@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "runtimeId": "ubuntu-24.04-arm64-deepseek-harness",
+  "version": "2026.08.1",
+  "architecture": "arm64-v8a",
+  "rootfs": {
+    "url": "https://downloads.example.invalid/deepseek-harness/android/ubuntu-rootfs.tar.gz",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "compressedBytes": 671088640,
+    "extractedBytes": 2147483648
+  },
+  "entrypoints": {
+    "shell": ["/bin/bash", "--login"],
+    "harness": ["/usr/local/bin/dsh", "web", "--host", "127.0.0.1", "--port", "3080"]
+  },
+  "harnessUrl": "http://127.0.0.1:3080/"
+}

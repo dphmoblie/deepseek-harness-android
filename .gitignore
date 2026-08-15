@@ -1,0 +1,55 @@
+# Dependencies and generated web output
+node_modules/
+dist/
+www/
+coverage/
+target/
+*.exe
+*.tsbuildinfo
+capacitor.config.js
+capacitor.config.d.ts
+vite.config.js
+vite.config.d.ts
+vitest.config.js
+vitest.config.d.ts
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+local.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+
+# Android generated output and IDE files
+.gradle/
+.idea/
+.vscode/
+*.iml
+.kotlin/
+**/.cxx/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/capacitor.settings.gradle
+android/app/capacitor.build.gradle
+android/app/src/main/assets/public/
+android/app/src/main/jniLibs/**/*.so
+android/gradle/wrapper/gradle-wrapper.jar
+*.apk
+*.aab
+
+# Downloaded runtimes, logs, and temporary files
+runtime-cache/
+*.rootfs
+*.tar
+*.tar.gz
+*.tar.xz
+*.log
+*.tmp
+.DS_Store
+Thumbs.db

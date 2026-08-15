@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">DeepSeek Harness</string>
+    <string name="auth_title">验证后打开 DeepSeek Harness</string>
+    <string name="auth_description">使用设备 PIN、图案或密码继续</string>
+    <string name="auth_required_title">需要设备屏幕锁</string>
+    <string name="auth_required_message">请先设置设备 PIN、图案或密码，再重新打开应用。</string>
+    <string name="open_security_settings">打开安全设置</string>
+    <string name="exit_app">退出</string>
+    <string name="shizuku_missing">请先安装并启动 Shizuku</string>
+</resources>
