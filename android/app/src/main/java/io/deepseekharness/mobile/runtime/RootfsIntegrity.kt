@@ -42,6 +42,26 @@ object RootfsIntegrity {
             throw RuntimeFailure("FILESYSTEM_ERROR", "无法检查运行时完整性", error)
         }
         if (!isLink) {
+            // 兼容 ROM 禁止应用创建符号链接时的降级产物：解压器会把链接复制成
+            // 目录或非空文件。目录与非空文件视为可用；缺失或 0 字节空文件
+            // 仍是打包/分发损坏特征（PRoot 无法加载入口），保持拒绝。
+            val exists = try {
+                Files.exists(path)
+            } catch (error: IOException) {
+                throw RuntimeFailure("FILESYSTEM_ERROR", "无法检查运行时完整性", error)
+            }
+            if (!exists) {
+                throw RuntimeFailure(failureCode, "运行时关键路径缺失：/${link.path}")
+            }
+            if (Files.isDirectory(path)) return
+            if (Files.isRegularFile(path)) {
+                val size = try {
+                    Files.size(path)
+                } catch (error: IOException) {
+                    throw RuntimeFailure("FILESYSTEM_ERROR", "无法检查运行时完整性", error)
+                }
+                if (size > 0) return
+            }
             throw RuntimeFailure(failureCode, "运行时关键路径缺失或不是符号链接：/${link.path}")
         }
         val actualTarget = try {
