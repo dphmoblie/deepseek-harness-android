@@ -206,11 +206,25 @@ jobs:
           set -x
           set -o pipefail
           mkdir -p /tmp/dsh-root && cd /tmp/dsh-root
+          # 本地未发布的 mobile bundle：复制进 dsh-root 后以 file: 依赖安装
+          cp -r "$GITHUB_WORKSPACE/packages/dsh-mobile-compat" /tmp/dsh-root/dsh-mobile-compat
           cat > package.json <<'EOF'
           {
             "name": "dsh-root",
             "private": true,
-            "dependencies": { "@deepseek-ai/dsh": "0.1.0-rc.6" },
+            "dependencies": {
+              "@deepseek-ai/dsh": "0.1.0-rc.6",
+              "@deepseek-ai/dsh-base": "0.0.1-rc.1",
+              "@deepseek-ai/dsh-web-app": "0.0.1-rc.1",
+              "@linxin666/dsh-web-ui-all": "0.1.19",
+              "@liustack/modlens": "3.18.1",
+              "dshmarket": "1.10.1",
+              "dsh-mobile-compat": "file:./dsh-mobile-compat",
+              "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
+              "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.6",
+              "@deepseek-ai/dsh-client-ui-theme": "0.1.0-rc.6",
+              "react": "^18.3.0"
+            },
             "devDependencies": { "node-gyp": "^10.2.0" }
           }
           EOF
