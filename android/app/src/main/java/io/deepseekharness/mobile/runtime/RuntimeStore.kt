@@ -55,8 +55,24 @@ class RuntimeStore(context: Context) {
         if (!committed) throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法保存运行时设置")
     }
 
-    fun runnerAvailable(): Boolean = listOf(runnerFile, loaderFile).all {
-        it.isFile && it.canRead() && it.canExecute()
+    fun runnerAvailable(): Boolean {
+        // 信任来自 APK 打包与签名，不依赖提取库的 x 位：部分机型（如荣耀）
+        // 上 nativeLibraryDir 提取文件的 canExecute() 恒为 false，但硬链接后
+        // 经系统加载路径执行不受 x 位影响。
+        val missing = listOf(RUNNER_NAME to runnerFile, LOADER_NAME to loaderFile).filter { (_, file) ->
+            !file.isFile || !file.canRead()
+        }
+        if (missing.isNotEmpty()) {
+            android.util.Log.w(
+                "dsh-runtime",
+                "runner check failed: " + missing.joinToString(", ") { (name, file) ->
+                    name + "(exists=" + file.exists() + ",isFile=" + file.isFile +
+                        ",readable=" + file.canRead() + ",executable=" + file.canExecute() +
+                        ",length=" + file.length() + ")"
+                },
+            )
+        }
+        return missing.isEmpty()
     }
 
     @Synchronized
