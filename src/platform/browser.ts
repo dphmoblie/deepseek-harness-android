@@ -9,7 +9,7 @@ import type {
   TerminalExit,
   TerminalKind,
 } from './types'
-import { validateSettings, validateRuntimeSource } from './validation'
+import { assertSessionId, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateRuntimeSource } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 const encoder = new TextEncoder()
@@ -147,6 +147,13 @@ export function createBrowserBridge(): RuntimeBridge {
     closeTerminal: sessionId => {
       if (sessions.delete(sessionId)) exitListeners.forEach(listener => listener({ sessionId, exitCode: 0 }))
       return Promise.resolve()
+    },
+    execDeviceCommand: (sessionId, command, param) => {
+      assertSessionId(sessionId)
+      validateDeviceCommand(command)
+      validateDeviceCommandParam(param)
+      // 浏览器预览环境没有真实设备 Shell：按失败返回（fail-closed）。
+      return Promise.resolve({ ok: false, exitCode: -1, text: '', truncated: false })
     },
     getShizukuState: () => Promise.resolve({ ...shizuku }),
     requestShizukuPermission: () => {

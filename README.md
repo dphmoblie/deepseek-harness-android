@@ -1,5 +1,7 @@
 # DeepSeek Harness Android
 
+[English](README.md) | [中文](README.zh.md)
+
 `app/` is an independent Capacitor Android application for managing a local DeepSeek Harness Ubuntu userspace. It provides runtime installation and reset, an Ubuntu terminal, optional Shizuku-backed device shell access, settings, and an embedded loopback-only Harness Web UI.
 
 ## Build requirements

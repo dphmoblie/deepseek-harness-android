@@ -15,6 +15,9 @@ import io.deepseekharness.mobile.runtime.RuntimeValidation
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
 import io.deepseekharness.mobile.runtime.audit.AuditResult
 import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
+import io.deepseekharness.mobile.shizuku.DeviceCommand
+import io.deepseekharness.mobile.shizuku.DeviceCommandResult
+import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
 import io.deepseekharness.mobile.shizuku.ShizukuState
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -31,6 +34,11 @@ class MobileRuntimePlugin : Plugin() {
     private val executor: ExecutorService = Executors.newFixedThreadPool(4)
     private val destroying = AtomicBoolean(false)
     private val auditedOperationLock = ReentrantLock()
+    private lateinit var deviceCommands: DeviceCommandRunner
+
+    companion object {
+        private const val DEVICE_COMMAND_TIMEOUT_MS = 60_000L
+    }
 
     override fun load() {
         auditLog = PrivateAuditLog(context)
@@ -44,6 +52,9 @@ class MobileRuntimePlugin : Plugin() {
                     }
                 },
                 onTerminalOutput = { sessionId, dataBase64 ->
+                    if (::deviceCommands.isInitialized) {
+                        deviceCommands.onOutput(sessionId, dataBase64)
+                    }
                     if (!destroying.get()) {
                         notifyListeners(
                             "terminalOutput",
@@ -59,6 +70,9 @@ class MobileRuntimePlugin : Plugin() {
                         )
                     }
                 },
+            )
+            deviceCommands = DeviceCommandRunner(
+                writer = { sessionId, dataBase64 -> controller.writeTerminal(sessionId, dataBase64) },
             )
             applyKeepScreenAwake(controller.store.settings().keepScreenAwake)
             recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.SUCCEEDED)
@@ -76,6 +90,7 @@ class MobileRuntimePlugin : Plugin() {
             executor.shutdownNow()
                 .filterIsInstance<PluginTask>()
                 .forEach { task -> task.rejectRuntimeClosed() }
+            if (::deviceCommands.isInitialized) deviceCommands.cancelAll()
         } catch (_: Throwable) {
             result = AuditResult.FAILED
         }
@@ -223,6 +238,25 @@ class MobileRuntimePlugin : Plugin() {
                 controller.closeTerminal(sessionId)
                 null
             }
+        }
+    }
+
+    @PluginMethod
+    fun execDeviceCommand(call: PluginCall) {
+        execute(call) {
+            val sessionId = call.getString("sessionId") ?: throw RuntimeFailure("SESSION_ID_INVALID", "终端会话标识缺失")
+            val commandName = call.getString("command") ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令缺失")
+            val command = DeviceCommand.fromName(commandName) ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令不支持")
+            if (!controller.hasDeviceSession(sessionId)) {
+                throw RuntimeFailure("SESSION_NOT_FOUND", "设备 Shell 会话不存在或已结束")
+            }
+            val result = deviceCommands.execute(sessionId, command, call.getString("param") ?: "", DEVICE_COMMAND_TIMEOUT_MS)
+            JSObject()
+                .put("ok", result.ok)
+                .put("exitCode", result.exitCode)
+                .put("text", result.text)
+                .put("truncated", result.truncated)
+                .also { if (result.errorCode != null) it.put("errorCode", result.errorCode) }
         }
     }
 

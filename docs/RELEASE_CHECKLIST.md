@@ -82,3 +82,8 @@ item below for the exact APK before publishing or otherwise distributing it.
   DeepSeek Harness, npm, PRoot, and Operit2 notices required by the exact
   release artifacts.
 - Run the repository checks and inspect `git diff` before the local release commit. Do not commit `.env`, signing material, rootfs archives, runners, build output, logs, or files over 100 MB.
+
+- Verify every packaged ELF (.so) passes the 16KB alignment check
+  (`readelf -l <lib> | grep LOAD` → p_align == 0x4000) before release, and record the
+  Honor / Android 16 on-device page-size test (`adb shell getconf PAGE_SIZE` == 16384)
+  in the release notes. See docs/review-2026-08-16.md §6.

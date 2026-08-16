@@ -2,6 +2,8 @@ import { Capacitor, registerPlugin } from '@capacitor/core'
 import type { PluginListenerHandle } from '@capacitor/core'
 import { createBrowserBridge } from './browser'
 import type {
+  DeviceCommand,
+  DeviceCommandResult,
   RuntimeBridge,
   RuntimeProgress,
   RuntimeSettings,
@@ -17,6 +19,9 @@ import {
   assertSessionId,
   assertTerminalKind,
   assertTerminalSize,
+  validateDeviceCommand,
+  validateDeviceCommandParam,
+  validateDeviceCommandResult,
   validateRuntimeProgress,
   validateRuntimeState,
   validateSettings,
@@ -41,6 +46,7 @@ interface NativeRuntimePlugin {
   writeTerminal(options: { sessionId: string; dataBase64: string }): Promise<void>
   resizeTerminal(options: { sessionId: string; columns: number; rows: number }): Promise<void>
   closeTerminal(options: { sessionId: string }): Promise<void>
+  execDeviceCommand(options: { sessionId: string; command: DeviceCommand; param?: string }): Promise<DeviceCommandResult>
   getShizukuState(): Promise<ShizukuState>
   requestShizukuPermission(): Promise<ShizukuState>
   openShizuku(): Promise<void>
@@ -91,6 +97,14 @@ function createNativeBridge(): RuntimeBridge {
       return NativeRuntime.resizeTerminal({ sessionId, columns, rows })
     },
     closeTerminal: sessionId => NativeRuntime.closeTerminal({ sessionId: assertSessionId(sessionId) }),
+    execDeviceCommand: (sessionId, command, param) => {
+      const validated = {
+        sessionId: assertSessionId(sessionId),
+        command: validateDeviceCommand(command),
+        param: validateDeviceCommandParam(param),
+      }
+      return NativeRuntime.execDeviceCommand(validated).then(validateDeviceCommandResult)
+    },
     getShizukuState: () => NativeRuntime.getShizukuState().then(validateShizukuState),
     requestShizukuPermission: () => NativeRuntime.requestShizukuPermission().then(validateShizukuState),
     openShizuku: () => NativeRuntime.openShizuku(),

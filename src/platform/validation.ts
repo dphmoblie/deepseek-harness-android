@@ -1,4 +1,6 @@
 import type {
+  DeviceCommand,
+  DeviceCommandResult,
   RuntimePhase,
   RuntimeProgress,
   RuntimeSettings,
@@ -280,4 +282,34 @@ export function validateTerminalExit(value: unknown): TerminalExit {
     throw new Error('终端退出码格式无效')
   }
   return { sessionId: assertSessionId(exit.sessionId), exitCode: exit.exitCode as number }
+}
+
+const DEVICE_COMMANDS = new Set<DeviceCommand>(['screenshot', 'uiDump', 'tap', 'inputText'])
+const MAX_DEVICE_PARAM_CHARS = 4096
+
+export function validateDeviceCommand(value: unknown): DeviceCommand {
+  if (typeof value !== 'string' || !DEVICE_COMMANDS.has(value as DeviceCommand)) throw new Error('设备命令不支持')
+  return value as DeviceCommand
+}
+
+export function validateDeviceCommandParam(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value.length > MAX_DEVICE_PARAM_CHARS) throw new Error('设备命令参数无效')
+  return value
+}
+
+export function validateDeviceCommandResult(value: unknown): DeviceCommandResult {
+  const result = asRecord(value, '设备命令结果')
+  if (typeof result.ok !== 'boolean' || typeof result.text !== 'string' || typeof result.truncated !== 'boolean') {
+    throw new Error('设备命令结果格式无效')
+  }
+  if (!Number.isInteger(result.exitCode) || (result.exitCode as number) < -1 || (result.exitCode as number) > 255) {
+    throw new Error('设备命令退出码无效')
+  }
+  return {
+    ok: result.ok,
+    exitCode: result.exitCode,
+    text: result.text,
+    truncated: result.truncated,
+  }
 }

@@ -1,0 +1,75 @@
+name: Android CI (build + verify)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js (pinned engine range)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Set up JDK (pinned by README)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '23.0.1'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK components
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;27.1.12297006"
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web bundle (tsc + vite)
+        run: pnpm run build
+
+      - name: Unit tests (vitest)
+        run: pnpm test
+
+      - name: Script tests (node --test)
+        run: pnpm run test:scripts
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Capacitor sync
+        run: pnpm run android:sync
+
+      - name: Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build debug APK + lint + unit tests
+        working-directory: android
+        run: ./gradlew assembleDebug lint testDebugUnitTest --no-daemon
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-harness-android-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

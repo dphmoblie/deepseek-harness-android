@@ -47,5 +47,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".shizuku.DeviceShellUserService"
+            android:exported="false"
+            android:permission="moe.shizuku.manager.permission.API_V23">
+            <intent-filter>
+                <action android:name="moe.shizuku.client.BIND_USER_SERVICE" />
+            </intent-filter>
+        </service>
+
     </application>
 </manifest>
