@@ -101,14 +101,23 @@ jobs:
         working-directory: android
         run: ./gradlew assembleDebug lint testDebugUnitTest --no-daemon
 
-      - name: Publish APK to dist branch
+      - name: Publish APK to dist branch (thin APKs only; embedded ones ship via Release)
         run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          SIZE="$(stat -c%s "$APK")"
+          echo "APK size: $SIZE bytes"
+          if [ "$SIZE" -ge 94371840 ]; then
+            # 嵌入 rootfs 的 APK 超过 GitHub 100MB 分支文件上限：
+            # 仅通过 Release 资产发布（≤2GB），dist 保持瘦包语义。
+            echo "embedded APK too large for dist branch — Release assets will carry it"
+            exit 0
+          fi
           git config user.name "github-actions"
           git config user.email "actions@github.com"
           git fetch origin dist || true
           git checkout -b dist origin/dist 2>/dev/null || git checkout --orphan dist
           rm -rf dist && mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/dsh-harness-android-debug.apk
+          cp "$APK" dist/dsh-harness-android-debug.apk
           git add -f dist/dsh-harness-android-debug.apk
           git commit -m "dist: auto-built APK ($GITHUB_SHA)" || true
           git push origin dist
