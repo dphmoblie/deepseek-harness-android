@@ -38,6 +38,7 @@ class MobileRuntimePlugin : Plugin() {
 
     companion object {
         private const val DEVICE_COMMAND_TIMEOUT_MS = 60_000L
+        private const val DESTROY_WAIT_SECONDS = 10L
     }
 
     override fun load() {
@@ -425,8 +426,4 @@ class MobileRuntimePlugin : Plugin() {
         .put("running", running)
         .put("permission", permission)
         .put("connected", connected)
-
-    private companion object {
-        const val DESTROY_WAIT_SECONDS = 10L
-    }
 }

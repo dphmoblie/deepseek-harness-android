@@ -199,6 +199,8 @@ class SafeRootfsExtractor {
         try {
             paths.chunked(EXEC_STAMP_BATCH_SIZE).forEach { batch ->
                 val workers = batch.map { path ->
+                    // android.jar 无 ProcessBuilder.Redirect.DISCARD（桌面 JDK 9+ 专有），
+                    // 使用默认 PIPE 并在等待后关闭流，setfattr 成功时无输出不会阻塞
                     val process = ProcessBuilder(
                         "/system/bin/setfattr",
                         "-n",
@@ -208,13 +210,14 @@ class SafeRootfsExtractor {
                         path.toString(),
                     )
                         .redirectErrorStream(true)
-                        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
                         .start()
                     process to path
                 }
                 workers.forEach { (process, path) ->
                     try {
-                        if (!process.waitFor(EXEC_STAMP_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                        val finished = process.waitFor(EXEC_STAMP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        process.inputStream.close()
+                        if (!finished) {
                             process.destroyForcibly()
                         }
                     } catch (_: InterruptedException) {
