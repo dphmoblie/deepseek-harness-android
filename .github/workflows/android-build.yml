@@ -181,6 +181,7 @@ jobs:
 
       - name: Prepare dsh runtime for linux/arm64 (compile node-pty from source)
         run: |
+          set -x
           mkdir -p /tmp/dsh-root && cd /tmp/dsh-root
           cat > package.json <<'EOF'
           {
@@ -191,30 +192,33 @@ jobs:
             "pnpm": { "onlyBuiltDependencies": ["node-pty"] }
           }
           EOF
-          # node-pty 1.1.0 的 npm 包不含 linux 预编译：install 脚本回退到 node-gyp 现场编译
-          #（arm64 原生 runner + 自带 gcc/make/python3）。pnpm 10+ 默认拦截依赖构建脚本，
-          # 必须经 onlyBuiltDependencies 放行；node-gyp 需显式声明为依赖。
-          if ! pnpm install --no-frozen-lockfile > /tmp/install.log 2>&1; then
-            echo "=== pnpm install 失败，推送日志到 ci-logs 分支 ==="
+          push_log() {
+            echo "=== 推送步骤日志到 ci-logs 分支 ==="
             git config user.name "github-actions"
             git config user.email "actions@github.com"
             git fetch origin ci-logs || true
             git checkout -b ci-logs origin/ci-logs 2>/dev/null || git checkout --orphan ci-logs
-            mkdir -p logs
-            cp /tmp/install.log logs/install-$GITHUB_RUN_NUMBER.log
+            rm -rf logs && mkdir -p logs
+            cp /tmp/step.log logs/install-$GITHUB_RUN_NUMBER.log
             git add -f logs/install-$GITHUB_RUN_NUMBER.log
             git commit -m "ci: install log run #$GITHUB_RUN_NUMBER" || true
             git push origin ci-logs || true
-            exit 1
-          fi
-          tail -n 20 /tmp/install.log
-          PTP="node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty"
-          mkdir -p "$PTP/prebuilds/linux-arm64"
-          cp "$PTP/build/Release/pty.node" "$PTP/prebuilds/linux-arm64/pty.node" \
-            || { echo "pty.node 缺失，dump build 目录："; find "$PTP/build" -maxdepth 2 -type f 2>/dev/null || true; exit 1; }
-          cp "$PTP/build/Release/spawn-helper" "$PTP/prebuilds/linux-arm64/spawn-helper" 2>/dev/null || true
-          chmod +x "$PTP/prebuilds/linux-arm64/spawn-helper" 2>/dev/null || true
-          ls -la "$PTP/prebuilds/linux-arm64/"
+          }
+          {
+            pnpm install --no-frozen-lockfile
+            PTP="node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty"
+            echo "=== pty 包路径探测 ==="
+            find node_modules/.pnpm -maxdepth 2 -type d -name "node-pty*" | head -20
+            echo "=== build 目录内容 ==="
+            find "$PTP/build" -maxdepth 2 -type f 2>/dev/null | head -30
+            mkdir -p "$PTP/prebuilds/linux-arm64"
+            cp "$PTP/build/Release/pty.node" "$PTP/prebuilds/linux-arm64/pty.node"
+            cp "$PTP/build/Release/spawn-helper" "$PTP/prebuilds/linux-arm64/spawn-helper" 2>/dev/null || true
+            chmod +x "$PTP/prebuilds/linux-arm64/spawn-helper" 2>/dev/null || true
+            ls -la "$PTP/prebuilds/linux-arm64/"
+          } 2>&1 | tee /tmp/step.log
+          STATUS="$?"
+          if [ "$STATUS" != "0" ]; then push_log; exit 1; fi
 
       - name: Download pinned rootfs inputs
         run: |
