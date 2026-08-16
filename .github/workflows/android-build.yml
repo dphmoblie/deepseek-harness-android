@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   build:
+    needs: build-runners
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,9 +22,9 @@ jobs:
           node-version: '22.19.0'
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11
+        run: |
+          npm install -g pnpm@11.19.0
+          pnpm --version
 
       - name: Set up JDK (pinned by README)
         uses: actions/setup-java@v4
@@ -62,6 +63,15 @@ jobs:
 
       - name: Capacitor sync
         run: pnpm run android:sync
+
+      - name: Download PRoot runners (built by the toolchain job)
+        uses: actions/download-artifact@v4
+        with:
+          name: proot-runners-arm64
+          path: android/app/src/main/jniLibs/arm64-v8a
+
+      - name: Verify runner placement
+        run: ls -la android/app/src/main/jniLibs/arm64-v8a
 
       - name: Gradle cache
         uses: gradle/actions/setup-gradle@v4
