@@ -322,10 +322,10 @@ class MobileRuntimePlugin : Plugin() {
                 } else {
                     AuditResult.FAILED
                 }
-                recordAudit(event, result)
+                recordAudit(event, result, failure.code)
                 throw failure
             } catch (error: Throwable) {
-                recordAudit(event, AuditResult.FAILED)
+                recordAudit(event, AuditResult.FAILED, "INTERNAL_ERROR")
                 throw error
             }
         }
@@ -355,8 +355,8 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
-    private fun recordAudit(event: AuditEvent, result: AuditResult) {
-        if (::auditLog.isInitialized) auditLog.record(event, result)
+    private fun recordAudit(event: AuditEvent, result: AuditResult, detail: String? = null) {
+        if (::auditLog.isInitialized) auditLog.record(event, result, detail)
     }
 
     private fun ensurePluginActive() {

@@ -50,6 +50,7 @@ class RuntimeSupervisor(
 
         val manifest = store.installedManifest()
             ?: throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
+        RootfsIntegrity.verifyLinks(store.currentRoot, "RUNTIME_CORRUPTED")
         try {
             launchResolver.verifyGuest(
                 NODE_PROBE_ENTRYPOINT,
