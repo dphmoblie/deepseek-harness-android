@@ -30,6 +30,7 @@ def main() -> int:
     expected_extracted = manifest["rootfs"]["extractedBytes"]
 
     seen: set[str] = set()
+    types: dict[str, str] = {}
     symlinks: list[tuple[str, str]] = []
     hardlinks: list[tuple[str, str]] = []
     entry_count = 0
@@ -52,16 +53,20 @@ def main() -> int:
                 fail(f"duplicate entry: {name!r}")
             seen.add(name)
             if m.isdir():
+                types[name] = "dir"
                 continue
             if m.isreg():
+                types[name] = "file"
                 if m.size < 0:
                     fail(f"negative-size file: {name!r}")
                 extracted += m.size
             elif m.issym():
                 if m.size != 0:
                     fail(f"symlink with unexpected data: {name!r}")
+                types[name] = "sym"
                 symlinks.append((name, m.linkname))
             elif m.islnk():
+                types[name] = "hard"
                 hardlinks.append((name, m.linkname))
             elif m.isdev() or m.ischr() or m.isblk() or m.isfifo():
                 fail(f"device node rejected: {name!r}")
@@ -71,23 +76,12 @@ def main() -> int:
     if extracted != expected_extracted:
         fail(f"extracted size mismatch: {extracted} != {expected_extracted}")
 
-    # 文件-目录冲突（提取器 ensureDirectory 规则）
-    for name in seen:
-        parent = PurePosixPath(name).parent
-        p = str(parent)
-        if p != ".":
-            q = p
-            while q and q != ".":
-                if q in seen and not any(x == q for x in ()) :
-                    pass
-                q = str(PurePosixPath(q).parent)
-    # 简化：收集所有路径，检查“某条目的父路径被文件占用”
-    file_set = {n for n in seen}
-    for name in list(seen):
+    # 文件-目录冲突（提取器 ensureDirectory 规则：父路径被非目录条目占用）
+    for name, kind in list(types.items()):
         p = str(PurePosixPath(name).parent)
         while p and p != ".":
-            if p in file_set:
-                fail(f"path conflict: parent of {name!r} is occupied by entry {p!r}")
+            if p in types and types[p] != "dir":
+                fail(f"path conflict: parent of {name!r} is occupied by {types[p]} entry {p!r}")
             p = str(PurePosixPath(p).parent)
 
     # 符号链接：目标解析不越界（绝对目标落在 root 内；相对目标折叠后不越界）
@@ -112,12 +106,15 @@ def main() -> int:
             fail(f"symlink escapes root: {name!r} -> {target!r}")
         if name in seen and any(n == name for n, _ in symlinks[:symlinks.index((name, target))]):
             fail(f"duplicate symlink path: {name!r}")
-    # 符号链接目标路径已被普通条目占用（提取器 ARCHIVE_DUPLICATE_ENTRY 规则）
+    # 符号链接延后创建冲突（提取器：目录/文件先写，symlink 创建时路径已存在则 ARCHIVE_DUPLICATE_ENTRY）
     for name, _ in symlinks:
-        if name in seen:
-            pass  # 自身在 seen 中属正常（symlink 本身计入 seen）
-        # 提取器检查的是 Os.symlink 时目标 PATH 是否已存在文件：
-        # 我们检查同名普通条目（非 symlink 自身）重复——已在 duplicate 检查覆盖
+        others = [n for n, t in types.items() if t != "sym" and n == name]
+        if others:
+            fail(f"symlink path occupied by non-symlink entry: {name!r}")
+    for name, _ in hardlinks:
+        others = [n for n, t in types.items() if t != "hard" and n == name]
+        if others:
+            fail(f"hardlink path occupied by non-hardlink entry: {name!r}")
 
     # 硬链接：目标存在、不是目录/链接、无环
     for name, target in hardlinks:
