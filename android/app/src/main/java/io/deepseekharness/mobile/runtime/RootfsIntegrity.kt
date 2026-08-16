@@ -45,14 +45,33 @@ object RootfsIntegrity {
             throw RuntimeFailure(failureCode, "运行时关键路径缺失或不是符号链接：/${link.path}")
         }
         val actualTarget = try {
-            parse(Files.readSymbolicLink(path))
+            Files.readSymbolicLink(path)
         } catch (error: IOException) {
             throw RuntimeFailure(failureCode, "无法读取运行时链接目标：/${link.path}", error)
         }
-        if (actualTarget != parse(link.target)) {
+        // 物化器会把 tar 内绝对目标（如 /usr/share/zoneinfo/Etc/UTC）改写为
+        // 相对形式（../usr/share/zoneinfo/Etc/UTC），因此必须比较解析后的
+        // 规范路径而非字面字符串，否则绝对/相对形式差异会误报。
+        if (resolvedTarget(root, link.path, actualTarget) != resolvedTarget(root, link.path, parse(link.target))) {
             throw RuntimeFailure(failureCode, "运行时关键链接目标异常：/${link.path}")
         }
     }
+
+    /** 解析链接目标为以 root 为基准的规范路径：绝对目标相对于 rootfs 根，相对目标相对于链接父目录。 */
+    private fun resolvedTarget(root: Path, linkPath: String, target: LinkTarget): Path {
+        val base = if (target.absolute) root else resolve(root, parentOf(linkPath))
+        var resolved = base
+        for (component in target.components) {
+            resolved = resolved.resolve(component)
+        }
+        return resolved.normalize()
+    }
+
+    private fun resolvedTarget(root: Path, linkPath: String, target: Path): Path =
+        resolvedTarget(root, linkPath, parse(target))
+
+    private fun parentOf(relative: String): String =
+        relative.split('/').dropLast(1).joinToString("/")
 
     private fun resolve(root: Path, relative: String): Path {
         var path = root

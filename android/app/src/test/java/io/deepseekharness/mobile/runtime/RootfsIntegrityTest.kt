@@ -58,6 +58,21 @@ class RootfsIntegrityTest {
     }
 
     @Test
+    fun passesWhenAbsoluteTargetIsMaterializedAsEquivalentRelativeForm() {
+        val root = temporaryFolder.newFolder("rootfs").toPath()
+        expectedLinks.forEach { link ->
+            Files.createDirectories(root.resolve(parentOf(link.path)))
+            val materializedTarget = when (link.path) {
+                "etc/localtime" -> "../usr/share/zoneinfo/Etc/UTC"
+                else -> link.target
+            }
+            createSymbolicLinkOrSkip(root.resolve(link.path), materializedTarget)
+        }
+
+        RootfsIntegrity.verifyLinks(root.toFile(), "RUNTIME_CORRUPTED")
+    }
+
+    @Test
     fun rejectsMissingRequiredLink() {
         val root = temporaryFolder.newFolder("rootfs").toPath()
         expectedLinks.filter { it.path != "bin" }.forEach { link ->
