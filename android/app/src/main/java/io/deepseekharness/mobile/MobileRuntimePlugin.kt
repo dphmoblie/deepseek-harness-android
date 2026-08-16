@@ -426,4 +426,5 @@ class MobileRuntimePlugin : Plugin() {
         .put("running", running)
         .put("permission", permission)
         .put("connected", connected)
+        .put("version", version)
 }

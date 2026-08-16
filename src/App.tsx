@@ -510,7 +510,10 @@ function TerminalScreen({ bridge, fontSize, onAuthorize, onError, onOpenShizuku,
       ) : (
         <div className="empty-terminal">
           <span><KeyRound size={27} /></span>
-          <h2>{!shizuku.installed ? '未安装 Shizuku' : !shizuku.running ? 'Shizuku 未运行' : '需要 Shizuku 授权'}</h2>
+          <h2>{!shizuku.installed ? '未安装 Shizuku' : !shizuku.running ? `Shizuku 未运行${shizuku.version ? '（v' + shizuku.version + '）' : ''}` : '需要 Shizuku 授权'}</h2>
+{shizuku.installed && !shizuku.running && (
+  <p className="shizuku-hint">Shizuku 服务不会自动启动：请在 Shizuku App 内通过无线调试或 adb 启动服务（设备重启后需重新启动）。</p>
+)}
           {shizuku.installed ? (
             <button className="button button-primary" type="button" onClick={shizuku.running ? onAuthorize : onOpenShizuku}>
               <ShieldCheck size={18} />{shizuku.running ? '请求授权' : '打开 Shizuku'}
@@ -547,7 +550,7 @@ function SettingsScreen({ busy, settings, shizuku, onAuthorize, onOpenShizuku, o
   const shizukuLabel = !shizuku.installed
     ? '未安装'
     : !shizuku.running
-      ? '未运行'
+      ? '未运行' + (shizuku.version ? '（v' + shizuku.version + '）' : '')
       : shizuku.permission === 'granted'
         ? shizuku.connected ? '已连接' : '已授权'
         : shizuku.permission === 'denied'

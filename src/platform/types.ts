@@ -46,6 +46,8 @@ export interface ShizukuState {
   running: boolean
   permission: 'granted' | 'denied' | 'undetermined'
   connected: boolean
+  /** Shizuku 服务端版本（诊断用；未安装为空串）。 */
+  version?: string
 }
 
 export interface TerminalChunk {

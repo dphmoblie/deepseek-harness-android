@@ -28,6 +28,8 @@ data class ShizukuState(
     val running: Boolean,
     val permission: String,
     val connected: Boolean,
+    /** Shizuku 服务端版本（未安装时为空串；诊断用）。 */
+    val version: String,
 )
 
 class ShizukuRuntime(
@@ -147,7 +149,16 @@ class ShizukuRuntime(
             else -> "undetermined"
         }
         val connected = granted && liveService() != null
-        return ShizukuState(installed, running, permission, connected)
+        val version = if (installed && running) {
+            try {
+                Shizuku.getVersion().toString()
+            } catch (_: Throwable) {
+                ""
+            }
+        } else {
+            ""
+        }
+        return ShizukuState(installed, running, permission, connected, version)
     }
 
     @Synchronized
