@@ -32,6 +32,7 @@ class RuntimeStore(context: Context) {
     val launchRunnerFile = File(launchDirectory, "proot")
     val launchLoaderFile = File(launchDirectory, "loader")
     val resolverFile = File(appContext.filesDir, "runtime-resolv.conf")
+    val harnessPidFile = File(appContext.noBackupFilesDir, "dsh-harness.pid")
 
     @Volatile private var manifestCacheLoaded = false
     @Volatile private var manifestCache: RuntimeManifest? = null
