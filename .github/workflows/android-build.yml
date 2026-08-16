@@ -189,9 +189,15 @@ jobs:
             "name": "dsh-root",
             "private": true,
             "dependencies": { "@deepseek-ai/dsh": "0.1.0-rc.6" },
-            "devDependencies": { "node-gyp": "^10.2.0" },
-            "pnpm": { "onlyBuiltDependencies": ["node-pty"] }
+            "devDependencies": { "node-gyp": "^10.2.0" }
           }
+          EOF
+          cat > pnpm-workspace.yaml <<'EOF'
+          onlyBuiltDependencies:
+            - node-pty
+            - koffi
+            - "@deepseek-ai/dsh-subprocess-local"
+            - protobufjs
           EOF
           push_log() {
             echo "=== 推送步骤日志到 ci-logs 分支 ==="
