@@ -828,7 +828,7 @@ export function App() {
 
       {resetOpen && <ResetDialog busy={busy === 'reset'} onCancel={() => setResetOpen(false)} onConfirm={confirmReset} />}
 
-      {onboardingOpen && (
+      {onboardingOpen && runtime.phase === 'not-installed' && (
         <Onboarding
           busy={busy}
           runtime={runtime}
