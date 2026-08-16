@@ -16,7 +16,6 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
-import java.util.concurrent.TimeUnit
 
 class SafeRootfsExtractor {
     private data class PendingSymlink(val path: Path, val target: String)
@@ -191,44 +190,23 @@ class SafeRootfsExtractor {
 
     /**
      * 为归档内可执行文件批量盖章 `security.android.exec` 扩展属性。
-     * Android 15+ 要求应用数据目录内的 ELF 携带该属性才能 exec，
-     * 旧内核不支持时整体忽略（盖章是增强项，失败不影响 rootfs 解压）。
+     * Android 15+ 要求应用数据目录内的 ELF 携带该属性才能 exec。
+     * 直接走 Os.setxattr 系统调用，不依赖可能被厂商裁剪的 /system/bin/setfattr；
+     * 旧内核不支持该属性时整体忽略（盖章是增强项，失败不影响 rootfs 解压）。
      */
     private fun stampExecutableFiles(paths: List<Path>) {
         if (paths.isEmpty()) return
-        try {
-            paths.chunked(EXEC_STAMP_BATCH_SIZE).forEach { batch ->
-                val workers = batch.map { path ->
-                    // android.jar 无 ProcessBuilder.Redirect.DISCARD（桌面 JDK 9+ 专有），
-                    // 使用默认 PIPE 并在等待后关闭流，setfattr 成功时无输出不会阻塞
-                    val process = ProcessBuilder(
-                        "/system/bin/setfattr",
-                        "-n",
-                        "security.android.exec",
-                        "-v",
-                        "1",
-                        path.toString(),
-                    )
-                        .redirectErrorStream(true)
-                        .start()
-                    process to path
-                }
-                workers.forEach { (process, path) ->
-                    try {
-                        val finished = process.waitFor(EXEC_STAMP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                        process.inputStream.close()
-                        if (!finished) {
-                            process.destroyForcibly()
-                        }
-                    } catch (_: InterruptedException) {
-                        Thread.currentThread().interrupt()
-                        process.destroyForcibly()
-                        return@forEach
-                    }
-                }
+        val stampValue = byteArrayOf(EXEC_XATTR_VALUE_BYTE)
+        var consecutiveFailures = 0
+        for (path in paths) {
+            try {
+                Os.setxattr(path.toString(), EXEC_XATTR_NAME, stampValue, 0)
+                consecutiveFailures = 0
+            } catch (_: Throwable) {
+                // 旧内核返回 ENOTSUP：前几个连续失败即可断定全盘不支持，提前退出
+                consecutiveFailures++
+                if (consecutiveFailures >= EXEC_STAMP_EARLY_ABORT_FAILURES) return
             }
-        } catch (_: Throwable) {
-            // setfattr 缺失或内核不支持 exec 属性时忽略
         }
     }
 
@@ -316,8 +294,9 @@ class SafeRootfsExtractor {
 
     companion object {
         private const val BUFFER_SIZE = 64 * 1024
-        private const val EXEC_STAMP_BATCH_SIZE = 64
-        private const val EXEC_STAMP_TIMEOUT_SECONDS = 30L
+        private const val EXEC_XATTR_NAME = "security.android.exec"
+        private const val EXEC_XATTR_VALUE_BYTE: Byte = '1'.code.toByte()
+        private const val EXEC_STAMP_EARLY_ABORT_FAILURES = 8
         private val SHA256_PATTERN = Regex("^[a-f0-9]{64}$")
     }
 }
