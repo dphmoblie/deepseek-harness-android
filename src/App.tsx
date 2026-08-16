@@ -35,6 +35,7 @@ import { TerminalPanel } from './components/TerminalPanel'
 import { runtimeBridge } from './platform/native'
 import type {
   RuntimePhase,
+  RuntimeProgress,
   RuntimeSettings,
   RuntimeState,
   ShizukuState,
@@ -170,6 +171,16 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
 function runtimeErrorMessage(errorCode?: string): string {
   if (errorCode === undefined) return '请重试启动；重置环境仅用于清除用户数据。'
   return RUNTIME_ERROR_MESSAGES[errorCode] ?? UNKNOWN_RUNTIME_ERROR_MESSAGE
+}
+
+function mergeRuntimeProgress(state: RuntimeState, progress: RuntimeProgress): RuntimeState {
+  return {
+    ...state,
+    phase: progress.phase,
+    downloadedBytes: progress.downloadedBytes,
+    totalBytes: progress.totalBytes,
+    errorCode: progress.phase === 'error' ? progress.errorCode : undefined,
+  }
 }
 
 function formatBytes(bytes: number): string {
@@ -724,33 +735,38 @@ export function App() {
   useEffect(() => {
     let cancelled = false
     let removeProgress: (() => Promise<void>) | undefined
+    let progressRevision = 0
+    let latestProgress: RuntimeProgress | undefined
 
     void (async () => {
       try {
-        const [nextRuntime, nextSettings, nextShizuku, progressHandle] = await Promise.all([
-          runtimeBridge.getState(),
-          runtimeBridge.getSettings(),
-          runtimeBridge.getShizukuState(),
-          runtimeBridge.addRuntimeProgressListener(progress => {
-            if (cancelled) return
-            setRuntime(current => ({
-              ...current,
-              phase: progress.phase,
-              downloadedBytes: progress.downloadedBytes,
-              totalBytes: progress.totalBytes,
-              errorCode: progress.phase === 'error' ? progress.errorCode : undefined,
-            }))
-          }),
-        ])
+        const progressHandle = await runtimeBridge.addRuntimeProgressListener(progress => {
+          if (cancelled) return
+          progressRevision += 1
+          latestProgress = progress
+          setRuntime(current => mergeRuntimeProgress(current, progress))
+        })
         if (cancelled) {
           await progressHandle.remove()
           return
         }
         removeProgress = progressHandle.remove
-        setRuntime(nextRuntime)
+
+        const revisionBeforeSnapshot = progressRevision
+        const [nextRuntime, nextSettings, nextShizuku] = await Promise.all([
+          runtimeBridge.getState(),
+          runtimeBridge.getSettings(),
+          runtimeBridge.getShizukuState(),
+        ])
+        if (cancelled) return
+
+        const initialRuntime = progressRevision === revisionBeforeSnapshot || latestProgress === undefined
+          ? nextRuntime
+          : mergeRuntimeProgress(nextRuntime, latestProgress)
+        setRuntime(initialRuntime)
         setSettings(nextSettings)
         setShizuku(nextShizuku)
-        setActiveTab(['ready', 'running'].includes(nextRuntime.phase) ? 'agent' : 'environment')
+        setActiveTab(['ready', 'running'].includes(initialRuntime.phase) ? 'agent' : 'environment')
       } catch (error) {
         if (!cancelled) notify(errorMessage(error), 'error')
       } finally {

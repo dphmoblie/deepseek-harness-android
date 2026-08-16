@@ -150,6 +150,44 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: '下载并安装' })).toBeEnabled()
   })
 
+  it('keeps a terminal progress event when an older boot snapshot resolves later', async () => {
+    const staleDownloading: RuntimeState = {
+      phase: 'downloading',
+      architecture: 'arm64-v8a',
+      downloadedBytes: 32 * 1024 * 1024,
+      totalBytes: readyState.totalBytes,
+      runnerAvailable: true,
+    }
+    let resolveState: (state: RuntimeState) => void = () => undefined
+    let progressListener: ((event: RuntimeProgress) => void) | undefined
+    bridge.getState.mockReturnValueOnce(new Promise<RuntimeState>(resolve => { resolveState = resolve }))
+    bridge.addRuntimeProgressListener.mockImplementationOnce((listener: (event: RuntimeProgress) => void) => {
+      progressListener = listener
+      return Promise.resolve({ remove: vi.fn().mockResolvedValue(undefined) })
+    })
+
+    render(<App />)
+    await waitFor(() => {
+      expect(progressListener).toBeTypeOf('function')
+      expect(bridge.getState).toHaveBeenCalledTimes(1)
+    })
+
+    await act(async () => {
+      progressListener?.({
+        phase: 'error',
+        downloadedBytes: staleDownloading.downloadedBytes,
+        totalBytes: staleDownloading.totalBytes,
+        errorCode: 'DOWNLOAD_NETWORK_UNAVAILABLE',
+      })
+      resolveState(staleDownloading)
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByText('网络不可用或下载连接已中断，可稍后继续。')).toBeInTheDocument()
+    expect(screen.queryByText('正在安装')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '下载并安装' })).toBeEnabled()
+  })
+
   it('shows a safe archive-integrity message from a native error code', async () => {
     bridge.getState.mockResolvedValueOnce({
       phase: 'error',
