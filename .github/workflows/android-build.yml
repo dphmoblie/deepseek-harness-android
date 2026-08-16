@@ -182,6 +182,7 @@ jobs:
       - name: Prepare dsh runtime for linux/arm64 (compile node-pty from source)
         run: |
           set -x
+          set -o pipefail
           mkdir -p /tmp/dsh-root && cd /tmp/dsh-root
           cat > package.json <<'EOF'
           {
@@ -229,6 +230,7 @@ jobs:
 
       - name: Build bundle + manifest (mobile profile)
         run: |
+          set -o pipefail
           {
             python3 scripts/build-embedded-runtime.py \
               --ubuntu /tmp/ubuntu.tar.gz --ubuntu-sha256 04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2 \
