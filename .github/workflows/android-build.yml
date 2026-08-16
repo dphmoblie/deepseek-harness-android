@@ -2,9 +2,12 @@ name: Android CI (build + verify)
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'feature/dsh-plugin-compat']
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -72,4 +75,74 @@ jobs:
         with:
           name: dsh-harness-android-debug
           path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Publish APK to dist branch
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git fetch origin dist || true
+          git checkout -b dist origin/dist 2>/dev/null || git checkout --orphan dist
+          rm -rf dist && mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/dsh-harness-android-debug.apk
+          git add -f dist/dsh-harness-android-debug.apk
+          git commit -m "dist: auto-built APK ($GITHUB_SHA)" || true
+          git push origin dist
+
+  build-runners:
+    name: Build PRoot runners (Operit2 toolchain, arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout Operit2 at the pinned runtime toolchain commit
+        uses: actions/checkout@v4
+        with:
+          repository: AAswordman/Operit2
+          ref: dc4c3a9405dc7ed3ef69b2ac9a6ace65374d77cf
+          path: operit2
+
+      - name: Download pinned sources (busybox / termux-proot / talloc / bash)
+        working-directory: operit2/tools/android-runtime
+        run: |
+          set -euo pipefail
+          mkdir -p downloads sources
+          fetch() {
+            local name="$1" url="$2" archive="$3" sha="$4"
+            echo "downloading $name"
+            curl -fL --retry 3 -o "downloads/$archive" "$url"
+            echo "$sha  downloads/$archive" | sha256sum -c -
+            tar -xf "downloads/$archive" -C sources
+          }
+          fetch busybox https://busybox.net/downloads/busybox-1.38.0.tar.bz2 busybox-1.38.0.tar.bz2 34f9ea6ff8636f2c9241153b9114eefa9e65674a45318ae1ef95bb5f31c53bb2
+          fetch proot https://github.com/termux/proot/archive/refs/tags/v5.1.107.78.tar.gz termux-proot-v5.1.107.78.tar.gz f3377ba49dcd833370420c34c5081b4c243ecbb85b2a9881a4f4586012599afa
+          fetch talloc https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz talloc-2.4.3.tar.gz dc46c40b9f46bb34dd97fe41f548b0e8b247b77a918576733c528e83abd854dd
+          fetch bash https://ftp.gnu.org/gnu/bash/bash-5.2.37.tar.gz bash-5.2.37.tar.gz 9599b22ecd1d5787ad7d3b7bf0c59f312b3396d1e281175dd1f8a4014da621ff
+
+      - name: Install NDK r29-beta4
+        run: |
+          mkdir -p "$HOME/.cache/operit-android-runtime"
+          curl -fL --retry 3 -o /tmp/ndk.zip https://dl.google.com/android/repository/android-ndk-r29-beta4-linux.zip
+          unzip -q /tmp/ndk.zip -d "$HOME/.cache/operit-android-runtime"
+
+      - name: Build PRoot (arm64-v8a)
+        working-directory: operit2
+        run: |
+          export ANDROID_NDK_HOME="$HOME/.cache/operit-android-runtime/android-ndk-r29-beta4"
+          export OPERIT_ANDROID_RUNTIME_ABIS="arm64-v8a"
+          export OPERIT_ANDROID_RUNTIME_COMPONENTS="proot"
+          bash tools/android-runtime/build_android_tools_wsl.sh
+
+      - name: Collect runners (renamed to dsh names)
+        run: |
+          mkdir -p runners
+          cp operit2/apps/flutter/app/android/app/src/main/jniLibs/arm64-v8a/liboperit_proot.so runners/libdsh_proot.so
+          cp operit2/apps/flutter/app/android/app/src/main/jniLibs/arm64-v8a/liboperit_loader.so runners/libdsh_proot_loader.so
+          sha256sum runners/*
+
+      - name: Upload runners
+        uses: actions/upload-artifact@v4
+        with:
+          name: proot-runners-arm64
+          path: runners/*.so
           if-no-files-found: error
