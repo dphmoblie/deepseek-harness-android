@@ -255,6 +255,11 @@ jobs:
         run: |
           {
             pwd
+            echo "=== node-pty step output ==="
+            cat /tmp/step.log 2>/dev/null || echo "(无 step.log)"
+            echo "=== dsh-root 探测 ==="
+            ls -la /tmp/dsh-root/node_modules/@deepseek-ai/dsh/lib/bin.js 2>/dev/null || echo "(dsh bin.js 缺失)"
+            ls -la /tmp/dsh-root/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/ 2>/dev/null || echo "(pty 目录缺失)"
             echo "=== bundle step output ==="
             cat /tmp/bundle.log 2>/dev/null || echo "(无 bundle.log)"
             echo "=== runtime-artifacts ==="
