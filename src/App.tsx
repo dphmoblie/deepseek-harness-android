@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import {
   AlertTriangle,
   Bot,
@@ -598,6 +599,13 @@ export function App() {
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [resetOpen, setResetOpen] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState<boolean>(() => {
+    try {
+      return typeof localStorage === 'undefined' ? false : localStorage.getItem(ONBOARDING_STORAGE_KEY) !== 'done'
+    } catch {
+      return false
+    }
+  })
   const noticeId = useRef(0)
 
   const notify = useCallback((message: string, tone: NoticeTone = 'info') => {
@@ -746,6 +754,15 @@ export function App() {
     void run('open-shizuku', () => runtimeBridge.openShizuku())
   }, [run])
 
+  const finishOnboarding = useCallback(() => {
+    try {
+      localStorage.setItem(ONBOARDING_STORAGE_KEY, 'done')
+    } catch {
+      // 无持久化环境（测试）时仅关闭本次会话的引导。
+    }
+    setOnboardingOpen(false)
+  }, [])
+
   const screen = useMemo(() => {
     switch (activeTab) {
       case 'agent':
@@ -810,6 +827,20 @@ export function App() {
       </nav>
 
       {resetOpen && <ResetDialog busy={busy === 'reset'} onCancel={() => setResetOpen(false)} onConfirm={confirmReset} />}
+
+      {onboardingOpen && (
+        <Onboarding
+          busy={busy}
+          runtime={runtime}
+          shizuku={shizuku}
+          settings={settings}
+          onInstall={installRuntime}
+          onAuthorize={requestShizukuPermission}
+          onOpenShizuku={openShizuku}
+          onOpenHarness={openHarness}
+          onDone={finishOnboarding}
+        />
+      )}
 
       {notice !== null && (
         <div className={`toast toast-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>
