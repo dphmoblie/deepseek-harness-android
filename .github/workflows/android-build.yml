@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    needs: [build-runners, build-rootfs]
+    needs: build-runners
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -71,15 +71,6 @@ jobs:
 
       - name: Verify runner placement
         run: ls -la android/app/src/main/jniLibs/arm64-v8a
-
-      - name: Download embedded runtime (bundle + manifest)
-        uses: actions/download-artifact@v4
-        with:
-          name: embedded-runtime
-          path: android/app/src/main/assets/runtime
-
-      - name: Verify runtime placement
-        run: ls -la android/app/src/main/assets/runtime
 
       - name: Set up Gradle (trusted distribution for wrapper bootstrap)
         uses: gradle/actions/setup-gradle@v4
@@ -228,3 +219,55 @@ jobs:
             /tmp/rootfs.bundle
             /tmp/runtime-manifest.json
           if-no-files-found: error
+
+  publish-release:
+    name: Publish test release (APK + rootfs bundle + manifest)
+    needs: [build, build-rootfs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dsh-harness-android-debug
+          path: /tmp/apk
+
+      - name: Download runtime artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: embedded-runtime
+          path: /tmp/runtime
+
+      - name: Create release with assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="v0.1.0-mobile-${{ github.run_number }}"
+          MANIFEST_SHA="$(sha256sum /tmp/runtime/runtime-manifest.json | cut -d' ' -f1)"
+          APK="$(ls /tmp/apk/*.apk | head -n1)"
+          cat > /tmp/notes.md <<EOF
+          # 移动端测试构建 ${{ github.sha }}
+
+          ## 安装与配置
+
+          1. 安装 $(basename "$APK")（debug 签名）。
+          2. 打开 App → 设置页，填写「运行时清单地址与 SHA-256」（**两者必须成对**）：
+             - URL: https://github.com/${{ github.repository }}/releases/download/${TAG}/runtime-manifest.json
+             - SHA-256: ${MANIFEST_SHA}
+          3. 返回「环境」页执行安装（rootfs 约百 MB，Wi-Fi 下更佳，支持断点续传）。
+
+          ## 资产
+
+          - $(basename "$APK")（已含 PRoot 运行器；不含 rootfs 以控制体积）
+          - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.1.0-rc.6 + 移动 profile）
+          - runtime-manifest.json
+          EOF
+          gh release create "${TAG}" \
+            --repo ${{ github.repository }} \
+            --title "Mobile test build #${{ github.run_number }}" \
+            --notes-file /tmp/notes.md \
+            "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json || true
