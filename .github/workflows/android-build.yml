@@ -218,8 +218,8 @@ jobs:
             cp "$PTP/build/Release/spawn-helper" "$PTP/prebuilds/linux-arm64/spawn-helper" 2>/dev/null || true
             chmod +x "$PTP/prebuilds/linux-arm64/spawn-helper" 2>/dev/null || true
             ls -la "$PTP/prebuilds/linux-arm64/"
-          } 2>&1 | tee /tmp/step.log
-          STATUS="$?"
+          } 2>&1 | tee /tmp/step.log || true
+          STATUS="${PIPESTATUS[0]}"
           if [ "$STATUS" != "0" ]; then push_log; exit 1; fi
 
       - name: Download pinned rootfs inputs
@@ -243,8 +243,8 @@ jobs:
             sha256sum /tmp/rootfs.bundle
             mkdir -p runtime-artifacts
             cp /tmp/rootfs.bundle /tmp/runtime-manifest.json runtime-artifacts/
-          } 2>&1 | tee /tmp/bundle.log
-          STATUS="$?"
+          } 2>&1 | tee /tmp/bundle.log || true
+          STATUS="${PIPESTATUS[0]}"
           if [ "$STATUS" != "0" ]; then
             git config user.name "github-actions"
             git config user.email "actions@github.com"
