@@ -246,15 +246,8 @@ jobs:
           } 2>&1 | tee /tmp/bundle.log || true
           STATUS="${PIPESTATUS[0]}"
           if [ "$STATUS" != "0" ]; then
-            git config user.name "github-actions"
-            git config user.email "actions@github.com"
-            git fetch origin dist || true
-            git checkout -B dist origin/dist 2>/dev/null || git checkout --orphan dist
-            mkdir -p logs
-            cp /tmp/bundle.log logs/bundle-$GITHUB_RUN_NUMBER.log
-            git add -f logs/bundle-$GITHUB_RUN_NUMBER.log
-            git commit -m "ci: bundle log run #$GITHUB_RUN_NUMBER" || true
-            git push origin dist || true
+            echo "=== bundle step failed, see /tmp/bundle.log (folded into verify log) ==="
+            cat /tmp/bundle.log
             exit 1
           fi
 
@@ -262,6 +255,9 @@ jobs:
         run: |
           {
             pwd
+            echo "=== bundle step output ==="
+            cat /tmp/bundle.log 2>/dev/null || echo "(无 bundle.log)"
+            echo "=== runtime-artifacts ==="
             ls -la runtime-artifacts/ || true
             du -sh runtime-artifacts/ 2>/dev/null || true
           } 2>&1 | tee /tmp/verify.log
