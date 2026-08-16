@@ -8,7 +8,7 @@
 
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
-        <provider android:authorities="moe.shizuku.privileged.api" />
+        <provider android:authorities="moe.shizuku.privileged.api.shizuku" />
     </queries>
 
     <application

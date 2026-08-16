@@ -731,6 +731,7 @@ export function App() {
     }
   })
   const noticeId = useRef(0)
+  const shizukuConnecting = useRef(false)
 
   const notify = useCallback((message: string, tone: NoticeTone = 'info') => {
     noticeId.current += 1
@@ -799,7 +800,16 @@ export function App() {
     const refreshShizuku = (reportError = true): void => {
       if (document.visibilityState === 'hidden') return
       void runtimeBridge.getShizukuState()
-        .then(next => { if (!cancelled) setShizuku(next) })
+        .then(next => {
+          if (!cancelled) setShizuku(next)
+          if (next.running && next.permission === 'granted' && !next.connected && !shizukuConnecting.current) {
+            shizukuConnecting.current = true
+            void runtimeBridge.connectShizuku()
+              .then(connected => { if (!cancelled) setShizuku(connected) })
+              .catch(() => {})
+              .finally(() => { shizukuConnecting.current = false })
+          }
+        })
         .catch(error => { if (!cancelled && reportError) notify(errorMessage(error), 'error') })
     }
     const handleVisibilityChange = (): void => {

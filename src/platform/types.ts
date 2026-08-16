@@ -88,6 +88,7 @@ export interface RuntimeBridge {
   execDeviceCommand: (sessionId: string, command: DeviceCommand, param?: string) => Promise<DeviceCommandResult>
   getShizukuState: () => Promise<ShizukuState>
   requestShizukuPermission: () => Promise<ShizukuState>
+  connectShizuku: () => Promise<ShizukuState>
   openShizuku: () => Promise<void>
   addRuntimeProgressListener: (listener: (event: RuntimeProgress) => void) => Promise<ListenerHandle>
   addTerminalOutputListener: (listener: (event: TerminalChunk) => void) => Promise<ListenerHandle>

@@ -160,6 +160,10 @@ export function createBrowserBridge(): RuntimeBridge {
       shizuku = { ...shizuku, permission: 'granted', connected: true }
       return Promise.resolve({ ...shizuku })
     },
+    connectShizuku: () => {
+      if (shizuku.permission === 'granted') shizuku = { ...shizuku, connected: true }
+      return Promise.resolve({ ...shizuku })
+    },
     openShizuku: () => Promise.resolve(),
     addRuntimeProgressListener: listener => {
       progressListeners.add(listener)

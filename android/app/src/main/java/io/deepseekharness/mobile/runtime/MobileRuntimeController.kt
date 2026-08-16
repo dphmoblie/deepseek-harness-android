@@ -81,6 +81,13 @@ class MobileRuntimeController(
         terminals.shizuku.requestPermission()
     }
 
+    fun connectShizuku(): ShizukuState = lifecycleLock.withLock {
+        ensureOpen()
+        // 授权已存在时直接绑定 Shizuku UserService；未授权时
+        // ShizukuRuntime.connect() 会在 requirePermission() 中拒绝（fail-closed）。
+        terminals.shizuku.connect()
+    }
+
     fun openShizukuManager() = lifecycleLock.withLock {
         ensureOpen()
         terminals.shizuku.openManager()

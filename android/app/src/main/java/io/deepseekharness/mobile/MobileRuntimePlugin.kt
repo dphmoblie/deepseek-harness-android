@@ -272,6 +272,11 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     @PluginMethod
+    fun connectShizuku(call: PluginCall) {
+        execute(call) { controller.connectShizuku().toJs() }
+    }
+
+    @PluginMethod
     fun openShizuku(call: PluginCall) {
         resolveWhileActive(call) {
             controller.openShizukuManager()

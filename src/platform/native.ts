@@ -49,6 +49,7 @@ interface NativeRuntimePlugin {
   execDeviceCommand(options: { sessionId: string; command: DeviceCommand; param?: string }): Promise<DeviceCommandResult>
   getShizukuState(): Promise<ShizukuState>
   requestShizukuPermission(): Promise<ShizukuState>
+  connectShizuku(): Promise<ShizukuState>
   openShizuku(): Promise<void>
   addListener(eventName: 'runtimeProgress', listener: (event: RuntimeProgress) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'terminalOutput', listener: (event: TerminalChunk) => void): Promise<PluginListenerHandle>
@@ -107,6 +108,7 @@ function createNativeBridge(): RuntimeBridge {
     },
     getShizukuState: () => NativeRuntime.getShizukuState().then(validateShizukuState),
     requestShizukuPermission: () => NativeRuntime.requestShizukuPermission().then(validateShizukuState),
+    connectShizuku: () => NativeRuntime.connectShizuku().then(validateShizukuState),
     openShizuku: () => NativeRuntime.openShizuku(),
     addRuntimeProgressListener: listener => NativeRuntime.addListener('runtimeProgress', validatedListener(validateRuntimeProgress, listener)),
     addTerminalOutputListener: listener => NativeRuntime.addListener('terminalOutput', validatedListener(validateTerminalChunk, listener)),

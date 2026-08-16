@@ -478,7 +478,9 @@ class ShizukuRuntime(
     }
 
     companion object {
-        private const val SHIZUKU_AUTHORITY = "moe.shizuku.privileged.api"
+        // Shizuku Manager 的 ContentProvider authority 为「包名.shizuku」，
+        // 不是包名本身；写错会导致 resolveContentProvider 检测不到已安装。
+        private const val SHIZUKU_AUTHORITY = "moe.shizuku.privileged.api.shizuku"
         private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
         private const val PERMISSION_REQUEST_CODE = 7319
         private const val PERMISSION_TIMEOUT_SECONDS = 60L
