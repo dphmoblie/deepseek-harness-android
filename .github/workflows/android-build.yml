@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    needs: build-runners
+    needs: [build-runners, build-rootfs]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +71,19 @@ jobs:
 
       - name: Verify runner placement
         run: ls -la android/app/src/main/jniLibs/arm64-v8a
+
+      - name: Download embedded runtime bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: embedded-runtime
+          path: /tmp/embedded-runtime
+
+      - name: Place embedded runtime into APK assets
+        run: |
+          mkdir -p android/app/src/main/assets/runtime
+          find /tmp/embedded-runtime -name rootfs.bundle -exec cp {} android/app/src/main/assets/runtime/rootfs.bundle \;
+          find /tmp/embedded-runtime -name runtime-manifest.json -exec cp {} android/app/src/main/assets/runtime/runtime-manifest.json \;
+          ls -la android/app/src/main/assets/runtime
 
       - name: Set up Gradle (trusted distribution for wrapper bootstrap)
         uses: gradle/actions/setup-gradle@v4
