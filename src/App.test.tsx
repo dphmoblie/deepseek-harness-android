@@ -29,6 +29,7 @@ vi.mock('./components/TerminalPanel', () => ({
 }))
 
 import { App } from './App'
+import { ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 
 const readyState: RuntimeState = {
   phase: 'ready',
@@ -53,6 +54,8 @@ const shizuku: ShizukuState = {
 }
 
 beforeEach(() => {
+  // App 测试覆盖非首启场景：显式标记引导已完成（含无 localStorage 的环境兜底）。
+  try { window.localStorage.setItem(ONBOARDING_STORAGE_KEY, 'done') } catch { /* no storage */ }
   vi.clearAllMocks()
   bridge.getState.mockResolvedValue({ ...readyState })
   bridge.getSettings.mockResolvedValue({ ...settings })
