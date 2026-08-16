@@ -179,19 +179,27 @@ jobs:
       - name: Set up pnpm
         run: npm install -g pnpm@11.19.0
 
-      - name: Prepare dsh runtime for linux/arm64 (node-pty prebuild)
+      - name: Prepare dsh runtime for linux/arm64 (compile node-pty from source)
         run: |
           mkdir -p /tmp/dsh-root && cd /tmp/dsh-root
           cat > package.json <<'EOF'
           {
             "name": "dsh-root",
             "private": true,
-            "supportedArchitectures": { "os": ["linux"], "cpu": ["arm64"] },
-            "dependencies": { "@deepseek-ai/dsh": "0.1.0-rc.6" }
+            "dependencies": { "@deepseek-ai/dsh": "0.1.0-rc.6" },
+            "devDependencies": { "node-gyp": "^10.2.0" }
           }
           EOF
+          # node-pty 1.1.0 的 npm 包不含 linux 预编译：install 脚本回退到 node-gyp 现场编译
+          #（arm64 原生 runner + 自带 gcc/make/python3）；node-gyp 必须显式声明为依赖。
           pnpm install --no-frozen-lockfile
-          ls -la node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/
+          PTP="node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty"
+          mkdir -p "$PTP/prebuilds/linux-arm64"
+          cp "$PTP/build/Release/pty.node" "$PTP/prebuilds/linux-arm64/pty.node" \
+            || { echo "pty.node 缺失，dump build 目录："; find "$PTP/build" -maxdepth 2 -type f 2>/dev/null || true; exit 1; }
+          cp "$PTP/build/Release/spawn-helper" "$PTP/prebuilds/linux-arm64/spawn-helper" 2>/dev/null || true
+          chmod +x "$PTP/prebuilds/linux-arm64/spawn-helper" 2>/dev/null || true
+          ls -la "$PTP/prebuilds/linux-arm64/"
 
       - name: Download pinned rootfs inputs
         run: |
