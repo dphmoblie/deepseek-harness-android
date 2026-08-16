@@ -193,11 +193,11 @@ jobs:
           }
           EOF
           cat > pnpm-workspace.yaml <<'EOF'
-          onlyBuiltDependencies:
-            - node-pty
-            - koffi
-            - "@deepseek-ai/dsh-subprocess-local"
-            - protobufjs
+          allowBuilds:
+            node-pty: true
+            koffi: true
+            "@deepseek-ai/dsh-subprocess-local": true
+            protobufjs: true
           EOF
           push_log() {
             echo "=== 推送步骤日志到 ci-logs 分支 ==="
@@ -214,6 +214,8 @@ jobs:
           }
           {
             pnpm install --no-frozen-lockfile
+            # 兜底：显式强制编译 node-pty，不依赖 allowBuilds 是否被解析
+            pnpm rebuild node-pty || true
             PTP="node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty"
             echo "=== pty 包路径探测 ==="
             find node_modules/.pnpm -maxdepth 2 -type d -name "node-pty*" | head -20
