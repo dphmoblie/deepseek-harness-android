@@ -18,7 +18,7 @@ const settings: RuntimeSettings = {
   terminalFontSize: 14,
 }
 
-const shizuku: ShizukuState = { installed: true, running: true, permission: 'undetermined' }
+const shizuku: ShizukuState = { installed: true, running: true, permission: 'undetermined', connected: false }
 
 function renderOnboarding(overrides: Partial<Parameters<typeof Onboarding>[0]> = {}) {
   const props = {
