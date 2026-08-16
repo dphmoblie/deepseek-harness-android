@@ -238,6 +238,8 @@ jobs:
               --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
             ls -la /tmp/rootfs.bundle /tmp/runtime-manifest.json
             sha256sum /tmp/rootfs.bundle
+            mkdir -p runtime-artifacts
+            cp /tmp/rootfs.bundle /tmp/runtime-manifest.json runtime-artifacts/
           } 2>&1 | tee /tmp/bundle.log
           STATUS="$?"
           if [ "$STATUS" != "0" ]; then
@@ -257,9 +259,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: embedded-runtime
-          path: |
-            /tmp/rootfs.bundle
-            /tmp/runtime-manifest.json
+          path: runtime-artifacts/
           if-no-files-found: error
 
   publish-release:
