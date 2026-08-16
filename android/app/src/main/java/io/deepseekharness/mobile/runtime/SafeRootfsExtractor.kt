@@ -16,6 +16,7 @@ import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 
 class SafeRootfsExtractor {
     private data class PendingSymlink(val path: Path, val target: String)
@@ -53,6 +54,7 @@ class SafeRootfsExtractor {
         val symlinks = ArrayList<PendingSymlink>()
         val hardlinks = ArrayList<PendingHardlink>()
         val directoryModes = ArrayList<PendingDirectoryMode>()
+        val execFiles = ArrayList<Path>()
         var entryCount = 0
         var extractedBytes = 0L
         onProgress(0, expectedExtractedBytes)
@@ -122,6 +124,7 @@ class SafeRootfsExtractor {
                                             onProgress(extractedBytes, expectedExtractedBytes)
                                         }
                                         Os.chmod(path.toString(), safeMode(entry.mode, directory = false))
+                                        if (entry.mode and 0x40 != 0) execFiles.add(path)
                                     }
                                     entry.isSymbolicLink -> {
                                         if (entry.size != 0L) {
@@ -152,9 +155,10 @@ class SafeRootfsExtractor {
                 throw RuntimeFailure("ARCHIVE_SIZE_MISMATCH", "运行时实际解压大小与清单不一致")
             }
             if (shouldCancel()) throw RuntimeFailure("INSTALL_CANCELLED", "运行时安装已取消")
+            stampExecutableFiles(execFiles)
             createHardlinks(hardlinks)
             for ((path, target) in symlinks) {
-                if (path.toFile().exists()) {
+                if (RuntimeFiles.existsNoFollow(path.toFile())) {
                     throw RuntimeFailure("ARCHIVE_DUPLICATE_ENTRY", "符号链接目标路径已存在")
                 }
                 Os.symlink(target, path.toString())
@@ -182,6 +186,46 @@ class SafeRootfsExtractor {
         while (true) {
             if (shouldCancel()) throw RuntimeFailure("INSTALL_CANCELLED", "运行时安装已取消")
             if (input.read(buffer) < 0) return
+        }
+    }
+
+    /**
+     * 为归档内可执行文件批量盖章 `security.android.exec` 扩展属性。
+     * Android 15+ 要求应用数据目录内的 ELF 携带该属性才能 exec，
+     * 旧内核不支持时整体忽略（盖章是增强项，失败不影响 rootfs 解压）。
+     */
+    private fun stampExecutableFiles(paths: List<Path>) {
+        if (paths.isEmpty()) return
+        try {
+            paths.chunked(EXEC_STAMP_BATCH_SIZE).forEach { batch ->
+                val workers = batch.map { path ->
+                    val process = ProcessBuilder(
+                        "/system/bin/setfattr",
+                        "-n",
+                        "security.android.exec",
+                        "-v",
+                        "1",
+                        path.toString(),
+                    )
+                        .redirectErrorStream(true)
+                        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                        .start()
+                    process to path
+                }
+                workers.forEach { (process, path) ->
+                    try {
+                        if (!process.waitFor(EXEC_STAMP_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                            process.destroyForcibly()
+                        }
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        process.destroyForcibly()
+                        return@forEach
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+            // setfattr 缺失或内核不支持 exec 属性时忽略
         }
     }
 
@@ -269,6 +313,8 @@ class SafeRootfsExtractor {
 
     companion object {
         private const val BUFFER_SIZE = 64 * 1024
+        private const val EXEC_STAMP_BATCH_SIZE = 64
+        private const val EXEC_STAMP_TIMEOUT_SECONDS = 30L
         private val SHA256_PATTERN = Regex("^[a-f0-9]{64}$")
     }
 }

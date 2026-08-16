@@ -63,6 +63,11 @@ bridge cannot choose another executable, add process arguments, or run a
 background command without an open user-visible terminal session. Shizuku
 supplies shell-level privileges, not root or Android hardware virtualization.
 
+一次性特权设备自动化（screencap/uiautomator/input 等）由 `ReflectiveShellExecutor`
+经反射调用 shizuku-api 13.1.5 私有 `Shizuku.newProcess` 实现，与 UserService PTY 终端互补；
+Shizuku 不可用、未授权或反射失败时一律失效即关（fail-closed）。
+详见 `docs/legacy/v2-bridge.md`（历史协议留档与反射依据）。
+
 ## Operit2 runtime boundary
 
 The Capacitor bridge, download verifier, extractor, PTY wrapper, and fixed

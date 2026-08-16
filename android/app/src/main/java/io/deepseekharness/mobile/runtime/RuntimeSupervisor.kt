@@ -8,6 +8,7 @@ import java.net.URL
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class HarnessAccess(
     val url: String,
@@ -32,9 +33,19 @@ class RuntimeSupervisor(
     private var harnessOutput: ProcessOutputTail? = null
     private var harnessAccess: HarnessAccess? = null
 
-    fun startHarness(): RuntimeStateSnapshot = synchronized(lock) {
+    fun startHarness(): RuntimeStateSnapshot {
+        // CAS 防重入：启动进行中时直接返回当前状态快照，避免并发启动排队
+        if (!starting.compareAndSet(false, true)) {
+            return synchronized(lock) { status.snapshot() }
+        }
+        try {
+            return synchronized(lock) {
         val existing = harnessProcess
         if (existing?.isAlive == true && harnessAccess != null) return@synchronized status.snapshot()
+        // 冷却期：仅在成功启动后生效，失败可立即重试
+        if (System.currentTimeMillis() - lastStartAttemptAt < START_COOLDOWN_MS) {
+            return@synchronized status.snapshot()
+        }
         clearHarnessState()
 
         val manifest = store.installedManifest()
@@ -95,15 +106,21 @@ class RuntimeSupervisor(
             throw error
         }
         harnessAccess = access
+        lastStartAttemptAt = System.currentTimeMillis()
         status.update(
             RuntimePhase.RUNNING,
             downloaded = manifest.rootfs.compressedBytes,
             total = manifest.rootfs.compressedBytes,
             nextHarnessUrl = manifest.harnessUri.toASCIIString(),
         )
+            }
+        } finally {
+            starting.set(false)
+        }
     }
 
     fun stop(): RuntimeStateSnapshot = synchronized(lock) {
+        lastStartAttemptAt = 0
         val process = harnessProcess
         if (process == null || !process.isAlive) {
             clearHarnessState()
@@ -228,6 +245,9 @@ class RuntimeSupervisor(
     companion object {
         private val NODE_PROBE_ENTRYPOINT = listOf("/opt/node/bin/node", "--version")
         private val HARNESS_PROBE_ENTRYPOINT = listOf("/usr/local/bin/dsh", "--version")
+        private const val START_COOLDOWN_MS = 90_000L
+        private val starting = AtomicBoolean(false)
+        @Volatile private var lastStartAttemptAt = 0L
         private const val START_TIMEOUT_SECONDS = 120L
         private const val STOP_TIMEOUT_SECONDS = 3L
         private const val NODE_PROBE_TIMEOUT_SECONDS = 15L

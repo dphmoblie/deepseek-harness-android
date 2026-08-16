@@ -48,6 +48,15 @@ class RuntimeInstaller(
             status.update(transferPhase, downloaded = 0, total = 0)
             val manifest = loadManifest(source)
             checkCancellation()
+            if (isCurrent(manifest)) {
+                status.update(
+                    RuntimePhase.READY,
+                    downloaded = manifest.rootfs.compressedBytes,
+                    total = manifest.rootfs.compressedBytes,
+                    nextHarnessUrl = null,
+                )
+                return
+            }
             workspace = createWorkspace(manifest, source.isBundled)
             status.update(transferPhase, downloaded = 0, total = manifest.rootfs.compressedBytes)
 
@@ -146,6 +155,15 @@ class RuntimeInstaller(
         } finally {
             installLock.unlock()
         }
+    }
+
+    /**
+     * 指纹比对：目标清单与已安装清单的 rootfs 摘要一致时视为已是最新，
+     * 跳过下载与解压（防重复安装，也防内嵌快照覆盖在线更新）。
+     */
+    private fun isCurrent(manifest: RuntimeManifest): Boolean {
+        val installed = store.installedManifest() ?: return false
+        return installed.rootfs.sha256 == manifest.rootfs.sha256
     }
 
     private fun loadManifest(source: RuntimeSource): RuntimeManifest {
