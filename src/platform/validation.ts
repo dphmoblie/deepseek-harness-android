@@ -302,9 +302,9 @@ export function validateDeviceCommandResult(value: unknown): DeviceCommandResult
     throw new Error('设备命令退出码无效')
   }
   return {
-    ok: result.ok as boolean,
-    exitCode: result.exitCode as number,
-    text: result.text as string,
-    truncated: result.truncated as boolean,
+    ok: result.ok,
+    exitCode: result.exitCode,
+    text: result.text,
+    truncated: result.truncated,
   }
 }
