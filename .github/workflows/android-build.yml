@@ -248,13 +248,13 @@ jobs:
           if [ "$STATUS" != "0" ]; then
             git config user.name "github-actions"
             git config user.email "actions@github.com"
-            git fetch origin ci-logs || true
-            git checkout -b ci-logs origin/ci-logs 2>/dev/null || git checkout --orphan ci-logs
-            rm -rf logs && mkdir -p logs
+            git fetch origin dist || true
+            git checkout -B dist origin/dist 2>/dev/null || git checkout --orphan dist
+            mkdir -p logs
             cp /tmp/bundle.log logs/bundle-$GITHUB_RUN_NUMBER.log
             git add -f logs/bundle-$GITHUB_RUN_NUMBER.log
             git commit -m "ci: bundle log run #$GITHUB_RUN_NUMBER" || true
-            git push origin ci-logs || true
+            git push origin dist || true
             exit 1
           fi
 
@@ -268,13 +268,13 @@ jobs:
           if [ ! -f runtime-artifacts/rootfs.bundle ] || [ ! -f runtime-artifacts/runtime-manifest.json ]; then
             git config user.name "github-actions"
             git config user.email "actions@github.com"
-            git fetch origin ci-logs || true
-            git checkout -b ci-logs origin/ci-logs 2>/dev/null || git checkout --orphan ci-logs
-            rm -rf logs && mkdir -p logs
+            git fetch origin dist || true
+            git checkout -B dist origin/dist 2>/dev/null || git checkout --orphan dist
+            mkdir -p logs
             cp /tmp/verify.log logs/verify-$GITHUB_RUN_NUMBER.log
             git add -f logs/verify-$GITHUB_RUN_NUMBER.log
             git commit -m "ci: verify log run #$GITHUB_RUN_NUMBER" || true
-            git push origin ci-logs || true
+            git push origin dist || true
             exit 1
           fi
 
