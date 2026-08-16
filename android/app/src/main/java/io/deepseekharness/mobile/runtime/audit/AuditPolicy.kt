@@ -7,7 +7,6 @@ import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 
 enum class AuditEvent {
-    APP_AUTH,
     PLUGIN_LOAD,
     PLUGIN_DESTROY,
     RUNTIME_INSTALL,

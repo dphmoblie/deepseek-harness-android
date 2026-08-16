@@ -31,13 +31,20 @@ fixed Ubuntu and Node.js input digests, preserves Unix metadata, and emits the
 archive metadata and SHA-256 used by the embedded manifest.
 
 When no remote source is configured, installation uses the embedded manifest
-and gzip rootfs and still verifies its declared byte length and SHA-256. A build
-or an authenticated user can instead configure both
+and gzip rootfs and still verifies its declared byte length and SHA-256. This
+APK-asset copy is reported as `preparing`, not as a completed network download.
+A build or the app user can instead configure both
 `DSH_RUNTIME_MANIFEST_URL` and `DSH_RUNTIME_MANIFEST_SHA256` (or their matching
 settings fields). That pair selects a remote HTTPS manifest whose exact bytes
 must match the pinned digest; the manifest then pins the HTTPS rootfs URL,
 length, architecture, compression, and SHA-256. Supplying only one value is an
-invalid configuration, not a fallback. Do not put API keys, passwords,
+invalid configuration, not a fallback. Remote archives use an app-private
+`rootfs-<sha256>.part` file, so an interrupted transfer can resume across app
+restarts. A resumed response must be HTTP 206 with the exact expected
+`Content-Range`; a server that ignores Range and returns HTTP 200, or rejects a
+stale range with HTTP 416, causes a verified restart from byte zero. Network,
+TLS, and timeout failures enter an explicit error state while retaining the
+bounded app-private partial file. Do not put API keys, passwords,
 database credentials, signing passwords, or tokens in `.env`, Gradle files,
 source code, manifests, URLs, or logs.
 
@@ -59,16 +66,32 @@ and exact release digests. See
 ## Security checkpoints
 
 - Native bridge inputs have explicit type, length, format, and state validation.
-- The management WebView is hidden until Android device-credential authentication succeeds and is locked again when the activity leaves the foreground.
+- The management WebView opens directly without an Android device-credential
+  prompt. Management operations use the same direct app session; `FLAG_SECURE`
+  blocks ordinary screenshots but is not an authentication boundary.
 - Embedded and downloaded artifacts require exact digests and byte limits;
-  downloads additionally require HTTPS, staging files, and atomic promotion.
-- Archive extraction prevents traversal and does not create device nodes.
+  downloads additionally require HTTPS, resumable digest-named staging files,
+  strict Range-response validation, and atomic promotion.
+- Archive extraction prevents traversal and does not create device nodes. The
+  exact compressed stream consumed by the extractor is counted and hashed
+  again before promotion, independently enforcing the manifest's compressed
+  size and SHA-256 during decompression.
+- Before launching Ubuntu, the app probes the packaged PRoot runner and its
+  seccomp compatibility, then requires individually validated bind mounts for
+  the generated resolver file, `/dev`, and `/proc`. Startup fails closed if a
+  required source, guest target, or compatibility probe is unavailable.
 - Harness binds only to Android loopback; no business service is exposed on `0.0.0.0`.
 - Every Harness start generates a non-persistent 256-bit credential. A rootfs
   preload authenticates both HTTP and WebSocket upgrades before upstream
-  handlers run, and only the device-authenticated internal WebView answers the
-  Basic-auth challenge. The credential is never placed in the URL or audit log.
-- Shizuku access requires a visible permission grant and a user-opened terminal session.
+  handlers run, and the non-exported internal WebView answers the Basic-auth
+  challenge transparently. An open TCP port alone is not considered ready: two
+  loopback probes separated by a stability interval must return HTTP 401 with
+  the exact expected Basic realm and UTF-8 challenge. The credential is never
+  placed in the URL or audit log.
+- Shizuku access requires the declared `ShizukuProvider`, a visible permission
+  grant, and a user-opened terminal session. Binder or UserService loss clears
+  active sessions; a later terminal request reconnects, and `connected` is true
+  only while a live authorized UserService binder is available.
 - Reset is confined to the app-private runtime root and does not follow symbolic links.
 - Owner-only audit files rotate daily and retain at least 90 days of fixed event/result codes.
 - No credential, URL, command, session identifier, terminal content, or sensitive user data is written to application audit files.

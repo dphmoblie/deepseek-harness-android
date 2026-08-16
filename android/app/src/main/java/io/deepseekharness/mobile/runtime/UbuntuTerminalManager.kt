@@ -24,6 +24,7 @@ class UbuntuTerminalManager(
     )
 
     private val appContext = context.applicationContext
+    private val launchResolver = RuntimeLaunchResolver(appContext, store)
     private val sessions = ConcurrentHashMap<String, Session>()
     private val ioExecutor = Executors.newCachedThreadPool()
     private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
@@ -32,8 +33,9 @@ class UbuntuTerminalManager(
         validateSize(columns, rows)
         val manifest = store.installedManifest()
             ?: throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
-        val argv = RuntimeCommand.prootArgv(store, manifest.shellArgv).toTypedArray()
-        val environment = RuntimeCommand.hostEnvironment(appContext, store)
+        val launch = launchResolver.launch(manifest.shellArgv)
+        val argv = launch.argv.toTypedArray()
+        val environment = launch.environment
             .map { (key, value) -> "$key=$value" }
             .toTypedArray()
         val handles = try {

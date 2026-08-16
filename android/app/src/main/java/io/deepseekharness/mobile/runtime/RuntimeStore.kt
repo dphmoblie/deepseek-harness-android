@@ -28,6 +28,9 @@ class RuntimeStore(context: Context) {
     val backupManifest = File(runtimeParent, "previous-manifest.json")
     val runnerFile get() = File(appContext.applicationInfo.nativeLibraryDir, RUNNER_NAME)
     val loaderFile get() = File(appContext.applicationInfo.nativeLibraryDir, LOADER_NAME)
+    private val launchDirectory = File(appContext.noBackupFilesDir, "dsh-runner")
+    val launchRunnerFile = File(launchDirectory, "proot")
+    val launchLoaderFile = File(launchDirectory, "loader")
     val resolverFile = File(appContext.filesDir, "runtime-resolv.conf")
 
     @Volatile private var manifestCacheLoaded = false
@@ -54,6 +57,28 @@ class RuntimeStore(context: Context) {
 
     fun runnerAvailable(): Boolean = listOf(runnerFile, loaderFile).all {
         it.isFile && it.canRead() && it.canExecute()
+    }
+
+    @Synchronized
+    fun prepareLaunchFiles() {
+        if (!runnerAvailable()) {
+            throw RuntimeFailure("RUNNER_UNAVAILABLE", "APK 未包含当前架构的受信任运行器")
+        }
+        if (RuntimeFiles.existsNoFollow(launchDirectory)) {
+            if (!RuntimeFiles.isDirectoryNoFollow(launchDirectory)) {
+                throw RuntimeFailure("RUNNER_PREPARE_FAILED", "运行器私有目录无效")
+            }
+        } else if (!launchDirectory.mkdir()) {
+            throw RuntimeFailure("RUNNER_PREPARE_FAILED", "无法创建运行器私有目录")
+        }
+        try {
+            Os.chmod(launchDirectory.absolutePath, 0x1c0)
+            refreshExecutableLink(runnerFile, launchRunnerFile)
+            refreshExecutableLink(loaderFile, launchLoaderFile)
+        } catch (error: Throwable) {
+            if (error is RuntimeFailure) throw error
+            throw RuntimeFailure("RUNNER_PREPARE_FAILED", "无法准备受信任运行器", error)
+        }
     }
 
     fun openBundledManifest(): InputStream = openBundledAsset(BUNDLED_MANIFEST_ASSET)
@@ -163,6 +188,37 @@ class RuntimeStore(context: Context) {
         appContext.assets.open(path)
     } catch (error: Exception) {
         throw RuntimeFailure("BUNDLED_RUNTIME_MISSING", "APK 未包含完整的初始化运行时", error)
+    }
+
+    private fun refreshExecutableLink(target: File, link: File) {
+        if (isExecutableLinkTo(target, link)) return
+
+        val pending = File(launchDirectory, ".${link.name}.new")
+        if (RuntimeFiles.existsNoFollow(pending) && !pending.delete()) {
+            throw RuntimeFailure("RUNNER_PREPARE_FAILED", "无法清理运行器临时链接")
+        }
+        try {
+            Os.symlink(target.absolutePath, pending.absolutePath)
+            if (!isExecutableLinkTo(target, pending)) {
+                throw RuntimeFailure("RUNNER_PREPARE_FAILED", "运行器临时链接不可执行")
+            }
+            // rename replaces an old link atomically, so active PRoot processes never observe a missing loader.
+            Os.rename(pending.absolutePath, link.absolutePath)
+        } finally {
+            if (RuntimeFiles.existsNoFollow(pending)) pending.delete()
+        }
+        if (!isExecutableLinkTo(target, link)) {
+            throw RuntimeFailure("RUNNER_PREPARE_FAILED", "运行器私有链接不可执行")
+        }
+    }
+
+    private fun isExecutableLinkTo(target: File, link: File): Boolean = try {
+        val stat = Os.lstat(link.absolutePath)
+        OsConstants.S_ISLNK(stat.st_mode) &&
+            Os.readlink(link.absolutePath) == target.absolutePath &&
+            link.isFile && link.canRead() && link.canExecute()
+    } catch (error: ErrnoException) {
+        if (error.errno == OsConstants.ENOENT) false else throw error
     }
 
     companion object {

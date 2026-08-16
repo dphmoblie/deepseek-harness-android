@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Bot,
@@ -65,6 +65,7 @@ const TABS: TabDefinition[] = [
 
 const PHASE_META: Record<RuntimePhase, { label: string; tone: string }> = {
   'not-installed': { label: '未安装', tone: 'neutral' },
+  preparing: { label: '读取内置环境', tone: 'blue' },
   downloading: { label: '下载中', tone: 'blue' },
   verifying: { label: '正在校验', tone: 'amber' },
   extracting: { label: '正在安装', tone: 'amber' },
@@ -86,8 +87,90 @@ const EMPTY_SHIZUKU: ShizukuState = {
   installed: false,
   running: false,
   permission: 'undetermined',
+  connected: false,
 }
 const MAX_NOTICE_CHARACTERS = 240
+const RESET_CONFIRMATION = 'RESET_RUNTIME'
+const UNKNOWN_RUNTIME_ERROR_MESSAGE = '运行时操作失败，请稍后重试；如问题持续，请重置环境。'
+const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  SOURCE_INCOMPLETE: '请同时配置运行时清单地址和 SHA-256，或同时留空。',
+  URL_INVALID: '运行时下载地址格式无效。',
+  URL_HOST_NOT_ALLOWED: '运行时下载地址必须使用允许的公网 HTTPS 主机。',
+  DIGEST_INVALID: '配置的 SHA-256 格式无效。',
+  DOWNLOAD_FAILED: '运行时下载失败，请稍后重试。',
+  DOWNLOAD_HOST_NOT_ALLOWED: '下载重定向离开了允许的主机。',
+  DOWNLOAD_NETWORK_UNAVAILABLE: '网络不可用或下载连接已中断，可稍后继续。',
+  DOWNLOAD_TIMEOUT: '下载连接或读取超时，可稍后继续。',
+  DOWNLOAD_TLS_FAILED: '下载服务的 TLS 校验失败。',
+  DOWNLOAD_HOST_UNRESOLVED: '无法解析下载主机。',
+  DOWNLOAD_HTTP_ERROR: '下载服务返回了错误响应。',
+  DOWNLOAD_INCOMPLETE: '下载尚未完成，再次安装时会继续。',
+  DOWNLOAD_RANGE_INVALID: '下载服务返回了无效的断点响应。',
+  DOWNLOAD_REDIRECT_LIMIT: '下载重定向次数过多。',
+  DOWNLOAD_TOO_LARGE: '下载内容超过清单声明或应用大小限制。',
+  DOWNLOAD_PART_CHANGED: '断点文件在下载期间发生变化，请重试。',
+  DOWNLOAD_PART_INVALID: '断点文件无效，请重置环境后重试。',
+  MANIFEST_DIGEST_MISMATCH: '运行时清单完整性校验失败。',
+  MANIFEST_INVALID: '运行时清单格式无效。',
+  MANIFEST_SCHEMA_UNSUPPORTED: '当前应用不支持此运行时清单版本。',
+  MANIFEST_SIZE_INVALID: '运行时清单中的大小信息无效。',
+  ARCHITECTURE_UNSUPPORTED: '运行时架构与当前设备不兼容。',
+  ENTRYPOINT_NOT_ALLOWED: '运行时清单包含不允许的启动入口。',
+  HARNESS_URL_INVALID: '运行时清单中的 Harness 地址无效。',
+  ARCHIVE_COMPRESSION_UNSUPPORTED: '当前应用不支持此运行时归档格式。',
+  ROOTFS_DIGEST_MISMATCH: '运行时归档完整性校验失败。',
+  ARCHIVE_DIGEST_MISMATCH: '内置运行时归档完整性校验失败。',
+  ARCHIVE_SOURCE_DIGEST_MISMATCH: '解压时读取的运行时归档未通过完整性复核。',
+  ARCHIVE_SOURCE_SIZE_MISMATCH: '解压时读取的运行时归档大小与清单不一致。',
+  ARCHIVE_SIZE_MISMATCH: '运行时归档的实际解压大小与清单不一致。',
+  ARCHIVE_EXPANSION_LIMIT: '运行时归档解压后超过允许大小。',
+  ARCHIVE_ENTRY_LIMIT: '运行时归档包含过多文件。',
+  ARCHIVE_FEATURE_UNSUPPORTED: '运行时归档包含不支持的文件特性。',
+  ARCHIVE_ENTRY_TYPE_REJECTED: '运行时归档包含不允许的文件类型。',
+  ARCHIVE_PATH_INVALID: '运行时归档包含无效路径。',
+  ARCHIVE_PATH_CONFLICT: '运行时归档中的文件路径发生冲突。',
+  ARCHIVE_DUPLICATE_ENTRY: '运行时归档包含重复文件。',
+  ARCHIVE_LINK_INVALID: '运行时归档包含无效链接。',
+  ARCHIVE_TRUNCATED: '运行时归档内容不完整。',
+  ARCHIVE_EXTRACTION_FAILED: '无法解压运行时归档。',
+  BUNDLED_RUNTIME_MISSING: 'APK 未包含完整的内置运行时。',
+  BUNDLED_RUNTIME_READ_FAILED: '无法读取 APK 内置运行时。',
+  FILESYSTEM_ERROR: '无法安全读写应用私有运行时文件，请检查可用存储空间。',
+  FILESYSTEM_SECURE_DELETE_UNAVAILABLE: '当前设备无法安全清理运行时文件。',
+  CLEANUP_FAILED: '无法完整清理旧运行时文件，请重试。',
+  RESET_SCOPE_INVALID: '为保护应用数据，已拒绝范围异常的文件清理操作。',
+  STAGING_NOT_EMPTY: '运行时暂存目录状态异常，请重试。',
+  RUNTIME_RECOVERY_FAILED: '无法恢复上次中断的运行时安装。',
+  RUNTIME_PROMOTION_FAILED: '无法启用已完成校验的运行时。',
+  INSTALL_IN_PROGRESS: '运行时安装正在进行。',
+  INSTALL_CANCELLED: '运行时安装已取消，再次安装时可继续下载。',
+  INSTALL_FAILED: '运行时安装失败，请稍后重试。',
+  RUNTIME_BUSY: '请先停止 Harness 和 Ubuntu 终端。',
+  RUNNER_UNAVAILABLE: 'APK 未包含当前设备架构所需的运行器。',
+  PROOT_RUNNER_START_FAILED: 'Android 无法执行内置 PRoot，请确认安装的是新版 ARM64 应用。',
+  PROOT_RUNNER_TIMEOUT: 'PRoot 自检超时，请停止其他会话后重试。',
+  PROOT_RUNNER_REJECTED: '内置 PRoot 未通过启动自检。',
+  PROOT_PROBE_TIMEOUT: 'PRoot 启动 Ubuntu 超时。',
+  PROOT_PTRACE_DENIED: '系统内核拒绝 PRoot 所需的 ptrace 操作，当前设备可能不兼容。',
+  PROOT_SECCOMP_UNAVAILABLE: '系统内核的 seccomp 策略与 PRoot 不兼容。',
+  PROOT_GUEST_EXEC_FAILED: 'PRoot 无法加载 Ubuntu 程序。',
+  PROOT_GUEST_START_FAILED: 'PRoot 无法启动 Ubuntu 用户空间。',
+  RUNNER_PREPARE_FAILED: '无法准备内置 PRoot 运行器。',
+  PROOT_REQUIRED_BIND_FAILED: 'PRoot 无法挂载 Ubuntu 必需的 DNS、设备或进程路径。',
+  NODE_RUNTIME_FAILED: '内置 Node.js 无法在当前设备运行。',
+  NODE_CPU_UNSUPPORTED: '设备 CPU 无法执行内置 Node.js。',
+  HARNESS_PREFLIGHT_FAILED: 'Harness 命令未通过启动自检。',
+  HARNESS_PORT_IN_USE: 'Harness 本机端口已被占用，请停止占用端口的程序后重试。',
+  HARNESS_MODULE_MISSING: 'Harness 运行模块不完整。',
+  HARNESS_NATIVE_MODULE_FAILED: 'Harness 原生模块无法在当前设备运行。',
+  HARNESS_START_TIMEOUT: 'Harness 首次启动超时，请重试或先打开 Ubuntu 终端检查环境。',
+  HARNESS_EXITED: 'Harness 在完成启动前已退出。',
+}
+
+function runtimeErrorMessage(errorCode?: string): string {
+  if (errorCode === undefined) return '请重试启动；重置环境仅用于清除用户数据。'
+  return RUNTIME_ERROR_MESSAGES[errorCode] ?? UNKNOWN_RUNTIME_ERROR_MESSAGE
+}
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
@@ -141,9 +224,9 @@ interface AgentScreenProps {
 }
 
 function AgentScreen({ busy, runtime, onInstall, onOpen, onStart, onStop, onTabChange }: AgentScreenProps) {
-  const installed = runtime.phase === 'ready' || runtime.phase === 'running' || runtime.phase === 'stopping'
+  const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running' || runtime.phase === 'stopping'
   const running = runtime.phase === 'running'
-  const transitional = runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting'
+  const transitional = runtime.phase === 'preparing' || runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting'
 
   return (
     <div className="screen agent-screen">
@@ -226,7 +309,7 @@ function AgentScreen({ busy, runtime, onInstall, onOpen, onStart, onStop, onTabC
       {runtime.phase === 'error' && (
         <div className="inline-alert danger" role="alert">
           <AlertTriangle size={19} />
-          <div><strong>运行时发生错误</strong><span>{runtime.errorCode ?? '请前往环境页面重试或重置。'}</span></div>
+          <div><strong>运行环境启动失败</strong><span>{runtimeErrorMessage(runtime.errorCode)}</span></div>
         </div>
       )}
     </div>
@@ -235,6 +318,7 @@ function AgentScreen({ busy, runtime, onInstall, onOpen, onStart, onStop, onTabC
 
 interface EnvironmentScreenProps {
   busy: string | null
+  bundledSource: boolean
   runtime: RuntimeState
   onInstall: () => void
   onReset: () => void
@@ -242,20 +326,29 @@ interface EnvironmentScreenProps {
   onStop: () => void
 }
 
-function EnvironmentScreen({ busy, runtime, onInstall, onReset, onStart, onStop }: EnvironmentScreenProps) {
-  const inProgress = ['downloading', 'verifying', 'extracting'].includes(runtime.phase)
+function EnvironmentScreen({ busy, bundledSource, runtime, onInstall, onReset, onStart, onStop }: EnvironmentScreenProps) {
+  const inProgress = ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
   const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running'
   const progress = runtime.totalBytes > 0
     ? Math.min(100, Math.round((runtime.downloadedBytes / runtime.totalBytes) * 100))
     : 0
 
-  const steps: Array<{ phase: RuntimePhase; label: string }> = [
-    { phase: 'downloading', label: '下载' },
-    { phase: 'verifying', label: '校验' },
-    { phase: 'extracting', label: '安装' },
-    { phase: 'ready', label: '就绪' },
+  const measurableProgress = ['preparing', 'downloading', 'extracting'].includes(runtime.phase) && runtime.totalBytes > 0
+  const steps: Array<{ id: string; label: string }> = [
+    { id: 'acquire', label: bundledSource ? '读取' : '下载' },
+    { id: 'verify', label: '校验' },
+    { id: 'install', label: '安装' },
+    { id: 'ready', label: '就绪' },
   ]
-  const currentStep = runtime.phase === 'running' ? 3 : steps.findIndex(step => step.phase === runtime.phase)
+  const currentStep = installed
+    ? 3
+    : runtime.phase === 'preparing' || runtime.phase === 'downloading'
+      ? 0
+      : runtime.phase === 'verifying'
+        ? 1
+        : runtime.phase === 'extracting'
+          ? 2
+          : -1
 
   return (
     <div className="screen environment-screen">
@@ -280,10 +373,10 @@ function EnvironmentScreen({ busy, runtime, onInstall, onReset, onStart, onStop 
           <div className="download-progress" aria-live="polite">
             <div className="progress-copy">
               <span>{PHASE_META[runtime.phase].label}</span>
-              <strong>{runtime.phase === 'downloading' ? `${progress}%` : '处理中'}</strong>
+              <strong>{measurableProgress ? `${progress}%` : '处理中'}</strong>
             </div>
             <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
-              <span style={{ width: `${runtime.phase === 'downloading' ? progress : 100}%` }} className={runtime.phase === 'downloading' ? '' : 'indeterminate'} />
+              <span style={{ width: `${measurableProgress ? progress : 100}%` }} className={measurableProgress ? '' : 'indeterminate'} />
             </div>
             <div className="progress-detail">
               <span>{formatBytes(runtime.downloadedBytes)}</span>
@@ -297,7 +390,7 @@ function EnvironmentScreen({ busy, runtime, onInstall, onReset, onStart, onStop 
             const complete = installed || currentStep > index
             const active = currentStep === index && !installed
             return (
-              <div className={`install-step ${complete ? 'complete' : ''} ${active ? 'active' : ''}`} key={step.phase}>
+              <div className={`install-step ${complete ? 'complete' : ''} ${active ? 'active' : ''}`} key={step.id}>
                 <span>{complete ? <CheckCircle2 size={17} /> : index + 1}</span>
                 <small>{step.label}</small>
               </div>
@@ -309,7 +402,7 @@ function EnvironmentScreen({ busy, runtime, onInstall, onReset, onStart, onStop 
           {!installed && !inProgress && (
             <button className="button button-primary" type="button" onClick={onInstall} disabled={busy !== null || !runtime.runnerAvailable}>
               {busy === 'install' ? <Loader2 className="spin" size={18} /> : <CloudDownload size={18} />}
-              下载并安装
+              {bundledSource ? '安装内置环境' : '下载并安装'}
             </button>
           )}
           {runtime.phase === 'ready' && (
@@ -333,11 +426,18 @@ function EnvironmentScreen({ busy, runtime, onInstall, onReset, onStart, onStop 
         </div>
       </section>
 
+      {runtime.phase === 'error' && (
+        <div className="inline-alert danger" role="alert">
+          <AlertTriangle size={19} />
+          <div><strong>{installed ? '运行环境启动失败' : '安装未完成'}</strong><span>{runtimeErrorMessage(runtime.errorCode)}</span></div>
+        </div>
+      )}
+
       <section className="detail-section" aria-labelledby="environment-details">
         <h2 id="environment-details">环境详情</h2>
         <div className="detail-list">
           <div className="detail-row"><span><Cpu size={18} />架构</span><strong>{runtime.architecture}</strong></div>
-          <div className="detail-row"><span><Database size={18} />镜像大小</span><strong>{formatBytes(runtime.totalBytes)}</strong></div>
+          <div className="detail-row"><span><Database size={18} />{inProgress ? '当前阶段总量' : '镜像大小'}</span><strong>{formatBytes(runtime.totalBytes)}</strong></div>
           <div className="detail-row"><span><Gauge size={18} />本机运行器</span><strong>{runtime.runnerAvailable ? '可用' : '不可用'}</strong></div>
           <div className="detail-row"><span><LockKeyhole size={18} />网络入口</span><strong>应用内</strong></div>
         </div>
@@ -437,7 +537,7 @@ function SettingsScreen({ busy, settings, shizuku, onAuthorize, onOpenShizuku, o
     : !shizuku.running
       ? '未运行'
       : shizuku.permission === 'granted'
-        ? '已授权'
+        ? shizuku.connected ? '已连接' : '已授权'
         : shizuku.permission === 'denied'
           ? '已拒绝'
           : '待授权'
@@ -532,7 +632,7 @@ function SettingsScreen({ busy, settings, shizuku, onAuthorize, onOpenShizuku, o
               </button>
             )}
             {shizuku.permission === 'granted' && (
-              <div className="permission-granted"><CheckCircle2 size={18} />权限可用</div>
+              <div className="permission-granted"><CheckCircle2 size={18} />{shizuku.connected ? '连接可用' : '权限可用'}</div>
             )}
           </div>
         </section>
@@ -555,12 +655,18 @@ interface ResetDialogProps {
 function ResetDialog({ busy, onCancel, onConfirm }: ResetDialogProps) {
   const [confirmation, setConfirmation] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const confirmed = confirmation.trim().toUpperCase() === RESET_CONFIRMATION
 
-  useEffect(() => inputRef.current?.focus(), [])
+  const submitReset = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (busy || !confirmed) return
+    inputRef.current?.blur()
+    onConfirm()
+  }
 
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !busy) onCancel() }}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="reset-title">
+    <div className="dialog-backdrop" role="presentation" onPointerDown={event => { if (event.target === event.currentTarget && !busy) onCancel() }}>
+      <form className="dialog" role="dialog" aria-modal="true" aria-labelledby="reset-title" onSubmit={submitReset}>
         <button className="dialog-close" type="button" aria-label="关闭" onClick={onCancel} disabled={busy}><X size={19} /></button>
         <span className="dialog-danger-icon"><Trash2 size={23} /></span>
         <h2 id="reset-title">重置 Ubuntu 环境</h2>
@@ -571,20 +677,22 @@ function ResetDialog({ busy, onCancel, onConfirm }: ResetDialogProps) {
             ref={inputRef}
             type="text"
             autoComplete="off"
+            autoCapitalize="characters"
+            enterKeyHint="done"
             spellCheck={false}
-            maxLength={13}
+            maxLength={32}
             value={confirmation}
             onChange={event => setConfirmation(event.target.value)}
           />
         </label>
         <div className="dialog-actions">
           <button className="button button-secondary" type="button" onClick={onCancel} disabled={busy}>取消</button>
-          <button className="button button-danger" type="button" onClick={onConfirm} disabled={busy || confirmation !== 'RESET_RUNTIME'}>
+          <button className="button button-danger" type="submit" disabled={busy || !confirmed}>
             {busy ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
-            确认重置
+            {busy ? '正在重置' : '确认重置'}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   )
 }
@@ -630,7 +738,7 @@ export function App() {
               phase: progress.phase,
               downloadedBytes: progress.downloadedBytes,
               totalBytes: progress.totalBytes,
-              errorCode: progress.phase === 'error' ? current.errorCode : undefined,
+              errorCode: progress.phase === 'error' ? progress.errorCode : undefined,
             }))
           }),
         ])
@@ -659,21 +767,24 @@ export function App() {
   useEffect(() => {
     let cancelled = false
 
-    const refreshShizuku = (): void => {
+    const refreshShizuku = (reportError = true): void => {
       if (document.visibilityState === 'hidden') return
       void runtimeBridge.getShizukuState()
         .then(next => { if (!cancelled) setShizuku(next) })
-        .catch(error => { if (!cancelled) notify(errorMessage(error), 'error') })
+        .catch(error => { if (!cancelled && reportError) notify(errorMessage(error), 'error') })
     }
     const handleVisibilityChange = (): void => {
       if (document.visibilityState === 'visible') refreshShizuku()
     }
+    const handleFocus = (): void => refreshShizuku()
 
-    window.addEventListener('focus', refreshShizuku)
+    window.addEventListener('focus', handleFocus)
     document.addEventListener('visibilitychange', handleVisibilityChange)
+    const timer = window.setInterval(() => refreshShizuku(false), 2500)
     return () => {
       cancelled = true
-      window.removeEventListener('focus', refreshShizuku)
+      window.clearInterval(timer)
+      window.removeEventListener('focus', handleFocus)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [notify])
@@ -693,10 +804,19 @@ export function App() {
 
   const installRuntime = useCallback(() => {
     void run('install', async () => {
-      await runtimeBridge.install(settings === null ? undefined : {
-        manifestUrl: settings.manifestUrl,
-        manifestSha256: settings.manifestSha256,
-      })
+      try {
+        await runtimeBridge.install(settings === null ? undefined : {
+          manifestUrl: settings.manifestUrl,
+          manifestSha256: settings.manifestSha256,
+        })
+      } catch (error) {
+        try {
+          setRuntime(await runtimeBridge.getState())
+        } catch {
+          // Preserve the install failure; state refresh is best effort.
+        }
+        throw error
+      }
       const next = await runtimeBridge.getState()
       setRuntime(next)
     }, 'Ubuntu 运行时已安装')
@@ -753,7 +873,7 @@ export function App() {
       case 'terminal':
         return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onError={terminalError} onOpenShizuku={openShizuku} onTabChange={setActiveTab} runtime={runtime} shizuku={shizuku} />
       case 'environment':
-        return <EnvironmentScreen busy={busy} runtime={runtime} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={startHarness} onStop={stopRuntime} />
+        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={startHarness} onStop={stopRuntime} />
       case 'settings':
         return <SettingsScreen busy={busy} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onOpenShizuku={openShizuku} onSave={saveSettings} />
     }

@@ -1,8 +1,10 @@
 package io.deepseekharness.mobile.runtime
 
 import android.content.Context
+import java.net.HttpURLConnection
 import java.net.InetSocketAddress
-import java.net.Socket
+import java.net.ServerSocket
+import java.net.URL
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.TimeUnit
@@ -24,31 +26,56 @@ class RuntimeSupervisor(
     private val status: RuntimeStatus,
 ) {
     private val appContext = context.applicationContext
+    private val launchResolver = RuntimeLaunchResolver(appContext, store)
     private val lock = Any()
     private var harnessProcess: Process? = null
+    private var harnessOutput: ProcessOutputTail? = null
     private var harnessAccess: HarnessAccess? = null
 
     fun startHarness(): RuntimeStateSnapshot = synchronized(lock) {
         val existing = harnessProcess
         if (existing?.isAlive == true && harnessAccess != null) return@synchronized status.snapshot()
-        harnessProcess = null
-        harnessAccess = null
+        clearHarnessState()
 
         val manifest = store.installedManifest()
             ?: throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
+        try {
+            launchResolver.verifyGuest(
+                NODE_PROBE_ENTRYPOINT,
+                "NODE_RUNTIME_FAILED",
+                "内置 Node.js 无法在当前设备运行",
+                NODE_PROBE_TIMEOUT_SECONDS,
+            )
+            launchResolver.verifyGuest(
+                HARNESS_PROBE_ENTRYPOINT,
+                "HARNESS_PREFLIGHT_FAILED",
+                "Harness 命令未通过启动自检",
+                HARNESS_PROBE_TIMEOUT_SECONDS,
+            )
+            ensurePortAvailable(manifest.harnessPort)
+        } catch (failure: RuntimeFailure) {
+            status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
+            throw failure
+        }
+
         val access = HarnessAccess(
             url = manifest.harnessUri.toASCIIString(),
             username = HarnessAccess.USERNAME,
             password = generateToken(),
         )
-        val command = RuntimeCommand.prootArgv(store, manifest.harnessArgv, access.password)
+        val launch = try {
+            launchResolver.launch(manifest.harnessArgv, access.password)
+        } catch (failure: RuntimeFailure) {
+            status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
+            throw failure
+        }
         val process = try {
-            ProcessBuilder(command)
+            ProcessBuilder(launch.argv)
                 .directory(store.currentRoot)
                 .redirectErrorStream(true)
                 .also { builder ->
                     builder.environment().clear()
-                    builder.environment().putAll(RuntimeCommand.hostEnvironment(appContext, store))
+                    builder.environment().putAll(launch.environment)
                 }
                 .start()
         } catch (error: Exception) {
@@ -56,14 +83,14 @@ class RuntimeSupervisor(
             throw RuntimeFailure("HARNESS_START_FAILED", "无法启动 Harness", error)
         }
         harnessProcess = process
-        drainOutput(process)
+        val output = ProcessOutputTail.drain(process, "dsh-harness-output")
+        harnessOutput = output
 
         try {
-            waitForLoopback(process, manifest.harnessPort)
+            waitForHarness(process, manifest.harnessPort, output)
         } catch (error: RuntimeFailure) {
             terminate(process)
-            harnessProcess = null
-            harnessAccess = null
+            clearHarnessState()
             status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = error.code)
             throw error
         }
@@ -79,66 +106,103 @@ class RuntimeSupervisor(
     fun stop(): RuntimeStateSnapshot = synchronized(lock) {
         val process = harnessProcess
         if (process == null || !process.isAlive) {
-            harnessProcess = null
-            harnessAccess = null
+            clearHarnessState()
             return@synchronized status.refreshIdle()
         }
         status.update(RuntimePhase.STOPPING, nextHarnessUrl = null)
         terminate(process)
-        harnessProcess = null
-        harnessAccess = null
+        clearHarnessState()
         status.refreshIdle()
     }
 
-    fun isRunning(): Boolean = synchronized(lock) { harnessProcess?.isAlive == true }
+    fun isRunning(): Boolean = synchronized(lock) {
+        val running = harnessProcess?.isAlive == true
+        if (!running) clearHarnessState()
+        running
+    }
 
     fun access(): HarnessAccess = synchronized(lock) {
         if (harnessProcess?.isAlive != true) {
-            harnessProcess = null
-            harnessAccess = null
+            clearHarnessState()
             throw RuntimeFailure("HARNESS_NOT_RUNNING", "Harness 尚未运行")
         }
         harnessAccess ?: throw RuntimeFailure("HARNESS_AUTH_UNAVAILABLE", "Harness 临时凭据不可用")
     }
 
-    private fun waitForLoopback(process: Process, port: Int) {
+    private fun clearHarnessState() {
+        harnessProcess = null
+        harnessOutput?.close()
+        harnessOutput = null
+        harnessAccess = null
+    }
+
+    private fun waitForHarness(process: Process, port: Int, output: ProcessOutputTail) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(START_TIMEOUT_SECONDS)
         while (System.nanoTime() < deadline) {
             if (!process.isAlive) {
-                throw RuntimeFailure("HARNESS_EXITED", "Harness 在监听端口前已退出")
+                throwHarnessExit(output)
             }
-            try {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress("127.0.0.1", port), SOCKET_TIMEOUT_MS)
-                    return
+
+            if (hasExpectedAuthChallenge(port)) {
+                pauseWhileStarting(HARNESS_STABILITY_MS)
+                if (!process.isAlive) throwHarnessExit(output)
+                val knownFailure = RuntimeDiagnostics.harnessFailure(output.snapshot())
+                if (knownFailure.code != "HARNESS_EXITED") {
+                    throw RuntimeFailure(knownFailure.code, knownFailure.message)
                 }
-            } catch (_: Exception) {
-                try {
-                    Thread.sleep(POLL_INTERVAL_MS)
-                } catch (error: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    throw RuntimeFailure("HARNESS_START_INTERRUPTED", "Harness 启动等待被中断", error)
-                }
+                if (hasExpectedAuthChallenge(port)) return
             }
+            pauseWhileStarting(POLL_INTERVAL_MS)
         }
         throw RuntimeFailure("HARNESS_START_TIMEOUT", "Harness 未在限定时间内启动")
     }
 
-    private fun drainOutput(process: Process) {
-        Thread({
-            try {
-                process.inputStream.use { input ->
-                    val buffer = ByteArray(8 * 1024)
-                    while (input.read(buffer) >= 0) {
-                        // Output can contain credentials or prompts and is intentionally discarded.
-                    }
-                }
-            } catch (_: Exception) {
-                // Process termination normally closes this stream.
+    private fun hasExpectedAuthChallenge(port: Int): Boolean {
+        val connection = try {
+            URL("http://127.0.0.1:$port/").openConnection() as HttpURLConnection
+        } catch (_: Exception) {
+            return false
+        }
+        return try {
+            connection.instanceFollowRedirects = false
+            connection.useCaches = false
+            connection.connectTimeout = HTTP_PROBE_TIMEOUT_MS
+            connection.readTimeout = HTTP_PROBE_TIMEOUT_MS
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("Accept", "text/html")
+            connection.setRequestProperty("Connection", "close")
+            connection.responseCode == HttpURLConnection.HTTP_UNAUTHORIZED &&
+                connection.getHeaderField("WWW-Authenticate") == EXPECTED_AUTH_CHALLENGE
+        } catch (_: Exception) {
+            false
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun throwHarnessExit(output: ProcessOutputTail): Nothing {
+        output.awaitClosed(OUTPUT_DRAIN_TIMEOUT_MS)
+        val failure = RuntimeDiagnostics.harnessFailure(output.snapshot())
+        throw RuntimeFailure(failure.code, failure.message)
+    }
+
+    private fun pauseWhileStarting(milliseconds: Long) {
+        try {
+            Thread.sleep(milliseconds)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw RuntimeFailure("HARNESS_START_INTERRUPTED", "Harness 启动等待被中断", error)
+        }
+    }
+
+    private fun ensurePortAvailable(port: Int) {
+        try {
+            ServerSocket().use { socket ->
+                socket.reuseAddress = false
+                socket.bind(InetSocketAddress("127.0.0.1", port), 1)
             }
-        }, "dsh-harness-output").apply {
-            isDaemon = true
-            start()
+        } catch (error: Exception) {
+            throw RuntimeFailure("HARNESS_PORT_IN_USE", "Harness 本机端口已被占用", error)
         }
     }
 
@@ -162,11 +226,18 @@ class RuntimeSupervisor(
     }
 
     companion object {
-        private const val START_TIMEOUT_SECONDS = 20L
+        private val NODE_PROBE_ENTRYPOINT = listOf("/opt/node/bin/node", "--version")
+        private val HARNESS_PROBE_ENTRYPOINT = listOf("/usr/local/bin/dsh", "--version")
+        private const val START_TIMEOUT_SECONDS = 120L
         private const val STOP_TIMEOUT_SECONDS = 3L
+        private const val NODE_PROBE_TIMEOUT_SECONDS = 15L
+        private const val HARNESS_PROBE_TIMEOUT_SECONDS = 30L
         private const val POLL_INTERVAL_MS = 200L
-        private const val SOCKET_TIMEOUT_MS = 200
+        private const val HARNESS_STABILITY_MS = 600L
+        private const val HTTP_PROBE_TIMEOUT_MS = 300
+        private const val OUTPUT_DRAIN_TIMEOUT_MS = 750L
         private const val TOKEN_BYTES = 32
+        private const val EXPECTED_AUTH_CHALLENGE = "Basic realm=\"${HarnessAccess.REALM}\", charset=\"UTF-8\""
         private val secureRandom = SecureRandom()
     }
 }

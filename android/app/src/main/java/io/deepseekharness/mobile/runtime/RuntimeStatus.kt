@@ -12,15 +12,17 @@ data class RuntimeStateSnapshot(
 )
 
 class RuntimeStatus(private val store: RuntimeStore) {
+    private val installedAtStartup = store.installedManifest()
+
     @Volatile
-    private var phase: RuntimePhase = if (store.installedManifest() == null) {
+    private var phase: RuntimePhase = if (installedAtStartup == null) {
         RuntimePhase.NOT_INSTALLED
     } else {
         RuntimePhase.READY
     }
 
     @Volatile private var downloadedBytes = 0L
-    @Volatile private var totalBytes = 0L
+    @Volatile private var totalBytes = installedAtStartup?.rootfs?.compressedBytes ?: 0L
     @Volatile private var harnessUrl: String? = null
     @Volatile private var errorCode: String? = null
     private var lastNotifiedPhase: RuntimePhase? = null

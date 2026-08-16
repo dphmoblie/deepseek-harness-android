@@ -39,7 +39,7 @@ export function createBrowserBridge(): RuntimeBridge {
     totalBytes: 640 * 1024 * 1024,
     runnerAvailable: true,
   }
-  let shizuku: ShizukuState = { installed: true, running: true, permission: 'undetermined' }
+  let shizuku: ShizukuState = { installed: true, running: true, permission: 'undetermined', connected: false }
   const progressListeners = new Set<(event: RuntimeProgress) => void>()
   const outputListeners = new Set<(event: TerminalChunk) => void>()
   const exitListeners = new Set<(event: TerminalExit) => void>()
@@ -71,8 +71,9 @@ export function createBrowserBridge(): RuntimeBridge {
       return Promise.resolve(validated)
     },
     install: async source => {
-      if (source !== undefined) validateRuntimeSource(source)
-      state = { ...state, phase: 'downloading', downloadedBytes: 0, errorCode: undefined }
+      const validatedSource = source === undefined ? undefined : validateRuntimeSource(source)
+      const acquisitionPhase = validatedSource === undefined || validatedSource.manifestUrl === '' ? 'preparing' : 'downloading'
+      state = { ...state, phase: acquisitionPhase, downloadedBytes: 0, errorCode: undefined }
       emitProgress()
       for (const percent of [0.12, 0.31, 0.56, 0.78, 1]) {
         await new Promise(resolve => window.setTimeout(resolve, 120))
@@ -84,7 +85,11 @@ export function createBrowserBridge(): RuntimeBridge {
       await new Promise(resolve => window.setTimeout(resolve, 180))
       state = { ...state, phase: 'extracting' }
       emitProgress()
-      await new Promise(resolve => window.setTimeout(resolve, 260))
+      for (const percent of [0.18, 0.47, 0.73, 1]) {
+        await new Promise(resolve => window.setTimeout(resolve, 80))
+        state = { ...state, downloadedBytes: Math.round(state.totalBytes * percent) }
+        emitProgress()
+      }
       state = { ...state, phase: 'ready', installedVersion: '2026.08.1' }
       emitProgress()
     },
@@ -145,7 +150,7 @@ export function createBrowserBridge(): RuntimeBridge {
     },
     getShizukuState: () => Promise.resolve({ ...shizuku }),
     requestShizukuPermission: () => {
-      shizuku = { ...shizuku, permission: 'granted' }
+      shizuku = { ...shizuku, permission: 'granted', connected: true }
       return Promise.resolve({ ...shizuku })
     },
     openShizuku: () => Promise.resolve(),

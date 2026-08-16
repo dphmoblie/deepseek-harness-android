@@ -96,7 +96,10 @@ describe('mobile Harness authentication preload', () => {
     const denied = await request(port)
     assert.equal(denied.status, 401)
     assert.equal(denied.body, '')
-    assert.match(denied.headers['www-authenticate'], /^Basic realm="DeepSeek Harness Mobile"/)
+    assert.equal(
+      denied.headers['www-authenticate'],
+      'Basic realm="DeepSeek Harness Mobile", charset="UTF-8"',
+    )
 
     const accepted = await request(port, authorizationHeader())
     assert.equal(accepted.status, 200)

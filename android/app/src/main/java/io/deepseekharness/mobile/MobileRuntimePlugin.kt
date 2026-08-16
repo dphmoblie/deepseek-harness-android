@@ -39,12 +39,12 @@ class MobileRuntimePlugin : Plugin() {
             controller = MobileRuntimeController(
                 context = context,
                 onProgress = { snapshot ->
-                    if (isManagementAuthenticated()) {
+                    if (!destroying.get()) {
                         notifyListeners("runtimeProgress", snapshot.toProgressJs())
                     }
                 },
                 onTerminalOutput = { sessionId, dataBase64 ->
-                    if (isManagementAuthenticated()) {
+                    if (!destroying.get()) {
                         notifyListeners(
                             "terminalOutput",
                             JSObject().put("sessionId", sessionId).put("dataBase64", dataBase64),
@@ -52,7 +52,7 @@ class MobileRuntimePlugin : Plugin() {
                     }
                 },
                 onTerminalExit = { sessionId, exitCode ->
-                    if (isManagementAuthenticated()) {
+                    if (!destroying.get()) {
                         notifyListeners(
                             "terminalExit",
                             JSObject().put("sessionId", sessionId).put("exitCode", exitCode),
@@ -155,9 +155,7 @@ class MobileRuntimePlugin : Plugin() {
     fun openHarness(call: PluginCall) {
         resolveWhileActive(call) {
             val access = controller.openHarnessAccess()
-            if (!AppAuthenticationState.authorizeHarnessLaunch(access)) {
-                throw RuntimeFailure("AUTH_REQUIRED", "请先完成设备身份验证")
-            }
+            AppAuthenticationState.authorizeHarnessLaunch(access)
             val intent = Intent(context, HarnessActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             try {
@@ -251,10 +249,6 @@ class MobileRuntimePlugin : Plugin() {
             rejectRuntimeClosed(call)
             return
         }
-        if (!isManagementAuthenticated()) {
-            rejectAuthenticationRequired(call)
-            return
-        }
         try {
             executor.execute(PluginTask(call, operation))
         } catch (_: RejectedExecutionException) {
@@ -265,8 +259,6 @@ class MobileRuntimePlugin : Plugin() {
     private fun resolveWhileActive(call: PluginCall, operation: () -> JSObject?) {
         if (destroying.get()) {
             rejectRuntimeClosed(call)
-        } else if (!isManagementAuthenticated()) {
-            rejectAuthenticationRequired(call)
         } else {
             resolveSafely(call, operation)
         }
@@ -334,19 +326,11 @@ class MobileRuntimePlugin : Plugin() {
 
     private fun ensurePluginActive() {
         if (destroying.get()) throw RuntimeFailure("RUNTIME_CLOSED", "本机运行时正在关闭")
-        if (!isManagementAuthenticated()) throw RuntimeFailure("AUTH_REQUIRED", "请先完成设备身份验证")
     }
 
     private fun rejectRuntimeClosed(call: PluginCall) {
         call.reject("本机运行时正在关闭", "RUNTIME_CLOSED")
     }
-
-    private fun rejectAuthenticationRequired(call: PluginCall) {
-        call.reject("请先完成设备身份验证", "AUTH_REQUIRED")
-    }
-
-    private fun isManagementAuthenticated(): Boolean =
-        AppAuthenticationState.isManagementAuthenticated()
 
     private inner class PluginTask(
         private val call: PluginCall,
@@ -388,6 +372,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("phase", phase.wireValue)
         .put("downloadedBytes", downloadedBytes)
         .put("totalBytes", totalBytes)
+        .also { json -> errorCode?.let { json.put("errorCode", it) } }
 
     private fun RuntimeStateSnapshot.toJs(): JSObject = JSObject()
         .put("phase", phase.wireValue)
@@ -405,6 +390,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("installed", installed)
         .put("running", running)
         .put("permission", permission)
+        .put("connected", connected)
 
     private companion object {
         const val DESTROY_WAIT_SECONDS = 10L
