@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    needs: build-runners
+    needs: [build-runners, build-rootfs]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +71,15 @@ jobs:
 
       - name: Verify runner placement
         run: ls -la android/app/src/main/jniLibs/arm64-v8a
+
+      - name: Download embedded runtime (bundle + manifest)
+        uses: actions/download-artifact@v4
+        with:
+          name: embedded-runtime
+          path: android/app/src/main/assets/runtime
+
+      - name: Verify runtime placement
+        run: ls -la android/app/src/main/assets/runtime
 
       - name: Set up Gradle (trusted distribution for wrapper bootstrap)
         uses: gradle/actions/setup-gradle@v4
@@ -163,4 +172,59 @@ jobs:
         with:
           name: proot-runners-arm64
           path: runners/*.so
+          if-no-files-found: error
+
+  build-rootfs:
+    name: Build embedded runtime bundle (Ubuntu 24.04 ARM64 + Node 24.19 + dsh)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22 (arm64)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+
+      - name: Set up pnpm
+        run: npm install -g pnpm@11.19.0
+
+      - name: Prepare dsh runtime for linux/arm64 (node-pty prebuild)
+        run: |
+          mkdir -p /tmp/dsh-root && cd /tmp/dsh-root
+          cat > package.json <<'EOF'
+          {
+            "name": "dsh-root",
+            "private": true,
+            "supportedArchitectures": { "os": ["linux"], "cpu": ["arm64"] },
+            "dependencies": { "@deepseek-ai/dsh": "0.1.0-rc.6" }
+          }
+          EOF
+          pnpm install --no-frozen-lockfile
+          ls -la node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/
+
+      - name: Download pinned rootfs inputs
+        run: |
+          curl -fL --retry 3 -o /tmp/ubuntu.tar.gz https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz
+          curl -fL --retry 3 -o /tmp/node.tar.xz https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-arm64.tar.xz
+          echo "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2  /tmp/ubuntu.tar.gz" | sha256sum -c -
+          echo "01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc  /tmp/node.tar.xz" | sha256sum -c -
+
+      - name: Build bundle + manifest (mobile profile)
+        run: |
+          python3 scripts/build-embedded-runtime.py \
+            --ubuntu /tmp/ubuntu.tar.gz --ubuntu-sha256 04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2 \
+            --node /tmp/node.tar.xz --node-sha256 01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc \
+            --dsh-root /tmp/dsh-root --runtime-version "0.1.0-mobile-test" \
+            --mobile-profile scripts/mobile-profile.example.json \
+            --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
+          ls -la /tmp/rootfs.bundle /tmp/runtime-manifest.json
+          sha256sum /tmp/rootfs.bundle
+
+      - name: Upload runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: embedded-runtime
+          path: |
+            /tmp/rootfs.bundle
+            /tmp/runtime-manifest.json
           if-no-files-found: error
