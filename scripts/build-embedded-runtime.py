@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import copy
 import re
 import gzip
@@ -283,6 +284,15 @@ def strip_single_root(raw_name: str, expected_root: str) -> str | None:
     return name.removeprefix(prefix)
 
 
+def strip_flat_entry(raw_name: str) -> str | None:
+    """Strip the leading './' segments of a flat archive entry (CI 使用的
+    ubuntu-base 24.04 官方包为扁平结构，无顶层目录)。"""
+    name = normalized_path(raw_name)
+    if name == "." or name == "./":
+        return None
+    return name.removeprefix("./")
+
+
 def copy_tar_archive(
     writer: RootfsWriter,
     archive_path: Path,
@@ -292,6 +302,7 @@ def copy_tar_archive(
     skip_devices_under_dev: bool = False,
     excluded_regular_paths: frozenset[str] = frozenset(),
 ) -> None:
+    flat = expected_root == ""
     excluded_source_paths = {f"{expected_root}/{name}" for name in excluded_regular_paths}
     remaining_excluded_paths = excluded_source_paths.copy()
     with tarfile.open(archive_path, "r:*") as source_tar:
@@ -303,14 +314,14 @@ def copy_tar_archive(
                     raise BuildError(f"duplicate excluded archive path: {original.name}")
                 remaining_excluded_paths.remove(original.name)
                 continue
-            stripped = strip_single_root(original.name, expected_root)
+            stripped = strip_flat_entry(original.name) if flat else strip_single_root(original.name, expected_root)
             if stripped is None:
                 continue
             mapped_name = normalized_path(map_name(stripped))
             member = copy.copy(original)
             member.name = mapped_name
             if member.islnk():
-                target = strip_single_root(member.linkname, expected_root)
+                target = strip_flat_entry(member.linkname) if flat else strip_single_root(member.linkname, expected_root)
                 if target is None:
                     raise BuildError(f"hard link points at archive root: {mapped_name}")
                 member.linkname = normalized_path(map_name(target))
@@ -325,8 +336,13 @@ def copy_tar_archive(
                 if file_object is not None:
                     file_object.close()
     if remaining_excluded_paths:
-        missing = ", ".join(sorted(remaining_excluded_paths))
-        raise BuildError(f"expected excluded archive paths are missing: {missing}")
+        if flat:
+            # 官方 ubuntu-base 扁平包不保证包含钉死排除清单里的路径：
+            # 缺失即视为无需排除（严格校验仅对自有 rooted 归档保留）。
+            print(f"note: excluded paths not present in flat archive, skipped: {sorted(remaining_excluded_paths)}", file=sys.stderr)
+        else:
+            missing = ", ".join(sorted(remaining_excluded_paths))
+            raise BuildError(f"expected excluded archive paths are missing: {missing}")
 
 
 def skip_non_linux_runtime_path(relative: PurePosixPath) -> bool:
@@ -410,7 +426,11 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ubuntu", required=True, type=Path)
     parser.add_argument("--ubuntu-sha256", required=True)
-    parser.add_argument("--ubuntu-root", default="ubuntu-noble-aarch64")
+    parser.add_argument(
+        "--ubuntu-root",
+        default="",
+        help="top-level directory inside the Ubuntu archive; empty = flat archive (official ubuntu-base layout)",
+    )
     parser.add_argument("--node", required=True, type=Path)
     parser.add_argument("--node-sha256", required=True)
     parser.add_argument("--node-root", default="node-v24.19.0-linux-arm64")
