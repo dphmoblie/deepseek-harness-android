@@ -303,7 +303,7 @@ export function validateDeviceCommandResult(value: unknown): DeviceCommandResult
   if (typeof result.ok !== 'boolean' || typeof result.text !== 'string' || typeof result.truncated !== 'boolean') {
     throw new Error('设备命令结果格式无效')
   }
-  if (!Number.isInteger(result.exitCode) || (result.exitCode as number) < -1 || (result.exitCode as number) > 255) {
+  if (typeof result.exitCode !== 'number' || !Number.isInteger(result.exitCode) || result.exitCode < -1 || result.exitCode > 255) {
     throw new Error('设备命令退出码无效')
   }
   return {
