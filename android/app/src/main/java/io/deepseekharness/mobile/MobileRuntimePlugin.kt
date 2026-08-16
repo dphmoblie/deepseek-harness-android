@@ -36,10 +36,6 @@ class MobileRuntimePlugin : Plugin() {
     private val auditedOperationLock = ReentrantLock()
     private lateinit var deviceCommands: DeviceCommandRunner
 
-    companion object {
-        private const val DEVICE_COMMAND_TIMEOUT_MS = 60_000L
-    }
-
     override fun load() {
         auditLog = PrivateAuditLog(context)
         recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.STARTED)
@@ -442,5 +438,6 @@ class MobileRuntimePlugin : Plugin() {
 
     private companion object {
         const val DESTROY_WAIT_SECONDS = 10L
+        const val DEVICE_COMMAND_TIMEOUT_MS = 60_000L
     }
 }
