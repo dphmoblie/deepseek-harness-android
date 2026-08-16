@@ -19,8 +19,7 @@ jobs:
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 11
+        # 版本唯一来源为 package.json 的 packageManager 字段，避免双重指定冲突
 
       - name: Set up JDK (pinned by README)
         uses: actions/setup-java@v4
