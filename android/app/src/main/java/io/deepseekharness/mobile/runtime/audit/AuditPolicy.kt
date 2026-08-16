@@ -31,8 +31,15 @@ internal object AuditPolicy {
 
     private val auditFilePattern = Regex("^audit-(\\d{4}-\\d{2}-\\d{2})\\.log$")
 
-    fun recordLine(instant: Instant, event: AuditEvent, result: AuditResult): String =
-        "${DateTimeFormatter.ISO_INSTANT.format(instant)}|${event.name}|${result.name}\n"
+    // 详情字段仅允许受控错误码：大写字母、数字、下划线。
+    // 原始进程输出、路径、凭据一律不落审计日志，防止敏感信息滞留本地。
+    private val detailPattern = Regex("^[A-Z][A-Z0-9_]{0,63}$")
+
+    fun recordLine(instant: Instant, event: AuditEvent, result: AuditResult, detail: String? = null): String {
+        val base = "${DateTimeFormatter.ISO_INSTANT.format(instant)}|${event.name}|${result.name}"
+        val safeDetail = detail?.takeIf(detailPattern::matches)
+        return if (safeDetail == null) "$base\n" else "$base|$safeDetail\n"
+    }
 
     fun utcDate(instant: Instant): LocalDate = instant.atZone(ZoneOffset.UTC).toLocalDate()
 

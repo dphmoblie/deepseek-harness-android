@@ -20,13 +20,13 @@ class PrivateAuditLog(context: Context) {
     private val auditDirectory = context.noBackupFilesDir.toPath().resolve(DIRECTORY_NAME)
     private var lastRetentionDate: LocalDate? = null
 
-    fun record(event: AuditEvent, result: AuditResult, instant: Instant = Instant.now()) {
+    fun record(event: AuditEvent, result: AuditResult, detail: String? = null, instant: Instant = Instant.now()) {
         synchronized(PROCESS_LOCK) {
             try {
                 ensurePrivateDirectory()
                 val today = AuditPolicy.utcDate(instant)
                 pruneOncePerDay(today)
-                append(AuditPolicy.fileName(today), AuditPolicy.recordLine(instant, event, result))
+                append(AuditPolicy.fileName(today), AuditPolicy.recordLine(instant, event, result, detail))
             } catch (_: Throwable) {
                 // Audit storage must never expose details or change the runtime operation's outcome.
             }

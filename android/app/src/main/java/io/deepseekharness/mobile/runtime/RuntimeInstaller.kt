@@ -102,6 +102,7 @@ class RuntimeInstaller(
                 status.update(RuntimePhase.EXTRACTING, downloaded = extracted, total = total)
             }
             checkCancellation()
+            RootfsIntegrity.verifyLinks(workspace.stagingRoot, "ROOTFS_LINKS_CORRUPTED")
             store.writeInstalledManifest(workspace.stagingManifest, manifest)
             promoteStaging(workspace)
             store.updateInstalledManifest(manifest)

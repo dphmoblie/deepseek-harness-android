@@ -23,29 +23,47 @@ class AuditPolicyTest {
             "sessionId=00000000-0000-0000-0000-000000000000",
         ).forEach { sentinel -> assertFalse(line.contains(sentinel)) }
 
-        val method = AuditPolicy::class.java.getDeclaredMethod(
-            "recordLine",
-            Instant::class.java,
-            AuditEvent::class.java,
-            AuditResult::class.java,
-        )
-        assertEquals(
-            listOf(Instant::class.java, AuditEvent::class.java, AuditResult::class.java),
-            method.parameterTypes.toList(),
-        )
-
         val recordMethod = PrivateAuditLog::class.java.getDeclaredMethod(
             "record",
             AuditEvent::class.java,
             AuditResult::class.java,
+            String::class.java,
             Instant::class.java,
         )
         assertEquals(
-            listOf(AuditEvent::class.java, AuditResult::class.java, Instant::class.java),
+            listOf(AuditEvent::class.java, AuditResult::class.java, String::class.java, Instant::class.java),
             recordMethod.parameterTypes.toList(),
         )
-        assertFalse(recordMethod.parameterTypes.contains(String::class.java))
         assertFalse(recordMethod.parameterTypes.any { type -> Throwable::class.java.isAssignableFrom(type) })
+    }
+
+    @Test
+    fun detailAcceptsOnlyControlledErrorCodes() {
+        val instant = Instant.parse("2026-08-16T12:34:56.789Z")
+
+        val detailed = AuditPolicy.recordLine(
+            instant,
+            AuditEvent.RUNTIME_START,
+            AuditResult.FAILED,
+            "PROOT_GUEST_EXEC_FAILED",
+        )
+        assertEquals("2026-08-16T12:34:56.789Z|RUNTIME_START|FAILED|PROOT_GUEST_EXEC_FAILED\n", detailed)
+
+        listOf(
+            "proot error: execve /bin/bash",
+            "https://downloads.example.invalid/private",
+            "/data/user/0/io.deepseekharness.mobile/no_backup",
+            "PROOT_GUEST_EXEC_FAILED\nsecond-line",
+            "TOKEN=abc123",
+            "internal error",
+            "",
+            "A".repeat(65),
+        ).forEach { invalid ->
+            assertEquals(
+                "2026-08-16T12:34:56.789Z|RUNTIME_START|FAILED\n",
+                AuditPolicy.recordLine(instant, AuditEvent.RUNTIME_START, AuditResult.FAILED, invalid),
+            )
+        }
     }
 
     @Test

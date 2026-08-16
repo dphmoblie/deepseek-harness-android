@@ -148,6 +148,8 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   INSTALL_CANCELLED: '运行时安装已取消，再次安装时可继续下载。',
   INSTALL_FAILED: '运行时安装失败，请稍后重试。',
   RUNTIME_BUSY: '请先停止 Harness 和 Ubuntu 终端。',
+  RUNTIME_CORRUPTED: '运行时文件已损坏，请重置运行时后重新安装。',
+  ROOTFS_LINKS_CORRUPTED: '运行时归档的关键符号链接缺失或损坏，请更换运行时来源后重新安装。',
   RUNNER_UNAVAILABLE: 'APK 未包含当前设备架构所需的运行器。',
   PROOT_RUNNER_START_FAILED: 'Android 无法执行内置 PRoot，请确认安装的是新版 ARM64 应用。',
   PROOT_RUNNER_TIMEOUT: 'PRoot 自检超时，请停止其他会话后重试。',
