@@ -1,2 +1,4 @@
+packages:
+  - 'harness-web'
 allowBuilds:
   esbuild: true
