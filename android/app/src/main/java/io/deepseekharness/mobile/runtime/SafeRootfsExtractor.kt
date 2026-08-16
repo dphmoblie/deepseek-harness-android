@@ -172,7 +172,8 @@ class SafeRootfsExtractor {
                 // The original verified failure is returned; the next install performs another scoped cleanup.
             }
             if (error is RuntimeFailure) throw error
-            throw RuntimeFailure("ARCHIVE_EXTRACTION_FAILED", "无法解压运行时归档", error)
+            val detail = error.message ?: error.javaClass.simpleName
+            throw RuntimeFailure("ARCHIVE_EXTRACTION_FAILED", "无法解压运行时归档：" + detail, error)
         }
     }
 

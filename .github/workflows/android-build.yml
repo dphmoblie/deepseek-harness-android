@@ -271,6 +271,7 @@ jobs:
               --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
             ls -la /tmp/rootfs.bundle /tmp/runtime-manifest.json
             sha256sum /tmp/rootfs.bundle
+            python3 scripts/verify-bundle.py --bundle /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
             mkdir -p runtime-artifacts
             cp /tmp/rootfs.bundle /tmp/runtime-manifest.json runtime-artifacts/
           } 2>&1 | tee /tmp/bundle.log || true
