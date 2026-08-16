@@ -59,6 +59,10 @@ runtime-cache/
 *.tmp
 .DS_Store
 Thumbs.db
-.wrapper-bootstrap/
+# 供应链安全 bootstrap：wrapper jar 二进制不提交，仅保留生成源码；
+# CI/本地用可信 Gradle 8.11.1 在该目录执行 `gradle wrapper` 生成 jar
+.wrapper-bootstrap/*
+!.wrapper-bootstrap/build.gradle
+!.wrapper-bootstrap/settings.gradle
 legal/.operit-license-import/
 legal/operit-license.tar
