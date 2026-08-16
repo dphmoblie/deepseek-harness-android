@@ -4,13 +4,35 @@ The APK is a Capacitor control surface. It does not copy the upstream Web bundle
 
 ## Runtime installation
 
-1. The app obtains a manifest from a configured HTTPS URL and verifies the manifest bytes against a build-time or user-entered SHA-256 digest.
-2. The native layer validates the schema, architecture, URL scheme, host policy, byte limits, entrypoint allowlist, and digest formats.
-3. The rootfs is downloaded to an app-private staging file with a compressed-size limit and SHA-256 verification.
-4. Extraction rejects path traversal, device nodes, unsafe hard links, excessive entry counts, and extracted-size overflow. Symbolic links are created only after regular entries have been written.
-5. A completed environment is atomically promoted. Reset never follows symbolic links and is limited to the app-private runtime directory.
+1. If no remote source is configured, the app reads
+   `assets/runtime/runtime-manifest.json` and
+   `assets/runtime/rootfs.tar.xz` from the APK. The current image recipe is
+   Ubuntu 24.04 ARM64 plus Node.js 24.19.0 and `@deepseek-ai/dsh`
+   0.1.0-rc.6.
+2. If both a remote manifest URL and its SHA-256 are configured, the remote
+   HTTPS manifest overrides the embedded source. The manifest bytes must match
+   that digest before parsing. A partial URL/digest pair is rejected.
+3. The native layer validates the schema, architecture, URL scheme, host
+   policy, byte limits, XZ compression value, entrypoint allowlist, and digest
+   formats. Both embedded and remote rootfs bytes are checked against the
+   manifest's exact length and SHA-256.
+4. A remote rootfs is downloaded to an app-private staging file. The embedded
+   rootfs is copied from the APK to staging. Both paths share the same bounded,
+   verified extraction and promotion flow.
+5. Extraction rejects path traversal, device nodes, unsafe hard links,
+   excessive entry counts, and extracted-size overflow. Symbolic links are
+   created only after regular entries have been written.
+6. A completed environment is atomically promoted. Reset never follows
+   symbolic links and is limited to the app-private runtime directory.
 
-The rootfs is remote to keep the APK small. The PRoot-compatible runner is an executable native library and must be packaged in the APK because current Android versions do not allow executing newly downloaded code from writable app storage. `scripts/prepare-runner.mjs` imports a release-pinned runner only when its URL and SHA-256 are supplied through environment variables; generated `.so` files are ignored by Git.
+`scripts/build-embedded-runtime.py` produces the optional embedded XZ archive
+and manifest without checking generated artifacts into Git. A distributor can
+omit those assets and publish a digest-pinned remote runtime to reduce APK
+size, but such an APK cannot install until a valid remote pair is configured.
+The PRoot-compatible runner and loader are executable native libraries and
+must always be packaged in the APK because current Android versions do not
+allow executing newly downloaded code from writable app storage. Generated
+`.so` files are ignored by Git.
 
 ## Terminal and Harness
 
@@ -20,12 +42,28 @@ The Ubuntu terminal always starts a manifest-validated fixed entrypoint through 
 
 Shizuku is optional and user-authorized. The app declares the official provider and API dependencies but does not bundle the Shizuku APK. Device sessions start a fixed `/system/bin/sh` process after an explicit permission grant. The Capacitor bridge cannot choose another executable, add process arguments, or run a background command without an open user-visible terminal session. Shizuku supplies shell-level privileges, not root or Android hardware virtualization.
 
-## Operit reference boundary
+## Operit2 runtime boundary
 
-Operit revision `35a8c8aa51039fa551f57d92ce2858e77f061fcc` and OperitTerminalCore revision `e4442bc6a047b6165bf59103721ad143149c620d` were reviewed for their high-level PRoot, terminal, and Shizuku integration patterns. This project uses an independent Capacitor bridge, download verifier, extractor, PTY implementation, and fixed Shizuku UserService contract. No Operit source code, assets, or binaries are included.
+The Capacitor bridge, download verifier, extractor, PTY wrapper, and fixed
+Shizuku UserService contract in this repository remain independently
+implemented. The release-native PRoot artifacts are a separate boundary: the
+APK packages `libdsh_proot.so` and `libdsh_proot_loader.so` obtained from the
+Operit2 Android runtime toolchain at commit
+`dc4c3a9405dc7ed3ef69b2ac9a6ace65374d77cf`, under
+`tools/android-runtime/`. The runner is used with `PROOT_LOADER` pointing to
+the loader in Android's native library directory; it is not copied to and
+executed from writable storage.
+
+PRoot is GPL-2.0-or-later. Operit2 is AGPL-3.0. Release provenance must retain
+the exact upstream revision, the hashes of both shipped ELF files, all local
+patches, and usable build/source instructions. Distribution must include the
+applicable license texts and make complete corresponding source available by a
+method allowed by those licenses. Recording the commit and hashes is necessary
+but is not, by itself, corresponding source. The current import record does
+not assert that the shipped binaries can be rebuilt bit-for-bit.
 
 ## Secrets and logs
 
-DeepSeek API credentials remain inside the Harness credential flow and are not handled by the Capacitor management UI. Android device authentication is performed by the system credential activity before the management WebView is revealed. Signing material, local Gradle properties, rootfs archives, native runners, `.env` files, build output, and logs are ignored by Git.
+DeepSeek API credentials remain inside the Harness credential flow and are not handled by the Capacitor management UI. Android device authentication is performed by the system credential activity before the management WebView is revealed. Signing material, local Gradle properties, generated rootfs archives, generated manifests, native runners, `.env` files, build output, and logs are ignored by Git.
 
 Native audit files live in `noBackupFilesDir`, use owner-only directory/file modes, rotate by UTC date, and retain the 90-day boundary plus newer files. Each line contains only an ISO timestamp, a fixed event enum, and a fixed result enum. URLs, commands, session identifiers, terminal data, credentials, and exception details are never written.
