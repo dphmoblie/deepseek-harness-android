@@ -73,11 +73,12 @@
 ## 6. 落地顺序（本分支提交计划）
 
 1. ✅ 本设计文档 + 移动 profile 规格（scripts/mobile-profile.example.json）
-2. dsh-mobile-compat 客户端插件包（AppFrame 移动形态 + aionui-panel 移动 tab）
-3. Capacitor 侧 OnboardingSteps（向导五步）
-4. rootfs 配方集成点（build-embedded-runtime.py 增加 --mobile-profile 参数，
+2. ✅ dsh-mobile-compat 客户端插件包（packages/dsh-mobile-compat，tsc 类型检查通过）
+3. ~~dsh-mobile-compat 客户端插件包~~（已完成，见上）
+4. Capacitor 侧 OnboardingSteps（向导五步）
+5. rootfs 配方集成点（build-embedded-runtime.py 增加 --mobile-profile 参数，
    默认远程 manifest、按需内嵌）
-5. 真机验收清单（荣耀 A16：布局截图矩阵、插件逐项、向导全流程、APK 体积对比）
+6. 真机验收清单（荣耀 A16：布局截图矩阵、插件逐项、向导全流程、APK 体积对比）
 
 ## 7. 边界与风险
 
