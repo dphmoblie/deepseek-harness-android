@@ -246,7 +246,24 @@ class SafeRootfsExtractor {
                 if (RuntimeFiles.existsNoFollow(link.path.toFile())) {
                     throw RuntimeFailure("ARCHIVE_DUPLICATE_ENTRY", "归档硬链接路径已存在")
                 }
-                Os.link(link.target.toString(), link.path.toString())
+                try {
+                    Os.link(link.target.toString(), link.path.toString())
+                } catch (error: android.system.ErrnoException) {
+                    // 荣耀等 ROM 的 SELinux 可能同时禁止硬链接（EACCES/EPERM）：
+                    // 与符号链接一致，降级为复制目标文件；目标已校验为常规文件且位于 rootfs 内。
+                    if (error.errno == OsConstants.EACCES ||
+                        error.errno == OsConstants.EPERM ||
+                        error.errno == OsConstants.ENOTSUP ||
+                        error.errno == OsConstants.EXDEV
+                    ) {
+                        val targetFile = link.target.toFile()
+                        link.path.parent.toFile().mkdirs()
+                        targetFile.copyTo(link.path.toFile(), overwrite = false)
+                        link.path.toFile().setExecutable(targetFile.canExecute(), false)
+                    } else {
+                        throw error
+                    }
+                }
                 iterator.remove()
                 progress = true
             }
