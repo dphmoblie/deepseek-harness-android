@@ -255,11 +255,33 @@ jobs:
             exit 1
           fi
 
+      - name: Verify runtime artifacts before upload
+        run: |
+          {
+            pwd
+            ls -la runtime-artifacts/ || true
+            du -sh runtime-artifacts/ 2>/dev/null || true
+          } 2>&1 | tee /tmp/verify.log
+          if [ ! -f runtime-artifacts/rootfs.bundle ] || [ ! -f runtime-artifacts/runtime-manifest.json ]; then
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git fetch origin ci-logs || true
+            git checkout -b ci-logs origin/ci-logs 2>/dev/null || git checkout --orphan ci-logs
+            rm -rf logs && mkdir -p logs
+            cp /tmp/verify.log logs/verify-$GITHUB_RUN_NUMBER.log
+            git add -f logs/verify-$GITHUB_RUN_NUMBER.log
+            git commit -m "ci: verify log run #$GITHUB_RUN_NUMBER" || true
+            git push origin ci-logs || true
+            exit 1
+          fi
+
       - name: Upload runtime
         uses: actions/upload-artifact@v4
         with:
           name: embedded-runtime
-          path: runtime-artifacts/
+          path: |
+            runtime-artifacts/rootfs.bundle
+            runtime-artifacts/runtime-manifest.json
           if-no-files-found: error
 
   publish-release:
