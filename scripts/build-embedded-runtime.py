@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import re
 import gzip
 import hashlib
 import io
@@ -47,6 +48,64 @@ def sha256_file(path: Path) -> str:
         while chunk := source.read(BUFFER_SIZE):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+MAX_MOBILE_PROFILE_BYTES = 64 * 1024
+MOBILE_BUNDLE_PATTERN = re.compile(r"^[A-Za-z0-9@._/-]{1,128}$")
+
+
+def validate_mobile_profile(path: Path) -> dict:
+    """Validate the optional mobile profile spec (scripts/mobile-profile.example.json)."""
+    if path.is_symlink() or not path.is_file():
+        raise BuildError("mobile profile does not exist or is not a regular file")
+    content = path.read_bytes()
+    if not content or len(content) > MAX_MOBILE_PROFILE_BYTES or b"\x00" in content:
+        raise BuildError("mobile profile size or content is invalid")
+    try:
+        spec = json.loads(content)
+    except json.JSONDecodeError as error:
+        raise BuildError(f"mobile profile JSON is invalid: {error}") from error
+    if not isinstance(spec, dict):
+        raise BuildError("mobile profile must be a JSON object")
+    dsh = spec.get("dsh")
+    if not isinstance(dsh, dict):
+        raise BuildError("mobile profile requires a dsh object")
+    profile = dsh.get("profile")
+    if not isinstance(profile, dict):
+        raise BuildError("mobile profile requires dsh.profile")
+    bundles = profile.get("bundles")
+    if not isinstance(bundles, list) or not bundles or len(bundles) > 64:
+        raise BuildError("mobile profile bundles must be a non-empty list (max 64)")
+    for bundle in bundles:
+        if not isinstance(bundle, str) or not MOBILE_BUNDLE_PATTERN.match(bundle):
+            raise BuildError(f"mobile profile bundle identifier is invalid: {bundle!r}")
+    mobile = spec.get("mobile")
+    result: dict = {"dsh": {"profile": {"bundles": list(bundles)}}}
+    if mobile is not None:
+        if not isinstance(mobile, dict):
+            raise BuildError("mobile profile 'mobile' section must be an object")
+        layout = mobile.get("layout")
+        if layout is not None and (not isinstance(layout, str) or len(layout) > 128):
+            raise BuildError("mobile profile layout identifier is invalid")
+        disabled = mobile.get("disabledOnMobile")
+        if disabled is not None and (
+            not isinstance(disabled, list)
+            or len(disabled) > 64
+            or any(not isinstance(name, str) or not MOBILE_BUNDLE_PATTERN.match(name) for name in disabled)
+        ):
+            raise BuildError("mobile profile disabledOnMobile list is invalid")
+        idle = mobile.get("idleStopMinutes")
+        if idle is not None and (not isinstance(idle, int) or isinstance(idle, bool) or not 1 <= idle <= 1440):
+            raise BuildError("mobile profile idleStopMinutes must be an integer in 1..1440")
+        embed = mobile.get("embedRootfs")
+        if embed is not None and not isinstance(embed, bool):
+            raise BuildError("mobile profile embedRootfs must be a boolean")
+        result["mobile"] = {
+            key: value
+            for key, value in mobile.items()
+            if key in ("layout", "disabledOnMobile", "idleStopMinutes", "embedRootfs")
+        }
+    return result
 
 
 def verify_input(path: Path, expected_sha256: str, label: str) -> None:
@@ -363,6 +422,13 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--source-date-epoch", type=int, default=0)
+    parser.add_argument(
+        "--mobile-profile",
+        type=Path,
+        default=None,
+        help="optional mobile profile spec (bundles subset + mobile flags); "
+        "written to root/.dsh/profiles/web/package.json and reflected in the manifest 'mobile' field",
+    )
     return parser.parse_args()
 
 
@@ -388,6 +454,7 @@ def main() -> None:
     if not dsh_entrypoint.is_file() or not node_pty.is_file():
         raise BuildError("Harness runtime is missing its CLI or Linux ARM64 node-pty module")
     mobile_auth_preload = read_support_file(MOBILE_AUTH_PRELOAD, "mobile authentication preload")
+    mobile_spec = validate_mobile_profile(args.mobile_profile) if args.mobile_profile is not None else None
     if args.output.exists() or args.manifest.exists():
         raise BuildError("output archive and manifest must not already exist")
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -431,6 +498,12 @@ def main() -> None:
                 (json.dumps(metadata, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"),
                 0o644,
             )
+            if mobile_spec is not None:
+                writer.add_bytes(
+                    "root/.dsh/profiles/web/package.json",
+                    (json.dumps(mobile_spec, ensure_ascii=True, indent=2) + "\n").encode("ascii"),
+                    0o644,
+                )
 
         compressed_bytes = temporary_output.stat().st_size
         archive_sha256 = sha256_file(temporary_output)
@@ -451,6 +524,7 @@ def main() -> None:
                 "harness": ["/usr/local/bin/dsh", "web", "--host", "127.0.0.1", "--port", "3080"],
             },
             "harnessUrl": "http://127.0.0.1:3080/",
+            **({"mobile": mobile_spec} if mobile_spec is not None else {}),
         }
         manifest_bytes = (json.dumps(manifest, ensure_ascii=True, indent=2) + "\n").encode("ascii")
         with temporary_manifest.open("xb") as manifest_output:
