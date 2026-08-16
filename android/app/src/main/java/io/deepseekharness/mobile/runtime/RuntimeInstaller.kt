@@ -169,8 +169,19 @@ class RuntimeInstaller(
 
     private fun loadManifest(source: RuntimeSource): RuntimeManifest {
         if (source.isBundled) {
-            val bytes = store.openBundledManifest().use {
-                readBounded(it, RuntimeLimits.MAX_MANIFEST_BYTES)
+            val bytes = try {
+                store.openBundledManifest().use {
+                    readBounded(it, RuntimeLimits.MAX_MANIFEST_BYTES)
+                }
+            } catch (failure: RuntimeFailure) {
+                if (failure.code == "BUNDLED_RUNTIME_MISSING") {
+                    throw RuntimeFailure(
+                        "RUNTIME_SOURCE_NEEDED",
+                        "本 APK 未内置运行时：请在设置页填写 manifest 地址与 SHA-256（两者必须成对）后重试安装",
+                        failure,
+                    )
+                }
+                throw failure
             }
             return RuntimeManifest.parse(bytes)
         }
