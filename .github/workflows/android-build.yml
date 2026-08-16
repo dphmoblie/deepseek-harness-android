@@ -195,11 +195,12 @@ jobs:
           EOF
           push_log() {
             echo "=== 推送步骤日志到 ci-logs 分支 ==="
+            cd "$GITHUB_WORKSPACE"
             git config user.name "github-actions"
             git config user.email "actions@github.com"
             git fetch origin ci-logs || true
             git checkout -b ci-logs origin/ci-logs 2>/dev/null || git checkout --orphan ci-logs
-            rm -rf logs && mkdir -p logs
+            mkdir -p logs
             cp /tmp/step.log logs/install-$GITHUB_RUN_NUMBER.log
             git add -f logs/install-$GITHUB_RUN_NUMBER.log
             git commit -m "ci: install log run #$GITHUB_RUN_NUMBER" || true
