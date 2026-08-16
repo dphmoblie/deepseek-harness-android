@@ -10,6 +10,8 @@ export type RuntimePhase =
 
 export type TerminalKind = 'ubuntu' | 'device'
 
+export type DeviceCommand = 'screenshot' | 'uiDump' | 'tap' | 'inputText'
+
 export interface RuntimeState {
   phase: RuntimePhase
   architecture: string
@@ -53,6 +55,14 @@ export interface TerminalExit {
   exitCode: number
 }
 
+export interface DeviceCommandResult {
+  ok: boolean
+  exitCode: number
+  text: string
+  truncated: boolean
+  errorCode?: string
+}
+
 export interface ListenerHandle {
   remove: () => Promise<void>
 }
@@ -70,6 +80,7 @@ export interface RuntimeBridge {
   writeTerminal: (sessionId: string, dataBase64: string) => Promise<void>
   resizeTerminal: (sessionId: string, columns: number, rows: number) => Promise<void>
   closeTerminal: (sessionId: string) => Promise<void>
+  execDeviceCommand: (sessionId: string, command: DeviceCommand, param?: string) => Promise<DeviceCommandResult>
   getShizukuState: () => Promise<ShizukuState>
   requestShizukuPermission: () => Promise<ShizukuState>
   openShizuku: () => Promise<void>

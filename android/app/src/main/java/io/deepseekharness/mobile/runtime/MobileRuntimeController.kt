@@ -71,6 +71,11 @@ class MobileRuntimeController(
         terminals.closeAndWait(sessionId)
     }
 
+    fun hasDeviceSession(sessionId: String): Boolean = lifecycleLock.withLock {
+        ensureOpen()
+        terminals.shizuku.contains(sessionId)
+    }
+
     fun requestShizukuPermission(): ShizukuState = lifecycleLock.withLock {
         ensureOpen()
         terminals.shizuku.requestPermission()
