@@ -93,8 +93,8 @@ class SafeRootfsExtractor {
                                 if (!seen.add(path)) {
                                     throw RuntimeFailure("ARCHIVE_DUPLICATE_ENTRY", "运行时归档包含重复或保留条目")
                                 }
-                                when {
-                                    entry.isLink -> {
+                                when (classifyEntry(entry)) {
+                                    ArchiveEntryKind.HARD_LINK -> {
                                         if (entry.size != 0L) {
                                             throw RuntimeFailure("ARCHIVE_LINK_INVALID", "归档硬链接包含意外数据")
                                         }
@@ -106,11 +106,11 @@ class SafeRootfsExtractor {
                                             ),
                                         )
                                     }
-                                    entry.isDirectory -> {
+                                    ArchiveEntryKind.DIRECTORY -> {
                                         ensureDirectory(path, root)
                                         directoryModes.add(PendingDirectoryMode(path, safeMode(entry.mode, directory = true)))
                                     }
-                                    entry.isFile -> {
+                                    ArchiveEntryKind.FILE -> {
                                         if (entry.isSparse || entry.size < 0) {
                                             throw RuntimeFailure("ARCHIVE_FEATURE_UNSUPPORTED", "运行时归档包含稀疏或无效文件")
                                         }
@@ -125,7 +125,7 @@ class SafeRootfsExtractor {
                                         Os.chmod(path.toString(), safeMode(entry.mode, directory = false))
                                         if (entry.mode and 0x40 != 0) execFiles.add(path)
                                     }
-                                    entry.isSymbolicLink -> {
+                                    ArchiveEntryKind.SYMBOLIC_LINK -> {
                                         if (entry.size != 0L) {
                                             throw RuntimeFailure("ARCHIVE_LINK_INVALID", "归档符号链接包含意外数据")
                                         }
@@ -137,9 +137,9 @@ class SafeRootfsExtractor {
                                             ),
                                         )
                                     }
-                                    else -> throw RuntimeFailure(
+                                    ArchiveEntryKind.UNSUPPORTED -> throw RuntimeFailure(
                                         "ARCHIVE_ENTRY_TYPE_REJECTED",
-                                        "运行时归档包含硬链接、设备节点或其他不安全条目",
+                                        "运行时归档包含设备节点或其他不支持的条目类型",
                                     )
                                 }
                             }
@@ -303,6 +303,29 @@ class SafeRootfsExtractor {
 
 private class CloseShieldInputStream(input: InputStream) : FilterInputStream(input) {
     override fun close() = Unit
+}
+
+internal enum class ArchiveEntryKind {
+    HARD_LINK,
+    DIRECTORY,
+    SYMBOLIC_LINK,
+    FILE,
+    UNSUPPORTED,
+}
+
+/**
+ * commons-compress 1.27.1 的 TarArchiveEntry.isFile() 对符号链接（linkFlag '2'）、
+ * 硬链接（'1'）、设备节点（'3'/'4'）与 FIFO（'6'）均返回 true，仅目录（'5'）
+ * 与以 "/" 结尾的名字返回 false。因此类型分派必须在 isFile 之前先判定
+ * isLink/isSymbolicLink，否则符号链接会被当作普通文件物化成 0 字节 + 0777
+ * 的普通文件（真机 rootfs 损坏的根因）。
+ */
+internal fun classifyEntry(entry: TarArchiveEntry): ArchiveEntryKind = when {
+    entry.isLink -> ArchiveEntryKind.HARD_LINK
+    entry.isDirectory -> ArchiveEntryKind.DIRECTORY
+    entry.isSymbolicLink -> ArchiveEntryKind.SYMBOLIC_LINK
+    entry.isFile && !entry.isCharacterDevice && !entry.isBlockDevice && !entry.isFIFO -> ArchiveEntryKind.FILE
+    else -> ArchiveEntryKind.UNSUPPORTED
 }
 
 internal class VerifiedArchiveInputStream(
