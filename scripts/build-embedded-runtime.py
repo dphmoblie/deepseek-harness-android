@@ -496,6 +496,10 @@ def main() -> None:
             copy_tar_archive(writer, args.node, args.node_root, lambda name: f"opt/node/{name}")
             add_windows_tree(writer, args.dsh_root, "opt/dsh")
             writer.add_symlink("usr/local/bin/node", "../../../opt/node/bin/node")
+            # Ubuntu base 精简包不含这两个链接，但 App 完整性校验将其列为必需：
+            # 运行时（mount 视图/时区）与校验都需要，缺了安装会报 ROOTFS_LINKS_CORRUPTED。
+            writer.add_symlink("etc/mtab", "../proc/self/mounts")
+            writer.add_symlink("etc/localtime", "../usr/share/zoneinfo/Etc/UTC")
             writer.add_bytes(
                 "usr/local/bin/dsh",
                 b'#!/bin/sh\nexec /opt/node/bin/node /opt/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js "$@"\n',

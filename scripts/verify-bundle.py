@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import posixpath
 import sys
 from pathlib import PurePosixPath
 
@@ -121,6 +122,30 @@ def main() -> int:
         t = normalized(target)
         if t not in seen:
             fail(f"hardlink target missing: {name!r} -> {target!r}")
+
+    # 与 App 侧 RootfsIntegrity.REQUIRED_LINKS 保持一致：
+    # 关键符号链接必须存在且目标解析一致（缺失/损坏会在安装后报 ROOTFS_LINKS_CORRUPTED）。
+    required_links = [
+        ("bin", "usr/bin"),
+        ("lib", "usr/lib"),
+        ("sbin", "usr/sbin"),
+        ("usr/bin/sh", "dash"),
+        ("etc/mtab", "../proc/self/mounts"),
+        ("etc/os-release", "../usr/lib/os-release"),
+        ("etc/localtime", "/usr/share/zoneinfo/Etc/UTC"),
+        ("usr/local/bin/node", "../../../opt/node/bin/node"),
+    ]
+
+    def canonical_target(name: str, target: str) -> str:
+        base = "/" if target.startswith("/") else "/" + posixpath.dirname(name)
+        return posixpath.normpath(posixpath.join(base, target))
+
+    for name, expected in required_links:
+        if types.get(name) != "sym":
+            fail(f"required symlink missing or not a symlink: {name!r}")
+        actual = next(target for n, target in symlinks if n == name)
+        if canonical_target(name, actual) != canonical_target(name, expected):
+            fail(f"required symlink target mismatch: {name!r} -> {actual!r} (expected {expected!r})")
 
     print(f"BUNDLE_VERIFY_OK: entries={entry_count} extracted={extracted} symlinks={len(symlinks)} hardlinks={len(hardlinks)}")
     return 0
