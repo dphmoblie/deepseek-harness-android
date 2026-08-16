@@ -229,14 +229,29 @@ jobs:
 
       - name: Build bundle + manifest (mobile profile)
         run: |
-          python3 scripts/build-embedded-runtime.py \
-            --ubuntu /tmp/ubuntu.tar.gz --ubuntu-sha256 04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2 \
-            --node /tmp/node.tar.xz --node-sha256 01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc \
-            --dsh-root /tmp/dsh-root --runtime-version "0.1.0-mobile-test" \
-            --mobile-profile scripts/mobile-profile.example.json \
-            --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
-          ls -la /tmp/rootfs.bundle /tmp/runtime-manifest.json
-          sha256sum /tmp/rootfs.bundle
+          {
+            python3 scripts/build-embedded-runtime.py \
+              --ubuntu /tmp/ubuntu.tar.gz --ubuntu-sha256 04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2 \
+              --node /tmp/node.tar.xz --node-sha256 01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc \
+              --dsh-root /tmp/dsh-root --runtime-version "0.1.0-mobile-test" \
+              --mobile-profile scripts/mobile-profile.example.json \
+              --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
+            ls -la /tmp/rootfs.bundle /tmp/runtime-manifest.json
+            sha256sum /tmp/rootfs.bundle
+          } 2>&1 | tee /tmp/bundle.log
+          STATUS="$?"
+          if [ "$STATUS" != "0" ]; then
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git fetch origin ci-logs || true
+            git checkout -b ci-logs origin/ci-logs 2>/dev/null || git checkout --orphan ci-logs
+            rm -rf logs && mkdir -p logs
+            cp /tmp/bundle.log logs/bundle-$GITHUB_RUN_NUMBER.log
+            git add -f logs/bundle-$GITHUB_RUN_NUMBER.log
+            git commit -m "ci: bundle log run #$GITHUB_RUN_NUMBER" || true
+            git push origin ci-logs || true
+            exit 1
+          fi
 
       - name: Upload runtime
         uses: actions/upload-artifact@v4
