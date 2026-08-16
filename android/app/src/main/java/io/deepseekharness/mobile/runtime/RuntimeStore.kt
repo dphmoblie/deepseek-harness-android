@@ -11,6 +11,7 @@ import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
+import java.io.InputStream
 import java.nio.channels.Channels
 import java.nio.channels.FileChannel
 import java.nio.file.LinkOption
@@ -26,6 +27,8 @@ class RuntimeStore(context: Context) {
     val backupRoot = File(runtimeParent, "previous")
     val backupManifest = File(runtimeParent, "previous-manifest.json")
     val runnerFile get() = File(appContext.applicationInfo.nativeLibraryDir, RUNNER_NAME)
+    val loaderFile get() = File(appContext.applicationInfo.nativeLibraryDir, LOADER_NAME)
+    val resolverFile = File(appContext.filesDir, "runtime-resolv.conf")
 
     @Volatile private var manifestCacheLoaded = false
     @Volatile private var manifestCache: RuntimeManifest? = null
@@ -49,7 +52,13 @@ class RuntimeStore(context: Context) {
         if (!committed) throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法保存运行时设置")
     }
 
-    fun runnerAvailable(): Boolean = runnerFile.isFile && runnerFile.canRead() && runnerFile.canExecute()
+    fun runnerAvailable(): Boolean = listOf(runnerFile, loaderFile).all {
+        it.isFile && it.canRead() && it.canExecute()
+    }
+
+    fun openBundledManifest(): InputStream = openBundledAsset(BUNDLED_MANIFEST_ASSET)
+
+    fun openBundledRootfs(): InputStream = openBundledAsset(BUNDLED_ROOTFS_ASSET)
 
     @Synchronized
     fun installedManifest(): RuntimeManifest? {
@@ -84,7 +93,8 @@ class RuntimeStore(context: Context) {
                     .put("url", "https://installed.invalid/rootfs")
                     .put("sha256", manifest.rootfs.sha256)
                     .put("compressedBytes", manifest.rootfs.compressedBytes)
-                    .put("extractedBytes", manifest.rootfs.extractedBytes),
+                    .put("extractedBytes", manifest.rootfs.extractedBytes)
+                    .put("compression", manifest.rootfs.compression.wireValue),
             )
             .put(
                 "entrypoints",
@@ -149,6 +159,12 @@ class RuntimeStore(context: Context) {
         }
     }
 
+    private fun openBundledAsset(path: String): InputStream = try {
+        appContext.assets.open(path)
+    } catch (error: Exception) {
+        throw RuntimeFailure("BUNDLED_RUNTIME_MISSING", "APK 未包含完整的初始化运行时", error)
+    }
+
     companion object {
         private const val PREFERENCES = "runtime_settings"
         private const val KEY_MANIFEST_URL = "manifest_url"
@@ -156,5 +172,8 @@ class RuntimeStore(context: Context) {
         private const val KEY_KEEP_AWAKE = "keep_screen_awake"
         private const val KEY_FONT_SIZE = "terminal_font_size"
         private const val RUNNER_NAME = "libdsh_proot.so"
+        private const val LOADER_NAME = "libdsh_proot_loader.so"
+        private const val BUNDLED_MANIFEST_ASSET = "runtime/runtime-manifest.json"
+        private const val BUNDLED_ROOTFS_ASSET = "runtime/rootfs.bundle"
     }
 }

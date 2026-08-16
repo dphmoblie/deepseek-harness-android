@@ -5,14 +5,13 @@ artifacts. Release builds must also generate and review a complete transitive
 dependency inventory for the exact lockfile, rootfs, native binaries, and
 Android artifact being distributed.
 
-The Android build copies this notice, the application `LICENSE`, and the
-configured JavaScript dependency license texts into `assets/legal/` in the
-APK. This generated bundle does not, by itself, satisfy the release-time
-review and packaging requirements for transitive Android dependencies or the
-Ubuntu, Node.js, DeepSeek Harness, PRoot, and Operit2 runtime materials. The
-full applicable GPL-2.0 and AGPL-3.0 texts and complete corresponding-source
-directions must accompany a distributed APK containing those native
-artifacts.
+The Android build copies this notice, the application `LICENSE`, the configured
+JavaScript dependency license texts, the full GPL-2.0 and AGPL-3.0 texts
+applicable to the imported PRoot/Operit artifacts, and archived GPL-3.0 and
+LGPL-3.0 reference texts into `assets/legal/` in the APK. This generated bundle does not, by itself, satisfy
+the release-time review and corresponding-source requirements for transitive
+Android dependencies or the Ubuntu, Node.js, DeepSeek Harness, PRoot, and
+Operit runtime materials.
 
 | Component | Purpose | License |
 | --- | --- | --- |
@@ -26,7 +25,6 @@ artifacts.
 | Kotlin | Android implementation language and runtime | Apache-2.0 |
 | AndroidX | Android application support libraries | Apache-2.0 |
 | Apache Commons Compress / IO | Rootfs archive handling | Apache-2.0 |
-| XZ for Java | XZ rootfs decompression | Public domain |
 | OkHttp | Digest-pinned HTTPS downloads | Apache-2.0 |
 | Shizuku API / provider | Optional Android shell bridge | Apache-2.0 |
 | Ubuntu 24.04 ARM64 packages | Embedded or remotely installed userspace runtime | Package-specific licenses |
@@ -34,6 +32,7 @@ artifacts.
 | `@deepseek-ai/dsh` 0.1.0-rc.6 | Agent runtime inside the rootfs | MIT |
 | PRoot v5.1.107.78 runner and loader | Userspace rootfs execution | GPL-2.0-or-later |
 | Operit2 Android runtime tooling and patch | Source/build provenance for the packaged PRoot artifacts | AGPL-3.0 |
+| Operit Terminal Core | Reference implementation consulted for the terminal integration | LGPL-3.0 |
 
 ## Native runtime provenance
 
@@ -52,6 +51,14 @@ v5.1.107.78 and carries the Operit patch at
 `tools/android-runtime/patches/termux-proot-operit-android.patch`. Operit2's
 top-level license is GNU AGPL version 3. PRoot source headers permit GNU GPL
 version 2 or, at the recipient's option, any later version.
+
+The upstream Operit Terminal Core `LICENSE` file is preserved verbatim as
+`operit-terminal-core-LGPL-3.0.txt`. Because that upstream notice abbreviates
+the incorporated GNU GPL version 3 text, the APK also carries unabridged FSF
+copies as `gnu-LGPL-3.0.txt` and `gnu-GPL-3.0.txt`. Terminal Core was consulted
+as a reference; no Terminal Core source or binary is copied into this app, so
+these three files are retained for traceability rather than asserted as the
+license of the independently implemented terminal bridge.
 
 The native ELF files and generated rootfs are deliberately absent from Git.
 Redistributors must preserve copyright and license notices and provide the

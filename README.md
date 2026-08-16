@@ -22,14 +22,16 @@ pnpm run android:sync
 ```
 
 The release build can embed `assets/runtime/runtime-manifest.json` and
-`assets/runtime/rootfs.tar.xz`. The current image recipe combines Ubuntu 24.04
+`assets/runtime/rootfs.bundle`. The opaque `.bundle` file is a gzip-compressed
+archive whose name prevents Android's asset packager from expanding it. The
+current image recipe combines Ubuntu 24.04
 ARM64, Node.js 24.19.0, and `@deepseek-ai/dsh` 0.1.0-rc.6. Generate those ignored
 artifacts with `scripts/build-embedded-runtime.py`; the script verifies the
 fixed Ubuntu and Node.js input digests, preserves Unix metadata, and emits the
 archive metadata and SHA-256 used by the embedded manifest.
 
 When no remote source is configured, installation uses the embedded manifest
-and XZ rootfs and still verifies its declared byte length and SHA-256. A build
+and gzip rootfs and still verifies its declared byte length and SHA-256. A build
 or an authenticated user can instead configure both
 `DSH_RUNTIME_MANIFEST_URL` and `DSH_RUNTIME_MANIFEST_SHA256` (or their matching
 settings fields). That pair selects a remote HTTPS manifest whose exact bytes
@@ -62,7 +64,10 @@ and exact release digests. See
   downloads additionally require HTTPS, staging files, and atomic promotion.
 - Archive extraction prevents traversal and does not create device nodes.
 - Harness binds only to Android loopback; no business service is exposed on `0.0.0.0`.
-- Loopback binding is a reachability restriction, not client authentication. Production distribution is gated on an authenticated Harness transport or equivalent upstream support.
+- Every Harness start generates a non-persistent 256-bit credential. A rootfs
+  preload authenticates both HTTP and WebSocket upgrades before upstream
+  handlers run, and only the device-authenticated internal WebView answers the
+  Basic-auth challenge. The credential is never placed in the URL or audit log.
 - Shizuku access requires a visible permission grant and a user-opened terminal session.
 - Reset is confined to the app-private runtime root and does not follow symbolic links.
 - Owner-only audit files rotate daily and retain at least 90 days of fixed event/result codes.

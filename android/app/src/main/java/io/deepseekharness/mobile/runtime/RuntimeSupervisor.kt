@@ -3,7 +3,20 @@ package io.deepseekharness.mobile.runtime
 import android.content.Context
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.security.SecureRandom
+import java.util.Base64
 import java.util.concurrent.TimeUnit
+
+data class HarnessAccess(
+    val url: String,
+    val username: String,
+    val password: String,
+) {
+    companion object {
+        const val USERNAME = "dsh-mobile"
+        const val REALM = "DeepSeek Harness Mobile"
+    }
+}
 
 class RuntimeSupervisor(
     context: Context,
@@ -13,21 +26,29 @@ class RuntimeSupervisor(
     private val appContext = context.applicationContext
     private val lock = Any()
     private var harnessProcess: Process? = null
+    private var harnessAccess: HarnessAccess? = null
 
     fun startHarness(): RuntimeStateSnapshot = synchronized(lock) {
         val existing = harnessProcess
-        if (existing?.isAlive == true) return@synchronized status.snapshot()
+        if (existing?.isAlive == true && harnessAccess != null) return@synchronized status.snapshot()
+        harnessProcess = null
+        harnessAccess = null
 
         val manifest = store.installedManifest()
             ?: throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
-        val command = RuntimeCommand.prootArgv(store, manifest.harnessArgv)
+        val access = HarnessAccess(
+            url = manifest.harnessUri.toASCIIString(),
+            username = HarnessAccess.USERNAME,
+            password = generateToken(),
+        )
+        val command = RuntimeCommand.prootArgv(store, manifest.harnessArgv, access.password)
         val process = try {
             ProcessBuilder(command)
                 .directory(store.currentRoot)
                 .redirectErrorStream(true)
                 .also { builder ->
                     builder.environment().clear()
-                    builder.environment().putAll(RuntimeCommand.hostEnvironment(appContext))
+                    builder.environment().putAll(RuntimeCommand.hostEnvironment(appContext, store))
                 }
                 .start()
         } catch (error: Exception) {
@@ -42,9 +63,11 @@ class RuntimeSupervisor(
         } catch (error: RuntimeFailure) {
             terminate(process)
             harnessProcess = null
+            harnessAccess = null
             status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = error.code)
             throw error
         }
+        harnessAccess = access
         status.update(
             RuntimePhase.RUNNING,
             downloaded = manifest.rootfs.compressedBytes,
@@ -57,15 +80,26 @@ class RuntimeSupervisor(
         val process = harnessProcess
         if (process == null || !process.isAlive) {
             harnessProcess = null
+            harnessAccess = null
             return@synchronized status.refreshIdle()
         }
         status.update(RuntimePhase.STOPPING, nextHarnessUrl = null)
         terminate(process)
         harnessProcess = null
+        harnessAccess = null
         status.refreshIdle()
     }
 
     fun isRunning(): Boolean = synchronized(lock) { harnessProcess?.isAlive == true }
+
+    fun access(): HarnessAccess = synchronized(lock) {
+        if (harnessProcess?.isAlive != true) {
+            harnessProcess = null
+            harnessAccess = null
+            throw RuntimeFailure("HARNESS_NOT_RUNNING", "Harness 尚未运行")
+        }
+        harnessAccess ?: throw RuntimeFailure("HARNESS_AUTH_UNAVAILABLE", "Harness 临时凭据不可用")
+    }
 
     private fun waitForLoopback(process: Process, port: Int) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(START_TIMEOUT_SECONDS)
@@ -121,10 +155,18 @@ class RuntimeSupervisor(
         }
     }
 
+    private fun generateToken(): String {
+        val bytes = ByteArray(TOKEN_BYTES)
+        secureRandom.nextBytes(bytes)
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+    }
+
     companion object {
         private const val START_TIMEOUT_SECONDS = 20L
         private const val STOP_TIMEOUT_SECONDS = 3L
         private const val POLL_INTERVAL_MS = 200L
         private const val SOCKET_TIMEOUT_MS = 200
+        private const val TOKEN_BYTES = 32
+        private val secureRandom = SecureRandom()
     }
 }

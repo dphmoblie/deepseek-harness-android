@@ -33,7 +33,7 @@ class UbuntuTerminalManager(
         val manifest = store.installedManifest()
             ?: throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
         val argv = RuntimeCommand.prootArgv(store, manifest.shellArgv).toTypedArray()
-        val environment = RuntimeCommand.hostEnvironment(appContext)
+        val environment = RuntimeCommand.hostEnvironment(appContext, store)
             .map { (key, value) -> "$key=$value" }
             .toTypedArray()
         val handles = try {

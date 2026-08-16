@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
+import android.webkit.HttpAuthHandler
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceRequest
@@ -14,8 +15,10 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebViewDatabase
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import io.deepseekharness.mobile.runtime.HarnessAccess
 import io.deepseekharness.mobile.runtime.RuntimeStore
 import java.io.ByteArrayInputStream
 
@@ -30,8 +33,11 @@ class HarnessActivity : AppCompatActivity() {
             finish()
             return
         }
-        val initialUrl = intent.getStringExtra(EXTRA_HARNESS_URL)
-        allowedOrigin = Origin.parse(initialUrl) ?: run {
+        val access = AppAuthenticationState.harnessAccess() ?: run {
+            finish()
+            return
+        }
+        allowedOrigin = Origin.parse(access.url) ?: run {
             finish()
             return
         }
@@ -62,7 +68,8 @@ class HarnessActivity : AppCompatActivity() {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(webView, false)
         }
-        webView.webViewClient = RestrictedWebViewClient(allowedOrigin)
+        WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword()
+        webView.webViewClient = RestrictedWebViewClient(allowedOrigin, access.username, access.password)
         setContentView(webView)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             WebView.startSafeBrowsing(applicationContext, null)
@@ -84,6 +91,7 @@ class HarnessActivity : AppCompatActivity() {
             webView.removeAllViews()
             webView.destroy()
         }
+        WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword()
         super.onDestroy()
     }
 
@@ -114,7 +122,24 @@ class HarnessActivity : AppCompatActivity() {
         }
     }
 
-    private class RestrictedWebViewClient(private val origin: Origin) : WebViewClient() {
+    private class RestrictedWebViewClient(
+        private val origin: Origin,
+        private val username: String,
+        private val password: String,
+    ) : WebViewClient() {
+        override fun onReceivedHttpAuthRequest(
+            view: WebView?,
+            handler: HttpAuthHandler?,
+            host: String?,
+            realm: String?,
+        ) {
+            if (host == origin.host && realm == HarnessAccess.REALM) {
+                handler?.proceed(username, password)
+            } else {
+                handler?.cancel()
+            }
+        }
+
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
             val uri = request?.url ?: return true
             return !origin.allows(uri)
@@ -143,9 +168,5 @@ class HarnessActivity : AppCompatActivity() {
             emptyMap(),
             ByteArrayInputStream(ByteArray(0)),
         )
-    }
-
-    companion object {
-        const val EXTRA_HARNESS_URL = "io.deepseekharness.mobile.HARNESS_URL"
     }
 }

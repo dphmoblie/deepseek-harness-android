@@ -2,8 +2,16 @@ package io.deepseekharness.mobile.runtime
 
 import android.system.ErrnoException
 import android.system.Os
+import java.io.ByteArrayOutputStream
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.InputStream
+import java.nio.channels.Channels
+import java.nio.channels.FileChannel
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
@@ -36,23 +44,28 @@ class RuntimeInstaller(
             checkCancellation()
 
             status.update(RuntimePhase.DOWNLOADING, downloaded = 0, total = 0)
-            val manifestBytes = http.downloadBytes(
-                source.manifestUrl,
-                source.manifestSha256,
-                RuntimeLimits.MAX_MANIFEST_BYTES,
-            )
+            val manifest = loadManifest(source)
             checkCancellation()
-            val manifest = RuntimeManifest.parse(manifestBytes, source.manifestUrl.host)
             status.update(RuntimePhase.DOWNLOADING, downloaded = 0, total = manifest.rootfs.compressedBytes)
 
-            http.downloadFile(
-                manifest.rootfs.url,
-                workspace.archivePart,
-                manifest.rootfs.compressedBytes,
-                manifest.rootfs.sha256,
-            ) { downloaded, total ->
-                checkCancellation()
-                status.update(RuntimePhase.DOWNLOADING, downloaded = downloaded, total = total)
+            if (source.isBundled) {
+                copyBundledRootfs(workspace.archivePart, manifest.rootfs) { copied ->
+                    status.update(
+                        RuntimePhase.DOWNLOADING,
+                        downloaded = copied,
+                        total = manifest.rootfs.compressedBytes,
+                    )
+                }
+            } else {
+                http.downloadFile(
+                    manifest.rootfs.url,
+                    workspace.archivePart,
+                    manifest.rootfs.compressedBytes,
+                    manifest.rootfs.sha256,
+                ) { downloaded, total ->
+                    checkCancellation()
+                    status.update(RuntimePhase.DOWNLOADING, downloaded = downloaded, total = total)
+                }
             }
             checkCancellation()
             status.update(
@@ -69,6 +82,7 @@ class RuntimeInstaller(
                 workspace.archivePart,
                 workspace.stagingRoot,
                 manifest.rootfs.extractedBytes,
+                manifest.rootfs.compression,
                 ::isCancelled,
             )
             checkCancellation()
@@ -115,6 +129,101 @@ class RuntimeInstaller(
         } finally {
             installLock.unlock()
         }
+    }
+
+    private fun loadManifest(source: RuntimeSource): RuntimeManifest {
+        if (source.isBundled) {
+            val bytes = store.openBundledManifest().use {
+                readBounded(it, RuntimeLimits.MAX_MANIFEST_BYTES)
+            }
+            return RuntimeManifest.parse(bytes)
+        }
+        val manifestUrl = source.manifestUrl
+            ?: throw RuntimeFailure("SOURCE_INCOMPLETE", "运行时来源无效")
+        val manifestSha256 = source.manifestSha256
+            ?: throw RuntimeFailure("SOURCE_INCOMPLETE", "运行时来源无效")
+        val bytes = http.downloadBytes(
+            manifestUrl,
+            manifestSha256,
+            RuntimeLimits.MAX_MANIFEST_BYTES,
+        )
+        return RuntimeManifest.parse(bytes, manifestUrl.host)
+    }
+
+    private fun copyBundledRootfs(
+        destination: File,
+        artifact: RootfsArtifact,
+        onProgress: (Long) -> Unit,
+    ) {
+        val digest = MessageDigest.getInstance("SHA-256")
+        var written = 0L
+        try {
+            store.openBundledRootfs().use { input ->
+                FileChannel.open(
+                    destination.toPath(),
+                    StandardOpenOption.CREATE_NEW,
+                    StandardOpenOption.WRITE,
+                    LinkOption.NOFOLLOW_LINKS,
+                ).use { channel ->
+                    BufferedOutputStream(Channels.newOutputStream(channel), BUFFER_SIZE).use { output ->
+                        val buffer = ByteArray(BUFFER_SIZE)
+                        while (true) {
+                            checkCancellation()
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            if (read == 0) continue
+                            if (written > artifact.compressedBytes - read) {
+                                throw RuntimeFailure("ARCHIVE_SIZE_MISMATCH", "APK 内置运行时归档大小无效")
+                            }
+                            output.write(buffer, 0, read)
+                            digest.update(buffer, 0, read)
+                            written += read
+                            onProgress(written)
+                        }
+                        output.flush()
+                        channel.force(true)
+                    }
+                }
+            }
+        } catch (error: Throwable) {
+            if (RuntimeFiles.existsNoFollow(destination)) cleanupIfPresent(destination)
+            if (error is RuntimeFailure) throw error
+            throw RuntimeFailure("BUNDLED_RUNTIME_READ_FAILED", "无法读取 APK 内置运行时", error)
+        }
+        if (written != artifact.compressedBytes || digest.digest().toLowerHex() != artifact.sha256) {
+            cleanupIfPresent(destination)
+            throw RuntimeFailure("ARCHIVE_DIGEST_MISMATCH", "APK 内置运行时完整性校验失败")
+        }
+    }
+
+    private fun readBounded(input: InputStream, maximumBytes: Int): ByteArray {
+        val output = ByteArrayOutputStream(minOf(maximumBytes, 16 * 1024))
+        val buffer = ByteArray(16 * 1024)
+        var total = 0
+        while (true) {
+            checkCancellation()
+            val read = input.read(buffer)
+            if (read < 0) break
+            if (read == 0) continue
+            total += read
+            if (total > maximumBytes) {
+                throw RuntimeFailure("MANIFEST_SIZE_INVALID", "APK 内置运行时清单大小无效")
+            }
+            output.write(buffer, 0, read)
+        }
+        if (total == 0) throw RuntimeFailure("MANIFEST_SIZE_INVALID", "APK 内置运行时清单为空")
+        return output.toByteArray()
+    }
+
+    private fun ByteArray.toLowerHex(): String {
+        val digits = "0123456789abcdef"
+        val result = CharArray(size * 2)
+        forEachIndexed { index, byte ->
+            val value = byte.toInt() and 0xff
+            result[index * 2] = digits[value ushr 4]
+            result[index * 2 + 1] = digits[value and 0x0f]
+        }
+        return result.concatToString()
     }
 
     private fun createWorkspace(): Workspace {
@@ -241,5 +350,6 @@ class RuntimeInstaller(
 
     companion object {
         private val UUID_SUFFIX = Regex("^[a-f0-9-]{36}$")
+        private const val BUFFER_SIZE = 64 * 1024
     }
 }

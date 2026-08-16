@@ -19,6 +19,11 @@ def legalAssetSources = [
     'legal/licenses/xterm-LICENSE.txt'           : new File(appSourceRoot, 'node_modules/@xterm/xterm/LICENSE'),
     'legal/licenses/xterm-addon-fit-LICENSE.txt' : new File(appSourceRoot, 'node_modules/@xterm/addon-fit/LICENSE'),
     'legal/licenses/lucide-react-LICENSE.txt'    : new File(appSourceRoot, 'node_modules/lucide-react/LICENSE'),
+    'legal/licenses/proot-GPL-2.0.txt'            : new File(appSourceRoot, 'legal/licenses/proot-GPL-2.0.txt'),
+    'legal/licenses/operit2-AGPL-3.0.txt'         : new File(appSourceRoot, 'legal/licenses/operit2-AGPL-3.0.txt'),
+    'legal/licenses/operit-terminal-core-LGPL-3.0.txt': new File(appSourceRoot, 'legal/licenses/operit-terminal-core-LGPL-3.0.txt'),
+    'legal/licenses/gnu-LGPL-3.0.txt'              : new File(appSourceRoot, 'legal/licenses/gnu-LGPL-3.0.txt'),
+    'legal/licenses/gnu-GPL-3.0.txt'               : new File(appSourceRoot, 'legal/licenses/gnu-GPL-3.0.txt'),
 ]
 def unavailableLegalAssetSources = legalAssetSources.findAll { _, source ->
     !source.isFile() || !source.canRead() || source.length() == 0L
@@ -119,6 +124,11 @@ android {
             // Curated license texts are APK assets; these exclusions only resolve dependency META-INF collisions.
             excludes += ['/META-INF/{AL2.0,LGPL2.1}', 'META-INF/DEPENDENCIES']
         }
+    }
+
+    androidResources {
+        // The opaque suffix prevents AAPT from transparently expanding and renaming gzip assets.
+        noCompress += ['bundle']
     }
 }
 

@@ -16,6 +16,20 @@ import {
 const ipv4 = (...octets: number[]): string => octets.join('.')
 
 describe('runtime source validation', () => {
+  it('accepts an empty pair for the bundled runtime', () => {
+    expect(validateRuntimeSource({ manifestUrl: ' ', manifestSha256: ' ' })).toEqual({
+      manifestUrl: '',
+      manifestSha256: '',
+    })
+  })
+
+  it('rejects a partially configured remote source', () => {
+    expect(() => validateRuntimeSource({
+      manifestUrl: 'https://downloads.example.invalid/runtime.json',
+      manifestSha256: '',
+    })).toThrow('同时填写')
+  })
+
   it('normalizes a valid HTTPS source and digest', () => {
     expect(validateRuntimeSource({
       manifestUrl: ' https://downloads.example.invalid/runtime.json ',
@@ -99,6 +113,20 @@ describe('settings validation', () => {
       keepScreenAwake: false,
       terminalFontSize: 25,
     })).toThrow('字号')
+  })
+
+  it('allows saving bundled runtime settings', () => {
+    expect(validateSettings({
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: true,
+      terminalFontSize: 16,
+    })).toEqual({
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: true,
+      terminalFontSize: 16,
+    })
   })
 
   it('rejects non-boolean screen settings instead of silently coercing them', () => {

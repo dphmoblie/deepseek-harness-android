@@ -24,9 +24,11 @@ enum class RuntimePhase(val wireValue: String) {
 }
 
 data class RuntimeSource(
-    val manifestUrl: URI,
-    val manifestSha256: String,
-)
+    val manifestUrl: URI?,
+    val manifestSha256: String?,
+) {
+    val isBundled: Boolean get() = manifestUrl == null && manifestSha256 == null
+}
 
 data class RuntimeSettings(
     val manifestUrl: String,
@@ -40,7 +42,18 @@ data class RootfsArtifact(
     val sha256: String,
     val compressedBytes: Long,
     val extractedBytes: Long,
+    val compression: RootfsCompression,
 )
+
+enum class RootfsCompression(val wireValue: String) {
+    GZIP("gzip"),
+    ;
+
+    companion object {
+        fun parse(value: String): RootfsCompression = entries.firstOrNull { it.wireValue == value }
+            ?: throw RuntimeFailure("ARCHIVE_COMPRESSION_UNSUPPORTED", "运行时归档压缩格式不受支持")
+    }
+}
 
 data class RuntimeManifest(
     val rawBytes: ByteArray,
@@ -93,6 +106,7 @@ data class RuntimeManifest(
                 sha256 = RuntimeValidation.requireSha256(requiredString(rootfsJson, "sha256")),
                 compressedBytes = requiredLong(rootfsJson, "compressedBytes", 1, RuntimeLimits.MAX_COMPRESSED_BYTES),
                 extractedBytes = requiredLong(rootfsJson, "extractedBytes", 1, RuntimeLimits.MAX_EXTRACTED_BYTES),
+                compression = RootfsCompression.parse(rootfsJson.optString("compression", "gzip")),
             )
 
             val entrypoints = requiredObject(json, "entrypoints")
@@ -223,8 +237,14 @@ object RuntimeValidation {
     fun source(url: String?, digest: String?): RuntimeSource {
         val normalizedUrl = url?.trim().orEmpty()
         val normalizedDigest = digest?.trim()?.lowercase(Locale.ROOT).orEmpty()
-        if (normalizedUrl.isEmpty() || normalizedUrl.length > RuntimeLimits.MAX_FIELD_CHARS) {
-            throw RuntimeFailure("SOURCE_REQUIRED", "请先配置运行时清单地址")
+        if (normalizedUrl.isEmpty() && normalizedDigest.isEmpty()) {
+            return RuntimeSource(null, null)
+        }
+        if (normalizedUrl.isEmpty() || normalizedDigest.isEmpty()) {
+            throw RuntimeFailure("SOURCE_INCOMPLETE", "运行时清单地址与 SHA-256 必须同时填写或同时留空")
+        }
+        if (normalizedUrl.length > RuntimeLimits.MAX_FIELD_CHARS) {
+            throw RuntimeFailure("URL_INVALID", "运行时清单地址长度无效")
         }
         return RuntimeSource(requireHttpsUri(normalizedUrl, rejectPrivateHost = true), requireSha256(normalizedDigest))
     }
@@ -239,7 +259,12 @@ object RuntimeValidation {
         if (terminalFontSize !in 11..24) {
             throw RuntimeFailure("SETTINGS_INVALID", "终端字号必须在 11 到 24 之间")
         }
-        return RuntimeSettings(source.manifestUrl.toASCIIString(), source.manifestSha256, keepScreenAwake, terminalFontSize)
+        return RuntimeSettings(
+            source.manifestUrl?.toASCIIString().orEmpty(),
+            source.manifestSha256.orEmpty(),
+            keepScreenAwake,
+            terminalFontSize,
+        )
     }
 
     fun requireSha256(value: String): String {

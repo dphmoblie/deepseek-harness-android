@@ -81,10 +81,9 @@ class MobileRuntimeController(
         terminals.shizuku.openManager()
     }
 
-    fun openHarnessUrl(): String = lifecycleLock.withLock {
+    fun openHarnessAccess(): HarnessAccess = lifecycleLock.withLock {
         ensureOpen()
-        if (!supervisor.isRunning()) throw RuntimeFailure("HARNESS_NOT_RUNNING", "Harness 尚未运行")
-        status.snapshot().harnessUrl ?: throw RuntimeFailure("HARNESS_URL_UNAVAILABLE", "Harness 地址不可用")
+        supervisor.access()
     }
 
     fun state(): RuntimeStateSnapshot = status.snapshot()

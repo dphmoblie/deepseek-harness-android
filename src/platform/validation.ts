@@ -103,7 +103,13 @@ export function validateRuntimeSource(source: RuntimeSource): RuntimeSource {
   const manifestUrl = source.manifestUrl.trim()
   const manifestSha256 = source.manifestSha256.trim().toLowerCase()
 
-  if (manifestUrl.length === 0 || manifestUrl.length > MAX_URL_LENGTH) {
+  if (manifestUrl.length === 0 && manifestSha256.length === 0) {
+    return { manifestUrl: '', manifestSha256: '' }
+  }
+  if (manifestUrl.length === 0 || manifestSha256.length === 0) {
+    throw new Error('运行时清单地址与 SHA-256 必须同时填写或同时留空')
+  }
+  if (manifestUrl.length > MAX_URL_LENGTH) {
     throw new Error('运行时清单地址长度无效')
   }
   if (containsControlCharacter(manifestUrl)) {

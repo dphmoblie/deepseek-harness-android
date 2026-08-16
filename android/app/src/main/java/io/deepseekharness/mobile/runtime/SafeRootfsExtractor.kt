@@ -9,6 +9,7 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
+import java.io.InputStream
 import java.nio.channels.Channels
 import java.nio.channels.FileChannel
 import java.nio.file.LinkOption
@@ -24,11 +25,14 @@ class SafeRootfsExtractor {
         archive: File,
         destination: File,
         expectedExtractedBytes: Long,
+        compression: RootfsCompression,
         shouldCancel: () -> Boolean = { false },
     ) {
         if (expectedExtractedBytes !in 1..RuntimeLimits.MAX_EXTRACTED_BYTES) {
             throw RuntimeFailure("MANIFEST_SIZE_INVALID", "运行时解压大小无效")
         }
+        val destinationParent = destination.parentFile
+            ?: throw RuntimeFailure("FILESYSTEM_ERROR", "运行时暂存路径无效")
         if (destination.exists()) {
             throw RuntimeFailure("STAGING_NOT_EMPTY", "运行时暂存目录已存在")
         }
@@ -46,8 +50,8 @@ class SafeRootfsExtractor {
 
         try {
             FileInputStream(archive).use { fileInput ->
-                GzipCompressorInputStream(BufferedInputStream(fileInput, BUFFER_SIZE)).use { gzipInput ->
-                    TarArchiveInputStream(gzipInput).use { tarInput ->
+                compressedInput(BufferedInputStream(fileInput, BUFFER_SIZE), compression).use { archiveInput ->
+                    TarArchiveInputStream(archiveInput).use { tarInput ->
                         while (true) {
                             if (shouldCancel()) throw RuntimeFailure("INSTALL_CANCELLED", "运行时安装已取消")
                             val entry = tarInput.nextEntry as? TarArchiveEntry ?: break
@@ -135,13 +139,17 @@ class SafeRootfsExtractor {
             }
         } catch (error: Throwable) {
             try {
-                RuntimeFiles.deleteTreeNoFollow(destination, destination.parentFile)
+                RuntimeFiles.deleteTreeNoFollow(destination, destinationParent)
             } catch (_: Throwable) {
                 // The original verified failure is returned; the next install performs another scoped cleanup.
             }
             if (error is RuntimeFailure) throw error
             throw RuntimeFailure("ARCHIVE_EXTRACTION_FAILED", "无法解压运行时归档", error)
         }
+    }
+
+    private fun compressedInput(input: InputStream, compression: RootfsCompression): InputStream = when (compression) {
+        RootfsCompression.GZIP -> GzipCompressorInputStream(input)
     }
 
     private fun createHardlinks(pending: List<PendingHardlink>) {

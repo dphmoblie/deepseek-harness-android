@@ -7,6 +7,14 @@ import java.net.InetAddress
 
 class RuntimeValidationTest {
     @Test
+    fun acceptsEmptySourceForBundledRuntime() {
+        val source = RuntimeValidation.source("", "")
+        assertEquals(true, source.isBundled)
+        assertEquals(null, source.manifestUrl)
+        assertEquals(null, source.manifestSha256)
+    }
+
+    @Test
     fun normalizesDigestAndHttpsSource() {
         val source = RuntimeValidation.source(
             "https://downloads.example.invalid/runtime.json",
@@ -40,6 +48,24 @@ class RuntimeValidationTest {
                 keepScreenAwake = false,
                 terminalFontSize = 25,
             )
+        }
+    }
+
+    @Test
+    fun rejectsPartiallyConfiguredSource() {
+        assertThrows(RuntimeFailure::class.java) {
+            RuntimeValidation.source("https://downloads.example.invalid/runtime.json", "")
+        }
+        assertThrows(RuntimeFailure::class.java) {
+            RuntimeValidation.source("", "a".repeat(64))
+        }
+    }
+
+    @Test
+    fun acceptsKnownArchiveCompressionFormats() {
+        assertEquals(RootfsCompression.GZIP, RootfsCompression.parse("gzip"))
+        assertThrows(RuntimeFailure::class.java) {
+            RootfsCompression.parse("xz")
         }
     }
 

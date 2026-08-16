@@ -7,7 +7,8 @@
     "url": "https://downloads.example.invalid/deepseek-harness/android/ubuntu-rootfs.tar.gz",
     "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
     "compressedBytes": 671088640,
-    "extractedBytes": 2147483648
+    "extractedBytes": 2147483648,
+    "compression": "gzip"
   },
   "entrypoints": {
     "shell": ["/bin/bash", "--login"],

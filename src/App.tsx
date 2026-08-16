@@ -455,7 +455,7 @@ function SettingsScreen({ busy, settings, shizuku, onAuthorize, onOpenShizuku, o
         <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
-            <div><h2 id="download-settings">运行时来源</h2><p>仅接受经过固定摘要校验的 HTTPS 清单</p></div>
+            <div><h2 id="download-settings">运行时来源</h2><p>留空使用内置环境，或填写固定摘要的 HTTPS 清单</p></div>
           </div>
           <label className="field">
             <span>清单地址</span>
@@ -467,7 +467,6 @@ function SettingsScreen({ busy, settings, shizuku, onAuthorize, onOpenShizuku, o
               maxLength={2048}
               value={draft.manifestUrl}
               onChange={event => setDraft({ ...draft, manifestUrl: event.target.value })}
-              required
             />
           </label>
           <label className="field">
@@ -484,7 +483,6 @@ function SettingsScreen({ busy, settings, shizuku, onAuthorize, onOpenShizuku, o
               pattern="[A-Fa-f0-9]{64}"
               value={draft.manifestSha256}
               onChange={event => setDraft({ ...draft, manifestSha256: event.target.value })}
-              required
             />
           </label>
         </section>

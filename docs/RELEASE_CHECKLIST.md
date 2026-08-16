@@ -17,12 +17,12 @@ item below for the exact APK before publishing or otherwise distributing it.
   every npm package copied into the rootfs.
 - For a self-contained build, inspect the APK for
   `assets/runtime/runtime-manifest.json` and
-  `assets/runtime/rootfs.tar.xz`. Independently verify the embedded archive's
+  `assets/runtime/rootfs.bundle`. Independently verify the embedded archive's
   compressed length and SHA-256 against its manifest.
 - For a smaller remote-runtime build, publish the rootfs and manifest over
   HTTPS, set both `DSH_RUNTIME_MANIFEST_URL` and
   `DSH_RUNTIME_MANIFEST_SHA256`, and independently verify the pinned manifest
-  bytes, archive SHA-256, byte lengths, architecture, and `xz` compression
+  bytes, archive SHA-256, byte lengths, architecture, and `gzip` compression
   value. Do not put credentials in URLs or either setting.
 - Test the selection rules: no remote pair uses the embedded assets; a full
   valid pair uses the remote override; a partial or invalid pair fails closed.
@@ -33,7 +33,10 @@ item below for the exact APK before publishing or otherwise distributing it.
 
 ## Security gates
 
-- Provide application-level client authentication for the Harness HTTP and WebSocket transport before production distribution. Loopback binding alone is not an authentication boundary on Android.
+- Verify an unauthenticated Harness HTTP request and WebSocket upgrade are both
+  rejected, the current device-authenticated internal WebView succeeds, and a
+  credential from an earlier Harness process no longer works. Loopback binding
+  alone is not an authentication boundary on Android.
 - Verify that runtime configuration files containing credentials are created with owner-only permissions inside the guest.
 - Confirm Shizuku remains optional, explicitly authorized, and limited to a user-visible fixed device Shell session.
 - Run Android lint, JVM tests, and an instrumented test on every supported Android API level and an ARM64 physical device.
@@ -47,8 +50,8 @@ item below for the exact APK before publishing or otherwise distributing it.
 - Resolve release gate `DEP-001` for the unsupported development-only archive dependency and record a clean package-manager audit.
 - Generate and review a full JavaScript and Android dependency inventory from the lockfile and resolved Gradle graph.
 - Inspect the generated APK `assets/legal/` bundle for the application
-  `LICENSE`, `THIRD_PARTY_NOTICES.md`, full GPL-2.0 and AGPL-3.0 license texts,
-  and every direct JavaScript runtime dependency license. Do not assume that a
+  `LICENSE`, `THIRD_PARTY_NOTICES.md`, full GPL-2.0, GPL-3.0, AGPL-3.0, and
+  LGPL-3.0 license texts, and every direct JavaScript runtime dependency license. Do not assume that a
   notice naming a license substitutes for its full text.
 - Record Operit2 repository
   `https://github.com/AAswordman/Operit2` at commit
@@ -56,6 +59,8 @@ item below for the exact APK before publishing or otherwise distributing it.
   `tools/android-runtime/` build instructions, the Termux PRoot
   v5.1.107.78 source, the Operit patch, all release-local changes, and the
   hashes of the two shipped ELF files.
+- Confirm the packaged PRoot `COPYING` retains its upstream copyright-holder
+  and author notices in addition to the full GPL-2.0 terms.
 - Publish or otherwise convey complete machine-readable corresponding source
   for the exact GPL-2.0-or-later and AGPL-3.0 covered artifacts by a method
   those licenses permit. Include the patches, build and installation scripts,

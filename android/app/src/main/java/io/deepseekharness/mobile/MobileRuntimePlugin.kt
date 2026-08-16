@@ -122,7 +122,7 @@ class MobileRuntimePlugin : Plugin() {
             val settings = RuntimeValidation.settings(
                 call.getString("manifestUrl"),
                 call.getString("manifestSha256"),
-                call.getBoolean("keepScreenAwake", false),
+                call.getBoolean("keepScreenAwake", false) ?: false,
                 fontSize,
             )
             controller.store.saveSettings(settings)
@@ -154,12 +154,11 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun openHarness(call: PluginCall) {
         resolveWhileActive(call) {
-            val url = controller.openHarnessUrl()
-            if (!AppAuthenticationState.authorizeHarnessLaunch()) {
+            val access = controller.openHarnessAccess()
+            if (!AppAuthenticationState.authorizeHarnessLaunch(access)) {
                 throw RuntimeFailure("AUTH_REQUIRED", "请先完成设备身份验证")
             }
             val intent = Intent(context, HarnessActivity::class.java)
-                .putExtra(HarnessActivity.EXTRA_HARNESS_URL, url)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             try {
                 context.startActivity(intent)

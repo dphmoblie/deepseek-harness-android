@@ -6,6 +6,8 @@ coverage/
 target/
 *.exe
 *.tsbuildinfo
+__pycache__/
+*.py[cod]
 capacitor.config.js
 capacitor.config.d.ts
 vite.config.js
@@ -37,7 +39,11 @@ android/app/build/
 android/local.properties
 android/capacitor.settings.gradle
 android/app/capacitor.build.gradle
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
 android/app/src/main/assets/public/
+android/app/src/main/assets/runtime/runtime-manifest.json
+android/app/src/main/assets/runtime/rootfs.bundle
 android/app/src/main/jniLibs/**/*.so
 android/gradle/wrapper/gradle-wrapper.jar
 *.apk
@@ -53,3 +59,6 @@ runtime-cache/
 *.tmp
 .DS_Store
 Thumbs.db
+.wrapper-bootstrap/
+legal/.operit-license-import/
+legal/operit-license.tar
