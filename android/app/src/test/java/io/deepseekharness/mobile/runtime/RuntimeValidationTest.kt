@@ -21,7 +21,7 @@ class RuntimeValidationTest {
             "A".repeat(64),
         )
         assertEquals("a".repeat(64), source.manifestSha256)
-        assertEquals("https", source.manifestUrl!!.scheme)
+        assertEquals("https", source.manifestUrl?.scheme)
     }
 
     @Test

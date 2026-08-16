@@ -22,9 +22,8 @@ jobs:
           node-version: '22.19.0'
 
       - name: Set up pnpm
-        run: |
-          npm install -g pnpm@11.19.0
-          pnpm --version
+        uses: pnpm/action-setup@v4
+        # 版本唯一来源为 package.json 的 packageManager 字段，避免双重指定冲突
 
       - name: Set up JDK (pinned by README)
         uses: actions/setup-java@v4
@@ -73,19 +72,21 @@ jobs:
       - name: Verify runner placement
         run: ls -la android/app/src/main/jniLibs/arm64-v8a
 
-      - name: Gradle cache
+      - name: Set up Gradle (trusted distribution for wrapper bootstrap)
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
+
+      - name: Generate Gradle wrapper (supply-chain bootstrap)
+        working-directory: .wrapper-bootstrap
+        run: gradle wrapper --no-daemon
+
+      - name: Install wrapper jar into android project
+        run: cp .wrapper-bootstrap/gradle/wrapper/gradle-wrapper.jar android/gradle/wrapper/gradle-wrapper.jar
 
       - name: Build debug APK + lint + unit tests
         working-directory: android
         run: ./gradlew assembleDebug lint testDebugUnitTest --no-daemon
-
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: dsh-harness-android-debug
-          path: android/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
 
       - name: Publish APK to dist branch
         run: |
@@ -98,6 +99,13 @@ jobs:
           git add -f dist/dsh-harness-android-debug.apk
           git commit -m "dist: auto-built APK ($GITHUB_SHA)" || true
           git push origin dist
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-harness-android-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
 
   build-runners:
     name: Build PRoot runners (Operit2 toolchain, arm64-v8a)

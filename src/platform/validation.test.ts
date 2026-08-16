@@ -5,6 +5,7 @@ import {
   assertTerminalKind,
   assertTerminalSize,
   validateRuntimeSource,
+  validateRuntimeProgress,
   validateRuntimeState,
   validateSettings,
   validateShizukuState,
@@ -176,9 +177,24 @@ describe('native bridge output validation', () => {
 
   it('rejects malformed state, Shizuku, session and terminal event values', () => {
     expect(() => validateRuntimeState({ phase: 'unknown' })).toThrow()
-    expect(() => validateShizukuState({ installed: true, running: true, permission: 'root' })).toThrow('权限')
+    expect(() => validateShizukuState({ installed: true, running: true, permission: 'root', connected: false })).toThrow('权限')
+    expect(() => validateShizukuState({ installed: true, running: true, permission: 'denied', connected: true })).toThrow('连接')
     expect(() => assertSessionId('------------------------------------')).toThrow('会话')
     expect(() => validateTerminalChunk({ sessionId, dataBase64: '***=' })).toThrow('编码')
     expect(() => validateTerminalExit({ sessionId, exitCode: 999 })).toThrow('退出码')
+  })
+
+  it('accepts local preparation progress and preserves native error codes', () => {
+    expect(validateRuntimeProgress({
+      phase: 'preparing',
+      downloadedBytes: 50,
+      totalBytes: 100,
+    }).phase).toBe('preparing')
+    expect(validateRuntimeProgress({
+      phase: 'error',
+      downloadedBytes: 50,
+      totalBytes: 100,
+      errorCode: 'DOWNLOAD_INCOMPLETE',
+    }).errorCode).toBe('DOWNLOAD_INCOMPLETE')
   })
 })

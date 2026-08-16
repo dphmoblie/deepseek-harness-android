@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RuntimeProgress, RuntimeSettings, RuntimeState, ShizukuState } from './platform/types'
 
@@ -51,6 +51,7 @@ const shizuku: ShizukuState = {
   installed: true,
   running: true,
   permission: 'undetermined',
+  connected: false,
 }
 
 beforeEach(() => {
@@ -76,7 +77,7 @@ beforeEach(() => {
     totalBytes: readyState.totalBytes,
     runnerAvailable: true,
   })
-  bridge.requestShizukuPermission.mockResolvedValue({ ...shizuku, permission: 'granted' })
+  bridge.requestShizukuPermission.mockResolvedValue({ ...shizuku, permission: 'granted', connected: true })
   bridge.openShizuku.mockResolvedValue(undefined)
 })
 
@@ -124,7 +125,121 @@ describe('App', () => {
     expect(await screen.findByTestId('terminal-panel')).toBeInTheDocument()
   })
 
-  it('requires the exact reset confirmation before invoking the native reset', async () => {
+  it('shows a remote network failure instead of a completed install state', async () => {
+    const notInstalled: RuntimeState = {
+      phase: 'not-installed',
+      architecture: 'arm64-v8a',
+      downloadedBytes: 0,
+      totalBytes: 0,
+      runnerAvailable: true,
+    }
+    const failed: RuntimeState = {
+      ...notInstalled,
+      phase: 'error',
+      totalBytes: readyState.totalBytes,
+      errorCode: 'DOWNLOAD_NETWORK_UNAVAILABLE',
+    }
+    bridge.getState
+      .mockResolvedValueOnce(notInstalled)
+      .mockResolvedValueOnce(failed)
+    bridge.install.mockRejectedValueOnce(new Error('网络不可用或下载连接已中断，可稍后继续'))
+
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: 'Ubuntu 环境' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '下载并安装' }))
+
+    expect(await screen.findByText('网络不可用或下载连接已中断，可稍后继续。')).toBeInTheDocument()
+    expect(screen.queryByText('正在安装')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '下载并安装' })).toBeEnabled()
+  })
+
+  it('keeps a terminal progress event when an older boot snapshot resolves later', async () => {
+    const staleDownloading: RuntimeState = {
+      phase: 'downloading',
+      architecture: 'arm64-v8a',
+      downloadedBytes: 32 * 1024 * 1024,
+      totalBytes: readyState.totalBytes,
+      runnerAvailable: true,
+    }
+    let resolveState: (state: RuntimeState) => void = () => undefined
+    let progressListener: ((event: RuntimeProgress) => void) | undefined
+    bridge.getState.mockReturnValueOnce(new Promise<RuntimeState>(resolve => { resolveState = resolve }))
+    bridge.addRuntimeProgressListener.mockImplementationOnce((listener: (event: RuntimeProgress) => void) => {
+      progressListener = listener
+      return Promise.resolve({ remove: vi.fn().mockResolvedValue(undefined) })
+    })
+
+    render(<App />)
+    await waitFor(() => {
+      expect(progressListener).toBeTypeOf('function')
+      expect(bridge.getState).toHaveBeenCalledTimes(1)
+    })
+
+    await act(async () => {
+      progressListener?.({
+        phase: 'error',
+        downloadedBytes: staleDownloading.downloadedBytes,
+        totalBytes: staleDownloading.totalBytes,
+        errorCode: 'DOWNLOAD_NETWORK_UNAVAILABLE',
+      })
+      resolveState(staleDownloading)
+      await Promise.resolve()
+    })
+
+    expect(await screen.findByText('网络不可用或下载连接已中断，可稍后继续。')).toBeInTheDocument()
+    expect(screen.queryByText('正在安装')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '下载并安装' })).toBeEnabled()
+  })
+
+  it('shows a safe archive-integrity message from a native error code', async () => {
+    bridge.getState.mockResolvedValueOnce({
+      phase: 'error',
+      architecture: 'arm64-v8a',
+      downloadedBytes: 0,
+      totalBytes: readyState.totalBytes,
+      runnerAvailable: true,
+      errorCode: 'ARCHIVE_SOURCE_DIGEST_MISMATCH',
+    })
+
+    render(<App />)
+
+    expect(await screen.findByText('解压时读取的运行时归档未通过完整性复核。')).toBeInTheDocument()
+  })
+
+  it('does not expose an unknown native error identifier', async () => {
+    const internalCode = 'INTERNAL_RUNTIME_IMPLEMENTATION_DETAIL'
+    bridge.getState.mockResolvedValueOnce({
+      phase: 'error',
+      architecture: 'arm64-v8a',
+      downloadedBytes: 0,
+      totalBytes: readyState.totalBytes,
+      runnerAvailable: true,
+      errorCode: internalCode,
+    })
+
+    render(<App />)
+
+    expect(await screen.findByText('运行时操作失败，请稍后重试；如问题持续，请重置环境。')).toBeInTheDocument()
+    expect(screen.queryByText(internalCode)).not.toBeInTheDocument()
+  })
+
+  it('keeps an installed runtime retryable after a PRoot startup failure', async () => {
+    bridge.getState.mockResolvedValueOnce({
+      ...readyState,
+      phase: 'error',
+      errorCode: 'PROOT_PTRACE_DENIED',
+    })
+
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: 'Ubuntu 环境' })).toBeInTheDocument()
+    fireEvent.click(screen.getAllByRole('button', { name: 'Agent' })[0])
+
+    expect(await screen.findByText('系统内核拒绝 PRoot 所需的 ptrace 操作，当前设备可能不兼容。')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '启动 Harness' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: '安装运行时' })).not.toBeInTheDocument()
+  })
+
+  it('accepts a normalized reset confirmation and invokes the native reset', async () => {
     render(<App />)
     await screen.findByText('Harness 可以启动')
 
@@ -133,13 +248,53 @@ describe('App', () => {
 
     const confirmButton = screen.getByRole('button', { name: '确认重置' })
     expect(confirmButton).toBeDisabled()
-    fireEvent.change(screen.getByLabelText('输入 RESET_RUNTIME 确认'), { target: { value: 'RESET_RUNTIME' } })
+    const confirmationInput = screen.getByLabelText('输入 RESET_RUNTIME 确认')
+    expect(confirmationInput).not.toHaveFocus()
+    fireEvent.change(confirmationInput, { target: { value: 'RESET-RUNTIME' } })
+    fireEvent.submit(screen.getByRole('dialog'))
+    expect(bridge.reset).not.toHaveBeenCalled()
+    fireEvent.change(confirmationInput, { target: { value: ' reset_runtime ' } })
     expect(confirmButton).toBeEnabled()
     fireEvent.click(confirmButton)
 
     await waitFor(() => expect(bridge.reset).toHaveBeenCalledWith('RESET_RUNTIME'))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect((await screen.findAllByText('未安装')).length).toBeGreaterThan(0)
+  })
+
+  it('submits reset through the mobile keyboard action', async () => {
+    render(<App />)
+    await screen.findByText('Harness 可以启动')
+
+    fireEvent.click(screen.getAllByRole('button', { name: '环境' })[0])
+    fireEvent.click(screen.getByRole('button', { name: '重置' }))
+    fireEvent.change(screen.getByLabelText('输入 RESET_RUNTIME 确认'), { target: { value: 'RESET_RUNTIME' } })
+    fireEvent.submit(screen.getByRole('dialog'))
+
+    await waitFor(() => expect(bridge.reset).toHaveBeenCalledWith('RESET_RUNTIME'))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('shows reset progress and keeps the dialog retryable after a native failure', async () => {
+    let rejectReset: (reason?: unknown) => void = () => undefined
+    bridge.reset.mockReturnValueOnce(new Promise((_, reject) => { rejectReset = reject }))
+    render(<App />)
+    await screen.findByText('Harness 可以启动')
+
+    fireEvent.click(screen.getAllByRole('button', { name: '环境' })[0])
+    fireEvent.click(screen.getByRole('button', { name: '重置' }))
+    const confirmationInput = screen.getByLabelText('输入 RESET_RUNTIME 确认')
+    confirmationInput.focus()
+    fireEvent.change(confirmationInput, { target: { value: 'RESET_RUNTIME' } })
+    fireEvent.submit(screen.getByRole('dialog'))
+
+    expect(confirmationInput).not.toHaveFocus()
+    expect(await screen.findByRole('button', { name: '正在重置' })).toBeDisabled()
+    act(() => { rejectReset(new Error('重置操作失败')) })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('重置操作失败')
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '确认重置' })).toBeEnabled()
   })
 
   it('saves runtime source and terminal settings through the validated bridge', async () => {
@@ -156,7 +311,7 @@ describe('App', () => {
   })
 
   it('refreshes Shizuku state after returning from its external activity', async () => {
-    bridge.getShizukuState.mockResolvedValueOnce({ installed: false, running: false, permission: 'undetermined' })
+    bridge.getShizukuState.mockResolvedValueOnce({ installed: false, running: false, permission: 'undetermined', connected: false })
     render(<App />)
     await screen.findByText('Harness 可以启动')
 
@@ -166,7 +321,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: '打开 Shizuku' }))
     await waitFor(() => expect(bridge.openShizuku).toHaveBeenCalledTimes(1))
 
-    bridge.getShizukuState.mockResolvedValue({ ...shizuku, permission: 'granted' })
+    bridge.getShizukuState.mockResolvedValue({ ...shizuku, permission: 'granted', connected: true })
     fireEvent.focus(window)
 
     expect(await screen.findByTestId('terminal-panel')).toBeInTheDocument()

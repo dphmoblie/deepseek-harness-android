@@ -1,5 +1,6 @@
 export type RuntimePhase =
   | 'not-installed'
+  | 'preparing'
   | 'downloading'
   | 'verifying'
   | 'extracting'
@@ -37,12 +38,14 @@ export interface RuntimeProgress {
   phase: RuntimePhase
   downloadedBytes: number
   totalBytes: number
+  errorCode?: string
 }
 
 export interface ShizukuState {
   installed: boolean
   running: boolean
   permission: 'granted' | 'denied' | 'undetermined'
+  connected: boolean
 }
 
 export interface TerminalChunk {

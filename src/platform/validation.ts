@@ -21,6 +21,7 @@ const MAX_ERROR_CODE_LENGTH = 96
 const MAX_TERMINAL_OUTPUT_BYTES = 96 * 1024
 const RUNTIME_PHASES = new Set<RuntimePhase>([
   'not-installed',
+  'preparing',
   'downloading',
   'verifying',
   'extracting',
@@ -205,9 +206,9 @@ export function assertBase64Input(value: string, maximumBytes: number): void {
 
 export function validateRuntimeState(value: unknown): RuntimeState {
   const state = asRecord(value, '运行时状态')
-  const downloadedBytes = byteCount(state.downloadedBytes, '已下载字节数')
+  const downloadedBytes = byteCount(state.downloadedBytes, '已处理字节数')
   const totalBytes = byteCount(state.totalBytes, '总字节数')
-  if (totalBytes > 0 && downloadedBytes > totalBytes) throw new Error('运行时下载进度无效')
+  if (totalBytes > 0 && downloadedBytes > totalBytes) throw new Error('运行时进度无效')
   if (typeof state.runnerAvailable !== 'boolean') throw new Error('本机运行器状态格式无效')
 
   const installedVersion = optionalIdentifier(state.installedVersion, '运行时版本')
@@ -241,19 +242,23 @@ export function validateRuntimeState(value: unknown): RuntimeState {
 
 export function validateRuntimeProgress(value: unknown): RuntimeProgress {
   const progress = asRecord(value, '运行时进度')
-  const downloadedBytes = byteCount(progress.downloadedBytes, '已下载字节数')
+  const downloadedBytes = byteCount(progress.downloadedBytes, '已处理字节数')
   const totalBytes = byteCount(progress.totalBytes, '总字节数')
-  if (totalBytes > 0 && downloadedBytes > totalBytes) throw new Error('运行时下载进度无效')
-  return { phase: runtimePhase(progress.phase), downloadedBytes, totalBytes }
+  if (totalBytes > 0 && downloadedBytes > totalBytes) throw new Error('运行时进度无效')
+  const errorCode = optionalIdentifier(progress.errorCode, '运行时错误码', ERROR_CODE_PATTERN, MAX_ERROR_CODE_LENGTH)
+  return { phase: runtimePhase(progress.phase), downloadedBytes, totalBytes, ...(errorCode === undefined ? {} : { errorCode }) }
 }
 
 export function validateShizukuState(value: unknown): ShizukuState {
   const state = asRecord(value, 'Shizuku 状态')
-  if (typeof state.installed !== 'boolean' || typeof state.running !== 'boolean') throw new Error('Shizuku 状态格式无效')
+  if (typeof state.installed !== 'boolean' || typeof state.running !== 'boolean' || typeof state.connected !== 'boolean') {
+    throw new Error('Shizuku 状态格式无效')
+  }
   if (state.permission !== 'granted' && state.permission !== 'denied' && state.permission !== 'undetermined') {
     throw new Error('Shizuku 权限状态格式无效')
   }
-  return { installed: state.installed, running: state.running, permission: state.permission }
+  if (state.connected && (!state.running || state.permission !== 'granted')) throw new Error('Shizuku 连接状态无效')
+  return { installed: state.installed, running: state.running, permission: state.permission, connected: state.connected }
 }
 
 export function validateTerminalSession(value: unknown): { sessionId: string } {

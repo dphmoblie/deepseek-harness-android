@@ -4,28 +4,13 @@ import io.deepseekharness.mobile.runtime.HarnessAccess
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal object AppAuthenticationState {
-    private val managementAuthenticated = AtomicBoolean(false)
     private val harnessAuthenticated = AtomicBoolean(false)
     private var harnessAccess: HarnessAccess? = null
 
     @Synchronized
-    fun grantManagement() {
-        managementAuthenticated.set(true)
-    }
-
-    @Synchronized
-    fun revokeManagement() {
-        managementAuthenticated.set(false)
-    }
-
-    fun isManagementAuthenticated(): Boolean = managementAuthenticated.get()
-
-    @Synchronized
-    fun authorizeHarnessLaunch(access: HarnessAccess): Boolean {
-        if (!managementAuthenticated.get()) return false
+    fun authorizeHarnessLaunch(access: HarnessAccess) {
         harnessAccess = access
         harnessAuthenticated.set(true)
-        return true
     }
 
     @Synchronized

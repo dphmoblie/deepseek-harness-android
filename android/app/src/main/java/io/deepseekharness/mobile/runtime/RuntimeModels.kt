@@ -14,6 +14,7 @@ import java.util.Locale
 
 enum class RuntimePhase(val wireValue: String) {
     NOT_INSTALLED("not-installed"),
+    PREPARING("preparing"),
     DOWNLOADING("downloading"),
     VERIFYING("verifying"),
     EXTRACTING("extracting"),

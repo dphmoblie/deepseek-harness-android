@@ -27,6 +27,7 @@ class RuntimeInstaller(
         val stagingRoot: File,
         val stagingManifest: File,
         val archivePart: File,
+        val preserveArchiveOnFailure: Boolean,
     )
 
     private val installLock = ReentrantLock()
@@ -40,18 +41,29 @@ class RuntimeInstaller(
             if (!store.runnerAvailable()) {
                 throw RuntimeFailure("RUNNER_UNAVAILABLE", "APK 未包含当前架构的受信任运行器")
             }
-            workspace = createWorkspace()
+            prepareRuntimeParent()
             checkCancellation()
 
-            status.update(RuntimePhase.DOWNLOADING, downloaded = 0, total = 0)
+            val transferPhase = if (source.isBundled) RuntimePhase.PREPARING else RuntimePhase.DOWNLOADING
+            status.update(transferPhase, downloaded = 0, total = 0)
             val manifest = loadManifest(source)
             checkCancellation()
-            status.update(RuntimePhase.DOWNLOADING, downloaded = 0, total = manifest.rootfs.compressedBytes)
+            if (isCurrent(manifest)) {
+                status.update(
+                    RuntimePhase.READY,
+                    downloaded = manifest.rootfs.compressedBytes,
+                    total = manifest.rootfs.compressedBytes,
+                    nextHarnessUrl = null,
+                )
+                return
+            }
+            workspace = createWorkspace(manifest, source.isBundled)
+            status.update(transferPhase, downloaded = 0, total = manifest.rootfs.compressedBytes)
 
             if (source.isBundled) {
                 copyBundledRootfs(workspace.archivePart, manifest.rootfs) { copied ->
                     status.update(
-                        RuntimePhase.DOWNLOADING,
+                        RuntimePhase.PREPARING,
                         downloaded = copied,
                         total = manifest.rootfs.compressedBytes,
                     )
@@ -75,16 +87,20 @@ class RuntimeInstaller(
             )
             status.update(
                 RuntimePhase.EXTRACTING,
-                downloaded = manifest.rootfs.compressedBytes,
-                total = manifest.rootfs.compressedBytes,
+                downloaded = 0,
+                total = manifest.rootfs.extractedBytes,
             )
             extractor.extract(
                 workspace.archivePart,
                 workspace.stagingRoot,
+                manifest.rootfs.compressedBytes,
+                manifest.rootfs.sha256,
                 manifest.rootfs.extractedBytes,
                 manifest.rootfs.compression,
                 ::isCancelled,
-            )
+            ) { extracted, total ->
+                status.update(RuntimePhase.EXTRACTING, downloaded = extracted, total = total)
+            }
             checkCancellation()
             store.writeInstalledManifest(workspace.stagingManifest, manifest)
             promoteStaging(workspace)
@@ -97,8 +113,17 @@ class RuntimeInstaller(
                 nextHarnessUrl = null,
             )
         } catch (error: Throwable) {
-            workspace?.let(::cleanupWorkspace)
-            val failure = if (isCancelled()) {
+            val cleanupFailure = workspace?.let {
+                try {
+                    cleanupWorkspace(it, preserveArchive = it.preserveArchiveOnFailure)
+                    null
+                } catch (cleanupError: Throwable) {
+                    cleanupError as? RuntimeFailure
+                        ?: RuntimeFailure("CLEANUP_FAILED", "无法完整清理安装暂存文件", cleanupError)
+                }
+            }
+            // Cleanup must not leave the public state stuck in a transfer or extraction phase.
+            val failure = cleanupFailure ?: if (isCancelled()) {
                 RuntimeFailure("INSTALL_CANCELLED", "运行时安装已取消")
             } else {
                 error as? RuntimeFailure ?: RuntimeFailure("INSTALL_FAILED", "运行时安装失败", error)
@@ -119,7 +144,8 @@ class RuntimeInstaller(
     fun resetWorkspace() {
         if (!installLock.tryLock()) throw RuntimeFailure("INSTALL_IN_PROGRESS", "安装期间不能重置运行时")
         try {
-            cleanAbandonedWorkspaces()
+            cleanTransientWorkspaces()
+            cleanResumeFilesExcept(null)
             cleanupIfPresent(store.backupManifest)
             cleanupIfPresent(store.backupRoot)
             cleanupIfPresent(store.currentManifest)
@@ -129,6 +155,15 @@ class RuntimeInstaller(
         } finally {
             installLock.unlock()
         }
+    }
+
+    /**
+     * 指纹比对：目标清单与已安装清单的 rootfs 摘要一致时视为已是最新，
+     * 跳过下载与解压（防重复安装，也防内嵌快照覆盖在线更新）。
+     */
+    private fun isCurrent(manifest: RuntimeManifest): Boolean {
+        val installed = store.installedManifest() ?: return false
+        return installed.rootfs.sha256 == manifest.rootfs.sha256
     }
 
     private fun loadManifest(source: RuntimeSource): RuntimeManifest {
@@ -226,21 +261,25 @@ class RuntimeInstaller(
         return result.concatToString()
     }
 
-    private fun createWorkspace(): Workspace {
+    private fun prepareRuntimeParent() {
         if (!RuntimeFiles.existsNoFollow(store.runtimeParent)) {
             Files.createDirectory(store.runtimeParent.toPath())
         } else if (!RuntimeFiles.isDirectoryNoFollow(store.runtimeParent)) {
             throw RuntimeFailure("FILESYSTEM_ERROR", "运行时父路径不是目录")
         }
         recoverInterruptedPromotion()
-        cleanAbandonedWorkspaces()
+        cleanTransientWorkspaces()
+    }
 
+    private fun createWorkspace(manifest: RuntimeManifest, bundled: Boolean): Workspace {
         val nonce = UUID.randomUUID().toString()
         val stagingRoot = File(store.runtimeParent, "staging-$nonce")
         val stagingManifest = File(store.runtimeParent, "manifest-$nonce.json")
-        val archivePart = File(store.runtimeParent, "download-$nonce.part")
+        val resumeName = if (bundled) null else "rootfs-${manifest.rootfs.sha256}.part"
+        cleanResumeFilesExcept(resumeName)
+        val archivePart = File(store.runtimeParent, resumeName ?: "download-$nonce.part")
         // The extractor itself creates the root with CREATE_NEW-style directory semantics.
-        return Workspace(stagingRoot, stagingManifest, archivePart)
+        return Workspace(stagingRoot, stagingManifest, archivePart, preserveArchiveOnFailure = !bundled)
     }
 
     private fun recoverInterruptedPromotion() {
@@ -317,13 +356,13 @@ class RuntimeInstaller(
         }
     }
 
-    private fun cleanupWorkspace(workspace: Workspace) {
-        cleanupIfPresent(workspace.archivePart)
+    private fun cleanupWorkspace(workspace: Workspace, preserveArchive: Boolean = false) {
+        if (!preserveArchive) cleanupIfPresent(workspace.archivePart)
         cleanupIfPresent(workspace.stagingManifest)
         cleanupIfPresent(workspace.stagingRoot)
     }
 
-    private fun cleanAbandonedWorkspaces() {
+    private fun cleanTransientWorkspaces() {
         val children = store.runtimeParent.listFiles() ?: return
         for (child in children) {
             val name = child.name
@@ -334,6 +373,14 @@ class RuntimeInstaller(
             ) {
                 cleanupIfPresent(child)
             }
+        }
+    }
+
+    private fun cleanResumeFilesExcept(keepName: String?) {
+        val children = store.runtimeParent.listFiles() ?: return
+        for (child in children) {
+            val name = child.name
+            if (RESUME_FILE.matches(name) && name != keepName) cleanupIfPresent(child)
         }
     }
 
@@ -350,6 +397,7 @@ class RuntimeInstaller(
 
     companion object {
         private val UUID_SUFFIX = Regex("^[a-f0-9-]{36}$")
+        private val RESUME_FILE = Regex("^rootfs-[a-f0-9]{64}\\.part$")
         private const val BUFFER_SIZE = 64 * 1024
     }
 }
