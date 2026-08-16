@@ -1,9 +1,5 @@
-<<<<<<< HEAD
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
-=======
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
->>>>>>> origin/main
+import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import {
   AlertTriangle,
   Bot,
