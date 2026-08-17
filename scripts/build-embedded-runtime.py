@@ -37,6 +37,14 @@ UBUNTU_EXCLUDED_REGULAR_PATHS = frozenset(
         r"usr/lib/systemd/system/system-systemd\x2dveritysetup.slice",
     },
 )
+PROFILE_BUNDLE_NAMES = (
+    "@deepseek-ai/dsh-base",
+    "@deepseek-ai/dsh-web-app",
+    "dsh-mobile-compat",
+    "@linxin666/dsh-web-ui-all",
+    "@liustack/modlens",
+    "dshmarket",
+)
 
 
 class BuildError(RuntimeError):
@@ -422,6 +430,32 @@ def add_windows_tree(writer: RootfsWriter, source_root: Path, destination_root: 
                 writer.add(info, source)
 
 
+def inject_bundles_into_dsh_manifest(dsh_root: Path) -> None:
+    """把 profile bundles 注入 @deepseek-ai/dsh 的 package.json dependencies。
+
+    dsh 启动时 healProfilesModuleFallback 只从 dsh 包的依赖闭包维护
+    profiles/node_modules；profile bundles 不是 dsh 的依赖时永远不会被它链接，
+    cordis 加载器从 profile 目录解析 loader entry 就会 "Cannot find package"。
+    这里把 bundles 注入 dsh 包依赖，让官方机制在运行时自动补齐链接，
+    构建期预置链接仅作兜底。
+    """
+    for manifest_path in dsh_root.glob(
+        "node_modules/.pnpm/@deepseek-ai+dsh@*/node_modules/@deepseek-ai/dsh/package.json",
+    ):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        deps = manifest.setdefault("dependencies", {})
+        changed = False
+        for name in PROFILE_BUNDLE_NAMES:
+            if name not in deps:
+                deps[name] = "*"
+                changed = True
+        if changed:
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+
 def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_dsh: str) -> None:
     """预生成 $DSH_HOME/profiles/node_modules 的扁平包链接。
 
@@ -559,6 +593,7 @@ def main() -> None:
                 excluded_regular_paths=UBUNTU_EXCLUDED_REGULAR_PATHS,
             )
             copy_tar_archive(writer, args.node, args.node_root, lambda name: f"opt/node/{name}")
+            inject_bundles_into_dsh_manifest(args.dsh_root)
             add_windows_tree(writer, args.dsh_root, "opt/dsh")
             add_profiles_module_fallback(writer, args.dsh_root, "opt/dsh")
             writer.add_symlink("usr/local/bin/node", "../../../opt/node/bin/node")
