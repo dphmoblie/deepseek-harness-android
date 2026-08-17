@@ -1,3 +1,4 @@
+import { ArrowLeft, File, Folder, Home } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { callUnary, RpcFailure, TransportError } from '../api/wire'
@@ -8,7 +9,8 @@ import type { DirectoryListing } from '../api/types'
  * 目录浏览：遍历 guest Linux 文件系统（host.listDirectory），
  * 支持面包屑导航与新建目录。文件条目 v1 仅展示，不可打开。
  */
-export function FilesView(): ReactElement {
+export function FilesView(props: { onBack: () => void }): ReactElement {
+  const { onBack } = props
   const [listing, setListing] = useState<DirectoryListing | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
@@ -47,7 +49,8 @@ export function FilesView(): ReactElement {
 
   return (
     <main className="view">
-      <header className="view-header">
+      <header className="view-header secondary-header">
+        <button type="button" className="icon-button" aria-label="返回对话" title="返回对话" onClick={onBack}><ArrowLeft size={20} /></button>
         <h1>目录</h1>
         <button type="button" className="btn btn-primary" onClick={() => setCreating((prev) => !prev)}>
           新建目录
@@ -78,7 +81,7 @@ export function FilesView(): ReactElement {
           <>
             <nav className="crumbs">
               <button type="button" className="crumb" onClick={() => void open(listing.home)}>
-                🏠 主目录
+                <Home size={14} aria-hidden="true" />主目录
               </button>
               {listing.crumbs.map((crumb) => (
                 <button key={crumb.path} type="button" className="crumb" onClick={() => void open(crumb.path)}>
@@ -91,7 +94,7 @@ export function FilesView(): ReactElement {
               {listing.entries.map((entry) => (
                 <li key={entry.path}>
                   <button type="button" className="list-row" onClick={() => void open(entry.path)}>
-                    <span className="entry-icon">{entry.path.endsWith('/') ? '📁' : '📄'}</span>
+                    <span className="entry-icon">{entry.path.endsWith('/') ? <Folder size={18} /> : <File size={18} />}</span>
                     <span className={`list-title${entry.hidden ? ' entry-hidden' : ''}`}>{entry.name}</span>
                     <span className="list-sub">{entry.path}</span>
                   </button>

@@ -3,7 +3,8 @@
 
 原理：dsh 的 distIndex 由 require.resolve('@deepseek-ai/dsh-web-frontend/dist/index.html')
 解析到 .pnpm 下的真实目录，流式重写 tar 时跳过旧 dist 条目、追加新 dist 树即可，
-无需改动 dsh 代码。全程不解压到磁盘；旧 bundle 保留 .bak 备份。
+无需改动 dsh 代码。全程不解压到磁盘；替换期间使用 .bak 事务备份，
+校验成功后立即删除，避免 Android AAPT 把备份也打进 APK。
 """
 
 from __future__ import annotations
@@ -59,6 +60,9 @@ def stream_rebuild(bundle: Path, output: Path, dist_root: Path, replacements: li
     copied_count = 0
     dist_index_name: str | None = None
     added_bytes = 0
+    existing_directories: set[str] = set()
+    copied_paths: set[str] = set()
+    deduplicated_count = 0
 
     with bundle.open("rb") as raw_input:
         with gzip.open(raw_input, "rb") as compressed_input:
@@ -93,11 +97,22 @@ def stream_rebuild(bundle: Path, output: Path, dist_root: Path, replacements: li
                                         raise BuildError(
                                             f"链接指向被替换的条目：{member.name} -> {member.linkname}"
                                         )
+                                # 输入 bundle 可能已含重复条目（历史脚本 bug 产物）：
+                                # 复制时按规范化路径去重，保证输出归档干净。
+                                normalized_name = _ber.normalized_path(member.name)
+                                if normalized_name in copied_paths:
+                                    deduplicated_count += 1
+                                    if member.isreg():
+                                        skipped_bytes += member.size
+                                    continue
+                                copied_paths.add(normalized_name)
                                 if member.isreg():
                                     file_object = source.extractfile(member)
                                     target.addfile(member, file_object)
                                 else:
                                     target.addfile(member)
+                                if member.isdir():
+                                    existing_directories.add(normalized_name)
                                 copied_count += 1
 
                             if dist_index_name is None:
@@ -105,6 +120,10 @@ def stream_rebuild(bundle: Path, output: Path, dist_root: Path, replacements: li
                             new_dist_root = dist_index_name[: -len("index.html")].rstrip("/")
 
                             writer = RootfsWriter(target, 0)
+                            # 旧条目中已保留父目录链（如 opt/dsh/...、usr/local/lib）：
+                            # 预注入避免追加新树时重复写目录条目（重复条目会被
+                            # SafeRootfsExtractor 以 ARCHIVE_DUPLICATE_ENTRY 拒绝）。
+                            writer.preseed_directories(existing_directories)
                             before_bytes = writer.extracted_bytes
                             add_windows_tree(writer, dist_root, new_dist_root)
                             for local_path, archive_target in replacements:
@@ -122,6 +141,7 @@ def stream_rebuild(bundle: Path, output: Path, dist_root: Path, replacements: li
         "skippedCount": skipped_count,
         "skippedBytes": skipped_bytes,
         "copiedCount": copied_count,
+        "deduplicatedCount": deduplicated_count,
         "addedEntries": 0,  # 由 collect_expected 阶段补充
         "addedBytes": added_bytes,
         "distRoot": new_dist_root,
@@ -168,11 +188,16 @@ def collect_expected(
 
 
 def verify_rebuilt(bundle: Path, expected: dict[str, bytes]) -> None:
-    """流式遍历新 bundle，校验新写入条目完整且旧 dist 条目已清除。"""
+    """流式遍历新 bundle，校验新写入条目完整、旧 dist 条目已清除、全局无重复路径。"""
     print(f"[verify] 校验重建后的 {bundle.name}…")
     found = 0
+    seen_paths: set[str] = set()
     with tarfile.open(bundle, "r|gz") as source:
         for member in source:
+            normalized = _ber.normalized_path(member.name)
+            if normalized in seen_paths:
+                raise BuildError(f"重建后归档包含重复条目：{normalized}")
+            seen_paths.add(normalized)
             wanted = expected.pop(member.name, None)
             if wanted is None:
                 # 新写入树的目录条目不在 expected 中，允许；内容条目残留才算失败
@@ -250,6 +275,9 @@ def main() -> None:
     temporary_manifest = manifest_path.with_name(f"{manifest_path.name}.{os.getpid()}.part")
     backup_bundle = bundle.with_name(f"{bundle.name}.bak")
     backup_manifest = manifest_path.with_name(f"{manifest_path.name}.bak")
+    bundle_backed_up = False
+    manifest_backed_up = False
+    committed = False
 
     try:
         print(f"[rebuild] 流式重建（跳过旧 dist，追加新 dist，gzip 级别 {ARGS.compression_level}）…")
@@ -270,26 +298,35 @@ def main() -> None:
             manifest_output.flush()
             os.fsync(manifest_output.fileno())
 
-        # 原子替换：旧文件保底备份为 .bak（下次运行会覆盖）
+        # 原子替换：校验新文件期间用 .bak 保留旧文件，异常时立即回滚。
         os.replace(bundle, backup_bundle)
+        bundle_backed_up = True
         os.replace(temporary_output, bundle)
         os.replace(manifest_path, backup_manifest)
+        manifest_backed_up = True
         os.replace(temporary_manifest, manifest_path)
 
         verify_rebuilt(bundle, expected)
+        committed = True
+
+        # 备份只能在校验通过后删除。assets 下残留的任意 .bak 都会被 AAPT 打包，
+        # 使 APK 同时包含新旧两份 rootfs。
+        backup_bundle.unlink(missing_ok=True)
+        backup_manifest.unlink(missing_ok=True)
 
         print(
             json.dumps(
                 {
                     "bundle": str(bundle),
                     "manifest": str(manifest_path),
-                    "backupBundle": str(backup_bundle),
+                    "transactionBackupsRemoved": True,
                     "runtimeVersion": ARGS.runtime_version,
                     "compressedBytes": compressed_bytes,
                     "extractedBytes": manifest["rootfs"]["extractedBytes"],
                     "sha256": archive_sha256,
                     "skippedOldDistEntries": stats["skippedCount"],
                     "skippedOldDistBytes": stats["skippedBytes"],
+                    "deduplicatedOldEntries": stats["deduplicatedCount"],
                     "addedNewDistEntries": stats["addedEntries"],
                     "addedNewDistBytes": stats["addedBytes"],
                 },
@@ -297,6 +334,15 @@ def main() -> None:
                 indent=2,
             )
         )
+    except Exception:
+        if not committed:
+            if manifest_backed_up and backup_manifest.exists():
+                manifest_path.unlink(missing_ok=True)
+                os.replace(backup_manifest, manifest_path)
+            if bundle_backed_up and backup_bundle.exists():
+                bundle.unlink(missing_ok=True)
+                os.replace(backup_bundle, bundle)
+        raise
     finally:
         temporary_output.unlink(missing_ok=True)
         temporary_manifest.unlink(missing_ok=True)

@@ -1,15 +1,18 @@
-# 移动端 DSH 插件兼容、UI 布局与轻量化部署设计（分支 feature/dsh-plugin-compat）
+# 移动端 DSH 插件兼容、对话 UI 与轻量化部署设计
 
 > 目标：让桌面 DSH 插件生态（dsh-web-ui 全家桶、dshmarket、modlens、archify 等）在手机
-> WebView 内的 Harness Web UI 上可用；为各部分给出移动布局方案；设计新手引导；轻量化部署。
+> WebView 内的 Harness Web UI 上可用；为各部分给出移动布局方案；应用打开后直接进入
+> Harness 对话，并通过固定 Release 运行时保持 APK 轻量。
 > 参考实现：kelai141 生态的 @dsh-android/dsh-client-ui-responsive（编译产物在本机
 > .dsh-dl/dsh-android-dsh-client-ui-responsive-0.1.0.tgz，本文中的模式均经其代码核实）。
 
-## 1. 现状基线（2026-08-16 实测）
+## 1. 现状基线（0.1.7）
 
-- **三端结构**：Capacitor 管理 UI（src/，React 32KB App）→ 内嵌 Harness Web UI
-  （rootfs 内 dsh web，仅 127.0.0.1 + preload Basic 认证）→ runtime profile 插件集
+- **三端结构**：Capacitor 启动与管理 UI（src/）→ 原生 HarnessActivity 内的移动对话 UI
+  （rootfs 内 dsh web，仅 127.0.0.1 + preload 认证）→ runtime profile 插件集
   （rootfs 配方：Ubuntu 24.04 ARM64 + Node 24.19 + @deepseek-ai/dsh 0.1.0-rc.6）。
+- **入口契约**：运行时就绪时启动应用直接恢复最近会话；服务、Ubuntu、终端、重置、
+  来源和 Shizuku 统一放在设置页，无额外引导或用户登录页。
 - **桌面插件生态**（本机桌面 profile 实测在装）：@linxin666/dsh-web-ui-all（task-board/
   git-graph/pet/remote-web-ui/live-stats/web-ui-settings/aionui-panel/ssh/liangshen/skins/
   skin-center/describe-image）、dshmarket、modlens、archify、distill、notify、dsh-browser。
@@ -28,7 +31,7 @@
 | dsh-task-board | 单列全宽 + 卡片横滑切换列（swipeable columns） | P1 |
 | dsh-ssh | 表单重排单列；终端 tab 全宽 | P1 |
 | dshmarket | 网格 2 列 → 单列卡片流 | P1 |
-| dsh-liangshen（preset） | 设置入口并入新手引导与插件设置页 | P2 |
+| dsh-liangshen（preset） | 入口并入 Harness 设置页，不占用对话首屏 | P2 |
 | modlens / describe-image | 图片预览全宽 + 底部操作条 | P2 |
 | skins/skin-center | 皮肤中心 2 列网格 | P2 |
 | pet / live-stats / git-graph / notify | 悬浮组件禁用或收进详情 sheet（防误触） | P2 |
@@ -49,36 +52,37 @@
    以 responsive 的 dsh.client.inject 声明为模板），在 rootfs 配方的 profile 中
    替代 layout 的 AppFrame；不改桌面插件本身（零侵入，与上游策略一致）。
 
-## 4. 新手设置（onboarding）
+## 4. 应用入口与管理
 
-分两层：
-
-1. **Capacitor 管理 UI 首启向导**（src/ 内新增 OnboardingSteps）：
-   ① 设备认证（现有）→ ② 运行时安装（内嵌或远程 manifest 对）→ ③ Shizuku 引导
-   （安装/授权，复用 requestShizukuPermission）→ ④ 插件启停（按 §2 矩阵预置移动集）→
-   ⑤ 打开 Harness（首次进入时的使用提示 overlay）。
-2. **Harness 内首会话引导**：dsh 侧以 preset（liangshen 同款机制）注入简短欢迎指令
-   （说明移动布局、插件入口位置、隐私边界：数据在本机/回环）。
+1. **直接对话**：运行时为 ready 时自动启动 Harness，为 running 时直接复用；
+   HarnessActivity 恢复最近未归档会话，没有会话时自动新建。
+2. **首次安装**：运行时不存在时只显示“安装并进入对话”的状态入口。官方 APK 已固定
+   同一 Release 的 manifest URL 与 SHA-256，用户无需填写来源或完成额外配置步骤。
+3. **设置归位**：Harness 服务启停、Ubuntu 安装进度和重置、Ubuntu/设备终端、
+   终端显示设置、运行时来源详情以及 Shizuku 授权/连接均在设置或二级页。
+4. **导航**：Harness 原生工具栏的设置和返回动作回到管理页；恢复焦点不会自动循环重开
+   HarnessActivity。
 
 ## 5. 轻量化部署方案
 
 | 层 | 现状 | 轻量动作 |
 |---|---|---|
-| APK | debug 已可构建；release 已开 minify+shrinkResources | arm64-only（已配置）；删除调试资源；确认无 x86 快照 |
-| 运行时 | 内嵌 .bundle（~100-300MB） | 默认**远程 manifest 对**下载按需安装；内嵌仅作无网兜底（可选构建） |
+| APK | `0.1.7` arm64-only，release 已开 minify+shrinkResources | CI 删除 rootfs/manifest/`.bak` assets，只发布瘦 APK |
+| 运行时 | CI 生成 Ubuntu + Node + dsh bundle | 与 APK 同 tag 发布；manifest URL 和摘要在构建时固定，无手工配置 |
 | 插件集 | rootfs 配方含完整 dsh | 移动 profile 白名单：默认只装 P0/P1 集（见 scripts/mobile-profile.example.json），dshmarket 按需补装 |
-| 传输 | preload 认证 | 不变 |
-| 内存 | Harness 常驻 | 空闲 N 分钟停 runtime 的既有 stopRuntime 流程（设置项默认开启） |
+| 传输 | preload 认证 | HTTP Basic 与 WebSocket HttpOnly Cookie 共用每次启动的新 token |
+| 下载 | Release rootfs 远程获取 | digest 命名 partial + HTTP Range，网络错误保留合法断点 |
 
-## 6. 落地顺序（本分支提交计划）
+## 6. 落地状态
 
-1. ✅ 本设计文档 + 移动 profile 规格（scripts/mobile-profile.example.json）
-2. ✅ dsh-mobile-compat 客户端插件包（packages/dsh-mobile-compat，tsc 类型检查通过）
-3. ~~dsh-mobile-compat 客户端插件包~~（已完成，见上）
-4. ✅ Capacitor 侧 OnboardingSteps（向导五步，40 测试全绿）
-5. ✅ rootfs 配方集成（build-embedded-runtime.py --mobile-profile 参数 + selfcheck，
-   默认远程 manifest、按需内嵌）
-6. ✅ 真机验收清单（docs/mobile-acceptance-checklist.md：布局矩阵/插件逐项/向导/轻量指标；真机执行待设备）
+1. 移动 profile 规格与 `dsh-mobile-compat` 客户端插件已接入 rootfs 配方。
+2. `harness-web` 已改为会话抽屉、聊天主视图、任务/文件/设置二级页，并支持模型、
+   推理强度、排队/引导发送与结构化消息渲染。
+3. Capacitor 已采用无额外引导的直接对话入口，管理能力集中到设置，不再使用四栏主导航。
+4. Shizuku 将授权与 UserService 连接分开显示；未连接时设备终端不可用且提供显式连接。
+5. CI 自动构建移动前端和 rootfs，生成同 tag Release manifest，并把其 URL/摘要固定进
+   `0.1.7` 瘦 APK。
+6. 真机验收以 `docs/mobile-acceptance-checklist.md` 为准。
 
 ## 7. 边界与风险
 

@@ -258,7 +258,16 @@ export function validateShizukuState(value: unknown): ShizukuState {
     throw new Error('Shizuku 权限状态格式无效')
   }
   if (state.connected && (!state.running || state.permission !== 'granted')) throw new Error('Shizuku 连接状态无效')
-  return { installed: state.installed, running: state.running, permission: state.permission, connected: state.connected }
+  const version = state.version === undefined
+    ? undefined
+    : optionalIdentifier(state.version, 'Shizuku 版本', IDENTIFIER_PATTERN, 32)
+  return {
+    installed: state.installed,
+    running: state.running,
+    permission: state.permission,
+    connected: state.connected,
+    ...(version === undefined ? {} : { version }),
+  }
 }
 
 export function validateTerminalSession(value: unknown): { sessionId: string } {

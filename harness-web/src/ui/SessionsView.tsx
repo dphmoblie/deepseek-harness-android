@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ReactElement } from 'react'
 import { useSessions } from '../state/sessions'
+import { sessionDisplayTitle } from '../state/sessionDisplay'
 import type { SessionId, SessionSummary } from '../api/types'
 
 function timeLabel(updatedAt: number): string {
@@ -33,7 +34,7 @@ function SessionActions(props: {
   return (
     <div className="sheet-backdrop" onClick={onClose}>
       <div className="sheet" onClick={(event) => event.stopPropagation()}>
-        <p className="sheet-title">{session.sessionId.slice(0, 12)}</p>
+        <p className="sheet-title">{sessionDisplayTitle(session)}</p>
         {editing ? (
           <div className="sheet-row">
             <input
@@ -107,7 +108,7 @@ export function SessionsView(props: { onOpen: (sessionId: SessionId) => void }):
                   }}
                 >
                   <span className="list-main">
-                    <span className="list-title">{item.sessionId.slice(0, 8)}</span>
+                    <span className="list-title">{sessionDisplayTitle(item)}</span>
                     {item.cwd !== undefined && <span className="list-sub">{item.cwd}</span>}
                   </span>
                   <span className="list-side">
@@ -126,7 +127,7 @@ export function SessionsView(props: { onOpen: (sessionId: SessionId) => void }):
               {archived.map((item) => (
                 <li key={item.sessionId}>
                   <button type="button" className="list-row" onClick={() => onOpen(item.sessionId)}>
-                    <span className="list-title">{item.sessionId.slice(0, 8)}</span>
+                    <span className="list-title">{sessionDisplayTitle(item)}</span>
                     <span className="list-time">{timeLabel(item.updatedAt)}</span>
                   </button>
                 </li>

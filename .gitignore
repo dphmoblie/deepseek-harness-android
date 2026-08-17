@@ -4,6 +4,8 @@ dist/
 www/
 coverage/
 target/
+.playwright-cli/
+output/
 *.exe
 *.tsbuildinfo
 __pycache__/

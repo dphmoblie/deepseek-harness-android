@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical">
+
+    <androidx.appcompat.widget.Toolbar
+        android:id="@+id/harness_toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="?attr/actionBarSize"
+        android:background="@color/harness_toolbar_background"
+        android:elevation="2dp"
+        android:minHeight="?attr/actionBarSize"
+        app:contentInsetEndWithActions="8dp"
+        app:navigationContentDescription="@string/harness_back_to_app"
+        app:navigationIcon="@drawable/ic_arrow_back"
+        app:title="@string/harness_title"
+        app:titleTextColor="@color/harness_toolbar_foreground" />
+
+    <WebView
+        android:id="@+id/harness_web_view"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@color/harness_page_background" />
+
+</LinearLayout>

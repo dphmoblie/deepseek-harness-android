@@ -1,3 +1,4 @@
+import { ArrowLeft } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { callUnary, RpcFailure, TransportError } from '../api/wire'
@@ -12,7 +13,8 @@ import type {
  * 设置页：模型提供商概览 + 敏感配置项（secrets）编辑 + 运行时信息。
  * 敏感值经 settings.mutate 写入对应 provider 命名空间，永不回显。
  */
-export function SettingsView(): ReactElement {
+export function SettingsView(props: { onBack: () => void }): ReactElement {
+  const { onBack } = props
   const [providers, setProviders] = useState<ConfigurableProviderView[]>([])
   const [describe, setDescribe] = useState<SettingsDescribeValue | null>(null)
   const [host, setHost] = useState<HostDescribeValue | null>(null)
@@ -62,7 +64,8 @@ export function SettingsView(): ReactElement {
 
   return (
     <main className="view">
-      <header className="view-header">
+      <header className="view-header secondary-header">
+        <button type="button" className="icon-button" aria-label="返回对话" title="返回对话" onClick={onBack}><ArrowLeft size={20} /></button>
         <h1>设置</h1>
         <button type="button" className="btn" onClick={() => void reload()}>刷新</button>
       </header>

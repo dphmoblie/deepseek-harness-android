@@ -1,3 +1,4 @@
+import { ArrowLeft } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { callUnary } from '../api/wire'
@@ -8,7 +9,8 @@ import type { SessionId, SessionSummary, TaskView, TodoItem } from '../api/types
  * 任务面板：展示所选会话的 job 任务列表（session/jobs 帧）与
  * todo 待办（todo/write 事件），数据全部来自下行事件流。
  */
-export function TasksView(): ReactElement {
+export function TasksView(props: { onBack: () => void }): ReactElement {
+  const { onBack } = props
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [selected, setSelected] = useState<SessionId | null>(null)
   const [jobs, setJobs] = useState<TaskView[]>([])
@@ -59,7 +61,8 @@ export function TasksView(): ReactElement {
 
   return (
     <main className="view">
-      <header className="view-header">
+      <header className="view-header secondary-header">
+        <button type="button" className="icon-button" aria-label="返回对话" title="返回对话" onClick={onBack}><ArrowLeft size={20} /></button>
         <h1>任务</h1>
       </header>
       {error !== null && <p className="error-bar" onClick={() => setError(null)}>{error}</p>}
@@ -73,7 +76,7 @@ export function TasksView(): ReactElement {
           {sessions.length === 0 && <option value="">（暂无会话）</option>}
           {sessions.map((item) => (
             <option key={item.sessionId} value={item.sessionId}>
-              {item.running ? '● ' : ''}{item.sessionId.slice(0, 8)}
+              {item.running ? '运行中 · ' : ''}{item.sessionId.slice(0, 8)}
               {item.cwd !== undefined ? `（${item.cwd}）` : ''}
             </option>
           ))}

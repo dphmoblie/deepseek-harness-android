@@ -1,65 +1,96 @@
-# 移动端真机验收清单（feature/dsh-plugin-compat）
+# 移动端 0.1.7 真机验收清单
 
-> 适用范围：荣耀 Android 16（arm64/16KB）及任一 arm64 真机；验收对象为本分支
-> 交付的 dsh-mobile-compat 插件、Onboarding 向导与 --mobile-profile rootfs 配方。
+> 适用范围：荣耀 Android 16（arm64/16KB）及至少一台其他 arm64 真机。验收对象为
+> 同一个 `v0.1.7-mobile-<run_number>` Release 中的瘦 APK、
+> `runtime-manifest.json` 与 `rootfs.bundle`。
 
-## 0. 前置
+## 0. 发布资产前置
 
-- [ ] APK 构建成功（CI artifact 或本地 assembleDebug）；含 16KB 对齐检查（readelf p_align==0x4000，见 docs/review-2026-08-16.md §6）
-- [ ] 运行时可用：内嵌 bundle（embedRootfs=true）或远程 manifest 对已配置（两者必须成对）
-- [ ] Shizuku（可选）与设备 Shell 基线可用（含 BIND_USER_SERVICE 声明修复的验证）
+- [ ] APK 的 `versionCode=7`、`versionName=0.1.7`，并通过团队签名校验。
+- [ ] Release 同时包含 APK、`runtime-manifest.json`、`rootfs.bundle`，三者来自同一次 CI run。
+- [ ] APK 内没有 `assets/runtime/rootfs.bundle`、运行时 manifest、`.bak` 或其他 rootfs 副本。
+- [ ] APK 已固定同一 Release 的 manifest URL 与 SHA-256；全新安装无需手工填写运行时来源。
+- [ ] APK 包含 ARM64 PRoot runner/loader，二者通过 16KB 对齐检查。
+- [ ] Shizuku 为可选项；未安装 Shizuku 不影响 Ubuntu 安装和 Harness 对话。
 
-## 1. 布局矩阵（dsh-mobile-compat）
+## 1. 启动与导航
 
-在 360px / 480px / 640px / 1024px 四种视口（开发者工具或旋转/分屏）逐一验证：
-
-| # | 检查项 | 预期 |
+| # | 操作 | 预期 |
 |---|---|---|
-| L1 | <640px 顶栏可见（菜单/详情按钮，safe-area 不遮挡） | 顶栏完整可点 |
-| L2 | 菜单按钮开/关抽屉侧栏；scrim 点击关闭 | 侧栏 ≤84vw，动画无跳动 |
-| L3 | 详情按钮开/关 bottom-sheet；把手可见 | sheet ≤70vh，内容可滚动 |
-| L4 | ≥640px 恢复三栏（sidebar/center/details） | 拖动把手宽幅在契约区间 |
-| L5 | 640-1024px 侧栏自动折叠为 rail | 窄屏 rail 可展开覆盖 |
-| L6 | 旋转/分屏实时重排，无宽度残留 | 回宽自动恢复 |
+| S1 | 已安装运行时后冷启动应用 | 自动启动本机 Harness，并直接打开应用内对话页；不拉起外部浏览器 |
+| S2 | Harness 已运行时再次打开应用 | 直接打开现有 Harness，不重复启动服务 |
+| S3 | 在 Harness 原生工具栏点设置 | 返回 Capacitor 设置页，不立即循环重开 Harness |
+| S4 | 在 Harness 原生工具栏点返回 | 有 WebView 历史时后退；无历史时返回设置页 |
+| S5 | 首次安装、运行时不存在 | 仅显示“安装并进入对话”的单步入口，无额外引导、跳过按钮或登录认证页 |
+| S6 | 设置页点“返回对话” | 启动或复用 Harness 后回到对话页 |
 
-## 2. 插件逐项（安装移动 profile 白名单后）
+## 2. Harness 对话 GUI
 
-| 插件 | 验收点 |
-|---|---|
-| dsh-mobile-compat（内置） | §1 全过；桌面宽度三栏不回归 |
-| aionui-panel | 文件/预览/变更在窄屏全宽可用；拖拽把手在移动形态隐藏 |
-| task-board | 单列全宽 + 横滑列（scroll-snap）不溢出 |
-| dshmarket | 卡片单列流；搜索/安装可用 |
-| modlens / describe-image | 图片全宽预览，操作条可达 |
-| 禁用的悬浮类（pet/live-stats） | 确认默认关闭，设置中明示 |
+在 360x800、390x844、480x960 及桌面宽度逐项验证：
 
-## 3. 新手引导（Onboarding）
+- [ ] 启动时恢复最近未归档会话；没有会话时自动创建会话并进入聊天。
+- [ ] 会话抽屉可打开、切换、新建、归档和关闭，标题优先显示会话 projection。
+- [ ] 消息支持 Markdown、GFM 表格、代码块、工具调用与可展开工具结果；外部 HTML 不执行。
+- [ ] Composer 可发送普通消息；运行中可选择排队或引导，队列数量同步显示。
+- [ ] 模型和推理强度可选，选择结果会用于后续发送。
+- [ ] 任务、文件、模型/Harness 设置作为二级页面可进入并可返回聊天。
+- [ ] Android 软键盘弹出时输入框、发送按钮和最后一条消息均可见，无横向溢出或文字重叠。
+- [ ] 应用切后台再恢复后事件流继续更新，不丢失增量，也不被迟到历史覆盖。
 
-- [ ] 首次启动弹出五步向导；「跳过」后不再出现（localStorage 持久化）
-- [ ] 步骤 2 未配置 manifest 对时显示警告；配置后安装按钮可用且安装成功
-- [ ] 步骤 3 Shizuku 未装/未授权/已授权三种状态文案与按钮正确
-- [ ] 步骤 5 「打开 Harness」在 phase=running 时可点、跳转成功
-- [ ] 完成后重启应用，向导不再弹出
+## 3. Ubuntu 下载、续传与状态
 
-## 4. 轻量化指标
+- [ ] 全新安装点“安装并进入对话”后先显示真实下载进度，未下载完成前不显示校验或安装完成。
+- [ ] 下载中断后记录当前字节数；关闭并重开应用，再次安装从同一
+  `rootfs-<sha256>.part` 偏移发出 Range 请求。
+- [ ] 合法 HTTP 206 与精确 `Content-Range` 继续写入，不重新下载已有字节。
+- [ ] 服务端返回 HTTP 200 或 416 时清理旧 partial 并从 0 开始；错误 206/Range 响应失效即关。
+- [ ] 断网、DNS、TLS、超时及截断下载进入明确 `error`，保留合法 partial，不显示“正在安装”。
+- [ ] 下载完成后校验 manifest 声明的大小和 SHA-256；摘要不符不得解压或启用。
+- [ ] 解压完成后自动启动 Harness 并进入对话；重新启动应用仍识别已安装版本。
+- [ ] 设置中的重置需要输入 `RESET_RUNTIME`，只清除应用私有 Ubuntu 环境并关闭相关会话。
 
-| 指标 | 记录值 | 目标 |
+## 4. 设置与终端
+
+- [ ] Harness 服务启动/停止、Ubuntu 版本与状态、运行时来源、重置均位于设置或其二级页。
+- [ ] Ubuntu 终端可创建、输入、调整尺寸、重新连接和关闭；字体设置立即用于新会话。
+- [ ] 保持屏幕常亮开关生效，退出相关页面后不泄漏其他敏感状态。
+- [ ] 设置页没有用户账号、密码、验证码或 Android 设备凭据认证入口。
+- [ ] Harness HTTP 与 WebSocket 未认证请求均被拒绝；内部 WebView 无可见认证提示且可正常连接。
+
+## 5. Shizuku 与设备 Shell
+
+- [ ] 未安装：显示“打开 Shizuku”，Ubuntu 与 Harness 功能仍可用。
+- [ ] 已安装但服务未运行：显示启动提示，打开 Shizuku 后可返回刷新状态。
+- [ ] 服务运行但未授权：点击“请求授权”只触发系统 Shizuku 授权流程。
+- [ ] 已授权但未连接：设备终端保持不可用，并显示“连接 Shizuku”按钮。
+- [ ] 点击“连接 Shizuku”后仅在 UserService binder 存活时显示“已连接”并允许设备 Shell。
+- [ ] 杀死 binder/UserService 后现有设备会话退出，状态回到未连接；再次连接可恢复。
+- [ ] 设备 Shell 的 uid 为 Android shell 权限而非 root；固定 `/system/bin/sh`，无隐藏后台通用命令入口。
+- [ ] screencap、uiautomator、tap、inputText 仅通过已有可见设备会话和固定白名单执行。
+
+## 6. 体积与兼容性记录
+
+| 指标 | 记录值 | 验收要求 |
 |---|---|---|
-| APK 大小（无内嵌 rootfs） | ___ MB | <30MB（对比全量内嵌版） |
-| 运行时安装体积 | ___ MB | 与 manifest compressedBytes 一致 |
-| 空闲内存（Harness 运行中） | ___ MB | 记录基线 |
-| 首启到 Harness 可用时长 | ___ 秒 | 记录基线 |
-| idleStopMinutes 生效 | 空闲 N 分钟后 runtime 自动停止 | 与 profile 一致 |
+| 瘦 APK 大小 | ___ MB | 不包含 rootfs；异常增长必须定位 |
+| rootfs compressedBytes | ___ MB | 与 manifest 及实际资产完全一致 |
+| 安装后运行时体积 | ___ MB | 不超过清单和提取上限 |
+| 首次下载到 Harness 可用 | ___ 秒 | 记录网络与设备条件 |
+| Harness 空闲内存 | ___ MB | 记录稳定基线 |
+| 页面大小 | ___ bytes | 荣耀 / Android 16 为 16384 |
 
-## 5. 记录模板
+## 7. 验收记录
 
+```text
+设备/系统：
+Android 页面大小：
+Release tag：v0.1.7-mobile-____
+Git commit：
+APK SHA-256：
+manifest SHA-256：
+rootfs SHA-256：
+结果：S1-S6 / 对话 GUI / 下载续传 / 设置终端 / Shizuku，逐项通过或失败并附截图与日志编号
 ```
-设备/系统：荣耀 XX / Android 16（getconf PAGE_SIZE=____）
-构建：feature/dsh-plugin-compat @ <commit>
-结果：L1-L6 / 插件表 / 向导 / 轻量指标，逐项 ✅/❌ + 截图
-```
 
-## 6. 与本分支无关但需同步验证的遗留项
-
-- [ ] docs/review-2026-08-16.md §6 的 16KB/PRoot 检查
-- [ ] DeviceShellUserService manifest 声明修复后的设备 Shell 绑定实测
+- [ ] 同步完成 `docs/review-2026-08-16.md` 中的 16KB/PRoot 检查。
+- [ ] 执行 Android lint、JVM 测试、前端测试和至少一次 ARM64 真机完整安装。
