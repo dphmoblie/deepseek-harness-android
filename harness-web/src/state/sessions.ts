@@ -4,65 +4,87 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { callUnary, RpcFailure, TransportError } from '../api/wire'
-import { describeFailure } from '../errors'
+import { callUnary } from '../api/wire'
 import { eventBus } from './events'
-import type { SessionId, SessionSummary } from '../api/types'
+import { agentErrorNotice, streamErrorNotice } from './errorDisplay'
+import { rpcErrorMessage } from './rpcError'
+import type { SessionCreateRequest, SessionId, SessionSummary, WorkspaceView } from '../api/types'
 
 const REFRESH_THROTTLE_MS = 500
 
 export type SessionsController = {
   items: SessionSummary[]
   archived: SessionId[]
+  workspaces: WorkspaceView[]
   loading: boolean
   error: string | null
   reload: () => Promise<void>
-  createSession: () => Promise<SessionId | null>
+  createSession: (options?: Omit<SessionCreateRequest, 'sessionId'>) => Promise<SessionId | null>
+  createSessionResult: (options?: Omit<SessionCreateRequest, 'sessionId'>) => Promise<SessionCreationResult>
   renameSession: (sessionId: SessionId, title: string) => Promise<void>
   archiveSession: (sessionId: SessionId) => Promise<boolean>
   dismissError: () => void
 }
 
+export type SessionCreationResult =
+  | { sessionId: SessionId; error: null }
+  | { sessionId: null; error: string }
+
 export function useSessions(): SessionsController {
   const [items, setItems] = useState<SessionSummary[]>([])
   const [archived, setArchived] = useState<SessionId[]>([])
+  const [workspaces, setWorkspaces] = useState<WorkspaceView[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const toErrorText = useCallback((failure: unknown): string => {
-    if (failure instanceof RpcFailure) return describeFailure(failure.code, failure.message)
-    if (failure instanceof TransportError) return failure.message
-    return String(failure)
-  }, [])
+  const reloadGeneration = useRef(0)
+  const reloadController = useRef<AbortController | null>(null)
 
   const reload = useCallback(async () => {
+    const generation = ++reloadGeneration.current
+    reloadController.current?.abort()
+    const controller = new AbortController()
+    reloadController.current = controller
     try {
       const [sessions, workspaces] = await Promise.all([
-        callUnary(window.location.origin, 'session.list', {}),
-        callUnary(window.location.origin, 'workspace.list', {}),
+        callUnary(window.location.origin, 'session.list', {}, { signal: controller.signal }),
+        callUnary(window.location.origin, 'workspace.list', {}, { signal: controller.signal }),
       ])
+      if (controller.signal.aborted || reloadGeneration.current !== generation) return
       setItems([...sessions.items].sort((a, b) => b.updatedAt - a.updatedAt))
       setArchived(workspaces.archivedSessionIds)
+      setWorkspaces(workspaces.items)
       setError(null)
     } catch (failure) {
-      setError(toErrorText(failure))
+      if (controller.signal.aborted || reloadGeneration.current !== generation || isAbortFailure(failure)) return
+      setError(rpcErrorMessage('加载会话与工作区', failure))
     } finally {
-      setLoading(false)
+      if (!controller.signal.aborted && reloadGeneration.current === generation) setLoading(false)
     }
-  }, [toErrorText])
+  }, [])
 
   useEffect(() => {
     void reload()
     const unsubscribe = eventBus.subscribe(({ stream, frame }) => {
+      const status = frame as { type?: unknown; message?: unknown; error?: unknown }
+      if (status.type === 'stream/error') {
+        setError(streamErrorNotice(status.error))
+        return
+      }
       if (stream !== 'host') return
-      const type = (frame as { type?: string }).type
+      if (status.type === 'host/agent-error') {
+        setError(agentErrorNotice(status.message))
+        return
+      }
+      const type = typeof status.type === 'string' ? status.type : undefined
       if (
         type !== 'host/session-added' &&
         type !== 'host/session-removed' &&
         type !== 'host/session-status' &&
         type !== 'host/archived-sessions-changed' &&
-        type !== 'host/workspace-changed'
+        type !== 'host/workspace-changed' &&
+        type !== 'host/workspace-removed' &&
+        type !== 'host/workspace-order-changed'
       ) {
         return
       }
@@ -75,19 +97,29 @@ export function useSessions(): SessionsController {
     return () => {
       unsubscribe()
       if (reloadTimer.current !== null) clearTimeout(reloadTimer.current)
+      reloadGeneration.current += 1
+      reloadController.current?.abort()
+      reloadController.current = null
     }
   }, [reload])
 
-  const createSession = useCallback(async (): Promise<SessionId | null> => {
+  const createSessionResult = useCallback(async (
+    options: Omit<SessionCreateRequest, 'sessionId'> = {},
+  ): Promise<SessionCreationResult> => {
     try {
-      const value = await callUnary(window.location.origin, 'session.create', {})
+      const value = await callUnary(window.location.origin, 'session.create', options)
       await reload()
-      return value.sessionId
+      return { sessionId: value.sessionId, error: null }
     } catch (failure) {
-      setError(toErrorText(failure))
-      return null
+      const message = rpcErrorMessage('创建会话', failure)
+      setError(message)
+      return { sessionId: null, error: message }
     }
-  }, [reload, toErrorText])
+  }, [reload])
+
+  const createSession = useCallback(async (
+    options: Omit<SessionCreateRequest, 'sessionId'> = {},
+  ): Promise<SessionId | null> => (await createSessionResult(options)).sessionId, [createSessionResult])
 
   const renameSession = useCallback(
     async (sessionId: SessionId, title: string) => {
@@ -95,10 +127,10 @@ export function useSessions(): SessionsController {
         await callUnary(window.location.origin, 'session.rename', { sessionId, title })
         await reload()
       } catch (failure) {
-        setError(toErrorText(failure))
+        setError(rpcErrorMessage('重命名会话', failure))
       }
     },
-    [reload, toErrorText],
+    [reload],
   )
 
   const archiveSession = useCallback(
@@ -108,11 +140,11 @@ export function useSessions(): SessionsController {
         await reload()
         return true
       } catch (failure) {
-        setError(toErrorText(failure))
+        setError(rpcErrorMessage('归档会话', failure))
         return false
       }
     },
-    [reload, toErrorText],
+    [reload],
   )
 
   const dismissError = useCallback(() => setError(null), [])
@@ -120,12 +152,18 @@ export function useSessions(): SessionsController {
   return {
     items,
     archived,
+    workspaces,
     loading,
     error,
     reload,
     createSession,
+    createSessionResult,
     renameSession,
     archiveSession,
     dismissError,
   }
+}
+
+function isAbortFailure(failure: unknown): boolean {
+  return failure instanceof Error && failure.name === 'AbortError'
 }

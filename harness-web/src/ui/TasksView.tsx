@@ -1,13 +1,23 @@
 import { ArrowLeft } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import { callUnary } from '../api/wire'
 import { eventBus } from '../state/events'
-import type { SessionId, SessionSummary, TaskView, TodoItem } from '../api/types'
+import { parseTodoProjection, todosFromHistory } from '../state/projections'
+import { rpcErrorMessage } from '../state/rpcError'
+import { streamErrorNotice } from '../state/errorDisplay'
+import type {
+  SessionId,
+  SessionSummary,
+  TaskView,
+  TodoItem,
+} from '../api/types'
+
+const HISTORY_PAGE_SIZE = 100
 
 /**
- * 任务面板：展示所选会话的 job 任务列表（session/jobs 帧）与
- * todo 待办（todo/write 事件），数据全部来自下行事件流。
+ * 任务面板：jobs 来自 session/jobs 实时帧；todo 优先使用历史尾页的
+ * todos 投影，并以 todo/write 回放及实时事件作为兼容回退。
  */
 export function TasksView(props: { onBack: () => void }): ReactElement {
   const { onBack } = props
@@ -15,7 +25,10 @@ export function TasksView(props: { onBack: () => void }): ReactElement {
   const [selected, setSelected] = useState<SessionId | null>(null)
   const [jobs, setJobs] = useState<TaskView[]>([])
   const [todos, setTodos] = useState<TodoItem[]>([])
+  const [loadingHistory, setLoadingHistory] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const selectionGenerationRef = useRef(0)
+  const todoRevisionRef = useRef(0)
 
   const reloadSessions = useCallback(async () => {
     try {
@@ -25,39 +38,121 @@ export function TasksView(props: { onBack: () => void }): ReactElement {
           .sort((a, b) => Number(b.running) - Number(a.running) || b.updatedAt - a.updatedAt),
       )
     } catch (failure) {
-      setError(String(failure))
+      setError(rpcErrorMessage('加载会话', failure))
     }
   }, [])
 
   useEffect(() => {
     void reloadSessions()
-    const unsubscribe = eventBus.subscribe(({ stream, frame }) => {
-      if (stream === 'mux') {
-        const mux = frame as { type?: string; sessionId?: SessionId; jobs?: TaskView[]; event?: { type?: string; data?: unknown } }
-        if (mux.type === 'session/jobs' && mux.sessionId === selected && mux.jobs !== undefined) {
-          setJobs(mux.jobs)
-        }
-        if (
-          mux.type === 'session/event' &&
-          mux.sessionId === selected &&
-          mux.event?.type === 'todo/write'
-        ) {
-          const data = mux.event.data as { todos?: TodoItem[] } | undefined
-          if (Array.isArray(data?.todos)) setTodos(data.todos)
-        }
-      } else if (stream === 'host') {
-        const host = frame as { type?: string }
-        if (host.type === 'host/session-status') void reloadSessions()
+    return eventBus.subscribe(({ stream, frame }) => {
+      const value = frame as { type?: string; error?: unknown }
+      if (value.type === 'stream/error') {
+        setError(streamErrorNotice(value.error))
+        return
       }
+      if (stream === 'host' && value.type === 'host/session-status') void reloadSessions()
     })
-    return unsubscribe
-  }, [selected, reloadSessions])
+  }, [reloadSessions])
 
   useEffect(() => {
-    if (selected === null && sessions.length > 0) setSelected(sessions[0]?.sessionId ?? null)
+    if (sessions.length === 0) {
+      if (selected !== null) setSelected(null)
+      return
+    }
+    if (selected === null || !sessions.some((item) => item.sessionId === selected)) {
+      setSelected(sessions[0]?.sessionId ?? null)
+    }
   }, [sessions, selected])
 
+  useEffect(() => {
+    const generation = ++selectionGenerationRef.current
+    todoRevisionRef.current = 0
+    setJobs([])
+    setTodos([])
+    setLoadingHistory(selected !== null)
+    setError(null)
+    if (selected === null) return
+
+    const controller = new AbortController()
+    const revisionAtRequest = todoRevisionRef.current
+    void callUnary(window.location.origin, 'session.history', {
+      sessionId: selected,
+      maxMessages: HISTORY_PAGE_SIZE,
+    }, { signal: controller.signal })
+      .then((value) => {
+        if (
+          selectionGenerationRef.current === generation
+          && todoRevisionRef.current === revisionAtRequest
+        ) {
+          setTodos(todosFromHistory(value))
+        }
+      })
+      .catch((failure: unknown) => {
+        if (controller.signal.aborted || selectionGenerationRef.current !== generation) return
+        setError(rpcErrorMessage('加载任务历史', failure))
+      })
+      .finally(() => {
+        if (selectionGenerationRef.current === generation) setLoadingHistory(false)
+      })
+
+    return () => controller.abort()
+  }, [selected])
+
+  useEffect(() => {
+    if (selected === null) return
+    return eventBus.subscribe(({ stream, frame }) => {
+      if (stream !== 'mux') return
+      const mux = frame as {
+        type?: string
+        sessionId?: SessionId
+        jobs?: unknown
+        key?: unknown
+        value?: unknown
+        event?: { type?: unknown; data?: Record<string, unknown> }
+      }
+      if (mux.sessionId !== selected) return
+
+      if (mux.type === 'session/jobs') {
+        const nextJobs = parseTaskViews(mux.jobs)
+        if (nextJobs !== null) setJobs(nextJobs)
+        return
+      }
+
+      if (mux.type === 'session/projection' && mux.key === 'todos') {
+        const nextTodos = parseTodoProjection(mux.value)
+        if (nextTodos !== undefined) {
+          todoRevisionRef.current += 1
+          setTodos(nextTodos)
+        }
+        return
+      }
+
+      if (mux.type !== 'session/event') return
+      if (mux.event?.type === 'turn/start') {
+        todoRevisionRef.current += 1
+        setTodos([])
+        return
+      }
+      if (mux.event?.type === 'todo/write') {
+        const nextTodos = parseTodoProjection(mux.event.data?.todos)
+        if (nextTodos !== undefined) {
+          todoRevisionRef.current += 1
+          setTodos(nextTodos)
+        }
+      }
+    })
+  }, [selected])
+
   const selectedSummary = sessions.find((item) => item.sessionId === selected)
+
+  const changeSession = (sessionId: string): void => {
+    // Clear synchronously with the selection so one session never flashes the
+    // previous session's jobs or todo snapshot while history is loading.
+    setJobs([])
+    setTodos([])
+    setError(null)
+    setSelected(sessionId === '' ? null : sessionId)
+  }
 
   return (
     <main className="view">
@@ -65,13 +160,14 @@ export function TasksView(props: { onBack: () => void }): ReactElement {
         <button type="button" className="icon-button" aria-label="返回对话" title="返回对话" onClick={onBack}><ArrowLeft size={20} /></button>
         <h1>任务</h1>
       </header>
-      {error !== null && <p className="error-bar" onClick={() => setError(null)}>{error}</p>}
+      {error !== null && <p className="error-bar" role="alert" onClick={() => setError(null)}>{error}</p>}
       <div className="view-body">
-        <label className="field-label">选择会话</label>
+        <label className="field-label" htmlFor="task-session">选择会话</label>
         <select
+          id="task-session"
           className="field"
           value={selected ?? ''}
-          onChange={(event) => setSelected(event.target.value)}
+          onChange={(event) => changeSession(event.target.value)}
         >
           {sessions.length === 0 && <option value="">（暂无会话）</option>}
           {sessions.map((item) => (
@@ -106,12 +202,14 @@ export function TasksView(props: { onBack: () => void }): ReactElement {
         )}
 
         <h2 className="section-title">待办事项</h2>
-        {todos.length === 0 ? (
+        {loadingHistory && todos.length === 0 ? (
+          <p className="hint">正在恢复待办…</p>
+        ) : todos.length === 0 ? (
           <p className="hint">暂无待办</p>
         ) : (
           <ul className="list">
-            {todos.map((todo, index) => (
-              <li key={index} className="todo-row">
+            {todos.map((todo) => (
+              <li key={`${todo.status}:${todo.content}`} className="todo-row">
                 <span className="todo-status" data-status={todo.status} />
                 <span className="list-title">{todo.content}</span>
               </li>
@@ -121,6 +219,46 @@ export function TasksView(props: { onBack: () => void }): ReactElement {
       </div>
     </main>
   )
+}
+
+function parseTaskViews(value: unknown): TaskView[] | null {
+  if (!Array.isArray(value) || value.length > 1_000) return null
+  const result: TaskView[] = []
+  for (const item of value) {
+    if (!isRecord(item)) return null
+    const { id, kind, label, status, detail, startedAt, finishedAt } = item
+    if (
+      typeof id !== 'string' || id.length === 0 || id.length > 200
+      || typeof kind !== 'string' || kind.length === 0 || kind.length > 200
+      || typeof label !== 'string' || label.length === 0 || label.length > 10_000
+      || !isTaskStatus(status)
+      || (detail !== undefined && (typeof detail !== 'string' || detail.length > 20_000))
+      || typeof startedAt !== 'number' || !Number.isFinite(startedAt)
+      || (finishedAt !== undefined && (typeof finishedAt !== 'number' || !Number.isFinite(finishedAt)))
+    ) return null
+    result.push({
+      id,
+      kind,
+      label,
+      status,
+      startedAt,
+      ...(detail === undefined ? {} : { detail }),
+      ...(finishedAt === undefined ? {} : { finishedAt }),
+    })
+  }
+  return result
+}
+
+function isTaskStatus(value: unknown): value is TaskView['status'] {
+  return value === 'running'
+    || value === 'stopping'
+    || value === 'completed'
+    || value === 'killed'
+    || value === 'failed'
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function jobStatusLabel(status: TaskView['status']): string {

@@ -57,6 +57,9 @@ describe('parseServerFrame', () => {
     expect(parseServerFrame('oops')).toBeNull()
     expect(parseServerFrame(JSON.stringify({ type: 'server-response', rpcId: 'r', result: { ok: true } }))).toBeNull()
     expect(parseServerFrame(JSON.stringify({ type: 'server-request', method: 'x', payload: {} }))).toBeNull()
+    expect(parseServerFrame(JSON.stringify({ type: 'server-request', rpcId: 'r', method: 'x', payload: null }))).toBeNull()
+    expect(parseServerFrame(JSON.stringify({ type: 'server-request', rpcId: 'r', method: 'x', payload: {} }))).toBeNull()
+    expect(parseServerFrame(JSON.stringify({ type: 'server-request', rpcId: 'r', method: 'x', payload: { type: 'y' } }))).toBeNull()
   })
 })
 
@@ -139,10 +142,11 @@ class FakeSocket {
     this.listeners.get(type)?.forEach((listener) => listener(event))
   }
 
-  close(): void {
+  close(code = 1000, reason = ''): void {
     if (!this.closed) {
       this.closed = true
-      this.emit('close')
+      this.readyState = 3
+      this.emit('close', { code, reason })
     }
   }
 }
@@ -172,7 +176,6 @@ describe('openEventStream', () => {
     socket.readyState = 1
     socket.emit('open')
     socket.emit('message', { data: JSON.stringify({ type: 'server-request', rpcId: 'r1', method: 'session/event', payload: { type: 'session/event', sessionId: 's1', event: {} } }) })
-    socket.emit('message', { data: 'garbage' })
     socket.emit('message', { data: JSON.stringify({ type: 'server-request', rpcId: 'r2', method: 'session/jobs', payload: { type: 'session/jobs', sessionId: 's1', jobs: [] } }) })
     socket.close()
     const frames = await promise
@@ -190,5 +193,35 @@ describe('openEventStream', () => {
     const promise = run()
     socket.emit('error')
     await expect(promise).rejects.toBeInstanceOf(TransportError)
+  })
+
+  it('畸形帧与已建立连接的异常关闭均抛出具体错误', async () => {
+    const run = (socket: FakeSocket): Promise<void> => (async () => {
+      const generator = openEventStream(BASE, '/api/events.mux', {
+        deps: { webSocketFactory: () => socket as unknown as WebSocket },
+      })
+      for await (const _frame of generator) void _frame
+    })()
+
+    const malformedSocket = new FakeSocket()
+    const malformed = run(malformedSocket)
+    malformedSocket.readyState = 1
+    malformedSocket.emit('open')
+    malformedSocket.emit('message', { data: 'garbage' })
+    await expect(malformed).rejects.toThrow('格式无效')
+
+    const closedSocket = new FakeSocket()
+    const closed = run(closedSocket)
+    closedSocket.readyState = 1
+    closedSocket.emit('open')
+    closedSocket.close(1006, '')
+    await expect(closed).rejects.toThrow('异常关闭（代码 1006）')
+
+    const erroredSocket = new FakeSocket()
+    const errored = run(erroredSocket)
+    erroredSocket.readyState = 1
+    erroredSocket.emit('open')
+    erroredSocket.emit('error')
+    await expect(errored).rejects.toThrow('连接意外中断')
   })
 })

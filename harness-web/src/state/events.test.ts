@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ServerRequest } from '../api/types'
+import { TransportError } from '../api/wire'
 import { EventBus } from './events'
 
 function waitForAbort(signal: AbortSignal): Promise<void> {
@@ -40,5 +41,36 @@ describe('EventBus lifecycle', () => {
 
     bus.stop()
     expect(secondGeneration.every((signal) => signal.aborted)).toBe(true)
+  })
+
+  it('连接失败时向界面发布脱敏后的具体原因', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const openStream = vi.fn((): AsyncGenerator<ServerRequest> => (
+      async function* (): AsyncGenerator<ServerRequest> {
+        await Promise.resolve()
+        yield* []
+        throw new TransportError('无法建立 Harness 事件流连接')
+      }
+    )())
+    const bus = new EventBus(openStream, () => 'http://127.0.0.1:3080')
+    const frames: unknown[] = []
+    bus.subscribe((event) => {
+      frames.push(event.frame)
+      bus.stop()
+    })
+
+    bus.start()
+
+    await vi.waitFor(() => expect(frames).toHaveLength(1))
+    expect(frames[0]).toEqual({
+      type: 'stream/error',
+      error: {
+        code: 'TRANSPORT_ERROR',
+        message: '无法建立 Harness 事件流连接',
+        details: {},
+      },
+    })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('无法建立 Harness 事件流连接'))
+    warn.mockRestore()
   })
 })

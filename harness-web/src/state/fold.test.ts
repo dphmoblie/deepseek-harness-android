@@ -45,10 +45,40 @@ describe('foldEvent 事件折叠', () => {
 
   it('turn/end 错误折叠为通知', () => {
     expect(foldEvent(event('turn/end', 5, { turn: 1, reason: { kind: 'completed' } }))).toBeNull()
-    expect(foldEvent(event('turn/end', 6, { turn: 1, reason: { kind: 'error', error: { message: 'x' } } })))
-      .toMatchObject({ kind: 'notice', text: '本轮因错误终止' })
+    expect(foldEvent(event('turn/end', 6, { turn: 1, reason: { kind: 'error', error: { message: '模型服务暂时不可用' } } })))
+      .toMatchObject({ kind: 'notice', text: '本轮运行失败：模型服务暂时不可用' })
     expect(foldEvent(event('turn/end', 7, { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } })))
       .toMatchObject({ kind: 'notice', text: '本轮已中止' })
+  })
+
+  it('使用 finish 分块补足缺少细节的 turn/end', () => {
+    const folded = foldHistory([
+      { event: event('turn/start', 11, { turn: 2 }) },
+      {
+        event: event('assistant/chunk', 12, {
+          turn: 2,
+          step: 1,
+          chunk: { type: 'finish', reason: { kind: 'error', failure: { message: '请求超时', code: 'TIMEOUT' } } },
+        }),
+      },
+      { event: event('turn/end', 13, { turn: 2, reason: { kind: 'error' } }) },
+    ])
+    expect(folded).toEqual([{ kind: 'notice', seq: 13, time: 0, text: '本轮运行失败：请求超时' }])
+  })
+
+  it('非用户取消的 aborted 保留流式失败原因', () => {
+    const folded = foldHistory([
+      { event: event('turn/start', 21, { turn: 3 }) },
+      {
+        event: event('assistant/chunk', 22, {
+          turn: 3,
+          step: 1,
+          chunk: { type: 'finish', reason: { kind: 'aborted', failure: { message: '上游连接提前关闭', code: 'STREAM_CLOSED' } } },
+        }),
+      },
+      { event: event('turn/end', 23, { turn: 3, reason: { kind: 'aborted' } }) },
+    ])
+    expect(folded).toEqual([{ kind: 'notice', seq: 23, time: 0, text: '本轮运行失败：上游连接提前关闭' }])
   })
 
   it('流分块与边界事件不上屏', () => {

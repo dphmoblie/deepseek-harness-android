@@ -8,9 +8,14 @@ import type { SessionsController } from './state/sessions'
 import { App } from './App'
 
 const mocks = vi.hoisted(() => ({
+  callUnary: vi.fn(),
   eventStart: vi.fn(),
   eventStop: vi.fn(),
   useSessions: vi.fn(),
+}))
+
+vi.mock('./api/wire', () => ({
+  callUnary: mocks.callUnary,
 }))
 
 afterEach(cleanup)
@@ -57,10 +62,12 @@ function controller(overrides: Partial<SessionsController> = {}): SessionsContro
       session('archived-a', '旧会话', 40),
     ],
     archived: ['archived-a'],
+    workspaces: [],
     loading: false,
     error: null,
     reload: vi.fn().mockResolvedValue(undefined),
     createSession: vi.fn().mockResolvedValue('created-session'),
+    createSessionResult: vi.fn().mockResolvedValue({ sessionId: 'created-session', error: null }),
     renameSession: vi.fn().mockResolvedValue(undefined),
     archiveSession: vi.fn().mockResolvedValue(true),
     dismissError: vi.fn(),
@@ -78,6 +85,7 @@ describe('conversation navigation drawer', () => {
   beforeEach(() => {
     localStorage.clear()
     vi.clearAllMocks()
+    mocks.callUnary.mockResolvedValue({ presets: [], authorable: false, hasDocument: false })
   })
 
   it('offers a visible row menu and can open an archived session', async () => {
@@ -166,5 +174,32 @@ describe('conversation navigation drawer', () => {
     await waitFor(() => expect(sessions.archiveSession).toHaveBeenCalledWith('active-a'))
     expect(screen.getByTestId('chat-session')).toHaveTextContent('active-a')
     expect(sessions.createSession).not.toHaveBeenCalled()
+  })
+
+  it('新建会话失败时保留弹窗并就地展示具体原因', async () => {
+    const failure = '创建会话失败：模型提供商拒绝请求（错误代码：provider-rejected）'
+    const sessions = controller({
+      createSessionResult: vi.fn().mockResolvedValue({ sessionId: null, error: failure }),
+    })
+    mocks.useSessions.mockReturnValue(sessions)
+    render(<App />)
+    await openDrawer()
+
+    const createButtons = screen.getAllByRole('button', { name: '新建会话' })
+    fireEvent.click(createButtons[createButtons.length - 1] as HTMLButtonElement)
+    const dialog = await screen.findByRole('dialog', { name: '新建会话' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '创建' }))
+
+    expect(await within(dialog).findByText(failure)).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: '新建会话' })).toBeInTheDocument()
+    expect(sessions.dismissError).toHaveBeenCalled()
+  })
+
+  it('移动布局收到后台错误时自动打开可见错误抽屉', async () => {
+    mocks.useSessions.mockReturnValue(controller({ error: '本轮运行失败：后台会话模型调用超时' }))
+    render(<App />)
+
+    const drawer = await screen.findByRole('dialog', { name: '会话与功能' })
+    expect(within(drawer).getByText('本轮运行失败：后台会话模型调用超时')).toBeVisible()
   })
 })

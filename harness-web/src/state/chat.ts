@@ -4,14 +4,18 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { callUnary, RpcFailure, sendResponse, TransportError } from '../api/wire'
-import { describeFailure } from '../errors'
+import { callUnary, sendResponse } from '../api/wire'
 import { applyChunk, createDraft, type AssistantDraft } from './draft'
+import { streamErrorNotice } from './errorDisplay'
 import { foldEvent, foldHistory, type ChatEntry } from './fold'
 import { eventBus, subscribeSession } from './events'
+import { parseGoalProjection, parseTodoProjection, todosFromHistory, type GoalSnapshotView } from './projections'
+import { rpcErrorMessage } from './rpcError'
 import { titleFromProjectionFrame, titleFromProjections } from './sessionDisplay'
 import type {
   AskUserQuestionItem,
+  FinishReason,
+  PromptContentPart,
   QueuedInboxItem,
   SessionEvent,
   SessionId,
@@ -44,6 +48,7 @@ export type ChatController = {
   draft: AssistantDraft | null
   todos: TodoItem[]
   queuedItems: QueuedInboxItem[]
+  goal: GoalSnapshotView | null | undefined
   title: string | null
   running: boolean
   loading: boolean
@@ -52,12 +57,17 @@ export type ChatController = {
   error: string | null
   approval: ApprovalRequest | null
   questions: QuestionRequest | null
-  sendPrompt: (text: string, mode: PromptMode) => Promise<void>
+  sendPrompt: (
+    text: string,
+    mode: PromptMode,
+    images?: Extract<PromptContentPart, { type: 'image' }>[],
+  ) => Promise<void>
   cancelTurn: () => Promise<void>
   loadMore: () => Promise<void>
   answerApproval: (outcome: 'allowed-once' | 'rejected') => Promise<void>
   answerQuestions: (answers: { id: string; selected: string[]; custom?: string }[]) => Promise<void>
   dismissError: () => void
+  reportError: (message: string) => void
 }
 
 export function useChat(sessionId: SessionId | null): ChatController {
@@ -65,6 +75,7 @@ export function useChat(sessionId: SessionId | null): ChatController {
   const [draft, setDraftState] = useState<AssistantDraft | null>(null)
   const [todos, setTodos] = useState<TodoItem[]>([])
   const [queuedItems, setQueuedItems] = useState<QueuedInboxItem[]>([])
+  const [goal, setGoal] = useState<GoalSnapshotView | null | undefined>(undefined)
   const [title, setTitle] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -77,6 +88,7 @@ export function useChat(sessionId: SessionId | null): ChatController {
   // 高频增量用 ref 保存权威状态，setState 仅负责触发渲染
   const entriesRef = useRef<ChatEntry[]>([])
   const draftRef = useRef<AssistantDraft | null>(null)
+  const finishReasonRef = useRef<{ turn: number; reason: FinishReason } | null>(null)
   const lastSeqRef = useRef(-1)
   const runningRevisionRef = useRef(0)
   const historyRequestRef = useRef(0)
@@ -91,11 +103,7 @@ export function useChat(sessionId: SessionId | null): ChatController {
     setDraftState(next)
   }, [])
 
-  const toErrorText = useCallback((failure: unknown): string => {
-    if (failure instanceof RpcFailure) return describeFailure(failure.code, failure.message)
-    if (failure instanceof TransportError) return failure.message
-    return String(failure)
-  }, [])
+  const toErrorText = useCallback((failure: unknown): string => rpcErrorMessage('Harness 请求', failure), [])
 
   /** 把一条增量事件折进视图（seq 去重、chunk 走草稿）。 */
   const applyEvent = useCallback(
@@ -105,9 +113,14 @@ export function useChat(sessionId: SessionId | null): ChatController {
       const data = event.data
       switch (event.type) {
         case 'assistant/chunk': {
-          const turn = data.turn as number
-          const step = data.step as number
-          const chunk = data.chunk as StreamChunk
+          const turn = sequenceNumber(data.turn)
+          const step = sequenceNumber(data.step)
+          const chunk = streamChunkOf(data.chunk)
+          if (turn === null || step === null || chunk === null) {
+            setError(streamErrorNotice({ message: 'assistant/chunk 载荷格式无效' }))
+            return
+          }
+          if (chunk.type === 'finish') finishReasonRef.current = { turn, reason: chunk.reason }
           const current = draftRef.current
           const base = current !== null && current.turn === turn && current.step === step
             ? current
@@ -122,20 +135,25 @@ export function useChat(sessionId: SessionId | null): ChatController {
           return
         }
         case 'turn/start':
+          finishReasonRef.current = null
           runningRevisionRef.current += 1
+          setTodos([])
           setRunning(true)
           return
         case 'turn/end': {
           runningRevisionRef.current += 1
           setRunning(false)
-          if (draftRef.current?.turn === (data.turn as number)) setDraftBoth(null)
-          const folded = foldEvent(event)
+          const turn = data.turn as number
+          if (draftRef.current?.turn === turn) setDraftBoth(null)
+          const finishReason = finishReasonRef.current?.turn === turn ? finishReasonRef.current.reason : undefined
+          finishReasonRef.current = null
+          const folded = foldEvent(event, undefined, finishReason)
           if (folded !== null) setEntriesBoth((prev) => [...prev, folded])
           return
         }
         case 'todo/write': {
-          const next = data.todos
-          if (Array.isArray(next)) setTodos(next as TodoItem[])
+          const next = parseTodoProjection(data.todos)
+          if (next !== undefined) setTodos(next)
           return
         }
         default: {
@@ -177,6 +195,10 @@ export function useChat(sessionId: SessionId | null): ChatController {
         }
         setHasMore(value.hasMore)
         setTitle(titleFromProjections(value.projections))
+        setTodos(todosFromHistory(value))
+        if (value.projections !== undefined && Object.prototype.hasOwnProperty.call(value.projections.values, 'goal')) {
+          setGoal(parseGoalProjection(value.projections.values.goal))
+        }
         let historyRunning = false
         for (const entry of value.events) {
           if (entry.event.type === 'turn/start') historyRunning = true
@@ -202,12 +224,14 @@ export function useChat(sessionId: SessionId | null): ChatController {
     historyRequestRef.current += 1
     entriesRef.current = []
     draftRef.current = null
+    finishReasonRef.current = null
     lastSeqRef.current = -1
     runningRevisionRef.current = 0
     setEntries([])
     setDraftState(null)
     setTodos([])
     setQueuedItems([])
+    setGoal(undefined)
     setTitle(null)
     setRunning(false)
     setLoadingMore(false)
@@ -224,7 +248,13 @@ export function useChat(sessionId: SessionId | null): ChatController {
       // MuxFrame 含 merge-extensible 透传分支，switch 不窄化，case 内显式收窄
       switch (frame.type) {
         case 'session/event': {
-          const { event, view } = frame as { event: SessionEvent; view?: ToolEventView }
+          const candidate = frame as { event?: unknown; view?: ToolEventView }
+          const event = sessionEventOf(candidate.event)
+          if (event === null) {
+            setError(streamErrorNotice({ message: 'session/event 载荷格式无效' }))
+            break
+          }
+          const { view } = candidate
           applyEvent(event, view)
           break
         }
@@ -268,6 +298,11 @@ export function useChat(sessionId: SessionId | null): ChatController {
           const { key, value } = frame as { key: string; value: unknown }
           const nextTitle = titleFromProjectionFrame(key, value)
           if (nextTitle !== null) setTitle(nextTitle)
+          if (key === 'goal') setGoal(parseGoalProjection(value))
+          if (key === 'todos') {
+            const nextTodos = parseTodoProjection(value)
+            if (nextTodos !== undefined) setTodos(nextTodos)
+          }
           break
         }
         default:
@@ -280,8 +315,14 @@ export function useChat(sessionId: SessionId | null): ChatController {
   useEffect(() => {
     if (sessionId === null) return
     return eventBus.subscribe(({ stream, frame }) => {
+      const status = frame as {
+        type?: string
+        sessionId?: SessionId
+        running?: boolean
+        message?: unknown
+        error?: unknown
+      }
       if (stream !== 'host') return
-      const status = frame as { type?: string; sessionId?: SessionId; running?: boolean }
       if (status.type === 'host/session-status' && status.sessionId === sessionId && typeof status.running === 'boolean') {
         runningRevisionRef.current += 1
         setRunning(status.running)
@@ -290,14 +331,41 @@ export function useChat(sessionId: SessionId | null): ChatController {
   }, [sessionId])
 
   const sendPrompt = useCallback(
-    async (text: string, mode: PromptMode) => {
-      if (sessionId === null || text.trim() === '') return
+    async (
+      text: string,
+      mode: PromptMode,
+      images: Extract<PromptContentPart, { type: 'image' }>[] = [],
+    ) => {
+      if (sessionId === null) return
+      const trimmed = text.trim()
+      const safeImages = images
+        .filter(image => (
+          (image.mediaType === 'image/png'
+            || image.mediaType === 'image/jpeg'
+            || image.mediaType === 'image/webp'
+            || image.mediaType === 'image/gif')
+          && image.data.length > 0
+          && image.data.length <= 14_000_000
+        ))
+        .slice(0, 4)
+      if (trimmed === '' && safeImages.length === 0) return
+      if (trimmed.length > 12_000) {
+        setError('消息超过 12000 字符限制')
+        return
+      }
+      const content: PromptContentPart[] = [
+        ...(trimmed === '' ? [] : [{ type: 'text' as const, text: trimmed }]),
+        ...safeImages.map(image => ({
+          ...image,
+          ...(image.name === undefined ? {} : { name: image.name.slice(0, 120) }),
+        })),
+      ]
       setError(null)
       try {
         await callUnary(window.location.origin, 'session.prompt', {
           sessionId,
           mode,
-          content: [{ type: 'text', text: text.trim() }],
+          content,
           clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         })
       } catch (failure) {
@@ -380,12 +448,14 @@ export function useChat(sessionId: SessionId | null): ChatController {
   )
 
   const dismissError = useCallback(() => setError(null), [])
+  const reportError = useCallback((message: string) => setError(message.slice(0, 500)), [])
 
   return {
     entries,
     draft,
     todos,
     queuedItems,
+    goal,
     title,
     running,
     loading,
@@ -400,8 +470,81 @@ export function useChat(sessionId: SessionId | null): ChatController {
     answerApproval,
     answerQuestions,
     dismissError,
+    reportError,
   }
 }
 
 /** 应用级便捷导出：App 挂载时启动事件总线。 */
 export { eventBus }
+
+function recordOf(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function sequenceNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+}
+
+function boundedText(value: unknown, maxLength: number): value is string {
+  return typeof value === 'string' && value.length <= maxLength
+}
+
+function streamChunkOf(value: unknown): StreamChunk | null {
+  const chunk = recordOf(value)
+  if (chunk === null || !boundedText(chunk.type, 128) || chunk.type.length === 0) return null
+  const index = (): boolean => sequenceNumber(chunk.index) !== null && (chunk.index as number) <= 100_000
+  switch (chunk.type) {
+    case 'block-start':
+      return index() && boundedText(chunk.blockType, 128) && chunk.blockType.length > 0 ? chunk as StreamChunk : null
+    case 'text-delta':
+    case 'reasoning-delta':
+      return index() && boundedText(chunk.text, 2_000_000) ? chunk as StreamChunk : null
+    case 'tool-call-delta':
+      return index()
+        && boundedText(chunk.id, 512)
+        && boundedText(chunk.argumentsDelta, 2_000_000)
+        && (chunk.name === undefined || boundedText(chunk.name, 256))
+        ? chunk as StreamChunk
+        : null
+    case 'block-end': {
+      const block = recordOf(chunk.block)
+      return index() && block !== null && boundedText(block.type, 128) && block.type.length > 0
+        ? chunk as StreamChunk
+        : null
+    }
+    case 'usage':
+      return validTokenUsage(chunk.usage) ? chunk as StreamChunk : null
+    case 'finish': {
+      const reason = recordOf(chunk.reason)
+      return reason !== null && boundedText(reason.kind, 128) && reason.kind.length > 0 ? chunk as StreamChunk : null
+    }
+    default:
+      // 新版插件分块由 draft 安全忽略；仍限制外层形状和类型长度。
+      return chunk as unknown as StreamChunk
+  }
+}
+
+function sessionEventOf(value: unknown): SessionEvent | null {
+  const event = recordOf(value)
+  if (event === null || !boundedText(event.type, 128) || event.type.length === 0) return null
+  if (sequenceNumber(event.seq) === null) return null
+  if (typeof event.time !== 'number' || !Number.isFinite(event.time)) return null
+  const data = recordOf(event.data)
+  if (data === null) return null
+  if (event.type === 'turn/end' && recordOf(data.reason) === null) return null
+  return event as SessionEvent
+}
+
+function validTokenUsage(value: unknown): boolean {
+  const usage = recordOf(value)
+  if (usage === null) return false
+  const fields = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'reasoningTokens'] as const
+  for (const field of fields) {
+    const amount = usage[field]
+    if (amount === undefined && field !== 'inputTokens' && field !== 'outputTokens') continue
+    if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount < 0) return false
+  }
+  return true
+}
