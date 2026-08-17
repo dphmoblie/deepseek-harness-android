@@ -55,12 +55,20 @@ function truncate(text: string): string {
   return `${characters.slice(0, MAX_ERROR_REASON_LENGTH - 1).join('')}…`
 }
 
+function redactSensitiveHeaders(text: string): string {
+  return text
+    // Authorization 可包含 Digest 参数或自定义多段方案，必须隐藏到当前行末。
+    .replace(/\b((?:proxy-)?authorization\s*:\s*)[^\r\n]*/gi, `$1${HIDDEN}`)
+    // Cookie 属性以分号分隔，逐字段处理容易遗漏，故隐藏到当前行末。
+    .replace(/\b((?:set-)?cookie\s*:\s*)[^\r\n]*/gi, `$1${HIDDEN}`)
+}
+
 function redact(text: string): string {
   return text
     // 先处理带空格的认证头，避免后续字段规则只隐藏 Bearer/Basic 单词。
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9+/=._~-]{4,}/gi, `$1 ${HIDDEN}`)
     .replace(
-      /((?:["']?(?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|token|auth(?:orization)?|cookie|credential|pass(?:word|wd)?|secret|signature)["']?)\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}\]]+)/gi,
+      /((?:["']?(?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|token|auth(?:orization)?|cookie|credential|pass(?:word|wd)?|secret|signature)["']?)\s*[:=]\s*)(?!\[已隐藏\])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}\]]+)/gi,
       `$1${HIDDEN}`,
     )
     .replace(/([?&](?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|password|secret|signature)=)[^&#\s]+/gi, `$1${HIDDEN}`)
@@ -69,6 +77,12 @@ function redact(text: string): string {
     .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}\b/gi, HIDDEN)
     .replace(/\bAKIA[0-9A-Z]{16}\b/g, HIDDEN)
     .replace(/\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b/g, '[私网地址]')
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[邮箱已隐藏]')
+    .replace(/(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)/g, '[手机号已隐藏]')
+    .replace(
+      /(?<!\d)(?:\d{6}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]|\d{15})(?!\d)/g,
+      '[身份证号已隐藏]',
+    )
     .replace(/\b[A-Za-z]:\\Users\\[^\\\s]+/gi, '%USERPROFILE%')
     .replace(/\/(?:home|Users)\/[^/\s]+/g, '$HOME')
 }
@@ -99,7 +113,7 @@ function cleanDiagnostic(value: string, seen: Set<unknown>, depth: number): stri
   // 畸形或无白名单消息字段的对象不能回退为整段 JSON 展示。
   if (looksLikeStructuredValue) return null
 
-  const lines = withoutPrefix
+  const lines = redactSensitiveHeaders(withoutPrefix)
     .split(/\r?\n/)
     .map(line => line.trim())
     .filter(line => line.length > 0)

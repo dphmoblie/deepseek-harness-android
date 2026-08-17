@@ -39,7 +39,8 @@ describe('错误原因安全展示', () => {
     const privateAddress = ['192', '168', '1', '20'].join('.')
     const reason = failureReason({
       message: [
-        `ProviderError: request failed Authorization: Bearer test-placeholder-token at C:\\Users\\alice\\project ${privateAddress}`,
+        'ProviderError: request failed Authorization: Bearer test-placeholder-token',
+        `target C:\\Users\\alice\\project ${privateAddress}`,
         '    at request (C:\\Users\\alice\\project\\client.ts:12:4)',
       ].join('\n'),
     })
@@ -104,6 +105,56 @@ describe('错误原因安全展示', () => {
     expect(reason).not.toContain('signature-placeholder')
   })
 
+  it('完整隐藏自定义 Authorization 方案与 Cookie 头', () => {
+    const authorization = failureReason(
+      'provider rejected Authorization: Token sensitive-placeholder-value',
+    )
+    expect(authorization).toBe('provider rejected Authorization: [已隐藏]')
+    expect(authorization).not.toContain('sensitive-placeholder-value')
+
+    const digest = failureReason(
+      'provider rejected Authorization: Digest username="placeholder", realm="internal", response="sensitive-placeholder"',
+    )
+    expect(digest).toBe('provider rejected Authorization: [已隐藏]')
+    expect(digest).not.toContain('realm')
+    expect(digest).not.toContain('sensitive-placeholder')
+
+    const proxyAuthorization = failureReason(
+      'provider rejected Proxy-Authorization: Custom first-part second-sensitive-part',
+    )
+    expect(proxyAuthorization).toBe('provider rejected Proxy-Authorization: [已隐藏]')
+    expect(proxyAuthorization).not.toContain('second-sensitive-part')
+
+    const cookie = failureReason(
+      'provider rejected Cookie: sid=session-placeholder; other=secondary-placeholder',
+    )
+    expect(cookie).toBe('provider rejected Cookie: [已隐藏]')
+    expect(cookie).not.toContain('session-placeholder')
+    expect(cookie).not.toContain('secondary-placeholder')
+
+    const setCookie = failureReason(
+      'provider rejected Set-Cookie: refresh=refresh-placeholder; Path=/; HttpOnly',
+    )
+    expect(setCookie).toBe('provider rejected Set-Cookie: [已隐藏]')
+    expect(setCookie).not.toContain('refresh-placeholder')
+
+    expect(failureReason(JSON.stringify({
+      message: 'provider rejected Cookie: sid=session-placeholder; reason=quota',
+    }))).toBe('provider rejected Cookie: [已隐藏]')
+  })
+
+  it('隐藏错误消息中的个人敏感数据', () => {
+    const email = ['alice', 'example.invalid'].join('@')
+    const phone = ['138', '0013', '8000'].join('')
+    const identityNumber = ['110105', '19900101', '001', 'X'].join('')
+    const reason = failureReason(`contact ${email} ${phone} ${identityNumber}`)
+
+    expect(reason).toBe('contact [邮箱已隐藏] [手机号已隐藏] [身份证号已隐藏]')
+    expect(reason).not.toContain(email)
+    expect(reason).not.toContain(phone)
+    expect(reason).not.toContain(identityNumber)
+  })
+
   it('读取 turn/end reason 自身及事件 failure 字段', () => {
     expect(turnEndFailureNotice(turnEnd({
       kind: 'error',
@@ -121,7 +172,7 @@ describe('错误原因安全展示', () => {
     const notice = modelCatalogFailureNotice([{
       id: 'deepseek',
       name: 'DeepSeek',
-      message: 'Authorization: Bearer test-placeholder-token 请求超时',
+      message: 'Authorization: Bearer test-placeholder-token\n请求超时',
     }])
     expect(notice).toContain('模型目录加载失败：DeepSeek')
     expect(notice).toContain('[已隐藏]')
