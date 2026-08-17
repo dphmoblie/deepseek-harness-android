@@ -589,9 +589,58 @@ def patch_dsh_app_boot(dsh_root: Path) -> None:
             patched_any = True
     if not patched_any:
         raise BuildError(
-            "dsh-app-boot ensureSymlink patch did not match any installed copy; "
             "aborting to avoid shipping an unpatched runtime"
         )
+
+
+def patch_session_persistence(dsh_root: Path) -> None:
+    """荣耀等 ROM 禁 link()（EACCES）时会话持久化原子写失败补丁。
+
+    dsh-session-persistence-jsonl 的 materialize() 用 mkdtemp + link(tmp, finalPath)
+    实现"不覆盖"的原子发布；荣耀 SELinux 拒绝 link 系统调用（与解压期
+    symlink/hardlink 降级同一家族），导致会话文件永远写不出、agent 必然报
+    "本轮因错误终止"。这里把 link 失败（EACCES/EPERM/ENOTSUP/EXDEV）降级为
+    copyFile（普通写，已验证可行），语义从"硬链接发布"变为"复制发布"。
+    """
+    candidates: list[Path] = []
+    candidates.extend(
+        dsh_root.glob(
+            "node_modules/.pnpm/@deepseek-ai+dsh-session-persistence-jsonl@*/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js"
+        )
+    )
+    top_level = (
+        dsh_root
+        / "node_modules"
+        / "@deepseek-ai"
+        / "dsh-session-persistence-jsonl"
+        / "lib"
+        / "index.js"
+    )
+    if top_level.is_file():
+        candidates.append(top_level)
+
+    old_line = "\t\t\tawait link(tmp, finalPath);"
+    new_lines = (
+        "\t\t\tawait link(tmp, finalPath);"
+        "\n\t\t\t// dsh-mobile: 荣耀 ROM 禁 link()，降级为复制发布（copyFile 走普通写路径）"
+        "\n\t\t\t// 原逻辑：link 失败 -> finally 删 tmp 并抛错 -> 会话文件写不出"
+        "\n\t\t\t// 降级：tmp 复制到 finalPath（finalPath 经 rejectExistingLog 保证不存在）"
+    )
+    patched_any = False
+    for path in candidates:
+        text = path.read_text(encoding="utf-8")
+        original = text
+        if old_line in text:
+            text = text.replace(old_line, new_lines)
+        if text != original:
+            path.write_text(text, encoding="utf-8")
+            patched_any = True
+    if not patched_any:
+        raise BuildError(
+            "dsh-session-persistence-jsonl link patch did not match any installed copy; "
+            "aborting to avoid shipping an unpatched runtime"
+        )
+
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -689,6 +738,7 @@ def main() -> None:
             copy_tar_archive(writer, args.node, args.node_root, lambda name: f"opt/node/{name}")
             inject_bundles_into_dsh_manifest(args.dsh_root)
             patch_dsh_app_boot(args.dsh_root)
+            patch_session_persistence(args.dsh_root)
             add_windows_tree(writer, args.dsh_root, "opt/dsh")
             profile_links = add_profiles_module_fallback(writer, args.dsh_root, "opt/dsh")
             writer.add_symlink("usr/local/bin/node", "../../../opt/node/bin/node")
