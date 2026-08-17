@@ -1,0 +1,22 @@
+{
+  "$schema": "./mobile-profile.schema.json",
+  "$comment": "移动端 runtime profile 插件白名单（轻量化默认集，dshmarket 可再装其余插件）。",
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-mobile-compat",
+        "@linxin666/dsh-web-ui-all",
+        "@liustack/modlens",
+        "dshmarket"
+      ]
+    }
+  },
+  "mobile": {
+    "layout": "dsh-mobile-compat",
+    "disabledOnMobile": ["@linxin666/dsh-pet", "@linxin666/dsh-live-stats", "dsh-browser"],
+    "idleStopMinutes": 15,
+    "embedRootfs": false
+  }
+}

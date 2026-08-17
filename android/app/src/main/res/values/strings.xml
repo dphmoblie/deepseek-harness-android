@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">DeepSeek Harness</string>
+    <string name="shizuku_missing">请先安装并启动 Shizuku</string>
+</resources>

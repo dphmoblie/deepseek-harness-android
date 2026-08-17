@@ -1,0 +1,2 @@
+-keep class io.deepseekharness.mobile.shizuku.DeviceShellUserService { *; }
+-keep class io.deepseekharness.mobile.shizuku.** extends android.os.Binder { *; }

@@ -1,0 +1,68 @@
+# Dependencies and generated web output
+node_modules/
+dist/
+www/
+coverage/
+target/
+*.exe
+*.tsbuildinfo
+__pycache__/
+*.py[cod]
+capacitor.config.js
+capacitor.config.d.ts
+vite.config.js
+vite.config.d.ts
+vitest.config.js
+vitest.config.d.ts
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+local.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+
+# Android generated output and IDE files
+.gradle/
+.idea/
+.vscode/
+*.iml
+.kotlin/
+**/.cxx/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/capacitor.settings.gradle
+android/app/capacitor.build.gradle
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+android/app/src/main/assets/public/
+android/app/src/main/assets/runtime/runtime-manifest.json
+android/app/src/main/assets/runtime/rootfs.bundle
+android/app/src/main/jniLibs/**/*.so
+android/gradle/wrapper/gradle-wrapper.jar
+*.apk
+*.aab
+
+# Downloaded runtimes, logs, and temporary files
+runtime-cache/
+*.rootfs
+*.tar
+*.tar.gz
+*.tar.xz
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+# 供应链安全 bootstrap：wrapper jar 二进制不提交，仅保留生成源码；
+# CI/本地用可信 Gradle 8.11.1 在该目录执行 `gradle wrapper` 生成 jar
+.wrapper-bootstrap/*
+!.wrapper-bootstrap/build.gradle
+!.wrapper-bootstrap/settings.gradle
+legal/.operit-license-import/
+legal/operit-license.tar
