@@ -88,6 +88,7 @@ export function parseServerResponse(raw: string): ServerResponse | null {
 
 /** 解析 WebSocket 文本帧；信封畸形返回 null（调用方跳过并告警）。 */
 export function parseServerFrame(raw: string): ServerRequest | null {
+  if (raw.length > 8 * 1024 * 1024) return null
   let value: unknown
   try {
     value = JSON.parse(raw)
@@ -97,7 +98,12 @@ export function parseServerFrame(raw: string): ServerRequest | null {
   if (typeof value !== 'object' || value === null) return null
   const envelope = value as Record<string, unknown>
   if (envelope.type !== 'server-request') return null
-  if (typeof envelope.rpcId !== 'string' || typeof envelope.method !== 'string') return null
+  if (typeof envelope.rpcId !== 'string' || envelope.rpcId.length === 0 || envelope.rpcId.length > 512) return null
+  if (typeof envelope.method !== 'string' || !/^[A-Za-z0-9._/-]{1,128}$/.test(envelope.method)) return null
+  if (typeof envelope.payload !== 'object' || envelope.payload === null || Array.isArray(envelope.payload)) return null
+  const payload = envelope.payload as Record<string, unknown>
+  if (typeof payload.type !== 'string' || !/^[A-Za-z0-9._/-]{1,128}$/.test(payload.type)) return null
+  if (envelope.method !== payload.type) return null
   return envelope as unknown as ServerRequest
 }
 
@@ -134,7 +140,7 @@ export async function callUnary<M extends RpcMethodName>(
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error
-    throw new TransportError(`无法连接 Harness 后端：${String(error)}`)
+    throw new TransportError('无法连接 Harness 后端：网络不可用、服务未启动或连接被拒绝')
   }
   if (!response.ok) {
     throw new TransportError(`Harness 后端返回 HTTP ${response.status}`, response.status)
@@ -173,7 +179,7 @@ export async function sendResponse(
     })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error
-    throw new TransportError(`无法连接 Harness 后端：${String(error)}`)
+    throw new TransportError('无法连接 Harness 后端：网络不可用、服务未启动或连接被拒绝')
   }
   if (!response.ok) {
     throw new TransportError(`Harness 后端返回 HTTP ${response.status}`, response.status)
@@ -201,6 +207,7 @@ export async function* openEventStream(
   const inbox: ({ kind: 'frame'; frame: ServerRequest } | { kind: 'end' })[] = []
   let wake: (() => void) | undefined
   let failure: Error | undefined
+  let opened = false
 
   const enqueue = (item: { kind: 'frame'; frame: ServerRequest } | { kind: 'end' }): void => {
     inbox.push(item)
@@ -209,24 +216,38 @@ export async function* openEventStream(
   }
 
   const handleOpen = (): void => {
+    opened = true
     onOpen?.()
   }
   const handleMessage = (event: MessageEvent): void => {
     if (typeof event.data !== 'string') return
     const frame = parseServerFrame(event.data)
     if (frame === null) {
-      console.warn('[harness-web] 丢弃畸形的下行帧')
+      failure = new TransportError('Harness 事件流收到格式无效的下行数据')
+      enqueue({ kind: 'end' })
       return
     }
     enqueue({ kind: 'frame', frame })
   }
-  const handleClose = (): void => {
+  const handleClose = (event: CloseEvent): void => {
+    if (!signal?.aborted && opened && event.code !== 1000 && failure === undefined) {
+      const detail = event.reason.trim()
+      failure = new TransportError(
+        detail === ''
+          ? `Harness 事件流异常关闭（代码 ${event.code}）`
+          : `Harness 事件流异常关闭（代码 ${event.code}）：${detail}`,
+      )
+    }
     enqueue({ kind: 'end' })
   }
   const handleError = (): void => {
-    // 已建立连接后的异常由 close 事件收尾；仅连接失败时作为错误抛出
     if (socket.readyState === WebSocket.CONNECTING) {
       failure = new TransportError('无法建立 Harness 事件流连接')
+      enqueue({ kind: 'end' })
+      return
+    }
+    if (!signal?.aborted && failure === undefined) {
+      failure = new TransportError('Harness 事件流连接意外中断')
       enqueue({ kind: 'end' })
     }
   }

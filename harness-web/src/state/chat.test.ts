@@ -15,7 +15,7 @@ vi.mock('../api/wire', async (importOriginal) => {
   return { ...actual, ...wire }
 })
 
-import { useChat } from './chat'
+import { eventBus, useChat } from './chat'
 
 type Deferred<T> = {
   promise: Promise<T>
@@ -183,5 +183,32 @@ describe('useChat history pagination', () => {
 
     expect(result.current.entries.map((entry) => entry.seq)).toEqual([15, 20])
     expect(result.current.loadingMore).toBe(false)
+  })
+})
+
+describe('useChat realtime validation', () => {
+  it('把畸形 assistant chunk 转为可见的具体错误', async () => {
+    wire.callUnary.mockResolvedValue({ events: [], hasMore: false })
+    const { result } = renderHook(() => useChat('session-a'))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+
+    act(() => {
+      const bus = eventBus as unknown as {
+        dispatch: (stream: 'mux', rpcId: string, frame: unknown) => void
+      }
+      bus.dispatch('mux', 'bad-chunk', {
+        type: 'session/event',
+        sessionId: 'session-a',
+        event: {
+          type: 'assistant/chunk',
+          seq: 1,
+          time: Date.now(),
+          data: { turn: 1, step: 1 },
+        },
+      })
+    })
+
+    expect(result.current.error).toBe('Harness 事件流异常：assistant/chunk 载荷格式无效')
+    expect(result.current.draft).toBeNull()
   })
 })

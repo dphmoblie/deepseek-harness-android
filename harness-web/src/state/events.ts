@@ -6,6 +6,7 @@
 
 import { HOST_EVENTS_PATH, MUX_EVENTS_PATH, openEventStream, TransportError } from '../api/wire'
 import type { HostFrame, MuxFrame, SessionId, ServerRequest } from '../api/types'
+import { failureReason } from './errorDisplay'
 
 /**
  * 分发的总线事件。rpcId 是外层 server-request 信封的回显令牌：
@@ -81,9 +82,9 @@ export class EventBus {
     this.listeners.forEach((listener) => {
       try {
         listener({ stream, rpcId, frame })
-      } catch (error) {
-        // 订阅者异常不能影响其他订阅者；静默丢弃并记录
-        console.warn('[harness-web] 事件订阅者异常', error)
+      } catch {
+        // 订阅者异常不能影响其他订阅者，也不能把原始异常写入日志。
+        console.warn('[harness-web] 事件订阅者异常，已隔离该回调')
       }
     })
   }
@@ -96,19 +97,29 @@ export class EventBus {
     const signal = controller.signal
     const origin = this.origin()
     let backoff = BASE_BACKOFF_MS
+    let failureReported = false
     while (this.started && !signal.aborted) {
       try {
         for await (const envelope of this.openStream(origin, path, { signal })) {
           backoff = BASE_BACKOFF_MS
+          failureReported = false
           this.dispatch(stream, envelope.rpcId, envelope.payload as MuxFrame | HostFrame)
         }
       } catch (error) {
         if (signal.aborted) return
-        if (error instanceof TransportError) {
-          console.warn(`[harness-web] ${stream} 事件流中断，${backoff}ms 后重连`)
-        } else {
-          console.warn('[harness-web] 事件流异常', error)
+        const reason = failureReason(error) ?? '事件流连接意外中断'
+        if (!failureReported) {
+          this.dispatch(stream, `frontend-${stream}-stream-error`, {
+            type: 'stream/error',
+            error: {
+              code: error instanceof TransportError ? 'TRANSPORT_ERROR' : 'EVENT_STREAM_ERROR',
+              message: reason,
+              details: {},
+            },
+          })
+          failureReported = true
         }
+        console.warn(`[harness-web] ${stream} 事件流中断，${backoff}ms 后重连：${reason}`)
       }
       await delay(backoff, signal)
       backoff = Math.min(backoff * 2, MAX_BACKOFF_MS)

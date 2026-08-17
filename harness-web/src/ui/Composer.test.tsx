@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import '@testing-library/jest-dom/vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Composer } from './Composer'
 
@@ -49,5 +49,24 @@ describe('Composer', () => {
 
     expect(onSend).toHaveBeenCalledOnce()
     expect(onSend).toHaveBeenCalledWith('继续检查', 'queue')
+  })
+
+  it('支持从剪贴板添加图片并随消息发送', async () => {
+    const onSend = vi.fn()
+    const file = new File([new Uint8Array([1, 2, 3])], 'screen.png', { type: 'image/png' })
+    render(<Composer running={false} onSend={onSend} onCancel={vi.fn()} />)
+
+    fireEvent.paste(screen.getByRole('textbox', { name: '发送给 DeepSeek Harness 的消息' }), {
+      clipboardData: { files: [file] },
+    })
+
+    expect(await screen.findByRole('img', { name: 'screen.png' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '发送并排队' }))
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith(
+      '',
+      'queue',
+      [expect.objectContaining({ type: 'image', mediaType: 'image/png', name: 'screen.png' })],
+    ))
   })
 })
