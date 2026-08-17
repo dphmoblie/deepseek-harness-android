@@ -167,7 +167,7 @@ export function MessageItem(props: { entry: ChatEntry; sessionId: SessionId }): 
               <span className="tool-name">工具结果{entry.isError ? '（失败）' : ''}</span>
             </summary>
             {typeof entry.view?.view.card === 'string' && <p className="tool-view-label">{entry.view.view.card}</p>}
-            <Blocks blocks={entry.message.content} />
+            <Blocks blocks={entry.message.content} sessionId={sessionId} />
           </details>
         </div>
       )

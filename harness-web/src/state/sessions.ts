@@ -19,7 +19,7 @@ export type SessionsController = {
   reload: () => Promise<void>
   createSession: () => Promise<SessionId | null>
   renameSession: (sessionId: SessionId, title: string) => Promise<void>
-  archiveSession: (sessionId: SessionId) => Promise<void>
+  archiveSession: (sessionId: SessionId) => Promise<boolean>
   dismissError: () => void
 }
 
@@ -102,12 +102,14 @@ export function useSessions(): SessionsController {
   )
 
   const archiveSession = useCallback(
-    async (sessionId: SessionId) => {
+    async (sessionId: SessionId): Promise<boolean> => {
       try {
         await callUnary(window.location.origin, 'workspace.archiveSession', { sessionId })
         await reload()
+        return true
       } catch (failure) {
         setError(toErrorText(failure))
+        return false
       }
     },
     [reload, toErrorText],

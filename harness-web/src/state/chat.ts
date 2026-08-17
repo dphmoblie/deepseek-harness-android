@@ -153,6 +153,7 @@ export function useChat(sessionId: SessionId | null): ChatController {
       const requestId = ++historyRequestRef.current
       const seqAtRequest = lastSeqRef.current
       const runningRevisionAtRequest = runningRevisionRef.current
+      setLoadingMore(false)
       setLoading(true)
       setError(null)
       try {
@@ -209,6 +210,7 @@ export function useChat(sessionId: SessionId | null): ChatController {
     setQueuedItems([])
     setTitle(null)
     setRunning(false)
+    setLoadingMore(false)
     setHasMore(false)
     setApproval(null)
     setQuestions(null)
@@ -315,25 +317,32 @@ export function useChat(sessionId: SessionId | null): ChatController {
   }, [sessionId, toErrorText])
 
   const loadMore = useCallback(async () => {
-    if (sessionId === null || loadingMore) return
+    if (sessionId === null || loading || loadingMore) return
     const head = entriesRef.current[0]
     if (head === undefined) return
+    const sessionAtRequest = sessionId
+    const historyRequestAtRequest = historyRequestRef.current
+    const isCurrentRequest = () => (
+      sessionIdRef.current === sessionAtRequest
+      && historyRequestRef.current === historyRequestAtRequest
+    )
     setLoadingMore(true)
     try {
       const value = await callUnary(window.location.origin, 'session.history', {
-        sessionId,
+        sessionId: sessionAtRequest,
         beforeSeq: head.seq,
         maxMessages: HISTORY_PAGE_SIZE,
       })
+      if (!isCurrentRequest()) return
       const older = foldHistory(value.events).filter((entry) => entry.seq < head.seq)
       if (older.length > 0) setEntriesBoth((prev) => [...older, ...prev])
       setHasMore(value.hasMore)
     } catch (failure) {
-      setError(toErrorText(failure))
+      if (isCurrentRequest()) setError(toErrorText(failure))
     } finally {
-      setLoadingMore(false)
+      if (isCurrentRequest()) setLoadingMore(false)
     }
-  }, [sessionId, loadingMore, setEntriesBoth, toErrorText])
+  }, [sessionId, loading, loadingMore, setEntriesBoth, toErrorText])
 
   const answerApproval = useCallback(
     async (outcome: 'allowed-once' | 'rejected') => {

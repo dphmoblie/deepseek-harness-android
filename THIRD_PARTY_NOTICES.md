@@ -17,6 +17,8 @@ Operit runtime materials.
 | --- | --- | --- |
 | Capacitor | Android application shell and native bridge | MIT |
 | React | Management UI | MIT |
+| react-markdown | Safe Markdown rendering for conversation content | MIT |
+| remark-gfm | GitHub Flavored Markdown support | MIT |
 | xterm.js | Terminal emulator | MIT |
 | Lucide | Interface icons | ISC |
 | Vite | Web build tooling | MIT |
