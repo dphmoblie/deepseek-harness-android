@@ -20,6 +20,9 @@ vitest.config.d.ts
 .env.*
 !.env.example
 local.properties
+# 团队统一签名：密钥库与真实密码配置仅经安全渠道分发，严禁提交
+android/keystore.properties
+android/keystore/
 *.jks
 *.keystore
 *.p12

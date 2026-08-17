@@ -13,6 +13,10 @@ jobs:
   build:
     needs: [build-runners, build-rootfs]
     runs-on: ubuntu-latest
+    env:
+      # 团队统一签名：密钥库与密码经 GitHub Secrets 注入（base64 编码的 dsh-mobile-team.jks）
+      DSH_KEYSTORE_BASE64: ${{ secrets.DSH_KEYSTORE_BASE64 }}
+      DSH_KEYSTORE_PASSWORD: ${{ secrets.DSH_KEYSTORE_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -100,6 +104,9 @@ jobs:
       - name: Build debug APK + lint + unit tests
         working-directory: android
         run: ./gradlew assembleDebug lint testDebugUnitTest --no-daemon
+
+      - name: 校验 APK 团队签名（证书指纹与团队密钥库一致）
+        run: python3 scripts/verify-apk-signature.py --apk android/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Publish APK to dist branch (thin APKs only; embedded ones ship via Release)
         run: |

@@ -8,6 +8,47 @@ def envBuildValue = { String name ->
     return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
 }
 
+// 团队统一签名（debug/release 共用）：防止不同开发者或 CI 用各自密钥签名，
+// 导致设备覆盖安装时报「应用签名与已安装版本不一致」。密钥库与密码均不入库：
+//   - 本地开发：android/keystore.properties（由团队负责人分发，模板见 keystore.properties.example）
+//   - CI 构建：环境变量 DSH_KEYSTORE_BASE64 + DSH_KEYSTORE_PASSWORD（由 GitHub Secrets 注入）
+// 两者都缺失时终止配置（fail-closed），杜绝无团队密钥的构建产物流入设备。
+def loadTeamSigning() {
+    def propertiesFile = rootProject.file('keystore.properties')
+    if (propertiesFile.isFile()) {
+        def properties = new Properties()
+        propertiesFile.withInputStream { properties.load(it) }
+        def storeFile = rootProject.file(properties['storeFile'])
+        if (!storeFile.isFile()) {
+            throw new GradleException("团队密钥库缺失：${storeFile}，请向团队负责人获取后放入 android/keystore/ 目录")
+        }
+        return [
+            storeFile    : storeFile,
+            storePassword: properties['storePassword'],
+            keyAlias     : properties['keyAlias'],
+            keyPassword  : properties['keyPassword'],
+        ]
+    }
+    def encoded = System.getenv('DSH_KEYSTORE_BASE64')
+    def password = System.getenv('DSH_KEYSTORE_PASSWORD')
+    if (encoded != null && !encoded.isEmpty() && password != null && !password.isEmpty()) {
+        def decodedFile = layout.buildDirectory.file('keystore/dsh-mobile-team.jks').get().asFile
+        decodedFile.parentFile.mkdirs()
+        decodedFile.bytes = Base64.decoder.decode(encoded)
+        return [
+            storeFile    : decodedFile,
+            storePassword: password,
+            keyAlias     : 'dsh-mobile',
+            keyPassword  : password,
+        ]
+    }
+    throw new GradleException(
+        '缺少团队签名配置：请配置 android/keystore.properties（参照 keystore.properties.example），' +
+            '或提供 DSH_KEYSTORE_BASE64/DSH_KEYSTORE_PASSWORD 环境变量。禁止以个人密钥签名分发 APK。'
+    )
+}
+def teamSigning = loadTeamSigning()
+
 def appSourceRoot = rootProject.projectDir.parentFile.canonicalFile
 def legalAssetSources = [
     'legal/LICENSE'                             : new File(appSourceRoot, 'LICENSE'),
@@ -56,6 +97,15 @@ android {
     namespace 'io.deepseekharness.mobile'
     compileSdk 35
 
+    signingConfigs {
+        team {
+            storeFile teamSigning.storeFile
+            storePassword teamSigning.storePassword
+            keyAlias teamSigning.keyAlias
+            keyPassword teamSigning.keyPassword
+        }
+    }
+
     defaultConfig {
         applicationId 'io.deepseekharness.mobile'
         minSdk 26
@@ -99,7 +149,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            signingConfig signingConfigs.team
+        }
         release {
+            signingConfig signingConfigs.team
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
