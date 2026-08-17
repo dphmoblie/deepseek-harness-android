@@ -580,19 +580,16 @@ def patch_dsh_app_boot(dsh_root: Path) -> None:
     for path in candidates:
         text = path.read_text(encoding="utf-8")
         original = text
-        if old_line in text:
-            text = text.replace(old_line, new_lines)
-            # 防回归：替换后必须包含 copyFile 降级（历史上出现过只加注释的伪补丁，CI 仍绿）
-            if "await copyFile(tmp, finalPath);" not in text:
-                raise BuildError(
-                    "dsh-session-persistence-jsonl link patch produced no copyFile fallback; aborting"
-                )
+        if trust_existing in text:
+            text = text.replace(trust_existing, trust_existing_replacement)
+        if tolerate_denied in text:
+            text = text.replace(tolerate_denied, tolerate_denied_replacement)
         if text != original:
             path.write_text(text, encoding="utf-8")
             patched_any = True
     if not patched_any:
         raise BuildError(
-            "dsh-session-persistence-jsonl link patch did not match any installed copy; "
+            "dsh-app-boot ensureSymlink patch did not match any installed copy; "
             "aborting to avoid shipping an unpatched runtime"
         )
 
