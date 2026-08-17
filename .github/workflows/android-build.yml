@@ -5,6 +5,15 @@ on:
     branches: [main, 'feature/dsh-plugin-compat']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type: preview (default) or stable'
+        required: false
+        default: 'preview'
+        type: choice
+        options:
+          - preview
+          - stable
 
 permissions:
   contents: write
@@ -408,7 +417,16 @@ jobs:
             git push origin dist || true
           }
           {
-            TAG="v0.1.7-mobile-${{ github.run_number }}"
+            RELEASE_TYPE="${{ github.event.inputs.release_type }}"
+            if [ "$RELEASE_TYPE" = "stable" ]; then
+              TAG="v0.1.7"
+              NAME="DeepSeek Harness Android v0.1.7（正式版）"
+              PRE="false"
+            else
+              TAG="v0.1.7-mobile-${{ github.run_number }}"
+              NAME="Mobile test build #${{ github.run_number }}"
+              PRE="true"
+            fi
             APK="$(ls /tmp/apk/*.apk | head -n1)"
             test -n "$APK"
             test -f /tmp/runtime/rootfs.bundle
@@ -433,7 +451,7 @@ jobs:
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/repos/${{ github.repository }}/releases \
-              -d "$(jq -n --arg t "$TAG" --arg n "Mobile test build #${{ github.run_number }}" --rawfile b /tmp/notes.md '{tag_name:$t, name:$n, body:$b, draft:false, prerelease:true}')")"
+              -d "$(jq -n --arg t "$TAG" --arg n "$NAME" --arg pre "$PRE" --rawfile b /tmp/notes.md '{tag_name:$t, name:$n, body:$b, draft:false, prerelease:($pre=="true")}')")"
             RELEASE_ID="$(echo "$RESP" | jq -r .id)"
             test -n "$RELEASE_ID" && test "$RELEASE_ID" != "null"
             UPLOAD_BASE="https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets"
