@@ -1,3 +1,6 @@
 <resources>
     <color name="launcher_background">#111315</color>
+    <color name="harness_toolbar_background">#111315</color>
+    <color name="harness_toolbar_foreground">#F4F6F5</color>
+    <color name="harness_page_background">#FFFFFF</color>
 </resources>

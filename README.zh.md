@@ -1,6 +1,6 @@
 # DeepSeek Harness Android
 
-`app/` 是一个独立的 Capacitor Android 应用，用于管理本机 DeepSeek Harness Ubuntu 用户空间。它提供运行时安装与重置、Ubuntu 终端、可选的 Shizuku 设备 Shell 访问、设置，以及仅限回环地址的内嵌 Harness Web 界面。
+`app/` 是一个独立的 Capacitor Android 应用，在本机 Ubuntu 用户空间中运行 DeepSeek Harness。运行时就绪后，打开应用会直接启动并进入应用内 Harness 对话，无需外部浏览器；服务控制、Ubuntu 安装与重置、终端、运行时来源和可选的 Shizuku 设备 Shell 均位于设置中。
 
 ## 构建要求
 
@@ -19,9 +19,9 @@ pnpm run build
 pnpm run android:sync
 ```
 
-发布构建可内嵌 `assets/runtime/runtime-manifest.json` 与 `assets/runtime/rootfs.bundle`。不透明的 `.bundle` 文件是 gzip 压缩归档，其命名方式可避免 Android 资源打包器自动解压改名。当前镜像配方组合了 Ubuntu 24.04 ARM64、Node.js 24.19.0 与 `@deepseek-ai/dsh` 0.1.0-rc.6。用 `scripts/build-embedded-runtime.py` 生成这些不入库的产物；该脚本会校验固定 Ubuntu/Node.js 输入的摘要、保留 Unix 元数据，并输出内嵌 manifest 所用的归档元数据与 SHA-256。
+官方 `0.1.7` CI 发布的是瘦 APK。工作流构建移动端 Harness 对话前端，将其注入 Ubuntu 24.04 ARM64、Node.js 24.19.0 与 `@deepseek-ai/dsh` 0.1.0-rc.6 运行时，并在同一个 `v0.1.7-mobile-<run_number>` Release 中发布 APK、`runtime-manifest.json` 与 `rootfs.bundle`。完成后的 manifest URL 与 SHA-256 会被编译进对应 APK，因此全新安装无需手工填写运行时来源；生成的 rootfs、manifest 与事务 `.bak` 不会被打进官方 APK。
 
-未配置远程来源时，安装使用内嵌 manifest 与 gzip rootfs，并同样校验其声明的字节长度与 SHA-256。构建方或已认证用户可同时配置 `DSH_RUNTIME_MANIFEST_URL` 与 `DSH_RUNTIME_MANIFEST_SHA256`（或设置页对应字段）。该配对用于选择远程 HTTPS manifest——其字节必须与钉死摘要完全一致；manifest 随后钉死 HTTPS rootfs 的 URL、长度、架构、压缩方式与 SHA-256。只填其中一个值属于无效配置，而不是回退方案。不要把 API 密钥、密码、数据库凭据、签名口令或 token 放入 `.env`、Gradle 文件、源码、manifest、URL 或日志。
+应用会先校验 manifest 的固定摘要，再校验其声明的 HTTPS rootfs URL、长度、架构、压缩方式与 SHA-256。下载使用应用私有的 `rootfs-<sha256>.part`，中断后可跨应用重启续传；续传响应必须是精确匹配的 HTTP 206/`Content-Range`，HTTP 200 或 416 会从零重新下载。断网、TLS、超时或截断会进入明确的错误状态并保留合法断点，不会提前显示正在解压或安装完成。`scripts/build-embedded-runtime.py` 仍可用于明确构造的内嵌开发包。不要把 API 密钥、密码、数据库凭据、签名口令或 token 放入 `.env`、Gradle 文件、源码、manifest、URL 或日志。
 
 原生运行器文件单独生成或导入，永不提交入库。发布 APK 必须同时打包 `lib/arm64-v8a/libdsh_proot.so` 与 `lib/arm64-v8a/libdsh_proot_loader.so` 两个文件。现有的 `prepare:runner` 流程仍可用于单独钉死版本的运行器来源，但它不能替代对随 APK 发布的这两个确切二进制的出处与许可审查。
 
@@ -30,7 +30,7 @@ pnpm run android:sync
 ## 安全要点
 
 - 原生桥输入具有显式的类型、长度、格式与状态校验。
-- 管理 WebView 在 Android 设备凭据认证成功前保持隐藏，离开前台时重新锁定。
+- 应用没有用户可见的登录或 Android 设备凭据门槛；启动直达对话，管理功能位于设置中。Harness 回环传输仍使用独立的一次性认证凭据。
 - 内嵌与下载产物均要求精确摘要与字节上限；下载还要求 HTTPS、暂存文件与原子晋升。
 - 归档解包防止路径穿越，且不创建设备节点。
 - Harness 仅绑定 Android 回环地址；任何业务服务都不暴露在 `0.0.0.0` 上。

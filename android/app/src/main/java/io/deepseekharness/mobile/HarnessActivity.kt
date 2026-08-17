@@ -4,20 +4,22 @@ import android.annotation.SuppressLint
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.WebViewDatabase
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.Toolbar
 import io.deepseekharness.mobile.runtime.HarnessAccess
 import io.deepseekharness.mobile.runtime.RuntimeStore
 import java.io.ByteArrayInputStream
@@ -25,6 +27,8 @@ import java.io.ByteArrayInputStream
 class HarnessActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var allowedOrigin: Origin
+    private val pageLoadGate = HarnessPageLoadGate()
+    private var pageFailureHandled = false
 
     companion object {
         const val AUTH_TOKEN_COOKIE = "dsh_mobile_token"
@@ -49,11 +53,28 @@ class HarnessActivity : AppCompatActivity() {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
 
-        webView = WebView(this)
-        webView.layoutParams = ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.MATCH_PARENT,
-        )
+        val cookieOrigin = HarnessSessionCookie.origin(allowedOrigin.port)
+        val authenticationCookie = try {
+            HarnessSessionCookie.authenticated(access.password)
+        } catch (_: IllegalArgumentException) {
+            finish()
+            return
+        }
+
+        setContentView(R.layout.activity_harness)
+        val toolbar = findViewById<Toolbar>(R.id.harness_toolbar)
+        toolbar.inflateMenu(R.menu.harness_toolbar)
+        toolbar.setNavigationOnClickListener { returnToMainActivity() }
+        toolbar.setOnMenuItemClickListener { item ->
+            if (item.itemId == R.id.action_harness_management) {
+                returnToMainActivity()
+                true
+            } else {
+                false
+            }
+        }
+
+        webView = findViewById(R.id.harness_web_view)
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -67,33 +88,46 @@ class HarnessActivity : AppCompatActivity() {
             displayZoomControls = false
             safeBrowsingEnabled = true
         }
-        CookieManager.getInstance().apply {
+        val cookieManager = CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(webView, false)
-            // WebView 的 WS 握手 401 不触发 onReceivedHttpAuthRequest，Basic 挑战
-            // 对 WebSocket 无效；注入 HttpOnly Cookie 供 preload 的 upgrade 路径
-            // 鉴权（JS 不可读，仅随同源请求与 WS 握手自动携带）。
-            setCookie(
-                "http://127.0.0.1:${allowedOrigin.port}",
-                "$AUTH_TOKEN_COOKIE=${access.password}; Path=/; HttpOnly",
-            )
         }
         WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword()
-        webView.webViewClient = RestrictedWebViewClient(allowedOrigin, access.username, access.password)
-        setContentView(webView)
+        webView.webViewClient = RestrictedWebViewClient(
+            allowedOrigin,
+            access.username,
+            access.password,
+            ::handleMainFrameFailure,
+        )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             WebView.startSafeBrowsing(applicationContext, null)
         }
-        webView.loadUrl(allowedOrigin.initialUrl)
+
+        // WebSocket 的 Basic challenge 不会触发 onReceivedHttpAuthRequest，因此使用
+        // JS 不可读的同源 Cookie。必须等异步写入确认并落盘后再发起首个页面请求。
+        cookieManager.setCookie(cookieOrigin, authenticationCookie) { accepted ->
+            when (pageLoadGate.onCookieStored(accepted)) {
+                CookieLoadDecision.LOAD -> {
+                    cookieManager.flush()
+                    webView.loadUrl(allowedOrigin.initialUrl)
+                }
+                CookieLoadDecision.REJECT -> {
+                    Toast.makeText(this, R.string.harness_session_failed, Toast.LENGTH_SHORT).show()
+                    returnToMainActivity()
+                }
+                CookieLoadDecision.IGNORE -> Unit
+            }
+        }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (webView.canGoBack()) webView.goBack() else finish()
+                if (webView.canGoBack()) webView.goBack() else returnToMainActivity()
             }
         })
     }
 
     override fun onDestroy() {
+        pageLoadGate.cancel()
         if (::webView.isInitialized) {
             webView.stopLoading()
             webView.webChromeClient = null
@@ -101,23 +135,30 @@ class HarnessActivity : AppCompatActivity() {
             webView.removeAllViews()
             webView.destroy()
         }
-        if (::allowedOrigin.isInitialized) {
-            // 清除注入的鉴权 Cookie：token 每次启动重新生成，旧值无意义
-            CookieManager.getInstance().setCookie(
-                "http://127.0.0.1:${allowedOrigin.port}",
-                "$AUTH_TOKEN_COOKIE=; Max-Age=0",
-            )
+        if (!isChangingConfigurations) {
+            AppAuthenticationState.revokeHarness()
+        }
+        if (::allowedOrigin.isInitialized && !isChangingConfigurations) {
+            // 清除注入的鉴权 Cookie：token 每次启动重新生成，旧值无意义。
+            val cookieManager = CookieManager.getInstance()
+            cookieManager.setCookie(
+                HarnessSessionCookie.origin(allowedOrigin.port),
+                HarnessSessionCookie.expired(),
+            ) { cookieManager.flush() }
         }
         WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword()
         super.onDestroy()
     }
 
-    override fun onStop() {
-        super.onStop()
-        if (!isChangingConfigurations) {
-            AppAuthenticationState.revokeHarness()
-            finish()
-        }
+    private fun returnToMainActivity() {
+        if (!isFinishing) finish()
+    }
+
+    private fun handleMainFrameFailure() {
+        if (pageFailureHandled || isFinishing || isDestroyed) return
+        pageFailureHandled = true
+        Toast.makeText(this, R.string.harness_page_failed, Toast.LENGTH_SHORT).show()
+        returnToMainActivity()
     }
 
     private data class Origin(val scheme: String, val host: String, val port: Int, val initialUrl: String) {
@@ -143,6 +184,7 @@ class HarnessActivity : AppCompatActivity() {
         private val origin: Origin,
         private val username: String,
         private val password: String,
+        private val onMainFrameFailure: () -> Unit,
     ) : WebViewClient() {
         override fun onReceivedHttpAuthRequest(
             view: WebView?,
@@ -169,6 +211,14 @@ class HarnessActivity : AppCompatActivity() {
 
         override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: android.net.http.SslError?) {
             handler?.cancel()
+        }
+
+        override fun onReceivedError(
+            view: WebView?,
+            request: WebResourceRequest?,
+            error: WebResourceError?,
+        ) {
+            if (request?.isForMainFrame == true) onMainFrameFailure()
         }
 
         override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {

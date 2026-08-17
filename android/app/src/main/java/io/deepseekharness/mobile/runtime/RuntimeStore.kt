@@ -38,12 +38,20 @@ class RuntimeStore(context: Context) {
     @Volatile private var manifestCache: RuntimeManifest? = null
 
     @Synchronized
-    fun settings(): RuntimeSettings = RuntimeSettings(
-        manifestUrl = preferences.getString(KEY_MANIFEST_URL, null) ?: BuildConfig.DEFAULT_MANIFEST_URL,
-        manifestSha256 = preferences.getString(KEY_MANIFEST_SHA256, null) ?: BuildConfig.DEFAULT_MANIFEST_SHA256,
-        keepScreenAwake = preferences.getBoolean(KEY_KEEP_AWAKE, false),
-        terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
-    )
+    fun settings(): RuntimeSettings {
+        val storedUrl = preferences.getString(KEY_MANIFEST_URL, null)
+        val storedSha256 = preferences.getString(KEY_MANIFEST_SHA256, null)
+        val pinnedDefaultAvailable = BuildConfig.DEFAULT_MANIFEST_URL.isNotEmpty() &&
+            BuildConfig.DEFAULT_MANIFEST_SHA256.isNotEmpty()
+        val migrateEmptyBundledSource = storedUrl == "" && storedSha256 == "" && pinnedDefaultAvailable
+        val usePinnedDefault = (storedUrl == null && storedSha256 == null) || migrateEmptyBundledSource
+        return RuntimeSettings(
+            manifestUrl = if (usePinnedDefault) BuildConfig.DEFAULT_MANIFEST_URL else storedUrl.orEmpty(),
+            manifestSha256 = if (usePinnedDefault) BuildConfig.DEFAULT_MANIFEST_SHA256 else storedSha256.orEmpty(),
+            keepScreenAwake = preferences.getBoolean(KEY_KEEP_AWAKE, false),
+            terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
+        )
+    }
 
     @Synchronized
     fun saveSettings(settings: RuntimeSettings) {

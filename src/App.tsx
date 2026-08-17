@@ -1,7 +1,7 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import {
   AlertTriangle,
+  ArrowLeft,
   Bot,
   CheckCircle2,
   ChevronRight,
@@ -31,7 +31,6 @@ import {
   Wifi,
   X,
 } from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
 import { TerminalPanel } from './components/TerminalPanel'
 import { runtimeBridge } from './platform/native'
 import type {
@@ -43,7 +42,7 @@ import type {
   TerminalKind,
 } from './platform/types'
 
-type AppTab = 'agent' | 'terminal' | 'environment' | 'settings'
+type AppView = 'conversation' | 'settings' | 'terminal' | 'environment'
 type NoticeTone = 'success' | 'error' | 'info'
 
 interface Notice {
@@ -51,19 +50,6 @@ interface Notice {
   message: string
   tone: NoticeTone
 }
-
-interface TabDefinition {
-  id: AppTab
-  label: string
-  icon: LucideIcon
-}
-
-const TABS: TabDefinition[] = [
-  { id: 'agent', label: 'Agent', icon: Bot },
-  { id: 'terminal', label: '终端', icon: SquareTerminal },
-  { id: 'environment', label: '环境', icon: HardDrive },
-  { id: 'settings', label: '设置', icon: Settings2 },
-]
 
 const PHASE_META: Record<RuntimePhase, { label: string; tone: string }> = {
   'not-installed': { label: '未安装', tone: 'neutral' },
@@ -100,7 +86,7 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   URL_HOST_NOT_ALLOWED: '运行时下载地址必须使用允许的公网 HTTPS 主机。',
   DIGEST_INVALID: '配置的 SHA-256 格式无效。',
   DOWNLOAD_FAILED: '运行时下载失败，请稍后重试。',
-  DOWNLOAD_HOST_NOT_ALLOWED: '下载重定向离开了允许的主机。',
+  DOWNLOAD_HOST_NOT_ALLOWED: '运行时归档与清单必须使用同一下载主机。',
   DOWNLOAD_NETWORK_UNAVAILABLE: '网络不可用或下载连接已中断，可稍后继续。',
   DOWNLOAD_TIMEOUT: '下载连接或读取超时，可稍后继续。',
   DOWNLOAD_TLS_FAILED: '下载服务的 TLS 校验失败。',
@@ -227,103 +213,95 @@ function PhaseBadge({ phase }: { phase: RuntimePhase }) {
   )
 }
 
-interface AgentScreenProps {
+function runtimeInstalled(runtime: RuntimeState): boolean {
+  return runtime.installedVersion !== undefined || ['ready', 'running', 'stopping'].includes(runtime.phase)
+}
+
+function runtimeTransitioning(runtime: RuntimeState): boolean {
+  return ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
+}
+
+interface ConversationScreenProps {
   busy: string | null
   runtime: RuntimeState
   onInstall: () => void
-  onOpen: () => void
-  onStart: () => void
-  onStop: () => void
-  onTabChange: (tab: AppTab) => void
+  onLaunch: () => void
+  onOpenSettings: () => void
 }
 
-function AgentScreen({ busy, runtime, onInstall, onOpen, onStart, onStop, onTabChange }: AgentScreenProps) {
-  const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running' || runtime.phase === 'stopping'
-  const running = runtime.phase === 'running'
-  const transitional = runtime.phase === 'preparing' || runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting'
+function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings }: ConversationScreenProps) {
+  const installed = runtimeInstalled(runtime)
+  const transitioning = runtimeTransitioning(runtime)
+  const progress = runtime.totalBytes > 0
+    ? Math.min(100, Math.round((runtime.downloadedBytes / runtime.totalBytes) * 100))
+    : 0
 
   return (
-    <div className="screen agent-screen">
+    <div className="screen conversation-gate">
       <div className="screen-heading">
         <div>
-          <p className="eyebrow">工作区</p>
-          <h1>Agent</h1>
+          <p className="eyebrow">Harness 对话</p>
+          <h1>{runtime.phase === 'error' ? '运行环境需要处理' : installed ? '正在进入工作区' : '初始化 Ubuntu'}</h1>
         </div>
         <PhaseBadge phase={runtime.phase} />
       </div>
 
-      <section className={`agent-console ${running ? 'is-running' : ''}`}>
-        <div className="agent-console-copy">
-          <span className="agent-icon" aria-hidden="true"><Bot size={30} /></span>
-          <div>
-            <h2>{running ? 'Harness 已连接' : installed ? 'Harness 可以启动' : '准备 Ubuntu 环境'}</h2>
-            <p>
-              {running
-                ? '本机运行时与应用内页面均已就绪。'
-                : installed
-                  ? '启动服务后在应用内打开 Agent。'
-                  : transitional
-                    ? '运行时正在准备，完成后即可启动。'
-                    : '首次使用需要安装经过校验的运行时。'}
-            </p>
-          </div>
+      <section className="launch-panel">
+        <span className="launch-icon" aria-hidden="true">
+          {busy === 'launch' || transitioning ? <Loader2 className="spin" size={30} /> : <Bot size={30} />}
+        </span>
+        <div className="launch-copy">
+          <h2>
+            {runtime.phase === 'error'
+              ? '运行环境需要处理'
+              : transitioning
+              ? PHASE_META[runtime.phase].label
+              : installed
+                ? '正在打开 Harness 对话'
+                : '首次使用需要准备运行环境'}
+          </h2>
+          <p>
+            {runtime.phase === 'error'
+              ? runtimeErrorMessage(runtime.errorCode)
+              : transitioning
+              ? `${formatBytes(runtime.downloadedBytes)} / ${formatBytes(runtime.totalBytes)}`
+              : installed
+                ? '应用会自动启动本机服务并进入对话，无需通过浏览器访问。'
+                : '安装包会校验 Ubuntu 运行时，远程下载中断后可继续。'}
+          </p>
         </div>
 
-        <div className="agent-actions">
-          {running ? (
-            <>
-              <button className="button button-inverted" type="button" onClick={onOpen} disabled={busy !== null}>
-                {busy === 'open' ? <Loader2 className="spin" size={18} /> : <ExternalLink size={18} />}
-                打开 Harness
-              </button>
-              <button className="button button-ghost-dark" type="button" onClick={onStop} disabled={busy !== null}>
-                <Square size={17} />
-                停止
-              </button>
-            </>
-          ) : installed ? (
-            <button className="button button-inverted" type="button" onClick={onStart} disabled={busy !== null || runtime.phase === 'stopping'}>
-              {busy === 'start' ? <Loader2 className="spin" size={18} /> : <Play size={18} fill="currentColor" />}
-              启动 Harness
-            </button>
-          ) : (
-            <button className="button button-inverted" type="button" onClick={transitional ? () => onTabChange('environment') : onInstall} disabled={busy !== null}>
-              {busy === 'install' || transitional ? <Loader2 className="spin" size={18} /> : <Download size={18} />}
-              {transitional ? '查看进度' : '安装运行时'}
+        {transitioning && (
+          <div className="download-progress gate-progress" aria-live="polite">
+            <div className="progress-copy"><span>{PHASE_META[runtime.phase].label}</span><strong>{runtime.totalBytes > 0 ? `${progress}%` : '处理中'}</strong></div>
+            <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
+              <span style={{ width: `${runtime.totalBytes > 0 ? progress : 100}%` }} className={runtime.totalBytes > 0 ? '' : 'indeterminate'} />
+            </div>
+          </div>
+        )}
+
+        <div className="launch-actions">
+          {!installed && !transitioning && (
+            <button className="button button-primary" type="button" onClick={onInstall} disabled={busy !== null || !runtime.runnerAvailable}>
+              {busy === 'install' ? <Loader2 className="spin" size={18} /> : <Download size={18} />}
+              {runtime.phase === 'error' ? '重试安装' : '安装并进入对话'}
             </button>
           )}
+          {installed && !transitioning && busy !== 'launch' && (
+            <button className="button button-primary" type="button" onClick={onLaunch} disabled={busy !== null}>
+              <Play size={18} fill="currentColor" />重新打开对话
+            </button>
+          )}
+          <button className="button button-secondary" type="button" onClick={onOpenSettings} disabled={busy === 'install'}>
+            <Settings2 size={18} />应用设置
+          </button>
         </div>
       </section>
-
-      <div className="quick-grid" aria-label="运行状态">
-        <button className="quick-item" type="button" onClick={() => onTabChange('environment')}>
-          <span className="quick-icon blue"><Cpu size={19} /></span>
-          <span><small>架构</small><strong>{runtime.architecture}</strong></span>
-          <ChevronRight size={17} />
-        </button>
-        <button className="quick-item" type="button" onClick={() => onTabChange('terminal')}>
-          <span className="quick-icon green"><SquareTerminal size={19} /></span>
-          <span><small>Ubuntu</small><strong>{installed ? '终端可用' : '等待安装'}</strong></span>
-          <ChevronRight size={17} />
-        </button>
-        <button className="quick-item" type="button" onClick={() => onTabChange('settings')}>
-          <span className="quick-icon amber"><ShieldCheck size={19} /></span>
-          <span><small>连接</small><strong>应用内打开</strong></span>
-          <ChevronRight size={17} />
-        </button>
-      </div>
 
       {!runtime.runnerAvailable && (
         <div className="inline-alert warning" role="alert">
           <AlertTriangle size={19} />
-          <div><strong>本机运行器不可用</strong><span>请安装包含当前 ABI 运行器的应用版本。</span></div>
-        </div>
-      )}
-
-      {runtime.phase === 'error' && (
-        <div className="inline-alert danger" role="alert">
-          <AlertTriangle size={19} />
-          <div><strong>运行环境启动失败</strong><span>{runtimeErrorMessage(runtime.errorCode)}</span></div>
+          <div><strong>本机运行器不可用</strong><span>请安装包含当前 ARM64 运行器的应用版本。</span></div>
         </div>
       )}
     </div>
@@ -334,13 +312,14 @@ interface EnvironmentScreenProps {
   busy: string | null
   bundledSource: boolean
   runtime: RuntimeState
+  onBack: () => void
   onInstall: () => void
   onReset: () => void
   onStart: () => void
   onStop: () => void
 }
 
-function EnvironmentScreen({ busy, bundledSource, runtime, onInstall, onReset, onStart, onStop }: EnvironmentScreenProps) {
+function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop }: EnvironmentScreenProps) {
   const inProgress = ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
   const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running'
   const progress = runtime.totalBytes > 0
@@ -366,12 +345,15 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onInstall, onReset, o
 
   return (
     <div className="screen environment-screen">
-      <div className="screen-heading">
+      <div className="screen-heading management-heading">
         <div>
           <p className="eyebrow">本机运行时</p>
           <h1>Ubuntu 环境</h1>
         </div>
-        <PhaseBadge phase={runtime.phase} />
+        <div className="heading-actions">
+          <PhaseBadge phase={runtime.phase} />
+          <button className="icon-button" type="button" aria-label="返回设置" title="返回设置" onClick={onBack}><ArrowLeft size={19} /></button>
+        </div>
       </div>
 
       <section className="runtime-overview">
@@ -421,7 +403,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onInstall, onReset, o
           )}
           {runtime.phase === 'ready' && (
             <button className="button button-primary" type="button" onClick={onStart} disabled={busy !== null}>
-              {busy === 'start' ? <Loader2 className="spin" size={18} /> : <Play size={18} fill="currentColor" />}
+              {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Play size={18} fill="currentColor" />}
               启动
             </button>
           )}
@@ -464,18 +446,20 @@ interface TerminalScreenProps {
   bridge: typeof runtimeBridge
   fontSize: number
   onAuthorize: () => void
+  onBack: () => void
+  onConnect: () => void
   onError: (message: string) => void
+  onOpenEnvironment: () => void
   onOpenShizuku: () => void
-  onTabChange: (tab: AppTab) => void
   runtime: RuntimeState
   shizuku: ShizukuState
 }
 
-function TerminalScreen({ bridge, fontSize, onAuthorize, onError, onOpenShizuku, onTabChange, runtime, shizuku }: TerminalScreenProps) {
+function TerminalScreen({ bridge, fontSize, onAuthorize, onBack, onConnect, onError, onOpenEnvironment, onOpenShizuku, runtime, shizuku }: TerminalScreenProps) {
   const [kind, setKind] = useState<TerminalKind>('ubuntu')
   const [epoch, setEpoch] = useState(0)
   const ubuntuReady = runtime.phase === 'ready' || runtime.phase === 'running'
-  const deviceReady = shizuku.installed && shizuku.running && shizuku.permission === 'granted'
+  const deviceReady = shizuku.installed && shizuku.running && shizuku.permission === 'granted' && shizuku.connected
   const ready = kind === 'ubuntu' ? ubuntuReady : deviceReady
 
   return (
@@ -485,9 +469,14 @@ function TerminalScreen({ bridge, fontSize, onAuthorize, onError, onOpenShizuku,
           <p className="eyebrow">交互会话</p>
           <h1>终端</h1>
         </div>
-        <button className="icon-button" type="button" title="重新连接" aria-label="重新连接终端" onClick={() => setEpoch(value => value + 1)} disabled={!ready}>
-          <RefreshCw size={19} />
-        </button>
+        <div className="heading-actions">
+          <button className="icon-button" type="button" title="重新连接" aria-label="重新连接终端" onClick={() => setEpoch(value => value + 1)} disabled={!ready}>
+            <RefreshCw size={19} />
+          </button>
+          <button className="icon-button" type="button" title="返回设置" aria-label="返回设置" onClick={onBack}>
+            <ArrowLeft size={19} />
+          </button>
+        </div>
       </div>
 
       <div className="segmented" role="tablist" aria-label="终端类型">
@@ -505,20 +494,21 @@ function TerminalScreen({ bridge, fontSize, onAuthorize, onError, onOpenShizuku,
         <div className="empty-terminal">
           <span><HardDrive size={27} /></span>
           <h2>Ubuntu 尚未就绪</h2>
-          <button className="button button-primary" type="button" onClick={() => onTabChange('environment')}>
+          <button className="button button-primary" type="button" onClick={onOpenEnvironment}>
             前往环境
           </button>
         </div>
       ) : (
         <div className="empty-terminal">
           <span><KeyRound size={27} /></span>
-          <h2>{!shizuku.installed ? '未安装 Shizuku' : !shizuku.running ? `Shizuku 未运行${shizuku.version ? '（v' + shizuku.version + '）' : ''}` : '需要 Shizuku 授权'}</h2>
-{shizuku.installed && !shizuku.running && (
-  <p className="shizuku-hint">Shizuku 服务不会自动启动：请在 Shizuku App 内通过无线调试或 adb 启动服务（设备重启后需重新启动）。</p>
-)}
+          <h2>{!shizuku.installed ? '未安装 Shizuku' : !shizuku.running ? `Shizuku 未运行${shizuku.version ? '（v' + shizuku.version + '）' : ''}` : shizuku.permission !== 'granted' ? '需要 Shizuku 授权' : 'Shizuku 连接未就绪'}</h2>
+          {shizuku.installed && !shizuku.running && (
+            <p className="shizuku-hint">Shizuku 服务不会自动启动：请在 Shizuku App 内通过无线调试或 adb 启动服务（设备重启后需重新启动）。</p>
+          )}
           {shizuku.installed ? (
-            <button className="button button-primary" type="button" onClick={shizuku.running ? onAuthorize : onOpenShizuku}>
-              <ShieldCheck size={18} />{shizuku.running ? '请求授权' : '打开 Shizuku'}
+            <button className="button button-primary" type="button" onClick={!shizuku.running ? onOpenShizuku : shizuku.permission === 'granted' ? onConnect : onAuthorize}>
+              {shizuku.permission === 'granted' && shizuku.running ? <RefreshCw size={18} /> : <ShieldCheck size={18} />}
+              {!shizuku.running ? '打开 Shizuku' : shizuku.permission === 'granted' ? '连接 Shizuku' : '请求授权'}
             </button>
           ) : (
             <button className="button button-secondary" type="button" onClick={onOpenShizuku}>
@@ -533,14 +523,20 @@ function TerminalScreen({ bridge, fontSize, onAuthorize, onError, onOpenShizuku,
 
 interface SettingsScreenProps {
   busy: string | null
+  runtime: RuntimeState
   settings: RuntimeSettings | null
   shizuku: ShizukuState
   onAuthorize: () => void
+  onConnect: () => void
+  onLaunch: () => void
+  onOpenEnvironment: () => void
   onOpenShizuku: () => void
+  onOpenTerminal: () => void
   onSave: (settings: RuntimeSettings) => void
+  onStop: () => void
 }
 
-function SettingsScreen({ busy, settings, shizuku, onAuthorize, onOpenShizuku, onSave }: SettingsScreenProps) {
+function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConnect, onLaunch, onOpenEnvironment, onOpenShizuku, onOpenTerminal, onSave, onStop }: SettingsScreenProps) {
   const [draft, setDraft] = useState<RuntimeSettings | null>(settings)
 
   useEffect(() => setDraft(settings), [settings])
@@ -561,18 +557,47 @@ function SettingsScreen({ busy, settings, shizuku, onAuthorize, onOpenShizuku, o
 
   return (
     <div className="screen settings-screen">
-      <div className="screen-heading">
+      <div className="screen-heading management-heading">
         <div>
-          <p className="eyebrow">应用配置</p>
+          <p className="eyebrow">应用管理</p>
           <h1>设置</h1>
         </div>
+        <button className="button button-primary conversation-button" type="button" onClick={onLaunch} disabled={busy !== null || !runtimeInstalled(runtime)}>
+          {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Bot size={18} />}
+          返回对话
+        </button>
       </div>
+
+      <section className="management-list" aria-label="运行环境管理">
+        <div className="management-service">
+          <span className="management-icon dark"><Bot size={20} /></span>
+          <span className="management-copy">
+            <strong>Harness 服务</strong>
+            <small>{runtime.phase === 'running' ? '正在本机运行' : runtimeInstalled(runtime) ? '已停止，可随时启动' : '等待 Ubuntu 环境'}</small>
+          </span>
+          {runtime.phase === 'running' ? (
+            <button className="button button-danger-quiet compact-button" type="button" onClick={onStop} disabled={busy !== null}><Square size={16} />停止</button>
+          ) : (
+            <PhaseBadge phase={runtime.phase} />
+          )}
+        </div>
+        <button className="management-row" type="button" onClick={onOpenEnvironment}>
+          <span className="management-icon green"><HardDrive size={20} /></span>
+          <span className="management-copy"><strong>Ubuntu 运行时</strong><small>安装进度、版本、来源与重置</small></span>
+          <ChevronRight size={18} />
+        </button>
+        <button className="management-row" type="button" onClick={onOpenTerminal}>
+          <span className="management-icon blue"><SquareTerminal size={20} /></span>
+          <span className="management-copy"><strong>终端与设备 Shell</strong><small>Ubuntu 终端、Shizuku 和本机 adb</small></span>
+          <ChevronRight size={18} />
+        </button>
+      </section>
 
       <form className="settings-form" onSubmit={event => { event.preventDefault(); onSave(draft) }}>
         <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
-            <div><h2 id="download-settings">运行时来源</h2><p>留空使用内置环境，或填写固定摘要的 HTTPS 清单</p></div>
+            <div><h2 id="download-settings">运行时来源</h2><p>官方包已固定下载源；仅内嵌开发包可留空</p></div>
           </div>
           <label className="field">
             <span>清单地址</span>
@@ -648,8 +673,13 @@ function SettingsScreen({ busy, settings, shizuku, onAuthorize, onOpenShizuku, o
                 <ExternalLink size={18} />打开 Shizuku
               </button>
             )}
-            {shizuku.permission === 'granted' && (
-              <div className="permission-granted"><CheckCircle2 size={18} />{shizuku.connected ? '连接可用' : '权限可用'}</div>
+            {shizuku.permission === 'granted' && !shizuku.connected && (
+              <button className="button button-secondary" type="button" onClick={onConnect} disabled={busy !== null}>
+                {busy === 'shizuku-connect' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}连接 Shizuku
+              </button>
+            )}
+            {shizuku.permission === 'granted' && shizuku.connected && (
+              <div className="permission-granted"><CheckCircle2 size={18} />连接可用</div>
             )}
           </div>
         </section>
@@ -715,7 +745,7 @@ function ResetDialog({ busy, onCancel, onConfirm }: ResetDialogProps) {
 }
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<AppTab>('environment')
+  const [activeView, setActiveView] = useState<AppView>('conversation')
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME)
   const [settings, setSettings] = useState<RuntimeSettings | null>(null)
   const [shizuku, setShizuku] = useState<ShizukuState>(EMPTY_SHIZUKU)
@@ -723,14 +753,9 @@ export function App() {
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [resetOpen, setResetOpen] = useState(false)
-  const [onboardingOpen, setOnboardingOpen] = useState<boolean>(() => {
-    try {
-      return typeof localStorage === 'undefined' ? false : localStorage.getItem(ONBOARDING_STORAGE_KEY) !== 'done'
-    } catch {
-      return false
-    }
-  })
   const noticeId = useRef(0)
+  const busyRef = useRef<string | null>(null)
+  const autoLaunchAttempted = useRef(false)
   const shizukuConnecting = useRef(false)
 
   const notify = useCallback((message: string, tone: NoticeTone = 'info') => {
@@ -752,45 +777,53 @@ export function App() {
     let progressRevision = 0
     let latestProgress: RuntimeProgress | undefined
 
+    const progressHandlePromise = runtimeBridge.addRuntimeProgressListener(progress => {
+      if (cancelled) return
+      progressRevision += 1
+      latestProgress = progress
+      setRuntime(current => mergeRuntimeProgress(current, progress))
+    })
+      .then(handle => {
+        if (cancelled) return handle.remove()
+        removeProgress = handle.remove
+      })
+      .catch(error => {
+        if (!cancelled) notify(errorMessage(error), 'error')
+      })
+
     void (async () => {
+      const revisionBeforeSnapshot = progressRevision
       try {
-        const progressHandle = await runtimeBridge.addRuntimeProgressListener(progress => {
-          if (cancelled) return
-          progressRevision += 1
-          latestProgress = progress
-          setRuntime(current => mergeRuntimeProgress(current, progress))
-        })
-        if (cancelled) {
-          await progressHandle.remove()
-          return
-        }
-        removeProgress = progressHandle.remove
-
-        const revisionBeforeSnapshot = progressRevision
-        const [nextRuntime, nextSettings, nextShizuku] = await Promise.all([
-          runtimeBridge.getState(),
-          runtimeBridge.getSettings(),
-          runtimeBridge.getShizukuState(),
-        ])
+        const nextRuntime = await runtimeBridge.getState()
         if (cancelled) return
-
         const initialRuntime = progressRevision === revisionBeforeSnapshot || latestProgress === undefined
           ? nextRuntime
           : mergeRuntimeProgress(nextRuntime, latestProgress)
         setRuntime(initialRuntime)
-        setSettings(nextSettings)
-        setShizuku(nextShizuku)
-        setActiveTab(['ready', 'running'].includes(initialRuntime.phase) ? 'agent' : 'environment')
       } catch (error) {
-        if (!cancelled) notify(errorMessage(error), 'error')
+        if (!cancelled) {
+          setRuntime(current => ({ ...current, phase: 'error', errorCode: 'STATE_UNAVAILABLE' }))
+          notify(errorMessage(error), 'error')
+        }
       } finally {
         if (!cancelled) setBooting(false)
       }
     })()
 
+    void runtimeBridge.getSettings()
+      .then(next => { if (!cancelled) setSettings(next) })
+      .catch(error => { if (!cancelled) notify(errorMessage(error), 'error') })
+
+    void runtimeBridge.getShizukuState()
+      .then(next => { if (!cancelled) setShizuku(next) })
+      .catch(() => {
+        // Shizuku is optional and must never block the Harness conversation.
+      })
+
     return () => {
       cancelled = true
       if (removeProgress !== undefined) void removeProgress()
+      void progressHandlePromise
     }
   }, [notify])
 
@@ -829,7 +862,8 @@ export function App() {
   }, [notify])
 
   const run = useCallback(async (id: string, operation: () => Promise<void>, success?: string) => {
-    if (busy !== null) return
+    if (busyRef.current !== null) return
+    busyRef.current = id
     setBusy(id)
     try {
       await operation()
@@ -837,9 +871,10 @@ export function App() {
     } catch (error) {
       notify(errorMessage(error), 'error')
     } finally {
+      busyRef.current = null
       setBusy(null)
     }
-  }, [busy, notify])
+  }, [notify])
 
   const installRuntime = useCallback(() => {
     void run('install', async () => {
@@ -858,24 +893,54 @@ export function App() {
       }
       const next = await runtimeBridge.getState()
       setRuntime(next)
+      autoLaunchAttempted.current = false
+      setActiveView('conversation')
     }, 'Ubuntu 运行时已安装')
   }, [run, settings])
 
-  const startHarness = useCallback(() => {
-    void run('start', async () => {
-      const next = await runtimeBridge.startHarness()
-      setRuntime(next)
-    }, 'Harness 已启动')
-  }, [run])
+  const launchHarness = useCallback(() => {
+    if (busyRef.current !== null) return
+    autoLaunchAttempted.current = true
+    busyRef.current = 'launch'
+    setBusy('launch')
+    void (async () => {
+      try {
+        let nextRuntime = runtime
+        if (nextRuntime.phase !== 'running') {
+          nextRuntime = await runtimeBridge.startHarness()
+          setRuntime(nextRuntime)
+        }
+        // HarnessActivity overlays MainActivity. Keeping settings underneath makes
+        // its native management button return to the intended management surface.
+        setActiveView('settings')
+        await runtimeBridge.openHarness()
+      } catch (error) {
+        setActiveView('conversation')
+        try {
+          setRuntime(await runtimeBridge.getState())
+        } catch {
+          // The launch error is the actionable failure; refresh is best effort.
+        }
+        notify(errorMessage(error), 'error')
+      } finally {
+        busyRef.current = null
+        setBusy(null)
+      }
+    })()
+  }, [notify, runtime])
 
-  const openHarness = useCallback(() => {
-    void run('open', () => runtimeBridge.openHarness())
-  }, [run])
+  useEffect(() => {
+    if (booting || activeView !== 'conversation' || busy !== null || autoLaunchAttempted.current) return
+    if (runtime.phase === 'running' || (runtimeInstalled(runtime) && runtime.phase !== 'stopping')) {
+      launchHarness()
+    }
+  }, [activeView, booting, busy, launchHarness, runtime])
 
   const stopRuntime = useCallback(() => {
     void run('stop', async () => {
       const next = await runtimeBridge.stopRuntime()
       setRuntime(next)
+      setActiveView('settings')
     }, '运行时已停止')
   }, [run])
 
@@ -884,6 +949,8 @@ export function App() {
       const next = await runtimeBridge.reset('RESET_RUNTIME')
       setRuntime(next)
       setResetOpen(false)
+      autoLaunchAttempted.current = false
+      setActiveView('conversation')
     }, 'Ubuntu 环境已重置')
   }, [run])
 
@@ -901,31 +968,29 @@ export function App() {
     }, 'Shizuku 已授权')
   }, [run])
 
+  const connectShizuku = useCallback(() => {
+    void run('shizuku-connect', async () => {
+      const next = await runtimeBridge.connectShizuku()
+      setShizuku(next)
+    }, 'Shizuku 已连接')
+  }, [run])
+
   const openShizuku = useCallback(() => {
     void run('open-shizuku', () => runtimeBridge.openShizuku())
   }, [run])
 
-  const finishOnboarding = useCallback(() => {
-    try {
-      localStorage.setItem(ONBOARDING_STORAGE_KEY, 'done')
-    } catch {
-      // 无持久化环境（测试）时仅关闭本次会话的引导。
-    }
-    setOnboardingOpen(false)
-  }, [])
-
   const screen = useMemo(() => {
-    switch (activeTab) {
-      case 'agent':
-        return <AgentScreen busy={busy} runtime={runtime} onInstall={installRuntime} onOpen={openHarness} onStart={startHarness} onStop={stopRuntime} onTabChange={setActiveTab} />
+    switch (activeView) {
+      case 'conversation':
+        return <ConversationScreen busy={busy} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} />
       case 'terminal':
-        return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onError={terminalError} onOpenShizuku={openShizuku} onTabChange={setActiveTab} runtime={runtime} shizuku={shizuku} />
+        return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onBack={() => setActiveView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
       case 'environment':
-        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={startHarness} onStop={stopRuntime} />
+        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => setActiveView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} />
       case 'settings':
-        return <SettingsScreen busy={busy} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onOpenShizuku={openShizuku} onSave={saveSettings} />
+        return <SettingsScreen busy={busy} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onConnect={connectShizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} onOpenTerminal={() => setActiveView('terminal')} onSave={saveSettings} onStop={stopRuntime} />
     }
-  }, [activeTab, busy, installRuntime, openHarness, openShizuku, requestShizukuPermission, runtime, saveSettings, settings, shizuku, startHarness, stopRuntime, terminalError])
+  }, [activeView, busy, connectShizuku, installRuntime, launchHarness, openShizuku, requestShizukuPermission, runtime, saveSettings, settings, shizuku, stopRuntime, terminalError])
 
   if (booting) {
     return (
@@ -938,60 +1003,22 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
-      <aside className="desktop-sidebar">
-        <Brand />
-        <nav aria-label="主导航">
-          {TABS.map(tab => {
-            const Icon = tab.icon
-            return (
-              <button key={tab.id} type="button" className={activeTab === tab.id ? 'active' : ''} onClick={() => setActiveTab(tab.id)} aria-current={activeTab === tab.id ? 'page' : undefined}>
-                <Icon size={20} />
-                <span>{tab.label}</span>
-              </button>
-            )
-          })}
-        </nav>
-        <div className="sidebar-runtime">
-          <PhaseBadge phase={runtime.phase} />
-          <small>{runtime.installedVersion ?? runtime.architecture}</small>
-        </div>
-      </aside>
-
+    <div className="app-shell management-shell">
       <header className="mobile-header">
         <Brand />
-        <PhaseBadge phase={runtime.phase} />
+        <div className="header-actions">
+          <PhaseBadge phase={runtime.phase} />
+          {activeView === 'conversation' && (
+            <button className="icon-button header-settings" type="button" aria-label="打开应用设置" title="应用设置" onClick={() => setActiveView('settings')}>
+              <Settings2 size={19} />
+            </button>
+          )}
+        </div>
       </header>
 
       <main className="app-main">{screen}</main>
 
-      <nav className="bottom-nav" aria-label="主导航">
-        {TABS.map(tab => {
-          const Icon = tab.icon
-          return (
-            <button key={tab.id} type="button" className={activeTab === tab.id ? 'active' : ''} onClick={() => setActiveTab(tab.id)} aria-current={activeTab === tab.id ? 'page' : undefined}>
-              <Icon size={21} />
-              <span>{tab.label}</span>
-            </button>
-          )
-        })}
-      </nav>
-
       {resetOpen && <ResetDialog busy={busy === 'reset'} onCancel={() => setResetOpen(false)} onConfirm={confirmReset} />}
-
-      {onboardingOpen && runtime.phase === 'not-installed' && (
-        <Onboarding
-          busy={busy}
-          runtime={runtime}
-          shizuku={shizuku}
-          settings={settings}
-          onInstall={installRuntime}
-          onAuthorize={requestShizukuPermission}
-          onOpenShizuku={openShizuku}
-          onOpenHarness={openHarness}
-          onDone={finishOnboarding}
-        />
-      )}
 
       {notice !== null && (
         <div className={`toast toast-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>

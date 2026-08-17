@@ -18,6 +18,7 @@ import tarfile
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Callable, Iterable, Iterator
+from urllib.parse import urlsplit
 
 
 MAX_ARCHIVE_ENTRIES = 250_000
@@ -447,6 +448,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--dsh-root", required=True, type=Path)
     parser.add_argument("--dsh-version", default="0.1.0-rc.6")
     parser.add_argument("--runtime-version", required=True)
+    parser.add_argument(
+        "--rootfs-url",
+        default=None,
+        help="HTTPS URL written to the manifest for remote installs; omitted for embedded-only bundles",
+    )
     parser.add_argument("--compression", choices=tuple(COMPRESSION_OUTPUT_SUFFIXES), default="gzip")
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--manifest", required=True, type=Path)
@@ -466,6 +472,23 @@ def main() -> None:
     if args.source_date_epoch < 0:
         raise BuildError("source date epoch must be non-negative")
     validate_output_extension(args.output, args.compression)
+    rootfs_url = args.rootfs_url or f"https://bundled.invalid/runtime/rootfs{COMPRESSION_OUTPUT_SUFFIXES[args.compression]}"
+    try:
+        parsed_rootfs_url = urlsplit(rootfs_url)
+        rootfs_port = parsed_rootfs_url.port
+    except ValueError as error:
+        raise BuildError("rootfs URL is invalid") from error
+    if (
+        len(rootfs_url) > 2048
+        or parsed_rootfs_url.scheme.lower() != "https"
+        or not parsed_rootfs_url.hostname
+        or parsed_rootfs_url.username is not None
+        or parsed_rootfs_url.password is not None
+        or parsed_rootfs_url.fragment
+        or (rootfs_port is not None and not 1 <= rootfs_port <= 65535)
+        or any(ord(character) < 32 or ord(character) == 127 for character in rootfs_url)
+    ):
+        raise BuildError("rootfs URL must be a bounded HTTPS URL without credentials or fragments")
     verify_input(args.ubuntu, args.ubuntu_sha256, "Ubuntu archive")
     verify_input(args.node, args.node_sha256, "Node.js archive")
     dsh_entrypoint = args.dsh_root / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
@@ -546,7 +569,7 @@ def main() -> None:
             "version": args.runtime_version,
             "architecture": "arm64-v8a",
             "rootfs": {
-                "url": f"https://bundled.invalid/runtime/rootfs{COMPRESSION_OUTPUT_SUFFIXES[args.compression]}",
+                "url": rootfs_url,
                 "sha256": archive_sha256,
                 "compressedBytes": compressed_bytes,
                 "extractedBytes": writer.extracted_bytes,

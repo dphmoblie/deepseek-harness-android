@@ -43,7 +43,9 @@
         <activity
             android:name=".HarnessActivity"
             android:exported="false"
-            android:screenOrientation="unspecified" />
+            android:screenOrientation="unspecified"
+            android:theme="@style/AppTheme.NoActionBar"
+            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".MainActivity"

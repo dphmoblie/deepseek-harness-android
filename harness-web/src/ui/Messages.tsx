@@ -1,3 +1,6 @@
+import { Image as ImageIcon } from 'lucide-react'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 import { callUnary } from '../api/wire'
@@ -9,21 +12,23 @@ export function Blocks(props: {
   blocks: ContentBlock[]
   sessionId?: SessionId
   streaming?: boolean
+  depth?: number
 }): ReactElement {
-  const { blocks, sessionId } = props
+  const { blocks, sessionId, depth = 0 } = props
+  if (depth > 4) return <div className="unsupported-block">嵌套内容过深，已停止展开</div>
   return (
     <div className="blocks">
       {blocks.map((block, index) => {
         // ContentBlock 含 merge-extensible 透传分支，switch 不窄化，case 内显式收窄
         switch (block.type) {
           case 'text':
-            return <p key={index} className="block-text">{(block as { text: string }).text}</p>
+            return <MarkdownText key={index} text={(block as { text: string }).text} />
           case 'reasoning': {
             const { text } = block as { text: string }
             return (
               <details key={index} className="block-reasoning">
                 <summary>思考过程</summary>
-                <p className="block-text">{text}</p>
+                <MarkdownText text={text} />
               </details>
             )
           }
@@ -37,11 +42,12 @@ export function Blocks(props: {
             )
           }
           case 'tool-result': {
-            const { isError } = block as { isError?: boolean }
+            const { isError, content } = block as { isError?: boolean; content?: ContentBlock[] }
             return (
-              <div key={index} className="block-tool-result">
-                工具结果{isError === true ? '（失败）' : ''}
-              </div>
+              <details key={index} className="block-tool-result">
+                <summary>工具结果{isError === true ? '（失败）' : ''}</summary>
+                {Array.isArray(content) && <Blocks blocks={content} sessionId={sessionId} depth={depth + 1} />}
+              </details>
             )
           }
           case 'image': {
@@ -51,9 +57,27 @@ export function Blocks(props: {
             )
           }
           default:
-            return null
+            return <div key={index} className="unsupported-block">暂不支持的内容块：{shorten(block.type)}</div>
         }
       })}
+    </div>
+  )
+}
+
+function MarkdownText(props: { text: string }): ReactElement {
+  const bounded = props.text.slice(0, 200_000)
+  return (
+    <div className="block-text markdown-body">
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        skipHtml
+        components={{
+          a: ({ children }) => <span className="markdown-link">{children}</span>,
+          img: ({ alt }) => <span className="block-image-placeholder"><ImageIcon size={15} />{alt ?? '图片'}</span>,
+        }}
+      >
+        {bounded}
+      </Markdown>
     </div>
   )
 }
@@ -96,7 +120,7 @@ function LazyImage(props: { sessionId?: SessionId; attachmentId: string; name?: 
   }, [sessionId, attachmentId])
 
   if (src === null) {
-    return <span className="block-image-placeholder">🖼 {name ?? '图片'}</span>
+    return <span className="block-image-placeholder"><ImageIcon size={15} />{name ?? '图片'}</span>
   }
   return <img className="block-image" src={src} alt={name ?? '图片'} />
 }
@@ -142,6 +166,7 @@ export function MessageItem(props: { entry: ChatEntry; sessionId: SessionId }): 
             <summary>
               <span className="tool-name">工具结果{entry.isError ? '（失败）' : ''}</span>
             </summary>
+            {typeof entry.view?.view.card === 'string' && <p className="tool-view-label">{entry.view.view.card}</p>}
             <Blocks blocks={entry.message.content} />
           </details>
         </div>
@@ -152,9 +177,10 @@ export function MessageItem(props: { entry: ChatEntry; sessionId: SessionId }): 
 }
 
 function prettyJson(raw: string): string {
+  const bounded = raw.slice(0, 200_000)
   try {
-    return JSON.stringify(JSON.parse(raw), null, 2)
+    return JSON.stringify(JSON.parse(bounded), null, 2)
   } catch {
-    return raw
+    return bounded
   }
 }

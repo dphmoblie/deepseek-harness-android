@@ -1,8 +1,9 @@
 # Release checklist
 
-Generated rootfs and native ELF files are intentionally excluded from Git. A
-local release APK may nevertheless contain them. Complete every applicable
-item below for the exact APK before publishing or otherwise distributing it.
+Generated rootfs and native ELF files are intentionally excluded from Git.
+The official `0.1.7` workflow publishes a thin APK and separate pinned runtime
+assets. Complete every applicable item below for the exact APK, manifest, and
+rootfs before publishing or otherwise distributing them.
 
 ## Runtime artifacts
 
@@ -15,24 +16,29 @@ item below for the exact APK before publishing or otherwise distributing it.
 - Retain Ubuntu package copyright metadata, the Node.js license and bundled
   dependency notices, the DeepSeek Harness MIT license, and the licenses of
   every npm package copied into the rootfs.
-- For a self-contained build, inspect the APK for
-  `assets/runtime/runtime-manifest.json` and
-  `assets/runtime/rootfs.bundle`. Independently verify the embedded archive's
-  compressed length and SHA-256 against its manifest.
-- For a smaller remote-runtime build, publish the rootfs and manifest over
-  HTTPS, set both `DSH_RUNTIME_MANIFEST_URL` and
-  `DSH_RUNTIME_MANIFEST_SHA256`, and independently verify the pinned manifest
-  bytes, archive SHA-256, byte lengths, architecture, and `gzip` compression
-  value. Do not put credentials in URLs or either setting.
-- Test the selection rules: no remote pair uses the embedded assets; a full
-  valid pair uses the remote override; a partial or invalid pair fails closed.
-- Verify an embedded installation reports `preparing` while copying the APK
-  asset and never presents that local copy as a completed network download.
+- Confirm the workflow tag is exactly `v0.1.7-mobile-<run_number>` and that the
+  rootfs URL recorded in `runtime-manifest.json` points to `rootfs.bundle`
+  under that same tag.
+- Independently verify the finished manifest SHA-256, rootfs SHA-256, byte
+  lengths, `arm64-v8a` architecture, `gzip` compression value, and runtime
+  version after the mobile Harness frontend has been injected.
+- Confirm CI compiles that exact manifest Release URL and SHA-256 into the
+  matching APK. Install the official APK with no prior app data and verify the
+  install action works without entering or changing a source URL or digest.
+- Inspect the APK and fail the release if it contains
+  `assets/runtime/rootfs.bundle`, `runtime-manifest.json`, either `.bak` file,
+  another rootfs archive, or another generated manifest. Record the thin APK
+  byte size and investigate any unexpected increase.
+- Confirm the published Release contains exactly the intended APK,
+  `rootfs.bundle`, and `runtime-manifest.json`, and that its notes identify the
+  thin-APK download and resume behavior without asking users to configure a
+  manifest manually.
 - Interrupt a remote rootfs transfer, restart the app, and verify the matching
   `rootfs-<sha256>.part` resumes with Range. Reject an incorrect HTTP 206 or
   `Content-Range`, and verify HTTP 200 and 416 responses to a resume request
   discard the partial and download again from byte zero. Confirm offline, TLS,
-  and timeout failures enter `error` without deleting the bounded partial.
+  timeout, and truncated responses enter `error` without deleting a valid
+  bounded partial or advancing the UI to extraction.
 - Inspect the APK for both `lib/arm64-v8a/libdsh_proot.so` and
   `lib/arm64-v8a/libdsh_proot_loader.so`, verify their ARM64 ELF type and
   release-recorded SHA-256 values, and test that the loader is resolved from
@@ -42,15 +48,16 @@ item below for the exact APK before publishing or otherwise distributing it.
 
 - Verify an unauthenticated Harness HTTP request and WebSocket upgrade are both
   rejected, the current non-exported internal WebView succeeds without
-  a visible Basic-auth prompt, and a credential from an earlier Harness process
-  no longer works. Loopback binding alone is not an authentication boundary on
+  a visible Basic-auth prompt, its HttpOnly origin cookie is installed before
+  the first page load, and a credential from an earlier Harness process no
+  longer works. Loopback binding alone is not an authentication boundary on
   Android.
 - Verify that runtime configuration files containing credentials are created with owner-only permissions inside the guest.
-- Confirm the manifest contains the official `ShizukuProvider`; Shizuku remains optional, explicitly authorized, and limited to a user-visible fixed device Shell session.
-- Kill and restart the Shizuku binder and UserService. Verify active sessions close, a subsequent terminal request reconnects, and `connected` is true only while the authorized UserService binder is live.
+- Confirm the manifest contains the official `ShizukuProvider`; Shizuku remains optional, explicitly authorized, explicitly connected, and limited to a user-visible fixed device Shell session.
+- Kill and restart the Shizuku binder and UserService. Verify active sessions close, the UI returns to an authorized-but-disconnected state, Connect Shizuku performs a fresh bind, and `connected` is true only while the authorized UserService binder is live.
 - Run Android lint, JVM tests, and an instrumented test on every supported Android API level and an ARM64 physical device.
 - Review the final APK network security configuration, exported components, backup rules, and WebView debugging state.
-- Verify app startup and management operations do not open the Android device-credential prompt, and verify the owner-only 90-day audit rotation on every supported Android API level.
+- Verify app startup enters the Harness conversation directly when the runtime is ready, the native toolbar returns to Settings, and neither startup nor management operations open an Android device-credential prompt. Verify the owner-only 90-day audit rotation on every supported Android API level.
 
 ## Reproducibility and licensing
 

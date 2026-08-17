@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item
+        android:id="@+id/action_harness_management"
+        android:contentDescription="@string/harness_open_management"
+        android:icon="@drawable/ic_settings"
+        android:title="@string/harness_open_management"
+        app:showAsAction="always" />
+</menu>

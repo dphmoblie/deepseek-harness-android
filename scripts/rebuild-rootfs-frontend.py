@@ -3,7 +3,8 @@
 
 原理：dsh 的 distIndex 由 require.resolve('@deepseek-ai/dsh-web-frontend/dist/index.html')
 解析到 .pnpm 下的真实目录，流式重写 tar 时跳过旧 dist 条目、追加新 dist 树即可，
-无需改动 dsh 代码。全程不解压到磁盘；旧 bundle 保留 .bak 备份。
+无需改动 dsh 代码。全程不解压到磁盘；替换期间使用 .bak 事务备份，
+校验成功后立即删除，避免 Android AAPT 把备份也打进 APK。
 """
 
 from __future__ import annotations
@@ -274,6 +275,9 @@ def main() -> None:
     temporary_manifest = manifest_path.with_name(f"{manifest_path.name}.{os.getpid()}.part")
     backup_bundle = bundle.with_name(f"{bundle.name}.bak")
     backup_manifest = manifest_path.with_name(f"{manifest_path.name}.bak")
+    bundle_backed_up = False
+    manifest_backed_up = False
+    committed = False
 
     try:
         print(f"[rebuild] 流式重建（跳过旧 dist，追加新 dist，gzip 级别 {ARGS.compression_level}）…")
@@ -294,20 +298,28 @@ def main() -> None:
             manifest_output.flush()
             os.fsync(manifest_output.fileno())
 
-        # 原子替换：旧文件保底备份为 .bak（下次运行会覆盖）
+        # 原子替换：校验新文件期间用 .bak 保留旧文件，异常时立即回滚。
         os.replace(bundle, backup_bundle)
+        bundle_backed_up = True
         os.replace(temporary_output, bundle)
         os.replace(manifest_path, backup_manifest)
+        manifest_backed_up = True
         os.replace(temporary_manifest, manifest_path)
 
         verify_rebuilt(bundle, expected)
+        committed = True
+
+        # 备份只能在校验通过后删除。assets 下残留的任意 .bak 都会被 AAPT 打包，
+        # 使 APK 同时包含新旧两份 rootfs。
+        backup_bundle.unlink(missing_ok=True)
+        backup_manifest.unlink(missing_ok=True)
 
         print(
             json.dumps(
                 {
                     "bundle": str(bundle),
                     "manifest": str(manifest_path),
-                    "backupBundle": str(backup_bundle),
+                    "transactionBackupsRemoved": True,
                     "runtimeVersion": ARGS.runtime_version,
                     "compressedBytes": compressed_bytes,
                     "extractedBytes": manifest["rootfs"]["extractedBytes"],
@@ -322,6 +334,15 @@ def main() -> None:
                 indent=2,
             )
         )
+    except Exception:
+        if not committed:
+            if manifest_backed_up and backup_manifest.exists():
+                manifest_path.unlink(missing_ok=True)
+                os.replace(backup_manifest, manifest_path)
+            if bundle_backed_up and backup_bundle.exists():
+                bundle.unlink(missing_ok=True)
+                os.replace(backup_bundle, bundle)
+        raise
     finally:
         temporary_output.unlink(missing_ok=True)
         temporary_manifest.unlink(missing_ok=True)

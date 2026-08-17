@@ -40,12 +40,10 @@ class ShizukuRuntime(
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
     private val sessions = ConcurrentHashMap.newKeySet<String>()
-    private val binderStateLock = Any()
     private val binderFutureLock = Any()
     private val connectionFutureLock = Any()
     private var binderFuture: CompletableFuture<Unit>? = null
     private var connectionFuture: CompletableFuture<IDeviceShellService>? = null
-    private var binderGeneration = 0L
     @Volatile private var permissionDeniedThisSession = false
     @Volatile private var permissionFuture: CompletableFuture<Int>? = null
     @Volatile private var service: IDeviceShellService? = null
@@ -60,19 +58,13 @@ class ShizukuRuntime(
         .version(USER_SERVICE_VERSION)
 
     private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
-        synchronized(binderStateLock) {
-            binderGeneration++
-            permissionDeniedThisSession = false
-        }
+        permissionDeniedThisSession = false
         synchronized(binderFutureLock) {
             binderFuture?.complete(Unit)
         }
     }
 
     private val binderDeadListener = Shizuku.OnBinderDeadListener {
-        synchronized(binderStateLock) {
-            binderGeneration++
-        }
         service = null
         permissionFuture?.completeExceptionally(RemoteException("Shizuku binder died"))
         synchronized(binderFutureLock) {
@@ -171,7 +163,6 @@ class ShizukuRuntime(
         }
         if (state().permission == "granted") return connect()
 
-        val requestGeneration = synchronized(binderStateLock) { binderGeneration }
         val result = CompletableFuture<Int>()
         val listener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
             if (requestCode == PERMISSION_REQUEST_CODE) result.complete(grantResult)
@@ -192,12 +183,10 @@ class ShizukuRuntime(
                 result.completeExceptionally(IllegalStateException("main handler rejected permission request"))
             }
             val grantResult = result.get(PERMISSION_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            synchronized(binderStateLock) {
-                if (binderGeneration != requestGeneration) {
-                    throw RuntimeFailure("SHIZUKU_BINDER_UNAVAILABLE", "Shizuku 连接已更新，请重试授权")
-                }
-                permissionDeniedThisSession = grantResult != PackageManager.PERMISSION_GRANTED
-            }
+            // Sticky binder callbacks are delivered asynchronously and may arrive while the
+            // permission dialog is open. The permission result itself remains authoritative;
+            // binder death already completes permissionFuture exceptionally.
+            permissionDeniedThisSession = grantResult != PackageManager.PERMISSION_GRANTED
             if (grantResult != PackageManager.PERMISSION_GRANTED) {
                 throw RuntimeFailure("SHIZUKU_PERMISSION_DENIED", "Shizuku 权限未授予")
             }

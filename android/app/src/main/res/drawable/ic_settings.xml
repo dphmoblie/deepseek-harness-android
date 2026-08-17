@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:tint="@color/harness_toolbar_foreground"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M3,5h10v2H3zM17,5h4v2h-4zM15,3h2v6h-2zM3,11h4v2H3zM11,11h10v2H11zM7,9h2v6H7zM3,17h10v2H3zM17,17h4v2h-4zM15,15h2v6h-2z" />
+</vector>

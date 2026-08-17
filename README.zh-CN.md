@@ -1,6 +1,6 @@
 # DeepSeek Harness Android（中文版）
 
-`app/` 是一个独立的 Capacitor Android 应用，用于管理本地 DeepSeek Harness Ubuntu 用户空间。它提供运行时安装与重置、Ubuntu 终端、可选的 Shizuku 设备 Shell 访问、设置，以及仅监听回环地址的内嵌 Harness Web UI。
+`app/` 是一个独立的 Capacitor Android 应用，在本机 Ubuntu 用户空间中运行 DeepSeek Harness。运行时就绪后，打开应用会直接启动并进入应用内 Harness 对话，无需外部浏览器；服务控制、Ubuntu 安装与重置、终端、运行时来源和可选的 Shizuku 设备 Shell 均位于设置中。
 
 > 本文档为 [README.md](README.md) 的中文版本，内容以英文原版为准。
 
@@ -21,9 +21,9 @@ pnpm run build
 pnpm run android:sync
 ```
 
-发布构建可以内嵌 `assets/runtime/runtime-manifest.json` 与 `assets/runtime/rootfs.bundle`。不透明的 `.bundle` 文件是一个 gzip 压缩归档，其命名方式可防止 Android 资源打包器对其解包。当前镜像配方组合了 Ubuntu 24.04 ARM64、Node.js 24.19.0 与 `@deepseek-ai/dsh` 0.1.0-rc.6。可使用 `scripts/build-embedded-runtime.py` 生成这些被忽略的产物；该脚本会校验固定的 Ubuntu 与 Node.js 输入摘要、保留 Unix 元数据，并输出内嵌清单所使用的归档元数据与 SHA-256。
+官方 `0.1.7` CI 发布的是瘦 APK。工作流构建移动端 Harness 对话前端，将其注入 Ubuntu 24.04 ARM64、Node.js 24.19.0 与 `@deepseek-ai/dsh` 0.1.0-rc.6 运行时，并在同一个 `v0.1.7-mobile-<run_number>` Release 中发布 APK、`runtime-manifest.json` 与 `rootfs.bundle`。完成后的清单 URL 与 SHA-256 会被编译进对应 APK，因此全新安装无需手工填写运行时来源；生成的 rootfs、清单与事务 `.bak` 不会被打进官方 APK。
 
-未配置远程源时，安装使用内嵌清单与 gzip rootfs，并仍会校验其声明的字节长度与 SHA-256。这份 APK 资源内副本报告为 `preparing`（准备中），而不是已完成的网络下载。构建方或应用用户可以改为同时配置 `DSH_RUNTIME_MANIFEST_URL` 与 `DSH_RUNTIME_MANIFEST_SHA256`（或其对应的设置字段）。这对配置用于选择远程 HTTPS 清单，其精确字节必须与固定摘要匹配；随后该清单固定 HTTPS rootfs 的 URL、长度、架构、压缩方式与 SHA-256。只提供其中一个值属于无效配置，而非回退方案。远程归档使用应用私有的 `rootfs-<sha256>.part` 文件，因此中断的传输可在应用重启后恢复。恢复的响应必须是 HTTP 206 且带有精确匹配的 `Content-Range`；忽略 Range 返回 HTTP 200、或以 HTTP 416 拒绝过期 Range 的服务器，会导致从字节零开始的全新验证下载。网络、TLS 与超时故障会进入明确的错误状态，同时保留有界大小的应用私有临时文件。禁止将 API 密钥、密码、数据库凭据、签名密码或 Token 放入 `.env`、Gradle 文件、源代码、清单、URL 或日志。
+应用会先校验清单的固定摘要，再校验其声明的 HTTPS rootfs URL、长度、架构、压缩方式与 SHA-256。下载使用应用私有的 `rootfs-<sha256>.part`，中断后可跨应用重启续传；续传响应必须是精确匹配的 HTTP 206/`Content-Range`，HTTP 200 或 416 会从零重新下载。断网、TLS、超时或截断会进入明确的错误状态并保留合法断点，不会提前显示正在解压或安装完成。`scripts/build-embedded-runtime.py` 仍可用于明确构造的内嵌开发包。禁止将 API 密钥、密码、数据库凭据、签名密码或 Token 放入 `.env`、Gradle 文件、源代码、清单、URL 或日志。
 
 原生运行器文件单独生成或导入，永不提交。发布 APK 同时打包 `lib/arm64-v8a/libdsh_proot.so` 与 `lib/arm64-v8a/libdsh_proot_loader.so`，两者均必需。现有的 `prepare:runner` 流程仍可用于单独固定的运行器来源，但它不能替代对 APK 中随附的那两个确切二进制的来源与许可审查。
 
@@ -32,7 +32,7 @@ pnpm run android:sync
 ## 安全检查点
 
 - 原生桥接输入具备显式的类型、长度、格式与状态校验。
-- 管理 WebView 直接打开，无需 Android 设备凭据提示。管理操作使用同一直接应用会话；`FLAG_SECURE` 阻止普通截屏，但并非认证边界。
+- 应用没有用户可见的登录或 Android 设备凭据门槛；启动直达对话，管理功能位于设置中。Harness 回环传输仍使用独立的一次性认证凭据。
 - 内嵌与下载的产物要求精确摘要与字节上限；下载额外要求 HTTPS、可恢复的按摘要命名的暂存文件、严格的 Range 响应校验与原子替换。
 - 归档解压防止路径穿越，且不创建设备节点。解压器消费的精确压缩流在替换前会再次计数与哈希，从而在解压过程中独立强制执行清单中的压缩大小与 SHA-256。
 - 启动 Ubuntu 前，应用会探测打包的 PRoot 运行器及其 seccomp 兼容性，然后要求对生成的解析器文件、`/dev` 与 `/proc` 分别校验绑定挂载。若必需的源、客户机目标或兼容性探测不可用，启动将安全失败（fail closed）。

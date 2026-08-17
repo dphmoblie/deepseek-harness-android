@@ -179,6 +179,8 @@ describe('native bridge output validation', () => {
     expect(() => validateRuntimeState({ phase: 'unknown' })).toThrow()
     expect(() => validateShizukuState({ installed: true, running: true, permission: 'root', connected: false })).toThrow('权限')
     expect(() => validateShizukuState({ installed: true, running: true, permission: 'denied', connected: true })).toThrow('连接')
+    expect(validateShizukuState({ installed: true, running: true, permission: 'granted', connected: true, version: '13' }).version).toBe('13')
+    expect(() => validateShizukuState({ installed: true, running: true, permission: 'granted', connected: true, version: '<script>' })).toThrow('版本')
     expect(() => assertSessionId('------------------------------------')).toThrow('会话')
     expect(() => validateTerminalChunk({ sessionId, dataBase64: '***=' })).toThrow('编码')
     expect(() => validateTerminalExit({ sessionId, exitCode: 999 })).toThrow('退出码')

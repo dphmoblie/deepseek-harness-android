@@ -42,7 +42,7 @@ class RuntimeHttp {
 
     fun downloadBytes(source: URI, expectedSha256: String, maximumBytes: Int): ByteArray {
         val output = java.io.ByteArrayOutputStream(minOf(maximumBytes, 64 * 1024))
-        val result = withResponse(source, source.host) { response, input ->
+        val result = withResponse(source) { response, input ->
             if (response.code != 200) {
                 throw RuntimeFailure("DOWNLOAD_HTTP_ERROR", "清单服务返回 HTTP ${response.code}")
             }
@@ -144,7 +144,7 @@ class RuntimeHttp {
                     throw RuntimeFailure("DOWNLOAD_PART_CHANGED", "断点文件在下载期间发生变化")
                 }
                 channel.position(offset)
-                withResponse(source, source.host, if (offset == 0L) null else offset) { response, input ->
+                withResponse(source, if (offset == 0L) null else offset) { response, input ->
                     val declaredSegmentBytes = validateDownloadResponse(response, offset, expectedBytes)
                     var count = offset
                     var segmentBytes = 0L
@@ -300,21 +300,17 @@ class RuntimeHttp {
 
     private fun <T> withResponse(
         source: URI,
-        allowedHost: String,
         rangeStart: Long? = null,
         consume: (Response, InputStream) -> T,
     ): T {
         var current = source
         repeat(MAX_REDIRECTS + 1) { redirectCount ->
-            RuntimeValidation.requireHttpsUri(current.toASCIIString())
-            if (!current.host.equals(allowedHost, ignoreCase = true)) {
-                throw RuntimeFailure("DOWNLOAD_HOST_NOT_ALLOWED", "下载重定向离开了允许的主机")
-            }
+            RuntimeValidation.requireHttpsUri(current.toASCIIString(), rejectPrivateHost = true)
             val request = try {
                 Request.Builder()
                     .url(current.toASCIIString())
                     .header("Accept-Encoding", "identity")
-                    .header("User-Agent", "DeepSeekHarnessMobile/0.1.1")
+                    .header("User-Agent", "DeepSeekHarnessMobile/0.1.7")
                     .also { builder -> rangeStart?.let { builder.header("Range", "bytes=$it-") } }
                     .get()
                     .build()
@@ -329,8 +325,7 @@ class RuntimeHttp {
                         }
                         val location = response.header("Location")
                             ?: throw RuntimeFailure("DOWNLOAD_FAILED", "下载重定向缺少目标地址")
-                        current = current.resolve(location)
-                        RuntimeValidation.requireHttpsUri(current.toASCIIString())
+                        current = resolveRedirect(current, location)
                         return@repeat
                     }
                     val body = response.body ?: throw RuntimeFailure("DOWNLOAD_FAILED", "下载响应不包含内容")
@@ -391,6 +386,20 @@ class RuntimeHttp {
             val end = match.groupValues[2].toLongOrNull() ?: return false
             val total = match.groupValues[3].toLongOrNull() ?: return false
             return start == expectedStart && total == expectedTotal && end == expectedTotal - 1 && end >= start
+        }
+
+        /**
+         * Release hosts commonly redirect to a separate CDN. The content digest pins both the
+         * manifest and archive, while PublicOnlyDns and this validation keep every hop on public
+         * HTTPS and prevent redirects to loopback/private destinations.
+         */
+        internal fun resolveRedirect(current: URI, location: String): URI {
+            val resolved = try {
+                current.resolve(location)
+            } catch (error: IllegalArgumentException) {
+                throw RuntimeFailure("URL_INVALID", "下载重定向地址格式无效", error)
+            }
+            return RuntimeValidation.requireHttpsUri(resolved.toASCIIString(), rejectPrivateHost = true)
         }
     }
 }

@@ -1,4 +1,9 @@
 <resources>
     <string name="app_name">DeepSeek Harness</string>
+    <string name="harness_title">Harness 对话</string>
+    <string name="harness_back_to_app">返回应用</string>
+    <string name="harness_open_management">打开管理设置</string>
+    <string name="harness_session_failed">无法建立本机 Harness 会话</string>
+    <string name="harness_page_failed">Harness 页面暂时无法打开，请在设置中重试</string>
     <string name="shizuku_missing">请先安装并启动 Shizuku</string>
 </resources>

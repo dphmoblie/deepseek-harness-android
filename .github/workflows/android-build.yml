@@ -82,12 +82,21 @@ jobs:
           name: embedded-runtime
           path: /tmp/embedded-runtime
 
-      - name: Place embedded runtime into APK assets
+      - name: Configure pinned remote runtime (thin APK)
         run: |
-          mkdir -p android/app/src/main/assets/runtime
-          find /tmp/embedded-runtime -name rootfs.bundle -exec cp {} android/app/src/main/assets/runtime/rootfs.bundle \;
-          find /tmp/embedded-runtime -name runtime-manifest.json -exec cp {} android/app/src/main/assets/runtime/runtime-manifest.json \;
-          ls -la android/app/src/main/assets/runtime
+          set -euo pipefail
+          MANIFEST="$(find /tmp/embedded-runtime -type f -name runtime-manifest.json -print -quit)"
+          test -n "$MANIFEST" && test -f "$MANIFEST"
+          MANIFEST_SHA="$(sha256sum "$MANIFEST" | cut -d' ' -f1)"
+          echo "DSH_RUNTIME_MANIFEST_URL=https://github.com/${{ github.repository }}/releases/download/v0.1.7-mobile-${{ github.run_number }}/runtime-manifest.json" >> "$GITHUB_ENV"
+          echo "DSH_RUNTIME_MANIFEST_SHA256=$MANIFEST_SHA" >> "$GITHUB_ENV"
+          # Release 资产承载 rootfs；APK 不嵌入 bundle，也不允许事务备份混入 assets。
+          rm -f android/app/src/main/assets/runtime/rootfs.bundle \
+            android/app/src/main/assets/runtime/rootfs.bundle.bak \
+            android/app/src/main/assets/runtime/runtime-manifest.json \
+            android/app/src/main/assets/runtime/runtime-manifest.json.bak
+          test ! -e android/app/src/main/assets/runtime/rootfs.bundle
+          echo "Pinned manifest SHA-256: $MANIFEST_SHA"
 
       - name: Set up Gradle (trusted distribution for wrapper bootstrap)
         uses: gradle/actions/setup-gradle@v4
@@ -206,7 +215,12 @@ jobs:
           node-version: '22.19.0'
 
       - name: Set up pnpm
-        run: npm install -g pnpm@11.19.0
+        uses: pnpm/action-setup@v4
+
+      - name: Build mobile Harness conversation frontend
+        run: |
+          pnpm install --frozen-lockfile --filter @dsh-mobile/harness-web...
+          pnpm --filter @dsh-mobile/harness-web build
 
       - name: Prepare dsh runtime for linux/arm64 (compile node-pty from source)
         run: |
@@ -290,9 +304,15 @@ jobs:
             python3 scripts/build-embedded-runtime.py \
               --ubuntu /tmp/ubuntu.tar.gz --ubuntu-sha256 04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2 \
               --node /tmp/node.tar.xz --node-sha256 01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc \
-              --dsh-root /tmp/dsh-root --runtime-version "0.1.0-mobile-test" \
+              --dsh-root /tmp/dsh-root --runtime-version "0.1.7-mobile-${GITHUB_RUN_NUMBER}" \
+              --rootfs-url "https://github.com/${{ github.repository }}/releases/download/v0.1.7-mobile-${{ github.run_number }}/rootfs.bundle" \
               --mobile-profile scripts/mobile-profile.example.json \
               --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
+            python3 scripts/rebuild-rootfs-frontend.py \
+              --bundle /tmp/rootfs.bundle \
+              --manifest /tmp/runtime-manifest.json \
+              --dist harness-web/dist \
+              --runtime-version "0.1.7-mobile-${GITHUB_RUN_NUMBER}"
             ls -la /tmp/rootfs.bundle /tmp/runtime-manifest.json
             sha256sum /tmp/rootfs.bundle
             python3 scripts/verify-bundle.py --bundle /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
@@ -368,7 +388,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -x
+          # Never enable xtrace here: a failed release log is persisted to the
+          # dist branch and must not contain the expanded Authorization header.
+          set +x
           set -o pipefail
           cd "$GITHUB_WORKSPACE"
           push_log() {
@@ -383,7 +405,7 @@ jobs:
             git push origin dist || true
           }
           {
-            TAG="v0.1.0-mobile-${{ github.run_number }}"
+            TAG="v0.1.7-mobile-${{ github.run_number }}"
             APK="$(ls /tmp/apk/*.apk | head -n1)"
             test -n "$APK"
             test -f /tmp/runtime/rootfs.bundle
@@ -394,11 +416,9 @@ jobs:
 
           ## 安装与配置
 
-          1. 安装 $(basename "$APK")（debug 签名，已含 PRoot 运行器）。
-          2. 打开 App → 设置页，填写「运行时清单地址与 SHA-256」（两者必须成对）：
-             - URL: https://github.com/${{ github.repository }}/releases/download/${TAG}/runtime-manifest.json
-             - SHA-256: ${MANIFEST_SHA}
-          3. 返回「环境」页执行安装（rootfs 约百 MB，建议 Wi-Fi，支持断点续传）。
+          1. 安装 $(basename "$APK")（瘦 APK，已含 PRoot 运行器）。
+          2. 首次打开后点「安装并进入对话」；应用已固定本次 Release 的清单地址与 SHA-256，无需手工填写。
+          3. rootfs 约百 MB，建议使用 Wi-Fi；中断后再次安装会从断点继续。
 
           ## 资产
 

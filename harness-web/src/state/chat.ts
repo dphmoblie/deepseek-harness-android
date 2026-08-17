@@ -9,8 +9,10 @@ import { describeFailure } from '../errors'
 import { applyChunk, createDraft, type AssistantDraft } from './draft'
 import { foldEvent, foldHistory, type ChatEntry } from './fold'
 import { eventBus, subscribeSession } from './events'
+import { titleFromProjectionFrame, titleFromProjections } from './sessionDisplay'
 import type {
   AskUserQuestionItem,
+  QueuedInboxItem,
   SessionEvent,
   SessionId,
   StreamChunk,
@@ -19,6 +21,8 @@ import type {
 } from '../api/types'
 
 const HISTORY_PAGE_SIZE = 100
+
+export type PromptMode = 'queue' | 'steer'
 
 export type ApprovalRequest = {
   rpcId: string
@@ -39,6 +43,8 @@ export type ChatController = {
   entries: ChatEntry[]
   draft: AssistantDraft | null
   todos: TodoItem[]
+  queuedItems: QueuedInboxItem[]
+  title: string | null
   running: boolean
   loading: boolean
   loadingMore: boolean
@@ -46,7 +52,7 @@ export type ChatController = {
   error: string | null
   approval: ApprovalRequest | null
   questions: QuestionRequest | null
-  sendPrompt: (text: string) => Promise<void>
+  sendPrompt: (text: string, mode: PromptMode) => Promise<void>
   cancelTurn: () => Promise<void>
   loadMore: () => Promise<void>
   answerApproval: (outcome: 'allowed-once' | 'rejected') => Promise<void>
@@ -58,6 +64,8 @@ export function useChat(sessionId: SessionId | null): ChatController {
   const [entries, setEntries] = useState<ChatEntry[]>([])
   const [draft, setDraftState] = useState<AssistantDraft | null>(null)
   const [todos, setTodos] = useState<TodoItem[]>([])
+  const [queuedItems, setQueuedItems] = useState<QueuedInboxItem[]>([])
+  const [title, setTitle] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -70,6 +78,8 @@ export function useChat(sessionId: SessionId | null): ChatController {
   const entriesRef = useRef<ChatEntry[]>([])
   const draftRef = useRef<AssistantDraft | null>(null)
   const lastSeqRef = useRef(-1)
+  const runningRevisionRef = useRef(0)
+  const historyRequestRef = useRef(0)
 
   const setEntriesBoth = useCallback((updater: (prev: ChatEntry[]) => ChatEntry[]) => {
     entriesRef.current = updater(entriesRef.current)
@@ -112,9 +122,11 @@ export function useChat(sessionId: SessionId | null): ChatController {
           return
         }
         case 'turn/start':
+          runningRevisionRef.current += 1
           setRunning(true)
           return
         case 'turn/end': {
+          runningRevisionRef.current += 1
           setRunning(false)
           if (draftRef.current?.turn === (data.turn as number)) setDraftBoth(null)
           const folded = foldEvent(event)
@@ -138,6 +150,9 @@ export function useChat(sessionId: SessionId | null): ChatController {
   /** 拉取历史首页（切换会话或检测到漏事件时调用）。 */
   const loadHistory = useCallback(
     async (session: SessionId) => {
+      const requestId = ++historyRequestRef.current
+      const seqAtRequest = lastSeqRef.current
+      const runningRevisionAtRequest = runningRevisionRef.current
       setLoading(true)
       setError(null)
       try {
@@ -147,15 +162,33 @@ export function useChat(sessionId: SessionId | null): ChatController {
         })
         if (sessionIdRef.current !== session) return
         const folded = foldHistory(value.events)
-        entriesRef.current = folded
-        setEntries(folded)
+        const historyLastSeq = value.events[value.events.length - 1]?.event.seq ?? -1
+        if (lastSeqRef.current > seqAtRequest) {
+          const merged = new Map<number, ChatEntry>()
+          folded.forEach(entry => merged.set(entry.seq, entry))
+          entriesRef.current.forEach(entry => merged.set(entry.seq, entry))
+          const nextEntries = [...merged.values()].sort((left, right) => left.seq - right.seq)
+          entriesRef.current = nextEntries
+          setEntries(nextEntries)
+        } else {
+          entriesRef.current = folded
+          setEntries(folded)
+        }
         setHasMore(value.hasMore)
-        const last = value.events[value.events.length - 1]
-        lastSeqRef.current = last?.event.seq ?? -1
+        setTitle(titleFromProjections(value.projections))
+        let historyRunning = false
+        for (const entry of value.events) {
+          if (entry.event.type === 'turn/start') historyRunning = true
+          if (entry.event.type === 'turn/end') historyRunning = false
+        }
+        if (runningRevisionRef.current === runningRevisionAtRequest) setRunning(historyRunning)
+        lastSeqRef.current = Math.max(lastSeqRef.current, historyLastSeq)
       } catch (failure) {
-        setError(toErrorText(failure))
+        if (historyRequestRef.current === requestId && sessionIdRef.current === session) {
+          setError(toErrorText(failure))
+        }
       } finally {
-        setLoading(false)
+        if (historyRequestRef.current === requestId) setLoading(false)
       }
     },
     [toErrorText],
@@ -165,12 +198,16 @@ export function useChat(sessionId: SessionId | null): ChatController {
   const sessionIdRef = useRef<SessionId | null>(null)
   useEffect(() => {
     sessionIdRef.current = sessionId
+    historyRequestRef.current += 1
     entriesRef.current = []
     draftRef.current = null
     lastSeqRef.current = -1
+    runningRevisionRef.current = 0
     setEntries([])
     setDraftState(null)
     setTodos([])
+    setQueuedItems([])
+    setTitle(null)
     setRunning(false)
     setHasMore(false)
     setApproval(null)
@@ -220,6 +257,17 @@ export function useChat(sessionId: SessionId | null): ChatController {
         case 'question/resolved':
           setQuestions(null)
           break
+        case 'session/queue': {
+          const { items } = frame as { items: QueuedInboxItem[] }
+          setQueuedItems(Array.isArray(items) ? items : [])
+          break
+        }
+        case 'session/projection': {
+          const { key, value } = frame as { key: string; value: unknown }
+          const nextTitle = titleFromProjectionFrame(key, value)
+          if (nextTitle !== null) setTitle(nextTitle)
+          break
+        }
         default:
           break
       }
@@ -227,15 +275,27 @@ export function useChat(sessionId: SessionId | null): ChatController {
     return unsubscribe
   }, [sessionId, applyEvent, loadHistory])
 
+  useEffect(() => {
+    if (sessionId === null) return
+    return eventBus.subscribe(({ stream, frame }) => {
+      if (stream !== 'host') return
+      const status = frame as { type?: string; sessionId?: SessionId; running?: boolean }
+      if (status.type === 'host/session-status' && status.sessionId === sessionId && typeof status.running === 'boolean') {
+        runningRevisionRef.current += 1
+        setRunning(status.running)
+      }
+    })
+  }, [sessionId])
+
   const sendPrompt = useCallback(
-    async (text: string) => {
+    async (text: string, mode: PromptMode) => {
       if (sessionId === null || text.trim() === '') return
       setError(null)
       try {
         await callUnary(window.location.origin, 'session.prompt', {
           sessionId,
-          mode: 'queue',
-          content: [{ type: 'text', text }],
+          mode,
+          content: [{ type: 'text', text: text.trim() }],
           clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         })
       } catch (failure) {
@@ -316,6 +376,8 @@ export function useChat(sessionId: SessionId | null): ChatController {
     entries,
     draft,
     todos,
+    queuedItems,
+    title,
     running,
     loading,
     loadingMore,

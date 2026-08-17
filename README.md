@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README.zh.md)
 
-`app/` is an independent Capacitor Android application for managing a local DeepSeek Harness Ubuntu userspace. It provides runtime installation and reset, an Ubuntu terminal, optional Shizuku-backed device shell access, settings, and an embedded loopback-only Harness Web UI.
+`app/` is an independent Capacitor Android application for running DeepSeek Harness in a local Ubuntu userspace. Once the runtime is ready, opening the app starts Harness and enters the in-app conversation directly; no external browser is required. Harness service controls, Ubuntu installation and reset, terminals, runtime source details, and optional Shizuku-backed device shell access live under Settings.
 
 ## Build requirements
 
@@ -23,30 +23,32 @@ pnpm run build
 pnpm run android:sync
 ```
 
-The release build can embed `assets/runtime/runtime-manifest.json` and
-`assets/runtime/rootfs.bundle`. The opaque `.bundle` file is a gzip-compressed
-archive whose name prevents Android's asset packager from expanding it. The
-current image recipe combines Ubuntu 24.04
-ARM64, Node.js 24.19.0, and `@deepseek-ai/dsh` 0.1.0-rc.6. Generate those ignored
-artifacts with `scripts/build-embedded-runtime.py`; the script verifies the
-fixed Ubuntu and Node.js input digests, preserves Unix metadata, and emits the
-archive metadata and SHA-256 used by the embedded manifest.
+The `0.1.7` CI release is a thin APK. The workflow builds the mobile Harness
+conversation frontend, injects it into an Ubuntu 24.04 ARM64 image containing
+Node.js 24.19.0 and `@deepseek-ai/dsh` 0.1.0-rc.6, and publishes three assets
+under one `v0.1.7-mobile-<run_number>` tag: the APK, `runtime-manifest.json`,
+and `rootfs.bundle`. The manifest contains that same Release's rootfs URL and
+exact archive metadata. CI hashes the finished manifest and compiles its URL
+and SHA-256 into the matching APK; generated runtime assets and transaction
+backups are removed from APK assets before Gradle runs. Installing an official
+Release therefore does not require entering a manifest URL or digest.
 
-When no remote source is configured, installation uses the embedded manifest
-and gzip rootfs and still verifies its declared byte length and SHA-256. This
-APK-asset copy is reported as `preparing`, not as a completed network download.
-A build or the app user can instead configure both
-`DSH_RUNTIME_MANIFEST_URL` and `DSH_RUNTIME_MANIFEST_SHA256` (or their matching
-settings fields). That pair selects a remote HTTPS manifest whose exact bytes
-must match the pinned digest; the manifest then pins the HTTPS rootfs URL,
-length, architecture, compression, and SHA-256. Supplying only one value is an
-invalid configuration, not a fallback. Remote archives use an app-private
+The manifest bytes must match the APK-pinned digest before parsing. The parsed
+manifest then pins the rootfs URL, byte length, architecture, compression, and
+SHA-256. Each HTTPS redirect is revalidated against public-destination policy,
+and the final content remains digest-bound. Remote archives use an app-private
 `rootfs-<sha256>.part` file, so an interrupted transfer can resume across app
-restarts. A resumed response must be HTTP 206 with the exact expected
-`Content-Range`; a server that ignores Range and returns HTTP 200, or rejects a
-stale range with HTTP 416, causes a verified restart from byte zero. Network,
-TLS, and timeout failures enter an explicit error state while retaining the
-bounded app-private partial file. Do not put API keys, passwords,
+or process restarts. A resumed response must be HTTP 206 with the exact
+expected `Content-Range`; HTTP 200 or 416 causes a clean, verified restart from
+byte zero. Network, TLS, timeout, and incomplete-transfer failures enter an
+explicit error state while retaining a valid bounded partial file. The UI does
+not report extraction until acquisition and archive verification have
+completed.
+
+`scripts/build-embedded-runtime.py` remains the deterministic image builder
+used by CI and also supports an explicitly constructed embedded development
+build. Embedded and remote acquisition share the same size, digest,
+extraction, and atomic-promotion checks. Do not put API keys, passwords,
 database credentials, signing passwords, or tokens in `.env`, Gradle files,
 source code, manifests, URLs, or logs.
 
@@ -58,19 +60,18 @@ committed. A release APK packages both
 but it does not replace the provenance and license review for the exact two
 binaries shipped in an APK.
 
-The runtime manifest fields and security flow are documented in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The embedded manifest's reserved
-`.invalid` archive URL is metadata only when the archive is read from the APK;
-it must never be contacted. A remote release manifest must use real HTTPS URLs
-and exact release digests. See
-[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md).
+The runtime manifest fields, CI pinning flow, and security boundaries are
+documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). See
+[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) before distributing an
+APK or runtime asset.
 
 ## Security checkpoints
 
 - Native bridge inputs have explicit type, length, format, and state validation.
-- The management WebView opens directly without an Android device-credential
-  prompt. Management operations use the same direct app session; `FLAG_SECURE`
-  blocks ordinary screenshots but is not an authentication boundary.
+- The app has no user-facing login or Android device-credential gate. The
+  conversation opens directly, while management operations remain in the
+  app's Settings surface. This does not weaken the separate loopback transport
+  credential described below.
 - Embedded and downloaded artifacts require exact digests and byte limits;
   downloads additionally require HTTPS, resumable digest-named staging files,
   strict Range-response validation, and atomic promotion.
@@ -91,9 +92,11 @@ and exact release digests. See
   the exact expected Basic realm and UTF-8 challenge. The credential is never
   placed in the URL or audit log.
 - Shizuku access requires the declared `ShizukuProvider`, a visible permission
-  grant, and a user-opened terminal session. Binder or UserService loss clears
-  active sessions; a later terminal request reconnects, and `connected` is true
-  only while a live authorized UserService binder is available.
+  grant, an explicit successful UserService connection, and a user-opened
+  terminal session. Settings exposes a Connect Shizuku action whenever
+  permission exists but the service is disconnected. Binder or UserService
+  loss clears active sessions, and `connected` is true only while a live
+  authorized UserService binder is available.
 - Reset is confined to the app-private runtime root and does not follow symbolic links.
 - Owner-only audit files rotate daily and retain at least 90 days of fixed event/result codes.
 - No credential, URL, command, session identifier, terminal content, or sensitive user data is written to application audit files.
