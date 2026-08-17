@@ -34,8 +34,8 @@ export interface RuntimeSettings extends RuntimeSource {
   terminalFontSize: number
   /** 模型 API Key（如 DeepSeek），注入 rootfs 的 DEEPSEEK_API_KEY 环境变量；空串表示未配置。 */
   apiKey?: string
-  /** 打开应用时自动启动 Harness（默认 true）。 */
-  autoLaunch: boolean
+  /** 打开应用时自动启动 Harness（默认 true）；旧存储/测试可能缺省。 */
+  autoLaunch?: boolean
 }
 export interface RuntimeProgress {
   phase: RuntimePhase

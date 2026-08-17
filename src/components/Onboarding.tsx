@@ -14,8 +14,7 @@ interface OnboardingProps {
   onOpenShizuku: () => void
   onOpenHarness: () => void
   onDone: () => void
-  onSaveSettings: (settings: RuntimeSettings) => void
-  settings: RuntimeSettings | null
+  onSaveSettings?: (settings: RuntimeSettings) => void
 }
 
 const STEPS = [
@@ -97,7 +96,7 @@ export function Onboarding({
                       onChange={event => setApiKeyDraft(event.target.value)}
                     />
                   </label>
-                  <button className="button button-primary" type="button" disabled={apiKeyDraft.trim() === ''} onClick={() => { onSaveSettings({ ...(settings ?? { manifestUrl: '', manifestSha256: '', keepScreenAwake: true, terminalFontSize: 14, autoLaunch: true }), apiKey: apiKeyDraft.trim() }); setApiKeyDraft('') }}>
+                  <button className="button button-primary" type="button" disabled={apiKeyDraft.trim() === ''} onClick={() => { onSaveSettings?.({ ...(settings ?? { manifestUrl: '', manifestSha256: '', keepScreenAwake: true, terminalFontSize: 14, autoLaunch: true }), apiKey: apiKeyDraft.trim() }); setApiKeyDraft('') }}>
                     <KeyRound size={18} />保存 API Key
                   </button>
                   <p className="onboarding-status">{settings?.apiKey ? '已配置（' + settings.apiKey.slice(0, 8) + '…）' : '未配置'}</p>
