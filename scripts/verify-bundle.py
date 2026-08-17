@@ -147,17 +147,6 @@ def main() -> int:
         if canonical_target(name, actual) != canonical_target(name, expected):
             fail(f"required symlink target mismatch: {name!r} -> {actual!r} (expected {expected!r})")
 
-    # profiles 扁平模块回退：dsh 启动时 cordis 从 profile 目录解析 loader entry，
-    # 必须能在 $DSH_HOME/profiles/node_modules 找到全部 profile bundles。
-    # （构建期由 add_profiles_module_fallback 生成，缺失会导致 Cannot find package）
-    profile_bundle_names = [
-        "dsh-mobile-compat",
-        "dshmarket",
-        "@deepseek-ai/dsh-base",
-        "@deepseek-ai/dsh-web-app",
-        "@linxin666/dsh-web-ui-all",
-        "@liustack/modlens",
-    ]
     for package_name in profile_bundle_names:
         link_name = f"root/.dsh/profiles/node_modules/{package_name}"
         if types.get(link_name) != "sym":
@@ -167,9 +156,21 @@ def main() -> int:
         if resolved not in types:
             fail(f"profiles link target missing in bundle: {link_name!r} -> {actual!r}")
 
+    # 全量扁平链接校验：所有 root/.dsh/profiles/node_modules 条目必须是符号链接，
+    # 且目标在 bundle 内真实存在。dsh 启动时 cordis 从 profile 目录解析 loader
+    # entry 依赖这条扁平目录；链接缺一个，对应插件就报 Cannot find package。
+    # 数量与构建期写入 manifest 的 profileLinks 对照，防止回归成部分链接。
+    profile_prefix = "root/.dsh/profiles/node_modules/"
+    profile_links = {n: t for n, t in symlinks if n.startswith(profile_prefix)}
+    for name, target in profile_links.items():
+        resolved = canonical_target(name, target).lstrip("/")
+        if resolved not in types:
+            fail(f"profiles link target missing in bundle: {name!r} -> {target!r} (resolved {resolved!r})")
+    expected_links = manifest.get("profileLinks")
+    if expected_links is not None and len(profile_links) != expected_links:
+        fail(f"profiles link count mismatch: bundle has {len(profile_links)}, manifest declares {expected_links}")
+    print(f"PROFILES_LINKS={len(profile_links)}")
+
     print(f"BUNDLE_VERIFY_OK: entries={entry_count} extracted={extracted} symlinks={len(symlinks)} hardlinks={len(hardlinks)}")
     return 0
-
-
-if __name__ == "__main__":
     sys.exit(main())

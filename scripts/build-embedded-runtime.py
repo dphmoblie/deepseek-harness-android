@@ -466,19 +466,20 @@ def inject_bundles_into_dsh_manifest(dsh_root: Path) -> None:
             )
 
 
-def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_dsh: str) -> None:
-    """预生成 $DSH_HOME/profiles/node_modules 的扁平包链接。
+def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_dsh: str) -> int:
+    """预生成 $DSH_HOME/profiles/node_modules 的扁平包链接，返回链接总数。
 
     dsh 启动时（profile-boot）会调用 healProfilesModuleFallback 维护这个目录，
     但它只从 @deepseek-ai/dsh 包的依赖闭包收集——profile bundles
     （dsh-mobile-compat、dshmarket 等）不是 dsh 的依赖，永远不会被它链接，
     cordis 加载器从 profile 目录解析 loader entry 时就会 "Cannot find package"。
     这里在构建期按 dsh_root 的依赖闭包（含全部 bundles）预生成链接打进 rootfs，
-    运行时无需（也避免在受限 ROM 上）再创建符号链接。
+    运行时无需（也避免在受限 ROM 上）再创建符号链接。链接总数写入 manifest 的
+    `profileLinks` 字段，供 verify-bundle.py 对照，防止回归成"只链接了部分包"。
     """
     node_modules = dsh_root / "node_modules"
     if not node_modules.is_dir():
-        return
+        return 0
 
     links: dict[str, Path] = {}
     queue: list[Path] = []
@@ -529,7 +530,66 @@ def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_ds
         rootfs_real = PurePosixPath("/") / PurePosixPath(rootfs_dsh) / real.relative_to(resolved_root).as_posix()
         rel = posixpath.relpath(rootfs_real.as_posix(), start="/root/.dsh/profiles/node_modules")
         writer.add_symlink(f"root/.dsh/profiles/node_modules/{name}", rel)
+    return len(links)
 
+
+def patch_dsh_app_boot(dsh_root: Path) -> None:
+    """放宽 dsh-app-boot 的 profiles/node_modules 链接维护（ROM 兼容）。
+
+    荣耀等 ROM 的 SELinux 禁止应用创建符号链接时，SafeRootfsExtractor 会把
+    profiles/node_modules 的链接降级复制成真实目录。dsh 启动时
+    healProfilesModuleFallback -> ensureSymlink 对"存在且不是符号链接"的条目
+    会直接抛错（"exists and is not a symlink"），导致 dsh 无法启动。这里在
+    构建期对 dsh-app-boot 打两个补丁：
+
+    1. 存在（任意类型）即信任跳过——条目要么是构建期预置链接，要么是
+       解压降级复制出的目录，两者都可用，不需要强制重建成符号链接；
+    2. 创建符号链接失败（EACCES/EPERM/ENOTSUP）时静默返回——受限 ROM 上
+       补链必然失败，解析靠扁平 profiles/node_modules 目录兜底。
+
+    补丁基于 dsh-app-boot 0.1.0-rc.6 的精确源码文本；任何一处不匹配都会
+    让构建失败（fail loud），避免静默打偏。
+    """
+    candidates: list[Path] = []
+    candidates.extend(
+        dsh_root.glob("node_modules/.pnpm/@deepseek-ai+dsh-app-boot@*/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js")
+    )
+    top_level = dsh_root / "node_modules" / "@deepseek-ai" / "dsh-app-boot" / "lib" / "index.js"
+    if top_level.is_file():
+        candidates.append(top_level)
+
+    trust_existing = (
+        "if (!stat.isSymbolicLink()) throw new Error("
+        "`dsh: ${link} exists and is not a symlink; remove it so dsh can manage the installation fallback`);"
+    )
+    trust_existing_replacement = (
+        "if (!stat.isSymbolicLink()) return; "
+        "/* dsh-mobile: trust prebuilt or degraded (copied) profiles entries */"
+    )
+    tolerate_denied = (
+        'if (error.code !== "EEXIST" || !lstatSync(link).isSymbolicLink() || readlinkSync(link) !== target) throw error;'
+    )
+    tolerate_denied_replacement = (
+        'if (error.code === "EACCES" || error.code === "EPERM" || error.code === "ENOTSUP") return; '
+        'if (error.code !== "EEXIST" || !lstatSync(link).isSymbolicLink() || readlinkSync(link) !== target) throw error;'
+    )
+
+    patched_any = False
+    for path in candidates:
+        text = path.read_text(encoding="utf-8")
+        original = text
+        if trust_existing in text:
+            text = text.replace(trust_existing, trust_existing_replacement)
+        if tolerate_denied in text:
+            text = text.replace(tolerate_denied, tolerate_denied_replacement)
+        if text != original:
+            path.write_text(text, encoding="utf-8")
+            patched_any = True
+    if not patched_any:
+        raise BuildError(
+            "dsh-app-boot ensureSymlink patch did not match any installed copy; "
+            "aborting to avoid shipping an unpatched runtime"
+        )
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -626,8 +686,9 @@ def main() -> None:
             )
             copy_tar_archive(writer, args.node, args.node_root, lambda name: f"opt/node/{name}")
             inject_bundles_into_dsh_manifest(args.dsh_root)
+            patch_dsh_app_boot(args.dsh_root)
             add_windows_tree(writer, args.dsh_root, "opt/dsh")
-            add_profiles_module_fallback(writer, args.dsh_root, "opt/dsh")
+            profile_links = add_profiles_module_fallback(writer, args.dsh_root, "opt/dsh")
             writer.add_symlink("usr/local/bin/node", "../../../opt/node/bin/node")
             # Ubuntu base 精简包不含这两个链接，但 App 完整性校验将其列为必需：
             # 运行时（mount 视图/时区）与校验都需要，缺了安装会报 ROOTFS_LINKS_CORRUPTED。
@@ -681,6 +742,7 @@ def main() -> None:
                 "harness": ["/usr/local/bin/dsh", "web", "--host", "127.0.0.1", "--port", "3080"],
             },
             "harnessUrl": "http://127.0.0.1:3080/",
+            "profileLinks": profile_links,
             **({"mobile": mobile_spec} if mobile_spec is not None else {}),
         }
         manifest_bytes = (json.dumps(manifest, ensure_ascii=True, indent=2) + "\n").encode("ascii")
