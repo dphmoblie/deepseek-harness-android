@@ -1,0 +1,73 @@
+/home/runner/work/deepseek-harness-for-android/deepseek-harness-for-android
+=== node-pty step output ===
++ pnpm install --no-frozen-lockfile
+[ERROR] Expected double-quoted property name in JSON at position 111 (line 6 column 7) in /tmp/dsh-root/package.json
+
+[0m [90m 4 |[39m     [32m"dependencies"[39m[33m:[39m {
+ [90m 5 |[39m       [32m"@deepseek-ai/dsh"[39m[33m:[39m [32m"0.1.0-rc.6"[39m[33m,[39m
+[31m[1m>[22m[39m[90m 6 |[39m       [33m#[39m latest([35m0.0[39m[35m.1[39m[33m-[39mrc[35m.1[39m) 依赖已下架的 [33m@[39mdeepseek[33m-[39mai[33m/[39mdsh[33m-[39mclient[33m-[39mui[33m-[39mslash，
+ [90m   |[39m       [31m[1m^[22m[39m
+ [90m 7 |[39m       [33m#[39m 固定到与 dsh [35m0.1[39m[35m.0[39m[33m-[39mrc[35m.6[39m 同批次的版本
+ [90m 8 |[39m       [32m"@deepseek-ai/dsh-base"[39m[33m:[39m [32m"0.1.0-rc.6"[39m[33m,[39m
+ [90m 9 |[39m     [32m"@deepseek-ai/dsh-web-app"[39m[33m:[39m [32m"0.1.0-rc.6"[39m[33m,[39m[0m
+
+For help, run: pnpm help install
++ pnpm rebuild node-pty
+[ERROR] Expected double-quoted property name in JSON at position 111 (line 6 column 7) in /tmp/dsh-root/package.json
+
+[0m [90m 4 |[39m     [32m"dependencies"[39m[33m:[39m {
+ [90m 5 |[39m       [32m"@deepseek-ai/dsh"[39m[33m:[39m [32m"0.1.0-rc.6"[39m[33m,[39m
+[31m[1m>[22m[39m[90m 6 |[39m       [33m#[39m latest([35m0.0[39m[35m.1[39m[33m-[39mrc[35m.1[39m) 依赖已下架的 [33m@[39mdeepseek[33m-[39mai[33m/[39mdsh[33m-[39mclient[33m-[39mui[33m-[39mslash，
+ [90m   |[39m       [31m[1m^[22m[39m
+ [90m 7 |[39m       [33m#[39m 固定到与 dsh [35m0.1[39m[35m.0[39m[33m-[39mrc[35m.6[39m 同批次的版本
+ [90m 8 |[39m       [32m"@deepseek-ai/dsh-base"[39m[33m:[39m [32m"0.1.0-rc.6"[39m[33m,[39m
+ [90m 9 |[39m     [32m"@deepseek-ai/dsh-web-app"[39m[33m:[39m [32m"0.1.0-rc.6"[39m[33m,[39m[0m
+
+For help, run: pnpm help rebuild
++ true
++ PTP=node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty
++ echo '=== pty 包路径探测 ==='
+=== pty 包路径探测 ===
++ find node_modules/.pnpm -maxdepth 2 -type d -name 'node-pty*'
+find: ‘node_modules/.pnpm’: No such file or directory
++ head -20
++ echo '=== build 目录内容 ==='
+=== build 目录内容 ===
++ find node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build -maxdepth 2 -type f
++ head -30
++ mkdir -p node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64
++ cp node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/Release/pty.node node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/pty.node
+cp: cannot stat 'node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/Release/pty.node': No such file or directory
++ cp node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/Release/spawn-helper node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/spawn-helper
++ true
++ chmod +x node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/spawn-helper
++ true
++ ls -la node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/
+total 8
+drwxr-xr-x 2 runner runner 4096 Aug 17 04:41 .
+drwxr-xr-x 3 runner runner 4096 Aug 17 04:41 ..
+=== dsh-root 探测 ===
+(dsh bin.js 缺失)
+total 8
+drwxr-xr-x 2 runner runner 4096 Aug 17 04:41 .
+drwxr-xr-x 3 runner runner 4096 Aug 17 04:41 ..
+=== bundle step output ===
+Harness runtime is missing its CLI or Linux ARM64 node-pty module
+ls: cannot access '/tmp/rootfs.bundle': No such file or directory
+ls: cannot access '/tmp/runtime-manifest.json': No such file or directory
+sha256sum: /tmp/rootfs.bundle: No such file or directory
+Traceback (most recent call last):
+  File "/home/runner/work/deepseek-harness-for-android/deepseek-harness-for-android/scripts/verify-bundle.py", line 155, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/runner/work/deepseek-harness-for-android/deepseek-harness-for-android/scripts/verify-bundle.py", line 30, in main
+    manifest = json.loads(open(args.manifest, encoding="utf-8").read())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/runtime-manifest.json'
+cp: cannot stat '/tmp/rootfs.bundle': No such file or directory
+cp: cannot stat '/tmp/runtime-manifest.json': No such file or directory
+=== runtime-artifacts ===
+total 8
+drwxr-xr-x  2 runner runner 4096 Aug 17 04:41 .
+drwxr-xr-x 13 runner runner 4096 Aug 17 04:41 ..
+4.0K	runtime-artifacts/
