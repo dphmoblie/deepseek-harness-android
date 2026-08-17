@@ -439,23 +439,27 @@ def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_ds
     links: dict[str, Path] = {}
     queue: list[Path] = []
 
-    def resolve_package(name: str) -> Path | None:
-        entry = node_modules / name
-        if not entry.exists():
-            return None
-        try:
-            real = entry.resolve()
-        except OSError:
-            return None
-        # pnpm 顶层包条目是符号链接（Windows 上为 junction）：解析后应指向真实目录
-        if real == entry or not real.is_dir():
-            return None
-        return real
+    def resolve_package(from_dir: Path, name: str) -> Path | None:
+        # Node 语义：从 from_dir 逐级向父目录查找 node_modules/<name>
+        cursor = from_dir
+        while True:
+            candidate = cursor / name if cursor.name == "node_modules" else cursor / "node_modules" / name
+            if candidate.exists():
+                try:
+                    real = candidate.resolve()
+                except OSError:
+                    return None
+                # pnpm 顶层包条目是符号链接（Windows 上为 junction）：解析后应指向真实目录
+                if real.is_dir():
+                    return real
+            if cursor.parent == cursor:
+                return None
+            cursor = cursor.parent
 
-    def enqueue(name: str) -> None:
+    def enqueue(name: str, from_dir: Path) -> None:
         if name in links:
             return
-        real = resolve_package(name)
+        real = resolve_package(from_dir, name)
         if real is None:
             return
         links[name] = real
@@ -463,7 +467,7 @@ def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_ds
 
     root_manifest = json.loads((dsh_root / "package.json").read_text(encoding="utf-8"))
     for dep in {**(root_manifest.get("dependencies") or {}), **(root_manifest.get("peerDependencies") or {})}:
-        enqueue(dep)
+        enqueue(dep, dsh_root)
 
     while queue:
         pkg_dir = queue.pop()
@@ -473,7 +477,7 @@ def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_ds
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         for dep in {**(manifest.get("dependencies") or {}), **(manifest.get("peerDependencies") or {})}:
             if dep not in links:
-                enqueue(dep)
+                enqueue(dep, pkg_dir)
 
     resolved_root = dsh_root.resolve()
     for name in sorted(links):
