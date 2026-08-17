@@ -17,7 +17,7 @@ import stat
 import tarfile
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Callable, Iterator
+from typing import BinaryIO, Callable, Iterable, Iterator
 
 
 MAX_ARCHIVE_ENTRIES = 250_000
@@ -224,6 +224,15 @@ class RootfsWriter:
             raise BuildError(f"unsupported rootfs entry type: {name}")
         self.seen.add(name)
         self.output.addfile(member, source)
+
+    def preseed_directories(self, names: Iterable[str]) -> None:
+        """流式重建场景：预注入 tar 流中已存在的目录，避免追加新树时重复写父目录链。
+
+        仅登记目录路径，不写条目、不计入 entry_count/extracted_bytes；
+        新树中与旧条目同路径的文件仍会被 add() 以 duplicate 拒绝。
+        """
+        for raw_name in names:
+            self.seen.add(normalized_path(raw_name))
 
     def add_directory(self, name: str) -> None:
         normalized = normalized_path(name)

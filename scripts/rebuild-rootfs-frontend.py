@@ -59,6 +59,9 @@ def stream_rebuild(bundle: Path, output: Path, dist_root: Path, replacements: li
     copied_count = 0
     dist_index_name: str | None = None
     added_bytes = 0
+    existing_directories: set[str] = set()
+    copied_paths: set[str] = set()
+    deduplicated_count = 0
 
     with bundle.open("rb") as raw_input:
         with gzip.open(raw_input, "rb") as compressed_input:
@@ -93,11 +96,22 @@ def stream_rebuild(bundle: Path, output: Path, dist_root: Path, replacements: li
                                         raise BuildError(
                                             f"链接指向被替换的条目：{member.name} -> {member.linkname}"
                                         )
+                                # 输入 bundle 可能已含重复条目（历史脚本 bug 产物）：
+                                # 复制时按规范化路径去重，保证输出归档干净。
+                                normalized_name = _ber.normalized_path(member.name)
+                                if normalized_name in copied_paths:
+                                    deduplicated_count += 1
+                                    if member.isreg():
+                                        skipped_bytes += member.size
+                                    continue
+                                copied_paths.add(normalized_name)
                                 if member.isreg():
                                     file_object = source.extractfile(member)
                                     target.addfile(member, file_object)
                                 else:
                                     target.addfile(member)
+                                if member.isdir():
+                                    existing_directories.add(normalized_name)
                                 copied_count += 1
 
                             if dist_index_name is None:
@@ -105,6 +119,10 @@ def stream_rebuild(bundle: Path, output: Path, dist_root: Path, replacements: li
                             new_dist_root = dist_index_name[: -len("index.html")].rstrip("/")
 
                             writer = RootfsWriter(target, 0)
+                            # 旧条目中已保留父目录链（如 opt/dsh/...、usr/local/lib）：
+                            # 预注入避免追加新树时重复写目录条目（重复条目会被
+                            # SafeRootfsExtractor 以 ARCHIVE_DUPLICATE_ENTRY 拒绝）。
+                            writer.preseed_directories(existing_directories)
                             before_bytes = writer.extracted_bytes
                             add_windows_tree(writer, dist_root, new_dist_root)
                             for local_path, archive_target in replacements:
@@ -122,6 +140,7 @@ def stream_rebuild(bundle: Path, output: Path, dist_root: Path, replacements: li
         "skippedCount": skipped_count,
         "skippedBytes": skipped_bytes,
         "copiedCount": copied_count,
+        "deduplicatedCount": deduplicated_count,
         "addedEntries": 0,  # 由 collect_expected 阶段补充
         "addedBytes": added_bytes,
         "distRoot": new_dist_root,
@@ -168,11 +187,16 @@ def collect_expected(
 
 
 def verify_rebuilt(bundle: Path, expected: dict[str, bytes]) -> None:
-    """流式遍历新 bundle，校验新写入条目完整且旧 dist 条目已清除。"""
+    """流式遍历新 bundle，校验新写入条目完整、旧 dist 条目已清除、全局无重复路径。"""
     print(f"[verify] 校验重建后的 {bundle.name}…")
     found = 0
+    seen_paths: set[str] = set()
     with tarfile.open(bundle, "r|gz") as source:
         for member in source:
+            normalized = _ber.normalized_path(member.name)
+            if normalized in seen_paths:
+                raise BuildError(f"重建后归档包含重复条目：{normalized}")
+            seen_paths.add(normalized)
             wanted = expected.pop(member.name, None)
             if wanted is None:
                 # 新写入树的目录条目不在 expected 中，允许；内容条目残留才算失败
@@ -290,6 +314,7 @@ def main() -> None:
                     "sha256": archive_sha256,
                     "skippedOldDistEntries": stats["skippedCount"],
                     "skippedOldDistBytes": stats["skippedBytes"],
+                    "deduplicatedOldEntries": stats["deduplicatedCount"],
                     "addedNewDistEntries": stats["addedEntries"],
                     "addedNewDistBytes": stats["addedBytes"],
                 },
