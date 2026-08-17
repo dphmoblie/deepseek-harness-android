@@ -29,7 +29,7 @@ export function TasksView(): ReactElement {
 
   useEffect(() => {
     void reloadSessions()
-    const unsubscribe = eventBus.subscribe(({ stream, rpcId: _rpcId, frame }) => {
+    const unsubscribe = eventBus.subscribe(({ stream, frame }) => {
       if (stream === 'mux') {
         const mux = frame as { type?: string; sessionId?: SessionId; jobs?: TaskView[]; event?: { type?: string; data?: unknown } }
         if (mux.type === 'session/jobs' && mux.sessionId === selected && mux.jobs !== undefined) {

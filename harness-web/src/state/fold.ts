@@ -20,7 +20,7 @@ export function foldHistoryEntry(entry: HistoryEntry): ChatEntry | null {
 
 /** 把一条增量事件折叠成渲染条目。 */
 export function foldEvent(event: SessionEvent, view?: ToolEventView): ChatEntry | null {
-  const data = event.data as Record<string, unknown>
+  const data = event.data
   switch (event.type) {
     case 'user/message': {
       const message = data.message

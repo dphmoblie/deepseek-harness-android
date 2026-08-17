@@ -92,7 +92,7 @@ export function useChat(sessionId: SessionId | null): ChatController {
     (event: SessionEvent, view?: ToolEventView) => {
       if (event.seq <= lastSeqRef.current) return
       lastSeqRef.current = event.seq
-      const data = event.data as Record<string, unknown>
+      const data = event.data
       switch (event.type) {
         case 'assistant/chunk': {
           const turn = data.turn as number

@@ -4,7 +4,6 @@ import {
   openEventStream,
   parseServerFrame,
   parseServerResponse,
-  RpcFailure,
   sendResponse,
   TransportError,
 } from './wire'
@@ -70,24 +69,25 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe('callUnary', () => {
   it('发送 client-request 信封并返回业务值', async () => {
-    const fetchFn = vi.fn(async (input: URL | RequestInfo, init?: RequestInit) => {
-      expect(String(input)).toBe('http://127.0.0.1:3080/api/session.list')
-      const body = JSON.parse(String(init?.body)) as { type: string; rpcId: string; method: string; payload: unknown }
+    const fetchFn = vi.fn((input: URL | RequestInfo, init?: RequestInit) => {
+      expect(input).toBeInstanceOf(URL)
+      expect((input as URL).href).toBe('http://127.0.0.1:3080/api/session.list')
+      const body = JSON.parse(init?.body as string) as { type: string; rpcId: string; method: string; payload: unknown }
       expect(body.type).toBe('client-request')
       expect(body.method).toBe('session.list')
-      return jsonResponse({ type: 'server-response', rpcId: body.rpcId, result: { ok: true, value: { items: [] } } })
+      return Promise.resolve(jsonResponse({ type: 'server-response', rpcId: body.rpcId, result: { ok: true, value: { items: [] } } }))
     })
     const value = await callUnary(BASE, 'session.list', {}, { deps: { fetchFn, randomId: () => 'r1' } })
     expect(value).toEqual({ items: [] })
   })
 
   it('业务失败抛 RpcFailure', async () => {
-    const fetchFn = vi.fn(async () =>
-      jsonResponse({
+    const fetchFn = vi.fn(() =>
+      Promise.resolve(jsonResponse({
         type: 'server-response',
         rpcId: 'r1',
         result: { ok: false, error: { code: 'session-not-found', message: 'no such session', details: { sessionId: 's1' } } },
-      }),
+      })),
     )
     await expect(
       callUnary(BASE, 'session.history', { sessionId: 's1' }, { deps: { fetchFn, randomId: () => 'r1' } }),
@@ -96,21 +96,22 @@ describe('callUnary', () => {
 
   it('载体层错误抛 TransportError', async () => {
     await expect(
-      callUnary(BASE, 'session.list', {}, { deps: { fetchFn: async () => new Response('not found', { status: 404 }), randomId: () => 'r1' } }),
+      callUnary(BASE, 'session.list', {}, { deps: { fetchFn: () => Promise.resolve(new Response('not found', { status: 404 })), randomId: () => 'r1' } }),
     ).rejects.toMatchObject({ status: 404 })
     await expect(
-      callUnary(BASE, 'session.list', {}, { deps: { fetchFn: async () => jsonResponse({ type: 'server-response', rpcId: 'other', result: { ok: true } }), randomId: () => 'r1' } }),
+      callUnary(BASE, 'session.list', {}, { deps: { fetchFn: () => Promise.resolve(jsonResponse({ type: 'server-response', rpcId: 'other', result: { ok: true } })), randomId: () => 'r1' } }),
     ).rejects.toBeInstanceOf(TransportError)
   })
 })
 
 describe('sendResponse', () => {
   it('发送 client-response 信封到 /api/respond', async () => {
-    const fetchFn = vi.fn(async () => new Response('', { status: 200 }))
+    const fetchFn = vi.fn(() => Promise.resolve(new Response('', { status: 200 })))
     await sendResponse(BASE, 'r1', { sessionId: 's1', approvalId: 'a1', outcome: 'allowed-once' }, { deps: { fetchFn } })
     const [url, init] = fetchFn.mock.calls[0] as unknown as [URL | RequestInfo, RequestInit | undefined]
-    expect(String(url)).toBe('http://127.0.0.1:3080/api/respond')
-    const body = JSON.parse(String(init?.body)) as { type: string; rpcId: string; result: { ok: boolean; value: unknown } }
+    expect(url).toBeInstanceOf(URL)
+    expect((url as URL).href).toBe('http://127.0.0.1:3080/api/respond')
+    const body = JSON.parse(init?.body as string) as { type: string; rpcId: string; result: { ok: boolean; value: unknown } }
     expect(body.type).toBe('client-response')
     expect(body.rpcId).toBe('r1')
     expect(body.result.ok).toBe(true)
