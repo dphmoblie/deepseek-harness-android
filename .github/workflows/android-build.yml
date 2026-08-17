@@ -258,6 +258,7 @@ jobs:
             git push origin ci-logs || true
           }
           {
+            set -e
             pnpm install --no-frozen-lockfile
             # 兜底：显式强制编译 node-pty，不依赖 allowBuilds 是否被解析
             pnpm rebuild node-pty || true
