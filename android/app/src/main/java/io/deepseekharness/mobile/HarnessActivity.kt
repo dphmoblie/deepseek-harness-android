@@ -26,6 +26,10 @@ class HarnessActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var allowedOrigin: Origin
 
+    companion object {
+        const val AUTH_TOKEN_COOKIE = "dsh_mobile_token"
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -66,6 +70,13 @@ class HarnessActivity : AppCompatActivity() {
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(webView, false)
+            // WebView 的 WS 握手 401 不触发 onReceivedHttpAuthRequest，Basic 挑战
+            // 对 WebSocket 无效；注入 HttpOnly Cookie 供 preload 的 upgrade 路径
+            // 鉴权（JS 不可读，仅随同源请求与 WS 握手自动携带）。
+            setCookie(
+                "http://127.0.0.1:${allowedOrigin.port}",
+                "$AUTH_TOKEN_COOKIE=${access.password}; Path=/; HttpOnly",
+            )
         }
         WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword()
         webView.webViewClient = RestrictedWebViewClient(allowedOrigin, access.username, access.password)
@@ -89,6 +100,13 @@ class HarnessActivity : AppCompatActivity() {
             webView.webViewClient = WebViewClient()
             webView.removeAllViews()
             webView.destroy()
+        }
+        if (::allowedOrigin.isInitialized) {
+            // 清除注入的鉴权 Cookie：token 每次启动重新生成，旧值无意义
+            CookieManager.getInstance().setCookie(
+                "http://127.0.0.1:${allowedOrigin.port}",
+                "$AUTH_TOKEN_COOKIE=; Max-Age=0",
+            )
         }
         WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword()
         super.onDestroy()

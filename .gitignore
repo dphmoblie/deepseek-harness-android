@@ -43,7 +43,9 @@ android/app/src/main/assets/capacitor.config.json
 android/app/src/main/assets/capacitor.plugins.json
 android/app/src/main/assets/public/
 android/app/src/main/assets/runtime/runtime-manifest.json
+android/app/src/main/assets/runtime/runtime-manifest.json.bak
 android/app/src/main/assets/runtime/rootfs.bundle
+android/app/src/main/assets/runtime/rootfs.bundle.bak
 android/app/src/main/jniLibs/**/*.so
 android/gradle/wrapper/gradle-wrapper.jar
 *.apk

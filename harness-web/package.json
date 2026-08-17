@@ -1,0 +1,25 @@
+{
+  "name": "@dsh-mobile/harness-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "description": "DeepSeek Harness 移动端 Web 前端（替换原版 dsh-web-frontend dist）",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 4174",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "18.3.18",
+    "@types/react-dom": "18.3.5",
+    "@vitejs/plugin-react": "4.3.4",
+    "typescript": "5.7.3",
+    "vite": "6.0.7",
+    "vitest": "2.1.8"
+  }
+}
