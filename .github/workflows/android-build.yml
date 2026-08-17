@@ -256,6 +256,10 @@ jobs:
             koffi: true
             "@deepseek-ai/dsh-subprocess-local": true
             protobufjs: true
+            "@google/genai": true
+            cloudflared: true
+            cpu-features: true
+            ssh2: true
           EOF
           push_log() {
             echo "=== 推送步骤日志到 ci-logs 分支 ==="

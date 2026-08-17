@@ -37,7 +37,7 @@ data class RuntimeSettings(
     val keepScreenAwake: Boolean,
     val terminalFontSize: Int,
     val apiKey: String = "",
-    val autoLaunch: Boolean = true,
+    val autoLaunch: Boolean = false,
 )
 
 data class RootfsArtifact(
