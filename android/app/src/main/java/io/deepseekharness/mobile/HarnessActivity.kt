@@ -41,7 +41,6 @@ class HarnessActivity : AppCompatActivity() {
             finish()
             return
         }
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         if (RuntimeStore(this).settings().keepScreenAwake) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }

@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
-import { Loader2 } from 'lucide-react'
+import { CheckCircle2, Copy, Loader2 } from 'lucide-react'
 import type { RuntimeBridge, TerminalChunk, TerminalExit, TerminalKind } from '../platform/types'
 
 interface TerminalPanelProps {
@@ -31,7 +31,28 @@ function base64ToBytes(value: string): Uint8Array {
 
 export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanelProps) {
   const containerRef = useRef<HTMLDivElement>(null)
+  const terminalRef = useRef<Terminal | null>(null)
   const [connecting, setConnecting] = useState(true)
+  const [copied, setCopied] = useState(false)
+
+  const copyOutput = useCallback(async () => {
+    const terminal = terminalRef.current
+    if (terminal === null) return
+    let text = terminal.getSelection()
+    if (text === '') {
+      terminal.selectAll()
+      text = terminal.getSelection()
+      terminal.clearSelection()
+    }
+    if (text === '') return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      onError('复制失败，请长按选择文本后复制')
+    }
+  }, [onError])
 
   useEffect(() => {
     const container = containerRef.current
@@ -48,7 +69,7 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
     const listenerRemovers: Array<() => Promise<void>> = []
 
     const terminal = new Terminal({
-      allowProposedApi: false,
+      allowProposedApi: true,
       allowTransparency: false,
       convertEol: false,
       cursorBlink: true,
@@ -84,6 +105,7 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
     terminal.open(container)
+    terminalRef.current = terminal
 
     const reportError = (error: unknown): void => {
       if (!cancelled) onError(error instanceof Error ? error.message : '终端操作失败')
@@ -203,12 +225,24 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
       window.cancelAnimationFrame(resizeFrame)
       listenerRemovers.forEach(remove => { void remove() })
       if (sessionId !== undefined) void bridge.closeTerminal(sessionId).catch(() => undefined)
+      terminalRef.current = null
       terminal.dispose()
     }
   }, [bridge, fontSize, kind, onError])
 
   return (
     <div className="terminal-frame" aria-label={kind === 'ubuntu' ? 'Ubuntu 终端' : '设备终端'}>
+      <button
+        type="button"
+        className="terminal-copy"
+        onClick={() => void copyOutput()}
+        disabled={connecting}
+        title="复制全部或选中内容"
+        aria-label="复制终端输出"
+      >
+        {copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
+        {copied ? '已复制' : '复制'}
+      </button>
       {connecting && (
         <div className="terminal-connecting" role="status">
           <Loader2 size={18} className="spin" />

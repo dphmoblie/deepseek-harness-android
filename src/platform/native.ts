@@ -56,7 +56,7 @@ interface NativeRuntimePlugin {
   addListener(eventName: 'terminalExit', listener: (event: TerminalExit) => void): Promise<PluginListenerHandle>
 }
 
-const MAX_TERMINAL_INPUT_BYTES = 32 * 1024
+const MAX_TERMINAL_INPUT_BYTES = 256 * 1024
 const NativeRuntime = registerPlugin<NativeRuntimePlugin>('MobileRuntime')
 
 function validatedListener<T>(validator: (value: unknown) => T, listener: (event: T) => void): (event: T) => void {

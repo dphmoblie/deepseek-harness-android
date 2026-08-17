@@ -785,7 +785,7 @@ button:disabled {
 .terminal-connecting {
   position: absolute;
   top: 10px;
-  right: 10px;
+  right: 84px;
   z-index: 5;
   display: inline-flex;
   align-items: center;
@@ -796,6 +796,28 @@ button:disabled {
   color: #c6ced8;
   background: #1e252d;
   font-size: 11px;
+}
+
+.terminal-copy {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid #3b4652;
+  border-radius: 6px;
+  background: #1b232c;
+  color: #aebacb;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.terminal-copy:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .empty-terminal {

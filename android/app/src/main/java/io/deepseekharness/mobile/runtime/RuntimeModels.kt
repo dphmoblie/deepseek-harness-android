@@ -229,7 +229,7 @@ object RuntimeLimits {
     const val MAX_ARCHIVE_ENTRIES = 250_000
     const val MAX_ARCHIVE_PATH_CHARS = 4096
     const val MAX_ARCHIVE_COMPONENT_CHARS = 255
-    const val MAX_TERMINAL_INPUT_BYTES = 32 * 1024
+    const val MAX_TERMINAL_INPUT_BYTES = 256 * 1024
 }
 
 object RuntimeValidation {
