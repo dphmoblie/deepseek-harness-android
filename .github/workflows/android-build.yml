@@ -215,15 +215,15 @@ jobs:
           mkdir -p /tmp/dsh-root && cd /tmp/dsh-root
           # 本地未发布的 mobile bundle：复制进 dsh-root 后以 file: 依赖安装
           cp -r "$GITHUB_WORKSPACE/packages/dsh-mobile-compat" /tmp/dsh-root/dsh-mobile-compat
+          # dsh-base/dsh-web-app 固定到与 dsh 0.1.0-rc.6 同批次版本：
+          # latest(0.0.1-rc.1) 依赖已下架的 @deepseek-ai/dsh-client-ui-slash，会导致安装失败
           cat > package.json <<'EOF'
           {
             "name": "dsh-root",
             "private": true,
-              "dependencies": {
-                "@deepseek-ai/dsh": "0.1.0-rc.6",
-                # latest(0.0.1-rc.1) 依赖已下架的 @deepseek-ai/dsh-client-ui-slash，
-                # 固定到与 dsh 0.1.0-rc.6 同批次的版本
-                "@deepseek-ai/dsh-base": "0.1.0-rc.6",
+            "dependencies": {
+              "@deepseek-ai/dsh": "0.1.0-rc.6",
+              "@deepseek-ai/dsh-base": "0.1.0-rc.6",
               "@deepseek-ai/dsh-web-app": "0.1.0-rc.6",
               "@linxin666/dsh-web-ui-all": "0.1.19",
               "@liustack/modlens": "3.18.1",
