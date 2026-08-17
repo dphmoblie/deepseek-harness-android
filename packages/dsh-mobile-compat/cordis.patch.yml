@@ -1,0 +1,6 @@
+# dsh-mobile-compat bundle patch: 把移动端 AppFrame 布局插件插入 profile 图层栈。
+# 参考 dshmarket 等 client bundle 的同构写法；client 依赖由 package.json 的
+# dsh.client.inject 声明（dsh-client-modules 在浏览器侧扫描加载）。
+- insert:
+    - id: dsh-mobile-compat
+      name: 'dsh-mobile-compat'
