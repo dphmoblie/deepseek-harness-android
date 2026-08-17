@@ -214,8 +214,8 @@ jobs:
             "private": true,
             "dependencies": {
               "@deepseek-ai/dsh": "0.1.0-rc.6",
-              "@deepseek-ai/dsh-base": "0.0.1-rc.1",
-              "@deepseek-ai/dsh-web-app": "0.0.1-rc.1",
+              "@deepseek-ai/dsh-base": "0.1.0-rc.6",
+              "@deepseek-ai/dsh-web-app": "0.1.0-rc.6",
               "@linxin666/dsh-web-ui-all": "0.1.19",
               "@liustack/modlens": "3.18.1",
               "dshmarket": "1.10.1",
