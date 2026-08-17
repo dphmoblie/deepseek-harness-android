@@ -227,9 +227,10 @@ interface ConversationScreenProps {
   onInstall: () => void
   onLaunch: () => void
   onOpenSettings: () => void
+  onOpenTerminal: () => void
 }
 
-function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings }: ConversationScreenProps) {
+function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings, onOpenTerminal }: ConversationScreenProps) {
   const installed = runtimeInstalled(runtime)
   const transitioning = runtimeTransitioning(runtime)
   const progress = runtime.totalBytes > 0
@@ -290,6 +291,11 @@ function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings
           {installed && !transitioning && busy !== 'launch' && (
             <button className="button button-primary" type="button" onClick={onLaunch} disabled={busy !== null}>
               <Play size={18} fill="currentColor" />重新打开对话
+            </button>
+          )}
+          {runtime.phase === 'error' && installed && (
+            <button className="button button-secondary" type="button" onClick={onOpenTerminal} disabled={busy !== null}>
+              <SquareTerminal size={18} />打开终端排查
             </button>
           )}
           <button className="button button-secondary" type="button" onClick={onOpenSettings} disabled={busy === 'install'}>
@@ -458,7 +464,9 @@ interface TerminalScreenProps {
 function TerminalScreen({ bridge, fontSize, onAuthorize, onBack, onConnect, onError, onOpenEnvironment, onOpenShizuku, runtime, shizuku }: TerminalScreenProps) {
   const [kind, setKind] = useState<TerminalKind>('ubuntu')
   const [epoch, setEpoch] = useState(0)
-  const ubuntuReady = runtime.phase === 'ready' || runtime.phase === 'running'
+  // Ubuntu 终端只依赖 rootfs 已安装（bash 由 PRoot 直接启动，不经过 dsh web）：
+  // dsh web 启动失败（phase=error）时也必须能进终端手动排查，而不是被闸在门外。
+  const ubuntuReady = runtimeInstalled(runtime) && !runtimeTransitioning(runtime)
   const deviceReady = shizuku.installed && shizuku.running && shizuku.permission === 'granted' && shizuku.connected
   const ready = kind === 'ubuntu' ? ubuntuReady : deviceReady
 
@@ -982,7 +990,7 @@ export function App() {
   const screen = useMemo(() => {
     switch (activeView) {
       case 'conversation':
-        return <ConversationScreen busy={busy} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} />
+        return <ConversationScreen busy={busy} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} onOpenTerminal={() => setActiveView('terminal')} />
       case 'terminal':
         return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onBack={() => setActiveView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
       case 'environment':
