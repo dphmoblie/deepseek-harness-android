@@ -1,0 +1,222 @@
+/home/runner/work/deepseek-harness-for-android/deepseek-harness-for-android
+=== node-pty step output ===
++ set -e
++ pnpm install --no-frozen-lockfile
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Progress: resolved 94, reused 7, downloaded 71, added 0
+Progress: resolved 221, reused 11, downloaded 200, added 0
+Progress: resolved 393, reused 40, downloaded 285, added 0
+Progress: resolved 606, reused 93, downloaded 444, added 0
+Progress: resolved 689, reused 128, downloaded 506, added 0
+[WARN] 3 deprecated subdependencies found: glob@10.5.0, node-domexception@1.0.0, tar@6.2.1
+Packages: +632
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 689, reused 128, downloaded 506, added 1
+Packages are hard linked from the content-addressable store to the virtual store.
+  Content-addressable store is at: /home/runner/setup-pnpm/node_modules/.bin/store/v11
+  Virtual store is at:             node_modules/.pnpm
+Progress: resolved 689, reused 128, downloaded 506, added 632, done
+.../.pnpm/koffi@3.1.5/node_modules/koffi install$ node ./cnoke.cjs -P . -D src/koffi --prebuild --release
+.../node_modules/protobufjs postinstall$ node scripts/postinstall
+.../node-pty@1.1.0/node_modules/node-pty install$ node scripts/prebuild.js || node-gyp rebuild
+.../node_modules/protobufjs postinstall: Done
+.../node-pty@1.1.0/node_modules/node-pty install: [32m> Checking prebuilds...[0m
+.../node-pty@1.1.0/node_modules/node-pty install: [33m> Rebuilding because directory /tmp/dsh-root/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64 does not exist[0m
+.../.pnpm/koffi@3.1.5/node_modules/koffi install: Done
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info it worked if it ends with ok
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info using node-gyp@12.4.0
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info using node@22.19.0 | linux | arm64
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info find Python using Python version 3.12.3 found at "/usr/bin/python3"
+.../node-pty@1.1.0/node_modules/node-pty install: gyp http GET https://nodejs.org/download/release/v22.19.0/node-v22.19.0-headers.tar.gz
+.../node-pty@1.1.0/node_modules/node-pty install: gyp http 200 https://nodejs.org/download/release/v22.19.0/node-v22.19.0-headers.tar.gz
+.../node-pty@1.1.0/node_modules/node-pty install: gyp http GET https://nodejs.org/download/release/v22.19.0/SHASUMS256.txt
+.../node-pty@1.1.0/node_modules/node-pty install: gyp http 200 https://nodejs.org/download/release/v22.19.0/SHASUMS256.txt
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn /usr/bin/python3
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args [
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '/home/runner/setup-pnpm/node_modules/.pnpm/pnpm@11.19.0/node_modules/pnpm/dist/node_modules/node-gyp/gyp/gyp_main.py',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args 'binding.gyp',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-f',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args 'make',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-I',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '/tmp/dsh-root/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/config.gypi',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-I',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '/home/runner/setup-pnpm/node_modules/.pnpm/pnpm@11.19.0/node_modules/pnpm/dist/node_modules/node-gyp/addon.gypi',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-I',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '/home/runner/.cache/node-gyp/22.19.0/include/node/common.gypi',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dlibrary=shared_library',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dvisibility=default',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dnode_root_dir=/home/runner/.cache/node-gyp/22.19.0',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dnode_gyp_dir=/home/runner/setup-pnpm/node_modules/.pnpm/pnpm@11.19.0/node_modules/pnpm/dist/node_modules/node-gyp',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dnode_lib_file=/home/runner/.cache/node-gyp/22.19.0/<(target_arch)/node.lib',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dmodule_root_dir=/tmp/dsh-root/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dnode_engine=v8',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '--depth=.',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '--no-parallel',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '--generator-output',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args 'build',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Goutput_dir=.'
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args ]
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn make
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args [ 'BUILDTYPE=Release', '-C', 'build' ]
+.../node-pty@1.1.0/node_modules/node-pty install: make: Entering directory '/tmp/dsh-root/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build'
+.../node-pty@1.1.0/node_modules/node-pty install:   TOUCH Release/obj.target/../../../node-addon-api@7.1.1/node_modules/node-addon-api/node_addon_api_except.stamp
+.../node-pty@1.1.0/node_modules/node-pty install:   CXX(target) Release/obj.target/pty/src/unix/pty.o
+.../node-pty@1.1.0/node_modules/node-pty install:   SOLINK_MODULE(target) Release/obj.target/pty.node
+.../node-pty@1.1.0/node_modules/node-pty install:   COPY Release/pty.node
+.../node-pty@1.1.0/node_modules/node-pty install: make: Leaving directory '/tmp/dsh-root/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build'
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info ok 
+.../node-pty@1.1.0/node_modules/node-pty install: Done
+.../node-pty@1.1.0/node_modules/node-pty postinstall$ node scripts/post-install.js
+.../node-pty@1.1.0/node_modules/node-pty postinstall: [32m> Cleaning release folder...[0m
+.../node-pty@1.1.0/node_modules/node-pty postinstall: [32m> Moving conpty.dll...[0m
+.../node-pty@1.1.0/node_modules/node-pty postinstall:   SKIPPED (not Windows)
+.../node-pty@1.1.0/node_modules/node-pty postinstall: Done
+.../@deepseek-ai/dsh-subprocess-local postinstall$ node scripts/ensure-spawn-helper.mjs
+.../@deepseek-ai/dsh-subprocess-local postinstall: Done
+
+dependencies:
++ @deepseek-ai/dsh 0.1.0-rc.6
++ @deepseek-ai/dsh-base 0.1.0-rc.6
++ @deepseek-ai/dsh-client-runtime 0.1.0-rc.6
++ @deepseek-ai/dsh-client-ui-slots 0.1.0-rc.6
++ @deepseek-ai/dsh-client-ui-theme 0.1.0-rc.6
++ @deepseek-ai/dsh-web-app 0.1.0-rc.6
++ @linxin666/dsh-web-ui-all 0.1.19
++ @liustack/modlens 3.18.1
++ dsh-mobile-compat 0.1.0
++ dshmarket 1.10.1
++ react 18.3.1 (19.2.8 is available)
+
+devDependencies:
++ node-gyp 10.3.1 (13.0.1 is available)
+
+Added 16 entries to minimumReleaseAgeExclude in pnpm-workspace.yaml (set minimumReleaseAgeStrict to true to gate these updates with a prompt):
+  @linxin666/dsh-client-ui-aionui-panel@0.1.19
+  @linxin666/dsh-client-ui-community-plugins@0.1.19
+  @linxin666/dsh-client-ui-git-graph@0.1.19
+  @linxin666/dsh-client-ui-skin-center@0.1.19
+  @linxin666/dsh-client-ui-task-board@0.1.19
+  @linxin666/dsh-client-ui-web-ui-settings@0.1.19
+  @linxin666/dsh-liangshen@0.1.19
+  @linxin666/dsh-live-stats@0.1.19
+  @linxin666/dsh-pet@0.1.19
+  @linxin666/dsh-remote-web-ui@0.1.19
+  @linxin666/dsh-skins@0.1.19
+  @linxin666/dsh-ssh@0.1.19
+  @linxin666/dsh-tool-describe-image@0.1.19
+  @linxin666/dsh-web-ui-all@0.1.19
+  @liustack/modlens@3.18.1
+  dshmarket@1.10.1
+[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: @google/genai@1.52.0, cloudflared@0.7.3, cpu-features@0.0.10, ssh2@1.17.0
+
+Run "pnpm approve-builds" to pick which dependencies should be allowed to run scripts.
++ pnpm rebuild node-pty
+.../node-pty@1.1.0/node_modules/node-pty install$ node scripts/prebuild.js || node-gyp rebuild
+.../node-pty@1.1.0/node_modules/node-pty install: [32m> Checking prebuilds...[0m
+.../node-pty@1.1.0/node_modules/node-pty install: [33m> Rebuilding because directory /tmp/dsh-root/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64 does not exist[0m
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info it worked if it ends with ok
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info using node-gyp@10.3.1
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info using node@22.19.0 | linux | arm64
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info find Python using Python version 3.12.3 found at "/usr/bin/python3"
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn /usr/bin/python3
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args [
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '/tmp/dsh-root/node_modules/.pnpm/node-gyp@10.3.1/node_modules/node-gyp/gyp/gyp_main.py',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args 'binding.gyp',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-f',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args 'make',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-I',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '/tmp/dsh-root/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/config.gypi',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-I',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '/tmp/dsh-root/node_modules/.pnpm/node-gyp@10.3.1/node_modules/node-gyp/addon.gypi',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-I',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '/home/runner/.cache/node-gyp/22.19.0/include/node/common.gypi',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dlibrary=shared_library',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dvisibility=default',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dnode_root_dir=/home/runner/.cache/node-gyp/22.19.0',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dnode_gyp_dir=/tmp/dsh-root/node_modules/.pnpm/node-gyp@10.3.1/node_modules/node-gyp',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dnode_lib_file=/home/runner/.cache/node-gyp/22.19.0/<(target_arch)/node.lib',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dmodule_root_dir=/tmp/dsh-root/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Dnode_engine=v8',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '--depth=.',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '--no-parallel',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '--generator-output',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args 'build',
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args '-Goutput_dir=.'
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args ]
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn make
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info spawn args [ 'BUILDTYPE=Release', '-C', 'build' ]
+.../node-pty@1.1.0/node_modules/node-pty install: make: Entering directory '/tmp/dsh-root/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build'
+.../node-pty@1.1.0/node_modules/node-pty install:   TOUCH Release/obj.target/../../../node-addon-api@7.1.1/node_modules/node-addon-api/node_addon_api_except.stamp
+.../node-pty@1.1.0/node_modules/node-pty install:   CXX(target) Release/obj.target/pty/src/unix/pty.o
+.../node-pty@1.1.0/node_modules/node-pty install:   SOLINK_MODULE(target) Release/obj.target/pty.node
+.../node-pty@1.1.0/node_modules/node-pty install:   COPY Release/pty.node
+.../node-pty@1.1.0/node_modules/node-pty install: make: Leaving directory '/tmp/dsh-root/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build'
+.../node-pty@1.1.0/node_modules/node-pty install: gyp info ok 
+.../node-pty@1.1.0/node_modules/node-pty install: Done
+.../node-pty@1.1.0/node_modules/node-pty postinstall$ node scripts/post-install.js
+.../node-pty@1.1.0/node_modules/node-pty postinstall: [32m> Cleaning release folder...[0m
+.../node-pty@1.1.0/node_modules/node-pty postinstall: [32m> Moving conpty.dll...[0m
+.../node-pty@1.1.0/node_modules/node-pty postinstall:   SKIPPED (not Windows)
+.../node-pty@1.1.0/node_modules/node-pty postinstall: Done
++ PTP=node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty
++ echo '=== pty 包路径探测 ==='
+=== pty 包路径探测 ===
++ find node_modules/.pnpm -maxdepth 2 -type d -name 'node-pty*'
++ head -20
+node_modules/.pnpm/node-pty@1.1.0
++ echo '=== build 目录内容 ==='
+=== build 目录内容 ===
++ find node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build -maxdepth 2 -type f
++ head -30
+node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/Release/pty.node
+node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/config.gypi
+node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/pty.target.mk
+node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/Makefile
+node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/binding.Makefile
++ mkdir -p node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64
++ cp node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/Release/pty.node node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/pty.node
++ cp node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/Release/spawn-helper node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/spawn-helper
++ true
++ chmod +x node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/spawn-helper
++ true
++ ls -la node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/
+total 88
+drwxr-xr-x 2 runner runner  4096 Aug 17 13:57 .
+drwxr-xr-x 7 runner runner  4096 Aug 17 13:57 ..
+-rwxr-xr-x 1 runner runner 81400 Aug 17 13:57 pty.node
+=== dsh-root 探测 ===
+-rwxr-xr-x 2 runner runner 8274 Aug 17 13:57 /tmp/dsh-root/node_modules/@deepseek-ai/dsh/lib/bin.js
+total 88
+drwxr-xr-x 2 runner runner  4096 Aug 17 13:57 .
+drwxr-xr-x 7 runner runner  4096 Aug 17 13:57 ..
+-rwxr-xr-x 1 runner runner 81400 Aug 17 13:57 pty.node
+=== bundle step output ===
+note: excluded paths not present in flat archive, skipped: ['/usr/lib/systemd/system/system-systemd\\x2dcryptsetup.slice', '/usr/lib/systemd/system/system-systemd\\x2dveritysetup.slice']
+Traceback (most recent call last):
+  File "/home/runner/work/deepseek-harness-for-android/deepseek-harness-for-android/scripts/build-embedded-runtime.py", line 833, in <module>
+    main()
+  File "/home/runner/work/deepseek-harness-for-android/deepseek-harness-for-android/scripts/build-embedded-runtime.py", line 745, in main
+    patch_dsh_app_boot(args.dsh_root)
+  File "/home/runner/work/deepseek-harness-for-android/deepseek-harness-for-android/scripts/build-embedded-runtime.py", line 583, in patch_dsh_app_boot
+    if old_line in text:
+       ^^^^^^^^
+NameError: name 'old_line' is not defined
+bundle 不存在
+ls: cannot access '/tmp/rootfs.bundle': No such file or directory
+ls: cannot access '/tmp/runtime-manifest.json': No such file or directory
+sha256sum: /tmp/rootfs.bundle: No such file or directory
+Traceback (most recent call last):
+  File "/home/runner/work/deepseek-harness-for-android/deepseek-harness-for-android/scripts/verify-bundle.py", line 189, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/runner/work/deepseek-harness-for-android/deepseek-harness-for-android/scripts/verify-bundle.py", line 30, in main
+    manifest = json.loads(open(args.manifest, encoding="utf-8").read())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/runtime-manifest.json'
+cp: cannot stat '/tmp/rootfs.bundle': No such file or directory
+cp: cannot stat '/tmp/runtime-manifest.json': No such file or directory
+=== runtime-artifacts ===
+total 8
+drwxr-xr-x  2 runner runner 4096 Aug 17 13:57 .
+drwxr-xr-x 14 runner runner 4096 Aug 17 13:57 ..
+4.0K	runtime-artifacts/
