@@ -2,12 +2,16 @@ name: Android CI (build + verify)
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'feature/dsh-plugin-compat']
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
+    needs: [build-runners, build-rootfs]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -59,6 +63,28 @@ jobs:
       - name: Capacitor sync
         run: pnpm run android:sync
 
+      - name: Download PRoot runners (built by the toolchain job)
+        uses: actions/download-artifact@v4
+        with:
+          name: proot-runners-arm64
+          path: android/app/src/main/jniLibs/arm64-v8a
+
+      - name: Verify runner placement
+        run: ls -la android/app/src/main/jniLibs/arm64-v8a
+
+      - name: Download embedded runtime bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: embedded-runtime
+          path: /tmp/embedded-runtime
+
+      - name: Place embedded runtime into APK assets
+        run: |
+          mkdir -p android/app/src/main/assets/runtime
+          find /tmp/embedded-runtime -name rootfs.bundle -exec cp {} android/app/src/main/assets/runtime/rootfs.bundle \;
+          find /tmp/embedded-runtime -name runtime-manifest.json -exec cp {} android/app/src/main/assets/runtime/runtime-manifest.json \;
+          ls -la android/app/src/main/assets/runtime
+
       - name: Set up Gradle (trusted distribution for wrapper bootstrap)
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -75,9 +101,317 @@ jobs:
         working-directory: android
         run: ./gradlew assembleDebug lint testDebugUnitTest --no-daemon
 
+      - name: Publish APK to dist branch (thin APKs only; embedded ones ship via Release)
+        run: |
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          SIZE="$(stat -c%s "$APK")"
+          echo "APK size: $SIZE bytes"
+          if [ "$SIZE" -ge 94371840 ]; then
+            # 嵌入 rootfs 的 APK 超过 GitHub 100MB 分支文件上限：
+            # 仅通过 Release 资产发布（≤2GB），dist 保持瘦包语义。
+            echo "embedded APK too large for dist branch — Release assets will carry it"
+            exit 0
+          fi
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git fetch origin dist || true
+          git checkout -b dist origin/dist 2>/dev/null || git checkout --orphan dist
+          rm -rf dist && mkdir -p dist
+          cp "$APK" dist/dsh-harness-android-debug.apk
+          git add -f dist/dsh-harness-android-debug.apk
+          git commit -m "dist: auto-built APK ($GITHUB_SHA)" || true
+          git push origin dist
+
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: dsh-harness-android-debug
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+  build-runners:
+    name: Build PRoot runners (Operit2 toolchain, arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout Operit2 at the pinned runtime toolchain commit
+        uses: actions/checkout@v4
+        with:
+          repository: AAswordman/Operit2
+          ref: dc4c3a9405dc7ed3ef69b2ac9a6ace65374d77cf
+          path: operit2
+
+      - name: Download pinned sources (busybox / termux-proot / talloc / bash)
+        working-directory: operit2/tools/android-runtime
+        run: |
+          set -euo pipefail
+          mkdir -p downloads sources
+          fetch() {
+            local name="$1" url="$2" archive="$3" sha="$4"
+            echo "downloading $name"
+            curl -fL --retry 3 -o "downloads/$archive" "$url"
+            echo "$sha  downloads/$archive" | sha256sum -c -
+            tar -xf "downloads/$archive" -C sources
+          }
+          fetch busybox https://busybox.net/downloads/busybox-1.38.0.tar.bz2 busybox-1.38.0.tar.bz2 34f9ea6ff8636f2c9241153b9114eefa9e65674a45318ae1ef95bb5f31c53bb2
+          fetch proot https://github.com/termux/proot/archive/refs/tags/v5.1.107.78.tar.gz termux-proot-v5.1.107.78.tar.gz f3377ba49dcd833370420c34c5081b4c243ecbb85b2a9881a4f4586012599afa
+          fetch talloc https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz talloc-2.4.3.tar.gz dc46c40b9f46bb34dd97fe41f548b0e8b247b77a918576733c528e83abd854dd
+          fetch bash https://ftp.gnu.org/gnu/bash/bash-5.2.37.tar.gz bash-5.2.37.tar.gz 9599b22ecd1d5787ad7d3b7bf0c59f312b3396d1e281175dd1f8a4014da621ff
+
+      - name: Install NDK r29-beta4
+        run: |
+          mkdir -p "$HOME/.cache/operit-android-runtime"
+          curl -fL --retry 3 -o /tmp/ndk.zip https://dl.google.com/android/repository/android-ndk-r29-beta4-linux.zip
+          unzip -q /tmp/ndk.zip -d "$HOME/.cache/operit-android-runtime"
+
+      - name: Build PRoot (arm64-v8a)
+        working-directory: operit2
+        run: |
+          export ANDROID_NDK_HOME="$HOME/.cache/operit-android-runtime/android-ndk-r29-beta4"
+          export OPERIT_ANDROID_RUNTIME_ABIS="arm64-v8a"
+          export OPERIT_ANDROID_RUNTIME_COMPONENTS="proot"
+          bash tools/android-runtime/build_android_tools_wsl.sh
+
+      - name: Collect runners (renamed to dsh names)
+        run: |
+          mkdir -p runners
+          cp operit2/apps/flutter/app/android/app/src/main/jniLibs/arm64-v8a/liboperit_proot.so runners/libdsh_proot.so
+          cp operit2/apps/flutter/app/android/app/src/main/jniLibs/arm64-v8a/liboperit_loader.so runners/libdsh_proot_loader.so
+          sha256sum runners/*
+
+      - name: Upload runners
+        uses: actions/upload-artifact@v4
+        with:
+          name: proot-runners-arm64
+          path: runners/*.so
+          if-no-files-found: error
+
+  build-rootfs:
+    name: Build embedded runtime bundle (Ubuntu 24.04 ARM64 + Node 24.19 + dsh)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22 (arm64)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+
+      - name: Set up pnpm
+        run: npm install -g pnpm@11.19.0
+
+      - name: Prepare dsh runtime for linux/arm64 (compile node-pty from source)
+        run: |
+          set -x
+          set -o pipefail
+          mkdir -p /tmp/dsh-root && cd /tmp/dsh-root
+          # 本地未发布的 mobile bundle：复制进 dsh-root 后以 file: 依赖安装
+          cp -r "$GITHUB_WORKSPACE/packages/dsh-mobile-compat" /tmp/dsh-root/dsh-mobile-compat
+          cat > package.json <<'EOF'
+          {
+            "name": "dsh-root",
+            "private": true,
+            "dependencies": {
+              "@deepseek-ai/dsh": "0.1.0-rc.6",
+              "@deepseek-ai/dsh-base": "0.0.1-rc.1",
+              "@deepseek-ai/dsh-web-app": "0.0.1-rc.1",
+              "@linxin666/dsh-web-ui-all": "0.1.19",
+              "@liustack/modlens": "3.18.1",
+              "dshmarket": "1.10.1",
+              "dsh-mobile-compat": "file:./dsh-mobile-compat",
+              "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
+              "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.6",
+              "@deepseek-ai/dsh-client-ui-theme": "0.1.0-rc.6",
+              "react": "^18.3.0"
+            },
+            "devDependencies": { "node-gyp": "^10.2.0" }
+          }
+          EOF
+          cat > pnpm-workspace.yaml <<'EOF'
+          allowBuilds:
+            node-pty: true
+            koffi: true
+            "@deepseek-ai/dsh-subprocess-local": true
+            protobufjs: true
+          EOF
+          push_log() {
+            echo "=== 推送步骤日志到 ci-logs 分支 ==="
+            cd "$GITHUB_WORKSPACE"
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git fetch origin ci-logs || true
+            git checkout -b ci-logs origin/ci-logs 2>/dev/null || git checkout --orphan ci-logs
+            mkdir -p logs
+            cp /tmp/step.log logs/install-$GITHUB_RUN_NUMBER.log
+            git add -f logs/install-$GITHUB_RUN_NUMBER.log
+            git commit -m "ci: install log run #$GITHUB_RUN_NUMBER" || true
+            git push origin ci-logs || true
+          }
+          {
+            pnpm install --no-frozen-lockfile
+            # 兜底：显式强制编译 node-pty，不依赖 allowBuilds 是否被解析
+            pnpm rebuild node-pty || true
+            PTP="node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty"
+            echo "=== pty 包路径探测 ==="
+            find node_modules/.pnpm -maxdepth 2 -type d -name "node-pty*" | head -20
+            echo "=== build 目录内容 ==="
+            find "$PTP/build" -maxdepth 2 -type f 2>/dev/null | head -30
+            mkdir -p "$PTP/prebuilds/linux-arm64"
+            cp "$PTP/build/Release/pty.node" "$PTP/prebuilds/linux-arm64/pty.node"
+            cp "$PTP/build/Release/spawn-helper" "$PTP/prebuilds/linux-arm64/spawn-helper" 2>/dev/null || true
+            chmod +x "$PTP/prebuilds/linux-arm64/spawn-helper" 2>/dev/null || true
+            ls -la "$PTP/prebuilds/linux-arm64/"
+          } 2>&1 | tee /tmp/step.log || true
+          STATUS="${PIPESTATUS[0]}"
+          if [ "$STATUS" != "0" ]; then push_log; exit 1; fi
+
+      - name: Download pinned rootfs inputs
+        run: |
+          curl -fL --retry 3 -o /tmp/ubuntu.tar.gz https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz
+          curl -fL --retry 3 -o /tmp/node.tar.xz https://nodejs.org/dist/v24.19.0/node-v24.19.0-linux-arm64.tar.xz
+          echo "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2  /tmp/ubuntu.tar.gz" | sha256sum -c -
+          echo "01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc  /tmp/node.tar.xz" | sha256sum -c -
+
+      - name: Build bundle + manifest (mobile profile)
+        run: |
+          set -o pipefail
+          {
+            python3 scripts/build-embedded-runtime.py \
+              --ubuntu /tmp/ubuntu.tar.gz --ubuntu-sha256 04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2 \
+              --node /tmp/node.tar.xz --node-sha256 01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc \
+              --dsh-root /tmp/dsh-root --runtime-version "0.1.0-mobile-test" \
+              --mobile-profile scripts/mobile-profile.example.json \
+              --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
+            ls -la /tmp/rootfs.bundle /tmp/runtime-manifest.json
+            sha256sum /tmp/rootfs.bundle
+            python3 scripts/verify-bundle.py --bundle /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
+            mkdir -p runtime-artifacts
+            cp /tmp/rootfs.bundle /tmp/runtime-manifest.json runtime-artifacts/
+          } 2>&1 | tee /tmp/bundle.log || true
+          STATUS="${PIPESTATUS[0]}"
+          if [ "$STATUS" != "0" ]; then
+            echo "=== bundle step failed, see /tmp/bundle.log (folded into verify log) ==="
+            cat /tmp/bundle.log
+            exit 1
+          fi
+
+      - name: Verify runtime artifacts before upload
+        run: |
+          {
+            pwd
+            echo "=== node-pty step output ==="
+            cat /tmp/step.log 2>/dev/null || echo "(无 step.log)"
+            echo "=== dsh-root 探测 ==="
+            ls -la /tmp/dsh-root/node_modules/@deepseek-ai/dsh/lib/bin.js 2>/dev/null || echo "(dsh bin.js 缺失)"
+            ls -la /tmp/dsh-root/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/ 2>/dev/null || echo "(pty 目录缺失)"
+            echo "=== bundle step output ==="
+            cat /tmp/bundle.log 2>/dev/null || echo "(无 bundle.log)"
+            echo "=== runtime-artifacts ==="
+            ls -la runtime-artifacts/ || true
+            du -sh runtime-artifacts/ 2>/dev/null || true
+          } 2>&1 | tee /tmp/verify.log
+          if [ ! -f runtime-artifacts/rootfs.bundle ] || [ ! -f runtime-artifacts/runtime-manifest.json ]; then
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git fetch origin dist || true
+            git checkout -B dist origin/dist 2>/dev/null || git checkout --orphan dist
+            mkdir -p logs
+            cp /tmp/verify.log logs/verify-$GITHUB_RUN_NUMBER.log
+            git add -f logs/verify-$GITHUB_RUN_NUMBER.log
+            git commit -m "ci: verify log run #$GITHUB_RUN_NUMBER" || true
+            git push origin dist || true
+            exit 1
+          fi
+
+      - name: Upload runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: embedded-runtime
+          path: |
+            runtime-artifacts/rootfs.bundle
+            runtime-artifacts/runtime-manifest.json
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish test release (APK + rootfs bundle + manifest)
+    needs: [build, build-rootfs]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dsh-harness-android-debug
+          path: /tmp/apk
+
+      - name: Download runtime artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: embedded-runtime
+          path: /tmp/runtime
+
+      - name: Create release with assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -x
+          set -o pipefail
+          cd "$GITHUB_WORKSPACE"
+          push_log() {
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git fetch origin dist || true
+            git checkout -B dist origin/dist 2>/dev/null || git checkout --orphan dist
+            mkdir -p logs
+            cp /tmp/release.log logs/release-$GITHUB_RUN_NUMBER.log
+            git add -f logs/release-$GITHUB_RUN_NUMBER.log
+            git commit -m "ci: release log run #$GITHUB_RUN_NUMBER" || true
+            git push origin dist || true
+          }
+          {
+            TAG="v0.1.0-mobile-${{ github.run_number }}"
+            APK="$(ls /tmp/apk/*.apk | head -n1)"
+            test -n "$APK"
+            test -f /tmp/runtime/rootfs.bundle
+            test -f /tmp/runtime/runtime-manifest.json
+            MANIFEST_SHA="$(sha256sum /tmp/runtime/runtime-manifest.json | cut -d' ' -f1)"
+            cat > /tmp/notes.md <<EOF
+          # 移动端测试构建 ${{ github.sha }}
+
+          ## 安装与配置
+
+          1. 安装 $(basename "$APK")（debug 签名，已含 PRoot 运行器）。
+          2. 打开 App → 设置页，填写「运行时清单地址与 SHA-256」（两者必须成对）：
+             - URL: https://github.com/${{ github.repository }}/releases/download/${TAG}/runtime-manifest.json
+             - SHA-256: ${MANIFEST_SHA}
+          3. 返回「环境」页执行安装（rootfs 约百 MB，建议 Wi-Fi，支持断点续传）。
+
+          ## 资产
+
+          - $(basename "$APK")（APK，含 PRoot 运行器）
+          - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.1.0-rc.6 + 移动 profile）
+          - runtime-manifest.json
+          EOF
+            RESP="$(curl -sS -f -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              https://api.github.com/repos/${{ github.repository }}/releases \
+              -d "$(jq -n --arg t "$TAG" --arg n "Mobile test build #${{ github.run_number }}" --rawfile b /tmp/notes.md '{tag_name:$t, name:$n, body:$b, draft:false, prerelease:true}')")"
+            RELEASE_ID="$(echo "$RESP" | jq -r .id)"
+            test -n "$RELEASE_ID" && test "$RELEASE_ID" != "null"
+            UPLOAD_BASE="https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets"
+            for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json; do
+              name="$(basename "$f")"
+              curl -sS -f -X POST \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Content-Type: application/octet-stream" \
+                --data-binary "@$f" \
+                "${UPLOAD_BASE}?name=${name}" >/dev/null
+            done
+            echo "RELEASE_URL=https://github.com/${{ github.repository }}/releases/tag/${TAG}"
+          } 2>&1 | tee /tmp/release.log || true
+          if [ "${PIPESTATUS[0]}" != "0" ]; then push_log; exit 1; fi

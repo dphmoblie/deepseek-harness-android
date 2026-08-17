@@ -46,6 +46,8 @@ export interface ShizukuState {
   running: boolean
   permission: 'granted' | 'denied' | 'undetermined'
   connected: boolean
+  /** Shizuku 服务端版本（诊断用；未安装为空串）。 */
+  version?: string
 }
 
 export interface TerminalChunk {
@@ -86,6 +88,7 @@ export interface RuntimeBridge {
   execDeviceCommand: (sessionId: string, command: DeviceCommand, param?: string) => Promise<DeviceCommandResult>
   getShizukuState: () => Promise<ShizukuState>
   requestShizukuPermission: () => Promise<ShizukuState>
+  connectShizuku: () => Promise<ShizukuState>
   openShizuku: () => Promise<void>
   addRuntimeProgressListener: (listener: (event: RuntimeProgress) => void) => Promise<ListenerHandle>
   addTerminalOutputListener: (listener: (event: TerminalChunk) => void) => Promise<ListenerHandle>

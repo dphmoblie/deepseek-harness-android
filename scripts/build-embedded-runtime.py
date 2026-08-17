@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import copy
+import re
 import gzip
 import hashlib
 import io
@@ -47,6 +49,64 @@ def sha256_file(path: Path) -> str:
         while chunk := source.read(BUFFER_SIZE):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+MAX_MOBILE_PROFILE_BYTES = 64 * 1024
+MOBILE_BUNDLE_PATTERN = re.compile(r"^[A-Za-z0-9@._/-]{1,128}$")
+
+
+def validate_mobile_profile(path: Path) -> dict:
+    """Validate the optional mobile profile spec (scripts/mobile-profile.example.json)."""
+    if path.is_symlink() or not path.is_file():
+        raise BuildError("mobile profile does not exist or is not a regular file")
+    content = path.read_bytes()
+    if not content or len(content) > MAX_MOBILE_PROFILE_BYTES or b"\x00" in content:
+        raise BuildError("mobile profile size or content is invalid")
+    try:
+        spec = json.loads(content)
+    except json.JSONDecodeError as error:
+        raise BuildError(f"mobile profile JSON is invalid: {error}") from error
+    if not isinstance(spec, dict):
+        raise BuildError("mobile profile must be a JSON object")
+    dsh = spec.get("dsh")
+    if not isinstance(dsh, dict):
+        raise BuildError("mobile profile requires a dsh object")
+    profile = dsh.get("profile")
+    if not isinstance(profile, dict):
+        raise BuildError("mobile profile requires dsh.profile")
+    bundles = profile.get("bundles")
+    if not isinstance(bundles, list) or not bundles or len(bundles) > 64:
+        raise BuildError("mobile profile bundles must be a non-empty list (max 64)")
+    for bundle in bundles:
+        if not isinstance(bundle, str) or not MOBILE_BUNDLE_PATTERN.match(bundle):
+            raise BuildError(f"mobile profile bundle identifier is invalid: {bundle!r}")
+    mobile = spec.get("mobile")
+    result: dict = {"dsh": {"profile": {"bundles": list(bundles)}}}
+    if mobile is not None:
+        if not isinstance(mobile, dict):
+            raise BuildError("mobile profile 'mobile' section must be an object")
+        layout = mobile.get("layout")
+        if layout is not None and (not isinstance(layout, str) or len(layout) > 128):
+            raise BuildError("mobile profile layout identifier is invalid")
+        disabled = mobile.get("disabledOnMobile")
+        if disabled is not None and (
+            not isinstance(disabled, list)
+            or len(disabled) > 64
+            or any(not isinstance(name, str) or not MOBILE_BUNDLE_PATTERN.match(name) for name in disabled)
+        ):
+            raise BuildError("mobile profile disabledOnMobile list is invalid")
+        idle = mobile.get("idleStopMinutes")
+        if idle is not None and (not isinstance(idle, int) or isinstance(idle, bool) or not 1 <= idle <= 1440):
+            raise BuildError("mobile profile idleStopMinutes must be an integer in 1..1440")
+        embed = mobile.get("embedRootfs")
+        if embed is not None and not isinstance(embed, bool):
+            raise BuildError("mobile profile embedRootfs must be a boolean")
+        result["mobile"] = {
+            key: value
+            for key, value in mobile.items()
+            if key in ("layout", "disabledOnMobile", "idleStopMinutes", "embedRootfs")
+        }
+    return result
 
 
 def verify_input(path: Path, expected_sha256: str, label: str) -> None:
@@ -224,6 +284,15 @@ def strip_single_root(raw_name: str, expected_root: str) -> str | None:
     return name.removeprefix(prefix)
 
 
+def strip_flat_entry(raw_name: str) -> str | None:
+    """Strip the leading './' segments of a flat archive entry (CI 使用的
+    ubuntu-base 24.04 官方包为扁平结构，无顶层目录)。"""
+    name = normalized_path(raw_name)
+    if name == "." or name == "./":
+        return None
+    return name.removeprefix("./")
+
+
 def copy_tar_archive(
     writer: RootfsWriter,
     archive_path: Path,
@@ -233,6 +302,7 @@ def copy_tar_archive(
     skip_devices_under_dev: bool = False,
     excluded_regular_paths: frozenset[str] = frozenset(),
 ) -> None:
+    flat = expected_root == ""
     excluded_source_paths = {f"{expected_root}/{name}" for name in excluded_regular_paths}
     remaining_excluded_paths = excluded_source_paths.copy()
     with tarfile.open(archive_path, "r:*") as source_tar:
@@ -244,14 +314,14 @@ def copy_tar_archive(
                     raise BuildError(f"duplicate excluded archive path: {original.name}")
                 remaining_excluded_paths.remove(original.name)
                 continue
-            stripped = strip_single_root(original.name, expected_root)
+            stripped = strip_flat_entry(original.name) if flat else strip_single_root(original.name, expected_root)
             if stripped is None:
                 continue
             mapped_name = normalized_path(map_name(stripped))
             member = copy.copy(original)
             member.name = mapped_name
             if member.islnk():
-                target = strip_single_root(member.linkname, expected_root)
+                target = strip_flat_entry(member.linkname) if flat else strip_single_root(member.linkname, expected_root)
                 if target is None:
                     raise BuildError(f"hard link points at archive root: {mapped_name}")
                 member.linkname = normalized_path(map_name(target))
@@ -266,8 +336,13 @@ def copy_tar_archive(
                 if file_object is not None:
                     file_object.close()
     if remaining_excluded_paths:
-        missing = ", ".join(sorted(remaining_excluded_paths))
-        raise BuildError(f"expected excluded archive paths are missing: {missing}")
+        if flat:
+            # 官方 ubuntu-base 扁平包不保证包含钉死排除清单里的路径：
+            # 缺失即视为无需排除（严格校验仅对自有 rooted 归档保留）。
+            print(f"note: excluded paths not present in flat archive, skipped: {sorted(remaining_excluded_paths)}", file=sys.stderr)
+        else:
+            missing = ", ".join(sorted(remaining_excluded_paths))
+            raise BuildError(f"expected excluded archive paths are missing: {missing}")
 
 
 def skip_non_linux_runtime_path(relative: PurePosixPath) -> bool:
@@ -351,7 +426,11 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ubuntu", required=True, type=Path)
     parser.add_argument("--ubuntu-sha256", required=True)
-    parser.add_argument("--ubuntu-root", default="ubuntu-noble-aarch64")
+    parser.add_argument(
+        "--ubuntu-root",
+        default="",
+        help="top-level directory inside the Ubuntu archive; empty = flat archive (official ubuntu-base layout)",
+    )
     parser.add_argument("--node", required=True, type=Path)
     parser.add_argument("--node-sha256", required=True)
     parser.add_argument("--node-root", default="node-v24.19.0-linux-arm64")
@@ -363,6 +442,13 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--source-date-epoch", type=int, default=0)
+    parser.add_argument(
+        "--mobile-profile",
+        type=Path,
+        default=None,
+        help="optional mobile profile spec (bundles subset + mobile flags); "
+        "written to root/.dsh/profiles/web/package.json and reflected in the manifest 'mobile' field",
+    )
     return parser.parse_args()
 
 
@@ -388,6 +474,7 @@ def main() -> None:
     if not dsh_entrypoint.is_file() or not node_pty.is_file():
         raise BuildError("Harness runtime is missing its CLI or Linux ARM64 node-pty module")
     mobile_auth_preload = read_support_file(MOBILE_AUTH_PRELOAD, "mobile authentication preload")
+    mobile_spec = validate_mobile_profile(args.mobile_profile) if args.mobile_profile is not None else None
     if args.output.exists() or args.manifest.exists():
         raise BuildError("output archive and manifest must not already exist")
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -409,6 +496,10 @@ def main() -> None:
             copy_tar_archive(writer, args.node, args.node_root, lambda name: f"opt/node/{name}")
             add_windows_tree(writer, args.dsh_root, "opt/dsh")
             writer.add_symlink("usr/local/bin/node", "../../../opt/node/bin/node")
+            # Ubuntu base 精简包不含这两个链接，但 App 完整性校验将其列为必需：
+            # 运行时（mount 视图/时区）与校验都需要，缺了安装会报 ROOTFS_LINKS_CORRUPTED。
+            writer.add_symlink("etc/mtab", "../proc/self/mounts")
+            writer.add_symlink("etc/localtime", "../usr/share/zoneinfo/Etc/UTC")
             writer.add_bytes(
                 "usr/local/bin/dsh",
                 b'#!/bin/sh\nexec /opt/node/bin/node /opt/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js "$@"\n',
@@ -431,6 +522,12 @@ def main() -> None:
                 (json.dumps(metadata, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8"),
                 0o644,
             )
+            if mobile_spec is not None:
+                writer.add_bytes(
+                    "root/.dsh/profiles/web/package.json",
+                    (json.dumps(mobile_spec, ensure_ascii=True, indent=2) + "\n").encode("ascii"),
+                    0o644,
+                )
 
         compressed_bytes = temporary_output.stat().st_size
         archive_sha256 = sha256_file(temporary_output)
@@ -451,6 +548,7 @@ def main() -> None:
                 "harness": ["/usr/local/bin/dsh", "web", "--host", "127.0.0.1", "--port", "3080"],
             },
             "harnessUrl": "http://127.0.0.1:3080/",
+            **({"mobile": mobile_spec} if mobile_spec is not None else {}),
         }
         manifest_bytes = (json.dumps(manifest, ensure_ascii=True, indent=2) + "\n").encode("ascii")
         with temporary_manifest.open("xb") as manifest_output:

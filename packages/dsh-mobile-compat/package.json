@@ -1,0 +1,50 @@
+{
+  "name": "dsh-mobile-compat",
+  "description": "Client plugin: mobile AppFrame for the embedded Harness Web UI (<640px drawer sidebar + bottom-sheet details) and mobile layout overrides for desktop DSH plugins",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/client.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-theme"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "files": [
+    "lib"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-theme": "0.1.0-rc.6",
+    "react": "^18.3.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-theme": "0.1.0-rc.6",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.5.0",
+    "@deepseek-ai/dsh-client-ui-layout": "0.1.0-rc.6"
+  }
+}

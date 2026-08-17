@@ -1433,3 +1433,20 @@ button:disabled {
     transition-duration: 1ms !important;
   }
 }
+
+
+/* onboarding */
+.onboarding-dialog { max-width: 520px; }
+.onboarding-step-dots { display: flex; gap: 6px; margin: 2px 0 12px; }
+.onboarding-step-dots > span { width: 22px; height: 4px; border-radius: 2px; background: var(--dsw-alias-border-l1, rgba(127,127,127,.35)); }
+.onboarding-step-dots > span.active { background: var(--dsw-alias-accent, #4c8dff); }
+.onboarding-step-dots > span.done { background: var(--dsw-alias-success, #34a853); }
+.onboarding-title { display: flex; align-items: center; gap: 9px; margin: 0 0 10px; }
+.onboarding-body { display: flex; flex-direction: column; gap: 10px; color: var(--dsw-alias-text-secondary, inherit); }
+.onboarding-body ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
+.onboarding-body code { font-size: .9em; }
+.onboarding-warn { color: var(--dsw-alias-warning, #b26a00); }
+.onboarding-status { font-size: .92em; }
+.onboarding-actions-row { display: flex; gap: 9px; flex-wrap: wrap; }
+.onboarding-nav { display: flex; align-items: center; width: 100%; }
+.onboarding-spacer { flex: 1; }

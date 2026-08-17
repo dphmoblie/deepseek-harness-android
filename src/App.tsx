@@ -1,4 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import {
   AlertTriangle,
   Bot,
@@ -511,7 +512,10 @@ function TerminalScreen({ bridge, fontSize, onAuthorize, onError, onOpenShizuku,
       ) : (
         <div className="empty-terminal">
           <span><KeyRound size={27} /></span>
-          <h2>{!shizuku.installed ? '未安装 Shizuku' : !shizuku.running ? 'Shizuku 未运行' : '需要 Shizuku 授权'}</h2>
+          <h2>{!shizuku.installed ? '未安装 Shizuku' : !shizuku.running ? `Shizuku 未运行${shizuku.version ? '（v' + shizuku.version + '）' : ''}` : '需要 Shizuku 授权'}</h2>
+{shizuku.installed && !shizuku.running && (
+  <p className="shizuku-hint">Shizuku 服务不会自动启动：请在 Shizuku App 内通过无线调试或 adb 启动服务（设备重启后需重新启动）。</p>
+)}
           {shizuku.installed ? (
             <button className="button button-primary" type="button" onClick={shizuku.running ? onAuthorize : onOpenShizuku}>
               <ShieldCheck size={18} />{shizuku.running ? '请求授权' : '打开 Shizuku'}
@@ -548,7 +552,7 @@ function SettingsScreen({ busy, settings, shizuku, onAuthorize, onOpenShizuku, o
   const shizukuLabel = !shizuku.installed
     ? '未安装'
     : !shizuku.running
-      ? '未运行'
+      ? '未运行' + (shizuku.version ? '（v' + shizuku.version + '）' : '')
       : shizuku.permission === 'granted'
         ? shizuku.connected ? '已连接' : '已授权'
         : shizuku.permission === 'denied'
@@ -719,7 +723,15 @@ export function App() {
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [resetOpen, setResetOpen] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState<boolean>(() => {
+    try {
+      return typeof localStorage === 'undefined' ? false : localStorage.getItem(ONBOARDING_STORAGE_KEY) !== 'done'
+    } catch {
+      return false
+    }
+  })
   const noticeId = useRef(0)
+  const shizukuConnecting = useRef(false)
 
   const notify = useCallback((message: string, tone: NoticeTone = 'info') => {
     noticeId.current += 1
@@ -788,7 +800,16 @@ export function App() {
     const refreshShizuku = (reportError = true): void => {
       if (document.visibilityState === 'hidden') return
       void runtimeBridge.getShizukuState()
-        .then(next => { if (!cancelled) setShizuku(next) })
+        .then(next => {
+          if (!cancelled) setShizuku(next)
+          if (next.running && next.permission === 'granted' && !next.connected && !shizukuConnecting.current) {
+            shizukuConnecting.current = true
+            void runtimeBridge.connectShizuku()
+              .then(connected => { if (!cancelled) setShizuku(connected) })
+              .catch(() => {})
+              .finally(() => { shizukuConnecting.current = false })
+          }
+        })
         .catch(error => { if (!cancelled && reportError) notify(errorMessage(error), 'error') })
     }
     const handleVisibilityChange = (): void => {
@@ -884,6 +905,15 @@ export function App() {
     void run('open-shizuku', () => runtimeBridge.openShizuku())
   }, [run])
 
+  const finishOnboarding = useCallback(() => {
+    try {
+      localStorage.setItem(ONBOARDING_STORAGE_KEY, 'done')
+    } catch {
+      // 无持久化环境（测试）时仅关闭本次会话的引导。
+    }
+    setOnboardingOpen(false)
+  }, [])
+
   const screen = useMemo(() => {
     switch (activeTab) {
       case 'agent':
@@ -948,6 +978,20 @@ export function App() {
       </nav>
 
       {resetOpen && <ResetDialog busy={busy === 'reset'} onCancel={() => setResetOpen(false)} onConfirm={confirmReset} />}
+
+      {onboardingOpen && runtime.phase === 'not-installed' && (
+        <Onboarding
+          busy={busy}
+          runtime={runtime}
+          shizuku={shizuku}
+          settings={settings}
+          onInstall={installRuntime}
+          onAuthorize={requestShizukuPermission}
+          onOpenShizuku={openShizuku}
+          onOpenHarness={openHarness}
+          onDone={finishOnboarding}
+        />
+      )}
 
       {notice !== null && (
         <div className={`toast toast-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>

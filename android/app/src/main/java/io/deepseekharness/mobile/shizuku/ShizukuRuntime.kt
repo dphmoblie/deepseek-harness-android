@@ -28,6 +28,8 @@ data class ShizukuState(
     val running: Boolean,
     val permission: String,
     val connected: Boolean,
+    /** Shizuku 服务端版本（未安装时为空串；诊断用）。 */
+    val version: String,
 )
 
 class ShizukuRuntime(
@@ -147,7 +149,16 @@ class ShizukuRuntime(
             else -> "undetermined"
         }
         val connected = granted && liveService() != null
-        return ShizukuState(installed, running, permission, connected)
+        val version = if (installed && running) {
+            try {
+                Shizuku.getVersion().toString()
+            } catch (_: Throwable) {
+                ""
+            }
+        } else {
+            ""
+        }
+        return ShizukuState(installed, running, permission, connected, version)
     }
 
     @Synchronized
@@ -467,7 +478,9 @@ class ShizukuRuntime(
     }
 
     companion object {
-        private const val SHIZUKU_AUTHORITY = "moe.shizuku.privileged.api"
+        // Shizuku Manager 的 ContentProvider authority 为「包名.shizuku」，
+        // 不是包名本身；写错会导致 resolveContentProvider 检测不到已安装。
+        private const val SHIZUKU_AUTHORITY = "moe.shizuku.privileged.api.shizuku"
         private const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
         private const val PERMISSION_REQUEST_CODE = 7319
         private const val PERMISSION_TIMEOUT_SECONDS = 60L

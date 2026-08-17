@@ -8,6 +8,7 @@ export default tseslint.config(
   {
     ignores: [
       'dist',
+      'packages/**', // 独立包的 lib/src 由其自身 tsconfig/typecheck 覆盖
       'android/app/src/main/assets/public',
       'android/**/build',
       '*.config.js',

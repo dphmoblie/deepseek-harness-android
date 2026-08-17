@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
@@ -7,7 +8,7 @@
 
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
-        <provider android:authorities="moe.shizuku.privileged.api" />
+        <provider android:authorities="moe.shizuku.privileged.api.shizuku" />
     </queries>
 
     <application
@@ -29,6 +30,15 @@
             android:exported="true"
             android:multiprocess="false"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+        <service
+            android:name=".shizuku.DeviceShellUserService"
+            android:exported="false"
+            android:permission="moe.shizuku.manager.permission.API_V23"
+            tools:ignore="Instantiatable">
+            <intent-filter>
+                <action android:name="moe.shizuku.client.BIND_USER_SERVICE" />
+            </intent-filter>
+        </service>
 
         <activity
             android:name=".HarnessActivity"

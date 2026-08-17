@@ -56,6 +56,7 @@ class SafeRootfsExtractor {
         val execFiles = ArrayList<Path>()
         var entryCount = 0
         var extractedBytes = 0L
+        var degradedSymlinkCount = 0
         onProgress(0, expectedExtractedBytes)
 
         try {
@@ -160,7 +161,22 @@ class SafeRootfsExtractor {
                 if (RuntimeFiles.existsNoFollow(path.toFile())) {
                     throw RuntimeFailure("ARCHIVE_DUPLICATE_ENTRY", "符号链接目标路径已存在")
                 }
-                Os.symlink(target, path.toString())
+                try {
+                    Os.symlink(target, path.toString())
+                } catch (error: android.system.ErrnoException) {
+                    // 部分 ROM（如荣耀）SELinux 禁止应用创建符号链接（EACCES/EPERM）：
+                    // 降级为复制目标内容，保证安装在任何设备上都能完成。
+                    if (error.errno == android.system.OsConstants.EACCES ||
+                        error.errno == android.system.OsConstants.EPERM ||
+                        error.errno == android.system.OsConstants.ENOTSUP ||
+                        error.errno == android.system.OsConstants.EXDEV
+                    ) {
+                        degradedSymlinkCount += 1
+                        copySymlinkTargetAsFallback(path, target, root)
+                    } else {
+                        throw error
+                    }
+                }
             }
             for ((path, mode) in directoryModes.asReversed()) {
                 Os.chmod(path.toString(), mode)
@@ -172,7 +188,8 @@ class SafeRootfsExtractor {
                 // The original verified failure is returned; the next install performs another scoped cleanup.
             }
             if (error is RuntimeFailure) throw error
-            throw RuntimeFailure("ARCHIVE_EXTRACTION_FAILED", "无法解压运行时归档", error)
+            val detail = error.message ?: error.javaClass.simpleName
+            throw RuntimeFailure("ARCHIVE_EXTRACTION_FAILED", "无法解压运行时归档：" + detail, error)
         }
     }
 
@@ -229,13 +246,67 @@ class SafeRootfsExtractor {
                 if (RuntimeFiles.existsNoFollow(link.path.toFile())) {
                     throw RuntimeFailure("ARCHIVE_DUPLICATE_ENTRY", "归档硬链接路径已存在")
                 }
-                Os.link(link.target.toString(), link.path.toString())
+                try {
+                    Os.link(link.target.toString(), link.path.toString())
+                } catch (error: android.system.ErrnoException) {
+                    // 荣耀等 ROM 的 SELinux 可能同时禁止硬链接（EACCES/EPERM）：
+                    // 与符号链接一致，降级为复制目标文件；目标已校验为常规文件且位于 rootfs 内。
+                    if (error.errno == OsConstants.EACCES ||
+                        error.errno == OsConstants.EPERM ||
+                        error.errno == OsConstants.ENOTSUP ||
+                        error.errno == OsConstants.EXDEV
+                    ) {
+                        val targetFile = link.target.toFile()
+                        link.path.parent.toFile().mkdirs()
+                        targetFile.copyTo(link.path.toFile(), overwrite = false)
+                        link.path.toFile().setExecutable(targetFile.canExecute(), false)
+                    } else {
+                        throw error
+                    }
+                }
                 iterator.remove()
                 progress = true
             }
             if (!progress) {
                 throw RuntimeFailure("ARCHIVE_LINK_INVALID", "归档硬链接目标不存在或形成循环")
             }
+        }
+    }
+
+    /**
+     * 符号链接创建被设备拒绝时的降级：按 POSIX 语义（链接内容相对链接所在目录）
+     * 解析目标，并以复制替代链接。复制保留原文件的可执行位（如 node 等入口）。
+     */
+    private fun copySymlinkTargetAsFallback(linkPath: Path, rawTarget: String, root: Path) {
+        val absoluteLink = linkPath.toAbsolutePath().normalize()
+        val resolved = if (rawTarget.startsWith("/")) {
+            root.resolve(rawTarget.removePrefix("/")).normalize()
+        } else {
+            absoluteLink.parent.resolve(rawTarget).normalize()
+        }
+        if (!resolved.startsWith(root)) {
+            throw RuntimeFailure("ARCHIVE_LINK_INVALID", "符号链接降级目标越界: $rawTarget")
+        }
+        val destination = absoluteLink
+        val sourceFile = resolved.toFile()
+        if (sourceFile.isDirectory) {
+            sourceFile.walkTopDown().forEach { file ->
+                val relative = resolved.relativize(file.toPath())
+                val targetFile = destination.resolve(relative).toFile()
+                if (file.isDirectory) {
+                    targetFile.mkdirs()
+                } else {
+                    targetFile.parentFile?.mkdirs()
+                    file.copyTo(targetFile, overwrite = false)
+                    targetFile.setExecutable(file.canExecute(), false)
+                }
+            }
+        } else if (sourceFile.isFile) {
+            destination.parent.toFile().mkdirs()
+            sourceFile.copyTo(destination.toFile(), overwrite = false)
+            destination.toFile().setExecutable(sourceFile.canExecute(), false)
+        } else {
+            throw RuntimeFailure("ARCHIVE_LINK_INVALID", "符号链接降级目标不可用: $rawTarget")
         }
     }
 
