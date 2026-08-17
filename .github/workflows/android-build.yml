@@ -376,8 +376,10 @@ jobs:
           if-no-files-found: error
 
   publish-release:
-    name: Publish test release (APK + rootfs bundle + manifest)
+    name: Publish release (APK + rootfs bundle + manifest)
     needs: [build, build-rootfs]
+    # 推送分支只做构建与验证；发布必须手动 workflow_dispatch 并选择 release_type
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_type != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
