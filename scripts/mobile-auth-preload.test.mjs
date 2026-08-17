@@ -41,16 +41,19 @@ function request(port, authorization) {
   })
 }
 
-function upgrade(port, authorization) {
+function upgrade(port, options = {}) {
+  const { authorization, cookie } = options
   return new Promise((resolve, reject) => {
     const socket = net.createConnection({ host: '127.0.0.1', port })
     let response = ''
     socket.setEncoding('ascii')
     socket.on('connect', () => {
-      const authLine = authorization === undefined ? '' : `Authorization: ${authorization}\r\n`
+      const lines = []
+      if (authorization !== undefined) lines.push(`Authorization: ${authorization}`)
+      if (cookie !== undefined) lines.push(`Cookie: ${cookie}`)
       socket.write(
         `GET /events HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n` +
-        `Connection: Upgrade\r\nUpgrade: websocket\r\n${authLine}\r\n`,
+        `Connection: Upgrade\r\nUpgrade: websocket\r\n${lines.join('\r\n')}\r\n\r\n`,
       )
     })
     socket.on('data', chunk => { response += chunk })
@@ -108,6 +111,37 @@ describe('mobile Harness authentication preload', () => {
 
   it('guards WebSocket upgrades with the same credential', async () => {
     assert.match(await upgrade(port), /^HTTP\/1\.1 401 Unauthorized/)
-    assert.match(await upgrade(port, authorizationHeader()), /^HTTP\/1\.1 101 Switching Protocols/)
+    assert.match(await upgrade(port, { authorization: authorizationHeader() }), /^HTTP\/1\.1 101 Switching Protocols/)
+  })
+
+  it('accepts the token cookie on upgrades but keeps HTTP Basic-only', async () => {
+    // 正确 Cookie：upgrade 放行（WebView 场景）；HTTP 请求不认 Cookie，仍 401
+    assert.match(
+      await upgrade(port, { cookie: `dsh_mobile_token=${TOKEN}` }),
+      /^HTTP\/1\.1 101 Switching Protocols/,
+    )
+    const httpWithCookie = await new Promise((resolve, reject) => {
+      const outgoing = http.get(
+        { host: '127.0.0.1', port, path: '/', headers: { Cookie: `dsh_mobile_token=${TOKEN}` } },
+        response => { response.resume(); resolve(response.statusCode) },
+      )
+      outgoing.on('error', reject)
+    })
+    assert.equal(httpWithCookie, 401)
+
+    // 错误 Cookie 一律拒绝，即使真 token 同时出现在其他同名 cookie 之后
+    assert.match(
+      await upgrade(port, { cookie: `dsh_mobile_token=${'B'.repeat(43)}` }),
+      /^HTTP\/1\.1 401 Unauthorized/,
+    )
+    assert.match(
+      await upgrade(port, { cookie: `dsh_mobile_token=${'B'.repeat(43)}; dsh_mobile_token=${TOKEN}` }),
+      /^HTTP\/1\.1 101 Switching Protocols/,
+    )
+    // 非法格式（长度不符/含不允许字符）拒绝而非崩溃
+    assert.match(
+      await upgrade(port, { cookie: 'dsh_mobile_token=short' }),
+      /^HTTP\/1\.1 401 Unauthorized/,
+    )
   })
 })
