@@ -82,21 +82,20 @@ jobs:
           name: embedded-runtime
           path: /tmp/embedded-runtime
 
-      - name: Configure pinned remote runtime (thin APK)
+      - name: Embed bundled runtime into APK (offline install)
         run: |
           set -euo pipefail
+          BUNDLE="$(find /tmp/embedded-runtime -type f -name rootfs.bundle -print -quit)"
           MANIFEST="$(find /tmp/embedded-runtime -type f -name runtime-manifest.json -print -quit)"
+          test -n "$BUNDLE" && test -f "$BUNDLE"
           test -n "$MANIFEST" && test -f "$MANIFEST"
-          MANIFEST_SHA="$(sha256sum "$MANIFEST" | cut -d' ' -f1)"
-          echo "DSH_RUNTIME_MANIFEST_URL=https://github.com/${{ github.repository }}/releases/download/v0.1.7-mobile-${{ github.run_number }}/runtime-manifest.json" >> "$GITHUB_ENV"
-          echo "DSH_RUNTIME_MANIFEST_SHA256=$MANIFEST_SHA" >> "$GITHUB_ENV"
-          # Release 资产承载 rootfs；APK 不嵌入 bundle，也不允许事务备份混入 assets。
-          rm -f android/app/src/main/assets/runtime/rootfs.bundle \
-            android/app/src/main/assets/runtime/rootfs.bundle.bak \
-            android/app/src/main/assets/runtime/runtime-manifest.json \
-            android/app/src/main/assets/runtime/runtime-manifest.json.bak
-          test ! -e android/app/src/main/assets/runtime/rootfs.bundle
-          echo "Pinned manifest SHA-256: $MANIFEST_SHA"
+          mkdir -p android/app/src/main/assets/runtime
+          cp "$BUNDLE" android/app/src/main/assets/runtime/rootfs.bundle
+          cp "$MANIFEST" android/app/src/main/assets/runtime/runtime-manifest.json
+          # 不注入 DSH_RUNTIME_MANIFEST_URL/SHA256：BuildConfig 为空时 App 走内置资产
+          # （RuntimeSource(null, null) -> isBundled），无需联网下载，中国网络可离线安装。
+          ls -la android/app/src/main/assets/runtime/
+          echo "Embedded rootfs bytes: $(stat -c%s android/app/src/main/assets/runtime/rootfs.bundle)"
 
       - name: Set up Gradle (trusted distribution for wrapper bootstrap)
         uses: gradle/actions/setup-gradle@v4
@@ -416,9 +415,9 @@ jobs:
 
           ## 安装与配置
 
-          1. 安装 $(basename "$APK")（瘦 APK，已含 PRoot 运行器）。
-          2. 首次打开后点「安装并进入对话」；应用已固定本次 Release 的清单地址与 SHA-256，无需手工填写。
-          3. rootfs 约百 MB，建议使用 Wi-Fi；中断后再次安装会从断点继续。
+          1. 安装 $(basename "$APK")（离线 APK，已内置 PRoot 运行器 + Ubuntu rootfs）。
+          2. 首次打开后点「安装并进入对话」；rootfs 从 APK 内置资产解压，无需联网下载。
+          3. 断网也能安装；若提示「未内置运行时」请确认下载的是本 Release 的 APK。
 
           ## 资产
 
