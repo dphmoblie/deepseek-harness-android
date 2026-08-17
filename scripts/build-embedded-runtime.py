@@ -422,6 +422,67 @@ def add_windows_tree(writer: RootfsWriter, source_root: Path, destination_root: 
                 writer.add(info, source)
 
 
+def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_dsh: str) -> None:
+    """预生成 $DSH_HOME/profiles/node_modules 的扁平包链接。
+
+    dsh 启动时（profile-boot）会调用 healProfilesModuleFallback 维护这个目录，
+    但它只从 @deepseek-ai/dsh 包的依赖闭包收集——profile bundles
+    （dsh-mobile-compat、dshmarket 等）不是 dsh 的依赖，永远不会被它链接，
+    cordis 加载器从 profile 目录解析 loader entry 时就会 "Cannot find package"。
+    这里在构建期按 dsh_root 的依赖闭包（含全部 bundles）预生成链接打进 rootfs，
+    运行时无需（也避免在受限 ROM 上）再创建符号链接。
+    """
+    node_modules = dsh_root / "node_modules"
+    if not node_modules.is_dir():
+        return
+
+    links: dict[str, Path] = {}
+    queue: list[Path] = []
+
+    def resolve_package(name: str) -> Path | None:
+        entry = node_modules / name
+        if not entry.exists():
+            return None
+        try:
+            real = entry.resolve()
+        except OSError:
+            return None
+        # pnpm 顶层包条目是符号链接（Windows 上为 junction）：解析后应指向真实目录
+        if real == entry or not real.is_dir():
+            return None
+        return real
+
+    def enqueue(name: str) -> None:
+        if name in links:
+            return
+        real = resolve_package(name)
+        if real is None:
+            return
+        links[name] = real
+        queue.append(real)
+
+    root_manifest = json.loads((dsh_root / "package.json").read_text(encoding="utf-8"))
+    for dep in {**(root_manifest.get("dependencies") or {}), **(root_manifest.get("peerDependencies") or {})}:
+        enqueue(dep)
+
+    while queue:
+        pkg_dir = queue.pop()
+        manifest_path = pkg_dir / "package.json"
+        if not manifest_path.is_file():
+            continue
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for dep in {**(manifest.get("dependencies") or {}), **(manifest.get("peerDependencies") or {})}:
+            if dep not in links:
+                enqueue(dep)
+
+    resolved_root = dsh_root.resolve()
+    for name in sorted(links):
+        real = links[name]
+        rootfs_real = PurePosixPath("/") / PurePosixPath(rootfs_dsh) / real.relative_to(resolved_root).as_posix()
+        rel = posixpath.relpath(rootfs_real.as_posix(), start="/root/.dsh/profiles/node_modules")
+        writer.add_symlink(f"root/.dsh/profiles/node_modules/{name}", rel)
+
+
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ubuntu", required=True, type=Path)
@@ -495,6 +556,7 @@ def main() -> None:
             )
             copy_tar_archive(writer, args.node, args.node_root, lambda name: f"opt/node/{name}")
             add_windows_tree(writer, args.dsh_root, "opt/dsh")
+            add_profiles_module_fallback(writer, args.dsh_root, "opt/dsh")
             writer.add_symlink("usr/local/bin/node", "../../../opt/node/bin/node")
             # Ubuntu base 精简包不含这两个链接，但 App 完整性校验将其列为必需：
             # 运行时（mount 视图/时区）与校验都需要，缺了安装会报 ROOTFS_LINKS_CORRUPTED。
