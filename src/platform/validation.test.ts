@@ -98,6 +98,7 @@ describe('settings validation', () => {
       manifestSha256: '',
       keepScreenAwake: false,
       terminalFontSize: 14,
+      autoLaunch: true,
     })
     expect(() => validateStoredSettings({
       manifestUrl: '',
@@ -122,11 +123,13 @@ describe('settings validation', () => {
       manifestSha256: '',
       keepScreenAwake: true,
       terminalFontSize: 16,
+      autoLaunch: true,
     })).toEqual({
       manifestUrl: '',
       manifestSha256: '',
       keepScreenAwake: true,
       terminalFontSize: 16,
+      autoLaunch: true,
     })
   })
 
