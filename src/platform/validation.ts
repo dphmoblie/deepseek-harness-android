@@ -151,7 +151,7 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
     throw new Error('终端字号必须是 11 到 24 之间的整数')
   }
   const apiKey = settings.apiKey === undefined ? undefined : String(settings.apiKey).trim().slice(0, 200) || undefined
-  const autoLaunch = settings.autoLaunch === undefined ? true : settings.autoLaunch
+  const autoLaunch = settings.autoLaunch === undefined ? false : settings.autoLaunch
   return {
     ...source,
     keepScreenAwake: settings.keepScreenAwake,
@@ -173,7 +173,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
   const apiKey = typeof settings.apiKey === 'string' && settings.apiKey.trim() !== ''
     ? settings.apiKey.trim().slice(0, 200)
     : undefined
-  const autoLaunch = settings.autoLaunch === undefined ? true : settings.autoLaunch === true
+  const autoLaunch = settings.autoLaunch === undefined ? false : settings.autoLaunch === true
   if (settings.manifestUrl === '' && settings.manifestSha256 === '') {
     return {
       manifestUrl: '',

@@ -51,7 +51,7 @@ class RuntimeStore(context: Context) {
             keepScreenAwake = preferences.getBoolean(KEY_KEEP_AWAKE, false),
             terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
             apiKey = preferences.getString(KEY_API_KEY, null).orEmpty(),
-            autoLaunch = preferences.getBoolean(KEY_AUTO_LAUNCH, true),
+            autoLaunch = preferences.getBoolean(KEY_AUTO_LAUNCH, false),
         )
     }
 

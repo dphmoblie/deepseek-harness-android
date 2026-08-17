@@ -21,7 +21,7 @@ const DEFAULT_SETTINGS: RuntimeSettings = {
   keepScreenAwake: true,
   terminalFontSize: 14,
   apiKey: '',
-  autoLaunch: true,
+  autoLaunch: false,
 }
 function listenerHandle(remove: () => void): ListenerHandle {
   return {
