@@ -221,8 +221,6 @@ jobs:
             "private": true,
               "dependencies": {
                 "@deepseek-ai/dsh": "0.1.0-rc.6",
-                # latest(0.0.1-rc.1) 依赖已下架的 @deepseek-ai/dsh-client-ui-slash，
-                # 固定到与 dsh 0.1.0-rc.6 同批次的版本
                 "@deepseek-ai/dsh-base": "0.1.0-rc.6",
               "@deepseek-ai/dsh-web-app": "0.1.0-rc.6",
               "@linxin666/dsh-web-ui-all": "0.1.19",
@@ -258,6 +256,7 @@ jobs:
             git push origin ci-logs || true
           }
           {
+            set -e
             pnpm install --no-frozen-lockfile
             # 兜底：显式强制编译 node-pty，不依赖 allowBuilds 是否被解析
             pnpm rebuild node-pty || true
