@@ -1,5 +1,5 @@
 import { ArrowUp, Square } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactElement } from 'react'
 import type { PromptMode } from '../state/chat'
 
@@ -16,10 +16,14 @@ export function Composer(props: {
   const [mode, setMode] = useState<PromptMode>('queue')
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
+  useEffect(() => {
+    if (!running) setMode('queue')
+  }, [running])
+
   const submit = (): void => {
     const trimmed = text.trim()
     if (trimmed === '') return
-    onSend(trimmed, mode)
+    onSend(trimmed, running ? mode : 'queue')
     setText('')
     const textarea = textareaRef.current
     if (textarea !== null) textarea.style.height = 'auto'
@@ -48,6 +52,7 @@ export function Composer(props: {
             className={mode === 'steer' ? 'segment segment-active' : 'segment'}
             aria-pressed={mode === 'steer'}
             title="让正在运行的代理调整当前方向"
+            disabled={!running}
             onClick={() => setMode('steer')}
           >
             引导
