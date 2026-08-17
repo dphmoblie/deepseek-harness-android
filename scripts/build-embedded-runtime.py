@@ -597,6 +597,61 @@ def patch_dsh_app_boot(dsh_root: Path) -> None:
         )
 
 
+def patch_session_persistence(dsh_root: Path) -> None:
+    """荣耀等 ROM 禁 link()（EACCES）时会话持久化原子写失败补丁。
+
+    dsh-session-persistence-jsonl 的 materializePosix() 用 mkdtemp + link(tmp, finalPath)
+    实现"不覆盖"的原子发布；荣耀 SELinux 拒绝 link 系统调用（与解压期
+    symlink/hardlink 降级同一家族），导致会话文件永远写不出、agent 必然报
+    "本轮因错误终止"。这里把 link 失败（EACCES/EPERM/ENOTSUP/EXDEV）降级为
+    copyFile（普通写，已验证可行），语义从"硬链接发布"变为"复制发布"。
+    """
+    candidates: list[Path] = []
+    candidates.extend(
+        dsh_root.glob(
+            "node_modules/.pnpm/@deepseek-ai+dsh-session-persistence-jsonl@*/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js"
+        )
+    )
+    top_level = (
+        dsh_root / "node_modules" / "@deepseek-ai" / "dsh-session-persistence-jsonl" / "lib" / "index.js"
+    )
+    if top_level.is_file():
+        candidates.append(top_level)
+
+    old_line = "\t\t\tawait link(tmp, finalPath);"
+    new_lines = (
+        "\t\t\tawait link(tmp, finalPath).catch(async (error) => {"
+        "\n\t\t\t\t// dsh-mobile: 荣耀 ROM 禁 link()（EACCES/EPERM/ENOTSUP/EXDEV），"
+        "\n\t\t\t\t// 降级为 copyFile 复制发布（普通写路径，finalPath 经 rejectExistingLog 保证不存在）"
+        "\n\t\t\t\tif (error && (error.code === \"EACCES\" || error.code === \"EPERM\" || error.code === \"ENOTSUP\" || error.code === \"EXDEV\")) {"
+        "\n\t\t\t\t\tconst { copyFile } = await import(\"node:fs/promises\");"
+        "\n\t\t\t\t\tawait copyFile(tmp, finalPath);"
+        "\n\t\t\t\t} else {"
+        "\n\t\t\t\t\tthrow error;"
+        "\n\t\t\t\t}"
+        "\n\t\t\t});"
+    )
+    patched_any = False
+    for path in candidates:
+        text = path.read_text(encoding="utf-8")
+        original = text
+        if old_line in text:
+            text = text.replace(old_line, new_lines)
+            # 防回归：替换后必须包含 copyFile 降级（历史上出现过只加注释的伪补丁，CI 仍绿）
+            if "await copyFile(tmp, finalPath);" not in text:
+                raise BuildError(
+                    "dsh-session-persistence-jsonl link patch produced no copyFile fallback; aborting"
+                )
+        if text != original:
+            path.write_text(text, encoding="utf-8")
+            patched_any = True
+    if not patched_any:
+        raise BuildError(
+            "dsh-session-persistence-jsonl link patch did not match any installed copy; "
+            "aborting to avoid shipping an unpatched runtime"
+        )
+
+
 def patch_attachment_link(dsh_root: Path) -> None:
     """dsh-attachment-local 的附件发布 link() 同样被荣耀 ROM 拒绝（EACCES）。
 
