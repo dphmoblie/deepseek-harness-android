@@ -162,6 +162,10 @@ def main() -> int:
         link_name = f"root/.dsh/profiles/node_modules/{package_name}"
         if types.get(link_name) != "sym":
             fail(f"profiles module fallback missing for bundle: {package_name!r}")
+        actual = next(target for n, target in symlinks if n == link_name)
+        resolved = canonical_target(link_name, actual).lstrip("/")
+        if resolved not in types:
+            fail(f"profiles link target missing in bundle: {link_name!r} -> {actual!r}")
 
     print(f"BUNDLE_VERIFY_OK: entries={entry_count} extracted={extracted} symlinks={len(symlinks)} hardlinks={len(hardlinks)}")
     return 0
