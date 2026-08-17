@@ -621,18 +621,26 @@ def patch_session_persistence(dsh_root: Path) -> None:
 
     old_line = "\t\t\tawait link(tmp, finalPath);"
     new_lines = (
-        "\t\t\tawait link(tmp, finalPath);"
-        "\n\t\t\t// dsh-mobile: 荣耀 ROM 禁 link()，降级为复制发布（copyFile 走普通写路径）"
-        "\n\t\t\t// 原逻辑：link 失败 -> finally 删 tmp 并抛错 -> 会话文件写不出"
-        "\n\t\t\t// 降级：tmp 复制到 finalPath（finalPath 经 rejectExistingLog 保证不存在）"
+        "\t\t\tawait link(tmp, finalPath).catch(async (error) => {"
+        "\n\t\t\t\t// dsh-mobile: 荣耀 ROM 禁 link()（EACCES/EPERM/ENOTSUP/EXDEV），"
+        "\n\t\t\t\t// 降级为 copyFile 复制发布（普通写路径，finalPath 经 rejectExistingLog 保证不存在）"
+        "\n\t\t\t\tif (error && (error.code === \"EACCES\" || error.code === \"EPERM\" || error.code === \"ENOTSUP\" || error.code === \"EXDEV\")) {"
+        "\n\t\t\t\t\tconst { copyFile } = await import(\"node:fs/promises\");"
+        "\n\t\t\t\t\tawait copyFile(tmp, finalPath);"
+        "\n\t\t\t\t} else {"
+        "\n\t\t\t\t\tthrow error;"
+        "\n\t\t\t\t}"
+        "\n\t\t\t});"
     )
     patched_any = False
     for path in candidates:
         text = path.read_text(encoding="utf-8")
-        original = text
-        if old_line in text:
-            text = text.replace(old_line, new_lines)
         if text != original:
+            # 防回归：替换后必须包含 copyFile 降级（历史上出现过只加注释的伪补丁，CI 仍绿）
+            if "await copyFile(tmp, finalPath);" not in text:
+                raise BuildError(
+                    "dsh-session-persistence-jsonl link patch produced no copyFile fallback; aborting"
+                )
             path.write_text(text, encoding="utf-8")
             patched_any = True
     if not patched_any:
@@ -640,7 +648,6 @@ def patch_session_persistence(dsh_root: Path) -> None:
             "dsh-session-persistence-jsonl link patch did not match any installed copy; "
             "aborting to avoid shipping an unpatched runtime"
         )
-
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
