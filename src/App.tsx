@@ -630,6 +630,7 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
           </label>
         </section>
 
+        <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
             <div><h2 id="download-settings">运行时来源</h2><p>官方包已固定下载源；仅内嵌开发包可留空</p></div>

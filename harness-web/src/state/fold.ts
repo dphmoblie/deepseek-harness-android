@@ -59,8 +59,16 @@ export function foldEvent(event: SessionEvent, view?: ToolEventView): ChatEntry 
     case 'turn/end': {
       const reason = data.reason as { kind?: string } | undefined
       if (reason === undefined) return null
-      if (reason.kind === 'error' || reason.kind === 'aborted') {
-        return { kind: 'notice', seq: event.seq, text: reason.kind === 'error' ? '本轮因错误终止' : '本轮已中止' }
+      if (reason.kind === 'error') {
+        // 调试辅助：把错误 reason 的详情直接展示（dsh 会话事件携带 code/message/details）
+        const detail = JSON.stringify(reason)
+        const text = detail !== undefined && detail !== '{"kind":"error"}'
+          ? '本轮因错误终止：' + detail.slice(0, 600)
+          : '本轮因错误终止'
+        return { kind: 'notice', seq: event.seq, text }
+      }
+      if (reason.kind === 'aborted') {
+        return { kind: 'notice', seq: event.seq, text: '本轮已中止' }
       }
       if (reason.kind === 'interrupted') {
         return { kind: 'notice', seq: event.seq, text: '上轮因中断未能完成' }
