@@ -528,8 +528,10 @@ def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_ds
     for name in sorted(links):
         real = links[name]
         rootfs_real = PurePosixPath("/") / PurePosixPath(rootfs_dsh) / real.relative_to(resolved_root).as_posix()
-        rel = posixpath.relpath(rootfs_real.as_posix(), start="/root/.dsh/profiles/node_modules")
-        writer.add_symlink(f"root/.dsh/profiles/node_modules/{name}", rel)
+        link_name = f"root/.dsh/profiles/node_modules/{name}"
+        link_dir = "/" + posixpath.dirname(link_name)
+        rel = posixpath.relpath(rootfs_real.as_posix(), start=link_dir)
+        writer.add_symlink(link_name, rel)
     return len(links)
 
 

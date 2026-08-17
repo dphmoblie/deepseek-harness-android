@@ -147,6 +147,16 @@ def main() -> int:
         if canonical_target(name, actual) != canonical_target(name, expected):
             fail(f"required symlink target mismatch: {name!r} -> {actual!r} (expected {expected!r})")
 
+    # profiles 扁平模块回退：dsh 启动时 cordis 从 profile 目录解析 loader entry，
+    # 必须能在 $DSH_HOME/profiles/node_modules 找到全部 profile bundles。
+    profile_bundle_names = [
+        "dsh-mobile-compat",
+        "dshmarket",
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "@linxin666/dsh-web-ui-all",
+        "@liustack/modlens",
+    ]
     for package_name in profile_bundle_names:
         link_name = f"root/.dsh/profiles/node_modules/{package_name}"
         if types.get(link_name) != "sym":
@@ -173,4 +183,7 @@ def main() -> int:
 
     print(f"BUNDLE_VERIFY_OK: entries={entry_count} extracted={extracted} symlinks={len(symlinks)} hardlinks={len(hardlinks)}")
     return 0
+
+
+if __name__ == "__main__":
     sys.exit(main())
