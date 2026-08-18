@@ -1,0 +1,44 @@
+# DSH 移动版长期任务路线图（Roadmap）
+
+> 依据：docs/mobile-runtime-evaluation.md（真机实测评估）。按优先级排序，标注验收标准与依赖。
+
+## T1 用户态 Landlock 沙箱（对应 P0-3）
+
+- **背景**：容器内无 bubblewrap/namespace 可用，沙箱后端不可用，文件工具只能 danger-full-access。
+- **方案**：内核 6.12 支持 Landlock（无 root、进程级），在 dsh 的沙箱后端（dsh-sandbox-local）实现 Landlock 适配：文件工具受限读写、可执行位受控。
+- **验收**：write/edit 工具在受限模式可用且不报 "no sandbox backend is usable"；越界路径被拒。
+- **依赖**：rootfs 内 dsh-sandbox-local 打补丁或新增后端；荣耀 SELinux 兼容性实测。
+- **工作量**：大（架构级）。
+
+## T2 Shizuku 命令桥接（对应 P1-1）
+
+- **背景**：App 已获 Shizuku 授权，但容器内无 binder 工具链、无 adbd 通道，agent 无法利用。
+- **方案**：App 侧新增 Shizuku 命令 RPC（把容器内命令经宿主 Shizuku 执行并回传），或预装 arm64 adb（待稳定静态源）。
+- **验收**：agent 能通过 Shizuku 执行设备级命令（截图/输入/文件读取）。
+- **依赖**：dsh 工具协议扩展 + App 原生桥接。
+- **工作量**：中。
+
+## T3 apt/dpkg 可用性（对应 P0-2）
+
+- **背景**：SELinux untrusted_app 域拒绝 rename system_file，apt 安装失败。
+- **方案**：容器根迁移到应用可写 overlay（upper 层接管 system_file）；或运行期安装到 /opt 白名单路径 + 自定义 dpkg 前/后脚本。
+- **验收**：容器内 apt-get install 成功安装常见包。
+- **依赖**：构建链容器布局重构；荣耀 SELinux 实测。
+- **工作量**：中-大。
+
+## T4 /sdcard 可写访问（对应 P1-2 深化）
+
+- **现状**：已实现可选 bind（代码层），真机效果待验证。
+- **方案**：若 SELinux 拒绝读取，改走 MediaStore/SAF 桥接（App 侧文件代理）。
+- **验收**：agent 能读写用户选定目录（下载/相册）。
+- **工作量**：中（视真机结果）。
+
+## T5 工具链完整性（对应 P0-1 深化）
+
+- **现状**：busybox/jq/unzip/python3 已注入（CI 待验证）。
+- **方案**：追加 git/gcc（需静态或同发行版二进制源）；提供 `dsh tool install` 一键命令。
+- **验收**：常见 agent 任务（编译/脚本/依赖管理）开箱可跑。
+- **工作量**：小-中。
+
+---
+优先级建议：T1（沙箱）> T2（Shizuku）> T4（sdcard 真机结果）> T5（工具链补全）> T3（apt）。
