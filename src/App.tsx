@@ -32,6 +32,7 @@ import {
   X,
 } from 'lucide-react'
 import { TerminalPanel } from './components/TerminalPanel'
+import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import { runtimeBridge } from './platform/native'
 import type {
   RuntimePhase,
@@ -786,6 +787,9 @@ export function App() {
   const [settings, setSettings] = useState<RuntimeSettings | null>(null)
   const [shizuku, setShizuku] = useState<ShizukuState>(EMPTY_SHIZUKU)
   const [booting, setBooting] = useState(true)
+  const [onboardingOpen, setOnboardingOpen] = useState(() => {
+    try { return localStorage.getItem(ONBOARDING_STORAGE_KEY) === null } catch { return true }
+  })
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [resetOpen, setResetOpen] = useState(false)
@@ -1056,6 +1060,21 @@ export function App() {
       <main className="app-main">{screen}</main>
 
       {resetOpen && <ResetDialog busy={busy === 'reset'} onCancel={() => setResetOpen(false)} onConfirm={confirmReset} />}
+
+      {onboardingOpen && (
+        <Onboarding
+          busy={busy}
+          runtime={runtime}
+          shizuku={shizuku}
+          settings={settings}
+          onInstall={installRuntime}
+          onAuthorize={requestShizukuPermission}
+          onOpenShizuku={openShizuku}
+          onOpenHarness={launchHarness}
+          onDone={() => { try { localStorage.setItem(ONBOARDING_STORAGE_KEY, '1') } catch {} setOnboardingOpen(false) }}
+          onSaveSettings={saveSettings}
+        />
+      )}
 
       {notice !== null && (
         <div className={`toast toast-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>

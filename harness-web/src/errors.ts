@@ -43,6 +43,12 @@ const CODE_MESSAGES: Record<string, string> = {
   'subagent-not-resumable': '子代理无法恢复',
   'subagent-unauthorized': '子代理未授权',
   'subagent-delivery-unavailable': '子代理无法投递',
+  'permission-denied': '系统权限限制：Android 安全策略拒绝了该操作（如需访问系统文件请用 Shizuku）',
+  EACCES: '系统权限限制：无法执行该文件/链接操作（Android SELinux 限制）',
+  EPERM: '操作不被允许：当前为受限 root，系统路径受 Android 保护',
+  'readonly-filesystem': '文件系统只读：该路径受 Android 保护，无法修改',
+  'no-sandbox-backend': '沙箱后端不可用：已降级为受限模式，部分文件操作可能受限',
+  'apt-unavailable': '包管理不可用：apt/系统安装受 Android 权限限制，请使用内置工具链',
   internal: '内部错误',
 }
 

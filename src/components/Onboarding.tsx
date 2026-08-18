@@ -58,11 +58,14 @@ export function Onboarding({
               <h2 id="onboarding-title" className="onboarding-title"><Icon size={22} />{STEPS[step].title}</h2>
               {step === 0 && (
                 <div className="onboarding-body">
-                  <p>这是一个运行在 <strong>本机</strong> 的 Harness 控制台：</p>
+                  <p>这是一个运行在 <strong>本机</strong> 的 Harness 控制台（DSH 移动版）：</p>
                   <ul>
                     <li>Ubuntu 运行时与 Harness 只监听 <code>127.0.0.1</code>，不出设备；</li>
-                    <li>模型凭据留在 Harness 凭据流程内，不经过管理界面；</li>
-                    <li>数据与审计都在应用私有目录，可随时重置。</li>
+                    <li>模型凭据只保存在本机，不经过管理界面；</li>
+                    <li>数据与审计都在应用私有目录，可随时重置；</li>
+                    <li>容器内是<strong>受限 root</strong>：<code>/system</code>、<code>/data</code> 等系统路径受 Android 保护，无法越权修改（apt/系统安装不可用）；</li>
+                    <li>基础工具（node、perl、tar）已内置；python/gcc/curl 等请在后续版本通过工具链安装；</li>
+                    <li>如需访问手机文件或系统操作，请配合 Shizuku 设备 Shell。</li>
                   </ul>
                 </div>
               )}

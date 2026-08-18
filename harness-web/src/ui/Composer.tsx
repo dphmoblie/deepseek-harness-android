@@ -73,6 +73,11 @@ export function Composer(props: {
   const submit = (): void => {
     const trimmed = text.trim()
     if (trimmed === '' && images.length === 0) return
+    // 纯标点/无实质内容：不发送，给出引导（P2-1）
+    if (images.length === 0 && !/[\u4e00-\u9fffA-Za-z0-9]/.test(trimmed)) {
+      onFailure?.('消息里似乎没有实质内容。试试直接描述你想做的事，例如「帮我写一个 Python 脚本」或「解释一下这个报错」。')
+      return
+    }
     const effectiveMode = running ? mode : 'queue'
     if (images.length > 0) onSend(trimmed, effectiveMode, images)
     else onSend(trimmed, effectiveMode)
