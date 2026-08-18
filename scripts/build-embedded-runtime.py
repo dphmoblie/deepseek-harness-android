@@ -466,6 +466,25 @@ def inject_bundles_into_dsh_manifest(dsh_root: Path) -> None:
             )
 
 
+DEVICE_CLI = """#!/usr/bin/env node
+'use strict';
+// dsh-device: 通过宿主 Shizuku 执行设备命令（ROADMAP T2 / P1-1）
+// 用法: dsh-device screenshot|uiDump|tap|inputText [param]
+const token = process.env.DSH_DEVICE_BRIDGE_TOKEN || '';
+const cmd = process.argv[2];
+if (!cmd) { console.error('用法: dsh-device screenshot|uiDump|tap|inputText [param]'); process.exit(2); }
+const param = process.argv.slice(3).join(' ');
+fetch('http://127.0.0.1:3082/device-command', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+  body: JSON.stringify({ command: cmd, param }),
+}).then(r => r.json()).then(j => {
+  if (j.text) process.stdout.write(j.text + (j.text.endsWith('\\n') ? '' : '\\n'));
+  if (!j.ok) { if (j.message) console.error('设备命令失败: ' + j.message); process.exit(1); }
+}).catch(e => { console.error('设备桥不可用（App 未运行或 Shizuku 未授权）: ' + e.message); process.exit(2); });
+""".encode("utf-8")
+
+
 def add_toolchain(writer: RootfsWriter, toolchain_dir: Path) -> None:
     """把预置工具链注入 rootfs（评估报告 P0-1）。
 
@@ -821,6 +840,7 @@ def main() -> None:
             patch_attachment_link(args.dsh_root)
             add_windows_tree(writer, args.dsh_root, "opt/dsh")
             add_toolchain(writer, args.toolchain_dir)
+            writer.add_bytes("usr/local/bin/dsh-device", DEVICE_CLI, 0o755)
             writer.add_directory("sdcard/")
             profile_links = add_profiles_module_fallback(writer, args.dsh_root, "opt/dsh")
             writer.add_symlink("usr/local/bin/node", "../../../opt/node/bin/node")

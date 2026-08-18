@@ -17,6 +17,11 @@
 - **验收**：agent 能通过 Shizuku 执行设备级命令（截图/输入/文件读取）。
 - **依赖**：dsh 工具协议扩展 + App 原生桥接。
 - **工作量**：中。
+- **状态**：✅ 已实现（代码层，Kotlin 编译通过），待真机验证。
+  - App 侧 DeviceBridgeServer：127.0.0.1:3082 HTTP 桥（ServerSocket 实现，Android 无 com.sun.net.httpserver），POST /device-command + Bearer 认证（DSH_DEVICE_BRIDGE_TOKEN，RuntimeStore 持久生成）。
+  - 白名单命令：screenshot / uiDump / tap / inputText（DeviceCommand.fromName），一次性会话执行后关闭。
+  - 容器侧 dsh-device CLI（构建时注入 /usr/local/bin）封装调用。
+  - 真机验证：装测试包后，容器内执行 dsh-device screenshot /sdcard/x.png 等，对照验收清单第 8 节。
 
 ## T3 apt/dpkg 可用性（对应 P0-2）
 

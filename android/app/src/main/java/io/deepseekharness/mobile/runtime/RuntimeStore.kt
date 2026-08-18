@@ -68,6 +68,15 @@ class RuntimeStore(context: Context) {
         if (!committed) throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法保存运行时设置")
     }
 
+    /** 设备命令桥 token（生成后持久化，注入容器 DSH_DEVICE_BRIDGE_TOKEN）。 */
+    @Synchronized
+    fun deviceBridgeToken(): String {
+        preferences.getString(KEY_DEVICE_BRIDGE_TOKEN, null)?.let { return it }
+        val token = "dbt-" + java.util.UUID.randomUUID().toString().replace("-", "").take(32)
+        preferences.edit().putString(KEY_DEVICE_BRIDGE_TOKEN, token).commit()
+        return token
+    }
+
     fun runnerAvailable(): Boolean {
         // 信任来自 APK 打包与签名，不依赖提取库的 x 位：部分机型（如荣耀）
         // 上 nativeLibraryDir 提取文件的 canExecute() 恒为 false，但硬链接后
@@ -298,6 +307,7 @@ class RuntimeStore(context: Context) {
         private const val KEY_FONT_SIZE = "terminal_font_size"
         private const val KEY_API_KEY = "model_api_key"
         private const val KEY_AUTO_LAUNCH = "auto_launch"
+        private const val KEY_DEVICE_BRIDGE_TOKEN = "device_bridge_token"
         private const val RUNNER_NAME = "libdsh_proot.so"
         private const val LOADER_NAME = "libdsh_proot_loader.so"
         private const val EXEC_XATTR_NAME = "security.android.exec"
