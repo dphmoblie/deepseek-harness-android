@@ -326,7 +326,7 @@ jobs:
           cp /bin/busybox /tmp/toolchain/bin/busybox
           cp "$(command -v jq)" /tmp/toolchain/bin/jq
           cp "$(command -v unzip)" /tmp/toolchain/bin/unzip
-          /tmp/toolchain/bin/busybox | head -2
+          /tmp/toolchain/bin/busybox >/dev/null 2>&1 || true   # 避免 SIGPIPE 触发 pipefail
           /tmp/toolchain/bin/jq --version
           ls /tmp/toolchain/python/bin | head -5
 
