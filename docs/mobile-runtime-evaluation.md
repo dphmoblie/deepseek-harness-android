@@ -90,6 +90,17 @@
 
 **建议下一步**：优先 **P0-1（工具链预装）**——对话已跑通，接下来"agent 能不能干活"取决于工具链；其次是 **P1-2（/sdcard 可达）**，这是移动版区别于桌面的核心场景。
 
+## 落地情况（2026-08 第二轮）
+
+| 项 | 状态 |
+|---|---|
+| P0-1 工具链预装 | ✅ 已实现：build-embedded-runtime.py 新增 --toolchain-dir（bin→/usr/local/bin、python→/opt/python+软链）；CI 构建前下载 busybox / jq / python-build-standalone（aarch64）并注入 |
+| P1-2 /sdcard 可达 | ✅ 已实现：rootfs 预建 /sdcard；Android 侧对 /sdcard 做可选 bind（存在才尝试、失败跳过，不影响核心启动）；真机效果待验证 |
+| P2 体验（引导/空消息/错误转译） | ✅ 已实现（Onboarding 挂载 + 纯标点引导 + EACCES/EPERM/沙箱/apt 中文转译） |
+| P0-2 apt/dpkg 不可用 | ⚠️ 容器内无法修复（SELinux untrusted_app 域拒绝 rename system_file）；对策：以预装替代在线安装（P0-1 已落地）；彻底解决需容器根迁移到可写 overlay（架构级，后续） |
+| P0-3 Landlock 沙箱 | 🔲 架构级后续：内核 6.12 支持 Landlock，需实现用户态沙箱后端；当前移动版以显式降级 + 引导说明（受限 root 提示）过渡 |
+| P1-1 Shizuku 工具链 | 🔲 需宿主侧桥接（容器内无 binder 工具链、无 adbd 通道）；arm64 Linux 静态 adb 无稳定发布源，建议后续版本在 App 层打通 Shizuku 命令通道 |
+
 ---
 
 *本报告素材来自真机实测；改进项需结合实际构建链（build-embedded-runtime.py）逐一落地。*
