@@ -466,6 +466,28 @@ def inject_bundles_into_dsh_manifest(dsh_root: Path) -> None:
             )
 
 
+def add_toolchain(writer: RootfsWriter, toolchain_dir: Path) -> None:
+    """把预置工具链注入 rootfs（评估报告 P0-1）。
+
+    - bin/* -> /usr/local/bin（静态可执行文件，保留 0755）
+    - python/ -> /opt/python（python-build-standalone 解压树），并建立
+      /usr/local/bin/python3 与 python 软链（荣耀降级复制后仍可用）
+    CI 在构建前下载；目录缺失时跳过（不影响既有构建）。
+    """
+    if toolchain_dir is None or not toolchain_dir.is_dir():
+        return
+    bin_dir = toolchain_dir / "bin"
+    if bin_dir.is_dir():
+        for binary in sorted(bin_dir.iterdir()):
+            if binary.is_file() and not binary.name.startswith("."):
+                writer.add_bytes(f"usr/local/bin/{binary.name}", binary.read_bytes(), 0o755)
+    python_dir = toolchain_dir / "python"
+    if python_dir.is_dir():
+        add_windows_tree(writer, python_dir, "opt/python")
+        writer.add_symlink("usr/local/bin/python3", "../../opt/python/bin/python3")
+        writer.add_symlink("usr/local/bin/python", "../../opt/python/bin/python3")
+
+
 def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_dsh: str) -> int:
     """预生成 $DSH_HOME/profiles/node_modules 的扁平包链接，返回链接总数。
 
@@ -713,6 +735,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--node-root", default="node-v24.19.0-linux-arm64")
     parser.add_argument("--node-version", default="24.19.0")
     parser.add_argument("--dsh-root", required=True, type=Path)
+    parser.add_argument("--toolchain-dir", type=Path, default=None, help="optional pre-staged toolchain dir (bin/* -> /usr/local/bin, python/ -> /opt/python)")
     parser.add_argument("--dsh-version", default="0.1.0-rc.6")
     parser.add_argument("--runtime-version", required=True)
     parser.add_argument(
@@ -798,6 +821,8 @@ def main() -> None:
             patch_session_persistence(args.dsh_root)
             patch_attachment_link(args.dsh_root)
             add_windows_tree(writer, args.dsh_root, "opt/dsh")
+            add_toolchain(writer, args.toolchain_dir)
+            writer.add_directory("sdcard/")
             profile_links = add_profiles_module_fallback(writer, args.dsh_root, "opt/dsh")
             writer.add_symlink("usr/local/bin/node", "../../../opt/node/bin/node")
             # Ubuntu base 精简包不含这两个链接，但 App 完整性校验将其列为必需：

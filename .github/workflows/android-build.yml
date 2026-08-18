@@ -312,6 +312,23 @@ jobs:
           echo "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2  /tmp/ubuntu.tar.gz" | sha256sum -c -
           echo "01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc  /tmp/node.tar.xz" | sha256sum -c -
 
+      - name: Download toolchain (busybox + jq + python standalone, arm64)
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/toolchain/bin
+          # busybox：wget/unzip/tar 等核心 applet（静态 arm64）
+          curl -fL --retry 3 -o /tmp/toolchain/bin/busybox https://busybox.net/downloads/binaries/1.36.1-x86_64-linux-musl/busybox-armv8l
+          chmod +x /tmp/toolchain/bin/busybox
+          # jq 静态
+          curl -fL --retry 3 -o /tmp/toolchain/bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-arm64
+          chmod +x /tmp/toolchain/bin/jq
+          # python-build-standalone（aarch64 glibc install_only）
+          curl -fL --retry 3 -o /tmp/py.tgz https://github.com/astral-sh/python-build-standalone/releases/download/20250712/cpython-3.13.6%2B20250712-aarch64-unknown-linux-gnu-install_only.tar.gz
+          mkdir -p /tmp/toolchain/python && tar -xzf /tmp/py.tgz -C /tmp/toolchain/python --strip-components=1
+          /tmp/toolchain/bin/busybox | head -2
+          /tmp/toolchain/bin/jq --version
+          ls /tmp/toolchain/python/bin | head -5
+
       - name: Build bundle + manifest (mobile profile)
         run: |
           set -o pipefail
@@ -326,7 +343,7 @@ jobs:
             python3 scripts/build-embedded-runtime.py \
               --ubuntu /tmp/ubuntu.tar.gz --ubuntu-sha256 04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2 \
               --node /tmp/node.tar.xz --node-sha256 01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc \
-              --dsh-root /tmp/dsh-root --runtime-version "${RUNTIME_VERSION}" \
+              --dsh-root /tmp/dsh-root --toolchain-dir /tmp/toolchain --runtime-version "${RUNTIME_VERSION}" \
               --rootfs-url "https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/rootfs.bundle" \
               --mobile-profile scripts/mobile-profile.example.json \
               --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json

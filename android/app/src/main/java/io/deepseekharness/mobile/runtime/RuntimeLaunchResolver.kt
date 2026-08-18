@@ -154,6 +154,17 @@ class RuntimeLaunchResolver(
             }
             throw requiredBindFailure(firstResult.startError)
         }
+        // 可选 bind：/sdcard（Android 公共存储）——失败仅跳过，不阻断启动
+        // （荣耀等 ROM 的 SELinux 可能拒绝读取 /sdcard，不影响核心 Harness）
+        val sdcard = ProotBindMount("/sdcard", "/sdcard")
+        if (File(sdcard.source).exists()) {
+            val guestSdcard = File(store.currentRoot, sdcard.target.removePrefix("/"))
+            if (guestSdcard.exists()) {
+                val candidate = profile.copy(bindMounts = profile.bindMounts + sdcard)
+                val result = probeGuest(candidate)
+                if (result.succeeded) profile = candidate
+            }
+        }
         return profile
     }
 
