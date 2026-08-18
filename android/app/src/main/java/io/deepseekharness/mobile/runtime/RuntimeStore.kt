@@ -50,6 +50,8 @@ class RuntimeStore(context: Context) {
             manifestSha256 = if (usePinnedDefault) BuildConfig.DEFAULT_MANIFEST_SHA256 else storedSha256.orEmpty(),
             keepScreenAwake = preferences.getBoolean(KEY_KEEP_AWAKE, false),
             terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
+            apiKey = preferences.getString(KEY_API_KEY, null).orEmpty(),
+            autoLaunch = preferences.getBoolean(KEY_AUTO_LAUNCH, false),
         )
     }
 
@@ -60,6 +62,8 @@ class RuntimeStore(context: Context) {
             .putString(KEY_MANIFEST_SHA256, settings.manifestSha256)
             .putBoolean(KEY_KEEP_AWAKE, settings.keepScreenAwake)
             .putInt(KEY_FONT_SIZE, settings.terminalFontSize)
+            .putString(KEY_API_KEY, settings.apiKey)
+            .putBoolean(KEY_AUTO_LAUNCH, settings.autoLaunch)
             .commit()
         if (!committed) throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法保存运行时设置")
     }
@@ -292,6 +296,8 @@ class RuntimeStore(context: Context) {
         private const val KEY_MANIFEST_SHA256 = "manifest_sha256"
         private const val KEY_KEEP_AWAKE = "keep_screen_awake"
         private const val KEY_FONT_SIZE = "terminal_font_size"
+        private const val KEY_API_KEY = "model_api_key"
+        private const val KEY_AUTO_LAUNCH = "auto_launch"
         private const val RUNNER_NAME = "libdsh_proot.so"
         private const val LOADER_NAME = "libdsh_proot_loader.so"
         private const val EXEC_XATTR_NAME = "security.android.exec"

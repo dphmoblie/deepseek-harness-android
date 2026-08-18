@@ -140,6 +140,8 @@ class MobileRuntimePlugin : Plugin() {
                 call.getString("manifestSha256"),
                 call.getBoolean("keepScreenAwake", false) ?: false,
                 fontSize,
+                call.getString("apiKey"),
+                call.getBoolean("autoLaunch", true) ?: true,
             )
             controller.store.saveSettings(settings)
             applyKeepScreenAwake(settings.keepScreenAwake)
@@ -407,6 +409,8 @@ class MobileRuntimePlugin : Plugin() {
         .put("manifestSha256", manifestSha256)
         .put("keepScreenAwake", keepScreenAwake)
         .put("terminalFontSize", terminalFontSize)
+        .put("apiKey", apiKey)
+        .put("autoLaunch", autoLaunch)
 
     private fun RuntimeStateSnapshot.toProgressJs(): JSObject = JSObject()
         .put("phase", phase.wireValue)

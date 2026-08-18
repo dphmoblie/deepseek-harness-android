@@ -12,6 +12,7 @@ import java.io.FilterInputStream
 import java.io.InputStream
 import java.nio.channels.Channels
 import java.nio.channels.FileChannel
+import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
@@ -276,6 +277,7 @@ class SafeRootfsExtractor {
     /**
      * 符号链接创建被设备拒绝时的降级：按 POSIX 语义（链接内容相对链接所在目录）
      * 解析目标，并以复制替代链接。复制保留原文件的可执行位（如 node 等入口）。
+     * 目录目标复制时跳过内部符号链接（见函数体注释）。
      */
     private fun copySymlinkTargetAsFallback(linkPath: Path, rawTarget: String, root: Path) {
         val absoluteLink = linkPath.toAbsolutePath().normalize()
@@ -290,7 +292,11 @@ class SafeRootfsExtractor {
         val destination = absoluteLink
         val sourceFile = resolved.toFile()
         if (sourceFile.isDirectory) {
+            // 复制目录时跳过内部符号链接：pnpm 包目录内的依赖链接指向 .pnpm 其它包，
+            // 跟随复制会膨胀/成环/产生空目录。扁平 profiles/node_modules 下的包依赖
+            // 由 Node 从该扁平目录向上解析，无需复制内部链接。
             sourceFile.walkTopDown().forEach { file ->
+                if (Files.isSymbolicLink(file.toPath())) return@forEach
                 val relative = resolved.relativize(file.toPath())
                 val targetFile = destination.resolve(relative).toFile()
                 if (file.isDirectory) {

@@ -36,6 +36,8 @@ data class RuntimeSettings(
     val manifestSha256: String,
     val keepScreenAwake: Boolean,
     val terminalFontSize: Int,
+    val apiKey: String = "",
+    val autoLaunch: Boolean = false,
 )
 
 data class RootfsArtifact(
@@ -255,16 +257,21 @@ object RuntimeValidation {
         digest: String?,
         keepScreenAwake: Boolean,
         terminalFontSize: Int,
+        apiKey: String? = null,
+        autoLaunch: Boolean = true,
     ): RuntimeSettings {
         val source = source(url, digest)
         if (terminalFontSize !in 11..24) {
             throw RuntimeFailure("SETTINGS_INVALID", "终端字号必须在 11 到 24 之间")
         }
+        val normalizedKey = apiKey?.trim().orEmpty().take(200)
         return RuntimeSettings(
             source.manifestUrl?.toASCIIString().orEmpty(),
             source.manifestSha256.orEmpty(),
             keepScreenAwake,
             terminalFontSize,
+            normalizedKey,
+            autoLaunch,
         )
     }
 

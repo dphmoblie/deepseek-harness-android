@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowLeft, ArrowRight, Blocks, Check, Loader2, Rocket, ShieldCheck, Sparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Blocks, Check, KeyRound, Loader2, Rocket, ShieldCheck, Sparkles, X } from 'lucide-react'
 import type { RuntimeSettings, RuntimeState, ShizukuState } from '../platform/types'
 
 export const ONBOARDING_STORAGE_KEY = 'dsh-mobile-onboarding-v1'
@@ -14,11 +14,13 @@ interface OnboardingProps {
   onOpenShizuku: () => void
   onOpenHarness: () => void
   onDone: () => void
+  onSaveSettings?: (settings: RuntimeSettings) => void
 }
 
 const STEPS = [
   { id: 'welcome', title: '欢迎使用 DeepSeek Harness Android', icon: Sparkles },
   { id: 'runtime', title: '安装 Ubuntu 运行时', icon: Blocks },
+  { id: 'apikey', title: '配置模型 API Key', icon: KeyRound },
   { id: 'shizuku', title: '设备 Shell（可选）', icon: ShieldCheck },
   { id: 'plugins', title: '插件与移动布局', icon: Blocks },
   { id: 'ready', title: '开始使用', icon: Rocket },
@@ -31,9 +33,10 @@ function manifestConfigured(settings: RuntimeSettings | null): boolean {
 
 export function Onboarding({
   busy, runtime, shizuku, settings,
-  onInstall, onAuthorize, onOpenShizuku, onOpenHarness, onDone,
+  onInstall, onAuthorize, onOpenShizuku, onOpenHarness, onDone, onSaveSettings,
 }: OnboardingProps) {
   const [step, setStep] = useState(0)
+  const [apiKeyDraft, setApiKeyDraft] = useState('')
   const last = step === STEPS.length - 1
 
   const installed = ['ready', 'running'].includes(runtime.phase)
@@ -80,6 +83,27 @@ export function Onboarding({
               )}
               {step === 2 && (
                 <div className="onboarding-body">
+                  <p>填入模型服务商（如 DeepSeek）的 API Key，Harness 才能对话。密钥只保存在本机，注入运行时环境，不经过网络。</p>
+                  <label className="field">
+                    <span>DeepSeek API Key（sk-...）</span>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      maxLength={200}
+                      placeholder="留空则稍后在设置页配置"
+                      value={apiKeyDraft}
+                      onChange={event => setApiKeyDraft(event.target.value)}
+                    />
+                  </label>
+                  <button className="button button-primary" type="button" disabled={apiKeyDraft.trim() === ''} onClick={() => { onSaveSettings?.({ ...(settings ?? { manifestUrl: '', manifestSha256: '', keepScreenAwake: true, terminalFontSize: 14, autoLaunch: true }), apiKey: apiKeyDraft.trim() }); setApiKeyDraft('') }}>
+                    <KeyRound size={18} />保存 API Key
+                  </button>
+                  <p className="onboarding-status">{settings?.apiKey ? '已配置（' + settings.apiKey.slice(0, 8) + '…）' : '未配置'}</p>
+                </div>
+              )}
+              {step === 3 && (
+                <div className="onboarding-body">
                   <p>Shizuku 让「设备 Shell」终端以 shell 权限执行系统命令（可选，不影响 Ubuntu 终端）。</p>
                   <ul>
                     <li>需要安装 Shizuku 应用并完成一次性引导；</li>
@@ -98,13 +122,13 @@ export function Onboarding({
                   </div>
                 </div>
               )}
-              {step === 3 && (
+              {step === 4 && (
                 <div className="onboarding-body">
                   <p>移动端已内置 <code>dsh-mobile-compat</code> 布局：小屏下侧栏变为抽屉、详情变为底部面板，桌面插件（文件/预览/看板/市场等）按移动形态适配。</p>
                   <p>更多插件可在 Harness 内通过市场（dshmarket）按需安装；宠物、实时统计等悬浮组件在手机上默认关闭。</p>
                 </div>
               )}
-              {step === 4 && (
+              {step === 5 && (
                 <div className="onboarding-body">
                   <p>一切就绪。打开 Harness 开始对话；随时返回本界面管理运行时与终端。</p>
                   <div className="onboarding-actions-row">

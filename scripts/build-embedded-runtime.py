@@ -38,6 +38,14 @@ UBUNTU_EXCLUDED_REGULAR_PATHS = frozenset(
         r"usr/lib/systemd/system/system-systemd\x2dveritysetup.slice",
     },
 )
+PROFILE_BUNDLE_NAMES = (
+    "@deepseek-ai/dsh-base",
+    "@deepseek-ai/dsh-web-app",
+    "dsh-mobile-compat",
+    "@linxin666/dsh-web-ui-all",
+    "@liustack/modlens",
+    "dshmarket",
+)
 
 
 class BuildError(RuntimeError):
@@ -432,6 +440,265 @@ def add_windows_tree(writer: RootfsWriter, source_root: Path, destination_root: 
                 writer.add(info, source)
 
 
+def inject_bundles_into_dsh_manifest(dsh_root: Path) -> None:
+    """把 profile bundles 注入 @deepseek-ai/dsh 的 package.json dependencies。
+
+    dsh 启动时 healProfilesModuleFallback 只从 dsh 包的依赖闭包维护
+    profiles/node_modules；profile bundles 不是 dsh 的依赖时永远不会被它链接，
+    cordis 加载器从 profile 目录解析 loader entry 就会 "Cannot find package"。
+    这里把 bundles 注入 dsh 包依赖，让官方机制在运行时自动补齐链接，
+    构建期预置链接仅作兜底。
+    """
+    for manifest_path in dsh_root.glob(
+        "node_modules/.pnpm/@deepseek-ai+dsh@*/node_modules/@deepseek-ai/dsh/package.json",
+    ):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        deps = manifest.setdefault("dependencies", {})
+        changed = False
+        for name in PROFILE_BUNDLE_NAMES:
+            if name not in deps:
+                deps[name] = "*"
+                changed = True
+        if changed:
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+
+def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_dsh: str) -> int:
+    """预生成 $DSH_HOME/profiles/node_modules 的扁平包链接，返回链接总数。
+
+    dsh 启动时（profile-boot）会调用 healProfilesModuleFallback 维护这个目录，
+    但它只从 @deepseek-ai/dsh 包的依赖闭包收集——profile bundles
+    （dsh-mobile-compat、dshmarket 等）不是 dsh 的依赖，永远不会被它链接，
+    cordis 加载器从 profile 目录解析 loader entry 时就会 "Cannot find package"。
+    这里在构建期按 dsh_root 的依赖闭包（含全部 bundles）预生成链接打进 rootfs，
+    运行时无需（也避免在受限 ROM 上）再创建符号链接。链接总数写入 manifest 的
+    `profileLinks` 字段，供 verify-bundle.py 对照，防止回归成"只链接了部分包"。
+    """
+    node_modules = dsh_root / "node_modules"
+    if not node_modules.is_dir():
+        return 0
+
+    links: dict[str, Path] = {}
+    queue: list[Path] = []
+
+    def resolve_package(from_dir: Path, name: str) -> Path | None:
+        # Node 语义：从 from_dir 逐级向父目录查找 node_modules/<name>
+        cursor = from_dir
+        while True:
+            candidate = cursor / name if cursor.name == "node_modules" else cursor / "node_modules" / name
+            if candidate.exists():
+                try:
+                    real = candidate.resolve()
+                except OSError:
+                    return None
+                # pnpm 顶层包条目是符号链接（Windows 上为 junction）：解析后应指向真实目录
+                if real.is_dir():
+                    return real
+            if cursor.parent == cursor:
+                return None
+            cursor = cursor.parent
+
+    def enqueue(name: str, from_dir: Path) -> None:
+        if name in links:
+            return
+        real = resolve_package(from_dir, name)
+        if real is None:
+            return
+        links[name] = real
+        queue.append(real)
+
+    root_manifest = json.loads((dsh_root / "package.json").read_text(encoding="utf-8"))
+    for dep in {**(root_manifest.get("dependencies") or {}), **(root_manifest.get("peerDependencies") or {})}:
+        enqueue(dep, dsh_root)
+
+    while queue:
+        pkg_dir = queue.pop()
+        manifest_path = pkg_dir / "package.json"
+        if not manifest_path.is_file():
+            continue
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for dep in {**(manifest.get("dependencies") or {}), **(manifest.get("peerDependencies") or {})}:
+            if dep not in links:
+                enqueue(dep, pkg_dir)
+
+    resolved_root = dsh_root.resolve()
+    for name in sorted(links):
+        real = links[name]
+        rootfs_real = PurePosixPath("/") / PurePosixPath(rootfs_dsh) / real.relative_to(resolved_root).as_posix()
+        link_name = f"root/.dsh/profiles/node_modules/{name}"
+        link_dir = "/" + posixpath.dirname(link_name)
+        rel = posixpath.relpath(rootfs_real.as_posix(), start=link_dir)
+        writer.add_symlink(link_name, rel)
+    return len(links)
+
+
+def patch_dsh_app_boot(dsh_root: Path) -> None:
+    """放宽 dsh-app-boot 的 profiles/node_modules 链接维护（ROM 兼容）。
+
+    荣耀等 ROM 的 SELinux 禁止应用创建符号链接时，SafeRootfsExtractor 会把
+    profiles/node_modules 的链接降级复制成真实目录。dsh 启动时
+    healProfilesModuleFallback -> ensureSymlink 对"存在且不是符号链接"的条目
+    会直接抛错（"exists and is not a symlink"），导致 dsh 无法启动。这里在
+    构建期对 dsh-app-boot 打两个补丁：
+
+    1. 存在（任意类型）即信任跳过——条目要么是构建期预置链接，要么是
+       解压降级复制出的目录，两者都可用，不需要强制重建成符号链接；
+    2. 创建符号链接失败（EACCES/EPERM/ENOTSUP）时静默返回——受限 ROM 上
+       补链必然失败，解析靠扁平 profiles/node_modules 目录兜底。
+
+    补丁基于 dsh-app-boot 0.1.0-rc.6 的精确源码文本；任何一处不匹配都会
+    让构建失败（fail loud），避免静默打偏。
+    """
+    candidates: list[Path] = []
+    candidates.extend(
+        dsh_root.glob("node_modules/.pnpm/@deepseek-ai+dsh-app-boot@*/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js")
+    )
+    top_level = dsh_root / "node_modules" / "@deepseek-ai" / "dsh-app-boot" / "lib" / "index.js"
+    if top_level.is_file():
+        candidates.append(top_level)
+
+    trust_existing = (
+        "if (!stat.isSymbolicLink()) throw new Error("
+        "`dsh: ${link} exists and is not a symlink; remove it so dsh can manage the installation fallback`);"
+    )
+    trust_existing_replacement = (
+        "if (!stat.isSymbolicLink()) return; "
+        "/* dsh-mobile: trust prebuilt or degraded (copied) profiles entries */"
+    )
+    tolerate_denied = (
+        'if (error.code !== "EEXIST" || !lstatSync(link).isSymbolicLink() || readlinkSync(link) !== target) throw error;'
+    )
+    tolerate_denied_replacement = (
+        'if (error.code === "EACCES" || error.code === "EPERM" || error.code === "ENOTSUP") return; '
+        'if (error.code !== "EEXIST" || !lstatSync(link).isSymbolicLink() || readlinkSync(link) !== target) throw error;'
+    )
+
+    patched_any = False
+    for path in candidates:
+        text = path.read_text(encoding="utf-8")
+        original = text
+        if trust_existing in text:
+            text = text.replace(trust_existing, trust_existing_replacement)
+        if tolerate_denied in text:
+            text = text.replace(tolerate_denied, tolerate_denied_replacement)
+        if text != original:
+            path.write_text(text, encoding="utf-8")
+            patched_any = True
+    if not patched_any:
+        raise BuildError(
+            "dsh-app-boot ensureSymlink patch did not match any installed copy; "
+            "aborting to avoid shipping an unpatched runtime"
+        )
+
+
+def patch_session_persistence(dsh_root: Path) -> None:
+    """荣耀等 ROM 禁 link()（EACCES）时会话持久化原子写失败补丁。
+
+    dsh-session-persistence-jsonl 的 materializePosix() 用 mkdtemp + link(tmp, finalPath)
+    实现"不覆盖"的原子发布；荣耀 SELinux 拒绝 link 系统调用（与解压期
+    symlink/hardlink 降级同一家族），导致会话文件永远写不出、agent 必然报
+    "本轮因错误终止"。这里把 link 失败（EACCES/EPERM/ENOTSUP/EXDEV）降级为
+    copyFile（普通写，已验证可行），语义从"硬链接发布"变为"复制发布"。
+    """
+    candidates: list[Path] = []
+    candidates.extend(
+        dsh_root.glob(
+            "node_modules/.pnpm/@deepseek-ai+dsh-session-persistence-jsonl@*/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js"
+        )
+    )
+    top_level = (
+        dsh_root / "node_modules" / "@deepseek-ai" / "dsh-session-persistence-jsonl" / "lib" / "index.js"
+    )
+    if top_level.is_file():
+        candidates.append(top_level)
+
+    old_line = "\t\t\tawait link(tmp, finalPath);"
+    new_lines = (
+        "\t\t\tawait link(tmp, finalPath).catch(async (error) => {"
+        "\n\t\t\t\t// dsh-mobile: 荣耀 ROM 禁 link()（EACCES/EPERM/ENOTSUP/EXDEV），"
+        "\n\t\t\t\t// 降级为 copyFile 复制发布（普通写路径，finalPath 经 rejectExistingLog 保证不存在）"
+        "\n\t\t\t\tif (error && (error.code === \"EACCES\" || error.code === \"EPERM\" || error.code === \"ENOTSUP\" || error.code === \"EXDEV\")) {"
+        "\n\t\t\t\t\tconst { copyFile } = await import(\"node:fs/promises\");"
+        "\n\t\t\t\t\tawait copyFile(tmp, finalPath);"
+        "\n\t\t\t\t} else {"
+        "\n\t\t\t\t\tthrow error;"
+        "\n\t\t\t\t}"
+        "\n\t\t\t});"
+    )
+    patched_any = False
+    for path in candidates:
+        text = path.read_text(encoding="utf-8")
+        original = text
+        if old_line in text:
+            text = text.replace(old_line, new_lines)
+            # 防回归：替换后必须包含 copyFile 降级（历史上出现过只加注释的伪补丁，CI 仍绿）
+            if "await copyFile(tmp, finalPath);" not in text:
+                raise BuildError(
+                    "dsh-session-persistence-jsonl link patch produced no copyFile fallback; aborting"
+                )
+        if text != original:
+            path.write_text(text, encoding="utf-8")
+            patched_any = True
+    if not patched_any:
+        raise BuildError(
+            "dsh-session-persistence-jsonl link patch did not match any installed copy; "
+            "aborting to avoid shipping an unpatched runtime"
+        )
+
+
+def patch_attachment_link(dsh_root: Path) -> None:
+    """dsh-attachment-local 的附件发布 link() 同样被荣耀 ROM 拒绝（EACCES）。
+
+    附件写入是 temporary -> link(target) 的 no-clobber 发布；与会话持久化
+    一样补 copyFile 降级。copyFile 对已存在目标抛 EEXIST，会继续走原
+    外层 catch 的完整性校验逻辑，语义不变。
+    """
+    candidates: list[Path] = []
+    candidates.extend(
+        dsh_root.glob(
+            "node_modules/.pnpm/@deepseek-ai+dsh-attachment-local@*/node_modules/@deepseek-ai/dsh-attachment-local/lib/index.js"
+        )
+    )
+    top_level = (
+        dsh_root / "node_modules" / "@deepseek-ai" / "dsh-attachment-local" / "lib" / "index.js"
+    )
+    if top_level.is_file():
+        candidates.append(top_level)
+
+    old_line = "\t\t\tawait link(temporary, target);"
+    new_lines = (
+        "\t\t\tawait link(temporary, target).catch(async (error) => {"
+        "\n\t\t\t\t// dsh-mobile: 荣耀 ROM 禁 link()，降级为 copyFile 复制发布（EEXIST 语义保留给外层完整性校验）"
+        "\n\t\t\t\tif (error && (error.code === \"EACCES\" || error.code === \"EPERM\" || error.code === \"ENOTSUP\" || error.code === \"EXDEV\")) {"
+        "\n\t\t\t\t\tconst { copyFile } = await import(\"node:fs/promises\");"
+        "\n\t\t\t\t\tawait copyFile(temporary, target);"
+        "\n\t\t\t\t} else {"
+        "\n\t\t\t\t\tthrow error;"
+        "\n\t\t\t\t}"
+        "\n\t\t\t});"
+    )
+    patched_any = False
+    for path in candidates:
+        text = path.read_text(encoding="utf-8")
+        original = text
+        if old_line in text:
+            text = text.replace(old_line, new_lines)
+            # 防回归：必须包含 copyFile 降级
+            if "await copyFile(temporary, target);" not in text:
+                raise BuildError("dsh-attachment-local link patch produced no copyFile fallback; aborting")
+        if text != original:
+            path.write_text(text, encoding="utf-8")
+            patched_any = True
+    if not patched_any:
+        raise BuildError(
+            "dsh-attachment-local link patch did not match any installed copy; "
+            "aborting to avoid shipping an unpatched runtime"
+        )
+
+
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ubuntu", required=True, type=Path)
@@ -526,7 +793,12 @@ def main() -> None:
                 excluded_regular_paths=UBUNTU_EXCLUDED_REGULAR_PATHS,
             )
             copy_tar_archive(writer, args.node, args.node_root, lambda name: f"opt/node/{name}")
+            inject_bundles_into_dsh_manifest(args.dsh_root)
+            patch_dsh_app_boot(args.dsh_root)
+            patch_session_persistence(args.dsh_root)
+            patch_attachment_link(args.dsh_root)
             add_windows_tree(writer, args.dsh_root, "opt/dsh")
+            profile_links = add_profiles_module_fallback(writer, args.dsh_root, "opt/dsh")
             writer.add_symlink("usr/local/bin/node", "../../../opt/node/bin/node")
             # Ubuntu base 精简包不含这两个链接，但 App 完整性校验将其列为必需：
             # 运行时（mount 视图/时区）与校验都需要，缺了安装会报 ROOTFS_LINKS_CORRUPTED。
@@ -580,6 +852,7 @@ def main() -> None:
                 "harness": ["/usr/local/bin/dsh", "web", "--host", "127.0.0.1", "--port", "3080"],
             },
             "harnessUrl": "http://127.0.0.1:3080/",
+            "profileLinks": profile_links,
             **({"mobile": mobile_spec} if mobile_spec is not None else {}),
         }
         manifest_bytes = (json.dumps(manifest, ensure_ascii=True, indent=2) + "\n").encode("ascii")

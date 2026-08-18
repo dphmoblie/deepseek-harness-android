@@ -150,10 +150,14 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
   if (!Number.isInteger(settings.terminalFontSize) || settings.terminalFontSize < 11 || settings.terminalFontSize > 24) {
     throw new Error('终端字号必须是 11 到 24 之间的整数')
   }
+  const apiKey = settings.apiKey === undefined ? undefined : String(settings.apiKey).trim().slice(0, 200) || undefined
+  const autoLaunch = settings.autoLaunch === undefined ? false : settings.autoLaunch
   return {
     ...source,
     keepScreenAwake: settings.keepScreenAwake,
     terminalFontSize: settings.terminalFontSize,
+    ...(apiKey === undefined ? {} : { apiKey }),
+    autoLaunch,
   }
 }
 
@@ -166,15 +170,31 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
   if (!Number.isInteger(settings.terminalFontSize) || (settings.terminalFontSize as number) < 11 || (settings.terminalFontSize as number) > 24) {
     throw new Error('终端字号必须是 11 到 24 之间的整数')
   }
+  const apiKey = typeof settings.apiKey === 'string' && settings.apiKey.trim() !== ''
+    ? settings.apiKey.trim().slice(0, 200)
+    : undefined
+  const autoLaunch = settings.autoLaunch === undefined ? false : settings.autoLaunch === true
   if (settings.manifestUrl === '' && settings.manifestSha256 === '') {
     return {
       manifestUrl: '',
       manifestSha256: '',
       keepScreenAwake: settings.keepScreenAwake,
       terminalFontSize: settings.terminalFontSize as number,
+      ...(apiKey === undefined ? {} : { apiKey }),
+      autoLaunch,
     }
   }
-  return validateSettings(settings as unknown as RuntimeSettings)
+  const source = validateRuntimeSource({
+    manifestUrl: settings.manifestUrl,
+    manifestSha256: settings.manifestSha256,
+  })
+  return {
+    ...source,
+    keepScreenAwake: settings.keepScreenAwake,
+    terminalFontSize: settings.terminalFontSize as number,
+    ...(apiKey === undefined ? {} : { apiKey }),
+    autoLaunch,
+  }
 }
 
 export function assertSessionId(sessionId: string): string {

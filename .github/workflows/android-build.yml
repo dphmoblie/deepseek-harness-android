@@ -5,9 +5,21 @@ on:
     branches: [main, 'feature/dsh-plugin-compat']
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release type: preview (default) or stable'
+        required: false
+        default: 'preview'
+        type: choice
+        options:
+          - preview
+          - stable
 
 permissions:
   contents: write
+
+env:
+  APP_VERSION: '0.1.7'
 
 jobs:
   build:
@@ -82,21 +94,20 @@ jobs:
           name: embedded-runtime
           path: /tmp/embedded-runtime
 
-      - name: Configure pinned remote runtime (thin APK)
+      - name: Embed bundled runtime into APK (offline install)
         run: |
           set -euo pipefail
+          BUNDLE="$(find /tmp/embedded-runtime -type f -name rootfs.bundle -print -quit)"
           MANIFEST="$(find /tmp/embedded-runtime -type f -name runtime-manifest.json -print -quit)"
+          test -n "$BUNDLE" && test -f "$BUNDLE"
           test -n "$MANIFEST" && test -f "$MANIFEST"
-          MANIFEST_SHA="$(sha256sum "$MANIFEST" | cut -d' ' -f1)"
-          echo "DSH_RUNTIME_MANIFEST_URL=https://github.com/${{ github.repository }}/releases/download/v0.1.7-mobile-${{ github.run_number }}/runtime-manifest.json" >> "$GITHUB_ENV"
-          echo "DSH_RUNTIME_MANIFEST_SHA256=$MANIFEST_SHA" >> "$GITHUB_ENV"
-          # Release 资产承载 rootfs；APK 不嵌入 bundle，也不允许事务备份混入 assets。
-          rm -f android/app/src/main/assets/runtime/rootfs.bundle \
-            android/app/src/main/assets/runtime/rootfs.bundle.bak \
-            android/app/src/main/assets/runtime/runtime-manifest.json \
-            android/app/src/main/assets/runtime/runtime-manifest.json.bak
-          test ! -e android/app/src/main/assets/runtime/rootfs.bundle
-          echo "Pinned manifest SHA-256: $MANIFEST_SHA"
+          mkdir -p android/app/src/main/assets/runtime
+          cp "$BUNDLE" android/app/src/main/assets/runtime/rootfs.bundle
+          cp "$MANIFEST" android/app/src/main/assets/runtime/runtime-manifest.json
+          # 不注入 DSH_RUNTIME_MANIFEST_URL/SHA256：BuildConfig 为空时 App 走内置资产
+          # （RuntimeSource(null, null) -> isBundled），无需联网下载，中国网络可离线安装。
+          ls -la android/app/src/main/assets/runtime/
+          echo "Embedded rootfs bytes: $(stat -c%s android/app/src/main/assets/runtime/rootfs.bundle)"
 
       - name: Set up Gradle (trusted distribution for wrapper bootstrap)
         uses: gradle/actions/setup-gradle@v4
@@ -110,16 +121,16 @@ jobs:
       - name: Install wrapper jar into android project
         run: cp .wrapper-bootstrap/gradle/wrapper/gradle-wrapper.jar android/gradle/wrapper/gradle-wrapper.jar
 
-      - name: Build debug APK + lint + unit tests
+      - name: Build release APK + lint + unit tests
         working-directory: android
-        run: ./gradlew assembleDebug lint testDebugUnitTest --no-daemon
+        run: ./gradlew assembleRelease lintRelease testDebugUnitTest --no-daemon
 
       - name: 校验 APK 团队签名（证书指纹与团队密钥库一致）
-        run: python3 scripts/verify-apk-signature.py --apk android/app/build/outputs/apk/debug/app-debug.apk
+        run: python3 scripts/verify-apk-signature.py --apk android/app/build/outputs/apk/release/app-release.apk
 
       - name: Publish APK to dist branch (thin APKs only; embedded ones ship via Release)
         run: |
-          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          APK=android/app/build/outputs/apk/release/app-release.apk
           SIZE="$(stat -c%s "$APK")"
           echo "APK size: $SIZE bytes"
           if [ "$SIZE" -ge 94371840 ]; then
@@ -133,16 +144,16 @@ jobs:
           git fetch origin dist || true
           git checkout -b dist origin/dist 2>/dev/null || git checkout --orphan dist
           rm -rf dist && mkdir -p dist
-          cp "$APK" dist/dsh-harness-android-debug.apk
-          git add -f dist/dsh-harness-android-debug.apk
+          cp "$APK" dist/dsh-harness-android-release.apk
+          git add -f dist/dsh-harness-android-release.apk
           git commit -m "dist: auto-built APK ($GITHUB_SHA)" || true
           git push origin dist
 
-      - name: Upload debug APK
+      - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
-          name: dsh-harness-android-debug
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: dsh-harness-android-release
+          path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
   build-runners:
@@ -257,6 +268,10 @@ jobs:
             koffi: true
             "@deepseek-ai/dsh-subprocess-local": true
             protobufjs: true
+            "@google/genai": true
+            cloudflared: true
+            cpu-features: true
+            ssh2: true
           EOF
           push_log() {
             echo "=== 推送步骤日志到 ci-logs 分支 ==="
@@ -301,18 +316,25 @@ jobs:
         run: |
           set -o pipefail
           {
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.release_type }}" = "stable" ]; then
+              RUNTIME_VERSION="${APP_VERSION}"
+              RELEASE_TAG="v${APP_VERSION}"
+            else
+              RUNTIME_VERSION="${APP_VERSION}-mobile-${GITHUB_RUN_NUMBER}"
+              RELEASE_TAG="v${RUNTIME_VERSION}"
+            fi
             python3 scripts/build-embedded-runtime.py \
               --ubuntu /tmp/ubuntu.tar.gz --ubuntu-sha256 04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2 \
               --node /tmp/node.tar.xz --node-sha256 01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc \
-              --dsh-root /tmp/dsh-root --runtime-version "0.1.7-mobile-${GITHUB_RUN_NUMBER}" \
-              --rootfs-url "https://github.com/${{ github.repository }}/releases/download/v0.1.7-mobile-${{ github.run_number }}/rootfs.bundle" \
+              --dsh-root /tmp/dsh-root --runtime-version "${RUNTIME_VERSION}" \
+              --rootfs-url "https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/rootfs.bundle" \
               --mobile-profile scripts/mobile-profile.example.json \
               --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
             python3 scripts/rebuild-rootfs-frontend.py \
               --bundle /tmp/rootfs.bundle \
               --manifest /tmp/runtime-manifest.json \
               --dist harness-web/dist \
-              --runtime-version "0.1.7-mobile-${GITHUB_RUN_NUMBER}"
+              --runtime-version "${RUNTIME_VERSION}"
             ls -la /tmp/rootfs.bundle /tmp/runtime-manifest.json
             sha256sum /tmp/rootfs.bundle
             python3 scripts/verify-bundle.py --bundle /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
@@ -364,8 +386,10 @@ jobs:
           if-no-files-found: error
 
   publish-release:
-    name: Publish test release (APK + rootfs bundle + manifest)
+    name: Publish release (APK + rootfs bundle + manifest)
     needs: [build, build-rootfs]
+    # 推送分支只做构建与验证；发布必须手动 workflow_dispatch 并选择 release_type
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_type != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -375,7 +399,7 @@ jobs:
       - name: Download APK artifact
         uses: actions/download-artifact@v4
         with:
-          name: dsh-harness-android-debug
+          name: dsh-harness-android-release
           path: /tmp/apk
 
       - name: Download runtime artifact
@@ -405,36 +429,51 @@ jobs:
             git push origin dist || true
           }
           {
-            TAG="v0.1.7-mobile-${{ github.run_number }}"
+            RELEASE_TYPE="${{ github.event.inputs.release_type }}"
+            if [ "$RELEASE_TYPE" = "stable" ]; then
+              TAG="v${APP_VERSION}"
+              NAME="DeepSeek Harness Android v${APP_VERSION}（正式版）"
+              PRE="false"
+            else
+              TAG="v${APP_VERSION}-mobile-${{ github.run_number }}"
+              NAME="Mobile test build #${{ github.run_number }}"
+              PRE="true"
+            fi
             APK="$(ls /tmp/apk/*.apk | head -n1)"
             test -n "$APK"
             test -f /tmp/runtime/rootfs.bundle
             test -f /tmp/runtime/runtime-manifest.json
             MANIFEST_SHA="$(sha256sum /tmp/runtime/runtime-manifest.json | cut -d' ' -f1)"
+            for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json; do
+              printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")"
+            done > /tmp/checksums.txt
             cat > /tmp/notes.md <<EOF
-          # 移动端测试构建 ${{ github.sha }}
+          # ${NAME}
 
           ## 安装与配置
 
-          1. 安装 $(basename "$APK")（瘦 APK，已含 PRoot 运行器）。
-          2. 首次打开后点「安装并进入对话」；应用已固定本次 Release 的清单地址与 SHA-256，无需手工填写。
-          3. rootfs 约百 MB，建议使用 Wi-Fi；中断后再次安装会从断点继续。
+          1. 安装 $(basename "$APK")（离线 APK，已内置 PRoot 运行器 + Ubuntu rootfs）。
+          2. 首次打开后点「安装并进入对话」；rootfs 从 APK 内置资产解压，无需联网下载。
+          3. 断网也能安装；若提示「未内置运行时」请确认下载的是本 Release 的 APK。
 
           ## 资产
 
           - $(basename "$APK")（APK，含 PRoot 运行器）
           - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.1.0-rc.6 + 移动 profile）
           - runtime-manifest.json
+          - checksums.txt（以上三项资产的 SHA-256）
+
+          runtime-manifest.json SHA-256：${MANIFEST_SHA}
           EOF
             RESP="$(curl -sS -f -X POST \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/repos/${{ github.repository }}/releases \
-              -d "$(jq -n --arg t "$TAG" --arg n "Mobile test build #${{ github.run_number }}" --rawfile b /tmp/notes.md '{tag_name:$t, name:$n, body:$b, draft:false, prerelease:true}')")"
+              -d "$(jq -n --arg t "$TAG" --arg n "$NAME" --arg pre "$PRE" --rawfile b /tmp/notes.md '{tag_name:$t, name:$n, body:$b, draft:false, prerelease:($pre=="true")}')")"
             RELEASE_ID="$(echo "$RESP" | jq -r .id)"
             test -n "$RELEASE_ID" && test "$RELEASE_ID" != "null"
             UPLOAD_BASE="https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets"
-            for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json; do
+            for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json /tmp/checksums.txt; do
               name="$(basename "$f")"
               curl -sS -f -X POST \
                 -H "Authorization: Bearer $GH_TOKEN" \

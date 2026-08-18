@@ -20,8 +20,9 @@ const DEFAULT_SETTINGS: RuntimeSettings = {
   manifestSha256: '0'.repeat(64),
   keepScreenAwake: true,
   terminalFontSize: 14,
+  apiKey: '',
+  autoLaunch: false,
 }
-
 function listenerHandle(remove: () => void): ListenerHandle {
   return {
     remove: () => {

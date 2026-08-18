@@ -17,6 +17,9 @@
     "./package.json": "./package.json"
   },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-runtime",
@@ -30,7 +33,8 @@
     "typecheck": "tsc -p . --noEmit"
   },
   "files": [
-    "lib"
+    "lib",
+    "cordis.patch.yml"
   ],
   "license": "MIT",
   "peerDependencies": {
@@ -46,5 +50,16 @@
     "@types/react": "^18.3.0",
     "typescript": "^5.5.0",
     "@deepseek-ai/dsh-client-ui-layout": "0.1.0-rc.6"
-  }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-插件",
+    "deepseek-harness",
+    "mobile",
+    "android",
+    "capacitor",
+    "plugin",
+    "layout"
+  ]
 }

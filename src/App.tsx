@@ -227,9 +227,10 @@ interface ConversationScreenProps {
   onInstall: () => void
   onLaunch: () => void
   onOpenSettings: () => void
+  onOpenTerminal: () => void
 }
 
-function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings }: ConversationScreenProps) {
+function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings, onOpenTerminal }: ConversationScreenProps) {
   const installed = runtimeInstalled(runtime)
   const transitioning = runtimeTransitioning(runtime)
   const progress = runtime.totalBytes > 0
@@ -290,6 +291,11 @@ function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings
           {installed && !transitioning && busy !== 'launch' && (
             <button className="button button-primary" type="button" onClick={onLaunch} disabled={busy !== null}>
               <Play size={18} fill="currentColor" />重新打开对话
+            </button>
+          )}
+          {runtime.phase === 'error' && installed && (
+            <button className="button button-secondary" type="button" onClick={onOpenTerminal} disabled={busy !== null}>
+              <SquareTerminal size={18} />打开终端排查
             </button>
           )}
           <button className="button button-secondary" type="button" onClick={onOpenSettings} disabled={busy === 'install'}>
@@ -458,7 +464,9 @@ interface TerminalScreenProps {
 function TerminalScreen({ bridge, fontSize, onAuthorize, onBack, onConnect, onError, onOpenEnvironment, onOpenShizuku, runtime, shizuku }: TerminalScreenProps) {
   const [kind, setKind] = useState<TerminalKind>('ubuntu')
   const [epoch, setEpoch] = useState(0)
-  const ubuntuReady = runtime.phase === 'ready' || runtime.phase === 'running'
+  // Ubuntu 终端只依赖 rootfs 已安装（bash 由 PRoot 直接启动，不经过 dsh web）：
+  // dsh web 启动失败（phase=error）时也必须能进终端手动排查，而不是被闸在门外。
+  const ubuntuReady = runtimeInstalled(runtime) && !runtimeTransitioning(runtime)
   const deviceReady = shizuku.installed && shizuku.running && shizuku.permission === 'granted' && shizuku.connected
   const ready = kind === 'ubuntu' ? ubuntuReady : deviceReady
 
@@ -594,6 +602,34 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
       </section>
 
       <form className="settings-form" onSubmit={event => { event.preventDefault(); onSave(draft) }}>
+        <section className="settings-section" aria-labelledby="model-settings">
+          <div className="section-title">
+            <span className="section-icon"><Bot size={19} /></span>
+            <div><h2 id="model-settings">模型</h2><p>API Key 只保存在本机，注入 Harness 运行时（DEEPSEEK_API_KEY）</p></div>
+          </div>
+          <label className="field">
+            <span>DeepSeek API Key</span>
+            <input
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={200}
+              placeholder={draft.apiKey ? '已配置（' + draft.apiKey.slice(0, 6) + '…），输入新值覆盖' : '未配置，填入 sk-...'}
+              value={draft.apiKey ?? ''}
+              onChange={event => setDraft({ ...draft, apiKey: event.target.value })}
+            />
+          </label>
+          <label className="toggle-row">
+            <span><strong>打开应用时自动启动 Harness</strong><small>关闭后需手动点「返回对话」启动</small></span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={draft.autoLaunch}
+              onChange={event => setDraft({ ...draft, autoLaunch: event.target.checked })}
+            />
+          </label>
+        </section>
+
         <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
@@ -931,10 +967,11 @@ export function App() {
 
   useEffect(() => {
     if (booting || activeView !== 'conversation' || busy !== null || autoLaunchAttempted.current) return
+    if (settings !== null && settings.autoLaunch === false) return
     if (runtime.phase === 'running' || (runtimeInstalled(runtime) && runtime.phase !== 'stopping')) {
       launchHarness()
     }
-  }, [activeView, booting, busy, launchHarness, runtime])
+  }, [activeView, booting, busy, launchHarness, runtime, settings])
 
   const stopRuntime = useCallback(() => {
     void run('stop', async () => {
@@ -982,7 +1019,7 @@ export function App() {
   const screen = useMemo(() => {
     switch (activeView) {
       case 'conversation':
-        return <ConversationScreen busy={busy} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} />
+        return <ConversationScreen busy={busy} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} onOpenTerminal={() => setActiveView('terminal')} />
       case 'terminal':
         return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onBack={() => setActiveView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
       case 'environment':

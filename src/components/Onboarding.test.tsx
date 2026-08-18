@@ -62,6 +62,7 @@ describe('Onboarding', () => {
     const props = renderOnboarding()
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
     expect(screen.getByText('设备 Shell（可选）')).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: /授权设备 Shell/ }))
     expect(props.onAuthorize).toHaveBeenCalledOnce()
@@ -69,7 +70,7 @@ describe('Onboarding', () => {
 
   it('calls onOpenHarness from the final step', () => {
     const props = renderOnboarding({ runtime: { ...runtime, phase: 'running' } })
-    for (let i = 0; i < 4; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    for (let i = 0; i < 5; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
     expect(screen.getByText('开始使用')).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
     expect(props.onOpenHarness).toHaveBeenCalledOnce()
