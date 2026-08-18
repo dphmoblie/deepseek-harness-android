@@ -35,7 +35,7 @@
 
 ## T5 工具链完整性（对应 P0-1 深化）
 
-- **现状**：busybox/jq/unzip/python3 已注入（CI 待验证）。
+- **现状**：busybox/jq/unzip/python3 已注入（CI 已验证通过）。
 - **方案**：追加 git/gcc（需静态或同发行版二进制源）；提供 `dsh tool install` 一键命令。
 - **验收**：常见 agent 任务（编译/脚本/依赖管理）开箱可跑。
 - **工作量**：小-中。

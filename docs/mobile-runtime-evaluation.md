@@ -94,7 +94,7 @@
 
 | 项 | 状态 |
 |---|---|
-| P0-1 工具链预装 | ✅ 已实现：build-embedded-runtime.py 新增 --toolchain-dir（bin→/usr/local/bin、python→/opt/python+软链）；CI 构建前下载 busybox / jq / python-build-standalone（aarch64）并注入 |
+| P0-1 工具链预装 | ✅ 已实现并通过 CI（python 3.13.5 + runner apt busybox/jq/unzip 注入，build-rootfs 绿）：build-embedded-runtime.py 新增 --toolchain-dir（bin→/usr/local/bin、python→/opt/python+软链）；CI 构建前下载 busybox / jq / python-build-standalone（aarch64）并注入 |
 | P1-2 /sdcard 可达 | ✅ 已实现：rootfs 预建 /sdcard；Android 侧对 /sdcard 做可选 bind（存在才尝试、失败跳过，不影响核心启动）；真机效果待验证 |
 | P2 体验（引导/空消息/错误转译） | ✅ 已实现（Onboarding 挂载 + 纯标点引导 + EACCES/EPERM/沙箱/apt 中文转译） |
 | P0-2 apt/dpkg 不可用 | ⚠️ 容器内无法修复（SELinux untrusted_app 域拒绝 rename system_file）；对策：以预装替代在线安装（P0-1 已落地）；彻底解决需容器根迁移到可写 overlay（架构级，后续） |
