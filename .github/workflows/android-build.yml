@@ -312,19 +312,20 @@ jobs:
           echo "04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2  /tmp/ubuntu.tar.gz" | sha256sum -c -
           echo "01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc  /tmp/node.tar.xz" | sha256sum -c -
 
-      - name: Download toolchain (busybox + jq + python standalone, arm64)
+      - name: Install toolchain (python standalone + apt static/dynamic binaries)
         run: |
           set -euo pipefail
-          mkdir -p /tmp/toolchain/bin
-          # busybox：wget/unzip/tar 等核心 applet（静态 arm64）
-          curl -fL --retry 3 -o /tmp/toolchain/bin/busybox https://busybox.net/downloads/binaries/1.36.1-x86_64-linux-musl/busybox-armv8l
-          chmod +x /tmp/toolchain/bin/busybox
-          # jq 静态
-          curl -fL --retry 3 -o /tmp/toolchain/bin/jq https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-arm64
-          chmod +x /tmp/toolchain/bin/jq
-          # python-build-standalone（aarch64 glibc install_only）
-          curl -fL --retry 3 -o /tmp/py.tgz https://github.com/astral-sh/python-build-standalone/releases/download/20250712/cpython-3.13.6%2B20250712-aarch64-unknown-linux-gnu-install_only.tar.gz
-          mkdir -p /tmp/toolchain/python && tar -xzf /tmp/py.tgz -C /tmp/toolchain/python --strip-components=1
+          mkdir -p /tmp/toolchain/bin /tmp/toolchain/python
+          # python-build-standalone（aarch64，自包含；版本号以 20250712 release 实资产为准）
+          curl -fL --retry 3 -o /tmp/py.tgz https://github.com/astral-sh/python-build-standalone/releases/download/20250712/cpython-3.13.5%2B20250712-aarch64-unknown-linux-gnu-install_only.tar.gz
+          tar -xzf /tmp/py.tgz -C /tmp/toolchain/python --strip-components=1
+          # 从 runner（ubuntu-24.04-arm，与 rootfs 同发行版）取工具：
+          # busybox-static 为静态链接；jq/unzip 动态依赖（glibc/libm 等）rootfs 已含
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends busybox-static jq unzip
+          cp /bin/busybox /tmp/toolchain/bin/busybox
+          cp "$(command -v jq)" /tmp/toolchain/bin/jq
+          cp "$(command -v unzip)" /tmp/toolchain/bin/unzip
           /tmp/toolchain/bin/busybox | head -2
           /tmp/toolchain/bin/jq --version
           ls /tmp/toolchain/python/bin | head -5
