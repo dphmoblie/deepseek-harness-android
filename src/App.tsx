@@ -1071,7 +1071,7 @@ export function App() {
           onAuthorize={requestShizukuPermission}
           onOpenShizuku={openShizuku}
           onOpenHarness={launchHarness}
-          onDone={() => { try { localStorage.setItem(ONBOARDING_STORAGE_KEY, '1') } catch {} setOnboardingOpen(false) }}
+          onDone={() => { try { localStorage.setItem(ONBOARDING_STORAGE_KEY, '1') } catch { /* ignore */ } setOnboardingOpen(false) }}
           onSaveSettings={saveSettings}
         />
       )}
