@@ -48,5 +48,27 @@
     "typescript-eslint": "8.19.1",
     "vite": "6.0.7",
     "vitest": "2.1.8"
-  }
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "dsh-插件",
+    "ai-agent",
+    "agent",
+    "llm",
+    "android",
+    "capacitor",
+    "ubuntu",
+    "proot",
+    "shizuku",
+    "mobile",
+    "harness"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dphmoblie/deepseek-harness-android.git"
+  },
+  "homepage": "https://github.com/dphmoblie/deepseek-harness-android"
 }
