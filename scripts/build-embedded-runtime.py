@@ -782,18 +782,17 @@ def main() -> None:
     verify_input(args.ubuntu, args.ubuntu_sha256, "Ubuntu archive")
     verify_input(args.node, args.node_sha256, "Node.js archive")
     dsh_entrypoint = args.dsh_root / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
-    node_pty = (
-        args.dsh_root
-        / "node_modules"
-        / ".pnpm"
-        / "node-pty@1.1.0"
-        / "node_modules"
-        / "node-pty"
-        / "prebuilds"
-        / "linux-arm64"
-        / "pty.node"
-    )
-    if not dsh_entrypoint.is_file() or not node_pty.is_file():
+    # node-pty 版本随 pnpm 解析漂移（1.1.0 / 1.2.0-beta.x），动态查找任意 node-pty@* 的
+    # prebuilds/linux-arm64/pty.node（prebuild 包自带，无需固定版本）
+    node_pty: Path | None = None
+    pnpm_dir = args.dsh_root / "node_modules" / ".pnpm"
+    if pnpm_dir.is_dir():
+        candidates = sorted(
+            pnpm_dir.glob("node-pty@*/node_modules/node-pty/prebuilds/linux-arm64/pty.node")
+        )
+        if candidates:
+            node_pty = candidates[0]
+    if not dsh_entrypoint.is_file() or node_pty is None:
         raise BuildError("Harness runtime is missing its CLI or Linux ARM64 node-pty module")
     mobile_auth_preload = read_support_file(MOBILE_AUTH_PRELOAD, "mobile authentication preload")
     mobile_spec = validate_mobile_profile(args.mobile_profile) if args.mobile_profile is not None else None
