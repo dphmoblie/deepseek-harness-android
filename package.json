@@ -68,7 +68,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/standtrain/deepseek-harness-for-android.git"
+    "url": "git+https://github.com/dphmoblie/deepseek-harness-android.git"
   },
-  "homepage": "https://github.com/standtrain/deepseek-harness-for-android"
+  "homepage": "https://github.com/dphmoblie/deepseek-harness-android"
 }
