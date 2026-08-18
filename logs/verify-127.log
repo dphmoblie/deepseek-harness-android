@@ -1,0 +1,225 @@
+/home/runner/work/deepseek-harness-android/deepseek-harness-android
+=== node-pty step output ===
++ set -e
++ pnpm install --no-frozen-lockfile
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Progress: resolved 72, reused 7, downloaded 38, added 0
+Progress: resolved 226, reused 11, downloaded 199, added 0
+Progress: resolved 291, reused 23, downloaded 256, added 0
+Progress: resolved 459, reused 49, downloaded 322, added 0
+Progress: resolved 672, reused 127, downloaded 488, added 0
+[WARN] 3 deprecated subdependencies found: glob@10.5.0, node-domexception@1.0.0, tar@6.2.1
+Progress: resolved 694, reused 128, downloaded 511, added 0
+Packages: +674
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Packages are hard linked from the content-addressable store to the virtual store.
+  Content-addressable store is at: /home/runner/setup-pnpm/node_modules/.bin/store/v11
+  Virtual store is at:             node_modules/.pnpm
+Progress: resolved 694, reused 128, downloaded 511, added 674, done
+.../node_modules/cpu-features install$ node buildcheck.js > buildcheck.gypi && node-gyp rebuild
+.../.pnpm/koffi@3.1.5/node_modules/koffi install$ node ./cnoke.cjs -P . -D src/koffi --prebuild --release
+.../node_modules/protobufjs postinstall$ node scripts/postinstall
+.../node_modules/node-pty install$ node scripts/prebuild.js || node-gyp rebuild
+.../node_modules/cloudflared postinstall$ node scripts/postinstall.mjs && node lib/cloudflared.js bin install
+.../node_modules/protobufjs postinstall: Done
+.../node_modules/node-pty install: [32m> Checking prebuilds...[0m
+.../node_modules/node-pty install: Done
+.../node_modules/node-pty postinstall$ node scripts/post-install.js
+.../.pnpm/koffi@3.1.5/node_modules/koffi install: Done
+.../node_modules/node-pty postinstall: [32m> Cleaning release folder...[0m
+.../node_modules/node-pty postinstall: [32m> Moving conpty.dll...[0m
+.../node_modules/node-pty postinstall:   SKIPPED (not Windows)
+.../node_modules/node-pty postinstall: Done
+.../node_modules/cloudflared postinstall: Installing latest version of cloudflared
+.../node_modules/cpu-features install: gyp info it worked if it ends with ok
+.../node_modules/cpu-features install: gyp info using node-gyp@12.4.0
+.../node_modules/cpu-features install: gyp info using node@22.19.0 | linux | arm64
+.../node_modules/cpu-features install: gyp info find Python using Python version 3.12.3 found at "/usr/bin/python3"
+.../node_modules/cpu-features install: gyp http GET https://nodejs.org/download/release/v22.19.0/node-v22.19.0-headers.tar.gz
+.../node_modules/cpu-features install: gyp http 200 https://nodejs.org/download/release/v22.19.0/node-v22.19.0-headers.tar.gz
+.../node_modules/cloudflared postinstall: Done
+.../node_modules/cpu-features install: gyp http GET https://nodejs.org/download/release/v22.19.0/SHASUMS256.txt
+.../node_modules/cpu-features install: gyp http 200 https://nodejs.org/download/release/v22.19.0/SHASUMS256.txt
+.../node_modules/cpu-features install: gyp info spawn /usr/bin/python3
+.../node_modules/cpu-features install: gyp info spawn args [
+.../node_modules/cpu-features install: gyp info spawn args '/home/runner/setup-pnpm/node_modules/.pnpm/pnpm@11.19.0/node_modules/pnpm/dist/node_modules/node-gyp/gyp/gyp_main.py',
+.../node_modules/cpu-features install: gyp info spawn args 'binding.gyp',
+.../node_modules/cpu-features install: gyp info spawn args '-f',
+.../node_modules/cpu-features install: gyp info spawn args 'make',
+.../node_modules/cpu-features install: gyp info spawn args '-I',
+.../node_modules/cpu-features install: gyp info spawn args '/tmp/dsh-root/node_modules/.pnpm/cpu-features@0.0.10/node_modules/cpu-features/build/config.gypi',
+.../node_modules/cpu-features install: gyp info spawn args '-I',
+.../node_modules/cpu-features install: gyp info spawn args '/home/runner/setup-pnpm/node_modules/.pnpm/pnpm@11.19.0/node_modules/pnpm/dist/node_modules/node-gyp/addon.gypi',
+.../node_modules/cpu-features install: gyp info spawn args '-I',
+.../node_modules/cpu-features install: gyp info spawn args '/home/runner/.cache/node-gyp/22.19.0/include/node/common.gypi',
+.../node_modules/cpu-features install: gyp info spawn args '-Dlibrary=shared_library',
+.../node_modules/cpu-features install: gyp info spawn args '-Dvisibility=default',
+.../node_modules/cpu-features install: gyp info spawn args '-Dnode_root_dir=/home/runner/.cache/node-gyp/22.19.0',
+.../node_modules/cpu-features install: gyp info spawn args '-Dnode_gyp_dir=/home/runner/setup-pnpm/node_modules/.pnpm/pnpm@11.19.0/node_modules/pnpm/dist/node_modules/node-gyp',
+.../node_modules/cpu-features install: gyp info spawn args '-Dnode_lib_file=/home/runner/.cache/node-gyp/22.19.0/<(target_arch)/node.lib',
+.../node_modules/cpu-features install: gyp info spawn args '-Dmodule_root_dir=/tmp/dsh-root/node_modules/.pnpm/cpu-features@0.0.10/node_modules/cpu-features',
+.../node_modules/cpu-features install: gyp info spawn args '-Dnode_engine=v8',
+.../node_modules/cpu-features install: gyp info spawn args '--depth=.',
+.../node_modules/cpu-features install: gyp info spawn args '--no-parallel',
+.../node_modules/cpu-features install: gyp info spawn args '--generator-output',
+.../node_modules/cpu-features install: gyp info spawn args 'build',
+.../node_modules/cpu-features install: gyp info spawn args '-Goutput_dir=.'
+.../node_modules/cpu-features install: gyp info spawn args ]
+.../node_modules/cpu-features install: gyp info spawn make
+.../node_modules/cpu-features install: gyp info spawn args [ 'BUILDTYPE=Release', '-C', 'build' ]
+.../node_modules/cpu-features install: make: Entering directory '/tmp/dsh-root/node_modules/.pnpm/cpu-features@0.0.10/node_modules/cpu-features/build'
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/impl_aarch64_linux_or_android.o
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/impl_aarch64_macos_or_iphone.o
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/impl_aarch64_windows.o
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/impl_arm_linux_or_android.o
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/impl_mips_linux_or_android.o
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/impl_ppc_linux.o
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/impl_x86_freebsd.o
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/impl_x86_linux_or_android.o
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/impl_x86_macos.o
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/impl_x86_windows.o
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/filesystem.o
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/stack_line_reader.o
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/string_view.o
+.../node_modules/cpu-features install:   CC(target) Release/obj.target/cpu_features/deps/cpu_features/src/hwcaps.o
+.../node_modules/cpu-features install: rm -f Release/obj.target/deps/cpu_features/cpu_features.a Release/obj.target/deps/cpu_features/cpu_features.a.ar-file-list; mkdir -p `dirname Release/obj.target/deps/cpu_features/cpu_features.a`
+.../node_modules/cpu-features install: ar crs Release/obj.target/deps/cpu_features/cpu_features.a @Release/obj.target/deps/cpu_features/cpu_features.a.ar-file-list
+.../node_modules/cpu-features install:   COPY Release/cpu_features.a
+.../node_modules/cpu-features install:   CXX(target) Release/obj.target/cpufeatures/src/binding.o
+.../node_modules/cpu-features install: In file included from ../src/binding.cc:1:
+.../node_modules/cpu-features install: /home/runner/.cache/node-gyp/22.19.0/include/node/node.h:1228:7: warning: cast between incompatible function types from ‘void (*)(Nan::ADDON_REGISTER_FUNCTION_ARGS_TYPE)’ {aka ‘void (*)(v8::Local<v8::Object>)’} to ‘node::addon_register_func’ {aka ‘void (*)(v8::Local<v8::Object>, v8::Local<v8::Value>, void*)’} [-Wcast-function-type]
+.../node_modules/cpu-features install:  1228 |       (node::addon_register_func) (regfunc),                          \
+.../node_modules/cpu-features install:       |       ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.../node_modules/cpu-features install: /home/runner/.cache/node-gyp/22.19.0/include/node/node.h:1262:3: note: in expansion of macro ‘NODE_MODULE_X’
+.../node_modules/cpu-features install:  1262 |   NODE_MODULE_X(modname, regfunc, NULL, 0)  // NOLINT (readability/null_usage)
+.../node_modules/cpu-features install:       |   ^~~~~~~~~~~~~
+.../node_modules/cpu-features install: ../src/binding.cc:151:1: note: in expansion of macro ‘NODE_MODULE’
+.../node_modules/cpu-features install:   151 | NODE_MODULE(cpufeatures, init)
+.../node_modules/cpu-features install:       | ^~~~~~~~~~~
+.../node_modules/cpu-features install:   SOLINK_MODULE(target) Release/obj.target/cpufeatures.node
+.../node_modules/cpu-features install:   COPY Release/cpufeatures.node
+.../node_modules/cpu-features install: make: Leaving directory '/tmp/dsh-root/node_modules/.pnpm/cpu-features@0.0.10/node_modules/cpu-features/build'
+.../node_modules/cpu-features install: gyp info ok 
+.../node_modules/cpu-features install: Done
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install$ node install.js
+.../node_modules/@google/genai preinstall$ echo 'preinstall: no-op'
+.../node_modules/@google/genai preinstall: preinstall: no-op
+.../node_modules/@google/genai preinstall: Done
+.../@deepseek-ai/dsh-subprocess-local postinstall$ node scripts/ensure-spawn-helper.mjs
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info it worked if it ends with ok
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info using node-gyp@12.4.0
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info using node@22.19.0 | linux | arm64
+.../@deepseek-ai/dsh-subprocess-local postinstall: Done
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info find Python using Python version 3.12.3 found at "/usr/bin/python3"
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn /usr/bin/python3
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args [
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '/home/runner/setup-pnpm/node_modules/.pnpm/pnpm@11.19.0/node_modules/pnpm/dist/node_modules/node-gyp/gyp/gyp_main.py',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args 'binding.gyp',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-f',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args 'make',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-I',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '/tmp/dsh-root/node_modules/.pnpm/ssh2@1.17.0/node_modules/ssh2/lib/protocol/crypto/build/config.gypi',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-I',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '/home/runner/setup-pnpm/node_modules/.pnpm/pnpm@11.19.0/node_modules/pnpm/dist/node_modules/node-gyp/addon.gypi',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-I',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '/home/runner/.cache/node-gyp/22.19.0/include/node/common.gypi',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dlibrary=shared_library',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dvisibility=default',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dnode_root_dir=/home/runner/.cache/node-gyp/22.19.0',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dnode_gyp_dir=/home/runner/setup-pnpm/node_modules/.pnpm/pnpm@11.19.0/node_modules/pnpm/dist/node_modules/node-gyp',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dnode_lib_file=/home/runner/.cache/node-gyp/22.19.0/<(target_arch)/node.lib',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dmodule_root_dir=/tmp/dsh-root/node_modules/.pnpm/ssh2@1.17.0/node_modules/ssh2/lib/protocol/crypto',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Dnode_engine=v8',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '--depth=.',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '--no-parallel',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '--generator-output',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args 'build',
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args '-Goutput_dir=.'
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args ]
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn make
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info spawn args [ 'BUILDTYPE=Release', '-C', 'build' ]
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: make: Entering directory '/tmp/dsh-root/node_modules/.pnpm/ssh2@1.17.0/node_modules/ssh2/lib/protocol/crypto/build'
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install:   CXX(target) Release/obj.target/sshcrypto/src/binding.o
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install:   SOLINK_MODULE(target) Release/obj.target/sshcrypto.node
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install:   COPY Release/sshcrypto.node
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: make: Leaving directory '/tmp/dsh-root/node_modules/.pnpm/ssh2@1.17.0/node_modules/ssh2/lib/protocol/crypto/build'
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: gyp info ok 
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: Succeeded in building optional crypto binding
+.../.pnpm/ssh2@1.17.0/node_modules/ssh2 install: Done
+
+dependencies:
++ @deepseek-ai/dsh 0.1.0-rc.6 (0.1.0-rc.7 is available)
++ @deepseek-ai/dsh-base 0.1.0-rc.6
++ @deepseek-ai/dsh-client-runtime 0.1.0-rc.6
++ @deepseek-ai/dsh-client-ui-slots 0.1.0-rc.6
++ @deepseek-ai/dsh-client-ui-theme 0.1.0-rc.6
++ @deepseek-ai/dsh-web-app 0.1.0-rc.6
++ @linxin666/dsh-web-ui-all 0.1.19
++ @liustack/modlens 3.18.1
++ dsh-mobile-compat 0.1.0
++ dshmarket 1.10.1
++ react 18.3.1 (19.2.8 is available)
+
+devDependencies:
++ node-gyp 10.3.1 (13.0.1 is available)
+
+Done in 16.9s using pnpm v11.19.0
++ pnpm rebuild node-pty
+.../node_modules/node-pty install$ node scripts/prebuild.js || node-gyp rebuild
+.../node_modules/node-pty install: [32m> Checking prebuilds...[0m
+.../node_modules/node-pty install: Done
+.../node_modules/node-pty postinstall$ node scripts/post-install.js
+.../node_modules/node-pty postinstall: [32m> Cleaning release folder...[0m
+.../node_modules/node-pty postinstall: [32m> Moving conpty.dll...[0m
+.../node_modules/node-pty postinstall:   SKIPPED (not Windows)
+.../node_modules/node-pty postinstall: Done
++ PTP=node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty
++ echo '=== pty 包路径探测 ==='
+=== pty 包路径探测 ===
++ find node_modules/.pnpm -maxdepth 2 -type d -name 'node-pty*'
++ head -20
+node_modules/.pnpm/node-pty@1.2.0-beta.15
++ echo '=== build 目录内容 ==='
+=== build 目录内容 ===
++ find node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build -maxdepth 2 -type f
++ head -30
++ mkdir -p node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64
++ cp node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/Release/pty.node node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/pty.node
+cp: cannot stat 'node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/Release/pty.node': No such file or directory
++ cp node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/build/Release/spawn-helper node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/spawn-helper
++ true
++ chmod +x node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/spawn-helper
++ true
++ ls -la node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/
+total 8
+drwxr-xr-x 2 runner runner 4096 Aug 18 12:26 .
+drwxr-xr-x 3 runner runner 4096 Aug 18 12:26 ..
+=== dsh-root 探测 ===
+-rwxr-xr-x 2 runner runner 8274 Aug 18 12:26 /tmp/dsh-root/node_modules/@deepseek-ai/dsh/lib/bin.js
+total 8
+drwxr-xr-x 2 runner runner 4096 Aug 18 12:26 .
+drwxr-xr-x 3 runner runner 4096 Aug 18 12:26 ..
+=== bundle step output ===
+=== [1/3] build-embedded-runtime.py ===
+Harness runtime is missing its CLI or Linux ARM64 node-pty module
+=== [2/3] rebuild-rootfs-frontend.py ===
+bundle 不存在
+ls: cannot access '/tmp/rootfs.bundle': No such file or directory
+ls: cannot access '/tmp/runtime-manifest.json': No such file or directory
+sha256sum: /tmp/rootfs.bundle: No such file or directory
+=== [3/3] verify-bundle.py ===
+Traceback (most recent call last):
+  File "/home/runner/work/deepseek-harness-android/deepseek-harness-android/scripts/verify-bundle.py", line 189, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/runner/work/deepseek-harness-android/deepseek-harness-android/scripts/verify-bundle.py", line 30, in main
+    manifest = json.loads(open(args.manifest, encoding="utf-8").read())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/runtime-manifest.json'
+cp: cannot stat '/tmp/rootfs.bundle': No such file or directory
+cp: cannot stat '/tmp/runtime-manifest.json': No such file or directory
+=== runtime-artifacts ===
+total 8
+drwxr-xr-x  2 runner runner 4096 Aug 18 12:27 .
+drwxr-xr-x 14 runner runner 4096 Aug 18 12:27 ..
+4.0K	runtime-artifacts/
