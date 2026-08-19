@@ -624,8 +624,23 @@ def patch_dsh_app_boot(dsh_root: Path) -> None:
     for path in candidates:
         text = path.read_text(encoding="utf-8")
         original = text
-        if trust_existing in text:
+        trust_source_count = text.count(trust_existing)
+        trust_replacement_count = text.count(trust_existing_replacement)
+        if trust_source_count + trust_replacement_count != 1:
+            raise BuildError(
+                f"dsh-app-boot trust-existing patch shape is not unique in {path}; "
+                "aborting to avoid patching an unsupported or duplicated implementation"
+            )
+        if trust_source_count == 1:
             text = text.replace(trust_existing, trust_existing_replacement, 1)
+        if (
+            trust_existing in text
+            or text.count(trust_existing_replacement) != 1
+        ):
+            raise BuildError(
+                f"dsh-app-boot trust-existing patch is not canonical in {path}; "
+                "aborting to avoid shipping a duplicated or partial patch"
+            )
         if text.count(tolerate_denied) != 1:
             raise BuildError(
                 f"dsh-app-boot denied-error patch source count is not one in {path}; "

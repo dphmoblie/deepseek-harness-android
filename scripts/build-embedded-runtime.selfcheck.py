@@ -99,6 +99,14 @@ def main() -> int:
         module.patch_dsh_app_boot(Path(directory))
         assert fixture.read_text(encoding="utf-8") == patched
 
+        fixture.write_text(f"{patched}\n{trust_existing}\n", encoding="utf-8")
+        try:
+            module.patch_dsh_app_boot(Path(directory))
+        except BuildError:
+            pass
+        else:
+            raise AssertionError("duplicate trust-existing source should fail the build")
+
     with tempfile.TemporaryDirectory(prefix="dsh-client-failure-") as directory:
         fixture = (
             Path(directory)
