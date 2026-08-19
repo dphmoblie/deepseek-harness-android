@@ -31,7 +31,7 @@
   同样受 seccomp 限制，宿主侧包装亦不可行。→ **关闭"容器内实现沙箱"路线**。
 
 ### 里程碑（已转向降级方案）
-- M1 ✅ 真机探测（完成）：上述判定结论入库。
+- M1 ✅ 真机探测（完成）：判定结论入库；完整证据见 docs/device-probe-report-2026-08-18.md（双通道 xattr 确认、seccomp 对照实验、rename 测试）。
 - M2 降级实现：dsh web 会话初始上下文注入"无沙箱模式"声明（真实权限边界：容器 root 受限、
   文件工具全权但受 SELinux/路径约束）；沙箱后端缺失错误改为一次性提示 + 中文转译
   （errors.ts 已有部分 EACCES/EPERM 转译，需补"沙箱后端"分支）。
@@ -62,7 +62,7 @@
   覆盖已有文件的升级会失败。
 
 ### 里程碑
-- M1 ✅ 诊断（完成）：结论入库（标签统一 app_data_file、rename OK、link() 被禁）。
+- M1 ✅ 诊断（完成）：结论入库（标签统一 app_data_file、rename OK、link() 被禁）；完整证据见 docs/device-probe-report-2026-08-18.md。
 - M2 重测全新包安装（真机，下一步）：
   - apt-get update && apt-get install -y tree（全新包，无备份需求）；
   - 成功 → 验证矩阵：ripgrep、git、build-essential（gcc）等全新包；
