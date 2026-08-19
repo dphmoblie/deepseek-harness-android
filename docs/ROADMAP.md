@@ -5,7 +5,7 @@
 ## T1 用户态 Landlock 沙箱（对应 P0-3）
 
 - **背景**：容器内无 bubblewrap/namespace 可用，沙箱后端不可用，文件工具只能 danger-full-access。
-- **方案**：内核 6.12 支持 Landlock（无 root、进程级），在 dsh 的沙箱后端（dsh-sandbox-local）实现 Landlock 适配：文件工具受限读写、可执行位受控。
+- **方案**：~~Landlock 适配~~（真机判定：landlock 444/445/446→ENOSYS、userns→ENOSYS，容器内沙箱后端全部不可用）→ 转显式降级：会话显著标注"无沙箱"权限模式，消除报错噪音。
 - **验收**：write/edit 工具在受限模式可用且不报 "no sandbox backend is usable"；越界路径被拒。
 - **依赖**：rootfs 内 dsh-sandbox-local 打补丁或新增后端；荣耀 SELinux 兼容性实测。
 - **工作量**：大（架构级）。
@@ -27,7 +27,7 @@
 ## T3 apt/dpkg 可用性（对应 P0-2）
 
 - **背景**：SELinux untrusted_app 域拒绝 rename system_file，apt 安装失败。
-- **方案**：容器根迁移到应用可写 overlay（upper 层接管 system_file）；或运行期安装到 /opt 白名单路径 + 自定义 dpkg 前/后脚本。
+- **方案**：根因已确认：dpkg backup 用 link()，而 untrusted_app 域禁 link()（rename/写均 OK，标签统一 app_data_file）。路线：① 重测全新包在线安装（无旧文件即无 backup link）；② 构建期预装为主；③ /opt 白名单兜底。
 - **验收**：容器内 apt-get install 成功安装常见包。
 - **依赖**：构建链容器布局重构；荣耀 SELinux 实测。
 - **工作量**：中-大。
@@ -43,7 +43,7 @@
 ## T5 工具链完整性（对应 P0-1 深化）
 
 - **现状**：busybox/jq/unzip/python3 已注入（CI 已验证通过）。
-- **方案**：追加 git/gcc（需静态或同发行版二进制源）；提供 `dsh tool install` 一键命令。
+- **方案**：git 构建期 .deb 解包（建议先行）；gcc 优先走 T3 在线安装（build-essential 全新包），备选构建期解包 / zig cc。
 - **验收**：常见 agent 任务（编译/脚本/依赖管理）开箱可跑。
 - **工作量**：小-中。
 - **状态**：📋 已立项为长期任务（T5a git 建议先行，T5b gcc 待 T3/zig 试点）→ docs/long-term-tasks.md
