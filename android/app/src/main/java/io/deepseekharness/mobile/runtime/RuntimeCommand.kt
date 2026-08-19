@@ -50,6 +50,7 @@ object RuntimeCommand {
             add("TERM=xterm-256color")
             add("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
             store.settings().apiKey.takeIf { it.isNotBlank() }?.let { add("DEEPSEEK_API_KEY=$it") }
+            add("DSH_DEVICE_BRIDGE_TOKEN=" + store.deviceBridgeToken())
             if (harnessAuthToken != null) {
                 add("NODE_OPTIONS=--require=/usr/local/lib/dsh-mobile-auth.cjs")
                 add("DSH_MOBILE_AUTH_TOKEN=$harnessAuthToken")

@@ -35,6 +35,7 @@ class MobileRuntimePlugin : Plugin() {
     private val destroying = AtomicBoolean(false)
     private val auditedOperationLock = ReentrantLock()
     private lateinit var deviceCommands: DeviceCommandRunner
+    private var deviceBridge: DeviceBridgeServer? = null
 
     companion object {
         private const val DEVICE_COMMAND_TIMEOUT_MS = 60_000L
@@ -76,6 +77,11 @@ class MobileRuntimePlugin : Plugin() {
                 writer = { sessionId, dataBase64 -> controller.writeTerminal(sessionId, dataBase64) },
             )
             applyKeepScreenAwake(controller.store.settings().keepScreenAwake)
+            deviceBridge = DeviceBridgeServer(
+                shizuku = controller.terminals.shizuku,
+                runner = deviceCommands,
+                token = controller.store.deviceBridgeToken(),
+            ).also { it.start() }
             recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.SUCCEEDED)
         } catch (error: Throwable) {
             recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.FAILED)
@@ -92,6 +98,8 @@ class MobileRuntimePlugin : Plugin() {
                 .filterIsInstance<PluginTask>()
                 .forEach { task -> task.rejectRuntimeClosed() }
             if (::deviceCommands.isInitialized) deviceCommands.cancelAll()
+            deviceBridge?.stop()
+            deviceBridge = null
         } catch (_: Throwable) {
             result = AuditResult.FAILED
         }

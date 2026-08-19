@@ -499,6 +499,47 @@ def inject_bundles_into_dsh_manifest(dsh_root: Path, bundle_names: Iterable[str]
             )
 
 
+DEVICE_CLI = """#!/usr/bin/env node
+'use strict';
+// dsh-device: 通过宿主 Shizuku 执行设备命令（ROADMAP T2 / P1-1）
+// 用法: dsh-device screenshot|uiDump|tap|inputText [param]
+const token = process.env.DSH_DEVICE_BRIDGE_TOKEN || '';
+const cmd = process.argv[2];
+if (!cmd) { console.error('用法: dsh-device screenshot|uiDump|tap|inputText [param]'); process.exit(2); }
+const param = process.argv.slice(3).join(' ');
+fetch('http://127.0.0.1:3082/device-command', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+  body: JSON.stringify({ command: cmd, param }),
+}).then(r => r.json()).then(j => {
+  if (j.text) process.stdout.write(j.text + (j.text.endsWith('\\n') ? '' : '\\n'));
+  if (!j.ok) { if (j.message) console.error('设备命令失败: ' + j.message); process.exit(1); }
+}).catch(e => { console.error('设备桥不可用（App 未运行或 Shizuku 未授权）: ' + e.message); process.exit(2); });
+""".encode("utf-8")
+
+
+def add_toolchain(writer: RootfsWriter, toolchain_dir: Path) -> None:
+    """把预置工具链注入 rootfs（评估报告 P0-1）。
+
+    - bin/* -> /usr/local/bin（静态可执行文件，保留 0755）
+    - python/ -> /opt/python（python-build-standalone 解压树），并建立
+      /usr/local/bin/python3 与 python 软链（荣耀降级复制后仍可用）
+    CI 在构建前下载；目录缺失时跳过（不影响既有构建）。
+    """
+    if toolchain_dir is None or not toolchain_dir.is_dir():
+        return
+    bin_dir = toolchain_dir / "bin"
+    if bin_dir.is_dir():
+        for binary in sorted(bin_dir.iterdir()):
+            if binary.is_file() and not binary.name.startswith("."):
+                writer.add_bytes(f"usr/local/bin/{binary.name}", binary.read_bytes(), 0o755)
+    python_dir = toolchain_dir / "python"
+    if python_dir.is_dir():
+        add_windows_tree(writer, python_dir, "opt/python")
+        writer.add_symlink("usr/local/bin/python3", "../../opt/python/bin/python3")
+        writer.add_symlink("usr/local/bin/python", "../../opt/python/bin/python3")
+
+
 def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_dsh: str) -> int:
     """预生成 $DSH_HOME/profiles/node_modules 的扁平包链接，返回链接总数。
 
@@ -671,6 +712,76 @@ def patch_dsh_app_boot(dsh_root: Path) -> None:
                 f"dsh-app-boot ensureSymlink patch is incomplete in {path}; "
                 "aborting to avoid shipping a partially patched runtime"
             )
+
+
+def patch_dsh_app_boot_bundle_tolerance(dsh_root: Path) -> None:
+    """bundle 层容错：单个 profile bundle 损坏/冲突时跳过，避免整个 web 无法启动。
+
+    插件冲突（如 dsh-web-ui-all 与 dshmarket 的 patch 层互相冲突、bundle 包损坏、
+    patch 文件读取/解析失败）目前会让 loadProfile 在组装 layers 时直接 throw，
+    dsh web 整体无法启动。这里把 layers 组装改为 flatMap + try/catch：
+    单个 bundle 失败时打印警告并跳过，其余 bundle 与用户 patch 层照常加载。
+
+    补丁基于 dsh-app-boot 0.1.0-rc.6 的精确源码文本；任何一处不匹配都会
+    让构建失败（fail loud），避免静默打偏。
+    """
+    candidates: list[Path] = []
+    candidates.extend(
+        dsh_root.glob("node_modules/.pnpm/@deepseek-ai+dsh-app-boot@*/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js")
+    )
+    top_level = dsh_root / "node_modules" / "@deepseek-ai" / "dsh-app-boot" / "lib" / "index.js"
+    if top_level.is_file():
+        candidates.append(top_level)
+
+    old = (
+        "\tconst layers = (normalizeShippedProfile(name, dir, readProfileManifest(binName, dir))"
+        ".dsh?.profile?.bundles ?? []).map((packageName) => {\n"
+        "\t\tconst packageDir = resolveBundleDir(binName, packageName, installAnchor, dir);\n"
+        "\t\tconst declared = JSON.parse(readFileSync(join(packageDir, \"package.json\"), \"utf8\")).dsh?.bundle?.patch;\n"
+        "\t\tif (declared === void 0) throw new Error(`${binName}: profile bundle ${JSON.stringify(packageName)} declares no dsh.bundle in its package.json`);\n"
+        "\t\tconst patchPath = join(packageDir, declared);\n"
+        "\t\treturn {\n"
+        "\t\t\tpackageName,\n"
+        "\t\t\tpackageDir,\n"
+        "\t\t\tpatchPath,\n"
+        "\t\t\tpatches: loadOverlayPatches(binName, patchPath)\n"
+        "\t\t};\n"
+        "\t});"
+    )
+    new = (
+        "\tconst layers = (normalizeShippedProfile(name, dir, readProfileManifest(binName, dir))"
+        ".dsh?.profile?.bundles ?? []).flatMap((packageName) => {\n"
+        "\t\ttry {\n"
+        "\t\t\tconst packageDir = resolveBundleDir(binName, packageName, installAnchor, dir);\n"
+        "\t\t\tconst declared = JSON.parse(readFileSync(join(packageDir, \"package.json\"), \"utf8\")).dsh?.bundle?.patch;\n"
+        "\t\t\tif (declared === void 0) throw new Error(`${binName}: profile bundle ${JSON.stringify(packageName)} declares no dsh.bundle in its package.json`);\n"
+        "\t\t\tconst patchPath = join(packageDir, declared);\n"
+        "\t\t\treturn [{\n"
+        "\t\t\t\tpackageName,\n"
+        "\t\t\t\tpackageDir,\n"
+        "\t\t\t\tpatchPath,\n"
+        "\t\t\t\tpatches: loadOverlayPatches(binName, patchPath)\n"
+        "\t\t\t}];\n"
+        "\t\t} catch (error) {\n"
+        "\t\t\t// dsh-mobile: 单个 profile bundle 损坏/冲突时跳过并继续，避免整个 web 无法启动。\n"
+        "\t\t\tprocess.stderr.write(`${binName}: skipping broken profile bundle ${JSON.stringify(packageName)}: ${String(error?.message ?? error)}\\n`);\n"
+        "\t\t\treturn [];\n"
+        "\t\t}\n"
+        "\t});"
+    )
+
+    patched_any = False
+    for path in candidates:
+        text = path.read_text(encoding="utf-8")
+        if old in text:
+            text = text.replace(old, new)
+            path.write_text(text, encoding="utf-8")
+            patched_any = True
+    if not patched_any:
+        raise BuildError(
+            "dsh-app-boot bundle-tolerance patch did not match any installed copy; "
+            "aborting to avoid shipping an unpatched runtime"
+        )
 
 
 def patch_session_persistence(dsh_root: Path) -> None:
@@ -1052,6 +1163,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--node-root", default="node-v24.19.0-linux-arm64")
     parser.add_argument("--node-version", default="24.19.0")
     parser.add_argument("--dsh-root", required=True, type=Path)
+    parser.add_argument("--toolchain-dir", type=Path, default=None, help="optional pre-staged toolchain dir (bin/* -> /usr/local/bin, python/ -> /opt/python)")
     parser.add_argument("--dsh-version", default="0.1.0-rc.6")
     parser.add_argument("--runtime-version", required=True)
     parser.add_argument(
@@ -1098,18 +1210,17 @@ def main() -> None:
     verify_input(args.ubuntu, args.ubuntu_sha256, "Ubuntu archive")
     verify_input(args.node, args.node_sha256, "Node.js archive")
     dsh_entrypoint = args.dsh_root / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
-    node_pty = (
-        args.dsh_root
-        / "node_modules"
-        / ".pnpm"
-        / "node-pty@1.1.0"
-        / "node_modules"
-        / "node-pty"
-        / "prebuilds"
-        / "linux-arm64"
-        / "pty.node"
-    )
-    if not dsh_entrypoint.is_file() or not node_pty.is_file():
+    # node-pty 版本随 pnpm 解析漂移（1.1.0 / 1.2.0-beta.x），动态查找任意 node-pty@* 的
+    # prebuilds/linux-arm64/pty.node（prebuild 包自带，无需固定版本）
+    node_pty: Path | None = None
+    pnpm_dir = args.dsh_root / "node_modules" / ".pnpm"
+    if pnpm_dir.is_dir():
+        candidates = sorted(
+            pnpm_dir.glob("node-pty@*/node_modules/node-pty/prebuilds/linux-arm64/pty.node")
+        )
+        if candidates:
+            node_pty = candidates[0]
+    if not dsh_entrypoint.is_file() or node_pty is None:
         raise BuildError("Harness runtime is missing its CLI or Linux ARM64 node-pty module")
     mobile_auth_preload = read_support_file(MOBILE_AUTH_PRELOAD, "mobile authentication preload")
     mobile_spec = validate_mobile_profile(args.mobile_profile) if args.mobile_profile is not None else None
@@ -1141,9 +1252,13 @@ def main() -> None:
             patch_client_failure_display(args.dsh_root)
             patch_client_mobile_settings_layout(args.dsh_root)
             patch_dsh_app_boot(args.dsh_root)
+            patch_dsh_app_boot_bundle_tolerance(args.dsh_root)
             patch_session_persistence(args.dsh_root)
             patch_attachment_link(args.dsh_root)
             add_windows_tree(writer, args.dsh_root, "opt/dsh")
+            add_toolchain(writer, args.toolchain_dir)
+            writer.add_bytes("usr/local/bin/dsh-device", DEVICE_CLI, 0o755)
+            writer.add_directory("sdcard/")
             profile_links = add_profiles_module_fallback(writer, args.dsh_root, "opt/dsh")
             writer.add_symlink("usr/local/bin/node", "../../../opt/node/bin/node")
             # Ubuntu base 精简包不含这两个链接，但 App 完整性校验将其列为必需：

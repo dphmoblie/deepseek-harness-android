@@ -92,5 +92,22 @@ rootfs SHA-256：
 结果：S1-S6 / 对话 GUI / 下载续传 / 设置终端 / Shizuku，逐项通过或失败并附截图与日志编号
 ```
 
+
+## 8. 工具链与 /sdcard 验证（对应 docs/ROADMAP.md T4/T5）
+
+- [ ] 工具链：容器内 `python3 --version`、`jq --version`、`busybox | head -1`、`unzip -v | head -1` 均可用（rootfs 注入 /usr/local/bin 与 /opt/python）。
+- [ ] python 软链：`python3` 与 `python` 都解析到 /opt/python/bin/python3（荣耀降级复制后仍可执行）。
+- [ ] /sdcard：容器内 `ls /sdcard` 可见 Android 公共存储（有内容或至少目录存在）；若为空/拒绝，记录是否因 SELinux（预期失败跳过，不影响 Harness 启动）。
+- [ ] 容器内 `cat /sdcard/<下载文件>` 可读取（可选：写测试）。
+- [ ] 对话页发消息正常（工具链/ bind 改动不回归核心对话）。
+
+## 9. 验收记录（补充）
+
+| 项 | 结果 |
+|---|---|
+| 工具链（python3/jq/busybox/unzip） | ___ |
+| /sdcard 可见性 | ___ |
+| /sdcard 读取 | ___ |
+
 - [ ] 同步完成 `docs/review-2026-08-16.md` 中的 16KB/PRoot 检查。
 - [ ] 执行 Android lint、JVM 测试、前端测试和至少一次 ARM64 真机完整安装。
