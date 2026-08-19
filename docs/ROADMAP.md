@@ -9,6 +9,7 @@
 - **验收**：write/edit 工具在受限模式可用且不报 "no sandbox backend is usable"；越界路径被拒。
 - **依赖**：rootfs 内 dsh-sandbox-local 打补丁或新增后端；荣耀 SELinux 兼容性实测。
 - **工作量**：大（架构级）。
+- **状态**：📋 已立项为长期任务（含调研结论与里程碑）→ docs/long-term-tasks.md
 
 ## T2 Shizuku 命令桥接（对应 P1-1）
 
@@ -30,6 +31,7 @@
 - **验收**：容器内 apt-get install 成功安装常见包。
 - **依赖**：构建链容器布局重构；荣耀 SELinux 实测。
 - **工作量**：中-大。
+- **状态**：📋 已立项为长期任务（含根因假设与诊断步骤）→ docs/long-term-tasks.md
 
 ## T4 /sdcard 可写访问（对应 P1-2 深化）
 
@@ -44,6 +46,7 @@
 - **方案**：追加 git/gcc（需静态或同发行版二进制源）；提供 `dsh tool install` 一键命令。
 - **验收**：常见 agent 任务（编译/脚本/依赖管理）开箱可跑。
 - **工作量**：小-中。
+- **状态**：📋 已立项为长期任务（T5a git 建议先行，T5b gcc 待 T3/zig 试点）→ docs/long-term-tasks.md
 
 ---
 优先级建议：T1（沙箱）> T2（Shizuku）> T4（sdcard 真机结果）> T5（工具链补全）> T3（apt）。
