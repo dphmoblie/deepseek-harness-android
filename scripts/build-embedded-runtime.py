@@ -1730,7 +1730,6 @@ def main() -> None:
             patch_dsh_app_boot_bundle_tolerance(args.dsh_root)
             patch_session_persistence(args.dsh_root)
             patch_attachment_link(args.dsh_root)
-            add_windows_tree(writer, args.dsh_root, "opt/dsh")
             add_toolchain(writer, args.toolchain_dir)
             writer.add_bytes("usr/local/bin/dsh-device", DEVICE_CLI, 0o755)
             writer.add_directory("sdcard/")
