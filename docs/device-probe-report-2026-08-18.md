@@ -30,9 +30,10 @@
 | getpid | OK | 白名单内，正常执行 |
 | openat2(437) | EFAULT（NULL 参数） | 被放行，参数错误才报错 |
 | pidfd_open(434) / clone3(435) | EINVAL | 被放行，参数错误 |
-| bpf(280) | EPERM | 显式禁止 → EPERM |
+| bpf(280) | errno 13 (EACCES) | 显式禁止 → EACCES |
 | fsopen(430) | ENOSYS | 未列入白名单 → 默认 ENOSYS |
 
+- **errno 语义修正**：errno 13 是 EACCES 而非 EPERM——seccomp 显式禁止的 syscall 返回 EACCES（如 bpf），未列入白名单的返回 ENOSYS（如 fsopen）。
 - 因此 landlock 的 ENOSYS = "该进程的 seccomp 策略未放行 landlock"；内核是否编译
   CONFIG_SECURITY_LANDLOCK 在容器内不可验证（/proc/config.gz、/proc/kallsyms、/proc/cmdline
   均 Permission denied；/sys 被掩蔽，/sys/module 仅 1 个条目，无 /sys/module/landlock——

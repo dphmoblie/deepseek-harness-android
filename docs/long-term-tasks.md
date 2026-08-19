@@ -63,7 +63,10 @@
 
 ### 里程碑
 - M1 ✅ 诊断（完成）：结论入库（标签统一 app_data_file、rename OK、link() 被禁）；完整证据见 docs/device-probe-report-2026-08-18.md。
-- M2 重测全新包安装（真机，下一步）：
+- M2 重测（真机，下一步）：
+  - 新线索：seccomp 显式禁止的 syscall 返回 errno 13（EACCES，与 dpkg 报错同 errno）——
+    dpkg 的备份操作可能用了 renameat2/link 等被拦截的 syscall；mv 成功不能排除该可能。
+  - 诊断脚本：docs/t3-diagnose.sh（CapEff / lsattr / mv / ln / renameat2(276) / dpkg --configure -a / 全新包安装）。
   - apt-get update && apt-get install -y tree（全新包，无备份需求）；
   - 成功 → 验证矩阵：ripgrep、git、build-essential（gcc）等全新包；
     输出"运行期安装约束"：仅全新安装，避免覆盖升级；
