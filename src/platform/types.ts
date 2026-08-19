@@ -17,6 +17,7 @@ export interface RuntimeState {
   phase: RuntimePhase
   architecture: string
   installedVersion?: string
+  updateAvailable: boolean
   downloadedBytes: number
   totalBytes: number
   runnerAvailable: boolean

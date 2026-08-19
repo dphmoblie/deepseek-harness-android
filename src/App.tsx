@@ -67,6 +67,7 @@ const PHASE_META: Record<RuntimePhase, { label: string; tone: string }> = {
 const EMPTY_RUNTIME: RuntimeState = {
   phase: 'not-installed',
   architecture: '检测中',
+  updateAvailable: false,
   downloadedBytes: 0,
   totalBytes: 0,
   runnerAvailable: false,
@@ -229,11 +230,13 @@ interface ConversationScreenProps {
   onLaunch: () => void
   onOpenSettings: () => void
   onOpenTerminal: () => void
+  onUpdate: () => void
 }
 
-function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings, onOpenTerminal }: ConversationScreenProps) {
+function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings, onOpenTerminal, onUpdate }: ConversationScreenProps) {
   const installed = runtimeInstalled(runtime)
   const transitioning = runtimeTransitioning(runtime)
+  const updateRequired = installed && runtime.updateAvailable && !transitioning
   const progress = runtime.totalBytes > 0
     ? Math.min(100, Math.round((runtime.downloadedBytes / runtime.totalBytes) * 100))
     : 0
@@ -243,18 +246,20 @@ function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings
       <div className="screen-heading">
         <div>
           <p className="eyebrow">Harness 对话</p>
-          <h1>{runtime.phase === 'error' ? '运行环境需要处理' : installed ? '正在进入工作区' : '初始化 Ubuntu'}</h1>
+          <h1>{updateRequired ? '更新运行环境' : runtime.phase === 'error' ? '运行环境需要处理' : installed ? '正在进入工作区' : '初始化 Ubuntu'}</h1>
         </div>
         <PhaseBadge phase={runtime.phase} />
       </div>
 
       <section className="launch-panel">
         <span className="launch-icon" aria-hidden="true">
-          {busy === 'launch' || transitioning ? <Loader2 className="spin" size={30} /> : <Bot size={30} />}
+          {busy === 'launch' || transitioning ? <Loader2 className="spin" size={30} /> : updateRequired ? <RefreshCw size={30} /> : <Bot size={30} />}
         </span>
         <div className="launch-copy">
           <h2>
-            {runtime.phase === 'error'
+            {updateRequired
+              ? '当前 APK 包含新版运行环境'
+              : runtime.phase === 'error'
               ? '运行环境需要处理'
               : transitioning
               ? PHASE_META[runtime.phase].label
@@ -263,7 +268,9 @@ function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings
                 : '首次使用需要准备运行环境'}
           </h2>
           <p>
-            {runtime.phase === 'error'
+            {updateRequired
+              ? '为避免继续打开旧版 Harness，需要先更新 Ubuntu 环境。更新会替换其中的本地修改。'
+              : runtime.phase === 'error'
               ? runtimeErrorMessage(runtime.errorCode)
               : transitioning
               ? `${formatBytes(runtime.downloadedBytes)} / ${formatBytes(runtime.totalBytes)}`
@@ -289,12 +296,17 @@ function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings
               {runtime.phase === 'error' ? '重试安装' : '安装并进入对话'}
             </button>
           )}
-          {installed && !transitioning && busy !== 'launch' && (
+          {updateRequired && (
+            <button className="button button-primary" type="button" onClick={onUpdate} disabled={busy !== null || !runtime.runnerAvailable}>
+              <RefreshCw size={18} />更新运行环境
+            </button>
+          )}
+          {installed && !transitioning && !updateRequired && busy !== 'launch' && (
             <button className="button button-primary" type="button" onClick={onLaunch} disabled={busy !== null}>
               <Play size={18} fill="currentColor" />重新打开对话
             </button>
           )}
-          {runtime.phase === 'error' && installed && (
+          {runtime.phase === 'error' && installed && !updateRequired && (
             <button className="button button-secondary" type="button" onClick={onOpenTerminal} disabled={busy !== null}>
               <SquareTerminal size={18} />打开终端排查
             </button>
@@ -324,9 +336,10 @@ interface EnvironmentScreenProps {
   onReset: () => void
   onStart: () => void
   onStop: () => void
+  onUpdate: () => void
 }
 
-function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop }: EnvironmentScreenProps) {
+function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop, onUpdate }: EnvironmentScreenProps) {
   const inProgress = ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
   const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running'
   const progress = runtime.totalBytes > 0
@@ -408,7 +421,12 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
               {bundledSource ? '安装内置环境' : '下载并安装'}
             </button>
           )}
-          {runtime.phase === 'ready' && (
+          {runtime.updateAvailable && installed && !inProgress && (
+            <button className="button button-primary" type="button" onClick={onUpdate} disabled={busy !== null || runtime.phase === 'running' || !runtime.runnerAvailable}>
+              <RefreshCw size={18} />{runtime.phase === 'running' ? '停止后更新' : '更新运行环境'}
+            </button>
+          )}
+          {runtime.phase === 'ready' && !runtime.updateAvailable && (
             <button className="button button-primary" type="button" onClick={onStart} disabled={busy !== null}>
               {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Play size={18} fill="currentColor" />}
               启动
@@ -428,6 +446,13 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
           )}
         </div>
       </section>
+
+      {runtime.updateAvailable && installed && (
+        <div className="inline-alert warning" role="alert">
+          <AlertTriangle size={19} />
+          <div><strong>APK 内置环境有更新</strong><span>更新会替换当前 Ubuntu 根目录，其中安装的软件、本地修改和未导出的文件将被清除。</span></div>
+        </div>
+      )}
 
       {runtime.phase === 'error' && (
         <div className="inline-alert danger" role="alert">
@@ -572,8 +597,8 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
           <h1>设置</h1>
         </div>
         <button className="button button-primary conversation-button" type="button" onClick={onLaunch} disabled={busy !== null || !runtimeInstalled(runtime)}>
-          {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Bot size={18} />}
-          返回对话
+          {busy === 'launch' ? <Loader2 className="spin" size={18} /> : runtime.updateAvailable ? <RefreshCw size={18} /> : <Bot size={18} />}
+          {runtime.updateAvailable ? '更新环境' : '返回对话'}
         </button>
       </div>
 
@@ -592,7 +617,7 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
         </div>
         <button className="management-row" type="button" onClick={onOpenEnvironment}>
           <span className="management-icon green"><HardDrive size={20} /></span>
-          <span className="management-copy"><strong>Ubuntu 运行时</strong><small>安装进度、版本、来源与重置</small></span>
+          <span className="management-copy"><strong>Ubuntu 运行时</strong><small>{runtime.updateAvailable ? '发现 APK 内置环境更新' : '安装进度、版本、来源与重置'}</small></span>
           <ChevronRight size={18} />
         </button>
         <button className="management-row" type="button" onClick={onOpenTerminal}>
@@ -781,6 +806,32 @@ function ResetDialog({ busy, onCancel, onConfirm }: ResetDialogProps) {
   )
 }
 
+interface UpdateDialogProps {
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}
+
+function UpdateDialog({ busy, onCancel, onConfirm }: UpdateDialogProps) {
+  return (
+    <div className="dialog-backdrop" role="presentation" onPointerDown={event => { if (event.target === event.currentTarget && !busy) onCancel() }}>
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="update-title">
+        <button className="dialog-close" type="button" aria-label="关闭" onClick={onCancel} disabled={busy}><X size={19} /></button>
+        <span className="dialog-danger-icon"><RefreshCw size={23} /></span>
+        <h2 id="update-title">更新 Ubuntu 运行环境</h2>
+        <p>当前 APK 内置了新版运行环境。继续后会替换已安装的 Ubuntu 根目录，其中安装的软件、本地修改和未导出的文件将被清除；应用设置不受影响。</p>
+        <div className="dialog-actions">
+          <button className="button button-secondary" type="button" onClick={onCancel} disabled={busy}>暂不更新</button>
+          <button className="button button-danger" type="button" onClick={onConfirm} disabled={busy}>
+            {busy ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+            {busy ? '正在更新' : '确认更新'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function App() {
   const [activeView, setActiveView] = useState<AppView>('conversation')
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME)
@@ -793,6 +844,7 @@ export function App() {
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [resetOpen, setResetOpen] = useState(false)
+  const [updateOpen, setUpdateOpen] = useState(false)
   const noticeId = useRef(0)
   const busyRef = useRef<string | null>(null)
   const autoLaunchAttempted = useRef(false)
@@ -938,8 +990,38 @@ export function App() {
     }, 'Ubuntu 运行时已安装')
   }, [run, settings])
 
+  const requestRuntimeUpdate = useCallback(() => {
+    if (busyRef.current === null) setUpdateOpen(true)
+  }, [])
+
+  const confirmRuntimeUpdate = useCallback(() => {
+    void run('update-runtime', async () => {
+      try {
+        // Empty source fields explicitly select the APK-bundled, digest-verified runtime.
+        await runtimeBridge.install({ manifestUrl: '', manifestSha256: '' })
+      } catch (error) {
+        try {
+          setRuntime(await runtimeBridge.getState())
+        } catch {
+          // Preserve the update failure; state refresh is best effort.
+        }
+        throw error
+      }
+      const next = await runtimeBridge.getState()
+      setRuntime(next)
+      setUpdateOpen(false)
+      autoLaunchAttempted.current = false
+      setActiveView('conversation')
+    }, 'Ubuntu 运行环境已更新')
+  }, [run])
+
   const launchHarness = useCallback(() => {
     if (busyRef.current !== null) return
+    if (runtime.updateAvailable) {
+      autoLaunchAttempted.current = true
+      requestRuntimeUpdate()
+      return
+    }
     autoLaunchAttempted.current = true
     busyRef.current = 'launch'
     setBusy('launch')
@@ -967,11 +1049,12 @@ export function App() {
         setBusy(null)
       }
     })()
-  }, [notify, runtime])
+  }, [notify, requestRuntimeUpdate, runtime])
 
   useEffect(() => {
     if (booting || activeView !== 'conversation' || busy !== null || autoLaunchAttempted.current) return
     if (settings !== null && settings.autoLaunch === false) return
+    if (runtime.updateAvailable) return
     if (runtime.phase === 'running' || (runtimeInstalled(runtime) && runtime.phase !== 'stopping')) {
       launchHarness()
     }
@@ -1023,15 +1106,15 @@ export function App() {
   const screen = useMemo(() => {
     switch (activeView) {
       case 'conversation':
-        return <ConversationScreen busy={busy} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} onOpenTerminal={() => setActiveView('terminal')} />
+        return <ConversationScreen busy={busy} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} onOpenTerminal={() => setActiveView('terminal')} onUpdate={requestRuntimeUpdate} />
       case 'terminal':
         return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onBack={() => setActiveView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
       case 'environment':
-        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => setActiveView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} />
+        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => setActiveView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} />
       case 'settings':
         return <SettingsScreen busy={busy} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onConnect={connectShizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} onOpenTerminal={() => setActiveView('terminal')} onSave={saveSettings} onStop={stopRuntime} />
     }
-  }, [activeView, busy, connectShizuku, installRuntime, launchHarness, openShizuku, requestShizukuPermission, runtime, saveSettings, settings, shizuku, stopRuntime, terminalError])
+  }, [activeView, busy, connectShizuku, installRuntime, launchHarness, openShizuku, requestRuntimeUpdate, requestShizukuPermission, runtime, saveSettings, settings, shizuku, stopRuntime, terminalError])
 
   if (booting) {
     return (
@@ -1060,6 +1143,7 @@ export function App() {
       <main className="app-main">{screen}</main>
 
       {resetOpen && <ResetDialog busy={busy === 'reset'} onCancel={() => setResetOpen(false)} onConfirm={confirmReset} />}
+      {updateOpen && <UpdateDialog busy={busy === 'update-runtime'} onCancel={() => setUpdateOpen(false)} onConfirm={confirmRuntimeUpdate} />}
 
       {onboardingOpen && (
         <Onboarding

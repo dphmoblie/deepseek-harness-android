@@ -1,21 +1,20 @@
 # Android architecture
 
-The APK combines a Capacitor management surface with a native Harness activity. The installed Ubuntu environment runs `dsh web` on Android loopback behind the packaged mobile-auth Node preload. The rootfs contains the purpose-built mobile Harness conversation frontend, including host bootstrap, same-origin RPC, WebSocket events, sessions, tasks, files, and model controls. Once the runtime is ready, app startup starts Harness and opens that frontend in the internal navigation-restricted WebView. Returning from the native Harness toolbar lands on Settings, where service, runtime, terminal, reset, source, and Shizuku controls are grouped.
+The APK combines a Capacitor management surface with a native Harness activity. The installed Ubuntu environment runs `dsh web` on Android loopback behind the packaged mobile-auth Node preload. During packaging, the original web distribution is removed and replaced by the purpose-built mobile Harness conversation frontend, including same-origin RPC, WebSocket events, sessions, tasks, files, skills, agent presets, model controls, and reasoning effort. Once the runtime is ready, app startup starts Harness and opens that frontend at `/` in the internal navigation-restricted WebView. Returning from the native Harness toolbar lands on Settings, where service, runtime, terminal, reset, source, and Shizuku controls are grouped.
 
 ## Runtime installation
 
-1. The official `0.1.7` workflow builds `rootfs.bundle` and
+1. The official `0.1.8` workflow builds `rootfs.bundle` and
    `runtime-manifest.json`, injects the built mobile conversation frontend,
-   and publishes both beside the matching thin APK under
-   `v0.1.7-mobile-<run_number>`. The manifest rootfs URL points to that exact
-   tag and records the archive length, SHA-256, architecture, compression, and
-   runtime version.
-2. Before Gradle builds the APK, CI hashes the finished manifest and supplies
-   its Release URL and SHA-256 through the generated `BuildConfig` defaults.
-   The workflow removes `rootfs.bundle`, manifests, and `.bak` transaction
-   files from APK assets. `RuntimeStore` also migrates an earlier empty bundled
-   source to these pinned defaults. An official APK therefore needs no
-   post-install source entry and cannot silently select an unrelated runtime.
+   and embeds both verified assets in the matching APK. The same files are
+   published under the corresponding Release tag for inspection and explicit
+   remote installation. The manifest records the archive length, SHA-256,
+   architecture, compression, and runtime version.
+2. Before Gradle builds the APK, CI verifies the finished manifest and copies
+   it and the bundle into `app/src/main/assets/runtime/`. `.bak`, `.part`, and
+   unrelated generated runtime files are rejected. `RuntimeStore` treats the
+   embedded manifest as the default source, so an official APK needs no
+   post-install source entry and can install while offline.
 3. The manifest bytes must match the APK-pinned digest before parsing. The
    native layer validates schema, architecture, HTTPS/public-destination
    policy on every redirect, byte limits, gzip compression, entrypoint
@@ -40,10 +39,9 @@ The APK combines a Capacitor management surface with a native Harness activity. 
 `scripts/build-embedded-runtime.py` produces the gzip bundle and manifest
 without checking generated artifacts into Git. `scripts/rebuild-rootfs-frontend.py`
 replaces the Harness frontend transactionally and deletes its temporary `.bak`
-files after verification so Android cannot package two rootfs copies. An
-explicit embedded development build remains possible, but it is not the
-official `0.1.7` distribution path and uses the same archive verification and
-extraction boundaries.
+files after verification so Android cannot package two rootfs copies. The
+official `0.1.8` build is embedded and uses the same archive verification and
+extraction boundaries as an explicitly configured remote build.
 The PRoot-compatible runner and loader are executable native libraries and
 must always be packaged in the APK because current Android versions do not
 allow executing newly downloaded code from writable app storage. Generated

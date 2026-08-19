@@ -6,7 +6,7 @@
 > 参考实现：kelai141 生态的 @dsh-android/dsh-client-ui-responsive（编译产物在本机
 > .dsh-dl/dsh-android-dsh-client-ui-responsive-0.1.0.tgz，本文中的模式均经其代码核实）。
 
-## 1. 现状基线（0.1.7）
+## 1. 现状基线（0.1.8）
 
 - **三端结构**：Capacitor 启动与管理 UI（src/）→ 原生 HarnessActivity 内的移动对话 UI
   （rootfs 内 dsh web，仅 127.0.0.1 + preload 认证）→ runtime profile 插件集
@@ -48,10 +48,10 @@
    （标题+菜单）、safe-area（env(safe-area-inset-*) 适配刘海/手势条）。
 4. **主题桥**：沿用 theme-bridge（system dark 同步 + 首帧深色），移动 WebView 的
    matchMedia 卡 light 问题已在壳侧 H1 修复思路内（preload token 之外同样适用）。
-5. **实现载体**：默认 Android profile 直接使用官方
-   `@deepseek-ai/dsh-client-ui-layout`。实验性的 `dsh-mobile-compat` 不再替代
-   AppFrame，因为两套 root 注册会冲突；不改桌面插件本身，保留官方 layout service
-   可确保插件、模型和设置功能完整。
+5. **实现载体**：新版 `harness-web` 替换原前端 dist，并成为唯一的根入口。原官方
+   `index.html` 不再保留；仅把第三方 Cordis 插件页面依赖的官方客户端资源收进按需加载的
+   `/plugin-workbench/`，避免默认加载两套界面。实验性的 `dsh-mobile-compat` 不加入默认
+   profile，避免 root 注册冲突；不改 Harness 后端。
 
 ## 4. 应用入口与管理
 
@@ -68,25 +68,24 @@
 
 | 层 | 现状 | 轻量动作 |
 |---|---|---|
-| APK | `0.1.7` arm64-only，release 已开 minify+shrinkResources | CI 删除 rootfs/manifest/`.bak` assets，只发布瘦 APK |
+| APK | `0.1.8` arm64-only，release 已开 minify+shrinkResources | APK 内嵌已校验 rootfs；Release 同时提供独立 runtime 资产 |
 | 运行时 | CI 生成 Ubuntu + Node + dsh bundle | 与 APK 同 tag 发布；manifest URL 和摘要在构建时固定，无手工配置 |
-| 插件集 | rootfs 配方含完整 dsh | 移动 profile 白名单：默认只装 P0/P1 集（见 scripts/mobile-profile.example.json），dshmarket 按需补装 |
+| 插件集 | rootfs 配方含完整 dsh | 移动设置直接管理市场与运行时清单；插件自带页面仅在打开完整工作台时加载 |
 | 传输 | preload 认证 | HTTP Basic 与 WebSocket HttpOnly Cookie 共用每次启动的新 token |
 | 下载 | Release rootfs 远程获取 | digest 命名 partial + HTTP Range，网络错误保留合法断点 |
 
 ## 6. 落地状态
 
-1. 移动 profile 规格已接入 rootfs 配方，并复用官方响应式 layout；`dsh-mobile-compat`
-   保留为独立实验包，不在默认运行时加载。profile 不使用无人消费的 `disabledOnMobile`
-   标记，所有已装插件统一由 Harness 官方插件设置启停。
-   官方设置组件的窄屏 CSS 在打包阶段补充为顶部标签 + 全宽内容布局，避免 390px WebView
-   中插件列表和 Agent 预设被桌面侧栏挤压裁切。
+1. 移动 profile 规格已接入 rootfs 配方；`harness-web` 原子替换根入口，官方旧首页不再
+   存在。为兼容第三方 Cordis 插件自带页面，官方客户端资源仅保留一份按需插件工作台，
+   默认对话不会加载。`dsh-mobile-compat` 保留为独立实验包，不在默认运行时加载。
 2. `harness-web` 已改为会话抽屉、聊天主视图、任务/文件/设置二级页，并支持模型、
-   推理强度、排队/引导发送与结构化消息渲染。
+   推理强度、排队/引导发送与结构化消息渲染；设置页包含插件市场、运行时插件状态、
+   Harness 公开设置以及完整插件工作台入口。
 3. Capacitor 已采用无额外引导的直接对话入口，管理能力集中到设置，不再使用四栏主导航。
 4. Shizuku 将授权与 UserService 连接分开显示；未连接时设备终端不可用且提供显式连接。
 5. CI 自动构建移动前端和 rootfs，生成同 tag Release manifest，并把其 URL/摘要固定进
-   `0.1.7` 瘦 APK。
+   `0.1.8` 内嵌运行时 APK。
 6. 真机验收以 `docs/mobile-acceptance-checklist.md` 为准。
 
 ## 7. 边界与风险

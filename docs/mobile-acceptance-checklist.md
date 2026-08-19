@@ -1,15 +1,15 @@
-# 移动端 0.1.7 真机验收清单
+# 移动端 0.1.8 真机验收清单
 
 > 适用范围：荣耀 Android 16（arm64/16KB）及至少一台其他 arm64 真机。验收对象为
-> 同一个 `v0.1.7-mobile-<run_number>` Release 中的瘦 APK、
+> 同一个 `v0.1.8-mobile-<run_number>` Release 中的内嵌 APK、
 > `runtime-manifest.json` 与 `rootfs.bundle`。
 
 ## 0. 发布资产前置
 
-- [ ] APK 的 `versionCode=7`、`versionName=0.1.7`，并通过团队签名校验。
+- [ ] APK 的 `versionCode=8`、`versionName=0.1.8`，并通过团队签名校验。
 - [ ] Release 同时包含 APK、`runtime-manifest.json`、`rootfs.bundle`，三者来自同一次 CI run。
-- [ ] APK 内没有 `assets/runtime/rootfs.bundle`、运行时 manifest、`.bak` 或其他 rootfs 副本。
-- [ ] APK 已固定同一 Release 的 manifest URL 与 SHA-256；全新安装无需手工填写运行时来源。
+- [ ] APK 内恰有一份 `assets/runtime/rootfs.bundle` 和运行时 manifest，没有 `.bak` 或其他 rootfs 副本。
+- [ ] 内嵌 manifest 的 rootfs SHA-256 与 APK 内 bundle 一致；全新安装无需手工填写运行时来源。
 - [ ] APK 包含 ARM64 PRoot runner/loader，二者通过 16KB 对齐检查。
 - [ ] Shizuku 为可选项；未安装 Shizuku 不影响 Ubuntu 安装和 Harness 对话。
 
@@ -72,10 +72,10 @@
 
 | 指标 | 记录值 | 验收要求 |
 |---|---|---|
-| 瘦 APK 大小 | ___ MB | 不包含 rootfs；异常增长必须定位 |
+| 内嵌 APK 大小 | ___ MB | 包含一份 rootfs；异常增长必须定位 |
 | rootfs compressedBytes | ___ MB | 与 manifest 及实际资产完全一致 |
 | 安装后运行时体积 | ___ MB | 不超过清单和提取上限 |
-| 首次下载到 Harness 可用 | ___ 秒 | 记录网络与设备条件 |
+| 首次安装到 Harness 可用 | ___ 秒 | 记录设备条件 |
 | Harness 空闲内存 | ___ MB | 记录稳定基线 |
 | 页面大小 | ___ bytes | 荣耀 / Android 16 为 16384 |
 
@@ -84,7 +84,7 @@
 ```text
 设备/系统：
 Android 页面大小：
-Release tag：v0.1.7-mobile-____
+Release tag：v0.1.8-mobile-____
 Git commit：
 APK SHA-256：
 manifest SHA-256：

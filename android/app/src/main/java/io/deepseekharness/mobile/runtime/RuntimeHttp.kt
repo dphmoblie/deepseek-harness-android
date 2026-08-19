@@ -310,7 +310,7 @@ class RuntimeHttp {
                 Request.Builder()
                     .url(current.toASCIIString())
                     .header("Accept-Encoding", "identity")
-                    .header("User-Agent", "DeepSeekHarnessMobile/0.1.7")
+                    .header("User-Agent", "DeepSeekHarnessMobile/0.1.8")
                     .also { builder -> rangeStart?.let { builder.header("Range", "bytes=$it-") } }
                     .get()
                     .build()

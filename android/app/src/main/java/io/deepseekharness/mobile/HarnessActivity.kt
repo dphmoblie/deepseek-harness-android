@@ -78,6 +78,7 @@ class HarnessActivity : AppCompatActivity() {
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
+            cacheMode = WebSettings.LOAD_NO_CACHE
             allowFileAccess = false
             allowContentAccess = false
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
@@ -109,7 +110,7 @@ class HarnessActivity : AppCompatActivity() {
             when (pageLoadGate.onCookieStored(accepted)) {
                 CookieLoadDecision.LOAD -> {
                     cookieManager.flush()
-                    webView.loadUrl(allowedOrigin.initialUrl)
+                    webView.loadUrl(HarnessPageUrl.withAppVersion(allowedOrigin.initialUrl, BuildConfig.VERSION_NAME))
                 }
                 CookieLoadDecision.REJECT -> {
                     Toast.makeText(this, R.string.harness_session_failed, Toast.LENGTH_SHORT).show()

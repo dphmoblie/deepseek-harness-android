@@ -68,7 +68,7 @@ export function App(): ReactElement {
   }, [sessionId])
 
   useEffect(() => {
-    if (!isDesktop && initialized.current && sessions.error !== null) setDrawerOpen(true)
+    if (!isDesktop && sessions.error !== null) setDrawerOpen(true)
   }, [isDesktop, sessions.error])
 
   const currentSummary = useMemo(

@@ -1,0 +1,16 @@
+allowBuilds:
+  node-pty: true
+  koffi: true
+  "@deepseek-ai/dsh-subprocess-local": true
+  protobufjs: true
+  "@google/genai": true
+  cloudflared: true
+  cpu-features: true
+  ssh2: true
+supportedArchitectures:
+  os:
+    - linux
+  cpu:
+    - arm64
+  libc:
+    - glibc

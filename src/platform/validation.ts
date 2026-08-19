@@ -230,6 +230,7 @@ export function validateRuntimeState(value: unknown): RuntimeState {
   const totalBytes = byteCount(state.totalBytes, '总字节数')
   if (totalBytes > 0 && downloadedBytes > totalBytes) throw new Error('运行时进度无效')
   if (typeof state.runnerAvailable !== 'boolean') throw new Error('本机运行器状态格式无效')
+  if (typeof state.updateAvailable !== 'boolean') throw new Error('运行时更新状态格式无效')
 
   const installedVersion = optionalIdentifier(state.installedVersion, '运行时版本')
   const errorCode = optionalIdentifier(state.errorCode, '运行时错误码', ERROR_CODE_PATTERN, MAX_ERROR_CODE_LENGTH)
@@ -254,6 +255,7 @@ export function validateRuntimeState(value: unknown): RuntimeState {
     downloadedBytes,
     totalBytes,
     runnerAvailable: state.runnerAvailable,
+    updateAvailable: state.updateAvailable,
     ...(installedVersion === undefined ? {} : { installedVersion }),
     ...(harnessUrl === undefined ? {} : { harnessUrl }),
     ...(errorCode === undefined ? {} : { errorCode }),

@@ -6,7 +6,7 @@ This directory is the Capacitor 7 Android platform for the DeepSeek Harness mobi
 
 1. Install the JavaScript dependencies from `app/` with Node.js `^22.19.0 || >=24.0.0` and `pnpm install --frozen-lockfile`.
 2. Import the release-pinned ARM64 PRoot runner and loader as `app/src/main/jniLibs/arm64-v8a/libdsh_proot.so` and `libdsh_proot_loader.so`. Both generated files are intentionally ignored by Git.
-3. For an official thin build, set both `DSH_RUNTIME_MANIFEST_URL` and `DSH_RUNTIME_MANIFEST_SHA256` to the matching Release manifest and remove generated runtime assets, including `.bak` files, before Gradle runs. The CI workflow performs these steps automatically. An explicitly self-contained development build may instead generate the ignored `app/src/main/assets/runtime/runtime-manifest.json` and `rootfs.bundle` assets.
+3. For the official self-contained build, generate the ignored `app/src/main/assets/runtime/runtime-manifest.json` and `rootfs.bundle` assets from the same source revision before Gradle runs. Transaction `.bak` and `.part` files must not be present. A remote-only development build may instead set both `DSH_RUNTIME_MANIFEST_URL` and `DSH_RUNTIME_MANIFEST_SHA256` and omit the bundled runtime.
 4. Run `pnpm run android:sync`, then build with Android SDK 35, NDK, CMake 3.22.1, JDK 23, and Gradle 8.11.1.
 
 The Gradle wrapper JAR and Capacitor-generated files are not committed. Generate the wrapper with a trusted Gradle 8.11.1 installation when preparing a clean build machine. Do not store signing passwords, download credentials, API keys, database credentials, or tokens in Gradle files or `local.properties`.

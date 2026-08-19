@@ -40,3 +40,15 @@ internal object HarnessSessionCookie {
     fun expired(): String =
         "${HarnessActivity.AUTH_TOKEN_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict"
 }
+
+internal object HarnessPageUrl {
+    private val ROOT_URL = Regex("http://127\\.0\\.0\\.1:([0-9]{4,5})/")
+    private val APP_VERSION = Regex("[A-Za-z0-9._-]{1,64}")
+
+    fun withAppVersion(rootUrl: String, appVersion: String): String {
+        val port = ROOT_URL.matchEntire(rootUrl)?.groupValues?.get(1)?.toIntOrNull()
+        require(port != null && port in 1024..65535) { "Harness root URL has an invalid format" }
+        require(APP_VERSION.matches(appVersion)) { "Application version has an invalid format" }
+        return "${rootUrl}?appVersion=$appVersion"
+    }
+}

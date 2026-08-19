@@ -1,9 +1,10 @@
 # Release checklist
 
 Generated rootfs and native ELF files are intentionally excluded from Git.
-The official `0.1.7` workflow publishes a thin APK and separate pinned runtime
-assets. Complete every applicable item below for the exact APK, manifest, and
-rootfs before publishing or otherwise distributing them.
+The official `0.1.8` workflow publishes a self-contained APK plus matching
+runtime assets for inspection and explicit remote installation. Complete every
+applicable item below for the exact APK, manifest, and rootfs before publishing
+or otherwise distributing them.
 
 ## Runtime artifacts
 
@@ -16,23 +17,23 @@ rootfs before publishing or otherwise distributing them.
 - Retain Ubuntu package copyright metadata, the Node.js license and bundled
   dependency notices, the DeepSeek Harness MIT license, and the licenses of
   every npm package copied into the rootfs.
-- Confirm the workflow tag is exactly `v0.1.7-mobile-<run_number>` and that the
-  rootfs URL recorded in `runtime-manifest.json` points to `rootfs.bundle`
-  under that same tag.
+- Confirm the workflow tag is exactly `v0.1.8-mobile-<run_number>` (or
+  `v0.1.8` for a stable release) and that the rootfs URL recorded in
+  `runtime-manifest.json` points to `rootfs.bundle` under that same tag.
 - Independently verify the finished manifest SHA-256, rootfs SHA-256, byte
   lengths, `arm64-v8a` architecture, `gzip` compression value, and runtime
   version after the mobile Harness frontend has been injected.
-- Confirm CI compiles that exact manifest Release URL and SHA-256 into the
-  matching APK. Install the official APK with no prior app data and verify the
-  install action works without entering or changing a source URL or digest.
-- Inspect the APK and fail the release if it contains
-  `assets/runtime/rootfs.bundle`, `runtime-manifest.json`, either `.bak` file,
-  another rootfs archive, or another generated manifest. Record the thin APK
-  byte size and investigate any unexpected increase.
+- Confirm CI embeds that exact manifest and rootfs digest in the matching APK.
+  Install the official APK with no prior app data and verify the install action
+  works offline without entering or changing a source URL or digest.
+- Inspect the APK and fail the release if it contains more than one
+  `assets/runtime/rootfs.bundle`, more than one `runtime-manifest.json`, either
+  `.bak` file, another rootfs archive, or another generated manifest. Record
+  the embedded APK byte size and investigate any unexpected increase.
 - Confirm the published Release contains exactly the intended APK,
   `rootfs.bundle`, and `runtime-manifest.json`, and that its notes identify the
-  thin-APK download and resume behavior without asking users to configure a
-  manifest manually.
+  embedded offline install and optional remote resume behavior without asking
+  users to configure a manifest manually.
 - Interrupt a remote rootfs transfer, restart the app, and verify the matching
   `rootfs-<sha256>.part` resumes with Range. Reject an incorrect HTTP 206 or
   `Content-Range`, and verify HTTP 200 and 416 responses to a resume request

@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  Blocks,
   Bot,
   Check,
   Eye,
@@ -25,6 +26,8 @@ import type {
   SettingsNamespaceView,
   WorkspaceView,
 } from '../api/types'
+import { PluginMarketplaceView } from './PluginMarketplaceView'
+import { RuntimeSettingsPanel } from './RuntimeSettingsPanel'
 
 const LAST_SESSION_KEY = 'dsh-mobile-last-session-v1'
 const MAX_PATH_CHARACTERS = 4096
@@ -597,6 +600,20 @@ export function SettingsView(props: { onBack: () => void; currentSessionId?: Ses
           </p>
         )}
 
+        <RuntimeSettingsPanel
+          describe={describe}
+          onUpdated={(updated) => setDescribe((previous) => previous === null
+            ? previous
+            : { ...previous, namespaces: previous.namespaces.map((item) => item.ns === updated.ns ? updated : item) })}
+        />
+
+        <a className="btn btn-block" href={pluginWorkbenchHref()}>
+          <Blocks size={16} aria-hidden="true" />
+          打开完整插件工作台
+        </a>
+
+        <PluginMarketplaceView />
+
         {describe !== null && !describe.writable && (
           <p className="hint">当前运行时的模型配置只读；已有凭据仍按各自权限管理</p>
         )}
@@ -708,6 +725,13 @@ export function SettingsView(props: { onBack: () => void; currentSessionId?: Ses
       </div>
     </main>
   )
+}
+
+function pluginWorkbenchHref(): string {
+  const url = new URL(window.location.href)
+  url.searchParams.set('surface', 'plugins')
+  url.hash = ''
+  return `${url.pathname}${url.search}`
 }
 
 function selectPresetTargetSession(

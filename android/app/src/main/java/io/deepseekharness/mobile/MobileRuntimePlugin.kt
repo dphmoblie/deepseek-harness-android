@@ -429,6 +429,7 @@ class MobileRuntimePlugin : Plugin() {
     private fun RuntimeStateSnapshot.toJs(): JSObject = JSObject()
         .put("phase", phase.wireValue)
         .put("architecture", architecture)
+        .put("updateAvailable", updateAvailable)
         .put("downloadedBytes", downloadedBytes)
         .put("totalBytes", totalBytes)
         .put("runnerAvailable", runnerAvailable)

@@ -23,7 +23,7 @@ test('dsh-mobile-compat keeps the dsh client module contract', async () => {
 
   // The workspace build is a TypeScript module used by the package toolchain.
   // The default Android profile deliberately does not load this experimental
-  // package; the official layout owns the root slot in production.
+  // root plugin; the standalone mobile frontend owns the default document.
   const clientSource = await readFile(
     resolve(appRoot, 'packages/dsh-mobile-compat/lib/client.js'),
     'utf8',
@@ -32,11 +32,41 @@ test('dsh-mobile-compat keeps the dsh client module contract', async () => {
   assert.match(clientSource, /export function apply\(ctx\)/)
 })
 
-test('Android rootfs workflow preserves the official frontend dist', async () => {
+test('Android rootfs workflow replaces the original frontend with the mobile frontend', async () => {
   const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
-  assert.doesNotMatch(workflow, /rebuild-rootfs-frontend\.py/)
-  assert.doesNotMatch(workflow, /--dist\s+harness-web\/dist/)
-  assert.match(workflow, /official @deepseek-ai\/dsh-web-frontend\/dist/)
+  assert.match(workflow, /Build mobile Harness conversation frontend/)
+  assert.match(workflow, /pnpm --filter @dsh-mobile\/harness-web build/)
+  assert.match(workflow, /rebuild-rootfs-frontend\.py/)
+  assert.match(workflow, /--dist\s+harness-web\/dist/)
+
+  const mobileIndex = await readFile(resolve(appRoot, 'harness-web/index.html'), 'utf8')
+  const rebuilder = await readFile(resolve(appRoot, 'scripts/rebuild-rootfs-frontend.py'), 'utf8')
+  assert.match(mobileIndex, /name="dsh-mobile-frontend" content="harness-web-v1"/)
+  assert.match(rebuilder, /is_frontend_dist_path\(member\.name\)/)
+  assert.match(rebuilder, /重建后仍残留旧 dist 条目/)
+  assert.match(rebuilder, /MOBILE_FRONTEND_MARKER/)
+})
+
+test('plugin workbench is opt-in and embeds assets without a duplicate desktop page', async () => {
+  const main = await readFile(resolve(appRoot, 'harness-web/src/main.tsx'), 'utf8')
+  const settings = await readFile(resolve(appRoot, 'harness-web/src/ui/SettingsView.tsx'), 'utf8')
+  const embedder = await readFile(
+    resolve(appRoot, 'harness-web/scripts/embed-plugin-workbench.mjs'),
+    'utf8',
+  )
+  assert.match(main, /surface === 'plugins'/)
+  assert.match(main, /import\('\.\/mobile'\)/)
+  assert.match(main, /target\.searchParams\.delete\('surface'\)/)
+  assert.match(main, /back\.textContent = '\u8fd4\u56de\u79fb\u52a8\u5bf9\u8bdd'/)
+  assert.match(settings, /searchParams\.set\('surface', 'plugins'\)/)
+  assert.match(embedder, /cp\(sourceAssetsRoot, workbenchAssetsRoot/)
+  assert.doesNotMatch(embedder, /cp\(sourceRoot, workbenchRoot/)
+  assert.match(embedder, /replaceAll\('\/assets\/', '\/plugin-workbench\/assets\/'\)/)
+  assert.match(embedder, /validateBootManifest\(globalThis\.__DSH_BOOT__\)/)
+  assert.match(embedder, /\\u542f\\u52a8\\u6e05\\u5355\\u7f3a\\u5931/)
+  assert.match(embedder, /document\.body\.insertBefore\(toolbar, document\.body\.firstChild\)/)
+  assert.match(embedder, /root\.style\.cssText = 'flex:1 1 auto;min-height:0;height:auto'/)
+  assert.doesNotMatch(embedder, /position:fixed/)
 })
 
 test('Android rootfs workflow tolerates node-pty version drift without hiding failures', async () => {
@@ -47,10 +77,42 @@ test('Android rootfs workflow tolerates node-pty version drift without hiding fa
   assert.match(workflow, /test -s "\$PTP\/prebuilds\/linux-arm64\/pty\.node"/)
   assert.doesNotMatch(workflow, /tee \/tmp\/(?:step|bundle|release)\.log \|\| true/)
   assert.doesNotMatch(workflow, /PIPESTATUS/)
+  assert.doesNotMatch(workflow, /git add -f/)
+  assert.doesNotMatch(workflow, /git checkout --orphan/)
+  assert.doesNotMatch(workflow, /ci-logs/)
   assert.equal(workflow.match(/STATUS="\$\?"/g)?.length, 3)
 })
 
-test('the default mobile profile keeps the official layout as the sole root owner', async () => {
+test('Android CI installs the runtime from a committed frozen lockfile', async () => {
+  const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
+  const runtimePackage = JSON.parse(
+    await readFile(resolve(appRoot, 'scripts/runtime-profile/package.json'), 'utf8'),
+  )
+  const runtimeLock = await readFile(
+    resolve(appRoot, 'scripts/runtime-profile/pnpm-lock.yaml'),
+    'utf8',
+  )
+  assert.match(workflow, /cp scripts\/runtime-profile\/package\.json scripts\/runtime-profile\/pnpm-lock\.yaml/)
+  assert.match(workflow, /pnpm install --frozen-lockfile/)
+  assert.doesNotMatch(workflow, /pnpm install --no-frozen-lockfile/)
+  assert.match(runtimeLock, /lockfileVersion: '9\.0'/)
+  for (const version of [
+    ...Object.values(runtimePackage.dependencies ?? {}),
+    ...Object.values(runtimePackage.devDependencies ?? {}),
+  ]) {
+    assert.match(version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/)
+  }
+})
+
+test('stable releases are main-only and bind the release to the built commit', async () => {
+  const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
+  assert.match(workflow, /^permissions:\s*\r?\n\s+contents: read$/m)
+  assert.match(workflow, /github\.event\.inputs\.release_type != 'stable' \|\| github\.ref == 'refs\/heads\/main'/)
+  assert.match(workflow, /permissions:\s*\r?\n\s+contents: write\s*\r?\n\s+# \u63a8\u9001\u5206\u652f/m)
+  assert.match(workflow, /target_commitish:\$sha/)
+})
+
+test('the default mobile profile avoids a second root-layout plugin', async () => {
   const profile = JSON.parse(
     await readFile(resolve(appRoot, 'scripts/mobile-profile.example.json'), 'utf8'),
   )
@@ -108,4 +170,8 @@ test('bundle verification keeps the official profile baseline without a mobile m
   assert.match(verifier, /runtime contains disabled optional bundle/)
   assert.match(verifier, /manifest mobile profile enables a disabled Android bundle/)
   assert.match(verifier, /runtime contains build-only package-manager metadata/)
+  assert.match(verifier, /MOBILE_FRONTEND_MARKER/)
+  assert.match(verifier, /expected exactly one mobile frontend index/)
+  assert.match(verifier, /expected exactly one plugin workbench loader/)
+  assert.match(verifier, /duplicate desktop frontend entry/)
 })

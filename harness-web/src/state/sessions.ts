@@ -68,7 +68,7 @@ export function useSessions(): SessionsController {
     const unsubscribe = eventBus.subscribe(({ stream, frame }) => {
       const status = frame as { type?: unknown; message?: unknown; error?: unknown }
       if (status.type === 'stream/error') {
-        setError(streamErrorNotice(status.error))
+        setError(current => current ?? streamErrorNotice(status.error))
         return
       }
       if (stream !== 'host') return

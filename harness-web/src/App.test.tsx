@@ -202,4 +202,17 @@ describe('conversation navigation drawer', () => {
     const drawer = await screen.findByRole('dialog', { name: '会话与功能' })
     expect(within(drawer).getByText('本轮运行失败：后台会话模型调用超时')).toBeVisible()
   })
+
+  it('首次载入失败且没有会话时仍提供设置入口', async () => {
+    mocks.useSessions.mockReturnValue(controller({
+      items: [],
+      archived: [],
+      error: '加载会话与工作区失败：Harness 后端返回 HTTP 503',
+    }))
+    render(<App />)
+
+    const drawer = await screen.findByRole('dialog', { name: '会话与功能' })
+    expect(within(drawer).getByText('加载会话与工作区失败：Harness 后端返回 HTTP 503')).toBeVisible()
+    expect(within(drawer).getByRole('button', { name: '设置' })).toBeVisible()
+  })
 })

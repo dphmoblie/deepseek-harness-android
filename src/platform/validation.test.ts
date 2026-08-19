@@ -163,6 +163,7 @@ describe('native bridge output validation', () => {
       phase: 'running',
       architecture: 'arm64-v8a',
       installedVersion: '2026.08.1',
+      updateAvailable: false,
       downloadedBytes: 100,
       totalBytes: 100,
       runnerAvailable: true,
@@ -171,11 +172,19 @@ describe('native bridge output validation', () => {
     expect(() => validateRuntimeState({
       phase: 'running',
       architecture: 'arm64-v8a',
+      updateAvailable: false,
       downloadedBytes: 100,
       totalBytes: 100,
       runnerAvailable: true,
       harnessUrl: 'https://example.invalid/',
     })).toThrow('本机 HTTP')
+    expect(() => validateRuntimeState({
+      phase: 'ready',
+      architecture: 'arm64-v8a',
+      downloadedBytes: 100,
+      totalBytes: 100,
+      runnerAvailable: true,
+    })).toThrow('更新状态')
   })
 
   it('rejects malformed state, Shizuku, session and terminal event values', () => {

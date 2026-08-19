@@ -3,7 +3,7 @@
 
 原理：dsh 的 distIndex 由 require.resolve('@deepseek-ai/dsh-web-frontend/dist/index.html')
 解析到 .pnpm 下的真实目录，流式重写 tar 时跳过旧 dist 条目、追加新 dist 树即可，
-无需改动 dsh 代码。全程不解压到磁盘；替换期间使用 .bak 事务备份，
+无需改动 dsh 后端代码。全程不解压到磁盘；替换期间使用 .bak 事务备份，
 校验成功后立即删除，避免 Android AAPT 把备份也打进 APK。
 """
 
@@ -33,6 +33,7 @@ sha256_file = _ber.sha256_file
 
 DIST_MARKER = "/dsh-web-frontend/dist"
 DIST_INDEX_SUFFIX = f"{DIST_MARKER}/index.html"
+MOBILE_FRONTEND_MARKER = b'name="dsh-mobile-frontend" content="harness-web-v1"'
 
 
 def is_frontend_dist_path(name: str) -> bool:
@@ -261,6 +262,8 @@ def main() -> None:
         raise BuildError("manifest 不存在")
     if not (dist_root / "index.html").is_file():
         raise BuildError("dist 目录缺少 index.html（先运行 pnpm build）")
+    if MOBILE_FRONTEND_MARKER not in (dist_root / "index.html").read_bytes():
+        raise BuildError("dist/index.html 缺少移动前端构建标记")
     replacements = parse_replacements(ARGS.replace_file)
 
     manifest = json.loads(manifest_path.read_bytes())

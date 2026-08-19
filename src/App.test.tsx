@@ -35,6 +35,7 @@ const readyState: RuntimeState = {
   phase: 'ready',
   architecture: 'arm64-v8a',
   installedVersion: '2026.08.17',
+  updateAvailable: false,
   downloadedBytes: 640 * 1024 * 1024,
   totalBytes: 640 * 1024 * 1024,
   runnerAvailable: true,
@@ -49,6 +50,7 @@ const runningState: RuntimeState = {
 const notInstalledState: RuntimeState = {
   phase: 'not-installed',
   architecture: 'arm64-v8a',
+  updateAvailable: false,
   downloadedBytes: 0,
   totalBytes: readyState.totalBytes,
   runnerAvailable: true,
@@ -86,6 +88,25 @@ beforeEach(() => {
 })
 
 describe('App conversation gate', () => {
+  it('blocks the old Harness until the bundled runtime update is explicitly confirmed', async () => {
+    bridge.getState
+      .mockResolvedValueOnce({ ...readyState, updateAvailable: true })
+      .mockResolvedValueOnce({ ...readyState })
+
+    render(<App />)
+
+    const updateButton = await screen.findByRole('button', { name: '更新运行环境' })
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+    expect(bridge.openHarness).not.toHaveBeenCalled()
+
+    fireEvent.click(updateButton)
+    expect(await screen.findByRole('dialog', { name: '更新 Ubuntu 运行环境' })).toHaveTextContent('本地修改和未导出的文件将被清除')
+    fireEvent.click(screen.getByRole('button', { name: '确认更新' }))
+
+    await waitFor(() => expect(bridge.install).toHaveBeenCalledWith({ manifestUrl: '', manifestSha256: '' }))
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  })
+
   it('starts a ready runtime and opens Harness automatically in order', async () => {
     render(<App />)
 
