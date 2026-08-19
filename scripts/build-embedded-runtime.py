@@ -635,6 +635,76 @@ def patch_dsh_app_boot(dsh_root: Path) -> None:
         )
 
 
+def patch_dsh_app_boot_bundle_tolerance(dsh_root: Path) -> None:
+    """bundle 层容错：单个 profile bundle 损坏/冲突时跳过，避免整个 web 无法启动。
+
+    插件冲突（如 dsh-web-ui-all 与 dshmarket 的 patch 层互相冲突、bundle 包损坏、
+    patch 文件读取/解析失败）目前会让 loadProfile 在组装 layers 时直接 throw，
+    dsh web 整体无法启动。这里把 layers 组装改为 flatMap + try/catch：
+    单个 bundle 失败时打印警告并跳过，其余 bundle 与用户 patch 层照常加载。
+
+    补丁基于 dsh-app-boot 0.1.0-rc.6 的精确源码文本；任何一处不匹配都会
+    让构建失败（fail loud），避免静默打偏。
+    """
+    candidates: list[Path] = []
+    candidates.extend(
+        dsh_root.glob("node_modules/.pnpm/@deepseek-ai+dsh-app-boot@*/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js")
+    )
+    top_level = dsh_root / "node_modules" / "@deepseek-ai" / "dsh-app-boot" / "lib" / "index.js"
+    if top_level.is_file():
+        candidates.append(top_level)
+
+    old = (
+        "\tconst layers = (normalizeShippedProfile(name, dir, readProfileManifest(binName, dir))"
+        ".dsh?.profile?.bundles ?? []).map((packageName) => {\n"
+        "\t\tconst packageDir = resolveBundleDir(binName, packageName, installAnchor, dir);\n"
+        "\t\tconst declared = JSON.parse(readFileSync(join(packageDir, \"package.json\"), \"utf8\")).dsh?.bundle?.patch;\n"
+        "\t\tif (declared === void 0) throw new Error(`${binName}: profile bundle ${JSON.stringify(packageName)} declares no dsh.bundle in its package.json`);\n"
+        "\t\tconst patchPath = join(packageDir, declared);\n"
+        "\t\treturn {\n"
+        "\t\t\tpackageName,\n"
+        "\t\t\tpackageDir,\n"
+        "\t\t\tpatchPath,\n"
+        "\t\t\tpatches: loadOverlayPatches(binName, patchPath)\n"
+        "\t\t};\n"
+        "\t});"
+    )
+    new = (
+        "\tconst layers = (normalizeShippedProfile(name, dir, readProfileManifest(binName, dir))"
+        ".dsh?.profile?.bundles ?? []).flatMap((packageName) => {\n"
+        "\t\ttry {\n"
+        "\t\t\tconst packageDir = resolveBundleDir(binName, packageName, installAnchor, dir);\n"
+        "\t\t\tconst declared = JSON.parse(readFileSync(join(packageDir, \"package.json\"), \"utf8\")).dsh?.bundle?.patch;\n"
+        "\t\t\tif (declared === void 0) throw new Error(`${binName}: profile bundle ${JSON.stringify(packageName)} declares no dsh.bundle in its package.json`);\n"
+        "\t\t\tconst patchPath = join(packageDir, declared);\n"
+        "\t\t\treturn [{\n"
+        "\t\t\t\tpackageName,\n"
+        "\t\t\t\tpackageDir,\n"
+        "\t\t\t\tpatchPath,\n"
+        "\t\t\t\tpatches: loadOverlayPatches(binName, patchPath)\n"
+        "\t\t\t}];\n"
+        "\t\t} catch (error) {\n"
+        "\t\t\t// dsh-mobile: 单个 profile bundle 损坏/冲突时跳过并继续，避免整个 web 无法启动。\n"
+        "\t\t\tprocess.stderr.write(`${binName}: skipping broken profile bundle ${JSON.stringify(packageName)}: ${String(error?.message ?? error)}\\n`);\n"
+        "\t\t\treturn [];\n"
+        "\t\t}\n"
+        "\t});"
+    )
+
+    patched_any = False
+    for path in candidates:
+        text = path.read_text(encoding="utf-8")
+        if old in text:
+            text = text.replace(old, new)
+            path.write_text(text, encoding="utf-8")
+            patched_any = True
+    if not patched_any:
+        raise BuildError(
+            "dsh-app-boot bundle-tolerance patch did not match any installed copy; "
+            "aborting to avoid shipping an unpatched runtime"
+        )
+
+
 def patch_session_persistence(dsh_root: Path) -> None:
     """荣耀等 ROM 禁 link()（EACCES）时会话持久化原子写失败补丁。
 
@@ -836,6 +906,7 @@ def main() -> None:
             copy_tar_archive(writer, args.node, args.node_root, lambda name: f"opt/node/{name}")
             inject_bundles_into_dsh_manifest(args.dsh_root)
             patch_dsh_app_boot(args.dsh_root)
+            patch_dsh_app_boot_bundle_tolerance(args.dsh_root)
             patch_session_persistence(args.dsh_root)
             patch_attachment_link(args.dsh_root)
             add_windows_tree(writer, args.dsh_root, "opt/dsh")
