@@ -284,24 +284,40 @@ jobs:
             git commit -m "ci: install log run #$GITHUB_RUN_NUMBER" || true
             git push origin ci-logs || true
           }
-          {
+          set +e
+          (
             set -e
             pnpm install --no-frozen-lockfile
             # 兜底：显式强制编译 node-pty，不依赖 allowBuilds 是否被解析
             pnpm rebuild node-pty || true
-            PTP_DIR="$(find node_modules/.pnpm -maxdepth 2 -type d -name 'node-pty@*' | head -1)"
-            PTP="$PTP_DIR/node_modules/node-pty"
+            mapfile -t PTP_DIRS < <(
+              find node_modules/.pnpm -mindepth 1 -maxdepth 1 -type d -name 'node-pty@*' -print | LC_ALL=C sort
+            )
+            if [ "${#PTP_DIRS[@]}" -ne 1 ]; then
+              echo "expected exactly one node-pty package, found ${#PTP_DIRS[@]}" >&2
+              exit 1
+            fi
+            PTP="${PTP_DIRS[0]}/node_modules/node-pty"
             echo "=== pty 包路径探测 ==="
-            find node_modules/.pnpm -maxdepth 2 -type d -name "node-pty*" | head -20
+            printf '%s\n' "${PTP_DIRS[@]}"
             echo "=== build 目录内容 ==="
-            find "$PTP/build" -maxdepth 2 -type f 2>/dev/null | head -30
+            if [ -d "$PTP/build" ]; then
+              find "$PTP/build" -maxdepth 2 -type f -print | sed -n '1,30p'
+            fi
             mkdir -p "$PTP/prebuilds/linux-arm64"
-            cp "$PTP/build/Release/pty.node" "$PTP/prebuilds/linux-arm64/pty.node"
-            cp "$PTP/build/Release/spawn-helper" "$PTP/prebuilds/linux-arm64/spawn-helper" 2>/dev/null || true
+            if [ ! -s "$PTP/prebuilds/linux-arm64/pty.node" ]; then
+              test -s "$PTP/build/Release/pty.node"
+              cp "$PTP/build/Release/pty.node" "$PTP/prebuilds/linux-arm64/pty.node"
+            fi
+            if [ -s "$PTP/build/Release/spawn-helper" ] && [ ! -e "$PTP/prebuilds/linux-arm64/spawn-helper" ]; then
+              cp "$PTP/build/Release/spawn-helper" "$PTP/prebuilds/linux-arm64/spawn-helper"
+            fi
             chmod +x "$PTP/prebuilds/linux-arm64/spawn-helper" 2>/dev/null || true
+            test -s "$PTP/prebuilds/linux-arm64/pty.node"
             ls -la "$PTP/prebuilds/linux-arm64/"
-          } 2>&1 | tee /tmp/step.log || true
-          STATUS="${PIPESTATUS[0]}"
+          ) 2>&1 | tee /tmp/step.log
+          STATUS="$?"
+          set -e
           if [ "$STATUS" != "0" ]; then push_log; exit 1; fi
 
       - name: Download pinned rootfs inputs
@@ -332,7 +348,9 @@ jobs:
       - name: Build bundle + manifest (mobile profile)
         run: |
           set -o pipefail
-          {
+          set +e
+          (
+            set -e
             if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.release_type }}" = "stable" ]; then
               RUNTIME_VERSION="${APP_VERSION}"
               RELEASE_TAG="v${APP_VERSION}"
@@ -356,8 +374,9 @@ jobs:
             python3 scripts/verify-bundle.py --bundle /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
             mkdir -p runtime-artifacts
             cp /tmp/rootfs.bundle /tmp/runtime-manifest.json runtime-artifacts/
-          } 2>&1 | tee /tmp/bundle.log || true
-          STATUS="${PIPESTATUS[0]}"
+          ) 2>&1 | tee /tmp/bundle.log
+          STATUS="$?"
+          set -e
           if [ "$STATUS" != "0" ]; then
             echo "=== bundle step failed, see /tmp/bundle.log (folded into verify log) ==="
             cat /tmp/bundle.log
@@ -372,7 +391,7 @@ jobs:
             cat /tmp/step.log 2>/dev/null || echo "(无 step.log)"
             echo "=== dsh-root 探测 ==="
             ls -la /tmp/dsh-root/node_modules/@deepseek-ai/dsh/lib/bin.js 2>/dev/null || echo "(dsh bin.js 缺失)"
-            ls -la /tmp/dsh-root/node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/prebuilds/linux-arm64/ 2>/dev/null || echo "(pty 目录缺失)"
+            find /tmp/dsh-root/node_modules/.pnpm -path '*/node-pty/prebuilds/linux-arm64/pty.node' -ls 2>/dev/null || echo "(pty 目录缺失)"
             echo "=== bundle step output ==="
             cat /tmp/bundle.log 2>/dev/null || echo "(无 bundle.log)"
             echo "=== runtime-artifacts ==="
@@ -432,6 +451,7 @@ jobs:
           # dist branch and must not contain the expanded Authorization header.
           set +x
           set -o pipefail
+          set +e
           cd "$GITHUB_WORKSPACE"
           push_log() {
             git config user.name "github-actions"
@@ -444,7 +464,8 @@ jobs:
             git commit -m "ci: release log run #$GITHUB_RUN_NUMBER" || true
             git push origin dist || true
           }
-          {
+          (
+            set -e
             RELEASE_TYPE="${{ github.event.inputs.release_type }}"
             if [ "$RELEASE_TYPE" = "stable" ]; then
               TAG="v${APP_VERSION}"
@@ -498,5 +519,7 @@ jobs:
                 "${UPLOAD_BASE}?name=${name}" >/dev/null
             done
             echo "RELEASE_URL=https://github.com/${{ github.repository }}/releases/tag/${TAG}"
-          } 2>&1 | tee /tmp/release.log || true
-          if [ "${PIPESTATUS[0]}" != "0" ]; then push_log; exit 1; fi
+          ) 2>&1 | tee /tmp/release.log
+          STATUS="$?"
+          set -e
+          if [ "$STATUS" != "0" ]; then push_log; exit 1; fi

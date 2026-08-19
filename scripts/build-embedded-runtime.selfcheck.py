@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,22 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
 REPO = SCRIPTS.parent
+
+
+def assert_node_syntax(path: Path) -> None:
+    node = shutil.which("node")
+    if node is None:
+        raise RuntimeError("node is required for compiled client bundle self-checks")
+    result = subprocess.run(
+        [node, "--check", str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            f"patched client bundle failed node --check: {path}\n{result.stderr}"
+        )
 
 
 def load_module() -> object:
@@ -39,6 +56,10 @@ def main() -> int:
         ("missing bundles", '{"dsh": {"profile": {}}}'),
         ("bad bundle id", '{"dsh": {"profile": {"bundles": ["bad id!"]}}}'),
         ("traversal bundle id", '{"dsh": {"profile": {"bundles": ["../outside"]}}}'),
+        (
+            "disabled Android layout bundle",
+            '{"dsh": {"profile": {"bundles": ["dsh-mobile-compat"]}}}',
+        ),
         ("bad idle", '{"dsh": {"profile": {"bundles": ["a"]}}, "mobile": {"idleStopMinutes": 0}}'),
         ("bad disabled", '{"dsh": {"profile": {"bundles": ["a"]}}, "mobile": {"disabledOnMobile": [1]}}'),
         ("bad embed", '{"dsh": {"profile": {"bundles": ["a"]}}, "mobile": {"embedRootfs": "no"}}'),
@@ -54,6 +75,105 @@ def main() -> int:
     temp.unlink(missing_ok=True)
 
     assert module.normalized_path("root/.dsh/profiles/web/package.json") == "root/.dsh/profiles/web/package.json"
+
+    with tempfile.TemporaryDirectory(prefix="dsh-node-pty-") as directory:
+        root = Path(directory)
+        module_path = (
+            root
+            / "node_modules"
+            / ".pnpm"
+            / "node-pty@1.2.0-beta.15"
+            / "node_modules"
+            / "node-pty"
+            / "prebuilds"
+            / "linux-arm64"
+            / "pty.node"
+        )
+        module_path.parent.mkdir(parents=True)
+        module_path.write_bytes(b"synthetic-arm64-module")
+        assert module.find_linux_arm64_node_pty(root) == module_path
+
+        second = (
+            root
+            / "node_modules"
+            / ".pnpm"
+            / "node-pty@1.1.0"
+            / "node_modules"
+            / "node-pty"
+            / "prebuilds"
+            / "linux-arm64"
+            / "pty.node"
+        )
+        second.parent.mkdir(parents=True)
+        second.write_bytes(b"second-synthetic-arm64-module")
+        try:
+            module.find_linux_arm64_node_pty(root)
+        except BuildError:
+            pass
+        else:
+            raise AssertionError("multiple node-pty packages should fail the build")
+
+        shutil.rmtree(second.parents[4])
+        module_path.write_bytes(b"")
+        try:
+            module.find_linux_arm64_node_pty(root)
+        except BuildError:
+            pass
+        else:
+            raise AssertionError("empty node-pty module should fail the build")
+
+    disabled = frozenset({"dsh-mobile-compat"})
+    assert module.skip_runtime_path(module.PurePosixPath("pnpm-lock.yaml"), disabled)
+    assert module.skip_runtime_path(module.PurePosixPath("node_modules/.package-map.json"), disabled)
+    assert module.skip_runtime_path(module.PurePosixPath("dsh-mobile-compat/lib/client.js"), disabled)
+    assert module.skip_runtime_path(module.PurePosixPath("node_modules/dsh-mobile-compat"), disabled)
+    assert module.skip_runtime_path(
+        module.PurePosixPath(
+            "node_modules/.pnpm/dsh-mobile-compat@file+fixture/node_modules/dsh-mobile-compat/package.json"
+        ),
+        disabled,
+    )
+    assert not module.skip_runtime_path(
+        module.PurePosixPath("node_modules/@deepseek-ai/dsh-web-app"),
+        disabled,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="dsh-profile-links-") as directory:
+        root = Path(directory)
+        (root / "node_modules" / "dsh-mobile-compat").mkdir(parents=True)
+        kept = root / "node_modules" / "kept-profile"
+        kept.mkdir(parents=True)
+        (root / "package.json").write_text(
+            json.dumps({"dependencies": {"dsh-mobile-compat": "*", "kept-profile": "*"}}),
+            encoding="utf-8",
+        )
+        (root / "node_modules" / "dsh-mobile-compat" / "package.json").write_text(
+            json.dumps({"name": "dsh-mobile-compat"}),
+            encoding="utf-8",
+        )
+        (kept / "package.json").write_text(
+            json.dumps({"name": "kept-profile"}),
+            encoding="utf-8",
+        )
+
+        class LinkRecorder:
+            def __init__(self) -> None:
+                self.links: list[tuple[str, str]] = []
+
+            def add_symlink(self, name: str, target: str) -> None:
+                self.links.append((name, target))
+
+        recorder = LinkRecorder()
+        count = module.add_profiles_module_fallback(
+            recorder,
+            root,
+            "opt/dsh",
+            disabled,
+        )
+        assert count == 1
+        assert [name for name, _ in recorder.links] == [
+            "root/.dsh/profiles/node_modules/kept-profile"
+        ]
 
     with tempfile.TemporaryDirectory(prefix="dsh-app-boot-") as directory:
         fixture = (
@@ -289,7 +409,233 @@ def main() -> int:
         else:
             raise AssertionError("partial mobile settings marker should fail the build")
 
-    print("selfcheck OK: mobile-profile validation + path normalization")
+    with tempfile.TemporaryDirectory(prefix="dsh-client-tool-details-action-") as directory:
+        fixture = (
+            Path(directory)
+            / "node_modules"
+            / ".pnpm"
+            / "@deepseek-ai+dsh-client-ui-tool@fixture"
+            / "node_modules"
+            / "@deepseek-ai"
+            / "dsh-client-ui-tool"
+            / "lib"
+            / "client.js"
+        )
+        fixture.parent.mkdir(parents=True)
+        fixture_source = (
+            "window.__dshFixture = () => {\n"
+            '\t\tconst css$2 = ".fixture:before{content:\\"\\"}.ztWv_q_callRow{border-radius:6px}";\n'
+            '\t\tconst tagId$2 = "@deepseek-ai/dsh-client-ui-tool/ToolCallTree.module.css";\n'
+            "\t\tvar ToolCallTree_module_css_default = {\n"
+            '\t\t\t"callRow": "ztWv_q_callRow",\n'
+            '\t\t\t"subCalls": "ztWv_q_subCalls"\n'
+            "\t\t};\n"
+            "\t\tconst fixtureInspectIcon = "
+            "_deepseek_ai_dsh_client_ui_primitives.IconInspectOutline12;\n"
+            "\t\tconst fixtureSampleInspectIcon = "
+            "_deepseek_ai_dsh_client_ui_primitives.IconInspectOutline12;\n"
+            "\t\tconst ToolCall = (0, react.memo)(function ToolCall() {\n"
+            "\t\t\treturn (0, react_jsx_runtime.jsxs)(\"div\", {\n"
+            "\t\t\t\tclassName: ToolCallTree_module_css_default.callRow,\n"
+            '\t\t\t\t"data-chat-call-id": callId,\n'
+            "\t\t\t\tchildren: [renderSlot(\"tool.call.toolview\", owner, {\n"
+            "\t\t\t\t\tentryKey: toolName,\n"
+            "\t\t\t\t\tfallback: (0, react_jsx_runtime.jsx)(GenericToolCard, {\n"
+            "\t\t\t\t\t\t...owner,\n"
+            "\t\t\t\t\t\tt\n"
+            "\t\t\t\t\t})\n"
+            "\t\t\t\t}), children]\n"
+            "\t\t\t});\n"
+            "\t\t});\n"
+            "};\n"
+        )
+        fixture.write_text(fixture_source, encoding="utf-8")
+        module.patch_client_tool_details_action(Path(directory))
+        patched = fixture.read_text(encoding="utf-8")
+        assert patched.count(module.CLIENT_TOOL_DETAILS_ACTION_MARKER) == 1
+        assert patched.count('"data-dsh-open-tool-details": ""') == 1
+        assert patched.count('"detailsButton": "ztWv_q_detailsButton"') == 1
+        assert patched.count("_deepseek_ai_dsh_client_ui_primitives.IconInspectOutline12") == 3
+        assert "content:\\\"\\\"" in patched
+        assert_node_syntax(fixture)
+
+        module.patch_client_tool_details_action(Path(directory))
+        assert fixture.read_text(encoding="utf-8") == patched
+
+        fixture.write_text(
+            patched.replace('\t\t\t\t\t"data-dsh-open-tool-details": "",\n', "", 1),
+            encoding="utf-8",
+        )
+        try:
+            module.patch_client_tool_details_action(Path(directory))
+        except BuildError:
+            pass
+        else:
+            raise AssertionError("modified Tool details action should fail the build")
+        fixture.write_text(patched, encoding="utf-8")
+
+        partial = Path(str(fixture).replace("@fixture", "@fixture-partial"))
+        partial.parent.mkdir(parents=True)
+        partial.write_text(
+            f"/* {module.CLIENT_TOOL_DETAILS_ACTION_MARKER} */\n",
+            encoding="utf-8",
+        )
+        try:
+            module.patch_client_tool_details_action(Path(directory))
+        except BuildError:
+            pass
+        else:
+            raise AssertionError("partial Tool details action marker should fail the build")
+
+    with tempfile.TemporaryDirectory(prefix="dsh-client-tool-details-entry-") as directory:
+        fixture = (
+            Path(directory)
+            / "node_modules"
+            / ".pnpm"
+            / "@deepseek-ai+dsh-client-ui-conversation@fixture"
+            / "node_modules"
+            / "@deepseek-ai"
+            / "dsh-client-ui-conversation"
+            / "lib"
+            / "client.js"
+        )
+        fixture.parent.mkdir(parents=True)
+        fixture_source = (
+            "function ChatView({ useSession, useSessions, useStore, renderSlot, "
+            "sessionId, openFile, loadOlder, loadImage, inspectCall, chatScroll, "
+            "forkAt, fileMentions, t }) {\n"
+            "\t\t\tconst listRef = (0, react.useRef)(null);\n"
+            "\t\t\treturn (0, react_jsx_runtime.jsx)(\"div\", {\n"
+            "\t\t\t\tchildren: (0, react_jsx_runtime.jsxs)(\"div\", {\n"
+            "\t\t\t\t\tref: listRef,\n"
+            "\t\t\t\t\tclassName: ChatView_module_css_default.scroll,\n"
+            "\t\t\t\t\tchildren: []\n"
+            "\t\t\t\t})\n"
+            "\t\t\t});\n"
+            "}\n"
+            "const injected = {\n"
+            "\t\t\t\t\t\topenDetails: (target) => {\n"
+            "\t\t\t\t\t\t\tactions.select(target);\n"
+            "\t\t\t\t\t\t\tlayout.openDetails();\n"
+            "\t\t\t\t\t\t},\n"
+            "};\n"
+        )
+        fixture.write_text(fixture_source, encoding="utf-8")
+        module.patch_client_tool_details_entry(Path(directory))
+        patched = fixture.read_text(encoding="utf-8")
+        assert patched.count(module.CLIENT_TOOL_DETAILS_ENTRY_MARKER) == 1
+        assert "sessionId, openFile, openDetails, loadOlder" in patched
+        assert 'target.closest("[data-dsh-open-tool-details]")' in patched
+        assert "callId.length > 256" in patched
+        assert patched.count("onClick: openToolDetails") == 1
+        assert "onKeyDown: openToolDetails" not in patched
+        assert "openDetails({" in patched
+        assert_node_syntax(fixture)
+
+        module.patch_client_tool_details_entry(Path(directory))
+        assert fixture.read_text(encoding="utf-8") == patched
+
+        fixture.write_text(
+            patched.replace("\t\t\t\t\tonClick: openToolDetails,\n", "", 1),
+            encoding="utf-8",
+        )
+        try:
+            module.patch_client_tool_details_entry(Path(directory))
+        except BuildError:
+            pass
+        else:
+            raise AssertionError("modified Tool details entry patch should fail the build")
+        fixture.write_text(patched, encoding="utf-8")
+
+        partial = Path(str(fixture).replace("@fixture", "@fixture-partial"))
+        partial.parent.mkdir(parents=True)
+        partial.write_text(
+            f"/* {module.CLIENT_TOOL_DETAILS_ENTRY_MARKER} */\n",
+            encoding="utf-8",
+        )
+        try:
+            module.patch_client_tool_details_entry(Path(directory))
+        except BuildError:
+            pass
+        else:
+            raise AssertionError("partial Tool details entry marker should fail the build")
+
+    with tempfile.TemporaryDirectory(prefix="dsh-mobile-tool-details-layout-") as directory:
+        fixture = (
+            Path(directory)
+            / "node_modules"
+            / ".pnpm"
+            / "@deepseek-ai+dsh-client-ui-layout@fixture"
+            / "node_modules"
+            / "@deepseek-ai"
+            / "dsh-client-ui-layout"
+            / "lib"
+            / "client.js"
+        )
+        fixture.parent.mkdir(parents=True)
+        fixture_source = (
+            'const css = ".fixture:before{content:\\"\\"}.pI_x6G_frame{display:grid}";\n'
+            '\t\tconst tagId = "@deepseek-ai/dsh-client-ui-layout/AppFrame.module.css";\n'
+            "function DetailsColumn(props) {\n"
+            "\t\t\treturn (0, react_jsx_runtime.jsx)(\"div\", {\n"
+            "\t\t\t\tclassName: AppFrame_module_css_default.detailsCol,\n"
+            "\t\t\t\tchildren: props.children\n"
+            "\t\t\t});\n"
+            "}\n"
+            "function AppFrame() {\n"
+            "\t\t\tconst cols = computeColumns(viewport, sidebarCollapsed ? 0 : "
+            "panels.sidebar === 0 ? 280 : panels.sidebar, detailsSession === void 0 "
+            "? 0 : panels.details);\n"
+            "\t\t\treturn (0, react_jsx_runtime.jsxs)(\"div\", {\n"
+            "\t\t\t\tstyle: { gridTemplateColumns: "
+            "`${cols.sidebar}px minmax(0, 1fr) ${cols.details}px` },\n"
+            "\t\t\t\t\"data-sidebar-collapsed\": sidebarCollapsed || void 0,\n"
+            "\t\t\t\t\"data-details-collapsed\": cols.details === 0 || void 0,\n"
+            "\t\t\t\tchildren: []\n"
+            "\t\t\t});\n"
+            "}\n"
+        )
+        fixture.write_text(fixture_source, encoding="utf-8")
+        module.patch_client_mobile_tool_details_layout(Path(directory))
+        patched = fixture.read_text(encoding="utf-8")
+        assert patched.count(module.MOBILE_TOOL_DETAILS_LAYOUT_MARKER) == 1
+        assert patched.count('"data-dsh-layout-frame": ""') == 1
+        assert patched.count('"data-dsh-details-column": ""') == 1
+        assert "const detailsOverlay = detailsSession !== void 0" in patched
+        assert "[data-dsh-layout-frame][data-details-overlay]" in patched
+        assert "@media (max-width:600px)" in patched
+        assert "content:\\\"\\\"" in patched
+        assert_node_syntax(fixture)
+
+        module.patch_client_mobile_tool_details_layout(Path(directory))
+        assert fixture.read_text(encoding="utf-8") == patched
+
+        fixture.write_text(
+            patched.replace("box-shadow:-8px 0 28px rgba(0,0,0,.16);", "", 1),
+            encoding="utf-8",
+        )
+        try:
+            module.patch_client_mobile_tool_details_layout(Path(directory))
+        except BuildError:
+            pass
+        else:
+            raise AssertionError("modified mobile Tool details CSS should fail the build")
+        fixture.write_text(patched, encoding="utf-8")
+
+        partial = Path(str(fixture).replace("@fixture", "@fixture-partial"))
+        partial.parent.mkdir(parents=True)
+        partial.write_text(
+            f"/* {module.MOBILE_TOOL_DETAILS_LAYOUT_MARKER} */\n",
+            encoding="utf-8",
+        )
+        try:
+            module.patch_client_mobile_tool_details_layout(Path(directory))
+        except BuildError:
+            pass
+        else:
+            raise AssertionError("partial mobile Tool details marker should fail the build")
+
+    print("selfcheck OK: mobile profile + runtime patches + path normalization")
     return 0
 
 
