@@ -3797,3 +3797,12 @@ input:focus-visible {
     padding-left: 10px;
   }
 }
+
+/* 插件管理徽章 */
+.plugin-list { display: flex; flex-direction: column; gap: 4px; margin: 8px 0; }
+.plugin-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-badge { flex: none; font-size: 12px; padding: 2px 8px; border-radius: 999px; }
+.plugin-badge-ok { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+.plugin-badge-bad { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.plugin-badge-warn { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
+.plugin-badge-dim { color: var(--text-faint); background: color-mix(in srgb, var(--text-faint) 12%, transparent); }

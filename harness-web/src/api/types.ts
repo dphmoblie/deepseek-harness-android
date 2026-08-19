@@ -584,6 +584,16 @@ export type SettingsReplaceValue = SettingsNamespaceView
 export type SettingsMutateRequest = { ns: string; ops: SettingsPathOp[]; expectedRevision?: number }
 export type SettingsMutateValue = SettingsNamespaceView
 
+export type PluginInventoryEntry = {
+  entryId: string
+  moduleName: string
+  enabled: boolean
+  fiberPhase: 'failed' | 'pending' | 'active' | 'loading' | 'unloading' | null
+}
+export type PluginInventoryListRequest = Record<string, never>
+export type PluginInventoryListValue = { entries: PluginInventoryEntry[] }
+
+
 export type CredentialsDescribeRequest = { refs: string[] }
 export type CredentialsDescribeValue = { credentials: Record<string, CredentialView> }
 
@@ -656,6 +666,7 @@ export type DshRpcMethods = {
   'settings.update': { payload: SettingsUpdateRequest; value: SettingsUpdateValue }
   'settings.replace': { payload: SettingsReplaceRequest; value: SettingsReplaceValue }
   'settings.mutate': { payload: SettingsMutateRequest; value: SettingsMutateValue }
+  'pluginInventory.list': { payload: PluginInventoryListRequest; value: PluginInventoryListValue }
   'credentials.describe': { payload: CredentialsDescribeRequest; value: CredentialsDescribeValue }
   'credentials.set': { payload: CredentialsSetRequest; value: CredentialsSetValue }
   'credentials.unset': { payload: CredentialsUnsetRequest; value: CredentialsUnsetValue }

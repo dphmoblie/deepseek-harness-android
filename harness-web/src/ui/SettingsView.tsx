@@ -25,6 +25,8 @@ import type {
   SettingsNamespaceView,
   WorkspaceView,
 } from '../api/types'
+import { PermissionSection } from './PermissionSection'
+import { PluginsSection } from './PluginsSection'
 
 const LAST_SESSION_KEY = 'dsh-mobile-last-session-v1'
 const MAX_PATH_CHARACTERS = 4096
@@ -396,6 +398,7 @@ export function SettingsView(props: { onBack: () => void; currentSessionId?: Ses
       </header>
       {error !== null && <p className="error-bar" role="alert" onClick={() => setError(null)}>{error}</p>}
       <div className="view-body">
+        <PermissionSection />
         <h2 className="section-title">工作区</h2>
         <label className="field-label" htmlFor="workspace-path">工作区绝对路径</label>
         <div className="secret-row">
@@ -705,6 +708,7 @@ export function SettingsView(props: { onBack: () => void; currentSessionId?: Ses
             </dl>
           </>
         )}
+        <PluginsSection />
       </div>
     </main>
   )
