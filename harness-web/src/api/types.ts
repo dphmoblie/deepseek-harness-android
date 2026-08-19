@@ -403,6 +403,18 @@ export type GoalRef = {
   revision: number
 }
 
+/** 主机插件运行时清单（只读；插件客户端 UI 由前端自行呈现）。 */
+export type PluginInventoryEntry = {
+  entryId: string
+  moduleName: string
+  enabled: boolean
+  fiberPhase: 'pending' | 'loading' | 'active' | 'failed' | 'unloading' | null
+}
+
+/** Typert direct Remote 调用使用 args 信封，即使方法没有参数也不能省略。 */
+export type PluginInventoryListRequest = { args: Record<string, never> }
+export type PluginInventoryListValue = { entries: PluginInventoryEntry[] }
+
 // ---------------------------------------------------------------------------
 // 方法签名总表：method → {payload, value}
 // ---------------------------------------------------------------------------
@@ -645,6 +657,7 @@ export type DshRpcMethods = {
   'agentPreset.copy': { payload: AgentPresetCopyRequest; value: AgentPresetCopyValue }
   'agentPreset.openDocument': { payload: AgentPresetOpenDocumentRequest; value: AgentPresetOpenDocumentValue }
   'agentPreset.remove': { payload: AgentPresetRemoveRequest; value: AgentPresetRemoveValue }
+  'pluginInventory/list': { payload: PluginInventoryListRequest; value: PluginInventoryListValue }
   'goal.create': { payload: GoalCreateRequest; value: GoalCreateValue }
   'goal.edit': { payload: GoalEditRequest; value: GoalEditValue }
   'goal.pause': { payload: GoalPauseRequest; value: GoalPauseValue }

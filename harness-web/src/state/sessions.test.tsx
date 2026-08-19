@@ -25,7 +25,7 @@ vi.mock('./events', () => ({
   },
 }))
 
-import { RpcFailure } from '../api/wire'
+import { RpcFailure, TransportError } from '../api/wire'
 import { useSessions } from './sessions'
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -177,6 +177,38 @@ describe('useSessions reload ownership', () => {
         },
       })
     })
+    expect(result.current.error).toBe('本轮运行失败：模型供应商配额不足')
+
+    act(() => result.current.dismissError())
+    act(() => {
+      mocks.listener?.({
+        stream: 'mux',
+        rpcId: 'stream-error-after-dismiss',
+        frame: {
+          type: 'stream/error',
+          error: { code: 'TRANSPORT_ERROR', message: '事件流异常关闭（代码 1006）', details: {} },
+        },
+      })
+    })
     expect(result.current.error).toBe('Harness 事件流异常：事件流异常关闭（代码 1006）')
+  })
+
+  it('事件流断开不覆盖更具体的初始 RPC 错误', async () => {
+    mocks.callUnary.mockRejectedValue(new TransportError('Harness 后端返回 HTTP 503', 503))
+    const { result } = renderHook(() => useSessions())
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.error).toBe('加载会话与工作区失败：Harness 后端返回 HTTP 503')
+
+    act(() => {
+      mocks.listener?.({
+        stream: 'mux',
+        rpcId: 'stream-error',
+        frame: {
+          type: 'stream/error',
+          error: { code: 'TRANSPORT_ERROR', message: '事件流连接意外中断', details: {} },
+        },
+      })
+    })
+    expect(result.current.error).toBe('加载会话与工作区失败：Harness 后端返回 HTTP 503')
   })
 })

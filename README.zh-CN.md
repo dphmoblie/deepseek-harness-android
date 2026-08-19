@@ -21,13 +21,15 @@ pnpm run build
 pnpm run android:sync
 ```
 
-官方 `0.1.7` CI 发布的是瘦 APK。工作流构建移动端 Harness 对话前端，将其注入 Ubuntu 24.04 ARM64、Node.js 24.19.0 与 `@deepseek-ai/dsh` 0.1.0-rc.6 运行时，并在同一个 `v0.1.7-mobile-<run_number>` Release 中发布 APK、`runtime-manifest.json` 与 `rootfs.bundle`。完成后的清单 URL 与 SHA-256 会被编译进对应 APK，因此全新安装无需手工填写运行时来源；生成的 rootfs、清单与事务 `.bak` 不会被打进官方 APK。
+官方 `0.1.8` CI 发布的是内嵌离线运行时的 ARM64 APK。工作流构建移动端 Harness 对话前端，将其注入 Ubuntu 24.04 ARM64、Node.js 24.19.0 与 `@deepseek-ai/dsh` 0.1.0-rc.6 运行时，再把校验后的 `rootfs.bundle` 和 `runtime-manifest.json` 内嵌到同一 APK。Release 也单独发布这两项运行时资产，便于核验以及用户明确配置远程来源；安装官方 APK 无需联网或手工填写运行时地址与摘要。
 
-应用会先校验清单的固定摘要，再校验其声明的 HTTPS rootfs URL、长度、架构、压缩方式与 SHA-256。下载使用应用私有的 `rootfs-<sha256>.part`，中断后可跨应用重启续传；续传响应必须是精确匹配的 HTTP 206/`Content-Range`，HTTP 200 或 416 会从零重新下载。断网、TLS、超时或截断会进入明确的错误状态并保留合法断点，不会提前显示正在解压或安装完成。`scripts/build-embedded-runtime.py` 仍可用于明确构造的内嵌开发包。禁止将 API 密钥、密码、数据库凭据、签名密码或 Token 放入 `.env`、Gradle 文件、源代码、清单、URL 或日志。
+内嵌安装会校验清单声明的长度、架构、压缩方式与 rootfs SHA-256 后再解压。用户明确配置远程来源时，应用还会校验清单摘要与 HTTPS 目标；下载使用应用私有的 `rootfs-<sha256>.part`，中断后可跨应用重启续传。续传响应必须精确匹配 HTTP 206/`Content-Range`，HTTP 200 或 416 会从零重新下载。断网、TLS、超时或截断会进入明确错误状态并保留合法断点，不会提前显示正在解压或安装完成。禁止将 API 密钥、密码、数据库凭据、签名密码或 Token 放入 `.env`、Gradle 文件、源代码、清单、URL 或日志。
+
+打包后的根路径只提供新版移动对话，包含会话、任务、文件、模型与推理强度、Agent preset、Harness 公开设置和插件生命周期管理。原桌面首页不再作为另一个入口打包；第三方 Cordis 插件自带页面可从设置中的按需兼容工作台打开，正常对话时不会加载这些资源。
 
 原生运行器文件单独生成或导入，永不提交。发布 APK 同时打包 `lib/arm64-v8a/libdsh_proot.so` 与 `lib/arm64-v8a/libdsh_proot_loader.so`，两者均必需。现有的 `prepare:runner` 流程仍可用于单独固定的运行器来源，但它不能替代对 APK 中随附的那两个确切二进制的来源与许可审查。
 
-运行时清单字段与安全流程记录在 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。当归档从 APK 读取时，内嵌清单保留的 `.invalid` 归档 URL 仅为元数据，绝不能对其进行访问。远程发布清单必须使用真实的 HTTPS URL 与精确的发布摘要。参见 [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)。
+运行时清单字段与安全流程记录在 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。发布清单使用同一 Release 的真实 HTTPS rootfs 地址与精确摘要；内嵌安装不会访问该地址。参见 [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)。
 
 ## 安全检查点
 

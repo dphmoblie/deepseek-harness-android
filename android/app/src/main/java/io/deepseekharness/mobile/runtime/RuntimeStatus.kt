@@ -4,6 +4,7 @@ data class RuntimeStateSnapshot(
     val phase: RuntimePhase,
     val architecture: String,
     val installedVersion: String?,
+    val updateAvailable: Boolean,
     val downloadedBytes: Long,
     val totalBytes: Long,
     val runnerAvailable: Boolean,
@@ -76,6 +77,10 @@ class RuntimeStatus(private val store: RuntimeStore) {
             phase = phase,
             architecture = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown",
             installedVersion = installed?.version,
+            updateAvailable = RuntimeUpdatePolicy.isAvailable(
+                installed?.rootfs?.sha256,
+                store.bundledManifestOrNull()?.rootfs?.sha256,
+            ),
             downloadedBytes = downloadedBytes,
             totalBytes = totalBytes,
             runnerAvailable = store.runnerAvailable(),

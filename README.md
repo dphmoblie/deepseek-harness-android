@@ -23,27 +23,25 @@ pnpm run build
 pnpm run android:sync
 ```
 
-The `0.1.7` CI release is a thin APK. The workflow builds the mobile Harness
-conversation frontend, injects it into an Ubuntu 24.04 ARM64 image containing
-Node.js 24.19.0 and `@deepseek-ai/dsh` 0.1.0-rc.6, and publishes three assets
-under one `v0.1.7-mobile-<run_number>` tag: the APK, `runtime-manifest.json`,
-and `rootfs.bundle`. The manifest contains that same Release's rootfs URL and
-exact archive metadata. CI hashes the finished manifest and compiles its URL
-and SHA-256 into the matching APK; generated runtime assets and transaction
-backups are removed from APK assets before Gradle runs. Installing an official
-Release therefore does not require entering a manifest URL or digest.
+The `0.1.8` CI release is a self-contained ARM64 APK. The workflow builds the
+mobile Harness conversation frontend, injects it into an Ubuntu 24.04 ARM64
+image containing Node.js 24.19.0 and `@deepseek-ai/dsh` 0.1.0-rc.6, then embeds
+the verified `rootfs.bundle` and `runtime-manifest.json` in the matching APK.
+The same runtime files are also published as separate Release assets for
+inspection and explicitly configured remote installation. Installing the
+official APK therefore works offline and does not require entering a manifest
+URL or digest.
 
-The manifest bytes must match the APK-pinned digest before parsing. The parsed
-manifest then pins the rootfs URL, byte length, architecture, compression, and
-SHA-256. Each HTTPS redirect is revalidated against public-destination policy,
-and the final content remains digest-bound. Remote archives use an app-private
-`rootfs-<sha256>.part` file, so an interrupted transfer can resume across app
-or process restarts. A resumed response must be HTTP 206 with the exact
-expected `Content-Range`; HTTP 200 or 416 causes a clean, verified restart from
-byte zero. Network, TLS, timeout, and incomplete-transfer failures enter an
-explicit error state while retaining a valid bounded partial file. The UI does
-not report extraction until acquisition and archive verification have
-completed.
+The bundled manifest pins the rootfs byte length, architecture, compression,
+and SHA-256. Embedded installation verifies those values before extraction.
+When a remote source is explicitly configured, its manifest digest and HTTPS
+destination are validated as well; archives use an app-private
+`rootfs-<sha256>.part` file so interrupted transfers can resume across app or
+process restarts. A resumed response must be HTTP 206 with the exact expected
+`Content-Range`; HTTP 200 or 416 causes a clean restart from byte zero. Network,
+TLS, timeout, and incomplete-transfer failures enter an explicit error state
+while retaining a valid bounded partial file. The UI does not report
+extraction until acquisition and archive verification have completed.
 
 `scripts/build-embedded-runtime.py` remains the deterministic image builder
 used by CI and also supports an explicitly constructed embedded development
@@ -51,6 +49,13 @@ build. Embedded and remote acquisition share the same size, digest,
 extraction, and atomic-promotion checks. Do not put API keys, passwords,
 database credentials, signing passwords, or tokens in `.env`, Gradle files,
 source code, manifests, URLs, or logs.
+
+The packaged `/` route is the mobile conversation UI, with sessions, tasks,
+files, model and reasoning controls, agent presets, public Harness settings,
+and plugin lifecycle management. The former desktop landing page is not
+packaged as another entry point. Third-party Cordis plugin pages can be opened
+from Settings through an on-demand compatibility workbench whose assets are
+not loaded during normal conversation use.
 
 The native runner files are generated or imported separately and never
 committed. A release APK packages both

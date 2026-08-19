@@ -57,6 +57,7 @@ def legalAssetSources = [
     'legal/licenses/react-dom-LICENSE.txt'       : new File(appSourceRoot, 'node_modules/react-dom/LICENSE'),
     'legal/licenses/react-markdown-LICENSE.txt'  : new File(appSourceRoot, 'harness-web/node_modules/react-markdown/license'),
     'legal/licenses/remark-gfm-LICENSE.txt'      : new File(appSourceRoot, 'harness-web/node_modules/remark-gfm/license'),
+    'legal/licenses/dsh-web-frontend-LICENSE.txt': new File(appSourceRoot, 'harness-web/node_modules/@deepseek-ai/dsh-web-frontend/LICENSE'),
     'legal/licenses/capacitor-core-LICENSE.txt'  : new File(appSourceRoot, 'node_modules/@capacitor/core/LICENSE'),
     'legal/licenses/capacitor-android-LICENSE.txt': new File(appSourceRoot, 'node_modules/@capacitor/android/LICENSE'),
     'legal/licenses/xterm-LICENSE.txt'           : new File(appSourceRoot, 'node_modules/@xterm/xterm/LICENSE'),
@@ -112,8 +113,8 @@ android {
         applicationId 'io.deepseekharness.mobile'
         minSdk 26
         targetSdk 35
-        versionCode 7
-        versionName '0.1.7'
+        versionCode 8
+        versionName '0.1.8'
 
         buildConfigField 'String', 'DEFAULT_MANIFEST_URL', envBuildValue('DSH_RUNTIME_MANIFEST_URL')
         buildConfigField 'String', 'DEFAULT_MANIFEST_SHA256', envBuildValue('DSH_RUNTIME_MANIFEST_SHA256')

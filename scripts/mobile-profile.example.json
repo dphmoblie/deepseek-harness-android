@@ -1,6 +1,6 @@
 {
   "$schema": "./mobile-profile.schema.json",
-  "$comment": "移动端 runtime profile 插件白名单（使用官方响应式布局；dshmarket 可再装其余插件）。",
+  "$comment": "移动端 runtime profile 插件白名单（新版对话前端替换原网页资源，避免重复打包）。",
   "dsh": {
     "profile": {
       "bundles": [

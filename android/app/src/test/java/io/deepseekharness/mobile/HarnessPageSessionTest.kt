@@ -43,4 +43,18 @@ class HarnessPageSessionTest {
         assertThrows(IllegalArgumentException::class.java) { HarnessSessionCookie.origin(80) }
         assertThrows(IllegalArgumentException::class.java) { HarnessSessionCookie.origin(65536) }
     }
+
+    @Test
+    fun harnessEntryUrlIncludesValidatedApplicationVersion() {
+        assertEquals(
+            "http://127.0.0.1:3080/?appVersion=0.1.8",
+            HarnessPageUrl.withAppVersion("http://127.0.0.1:3080/", "0.1.8"),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            HarnessPageUrl.withAppVersion("https://example.invalid/", "0.1.8")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            HarnessPageUrl.withAppVersion("http://127.0.0.1:3080/", "0.1.8&unsafe=true")
+        }
+    }
 }

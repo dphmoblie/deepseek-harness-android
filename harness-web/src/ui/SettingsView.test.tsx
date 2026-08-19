@@ -93,6 +93,13 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('SettingsView workspace management', () => {
+  it('完整插件工作台是按需入口且不会替换移动根页面', async () => {
+    render(<SettingsView onBack={vi.fn()} />)
+
+    const link = await screen.findByRole('link', { name: '打开完整插件工作台' })
+    expect(link).toHaveAttribute('href', '/?surface=plugins')
+  })
+
   it('校验路径后以结构化参数创建工作区', async () => {
     render(<SettingsView onBack={vi.fn()} />)
     await screen.findByText('Project Alpha')

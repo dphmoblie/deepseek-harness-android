@@ -36,6 +36,7 @@ export function createBrowserBridge(): RuntimeBridge {
   let state: RuntimeState = {
     phase: 'not-installed',
     architecture: 'arm64-v8a',
+    updateAvailable: false,
     downloadedBytes: 0,
     totalBytes: 640 * 1024 * 1024,
     runnerAvailable: true,
@@ -91,7 +92,7 @@ export function createBrowserBridge(): RuntimeBridge {
         state = { ...state, downloadedBytes: Math.round(state.totalBytes * percent) }
         emitProgress()
       }
-      state = { ...state, phase: 'ready', installedVersion: '2026.08.1' }
+      state = { ...state, phase: 'ready', installedVersion: '2026.08.1', updateAvailable: false }
       emitProgress()
     },
     startHarness: () => {
@@ -112,6 +113,7 @@ export function createBrowserBridge(): RuntimeBridge {
       state = {
         phase: 'not-installed',
         architecture: state.architecture,
+        updateAvailable: false,
         downloadedBytes: 0,
         totalBytes: state.totalBytes,
         runnerAvailable: state.runnerAvailable,

@@ -16,10 +16,10 @@ on:
           - stable
 
 permissions:
-  contents: write
+  contents: read
 
 env:
-  APP_VERSION: '0.1.7'
+  APP_VERSION: '0.1.8'
 
 jobs:
   build:
@@ -134,27 +134,6 @@ jobs:
       - name: 校验 APK 团队签名（证书指纹与团队密钥库一致）
         run: python3 scripts/verify-apk-signature.py --apk android/app/build/outputs/apk/release/app-release.apk
 
-      - name: Publish APK to dist branch (thin APKs only; embedded ones ship via Release)
-        run: |
-          APK=android/app/build/outputs/apk/release/app-release.apk
-          SIZE="$(stat -c%s "$APK")"
-          echo "APK size: $SIZE bytes"
-          if [ "$SIZE" -ge 94371840 ]; then
-            # 嵌入 rootfs 的 APK 超过 GitHub 100MB 分支文件上限：
-            # 仅通过 Release 资产发布（≤2GB），dist 保持瘦包语义。
-            echo "embedded APK too large for dist branch — Release assets will carry it"
-            exit 0
-          fi
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git fetch origin dist || true
-          git checkout -b dist origin/dist 2>/dev/null || git checkout --orphan dist
-          rm -rf dist && mkdir -p dist
-          cp "$APK" dist/dsh-harness-android-release.apk
-          git add -f dist/dsh-harness-android-release.apk
-          git commit -m "dist: auto-built APK ($GITHUB_SHA)" || true
-          git push origin dist
-
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
@@ -194,8 +173,10 @@ jobs:
 
       - name: Install NDK r29-beta4
         run: |
+          set -euo pipefail
           mkdir -p "$HOME/.cache/operit-android-runtime"
           curl -fL --retry 3 -o /tmp/ndk.zip https://dl.google.com/android/repository/android-ndk-r29-beta4-linux.zip
+          echo "c5db6031a549b5274eed920c45ee3c7da1ac3f1f416cbb512dd9d88417bdf009  /tmp/ndk.zip" | sha256sum -c -
           unzip -q /tmp/ndk.zip -d "$HOME/.cache/operit-android-runtime"
 
       - name: Build PRoot (arm64-v8a)
@@ -234,60 +215,23 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
 
+      - name: Build mobile Harness conversation frontend
+        run: |
+          pnpm install --frozen-lockfile --filter @dsh-mobile/harness-web...
+          pnpm --filter @dsh-mobile/harness-web build
+
       - name: Prepare dsh runtime for linux/arm64 (compile node-pty from source)
         run: |
           set -x
           set -o pipefail
-          mkdir -p /tmp/dsh-root && cd /tmp/dsh-root
-          # dsh-base/dsh-web-app 固定到与 dsh 0.1.0-rc.6 同批次版本：
-          # latest(0.0.1-rc.1) 依赖已下架的 @deepseek-ai/dsh-client-ui-slash，会导致安装失败
-          cat > package.json <<'EOF'
-          {
-            "name": "dsh-root",
-            "private": true,
-            "dependencies": {
-              "@deepseek-ai/dsh": "0.1.0-rc.6",
-              "@deepseek-ai/dsh-base": "0.1.0-rc.6",
-              "@deepseek-ai/dsh-web-app": "0.1.0-rc.6",
-              "@linxin666/dsh-web-ui-all": "0.1.19",
-              "@liustack/modlens": "3.18.1",
-              "dshmarket": "1.10.1",
-              "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
-              "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.6",
-              "@deepseek-ai/dsh-client-ui-theme": "0.1.0-rc.6",
-              "react": "^18.3.0"
-            },
-            "devDependencies": { "node-gyp": "^10.2.0" }
-          }
-          EOF
-          cat > pnpm-workspace.yaml <<'EOF'
-          allowBuilds:
-            node-pty: true
-            koffi: true
-            "@deepseek-ai/dsh-subprocess-local": true
-            protobufjs: true
-            "@google/genai": true
-            cloudflared: true
-            cpu-features: true
-            ssh2: true
-          EOF
-          push_log() {
-            echo "=== 推送步骤日志到 ci-logs 分支 ==="
-            cd "$GITHUB_WORKSPACE"
-            git config user.name "github-actions"
-            git config user.email "actions@github.com"
-            git fetch origin ci-logs || true
-            git checkout -b ci-logs origin/ci-logs 2>/dev/null || git checkout --orphan ci-logs
-            mkdir -p logs
-            cp /tmp/step.log logs/install-$GITHUB_RUN_NUMBER.log
-            git add -f logs/install-$GITHUB_RUN_NUMBER.log
-            git commit -m "ci: install log run #$GITHUB_RUN_NUMBER" || true
-            git push origin ci-logs || true
-          }
+          mkdir -p /tmp/dsh-root
+          cp scripts/runtime-profile/package.json scripts/runtime-profile/pnpm-lock.yaml \
+            scripts/runtime-profile/pnpm-workspace.yaml /tmp/dsh-root/
+          cd /tmp/dsh-root
           set +e
           (
             set -e
-            pnpm install --no-frozen-lockfile
+            pnpm install --frozen-lockfile
             # 兜底：显式强制编译 node-pty，不依赖 allowBuilds 是否被解析
             pnpm rebuild node-pty || true
             mapfile -t PTP_DIRS < <(
@@ -318,7 +262,7 @@ jobs:
           ) 2>&1 | tee /tmp/step.log
           STATUS="$?"
           set -e
-          if [ "$STATUS" != "0" ]; then push_log; exit 1; fi
+          if [ "$STATUS" != "0" ]; then exit 1; fi
 
       - name: Download pinned rootfs inputs
         run: |
@@ -333,6 +277,7 @@ jobs:
           mkdir -p /tmp/toolchain/bin /tmp/toolchain/python
           # python-build-standalone（aarch64，自包含；版本号以 20250712 release 实资产为准）
           curl -fL --retry 3 -o /tmp/py.tgz https://github.com/astral-sh/python-build-standalone/releases/download/20250712/cpython-3.13.5%2B20250712-aarch64-unknown-linux-gnu-install_only.tar.gz
+          echo "d3b6805d8a12610d45917aa5cac69f53f8dd1ee3faef86fc8d2d1488825edd9a  /tmp/py.tgz" | sha256sum -c -
           tar -xzf /tmp/py.tgz -C /tmp/toolchain/python --strip-components=1
           # 从 runner（ubuntu-24.04-arm，与 rootfs 同发行版）取工具：
           # busybox-static 为静态链接；jq/unzip 动态依赖（glibc/libm 等）rootfs 已含
@@ -365,10 +310,11 @@ jobs:
               --rootfs-url "https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/rootfs.bundle" \
               --mobile-profile scripts/mobile-profile.example.json \
               --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
-            # Keep the official @deepseek-ai/dsh-web-frontend/dist emitted by
-            # @deepseek-ai/dsh-web-app.  Do not replace it with the reduced
-            # mobile harness-web build: the official dist owns the complete
-            # plugin/settings UI and the boot graph expected by dsh-web-app.
+            python3 scripts/rebuild-rootfs-frontend.py \
+              --bundle /tmp/rootfs.bundle \
+              --manifest /tmp/runtime-manifest.json \
+              --dist harness-web/dist \
+              --runtime-version "${RUNTIME_VERSION}"
             ls -la /tmp/rootfs.bundle /tmp/runtime-manifest.json
             sha256sum /tmp/rootfs.bundle
             python3 scripts/verify-bundle.py --bundle /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
@@ -399,15 +345,7 @@ jobs:
             du -sh runtime-artifacts/ 2>/dev/null || true
           } 2>&1 | tee /tmp/verify.log
           if [ ! -f runtime-artifacts/rootfs.bundle ] || [ ! -f runtime-artifacts/runtime-manifest.json ]; then
-            git config user.name "github-actions"
-            git config user.email "actions@github.com"
-            git fetch origin dist || true
-            git checkout -B dist origin/dist 2>/dev/null || git checkout --orphan dist
-            mkdir -p logs
-            cp /tmp/verify.log logs/verify-$GITHUB_RUN_NUMBER.log
-            git add -f logs/verify-$GITHUB_RUN_NUMBER.log
-            git commit -m "ci: verify log run #$GITHUB_RUN_NUMBER" || true
-            git push origin dist || true
+            echo "runtime artifacts are missing; inspect this Actions step output" >&2
             exit 1
           fi
 
@@ -423,11 +361,11 @@ jobs:
   publish-release:
     name: Publish release (APK + rootfs bundle + manifest)
     needs: [build, build-rootfs]
-    # 推送分支只做构建与验证；发布必须手动 workflow_dispatch 并选择 release_type
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_type != ''
-    runs-on: ubuntu-latest
     permissions:
       contents: write
+    # 推送分支只做构建与验证；发布必须手动 workflow_dispatch 并选择 release_type
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_type != '' && (github.event.inputs.release_type != 'stable' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -447,23 +385,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Never enable xtrace here: a failed release log is persisted to the
-          # dist branch and must not contain the expanded Authorization header.
+          # Never enable xtrace here: the Authorization header must not appear
+          # in the Actions log.
           set +x
           set -o pipefail
           set +e
           cd "$GITHUB_WORKSPACE"
-          push_log() {
-            git config user.name "github-actions"
-            git config user.email "actions@github.com"
-            git fetch origin dist || true
-            git checkout -B dist origin/dist 2>/dev/null || git checkout --orphan dist
-            mkdir -p logs
-            cp /tmp/release.log logs/release-$GITHUB_RUN_NUMBER.log
-            git add -f logs/release-$GITHUB_RUN_NUMBER.log
-            git commit -m "ci: release log run #$GITHUB_RUN_NUMBER" || true
-            git push origin dist || true
-          }
           (
             set -e
             RELEASE_TYPE="${{ github.event.inputs.release_type }}"
@@ -496,7 +423,7 @@ jobs:
           ## 资产
 
           - $(basename "$APK")（APK，含 PRoot 运行器）
-          - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.1.0-rc.6 + 移动 profile）
+          - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.1.0-rc.6 + 移动前端 + 按需插件工作台资源）
           - runtime-manifest.json
           - checksums.txt（以上三项资产的 SHA-256）
 
@@ -506,7 +433,7 @@ jobs:
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/repos/${{ github.repository }}/releases \
-              -d "$(jq -n --arg t "$TAG" --arg n "$NAME" --arg pre "$PRE" --rawfile b /tmp/notes.md '{tag_name:$t, name:$n, body:$b, draft:false, prerelease:($pre=="true")}')")"
+              -d "$(jq -n --arg t "$TAG" --arg n "$NAME" --arg pre "$PRE" --arg sha "$GITHUB_SHA" --rawfile b /tmp/notes.md '{tag_name:$t, target_commitish:$sha, name:$n, body:$b, draft:false, prerelease:($pre=="true")}')")"
             RELEASE_ID="$(echo "$RESP" | jq -r .id)"
             test -n "$RELEASE_ID" && test "$RELEASE_ID" != "null"
             UPLOAD_BASE="https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets"
@@ -522,4 +449,4 @@ jobs:
           ) 2>&1 | tee /tmp/release.log
           STATUS="$?"
           set -e
-          if [ "$STATUS" != "0" ]; then push_log; exit 1; fi
+          if [ "$STATUS" != "0" ]; then exit 1; fi

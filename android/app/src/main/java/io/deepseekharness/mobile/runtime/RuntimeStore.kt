@@ -36,6 +36,8 @@ class RuntimeStore(context: Context) {
 
     @Volatile private var manifestCacheLoaded = false
     @Volatile private var manifestCache: RuntimeManifest? = null
+    @Volatile private var bundledManifestCacheLoaded = false
+    @Volatile private var bundledManifestCache: RuntimeManifest? = null
 
     @Synchronized
     fun settings(): RuntimeSettings {
@@ -122,6 +124,40 @@ class RuntimeStore(context: Context) {
     fun openBundledManifest(): InputStream = openBundledAsset(BUNDLED_MANIFEST_ASSET)
 
     fun openBundledRootfs(): InputStream = openBundledAsset(BUNDLED_ROOTFS_ASSET)
+
+    /**
+     * APK assets are immutable for the lifetime of this process. A missing or malformed bundled
+     * manifest is treated as "no bundled update" here; installation still reports its precise
+     * validation error when the user explicitly selects the bundled source.
+     */
+    @Synchronized
+    fun bundledManifestOrNull(): RuntimeManifest? {
+        if (bundledManifestCacheLoaded) return bundledManifestCache
+        bundledManifestCache = try {
+            openBundledManifest().use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(16 * 1024)
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > RuntimeLimits.MAX_MANIFEST_BYTES) {
+                        throw RuntimeFailure("MANIFEST_SIZE_INVALID", "APK 内置运行时清单大小无效")
+                    }
+                    output.write(buffer, 0, read)
+                }
+                RuntimeManifest.parse(output.toByteArray()).also {
+                    // A thin APK may carry no rootfs asset; do not advertise an update it cannot apply.
+                    openBundledRootfs().use { }
+                }
+            }
+        } catch (_: Exception) {
+            null
+        }
+        bundledManifestCacheLoaded = true
+        return bundledManifestCache
+    }
 
     @Synchronized
     fun installedManifest(): RuntimeManifest? {

@@ -32,6 +32,7 @@ Operit runtime materials.
 | Ubuntu 24.04 ARM64 packages | Embedded or remotely installed userspace runtime | Package-specific licenses |
 | Node.js 24.19.0 and bundled dependencies | JavaScript runtime inside the rootfs | MIT and bundled dependency-specific licenses |
 | `@deepseek-ai/dsh` 0.1.0-rc.6 | Agent runtime inside the rootfs | MIT |
+| `@deepseek-ai/dsh-web-frontend` 0.1.0-rc.7 | On-demand Cordis plugin compatibility workbench | MIT |
 | PRoot v5.1.107.78 runner and loader | Userspace rootfs execution | GPL-2.0-or-later |
 | Operit2 Android runtime tooling and patch | Source/build provenance for the packaged PRoot artifacts | AGPL-3.0 |
 | Operit Terminal Core | Reference implementation consulted for the terminal integration | LGPL-3.0 |

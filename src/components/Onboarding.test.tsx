@@ -6,6 +6,7 @@ import type { RuntimeSettings, RuntimeState, ShizukuState } from '../platform/ty
 const runtime: RuntimeState = {
   phase: 'not-installed',
   architecture: 'arm64-v8a',
+  updateAvailable: false,
   downloadedBytes: 0,
   totalBytes: 0,
   runnerAvailable: true,
