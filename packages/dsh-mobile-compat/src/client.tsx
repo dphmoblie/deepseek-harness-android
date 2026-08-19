@@ -226,4 +226,5 @@ export function apply(ctx: ClientContext): () => void {
   return () => {}
 }
 
-export { apply as inject }
+/** Required Cordis services. The client loader reads this as plugin metadata. */
+export const inject = ['slots']

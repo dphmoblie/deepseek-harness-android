@@ -127,8 +127,8 @@ export function Onboarding({
               )}
               {step === 4 && (
                 <div className="onboarding-body">
-                  <p>移动端已内置 <code>dsh-mobile-compat</code> 布局：小屏下侧栏变为抽屉、详情变为底部面板，桌面插件（文件/预览/看板/市场等）按移动形态适配。</p>
-                  <p>更多插件可在 Harness 内通过市场（dshmarket）按需安装；宠物、实时统计等悬浮组件在手机上默认关闭。</p>
+                  <p>Harness 使用官方响应式布局：小屏下侧栏、工作区和设置仍保持原版交互，插件、模型与推理强度入口不会被移动壳替换。</p>
+                  <p>插件均由 Harness 的插件设置管理，移动 profile 不会静默关闭宠物、实时统计或浏览器插件；更多插件可通过市场（dshmarket）按需安装。</p>
                 </div>
               )}
               {step === 5 && (

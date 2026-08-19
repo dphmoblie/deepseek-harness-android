@@ -29,9 +29,9 @@ describe('错误原因安全展示', () => {
     })).toBe('上游连接被重置')
   })
 
-  it('认证失败使用固定文案，不回显供应商消息中的凭证', () => {
+  it('明确的 API 密钥无效使用固定文案，不回显供应商消息中的凭证', () => {
     const fakeCredential = ['sk', 'test-placeholder-not-a-key'].join('-')
-    expect(failureReason({ code: 'AUTH', message: `invalid apiKey=${fakeCredential}` }))
+    expect(failureReason({ code: 'INVALID_API_KEY', message: `invalid apiKey=${fakeCredential}` }))
       .toBe('API 密钥无效')
   })
 
@@ -63,10 +63,67 @@ describe('错误原因安全展示', () => {
   it('Python traceback 只展示末尾异常摘要', () => {
     expect(failureReason([
       'Traceback (most recent call last):',
-      '  File "/home/alice/client.py", line 8, in request',
+      '  File "/root/private/client.py", line 8, in request',
       '    await client.send()',
       'TimeoutError: 上游响应超时',
     ].join('\n'))).toBe('TimeoutError: 上游响应超时')
+  })
+
+  it('外层通用消息不会覆盖嵌套的具体原因，并支持数组载荷', () => {
+    expect(failureReason({
+      message: 'Request failed',
+      error: { message: 'Provider quota exhausted' },
+    })).toBe('Provider quota exhausted')
+    expect(failureReason([
+      { message: '本轮因错误终止' },
+      { detail: 'Array failure detail' },
+    ])).toBe('Array failure detail')
+  })
+
+  it('通用消息不会覆盖错误码或 HTTP 状态', () => {
+    expect(failureReason({ message: 'Request failed', code: 'RATE_LIMIT', status: 429 }))
+      .toBe('错误代码 RATE_LIMIT')
+    expect(failureReason({ message: 'Request failed', status: 429 }))
+      .toBe('HTTP 429')
+  })
+
+  it('仅把明确的无效 API 密钥代码映射为固定文案', () => {
+    expect(failureReason({ code: 'UNAUTHORIZED', message: '代理会话已过期' }))
+      .toBe('代理会话已过期')
+    expect(failureReason({ code: 'AUTH', message: '插件权限不足' }))
+      .toBe('插件权限不足')
+    expect(failureReason({ code: 'INVALID_API_KEY', message: '不得回显' }))
+      .toBe('API 密钥无效')
+  })
+
+  it('隐藏 Android 与 Ubuntu 运行时私有路径', () => {
+    expect(failureReason(
+      'paths /opt/dsh/private.js /data/user/0/io.deepseekharness.mobile/files/config '
+      + '/data/user_de/0/io.deepseekharness.mobile/files/direct-boot '
+      + '/data/data/io.deepseekharness.mobile/cache/item /tmp/session/cache '
+      + '/storage/emulated/0/Download/key',
+    )).toBe(
+      'paths $DSH_HOME $APP_DATA $APP_DATA '
+      + '$APP_DATA $TMP $SHARED_STORAGE',
+    )
+  })
+
+  it('隐藏常见第三方 token 与 URL 查询凭据', () => {
+    const githubFineGrained = `github_${'pat_'}${'A'.repeat(24)}`
+    const githubClassic = `${'ghp'}_${'B'.repeat(24)}`
+    const googleApiKey = `AI${'za'}${'C'.repeat(24)}`
+    const slackToken = `${'xoxb'}-${'1'.repeat(12)}-${'D'.repeat(20)}`
+    const reason = failureReason(
+      `provider tokens ${githubFineGrained} ${githubClassic} ${googleApiKey} ${slackToken} `
+      + 'https://example.invalid/request?key=query-placeholder&client_secret=secret-placeholder',
+    )
+
+    expect(reason).toBe(
+      'provider tokens [已隐藏] [已隐藏] [已隐藏] [已隐藏] '
+      + 'https://example.invalid/request?key=[已隐藏]&client_secret=[已隐藏]',
+    )
+    expect(reason).not.toContain('query-placeholder')
+    expect(reason).not.toContain('secret-placeholder')
   })
 
   it('限制展示长度并保持 Unicode 字符完整', () => {

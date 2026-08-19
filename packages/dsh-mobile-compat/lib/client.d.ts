@@ -35,4 +35,5 @@ export declare function AppFrame({ useStore, actions, renderSlot }: AppFrameProp
     ref: import("react").RefObject<HTMLDivElement>;
 }, HTMLDivElement>;
 export declare function apply(ctx: ClientContext): () => void;
-export { apply as inject };
+/** Required Cordis services. The client loader reads this as plugin metadata. */
+export declare const inject: string[];

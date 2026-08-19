@@ -41,15 +41,40 @@ UBUNTU_EXCLUDED_REGULAR_PATHS = frozenset(
 PROFILE_BUNDLE_NAMES = (
     "@deepseek-ai/dsh-base",
     "@deepseek-ai/dsh-web-app",
-    "dsh-mobile-compat",
     "@linxin666/dsh-web-ui-all",
     "@liustack/modlens",
     "dshmarket",
 )
+MOBILE_SETTINGS_LAYOUT_MARKER = "dsh-mobile-settings-layout-v1"
+CLIENT_FAILURE_DISPLAY_MARKER = "dsh-client-failure-display-v2"
 
 
 class BuildError(RuntimeError):
     pass
+
+
+def unique_file_candidates(paths: Iterable[Path]) -> list[Path]:
+    """Return each installed package copy once, preserving discovery order.
+
+    pnpm exposes the same package through a versioned store path and a
+    top-level symlink.  Patching one spelling and silently skipping the other
+    makes the generated runtime depend on filesystem traversal order, so every
+    resolved file must be checked below.
+    """
+    result: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            key = os.path.normcase(str(path.resolve(strict=False)))
+        except OSError:
+            key = os.path.normcase(str(path.absolute()))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
 
 
 def sha256_file(path: Path) -> str:
@@ -61,7 +86,9 @@ def sha256_file(path: Path) -> str:
 
 
 MAX_MOBILE_PROFILE_BYTES = 64 * 1024
-MOBILE_BUNDLE_PATTERN = re.compile(r"^[A-Za-z0-9@._/-]{1,128}$")
+MOBILE_BUNDLE_PATTERN = re.compile(
+    r"^(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,61}/)?[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+)
 
 
 def validate_mobile_profile(path: Path) -> dict:
@@ -440,22 +467,28 @@ def add_windows_tree(writer: RootfsWriter, source_root: Path, destination_root: 
                 writer.add(info, source)
 
 
-def inject_bundles_into_dsh_manifest(dsh_root: Path) -> None:
+def inject_bundles_into_dsh_manifest(dsh_root: Path, bundle_names: Iterable[str] = PROFILE_BUNDLE_NAMES) -> None:
     """把 profile bundles 注入 @deepseek-ai/dsh 的 package.json dependencies。
 
     dsh 启动时 healProfilesModuleFallback 只从 dsh 包的依赖闭包维护
-    profiles/node_modules；profile bundles 不是 dsh 的依赖时永远不会被它链接，
+    profiles/node_modules；profile bundles 不是 dsh 的依赖时不会被它链接，
     cordis 加载器从 profile 目录解析 loader entry 就会 "Cannot find package"。
     这里把 bundles 注入 dsh 包依赖，让官方机制在运行时自动补齐链接，
     构建期预置链接仅作兜底。
     """
+    bundle_names = tuple(bundle_names)
     for manifest_path in dsh_root.glob(
         "node_modules/.pnpm/@deepseek-ai+dsh@*/node_modules/@deepseek-ai/dsh/package.json",
     ):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         deps = manifest.setdefault("dependencies", {})
         changed = False
-        for name in PROFILE_BUNDLE_NAMES:
+        # A reused build directory may still carry the experimental layout
+        # package from an older profile. Remove that stale edge so Cordis does
+        # not discover an unrequested root-slot owner at runtime.
+        if "dsh-mobile-compat" not in bundle_names and deps.pop("dsh-mobile-compat", None) is not None:
+            changed = True
+        for name in bundle_names:
             if name not in deps:
                 deps[name] = "*"
                 changed = True
@@ -470,8 +503,8 @@ def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_ds
     """预生成 $DSH_HOME/profiles/node_modules 的扁平包链接，返回链接总数。
 
     dsh 启动时（profile-boot）会调用 healProfilesModuleFallback 维护这个目录，
-    但它只从 @deepseek-ai/dsh 包的依赖闭包收集——profile bundles
-    （dsh-mobile-compat、dshmarket 等）不是 dsh 的依赖，永远不会被它链接，
+    但它只从 @deepseek-ai/dsh 包的依赖闭包收集；profile bundles 不是 dsh 的依赖时，
+    不会被它链接，
     cordis 加载器从 profile 目录解析 loader entry 时就会 "Cannot find package"。
     这里在构建期按 dsh_root 的依赖闭包（含全部 bundles）预生成链接打进 rootfs，
     运行时无需（也避免在受限 ROM 上）再创建符号链接。链接总数写入 manifest 的
@@ -489,14 +522,15 @@ def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_ds
         cursor = from_dir
         while True:
             candidate = cursor / name if cursor.name == "node_modules" else cursor / "node_modules" / name
-            if candidate.exists():
-                try:
-                    real = candidate.resolve()
-                except OSError:
-                    return None
-                # pnpm 顶层包条目是符号链接（Windows 上为 junction）：解析后应指向真实目录
-                if real.is_dir():
-                    return real
+            try:
+                # `tar` extracted pnpm links can report exists() == false on
+                # Windows while resolve() still reaches their real target.
+                real = candidate.resolve()
+            except OSError:
+                real = candidate
+            # pnpm 顶层包条目是符号链接（Windows 上为 junction）：解析后应指向真实目录
+            if real.is_dir():
+                return real
             if cursor.parent == cursor:
                 return None
             cursor = cursor.parent
@@ -554,11 +588,12 @@ def patch_dsh_app_boot(dsh_root: Path) -> None:
     """
     candidates: list[Path] = []
     candidates.extend(
-        dsh_root.glob("node_modules/.pnpm/@deepseek-ai+dsh-app-boot@*/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js")
+        dsh_root.glob("node_modules/.pnpm/*/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js")
     )
     top_level = dsh_root / "node_modules" / "@deepseek-ai" / "dsh-app-boot" / "lib" / "index.js"
     if top_level.is_file():
         candidates.append(top_level)
+    candidates = unique_file_candidates(candidates)
 
     trust_existing = (
         "if (!stat.isSymbolicLink()) throw new Error("
@@ -576,7 +611,11 @@ def patch_dsh_app_boot(dsh_root: Path) -> None:
         'if (error.code !== "EEXIST" || !lstatSync(link).isSymbolicLink() || readlinkSync(link) !== target) throw error;'
     )
 
-    patched_any = False
+    if not candidates:
+        raise BuildError(
+            "dsh-app-boot ensureSymlink patch found no installed copy; "
+            "aborting to avoid shipping an unpatched runtime"
+        )
     for path in candidates:
         text = path.read_text(encoding="utf-8")
         original = text
@@ -586,12 +625,11 @@ def patch_dsh_app_boot(dsh_root: Path) -> None:
             text = text.replace(tolerate_denied, tolerate_denied_replacement)
         if text != original:
             path.write_text(text, encoding="utf-8")
-            patched_any = True
-    if not patched_any:
-        raise BuildError(
-            "dsh-app-boot ensureSymlink patch did not match any installed copy; "
-            "aborting to avoid shipping an unpatched runtime"
-        )
+        if trust_existing_replacement not in text or tolerate_denied_replacement not in text:
+            raise BuildError(
+                f"dsh-app-boot ensureSymlink patch is incomplete in {path}; "
+                "aborting to avoid shipping a partially patched runtime"
+            )
 
 
 def patch_session_persistence(dsh_root: Path) -> None:
@@ -606,7 +644,7 @@ def patch_session_persistence(dsh_root: Path) -> None:
     candidates: list[Path] = []
     candidates.extend(
         dsh_root.glob(
-            "node_modules/.pnpm/@deepseek-ai+dsh-session-persistence-jsonl@*/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js"
+            "node_modules/.pnpm/*/node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/index.js"
         )
     )
     top_level = (
@@ -614,6 +652,7 @@ def patch_session_persistence(dsh_root: Path) -> None:
     )
     if top_level.is_file():
         candidates.append(top_level)
+    candidates = unique_file_candidates(candidates)
 
     old_line = "\t\t\tawait link(tmp, finalPath);"
     new_lines = (
@@ -628,7 +667,11 @@ def patch_session_persistence(dsh_root: Path) -> None:
         "\n\t\t\t\t}"
         "\n\t\t\t});"
     )
-    patched_any = False
+    if not candidates:
+        raise BuildError(
+            "dsh-session-persistence-jsonl link patch found no installed copy; "
+            "aborting to avoid shipping an unpatched runtime"
+        )
     for path in candidates:
         text = path.read_text(encoding="utf-8")
         original = text
@@ -641,12 +684,11 @@ def patch_session_persistence(dsh_root: Path) -> None:
                 )
         if text != original:
             path.write_text(text, encoding="utf-8")
-            patched_any = True
-    if not patched_any:
-        raise BuildError(
-            "dsh-session-persistence-jsonl link patch did not match any installed copy; "
-            "aborting to avoid shipping an unpatched runtime"
-        )
+        if new_lines not in text:
+            raise BuildError(
+                f"dsh-session-persistence-jsonl link patch is incomplete in {path}; "
+                "aborting to avoid shipping a partially patched runtime"
+            )
 
 
 def patch_attachment_link(dsh_root: Path) -> None:
@@ -659,7 +701,7 @@ def patch_attachment_link(dsh_root: Path) -> None:
     candidates: list[Path] = []
     candidates.extend(
         dsh_root.glob(
-            "node_modules/.pnpm/@deepseek-ai+dsh-attachment-local@*/node_modules/@deepseek-ai/dsh-attachment-local/lib/index.js"
+            "node_modules/.pnpm/*/node_modules/@deepseek-ai/dsh-attachment-local/lib/index.js"
         )
     )
     top_level = (
@@ -667,6 +709,7 @@ def patch_attachment_link(dsh_root: Path) -> None:
     )
     if top_level.is_file():
         candidates.append(top_level)
+    candidates = unique_file_candidates(candidates)
 
     old_line = "\t\t\tawait link(temporary, target);"
     new_lines = (
@@ -680,7 +723,11 @@ def patch_attachment_link(dsh_root: Path) -> None:
         "\n\t\t\t\t}"
         "\n\t\t\t});"
     )
-    patched_any = False
+    if not candidates:
+        raise BuildError(
+            "dsh-attachment-local link patch found no installed copy; "
+            "aborting to avoid shipping an unpatched runtime"
+        )
     for path in candidates:
         text = path.read_text(encoding="utf-8")
         original = text
@@ -691,12 +738,263 @@ def patch_attachment_link(dsh_root: Path) -> None:
                 raise BuildError("dsh-attachment-local link patch produced no copyFile fallback; aborting")
         if text != original:
             path.write_text(text, encoding="utf-8")
-            patched_any = True
-    if not patched_any:
-        raise BuildError(
-            "dsh-attachment-local link patch did not match any installed copy; "
-            "aborting to avoid shipping an unpatched runtime"
+        if new_lines not in text:
+            raise BuildError(
+                f"dsh-attachment-local link patch is incomplete in {path}; "
+                "aborting to avoid shipping a partially patched runtime"
+            )
+
+
+def patch_client_failure_display(dsh_root: Path) -> None:
+    """让官方对话 UI 展示已有失败详情，而不是只显示占位文案。
+
+    这是客户端 runtime 的显示边界补丁：它只读取 session event 中已经存在的
+    message/detail/cause/code/status 字段，过滤旧的“本轮因错误终止”占位文本，
+    并在进入 WebView 前做长度限制和凭据脱敏。Agent、模型请求和会话持久化逻辑
+    均不变。补丁基于 rc.6 的浏览器 bundle，匹配失败时构建直接失败，避免静默
+    生成未修复的官方 UI。
+    """
+    candidates: list[Path] = []
+    candidates.extend(
+        dsh_root.glob(
+            "node_modules/.pnpm/*/node_modules/@deepseek-ai/dsh-client-runtime/lib/client.js"
         )
+    )
+    top_level = (
+        dsh_root
+        / "node_modules"
+        / "@deepseek-ai"
+        / "dsh-client-runtime"
+        / "lib"
+        / "client.js"
+    )
+    if top_level.is_file():
+        candidates.append(top_level)
+    candidates = unique_file_candidates(candidates)
+
+    replacement = r'''/* dsh-client-failure-display-v2 */
+		function displayFailureMessage(failure) {
+			const placeholders = new Set([
+				"本轮因错误终止",
+				"本轮运行失败",
+				"本轮因错误结束",
+				"本轮以错误结束",
+				"This turn failed"
+			]);
+			const weakMessages = new Set([
+				"request failed",
+				"network error",
+				"fetch failed",
+				"failed to fetch",
+				"failure",
+				"error",
+				"unknown error",
+				"internal server error",
+				"service unavailable",
+				"请求失败",
+				"网络错误",
+				"未知错误",
+				"内部服务器错误",
+				"服务不可用"
+			]);
+			const hidden = "[redacted]";
+			const normalizedForComparison = (text) => text.replace(/[\s。.!！:：]+$/g, "").trim().toLowerCase();
+			const isWeakMessage = (text) => weakMessages.has(normalizedForComparison(text));
+			const read = (record, field) => {
+				try {
+					return record[field];
+				} catch {
+					return void 0;
+				}
+			};
+			const redactHeaders = (text) => text
+				.replace(/\b((?:proxy-)?authorization\s*:\s*)[^\r\n]*/gi, `$1${hidden}`)
+				.replace(/\b((?:set-)?cookie\s*:\s*)[^\r\n]*/gi, `$1${hidden}`);
+			const redact = (text) => text
+				.replace(/\b(Bearer|Basic|Token)\s+[A-Za-z0-9+/=._~-]{4,}/gi, `$1 ${hidden}`)
+				.replace(/((?:["']?(?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|token|auth(?:orization)?|cookie|credential|pass(?:word|wd)?|secret|signature)["']?)\s*[:=]\s*)(?!\[redacted\])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}\]]+)/gi, `$1${hidden}`)
+				.replace(/([?&](?:api[-_]?key|key|access[-_]?token|refresh[-_]?token|id[-_]?token|token|password|pass(?:wd)?|client[-_]?secret|secret|signature|credential)=)[^&#\s]+/gi, `$1${hidden}`)
+				.replace(/\b([a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:)[^\s/@]+@/gi, `$1${hidden}@`)
+				.replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, hidden)
+				.replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}\b/gi, hidden)
+				.replace(/\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g, hidden)
+				.replace(/\bAKIA[0-9A-Z]{16}\b/g, hidden)
+				.replace(/\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b/g, "[private address]")
+				.replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[email redacted]")
+				.replace(/(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)/g, "[phone redacted]")
+				.replace(/(?<!\d)(?:\d{6}(?:18|19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]|\d{15})(?!\d)/g, "[identity redacted]")
+				.replace(/\b[A-Za-z]:\\Users\\[^\\\s]+/gi, "%USERPROFILE%")
+				.replace(/\/(?:home|Users|root)\/[^/\s]+/g, "$HOME")
+				.replace(/\/data\/(?:user(?:_de)?\/\d+|data)\/[^/\s]+(?:\/[^\s]*)?/g, "$APP_DATA")
+				.replace(/\/opt\/dsh(?:\/[^\s]*)?/gi, "$DSH_HOME")
+				.replace(/\/(?:tmp|var\/tmp)(?:\/[^\s]*)?/g, "$TMP")
+				.replace(/\/(?:storage\/emulated\/\d+|sdcard)\/[^/\s]+(?:\/[^\s]*)?/g, "$SHARED_STORAGE");
+			const clean = (value, depth) => {
+				if (typeof value !== "string" || depth > 4) return null;
+				// Keep tab/newline/CR until stack frames have been removed below.
+				let text = value.slice(0, 4096).replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ").trim();
+				if (text === "") return null;
+				text = text.replace(/^(?:[A-Za-z_$][\w.$-]*(?:Error|Exception)|Error)\s*:\s*/i, "").trim();
+				const normalized = text.replace(/[\s。.!！:：]+$/g, "");
+				if (placeholders.has(normalized)) return null;
+				const structured = text.startsWith("{") || /^\[\s*(?:[{"\d]|true\b|false\b|null\b)/.test(text);
+				if (structured) {
+					try {
+						const nested = visit(JSON.parse(text), depth + 1);
+						if (nested !== null) return nested;
+					} catch {}
+					return null;
+				}
+				const lines = redactHeaders(text).split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+				const pythonTraceback = lines.some(line => /^Traceback \(most recent call last\):$/i.test(line));
+				const useful = lines.filter(line => !/^(?:Traceback \(most recent call last\):|at\s+|File\s+".*",\s+line\s+\d+|\.\.\. \d+ more$|Suppressed:\s*|goroutine\s+\d+|\d+:\s+0x[\da-f]+)/i.test(line));
+				const meaningful = pythonTraceback ? useful.slice(-1) : useful.slice(0, 2);
+				if (meaningful.length === 0) return null;
+				text = meaningful.join(" ").replace(/\s+at\s+(?:new\s+)?[\w$.[\]<>]+\s*\([^)]*\.(?:[cm]?[jt]sx?|java|kt|py):\d+(?::\d+)?\).*$/i, "");
+				text = redact(text).replace(/\s+/g, " ").trim();
+				const cleaned = text.replace(/[\s。.!！:：]+$/g, "");
+				if (text === "" || text === "[object Object]" || placeholders.has(cleaned)) return null;
+				return [...text].length > 240 ? `${[...text].slice(0, 239).join("")}…` : text;
+			};
+			const seen = new Set();
+			const visit = (value, depth) => {
+				if (value === null || depth > 4) return null;
+				if (typeof value === "string") return clean(value, depth);
+				if (typeof value !== "object" || seen.has(value)) return null;
+				seen.add(value);
+				if (Array.isArray(value)) {
+					for (const item of value) {
+						const nested = visit(item, depth + 1);
+						if (nested !== null) return nested;
+					}
+					return null;
+				}
+				const record = value;
+				const code = read(record, "code");
+				if (typeof code === "string" && /^INVALID_API_KEY$/i.test(code.trim())) return "API key is invalid";
+				let weakMessage = null;
+				for (const field of ["message", "detail", "description", "error_description"]) {
+					const message = clean(read(record, field), depth + 1);
+					if (message === null) continue;
+					if (!isWeakMessage(message)) return message;
+					weakMessage ??= message;
+				}
+				for (const field of ["error", "failure", "cause", "details"]) {
+					const nested = visit(read(record, field), depth + 1);
+					if (nested !== null) return nested;
+				}
+				if (typeof code === "string" && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,63}$/.test(code) && code !== "UNKNOWN") return `Error code ${code}`;
+				const status = read(record, "status");
+				if (Number.isInteger(status) && status >= 100 && status <= 599) return `HTTP ${status}`;
+				if (weakMessage !== null) return weakMessage;
+				return null;
+			};
+			return visit(failure, 0) ?? "Failure details unavailable";
+		}'''
+    boundary = "\n\t\t//#endregion"
+
+    def require_exact_replacement(text: str, path: Path) -> None:
+        if text.count(CLIENT_FAILURE_DISPLAY_MARKER) != 1:
+            raise BuildError(f"client failure display marker must occur exactly once in {path}")
+        start = text.find(f"/* {CLIENT_FAILURE_DISPLAY_MARKER} */")
+        end = text.find(boundary, start)
+        if start < 0 or end < 0 or text[start:end] != replacement:
+            raise BuildError(f"client failure display marker is incomplete in {path}")
+
+    if not candidates:
+        raise BuildError(
+            "dsh-client-runtime failure display patch found no installed copy; "
+            "aborting to avoid shipping a generic-error-only UI"
+        )
+    for path in candidates:
+        text = path.read_text(encoding="utf-8")
+        if CLIENT_FAILURE_DISPLAY_MARKER in text:
+            require_exact_replacement(text, path)
+            continue
+        marker = "function displayFailureMessage(failure) {"
+        start = text.find(marker)
+        if start < 0:
+            raise BuildError(f"client failure display function is missing in {path}")
+        end = text.find(boundary, start)
+        if end < 0:
+            raise BuildError(f"client failure display function boundary is missing in {path}")
+        text = text[:start] + replacement + text[end:]
+        require_exact_replacement(text, path)
+        path.write_text(text, encoding="utf-8")
+
+
+def patch_client_mobile_settings_layout(dsh_root: Path) -> None:
+    """Keep the official settings dialog usable in a narrow WebView.
+
+    The official settings component uses a desktop 188px navigation rail. On a
+    390px WebView that leaves too little room for plugin and Agent preset text.
+    This CSS-only boundary patch changes the rail into a horizontally scrollable
+    top tab row below 600px; it does not change plugin, Agent, model, or settings
+    data logic.
+    """
+    candidates: list[Path] = []
+    candidates.extend(
+        dsh_root.glob(
+            "node_modules/.pnpm/*/"
+            "node_modules/@deepseek-ai/dsh-client-ui-settings-general/lib/client.js",
+        )
+    )
+    top_level = (
+        dsh_root
+        / "node_modules"
+        / "@deepseek-ai"
+        / "dsh-client-ui-settings-general"
+        / "lib"
+        / "client.js"
+    )
+    if top_level.is_file():
+        candidates.append(top_level)
+    candidates = unique_file_candidates(candidates)
+
+    mobile_css = (
+        f"/* {MOBILE_SETTINGS_LAYOUT_MARKER} */"
+        "@media (max-width:600px){"
+        ".VOzbGW_panel{width:calc(100vw - 24px);max-width:none;"
+        "height:calc(100vh - 24px);border-radius:16px;flex-direction:column}"
+        ".VOzbGW_nav{width:100%;height:auto;gap:8px;padding:14px 12px 0}"
+        ".VOzbGW_navTitle{padding:0 4px}"
+        ".VOzbGW_navList{width:100%;flex-direction:row;gap:4px;overflow-x:auto;"
+        "padding-bottom:4px;scrollbar-width:none}"
+        ".VOzbGW_navList::-webkit-scrollbar{display:none}"
+        ".VOzbGW_navCell{flex:1 0 auto;height:36px;justify-content:center;"
+        "gap:4px;padding:7px 6px;font-size:13px}"
+        ".VOzbGW_navLabel{flex:0 1 auto}"
+        ".VOzbGW_content{width:100%;min-height:0}"
+        ".VOzbGW_header{height:44px;padding:8px 14px}"
+        ".VOzbGW_options{padding:0 16px 16px}"
+        "}"
+    )
+    encoded_css = json.dumps(mobile_css, ensure_ascii=True)[1:-1]
+
+    def require_exact_mobile_css(text: str, path: Path) -> None:
+        if text.count(MOBILE_SETTINGS_LAYOUT_MARKER) != 1 or text.count(encoded_css) != 1:
+            raise BuildError(f"mobile settings layout marker is incomplete in {path}")
+
+    if not candidates:
+        raise BuildError(
+            "dsh-client-ui-settings-general mobile layout patch found no installed copy; "
+            "aborting to avoid shipping a desktop-only settings dialog"
+        )
+    for path in candidates:
+        text = path.read_text(encoding="utf-8")
+        if MOBILE_SETTINGS_LAYOUT_MARKER in text:
+            require_exact_mobile_css(text, path)
+            continue
+        marker = 'const css$3 = "'
+        start = text.find(marker)
+        if start < 0:
+            raise BuildError(f"settings CSS declaration is missing in {path}")
+        end = text.find('";', start + len(marker))
+        if end < 0:
+            raise BuildError(f"settings CSS declaration boundary is missing in {path}")
+        text = text[:end] + encoded_css + text[end:]
+        require_exact_mobile_css(text, path)
+        path.write_text(text, encoding="utf-8")
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -793,7 +1091,14 @@ def main() -> None:
                 excluded_regular_paths=UBUNTU_EXCLUDED_REGULAR_PATHS,
             )
             copy_tar_archive(writer, args.node, args.node_root, lambda name: f"opt/node/{name}")
-            inject_bundles_into_dsh_manifest(args.dsh_root)
+            profile_bundles = (
+                tuple(mobile_spec["dsh"]["profile"]["bundles"])
+                if mobile_spec is not None
+                else PROFILE_BUNDLE_NAMES
+            )
+            inject_bundles_into_dsh_manifest(args.dsh_root, profile_bundles)
+            patch_client_failure_display(args.dsh_root)
+            patch_client_mobile_settings_layout(args.dsh_root)
             patch_dsh_app_boot(args.dsh_root)
             patch_session_persistence(args.dsh_root)
             patch_attachment_link(args.dsh_root)
