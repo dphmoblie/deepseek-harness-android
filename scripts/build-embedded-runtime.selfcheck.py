@@ -55,6 +55,50 @@ def main() -> int:
 
     assert module.normalized_path("root/.dsh/profiles/web/package.json") == "root/.dsh/profiles/web/package.json"
 
+    with tempfile.TemporaryDirectory(prefix="dsh-app-boot-") as directory:
+        fixture = (
+            Path(directory)
+            / "node_modules"
+            / ".pnpm"
+            / "@deepseek-ai+dsh-app-boot@fixture"
+            / "node_modules"
+            / "@deepseek-ai"
+            / "dsh-app-boot"
+            / "lib"
+            / "index.js"
+        )
+        fixture.parent.mkdir(parents=True)
+        trust_existing = (
+            "if (!stat.isSymbolicLink()) throw new Error("
+            "`dsh: ${link} exists and is not a symlink; remove it so dsh can manage the installation fallback`);"
+        )
+        tolerate_denied = (
+            'if (error.code !== "EEXIST" || !lstatSync(link).isSymbolicLink() || readlinkSync(link) !== target) throw error;'
+        )
+        tolerate_denied_prefix = (
+            'if (error.code === "EACCES" || error.code === "EPERM" || error.code === "ENOTSUP") return; '
+        )
+        tolerate_denied_replacement = tolerate_denied_prefix + tolerate_denied
+        fixture.write_text(f"{trust_existing}\n{tolerate_denied}\n", encoding="utf-8")
+
+        module.patch_dsh_app_boot(Path(directory))
+        patched = fixture.read_text(encoding="utf-8")
+        assert patched.count(tolerate_denied_prefix) == 1
+        assert patched.count(tolerate_denied_replacement) == 1
+
+        module.patch_dsh_app_boot(Path(directory))
+        assert fixture.read_text(encoding="utf-8") == patched
+
+        fixture.write_text(
+            patched.replace(
+                tolerate_denied_replacement,
+                tolerate_denied_prefix * 4 + tolerate_denied,
+            ),
+            encoding="utf-8",
+        )
+        module.patch_dsh_app_boot(Path(directory))
+        assert fixture.read_text(encoding="utf-8") == patched
+
     with tempfile.TemporaryDirectory(prefix="dsh-client-failure-") as directory:
         fixture = (
             Path(directory)

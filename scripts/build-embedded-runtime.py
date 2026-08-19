@@ -606,9 +606,14 @@ def patch_dsh_app_boot(dsh_root: Path) -> None:
     tolerate_denied = (
         'if (error.code !== "EEXIST" || !lstatSync(link).isSymbolicLink() || readlinkSync(link) !== target) throw error;'
     )
-    tolerate_denied_replacement = (
+    tolerate_denied_prefix = (
         'if (error.code === "EACCES" || error.code === "EPERM" || error.code === "ENOTSUP") return; '
-        'if (error.code !== "EEXIST" || !lstatSync(link).isSymbolicLink() || readlinkSync(link) !== target) throw error;'
+    )
+    tolerate_denied_replacement = (
+        tolerate_denied_prefix + tolerate_denied
+    )
+    tolerate_denied_pattern = re.compile(
+        rf"(?:{re.escape(tolerate_denied_prefix)})*{re.escape(tolerate_denied)}"
     )
 
     if not candidates:
@@ -620,9 +625,30 @@ def patch_dsh_app_boot(dsh_root: Path) -> None:
         text = path.read_text(encoding="utf-8")
         original = text
         if trust_existing in text:
-            text = text.replace(trust_existing, trust_existing_replacement)
-        if tolerate_denied in text:
-            text = text.replace(tolerate_denied, tolerate_denied_replacement)
+            text = text.replace(trust_existing, trust_existing_replacement, 1)
+        if text.count(tolerate_denied) != 1:
+            raise BuildError(
+                f"dsh-app-boot denied-error patch source count is not one in {path}; "
+                "aborting to avoid patching an unsupported or duplicated implementation"
+            )
+        text, replacement_count = tolerate_denied_pattern.subn(
+            tolerate_denied_replacement,
+            text,
+            count=1,
+        )
+        if replacement_count != 1:
+            raise BuildError(
+                f"dsh-app-boot denied-error patch source is missing in {path}; "
+                "aborting to avoid shipping an unpatched runtime"
+            )
+        if (
+            text.count(tolerate_denied_prefix) != 1
+            or text.count(tolerate_denied_replacement) != 1
+        ):
+            raise BuildError(
+                f"dsh-app-boot denied-error patch is not canonical in {path}; "
+                "aborting to avoid shipping a duplicated or partial patch"
+            )
         if text != original:
             path.write_text(text, encoding="utf-8")
         if trust_existing_replacement not in text or tolerate_denied_replacement not in text:
