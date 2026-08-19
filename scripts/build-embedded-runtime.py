@@ -45,8 +45,23 @@ PROFILE_BUNDLE_NAMES = (
     "@liustack/modlens",
     "dshmarket",
 )
+OPTIONAL_PROFILE_BUNDLES = frozenset({"dsh-mobile-compat"})
+RUNTIME_BUILD_METADATA_PATHS = frozenset(
+    {
+        PurePosixPath("pnpm-lock.yaml"),
+        PurePosixPath("pnpm-workspace.yaml"),
+        PurePosixPath("node_modules/.modules.yaml"),
+        PurePosixPath("node_modules/.package-map.json"),
+        PurePosixPath("node_modules/.pnpm-workspace-state-v1.json"),
+        PurePosixPath("node_modules/.pnpm/lock.yaml"),
+    }
+)
 MOBILE_SETTINGS_LAYOUT_MARKER = "dsh-mobile-settings-layout-v1"
 CLIENT_FAILURE_DISPLAY_MARKER = "dsh-client-failure-display-v2"
+CLIENT_TOOL_DETAILS_ACTION_MARKER = "dsh-client-tool-details-action-v1"
+CLIENT_TOOL_DETAILS_ENTRY_MARKER = "dsh-client-tool-details-entry-v2"
+LEGACY_CLIENT_TOOL_DETAILS_ENTRY_MARKER = "dsh-client-tool-details-entry-v1"
+MOBILE_TOOL_DETAILS_LAYOUT_MARKER = "dsh-mobile-tool-details-layout-v1"
 
 
 class BuildError(RuntimeError):
@@ -85,6 +100,30 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def find_linux_arm64_node_pty(dsh_root: Path) -> Path:
+    """Return the single installed Linux ARM64 node-pty module.
+
+    dsh currently allows node-pty prereleases, so pnpm's resolved version may
+    change without a dsh version change. Requiring one package directory keeps
+    selection deterministic and prevents silently validating an unused copy.
+    """
+    pnpm_dir = dsh_root / "node_modules" / ".pnpm"
+    package_dirs = sorted(
+        path
+        for path in pnpm_dir.glob("node-pty@*/node_modules/node-pty")
+        if path.is_dir()
+    )
+    if len(package_dirs) != 1:
+        raise BuildError(
+            "Harness runtime must contain exactly one pnpm node-pty package; "
+            f"found {len(package_dirs)}"
+        )
+    module = package_dirs[0] / "prebuilds" / "linux-arm64" / "pty.node"
+    if not module.is_file() or module.stat().st_size <= 0:
+        raise BuildError("Harness runtime is missing its Linux ARM64 node-pty module")
+    return module
+
+
 MAX_MOBILE_PROFILE_BYTES = 64 * 1024
 MOBILE_BUNDLE_PATTERN = re.compile(
     r"^(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,61}/)?[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
@@ -114,8 +153,12 @@ def validate_mobile_profile(path: Path) -> dict:
     if not isinstance(bundles, list) or not bundles or len(bundles) > 64:
         raise BuildError("mobile profile bundles must be a non-empty list (max 64)")
     for bundle in bundles:
-        if not isinstance(bundle, str) or not MOBILE_BUNDLE_PATTERN.match(bundle):
+        if not isinstance(bundle, str) or not MOBILE_BUNDLE_PATTERN.fullmatch(bundle):
             raise BuildError(f"mobile profile bundle identifier is invalid: {bundle!r}")
+        if bundle in OPTIONAL_PROFILE_BUNDLES:
+            raise BuildError(
+                f"mobile profile bundle is disabled on Android: {bundle!r}"
+            )
     mobile = spec.get("mobile")
     result: dict = {"dsh": {"profile": {"bundles": list(bundles)}}}
     if mobile is not None:
@@ -128,7 +171,7 @@ def validate_mobile_profile(path: Path) -> dict:
         if disabled is not None and (
             not isinstance(disabled, list)
             or len(disabled) > 64
-            or any(not isinstance(name, str) or not MOBILE_BUNDLE_PATTERN.match(name) for name in disabled)
+            or any(not isinstance(name, str) or not MOBILE_BUNDLE_PATTERN.fullmatch(name) for name in disabled)
         ):
             raise BuildError("mobile profile disabledOnMobile list is invalid")
         idle = mobile.get("idleStopMinutes")
@@ -390,7 +433,30 @@ def copy_tar_archive(
             raise BuildError(f"expected excluded archive paths are missing: {missing}")
 
 
-def skip_non_linux_runtime_path(relative: PurePosixPath) -> bool:
+def runtime_path_contains_package(relative: PurePosixPath, package_name: str) -> bool:
+    package_parts = PurePosixPath(package_name).parts
+    parts = relative.parts
+    if parts[: len(package_parts)] == package_parts:
+        return True
+    for index, part in enumerate(parts):
+        if part == "node_modules" and parts[index + 1 : index + 1 + len(package_parts)] == package_parts:
+            return True
+    encoded_name = package_name.replace("/", "+")
+    return (
+        len(parts) >= 3
+        and parts[:2] == ("node_modules", ".pnpm")
+        and (parts[2] == encoded_name or parts[2].startswith(f"{encoded_name}@"))
+    )
+
+
+def skip_runtime_path(
+    relative: PurePosixPath,
+    excluded_package_names: frozenset[str] = frozenset(),
+) -> bool:
+    if relative in RUNTIME_BUILD_METADATA_PATHS:
+        return True
+    if any(runtime_path_contains_package(relative, name) for name in excluded_package_names):
+        return True
     lowered_parts = tuple(part.lower() for part in relative.parts)
     if any("win32" in part or part.startswith("darwin-") for part in lowered_parts):
         return True
@@ -403,7 +469,12 @@ def skip_non_linux_runtime_path(relative: PurePosixPath) -> bool:
     return False
 
 
-def add_windows_tree(writer: RootfsWriter, source_root: Path, destination_root: str) -> None:
+def add_windows_tree(
+    writer: RootfsWriter,
+    source_root: Path,
+    destination_root: str,
+    excluded_package_names: frozenset[str] = frozenset(),
+) -> None:
     writer.add_directory(destination_root)
     for current_raw, directory_names, file_names in os.walk(source_root, topdown=True, followlinks=False):
         current = Path(current_raw)
@@ -413,7 +484,10 @@ def add_windows_tree(writer: RootfsWriter, source_root: Path, destination_root: 
         for name in list(directory_names):
             path = current / name
             local_relative = path.relative_to(source_root)
-            if skip_non_linux_runtime_path(PurePosixPath(local_relative.as_posix())):
+            if skip_runtime_path(
+                PurePosixPath(local_relative.as_posix()),
+                excluded_package_names,
+            ):
                 directory_names.remove(name)
                 continue
             archive_name = normalized_path(f"{archive_parent}/{name}")
@@ -436,7 +510,10 @@ def add_windows_tree(writer: RootfsWriter, source_root: Path, destination_root: 
         for name in file_names:
             path = current / name
             local_relative = path.relative_to(source_root)
-            if skip_non_linux_runtime_path(PurePosixPath(local_relative.as_posix())):
+            if skip_runtime_path(
+                PurePosixPath(local_relative.as_posix()),
+                excluded_package_names,
+            ):
                 continue
             archive_name = normalized_path(f"{archive_parent}/{name}")
             if path.is_symlink():
@@ -540,7 +617,12 @@ def add_toolchain(writer: RootfsWriter, toolchain_dir: Path) -> None:
         writer.add_symlink("usr/local/bin/python", "../../opt/python/bin/python3")
 
 
-def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_dsh: str) -> int:
+def add_profiles_module_fallback(
+    writer: RootfsWriter,
+    dsh_root: Path,
+    rootfs_dsh: str,
+    excluded_package_names: frozenset[str] = frozenset(),
+) -> int:
     """预生成 $DSH_HOME/profiles/node_modules 的扁平包链接，返回链接总数。
 
     dsh 启动时（profile-boot）会调用 healProfilesModuleFallback 维护这个目录，
@@ -577,7 +659,7 @@ def add_profiles_module_fallback(writer: RootfsWriter, dsh_root: Path, rootfs_ds
             cursor = cursor.parent
 
     def enqueue(name: str, from_dir: Path) -> None:
-        if name in links:
+        if name in excluded_package_names or name in links:
             return
         real = resolve_package(from_dir, name)
         if real is None:
@@ -1149,6 +1231,405 @@ def patch_client_mobile_settings_layout(dsh_root: Path) -> None:
         path.write_text(text, encoding="utf-8")
 
 
+def patch_client_tool_details_action(dsh_root: Path) -> None:
+    """Add a dedicated native details button to each official Tool row.
+
+    Tool rows use an accessible DisclosureRow for inline expansion. Keeping the
+    details affordance as a sibling button preserves that existing interaction
+    and avoids interpreting arbitrary row clicks as a details selection.
+    """
+    candidates: list[Path] = []
+    candidates.extend(
+        dsh_root.glob(
+            "node_modules/.pnpm/*/"
+            "node_modules/@deepseek-ai/dsh-client-ui-tool/lib/client.js",
+        )
+    )
+    top_level = (
+        dsh_root
+        / "node_modules"
+        / "@deepseek-ai"
+        / "dsh-client-ui-tool"
+        / "lib"
+        / "client.js"
+    )
+    if top_level.is_file():
+        candidates.append(top_level)
+    candidates = unique_file_candidates(candidates)
+
+    source_css_map = (
+        "var ToolCallTree_module_css_default = {\n"
+        '\t\t\t"callRow": "ztWv_q_callRow",\n'
+        '\t\t\t"subCalls": "ztWv_q_subCalls"\n'
+        "\t\t};"
+    )
+    patched_css_map = (
+        "var ToolCallTree_module_css_default = {\n"
+        '\t\t\t"callRow": "ztWv_q_callRow",\n'
+        '\t\t\t"subCalls": "ztWv_q_subCalls",\n'
+        '\t\t\t"detailsButton": "ztWv_q_detailsButton"\n'
+        "\t\t};"
+    )
+    source_children = (
+        '\t\t\t\tchildren: [renderSlot("tool.call.toolview", owner, {\n'
+        "\t\t\t\t\tentryKey: toolName,\n"
+        '\t\t\t\t\tfallback: (0, react_jsx_runtime.jsx)(GenericToolCard, {\n'
+        "\t\t\t\t\t\t...owner,\n"
+        "\t\t\t\t\t\tt\n"
+        "\t\t\t\t\t})\n"
+        "\t\t\t\t}), children]\n"
+    )
+    source_call_id = '\t\t\t\t"data-chat-call-id": callId,\n'
+    source_inspect_icon = "_deepseek_ai_dsh_client_ui_primitives.IconInspectOutline12"
+    patched_children = (
+        '\t\t\t\tchildren: [renderSlot("tool.call.toolview", owner, {\n'
+        "\t\t\t\t\tentryKey: toolName,\n"
+        '\t\t\t\t\tfallback: (0, react_jsx_runtime.jsx)(GenericToolCard, {\n'
+        "\t\t\t\t\t\t...owner,\n"
+        "\t\t\t\t\t\tt\n"
+        "\t\t\t\t\t})\n"
+        "\t\t\t\t}), (0, react_jsx_runtime.jsx)(\"button\", {\n"
+        "\t\t\t\t\ttype: \"button\",\n"
+        "\t\t\t\t\tclassName: ToolCallTree_module_css_default.detailsButton,\n"
+        '\t\t\t\t\t"data-dsh-open-tool-details": "",\n'
+        '\t\t\t\t\t"aria-label": "Open tool details",\n'
+        '\t\t\t\t\ttitle: "Open tool details",\n'
+        "\t\t\t\t\tchildren: (0, react_jsx_runtime.jsx)(_deepseek_ai_dsh_client_ui_primitives.IconInspectOutline12, {})\n"
+        "\t\t\t\t}), children]\n"
+    )
+    action_css = (
+        f"/* {CLIENT_TOOL_DETAILS_ACTION_MARKER} */"
+        ".ztWv_q_callRow{box-sizing:border-box;padding-right:36px;position:relative}"
+        ".ztWv_q_detailsButton{appearance:none;border:0;box-sizing:border-box;"
+        "color:var(--dsw-alias-label-secondary);background:transparent;cursor:pointer;"
+        "align-items:center;justify-content:center;width:28px;height:28px;padding:0;"
+        "display:flex;position:absolute;top:4px;right:4px}"
+        ".ztWv_q_detailsButton:hover{color:var(--dsw-alias-label-primary);"
+        "background:var(--dsw-alias-interactive-bg-hover);border-radius:4px}"
+        ".ztWv_q_detailsButton:focus-visible{outline:2px solid "
+        "var(--dsw-alias-state-business-primary);"
+        "outline-offset:1px;border-radius:4px}"
+    )
+    encoded_css = json.dumps(action_css, ensure_ascii=True)[1:-1]
+
+    def require_exact_tool_action(text: str, path: Path) -> None:
+        if not (
+            text.count(CLIENT_TOOL_DETAILS_ACTION_MARKER) == 1
+            and text.count(encoded_css) == 1
+            and text.count(patched_css_map) == 1
+            and text.count(patched_children) == 1
+            and text.count(source_call_id) == 1
+            and text.count(source_inspect_icon) >= 1
+            and text.count(source_css_map) == 0
+            and text.count(source_children) == 0
+        ):
+            raise BuildError(f"Tool details action marker is incomplete in {path}")
+
+    if not candidates:
+        raise BuildError(
+            "dsh-client-ui-tool details action patch found no installed copy; "
+            "aborting to avoid shipping unreachable Tool details"
+        )
+    for path in candidates:
+        text = path.read_text(encoding="utf-8")
+        if CLIENT_TOOL_DETAILS_ACTION_MARKER in text:
+            require_exact_tool_action(text, path)
+            continue
+        css_marker = 'const css$2 = "'
+        css_boundary = (
+            '";\n\t\tconst tagId$2 = '
+            '"@deepseek-ai/dsh-client-ui-tool/ToolCallTree.module.css";'
+        )
+        css_start = text.find(css_marker)
+        css_end = text.find(css_boundary, css_start + len(css_marker))
+        anchors = {
+            "ToolCallTree CSS declaration": text.count(css_marker),
+            "ToolCallTree CSS boundary": text.count(css_boundary),
+            "ToolCallTree CSS map": text.count(source_css_map),
+            "ToolCall wrapper": text.count(source_children),
+            "Tool call id attribute": text.count(source_call_id),
+        }
+        invalid = [name for name, count in anchors.items() if count != 1]
+        if text.count(source_inspect_icon) < 1:
+            invalid.append("Inspect icon export")
+        if css_start < 0 or css_end < 0:
+            invalid.append("ToolCallTree CSS declaration boundary")
+        if invalid:
+            raise BuildError(
+                f"Tool details action patch anchors are not unique in {path}: "
+                + ", ".join(dict.fromkeys(invalid))
+            )
+        text = text[:css_end] + encoded_css + text[css_end:]
+        text = text.replace(source_css_map, patched_css_map, 1)
+        text = text.replace(source_children, patched_children, 1)
+        require_exact_tool_action(text, path)
+        path.write_text(text, encoding="utf-8")
+
+
+def patch_client_tool_details_entry(dsh_root: Path) -> None:
+    """Route only the dedicated Tool details button to the official callback."""
+    candidates: list[Path] = []
+    candidates.extend(
+        dsh_root.glob(
+            "node_modules/.pnpm/*/"
+            "node_modules/@deepseek-ai/dsh-client-ui-conversation/lib/client.js",
+        )
+    )
+    top_level = (
+        dsh_root
+        / "node_modules"
+        / "@deepseek-ai"
+        / "dsh-client-ui-conversation"
+        / "lib"
+        / "client.js"
+    )
+    if top_level.is_file():
+        candidates.append(top_level)
+    candidates = unique_file_candidates(candidates)
+
+    source_signature = (
+        "function ChatView({ useSession, useSessions, useStore, renderSlot, "
+        "sessionId, openFile, loadOlder, loadImage, inspectCall, chatScroll, "
+        "forkAt, fileMentions, t }) {"
+    )
+    patched_signature = (
+        "function ChatView({ useSession, useSessions, useStore, renderSlot, "
+        "sessionId, openFile, openDetails, loadOlder, loadImage, inspectCall, "
+        "chatScroll, forkAt, fileMentions, t }) {"
+    )
+    open_details_provider = (
+        "\t\t\t\t\t\topenDetails: (target) => {\n"
+        "\t\t\t\t\t\t\tactions.select(target);\n"
+        "\t\t\t\t\t\t\tlayout.openDetails();\n"
+        "\t\t\t\t\t\t},\n"
+    )
+    list_ref = '\t\t\tconst listRef = (0, react.useRef)(null);\n'
+    handler = (
+        list_ref
+        + f"\t\t\t/* {CLIENT_TOOL_DETAILS_ENTRY_MARKER} */\n"
+        + "\t\t\tconst openToolDetails = (event) => {\n"
+        + "\t\t\t\tconst target = event.target;\n"
+        + "\t\t\t\tif (!(target instanceof Element)) return;\n"
+        + '\t\t\t\tconst trigger = target.closest("[data-dsh-open-tool-details]");\n'
+        + "\t\t\t\tif (!(trigger instanceof HTMLButtonElement) || trigger.disabled "
+        + "|| !listRef.current?.contains(trigger)) return;\n"
+        + '\t\t\t\tconst row = trigger.closest("[data-chat-call-id]");\n'
+        + '\t\t\t\tconst callId = row?.getAttribute("data-chat-call-id");\n'
+        + "\t\t\t\tif (row === null || !listRef.current?.contains(row) "
+        + '|| callId === null || callId === "" || callId.length > 256 '
+        + r'|| /[\u0000-\u001F\u007F]/.test(callId)) return;'
+        + "\n"
+        + "\t\t\t\tevent.preventDefault();\n"
+        + "\t\t\t\tevent.stopPropagation();\n"
+        + "\t\t\t\topenDetails({\n"
+        + "\t\t\t\t\tturnSeq: 0,\n"
+        + "\t\t\t\t\tcallId\n"
+        + "\t\t\t\t});\n"
+        + "\t\t\t};\n"
+    )
+    list_props = (
+        "\t\t\t\t\tref: listRef,\n"
+        "\t\t\t\t\tclassName: ChatView_module_css_default.scroll,\n"
+    )
+    patched_list_props = (
+        "\t\t\t\t\tref: listRef,\n"
+        "\t\t\t\t\tonClick: openToolDetails,\n"
+        "\t\t\t\t\tclassName: ChatView_module_css_default.scroll,\n"
+    )
+
+    def require_exact_tool_entry(text: str, path: Path) -> None:
+        complete = (
+            text.count(CLIENT_TOOL_DETAILS_ENTRY_MARKER) == 1
+            and text.count(patched_signature) == 1
+            and text.count(handler) == 1
+            and text.count(patched_list_props) == 1
+            and text.count(open_details_provider) == 1
+            and source_signature not in text
+            and "onKeyDown: openToolDetails" not in text
+        )
+        if not complete:
+            raise BuildError(f"Tool details entry marker is incomplete in {path}")
+
+    if not candidates:
+        raise BuildError(
+            "dsh-client-ui-conversation Tool details entry patch found no installed copy; "
+            "aborting to avoid shipping unreachable Tool details"
+        )
+    for path in candidates:
+        text = path.read_text(encoding="utf-8")
+        if LEGACY_CLIENT_TOOL_DETAILS_ENTRY_MARKER in text:
+            raise BuildError(
+                f"legacy Tool details entry patch found in {path}; use a clean Harness runtime"
+            )
+        if CLIENT_TOOL_DETAILS_ENTRY_MARKER in text:
+            require_exact_tool_entry(text, path)
+            continue
+        anchors = {
+            "ChatView signature": text.count(source_signature),
+            "chat list ref": text.count(list_ref),
+            "chat list props": text.count(list_props),
+            "openDetails provider": text.count(open_details_provider),
+        }
+        invalid = [name for name, count in anchors.items() if count != 1]
+        if invalid:
+            raise BuildError(
+                f"Tool details entry patch anchors are not unique in {path}: "
+                + ", ".join(invalid)
+            )
+        text = text.replace(source_signature, patched_signature, 1)
+        text = text.replace(list_ref, handler, 1)
+        text = text.replace(list_props, patched_list_props, 1)
+        require_exact_tool_entry(text, path)
+        path.write_text(text, encoding="utf-8")
+
+
+def patch_client_mobile_tool_details_layout(dsh_root: Path) -> None:
+    """Keep requested official Tool details visible when columns concede to zero.
+
+    The desktop concession solver intentionally derives a zero-width details
+    track on narrow frames. When the user explicitly selects a Tool call, this
+    client-only patch presents the same mounted official details subtree as a
+    right overlay (full width on phones); desktop layouts that can fit the
+    details column are unchanged.
+    """
+    candidates: list[Path] = []
+    candidates.extend(
+        dsh_root.glob(
+            "node_modules/.pnpm/*/"
+            "node_modules/@deepseek-ai/dsh-client-ui-layout/lib/client.js",
+        )
+    )
+    top_level = (
+        dsh_root
+        / "node_modules"
+        / "@deepseek-ai"
+        / "dsh-client-ui-layout"
+        / "lib"
+        / "client.js"
+    )
+    if top_level.is_file():
+        candidates.append(top_level)
+    candidates = unique_file_candidates(candidates)
+
+    source_details_column = (
+        "\t\t\treturn (0, react_jsx_runtime.jsx)(\"div\", {\n"
+        "\t\t\t\tclassName: AppFrame_module_css_default.detailsCol,\n"
+        "\t\t\t\tchildren: props.children\n"
+        "\t\t\t});\n"
+    )
+    patched_details_column = (
+        "\t\t\treturn (0, react_jsx_runtime.jsx)(\"div\", {\n"
+        "\t\t\t\tclassName: AppFrame_module_css_default.detailsCol,\n"
+        '\t\t\t\t"data-dsh-details-column": "",\n'
+        "\t\t\t\tchildren: props.children\n"
+        "\t\t\t});\n"
+    )
+    source_columns = (
+        "\t\t\tconst cols = computeColumns(viewport, sidebarCollapsed ? 0 : "
+        "panels.sidebar === 0 ? 280 : panels.sidebar, detailsSession === void 0 "
+        "? 0 : panels.details);\n"
+    )
+    patched_columns = (
+        source_columns
+        + "\t\t\tconst detailsOverlay = detailsSession !== void 0 "
+        "&& panels.details > 0 && cols.details === 0;\n"
+    )
+    grid_template = (
+        chr(96)
+        + "$"
+        + "{cols.sidebar}px minmax(0, 1fr) $"
+        + "{cols.details}px"
+        + chr(96)
+    )
+    source_frame_props = (
+        "\t\t\t\tstyle: { gridTemplateColumns: "
+        + grid_template
+        + " },\n"
+        + '\t\t\t\t"data-sidebar-collapsed": sidebarCollapsed || void 0,\n'
+        + '\t\t\t\t"data-details-collapsed": cols.details === 0 || void 0,\n'
+    )
+    patched_frame_props = (
+        "\t\t\t\tstyle: { gridTemplateColumns: "
+        + grid_template
+        + " },\n"
+        + '\t\t\t\t"data-dsh-layout-frame": "",\n'
+        + '\t\t\t\t"data-sidebar-collapsed": sidebarCollapsed || void 0,\n'
+        + '\t\t\t\t"data-details-overlay": detailsOverlay || void 0,\n'
+        + '\t\t\t\t"data-details-collapsed": '
+        + "!detailsOverlay && cols.details === 0 || void 0,\n"
+    )
+    mobile_css = (
+        f"/* {MOBILE_TOOL_DETAILS_LAYOUT_MARKER} */"
+        "[data-dsh-layout-frame][data-details-overlay] "
+        "[data-dsh-details-column]{"
+        "z-index:10;box-sizing:border-box;background:var(--dsw-alias-bg-base);"
+        "width:min(100%,520px);position:absolute;top:0;right:0;bottom:0;"
+        "box-shadow:-8px 0 28px rgba(0,0,0,.16);"
+        "animation:dshMobileDetailsIn var(--ds-transition-duration-slow) "
+        "var(--ds-ease-in-out) both}"
+        "[data-dsh-layout-frame][data-details-overlay]>"
+        "[data-side=details]{display:none}"
+        "@keyframes dshMobileDetailsIn{from{opacity:.96;transform:translateX(24px)}"
+        "to{opacity:1;transform:translateX(0)}}"
+        "@media (max-width:600px){"
+        "[data-dsh-layout-frame][data-details-overlay] "
+        "[data-dsh-details-column]{left:0;width:100%;box-shadow:none}}"
+        "@media (prefers-reduced-motion:reduce){"
+        "[data-dsh-layout-frame][data-details-overlay] "
+        "[data-dsh-details-column]{animation:none}}"
+    )
+    encoded_css = json.dumps(mobile_css, ensure_ascii=True)[1:-1]
+
+    def require_exact_mobile_details(text: str, path: Path) -> None:
+        complete = (
+            text.count(MOBILE_TOOL_DETAILS_LAYOUT_MARKER) == 1
+            and text.count(encoded_css) == 1
+            and text.count(patched_details_column) == 1
+            and text.count(patched_columns) == 1
+            and text.count(patched_frame_props) == 1
+            and text.count(source_frame_props) == 0
+        )
+        if not complete:
+            raise BuildError(f"mobile Tool details layout marker is incomplete in {path}")
+
+    if not candidates:
+        raise BuildError(
+            "dsh-client-ui-layout mobile Tool details patch found no installed copy; "
+            "aborting to avoid shipping a zero-width details surface"
+        )
+    for path in candidates:
+        text = path.read_text(encoding="utf-8")
+        if MOBILE_TOOL_DETAILS_LAYOUT_MARKER in text:
+            require_exact_mobile_details(text, path)
+            continue
+        css_marker = 'const css = "'
+        css_boundary = (
+            '";\n\t\tconst tagId = '
+            '"@deepseek-ai/dsh-client-ui-layout/AppFrame.module.css";'
+        )
+        css_start = text.find(css_marker)
+        css_end = text.find(css_boundary, css_start + len(css_marker))
+        anchors = {
+            "layout CSS declaration": text.count(css_marker),
+            "layout CSS boundary": text.count(css_boundary),
+            "details column": text.count(source_details_column),
+            "column solver call": text.count(source_columns),
+            "frame details props": text.count(source_frame_props),
+        }
+        invalid = [name for name, count in anchors.items() if count != 1]
+        if invalid or css_start < 0 or css_end < 0:
+            raise BuildError(
+                f"mobile Tool details layout anchors are not unique in {path}: "
+                + ", ".join(invalid or ["layout CSS boundary"])
+            )
+        text = text[:css_end] + encoded_css + text[css_end:]
+        text = text.replace(source_details_column, patched_details_column, 1)
+        text = text.replace(source_columns, patched_columns, 1)
+        text = text.replace(source_frame_props, patched_frame_props, 1)
+        require_exact_mobile_details(text, path)
+        path.write_text(text, encoding="utf-8")
+
+
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ubuntu", required=True, type=Path)
@@ -1210,18 +1691,9 @@ def main() -> None:
     verify_input(args.ubuntu, args.ubuntu_sha256, "Ubuntu archive")
     verify_input(args.node, args.node_sha256, "Node.js archive")
     dsh_entrypoint = args.dsh_root / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
-    # node-pty 版本随 pnpm 解析漂移（1.1.0 / 1.2.0-beta.x），动态查找任意 node-pty@* 的
-    # prebuilds/linux-arm64/pty.node（prebuild 包自带，无需固定版本）
-    node_pty: Path | None = None
-    pnpm_dir = args.dsh_root / "node_modules" / ".pnpm"
-    if pnpm_dir.is_dir():
-        candidates = sorted(
-            pnpm_dir.glob("node-pty@*/node_modules/node-pty/prebuilds/linux-arm64/pty.node")
-        )
-        if candidates:
-            node_pty = candidates[0]
-    if not dsh_entrypoint.is_file() or node_pty is None:
-        raise BuildError("Harness runtime is missing its CLI or Linux ARM64 node-pty module")
+    if not dsh_entrypoint.is_file():
+        raise BuildError("Harness runtime is missing its CLI")
+    find_linux_arm64_node_pty(args.dsh_root)
     mobile_auth_preload = read_support_file(MOBILE_AUTH_PRELOAD, "mobile authentication preload")
     mobile_spec = validate_mobile_profile(args.mobile_profile) if args.mobile_profile is not None else None
     if args.output.exists() or args.manifest.exists():
@@ -1251,6 +1723,9 @@ def main() -> None:
             inject_bundles_into_dsh_manifest(args.dsh_root, profile_bundles)
             patch_client_failure_display(args.dsh_root)
             patch_client_mobile_settings_layout(args.dsh_root)
+            patch_client_tool_details_action(args.dsh_root)
+            patch_client_tool_details_entry(args.dsh_root)
+            patch_client_mobile_tool_details_layout(args.dsh_root)
             patch_dsh_app_boot(args.dsh_root)
             patch_dsh_app_boot_bundle_tolerance(args.dsh_root)
             patch_session_persistence(args.dsh_root)
@@ -1259,7 +1734,19 @@ def main() -> None:
             add_toolchain(writer, args.toolchain_dir)
             writer.add_bytes("usr/local/bin/dsh-device", DEVICE_CLI, 0o755)
             writer.add_directory("sdcard/")
-            profile_links = add_profiles_module_fallback(writer, args.dsh_root, "opt/dsh")
+            disabled_profile_bundles = OPTIONAL_PROFILE_BUNDLES.difference(profile_bundles)
+            add_windows_tree(
+                writer,
+                args.dsh_root,
+                "opt/dsh",
+                disabled_profile_bundles,
+            )
+            profile_links = add_profiles_module_fallback(
+                writer,
+                args.dsh_root,
+                "opt/dsh",
+                disabled_profile_bundles,
+            )
             writer.add_symlink("usr/local/bin/node", "../../../opt/node/bin/node")
             # Ubuntu base 精简包不含这两个链接，但 App 完整性校验将其列为必需：
             # 运行时（mount 视图/时区）与校验都需要，缺了安装会报 ROOTFS_LINKS_CORRUPTED。

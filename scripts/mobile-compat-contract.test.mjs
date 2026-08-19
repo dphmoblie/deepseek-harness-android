@@ -39,6 +39,17 @@ test('Android rootfs workflow preserves the official frontend dist', async () =>
   assert.match(workflow, /official @deepseek-ai\/dsh-web-frontend\/dist/)
 })
 
+test('Android rootfs workflow tolerates node-pty version drift without hiding failures', async () => {
+  const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
+  assert.doesNotMatch(workflow, /node-pty@1\.1\.0/)
+  assert.match(workflow, /mapfile -t PTP_DIRS/)
+  assert.match(workflow, /expected exactly one node-pty package/)
+  assert.match(workflow, /test -s "\$PTP\/prebuilds\/linux-arm64\/pty\.node"/)
+  assert.doesNotMatch(workflow, /tee \/tmp\/(?:step|bundle|release)\.log \|\| true/)
+  assert.doesNotMatch(workflow, /PIPESTATUS/)
+  assert.equal(workflow.match(/STATUS="\$\?"/g)?.length, 3)
+})
+
 test('the default mobile profile keeps the official layout as the sole root owner', async () => {
   const profile = JSON.parse(
     await readFile(resolve(appRoot, 'scripts/mobile-profile.example.json'), 'utf8'),
@@ -70,8 +81,31 @@ test('runtime packaging keeps official settings usable in a narrow WebView', asy
   assert.match(builder, /patch_client_mobile_settings_layout\(args\.dsh_root\)/)
 })
 
+test('runtime packaging exposes official Tool details without replacing the root layout', async () => {
+  const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
+  assert.match(builder, /def patch_client_tool_details_action\(dsh_root: Path\)/)
+  assert.match(builder, /dsh-client-tool-details-action-v1/)
+  assert.match(builder, /data-dsh-open-tool-details/)
+  assert.match(builder, /IconInspectOutline12/)
+  assert.match(builder, /def patch_client_tool_details_entry\(dsh_root: Path\)/)
+  assert.match(builder, /dsh-client-tool-details-entry-v2/)
+  assert.match(builder, /callId\.length > 256/)
+  assert.match(builder, /target\.closest\("\[data-dsh-open-tool-details\]"\)/)
+  assert.match(builder, /onClick: openToolDetails/)
+  assert.match(builder, /and "onKeyDown: openToolDetails" not in text/)
+  assert.match(builder, /def patch_client_mobile_tool_details_layout\(dsh_root: Path\)/)
+  assert.match(builder, /dsh-mobile-tool-details-layout-v1/)
+  assert.match(builder, /data-dsh-details-column/)
+  assert.match(builder, /patch_client_tool_details_action\(args\.dsh_root\)/)
+  assert.match(builder, /patch_client_tool_details_entry\(args\.dsh_root\)/)
+  assert.match(builder, /patch_client_mobile_tool_details_layout\(args\.dsh_root\)/)
+})
+
 test('bundle verification keeps the official profile baseline without a mobile manifest', async () => {
   const verifier = await readFile(resolve(appRoot, 'scripts/verify-bundle.py'), 'utf8')
   assert.match(verifier, /PROFILE_BUNDLE_NAMES\s*=\s*\(/)
   assert.match(verifier, /profile_bundle_names\s*=\s*list\(PROFILE_BUNDLE_NAMES\)/)
+  assert.match(verifier, /runtime contains disabled optional bundle/)
+  assert.match(verifier, /manifest mobile profile enables a disabled Android bundle/)
+  assert.match(verifier, /runtime contains build-only package-manager metadata/)
 })
