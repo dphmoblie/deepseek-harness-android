@@ -20,6 +20,22 @@ const PLACEHOLDER_MESSAGES = new Set([
   '本轮因错误结束',
   '本轮以错误结束',
 ])
+const WEAK_MESSAGES = new Set([
+  'request failed',
+  'network error',
+  'fetch failed',
+  'failed to fetch',
+  'failure',
+  'error',
+  'unknown error',
+  'internal server error',
+  'service unavailable',
+  '请求失败',
+  '网络错误',
+  '未知错误',
+  '内部服务器错误',
+  '服务不可用',
+])
 
 function recordOf(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null ? value as Record<string, unknown> : null
@@ -49,6 +65,14 @@ function safeStatus(record: Record<string, unknown>): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599 ? value : null
 }
 
+function normalizedForComparison(text: string): string {
+  return text.replace(/[\s。.!！:：]+$/g, '').trim().toLowerCase()
+}
+
+function isWeakMessage(text: string): boolean {
+  return WEAK_MESSAGES.has(normalizedForComparison(text))
+}
+
 function truncate(text: string): string {
   const characters = [...text]
   if (characters.length <= MAX_ERROR_REASON_LENGTH) return text
@@ -71,10 +95,11 @@ function redact(text: string): string {
       /((?:["']?(?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|id[-_ ]?token|token|auth(?:orization)?|cookie|credential|pass(?:word|wd)?|secret|signature)["']?)\s*[:=]\s*)(?!\[已隐藏\])(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}\]]+)/gi,
       `$1${HIDDEN}`,
     )
-    .replace(/([?&](?:api[-_]?key|access[-_]?token|refresh[-_]?token|token|password|secret|signature)=)[^&#\s]+/gi, `$1${HIDDEN}`)
+    .replace(/([?&](?:api[-_]?key|key|access[-_]?token|refresh[-_]?token|id[-_]?token|token|password|pass(?:wd)?|client[-_]?secret|secret|signature|credential)=)[^&#\s]+/gi, `$1${HIDDEN}`)
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:)[^\s/@]+@/gi, `$1${HIDDEN}@`)
     .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, HIDDEN)
     .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{12,}\b/gi, HIDDEN)
+    .replace(/\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g, HIDDEN)
     .replace(/\bAKIA[0-9A-Z]{16}\b/g, HIDDEN)
     .replace(/\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b/g, '[私网地址]')
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[邮箱已隐藏]')
@@ -84,7 +109,11 @@ function redact(text: string): string {
       '[身份证号已隐藏]',
     )
     .replace(/\b[A-Za-z]:\\Users\\[^\\\s]+/gi, '%USERPROFILE%')
-    .replace(/\/(?:home|Users)\/[^/\s]+/g, '$HOME')
+    .replace(/\/(?:home|Users|root)\/[^/\s]+/g, '$HOME')
+    .replace(/\/data\/(?:user(?:_de)?\/\d+|data)\/[^/\s]+(?:\/[^\s]*)?/g, '$APP_DATA')
+    .replace(/\/opt\/dsh(?:\/[^\s]*)?/gi, '$DSH_HOME')
+    .replace(/\/(?:tmp|var\/tmp)(?:\/[^\s]*)?/g, '$TMP')
+    .replace(/\/(?:storage\/emulated\/\d+|sdcard)\/[^/\s]+(?:\/[^\s]*)?/g, '$SHARED_STORAGE')
 }
 
 function parseStructuredText(text: string, seen: Set<unknown>, depth: number): string | null {
@@ -135,18 +164,30 @@ function cleanDiagnostic(value: string, seen: Set<unknown>, depth: number): stri
 function extractReason(value: unknown, seen: Set<unknown>, depth: number): string | null {
   if (depth > 4) return null
   if (typeof value === 'string') return cleanDiagnostic(value, seen, depth)
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return null
+    seen.add(value)
+    for (const item of value) {
+      const nested = extractReason(item, seen, depth + 1)
+      if (nested !== null) return nested
+    }
+    return null
+  }
   const record = recordOf(value)
   if (record === null || seen.has(value)) return null
   seen.add(value)
 
   const code = safeCode(record)
-  if (code !== null && /^(?:AUTH|UNAUTHORIZED|INVALID_API_KEY)$/i.test(code)) return 'API 密钥无效'
+  if (code !== null && /^INVALID_API_KEY$/i.test(code)) return 'API 密钥无效'
 
+  let weakMessage: string | null = null
   for (const field of MESSAGE_FIELDS) {
     const message = textField(record, field)
     if (message === null) continue
     const cleaned = cleanDiagnostic(message, seen, depth)
-    if (cleaned !== null) return cleaned
+    if (cleaned === null) continue
+    if (!isWeakMessage(cleaned)) return cleaned
+    weakMessage ??= cleaned
   }
   for (const field of NESTED_FAILURE_FIELDS) {
     const nested = extractReason(readField(record, field), seen, depth + 1)
@@ -156,6 +197,7 @@ function extractReason(value: unknown, seen: Set<unknown>, depth: number): strin
   const status = safeStatus(record)
   if (code !== null && code !== 'UNKNOWN') return `错误代码 ${code}`
   if (status !== null) return `HTTP ${status}`
+  if (weakMessage !== null) return weakMessage
   return null
 }
 

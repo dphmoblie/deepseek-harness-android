@@ -165,5 +165,6 @@ export function apply(ctx) {
     }, 'dsh-mobile-compat: styles');
     return () => { };
 }
-export { apply as inject };
+/** Required Cordis services. The client loader reads this as plugin metadata. */
+export const inject = ['slots'];
 //# sourceMappingURL=client.js.map

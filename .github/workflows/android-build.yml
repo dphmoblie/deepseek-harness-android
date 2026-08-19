@@ -32,10 +32,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node.js (pinned engine range)
+      - name: Set up Node.js 24.14.0
         uses: actions/setup-node@v4
         with:
-          node-version: '22.19.0'
+          node-version: '24.14.0'
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -70,8 +70,14 @@ jobs:
       - name: Unit tests (vitest)
         run: pnpm test
 
+      - name: Harness frontend tests
+        run: pnpm --dir harness-web test
+
       - name: Script tests (node --test)
         run: pnpm run test:scripts
+
+      - name: Runtime packaging self-check
+        run: python3 scripts/build-embedded-runtime.selfcheck.py
 
       - name: Lint
         run: pnpm run lint
@@ -220,26 +226,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node 22 (arm64)
+      - name: Set up Node 24.14.0 (arm64)
         uses: actions/setup-node@v4
         with:
-          node-version: '22.19.0'
+          node-version: '24.14.0'
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
-
-      - name: Build mobile Harness conversation frontend
-        run: |
-          pnpm install --frozen-lockfile --filter @dsh-mobile/harness-web...
-          pnpm --filter @dsh-mobile/harness-web build
 
       - name: Prepare dsh runtime for linux/arm64 (compile node-pty from source)
         run: |
           set -x
           set -o pipefail
           mkdir -p /tmp/dsh-root && cd /tmp/dsh-root
-          # 本地未发布的 mobile bundle：复制进 dsh-root 后以 file: 依赖安装
-          cp -r "$GITHUB_WORKSPACE/packages/dsh-mobile-compat" /tmp/dsh-root/dsh-mobile-compat
           # dsh-base/dsh-web-app 固定到与 dsh 0.1.0-rc.6 同批次版本：
           # latest(0.0.1-rc.1) 依赖已下架的 @deepseek-ai/dsh-client-ui-slash，会导致安装失败
           cat > package.json <<'EOF'
@@ -253,7 +252,6 @@ jobs:
               "@linxin666/dsh-web-ui-all": "0.1.19",
               "@liustack/modlens": "3.18.1",
               "dshmarket": "1.10.1",
-              "dsh-mobile-compat": "file:./dsh-mobile-compat",
               "@deepseek-ai/dsh-client-runtime": "0.1.0-rc.6",
               "@deepseek-ai/dsh-client-ui-slots": "0.1.0-rc.6",
               "@deepseek-ai/dsh-client-ui-theme": "0.1.0-rc.6",
@@ -330,11 +328,10 @@ jobs:
               --rootfs-url "https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/rootfs.bundle" \
               --mobile-profile scripts/mobile-profile.example.json \
               --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
-            python3 scripts/rebuild-rootfs-frontend.py \
-              --bundle /tmp/rootfs.bundle \
-              --manifest /tmp/runtime-manifest.json \
-              --dist harness-web/dist \
-              --runtime-version "${RUNTIME_VERSION}"
+            # Keep the official @deepseek-ai/dsh-web-frontend/dist emitted by
+            # @deepseek-ai/dsh-web-app.  Do not replace it with the reduced
+            # mobile harness-web build: the official dist owns the complete
+            # plugin/settings UI and the boot graph expected by dsh-web-app.
             ls -la /tmp/rootfs.bundle /tmp/runtime-manifest.json
             sha256sum /tmp/rootfs.bundle
             python3 scripts/verify-bundle.py --bundle /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json

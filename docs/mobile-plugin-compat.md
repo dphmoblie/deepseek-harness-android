@@ -48,9 +48,10 @@
    （标题+菜单）、safe-area（env(safe-area-inset-*) 适配刘海/手势条）。
 4. **主题桥**：沿用 theme-bridge（system dark 同步 + 首帧深色），移动 WebView 的
    matchMedia 卡 light 问题已在壳侧 H1 修复思路内（preload token 之外同样适用）。
-5. **实现载体**：新建客户端插件包 `dsh-mobile-compat`（TS 源码 + 构建，
-   以 responsive 的 dsh.client.inject 声明为模板），在 rootfs 配方的 profile 中
-   替代 layout 的 AppFrame；不改桌面插件本身（零侵入，与上游策略一致）。
+5. **实现载体**：默认 Android profile 直接使用官方
+   `@deepseek-ai/dsh-client-ui-layout`。实验性的 `dsh-mobile-compat` 不再替代
+   AppFrame，因为两套 root 注册会冲突；不改桌面插件本身，保留官方 layout service
+   可确保插件、模型和设置功能完整。
 
 ## 4. 应用入口与管理
 
@@ -75,7 +76,11 @@
 
 ## 6. 落地状态
 
-1. 移动 profile 规格与 `dsh-mobile-compat` 客户端插件已接入 rootfs 配方。
+1. 移动 profile 规格已接入 rootfs 配方，并复用官方响应式 layout；`dsh-mobile-compat`
+   保留为独立实验包，不在默认运行时加载。profile 不使用无人消费的 `disabledOnMobile`
+   标记，所有已装插件统一由 Harness 官方插件设置启停。
+   官方设置组件的窄屏 CSS 在打包阶段补充为顶部标签 + 全宽内容布局，避免 390px WebView
+   中插件列表和 Agent 预设被桌面侧栏挤压裁切。
 2. `harness-web` 已改为会话抽屉、聊天主视图、任务/文件/设置二级页，并支持模型、
    推理强度、排队/引导发送与结构化消息渲染。
 3. Capacitor 已采用无额外引导的直接对话入口，管理能力集中到设置，不再使用四栏主导航。

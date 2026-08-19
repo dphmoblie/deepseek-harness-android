@@ -9,12 +9,23 @@ from __future__ import annotations
 import argparse
 import json
 import posixpath
+import re
 import sys
 from pathlib import PurePosixPath
 
 MAX_ENTRIES = 250_000
 MAX_PATH_CHARS = 4_096
 MAX_COMPONENT_CHARS = 255
+PROFILE_BUNDLE_NAMES = (
+    "@deepseek-ai/dsh-base",
+    "@deepseek-ai/dsh-web-app",
+    "@linxin666/dsh-web-ui-all",
+    "@liustack/modlens",
+    "dshmarket",
+)
+MOBILE_BUNDLE_PATTERN = re.compile(
+    r"^(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,61}/)?[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+)
 
 
 def normalized(raw: str) -> str:
@@ -149,14 +160,23 @@ def main() -> int:
 
     # profiles 扁平模块回退：dsh 启动时 cordis 从 profile 目录解析 loader entry，
     # 必须能在 $DSH_HOME/profiles/node_modules 找到全部 profile bundles。
-    profile_bundle_names = [
-        "dsh-mobile-compat",
-        "dshmarket",
-        "@deepseek-ai/dsh-base",
-        "@deepseek-ai/dsh-web-app",
-        "@linxin666/dsh-web-ui-all",
-        "@liustack/modlens",
-    ]
+    mobile_profile = manifest.get("mobile")
+    profile_bundle_names = list(PROFILE_BUNDLE_NAMES)
+    if mobile_profile is not None and not isinstance(mobile_profile, dict):
+        fail("manifest mobile profile must be an object")
+    if isinstance(mobile_profile, dict):
+        profile_bundle_names = []
+        dsh_profile = mobile_profile.get("dsh")
+        if isinstance(dsh_profile, dict):
+            profile = dsh_profile.get("profile")
+            if isinstance(profile, dict):
+                bundles = profile.get("bundles")
+                if isinstance(bundles, list) and 0 < len(bundles) <= 64:
+                    if any(not isinstance(name, str) or not MOBILE_BUNDLE_PATTERN.fullmatch(name) for name in bundles):
+                        fail("manifest mobile profile contains an invalid bundle name")
+                    profile_bundle_names = list(bundles)
+        if not profile_bundle_names:
+            fail("manifest mobile profile does not declare any bundle names")
     for package_name in profile_bundle_names:
         link_name = f"root/.dsh/profiles/node_modules/{package_name}"
         if types.get(link_name) != "sym":
