@@ -37,7 +37,8 @@ RUNTIME_BUILD_METADATA_PATHS = frozenset(
 MOBILE_BUNDLE_PATTERN = re.compile(
     r"^(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,61}/)?[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 )
-MOBILE_FRONTEND_MARKER = b'name="dsh-mobile-frontend" content="harness-web-v1"'
+OFFICIAL_FRONTEND_MARKER = b'<div id="root">'  # 官方 dsh-web-frontend 模板特征
+MOBILE_MARKER_FORBIDDEN = b'dsh-mobile-frontend'  # harness-web 标记不得混入官方 dist
 FRONTEND_DIST_SUFFIX = "/node_modules/@deepseek-ai/dsh-web-frontend/dist/"
 
 
@@ -80,7 +81,6 @@ def main() -> int:
     entry_count = 0
     extracted = 0
     frontend_indexes: list[str] = []
-    frontend_loaders: list[str] = []
     fail = lambda msg: (_ for _ in ()).throw(SystemExit(f"BUNDLE_VERIFY_FAILED: {msg}"))
 
     import tarfile
@@ -111,10 +111,11 @@ def main() -> int:
                     if dist_path == "index.html":
                         frontend_indexes.append(name)
                         source = t.extractfile(m)
-                        if source is None or MOBILE_FRONTEND_MARKER not in source.read():
-                            fail(f"mobile frontend marker missing: {name!r}")
-                    elif dist_path == "plugin-workbench-loader.js":
-                        frontend_loaders.append(name)
+                        content = source.read()
+                        if content is None or OFFICIAL_FRONTEND_MARKER not in content:
+                            fail(f"official frontend index missing #root: {name!r}")
+                        if MOBILE_MARKER_FORBIDDEN in content:
+                            fail(f"harness-web marker leaked into official frontend: {name!r}")
                     elif dist_path == "plugin-workbench/index.html":
                         fail(f"duplicate desktop frontend entry: {name!r}")
             elif m.issym():
@@ -134,8 +135,6 @@ def main() -> int:
         fail(f"extracted size mismatch: {extracted} != {expected_extracted}")
     if len(frontend_indexes) != 1:
         fail(f"expected exactly one mobile frontend index, found {len(frontend_indexes)}")
-    if len(frontend_loaders) != 1:
-        fail(f"expected exactly one plugin workbench loader, found {len(frontend_loaders)}")
 
     # 文件-目录冲突（提取器 ensureDirectory 规则：父路径被非目录条目占用）
     for name, kind in list(types.items()):

@@ -215,11 +215,6 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Build mobile Harness conversation frontend
-        run: |
-          pnpm install --frozen-lockfile --filter @dsh-mobile/harness-web...
-          pnpm --filter @dsh-mobile/harness-web build
-
       - name: Prepare dsh runtime for linux/arm64 (compile node-pty from source)
         run: |
           set -x
@@ -310,11 +305,6 @@ jobs:
               --rootfs-url "https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/rootfs.bundle" \
               --mobile-profile scripts/mobile-profile.example.json \
               --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
-            python3 scripts/rebuild-rootfs-frontend.py \
-              --bundle /tmp/rootfs.bundle \
-              --manifest /tmp/runtime-manifest.json \
-              --dist harness-web/dist \
-              --runtime-version "${RUNTIME_VERSION}"
             ls -la /tmp/rootfs.bundle /tmp/runtime-manifest.json
             sha256sum /tmp/rootfs.bundle
             python3 scripts/verify-bundle.py --bundle /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
