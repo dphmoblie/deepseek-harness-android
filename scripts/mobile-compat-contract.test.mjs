@@ -32,19 +32,15 @@ test('dsh-mobile-compat keeps the dsh client module contract', async () => {
   assert.match(clientSource, /export function apply\(ctx\)/)
 })
 
-test('Android rootfs workflow replaces the original frontend with the mobile frontend', async () => {
+test('Android rootfs workflow keeps the official frontend (plugins load natively)', async () => {
   const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
-  assert.match(workflow, /Build mobile Harness conversation frontend/)
-  assert.match(workflow, /pnpm --filter @dsh-mobile\/harness-web build/)
-  assert.match(workflow, /rebuild-rootfs-frontend\.py/)
-  assert.match(workflow, /--dist\s+harness-web\/dist/)
-
-  const mobileIndex = await readFile(resolve(appRoot, 'harness-web/index.html'), 'utf8')
-  const rebuilder = await readFile(resolve(appRoot, 'scripts/rebuild-rootfs-frontend.py'), 'utf8')
-  assert.match(mobileIndex, /name="dsh-mobile-frontend" content="harness-web-v1"/)
-  assert.match(rebuilder, /is_frontend_dist_path\(member\.name\)/)
-  assert.match(rebuilder, /重建后仍残留旧 dist 条目/)
-  assert.match(rebuilder, /MOBILE_FRONTEND_MARKER/)
+  assert.doesNotMatch(workflow, /Build mobile Harness conversation frontend/)
+  assert.doesNotMatch(workflow, /rebuild-rootfs-frontend\.py/)
+  assert.doesNotMatch(workflow, /--dist\s+harness-web\/dist/)
+  const verifier = await readFile(resolve(appRoot, 'scripts/verify-bundle.py'), 'utf8')
+  assert.match(verifier, /OFFICIAL_FRONTEND_MARKER/)
+  assert.match(verifier, /official frontend index missing #root/)
+  assert.match(verifier, /harness-web marker leaked into official frontend/)
 })
 
 test('plugin workbench is opt-in and embeds assets without a duplicate desktop page', async () => {
@@ -170,8 +166,8 @@ test('bundle verification keeps the official profile baseline without a mobile m
   assert.match(verifier, /runtime contains disabled optional bundle/)
   assert.match(verifier, /manifest mobile profile enables a disabled Android bundle/)
   assert.match(verifier, /runtime contains build-only package-manager metadata/)
-  assert.match(verifier, /MOBILE_FRONTEND_MARKER/)
+  assert.match(verifier, /OFFICIAL_FRONTEND_MARKER/)
   assert.match(verifier, /expected exactly one mobile frontend index/)
-  assert.match(verifier, /expected exactly one plugin workbench loader/)
+  assert.doesNotMatch(verifier, /plugin workbench loader/)
   assert.match(verifier, /duplicate desktop frontend entry/)
 })
