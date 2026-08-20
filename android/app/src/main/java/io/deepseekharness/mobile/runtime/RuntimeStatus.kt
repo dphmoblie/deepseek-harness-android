@@ -73,13 +73,18 @@ class RuntimeStatus(private val store: RuntimeStore) {
     @Synchronized
     fun snapshot(): RuntimeStateSnapshot {
         val installed = store.installedManifest()
+        val bundled = store.bundledManifestOrNull()
         return RuntimeStateSnapshot(
             phase = phase,
             architecture = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown",
             installedVersion = installed?.version,
             updateAvailable = RuntimeUpdatePolicy.isAvailable(
+                installed?.runtimeId,
+                installed?.version,
                 installed?.rootfs?.sha256,
-                store.bundledManifestOrNull()?.rootfs?.sha256,
+                bundled?.runtimeId,
+                bundled?.version,
+                bundled?.rootfs?.sha256,
             ),
             downloadedBytes = downloadedBytes,
             totalBytes = totalBytes,

@@ -20,7 +20,11 @@ The APK combines a Capacitor management surface with a native Harness activity. 
    policy on every redirect, byte limits, gzip compression, entrypoint
    allowlists, and digest formats. Rootfs bytes are checked against the exact
    manifest length and SHA-256.
-4. The rootfs download uses an app-private
+4. The UI advertises the embedded runtime as an update only when the installed
+   and bundled manifests use the same runtime ID, the bundled version is a
+   strictly newer bounded release, and the rootfs digest differs. A digest
+   mismatch alone never replaces an explicitly configured newer remote runtime.
+5. The rootfs download uses an app-private
    `rootfs-<manifest-rootfs-sha256>.part` file. The digest-derived name lets the
    same pinned artifact resume across process or app restarts. A resumed
    request must receive HTTP 206 with the exact start offset and total in
@@ -28,12 +32,12 @@ The APK combines a Capacitor management surface with a native Harness activity. 
    ignored) or HTTP 416 (stale range rejected) restarts the transfer from byte
    zero. Network, TLS, and timeout failures use fixed error codes and retain the
    bounded app-private partial for a later retry.
-5. Only after download completion and digest verification does state advance
+6. Only after download completion and digest verification does state advance
    through verification and extraction. Extraction rejects path traversal,
    device nodes, unsafe hard links,
    excessive entry counts, and extracted-size overflow. Symbolic links are
    created only after regular entries have been written.
-6. A completed environment is atomically promoted. Reset never follows
+7. A completed environment is atomically promoted. Reset never follows
    symbolic links and is limited to the app-private runtime directory.
 
 `scripts/build-embedded-runtime.py` produces the gzip bundle and manifest
