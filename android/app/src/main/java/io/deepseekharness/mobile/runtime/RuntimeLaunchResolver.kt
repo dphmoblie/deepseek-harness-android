@@ -76,6 +76,14 @@ class RuntimeLaunchResolver(
             errorCode,
             message,
         )
+        // Keep a bounded, redacted probe tail for device diagnostics. Probe commands do not
+        // print credentials, but redaction protects against future dependency error messages.
+        android.util.Log.w(
+            "dsh-runtime",
+            "guest probe failed code=${failure.code} exit=${failureResults.firstOrNull()?.exitCode} " +
+                "timeout=${failureResults.firstOrNull()?.timedOut} output=" +
+                redactDiagnosticOutput(failureResults.firstOrNull()?.output.orEmpty()),
+        )
         val cause = failureResults.firstNotNullOfOrNull { it.startError }
         throw RuntimeFailure(failure.code, failure.message, cause)
     }
@@ -202,6 +210,10 @@ class RuntimeLaunchResolver(
         val SYSTEM_BIND_MOUNTS = listOf(ProotBindMount("/dev"), ProotBindMount("/proc"))
         const val RUNNER_PROBE_TIMEOUT_SECONDS = 5L
         const val GUEST_PROBE_TIMEOUT_SECONDS = 12L
+
+        private fun redactDiagnosticOutput(value: String): String = value
+            .replace(Regex("(?i)(api[_-]?key|token|password|secret)=?\\s*[^\\s]+"), "$1=<redacted>")
+            .takeLast(4096)
     }
 }
 

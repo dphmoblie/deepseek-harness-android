@@ -421,7 +421,14 @@ class RuntimeSupervisor(
 
     private fun throwHarnessExit(output: ProcessOutputTail): Nothing {
         output.awaitClosed(OUTPUT_DRAIN_TIMEOUT_MS)
-        val failure = RuntimeDiagnostics.harnessFailure(output.snapshot())
+        val diagnostic = output.snapshot()
+        val failure = RuntimeDiagnostics.harnessFailure(diagnostic)
+        android.util.Log.w(
+            "dsh-runtime",
+            "harness exited code=${failure.code} output=" + diagnostic
+                .replace(Regex("(?i)(api[_-]?key|token|password|secret)=?\\s*[^\\s]+"), "$1=<redacted>")
+                .takeLast(4096),
+        )
         throw RuntimeFailure(failure.code, failure.message)
     }
 

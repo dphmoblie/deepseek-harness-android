@@ -56,7 +56,6 @@ object RuntimeCommand {
             add(store.launchRunnerFile.absolutePath)
             add("-r")
             add(store.currentRoot.absolutePath)
-            add("-0")
             add("-w")
             add("/root")
             bindMounts.forEach { mount ->
