@@ -1,6 +1,7 @@
 # Dependencies and generated web output
 node_modules/
 dist/
+harness-web/.dist-android/
 www/
 coverage/
 target/

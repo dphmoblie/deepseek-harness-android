@@ -100,7 +100,10 @@ class RuntimeSupervisor(
             password = generateToken(),
         )
         val launch = try {
-            launchResolver.launch(manifest.harnessArgv, access.password)
+            val configuredProviders = store.providerApiKeys().keys
+            val providerPatchPath = store.prepareProviderPatch(configuredProviders)
+            val harnessEntrypoint = RuntimeCommand.withProviderPatch(manifest.harnessArgv, providerPatchPath)
+            launchResolver.launch(harnessEntrypoint, access.password)
         } catch (failure: RuntimeFailure) {
             status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
             throw failure

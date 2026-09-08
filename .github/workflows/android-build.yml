@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 env:
-  APP_VERSION: '0.1.8'
+  APP_VERSION: '0.1.9'
 
 jobs:
   build:
@@ -70,7 +70,7 @@ jobs:
       - name: Unit tests (vitest)
         run: pnpm test
 
-      - name: Harness frontend tests
+      - name: Official Harness frontend adapter tests
         run: pnpm --dir harness-web test
 
       - name: Script tests (node --test)
@@ -215,10 +215,10 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
 
-      - name: Build mobile Harness conversation frontend
+      - name: Build Android-adapted official Harness frontend
         run: |
           pnpm install --frozen-lockfile --filter @dsh-mobile/harness-web...
-          pnpm --filter @dsh-mobile/harness-web build
+          pnpm --dir harness-web build
 
       - name: Prepare dsh runtime for linux/arm64 (compile node-pty from source)
         run: |
@@ -423,7 +423,7 @@ jobs:
           ## 资产
 
           - $(basename "$APK")（APK，含 PRoot 运行器）
-          - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.1.0-rc.6 + 移动前端 + 按需插件工作台资源）
+          - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.1.0-rc.6 + 官方 Harness 前端 Android 适配）
           - runtime-manifest.json
           - checksums.txt（以上三项资产的 SHA-256）
 

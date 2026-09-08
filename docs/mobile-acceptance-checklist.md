@@ -1,12 +1,12 @@
-# 移动端 0.1.8 真机验收清单
+# 移动端 0.1.9 真机验收清单
 
 > 适用范围：荣耀 Android 16（arm64/16KB）及至少一台其他 arm64 真机。验收对象为
-> 同一个 `v0.1.8-mobile-<run_number>` Release 中的内嵌 APK、
+> 同一个 `v0.1.9-mobile-<run_number>`（正式版为 `v0.1.9`）Release 中的内嵌 APK、
 > `runtime-manifest.json` 与 `rootfs.bundle`。
 
 ## 0. 发布资产前置
 
-- [ ] APK 的 `versionCode=8`、`versionName=0.1.8`，并通过团队签名校验。
+- [ ] APK 的 `versionCode=9`、`versionName=0.1.9`，并通过团队签名校验。
 - [ ] Release 同时包含 APK、`runtime-manifest.json`、`rootfs.bundle`，三者来自同一次 CI run。
 - [ ] APK 内恰有一份 `assets/runtime/rootfs.bundle` 和运行时 manifest，没有 `.bak` 或其他 rootfs 副本。
 - [ ] 内嵌 manifest 的 rootfs SHA-256 与 APK 内 bundle 一致；全新安装无需手工填写运行时来源。
@@ -29,11 +29,12 @@
 在 360x800、390x844、480x960 及桌面宽度逐项验证：
 
 - [ ] 启动时恢复最近未归档会话；没有会话时自动创建会话并进入聊天。
-- [ ] 会话抽屉可打开、切换、新建、归档和关闭，标题优先显示会话 projection。
+- [ ] 官方会话列表可打开、切换、新建、归档和关闭。
 - [ ] 消息支持 Markdown、GFM 表格、代码块、工具调用与可展开工具结果；外部 HTML 不执行。
 - [ ] Composer 可发送普通消息；运行中可选择排队或引导，队列数量同步显示。
 - [ ] 模型和推理强度可选，选择结果会用于后续发送。
-- [ ] 任务、文件、模型/Harness 设置作为二级页面可进入并可返回聊天。
+- [ ] 官方任务、文件、模型/Harness 设置及插件页面可进入并可返回聊天。
+- [ ] 不再出现“移动对话/插件工作台”双前端切换；官方入口与插件资源正常加载。
 - [ ] Android 软键盘弹出时输入框、发送按钮和最后一条消息均可见，无横向溢出或文字重叠。
 - [ ] 应用切后台再恢复后事件流继续更新，不丢失增量，也不被迟到历史覆盖。
 
@@ -84,7 +85,7 @@
 ```text
 设备/系统：
 Android 页面大小：
-Release tag：v0.1.8-mobile-____
+Release tag：v0.1.9-mobile-____
 Git commit：
 APK SHA-256：
 manifest SHA-256：

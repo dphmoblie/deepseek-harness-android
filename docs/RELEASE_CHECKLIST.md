@@ -1,7 +1,7 @@
 # Release checklist
 
 Generated rootfs and native ELF files are intentionally excluded from Git.
-The official `0.1.8` workflow publishes a self-contained APK plus matching
+The official `0.1.9` workflow publishes a self-contained APK plus matching
 runtime assets for inspection and explicit remote installation. Complete every
 applicable item below for the exact APK, manifest, and rootfs before publishing
 or otherwise distributing them.
@@ -17,12 +17,14 @@ or otherwise distributing them.
 - Retain Ubuntu package copyright metadata, the Node.js license and bundled
   dependency notices, the DeepSeek Harness MIT license, and the licenses of
   every npm package copied into the rootfs.
-- Confirm the workflow tag is exactly `v0.1.8-mobile-<run_number>` (or
-  `v0.1.8` for a stable release) and that the rootfs URL recorded in
+- Confirm the workflow tag is exactly `v0.1.9-mobile-<run_number>` (or
+  `v0.1.9` for a stable release) and that the rootfs URL recorded in
   `runtime-manifest.json` points to `rootfs.bundle` under that same tag.
 - Independently verify the finished manifest SHA-256, rootfs SHA-256, byte
   lengths, `arm64-v8a` architecture, `gzip` compression value, and runtime
-  version after the mobile Harness frontend has been injected.
+  version after the adapted official Harness frontend has been packaged.
+- Confirm `/` loads the original Harness entrypoint with its plugin assets;
+  the retired mobile entrypoint and `plugin-workbench` copies must be absent.
 - Confirm CI embeds that exact manifest and rootfs digest in the matching APK.
   Install the official APK with no prior app data and verify the install action
   works offline without entering or changing a source URL or digest.

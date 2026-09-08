@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { RuntimeProgress, RuntimeSettings, RuntimeState, ShizukuState } from './platform/types'
+import type { RuntimeProgress, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from './platform/types'
 
 const bridge = vi.hoisted(() => ({
   getState: vi.fn(),
@@ -61,6 +61,7 @@ const settings: RuntimeSettings = {
   manifestSha256: 'a'.repeat(64),
   keepScreenAwake: true,
   terminalFontSize: 14,
+  configuredModelProviders: [],
 }
 
 const shizuku: ShizukuState = {
@@ -76,7 +77,7 @@ beforeEach(() => {
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
   bridge.addRuntimeProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })
-  bridge.saveSettings.mockImplementation((value: RuntimeSettings) => Promise.resolve(value))
+  bridge.saveSettings.mockImplementation((value: RuntimeSettingsUpdate) => Promise.resolve(value))
   bridge.install.mockResolvedValue(undefined)
   bridge.startHarness.mockResolvedValue({ ...runningState })
   bridge.openHarness.mockResolvedValue(undefined)
@@ -222,6 +223,20 @@ describe('App conversation gate', () => {
 
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, terminalFontSize: 17 }))
     expect(await screen.findByText('设置已保存')).toBeInTheDocument()
+  })
+
+  it('saves a whitelisted provider credential update', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
+    fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
+      ...settings,
+      providerApiKeys: { openai: 'unit-test-openai-key' },
+    }))
   })
 
   it('requires an explicit bounded confirmation before resetting Ubuntu', async () => {

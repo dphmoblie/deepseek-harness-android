@@ -1,15 +1,19 @@
 import type {
   DeviceCommand,
   DeviceCommandResult,
+  ModelProviderId,
+  ProviderApiKeys,
   RuntimePhase,
   RuntimeProgress,
   RuntimeSettings,
+  RuntimeSettingsUpdate,
   RuntimeSource,
   RuntimeState,
   ShizukuState,
   TerminalChunk,
   TerminalExit,
 } from './types'
+import { MODEL_PROVIDER_IDS } from './types'
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const SESSION_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i
@@ -19,6 +23,8 @@ const MAX_URL_LENGTH = 2048
 const MAX_IDENTIFIER_LENGTH = 96
 const MAX_ERROR_CODE_LENGTH = 96
 const MAX_TERMINAL_OUTPUT_BYTES = 96 * 1024
+const API_KEY_PATTERN = /^[\x21-\x7e]{1,200}$/
+const MODEL_PROVIDER_ID_SET = new Set<string>(MODEL_PROVIDER_IDS)
 const RUNTIME_PHASES = new Set<RuntimePhase>([
   'not-installed',
   'preparing',
@@ -68,6 +74,59 @@ function containsControlCharacter(value: string): boolean {
     const code = character.charCodeAt(0)
     return code <= 31 || code === 127
   })
+}
+
+function modelProviderId(value: unknown): ModelProviderId {
+  if (typeof value !== 'string' || !MODEL_PROVIDER_ID_SET.has(value)) throw new Error('模型供应商格式无效')
+  return value as ModelProviderId
+}
+
+function configuredModelProviders(value: unknown, legacyApiKey: unknown): ModelProviderId[] {
+  const providers: ModelProviderId[] = []
+  if (value !== undefined) {
+    if (!Array.isArray(value) || value.length > MODEL_PROVIDER_IDS.length) throw new Error('模型凭据状态格式无效')
+    for (const item of value) {
+      const provider = modelProviderId(item)
+      if (providers.includes(provider)) throw new Error('模型凭据状态包含重复供应商')
+      providers.push(provider)
+    }
+  }
+  if (legacyApiKey !== undefined) {
+    if (typeof legacyApiKey !== 'string') throw new Error('旧版模型凭据格式无效')
+    const normalized = legacyApiKey.trim()
+    if (normalized !== '') {
+      if (!API_KEY_PATTERN.test(normalized)) throw new Error('旧版模型凭据包含非法字符或长度无效')
+      if (!providers.includes('deepseek')) providers.unshift('deepseek')
+    }
+  }
+  return MODEL_PROVIDER_IDS.filter(provider => providers.includes(provider))
+}
+
+function providerApiKeyUpdates(value: unknown): ProviderApiKeys {
+  if (value === undefined) return {}
+  const record = asRecord(value, '模型凭据更新')
+  if (Object.keys(record).length > MODEL_PROVIDER_IDS.length) throw new Error('模型凭据更新数量无效')
+  const result: ProviderApiKeys = {}
+  for (const [rawProvider, rawKey] of Object.entries(record)) {
+    const provider = modelProviderId(rawProvider)
+    if (typeof rawKey !== 'string') throw new Error('模型凭据必须是字符串')
+    const key = rawKey.trim()
+    if (!API_KEY_PATTERN.test(key)) throw new Error('模型凭据包含非法字符或长度无效')
+    result[provider] = key
+  }
+  return result
+}
+
+function clearedProviderApiKeys(value: unknown): ModelProviderId[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > MODEL_PROVIDER_IDS.length) throw new Error('模型凭据清除列表格式无效')
+  const result: ModelProviderId[] = []
+  for (const item of value) {
+    const provider = modelProviderId(item)
+    if (result.includes(provider)) throw new Error('模型凭据清除列表包含重复供应商')
+    result.push(provider)
+  }
+  return result
 }
 
 function isBlockedIpv4(hostname: string): boolean {
@@ -150,14 +209,28 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
   if (!Number.isInteger(settings.terminalFontSize) || settings.terminalFontSize < 11 || settings.terminalFontSize > 24) {
     throw new Error('终端字号必须是 11 到 24 之间的整数')
   }
-  const apiKey = settings.apiKey === undefined ? undefined : String(settings.apiKey).trim().slice(0, 200) || undefined
   const autoLaunch = settings.autoLaunch === undefined ? false : settings.autoLaunch
+  if (typeof autoLaunch !== 'boolean') throw new Error('自动启动设置格式无效')
   return {
     ...source,
     keepScreenAwake: settings.keepScreenAwake,
     terminalFontSize: settings.terminalFontSize,
-    ...(apiKey === undefined ? {} : { apiKey }),
+    configuredModelProviders: configuredModelProviders(settings.configuredModelProviders, settings.apiKey),
     autoLaunch,
+  }
+}
+
+export function validateSettingsUpdate(settings: RuntimeSettingsUpdate): RuntimeSettingsUpdate {
+  const validated = validateSettings(settings)
+  const providerApiKeys = providerApiKeyUpdates(settings.providerApiKeys)
+  const clearProviderApiKeys = clearedProviderApiKeys(settings.clearProviderApiKeys)
+  if (clearProviderApiKeys.some(provider => providerApiKeys[provider] !== undefined)) {
+    throw new Error('同一模型凭据不能同时更新和清除')
+  }
+  return {
+    ...validated,
+    ...(Object.keys(providerApiKeys).length === 0 ? {} : { providerApiKeys }),
+    ...(clearProviderApiKeys.length === 0 ? {} : { clearProviderApiKeys }),
   }
 }
 
@@ -170,17 +243,16 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
   if (!Number.isInteger(settings.terminalFontSize) || (settings.terminalFontSize as number) < 11 || (settings.terminalFontSize as number) > 24) {
     throw new Error('终端字号必须是 11 到 24 之间的整数')
   }
-  const apiKey = typeof settings.apiKey === 'string' && settings.apiKey.trim() !== ''
-    ? settings.apiKey.trim().slice(0, 200)
-    : undefined
   const autoLaunch = settings.autoLaunch === undefined ? false : settings.autoLaunch === true
+  if (settings.autoLaunch !== undefined && typeof settings.autoLaunch !== 'boolean') throw new Error('自动启动设置格式无效')
+  const configuredProviders = configuredModelProviders(settings.configuredModelProviders, settings.apiKey)
   if (settings.manifestUrl === '' && settings.manifestSha256 === '') {
     return {
       manifestUrl: '',
       manifestSha256: '',
       keepScreenAwake: settings.keepScreenAwake,
       terminalFontSize: settings.terminalFontSize as number,
-      ...(apiKey === undefined ? {} : { apiKey }),
+      configuredModelProviders: configuredProviders,
       autoLaunch,
     }
   }
@@ -192,7 +264,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
     ...source,
     keepScreenAwake: settings.keepScreenAwake,
     terminalFontSize: settings.terminalFontSize as number,
-    ...(apiKey === undefined ? {} : { apiKey }),
+    configuredModelProviders: configuredProviders,
     autoLaunch,
   }
 }

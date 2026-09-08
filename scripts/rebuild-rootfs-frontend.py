@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""把 harness-web 构建产物替换进现有 rootfs.bundle 的 dsh 前端 dist，并重算 manifest。
+"""把 Android 适配后的官方 Harness 前端替换进 rootfs.bundle 并重算 manifest。
 
 原理：dsh 的 distIndex 由 require.resolve('@deepseek-ai/dsh-web-frontend/dist/index.html')
 解析到 .pnpm 下的真实目录，流式重写 tar 时跳过旧 dist 条目、追加新 dist 树即可，
@@ -33,7 +33,10 @@ sha256_file = _ber.sha256_file
 
 DIST_MARKER = "/dsh-web-frontend/dist"
 DIST_INDEX_SUFFIX = f"{DIST_MARKER}/index.html"
-MOBILE_FRONTEND_MARKER = b'name="dsh-mobile-frontend" content="harness-web-v1"'
+OFFICIAL_FRONTEND_MARKER = b'name="dsh-official-frontend" content="android-adapted-v1"'
+LEGACY_MOBILE_FRONTEND_MARKER = b'dsh-mobile-frontend'
+LEGACY_FRONTEND_FILES = frozenset({"plugin-workbench-loader.js"})
+LEGACY_FRONTEND_PREFIXES = ("plugin-workbench/",)
 
 
 def is_frontend_dist_path(name: str) -> bool:
@@ -44,6 +47,40 @@ def is_frontend_dist_path(name: str) -> bool:
 def is_replaced_path(name: str, replacements: list[tuple[Path, str]]) -> bool:
     """路径是否命中任一 --replace-file 的归档目标（文件本身或其子树）。"""
     return any(name == target or name.startswith(f"{target}/") for _, target in replacements)
+
+
+def validate_frontend_dist(dist_root: Path) -> None:
+    """Require one official root page and reject artifacts from the removed custom frontend."""
+    if not dist_root.is_dir() or dist_root.is_symlink():
+        raise BuildError("dist 不是常规目录")
+    relative_files: list[str] = []
+    for current_raw, directory_names, file_names in os.walk(dist_root, topdown=True, followlinks=False):
+        current = Path(current_raw)
+        if any((current / name).is_symlink() for name in directory_names):
+            raise BuildError("dist 目录不能包含符号链接目录")
+        for name in file_names:
+            path = current / name
+            if path.is_symlink() or not stat.S_ISREG(path.stat().st_mode):
+                raise BuildError(f"dist 包含非常规文件：{path}")
+            relative_files.append(path.relative_to(dist_root).as_posix())
+
+    indexes = [name for name in relative_files if name == "index.html" or name.endswith("/index.html")]
+    if indexes != ["index.html"]:
+        raise BuildError(f"dist 必须且只能包含根入口 index.html：{indexes!r}")
+    legacy = sorted(
+        name for name in relative_files
+        if name in LEGACY_FRONTEND_FILES or name.startswith(LEGACY_FRONTEND_PREFIXES)
+    )
+    if legacy:
+        raise BuildError(f"dist 仍包含已移除的自写前端资源：{legacy!r}")
+
+    index_bytes = (dist_root / "index.html").read_bytes()
+    if OFFICIAL_FRONTEND_MARKER not in index_bytes:
+        raise BuildError("dist/index.html 缺少官方前端 Android 适配标记")
+    if b'<div id="root">' not in index_bytes:
+        raise BuildError("dist/index.html 缺少官方前端 #root 挂载点")
+    if LEGACY_MOBILE_FRONTEND_MARKER in index_bytes:
+        raise BuildError("dist/index.html 仍包含已移除的移动前端标记")
 
 
 def verify_bundle(bundle: Path, expected_sha256: str) -> None:
@@ -260,10 +297,7 @@ def main() -> None:
         raise BuildError("bundle 不存在")
     if not manifest_path.is_file():
         raise BuildError("manifest 不存在")
-    if not (dist_root / "index.html").is_file():
-        raise BuildError("dist 目录缺少 index.html（先运行 pnpm build）")
-    if MOBILE_FRONTEND_MARKER not in (dist_root / "index.html").read_bytes():
-        raise BuildError("dist/index.html 缺少移动前端构建标记")
+    validate_frontend_dist(dist_root)
     replacements = parse_replacements(ARGS.replace_file)
 
     manifest = json.loads(manifest_path.read_bytes())

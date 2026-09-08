@@ -1,11 +1,11 @@
 # Android architecture
 
-The APK combines a Capacitor management surface with a native Harness activity. The installed Ubuntu environment runs `dsh web` on Android loopback behind the packaged mobile-auth Node preload. During packaging, the original web distribution is removed and replaced by the purpose-built mobile Harness conversation frontend, including same-origin RPC, WebSocket events, sessions, tasks, files, skills, agent presets, model controls, and reasoning effort. Once the runtime is ready, app startup starts Harness and opens that frontend at `/` in the internal navigation-restricted WebView. Returning from the native Harness toolbar lands on Settings, where service, runtime, terminal, reset, source, and Shizuku controls are grouped.
+The APK combines a Capacitor management surface with a native Harness activity. The installed Ubuntu environment runs `dsh web` on Android loopback behind the packaged mobile-auth Node preload. The packaged frontend uses the official Harness distribution and its plugin loader, with a small Android stylesheet for safe areas and input sizing. There is one root frontend and no separate mobile conversation implementation. Once the runtime is ready, app startup opens `/` in the internal navigation-restricted WebView. Returning from the native Harness toolbar lands on Settings, where service, model provider credentials, runtime, terminal, reset, source, and Shizuku controls are grouped.
 
 ## Runtime installation
 
-1. The official `0.1.8` workflow builds `rootfs.bundle` and
-   `runtime-manifest.json`, injects the built mobile conversation frontend,
+1. The official `0.1.9` workflow builds `rootfs.bundle` and
+   `runtime-manifest.json`, packages the Android-adapted official frontend,
    and embeds both verified assets in the matching APK. The same files are
    published under the corresponding Release tag for inspection and explicit
    remote installation. The manifest records the archive length, SHA-256,
@@ -44,7 +44,7 @@ The APK combines a Capacitor management surface with a native Harness activity. 
 without checking generated artifacts into Git. `scripts/rebuild-rootfs-frontend.py`
 replaces the Harness frontend transactionally and deletes its temporary `.bak`
 files after verification so Android cannot package two rootfs copies. The
-official `0.1.8` build is embedded and uses the same archive verification and
+official `0.1.9` build is embedded and uses the same archive verification and
 extraction boundaries as an explicitly configured remote build.
 The PRoot-compatible runner and loader are executable native libraries and
 must always be packaged in the APK because current Android versions do not

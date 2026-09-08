@@ -7,6 +7,7 @@ import type {
   RuntimeBridge,
   RuntimeProgress,
   RuntimeSettings,
+  RuntimeSettingsUpdate,
   RuntimeSource,
   RuntimeState,
   ShizukuState,
@@ -25,6 +26,7 @@ import {
   validateRuntimeProgress,
   validateRuntimeState,
   validateSettings,
+  validateSettingsUpdate,
   validateShizukuState,
   validateStoredSettings,
   validateRuntimeSource,
@@ -36,7 +38,7 @@ import {
 interface NativeRuntimePlugin {
   getState(): Promise<RuntimeState>
   getSettings(): Promise<RuntimeSettings>
-  saveSettings(settings: RuntimeSettings): Promise<RuntimeSettings>
+  saveSettings(settings: RuntimeSettingsUpdate): Promise<RuntimeSettings>
   install(source?: RuntimeSource): Promise<void>
   startHarness(): Promise<RuntimeState>
   openHarness(): Promise<void>
@@ -73,7 +75,7 @@ function createNativeBridge(): RuntimeBridge {
   return {
     getState: () => NativeRuntime.getState().then(validateRuntimeState),
     getSettings: () => NativeRuntime.getSettings().then(validateStoredSettings),
-    saveSettings: settings => NativeRuntime.saveSettings(validateSettings(settings)).then(validateSettings),
+    saveSettings: settings => NativeRuntime.saveSettings(validateSettingsUpdate(settings)).then(validateSettings),
     install: source => NativeRuntime.install(source === undefined ? undefined : validateRuntimeSource(source)),
     startHarness: () => NativeRuntime.startHarness().then(validateRuntimeState),
     openHarness: () => NativeRuntime.openHarness(),

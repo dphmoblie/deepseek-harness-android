@@ -17,6 +17,7 @@ const settings: RuntimeSettings = {
   manifestSha256: 'a'.repeat(64),
   keepScreenAwake: true,
   terminalFontSize: 14,
+  configuredModelProviders: [],
 }
 
 const shizuku: ShizukuState = { installed: true, running: true, permission: 'undetermined', connected: false }

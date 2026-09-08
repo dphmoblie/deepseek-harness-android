@@ -1095,7 +1095,8 @@ button:disabled {
   font-weight: 650;
 }
 
-.field input {
+.field input,
+.field select {
   width: 100%;
   min-height: 44px;
   padding: 10px 11px;
@@ -1106,9 +1107,20 @@ button:disabled {
   font-size: 13px;
 }
 
-.field input:focus {
+.field select {
+  appearance: auto;
+}
+
+.field input:focus,
+.field select:focus {
   border-color: var(--blue);
   background: #ffffff;
+}
+
+.credential-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 9px;
 }
 
 .mono-input {
