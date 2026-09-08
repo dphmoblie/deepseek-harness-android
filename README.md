@@ -7,7 +7,7 @@
 ## Build requirements
 
 - Node.js `^22.19.0 || >=24.0.0`, matching the current DeepSeek Harness engine range. Node.js 11.9 cannot build supported Capacitor releases or the current DeepSeek Harness upstream.
-- JDK 23.0.1, with `JAVA_HOME` set explicitly when the system default still points to Java 8.
+- JDK 23.0.1.
 - Android SDK 35 and a compatible Android NDK.
 - The pinned ARM64 PRoot runner and loader used by the release. The current
   release artifacts come from the Operit2 Android runtime toolchain at commit
