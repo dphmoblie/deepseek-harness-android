@@ -56,16 +56,23 @@ class MobileRuntimePlugin : Plugin() {
                         notifyListeners("runtimeProgress", snapshot.toProgressJs())
                     }
                 },
-                onTerminalOutput = { sessionId, dataBase64 ->
-                    if (::deviceCommands.isInitialized) {
-                        deviceCommands.onOutput(sessionId, dataBase64)
-                    }
-                    if (!destroying.get()) {
-                        notifyListeners(
-                            "terminalOutput",
-                            JSObject().put("sessionId", sessionId).put("dataBase64", dataBase64),
-                        )
-                    }
+                onTerminalOutput = { sessionId, dataBase64, suppressPublicOutput ->
+                    dispatchTerminalOutput(
+                        sessionId,
+                        dataBase64,
+                        suppressPublicOutput,
+                        onDeviceCommandOutput = { id, data ->
+                            if (::deviceCommands.isInitialized) deviceCommands.onOutput(id, data)
+                        },
+                        onPublicOutput = { id, data ->
+                            if (!destroying.get()) {
+                                notifyListeners(
+                                    "terminalOutput",
+                                    JSObject().put("sessionId", id).put("dataBase64", data),
+                                )
+                            }
+                        },
+                    )
                 },
                 onTerminalExit = { sessionId, exitCode ->
                     if (!destroying.get()) {
@@ -495,4 +502,15 @@ class MobileRuntimePlugin : Plugin() {
         .put("permission", permission)
         .put("connected", connected)
         .put("version", version)
+}
+
+internal fun dispatchTerminalOutput(
+    sessionId: String,
+    dataBase64: String,
+    suppressPublicOutput: Boolean,
+    onDeviceCommandOutput: (sessionId: String, dataBase64: String) -> Unit,
+    onPublicOutput: (sessionId: String, dataBase64: String) -> Unit,
+) {
+    onDeviceCommandOutput(sessionId, dataBase64)
+    if (!suppressPublicOutput) onPublicOutput(sessionId, dataBase64)
 }

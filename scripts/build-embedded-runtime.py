@@ -41,7 +41,20 @@ UBUNTU_EXCLUDED_REGULAR_PATHS = frozenset(
 PROFILE_BUNDLE_NAMES = (
     "@deepseek-ai/dsh-base",
     "@deepseek-ai/dsh-web-app",
+    "@deepseek-harness/dsh-mobile-shizuku",
 )
+PNPM_VERSION = "11.19.0"
+PNPM_ENTRYPOINT = PurePosixPath("node_modules/pnpm/bin/pnpm.cjs")
+PNPM_WRAPPER = (
+    b"#!/bin/sh\n"
+    b'exec /opt/node/bin/node /opt/dsh/node_modules/pnpm/bin/pnpm.cjs "$@"\n'
+)
+WEB_PROFILE_PNPM_WORKSPACE = b"""packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: false
+"""
 RUNTIME_BUILD_METADATA_PATHS = frozenset(
     {
         PurePosixPath("pnpm-lock.yaml"),
@@ -601,6 +614,7 @@ def add_profiles_module_fallback(
 
     links: dict[str, Path] = {}
     queue: list[Path] = []
+    resolved_root = dsh_root.resolve()
 
     def resolve_package(from_dir: Path, name: str) -> Path | None:
         # Node 语义：从 from_dir 逐级向父目录查找 node_modules/<name>
@@ -626,6 +640,9 @@ def add_profiles_module_fallback(
         real = resolve_package(from_dir, name)
         if real is None:
             return
+        relative = PurePosixPath(real.relative_to(resolved_root).as_posix())
+        if skip_runtime_path(relative, excluded_package_names):
+            return
         links[name] = real
         queue.append(real)
 
@@ -643,7 +660,6 @@ def add_profiles_module_fallback(
             if dep not in links:
                 enqueue(dep, pkg_dir)
 
-    resolved_root = dsh_root.resolve()
     for name in sorted(links):
         real = links[name]
         rootfs_real = PurePosixPath("/") / PurePosixPath(rootfs_dsh) / real.relative_to(resolved_root).as_posix()
@@ -717,6 +733,11 @@ def main() -> None:
     dsh_entrypoint = args.dsh_root / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
     if not dsh_entrypoint.is_file():
         raise BuildError("Harness runtime is missing its CLI")
+    pnpm_entrypoint = args.dsh_root / Path(PNPM_ENTRYPOINT.as_posix())
+    if not pnpm_entrypoint.is_file():
+        raise BuildError(
+            f"Harness runtime is missing the pinned pnpm {PNPM_VERSION} entrypoint"
+        )
     find_linux_arm64_node_pty(args.dsh_root)
     mobile_auth_preload = read_support_file(MOBILE_AUTH_PRELOAD, "mobile authentication preload")
     mobile_spec = validate_mobile_profile(args.mobile_profile) if args.mobile_profile is not None else None
@@ -762,6 +783,10 @@ def main() -> None:
                 disabled_profile_bundles,
             )
             writer.add_symlink("usr/local/bin/node", "../../../opt/node/bin/node")
+            writer.add_symlink("usr/local/bin/npm", "../../../opt/node/bin/npm")
+            writer.add_symlink("usr/local/bin/npx", "../../../opt/node/bin/npx")
+            writer.add_symlink("usr/local/bin/corepack", "../../../opt/node/bin/corepack")
+            writer.add_bytes("usr/local/bin/pnpm", PNPM_WRAPPER, 0o755)
             # Ubuntu base 精简包不含这两个链接，但 App 完整性校验将其列为必需：
             # 运行时（mount 视图/时区）与校验都需要，缺了安装会报 ROOTFS_LINKS_CORRUPTED。
             writer.add_symlink("etc/mtab", "../proc/self/mounts")
@@ -792,6 +817,13 @@ def main() -> None:
                 writer.add_bytes(
                     "root/.dsh/profiles/web/package.json",
                     (json.dumps(mobile_spec, ensure_ascii=True, indent=2) + "\n").encode("ascii"),
+                    0o644,
+                )
+                # 预置 package.json 会让官方 dsh plugin 跳过 initProfile；因此这里
+                # 同步写入其标准 pnpm 工作区配置，保持外部插件使用 hoisted linker。
+                writer.add_bytes(
+                    "root/.dsh/profiles/web/pnpm-workspace.yaml",
+                    WEB_PROFILE_PNPM_WORKSPACE,
                     0o644,
                 )
 

@@ -87,6 +87,9 @@ object RuntimeCommand {
                 add("DSH_DEVICE_BRIDGE_TOKEN=${access.token}")
             }
             if (harnessAuthToken != null) {
+                // 同时作为 guest 进程身份标记；RuntimeSupervisor 用完整环境条目
+                // 识别 PRoot 退出后被重新挂父进程的 Harness 子进程。
+                add("DSH_PIDFILE=${store.harnessPidFile.absolutePath}")
                 add("NODE_OPTIONS=--require=/usr/local/lib/dsh-mobile-auth.cjs")
                 add("DSH_MOBILE_AUTH_TOKEN=$harnessAuthToken")
             }

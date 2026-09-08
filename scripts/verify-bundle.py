@@ -19,6 +19,7 @@ MAX_COMPONENT_CHARS = 255
 PROFILE_BUNDLE_NAMES = (
     "@deepseek-ai/dsh-base",
     "@deepseek-ai/dsh-web-app",
+    "@deepseek-harness/dsh-mobile-shizuku",
 )
 RUNTIME_BUILD_METADATA_PATHS = frozenset(
     {
@@ -60,6 +61,8 @@ def main() -> int:
     entry_count = 0
     extracted = 0
     frontend_indexes: list[str] = []
+    pnpm_wrapper: bytes | None = None
+    web_profile_workspace: bytes | None = None
     fail = lambda msg: (_ for _ in ()).throw(SystemExit(f"BUNDLE_VERIFY_FAILED: {msg}"))
 
     import tarfile
@@ -85,6 +88,16 @@ def main() -> int:
                 if m.size < 0:
                     fail(f"negative-size file: {name!r}")
                 extracted += m.size
+                if name in {
+                    "usr/local/bin/pnpm",
+                    "root/.dsh/profiles/web/pnpm-workspace.yaml",
+                }:
+                    source = t.extractfile(m)
+                    content = b"" if source is None else source.read()
+                    if name == "usr/local/bin/pnpm":
+                        pnpm_wrapper = content
+                    else:
+                        web_profile_workspace = content
                 if FRONTEND_DIST_SUFFIX in name:
                     dist_path = name.split(FRONTEND_DIST_SUFFIX, 1)[1]
                     if dist_path == "index.html":
@@ -176,6 +189,9 @@ def main() -> int:
         ("etc/os-release", "../usr/lib/os-release"),
         ("etc/localtime", "/usr/share/zoneinfo/Etc/UTC"),
         ("usr/local/bin/node", "../../../opt/node/bin/node"),
+        ("usr/local/bin/npm", "../../../opt/node/bin/npm"),
+        ("usr/local/bin/npx", "../../../opt/node/bin/npx"),
+        ("usr/local/bin/corepack", "../../../opt/node/bin/corepack"),
     ]
 
     def canonical_target(name: str, target: str) -> str:
@@ -188,6 +204,20 @@ def main() -> int:
         actual = next(target for n, target in symlinks if n == name)
         if canonical_target(name, actual) != canonical_target(name, expected):
             fail(f"required symlink target mismatch: {name!r} -> {actual!r} (expected {expected!r})")
+
+    expected_pnpm_wrapper = (
+        b"#!/bin/sh\n"
+        b'exec /opt/node/bin/node /opt/dsh/node_modules/pnpm/bin/pnpm.cjs "$@"\n'
+    )
+    if pnpm_wrapper != expected_pnpm_wrapper:
+        fail("pinned pnpm wrapper is missing or invalid")
+    pnpm_package_link = "opt/dsh/node_modules/pnpm"
+    if types.get(pnpm_package_link) != "sym":
+        fail("pinned pnpm package link is missing")
+    pnpm_package_target = next(target for name, target in symlinks if name == pnpm_package_link)
+    pnpm_package_dir = canonical_target(pnpm_package_link, pnpm_package_target).lstrip("/")
+    if types.get(f"{pnpm_package_dir}/bin/pnpm.cjs") != "file":
+        fail("pinned pnpm package entrypoint is missing")
 
     # profiles 扁平模块回退：dsh 启动时 cordis 从 profile 目录解析 loader entry，
     # 必须能在 $DSH_HOME/profiles/node_modules 找到全部 profile bundles。
@@ -208,6 +238,9 @@ def main() -> int:
                     profile_bundle_names = list(bundles)
         if not profile_bundle_names:
             fail("manifest mobile profile does not declare any bundle names")
+        expected_workspace = b"packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n"
+        if web_profile_workspace != expected_workspace:
+            fail("mobile web profile pnpm workspace is missing or invalid")
 
     leaked_metadata = sorted(RUNTIME_BUILD_METADATA_PATHS.intersection(seen))
     if leaked_metadata:

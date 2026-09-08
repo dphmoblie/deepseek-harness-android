@@ -34,7 +34,7 @@ data class ShizukuState(
 
 class ShizukuRuntime(
     context: Context,
-    private val onOutput: (sessionId: String, dataBase64: String) -> Unit,
+    private val onOutput: (sessionId: String, dataBase64: String, suppressPublicOutput: Boolean) -> Unit,
     private val onExit: (sessionId: String, exitCode: Int) -> Unit,
 ) {
     private val appContext = context.applicationContext
@@ -109,16 +109,16 @@ class ShizukuRuntime(
         Shizuku.addBinderDeadListener(binderDeadListener, mainHandler)
     }
 
-    private val callback = object : IDeviceShellCallback.Stub() {
+    private fun callback(suppressPublicOutput: Boolean) = object : IDeviceShellCallback.Stub() {
         override fun onOutput(sessionId: String?, data: ByteArray?) {
             if (sessionId == null || !SESSION_PATTERN.matches(sessionId) || data == null || data.isEmpty() || data.size > 32 * 1024) return
-            onOutput(sessionId, Base64.getEncoder().encodeToString(data))
+            onOutput(sessionId, Base64.getEncoder().encodeToString(data), suppressPublicOutput)
         }
 
         override fun onExit(sessionId: String?, exitCode: Int) {
             if (sessionId != null && SESSION_PATTERN.matches(sessionId)) {
                 sessions.remove(sessionId)
-                onExit(sessionId, exitCode.coerceIn(0, 255))
+                if (!suppressPublicOutput) onExit(sessionId, exitCode.coerceIn(0, 255))
             }
         }
     }
@@ -241,11 +241,11 @@ class ShizukuRuntime(
         return state()
     }
 
-    fun create(columns: Int, rows: Int): String {
+    fun create(columns: Int, rows: Int, suppressPublicOutput: Boolean = false): String {
         UbuntuTerminalManager.validateSize(columns, rows)
         requirePermission()
         val id = try {
-            requireService().createSession(columns, rows, callback)
+            requireService().createSession(columns, rows, callback(suppressPublicOutput))
         } catch (error: RemoteException) {
             service = null
             throw RuntimeFailure("SHIZUKU_SERVICE_FAILED", "无法创建设备 Shell", error)

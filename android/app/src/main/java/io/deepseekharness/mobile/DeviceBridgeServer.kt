@@ -126,7 +126,7 @@ class DeviceBridgeServer(
                     if (commandName.length > 32 || param.length > 1024) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备参数过长")
                     val command = DeviceCommand.fromName(commandName)
                         ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令不支持")
-                    val sessionId = shizuku.create(DEFAULT_COLUMNS, DEFAULT_ROWS)
+                    val sessionId = shizuku.create(DEFAULT_COLUMNS, DEFAULT_ROWS, suppressPublicOutput = true)
                     try {
                         val result = runner.execute(sessionId, command, param, COMMAND_TIMEOUT_MS)
                         val errorJson = result.errorCode?.let { JSONObject.quote(it) } ?: "null"

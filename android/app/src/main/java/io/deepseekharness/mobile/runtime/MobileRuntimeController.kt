@@ -9,7 +9,7 @@ import kotlin.concurrent.withLock
 class MobileRuntimeController(
     context: Context,
     onProgress: (RuntimeStateSnapshot) -> Unit,
-    onTerminalOutput: (sessionId: String, dataBase64: String) -> Unit,
+    onTerminalOutput: (sessionId: String, dataBase64: String, suppressPublicOutput: Boolean) -> Unit,
     onTerminalExit: (sessionId: String, exitCode: Int) -> Unit,
 ) {
     private val lifecycleLock = ReentrantLock()

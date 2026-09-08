@@ -1,0 +1,3 @@
+- insert:
+    - id: mobile-shizuku-tools
+      name: '@deepseek-harness/dsh-mobile-shizuku'

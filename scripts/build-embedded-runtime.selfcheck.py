@@ -71,6 +71,15 @@ def main() -> int:
     temp.unlink(missing_ok=True)
 
     assert module.normalized_path("root/.dsh/profiles/web/package.json") == "root/.dsh/profiles/web/package.json"
+    assert module.PNPM_VERSION == "11.19.0"
+    assert module.PNPM_ENTRYPOINT.as_posix() == "node_modules/pnpm/bin/pnpm.cjs"
+    assert module.PNPM_WRAPPER == (
+        b"#!/bin/sh\n"
+        b'exec /opt/node/bin/node /opt/dsh/node_modules/pnpm/bin/pnpm.cjs "$@"\n'
+    )
+    assert module.WEB_PROFILE_PNPM_WORKSPACE == (
+        b"packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n"
+    )
 
     with tempfile.TemporaryDirectory(prefix="dsh-node-pty-") as directory:
         root = Path(directory)
@@ -139,8 +148,14 @@ def main() -> int:
         (root / "node_modules" / "obsolete-bundle").mkdir(parents=True)
         kept = root / "node_modules" / "kept-profile"
         kept.mkdir(parents=True)
+        platform_only = root / "node_modules" / "dsh-win32-process"
+        platform_only.mkdir(parents=True)
         (root / "package.json").write_text(
-            json.dumps({"dependencies": {"obsolete-bundle": "*", "kept-profile": "*"}}),
+            json.dumps({"dependencies": {
+                "obsolete-bundle": "*",
+                "kept-profile": "*",
+                "dsh-win32-process": "*",
+            }}),
             encoding="utf-8",
         )
         (root / "node_modules" / "obsolete-bundle" / "package.json").write_text(
@@ -149,6 +164,10 @@ def main() -> int:
         )
         (kept / "package.json").write_text(
             json.dumps({"name": "kept-profile"}),
+            encoding="utf-8",
+        )
+        (platform_only / "package.json").write_text(
+            json.dumps({"name": "dsh-win32-process"}),
             encoding="utf-8",
         )
 

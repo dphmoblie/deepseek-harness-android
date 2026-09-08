@@ -159,7 +159,7 @@ class UbuntuTerminalManager(
         try {
             NativePty.signal(session.processId, SIGNAL_TERM)
         } catch (_: Throwable) {
-            return
+            // 进程可能正在退出；仍安排强制回收，避免会话永久停留在 closing。
         }
         scheduler.schedule({
             if (sessions.containsKey(session.id)) {

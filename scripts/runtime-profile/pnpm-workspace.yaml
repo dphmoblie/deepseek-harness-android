@@ -1,3 +1,6 @@
+packages:
+  - 'plugins/*'
+
 allowBuilds:
   node-pty: true
   koffi: true

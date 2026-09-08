@@ -28,8 +28,8 @@ data class HarnessAccess(
 /**
  * 应用进程被系统回收时，PRoot→node Harness 子进程不会随之退出，会残留并
  * 继续占用本机端口，导致下次启动报 HARNESS_PORT_IN_USE。启动前依据持久化
- * pid 文件识别残留进程：仅当进程 cmdline 与受信任运行器路径完全一致时才
- * 回收（防止 pid 复用误杀无关进程）。
+ * pid 文件及完整环境标记识别残留进程：根进程还需匹配受信任运行器路径，
+ * 所有信号发送前均校验 /proc 启动时间，防止 pid 复用误杀无关进程。
  */
 internal object HarnessResidual {
     /** 解析持久化的 pid 记录；非法内容与 pid 1（init）一律视为无记录。 */
@@ -40,7 +40,16 @@ internal object HarnessResidual {
         val executable = cmdline.split('\u0000').firstOrNull() ?: return false
         return executable.isNotEmpty() && executable == runnerPath
     }
+
+    /** 环境变量按 NUL 分隔后的完整条目匹配，避免路径前缀误认其他进程。 */
+    fun hasEnvironmentEntry(environment: String, name: String, value: String): Boolean {
+        if (name.isEmpty() || name.any { it == '=' || it == '\u0000' } || value.indexOf('\u0000') >= 0) return false
+        val expected = "$name=$value"
+        return environment.split('\u0000').any { it == expected }
+    }
 }
+
+private data class HarnessProcessIdentity(val pid: Int, val startedAt: String)
 
 class RuntimeSupervisor(
     context: Context,
@@ -156,18 +165,22 @@ class RuntimeSupervisor(
 
     fun stop(): RuntimeStateSnapshot = synchronized(lock) {
         lastStartAttemptAt = 0
-        val process = harnessProcess
-        if (process == null || !process.isAlive) {
-            reapStaleHarness()
+        status.update(RuntimePhase.STOPPING, nextHarnessUrl = null)
+        try {
+            val process = harnessProcess
+            if (process == null || !process.isAlive) {
+                reapStaleHarness()
+            } else {
+                terminate(process)
+            }
             store.installedManifest()?.let { waitForPortRelease(it.harnessPort) }
             clearHarnessState()
             return@synchronized status.refreshIdle()
+        } catch (failure: RuntimeFailure) {
+            harnessAccess = null
+            status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
+            throw failure
         }
-        status.update(RuntimePhase.STOPPING, nextHarnessUrl = null)
-        terminate(process)
-        store.installedManifest()?.let { waitForPortRelease(it.harnessPort) }
-        clearHarnessState()
-        status.refreshIdle()
     }
 
     fun isRunning(): Boolean = synchronized(lock) {
@@ -192,6 +205,11 @@ class RuntimeSupervisor(
 
     /** 回收上次启动残留的 Harness 进程树；pid 文件缺失或进程已退出时仅清理记录。 */
     private fun reapStaleHarness() {
+        val markedProcesses = findMarkedHarnessProcesses()
+        if (markedProcesses.isNotEmpty()) {
+            signalProcesses(markedProcesses, OsConstants.SIGKILL)
+            waitForProcessExit(markedProcesses, REAP_WAIT_TIMEOUT_MS)
+        }
         val pidFile = store.harnessPidFile
         if (!pidFile.isFile) return
         val content = try {
@@ -252,6 +270,12 @@ class RuntimeSupervisor(
         ""
     }
 
+    private fun readProcEnvironment(pid: Int): String = try {
+        String(File("/proc/$pid/environ").readBytes(), Charsets.ISO_8859_1)
+    } catch (_: Exception) {
+        ""
+    }
+
     /** 自底向上 SIGKILL 整棵进程树，覆盖 PRoot 之外的残留 guest 进程。 */
     private fun killProcessTree(pid: Int) {
         readChildPids(pid).forEach { child -> killProcessTree(child) }
@@ -288,6 +312,66 @@ class RuntimeSupervisor(
                 Thread.currentThread().interrupt()
                 return
             }
+        }
+    }
+
+    /**
+     * PRoot 退出时 guest 进程可能被重新挂到其他父进程。启动器注入的 pid 文件路径
+     * 对当前 App 安装唯一，扫描完整环境条目可在失去父子关系后继续识别这些进程。
+     */
+    private fun findMarkedHarnessProcesses(): List<HarnessProcessIdentity> {
+        return File("/proc").listFiles().orEmpty().mapNotNull { entry ->
+            val pid = entry.name.toIntOrNull()?.takeIf { it > 1 } ?: return@mapNotNull null
+            if (!HarnessResidual.hasEnvironmentEntry(
+                    readProcEnvironment(pid),
+                    PID_FILE_ENV,
+                    store.harnessPidFile.absolutePath,
+                )
+            ) {
+                return@mapNotNull null
+            }
+            processIdentity(pid)
+        }
+    }
+
+    /** 捕获当前进程树并按叶子到根排序，避免先终止 PRoot 后丢失其 tracee。 */
+    private fun processTree(rootPid: Int): List<HarnessProcessIdentity> {
+        val result = mutableListOf<HarnessProcessIdentity>()
+        val visited = mutableSetOf<Int>()
+        fun collect(pid: Int) {
+            if (!visited.add(pid)) return
+            readChildPids(pid).forEach(::collect)
+            processIdentity(pid)?.let(result::add)
+        }
+        collect(rootPid)
+        return result
+    }
+
+    private fun processIdentity(pid: Int): HarnessProcessIdentity? {
+        val startedAt = processStartTime(pid)
+        return startedAt.takeIf { it.isNotEmpty() }?.let { HarnessProcessIdentity(pid, it) }
+    }
+
+    private fun isSameProcess(identity: HarnessProcessIdentity): Boolean =
+        identity.startedAt.isNotEmpty() && processStartTime(identity.pid) == identity.startedAt
+
+    private fun signalProcesses(processes: List<HarnessProcessIdentity>, signal: Int) {
+        processes.distinctBy { it.pid }.forEach { identity ->
+            if (!isSameProcess(identity)) return@forEach
+            try {
+                Os.kill(identity.pid, signal)
+            } catch (error: ErrnoException) {
+                if (error.errno != OsConstants.ESRCH) {
+                    throw RuntimeFailure("HARNESS_STOP_FAILED", "无法停止 Harness 进程", error)
+                }
+            }
+        }
+    }
+
+    private fun waitForProcessExit(processes: List<HarnessProcessIdentity>, timeoutMillis: Long) {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        while (processes.any(::isSameProcess) && System.nanoTime() < deadline) {
+            pauseWhileStopping(REAP_POLL_INTERVAL_MS)
         }
     }
 
@@ -367,54 +451,68 @@ class RuntimeSupervisor(
     }
 
     private fun terminate(process: Process) {
-        // Capture descendants before PRoot exits and reparents its traced guest processes.
         val rootPid = try { HarnessResidual.parsePid(store.harnessPidFile.readText()) } catch (_: Exception) { null }
-        val descendants = linkedMapOf<Int, String>()
-        fun collect(pid: Int) {
-            readChildPids(pid).forEach { child ->
-                if (!descendants.containsKey(child)) {
-                    descendants[child] = processStartTime(child)
-                    collect(child)
-                }
+        val trustedRoot = rootPid?.takeIf {
+            HarnessResidual.isProotProcess(readProcCmdline(it), store.launchRunnerFile.absolutePath)
+        }?.let(::processIdentity)
+        val observed = linkedMapOf<Int, HarnessProcessIdentity>()
+
+        fun discover(): List<HarnessProcessIdentity> {
+            val tree = trustedRoot?.takeIf(::isSameProcess)?.let { processTree(it.pid) }.orEmpty()
+            val treePids = tree.mapTo(mutableSetOf()) { it.pid }
+            val marked = findMarkedHarnessProcesses().filterNot { it.pid in treePids }
+            return (tree + marked).also { current ->
+                current.forEach { identity -> observed[identity.pid] = identity }
             }
         }
-        if (rootPid != null && HarnessResidual.isProotProcess(readProcCmdline(rootPid), store.launchRunnerFile.absolutePath)) {
-            collect(rootPid)
-        }
+
+        // PRoot may wait for its tracees. Signal leaves before the tracer/root.
+        signalProcesses(discover(), OsConstants.SIGTERM)
         process.destroy()
-        try {
-            if (!process.waitFor(STOP_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                if (rootPid != null) collect(rootPid)
-                process.destroyForcibly()
-                process.waitFor(STOP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            }
-        } catch (error: InterruptedException) {
-            Thread.currentThread().interrupt()
-            process.destroyForcibly()
-        } finally {
-            descendants.entries.toList().asReversed().forEach { (pid, startedAt) ->
-                // Security check: /proc start time prevents signaling a reused PID.
-                if (startedAt.isNotEmpty() && processStartTime(pid) == startedAt) {
-                    try { Os.kill(pid, OsConstants.SIGKILL) } catch (error: ErrnoException) {
-                        if (error.errno != OsConstants.ESRCH) throw RuntimeFailure("HARNESS_STOP_FAILED", "无法停止 Harness 子进程", error)
-                    }
-                }
-            }
+        val gracefulDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(GRACEFUL_STOP_TIMEOUT_MS)
+        while (System.nanoTime() < gracefulDeadline) {
+            discover()
+            if (!process.isAlive && observed.values.none(::isSameProcess)) return
+            pauseWhileStopping(REAP_POLL_INTERVAL_MS)
         }
-        if (process.isAlive) throw RuntimeFailure("HARNESS_STOP_TIMEOUT", "Harness 进程未在限定时间内结束")
+
+        val forceDeadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(FORCE_STOP_TIMEOUT_MS)
+        do {
+            signalProcesses(discover(), OsConstants.SIGKILL)
+            if (process.isAlive) process.destroyForcibly()
+            if (!process.isAlive && observed.values.none(::isSameProcess) && findMarkedHarnessProcesses().isEmpty()) return
+            pauseWhileStopping(REAP_POLL_INTERVAL_MS)
+        } while (System.nanoTime() < forceDeadline)
+
+        if (observed.values.any(::isSameProcess) || findMarkedHarnessProcesses().isNotEmpty() || process.isAlive) {
+            throw RuntimeFailure("HARNESS_STOP_TIMEOUT", "Harness 进程未在限定时间内结束")
+        }
     }
 
     private fun processStartTime(pid: Int): String = try {
-        File("/proc/$pid/stat").readText().substringAfterLast(") ").split(' ').getOrNull(19).orEmpty()
+        val stat = File("/proc/$pid/stat").readText()
+        val fields = stat.substringAfterLast(") ").split(' ')
+        if (fields.getOrNull(0) == "Z") "" else fields.getOrNull(19).orEmpty()
     } catch (_: Exception) { "" }
 
     private fun waitForPortRelease(port: Int) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(STOP_TIMEOUT_SECONDS)
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(PORT_RELEASE_TIMEOUT_MS)
         while (true) {
             try { ensurePortAvailable(port); return } catch (error: RuntimeFailure) {
                 if (System.nanoTime() >= deadline) throw RuntimeFailure("HARNESS_STOP_TIMEOUT", "Harness 端口尚未释放，请稍后重试停止", error)
+                // PRoot 根退出后仍可能出现刚被重挂父进程的 guest，按唯一环境标记再次回收。
+                signalProcesses(findMarkedHarnessProcesses(), OsConstants.SIGKILL)
             }
-            pauseWhileStarting(REAP_POLL_INTERVAL_MS)
+            pauseWhileStopping(REAP_POLL_INTERVAL_MS)
+        }
+    }
+
+    private fun pauseWhileStopping(milliseconds: Long) {
+        try {
+            Thread.sleep(milliseconds)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw RuntimeFailure("HARNESS_STOP_INTERRUPTED", "Harness 停止等待被中断", error)
         }
     }
 
@@ -435,7 +533,9 @@ class RuntimeSupervisor(
         private val starting = AtomicBoolean(false)
         @Volatile private var lastStartAttemptAt = 0L
         private const val START_TIMEOUT_SECONDS = 120L
-        private const val STOP_TIMEOUT_SECONDS = 3L
+        private const val GRACEFUL_STOP_TIMEOUT_MS = 2_000L
+        private const val FORCE_STOP_TIMEOUT_MS = 5_000L
+        private const val PORT_RELEASE_TIMEOUT_MS = 5_000L
         private const val NODE_PROBE_TIMEOUT_SECONDS = 15L
         private const val HARNESS_PROBE_TIMEOUT_SECONDS = 30L
         private const val POLL_INTERVAL_MS = 200L
