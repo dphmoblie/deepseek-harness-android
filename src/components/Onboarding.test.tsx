@@ -60,6 +60,31 @@ describe('Onboarding', () => {
     expect(props.onInstall).toHaveBeenCalledOnce()
   })
 
+  it('saves a custom provider from the model step', () => {
+    const onSaveSettings = vi.fn()
+    renderOnboarding({ onSaveSettings })
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'custom' } })
+    fireEvent.click(screen.getByRole('button', { name: '添加自定义供应商' }))
+    fireEvent.change(screen.getByRole('textbox', { name: '供应商名称' }), { target: { value: 'Gateway' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Base URL' }), { target: { value: 'https://api.example.com/v1' } })
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'test-placeholder-key' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '模型 ID' }), { target: { value: 'example/model' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '模型名称' }), { target: { value: 'Example Model' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存自定义供应商' }))
+
+    expect(onSaveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      customModelProviders: [expect.objectContaining({
+        id: 'custom-1',
+        api: 'openai-completions',
+        baseUrl: 'https://api.example.com/v1',
+        models: [expect.objectContaining({ id: 'example/model' })],
+      })],
+      customProviderApiKeys: { 'custom-1': 'test-placeholder-key' },
+    }))
+  })
+
   it('calls onAuthorize when Shizuku is available and not granted', () => {
     const props = renderOnboarding()
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
