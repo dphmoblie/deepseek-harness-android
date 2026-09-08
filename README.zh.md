@@ -19,11 +19,11 @@ pnpm run build
 pnpm run android:sync
 ```
 
-官方 `0.1.8` CI 发布的是内嵌离线运行时的 ARM64 APK。工作流构建移动端 Harness 对话前端，将其注入 Ubuntu 24.04 ARM64、Node.js 24.19.0 与 `@deepseek-ai/dsh` 0.1.0-rc.6 运行时，再把校验后的 `rootfs.bundle` 和 `runtime-manifest.json` 内嵌到同一 APK。Release 也单独发布这两项运行时资产，便于核验以及用户明确配置远程来源；安装官方 APK 无需联网或手工填写运行时地址与摘要。
+官方 `0.1.9` CI 发布的是内嵌离线运行时的 ARM64 APK。工作流复制固定版本的官方 `@deepseek-ai/dsh-web-frontend` 0.1.0-rc.7 发行文件，只增加 Android 安全区与触控尺寸样式，再将其注入 Ubuntu 24.04 ARM64、Node.js 24.19.0 与 `@deepseek-ai/dsh` 0.1.0-rc.6 运行时。随后，校验后的 `rootfs.bundle` 和 `runtime-manifest.json` 会内嵌到同一 APK。Release 也单独发布这两项运行时资产，便于核验以及用户明确配置远程来源；安装官方 APK 无需联网或手工填写运行时地址与摘要。
 
 内嵌安装会校验 manifest 声明的长度、架构、压缩方式与 rootfs SHA-256 后再解压。用户明确配置远程来源时，应用还会校验 manifest 摘要与 HTTPS 目标；下载使用应用私有的 `rootfs-<sha256>.part`，中断后可跨应用重启续传。续传响应必须精确匹配 HTTP 206/`Content-Range`，HTTP 200 或 416 会从零重新下载。断网、TLS、超时或截断会进入明确错误状态并保留合法断点，不会提前显示正在解压或安装完成。不要把 API 密钥、密码、数据库凭据、签名口令或 token 放入 `.env`、Gradle 文件、源码、manifest、URL 或日志。
 
-打包后的根路径只提供新版移动对话，包含会话、任务、文件、模型与推理强度、Agent preset、Harness 公开设置和插件生命周期管理。原桌面首页不再作为另一个入口打包；第三方 Cordis 插件自带页面可从设置中的按需兼容工作台打开，正常对话时不会加载这些资源。
+打包后的根路径直接提供完整的官方 Harness 前端，包括对话、模型、推理强度、设置与插件界面。应用不再包含单独编写的对话前端或兼容工作台。Android 适配仅处理 WebView 安全区和触控目标尺寸，保留上游页面结构与风格。相邻目录中的上游源码可以独立拉取更新；APK 仍使用 `scripts/runtime-profile/package.json` 与 `harness-web/package.json` 固定的版本，只有在明确升级并完成兼容测试后才会变化。
 
 原生运行器文件单独生成或导入，永不提交入库。发布 APK 必须同时打包 `lib/arm64-v8a/libdsh_proot.so` 与 `lib/arm64-v8a/libdsh_proot_loader.so` 两个文件。现有的 `prepare:runner` 流程仍可用于单独钉死版本的运行器来源，但它不能替代对随 APK 发布的这两个确切二进制的出处与许可审查。
 

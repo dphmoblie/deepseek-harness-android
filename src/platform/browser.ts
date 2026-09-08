@@ -1,5 +1,7 @@
 import type {
   ListenerHandle,
+  ModelProviderId,
+  ProviderApiKeys,
   RuntimeBridge,
   RuntimeProgress,
   RuntimeSettings,
@@ -9,7 +11,8 @@ import type {
   TerminalExit,
   TerminalKind,
 } from './types'
-import { assertSessionId, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateRuntimeSource } from './validation'
+import { MODEL_PROVIDER_IDS } from './types'
+import { assertSessionId, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 const encoder = new TextEncoder()
@@ -20,7 +23,7 @@ const DEFAULT_SETTINGS: RuntimeSettings = {
   manifestSha256: '0'.repeat(64),
   keepScreenAwake: true,
   terminalFontSize: 14,
-  apiKey: '',
+  configuredModelProviders: [],
   autoLaunch: false,
 }
 function listenerHandle(remove: () => void): ListenerHandle {
@@ -33,6 +36,9 @@ function listenerHandle(remove: () => void): ListenerHandle {
 }
 
 export function createBrowserBridge(): RuntimeBridge {
+  let currentSettings = { ...DEFAULT_SETTINGS }
+  const configuredProviders = new Set<ModelProviderId>()
+  const volatileProviderKeys: ProviderApiKeys = {}
   let state: RuntimeState = {
     phase: 'not-installed',
     architecture: 'arm64-v8a',
@@ -60,17 +66,37 @@ export function createBrowserBridge(): RuntimeBridge {
     getState: () => Promise.resolve({ ...state }),
     getSettings: () => {
       const saved = localStorage.getItem(SETTINGS_KEY)
-      if (saved === null) return Promise.resolve({ ...DEFAULT_SETTINGS })
+      if (saved === null) return Promise.resolve({ ...currentSettings })
       try {
-        return Promise.resolve(validateSettings(JSON.parse(saved) as RuntimeSettings))
+        const raw = JSON.parse(saved) as RuntimeSettings
+        currentSettings = validateSettings(raw)
+        currentSettings.configuredModelProviders.forEach(provider => configuredProviders.add(provider))
+        if (typeof raw.apiKey === 'string' && raw.apiKey.trim() !== '') volatileProviderKeys.deepseek = raw.apiKey.trim()
+        currentSettings = { ...currentSettings, configuredModelProviders: MODEL_PROVIDER_IDS.filter(provider => configuredProviders.has(provider)) }
+        // Browser preview storage mirrors production by retaining only masked credential state.
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(currentSettings))
+        return Promise.resolve({ ...currentSettings })
       } catch {
-        return Promise.resolve({ ...DEFAULT_SETTINGS })
+        currentSettings = { ...DEFAULT_SETTINGS }
+        return Promise.resolve({ ...currentSettings })
       }
     },
     saveSettings: settings => {
-      const validated = validateSettings(settings)
-      localStorage.setItem(SETTINGS_KEY, JSON.stringify(validated))
-      return Promise.resolve(validated)
+      const validated = validateSettingsUpdate(settings)
+      Object.entries(validated.providerApiKeys ?? {}).forEach(([provider, key]) => {
+        volatileProviderKeys[provider as ModelProviderId] = key
+        configuredProviders.add(provider as ModelProviderId)
+      })
+      validated.clearProviderApiKeys?.forEach(provider => {
+        delete volatileProviderKeys[provider]
+        configuredProviders.delete(provider)
+      })
+      currentSettings = validateSettings({
+        ...validated,
+        configuredModelProviders: MODEL_PROVIDER_IDS.filter(provider => configuredProviders.has(provider)),
+      })
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(currentSettings))
+      return Promise.resolve({ ...currentSettings })
     },
     install: async source => {
       const validatedSource = source === undefined ? undefined : validateRuntimeSource(source)
@@ -101,7 +127,8 @@ export function createBrowserBridge(): RuntimeBridge {
     },
     openHarness: () => {
       if (state.phase !== 'running' || state.harnessUrl === undefined) throw new Error('Harness 尚未运行')
-      window.open(state.harnessUrl, '_blank', 'noopener,noreferrer')
+      const url = new URL(state.harnessUrl)
+      window.open(url.toString(), '_blank', 'noopener,noreferrer')
       return Promise.resolve()
     },
     stopRuntime: () => {

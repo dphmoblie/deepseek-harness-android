@@ -33,11 +33,15 @@ import {
 } from 'lucide-react'
 import { TerminalPanel } from './components/TerminalPanel'
 import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
+import { MODEL_PROVIDERS } from './modelProviders'
 import { runtimeBridge } from './platform/native'
 import type {
+  ModelProviderId,
+  ProviderApiKeys,
   RuntimePhase,
   RuntimeProgress,
   RuntimeSettings,
+  RuntimeSettingsUpdate,
   RuntimeState,
   ShizukuState,
   TerminalKind,
@@ -152,6 +156,9 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   NODE_RUNTIME_FAILED: '内置 Node.js 无法在当前设备运行。',
   NODE_CPU_UNSUPPORTED: '设备 CPU 无法执行内置 Node.js。',
   HARNESS_PREFLIGHT_FAILED: 'Harness 命令未通过启动自检。',
+  CREDENTIALS_DECRYPT_FAILED: '无法读取已保存的模型凭据；原有数据已保留，请稍后重试。',
+  CREDENTIALS_ENCRYPT_FAILED: '无法安全保存模型凭据；请稍后重试。',
+  RUNTIME_CONFIG_FAILED: '无法生成模型供应商启动配置，请检查运行时文件后重试。',
   HARNESS_PORT_IN_USE: 'Harness 本机端口已被占用，请停止占用端口的程序后重试。',
   HARNESS_MODULE_MISSING: 'Harness 运行模块不完整。',
   HARNESS_NATIVE_MODULE_FAILED: 'Harness 原生模块无法在当前设备运行。',
@@ -566,14 +573,21 @@ interface SettingsScreenProps {
   onOpenEnvironment: () => void
   onOpenShizuku: () => void
   onOpenTerminal: () => void
-  onSave: (settings: RuntimeSettings) => void
+  onSave: (settings: RuntimeSettingsUpdate) => void
   onStop: () => void
 }
 
 function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConnect, onLaunch, onOpenEnvironment, onOpenShizuku, onOpenTerminal, onSave, onStop }: SettingsScreenProps) {
   const [draft, setDraft] = useState<RuntimeSettings | null>(settings)
+  const [selectedProvider, setSelectedProvider] = useState<ModelProviderId>('deepseek')
+  const [credentialDrafts, setCredentialDrafts] = useState<ProviderApiKeys>({})
+  const [clearedProviders, setClearedProviders] = useState<ModelProviderId[]>([])
 
-  useEffect(() => setDraft(settings), [settings])
+  useEffect(() => {
+    setDraft(settings)
+    setCredentialDrafts({})
+    setClearedProviders([])
+  }, [settings])
 
   if (draft === null) {
     return <div className="screen loading-screen"><Loader2 className="spin" size={24} /><span>正在读取设置</span></div>
@@ -588,6 +602,17 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
         : shizuku.permission === 'denied'
           ? '已拒绝'
           : '待授权'
+  const selectedProviderOption = MODEL_PROVIDERS.find(provider => provider.id === selectedProvider) ?? MODEL_PROVIDERS[0]
+  const selectedProviderConfigured = (
+    draft.configuredModelProviders.includes(selectedProvider) || credentialDrafts[selectedProvider] !== undefined
+  ) && !clearedProviders.includes(selectedProvider)
+  const saveDraft = (): void => {
+    onSave({
+      ...draft,
+      ...(Object.keys(credentialDrafts).length === 0 ? {} : { providerApiKeys: credentialDrafts }),
+      ...(clearedProviders.length === 0 ? {} : { clearProviderApiKeys: clearedProviders }),
+    })
+  }
 
   return (
     <div className="screen settings-screen">
@@ -598,7 +623,7 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
         </div>
         <button className="button button-primary conversation-button" type="button" onClick={onLaunch} disabled={busy !== null || !runtimeInstalled(runtime)}>
           {busy === 'launch' ? <Loader2 className="spin" size={18} /> : runtime.updateAvailable ? <RefreshCw size={18} /> : <Bot size={18} />}
-          {runtime.updateAvailable ? '更新环境' : '返回对话'}
+          {runtime.updateAvailable ? '更新环境' : '打开 Harness'}
         </button>
       </div>
 
@@ -627,26 +652,69 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
         </button>
       </section>
 
-      <form className="settings-form" onSubmit={event => { event.preventDefault(); onSave(draft) }}>
+      <form className="settings-form" onSubmit={event => { event.preventDefault(); saveDraft() }}>
         <section className="settings-section" aria-labelledby="model-settings">
           <div className="section-title">
             <span className="section-icon"><Bot size={19} /></span>
-            <div><h2 id="model-settings">模型</h2><p>API Key 只保存在本机，注入 Harness 运行时（DEEPSEEK_API_KEY）</p></div>
+            <div><h2 id="model-settings">模型供应商</h2><p>凭据在设备上加密保存，并注入 Harness 运行时</p></div>
           </div>
           <label className="field">
-            <span>DeepSeek API Key</span>
+            <span>供应商</span>
+            <select
+              value={selectedProvider}
+              onChange={event => setSelectedProvider(event.target.value as ModelProviderId)}
+            >
+              {MODEL_PROVIDERS.map(provider => {
+                const configured = (draft.configuredModelProviders.includes(provider.id) || credentialDrafts[provider.id] !== undefined)
+                  && !clearedProviders.includes(provider.id)
+                return <option key={provider.id} value={provider.id}>{provider.label}{configured ? '（已配置）' : ''}</option>
+              })}
+            </select>
+          </label>
+          <label className="field">
+            <span>{selectedProviderOption.label} API Key · {selectedProviderOption.environmentVariable}</span>
             <input
               type="password"
-              autoComplete="off"
+              autoComplete="new-password"
               spellCheck={false}
               maxLength={200}
-              placeholder={draft.apiKey ? '已配置（' + draft.apiKey.slice(0, 6) + '…），输入新值覆盖' : '未配置，填入 sk-...'}
-              value={draft.apiKey ?? ''}
-              onChange={event => setDraft({ ...draft, apiKey: event.target.value })}
+              placeholder={selectedProviderConfigured ? '已配置，留空保持不变' : '输入 API Key'}
+              value={credentialDrafts[selectedProvider] ?? ''}
+              onChange={event => {
+                const value = event.target.value
+                setCredentialDrafts(current => {
+                  const next = { ...current }
+                  if (value === '') delete next[selectedProvider]
+                  else next[selectedProvider] = value
+                  return next
+                })
+                if (value !== '') setClearedProviders(current => current.filter(provider => provider !== selectedProvider))
+              }}
             />
           </label>
+          {(draft.configuredModelProviders.includes(selectedProvider) || clearedProviders.includes(selectedProvider)) && (
+            <div className="credential-actions">
+              <button
+                className="button button-danger-quiet compact-button"
+                type="button"
+                onClick={() => {
+                  setCredentialDrafts(current => {
+                    const next = { ...current }
+                    delete next[selectedProvider]
+                    return next
+                  })
+                  setClearedProviders(current => current.includes(selectedProvider)
+                    ? current.filter(provider => provider !== selectedProvider)
+                    : [...current, selectedProvider])
+                }}
+              >
+                {clearedProviders.includes(selectedProvider) ? <RotateCcw size={16} /> : <Trash2 size={16} />}
+                {clearedProviders.includes(selectedProvider) ? '撤销清除' : '清除凭据'}
+              </button>
+            </div>
+          )}
           <label className="toggle-row">
-            <span><strong>打开应用时自动启动 Harness</strong><small>关闭后需手动点「返回对话」启动</small></span>
+            <span><strong>打开应用时自动启动 Harness</strong><small>关闭后需手动点「打开 Harness」启动</small></span>
             <input
               type="checkbox"
               role="switch"
@@ -1078,7 +1146,7 @@ export function App() {
     }, 'Ubuntu 环境已重置')
   }, [run])
 
-  const saveSettings = useCallback((nextSettings: RuntimeSettings) => {
+  const saveSettings = useCallback((nextSettings: RuntimeSettingsUpdate) => {
     void run('save-settings', async () => {
       const saved = await runtimeBridge.saveSettings(nextSettings)
       setSettings(saved)

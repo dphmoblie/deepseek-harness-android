@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ArrowLeft, ArrowRight, Blocks, Check, KeyRound, Loader2, Rocket, ShieldCheck, Sparkles, X } from 'lucide-react'
-import type { RuntimeSettings, RuntimeState, ShizukuState } from '../platform/types'
+import { MODEL_PROVIDERS } from '../modelProviders'
+import type { ModelProviderId, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from '../platform/types'
 
 export const ONBOARDING_STORAGE_KEY = 'dsh-mobile-onboarding-v1'
 
@@ -14,7 +15,7 @@ interface OnboardingProps {
   onOpenShizuku: () => void
   onOpenHarness: () => void
   onDone: () => void
-  onSaveSettings?: (settings: RuntimeSettings) => void
+  onSaveSettings?: (settings: RuntimeSettingsUpdate) => void
 }
 
 const STEPS = [
@@ -37,6 +38,7 @@ export function Onboarding({
 }: OnboardingProps) {
   const [step, setStep] = useState(0)
   const [apiKeyDraft, setApiKeyDraft] = useState('')
+  const [selectedProvider, setSelectedProvider] = useState<ModelProviderId>('deepseek')
   const last = step === STEPS.length - 1
 
   const installed = ['ready', 'running'].includes(runtime.phase)
@@ -86,9 +88,17 @@ export function Onboarding({
               )}
               {step === 2 && (
                 <div className="onboarding-body">
-                  <p>填入模型服务商（如 DeepSeek）的 API Key，Harness 才能对话。密钥只保存在本机，注入运行时环境，不经过网络。</p>
+                  <p>选择模型供应商并保存 API Key。密钥在设备上加密保存，页面不会回显明文。</p>
                   <label className="field">
-                    <span>DeepSeek API Key（sk-...）</span>
+                    <span>供应商</span>
+                    <select value={selectedProvider} onChange={event => setSelectedProvider(event.target.value as ModelProviderId)}>
+                      {MODEL_PROVIDERS.map(provider => (
+                        <option key={provider.id} value={provider.id}>{provider.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>{MODEL_PROVIDERS.find(provider => provider.id === selectedProvider)?.label ?? selectedProvider} API Key</span>
                     <input
                       type="password"
                       autoComplete="off"
@@ -99,10 +109,23 @@ export function Onboarding({
                       onChange={event => setApiKeyDraft(event.target.value)}
                     />
                   </label>
-                  <button className="button button-primary" type="button" disabled={apiKeyDraft.trim() === ''} onClick={() => { onSaveSettings?.({ ...(settings ?? { manifestUrl: '', manifestSha256: '', keepScreenAwake: true, terminalFontSize: 14, autoLaunch: true }), apiKey: apiKeyDraft.trim() }); setApiKeyDraft('') }}>
+                  <button className="button button-primary" type="button" disabled={apiKeyDraft.trim() === ''} onClick={() => {
+                    onSaveSettings?.({
+                      ...(settings ?? {
+                        manifestUrl: '',
+                        manifestSha256: '',
+                        keepScreenAwake: true,
+                        terminalFontSize: 14,
+                        configuredModelProviders: [],
+                        autoLaunch: true,
+                      }),
+                      providerApiKeys: { [selectedProvider]: apiKeyDraft.trim() },
+                    })
+                    setApiKeyDraft('')
+                  }}>
                     <KeyRound size={18} />保存 API Key
                   </button>
-                  <p className="onboarding-status">{settings?.apiKey ? '已配置（' + settings.apiKey.slice(0, 8) + '…）' : '未配置'}</p>
+                  <p className="onboarding-status">{settings?.configuredModelProviders.includes(selectedProvider) ? '已配置' : '未配置'}</p>
                 </div>
               )}
               {step === 3 && (

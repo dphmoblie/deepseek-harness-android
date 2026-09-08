@@ -76,7 +76,7 @@ class MobileRuntimePlugin : Plugin() {
             deviceCommands = DeviceCommandRunner(
                 writer = { sessionId, dataBase64 -> controller.writeTerminal(sessionId, dataBase64) },
             )
-            applyKeepScreenAwake(controller.store.settings().keepScreenAwake)
+            applyKeepScreenAwake(controller.store.keepScreenAwake())
             deviceBridge = DeviceBridgeServer(
                 shizuku = controller.terminals.shizuku,
                 runner = deviceCommands,
@@ -143,17 +143,25 @@ class MobileRuntimePlugin : Plugin() {
         execute(call) {
             val fontSize = call.getInt("terminalFontSize")
                 ?: throw RuntimeFailure("SETTINGS_INVALID", "终端字号缺失")
+            val providerApiKeyUpdates = RuntimeValidation.providerApiKeyUpdates(call.getObject("providerApiKeys"))
+                .toMutableMap()
+            call.getString("apiKey")?.trim()?.takeIf { it.isNotEmpty() }?.let { legacyKey ->
+                providerApiKeyUpdates.putIfAbsent(
+                    io.deepseekharness.mobile.runtime.ModelProvider.DEEPSEEK,
+                    RuntimeValidation.requireProviderApiKey(legacyKey),
+                )
+            }
+            val clearedProviderApiKeys = RuntimeValidation.clearedProviderApiKeys(call.getArray("clearProviderApiKeys"))
             val settings = RuntimeValidation.settings(
                 call.getString("manifestUrl"),
                 call.getString("manifestSha256"),
                 call.getBoolean("keepScreenAwake", false) ?: false,
                 fontSize,
-                call.getString("apiKey"),
                 call.getBoolean("autoLaunch", true) ?: true,
             )
-            controller.store.saveSettings(settings)
-            applyKeepScreenAwake(settings.keepScreenAwake)
-            settings.toJs()
+            val saved = controller.store.saveSettings(settings, providerApiKeyUpdates, clearedProviderApiKeys)
+            applyKeepScreenAwake(saved.keepScreenAwake)
+            saved.toJs()
         }
     }
 
@@ -417,7 +425,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("manifestSha256", manifestSha256)
         .put("keepScreenAwake", keepScreenAwake)
         .put("terminalFontSize", terminalFontSize)
-        .put("apiKey", apiKey)
+        .put("configuredModelProviders", org.json.JSONArray(configuredModelProviders.map { it.wireValue }))
         .put("autoLaunch", autoLaunch)
 
     private fun RuntimeStateSnapshot.toProgressJs(): JSObject = JSObject()

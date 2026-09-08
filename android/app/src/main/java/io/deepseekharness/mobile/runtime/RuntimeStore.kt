@@ -20,6 +20,7 @@ import java.nio.file.StandardOpenOption
 class RuntimeStore(context: Context) {
     private val appContext = context.applicationContext
     private val preferences: SharedPreferences = appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+    private val credentialCipher = RuntimeCredentialCipher()
 
     val runtimeParent = File(appContext.noBackupFilesDir, "dsh-runtime")
     val currentRoot = File(runtimeParent, "current")
@@ -33,11 +34,16 @@ class RuntimeStore(context: Context) {
     val launchLoaderFile = File(launchDirectory, "loader")
     val resolverFile = File(appContext.filesDir, "runtime-resolv.conf")
     val harnessPidFile = File(appContext.noBackupFilesDir, "dsh-harness.pid")
+    private val launcherConfigDirectory = File(currentRoot, "root/.dsh-mobile")
+    private val providerPatchFile = File(launcherConfigDirectory, PROVIDER_PATCH_FILENAME)
 
     @Volatile private var manifestCacheLoaded = false
     @Volatile private var manifestCache: RuntimeManifest? = null
     @Volatile private var bundledManifestCacheLoaded = false
     @Volatile private var bundledManifestCache: RuntimeManifest? = null
+
+    // UI lifecycle reads do not need credentials or a working Keystore service.
+    fun keepScreenAwake(): Boolean = preferences.getBoolean(KEY_KEEP_AWAKE, false)
 
     @Synchronized
     fun settings(): RuntimeSettings {
@@ -47,27 +53,187 @@ class RuntimeStore(context: Context) {
             BuildConfig.DEFAULT_MANIFEST_SHA256.isNotEmpty()
         val migrateEmptyBundledSource = storedUrl == "" && storedSha256 == "" && pinnedDefaultAvailable
         val usePinnedDefault = (storedUrl == null && storedSha256 == null) || migrateEmptyBundledSource
+        val providerApiKeys = providerApiKeysLocked()
         return RuntimeSettings(
             manifestUrl = if (usePinnedDefault) BuildConfig.DEFAULT_MANIFEST_URL else storedUrl.orEmpty(),
             manifestSha256 = if (usePinnedDefault) BuildConfig.DEFAULT_MANIFEST_SHA256 else storedSha256.orEmpty(),
-            keepScreenAwake = preferences.getBoolean(KEY_KEEP_AWAKE, false),
+            keepScreenAwake = keepScreenAwake(),
             terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
-            apiKey = preferences.getString(KEY_API_KEY, null).orEmpty(),
+            configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             autoLaunch = preferences.getBoolean(KEY_AUTO_LAUNCH, false),
         )
     }
 
     @Synchronized
-    fun saveSettings(settings: RuntimeSettings) {
-        val committed = preferences.edit()
+    fun saveSettings(
+        settings: RuntimeSettings,
+        providerApiKeyUpdates: Map<ModelProvider, String> = emptyMap(),
+        clearedProviderApiKeys: Set<ModelProvider> = emptySet(),
+    ): RuntimeSettings {
+        if (providerApiKeyUpdates.keys.any(clearedProviderApiKeys::contains)) {
+            throw RuntimeFailure("SETTINGS_INVALID", "同一模型凭据不能同时更新和清除")
+        }
+        val providerApiKeys = providerApiKeysLocked().toMutableMap()
+        clearedProviderApiKeys.forEach(providerApiKeys::remove)
+        providerApiKeys.putAll(providerApiKeyUpdates)
+        val encryptedCredentials = encryptProviderApiKeys(providerApiKeys)
+        val editor = preferences.edit()
             .putString(KEY_MANIFEST_URL, settings.manifestUrl)
             .putString(KEY_MANIFEST_SHA256, settings.manifestSha256)
             .putBoolean(KEY_KEEP_AWAKE, settings.keepScreenAwake)
             .putInt(KEY_FONT_SIZE, settings.terminalFontSize)
-            .putString(KEY_API_KEY, settings.apiKey)
+            // Retired frontend choices must not redirect the single official entrypoint.
+            .remove(KEY_LEGACY_DEFAULT_FRONTEND)
             .putBoolean(KEY_AUTO_LAUNCH, settings.autoLaunch)
-            .commit()
+            .remove(KEY_API_KEY)
+        if (encryptedCredentials == null) editor.remove(KEY_PROVIDER_CREDENTIALS)
+        else editor.putString(KEY_PROVIDER_CREDENTIALS, encryptedCredentials)
+        val committed = editor.commit()
         if (!committed) throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法保存运行时设置")
+        return settings.copy(
+            configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
+        )
+    }
+
+    @Synchronized
+    fun providerApiKeys(): Map<ModelProvider, String> = providerApiKeysLocked().toMap()
+
+    /** Writes a fixed, secret-free Cordis overlay for the configured pi-ai routes. */
+    @Synchronized
+    fun prepareProviderPatch(configuredProviders: Set<ModelProvider>): String? {
+        val enabled = ModelProvider.entries.filter { it != ModelProvider.DEEPSEEK && configuredProviders.contains(it) }
+        if (enabled.isEmpty()) {
+            deleteGeneratedFile(providerPatchFile)
+            return null
+        }
+        val rootHome = File(currentRoot, "root")
+        if (!RuntimeFiles.isDirectoryNoFollow(rootHome)) {
+            throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "Ubuntu 主目录无效")
+        }
+        if (RuntimeFiles.existsNoFollow(launcherConfigDirectory)) {
+            if (!RuntimeFiles.isDirectoryNoFollow(launcherConfigDirectory)) {
+                throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "启动器配置目录无效")
+            }
+        } else if (!launcherConfigDirectory.mkdir()) {
+            throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "无法创建启动器配置目录")
+        }
+
+        val providers = JSONObject()
+        enabled.forEach { provider ->
+            providers.put(provider.wireValue, JSONObject().put("apiKeyEnv", provider.environmentVariable))
+        }
+        val bytes = JSONArray()
+            .put(
+                JSONObject()
+                    .put("id", "llm-pi-ai")
+                    .put("config", JSONObject().put("providers", providers)),
+            )
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        val pending = File(launcherConfigDirectory, ".$PROVIDER_PATCH_FILENAME.new")
+        try {
+            Os.chmod(launcherConfigDirectory.absolutePath, 0x1c0)
+            deleteGeneratedFile(pending)
+            requireRegularGeneratedFileOrMissing(providerPatchFile)
+            FileChannel.open(
+                pending.toPath(),
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE,
+                LinkOption.NOFOLLOW_LINKS,
+            ).use { channel ->
+                Channels.newOutputStream(channel).use { output ->
+                    output.write(bytes)
+                    output.flush()
+                    channel.force(true)
+                }
+            }
+            Os.chmod(pending.absolutePath, 0x180)
+            Os.rename(pending.absolutePath, providerPatchFile.absolutePath)
+        } catch (error: Throwable) {
+            try {
+                deleteGeneratedFile(pending)
+            } catch (_: Throwable) {
+                // Preserve the original bounded configuration failure.
+            }
+            if (error is RuntimeFailure) throw error
+            throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "无法生成模型供应商启动配置", error)
+        }
+        return RuntimeCommand.PROVIDER_PATCH_GUEST_PATH
+    }
+
+    private fun providerApiKeysLocked(): Map<ModelProvider, String> {
+        val encrypted = preferences.getString(KEY_PROVIDER_CREDENTIALS, null)
+        if (!encrypted.isNullOrEmpty()) {
+            return try {
+                val plaintext = credentialCipher.decrypt(encrypted)
+                try {
+                    RuntimeValidation.providerApiKeyUpdates(JSONObject(plaintext.toString(Charsets.UTF_8)))
+                } finally {
+                    plaintext.fill(0)
+                }
+            } catch (error: Exception) {
+                // A temporary Keystore failure must never erase saved credentials.
+                throw RuntimeFailure(
+                    "CREDENTIALS_DECRYPT_FAILED",
+                    "无法读取已保存的模型凭据；原有数据已保留，请稍后重试",
+                    error,
+                )
+            }
+        }
+
+        val legacy = preferences.getString(KEY_API_KEY, null)?.trim().orEmpty()
+        if (legacy.isEmpty()) return emptyMap()
+        val migrated = try {
+            mapOf(ModelProvider.DEEPSEEK to RuntimeValidation.requireProviderApiKey(legacy))
+        } catch (error: RuntimeFailure) {
+            throw RuntimeFailure(
+                "CREDENTIALS_DECRYPT_FAILED",
+                "无法读取已保存的模型凭据；原有数据已保留，请稍后重试",
+                error,
+            )
+        }
+        val encryptedMigration = encryptProviderApiKeys(migrated)
+            ?: throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法迁移模型凭据")
+        val committed = preferences.edit()
+            .putString(KEY_PROVIDER_CREDENTIALS, encryptedMigration)
+            .remove(KEY_API_KEY)
+            .commit()
+        if (!committed) throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法迁移模型凭据")
+        return migrated
+    }
+
+    private fun encryptProviderApiKeys(providerApiKeys: Map<ModelProvider, String>): String? {
+        if (providerApiKeys.isEmpty()) return null
+        val json = JSONObject()
+        ModelProvider.entries.forEach { provider ->
+            providerApiKeys[provider]?.let { json.put(provider.wireValue, it) }
+        }
+        val plaintext = json.toString().toByteArray(Charsets.UTF_8)
+        return try {
+            credentialCipher.encrypt(plaintext)
+        } catch (error: Throwable) {
+            throw RuntimeFailure("CREDENTIALS_ENCRYPT_FAILED", "无法安全保存模型凭据", error)
+        } finally {
+            plaintext.fill(0)
+        }
+    }
+
+    private fun requireRegularGeneratedFileOrMissing(file: File) {
+        if (!RuntimeFiles.existsNoFollow(file)) return
+        val stat = try {
+            Os.lstat(file.absolutePath)
+        } catch (error: ErrnoException) {
+            throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "无法检查启动器配置文件", error)
+        }
+        if (!OsConstants.S_ISREG(stat.st_mode)) {
+            throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "启动器配置文件类型无效")
+        }
+    }
+
+    private fun deleteGeneratedFile(file: File) {
+        if (!RuntimeFiles.existsNoFollow(file)) return
+        requireRegularGeneratedFileOrMissing(file)
+        if (!file.delete()) throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "无法清理旧的启动器配置")
     }
 
     /** 设备命令桥 token（生成后持久化，注入容器 DSH_DEVICE_BRIDGE_TOKEN）。 */
@@ -342,6 +508,8 @@ class RuntimeStore(context: Context) {
         private const val KEY_KEEP_AWAKE = "keep_screen_awake"
         private const val KEY_FONT_SIZE = "terminal_font_size"
         private const val KEY_API_KEY = "model_api_key"
+        private const val KEY_PROVIDER_CREDENTIALS = "provider_credentials_encrypted_v1"
+        private const val KEY_LEGACY_DEFAULT_FRONTEND = "default_frontend"
         private const val KEY_AUTO_LAUNCH = "auto_launch"
         private const val KEY_DEVICE_BRIDGE_TOKEN = "device_bridge_token"
         private const val RUNNER_NAME = "libdsh_proot.so"
@@ -350,5 +518,6 @@ class RuntimeStore(context: Context) {
         private val EXEC_XATTR_VALUE: ByteArray = byteArrayOf('1'.code.toByte())
         private const val BUNDLED_MANIFEST_ASSET = "runtime/runtime-manifest.json"
         private const val BUNDLED_ROOTFS_ASSET = "runtime/rootfs.bundle"
+        private const val PROVIDER_PATCH_FILENAME = "launcher-providers.patch.json"
     }
 }

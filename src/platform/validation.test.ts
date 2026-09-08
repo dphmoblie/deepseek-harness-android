@@ -8,6 +8,7 @@ import {
   validateRuntimeProgress,
   validateRuntimeState,
   validateSettings,
+  validateSettingsUpdate,
   validateShizukuState,
   validateStoredSettings,
   validateTerminalChunk,
@@ -98,6 +99,7 @@ describe('settings validation', () => {
       manifestSha256: '',
       keepScreenAwake: false,
       terminalFontSize: 14,
+      configuredModelProviders: [],
       autoLaunch: false,
     })
     expect(() => validateStoredSettings({
@@ -114,6 +116,7 @@ describe('settings validation', () => {
       manifestSha256: 'a'.repeat(64),
       keepScreenAwake: false,
       terminalFontSize: 25,
+      configuredModelProviders: [],
     })).toThrow('字号')
   })
 
@@ -123,12 +126,14 @@ describe('settings validation', () => {
       manifestSha256: '',
       keepScreenAwake: true,
       terminalFontSize: 16,
+      configuredModelProviders: [],
       autoLaunch: false,
     })).toEqual({
       manifestUrl: '',
       manifestSha256: '',
       keepScreenAwake: true,
       terminalFontSize: 16,
+      configuredModelProviders: [],
       autoLaunch: false,
     })
   })
@@ -139,7 +144,50 @@ describe('settings validation', () => {
       manifestSha256: 'a'.repeat(64),
       keepScreenAwake: 'true',
       terminalFontSize: 14,
+      configuredModelProviders: [],
     } as unknown as Parameters<typeof validateSettings>[0])).toThrow('屏幕常亮')
+  })
+
+  it('validates bounded provider credential updates', () => {
+    expect(validateSettingsUpdate({
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: true,
+      terminalFontSize: 14,
+      configuredModelProviders: ['deepseek'],
+      providerApiKeys: { openai: 'unit-test-openai-key', google: 'unit-test-gemini-key' },
+      clearProviderApiKeys: ['deepseek'],
+      autoLaunch: true,
+    })).toEqual({
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: true,
+      terminalFontSize: 14,
+      configuredModelProviders: ['deepseek'],
+      providerApiKeys: { openai: 'unit-test-openai-key', google: 'unit-test-gemini-key' },
+      clearProviderApiKeys: ['deepseek'],
+      autoLaunch: true,
+    })
+  })
+
+  it('ignores retired frontend preferences and rejects invalid provider updates', () => {
+    const base = {
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: true,
+      terminalFontSize: 14,
+      configuredModelProviders: [],
+      autoLaunch: true,
+    }
+    expect(validateStoredSettings({ ...base, defaultFrontend: 'workbench' })).toEqual(base)
+    expect(() => validateSettingsUpdate({ ...base, providerApiKeys: { custom: 'key' } } as never)).toThrow('供应商')
+    expect(() => validateSettingsUpdate({ ...base, providerApiKeys: { openai: 'bad key' } })).toThrow('非法字符')
+    expect(() => validateSettingsUpdate({
+      ...base,
+      providerApiKeys: { openai: 'replacement-key' },
+      clearProviderApiKeys: ['openai'],
+    })).toThrow('同时更新和清除')
+    expect(() => validateSettings({ ...base, autoLaunch: 'true' } as never)).toThrow('自动启动')
   })
 
   it('enforces terminal dimensions', () => {

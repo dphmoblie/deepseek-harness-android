@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
+import { spawnSync } from 'node:child_process'
 
 const appRoot = resolve(import.meta.dirname, '..')
 
@@ -23,7 +24,7 @@ test('dsh-mobile-compat keeps the dsh client module contract', async () => {
 
   // The workspace build is a TypeScript module used by the package toolchain.
   // The default Android profile deliberately does not load this experimental
-  // root plugin; the standalone mobile frontend owns the default document.
+  // root plugin; the official Harness frontend owns the default document.
   const clientSource = await readFile(
     resolve(appRoot, 'packages/dsh-mobile-compat/lib/client.js'),
     'utf8',
@@ -32,37 +33,81 @@ test('dsh-mobile-compat keeps the dsh client module contract', async () => {
   assert.match(clientSource, /export function apply\(ctx\)/)
 })
 
-test('Android rootfs workflow keeps the official frontend (plugins load natively)', async () => {
+test('Android rootfs workflow packages the adapted official frontend at the root', async () => {
   const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
-  assert.doesNotMatch(workflow, /Build mobile Harness conversation frontend/)
-  assert.doesNotMatch(workflow, /rebuild-rootfs-frontend\.py/)
-  assert.doesNotMatch(workflow, /--dist\s+harness-web\/dist/)
-  const verifier = await readFile(resolve(appRoot, 'scripts/verify-bundle.py'), 'utf8')
-  assert.match(verifier, /OFFICIAL_FRONTEND_MARKER/)
-  assert.match(verifier, /official frontend index missing #root/)
-  assert.match(verifier, /harness-web marker leaked into official frontend/)
+  assert.match(workflow, /Build Android-adapted official Harness frontend/)
+  assert.match(workflow, /pnpm --dir harness-web build/)
+  assert.match(workflow, /rebuild-rootfs-frontend\.py/)
+  assert.match(workflow, /--dist\s+harness-web\/dist/)
+
+  const rebuilder = await readFile(resolve(appRoot, 'scripts/rebuild-rootfs-frontend.py'), 'utf8')
+  assert.match(rebuilder, /is_frontend_dist_path\(member\.name\)/)
+  assert.match(rebuilder, /重建后仍残留旧 dist 条目/)
+  assert.match(rebuilder, /OFFICIAL_FRONTEND_MARKER/)
+  assert.match(rebuilder, /validate_frontend_dist\(dist_root\)/)
+  assert.match(rebuilder, /name="dsh-official-frontend" content="android-adapted-v1"/)
 })
 
-test('plugin workbench is opt-in and embeds assets without a duplicate desktop page', async () => {
-  const main = await readFile(resolve(appRoot, 'harness-web/src/main.tsx'), 'utf8')
-  const settings = await readFile(resolve(appRoot, 'harness-web/src/ui/SettingsView.tsx'), 'utf8')
-  const embedder = await readFile(
-    resolve(appRoot, 'harness-web/scripts/embed-plugin-workbench.mjs'),
+test('official frontend adapter keeps upstream assets without a second conversation entry', async () => {
+  const packageJson = JSON.parse(await readFile(resolve(appRoot, 'harness-web/package.json'), 'utf8'))
+  const adapter = await readFile(
+    resolve(appRoot, 'harness-web/scripts/build-official-frontend.mjs'),
     'utf8',
   )
-  assert.match(main, /surface === 'plugins'/)
-  assert.match(main, /import\('\.\/mobile'\)/)
-  assert.match(main, /target\.searchParams\.delete\('surface'\)/)
-  assert.match(main, /back\.textContent = '\u8fd4\u56de\u79fb\u52a8\u5bf9\u8bdd'/)
-  assert.match(settings, /searchParams\.set\('surface', 'plugins'\)/)
-  assert.match(embedder, /cp\(sourceAssetsRoot, workbenchAssetsRoot/)
-  assert.doesNotMatch(embedder, /cp\(sourceRoot, workbenchRoot/)
-  assert.match(embedder, /replaceAll\('\/assets\/', '\/plugin-workbench\/assets\/'\)/)
-  assert.match(embedder, /validateBootManifest\(globalThis\.__DSH_BOOT__\)/)
-  assert.match(embedder, /\\u542f\\u52a8\\u6e05\\u5355\\u7f3a\\u5931/)
-  assert.match(embedder, /document\.body\.insertBefore\(toolbar, document\.body\.firstChild\)/)
-  assert.match(embedder, /root\.style\.cssText = 'flex:1 1 auto;min-height:0;height:auto'/)
-  assert.doesNotMatch(embedder, /position:fixed/)
+  assert.equal(packageJson.scripts.build, 'node scripts/build-official-frontend.mjs')
+  assert.equal(packageJson.scripts.test, 'node --test scripts/*.test.mjs')
+  assert.match(adapter, /cp\(sourceRoot, temporaryRoot/)
+  assert.match(adapter, /dsh-official-frontend/)
+  assert.match(adapter, /dsh-android\.css/)
+  assert.doesNotMatch(adapter, /plugin-workbench-loader/)
+  assert.doesNotMatch(adapter, /createRoot\(|import\(['"]\.\/mobile/)
+  await assert.rejects(readFile(resolve(appRoot, 'harness-web/src/main.tsx')), { code: 'ENOENT' })
+  await assert.rejects(readFile(resolve(appRoot, 'harness-web/scripts/embed-plugin-workbench.mjs')), { code: 'ENOENT' })
+})
+
+test('rootfs frontend input rejects old workbench artifacts and duplicate HTML entries', () => {
+  const probe = String.raw`
+import importlib.util
+import pathlib
+import tempfile
+
+spec = importlib.util.spec_from_file_location("frontend_rebuilder", "scripts/rebuild-rootfs-frontend.py")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+marker = b'<meta name="dsh-official-frontend" content="android-adapted-v1" /><div id="root"></div>'
+
+def rejected(root):
+    try:
+        module.validate_frontend_dist(root)
+    except module.BuildError:
+        return
+    raise AssertionError("invalid frontend distribution was accepted")
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = pathlib.Path(temporary)
+    index = root / "index.html"
+    index.write_bytes(marker)
+    module.validate_frontend_dist(root)
+    for relative in ("plugin-workbench-loader.js", "plugin-workbench/assets/entry.js", "other/index.html"):
+        legacy = root / relative
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_bytes(b"stale")
+        rejected(root)
+        legacy.unlink()
+    index.write_bytes(marker + b'<meta name="dsh-mobile-frontend" content="harness-web-v1" />')
+    rejected(root)
+    index.write_bytes(b"<div id=root></div>")
+    rejected(root)
+`
+  const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', probe], {
+    cwd: appRoot,
+    encoding: 'utf8',
+    timeout: 10_000,
+    windowsHide: true,
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+  })
+  assert.ifError(result.error)
+  assert.equal(result.status, 0, result.stderr)
 })
 
 test('Android rootfs workflow tolerates node-pty version drift without hiding failures', async () => {
@@ -167,7 +212,9 @@ test('bundle verification keeps the official profile baseline without a mobile m
   assert.match(verifier, /manifest mobile profile enables a disabled Android bundle/)
   assert.match(verifier, /runtime contains build-only package-manager metadata/)
   assert.match(verifier, /OFFICIAL_FRONTEND_MARKER/)
-  assert.match(verifier, /expected exactly one mobile frontend index/)
-  assert.doesNotMatch(verifier, /plugin workbench loader/)
-  assert.match(verifier, /duplicate desktop frontend entry/)
+  assert.match(verifier, /expected exactly one official frontend index/)
+  assert.match(verifier, /legacy custom frontend artifact remains/)
+  assert.match(verifier, /legacy mobile frontend marker remains/)
+  assert.match(verifier, /official frontend index missing #root/)
+  assert.match(verifier, /duplicate frontend entry/)
 })

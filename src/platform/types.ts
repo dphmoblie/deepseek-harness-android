@@ -13,6 +13,21 @@ export type TerminalKind = 'ubuntu' | 'device'
 
 export type DeviceCommand = 'screenshot' | 'uiDump' | 'tap' | 'inputText'
 
+export const MODEL_PROVIDER_IDS = [
+  'deepseek',
+  'openai',
+  'anthropic',
+  'google',
+  'openrouter',
+  'groq',
+  'xai',
+  'mistral',
+] as const
+
+export type ModelProviderId = typeof MODEL_PROVIDER_IDS[number]
+
+export type ProviderApiKeys = Partial<Record<ModelProviderId, string>>
+
 export interface RuntimeState {
   phase: RuntimePhase
   architecture: string
@@ -33,10 +48,19 @@ export interface RuntimeSource {
 export interface RuntimeSettings extends RuntimeSource {
   keepScreenAwake: boolean
   terminalFontSize: number
-  /** 模型 API Key（如 DeepSeek），注入 rootfs 的 DEEPSEEK_API_KEY 环境变量；空串表示未配置。 */
+  /** 已配置凭据的供应商；只返回状态，不向 WebView 回传凭据明文。 */
+  configuredModelProviders: ModelProviderId[]
+  /** 旧版原生桥接兼容字段；校验后只迁移为 DeepSeek 的已配置状态。 */
   apiKey?: string
   /** 打开应用时自动启动 Harness（默认 true）；旧存储/测试可能缺省。 */
   autoLaunch?: boolean
+}
+
+export interface RuntimeSettingsUpdate extends RuntimeSettings {
+  /** 本次写入的凭据增量；原生端只接受固定供应商白名单。 */
+  providerApiKeys?: ProviderApiKeys
+  /** 本次明确清除的供应商凭据。 */
+  clearProviderApiKeys?: ModelProviderId[]
 }
 export interface RuntimeProgress {
   phase: RuntimePhase
@@ -79,7 +103,7 @@ export interface ListenerHandle {
 export interface RuntimeBridge {
   getState: () => Promise<RuntimeState>
   getSettings: () => Promise<RuntimeSettings>
-  saveSettings: (settings: RuntimeSettings) => Promise<RuntimeSettings>
+  saveSettings: (settings: RuntimeSettingsUpdate) => Promise<RuntimeSettings>
   install: (source?: RuntimeSource) => Promise<void>
   startHarness: () => Promise<RuntimeState>
   openHarness: () => Promise<void>

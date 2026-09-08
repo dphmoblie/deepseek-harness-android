@@ -24,6 +24,23 @@ enum class RuntimePhase(val wireValue: String) {
     ERROR("error"),
 }
 
+enum class ModelProvider(val wireValue: String, val environmentVariable: String) {
+    DEEPSEEK("deepseek", "DEEPSEEK_API_KEY"),
+    OPENAI("openai", "OPENAI_API_KEY"),
+    ANTHROPIC("anthropic", "ANTHROPIC_API_KEY"),
+    GOOGLE("google", "GEMINI_API_KEY"),
+    OPENROUTER("openrouter", "OPENROUTER_API_KEY"),
+    GROQ("groq", "GROQ_API_KEY"),
+    XAI("xai", "XAI_API_KEY"),
+    MISTRAL("mistral", "MISTRAL_API_KEY"),
+    ;
+
+    companion object {
+        fun parse(value: String): ModelProvider = entries.firstOrNull { it.wireValue == value }
+            ?: throw RuntimeFailure("SETTINGS_INVALID", "模型供应商格式无效")
+    }
+}
+
 data class RuntimeSource(
     val manifestUrl: URI?,
     val manifestSha256: String?,
@@ -36,7 +53,7 @@ data class RuntimeSettings(
     val manifestSha256: String,
     val keepScreenAwake: Boolean,
     val terminalFontSize: Int,
-    val apiKey: String = "",
+    val configuredModelProviders: Set<ModelProvider> = emptySet(),
     val autoLaunch: Boolean = false,
 )
 
@@ -257,22 +274,60 @@ object RuntimeValidation {
         digest: String?,
         keepScreenAwake: Boolean,
         terminalFontSize: Int,
-        apiKey: String? = null,
         autoLaunch: Boolean = true,
     ): RuntimeSettings {
         val source = source(url, digest)
         if (terminalFontSize !in 11..24) {
             throw RuntimeFailure("SETTINGS_INVALID", "终端字号必须在 11 到 24 之间")
         }
-        val normalizedKey = apiKey?.trim().orEmpty().take(200)
         return RuntimeSettings(
-            source.manifestUrl?.toASCIIString().orEmpty(),
-            source.manifestSha256.orEmpty(),
-            keepScreenAwake,
-            terminalFontSize,
-            normalizedKey,
-            autoLaunch,
+            manifestUrl = source.manifestUrl?.toASCIIString().orEmpty(),
+            manifestSha256 = source.manifestSha256.orEmpty(),
+            keepScreenAwake = keepScreenAwake,
+            terminalFontSize = terminalFontSize,
+            autoLaunch = autoLaunch,
         )
+    }
+
+    fun providerApiKeyUpdates(value: JSONObject?): Map<ModelProvider, String> {
+        if (value == null) return emptyMap()
+        if (value.length() > ModelProvider.entries.size) {
+            throw RuntimeFailure("SETTINGS_INVALID", "模型凭据更新数量无效")
+        }
+        val result = linkedMapOf<ModelProvider, String>()
+        val names = value.keys()
+        while (names.hasNext()) {
+            val name = names.next()
+            val provider = ModelProvider.parse(name)
+            val rawKey = value.opt(name)
+            if (rawKey !is String) throw RuntimeFailure("SETTINGS_INVALID", "模型凭据必须是字符串")
+            result[provider] = requireProviderApiKey(rawKey)
+        }
+        return result
+    }
+
+    fun clearedProviderApiKeys(value: JSONArray?): Set<ModelProvider> {
+        if (value == null) return emptySet()
+        if (value.length() > ModelProvider.entries.size) {
+            throw RuntimeFailure("SETTINGS_INVALID", "模型凭据清除列表格式无效")
+        }
+        val result = linkedSetOf<ModelProvider>()
+        for (index in 0 until value.length()) {
+            val rawProvider = value.opt(index)
+            if (rawProvider !is String) throw RuntimeFailure("SETTINGS_INVALID", "模型供应商格式无效")
+            if (!result.add(ModelProvider.parse(rawProvider))) {
+                throw RuntimeFailure("SETTINGS_INVALID", "模型凭据清除列表包含重复供应商")
+            }
+        }
+        return result
+    }
+
+    fun requireProviderApiKey(value: String): String {
+        val normalized = value.trim()
+        if (!providerApiKeyPattern.matches(normalized)) {
+            throw RuntimeFailure("SETTINGS_INVALID", "模型凭据包含非法字符或长度无效")
+        }
+        return normalized
     }
 
     fun requireSha256(value: String): String {
@@ -282,6 +337,8 @@ object RuntimeValidation {
         }
         return normalized
     }
+
+    private val providerApiKeyPattern = Regex("^[\\x21-\\x7E]{1,200}$")
 
     fun requireHttpsUri(value: String, rejectPrivateHost: Boolean = false): URI {
         if (value.isEmpty() || value.length > RuntimeLimits.MAX_FIELD_CHARS || value.any(Char::isISOControl)) {

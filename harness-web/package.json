@@ -1,38 +1,22 @@
 {
   "name": "@dsh-mobile/harness-web",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.19.0",
-  "description": "DeepSeek Harness 移动端 Web 前端（默认移动界面与按需插件工作台）",
+  "description": "官方 DeepSeek Harness Web 前端的 Android 打包适配层",
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 4174",
-    "build": "tsc --noEmit && vite build && node scripts/embed-plugin-workbench.mjs",
-    "test": "vitest run"
-  },
-  "dependencies": {
-    "lucide-react": "0.468.0",
-    "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "react-markdown": "10.1.0",
-    "remark-gfm": "4.0.1"
+    "build": "node scripts/build-official-frontend.mjs",
+    "test": "node --test scripts/*.test.mjs"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-web-frontend": "0.1.0-rc.7",
-    "@types/react": "18.3.18",
-    "@types/react-dom": "18.3.5",
-    "@vitejs/plugin-react": "4.3.4",
-    "typescript": "5.7.3",
-    "vite": "6.0.7",
-    "vitest": "2.1.8"
+    "@deepseek-ai/dsh-web-frontend": "0.1.0-rc.7"
   },
   "keywords": [
     "dsh",
     "dsh-web",
     "deepseek-harness",
-    "mobile",
     "android",
-    "chat",
-    "ui"
+    "official-frontend"
   ]
 }

@@ -37,9 +37,11 @@ RUNTIME_BUILD_METADATA_PATHS = frozenset(
 MOBILE_BUNDLE_PATTERN = re.compile(
     r"^(?:@[A-Za-z0-9][A-Za-z0-9._-]{0,61}/)?[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 )
-OFFICIAL_FRONTEND_MARKER = b'<div id="root">'  # 官方 dsh-web-frontend 模板特征
-MOBILE_MARKER_FORBIDDEN = b'dsh-mobile-frontend'  # harness-web 标记不得混入官方 dist
+OFFICIAL_FRONTEND_MARKER = b'name="dsh-official-frontend" content="android-adapted-v1"'
+LEGACY_MOBILE_FRONTEND_MARKER = b'dsh-mobile-frontend'
 FRONTEND_DIST_SUFFIX = "/node_modules/@deepseek-ai/dsh-web-frontend/dist/"
+LEGACY_FRONTEND_FILES = frozenset({"plugin-workbench-loader.js"})
+LEGACY_FRONTEND_PREFIXES = ("plugin-workbench/",)
 
 
 def normalized(raw: str) -> str:
@@ -111,13 +113,17 @@ def main() -> int:
                     if dist_path == "index.html":
                         frontend_indexes.append(name)
                         source = t.extractfile(m)
-                        content = source.read()
-                        if content is None or OFFICIAL_FRONTEND_MARKER not in content:
+                        content = b"" if source is None else source.read()
+                        if OFFICIAL_FRONTEND_MARKER not in content:
+                            fail(f"official frontend marker missing: {name!r}")
+                        if b'<div id="root">' not in content:
                             fail(f"official frontend index missing #root: {name!r}")
-                        if MOBILE_MARKER_FORBIDDEN in content:
-                            fail(f"harness-web marker leaked into official frontend: {name!r}")
-                    elif dist_path == "plugin-workbench/index.html":
-                        fail(f"duplicate desktop frontend entry: {name!r}")
+                        if LEGACY_MOBILE_FRONTEND_MARKER in content:
+                            fail(f"legacy mobile frontend marker remains: {name!r}")
+                    elif dist_path.endswith("/index.html"):
+                        fail(f"duplicate frontend entry: {name!r}")
+                    elif dist_path in LEGACY_FRONTEND_FILES or dist_path.startswith(LEGACY_FRONTEND_PREFIXES):
+                        fail(f"legacy custom frontend artifact remains: {name!r}")
             elif m.issym():
                 if m.size != 0:
                     fail(f"symlink with unexpected data: {name!r}")
@@ -134,7 +140,7 @@ def main() -> int:
     if extracted != expected_extracted:
         fail(f"extracted size mismatch: {extracted} != {expected_extracted}")
     if len(frontend_indexes) != 1:
-        fail(f"expected exactly one mobile frontend index, found {len(frontend_indexes)}")
+        fail(f"expected exactly one official frontend index, found {len(frontend_indexes)}")
 
     # 文件-目录冲突（提取器 ensureDirectory 规则：父路径被非目录条目占用）
     for name, kind in list(types.items()):

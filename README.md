@@ -23,10 +23,12 @@ pnpm run build
 pnpm run android:sync
 ```
 
-The `0.1.8` CI release is a self-contained ARM64 APK. The workflow builds the
-mobile Harness conversation frontend, injects it into an Ubuntu 24.04 ARM64
-image containing Node.js 24.19.0 and `@deepseek-ai/dsh` 0.1.0-rc.6, then embeds
-the verified `rootfs.bundle` and `runtime-manifest.json` in the matching APK.
+The `0.1.9` CI release is a self-contained ARM64 APK. The workflow copies the
+pinned official `@deepseek-ai/dsh-web-frontend` 0.1.0-rc.7 distribution, adds
+only the Android safe-area and input-size stylesheet, and injects it into an
+Ubuntu 24.04 ARM64 image containing Node.js 24.19.0 and
+`@deepseek-ai/dsh` 0.1.0-rc.6. It then embeds the verified `rootfs.bundle` and
+`runtime-manifest.json` in the matching APK.
 The same runtime files are also published as separate Release assets for
 inspection and explicitly configured remote installation. Installing the
 official APK therefore works offline and does not require entering a manifest
@@ -50,12 +52,15 @@ extraction, and atomic-promotion checks. Do not put API keys, passwords,
 database credentials, signing passwords, or tokens in `.env`, Gradle files,
 source code, manifests, URLs, or logs.
 
-The packaged `/` route is the mobile conversation UI, with sessions, tasks,
-files, model and reasoning controls, agent presets, public Harness settings,
-and plugin lifecycle management. The former desktop landing page is not
-packaged as another entry point. Third-party Cordis plugin pages can be opened
-from Settings through an on-demand compatibility workbench whose assets are
-not loaded during normal conversation use.
+The packaged `/` route is the complete official Harness frontend, including
+its conversation, model, reasoning, settings, and plugin surfaces. There is no
+separate application-authored conversation frontend or compatibility
+workbench. The Android adapter keeps the upstream structure and styling and is
+limited to WebView safe areas and input sizing. The adjacent upstream
+source checkout can be updated independently; an APK continues to use the
+versions pinned in `scripts/runtime-profile/package.json` and
+`harness-web/package.json` until those pins are deliberately upgraded and
+tested together.
 
 The native runner files are generated or imported separately and never
 committed. A release APK packages both

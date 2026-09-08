@@ -49,7 +49,7 @@ class HarnessActivity : AppCompatActivity() {
             finish()
             return
         }
-        if (RuntimeStore(this).settings().keepScreenAwake) {
+        if (RuntimeStore(this).keepScreenAwake()) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
 

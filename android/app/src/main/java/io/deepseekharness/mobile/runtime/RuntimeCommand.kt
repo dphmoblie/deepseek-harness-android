@@ -14,6 +14,25 @@ data class ProotBindMount(
 )
 
 object RuntimeCommand {
+    const val PROVIDER_PATCH_GUEST_PATH = "/root/.dsh-mobile/launcher-providers.patch.json"
+
+    fun withProviderPatch(entrypoint: List<String>, patchPath: String?): List<String> {
+        if (patchPath == null) return entrypoint.toList()
+        if (
+            patchPath != PROVIDER_PATCH_GUEST_PATH || entrypoint.size != 6 ||
+            entrypoint[0] != "/usr/local/bin/dsh" || entrypoint[1] != "web"
+        ) {
+            throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "Harness 启动配置无效")
+        }
+        return buildList(entrypoint.size + 2) {
+            add(entrypoint[0])
+            add(entrypoint[1])
+            add("--patch")
+            add(PROVIDER_PATCH_GUEST_PATH)
+            addAll(entrypoint.drop(2))
+        }
+    }
+
     fun prootArgv(
         store: RuntimeStore,
         entrypoint: List<String>,
@@ -29,6 +48,7 @@ object RuntimeCommand {
         if (harnessAuthToken != null && !HARNESS_TOKEN_PATTERN.matches(harnessAuthToken)) {
             throw RuntimeFailure("HARNESS_AUTH_INVALID", "Harness 临时凭据无效")
         }
+        val providerApiKeys = store.providerApiKeys()
         return buildList {
             add(store.launchRunnerFile.absolutePath)
             add("-r")
@@ -49,7 +69,9 @@ object RuntimeCommand {
             add("LANG=C.UTF-8")
             add("TERM=xterm-256color")
             add("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
-            store.settings().apiKey.takeIf { it.isNotBlank() }?.let { add("DEEPSEEK_API_KEY=$it") }
+            ModelProvider.entries.forEach { provider ->
+                providerApiKeys[provider]?.let { key -> add("${provider.environmentVariable}=$key") }
+            }
             add("DSH_DEVICE_BRIDGE_TOKEN=" + store.deviceBridgeToken())
             if (harnessAuthToken != null) {
                 add("NODE_OPTIONS=--require=/usr/local/lib/dsh-mobile-auth.cjs")
