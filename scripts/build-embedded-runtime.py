@@ -652,7 +652,12 @@ def add_profiles_module_fallback(
         real = resolve_package(from_dir, name)
         if real is None:
             return
-        relative = PurePosixPath(real.relative_to(resolved_root).as_posix())
+        # A stale workspace install can leave peer/dev links pointing outside
+        # the runtime profile. Never follow those into the host workspace.
+        try:
+            relative = PurePosixPath(real.relative_to(resolved_root).as_posix())
+        except ValueError:
+            return
         if skip_runtime_path(relative, excluded_package_names):
             return
         links[name] = real
