@@ -28,6 +28,24 @@ export type ModelProviderId = typeof MODEL_PROVIDER_IDS[number]
 
 export type ProviderApiKeys = Partial<Record<ModelProviderId, string>>
 
+export const CUSTOM_PROVIDER_APIS = ['openai-completions', 'openai-responses', 'anthropic-messages'] as const
+export type CustomProviderApi = typeof CUSTOM_PROVIDER_APIS[number]
+
+export interface CustomProviderModel {
+  id: string
+  name: string
+  contextWindow: number
+  maxTokens: number
+}
+
+export interface CustomModelProvider {
+  id: string
+  name: string
+  api: CustomProviderApi
+  baseUrl: string
+  models: CustomProviderModel[]
+}
+
 export interface RuntimeState {
   phase: RuntimePhase
   architecture: string
@@ -50,6 +68,9 @@ export interface RuntimeSettings extends RuntimeSource {
   terminalFontSize: number
   /** 已配置凭据的供应商；只返回状态，不向 WebView 回传凭据明文。 */
   configuredModelProviders: ModelProviderId[]
+  /** 自定义供应商元数据；旧版桥接可缺省，保存的密钥绝不回传。 */
+  customModelProviders?: CustomModelProvider[]
+  configuredCustomModelProviders?: string[]
   /** 旧版原生桥接兼容字段；校验后只迁移为 DeepSeek 的已配置状态。 */
   apiKey?: string
   /** 打开应用时自动启动 Harness（默认 true）；旧存储/测试可能缺省。 */
@@ -61,6 +82,8 @@ export interface RuntimeSettingsUpdate extends RuntimeSettings {
   providerApiKeys?: ProviderApiKeys
   /** 本次明确清除的供应商凭据。 */
   clearProviderApiKeys?: ModelProviderId[]
+  customProviderApiKeys?: Record<string, string>
+  clearCustomProviderApiKeys?: string[]
 }
 export interface RuntimeProgress {
   phase: RuntimePhase

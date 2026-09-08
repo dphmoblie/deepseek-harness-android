@@ -19,11 +19,7 @@ MAX_COMPONENT_CHARS = 255
 PROFILE_BUNDLE_NAMES = (
     "@deepseek-ai/dsh-base",
     "@deepseek-ai/dsh-web-app",
-    "@linxin666/dsh-web-ui-all",
-    "@liustack/modlens",
-    "dshmarket",
 )
-OPTIONAL_PROFILE_BUNDLES = frozenset({"dsh-mobile-compat"})
 RUNTIME_BUILD_METADATA_PATHS = frozenset(
     {
         "opt/dsh/pnpm-lock.yaml",
@@ -46,25 +42,6 @@ LEGACY_FRONTEND_PREFIXES = ("plugin-workbench/",)
 
 def normalized(raw: str) -> str:
     return raw.removesuffix("/")
-
-
-def runtime_path_contains_package(name: str, package_name: str) -> bool:
-    prefix = "opt/dsh/"
-    if not name.startswith(prefix):
-        return False
-    parts = PurePosixPath(name.removeprefix(prefix)).parts
-    package_parts = PurePosixPath(package_name).parts
-    if parts[: len(package_parts)] == package_parts:
-        return True
-    for index, part in enumerate(parts):
-        if part == "node_modules" and parts[index + 1 : index + 1 + len(package_parts)] == package_parts:
-            return True
-    encoded_name = package_name.replace("/", "+")
-    return (
-        len(parts) >= 3
-        and parts[:2] == ("node_modules", ".pnpm")
-        and (parts[2] == encoded_name or parts[2].startswith(f"{encoded_name}@"))
-    )
 
 
 def main() -> int:
@@ -228,12 +205,6 @@ def main() -> int:
                 if isinstance(bundles, list) and 0 < len(bundles) <= 64:
                     if any(not isinstance(name, str) or not MOBILE_BUNDLE_PATTERN.fullmatch(name) for name in bundles):
                         fail("manifest mobile profile contains an invalid bundle name")
-                    disabled_requested = sorted(OPTIONAL_PROFILE_BUNDLES.intersection(bundles))
-                    if disabled_requested:
-                        fail(
-                            "manifest mobile profile enables a disabled Android bundle: "
-                            f"{disabled_requested[0]!r}"
-                        )
                     profile_bundle_names = list(bundles)
         if not profile_bundle_names:
             fail("manifest mobile profile does not declare any bundle names")
@@ -241,15 +212,6 @@ def main() -> int:
     leaked_metadata = sorted(RUNTIME_BUILD_METADATA_PATHS.intersection(seen))
     if leaked_metadata:
         fail(f"runtime contains build-only package-manager metadata: {leaked_metadata[0]!r}")
-    for package_name in sorted(OPTIONAL_PROFILE_BUNDLES.difference(profile_bundle_names)):
-        leaked_paths = sorted(
-            name for name in seen if runtime_path_contains_package(name, package_name)
-        )
-        if leaked_paths:
-            fail(
-                f"runtime contains disabled optional bundle {package_name!r}: "
-                f"{leaked_paths[0]!r}"
-            )
     for package_name in profile_bundle_names:
         link_name = f"root/.dsh/profiles/node_modules/{package_name}"
         if types.get(link_name) != "sym":

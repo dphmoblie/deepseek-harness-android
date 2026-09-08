@@ -34,9 +34,10 @@ class RuntimeLaunchResolver(
     fun launch(
         entrypoint: List<String>,
         harnessAuthToken: String? = null,
+        deviceBridgeAccess: DeviceBridgeAccess? = null,
     ): RuntimeLaunchSpec = synchronized(lock) {
         val resolved = resolveProfile()
-        buildLaunch(resolved.profile, entrypoint, harnessAuthToken)
+        buildLaunch(resolved.profile, entrypoint, harnessAuthToken, deviceBridgeAccess)
     }
 
     fun verifyGuest(
@@ -190,8 +191,9 @@ class RuntimeLaunchResolver(
         profile: ProotLaunchProfile,
         entrypoint: List<String>,
         harnessAuthToken: String? = null,
+        deviceBridgeAccess: DeviceBridgeAccess? = null,
     ): RuntimeLaunchSpec = RuntimeLaunchSpec(
-        argv = RuntimeCommand.prootArgv(store, entrypoint, profile.bindMounts, harnessAuthToken),
+        argv = RuntimeCommand.prootArgv(store, entrypoint, profile.bindMounts, harnessAuthToken, deviceBridgeAccess),
         environment = RuntimeCommand.hostEnvironment(appContext, store, profile.disableSeccomp),
     )
 

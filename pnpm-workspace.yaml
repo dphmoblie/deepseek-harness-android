@@ -1,5 +1,6 @@
 packages:
   - 'harness-web'
-  - packages/*
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/dsh-web-frontend@0.1.3-alpha.2'

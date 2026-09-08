@@ -10,7 +10,7 @@
 
 - **三端结构**：Capacitor 启动与管理 UI（src/）→ 原生 HarnessActivity 内的移动对话 UI
   （rootfs 内 dsh web，仅 127.0.0.1 + preload 认证）→ runtime profile 插件集
-  （rootfs 配方：Ubuntu 24.04 ARM64 + Node 24.19 + @deepseek-ai/dsh 0.1.0-rc.6）。
+  （rootfs 配方：Ubuntu 24.04 ARM64 + Node 24.19 + @deepseek-ai/dsh 0.1.3-alpha.2）。
 - **入口契约**：运行时就绪时启动应用直接恢复最近会话；服务、Ubuntu、终端、重置、
   来源和 Shizuku 统一放在设置页，无额外引导或用户登录页。
 - **桌面插件生态**（本机桌面 profile 实测在装）：@linxin666/dsh-web-ui-all（task-board/
@@ -50,8 +50,7 @@
    matchMedia 卡 light 问题已在壳侧 H1 修复思路内（preload token 之外同样适用）。
 5. **实现载体**：`harness-web` 仅保留官方前端发行文件的 Android 打包适配层，官方
    `index.html` 直接作为唯一根入口。自写对话页面与 `/plugin-workbench/` 加载器已移除；
-   适配层只追加安全区与触控尺寸样式。实验性的 `dsh-mobile-compat` 不加入默认 profile，
-   避免 root 注册冲突；不改 Harness 后端。
+   适配层只追加安全区与触控尺寸样式，不改 Harness 后端。
 
 ## 4. 应用入口与管理
 
@@ -78,7 +77,6 @@
 
 1. 移动 profile 规格已接入 rootfs 配方；`harness-web` 原子写入 Android 适配后的官方
    前端，归档校验要求唯一的官方根入口，拒绝旧自写前端标记与工作台资源。
-   `dsh-mobile-compat` 保留为独立实验包，不在默认运行时加载。
 2. 对话、模型、推理强度、设置、市场与插件页面统一使用官方前端。Android 适配保留
    上游页面结构、主题和交互，仅补充 WebView 安全区与触控尺寸样式。
 3. Capacitor 已采用无额外引导的直接对话入口，管理能力集中到设置，不再使用四栏主导航。
@@ -86,8 +84,7 @@
 5. CI 打包官方前端和 rootfs，生成同 tag Release manifest，并把其 URL/摘要固定进
    `0.1.9` 内嵌运行时 APK。
 6. 真机验收以 `docs/mobile-acceptance-checklist.md` 为准。
-7. 拉取相邻目录的上游源码不会更改 APK 依赖。当前打包仍使用固定的 dsh 0.1.0-rc.6
-   与官方前端 0.1.0-rc.7；升级这些依赖需要同时验证客户端、运行时和认证协议。
+7. 拉取相邻目录的上游源码不会更改 APK 依赖。当前打包固定使用 dsh 与官方前端 0.1.3-alpha.2；升级这些依赖需要同时验证客户端、运行时和认证协议。
 
 ## 7. 边界与风险
 

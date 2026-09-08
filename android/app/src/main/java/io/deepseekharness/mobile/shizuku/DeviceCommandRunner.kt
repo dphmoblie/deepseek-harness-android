@@ -105,8 +105,9 @@ class DeviceCommandRunner(
             if (idx >= 0) {
                 val payload = pending.buffer.substring(0, idx)
                 val rest = pending.buffer.substring(idx + sentinel.length)
-                val exitCode = Regex("^:(\\d{1,3})").find(rest)?.groupValues?.get(1)?.toIntOrNull()?.coerceIn(0, 255) ?: -1
-                pending.done.complete(DeviceCommandResult(true, exitCode, payload, pending.truncated, null))
+                val exitCode = Regex("^:(\\d{1,3})\\r?\\n").find(rest)?.groupValues?.get(1)?.toIntOrNull() ?: return
+                pending.done.complete(DeviceCommandResult(exitCode == 0, exitCode, payload, pending.truncated,
+                    if (exitCode == 0) null else "DEVICE_COMMAND_FAILED"))
             }
         }
     }
@@ -129,14 +130,14 @@ class DeviceCommandRunner(
                     ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
                 val y = parts.getOrNull(1)?.trim()?.toIntOrNull()
                     ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
-                if (x < 0 || y < 0) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
+                if (x !in 0..65535 || y !in 0..65535) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
                 "input tap $x $y"
             }
             DeviceCommand.INPUT_TEXT -> {
                 if (param.isEmpty() || param.length > MAX_TEXT_CHARS) {
                     throw RuntimeFailure("DEVICE_COMMAND_INVALID", "输入文本无效")
                 }
-                if (param.any { it.code > 0x7f || it == '\'' || it == '"' || it == '\\' || it == ';' || it == '$' || it == '\u0060' }) {
+                if (param.any { it.code !in 0x20..0x7e || it == '\'' || it == '"' || it == '\\' || it == ';' || it == '$' || it == '\u0060' }) {
                     throw RuntimeFailure("DEVICE_COMMAND_INVALID", "输入文本仅支持 ASCII 且不含引号/分号/反斜杠等字符")
                 }
                 "input text '$param'"

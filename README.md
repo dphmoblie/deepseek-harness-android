@@ -23,11 +23,11 @@ pnpm run build
 pnpm run android:sync
 ```
 
-The `0.1.9` CI release is a self-contained ARM64 APK. The workflow copies the
-pinned official `@deepseek-ai/dsh-web-frontend` 0.1.0-rc.7 distribution, adds
-only the Android safe-area and input-size stylesheet, and injects it into an
-Ubuntu 24.04 ARM64 image containing Node.js 24.19.0 and
-`@deepseek-ai/dsh` 0.1.0-rc.6. It then embeds the verified `rootfs.bundle` and
+The `0.1.9` CI release is a self-contained ARM64 APK. The workflow pins
+`@deepseek-ai/dsh` and the official frontend to `0.1.3-alpha.2`, matching
+upstream commit `c389f96bf3a9b6807cb71ed6bdad5849be0df6d8`. It adds only the
+Android safe-area and input-size stylesheet and injects the packages into an
+Ubuntu 24.04 ARM64 image containing Node.js 24.19.0. It then embeds the verified `rootfs.bundle` and
 `runtime-manifest.json` in the matching APK.
 The same runtime files are also published as separate Release assets for
 inspection and explicitly configured remote installation. Installing the

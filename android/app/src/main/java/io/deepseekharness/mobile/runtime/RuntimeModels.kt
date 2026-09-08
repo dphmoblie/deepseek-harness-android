@@ -41,6 +41,36 @@ enum class ModelProvider(val wireValue: String, val environmentVariable: String)
     }
 }
 
+enum class CustomProviderApi(val wireValue: String) {
+    OPENAI_COMPLETIONS("openai-completions"),
+    OPENAI_RESPONSES("openai-responses"),
+    ANTHROPIC_MESSAGES("anthropic-messages"),
+    ;
+
+    companion object {
+        fun parse(value: String): CustomProviderApi = entries.firstOrNull { it.wireValue == value }
+            ?: throw RuntimeFailure("SETTINGS_INVALID", "自定义供应商 API 协议不支持")
+    }
+}
+
+data class CustomProviderModel(
+    val id: String,
+    val name: String,
+    val contextWindow: Int,
+    val maxTokens: Int,
+)
+
+data class CustomModelProvider(
+    val id: String,
+    val name: String,
+    val api: CustomProviderApi,
+    val baseUrl: String,
+    val models: List<CustomProviderModel>,
+) {
+    val environmentVariable: String
+        get() = "DSH_CUSTOM_PROVIDER_${id.uppercase(Locale.ROOT).replace('-', '_')}_API_KEY"
+}
+
 data class RuntimeSource(
     val manifestUrl: URI?,
     val manifestSha256: String?,
@@ -54,6 +84,8 @@ data class RuntimeSettings(
     val keepScreenAwake: Boolean,
     val terminalFontSize: Int,
     val configuredModelProviders: Set<ModelProvider> = emptySet(),
+    val customModelProviders: List<CustomModelProvider> = emptyList(),
+    val configuredCustomModelProviders: Set<String> = emptySet(),
     val autoLaunch: Boolean = false,
 )
 
@@ -253,6 +285,10 @@ object RuntimeLimits {
 
 object RuntimeValidation {
     private val sha256Pattern = Regex("^[a-f0-9]{64}$")
+    private val customProviderIdPattern = Regex("^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+    private val customModelIdPattern = Regex("^[A-Za-z0-9][A-Za-z0-9._:/+\\-]{0,199}$")
+    private val reservedProviderIds = ModelProvider.entries.mapTo(mutableSetOf()) { it.wireValue }
+        .apply { addAll(listOf("constructor", "prototype", "__proto__")) }
 
     fun source(url: String?, digest: String?): RuntimeSource {
         val normalizedUrl = url?.trim().orEmpty()
@@ -329,6 +365,113 @@ object RuntimeValidation {
         }
         return normalized
     }
+
+    fun customModelProviders(value: JSONArray?): List<CustomModelProvider> {
+        if (value == null) return emptyList()
+        if (value.length() > MAX_CUSTOM_PROVIDERS) throw RuntimeFailure("SETTINGS_INVALID", "最多可配置 16 个自定义供应商")
+        val ids = linkedSetOf<String>()
+        return (0 until value.length()).map { index ->
+            val item = value.optJSONObject(index)
+                ?: throw RuntimeFailure("SETTINGS_INVALID", "自定义供应商格式无效")
+            val id = requireCustomProviderId(item.opt("id"))
+            if (!ids.add(id)) throw RuntimeFailure("SETTINGS_INVALID", "自定义供应商标识不能重复")
+            val modelsJson = item.optJSONArray("models")
+                ?: throw RuntimeFailure("SETTINGS_INVALID", "自定义模型列表格式无效")
+            if (modelsJson.length() !in 1..MAX_CUSTOM_MODELS) {
+                throw RuntimeFailure("SETTINGS_INVALID", "每个自定义供应商需要 1 到 32 个模型")
+            }
+            val modelIds = linkedSetOf<String>()
+            val models = (0 until modelsJson.length()).map { modelIndex ->
+                val model = modelsJson.optJSONObject(modelIndex)
+                    ?: throw RuntimeFailure("SETTINGS_INVALID", "自定义模型格式无效")
+                val modelId = model.opt("id") as? String
+                if (modelId == null || !customModelIdPattern.matches(modelId) || !modelIds.add(modelId)) {
+                    throw RuntimeFailure("SETTINGS_INVALID", "自定义模型 ID 格式无效或重复")
+                }
+                val contextWindow = requireTokenCount(model.opt("contextWindow"), "模型上下文长度")
+                val maxTokens = requireTokenCount(model.opt("maxTokens"), "模型最大输出长度")
+                if (maxTokens > contextWindow) throw RuntimeFailure("SETTINGS_INVALID", "模型最大输出长度不能超过上下文长度")
+                CustomProviderModel(modelId, requireDisplayName(model.opt("name"), 100, "模型名称"), contextWindow, maxTokens)
+            }
+            CustomModelProvider(
+                id,
+                requireDisplayName(item.opt("name"), 80, "自定义供应商名称"),
+                CustomProviderApi.parse(item.optString("api")),
+                requireProviderBaseUrl(item.opt("baseUrl")),
+                models,
+            )
+        }
+    }
+
+    fun customProviderApiKeyUpdates(value: JSONObject?, allowedIds: Set<String>): Map<String, String> {
+        if (value == null) return emptyMap()
+        if (value.length() > MAX_CUSTOM_PROVIDERS) throw RuntimeFailure("SETTINGS_INVALID", "自定义模型凭据更新数量无效")
+        val result = linkedMapOf<String, String>()
+        val names = value.keys()
+        while (names.hasNext()) {
+            val id = requireCustomProviderId(names.next())
+            if (id !in allowedIds) throw RuntimeFailure("SETTINGS_INVALID", "凭据更新包含不存在的自定义供应商")
+            val rawKey = value.opt(id) as? String ?: throw RuntimeFailure("SETTINGS_INVALID", "自定义模型凭据必须是字符串")
+            result[id] = requireProviderApiKey(rawKey)
+        }
+        return result
+    }
+
+    fun clearedCustomProviderApiKeys(value: JSONArray?, allowedIds: Set<String>): Set<String> {
+        if (value == null) return emptySet()
+        if (value.length() > MAX_CUSTOM_PROVIDERS) throw RuntimeFailure("SETTINGS_INVALID", "自定义模型凭据清除列表格式无效")
+        val result = linkedSetOf<String>()
+        for (index in 0 until value.length()) {
+            val id = requireCustomProviderId(value.opt(index))
+            if (id !in allowedIds || !result.add(id)) throw RuntimeFailure("SETTINGS_INVALID", "自定义模型凭据清除列表无效")
+        }
+        return result
+    }
+
+    private fun requireCustomProviderId(value: Any?): String {
+        val id = value as? String
+        if (id == null || id.length > 48 || !customProviderIdPattern.matches(id) || id in reservedProviderIds) {
+            throw RuntimeFailure("SETTINGS_INVALID", "自定义供应商标识格式无效或与内置供应商重复")
+        }
+        return id
+    }
+
+    private fun requireDisplayName(value: Any?, maximum: Int, label: String): String {
+        val normalized = (value as? String)?.trim().orEmpty()
+        if (normalized.isEmpty() || normalized.length > maximum || normalized.any { it.isISOControl() || it == '<' || it == '>' }) {
+            throw RuntimeFailure("SETTINGS_INVALID", "$label 包含非法字符或长度无效")
+        }
+        return normalized
+    }
+
+    private fun requireTokenCount(value: Any?, label: String): Int {
+        val number = value as? Number ?: throw RuntimeFailure("SETTINGS_INVALID", "$label 格式无效")
+        val integer = number.toInt()
+        if (number.toDouble() != integer.toDouble() || integer !in 1..10_000_000) {
+            throw RuntimeFailure("SETTINGS_INVALID", "$label 必须为 1 到 10000000 之间的整数")
+        }
+        return integer
+    }
+
+    private fun requireProviderBaseUrl(value: Any?): String {
+        val raw = (value as? String)?.trim().orEmpty()
+        if (raw.isEmpty() || raw.length > RuntimeLimits.MAX_FIELD_CHARS || raw.any { it.isISOControl() || it == '\\' }) {
+            throw RuntimeFailure("SETTINGS_INVALID", "自定义供应商 Base URL 包含非法字符或长度无效")
+        }
+        val uri = try { URI(raw).normalize() } catch (error: URISyntaxException) {
+            throw RuntimeFailure("SETTINGS_INVALID", "自定义供应商 Base URL 格式无效", error)
+        }
+        val scheme = uri.scheme?.lowercase(Locale.ROOT)
+        val host = uri.host?.lowercase(Locale.ROOT)
+        val loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
+        if ((scheme != "https" && !(scheme == "http" && loopback)) || host.isNullOrEmpty() ||
+            uri.port !in -1..65535 || uri.port == 0 || uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null
+        ) throw RuntimeFailure("SETTINGS_INVALID", "Base URL 必须使用 HTTPS（本机回环可用 HTTP），且不能包含凭据、查询参数或片段")
+        return uri.toASCIIString().removeSuffix("/")
+    }
+
+    private const val MAX_CUSTOM_PROVIDERS = 16
+    private const val MAX_CUSTOM_MODELS = 32
 
     fun requireSha256(value: String): String {
         val normalized = value.lowercase(Locale.ROOT)

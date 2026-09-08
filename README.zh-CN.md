@@ -21,7 +21,7 @@ pnpm run build
 pnpm run android:sync
 ```
 
-官方 `0.1.9` CI 发布的是内嵌离线运行时的 ARM64 APK。工作流复制固定版本的官方 `@deepseek-ai/dsh-web-frontend` 0.1.0-rc.7 发行文件，只增加 Android 安全区与触控尺寸样式，再将其注入 Ubuntu 24.04 ARM64、Node.js 24.19.0 与 `@deepseek-ai/dsh` 0.1.0-rc.6 运行时。随后，校验后的 `rootfs.bundle` 和 `runtime-manifest.json` 会内嵌到同一 APK。Release 也单独发布这两项运行时资产，便于核验以及用户明确配置远程来源；安装官方 APK 无需联网或手工填写运行时地址与摘要。
+官方 `0.1.9` CI 发布的是内嵌离线运行时的 ARM64 APK。工作流固定使用与上游 `master` 提交 `c389f96bf3a9b6807cb71ed6bdad5849be0df6d8` 对应的 `@deepseek-ai/dsh` 和官方前端 `0.1.3-alpha.2`，只增加 Android 安全区与触控尺寸样式，再将其注入 Ubuntu 24.04 ARM64 与 Node.js 24.19.0 运行时。随后，校验后的 `rootfs.bundle` 和 `runtime-manifest.json` 会内嵌到同一 APK。
 
 内嵌安装会校验清单声明的长度、架构、压缩方式与 rootfs SHA-256 后再解压。用户明确配置远程来源时，应用还会校验清单摘要与 HTTPS 目标；下载使用应用私有的 `rootfs-<sha256>.part`，中断后可跨应用重启续传。续传响应必须精确匹配 HTTP 206/`Content-Range`，HTTP 200 或 416 会从零重新下载。断网、TLS、超时或截断会进入明确错误状态并保留合法断点，不会提前显示正在解压或安装完成。禁止将 API 密钥、密码、数据库凭据、签名密码或 Token 放入 `.env`、Gradle 文件、源代码、清单、URL 或日志。
 
@@ -39,8 +39,9 @@ pnpm run android:sync
 - 归档解压防止路径穿越，且不创建设备节点。解压器消费的精确压缩流在替换前会再次计数与哈希，从而在解压过程中独立强制执行清单中的压缩大小与 SHA-256。
 - 启动 Ubuntu 前，应用会探测打包的 PRoot 运行器及其 seccomp 兼容性，然后要求对生成的解析器文件、`/dev` 与 `/proc` 分别校验绑定挂载。若必需的源、客户机目标或兼容性探测不可用，启动将安全失败（fail closed）。
 - Harness 仅绑定 Android 回环地址；不对 `0.0.0.0` 暴露任何业务服务。
+- 自定义模型供应商只接受受支持的 API 协议、HTTPS Base URL（本机回环可用 HTTP）和有界模型元数据；API Key 使用 Android Keystore 加密且不返回 WebView。保存模型配置会重启正在运行的 Harness，使新 overlay 和凭据立即生效。
 - 每次 Harness 启动都会生成一个非持久的 256 位凭据。rootfs 预加载在上游处理器运行前对 HTTP 与 WebSocket 升级均进行认证，且仅由非导出的内部 WebView 透明应答 Basic 认证质询。仅开放的 TCP 端口不被视为就绪：两个相隔稳定性间隔的回环探测必须返回 HTTP 401，且带有精确匹配的 Basic 域与 UTF-8 质询。凭据绝不放入 URL 或审计日志。
-- Shizuku 访问要求声明 `ShizukuProvider`、可见的权限授予，以及用户打开的终端会话。Binder 或 UserService 丢失会清除活动会话；之后的终端请求会重新连接，且仅当存在活跃的已授权 UserService Binder 时 `connected` 才为 true。
+- Shizuku 访问要求声明 `ShizukuProvider`、可见的权限授予，以及用户打开的终端会话。容器通过宿主进程的随机回环端口和进程级临时令牌调用受限设备命令，不直接访问 Binder。Binder 或 UserService 丢失会清除活动会话；之后的终端请求会重新连接，且仅当存在活跃的已授权 UserService Binder 时 `connected` 才为 true。
 - 重置仅限于应用私有运行时根目录，且不跟随符号链接。
 - 仅所有者可读的审计文件每日轮转，并至少保留 90 天的固定事件/结果代码。
 - 任何凭据、URL、命令、会话标识符、终端内容或敏感用户数据都不会写入应用审计文件。

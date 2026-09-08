@@ -423,7 +423,7 @@ jobs:
           ## 资产
 
           - $(basename "$APK")（APK，含 PRoot 运行器）
-          - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.1.0-rc.6 + 官方 Harness 前端 Android 适配）
+          - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.1.3-alpha.2 + 官方 Harness 前端 Android 适配）
           - runtime-manifest.json
           - checksums.txt（以上三项资产的 SHA-256）
 

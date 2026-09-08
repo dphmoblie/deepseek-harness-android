@@ -33,6 +33,37 @@ class MobileRuntimeController(
         supervisor.startHarness()
     }
 
+    fun configureDeviceBridge(access: DeviceBridgeAccess) = lifecycleLock.withLock {
+        ensureOpen()
+        supervisor.configureDeviceBridge(access)
+    }
+
+    fun saveSettings(
+        settings: RuntimeSettings,
+        providerApiKeyUpdates: Map<ModelProvider, String>,
+        clearedProviderApiKeys: Set<ModelProvider>,
+        customProviders: List<CustomModelProvider>,
+        customProviderApiKeyUpdates: Map<String, String>,
+        clearedCustomProviderApiKeys: Set<String>,
+    ): RuntimeSettings = lifecycleLock.withLock {
+        ensureOpen()
+        val modelConfigurationChanged = providerApiKeyUpdates.isNotEmpty() || clearedProviderApiKeys.isNotEmpty() ||
+            customProviderApiKeyUpdates.isNotEmpty() || clearedCustomProviderApiKeys.isNotEmpty() ||
+            customProviders != store.settings().customModelProviders
+        val restartHarness = modelConfigurationChanged && supervisor.isRunning()
+        if (modelConfigurationChanged) supervisor.stop()
+        val saved = store.saveSettings(
+            settings,
+            providerApiKeyUpdates,
+            clearedProviderApiKeys,
+            customProviders,
+            customProviderApiKeyUpdates,
+            clearedCustomProviderApiKeys,
+        )
+        if (restartHarness) supervisor.startHarness()
+        saved
+    }
+
     fun stopRuntime(): RuntimeStateSnapshot = lifecycleLock.withLock {
         ensureOpen()
         supervisor.stop()

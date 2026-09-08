@@ -8,6 +8,7 @@ import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
+import io.deepseekharness.mobile.runtime.DeviceBridgeAccess
 import io.deepseekharness.mobile.runtime.RuntimeFailure
 import io.deepseekharness.mobile.runtime.RuntimeSettings
 import io.deepseekharness.mobile.runtime.RuntimeStateSnapshot
@@ -25,6 +26,8 @@ import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
+import java.security.SecureRandom
+import java.util.Base64
 import kotlin.concurrent.withLock
 
 @CapacitorPlugin(name = "MobileRuntime")
@@ -77,13 +80,19 @@ class MobileRuntimePlugin : Plugin() {
                 writer = { sessionId, dataBase64 -> controller.writeTerminal(sessionId, dataBase64) },
             )
             applyKeepScreenAwake(controller.store.keepScreenAwake())
+            val bridgeTokenBytes = ByteArray(32).also(SecureRandom()::nextBytes)
+            val bridgeToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bridgeTokenBytes)
+            bridgeTokenBytes.fill(0)
             deviceBridge = DeviceBridgeServer(
                 shizuku = controller.terminals.shizuku,
                 runner = deviceCommands,
-                token = controller.store.deviceBridgeToken(),
+                token = bridgeToken,
             ).also { it.start() }
+            controller.configureDeviceBridge(DeviceBridgeAccess(deviceBridge!!.localPort, bridgeToken))
             recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.SUCCEEDED)
         } catch (error: Throwable) {
+            deviceBridge?.stop()
+            deviceBridge = null
             recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.FAILED)
             throw error
         }
@@ -152,6 +161,16 @@ class MobileRuntimePlugin : Plugin() {
                 )
             }
             val clearedProviderApiKeys = RuntimeValidation.clearedProviderApiKeys(call.getArray("clearProviderApiKeys"))
+            val customProviders = RuntimeValidation.customModelProviders(call.getArray("customModelProviders"))
+            val allowedCustomIds = customProviders.mapTo(linkedSetOf()) { it.id }
+            val customProviderApiKeyUpdates = RuntimeValidation.customProviderApiKeyUpdates(
+                call.getObject("customProviderApiKeys"),
+                allowedCustomIds,
+            )
+            val clearedCustomProviderApiKeys = RuntimeValidation.clearedCustomProviderApiKeys(
+                call.getArray("clearCustomProviderApiKeys"),
+                allowedCustomIds,
+            )
             val settings = RuntimeValidation.settings(
                 call.getString("manifestUrl"),
                 call.getString("manifestSha256"),
@@ -159,7 +178,14 @@ class MobileRuntimePlugin : Plugin() {
                 fontSize,
                 call.getBoolean("autoLaunch", true) ?: true,
             )
-            val saved = controller.store.saveSettings(settings, providerApiKeyUpdates, clearedProviderApiKeys)
+            val saved = controller.saveSettings(
+                settings,
+                providerApiKeyUpdates,
+                clearedProviderApiKeys,
+                customProviders,
+                customProviderApiKeyUpdates,
+                clearedCustomProviderApiKeys,
+            )
             applyKeepScreenAwake(saved.keepScreenAwake)
             saved.toJs()
         }
@@ -426,6 +452,22 @@ class MobileRuntimePlugin : Plugin() {
         .put("keepScreenAwake", keepScreenAwake)
         .put("terminalFontSize", terminalFontSize)
         .put("configuredModelProviders", org.json.JSONArray(configuredModelProviders.map { it.wireValue }))
+        .put("customModelProviders", org.json.JSONArray().also { providers ->
+            customModelProviders.forEach { provider ->
+                providers.put(JSObject()
+                    .put("id", provider.id)
+                    .put("name", provider.name)
+                    .put("api", provider.api.wireValue)
+                    .put("baseUrl", provider.baseUrl)
+                    .put("models", org.json.JSONArray().also { models ->
+                        provider.models.forEach { model ->
+                            models.put(JSObject().put("id", model.id).put("name", model.name)
+                                .put("contextWindow", model.contextWindow).put("maxTokens", model.maxTokens))
+                        }
+                    }))
+            }
+        })
+        .put("configuredCustomModelProviders", org.json.JSONArray(configuredCustomModelProviders))
         .put("autoLaunch", autoLaunch)
 
     private fun RuntimeStateSnapshot.toProgressJs(): JSObject = JSObject()

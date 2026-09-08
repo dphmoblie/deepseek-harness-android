@@ -19,7 +19,7 @@ pnpm run build
 pnpm run android:sync
 ```
 
-官方 `0.1.9` CI 发布的是内嵌离线运行时的 ARM64 APK。工作流复制固定版本的官方 `@deepseek-ai/dsh-web-frontend` 0.1.0-rc.7 发行文件，只增加 Android 安全区与触控尺寸样式，再将其注入 Ubuntu 24.04 ARM64、Node.js 24.19.0 与 `@deepseek-ai/dsh` 0.1.0-rc.6 运行时。随后，校验后的 `rootfs.bundle` 和 `runtime-manifest.json` 会内嵌到同一 APK。Release 也单独发布这两项运行时资产，便于核验以及用户明确配置远程来源；安装官方 APK 无需联网或手工填写运行时地址与摘要。
+官方 `0.1.9` CI 发布的是内嵌离线运行时的 ARM64 APK。工作流固定使用与上游提交 `c389f96bf3a9b6807cb71ed6bdad5849be0df6d8` 对应的 `@deepseek-ai/dsh` 和官方前端 `0.1.3-alpha.2`，只增加 Android 安全区与触控尺寸样式，再将其注入 Ubuntu 24.04 ARM64 与 Node.js 24.19.0 运行时。随后，校验后的 `rootfs.bundle` 和 `runtime-manifest.json` 会内嵌到同一 APK。
 
 内嵌安装会校验 manifest 声明的长度、架构、压缩方式与 rootfs SHA-256 后再解压。用户明确配置远程来源时，应用还会校验 manifest 摘要与 HTTPS 目标；下载使用应用私有的 `rootfs-<sha256>.part`，中断后可跨应用重启续传。续传响应必须精确匹配 HTTP 206/`Content-Range`，HTTP 200 或 416 会从零重新下载。断网、TLS、超时或截断会进入明确错误状态并保留合法断点，不会提前显示正在解压或安装完成。不要把 API 密钥、密码、数据库凭据、签名口令或 token 放入 `.env`、Gradle 文件、源码、manifest、URL 或日志。
 

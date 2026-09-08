@@ -39,6 +39,7 @@ export function createBrowserBridge(): RuntimeBridge {
   let currentSettings = { ...DEFAULT_SETTINGS }
   const configuredProviders = new Set<ModelProviderId>()
   const volatileProviderKeys: ProviderApiKeys = {}
+  const configuredCustomProviders = new Set<string>()
   let state: RuntimeState = {
     phase: 'not-installed',
     architecture: 'arm64-v8a',
@@ -71,6 +72,7 @@ export function createBrowserBridge(): RuntimeBridge {
         const raw = JSON.parse(saved) as RuntimeSettings
         currentSettings = validateSettings(raw)
         currentSettings.configuredModelProviders.forEach(provider => configuredProviders.add(provider))
+        currentSettings.configuredCustomModelProviders?.forEach(id => configuredCustomProviders.add(id))
         if (typeof raw.apiKey === 'string' && raw.apiKey.trim() !== '') volatileProviderKeys.deepseek = raw.apiKey.trim()
         currentSettings = { ...currentSettings, configuredModelProviders: MODEL_PROVIDER_IDS.filter(provider => configuredProviders.has(provider)) }
         // Browser preview storage mirrors production by retaining only masked credential state.
@@ -91,9 +93,14 @@ export function createBrowserBridge(): RuntimeBridge {
         delete volatileProviderKeys[provider]
         configuredProviders.delete(provider)
       })
+      const allowedCustomIds = new Set(validated.customModelProviders?.map(provider => provider.id))
+      for (const id of configuredCustomProviders) if (!allowedCustomIds.has(id)) configuredCustomProviders.delete(id)
+      Object.keys(validated.customProviderApiKeys ?? {}).forEach(id => configuredCustomProviders.add(id))
+      validated.clearCustomProviderApiKeys?.forEach(id => configuredCustomProviders.delete(id))
       currentSettings = validateSettings({
         ...validated,
         configuredModelProviders: MODEL_PROVIDER_IDS.filter(provider => configuredProviders.has(provider)),
+        configuredCustomModelProviders: [...configuredCustomProviders],
       })
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(currentSettings))
       return Promise.resolve({ ...currentSettings })

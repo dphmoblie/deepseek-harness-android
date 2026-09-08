@@ -6,33 +6,6 @@ import { spawnSync } from 'node:child_process'
 
 const appRoot = resolve(import.meta.dirname, '..')
 
-test('dsh-mobile-compat keeps the dsh client module contract', async () => {
-  const packageJson = JSON.parse(
-    await readFile(resolve(appRoot, 'packages/dsh-mobile-compat/package.json'), 'utf8'),
-  )
-  assert.deepEqual(packageJson.exports?.['./client'], {
-    types: './lib/client.d.ts',
-    default: './lib/client.js',
-  })
-  assert.deepEqual(packageJson.dsh?.client, {
-    inject: [
-      '@deepseek-ai/dsh-client-runtime',
-      '@deepseek-ai/dsh-client-ui-theme',
-    ],
-    platform: 'web',
-  })
-
-  // The workspace build is a TypeScript module used by the package toolchain.
-  // The default Android profile deliberately does not load this experimental
-  // root plugin; the official Harness frontend owns the default document.
-  const clientSource = await readFile(
-    resolve(appRoot, 'packages/dsh-mobile-compat/lib/client.js'),
-    'utf8',
-  )
-  assert.match(clientSource, /export const inject\s*=\s*\['slots'\]/)
-  assert.match(clientSource, /export function apply\(ctx\)/)
-})
-
 test('Android rootfs workflow packages the adapted official frontend at the root', async () => {
   const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
   assert.match(workflow, /Build Android-adapted official Harness frontend/)
@@ -160,56 +133,21 @@ test('the default mobile profile avoids a second root-layout plugin', async () =
   const bundles = profile?.dsh?.profile?.bundles
   assert.ok(Array.isArray(bundles))
   assert.ok(bundles.includes('@deepseek-ai/dsh-web-app'))
-  assert.ok(!bundles.includes('dsh-mobile-compat'))
   assert.equal(profile?.mobile?.layout, undefined)
   assert.equal(profile?.mobile?.disabledOnMobile, undefined)
 })
 
-test('runtime packaging patches the official client error display at the UI boundary', async () => {
+test('runtime packaging leaves the version-matched official client immutable', async () => {
   const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
-  assert.match(builder, /def patch_client_failure_display\(dsh_root: Path\)/)
-  assert.match(builder, /Failure details unavailable/)
-  assert.match(builder, /const placeholders = new Set/)
-  assert.match(builder, /dsh-client-failure-display-v2/)
-  assert.match(builder, /Array\.isArray\(value\)/)
-  assert.match(builder, /unique_file_candidates\(candidates\)/)
-  assert.match(builder, /patch_client_failure_display\(args\.dsh_root\)/)
-})
-
-test('runtime packaging keeps official settings usable in a narrow WebView', async () => {
-  const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
-  assert.match(builder, /def patch_client_mobile_settings_layout\(dsh_root: Path\)/)
-  assert.match(builder, /dsh-mobile-settings-layout-v1/)
-  assert.match(builder, /@media \(max-width:600px\)/)
-  assert.match(builder, /patch_client_mobile_settings_layout\(args\.dsh_root\)/)
-})
-
-test('runtime packaging exposes official Tool details without replacing the root layout', async () => {
-  const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
-  assert.match(builder, /def patch_client_tool_details_action\(dsh_root: Path\)/)
-  assert.match(builder, /dsh-client-tool-details-action-v1/)
-  assert.match(builder, /data-dsh-open-tool-details/)
-  assert.match(builder, /IconInspectOutline12/)
-  assert.match(builder, /def patch_client_tool_details_entry\(dsh_root: Path\)/)
-  assert.match(builder, /dsh-client-tool-details-entry-v2/)
-  assert.match(builder, /callId\.length > 256/)
-  assert.match(builder, /target\.closest\("\[data-dsh-open-tool-details\]"\)/)
-  assert.match(builder, /onClick: openToolDetails/)
-  assert.match(builder, /and "onKeyDown: openToolDetails" not in text/)
-  assert.match(builder, /def patch_client_mobile_tool_details_layout\(dsh_root: Path\)/)
-  assert.match(builder, /dsh-mobile-tool-details-layout-v1/)
-  assert.match(builder, /data-dsh-details-column/)
-  assert.match(builder, /patch_client_tool_details_action\(args\.dsh_root\)/)
-  assert.match(builder, /patch_client_tool_details_entry\(args\.dsh_root\)/)
-  assert.match(builder, /patch_client_mobile_tool_details_layout\(args\.dsh_root\)/)
+  assert.doesNotMatch(builder, /patch_client_failure_display\(args\.dsh_root\)/)
+  assert.doesNotMatch(builder, /patch_client_mobile_settings_layout\(args\.dsh_root\)/)
+  assert.doesNotMatch(builder, /patch_client_tool_details_action\(args\.dsh_root\)/)
 })
 
 test('bundle verification keeps the official profile baseline without a mobile manifest', async () => {
   const verifier = await readFile(resolve(appRoot, 'scripts/verify-bundle.py'), 'utf8')
   assert.match(verifier, /PROFILE_BUNDLE_NAMES\s*=\s*\(/)
   assert.match(verifier, /profile_bundle_names\s*=\s*list\(PROFILE_BUNDLE_NAMES\)/)
-  assert.match(verifier, /runtime contains disabled optional bundle/)
-  assert.match(verifier, /manifest mobile profile enables a disabled Android bundle/)
   assert.match(verifier, /runtime contains build-only package-manager metadata/)
   assert.match(verifier, /OFFICIAL_FRONTEND_MARKER/)
   assert.match(verifier, /expected exactly one official frontend index/)

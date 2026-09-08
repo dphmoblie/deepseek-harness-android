@@ -54,12 +54,18 @@ class RuntimeStore(context: Context) {
         val migrateEmptyBundledSource = storedUrl == "" && storedSha256 == "" && pinnedDefaultAvailable
         val usePinnedDefault = (storedUrl == null && storedSha256 == null) || migrateEmptyBundledSource
         val providerApiKeys = providerApiKeysLocked()
+        val customProviders = customModelProvidersLocked()
+        val customProviderApiKeys = customProviderApiKeysLocked(customProviders.mapTo(linkedSetOf()) { it.id })
         return RuntimeSettings(
             manifestUrl = if (usePinnedDefault) BuildConfig.DEFAULT_MANIFEST_URL else storedUrl.orEmpty(),
             manifestSha256 = if (usePinnedDefault) BuildConfig.DEFAULT_MANIFEST_SHA256 else storedSha256.orEmpty(),
             keepScreenAwake = keepScreenAwake(),
             terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
+            customModelProviders = customProviders,
+            configuredCustomModelProviders = customProviders.mapNotNullTo(linkedSetOf()) { provider ->
+                provider.id.takeIf(customProviderApiKeys::containsKey)
+            },
             autoLaunch = preferences.getBoolean(KEY_AUTO_LAUNCH, false),
         )
     }
@@ -69,14 +75,27 @@ class RuntimeStore(context: Context) {
         settings: RuntimeSettings,
         providerApiKeyUpdates: Map<ModelProvider, String> = emptyMap(),
         clearedProviderApiKeys: Set<ModelProvider> = emptySet(),
+        customProviders: List<CustomModelProvider> = emptyList(),
+        customProviderApiKeyUpdates: Map<String, String> = emptyMap(),
+        clearedCustomProviderApiKeys: Set<String> = emptySet(),
     ): RuntimeSettings {
         if (providerApiKeyUpdates.keys.any(clearedProviderApiKeys::contains)) {
             throw RuntimeFailure("SETTINGS_INVALID", "同一模型凭据不能同时更新和清除")
         }
+        val allowedCustomIds = customProviders.mapTo(linkedSetOf()) { it.id }
+        if (customProviderApiKeyUpdates.keys.any(clearedCustomProviderApiKeys::contains) ||
+            customProviderApiKeyUpdates.keys.any { it !in allowedCustomIds } || clearedCustomProviderApiKeys.any { it !in allowedCustomIds }
+        ) throw RuntimeFailure("SETTINGS_INVALID", "自定义模型凭据更新与供应商配置不一致")
         val providerApiKeys = providerApiKeysLocked().toMutableMap()
         clearedProviderApiKeys.forEach(providerApiKeys::remove)
         providerApiKeys.putAll(providerApiKeyUpdates)
+        val storedCustomIds = customModelProvidersLocked().mapTo(linkedSetOf()) { it.id }
+        val customProviderApiKeys = customProviderApiKeysLocked(storedCustomIds).toMutableMap()
+        customProviderApiKeys.keys.retainAll(allowedCustomIds)
+        clearedCustomProviderApiKeys.forEach(customProviderApiKeys::remove)
+        customProviderApiKeys.putAll(customProviderApiKeyUpdates)
         val encryptedCredentials = encryptProviderApiKeys(providerApiKeys)
+        val encryptedCustomCredentials = encryptCustomProviderApiKeys(customProviderApiKeys)
         val editor = preferences.edit()
             .putString(KEY_MANIFEST_URL, settings.manifestUrl)
             .putString(KEY_MANIFEST_SHA256, settings.manifestSha256)
@@ -85,24 +104,39 @@ class RuntimeStore(context: Context) {
             // Retired frontend choices must not redirect the single official entrypoint.
             .remove(KEY_LEGACY_DEFAULT_FRONTEND)
             .putBoolean(KEY_AUTO_LAUNCH, settings.autoLaunch)
+            .putString(KEY_CUSTOM_PROVIDERS, customProvidersToJson(customProviders).toString())
             .remove(KEY_API_KEY)
+            .remove("device_bridge_token")
         if (encryptedCredentials == null) editor.remove(KEY_PROVIDER_CREDENTIALS)
         else editor.putString(KEY_PROVIDER_CREDENTIALS, encryptedCredentials)
+        if (encryptedCustomCredentials == null) editor.remove(KEY_CUSTOM_PROVIDER_CREDENTIALS)
+        else editor.putString(KEY_CUSTOM_PROVIDER_CREDENTIALS, encryptedCustomCredentials)
         val committed = editor.commit()
         if (!committed) throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法保存运行时设置")
         return settings.copy(
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
+            customModelProviders = customProviders,
+            configuredCustomModelProviders = customProviders.mapNotNullTo(linkedSetOf()) { provider ->
+                provider.id.takeIf(customProviderApiKeys::containsKey)
+            },
         )
     }
 
     @Synchronized
     fun providerApiKeys(): Map<ModelProvider, String> = providerApiKeysLocked().toMap()
 
+    @Synchronized
+    fun customProviderApiKeys(): Map<String, String> {
+        val allowedIds = customModelProvidersLocked().mapTo(linkedSetOf()) { it.id }
+        return customProviderApiKeysLocked(allowedIds).toMap()
+    }
+
     /** Writes a fixed, secret-free Cordis overlay for the configured pi-ai routes. */
     @Synchronized
     fun prepareProviderPatch(configuredProviders: Set<ModelProvider>): String? {
         val enabled = ModelProvider.entries.filter { it != ModelProvider.DEEPSEEK && configuredProviders.contains(it) }
-        if (enabled.isEmpty()) {
+        val customProviders = customModelProvidersLocked()
+        if (enabled.isEmpty() && customProviders.isEmpty()) {
             deleteGeneratedFile(providerPatchFile)
             return null
         }
@@ -121,6 +155,27 @@ class RuntimeStore(context: Context) {
         val providers = JSONObject()
         enabled.forEach { provider ->
             providers.put(provider.wireValue, JSONObject().put("apiKeyEnv", provider.environmentVariable))
+        }
+        customProviders.forEach { provider ->
+            providers.put(
+                provider.id,
+                JSONObject()
+                    .put("apiKeyEnv", provider.environmentVariable)
+                    .put("displayName", provider.name)
+                    .put("api", provider.api.wireValue)
+                    .put("baseURL", provider.baseUrl)
+                    .put("models", JSONArray().also { models ->
+                        provider.models.forEach { model ->
+                            models.put(
+                                JSONObject()
+                                    .put("id", model.id)
+                                    .put("name", model.name)
+                                    .put("contextWindow", model.contextWindow)
+                                    .put("maxTokens", model.maxTokens),
+                            )
+                        }
+                    }),
+            )
         }
         val bytes = JSONArray()
             .put(
@@ -218,6 +273,59 @@ class RuntimeStore(context: Context) {
         }
     }
 
+    private fun customModelProvidersLocked(): List<CustomModelProvider> {
+        val raw = preferences.getString(KEY_CUSTOM_PROVIDERS, null) ?: return emptyList()
+        return try {
+            RuntimeValidation.customModelProviders(JSONArray(raw))
+        } catch (error: Exception) {
+            throw RuntimeFailure("SETTINGS_READ_FAILED", "无法读取自定义模型供应商配置", error)
+        }
+    }
+
+    private fun customProviderApiKeysLocked(allowedIds: Set<String>): Map<String, String> {
+        val encrypted = preferences.getString(KEY_CUSTOM_PROVIDER_CREDENTIALS, null) ?: return emptyMap()
+        return try {
+            val plaintext = credentialCipher.decrypt(encrypted)
+            try {
+                RuntimeValidation.customProviderApiKeyUpdates(JSONObject(plaintext.toString(Charsets.UTF_8)), allowedIds)
+            } finally {
+                plaintext.fill(0)
+            }
+        } catch (error: Exception) {
+            throw RuntimeFailure("CREDENTIALS_DECRYPT_FAILED", "无法读取已保存的自定义模型凭据；原有数据已保留", error)
+        }
+    }
+
+    private fun encryptCustomProviderApiKeys(values: Map<String, String>): String? {
+        if (values.isEmpty()) return null
+        val plaintext = JSONObject(values).toString().toByteArray(Charsets.UTF_8)
+        return try {
+            credentialCipher.encrypt(plaintext)
+        } catch (error: Throwable) {
+            throw RuntimeFailure("CREDENTIALS_ENCRYPT_FAILED", "无法安全保存自定义模型凭据", error)
+        } finally {
+            plaintext.fill(0)
+        }
+    }
+
+    private fun customProvidersToJson(providers: List<CustomModelProvider>): JSONArray = JSONArray().also { result ->
+        providers.forEach { provider ->
+            result.put(
+                JSONObject()
+                    .put("id", provider.id)
+                    .put("name", provider.name)
+                    .put("api", provider.api.wireValue)
+                    .put("baseUrl", provider.baseUrl)
+                    .put("models", JSONArray().also { models ->
+                        provider.models.forEach { model ->
+                            models.put(JSONObject().put("id", model.id).put("name", model.name)
+                                .put("contextWindow", model.contextWindow).put("maxTokens", model.maxTokens))
+                        }
+                    }),
+            )
+        }
+    }
+
     private fun requireRegularGeneratedFileOrMissing(file: File) {
         if (!RuntimeFiles.existsNoFollow(file)) return
         val stat = try {
@@ -234,15 +342,6 @@ class RuntimeStore(context: Context) {
         if (!RuntimeFiles.existsNoFollow(file)) return
         requireRegularGeneratedFileOrMissing(file)
         if (!file.delete()) throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "无法清理旧的启动器配置")
-    }
-
-    /** 设备命令桥 token（生成后持久化，注入容器 DSH_DEVICE_BRIDGE_TOKEN）。 */
-    @Synchronized
-    fun deviceBridgeToken(): String {
-        preferences.getString(KEY_DEVICE_BRIDGE_TOKEN, null)?.let { return it }
-        val token = "dbt-" + java.util.UUID.randomUUID().toString().replace("-", "").take(32)
-        preferences.edit().putString(KEY_DEVICE_BRIDGE_TOKEN, token).commit()
-        return token
     }
 
     fun runnerAvailable(): Boolean {
@@ -509,9 +608,10 @@ class RuntimeStore(context: Context) {
         private const val KEY_FONT_SIZE = "terminal_font_size"
         private const val KEY_API_KEY = "model_api_key"
         private const val KEY_PROVIDER_CREDENTIALS = "provider_credentials_encrypted_v1"
+        private const val KEY_CUSTOM_PROVIDERS = "custom_model_providers_v1"
+        private const val KEY_CUSTOM_PROVIDER_CREDENTIALS = "custom_provider_credentials_encrypted_v1"
         private const val KEY_LEGACY_DEFAULT_FRONTEND = "default_frontend"
         private const val KEY_AUTO_LAUNCH = "auto_launch"
-        private const val KEY_DEVICE_BRIDGE_TOKEN = "device_bridge_token"
         private const val RUNNER_NAME = "libdsh_proot.so"
         private const val LOADER_NAME = "libdsh_proot_loader.so"
         private const val EXEC_XATTR_NAME = "security.android.exec"

@@ -34,6 +34,7 @@ import {
 import { TerminalPanel } from './components/TerminalPanel'
 import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import { MODEL_PROVIDERS } from './modelProviders'
+import { CustomProviders } from './components/CustomProviders'
 import { runtimeBridge } from './platform/native'
 import type {
   ModelProviderId,
@@ -579,14 +580,18 @@ interface SettingsScreenProps {
 
 function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConnect, onLaunch, onOpenEnvironment, onOpenShizuku, onOpenTerminal, onSave, onStop }: SettingsScreenProps) {
   const [draft, setDraft] = useState<RuntimeSettings | null>(settings)
-  const [selectedProvider, setSelectedProvider] = useState<ModelProviderId>('deepseek')
+  const [selectedProvider, setSelectedProvider] = useState<ModelProviderId | 'custom'>('deepseek')
   const [credentialDrafts, setCredentialDrafts] = useState<ProviderApiKeys>({})
   const [clearedProviders, setClearedProviders] = useState<ModelProviderId[]>([])
+  const [customCredentials, setCustomCredentials] = useState<Record<string, string>>({})
+  const [clearedCustomProviders, setClearedCustomProviders] = useState<string[]>([])
 
   useEffect(() => {
     setDraft(settings)
     setCredentialDrafts({})
     setClearedProviders([])
+    setCustomCredentials({})
+    setClearedCustomProviders([])
   }, [settings])
 
   if (draft === null) {
@@ -603,7 +608,7 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
           ? '已拒绝'
           : '待授权'
   const selectedProviderOption = MODEL_PROVIDERS.find(provider => provider.id === selectedProvider) ?? MODEL_PROVIDERS[0]
-  const selectedProviderConfigured = (
+  const selectedProviderConfigured = selectedProvider !== 'custom' && (
     draft.configuredModelProviders.includes(selectedProvider) || credentialDrafts[selectedProvider] !== undefined
   ) && !clearedProviders.includes(selectedProvider)
   const saveDraft = (): void => {
@@ -611,6 +616,8 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
       ...draft,
       ...(Object.keys(credentialDrafts).length === 0 ? {} : { providerApiKeys: credentialDrafts }),
       ...(clearedProviders.length === 0 ? {} : { clearProviderApiKeys: clearedProviders }),
+      ...(Object.keys(customCredentials).length === 0 ? {} : { customProviderApiKeys: customCredentials }),
+      ...(clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: clearedCustomProviders }),
     })
   }
 
@@ -662,16 +669,17 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
             <span>供应商</span>
             <select
               value={selectedProvider}
-              onChange={event => setSelectedProvider(event.target.value as ModelProviderId)}
+               onChange={event => setSelectedProvider(event.target.value as ModelProviderId | 'custom')}
             >
               {MODEL_PROVIDERS.map(provider => {
                 const configured = (draft.configuredModelProviders.includes(provider.id) || credentialDrafts[provider.id] !== undefined)
                   && !clearedProviders.includes(provider.id)
                 return <option key={provider.id} value={provider.id}>{provider.label}{configured ? '（已配置）' : ''}</option>
               })}
+              <option value="custom">自定义</option>
             </select>
           </label>
-          <label className="field">
+          {selectedProvider !== 'custom' && <><label className="field">
             <span>{selectedProviderOption.label} API Key · {selectedProviderOption.environmentVariable}</span>
             <input
               type="password"
@@ -712,7 +720,16 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
                 {clearedProviders.includes(selectedProvider) ? '撤销清除' : '清除凭据'}
               </button>
             </div>
-          )}
+          )}</>}
+          {selectedProvider === 'custom' && <CustomProviders
+            providers={draft.customModelProviders ?? []}
+            configured={draft.configuredCustomModelProviders ?? []}
+            credentials={customCredentials}
+            cleared={clearedCustomProviders}
+            onChange={providers => setDraft({ ...draft, customModelProviders: providers })}
+            onCredentials={setCustomCredentials}
+            onClear={setClearedCustomProviders}
+          />}
           <label className="toggle-row">
             <span><strong>打开应用时自动启动 Harness</strong><small>关闭后需手动点「打开 Harness」启动</small></span>
             <input
@@ -1150,6 +1167,7 @@ export function App() {
     void run('save-settings', async () => {
       const saved = await runtimeBridge.saveSettings(nextSettings)
       setSettings(saved)
+      setRuntime(await runtimeBridge.getState())
     }, '设置已保存')
   }, [run])
 

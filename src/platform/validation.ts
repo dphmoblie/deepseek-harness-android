@@ -14,6 +14,7 @@ import type {
   TerminalExit,
 } from './types'
 import { MODEL_PROVIDER_IDS } from './types'
+import { validateCustomCredentialIds, validateCustomCredentialUpdates, validateCustomModelProviders } from './customProviders'
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const SESSION_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i
@@ -216,6 +217,10 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
     keepScreenAwake: settings.keepScreenAwake,
     terminalFontSize: settings.terminalFontSize,
     configuredModelProviders: configuredModelProviders(settings.configuredModelProviders, settings.apiKey),
+    ...(settings.customModelProviders === undefined ? {} : { customModelProviders: validateCustomModelProviders(settings.customModelProviders) }),
+    ...(settings.configuredCustomModelProviders === undefined ? {} : {
+      configuredCustomModelProviders: validateCustomCredentialIds(settings.configuredCustomModelProviders, '自定义模型凭据状态'),
+    }),
     autoLaunch,
   }
 }
@@ -224,13 +229,19 @@ export function validateSettingsUpdate(settings: RuntimeSettingsUpdate): Runtime
   const validated = validateSettings(settings)
   const providerApiKeys = providerApiKeyUpdates(settings.providerApiKeys)
   const clearProviderApiKeys = clearedProviderApiKeys(settings.clearProviderApiKeys)
+  const allowedCustomIds = validated.customModelProviders === undefined ? undefined : new Set(validated.customModelProviders.map(provider => provider.id))
+  const customProviderApiKeys = validateCustomCredentialUpdates(settings.customProviderApiKeys, allowedCustomIds)
+  const clearCustomProviderApiKeys = validateCustomCredentialIds(settings.clearCustomProviderApiKeys, '自定义模型凭据清除列表', allowedCustomIds)
   if (clearProviderApiKeys.some(provider => providerApiKeys[provider] !== undefined)) {
     throw new Error('同一模型凭据不能同时更新和清除')
   }
+  if (clearCustomProviderApiKeys.some(id => customProviderApiKeys[id] !== undefined)) throw new Error('同一自定义模型凭据不能同时更新和清除')
   return {
     ...validated,
     ...(Object.keys(providerApiKeys).length === 0 ? {} : { providerApiKeys }),
     ...(clearProviderApiKeys.length === 0 ? {} : { clearProviderApiKeys }),
+    ...(Object.keys(customProviderApiKeys).length === 0 ? {} : { customProviderApiKeys }),
+    ...(clearCustomProviderApiKeys.length === 0 ? {} : { clearCustomProviderApiKeys }),
   }
 }
 
@@ -246,6 +257,12 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
   const autoLaunch = settings.autoLaunch === undefined ? false : settings.autoLaunch === true
   if (settings.autoLaunch !== undefined && typeof settings.autoLaunch !== 'boolean') throw new Error('自动启动设置格式无效')
   const configuredProviders = configuredModelProviders(settings.configuredModelProviders, settings.apiKey)
+  const customSettings = {
+    ...(settings.customModelProviders === undefined ? {} : { customModelProviders: validateCustomModelProviders(settings.customModelProviders) }),
+    ...(settings.configuredCustomModelProviders === undefined ? {} : {
+      configuredCustomModelProviders: validateCustomCredentialIds(settings.configuredCustomModelProviders, '自定义模型凭据状态'),
+    }),
+  }
   if (settings.manifestUrl === '' && settings.manifestSha256 === '') {
     return {
       manifestUrl: '',
@@ -253,6 +270,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
       keepScreenAwake: settings.keepScreenAwake,
       terminalFontSize: settings.terminalFontSize as number,
       configuredModelProviders: configuredProviders,
+      ...customSettings,
       autoLaunch,
     }
   }
@@ -265,6 +283,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
     keepScreenAwake: settings.keepScreenAwake,
     terminalFontSize: settings.terminalFontSize as number,
     configuredModelProviders: configuredProviders,
+    ...customSettings,
     autoLaunch,
   }
 }

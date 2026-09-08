@@ -1,6 +1,0 @@
-# dsh-mobile-compat is experimental and is intentionally absent from the default
-# Android profile. Enable it only in a dedicated profile after validating its
-# loader format and compatibility with the official layout service.
-- insert:
-    - id: dsh-mobile-compat
-      name: 'dsh-mobile-compat'

@@ -53,6 +53,12 @@ class RuntimeSupervisor(
     private var harnessProcess: Process? = null
     private var harnessOutput: ProcessOutputTail? = null
     private var harnessAccess: HarnessAccess? = null
+    private var deviceBridgeAccess: DeviceBridgeAccess? = null
+
+    fun configureDeviceBridge(access: DeviceBridgeAccess) = synchronized(lock) {
+        if (harnessProcess?.isAlive == true) throw RuntimeFailure("RUNTIME_BUSY", "Harness 运行时不能更改设备桥")
+        deviceBridgeAccess = access
+    }
 
     fun startHarness(): RuntimeStateSnapshot {
         // CAS 防重入：启动进行中时直接返回当前状态快照，避免并发启动排队
@@ -103,7 +109,7 @@ class RuntimeSupervisor(
             val configuredProviders = store.providerApiKeys().keys
             val providerPatchPath = store.prepareProviderPatch(configuredProviders)
             val harnessEntrypoint = RuntimeCommand.withProviderPatch(manifest.harnessArgv, providerPatchPath)
-            launchResolver.launch(harnessEntrypoint, access.password)
+            launchResolver.launch(harnessEntrypoint, access.password, deviceBridgeAccess)
         } catch (failure: RuntimeFailure) {
             status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
             throw failure
@@ -152,24 +158,25 @@ class RuntimeSupervisor(
         lastStartAttemptAt = 0
         val process = harnessProcess
         if (process == null || !process.isAlive) {
+            reapStaleHarness()
+            store.installedManifest()?.let { waitForPortRelease(it.harnessPort) }
             clearHarnessState()
             return@synchronized status.refreshIdle()
         }
         status.update(RuntimePhase.STOPPING, nextHarnessUrl = null)
         terminate(process)
+        store.installedManifest()?.let { waitForPortRelease(it.harnessPort) }
         clearHarnessState()
         status.refreshIdle()
     }
 
     fun isRunning(): Boolean = synchronized(lock) {
         val running = harnessProcess?.isAlive == true
-        if (!running) clearHarnessState()
         running
     }
 
     fun access(): HarnessAccess = synchronized(lock) {
         if (harnessProcess?.isAlive != true) {
-            clearHarnessState()
             throw RuntimeFailure("HARNESS_NOT_RUNNING", "Harness 尚未运行")
         }
         harnessAccess ?: throw RuntimeFailure("HARNESS_AUTH_UNAVAILABLE", "Harness 临时凭据不可用")
@@ -257,12 +264,18 @@ class RuntimeSupervisor(
     }
 
     private fun readChildPids(pid: Int): List<Int> {
-        val content = try {
-            File("/proc/$pid/task/$pid/children").readText()
+        return try {
+            File("/proc/$pid/task").listFiles().orEmpty().flatMap { task ->
+                try {
+                    File(task, "children").readText().trim().split(WHITESPACE)
+                        .mapNotNull { it.toIntOrNull()?.takeIf { child -> child > 1 } }
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            }.distinct()
         } catch (_: Exception) {
-            return emptyList()
+            emptyList()
         }
-        return content.trim().split(WHITESPACE).filter { it.isNotEmpty() }.mapNotNull { it.toIntOrNull() }
     }
 
     private fun waitForPidExit(pid: Int) {
@@ -354,15 +367,54 @@ class RuntimeSupervisor(
     }
 
     private fun terminate(process: Process) {
+        // Capture descendants before PRoot exits and reparents its traced guest processes.
+        val rootPid = try { HarnessResidual.parsePid(store.harnessPidFile.readText()) } catch (_: Exception) { null }
+        val descendants = linkedMapOf<Int, String>()
+        fun collect(pid: Int) {
+            readChildPids(pid).forEach { child ->
+                if (!descendants.containsKey(child)) {
+                    descendants[child] = processStartTime(child)
+                    collect(child)
+                }
+            }
+        }
+        if (rootPid != null && HarnessResidual.isProotProcess(readProcCmdline(rootPid), store.launchRunnerFile.absolutePath)) {
+            collect(rootPid)
+        }
         process.destroy()
         try {
             if (!process.waitFor(STOP_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                if (rootPid != null) collect(rootPid)
                 process.destroyForcibly()
                 process.waitFor(STOP_TIMEOUT_SECONDS, TimeUnit.SECONDS)
             }
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
             process.destroyForcibly()
+        } finally {
+            descendants.entries.toList().asReversed().forEach { (pid, startedAt) ->
+                // Security check: /proc start time prevents signaling a reused PID.
+                if (startedAt.isNotEmpty() && processStartTime(pid) == startedAt) {
+                    try { Os.kill(pid, OsConstants.SIGKILL) } catch (error: ErrnoException) {
+                        if (error.errno != OsConstants.ESRCH) throw RuntimeFailure("HARNESS_STOP_FAILED", "无法停止 Harness 子进程", error)
+                    }
+                }
+            }
+        }
+        if (process.isAlive) throw RuntimeFailure("HARNESS_STOP_TIMEOUT", "Harness 进程未在限定时间内结束")
+    }
+
+    private fun processStartTime(pid: Int): String = try {
+        File("/proc/$pid/stat").readText().substringAfterLast(") ").split(' ').getOrNull(19).orEmpty()
+    } catch (_: Exception) { "" }
+
+    private fun waitForPortRelease(port: Int) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(STOP_TIMEOUT_SECONDS)
+        while (true) {
+            try { ensurePortAvailable(port); return } catch (error: RuntimeFailure) {
+                if (System.nanoTime() >= deadline) throw RuntimeFailure("HARNESS_STOP_TIMEOUT", "Harness 端口尚未释放，请稍后重试停止", error)
+            }
+            pauseWhileStarting(REAP_POLL_INTERVAL_MS)
         }
     }
 
