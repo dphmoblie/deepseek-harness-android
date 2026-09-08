@@ -148,13 +148,13 @@ def main() -> int:
         (root / "node_modules" / "obsolete-bundle").mkdir(parents=True)
         kept = root / "node_modules" / "kept-profile"
         kept.mkdir(parents=True)
-        platform_only = root / "node_modules" / "dsh-win32-process"
+        platform_only = root / "node_modules" / "@deepseek-ai" / "dsh-win32-process"
         platform_only.mkdir(parents=True)
         (root / "package.json").write_text(
             json.dumps({"dependencies": {
                 "obsolete-bundle": "*",
                 "kept-profile": "*",
-                "dsh-win32-process": "*",
+                "@deepseek-ai/dsh-win32-process": "*",
             }}),
             encoding="utf-8",
         )
@@ -167,7 +167,7 @@ def main() -> int:
             encoding="utf-8",
         )
         (platform_only / "package.json").write_text(
-            json.dumps({"name": "dsh-win32-process"}),
+            json.dumps({"name": "@deepseek-ai/dsh-win32-process"}),
             encoding="utf-8",
         )
 
@@ -185,10 +185,26 @@ def main() -> int:
             "opt/dsh",
             disabled,
         )
-        assert count == 1
+        assert count == 2
         assert [name for name, _ in recorder.links] == [
-            "root/.dsh/profiles/node_modules/kept-profile"
+            "root/.dsh/profiles/node_modules/@deepseek-ai/dsh-win32-process",
+            "root/.dsh/profiles/node_modules/kept-profile",
         ]
+
+    assert not module.skip_runtime_path(
+        module.PurePosixPath(
+            "node_modules/.pnpm/@deepseek-ai+dsh-win32-process@x/node_modules/"
+            "@deepseek-ai/dsh-win32-process/lib/index.js"
+        ),
+        disabled,
+    )
+    assert module.skip_runtime_path(
+        module.PurePosixPath(
+            "node_modules/.pnpm/@deepseek-ai+dsh-win32-process@x/node_modules/"
+            "@deepseek-ai/dsh-win32-process/node_modules/koffi/prebuilds/win32-x64/koffi.node"
+        ),
+        disabled,
+    )
 
     print("selfcheck OK: mobile profile + rootfs path normalization")
 

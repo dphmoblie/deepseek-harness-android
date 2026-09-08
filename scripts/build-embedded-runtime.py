@@ -433,7 +433,19 @@ def skip_runtime_path(
     if any(runtime_path_contains_package(relative, name) for name in excluded_package_names):
         return True
     lowered_parts = tuple(part.lower() for part in relative.parts)
-    if any("win32" in part or part.startswith("darwin-") for part in lowered_parts):
+    # dsh-subprocess-local imports this package unconditionally, even on POSIX.
+    # Keep its portable JavaScript entrypoint available while still filtering
+    # platform-specific descendants (for example koffi's win32 prebuilds).
+    encoded_win32_process = "@deepseek-ai+dsh-win32-proc"
+    for index, part in enumerate(lowered_parts):
+        if "win32" not in part and not part.startswith("darwin-"):
+            continue
+        is_win32_process_package = (
+            part == "dsh-win32-process"
+            or part.startswith(encoded_win32_process)
+        )
+        if is_win32_process_package:
+            continue
         return True
     if relative.suffix.lower() in {".cmd", ".ps1", ".pdb", ".exe", ".dll"}:
         return True
