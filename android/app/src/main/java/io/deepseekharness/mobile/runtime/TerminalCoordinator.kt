@@ -77,8 +77,10 @@ class TerminalCoordinator(
     fun hasAnySessions(): Boolean = ubuntu.hasSessions() || shizuku.hasSessions()
 
     fun closeAllAndWait() {
-        ubuntu.closeAllAndWait()
-        shizuku.closeAllAndWait()
+        BestEffortCleanup.runAll(
+            { ubuntu.closeAllAndWait() },
+            { shizuku.disconnect() },
+        )
     }
 
     fun shutdown() {

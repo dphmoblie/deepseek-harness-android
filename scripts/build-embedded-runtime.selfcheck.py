@@ -80,6 +80,62 @@ def main() -> int:
     assert module.WEB_PROFILE_PNPM_WORKSPACE == (
         b"packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n"
     )
+    assert module.MOBILE_AUTH_PRELOAD.read_bytes()
+    assert module.MOBILE_SESSION_PUBLISHER.read_bytes()
+
+    with tempfile.TemporaryDirectory(prefix="dsh-python-mode-") as directory:
+        root = Path(directory)
+        python_root = root / "python"
+        (python_root / "bin").mkdir(parents=True)
+        (python_root / "lib").mkdir()
+        (python_root / "bin" / "python3.13").write_bytes(b"python")
+        (python_root / "lib" / "stdlib.py").write_bytes(b"stdlib")
+        archive = root / "python.tar"
+        with module.tarfile.open(archive, "w") as target:
+            writer = module.RootfsWriter(target, 0)
+            module.add_windows_tree(
+                writer,
+                python_root,
+                "opt/python",
+                executable_prefixes=(module.PurePosixPath("bin"),),
+            )
+        with module.tarfile.open(archive, "r") as source:
+            assert source.getmember("opt/python/bin/python3.13").mode == 0o755
+            assert source.getmember("opt/python/lib/stdlib.py").mode == 0o644
+
+    if sys.platform != "win32":
+        publisher_spec = importlib.util.spec_from_file_location(
+            "mobile_session_publish",
+            module.MOBILE_SESSION_PUBLISHER,
+        )
+        if publisher_spec is None or publisher_spec.loader is None:
+            raise RuntimeError("unable to load mobile session publisher")
+        publisher = importlib.util.module_from_spec(publisher_spec)
+        publisher_spec.loader.exec_module(publisher)
+        with tempfile.TemporaryDirectory(prefix="dsh-mobile-sessions-") as directory:
+            session_root = Path(directory)
+            session_dir = session_root / "project" / "session-id"
+            session_dir.mkdir(parents=True, mode=0o700)
+            publisher.SESSION_ROOT = publisher.PurePosixPath(session_root)
+            target = session_dir / "session.v3.jsonl.zstd"
+            first = session_dir / "session.v3.jsonl.zstd.0123456789ab.tmp"
+            first.write_bytes(b"first")
+            first.chmod(0o600)
+            publisher.publish(str(first), str(target))
+            assert target.read_bytes() == b"first"
+            assert not first.exists()
+
+            second = session_dir / "session.v3.jsonl.zstd.abcdef012345.tmp"
+            second.write_bytes(b"second")
+            second.chmod(0o600)
+            try:
+                publisher.publish(str(second), str(target))
+            except SystemExit as error:
+                assert error.code == 17
+            else:
+                raise AssertionError("session publisher must not replace an existing target")
+            assert target.read_bytes() == b"first"
+            assert second.read_bytes() == b"second"
 
     with tempfile.TemporaryDirectory(prefix="dsh-node-pty-") as directory:
         root = Path(directory)

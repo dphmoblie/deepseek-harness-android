@@ -17,6 +17,7 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.security.MessageDigest
 
@@ -40,6 +41,7 @@ class DeviceBridgeServer(
     private val server = ServerSocket(port, 4, InetAddress.getByName("127.0.0.1"))
     private val executor = ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(4))
     private val running = AtomicBoolean(true)
+    private val activeSockets = ConcurrentHashMap.newKeySet<Socket>()
     val localPort: Int get() = server.localPort
 
     fun start() {
@@ -54,19 +56,52 @@ class DeviceBridgeServer(
             server.close()
         } catch (_: Throwable) {
         }
+        activeSockets.forEach(::closeQuietly)
         executor.shutdownNow()
+        // Close a socket accepted concurrently with server.close(), then briefly wait
+        // so no late device request can reconnect Shizuku after runtime cleanup.
+        activeSockets.forEach(::closeQuietly)
+        try {
+            executor.awaitTermination(STOP_WAIT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
     }
 
     private fun acceptLoop() {
         while (running.get()) {
             try {
                 val socket = server.accept()
-                try { executor.execute { handle(socket) } } catch (_: RejectedExecutionException) { socket.close() }
+                if (!running.get()) {
+                    closeQuietly(socket)
+                    break
+                }
+                activeSockets.add(socket)
+                try {
+                    executor.execute {
+                        try {
+                            handle(socket)
+                        } finally {
+                            activeSockets.remove(socket)
+                            closeQuietly(socket)
+                        }
+                    }
+                } catch (_: RejectedExecutionException) {
+                    activeSockets.remove(socket)
+                    closeQuietly(socket)
+                }
             } catch (_: SocketException) {
                 break // server.close() 后退出
             } catch (_: Throwable) {
                 if (!running.get()) break
             }
+        }
+    }
+
+    private fun closeQuietly(socket: Socket) {
+        try {
+            socket.close()
+        } catch (_: Throwable) {
         }
     }
 
@@ -126,7 +161,12 @@ class DeviceBridgeServer(
                     if (commandName.length > 32 || param.length > 1024) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备参数过长")
                     val command = DeviceCommand.fromName(commandName)
                         ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令不支持")
-                    val sessionId = shizuku.create(DEFAULT_COLUMNS, DEFAULT_ROWS, suppressPublicOutput = true)
+                    val sessionId = shizuku.create(
+                        DEFAULT_COLUMNS,
+                        DEFAULT_ROWS,
+                        suppressPublicOutput = true,
+                        permitted = running::get,
+                    )
                     try {
                         val result = runner.execute(sessionId, command, param, COMMAND_TIMEOUT_MS)
                         val errorJson = result.errorCode?.let { JSONObject.quote(it) } ?: "null"
@@ -202,6 +242,7 @@ class DeviceBridgeServer(
 
     companion object {
         private const val COMMAND_TIMEOUT_MS = 60_000L
+        private const val STOP_WAIT_MILLIS = 500L
         private const val DEFAULT_COLUMNS = 80
         private const val DEFAULT_ROWS = 24
     }

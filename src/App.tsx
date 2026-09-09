@@ -164,7 +164,15 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   HARNESS_MODULE_MISSING: 'Harness 运行模块不完整。',
   HARNESS_NATIVE_MODULE_FAILED: 'Harness 原生模块无法在当前设备运行。',
   HARNESS_START_TIMEOUT: 'Harness 首次启动超时，请重试或先打开 Ubuntu 终端检查环境。',
+  HARNESS_AUTH_UNAVAILABLE: 'Harness 未提供有效的网页认证入口，请更新运行环境后重试。',
   HARNESS_EXITED: 'Harness 在完成启动前已退出。',
+  HARNESS_STOP_FAILED: '无法停止 Harness 进程，请重试。',
+  HARNESS_STOP_TIMEOUT: 'Harness 未在限定时间内停止，请重试。',
+  HARNESS_STOP_INTERRUPTED: 'Harness 停止操作被中断，请重试。',
+  SHIZUKU_UNBIND_TIMEOUT: 'Shizuku 设备服务未在限定时间内退出，请重试。',
+  SHIZUKU_UNBIND_INTERRUPTED: 'Shizuku 设备服务停止操作被中断，请重试。',
+  SHIZUKU_UNBIND_FAILED: '无法停止 Shizuku 设备服务，请重试。',
+  SHIZUKU_DISCONNECTING: 'Shizuku 设备服务正在停止，请稍后重试。',
 }
 
 function runtimeErrorMessage(errorCode?: string): string {
@@ -933,7 +941,6 @@ export function App() {
   const noticeId = useRef(0)
   const busyRef = useRef<string | null>(null)
   const autoLaunchAttempted = useRef(false)
-  const shizukuConnecting = useRef(false)
 
   const notify = useCallback((message: string, tone: NoticeTone = 'info') => {
     noticeId.current += 1
@@ -1012,13 +1019,6 @@ export function App() {
       void runtimeBridge.getShizukuState()
         .then(next => {
           if (!cancelled) setShizuku(next)
-          if (next.running && next.permission === 'granted' && !next.connected && !shizukuConnecting.current) {
-            shizukuConnecting.current = true
-            void runtimeBridge.connectShizuku()
-              .then(connected => { if (!cancelled) setShizuku(connected) })
-              .catch(() => {})
-              .finally(() => { shizukuConnecting.current = false })
-          }
         })
         .catch(error => { if (!cancelled && reportError) notify(errorMessage(error), 'error') })
     }

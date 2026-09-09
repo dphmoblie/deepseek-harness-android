@@ -263,6 +263,28 @@ describe('App conversation gate', () => {
     expect(bridge.openHarness).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps Shizuku disconnected until the user explicitly reconnects it', async () => {
+    bridge.getShizukuState.mockResolvedValue({ ...shizuku, permission: 'granted', connected: false })
+    render(<App />)
+
+    fireEvent.focus(window)
+    await waitFor(() => expect(bridge.getShizukuState).toHaveBeenCalled())
+    expect(bridge.connectShizuku).not.toHaveBeenCalled()
+  })
+
+  it('shows the bounded authentication startup error without runtime details', async () => {
+    bridge.getState.mockResolvedValueOnce({
+      ...readyState,
+      phase: 'error',
+      errorCode: 'HARNESS_AUTH_UNAVAILABLE',
+    })
+    bridge.getSettings.mockResolvedValueOnce({ ...settings, autoLaunch: false })
+    render(<App />)
+
+    expect(await screen.findByText('Harness 未提供有效的网页认证入口，请更新运行环境后重试。')).toBeInTheDocument()
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+  })
+
   it('renders bounded launch errors as text without injecting markup', async () => {
     const unsafePrefix = '<img src=x onerror=alert(1)>'
     bridge.startHarness.mockRejectedValueOnce(new Error(`${unsafePrefix}\n${'x'.repeat(500)}`))

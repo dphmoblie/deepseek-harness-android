@@ -11,6 +11,7 @@ import json
 import posixpath
 import re
 import sys
+from pathlib import Path
 from pathlib import PurePosixPath
 
 MAX_ENTRIES = 250_000
@@ -42,6 +43,10 @@ DSH_PACKAGE_PATTERN = re.compile(
 )
 LEGACY_FRONTEND_FILES = frozenset({"plugin-workbench-loader.js"})
 LEGACY_FRONTEND_PREFIXES = ("plugin-workbench/",)
+SUPPORT_FILES = {
+    "usr/local/lib/dsh-mobile-auth.cjs": Path(__file__).with_name("mobile-auth-preload.cjs"),
+    "usr/local/lib/dsh-mobile-session-publish.py": Path(__file__).with_name("mobile-session-publish.py"),
+}
 
 
 def normalized(raw: str) -> str:
@@ -59,6 +64,7 @@ def main() -> int:
 
     seen: set[str] = set()
     types: dict[str, str] = {}
+    file_modes: dict[str, int] = {}
     symlinks: list[tuple[str, str]] = []
     hardlinks: list[tuple[str, str]] = []
     entry_count = 0
@@ -68,6 +74,7 @@ def main() -> int:
     web_profile_workspace: bytes | None = None
     runtime_metadata: bytes | None = None
     dsh_package_metadata: list[bytes] = []
+    support_files: dict[str, tuple[bytes, int]] = {}
     fail = lambda msg: (_ for _ in ()).throw(SystemExit(f"BUNDLE_VERIFY_FAILED: {msg}"))
 
     import tarfile
@@ -90,6 +97,7 @@ def main() -> int:
                 continue
             if m.isreg():
                 types[name] = "file"
+                file_modes[name] = m.mode
                 if m.size < 0:
                     fail(f"negative-size file: {name!r}")
                 extracted += m.size
@@ -109,6 +117,9 @@ def main() -> int:
                 elif DSH_PACKAGE_PATTERN.fullmatch(name):
                     source = t.extractfile(m)
                     dsh_package_metadata.append(b"" if source is None else source.read())
+                elif name in SUPPORT_FILES:
+                    source = t.extractfile(m)
+                    support_files[name] = (b"" if source is None else source.read(), m.mode)
                 if FRONTEND_DIST_SUFFIX in name:
                     dist_path = name.split(FRONTEND_DIST_SUFFIX, 1)[1]
                     if dist_path == "index.html":
@@ -156,6 +167,16 @@ def main() -> int:
             "runtime dshVersion mismatch: "
             f"{metadata.get('dshVersion')!r} != {expected_dsh_version!r}"
         )
+    expected_runtime_version = manifest.get("version")
+    if not isinstance(expected_runtime_version, str) or not re.fullmatch(
+        r"[A-Za-z0-9._-]{1,96}", expected_runtime_version
+    ):
+        fail("manifest runtime version is missing or invalid")
+    if metadata.get("runtimeVersion") != expected_runtime_version:
+        fail(
+            "runtime version mismatch: "
+            f"{metadata.get('runtimeVersion')!r} != {expected_runtime_version!r}"
+        )
     if len(dsh_package_metadata) != 1:
         fail(f"expected exactly one Harness runtime package, found {len(dsh_package_metadata)}")
     try:
@@ -169,6 +190,13 @@ def main() -> int:
         )
     if len(frontend_indexes) != 1:
         fail(f"expected exactly one official frontend index, found {len(frontend_indexes)}")
+    for archive_path, local_path in SUPPORT_FILES.items():
+        packaged = support_files.get(archive_path)
+        if packaged is None or packaged[0] != local_path.read_bytes():
+            fail(f"mobile support file is missing or stale: {archive_path!r}")
+        expected_mode = 0o600 if archive_path.endswith(".py") else 0o644
+        if packaged[1] != expected_mode:
+            fail(f"mobile support file mode is invalid: {archive_path!r}")
 
     # 文件-目录冲突（提取器 ensureDirectory 规则：父路径被非目录条目占用）
     for name, kind in list(types.items()):
@@ -230,6 +258,8 @@ def main() -> int:
         ("usr/local/bin/npm", "../../../opt/node/bin/npm"),
         ("usr/local/bin/npx", "../../../opt/node/bin/npx"),
         ("usr/local/bin/corepack", "../../../opt/node/bin/corepack"),
+        ("usr/local/bin/python3", "../../opt/python/bin/python3"),
+        ("usr/local/bin/python", "../../opt/python/bin/python3"),
     ]
 
     def canonical_target(name: str, target: str) -> str:
@@ -242,6 +272,17 @@ def main() -> int:
         actual = next(target for n, target in symlinks if n == name)
         if canonical_target(name, actual) != canonical_target(name, expected):
             fail(f"required symlink target mismatch: {name!r} -> {actual!r} (expected {expected!r})")
+
+    python_link = "opt/python/bin/python3"
+    if types.get(python_link) != "sym":
+        fail("embedded Python interpreter link is missing")
+    python_target = next(target for name, target in symlinks if name == python_link)
+    python_executable = canonical_target(python_link, python_target).lstrip("/")
+    if types.get(python_executable) != "file" or file_modes.get(python_executable) != 0o755:
+        fail("embedded Python interpreter target is missing or not executable")
+    for name, mode in file_modes.items():
+        if name.startswith("opt/python/bin/") and mode != 0o755:
+            fail(f"embedded Python command is not executable: {name!r}")
 
     expected_pnpm_wrapper = (
         b"#!/bin/sh\n"

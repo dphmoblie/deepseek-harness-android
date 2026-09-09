@@ -1,12 +1,20 @@
 'use strict'
 
 const crypto = require('node:crypto')
+const childProcess = require('node:child_process')
 const http = require('node:http')
+const fsp = require('node:fs/promises')
+const { syncBuiltinESMExports } = require('node:module')
+const { promisify } = require('node:util')
 
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
 const USERNAME = 'dsh-mobile'
 const REALM = 'DeepSeek Harness Mobile'
 const TOKEN_COOKIE = 'dsh_mobile_token'
+const SESSION_PUBLISHER = '/opt/python/bin/python3'
+const SESSION_PUBLISHER_SCRIPT = '/usr/local/lib/dsh-mobile-session-publish.py'
+const SESSION_TARGET_PATTERN = /^\/root\/\.dsh\/sessions\/[^/]{1,255}\/[^/]{1,255}\/session(?:\.v[0-9]+)?\.jsonl(?:\.zstd)?$/
+const SESSION_STAGE_PATTERN = /^session\.[A-Za-z0-9._-]{1,192}\.tmp$/
 const token = process.env.DSH_MOBILE_AUTH_TOKEN
 
 if (typeof token !== 'string' || !TOKEN_PATTERN.test(token)) {
@@ -18,6 +26,42 @@ const expected = Buffer.from(
   `Basic ${Buffer.from(`${USERNAME}:${token}`, 'ascii').toString('base64')}`,
   'ascii',
 )
+
+// PRoot may reject hard links on Android. The fallback performs the same
+// no-replace publication with renameat2 after validating the fixed private
+// session path. syncBuiltinESMExports updates DSH's named fs/promises import.
+const execFile = promisify(childProcess.execFile)
+const originalLink = fsp.link.bind(fsp)
+fsp.link = async (source, target) => {
+  try {
+    return await originalLink(source, target)
+  } catch (error) {
+    const code = error && typeof error === 'object' ? error.code : undefined
+    const separator = typeof source === 'string' ? source.lastIndexOf('/') : -1
+    const validSessionPublication = typeof source === 'string' && typeof target === 'string' &&
+      source.length <= 4096 && target.length <= 4096 && separator > 0 &&
+      source.slice(0, separator) === target.slice(0, target.lastIndexOf('/')) &&
+      SESSION_STAGE_PATTERN.test(source.slice(separator + 1)) && SESSION_TARGET_PATTERN.test(target)
+    if (!validSessionPublication || !['EACCES', 'EPERM', 'ENOTSUP', 'EOPNOTSUPP'].includes(code)) throw error
+    try {
+      await execFile(SESSION_PUBLISHER, [SESSION_PUBLISHER_SCRIPT, source, target], {
+        timeout: 5000,
+        windowsHide: true,
+      })
+    } catch (publishError) {
+      if (publishError && typeof publishError === 'object' && publishError.code === 17) {
+        const collision = new Error('session already exists')
+        collision.code = 'EEXIST'
+        throw collision
+      }
+      const failure = new Error('mobile session publication failed')
+      failure.code = 'EIO'
+      throw failure
+    }
+  }
+}
+syncBuiltinESMExports()
+
 delete process.env.DSH_MOBILE_AUTH_TOKEN
 delete process.env.NODE_OPTIONS
 

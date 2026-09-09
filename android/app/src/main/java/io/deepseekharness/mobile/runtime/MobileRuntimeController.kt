@@ -33,6 +33,8 @@ class MobileRuntimeController(
         supervisor.startHarness()
     }
 
+    fun requestStartCancellation(): Boolean = supervisor.requestStartCancellation()
+
     fun configureDeviceBridge(access: DeviceBridgeAccess) = lifecycleLock.withLock {
         ensureOpen()
         supervisor.configureDeviceBridge(access)
@@ -64,22 +66,33 @@ class MobileRuntimeController(
         saved
     }
 
-    fun stopRuntime(): RuntimeStateSnapshot = lifecycleLock.withLock {
-        ensureOpen()
-        supervisor.stop()
-        terminals.closeAllAndWait()
-        status.refreshIdle()
+    fun stopRuntime(): RuntimeStateSnapshot {
+        supervisor.requestStartCancellation()
+        return lifecycleLock.withLock {
+            ensureOpen()
+            BestEffortCleanup.runAll(
+                { supervisor.stop() },
+                { terminals.closeAllAndWait() },
+            )
+            status.refreshIdle()
+        }
     }
 
-    fun reset(confirmation: String?): RuntimeStateSnapshot = lifecycleLock.withLock {
+    fun reset(confirmation: String?): RuntimeStateSnapshot {
         ensureOpen()
         if (confirmation != "RESET_RUNTIME") {
             throw RuntimeFailure("RESET_CONFIRMATION_INVALID", "重置确认文本无效")
         }
-        supervisor.stop()
-        terminals.closeAllAndWait()
-        installer.resetWorkspace()
-        status.snapshot()
+        supervisor.requestStartCancellation()
+        return lifecycleLock.withLock {
+            ensureOpen()
+            BestEffortCleanup.runAll(
+                { supervisor.stop() },
+                { terminals.closeAllAndWait() },
+            )
+            installer.resetWorkspace()
+            status.snapshot()
+        }
     }
 
     fun createTerminal(kind: String, columns: Int, rows: Int): String = lifecycleLock.withLock {
@@ -138,6 +151,7 @@ class MobileRuntimeController(
     fun shutdown() {
         if (!closed.compareAndSet(false, true)) return
         installer.cancelInstall()
+        supervisor.requestStartCancellation()
         lifecycleLock.withLock {
             BestEffortCleanup.runAll(
                 { supervisor.stop() },

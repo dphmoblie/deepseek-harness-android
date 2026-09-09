@@ -12,13 +12,15 @@ import java.net.URL
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 data class HarnessAccess(
     val url: String,
     val username: String,
     val password: String,
 ) {
+    override fun toString(): String = "HarnessAccess(url=<redacted>, username=$username, password=<redacted>)"
+
     companion object {
         const val USERNAME = "dsh-mobile"
         const val REALM = "DeepSeek Harness Mobile"
@@ -51,6 +53,38 @@ internal object HarnessResidual {
 
 private data class HarnessProcessIdentity(val pid: Int, val startedAt: String)
 
+internal class RuntimeStartCancellation {
+    private var starting = false
+    private var cancellationRequested = false
+
+    @Synchronized
+    fun tryBegin(): Boolean {
+        if (starting) return false
+        starting = true
+        cancellationRequested = false
+        return true
+    }
+
+    @Synchronized
+    fun request(): Boolean {
+        if (!starting) return false
+        cancellationRequested = true
+        return true
+    }
+
+    @Synchronized
+    fun isRequested(): Boolean = starting && cancellationRequested
+
+    @Synchronized
+    fun isStarting(): Boolean = starting
+
+    @Synchronized
+    fun finish() {
+        starting = false
+        cancellationRequested = false
+    }
+}
+
 class RuntimeSupervisor(
     context: Context,
     private val store: RuntimeStore,
@@ -59,6 +93,8 @@ class RuntimeSupervisor(
     private val appContext = context.applicationContext
     private val launchResolver = RuntimeLaunchResolver(appContext, store)
     private val lock = Any()
+    private val startCancellation = RuntimeStartCancellation()
+    private val startCancellationEpoch = AtomicLong(0)
     private var harnessProcess: Process? = null
     private var harnessOutput: ProcessOutputTail? = null
     private var harnessAccess: HarnessAccess? = null
@@ -70,11 +106,12 @@ class RuntimeSupervisor(
     }
 
     fun startHarness(): RuntimeStateSnapshot {
-        // CAS 防重入：启动进行中时直接返回当前状态快照，避免并发启动排队
-        if (!starting.compareAndSet(false, true)) {
-            return synchronized(lock) { status.snapshot() }
-        }
+        val startEpoch = startCancellationEpoch.get()
+        if (!startCancellation.tryBegin()) return status.snapshot()
         try {
+            if (startCancellationEpoch.get() != startEpoch) {
+                throw RuntimeFailure(START_CANCELLED_CODE, "Harness 启动已取消")
+            }
             return synchronized(lock) {
         val existing = harnessProcess
         if (existing?.isAlive == true && harnessAccess != null) return@synchronized status.snapshot()
@@ -90,39 +127,49 @@ class RuntimeSupervisor(
         val manifest = store.installedManifest()
             ?: throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
         RootfsIntegrity.verifyLinks(store.currentRoot, "RUNTIME_CORRUPTED")
+        throwIfStartCancelled()
         try {
             launchResolver.verifyGuest(
                 NODE_PROBE_ENTRYPOINT,
                 "NODE_RUNTIME_FAILED",
                 "内置 Node.js 无法在当前设备运行",
                 NODE_PROBE_TIMEOUT_SECONDS,
+                startCancellation::isRequested,
             )
             launchResolver.verifyGuest(
                 HARNESS_PROBE_ENTRYPOINT,
                 "HARNESS_PREFLIGHT_FAILED",
                 "Harness 命令未通过启动自检",
                 HARNESS_PROBE_TIMEOUT_SECONDS,
+                startCancellation::isRequested,
             )
+            throwIfStartCancelled()
             ensurePortAvailable(manifest.harnessPort)
         } catch (failure: RuntimeFailure) {
-            status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
+            if (failure.code != START_CANCELLED_CODE) {
+                status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
+            }
             throw failure
         }
 
-        val access = HarnessAccess(
-            url = manifest.harnessUri.toASCIIString(),
-            username = HarnessAccess.USERNAME,
-            password = generateToken(),
-        )
+        val password = generateToken()
         val launch = try {
             val configuredProviders = store.providerApiKeys().keys
             val providerPatchPath = store.prepareProviderPatch(configuredProviders)
             val harnessEntrypoint = RuntimeCommand.withProviderPatch(manifest.harnessArgv, providerPatchPath)
-            launchResolver.launch(harnessEntrypoint, access.password, deviceBridgeAccess)
+            launchResolver.launch(
+                harnessEntrypoint,
+                password,
+                deviceBridgeAccess,
+                startCancellation::isRequested,
+            )
         } catch (failure: RuntimeFailure) {
-            status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
+            if (failure.code != START_CANCELLED_CODE) {
+                status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
+            }
             throw failure
         }
+        throwIfStartCancelled()
         val process = try {
             ProcessBuilder(harnessLaunchArgv(launch.argv))
                 .directory(store.currentRoot)
@@ -138,30 +185,50 @@ class RuntimeSupervisor(
             throw RuntimeFailure("HARNESS_START_FAILED", "无法启动 Harness", error)
         }
         harnessProcess = process
-        val output = ProcessOutputTail.drain(process, "dsh-harness-output")
+        val output = ProcessOutputTail.drain(process, "dsh-harness-output", manifest.harnessPort)
         harnessOutput = output
 
-        try {
+        val launchUrl = try {
             waitForHarness(process, manifest.harnessPort, output)
         } catch (error: RuntimeFailure) {
             terminate(process, manifest.harnessPort)
             clearHarnessState()
-            status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = error.code)
+            if (error.code != START_CANCELLED_CODE) {
+                status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = error.code)
+            }
             throw error
         }
-        harnessAccess = access
+        throwIfStartCancelled()
+        // Credentials remain native/in-memory; status snapshots retain the public manifest URL.
+        harnessAccess = HarnessAccess(launchUrl, HarnessAccess.USERNAME, password)
         lastStartAttemptAt = System.currentTimeMillis()
         status.update(
             RuntimePhase.RUNNING,
             downloaded = manifest.rootfs.compressedBytes,
             total = manifest.rootfs.compressedBytes,
             nextHarnessUrl = manifest.harnessUri.toASCIIString(),
-        )
+            )
+            }
+        } catch (failure: RuntimeFailure) {
+            if (failure.code != START_CANCELLED_CODE) throw failure
+            return synchronized(lock) {
+                harnessProcess?.takeIf { it.isAlive }?.let { process ->
+                    terminate(process, store.installedManifest()?.harnessPort)
+                }
+                clearHarnessState()
+                status.refreshIdle()
             }
         } finally {
-            starting.set(false)
+            startCancellation.finish()
         }
     }
+
+    fun requestStartCancellation(): Boolean {
+        startCancellationEpoch.incrementAndGet()
+        return startCancellation.request()
+    }
+
+    fun isStarting(): Boolean = startCancellation.isStarting()
 
     fun stop(): RuntimeStateSnapshot = synchronized(lock) {
         lastStartAttemptAt = 0
@@ -377,23 +444,30 @@ class RuntimeSupervisor(
         }
     }
 
-    private fun waitForHarness(process: Process, port: Int, output: ProcessOutputTail) {
+    private fun waitForHarness(process: Process, port: Int, output: ProcessOutputTail): String {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(START_TIMEOUT_SECONDS)
+        var authServiceReady = false
         while (System.nanoTime() < deadline) {
+            throwIfStartCancelled()
             if (!process.isAlive) {
                 throwHarnessExit(output)
             }
 
             if (hasExpectedAuthChallenge(port)) {
+                authServiceReady = true
                 pauseWhileStarting(HARNESS_STABILITY_MS)
                 if (!process.isAlive) throwHarnessExit(output)
                 val knownFailure = RuntimeDiagnostics.harnessFailure(output.snapshot())
                 if (knownFailure.code != "HARNESS_EXITED") {
                     throw RuntimeFailure(knownFailure.code, knownFailure.message)
                 }
-                if (hasExpectedAuthChallenge(port)) return
+                val launchUrl = output.harnessLaunchUrl()
+                if (launchUrl != null && hasExpectedAuthChallenge(port)) return launchUrl
             }
             pauseWhileStarting(POLL_INTERVAL_MS)
+        }
+        if (authServiceReady && output.harnessLaunchUrl() == null) {
+            throw RuntimeFailure("HARNESS_AUTH_UNAVAILABLE", "Harness 未提供有效的网页认证入口")
         }
         throw RuntimeFailure("HARNESS_START_TIMEOUT", "Harness 未在限定时间内启动")
     }
@@ -423,14 +497,9 @@ class RuntimeSupervisor(
 
     private fun throwHarnessExit(output: ProcessOutputTail): Nothing {
         output.awaitClosed(OUTPUT_DRAIN_TIMEOUT_MS)
-        val diagnostic = output.snapshot()
-        val failure = RuntimeDiagnostics.harnessFailure(diagnostic)
-        android.util.Log.w(
-            "dsh-runtime",
-            "harness exited code=${failure.code} output=" + diagnostic
-                .replace(Regex("(?i)(api[_-]?key|token|password|secret)=?\\s*[^\\s]+"), "$1=<redacted>")
-                .takeLast(4096),
-        )
+        val failure = RuntimeDiagnostics.harnessFailure(output.snapshot())
+        // The bounded tail may begin inside a credential, so log only the classified failure.
+        android.util.Log.w("dsh-runtime", "harness exited code=${failure.code}")
         throw RuntimeFailure(failure.code, failure.message)
     }
 
@@ -497,6 +566,12 @@ class RuntimeSupervisor(
 
         if (observed.values.any(::isSameProcess) || findMarkedHarnessProcesses().isNotEmpty() || process.isAlive) {
             throw RuntimeFailure("HARNESS_STOP_TIMEOUT", "Harness 进程未在限定时间内结束")
+        }
+    }
+
+    private fun throwIfStartCancelled() {
+        if (startCancellation.isRequested()) {
+            throw RuntimeFailure(START_CANCELLED_CODE, "Harness 启动已取消")
         }
     }
 
@@ -589,8 +664,8 @@ class RuntimeSupervisor(
         private const val REAP_POLL_INTERVAL_MS = 100L
         private val WHITESPACE = Regex("\\s+")
         private const val PID_FILE_ENV = "DSH_PIDFILE"
-        private val starting = AtomicBoolean(false)
         @Volatile private var lastStartAttemptAt = 0L
+        internal const val START_CANCELLED_CODE = "HARNESS_START_CANCELLED"
         private const val START_TIMEOUT_SECONDS = 120L
         private const val GRACEFUL_STOP_TIMEOUT_MS = 2_000L
         private const val FORCE_STOP_TIMEOUT_MS = 5_000L

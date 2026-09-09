@@ -28,6 +28,7 @@ MAX_COMPONENT_CHARS = 255
 BUFFER_SIZE = 1024 * 1024
 MAX_SUPPORT_FILE_BYTES = 16 * 1024
 MOBILE_AUTH_PRELOAD = Path(__file__).with_name("mobile-auth-preload.cjs")
+MOBILE_SESSION_PUBLISHER = Path(__file__).with_name("mobile-session-publish.py")
 COMPRESSION_OUTPUT_SUFFIXES = {
     # AAPT treats .gz assets specially and strips the suffix. The payload remains gzip.
     "gzip": ".bundle",
@@ -461,6 +462,7 @@ def add_windows_tree(
     source_root: Path,
     destination_root: str,
     excluded_package_names: frozenset[str] = frozenset(),
+    executable_prefixes: tuple[PurePosixPath, ...] = (),
 ) -> None:
     writer.add_directory(destination_root)
     for current_raw, directory_names, file_names in os.walk(source_root, topdown=True, followlinks=False):
@@ -521,7 +523,11 @@ def add_windows_tree(
                 raise BuildError(f"unsupported local runtime file type: {path}")
             info = tarfile.TarInfo(archive_name)
             info.size = file_stat.st_size
-            info.mode = 0o644
+            relative_posix = PurePosixPath(local_relative.as_posix())
+            info.mode = 0o755 if any(
+                relative_posix == prefix or prefix in relative_posix.parents
+                for prefix in executable_prefixes
+            ) else 0o644
             info.uid = 0
             info.gid = 0
             info.uname = "root"
@@ -588,7 +594,7 @@ def add_toolchain(writer: RootfsWriter, toolchain_dir: Path) -> None:
     - bin/* -> /usr/local/bin（静态可执行文件，保留 0755）
     - python/ -> /opt/python（python-build-standalone 解压树），并建立
       /usr/local/bin/python3 与 python 软链（荣耀降级复制后仍可用）
-    CI 在构建前下载；目录缺失时跳过（不影响既有构建）。
+    CI 在构建前下载；Android runtime 必须提供完整工具链。
     """
     if toolchain_dir is None or not toolchain_dir.is_dir():
         return
@@ -599,7 +605,12 @@ def add_toolchain(writer: RootfsWriter, toolchain_dir: Path) -> None:
                 writer.add_bytes(f"usr/local/bin/{binary.name}", binary.read_bytes(), 0o755)
     python_dir = toolchain_dir / "python"
     if python_dir.is_dir():
-        add_windows_tree(writer, python_dir, "opt/python")
+        add_windows_tree(
+            writer,
+            python_dir,
+            "opt/python",
+            executable_prefixes=(PurePosixPath("bin"),),
+        )
         writer.add_symlink("usr/local/bin/python3", "../../opt/python/bin/python3")
         writer.add_symlink("usr/local/bin/python", "../../opt/python/bin/python3")
 
@@ -701,7 +712,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--node-root", default="node-v24.19.0-linux-arm64")
     parser.add_argument("--node-version", default="24.19.0")
     parser.add_argument("--dsh-root", required=True, type=Path)
-    parser.add_argument("--toolchain-dir", type=Path, default=None, help="optional pre-staged toolchain dir (bin/* -> /usr/local/bin, python/ -> /opt/python)")
+    parser.add_argument("--toolchain-dir", required=True, type=Path, help="pre-staged toolchain dir (bin/* -> /usr/local/bin, python/ -> /opt/python)")
     parser.add_argument("--dsh-version", default="0.1.5-alpha.1")
     parser.add_argument("--runtime-version", required=True)
     parser.add_argument(
@@ -767,7 +778,13 @@ def main() -> None:
         )
     find_linux_arm64_node_pty(args.dsh_root)
     mobile_auth_preload = read_support_file(MOBILE_AUTH_PRELOAD, "mobile authentication preload")
+    mobile_session_publisher = read_support_file(MOBILE_SESSION_PUBLISHER, "mobile session publisher")
     mobile_spec = validate_mobile_profile(args.mobile_profile) if args.mobile_profile is not None else None
+    if (
+        args.toolchain_dir is None
+        or not (args.toolchain_dir / "python" / "bin" / "python3").is_file()
+    ):
+        raise BuildError("mobile runtime requires the embedded Python session publisher runtime")
     if args.output.exists() or args.manifest.exists():
         raise BuildError("output archive and manifest must not already exist")
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -827,6 +844,11 @@ def main() -> None:
                 "usr/local/lib/dsh-mobile-auth.cjs",
                 mobile_auth_preload,
                 0o644,
+            )
+            writer.add_bytes(
+                "usr/local/lib/dsh-mobile-session-publish.py",
+                mobile_session_publisher,
+                0o600,
             )
             metadata = {
                 "dshVersion": args.dsh_version,

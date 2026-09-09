@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import importlib.util
+import io
 import json
 import os
 import stat
@@ -37,6 +38,11 @@ OFFICIAL_FRONTEND_MARKER = b'name="dsh-official-frontend" content="android-adapt
 LEGACY_MOBILE_FRONTEND_MARKER = b'dsh-mobile-frontend'
 LEGACY_FRONTEND_FILES = frozenset({"plugin-workbench-loader.js"})
 LEGACY_FRONTEND_PREFIXES = ("plugin-workbench/",)
+REPLACEMENT_FILE_MODES = {
+    "usr/local/lib/dsh-mobile-session-publish.py": 0o600,
+}
+RUNTIME_METADATA_PATH = "etc/deepseek-harness-runtime.json"
+RUNTIME_EXECUTABLE_PREFIXES = ("opt/python/bin/",)
 
 
 def is_frontend_dist_path(name: str) -> bool:
@@ -47,6 +53,23 @@ def is_frontend_dist_path(name: str) -> bool:
 def is_replaced_path(name: str, replacements: list[tuple[Path, str]]) -> bool:
     """路径是否命中任一 --replace-file 的归档目标（文件本身或其子树）。"""
     return any(name == target or name.startswith(f"{target}/") for _, target in replacements)
+
+
+def replacement_file_mode(archive_target: str) -> int:
+    """Return the fixed archive mode for a single-file replacement."""
+    return REPLACEMENT_FILE_MODES.get(archive_target, 0o644)
+
+
+def rewrite_runtime_metadata(content: bytes, runtime_version: str) -> bytes:
+    """Keep the bundle's internal runtime version aligned with its manifest."""
+    try:
+        metadata = json.loads(content)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise BuildError("bundle 内运行时元数据无效") from error
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("runtimeVersion"), str):
+        raise BuildError("bundle 内运行时元数据缺少 runtimeVersion")
+    metadata["runtimeVersion"] = runtime_version
+    return (json.dumps(metadata, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n").encode("ascii")
 
 
 def validate_frontend_dist(dist_root: Path) -> None:
@@ -91,7 +114,13 @@ def verify_bundle(bundle: Path, expected_sha256: str) -> None:
         raise BuildError(f"bundle SHA-256 与 manifest 不一致：{actual}")
 
 
-def stream_rebuild(bundle: Path, output: Path, dist_root: Path, replacements: list[tuple[Path, str]]) -> dict:
+def stream_rebuild(
+    bundle: Path,
+    output: Path,
+    dist_root: Path,
+    replacements: list[tuple[Path, str]],
+    runtime_version: str,
+) -> dict:
     """流式复制 bundle，跳过旧前端 dist 与替换目标条目，末尾追加新 dist 树与替换文件。"""
     skipped_count = 0
     skipped_bytes = 0
@@ -101,6 +130,7 @@ def stream_rebuild(bundle: Path, output: Path, dist_root: Path, replacements: li
     existing_directories: set[str] = set()
     copied_paths: set[str] = set()
     deduplicated_count = 0
+    runtime_metadata_bytes_delta = 0
 
     with bundle.open("rb") as raw_input:
         with gzip.open(raw_input, "rb") as compressed_input:
@@ -146,7 +176,17 @@ def stream_rebuild(bundle: Path, output: Path, dist_root: Path, replacements: li
                                 copied_paths.add(normalized_name)
                                 if member.isreg():
                                     file_object = source.extractfile(member)
-                                    target.addfile(member, file_object)
+                                    if normalized_name == RUNTIME_METADATA_PATH:
+                                        original = b"" if file_object is None else file_object.read()
+                                        rewritten = rewrite_runtime_metadata(original, runtime_version)
+                                        runtime_metadata_bytes_delta = len(rewritten) - member.size
+                                        member.size = len(rewritten)
+                                        member.mode = 0o644
+                                        target.addfile(member, io.BytesIO(rewritten))
+                                    else:
+                                        if normalized_name.startswith(RUNTIME_EXECUTABLE_PREFIXES):
+                                            member.mode = 0o755
+                                        target.addfile(member, file_object)
                                 else:
                                     target.addfile(member)
                                 if member.isdir():
@@ -171,7 +211,7 @@ def stream_rebuild(bundle: Path, output: Path, dist_root: Path, replacements: li
                                     writer.add_bytes(
                                         archive_target,
                                         _ber.read_support_file(local_path, str(local_path)),
-                                        0o644,
+                                        replacement_file_mode(archive_target),
                                     )
                             added_bytes = writer.extracted_bytes - before_bytes
 
@@ -182,6 +222,7 @@ def stream_rebuild(bundle: Path, output: Path, dist_root: Path, replacements: li
         "deduplicatedCount": deduplicated_count,
         "addedEntries": 0,  # 由 collect_expected 阶段补充
         "addedBytes": added_bytes,
+        "runtimeMetadataBytesDelta": runtime_metadata_bytes_delta,
         "distRoot": new_dist_root,
     }
 
@@ -225,10 +266,16 @@ def collect_expected(
     return expected
 
 
-def verify_rebuilt(bundle: Path, expected: dict[str, bytes]) -> None:
+def verify_rebuilt(
+    bundle: Path,
+    expected: dict[str, bytes],
+    expected_modes: dict[str, int],
+    expected_runtime_version: str,
+) -> None:
     """流式遍历新 bundle，校验新写入条目完整、旧 dist 条目已清除、全局无重复路径。"""
     print(f"[verify] 校验重建后的 {bundle.name}…")
     found = 0
+    runtime_metadata_found = False
     seen_paths: set[str] = set()
     with tarfile.open(bundle, "r|gz") as source:
         for member in source:
@@ -236,6 +283,21 @@ def verify_rebuilt(bundle: Path, expected: dict[str, bytes]) -> None:
             if normalized in seen_paths:
                 raise BuildError(f"重建后归档包含重复条目：{normalized}")
             seen_paths.add(normalized)
+            if member.isreg() and normalized.startswith(RUNTIME_EXECUTABLE_PREFIXES):
+                if member.mode != 0o755:
+                    raise BuildError(f"重建后运行时文件不可执行：{member.name}")
+            if normalized == RUNTIME_METADATA_PATH:
+                if not member.isreg():
+                    raise BuildError("重建后运行时元数据不是常规文件")
+                content = source.extractfile(member).read()
+                try:
+                    metadata = json.loads(content)
+                except (json.JSONDecodeError, UnicodeDecodeError) as error:
+                    raise BuildError("重建后运行时元数据无效") from error
+                if metadata.get("runtimeVersion") != expected_runtime_version:
+                    raise BuildError("重建后运行时元数据版本不一致")
+                runtime_metadata_found = True
+                continue
             wanted = expected.pop(member.name, None)
             if wanted is None:
                 # 新写入树的目录条目不在 expected 中，允许；内容条目残留才算失败
@@ -246,10 +308,17 @@ def verify_rebuilt(bundle: Path, expected: dict[str, bytes]) -> None:
                 raise BuildError(f"重建后条目类型异常：{member.name}")
             if source.extractfile(member).read() != wanted:
                 raise BuildError(f"重建后内容不一致：{member.name}")
+            expected_mode = expected_modes.get(member.name)
+            if expected_mode is not None and member.mode != expected_mode:
+                raise BuildError(
+                    f"重建后条目权限异常：{member.name} ({member.mode:o} != {expected_mode:o})"
+                )
             found += 1
     if expected:
         missing = ", ".join(sorted(expected))
         raise BuildError(f"新写入条目缺失：{missing}")
+    if not runtime_metadata_found:
+        raise BuildError("重建后缺少运行时元数据")
     print(f"[verify] 新写入共 {found} 个条目校验通过")
 
 
@@ -318,8 +387,19 @@ def main() -> None:
 
     try:
         print(f"[rebuild] 流式重建（跳过旧 dist，追加新 dist，gzip 级别 {ARGS.compression_level}）…")
-        stats = stream_rebuild(bundle, temporary_output, dist_root, replacements)
+        stats = stream_rebuild(
+            bundle,
+            temporary_output,
+            dist_root,
+            replacements,
+            ARGS.runtime_version,
+        )
         expected = collect_expected(dist_root, stats["distRoot"], replacements)
+        expected_modes = {
+            archive_target: replacement_file_mode(archive_target)
+            for local_path, archive_target in replacements
+            if local_path.is_file()
+        }
         stats["addedEntries"] = len(expected)
 
         compressed_bytes = temporary_output.stat().st_size
@@ -327,7 +407,12 @@ def main() -> None:
         manifest["version"] = ARGS.runtime_version
         manifest["rootfs"]["sha256"] = archive_sha256
         manifest["rootfs"]["compressedBytes"] = compressed_bytes
-        manifest["rootfs"]["extractedBytes"] = old_extracted_bytes - stats["skippedBytes"] + stats["addedBytes"]
+        manifest["rootfs"]["extractedBytes"] = (
+            old_extracted_bytes
+            - stats["skippedBytes"]
+            + stats["addedBytes"]
+            + stats["runtimeMetadataBytesDelta"]
+        )
 
         manifest_bytes = (json.dumps(manifest, ensure_ascii=True, indent=2) + "\n").encode("ascii")
         with temporary_manifest.open("xb") as manifest_output:
@@ -343,7 +428,7 @@ def main() -> None:
         manifest_backed_up = True
         os.replace(temporary_manifest, manifest_path)
 
-        verify_rebuilt(bundle, expected)
+        verify_rebuilt(bundle, expected, expected_modes, ARGS.runtime_version)
         committed = True
 
         # 备份只能在校验通过后删除。assets 下残留的任意 .bak 都会被 AAPT 打包，
