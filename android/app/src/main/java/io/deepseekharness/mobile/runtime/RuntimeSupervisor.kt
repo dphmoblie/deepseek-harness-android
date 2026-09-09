@@ -144,7 +144,7 @@ class RuntimeSupervisor(
         try {
             waitForHarness(process, manifest.harnessPort, output)
         } catch (error: RuntimeFailure) {
-            terminate(process)
+            terminate(process, manifest.harnessPort)
             clearHarnessState()
             status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = error.code)
             throw error
@@ -168,12 +168,13 @@ class RuntimeSupervisor(
         status.update(RuntimePhase.STOPPING, nextHarnessUrl = null)
         try {
             val process = harnessProcess
+            val harnessPort = store.installedManifest()?.harnessPort
             if (process == null || !process.isAlive) {
-                reapStaleHarness()
+                reapStaleHarness(harnessPort)
             } else {
-                terminate(process)
+                terminate(process, harnessPort)
             }
-            store.installedManifest()?.let { waitForPortRelease(it.harnessPort) }
+            harnessPort?.let { waitForPortRelease(it) }
             clearHarnessState()
             return@synchronized status.refreshIdle()
         } catch (failure: RuntimeFailure) {
@@ -204,8 +205,9 @@ class RuntimeSupervisor(
     }
 
     /** 回收上次启动残留的 Harness 进程树；pid 文件缺失或进程已退出时仅清理记录。 */
-    private fun reapStaleHarness() {
-        val markedProcesses = findMarkedHarnessProcesses()
+    private fun reapStaleHarness(port: Int? = null) {
+        val markedProcesses = (findMarkedHarnessProcesses() +
+            port?.let(::findListeningProcessIdentities).orEmpty()).distinctBy { it.pid }
         if (markedProcesses.isNotEmpty()) {
             signalProcesses(markedProcesses, OsConstants.SIGKILL)
             waitForProcessExit(markedProcesses, REAP_WAIT_TIMEOUT_MS)
@@ -457,7 +459,7 @@ class RuntimeSupervisor(
         }
     }
 
-    private fun terminate(process: Process) {
+    private fun terminate(process: Process, port: Int?) {
         val rootPid = try { HarnessResidual.parsePid(store.harnessPidFile.readText()) } catch (_: Exception) { null }
         val trustedRoot = rootPid?.takeIf {
             HarnessResidual.isProotProcess(readProcCmdline(it), store.launchRunnerFile.absolutePath)
@@ -468,7 +470,9 @@ class RuntimeSupervisor(
             val tree = trustedRoot?.takeIf(::isSameProcess)?.let { processTree(it.pid) }.orEmpty()
             val treePids = tree.mapTo(mutableSetOf()) { it.pid }
             val marked = findMarkedHarnessProcesses().filterNot { it.pid in treePids }
-            return (tree + marked).also { current ->
+            val listeners = port?.let(::findListeningProcessIdentities).orEmpty()
+                .filterNot { it.pid in treePids || marked.any { markedProcess -> markedProcess.pid == it.pid } }
+            return (tree + marked + listeners).also { current ->
                 current.forEach { identity -> observed[identity.pid] = identity }
             }
         }
@@ -512,6 +516,54 @@ class RuntimeSupervisor(
             }
             pauseWhileStopping(REAP_POLL_INTERVAL_MS)
         }
+    }
+
+    /**
+     * PRoot tracees can outlive the tracer and lose their parent relationship. Locate
+     * listeners for the fixed loopback Harness port through /proc and return only
+     * processes owned by this app, avoiding interference with other applications.
+     */
+    private fun findListeningProcessIdentities(port: Int): List<HarnessProcessIdentity> {
+        if (port !in 1024..65535) return emptyList()
+        val targetPort = port.toString(16).uppercase()
+        val inodes = buildSet {
+            listOf("/proc/net/tcp", "/proc/net/tcp6").forEach { path ->
+                try {
+                    File(path).useLines { lines ->
+                        lines.drop(1).forEach { line ->
+                            val fields = line.trim().split(WHITESPACE)
+                            if (fields.size > 11 && fields[3] == "0A" &&
+                                fields[1].substringAfter(':', "") == targetPort
+                            ) add(fields[11])
+                        }
+                    }
+                } catch (_: Exception) {
+                    // /proc entries may disappear while processes exit.
+                }
+            }
+        }
+        if (inodes.isEmpty()) return emptyList()
+        return File("/proc").listFiles().orEmpty().mapNotNull { entry ->
+            val pid = entry.name.toIntOrNull()?.takeIf { it > 1 } ?: return@mapNotNull null
+            if (!isOwnedByApp(pid)) return@mapNotNull null
+            val fdDir = File(entry, "fd")
+            val ownsSocket = try {
+                fdDir.listFiles().orEmpty().any { fd ->
+                    val target = try { Os.readlink(fd.absolutePath) } catch (_: Exception) { "" }
+                    target.startsWith("socket:[") && target.removePrefix("socket:[").removeSuffix("]") in inodes
+                }
+            } catch (_: Exception) {
+                false
+            }
+            if (ownsSocket) processIdentity(pid) else null
+        }
+    }
+
+    private fun isOwnedByApp(pid: Int): Boolean = try {
+        val uidLine = File("/proc/$pid/status").useLines { lines -> lines.firstOrNull { it.startsWith("Uid:") } }
+        uidLine?.trim()?.split(WHITESPACE)?.getOrNull(1)?.toIntOrNull() == android.os.Process.myUid()
+    } catch (_: Exception) {
+        false
     }
 
     private fun pauseWhileStopping(milliseconds: Long) {
