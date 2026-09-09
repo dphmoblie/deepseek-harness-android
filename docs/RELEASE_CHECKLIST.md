@@ -9,7 +9,7 @@ or otherwise distributing them.
 ## Runtime artifacts
 
 - Build the release image from Ubuntu 24.04 ARM64, Node.js 24.19.0, and
-  `@deepseek-ai/dsh` 0.1.0-rc.6. Record and independently verify the SHA-256
+  `@deepseek-ai/dsh` 0.1.5-alpha.1. Record and independently verify the SHA-256
   of every source archive and package used by
   `scripts/build-embedded-runtime.py`.
 - Verify `/usr/local/bin/dsh`, the ARM64 native Node modules, the runtime
@@ -96,4 +96,4 @@ or otherwise distributing them.
 - Verify every packaged ELF (.so) passes the 16KB alignment check
   (`readelf -l <lib> | grep LOAD` → p_align == 0x4000) before release, and record the
   Honor / Android 16 on-device page-size test (`adb shell getconf PAGE_SIZE` == 16384)
-  in the release notes. See docs/review-2026-08-16.md §6.
+  in the release notes.

@@ -36,6 +36,7 @@ import {
 import { TerminalPanel } from './components/TerminalPanel'
 import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import { MODEL_PROVIDERS } from './modelProviders'
+import { CustomProviders } from './components/CustomProviders'
 import { runtimeBridge } from './platform/native'
 import type {
   ModelProviderId,
@@ -165,7 +166,15 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   HARNESS_MODULE_MISSING: 'Harness 运行模块不完整。',
   HARNESS_NATIVE_MODULE_FAILED: 'Harness 原生模块无法在当前设备运行。',
   HARNESS_START_TIMEOUT: 'Harness 首次启动超时，请重试或先打开 Ubuntu 终端检查环境。',
+  HARNESS_AUTH_UNAVAILABLE: 'Harness 未提供有效的网页认证入口，请更新运行环境后重试。',
   HARNESS_EXITED: 'Harness 在完成启动前已退出。',
+  HARNESS_STOP_FAILED: '无法停止 Harness 进程，请重试。',
+  HARNESS_STOP_TIMEOUT: 'Harness 未在限定时间内停止，请重试。',
+  HARNESS_STOP_INTERRUPTED: 'Harness 停止操作被中断，请重试。',
+  SHIZUKU_UNBIND_TIMEOUT: 'Shizuku 设备服务未在限定时间内退出，请重试。',
+  SHIZUKU_UNBIND_INTERRUPTED: 'Shizuku 设备服务停止操作被中断，请重试。',
+  SHIZUKU_UNBIND_FAILED: '无法停止 Shizuku 设备服务，请重试。',
+  SHIZUKU_DISCONNECTING: 'Shizuku 设备服务正在停止，请稍后重试。',
 }
 
 function runtimeErrorMessage(errorCode?: string): string {
@@ -574,14 +583,18 @@ interface SettingsScreenProps {
 
 function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConnect, onLaunch, onOpenEnvironment, onOpenShizuku, onOpenTerminal, onSave, onStop }: SettingsScreenProps) {
   const [draft, setDraft] = useState<RuntimeSettings | null>(settings)
-  const [selectedProvider, setSelectedProvider] = useState<ModelProviderId>('deepseek')
+  const [selectedProvider, setSelectedProvider] = useState<ModelProviderId | 'custom'>('deepseek')
   const [credentialDrafts, setCredentialDrafts] = useState<ProviderApiKeys>({})
   const [clearedProviders, setClearedProviders] = useState<ModelProviderId[]>([])
+  const [customCredentials, setCustomCredentials] = useState<Record<string, string>>({})
+  const [clearedCustomProviders, setClearedCustomProviders] = useState<string[]>([])
 
   useEffect(() => {
     setDraft(settings)
     setCredentialDrafts({})
     setClearedProviders([])
+    setCustomCredentials({})
+    setClearedCustomProviders([])
   }, [settings])
 
   if (draft === null) {
@@ -598,7 +611,7 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
           ? t("已拒绝")
           : t("待授权")
   const selectedProviderOption = MODEL_PROVIDERS.find(provider => provider.id === selectedProvider) ?? MODEL_PROVIDERS[0]
-  const selectedProviderConfigured = (
+  const selectedProviderConfigured = selectedProvider !== 'custom' && (
     draft.configuredModelProviders.includes(selectedProvider) || credentialDrafts[selectedProvider] !== undefined
   ) && !clearedProviders.includes(selectedProvider)
   const saveDraft = (): void => {
@@ -606,6 +619,8 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
       ...draft,
       ...(Object.keys(credentialDrafts).length === 0 ? {} : { providerApiKeys: credentialDrafts }),
       ...(clearedProviders.length === 0 ? {} : { clearProviderApiKeys: clearedProviders }),
+      ...(Object.keys(customCredentials).length === 0 ? {} : { customProviderApiKeys: customCredentials }),
+      ...(clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: clearedCustomProviders }),
     })
   }
 
@@ -659,16 +674,17 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
             <span>{t("供应商")}</span>
             <select
               value={selectedProvider}
-              onChange={event => setSelectedProvider(event.target.value as ModelProviderId)}
+              onChange={event => setSelectedProvider(event.target.value as ModelProviderId | 'custom')}
             >
               {MODEL_PROVIDERS.map(provider => {
                 const configured = (draft.configuredModelProviders.includes(provider.id) || credentialDrafts[provider.id] !== undefined)
                   && !clearedProviders.includes(provider.id)
                 return <option key={provider.id} value={provider.id}>{provider.label}{configured ? t("（已配置）") : ''}</option>
               })}
+              <option value="custom">{t('自定义')}</option>
             </select>
           </label>
-          <label className="field">
+          {selectedProvider !== 'custom' && <><label className="field">
             <span>{selectedProviderOption.label} API Key · {selectedProviderOption.environmentVariable}</span>
             <input
               type="password"
@@ -709,7 +725,16 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
                 {clearedProviders.includes(selectedProvider) ? t("撤销清除") : t("清除凭据")}
               </button>
             </div>
-          )}
+          )}</>}
+          {selectedProvider === 'custom' && <CustomProviders
+            providers={draft.customModelProviders ?? []}
+            configured={draft.configuredCustomModelProviders ?? []}
+            credentials={customCredentials}
+            cleared={clearedCustomProviders}
+            onChange={providers => setDraft({ ...draft, customModelProviders: providers })}
+            onCredentials={setCustomCredentials}
+            onClear={setClearedCustomProviders}
+          />}
           <label className="toggle-row">
             <span><strong>{t("打开应用时自动启动 Harness")}</strong><small>{t("关闭后需手动点「打开 Harness」启动")}</small></span>
             <input
@@ -911,7 +936,6 @@ export function App() {
   const noticeId = useRef(0)
   const busyRef = useRef<string | null>(null)
   const autoLaunchAttempted = useRef(false)
-  const shizukuConnecting = useRef(false)
 
   const notify = useCallback((message: string, tone: NoticeTone = 'info') => {
     noticeId.current += 1
@@ -990,13 +1014,6 @@ export function App() {
       void runtimeBridge.getShizukuState()
         .then(next => {
           if (!cancelled) setShizuku(next)
-          if (next.running && next.permission === 'granted' && !next.connected && !shizukuConnecting.current) {
-            shizukuConnecting.current = true
-            void runtimeBridge.connectShizuku()
-              .then(connected => { if (!cancelled) setShizuku(connected) })
-              .catch(() => {})
-              .finally(() => { shizukuConnecting.current = false })
-          }
         })
         .catch(error => { if (!cancelled && reportError) notify(errorMessage(error), 'error') })
     }
@@ -1145,6 +1162,7 @@ export function App() {
     void run('save-settings', async () => {
       const saved = await runtimeBridge.saveSettings(nextSettings)
       setSettings(saved)
+      setRuntime(await runtimeBridge.getState())
     }, t("设置已保存"))
   }, [run])
 

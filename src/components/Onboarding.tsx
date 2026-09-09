@@ -1,8 +1,9 @@
+import { useEffect, useState } from 'react'
 import { t } from '../i18n'
-import { useState } from 'react'
 import { ArrowLeft, ArrowRight, Blocks, Check, KeyRound, Loader2, Rocket, ShieldCheck, Sparkles, X } from 'lucide-react'
+import { CustomProviders } from './CustomProviders'
 import { MODEL_PROVIDERS } from '../modelProviders'
-import type { ModelProviderId, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from '../platform/types'
+import type { CustomModelProvider, ModelProviderId, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from '../platform/types'
 
 export const ONBOARDING_STORAGE_KEY = 'dsh-mobile-onboarding-v1'
 
@@ -39,11 +40,29 @@ export function Onboarding({
 }: OnboardingProps) {
   const [step, setStep] = useState(0)
   const [apiKeyDraft, setApiKeyDraft] = useState('')
-  const [selectedProvider, setSelectedProvider] = useState<ModelProviderId>('deepseek')
+  const [selectedProvider, setSelectedProvider] = useState<ModelProviderId | 'custom'>('deepseek')
+  const [customProviders, setCustomProviders] = useState<CustomModelProvider[]>(settings?.customModelProviders ?? [])
+  const [customCredentials, setCustomCredentials] = useState<Record<string, string>>({})
+  const [clearedCustomProviders, setClearedCustomProviders] = useState<string[]>([])
   const last = step === STEPS.length - 1
 
   const installed = ['ready', 'running'].includes(runtime.phase)
   const authorized = shizuku.permission === 'granted'
+
+  useEffect(() => {
+    setCustomProviders(settings?.customModelProviders ?? [])
+    setCustomCredentials({})
+    setClearedCustomProviders([])
+  }, [settings])
+
+  const baseSettings = settings ?? {
+    manifestUrl: '',
+    manifestSha256: '',
+    keepScreenAwake: true,
+    terminalFontSize: 14,
+    configuredModelProviders: [],
+    autoLaunch: true,
+  }
 
   return (
     <div className="dialog-backdrop" role="presentation">
@@ -87,45 +106,63 @@ export function Onboarding({
                 </div>
               )}
               {step === 2 && (
-                <div className="onboarding-body">
+                <form className="onboarding-body" onSubmit={event => {
+                  event.preventDefault()
+                  if (selectedProvider === 'custom') {
+                    onSaveSettings?.({
+                      ...baseSettings,
+                      customModelProviders: customProviders,
+                      ...(Object.keys(customCredentials).length === 0 ? {} : { customProviderApiKeys: customCredentials }),
+                      ...(clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: clearedCustomProviders }),
+                    })
+                    setCustomCredentials({})
+                    setClearedCustomProviders([])
+                    return
+                  }
+                  onSaveSettings?.({
+                    ...baseSettings,
+                    providerApiKeys: { [selectedProvider]: apiKeyDraft.trim() },
+                  })
+                  setApiKeyDraft('')
+                }}>
                   <p>{t("选择模型供应商并保存 API Key。密钥在设备上加密保存，页面不会回显明文。")}</p>
                   <label className="field">
                     <span>{t("供应商")}</span>
-                    <select value={selectedProvider} onChange={event => setSelectedProvider(event.target.value as ModelProviderId)}>
+                    <select value={selectedProvider} onChange={event => setSelectedProvider(event.target.value as ModelProviderId | 'custom')}>
                       {MODEL_PROVIDERS.map(provider => (
                         <option key={provider.id} value={provider.id}>{provider.label}</option>
                       ))}
+                      <option value="custom">{t('自定义')}</option>
                     </select>
                   </label>
-                  <label className="field">
+                  {selectedProvider !== 'custom' && <label className="field">
                     <span>{MODEL_PROVIDERS.find(provider => provider.id === selectedProvider)?.label ?? selectedProvider} API Key</span>
                     <input
                       type="password"
-                      autoComplete="off"
+                      autoComplete="new-password"
                       spellCheck={false}
                       maxLength={200}
                       placeholder={t("留空则稍后在设置页配置")}
                       value={apiKeyDraft}
                       onChange={event => setApiKeyDraft(event.target.value)}
                     />
-                  </label>
-                  <button className="button button-primary" type="button" disabled={apiKeyDraft.trim() === ''} onClick={() => {
-                    onSaveSettings?.({
-                      ...(settings ?? {
-                        manifestUrl: '',
-                        manifestSha256: '',
-                        keepScreenAwake: true,
-                        terminalFontSize: 14,
-                        configuredModelProviders: [],
-                        autoLaunch: true,
-                      }),
-                      providerApiKeys: { [selectedProvider]: apiKeyDraft.trim() },
-                    })
-                    setApiKeyDraft('')
-                  }}>
-                    <KeyRound size={18} />{t("保存 API Key")}</button>
-                  <p className="onboarding-status">{settings?.configuredModelProviders.includes(selectedProvider) ? t("已配置") : t("未配置")}</p>
-                </div>
+                  </label>}
+                  {selectedProvider === 'custom' && <CustomProviders
+                    providers={customProviders}
+                    configured={settings?.configuredCustomModelProviders ?? []}
+                    credentials={customCredentials}
+                    cleared={clearedCustomProviders}
+                    onChange={setCustomProviders}
+                    onCredentials={setCustomCredentials}
+                    onClear={setClearedCustomProviders}
+                  />}
+                  <button className="button button-primary" type="submit" disabled={selectedProvider === 'custom' ? customProviders.length === 0 : apiKeyDraft.trim() === ''}>
+                    <KeyRound size={18} />{selectedProvider === 'custom' ? t('保存自定义供应商') : t('保存 API Key')}
+                  </button>
+                  <p className="onboarding-status">{selectedProvider === 'custom'
+                    ? t('已配置 {0} 个自定义供应商凭据', settings?.configuredCustomModelProviders?.length ?? 0)
+                    : settings?.configuredModelProviders.includes(selectedProvider) ? t('已配置') : t('未配置')}</p>
+                </form>
               )}
               {step === 3 && (
                 <div className="onboarding-body">

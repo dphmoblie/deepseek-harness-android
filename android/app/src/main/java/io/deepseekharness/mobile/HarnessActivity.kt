@@ -34,11 +34,11 @@ class HarnessActivity : AppCompatActivity() {
         const val AUTH_TOKEN_COOKIE = "dsh_mobile_token"
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
     override fun attachBaseContext(newBase: android.content.Context) {
         super.attachBaseContext(AppLanguage.localizedContext(newBase))
     }
 
+    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (!AppAuthenticationState.isHarnessAuthenticated()) {
@@ -166,21 +166,14 @@ class HarnessActivity : AppCompatActivity() {
         returnToMainActivity()
     }
 
-    private data class Origin(val scheme: String, val host: String, val port: Int, val initialUrl: String) {
+    private class Origin(val scheme: String, val host: String, val port: Int, val initialUrl: String) {
         fun allows(uri: Uri): Boolean =
             uri.scheme == scheme && uri.host == host && uri.port == port && uri.userInfo == null
 
         companion object {
             fun parse(raw: String?): Origin? {
-                if (raw.isNullOrEmpty() || raw.length > 256) return null
-                val uri = Uri.parse(raw)
-                if (
-                    uri.scheme != "http" || uri.host != "127.0.0.1" || uri.port !in 1024..65535 ||
-                    uri.userInfo != null || uri.query != null || uri.fragment != null ||
-                    (uri.path != null && uri.path != "" && uri.path != "/")
-                ) return null
-                val normalized = "http://127.0.0.1:${uri.port}/"
-                return Origin("http", "127.0.0.1", uri.port, normalized)
+                val uri = HarnessPageUrl.parseEntryUrl(raw) ?: return null
+                return Origin(uri.scheme, uri.host, uri.port, uri.toASCIIString())
             }
         }
     }

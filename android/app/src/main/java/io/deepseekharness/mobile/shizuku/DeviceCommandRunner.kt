@@ -46,6 +46,7 @@ class DeviceCommandRunner(
 ) {
     private class Pending(val requestId: String) {
         val buffer = StringBuilder()
+        val controlTail = StringBuilder()
         val done = CompletableFuture<DeviceCommandResult>()
         var truncated = false
     }
@@ -93,20 +94,33 @@ class DeviceCommandRunner(
             return
         }
         synchronized(pending.buffer) {
-            if (pending.buffer.length >= MAX_BUFFER_CHARS) {
-                pending.truncated = true
-            } else {
-                val remaining = MAX_BUFFER_CHARS - pending.buffer.length
+            val remaining = MAX_BUFFER_CHARS - pending.buffer.length
+            if (remaining > 0) {
                 pending.buffer.append(text, 0, minOf(text.length, remaining))
                 if (text.length > remaining) pending.truncated = true
+            } else {
+                pending.truncated = true
+            }
+
+            // 输出达到上限后仍保留一个独立的小尾窗；命令哨兵位于流末尾，
+            // 因而不会因正文截断而丢失并等待到超时。
+            pending.controlTail.append(text)
+            if (pending.controlTail.length > MAX_CONTROL_TAIL_CHARS) {
+                pending.controlTail.delete(0, pending.controlTail.length - MAX_CONTROL_TAIL_CHARS)
             }
             val sentinel = "__DSH_END_" + pending.requestId + "__"
-            val idx = pending.buffer.indexOf(sentinel)
+            val idx = pending.controlTail.indexOf(sentinel)
             if (idx >= 0) {
-                val payload = pending.buffer.substring(0, idx)
-                val rest = pending.buffer.substring(idx + sentinel.length)
-                val exitCode = Regex("^:(\\d{1,3})").find(rest)?.groupValues?.get(1)?.toIntOrNull()?.coerceIn(0, 255) ?: -1
-                pending.done.complete(DeviceCommandResult(true, exitCode, payload, pending.truncated, null))
+                val capturedSentinel = pending.buffer.indexOf(sentinel)
+                val payload = if (capturedSentinel >= 0) {
+                    pending.buffer.substring(0, capturedSentinel)
+                } else {
+                    pending.buffer.toString()
+                }
+                val rest = pending.controlTail.substring(idx + sentinel.length)
+                val exitCode = Regex("^:(\\d{1,3})\\r?\\n").find(rest)?.groupValues?.get(1)?.toIntOrNull() ?: return
+                pending.done.complete(DeviceCommandResult(exitCode == 0, exitCode, payload, pending.truncated,
+                    if (exitCode == 0) null else "DEVICE_COMMAND_FAILED"))
             }
         }
     }
@@ -119,35 +133,47 @@ class DeviceCommandRunner(
         inflight.clear()
     }
 
-    private fun buildInput(requestId: String, command: DeviceCommand, param: String): String {
+    internal fun buildInput(requestId: String, command: DeviceCommand, param: String): String {
+        if (!REQUEST_ID_PATTERN.matches(requestId)) {
+            throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令请求标识无效")
+        }
+        val sentinel = "__DSH_END_${requestId}__"
         val line = when (command) {
             DeviceCommand.SCREENSHOT -> "screencap -p | toybox base64"
-            DeviceCommand.UI_DUMP -> "uiautomator dump /data/local/tmp/dsh-ui.xml && cat /data/local/tmp/dsh-ui.xml"
+            DeviceCommand.UI_DUMP -> {
+                val temporary = "/data/local/tmp/dsh-ui-$requestId.xml"
+                return "trap 'rm -f $temporary' EXIT HUP INT TERM; " +
+                    "uiautomator dump $temporary && cat $temporary; " +
+                    "dsh_status=\$?; rm -f $temporary; trap - EXIT HUP INT TERM; " +
+                    "echo $sentinel:\$dsh_status\n"
+            }
             DeviceCommand.TAP -> {
                 val parts = param.split(",", limit = 2)
                 val x = parts.getOrNull(0)?.trim()?.toIntOrNull()
                     ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
                 val y = parts.getOrNull(1)?.trim()?.toIntOrNull()
                     ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
-                if (x < 0 || y < 0) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
+                if (x !in 0..65535 || y !in 0..65535) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
                 "input tap $x $y"
             }
             DeviceCommand.INPUT_TEXT -> {
                 if (param.isEmpty() || param.length > MAX_TEXT_CHARS) {
                     throw RuntimeFailure("DEVICE_COMMAND_INVALID", "输入文本无效")
                 }
-                if (param.any { it.code > 0x7f || it == '\'' || it == '"' || it == '\\' || it == ';' || it == '$' || it == '\u0060' }) {
+                if (param.any { it.code !in 0x20..0x7e || it == '\'' || it == '"' || it == '\\' || it == ';' || it == '$' || it == '\u0060' }) {
                     throw RuntimeFailure("DEVICE_COMMAND_INVALID", "输入文本仅支持 ASCII 且不含引号/分号/反斜杠等字符")
                 }
                 "input text '$param'"
             }
         }
-        return line + "; echo __DSH_END_" + requestId + "__:$?\n"
+        return "$line; echo $sentinel:\$?\n"
     }
 
     companion object {
         private const val ECHO_SETTLE_MILLIS = 250L
         private const val MAX_BUFFER_CHARS = 8 * 1024 * 1024
+        private const val MAX_CONTROL_TAIL_CHARS = 256
         private const val MAX_TEXT_CHARS = 1024
+        private val REQUEST_ID_PATTERN = Regex("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
     }
 }

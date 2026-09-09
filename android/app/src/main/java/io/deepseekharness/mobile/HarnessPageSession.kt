@@ -1,5 +1,8 @@
 package io.deepseekharness.mobile
 
+import io.deepseekharness.mobile.runtime.HarnessWebAuth
+import java.net.URI
+
 internal enum class CookieLoadDecision {
     LOAD,
     REJECT,
@@ -42,13 +45,23 @@ internal object HarnessSessionCookie {
 }
 
 internal object HarnessPageUrl {
-    private val ROOT_URL = Regex("http://127\\.0\\.0\\.1:([0-9]{4,5})/")
+    private val ROOT_URL = Regex("http://127\\.0\\.0\\.1:([1-9][0-9]{3,4})/")
     private val APP_VERSION = Regex("[A-Za-z0-9._-]{1,64}")
 
-    fun withAppVersion(rootUrl: String, appVersion: String): String {
-        val port = ROOT_URL.matchEntire(rootUrl)?.groupValues?.get(1)?.toIntOrNull()
-        require(port != null && port in 1024..65535) { "Harness root URL has an invalid format" }
+    fun parseEntryUrl(raw: String?): URI? {
+        if (raw.isNullOrEmpty() || raw.length > 128) return null
+        HarnessWebAuth.parseLaunchUrl(raw)?.let { return it }
+        // Security: legacy entries accept only the canonical loopback root without a query.
+        val port = ROOT_URL.matchEntire(raw)?.groupValues?.get(1)?.toIntOrNull() ?: return null
+        if (port !in 1024..65535) return null
+        return URI(raw)
+    }
+
+    fun withAppVersion(entryUrl: String, appVersion: String): String {
+        val entry = requireNotNull(parseEntryUrl(entryUrl)) { "Harness entry URL has an invalid format" }
         require(APP_VERSION.matches(appVersion)) { "Application version has an invalid format" }
-        return "${rootUrl}?appVersion=$appVersion"
+        // Retain DSH's validated bootstrap token while adding the mobile version parameter.
+        val query = listOfNotNull(entry.rawQuery, "appVersion=$appVersion").joinToString("&")
+        return URI(entry.scheme, null, entry.host, entry.port, entry.path, query, null).toASCIIString()
     }
 }

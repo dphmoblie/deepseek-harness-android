@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import net from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
@@ -143,5 +146,90 @@ describe('mobile Harness authentication preload', () => {
       await upgrade(port, { cookie: 'dsh_mobile_token=short' }),
       /^HTTP\/1\.1 401 Unauthorized/,
     )
+  })
+})
+
+describe('mobile session publication fallback', () => {
+  let fixtureDirectory
+  let failurePreload
+
+  before(async () => {
+    fixtureDirectory = await mkdtemp(join(tmpdir(), 'dsh-mobile-link-'))
+    failurePreload = join(fixtureDirectory, 'force-link-failure.cjs')
+    await writeFile(failurePreload, `
+      'use strict'
+      const fsp = require('node:fs/promises')
+      fsp.link = async () => {
+        const error = new Error('forced Android PRoot hard-link failure')
+        error.code = 'EACCES'
+        throw error
+      }
+      require('node:child_process').execFile = (file, args, _options, callback) => {
+        const valid = file === '/opt/python/bin/python3' &&
+          args[0] === '/usr/local/lib/dsh-mobile-session-publish.py' &&
+          args[1] === '/root/.dsh/sessions/project/session/session.v3.jsonl.zstd.0123456789ab.tmp' &&
+          args[2] === '/root/.dsh/sessions/project/session/session.v3.jsonl.zstd'
+        if (!valid) {
+          const error = new Error('invalid publisher invocation')
+          error.code = 5
+          callback(error, '', '')
+          return
+        }
+        if (process.env.DSH_MOBILE_LINK_TEST_MODE === 'collision') {
+          const error = new Error('target exists')
+          error.code = 17
+          callback(error, '', '')
+        } else {
+          callback(null, '', '')
+        }
+      }
+    `, { mode: 0o600 })
+  })
+
+  after(async () => {
+    if (fixtureDirectory !== undefined) await rm(fixtureDirectory, { recursive: true, force: true })
+  })
+
+  async function runFallback(mode) {
+    const source = '/root/.dsh/sessions/project/session/session.v3.jsonl.zstd.0123456789ab.tmp'
+    const target = '/root/.dsh/sessions/project/session/session.v3.jsonl.zstd'
+    const childSource = `
+      (async () => {
+        const { link } = await import('node:fs/promises')
+        try {
+          await link(${JSON.stringify(source)}, ${JSON.stringify(target)})
+          process.stdout.write('published')
+        } catch (error) {
+          process.stdout.write(String(error.code))
+        }
+      })().catch(() => process.exit(2))
+    `
+    const child = spawn(process.execPath, ['-e', childSource], {
+      env: {
+        ...process.env,
+        DSH_MOBILE_AUTH_TOKEN: TOKEN,
+        DSH_MOBILE_LINK_TEST_MODE: mode,
+        NODE_OPTIONS: `--require=${failurePreload} --require=${PRELOAD}`,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const stdout = []
+    const stderr = []
+    child.stdout.on('data', chunk => stdout.push(chunk))
+    child.stderr.on('data', chunk => stderr.push(chunk))
+    const exitCode = await new Promise((resolve, reject) => {
+      child.once('error', reject)
+      child.once('exit', resolve)
+    })
+    assert.equal(exitCode, 0, Buffer.concat(stderr).toString('utf8'))
+    return Buffer.concat(stdout).toString('utf8')
+  }
+
+  it('uses the bounded no-replace publisher after a PRoot permission failure', async () => {
+    assert.equal(await runFallback('success'), 'published')
+  })
+
+  it('preserves EEXIST when another writer published first', async () => {
+    assert.equal(await runFallback('collision'), 'EEXIST')
   })
 })

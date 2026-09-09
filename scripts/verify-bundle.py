@@ -11,6 +11,7 @@ import json
 import posixpath
 import re
 import sys
+from pathlib import Path
 from pathlib import PurePosixPath
 
 MAX_ENTRIES = 250_000
@@ -19,11 +20,8 @@ MAX_COMPONENT_CHARS = 255
 PROFILE_BUNDLE_NAMES = (
     "@deepseek-ai/dsh-base",
     "@deepseek-ai/dsh-web-app",
-    "@linxin666/dsh-web-ui-all",
-    "@liustack/modlens",
-    "dshmarket",
+    "@deepseek-harness/dsh-mobile-shizuku",
 )
-OPTIONAL_PROFILE_BUNDLES = frozenset({"dsh-mobile-compat"})
 RUNTIME_BUILD_METADATA_PATHS = frozenset(
     {
         "opt/dsh/pnpm-lock.yaml",
@@ -40,31 +38,19 @@ MOBILE_BUNDLE_PATTERN = re.compile(
 OFFICIAL_FRONTEND_MARKER = b'name="dsh-official-frontend" content="android-adapted-v1"'
 LEGACY_MOBILE_FRONTEND_MARKER = b'dsh-mobile-frontend'
 FRONTEND_DIST_SUFFIX = "/node_modules/@deepseek-ai/dsh-web-frontend/dist/"
+DSH_PACKAGE_PATTERN = re.compile(
+    r"^opt/dsh/node_modules/\.pnpm/@deepseek-ai\+dsh@[^/]+/node_modules/@deepseek-ai/dsh/package\.json$"
+)
 LEGACY_FRONTEND_FILES = frozenset({"plugin-workbench-loader.js"})
 LEGACY_FRONTEND_PREFIXES = ("plugin-workbench/",)
+SUPPORT_FILES = {
+    "usr/local/lib/dsh-mobile-auth.cjs": Path(__file__).with_name("mobile-auth-preload.cjs"),
+    "usr/local/lib/dsh-mobile-session-publish.py": Path(__file__).with_name("mobile-session-publish.py"),
+}
 
 
 def normalized(raw: str) -> str:
     return raw.removesuffix("/")
-
-
-def runtime_path_contains_package(name: str, package_name: str) -> bool:
-    prefix = "opt/dsh/"
-    if not name.startswith(prefix):
-        return False
-    parts = PurePosixPath(name.removeprefix(prefix)).parts
-    package_parts = PurePosixPath(package_name).parts
-    if parts[: len(package_parts)] == package_parts:
-        return True
-    for index, part in enumerate(parts):
-        if part == "node_modules" and parts[index + 1 : index + 1 + len(package_parts)] == package_parts:
-            return True
-    encoded_name = package_name.replace("/", "+")
-    return (
-        len(parts) >= 3
-        and parts[:2] == ("node_modules", ".pnpm")
-        and (parts[2] == encoded_name or parts[2].startswith(f"{encoded_name}@"))
-    )
 
 
 def main() -> int:
@@ -78,11 +64,17 @@ def main() -> int:
 
     seen: set[str] = set()
     types: dict[str, str] = {}
+    file_modes: dict[str, int] = {}
     symlinks: list[tuple[str, str]] = []
     hardlinks: list[tuple[str, str]] = []
     entry_count = 0
     extracted = 0
     frontend_indexes: list[str] = []
+    pnpm_wrapper: bytes | None = None
+    web_profile_workspace: bytes | None = None
+    runtime_metadata: bytes | None = None
+    dsh_package_metadata: list[bytes] = []
+    support_files: dict[str, tuple[bytes, int]] = {}
     fail = lambda msg: (_ for _ in ()).throw(SystemExit(f"BUNDLE_VERIFY_FAILED: {msg}"))
 
     import tarfile
@@ -105,9 +97,29 @@ def main() -> int:
                 continue
             if m.isreg():
                 types[name] = "file"
+                file_modes[name] = m.mode
                 if m.size < 0:
                     fail(f"negative-size file: {name!r}")
                 extracted += m.size
+                if name in {
+                    "usr/local/bin/pnpm",
+                    "root/.dsh/profiles/web/pnpm-workspace.yaml",
+                    "etc/deepseek-harness-runtime.json",
+                }:
+                    source = t.extractfile(m)
+                    content = b"" if source is None else source.read()
+                    if name == "usr/local/bin/pnpm":
+                        pnpm_wrapper = content
+                    elif name == "root/.dsh/profiles/web/pnpm-workspace.yaml":
+                        web_profile_workspace = content
+                    else:
+                        runtime_metadata = content
+                elif DSH_PACKAGE_PATTERN.fullmatch(name):
+                    source = t.extractfile(m)
+                    dsh_package_metadata.append(b"" if source is None else source.read())
+                elif name in SUPPORT_FILES:
+                    source = t.extractfile(m)
+                    support_files[name] = (b"" if source is None else source.read(), m.mode)
                 if FRONTEND_DIST_SUFFIX in name:
                     dist_path = name.split(FRONTEND_DIST_SUFFIX, 1)[1]
                     if dist_path == "index.html":
@@ -139,8 +151,52 @@ def main() -> int:
 
     if extracted != expected_extracted:
         fail(f"extracted size mismatch: {extracted} != {expected_extracted}")
+    expected_dsh_version = manifest.get("dshVersion")
+    if not isinstance(expected_dsh_version, str) or not re.fullmatch(
+        r"[A-Za-z0-9._-]{1,96}", expected_dsh_version
+    ):
+        fail("manifest dshVersion is missing or invalid")
+    try:
+        metadata = json.loads(runtime_metadata) if runtime_metadata is not None else None
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        metadata = None
+    if not isinstance(metadata, dict):
+        fail("runtime build metadata is missing or invalid")
+    if metadata.get("dshVersion") != expected_dsh_version:
+        fail(
+            "runtime dshVersion mismatch: "
+            f"{metadata.get('dshVersion')!r} != {expected_dsh_version!r}"
+        )
+    expected_runtime_version = manifest.get("version")
+    if not isinstance(expected_runtime_version, str) or not re.fullmatch(
+        r"[A-Za-z0-9._-]{1,96}", expected_runtime_version
+    ):
+        fail("manifest runtime version is missing or invalid")
+    if metadata.get("runtimeVersion") != expected_runtime_version:
+        fail(
+            "runtime version mismatch: "
+            f"{metadata.get('runtimeVersion')!r} != {expected_runtime_version!r}"
+        )
+    if len(dsh_package_metadata) != 1:
+        fail(f"expected exactly one Harness runtime package, found {len(dsh_package_metadata)}")
+    try:
+        packaged_dsh_version = json.loads(dsh_package_metadata[0]).get("version")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        packaged_dsh_version = None
+    if packaged_dsh_version != expected_dsh_version:
+        fail(
+            "packaged Harness version mismatch: "
+            f"{packaged_dsh_version!r} != {expected_dsh_version!r}"
+        )
     if len(frontend_indexes) != 1:
         fail(f"expected exactly one official frontend index, found {len(frontend_indexes)}")
+    for archive_path, local_path in SUPPORT_FILES.items():
+        packaged = support_files.get(archive_path)
+        if packaged is None or packaged[0] != local_path.read_bytes():
+            fail(f"mobile support file is missing or stale: {archive_path!r}")
+        expected_mode = 0o600 if archive_path.endswith(".py") else 0o644
+        if packaged[1] != expected_mode:
+            fail(f"mobile support file mode is invalid: {archive_path!r}")
 
     # 文件-目录冲突（提取器 ensureDirectory 规则：父路径被非目录条目占用）
     for name, kind in list(types.items()):
@@ -199,6 +255,11 @@ def main() -> int:
         ("etc/os-release", "../usr/lib/os-release"),
         ("etc/localtime", "/usr/share/zoneinfo/Etc/UTC"),
         ("usr/local/bin/node", "../../../opt/node/bin/node"),
+        ("usr/local/bin/npm", "../../../opt/node/bin/npm"),
+        ("usr/local/bin/npx", "../../../opt/node/bin/npx"),
+        ("usr/local/bin/corepack", "../../../opt/node/bin/corepack"),
+        ("usr/local/bin/python3", "../../opt/python/bin/python3"),
+        ("usr/local/bin/python", "../../opt/python/bin/python3"),
     ]
 
     def canonical_target(name: str, target: str) -> str:
@@ -211,6 +272,31 @@ def main() -> int:
         actual = next(target for n, target in symlinks if n == name)
         if canonical_target(name, actual) != canonical_target(name, expected):
             fail(f"required symlink target mismatch: {name!r} -> {actual!r} (expected {expected!r})")
+
+    python_link = "opt/python/bin/python3"
+    if types.get(python_link) != "sym":
+        fail("embedded Python interpreter link is missing")
+    python_target = next(target for name, target in symlinks if name == python_link)
+    python_executable = canonical_target(python_link, python_target).lstrip("/")
+    if types.get(python_executable) != "file" or file_modes.get(python_executable) != 0o755:
+        fail("embedded Python interpreter target is missing or not executable")
+    for name, mode in file_modes.items():
+        if name.startswith("opt/python/bin/") and mode != 0o755:
+            fail(f"embedded Python command is not executable: {name!r}")
+
+    expected_pnpm_wrapper = (
+        b"#!/bin/sh\n"
+        b'exec /opt/node/bin/node /opt/dsh/node_modules/pnpm/bin/pnpm.cjs "$@"\n'
+    )
+    if pnpm_wrapper != expected_pnpm_wrapper:
+        fail("pinned pnpm wrapper is missing or invalid")
+    pnpm_package_link = "opt/dsh/node_modules/pnpm"
+    if types.get(pnpm_package_link) != "sym":
+        fail("pinned pnpm package link is missing")
+    pnpm_package_target = next(target for name, target in symlinks if name == pnpm_package_link)
+    pnpm_package_dir = canonical_target(pnpm_package_link, pnpm_package_target).lstrip("/")
+    if types.get(f"{pnpm_package_dir}/bin/pnpm.cjs") != "file":
+        fail("pinned pnpm package entrypoint is missing")
 
     # profiles 扁平模块回退：dsh 启动时 cordis 从 profile 目录解析 loader entry，
     # 必须能在 $DSH_HOME/profiles/node_modules 找到全部 profile bundles。
@@ -228,28 +314,16 @@ def main() -> int:
                 if isinstance(bundles, list) and 0 < len(bundles) <= 64:
                     if any(not isinstance(name, str) or not MOBILE_BUNDLE_PATTERN.fullmatch(name) for name in bundles):
                         fail("manifest mobile profile contains an invalid bundle name")
-                    disabled_requested = sorted(OPTIONAL_PROFILE_BUNDLES.intersection(bundles))
-                    if disabled_requested:
-                        fail(
-                            "manifest mobile profile enables a disabled Android bundle: "
-                            f"{disabled_requested[0]!r}"
-                        )
                     profile_bundle_names = list(bundles)
         if not profile_bundle_names:
             fail("manifest mobile profile does not declare any bundle names")
+        expected_workspace = b"packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n"
+        if web_profile_workspace != expected_workspace:
+            fail("mobile web profile pnpm workspace is missing or invalid")
 
     leaked_metadata = sorted(RUNTIME_BUILD_METADATA_PATHS.intersection(seen))
     if leaked_metadata:
         fail(f"runtime contains build-only package-manager metadata: {leaked_metadata[0]!r}")
-    for package_name in sorted(OPTIONAL_PROFILE_BUNDLES.difference(profile_bundle_names)):
-        leaked_paths = sorted(
-            name for name in seen if runtime_path_contains_package(name, package_name)
-        )
-        if leaked_paths:
-            fail(
-                f"runtime contains disabled optional bundle {package_name!r}: "
-                f"{leaked_paths[0]!r}"
-            )
     for package_name in profile_bundle_names:
         link_name = f"root/.dsh/profiles/node_modules/{package_name}"
         if types.get(link_name) != "sym":

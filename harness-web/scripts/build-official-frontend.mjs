@@ -14,10 +14,10 @@ validateOfficialIndex(sourceIndex)
 // 安全校验：只接受包内资源路径，拒绝外部入口和目录穿越；缺少资源时终止打包。
 const sourceAssets = [...sourceIndex.matchAll(/(?:src|href)="([^"]+)"/gu)].map(match => match[1])
 for (const path of sourceAssets) {
-  if (!/^\/[A-Za-z0-9._/-]{1,240}$/u.test(path) || path.includes('..')) {
+  if (!/^(?:\.\/|\/)[A-Za-z0-9._/-]{1,240}$/u.test(path) || path.includes('..')) {
     throw new Error('官方前端包含非法资源路径')
   }
-  await readFile(join(sourceRoot, path.slice(1)))
+  await readFile(join(sourceRoot, path.replace(/^\.\//u, '').replace(/^\//u, '')))
 }
 
 await rm(temporaryRoot, { recursive: true, force: true })
@@ -46,7 +46,7 @@ function validateOfficialIndex(value) {
   if (!value.includes('<div id="root"></div>') || !value.includes('</head>')) {
     throw new Error('官方前端 index.html 结构异常')
   }
-  if (!/<script\b[^>]*\bsrc="\/assets\/[A-Za-z0-9._/-]+"/u.test(value)) {
+  if (!/<script\b[^>]*\bsrc="(?:\.\/|\/)assets\/[A-Za-z0-9._/-]+"/u.test(value)) {
     throw new Error('官方前端 index.html 缺少受支持的入口资源')
   }
   if (value.includes('dsh-mobile-frontend') || value.includes('plugin-workbench')) {

@@ -73,6 +73,11 @@ jobs:
       - name: Official Harness frontend adapter tests
         run: pnpm --dir harness-web test
 
+      - name: Install Shizuku plugin contract dependencies
+        # Contract tests import the real plugin from its separate runtime workspace.
+        # Native build scripts run in the ARM64 rootfs job.
+        run: pnpm --dir scripts/runtime-profile install --frozen-lockfile --ignore-scripts
+
       - name: Script tests (node --test)
         run: pnpm run test:scripts
 
@@ -227,6 +232,7 @@ jobs:
           mkdir -p /tmp/dsh-root
           cp scripts/runtime-profile/package.json scripts/runtime-profile/pnpm-lock.yaml \
             scripts/runtime-profile/pnpm-workspace.yaml /tmp/dsh-root/
+          cp -R scripts/runtime-profile/plugins /tmp/dsh-root/
           cd /tmp/dsh-root
           set +e
           (
@@ -423,7 +429,7 @@ jobs:
           ## 资产
 
           - $(basename "$APK")（APK，含 PRoot 运行器）
-          - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.1.0-rc.6 + 官方 Harness 前端 Android 适配）
+          - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.1.5-alpha.1 + 官方 Harness 前端 Android 适配）
           - runtime-manifest.json
           - checksums.txt（以上三项资产的 SHA-256）
 

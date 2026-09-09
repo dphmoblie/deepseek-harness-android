@@ -9,7 +9,7 @@ import kotlin.concurrent.withLock
 class MobileRuntimeController(
     context: Context,
     onProgress: (RuntimeStateSnapshot) -> Unit,
-    onTerminalOutput: (sessionId: String, dataBase64: String) -> Unit,
+    onTerminalOutput: (sessionId: String, dataBase64: String, suppressPublicOutput: Boolean) -> Unit,
     onTerminalExit: (sessionId: String, exitCode: Int) -> Unit,
 ) {
     private val lifecycleLock = ReentrantLock()
@@ -33,22 +33,66 @@ class MobileRuntimeController(
         supervisor.startHarness()
     }
 
-    fun stopRuntime(): RuntimeStateSnapshot = lifecycleLock.withLock {
+    fun requestStartCancellation(): Boolean = supervisor.requestStartCancellation()
+
+    fun configureDeviceBridge(access: DeviceBridgeAccess) = lifecycleLock.withLock {
         ensureOpen()
-        supervisor.stop()
-        terminals.closeAllAndWait()
-        status.refreshIdle()
+        supervisor.configureDeviceBridge(access)
     }
 
-    fun reset(confirmation: String?): RuntimeStateSnapshot = lifecycleLock.withLock {
+    fun saveSettings(
+        settings: RuntimeSettings,
+        providerApiKeyUpdates: Map<ModelProvider, String>,
+        clearedProviderApiKeys: Set<ModelProvider>,
+        customProviders: List<CustomModelProvider>,
+        customProviderApiKeyUpdates: Map<String, String>,
+        clearedCustomProviderApiKeys: Set<String>,
+    ): RuntimeSettings = lifecycleLock.withLock {
+        ensureOpen()
+        val modelConfigurationChanged = providerApiKeyUpdates.isNotEmpty() || clearedProviderApiKeys.isNotEmpty() ||
+            customProviderApiKeyUpdates.isNotEmpty() || clearedCustomProviderApiKeys.isNotEmpty() ||
+            customProviders != store.settings().customModelProviders
+        val restartHarness = modelConfigurationChanged && supervisor.isRunning()
+        if (modelConfigurationChanged) supervisor.stop()
+        val saved = store.saveSettings(
+            settings,
+            providerApiKeyUpdates,
+            clearedProviderApiKeys,
+            customProviders,
+            customProviderApiKeyUpdates,
+            clearedCustomProviderApiKeys,
+        )
+        if (restartHarness) supervisor.startHarness()
+        saved
+    }
+
+    fun stopRuntime(): RuntimeStateSnapshot {
+        supervisor.requestStartCancellation()
+        return lifecycleLock.withLock {
+            ensureOpen()
+            BestEffortCleanup.runAll(
+                { supervisor.stop() },
+                { terminals.closeAllAndWait() },
+            )
+            status.refreshIdle()
+        }
+    }
+
+    fun reset(confirmation: String?): RuntimeStateSnapshot {
         ensureOpen()
         if (confirmation != "RESET_RUNTIME") {
             throw RuntimeFailure("RESET_CONFIRMATION_INVALID", "重置确认文本无效")
         }
-        supervisor.stop()
-        terminals.closeAllAndWait()
-        installer.resetWorkspace()
-        status.snapshot()
+        supervisor.requestStartCancellation()
+        return lifecycleLock.withLock {
+            ensureOpen()
+            BestEffortCleanup.runAll(
+                { supervisor.stop() },
+                { terminals.closeAllAndWait() },
+            )
+            installer.resetWorkspace()
+            status.snapshot()
+        }
     }
 
     fun createTerminal(kind: String, columns: Int, rows: Int): String = lifecycleLock.withLock {
@@ -107,6 +151,7 @@ class MobileRuntimeController(
     fun shutdown() {
         if (!closed.compareAndSet(false, true)) return
         installer.cancelInstall()
+        supervisor.requestStartCancellation()
         lifecycleLock.withLock {
             BestEffortCleanup.runAll(
                 { supervisor.stop() },

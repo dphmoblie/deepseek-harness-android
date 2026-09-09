@@ -41,4 +41,23 @@ class HarnessResidualTest {
         assertFalse(HarnessResidual.isProotProcess("${runner}-extra\u0000-r", runner))
         assertFalse(HarnessResidual.isProotProcess("$runner\u0000-r", "/other/path/proot"))
     }
+
+    @Test
+    fun matchesOnlyCompleteEnvironmentEntry() {
+        val pidFile = "/data/user/0/io.deepseekharness.mobile/no_backup/harness.pid"
+        val environment = "PATH=/usr/bin\u0000DSH_PIDFILE=$pidFile\u0000HOME=/root\u0000"
+
+        assertTrue(HarnessResidual.hasEnvironmentEntry(environment, "DSH_PIDFILE", pidFile))
+        assertFalse(HarnessResidual.hasEnvironmentEntry(environment, "DSH_PIDFILE", "$pidFile.old"))
+        assertFalse(HarnessResidual.hasEnvironmentEntry(environment, "PIDFILE", pidFile))
+        assertFalse(HarnessResidual.hasEnvironmentEntry(environment, "BAD=NAME", pidFile))
+        assertFalse(HarnessResidual.hasEnvironmentEntry(environment, "DSH_PIDFILE", "$pidFile\u0000OTHER=value"))
+    }
+
+    @Test
+    fun rejectsMalformedEnvironmentNamesAndValues() {
+        assertFalse(HarnessResidual.hasEnvironmentEntry("DSH_PIDFILE=/tmp/a", "", "/tmp/a"))
+        assertFalse(HarnessResidual.hasEnvironmentEntry("DSH_PIDFILE=/tmp/a", "DSH=PIDFILE", "/tmp/a"))
+        assertFalse(HarnessResidual.hasEnvironmentEntry("DSH_PIDFILE=/tmp/a", "DSH_PIDFILE", "/tmp/a\u0000x"))
+    }
 }

@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Onboarding } from './Onboarding'
+import { saveLanguage } from '../i18n'
 import type { RuntimeSettings, RuntimeState, ShizukuState } from '../platform/types'
 
 const runtime: RuntimeState = {
@@ -40,6 +41,8 @@ function renderOnboarding(overrides: Partial<Parameters<typeof Onboarding>[0]> =
 }
 
 describe('Onboarding', () => {
+  beforeEach(() => { saveLanguage('zh-CN') })
+
   it('renders the welcome step and navigates forward', () => {
     renderOnboarding()
     expect(screen.getByText('欢迎使用 DeepSeek Harness Android')).toBeDefined()
@@ -58,6 +61,35 @@ describe('Onboarding', () => {
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
     fireEvent.click(screen.getByRole('button', { name: /安装运行时/ }))
     expect(props.onInstall).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    { language: 'zh-CN', next: '下一步', provider: '供应商', add: '添加自定义供应商', providerName: '供应商名称', modelId: '模型 ID', modelName: '模型名称', save: '保存自定义供应商' },
+    { language: 'en', next: 'Next', provider: 'Provider', add: 'Add custom provider', providerName: 'Provider name', modelId: 'Model ID', modelName: 'Model name', save: 'Save custom provider' },
+  ])('saves a custom provider from the model step in $language', labels => {
+    saveLanguage(labels.language)
+    const onSaveSettings = vi.fn()
+    renderOnboarding({ onSaveSettings })
+    fireEvent.click(screen.getByRole('button', { name: labels.next }))
+    fireEvent.click(screen.getByRole('button', { name: labels.next }))
+    fireEvent.change(screen.getByRole('combobox', { name: labels.provider }), { target: { value: 'custom' } })
+    fireEvent.click(screen.getByRole('button', { name: labels.add }))
+    fireEvent.change(screen.getByRole('textbox', { name: labels.providerName }), { target: { value: 'Gateway' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Base URL' }), { target: { value: 'https://api.example.com/v1' } })
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'test-placeholder-key' } })
+    fireEvent.change(screen.getByRole('textbox', { name: labels.modelId }), { target: { value: 'example/model' } })
+    fireEvent.change(screen.getByRole('textbox', { name: labels.modelName }), { target: { value: 'Example Model' } })
+    fireEvent.click(screen.getByRole('button', { name: labels.save }))
+
+    expect(onSaveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      customModelProviders: [expect.objectContaining({
+        id: 'custom-1',
+        api: 'openai-completions',
+        baseUrl: 'https://api.example.com/v1',
+        models: [expect.objectContaining({ id: 'example/model' })],
+      })],
+      customProviderApiKeys: { 'custom-1': 'test-placeholder-key' },
+    }))
   })
 
   it('calls onAuthorize when Shizuku is available and not granted', () => {

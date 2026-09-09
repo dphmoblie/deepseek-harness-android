@@ -1123,6 +1123,16 @@ button:disabled {
   margin-top: 9px;
 }
 
+.custom-providers, .custom-provider { display: grid; gap: 16px; min-width: 0; }
+.custom-provider { border-bottom: 1px solid #d8dde2; padding-bottom: 20px; }
+.custom-provider-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.custom-provider-heading h3 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.custom-provider-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.custom-model { border: 0; border-top: 1px solid #e3e6e9; padding: 12px 0 0; margin: 0; min-width: 0; }
+.custom-model legend { font-size: 14px; padding-right: 8px; }
+.custom-providers .icon-button { width: 36px; height: 36px; flex: 0 0 36px; display: inline-grid; place-items: center; }
+@media (max-width: 420px) { .custom-provider-fields { grid-template-columns: minmax(0, 1fr); } }
+
 .mono-input {
   font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
   font-size: 12px !important;

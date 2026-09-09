@@ -72,10 +72,7 @@ choose another executable, add process arguments, or run a background command
 without an open user-visible terminal session. Shizuku supplies shell-level
 privileges, not root or Android hardware virtualization.
 
-一次性特权设备自动化（screencap/uiautomator/input 等）由 `ReflectiveShellExecutor`
-经反射调用 shizuku-api 13.1.5 私有 `Shizuku.newProcess` 实现，与 UserService PTY 终端互补；
-Shizuku 不可用、未授权或反射失败时一律失效即关（fail-closed）。
-详见 `docs/legacy/v2-bridge.md`（历史协议留档与反射依据）。
+容器无法直接访问 Android Binder。`dsh-device` 使用 Harness 启动时注入的随机回环端口和进程级临时令牌请求宿主桥；宿主桥只接受有界的固定命令类型，并通过已授权的 Shizuku UserService PTY 执行。令牌不持久化，不写入 URL 或日志。Shizuku 不可用、未授权或 UserService 断开时请求明确失败。
 
 ## Operit2 runtime boundary
 
@@ -103,6 +100,6 @@ not assert that the shipped binaries can be rebuilt bit-for-bit.
 
 ## Secrets and logs
 
-DeepSeek API credentials remain inside the Harness credential flow and are not handled by the Capacitor management UI. The management surface opens directly and does not use Android device-credential authentication. The ephemeral Harness transport credential is generated with `SecureRandom`, never persisted, never returned to JavaScript, and supplied to the internal WebView without a user-facing prompt. The WebView-side reference is cleared when the internal WebView stops, while the server-side reference is cleared when the Harness process stops. Signing material, local Gradle properties, generated rootfs archives, generated manifests, native runners, `.env` files, build output, and logs are ignored by Git.
+Built-in and custom provider credentials entered in the management UI are encrypted with Android Keystore and only injected into the PRoot process environment. Credential values never return to the WebView. Saving model configuration restarts a running Harness before reporting success so the generated Cordis overlay and environment agree with the displayed state. The management surface opens directly and does not use Android device-credential authentication. The ephemeral Harness transport credential is generated with `SecureRandom`, never persisted, never returned to JavaScript, and supplied to the internal WebView without a user-facing prompt. The WebView-side reference is cleared when the internal WebView stops, while the server-side reference is cleared when the Harness process stops. Signing material, local Gradle properties, generated rootfs archives, generated manifests, native runners, `.env` files, build output, and logs are ignored by Git.
 
 Native audit files live in `noBackupFilesDir`, use owner-only directory/file modes, rotate by UTC date, and retain the 90-day boundary plus newer files. Each line contains only an ISO timestamp, a fixed event enum, and a fixed result enum. URLs, commands, session identifiers, terminal data, credentials, and exception details are never written.

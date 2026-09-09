@@ -26,6 +26,9 @@ class RootfsIntegrityTest {
         FixtureLink("etc/os-release", "../usr/lib/os-release"),
         FixtureLink("etc/localtime", "/usr/share/zoneinfo/Etc/UTC"),
         FixtureLink("usr/local/bin/node", "../../../opt/node/bin/node"),
+        FixtureLink("usr/local/bin/npm", "../../../opt/node/bin/npm"),
+        FixtureLink("usr/local/bin/npx", "../../../opt/node/bin/npx"),
+        FixtureLink("usr/local/bin/corepack", "../../../opt/node/bin/corepack"),
     )
 
     @Test

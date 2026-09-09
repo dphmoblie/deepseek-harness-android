@@ -94,7 +94,7 @@ rootfs SHA-256：
 ```
 
 
-## 8. 工具链与 /sdcard 验证（对应 docs/ROADMAP.md T4/T5）
+## 8. 工具链与 /sdcard 验证
 
 - [ ] 工具链：容器内 `python3 --version`、`jq --version`、`busybox | head -1`、`unzip -v | head -1` 均可用（rootfs 注入 /usr/local/bin 与 /opt/python）。
 - [ ] python 软链：`python3` 与 `python` 都解析到 /opt/python/bin/python3（荣耀降级复制后仍可执行）。
@@ -110,5 +110,5 @@ rootfs SHA-256：
 | /sdcard 可见性 | ___ |
 | /sdcard 读取 | ___ |
 
-- [ ] 同步完成 `docs/review-2026-08-16.md` 中的 16KB/PRoot 检查。
+- [ ] 完成 16KB 页大小设备与 PRoot 启动检查。
 - [ ] 执行 Android lint、JVM 测试、前端测试和至少一次 ARM64 真机完整安装。

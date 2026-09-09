@@ -13,6 +13,8 @@ data class ProotBindMount(
     val target: String = source,
 )
 
+data class DeviceBridgeAccess(val port: Int, val token: String)
+
 object RuntimeCommand {
     const val PROVIDER_PATCH_GUEST_PATH = "/root/.dsh-mobile/launcher-providers.patch.json"
 
@@ -38,6 +40,7 @@ object RuntimeCommand {
         entrypoint: List<String>,
         bindMounts: List<ProotBindMount> = emptyList(),
         harnessAuthToken: String? = null,
+        deviceBridgeAccess: DeviceBridgeAccess? = null,
     ): List<String> {
         if (!store.runnerAvailable()) {
             throw RuntimeFailure("RUNNER_UNAVAILABLE", "APK 未包含当前架构的受信任运行器")
@@ -53,7 +56,6 @@ object RuntimeCommand {
             add(store.launchRunnerFile.absolutePath)
             add("-r")
             add(store.currentRoot.absolutePath)
-            add("-0")
             add("-w")
             add("/root")
             bindMounts.forEach { mount ->
@@ -72,8 +74,21 @@ object RuntimeCommand {
             ModelProvider.entries.forEach { provider ->
                 providerApiKeys[provider]?.let { key -> add("${provider.environmentVariable}=$key") }
             }
-            add("DSH_DEVICE_BRIDGE_TOKEN=" + store.deviceBridgeToken())
+            val customKeys = store.customProviderApiKeys()
+            store.settings().customModelProviders.forEach { provider ->
+                customKeys[provider.id]?.let { key -> add("${provider.environmentVariable}=$key") }
+            }
+            deviceBridgeAccess?.let { access ->
+                if (access.port !in 1024..65535 || !HARNESS_TOKEN_PATTERN.matches(access.token)) {
+                    throw RuntimeFailure("DEVICE_BRIDGE_INVALID", "设备桥临时连接信息无效")
+                }
+                add("DSH_DEVICE_BRIDGE_PORT=${access.port}")
+                add("DSH_DEVICE_BRIDGE_TOKEN=${access.token}")
+            }
             if (harnessAuthToken != null) {
+                // 同时作为 guest 进程身份标记；RuntimeSupervisor 用完整环境条目
+                // 识别 PRoot 退出后被重新挂父进程的 Harness 子进程。
+                add("DSH_PIDFILE=${store.harnessPidFile.absolutePath}")
                 add("NODE_OPTIONS=--require=/usr/local/lib/dsh-mobile-auth.cjs")
                 add("DSH_MOBILE_AUTH_TOKEN=$harnessAuthToken")
             }

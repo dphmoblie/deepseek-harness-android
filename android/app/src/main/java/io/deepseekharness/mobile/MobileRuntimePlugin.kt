@@ -8,6 +8,7 @@ import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
+import io.deepseekharness.mobile.runtime.DeviceBridgeAccess
 import io.deepseekharness.mobile.runtime.RuntimeFailure
 import io.deepseekharness.mobile.runtime.RuntimeSettings
 import io.deepseekharness.mobile.runtime.RuntimeStateSnapshot
@@ -24,7 +25,10 @@ import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
+import java.security.SecureRandom
+import java.util.Base64
 import kotlin.concurrent.withLock
 
 @CapacitorPlugin(name = "MobileRuntime")
@@ -33,6 +37,8 @@ class MobileRuntimePlugin : Plugin() {
     private lateinit var auditLog: PrivateAuditLog
     private val executor: ExecutorService = Executors.newFixedThreadPool(4)
     private val destroying = AtomicBoolean(false)
+    private val harnessStartScheduled = AtomicBoolean(false)
+    private val harnessStartGeneration = AtomicLong(0)
     private val auditedOperationLock = ReentrantLock()
     private lateinit var deviceCommands: DeviceCommandRunner
     private var deviceBridge: DeviceBridgeServer? = null
@@ -69,16 +75,23 @@ class MobileRuntimePlugin : Plugin() {
                         notifyListeners("runtimeProgress", snapshot.toProgressJs())
                     }
                 },
-                onTerminalOutput = { sessionId, dataBase64 ->
-                    if (::deviceCommands.isInitialized) {
-                        deviceCommands.onOutput(sessionId, dataBase64)
-                    }
-                    if (!destroying.get()) {
-                        notifyListeners(
-                            "terminalOutput",
-                            JSObject().put("sessionId", sessionId).put("dataBase64", dataBase64),
-                        )
-                    }
+                onTerminalOutput = { sessionId, dataBase64, suppressPublicOutput ->
+                    dispatchTerminalOutput(
+                        sessionId,
+                        dataBase64,
+                        suppressPublicOutput,
+                        onDeviceCommandOutput = { id, data ->
+                            if (::deviceCommands.isInitialized) deviceCommands.onOutput(id, data)
+                        },
+                        onPublicOutput = { id, data ->
+                            if (!destroying.get()) {
+                                notifyListeners(
+                                    "terminalOutput",
+                                    JSObject().put("sessionId", id).put("dataBase64", data),
+                                )
+                            }
+                        },
+                    )
                 },
                 onTerminalExit = { sessionId, exitCode ->
                     if (!destroying.get()) {
@@ -93,13 +106,10 @@ class MobileRuntimePlugin : Plugin() {
                 writer = { sessionId, dataBase64 -> controller.writeTerminal(sessionId, dataBase64) },
             )
             applyKeepScreenAwake(controller.store.keepScreenAwake())
-            deviceBridge = DeviceBridgeServer(
-                shizuku = controller.terminals.shizuku,
-                runner = deviceCommands,
-                token = controller.store.deviceBridgeToken(),
-            ).also { it.start() }
+            ensureDeviceBridge()
             recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.SUCCEEDED)
         } catch (error: Throwable) {
+            stopDeviceBridge()
             recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.FAILED)
             throw error
         }
@@ -107,6 +117,7 @@ class MobileRuntimePlugin : Plugin() {
 
     override fun handleOnDestroy() {
         if (!destroying.compareAndSet(false, true)) return
+        harnessStartGeneration.incrementAndGet()
         recordAudit(AuditEvent.PLUGIN_DESTROY, AuditResult.STARTED)
         var result = AuditResult.SUCCEEDED
         try {
@@ -114,8 +125,7 @@ class MobileRuntimePlugin : Plugin() {
                 .filterIsInstance<PluginTask>()
                 .forEach { task -> task.rejectRuntimeClosed() }
             if (::deviceCommands.isInitialized) deviceCommands.cancelAll()
-            deviceBridge?.stop()
-            deviceBridge = null
+            stopDeviceBridge()
         } catch (_: Throwable) {
             result = AuditResult.FAILED
         }
@@ -168,6 +178,16 @@ class MobileRuntimePlugin : Plugin() {
                 )
             }
             val clearedProviderApiKeys = RuntimeValidation.clearedProviderApiKeys(call.getArray("clearProviderApiKeys"))
+            val customProviders = RuntimeValidation.customModelProviders(call.getArray("customModelProviders"))
+            val allowedCustomIds = customProviders.mapTo(linkedSetOf()) { it.id }
+            val customProviderApiKeyUpdates = RuntimeValidation.customProviderApiKeyUpdates(
+                call.getObject("customProviderApiKeys"),
+                allowedCustomIds,
+            )
+            val clearedCustomProviderApiKeys = RuntimeValidation.clearedCustomProviderApiKeys(
+                call.getArray("clearCustomProviderApiKeys"),
+                allowedCustomIds,
+            )
             val settings = RuntimeValidation.settings(
                 call.getString("manifestUrl"),
                 call.getString("manifestSha256"),
@@ -175,7 +195,14 @@ class MobileRuntimePlugin : Plugin() {
                 fontSize,
                 call.getBoolean("autoLaunch", true) ?: true,
             )
-            val saved = controller.store.saveSettings(settings, providerApiKeyUpdates, clearedProviderApiKeys)
+            val saved = controller.saveSettings(
+                settings,
+                providerApiKeyUpdates,
+                clearedProviderApiKeys,
+                customProviders,
+                customProviderApiKeyUpdates,
+                clearedCustomProviderApiKeys,
+            )
             applyKeepScreenAwake(saved.keepScreenAwake)
             saved.toJs()
         }
@@ -198,7 +225,23 @@ class MobileRuntimePlugin : Plugin() {
 
     @PluginMethod
     fun startHarness(call: PluginCall) {
-        execute(call) { audited(AuditEvent.RUNTIME_START) { controller.startHarness().toJs() } }
+        if (!harnessStartScheduled.compareAndSet(false, true)) {
+            resolveWhileActive(call) { controller.state().toJs() }
+            return
+        }
+        val generation = harnessStartGeneration.get()
+        val accepted = execute(call) {
+            try {
+                audited(AuditEvent.RUNTIME_START) {
+                    if (generation != harnessStartGeneration.get()) return@audited controller.state().toJs()
+                    ensureDeviceBridge()
+                    controller.startHarness().toJs()
+                }
+            } finally {
+                harnessStartScheduled.set(false)
+            }
+        }
+        if (!accepted) harnessStartScheduled.set(false)
     }
 
     @PluginMethod
@@ -220,16 +263,61 @@ class MobileRuntimePlugin : Plugin() {
 
     @PluginMethod
     fun stopRuntime(call: PluginCall) {
-        execute(call) { audited(AuditEvent.RUNTIME_STOP) { controller.stopRuntime().toJs() } }
+        harnessStartGeneration.incrementAndGet()
+        requestHarnessStartCancellation()
+        execute(call) {
+            audited(AuditEvent.RUNTIME_STOP) {
+                stopDeviceBridge()
+                deviceCommands.cancelAll()
+                controller.stopRuntime().toJs()
+            }
+        }
     }
 
     @PluginMethod
     fun reset(call: PluginCall) {
+        if (call.getString("confirmation") == "RESET_RUNTIME") {
+            harnessStartGeneration.incrementAndGet()
+            requestHarnessStartCancellation()
+        }
         execute(call) {
             audited(AuditEvent.RUNTIME_RESET) {
-                controller.reset(call.getString("confirmation")).toJs()
+                val confirmation = call.getString("confirmation")
+                if (confirmation != "RESET_RUNTIME") {
+                    throw RuntimeFailure("RESET_CONFIRMATION_INVALID", "重置确认文本无效")
+                }
+                stopDeviceBridge()
+                deviceCommands.cancelAll()
+                controller.reset(confirmation).toJs()
             }
         }
+    }
+
+    @Synchronized
+    private fun ensureDeviceBridge() {
+        if (deviceBridge != null) return
+        val bridgeTokenBytes = ByteArray(32).also(SecureRandom()::nextBytes)
+        val bridgeToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bridgeTokenBytes)
+        bridgeTokenBytes.fill(0)
+        val bridge = DeviceBridgeServer(
+            shizuku = controller.terminals.shizuku,
+            runner = deviceCommands,
+            token = bridgeToken,
+        )
+        try {
+            bridge.start()
+            controller.configureDeviceBridge(DeviceBridgeAccess(bridge.localPort, bridgeToken))
+            deviceBridge = bridge
+        } catch (error: Throwable) {
+            bridge.stop()
+            throw error
+        }
+    }
+
+    @Synchronized
+    private fun stopDeviceBridge() {
+        deviceBridge?.stop()
+        deviceBridge = null
     }
 
     @PluginMethod
@@ -318,15 +406,23 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
-    private fun execute(call: PluginCall, operation: () -> JSObject?) {
+    private fun execute(call: PluginCall, operation: () -> JSObject?): Boolean {
         if (destroying.get()) {
             rejectRuntimeClosed(call)
-            return
+            return false
         }
-        try {
+        return try {
             executor.execute(PluginTask(call, operation))
+            true
         } catch (_: RejectedExecutionException) {
             rejectRuntimeClosed(call)
+            false
+        }
+    }
+
+    private fun requestHarnessStartCancellation() {
+        if (!destroying.get() && ::controller.isInitialized) {
+            controller.requestStartCancellation()
         }
     }
 
@@ -442,6 +538,22 @@ class MobileRuntimePlugin : Plugin() {
         .put("keepScreenAwake", keepScreenAwake)
         .put("terminalFontSize", terminalFontSize)
         .put("configuredModelProviders", org.json.JSONArray(configuredModelProviders.map { it.wireValue }))
+        .put("customModelProviders", org.json.JSONArray().also { providers ->
+            customModelProviders.forEach { provider ->
+                providers.put(JSObject()
+                    .put("id", provider.id)
+                    .put("name", provider.name)
+                    .put("api", provider.api.wireValue)
+                    .put("baseUrl", provider.baseUrl)
+                    .put("models", org.json.JSONArray().also { models ->
+                        provider.models.forEach { model ->
+                            models.put(JSObject().put("id", model.id).put("name", model.name)
+                                .put("contextWindow", model.contextWindow).put("maxTokens", model.maxTokens))
+                        }
+                    }))
+            }
+        })
+        .put("configuredCustomModelProviders", org.json.JSONArray(configuredCustomModelProviders))
         .put("autoLaunch", autoLaunch)
 
     private fun RuntimeStateSnapshot.toProgressJs(): JSObject = JSObject()
@@ -469,4 +581,15 @@ class MobileRuntimePlugin : Plugin() {
         .put("permission", permission)
         .put("connected", connected)
         .put("version", version)
+}
+
+internal fun dispatchTerminalOutput(
+    sessionId: String,
+    dataBase64: String,
+    suppressPublicOutput: Boolean,
+    onDeviceCommandOutput: (sessionId: String, dataBase64: String) -> Unit,
+    onPublicOutput: (sessionId: String, dataBase64: String) -> Unit,
+) {
+    onDeviceCommandOutput(sessionId, dataBase64)
+    if (!suppressPublicOutput) onPublicOutput(sessionId, dataBase64)
 }

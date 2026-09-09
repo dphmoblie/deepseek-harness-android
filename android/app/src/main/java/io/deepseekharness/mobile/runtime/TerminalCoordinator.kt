@@ -8,11 +8,16 @@ import java.util.concurrent.TimeUnit
 class TerminalCoordinator(
     context: Context,
     store: RuntimeStore,
-    onOutput: (sessionId: String, dataBase64: String) -> Unit,
+    onOutput: (sessionId: String, dataBase64: String, suppressPublicOutput: Boolean) -> Unit,
     onExit: (sessionId: String, exitCode: Int) -> Unit,
 ) {
     val shizuku = ShizukuRuntime(context, onOutput, onExit)
-    private val ubuntu = UbuntuTerminalManager(context, store, onOutput, onExit)
+    private val ubuntu = UbuntuTerminalManager(
+        context,
+        store,
+        { sessionId, dataBase64 -> onOutput(sessionId, dataBase64, false) },
+        onExit,
+    )
 
     fun create(kind: String, columns: Int, rows: Int): String = when (kind) {
         "ubuntu" -> ubuntu.create(columns, rows)
@@ -72,8 +77,10 @@ class TerminalCoordinator(
     fun hasAnySessions(): Boolean = ubuntu.hasSessions() || shizuku.hasSessions()
 
     fun closeAllAndWait() {
-        ubuntu.closeAllAndWait()
-        shizuku.closeAllAndWait()
+        BestEffortCleanup.runAll(
+            { ubuntu.closeAllAndWait() },
+            { shizuku.disconnect() },
+        )
     }
 
     fun shutdown() {

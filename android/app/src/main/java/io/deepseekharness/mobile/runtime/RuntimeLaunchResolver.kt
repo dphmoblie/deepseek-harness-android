@@ -34,9 +34,12 @@ class RuntimeLaunchResolver(
     fun launch(
         entrypoint: List<String>,
         harnessAuthToken: String? = null,
+        deviceBridgeAccess: DeviceBridgeAccess? = null,
+        externalCancellation: () -> Boolean = { false },
     ): RuntimeLaunchSpec = synchronized(lock) {
-        val resolved = resolveProfile()
-        buildLaunch(resolved.profile, entrypoint, harnessAuthToken)
+        val resolved = resolveProfile(externalCancellation)
+        throwIfStartCancelled(externalCancellation)
+        buildLaunch(resolved.profile, entrypoint, harnessAuthToken, deviceBridgeAccess)
     }
 
     fun verifyGuest(
@@ -44,12 +47,14 @@ class RuntimeLaunchResolver(
         errorCode: String,
         message: String,
         timeoutSeconds: Long,
+        externalCancellation: () -> Boolean = { false },
     ) = synchronized(lock) {
-        val resolved = resolveProfile()
+        val resolved = resolveProfile(externalCancellation)
         val firstResult = ProcessProbe.run(
             buildLaunch(resolved.profile, entrypoint),
             store.currentRoot,
             timeoutSeconds,
+            externalCancellation,
         )
         if (firstResult.succeeded) return@synchronized
 
@@ -60,6 +65,7 @@ class RuntimeLaunchResolver(
                 buildLaunch(fallback, entrypoint),
                 store.currentRoot,
                 timeoutSeconds,
+                externalCancellation,
             )
             if (fallbackResult.succeeded) {
                 cachedProfile = CachedProfile(resolved.key, fallback)
@@ -75,14 +81,23 @@ class RuntimeLaunchResolver(
             errorCode,
             message,
         )
+        // Keep a bounded, redacted probe tail for device diagnostics. Probe commands do not
+        // print credentials, but redaction protects against future dependency error messages.
+        android.util.Log.w(
+            "dsh-runtime",
+            "guest probe failed code=${failure.code} exit=${failureResults.firstOrNull()?.exitCode} " +
+                "timeout=${failureResults.firstOrNull()?.timedOut} output=" +
+                redactDiagnosticOutput(failureResults.firstOrNull()?.output.orEmpty()),
+        )
         val cause = failureResults.firstNotNullOfOrNull { it.startError }
         throw RuntimeFailure(failure.code, failure.message, cause)
     }
 
-    private fun resolveProfile(): CachedProfile {
+    private fun resolveProfile(externalCancellation: () -> Boolean): CachedProfile {
+        throwIfStartCancelled(externalCancellation)
         val manifest = prepareRuntime()
         val key = "${manifest.runtimeId}:${manifest.version}:${manifest.rootfs.sha256}"
-        return cachedProfile?.takeIf { it.key == key } ?: CachedProfile(key, detectProfile()).also {
+        return cachedProfile?.takeIf { it.key == key } ?: CachedProfile(key, detectProfile(externalCancellation)).also {
             cachedProfile = it
         }
     }
@@ -98,7 +113,7 @@ class RuntimeLaunchResolver(
         return manifest
     }
 
-    private fun detectProfile(): ProotLaunchProfile {
+    private fun detectProfile(externalCancellation: () -> Boolean): ProotLaunchProfile {
         val runnerResult = ProcessProbe.run(
             RuntimeLaunchSpec(
                 argv = listOf(store.launchRunnerFile.absolutePath, "--version"),
@@ -106,6 +121,7 @@ class RuntimeLaunchResolver(
             ),
             store.currentRoot,
             RUNNER_PROBE_TIMEOUT_SECONDS,
+            externalCancellation,
         )
         if (!runnerResult.succeeded) {
             val failure = RuntimeDiagnostics.runnerFailure(runnerResult)
@@ -113,7 +129,7 @@ class RuntimeLaunchResolver(
         }
 
         val defaultProfile = ProotLaunchProfile(disableSeccomp = false, bindMounts = emptyList())
-        val defaultResult = probeGuest(defaultProfile)
+        val defaultResult = probeGuest(defaultProfile, externalCancellation)
         var profile = if (defaultResult.succeeded) {
             defaultProfile
         } else {
@@ -121,7 +137,7 @@ class RuntimeLaunchResolver(
                 throw guestStartFailure(listOf(defaultResult))
             }
             val fallbackProfile = defaultProfile.copy(disableSeccomp = true)
-            val fallbackResult = probeGuest(fallbackProfile)
+            val fallbackResult = probeGuest(fallbackProfile, externalCancellation)
             if (!fallbackResult.succeeded) {
                 throw guestStartFailure(listOf(fallbackResult, defaultResult))
             }
@@ -133,19 +149,20 @@ class RuntimeLaunchResolver(
             *SYSTEM_BIND_MOUNTS.toTypedArray(),
         )
         for (mount in bindCandidates) {
+            throwIfStartCancelled(externalCancellation)
             val guestTarget = File(store.currentRoot, mount.target.removePrefix("/"))
             if (!File(mount.source).exists() || !guestTarget.exists()) {
                 throw requiredBindFailure()
             }
             val candidate = profile.copy(bindMounts = profile.bindMounts + mount)
-            val firstResult = probeGuest(candidate)
+            val firstResult = probeGuest(candidate, externalCancellation)
             if (firstResult.succeeded) {
                 profile = candidate
                 continue
             }
             if (!candidate.disableSeccomp && RuntimeDiagnostics.shouldRetryWithoutSeccomp(firstResult)) {
                 val fallback = candidate.copy(disableSeccomp = true)
-                val fallbackResult = probeGuest(fallback)
+                val fallbackResult = probeGuest(fallback, externalCancellation)
                 if (fallbackResult.succeeded) {
                     profile = fallback
                     continue
@@ -161,18 +178,28 @@ class RuntimeLaunchResolver(
             val guestSdcard = File(store.currentRoot, sdcard.target.removePrefix("/"))
             if (guestSdcard.exists()) {
                 val candidate = profile.copy(bindMounts = profile.bindMounts + sdcard)
-                val result = probeGuest(candidate)
+                val result = probeGuest(candidate, externalCancellation)
                 if (result.succeeded) profile = candidate
             }
         }
         return profile
     }
 
-    private fun probeGuest(profile: ProotLaunchProfile): ProcessProbeResult = ProcessProbe.run(
+    private fun probeGuest(
+        profile: ProotLaunchProfile,
+        externalCancellation: () -> Boolean,
+    ): ProcessProbeResult = ProcessProbe.run(
         buildLaunch(profile, GUEST_PROBE_ENTRYPOINT),
         store.currentRoot,
         GUEST_PROBE_TIMEOUT_SECONDS,
+        externalCancellation,
     )
+
+    private fun throwIfStartCancelled(externalCancellation: () -> Boolean) {
+        if (externalCancellation()) {
+            throw RuntimeFailure(RuntimeSupervisor.START_CANCELLED_CODE, "Harness 启动已取消")
+        }
+    }
 
     private fun guestStartFailure(results: List<ProcessProbeResult>): RuntimeFailure {
         val failure = results.firstNotNullOfOrNull(RuntimeDiagnostics::prootFailure)
@@ -190,8 +217,9 @@ class RuntimeLaunchResolver(
         profile: ProotLaunchProfile,
         entrypoint: List<String>,
         harnessAuthToken: String? = null,
+        deviceBridgeAccess: DeviceBridgeAccess? = null,
     ): RuntimeLaunchSpec = RuntimeLaunchSpec(
-        argv = RuntimeCommand.prootArgv(store, entrypoint, profile.bindMounts, harnessAuthToken),
+        argv = RuntimeCommand.prootArgv(store, entrypoint, profile.bindMounts, harnessAuthToken, deviceBridgeAccess),
         environment = RuntimeCommand.hostEnvironment(appContext, store, profile.disableSeccomp),
     )
 
@@ -200,6 +228,10 @@ class RuntimeLaunchResolver(
         val SYSTEM_BIND_MOUNTS = listOf(ProotBindMount("/dev"), ProotBindMount("/proc"))
         const val RUNNER_PROBE_TIMEOUT_SECONDS = 5L
         const val GUEST_PROBE_TIMEOUT_SECONDS = 12L
+
+        private fun redactDiagnosticOutput(value: String): String = value
+            .replace(Regex("(?i)(api[_-]?key|token|password|secret)=?\\s*[^\\s]+"), "$1=<redacted>")
+            .takeLast(4096)
     }
 }
 
@@ -278,27 +310,31 @@ internal object RuntimeDiagnostics {
 }
 
 internal object ProcessProbe {
-    fun run(spec: RuntimeLaunchSpec, workingDirectory: File, timeoutSeconds: Long): ProcessProbeResult {
+    fun run(
+        spec: RuntimeLaunchSpec,
+        workingDirectory: File,
+        timeoutSeconds: Long,
+        externalCancellation: () -> Boolean = { false },
+        processStarter: (RuntimeLaunchSpec, File) -> Process = ::startProcess,
+    ): ProcessProbeResult {
+        throwIfStartCancelled(externalCancellation)
         val process = try {
-            ProcessBuilder(spec.argv)
-                .directory(workingDirectory)
-                .redirectErrorStream(true)
-                .also { builder ->
-                    builder.environment().clear()
-                    builder.environment().putAll(spec.environment)
-                }
-                .start()
+            processStarter(spec, workingDirectory)
         } catch (error: Throwable) {
             return ProcessProbeResult(null, false, "", error)
         }
         val output = ProcessOutputTail.drain(process, "dsh-runtime-probe")
         val completed = try {
-            process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+            waitForExit(process, timeoutSeconds, externalCancellation)
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
             terminate(process)
             output.close()
             throw RuntimeFailure("RUNTIME_START_INTERRUPTED", "运行时启动自检被中断", error)
+        } catch (failure: RuntimeFailure) {
+            terminate(process)
+            output.close()
+            throw failure
         }
         if (!completed) terminate(process)
         output.awaitClosed(OUTPUT_DRAIN_TIMEOUT_MS)
@@ -309,6 +345,40 @@ internal object ProcessProbe {
         )
         output.close()
         return result
+    }
+
+    private fun startProcess(spec: RuntimeLaunchSpec, workingDirectory: File): Process =
+        ProcessBuilder(spec.argv)
+            .directory(workingDirectory)
+            .redirectErrorStream(true)
+            .also { builder ->
+                builder.environment().clear()
+                builder.environment().putAll(spec.environment)
+            }
+            .start()
+
+    internal fun waitForExit(
+        process: Process,
+        timeoutSeconds: Long,
+        externalCancellation: () -> Boolean,
+    ): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+        while (true) {
+            throwIfStartCancelled(externalCancellation)
+            val remainingNanos = deadline - System.nanoTime()
+            if (remainingNanos <= 0) return false
+            val waitMillis = minOf(
+                PROBE_CANCEL_POLL_MS,
+                TimeUnit.NANOSECONDS.toMillis(remainingNanos).coerceAtLeast(1L),
+            )
+            if (process.waitFor(waitMillis, TimeUnit.MILLISECONDS)) return true
+        }
+    }
+
+    private fun throwIfStartCancelled(externalCancellation: () -> Boolean) {
+        if (externalCancellation()) {
+            throw RuntimeFailure(RuntimeSupervisor.START_CANCELLED_CODE, "Harness 启动已取消")
+        }
     }
 
     private fun terminate(process: Process) {
@@ -325,14 +395,17 @@ internal object ProcessProbe {
     }
 
     private const val PROBE_STOP_TIMEOUT_MS = 500L
+    private const val PROBE_CANCEL_POLL_MS = 100L
     private const val OUTPUT_DRAIN_TIMEOUT_MS = 750L
 }
 
 internal class ProcessOutputTail private constructor(
     process: Process,
     threadName: String,
+    harnessPort: Int?,
 ) {
     private val buffer = TailBuffer(MAX_OUTPUT_BYTES)
+    private val webAuth = harnessPort?.let(::HarnessWebAuthCapture)
     private val input: InputStream = process.inputStream
     private val reader = Thread({
         try {
@@ -341,7 +414,10 @@ internal class ProcessOutputTail private constructor(
                 while (true) {
                     val count = input.read(chunk)
                     if (count < 0) break
-                    if (count > 0) buffer.append(chunk, count)
+                    if (count > 0) {
+                        webAuth?.append(chunk, count)
+                        buffer.append(chunk, count)
+                    }
                 }
             }
         } catch (_: Throwable) {
@@ -353,6 +429,8 @@ internal class ProcessOutputTail private constructor(
     }
 
     fun snapshot(): String = buffer.text()
+
+    fun harnessLaunchUrl(): String? = webAuth?.url()
 
     fun awaitClosed(timeoutMillis: Long) {
         try {
@@ -370,10 +448,12 @@ internal class ProcessOutputTail private constructor(
         }
         awaitClosed(READER_CLOSE_TIMEOUT_MS)
         buffer.clear()
+        webAuth?.clear()
     }
 
     companion object {
-        fun drain(process: Process, threadName: String): ProcessOutputTail = ProcessOutputTail(process, threadName)
+        fun drain(process: Process, threadName: String, harnessPort: Int? = null): ProcessOutputTail =
+            ProcessOutputTail(process, threadName, harnessPort)
         private const val MAX_OUTPUT_BYTES = 16 * 1024
         private const val READER_CLOSE_TIMEOUT_MS = 750L
     }

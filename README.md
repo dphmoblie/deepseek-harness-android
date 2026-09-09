@@ -92,6 +92,7 @@ manifest. Full build instructions and the signing policy are documented in
 
 ```bash
 pnpm test          # Vitest unit tests
+pnpm --dir scripts/runtime-profile install --frozen-lockfile --ignore-scripts # plugin test dependencies
 pnpm run test:scripts
 pnpm lint          # ESLint, zero warnings
 ```

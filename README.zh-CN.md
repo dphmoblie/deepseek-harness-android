@@ -91,6 +91,7 @@ pnpm run android:open   # 在 Android Studio 中打开，或直接使用 Gradle 
 
 ```bash
 pnpm test          # Vitest 单元测试
+pnpm --dir scripts/runtime-profile install --frozen-lockfile --ignore-scripts # 插件测试依赖
 pnpm run test:scripts
 pnpm lint          # ESLint，零警告通过
 ```

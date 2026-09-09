@@ -26,6 +26,9 @@ object RootfsIntegrity {
         RequiredLink("etc/os-release", "../usr/lib/os-release"),
         RequiredLink("etc/localtime", "/usr/share/zoneinfo/Etc/UTC"),
         RequiredLink("usr/local/bin/node", "../../../opt/node/bin/node"),
+        RequiredLink("usr/local/bin/npm", "../../../opt/node/bin/npm"),
+        RequiredLink("usr/local/bin/npx", "../../../opt/node/bin/npx"),
+        RequiredLink("usr/local/bin/corepack", "../../../opt/node/bin/corepack"),
     )
 
     fun verifyLinks(root: File, failureCode: String) {
