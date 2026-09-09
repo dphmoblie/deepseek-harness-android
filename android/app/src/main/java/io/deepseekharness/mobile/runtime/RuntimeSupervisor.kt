@@ -534,7 +534,7 @@ class RuntimeSupervisor(
                             val fields = line.trim().split(WHITESPACE)
                             if (fields.size > 11 && fields[3] == "0A" &&
                                 fields[1].substringAfter(':', "") == targetPort
-                            ) add(fields[11])
+                            ) add(fields[10])
                         }
                     }
                 } catch (_: Exception) {
