@@ -1,3 +1,4 @@
+import { validatePluginRequest } from './plugins'
 import type {
   ListenerHandle,
   ModelProviderId,
@@ -64,6 +65,11 @@ export function createBrowserBridge(): RuntimeBridge {
   }
 
   return {
+    managePlugins: request => {
+      validatePluginRequest(request)
+      if (request.operation !== 'list') return Promise.reject(new Error('浏览器预览不支持修改设备插件'))
+      return Promise.resolve({ plugins: [] })
+    },
     setAppLanguage: language => language === 'zh-CN' || language === 'en'
       ? Promise.resolve()
       : Promise.reject(new Error('不支持的应用语言')),

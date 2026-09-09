@@ -156,7 +156,11 @@ class RuntimeSupervisor(
         val launch = try {
             val configuredProviders = store.providerApiKeys().keys
             val providerPatchPath = store.prepareProviderPatch(configuredProviders)
-            val harnessEntrypoint = RuntimeCommand.withProviderPatch(manifest.harnessArgv, providerPatchPath)
+            val providerEntrypoint = RuntimeCommand.withProviderPatch(manifest.harnessArgv, providerPatchPath)
+            val pluginPatch = File(store.currentRoot, "root/.dsh-mobile/launcher-plugins.patch.json")
+            val harnessEntrypoint = if (pluginPatch.isFile) {
+                providerEntrypoint.take(2) + listOf("--patch", "/root/.dsh-mobile/launcher-plugins.patch.json") + providerEntrypoint.drop(2)
+            } else providerEntrypoint
             launchResolver.launch(
                 harnessEntrypoint,
                 password,
@@ -254,6 +258,14 @@ class RuntimeSupervisor(
     fun isRunning(): Boolean = synchronized(lock) {
         val running = harnessProcess?.isAlive == true
         running
+    }
+
+    /** 修改插件前回收旧进程，并确认监听端口已释放。 */
+    fun preparePluginManagement() = synchronized(lock) {
+        if (harnessProcess?.isAlive == true || isStarting()) throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness")
+        val port = store.installedManifest()?.harnessPort
+        reapStaleHarness(port)
+        port?.let { waitForPortRelease(it) }
     }
 
     fun access(): HarnessAccess = synchronized(lock) {

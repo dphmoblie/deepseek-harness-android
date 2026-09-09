@@ -1,7 +1,10 @@
+import { validatePluginCatalog, validatePluginRequest } from './plugins'
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import type { PluginListenerHandle } from '@capacitor/core'
 import { createBrowserBridge } from './browser'
 import type {
+  PluginRequest,
+  PluginCatalog,
   DeviceCommand,
   DeviceCommandResult,
   RuntimeBridge,
@@ -36,6 +39,7 @@ import {
 } from './validation'
 
 interface NativeRuntimePlugin {
+  managePlugins(options: PluginRequest): Promise<PluginCatalog>
   setAppLanguage(options: { language: 'zh-CN' | 'en' }): Promise<void>
   getState(): Promise<RuntimeState>
   getSettings(): Promise<RuntimeSettings>
@@ -74,6 +78,7 @@ function validatedListener<T>(validator: (value: unknown) => T, listener: (event
 
 function createNativeBridge(): RuntimeBridge {
   return {
+    managePlugins: request => NativeRuntime.managePlugins(validatePluginRequest(request)).then(validatePluginCatalog),
     setAppLanguage: language => {
       if (language !== 'zh-CN' && language !== 'en') return Promise.reject(new Error('不支持的应用语言'))
       return NativeRuntime.setAppLanguage({ language })

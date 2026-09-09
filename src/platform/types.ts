@@ -124,6 +124,7 @@ export interface ListenerHandle {
 }
 
 export interface RuntimeBridge {
+  managePlugins: (request: PluginRequest) => Promise<PluginCatalog>
   /** 保存应用语言，仅接受简体中文和英语。 */
   setAppLanguage: (language: 'zh-CN' | 'en') => Promise<void>
   getState: () => Promise<RuntimeState>
@@ -146,4 +147,31 @@ export interface RuntimeBridge {
   addRuntimeProgressListener: (listener: (event: RuntimeProgress) => void) => Promise<ListenerHandle>
   addTerminalOutputListener: (listener: (event: TerminalChunk) => void) => Promise<ListenerHandle>
   addTerminalExitListener: (listener: (event: TerminalExit) => void) => Promise<ListenerHandle>
+}
+
+/** 插件管理只传递受控元数据，不返回配置值、绝对路径或凭据。 */
+export interface PluginChild {
+  id: string
+  name: string
+  enabled: boolean
+  effectiveEnabled: boolean
+  protected: boolean
+}
+export interface PluginGroup {
+  id: string
+  file: string
+  version: string | null
+  enabled: boolean
+  protected: boolean
+  official: boolean
+  installed: boolean
+  readable: boolean
+  children: PluginChild[]
+}
+export interface PluginCatalog { plugins: PluginGroup[] }
+export interface PluginRequest {
+  operation: 'list' | 'enable' | 'child' | 'update'
+  id?: string
+  enabled?: boolean
+  childId?: string
 }

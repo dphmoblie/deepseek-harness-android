@@ -24,6 +24,7 @@ internal data class ClassifiedFailure(val code: String, val message: String)
 class RuntimeLaunchResolver(
     context: Context,
     private val store: RuntimeStore,
+    private val includeCredentials: Boolean = true,
 ) {
     private data class CachedProfile(val key: String, val profile: ProotLaunchProfile)
 
@@ -219,7 +220,7 @@ class RuntimeLaunchResolver(
         harnessAuthToken: String? = null,
         deviceBridgeAccess: DeviceBridgeAccess? = null,
     ): RuntimeLaunchSpec = RuntimeLaunchSpec(
-        argv = RuntimeCommand.prootArgv(store, entrypoint, profile.bindMounts, harnessAuthToken, deviceBridgeAccess),
+        argv = RuntimeCommand.prootArgv(store, entrypoint, profile.bindMounts, harnessAuthToken, deviceBridgeAccess, includeCredentials),
         environment = RuntimeCommand.hostEnvironment(appContext, store, profile.disableSeccomp),
     )
 
@@ -316,6 +317,7 @@ internal object ProcessProbe {
         timeoutSeconds: Long,
         externalCancellation: () -> Boolean = { false },
         processStarter: (RuntimeLaunchSpec, File) -> Process = ::startProcess,
+        outputLimit: Int = 16 * 1024,
     ): ProcessProbeResult {
         throwIfStartCancelled(externalCancellation)
         val process = try {
@@ -323,7 +325,7 @@ internal object ProcessProbe {
         } catch (error: Throwable) {
             return ProcessProbeResult(null, false, "", error)
         }
-        val output = ProcessOutputTail.drain(process, "dsh-runtime-probe")
+        val output = ProcessOutputTail.drain(process, "dsh-runtime-probe", outputLimit = outputLimit)
         val completed = try {
             waitForExit(process, timeoutSeconds, externalCancellation)
         } catch (error: InterruptedException) {
@@ -403,8 +405,9 @@ internal class ProcessOutputTail private constructor(
     process: Process,
     threadName: String,
     harnessPort: Int?,
+    outputLimit: Int,
 ) {
-    private val buffer = TailBuffer(MAX_OUTPUT_BYTES)
+    private val buffer = TailBuffer(outputLimit.coerceIn(1024, 256 * 1024))
     private val webAuth = harnessPort?.let(::HarnessWebAuthCapture)
     private val input: InputStream = process.inputStream
     private val reader = Thread({
@@ -452,8 +455,8 @@ internal class ProcessOutputTail private constructor(
     }
 
     companion object {
-        fun drain(process: Process, threadName: String, harnessPort: Int? = null): ProcessOutputTail =
-            ProcessOutputTail(process, threadName, harnessPort)
+        fun drain(process: Process, threadName: String, harnessPort: Int? = null, outputLimit: Int = MAX_OUTPUT_BYTES): ProcessOutputTail =
+            ProcessOutputTail(process, threadName, harnessPort, outputLimit)
         private const val MAX_OUTPUT_BYTES = 16 * 1024
         private const val READER_CLOSE_TIMEOUT_MS = 750L
     }

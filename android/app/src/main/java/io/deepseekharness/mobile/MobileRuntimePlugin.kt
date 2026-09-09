@@ -154,6 +154,23 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /** 权限：应用私有桥接；白名单操作、包名与条目标识校验；只返回插件元数据。 */
+    @PluginMethod
+    fun managePlugins(call: PluginCall) {
+        execute(call) {
+            val operation = call.getString("operation").orEmpty()
+            val event = when (operation) {
+                "list" -> AuditEvent.PLUGIN_LIST
+                "enable", "child" -> AuditEvent.PLUGIN_ENABLE
+                "update" -> AuditEvent.PLUGIN_UPDATE
+                else -> throw RuntimeFailure("PLUGIN_INPUT_INVALID", "插件操作无效")
+            }
+            audited(event) {
+                controller.managePlugins(operation, call.getString("id"), call.getBoolean("enabled"), call.getString("childId"))
+            }
+        }
+    }
+
     @PluginMethod
     fun getState(call: PluginCall) {
         resolveWhileActive(call) { controller.state().toJs() }

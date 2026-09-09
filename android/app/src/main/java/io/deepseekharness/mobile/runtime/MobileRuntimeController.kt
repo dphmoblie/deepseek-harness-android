@@ -18,6 +18,7 @@ class MobileRuntimeController(
     val status = RuntimeStatus(store).also { it.progressListener = onProgress }
     private val installer = RuntimeInstaller(store, status, externalCancellation = closed::get)
     private val supervisor = RuntimeSupervisor(context, store, status)
+    private val plugins = RuntimePluginManager(context, store)
     val terminals = TerminalCoordinator(context, store, onTerminalOutput, onTerminalExit)
 
     fun install(source: RuntimeSource) = lifecycleLock.withLock {
@@ -30,7 +31,23 @@ class MobileRuntimeController(
 
     fun startHarness(): RuntimeStateSnapshot = lifecycleLock.withLock {
         ensureOpen()
+        if (!supervisor.isRunning()) {
+            supervisor.preparePluginManagement()
+            plugins.recoverIfNeeded()
+        }
         supervisor.startHarness()
+    }
+
+    /** 权限：仅应用内部；生命周期锁防止插件写入与启动、安装、终端并发。 */
+    fun managePlugins(operation: String, id: String?, enabled: Boolean?, childId: String?): com.getcapacitor.JSObject = lifecycleLock.withLock {
+        ensureOpen()
+        if (operation != "list") {
+            if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
+                throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
+            }
+            supervisor.preparePluginManagement()
+        }
+        plugins.run(operation, id, enabled, childId)
     }
 
     fun requestStartCancellation(): Boolean = supervisor.requestStartCancellation()

@@ -1,4 +1,5 @@
 import { t, useLanguage } from './i18n'
+import { PluginSettings } from './components/PluginSettings'
 import { LanguageSettings } from './components/LanguageSettings'
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -50,7 +51,7 @@ import type {
   TerminalKind,
 } from './platform/types'
 
-type AppView = 'conversation' | 'settings' | 'terminal' | 'environment'
+type AppView = 'conversation' | 'settings' | 'terminal' | 'environment' | 'plugins'
 type NoticeTone = 'success' | 'error' | 'info'
 
 interface Notice {
@@ -577,11 +578,12 @@ interface SettingsScreenProps {
   onOpenEnvironment: () => void
   onOpenShizuku: () => void
   onOpenTerminal: () => void
+  onOpenPlugins: () => void
   onSave: (settings: RuntimeSettingsUpdate) => void
   onStop: () => void
 }
 
-function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConnect, onLaunch, onOpenEnvironment, onOpenShizuku, onOpenTerminal, onSave, onStop }: SettingsScreenProps) {
+function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConnect, onLaunch, onOpenEnvironment, onOpenShizuku, onOpenTerminal, onOpenPlugins, onSave, onStop }: SettingsScreenProps) {
   const [draft, setDraft] = useState<RuntimeSettings | null>(settings)
   const [selectedProvider, setSelectedProvider] = useState<ModelProviderId | 'custom'>('deepseek')
   const [credentialDrafts, setCredentialDrafts] = useState<ProviderApiKeys>({})
@@ -640,6 +642,11 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
       <LanguageSettings />
 
       <section className="management-list" aria-label={t("运行环境管理")}>
+        <button className="management-row" type="button" onClick={onOpenPlugins}>
+          <span className="management-icon green"><Settings2 size={20} /></span>
+          <span className="management-copy"><strong>{t("插件管理")}</strong><small>{t("官方与第三方插件，按文件管理启停和更新")}</small></span>
+          <ChevronRight size={18} />
+        </button>
         <div className="management-service">
           <span className="management-icon dark"><Bot size={20} /></span>
           <span className="management-copy">
@@ -1190,10 +1197,12 @@ export function App() {
         return <ConversationScreen busy={busy} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} onOpenTerminal={() => setActiveView('terminal')} onUpdate={requestRuntimeUpdate} />
       case 'terminal':
         return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onBack={() => setActiveView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
+      case 'plugins':
+        return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => setActiveView('settings')} />
       case 'environment':
         return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => setActiveView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} />
       case 'settings':
-        return <SettingsScreen busy={busy} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onConnect={connectShizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} onOpenTerminal={() => setActiveView('terminal')} onSave={saveSettings} onStop={stopRuntime} />
+        return <SettingsScreen onOpenPlugins={() => setActiveView('plugins')} busy={busy} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onConnect={connectShizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} onOpenTerminal={() => setActiveView('terminal')} onSave={saveSettings} onStop={stopRuntime} />
     }
   })()
 
