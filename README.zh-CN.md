@@ -61,7 +61,7 @@ Shizuku 完全可选，且不会随应用捆绑安装：
 
 1. 自行安装并启动 [Shizuku](https://shizuku.rikka.app/)（通过无线调试或 Shizuku 官方指引的方式）。
 2. 在应用内授予权限，再点击显式的**连接 Shizuku** 操作按钮。
-3. 连接成功后，设备终端会通过 Shizuku UserService PTY 启动固定的 `/system/bin/sh`。桥接层无法选择其他可执行文件、无法传入任意参数，也不能在没有可见终端会话的情况下执行后台命令。
+3. 该项功能正在测试，可能存在问题。
 
 当 Shizuku 不可用、未授权或连接断开时，设备终端请求会明确报错；Ubuntu 运行时与 Harness 不受影响。
 

@@ -61,7 +61,7 @@ Shizuku is entirely optional and never bundled:
 
 1. Install and start [Shizuku](https://shizuku.rikka.app/) (via wireless debugging or the standard Shizuku setup methods).
 2. Grant the permission prompt inside the app, then use the explicit **Connect Shizuku** action.
-3. Once connected, the device terminal starts a fixed `/system/bin/sh` through a Shizuku UserService PTY. The bridge cannot select other executables, pass arbitrary arguments, or run background commands without a visible terminal session.
+3. This feature is currently in the testing phase and may be subject to potential defects.
 
 If Shizuku is unavailable, unauthorized, or disconnected, device-terminal requests fail explicitly; the Ubuntu runtime and Harness are unaffected.
 
