@@ -64,6 +64,9 @@ export function createBrowserBridge(): RuntimeBridge {
   }
 
   return {
+    setAppLanguage: language => language === 'zh-CN' || language === 'en'
+      ? Promise.resolve()
+      : Promise.reject(new Error('不支持的应用语言')),
     getState: () => Promise.resolve({ ...state }),
     getSettings: () => {
       const saved = localStorage.getItem(SETTINGS_KEY)

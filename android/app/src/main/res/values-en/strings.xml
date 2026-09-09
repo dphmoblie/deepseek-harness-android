@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">DeepSeek Harness</string>
+    <string name="harness_title">Harness chat</string>
+    <string name="harness_back_to_app">Back to app</string>
+    <string name="harness_open_management">Open app settings</string>
+    <string name="harness_session_failed">Unable to establish a local Harness session</string>
+    <string name="harness_page_failed">Unable to open Harness. Please retry in Settings.</string>
+    <string name="shizuku_missing">Install and start Shizuku first</string>
+</resources>

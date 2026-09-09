@@ -34,6 +34,10 @@ class HarnessActivity : AppCompatActivity() {
         const val AUTH_TOKEN_COOKIE = "dsh_mobile_token"
     }
 
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(AppLanguage.localizedContext(newBase))
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

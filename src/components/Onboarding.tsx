@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { t } from '../i18n'
 import { ArrowLeft, ArrowRight, Blocks, Check, KeyRound, Loader2, Rocket, ShieldCheck, Sparkles, X } from 'lucide-react'
 import { CustomProviders } from './CustomProviders'
 import { MODEL_PROVIDERS } from '../modelProviders'
@@ -66,8 +67,8 @@ export function Onboarding({
   return (
     <div className="dialog-backdrop" role="presentation">
       <div className="dialog onboarding-dialog" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
-        <button className="dialog-close" type="button" aria-label="跳过引导" onClick={onDone}><X size={19} /></button>
-        <span className="onboarding-step-dots" aria-label={'步骤 ' + (step + 1) + ' / ' + STEPS.length}>
+        <button className="dialog-close" type="button" aria-label={t("跳过引导")} onClick={onDone}><X size={19} /></button>
+        <span className="onboarding-step-dots" aria-label={t("步骤 ") + (step + 1) + ' / ' + STEPS.length}>
           {STEPS.map((s, index) => (
             <span key={s.id} className={index === step ? 'active' : index < step ? 'done' : ''} />
           ))}
@@ -76,33 +77,32 @@ export function Onboarding({
           const Icon = STEPS[step].icon
           return (
             <>
-              <h2 id="onboarding-title" className="onboarding-title"><Icon size={22} />{STEPS[step].title}</h2>
+              <h2 id="onboarding-title" className="onboarding-title"><Icon size={22} />{t(STEPS[step].title)}</h2>
               {step === 0 && (
                 <div className="onboarding-body">
-                  <p>这是一个运行在 <strong>本机</strong> 的 Harness 控制台（DSH 移动版）：</p>
+                  <p>{t("这是一个运行在")}<strong>{t("本机")}</strong> {t("的 Harness 控制台（DSH 移动版）：")}</p>
                   <ul>
-                    <li>Ubuntu 运行时与 Harness 只监听 <code>127.0.0.1</code>，不出设备；</li>
-                    <li>模型凭据只保存在本机，不经过管理界面；</li>
-                    <li>数据与审计都在应用私有目录，可随时重置；</li>
-                    <li>容器内是<strong>受限 root</strong>：<code>/system</code>、<code>/data</code> 等系统路径受 Android 保护，无法越权修改（apt/系统安装不可用）；</li>
-                    <li>基础工具（node、perl、tar）已内置；python/gcc/curl 等请在后续版本通过工具链安装；</li>
-                    <li>如需访问手机文件或系统操作，请配合 Shizuku 设备 Shell。</li>
+                    <li>{t("Ubuntu 运行时与 Harness 只监听")}<code>127.0.0.1</code>{t("，不出设备；")}</li>
+                    <li>{t("模型凭据只保存在本机，不经过管理界面；")}</li>
+                    <li>{t("数据与审计都在应用私有目录，可随时重置；")}</li>
+                    <li>{t("容器内是")}<strong>{t("受限 root")}</strong>：<code>/system</code>、<code>/data</code> {t("等系统路径受 Android 保护，无法越权修改（apt/系统安装不可用）；")}</li>
+                    <li>{t("基础工具（node、perl、tar）已内置；python/gcc/curl 等请在后续版本通过工具链安装；")}</li>
+                    <li>{t("如需访问手机文件或系统操作，请配合 Shizuku 设备 Shell。")}</li>
                   </ul>
                 </div>
               )}
               {step === 1 && (
                 <div className="onboarding-body">
-                  <p>首次使用需要安装 Ubuntu 运行时（约几百 MB，可经 Wi-Fi 下载）。</p>
+                  <p>{t("首次使用需要安装 Ubuntu 运行时（约几百 MB，可经 Wi-Fi 下载）。")}</p>
                   {!manifestConfigured(settings) && (
-                    <p className="onboarding-warn">尚未配置运行时下载地址：请先在「设置」页填写 manifest 地址与 SHA-256（两者必须成对）。</p>
+                    <p className="onboarding-warn">{t("尚未配置运行时下载地址：请先在「设置」页填写 manifest 地址与 SHA-256（两者必须成对）。")}</p>
                   )}
                   <p className="onboarding-status">
-                    当前状态：{installed ? '已安装' + (runtime.phase === 'running' ? ' · 运行中' : '') : runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting' ? '正在安装…' : '未安装'}
+                    {t("当前状态：")}{installed ? t("已安装") + (runtime.phase === 'running' ? t(" · 运行中") : '') : runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting' ? t("正在安装…") : t("未安装")}
                   </p>
                   <button className="button button-primary" type="button" disabled={busy !== null || installed} onClick={onInstall}>
                     {busy === 'install' ? <Loader2 className="spin" size={18} /> : <Blocks size={18} />}
-                    安装运行时
-                  </button>
+                    {t("安装运行时")}</button>
                 </div>
               )}
               {step === 2 && (
@@ -125,14 +125,14 @@ export function Onboarding({
                   })
                   setApiKeyDraft('')
                 }}>
-                  <p>选择模型供应商并保存 API Key。密钥在设备上加密保存，页面不会回显明文。</p>
+                  <p>{t("选择模型供应商并保存 API Key。密钥在设备上加密保存，页面不会回显明文。")}</p>
                   <label className="field">
-                    <span>供应商</span>
+                    <span>{t("供应商")}</span>
                     <select value={selectedProvider} onChange={event => setSelectedProvider(event.target.value as ModelProviderId | 'custom')}>
                       {MODEL_PROVIDERS.map(provider => (
                         <option key={provider.id} value={provider.id}>{provider.label}</option>
                       ))}
-                      <option value="custom">自定义</option>
+                      <option value="custom">{t('自定义')}</option>
                     </select>
                   </label>
                   {selectedProvider !== 'custom' && <label className="field">
@@ -142,7 +142,7 @@ export function Onboarding({
                       autoComplete="new-password"
                       spellCheck={false}
                       maxLength={200}
-                      placeholder="留空则稍后在设置页配置"
+                      placeholder={t("留空则稍后在设置页配置")}
                       value={apiKeyDraft}
                       onChange={event => setApiKeyDraft(event.target.value)}
                     />
@@ -157,28 +157,28 @@ export function Onboarding({
                     onClear={setClearedCustomProviders}
                   />}
                   <button className="button button-primary" type="submit" disabled={selectedProvider === 'custom' ? customProviders.length === 0 : apiKeyDraft.trim() === ''}>
-                    <KeyRound size={18} />{selectedProvider === 'custom' ? '保存自定义供应商' : '保存 API Key'}
+                    <KeyRound size={18} />{selectedProvider === 'custom' ? t('保存自定义供应商') : t('保存 API Key')}
                   </button>
                   <p className="onboarding-status">{selectedProvider === 'custom'
-                    ? `已配置 ${settings?.configuredCustomModelProviders?.length ?? 0} 个自定义供应商凭据`
-                    : settings?.configuredModelProviders.includes(selectedProvider) ? '已配置' : '未配置'}</p>
+                    ? t('已配置 {0} 个自定义供应商凭据', settings?.configuredCustomModelProviders?.length ?? 0)
+                    : settings?.configuredModelProviders.includes(selectedProvider) ? t('已配置') : t('未配置')}</p>
                 </form>
               )}
               {step === 3 && (
                 <div className="onboarding-body">
-                  <p>Shizuku 让「设备 Shell」终端以 shell 权限执行系统命令（可选，不影响 Ubuntu 终端）。</p>
+                  <p>{t("Shizuku 让「设备 Shell」终端以 shell 权限执行系统命令（可选，不影响 Ubuntu 终端）。")}</p>
                   <ul>
-                    <li>需要安装 Shizuku 应用并完成一次性引导；</li>
-                    <li>授权可随时在「设置」页撤销；</li>
-                    <li>未授权时设备 Shell 相关功能自动禁用（fail-closed）。</li>
+                    <li>{t("需要安装 Shizuku 应用并完成一次性引导；")}</li>
+                    <li>{t("授权可随时在「设置」页撤销；")}</li>
+                    <li>{t("未授权时设备 Shell 相关功能自动禁用（fail-closed）。")}</li>
                   </ul>
                   <div className="onboarding-actions-row">
                     {!shizuku.installed || !shizuku.running ? (
-                      <button className="button button-primary" type="button" onClick={onOpenShizuku}>安装 / 打开 Shizuku</button>
+                      <button className="button button-primary" type="button" onClick={onOpenShizuku}>{t("安装 / 打开 Shizuku")}</button>
                     ) : (
                       <button className="button button-primary" type="button" disabled={busy !== null || authorized} onClick={onAuthorize}>
                         {busy === 'shizuku-permission' ? <Loader2 className="spin" size={18} /> : <ShieldCheck size={18} />}
-                        {authorized ? '已授权' : '授权设备 Shell'}
+                        {authorized ? t("已授权") : t("授权设备 Shell")}
                       </button>
                     )}
                   </div>
@@ -186,30 +186,29 @@ export function Onboarding({
               )}
               {step === 4 && (
                 <div className="onboarding-body">
-                  <p>Harness 使用官方响应式布局：小屏下侧栏、工作区和设置仍保持原版交互，插件、模型与推理强度入口不会被移动壳替换。</p>
-                  <p>插件均由 Harness 的插件设置管理，移动 profile 不会静默关闭宠物、实时统计或浏览器插件；更多插件可通过市场（dshmarket）按需安装。</p>
+                  <p>{t("Harness 使用官方响应式布局：小屏下侧栏、工作区和设置仍保持原版交互，插件、模型与推理强度入口不会被移动壳替换。")}</p>
+                  <p>{t("插件均由 Harness 的插件设置管理，移动 profile 不会静默关闭宠物、实时统计或浏览器插件；更多插件可通过市场（dshmarket）按需安装。")}</p>
                 </div>
               )}
               {step === 5 && (
                 <div className="onboarding-body">
-                  <p>一切就绪。打开 Harness 开始对话；随时返回本界面管理运行时与终端。</p>
+                  <p>{t("一切就绪。打开 Harness 开始对话；随时返回本界面管理运行时与终端。")}</p>
                   <div className="onboarding-actions-row">
                     <button className="button button-primary" type="button" disabled={busy !== null || runtime.phase !== 'running'} onClick={onOpenHarness}>
                       <Rocket size={18} />
-                      打开 Harness
-                    </button>
+                      {t("打开 Harness")}</button>
                   </div>
                 </div>
               )}
               <div className="dialog-actions onboarding-nav">
                 {step > 0 && (
-                  <button className="button button-secondary" type="button" onClick={() => setStep(step - 1)}><ArrowLeft size={18} />上一步</button>
+                  <button className="button button-secondary" type="button" onClick={() => setStep(step - 1)}><ArrowLeft size={18} />{t("上一步")}</button>
                 )}
                 <span className="onboarding-spacer" />
                 {last ? (
-                  <button className="button button-primary" type="button" onClick={onDone}><Check size={18} />完成</button>
+                  <button className="button button-primary" type="button" onClick={onDone}><Check size={18} />{t("完成")}</button>
                 ) : (
-                  <button className="button button-primary" type="button" onClick={() => setStep(step + 1)}>下一步<ArrowRight size={18} /></button>
+                  <button className="button button-primary" type="button" onClick={() => setStep(step + 1)}>{t("下一步")}<ArrowRight size={18} /></button>
                 )}
               </div>
             </>

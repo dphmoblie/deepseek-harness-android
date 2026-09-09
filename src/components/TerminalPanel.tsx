@@ -1,3 +1,4 @@
+import { t } from '../i18n'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
@@ -23,7 +24,7 @@ function bytesToBase64(value: string): string {
 
 function base64ToBytes(value: string): Uint8Array {
   if (value.length > 128 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) {
-    throw new Error('终端输出格式无效')
+    throw new Error(t("终端输出格式无效"))
   }
   const binary = atob(value)
   return Uint8Array.from(binary, character => character.charCodeAt(0))
@@ -50,7 +51,7 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch {
-      onError('复制失败，请长按选择文本后复制')
+      onError(t("复制失败，请长按选择文本后复制"))
     }
   }, [onError])
 
@@ -108,7 +109,7 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
     terminalRef.current = terminal
 
     const reportError = (error: unknown): void => {
-      if (!cancelled) onError(error instanceof Error ? error.message : '终端操作失败')
+      if (!cancelled) onError(error instanceof Error ? error.message : t("终端操作失败"))
     }
 
     const writeOutput = (event: TerminalChunk): void => {
@@ -123,7 +124,7 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
       sessionEnded = true
       disposeInput?.()
       disposeInput = undefined
-      terminal.writeln(`\r\n[会话已结束，退出码 ${event.exitCode}]`)
+      terminal.writeln(t("\r\n[会话已结束，退出码 {0}]", event.exitCode))
       setConnecting(false)
     }
 
@@ -231,23 +232,22 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
   }, [bridge, fontSize, kind, onError])
 
   return (
-    <div className="terminal-frame" aria-label={kind === 'ubuntu' ? 'Ubuntu 终端' : '设备终端'}>
+    <div className="terminal-frame" aria-label={kind === 'ubuntu' ? t("Ubuntu 终端") : t("设备终端")}>
       <button
         type="button"
         className="terminal-copy"
         onClick={() => void copyOutput()}
         disabled={connecting}
-        title="复制全部或选中内容"
-        aria-label="复制终端输出"
+        title={t("复制全部或选中内容")}
+        aria-label={t("复制终端输出")}
       >
         {copied ? <CheckCircle2 size={14} /> : <Copy size={14} />}
-        {copied ? '已复制' : '复制'}
+        {copied ? t("已复制") : t("复制")}
       </button>
       {connecting && (
         <div className="terminal-connecting" role="status">
           <Loader2 size={18} className="spin" />
-          正在连接
-        </div>
+          {t("正在连接")}</div>
       )}
       <div ref={containerRef} className="terminal-canvas" />
     </div>

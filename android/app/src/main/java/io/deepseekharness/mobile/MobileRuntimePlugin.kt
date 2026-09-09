@@ -48,6 +48,22 @@ class MobileRuntimePlugin : Plugin() {
         private const val DESTROY_WAIT_SECONDS = 10L
     }
 
+    /** 权限：应用内桥接；校验语言白名单；仅返回保存结果，不返回私有配置。 */
+    @PluginMethod
+    fun setAppLanguage(call: PluginCall) {
+        val language = call.getString("language").orEmpty()
+        if (language != "zh-CN" && language != "en") {
+            call.reject("不支持的应用语言", "LANGUAGE_INVALID")
+            return
+        }
+        try {
+            if (AppLanguage.save(context, language)) call.resolve()
+            else call.reject("无法保存应用语言", "LANGUAGE_SAVE_FAILED")
+        } catch (_: Exception) {
+            call.reject("无法保存应用语言", "LANGUAGE_SAVE_FAILED")
+        }
+    }
+
     override fun load() {
         auditLog = PrivateAuditLog(context)
         recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.STARTED)

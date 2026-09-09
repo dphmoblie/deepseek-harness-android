@@ -124,6 +124,8 @@ export interface ListenerHandle {
 }
 
 export interface RuntimeBridge {
+  /** 保存应用语言，仅接受简体中文和英语。 */
+  setAppLanguage: (language: 'zh-CN' | 'en') => Promise<void>
   getState: () => Promise<RuntimeState>
   getSettings: () => Promise<RuntimeSettings>
   saveSettings: (settings: RuntimeSettingsUpdate) => Promise<RuntimeSettings>

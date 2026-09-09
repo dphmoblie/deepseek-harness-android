@@ -1721,3 +1721,37 @@ button:disabled {
 .onboarding-actions-row { display: flex; gap: 9px; flex-wrap: wrap; }
 .onboarding-nav { display: flex; align-items: center; width: 100%; }
 .onboarding-spacer { flex: 1; }
+
+/* 语言页适配窄屏及英文长文案，保留现有应用的配色与控件风格。 */
+.language-screen {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+}
+.language-card {
+  width: min(100%, 480px);
+  padding: 28px;
+  border: 1px solid #dce1e6;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 16px 48px #17202a0d;
+}
+.language-card h2 { font-size: 24px; line-height: 1.4; }
+.language-card p, .language-settings p { color: #626d79; line-height: 1.6; }
+.language-card label, .language-settings label { display: block; margin: 16px 0 8px; }
+.language-card select, .language-settings select {
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid #c9d0d8;
+  border-radius: 10px;
+  background: white;
+  color: #17202a;
+  font: inherit;
+}
+.language-card .button { margin-top: 24px; width: 100%; }
+.language-settings { padding: 20px; margin-bottom: 16px; }
+.language-settings h2 { font-size: 18px; margin: 8px 0; }
+html[lang="en"] .button { white-space: normal; }
+html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
