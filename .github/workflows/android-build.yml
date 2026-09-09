@@ -73,6 +73,11 @@ jobs:
       - name: Official Harness frontend adapter tests
         run: pnpm --dir harness-web test
 
+      - name: Install Shizuku plugin contract dependencies
+        # Contract tests import the real plugin from its separate runtime workspace.
+        # Native build scripts run in the ARM64 rootfs job.
+        run: pnpm --dir scripts/runtime-profile install --frozen-lockfile --ignore-scripts
+
       - name: Script tests (node --test)
         run: pnpm run test:scripts
 
