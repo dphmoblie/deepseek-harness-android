@@ -36,6 +36,7 @@ import {
 } from './validation'
 
 interface NativeRuntimePlugin {
+  setAppLanguage(options: { language: 'zh-CN' | 'en' }): Promise<void>
   getState(): Promise<RuntimeState>
   getSettings(): Promise<RuntimeSettings>
   saveSettings(settings: RuntimeSettingsUpdate): Promise<RuntimeSettings>
@@ -73,6 +74,10 @@ function validatedListener<T>(validator: (value: unknown) => T, listener: (event
 
 function createNativeBridge(): RuntimeBridge {
   return {
+    setAppLanguage: language => {
+      if (language !== 'zh-CN' && language !== 'en') return Promise.reject(new Error('不支持的应用语言'))
+      return NativeRuntime.setAppLanguage({ language })
+    },
     getState: () => NativeRuntime.getState().then(validateRuntimeState),
     getSettings: () => NativeRuntime.getSettings().then(validateStoredSettings),
     saveSettings: settings => NativeRuntime.saveSettings(validateSettingsUpdate(settings)).then(validateSettings),

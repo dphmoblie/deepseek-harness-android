@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RuntimeProgress, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from './platform/types'
 
 const bridge = vi.hoisted(() => ({
+  setAppLanguage: vi.fn(),
   getState: vi.fn(),
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
@@ -72,7 +73,11 @@ const shizuku: ShizukuState = {
 }
 
 beforeEach(() => {
+  window.localStorage.clear()
+  window.localStorage.setItem('dsh-mobile-language-v1', 'zh-CN')
+  window.localStorage.setItem('dsh-mobile-onboarding-v1', '1')
   vi.clearAllMocks()
+  bridge.setAppLanguage.mockResolvedValue(undefined)
   bridge.getState.mockResolvedValue({ ...readyState })
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
@@ -274,5 +279,51 @@ describe('App conversation gate', () => {
     expect(Array.from(message)).toHaveLength(240)
     expect(message).not.toContain('\n')
     expect(alert.querySelector('img')).toBeNull()
+  })
+})
+
+describe('应用语言', () => {
+  it('首次选择语言前不自动打开 Harness，选择英语后显示英文引导', async () => {
+    window.localStorage.clear()
+    render(<App />)
+    expect(await screen.findByRole('heading', { name: '选择语言 / Choose your language' })).toBeVisible()
+    await waitFor(() => expect(bridge.getState).toHaveBeenCalled())
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+    expect(bridge.openHarness).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText('语言 / Language'), { target: { value: 'en' } })
+    fireEvent.click(screen.getByRole('button', { name: '继续 / Continue' }))
+    expect(await screen.findByRole('dialog', { name: 'Welcome to DeepSeek Harness Android' })).toBeVisible()
+    expect(bridge.setAppLanguage).toHaveBeenCalledWith('en')
+    expect(window.localStorage.getItem('dsh-mobile-language-v1')).toBe('en')
+    expect(document.documentElement.lang).toBe('en')
+    expect(bridge.openHarness).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Skip setup' }))
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  })
+
+  it('设置切换立即生效且重新挂载后保留语言', async () => {
+    const view = render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
+    fireEvent.change(screen.getByLabelText('语言'), { target: { value: 'en' } })
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Save settings' })).toBeVisible()
+    expect(screen.getByText('Running', { selector: '.phase-badge' })).toBeVisible()
+    view.unmount()
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Open app settings' }))
+    expect(screen.getByLabelText('Language')).toHaveValue('en')
+    fireEvent.change(screen.getByLabelText('Language'), { target: { value: 'zh-CN' } })
+    expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()
+    expect(document.documentElement.lang).toBe('zh-CN')
+  })
+
+  it('保存失败时保留语言选择页，不自动启动运行时', async () => {
+    window.localStorage.clear()
+    bridge.setAppLanguage.mockRejectedValue(new Error('LANGUAGE_SAVE_FAILED'))
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '继续 / Continue' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('无法保存语言')
+    expect(window.localStorage.getItem('dsh-mobile-language-v1')).toBeNull()
+    expect(bridge.openHarness).not.toHaveBeenCalled()
   })
 })
