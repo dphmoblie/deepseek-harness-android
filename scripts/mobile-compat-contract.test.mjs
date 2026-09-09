@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
 const appRoot = resolve(import.meta.dirname, '..')
+const harnessVersion = '0.1.5-alpha.1'
 
 test('Android rootfs workflow packages the adapted official frontend at the root', async () => {
   const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
@@ -120,6 +121,48 @@ test('Android CI installs the runtime from a committed frozen lockfile', async (
     assert.match(version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/)
   }
   assert.match(runtimeLock, /\n\s+pnpm:\s*\r?\n\s+specifier: 11\.19\.0\s*\r?\n\s+version: 11\.19\.0/)
+})
+
+test('mobile runtime and official frontend use the same validated Harness release', async () => {
+  const runtimePackage = JSON.parse(
+    await readFile(resolve(appRoot, 'scripts/runtime-profile/package.json'), 'utf8'),
+  )
+  const shizukuPackage = JSON.parse(
+    await readFile(
+      resolve(appRoot, 'scripts/runtime-profile/plugins/dsh-mobile-shizuku/package.json'),
+      'utf8',
+    ),
+  )
+  const frontendPackage = JSON.parse(
+    await readFile(resolve(appRoot, 'harness-web/package.json'), 'utf8'),
+  )
+  const runtimeLock = await readFile(
+    resolve(appRoot, 'scripts/runtime-profile/pnpm-lock.yaml'),
+    'utf8',
+  )
+  const frontendLock = await readFile(resolve(appRoot, 'pnpm-lock.yaml'), 'utf8')
+  const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
+
+  for (const dependency of [
+    '@deepseek-ai/dsh',
+    '@deepseek-ai/dsh-base',
+    '@deepseek-ai/dsh-web-app',
+  ]) {
+    assert.equal(runtimePackage.dependencies[dependency], harnessVersion)
+    assert.match(runtimeLock, new RegExp(`'${dependency.replace('/', '\\/')}':\\r?\\n\\s+specifier: ${harnessVersion.replaceAll('.', '\\.')}`))
+  }
+  for (const dependency of [
+    '@deepseek-ai/dsh-attachment',
+    '@deepseek-ai/dsh-llm',
+    '@deepseek-ai/dsh-system-prompt',
+    '@deepseek-ai/dsh-tools',
+  ]) {
+    assert.equal(shizukuPackage.peerDependencies[dependency], harnessVersion)
+  }
+  assert.equal(frontendPackage.devDependencies['@deepseek-ai/dsh-web-frontend'], harnessVersion)
+  assert.match(frontendLock, new RegExp(`specifier: ${harnessVersion.replaceAll('.', '\\.')}`))
+  assert.match(builder, new RegExp(`--dsh-version.*default="${harnessVersion.replaceAll('.', '\\.')}"`))
+  assert.match(builder, /Harness runtime version mismatch/)
 })
 
 test('embedded runtime exposes its pinned package manager without host Node.js', async () => {
@@ -268,6 +311,9 @@ test('bundle verification keeps the official profile baseline without a mobile m
   assert.match(verifier, /PROFILE_BUNDLE_NAMES\s*=\s*\(/)
   assert.match(verifier, /profile_bundle_names\s*=\s*list\(PROFILE_BUNDLE_NAMES\)/)
   assert.match(verifier, /runtime contains build-only package-manager metadata/)
+  assert.match(verifier, /runtime dshVersion mismatch/)
+  assert.match(verifier, /packaged Harness version mismatch/)
+  assert.match(verifier, /manifest dshVersion is missing or invalid/)
   assert.match(verifier, /OFFICIAL_FRONTEND_MARKER/)
   assert.match(verifier, /expected exactly one official frontend index/)
   assert.match(verifier, /legacy custom frontend artifact remains/)

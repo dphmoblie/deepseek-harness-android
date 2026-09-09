@@ -69,6 +69,6 @@ internal object RuntimeUpdatePolicy {
     }
 
     private const val MAX_CORE_PARTS = 4
-    private val VERSION_PATTERN = Regex("^[0-9]+(?:\\.[0-9]+){0,3}(?:-[A-Za-z0-9]+(?:\\.[A-Za-z0-9]+)*)?$")
-    private val PRERELEASE_TOKEN = Regex("^[A-Za-z0-9]+$")
+    private val VERSION_PATTERN = Regex("^[0-9]+(?:\\.[0-9]+){0,3}(?:-[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*)?$")
+    private val PRERELEASE_TOKEN = Regex("^[A-Za-z0-9-]+$")
 }

@@ -702,7 +702,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--node-version", default="24.19.0")
     parser.add_argument("--dsh-root", required=True, type=Path)
     parser.add_argument("--toolchain-dir", type=Path, default=None, help="optional pre-staged toolchain dir (bin/* -> /usr/local/bin, python/ -> /opt/python)")
-    parser.add_argument("--dsh-version", default="0.1.3-alpha.2")
+    parser.add_argument("--dsh-version", default="0.1.5-alpha.1")
     parser.add_argument("--runtime-version", required=True)
     parser.add_argument(
         "--rootfs-url",
@@ -750,6 +750,16 @@ def main() -> None:
     dsh_entrypoint = args.dsh_root / "node_modules" / "@deepseek-ai" / "dsh" / "lib" / "bin.js"
     if not dsh_entrypoint.is_file():
         raise BuildError("Harness runtime is missing its CLI")
+    dsh_package_path = args.dsh_root / "node_modules" / "@deepseek-ai" / "dsh" / "package.json"
+    try:
+        installed_dsh_version = json.loads(dsh_package_path.read_text(encoding="utf-8"))["version"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+        raise BuildError("Harness runtime package metadata is missing or invalid") from error
+    if installed_dsh_version != args.dsh_version:
+        raise BuildError(
+            "Harness runtime version mismatch: "
+            f"installed {installed_dsh_version!r}, expected {args.dsh_version!r}"
+        )
     pnpm_entrypoint = args.dsh_root / Path(PNPM_ENTRYPOINT.as_posix())
     if not pnpm_entrypoint.is_file():
         raise BuildError(
@@ -850,6 +860,7 @@ def main() -> None:
             "schemaVersion": 1,
             "runtimeId": "ubuntu-24.04-arm64-deepseek-harness",
             "version": args.runtime_version,
+            "dshVersion": args.dsh_version,
             "architecture": "arm64-v8a",
             "rootfs": {
                 "url": rootfs_url,

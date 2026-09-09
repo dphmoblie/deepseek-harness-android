@@ -37,6 +37,9 @@ MOBILE_BUNDLE_PATTERN = re.compile(
 OFFICIAL_FRONTEND_MARKER = b'name="dsh-official-frontend" content="android-adapted-v1"'
 LEGACY_MOBILE_FRONTEND_MARKER = b'dsh-mobile-frontend'
 FRONTEND_DIST_SUFFIX = "/node_modules/@deepseek-ai/dsh-web-frontend/dist/"
+DSH_PACKAGE_PATTERN = re.compile(
+    r"^opt/dsh/node_modules/\.pnpm/@deepseek-ai\+dsh@[^/]+/node_modules/@deepseek-ai/dsh/package\.json$"
+)
 LEGACY_FRONTEND_FILES = frozenset({"plugin-workbench-loader.js"})
 LEGACY_FRONTEND_PREFIXES = ("plugin-workbench/",)
 
@@ -63,6 +66,8 @@ def main() -> int:
     frontend_indexes: list[str] = []
     pnpm_wrapper: bytes | None = None
     web_profile_workspace: bytes | None = None
+    runtime_metadata: bytes | None = None
+    dsh_package_metadata: list[bytes] = []
     fail = lambda msg: (_ for _ in ()).throw(SystemExit(f"BUNDLE_VERIFY_FAILED: {msg}"))
 
     import tarfile
@@ -91,13 +96,19 @@ def main() -> int:
                 if name in {
                     "usr/local/bin/pnpm",
                     "root/.dsh/profiles/web/pnpm-workspace.yaml",
+                    "etc/deepseek-harness-runtime.json",
                 }:
                     source = t.extractfile(m)
                     content = b"" if source is None else source.read()
                     if name == "usr/local/bin/pnpm":
                         pnpm_wrapper = content
-                    else:
+                    elif name == "root/.dsh/profiles/web/pnpm-workspace.yaml":
                         web_profile_workspace = content
+                    else:
+                        runtime_metadata = content
+                elif DSH_PACKAGE_PATTERN.fullmatch(name):
+                    source = t.extractfile(m)
+                    dsh_package_metadata.append(b"" if source is None else source.read())
                 if FRONTEND_DIST_SUFFIX in name:
                     dist_path = name.split(FRONTEND_DIST_SUFFIX, 1)[1]
                     if dist_path == "index.html":
@@ -129,6 +140,33 @@ def main() -> int:
 
     if extracted != expected_extracted:
         fail(f"extracted size mismatch: {extracted} != {expected_extracted}")
+    expected_dsh_version = manifest.get("dshVersion")
+    if not isinstance(expected_dsh_version, str) or not re.fullmatch(
+        r"[A-Za-z0-9._-]{1,96}", expected_dsh_version
+    ):
+        fail("manifest dshVersion is missing or invalid")
+    try:
+        metadata = json.loads(runtime_metadata) if runtime_metadata is not None else None
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        metadata = None
+    if not isinstance(metadata, dict):
+        fail("runtime build metadata is missing or invalid")
+    if metadata.get("dshVersion") != expected_dsh_version:
+        fail(
+            "runtime dshVersion mismatch: "
+            f"{metadata.get('dshVersion')!r} != {expected_dsh_version!r}"
+        )
+    if len(dsh_package_metadata) != 1:
+        fail(f"expected exactly one Harness runtime package, found {len(dsh_package_metadata)}")
+    try:
+        packaged_dsh_version = json.loads(dsh_package_metadata[0]).get("version")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        packaged_dsh_version = None
+    if packaged_dsh_version != expected_dsh_version:
+        fail(
+            "packaged Harness version mismatch: "
+            f"{packaged_dsh_version!r} != {expected_dsh_version!r}"
+        )
     if len(frontend_indexes) != 1:
         fail(f"expected exactly one official frontend index, found {len(frontend_indexes)}")
 

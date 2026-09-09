@@ -46,6 +46,12 @@ class RuntimeUpdatePolicyTest {
     @Test
     fun comparesPrereleasesBeforeStableReleases() {
         assertTrue(RuntimeUpdatePolicy.compareVersions("0.1.8", "0.1.8-rc.6") > 0)
+        assertTrue(
+            RuntimeUpdatePolicy.compareVersions(
+                "0.1.9-mobile-shizuku.5",
+                "0.1.9-mobile-shizuku.4",
+            ) > 0,
+        )
         assertTrue(RuntimeUpdatePolicy.compareVersions("0.1.9", "0.1.10") < 0)
         assertTrue(RuntimeUpdatePolicy.compareVersions("2026.08.18", "2026.08.17") > 0)
         assertTrue(RuntimeUpdatePolicy.compareVersions("custom", "0.1.8") == 0)
