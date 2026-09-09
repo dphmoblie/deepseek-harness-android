@@ -1,129 +1,149 @@
-# DeepSeek Harness Android
+# DeepSeek Harness for Android
 
-This document will be extensively revised later, without AI.There are too many mistake！！！
-这篇文档稍后将会被修改，因为有一些令人迷惑的问题和错误。
+[English](README.md) · [简体中文](README.zh-CN.md)
 
-[English](README.md) | [中文](README.zh.md)
+**DeepSeek Harness for Android** runs the full [DeepSeek Harness](https://github.com/deepseek-ai/dsh) agent environment — an Ubuntu userspace, Node.js, and the official Harness web console — directly on an Android phone. No root is required: the complete Linux environment executes inside [PRoot](https://github.com/proot-me/proot), and Harness is served on Android loopback and displayed in a navigation-restricted internal WebView.
 
-`app/` is an independent Capacitor Android application for running DeepSeek Harness in a local Ubuntu userspace. Once the runtime is ready, opening the app starts Harness and enters the in-app conversation directly; no external browser is required. Harness service controls, Ubuntu installation and reset, terminals, runtime source details, and optional Shizuku-backed device shell access live under Settings.
+| | |
+| --- | --- |
+| Application package | `io.deepseekharness.mobile` |
+| Current version | `0.1.9` |
+| Minimum system | Android 8.0 (API 26) or newer |
+| Architecture | `arm64-v8a` only |
+| Embedded runtime | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.1.5-alpha.1 |
+| Application license | MIT (runtime components carry their own licenses — see [License](#license)) |
 
-## Build requirements
+## Highlights
 
-- Node.js `^22.19.0 || >=24.0.0`, matching the current DeepSeek Harness engine range. Node.js 11.9 cannot build supported Capacitor releases or the current DeepSeek Harness upstream.
-- JDK 23.0.1.
-- Android SDK 35 and a compatible Android NDK.
-- The pinned ARM64 PRoot runner and loader used by the release. The current
-  release artifacts come from the Operit2 Android runtime toolchain at commit
-  `dc4c3a9405dc7ed3ef69b2ac9a6ace65374d77cf`.
+- **A complete Linux agent environment on your phone.** Ubuntu 24.04 runs on device through PRoot. There is no cloud server, no remote desktop, and no account sign-up: the agent runtime and its web console run locally.
+- **Official Harness web console.** The app packages the official `dsh web` frontend, adapted only for mobile viewport sizing and safe areas. Desktop-oriented DSH web plugins load through the standard Harness plugin loader and receive mobile-friendly layouts.
+- **Works without rooting.** PRoot provides userspace containment on stock devices. An optional [Shizuku](https://shizuku.rikka.app/) integration adds a shell-level device terminal (`/system/bin/sh`) when you choose to authorize it. Shizuku grants Android shell privileges — never root.
+- **Self-contained and offline-capable.** The release APK embeds a verified `rootfs.bundle` plus a signed manifest, so the runtime can be installed with no network connection. Remote, digest-pinned runtime sources are also supported.
+- **Tamper-resistant runtime delivery.** Every manifest and rootfs image is verified by exact length and SHA-256 before use; downloads only accept HTTPS destinations, reject private-address DNS answers, resume with HTTP range requests, and extract with path-traversal and device-node protections. Promotion to an active environment is atomic.
+- **Built-in and custom model providers.** Credentials for DeepSeek, OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, xAI, Mistral, and your own OpenAI-compatible endpoints are encrypted with the Android Keystore and injected only into the runtime process. They are never returned to the WebView.
+- **Local-only by construction.** Harness binds exclusively to `127.0.0.1`. Each start generates a fresh 256-bit transport token that protects both HTTP and WebSocket requests; the token is held in process memory only and is never persisted or embedded in URLs.
+- **Integrated terminals.** Use an Ubuntu terminal inside the PRoot environment and, optionally, a Shizuku-backed Android device terminal in the same interface.
 
-The Android WebView does not run Node.js. The installed Ubuntu environment must contain Node.js in the exact supported range `^22.19.0 || >=24.0.0`; Node.js 23 is not supported by the current Harness.
+## How it works
 
-## Local workflow
+The application has three layers:
 
-```powershell
+1. **Management surface (Capacitor + React).** A native Android shell for runtime installation, service control, model provider settings, terminals, runtime sources, and reset.
+2. **Native runtime layer (Kotlin).** Validates and extracts the rootfs, manages the PRoot runner and loader shipped as native libraries, supervises the Harness process and PTY sessions, and optionally connects to a user-authorized Shizuku UserService.
+3. **Ubuntu runtime (PRoot).** A fixed, allowlisted entrypoint starts `dsh web` on loopback inside Ubuntu 24.04. A Node.js preload enforces the per-start token before any request reaches Harness, and the internal WebView is restricted to that same loopback origin.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture and security boundaries.
+
+## Installation
+
+1. Download the latest APK from the [Releases](https://github.com/dphmoblie/deepseek-harness-android/releases) page.
+2. Install the APK (allow installation from the trusted source when prompted).
+3. Open the app and wait for the embedded runtime to be read, verified, and installed — no internet connection is required for the official self-contained build.
+4. Add a model provider and API key in **Settings → Model providers**, then start Harness.
+
+When the runtime is ready, the app opens the Harness console directly and restores your most recent session.
+
+### Requirements
+
+- An Android 8.0+ device with an **arm64-v8a** (64-bit ARM) processor.
+- Roughly several GB of free storage for the extracted Ubuntu environment.
+- An API key for at least one supported model provider, or a compatible custom endpoint.
+
+## Model providers
+
+Built-in providers: **DeepSeek, OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, xAI, Mistral**.
+
+You can also configure any OpenAI-compatible endpoint as a custom provider (base URL, API key, and model list). Credentials are encrypted at rest with the Android Keystore and are injected into the Harness process environment only; saving a configuration restarts a running Harness so the runtime state always matches what is shown in the UI.
+
+## Optional Shizuku integration
+
+Shizuku is entirely optional and never bundled:
+
+1. Install and start [Shizuku](https://shizuku.rikka.app/) (via wireless debugging or the standard Shizuku setup methods).
+2. Grant the permission prompt inside the app, then use the explicit **Connect Shizuku** action.
+3. This feature is currently in the testing phase and may be subject to potential defects.
+
+If Shizuku is unavailable, unauthorized, or disconnected, device-terminal requests fail explicitly; the Ubuntu runtime and Harness are unaffected.
+
+## Building from source
+
+### Prerequisites
+
+- Node.js `^22.19.0` or `>=24.0.0` with [pnpm](https://pnpm.io/) 11
+- Android SDK 35, NDK, CMake 3.22.1, JDK 23, Gradle 8.11.1
+- The release-pinned ARM64 PRoot runner and loader (`libdsh_proot.so`, `libdsh_proot_loader.so`) from the Operit2 Android runtime toolchain — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the exact upstream revision and hashes
+- For the self-contained build: a `runtime-manifest.json` and `rootfs.bundle` generated from the matching source revision
+
+### Web and Android build
+
+```bash
 pnpm install --frozen-lockfile
-pnpm run build
-pnpm run android:sync
+pnpm run build          # TypeScript check + Vite production build
+pnpm run android:sync   # build and sync into the Android project
+pnpm run android:open   # open in Android Studio, or build with Gradle
 ```
 
-The `0.1.9` CI release is a self-contained ARM64 APK. The workflow copies the
-pinned official `@deepseek-ai/dsh-web-frontend` 0.1.0-rc.7 distribution, adds
-only the Android safe-area and input-size stylesheet, and injects it into an
-Ubuntu 24.04 ARM64 image containing Node.js 24.19.0 and
-`@deepseek-ai/dsh` 0.1.0-rc.6. It then embeds the verified `rootfs.bundle` and
-`runtime-manifest.json` in the matching APK.
-The same runtime files are also published as separate Release assets for
-inspection and explicitly configured remote installation. Installing the
-official APK therefore works offline and does not require entering a manifest
-URL or digest.
+A development build may omit the bundled runtime and instead pin both
+`DSH_RUNTIME_MANIFEST_URL` and `DSH_RUNTIME_MANIFEST_SHA256` to a remote
+manifest. Full build instructions and the signing policy are documented in
+[android/README.md](android/README.md).
 
-The bundled manifest pins the rootfs byte length, architecture, compression,
-and SHA-256. Embedded installation verifies those values before extraction.
-When a remote source is explicitly configured, its manifest digest and HTTPS
-destination are validated as well; archives use an app-private
-`rootfs-<sha256>.part` file so interrupted transfers can resume across app or
-process restarts. A resumed response must be HTTP 206 with the exact expected
-`Content-Range`; HTTP 200 or 416 causes a clean restart from byte zero. Network,
-TLS, timeout, and incomplete-transfer failures enter an explicit error state
-while retaining a valid bounded partial file. The UI does not report
-extraction until acquisition and archive verification have completed.
+### Checks
 
-`scripts/build-embedded-runtime.py` remains the deterministic image builder
-used by CI and also supports an explicitly constructed embedded development
-build. Embedded and remote acquisition share the same size, digest,
-extraction, and atomic-promotion checks. Do not put API keys, passwords,
-database credentials, signing passwords, or tokens in `.env`, Gradle files,
-source code, manifests, URLs, or logs.
+```bash
+pnpm test          # Vitest unit tests
+pnpm run test:scripts
+pnpm lint          # ESLint, zero warnings
+```
 
-The packaged `/` route is the complete official Harness frontend, including
-its conversation, model, reasoning, settings, and plugin surfaces. There is no
-separate application-authored conversation frontend or compatibility
-workbench. The Android adapter keeps the upstream structure and styling and is
-limited to WebView safe areas and input sizing. The adjacent upstream
-source checkout can be updated independently; an APK continues to use the
-versions pinned in `scripts/runtime-profile/package.json` and
-`harness-web/package.json` until those pins are deliberately upgraded and
-tested together.
+## Security and privacy
 
-The native runner files are generated or imported separately and never
-committed. A release APK packages both
-`lib/arm64-v8a/libdsh_proot.so` and
-`lib/arm64-v8a/libdsh_proot_loader.so`; both are required. The existing
-`prepare:runner` flow remains available for a separately pinned runner source,
-but it does not replace the provenance and license review for the exact two
-binaries shipped in an APK.
+- **Loopback only.** Harness never binds to a non-loopback interface; the internal WebView blocks navigation and HTTP resources outside the loopback origin.
+- **Ephemeral transport credential.** A fresh 256-bit token generated with `SecureRandom` protects every Harness start. It is never persisted, logged, embedded in a URL, or returned to JavaScript.
+- **Credential storage.** Provider API keys are encrypted with the Android Keystore and leave the management surface only as process environment variables for the PRoot runtime.
+- **Verified runtime supply chain.** Manifests and rootfs images are schema-validated, digest-pinned, and extracted with strict archive boundaries; resumable downloads fail closed on malformed ranges or unexpected responses.
+- **Audit trail.** Native audit records live in the app-private no-backup directory with owner-only file modes, rotate daily in UTC, and retain 90 days. Records contain only fixed event/result enums — never URLs, commands, tokens, or terminal data.
+- **No login, no tracking.** The app has no accounts, no advertisements, and no telemetry.
 
-The runtime manifest fields, CI pinning flow, and security boundaries are
-documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). See
-[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) before distributing an
-APK or runtime asset.
+## Contributing
 
-## Security checkpoints
+Issues and pull requests are welcome at
+<https://github.com/dphmoblie/deepseek-harness-android>.
 
-- Native bridge inputs have explicit type, length, format, and state validation.
-- The app has no user-facing login or Android device-credential gate. The
-  conversation opens directly, while management operations remain in the
-  app's Settings surface. This does not weaken the separate loopback transport
-  credential described below.
-- Embedded and downloaded artifacts require exact digests and byte limits;
-  downloads additionally require HTTPS, resumable digest-named staging files,
-  strict Range-response validation, and atomic promotion.
-- Archive extraction prevents traversal and does not create device nodes. The
-  exact compressed stream consumed by the extractor is counted and hashed
-  again before promotion, independently enforcing the manifest's compressed
-  size and SHA-256 during decompression.
-- Before launching Ubuntu, the app probes the packaged PRoot runner and its
-  seccomp compatibility, then requires individually validated bind mounts for
-  the generated resolver file, `/dev`, and `/proc`. Startup fails closed if a
-  required source, guest target, or compatibility probe is unavailable.
-- Harness binds only to Android loopback; no business service is exposed on `0.0.0.0`.
-- Every Harness start generates a non-persistent 256-bit credential. A rootfs
-  preload authenticates both HTTP and WebSocket upgrades before upstream
-  handlers run, and the non-exported internal WebView answers the Basic-auth
-  challenge transparently. An open TCP port alone is not considered ready: two
-  loopback probes separated by a stability interval must return HTTP 401 with
-  the exact expected Basic realm and UTF-8 challenge. The credential is never
-  placed in the URL or audit log.
-- Shizuku access requires the declared `ShizukuProvider`, a visible permission
-  grant, an explicit successful UserService connection, and a user-opened
-  terminal session. Settings exposes a Connect Shizuku action whenever
-  permission exists but the service is disconnected. Binder or UserService
-  loss clears active sessions, and `connected` is true only while a live
-  authorized UserService binder is available.
-- Reset is confined to the app-private runtime root and does not follow symbolic links.
-- Owner-only audit files rotate daily and retain at least 90 days of fixed event/result codes.
-- No credential, URL, command, session identifier, terminal content, or sensitive user data is written to application audit files.
+When contributing, please keep changes scoped, add tests for new behavior, and
+run `pnpm lint` and `pnpm test` before submitting. Security-sensitive changes
+must preserve the boundaries described in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); in particular, never weaken
+loopback enforcement, digest verification, entrypoint allowlists, or the
+Shizuku UserService contract.
 
-## Licensing
+### Contributors
 
-The original application source is MIT licensed. That does not replace or
-weaken the licenses of packaged runtime components. Direct dependency and
-runtime redistribution obligations are summarized in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). In particular, the PRoot
-runner is GPL-2.0-or-later and the referenced Operit2 source/build material is
-AGPL-3.0. A distributor must provide the applicable license texts, complete
-corresponding source for the exact shipped artifacts (including modifications
-and the scripts needed to build them), and clear source-acquisition
-instructions for as long as the applicable licenses require. The current
-provenance record identifies a source revision and binary digests; it does not
-claim a bit-for-bit reproducible rebuild.
+Thanks to everyone who has contributed to the project:
+
+- [@standtrain](https://github.com/standtrain)
+- [@11hyy](https://github.com/11hyy)
+
+### Community
+
+- **QQ group: 1108895375** — questions, feedback, and release announcements are welcome.
+
+## License
+
+The application code in this repository is released under the [MIT License](LICENSE).
+
+The release APK additionally redistributes third-party runtime components under
+their own licenses, including PRoot (GPL-2.0-or-later), Operit2 runtime
+tooling (AGPL-3.0), Ubuntu 24.04 packages, Node.js, and the MIT-licensed
+DeepSeek Harness runtime and frontend. Provenance, exact upstream revisions,
+artifact hashes, and the corresponding license texts are recorded in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and inside the APK under
+`assets/legal/`.
+
+## Related documentation
+
+- [Architecture and security boundaries](docs/ARCHITECTURE.md)
+- [Mobile plugin compatibility design](docs/mobile-plugin-compat.md)
+- [Release checklist](docs/RELEASE_CHECKLIST.md)
+- [Android platform build notes](android/README.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)

@@ -1,50 +1,143 @@
-# DeepSeek Harness Android（中文版）
+# DeepSeek Harness 安卓版
 
-`app/` 是一个独立的 Capacitor Android 应用，在本机 Ubuntu 用户空间中运行 DeepSeek Harness。运行时就绪后，打开应用会直接启动并进入应用内 Harness 对话，无需外部浏览器；服务控制、Ubuntu 安装与重置、终端、运行时来源和可选的 Shizuku 设备 Shell 均位于设置中。
+[English](README.md) · [简体中文](README.zh-CN.md)
 
-> 本文档为 [README.md](README.md) 的中文版本，内容以英文原版为准。
+**DeepSeek Harness 安卓版**可在安卓手机上直接运行完整的 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) 智能体环境——包括 Ubuntu 用户空间、Node.js 以及官方 Harness 网页控制台。设备**无需 Root**：整套 Linux 环境通过 [PRoot](https://github.com/proot-me/proot) 在用户空间内执行，Harness 服务仅监听安卓回环地址，并在禁止外部导航的内置 WebView 中展示。
 
-## 构建要求
+| | |
+| --- | --- |
+| 应用包名 | `io.deepseekharness.mobile` |
+| 当前版本 | `0.1.9` |
+| 最低系统 | Android 8.0（API 26）及以上 |
+| 支持架构 | 仅 `arm64-v8a` |
+| 内置运行时 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.1.5-alpha.1 |
+| 应用许可证 | MIT（运行时组件沿用各自许可证，见[许可证](#许可证)一节） |
 
-- Node.js `^22.19.0 || >=24.0.0`，与当前 DeepSeek Harness 引擎版本范围一致。Node.js 11.9 无法构建受支持的 Capacitor 版本或当前 DeepSeek Harness 上游。
-- JDK 23.0.1，当系统默认仍指向 Java 8 时需显式设置 `JAVA_HOME`。
-- Android SDK 35 及兼容的 Android NDK。
-- 发布版使用的固定 ARM64 PRoot 运行器与加载器。当前发布产物来自 Operit2 Android 运行时工具链，提交 `dc4c3a9405dc7ed3ef69b2ac9a6ace65374d77cf`。
+## 功能特性
 
-Android WebView 不运行 Node.js。已安装的 Ubuntu 环境必须包含版本范围恰为 `^22.19.0 || >=24.0.0` 的 Node.js；当前 Harness 不支持 Node.js 23。
+- **手机上的完整 Linux 智能体环境。** Ubuntu 24.04 完全在设备本地通过 PRoot 运行，不依赖云服务器、远程桌面，也无需注册账号：智能体运行时与网页控制台均在本地执行。
+- **官方 Harness 网页控制台。** 应用内置官方 `dsh web` 前端，仅针对移动端视口尺寸与安全区域做了适配。桌面端 DSH 网页插件可通过标准 Harness 插件加载器使用，并获得适配移动端的布局形态。
+- **免 Root 运行。** 在普通原厂设备上即可通过 PRoot 实现用户空间容器化。可选的 [Shizuku](https://shizuku.rikka.app/) 集成可在用户主动授权后额外提供 Shell 级别的设备终端（`/system/bin/sh`）。Shizuku 提供的是安卓 Shell 权限，而非 Root 权限。
+- **开箱即用、支持离线安装。** 正式版 APK 内置经过校验的 `rootfs.bundle` 与清单文件，无网络环境也可完成运行时安装；同时也支持经摘要固定（digest-pinned）的远程运行时来源。
+- **防篡改的运行时分发。** 每份清单与根文件系统镜像在使用前均按精确长度与 SHA-256 校验；下载仅接受 HTTPS 目标地址、拒绝指向私有地址的 DNS 解析结果，支持 HTTP 范围请求断点续传，解压时具备路径穿越与设备节点防护。环境就绪后以原子方式切换生效。
+- **内置与自定义模型供应商。** DeepSeek、OpenAI、Anthropic、Google Gemini、OpenRouter、Groq、xAI、Mistral 以及自建 OpenAI 兼容端点的凭据均通过 Android Keystore 加密保存，且只会注入运行时进程，绝不回传至 WebView。
+- **默认仅本地通信。** Harness 只绑定 `127.0.0.1`。每次启动都会生成全新的 256 位传输令牌，同时保护 HTTP 与 WebSocket 请求；令牌仅保存在进程内存中，不会持久化，也不会写入 URL。
+- **集成终端。** 可在同一界面中使用 PRoot 环境内的 Ubuntu 终端，以及（可选）由 Shizuku 支持的安卓设备终端。
 
-## 本地工作流
+## 工作原理
 
-```powershell
+应用分为三层：
+
+1. **管理界面（Capacitor + React）。** 原生安卓外壳，负责运行时安装、服务控制、模型供应商设置、终端、运行时来源与环境重置。
+2. **原生运行时层（Kotlin）。** 负责根文件系统的校验与解压、以原生库形式随包提供的 PRoot 运行器与加载器管理、Harness 进程与 PTY 会话监管，以及在用户授权后连接 Shizuku UserService。
+3. **Ubuntu 运行时（PRoot）。** 通过固定的白名单入口在 Ubuntu 24.04 内启动 `dsh web` 并仅监听回环地址。Node.js 预加载模块会在任何请求到达 Harness 之前校验当次启动令牌，内置 WebView 也被限制在同一回环源内。
+
+完整架构与安全边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
+## 安装
+
+1. 从 [Releases](https://github.com/dphmoblie/deepseek-harness-android/releases) 页面下载最新版 APK。
+2. 安装 APK（按系统提示允许来自可信来源的安装）。
+3. 打开应用，等待内置运行时完成读取、校验与安装——官方自包含版本无需联网。
+4. 在**设置 → 模型供应商**中添加模型供应商与 API 密钥，随后启动 Harness。
+
+运行时就绪后，应用会直接打开 Harness 控制台并恢复最近一次会话。
+
+### 环境要求
+
+- Android 8.0 及以上、**arm64-v8a**（64 位 ARM）处理器的设备。
+- 数 GB 左右的可用存储空间，用于存放解压后的 Ubuntu 环境。
+- 至少一个受支持模型供应商的 API 密钥，或一个兼容的自定义端点。
+
+## 模型供应商
+
+内置供应商：**DeepSeek、OpenAI、Anthropic、Google Gemini、OpenRouter、Groq、xAI、Mistral**。
+
+也可以将任意 OpenAI 兼容端点配置为自定义供应商（基础地址、API 密钥与模型列表）。凭据通过 Android Keystore 静态加密，仅以进程环境变量形式注入 Harness 运行时；保存配置时若 Harness 正在运行会自动重启，确保运行时状态始终与界面显示一致。
+
+## 可选的 Shizuku 集成
+
+Shizuku 完全可选，且不会随应用捆绑安装：
+
+1. 自行安装并启动 [Shizuku](https://shizuku.rikka.app/)（通过无线调试或 Shizuku 官方指引的方式）。
+2. 在应用内授予权限，再点击显式的**连接 Shizuku** 操作按钮。
+3. 该项功能正在测试，可能存在问题。
+
+当 Shizuku 不可用、未授权或连接断开时，设备终端请求会明确报错；Ubuntu 运行时与 Harness 不受影响。
+
+## 从源码构建
+
+### 构建依赖
+
+- Node.js `^22.19.0` 或 `>=24.0.0`，以及 [pnpm](https://pnpm.io/) 11
+- Android SDK 35、NDK、CMake 3.22.1、JDK 23、Gradle 8.11.1
+- 来自 Operit2 安卓运行时工具链、与发布版本固定对应的 ARM64 PRoot 运行器与加载器（`libdsh_proot.so`、`libdsh_proot_loader.so`）——准确的上游版本号与哈希见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+- 自包含构建还需从同一源码版本生成的 `runtime-manifest.json` 与 `rootfs.bundle`
+
+### Web 与安卓构建
+
+```bash
 pnpm install --frozen-lockfile
-pnpm run build
-pnpm run android:sync
+pnpm run build          # TypeScript 检查 + Vite 生产构建
+pnpm run android:sync   # 构建并同步到安卓工程
+pnpm run android:open   # 在 Android Studio 中打开，或直接使用 Gradle 构建
 ```
 
-官方 `0.1.9` CI 发布的是内嵌离线运行时的 ARM64 APK。工作流复制固定版本的官方 `@deepseek-ai/dsh-web-frontend` 0.1.0-rc.7 发行文件，只增加 Android 安全区与触控尺寸样式，再将其注入 Ubuntu 24.04 ARM64、Node.js 24.19.0 与 `@deepseek-ai/dsh` 0.1.0-rc.6 运行时。随后，校验后的 `rootfs.bundle` 和 `runtime-manifest.json` 会内嵌到同一 APK。Release 也单独发布这两项运行时资产，便于核验以及用户明确配置远程来源；安装官方 APK 无需联网或手工填写运行时地址与摘要。
+开发版构建可以不内置运行时，改为同时设置 `DSH_RUNTIME_MANIFEST_URL` 与
+`DSH_RUNTIME_MANIFEST_SHA256` 以固定远程清单。完整构建说明与签名策略见
+[android/README.md](android/README.md)。
 
-内嵌安装会校验清单声明的长度、架构、压缩方式与 rootfs SHA-256 后再解压。用户明确配置远程来源时，应用还会校验清单摘要与 HTTPS 目标；下载使用应用私有的 `rootfs-<sha256>.part`，中断后可跨应用重启续传。续传响应必须精确匹配 HTTP 206/`Content-Range`，HTTP 200 或 416 会从零重新下载。断网、TLS、超时或截断会进入明确错误状态并保留合法断点，不会提前显示正在解压或安装完成。禁止将 API 密钥、密码、数据库凭据、签名密码或 Token 放入 `.env`、Gradle 文件、源代码、清单、URL 或日志。
+### 检查与测试
 
-打包后的根路径直接提供完整的官方 Harness 前端，包括对话、模型、推理强度、设置与插件界面。应用不再包含单独编写的对话前端或兼容工作台。Android 适配仅处理 WebView 安全区和触控目标尺寸，保留上游页面结构与风格。相邻目录中的上游源码可以独立拉取更新；APK 仍使用 `scripts/runtime-profile/package.json` 与 `harness-web/package.json` 固定的版本，只有在明确升级并完成兼容测试后才会变化。
+```bash
+pnpm test          # Vitest 单元测试
+pnpm run test:scripts
+pnpm lint          # ESLint，零警告通过
+```
 
-原生运行器文件单独生成或导入，永不提交。发布 APK 同时打包 `lib/arm64-v8a/libdsh_proot.so` 与 `lib/arm64-v8a/libdsh_proot_loader.so`，两者均必需。现有的 `prepare:runner` 流程仍可用于单独固定的运行器来源，但它不能替代对 APK 中随附的那两个确切二进制的来源与许可审查。
+## 安全与隐私
 
-运行时清单字段与安全流程记录在 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。发布清单使用同一 Release 的真实 HTTPS rootfs 地址与精确摘要；内嵌安装不会访问该地址。参见 [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)。
+- **仅监听回环地址。** Harness 不会绑定任何非回环网络接口；内置 WebView 阻止访问回环源之外的导航与 HTTP 资源。
+- **临时传输凭据。** 每次启动 Harness 都会通过 `SecureRandom` 生成全新的 256 位令牌。令牌不会持久化、不会写入日志或 URL，也不会返回给 JavaScript。
+- **凭据存储。** 供应商 API 密钥通过 Android Keystore 加密，离开管理界面时仅作为 PRoot 运行时的进程环境变量存在。
+- **可验证的运行时供应链。** 清单与根文件系统镜像均经过 schema 校验与摘要固定，解压时执行严格的归档边界检查；断点续传遇到非法范围或异常响应时按失败即关闭（fail-closed）处理。
+- **审计记录。** 原生审计日志存放在应用私有的禁备份目录中，文件仅所有者可读写，按 UTC 日期轮转并保留 90 天。记录只包含固定的事件/结果枚举，绝不包含 URL、命令、令牌或终端数据。
+- **无登录、无追踪。** 应用不设账号、不含广告、不采集遥测数据。
 
-## 安全检查点
+## 参与贡献
 
-- 原生桥接输入具备显式的类型、长度、格式与状态校验。
-- 应用没有用户可见的登录或 Android 设备凭据门槛；启动直达对话，管理功能位于设置中。Harness 回环传输仍使用独立的一次性认证凭据。
-- 内嵌与下载的产物要求精确摘要与字节上限；下载额外要求 HTTPS、可恢复的按摘要命名的暂存文件、严格的 Range 响应校验与原子替换。
-- 归档解压防止路径穿越，且不创建设备节点。解压器消费的精确压缩流在替换前会再次计数与哈希，从而在解压过程中独立强制执行清单中的压缩大小与 SHA-256。
-- 启动 Ubuntu 前，应用会探测打包的 PRoot 运行器及其 seccomp 兼容性，然后要求对生成的解析器文件、`/dev` 与 `/proc` 分别校验绑定挂载。若必需的源、客户机目标或兼容性探测不可用，启动将安全失败（fail closed）。
-- Harness 仅绑定 Android 回环地址；不对 `0.0.0.0` 暴露任何业务服务。
-- 每次 Harness 启动都会生成一个非持久的 256 位凭据。rootfs 预加载在上游处理器运行前对 HTTP 与 WebSocket 升级均进行认证，且仅由非导出的内部 WebView 透明应答 Basic 认证质询。仅开放的 TCP 端口不被视为就绪：两个相隔稳定性间隔的回环探测必须返回 HTTP 401，且带有精确匹配的 Basic 域与 UTF-8 质询。凭据绝不放入 URL 或审计日志。
-- Shizuku 访问要求声明 `ShizukuProvider`、可见的权限授予，以及用户打开的终端会话。Binder 或 UserService 丢失会清除活动会话；之后的终端请求会重新连接，且仅当存在活跃的已授权 UserService Binder 时 `connected` 才为 true。
-- 重置仅限于应用私有运行时根目录，且不跟随符号链接。
-- 仅所有者可读的审计文件每日轮转，并至少保留 90 天的固定事件/结果代码。
-- 任何凭据、URL、命令、会话标识符、终端内容或敏感用户数据都不会写入应用审计文件。
+欢迎在 <https://github.com/dphmoblie/deepseek-harness-android> 提交 Issue 与 Pull Request。
 
-## 许可
+提交前请保持改动聚焦、为新行为补充测试，并运行 `pnpm lint` 与 `pnpm test`。
+涉及安全的改动必须维护 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) 所述边界，
+尤其不得削弱回环访问控制、摘要校验、入口白名单或 Shizuku UserService 契约。
 
-原始应用源代码采用 MIT 许可。这不能替代或削弱所打包运行时组件的许可。直接依赖与运行时再分发义务汇总于 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。特别是，PRoot 运行器为 GPL-2.0-or-later，所引用的 Operit2 源代码/构建材料为 AGPL-3.0。分发者必须在适用许可要求的期限内，提供适用的许可文本、所随附确切产物的完整对应源代码（包括修改内容与构建所需的脚本）以及清晰的源代码获取说明。当前的溯源记录标明了源代码修订版本与二进制摘要；它不声明可以逐位复现的重构建。
+### 贡献者
+
+感谢以下贡献者对本项目的付出：
+
+- [@standtrain](https://github.com/standtrain)
+- [@11hyy](https://github.com/11hyy)
+
+### 交流社区
+
+- **QQ 交流群：1108895375**——欢迎入群提问、反馈建议、获取版本发布通知。
+
+## 许可证
+
+本仓库中的应用代码基于 [MIT 许可证](LICENSE)发布。
+
+正式版 APK 还以各自许可证再分发了第三方运行时组件，包括 PRoot
+（GPL-2.0-or-later）、Operit2 运行时工具链（AGPL-3.0）、Ubuntu 24.04
+软件包、Node.js，以及采用 MIT 许可证的 DeepSeek Harness 运行时与前端。
+组件来源、确切上游版本、制品哈希及相应许可证文本记录于
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，并随 APK 内
+`assets/legal/` 目录一并提供。
+
+## 相关文档
+
+- [架构与安全边界](docs/ARCHITECTURE.md)
+- [移动端插件兼容设计](docs/mobile-plugin-compat.md)
+- [发布检查清单](docs/RELEASE_CHECKLIST.md)
+- [安卓平台构建说明](android/README.md)
+- [第三方声明](THIRD_PARTY_NOTICES.md)
