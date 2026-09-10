@@ -31,6 +31,8 @@ jobs:
       DSH_KEYSTORE_PASSWORD: ${{ secrets.DSH_KEYSTORE_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Node.js 24.14.0
         uses: actions/setup-node@v4
@@ -151,6 +153,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Checkout Operit2 at the pinned runtime toolchain commit
         uses: actions/checkout@v4
@@ -211,6 +215,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Node 24.14.0 (arm64)
         uses: actions/setup-node@v4
@@ -374,6 +380,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Download APK artifact
         uses: actions/download-artifact@v4

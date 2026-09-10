@@ -40,6 +40,20 @@ test('official frontend adapter keeps upstream assets without a second conversat
   await assert.rejects(readFile(resolve(appRoot, 'harness-web/scripts/embed-plugin-workbench.mjs')), { code: 'ENOENT' })
 })
 
+test('app consumes the maintained mobile Harness adapter as a pinned submodule', async () => {
+  const gitmodules = await readFile(resolve(appRoot, '.gitmodules'), 'utf8')
+  assert.match(gitmodules, /path\s*=\s*harness-web/u)
+  assert.match(gitmodules, /url\s*=\s*https:\/\/github\.com\/dphmoblie\/deepseek-harness-mobile-support\.git/u)
+
+  const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
+  const checkoutCount = workflow.match(/uses:\s*actions\/checkout@v4/gu)?.length ?? 0
+  const recursiveCount = workflow.match(/submodules:\s*recursive/gu)?.length ?? 0
+  assert.ok(checkoutCount >= 4, 'all jobs should check out the app repository')
+  assert.equal(recursiveCount, 4, 'each app workflow job must recursively check out Harness')
+  assert.ok(recursiveCount < checkoutCount, 'the external Operit2 checkout is intentionally separate')
+  assert.match(workflow, /pnpm --dir harness-web build/u)
+})
+
 test('rootfs frontend input rejects old workbench artifacts and duplicate HTML entries', () => {
   const probe = String.raw`
 import importlib.util
