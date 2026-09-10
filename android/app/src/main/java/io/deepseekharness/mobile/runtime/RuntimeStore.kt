@@ -16,6 +16,7 @@ import java.nio.channels.Channels
 import java.nio.channels.FileChannel
 import java.nio.file.LinkOption
 import java.nio.file.StandardOpenOption
+import java.nio.file.StandardCopyOption
 
 class RuntimeStore(context: Context) {
     private val appContext = context.applicationContext
@@ -44,6 +45,90 @@ class RuntimeStore(context: Context) {
 
     // UI lifecycle reads do not need credentials or a working Keystore service.
     fun keepScreenAwake(): Boolean = preferences.getBoolean(KEY_KEEP_AWAKE, false)
+
+    /** Synchronize the Harness web locale; a missing runtime is a valid no-op. */
+    @Synchronized
+    fun syncHarnessLocale(language: String): Boolean {
+        val harnessLanguage = when (language) {
+            "zh-CN" -> "zh"
+            "en" -> "en"
+            else -> throw RuntimeFailure("LANGUAGE_INVALID", "不支持的应用语言")
+        }
+        // Selecting a language before installation is allowed; startHarness()
+        // replays the saved choice once the guest filesystem exists.
+        if (!RuntimeFiles.isDirectoryNoFollow(currentRoot)) return true
+        val rootHome = File(currentRoot, "root")
+        if (!RuntimeFiles.isDirectoryNoFollow(rootHome)) {
+            throw RuntimeFailure("LANGUAGE_SYNC_FAILED", "Harness 主目录无效")
+        }
+        val settingsFile = File(rootHome, ".dsh/settings.yaml")
+        val settingsDirectory = settingsFile.parentFile
+            ?: throw RuntimeFailure("LANGUAGE_SYNC_FAILED", "Harness 语言设置路径无效")
+        // dsh-settings-file creates this file lazily. Create the parent and the
+        // locale document here so a language chosen before the first Harness
+        // settings write is durable and can be picked up by its file watcher.
+        if (!RuntimeFiles.existsNoFollow(settingsDirectory)) {
+            if (!settingsDirectory.mkdir() && !RuntimeFiles.existsNoFollow(settingsDirectory)) {
+                throw RuntimeFailure("LANGUAGE_SYNC_FAILED", "无法创建 Harness 语言设置目录")
+            }
+        }
+        if (!RuntimeFiles.isDirectoryNoFollow(settingsDirectory)) {
+            throw RuntimeFailure("LANGUAGE_SYNC_FAILED", "Harness 语言设置目录无效")
+        }
+        Os.chmod(settingsDirectory.absolutePath, 0x1c0)
+        val settingsExists = RuntimeFiles.existsNoFollow(settingsFile)
+        if (settingsExists && !isRegularFileNoFollow(settingsFile)) {
+            throw RuntimeFailure("LANGUAGE_SYNC_FAILED", "Harness 语言设置文件无效")
+        }
+        val current = try {
+            if (settingsExists) settingsFile.readText(Charsets.UTF_8) else ""
+        } catch (error: Exception) {
+            throw RuntimeFailure("LANGUAGE_SYNC_FAILED", "无法读取 Harness 语言设置", error)
+        }
+        val updated = HarnessLocaleSettings.updateYaml(current, harnessLanguage)
+        if (settingsExists && updated == current) return true
+        val temporary = File(settingsDirectory, ".settings.yaml.dsh-locale.tmp")
+        try {
+            if (RuntimeFiles.existsNoFollow(temporary)) temporary.delete()
+            FileChannel.open(
+                temporary.toPath(),
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE,
+                LinkOption.NOFOLLOW_LINKS,
+            ).use { channel ->
+                Channels.newOutputStream(channel).use { output ->
+                    output.write(updated.toByteArray(Charsets.UTF_8))
+                    output.flush()
+                    channel.force(true)
+                }
+            }
+            Os.chmod(temporary.absolutePath, 0x180)
+            try {
+                java.nio.file.Files.move(
+                    temporary.toPath(), settingsFile.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING,
+                    LinkOption.NOFOLLOW_LINKS,
+                )
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                java.nio.file.Files.move(
+                    temporary.toPath(), settingsFile.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                    LinkOption.NOFOLLOW_LINKS,
+                )
+            }
+            return true
+        } catch (error: Exception) {
+            try { temporary.delete() } catch (_: Exception) { }
+            throw RuntimeFailure("LANGUAGE_SYNC_FAILED", "无法保存 Harness 语言设置", error)
+        }
+    }
+
+    private fun isRegularFileNoFollow(file: File): Boolean = try {
+        val mode = Os.lstat(file.absolutePath).st_mode
+        OsConstants.S_ISREG(mode)
+    } catch (error: ErrnoException) {
+        if (error.errno == OsConstants.ENOENT) false else throw RuntimeFailure("FILESYSTEM_ERROR", "无法检查 Harness 设置文件", error)
+    }
 
     @Synchronized
     fun settings(): RuntimeSettings {

@@ -57,8 +57,10 @@ class MobileRuntimePlugin : Plugin() {
             return
         }
         try {
-            if (AppLanguage.save(context, language)) call.resolve()
+            if (AppLanguage.save(context, language) && io.deepseekharness.mobile.runtime.RuntimeStore(context).syncHarnessLocale(language)) call.resolve()
             else call.reject("无法保存应用语言", "LANGUAGE_SAVE_FAILED")
+        } catch (failure: RuntimeFailure) {
+            call.reject(failure.message ?: "无法同步 Harness 语言", failure.code)
         } catch (_: Exception) {
             call.reject("无法保存应用语言", "LANGUAGE_SAVE_FAILED")
         }
@@ -235,6 +237,9 @@ class MobileRuntimePlugin : Plugin() {
                 audited(AuditEvent.RUNTIME_START) {
                     if (generation != harnessStartGeneration.get()) return@audited controller.state().toJs()
                     ensureDeviceBridge()
+                    // The app language can be selected before the runtime creates
+                    // its settings file. Replay it before every Harness start.
+                    controller.store.syncHarnessLocale(AppLanguage.current(context))
                     controller.startHarness().toJs()
                 }
             } finally {
