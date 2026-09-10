@@ -15,9 +15,13 @@ internal object AppLanguage {
             .edit().putString(KEY, language).commit()
     }
 
+    fun current(context: Context): String = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        .getString(KEY, null)
+        ?.takeIf { it == "en" || it == "zh-CN" }
+        ?: "zh-CN"
+
     fun localizedContext(context: Context): Context {
-        val stored = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getString(KEY, null)
-        val language = if (stored == "en") "en" else "zh-CN"
+        val language = current(context)
         val configuration = Configuration(context.resources.configuration)
         configuration.setLocale(Locale.forLanguageTag(language))
         return context.createConfigurationContext(configuration)
