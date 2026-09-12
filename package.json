@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-mobile",
-  "version": "0.1.16-preview",
+  "version": "0.1.17-preview",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.19.0",
