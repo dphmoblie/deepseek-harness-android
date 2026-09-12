@@ -10,7 +10,7 @@
     "test": "node --test scripts/*.test.mjs"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-web-frontend": "0.1.5-alpha.1"
+    "@deepseek-ai/dsh-web-frontend": "0.1.5-rc.1"
   },
   "keywords": [
     "dsh",

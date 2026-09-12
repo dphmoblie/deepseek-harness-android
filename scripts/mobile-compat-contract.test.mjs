@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
 const appRoot = resolve(import.meta.dirname, '..')
-const harnessVersion = '0.1.5-alpha.1'
+const harnessVersion = '0.1.5-rc.1'
 
 test('Android rootfs workflow packages the adapted official frontend at the root', async () => {
   const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')

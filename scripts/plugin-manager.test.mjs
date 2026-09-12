@@ -5,7 +5,112 @@ import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
-const { createManager, within } = require('../android/app/src/main/assets/support/plugin-manager.cjs')
+const { createManager, within, parseVersion, compareVersions, satisfiesRange, selectNewestCompatible } =
+  require('../android/app/src/main/assets/support/plugin-manager.cjs')
+
+test('只认 dist-tags.latest 会装错版本：必须按运行时 dsh 版本挑引擎兼容版本', () => {
+  // 两个真实反例：latest 要求更高的 dsh；另一些包的 latest 反而是更早的预发布。
+  const versions = ['0.3.20', '0.3.19', '0.3.18', '0.3.17-beta.1', '0.3.16']
+  const ranges = {
+    '0.3.20': '>=0.1.5-rc.1',
+    '0.3.19': '>=0.1.5-rc.1',
+    '0.3.18': '>=0.1.5-alpha.1',
+    '0.3.17-beta.1': '>=0.1.5-alpha.1',
+    '0.3.16': '>=0.1.5-alpha.1',
+  }
+  // 运行时是 0.1.5-alpha.1：0.3.20 / 0.3.19 不满足，落到 0.3.18。
+  assert.deepEqual(
+    selectNewestCompatible(versions, '0.1.5-alpha.1', version => ranges[version]),
+    { version: '0.3.18', range: '>=0.1.5-alpha.1' },
+  )
+  // 运行时升到 0.1.5-rc.2 后同一个包就能装到最新。
+  assert.deepEqual(
+    selectNewestCompatible(versions, '0.1.5-rc.2', version => ranges[version]),
+    { version: '0.3.20', range: '>=0.1.5-rc.1' },
+  )
+})
+
+test('未声明 dsh 引擎范围的插件按兼容处理，直接取最高版本', () => {
+  assert.deepEqual(
+    selectNewestCompatible(['1.2.0', '1.1.0'], '0.1.5-alpha.1', () => null),
+    { version: '1.2.0', range: null },
+  )
+  assert.deepEqual(
+    selectNewestCompatible(['1.2.0', '1.1.0'], '0.1.5-alpha.1', () => '*'),
+    { version: '1.2.0', range: null },
+  )
+})
+
+test('稳定版运行时优先稳定候选，预发布只在必要时回退', () => {
+  const ranges = { '2.0.0-beta.1': '>=1.0.0', '1.9.0': '>=1.0.0' }
+  // 运行时是稳定版：即便 2.0.0-beta.1 更新，也优先取稳定候选 1.9.0。
+  assert.equal(
+    selectNewestCompatible(['2.0.0-beta.1', '1.9.0'], '1.0.0', version => ranges[version]).version,
+    '1.9.0',
+  )
+  // 稳定候选没有兼容版本时，才回退到预发布候选。
+  assert.equal(
+    selectNewestCompatible(['2.0.0-beta.1', '1.9.0'], '1.0.0', version => (version === '1.9.0' ? '>=9.0.0' : '>=1.0.0')).version,
+    '2.0.0-beta.1',
+  )
+})
+
+test('没有兼容版本时返回 null，调用方据此报 PLUGIN_ENGINE_UNSUPPORTED', () => {
+  assert.equal(selectNewestCompatible(['2.0.0', '1.0.0'], '0.1.5-alpha.1', () => '>=0.1.5-rc.1'), null)
+  assert.equal(selectNewestCompatible([], '0.1.5-alpha.1', () => null), null)
+  assert.equal(selectNewestCompatible(['not-a-version'], '0.1.5-alpha.1', () => null), null)
+  // 运行时版本本身不可解析时不猜：返回 null 由调用方决定降级策略。
+  assert.equal(selectNewestCompatible(['1.0.0'], 'unknown', () => null), null)
+})
+
+test('探测次数有上限，避免版本很多的包把更新时间拖爆', () => {
+  const versions = Array.from({ length: 50 }, (_, index) => `1.0.${50 - index}`)
+  let probes = 0
+  const result = selectNewestCompatible(versions, '0.1.5-alpha.1', () => {
+    probes += 1
+    return '>=9.9.9'
+  }, 4)
+  assert.equal(result, null)
+  assert.equal(probes, 4)
+})
+
+test('范围匹配严格对齐 npm 语义（含预发布与插入符）', () => {
+  // 预发布只有在同元组且比较符自身带预发布时才参与匹配 —— 这正是
+  // 「alpha 不满足 rc 下限」与「alpha 不满足 ^0.1.5」的原因。
+  assert.equal(satisfiesRange('0.1.5-alpha.1', '>=0.1.5-rc.1'), false)
+  assert.equal(satisfiesRange('0.1.5-rc.2', '>=0.1.5-rc.1'), true)
+  assert.equal(satisfiesRange('0.1.5-alpha.1', '^0.1.5'), false)
+  assert.equal(satisfiesRange('0.1.5', '^0.1.5'), true)
+  assert.equal(satisfiesRange('0.1.9', '^0.1.5'), true)
+  assert.equal(satisfiesRange('0.2.0', '^0.1.5'), false)
+  assert.equal(satisfiesRange('1.5.0', '^1.2.3'), true)
+  assert.equal(satisfiesRange('2.0.0', '^1.2.3'), false)
+  // 波浪号、部分版本、与、或、通配。
+  assert.equal(satisfiesRange('0.1.5', '~0.1.2'), true)
+  assert.equal(satisfiesRange('0.2.0', '~0.1.2'), false)
+  assert.equal(satisfiesRange('0.3.7', '0.3'), true)
+  assert.equal(satisfiesRange('0.4.0', '0.3'), false)
+  assert.equal(satisfiesRange('0.1.5', '>=0.1.0 <0.2.0'), true)
+  assert.equal(satisfiesRange('0.2.1', '>=0.1.0 <0.2.0'), false)
+  assert.equal(satisfiesRange('0.1.5-alpha.1', '>=0.1.5-rc.1 || >=0.1.4'), false)
+  assert.equal(satisfiesRange('0.1.4', '>=0.1.5-rc.1 || >=0.1.4'), true)
+  assert.equal(satisfiesRange('0.1.5', '*'), true)
+  assert.equal(satisfiesRange('0.1.5', ''), false)
+  assert.equal(satisfiesRange('0.1.5', 'a'.repeat(300)), false)
+})
+
+test('版本比较遵循 semver 的预发布优先级', () => {
+  assert.equal(compareVersions('1.0.0', '1.0.0-rc.1'), 1)
+  assert.equal(compareVersions('1.0.0-alpha.1', '1.0.0-alpha.2'), -1)
+  assert.equal(compareVersions('1.0.0-alpha.1', '1.0.0-beta.1'), -1)
+  assert.equal(compareVersions('1.0.0-1', '1.0.0-alpha'), -1)
+  assert.equal(compareVersions('1.0.0+build.2', '1.0.0+build.1'), 0)
+  assert.equal(compareVersions('1.0', '1.0.0'), null)
+  assert.equal(compareVersions('1.0.0', 'x.y.z'), null)
+  assert.deepEqual(parseVersion('0.1.5-rc.2'), { numbers: [0, 1, 5], prerelease: ['rc', '2'] })
+  assert.deepEqual(parseVersion('1.2.3').prerelease, [])
+  assert.equal(parseVersion('x'.repeat(80)), null)
+})
 
 test('根目录路径校验兼容真实 Ubuntu 根路径', () => {
   assert.equal(within(path.parse(process.cwd()).root, process.cwd()), true)

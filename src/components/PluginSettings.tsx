@@ -10,6 +10,7 @@ const errorMessages: Record<string, string> = {
   PLUGIN_PROTECTED: '此核心组件受保护，随运行时更新',
   PLUGIN_UPDATE_FAILED: '插件更新失败，已保留原版本。请检查网络后重试。',
   PLUGIN_DEPENDENCY_UNSUPPORTED: '新版插件的依赖与当前运行时不兼容，已保留原版本',
+  PLUGIN_ENGINE_UNSUPPORTED: '该插件没有与当前运行环境（dsh 版本）兼容的版本，已保留原版本。请升级运行环境后重试。',
   PLUGIN_LINK_UNSUPPORTED: '设备不支持安全更新所需的文件链接，已保留原版本',
   PLUGIN_RECOVERY_FAILED: '上次更新尚未恢复，请重试或检查运行时',
   PLUGIN_GROUP_DISABLED: '请先启用所属配置文件',
