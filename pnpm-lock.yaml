@@ -85,8 +85,8 @@ importers:
   harness-web:
     devDependencies:
       '@deepseek-ai/dsh-web-frontend':
-        specifier: 0.1.5-alpha.1
-        version: 0.1.5-alpha.1
+        specifier: 0.1.5-rc.1
+        version: 0.1.5-rc.1
 
 packages:
 
@@ -224,8 +224,8 @@ packages:
     resolution: {integrity: sha512-Vd/9EVDiu6PPJt9yAh6roZP6El1xHrdvIVGjyBsHR0RYwNHgL7FJPyIIW4fANJNG6FtyZfvlRPpFI4ZM/lubvw==}
     engines: {node: '>=18'}
 
-  '@deepseek-ai/dsh-web-frontend@0.1.5-alpha.1':
-    resolution: {integrity: sha512-7vhs9uiNiaUOia2sekcrUeaYho5WngzvtII9B3Bw+vro93N5F5PSINoF6P6uEF4Q/Z8XdCvUIRi70skRTaN2KQ==}
+  '@deepseek-ai/dsh-web-frontend@0.1.5-rc.1':
+    resolution: {integrity: sha512-N6WnubGkuOt62OSFVs3XFybh9/VnDy2yMqaAivr1pIp3YtLsMv9QEyYrgqUhsYsuqu1Tfr5GAVmmcNI5OA7i/Q==}
 
   '@esbuild/aix-ppc64@0.21.5':
     resolution: {integrity: sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ==}
@@ -2311,7 +2311,7 @@ snapshots:
 
   '@csstools/css-tokenizer@3.0.4': {}
 
-  '@deepseek-ai/dsh-web-frontend@0.1.5-alpha.1': {}
+  '@deepseek-ai/dsh-web-frontend@0.1.5-rc.1': {}
 
   '@esbuild/aix-ppc64@0.21.5':
     optional: true

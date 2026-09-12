@@ -7,9 +7,9 @@
     "node": ">=24.0.0"
   },
   "dependencies": {
-    "@deepseek-ai/dsh": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-base": "0.1.5-alpha.1",
-    "@deepseek-ai/dsh-web-app": "0.1.5-alpha.1",
+    "@deepseek-ai/dsh": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-base": "0.1.5-rc.1",
+    "@deepseek-ai/dsh-web-app": "0.1.5-rc.1",
     "@deepseek-harness/dsh-mobile-shizuku": "workspace:0.1.0",
     "pnpm": "11.19.0",
     "react": "18.3.1"
