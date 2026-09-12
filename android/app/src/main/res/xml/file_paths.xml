@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 诊断日志导出：只暴露 cacheDir/diagnostics/ 这一个子目录。
+     诊断日志本身位于 noBackupFilesDir（不参与备份、不可被 FileProvider 分享），
+     导出时才会复制到 cache 目录供系统分享面板读取。 -->
+<paths>
+    <cache-path
+        name="diagnostics"
+        path="diagnostics/" />
+</paths>

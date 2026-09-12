@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.view.WindowManager
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -27,6 +28,10 @@ import io.deepseekharness.mobile.runtime.RuntimeValidation
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
 import io.deepseekharness.mobile.runtime.audit.AuditResult
 import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticExport
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticState
 import io.deepseekharness.mobile.shizuku.DeviceCommand
 import io.deepseekharness.mobile.shizuku.DeviceCommandResult
 import io.deepseekharness.mobile.shizuku.ShizukuState
@@ -71,6 +76,9 @@ class MobileRuntimePlugin : Plugin() {
     companion object {
         private const val DEVICE_COMMAND_TIMEOUT_MS = 60_000L
         private const val DESTROY_WAIT_SECONDS = 10L
+
+        /** 受控错误码：大写字母、数字与下划线，与审计日志的策略一致。 */
+        private val CONTROLLED_CODE = Regex("^[A-Z][A-Z0-9_]{0,63}$")
     }
 
     /** 权限：应用内桥接；校验语言白名单；仅返回保存结果，不返回私有配置。 */
@@ -107,12 +115,23 @@ class MobileRuntimePlugin : Plugin() {
         // 设备桥只服务设备 Shell，属于可选能力。保活生效时 Harness 进程仍在运行，
         // 桥本应由 RuntimeHost 复用；即便这里真的失败，也绝不能让插件注册失败——
         // 那正是「点通知后设置页打不开」的成因。
+        var bridgeReady = true
         try {
             ensureDeviceBridge()
         } catch (_: Throwable) {
+            bridgeReady = false
             android.util.Log.w("dsh-runtime", "device bridge unavailable; device shell disabled")
         }
         recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.SUCCEEDED)
+        diagnostics()?.record(
+            DiagnosticLevel.INFO,
+            DiagnosticEvent.APP_START,
+            mapOf(
+                "result" to "ok",
+                "active" to bridgeReady.toString(),
+                "enabled" to RuntimeHost.isForegroundServiceActive().toString(),
+            ),
+        )
     }
 
     /**
@@ -158,6 +177,16 @@ class MobileRuntimePlugin : Plugin() {
                 throw error
             } finally {
                 recordAudit(AuditEvent.PLUGIN_DESTROY, result)
+                // 记录销毁结果与此刻运行时是否仍被前台服务保留：这正是排查
+                // 「划掉最近任务后运行时是否还在」时需要的第一手信息。
+                diagnostics()?.record(
+                    DiagnosticLevel.INFO,
+                    DiagnosticEvent.APP_DESTROY,
+                    mapOf(
+                        "result" to result.name.lowercase(),
+                        "active" to RuntimeHost.isForegroundServiceActive().toString(),
+                    ),
+                )
             }
         }
     }
@@ -262,10 +291,25 @@ class MobileRuntimePlugin : Plugin() {
                 audited(AuditEvent.RUNTIME_START) {
                     if (generation != harnessStartGeneration.get()) return@audited controller.state().toJs()
                     ensureDeviceBridge()
-                    controller.startHarness().toJs().also {
-                        // Harness 启动成功后才按设置提升前台优先级；失败时不留空转服务。
-                        // 这里直接读开关，避免为读设置而触发凭据解密。
-                        syncKeepAliveService(controller.store.keepRuntimeInBackground())
+                    try {
+                        controller.startHarness().toJs().also { snapshot ->
+                            // Harness 启动成功后才按设置提升前台优先级；失败时不留空转服务。
+                            // 这里直接读开关，避免为读设置而触发凭据解密。
+                            syncKeepAliveService(controller.store.keepRuntimeInBackground())
+                            diagnostics()?.record(
+                                DiagnosticLevel.INFO,
+                                DiagnosticEvent.HARNESS_START,
+                                mapOf("result" to "ok", "phase" to snapshot.optString("phase")),
+                            )
+                        }
+                    } catch (failure: Throwable) {
+                        // 启动失败码是排障的核心线索：它是受控枚举，不含任何凭据或路径。
+                        diagnostics()?.record(
+                            DiagnosticLevel.ERROR,
+                            DiagnosticEvent.HARNESS_START,
+                            mapOf("result" to "failed", "code" to failureCode(failure)),
+                        )
+                        throw failure
                     }
                 }
             } finally {
@@ -303,7 +347,13 @@ class MobileRuntimePlugin : Plugin() {
                 // 否则 supervisor 里保存的端口与令牌会变成指向死端口的陈旧配置。
                 // 只终结发起中的设备命令——它们的终端会话即将被关闭。
                 RuntimeHost.cancelDeviceCommands()
-                controller.stopRuntime().toJs()
+                controller.stopRuntime().toJs().also { snapshot ->
+                    diagnostics()?.record(
+                        DiagnosticLevel.INFO,
+                        DiagnosticEvent.HARNESS_STOP,
+                        mapOf("result" to "ok", "phase" to snapshot.optString("phase")),
+                    )
+                }
             }
         }
     }
@@ -336,6 +386,15 @@ class MobileRuntimePlugin : Plugin() {
      * 而 Activity 重建时重复配置正是「插件注册失败」的根因。
      */
     private fun ensureDeviceBridge() {
+        if (RuntimeHost.deviceBridgeOrNull() != null) {
+            // 复用的是前台服务保留下来的同一个桥：这正是保活生效时的正常路径。
+            diagnostics()?.record(
+                DiagnosticLevel.INFO,
+                DiagnosticEvent.DEVICE_BRIDGE,
+                mapOf("result" to "reused"),
+            )
+            return
+        }
         RuntimeHost.acquireDeviceBridge {
             val bridgeTokenBytes = ByteArray(32).also(SecureRandom()::nextBytes)
             val bridgeToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bridgeTokenBytes)
@@ -349,12 +408,39 @@ class MobileRuntimePlugin : Plugin() {
                 bridge.start()
                 controller.configureDeviceBridge(DeviceBridgeAccess(bridge.localPort, bridgeToken))
             } catch (error: Throwable) {
+                diagnostics()?.record(
+                    DiagnosticLevel.WARN,
+                    DiagnosticEvent.DEVICE_BRIDGE,
+                    mapOf("result" to "failed", "code" to failureCode(error)),
+                )
                 bridge.stop()
                 throw error
             }
+            diagnostics()?.record(
+                DiagnosticLevel.INFO,
+                DiagnosticEvent.DEVICE_BRIDGE,
+                mapOf("result" to "created"),
+            )
             bridge
         }
     }
+
+    /**
+     * 受控失败码：RuntimeFailure 携带固定枚举码，其他异常统一归一化为 INTERNAL_ERROR。
+     * 绝不写入异常消息——那里可能包含路径或凭据片段。
+     */
+    private fun failureCode(error: Throwable): String =
+        (error as? RuntimeFailure)?.code?.takeIf { code -> code.matches(CONTROLLED_CODE) } ?: "INTERNAL_ERROR"
+
+    /** 诊断日志；控制器尚未就绪时返回 null（排障不得影响主流程）。 */
+    private fun diagnostics() = if (this::controller.isInitialized) controller.store.diagnostics else null
+
+    /**
+     * 诊断日志（必需）。
+     * 只有插件成功加载后才可能被调用的方法使用它；未就绪即属于运行时已关闭。
+     */
+    private fun requireDiagnostics() = diagnostics()
+        ?: throw RuntimeFailure("RUNTIME_CLOSED", "本机运行时正在关闭")
 
     @PluginMethod
     fun createTerminal(call: PluginCall) {
@@ -491,16 +577,90 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 权限：应用内桥接。
+     * 只返回诊断日志的状态（开关、保留天数、文件数、总字节数、最近记录时间），
+     * 不回传任何日志内容。
+     */
+    @PluginMethod
+    fun getDiagnosticLogState(call: PluginCall) {
+        resolveWhileActive(call) { requireDiagnostics().state().toJs() }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 更新收集开关与保留天数；保留天数由原生侧夹到 1..30，非法输入直接拒绝。
+     */
+    @PluginMethod
+    fun setDiagnosticLogSettings(call: PluginCall) {
+        execute(call) {
+            val enabled = call.getBoolean("enabled")
+                ?: throw RuntimeFailure("DIAGNOSTIC_SETTINGS_INVALID", "诊断日志开关缺失")
+            val retentionDays = call.getInt("retentionDays")
+                ?: throw RuntimeFailure("DIAGNOSTIC_SETTINGS_INVALID", "诊断日志保留天数缺失")
+            requireDiagnostics().setSettings(enabled, retentionDays).toJs()
+        }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 导出全部诊断日志并用系统分享面板交给用户选择去向；没有内容时明确失败，
+     * 不生成空文件。诊断日志只含受控状态码，因此分享本身不构成凭据外泄。
+     */
+    @PluginMethod
+    fun shareDiagnosticLog(call: PluginCall) {
+        execute(call) {
+            val log = requireDiagnostics()
+            val export = log.export()
+                ?: throw RuntimeFailure("DIAGNOSTIC_EXPORT_EMPTY", "当前没有可导出的诊断日志")
+            val uri = FileProvider.getUriForFile(context, log.fileProviderAuthority(), log.exportedFile(export))
+            val send = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, context.getString(R.string.diagnostic_share_subject))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            try {
+                context.startActivity(
+                    Intent.createChooser(send, context.getString(R.string.diagnostic_share_title))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            } catch (error: Throwable) {
+                throw RuntimeFailure("DIAGNOSTIC_SHARE_FAILED", "无法打开分享面板", error)
+            }
+            log.state().toJs().also { json ->
+                json.put("fileName", export.fileName)
+                json.put("exportedBytes", export.sizeBytes)
+            }
+        }
+    }
+
+    /** 权限：应用内桥接；清空全部诊断日志。 */
+    @PluginMethod
+    fun clearDiagnosticLog(call: PluginCall) {
+        execute(call) { requireDiagnostics().clear().toJs() }
+    }
+
+    /**
      * 按设置与当前运行时阶段同步前台服务。
      * 只在用户开启且 Harness 确实由本进程运行时保持服务，避免留下无法解释的通知。
      */
     private fun syncKeepAliveService(keepRuntimeInBackground: Boolean) {
         val running = controller.state().phase == RuntimePhase.RUNNING
-        if (HarnessKeepAlivePolicy.shouldRunService(keepRuntimeInBackground, running)) {
+        val shouldRun = HarnessKeepAlivePolicy.shouldRunService(keepRuntimeInBackground, running)
+        if (shouldRun) {
             HarnessKeepAliveService.start(context)
         } else {
             HarnessKeepAliveService.stop(context)
         }
+        diagnostics()?.record(
+            DiagnosticLevel.INFO,
+            DiagnosticEvent.KEEP_ALIVE,
+            mapOf(
+                "active" to shouldRun.toString(),
+                "running" to running.toString(),
+                "enabled" to keepRuntimeInBackground.toString(),
+            ),
+        )
     }
 
     /** 显式停止运行时或重置：立即撤销前台服务，由 RuntimeHost 统一收尾。 */
@@ -751,6 +911,14 @@ class MobileRuntimePlugin : Plugin() {
         .put("permission", permission)
         .put("connected", connected)
         .put("version", version)
+
+    /** 诊断日志状态：只有布尔值、计数与时间戳，不含任何日志内容。 */
+    private fun DiagnosticState.toJs(): JSObject = JSObject()
+        .put("enabled", enabled)
+        .put("retentionDays", retentionDays)
+        .put("fileCount", fileCount)
+        .put("totalBytes", totalBytes)
+        .put("lastEntryAtMillis", lastEntryAtMillis)
 }
 
 internal fun dispatchTerminalOutput(

@@ -4,6 +4,8 @@ import android.content.Context
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
@@ -309,6 +311,12 @@ class RuntimeSupervisor(
         if (markedProcesses.isNotEmpty()) {
             signalProcesses(markedProcesses, OsConstants.SIGKILL)
             waitForProcessExit(markedProcesses, REAP_WAIT_TIMEOUT_MS)
+            // 残留回收是「进程曾被系统回收」最直接的证据，值得进诊断时间线。
+            store.diagnostics.record(
+                DiagnosticLevel.WARN,
+                DiagnosticEvent.RECOVERY,
+                mapOf("reason" to "reaped_residual", "count" to markedProcesses.size.toString()),
+            )
         }
         val pidFile = store.harnessPidFile
         if (!pidFile.isFile) return
@@ -325,6 +333,11 @@ class RuntimeSupervisor(
         }
         // 仅当残留进程身份与受信任运行器一致时才回收，防止 pid 复用误杀无关进程
         if (HarnessResidual.isProotProcess(readProcCmdline(pid), store.launchRunnerFile.absolutePath)) {
+            store.diagnostics.record(
+                DiagnosticLevel.WARN,
+                DiagnosticEvent.RECOVERY,
+                mapOf("reason" to "reaped_pid_file", "count" to "1"),
+            )
             killProcessTree(pid)
             waitForPidExit(pid)
         }

@@ -37,6 +37,18 @@
             android:exported="true"
             android:multiprocess="false"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <!-- 诊断日志导出：只暴露 cacheDir/diagnostics/ 子目录，不导出、不授予持久权限。
+             分享时通过 FLAG_GRANT_READ_URI_PERMISSION 临时授权给用户选中的应用。 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.diagnostics"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
         <service
             android:name=".shizuku.DeviceShellUserService"
             android:exported="false"

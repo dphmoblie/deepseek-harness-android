@@ -11,4 +11,7 @@
     <string name="keep_alive_channel_description">Keeps the local Harness runtime running in the background</string>
     <string name="keep_alive_notification_title">Harness is running in the background</string>
     <string name="keep_alive_notification_text">Tap to return to the app and manage the runtime</string>
+    <!-- Diagnostic log export: static share sheet text with no file path or log content. -->
+    <string name="diagnostic_share_title">Export diagnostic log</string>
+    <string name="diagnostic_share_subject">DeepSeek Harness diagnostic log</string>
 </resources>

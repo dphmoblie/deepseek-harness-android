@@ -1,5 +1,8 @@
 package io.deepseekharness.mobile.runtime
 
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
+
 data class RuntimeStateSnapshot(
     val phase: RuntimePhase,
     val architecture: String,
@@ -130,6 +133,16 @@ class RuntimeStatus(private val store: RuntimeStore) {
         intent = next
         persistedPhase = currentPhase
         store.recordRuntimeIntent(next, currentPhase, System.currentTimeMillis())
+        // 阶段变化是排障时最有价值的时间线；进度回调不会走到这里（上方已按阶段去重）。
+        store.diagnostics.record(
+            if (currentPhase == RuntimePhase.ERROR) DiagnosticLevel.ERROR else DiagnosticLevel.INFO,
+            DiagnosticEvent.RUNTIME_PHASE,
+            buildMap {
+                put("phase", currentPhase.wireValue)
+                if (forceStop) put("reason", "stopped")
+                errorCode?.let { put("code", it) }
+            },
+        )
     }
 
     companion object {

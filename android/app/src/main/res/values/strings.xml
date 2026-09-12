@@ -11,4 +11,7 @@
     <string name="keep_alive_channel_description">保持本机 Harness 运行时在后台继续运行</string>
     <string name="keep_alive_notification_title">Harness 正在后台运行</string>
     <string name="keep_alive_notification_text">点按返回应用管理本机运行时</string>
+    <!-- 诊断日志导出：分享面板文案固定，不含文件路径或日志内容。 -->
+    <string name="diagnostic_share_title">导出诊断日志</string>
+    <string name="diagnostic_share_subject">DeepSeek Harness 诊断日志</string>
 </resources>

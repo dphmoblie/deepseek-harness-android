@@ -15,6 +15,9 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
 import io.deepseekharness.mobile.runtime.RuntimeHost
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLog
 
 /**
  * 「后台保持 Harness」前台服务。
@@ -31,6 +34,9 @@ import io.deepseekharness.mobile.runtime.RuntimeHost
  * 避免留下无法解释的通知。
  */
 class HarnessKeepAliveService : Service() {
+    /** 服务侧自有实例：不依赖插件是否存活，服务启停本身也要进诊断时间线。 */
+    private val diagnostics by lazy { DiagnosticLog(this) }
+
     override fun onCreate() {
         super.onCreate()
         ensureNotificationChannel()
@@ -47,11 +53,21 @@ class HarnessKeepAliveService : Service() {
         if (HarnessKeepAlivePolicy.shouldStopServiceWithoutController(RuntimeHost.controllerOrNull() != null)) {
             // 进程被系统回收后重启：运行时与临时认证凭据都已不存在，旧会话无法恢复。
             // 此时保持前台服务只会留下一个空转通知，因此立即结束，由界面提示重新连接。
+            diagnostics.record(
+                DiagnosticLevel.WARN,
+                DiagnosticEvent.KEEP_ALIVE,
+                mapOf("reason" to "no_runtime", "active" to "false"),
+            )
             stopForegroundCompat()
             stopSelf()
             return START_NOT_STICKY
         }
         RuntimeHost.attachForegroundService()
+        diagnostics.record(
+            DiagnosticLevel.INFO,
+            DiagnosticEvent.KEEP_ALIVE,
+            mapOf("reason" to "foreground", "active" to "true"),
+        )
         // 故意不使用 START_STICKY：系统重启本服务时进程内已无运行时，
         // 重新拉起只会产生一个无法自解释的通知。
         return START_NOT_STICKY
@@ -70,6 +86,11 @@ class HarnessKeepAliveService : Service() {
     override fun onDestroy() {
         stopForegroundCompat()
         RuntimeHost.detachForegroundService()
+        diagnostics.record(
+            DiagnosticLevel.INFO,
+            DiagnosticEvent.KEEP_ALIVE,
+            mapOf("reason" to "destroyed", "active" to "false"),
+        )
         super.onDestroy()
     }
 

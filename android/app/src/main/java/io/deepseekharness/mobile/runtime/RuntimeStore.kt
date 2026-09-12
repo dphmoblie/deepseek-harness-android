@@ -6,6 +6,7 @@ import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import io.deepseekharness.mobile.BuildConfig
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLog
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -34,6 +35,15 @@ class RuntimeStore(context: Context) {
     val launchLoaderFile = File(launchDirectory, "loader")
     val resolverFile = File(appContext.filesDir, "runtime-resolv.conf")
     val harnessPidFile = File(appContext.noBackupFilesDir, "dsh-harness.pid")
+
+    /**
+     * 应用自诊断日志。
+     *
+     * 放在 store 上的原因：运行时各组件（状态机、supervisor、插件、前台服务）都持有 store，
+     * 排障所需的埋点因此不需要新增构造参数。它只写受控枚举与受控键值，绝不保存凭据。
+     */
+    val diagnostics: DiagnosticLog by lazy { DiagnosticLog(appContext) }
+
     private val launcherConfigDirectory = File(currentRoot, "root/.dsh-mobile")
     private val providerPatchFile = File(launcherConfigDirectory, PROVIDER_PATCH_FILENAME)
 
