@@ -7,6 +7,8 @@ import type {
   PluginCatalog,
   DeviceCommand,
   DeviceCommandResult,
+  DiagnosticLogExport,
+  DiagnosticLogState,
   KeepAliveState,
   NotificationPermissionResult,
   RuntimeBridge,
@@ -22,12 +24,15 @@ import type {
 } from './types'
 import {
   assertBase64Input,
+  assertDiagnosticRetentionDays,
   assertSessionId,
   assertTerminalKind,
   assertTerminalSize,
   validateDeviceCommand,
   validateDeviceCommandParam,
   validateDeviceCommandResult,
+  validateDiagnosticLogExport,
+  validateDiagnosticLogState,
   validateKeepAliveState,
   validateNotificationPermissionResult,
   validateRuntimeProgress,
@@ -64,6 +69,10 @@ interface NativeRuntimePlugin {
   openShizuku(): Promise<void>
   getKeepAliveState(): Promise<KeepAliveState>
   requestNotificationPermission(): Promise<NotificationPermissionResult>
+  getDiagnosticLogState(): Promise<DiagnosticLogState>
+  setDiagnosticLogSettings(options: { enabled: boolean; retentionDays: number }): Promise<DiagnosticLogState>
+  shareDiagnosticLog(): Promise<DiagnosticLogExport>
+  clearDiagnosticLog(): Promise<DiagnosticLogState>
   addListener(eventName: 'runtimeProgress', listener: (event: RuntimeProgress) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'terminalOutput', listener: (event: TerminalChunk) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'terminalExit', listener: (event: TerminalExit) => void): Promise<PluginListenerHandle>
@@ -130,6 +139,13 @@ function createNativeBridge(): RuntimeBridge {
     openShizuku: () => NativeRuntime.openShizuku(),
     getKeepAliveState: () => NativeRuntime.getKeepAliveState().then(validateKeepAliveState),
     requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),
+    getDiagnosticLogState: () => NativeRuntime.getDiagnosticLogState().then(validateDiagnosticLogState),
+    setDiagnosticLogSettings: (enabled, retentionDays) => {
+      const days = assertDiagnosticRetentionDays(retentionDays)
+      return NativeRuntime.setDiagnosticLogSettings({ enabled, retentionDays: days }).then(validateDiagnosticLogState)
+    },
+    shareDiagnosticLog: () => NativeRuntime.shareDiagnosticLog().then(validateDiagnosticLogExport),
+    clearDiagnosticLog: () => NativeRuntime.clearDiagnosticLog().then(validateDiagnosticLogState),
     addRuntimeProgressListener: listener => NativeRuntime.addListener('runtimeProgress', validatedListener(validateRuntimeProgress, listener)),
     addTerminalOutputListener: listener => NativeRuntime.addListener('terminalOutput', validatedListener(validateTerminalChunk, listener)),
     addTerminalExitListener: listener => NativeRuntime.addListener('terminalExit', validatedListener(validateTerminalExit, listener)),

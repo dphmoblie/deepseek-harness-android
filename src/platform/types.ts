@@ -144,6 +144,32 @@ export interface NotificationPermissionResult {
   supported: boolean
 }
 
+/**
+ * 诊断日志状态。
+ *
+ * 只包含开关、保留天数、计数与时间戳：**不含任何日志内容**，
+ * 日志正文只能由用户在系统分享面板里查看。
+ */
+export interface DiagnosticLogState {
+  enabled: boolean
+  retentionDays: number
+  fileCount: number
+  totalBytes: number
+  /** 最近一条记录的时间；从未记录时为 0。 */
+  lastEntryAtMillis: number
+}
+
+/** 导出结果：在状态之外附带导出文件名与字节数。 */
+export interface DiagnosticLogExport extends DiagnosticLogState {
+  fileName: string
+  exportedBytes: number
+}
+
+/** 保留天数范围；原生侧同样会夹取，前端只做先期校验。 */
+export const DIAGNOSTIC_RETENTION_MIN = 1
+export const DIAGNOSTIC_RETENTION_MAX = 30
+export const DIAGNOSTIC_RETENTION_DEFAULT = 3
+
 export interface TerminalChunk {
   sessionId: string
   dataBase64: string
@@ -191,6 +217,14 @@ export interface RuntimeBridge {
   getKeepAliveState: () => Promise<KeepAliveState>
   /** 申请前台服务通知权限；Android 13 以下直接返回已授予。 */
   requestNotificationPermission: () => Promise<NotificationPermissionResult>
+  /** 诊断日志状态；不含日志内容。 */
+  getDiagnosticLogState: () => Promise<DiagnosticLogState>
+  /** 更新采集开关与保留天数（1–30）。 */
+  setDiagnosticLogSettings: (enabled: boolean, retentionDays: number) => Promise<DiagnosticLogState>
+  /** 导出全部诊断日志并打开系统分享面板。 */
+  shareDiagnosticLog: () => Promise<DiagnosticLogExport>
+  /** 清空全部诊断日志。 */
+  clearDiagnosticLog: () => Promise<DiagnosticLogState>
   addRuntimeProgressListener: (listener: (event: RuntimeProgress) => void) => Promise<ListenerHandle>
   addTerminalOutputListener: (listener: (event: TerminalChunk) => void) => Promise<ListenerHandle>
   addTerminalExitListener: (listener: (event: TerminalExit) => void) => Promise<ListenerHandle>

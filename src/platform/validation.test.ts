@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   assertBase64Input,
+  assertDiagnosticRetentionDays,
   assertSessionId,
   assertTerminalKind,
   assertTerminalSize,
+  validateDiagnosticLogExport,
+  validateDiagnosticLogState,
   validateKeepAliveState,
   validateNotificationPermissionResult,
   validateRuntimeProgress,
@@ -16,6 +19,7 @@ import {
   validateTerminalChunk,
   validateTerminalExit,
 } from './validation'
+import { DIAGNOSTIC_RETENTION_MAX, DIAGNOSTIC_RETENTION_MIN } from './types'
 
 const ipv4 = (...octets: number[]): string => octets.join('.')
 
@@ -346,5 +350,59 @@ describe('后台保持状态校验', () => {
     expect(validateNotificationPermissionResult({ granted: false, supported: false })).toEqual({ granted: false, supported: false })
     expect(() => validateNotificationPermissionResult({ granted: 'yes', supported: true })).toThrow('通知权限结果')
     expect(() => validateNotificationPermissionResult({ granted: true })).toThrow('通知权限结果')
+  })
+})
+
+describe('诊断日志校验', () => {
+  const base = {
+    enabled: false,
+    retentionDays: 3,
+    fileCount: 0,
+    totalBytes: 0,
+    lastEntryAtMillis: 0,
+  }
+
+  it('只接受开关、计数与时间戳', () => {
+    expect(validateDiagnosticLogState(base)).toEqual(base)
+    expect(validateDiagnosticLogState({ ...base, enabled: true, fileCount: 2, totalBytes: 4096, lastEntryAtMillis: 1_700_000_000_000 }))
+      .toEqual({ ...base, enabled: true, fileCount: 2, totalBytes: 4096, lastEntryAtMillis: 1_700_000_000_000 })
+  })
+
+  it('拒绝越界保留天数与非计数值', () => {
+    expect(() => validateDiagnosticLogState({ ...base, retentionDays: 0 })).toThrow('保留天数')
+    expect(() => validateDiagnosticLogState({ ...base, retentionDays: 31 })).toThrow('保留天数')
+    expect(() => validateDiagnosticLogState({ ...base, retentionDays: 3.5 })).toThrow('保留天数')
+    expect(() => validateDiagnosticLogState({ ...base, fileCount: -1 })).toThrow('文件数')
+    expect(() => validateDiagnosticLogState({ ...base, totalBytes: '1024' })).toThrow('总字节数')
+    expect(() => validateDiagnosticLogState({ ...base, enabled: 'yes' })).toThrow('诊断日志状态')
+    expect(() => validateDiagnosticLogState(null)).toThrow('诊断日志状态')
+  })
+
+  it('保留天数边界与原生侧一致', () => {
+    expect(assertDiagnosticRetentionDays(DIAGNOSTIC_RETENTION_MIN)).toBe(DIAGNOSTIC_RETENTION_MIN)
+    expect(assertDiagnosticRetentionDays(DIAGNOSTIC_RETENTION_MAX)).toBe(DIAGNOSTIC_RETENTION_MAX)
+    expect(() => assertDiagnosticRetentionDays(DIAGNOSTIC_RETENTION_MAX + 1)).toThrow('保留天数')
+    expect(() => assertDiagnosticRetentionDays(DIAGNOSTIC_RETENTION_MIN - 1)).toThrow('保留天数')
+  })
+
+  it('导出结果必须带有安全的文件名', () => {
+    expect(validateDiagnosticLogExport({
+      ...base,
+      enabled: true,
+      fileCount: 1,
+      fileName: 'dsh-diagnostic-20260912-102030.txt',
+      exportedBytes: 512,
+    })).toEqual({
+      ...base,
+      enabled: true,
+      fileCount: 1,
+      fileName: 'dsh-diagnostic-20260912-102030.txt',
+      exportedBytes: 512,
+    })
+    // 文件名不得包含路径分隔符或任何自由文本。
+    expect(() => validateDiagnosticLogExport({ ...base, fileName: '../../etc/passwd' })).toThrow('文件名')
+    expect(() => validateDiagnosticLogExport({ ...base, fileName: 'a b.txt' })).toThrow('文件名')
+    expect(() => validateDiagnosticLogExport({ ...base, fileName: '' })).toThrow('文件名')
+    expect(() => validateDiagnosticLogExport({ ...base, fileName: 'ok.txt' })).toThrow('导出字节数')
   })
 })

@@ -25,7 +25,9 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  ScrollText,
   Settings2,
+  Share2,
   ShieldCheck,
   Smartphone,
   Square,
@@ -41,6 +43,7 @@ import { MODEL_PROVIDERS } from './modelProviders'
 import { CustomProviders } from './components/CustomProviders'
 import { runtimeBridge } from './platform/native'
 import type {
+  DiagnosticLogState,
   KeepAliveState,
   ModelProviderId,
   ProviderApiKeys,
@@ -52,8 +55,38 @@ import type {
   ShizukuState,
   TerminalKind,
 } from './platform/types'
+import { DIAGNOSTIC_RETENTION_MAX, DIAGNOSTIC_RETENTION_DEFAULT, DIAGNOSTIC_RETENTION_MIN } from './platform/types'
 
-type AppView = 'conversation' | 'settings' | 'terminal' | 'environment' | 'plugins'
+type AppView =
+  | 'conversation'
+  | 'settings'
+  | 'settings-models'
+  | 'settings-runtime'
+  | 'settings-terminal'
+  | 'settings-shizuku'
+  | 'settings-diagnostics'
+  | 'terminal'
+  | 'environment'
+  | 'plugins'
+
+/** 设置二级页：把原先的单页设置按功能分类，避免所有选项挤在一屏里。 */
+type SettingsPage = 'models' | 'runtime' | 'terminal' | 'shizuku' | 'diagnostics'
+
+const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView }> = {
+  models: { title: '模型与凭据', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
+  runtime: { title: '运行与后台', hint: '后台保持、前台服务与运行时来源', view: 'settings-runtime' },
+  terminal: { title: '终端与外观', hint: '字号与屏幕保持常亮', view: 'settings-terminal' },
+  shizuku: { title: 'Shizuku 与设备 Shell', hint: '授权、连接与设备命令', view: 'settings-shizuku' },
+  diagnostics: { title: '诊断与日志', hint: '采集开关、保留策略与导出', view: 'settings-diagnostics' },
+}
+
+const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'shizuku', 'diagnostics']
+
+function settingsPageOf(view: AppView): SettingsPage | null {
+  const entry = SETTINGS_PAGES.find(page => SETTINGS_PAGE_META[page].view === view)
+  return entry ?? null
+}
+
 type NoticeTone = 'success' | 'error' | 'info'
 
 interface Notice {
@@ -98,6 +131,15 @@ const EMPTY_KEEP_ALIVE: KeepAliveState = {
   deviceShellReady: false,
   reconnectRequired: false,
   lastIntent: 'unknown',
+}
+
+/** 诊断日志状态未知时的占位值：按“未收集、无文件”处理，不显示虚假计数。 */
+const EMPTY_DIAGNOSTIC: DiagnosticLogState = {
+  enabled: false,
+  retentionDays: DIAGNOSTIC_RETENTION_DEFAULT,
+  fileCount: 0,
+  totalBytes: 0,
+  lastEntryAtMillis: 0,
 }
 const MAX_NOTICE_CHARACTERS = 240
 const RESET_CONFIRMATION = 'RESET_RUNTIME'
@@ -638,25 +680,117 @@ function TerminalScreen({ bridge, fontSize, onAuthorize, onBack, onConnect, onEr
   )
 }
 
-interface SettingsScreenProps {
+interface SettingsHomeScreenProps {
   busy: string | null
   keepAlive: KeepAliveState
+  runtime: RuntimeState
+  diagnostic: DiagnosticLogState
+  shizuku: ShizukuState
+  onLaunch: () => void
+  onOpenEnvironment: () => void
+  onOpenPage: (page: SettingsPage) => void
+  onOpenPlugins: () => void
+  onOpenTerminal: () => void
+  onStop: () => void
+}
+
+/**
+ * 设置首页：只保留语言、运行环境管理与五个设置分类入口。
+ * 具体选项在各自二级页里，避免单页堆叠过多控件。
+ */
+function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenEnvironment, onOpenPage, onOpenPlugins, onOpenTerminal, onStop }: SettingsHomeScreenProps) {
+  return (
+    <div className="screen settings-screen">
+      <div className="screen-heading management-heading">
+        <div>
+          <p className="eyebrow">{t("应用管理")}</p>
+          <h1>{t("设置")}</h1>
+        </div>
+        <button className="button button-primary conversation-button" type="button" onClick={onLaunch} disabled={busy !== null || !runtimeInstalled(runtime)}>
+          {busy === 'launch' ? <Loader2 className="spin" size={18} /> : runtime.updateAvailable ? <RefreshCw size={18} /> : <Bot size={18} />}
+          {runtime.updateAvailable ? t("更新环境") : t("打开 Harness")}
+        </button>
+      </div>
+
+      <LanguageSettings />
+
+      <section className="management-list" aria-label={t("运行环境管理")}>
+        <button className="management-row" type="button" onClick={onOpenPlugins}>
+          <span className="management-icon green"><Settings2 size={20} /></span>
+          <span className="management-copy"><strong>{t("插件管理")}</strong><small>{t("官方与第三方插件，按文件管理启停和更新")}</small></span>
+          <ChevronRight size={18} />
+        </button>
+        <div className="management-service">
+          <span className="management-icon dark"><Bot size={20} /></span>
+          <span className="management-copy">
+            <strong>{t("Harness 服务")}</strong>
+            <small>{runtime.phase === 'running' ? t("正在本机运行") : runtimeInstalled(runtime) ? t("已停止，可随时启动") : t("等待 Ubuntu 环境")}</small>
+          </span>
+          {runtime.phase === 'running' ? (
+            <button className="button button-danger-quiet compact-button" type="button" onClick={onStop} disabled={busy !== null}><Square size={16} />{t("停止")}</button>
+          ) : (
+            <PhaseBadge phase={runtime.phase} />
+          )}
+        </div>
+        <button className="management-row" type="button" onClick={onOpenEnvironment}>
+          <span className="management-icon green"><HardDrive size={20} /></span>
+          <span className="management-copy"><strong>{t("Ubuntu 运行时")}</strong><small>{runtime.updateAvailable ? t("发现 APK 内置环境更新") : t("安装进度、版本、来源与重置")}</small></span>
+          <ChevronRight size={18} />
+        </button>
+        <button className="management-row" type="button" onClick={onOpenTerminal}>
+          <span className="management-icon blue"><SquareTerminal size={20} /></span>
+          <span className="management-copy"><strong>{t("终端与设备 Shell")}</strong><small>{t("Ubuntu 终端、Shizuku 和本机 adb")}</small></span>
+          <ChevronRight size={18} />
+        </button>
+      </section>
+
+      <section className="management-list" aria-label={t("设置分类")}>
+        {SETTINGS_PAGES.map(page => {
+          const meta = SETTINGS_PAGE_META[page]
+          const badge = page === 'runtime' ? (keepAlive.foregroundServiceActive ? t("后台保持中") : keepAlive.keepRuntimeInBackground ? t("已开启") : t("未开启"))
+            : page === 'shizuku' ? (!shizuku.installed ? t("未安装") : shizuku.connected ? t("已连接") : shizuku.permission === 'granted' ? t("已授权") : t("待授权"))
+              : page === 'diagnostics' ? (diagnostic.enabled ? t("收集中") : t("未收集"))
+                : ''
+          return (
+            <button className="management-row" key={page} type="button" onClick={() => onOpenPage(page)}>
+              <span className={`management-icon ${page === 'diagnostics' ? 'dark' : 'green'}`}>
+                {page === 'models' ? <KeyRound size={20} /> : page === 'runtime' ? <Power size={20} /> : page === 'terminal' ? <SquareTerminal size={20} /> : page === 'shizuku' ? <Smartphone size={20} /> : <ScrollText size={20} />}
+              </span>
+              <span className="management-copy">
+                <strong>{t(meta.title)}</strong>
+                <small>{badge === '' ? t(meta.hint) : `${t(meta.hint)} · ${badge}`}</small>
+              </span>
+              <ChevronRight size={18} />
+            </button>
+          )
+        })}
+      </section>
+    </div>
+  )
+}
+
+interface SettingsScreenProps {
+  busy: string | null
+  /** 诊断日志状态：与设置草稿独立，由原生侧直接管理。 */
+  diagnostic: DiagnosticLogState
+  keepAlive: KeepAliveState
+  page: SettingsPage
   runtime: RuntimeState
   settings: RuntimeSettings | null
   shizuku: ShizukuState
   onAuthorize: () => void
+  onBack: () => void
+  onClearDiagnostic: () => void
   onConnect: () => void
+  onDiagnosticSettings: (enabled: boolean, retentionDays: number) => void
   onLaunch: () => void
-  onOpenEnvironment: () => void
   onOpenShizuku: () => void
-  onOpenTerminal: () => void
-  onOpenPlugins: () => void
   onRequestNotificationPermission: () => void
   onSave: (settings: RuntimeSettingsUpdate) => void
-  onStop: () => void
+  onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ busy, keepAlive, runtime, settings, shizuku, onAuthorize, onConnect, onLaunch, onOpenEnvironment, onOpenShizuku, onOpenTerminal, onOpenPlugins, onRequestNotificationPermission, onSave, onStop }: SettingsScreenProps) {
+function SettingsScreen({ busy, diagnostic, keepAlive, page, runtime, settings, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onOpenShizuku, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
   const [draft, setDraft] = useState<RuntimeSettings | null>(settings)
   const [selectedProvider, setSelectedProvider] = useState<ModelProviderId | 'custom'>('deepseek')
   const [credentialDrafts, setCredentialDrafts] = useState<ProviderApiKeys>({})
@@ -709,48 +843,16 @@ function SettingsScreen({ busy, keepAlive, runtime, settings, shizuku, onAuthori
     <div className="screen settings-screen">
       <div className="screen-heading management-heading">
         <div>
-          <p className="eyebrow">{t("应用管理")}</p>
-          <h1>{t("设置")}</h1>
+          <p className="eyebrow">{t("设置")}</p>
+          <h1>{t(SETTINGS_PAGE_META[page].title)}</h1>
         </div>
-        <button className="button button-primary conversation-button" type="button" onClick={onLaunch} disabled={busy !== null || !runtimeInstalled(runtime)}>
-          {busy === 'launch' ? <Loader2 className="spin" size={18} /> : runtime.updateAvailable ? <RefreshCw size={18} /> : <Bot size={18} />}
-          {runtime.updateAvailable ? t("更新环境") : t("打开 Harness")}
+        <button className="icon-button" type="button" aria-label={t("返回设置")} title={t("返回设置")} onClick={onBack}>
+          <ArrowLeft size={19} />
         </button>
       </div>
 
-      <LanguageSettings />
-
-      <section className="management-list" aria-label={t("运行环境管理")}>
-        <button className="management-row" type="button" onClick={onOpenPlugins}>
-          <span className="management-icon green"><Settings2 size={20} /></span>
-          <span className="management-copy"><strong>{t("插件管理")}</strong><small>{t("官方与第三方插件，按文件管理启停和更新")}</small></span>
-          <ChevronRight size={18} />
-        </button>
-        <div className="management-service">
-          <span className="management-icon dark"><Bot size={20} /></span>
-          <span className="management-copy">
-            <strong>{t("Harness 服务")}</strong>
-            <small>{runtime.phase === 'running' ? t("正在本机运行") : runtimeInstalled(runtime) ? t("已停止，可随时启动") : t("等待 Ubuntu 环境")}</small>
-          </span>
-          {runtime.phase === 'running' ? (
-            <button className="button button-danger-quiet compact-button" type="button" onClick={onStop} disabled={busy !== null}><Square size={16} />{t("停止")}</button>
-          ) : (
-            <PhaseBadge phase={runtime.phase} />
-          )}
-        </div>
-        <button className="management-row" type="button" onClick={onOpenEnvironment}>
-          <span className="management-icon green"><HardDrive size={20} /></span>
-          <span className="management-copy"><strong>{t("Ubuntu 运行时")}</strong><small>{runtime.updateAvailable ? t("发现 APK 内置环境更新") : t("安装进度、版本、来源与重置")}</small></span>
-          <ChevronRight size={18} />
-        </button>
-        <button className="management-row" type="button" onClick={onOpenTerminal}>
-          <span className="management-icon blue"><SquareTerminal size={20} /></span>
-          <span className="management-copy"><strong>{t("终端与设备 Shell")}</strong><small>{t("Ubuntu 终端、Shizuku 和本机 adb")}</small></span>
-          <ChevronRight size={18} />
-        </button>
-      </section>
-
       <form className="settings-form" onSubmit={event => { event.preventDefault(); saveDraft() }}>
+        {page === 'models' && (
         <section className="settings-section" aria-labelledby="model-settings">
           <div className="section-title">
             <span className="section-icon"><Bot size={19} /></span>
@@ -831,7 +933,9 @@ function SettingsScreen({ busy, keepAlive, runtime, settings, shizuku, onAuthori
             />
           </label>
         </section>
+        )}
 
+        {page === 'runtime' && (
         <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
@@ -866,7 +970,9 @@ function SettingsScreen({ busy, keepAlive, runtime, settings, shizuku, onAuthori
             />
           </label>
         </section>
+        )}
 
+        {page === 'terminal' && (
         <section className="settings-section" aria-labelledby="terminal-settings">
           <div className="section-title">
             <span className="section-icon"><SquareTerminal size={19} /></span>
@@ -893,7 +999,9 @@ function SettingsScreen({ busy, keepAlive, runtime, settings, shizuku, onAuthori
             />
           </label>
         </section>
+        )}
 
+        {page === 'runtime' && (
         <section className="settings-section" aria-labelledby="keep-alive-settings">
           <div className="section-title section-title-action">
             <span className="section-icon"><BellRing size={19} /></span>
@@ -959,7 +1067,9 @@ function SettingsScreen({ busy, keepAlive, runtime, settings, shizuku, onAuthori
             </div>
           )}
         </section>
+        )}
 
+        {page === 'shizuku' && (
         <section className="settings-section" aria-labelledby="shizuku-settings">
           <div className="section-title section-title-action">
             <span className="section-icon"><Smartphone size={19} /></span>
@@ -987,10 +1097,69 @@ function SettingsScreen({ busy, keepAlive, runtime, settings, shizuku, onAuthori
             {t("Shizuku 只用于设备 Shell 的授权与连接状态检测、连接恢复辅助和健康检查；它不是 root，也不提供永久保活能力。未安装、未授权或断开时，设备 Shell 功能自动降级，不影响 Ubuntu 终端与 Harness。")}
           </p>
         </section>
+        )}
 
+        {page === 'diagnostics' && (
+        <section className="settings-section" aria-labelledby="diagnostic-settings">
+          <div className="section-title section-title-action">
+            <span className="section-icon"><ScrollText size={19} /></span>
+            <div><h2 id="diagnostic-settings">{t("诊断日志")}</h2><p>{t("仅记录应用内部状态码，用于把问题带出来")}</p></div>
+            <span className={`status-chip ${diagnostic.enabled ? 'success' : ''}`}>
+              {diagnostic.enabled ? t("收集中") : t("未收集")}
+            </span>
+          </div>
+          <label className="toggle-row">
+            <span>
+              <strong>{t("收集诊断日志")}</strong>
+              <small>{t("默认关闭；开启后记录运行时阶段、启动结果与前台服务状态")}</small>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={diagnostic.enabled}
+              disabled={busy !== null}
+              onChange={event => onDiagnosticSettings(event.target.checked, diagnostic.retentionDays)}
+            />
+          </label>
+          <label className="range-field">
+            <span><strong>{t("保留天数")}</strong><small>{diagnostic.retentionDays} {t("天")}</small></span>
+            <input
+              type="range"
+              min={DIAGNOSTIC_RETENTION_MIN}
+              max={DIAGNOSTIC_RETENTION_MAX}
+              step={1}
+              value={diagnostic.retentionDays}
+              disabled={busy !== null}
+              onChange={event => onDiagnosticSettings(diagnostic.enabled, Number(event.target.value))}
+            />
+          </label>
+          <div className="settings-status-list">
+            <div className="settings-status-row">
+              <span>{t("日志文件")}</span>
+              <strong>{diagnostic.fileCount} · {formatBytes(diagnostic.totalBytes)}</strong>
+            </div>
+            <div className="settings-status-row">
+              <span>{t("最近记录")}</span>
+              <strong>{formatRecordedAt(diagnostic.lastEntryAtMillis) || t("从未记录")}</strong>
+            </div>
+          </div>
+          <p className="settings-note">
+            {t("诊断日志只包含应用内部的事件名、状态码、布尔值与计数：不含 URL、模型凭据、Harness 临时密码、设备桥令牌、终端内容或文件路径。日志保存在应用私有目录且不参与备份，到期自动删除。")}
+          </p>
+          <div className="settings-inline-actions">
+            <button className="button button-secondary" type="button" onClick={onShareDiagnostic} disabled={busy !== null || diagnostic.fileCount === 0}>
+              {busy === 'diagnostic-share' ? <Loader2 className="spin" size={18} /> : <Share2 size={18} />}{t("导出并分享")}</button>
+            <button className="button button-danger-quiet" type="button" onClick={onClearDiagnostic} disabled={busy !== null || diagnostic.fileCount === 0}>
+              {busy === 'diagnostic-clear' ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}{t("清空日志")}</button>
+          </div>
+        </section>
+        )}
+
+        {(page === 'models' || page === 'runtime' || page === 'terminal') && (
         <button className="button button-primary save-button" type="submit" disabled={busy !== null}>
           {busy === 'save-settings' ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
           {t("保存设置")}</button>
+        )}
       </form>
     </div>
   )
@@ -1081,6 +1250,7 @@ export function App() {
   const [settings, setSettings] = useState<RuntimeSettings | null>(null)
   const [shizuku, setShizuku] = useState<ShizukuState>(EMPTY_SHIZUKU)
   const [keepAlive, setKeepAlive] = useState<KeepAliveState>(EMPTY_KEEP_ALIVE)
+  const [diagnostic, setDiagnostic] = useState<DiagnosticLogState>(EMPTY_DIAGNOSTIC)
   const [booting, setBooting] = useState(true)
   const [onboardingOpen, setOnboardingOpen] = useState(() => {
     try { return window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === null } catch { return true }
@@ -1159,6 +1329,12 @@ export function App() {
       .then(next => { if (!cancelled) setKeepAlive(next) })
       .catch(() => {
         // 后台保持状态读取失败不阻塞界面：保持上一次的已知状态。
+      })
+
+    void runtimeBridge.getDiagnosticLogState()
+      .then(next => { if (!cancelled) setDiagnostic(next) })
+      .catch(() => {
+        // 诊断日志状态读取失败不阻塞界面。
       })
 
     return () => {
@@ -1322,6 +1498,40 @@ export function App() {
     }
   }, [activeView, booting, busy, language, launchHarness, onboardingOpen, runtime, settings])
 
+  const openSettings = useCallback((page: SettingsPage) => {
+    setActiveView(SETTINGS_PAGE_META[page].view)
+  }, [])
+
+  /** 更新诊断日志采集开关与保留天数；原生侧会再次夹取保留范围。 */
+  const saveDiagnosticSettings = useCallback((enabled: boolean, retentionDays: number) => {
+    void run('diagnostic-settings', async () => {
+      setDiagnostic(await runtimeBridge.setDiagnosticLogSettings(enabled, retentionDays))
+    })
+  }, [run])
+
+  /**
+   * 导出诊断日志：导出后交给系统分享面板。
+   * 用户取消分享不算失败，因此这里吞掉分享相关的拒绝，只在真正导出失败时提示。
+   */
+  const shareDiagnostic = useCallback(() => {
+    void run('diagnostic-share', async () => {
+      try {
+        const result = await runtimeBridge.shareDiagnosticLog()
+        setDiagnostic(result)
+        notify(t("诊断日志已导出：{0}", result.fileName), 'success')
+      } catch (error) {
+        setDiagnostic(await runtimeBridge.getDiagnosticLogState())
+        throw error
+      }
+    })
+  }, [notify, run])
+
+  const clearDiagnostic = useCallback(() => {
+    void run('diagnostic-clear', async () => {
+      setDiagnostic(await runtimeBridge.clearDiagnosticLog())
+    }, t("诊断日志已清空"))
+  }, [run])
+
   const stopRuntime = useCallback(() => {
     void run('stop', async () => {
       const next = await runtimeBridge.stopRuntime()
@@ -1399,7 +1609,12 @@ export function App() {
       case 'environment':
         return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => setActiveView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} />
       case 'settings':
-        return <SettingsScreen onOpenPlugins={() => setActiveView('plugins')} busy={busy} keepAlive={keepAlive} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onConnect={connectShizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} onOpenTerminal={() => setActiveView('terminal')} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onStop={stopRuntime} />
+        return <SettingsHomeScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenPage={openSettings} onOpenPlugins={() => setActiveView('plugins')} onOpenTerminal={() => setActiveView('terminal')} onStop={stopRuntime} />
+      default: {
+        const page = settingsPageOf(activeView)
+        if (page === null) return null
+        return <SettingsScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} page={page} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => setActiveView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onOpenShizuku={openShizuku} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
+      }
     }
   })()
 

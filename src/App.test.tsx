@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { KeepAliveState, RuntimeProgress, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from './platform/types'
+import type { DiagnosticLogState, KeepAliveState, RuntimeProgress, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from './platform/types'
 
 const bridge = vi.hoisted(() => ({
   setAppLanguage: vi.fn(),
@@ -22,6 +22,10 @@ const bridge = vi.hoisted(() => ({
   openShizuku: vi.fn(),
   getKeepAliveState: vi.fn(),
   requestNotificationPermission: vi.fn(),
+  getDiagnosticLogState: vi.fn(),
+  setDiagnosticLogSettings: vi.fn(),
+  shareDiagnosticLog: vi.fn(),
+  clearDiagnosticLog: vi.fn(),
   addRuntimeProgressListener: vi.fn(),
   addTerminalOutputListener: vi.fn(),
   addTerminalExitListener: vi.fn(),
@@ -83,6 +87,19 @@ const keepAlive: KeepAliveState = {
   lastIntent: 'stopped',
 }
 
+const diagnostic: DiagnosticLogState = {
+  enabled: false,
+  retentionDays: 3,
+  fileCount: 0,
+  totalBytes: 0,
+  lastEntryAtMillis: 0,
+}
+
+/** 进入某个设置二级页：设置首页只保留分类入口。 */
+function openSettingsPage(name: string): void {
+  fireEvent.click(screen.getByRole('button', { name: new RegExp(name) }))
+}
+
 beforeEach(() => {
   window.localStorage.clear()
   window.localStorage.setItem('dsh-mobile-language-v1', 'zh-CN')
@@ -94,6 +111,11 @@ beforeEach(() => {
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
   bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive })
   bridge.requestNotificationPermission.mockResolvedValue({ granted: true, supported: true })
+  bridge.getDiagnosticLogState.mockResolvedValue({ ...diagnostic })
+  bridge.setDiagnosticLogSettings.mockImplementation((enabled: boolean, retentionDays: number) =>
+    Promise.resolve({ ...diagnostic, enabled, retentionDays }))
+  bridge.clearDiagnosticLog.mockResolvedValue({ ...diagnostic })
+  bridge.shareDiagnosticLog.mockResolvedValue({ ...diagnostic, fileName: 'dsh-diagnostic-20260912-102030.txt', exportedBytes: 512 })
   bridge.addRuntimeProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })
   bridge.saveSettings.mockImplementation((value: RuntimeSettingsUpdate) => Promise.resolve(value))
   bridge.install.mockResolvedValue(undefined)
@@ -234,7 +256,13 @@ describe('App conversation gate', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
+    // 运行时来源在「运行与后台」页。
+    openSettingsPage('运行与后台')
     expect(screen.getByText('官方包已固定下载源；仅内嵌开发包可留空')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
+
+    // 字号在「终端与外观」页。
+    openSettingsPage('终端与外观')
     const fontSlider = await screen.findByRole('slider', { name: /字号/ })
     fireEvent.change(fontSlider, { target: { value: '17' } })
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
@@ -247,6 +275,7 @@ describe('App conversation gate', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
+    openSettingsPage('模型与凭据')
     fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
@@ -322,6 +351,7 @@ describe('后台保持与恢复', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
+    openSettingsPage('运行与后台')
     const toggle = await screen.findByRole('switch', { name: /后台保持 Harness/ })
     expect(toggle).not.toBeChecked()
     expect(bridge.requestNotificationPermission).not.toHaveBeenCalled()
@@ -348,6 +378,7 @@ describe('后台保持与恢复', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
+    openSettingsPage('运行与后台')
     expect(await screen.findByText('前台服务运行中')).toBeVisible()
     expect(screen.getByText('未授予')).toBeVisible()
     // 设备 Shell 辅助只反映 Shizuku 授权状态，不代表保活能力。
@@ -371,6 +402,84 @@ describe('后台保持与恢复', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '重新连接' }))
     await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
+  })
+})
+
+describe('诊断与日志', () => {
+  it('默认不收集，开关与保留天数按原生返回值更新', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    openSettingsPage('诊断与日志')
+    const toggle = await screen.findByRole('switch', { name: /收集诊断日志/ })
+    await waitFor(() => expect(toggle).toBeEnabled())
+    expect(toggle).not.toBeChecked()
+    // 没有任何日志时可导出/清空按钮保持禁用，避免产生空文件。
+    expect(screen.getByRole('button', { name: '导出并分享' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '清空日志' })).toBeDisabled()
+
+    fireEvent.click(toggle)
+    await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(true, 3))
+    expect(await screen.findByRole('switch', { name: /收集诊断日志/ })).toBeChecked()
+
+    fireEvent.change(screen.getByRole('slider', { name: /保留天数/ }), { target: { value: '7' } })
+    await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(true, 7))
+  })
+
+  it('有日志时可导出分享与清空，并显示计数', async () => {
+    const withLogs: DiagnosticLogState = {
+      enabled: true,
+      retentionDays: 3,
+      fileCount: 2,
+      totalBytes: 4096,
+      lastEntryAtMillis: 1_700_000_000_000,
+    }
+    bridge.getDiagnosticLogState.mockResolvedValue({ ...withLogs })
+    // 导出成功返回的是导出后的状态：日志文件仍在，因此「清空日志」应保持可用。
+    bridge.shareDiagnosticLog.mockResolvedValue({
+      ...withLogs,
+      fileName: 'dsh-diagnostic-20260912-102030.txt',
+      exportedBytes: 512,
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    openSettingsPage('诊断与日志')
+    expect(await screen.findByText('收集中')).toBeVisible()
+    expect(screen.getByText(/2 · /)).toBeVisible()
+
+    // 等待启动流程释放忙碌状态：run() 在忙碌时会直接忽略点击。
+    const shareButton = screen.getByRole('button', { name: '导出并分享' })
+    await waitFor(() => expect(shareButton).toBeEnabled())
+    fireEvent.click(shareButton)
+    await waitFor(() => expect(bridge.shareDiagnosticLog).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText(/诊断日志已导出/)).toBeVisible()
+
+    const clearButton = screen.getByRole('button', { name: '清空日志' })
+    await waitFor(() => expect(clearButton).toBeEnabled())
+    fireEvent.click(clearButton)
+    await waitFor(() => expect(bridge.clearDiagnosticLog).toHaveBeenCalledTimes(1))
+    expect(await screen.findByText('诊断日志已清空')).toBeVisible()
+  })
+
+  it('导出失败时保留状态并提示错误，不显示成功文案', async () => {
+    bridge.getDiagnosticLogState.mockResolvedValue({
+      enabled: true,
+      retentionDays: 3,
+      fileCount: 1,
+      totalBytes: 128,
+      lastEntryAtMillis: 1_700_000_000_000,
+    })
+    bridge.shareDiagnosticLog.mockRejectedValue(new Error('当前没有可导出的诊断日志'))
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    openSettingsPage('诊断与日志')
+    fireEvent.click(await screen.findByRole('button', { name: '导出并分享' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('当前没有可导出的诊断日志')
+    expect(bridge.getDiagnosticLogState).toHaveBeenCalled()
   })
 })
 
@@ -398,8 +507,11 @@ describe('应用语言', () => {
     fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
     fireEvent.change(screen.getByLabelText('语言'), { target: { value: 'en' } })
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Save settings' })).toBeVisible()
     expect(screen.getByText('Running', { selector: '.phase-badge' })).toBeVisible()
+    // 设置首页现在只保留分类入口，保存按钮在可编辑的二级页里。
+    fireEvent.click(screen.getByRole('button', { name: /Terminal and appearance/ }))
+    expect(await screen.findByRole('heading', { name: 'Terminal and appearance' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Save settings' })).toBeVisible()
     view.unmount()
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: 'Open app settings' }))

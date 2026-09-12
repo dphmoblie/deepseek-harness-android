@@ -1,5 +1,6 @@
 import { validatePluginRequest } from './plugins'
 import type {
+  DiagnosticLogState,
   KeepAliveState,
   ListenerHandle,
   ModelProviderId,
@@ -13,7 +14,7 @@ import type {
   TerminalExit,
   TerminalKind,
 } from './types'
-import { MODEL_PROVIDER_IDS } from './types'
+import { DIAGNOSTIC_RETENTION_DEFAULT, MODEL_PROVIDER_IDS } from './types'
 import { assertSessionId, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
@@ -53,6 +54,13 @@ export function createBrowserBridge(): RuntimeBridge {
     runnerAvailable: true,
   }
   let shizuku: ShizukuState = { installed: true, running: true, permission: 'undetermined', connected: false }
+  let diagnosticState: DiagnosticLogState = {
+    enabled: false,
+    retentionDays: DIAGNOSTIC_RETENTION_DEFAULT,
+    fileCount: 0,
+    totalBytes: 0,
+    lastEntryAtMillis: 0,
+  }
   const progressListeners = new Set<(event: RuntimeProgress) => void>()
   const outputListeners = new Set<(event: TerminalChunk) => void>()
   const exitListeners = new Set<(event: TerminalExit) => void>()
@@ -224,6 +232,17 @@ export function createBrowserBridge(): RuntimeBridge {
       lastIntent: state.phase === 'running' ? 'running' : 'stopped',
     }),
     requestNotificationPermission: () => Promise.resolve({ granted: false, supported: false }),
+    // 浏览器预览没有原生诊断日志：保持关闭且不可导出，避免给出「已经采集到东西」的错觉。
+    getDiagnosticLogState: (): Promise<DiagnosticLogState> => Promise.resolve({ ...diagnosticState }),
+    setDiagnosticLogSettings: (enabled: boolean, retentionDays: number) => {
+      diagnosticState = { ...diagnosticState, enabled, retentionDays }
+      return Promise.resolve({ ...diagnosticState })
+    },
+    shareDiagnosticLog: () => Promise.reject(new Error('浏览器预览不支持导出诊断日志')),
+    clearDiagnosticLog: () => {
+      diagnosticState = { ...diagnosticState, fileCount: 0, totalBytes: 0, lastEntryAtMillis: 0 }
+      return Promise.resolve({ ...diagnosticState })
+    },
     addRuntimeProgressListener: listener => {
       progressListeners.add(listener)
       return Promise.resolve(listenerHandle(() => progressListeners.delete(listener)))

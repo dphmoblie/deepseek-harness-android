@@ -498,7 +498,7 @@ test('keep-alive keeps the device bridge process-scoped and the notification ent
   // 回归 2：桥构建失败绝不能穿出 load()（设备桥只服务设备 Shell，属可选能力）。
   assert.match(
     nativePlugin,
-    /try \{\s*ensureDeviceBridge\(\)\s*\} catch \(_: Throwable\) \{\s*android\.util\.Log\.w\("dsh-runtime", "device bridge unavailable/,
+    /try \{\s*ensureDeviceBridge\(\)\s*\} catch \(_: Throwable\) \{[\s\S]{0,240}?android\.util\.Log\.w\("dsh-runtime", "device bridge unavailable/,
   )
 
   // 回归 3：load() 失败必须注销已登记的订阅者，否则 RuntimeHost.sinks 永远非空，

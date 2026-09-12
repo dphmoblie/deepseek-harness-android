@@ -1,6 +1,8 @@
 import type {
   DeviceCommand,
   DeviceCommandResult,
+  DiagnosticLogExport,
+  DiagnosticLogState,
   KeepAliveState,
   ModelProviderId,
   NotificationPermission,
@@ -17,7 +19,11 @@ import type {
   TerminalChunk,
   TerminalExit,
 } from './types'
-import { MODEL_PROVIDER_IDS } from './types'
+import {
+  DIAGNOSTIC_RETENTION_MAX,
+  DIAGNOSTIC_RETENTION_MIN,
+  MODEL_PROVIDER_IDS,
+} from './types'
 import { validateCustomCredentialIds, validateCustomCredentialUpdates, validateCustomModelProviders } from './customProviders'
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
@@ -449,7 +455,51 @@ export function validateNotificationPermissionResult(value: unknown): Notificati
   return { granted: result.granted, supported: result.supported }
 }
 
-export function validateTerminalSession(value: unknown): { sessionId: string } {  const session = asRecord(value, '终端会话')
+function diagnosticCount(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label}格式无效`)
+  return value as number
+}
+
+/** 诊断日志保留天数：必须是 1–30 的整数，与原生侧夹取范围一致。 */
+export function assertDiagnosticRetentionDays(value: number): number {
+  if (!Number.isInteger(value) || value < DIAGNOSTIC_RETENTION_MIN || value > DIAGNOSTIC_RETENTION_MAX) {
+    throw new Error(`诊断日志保留天数必须是 ${DIAGNOSTIC_RETENTION_MIN} 到 ${DIAGNOSTIC_RETENTION_MAX} 之间的整数`)
+  }
+  return value
+}
+
+/**
+ * 校验诊断日志状态。
+ * 只接受布尔值、计数与时间戳：日志正文永远不会经原生接口回传 WebView。
+ */
+export function validateDiagnosticLogState(value: unknown): DiagnosticLogState {
+  const state = asRecord(value, '诊断日志状态')
+  if (typeof state.enabled !== 'boolean') throw new Error('诊断日志状态格式无效')
+  return {
+    enabled: state.enabled,
+    retentionDays: assertDiagnosticRetentionDays(state.retentionDays as number),
+    fileCount: diagnosticCount(state.fileCount, '诊断日志文件数'),
+    totalBytes: diagnosticCount(state.totalBytes, '诊断日志总字节数'),
+    lastEntryAtMillis: diagnosticCount(state.lastEntryAtMillis, '诊断日志最近记录时间'),
+  }
+}
+
+export function validateDiagnosticLogExport(value: unknown): DiagnosticLogExport {
+  const state = validateDiagnosticLogState(value)
+  const record = asRecord(value, '诊断日志导出结果')
+  // 导出文件名由原生侧以 UTC 时间戳生成：不含路径分隔符，也不含设备或用户信息。
+  if (typeof record.fileName !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(record.fileName)) {
+    throw new Error('诊断日志导出文件名格式无效')
+  }
+  return {
+    ...state,
+    fileName: record.fileName,
+    exportedBytes: diagnosticCount(record.exportedBytes, '诊断日志导出字节数'),
+  }
+}
+
+export function validateTerminalSession(value: unknown): { sessionId: string } {
+  const session = asRecord(value, '终端会话')
   if (typeof session.sessionId !== 'string') throw new Error('终端会话标识无效')
   return { sessionId: assertSessionId(session.sessionId) }
 }
