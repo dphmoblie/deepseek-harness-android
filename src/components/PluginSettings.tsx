@@ -23,6 +23,8 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
   const [catalog, setCatalog] = useState<PluginCatalog | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
+  /** 受控详情（包名与版本差异），与 notice 分开保存：notice 要能被 t() 整条查表翻译。 */
+  const [noticeDetail, setNoticeDetail] = useState('')
   const [failed, setFailed] = useState(false)
   const [stopped, setStopped] = useState(false)
   const active = useRef(true)
@@ -30,7 +32,7 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
   const run = useCallback(async (request: PluginRequest): Promise<void> => {
     if (pending.current) return
     pending.current = true
-    setBusy(true); setNotice(''); setFailed(false)
+    setBusy(true); setNotice(''); setNoticeDetail(''); setFailed(false)
     try {
       const result = await bridge.managePlugins(request)
       if (active.current) {
@@ -44,8 +46,8 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
         // 与通用文案相同时不重复展示。
         const raw = error && typeof error === 'object' && 'message' in error && typeof error.message === 'string' ? error.message : ''
         const detail = raw !== '' && raw !== GENERIC_PLUGIN_FAILURE ? raw : ''
-        const mapped = errorMessages[code]
-        setNotice(mapped ? (detail === '' ? mapped : `${mapped}（${detail}）`) : (detail || GENERIC_PLUGIN_FAILURE))
+        setNotice(errorMessages[code] ?? GENERIC_PLUGIN_FAILURE)
+        setNoticeDetail(detail)
         setFailed(true)
       }
     } finally { pending.current = false; if (active.current) setBusy(false) }
@@ -58,7 +60,7 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
   useEffect(() => { setStopped(false) }, [runtime.phase])
   const stop = async (): Promise<void> => {
     if (pending.current) return
-    pending.current = true; setBusy(true); setNotice('')
+    pending.current = true; setBusy(true); setNotice(''); setNoticeDetail('')
     try {
       await bridge.stopRuntime()
       if (active.current) { setStopped(true); setNotice('运行时已停止，可以管理插件'); setFailed(false) }
@@ -74,7 +76,7 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
     </div>
     <p className="plugin-description">{t('无需启动 Harness，即可按配置文件管理插件。展开文件可调整子插件。')}</p>
     <div className="plugin-stop"><span>{t('修改前请停止 Harness 和 Ubuntu 终端；设置将在下次启动生效。')}</span><button className="button button-danger-quiet" type="button" disabled={busy} onClick={() => { void stop() }}>{t('停止运行时')}</button></div>
-    {notice && <p className="plugin-notice" role={failed ? 'alert' : 'status'}>{t(notice)}</p>}
+    {notice && <p className="plugin-notice" role={failed ? 'alert' : 'status'}>{t(notice)}{noticeDetail !== '' && `（${noticeDetail}）`}</p>}
     {busy && <p role="status">{t('正在处理插件，请稍候')}</p>}
     {catalog?.plugins.length === 0 && <p>{t('暂无插件。请在 Android 设备上安装运行时后刷新。')}</p>}
     {[true, false].map(official => <section key={String(official)} className="plugin-category" aria-label={t(official ? '官方插件' : '第三方插件')}>
