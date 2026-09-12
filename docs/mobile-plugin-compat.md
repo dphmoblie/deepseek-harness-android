@@ -10,7 +10,7 @@
 
 - **三端结构**：Capacitor 启动与管理 UI（src/）→ 原生 HarnessActivity 内的移动对话 UI
   （rootfs 内 dsh web，仅 127.0.0.1 + preload 认证）→ runtime profile 插件集
-  （rootfs 配方：Ubuntu 24.04 ARM64 + Node 24.19 + @deepseek-ai/dsh 0.1.5-alpha.1）。
+  （rootfs 配方：Ubuntu 24.04 ARM64 + Node 24.19 + @deepseek-ai/dsh 0.1.5-rc.2）。
 - **入口契约**：运行时就绪时启动应用直接恢复最近会话；服务、Ubuntu、终端、重置、
   来源和 Shizuku 统一放在设置页，无额外引导或用户登录页。
 - **桌面插件生态**（本机桌面 profile 实测在装）：@linxin666/dsh-web-ui-all（task-board/
@@ -84,10 +84,17 @@
 5. CI 打包官方前端和 rootfs，生成同 tag Release manifest，并把其 URL/摘要固定进
    `0.1.9` 内嵌运行时 APK。
 6. 真机验收以 `docs/mobile-acceptance-checklist.md` 为准。
-7. 拉取相邻目录的上游源码不会更改 APK 依赖。当前打包固定使用 dsh 与官方前端 0.1.5-alpha.1；升级这些依赖需要同时验证客户端、运行时和认证协议。
+7. 拉取相邻目录的上游源码不会更改 APK 依赖。当前打包固定使用 dsh 与官方前端 0.1.5-rc.2；升级这些依赖需要同时验证客户端、运行时和认证协议。
 
 ## 7. 边界与风险
 
+- **dsh 全家桶必须整族锁同一版本**（当前 `0.1.5-rc.2`，并在
+  `scripts/runtime-profile/pnpm-workspace.yaml` 用 `overrides` 兜底）。dsh 的服务靠 Symbol
+  作为 key 挂在 cordis 注册表上（如 `dsh-tools` 的 `TOOL_RUNTIME_SCHEDULER`），而 Symbol 是
+  每个物理模块副本各造一个；树里出现两份 `dsh-tools` 就会让 `ctx.tools[symbol]` 变成
+  `undefined`，所有工具调用在 `.prepare` 上抛 `Cannot read properties of undefined`。
+  成因、判定方式与永久护栏见 `docs/ARCHITECTURE.md` 的「运行时依赖版本钉与 Symbol 身份」一节；
+  快速自检用 `node scripts/check-runtime-dedupe.mjs`。
 - 不改桌面插件与桌面 DSH 核心（只新增客户端适配层与移动 profile 配置）；
 - 插件在移动端的禁用/替换需在设置页明示（透明性）；
 - 16KB/PRoot 运行器两个作者钉死件不因本分支变更（运行时安装依赖不变）；

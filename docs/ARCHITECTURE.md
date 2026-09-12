@@ -51,6 +51,40 @@ must always be packaged in the APK because current Android versions do not
 allow executing newly downloaded code from writable app storage. Generated
 `.so` files are ignored by Git.
 
+## 运行时依赖版本钉与 Symbol 身份（dsh 全家桶必须整族同版本）
+
+移动运行时依赖的整个 `@deepseek-ai/dsh` 家族必须**精确钉死在同一版本**（当前 `0.1.5-rc.2`），
+并由 `scripts/runtime-profile/pnpm-workspace.yaml` 的 `overrides` 兜底。这不是洁癖，是硬约束：
+
+1. `@deepseek-ai/dsh-tools` 导出 `TOOL_RUNTIME_SCHEDULER = Symbol('@deepseek-ai/dsh-tools.scheduler')`。
+2. dsh 的 `ToolRuntime` 服务用这个 Symbol 作为 key，把调度器挂进 cordis 注册表。
+3. `dsh-agent-loop` 用 `ctx.tools[TOOL_RUNTIME_SCHEDULER].prepare(call.exec)` 把它取回来。
+4. Symbol 是**每个物理模块副本各造一个**。树里只要存在两份 `dsh-tools`，两边的 Symbol
+   就不相等，`ctx.tools[symbol]` 得到 `undefined`，于是每次工具调用都在 `.prepare` 上抛
+   `Cannot read properties of undefined (reading 'prepare')`——对话本身完全正常，只有工具全挂。
+
+历史事故成因：插件的 `package.json` 用**精确版本**把 `peerDependencies` 钉在 rc.1，而
+`@deepseek-ai/dsh` 自己的内部依赖写的是**范围** `^0.1.5-rc.1`（会解析到 rc.2）。pnpm 为了
+同时满足两者，额外装了一份 rc.1 → 两份物理副本 → 两个 Symbol 实例。
+
+注意重复副本不一定来自两个版本：同一个版本因为 peer 组合不同被 pnpm 拆成两个虚拟store
+条目，同样会产生两份物理模块、两个 Symbol。因此判定必须按物理副本数，而不是只比版本号。
+
+永久护栏：
+
+- `scripts/check-runtime-dedupe.mjs [根目录]`：遍历 `.pnpm`，按包内 `package.json` 的**真实
+  `version`** 归类，不依赖目录名（pnpm 会截断过长的目录名，例如包名被砍成
+  `@deepseek-ai+dsh-system-pro`、版本被砍成 `0.1.`），并用文件系统类型区分「包本体」与
+  「依赖引用」。任一带 Symbol 的服务包出现 ≥2 份物理副本就打印分组并 `exit 1`。
+  默认检查 `scripts/runtime-profile`。
+- CI 的 `build-rootfs` 作业在 “Verify runtime artifacts before upload” 步骤里，对构建产物
+  `/tmp/dsh-root` 运行该脚本，并把 `dsh-tools` 的物理副本清单打进日志。该断言是**致命**的，
+  不是 advisory：出现重复副本就阻断上传。
+- `scripts/mobile-compat-contract.test.mjs` 断言所有版本钉文件（两个 `package.json`、
+  插件 peer、`harness-web`、`build-embedded-runtime.py` 默认值、`overrides`、示例清单）声明的
+  dsh 版本完全一致，并断言 lockfile 里没有残留其它 `0.1.5` 预发布版本；只改一处会被
+  `node --test scripts/*.test.mjs` 挡住。
+
 ## Terminal and Harness
 
 The Ubuntu terminal always starts a manifest-validated fixed entrypoint through PRoot. Terminal keystrokes are length-limited byte input to an existing process; they are never concatenated into a host shell command. Harness starts only on `127.0.0.1`. Each start receives a fresh 256-bit token through a fixed environment field; a Node preload removes the field after deriving a constant-time Basic-auth check and rejects unauthenticated HTTP and WebSocket upgrades before route dispatch. The token is held only in process memory. The non-exported internal WebView answers the HTTP Basic challenge transparently and also installs a JS-inaccessible, origin-scoped cookie before the first page load because WebView does not surface a Basic challenge for WebSocket upgrades. Neither credential is added to the URL. Neither direct conversation startup nor Settings invokes Android device-credential authentication.
@@ -75,6 +109,23 @@ The Ubuntu terminal always starts a manifest-validated fixed entrypoint through 
 - 为让 WebView 读取选中的 `content://`，`allowContentAccess` 必须为 `true`。这**不**等于
   放开任意 provider 读取：页面自身发起的 `content://` 加载依旧被 `shouldInterceptRequest`
   拦成 403，放开的只是"读取用户在系统选择器里明确选中的那一个文件"。
+
+## 外壳返回键与视图历史
+
+外壳（`MainActivity` 里的 Capacitor WebView）过去只改 React 状态来切换视图，WebView 里
+不存在任何可回退的历史，`canGoBack()` 恒为 false：在设置二级页按返回键会被 Capacitor 外壳
+直接结束 Activity，用户看到的就是「按返回直接退出应用」。现在的分工是：
+
+- `src/App.tsx`：每次视图切换都 `history.pushState`，视图名同时写进 `history.state`
+  （`dshView`）与地址片段（主视图保持根地址干净）。`popstate` 把视图恢复成历史记录里的那一条，
+  且**不再写新历史**，否则回退过程中会不断堆积记录、返回键永远回不到上一级。
+  同一视图重复导航（例如启动成功后再次切到设置）不压新记录；屏幕内的返回按钮在上一级正好是
+  目标视图时走 `history.back()`，避免留下「按系统返回又被送回二级页」的记录。
+- `MainActivity`：注册唯一的 `OnBackPressedCallback`。`canGoBack()` 为 true 时 `goBack()`；
+  历史见底时 `moveTaskToBack(true)` 把任务退到后台，**不** `finish()` Activity，
+  正在运行的本机运行时与 WebView 状态原样保留。Capacitor 7 的 `BridgeActivity` 本身没有
+  `onBackPressed` 实现，因此不存在「既 goBack 又 finish」的双重处理。
+- `HarnessActivity` 的返回语义不变：有历史先后退，没有历史则回到外壳管理界面。
 
 ## Background keep-alive and recovery
 

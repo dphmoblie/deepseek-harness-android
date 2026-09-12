@@ -713,7 +713,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--node-version", default="24.19.0")
     parser.add_argument("--dsh-root", required=True, type=Path)
     parser.add_argument("--toolchain-dir", required=True, type=Path, help="pre-staged toolchain dir (bin/* -> /usr/local/bin, python/ -> /opt/python)")
-    parser.add_argument("--dsh-version", default="0.1.5-rc.1")
+    parser.add_argument("--dsh-version", default="0.1.5-rc.2")
     parser.add_argument("--runtime-version", required=True)
     parser.add_argument(
         "--rootfs-url",

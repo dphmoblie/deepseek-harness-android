@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "runtimeId": "ubuntu-24.04-arm64-deepseek-harness",
   "version": "2026.08.1",
-  "dshVersion": "0.1.5-alpha.1",
+  "dshVersion": "0.1.5-rc.2",
   "architecture": "arm64-v8a",
   "rootfs": {
     "url": "https://downloads.example.invalid/deepseek-harness/android/ubuntu-rootfs.tar.gz",

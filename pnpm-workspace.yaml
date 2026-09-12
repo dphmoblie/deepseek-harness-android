@@ -3,4 +3,4 @@ packages:
 allowBuilds:
   esbuild: true
 minimumReleaseAgeExclude:
-  - '@deepseek-ai/dsh-web-frontend@0.1.5-alpha.1'
+  - '@deepseek-ai/dsh-web-frontend@0.1.5-rc.2'

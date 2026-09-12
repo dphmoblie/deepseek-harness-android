@@ -1,6 +1,6 @@
 {
   "name": "@dsh-mobile/harness-web",
-  "version": "0.1.17-preview",
+  "version": "0.1.18-preview",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.19.0",
@@ -10,7 +10,7 @@
     "test": "node --test scripts/*.test.mjs"
   },
   "devDependencies": {
-    "@deepseek-ai/dsh-web-frontend": "0.1.5-rc.1"
+    "@deepseek-ai/dsh-web-frontend": "0.1.5-rc.2"
   },
   "keywords": [
     "dsh",

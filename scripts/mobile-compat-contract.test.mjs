@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
 const appRoot = resolve(import.meta.dirname, '..')
-const harnessVersion = '0.1.5-rc.1'
+const harnessVersion = '0.1.5-rc.2'
 
 test('Android rootfs workflow packages the adapted official frontend at the root', async () => {
   const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
@@ -121,6 +121,88 @@ test('Android CI installs the runtime from a committed frozen lockfile', async (
     assert.match(version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/)
   }
   assert.match(runtimeLock, /\n\s+pnpm:\s*\r?\n\s+specifier: 11\.19\.0\s*\r?\n\s+version: 11\.19\.0/)
+})
+
+test('every dsh version pin in the repository declares the same release', async () => {
+  const read = relative => readFile(resolve(appRoot, relative), 'utf8')
+  const runtimePackage = JSON.parse(await read('scripts/runtime-profile/package.json'))
+  const shizukuPackage = JSON.parse(
+    await read('scripts/runtime-profile/plugins/dsh-mobile-shizuku/package.json'),
+  )
+  const frontendPackage = JSON.parse(await read('harness-web/package.json'))
+  const builder = await read('scripts/build-embedded-runtime.py')
+  const workspace = await read('scripts/runtime-profile/pnpm-workspace.yaml')
+  const workflow = await read('.github/workflows/android-build.yml')
+  const contract = await read('scripts/mobile-compat-contract.test.mjs')
+  const runtimeLock = await read('scripts/runtime-profile/pnpm-lock.yaml')
+
+  // 每一条都是**独立**的版本来源。任何人只改其中一处，下面的集合就会出现第二个值，
+  // 测试立刻失败——这正是当初 rc.1 与 rc.2 混用、dsh-tools 出现双副本的入口。
+  const pins = [
+    ...['@deepseek-ai/dsh', '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'].map(name => [
+      `scripts/runtime-profile/package.json dependencies["${name}"]`,
+      runtimePackage.dependencies[name],
+    ]),
+    ...[
+      '@deepseek-ai/dsh-attachment',
+      '@deepseek-ai/dsh-llm',
+      '@deepseek-ai/dsh-system-prompt',
+      '@deepseek-ai/dsh-tools',
+    ].map(name => [
+      `dsh-mobile-shizuku peerDependencies["${name}"]`,
+      shizukuPackage.peerDependencies[name],
+    ]),
+    [
+      'harness-web devDependencies["@deepseek-ai/dsh-web-frontend"]',
+      frontendPackage.devDependencies['@deepseek-ai/dsh-web-frontend'],
+    ],
+    [
+      'build-embedded-runtime.py --dsh-version 默认值',
+      builder.match(/--dsh-version",\s*default="([^"]+)"/)?.[1],
+    ],
+    ['mobile-compat-contract.test.mjs harnessVersion', contract.match(/const harnessVersion = '([^']+)'/)?.[1]],
+    [
+      'pnpm-workspace.yaml overrides["@deepseek-ai/dsh"]',
+      workspace.match(/^\s+'@deepseek-ai\/dsh':\s*(\S+)\s*$/m)?.[1],
+    ],
+    [
+      'pnpm-workspace.yaml overrides["@deepseek-ai/dsh-*"]',
+      workspace.match(/^\s+'@deepseek-ai\/dsh-\*':\s*(\S+)\s*$/m)?.[1],
+    ],
+    [
+      'docs/runtime-manifest.example.json dshVersion',
+      JSON.parse(await read('docs/runtime-manifest.example.json')).dshVersion,
+    ],
+  ]
+
+  for (const [source, version] of pins) {
+    assert.equal(typeof version, 'string', `未能从 ${source} 解析出 dsh 版本`)
+    assert.notEqual(version.length, 0, `未能从 ${source} 解析出 dsh 版本`)
+  }
+  const versions = [...new Set(pins.map(([, version]) => version))]
+  assert.deepEqual(
+    versions,
+    [harnessVersion],
+    `dsh 版本钉不一致：\n${pins.map(([source, version]) => `  ${version}  <- ${source}`).join('\n')}`,
+  )
+
+  // 发布说明模板里出现的 dsh 版本也必须一致（避免 Release 页面写着旧版本号）。
+  for (const mention of workflow.match(/dsh \d+\.\d+\.\d+-[0-9A-Za-z.-]+/g) ?? []) {
+    assert.equal(mention, `dsh ${harnessVersion}`, `android-build.yml 里的 dsh 版本与版本钉不一致：${mention}`)
+  }
+
+  // lockfile 是实际解析结果：不允许残留任何别的 0.1.5 预发布版本。
+  // 残留即意味着两套版本共存，也就意味着两份 Symbol → 工具调用全挂。
+  const strayPrereleases = [
+    ...new Set(
+      (runtimeLock.match(/0\.1\.5-[0-9A-Za-z.-]+/g) ?? []).filter(version => version !== harnessVersion),
+    ),
+  ]
+  assert.deepEqual(strayPrereleases, [], `pnpm-lock.yaml 里残留了非目标版本：${strayPrereleases.join(', ')}`)
+
+  // 去重护栏必须挂在 CI 上，而且是致命的（不得用 || true / continue-on-error 吞掉）。
+  assert.match(workflow, /node scripts\/check-runtime-dedupe\.mjs --list \/tmp\/dsh-root/)
+  assert.doesNotMatch(workflow, /check-runtime-dedupe\.mjs[^\n]*\|\|\s*true/)
 })
 
 test('mobile runtime and official frontend use the same validated Harness release', async () => {

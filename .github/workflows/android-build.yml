@@ -21,7 +21,7 @@ permissions:
 env:
   # 测试版版本号：与 android/app/build.gradle 的 versionName 保持一致。
   # CI 会据此生成运行时版本与 Release 标签（形如 v0.1.12-preview-mobile-<run_number>）。
-  APP_VERSION: '0.1.17-preview'
+  APP_VERSION: '0.1.18-preview'
 
 jobs:
   build:
@@ -346,6 +346,10 @@ jobs:
             echo "=== dsh-root 探测 ==="
             ls -la /tmp/dsh-root/node_modules/@deepseek-ai/dsh/lib/bin.js 2>/dev/null || echo "(dsh bin.js 缺失)"
             find /tmp/dsh-root/node_modules/.pnpm -path '*/node-pty/prebuilds/linux-arm64/pty.node' -ls 2>/dev/null || echo "(pty 目录缺失)"
+            echo "=== dsh-tools 物理副本清单（符号链接不会被 find 跟随，只列包本体） ==="
+            find /tmp/dsh-root/node_modules/.pnpm \
+              -path '*/node_modules/@deepseek-ai/dsh-tools/package.json' -print 2>/dev/null \
+              || echo "(未找到 dsh-tools)"
             echo "=== bundle step output ==="
             cat /tmp/bundle.log 2>/dev/null || echo "(无 bundle.log)"
             echo "=== runtime-artifacts ==="
@@ -356,6 +360,11 @@ jobs:
             echo "runtime artifacts are missing; inspect this Actions step output" >&2
             exit 1
           fi
+          # 致命断言：dsh 全家桶必须各自只有一份物理副本。
+          # 两份副本 = 两个 Symbol 实例 → cordis 注册表取不到服务 → 所有工具调用
+          # 在 '.prepare' 上抛 "Cannot read properties of undefined"。
+          # 这里刻意不做成 advisory：重复副本必须拦住上传，不能只打日志。
+          node scripts/check-runtime-dedupe.mjs --list /tmp/dsh-root
 
       - name: Upload runtime
         uses: actions/upload-artifact@v4
@@ -459,7 +468,7 @@ jobs:
           ## 资产
 
           - $(basename "$APK")（APK，含 PRoot 运行器）
-          - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.1.5-rc.1 + 官方 Harness 前端 Android 适配）
+          - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.1.5-rc.2 + 官方 Harness 前端 Android 适配）
           - runtime-manifest.json
           - checksums.txt（以上三项资产的 SHA-256）
 

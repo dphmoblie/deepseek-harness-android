@@ -10,6 +10,16 @@ allowBuilds:
   cloudflared: true
   cpu-features: true
   ssh2: true
+
+# 强制整个 @deepseek-ai/dsh 家族解析到同一版本。
+# 这些包通过 Symbol 作为 key 在 cordis 注册表里挂服务（例如 dsh-tools 的
+# TOOL_RUNTIME_SCHEDULER），而 Symbol 是每个物理模块副本各造一个：树里只要出现
+# 两份不同版本的 dsh-tools，两边的 Symbol 就不相等，工具调用会取到 undefined
+# 并在 '.prepare' 上抛错。overrides 是防止版本范围重新引入第二份副本的兜底。
+overrides:
+  '@deepseek-ai/dsh': 0.1.5-rc.2
+  '@deepseek-ai/dsh-*': 0.1.5-rc.2
+
 minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-acp-app@0.1.5-alpha.1'
   - '@deepseek-ai/dsh-acp@0.1.5-alpha.1'

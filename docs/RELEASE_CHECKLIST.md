@@ -9,7 +9,7 @@ or otherwise distributing them.
 ## Runtime artifacts
 
 - Build the release image from Ubuntu 24.04 ARM64, Node.js 24.19.0, and
-  `@deepseek-ai/dsh` 0.1.5-alpha.1. Record and independently verify the SHA-256
+  `@deepseek-ai/dsh` 0.1.5-rc.2. Record and independently verify the SHA-256
   of every source archive and package used by
   `scripts/build-embedded-runtime.py`.
 - Verify `/usr/local/bin/dsh`, the ARM64 native Node modules, the runtime
