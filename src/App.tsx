@@ -87,6 +87,82 @@ function settingsPageOf(view: AppView): SettingsPage | null {
   return entry ?? null
 }
 
+/** 外壳视图的全部取值：历史状态与地址片段只接受这里的值，其余一律回落到主视图。 */
+const APP_VIEWS: AppView[] = [
+  'conversation',
+  'settings',
+  'settings-models',
+  'settings-runtime',
+  'settings-terminal',
+  'settings-shizuku',
+  'settings-diagnostics',
+  'terminal',
+  'environment',
+  'plugins',
+]
+
+/**
+ * 主视图：外壳历史栈的栈底，应用启动时也总是落在这里。
+ *
+ * 回到主视图之后再按返回键，WebView 已经没有可回退的历史（canGoBack() 为 false），
+ * 原生侧据此把任务退到后台，而不是结束应用；从设置二级页到主视图的每一级都能原路退回。
+ */
+const ROOT_VIEW: AppView = 'conversation'
+
+/** 写进 history.state 的视图字段名。 */
+const VIEW_STATE_KEY = 'dshView'
+
+function isAppView(value: unknown): value is AppView {
+  return typeof value === 'string' && (APP_VIEWS as string[]).includes(value)
+}
+
+/** 只认本应用写入的历史状态：其它来源（含 null）一律视为未知，不把外部状态当成视图。 */
+function viewFromHistoryState(state: unknown): AppView | null {
+  if (typeof state !== 'object' || state === null) return null
+  const value = (state as Record<string, unknown>)[VIEW_STATE_KEY]
+  return isAppView(value) ? value : null
+}
+
+/** 当前地址去掉片段后的部分：主视图回写历史时用它，避免把上一个视图的片段留在地址栏里。 */
+function currentPath(): string {
+  return `${window.location.pathname}${window.location.search}`
+}
+
+/**
+ * 视图与地址片段的唯一映射：主视图保持根地址干净，其余视图用 `#视图名`。
+ * 地址与视图一一对应，回退或前进后不会出现「界面在一级、地址还停在二级」。
+ */
+function viewAddress(view: AppView): string {
+  return view === ROOT_VIEW ? currentPath() : `#${view}`
+}
+
+function viewFromHash(hash: string): AppView | null {
+  const value = hash.startsWith('#') ? hash.slice(1) : hash
+  return isAppView(value) ? value : null
+}
+
+/**
+ * 导航入口：切换视图时必须同时写一条历史记录。
+ *
+ * 外壳过去只改 React 状态，WebView 里不存在任何可回退的历史（canGoBack() 恒为 false），
+ * Android 的返回键与返回手势抵达时 Capacitor 外壳会直接结束 Activity —— 用户看到的就是
+ * 「在设置二级页按返回直接退出应用」。写入历史后，返回键先回退到上一条记录，
+ * 再由 popstate 把视图恢复成上一级。
+ */
+function pushViewEntry(view: AppView): void {
+  window.history.pushState({ [VIEW_STATE_KEY]: view }, '', viewAddress(view))
+}
+
+/**
+ * 把当前这条历史记录校正成指定视图（不新增记录）。
+ *
+ * 用于首屏对齐，以及回退到无法识别的记录（如 WebView 恢复历史、外部写入）时把地址
+ * 拉回视图，保证两者的对应关系在任何时刻都成立。
+ */
+function replaceViewEntry(view: AppView): void {
+  window.history.replaceState({ [VIEW_STATE_KEY]: view }, '', viewAddress(view))
+}
+
 type NoticeTone = 'success' | 'error' | 'info'
 
 interface Notice {
@@ -148,6 +224,16 @@ const RESET_CONFIRMATION = 'RESET_RUNTIME'
  * 超时后按“未授予”处理，避免界面一直停留在忙碌状态。
  */
 const NOTIFICATION_PERMISSION_TIMEOUT_MS = 30_000
+
+/**
+ * 保存「后台保持」后，等待前台服务真正进入前台的宽限期。
+ *
+ * 前台服务由 Android 异步拉起（`startForegroundService` 之后才由服务自己 `startForeground`），
+ * 保存后紧接着读取原生状态会看到「尚未生效」。复核必须等一小段时间，
+ * 否则会把正常启动中的服务误报成未生效。
+ */
+const FOREGROUND_SERVICE_SETTLE_MS = 1500
+
 const UNKNOWN_RUNTIME_ERROR_MESSAGE = '运行时操作失败，请稍后重试；如问题持续，请重置环境。'
 const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   SOURCE_INCOMPLETE: '请同时配置运行时清单地址和 SHA-256，或同时留空。',
@@ -199,6 +285,7 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   STAGING_NOT_EMPTY: '运行时暂存目录状态异常，请重试。',
   RUNTIME_RECOVERY_FAILED: '无法恢复上次中断的运行时安装。',
   RUNTIME_PROMOTION_FAILED: '无法启用已完成校验的运行时。',
+  RUNTIME_PRESERVE_FAILED: '旧运行时里的用户数据未能放回新运行时；数据与旧运行时备份均已保留，请勿重置环境。',
   INSTALL_IN_PROGRESS: '运行时安装正在进行。',
   INSTALL_CANCELLED: '运行时安装已取消，再次安装时可继续下载。',
   INSTALL_FAILED: '运行时安装失败，请稍后重试。',
@@ -1245,7 +1332,17 @@ function UpdateDialog({ busy, onCancel, onConfirm }: UpdateDialogProps) {
 export function App() {
   const language = useLanguage()
   useEffect(() => { document.documentElement.lang = language ?? 'zh-CN' }, [language])
-  const [activeView, setActiveView] = useState<AppView>('conversation')
+  const [activeView, setActiveViewState] = useState<AppView>(ROOT_VIEW)
+  /**
+   * 当前视图的同步真值：导航与历史回退都先改它再改状态。
+   * 同一视图重复导航（例如启动成功后再次切到设置）由此判重，不会往历史里堆冗余记录。
+   */
+  const activeViewRef = useRef<AppView>(activeView)
+  /**
+   * 当前这条历史记录被压入时所在的视图，也就是真实的上一级。
+   * 未知时为 null：历史回退/前进之后无法再知道相邻记录是谁。
+   */
+  const previousViewRef = useRef<AppView | null>(null)
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME)
   const [settings, setSettings] = useState<RuntimeSettings | null>(null)
   const [shizuku, setShizuku] = useState<ShizukuState>(EMPTY_SHIZUKU)
@@ -1269,6 +1366,59 @@ export function App() {
   }, [])
 
   const terminalError = useCallback((message: string) => notify(message, 'error'), [notify])
+
+  /**
+   * 视图导航入口（取代直接调用裸的 setState）：只有视图真的变化才写历史并重渲染。
+   */
+  const setActiveView = useCallback((next: AppView) => {
+    const current = activeViewRef.current
+    if (current === next) return
+    activeViewRef.current = next
+    previousViewRef.current = current
+    setActiveViewState(next)
+    pushViewEntry(next)
+  }, [])
+
+  /**
+   * 屏幕内返回按钮：回到上一级视图。
+   *
+   * 上一级正好就是目标视图时回退历史，而不是再压一条新记录 —— 否则历史会变成
+   * 「主视图 → 设置 → 二级页 → 设置」，用户此后按系统返回键会被重新送回二级页。
+   * 上一级不是目标视图时（例如从终端跳到设置首页）保持普通导航语义：压入目标视图。
+   * 视图切换由回退后的 popstate 完成，与系统返回键走同一条路径。
+   */
+  const backToView = useCallback((target: AppView) => {
+    if (previousViewRef.current !== target) {
+      setActiveView(target)
+      return
+    }
+    previousViewRef.current = null
+    window.history.back()
+  }, [setActiveView])
+
+  /**
+   * 历史回退与前进（系统返回键/返回手势、浏览器后退/前进按钮）只改变历史位置，
+   * 这里把视图同步到历史所在的那条记录上。
+   *
+   * 刻意不在这里写新记录：回退过程中 pushState 会截断前进方向的历史并不断堆积记录，
+   * 返回键就再也回不到真正的上一级。
+   */
+  useEffect(() => {
+    // 应用始终从主视图启动（启动 Harness 的流程依赖主视图），首屏就把栈底记录校正成主视图：
+    // WebView 恢复历史时地址可能残留上一次的片段，这里顺手清掉，避免视图与地址不一致。
+    replaceViewEntry(activeViewRef.current)
+    const handlePopState = (event: PopStateEvent): void => {
+      const restored = viewFromHistoryState(event.state) ?? viewFromHash(window.location.hash) ?? ROOT_VIEW
+      activeViewRef.current = restored
+      // 回退/前进之后相邻记录未知，不能再据此把屏幕内返回当成回退。
+      previousViewRef.current = null
+      setActiveViewState(restored)
+      // 记录无法识别时把地址拉回视图，避免出现「界面在主视图、地址停在二级页」。
+      replaceViewEntry(restored)
+    }
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
 
   useEffect(() => {
     if (notice === null) return
@@ -1424,7 +1574,7 @@ export function App() {
       autoLaunchAttempted.current = false
       setActiveView('conversation')
     }, t("Ubuntu 运行时已安装"))
-  }, [run, settings])
+  }, [run, setActiveView, settings])
 
   const requestRuntimeUpdate = useCallback(() => {
     if (busyRef.current === null) setUpdateOpen(true)
@@ -1449,7 +1599,7 @@ export function App() {
       autoLaunchAttempted.current = false
       setActiveView('conversation')
     }, t("Ubuntu 运行环境已更新"))
-  }, [run])
+  }, [run, setActiveView])
 
   const launchHarness = useCallback(() => {
     if (busyRef.current !== null) return
@@ -1487,7 +1637,7 @@ export function App() {
         setBusy(null)
       }
     })()
-  }, [notify, requestRuntimeUpdate, runtime])
+  }, [notify, requestRuntimeUpdate, runtime, setActiveView])
 
   useEffect(() => {
     if (language === null || onboardingOpen || booting || activeView !== 'conversation' || busy !== null || autoLaunchAttempted.current) return
@@ -1500,7 +1650,7 @@ export function App() {
 
   const openSettings = useCallback((page: SettingsPage) => {
     setActiveView(SETTINGS_PAGE_META[page].view)
-  }, [])
+  }, [setActiveView])
 
   /** 更新诊断日志采集开关与保留天数；原生侧会再次夹取保留范围。 */
   const saveDiagnosticSettings = useCallback((enabled: boolean, retentionDays: number) => {
@@ -1540,7 +1690,7 @@ export function App() {
       setKeepAlive(await runtimeBridge.getKeepAliveState())
       setActiveView('settings')
     }, t("运行时已停止"))
-  }, [run])
+  }, [run, setActiveView])
 
   const confirmReset = useCallback(() => {
     void run('reset', async () => {
@@ -1551,7 +1701,7 @@ export function App() {
       autoLaunchAttempted.current = false
       setActiveView('conversation')
     }, t("Ubuntu 环境已重置"))
-  }, [run])
+  }, [run, setActiveView])
 
   const saveSettings = useCallback((nextSettings: RuntimeSettingsUpdate) => {
     void run('save-settings', async () => {
@@ -1559,13 +1709,32 @@ export function App() {
       setSettings(saved)
       setRuntime(await runtimeBridge.getState())
       // 保存可能改变后台保持开关，服务状态需要重新读取。
-      setKeepAlive(await runtimeBridge.getKeepAliveState())
-    }, t("设置已保存"))
-  }, [run])
+      const nextKeepAlive = await runtimeBridge.getKeepAliveState()
+      setKeepAlive(nextKeepAlive)
+      // 「已保存」不等于「已生效」：前台服务是否真的进入前台由原生状态决定。
+      notify(t("设置已保存"), 'success')
+      if (saved.keepRuntimeInBackground !== true || nextKeepAlive.foregroundServiceActive) return
+      // 服务可能只是还在启动中，等宽限期过后用原生状态复核：
+      // 仍为「未运行」才提示未生效（缺少通知权限、后台启动被系统拒绝或厂商策略限制都会停在这里）。
+      window.setTimeout(() => {
+        void runtimeBridge.getKeepAliveState().then(latest => {
+          setKeepAlive(latest)
+          if (latest.keepRuntimeInBackground === true && !latest.foregroundServiceActive) {
+            notify(t("设置已保存，但后台保持未生效：前台服务未运行。Android 13 及以上需要通知权限，并可能受系统后台限制；请在系统设置中为本应用开启通知权限后重试。"), 'error')
+          }
+        }).catch(() => {
+          // 复核失败时保留「设置已保存」的提示：不猜测服务状态，也不误报未生效。
+        })
+      }, FOREGROUND_SERVICE_SETTLE_MS)
+    })
+  }, [notify, run])
 
   /**
    * 申请前台服务通知权限。
-   * 被拒绝不影响 Harness 运行，只影响 Android 13+ 是否显示常驻通知。
+   *
+   * 权限被拒绝（或调用超时）时前台服务根本起不来，「后台保持」不会生效：
+   * 部分厂商 ROM 甚至会因此终结应用进程，所以这里如实说明后果并指引到系统设置，
+   * 不再声称「前台服务仍会运行」。
    */
   const requestNotificationPermission = useCallback(() => {
     void run('notification-permission', async () => {
@@ -1575,7 +1744,7 @@ export function App() {
       )
       setKeepAlive(await runtimeBridge.getKeepAliveState())
       if (result === null || (!result.granted && result.supported)) {
-        notify(t("通知权限未授予：前台服务仍会运行，但 Android 13 及以上不会显示常驻通知，可在系统设置中手动开启。"), 'info')
+        notify(t("未获得通知权限：Android 13 及以上需要通知权限才能运行前台服务，后台保持不会生效。请在系统设置中为本应用开启通知权限后重试。"), 'error')
       }
     })
   }, [notify, run])
@@ -1603,17 +1772,17 @@ export function App() {
       case 'conversation':
         return <ConversationScreen busy={busy} keepAlive={keepAlive} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} onOpenTerminal={() => setActiveView('terminal')} onUpdate={requestRuntimeUpdate} />
       case 'terminal':
-        return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onBack={() => setActiveView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
+        return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
       case 'plugins':
-        return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => setActiveView('settings')} />
+        return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
       case 'environment':
-        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => setActiveView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} />
+        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} />
       case 'settings':
         return <SettingsHomeScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenPage={openSettings} onOpenPlugins={() => setActiveView('plugins')} onOpenTerminal={() => setActiveView('terminal')} onStop={stopRuntime} />
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} page={page} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => setActiveView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onOpenShizuku={openShizuku} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} page={page} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onOpenShizuku={openShizuku} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

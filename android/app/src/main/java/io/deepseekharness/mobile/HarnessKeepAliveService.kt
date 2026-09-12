@@ -49,7 +49,14 @@ class HarnessKeepAliveService : Service() {
         // startForeground() 会抛 ForegroundServiceDidNotStartInTimeException 并终结整个进程。
         // 先前「没有 controller 就直接 stopSelf()」的写法全程没有进入前台状态，只是运气好
         // 没触发；这里改成先无条件进入前台，再决定是否立即结束。
-        startForegroundCompat()
+        if (!startForegroundCompat()) {
+            // 进入前台失败时必须在此收尾：服务既没有通知，也没有被系统认定的前台身份，
+            // 继续运行只会留下一个无法自解释的进程。立即结束，Harness 本身照常以普通
+            // 后台进程运行，只是失去存活优先级提升。
+            stopForegroundCompat()
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (HarnessKeepAlivePolicy.shouldStopServiceWithoutController(RuntimeHost.controllerOrNull() != null)) {
             // 进程被系统回收后重启：运行时与临时认证凭据都已不存在，旧会话无法恢复。
             // 此时保持前台服务只会留下一个空转通知，因此立即结束，由界面提示重新连接。
@@ -97,17 +104,36 @@ class HarnessKeepAliveService : Service() {
     /** 仅以启动方式运行，不提供绑定接口。 */
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun startForegroundCompat() {
+    /**
+     * 进入前台状态，返回是否成功。
+     *
+     * 刻意不让异常逃出这里：`onStartCommand` 抛出的异常会终结**整个应用进程**，
+     * 也就是用户看到的「闪退」。实测在未授予通知权限（或厂商 ROM 拒绝该前台服务
+     * 类型）时 `startForeground` 会抛异常，因此这里降级处理：
+     * 记录受控诊断后返回 false，由调用方结束服务，Harness 继续以普通后台进程运行。
+     */
+    private fun startForegroundCompat(): Boolean {
         val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            ServiceCompat.startForeground(
-                this,
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceCompat.startForeground(
+                    this,
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+            } else {
+                ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, 0)
+            }
+            true
+        } catch (error: Throwable) {
+            diagnostics.record(
+                DiagnosticLevel.WARN,
+                DiagnosticEvent.KEEP_ALIVE,
+                mapOf("reason" to "foreground_failed", "active" to "false"),
             )
-        } else {
-            ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, 0)
+            android.util.Log.w("dsh-runtime", "keep-alive foreground failed: ${error.javaClass.simpleName}")
+            false
         }
     }
 

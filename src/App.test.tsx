@@ -259,7 +259,9 @@ describe('App conversation gate', () => {
     // 运行时来源在「运行与后台」页。
     openSettingsPage('运行与后台')
     expect(screen.getByText('官方包已固定下载源；仅内嵌开发包可留空')).toBeInTheDocument()
+    // 屏幕内返回按钮走的是历史回退，视图切换在 popstate 之后生效。
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
+    expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()
 
     // 字号在「终端与外观」页。
     openSettingsPage('终端与外观')
@@ -362,6 +364,57 @@ describe('后台保持与恢复', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, keepRuntimeInBackground: true }))
+  })
+
+  it('通知权限被拒时提示后台保持不会生效，不谎称前台服务仍在运行', async () => {
+    // 不自动启动：停在主视图手动进设置，避免与启动流程抢忙碌状态。
+    bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false })
+    bridge.requestNotificationPermission.mockResolvedValue({ granted: false, supported: true })
+    bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive, notificationPermission: 'prompt' })
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
+    openSettingsPage('运行与后台')
+
+    const toggle = await screen.findByRole('switch', { name: /后台保持 Harness/ })
+    fireEvent.click(toggle)
+    await waitFor(() => expect(bridge.requestNotificationPermission).toHaveBeenCalledTimes(1))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('后台保持不会生效')
+    // 旧文案声称「前台服务仍会运行」：缺少通知权限时服务根本起不来（部分 ROM 还会终结进程）。
+    expect(alert).not.toHaveTextContent('仍会运行')
+    // 状态行仍按原生回传如实显示未授予。
+    expect(screen.getByText('未授予')).toBeVisible()
+  })
+
+  it('开启后台保持但前台服务没起来时提示未生效', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false, keepRuntimeInBackground: true })
+    // 权限已授予、开关已是开启状态，但前台服务没有进入前台：以原生状态为准。
+    bridge.getKeepAliveState.mockResolvedValue({
+      ...keepAlive,
+      keepRuntimeInBackground: true,
+      foregroundServiceActive: false,
+    })
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
+    openSettingsPage('运行与后台')
+
+    const saveButton = await screen.findByRole('button', { name: '保存设置' })
+    await waitFor(() => expect(saveButton).toBeEnabled())
+    fireEvent.click(saveButton)
+
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
+      ...settings,
+      autoLaunch: false,
+      keepRuntimeInBackground: true,
+    }))
+    // 前台服务是异步拉起的：应用会等宽限期后按原生状态复核，确认仍未运行才提示未生效。
+    const alert = await screen.findByRole('alert', {}, { timeout: 4000 })
+    expect(alert).toHaveTextContent('设置已保存，但后台保持未生效')
+    // 「已保存」不等于「已生效」：只留一句「设置已保存」是不够的。
+    expect(screen.queryByText('设置已保存')).toBeNull()
   })
 
   it('显示前台服务、通知权限与设备 Shell 辅助状态', async () => {
