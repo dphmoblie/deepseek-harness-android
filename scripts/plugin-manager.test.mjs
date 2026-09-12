@@ -5,8 +5,91 @@ import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
-const { createManager, within, parseVersion, compareVersions, satisfiesRange, selectNewestCompatible, safeDetail } =
+const { createManager, within, parseVersion, compareVersions, satisfiesRange, selectNewestCompatible, safeDetail, packageNameOf, collectBareSpecifiers } =
   require('../android/app/src/main/assets/support/plugin-manager.cjs')
+
+test('裸导入抽取只认包名，路径与内建模块一律忽略', () => {
+  assert.equal(packageNameOf('react'), 'react')
+  assert.equal(packageNameOf('react/jsx-runtime'), 'react')
+  assert.equal(packageNameOf('@deepseek-ai/dsh-tools'), '@deepseek-ai/dsh-tools')
+  assert.equal(packageNameOf('@deepseek-ai/dsh-tools/lib/x.js'), '@deepseek-ai/dsh-tools')
+  assert.equal(packageNameOf('./local'), null)
+  assert.equal(packageNameOf('../up'), null)
+  assert.equal(packageNameOf('/abs/path'), null)
+  assert.equal(packageNameOf('node:fs'), null)
+  assert.equal(packageNameOf('#internal'), null)
+  assert.equal(packageNameOf(''), null)
+  assert.equal(packageNameOf('a'.repeat(200)), null)
+
+  const source = [
+    "import { z } from 'zustand'",
+    "import 'side-effect-pkg'",
+    "const a = require('@scope/pkg/deep')",
+    "const b = await import('immer')",
+    "import local from './local.js'",
+    "import fs from 'node:fs'",
+    'const notImport = "from \'quoted-in-string\'"',
+  ].join('\n')
+  const found = collectBareSpecifiers(source)
+  // `quoted-in-string` 是已知的误报：文本扫描无法区分字符串字面量里的 `from '...'`。
+  // 误报是安全的——只有"运行时确实存在"的名字才会被链进 staging，凭空出现的名字会被
+  // resolvePackage() 拒绝，代价仅是一次多余的查找。
+  assert.deepEqual([...found].sort(), ['@scope/pkg', 'immer', 'quoted-in-string', 'side-effect-pkg', 'zustand'])
+  // 真正危险的是漏报与路径误判，这里确认相对路径没有被当成包名。
+  assert.equal(found.has('local.js'), false)
+  assert.equal(found.has('fs'), false)
+})
+
+test('解析闭包补全：宿主提供的裸导入被链回运行时实例，不改动既有依赖', t => {
+  // 复现"模块不完整"：插件只带自己的依赖，而 react / cordis 这类宿主包不在 staging 里。
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-staging-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  const write = (relative, content) => {
+    const file = path.join(root, relative)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, content)
+  }
+  const pkg = (name, version, extra = {}) => JSON.stringify({ name, version, ...extra })
+
+  // 运行时：opt/dsh/node_modules 里放宿主包（resolvePackage 的允许根之一）。
+  write('opt/dsh/node_modules/react/package.json', pkg('react', '18.3.1'))
+  write('opt/dsh/node_modules/@deepseek-ai/cordis/package.json', pkg('@deepseek-ai/cordis', '4.0.2'))
+  write('opt/dsh/node_modules/@deepseek-ai/dsh/package.json', pkg('@deepseek-ai/dsh', '0.1.5-rc.1'))
+  write('opt/node/lib/node_modules/npm/bin/npm-cli.js', '// npm')
+  write('root/.dsh/profiles/web/package.json', JSON.stringify({ dsh: { profile: { bundles: ['demo-plugin'] } } }))
+
+  // 插件：只声明并携带自己的依赖，源码里却导入了宿主包。
+  const plugin = pkg('demo-plugin', '1.0.0', { dsh: { bundle: { patch: './cordis.patch.json' } } })
+  const install = (id, directory) => {
+    const stage = path.join(directory, 'node_modules')
+    fs.mkdirSync(path.join(stage, 'demo-plugin'), { recursive: true })
+    fs.writeFileSync(path.join(stage, 'demo-plugin/package.json'), plugin)
+    fs.writeFileSync(path.join(stage, 'demo-plugin/cordis.patch.json'), '[]')
+    fs.writeFileSync(
+      path.join(stage, 'demo-plugin/index.js'),
+      "import { z } from 'zustand'\nimport { c } from '@deepseek-ai/cordis'\nimport r from 'react'\n",
+    )
+    fs.mkdirSync(path.join(stage, 'zustand'), { recursive: true })
+    fs.writeFileSync(path.join(stage, 'zustand/package.json'), pkg('zustand', '4.5.5'))  }
+
+  // 注入 YAML 解析器：补丁内容就是 JSON 数组，用 JSON.parse 即可，避免依赖运行时里的 js-yaml。
+  const manager = createManager(root, install, text => JSON.parse(text))
+  manager.update('demo-plugin')
+
+  const stage = path.join(root, 'root/.dsh-mobile/plugin-manager/versions')
+  const transaction = fs.readdirSync(stage)[0]
+  const modules = path.join(stage, transaction, 'node_modules')
+
+  // 宿主包被链进来（否则 Node 会 ERR_MODULE_NOT_FOUND，表现为"模块不完整"）。
+  assert.equal(fs.lstatSync(path.join(modules, 'react')).isSymbolicLink(), true)
+  assert.equal(fs.realpathSync(path.join(modules, 'react')), fs.realpathSync(path.join(root, 'opt/dsh/node_modules/react')))
+  assert.equal(fs.lstatSync(path.join(modules, '@deepseek-ai/cordis')).isSymbolicLink(), true)
+  // 插件自带、staging 里已存在的依赖保持原样，不被链接替换。
+  assert.equal(fs.lstatSync(path.join(modules, 'zustand')).isSymbolicLink(), false)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(modules, 'zustand/package.json'), 'utf8')).version, '4.5.5')
+  // 运行时里不存在的名字不会被凭空造出来。
+  assert.equal(fs.existsSync(path.join(modules, 'missing-package')), false)
+})
 
 test('失败详情只允许包名与版本字符，路径与异常原文一律丢弃', () => {
   // 能定位问题的正文必须放行。

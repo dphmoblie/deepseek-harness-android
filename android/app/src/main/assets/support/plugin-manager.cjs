@@ -20,6 +20,13 @@ const protectedPackage = name => officialPackage(name) || ['react', 'react-dom',
  */
 const DETAIL = /^[A-Za-z0-9@/._+, =!<>~^|()\-]{1,300}$/
 
+/** 解析闭包补全的扫描上限：只扫这些扩展名，并限定文件数、单文件与总字节数。 */
+const SCAN_EXTENSIONS = ['.js', '.mjs', '.cjs', '.json']
+const SCAN_MAX_FILES = 4000
+const SCAN_MAX_BYTES = 24 * 1024 * 1024
+const SCAN_MAX_FILE_BYTES = 512 * 1024
+const MAX_LINKED_DEPENDENCIES = 64
+
 /** 详情校验：通过返回原文，否则返回 null（调用方据此省略 detail 字段）。 */
 function safeDetail(detail) {
   if (typeof detail !== 'string' || !DETAIL.test(detail)) return null
@@ -29,6 +36,46 @@ function safeDetail(detail) {
   if (detail.startsWith('/') || detail.startsWith('~') || detail.startsWith('.')) return null
   if (detail.includes('//')) return null
   return detail
+}
+
+/**
+ * 从裸导入说明符里取出包名：`a/b/c` → `a`，`@s/p/x` → `@s/p`。
+ * 相对/绝对路径、`node:` 内建与子路径导入（`#internal`）一律返回 null。
+ */
+function packageNameOf(specifier) {
+  if (typeof specifier !== 'string' || specifier.length === 0 || specifier.length > 128) return null
+  if (specifier.startsWith('.') || specifier.startsWith('/') || specifier.startsWith('#')) return null
+  if (specifier.startsWith('node:')) return null
+  const parts = specifier.split('/')
+  const name = specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
+  return NAME.test(name) ? name : null
+}
+
+/**
+ * 静态抽取一段源码里的裸导入包名。
+ *
+ * 只做保守的文本匹配：`from '...'`、`import '...'`、`require('...')`、`import('...')`。
+ * 宁可漏掉动态拼接出来的导入，也不做会误判的复杂解析 —— 漏掉的会在 Harness 启动时
+ * 照旧报错，而误判会把无关包链进 staging。
+ */
+function collectBareSpecifiers(text) {
+  const found = new Set()
+  if (typeof text !== 'string' || text.length === 0) return found
+  const patterns = [
+    /\bfrom\s*['"]([^'"\n]{1,128})['"]/g,
+    /\bimport\s*['"]([^'"\n]{1,128})['"]/g,
+    /\brequire\s*\(\s*['"]([^'"\n]{1,128})['"]\s*\)/g,
+    /\bimport\s*\(\s*['"]([^'"\n]{1,128})['"]\s*\)/g,
+  ]
+  for (const pattern of patterns) {
+    let match
+    while ((match = pattern.exec(text)) !== null) {
+      const name = packageNameOf(match[1])
+      if (name !== null) found.add(name)
+      if (found.size > 512) return found
+    }
+  }
+  return found
 }
 
 /**
@@ -574,6 +621,58 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     })
     if (result.status !== 0) fail('PLUGIN_UPDATE_FAILED')
   }
+  /** 解析闭包补全：详见 updateInternal 里的调用点说明。 */
+  function linkUnresolvedRuntimeDependencies(stageModules, stagedNames) {
+    const present = new Set(stagedNames)
+    const candidates = new Set()
+    let files = 0
+    let bytes = 0
+    const scan = directory => {
+      let items
+      try { items = fs.readdirSync(directory, { withFileTypes: true }) } catch { return }
+      for (const item of items) {
+        if (files >= SCAN_MAX_FILES || bytes >= SCAN_MAX_BYTES || candidates.size >= MAX_LINKED_DEPENDENCIES * 4) return
+        if (item.isSymbolicLink()) continue
+        const full = path.join(directory, item.name)
+        if (item.isDirectory()) {
+          // 不进入已建好链接的依赖，也不进入点目录：它们不是插件自身的源码。
+          if (item.name === 'node_modules' || item.name.startsWith('.')) continue
+          scan(full)
+          continue
+        }
+        if (!item.isFile() || !SCAN_EXTENSIONS.includes(path.extname(item.name))) continue
+        files += 1
+        try {
+          const info = fs.statSync(full)
+          if (info.size === 0 || info.size > SCAN_MAX_FILE_BYTES) continue
+          bytes += info.size
+          collectBareSpecifiers(fs.readFileSync(full, 'utf8')).forEach(name => candidates.add(name))
+        } catch {
+          // 单个文件读失败不影响其余扫描。
+        }
+      }
+    }
+    scan(stageModules)
+    let linked = 0
+    for (const name of candidates) {
+      if (linked >= MAX_LINKED_DEPENDENCIES) break
+      // staging 顶层已有的名字一律不动：那是 npm 的解析结果，必须原样保留。
+      if (present.has(name)) continue
+      const target = path.join(stageModules, name)
+      if (exists(target)) continue
+      const installed = resolvePackage(name)
+      if (installed === null) continue
+      try {
+        fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 })
+        fs.symlinkSync(installed, target, 'junction')
+        present.add(name)
+        linked += 1
+      } catch {
+        // 建链失败留给后续解析报错，不因此让整次更新失败。
+      }
+    }
+  }
+
   function updateInternal(id, directory, transactionId) {
     requireEditable(id)
     if (protectedPackage(id)) fail('PLUGIN_PROTECTED')
@@ -597,6 +696,16 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     const patch = path.resolve(stageModules, id, selected.dsh.bundle.patch)
     if (!within(path.join(stageModules, id), patch) || !fs.statSync(safe(patch)).isFile()) fail('PLUGIN_UPDATE_FAILED')
     loadPatches(patch)
+    // 解析闭包补全。
+    //
+    // staging 位于 ~/.dsh-mobile/plugin-manager/versions/<txn>，而 Node 是按真实路径向上
+    // 解析依赖的：它永远走不到 profiles/node_modules，于是 react / react-dom /
+    // @deepseek-ai/cordis / dsh-settings 这类**宿主提供、未随插件安装**的依赖会全部
+    // ERR_MODULE_NOT_FOUND，表现为"模块不完整"。它们既不是插件的依赖，npm 也就不会装。
+    //
+    // 这里把 staging 内解析不到、但运行时确实存在的裸导入链回运行时实例。只在 staging
+    // 内部建链、不写事务日志：失败时整个 staging 会被丢弃，不会影响任何既有安装。
+    linkUnresolvedRuntimeDependencies(stageModules, stagedNames)
     const entries = []
     for (const name of stagedNames) {
       const source = safe(path.join(stageModules, name))
@@ -666,6 +775,9 @@ module.exports = {
   selectNewestCompatible,
   // 供单测覆盖受控详情过滤（决定哪些字符能回到 WebView）。
   safeDetail,
+  // 供单测覆盖裸导入抽取（决定哪些宿主依赖会被链进 staging）。
+  packageNameOf,
+  collectBareSpecifiers,
 }
 if (require.main === module) {
   try {
