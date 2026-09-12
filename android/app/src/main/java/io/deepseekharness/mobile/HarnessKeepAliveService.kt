@@ -37,14 +37,20 @@ class HarnessKeepAliveService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 必须最先进入前台状态。
+        //
+        // Android 12+ 对 startForegroundService() 启动的服务有 5 秒硬性要求：超时未调用
+        // startForeground() 会抛 ForegroundServiceDidNotStartInTimeException 并终结整个进程。
+        // 先前「没有 controller 就直接 stopSelf()」的写法全程没有进入前台状态，只是运气好
+        // 没触发；这里改成先无条件进入前台，再决定是否立即结束。
+        startForegroundCompat()
         if (HarnessKeepAlivePolicy.shouldStopServiceWithoutController(RuntimeHost.controllerOrNull() != null)) {
             // 进程被系统回收后重启：运行时与临时认证凭据都已不存在，旧会话无法恢复。
-            // 此时保持前台服务只会留下一个空转通知，因此直接结束，由界面提示重新连接。
+            // 此时保持前台服务只会留下一个空转通知，因此立即结束，由界面提示重新连接。
             stopForegroundCompat()
             stopSelf()
             return START_NOT_STICKY
         }
-        startForegroundCompat()
         RuntimeHost.attachForegroundService()
         // 故意不使用 START_STICKY：系统重启本服务时进程内已无运行时，
         // 重新拉起只会产生一个无法自解释的通知。
@@ -93,10 +99,12 @@ class HarnessKeepAliveService : Service() {
      * 因而在锁屏与通知栏都不会泄露用户数据。
      */
     private fun buildNotification(): Notification {
+        // 入口刻意不指向 singleTask 的 MainActivity：那会 clear-top 掉正在显示的
+        // HarnessActivity 并撤销会话凭据。KeepAliveEntryActivity 只做透明转发。
         val openApp = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, MainActivity::class.java).addFlags(
+            Intent(this, KeepAliveEntryActivity::class.java).addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP,
             ),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,

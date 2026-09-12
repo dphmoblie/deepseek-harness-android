@@ -29,7 +29,6 @@ import io.deepseekharness.mobile.runtime.audit.AuditResult
 import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
 import io.deepseekharness.mobile.shizuku.DeviceCommand
 import io.deepseekharness.mobile.shizuku.DeviceCommandResult
-import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
 import io.deepseekharness.mobile.shizuku.ShizukuState
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -62,8 +61,6 @@ class MobileRuntimePlugin : Plugin() {
     private val harnessStartScheduled = AtomicBoolean(false)
     private val harnessStartGeneration = AtomicLong(0)
     private val auditedOperationLock = ReentrantLock()
-    private lateinit var deviceCommands: DeviceCommandRunner
-    private var deviceBridge: DeviceBridgeServer? = null
 
     /**
      * 运行时事件出口。运行时由 [RuntimeHost] 跨插件实例持有，因此这里必须是稳定的
@@ -99,26 +96,32 @@ class MobileRuntimePlugin : Plugin() {
             // 运行时由 RuntimeHost 跨插件实例持有：前台服务保留的会话在这里被复用，
             // 不会因为 WebView 重建而重新安装或重新生成认证凭据。
             controller = RuntimeHost.acquire(context, eventSink)
-            deviceCommands = DeviceCommandRunner(
-                writer = { sessionId, dataBase64 -> controller.writeTerminal(sessionId, dataBase64) },
-            )
             applyKeepScreenAwake(controller.store.keepScreenAwake())
-            ensureDeviceBridge()
-            recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.SUCCEEDED)
         } catch (error: Throwable) {
-            stopDeviceBridge()
+            // 插件注册失败会让整个管理界面失去原生桥：这里必须释放已经登记的订阅，
+            // 否则 RuntimeHost 永远判不出「没有订阅者」，运行时就再也释放不掉。
+            RuntimeHost.detachPluginSink(eventSink)
             recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.FAILED)
             throw error
         }
+        // 设备桥只服务设备 Shell，属于可选能力。保活生效时 Harness 进程仍在运行，
+        // 桥本应由 RuntimeHost 复用；即便这里真的失败，也绝不能让插件注册失败——
+        // 那正是「点通知后设置页打不开」的成因。
+        try {
+            ensureDeviceBridge()
+        } catch (_: Throwable) {
+            android.util.Log.w("dsh-runtime", "device bridge unavailable; device shell disabled")
+        }
+        recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.SUCCEEDED)
     }
 
     /**
      * Capacitor 插件销毁（Activity 销毁，含划掉最近任务）。
      *
-     * 这里只取消订阅并回收插件自己拥有的资源（线程池、设备桥、设备命令）：
-     * 运行时由 [RuntimeHost] 统一持有，前台服务仍在负责时不得立即 shutdown，
-     * 否则「后台保持 Harness」会形同虚设。两者都不再持有时由 RuntimeHost 释放运行时，
-     * 语义与旧实现一致。
+     * 这里只回收插件自己拥有的资源（线程池、发起中的设备命令）并注销事件订阅者：
+     * 运行时与设备桥都由 [RuntimeHost] 进程级持有，前台服务仍在负责时不得立即
+     * shutdown 或拆桥，否则「后台保持 Harness」会形同虚设、guest 注入的桥端口也会失效。
+     * 两者都不再持有时由 RuntimeHost 释放，语义与旧实现一致。
      */
     override fun handleOnDestroy() {
         if (!destroying.compareAndSet(false, true)) return
@@ -129,8 +132,8 @@ class MobileRuntimePlugin : Plugin() {
             executor.shutdownNow()
                 .filterIsInstance<PluginTask>()
                 .forEach { task -> task.rejectRuntimeClosed() }
-            if (this::deviceCommands.isInitialized) deviceCommands.cancelAll()
-            stopDeviceBridge()
+            // 只终结本实例发起中的设备命令：发起它们的 WebView 已经不在了。
+            RuntimeHost.cancelDeviceCommands()
         } catch (_: Throwable) {
             result = AuditResult.FAILED
         }
@@ -296,8 +299,10 @@ class MobileRuntimePlugin : Plugin() {
         stopKeepAliveService()
         execute(call) {
             audited(AuditEvent.RUNTIME_STOP) {
-                stopDeviceBridge()
-                deviceCommands.cancelAll()
+                // 设备桥是进程级资源：停止 Harness 不等于释放运行时，桥必须留着，
+                // 否则 supervisor 里保存的端口与令牌会变成指向死端口的陈旧配置。
+                // 只终结发起中的设备命令——它们的终端会话即将被关闭。
+                RuntimeHost.cancelDeviceCommands()
                 controller.stopRuntime().toJs()
             }
         }
@@ -317,38 +322,38 @@ class MobileRuntimePlugin : Plugin() {
                 if (confirmation != "RESET_RUNTIME") {
                     throw RuntimeFailure("RESET_CONFIRMATION_INVALID", "重置确认文本无效")
                 }
-                stopDeviceBridge()
-                deviceCommands.cancelAll()
+                RuntimeHost.cancelDeviceCommands()
                 controller.reset(confirmation).toJs()
             }
         }
     }
 
-    @Synchronized
+    /**
+     * 取得进程级设备桥。
+     *
+     * 构建与配置只在 RuntimeHost 首次创建时执行一次：保活生效时 Harness 进程仍在运行，
+     * `RuntimeSupervisor.configureDeviceBridge` 会拒绝重复配置（`RUNTIME_BUSY`），
+     * 而 Activity 重建时重复配置正是「插件注册失败」的根因。
+     */
     private fun ensureDeviceBridge() {
-        if (deviceBridge != null) return
-        val bridgeTokenBytes = ByteArray(32).also(SecureRandom()::nextBytes)
-        val bridgeToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bridgeTokenBytes)
-        bridgeTokenBytes.fill(0)
-        val bridge = DeviceBridgeServer(
-            shizuku = controller.terminals.shizuku,
-            runner = deviceCommands,
-            token = bridgeToken,
-        )
-        try {
-            bridge.start()
-            controller.configureDeviceBridge(DeviceBridgeAccess(bridge.localPort, bridgeToken))
-            deviceBridge = bridge
-        } catch (error: Throwable) {
-            bridge.stop()
-            throw error
+        RuntimeHost.acquireDeviceBridge {
+            val bridgeTokenBytes = ByteArray(32).also(SecureRandom()::nextBytes)
+            val bridgeToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bridgeTokenBytes)
+            bridgeTokenBytes.fill(0)
+            val bridge = DeviceBridgeServer(
+                shizuku = controller.terminals.shizuku,
+                runner = RuntimeHost.deviceCommands(),
+                token = bridgeToken,
+            )
+            try {
+                bridge.start()
+                controller.configureDeviceBridge(DeviceBridgeAccess(bridge.localPort, bridgeToken))
+            } catch (error: Throwable) {
+                bridge.stop()
+                throw error
+            }
+            bridge
         }
-    }
-
-    @Synchronized
-    private fun stopDeviceBridge() {
-        deviceBridge?.stop()
-        deviceBridge = null
     }
 
     @PluginMethod
@@ -404,7 +409,8 @@ class MobileRuntimePlugin : Plugin() {
             if (!controller.hasDeviceSession(sessionId)) {
                 throw RuntimeFailure("SESSION_NOT_FOUND", "设备 Shell 会话不存在或已结束")
             }
-            val result = deviceCommands.execute(sessionId, command, call.getString("param") ?: "", DEVICE_COMMAND_TIMEOUT_MS)
+            val result = RuntimeHost.deviceCommands()
+                .execute(sessionId, command, call.getString("param") ?: "", DEVICE_COMMAND_TIMEOUT_MS)
             JSObject()
                 .put("ok", result.ok)
                 .put("exitCode", result.exitCode)
@@ -649,7 +655,8 @@ class MobileRuntimePlugin : Plugin() {
                 dataBase64,
                 suppressPublicOutput,
                 onDeviceCommandOutput = { id, data ->
-                    if (this@MobileRuntimePlugin::deviceCommands.isInitialized) deviceCommands.onOutput(id, data)
+                    // 热路径：没有执行器时不要顺手创建（未授权设备 Shell 时永远用不到）。
+                    RuntimeHost.deviceCommandsOrNull()?.onOutput(id, data)
                 },
                 onPublicOutput = { id, data ->
                     if (!destroying.get()) {

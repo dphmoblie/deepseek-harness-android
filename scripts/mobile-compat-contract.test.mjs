@@ -383,9 +383,11 @@ test('Shizuku UserService uses the reserved removal transaction and stops with t
   assert.match(runtimeSupervisor, /val startEpoch = startCancellationEpoch\.get\(\)/)
   assert.match(runtimeSupervisor, /if \(startCancellationEpoch\.get\(\) != startEpoch\)/)
   assert.match(nativePlugin, /fun stopRuntime\(call: PluginCall\) \{\s*harnessStartGeneration\.incrementAndGet\(\)\s*requestHarnessStartCancellation\(\)\s*stopKeepAliveService\(\)\s*execute\(call\)/)
-  assert.match(nativePlugin, /fun stopRuntime[\s\S]*?stopDeviceBridge\(\)\s*deviceCommands\.cancelAll\(\)\s*controller\.stopRuntime\(\)/)
+  // 停止 Harness 不等于释放运行时：设备桥是进程级资源，必须留着，
+  // 否则 supervisor 里保存的端口与令牌会变成指向死端口的陈旧配置。
+  assert.match(nativePlugin, /fun stopRuntime[\s\S]*?RuntimeHost\.cancelDeviceCommands\(\)\s*controller\.stopRuntime\(\)/)
   assert.match(nativePlugin, /fun startHarness[\s\S]*?harnessStartScheduled\.compareAndSet\(false, true\)[\s\S]*?ensureDeviceBridge\(\)/)
-  assert.match(nativePlugin, /if \(confirmation != "RESET_RUNTIME"\)[\s\S]*?stopDeviceBridge\(\)\s*deviceCommands\.cancelAll\(\)\s*controller\.reset\(confirmation\)/)
+  assert.match(nativePlugin, /if \(confirmation != "RESET_RUNTIME"\)[\s\S]*?RuntimeHost\.cancelDeviceCommands\(\)\s*controller\.reset\(confirmation\)/)
 })
 
 test('background keep-alive delegates the shared runtime and never claims to defeat the system', async () => {
@@ -457,7 +459,89 @@ test('background keep-alive delegates the shared runtime and never claims to def
   assert.doesNotMatch(runtimeStore, /KEY_RUNTIME_[A-Z_]+ = "[^"]*(credential|password|token|api_key)/)
 })
 
-test('runtime packaging leaves the version-matched official client immutable', async () => {  const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
+test('keep-alive keeps the device bridge process-scoped and the notification entry non-destructive', async () => {
+  const manifest = await readFile(
+    resolve(appRoot, 'android/app/src/main/AndroidManifest.xml'),
+    'utf8',
+  )
+  const nativePlugin = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/MobileRuntimePlugin.kt',
+  ), 'utf8')
+  const runtimeHost = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeHost.kt',
+  ), 'utf8')
+  const keepAliveService = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/HarnessKeepAliveService.kt',
+  ), 'utf8')
+  const entryActivity = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/KeepAliveEntryActivity.kt',
+  ), 'utf8')
+  const deviceBridge = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/DeviceBridgeServer.kt',
+  ), 'utf8')
+
+  // 回归 1：设备桥与设备命令不得再由插件持有。
+  // 保活生效时 Harness 进程仍在运行，Activity 重建会重复 configureDeviceBridge，
+  // supervisor 以 RUNTIME_BUSY 拒绝 -> load() 抛异常 -> 插件注册失败 -> 管理界面失去原生桥。
+  assert.doesNotMatch(nativePlugin, /private var deviceBridge/)
+  assert.doesNotMatch(nativePlugin, /private lateinit var deviceCommands/)
+  assert.doesNotMatch(nativePlugin, /stopDeviceBridge/)
+  assert.match(nativePlugin, /RuntimeHost\.acquireDeviceBridge \{/)
+  assert.match(nativePlugin, /RuntimeHost\.deviceCommands\(\)/)
+  assert.match(nativePlugin, /RuntimeHost\.deviceCommandsOrNull\(\)\?\.onOutput/)
+
+  // 回归 2：桥构建失败绝不能穿出 load()（设备桥只服务设备 Shell，属可选能力）。
+  assert.match(
+    nativePlugin,
+    /try \{\s*ensureDeviceBridge\(\)\s*\} catch \(_: Throwable\) \{\s*android\.util\.Log\.w\("dsh-runtime", "device bridge unavailable/,
+  )
+
+  // 回归 3：load() 失败必须注销已登记的订阅者，否则 RuntimeHost.sinks 永远非空，
+  // 运行时就再也释放不掉。
+  assert.match(nativePlugin, /RuntimeHost\.detachPluginSink\(eventSink\)/)
+
+  // 回归 4：桥必须与运行时同生命周期持有与拆除。
+  assert.match(runtimeHost, /interface RuntimeScopedResource/)
+  assert.match(runtimeHost, /private fun releaseDeviceResourcesLocked\(\)/)
+  assert.match(runtimeHost, /controller = null\s*releaseDeviceResourcesLocked\(\)\s*return current/)
+  assert.match(deviceBridge, /\) : RuntimeScopedResource \{/)
+  assert.match(deviceBridge, /override fun stop\(\)/)
+
+  // 回归 5：onStartCommand 必须先进入前台再决定是否结束。
+  // Android 12+ 对 startForegroundService() 有 5 秒硬性要求，未及时 startForeground()
+  // 会抛 ForegroundServiceDidNotStartInTimeException 终结整个进程。
+  const startCommandBody = keepAliveService.match(
+    /override fun onStartCommand\(intent: Intent\?, flags: Int, startId: Int\): Int \{([\s\S]*?)\n {4}\}/,
+  )?.[1] ?? ''
+  assert.ok(startCommandBody.length > 0, 'HarnessKeepAliveService must implement onStartCommand')
+  // 先剔除注释行再比较位置：注释里提到 stopSelf() 会污染 indexOf。
+  const startCommandCode = startCommandBody
+    .split('\n')
+    .filter(line => !line.trim().startsWith('//'))
+    .join('\n')
+  const foregroundAt = startCommandCode.indexOf('startForegroundCompat()')
+  const stopSelfAt = startCommandCode.indexOf('stopSelf()')
+  assert.ok(foregroundAt >= 0, 'onStartCommand must call startForegroundCompat()')
+  assert.ok(stopSelfAt >= 0, 'onStartCommand must be able to end the service')
+  assert.ok(foregroundAt < stopSelfAt, 'startForegroundCompat() must run before stopSelf()')
+
+  // 回归 6：通知入口不得指向 singleTask 的 MainActivity。
+  // 否则任务栈 [MainActivity, HarnessActivity] 会触发 clear-top 销毁对话界面，
+  // 并连带撤销一次性会话凭据，用户再也回不到对话。
+  assert.doesNotMatch(keepAliveService, /Intent\(this, MainActivity::class\.java\)/)
+  assert.match(keepAliveService, /Intent\(this, KeepAliveEntryActivity::class\.java\)/)
+  assert.match(manifest, /android:name="\.KeepAliveEntryActivity"[\s\S]*?android:exported="false"/)
+  assert.match(entryActivity, /AppAuthenticationState\.isHarnessAuthenticated\(\)/)
+  assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_NEW_TASK or Intent\.FLAG_ACTIVITY_SINGLE_TOP/)
+})
+
+test('runtime packaging leaves the version-matched official client immutable', async () => {
+  const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
   assert.doesNotMatch(builder, /patch_client_failure_display\(args\.dsh_root\)/)
   assert.doesNotMatch(builder, /patch_client_mobile_settings_layout\(args\.dsh_root\)/)
   assert.doesNotMatch(builder, /patch_client_tool_details_action\(args\.dsh_root\)/)

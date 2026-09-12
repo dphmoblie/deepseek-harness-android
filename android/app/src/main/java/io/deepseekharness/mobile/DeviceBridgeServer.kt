@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile
 
 import io.deepseekharness.mobile.runtime.RuntimeFailure
+import io.deepseekharness.mobile.runtime.RuntimeScopedResource
 import io.deepseekharness.mobile.shizuku.DeviceCommand
 import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
 import io.deepseekharness.mobile.shizuku.ShizukuRuntime
@@ -31,13 +32,17 @@ import java.security.MessageDigest
  *
  * 注意：Android 运行时没有 com.sun.net.httpserver，这里用 ServerSocket 实现
  * 极简 HTTP/1.1 服务（只支持单个 POST 端点 + 固定 Content-Length 请求体）。
+ *
+ * 生命周期：由 `RuntimeHost` 以进程级资源持有，与 Harness 运行时同生共死。
+ * 保活生效时 Harness 进程仍在运行，Activity 重建不得重建或拆除本桥，
+ * 否则 guest 注入的端口与 Bearer token 会立即失效。
  */
 class DeviceBridgeServer(
     private val shizuku: ShizukuRuntime,
     private val runner: DeviceCommandRunner,
     private val token: String,
     port: Int = 0,
-) {
+) : RuntimeScopedResource {
     private val server = ServerSocket(port, 4, InetAddress.getByName("127.0.0.1"))
     private val executor = ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(4))
     private val running = AtomicBoolean(true)
@@ -50,7 +55,7 @@ class DeviceBridgeServer(
         thread.start()
     }
 
-    fun stop() {
+    override fun stop() {
         running.set(false)
         try {
             server.close()
