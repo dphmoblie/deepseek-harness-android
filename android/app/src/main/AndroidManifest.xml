@@ -13,6 +13,22 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
+    <!-- 存储访问。
+         容器内的 PRoot 以应用 UID 运行，"按路径读 /sdcard" 受同一套权限约束：
+           - 相册 / 截图 / 视频：Android 13+ 用 READ_MEDIA_*，12 及以下用 READ_EXTERNAL_STORAGE；
+           - 其余目录（Download、自建壁纸目录等非媒体路径）：需要「所有文件访问」。
+         MANAGE_EXTERNAL_STORAGE 是特殊权限，不会弹运行时对话框，必须引导用户到系统设置页
+         手动开启，因此界面上要显示状态并提供入口，不能静默申请。
+         本应用走 GitHub Release 分发，不经 Play 审核；若将来上架需按 Play 政策重新评估。 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
         <provider android:authorities="moe.shizuku.privileged.api.shizuku" />

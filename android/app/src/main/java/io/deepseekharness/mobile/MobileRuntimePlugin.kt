@@ -20,6 +20,7 @@ import io.deepseekharness.mobile.runtime.DeviceBridgeAccess
 import io.deepseekharness.mobile.runtime.RuntimeEventSink
 import io.deepseekharness.mobile.runtime.RuntimeFailure
 import io.deepseekharness.mobile.runtime.RuntimeHost
+import io.deepseekharness.mobile.runtime.RuntimeIntent
 import io.deepseekharness.mobile.runtime.RuntimeKeepAliveSnapshot
 import io.deepseekharness.mobile.runtime.RuntimePhase
 import io.deepseekharness.mobile.runtime.RuntimeSettings
@@ -49,6 +50,25 @@ import kotlin.concurrent.withLock
 /** 前台服务通知权限别名；Android 13 以下系统不需要该权限。 */
 private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
 
+/*
+ * 存储权限别名。
+ * 媒体读取自 Android 13 起由 READ_MEDIA_* 取代 READ_EXTERNAL_STORAGE，两者不能塞进同一个
+ * 别名：在不适用的系统版本上 checkSelfPermission 恒为拒绝，会让状态显示永远不正确。
+ * 因此按系统版本分别声明、分别申请，状态查询也只看 API 对应的那一个。
+ */
+private const val MEDIA_IMAGES_ALIAS = "mediaImages"
+private const val MEDIA_VIDEO_ALIAS = "mediaVideo"
+private const val LEGACY_STORAGE_ALIAS = "legacyStorage"
+
+/**
+ * 本进程是否已经记录过「上次非正常结束」。
+ *
+ * 每个进程只记一次：Activity 重建会重复走 load()，但「上次是怎么死的」只与进程启动有关。
+ * 放在文件级是刻意的 —— 它必须随进程重置，而 RuntimeHost 里的状态会被跨 Activity 复用。
+ */
+@Volatile
+private var uncleanExitRecorded = false
+
 @CapacitorPlugin(
     name = "MobileRuntime",
     permissions = [
@@ -56,6 +76,9 @@ private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
             alias = NOTIFICATION_PERMISSION_ALIAS,
             strings = [Manifest.permission.POST_NOTIFICATIONS],
         ),
+        Permission(alias = MEDIA_IMAGES_ALIAS, strings = [Manifest.permission.READ_MEDIA_IMAGES]),
+        Permission(alias = MEDIA_VIDEO_ALIAS, strings = [Manifest.permission.READ_MEDIA_VIDEO]),
+        Permission(alias = LEGACY_STORAGE_ALIAS, strings = [Manifest.permission.READ_EXTERNAL_STORAGE]),
     ],
 )
 class MobileRuntimePlugin : Plugin() {
@@ -123,6 +146,7 @@ class MobileRuntimePlugin : Plugin() {
             android.util.Log.w("dsh-runtime", "device bridge unavailable; device shell disabled")
         }
         recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.SUCCEEDED)
+        recordUncleanExitIfNeeded()
         diagnostics()?.record(
             DiagnosticLevel.INFO,
             DiagnosticEvent.APP_START,
@@ -442,6 +466,30 @@ class MobileRuntimePlugin : Plugin() {
     private fun requireDiagnostics() = diagnostics()
         ?: throw RuntimeFailure("RUNTIME_CLOSED", "本机运行时正在关闭")
 
+    /**
+     * 记录「上次进程非正常结束」。
+     *
+     * 进程被系统杀死（强制停止、内存回收、厂商清理，以及**安装新版本 APK**）时不会走到
+     * handleOnDestroy，持久化的运行意图会停留在 RUNNING。因此判据是：上次意图为 RUNNING、
+     * 而本进程并没有持有正在运行的 Harness。
+     *
+     * 这是排查「会话为什么会坏」时最需要的第一手证据 —— 一次被硬中断的 agent 轮次会留下
+     * 悬空的 tool_calls，之后每一轮都会因历史不合法而失败。
+     */
+    private fun recordUncleanExitIfNeeded() {
+        if (uncleanExitRecorded) return
+        uncleanExitRecorded = true
+        val log = diagnostics() ?: return
+        if (controller.store.runtimeIntentRecord().intent != RuntimeIntent.RUNNING) return
+        val phase = controller.state().phase
+        if (phase == RuntimePhase.RUNNING) return
+        log.record(
+            DiagnosticLevel.WARN,
+            DiagnosticEvent.RECOVERY,
+            mapOf("reason" to "unclean_exit", "phase" to phase.wireValue),
+        )
+    }
+
     @PluginMethod
     fun createTerminal(call: PluginCall) {
         execute(call) {
@@ -639,6 +687,106 @@ class MobileRuntimePlugin : Plugin() {
     fun clearDiagnosticLog(call: PluginCall) {
         execute(call) { requireDiagnostics().clear().toJs() }
     }
+
+    /**
+     * 权限：应用内桥接。
+     * 只返回存储访问的布尔与枚举状态，不含任何文件路径或目录内容。
+     */
+    @PluginMethod
+    fun getStorageAccessState(call: PluginCall) {
+        resolveWhileActive(call) { storageAccessStateJson() }
+    }
+
+    /**
+     * 权限：应用内桥接；仅申请相册/视频的媒体读取权限。
+     * Android 13 起用 READ_MEDIA_*，12 及以下用 READ_EXTERNAL_STORAGE；被拒绝只返回结果，
+     * 不阻断其他功能（容器仍可读应用私有目录）。
+     */
+    @PluginMethod
+    fun requestMediaPermission(call: PluginCall) {
+        val currentActivity = activity
+        if (currentActivity == null) {
+            call.resolve(JSObject().put("granted", mediaPermissionGranted()))
+            return
+        }
+        val aliases = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(MEDIA_IMAGES_ALIAS, MEDIA_VIDEO_ALIAS)
+        } else {
+            arrayOf(LEGACY_STORAGE_ALIAS)
+        }
+        // Capacitor 的插件方法运行在桥接线程上，而权限申请必须从主线程发起。
+        currentActivity.runOnUiThread {
+            requestPermissionForAliases(aliases, call, "mediaPermissionCallback")
+        }
+    }
+
+    @PermissionCallback
+    private fun mediaPermissionCallback(call: PluginCall) {
+        call.resolve(JSObject().put("granted", mediaPermissionGranted()))
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 「所有文件访问」是特殊权限，没有运行时对话框可弹：只能跳到系统设置页由用户手动开启。
+     * Android 11 以下不存在该权限，返回 supported=false 由界面隐藏入口。
+     */
+    @PluginMethod
+    fun openAllFilesAccessSettings(call: PluginCall) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            call.resolve(JSObject().put("supported", false).put("granted", true))
+            return
+        }
+        val intent = Intent(
+            android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            android.net.Uri.parse("package:${context.packageName}"),
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            context.startActivity(intent)
+        } catch (error: Throwable) {
+            // 部分 ROM 没有该设置页：退回应用详情页，至少让用户能进系统设置。
+            try {
+                context.startActivity(
+                    Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(android.net.Uri.parse("package:${context.packageName}"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            } catch (fallbackError: Throwable) {
+                throw RuntimeFailure("STORAGE_SETTINGS_UNAVAILABLE", "无法打开系统存储设置", fallbackError)
+            }
+        }
+        call.resolve(JSObject().put("supported", true).put("granted", allFilesAccessGranted()))
+    }
+
+    private fun mediaPermissionGranted(): Boolean = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+            permissionGranted(Manifest.permission.READ_MEDIA_IMAGES) ||
+                permissionGranted(Manifest.permission.READ_MEDIA_VIDEO)
+        else -> permissionGranted(Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
+
+    /**
+     * 「所有文件访问」状态。
+     * Android 11 以下不存在该权限，视为无需申请（返回 true），避免界面显示成"未授权"。
+     */
+    private fun allFilesAccessGranted(): Boolean = when {
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.R -> true
+        else -> try {
+            android.os.Environment.isExternalStorageManager()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun permissionGranted(permission: String): Boolean =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+    /** 存储访问状态：只有布尔与枚举，不含路径或目录内容。 */
+    private fun storageAccessStateJson(): JSObject = JSObject()
+        .put("mediaGranted", mediaPermissionGranted())
+        .put("allFilesGranted", allFilesAccessGranted())
+        // allFilesSupported=false 表示系统版本低于 Android 11，界面应隐藏「所有文件访问」入口。
+        .put("allFilesSupported", Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+        .put("sdkInt", Build.VERSION.SDK_INT)
 
     /**
      * 按设置与当前运行时阶段同步前台服务。
