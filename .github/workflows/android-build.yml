@@ -375,7 +375,11 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_type != '' && (github.event.inputs.release_type != 'stable' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
+      # 需要完整历史与标签：Release 说明里的「变更内容」由上一个发布标签到本次提交的
+      # 提交列表生成，浅克隆既没有历史也没有标签。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download APK artifact
         uses: actions/download-artifact@v4
@@ -416,11 +420,35 @@ jobs:
             test -f /tmp/runtime/rootfs.bundle
             test -f /tmp/runtime/runtime-manifest.json
             MANIFEST_SHA="$(sha256sum /tmp/runtime/runtime-manifest.json | cut -d' ' -f1)"
+            # 变更内容：上一个发布标签到本次提交的合并提交列表。
+            # 每次升版本号都必须能说清"这一版更新了什么"，因此这里由 CI 自动生成，
+            # 不依赖人工在 Release 页面补写。
+            PREV_TAG="$(git tag --list 'v*' --sort=-creatordate | head -n1 || true)"
+            if [ -n "$PREV_TAG" ]; then
+              RANGE="${PREV_TAG}..${GITHUB_SHA}"
+            else
+              RANGE="${GITHUB_SHA}"
+            fi
+            CHANGES="$(git log --no-merges --pretty=format:'- %s' "$RANGE" 2>/dev/null | head -n 40 || true)"
+            if [ -z "$CHANGES" ]; then
+              CHANGES="- （本次没有可列出的提交，可能是重新发布同一提交）"
+            fi
+            if [ -n "$PREV_TAG" ]; then
+              CHANGES_HEADER="上一个版本：${PREV_TAG}"
+            else
+              CHANGES_HEADER="（未找到上一个发布标签）"
+            fi
             for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json; do
               printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")"
             done > /tmp/checksums.txt
             cat > /tmp/notes.md <<EOF
           # ${NAME}
+
+          ## 变更内容
+
+          ${CHANGES_HEADER}
+
+          ${CHANGES}
 
           ## 安装与配置
 
