@@ -55,6 +55,27 @@ allow executing newly downloaded code from writable app storage. Generated
 
 The Ubuntu terminal always starts a manifest-validated fixed entrypoint through PRoot. Terminal keystrokes are length-limited byte input to an existing process; they are never concatenated into a host shell command. Harness starts only on `127.0.0.1`. Each start receives a fresh 256-bit token through a fixed environment field; a Node preload removes the field after deriving a constant-time Basic-auth check and rejects unauthenticated HTTP and WebSocket upgrades before route dispatch. The token is held only in process memory. The non-exported internal WebView answers the HTTP Basic challenge transparently and also installs a JS-inaccessible, origin-scoped cookie before the first page load because WebView does not surface a Basic challenge for WebSocket upgrades. Neither credential is added to the URL. Neither direct conversation startup nor Settings invokes Android device-credential authentication.
 
+## Harness WebView 与其文件选择器
+
+`HarnessActivity` 承载官方前端，并把页面限制在单一回环源：`shouldInterceptRequest` 与
+`shouldOverrideUrlLoading` 把任何非 `http://127.0.0.1:<port>` 的请求拦成 403，同时关闭
+`allowFileAccess`、禁止混合内容与多窗口。
+
+**`<input type="file">`**：WebView 只有设置了 `WebChromeClient.onShowFileChooser` 才会响应
+文件选择。此前该回调缺失，页面上任何"选择文件"入口在手机上都是死按钮 —— 皮肤中心的壁纸
+导入只能靠手填容器路径绕过，官方附件上传入口同样点不动。现在的实现：
+
+- 按页面请求的模式走 SAF 契约：单选用 `OpenDocument`，多选用 `OpenMultipleDocuments`。
+  结果一定是 `content://`；刻意不用 `ACTION_GET_CONTENT`，因为部分 provider 会返回
+  `file://`，而 `allowFileAccess` 保持关闭。
+- 页面的 `acceptTypes` 只接受标准 MIME（含 `/`）；只给扩展名（如 `.png`）时回退到任意
+  类型，因为 SAF 不接受扩展名过滤。
+- 回调**恰好回传一次**：取消、拉起失败与 Activity 销毁都回传 `null`，否则该 input 会永久
+  停在"等待选择文件"；同一页面重复触发时先取消上一个挂起请求。
+- 为让 WebView 读取选中的 `content://`，`allowContentAccess` 必须为 `true`。这**不**等于
+  放开任意 provider 读取：页面自身发起的 `content://` 加载依旧被 `shouldInterceptRequest`
+  拦成 403，放开的只是"读取用户在系统选择器里明确选中的那一个文件"。
+
 ## Background keep-alive and recovery
 
 「后台保持 Harness」是一个显式开关（`keepRuntimeInBackground`，默认 `false`，旧配置缺键时同样按

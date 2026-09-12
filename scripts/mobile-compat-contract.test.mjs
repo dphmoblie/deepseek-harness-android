@@ -540,6 +540,42 @@ test('keep-alive keeps the device bridge process-scoped and the notification ent
   assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_NEW_TASK or Intent\.FLAG_ACTIVITY_SINGLE_TOP/)
 })
 
+test('Harness WebView serves the system file chooser and keeps page-initiated loads blocked', async () => {
+  const activity = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/HarnessActivity.kt',
+  ), 'utf8')
+
+  // 没有 WebChromeClient 时 <input type="file"> 是死按钮：皮肤中心的"从相册导入"与官方
+  // 附件上传都依赖这条链路。页面上任何"选择文件"入口都因此失效。
+  assert.match(activity, /webView\.webChromeClient = HarnessWebChromeClient\(\)/)
+  assert.match(activity, /override fun onShowFileChooser\(/)
+  assert.match(activity, /class HarnessWebChromeClient : WebChromeClient\(\)/)
+
+  // content:// 访问必须放开，否则 SAF 选中的文件 WebView 读不到，选择器等于白弹。
+  assert.match(activity, /allowContentAccess = true/)
+  // 但 file:// 仍然关闭：SAF 返回的不会是 file://，其余来源一律不接受。
+  assert.match(activity, /allowFileAccess = false/)
+  // 只用 SAF 契约，保证结果一定是 content://。
+  assert.match(activity, /ActivityResultContracts\.OpenDocument\(\)/)
+  assert.match(activity, /ActivityResultContracts\.OpenMultipleDocuments\(\)/)
+  assert.match(activity, /it\.scheme == ContentResolver\.SCHEME_CONTENT/)
+
+  // 回调必须恰好回传一次：取消/销毁时回传 null，否则该 input 永久停在"等待选择文件"。
+  const delivery = activity.match(
+    /private fun deliverFileChooserResult\(uris: List<Uri>\) \{([\s\S]*?)\n {4}\}/,
+  )?.[1] ?? ''
+  assert.ok(delivery.length > 0, 'deliverFileChooserResult must exist')
+  assert.match(delivery, /pendingFileChooser = null/)
+  assert.match(delivery, /callback\.onReceiveValue\(/)
+  assert.match(delivery, /accepted\.takeIf \{ it\.isNotEmpty\(\) \}\?\.toTypedArray\(\)/)
+  // 销毁时必须清掉挂起的选择请求。
+  assert.match(activity, /deliverFileChooserResult\(emptyList\(\)\)[\s\S]{0,400}?webView\.webChromeClient = null/)
+
+  // 页面自身发起的非回环请求仍然被拦成 403：放开 content 访问不等于放开任意 provider 读取。
+  assert.match(activity, /return if \(origin\.allows\(uri\)\) null else blockedResponse\(\)/)
+})
+
 test('runtime packaging leaves the version-matched official client immutable', async () => {
   const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
   assert.doesNotMatch(builder, /patch_client_failure_display\(args\.dsh_root\)/)
