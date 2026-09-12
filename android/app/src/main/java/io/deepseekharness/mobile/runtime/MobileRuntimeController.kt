@@ -6,20 +6,26 @@ import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.withLock
 
+/**
+ * 本机运行时控制器。
+ *
+ * 实例由 [RuntimeHost] 持有：Capacitor 插件销毁（含划掉最近任务）后，前台服务可以
+ * 继续复用同一实例与会话；插件或服务都不再持有时才真正 [shutdown]。
+ *
+ * 事件出口通过 [RuntimeEventSink] 注入，运行时不直接引用 WebView，也不保存任何凭据。
+ */
 class MobileRuntimeController(
     context: Context,
-    onProgress: (RuntimeStateSnapshot) -> Unit,
-    onTerminalOutput: (sessionId: String, dataBase64: String, suppressPublicOutput: Boolean) -> Unit,
-    onTerminalExit: (sessionId: String, exitCode: Int) -> Unit,
+    private val events: RuntimeEventSink,
 ) {
     private val lifecycleLock = ReentrantLock()
     private val closed = AtomicBoolean(false)
     val store = RuntimeStore(context)
-    val status = RuntimeStatus(store).also { it.progressListener = onProgress }
+    val status = RuntimeStatus(store).also { it.progressListener = events::onProgress }
     private val installer = RuntimeInstaller(store, status, externalCancellation = closed::get)
     private val supervisor = RuntimeSupervisor(context, store, status)
     private val plugins = RuntimePluginManager(context, store)
-    val terminals = TerminalCoordinator(context, store, onTerminalOutput, onTerminalExit)
+    val terminals = TerminalCoordinator(context, store, events::onTerminalOutput, events::onTerminalExit)
 
     fun install(source: RuntimeSource) = lifecycleLock.withLock {
         ensureOpen()
@@ -163,6 +169,54 @@ class MobileRuntimeController(
     fun shizukuState(): ShizukuState = lifecycleLock.withLock {
         ensureOpen()
         terminals.shizuku.state()
+    }
+
+    /**
+     * 是否存在本进程无法复用的 Harness 残留进程。
+     * 应用进程被系统回收后 PRoot→node 子进程可能仍在运行，但临时 Basic Auth 凭据
+     * 已随进程丢失，只能提示用户重新连接。
+     */
+    fun hasResidualHarness(): Boolean = try {
+        supervisor.hasResidualHarness()
+    } catch (_: Throwable) {
+        // 判定失败按“无残留”处理：不额外弹提示，启动流程仍会自行回收残留。
+        false
+    }
+
+    /**
+     * 后台保持与恢复状态快照。
+     *
+     * 只读取设置、Shizuku 状态、残留进程标记与持久化意图；不启动进程、不执行 Shell
+     * 命令、不返回任何凭据，可安全回传 WebView。
+     */
+    fun keepAliveSnapshot(foregroundServiceActive: Boolean): RuntimeKeepAliveSnapshot = lifecycleLock.withLock {
+        ensureOpen()
+        val record = store.runtimeIntentRecord()
+        val ownedRunning = status.snapshot().phase == RuntimePhase.RUNNING
+        RuntimeKeepAliveSnapshot(
+            keepRuntimeInBackground = store.keepRuntimeInBackground(),
+            foregroundServiceActive = foregroundServiceActive,
+            deviceShellReady = deviceShellReadyLocked(),
+            reconnectRequired = HarnessKeepAlivePolicy.requiresReconnect(
+                runtimeOwnedRunning = ownedRunning,
+                residualProcess = hasResidualHarness(),
+                lastIntent = record.intent,
+            ),
+            lastIntent = record.intent,
+            lastPhase = record.phase,
+            lastUpdatedAtMillis = record.updatedAtMillis,
+        )
+    }
+
+    /**
+     * Shizuku 健康检查：只读取 binder、授权与 UserService 状态，不执行任何 Shell 命令
+     * 与设备操作。Shizuku 未安装、未授权或断开时返回 false，运行时按无设备 Shell 降级。
+     */
+    private fun deviceShellReadyLocked(): Boolean = try {
+        val state = terminals.shizuku.healthCheck()
+        state.installed && state.running && state.permission == "granted"
+    } catch (_: Throwable) {
+        false
     }
 
     fun shutdown() {

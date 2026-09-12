@@ -75,6 +75,12 @@ export interface RuntimeSettings extends RuntimeSource {
   apiKey?: string
   /** 打开应用时自动启动 Harness（默认 true）；旧存储/测试可能缺省。 */
   autoLaunch?: boolean
+  /**
+   * 后台保持 Harness（默认 false，旧存储/旧桥接缺省时按 false 处理）。
+   * 开启后运行时会使用前台服务，提升进程存活优先级；
+   * 但不能阻止 Android 或厂商系统在内存、电量或后台策略下结束进程。
+   */
+  keepRuntimeInBackground?: boolean
 }
 
 export interface RuntimeSettingsUpdate extends RuntimeSettings {
@@ -99,6 +105,43 @@ export interface ShizukuState {
   connected: boolean
   /** Shizuku 服务端版本（诊断用；未安装为空串）。 */
   version?: string
+}
+
+/** Android 13+ 前台服务通知权限；unsupported 表示系统版本低于 Android 13。 */
+export type NotificationPermission = 'granted' | 'prompt' | 'unsupported'
+
+/** 持久化的运行意图；unknown 表示从未记录。 */
+export type RuntimeIntent = 'running' | 'stopped' | 'unknown'
+
+/**
+ * 后台保持与恢复状态。
+ *
+ * 只包含布尔值、枚举与时间戳：不含 Harness 地址、临时 Basic Auth 密码、
+ * 模型 API Key、终端内容或其他用户数据，可安全用于界面显示。
+ */
+export interface KeepAliveState {
+  /** 设置中的「后台保持 Harness」开关当前值。 */
+  keepRuntimeInBackground: boolean
+  /** 前台服务当前是否正在负责本机运行时。 */
+  foregroundServiceActive: boolean
+  /** 通知权限状态；仅影响 Android 13+ 是否显示前台服务通知。 */
+  notificationPermission: NotificationPermission
+  /** Shizuku 设备 Shell 是否已授权可用；仅用于辅助连接恢复，未授权时降级为 false。 */
+  deviceShellReady: boolean
+  /** 进程被系统回收后存在无法复用的旧会话，需要重新连接。 */
+  reconnectRequired: boolean
+  /** 持久化的最后一次运行意图。 */
+  lastIntent: RuntimeIntent
+  /** 持久化的最近运行阶段；从未记录时缺省。 */
+  lastPhase?: RuntimePhase
+  /** 最近一次状态写入时间（毫秒时间戳）；从未记录时为 0。 */
+  lastUpdatedAtMillis?: number
+}
+
+/** 通知权限申请结果；supported 为 false 表示系统版本低于 Android 13。 */
+export interface NotificationPermissionResult {
+  granted: boolean
+  supported: boolean
 }
 
 export interface TerminalChunk {
@@ -144,6 +187,10 @@ export interface RuntimeBridge {
   requestShizukuPermission: () => Promise<ShizukuState>
   connectShizuku: () => Promise<ShizukuState>
   openShizuku: () => Promise<void>
+  /** 后台保持与恢复状态；不含任何凭据或用户数据。 */
+  getKeepAliveState: () => Promise<KeepAliveState>
+  /** 申请前台服务通知权限；Android 13 以下直接返回已授予。 */
+  requestNotificationPermission: () => Promise<NotificationPermissionResult>
   addRuntimeProgressListener: (listener: (event: RuntimeProgress) => void) => Promise<ListenerHandle>
   addTerminalOutputListener: (listener: (event: TerminalChunk) => void) => Promise<ListenerHandle>
   addTerminalExitListener: (listener: (event: TerminalExit) => void) => Promise<ListenerHandle>

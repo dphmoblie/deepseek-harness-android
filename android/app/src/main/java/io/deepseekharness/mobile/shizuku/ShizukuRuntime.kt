@@ -169,6 +169,21 @@ class ShizukuRuntime(
         return ShizukuState(installed, running, permission, connected, version)
     }
 
+    /**
+     * 设备 Shell 健康检查。
+     *
+     * 只读取 binder 可用性、用户授权与 UserService 状态：
+     *  - 不执行任何 Shell 命令，不读写文件，不连接设备桥；
+     *  - 不抛出异常，未安装、未授权、服务断开或 binder 死亡时统一返回不可用状态，
+     *    调用方据此降级运行；
+     *  - 不写日志，因而不会输出凭据、命令参数或会话标识。
+     */
+    fun healthCheck(): ShizukuState = try {
+        state()
+    } catch (_: Throwable) {
+        ShizukuState(installed = false, running = false, permission = "undetermined", connected = false, version = "")
+    }
+
     @Synchronized
     fun requestPermission(): ShizukuState {
         val current = state()

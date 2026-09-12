@@ -1755,3 +1755,44 @@ button:disabled {
 .language-settings h2 { font-size: 18px; margin: 8px 0; }
 html[lang="en"] .button { white-space: normal; }
 html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
+
+/* 后台保持：告警条上的操作按钮推到右侧。 */
+.inline-alert > .button {
+  flex: none;
+  align-self: center;
+  margin-left: auto;
+}
+
+/* 后台保持状态明细：只显示固定标签与状态值，不含地址、凭据或终端内容。 */
+.settings-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 12px;
+}
+
+.settings-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-status-row strong {
+  color: var(--ink);
+  font-size: 12px;
+  text-align: right;
+}
+
+.settings-note {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}

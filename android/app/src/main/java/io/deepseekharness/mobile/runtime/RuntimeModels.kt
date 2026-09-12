@@ -87,6 +87,12 @@ data class RuntimeSettings(
     val customModelProviders: List<CustomModelProvider> = emptyList(),
     val configuredCustomModelProviders: Set<String> = emptySet(),
     val autoLaunch: Boolean = false,
+    /**
+     * 后台保持 Harness：运行时启动后启用前台服务，提升本应用进程的存活优先级。
+     * 默认 false，旧版本配置没有该键时同样按 false 处理。
+     * 该开关不能阻止 Android 或厂商系统杀死进程。
+     */
+    val keepRuntimeInBackground: Boolean = false,
 )
 
 data class RootfsArtifact(
@@ -311,6 +317,7 @@ object RuntimeValidation {
         keepScreenAwake: Boolean,
         terminalFontSize: Int,
         autoLaunch: Boolean = true,
+        keepRuntimeInBackground: Boolean = false,
     ): RuntimeSettings {
         val source = source(url, digest)
         if (terminalFontSize !in 11..24) {
@@ -322,6 +329,7 @@ object RuntimeValidation {
             keepScreenAwake = keepScreenAwake,
             terminalFontSize = terminalFontSize,
             autoLaunch = autoLaunch,
+            keepRuntimeInBackground = keepRuntimeInBackground,
         )
     }
 

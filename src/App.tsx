@@ -5,6 +5,7 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
+  BellRing,
   Bot,
   CheckCircle2,
   ChevronRight,
@@ -40,6 +41,7 @@ import { MODEL_PROVIDERS } from './modelProviders'
 import { CustomProviders } from './components/CustomProviders'
 import { runtimeBridge } from './platform/native'
 import type {
+  KeepAliveState,
   ModelProviderId,
   ProviderApiKeys,
   RuntimePhase,
@@ -87,8 +89,23 @@ const EMPTY_SHIZUKU: ShizukuState = {
   permission: 'undetermined',
   connected: false,
 }
+
+/** 后台保持状态未知时的占位值：一律按“未开启、未运行”处理，不做保活承诺。 */
+const EMPTY_KEEP_ALIVE: KeepAliveState = {
+  keepRuntimeInBackground: false,
+  foregroundServiceActive: false,
+  notificationPermission: 'unsupported',
+  deviceShellReady: false,
+  reconnectRequired: false,
+  lastIntent: 'unknown',
+}
 const MAX_NOTICE_CHARACTERS = 240
 const RESET_CONFIRMATION = 'RESET_RUNTIME'
+/**
+ * 通知权限申请的兜底超时：系统对话框在极端情况下可能不返回结果，
+ * 超时后按“未授予”处理，避免界面一直停留在忙碌状态。
+ */
+const NOTIFICATION_PERMISSION_TIMEOUT_MS = 30_000
 const UNKNOWN_RUNTIME_ERROR_MESSAGE = '运行时操作失败，请稍后重试；如问题持续，请重置环境。'
 const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   SOURCE_INCOMPLETE: '请同时配置运行时清单地址和 SHA-256，或同时留空。',
@@ -245,8 +262,49 @@ function runtimeTransitioning(runtime: RuntimeState): boolean {
   return ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
 }
 
+/** 通知权限显示文案；三种状态都由原生端给出，前端不猜测系统行为。 */
+const NOTIFICATION_PERMISSION_LABELS = {
+  granted: '已授予',
+  prompt: '未授予',
+  unsupported: '系统不支持',
+} as const
+
+/**
+ * 格式化持久化的恢复记录时间。
+ * 无记录时返回空串，界面据此隐藏该行，不显示伪造或推断出来的时间。
+ */
+function formatRecordedAt(millis: number | undefined): string {
+  if (millis === undefined || !Number.isFinite(millis) || millis <= 0) return ''
+  try {
+    return new Date(millis).toLocaleString()
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 给可能长时间不返回的系统交互加超时兜底。
+ * 只在“超时后可安全降级”的场景使用。
+ */
+function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T | null> {
+  return new Promise(resolve => {
+    const timer = window.setTimeout(() => resolve(null), milliseconds)
+    promise.then(
+      value => {
+        window.clearTimeout(timer)
+        resolve(value)
+      },
+      () => {
+        window.clearTimeout(timer)
+        resolve(null)
+      },
+    )
+  })
+}
+
 interface ConversationScreenProps {
   busy: string | null
+  keepAlive: KeepAliveState
   runtime: RuntimeState
   onInstall: () => void
   onLaunch: () => void
@@ -255,7 +313,7 @@ interface ConversationScreenProps {
   onUpdate: () => void
 }
 
-function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings, onOpenTerminal, onUpdate }: ConversationScreenProps) {
+function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onOpenSettings, onOpenTerminal, onUpdate }: ConversationScreenProps) {
   const installed = runtimeInstalled(runtime)
   const transitioning = runtimeTransitioning(runtime)
   const updateRequired = installed && runtime.updateAvailable && !transitioning
@@ -334,6 +392,19 @@ function ConversationScreen({ busy, runtime, onInstall, onLaunch, onOpenSettings
             <Settings2 size={18} />{t("应用设置")}</button>
         </div>
       </section>
+
+      {keepAlive.reconnectRequired && !transitioning && (
+        <div className="inline-alert warning" role="alert">
+          <AlertTriangle size={19} />
+          <div>
+            <strong>{t("需要重新连接")}</strong>
+            <span>{t("应用进程已被系统回收，旧的 Harness 会话与临时凭据无法恢复；请重新连接以启动新的本机会话。")}</span>
+          </div>
+          <button className="button button-primary compact-button" type="button" onClick={onLaunch} disabled={busy !== null || !installed}>
+            {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("重新连接")}
+          </button>
+        </div>
+      )}
 
       {!runtime.runnerAvailable && (
         <div className="inline-alert warning" role="alert">
@@ -569,6 +640,7 @@ function TerminalScreen({ bridge, fontSize, onAuthorize, onBack, onConnect, onEr
 
 interface SettingsScreenProps {
   busy: string | null
+  keepAlive: KeepAliveState
   runtime: RuntimeState
   settings: RuntimeSettings | null
   shizuku: ShizukuState
@@ -579,11 +651,12 @@ interface SettingsScreenProps {
   onOpenShizuku: () => void
   onOpenTerminal: () => void
   onOpenPlugins: () => void
+  onRequestNotificationPermission: () => void
   onSave: (settings: RuntimeSettingsUpdate) => void
   onStop: () => void
 }
 
-function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConnect, onLaunch, onOpenEnvironment, onOpenShizuku, onOpenTerminal, onOpenPlugins, onSave, onStop }: SettingsScreenProps) {
+function SettingsScreen({ busy, keepAlive, runtime, settings, shizuku, onAuthorize, onConnect, onLaunch, onOpenEnvironment, onOpenShizuku, onOpenTerminal, onOpenPlugins, onRequestNotificationPermission, onSave, onStop }: SettingsScreenProps) {
   const [draft, setDraft] = useState<RuntimeSettings | null>(settings)
   const [selectedProvider, setSelectedProvider] = useState<ModelProviderId | 'custom'>('deepseek')
   const [credentialDrafts, setCredentialDrafts] = useState<ProviderApiKeys>({})
@@ -613,6 +686,12 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
           ? t("已拒绝")
           : t("待授权")
   const selectedProviderOption = MODEL_PROVIDERS.find(provider => provider.id === selectedProvider) ?? MODEL_PROVIDERS[0]
+  const keepAliveRecordedAt = formatRecordedAt(keepAlive.lastUpdatedAtMillis)
+  const lastRunLabel = keepAlive.lastPhase === undefined
+    ? t("从未记录")
+    : keepAliveRecordedAt === ''
+      ? t(PHASE_META[keepAlive.lastPhase].label)
+      : `${t(PHASE_META[keepAlive.lastPhase].label)} · ${keepAliveRecordedAt}`
   const selectedProviderConfigured = selectedProvider !== 'custom' && (
     draft.configuredModelProviders.includes(selectedProvider) || credentialDrafts[selectedProvider] !== undefined
   ) && !clearedProviders.includes(selectedProvider)
@@ -815,6 +894,72 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
           </label>
         </section>
 
+        <section className="settings-section" aria-labelledby="keep-alive-settings">
+          <div className="section-title section-title-action">
+            <span className="section-icon"><BellRing size={19} /></span>
+            <div><h2 id="keep-alive-settings">{t("后台保持")}</h2><p>{t("使用前台服务提升本机运行时的存活优先级")}</p></div>
+            <span className={`status-chip ${keepAlive.foregroundServiceActive ? 'success' : ''}`}>
+              {keepAlive.foregroundServiceActive ? t("前台服务运行中") : t("前台服务未运行")}
+            </span>
+          </div>
+          <label className="toggle-row">
+            <span>
+              <strong>{t("后台保持 Harness")}</strong>
+              <small>{t("开启后需要常驻通知；锁屏、返回桌面或划掉最近任务后仍可能继续运行")}</small>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={draft.keepRuntimeInBackground ?? false}
+              onChange={event => {
+                setDraft({ ...draft, keepRuntimeInBackground: event.target.checked })
+                // 开启时立即申请通知权限：前台服务在 Android 13+ 需要它才能显示常驻通知。
+                if (event.target.checked) onRequestNotificationPermission()
+              }}
+            />
+          </label>
+          <div className="settings-status-list">
+            <div className="settings-status-row">
+              <span>{t("前台服务")}</span>
+              <strong>{keepAlive.foregroundServiceActive ? t("运行中") : t("未运行")}</strong>
+            </div>
+            <div className="settings-status-row">
+              <span>{t("通知权限")}</span>
+              <strong>{t(NOTIFICATION_PERMISSION_LABELS[keepAlive.notificationPermission])}</strong>
+            </div>
+            <div className="settings-status-row">
+              <span>{t("最近状态")}</span>
+              <strong>{lastRunLabel}</strong>
+            </div>
+            <div className="settings-status-row">
+              <span>{t("设备 Shell 辅助")}</span>
+              <strong>{keepAlive.deviceShellReady ? t("可用") : t("不可用")}</strong>
+            </div>
+          </div>
+          <p className="settings-note">
+            {t("前台服务只提升本应用进程的优先级：Android 与厂商的电池、内存和后台策略仍可能结束进程，无法保证绝对不被停止；进程被系统强制停止后，旧的 Harness 会话与临时凭据不可恢复。")}
+          </p>
+          <div className="settings-inline-actions">
+            {keepAlive.notificationPermission === 'prompt' && (
+              <button className="button button-secondary" type="button" onClick={onRequestNotificationPermission} disabled={busy !== null}>
+                <BellRing size={18} />{t("申请通知权限")}</button>
+            )}
+            {keepAlive.reconnectRequired && (
+              <button className="button button-secondary" type="button" onClick={onLaunch} disabled={busy !== null || !runtimeInstalled(runtime)}>
+                {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("重新连接")}</button>
+            )}
+          </div>
+          {keepAlive.reconnectRequired && (
+            <div className="inline-alert warning" role="alert">
+              <AlertTriangle size={19} />
+              <div>
+                <strong>{t("需要重新连接")}</strong>
+                <span>{t("应用进程已被系统回收，旧的 Harness 会话与临时凭据无法恢复；请重新连接以启动新的本机会话。")}</span>
+              </div>
+            </div>
+          )}
+        </section>
+
         <section className="settings-section" aria-labelledby="shizuku-settings">
           <div className="section-title section-title-action">
             <span className="section-icon"><Smartphone size={19} /></span>
@@ -838,6 +983,9 @@ function SettingsScreen({ busy, runtime, settings, shizuku, onAuthorize, onConne
               <div className="permission-granted"><CheckCircle2 size={18} />{t("连接可用")}</div>
             )}
           </div>
+          <p className="settings-note">
+            {t("Shizuku 只用于设备 Shell 的授权与连接状态检测、连接恢复辅助和健康检查；它不是 root，也不提供永久保活能力。未安装、未授权或断开时，设备 Shell 功能自动降级，不影响 Ubuntu 终端与 Harness。")}
+          </p>
         </section>
 
         <button className="button button-primary save-button" type="submit" disabled={busy !== null}>
@@ -932,6 +1080,7 @@ export function App() {
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME)
   const [settings, setSettings] = useState<RuntimeSettings | null>(null)
   const [shizuku, setShizuku] = useState<ShizukuState>(EMPTY_SHIZUKU)
+  const [keepAlive, setKeepAlive] = useState<KeepAliveState>(EMPTY_KEEP_ALIVE)
   const [booting, setBooting] = useState(true)
   const [onboardingOpen, setOnboardingOpen] = useState(() => {
     try { return window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === null } catch { return true }
@@ -1006,6 +1155,12 @@ export function App() {
         // Shizuku is optional and must never block the Harness conversation.
       })
 
+    void runtimeBridge.getKeepAliveState()
+      .then(next => { if (!cancelled) setKeepAlive(next) })
+      .catch(() => {
+        // 后台保持状态读取失败不阻塞界面：保持上一次的已知状态。
+      })
+
     return () => {
       cancelled = true
       if (removeProgress !== undefined) void removeProgress()
@@ -1024,14 +1179,32 @@ export function App() {
         })
         .catch(error => { if (!cancelled && reportError) notify(errorMessage(error), 'error') })
     }
-    const handleVisibilityChange = (): void => {
-      if (document.visibilityState === 'visible') refreshShizuku()
+    // 后台保持状态同时轮询：前台服务可能被系统结束，需要通过原生端才能得知。
+    const refreshKeepAlive = (): void => {
+      if (document.visibilityState === 'hidden') return
+      void runtimeBridge.getKeepAliveState()
+        .then(next => { if (!cancelled) setKeepAlive(next) })
+        .catch(() => {
+          // 轮询失败时保留上一次状态，不重复提示同一条错误。
+        })
     }
-    const handleFocus = (): void => refreshShizuku()
+    const handleVisibilityChange = (): void => {
+      if (document.visibilityState === 'visible') {
+        refreshShizuku()
+        refreshKeepAlive()
+      }
+    }
+    const handleFocus = (): void => {
+      refreshShizuku()
+      refreshKeepAlive()
+    }
 
     window.addEventListener('focus', handleFocus)
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    const timer = window.setInterval(() => refreshShizuku(false), 2500)
+    const timer = window.setInterval(() => {
+      refreshShizuku(false)
+      refreshKeepAlive()
+    }, 2500)
     return () => {
       cancelled = true
       window.clearInterval(timer)
@@ -1119,6 +1292,8 @@ export function App() {
           nextRuntime = await runtimeBridge.startHarness()
           setRuntime(nextRuntime)
         }
+        // 启动成功后前台服务状态才可能变化（设置开启时）。
+        setKeepAlive(await runtimeBridge.getKeepAliveState())
         // HarnessActivity overlays MainActivity. Keeping settings underneath makes
         // its native management button return to the intended management surface.
         setActiveView('settings')
@@ -1151,6 +1326,8 @@ export function App() {
     void run('stop', async () => {
       const next = await runtimeBridge.stopRuntime()
       setRuntime(next)
+      // 显式停止会同时撤销前台服务。
+      setKeepAlive(await runtimeBridge.getKeepAliveState())
       setActiveView('settings')
     }, t("运行时已停止"))
   }, [run])
@@ -1159,6 +1336,7 @@ export function App() {
     void run('reset', async () => {
       const next = await runtimeBridge.reset('RESET_RUNTIME')
       setRuntime(next)
+      setKeepAlive(await runtimeBridge.getKeepAliveState())
       setResetOpen(false)
       autoLaunchAttempted.current = false
       setActiveView('conversation')
@@ -1170,8 +1348,27 @@ export function App() {
       const saved = await runtimeBridge.saveSettings(nextSettings)
       setSettings(saved)
       setRuntime(await runtimeBridge.getState())
+      // 保存可能改变后台保持开关，服务状态需要重新读取。
+      setKeepAlive(await runtimeBridge.getKeepAliveState())
     }, t("设置已保存"))
   }, [run])
+
+  /**
+   * 申请前台服务通知权限。
+   * 被拒绝不影响 Harness 运行，只影响 Android 13+ 是否显示常驻通知。
+   */
+  const requestNotificationPermission = useCallback(() => {
+    void run('notification-permission', async () => {
+      const result = await withTimeout(
+        runtimeBridge.requestNotificationPermission(),
+        NOTIFICATION_PERMISSION_TIMEOUT_MS,
+      )
+      setKeepAlive(await runtimeBridge.getKeepAliveState())
+      if (result === null || (!result.granted && result.supported)) {
+        notify(t("通知权限未授予：前台服务仍会运行，但 Android 13 及以上不会显示常驻通知，可在系统设置中手动开启。"), 'info')
+      }
+    })
+  }, [notify, run])
 
   const requestShizukuPermission = useCallback(() => {
     void run('shizuku-permission', async () => {
@@ -1194,7 +1391,7 @@ export function App() {
   const screen = (() => {
     switch (activeView) {
       case 'conversation':
-        return <ConversationScreen busy={busy} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} onOpenTerminal={() => setActiveView('terminal')} onUpdate={requestRuntimeUpdate} />
+        return <ConversationScreen busy={busy} keepAlive={keepAlive} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} onOpenTerminal={() => setActiveView('terminal')} onUpdate={requestRuntimeUpdate} />
       case 'terminal':
         return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onBack={() => setActiveView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
       case 'plugins':
@@ -1202,7 +1399,7 @@ export function App() {
       case 'environment':
         return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => setActiveView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} />
       case 'settings':
-        return <SettingsScreen onOpenPlugins={() => setActiveView('plugins')} busy={busy} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onConnect={connectShizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} onOpenTerminal={() => setActiveView('terminal')} onSave={saveSettings} onStop={stopRuntime} />
+        return <SettingsScreen onOpenPlugins={() => setActiveView('plugins')} busy={busy} keepAlive={keepAlive} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onConnect={connectShizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} onOpenTerminal={() => setActiveView('terminal')} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onStop={stopRuntime} />
     }
   })()
 

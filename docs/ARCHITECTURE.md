@@ -55,6 +55,29 @@ allow executing newly downloaded code from writable app storage. Generated
 
 The Ubuntu terminal always starts a manifest-validated fixed entrypoint through PRoot. Terminal keystrokes are length-limited byte input to an existing process; they are never concatenated into a host shell command. Harness starts only on `127.0.0.1`. Each start receives a fresh 256-bit token through a fixed environment field; a Node preload removes the field after deriving a constant-time Basic-auth check and rejects unauthenticated HTTP and WebSocket upgrades before route dispatch. The token is held only in process memory. The non-exported internal WebView answers the HTTP Basic challenge transparently and also installs a JS-inaccessible, origin-scoped cookie before the first page load because WebView does not surface a Basic challenge for WebSocket upgrades. Neither credential is added to the URL. Neither direct conversation startup nor Settings invokes Android device-credential authentication.
 
+## Background keep-alive and recovery
+
+「后台保持 Harness」是一个显式开关（`keepRuntimeInBackground`，默认 `false`，旧配置缺键时同样按
+`false` 处理）。开启且 Harness 由本进程成功启动后，应用启动一个 `specialUse` 前台服务
+（`HarnessKeepAliveService`）并显示常驻通知，把本应用进程标记为前台服务；通知文案来自固定资源
+字符串，不含 URL、端口、凭据、终端内容或会话标识。服务本身不执行 Shell 命令、不连接 Shizuku、
+不持有任何凭据，也不承诺进程不会被系统或厂商策略结束。Android 13 及以上会在开关打开时申请
+`POST_NOTIFICATIONS`；被拒绝时服务照常运行，只是不显示常驻通知。
+
+`MobileRuntimeController` 的实际持有者是进程级 `RuntimeHost`，而不是 Capacitor 插件：插件的
+`handleOnDestroy()`（划掉最近任务也会触发）只回收插件自有资源并注销事件订阅者，前台服务仍在
+负责运行时时不调用 `shutdown`，因此 PRoot→node 的 Harness 子进程与内存中的临时会话凭据得以
+保留；插件或服务都不再持有时才释放运行时，语义与旧实现一致。事件出口是可替换的
+`RuntimeEventSink`，没有订阅者时事件被丢弃而不缓存。
+
+恢复语义：`RuntimeStore` 只持久化运行意图（`running`/`stopped`/`unknown`）、最近阶段与时间，
+不含凭据。应用进程被系统回收后，`RuntimeStatus` 不会把状态恢复成 `running`；
+`RuntimeSupervisor.hasResidualHarness()` 以只读方式（pid 文件 + `/proc/<pid>/cmdline` 必须匹配
+受信任运行器路径）判断是否存在无法复用的残留进程。只要本进程未持有正在运行的 Harness，且
+检测到残留进程或上次意图为运行中，界面就显示「需要重新连接」，由用户显式重启一个新的会话。
+前台服务在没有可管理运行时时立即结束，避免留下无法解释的通知。逐项行为与限制见
+`docs/后台保持与恢复.md`，真机验收步骤见 `docs/mobile-acceptance-checklist.md` 的 5.1 小节。
+
 ## Shizuku
 
 Shizuku is optional and user-authorized. The app declares the official
@@ -70,7 +93,11 @@ running, permission is granted, and that UserService binder is alive. Device
 sessions then start a fixed `/system/bin/sh`. The Capacitor bridge cannot
 choose another executable, add process arguments, or run a background command
 without an open user-visible terminal session. Shizuku supplies shell-level
-privileges, not root or Android hardware virtualization.
+privileges, not root or Android hardware virtualization. `healthCheck()` is a
+read-only snapshot used for degraded-mode decisions and the background
+keep-alive status line: it never throws, never runs a command, and never logs,
+so it cannot leak credentials or command arguments. Shizuku never influences
+keep-alive decisions — the foreground service does not depend on it.
 
 容器无法直接访问 Android Binder。`dsh-device` 使用 Harness 启动时注入的随机回环端口和进程级临时令牌请求宿主桥；宿主桥只接受有界的固定命令类型，并通过已授权的 Shizuku UserService PTY 执行。令牌不持久化，不写入 URL 或日志。Shizuku 不可用、未授权或 UserService 断开时请求明确失败。
 

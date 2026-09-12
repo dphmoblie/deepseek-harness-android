@@ -1,8 +1,12 @@
 import type {
   DeviceCommand,
   DeviceCommandResult,
+  KeepAliveState,
   ModelProviderId,
+  NotificationPermission,
+  NotificationPermissionResult,
   ProviderApiKeys,
+  RuntimeIntent,
   RuntimePhase,
   RuntimeProgress,
   RuntimeSettings,
@@ -212,6 +216,8 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
   }
   const autoLaunch = settings.autoLaunch === undefined ? false : settings.autoLaunch
   if (typeof autoLaunch !== 'boolean') throw new Error('自动启动设置格式无效')
+  const keepRuntimeInBackground = settings.keepRuntimeInBackground === undefined ? false : settings.keepRuntimeInBackground
+  if (typeof keepRuntimeInBackground !== 'boolean') throw new Error('后台保持设置格式无效')
   return {
     ...source,
     keepScreenAwake: settings.keepScreenAwake,
@@ -222,6 +228,7 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
       configuredCustomModelProviders: validateCustomCredentialIds(settings.configuredCustomModelProviders, '自定义模型凭据状态'),
     }),
     autoLaunch,
+    keepRuntimeInBackground,
   }
 }
 
@@ -256,6 +263,12 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
   }
   const autoLaunch = settings.autoLaunch === undefined ? false : settings.autoLaunch === true
   if (settings.autoLaunch !== undefined && typeof settings.autoLaunch !== 'boolean') throw new Error('自动启动设置格式无效')
+  const keepRuntimeInBackground = settings.keepRuntimeInBackground === undefined
+    ? false
+    : settings.keepRuntimeInBackground === true
+  if (settings.keepRuntimeInBackground !== undefined && typeof settings.keepRuntimeInBackground !== 'boolean') {
+    throw new Error('后台保持设置格式无效')
+  }
   const configuredProviders = configuredModelProviders(settings.configuredModelProviders, settings.apiKey)
   const customSettings = {
     ...(settings.customModelProviders === undefined ? {} : { customModelProviders: validateCustomModelProviders(settings.customModelProviders) }),
@@ -272,6 +285,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
       configuredModelProviders: configuredProviders,
       ...customSettings,
       autoLaunch,
+      keepRuntimeInBackground,
     }
   }
   const source = validateRuntimeSource({
@@ -285,6 +299,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
     configuredModelProviders: configuredProviders,
     ...customSettings,
     autoLaunch,
+    keepRuntimeInBackground,
   }
 }
 
@@ -383,8 +398,58 @@ export function validateShizukuState(value: unknown): ShizukuState {
   }
 }
 
-export function validateTerminalSession(value: unknown): { sessionId: string } {
-  const session = asRecord(value, '终端会话')
+const NOTIFICATION_PERMISSIONS = new Set<NotificationPermission>(['granted', 'prompt', 'unsupported'])
+const RUNTIME_INTENTS = new Set<RuntimeIntent>(['running', 'stopped', 'unknown'])
+
+/**
+ * 校验后台保持与恢复状态。
+ * 只接受布尔值、固定枚举与时间戳；任何额外字段都不会被回传使用。
+ */
+export function validateKeepAliveState(value: unknown): KeepAliveState {
+  const state = asRecord(value, '后台保持状态')
+  if (
+    typeof state.keepRuntimeInBackground !== 'boolean' ||
+    typeof state.foregroundServiceActive !== 'boolean' ||
+    typeof state.deviceShellReady !== 'boolean' ||
+    typeof state.reconnectRequired !== 'boolean'
+  ) {
+    throw new Error('后台保持状态格式无效')
+  }
+  if (typeof state.notificationPermission !== 'string' || !NOTIFICATION_PERMISSIONS.has(state.notificationPermission as NotificationPermission)) {
+    throw new Error('通知权限状态格式无效')
+  }
+  if (typeof state.lastIntent !== 'string' || !RUNTIME_INTENTS.has(state.lastIntent as RuntimeIntent)) {
+    throw new Error('运行意图格式无效')
+  }
+  const lastPhase = state.lastPhase === undefined ? undefined : runtimePhase(state.lastPhase)
+  let lastUpdatedAtMillis: number | undefined
+  if (state.lastUpdatedAtMillis !== undefined) {
+    if (!Number.isSafeInteger(state.lastUpdatedAtMillis) || (state.lastUpdatedAtMillis as number) < 0) {
+      throw new Error('状态更新时间格式无效')
+    }
+    lastUpdatedAtMillis = state.lastUpdatedAtMillis as number
+  }
+  return {
+    keepRuntimeInBackground: state.keepRuntimeInBackground,
+    foregroundServiceActive: state.foregroundServiceActive,
+    notificationPermission: state.notificationPermission as NotificationPermission,
+    deviceShellReady: state.deviceShellReady,
+    reconnectRequired: state.reconnectRequired,
+    lastIntent: state.lastIntent as RuntimeIntent,
+    ...(lastPhase === undefined ? {} : { lastPhase }),
+    ...(lastUpdatedAtMillis === undefined ? {} : { lastUpdatedAtMillis }),
+  }
+}
+
+export function validateNotificationPermissionResult(value: unknown): NotificationPermissionResult {
+  const result = asRecord(value, '通知权限结果')
+  if (typeof result.granted !== 'boolean' || typeof result.supported !== 'boolean') {
+    throw new Error('通知权限结果格式无效')
+  }
+  return { granted: result.granted, supported: result.supported }
+}
+
+export function validateTerminalSession(value: unknown): { sessionId: string } {  const session = asRecord(value, '终端会话')
   if (typeof session.sessionId !== 'string') throw new Error('终端会话标识无效')
   return { sessionId: assertSessionId(session.sessionId) }
 }

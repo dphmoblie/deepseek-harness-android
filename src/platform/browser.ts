@@ -1,5 +1,6 @@
 import { validatePluginRequest } from './plugins'
 import type {
+  KeepAliveState,
   ListenerHandle,
   ModelProviderId,
   ProviderApiKeys,
@@ -26,6 +27,8 @@ const DEFAULT_SETTINGS: RuntimeSettings = {
   terminalFontSize: 14,
   configuredModelProviders: [],
   autoLaunch: false,
+  // 浏览器预览没有前台服务：保持关闭，避免给出错误的保活预期。
+  keepRuntimeInBackground: false,
 }
 function listenerHandle(remove: () => void): ListenerHandle {
   return {
@@ -211,6 +214,16 @@ export function createBrowserBridge(): RuntimeBridge {
       return Promise.resolve({ ...shizuku })
     },
     openShizuku: () => Promise.resolve(),
+    // 浏览器预览没有 Android 前台服务：如实报告未运行，避免误导保活预期。
+    getKeepAliveState: (): Promise<KeepAliveState> => Promise.resolve({
+      keepRuntimeInBackground: currentSettings.keepRuntimeInBackground === true,
+      foregroundServiceActive: false,
+      notificationPermission: 'unsupported',
+      deviceShellReady: shizuku.installed && shizuku.running && shizuku.permission === 'granted',
+      reconnectRequired: false,
+      lastIntent: state.phase === 'running' ? 'running' : 'stopped',
+    }),
+    requestNotificationPermission: () => Promise.resolve({ granted: false, supported: false }),
     addRuntimeProgressListener: listener => {
       progressListeners.add(listener)
       return Promise.resolve(listenerHandle(() => progressListeners.delete(listener)))

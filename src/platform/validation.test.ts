@@ -4,8 +4,10 @@ import {
   assertSessionId,
   assertTerminalKind,
   assertTerminalSize,
-  validateRuntimeSource,
+  validateKeepAliveState,
+  validateNotificationPermissionResult,
   validateRuntimeProgress,
+  validateRuntimeSource,
   validateRuntimeState,
   validateSettings,
   validateSettingsUpdate,
@@ -101,6 +103,8 @@ describe('settings validation', () => {
       terminalFontSize: 14,
       configuredModelProviders: [],
       autoLaunch: false,
+      // 旧存储没有该键：按默认 false 迁移，不改变既有行为。
+      keepRuntimeInBackground: false,
     })
     expect(() => validateStoredSettings({
       manifestUrl: '',
@@ -135,7 +139,47 @@ describe('settings validation', () => {
       terminalFontSize: 16,
       configuredModelProviders: [],
       autoLaunch: false,
+      keepRuntimeInBackground: false,
     })
+  })
+
+  it('默认关闭后台保持，并保留显式开启的设置', () => {
+    expect(validateSettings({
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: false,
+      terminalFontSize: 14,
+      configuredModelProviders: [],
+    }).keepRuntimeInBackground).toBe(false)
+    expect(validateSettings({
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: false,
+      terminalFontSize: 14,
+      configuredModelProviders: [],
+      keepRuntimeInBackground: true,
+    }).keepRuntimeInBackground).toBe(true)
+    expect(validateStoredSettings({
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: false,
+      terminalFontSize: 14,
+      keepRuntimeInBackground: true,
+    }).keepRuntimeInBackground).toBe(true)
+  })
+
+  it('拒绝非布尔的后台保持设置，不做静默转换', () => {
+    const invalid = {
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: false,
+      terminalFontSize: 14,
+      configuredModelProviders: [],
+      keepRuntimeInBackground: 'true',
+    }
+    expect(() => validateSettings(invalid as never)).toThrow('后台保持')
+    expect(() => validateStoredSettings(invalid)).toThrow('后台保持')
+    expect(() => validateSettingsUpdate(invalid as never)).toThrow('后台保持')
   })
 
   it('rejects non-boolean screen settings instead of silently coercing them', () => {
@@ -158,6 +202,7 @@ describe('settings validation', () => {
       providerApiKeys: { openai: 'unit-test-openai-key', google: 'unit-test-gemini-key' },
       clearProviderApiKeys: ['deepseek'],
       autoLaunch: true,
+      keepRuntimeInBackground: true,
     })).toEqual({
       manifestUrl: '',
       manifestSha256: '',
@@ -167,6 +212,7 @@ describe('settings validation', () => {
       providerApiKeys: { openai: 'unit-test-openai-key', google: 'unit-test-gemini-key' },
       clearProviderApiKeys: ['deepseek'],
       autoLaunch: true,
+      keepRuntimeInBackground: true,
     })
   })
 
@@ -178,6 +224,7 @@ describe('settings validation', () => {
       terminalFontSize: 14,
       configuredModelProviders: [],
       autoLaunch: true,
+      keepRuntimeInBackground: false,
     }
     expect(validateStoredSettings({ ...base, defaultFrontend: 'workbench' })).toEqual(base)
     expect(() => validateSettingsUpdate({ ...base, providerApiKeys: { custom: 'key' } } as never)).toThrow('供应商')
@@ -258,5 +305,46 @@ describe('native bridge output validation', () => {
       totalBytes: 100,
       errorCode: 'DOWNLOAD_INCOMPLETE',
     }).errorCode).toBe('DOWNLOAD_INCOMPLETE')
+  })
+})
+
+describe('后台保持状态校验', () => {
+  const base = {
+    keepRuntimeInBackground: true,
+    foregroundServiceActive: true,
+    notificationPermission: 'granted',
+    deviceShellReady: false,
+    reconnectRequired: false,
+    lastIntent: 'running',
+  }
+
+  it('接受完整状态并保留可选的最近记录', () => {
+    expect(validateKeepAliveState({
+      ...base,
+      lastPhase: 'running',
+      lastUpdatedAtMillis: 1_700_000_000_000,
+    })).toEqual({
+      ...base,
+      lastPhase: 'running',
+      lastUpdatedAtMillis: 1_700_000_000_000,
+    })
+    // 从未记录时两个可选字段整体缺省，界面据此隐藏该行。
+    expect(validateKeepAliveState(base)).toEqual(base)
+  })
+
+  it('拒绝非法枚举、非布尔值与负数时间', () => {
+    expect(() => validateKeepAliveState({ ...base, notificationPermission: 'root' })).toThrow('通知权限')
+    expect(() => validateKeepAliveState({ ...base, lastIntent: 'paused' })).toThrow('运行意图')
+    expect(() => validateKeepAliveState({ ...base, lastPhase: 'sleeping' })).toThrow('运行时阶段')
+    expect(() => validateKeepAliveState({ ...base, reconnectRequired: 'yes' })).toThrow('后台保持状态')
+    expect(() => validateKeepAliveState({ ...base, lastUpdatedAtMillis: -1 })).toThrow('更新时间')
+    expect(() => validateKeepAliveState(null)).toThrow('后台保持状态')
+  })
+
+  it('只接受布尔型的通知权限结果', () => {
+    expect(validateNotificationPermissionResult({ granted: true, supported: true })).toEqual({ granted: true, supported: true })
+    expect(validateNotificationPermissionResult({ granted: false, supported: false })).toEqual({ granted: false, supported: false })
+    expect(() => validateNotificationPermissionResult({ granted: 'yes', supported: true })).toThrow('通知权限结果')
+    expect(() => validateNotificationPermissionResult({ granted: true })).toThrow('通知权限结果')
   })
 })

@@ -4,6 +4,13 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 后台保持 Harness：前台服务及其通知权限。
+         targetSdk 35 下前台服务必须声明具体类型；本服务不属于媒体、定位、数据同步
+         等既有类型，只用于维持本机运行时进程，因此使用 specialUse 并给出用途说明。
+         POST_NOTIFICATIONS 仅影响 Android 13+ 是否显示通知，服务本身不依赖它。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
     <queries>
@@ -38,6 +45,20 @@
             <intent-filter>
                 <action android:name="moe.shizuku.client.BIND_USER_SERVICE" />
             </intent-filter>
+        </service>
+
+        <!-- 后台保持 Harness 的前台服务。
+             stopWithTask="false"：划掉最近任务时不随任务结束；是否继续仍由系统与
+             厂商后台策略决定，本应用不做绝对保活承诺。 -->
+        <service
+            android:name=".HarnessKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false"
+            tools:ignore="Instantiatable">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="维持本机 Harness 运行时进程，使用户在锁屏、返回桌面或划掉最近任务后仍能继续本地会话" />
         </service>
 
         <activity

@@ -7,6 +7,8 @@ import type {
   PluginCatalog,
   DeviceCommand,
   DeviceCommandResult,
+  KeepAliveState,
+  NotificationPermissionResult,
   RuntimeBridge,
   RuntimeProgress,
   RuntimeSettings,
@@ -26,6 +28,8 @@ import {
   validateDeviceCommand,
   validateDeviceCommandParam,
   validateDeviceCommandResult,
+  validateKeepAliveState,
+  validateNotificationPermissionResult,
   validateRuntimeProgress,
   validateRuntimeState,
   validateSettings,
@@ -58,6 +62,8 @@ interface NativeRuntimePlugin {
   requestShizukuPermission(): Promise<ShizukuState>
   connectShizuku(): Promise<ShizukuState>
   openShizuku(): Promise<void>
+  getKeepAliveState(): Promise<KeepAliveState>
+  requestNotificationPermission(): Promise<NotificationPermissionResult>
   addListener(eventName: 'runtimeProgress', listener: (event: RuntimeProgress) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'terminalOutput', listener: (event: TerminalChunk) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'terminalExit', listener: (event: TerminalExit) => void): Promise<PluginListenerHandle>
@@ -122,6 +128,8 @@ function createNativeBridge(): RuntimeBridge {
     requestShizukuPermission: () => NativeRuntime.requestShizukuPermission().then(validateShizukuState),
     connectShizuku: () => NativeRuntime.connectShizuku().then(validateShizukuState),
     openShizuku: () => NativeRuntime.openShizuku(),
+    getKeepAliveState: () => NativeRuntime.getKeepAliveState().then(validateKeepAliveState),
+    requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),
     addRuntimeProgressListener: listener => NativeRuntime.addListener('runtimeProgress', validatedListener(validateRuntimeProgress, listener)),
     addTerminalOutputListener: listener => NativeRuntime.addListener('terminalOutput', validatedListener(validateTerminalChunk, listener)),
     addTerminalExitListener: listener => NativeRuntime.addListener('terminalExit', validatedListener(validateTerminalExit, listener)),

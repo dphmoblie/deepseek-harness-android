@@ -1,15 +1,26 @@
 package io.deepseekharness.mobile
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.view.WindowManager
+import androidx.core.content.ContextCompat
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
+import com.getcapacitor.annotation.Permission
+import com.getcapacitor.annotation.PermissionCallback
+import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
 import io.deepseekharness.mobile.runtime.DeviceBridgeAccess
+import io.deepseekharness.mobile.runtime.RuntimeEventSink
 import io.deepseekharness.mobile.runtime.RuntimeFailure
+import io.deepseekharness.mobile.runtime.RuntimeHost
+import io.deepseekharness.mobile.runtime.RuntimeKeepAliveSnapshot
+import io.deepseekharness.mobile.runtime.RuntimePhase
 import io.deepseekharness.mobile.runtime.RuntimeSettings
 import io.deepseekharness.mobile.runtime.RuntimeStateSnapshot
 import io.deepseekharness.mobile.runtime.RuntimeValidation
@@ -31,7 +42,18 @@ import java.security.SecureRandom
 import java.util.Base64
 import kotlin.concurrent.withLock
 
-@CapacitorPlugin(name = "MobileRuntime")
+/** 前台服务通知权限别名；Android 13 以下系统不需要该权限。 */
+private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
+
+@CapacitorPlugin(
+    name = "MobileRuntime",
+    permissions = [
+        Permission(
+            alias = NOTIFICATION_PERMISSION_ALIAS,
+            strings = [Manifest.permission.POST_NOTIFICATIONS],
+        ),
+    ],
+)
 class MobileRuntimePlugin : Plugin() {
     private lateinit var controller: MobileRuntimeController
     private lateinit var auditLog: PrivateAuditLog
@@ -42,6 +64,12 @@ class MobileRuntimePlugin : Plugin() {
     private val auditedOperationLock = ReentrantLock()
     private lateinit var deviceCommands: DeviceCommandRunner
     private var deviceBridge: DeviceBridgeServer? = null
+
+    /**
+     * 运行时事件出口。运行时由 [RuntimeHost] 跨插件实例持有，因此这里必须是稳定的
+     * 订阅者对象：插件销毁后取消订阅，运行时不会继续向已销毁的 WebView 派发事件。
+     */
+    private val eventSink = PluginEventSink()
 
     companion object {
         private const val DEVICE_COMMAND_TIMEOUT_MS = 60_000L
@@ -68,40 +96,9 @@ class MobileRuntimePlugin : Plugin() {
         auditLog = PrivateAuditLog(context)
         recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.STARTED)
         try {
-            controller = MobileRuntimeController(
-                context = context,
-                onProgress = { snapshot ->
-                    if (!destroying.get()) {
-                        notifyListeners("runtimeProgress", snapshot.toProgressJs())
-                    }
-                },
-                onTerminalOutput = { sessionId, dataBase64, suppressPublicOutput ->
-                    dispatchTerminalOutput(
-                        sessionId,
-                        dataBase64,
-                        suppressPublicOutput,
-                        onDeviceCommandOutput = { id, data ->
-                            if (::deviceCommands.isInitialized) deviceCommands.onOutput(id, data)
-                        },
-                        onPublicOutput = { id, data ->
-                            if (!destroying.get()) {
-                                notifyListeners(
-                                    "terminalOutput",
-                                    JSObject().put("sessionId", id).put("dataBase64", data),
-                                )
-                            }
-                        },
-                    )
-                },
-                onTerminalExit = { sessionId, exitCode ->
-                    if (!destroying.get()) {
-                        notifyListeners(
-                            "terminalExit",
-                            JSObject().put("sessionId", sessionId).put("exitCode", exitCode),
-                        )
-                    }
-                },
-            )
+            // 运行时由 RuntimeHost 跨插件实例持有：前台服务保留的会话在这里被复用，
+            // 不会因为 WebView 重建而重新安装或重新生成认证凭据。
+            controller = RuntimeHost.acquire(context, eventSink)
             deviceCommands = DeviceCommandRunner(
                 writer = { sessionId, dataBase64 -> controller.writeTerminal(sessionId, dataBase64) },
             )
@@ -115,6 +112,14 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /**
+     * Capacitor 插件销毁（Activity 销毁，含划掉最近任务）。
+     *
+     * 这里只取消订阅并回收插件自己拥有的资源（线程池、设备桥、设备命令）：
+     * 运行时由 [RuntimeHost] 统一持有，前台服务仍在负责时不得立即 shutdown，
+     * 否则「后台保持 Harness」会形同虚设。两者都不再持有时由 RuntimeHost 释放运行时，
+     * 语义与旧实现一致。
+     */
     override fun handleOnDestroy() {
         if (!destroying.compareAndSet(false, true)) return
         harnessStartGeneration.incrementAndGet()
@@ -124,16 +129,16 @@ class MobileRuntimePlugin : Plugin() {
             executor.shutdownNow()
                 .filterIsInstance<PluginTask>()
                 .forEach { task -> task.rejectRuntimeClosed() }
-            if (::deviceCommands.isInitialized) deviceCommands.cancelAll()
+            if (this::deviceCommands.isInitialized) deviceCommands.cancelAll()
             stopDeviceBridge()
         } catch (_: Throwable) {
             result = AuditResult.FAILED
         }
         try {
-            if (::controller.isInitialized) controller.shutdown()
+            RuntimeHost.detachPluginSink(eventSink)
         } catch (_: Throwable) {
             result = AuditResult.FAILED
-            // Destruction still proceeds; no terminal data or process details are logged.
+            // 销毁流程继续；不记录终端数据或进程细节。
         } finally {
             try {
                 if (!executor.awaitTermination(DESTROY_WAIT_SECONDS, TimeUnit.SECONDS)) {
@@ -211,6 +216,7 @@ class MobileRuntimePlugin : Plugin() {
                 call.getBoolean("keepScreenAwake", false) ?: false,
                 fontSize,
                 call.getBoolean("autoLaunch", true) ?: true,
+                call.getBoolean("keepRuntimeInBackground", false) ?: false,
             )
             val saved = controller.saveSettings(
                 settings,
@@ -221,6 +227,7 @@ class MobileRuntimePlugin : Plugin() {
                 clearedCustomProviderApiKeys,
             )
             applyKeepScreenAwake(saved.keepScreenAwake)
+            syncKeepAliveService(saved.keepRuntimeInBackground)
             saved.toJs()
         }
     }
@@ -252,7 +259,11 @@ class MobileRuntimePlugin : Plugin() {
                 audited(AuditEvent.RUNTIME_START) {
                     if (generation != harnessStartGeneration.get()) return@audited controller.state().toJs()
                     ensureDeviceBridge()
-                    controller.startHarness().toJs()
+                    controller.startHarness().toJs().also {
+                        // Harness 启动成功后才按设置提升前台优先级；失败时不留空转服务。
+                        // 这里直接读开关，避免为读设置而触发凭据解密。
+                        syncKeepAliveService(controller.store.keepRuntimeInBackground())
+                    }
                 }
             } finally {
                 harnessStartScheduled.set(false)
@@ -282,6 +293,7 @@ class MobileRuntimePlugin : Plugin() {
     fun stopRuntime(call: PluginCall) {
         harnessStartGeneration.incrementAndGet()
         requestHarnessStartCancellation()
+        stopKeepAliveService()
         execute(call) {
             audited(AuditEvent.RUNTIME_STOP) {
                 stopDeviceBridge()
@@ -296,6 +308,8 @@ class MobileRuntimePlugin : Plugin() {
         if (call.getString("confirmation") == "RESET_RUNTIME") {
             harnessStartGeneration.incrementAndGet()
             requestHarnessStartCancellation()
+            // 重置会清除运行时层，必须先撤掉前台服务，避免服务保留已失效的运行时。
+            stopKeepAliveService()
         }
         execute(call) {
             audited(AuditEvent.RUNTIME_RESET) {
@@ -423,6 +437,87 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /**
+     * 权限：应用内桥接。
+     * 只返回后台保持与恢复状态（布尔值、枚举、时间戳），不含 URL、凭据或终端内容。
+     */
+    @PluginMethod
+    fun getKeepAliveState(call: PluginCall) {
+        resolveWhileActive(call) {
+            controller.keepAliveSnapshot(RuntimeHost.isForegroundServiceActive()).toJs()
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；仅申请前台服务通知权限。
+     * Android 13 以下不需要该权限，直接返回已授予；被拒绝时只返回结果，
+     * 不阻止 Harness 运行，由界面提示用户自行在系统设置中开启。
+     */
+    @PluginMethod
+    fun requestNotificationPermission(call: PluginCall) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            call.resolve(JSObject().put("granted", true).put("supported", false))
+            return
+        }
+        if (notificationPermissionGranted()) {
+            call.resolve(JSObject().put("granted", true).put("supported", true))
+            return
+        }
+        val currentActivity = activity
+        if (currentActivity == null) {
+            // 没有前台 Activity 时无法弹系统对话框：如实返回未授予，不挂起调用。
+            call.resolve(JSObject().put("granted", false).put("supported", true))
+            return
+        }
+        // Capacitor 的插件方法运行在桥接线程上，而权限申请必须从主线程发起。
+        currentActivity.runOnUiThread {
+            requestPermissionForAlias(NOTIFICATION_PERMISSION_ALIAS, call, "notificationPermissionCallback")
+        }
+    }
+
+    @PermissionCallback
+    private fun notificationPermissionCallback(call: PluginCall) {
+        call.resolve(
+            JSObject()
+                .put("granted", notificationPermissionGranted())
+                .put("supported", true),
+        )
+    }
+
+    /**
+     * 按设置与当前运行时阶段同步前台服务。
+     * 只在用户开启且 Harness 确实由本进程运行时保持服务，避免留下无法解释的通知。
+     */
+    private fun syncKeepAliveService(keepRuntimeInBackground: Boolean) {
+        val running = controller.state().phase == RuntimePhase.RUNNING
+        if (HarnessKeepAlivePolicy.shouldRunService(keepRuntimeInBackground, running)) {
+            HarnessKeepAliveService.start(context)
+        } else {
+            HarnessKeepAliveService.stop(context)
+        }
+    }
+
+    /** 显式停止运行时或重置：立即撤销前台服务，由 RuntimeHost 统一收尾。 */
+    private fun stopKeepAliveService() {
+        HarnessKeepAliveService.stop(context)
+    }
+
+    private fun notificationPermissionGranted(): Boolean = when {
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU -> true
+        else -> ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * 通知权限状态：unsupported 表示系统版本低于 Android 13；
+     * prompt 表示尚未授予（可能已拒绝，可在系统设置中开启），不代表通知一定无法显示。
+     */
+    private fun notificationPermissionState(): String = when {
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU -> "unsupported"
+        notificationPermissionGranted() -> "granted"
+        else -> "prompt"
+    }
+
     private fun execute(call: PluginCall, operation: () -> JSObject?): Boolean {
         if (destroying.get()) {
             rejectRuntimeClosed(call)
@@ -539,6 +634,44 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /**
+     * WebView 侧事件出口：只在插件仍然存活时派发。
+     * 插件销毁后运行时可能仍由前台服务持有，此时事件被安全丢弃——不缓存、不落盘。
+     */
+    private inner class PluginEventSink : RuntimeEventSink {
+        override fun onProgress(snapshot: RuntimeStateSnapshot) {
+            if (!destroying.get()) notifyListeners("runtimeProgress", snapshot.toProgressJs())
+        }
+
+        override fun onTerminalOutput(sessionId: String, dataBase64: String, suppressPublicOutput: Boolean) {
+            dispatchTerminalOutput(
+                sessionId,
+                dataBase64,
+                suppressPublicOutput,
+                onDeviceCommandOutput = { id, data ->
+                    if (this@MobileRuntimePlugin::deviceCommands.isInitialized) deviceCommands.onOutput(id, data)
+                },
+                onPublicOutput = { id, data ->
+                    if (!destroying.get()) {
+                        notifyListeners(
+                            "terminalOutput",
+                            JSObject().put("sessionId", id).put("dataBase64", data),
+                        )
+                    }
+                },
+            )
+        }
+
+        override fun onTerminalExit(sessionId: String, exitCode: Int) {
+            if (!destroying.get()) {
+                notifyListeners(
+                    "terminalExit",
+                    JSObject().put("sessionId", sessionId).put("exitCode", exitCode),
+                )
+            }
+        }
+    }
+
     private fun applyKeepScreenAwake(enabled: Boolean) {
         activity?.runOnUiThread {
             if (enabled) {
@@ -572,6 +705,19 @@ class MobileRuntimePlugin : Plugin() {
         })
         .put("configuredCustomModelProviders", org.json.JSONArray(configuredCustomModelProviders))
         .put("autoLaunch", autoLaunch)
+        .put("keepRuntimeInBackground", keepRuntimeInBackground)
+
+    private fun RuntimeKeepAliveSnapshot.toJs(): JSObject = JSObject()
+        .put("keepRuntimeInBackground", keepRuntimeInBackground)
+        .put("foregroundServiceActive", foregroundServiceActive)
+        .put("notificationPermission", notificationPermissionState())
+        .put("deviceShellReady", deviceShellReady)
+        .put("reconnectRequired", reconnectRequired)
+        .put("lastIntent", lastIntent.wireValue)
+        .also { json ->
+            lastPhase?.let { json.put("lastPhase", it.wireValue) }
+            json.put("lastUpdatedAtMillis", lastUpdatedAtMillis.coerceAtLeast(0L))
+        }
 
     private fun RuntimeStateSnapshot.toProgressJs(): JSObject = JSObject()
         .put("phase", phase.wireValue)

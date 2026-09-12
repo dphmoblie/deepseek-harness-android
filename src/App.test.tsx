@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { RuntimeProgress, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from './platform/types'
+import type { KeepAliveState, RuntimeProgress, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from './platform/types'
 
 const bridge = vi.hoisted(() => ({
   setAppLanguage: vi.fn(),
@@ -20,6 +20,8 @@ const bridge = vi.hoisted(() => ({
   requestShizukuPermission: vi.fn(),
   connectShizuku: vi.fn(),
   openShizuku: vi.fn(),
+  getKeepAliveState: vi.fn(),
+  requestNotificationPermission: vi.fn(),
   addRuntimeProgressListener: vi.fn(),
   addTerminalOutputListener: vi.fn(),
   addTerminalExitListener: vi.fn(),
@@ -72,6 +74,15 @@ const shizuku: ShizukuState = {
   connected: false,
 }
 
+const keepAlive: KeepAliveState = {
+  keepRuntimeInBackground: false,
+  foregroundServiceActive: false,
+  notificationPermission: 'granted',
+  deviceShellReady: false,
+  reconnectRequired: false,
+  lastIntent: 'stopped',
+}
+
 beforeEach(() => {
   window.localStorage.clear()
   window.localStorage.setItem('dsh-mobile-language-v1', 'zh-CN')
@@ -81,6 +92,8 @@ beforeEach(() => {
   bridge.getState.mockResolvedValue({ ...readyState })
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
+  bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive })
+  bridge.requestNotificationPermission.mockResolvedValue({ granted: true, supported: true })
   bridge.addRuntimeProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })
   bridge.saveSettings.mockImplementation((value: RuntimeSettingsUpdate) => Promise.resolve(value))
   bridge.install.mockResolvedValue(undefined)
@@ -301,6 +314,63 @@ describe('App conversation gate', () => {
     expect(Array.from(message)).toHaveLength(240)
     expect(message).not.toContain('\n')
     expect(alert.querySelector('img')).toBeNull()
+  })
+})
+
+describe('后台保持与恢复', () => {
+  it('默认关闭后台保持，开启时申请通知权限并按当前值保存', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    const toggle = await screen.findByRole('switch', { name: /后台保持 Harness/ })
+    expect(toggle).not.toBeChecked()
+    expect(bridge.requestNotificationPermission).not.toHaveBeenCalled()
+
+    fireEvent.click(toggle)
+    expect(toggle).toBeChecked()
+    await waitFor(() => expect(bridge.requestNotificationPermission).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, keepRuntimeInBackground: true }))
+  })
+
+  it('显示前台服务、通知权限与设备 Shell 辅助状态', async () => {
+    bridge.getKeepAliveState.mockResolvedValue({
+      ...keepAlive,
+      keepRuntimeInBackground: true,
+      foregroundServiceActive: true,
+      notificationPermission: 'prompt',
+      deviceShellReady: true,
+      lastIntent: 'running',
+      lastPhase: 'running',
+      lastUpdatedAtMillis: 1_700_000_000_000,
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    expect(await screen.findByText('前台服务运行中')).toBeVisible()
+    expect(screen.getByText('未授予')).toBeVisible()
+    // 设备 Shell 辅助只反映 Shizuku 授权状态，不代表保活能力。
+    expect(screen.getByRole('button', { name: '申请通知权限' })).toBeVisible()
+  })
+
+  it('进程被系统回收后提示重新连接并可通过同一入口重启', async () => {
+    bridge.getKeepAliveState.mockResolvedValue({
+      ...keepAlive,
+      keepRuntimeInBackground: true,
+      reconnectRequired: true,
+      lastIntent: 'running',
+      lastPhase: 'running',
+    })
+    bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false })
+    render(<App />)
+
+    expect(await screen.findByText('需要重新连接')).toBeVisible()
+    // 未伪装成已恢复：残留会话不会被当作运行中，仍需用户显式重新连接。
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '重新连接' }))
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
   })
 })
 

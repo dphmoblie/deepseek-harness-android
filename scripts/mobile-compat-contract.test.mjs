@@ -382,14 +382,82 @@ test('Shizuku UserService uses the reserved removal transaction and stops with t
   assert.match(runtimeSupervisor, /startCancellationEpoch = AtomicLong\(0\)/)
   assert.match(runtimeSupervisor, /val startEpoch = startCancellationEpoch\.get\(\)/)
   assert.match(runtimeSupervisor, /if \(startCancellationEpoch\.get\(\) != startEpoch\)/)
-  assert.match(nativePlugin, /fun stopRuntime\(call: PluginCall\) \{\s*harnessStartGeneration\.incrementAndGet\(\)\s*requestHarnessStartCancellation\(\)\s*execute\(call\)/)
+  assert.match(nativePlugin, /fun stopRuntime\(call: PluginCall\) \{\s*harnessStartGeneration\.incrementAndGet\(\)\s*requestHarnessStartCancellation\(\)\s*stopKeepAliveService\(\)\s*execute\(call\)/)
   assert.match(nativePlugin, /fun stopRuntime[\s\S]*?stopDeviceBridge\(\)\s*deviceCommands\.cancelAll\(\)\s*controller\.stopRuntime\(\)/)
   assert.match(nativePlugin, /fun startHarness[\s\S]*?harnessStartScheduled\.compareAndSet\(false, true\)[\s\S]*?ensureDeviceBridge\(\)/)
   assert.match(nativePlugin, /if \(confirmation != "RESET_RUNTIME"\)[\s\S]*?stopDeviceBridge\(\)\s*deviceCommands\.cancelAll\(\)\s*controller\.reset\(confirmation\)/)
 })
 
-test('runtime packaging leaves the version-matched official client immutable', async () => {
-  const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
+test('background keep-alive delegates the shared runtime and never claims to defeat the system', async () => {
+  const manifest = await readFile(
+    resolve(appRoot, 'android/app/src/main/AndroidManifest.xml'),
+    'utf8',
+  )
+  const nativePlugin = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/MobileRuntimePlugin.kt',
+  ), 'utf8')
+  const runtimeHost = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeHost.kt',
+  ), 'utf8')
+  const keepAliveService = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/HarnessKeepAliveService.kt',
+  ), 'utf8')
+  const keepAlivePolicy = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/runtime/HarnessKeepAlivePolicy.kt',
+  ), 'utf8')
+  const runtimeStore = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeStore.kt',
+  ), 'utf8')
+
+  // 清单：前台服务类型、权限与「不随任务结束」声明。
+  assert.match(manifest, /android:name="android\.permission\.FOREGROUND_SERVICE"/)
+  assert.match(manifest, /android:name="android\.permission\.FOREGROUND_SERVICE_SPECIAL_USE"/)
+  assert.match(manifest, /android:name="android\.permission\.POST_NOTIFICATIONS"/)
+  assert.match(
+    manifest,
+    /android:name="\.HarnessKeepAliveService"[\s\S]*?android:foregroundServiceType="specialUse"[\s\S]*?android:stopWithTask="false"/,
+  )
+  assert.match(manifest, /PROPERTY_SPECIAL_USE_FGS_SUBTYPE/)
+
+  // 插件销毁只注销订阅者，不再直接 shutdown 共享运行时。
+  assert.match(nativePlugin, /override fun handleOnDestroy\(\)[\s\S]*?RuntimeHost\.detachPluginSink\(eventSink\)/)
+  assert.doesNotMatch(nativePlugin, /controller\.shutdown\(\)/)
+  assert.match(nativePlugin, /controller = RuntimeHost\.acquire\(context, eventSink\)/)
+  // 显式停止与重置都必须撤销前台服务。
+  assert.match(nativePlugin, /fun stopRuntime[\s\S]*?stopKeepAliveService\(\)/)
+  assert.match(nativePlugin, /fun reset\(call: PluginCall\)[\s\S]*?stopKeepAliveService\(\)/)
+  // 保存设置与启动成功后按设置同步服务状态。
+  assert.match(nativePlugin, /syncKeepAliveService\(saved\.keepRuntimeInBackground\)/)
+  assert.match(nativePlugin, /syncKeepAliveService\(controller\.store\.keepRuntimeInBackground\(\)\)/)
+
+  // 运行时归属：前台服务决定插件销毁后是否保留运行时。
+  assert.match(runtimeHost, /HarnessKeepAlivePolicy\.shouldReleaseRuntimeOnPluginDetach\(foregroundServiceActive\)/)
+  assert.match(runtimeHost, /if \(sinks\.isEmpty\(\)\) takeControllerLocked\(\) else null/)
+
+  // 划掉最近任务不得结束服务，且服务不执行 Shell 命令、不接触凭据。
+  const onTaskRemovedBody = keepAliveService.match(
+    /override fun onTaskRemoved\(rootIntent: Intent\?\) \{([\s\S]*?)\n {4}\}/,
+  )?.[1] ?? ''
+  assert.ok(onTaskRemovedBody.length > 0, 'HarnessKeepAliveService must override onTaskRemoved')
+  assert.doesNotMatch(onTaskRemovedBody, /stopSelf\(\)|stopForeground|RuntimeHost/)
+  assert.doesNotMatch(keepAliveService, /ProcessBuilder|Runtime\.getRuntime|exec\(/)
+  assert.doesNotMatch(keepAliveService, /HarnessAccess|password|apiKey/)
+  // 通知内容只来自固定资源字符串。
+  assert.match(keepAliveService, /setContentTitle\(getString\(R\.string\.keep_alive_notification_title\)\)/)
+  assert.match(keepAliveService, /setContentText\(getString\(R\.string\.keep_alive_notification_text\)\)/)
+
+  // 恢复记录只保存意图、阶段与时间，不含凭据。
+  assert.match(keepAlivePolicy, /data class RuntimeIntentRecord\(\s*val intent: RuntimeIntent,\s*val phase: RuntimePhase\?,\s*val updatedAtMillis: Long,\s*\)/)
+  assert.match(runtimeStore, /fun recordRuntimeIntent\(intent: RuntimeIntent, phase: RuntimePhase, updatedAtMillis: Long\)/)
+  assert.doesNotMatch(runtimeStore, /KEY_RUNTIME_[A-Z_]+ = "[^"]*(credential|password|token|api_key)/)
+})
+
+test('runtime packaging leaves the version-matched official client immutable', async () => {  const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
   assert.doesNotMatch(builder, /patch_client_failure_display\(args\.dsh_root\)/)
   assert.doesNotMatch(builder, /patch_client_mobile_settings_layout\(args\.dsh_root\)/)
   assert.doesNotMatch(builder, /patch_client_tool_details_action\(args\.dsh_root\)/)

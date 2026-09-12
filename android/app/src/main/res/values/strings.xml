@@ -6,4 +6,9 @@
     <string name="harness_session_failed">无法建立本机 Harness 会话</string>
     <string name="harness_page_failed">Harness 页面暂时无法打开，请在设置中重试</string>
     <string name="shizuku_missing">请先安装并启动 Shizuku</string>
+    <!-- 后台保持前台服务通知：文案固定，不含 URL、凭据、终端内容或任何用户数据。 -->
+    <string name="keep_alive_channel_name">后台运行</string>
+    <string name="keep_alive_channel_description">保持本机 Harness 运行时在后台继续运行</string>
+    <string name="keep_alive_notification_title">Harness 正在后台运行</string>
+    <string name="keep_alive_notification_text">点按返回应用管理本机运行时</string>
 </resources>

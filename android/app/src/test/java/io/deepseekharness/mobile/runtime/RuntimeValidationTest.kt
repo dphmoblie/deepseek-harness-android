@@ -1,7 +1,9 @@
 package io.deepseekharness.mobile.runtime
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.InetAddress
 
@@ -59,6 +61,38 @@ class RuntimeValidationTest {
         assertThrows(RuntimeFailure::class.java) {
             RuntimeValidation.source("", "a".repeat(64))
         }
+    }
+
+    @Test
+    fun defaultsBackgroundKeepAliveToDisabled() {
+        // 旧配置与旧前端都不传该字段：默认关闭，不改变既有行为。
+        val legacy = RuntimeValidation.settings(
+            "https://downloads.example.invalid/runtime.json",
+            "a".repeat(64),
+            keepScreenAwake = true,
+            terminalFontSize = 14,
+        )
+        assertEquals(false, legacy.keepRuntimeInBackground)
+        assertFalse(legacy.keepRuntimeInBackground)
+
+        val enabled = RuntimeValidation.settings(
+            "https://downloads.example.invalid/runtime.json",
+            "a".repeat(64),
+            keepScreenAwake = true,
+            terminalFontSize = 14,
+            autoLaunch = true,
+            keepRuntimeInBackground = true,
+        )
+        assertTrue(enabled.keepRuntimeInBackground)
+        // 数据类默认值同样为 false，避免漏传时被当成开启。
+        assertFalse(
+            RuntimeSettings(
+                manifestUrl = "",
+                manifestSha256 = "",
+                keepScreenAwake = false,
+                terminalFontSize = 14,
+            ).keepRuntimeInBackground,
+        )
     }
 
     @Test

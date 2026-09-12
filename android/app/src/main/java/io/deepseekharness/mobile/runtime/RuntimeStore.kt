@@ -45,6 +45,38 @@ class RuntimeStore(context: Context) {
     // UI lifecycle reads do not need credentials or a working Keystore service.
     fun keepScreenAwake(): Boolean = preferences.getBoolean(KEY_KEEP_AWAKE, false)
 
+    /**
+     * 「后台保持 Harness」开关。
+     * 旧版本配置里没有该键，缺失时统一按 false 处理，与设置默认值保持一致。
+     */
+    fun keepRuntimeInBackground(): Boolean = preferences.getBoolean(KEY_KEEP_BACKGROUND, false)
+
+    /**
+     * 写入运行时恢复记录：只保存运行意图、最近阶段与时间。
+     *
+     * 这里刻意不保存任何凭据——Harness 的临时 Basic Auth 密码只存在于进程内存中。
+     * Android 进程被系统强制停止后，该密码不可恢复，恢复流程必须据此提示重新连接，
+     * 而不是假装旧会话仍在。
+     */
+    fun recordRuntimeIntent(intent: RuntimeIntent, phase: RuntimePhase, updatedAtMillis: Long) {
+        preferences.edit()
+            .putString(KEY_RUNTIME_INTENT, intent.wireValue)
+            .putString(KEY_RUNTIME_PHASE, phase.wireValue)
+            .putLong(KEY_RUNTIME_UPDATED_AT, updatedAtMillis.coerceAtLeast(0))
+            .apply()
+    }
+
+    /** 读取运行时恢复记录；从未记录或内容损坏时返回 [RuntimeIntentRecord.EMPTY]。 */
+    fun runtimeIntentRecord(): RuntimeIntentRecord {
+        val phase = preferences.getString(KEY_RUNTIME_PHASE, null)
+            ?.let { raw -> RuntimePhase.entries.firstOrNull { it.wireValue == raw } }
+        return RuntimeIntentRecord(
+            intent = RuntimeIntent.parse(preferences.getString(KEY_RUNTIME_INTENT, null)),
+            phase = phase,
+            updatedAtMillis = preferences.getLong(KEY_RUNTIME_UPDATED_AT, 0L).coerceAtLeast(0L),
+        )
+    }
+
     @Synchronized
     fun settings(): RuntimeSettings {
         val storedUrl = preferences.getString(KEY_MANIFEST_URL, null)
@@ -60,6 +92,7 @@ class RuntimeStore(context: Context) {
             manifestUrl = if (usePinnedDefault) BuildConfig.DEFAULT_MANIFEST_URL else storedUrl.orEmpty(),
             manifestSha256 = if (usePinnedDefault) BuildConfig.DEFAULT_MANIFEST_SHA256 else storedSha256.orEmpty(),
             keepScreenAwake = keepScreenAwake(),
+            keepRuntimeInBackground = keepRuntimeInBackground(),
             terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             customModelProviders = customProviders,
@@ -100,6 +133,7 @@ class RuntimeStore(context: Context) {
             .putString(KEY_MANIFEST_URL, settings.manifestUrl)
             .putString(KEY_MANIFEST_SHA256, settings.manifestSha256)
             .putBoolean(KEY_KEEP_AWAKE, settings.keepScreenAwake)
+            .putBoolean(KEY_KEEP_BACKGROUND, settings.keepRuntimeInBackground)
             .putInt(KEY_FONT_SIZE, settings.terminalFontSize)
             // Retired frontend choices must not redirect the single official entrypoint.
             .remove(KEY_LEGACY_DEFAULT_FRONTEND)
@@ -605,6 +639,11 @@ class RuntimeStore(context: Context) {
         private const val KEY_MANIFEST_URL = "manifest_url"
         private const val KEY_MANIFEST_SHA256 = "manifest_sha256"
         private const val KEY_KEEP_AWAKE = "keep_screen_awake"
+        private const val KEY_KEEP_BACKGROUND = "keep_runtime_in_background"
+        // 运行时恢复记录：只保存运行意图、最近阶段与时间，绝不保存凭据。
+        private const val KEY_RUNTIME_INTENT = "runtime_intent"
+        private const val KEY_RUNTIME_PHASE = "runtime_last_phase"
+        private const val KEY_RUNTIME_UPDATED_AT = "runtime_last_updated_at"
         private const val KEY_FONT_SIZE = "terminal_font_size"
         private const val KEY_API_KEY = "model_api_key"
         private const val KEY_PROVIDER_CREDENTIALS = "provider_credentials_encrypted_v1"

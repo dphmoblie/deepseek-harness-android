@@ -260,6 +260,25 @@ class RuntimeSupervisor(
         running
     }
 
+    /**
+     * 是否存在本进程未持有、但仍在运行的 Harness 残留进程。
+     *
+     * 应用进程被系统回收（强制停止、内存回收、厂商后台清理）时，PRoot→node 子进程
+     * 不会随之退出，pid 文件也会保留；但本进程内存里的临时 Basic Auth 凭据已经消失，
+     * 旧会话无法恢复。此处只做只读判定，不发送信号、不启动进程：
+     * pid 文件缺失、进程已退出或身份与受信任运行器不符时一律返回 false。
+     */
+    fun hasResidualHarness(): Boolean = synchronized(lock) {
+        if (harnessProcess?.isAlive == true) return@synchronized false
+        val pid = try {
+            HarnessResidual.parsePid(store.harnessPidFile.readText())
+        } catch (_: Exception) {
+            null
+        } ?: return@synchronized false
+        if (!isPidAlive(pid)) return@synchronized false
+        HarnessResidual.isProotProcess(readProcCmdline(pid), store.launchRunnerFile.absolutePath)
+    }
+
     /** 修改插件前回收旧进程，并确认监听端口已释放。 */
     fun preparePluginManagement() = synchronized(lock) {
         if (harnessProcess?.isAlive == true || isStarting()) throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness")

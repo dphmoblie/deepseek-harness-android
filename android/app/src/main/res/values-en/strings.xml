@@ -6,4 +6,9 @@
     <string name="harness_session_failed">Unable to establish a local Harness session</string>
     <string name="harness_page_failed">Unable to open Harness. Please retry in Settings.</string>
     <string name="shizuku_missing">Install and start Shizuku first</string>
+    <!-- Background keep-alive foreground service notification: static text with no URL, credential, terminal output, or user data. -->
+    <string name="keep_alive_channel_name">Background run</string>
+    <string name="keep_alive_channel_description">Keeps the local Harness runtime running in the background</string>
+    <string name="keep_alive_notification_title">Harness is running in the background</string>
+    <string name="keep_alive_notification_text">Tap to return to the app and manage the runtime</string>
 </resources>
