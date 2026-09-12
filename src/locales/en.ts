@@ -32,6 +32,7 @@ export const english: Readonly<Record<string, string>> = {
   "此核心组件受保护，随运行时更新": "This protected core component updates with the runtime.",
   "插件更新失败，已保留原版本。请检查网络后重试。": "Update failed. The previous version was preserved. Check your connection and try again.",
   "新版插件的依赖与当前运行时不兼容，已保留原版本": "The new dependencies are incompatible with this runtime. The previous version was preserved.",
+  "该插件没有与当前运行环境（dsh 版本）兼容的版本，已保留原版本。请升级运行环境后重试。": "No version of this plugin is compatible with the current runtime (dsh version). The previous version was preserved. Update the runtime and try again.",
   "设备不支持安全更新所需的文件链接，已保留原版本": "This device does not support the file links required for safe updates. The previous version was preserved.",
   "上次更新尚未恢复，请重试或检查运行时": "The previous update has not been recovered. Try again or check the runtime.",
   "请先启用所属配置文件": "Enable the configuration file first.",

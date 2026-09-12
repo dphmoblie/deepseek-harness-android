@@ -11,6 +11,184 @@ const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)
 const officialPackage = name => name.startsWith('@deepseek-ai/') || name === '@deepseek-harness/dsh-mobile-shizuku'
 const protectedPackage = name => officialPackage(name) || ['react', 'react-dom', 'cordis'].includes(name)
 function fail(code) { throw new Error(code) }
+
+// ---------------------------------------------------------------------------
+// 版本选择
+//
+// 只认 dist-tags.latest 会装到与运行时 dsh 不兼容的版本：例如某个插件的 latest
+// 要求 dsh>=0.1.5-rc.1，而本机运行时是 0.1.5-alpha.1；另一些包的 latest 甚至是
+// 更早的预发布。这里按"运行时 dsh 版本 + 插件自己声明的 dsh.engines.dsh 范围"
+// 挑出最高兼容版本。
+//
+// 范围匹配只实现 npm 里实际会出现的写法，并且**严格对齐 npm 默认语义**（预发布
+// 版本只有在同 主.次.修订 元组且比较符自身带预发布时才参与匹配）：
+//   ||            或
+//   空格          与
+//   >= > <= < =   比较
+//   ^ ~ 与 部分版本（x / x.y / 1.x）
+// 本段不依赖任何外部包，因此可以在没有网络与 npm 的环境里完整单测。
+// ---------------------------------------------------------------------------
+
+const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/
+
+function parseVersion(text) {
+  if (typeof text !== 'string' || text.length === 0 || text.length > 64) return null
+  const match = SEMVER.exec(text)
+  if (!match) return null
+  const numbers = [Number(match[1]), Number(match[2]), Number(match[3])]
+  if (numbers.some(value => !Number.isSafeInteger(value))) return null
+  return { numbers, prerelease: match[4] ? match[4].split('.') : [] }
+}
+
+function comparePrerelease(left, right) {
+  // 有预发布 < 无预发布：1.0.0-rc.1 < 1.0.0
+  if (left.length === 0 || right.length === 0) {
+    if (left.length === right.length) return 0
+    return left.length === 0 ? 1 : -1
+  }
+  const length = Math.max(left.length, right.length)
+  for (let index = 0; index < length; index += 1) {
+    const a = left[index]
+    const b = right[index]
+    if (a === undefined) return -1
+    if (b === undefined) return 1
+    if (a === b) continue
+    const aNumber = /^\d+$/.test(a) ? Number(a) : null
+    const bNumber = /^\d+$/.test(b) ? Number(b) : null
+    if (aNumber !== null && bNumber !== null) return aNumber < bNumber ? -1 : 1
+    // 数字标识符优先级低于字母标识符
+    if (aNumber !== null) return -1
+    if (bNumber !== null) return 1
+    return a < b ? -1 : 1
+  }
+  return 0
+}
+
+function compareParsed(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    if (left.numbers[index] !== right.numbers[index]) return left.numbers[index] < right.numbers[index] ? -1 : 1
+  }
+  return comparePrerelease(left.prerelease, right.prerelease)
+}
+
+function compareVersions(left, right) {
+  const a = parseVersion(left)
+  const b = parseVersion(right)
+  if (!a || !b) return null
+  return compareParsed(a, b)
+}
+
+function expandRangeClause(clause) {
+  const expanded = []
+  for (const part of clause.split(/\s+/).filter(Boolean)) {
+    const caret = /^\^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?$/.exec(part)
+    if (caret) {
+      const major = Number(caret[1])
+      const minor = Number(caret[2] ?? 0)
+      const patch = Number(caret[3] ?? 0)
+      const base = `${major}.${minor}.${patch}${caret[4] ? '-' + caret[4] : ''}`
+      if (major > 0) expanded.push(`>=${base}`, `<${major + 1}.0.0-0`)
+      else if (minor > 0) expanded.push(`>=${base}`, `<0.${minor + 1}.0-0`)
+      else expanded.push(`>=${base}`, `<0.0.${patch + 1}-0`)
+      continue
+    }
+    const tilde = /^~(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?$/.exec(part)
+    if (tilde) {
+      const major = Number(tilde[1])
+      const minor = Number(tilde[2] ?? 0)
+      const patch = Number(tilde[3] ?? 0)
+      expanded.push(`>=${major}.${minor}.${patch}${tilde[4] ? '-' + tilde[4] : ''}`, `<${major}.${minor + 1}.0-0`)
+      continue
+    }
+    const partial = /^(\d+)(?:\.(\d+|x|\*))?(?:\.(\d+|x|\*))?$/.exec(part)
+    if (partial) {
+      const major = Number(partial[1])
+      const minor = partial[2]
+      const patch = partial[3]
+      if (minor === undefined || minor === 'x' || minor === '*') {
+        expanded.push(`>=${major}.0.0`, `<${major + 1}.0.0-0`)
+      } else if (patch === undefined || patch === 'x' || patch === '*') {
+        expanded.push(`>=${major}.${Number(minor)}.0`, `<${major}.${Number(minor) + 1}.0-0`)
+      } else {
+        expanded.push(`=${major}.${Number(minor)}.${Number(patch)}`)
+      }
+      continue
+    }
+    expanded.push(part)
+  }
+  return expanded.join(' ')
+}
+
+function satisfiesComparator(version, operator, operandText) {
+  const target = parseVersion(version)
+  const operand = parseVersion(operandText)
+  if (!target || !operand) return false
+  if (target.prerelease.length > 0) {
+    // npm 默认语义：预发布版本只有在同一 主.次.修订 元组、且比较符自身带预发布时才参与匹配。
+    const sameTuple = target.numbers.every((value, index) => value === operand.numbers[index])
+    if (!sameTuple || operand.prerelease.length === 0) return false
+  }
+  const order = compareParsed(target, operand)
+  if (operator === '>') return order > 0
+  if (operator === '>=') return order >= 0
+  if (operator === '<') return order < 0
+  if (operator === '<=') return order <= 0
+  return order === 0
+}
+
+function satisfiesRange(version, range) {
+  if (!parseVersion(version)) return false
+  if (typeof range !== 'string' || range.length === 0 || range.length > 256) return false
+  const text = range.trim()
+  if (text === '' || text === '*') return true
+  return text.split('||').some(clause => {
+    const trimmed = clause.trim()
+    if (trimmed === '') return false
+    return expandRangeClause(trimmed).split(/\s+/).filter(Boolean).every(part => {
+      const match = /^(>=|<=|>|<|=)?(.*)$/.exec(part)
+      if (!match) return false
+      return satisfiesComparator(version, match[1] ?? '=', match[2])
+    })
+  })
+}
+
+/**
+ * 从候选版本中挑出与 [runtimeDsh] 兼容的最高版本。
+ *
+ * [rangeOf] 返回该候选版本声明的 dsh 引擎范围；返回 null/空串表示"未声明"，
+ * 按兼容处理（与 npm 的宽松默认一致）。
+ *
+ * 返回 { version, range } 或 null（在探测上限内没有兼容版本）。
+ * 探测次数有上限：每个候选都要额外问一次 npm，不设上限会在版本很多的包上退化。
+ */
+function selectNewestCompatible(versions, runtimeDsh, rangeOf, maxProbes = 6) {
+  if (!parseVersion(runtimeDsh) || !Array.isArray(versions)) return null
+  const parsed = versions
+    .filter(item => typeof item === 'string' && VERSION.test(item))
+    .map(item => ({ text: item, parsed: parseVersion(item) }))
+    .filter(item => item.parsed !== null)
+    .sort((a, b) => compareParsed(b.parsed, a.parsed))
+  if (parsed.length === 0) return null
+  const prereleaseRuntime = parseVersion(runtimeDsh).prerelease.length > 0
+  // 运行时是稳定版时优先稳定候选；稳定候选全不兼容才退回预发布。
+  const ordered = prereleaseRuntime ? parsed : [
+    ...parsed.filter(item => item.parsed.prerelease.length === 0),
+    ...parsed.filter(item => item.parsed.prerelease.length > 0),
+  ]
+  let probes = 0
+  for (const candidate of ordered) {
+    if (probes >= maxProbes) return null
+    probes += 1
+    const range = typeof rangeOf === 'function' ? rangeOf(candidate.text) : null
+    if (range === null || range === undefined || range === '' || range === '*') {
+      return { version: candidate.text, range: null }
+    }
+    if (typeof range !== 'string' || range.length > 256) continue
+    if (satisfiesRange(runtimeDsh, range)) return { version: candidate.text, range }
+  }
+  return null
+}
+
 function within(base, value) {
   const relative = path.relative(base, value)
   return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)
@@ -302,6 +480,31 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     }
     fs.unlinkSync(journal)
   }
+  /** 运行时实际安装的 dsh 版本；读不到时返回 null（此时退回旧的 latest 行为）。 */
+  function runtimeDshVersion() {
+    const installed = resolvePackage('@deepseek-ai/dsh')
+    if (!installed) return null
+    try {
+      const pkg = read(path.join(installed, 'package.json'))
+      return typeof pkg.version === 'string' && VERSION.test(pkg.version) ? pkg.version : null
+    } catch {
+      return null
+    }
+  }
+
+  /** 问 npm 某个具体版本声明的 dsh 引擎范围；查询失败或未声明都按"未声明"处理。 */
+  function engineRangeOf(npm, id, version, common, environment) {
+    const probe = spawnSync(
+      process.execPath,
+      [npm, 'view', `${id}@${version}`, 'dsh.engines.dsh', '--json', ...common],
+      { env: environment, encoding: 'utf8', timeout: 20000, maxBuffer: 65536 },
+    )
+    if (probe.status !== 0) return null
+    let range
+    try { range = JSON.parse(probe.stdout) } catch { return null }
+    return typeof range === 'string' && range.length > 0 && range.length <= 256 ? range : null
+  }
+
   function npmInstall(id, directory) {
     const npm = path.join(root, 'opt/node/lib/node_modules/npm/bin/npm-cli.js')
     safe(npm)
@@ -309,11 +512,32 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     // 使用隔离配置和参数数组；不继承模型凭据，不执行依赖安装脚本。
     const environment = { HOME: directory, PATH: path.dirname(process.execPath) + ':/usr/bin:/bin', LANG: 'C.UTF-8', TMPDIR: directory }
     const common = ['--registry=https://registry.npmjs.org', '--userconfig=' + path.join(directory, 'npmrc'), '--globalconfig=' + path.join(directory, 'global-npmrc')]
-    const latest = spawnSync(process.execPath, [npm, 'view', id, 'dist-tags.latest', '--json', ...common], { env: environment, encoding: 'utf8', timeout: 45000, maxBuffer: 65536 })
-    if (latest.status !== 0) fail('PLUGIN_UPDATE_FAILED')
-    let version
-    try { version = JSON.parse(latest.stdout) } catch { fail('PLUGIN_UPDATE_FAILED') }
-    if (typeof version !== 'string' || version.length > 64 || !VERSION.test(version)) fail('PLUGIN_UPDATE_FAILED')
+    const runtimeDsh = runtimeDshVersion()
+    let version = null
+    if (runtimeDsh === null) {
+      // 读不到运行时版本（异常安装形态）时保持旧行为，不因为探测失败而拒绝更新。
+      const latest = spawnSync(process.execPath, [npm, 'view', id, 'dist-tags.latest', '--json', ...common], { env: environment, encoding: 'utf8', timeout: 45000, maxBuffer: 65536 })
+      if (latest.status !== 0) fail('PLUGIN_UPDATE_FAILED')
+      let parsed
+      try { parsed = JSON.parse(latest.stdout) } catch { fail('PLUGIN_UPDATE_FAILED') }
+      if (typeof parsed !== 'string' || parsed.length > 64 || !VERSION.test(parsed)) fail('PLUGIN_UPDATE_FAILED')
+      version = parsed
+    } else {
+      // 按运行时 dsh 版本挑选引擎兼容的最高版本，而不是无脑 latest。
+      const listed = spawnSync(process.execPath, [npm, 'view', id, 'versions', '--json', ...common], { env: environment, encoding: 'utf8', timeout: 45000, maxBuffer: 1024 * 1024 })
+      if (listed.status !== 0) fail('PLUGIN_UPDATE_FAILED')
+      let versions
+      try { versions = JSON.parse(listed.stdout) } catch { fail('PLUGIN_UPDATE_FAILED') }
+      if (typeof versions === 'string') versions = [versions]
+      if (!Array.isArray(versions) || versions.length === 0 || versions.length > 5000) fail('PLUGIN_UPDATE_FAILED')
+      const selection = selectNewestCompatible(
+        versions,
+        runtimeDsh,
+        candidate => engineRangeOf(npm, id, candidate, common, environment),
+      )
+      if (selection === null) fail('PLUGIN_ENGINE_UNSUPPORTED')
+      version = selection.version
+    }
     atomic(path.join(directory, 'package.json'), { name: 'dsh-mobile-plugin-update', version: '1.0.0', private: true })
     const result = spawnSync(process.execPath, [npm, 'install', id + '@' + version, '--ignore-scripts', '--legacy-peer-deps', '--bin-links=false', '--no-audit', '--no-fund', '--omit=dev', '--fetch-retries=1', '--fetch-timeout=30000', ...common], {
       cwd: directory, env: environment, encoding: 'utf8', timeout: 180000, maxBuffer: 1024 * 1024,
@@ -397,7 +621,16 @@ function createManager(rootDirectory, installPackage, parseYaml) {
   return { list, setEnabled, setChildEnabled, update, recover }
 }
 
-module.exports = { createManager, validName, within }
+module.exports = {
+  createManager,
+  validName,
+  within,
+  // 供单测直接覆盖版本选择语义（无网络、无 npm）。
+  parseVersion,
+  compareVersions,
+  satisfiesRange,
+  selectNewestCompatible,
+}
 if (require.main === module) {
   try {
     const manager = createManager('/')
