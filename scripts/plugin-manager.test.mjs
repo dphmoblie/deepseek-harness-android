@@ -5,8 +5,29 @@ import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
-const { createManager, within, parseVersion, compareVersions, satisfiesRange, selectNewestCompatible } =
+const { createManager, within, parseVersion, compareVersions, satisfiesRange, selectNewestCompatible, safeDetail } =
   require('../android/app/src/main/assets/support/plugin-manager.cjs')
+
+test('失败详情只允许包名与版本字符，路径与异常原文一律丢弃', () => {
+  // 能定位问题的正文必须放行。
+  assert.equal(safeDetail('commander 7.2.0 != 15.0.0'), 'commander 7.2.0 != 15.0.0')
+  assert.equal(safeDetail('@linxin666/dsh-web-all dsh=0.1.5-alpha.1'), '@linxin666/dsh-web-all dsh=0.1.5-alpha.1')
+  assert.equal(safeDetail('zustand >=0.1.5-rc.1'), 'zustand >=0.1.5-rc.1')
+  // 路径、URL、引号、反斜杠、换行、超长内容全部拒绝 —— 详情会回到 WebView，
+  // 不能成为把 guest 路径或异常原文带出容器的通道。
+  assert.equal(safeDetail('/root/.dsh-mobile/plugin-manager/versions/txn/node_modules/x'), null)
+  assert.equal(safeDetail('~/dsh/x'), null)
+  assert.equal(safeDetail('./relative'), null)
+  assert.equal(safeDetail('root//double'), null)
+  assert.equal(safeDetail('https://registry.npmjs.org/x'), null)
+  assert.equal(safeDetail('boom "quoted"'), null)
+  assert.equal(safeDetail('back\\slash'), null)
+  assert.equal(safeDetail('line\nbreak'), null)
+  assert.equal(safeDetail('a'.repeat(301)), null)
+  assert.equal(safeDetail(''), null)
+  assert.equal(safeDetail(undefined), null)
+  assert.equal(safeDetail({ toString: () => 'x' }), null)
+})
 
 test('只认 dist-tags.latest 会装错版本：必须按运行时 dsh 版本挑引擎兼容版本', () => {
   // 两个真实反例：latest 要求更高的 dsh；另一些包的 latest 反而是更早的预发布。

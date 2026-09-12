@@ -42,7 +42,15 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         }
         if (!result.succeeded || payload.has("error")) {
             val code = payload.optString("error").takeIf { it in ERROR_CODES } ?: "PLUGIN_OPERATION_FAILED"
-            throw RuntimeFailure(code, "插件操作失败，请检查运行时状态后重试")
+            // 受控详情：只接受包名/版本/范围字符集。它来自 guest 脚本，必须在此再校验一次，
+            // 否则路径或异常原文会随消息一路回到 WebView。字符集允许 `/`（作用域包名需要），
+            // 因此额外拒绝以 `/`、`~`、`.` 开头以及含 `//` 的取值，挡住路径形态。
+            val detail = payload.optString("detail").takeIf { candidate ->
+                DETAIL.matches(candidate) &&
+                    !candidate.startsWith("/") && !candidate.startsWith("~") && !candidate.startsWith(".") &&
+                    !candidate.contains("//")
+            }
+            throw RuntimeFailure(code, detail ?: "插件操作失败，请检查运行时状态后重试")
         }
         if (operation != "recover" && payload.optJSONArray("plugins") == null) {
             throw RuntimeFailure("PLUGIN_OPERATION_FAILED", "插件返回数据无效")
@@ -77,6 +85,8 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
     private companion object {
         val PACKAGE = Regex("^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
         val ENTRY = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+        /** 受控详情：包名、版本号与 semver 范围字符集；拒绝引号、反斜杠、冒号与控制字符。 */
+        val DETAIL = Regex("^[A-Za-z0-9@/._+, =!<>~^|()\\-]{1,300}$")
         val ERROR_CODES = setOf("PLUGIN_INPUT_INVALID", "PLUGIN_PATH_INVALID", "PLUGIN_CONFIG_INVALID", "PLUGIN_NOT_FOUND", "PLUGIN_PROTECTED", "PLUGIN_RECOVERY_FAILED", "PLUGIN_UPDATER_MISSING", "PLUGIN_UPDATE_FAILED", "PLUGIN_LINK_UNSUPPORTED", "PLUGIN_DEPENDENCY_UNSUPPORTED", "PLUGIN_ENGINE_UNSUPPORTED", "PLUGIN_GROUP_DISABLED", "PLUGIN_OPERATION_FAILED")
     }
 }

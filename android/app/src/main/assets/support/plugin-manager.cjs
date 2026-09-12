@@ -10,7 +10,37 @@ const NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/
 const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?(?:\+[A-Za-z0-9.-]+)?$/
 const officialPackage = name => name.startsWith('@deepseek-ai/') || name === '@deepseek-harness/dsh-mobile-shizuku'
 const protectedPackage = name => officialPackage(name) || ['react', 'react-dom', 'cordis'].includes(name)
-function fail(code) { throw new Error(code) }
+
+/**
+ * 失败详情：只允许包名、版本号与 semver 范围里出现的字符。
+ *
+ * 之所以要收紧：`npmInstall` 与路径打交道，一旦把路径或异常原文塞进 detail 就会随
+ * 桥接回传到 WebView。这里拒绝引号、反斜杠、冒号、控制字符与超长内容，只留下
+ * `包名@版本`、`!=`、范围表达式这类可安全展示、也足够定位问题的信息。
+ */
+const DETAIL = /^[A-Za-z0-9@/._+, =!<>~^|()\-]{1,300}$/
+
+/** 详情校验：通过返回原文，否则返回 null（调用方据此省略 detail 字段）。 */
+function safeDetail(detail) {
+  if (typeof detail !== 'string' || !DETAIL.test(detail)) return null
+  // 字符集必须允许 `/`（作用域包名 @scope/name 需要它），因此单靠字符集挡不住路径。
+  // 包名不可能以 `/`、`~`、`.` 开头，也不会包含 `//`：据此拒绝绝对路径、家目录路径
+  // 与相对路径，作为"路径不得离开容器"的兜底。
+  if (detail.startsWith('/') || detail.startsWith('~') || detail.startsWith('.')) return null
+  if (detail.includes('//')) return null
+  return detail
+}
+
+/**
+ * 抛出受控错误码，可选附带受控详情。
+ * 只暴露错误码时用户只能看到"更新失败"；带上具体包名与版本差异才能自助定位。
+ */
+function fail(code, detail) {
+  const error = new Error(code)
+  const safe = safeDetail(detail)
+  if (safe !== null) error.detail = safe
+  throw error
+}
 
 // ---------------------------------------------------------------------------
 // 版本选择
@@ -535,7 +565,7 @@ function createManager(rootDirectory, installPackage, parseYaml) {
         runtimeDsh,
         candidate => engineRangeOf(npm, id, candidate, common, environment),
       )
-      if (selection === null) fail('PLUGIN_ENGINE_UNSUPPORTED')
+      if (selection === null) fail('PLUGIN_ENGINE_UNSUPPORTED', `${id} dsh=${runtimeDsh}`)
       version = selection.version
     }
     atomic(path.join(directory, 'package.json'), { name: 'dsh-mobile-plugin-update', version: '1.0.0', private: true })
@@ -574,7 +604,9 @@ function createManager(rootDirectory, installPackage, parseYaml) {
       if (pkg.name !== name || fs.lstatSync(source).isSymbolicLink()) fail('PLUGIN_UPDATE_FAILED')
       const installed = resolvePackage(name)
       if (protectedPackage(name)) {
-        if (!installed || read(path.join(installed, 'package.json')).version !== pkg.version) fail('PLUGIN_DEPENDENCY_UNSUPPORTED')
+        if (!installed || read(path.join(installed, 'package.json')).version !== pkg.version) {
+          fail('PLUGIN_DEPENDENCY_UNSUPPORTED', `${name} ${pkg.version} != ${installed ? read(path.join(installed, 'package.json')).version : 'missing'}`)
+        }
         // 核心 SDK 始终使用运行时已有实例，避免加载第二份服务容器。
         fs.rmSync(source, { recursive: true })
         fs.symlinkSync(installed, source, 'junction')
@@ -582,7 +614,9 @@ function createManager(rootDirectory, installPackage, parseYaml) {
       }
       if (name !== id && installed) {
         // 不覆盖其他插件正在共享的依赖；不兼容时整次更新失败并保留原版本。
-        if (read(path.join(installed, 'package.json')).version !== pkg.version) fail('PLUGIN_DEPENDENCY_UNSUPPORTED')
+        if (read(path.join(installed, 'package.json')).version !== pkg.version) {
+          fail('PLUGIN_DEPENDENCY_UNSUPPORTED', `${name} ${pkg.version} != ${read(path.join(installed, 'package.json')).version}`)
+        }
         continue
       }
       const target = modules.map(base => path.join(base, name)).find(exists) ?? safe(path.join(fallbackModules, name))
@@ -630,6 +664,8 @@ module.exports = {
   compareVersions,
   satisfiesRange,
   selectNewestCompatible,
+  // 供单测覆盖受控详情过滤（决定哪些字符能回到 WebView）。
+  safeDetail,
 }
 if (require.main === module) {
   try {
@@ -647,7 +683,9 @@ if (require.main === module) {
     process.stdout.write(output + '\n')
   } catch (error) {
     const code = /^PLUGIN_[A-Z_]+$/.test(error.message) ? error.message : 'PLUGIN_OPERATION_FAILED'
-    process.stdout.write(JSON.stringify({ error: code }) + '\n')
+    // 详情再次校验后才回传：错误对象可能来自任何一层，不能假定它已经被过滤过。
+    const detail = safeDetail(error.detail)
+    process.stdout.write(JSON.stringify(detail === null ? { error: code } : { error: code, detail }) + '\n')
     process.exitCode = 1
   }
 }

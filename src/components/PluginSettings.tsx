@@ -4,8 +4,10 @@ import { t, useLanguage } from '../i18n'
 import type { PluginCatalog, PluginRequest, RuntimeBridge, RuntimeState } from '../platform/types'
 import './PluginSettings.css'
 
-const errorMessages: Record<string, string> = {
-  RUNTIME_BUSY: '请先停止 Harness 和 Ubuntu 终端',
+/** 原生侧在无法给出更精确信息时使用的通用文案：与它相同时不重复展示。 */
+const GENERIC_PLUGIN_FAILURE = '插件操作失败，请检查运行时状态后重试'
+
+const errorMessages: Record<string, string> = {  RUNTIME_BUSY: '请先停止 Harness 和 Ubuntu 终端',
   RUNTIME_NOT_INSTALLED: '请先安装 Ubuntu 运行时',
   PLUGIN_PROTECTED: '此核心组件受保护，随运行时更新',
   PLUGIN_UPDATE_FAILED: '插件更新失败，已保留原版本。请检查网络后重试。',
@@ -38,7 +40,13 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
     } catch (error) {
       if (active.current) {
         const code = error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : ''
-        setNotice(errorMessages[code] ?? '插件操作失败，请重试'); setFailed(true)
+        // 原生侧会在能定位问题时把受控详情（包名与版本差异）放进 message；
+        // 与通用文案相同时不重复展示。
+        const raw = error && typeof error === 'object' && 'message' in error && typeof error.message === 'string' ? error.message : ''
+        const detail = raw !== '' && raw !== GENERIC_PLUGIN_FAILURE ? raw : ''
+        const mapped = errorMessages[code]
+        setNotice(mapped ? (detail === '' ? mapped : `${mapped}（${detail}）`) : (detail || GENERIC_PLUGIN_FAILURE))
+        setFailed(true)
       }
     } finally { pending.current = false; if (active.current) setBusy(false) }
   }, [bridge])
