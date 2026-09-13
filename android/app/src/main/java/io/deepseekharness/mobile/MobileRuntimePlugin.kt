@@ -763,7 +763,7 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
-     * 悬浮球开关与系统权限的当前状态。
+     * 悬浮球开关、系统悬浮窗权限与服务运行状态的当前快照。
      *
      * 返回值只有布尔量，不含任何用户数据。`canDrawOverlays` 必须每次实时读取：
      * 用户可能在系统设置里随时撤销，缓存下来会让界面显示错误状态。
@@ -793,7 +793,7 @@ class MobileRuntimePlugin : Plugin() {
             ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             try {
                 context.startActivity(intent)
-            } catch (error: Throwable) {
+            } catch (_: Throwable) {
                 // 部分 ROM 没有该设置页：退回应用详情页，至少让用户能进系统设置。
                 try {
                     context.startActivity(
@@ -907,11 +907,26 @@ class MobileRuntimePlugin : Plugin() {
      */
     private fun syncOverlayBallService(enabled: Boolean) {
         val canDraw = android.provider.Settings.canDrawOverlays(context)
-        if (OverlayBallPolicy.shouldShowBall(enabled, canDraw)) {
+        val shouldRun = OverlayBallPolicy.shouldShowBall(enabled, canDraw)
+        if (shouldRun) {
             OverlayBallService.start(context)
         } else {
             OverlayBallService.stop(context)
         }
+        // 这里有两条静默失败的路径：权限被撤销时走的是 stop，而 stopService 对未运行的
+        // 服务是空操作、不触发 onDestroy 的记录；start 内部也会吞掉系统拒绝启动前台服务的
+        // 异常。没有这条记录，「开关开着但球不出现」在诊断日志里完全查不到原因。
+        diagnostics()?.record(
+            DiagnosticLevel.INFO,
+            DiagnosticEvent.KEEP_ALIVE,
+            mapOf(
+                "reason" to "overlay_sync",
+                "active" to shouldRun.toString(),
+                "enabled" to enabled.toString(),
+                "permission" to if (canDraw) "granted" else "denied",
+                "running" to OverlayBallService.isRunning.toString(),
+            ),
+        )
     }
 
     /** 显式停止运行时或重置：立即撤销前台服务，由 RuntimeHost 统一收尾。 */
