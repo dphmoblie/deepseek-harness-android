@@ -153,6 +153,17 @@ class MobileRuntimePlugin : Plugin() {
             bridgeReady = false
             android.util.Log.w("dsh-runtime", "device bridge unavailable; device shell disabled")
         }
+        // 悬浮球可以在插件加载时恢复，keep-alive 不能：后者要求运行时确实在跑，
+        // 没跑就启动只会留下一个无法解释的通知；悬浮球与运行时无关，只取决于
+        // 「用户开关 + 系统权限」（syncOverlayBallService 内部判断），所以重启应用后
+        // 必须自动把球恢复出来，否则用户强行停止后重开，球要再保存一次设置才会出现。
+        // 与设备桥同理：恢复失败（如后台启动前台服务被系统限制）不能影响插件注册，
+        // 详细结果由 syncOverlayBallService 自己记入诊断日志。
+        try {
+            syncOverlayBallService(controller.store.overlayBallEnabled())
+        } catch (_: Throwable) {
+            android.util.Log.w("dsh-runtime", "overlay ball restore failed")
+        }
         recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.SUCCEEDED)
         recordUncleanExitIfNeeded()
         diagnostics()?.record(
