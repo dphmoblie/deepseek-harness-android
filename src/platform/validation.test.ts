@@ -228,8 +228,10 @@ describe('settings validation', () => {
   })
 
   it('设置校验保留悬浮球字段', () => {
-    // 这两个函数是显式重建对象、不展开透传：漏掉字段不会报错，
-    // 只会让前端永远读不到开关值（表现为设置页开关永远显示关闭）。
+    // validateSettings 是保存路径、validateStoredSettings 是存储读取路径（前端拿到设置的那条路），
+    // 两者都显式重建对象、不展开透传：漏掉字段不会报错，只会让前端永远读不到开关值
+    // （表现为设置页开关永远显示关闭）。两条路径都要锁住 true 值的透传，
+    // 否则把取值写死成 false 也不会有用例变红。
     const validSettings = {
       manifestUrl: '',
       manifestSha256: '',
@@ -238,9 +240,11 @@ describe('settings validation', () => {
       configuredModelProviders: [],
     }
     expect(validateSettings({ ...validSettings, overlayBallEnabled: true }).overlayBallEnabled).toBe(true)
+    expect(validateStoredSettings({ ...validSettings, overlayBallEnabled: true }).overlayBallEnabled).toBe(true)
     // 字段缺席时回落 false：与原生侧「缺键按 false」一致，
     // 老版本升级上来的用户不会突然多出一个悬浮球。
     expect(validateSettings({ ...validSettings }).overlayBallEnabled).toBe(false)
+    expect(validateStoredSettings({ ...validSettings }).overlayBallEnabled).toBe(false)
   })
 
   it('ignores retired frontend preferences and rejects invalid provider updates', () => {

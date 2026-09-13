@@ -59,8 +59,10 @@ function asRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 /**
- * 该文件原本没有布尔校验函数（只有 asRecord / requiredIdentifier / byteCount 等），
- * 这里按同一风格补一个：类型不符即抛错，错误消息格式与既有函数一致。
+ * 校验布尔标量。
+ *
+ * 类型不符（含 undefined、null、字符串化的 'true'/'false' 与 1/0）一律抛错，
+ * 不做静默转换；错误消息格式与文件内其他校验辅助一致：`${label}格式无效`。
  */
 function requiredBoolean(value: unknown, label: string): boolean {
   if (typeof value !== 'boolean') throw new Error(`${label}格式无效`)
@@ -595,9 +597,9 @@ export function validateDeviceCommandResult(value: unknown): DeviceCommandResult
 export function validateOverlayBallState(value: unknown): OverlayBallState {
   const source = asRecord(value, '悬浮球状态')
   return {
-    enabled: requiredBoolean(source.enabled, '悬浮球状态.enabled'),
-    canDrawOverlays: requiredBoolean(source.canDrawOverlays, '悬浮球状态.canDrawOverlays'),
-    serviceActive: requiredBoolean(source.serviceActive, '悬浮球状态.serviceActive'),
+    enabled: requiredBoolean(source.enabled, '悬浮球开关'),
+    canDrawOverlays: requiredBoolean(source.canDrawOverlays, '悬浮球权限'),
+    serviceActive: requiredBoolean(source.serviceActive, '悬浮球服务状态'),
   }
 }
 

@@ -146,7 +146,7 @@ function createNativeBridge(): RuntimeBridge {
     getKeepAliveState: () => NativeRuntime.getKeepAliveState().then(validateKeepAliveState),
     requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),
     getOverlayBallState: () => NativeRuntime.overlayBallState().then(validateOverlayBallState),
-    openOverlaySettings: () => NativeRuntime.openOverlaySettings().then(() => undefined),
+    openOverlaySettings: () => NativeRuntime.openOverlaySettings(),
     getHarnessLog: () => NativeRuntime.getHarnessLog().then(validateHarnessLog),
     getDiagnosticLogState: () => NativeRuntime.getDiagnosticLogState().then(validateDiagnosticLogState),
     setDiagnosticLogSettings: (enabled, retentionDays) => {
