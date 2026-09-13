@@ -68,8 +68,10 @@ class RuntimeStore(context: Context) {
     /**
      * 由悬浮球菜单在原生侧直接关闭开关。
      *
-     * 菜单是原生界面，没有前端调用栈可以回写设置，因此这里直接落盘；
-     * 界面在下次进入设置页时会读到新值。只写这一个布尔量，不触碰其他设置。
+     * 菜单是原生界面，没有前端调用栈可以回写设置，因此这里直接落盘。
+     * 本方法只负责写入持久化存储，不负责通知前端；界面要看到新值，
+     * 需要界面侧在进入设置页时重新读取设置，这是界面侧的职责。
+     * 只写这一个布尔量，不触碰其他设置。
      */
     fun setOverlayBallEnabled(enabled: Boolean) {
         preferences.edit().putBoolean(KEY_OVERLAY_BALL, enabled).apply()

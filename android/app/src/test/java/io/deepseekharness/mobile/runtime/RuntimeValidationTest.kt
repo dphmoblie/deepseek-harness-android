@@ -96,6 +96,38 @@ class RuntimeValidationTest {
     }
 
     @Test
+    fun defaultsOverlayBallToDisabled() {
+        // 旧配置与旧前端都不传该字段：默认关闭，老版本升级上来的用户不会突然多出一个悬浮球。
+        val legacy = RuntimeValidation.settings(
+            "https://downloads.example.invalid/runtime.json",
+            "a".repeat(64),
+            keepScreenAwake = true,
+            terminalFontSize = 14,
+        )
+        assertEquals(false, legacy.overlayBallEnabled)
+        assertFalse(legacy.overlayBallEnabled)
+
+        val enabled = RuntimeValidation.settings(
+            "https://downloads.example.invalid/runtime.json",
+            "a".repeat(64),
+            keepScreenAwake = true,
+            terminalFontSize = 14,
+            autoLaunch = true,
+            overlayBallEnabled = true,
+        )
+        assertTrue(enabled.overlayBallEnabled)
+        // 数据类默认值同样为 false，避免漏传时被当成开启。
+        assertFalse(
+            RuntimeSettings(
+                manifestUrl = "",
+                manifestSha256 = "",
+                keepScreenAwake = false,
+                terminalFontSize = 14,
+            ).overlayBallEnabled,
+        )
+    }
+
+    @Test
     fun acceptsKnownArchiveCompressionFormats() {
         assertEquals(RootfsCompression.GZIP, RootfsCompression.parse("gzip"))
         assertThrows(RuntimeFailure::class.java) {
