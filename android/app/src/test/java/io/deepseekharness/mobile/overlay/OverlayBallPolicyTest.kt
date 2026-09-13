@@ -123,4 +123,16 @@ class OverlayBallPolicyTest {
         )
         assertEquals(1620, position.second)
     }
+
+    @Test
+    fun placesDefaultPositionAtRightEdgeVerticallyCentered() {
+        // 1080×1920 屏幕、球 144、边距 30：贴右边、垂直居中。
+        assertEquals(906 to 888, OverlayBallPolicy.defaultPosition(1080, 1920, 144, 30))
+    }
+
+    @Test
+    fun clampsDefaultPositionWhenScreenIsSmall() {
+        // 屏幕比球还小时仍返回 0，不能出现负坐标（负的 LayoutParams 会被 WindowManager 拒绝）。
+        assertEquals(0 to 0, OverlayBallPolicy.defaultPosition(100, 100, 144, 30))
+    }
 }

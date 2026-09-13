@@ -9,7 +9,7 @@
         android:layout_width="24dp"
         android:layout_height="24dp"
         android:layout_gravity="center"
-        android:contentDescription="@string/overlay_ball_notification_title"
+        android:contentDescription="@string/overlay_ball_content_description"
         android:src="@drawable/ic_overlay_ball"
         android:tint="#A9F0D5" />
 </FrameLayout>

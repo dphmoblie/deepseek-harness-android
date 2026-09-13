@@ -102,6 +102,24 @@ object OverlayBallPolicy {
     }
 
     /**
+     * 没存过位置时的初始落点：贴右边缘、垂直居中。
+     *
+     * 复用 [clampPosition] 保证屏幕比球还小时也不会返回负坐标。
+     */
+    fun defaultPosition(
+        screenWidth: Int,
+        screenHeight: Int,
+        ballSize: Int,
+        marginPx: Int,
+    ): Pair<Int, Int> = clampPosition(
+        screenWidth - ballSize - marginPx,
+        ((screenHeight - ballSize) * DEFAULT_VERTICAL_RATIO).toInt(),
+        screenWidth,
+        screenHeight,
+        ballSize,
+    )
+
+    /**
      * 球可用的最大偏移量：屏幕尺寸减球尺寸，屏幕比球还小时取 0。
      *
      * 坐标不得为负 —— 负的 LayoutParams 坐标会让 WindowManager 拒绝并拖垮服务。

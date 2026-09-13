@@ -13,6 +13,7 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
+import android.provider.Settings
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -24,13 +25,12 @@ import android.widget.TextView
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
-import android.provider.Settings
 import io.deepseekharness.mobile.overlay.OverlayBallPolicy
 import io.deepseekharness.mobile.overlay.OverlayBallPreferences
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLog
-import io.deepseekharness.mobile.runtime.RuntimeHost
+import io.deepseekharness.mobile.runtime.RuntimeStore
 
 /**
  * 悬浮球前台服务。
@@ -79,6 +79,8 @@ class OverlayBallService : Service() {
             return START_NOT_STICKY
         }
         // 权限可能在服务运行期间被系统或用户在设置里撤销，每次启动都重新确认。
+        // 这里只确认权限：用户开关由调用方负责（设置项写入后才启动本服务），
+        // 传 true 表示「走到这一步就说明开关已开」，不是要再核对一次偏好。
         if (!OverlayBallPolicy.shouldShowBall(
                 enabled = true,
                 canDrawOverlays = Settings.canDrawOverlays(this),
@@ -184,10 +186,12 @@ class OverlayBallService : Service() {
                 metrics.widthPixels, metrics.heightPixels, size,
             )
         } else {
-            OverlayBallPolicy.clampPosition(
-                metrics.widthPixels - size - (DEFAULT_MARGIN_DP * metrics.density).toInt(),
-                ((metrics.heightPixels - size) * OverlayBallPolicy.DEFAULT_VERTICAL_RATIO).toInt(),
-                metrics.widthPixels, metrics.heightPixels, size,
+            // 没存过位置：贴右边缘、垂直居中。
+            OverlayBallPolicy.defaultPosition(
+                metrics.widthPixels,
+                metrics.heightPixels,
+                size,
+                (DEFAULT_MARGIN_DP * metrics.density).toInt(),
             )
         }
         params.x = x
@@ -198,11 +202,19 @@ class OverlayBallService : Service() {
         // onStartCommand 里已经检查过 canDrawOverlays，但用户完全可能在检查之后、
         // addView 之前把权限撤销掉 —— 这是真实竞态。这里兜一层：加不上球就结束服务，
         // 而不是让异常从 onStartCommand 逃出去终结整个进程（用户看到的是「闪退」）。
-        if (runCatching { windowManager.addView(view, params) }.isFailure) {
+        val attached = runCatching { windowManager.addView(view, params) }
+        if (attached.isFailure) {
             diagnostics.record(
                 DiagnosticLevel.WARN,
                 DiagnosticEvent.KEEP_ALIVE,
                 mapOf("reason" to "overlay_attach_failed", "active" to "false"),
+            )
+            // 诊断日志只收白名单内的取值（reason 只接受全小写 token），异常类名进不去；
+            // 而这里恰恰最需要区分「权限竞态 / token 非法 / 参数非法」，因此额外在
+            // logcat 留一行类名，格式与前台失败路径一致。
+            android.util.Log.w(
+                "dsh-runtime",
+                "overlay ball attach failed: ${attached.exceptionOrNull()?.javaClass?.simpleName}",
             )
             stopForegroundCompat()
             stopSelf()
@@ -240,7 +252,12 @@ class OverlayBallService : Service() {
             MotionEvent.ACTION_MOVE -> {
                 val deltaX = event.rawX - touchStartX
                 val deltaY = event.rawY - touchStartY
-                if (!OverlayBallPolicy.isClick(deltaX, deltaY, slop)) {
+                // 多指手势一律不拖动：rawX/rawY 恒取 pointer 0，第一根手指抬起、剩余手指
+                // 重编号时坐标会跳，按位移算出来的球位会跟着跳一段。
+                if (event.pointerCount > 1) return true
+                // 长按已弹出菜单后不再拖动：此时 ACTION_UP 会直接返回，跳过吸附与落盘，
+                // 球会停在非吸附位置且位置没保存，全程还被不透明遮罩挡着。
+                if (!longPressFired && !OverlayBallPolicy.isClick(deltaX, deltaY, slop)) {
                     val metrics = resources.displayMetrics
                     val (x, y) = OverlayBallPolicy.clampPosition(
                         initialX + deltaX.toInt(),
@@ -257,8 +274,8 @@ class OverlayBallService : Service() {
                         ViewConfiguration.getLongPressTimeout().toLong(),
                     )
                 ) {
-                    // 先判长按再判移动：手指按住不动的期间收不到新的 MOVE 事件，
-                    // 靠这里到达阈值时弹出菜单。
+                    // 拖动分支先被 isClick 排除，走到这里说明手指基本没动；
+                    // 按住不动的期间收不到新的 MOVE 事件，靠这一次到达阈值时弹出菜单。
                     longPressFired = true
                     showMenu()
                 }
@@ -426,11 +443,11 @@ class OverlayBallService : Service() {
 
     /** 「隐藏悬浮球」：直接关闭设置开关并停止服务，不引入额外的「临时隐藏」状态。 */
     private fun hideBall() {
-        runCatching {
-            RuntimeHost.controllerOrNull()
-                ?.store
-                ?.setOverlayBallEnabled(false)
-        }
+        // 直接构造 store，不依赖 RuntimeHost 是否还持有 controller：
+        // controller 与悬浮球服务相互独立，「只开球不开后台保持」的用户划掉最近任务后
+        // controller 会被释放，而此时长按菜单隐藏球是最常见的操作之一。
+        // 构造 store 无副作用，也不读取任何凭据。
+        runCatching { RuntimeStore(applicationContext).setOverlayBallEnabled(false) }
         stopSelf()
     }
 
