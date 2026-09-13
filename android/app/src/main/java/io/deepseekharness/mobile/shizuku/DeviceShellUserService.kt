@@ -39,6 +39,13 @@ class DeviceShellUserService() : IDeviceShellService.Stub() {
             arrayOf(DEVICE_SHELL),
             arrayOf(
                 "HOME=/data/local/tmp",
+                // Android framework tools read these variables during bootstrap. The PTY
+                // intentionally starts with a small environment, so provide the platform
+                // roots explicitly instead of relying on the parent Shizuku process.
+                "ANDROID_DATA=/data",
+                "ANDROID_ROOT=/system",
+                "ANDROID_STORAGE=/storage",
+                "EXTERNAL_STORAGE=/sdcard",
                 "LANG=C.UTF-8",
                 "PATH=/system/bin:/system/xbin",
                 "TERM=xterm-256color",

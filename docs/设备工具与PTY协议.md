@@ -111,11 +111,13 @@ echo "__DSH_E_<请求标识>_${dsh_nonce}__:$?"
 | `UI_DUMP_FAILED` | `uiautomator dump` 返回非零（脚本退出码 4），其 stderr 保留在 payload 里 |
 | `UI_DUMP_EMPTY` | `uiautomator` 返回 0，但目标文件不存在或为空（脚本退出码 5） |
 
-uiDump 的脚本顺序是：**先探测工具** → 执行 dump 并把 stderr 一起接回（`2>&1`）→
-用 `[ -s ]` 校验产物非空。旧实现里的 `uiautomator dump X && cat X` 会让 `cat` 的 ENOENT
+uiDump 的脚本顺序是：**先探测工具** → 使用 `--compressed` 写入 `/data/local/tmp` →
+用 `[ -s ]` 校验产物非空 → 失败时再用兼容旧版的参数形式写入 `/sdcard` → 把 stderr
+一起接回（`2>&1`）。两次都返回非零才报 `UI_DUMP_FAILED`，两次都返回 0 但没有有效文件
+才报 `UI_DUMP_EMPTY`。旧实现里的 `uiautomator dump X && cat X` 会让 `cat` 的 ENOENT
 掩盖真实失败并统一报 `DEVICE_COMMAND_FAILED`，现在不会再发生。
 
-## 5. uiDump 为什么不提供降级路径
+## 5. uiDump 为什么不伪造降级结果
 
 真机实测：本 ROM 上 `uiautomator dump` 是**静默空壳**——退出码 0、零输出、零文件、
 耗时约 0 ms（正常启动 ART 需要 1–3 秒），因此 `[ -s ]` 判定失败，上报 `UI_DUMP_EMPTY`。

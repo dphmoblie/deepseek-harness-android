@@ -55,16 +55,22 @@ class DeviceCommandRunnerTest {
     fun uiDumpProbesToolKeepsStderrAndGradesFailures() {
         val input = runner.buildInput(requestId, DeviceCommand.UI_DUMP, "")
         val temporary = "/data/local/tmp/dsh-ui-$requestId.xml"
+        val fallback = "/sdcard/dsh-ui-$requestId.xml"
 
         // 请求级临时文件；清理挂在 EXIT 上，内层 shell 退出即生效。
         assertTrue(input.contains("dsh_tmp=$temporary"))
-        assertTrue(input.contains("trap \"rm -f \$dsh_tmp\" EXIT HUP INT TERM"))
+        assertTrue(input.contains("dsh_fallback=$fallback"))
+        assertTrue(input.contains("trap \"rm -f \$dsh_tmp \$dsh_fallback\" EXIT HUP INT TERM"))
         // 先探测工具是否存在。
         assertTrue(input.contains("command -v uiautomator >/dev/null 2>&1"))
-        // 失败与 stderr 原样保留（2>&1），不再被 cat 的 ENOENT 掩盖。
-        assertTrue(input.contains("uiautomator dump \$dsh_tmp 2>&1"))
-        // 产物必须非空。
+        // 两次失败的 stderr 都保留（2>&1），不再被 cat 的 ENOENT 掩盖。
+        assertTrue(input.contains("uiautomator dump --compressed \$dsh_tmp 2>&1"))
+        assertTrue(input.contains("uiautomator dump \$dsh_fallback 2>&1"))
+        assertTrue(input.contains("dsh_first=\$?"))
+        assertTrue(input.contains("dsh_second=\$?"))
+        // 两条路径的产物都必须非空。
         assertTrue(input.contains("[ -s \$dsh_tmp ]"))
+        assertTrue(input.contains("[ -s \$dsh_fallback ]"))
         // 三类失败各自的退出码：无工具 3 / dump 失败 4 / 产物为空 5。
         assertTrue(input.contains("dsh_rc=3"))
         assertTrue(input.contains("dsh_rc=4"))
