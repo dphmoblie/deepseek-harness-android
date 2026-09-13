@@ -697,6 +697,28 @@ describe('悬浮球设置', () => {
     expect(await screen.findByText(/系统权限已关闭/)).toBeInTheDocument()
   })
 
+  it('系统权限被撤销但开关已开启时，仍可在应用内把它关掉', async () => {
+    // 禁用只用于防「未授权时误开」：已开状态下权限消失时必须允许关闭，
+    // 否则用户只能先去系统设置重新授权，才能回来关掉这个已经失效的功能。
+    bridge.getSettings.mockResolvedValue({ ...settings, overlayBallEnabled: true })
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: true, canDrawOverlays: false, serviceActive: false })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    openSettingsPage('运行与后台')
+    const toggle = await screen.findByRole('switch', { name: /悬浮球/ })
+    await waitFor(() => expect(toggle).toBeChecked())
+    expect(toggle).toBeEnabled()
+
+    fireEvent.click(toggle)
+    expect(toggle).not.toBeChecked()
+
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ overlayBallEnabled: false }),
+    ))
+  })
+
   it('进入设置二级页时重新读取设置，避免草稿把原生侧改动覆盖回去', async () => {
     // 用户可能刚用悬浮球菜单在原生侧关掉了球：不重读设置的话，进设置页看到的是旧值，
     // 一保存就把菜单的关闭动作覆盖回去。挂载读一次、进入设置页再读一次。
@@ -710,5 +732,30 @@ describe('悬浮球设置', () => {
     await waitFor(() => expect(bridge.getSettings).toHaveBeenCalledTimes(2))
     // 重读的结果必须真的进到开关上，而不只是多调了一次桥方法。
     await waitFor(() => expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked())
+  })
+
+  it('开启悬浮球但前台服务没起来时提示未生效', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false, overlayBallEnabled: true })
+    // 权限已授予、开关已是开启状态，但悬浮球前台服务没有运行：以原生状态为准。
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: true, canDrawOverlays: true, serviceActive: false })
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
+    openSettingsPage('运行与后台')
+
+    const saveButton = await screen.findByRole('button', { name: '保存设置' })
+    await waitFor(() => expect(saveButton).toBeEnabled())
+    fireEvent.click(saveButton)
+
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
+      ...settings,
+      autoLaunch: false,
+      overlayBallEnabled: true,
+    }))
+    // 悬浮球前台服务同样是异步拉起的：等宽限期后按原生状态复核，确认仍未运行才提示未生效。
+    const alert = await screen.findByRole('alert', {}, { timeout: 4000 })
+    expect(alert).toHaveTextContent('设置已保存，但悬浮球未生效')
+    // 「已保存」不等于「已生效」：只留一句「设置已保存」是不够的。
+    expect(screen.queryByText('设置已保存')).toBeNull()
   })
 })

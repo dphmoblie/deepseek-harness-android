@@ -238,6 +238,21 @@ const NOTIFICATION_PERMISSION_TIMEOUT_MS = 30_000
  */
 const FOREGROUND_SERVICE_SETTLE_MS = 1500
 
+/**
+ * 保存设置后的前台服务生效复核。
+ *
+ * 「后台保持」与「悬浮球」各有一个前台服务，都由 Android 异步拉起：保存后紧接着读取原生状态
+ * 会看到「尚未生效」。这里等宽限期过后再读一次，把最新状态交给调用方判断与提示；
+ * 复核本身失败时静默保留「设置已保存」的提示，不猜测服务状态，也不误报未生效。
+ */
+function recheckForegroundServiceAfterSettle<T>(read: () => Promise<T>, onSettled: (latest: T) => void): void {
+  window.setTimeout(() => {
+    void read().then(onSettled).catch(() => {
+      // 复核失败时保留「设置已保存」的提示：不猜测服务状态，也不误报未生效。
+    })
+  }, FOREGROUND_SERVICE_SETTLE_MS)
+}
+
 const UNKNOWN_RUNTIME_ERROR_MESSAGE = '运行时操作失败，请稍后重试；如问题持续，请重置环境。'
 const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   SOURCE_INCOMPLETE: '请同时配置运行时清单地址和 SHA-256，或同时留空。',
@@ -1001,9 +1016,10 @@ interface SettingsScreenProps {
   /**
    * 悬浮球状态（原生侧真值）。
    *
-   * 界面目前只消费 canDrawOverlays：开关能否操作、权限引导入口、以及「系统权限已关闭」
-   * 提示都由它决定。enabled 与 serviceActive 只随状态一起保存，尚未渲染、也不参与任何判断 ——
-   * 开关的显示值取自设置草稿 draft.overlayBallEnabled，不是这里的 enabled。
+   * 界面只消费 canDrawOverlays：开关能否操作、权限引导入口、以及「系统权限已关闭」
+   * 提示都由它决定。enabled 与 serviceActive 不参与本页渲染；保存后的生效复核在 App 层
+   * 消费它们（与「后台保持」同一套节奏）。开关的显示值取自设置草稿 draft.overlayBallEnabled，
+   * 不是这里的 enabled。
    */
   overlayBall: OverlayBallState
   page: SettingsPage
@@ -1275,11 +1291,13 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
                 <small className="status-text-error">{t("系统权限已关闭")}</small>
               ) : null}
             </span>
+            {/* 只禁用「开启」方向：没有权限且当前是关的就禁用，防止误开后无声失败；
+                已经开着时仍允许关闭，否则权限被系统撤销后用户无法在应用内关掉这个功能。 */}
             <input
               type="checkbox"
               role="switch"
               checked={draft.overlayBallEnabled ?? false}
-              disabled={!overlayBall.canDrawOverlays}
+              disabled={!overlayBall.canDrawOverlays && draft.overlayBallEnabled !== true}
               onChange={event => setDraft({ ...draft, overlayBallEnabled: event.target.checked })}
             />
           </label>
@@ -1943,21 +1961,37 @@ export function App() {
       // 保存可能改变后台保持开关，服务状态需要重新读取。
       const nextKeepAlive = await runtimeBridge.getKeepAliveState()
       setKeepAlive(nextKeepAlive)
+      // 悬浮球同理：保存可能切换开关，前台服务状态需要重新读取。
+      const nextOverlayBall = await runtimeBridge.getOverlayBallState()
+      setOverlayBall(nextOverlayBall)
       // 「已保存」不等于「已生效」：前台服务是否真的进入前台由原生状态决定。
       notify(t("设置已保存"), 'success')
-      if (saved.keepRuntimeInBackground !== true || nextKeepAlive.foregroundServiceActive) return
-      // 服务可能只是还在启动中，等宽限期过后用原生状态复核：
-      // 仍为「未运行」才提示未生效（缺少通知权限、后台启动被系统拒绝或厂商策略限制都会停在这里）。
-      window.setTimeout(() => {
-        void runtimeBridge.getKeepAliveState().then(latest => {
-          setKeepAlive(latest)
-          if (latest.keepRuntimeInBackground === true && !latest.foregroundServiceActive) {
-            notify(t("设置已保存，但后台保持未生效：前台服务未运行。Android 13 及以上需要通知权限，并可能受系统后台限制；请在系统设置中为本应用开启通知权限后重试。"), 'error')
-          }
-        }).catch(() => {
-          // 复核失败时保留「设置已保存」的提示：不猜测服务状态，也不误报未生效。
-        })
-      }, FOREGROUND_SERVICE_SETTLE_MS)
+      if (saved.keepRuntimeInBackground === true && !nextKeepAlive.foregroundServiceActive) {
+        // 服务可能只是还在启动中，等宽限期过后用原生状态复核：
+        // 仍为「未运行」才提示未生效（缺少通知权限、后台启动被系统拒绝或厂商策略限制都会停在这里）。
+        recheckForegroundServiceAfterSettle(
+          () => runtimeBridge.getKeepAliveState(),
+          latest => {
+            setKeepAlive(latest)
+            if (latest.keepRuntimeInBackground === true && !latest.foregroundServiceActive) {
+              notify(t("设置已保存，但后台保持未生效：前台服务未运行。Android 13 及以上需要通知权限，并可能受系统后台限制；请在系统设置中为本应用开启通知权限后重试。"), 'error')
+            }
+          },
+        )
+      }
+      if (saved.overlayBallEnabled === true && !nextOverlayBall.serviceActive) {
+        // 悬浮球走同一套节奏：原生侧启动前台服务失败时是静默吞异常的，
+        // 只有等宽限期过后复核原生状态，才能把「开关开着但球没起来」的原因告诉用户。
+        recheckForegroundServiceAfterSettle(
+          () => runtimeBridge.getOverlayBallState(),
+          latest => {
+            setOverlayBall(latest)
+            if (latest.enabled === true && !latest.serviceActive) {
+              notify(t("设置已保存，但悬浮球未生效：前台服务未运行。系统可能拒绝了前台服务启动，或权限不足；请在系统设置中检查「显示在其他应用上层」与通知权限后重试。"), 'error')
+            }
+          },
+        )
+      }
     })
   }, [notify, run])
 
