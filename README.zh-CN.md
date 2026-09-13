@@ -2,16 +2,44 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
+[![最新版本](https://img.shields.io/github/v/release/dphmoblie/deepseek-harness-android?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&logo=github)](https://github.com/dphmoblie/deepseek-harness-android/releases)
+[![下载总量](https://img.shields.io/github/downloads/dphmoblie/deepseek-harness-android/total?label=%E4%B8%8B%E8%BD%BD%E6%80%BB%E9%87%8F&logo=github)](https://github.com/dphmoblie/deepseek-harness-android/releases)
+[![许可证](https://img.shields.io/github/license/dphmoblie/deepseek-harness-android?label=%E8%AE%B8%E5%8F%AF%E8%AF%81)](LICENSE)
+[![最近提交](https://img.shields.io/github/last-commit/dphmoblie/deepseek-harness-android?label=%E6%9C%80%E8%BF%91%E6%8F%90%E4%BA%A4)](https://github.com/dphmoblie/deepseek-harness-android/commits)
+[![欢迎 PR](https://img.shields.io/badge/PR-%E6%AC%A2%E8%BF%8E%E8%B4%A1%E7%8C%AE-brightgreen.svg)](https://github.com/dphmoblie/deepseek-harness-android/pulls)
+
+[![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
+[![arm64-v8a](https://img.shields.io/badge/ABI-arm64--v8a-3DDC84?logo=arm&logoColor=white)](https://developer.android.com/ndk/guides/abis)
+[![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
+[![Node.js 24](https://img.shields.io/badge/Node.js%2024-5FA04E?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![PRoot](https://img.shields.io/badge/PRoot-%E7%94%A8%E6%88%B7%E7%A9%BA%E9%97%B4%E5%AE%B9%E5%99%A8-4EAA25)](https://github.com/proot-me/proot)
+[![Capacitor 7](https://img.shields.io/badge/Capacitor%207-119EFC?logo=capacitor&logoColor=white)](https://capacitorjs.com/)
+[![React 18](https://img.shields.io/badge/React%2018-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
+
 **DeepSeek Harness 安卓版**可在安卓手机上直接运行完整的 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) 智能体环境——包括 Ubuntu 用户空间、Node.js 以及官方 Harness 网页控制台。设备**无需 Root**：整套 Linux 环境通过 [PRoot](https://github.com/proot-me/proot) 在用户空间内执行，Harness 服务仅监听安卓回环地址，并在禁止外部导航的内置 WebView 中展示。
 
 | | |
 | --- | --- |
 | 应用包名 | `io.deepseekharness.mobile` |
-| 当前版本 | `0.1.9` |
+| 当前版本 | `0.1.10` |
 | 最低系统 | Android 8.0（API 26）及以上 |
 | 支持架构 | 仅 `arm64-v8a` |
 | 内置运行时 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.1.5-rc.2 |
 | 应用许可证 | MIT（运行时组件沿用各自许可证，见[许可证](#许可证)一节） |
+
+## 目录
+
+- [功能特性](#功能特性)
+- [工作原理](#工作原理)
+- [安装](#安装)
+- [模型供应商](#模型供应商)
+- [可选的 Shizuku 集成](#可选的-shizuku-集成)
+- [从源码构建](#从源码构建)
+- [安全与隐私](#安全与隐私)
+- [参与贡献](#参与贡献)
+- [许可证](#许可证)
+- [相关文档](#相关文档)
 
 ## 功能特性
 

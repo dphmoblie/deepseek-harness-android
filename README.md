@@ -2,16 +2,44 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
+[![GitHub Release](https://img.shields.io/github/v/release/dphmoblie/deepseek-harness-android?logo=github)](https://github.com/dphmoblie/deepseek-harness-android/releases)
+[![GitHub Downloads](https://img.shields.io/github/downloads/dphmoblie/deepseek-harness-android/total?logo=github)](https://github.com/dphmoblie/deepseek-harness-android/releases)
+[![License](https://img.shields.io/github/license/dphmoblie/deepseek-harness-android)](LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/dphmoblie/deepseek-harness-android)](https://github.com/dphmoblie/deepseek-harness-android/commits)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/dphmoblie/deepseek-harness-android/pulls)
+
+[![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
+[![ABI arm64-v8a](https://img.shields.io/badge/ABI-arm64--v8a-3DDC84?logo=arm&logoColor=white)](https://developer.android.com/ndk/guides/abis)
+[![Ubuntu 24.04](https://img.shields.io/badge/Ubuntu%2024.04-E95420?logo=ubuntu&logoColor=white)](https://ubuntu.com/)
+[![Node.js 24](https://img.shields.io/badge/Node.js%2024-5FA04E?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![PRoot](https://img.shields.io/badge/PRoot-userspace%20container-4EAA25)](https://github.com/proot-me/proot)
+[![Capacitor 7](https://img.shields.io/badge/Capacitor%207-119EFC?logo=capacitor&logoColor=white)](https://capacitorjs.com/)
+[![React 18](https://img.shields.io/badge/React%2018-61DAFB?logo=react&logoColor=black)](https://react.dev/)
+[![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
+
 **DeepSeek Harness for Android** runs the full [DeepSeek Harness](https://github.com/deepseek-ai/dsh) agent environment — an Ubuntu userspace, Node.js, and the official Harness web console — directly on an Android phone. No root is required: the complete Linux environment executes inside [PRoot](https://github.com/proot-me/proot), and Harness is served on Android loopback and displayed in a navigation-restricted internal WebView.
 
 | | |
 | --- | --- |
 | Application package | `io.deepseekharness.mobile` |
-| Current version | `0.1.9` |
+| Current version | `0.1.10` |
 | Minimum system | Android 8.0 (API 26) or newer |
 | Architecture | `arm64-v8a` only |
 | Embedded runtime | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.1.5-rc.2 |
 | Application license | MIT (runtime components carry their own licenses — see [License](#license)) |
+
+## Contents
+
+- [Highlights](#highlights)
+- [How it works](#how-it-works)
+- [Installation](#installation)
+- [Model providers](#model-providers)
+- [Optional Shizuku integration](#optional-shizuku-integration)
+- [Building from source](#building-from-source)
+- [Security and privacy](#security-and-privacy)
+- [Contributing](#contributing)
+- [License](#license)
+- [Related documentation](#related-documentation)
 
 ## Highlights
 
