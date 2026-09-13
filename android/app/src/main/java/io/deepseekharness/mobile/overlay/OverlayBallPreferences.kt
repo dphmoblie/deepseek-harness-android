@@ -32,7 +32,7 @@ class OverlayBallPreferences(private val storage: Storage) {
     }
 
     fun clearPosition() {
-        // SharedPreferences 没有删除单个键的接口，约定 -1 表示未设置。
+        // Storage 抽象只暴露了 readInt/writeInt，没有删除方法，约定写入 -1 表示未设置。
         storage.writeInt(KEY_X, -1)
         storage.writeInt(KEY_Y, -1)
     }
