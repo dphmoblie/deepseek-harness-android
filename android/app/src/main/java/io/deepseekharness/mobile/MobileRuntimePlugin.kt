@@ -280,6 +280,8 @@ class MobileRuntimePlugin : Plugin() {
                 fontSize,
                 call.getBoolean("autoLaunch", true) ?: true,
                 call.getBoolean("keepRuntimeInBackground", false) ?: false,
+                // 悬浮球开关与后台保持独立：只读开关本身，不触发凭据解密。
+                call.getBoolean("overlayBallEnabled", false) ?: false,
             )
             val saved = controller.saveSettings(
                 settings,

@@ -62,6 +62,19 @@ class RuntimeStore(context: Context) {
      */
     fun keepRuntimeInBackground(): Boolean = preferences.getBoolean(KEY_KEEP_BACKGROUND, false)
 
+    /** 悬浮球开关。缺键时按 false 处理：老版本升级上来的用户不会突然多出一个球。 */
+    fun overlayBallEnabled(): Boolean = preferences.getBoolean(KEY_OVERLAY_BALL, false)
+
+    /**
+     * 由悬浮球菜单在原生侧直接关闭开关。
+     *
+     * 菜单是原生界面，没有前端调用栈可以回写设置，因此这里直接落盘；
+     * 界面在下次进入设置页时会读到新值。只写这一个布尔量，不触碰其他设置。
+     */
+    fun setOverlayBallEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_OVERLAY_BALL, enabled).apply()
+    }
+
     /**
      * 把应用界面语言同步到 Harness 运行时的 `~/.dsh/settings.yaml`（locale.preference）。
      *
@@ -193,6 +206,7 @@ class RuntimeStore(context: Context) {
             manifestSha256 = if (usePinnedDefault) BuildConfig.DEFAULT_MANIFEST_SHA256 else storedSha256.orEmpty(),
             keepScreenAwake = keepScreenAwake(),
             keepRuntimeInBackground = keepRuntimeInBackground(),
+            overlayBallEnabled = overlayBallEnabled(),
             terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             customModelProviders = customProviders,
@@ -234,6 +248,7 @@ class RuntimeStore(context: Context) {
             .putString(KEY_MANIFEST_SHA256, settings.manifestSha256)
             .putBoolean(KEY_KEEP_AWAKE, settings.keepScreenAwake)
             .putBoolean(KEY_KEEP_BACKGROUND, settings.keepRuntimeInBackground)
+            .putBoolean(KEY_OVERLAY_BALL, settings.overlayBallEnabled)
             .putInt(KEY_FONT_SIZE, settings.terminalFontSize)
             // Retired frontend choices must not redirect the single official entrypoint.
             .remove(KEY_LEGACY_DEFAULT_FRONTEND)
@@ -740,6 +755,7 @@ class RuntimeStore(context: Context) {
         private const val KEY_MANIFEST_SHA256 = "manifest_sha256"
         private const val KEY_KEEP_AWAKE = "keep_screen_awake"
         private const val KEY_KEEP_BACKGROUND = "keep_runtime_in_background"
+        private const val KEY_OVERLAY_BALL = "overlay_ball_enabled"
         // 运行时恢复记录：只保存运行意图、最近阶段与时间，绝不保存凭据。
         private const val KEY_RUNTIME_INTENT = "runtime_intent"
         private const val KEY_RUNTIME_PHASE = "runtime_last_phase"
