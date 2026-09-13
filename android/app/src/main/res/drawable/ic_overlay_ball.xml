@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 悬浮球球面：与启动图标同一套「终端提示符」基因，单色便于按主题着色。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M5.6,7.4l4.2,4.6 -4.2,4.6 1.8,1.6 5.4,-6.2 -5.4,-6.2zM12.8,15.4h6.2v2.2h-6.2z" />
+</vector>

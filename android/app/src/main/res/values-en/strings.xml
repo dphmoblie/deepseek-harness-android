@@ -14,4 +14,11 @@
     <!-- Diagnostic log export: static share sheet text with no file path or log content. -->
     <string name="diagnostic_share_title">Export diagnostic log</string>
     <string name="diagnostic_share_subject">DeepSeek Harness diagnostic log</string>
+    <!-- Floating ball. Fixed copy: no URL, port, credential, or session content. -->
+    <string name="overlay_ball_channel_name">Floating ball</string>
+    <string name="overlay_ball_channel_description">Shows a floating ball above other apps; tap to return to the Harness conversation</string>
+    <string name="overlay_ball_notification_title">Floating ball is on</string>
+    <string name="overlay_ball_notification_text">Tap to return to the Harness conversation</string>
+    <string name="overlay_ball_menu_settings">Open settings</string>
+    <string name="overlay_ball_menu_hide">Hide floating ball</string>
 </resources>

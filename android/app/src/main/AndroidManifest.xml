@@ -29,6 +29,11 @@
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
+    <!-- 悬浮球。这是特殊权限，不会弹运行时对话框，必须引导用户到系统设置手动开启，
+         因此界面上要显示状态并提供入口，不能静默申请。
+         用途仅限：在其他应用上层显示一个可拖动的球，点按回到 Harness 对话。 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
         <provider android:authorities="moe.shizuku.privileged.api.shizuku" />
@@ -87,6 +92,19 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="维持本机 Harness 运行时进程，使用户在锁屏、返回桌面或划掉最近任务后仍能继续本地会话" />
+        </service>
+
+        <!-- 悬浮球前台服务。与后台保持服务刻意分开：两者的启动条件互不相干。
+             停止任务时不移除，由系统策略决定后续行为，不做保活承诺。 -->
+        <service
+            android:name=".OverlayBallService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false"
+            tools:ignore="Instantiatable">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="在其他应用上层显示悬浮球，点按返回 Harness 对话" />
         </service>
 
         <activity

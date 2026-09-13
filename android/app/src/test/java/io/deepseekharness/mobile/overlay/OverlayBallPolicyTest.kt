@@ -85,4 +85,42 @@ class OverlayBallPolicyTest {
         // 位置没动但时间不够 → 还只是按下。
         assertFalse(OverlayBallPolicy.isLongPress(distanceX = 0f, distanceY = 0f, touchSlop = 12, heldMillis = 200, longPressMillis = 500))
     }
+
+    @Test
+    fun placesMenuBesideBallWhenItFits() {
+        // 球在左侧、右边放得下 → 贴在球的右侧。
+        assertEquals(200 to 300, OverlayBallPolicy.menuPosition(
+            ballX = 100, ballY = 300, ballSize = 100,
+            menuWidth = 400, menuHeight = 200,
+            screenWidth = 1080, screenHeight = 1920,
+        ))
+        // 球在右侧、右边放不下 → 改贴左侧。
+        assertEquals(500 to 300, OverlayBallPolicy.menuPosition(
+            ballX = 900, ballY = 300, ballSize = 100,
+            menuWidth = 400, menuHeight = 200,
+            screenWidth = 1080, screenHeight = 1920,
+        ))
+    }
+
+    @Test
+    fun keepsMenuInsideScreenWhenNeitherSideFits() {
+        // 两边都放不下 → 收进屏幕内，不越界。
+        val position = OverlayBallPolicy.menuPosition(
+            ballX = 500, ballY = 300, ballSize = 100,
+            menuWidth = 900, menuHeight = 200,
+            screenWidth = 1080, screenHeight = 1920,
+        )
+        assertEquals(180, position.first)
+    }
+
+    @Test
+    fun liftsMenuAboveBottomEdge() {
+        // 球贴近底部时菜单向上收，不能有一半在屏幕外。
+        val position = OverlayBallPolicy.menuPosition(
+            ballX = 100, ballY = 1800, ballSize = 100,
+            menuWidth = 400, menuHeight = 300,
+            screenWidth = 1080, screenHeight = 1920,
+        )
+        assertEquals(1620, position.second)
+    }
 }

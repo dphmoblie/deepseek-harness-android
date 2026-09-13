@@ -72,6 +72,36 @@ object OverlayBallPolicy {
     }
 
     /**
+     * 计算长按菜单的左上角坐标。
+     *
+     * 球在左半屏时菜单贴在球的右侧，右边放不下就试左边，两边都放不下则收进屏幕内；
+     * 垂直方向同理，避免菜单有一半落在屏幕外。
+     */
+    fun menuPosition(
+        ballX: Int,
+        ballY: Int,
+        ballSize: Int,
+        menuWidth: Int,
+        menuHeight: Int,
+        screenWidth: Int,
+        screenHeight: Int,
+    ): Pair<Int, Int> {
+        val right = ballX + ballSize
+        val left = ballX - menuWidth
+        val x = when {
+            right + menuWidth <= screenWidth -> right
+            left >= 0 -> left
+            else -> (screenWidth - menuWidth).coerceAtLeast(0)
+        }
+        val y = if (ballY + menuHeight <= screenHeight) {
+            ballY
+        } else {
+            (screenHeight - menuHeight).coerceAtLeast(0)
+        }
+        return x to y
+    }
+
+    /**
      * 球可用的最大偏移量：屏幕尺寸减球尺寸，屏幕比球还小时取 0。
      *
      * 坐标不得为负 —— 负的 LayoutParams 坐标会让 WindowManager 拒绝并拖垮服务。
