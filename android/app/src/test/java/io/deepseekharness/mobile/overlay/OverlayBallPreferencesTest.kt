@@ -32,8 +32,26 @@ class OverlayBallPreferencesTest {
     }
 
     @Test
+    fun roundTripsOriginPosition() {
+        // (0,0) 是合法位置的边界值：本类用负数表示非法、-1 表示空，
+        // 它能区分出「0 即未设置」的错误实现。
+        val preferences = OverlayBallPreferences(FakeStorage())
+        preferences.writePosition(0, 0)
+        assertEquals(0 to 0, preferences.readPosition())
+    }
+
+    @Test
+    fun ignoresNegativeWriteAndKeepsStoredPosition() {
+        // 非法写入被静默丢弃，已存位置保持原样——注意这不同于「没存过」。
+        val preferences = OverlayBallPreferences(FakeStorage())
+        preferences.writePosition(120, 480)
+        preferences.writePosition(-1, 600)
+        assertEquals(120 to 480, preferences.readPosition())
+    }
+
+    @Test
     fun rejectsNegativeStoredValues() {
-        // 负坐标只可能来自被篡改的存储或旧版本写入，读回时必须当作没存过。
+        // 负值有两个来源：clearPosition 写入的哨兵，以及被外部改写的存储；读取时都当作没存过。
         val storage = FakeStorage()
         storage.values[OverlayBallPreferences.KEY_X] = -10
         storage.values[OverlayBallPreferences.KEY_Y] = 480

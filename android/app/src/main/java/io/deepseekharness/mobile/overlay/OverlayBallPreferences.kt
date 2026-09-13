@@ -25,6 +25,12 @@ class OverlayBallPreferences(private val storage: Storage) {
         return x to y
     }
 
+    /**
+     * 写入球位置。
+     *
+     * 坐标为负时静默丢弃、不覆盖旧值：此时存储里仍是被拒前的旧位置，而不是「没存过」，
+     * 调用方也拿不到任何错误信号。坐标的合法范围（例如不超出屏幕尺寸）由调用方负责 clamp。
+     */
     fun writePosition(x: Int, y: Int) {
         if (x < 0 || y < 0) return
         storage.writeInt(KEY_X, x)
@@ -32,14 +38,21 @@ class OverlayBallPreferences(private val storage: Storage) {
     }
 
     fun clearPosition() {
-        // Storage 抽象只暴露了 readInt/writeInt，没有删除方法，约定写入 -1 表示未设置。
-        storage.writeInt(KEY_X, -1)
-        storage.writeInt(KEY_Y, -1)
+        // Storage 抽象只暴露了 readInt/writeInt，没有删除方法，约定写入哨兵表示未设置。
+        storage.writeInt(KEY_X, NOT_SET)
+        storage.writeInt(KEY_Y, NOT_SET)
     }
 
     companion object {
         const val KEY_X = "ball_x"
         const val KEY_Y = "ball_y"
+
+        /**
+         * 未设置的哨兵值：[clearPosition] 主动写入它表示已清除；
+         * 读取路径遇到任何负值（含本值）都视为「没存过」，因此它同时承担
+         * 「已清除」与「非法值」两种含义。
+         */
+        private const val NOT_SET = -1
 
         /** 生产实现：独立偏好文件，仅本应用可读。 */
         fun from(context: Context): OverlayBallPreferences {
@@ -47,7 +60,7 @@ class OverlayBallPreferences(private val storage: Storage) {
                 .getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
             return OverlayBallPreferences(object : Storage {
                 override fun readInt(key: String): Int? =
-                    if (preferences.contains(key)) preferences.getInt(key, -1) else null
+                    if (preferences.contains(key)) preferences.getInt(key, NOT_SET) else null
 
                 override fun writeInt(key: String, value: Int) {
                     preferences.edit().putInt(key, value).apply()
