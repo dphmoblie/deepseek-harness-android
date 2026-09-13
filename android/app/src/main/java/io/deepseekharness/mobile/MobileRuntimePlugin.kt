@@ -178,6 +178,28 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 回到前台时重新对齐悬浮球服务。
+     *
+     * 「显示在其他应用之上」是特殊权限，只能由用户到系统设置页手动开启，而且**授权不会结束进程**：
+     * 用户按界面引导去授权再返回时，插件与运行时都还活着，不会重走 [load]；前端对悬浮球状态
+     * 只读不写，也没有别的入口能把球拉起来。因此这里在主界面每次 onResume 时对齐一次，
+     * 补上「权限从已撤销恢复为已授予」的复位路径。
+     *
+     * 反向变化同样由这次对齐覆盖：权限在运行期被撤销时，同一次对齐会停掉服务并撤掉通知，
+     * 不留「球没了、通知还在」的状态。刻意不做轮询：对齐只发生在用户真正回到应用时。
+     * 与 [load] 一致，失败原因由 [syncOverlayBallService] 记入诊断日志，不阻塞界面。
+     */
+    override fun handleOnResume() {
+        super.handleOnResume()
+        if (destroying.get() || !::controller.isInitialized) return
+        try {
+            syncOverlayBallService(controller.store.overlayBallEnabled())
+        } catch (_: Throwable) {
+            android.util.Log.w("dsh-runtime", "overlay ball resume sync failed")
+        }
+    }
+
+    /**
      * Capacitor 插件销毁（Activity 销毁，含划掉最近任务）。
      *
      * 这里只回收插件自己拥有的资源（线程池、发起中的设备命令）并注销事件订阅者：

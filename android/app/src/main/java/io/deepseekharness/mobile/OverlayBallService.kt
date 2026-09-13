@@ -51,6 +51,16 @@ class OverlayBallService : Service() {
 
     private lateinit var windowManager: WindowManager
     private var ballView: View? = null
+
+    /**
+     * 球视图当前是否挂在 WindowManager 上。
+     *
+     * 不能只看 [ballView] 是否为空：权限被系统撤销时窗口会从 WindowManager 上移除，
+     * 而视图引用仍然非空。此时若按下「引用非空」早退，之后每次同步都会误判成球已经在显示，
+     * 球再也挂不回来。状态由视图的附着回调维护，并在挂载成功时置位、摘除时清零。
+     */
+    private var ballAttached = false
+
     private var menuScrim: View? = null
     private var menuView: View? = null
     private lateinit var layoutParams: WindowManager.LayoutParams
@@ -124,6 +134,9 @@ class OverlayBallService : Service() {
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        // 服务能收到的最稳定的系统回调：顺带复查一次权限。撤销后就不要再动
+        // 一个可能已经失效的窗口，由 onDestroy 统一摘除。
+        if (stopIfOverlayPermissionRevoked()) return
         val view = ballView ?: return
         val metrics = resources.displayMetrics
         val (x, y) = OverlayBallPolicy.clampPosition(
@@ -158,11 +171,43 @@ class OverlayBallService : Service() {
     /** 仅以启动方式运行，不提供绑定接口。 */
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * 运行期权限复查：悬浮窗权限已撤销时立即收尾，返回 true 表示调用方必须马上返回、
+     * 不要再碰任何窗口。
+     *
+     * 设计承诺「权限被系统收回时立即 stopSelf()」，但系统不会为这个权限变化回调服务，
+     * 也不该为此做常驻轮询。这里只在现有的两个时机顺带复查：用户仍然点得到球（触摸）时，
+     * 以及系统配置变化（旋转）时；其余情况由插件在每次回到前台时的对齐负责收尾。
+     * 记录字段与 onStartCommand 的驳回路径保持一致，便于按同一组条件排查。
+     */
+    private fun stopIfOverlayPermissionRevoked(): Boolean {
+        if (Settings.canDrawOverlays(this)) return false
+        diagnostics.record(
+            DiagnosticLevel.WARN,
+            DiagnosticEvent.KEEP_ALIVE,
+            mapOf("reason" to "overlay_denied", "active" to "false"),
+        )
+        stopForegroundCompat()
+        stopSelf()
+        return true
+    }
+
     // ── 球体 ────────────────────────────────────────────────────────────────
 
     /** 尝试把球挂到窗口上；返回 false 表示已经记录原因并请求停止服务。 */
     private fun attachBall(): Boolean {
-        if (ballView != null) return true
+        // 早退条件必须是「球确实还挂在窗口上」，不能只判引用非空：权限被系统撤销时窗口可能
+        // 已被移除而 ballView 仍非空，无条件早退会让之后每次同步都直接返回 true，球再也回不来。
+        if (OverlayBallPolicy.canReuseBallView(
+                viewPresent = ballView != null,
+                viewAttached = ballAttached,
+            )
+        ) {
+            return true
+        }
+        // 陈旧视图（窗口已被系统移除，或上一次挂载失败）：先安全摘除再重建，
+        // 避免窗口泄漏与重复添加。已经不在 WindowManager 上时 removeView 会抛异常，吞掉即可。
+        detachBall()
         val metrics = resources.displayMetrics
         val size = (BALL_SIZE_DP * metrics.density).toInt()
 
@@ -198,6 +243,19 @@ class OverlayBallService : Service() {
         params.y = y
 
         view.setOnTouchListener { _, event -> handleTouch(event, size) }
+        // 球是否还在窗口上由视图的附着回调维护：客户端侧的移除一定会回调，系统侧的移除
+        // 视 ROM 实现而定，因此它只用于避免「已被摘掉的窗口挡住重挂」这一类误判，
+        // 真正的清理由插件每次回前台的权限对齐（撤销 → 停服务 → 摘视图）兜底。
+        // 只认当前这颗球的回调，避免重建期间旧视图的回调覆盖新状态。
+        view.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(attached: View) {
+                if (attached === ballView) ballAttached = true
+            }
+
+            override fun onViewDetachedFromWindow(detached: View) {
+                if (detached === ballView) ballAttached = false
+            }
+        })
         // 权限缺失时 addView 会直接抛异常（SecurityException / BadTokenException）。
         // onStartCommand 里已经检查过 canDrawOverlays，但用户完全可能在检查之后、
         // addView 之前把权限撤销掉 —— 这是真实竞态。这里兜一层：加不上球就结束服务，
@@ -222,11 +280,15 @@ class OverlayBallService : Service() {
         }
         ballView = view
         layoutParams = params
+        // 乐观置位：addView 返回时窗口已登记，首次遍历（附着回调）还没跑完，
+        // 这一小段空窗期不能把刚挂上的球误判成陈旧视图。
+        ballAttached = true
         return true
     }
 
     private fun detachBall() {
         ballView?.let { view ->
+            ballAttached = false
             runCatching { windowManager.removeView(view) }
         }
         ballView = null
@@ -241,6 +303,10 @@ class OverlayBallService : Service() {
         val slop = ViewConfiguration.get(this).scaledTouchSlop
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // 运行期复查权限：球还在屏幕上、用户仍然点得到，说明权限可能是在本服务运行期间
+                // 被撤销的（部分 ROM 不杀进程也不摘窗口）。此时立即收尾并吞掉本次触摸，
+                // 不留「球还在、通知也在」的假象。
+                if (stopIfOverlayPermissionRevoked()) return true
                 touchStartX = event.rawX
                 touchStartY = event.rawY
                 touchStartAt = SystemClock.uptimeMillis()
@@ -433,8 +499,25 @@ class OverlayBallService : Service() {
         menuScrim = null
     }
 
-    /** 「打开设置」：回到管理界面（与悬浮球短按目标不同的常规入口）。 */
+    /**
+     * 「打开设置」：回到管理界面。
+     *
+     * 对话界面存活时不能直接启动 `MainActivity` —— 它是 `singleTask`，任务栈为
+     * `[MainActivity, HarnessActivity]` 时启动会触发 clear-top，把正在运行的对话界面连同
+     * 一次性会话凭据一起销毁（[KeepAliveEntryActivity] 的 KDoc 记录了同一失败模式）。
+     * 也没有启动标志能绕开：`singleTask` 实例只能是任务栈根，无法在不清理栈上活动的前提下
+     * 被带到 `HarnessActivity` 之上。因此对话存活时退回到与短按相同的转发入口，
+     * 把应用带回前台，由用户在对话界面里按「返回管理」自行离开 —— 销毁只由用户发起。
+     * 没有对话在运行时不存在会被 clear-top 清掉的受害者，仍直接打开管理界面。
+     */
     private fun openSettings() {
+        if (!OverlayBallPolicy.canOpenManagementDirectly(
+                harnessActivityAlive = AppAuthenticationState.isHarnessAuthenticated(),
+            )
+        ) {
+            openHarness()
+            return
+        }
         val intent = Intent(this, MainActivity::class.java).addFlags(
             Intent.FLAG_ACTIVITY_NEW_TASK,
         )

@@ -24,6 +24,24 @@ class OverlayBallPolicyTest {
     }
 
     @Test
+    fun reusesBallViewOnlyWhileItStaysAttached() {
+        // 视图还在窗口上：直接复用，不重复添加。
+        assertTrue(OverlayBallPolicy.canReuseBallView(viewPresent = true, viewAttached = true))
+        // 视图引用还在、但窗口已被系统移除（运行期撤销权限）：必须重建，否则球永远挂不上。
+        assertFalse(OverlayBallPolicy.canReuseBallView(viewPresent = true, viewAttached = false))
+        assertFalse(OverlayBallPolicy.canReuseBallView(viewPresent = false, viewAttached = false))
+    }
+
+    @Test
+    fun opensManagementDirectlyOnlyWhenNoConversationIsAlive() {
+        // 对话不在：直接打开管理界面，任务栈里没有会被 clear-top 清掉的受害者。
+        assertTrue(OverlayBallPolicy.canOpenManagementDirectly(harnessActivityAlive = false))
+        // 对话存活：启动 singleTask 的 MainActivity 会销毁它并撤销一次性会话凭据，
+        // 只能改走转发入口（与悬浮球短按、常驻通知一致）。
+        assertFalse(OverlayBallPolicy.canOpenManagementDirectly(harnessActivityAlive = true))
+    }
+
+    @Test
     fun clampsPositionInsideScreen() {
         // 正常范围内原样返回。
         assertEquals(100 to 200, OverlayBallPolicy.clampPosition(100, 200, 1080, 1920, 144))

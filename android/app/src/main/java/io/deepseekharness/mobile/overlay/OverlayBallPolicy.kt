@@ -41,6 +41,25 @@ object OverlayBallPolicy {
         enabled && canDrawOverlays
 
     /**
+     * 已存在的球视图能否直接复用。
+     *
+     * 只判「视图引用非空」是不够的：窗口可能已经被系统移除（例如运行期撤销悬浮窗权限），
+     * 此时必须重新挂载，否则之后每一次同步都会误判成「球已经在显示」而不再挂载 ——
+     * 连重新保存设置都救不回来。
+     */
+    fun canReuseBallView(viewPresent: Boolean, viewAttached: Boolean): Boolean =
+        viewPresent && viewAttached
+
+    /**
+     * 「打开设置」能否直接启动管理界面（`singleTask` 的 `MainActivity`）。
+     *
+     * 对话界面（`HarnessActivity`）存活时不能：启动 `MainActivity` 会触发 clear-top，
+     * 把它连同一次性会话凭据一起销毁。对话不在时任务栈里没有可被清掉的受害者，
+     * 可以直接打开管理界面。
+     */
+    fun canOpenManagementDirectly(harnessActivityAlive: Boolean): Boolean = !harnessActivityAlive
+
+    /**
      * 把球的左上角坐标约束在屏幕可视范围内。
      *
      * 屏幕比球还小时收敛到 0，而不是返回负数 —— 负的 LayoutParams 坐标会让
