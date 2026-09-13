@@ -14,13 +14,60 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
     private val resolver = RuntimeLaunchResolver(context, store, includeCredentials = false)
     private val directory get() = File(store.currentRoot, "root/.dsh-mobile")
 
+    /** 最近一次**成功**修复所对应的运行时代次指纹；见 [repairInstalledIfNeeded]。 */
+    @Volatile
+    private var repairedGeneration: String? = null
+
+    /** 最近一次**失败**所对应的运行时代次；配合下面时刻构成失败冷却窗口。 */
+    @Volatile
+    private var repairFailureGeneration: String? = null
+
+    /** 最近一次修复失败的时刻；从未失败时为 0。 */
+    @Volatile
+    private var repairFailureAtMillis: Long = 0L
+
     fun recoverIfNeeded() {
         if (File(directory, "plugin-manager/transaction.json").exists()) run("recover", null, null, null)
     }
 
+    /**
+     * 已安装插件的运行时链接修复（幂等自愈，不需要重新下载插件）。
+     *
+     * 需要它的两种坏形态：插件目录会被运行时升级保留，而里面指向运行时包的绝对链接带着旧
+     * 版本号与 peer 哈希，新根目录里已经不存在（悬空链接）；早期安装留下的真实副本则会让
+     * 运行时里出现第二份 dsh-tools —— 它的 Symbol 是每个物理模块副本各造一个，身份失配后
+     * `ctx.tools[调度器 Symbol]` 取到 undefined，**每一次工具调用**都会失败。
+     *
+     * 同一运行时代次只做一次（指纹为 runtimeId + 版本 + rootfs 摘要）：没有换运行时就不会
+     * 产生新的坏形态。失败不抛给调用方，并进入冷却窗口（判定见 [PluginRepairPolicy]）——
+     * 插件列表与 Harness 启动不应因为一次自愈失败而反复中断。
+     */
+    fun repairInstalledIfNeeded() {
+        val generation = store.installedManifest()?.let { "${it.runtimeId}|${it.version}|${it.rootfs.sha256}" } ?: return
+        val now = System.currentTimeMillis()
+        val attempt = PluginRepairPolicy.shouldAttempt(
+            generation = generation,
+            repairedGeneration = repairedGeneration,
+            lastFailureGeneration = repairFailureGeneration,
+            lastFailureAtMillis = repairFailureAtMillis,
+            nowMillis = now,
+        )
+        if (!attempt) return
+        try {
+            run("repair", null, null, null)
+            repairedGeneration = generation
+        } catch (_: Exception) {
+            // run() 已把失败转成受控错误码；自愈是尽力而为，因此不抛出。
+            // 记录失败时刻并进入冷却：失败通常是确定性的，立刻重试只会让下一次
+            // 读取插件列表再白等一次完整超时。
+            repairFailureGeneration = generation
+            repairFailureAtMillis = now
+        }
+    }
+
     fun run(operation: String, id: String?, enabled: Boolean?, childId: String?): JSObject {
-        if (operation !in setOf("list", "enable", "child", "update", "recover")) invalid()
-        if (operation !in setOf("list", "recover")) {
+        if (operation !in setOf("list", "enable", "child", "update", "recover", "repair")) invalid()
+        if (operation !in setOf("list", "recover", "repair")) {
             if (id == null || id.length !in 1..214 || !PACKAGE.matches(id) || ".." in id) invalid()
             if (operation in setOf("enable", "child") && enabled == null) invalid()
             if (operation == "child" && (childId == null || !ENTRY.matches(childId))) invalid()
@@ -31,7 +78,13 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         if (id != null) argv.add(id)
         if (enabled != null) argv.add(enabled.toString())
         if (childId != null) argv.add(childId)
-        val result = ProcessProbe.run(resolver.launch(argv), store.currentRoot, if (operation == "update") 250 else 30, outputLimit = 256 * 1024)
+        val timeoutSeconds = when (operation) {
+            "update" -> 250L
+            // 修复要遍历已安装的插件目录，给足时间但仍是有限等待。
+            "repair" -> 90L
+            else -> 30L
+        }
+        val result = ProcessProbe.run(resolver.launch(argv), store.currentRoot, timeoutSeconds, outputLimit = 256 * 1024)
         val payload = try {
             // 运行器可能输出诊断行；只接受最后一行的有界 JSON，不回传原始日志。
             val line = result.output.trimEnd().lineSequence().lastOrNull().orEmpty()
@@ -52,7 +105,11 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             }
             throw RuntimeFailure(code, detail ?: "插件操作失败，请检查运行时状态后重试")
         }
-        if (operation != "recover" && payload.optJSONArray("plugins") == null) {
+        if (operation in setOf("list", "enable", "child", "update") && payload.optJSONArray("plugins") == null) {
+            throw RuntimeFailure("PLUGIN_OPERATION_FAILED", "插件返回数据无效")
+        }
+        // 修复只回传计数（处理了多少个包、失败多少个），没有插件清单。
+        if (operation == "repair" && payload.optInt("scanned", -1) < 0) {
             throw RuntimeFailure("PLUGIN_OPERATION_FAILED", "插件返回数据无效")
         }
         return payload

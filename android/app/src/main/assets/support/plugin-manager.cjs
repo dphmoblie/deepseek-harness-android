@@ -27,6 +27,23 @@ const SCAN_MAX_BYTES = 24 * 1024 * 1024
 const SCAN_MAX_FILE_BYTES = 512 * 1024
 const MAX_LINKED_DEPENDENCIES = 64
 
+/**
+ * 运行时包去重与修复只处理这个作用域。
+ *
+ * `@deepseek-ai/` 下的包通过 Symbol 在 cordis 注册表里挂服务（例如 dsh-tools 的
+ * TOOL_RUNTIME_SCHEDULER），任何一份多余的物理副本都会让 Symbol 身份失配；插件自己的
+ * 第三方依赖（zod、zustand 等）保持 npm 装好的真实副本，改动面越小越安全。
+ * 详见 docs/插件安装与运行时单例.md。
+ */
+const RUNTIME_SCOPE = '@deepseek-ai/'
+/** 嵌套 node_modules 的深度、目录数与包数上限：避免在大依赖树上遍历爆炸。 */
+const RECONCILE_MAX_DEPTH = 4
+const RECONCILE_MAX_DIRECTORIES = 256
+const RECONCILE_MAX_PACKAGES = 512
+/** 一次修复最多扫描的插件版本目录数（暂存目录名固定为 UUID）。 */
+const REPAIR_MAX_VERSIONS = 64
+const TRANSACTION_ID = /^[a-f0-9-]{36}$/
+
 /** 详情校验：通过返回原文，否则返回 null（调用方据此省略 detail 字段）。 */
 function safeDetail(detail) {
   if (typeof detail !== 'string' || !DETAIL.test(detail)) return null
@@ -350,6 +367,164 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     }
     return null
   }
+  /**
+   * 把某个 node_modules 目录里的 `@deepseek-ai/*` 条目对齐到当前运行时实例。
+   *
+   * 为什么必须做：npm 把插件依赖的 `@deepseek-ai/*` 当普通依赖装成**真实副本**（dsh-base、
+   * dsh-agent-loop 这类包又各自把 dsh-tools 声明为依赖，`--omit=dev` 不装 peer 但会装它们），
+   * 而 dsh-tools 导出的是 `Symbol('@deepseek-ai/dsh-tools.scheduler')`，Symbol 在**每个物理
+   * 模块副本里各造一个**。插件目录里留下一份真实副本，就等于让运行时里出现两个不相等的
+   * Symbol，`ctx.tools[TOOL_RUNTIME_SCHEDULER]` 取到 undefined，之后**每一次工具调用**都会
+   * 在 `.prepare` 上抛 `Cannot read properties of undefined (reading 'prepare')`。
+   *
+   * 判定一律以「从运行时安装锚点实际解析到的真实目录」为准（resolvePackage 已覆盖 pnpm
+   * 隔离布局），绝不从既有链接的字符串里反推版本号或 peer 哈希。三种形态：
+   *   - 真实目录副本：删除后改建指向运行时实例的 junction；
+   *   - 悬空链接（运行时升级后，被保留的插件目录里旧版本号/peer 哈希路径已不存在）：
+   *     重新指向当前运行时解析到的那一份；
+   *   - 已指向当前运行时实例的链接：不动（幂等，可反复调用）。
+   *
+   * 单个包失败只计数、不抛异常：这里跑在安装流程里，绝不能因为一个包把整次更新打断。
+   * 全程只做 readdir / lstat / realpath / rm / symlink，不执行任何脚本。
+   *
+   * [boundary] 是调用方给定的处理范围（插件的版本目录）。返回计数对象；`failed` 含
+   * "因安全边界拒绝处理"的条目，`refused` 是其子集。
+   */
+  function reconcileRuntimePackages(modulesDirectory, boundary) {
+    const summary = { scanned: 0, linked: 0, unchanged: 0, versionMismatch: 0, failed: 0, refused: 0 }
+    let realBase
+    try { realBase = fs.realpathSync(modulesDirectory) } catch { return summary }
+    // 安全边界一：处理范围本身必须落在调用方给定目录内，且整体仍在 guest root 内。
+    // node_modules 被换成指向别处的链接时，这里直接放弃，什么都不做。
+    if (!within(root, realBase) || !within(boundary, realBase)) return summary
+    // 安全边界二：被删除或改建的条目，其**真实路径**必须落在本次处理的 node_modules 内；
+    // 每一层目录在进入前也要过同一检查。悬空链接无法 realpath，因此改为校验它所在目录的
+    // 真实路径（unlink 只删除链接本身，不会跟随）。
+    const inside = target => {
+      try { return within(realBase, fs.realpathSync(target)) } catch { return false }
+    }
+    const reject = () => { summary.failed += 1; summary.refused += 1 }
+    /**
+     * 对齐单个作用域包。返回 true 表示该条目当前已指向当前运行时实例（含本次刚改建），
+     * 调用方无需再进入它的 node_modules。
+     */
+    const reconcile = (target, name, stats) => {
+      summary.scanned += 1
+      // 名字先过 NAME：resolvePackage 内部用 validName，非法名字会直接抛受控错误。
+      if (name.length > 214 || name.includes('..') || !NAME.test(name)) return false
+      let installed
+      try { installed = resolvePackage(name) } catch { reject(); return false }
+      // 运行时没有这个名字：保留插件自带副本，只处理"与运行时重复"的包。
+      if (installed === null) return false
+      if (stats.isSymbolicLink()) {
+        let resolved = null
+        try { resolved = fs.realpathSync(target) } catch { resolved = null }
+        // 有效链接且已指向当前运行时实例：幂等返回。
+        if (resolved !== null && resolved === installed && exists(path.join(resolved, 'package.json'))) {
+          summary.unchanged += 1
+          return true
+        }
+        if (!inside(path.dirname(target))) { reject(); return false }
+        try { fs.unlinkSync(target) } catch { summary.failed += 1; return false }
+      } else {
+        if (!stats.isDirectory()) return false
+        const staged = versionOf(target)
+        const current = versionOf(installed)
+        if (staged !== null && current !== null && staged !== current) summary.versionMismatch += 1
+        if (!inside(target)) { reject(); return false }
+        try { fs.rmSync(target, { recursive: true, force: true }) } catch { summary.failed += 1; return false }
+      }
+      try {
+        fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 })
+        fs.symlinkSync(installed, target, 'junction')
+        summary.linked += 1
+        return true
+      } catch {
+        // 建链失败留给后续解析报错，不因此让整次安装失败。
+        summary.failed += 1
+        return false
+      }
+    }
+    let directories = 0
+    const visit = (directory, depth) => {
+      if (depth > RECONCILE_MAX_DEPTH || directories >= RECONCILE_MAX_DIRECTORIES) return
+      if (summary.scanned >= RECONCILE_MAX_PACKAGES || !inside(directory)) return
+      directories += 1
+      let items
+      try { items = fs.readdirSync(directory, { withFileTypes: true }) } catch { return }
+      // 本层的包目录：作用域目录只是容器，展开成 `@scope/name` 两级。
+      const packages = []
+      for (const item of items) {
+        if (item.name === '.bin' || item.name.startsWith('.')) continue
+        const full = path.join(directory, item.name)
+        if (!item.name.startsWith('@')) { packages.push([item.name, full]); continue }
+        let stats
+        try { stats = fs.lstatSync(full) } catch { continue }
+        // 作用域目录只展开真实目录：链接（含悬空）一律不进入，避免把动作带出处理范围。
+        if (!stats.isDirectory()) continue
+        let children
+        try { children = fs.readdirSync(full, { withFileTypes: true }) } catch { continue }
+        for (const child of children) {
+          if (child.name.startsWith('.') || child.name.startsWith('@')) continue
+          packages.push([item.name + '/' + child.name, path.join(full, child.name)])
+        }
+      }
+      for (const [name, full] of packages) {
+        if (summary.scanned >= RECONCILE_MAX_PACKAGES) return
+        let stats
+        try { stats = fs.lstatSync(full) } catch { continue }
+        // 作用域包一律交给 reconcile 判定：真实副本与悬空链接都要处理，普通文件它自己会跳过。
+        // 已指向运行时实例的条目不再进入：运行时本体不是本次处理的删除对象。
+        if (name.startsWith(RUNTIME_SCOPE) && reconcile(full, name, stats)) continue
+        if (!stats.isDirectory()) continue
+        // 嵌套 node_modules：npm 在 --legacy-peer-deps 下会把冲突的副本嵌在包目录内。
+        const nested = path.join(full, 'node_modules')
+        if (exists(nested)) visit(nested, depth + 1)
+      }
+    }
+    visit(modulesDirectory, 0)
+    return summary
+  }
+  /** 读取包目录的版本号；读不到返回 null（不抛异常，版本只用于计数）。 */
+  function versionOf(directory) {
+    try {
+      const value = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8'))
+      return typeof value.version === 'string' && value.version.length <= 64 ? value.version : null
+    } catch { return null }
+  }
+  /**
+   * 修复已安装插件：扫描 `versions/<事务目录>/node_modules`，把其中的 `@deepseek-ai/*`
+   * 真实副本与悬空链接对齐到当前运行时实例。
+   *
+   * 用于「不重新下载插件就把已装坏的插件恢复」：运行时升级后插件目录被保留，而里面指向
+   * 旧运行时副本的绝对路径（带旧版本号与 peer 哈希）已经不存在，插件加载会直接失败。
+   * 幂等、可重复调用，失败只计数（受控错误码由 CLI 层给出，这里不抛未分类异常）。
+   */
+  function repair() {
+    const summary = { versions: 0, scanned: 0, linked: 0, unchanged: 0, versionMismatch: 0, failed: 0, refused: 0 }
+    let items
+    try { items = fs.readdirSync(path.join(home, 'versions'), { withFileTypes: true }) } catch { return summary }
+    for (const item of items) {
+      if (summary.versions >= REPAIR_MAX_VERSIONS) break
+      if (!TRANSACTION_ID.test(item.name)) continue
+      const directory = path.join(home, 'versions', item.name)
+      let stats
+      try { stats = fs.lstatSync(directory) } catch { continue }
+      if (!stats.isDirectory()) continue
+      let realDirectory
+      try { realDirectory = fs.realpathSync(directory) } catch { continue }
+      if (!within(home, realDirectory)) continue
+      const modulesDirectory = path.join(directory, 'node_modules')
+      // node_modules 被换成指向版本目录之外的链接时整条跳过：不计入处理数，也不动任何东西。
+      let realModules
+      try { realModules = fs.realpathSync(modulesDirectory) } catch { continue }
+      if (!within(realDirectory, realModules)) continue
+      summary.versions += 1
+      const result = reconcileRuntimePackages(modulesDirectory, directory)
+      for (const key of ['scanned', 'linked', 'unchanged', 'versionMismatch', 'failed', 'refused']) summary[key] += result[key]
+    }
+    return summary
+  }
   function basicList() {
     const config = manifest()
     return { plugins: config.names.map(id => {
@@ -539,7 +714,7 @@ function createManager(rootDirectory, installPackage, parseYaml) {
       const targetBase = modules.find(base => within(base, target) && target !== base)
       const relativeName = targetBase && path.relative(targetBase, target).split(path.sep).join('/')
       const backupParts = path.relative(path.join(home, 'backups'), backup).split(path.sep)
-      if (!relativeName || !NAME.test(relativeName) || relativeName.includes('..') || protectedPackage(relativeName) || backupParts.length !== 2 || !/^[a-f0-9-]{36}$/.test(backupParts[0]) || !/^[0-9]{1,3}$/.test(backupParts[1])) fail('PLUGIN_RECOVERY_FAILED')
+      if (!relativeName || !NAME.test(relativeName) || relativeName.includes('..') || protectedPackage(relativeName) || backupParts.length !== 2 || !TRANSACTION_ID.test(backupParts[0]) || !/^[0-9]{1,3}$/.test(backupParts[1])) fail('PLUGIN_RECOVERY_FAILED')
       safe(path.dirname(target)); safe(path.dirname(backup))
       return { target, backup, hadOriginal: entry.hadOriginal === true }
     })
@@ -683,6 +858,10 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     try { fs.symlinkSync(directory, probe, 'junction'); fs.unlinkSync(probe) } catch { fail('PLUGIN_LINK_UNSUPPORTED') }
     ;(installPackage ?? npmInstall)(id, directory)
     const stageModules = path.join(directory, 'node_modules')
+    // 安装后消重：npm 会把插件依赖的 `@deepseek-ai/*` 装成真实副本，留在插件目录里就是
+    // 同一份运行时服务模块的第二份物理副本（Symbol 身份失配 → 所有工具调用失败）。
+    // 必须在读取 stagedNames 之前完成：顶层副本会被换成链接，后续切换逻辑认得这种链接。
+    const runtimeDedupe = reconcileRuntimePackages(stageModules, directory)
     const stagedNames = []
     for (const item of fs.readdirSync(stageModules)) {
       if (item === '.bin' || item.startsWith('.')) continue
@@ -709,9 +888,17 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     const entries = []
     for (const name of stagedNames) {
       const source = safe(path.join(stageModules, name))
-      const pkg = read(path.join(source, 'package.json'))
-      if (pkg.name !== name || fs.lstatSync(source).isSymbolicLink()) fail('PLUGIN_UPDATE_FAILED')
       const installed = resolvePackage(name)
+      if (fs.lstatSync(source).isSymbolicLink()) {
+        // 安装后消重已把运行时包换成指向运行时实例的链接，结果与下面的核心 SDK 分支一致。
+        // 只接受确实指向运行时实例的链接：npm 装出的其他链接（例如 file: 依赖）仍旧拒绝。
+        let resolved = null
+        try { resolved = fs.realpathSync(source) } catch { resolved = null }
+        if (!protectedPackage(name) || installed === null || resolved !== installed) fail('PLUGIN_UPDATE_FAILED')
+        continue
+      }
+      const pkg = read(path.join(source, 'package.json'))
+      if (pkg.name !== name) fail('PLUGIN_UPDATE_FAILED')
       if (protectedPackage(name)) {
         if (!installed || read(path.join(installed, 'package.json')).version !== pkg.version) {
           fail('PLUGIN_DEPENDENCY_UNSUPPORTED', `${name} ${pkg.version} != ${installed ? read(path.join(installed, 'package.json')).version : 'missing'}`)
@@ -745,7 +932,8 @@ function createManager(rootDirectory, installPackage, parseYaml) {
       fs.unlinkSync(journal)
       // 提交点之后仅清理备份，清理失败不得把成功更新报告为失败。
       try { fs.rmSync(path.join(home, 'backups', transactionId), { recursive: true, force: true }) } catch {}
-      return result
+      // 消重计数随结果一起回传：只含计数，不含任何路径。
+      return { ...result, runtimeDedupe }
     } catch (error) {
       recover()
       throw error
@@ -761,7 +949,7 @@ function createManager(rootDirectory, installPackage, parseYaml) {
       throw error
     }
   }
-  return { list, setEnabled, setChildEnabled, update, recover }
+  return { list, setEnabled, setChildEnabled, update, recover, repair }
 }
 
 module.exports = {
@@ -786,6 +974,7 @@ if (require.main === module) {
     let result
     if (operation === 'list') result = manager.list()
     else if (operation === 'recover') { manager.recover(); result = { recovered: true } }
+    else if (operation === 'repair') { manager.recover(); result = manager.repair() }
     else if (operation === 'enable' && (flag === 'true' || flag === 'false')) { manager.recover(); result = manager.setEnabled(id, flag === 'true') }
     else if (operation === 'child' && (flag === 'true' || flag === 'false')) { manager.recover(); result = manager.setChildEnabled(id, childId, flag === 'true') }
     else if (operation === 'update') result = manager.update(id)

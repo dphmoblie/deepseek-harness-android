@@ -390,3 +390,175 @@ test('真实 YAML 解析保留表达式为数据，不执行插件代码', t => 
   const manager = createManager(root)
   assert.equal(manager.list().plugins[1].children[0].id, 'sample')
 })
+
+// ---------------------------------------------------------------------------
+// 运行时包单例：安装后消重与已安装插件修复
+//
+// 这一组覆盖设备上的真实故障链：npm 把插件依赖的 `@deepseek-ai/*`（尤其是 dsh-base、
+// dsh-agent-loop 拖进来的 dsh-tools）装成真实副本，插件目录里因此出现同一份带 Symbol
+// 服务模块的第二份物理副本，`ctx.tools[TOOL_RUNTIME_SCHEDULER]` 取到 undefined，
+// 每一次工具调用都在 '.prepare' 上抛错。
+// ---------------------------------------------------------------------------
+
+/** 在某个 node_modules 里造一个"npm 装出来的"真实副本包目录。 */
+function stagedPackage(directory, name, version) {
+  const target = path.join(directory, name)
+  fs.mkdirSync(target, { recursive: true })
+  fs.writeFileSync(path.join(target, 'package.json'), JSON.stringify({ name, version }))
+  return target
+}
+
+/** 造一个已安装插件的版本目录，返回它的 node_modules 路径。 */
+function installedModules(root, transactionId) {
+  const modules = path.join(root, 'root/.dsh-mobile/plugin-manager/versions', transactionId, 'node_modules')
+  fs.mkdirSync(modules, { recursive: true })
+  return modules
+}
+
+/** 取本次更新的事务目录下的 node_modules（暂存目录就是插件实际被加载的位置）。 */
+function stagedModules(root, expected = 1) {
+  const base = path.join(root, 'root/.dsh-mobile/plugin-manager/versions')
+  const entries = fs.readdirSync(base)
+  assert.equal(entries.length, expected)
+  return path.join(base, entries[0], 'node_modules')
+}
+
+test('安装后消重：staging 里的 @deepseek-ai/* 真实副本改成指向运行时实例的链接', t => {
+  const { manager, write, root } = fixture(t, (id, directory) => {
+    installer(id, directory)
+    const stage = path.join(directory, 'node_modules')
+    // 插件自己的第三方依赖：必须保持 npm 装好的真实副本。
+    stagedPackage(stage, 'zustand', '4.5.5')
+    // 顶层真实副本：npm 的提升结果。
+    stagedPackage(stage, '@deepseek-ai/dsh-tools', '1.0.0')
+    // 嵌套真实副本：--legacy-peer-deps 下版本冲突时 npm 会把副本嵌在包目录里。
+    stagedPackage(path.join(stage, 'test-plugin', 'node_modules'), '@deepseek-ai/dsh-tools', '1.0.0')
+  })
+  write('opt/dsh/node_modules/@deepseek-ai/dsh-tools/package.json', { name: '@deepseek-ai/dsh-tools', version: '1.0.0' })
+
+  const result = manager.update('test-plugin')
+  assert.equal(result.plugins[1].version, '2.0.0')
+  // 计数随更新结果回传，只含计数不含路径。
+  assert.deepEqual(result.runtimeDedupe, { scanned: 2, linked: 2, unchanged: 0, versionMismatch: 0, failed: 0, refused: 0 })
+
+  const modules = stagedModules(root)
+  const runtimeCopy = fs.realpathSync(path.join(root, 'opt/dsh/node_modules/@deepseek-ai/dsh-tools'))
+  for (const relative of ['@deepseek-ai/dsh-tools', 'test-plugin/node_modules/@deepseek-ai/dsh-tools']) {
+    const link = path.join(modules, relative)
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true, relative)
+    assert.equal(fs.realpathSync(link), runtimeCopy, relative)
+    // 链接是有效的：插件内解析得到运行时那一份，Symbol 身份因此一致。
+    assert.equal(JSON.parse(fs.readFileSync(path.join(link, 'package.json'), 'utf8')).name, '@deepseek-ai/dsh-tools')
+  }
+  // 插件自己的第三方依赖原样保留。
+  assert.equal(fs.lstatSync(path.join(modules, 'zustand')).isSymbolicLink(), false)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(modules, 'zustand/package.json'), 'utf8')).version, '4.5.5')
+  // 运行时本体没有被替换成指向自己的链接。
+  assert.equal(fs.lstatSync(path.join(root, 'opt/dsh/node_modules/@deepseek-ai/dsh-tools')).isSymbolicLink(), false)
+})
+
+test('修复动作：已安装插件里的真实副本与悬空链接重新指向当前运行时，且幂等', t => {
+  const { manager, write, root } = fixture(t)
+  write('opt/dsh/node_modules/@deepseek-ai/dsh-tools/package.json', { name: '@deepseek-ai/dsh-tools', version: '1.0.0' })
+  write('opt/dsh/node_modules/@deepseek-ai/dsh-base/package.json', { name: '@deepseek-ai/dsh-base', version: '1.0.0' })
+  write('opt/dsh/node_modules/@deepseek-ai/dsh-app-boot/package.json', { name: '@deepseek-ai/dsh-app-boot', version: '1.0.0' })
+
+  const modules = installedModules(root, '12345678-1234-1234-1234-123456789abc')
+  // 坏形态一：真实副本（安装时留下的第二份 dsh-tools，且版本比运行时旧）。
+  stagedPackage(modules, '@deepseek-ai/dsh-tools', '0.1.4')
+  // 坏形态二：悬空链接 —— 运行时升级后插件目录被保留，旧版本号 + peer 哈希的路径已不存在。
+  const missing = path.join(root, 'opt/dsh/node_modules/.pnpm/@deepseek-ai+dsh-base@0.1.4_oldhash/node_modules/@deepseek-ai/dsh-base')
+  fs.symlinkSync(missing, path.join(modules, '@deepseek-ai/dsh-base'), 'junction')
+  assert.equal(fs.existsSync(path.join(modules, '@deepseek-ai/dsh-base/package.json')), false)
+  // 已经指向当前运行时实例的链接：不该被改动。
+  const healthy = fs.realpathSync(path.join(root, 'opt/dsh/node_modules/@deepseek-ai/dsh-app-boot'))
+  fs.symlinkSync(healthy, path.join(modules, '@deepseek-ai/dsh-app-boot'), 'junction')
+  // 嵌套副本同样处理（不做嵌套就会留下第二份物理副本）。
+  stagedPackage(path.join(modules, 'demo-plugin/node_modules'), '@deepseek-ai/dsh-tools', '0.1.4')
+
+  const runtimeTools = fs.realpathSync(path.join(root, 'opt/dsh/node_modules/@deepseek-ai/dsh-tools'))
+  assert.deepEqual(manager.repair(), { versions: 1, scanned: 4, linked: 3, unchanged: 1, versionMismatch: 2, failed: 0, refused: 0 })
+  for (const relative of ['@deepseek-ai/dsh-tools', 'demo-plugin/node_modules/@deepseek-ai/dsh-tools']) {
+    assert.equal(fs.lstatSync(path.join(modules, relative)).isSymbolicLink(), true, relative)
+    assert.equal(fs.realpathSync(path.join(modules, relative)), runtimeTools, relative)
+  }
+  const base = path.join(modules, '@deepseek-ai/dsh-base')
+  assert.equal(fs.realpathSync(base), fs.realpathSync(path.join(root, 'opt/dsh/node_modules/@deepseek-ai/dsh-base')))
+  assert.equal(fs.realpathSync(path.join(modules, '@deepseek-ai/dsh-app-boot')), healthy)
+  assert.equal(fs.lstatSync(path.join(modules, 'demo-plugin')).isSymbolicLink(), false)
+
+  // 幂等：再跑一次不改动任何东西，全部计入 unchanged。
+  assert.deepEqual(manager.repair(), { versions: 1, scanned: 4, linked: 0, unchanged: 4, versionMismatch: 0, failed: 0, refused: 0 })
+})
+
+test('修复动作拒绝越界路径：链接指向处理范围之外时一处都不动', t => {
+  const { manager, write, root } = fixture(t)
+  write('opt/dsh/node_modules/@deepseek-ai/dsh-tools/package.json', { name: '@deepseek-ai/dsh-tools', version: '1.0.0' })
+  // 处理范围之外的真实副本。它仍在 guest root 内，所以"必须在 root 内"这一层挡不住它，
+  // 必须由 node_modules / 作用域目录 / 包目录三层的边界校验挡住。
+  const outside = path.join(root, 'tmp-outside')
+  stagedPackage(path.join(outside, 'modules'), '@deepseek-ai/dsh-tools', '1.0.0')
+  stagedPackage(path.join(outside, 'scope'), '@deepseek-ai/dsh-tools', '1.0.0')
+  stagedPackage(path.join(outside, 'nested/node_modules'), '@deepseek-ai/dsh-tools', '1.0.0')
+
+  // 形态一：版本目录的 node_modules 整体是指向处理范围之外的链接。
+  const wholeLink = installedModules(root, '11111111-1111-1111-1111-111111111111')
+  fs.rmdirSync(wholeLink)
+  fs.symlinkSync(path.join(outside, 'modules'), wholeLink, 'junction')
+  // 形态二：作用域目录 @deepseek-ai 本身是指向处理范围之外的链接。
+  const scopeLink = installedModules(root, '22222222-2222-2222-2222-222222222222')
+  fs.symlinkSync(path.join(outside, 'scope'), path.join(scopeLink, '@deepseek-ai'), 'junction')
+  // 形态三：嵌套层的包目录是指向处理范围之外的链接。
+  const nestedLink = installedModules(root, '33333333-3333-3333-3333-333333333333')
+  fs.symlinkSync(path.join(outside, 'nested'), path.join(nestedLink, 'demo-plugin'), 'junction')
+
+  // 形态一被整体拒绝（不计入处理数），形态二、三的链接一律不进入：没有任何包被处理。
+  assert.deepEqual(manager.repair(), { versions: 2, scanned: 0, linked: 0, unchanged: 0, versionMismatch: 0, failed: 0, refused: 0 })
+  for (const relative of ['modules/@deepseek-ai/dsh-tools', 'scope/@deepseek-ai/dsh-tools', 'nested/node_modules/@deepseek-ai/dsh-tools']) {
+    const copy = path.join(outside, relative)
+    assert.equal(fs.lstatSync(copy).isSymbolicLink(), false, relative)
+    assert.equal(JSON.parse(fs.readFileSync(path.join(copy, 'package.json'), 'utf8')).version, '1.0.0', relative)
+  }
+})
+
+test('安装后消重：版本与运行时不一致也改用运行时实例，而不是让整次更新失败', t => {
+  // dsh-base 是绝大多数功能插件的依赖，npm 会把它解析成范围内的最新版本，与运行时钉住的
+  // 版本经常不同 —— 这正是设备上留下真实副本的入口。第二份物理副本必然让工具调用全挂，
+  // 因此这里改为一律指向运行时实例（计数里保留 versionMismatch 供排查），不再整次失败。
+  const { manager, root } = fixture(t, (id, directory) => {
+    installer(id, directory)
+    stagedPackage(path.join(directory, 'node_modules'), '@deepseek-ai/dsh-base', '2.0.0')
+  })
+  const result = manager.update('test-plugin')
+  assert.equal(result.plugins[1].version, '2.0.0')
+  assert.deepEqual(result.runtimeDedupe, { scanned: 1, linked: 1, unchanged: 0, versionMismatch: 1, failed: 0, refused: 0 })
+  const link = path.join(stagedModules(root), '@deepseek-ai/dsh-base')
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true)
+  assert.equal(fs.realpathSync(link), fs.realpathSync(path.join(root, 'opt/dsh/node_modules/@deepseek-ai/dsh-base')))
+  // 插件加载到的是运行时那一份（1.0.0），不是 npm 装出来的 2.0.0。
+  assert.equal(JSON.parse(fs.readFileSync(path.join(link, 'package.json'), 'utf8')).version, '1.0.0')
+})
+
+test('运行时没有的 @deepseek-ai/* 依赖保持原样，仍按受控错误拒绝整次更新', t => {
+  const { manager } = fixture(t, (id, directory) => {
+    installer(id, directory)
+    stagedPackage(path.join(directory, 'node_modules'), '@deepseek-ai/dsh-unknown', '1.0.0')
+  })
+  assert.throws(() => manager.update('test-plugin'), /PLUGIN_DEPENDENCY_UNSUPPORTED/)
+})
+
+test('安装后消重不跟随指向 staging 之外的链接', t => {
+  const { manager, root } = fixture(t, (id, directory) => {
+    installer(id, directory)
+    // 插件内部嵌套的 node_modules 是指向 staging 之外的链接：去重必须不进入，
+    // 否则会把处理范围之外的目录当成插件自己的副本删掉。
+    fs.symlinkSync(path.join(root, 'tmp-outside/nested'), path.join(directory, 'node_modules/test-plugin/node_modules'), 'junction')
+  })
+  const outside = stagedPackage(path.join(root, 'tmp-outside/nested/node_modules'), '@deepseek-ai/dsh-tools', '1.0.0')
+
+  const result = manager.update('test-plugin')
+  assert.equal(result.plugins[1].version, '2.0.0')
+  assert.deepEqual(result.runtimeDedupe, { scanned: 0, linked: 0, unchanged: 0, versionMismatch: 0, failed: 0, refused: 0 })
+  assert.equal(fs.lstatSync(outside).isSymbolicLink(), false)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(outside, 'package.json'), 'utf8')).version, '1.0.0')
+})

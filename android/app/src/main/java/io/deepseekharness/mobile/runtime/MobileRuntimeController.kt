@@ -40,6 +40,8 @@ class MobileRuntimeController(
         if (!supervisor.isRunning()) {
             supervisor.preparePluginManagement()
             plugins.recoverIfNeeded()
+            // 启动前自愈：运行时升级后插件目录里的链接可能已悬空，修复必须在插件被加载前完成。
+            plugins.repairInstalledIfNeeded()
         }
         supervisor.startHarness()
     }
@@ -52,6 +54,10 @@ class MobileRuntimeController(
                 throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
             }
             supervisor.preparePluginManagement()
+        } else if (!supervisor.isRunning() && !terminals.hasRuntimeSessions()) {
+            // 读取插件列表时顺带自愈一次（幂等）：已经装坏的插件不必重装即可恢复。
+            // 运行时在跑时不动这些链接，避免与正在加载模块的 Harness 抢同一批目录项。
+            plugins.repairInstalledIfNeeded()
         }
         plugins.run(operation, id, enabled, childId)
     }
