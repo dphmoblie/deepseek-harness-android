@@ -3,6 +3,8 @@ package io.deepseekharness.mobile.runtime
 import android.content.Context
 import android.system.Os
 import com.getcapacitor.JSObject
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -54,12 +56,32 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         )
         if (!attempt) return
         try {
-            run("repair", null, null, null)
+            val summary = run("repair", null, null, null)
             repairedGeneration = generation
+            // 只记计数，让下次导出的诊断日志能直接回答「设备上到底有没有重复的运行时包」：
+            //  - files = 修复动作实际扫到了多少个包条目；
+            //  - count = 其中多少个被重新指向运行时实例（**count > 0 即确实存在重复副本**）；
+            //  - result = denied 表示有包没能修复（拒绝或失败），需要人工介入。
+            val linked = summary.optInt("linked", 0)
+            val unfixed = summary.optInt("failed", 0) + summary.optInt("refused", 0)
+            store.diagnostics.record(
+                DiagnosticLevel.INFO,
+                DiagnosticEvent.REPAIR,
+                mapOf(
+                    "result" to if (unfixed > 0) "denied" else "ok",
+                    "count" to linked.toString(),
+                    "files" to summary.optInt("scanned", 0).toString(),
+                ),
+            )
         } catch (_: Exception) {
             // run() 已把失败转成受控错误码；自愈是尽力而为，因此不抛出。
             // 记录失败时刻并进入冷却：失败通常是确定性的，立刻重试只会让下一次
             // 读取插件列表再白等一次完整超时。
+            store.diagnostics.record(
+                DiagnosticLevel.WARN,
+                DiagnosticEvent.REPAIR,
+                mapOf("result" to "failed", "count" to "0"),
+            )
             repairFailureGeneration = generation
             repairFailureAtMillis = now
         }
