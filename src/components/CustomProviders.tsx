@@ -28,7 +28,7 @@ export function CustomProviders({ providers, configured, credentials, cleared, o
         }}><Trash2 size={18} /></button>
       </div>
       <div className="custom-provider-fields">
-        <label className="field"><span>{t('供应商标识')}</span><input required maxLength={48} pattern="[a-z][a-z0-9]*(?:-[a-z0-9]+)*" value={provider.id} disabled={configured.includes(provider.id)} onChange={event => {
+        <label className="field"><span>{t('供应商标识')}</span><input required maxLength={48} pattern="[a-z][a-z0-9]*(?:-[a-z0-9]+)*" title={t('小写字母与数字，用连字符分隔，例如 gateway-1')} value={provider.id} disabled={configured.includes(provider.id)} onChange={event => {
           const nextId = event.target.value
           if (credentials[provider.id]) {
             const next = { ...credentials, [nextId]: credentials[provider.id] }
@@ -57,7 +57,7 @@ export function CustomProviders({ providers, configured, credentials, cleared, o
       {configured.includes(provider.id) && <button type="button" className="button button-danger-quiet compact-button" onClick={() => {
         onCredentials(Object.fromEntries(Object.entries(credentials).filter(([id]) => id !== provider.id)))
         onClear(cleared.includes(provider.id) ? cleared.filter(id => id !== provider.id) : [...cleared, provider.id])
-      }}>{cleared.includes(provider.id) ? <RotateCcw size={16} /> : <Trash2 size={16} />}{cleared.includes(provider.id) ? t('撤销清除凭据') : t('清除凭据')}</button>}
+      }}>{cleared.includes(provider.id) ? <RotateCcw size={16} /> : <Trash2 size={16} />}{cleared.includes(provider.id) ? t('撤销清除密钥') : t('清除密钥')}</button>}
       {provider.models.map((model, modelIndex) => <fieldset className="custom-model" key={modelIndex}>
         <legend>{t('模型 {0}', modelIndex + 1)}</legend>
         <div className="custom-provider-fields">

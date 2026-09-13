@@ -21,6 +21,8 @@ const bridge = vi.hoisted(() => ({
   connectShizuku: vi.fn(),
   openShizuku: vi.fn(),
   getKeepAliveState: vi.fn(),
+  getOverlayBallState: vi.fn(),
+  openOverlaySettings: vi.fn(),
   requestNotificationPermission: vi.fn(),
   getHarnessLog: vi.fn(),
   getDiagnosticLogState: vi.fn(),
@@ -111,6 +113,9 @@ beforeEach(() => {
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
   bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive })
+  // 默认已授予「显示在其他应用上层」权限：与用例无关的测试不该被一个禁用开关影响。
+  bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
+  bridge.openOverlaySettings.mockResolvedValue(undefined)
   bridge.requestNotificationPermission.mockResolvedValue({ granted: true, supported: true })
   bridge.getHarnessLog.mockResolvedValue({ available: true, text: 'Error: tool call failed\n    at run (dsh.js:1:1)' })
   bridge.getDiagnosticLogState.mockResolvedValue({ ...diagnostic })
@@ -260,7 +265,7 @@ describe('App conversation gate', () => {
 
     // 运行时来源在「运行与后台」页。
     openSettingsPage('运行与后台')
-    expect(screen.getByText('官方包已固定下载源；仅内嵌开发包可留空')).toBeInTheDocument()
+    expect(screen.getByText('正式版已预置下载源；两项留空表示改用 APK 内置运行时（仅内嵌构建可用）')).toBeInTheDocument()
     // 屏幕内返回按钮走的是历史回退，视图切换在 popstate 之后生效。
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
     expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()
@@ -279,7 +284,7 @@ describe('App conversation gate', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('模型与凭据')
+    openSettingsPage('模型与密钥')
     fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
@@ -295,7 +300,7 @@ describe('App conversation gate', () => {
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
     fireEvent.click(screen.getByRole('button', { name: /Ubuntu 运行时/ }))
-    fireEvent.click(await screen.findByRole('button', { name: '重置' }))
+    fireEvent.click(await screen.findByRole('button', { name: '重置环境' }))
     const confirmation = screen.getByLabelText('输入 RESET_RUNTIME 确认')
     fireEvent.change(confirmation, { target: { value: ' reset_runtime ' } })
     fireEvent.click(screen.getByRole('button', { name: '确认重置' }))
@@ -501,7 +506,7 @@ describe('诊断与日志', () => {
 
     openSettingsPage('诊断与日志')
     expect(await screen.findByText('收集中')).toBeVisible()
-    expect(screen.getByText(/2 · /)).toBeVisible()
+    expect(screen.getByText('2 个文件 · 4.0 KB')).toBeVisible()
 
     // 等待启动流程释放忙碌状态：run() 在忙碌时会直接忽略点击。
     const shareButton = screen.getByRole('button', { name: '导出并分享' })
@@ -640,5 +645,53 @@ describe('应用语言', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('无法保存语言')
     expect(window.localStorage.getItem('dsh-mobile-language-v1')).toBeNull()
     expect(bridge.openHarness).not.toHaveBeenCalled()
+  })
+})
+
+describe('悬浮球设置', () => {
+  it('未授予系统权限时开关不可用并给出引导入口', async () => {
+    // 权限未授予时不能给一个点了没反应的开关：必须禁用并给出「去开启」的入口。
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: false, serviceActive: false })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    openSettingsPage('运行与后台')
+    expect(await screen.findByText('悬浮球')).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeDisabled()
+
+    // 文案以源码中的当前写法为准（界面润色把「去系统设置开启」改成了「前往系统设置开启」）。
+    fireEvent.click(screen.getByRole('button', { name: '前往系统设置开启' }))
+    await waitFor(() => expect(bridge.openOverlaySettings).toHaveBeenCalledTimes(1))
+  })
+
+  it('已授权时可切换开关，并随「保存设置」一起提交', async () => {
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    openSettingsPage('运行与后台')
+    const toggle = await screen.findByRole('switch', { name: /悬浮球/ })
+    expect(toggle).not.toBeChecked()
+
+    fireEvent.click(toggle)
+    // 与「后台保持 Harness」同一套模型：开关只改草稿，由「保存设置」统一提交。
+    expect(toggle).toBeChecked()
+    expect(bridge.saveSettings).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ overlayBallEnabled: true }),
+    ))
+  })
+
+  it('开关已开启但系统权限被撤销时如实显示原因', async () => {
+    // 设置里记着开启，但系统权限没了：必须把原因说出来，而不是静默失效。
+    bridge.getSettings.mockResolvedValue({ ...settings, overlayBallEnabled: true })
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: true, canDrawOverlays: false, serviceActive: false })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    openSettingsPage('运行与后台')
+    expect(await screen.findByText(/系统权限已关闭/)).toBeInTheDocument()
   })
 })

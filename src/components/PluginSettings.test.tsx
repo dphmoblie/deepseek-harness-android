@@ -31,7 +31,7 @@ describe('应用外层插件管理', () => {
     const bridge = setup({ ...runtime, phase: 'running' })
     fireEvent.click(await screen.findByText('example-plugin'))
     expect(screen.getByRole('checkbox', { name: '启用文件 example-plugin' })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: '停止运行时' }))
+    fireEvent.click(screen.getByRole('button', { name: '停止运行环境' }))
     await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledOnce())
     await waitFor(() => expect(screen.getByRole('checkbox', { name: '启用文件 example-plugin' })).toBeEnabled())
   })
