@@ -16,7 +16,8 @@ class OverlayBallPolicyTest {
     @Test
     fun showsBallOnlyWhenEnabledAndPermissionGranted() {
         assertTrue(OverlayBallPolicy.shouldShowBall(enabled = true, canDrawOverlays = true))
-        // 权限被系统收回时必须隐藏：显示一个点不动的球没有意义。
+        // 权限缺失是硬约束：此时 WindowManager.addView 会直接失败抛异常并拖垮服务，
+        // 并不是「球画不出来只是体验变差」的问题。
         assertFalse(OverlayBallPolicy.shouldShowBall(enabled = true, canDrawOverlays = false))
         assertFalse(OverlayBallPolicy.shouldShowBall(enabled = false, canDrawOverlays = true))
         assertFalse(OverlayBallPolicy.shouldShowBall(enabled = false, canDrawOverlays = false))
@@ -53,6 +54,26 @@ class OverlayBallPolicyTest {
         // 阈值内算点击，超过才算拖动。
         assertTrue(OverlayBallPolicy.isClick(distanceX = 6f, distanceY = 6f, touchSlop = 12))
         assertFalse(OverlayBallPolicy.isClick(distanceX = 40f, distanceY = 0f, touchSlop = 12))
+    }
+
+    @Test
+    fun treatsDistanceExactlyAtSlopAsClick() {
+        // 包含性边界：位移恰好等于 touchSlop 仍算点击，超过才算拖动。
+        assertTrue(OverlayBallPolicy.isClick(distanceX = 3f, distanceY = 4f, touchSlop = 5))
+    }
+
+    @Test
+    fun treatsHeldTimeExactlyAtThresholdAsLongPress() {
+        // 包含性边界：按住时长恰好等于阈值即算长按。
+        assertTrue(
+            OverlayBallPolicy.isLongPress(
+                distanceX = 0f,
+                distanceY = 0f,
+                touchSlop = 12,
+                heldMillis = 500,
+                longPressMillis = 500,
+            ),
+        )
     }
 
     @Test
