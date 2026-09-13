@@ -176,6 +176,21 @@ class RuntimeSupervisor(
             throw failure
         }
         throwIfStartCancelled()
+        // 记录本次启动实际注入的模型凭据**条数**，不记录变量名与取值。
+        // 用途：导出诊断日志后即可区分「App 没有可注入的凭据」与「dsh 侧没有用上」。
+        // 命名形态取自 ModelProvider 与 CustomModelProvider，二者均以 _API_KEY 结尾；
+        // 因此 DSH_MOBILE_AUTH_TOKEN / DSH_DEVICE_BRIDGE_TOKEN 这类临时凭据不会被计入。
+        val credentialCount = launch.argv.count { entry ->
+            entry.substringBefore('=').matches(Regex("^[A-Z][A-Z0-9_]*_API_KEY$"))
+        }
+        store.diagnostics.record(
+            DiagnosticLevel.INFO,
+            DiagnosticEvent.CREDENTIALS,
+            mapOf(
+                "result" to if (credentialCount > 0) "ok" else "skipped",
+                "count" to credentialCount.toString(),
+            ),
+        )
         val process = try {
             ProcessBuilder(harnessLaunchArgv(launch.argv))
                 .directory(store.currentRoot)

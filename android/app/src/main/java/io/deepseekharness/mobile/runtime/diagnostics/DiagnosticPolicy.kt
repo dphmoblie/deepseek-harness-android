@@ -45,6 +45,14 @@ enum class DiagnosticEvent {
 
     /** 日志导出与清理。 */
     LOG_EXPORT,
+
+    /**
+     * 每次 Harness 启动实际注入的模型凭据条数。
+     *
+     * 只记录**计数**，绝不记录变量名与取值：用于在设备上区分
+     * 「App 没有可注入的凭据」与「dsh 侧没有用上」，避免只能靠猜。
+     */
+    CREDENTIALS,
 }
 
 /**

@@ -18,18 +18,30 @@ import org.junit.Test
 class RuntimePreservePolicyTest {
     @Test
     fun preservesOnlyWhitelistedGuestData() {
+        // $DSH_HOME 下的用户数据；每一项都由 dsh 源码确认过出处。
         assertTrue(RuntimePreservePolicy.shouldPreserve("sessions"))
-        assertTrue(RuntimePreservePolicy.shouldPreserve("projects"))
-        assertTrue(RuntimePreservePolicy.shouldPreserve("plugins"))
-        assertTrue(RuntimePreservePolicy.shouldPreserve("settings.json"))
+        assertTrue(RuntimePreservePolicy.shouldPreserve("settings.yaml"))
+        assertTrue(RuntimePreservePolicy.shouldPreserve(".credentials.yaml"))
+        assertTrue(RuntimePreservePolicy.shouldPreserve("attachments"))
+        assertTrue(RuntimePreservePolicy.shouldPreserve("skills"))
+        // 用户安装的插件不在 $DSH_HOME 下，但同样必须保留。
+        assertTrue(RuntimePreservePolicy.shouldPreserve("plugin-manager"))
         // 白名单是封闭集合：白名单外的名字（含运行时产物）一律拒绝。
         assertFalse(RuntimePreservePolicy.shouldPreserve("profiles"))
         assertFalse(RuntimePreservePolicy.shouldPreserve("cache"))
         assertFalse(RuntimePreservePolicy.shouldPreserve("tmp"))
         assertFalse(RuntimePreservePolicy.shouldPreserve("logs"))
+        assertFalse(RuntimePreservePolicy.shouldPreserve("llm-deepseek"))
         // 应用自己生成的启动配置不在 $DSH_HOME 下，永远不保留。
         assertFalse(RuntimePreservePolicy.shouldPreserve("launcher-providers.patch.json"))
         assertFalse(RuntimePreservePolicy.shouldPreserve(".dsh-mobile"))
+        // 以下三项都曾被误列为保留项，已被源码证伪：必须保持拒绝以防回归。
+        // settings.json 不是 dsh 的设置文件名（真实为 settings.yaml）；
+        // $DSH_HOME/plugins 不是 dsh 的路径（用户插件在 root/.dsh-mobile/plugin-manager）；
+        // $DSH_HOME/projects 同样没有出处。
+        assertFalse(RuntimePreservePolicy.shouldPreserve("settings.json"))
+        assertFalse(RuntimePreservePolicy.shouldPreserve("plugins"))
+        assertFalse(RuntimePreservePolicy.shouldPreserve("projects"))
     }
 
     @Test
@@ -64,9 +76,15 @@ class RuntimePreservePolicyTest {
     fun mapsWhitelistedNamesToGuestPaths() {
         assertEquals("root/.dsh", RuntimePreservePolicy.GUEST_DSH_HOME)
         assertEquals("root/.dsh/sessions", RuntimePreservePolicy.guestRelativePath("sessions"))
-        assertEquals("root/.dsh/projects", RuntimePreservePolicy.guestRelativePath("projects"))
-        assertEquals("root/.dsh/plugins", RuntimePreservePolicy.guestRelativePath("plugins"))
-        assertEquals("root/.dsh/settings.json", RuntimePreservePolicy.guestRelativePath("settings.json"))
+        assertEquals("root/.dsh/settings.yaml", RuntimePreservePolicy.guestRelativePath("settings.yaml"))
+        assertEquals("root/.dsh/.credentials.yaml", RuntimePreservePolicy.guestRelativePath(".credentials.yaml"))
+        assertEquals("root/.dsh/attachments", RuntimePreservePolicy.guestRelativePath("attachments"))
+        assertEquals("root/.dsh/skills", RuntimePreservePolicy.guestRelativePath("skills"))
+        // 用户安装的插件不在 $DSH_HOME 下：必须落到显式声明的完整相对路径。
+        assertEquals(
+            "root/.dsh-mobile/plugin-manager",
+            RuntimePreservePolicy.guestRelativePath("plugin-manager"),
+        )
         // 被拒绝的输入不产生路径。
         assertNull(RuntimePreservePolicy.guestRelativePath(null))
         assertNull(RuntimePreservePolicy.guestRelativePath(""))
@@ -74,18 +92,39 @@ class RuntimePreservePolicyTest {
         assertNull(RuntimePreservePolicy.guestRelativePath("/sessions"))
         assertNull(RuntimePreservePolicy.guestRelativePath("a/b"))
         assertNull(RuntimePreservePolicy.guestRelativePath("profiles"))
+        // 整个 .dsh-mobile 目录不被保留：同目录下的启动配置每次启动重新生成。
+        assertNull(RuntimePreservePolicy.guestRelativePath(".dsh-mobile"))
     }
 
     @Test
-    fun whitelistIsFlatAndCannotEscapeGuestDshHome() {
+    fun whitelistCannotEscapeItsDeclaredGuestRoots() {
         val names = RuntimePreservePolicy.preservedNames()
-        assertEquals(listOf("sessions", "projects", "plugins", "settings.json"), names)
+        assertEquals(
+            listOf(
+                "sessions",
+                "settings.yaml",
+                ".credentials.yaml",
+                "attachments",
+                "skills",
+                "plugin-manager",
+            ),
+            names,
+        )
         for (name in names) {
-            assertFalse("白名单条目必须是扁平名字：$name", name.contains("/"))
-            assertFalse("白名单条目不能是相对路径段：$name", name == "." || name == "..")
+            // 暂存名必须是扁平名字：它同时被用作 preserve-<uuid>/ 下的条目名，
+            // 带分隔符就会把暂存目录结构变成嵌套的。
+            assertFalse("暂存名必须是扁平名字：$name", name.contains("/"))
+            assertFalse("暂存名不能是相对路径段：$name", name == "." || name == "..")
             val relative = RuntimePreservePolicy.guestRelativePath(name)
-            assertEquals("$name 必须落在访客 dsh 主目录下", RuntimePreservePolicy.GUEST_DSH_HOME + "/" + name, relative)
+            assertTrue("白名单条目必须给出访客相对路径：$name", relative != null)
             assertFalse("白名单路径不得包含相对路径段：$relative", relative!!.contains(".."))
+            assertFalse("白名单路径必须是相对路径：$relative", relative.startsWith("/"))
+            // 只允许落在两个显式声明的访客根之下，防止将来新增条目时越界。
+            val allowedRoots = listOf(RuntimePreservePolicy.GUEST_DSH_HOME, "root/.dsh-mobile")
+            assertTrue(
+                "$relative 必须落在声明的访客根之下",
+                allowedRoots.any { relative.startsWith("$it/") },
+            )
         }
     }
 
@@ -93,8 +132,18 @@ class RuntimePreservePolicyTest {
     fun keepsRuntimeArtifactsOutOfTheWhitelist() {
         // 运行时产物必须显式列出并排除：旧 profiles/node_modules 是指向旧 rootfs 的符号链接，
         // 搬进新根目录会制造悬空链接与重复模块。
+        // `plugins` 也列在这里：它**不是** dsh 的路径（用户安装的插件真实位于
+        // root/.dsh-mobile/plugin-manager），曾被我误列为保留项，列出以防回归。
         assertEquals(
-            listOf("profiles", "cache", "tmp", "logs"),
+            listOf(
+                "profiles",
+                "cache",
+                "tmp",
+                "logs",
+                "llm-deepseek",
+                "launcher-providers.patch.json",
+                "plugins",
+            ),
             RuntimePreservePolicy.RUNTIME_ARTIFACTS_NOT_PRESERVED,
         )
         for (artifact in RuntimePreservePolicy.RUNTIME_ARTIFACTS_NOT_PRESERVED) {
@@ -151,7 +200,7 @@ class RuntimePreservePolicyTest {
             RuntimePreservePolicy.RestoreDecision.CONFLICT,
             RuntimePreservePolicy.decideRestore(present = true, isDirectory = true, childCount = 1024),
         )
-        // 文件（即使长度为 0）永远不是空壳，settings.json 走的就是这条判定。
+        // 文件（即使长度为 0）永远不是空壳，settings.yaml / .credentials.yaml 走的就是这条判定。
         assertEquals(
             RuntimePreservePolicy.RestoreDecision.CONFLICT,
             RuntimePreservePolicy.decideRestore(present = true, isDirectory = false, childCount = 0),

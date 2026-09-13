@@ -21,7 +21,7 @@ permissions:
 env:
   # 测试版版本号：与 android/app/build.gradle 的 versionName 保持一致。
   # CI 会据此生成运行时版本与 Release 标签（形如 v0.1.12-preview-mobile-<run_number>）。
-  APP_VERSION: '0.1.18-preview'
+  APP_VERSION: '0.1.19-preview'
 
 jobs:
   build:

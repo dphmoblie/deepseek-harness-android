@@ -23,20 +23,39 @@ object RuntimePreservePolicy {
     const val GUEST_DSH_HOME = "root/.dsh"
 
     /**
-     * 需要跨升级保留的用户数据。
-     *
-     * 全部是**扁平名字**（不含任何路径分隔符）：白名单只描述「`$DSH_HOME` 下的哪一项」，
-     * 不做嵌套匹配，从根上消除路径穿越面。顺序固定，便于日志与测试断言。
+     * 需要跨升级保留的 `$DSH_HOME` 用户数据。**全部是扁平名字**（不含路径分隔符）：
+     * 白名单只描述「`$DSH_HOME` 下的哪一项」，不做嵌套匹配，从根上消除路径穿越面。
+     * 顺序固定，便于日志与测试断言。每一项都由 dsh 源码确认过出处。
      */
     private val PRESERVED_NAMES = listOf(
-        // 对话会话（见 scripts/mobile-session-publish.py 的 SESSION_ROOT）。
+        // 对话会话（scripts/mobile-session-publish.py 的 SESSION_ROOT = /root/.dsh/sessions）。
         "sessions",
-        // 工作区/项目状态。
-        "projects",
-        // 用户自行安装的插件。
-        "plugins",
-        // dsh 配置。
-        "settings.json",
+        // dsh 设置。真实文件名是 settings.yaml（dsh-settings-file/lib/index.js:32）；
+        // 早期实现误写为 settings.json，导致设置从未被保留。
+        "settings.yaml",
+        // 模型凭据（dsh-credentials-local/lib/index.js:49,58）。该文件必须以 0600 保留，
+        // 因此只能 Os.rename、绝不能复制：复制会被 umask 改成 0644，而 dsh 会拒绝读取
+        // 权限宽松的凭据文件并直接报错（同上 lib/index.js:104）。
+        ".credentials.yaml",
+        // 用户上传的附件（dsh-attachment-local/lib/index.js:986）。
+        "attachments",
+        // 用户技能（dsh-skill-filesystem/lib/index.js:172）。
+        "skills",
+    )
+
+    /**
+     * 不在 `$DSH_HOME` 下、但同样必须跨版本保留的访客项：**暂存名 → 访客相对路径**。
+     *
+     * `plugin-manager` 是用户安装的插件：`plugin-manager.cjs` 把插件 npm 装到
+     * `root/.dsh-mobile/plugin-manager/versions/<txid>/node_modules/`。它**不在 `$DSH_HOME` 下**，
+     * 扁平的「`$DSH_HOME` 下名字」模型表达不了，必须显式给出完整相对路径。两条边界：
+     *  - 只保留 `plugin-manager` 这一项，**不是**整个 `root/.dsh-mobile`：同目录下的
+     *    `launcher-providers.patch.json` 由应用每次启动重新生成，保留它只会把过期配置带进新运行时；
+     *  - 跨版本保留插件目录会留下指向旧 rootfs 的悬空符号链接，这一条由插件侧的「修复动作」
+     *    负责（见 docs/项目状态.md）。
+     */
+    private val PRESERVED_OUTSIDE_HOME = mapOf(
+        "plugin-manager" to "root/.dsh-mobile/plugin-manager",
     )
 
     /**
@@ -45,11 +64,20 @@ object RuntimePreservePolicy {
      * - `profiles`：`profiles/node_modules` 是指向旧 rootfs 内包的符号链接，
      *   `profiles/web` 是按旧 dsh 版本生成的产物；搬进新根目录会制造悬空链接与重复模块。
      * - `cache`、`tmp`、`logs`：缓存、临时文件与日志，由新运行时重建即可，没有跨版本价值。
-     *
-     * 另有 `root/.dsh-mobile/launcher-providers.patch.json`（应用每次启动重新生成）
-     * 不在 `$DSH_HOME` 下，同样不保留。
+     * - `llm-deepseek`：远端文件上传缓存（dsh-llm-deepseek/lib/index.js:766），与远端状态绑定。
+     * - `launcher-providers.patch.json`：应用每次启动重新生成的启动配置。
+     * - `plugins`：**这不是 dsh 的路径**（用户安装的插件真实位于 `root/.dsh-mobile/plugin-manager`，
+     *   见 [PRESERVED_OUTSIDE_HOME]）。它曾被误列为保留项，已删除；列在这里是为了防止回归。
      */
-    val RUNTIME_ARTIFACTS_NOT_PRESERVED = listOf("profiles", "cache", "tmp", "logs")
+    val RUNTIME_ARTIFACTS_NOT_PRESERVED = listOf(
+        "profiles",
+        "cache",
+        "tmp",
+        "logs",
+        "llm-deepseek",
+        "launcher-providers.patch.json",
+        "plugins",
+    )
 
     /** 用户数据暂存目录前缀：`runtimeParent/preserve-<uuid>`。 */
     const val PRESERVE_DIRECTORY_PREFIX = "preserve-"
@@ -59,17 +87,21 @@ object RuntimePreservePolicy {
     /**
      * 名字是否属于需要保留的用户数据。
      *
-     * 只接受白名单里的扁平名字：`null`、空串、`../x`、`/abs`、`a/b`、`.`、`..`
+     * 只接受白名单里的项：`null`、空串、`../x`、`/abs`、`a/b`、`.`、`..`
      * 以及任何其它输入一律拒绝，避免把路径穿越面带进提升流程。
      */
-    fun shouldPreserve(name: String?): Boolean = name != null && PRESERVED_NAMES.contains(name)
+    fun shouldPreserve(name: String?): Boolean =
+        name != null && (PRESERVED_NAMES.contains(name) || PRESERVED_OUTSIDE_HOME.containsKey(name))
 
     /** 相对根文件系统的白名单路径；名字不被接受时返回 `null`。 */
-    fun guestRelativePath(name: String?): String? =
-        if (shouldPreserve(name)) "$GUEST_DSH_HOME/$name" else null
+    fun guestRelativePath(name: String?): String? = when {
+        name == null -> null
+        name in PRESERVED_NAMES -> "$GUEST_DSH_HOME/$name"
+        else -> PRESERVED_OUTSIDE_HOME[name]
+    }
 
-    /** 白名单条目（扁平名字，顺序固定）。 */
-    fun preservedNames(): List<String> = PRESERVED_NAMES
+    /** 白名单条目（暂存名，顺序固定：先 `$DSH_HOME` 内的，再 `$DSH_HOME` 外的）。 */
+    fun preservedNames(): List<String> = PRESERVED_NAMES + PRESERVED_OUTSIDE_HOME.keys
 
     /** 生成 `preserve-<uuid>` 暂存目录名。 */
     fun preserveDirectoryName(nonce: String): String = PRESERVE_DIRECTORY_PREFIX + nonce

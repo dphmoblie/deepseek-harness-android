@@ -52,7 +52,7 @@ class RuntimeLaunchResolver(
     ) = synchronized(lock) {
         val resolved = resolveProfile(externalCancellation)
         val firstResult = ProcessProbe.run(
-            buildLaunch(resolved.profile, entrypoint),
+            buildLaunch(resolved.profile, entrypoint, includeCredentials = false),
             store.currentRoot,
             timeoutSeconds,
             externalCancellation,
@@ -63,7 +63,7 @@ class RuntimeLaunchResolver(
         if (!resolved.profile.disableSeccomp && RuntimeDiagnostics.shouldRetryWithoutSeccomp(firstResult)) {
             val fallback = resolved.profile.copy(disableSeccomp = true)
             val fallbackResult = ProcessProbe.run(
-                buildLaunch(fallback, entrypoint),
+                buildLaunch(fallback, entrypoint, includeCredentials = false),
                 store.currentRoot,
                 timeoutSeconds,
                 externalCancellation,
@@ -190,7 +190,7 @@ class RuntimeLaunchResolver(
         profile: ProotLaunchProfile,
         externalCancellation: () -> Boolean,
     ): ProcessProbeResult = ProcessProbe.run(
-        buildLaunch(profile, GUEST_PROBE_ENTRYPOINT),
+        buildLaunch(profile, GUEST_PROBE_ENTRYPOINT, includeCredentials = false),
         store.currentRoot,
         GUEST_PROBE_TIMEOUT_SECONDS,
         externalCancellation,
@@ -214,11 +214,19 @@ class RuntimeLaunchResolver(
         return RuntimeFailure(failure.code, failure.message, cause)
     }
 
+    /**
+     * 组装一次 PRoot 启动参数。
+     *
+     * `includeCredentials` 默认取本解析器的构造参数，但**探测与自检必须显式传 false**：
+     * 那些进程只跑 `node --version`、`dsh --version` 一类的命令，不需要模型凭据，
+     * 让 API Key 出现在它们的进程环境里属于无谓的暴露面（最小权限）。
+     */
     private fun buildLaunch(
         profile: ProotLaunchProfile,
         entrypoint: List<String>,
         harnessAuthToken: String? = null,
         deviceBridgeAccess: DeviceBridgeAccess? = null,
+        includeCredentials: Boolean = this.includeCredentials,
     ): RuntimeLaunchSpec = RuntimeLaunchSpec(
         argv = RuntimeCommand.prootArgv(store, entrypoint, profile.bindMounts, harnessAuthToken, deviceBridgeAccess, includeCredentials),
         environment = RuntimeCommand.hostEnvironment(appContext, store, profile.disableSeccomp),
