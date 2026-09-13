@@ -11,6 +11,12 @@ export default tseslint.config(
       'packages/**', // 独立包的 lib/src 由其自身 tsconfig/typecheck 覆盖
       'android/app/src/main/assets/public',
       'android/**/build',
+      // 运行时 profile 构建产出的 vendored 依赖补丁副本：已被 .gitignore 忽略，
+      // 不是本仓库源码。它们不在任一 tsconfig 的 project 内，lint 会退化成
+      // 354 条 "file was not found in any of the provided project(s)" 解析错误，
+      // 进而让 CI 的 Lint 步骤失败 —— 故在此显式排除。
+      'scripts/runtime-profile/.patch-source',
+      'scripts/runtime-profile/.pnpm-pi-ai-patch',
       '*.config.js',
       '*.config.d.ts',
       '*.tsbuildinfo',
