@@ -14,6 +14,7 @@ import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
+import io.deepseekharness.mobile.overlay.OverlayBallPolicy
 import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
@@ -295,6 +296,7 @@ class MobileRuntimePlugin : Plugin() {
             )
             applyKeepScreenAwake(saved.keepScreenAwake)
             syncKeepAliveService(saved.keepRuntimeInBackground)
+            syncOverlayBallService(saved.overlayBallEnabled)
             saved.toJs()
         }
     }
@@ -761,6 +763,57 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 悬浮球开关与系统权限的当前状态。
+     *
+     * 返回值只有布尔量，不含任何用户数据。`canDrawOverlays` 必须每次实时读取：
+     * 用户可能在系统设置里随时撤销，缓存下来会让界面显示错误状态。
+     */
+    @PluginMethod
+    fun overlayBallState(call: PluginCall) {
+        execute(call) {
+            JSObject()
+                .put("enabled", controller.store.overlayBallEnabled())
+                .put("canDrawOverlays", android.provider.Settings.canDrawOverlays(context))
+                .put("serviceActive", OverlayBallService.isRunning)
+        }
+    }
+
+    /**
+     * 引导用户到「显示在其他应用上层」设置页。
+     *
+     * 该权限不弹运行时对话框，只能由用户手动开启；本方法只负责跳转，
+     * 授权结果由界面在 onResume 后重新查询 [overlayBallState] 获得。
+     */
+    @PluginMethod
+    fun openOverlaySettings(call: PluginCall) {
+        execute(call) {
+            val intent = Intent(
+                android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                android.net.Uri.parse("package:${context.packageName}"),
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                context.startActivity(intent)
+            } catch (error: Throwable) {
+                // 部分 ROM 没有该设置页：退回应用详情页，至少让用户能进系统设置。
+                try {
+                    context.startActivity(
+                        Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                            .setData(android.net.Uri.parse("package:${context.packageName}"))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                } catch (fallbackError: Throwable) {
+                    throw RuntimeFailure(
+                        "OVERLAY_SETTINGS_UNAVAILABLE",
+                        "无法打开系统设置页",
+                        fallbackError,
+                    )
+                }
+            }
+            null
+        }
+    }
+
+    /**
      * 权限：应用内桥接。
      * 「所有文件访问」是特殊权限，没有运行时对话框可弹：只能跳到系统设置页由用户手动开启。
      * Android 11 以下不存在该权限，返回 supported=false 由界面隐藏入口。
@@ -844,6 +897,21 @@ class MobileRuntimePlugin : Plugin() {
                 "enabled" to keepRuntimeInBackground.toString(),
             ),
         )
+    }
+
+    /**
+     * 按设置同步悬浮球服务。
+     *
+     * 与 [syncKeepAliveService] 分开：两者的启动条件互不相干，合在一起会让
+     * 「只想开悬浮球」的用户被动拉起运行时保活服务。
+     */
+    private fun syncOverlayBallService(enabled: Boolean) {
+        val canDraw = android.provider.Settings.canDrawOverlays(context)
+        if (OverlayBallPolicy.shouldShowBall(enabled, canDraw)) {
+            OverlayBallService.start(context)
+        } else {
+            OverlayBallService.stop(context)
+        }
     }
 
     /** 显式停止运行时或重置：立即撤销前台服务，由 RuntimeHost 统一收尾。 */
