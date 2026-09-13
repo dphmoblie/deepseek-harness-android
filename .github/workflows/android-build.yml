@@ -279,6 +279,9 @@ jobs:
           set -e
           if [ "$STATUS" != "0" ]; then exit 1; fi
 
+      - name: Check mobile adaptation anchors in the runtime plugin tree
+        run: node harness-web/scripts/check-runtime-anchors.mjs /tmp/dsh-root/node_modules
+
       - name: Download pinned rootfs inputs
         run: |
           curl -fL --retry 3 -o /tmp/ubuntu.tar.gz https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz

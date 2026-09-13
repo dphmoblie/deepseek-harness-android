@@ -52,6 +52,14 @@ test('app consumes the maintained mobile Harness adapter as a pinned submodule',
   assert.equal(recursiveCount, 4, 'each app workflow job must recursively check out Harness')
   assert.ok(recursiveCount < checkoutCount, 'the external Operit2 checkout is intentionally separate')
   assert.match(workflow, /pnpm --dir harness-web build/u)
+
+  // 移动适配的锚点守卫必须在打包运行时之前运行：官方升级删掉 android.css
+  // 依赖的锚点时，CI 立即失败并列出受影响的规则，而不是静默发出坏镜像。
+  assert.match(workflow, /check-runtime-anchors\.mjs \/tmp\/dsh-root\/node_modules/u)
+  assert.ok(
+    workflow.indexOf('check-runtime-anchors.mjs') < workflow.indexOf('Build bundle + manifest'),
+    '锚点守卫必须在 bundle 构建之前运行',
+  )
 })
 
 test('rootfs frontend input rejects old workbench artifacts and duplicate HTML entries', () => {
