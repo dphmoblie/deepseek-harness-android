@@ -21,6 +21,6 @@
     <string name="overlay_ball_channel_description">在其他应用上层显示悬浮球，点按可快速回到 Harness 对话</string>
     <string name="overlay_ball_notification_title">悬浮球已开启</string>
     <string name="overlay_ball_notification_text">点按可快速回到 Harness 对话</string>
-    <string name="overlay_ball_menu_settings">打开设置</string>
+    <string name="overlay_ball_menu_return">回到应用</string>
     <string name="overlay_ball_menu_hide">隐藏悬浮球</string>
 </resources>

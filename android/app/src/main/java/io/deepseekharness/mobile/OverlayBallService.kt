@@ -469,9 +469,9 @@ class OverlayBallService : Service() {
             setBackgroundColor(MENU_BACKGROUND_COLOR)
             setPadding(0, MENU_PADDING_DP, 0, MENU_PADDING_DP)
         }
-        container.addView(menuItem(R.string.overlay_ball_menu_settings) {
+        container.addView(menuItem(R.string.overlay_ball_menu_return) {
             detachMenu()
-            openSettings()
+            returnToApp()
         })
         container.addView(menuItem(R.string.overlay_ball_menu_hide) {
             detachMenu()
@@ -500,17 +500,19 @@ class OverlayBallService : Service() {
     }
 
     /**
-     * 「打开设置」：回到管理界面。
+     * 「回到应用」：把应用带回前台。
      *
-     * 对话界面存活时不能直接启动 `MainActivity` —— 它是 `singleTask`，任务栈为
-     * `[MainActivity, HarnessActivity]` 时启动会触发 clear-top，把正在运行的对话界面连同
-     * 一次性会话凭据一起销毁（[KeepAliveEntryActivity] 的 KDoc 记录了同一失败模式）。
-     * 也没有启动标志能绕开：`singleTask` 实例只能是任务栈根，无法在不清理栈上活动的前提下
-     * 被带到 `HarnessActivity` 之上。因此对话存活时退回到与短按相同的转发入口，
-     * 把应用带回前台，由用户在对话界面里按「返回管理」自行离开 —— 销毁只由用户发起。
-     * 没有对话在运行时不存在会被 clear-top 清掉的受害者，仍直接打开管理界面。
+     * 之所以要分两种情况，是因为 `MainActivity` 是 `singleTask`：对话界面存活时启动它会
+     * 触发 clear-top，把后台的 `HarnessActivity` 连同一次性会话凭据一起销毁
+     * （[KeepAliveEntryActivity] 的 KDoc 记录了同一失败模式）。也没有启动标志能绕开：
+     * `singleTask` 实例只能是任务栈根，无法在不清理栈上活动的前提下被带到
+     * `HarnessActivity` 之上。因此对话存活时退回到与短按相同的转发入口 ——
+     * [KeepAliveEntryActivity] 正是为绕开这一点而存在的 —— 把应用带回前台，
+     * 销毁只由用户在对话界面里主动发起。
+     *
+     * 对话不在时，任务栈里没有会被 clear-top 清掉的受害者，所以直接启动管理界面。
      */
-    private fun openSettings() {
+    private fun returnToApp() {
         if (!OverlayBallPolicy.canOpenManagementDirectly(
                 harnessActivityAlive = AppAuthenticationState.isHarnessAuthenticated(),
             )

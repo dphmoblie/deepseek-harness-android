@@ -21,6 +21,6 @@
     <string name="overlay_ball_channel_description">Shows a floating ball above other apps; tap to return to the Harness conversation</string>
     <string name="overlay_ball_notification_title">Floating ball is on</string>
     <string name="overlay_ball_notification_text">Tap to return to the Harness conversation</string>
-    <string name="overlay_ball_menu_settings">Open settings</string>
+    <string name="overlay_ball_menu_return">Return to app</string>
     <string name="overlay_ball_menu_hide">Hide floating ball</string>
 </resources>
