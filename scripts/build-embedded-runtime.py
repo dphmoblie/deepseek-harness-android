@@ -46,6 +46,10 @@ PROFILE_BUNDLE_NAMES = (
 )
 PNPM_VERSION = "11.19.0"
 PNPM_ENTRYPOINT = PurePosixPath("node_modules/pnpm/bin/pnpm.cjs")
+NPM_EXECUTABLE_PATHS = (
+    PurePosixPath("node_modules/@vscode/ripgrep-linux-arm64/bin/rg"),
+    PurePosixPath("node_modules/@deepseek-ai/node-addon-system-linux-arm64/bin/landlock-run"),
+)
 PNPM_WRAPPER = (
     b"#!/bin/sh\n"
     b'exec /opt/node/bin/node /opt/dsh/node_modules/pnpm/bin/pnpm.cjs "$@"\n'
@@ -457,6 +461,15 @@ def skip_runtime_path(
     return False
 
 
+def is_npm_executable(relative: PurePosixPath) -> bool:
+    # 安全校验点：仅对指定包的完整入口路径授予执行位，避免扩大到相邻数据文件。
+    # 固定权限不依赖 Windows/POSIX 源目录的 mode，保证两种构建主机产物一致。
+    return any(
+        relative.parts[-len(entry.parts):] == entry.parts
+        for entry in NPM_EXECUTABLE_PATHS
+    )
+
+
 def add_windows_tree(
     writer: RootfsWriter,
     source_root: Path,
@@ -524,10 +537,11 @@ def add_windows_tree(
             info = tarfile.TarInfo(archive_name)
             info.size = file_stat.st_size
             relative_posix = PurePosixPath(local_relative.as_posix())
-            info.mode = 0o755 if any(
+            executable = is_npm_executable(PurePosixPath(archive_name)) or any(
                 relative_posix == prefix or prefix in relative_posix.parents
                 for prefix in executable_prefixes
-            ) else 0o644
+            )
+            info.mode = 0o755 if executable else 0o644
             info.uid = 0
             info.gid = 0
             info.uname = "root"
