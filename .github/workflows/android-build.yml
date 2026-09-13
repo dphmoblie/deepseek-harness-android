@@ -235,6 +235,7 @@ jobs:
           cp scripts/runtime-profile/package.json scripts/runtime-profile/pnpm-lock.yaml \
             scripts/runtime-profile/pnpm-workspace.yaml /tmp/dsh-root/
           cp -R scripts/runtime-profile/plugins /tmp/dsh-root/
+          cp -R scripts/runtime-profile/patches /tmp/dsh-root/
           cd /tmp/dsh-root
           set +e
           (
