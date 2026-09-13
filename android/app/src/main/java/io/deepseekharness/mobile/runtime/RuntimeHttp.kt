@@ -4,6 +4,7 @@ import okhttp3.Dns
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import io.deepseekharness.mobile.BuildConfig
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -310,7 +311,8 @@ class RuntimeHttp {
                 Request.Builder()
                     .url(current.toASCIIString())
                     .header("Accept-Encoding", "identity")
-                    .header("User-Agent", "DeepSeekHarnessMobile/0.1.8")
+                    // 版本号只从 BuildConfig 取，避免这里再写死一个跟不上发布的版本。
+                    .header("User-Agent", "DeepSeekHarnessMobile/${BuildConfig.VERSION_NAME}")
                     .also { builder -> rangeStart?.let { builder.header("Range", "bytes=$it-") } }
                     .get()
                     .build()

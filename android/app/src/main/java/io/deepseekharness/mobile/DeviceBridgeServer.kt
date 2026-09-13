@@ -171,6 +171,9 @@ class DeviceBridgeServer(
                         DEFAULT_ROWS,
                         suppressPublicOutput = true,
                         permitted = running::get,
+                        // 会话退出（Shell 死亡 / Shizuku 断开）后不会再有输出：
+                        // 在途的设备命令立刻按协议错误收口，不必空等到 60 秒超时。
+                        onSessionExit = { id -> runner.onSessionExit(id) },
                     )
                     try {
                         val result = runner.execute(sessionId, command, param, COMMAND_TIMEOUT_MS)

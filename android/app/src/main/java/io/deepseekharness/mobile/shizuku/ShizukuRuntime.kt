@@ -125,7 +125,10 @@ class ShizukuRuntime(
         Shizuku.addBinderDeadListener(binderDeadListener, mainHandler)
     }
 
-    private fun callback(suppressPublicOutput: Boolean) = object : IDeviceShellCallback.Stub() {
+    private fun callback(
+        suppressPublicOutput: Boolean,
+        onSessionExit: ((String) -> Unit)?,
+    ) = object : IDeviceShellCallback.Stub() {
         override fun onOutput(sessionId: String?, data: ByteArray?) {
             if (sessionId == null || !SESSION_PATTERN.matches(sessionId) || data == null || data.isEmpty() || data.size > 32 * 1024) return
             onOutput(sessionId, Base64.getEncoder().encodeToString(data), suppressPublicOutput)
@@ -134,7 +137,13 @@ class ShizukuRuntime(
         override fun onExit(sessionId: String?, exitCode: Int) {
             if (sessionId != null && SESSION_PATTERN.matches(sessionId)) {
                 sessions.remove(sessionId)
-                if (!suppressPublicOutput) onExit(sessionId, exitCode.coerceIn(0, 255))
+                // 设备命令会话（suppressPublicOutput=true）不向终端 UI 广播退出事件，
+                // 但会话内的在途设备命令必须立刻知道「不会再有输出了」，
+                // 否则「BEGIN 已出现、END 永不到来」只能拖到 60 秒超时。
+                onSessionExit?.invoke(sessionId)
+                // 必须带外层限定符：裸写 onExit(...) 会解析到本对象自己的 onExit，
+                // 变成无限递归并抛 StackOverflowError，退出事件永远送不到运行时。
+                if (!suppressPublicOutput) this@ShizukuRuntime.onExit(sessionId, exitCode.coerceIn(0, 255))
             }
         }
     }
@@ -277,6 +286,7 @@ class ShizukuRuntime(
         rows: Int,
         suppressPublicOutput: Boolean = false,
         permitted: () -> Boolean = { true },
+        onSessionExit: ((String) -> Unit)? = null,
     ): String {
         UbuntuTerminalManager.validateSize(columns, rows)
         if (!permitted()) throw RuntimeFailure("DEVICE_BRIDGE_STOPPED", "设备桥已停止")
@@ -284,7 +294,7 @@ class ShizukuRuntime(
         val current = requireService(permitted)
         if (!permitted()) throw RuntimeFailure("DEVICE_BRIDGE_STOPPED", "设备桥已停止")
         val id = try {
-            current.createSession(columns, rows, callback(suppressPublicOutput))
+            current.createSession(columns, rows, callback(suppressPublicOutput, onSessionExit))
         } catch (error: RemoteException) {
             service = null
             throw RuntimeFailure("SHIZUKU_SERVICE_FAILED", "无法创建设备 Shell", error)

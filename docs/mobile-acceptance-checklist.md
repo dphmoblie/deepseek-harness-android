@@ -71,6 +71,15 @@
 - [ ] 杀死 binder/UserService 后现有设备会话退出，状态回到未连接；再次连接可恢复。
 - [ ] 设备 Shell 的 uid 为 Android shell 权限而非 root；固定 `/system/bin/sh`，无隐藏后台通用命令入口。
 - [ ] screencap、uiautomator、tap、inputText 仅通过已有可见设备会话和固定白名单执行。
+
+> 说明：`screencap / uiautomator / tap / inputText` 四项**必须真机验收后才能勾选**。
+> JVM 单测（`DeviceCommandProtocolTest`、`DeviceCommandRunnerTest`）只固定「给定这样一段
+> 字节流，解析必须得到什么结果」，无法覆盖 PTY 回显、mksh 行编辑器（它无视 `stty -echo`）
+> 与 Shizuku UserService 的真实行为。协议、错误码分级与旧方案失败原因见
+> `docs/设备工具与PTY协议.md`。验收要点：截图返回可解码的 PNG；`tap` 不再 60 秒超时；
+> 1 个字符的 `inputText` 不再超时；`uiDump` 给出 `UI_DUMP_FAILED` / `UI_DUMP_EMPTY` /
+> `UI_DUMP_NO_TOOL` 之类的**明确**错误码，而不是统一的 `DEVICE_COMMAND_FAILED`。
+
 - [ ] 关闭/卸载 Shizuku 后「后台保持」相关状态显示“设备 Shell 辅助：不可用”，不影响 Harness 与后台保持。
 - [ ] 设置页明确说明 Shizuku 不是 root，也不提供永久保活能力。
 
