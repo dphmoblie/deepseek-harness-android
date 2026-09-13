@@ -157,13 +157,19 @@ class RuntimeStore(context: Context) {
      * 这里刻意不保存任何凭据——Harness 的临时 Basic Auth 密码只存在于进程内存中。
      * Android 进程被系统强制停止后，该密码不可恢复，恢复流程必须据此提示重新连接，
      * 而不是假装旧会话仍在。
+     *
+     * 必须同步落盘（[android.content.SharedPreferences.Editor.commit]）：这条记录是
+     * 进程消失后判定「上次是否正常结束」的唯一依据，而进程消失恰恰可能紧跟在写入之后
+     * （正常退出后立即被系统或厂商清理；实测 MIUI 上出现过正常退出仍被误判为
+     * unclean_exit 的案例）。异步 apply 的磁盘写可能来不及完成就随进程丢失。
+     * 写入是低频的（仅在阶段变化时触发），commit 的开销可忽略。
      */
     fun recordRuntimeIntent(intent: RuntimeIntent, phase: RuntimePhase, updatedAtMillis: Long) {
         preferences.edit()
             .putString(KEY_RUNTIME_INTENT, intent.wireValue)
             .putString(KEY_RUNTIME_PHASE, phase.wireValue)
             .putLong(KEY_RUNTIME_UPDATED_AT, updatedAtMillis.coerceAtLeast(0))
-            .apply()
+            .commit()
     }
 
     /** 读取运行时恢复记录；从未记录或内容损坏时返回 [RuntimeIntentRecord.EMPTY]。 */
