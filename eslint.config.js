@@ -17,6 +17,9 @@ export default tseslint.config(
       // 进而让 CI 的 Lint 步骤失败 —— 故在此显式排除。
       'scripts/runtime-profile/.patch-source',
       'scripts/runtime-profile/.pnpm-pi-ai-patch',
+      // 本地排查与素材生成的临时产物目录：已被 .gitignore 忽略，不是本仓库源码。
+      // 其中的解包依赖同样不在任何 tsconfig 的 project 内，会让本地 lint 直接报错。
+      'output',
       '*.config.js',
       '*.config.d.ts',
       '*.tsbuildinfo',

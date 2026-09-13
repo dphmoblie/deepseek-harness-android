@@ -1,3 +1,4 @@
+import appMark from './assets/app-mark.png'
 import { t, useLanguage } from './i18n'
 import { PluginSettings } from './components/PluginSettings'
 import { LanguageSettings } from './components/LanguageSettings'
@@ -22,7 +23,6 @@ import {
   KeyRound,
   Loader2,
   LockKeyhole,
-  MonitorSmartphone,
   Play,
   Power,
   RefreshCw,
@@ -36,7 +36,6 @@ import {
   Square,
   SquareTerminal,
   Trash2,
-  Waves,
   Wifi,
   X,
 } from 'lucide-react'
@@ -370,7 +369,7 @@ function errorMessage(error: unknown): string {
 function Brand() {
   return (
     <div className="brand" aria-label="DeepSeek Harness">
-      <span className="brand-symbol" aria-hidden="true"><Waves size={22} strokeWidth={2.3} /></span>
+      <span className="brand-symbol" aria-hidden="true"><img src={appMark} alt="" width={26} height={26} /></span>
       <span className="brand-name">deepseek</span>
       <span className="brand-badge">HARNESS</span>
     </div>
@@ -466,7 +465,7 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onO
 
       <section className="launch-panel">
         <span className="launch-icon" aria-hidden="true">
-          {busy === 'launch' || transitioning ? <Loader2 className="spin" size={30} /> : updateRequired ? <RefreshCw size={30} /> : <Bot size={30} />}
+          {busy === 'launch' || transitioning ? <Loader2 className="spin" size={30} /> : updateRequired ? <RefreshCw size={30} /> : <img src={appMark} alt="" width={38} height={38} />}
         </span>
         <div className="launch-copy">
           <h2>
@@ -600,7 +599,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
 
       <section className="runtime-overview">
         <div className="runtime-title-row">
-          <span className="runtime-logo" aria-hidden="true"><MonitorSmartphone size={27} /></span>
+          <span className="runtime-logo" aria-hidden="true"><img src={appMark} alt="" width={34} height={34} /></span>
           <div>
             <h2>Ubuntu 24.04</h2>
             <p>{runtime.installedVersion === undefined ? t("等待安装") : t("运行时 {0}", runtime.installedVersion)}</p>

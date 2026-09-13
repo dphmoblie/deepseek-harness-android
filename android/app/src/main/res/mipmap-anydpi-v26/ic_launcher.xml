@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 自适应图标：背景与前景均使用位图，由系统按启动器形状裁切。
+     前景主体宽度占 108dp 画布的 56%，落在中心 66dp 安全区内，
+     因此在圆形与圆角方形遮罩下都不会被裁到。 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@color/launcher_background" />
-    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
 </adaptive-icon>
