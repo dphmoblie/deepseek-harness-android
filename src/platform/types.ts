@@ -183,6 +183,14 @@ export const DIAGNOSTIC_RETENTION_MIN = 1
 export const DIAGNOSTIC_RETENTION_MAX = 30
 export const DIAGNOSTIC_RETENTION_DEFAULT = 3
 
+/**
+ * 界面接受的运行日志字符数上限。
+ *
+ * 原生侧已按 8 KB 字节（UTF-8 边界）截断后回传；这里是前端校验的兜底：
+ * 留出多字节字符与换行差异的余量，异常载荷不允许把界面撑爆。
+ */
+export const HARNESS_LOG_MAX_CHARS = 32 * 1024
+
 export interface TerminalChunk {
   sessionId: string
   dataBase64: string
@@ -238,6 +246,12 @@ export interface RuntimeBridge {
   shareDiagnosticLog: () => Promise<DiagnosticLogExport>
   /** 清空全部诊断日志。 */
   clearDiagnosticLog: () => Promise<DiagnosticLogState>
+  /**
+   * 读取访客进程输出的尾部（只读、不落盘）。
+   *
+   * 可能包含会话内容：只在设备上的界面里展示，不写入诊断日志，也不随诊断日志导出。
+   */
+  getHarnessLog: () => Promise<HarnessLog>
   addRuntimeProgressListener: (listener: (event: RuntimeProgress) => void) => Promise<ListenerHandle>
   addTerminalOutputListener: (listener: (event: TerminalChunk) => void) => Promise<ListenerHandle>
   addTerminalExitListener: (listener: (event: TerminalExit) => void) => Promise<ListenerHandle>

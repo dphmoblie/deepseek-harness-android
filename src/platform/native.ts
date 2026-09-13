@@ -9,6 +9,7 @@ import type {
   DeviceCommandResult,
   DiagnosticLogExport,
   DiagnosticLogState,
+  HarnessLog,
   KeepAliveState,
   NotificationPermissionResult,
   RuntimeBridge,
@@ -33,6 +34,7 @@ import {
   validateDeviceCommandResult,
   validateDiagnosticLogExport,
   validateDiagnosticLogState,
+  validateHarnessLog,
   validateKeepAliveState,
   validateNotificationPermissionResult,
   validateRuntimeProgress,
@@ -69,6 +71,7 @@ interface NativeRuntimePlugin {
   openShizuku(): Promise<void>
   getKeepAliveState(): Promise<KeepAliveState>
   requestNotificationPermission(): Promise<NotificationPermissionResult>
+  getHarnessLog(): Promise<HarnessLog>
   getDiagnosticLogState(): Promise<DiagnosticLogState>
   setDiagnosticLogSettings(options: { enabled: boolean; retentionDays: number }): Promise<DiagnosticLogState>
   shareDiagnosticLog(): Promise<DiagnosticLogExport>
@@ -139,6 +142,7 @@ function createNativeBridge(): RuntimeBridge {
     openShizuku: () => NativeRuntime.openShizuku(),
     getKeepAliveState: () => NativeRuntime.getKeepAliveState().then(validateKeepAliveState),
     requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),
+    getHarnessLog: () => NativeRuntime.getHarnessLog().then(validateHarnessLog),
     getDiagnosticLogState: () => NativeRuntime.getDiagnosticLogState().then(validateDiagnosticLogState),
     setDiagnosticLogSettings: (enabled, retentionDays) => {
       const days = assertDiagnosticRetentionDays(retentionDays)

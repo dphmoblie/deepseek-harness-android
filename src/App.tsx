@@ -8,8 +8,11 @@ import {
   BellRing,
   Bot,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   CloudDownload,
+  Copy,
   Cpu,
   Database,
   Download,
@@ -44,6 +47,7 @@ import { CustomProviders } from './components/CustomProviders'
 import { runtimeBridge } from './platform/native'
 import type {
   DiagnosticLogState,
+  HarnessLog,
   KeepAliveState,
   ModelProviderId,
   ProviderApiKeys,
@@ -856,11 +860,142 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
   )
 }
 
+interface HarnessLogPanelProps {
+  /** 读取访客进程输出尾部；只在用户展开区块时调用。 */
+  loadHarnessLog: () => Promise<HarnessLog>
+}
+
+/**
+ * 「运行日志（最近 8 KB）」折叠区块。
+ *
+ * 为什么需要它：工具调用失败时界面只显示一句不带栈信息的报错，唯一线索是访客进程
+ * 自己打在 stdout/stderr 上的完整输出（异常栈、插件加载报错等）。
+ *
+ * 隐私边界：这段文本来自访客进程，**可能包含会话内容**（工具参数、代码片段等），
+ * 因此只在本机界面展示 —— 不写入诊断日志、不新增诊断事件，也不随诊断日志导出。
+ * 也正因如此，读取是**按需**的：折叠状态下不碰桥接，展开时才去取一次最新尾部。
+ */
+function HarnessLogPanel({ loadHarnessLog }: HarnessLogPanelProps) {
+  const [open, setOpen] = useState(false)
+  const [log, setLog] = useState<HarnessLog | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
+  const copyResetTimer = useRef(0)
+
+  useEffect(() => () => window.clearTimeout(copyResetTimer.current), [])
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setLoading(true)
+    setFailed(false)
+    setCopied(false)
+    setCopyFailed(false)
+    void loadHarnessLog()
+      .then(next => { if (!cancelled) setLog(next) })
+      .catch(() => {
+        // 读取失败时不保留上一次的内容：界面要么显示本次真实结果，要么明确说读不到。
+        if (!cancelled) { setLog(null); setFailed(true) }
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    // 折叠回来时丢弃在途结果，避免收起后又被异步写回内容。
+    return () => { cancelled = true }
+  }, [loadHarnessLog, open])
+
+  // 复用终端面板同一套剪贴板实现：不额外引入依赖。
+  const copyHarnessLog = useCallback(() => {
+    if (log === null || !log.available || log.text === '') return
+    void (async () => {
+      try {
+        await navigator.clipboard.writeText(log.text)
+        setCopied(true)
+        setCopyFailed(false)
+        window.clearTimeout(copyResetTimer.current)
+        copyResetTimer.current = window.setTimeout(() => setCopied(false), 1500)
+      } catch {
+        setCopyFailed(true)
+      }
+    })()
+  }, [log])
+
+  const hasText = log !== null && log.available && log.text !== ''
+
+  return (
+    <section className="settings-section harness-log-section" aria-labelledby="harness-log-title">
+      <button
+        className="harness-log-toggle"
+        type="button"
+        aria-expanded={open}
+        aria-controls="harness-log-body"
+        onClick={() => setOpen(current => !current)}
+      >
+        <span className="section-icon"><ScrollText size={19} /></span>
+        <span className="harness-log-heading">
+          <strong id="harness-log-title">{t("运行日志（最近 8 KB）")}</strong>
+          <small>{t("访客进程输出尾部，用于排查工具调用失败")}</small>
+        </span>
+        {open ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+      </button>
+
+      {/*
+        折叠时只保留一个空的隐藏容器：aria-controls 指向的元素始终存在，
+        内容与读取都只在展开后发生。
+      */}
+      <div className="harness-log-body" id="harness-log-body" hidden={!open}>
+        {open && (
+        <>
+          <p className="settings-note">
+            {t("这段内容来自访客进程输出，可能包含会话内容，仅供排障；它只在设备上的界面里显示，不会写入诊断日志，也不随诊断日志导出。")}
+          </p>
+
+          {loading && (
+            <p className="harness-log-state"><Loader2 className="spin" size={16} />{t("正在读取运行日志…")}</p>
+          )}
+          {!loading && failed && (
+            <p className="harness-log-state" role="alert">{t("读取运行日志失败，请稍后重试")}</p>
+          )}
+          {!loading && !failed && log !== null && !log.available && (
+            <p className="harness-log-state">{t("当前没有可读取的运行日志")}</p>
+          )}
+          {!loading && !failed && log !== null && log.available && log.text === '' && (
+            <p className="harness-log-state">{t("访客进程最近没有输出")}</p>
+          )}
+
+          {!loading && !failed && hasText && (
+            <>
+              {/*
+                访客输出一律按纯文本渲染：React 只把它写成文本节点，标签不会被解析。
+                这里绝不能改成 dangerouslySetInnerHTML —— 内容来自访客进程，不是受控文案。
+              */}
+              <pre className="harness-log-output">{log.text}</pre>
+              <div className="settings-inline-actions">
+                <button className="button button-secondary" type="button" onClick={copyHarnessLog}>
+                  {copied ? <CheckCircle2 size={18} /> : <Copy size={18} />}
+                  {copied ? t("已复制") : t("复制")}
+                </button>
+              </div>
+            </>
+          )}
+
+          {copyFailed && (
+            <p className="harness-log-state" role="alert">{t("复制失败，请长按选择文本后复制")}</p>
+          )}
+        </>
+        )}
+      </div>
+    </section>
+  )
+}
+
 interface SettingsScreenProps {
   busy: string | null
   /** 诊断日志状态：与设置草稿独立，由原生侧直接管理。 */
   diagnostic: DiagnosticLogState
   keepAlive: KeepAliveState
+  /** 读取访客进程输出尾部；由折叠区块在展开时按需调用。 */
+  loadHarnessLog: () => Promise<HarnessLog>
   page: SettingsPage
   runtime: RuntimeState
   settings: RuntimeSettings | null
@@ -877,7 +1012,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ busy, diagnostic, keepAlive, page, runtime, settings, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onOpenShizuku, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, runtime, settings, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onOpenShizuku, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
   const [draft, setDraft] = useState<RuntimeSettings | null>(settings)
   const [selectedProvider, setSelectedProvider] = useState<ModelProviderId | 'custom'>('deepseek')
   const [credentialDrafts, setCredentialDrafts] = useState<ProviderApiKeys>({})
@@ -1187,6 +1322,7 @@ function SettingsScreen({ busy, diagnostic, keepAlive, page, runtime, settings, 
         )}
 
         {page === 'diagnostics' && (
+        <>
         <section className="settings-section" aria-labelledby="diagnostic-settings">
           <div className="section-title section-title-action">
             <span className="section-icon"><ScrollText size={19} /></span>
@@ -1240,6 +1376,9 @@ function SettingsScreen({ busy, diagnostic, keepAlive, page, runtime, settings, 
               {busy === 'diagnostic-clear' ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}{t("清空日志")}</button>
           </div>
         </section>
+        {/* 运行日志与诊断日志是两回事：前者是访客输出尾部，只在界面展示、不进导出。 */}
+        <HarnessLogPanel loadHarnessLog={loadHarnessLog} />
+        </>
         )}
 
         {(page === 'models' || page === 'runtime' || page === 'terminal') && (
@@ -1682,6 +1821,14 @@ export function App() {
     }, t("诊断日志已清空"))
   }, [run])
 
+  /**
+   * 读取访客进程输出尾部。
+   *
+   * 只由诊断页的折叠区块在展开时调用：进入设置页不读取，避免把可能含会话内容的
+   * 文本无谓地带进界面。引用保持稳定，折叠区块的副作用不会因此重复触发。
+   */
+  const loadHarnessLog = useCallback(() => runtimeBridge.getHarnessLog(), [])
+
   const stopRuntime = useCallback(() => {
     void run('stop', async () => {
       const next = await runtimeBridge.stopRuntime()
@@ -1782,7 +1929,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} page={page} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onOpenShizuku={openShizuku} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} loadHarnessLog={loadHarnessLog} page={page} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onOpenShizuku={openShizuku} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

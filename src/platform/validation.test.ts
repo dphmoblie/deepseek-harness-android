@@ -7,6 +7,7 @@ import {
   assertTerminalSize,
   validateDiagnosticLogExport,
   validateDiagnosticLogState,
+  validateHarnessLog,
   validateKeepAliveState,
   validateNotificationPermissionResult,
   validateRuntimeProgress,
@@ -19,7 +20,7 @@ import {
   validateTerminalChunk,
   validateTerminalExit,
 } from './validation'
-import { DIAGNOSTIC_RETENTION_MAX, DIAGNOSTIC_RETENTION_MIN } from './types'
+import { DIAGNOSTIC_RETENTION_MAX, DIAGNOSTIC_RETENTION_MIN, HARNESS_LOG_MAX_CHARS } from './types'
 
 const ipv4 = (...octets: number[]): string => octets.join('.')
 
@@ -404,5 +405,29 @@ describe('诊断日志校验', () => {
     expect(() => validateDiagnosticLogExport({ ...base, fileName: 'a b.txt' })).toThrow('文件名')
     expect(() => validateDiagnosticLogExport({ ...base, fileName: '' })).toThrow('文件名')
     expect(() => validateDiagnosticLogExport({ ...base, fileName: 'ok.txt' })).toThrow('导出字节数')
+  })
+})
+
+describe('运行日志校验', () => {
+  it('接受可用的尾部文本与不可用时的空内容', () => {
+    const text = 'Error: tool call failed\n    at run (dsh.js:1:1)'
+    expect(validateHarnessLog({ available: true, text })).toEqual({ available: true, text })
+    // 运行时不持有 Harness 输出时如实返回不可用，且 text 为空串。
+    expect(validateHarnessLog({ available: false, text: '' })).toEqual({ available: false, text: '' })
+  })
+
+  it('拒绝类型错误与自相矛盾的载荷', () => {
+    expect(() => validateHarnessLog(null)).toThrow('运行日志')
+    expect(() => validateHarnessLog({ available: 'yes', text: '' })).toThrow('可用状态')
+    expect(() => validateHarnessLog({ available: true, text: 42 })).toThrow('内容格式')
+    // 「不可用却带内容」是异常载荷：不接受，避免界面按 available 判定后又渲染出文本。
+    expect(() => validateHarnessLog({ available: false, text: '不该出现的内容' })).toThrow('不一致')
+  })
+
+  it('拒绝超长文本，边界值按字符数放行', () => {
+    expect(validateHarnessLog({ available: true, text: 'x'.repeat(HARNESS_LOG_MAX_CHARS) }).text)
+      .toHaveLength(HARNESS_LOG_MAX_CHARS)
+    expect(() => validateHarnessLog({ available: true, text: 'x'.repeat(HARNESS_LOG_MAX_CHARS + 1) }))
+      .toThrow('长度')
   })
 })

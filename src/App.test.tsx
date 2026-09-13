@@ -22,6 +22,7 @@ const bridge = vi.hoisted(() => ({
   openShizuku: vi.fn(),
   getKeepAliveState: vi.fn(),
   requestNotificationPermission: vi.fn(),
+  getHarnessLog: vi.fn(),
   getDiagnosticLogState: vi.fn(),
   setDiagnosticLogSettings: vi.fn(),
   shareDiagnosticLog: vi.fn(),
@@ -111,6 +112,7 @@ beforeEach(() => {
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
   bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive })
   bridge.requestNotificationPermission.mockResolvedValue({ granted: true, supported: true })
+  bridge.getHarnessLog.mockResolvedValue({ available: true, text: 'Error: tool call failed\n    at run (dsh.js:1:1)' })
   bridge.getDiagnosticLogState.mockResolvedValue({ ...diagnostic })
   bridge.setDiagnosticLogSettings.mockImplementation((enabled: boolean, retentionDays: number) =>
     Promise.resolve({ ...diagnostic, enabled, retentionDays }))
@@ -533,6 +535,62 @@ describe('诊断与日志', () => {
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('当前没有可导出的诊断日志')
     expect(bridge.getDiagnosticLogState).toHaveBeenCalled()
+  })
+
+  it('运行日志折叠时不读取，展开后才按需读取并按纯文本渲染', async () => {
+    const payload = '<img src=x onerror=alert(1)>\nError: tool call failed'
+    bridge.getHarnessLog.mockResolvedValue({ available: true, text: payload })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    openSettingsPage('诊断与日志')
+    const toggle = await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    // 折叠状态不碰桥接：访客输出可能含会话内容，不展开就不带进界面。
+    expect(bridge.getHarnessLog).not.toHaveBeenCalled()
+    expect(document.querySelector('.harness-log-output')).toBeNull()
+
+    fireEvent.click(toggle)
+    await waitFor(() => expect(bridge.getHarnessLog).toHaveBeenCalledTimes(1))
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    // 隐私边界必须在界面上写清，而不是只藏在文档里。
+    expect(screen.getByText(/可能包含会话内容/)).toBeVisible()
+    expect(screen.getByText(/不随诊断日志导出/)).toBeVisible()
+
+    const output = document.querySelector('.harness-log-output')
+    expect(output).not.toBeNull()
+    // 访客输出按纯文本渲染：标签不解析，只作为文本出现，也不会产生 img 元素。
+    expect(output?.querySelector('img')).toBeNull()
+    expect(output?.textContent).toBe(payload)
+  })
+
+  it('没有可读取的运行日志时给出提示并隐藏复制按钮', async () => {
+    bridge.getHarnessLog.mockResolvedValue({ available: false, text: '' })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    openSettingsPage('诊断与日志')
+    fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
+
+    expect(await screen.findByText('当前没有可读取的运行日志')).toBeVisible()
+    expect(screen.queryByRole('button', { name: '复制' })).toBeNull()
+    expect(document.querySelector('.harness-log-output')).toBeNull()
+  })
+
+  it('展开后可用一键复制运行日志，复用系统剪贴板', async () => {
+    const payload = 'Error: TOOL_CALL_FAILED\n    at handler (dsh.js:42:7)'
+    bridge.getHarnessLog.mockResolvedValue({ available: true, text: payload })
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    openSettingsPage('诊断与日志')
+    fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
+
+    fireEvent.click(await screen.findByRole('button', { name: '复制' }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(payload))
+    expect(await screen.findByText('已复制')).toBeVisible()
   })
 })
 

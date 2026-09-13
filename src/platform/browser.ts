@@ -1,6 +1,7 @@
 import { validatePluginRequest } from './plugins'
 import type {
   DiagnosticLogState,
+  HarnessLog,
   KeepAliveState,
   ListenerHandle,
   ModelProviderId,
@@ -232,6 +233,8 @@ export function createBrowserBridge(): RuntimeBridge {
       lastIntent: state.phase === 'running' ? 'running' : 'stopped',
     }),
     requestNotificationPermission: () => Promise.resolve({ granted: false, supported: false }),
+    // 浏览器预览里没有访客进程，也就没有可读的输出尾部：如实返回不可用，不编造内容。
+    getHarnessLog: (): Promise<HarnessLog> => Promise.resolve({ available: false, text: '' }),
     // 浏览器预览没有原生诊断日志：保持关闭且不可导出，避免给出「已经采集到东西」的错觉。
     getDiagnosticLogState: (): Promise<DiagnosticLogState> => Promise.resolve({ ...diagnosticState }),
     setDiagnosticLogSettings: (enabled: boolean, retentionDays: number) => {
