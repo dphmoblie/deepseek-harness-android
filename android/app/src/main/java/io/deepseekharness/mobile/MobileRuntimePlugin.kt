@@ -15,6 +15,7 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
+import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
 import io.deepseekharness.mobile.runtime.DeviceBridgeAccess
 import io.deepseekharness.mobile.runtime.RuntimeEventSink
@@ -622,6 +623,28 @@ class MobileRuntimePlugin : Plugin() {
                 .put("granted", notificationPermissionGranted())
                 .put("supported", true),
         )
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 返回 Harness 访客进程 stdout/stderr 的有界尾部（默认 8192 字节，按 UTF-8 字符边界截断），
+     * 供设置页的「运行日志」展示。
+     *
+     * 为什么需要它：工具调用失败时界面往往只显示一句没有栈的 JS 报错，排查无法进行；
+     * 而 dsh 自己打印的完整异常就在访客进程输出里，此前被有界缓冲保留、却没有任何出口。
+     *
+     * 隐私边界：这段文本可能包含会话内容，因此**只回传当前界面**——
+     * 不写入诊断日志、不新增诊断事件或字段、不落盘、不随诊断日志导出。
+     * 运行时不持有 Harness 输出时如实返回 available=false，不猜造内容。
+     */
+    @PluginMethod
+    fun getHarnessLog(call: PluginCall) {
+        resolveWhileActive(call) {
+            val text = HarnessOutputTailSource.read()
+            JSObject()
+                .put("available", text != null)
+                .put("text", text.orEmpty())
+        }
     }
 
     /**

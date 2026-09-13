@@ -59,6 +59,7 @@ android/gradle/wrapper/gradle-wrapper.jar
 
 # Downloaded runtimes, logs, and temporary files
 runtime-cache/
+.pnpm-pi-ai-patch/
 *.rootfs
 *.tar
 *.tar.gz

@@ -1,0 +1,38 @@
+diff --git a/dist/api/transform-messages.js b/dist/api/transform-messages.js
+index 6aa6aa2bb660194e64a06d5dc98f61862311f210..dbd611993c32e9e77f2d190c98b847a3c4555e51 100644
+--- a/dist/api/transform-messages.js
++++ b/dist/api/transform-messages.js
+@@ -126,6 +126,7 @@ export function transformMessages(messages, model, normalizeToolCallId) {
+     // This preserves thinking signatures and satisfies API requirements
+     const result = [];
+     let pendingToolCalls = [];
++    let pendingToolCallIds = new Set();
+     let existingToolResultIds = new Set();
+     const insertSyntheticToolResults = () => {
+         if (pendingToolCalls.length > 0) {
+@@ -142,6 +143,7 @@ export function transformMessages(messages, model, normalizeToolCallId) {
+                 }
+             }
+             pendingToolCalls = [];
++            pendingToolCallIds = new Set();
+             existingToolResultIds = new Set();
+         }
+     };
+@@ -163,11 +165,18 @@ export function transformMessages(messages, model, normalizeToolCallId) {
+             const toolCalls = assistantMsg.content.filter((b) => b.type === "toolCall");
+             if (toolCalls.length > 0) {
+                 pendingToolCalls = toolCalls;
++                pendingToolCallIds = new Set(toolCalls.map((toolCall) => toolCall.id));
+                 existingToolResultIds = new Set();
+             }
+             result.push(msg);
+         }
+         else if (msg.role === "toolResult") {
++            // OpenAI 要求每个紧邻的 assistant 工具调用都有且只有一个响应。
++            // 丢弃过期或重复结果，避免向接口转发无效消息序列。
++            if (!pendingToolCallIds.has(msg.toolCallId) || existingToolResultIds.has(msg.toolCallId)) {
++                continue;
++            }
+             existingToolResultIds.add(msg.toolCallId);
+             result.push(msg);
+         }

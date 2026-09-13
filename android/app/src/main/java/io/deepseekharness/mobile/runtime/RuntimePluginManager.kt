@@ -87,9 +87,56 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         }
     }
 
+    /**
+     * 只读模块图探测：统计访客里 `@deepseek-ai/dsh-tools` 出现了几处，以及**不同真实路径数**。
+     *
+     * 返回 `{ total, realCopies, links, distinctRealpaths }`，**只有计数、没有任何路径**。
+     *
+     * 与 [repairInstalledIfNeeded] 的区别：本方法只读、不改动任何文件，也不参与代次指纹，
+     * 因此可以在每次 Harness 启动前独立触发。
+     */
+    fun scanModuleGraph(): JSObject = run("graph", null, null, null)
+
+    /**
+     * 探测并把结果写进诊断日志（只记计数，见 [DiagnosticEvent.MODULE_GRAPH]）。
+     *
+     * 判据是 `distinctRealpaths`（不同真实路径数），不是出现次数：同一个真实目录被多个链接
+     * 引用多少次都只算一份，只有真正出现**两份物理副本**时才会 > 1 —— 那正是
+     * `ctx.tools[调度器 Symbol]` 取到 undefined、所有工具调用在 `.prepare` 上抛错的成因。
+     *
+     * 每次 Harness 启动都探测，不按代次缓存。理由：探测只读、只遍历固定候选根且有深度与
+     * 条目上限，代价与一次插件列表读取相当；而按代次缓存会在「装了新插件」这种不换代次、
+     * 却最容易产生第二份副本的场景下给出过期结论 —— 诊断日志必须回答的是**当场**有几份。
+     * 探测失败不抛给调用方（run() 已把失败转成受控错误码），也不能让 Harness 启动失败。
+     */
+    fun recordModuleGraph() {
+        try {
+            val summary = scanModuleGraph()
+            val distinct = summary.optInt("distinctRealpaths", 0)
+            val duplicated = distinct > 1
+            store.diagnostics.record(
+                if (duplicated) DiagnosticLevel.WARN else DiagnosticLevel.INFO,
+                DiagnosticEvent.MODULE_GRAPH,
+                mapOf(
+                    "result" to if (duplicated) "failed" else "ok",
+                    "count" to distinct.toString(),
+                    "files" to summary.optInt("total", 0).toString(),
+                ),
+            )
+        } catch (_: Exception) {
+            // 探测本身失败：用受控码与 result=denied 区分于上面的「确实有两份」（result=failed），
+            // 避免把一次失败的探测误读成判据成立。
+            store.diagnostics.record(
+                DiagnosticLevel.WARN,
+                DiagnosticEvent.MODULE_GRAPH,
+                mapOf("result" to "denied", "count" to "0", "code" to "PROBE_FAILED"),
+            )
+        }
+    }
+
     fun run(operation: String, id: String?, enabled: Boolean?, childId: String?): JSObject {
-        if (operation !in setOf("list", "enable", "child", "update", "recover", "repair")) invalid()
-        if (operation !in setOf("list", "recover", "repair")) {
+        if (operation !in setOf("list", "enable", "child", "update", "recover", "repair", "graph")) invalid()
+        if (operation !in setOf("list", "recover", "repair", "graph")) {
             if (id == null || id.length !in 1..214 || !PACKAGE.matches(id) || ".." in id) invalid()
             if (operation in setOf("enable", "child") && enabled == null) invalid()
             if (operation == "child" && (childId == null || !ENTRY.matches(childId))) invalid()
@@ -104,6 +151,8 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             "update" -> 250L
             // 修复要遍历已安装的插件目录，给足时间但仍是有限等待。
             "repair" -> 90L
+            // 模块图探测是只读遍历（有深度与条目上限），不需要修复那么长的等待。
+            "graph" -> 30L
             else -> 30L
         }
         val result = ProcessProbe.run(resolver.launch(argv), store.currentRoot, timeoutSeconds, outputLimit = 256 * 1024)
@@ -132,6 +181,11 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         }
         // 修复只回传计数（处理了多少个包、失败多少个），没有插件清单。
         if (operation == "repair" && payload.optInt("scanned", -1) < 0) {
+            throw RuntimeFailure("PLUGIN_OPERATION_FAILED", "插件返回数据无效")
+        }
+        // 模块图探测同样只回传计数。判据字段是「不同真实路径数」：缺失或为负说明载荷不可信，
+        // 宁可报错也不能把 0 当成「只有一份」写进诊断日志。
+        if (operation == "graph" && payload.optInt("distinctRealpaths", -1) < 0) {
             throw RuntimeFailure("PLUGIN_OPERATION_FAILED", "插件返回数据无效")
         }
         return payload

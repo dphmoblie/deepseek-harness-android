@@ -44,6 +44,48 @@ const RECONCILE_MAX_PACKAGES = 512
 const REPAIR_MAX_VERSIONS = 64
 const TRANSACTION_ID = /^[a-f0-9-]{36}$/
 
+/**
+ * 模块图探测的目标包与它的作用域。
+ *
+ * `dsh-tools` 是**带 Symbol 服务身份**的模块：`Symbol('@deepseek-ai/dsh-tools.scheduler')`
+ * 在每个物理模块副本里各造一个。因此「有几份」不能靠出现次数回答，只能靠**不同真实路径数**回答。
+ */
+const GRAPH_SCOPE = '@deepseek-ai'
+const GRAPH_PACKAGE = 'dsh-tools'
+
+/**
+ * 模块图探测的候选根（相对 guest root；root 为 `/` 时即设备上的绝对路径）。
+ * 缺失的根直接跳过：探测必须在任何安装形态下都能返回结果，绝不报错。
+ */
+const GRAPH_ROOTS = [
+  'opt/dsh/node_modules',
+  'opt/dsh/plugins',
+  'root/.dsh/profiles/node_modules',
+  'root/.dsh/profiles/web/node_modules',
+  'root/.dsh-mobile/plugin-manager',
+]
+
+/**
+ * 探测的遍历上限：深度、目录数与条目数。
+ *
+ * 上限是**失控保护**，不是常规节流：真实的 pnpm 虚拟store 有几百个条目（本仓库自身就是 571 个），
+ * 一旦预算把扫描截断，计数就会偏小 —— 而「少算一份真实副本」恰好是唯一会让判据失效的错误，
+ * 所以上限必须宽到能完整覆盖真实布局。
+ *  - 深度 4 刚好够到 pnpm 隔离布局的真实副本：
+ *    `node_modules/.pnpm/<pkg>/node_modules/@deepseek-ai/dsh-tools`；
+ *  - 目录与条目上限**按候选根各自重置**：带 `.pnpm` 的 `opt/dsh/node_modules` 一个根就能把
+ *    共享预算吃光，让其余四个根一个都扫不到，那样的计数不能作为判据。
+ */
+const GRAPH_MAX_DEPTH = 4
+const GRAPH_MAX_DIRECTORIES = 2048
+const GRAPH_MAX_ENTRIES = 16384
+
+/** 非 node_modules 候选根（plugins / plugin-manager）里允许自由下探的层数：只为找到 node_modules。 */
+const GRAPH_BROWSE_DEPTH = 2
+
+/** 这些目录名下的子项是「包目录」；pnpm 的隔离布局用 `.pnpm` 承担同样的角色。 */
+const GRAPH_MODULE_DIRECTORIES = new Set(['node_modules', '.pnpm'])
+
 /** 详情校验：通过返回原文，否则返回 null（调用方据此省略 detail 字段）。 */
 function safeDetail(detail) {
   if (typeof detail !== 'string' || !DETAIL.test(detail)) return null
@@ -525,6 +567,167 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     }
     return summary
   }
+  /**
+   * 模块图探测（**只读**）：数一数 `@deepseek-ai/dsh-tools` 在访客里出现了几处、分别是什么形态，
+   * 以及**不同真实路径数**（`distinctRealpaths`）。
+   *
+   * 为什么需要它：`dsh-tools` 的调度器服务用 `Symbol('@deepseek-ai/dsh-tools.scheduler')` 注册，
+   * 而 Symbol 在**每个物理模块副本里各造一个身份**。只要同一进程里加载到两份真实副本，
+   * `ctx.tools[调度器 Symbol]` 就是 undefined，之后**每一次工具调用**都在 `.prepare` 上抛
+   * `Cannot read properties of undefined (reading 'prepare')`（调用点：dsh-agent-loop/lib/index.js:588）。
+   * 也就是说：**`distinctRealpaths > 1` 就是「工具调用全部失败」的直接证据**，不必再靠推断。
+   *
+   * 与 repair 的区别（决定了两者必须分开暴露）：
+   *  - repair 会删改文件，且按运行时代次指纹只跑一次；本函数**从不修改任何东西**，
+   *    也不参与代次指纹，因此可以在每次 Harness 启动时独立触发；
+   *  - repair 只处理「已安装插件的版本目录」，而副本可能出现在别处（profiles、plugins、
+   *    pnpm 隔离目录），本函数把候选根整体看一遍。
+   *
+   * 判据只认真实路径：同一个真实目录被 N 个链接引用就只算一份（出现次数 N 不构成重复），
+   * 只有两个**不同的真实目录**才会让 Symbol 身份分裂。悬空链接解析不到任何模块，只计出现次数。
+   *
+   * 失败一律吞掉：单个候选根不存在、不可读、遍历超限都只影响计数，绝不抛异常——
+   * 探测跑在 Harness 启动前，不能因为诊断把启动打断。
+   *
+   * 只回传计数，不回传路径（与既有受控载荷风格一致）：调用方拿到的是
+   * `{ total, realCopies, links, distinctRealpaths }`，其中 `total = realCopies + links`。
+   */
+  function scanRuntimeGraph() {
+    const summary = { total: 0, realCopies: 0, links: 0, distinctRealpaths: 0 }
+    const realpaths = new Set()
+    /** 链接的「字面目标」→ 真实路径缓存（null = 悬空）。见下面 linkRealpath 的说明。 */
+    const linkTargets = new Map()
+    /**
+     * 求一个（真实存在的）路径的真实路径，求不到只影响 Set，不影响出现次数计数。
+     */
+    const addRealpath = value => {
+      try { realpaths.add(fs.realpathSync(value)) } catch { /* 求不到真实路径时只计出现次数。 */ }
+    }
+    /**
+     * 求一个链接的真实路径，并按「字面目标」缓存结果。
+     *
+     * 为什么必须缓存：realpath 每次都要打开句柄（实测每次约 3ms），而 pnpm 的几百个虚拟store
+     * 条目里绝大多数链接都指向同一份真实目录 —— 逐个 realpath 会把一次探测从几十毫秒拖到一秒
+     * 以上（实测 400 个链接 = 1.1s）。readlink + 相对路径解析便宜一个数量级，且同一个绝对目标
+     * 解析结果必然相同，因此「先字面目标去重、再 realpath」不改变判据，只去掉重复开销。
+     */
+    const linkRealpath = literal => {
+      if (!linkTargets.has(literal)) {
+        try { linkTargets.set(literal, fs.realpathSync(literal)) } catch { linkTargets.set(literal, null) }
+      }
+      const resolved = linkTargets.get(literal)
+      if (resolved !== null) realpaths.add(resolved)
+    }
+    /**
+     * 记一处出现位置：真实目录计入 realCopies，符号链接计入 links；两种形态都先求真实路径再放进
+     * Set —— **Set.size 就是「不同真实路径数」，这是唯一判据**。
+     */
+    const record = candidate => {
+      let stats
+      try { stats = fs.lstatSync(candidate) } catch { return }
+      if (stats.isSymbolicLink()) {
+        summary.links += 1
+        // 悬空链接（运行时升级后指向旧路径）解析不到任何模块：只计出现次数，不构成第二份副本。
+        let literal = null
+        try { literal = path.resolve(path.dirname(candidate), fs.readlinkSync(candidate)) } catch { literal = null }
+        if (literal !== null) linkRealpath(literal)
+      } else if (stats.isDirectory()) {
+        summary.realCopies += 1
+        addRealpath(candidate)
+      } else {
+        // 既不是目录也不是链接（同名普通文件）：不是一个模块副本，忽略。
+        return
+      }
+      summary.total += 1
+    }
+    /**
+     * 定点检查一个「模块目录」（node_modules / .pnpm）里的 `@deepseek-ai/dsh-tools`。
+     *
+     * 只走固定的一段路径、每段先 lstat 判类型：**不 readdir、不跟随链接**。
+     * 这是探测能在几百个虚拟store 条目上保持廉价的关键 —— 每个条目 1~2 次 lstat，
+     * 而不是把它的依赖清单整个读一遍（pnpm 里每个条目都带几十条依赖链接，读一遍的成本高一个量级）。
+     */
+    const check = modulesDirectory => {
+      // 中间段 @deepseek-ai 本身是链接时不进入：跟随它就可能走到候选根之外。
+      let scope
+      try { scope = fs.lstatSync(path.join(modulesDirectory, GRAPH_SCOPE)) } catch { return }
+      if (scope.isSymbolicLink() || !scope.isDirectory()) return
+      record(path.join(modulesDirectory, GRAPH_SCOPE, GRAPH_PACKAGE))
+    }
+    /**
+     * 进入一个「模块目录」：它的子项是包目录（`node_modules`）、作用域目录或嵌套模块目录。
+     *
+     * 不无差别递归的原因：`node_modules` 下每个包都带 lib/dist 等源码目录，无差别递归会瞬间
+     * 吃光目录预算；而**链接目录一律不进入**（readdir 的 Dirent 对链接不跟随，`isDirectory()`
+     * 为 false），这正是「不走出候选根之外」的实现点。
+     */
+    const walk = (modulesDirectory, depth, budget) => {
+      if (depth > GRAPH_MAX_DEPTH) return
+      if (budget.directories >= GRAPH_MAX_DIRECTORIES || budget.entries >= GRAPH_MAX_ENTRIES) return
+      // 模块目录自身可能是链接（例如整个 node_modules 被换成链接）：不跟随，整棵子树跳过。
+      let stats
+      try { stats = fs.lstatSync(modulesDirectory) } catch { return }
+      if (!stats.isDirectory()) return
+      budget.directories += 1
+      check(modulesDirectory)
+      let items
+      try { items = fs.readdirSync(modulesDirectory, { withFileTypes: true }) } catch { return }
+      // pnpm 的虚拟store：`.pnpm/<条目>/node_modules/` 里除条目自身（唯一的真实目录）外全是链接，
+      // 而链接不跟随 ⇒ 每个条目只需定点检查一次。check-runtime-dedupe.mjs 依据同一事实统计副本。
+      const store = path.basename(modulesDirectory) === '.pnpm'
+      for (const item of items) {
+        if (budget.directories >= GRAPH_MAX_DIRECTORIES || budget.entries >= GRAPH_MAX_ENTRIES) return
+        budget.entries += 1
+        // 点目录（.bin 等）一律跳过；`.pnpm` 是虚拟store，必须进去。
+        if (item.name.startsWith('.') && item.name !== '.pnpm') continue
+        if (!item.isDirectory()) continue
+        const full = path.join(modulesDirectory, item.name)
+        if (GRAPH_MODULE_DIRECTORIES.has(item.name)) { walk(full, depth + 1, budget); continue }
+        // 作用域目录由 check() 统一定点处理，它不是包目录。
+        if (item.name === GRAPH_SCOPE) continue
+        // 包目录：store 条目只做定点检查；npm 的嵌套布局必须继续下探
+        // （`node_modules/<包>/node_modules/@deepseek-ai/...` 正是 D1 那类嵌套副本的藏身处）。
+        if (store) { check(path.join(full, 'node_modules')); continue }
+        walk(path.join(full, 'node_modules'), depth + 1, budget)
+      }
+    }
+    /**
+     * 浏览一个非 node_modules 的候选根（`opt/dsh/plugins`、`root/.dsh-mobile/plugin-manager`）：
+     * 只为找到其中的模块目录与包目录。带 `node_modules` 的目录按包目录处理，其余在浅层继续下探。
+     */
+    const browse = (directory, depth, budget) => {
+      if (depth > GRAPH_MAX_DEPTH) return
+      if (budget.directories >= GRAPH_MAX_DIRECTORIES || budget.entries >= GRAPH_MAX_ENTRIES) return
+      let stats
+      try { stats = fs.lstatSync(directory) } catch { return }
+      if (!stats.isDirectory()) return
+      budget.directories += 1
+      let items
+      try { items = fs.readdirSync(directory, { withFileTypes: true }) } catch { return }
+      for (const item of items) {
+        if (budget.directories >= GRAPH_MAX_DIRECTORIES || budget.entries >= GRAPH_MAX_ENTRIES) return
+        budget.entries += 1
+        if (item.name.startsWith('.')) continue
+        // 链接与普通文件都不进入：不跟随链接目录。
+        if (!item.isDirectory()) continue
+        const full = path.join(directory, item.name)
+        if (GRAPH_MODULE_DIRECTORIES.has(item.name)) { walk(full, depth + 1, budget); continue }
+        let nested = null
+        try { nested = fs.lstatSync(path.join(full, 'node_modules')) } catch { nested = null }
+        if (nested !== null && nested.isDirectory()) { walk(path.join(full, 'node_modules'), depth + 1, budget); continue }
+        if (depth < GRAPH_BROWSE_DEPTH) browse(full, depth + 1, budget)
+      }
+    }
+    for (const candidate of GRAPH_ROOTS) {
+      // 每个候选根各自一份预算：见 GRAPH_MAX_DIRECTORIES 的说明。
+      const directory = path.join(root, candidate)
+      const budget = { directories: 0, entries: 0 }
+      if (GRAPH_MODULE_DIRECTORIES.has(path.basename(directory))) walk(directory, 0, budget)
+      else browse(directory, 0, budget)
+    }
+    summary.distinctRealpaths = realpaths.size
+    return summary
+  }
   function basicList() {
     const config = manifest()
     return { plugins: config.names.map(id => {
@@ -949,7 +1152,7 @@ function createManager(rootDirectory, installPackage, parseYaml) {
       throw error
     }
   }
-  return { list, setEnabled, setChildEnabled, update, recover, repair }
+  return { list, setEnabled, setChildEnabled, update, recover, repair, scanRuntimeGraph }
 }
 
 module.exports = {
@@ -966,6 +1169,12 @@ module.exports = {
   // 供单测覆盖裸导入抽取（决定哪些宿主依赖会被链进 staging）。
   packageNameOf,
   collectBareSpecifiers,
+  // 供单测断言模块图探测的预算不会截断真实规模的依赖树（截断 = 漏算真实副本 = 判据失效）。
+  GRAPH_LIMITS: Object.freeze({
+    depth: GRAPH_MAX_DEPTH,
+    directories: GRAPH_MAX_DIRECTORIES,
+    entries: GRAPH_MAX_ENTRIES,
+  }),
 }
 if (require.main === module) {
   try {
@@ -975,6 +1184,8 @@ if (require.main === module) {
     if (operation === 'list') result = manager.list()
     else if (operation === 'recover') { manager.recover(); result = { recovered: true } }
     else if (operation === 'repair') { manager.recover(); result = manager.repair() }
+    // 模块图探测是只读的：不走 recover()，也不参与 repair 的代次指纹，可随时独立触发。
+    else if (operation === 'graph') result = manager.scanRuntimeGraph()
     else if (operation === 'enable' && (flag === 'true' || flag === 'false')) { manager.recover(); result = manager.setEnabled(id, flag === 'true') }
     else if (operation === 'child' && (flag === 'true' || flag === 'false')) { manager.recover(); result = manager.setChildEnabled(id, childId, flag === 'true') }
     else if (operation === 'update') result = manager.update(id)

@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
-const { createManager, within, parseVersion, compareVersions, satisfiesRange, selectNewestCompatible, safeDetail, packageNameOf, collectBareSpecifiers } =
+const { createManager, within, parseVersion, compareVersions, satisfiesRange, selectNewestCompatible, safeDetail, packageNameOf, collectBareSpecifiers, GRAPH_LIMITS } =
   require('../android/app/src/main/assets/support/plugin-manager.cjs')
 
 test('裸导入抽取只认包名，路径与内建模块一律忽略', () => {
@@ -561,4 +561,151 @@ test('安装后消重不跟随指向 staging 之外的链接', t => {
   assert.deepEqual(result.runtimeDedupe, { scanned: 0, linked: 0, unchanged: 0, versionMismatch: 0, failed: 0, refused: 0 })
   assert.equal(fs.lstatSync(outside).isSymbolicLink(), false)
   assert.equal(JSON.parse(fs.readFileSync(path.join(outside, 'package.json'), 'utf8')).version, '1.0.0')
+})
+
+// ---------------------------------------------------------------------------
+// 模块图探测（只读）：访客里到底有几份 dsh-tools
+//
+// 判据只有一条：**不同真实路径数**（distinctRealpaths）。同一个真实目录被多个链接引用多少次
+// 都只算一份（链接不改变模块身份）；只有存在两份**不同的真实副本**时，`dsh-tools` 的调度器
+// Symbol 才会出现两个不相等的身份，`ctx.tools[调度器 Symbol]` 取到 undefined，
+// 之后每一次工具调用都在 `.prepare` 上抛错。
+// ---------------------------------------------------------------------------
+
+/** 建一个只含目录布局的临时 root（探测只读目录，不需要任何 package.json 清单）。 */
+function graphRoot(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-graph-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }))
+  return root
+}
+
+/** 在 root 的相对路径下造一个真实的 dsh-tools 包目录，返回它的绝对路径。 */
+function toolsCopy(root, relative) {
+  const target = path.join(root, relative, '@deepseek-ai/dsh-tools')
+  fs.mkdirSync(target, { recursive: true })
+  fs.writeFileSync(path.join(target, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-tools', version: '0.1.5-rc.2' }))
+  return target
+}
+
+/** 让 root 的相对路径成为指向 [target] 的 dsh-tools 链接（Windows 上用 junction）。 */
+function toolsLink(root, relative, target) {
+  const link = path.join(root, relative, '@deepseek-ai/dsh-tools')
+  fs.mkdirSync(path.dirname(link), { recursive: true })
+  fs.symlinkSync(target, link, 'junction')
+  return link
+}
+
+/** 目录快照：形态、mtime、大小与链接目标；用来断言探测没有改动任何东西。 */
+function snapshot(directory) {
+  const rows = []
+  const visit = current => {
+    const items = fs.readdirSync(current, { withFileTypes: true }).sort((left, right) => (left.name < right.name ? -1 : 1))
+    for (const item of items) {
+      const full = path.join(current, item.name)
+      // 快照自己也用 lstat：链接只记录目标，不进入（否则快照会跟着链接走出临时 root）。
+      const stats = fs.lstatSync(full)
+      const kind = stats.isSymbolicLink() ? 'link->' + fs.readlinkSync(full) : stats.isDirectory() ? 'dir' : 'file'
+      rows.push([path.relative(directory, full).split(path.sep).join('/'), kind, String(stats.mtimeMs), String(stats.size)].join('|'))
+      if (stats.isDirectory()) visit(full)
+    }
+  }
+  visit(directory)
+  return rows
+}
+
+test('模块图探测：同一个真实目录被多处链接引用只算一份', t => {
+  const root = graphRoot(t)
+  // 运行时本体：pnpm 隔离布局下的那一份真实目录。
+  const runtime = toolsCopy(root, 'opt/dsh/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.2/node_modules')
+  // 三处链接（顶层入口、$DSH_HOME 的 profile、插件版本目录）都指向同一份。
+  toolsLink(root, 'opt/dsh/node_modules', runtime)
+  toolsLink(root, 'root/.dsh/profiles/node_modules', runtime)
+  toolsLink(root, 'root/.dsh-mobile/plugin-manager/versions/12345678-1234-1234-1234-123456789abc/node_modules', runtime)
+
+  // 出现 4 次但真实路径只有一个：链接不改变模块身份，因而不是重复副本。
+  assert.deepEqual(createManager(root).scanRuntimeGraph(), { total: 4, realCopies: 1, links: 3, distinctRealpaths: 1 })
+})
+
+test('模块图探测：两个不同的真实目录即两份模块实例', t => {
+  const root = graphRoot(t)
+  // 运行时本体。
+  toolsCopy(root, 'opt/dsh/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.2/node_modules')
+  // 插件版本目录里 npm 装出来的真实副本（嵌套形态）：第二个不同的真实路径。
+  toolsCopy(root, 'root/.dsh-mobile/plugin-manager/versions/12345678-1234-1234-1234-123456789abc/node_modules/demo-plugin/node_modules')
+
+  // 判据 > 1：两份物理副本 ⇒ Symbol 身份分裂 ⇒ 所有工具调用失败。
+  assert.deepEqual(createManager(root).scanRuntimeGraph(), { total: 2, realCopies: 2, links: 0, distinctRealpaths: 2 })
+})
+
+test('模块图探测：候选根不存在时返回零计数且不报错', t => {
+  const root = graphRoot(t)
+  assert.deepEqual(createManager(root).scanRuntimeGraph(), { total: 0, realCopies: 0, links: 0, distinctRealpaths: 0 })
+  // 候选根存在、但里面没有 dsh-tools（只有作用域目录）时同样是零计数。
+  fs.mkdirSync(path.join(root, 'opt/dsh/node_modules/@deepseek-ai'), { recursive: true })
+  fs.mkdirSync(path.join(root, 'opt/dsh/plugins'), { recursive: true })
+  fs.mkdirSync(path.join(root, 'root/.dsh/profiles/web/node_modules'), { recursive: true })
+  assert.deepEqual(createManager(root).scanRuntimeGraph(), { total: 0, realCopies: 0, links: 0, distinctRealpaths: 0 })
+})
+
+test('模块图探测只读：不改动任何文件，也不动悬空链接', t => {
+  const root = graphRoot(t)
+  const runtime = toolsCopy(root, 'opt/dsh/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.2/node_modules')
+  toolsLink(root, 'opt/dsh/node_modules', runtime)
+  toolsCopy(root, 'root/.dsh-mobile/plugin-manager/versions/12345678-1234-1234-1234-123456789abc/node_modules/demo-plugin/node_modules')
+  // 悬空链接（指向已不存在的旧运行时路径）：只计出现次数，不算第二份副本，更不该被"顺手修好"。
+  const dangling = toolsLink(
+    root,
+    'root/.dsh/profiles/node_modules',
+    path.join(root, 'opt/dsh/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.1/node_modules/@deepseek-ai/dsh-tools'),
+  )
+
+  const before = snapshot(root)
+  const graph = createManager(root).scanRuntimeGraph()
+  assert.equal(graph.distinctRealpaths, 2)
+  assert.equal(graph.links, 2)
+  assert.equal(fs.lstatSync(dangling).isSymbolicLink(), true)
+  // 快照逐项相同：形态、mtime 与大小都没变，是"只读"的直接证据。
+  assert.deepEqual(snapshot(root), before)
+})
+
+test('模块图探测不跟随指向候选根之外的符号链接目录', t => {
+  const root = graphRoot(t)
+  // 候选根之外的真实副本：任何计数都不该包含它。
+  toolsCopy(root, 'tmp-outside')
+  toolsCopy(root, 'tmp-outside/nested/node_modules')
+
+  // 形态一：候选根内的普通链接指向外面。
+  fs.mkdirSync(path.join(root, 'opt/dsh/plugins'), { recursive: true })
+  fs.symlinkSync(path.join(root, 'tmp-outside'), path.join(root, 'opt/dsh/plugins/linked-plugin'), 'junction')
+  // 形态二：@deepseek-ai 作用域目录本身是指向外面的链接。
+  fs.mkdirSync(path.join(root, 'opt/dsh/node_modules'), { recursive: true })
+  fs.symlinkSync(path.join(root, 'tmp-outside'), path.join(root, 'opt/dsh/node_modules/@deepseek-ai'), 'junction')
+  // 形态三：候选根本身是指向外面的链接。
+  fs.mkdirSync(path.join(root, 'root/.dsh/profiles'), { recursive: true })
+  fs.symlinkSync(path.join(root, 'tmp-outside/nested/node_modules'), path.join(root, 'root/.dsh/profiles/node_modules'), 'junction')
+
+  assert.deepEqual(createManager(root).scanRuntimeGraph(), { total: 0, realCopies: 0, links: 0, distinctRealpaths: 0 })
+  // 外面那份副本原样保留：探测没有跟随，也没有改动它。
+  assert.equal(fs.lstatSync(path.join(root, 'tmp-outside/@deepseek-ai/dsh-tools')).isSymbolicLink(), false)
+})
+
+test('模块图探测的预算按真实规模设定：截断会少算真实副本，等于让判据失效', t => {
+  // 真实的 pnpm 虚拟store 有几百个条目（本仓库自身 571 个），而每个声明了该依赖的条目都会带一条
+  // dsh-tools 链接。预算一旦截断，计数就会偏小 —— 而「少算一份真实副本」正是唯一会让判据失效的
+  // 错误，因此探测不能沿用修复路径那套 256 目录预算（实测 400 个 store 条目就会漏掉第二份副本）。
+  assert.equal(GRAPH_LIMITS.depth, 4)
+  assert.ok(GRAPH_LIMITS.directories >= 1024, `目录预算过小：${GRAPH_LIMITS.directories}`)
+  assert.ok(GRAPH_LIMITS.entries >= 8192, `条目预算过小：${GRAPH_LIMITS.entries}`)
+
+  // 行为侧再钉一次：几十个条目的链接全部计入，不会在中途停下。
+  const root = graphRoot(t)
+  const runtime = toolsCopy(root, 'opt/dsh/node_modules/.pnpm/@deepseek-ai+dsh-tools@0.1.5-rc.2/node_modules')
+  const entries = 40
+  for (let index = 0; index < entries; index += 1) {
+    toolsLink(root, `opt/dsh/node_modules/.pnpm/dep-${String(index).padStart(3, '0')}@1.0.0/node_modules`, runtime)
+  }
+  const graph = createManager(root).scanRuntimeGraph()
+  assert.equal(graph.links, entries)
+  assert.equal(graph.realCopies, 1)
+  assert.equal(graph.distinctRealpaths, 1)
 })

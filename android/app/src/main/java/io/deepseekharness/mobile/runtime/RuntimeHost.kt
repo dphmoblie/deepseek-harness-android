@@ -184,6 +184,8 @@ object RuntimeHost {
      */
     private fun takeControllerLocked(): MobileRuntimeController? {
         val current = controller ?: return null
+        // 运行时释放时清空输出尾部登记，避免已结束会话继续驻留内存。
+        HarnessOutputTailSource.clear()
         controller = null
         releaseDeviceResourcesLocked()
         return current

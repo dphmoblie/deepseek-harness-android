@@ -62,6 +62,21 @@ enum class DiagnosticEvent {
      * 的直接证据 —— 这正是工具调用失败那条链路此前只能靠推断的那一环。
      */
     REPAIR,
+
+    /**
+     * 访客里 `@deepseek-ai/dsh-tools` 的模块图探测结果（只读，Harness 每次启动前记录一次）。
+     *
+     * 只记录计数：`count` = **不同真实路径数**，`files` = 出现位置总数（真实目录 + 符号链接）。
+     * **`count > 1` 即同一进程里存在两份模块实例**：`dsh-tools` 的调度器
+     * `Symbol('@deepseek-ai/dsh-tools.scheduler')` 是每个物理模块副本各造一个身份，身份失配后
+     * `ctx.tools[调度器 Symbol]` 取到 undefined，之后**每一次工具调用都会失败**，报
+     * `Cannot read properties of undefined (reading 'prepare')`。
+     * 判据只认真实路径：同一个真实目录被多个链接引用多少次都只算一份，因此不会误报。
+     *
+     * 取值约定：`result=ok` 表示只有一份；`count > 1` 时记 WARN + `result=failed`（一眼可见）；
+     * 探测本身失败时记 WARN + `result=denied` + `code=PROBE_FAILED`，与判据成立区分开。
+     */
+    MODULE_GRAPH,
 }
 
 /**

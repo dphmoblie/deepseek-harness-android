@@ -165,6 +165,19 @@ export interface DiagnosticLogExport extends DiagnosticLogState {
   exportedBytes: number
 }
 
+/**
+ * Harness 访客进程输出的尾部快照（stdout 与 stderr 已合并）。
+ *
+ * 与诊断日志相反，这段文本**可能包含会话内容**（工具参数、报错栈、代码片段等）：
+ * 它只在设备上的界面里展示，不写入诊断日志，也不随诊断日志导出。
+ */
+export interface HarnessLog {
+  /** 当前是否有可读的进程输出；false 时 text 恒为空串。 */
+  available: boolean
+  /** 输出尾部；原生侧按字节上限（默认 8192）截断，且落在 UTF-8 字符边界上。 */
+  text: string
+}
+
 /** 保留天数范围；原生侧同样会夹取，前端只做先期校验。 */
 export const DIAGNOSTIC_RETENTION_MIN = 1
 export const DIAGNOSTIC_RETENTION_MAX = 30

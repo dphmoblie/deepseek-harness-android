@@ -98,9 +98,23 @@ class RuntimeSupervisor(
     private val startCancellation = RuntimeStartCancellation()
     private val startCancellationEpoch = AtomicLong(0)
     private var harnessProcess: Process? = null
-    private var harnessOutput: ProcessOutputTail? = null
+
+    /*
+     * 输出尾部与其留存快照都声明为 @Volatile：写入始终发生在 lock 内，
+     * 但读取（界面「运行日志」）刻意不抢 lock —— startHarness 与 stop 会在持锁期间
+     * 等待最长数十秒，若读取也去排队，WebView 桥接线程会被一起拖住。
+     */
+    @Volatile private var harnessOutput: ProcessOutputTail? = null
+    @Volatile private var lastHarnessOutput: String? = null
     private var harnessAccess: HarnessAccess? = null
     private var deviceBridgeAccess: DeviceBridgeAccess? = null
+
+    init {
+        // 桥接层（io.deepseekharness.mobile.MobileRuntimePlugin）拿不到本类的引用：
+        // supervisor 由 MobileRuntimeController 私有持有。这里把只读出口登记到进程级发布点，
+        // 由 RuntimeHost 在运行时释放时清空，登记项不会长期持有本实例。
+        HarnessOutputTailSource.register(::harnessOutputTail)
+    }
 
     fun configureDeviceBridge(access: DeviceBridgeAccess) = synchronized(lock) {
         if (harnessProcess?.isAlive == true) throw RuntimeFailure("RUNTIME_BUSY", "Harness 运行时不能更改设备桥")
@@ -278,6 +292,32 @@ class RuntimeSupervisor(
     }
 
     /**
+     * Harness 进程输出（stdout 与 stderr 已合并）的尾部快照，最多 [maxBytes] 个 UTF-8 字节。
+     *
+     * 用途：设置页的「运行日志」。工具调用失败时界面往往只有一句没有栈的报错
+     * （例如 Cannot read properties of undefined），而 dsh 自己打印的完整异常就落在这段输出里。
+     *
+     * 取值顺序：优先读正在运行的进程缓冲区；进程已结束（自行退出、启动失败或被停止）时
+     * 回退到 [clearHarnessState] 在关闭前留存的最后一次快照。两者都没有时返回 null，
+     * 由调用方如实显示「没有可用的运行日志」。
+     *
+     * 线程模型：刻意**不抢** [lock]。`startHarness` 与 `stop` 会在持锁期间等待最长数十秒，
+     * 这里若也去排队，WebView 桥接线程会被一起拖住（用户点开日志就会卡住界面）。
+     * 读取只用 @Volatile 字段 + 缓冲区自身的 @Synchronized：单次拷贝上限 16 KB，
+     * 与写线程互斥但不会长时间阻塞。
+     *
+     * 隐私边界：返回的文本可能包含会话内容。它只用于设备上的界面展示：
+     * 不落盘、不写诊断日志、不随诊断日志导出。
+     */
+    fun harnessOutputTail(maxBytes: Int = HARNESS_OUTPUT_TAIL_BYTES): String? {
+        // 竞态窗口：clearHarnessState 可能刚清空缓冲区再置空引用，此时读到的是空串；
+        // 那与「进程还没有任何输出」是同一种情况，一并回退到留存快照。
+        val live = harnessOutput?.snapshot()?.takeIf { it.isNotEmpty() }
+        val text = live ?: lastHarnessOutput ?: return null
+        return utf8TailWithin(text, maxBytes).takeIf { it.isNotEmpty() }
+    }
+
+    /**
      * 是否存在本进程未持有、但仍在运行的 Harness 残留进程。
      *
      * 应用进程被系统回收（强制停止、内存回收、厂商后台清理）时，PRoot→node 子进程
@@ -313,6 +353,10 @@ class RuntimeSupervisor(
 
     private fun clearHarnessState() {
         harnessProcess = null
+        // 关闭前留存最后一次输出：进程自行退出或启动失败时，错误码之外的唯一线索就在这里，
+        // 而 close() 会清空缓冲区，错过这一次就再也读不到了。
+        // 它随本实例（即当前运行时）存在：运行时释放时登记项被清空，本实例随即不可达。
+        harnessOutput?.snapshot()?.takeIf { it.isNotEmpty() }?.let { lastHarnessOutput = it }
         harnessOutput?.close()
         harnessOutput = null
         harnessAccess = null

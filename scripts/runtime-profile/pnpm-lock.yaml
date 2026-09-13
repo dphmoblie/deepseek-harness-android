@@ -8,6 +8,9 @@ overrides:
   '@deepseek-ai/dsh': 0.1.5-rc.2
   '@deepseek-ai/dsh-*': 0.1.5-rc.2
 
+patchedDependencies:
+  '@earendil-works/pi-ai@0.85.1': c0a462dfa0b492b397ff40f111a5d6b9607929c3bb972b928268259b6f6c5d37
+
 importers:
 
   .:
@@ -4964,7 +4967,7 @@ snapshots:
       '@deepseek-ai/dsh-timeout': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
       '@deepseek-ai/dsh-util-values': 0.1.5-rc.2(@deepseek-ai/cordis@4.0.2)
       '@deepseek-ai/schemastery': 3.18.2
-      '@earendil-works/pi-ai': 0.85.1(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)
+      '@earendil-works/pi-ai': 0.85.1(patch_hash=c0a462dfa0b492b397ff40f111a5d6b9607929c3bb972b928268259b6f6c5d37)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - bufferutil
@@ -6408,7 +6411,7 @@ snapshots:
       '@deepseek-ai/cosmokit': 1.8.3
       '@standard-schema/spec': 1.1.0
 
-  '@earendil-works/pi-ai@0.85.1(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)':
+  '@earendil-works/pi-ai@0.85.1(patch_hash=c0a462dfa0b492b397ff40f111a5d6b9607929c3bb972b928268259b6f6c5d37)(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.123.0(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0

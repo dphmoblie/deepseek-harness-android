@@ -42,6 +42,12 @@ class MobileRuntimeController(
             plugins.recoverIfNeeded()
             // 启动前自愈：运行时升级后插件目录里的链接可能已悬空，修复必须在插件被加载前完成。
             plugins.repairInstalledIfNeeded()
+            // 启动前取证：自愈按代次指纹只跑一次，探测则每次都跑 —— 它只读、只遍历固定候选根，
+            // 而「装了新插件」不换代次，缓存会漏掉那个时机。
+            // 结果只写计数（MODULE_GRAPH）。判读要分清方向：**count=1 是很强的否定结论**
+            // （该故障与模块重复无关）；count>1 只说明「存在」两份物理副本 —— 可能只是 pnpm
+            // store 里已无引用的陈旧目录，**不等于**运行中的进程确实加载了两份。
+            plugins.recordModuleGraph()
         }
         supervisor.startHarness()
     }
@@ -54,10 +60,6 @@ class MobileRuntimeController(
                 throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
             }
             supervisor.preparePluginManagement()
-        } else if (!supervisor.isRunning() && !terminals.hasRuntimeSessions()) {
-            // 读取插件列表时顺带自愈一次（幂等）：已经装坏的插件不必重装即可恢复。
-            // 运行时在跑时不动这些链接，避免与正在加载模块的 Harness 抢同一批目录项。
-            plugins.repairInstalledIfNeeded()
         }
         plugins.run(operation, id, enabled, childId)
     }
