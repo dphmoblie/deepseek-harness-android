@@ -15,9 +15,14 @@ internal object AppLanguage {
             .edit().putString(KEY, language).commit()
     }
 
+    /** 读取当前应用语言；未设置或为非法值时回落到简体中文。 */
+    fun current(context: Context): String = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        .getString(KEY, null)
+        ?.takeIf { it == "en" || it == "zh-CN" }
+        ?: "zh-CN"
+
     fun localizedContext(context: Context): Context {
-        val stored = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).getString(KEY, null)
-        val language = if (stored == "en") "en" else "zh-CN"
+        val language = current(context)
         val configuration = Configuration(context.resources.configuration)
         configuration.setLocale(Locale.forLanguageTag(language))
         return context.createConfigurationContext(configuration)

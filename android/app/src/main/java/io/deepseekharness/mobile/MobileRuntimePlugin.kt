@@ -114,8 +114,14 @@ class MobileRuntimePlugin : Plugin() {
             return
         }
         try {
-            if (AppLanguage.save(context, language)) call.resolve()
+            // 先持久化应用语言，再尽力同步到已安装运行时；运行时未安装时该调用为空操作。
+            val saved = AppLanguage.save(context, language) &&
+                io.deepseekharness.mobile.runtime.RuntimeStore(context).syncHarnessLocale(language)
+            if (saved) call.resolve()
             else call.reject("无法保存应用语言", "LANGUAGE_SAVE_FAILED")
+        } catch (failure: RuntimeFailure) {
+            // 受控错误码（如 LANGUAGE_INVALID / LANGUAGE_SYNC_FAILED）直接回传，便于前端区分提示。
+            call.reject(failure.message ?: "无法同步 Harness 语言", failure.code)
         } catch (_: Exception) {
             call.reject("无法保存应用语言", "LANGUAGE_SAVE_FAILED")
         }
@@ -316,6 +322,8 @@ class MobileRuntimePlugin : Plugin() {
                 audited(AuditEvent.RUNTIME_START) {
                     if (generation != harnessStartGeneration.get()) return@audited controller.state().toJs()
                     ensureDeviceBridge()
+                    // 应用语言可能在运行时创建 settings 文件之前就已选择，每次启动 Harness 前重放一次。
+                    controller.store.syncHarnessLocale(AppLanguage.current(context))
                     try {
                         controller.startHarness().toJs().also { snapshot ->
                             // Harness 启动成功后才按设置提升前台优先级；失败时不留空转服务。
