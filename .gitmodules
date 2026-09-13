@@ -1,0 +1,4 @@
+[submodule "harness-web"]
+	path = harness-web
+	url = https://github.com/dphmoblie/deepseek-harness-mobile-support.git
+	branch = feat/mobile-optimized-harness
