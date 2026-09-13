@@ -1054,6 +1054,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("configuredCustomModelProviders", org.json.JSONArray(configuredCustomModelProviders))
         .put("autoLaunch", autoLaunch)
         .put("keepRuntimeInBackground", keepRuntimeInBackground)
+        .put("overlayBallEnabled", overlayBallEnabled)
 
     private fun RuntimeKeepAliveSnapshot.toJs(): JSObject = JSObject()
         .put("keepRuntimeInBackground", keepRuntimeInBackground)
