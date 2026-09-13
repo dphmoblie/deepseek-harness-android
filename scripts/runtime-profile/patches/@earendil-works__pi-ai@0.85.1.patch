@@ -1,5 +1,5 @@
 diff --git a/dist/api/transform-messages.js b/dist/api/transform-messages.js
-index 6aa6aa2..dbd6119 100644
+index 6aa6aa2bb660194e64a06d5dc98f61862311f210..dbd611993c32e9e77f2d190c98b847a3c4555e51 100644
 --- a/dist/api/transform-messages.js
 +++ b/dist/api/transform-messages.js
 @@ -126,6 +126,7 @@ export function transformMessages(messages, model, normalizeToolCallId) {
@@ -28,18 +28,12 @@ index 6aa6aa2..dbd6119 100644
              result.push(msg);
          }
          else if (msg.role === "toolResult") {
-+            // OpenAI 要求每个紧邻的 assistant 工具调用都有且只有一个响应。
-+            // 丢弃过期或重复结果，避免向接口转发无效消息序列。
++            // OpenAI requires exactly one tool response for every call in the
++            // immediately preceding assistant message. Drop stale/duplicate
++            // results instead of forwarding an invalid transcript.
 +            if (!pendingToolCallIds.has(msg.toolCallId) || existingToolResultIds.has(msg.toolCallId)) {
 +                continue;
 +            }
              existingToolResultIds.add(msg.toolCallId);
              result.push(msg);
          }
-@@ -184,4 +193,4 @@ export function transformMessages(messages, model, normalizeToolCallId) {
-     insertSyntheticToolResults();
-     return result;
- }
--//# sourceMappingURL=transform-messages.js.map
-\ No newline at end of file
-+//# sourceMappingURL=transform-messages.js.map
