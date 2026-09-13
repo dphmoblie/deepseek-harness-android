@@ -81,6 +81,12 @@ export interface RuntimeSettings extends RuntimeSource {
    * 但不能阻止 Android 或厂商系统在内存、电量或后台策略下结束进程。
    */
   keepRuntimeInBackground?: boolean
+  /**
+   * 设置中的「悬浮球」开关。默认关闭。
+   *
+   * 与 keepRuntimeInBackground 是两件独立的事，界面不要合并成一个开关。
+   */
+  overlayBallEnabled?: boolean
 }
 
 export interface RuntimeSettingsUpdate extends RuntimeSettings {
@@ -136,6 +142,20 @@ export interface KeepAliveState {
   lastPhase?: RuntimePhase
   /** 最近一次状态写入时间（毫秒时间戳）；从未记录时为 0。 */
   lastUpdatedAtMillis?: number
+}
+
+/**
+ * 悬浮球状态。
+ *
+ * 不含任何用户数据：只有开关值、系统权限状态与服务存活状态三个布尔量。
+ */
+export interface OverlayBallState {
+  /** 设置中的「悬浮球」开关当前值。 */
+  enabled: boolean
+  /** 系统是否已授予「显示在其他应用上层」权限。 */
+  canDrawOverlays: boolean
+  /** 悬浮球服务当前是否在运行。 */
+  serviceActive: boolean
 }
 
 /** 通知权限申请结果；supported 为 false 表示系统版本低于 Android 13。 */
@@ -238,6 +258,10 @@ export interface RuntimeBridge {
   getKeepAliveState: () => Promise<KeepAliveState>
   /** 申请前台服务通知权限；Android 13 以下直接返回已授予。 */
   requestNotificationPermission: () => Promise<NotificationPermissionResult>
+  /** 悬浮球状态；不含任何用户数据。 */
+  getOverlayBallState: () => Promise<OverlayBallState>
+  /** 跳转到系统「显示在其他应用上层」设置页。该权限只能由用户手动开启。 */
+  openOverlaySettings: () => Promise<void>
   /** 诊断日志状态；不含日志内容。 */
   getDiagnosticLogState: () => Promise<DiagnosticLogState>
   /** 更新采集开关与保留天数（1–30）。 */

@@ -10,6 +10,7 @@ import {
   validateHarnessLog,
   validateKeepAliveState,
   validateNotificationPermissionResult,
+  validateOverlayBallState,
   validateRuntimeProgress,
   validateRuntimeSource,
   validateRuntimeState,
@@ -110,6 +111,8 @@ describe('settings validation', () => {
       autoLaunch: false,
       // 旧存储没有该键：按默认 false 迁移，不改变既有行为。
       keepRuntimeInBackground: false,
+      // 同理：旧存储也没有悬浮球键，缺省按关闭处理。
+      overlayBallEnabled: false,
     })
     expect(() => validateStoredSettings({
       manifestUrl: '',
@@ -145,6 +148,8 @@ describe('settings validation', () => {
       configuredModelProviders: [],
       autoLaunch: false,
       keepRuntimeInBackground: false,
+      // 缺省时回落 false：与原生侧「缺键按 false」一致，老用户不会突然多出一个悬浮球。
+      overlayBallEnabled: false,
     })
   })
 
@@ -218,7 +223,24 @@ describe('settings validation', () => {
       clearProviderApiKeys: ['deepseek'],
       autoLaunch: true,
       keepRuntimeInBackground: true,
+      overlayBallEnabled: false,
     })
+  })
+
+  it('设置校验保留悬浮球字段', () => {
+    // 这两个函数是显式重建对象、不展开透传：漏掉字段不会报错，
+    // 只会让前端永远读不到开关值（表现为设置页开关永远显示关闭）。
+    const validSettings = {
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: false,
+      terminalFontSize: 14,
+      configuredModelProviders: [],
+    }
+    expect(validateSettings({ ...validSettings, overlayBallEnabled: true }).overlayBallEnabled).toBe(true)
+    // 字段缺席时回落 false：与原生侧「缺键按 false」一致，
+    // 老版本升级上来的用户不会突然多出一个悬浮球。
+    expect(validateSettings({ ...validSettings }).overlayBallEnabled).toBe(false)
   })
 
   it('ignores retired frontend preferences and rejects invalid provider updates', () => {
@@ -230,6 +252,7 @@ describe('settings validation', () => {
       configuredModelProviders: [],
       autoLaunch: true,
       keepRuntimeInBackground: false,
+      overlayBallEnabled: false,
     }
     expect(validateStoredSettings({ ...base, defaultFrontend: 'workbench' })).toEqual(base)
     expect(() => validateSettingsUpdate({ ...base, providerApiKeys: { custom: 'key' } } as never)).toThrow('供应商')
@@ -429,5 +452,27 @@ describe('运行日志校验', () => {
       .toHaveLength(HARNESS_LOG_MAX_CHARS)
     expect(() => validateHarnessLog({ available: true, text: 'x'.repeat(HARNESS_LOG_MAX_CHARS + 1) }))
       .toThrow('长度')
+  })
+})
+
+describe('悬浮球状态校验', () => {
+  it('接受合法的悬浮球状态', () => {
+    const state = validateOverlayBallState({
+      enabled: true,
+      canDrawOverlays: true,
+      serviceActive: true,
+    })
+    expect(state).toEqual({ enabled: true, canDrawOverlays: true, serviceActive: true })
+  })
+
+  it('拒绝非布尔字段', () => {
+    // 原生返回值不可信：字段缺失或类型不符时必须抛错，而不是静默降级成 false，
+    // 否则界面会把「读取失败」显示成「开关是关的」，用户点了没反应也不知道为什么。
+    expect(() => validateOverlayBallState({ enabled: 'true', canDrawOverlays: true, serviceActive: true }))
+      .toThrow()
+    expect(() => validateOverlayBallState({ enabled: true, canDrawOverlays: 1, serviceActive: false }))
+      .toThrow()
+    expect(() => validateOverlayBallState({ enabled: true, canDrawOverlays: true }))
+      .toThrow()
   })
 })
