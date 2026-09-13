@@ -998,7 +998,13 @@ interface SettingsScreenProps {
   keepAlive: KeepAliveState
   /** 读取访客进程输出尾部；由折叠区块在展开时按需调用。 */
   loadHarnessLog: () => Promise<HarnessLog>
-  /** 悬浮球状态：开关值、系统权限与服务状态都由原生侧决定，这里只用于展示与禁用判断。 */
+  /**
+   * 悬浮球状态（原生侧真值）。
+   *
+   * 界面目前只消费 canDrawOverlays：开关能否操作、权限引导入口、以及「系统权限已关闭」
+   * 提示都由它决定。enabled 与 serviceActive 只随状态一起保存，尚未渲染、也不参与任何判断 ——
+   * 开关的显示值取自设置草稿 draft.overlayBallEnabled，不是这里的 enabled。
+   */
   overlayBall: OverlayBallState
   page: SettingsPage
   runtime: RuntimeState
@@ -1254,7 +1260,9 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
               }}
             />
           </label>
-          {/* 悬浮球与「后台保持」是两个独立开关：前者只提供回到对话的入口，不提升进程存活优先级。 */}
+          {/* 悬浮球与「后台保持」是两个互相独立的开关，但各自都会提高本应用进程被系统回收的优先级：
+              开悬浮球不会去拉起运行时的保活服务；悬浮球自身由独立的前台服务承载，
+              与「后台保持」一样只提高优先级，不保证进程不被系统结束。 */}
           <label className="toggle-row">
             <span>
               <strong>{t("悬浮球")}</strong>
@@ -1276,13 +1284,8 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
             />
           </label>
           {!overlayBall.canDrawOverlays && (
-            <button
-              className="button button-secondary"
-              type="button"
-              onClick={onOpenOverlaySettings}
-            >
-              {t("前往系统设置开启")}
-            </button>
+            <button className="button button-secondary" type="button" onClick={onOpenOverlaySettings} disabled={busy !== null}>
+              <ExternalLink size={18} />{t("前往系统设置开启")}</button>
           )}
           <div className="settings-status-list">
             <div className="settings-status-row">
@@ -1855,15 +1858,16 @@ export function App() {
   }, [activeView, booting, busy, language, launchHarness, onboardingOpen, runtime, settings])
 
   const openSettings = useCallback((page: SettingsPage) => {
-    // 悬浮球开关可以被悬浮球菜单在原生侧直接改写：进入设置页前重读一次设置与悬浮球状态，
-    // 否则用户用菜单关掉了球、进设置页却看到开关还开着，此时保存还会把菜单的关闭动作覆盖回去。
-    // 只在「进入设置页」这一个时机读取：不做全局轮询，也不挂在页面可见性上，
-    // 避免用户正在页内编辑时被无谓的刷新重置草稿。
+    // 设置本身只在「进入设置页」这一个时机重读：悬浮球开关可以被悬浮球菜单在原生侧直接改写，
+    // 不重读的话用户用菜单关掉了球、进设置页却看到开关还开着，此时保存还会把关闭动作覆盖回去。
+    // 刻意不做全局轮询、也不挂在页面可见性上：用户可能正在页内编辑，无谓的刷新会把草稿重置掉。
     void runtimeBridge.getSettings()
       .then(setSettings)
       .catch(() => {
         // 读取失败时保留已有设置：不阻塞进入设置页，也不清空草稿的数据来源。
       })
+    // 悬浮球状态是另一回事：它决定开关能否操作，除这里顺手对齐一次外，
+    // 还由上面那个 effect 的 2.5s 轮询与 focus/visibilitychange 持续刷新。
     void runtimeBridge.getOverlayBallState()
       .then(setOverlayBall)
       .catch(() => {

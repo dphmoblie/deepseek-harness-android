@@ -658,6 +658,8 @@ describe('悬浮球设置', () => {
     openSettingsPage('运行与后台')
     expect(await screen.findByText('悬浮球')).toBeInTheDocument()
     expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeDisabled()
+    // 「系统权限已关闭」只在设置里记着开启时才出现：这里设置是关着的，不能只因为没权限就报它。
+    expect(screen.queryByText('系统权限已关闭')).not.toBeInTheDocument()
 
     // 文案以源码中的当前写法为准（界面润色把「去系统设置开启」改成了「前往系统设置开启」）。
     fireEvent.click(screen.getByRole('button', { name: '前往系统设置开启' }))
@@ -693,5 +695,20 @@ describe('悬浮球设置', () => {
 
     openSettingsPage('运行与后台')
     expect(await screen.findByText(/系统权限已关闭/)).toBeInTheDocument()
+  })
+
+  it('进入设置二级页时重新读取设置，避免草稿把原生侧改动覆盖回去', async () => {
+    // 用户可能刚用悬浮球菜单在原生侧关掉了球：不重读设置的话，进设置页看到的是旧值，
+    // 一保存就把菜单的关闭动作覆盖回去。挂载读一次、进入设置页再读一次。
+    bridge.getSettings.mockResolvedValueOnce({ ...settings })
+    bridge.getSettings.mockResolvedValueOnce({ ...settings, overlayBallEnabled: true })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    expect(bridge.getSettings).toHaveBeenCalledTimes(1)
+
+    openSettingsPage('运行与后台')
+    await waitFor(() => expect(bridge.getSettings).toHaveBeenCalledTimes(2))
+    // 重读的结果必须真的进到开关上，而不只是多调了一次桥方法。
+    await waitFor(() => expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked())
   })
 })
