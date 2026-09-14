@@ -103,6 +103,40 @@ def main() -> int:
             assert source.getmember("opt/python/bin/python3.13").mode == 0o755
             assert source.getmember("opt/python/lib/stdlib.py").mode == 0o644
 
+    with tempfile.TemporaryDirectory(prefix="dsh-npm-executable-mode-") as directory:
+        root = Path(directory)
+        runtime = root / "runtime"
+        expected_modes = {
+            "node_modules/.pnpm/@vscode+ripgrep-linux-arm64@1.18.0/node_modules/@vscode/ripgrep-linux-arm64/bin/rg": 0o755,
+            "node_modules/.pnpm/@deepseek-ai+node-addon-system-linux-arm64@0.1.2/node_modules/@deepseek-ai/node-addon-system-linux-arm64/bin/landlock-run": 0o755,
+            "node_modules/@vscode/ripgrep-linux-arm64/bin/rg": 0o755,
+            "node_modules/@deepseek-ai/node-addon-system-linux-arm64/bin/landlock-run": 0o755,
+            "node_modules/@vscode/ripgrep-linux-arm64/bin/rg.data": 0o644,
+            "node_modules/@vscode/ripgrep-linux-arm64/lib/index.js": 0o644,
+            "node_modules/@deepseek-ai/node-addon-system-linux-arm64/bin/landlock-run.json": 0o644,
+            "node_modules/@deepseek-ai/node-addon-system-linux-arm64/lib/index.js": 0o644,
+            "node_modules/@vscode/ripgrep-linux-arm64-extra/bin/rg": 0o644,
+            "node_modules/@vscode/ripgrep-linux-x64/bin/rg": 0o644,
+            "node_modules/@other/node-addon-system-linux-arm64/bin/landlock-run": 0o644,
+            "node_modules/other/bin/rg": 0o644,
+            "not_node_modules/@vscode/ripgrep-linux-arm64/bin/rg": 0o644,
+            "@deepseek-ai/node-addon-system-linux-arm64/bin/landlock-run": 0o644,
+        }
+        for relative, mode in expected_modes.items():
+            path = runtime / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"fixture")
+            # Target executables arrive without execute bits; unrelated source files may have them.
+            path.chmod(0o644 if mode == 0o755 else 0o755)
+        archive = root / "runtime.tar"
+        with module.tarfile.open(archive, "w") as target:
+            writer = module.RootfsWriter(target, 0)
+            module.add_windows_tree(writer, runtime, "opt/dsh")
+        with module.tarfile.open(archive, "r") as source:
+            for relative, mode in expected_modes.items():
+                member = source.getmember(f"opt/dsh/{relative}")
+                assert member.mode == mode, f"unexpected runtime mode: {relative}: {member.mode:o}"
+
     if sys.platform != "win32":
         publisher_spec = importlib.util.spec_from_file_location(
             "mobile_session_publish",
