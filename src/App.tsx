@@ -1008,20 +1008,15 @@ function HarnessLogPanel({ loadHarnessLog }: HarnessLogPanelProps) {
 
 interface SettingsScreenProps {
   busy: string | null
+  settingsReadStatus: 'idle' | 'loading' | 'failed'
   /** 诊断日志状态：与设置草稿独立，由原生侧直接管理。 */
   diagnostic: DiagnosticLogState
   keepAlive: KeepAliveState
   /** 读取访客进程输出尾部；由折叠区块在展开时按需调用。 */
   loadHarnessLog: () => Promise<HarnessLog>
-  /**
-   * 悬浮球状态（原生侧真值）。
-   *
-   * 界面只消费 canDrawOverlays：开关能否操作、权限引导入口、以及「系统权限已关闭」
-   * 提示都由它决定。enabled 与 serviceActive 不参与本页渲染；保存后的生效复核在 App 层
-   * 消费它们（与「后台保持」同一套节奏）。开关的显示值取自设置草稿 draft.overlayBallEnabled，
-   * 不是这里的 enabled。
-   */
-  overlayBall: OverlayBallState
+  /** 未编辑的悬浮球开关跟随原生状态；null 表示尚未取得快照。 */
+  overlayBall: OverlayBallState | null
+  overlayBallReadFailed: boolean
   page: SettingsPage
   runtime: RuntimeState
   settings: RuntimeSettings | null
@@ -1036,12 +1031,14 @@ interface SettingsScreenProps {
   onOpenOverlaySettings: () => void
   onOpenShizuku: () => void
   onRequestNotificationPermission: () => void
+  onReloadSettings: () => void
   onSave: (settings: RuntimeSettingsUpdate) => void
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBall, page, runtime, settings, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onOpenOverlaySettings, onOpenShizuku, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBall, overlayBallReadFailed, page, runtime, settings, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
   const [draft, setDraft] = useState<RuntimeSettings | null>(settings)
+  const [overlayBallDraft, setOverlayBallDraft] = useState<boolean | undefined>()
   const [selectedProvider, setSelectedProvider] = useState<ModelProviderId | 'custom'>('deepseek')
   const [credentialDrafts, setCredentialDrafts] = useState<ProviderApiKeys>({})
   const [clearedProviders, setClearedProviders] = useState<ModelProviderId[]>([])
@@ -1050,15 +1047,30 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
 
   useEffect(() => {
     setDraft(settings)
+    setOverlayBallDraft(undefined)
     setCredentialDrafts({})
     setClearedProviders([])
     setCustomCredentials({})
     setClearedCustomProviders([])
   }, [settings])
 
-  if (draft === null) {
+  if (settingsReadStatus === 'failed') {
+    return <div className="screen loading-screen">
+      <p role="alert">{t("无法读取最新设置，请重试")}</p>
+      <button className="button button-primary" type="button" onClick={onReloadSettings}>{t("重试")}</button>
+      <button className="button button-secondary" type="button" onClick={onBack}>{t("返回设置")}</button>
+    </div>
+  }
+  if (settingsReadStatus === 'loading' || draft === null) {
     return <div className="screen loading-screen"><Loader2 className="spin" size={24} /><span>{t("正在读取设置")}</span></div>
   }
+
+  // 只为用户主动修改的开关保留草稿；原生菜单关闭悬浮球时，不影响页内其他未保存内容。
+  const overlayBallEnabled = overlayBallDraft
+    ?? (overlayBallReadFailed ? draft.overlayBallEnabled : overlayBall?.enabled)
+    ?? draft.overlayBallEnabled
+    ?? false
+  const overlayPermissionKnown = overlayBall !== null && !overlayBallReadFailed
 
   const shizukuLabel = !shizuku.installed
     ? t("未安装")
@@ -1080,8 +1092,13 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
     draft.configuredModelProviders.includes(selectedProvider) || credentialDrafts[selectedProvider] !== undefined
   ) && !clearedProviders.includes(selectedProvider)
   const saveDraft = (): void => {
+    // 悬浮球是原生侧可被菜单直接修改的独立偏好。只有用户在本页实际拨动开关时，
+    // 才把它作为更新字段发送；否则省略该字段，让原生侧保留菜单刚写入的值。
+    const settingsWithoutOverlayBall = { ...draft }
+    delete settingsWithoutOverlayBall.overlayBallEnabled
     onSave({
-      ...draft,
+      ...settingsWithoutOverlayBall,
+      ...(overlayBallDraft === undefined ? {} : { overlayBallEnabled }),
       ...(Object.keys(credentialDrafts).length === 0 ? {} : { providerApiKeys: credentialDrafts }),
       ...(clearedProviders.length === 0 ? {} : { clearProviderApiKeys: clearedProviders }),
       ...(Object.keys(customCredentials).length === 0 ? {} : { customProviderApiKeys: customCredentials }),
@@ -1283,11 +1300,13 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
             <span>
               <strong>{t("悬浮球")}</strong>
               <small>
-                {overlayBall.canDrawOverlays
+                {!overlayPermissionKnown
+                  ? t("暂时无法确认悬浮窗权限")
+                  : overlayBall.canDrawOverlays
                   ? t("在其他应用上层显示悬浮球，点按可快速回到对话")
                   : t("需要「显示在其他应用上层」权限才能使用")}
               </small>
-              {draft.overlayBallEnabled === true && !overlayBall.canDrawOverlays ? (
+              {overlayBallEnabled && overlayPermissionKnown && !overlayBall.canDrawOverlays ? (
                 <small className="status-text-error">{t("系统权限已关闭")}</small>
               ) : null}
             </span>
@@ -1296,12 +1315,13 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
             <input
               type="checkbox"
               role="switch"
-              checked={draft.overlayBallEnabled ?? false}
-              disabled={!overlayBall.canDrawOverlays && draft.overlayBallEnabled !== true}
-              onChange={event => setDraft({ ...draft, overlayBallEnabled: event.target.checked })}
+              checked={overlayBallEnabled}
+              disabled={(!overlayPermissionKnown || !overlayBall.canDrawOverlays) && !overlayBallEnabled}
+              onChange={event => setOverlayBallDraft(event.target.checked)}
             />
           </label>
-          {!overlayBall.canDrawOverlays && (
+          {overlayBallReadFailed && <p className="status-text-error" role="alert">{t("无法读取悬浮球状态，正在重试")}</p>}
+          {overlayPermissionKnown && !overlayBall.canDrawOverlays && (
             <button className="button button-secondary" type="button" onClick={onOpenOverlaySettings} disabled={busy !== null}>
               <ExternalLink size={18} />{t("前往系统设置开启")}</button>
           )}
@@ -1541,17 +1561,14 @@ export function App() {
   const previousViewRef = useRef<AppView | null>(null)
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME)
   const [settings, setSettings] = useState<RuntimeSettings | null>(null)
+  const [settingsReadStatus, setSettingsReadStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
+  const settingsReadRevision = useRef(0)
   const [shizuku, setShizuku] = useState<ShizukuState>(EMPTY_SHIZUKU)
   const [keepAlive, setKeepAlive] = useState<KeepAliveState>(EMPTY_KEEP_ALIVE)
-  /**
-   * 悬浮球状态。开关值、系统权限与服务状态都由原生侧决定，这里只保存最近一次读到的值；
-   * 未知时按最保守的「未开启、无权限」显示，不会给用户一个看似可用的开关。
-   */
-  const [overlayBall, setOverlayBall] = useState<OverlayBallState>({
-    enabled: false,
-    canDrawOverlays: false,
-    serviceActive: false,
-  })
+  // 查询失败与「没有权限」分开记录，保留最近一次快照供开关关闭操作使用。
+  const [overlayBall, setOverlayBall] = useState<OverlayBallState | null>(null)
+  const [overlayBallReadFailed, setOverlayBallReadFailed] = useState(false)
+  const overlayBallReadRevision = useRef(0)
   const [diagnostic, setDiagnostic] = useState<DiagnosticLogState>(EMPTY_DIAGNOSTIC)
   const [booting, setBooting] = useState(true)
   const [onboardingOpen, setOnboardingOpen] = useState(() => {
@@ -1571,6 +1588,21 @@ export function App() {
   }, [])
 
   const terminalError = useCallback((message: string) => notify(message, 'error'), [notify])
+
+  const readOverlayBall = useCallback(async () => {
+    const revision = ++overlayBallReadRevision.current
+    try {
+      const next = await runtimeBridge.getOverlayBallState()
+      if (revision === overlayBallReadRevision.current) {
+        setOverlayBall(next)
+        setOverlayBallReadFailed(false)
+      }
+      return next
+    } catch (error) {
+      if (revision === overlayBallReadRevision.current) setOverlayBallReadFailed(true)
+      throw error
+    }
+  }, [])
 
   /**
    * 视图导航入口（取代直接调用裸的 setState）：只有视图真的变化才写历史并重渲染。
@@ -1670,8 +1702,9 @@ export function App() {
       }
     })()
 
+    const initialSettingsRevision = settingsReadRevision.current
     void runtimeBridge.getSettings()
-      .then(next => { if (!cancelled) setSettings(next) })
+      .then(next => { if (!cancelled && initialSettingsRevision === settingsReadRevision.current) setSettings(next) })
       .catch(error => { if (!cancelled) notify(errorMessage(error), 'error') })
 
     void runtimeBridge.getShizukuState()
@@ -1686,10 +1719,9 @@ export function App() {
         // 后台保持状态读取失败不阻塞界面：保持上一次的已知状态。
       })
 
-    void runtimeBridge.getOverlayBallState()
-      .then(next => { if (!cancelled) setOverlayBall(next) })
+    void readOverlayBall()
       .catch(() => {
-        // 悬浮球状态读取失败不阻塞界面：保持上一次的已知状态。
+        // 悬浮球属于可选能力，错误由设置页单独显示。
       })
 
     void runtimeBridge.getDiagnosticLogState()
@@ -1703,7 +1735,7 @@ export function App() {
       if (removeProgress !== undefined) void removeProgress()
       void progressHandlePromise
     }
-  }, [notify])
+  }, [notify, readOverlayBall])
 
   useEffect(() => {
     let cancelled = false
@@ -1732,10 +1764,9 @@ export function App() {
      */
     const refreshOverlayBall = (): void => {
       if (document.visibilityState === 'hidden') return
-      void runtimeBridge.getOverlayBallState()
-        .then(next => { if (!cancelled) setOverlayBall(next) })
+      void readOverlayBall()
         .catch(() => {
-          // 读取失败时保留上一次状态，不重复提示同一条错误。
+          // 设置页保留查询失败提示，不在轮询中重复弹通知。
         })
     }
     const handleVisibilityChange = (): void => {
@@ -1764,7 +1795,7 @@ export function App() {
       window.removeEventListener('focus', handleFocus)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [notify])
+  }, [notify, readOverlayBall])
 
   const run = useCallback(async (id: string, operation: () => Promise<void>, success?: string) => {
     if (busyRef.current !== null) return
@@ -1876,23 +1907,24 @@ export function App() {
   }, [activeView, booting, busy, language, launchHarness, onboardingOpen, runtime, settings])
 
   const openSettings = useCallback((page: SettingsPage) => {
-    // 设置本身只在「进入设置页」这一个时机重读：悬浮球开关可以被悬浮球菜单在原生侧直接改写，
-    // 不重读的话用户用菜单关掉了球、进设置页却看到开关还开着，此时保存还会把关闭动作覆盖回去。
-    // 刻意不做全局轮询、也不挂在页面可见性上：用户可能正在页内编辑，无谓的刷新会把草稿重置掉。
+    // 最新设置读完之前不展示可编辑的旧草稿，避免迟到响应清空刚输入的内容。
+    const revision = ++settingsReadRevision.current
+    setSettingsReadStatus('loading')
     void runtimeBridge.getSettings()
-      .then(setSettings)
-      .catch(() => {
-        // 读取失败时保留已有设置：不阻塞进入设置页，也不清空草稿的数据来源。
+      .then(next => {
+        if (revision !== settingsReadRevision.current) return
+        setSettings(next)
+        setSettingsReadStatus('idle')
       })
-    // 悬浮球状态是另一回事：它决定开关能否操作，除这里顺手对齐一次外，
-    // 还由上面那个 effect 的 2.5s 轮询与 focus/visibilitychange 持续刷新。
-    void runtimeBridge.getOverlayBallState()
-      .then(setOverlayBall)
       .catch(() => {
-        // 读取失败时保留上一次的已知状态。
+        if (revision === settingsReadRevision.current) setSettingsReadStatus('failed')
+      })
+    void readOverlayBall()
+      .catch(() => {
+        // 悬浮球查询失败不阻塞其他设置。
       })
     setActiveView(SETTINGS_PAGE_META[page].view)
-  }, [setActiveView])
+  }, [readOverlayBall, setActiveView])
 
   /** 更新诊断日志采集开关与保留天数；原生侧会再次夹取保留范围。 */
   const saveDiagnosticSettings = useCallback((enabled: boolean, retentionDays: number) => {
@@ -1957,16 +1989,18 @@ export function App() {
     void run('save-settings', async () => {
       const saved = await runtimeBridge.saveSettings(nextSettings)
       setSettings(saved)
-      setRuntime(await runtimeBridge.getState())
-      // 保存可能改变后台保持开关，服务状态需要重新读取。
-      const nextKeepAlive = await runtimeBridge.getKeepAliveState()
-      setKeepAlive(nextKeepAlive)
-      // 悬浮球同理：保存可能切换开关，前台服务状态需要重新读取。
-      const nextOverlayBall = await runtimeBridge.getOverlayBallState()
-      setOverlayBall(nextOverlayBall)
-      // 「已保存」不等于「已生效」：前台服务是否真的进入前台由原生状态决定。
-      notify(t("设置已保存"), 'success')
-      if (saved.keepRuntimeInBackground === true && !nextKeepAlive.foregroundServiceActive) {
+      // 落盘成功后，状态查询失败不能被当成保存失败；三项查询互不阻塞。
+      const [runtimeResult, keepAliveResult, overlayResult] = await Promise.allSettled([
+        runtimeBridge.getState(), runtimeBridge.getKeepAliveState(), readOverlayBall(),
+      ])
+      if (runtimeResult.status === 'fulfilled') setRuntime(runtimeResult.value)
+      if (keepAliveResult.status === 'fulfilled') setKeepAlive(keepAliveResult.value)
+      if ([runtimeResult, keepAliveResult, overlayResult].some(result => result.status === 'rejected')) {
+        notify(t("设置已保存，但部分状态暂时无法确认，请稍后重试"), 'info')
+      } else {
+        notify(t("设置已保存"), 'success')
+      }
+      if (saved.keepRuntimeInBackground === true && keepAliveResult.status === 'fulfilled' && !keepAliveResult.value.foregroundServiceActive) {
         // 服务可能只是还在启动中，等宽限期过后用原生状态复核：
         // 仍为「未运行」才提示未生效（缺少通知权限、后台启动被系统拒绝或厂商策略限制都会停在这里）。
         recheckForegroundServiceAfterSettle(
@@ -1979,13 +2013,12 @@ export function App() {
           },
         )
       }
-      if (saved.overlayBallEnabled === true && !nextOverlayBall.serviceActive) {
+      if (saved.overlayBallEnabled === true && overlayResult.status === 'fulfilled' && !overlayResult.value.serviceActive) {
         // 悬浮球走同一套节奏：原生侧启动前台服务失败时是静默吞异常的，
         // 只有等宽限期过后复核原生状态，才能把「开关开着但球没起来」的原因告诉用户。
         recheckForegroundServiceAfterSettle(
-          () => runtimeBridge.getOverlayBallState(),
+          readOverlayBall,
           latest => {
-            setOverlayBall(latest)
             if (latest.enabled === true && !latest.serviceActive) {
               notify(t("设置已保存，但悬浮球未生效：前台服务未运行。系统可能拒绝了前台服务启动，或权限不足；请在系统设置中检查「显示在其他应用上层」与通知权限后重试。"), 'error')
             }
@@ -1993,7 +2026,7 @@ export function App() {
         )
       }
     })
-  }, [notify, run])
+  }, [notify, readOverlayBall, run])
 
   /**
    * 申请前台服务通知权限。
@@ -2058,7 +2091,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} page={page} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} page={page} runtime={runtime} settings={settings} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

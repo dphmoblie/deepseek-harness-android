@@ -433,5 +433,9 @@ export const english: Readonly<Record<string, string>> = {
   "Shizuku 设备服务未在限定时间内退出，请重试。": "The Shizuku device service did not stop within the time limit. Please retry.",
   "Shizuku 设备服务停止操作被中断，请重试。": "Stopping the Shizuku device service was interrupted. Please retry.",
   "无法停止 Shizuku 设备服务，请重试。": "Unable to stop the Shizuku device service. Please retry.",
-  "Shizuku 设备服务正在停止，请稍后重试。": "The Shizuku device service is stopping. Please try again shortly."
+  "Shizuku 设备服务正在停止，请稍后重试。": "The Shizuku device service is stopping. Please try again shortly.",
+  "无法读取最新设置，请重试": "Unable to read the latest settings. Please retry.",
+  "暂时无法确认悬浮窗权限": "Overlay permission could not be checked.",
+  "无法读取悬浮球状态，正在重试": "Unable to read the floating ball status. Retrying…",
+  "设置已保存，但部分状态暂时无法确认，请稍后重试": "Settings saved, but some status checks failed. Please retry shortly."
 }

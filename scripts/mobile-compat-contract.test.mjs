@@ -576,6 +576,10 @@ test('keep-alive keeps the device bridge process-scoped and the notification ent
     appRoot,
     'android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeHost.kt',
   ), 'utf8')
+  const runtimeStore = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeStore.kt',
+  ), 'utf8')
   const keepAliveService = await readFile(resolve(
     appRoot,
     'android/app/src/main/java/io/deepseekharness/mobile/HarnessKeepAliveService.kt',
@@ -646,6 +650,12 @@ test('keep-alive keeps the device bridge process-scoped and the notification ent
   assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_REORDER_TO_FRONT/)
   assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_SINGLE_TOP/)
   assert.doesNotMatch(entryActivity, /Intent\.FLAG_ACTIVITY_CLEAR_TOP/)
+
+  // 保存其他设置时不得用旧页面快照覆盖悬浮球菜单刚写入的关闭状态。
+  assert.match(nativePlugin, /optionalOverlayBallEnabled\(call\.data\)/)
+  assert.match(nativePlugin, /overlayBallEnabledUpdate = overlayBallEnabledUpdate/)
+  assert.match(runtimeStore, /overlayBallEnabledUpdate\?\.let \{ editor\.putBoolean\(KEY_OVERLAY_BALL, it\) \}/)
+  assert.doesNotMatch(runtimeStore, /\.putBoolean\(KEY_OVERLAY_BALL, settings\.overlayBallEnabled\)/)
 })
 
 test('Harness WebView serves the system file chooser and keeps page-initiated loads blocked', async () => {

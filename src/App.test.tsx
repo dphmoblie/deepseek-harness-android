@@ -99,8 +99,9 @@ const diagnostic: DiagnosticLogState = {
 }
 
 /** 进入某个设置二级页：设置首页只保留分类入口。 */
-function openSettingsPage(name: string): void {
+async function openSettingsPage(name: string): Promise<void> {
   fireEvent.click(screen.getByRole('button', { name: new RegExp(name) }))
+  await screen.findByRole('heading', { name })
 }
 
 beforeEach(() => {
@@ -264,14 +265,14 @@ describe('App conversation gate', () => {
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
     // 运行时来源在「运行与后台」页。
-    openSettingsPage('运行与后台')
+    await openSettingsPage('运行与后台')
     expect(screen.getByText('正式版已预置下载源；两项留空表示改用 APK 内置运行时（仅内嵌构建可用）')).toBeInTheDocument()
     // 屏幕内返回按钮走的是历史回退，视图切换在 popstate 之后生效。
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
     expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()
 
     // 字号在「终端与外观」页。
-    openSettingsPage('终端与外观')
+    await openSettingsPage('终端与外观')
     const fontSlider = await screen.findByRole('slider', { name: /字号/ })
     fireEvent.change(fontSlider, { target: { value: '17' } })
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
@@ -284,7 +285,7 @@ describe('App conversation gate', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('模型与密钥')
+    await openSettingsPage('模型与密钥')
     fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
@@ -360,7 +361,7 @@ describe('后台保持与恢复', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('运行与后台')
+    await openSettingsPage('运行与后台')
     const toggle = await screen.findByRole('switch', { name: /后台保持 Harness/ })
     expect(toggle).not.toBeChecked()
     expect(bridge.requestNotificationPermission).not.toHaveBeenCalled()
@@ -381,7 +382,7 @@ describe('后台保持与恢复', () => {
     render(<App />)
 
     fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
-    openSettingsPage('运行与后台')
+    await openSettingsPage('运行与后台')
 
     const toggle = await screen.findByRole('switch', { name: /后台保持 Harness/ })
     fireEvent.click(toggle)
@@ -406,7 +407,7 @@ describe('后台保持与恢复', () => {
     render(<App />)
 
     fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
-    openSettingsPage('运行与后台')
+    await openSettingsPage('运行与后台')
 
     const saveButton = await screen.findByRole('button', { name: '保存设置' })
     await waitFor(() => expect(saveButton).toBeEnabled())
@@ -438,7 +439,7 @@ describe('后台保持与恢复', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('运行与后台')
+    await openSettingsPage('运行与后台')
     expect(await screen.findByText('前台服务运行中')).toBeVisible()
     expect(screen.getByText('未授予')).toBeVisible()
     // 设备 Shell 辅助只反映 Shizuku 授权状态，不代表保活能力。
@@ -470,7 +471,7 @@ describe('诊断与日志', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志')
     const toggle = await screen.findByRole('switch', { name: /收集诊断日志/ })
     await waitFor(() => expect(toggle).toBeEnabled())
     expect(toggle).not.toBeChecked()
@@ -504,7 +505,7 @@ describe('诊断与日志', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志')
     expect(await screen.findByText('收集中')).toBeVisible()
     expect(screen.getByText('2 个文件 · 4.0 KB')).toBeVisible()
 
@@ -534,7 +535,7 @@ describe('诊断与日志', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: '导出并分享' }))
 
     const alert = await screen.findByRole('alert')
@@ -548,7 +549,7 @@ describe('诊断与日志', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志')
     const toggle = await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     // 折叠状态不碰桥接：访客输出可能含会话内容，不展开就不带进界面。
@@ -574,7 +575,7 @@ describe('诊断与日志', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
 
     expect(await screen.findByText('当前没有可读取的运行日志')).toBeVisible()
@@ -590,7 +591,7 @@ describe('诊断与日志', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
 
     fireEvent.click(await screen.findByRole('button', { name: '复制' }))
@@ -655,7 +656,7 @@ describe('悬浮球设置', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('运行与后台')
+    await openSettingsPage('运行与后台')
     expect(await screen.findByText('悬浮球')).toBeInTheDocument()
     expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeDisabled()
     // 「系统权限已关闭」只在设置里记着开启时才出现：这里设置是关着的，不能只因为没权限就报它。
@@ -671,7 +672,7 @@ describe('悬浮球设置', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('运行与后台')
+    await openSettingsPage('运行与后台')
     const toggle = await screen.findByRole('switch', { name: /悬浮球/ })
     expect(toggle).not.toBeChecked()
 
@@ -693,7 +694,7 @@ describe('悬浮球设置', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('运行与后台')
+    await openSettingsPage('运行与后台')
     expect(await screen.findByText(/系统权限已关闭/)).toBeInTheDocument()
   })
 
@@ -705,7 +706,7 @@ describe('悬浮球设置', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    openSettingsPage('运行与后台')
+    await openSettingsPage('运行与后台')
     const toggle = await screen.findByRole('switch', { name: /悬浮球/ })
     await waitFor(() => expect(toggle).toBeChecked())
     expect(toggle).toBeEnabled()
@@ -724,11 +725,13 @@ describe('悬浮球设置', () => {
     // 一保存就把菜单的关闭动作覆盖回去。挂载读一次、进入设置页再读一次。
     bridge.getSettings.mockResolvedValueOnce({ ...settings })
     bridge.getSettings.mockResolvedValueOnce({ ...settings, overlayBallEnabled: true })
+    bridge.getOverlayBallState.mockResolvedValueOnce({ enabled: false, canDrawOverlays: true, serviceActive: false })
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: true, canDrawOverlays: true, serviceActive: true })
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
     expect(bridge.getSettings).toHaveBeenCalledTimes(1)
 
-    openSettingsPage('运行与后台')
+    await openSettingsPage('运行与后台')
     await waitFor(() => expect(bridge.getSettings).toHaveBeenCalledTimes(2))
     // 重读的结果必须真的进到开关上，而不只是多调了一次桥方法。
     await waitFor(() => expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked())
@@ -736,12 +739,13 @@ describe('悬浮球设置', () => {
 
   it('开启悬浮球但前台服务没起来时提示未生效', async () => {
     bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false, overlayBallEnabled: true })
+    bridge.saveSettings.mockImplementation((value: RuntimeSettingsUpdate) => Promise.resolve({ ...value, overlayBallEnabled: true }))
     // 权限已授予、开关已是开启状态，但悬浮球前台服务没有运行：以原生状态为准。
     bridge.getOverlayBallState.mockResolvedValue({ enabled: true, canDrawOverlays: true, serviceActive: false })
     render(<App />)
 
     fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
-    openSettingsPage('运行与后台')
+    await openSettingsPage('运行与后台')
 
     const saveButton = await screen.findByRole('button', { name: '保存设置' })
     await waitFor(() => expect(saveButton).toBeEnabled())
@@ -750,12 +754,139 @@ describe('悬浮球设置', () => {
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
       ...settings,
       autoLaunch: false,
-      overlayBallEnabled: true,
     }))
     // 悬浮球前台服务同样是异步拉起的：等宽限期后按原生状态复核，确认仍未运行才提示未生效。
     const alert = await screen.findByRole('alert', {}, { timeout: 4000 })
     expect(alert).toHaveTextContent('设置已保存，但悬浮球未生效')
     // 「已保存」不等于「已生效」：只留一句「设置已保存」是不够的。
     expect(screen.queryByText('设置已保存')).toBeNull()
+  })
+
+  it('进入设置时先读取最新值，再允许编辑，避免迟到响应覆盖输入', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    let resolveSettings!: (value: RuntimeSettings) => void
+    bridge.getSettings.mockImplementationOnce(() => new Promise<RuntimeSettings>(resolve => { resolveSettings = resolve }))
+
+    fireEvent.click(screen.getByRole('button', { name: /终端与外观/ }))
+    expect(screen.getByText('正在读取设置')).toBeVisible()
+    expect(screen.queryByRole('slider')).toBeNull()
+    expect(screen.queryByRole('button', { name: '保存设置' })).toBeNull()
+
+    await act(async () => {
+      resolveSettings({ ...settings, terminalFontSize: 16 })
+      await Promise.resolve()
+    })
+    const slider = await screen.findByRole('slider', { name: /字号/ })
+    expect(slider).toHaveValue('16')
+    fireEvent.change(slider, { target: { value: '18' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ terminalFontSize: 18 })))
+  })
+
+  it('设置重读失败时允许重试且不能保存旧快照', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    bridge.getSettings.mockRejectedValueOnce(new Error('read failed'))
+    fireEvent.click(screen.getByRole('button', { name: /运行与后台/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('无法读取最新设置，请重试')
+    expect(screen.queryByRole('button', { name: '保存设置' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(await screen.findByRole('heading', { name: '运行与后台' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '保存设置' })).toBeEnabled()
+  })
+
+  it('页内用菜单隐藏悬浮球后，保存其他草稿不会重新开启它', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, overlayBallEnabled: true })
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: true, canDrawOverlays: true, serviceActive: true })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('终端与外观')
+    const slider = screen.getByRole('slider', { name: /字号/ })
+    fireEvent.change(slider, { target: { value: '19' } })
+
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
+    await act(async () => {
+      fireEvent.focus(window)
+      await Promise.resolve()
+    })
+    expect(slider).toHaveValue('19')
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, terminalFontSize: 19 }))
+  })
+
+  it('菜单关闭后即使还没收到轮询结果，也不会提交旧的悬浮球开关值', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, overlayBallEnabled: true })
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: true, canDrawOverlays: true, serviceActive: true })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('运行与后台')
+    expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked()
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
+    // 原生菜单已关闭球，但不给前端 focus 或轮询事件，立即保存其他设置。
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(settings))
+  })
+
+  it('已修改的悬浮球草稿不被权限状态刷新覆盖', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('运行与后台')
+    const toggle = screen.getByRole('switch', { name: /悬浮球/ })
+    fireEvent.click(toggle)
+    await act(async () => {
+      fireEvent.focus(window)
+      await Promise.resolve()
+    })
+    expect(toggle).toBeChecked()
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ overlayBallEnabled: true })))
+  })
+
+  it('悬浮球查询失败显示未知状态，重试成功后恢复权限状态', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, overlayBallEnabled: true })
+    bridge.getOverlayBallState.mockRejectedValue(new Error('overlay read failed'))
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('运行与后台')
+    expect(screen.getByRole('alert')).toHaveTextContent('无法读取悬浮球状态，正在重试')
+    expect(screen.queryByText('系统权限已关闭')).toBeNull()
+    expect(screen.queryByRole('button', { name: '前往系统设置开启' })).toBeNull()
+    const toggle = screen.getByRole('switch', { name: /悬浮球/ })
+    expect(toggle).toBeChecked()
+    expect(toggle).toBeEnabled()
+
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: true, canDrawOverlays: true, serviceActive: true })
+    await act(async () => {
+      fireEvent.focus(window)
+      await Promise.resolve()
+    })
+    expect(screen.queryByText('无法读取悬浮球状态，正在重试')).toBeNull()
+    expect(screen.getByText('在其他应用上层显示悬浮球，点按可快速回到对话')).toBeVisible()
+  })
+
+  it('设置已落盘后悬浮球查询失败不会误报保存失败', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('终端与外观')
+    bridge.getOverlayBallState.mockRejectedValue(new Error('overlay read failed'))
+    fireEvent.change(screen.getByRole('slider', { name: /字号/ }), { target: { value: '20' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+
+    expect(await screen.findByText('设置已保存，但部分状态暂时无法确认，请稍后重试')).toBeVisible()
+    expect(screen.queryByText('overlay read failed')).toBeNull()
+    expect(screen.getByRole('slider', { name: /字号/ })).toHaveValue('20')
+  })
+
+  it('悬浮球保存成功但状态复核失败时仍显示已保存的开关值', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('运行与后台')
+    fireEvent.click(screen.getByRole('switch', { name: /悬浮球/ }))
+    bridge.getOverlayBallState.mockRejectedValue(new Error('overlay read failed'))
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+
+    expect(await screen.findByText('设置已保存，但部分状态暂时无法确认，请稍后重试')).toBeVisible()
+    expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked()
   })
 })

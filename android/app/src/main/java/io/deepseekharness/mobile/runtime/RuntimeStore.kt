@@ -227,6 +227,7 @@ class RuntimeStore(context: Context) {
         customProviders: List<CustomModelProvider> = emptyList(),
         customProviderApiKeyUpdates: Map<String, String> = emptyMap(),
         clearedCustomProviderApiKeys: Set<String> = emptySet(),
+        overlayBallEnabledUpdate: Boolean? = settings.overlayBallEnabled,
     ): RuntimeSettings {
         if (providerApiKeyUpdates.keys.any(clearedProviderApiKeys::contains)) {
             throw RuntimeFailure("SETTINGS_INVALID", "同一模型凭据不能同时更新和清除")
@@ -250,7 +251,6 @@ class RuntimeStore(context: Context) {
             .putString(KEY_MANIFEST_SHA256, settings.manifestSha256)
             .putBoolean(KEY_KEEP_AWAKE, settings.keepScreenAwake)
             .putBoolean(KEY_KEEP_BACKGROUND, settings.keepRuntimeInBackground)
-            .putBoolean(KEY_OVERLAY_BALL, settings.overlayBallEnabled)
             .putInt(KEY_FONT_SIZE, settings.terminalFontSize)
             // Retired frontend choices must not redirect the single official entrypoint.
             .remove(KEY_LEGACY_DEFAULT_FRONTEND)
@@ -258,6 +258,7 @@ class RuntimeStore(context: Context) {
             .putString(KEY_CUSTOM_PROVIDERS, customProvidersToJson(customProviders).toString())
             .remove(KEY_API_KEY)
             .remove("device_bridge_token")
+        overlayBallEnabledUpdate?.let { editor.putBoolean(KEY_OVERLAY_BALL, it) }
         if (encryptedCredentials == null) editor.remove(KEY_PROVIDER_CREDENTIALS)
         else editor.putString(KEY_PROVIDER_CREDENTIALS, encryptedCredentials)
         if (encryptedCustomCredentials == null) editor.remove(KEY_CUSTOM_PROVIDER_CREDENTIALS)
@@ -265,6 +266,8 @@ class RuntimeStore(context: Context) {
         val committed = editor.commit()
         if (!committed) throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法保存运行时设置")
         return settings.copy(
+            // Omitted updates are read after commit so a concurrent native-menu hide is preserved.
+            overlayBallEnabled = overlayBallEnabledUpdate ?: overlayBallEnabled(),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             customModelProviders = customProviders,
             configuredCustomModelProviders = customProviders.mapNotNullTo(linkedSetOf()) { provider ->

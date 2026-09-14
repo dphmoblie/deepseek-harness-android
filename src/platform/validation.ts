@@ -266,13 +266,15 @@ export function validateSettingsUpdate(settings: RuntimeSettingsUpdate): Runtime
     throw new Error('同一模型凭据不能同时更新和清除')
   }
   if (clearCustomProviderApiKeys.some(id => customProviderApiKeys[id] !== undefined)) throw new Error('同一自定义模型凭据不能同时更新和清除')
-  return {
+  const result: RuntimeSettingsUpdate = {
     ...validated,
     ...(Object.keys(providerApiKeys).length === 0 ? {} : { providerApiKeys }),
     ...(clearProviderApiKeys.length === 0 ? {} : { clearProviderApiKeys }),
     ...(Object.keys(customProviderApiKeys).length === 0 ? {} : { customProviderApiKeys }),
     ...(clearCustomProviderApiKeys.length === 0 ? {} : { clearCustomProviderApiKeys }),
   }
+  if (settings.overlayBallEnabled === undefined) delete result.overlayBallEnabled
+  return result
 }
 
 export function validateStoredSettings(value: unknown): RuntimeSettings {

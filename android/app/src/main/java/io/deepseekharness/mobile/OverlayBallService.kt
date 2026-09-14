@@ -1,5 +1,6 @@
 package io.deepseekharness.mobile
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -195,6 +196,7 @@ class OverlayBallService : Service() {
     // ── 球体 ────────────────────────────────────────────────────────────────
 
     /** 尝试把球挂到窗口上；返回 false 表示已经记录原因并请求停止服务。 */
+    @SuppressLint("ClickableViewAccessibility") // handleTouch 会在短按分支调用 view.performClick()。
     private fun attachBall(): Boolean {
         // 早退条件必须是「球确实还挂在窗口上」，不能只判引用非空：权限被系统撤销时窗口可能
         // 已被移除而 ballView 仍非空，无条件早退会让之后每次同步都直接返回 true，球再也回不来。
@@ -242,7 +244,15 @@ class OverlayBallService : Service() {
         params.x = x
         params.y = y
 
-        view.setOnTouchListener { _, event -> handleTouch(event, size) }
+        // 触摸与无障碍操作共用语义点击入口，TalkBack 可直接点击或长按球体。
+        view.setOnClickListener {
+            if (!stopIfOverlayPermissionRevoked()) openHarness()
+        }
+        view.setOnLongClickListener {
+            if (!stopIfOverlayPermissionRevoked()) showMenu()
+            true
+        }
+        view.setOnTouchListener { touched, event -> handleTouch(touched, event, size) }
         // 球是否还在窗口上由视图的附着回调维护：客户端侧的移除一定会回调，系统侧的移除
         // 视 ROM 实现而定，因此它只用于避免「已被摘掉的窗口挡住重挂」这一类误判，
         // 真正的清理由插件每次回前台的权限对齐（撤销 → 停服务 → 摘视图）兜底。
@@ -299,7 +309,7 @@ class OverlayBallService : Service() {
      *
      * 判定复用 [OverlayBallPolicy]，与单测覆盖的是同一套规则。
      */
-    private fun handleTouch(event: MotionEvent, size: Int): Boolean {
+    private fun handleTouch(view: View, event: MotionEvent, size: Int): Boolean {
         val slop = ViewConfiguration.get(this).scaledTouchSlop
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -343,7 +353,7 @@ class OverlayBallService : Service() {
                     // 拖动分支先被 isClick 排除，走到这里说明手指基本没动；
                     // 按住不动的期间收不到新的 MOVE 事件，靠这一次到达阈值时弹出菜单。
                     longPressFired = true
-                    showMenu()
+                    view.performLongClick()
                 }
                 return true
             }
@@ -357,11 +367,11 @@ class OverlayBallService : Service() {
                         ViewConfiguration.getLongPressTimeout().toLong(),
                     )
                 ) {
-                    showMenu()
+                    view.performLongClick()
                     return true
                 }
                 if (OverlayBallPolicy.isClick(deltaX, deltaY, slop)) {
-                    openHarness()
+                    view.performClick()
                 } else {
                     // 拖动结束：吸附到最近边缘并记住位置。
                     val metrics = resources.displayMetrics

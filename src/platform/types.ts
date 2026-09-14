@@ -90,6 +90,8 @@ export interface RuntimeSettings extends RuntimeSource {
 }
 
 export interface RuntimeSettingsUpdate extends RuntimeSettings {
+  /** 省略时保留原生侧当前偏好；显式布尔值才修改悬浮球开关。 */
+  overlayBallEnabled?: boolean
   /** 本次写入的凭据增量；原生端只接受固定供应商白名单。 */
   providerApiKeys?: ProviderApiKeys
   /** 本次明确清除的供应商凭据。 */

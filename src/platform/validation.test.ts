@@ -223,7 +223,6 @@ describe('settings validation', () => {
       clearProviderApiKeys: ['deepseek'],
       autoLaunch: true,
       keepRuntimeInBackground: true,
-      overlayBallEnabled: false,
     })
   })
 
@@ -245,6 +244,11 @@ describe('settings validation', () => {
     // 老版本升级上来的用户不会突然多出一个悬浮球。
     expect(validateSettings({ ...validSettings }).overlayBallEnabled).toBe(false)
     expect(validateStoredSettings({ ...validSettings }).overlayBallEnabled).toBe(false)
+    // 保存请求中省略字段表示保留；不能在校验时补 false 后关闭原生侧的开关。
+    expect(validateSettingsUpdate(validSettings)).not.toHaveProperty('overlayBallEnabled')
+    expect(validateSettingsUpdate({ ...validSettings, overlayBallEnabled: undefined })).not.toHaveProperty('overlayBallEnabled')
+    expect(validateSettingsUpdate({ ...validSettings, overlayBallEnabled: false }).overlayBallEnabled).toBe(false)
+    expect(validateSettingsUpdate({ ...validSettings, overlayBallEnabled: true }).overlayBallEnabled).toBe(true)
   })
 
   it('ignores retired frontend preferences and rejects invalid provider updates', () => {

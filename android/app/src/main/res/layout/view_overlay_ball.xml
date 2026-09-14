@@ -1,15 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 悬浮球的视图：一个圆形背景 + 居中的品牌符号。 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:contentDescription="@string/overlay_ball_content_description"
+    android:focusable="true"
     android:background="@drawable/bg_overlay_ball">
 
-    <ImageView
+    <androidx.appcompat.widget.AppCompatImageView
         android:layout_width="24dp"
         android:layout_height="24dp"
         android:layout_gravity="center"
-        android:contentDescription="@string/overlay_ball_content_description"
+        android:importantForAccessibility="no"
         android:src="@drawable/ic_overlay_ball"
-        android:tint="#A9F0D5" />
+        app:tint="#A9F0D5" />
 </FrameLayout>

@@ -38,6 +38,7 @@ import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticState
 import io.deepseekharness.mobile.shizuku.DeviceCommand
 import io.deepseekharness.mobile.shizuku.DeviceCommandResult
 import io.deepseekharness.mobile.shizuku.ShizukuState
+import org.json.JSONObject
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
@@ -48,6 +49,13 @@ import java.util.concurrent.locks.ReentrantLock
 import java.security.SecureRandom
 import java.util.Base64
 import kotlin.concurrent.withLock
+
+internal fun optionalOverlayBallEnabled(data: JSONObject): Boolean? {
+    if (!data.has("overlayBallEnabled")) return null
+    val value = data.opt("overlayBallEnabled")
+    if (value !is Boolean) throw RuntimeFailure("SETTINGS_INVALID", "悬浮球开关格式无效")
+    return value
+}
 
 /** 前台服务通知权限别名；Android 13 以下系统不需要该权限。 */
 private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
@@ -307,6 +315,7 @@ class MobileRuntimePlugin : Plugin() {
                 call.getArray("clearCustomProviderApiKeys"),
                 allowedCustomIds,
             )
+            val overlayBallEnabledUpdate = optionalOverlayBallEnabled(call.data)
             val settings = RuntimeValidation.settings(
                 call.getString("manifestUrl"),
                 call.getString("manifestSha256"),
@@ -314,10 +323,8 @@ class MobileRuntimePlugin : Plugin() {
                 fontSize,
                 call.getBoolean("autoLaunch", true) ?: true,
                 call.getBoolean("keepRuntimeInBackground", false) ?: false,
-                // 仅就这一行的取值方式而言：从 Call 直读悬浮球开关（与后台保持相互独立），
-                // 避免为了读取设置而走 store.settings() 触发凭据解密。
-                // 这不描述整个调用——紧随其后的 saveSettings() 仍会解密已保存的凭据。
-                call.getBoolean("overlayBallEnabled", false) ?: false,
+                // 省略值只作为构造设置对象时的占位；是否写入由下面的可空更新参数决定。
+                overlayBallEnabledUpdate ?: false,
             )
             val saved = controller.saveSettings(
                 settings,
@@ -326,10 +333,12 @@ class MobileRuntimePlugin : Plugin() {
                 customProviders,
                 customProviderApiKeyUpdates,
                 clearedCustomProviderApiKeys,
+                overlayBallEnabledUpdate = overlayBallEnabledUpdate,
             )
             applyKeepScreenAwake(saved.keepScreenAwake)
             syncKeepAliveService(saved.keepRuntimeInBackground)
-            syncOverlayBallService(saved.overlayBallEnabled)
+            // 菜单可能与本次保存并发关闭悬浮球；服务启停以同步瞬间的单字段真值为准。
+            syncOverlayBallService(controller.store.overlayBallEnabled())
             saved.toJs()
         }
     }

@@ -121,6 +121,11 @@ export function createBrowserBridge(): RuntimeBridge {
       validated.clearCustomProviderApiKeys?.forEach(id => configuredCustomProviders.delete(id))
       currentSettings = validateSettings({
         ...validated,
+        // The native bridge treats an omitted field as "leave unchanged" so an
+        // overlay-ball menu action cannot be overwritten by an unrelated save.
+        overlayBallEnabled: settings.overlayBallEnabled === undefined
+          ? currentSettings.overlayBallEnabled ?? false
+          : validated.overlayBallEnabled,
         configuredModelProviders: MODEL_PROVIDER_IDS.filter(provider => configuredProviders.has(provider)),
         configuredCustomModelProviders: [...configuredCustomProviders],
       })
