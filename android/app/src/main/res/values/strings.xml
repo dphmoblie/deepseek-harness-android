@@ -14,4 +14,13 @@
     <!-- 诊断日志导出：分享面板文案固定，不含文件路径或日志内容。 -->
     <string name="diagnostic_share_title">导出诊断日志</string>
     <string name="diagnostic_share_subject">DeepSeek Harness 诊断日志</string>
+    <!-- 悬浮球。文案固定，不含 URL、端口、凭据或会话内容。 -->
+    <!-- 球本身的读屏名称：名词性短语，不复用下面那句状态语形式的通知标题。 -->
+    <string name="overlay_ball_content_description">悬浮球</string>
+    <string name="overlay_ball_channel_name">悬浮球</string>
+    <string name="overlay_ball_channel_description">在其他应用上层显示悬浮球，点按可快速回到 Harness 对话</string>
+    <string name="overlay_ball_notification_title">悬浮球已开启</string>
+    <string name="overlay_ball_notification_text">点按可快速回到 Harness 对话</string>
+    <string name="overlay_ball_menu_return">回到应用</string>
+    <string name="overlay_ball_menu_hide">隐藏悬浮球</string>
 </resources>

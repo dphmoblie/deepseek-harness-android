@@ -52,6 +52,14 @@ test('app consumes the maintained mobile Harness adapter as a pinned submodule',
   assert.equal(recursiveCount, 4, 'each app workflow job must recursively check out Harness')
   assert.ok(recursiveCount < checkoutCount, 'the external Operit2 checkout is intentionally separate')
   assert.match(workflow, /pnpm --dir harness-web build/u)
+
+  // 移动适配的锚点守卫必须在打包运行时之前运行：官方升级删掉 android.css
+  // 依赖的锚点时，CI 立即失败并列出受影响的规则，而不是静默发出坏镜像。
+  assert.match(workflow, /check-runtime-anchors\.mjs \/tmp\/dsh-root\/node_modules/u)
+  assert.ok(
+    workflow.indexOf('check-runtime-anchors.mjs') < workflow.indexOf('Build bundle + manifest'),
+    '锚点守卫必须在 bundle 构建之前运行',
+  )
 })
 
 test('rootfs frontend input rejects old workbench artifacts and duplicate HTML entries', () => {
@@ -568,6 +576,10 @@ test('keep-alive keeps the device bridge process-scoped and the notification ent
     appRoot,
     'android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeHost.kt',
   ), 'utf8')
+  const runtimeStore = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeStore.kt',
+  ), 'utf8')
   const keepAliveService = await readFile(resolve(
     appRoot,
     'android/app/src/main/java/io/deepseekharness/mobile/HarnessKeepAliveService.kt',
@@ -633,7 +645,17 @@ test('keep-alive keeps the device bridge process-scoped and the notification ent
   assert.match(keepAliveService, /Intent\(this, KeepAliveEntryActivity::class\.java\)/)
   assert.match(manifest, /android:name="\.KeepAliveEntryActivity"[\s\S]*?android:exported="false"/)
   assert.match(entryActivity, /AppAuthenticationState\.isHarnessAuthenticated\(\)/)
-  assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_NEW_TASK or Intent\.FLAG_ACTIVITY_SINGLE_TOP/)
+  // 必须把已有 HarnessActivity 调回前台，避免通知入口创建第二个实例并触发凭据释放。
+  assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_NEW_TASK/)
+  assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_REORDER_TO_FRONT/)
+  assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_SINGLE_TOP/)
+  assert.doesNotMatch(entryActivity, /Intent\.FLAG_ACTIVITY_CLEAR_TOP/)
+
+  // 保存其他设置时不得用旧页面快照覆盖悬浮球菜单刚写入的关闭状态。
+  assert.match(nativePlugin, /optionalOverlayBallEnabled\(call\.data\)/)
+  assert.match(nativePlugin, /overlayBallEnabledUpdate = overlayBallEnabledUpdate/)
+  assert.match(runtimeStore, /overlayBallEnabledUpdate\?\.let \{ editor\.putBoolean\(KEY_OVERLAY_BALL, it\) \}/)
+  assert.doesNotMatch(runtimeStore, /\.putBoolean\(KEY_OVERLAY_BALL, settings\.overlayBallEnabled\)/)
 })
 
 test('Harness WebView serves the system file chooser and keeps page-initiated loads blocked', async () => {

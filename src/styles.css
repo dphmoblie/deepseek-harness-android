@@ -1,3 +1,7 @@
+/*
+ * 设计令牌：颜色、圆角、字重与阴影都只在这里定义，其余规则一律引用变量。
+ * 圆角只保留三档（控件 / 卡片 / 胶囊），避免同一界面出现多种圆角。
+ */
 :root {
   color: #17202b;
   background: #f3f5f8;
@@ -8,6 +12,7 @@
   --bg: #f3f5f8;
   --surface: #ffffff;
   --surface-muted: #edf1f5;
+  --surface-hover: #f8fafc;
   --ink: #17202b;
   --muted: #667181;
   --line: #dce2e9;
@@ -21,7 +26,17 @@
   --amber-soft: #fff2d5;
   --red: #b33535;
   --red-soft: #fdeaea;
-  --shadow: 0 10px 34px rgb(27 39 55 / 9%);
+  --danger-line: #edc4c4;
+  --radius-control: 10px;
+  --radius-card: 12px;
+  --radius-chip: 999px;
+  --radius-inner: 8px;
+  --weight-bold: 700;
+  --weight-semibold: 650;
+  --weight-medium: 600;
+  --shadow: 0 10px 34px rgb(27 39 55 / 8%);
+  --shadow-card: 0 1px 2px rgb(23 32 43 / 4%);
+  --ring: 3px solid rgb(65 118 230 / 28%);
 }
 
 * {
@@ -53,8 +68,10 @@ button {
 }
 
 button:focus-visible,
-input:focus-visible {
-  outline: 3px solid rgb(65 118 230 / 28%);
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: var(--ring);
   outline-offset: 2px;
 }
 
@@ -69,10 +86,6 @@ button:disabled {
   width: 100%;
   height: 100dvh;
   overflow: hidden;
-}
-
-.desktop-sidebar {
-  display: none;
 }
 
 .mobile-header {
@@ -122,17 +135,17 @@ button:disabled {
 
 .brand-name {
   font-size: 16px;
-  font-weight: 730;
+  font-weight: var(--weight-bold);
 }
 
 .brand-badge {
   margin-left: 7px;
   padding: 3px 5px;
-  border-radius: 3px;
+  border-radius: 4px;
   color: #ffffff;
   background: #17202b;
   font-size: 9px;
-  font-weight: 780;
+  font-weight: var(--weight-bold);
   line-height: 1;
 }
 
@@ -142,13 +155,13 @@ button:disabled {
   align-items: center;
   gap: 7px;
   min-height: 28px;
-  padding: 5px 9px;
+  padding: 5px 10px;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-chip);
   color: var(--muted);
   background: var(--surface);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: var(--weight-semibold);
   white-space: nowrap;
 }
 
@@ -253,9 +266,9 @@ button:disabled {
   min-height: 44px;
   padding: 10px 15px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--radius-control);
   font-size: 14px;
-  font-weight: 680;
+  font-weight: var(--weight-semibold);
   cursor: pointer;
   transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, transform 150ms ease;
 }
@@ -284,25 +297,6 @@ button:disabled {
   background: var(--surface-muted);
 }
 
-.button-inverted {
-  color: #11151a;
-  background: #ffffff;
-}
-
-.button-inverted:not(:disabled):hover {
-  background: #e8edf4;
-}
-
-.button-ghost-dark {
-  color: #f2f5f8;
-  border-color: #48515d;
-  background: transparent;
-}
-
-.button-ghost-dark:not(:disabled):hover {
-  background: #262d35;
-}
-
 .button-danger {
   color: #ffffff;
   background: var(--red);
@@ -310,7 +304,7 @@ button:disabled {
 
 .button-danger-quiet {
   color: var(--red);
-  border-color: #edc4c4;
+  border-color: var(--danger-line);
   background: var(--red-soft);
 }
 
@@ -322,28 +316,16 @@ button:disabled {
   height: 44px;
   padding: 0;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: var(--radius-control);
   color: var(--ink);
   background: var(--surface);
   cursor: pointer;
+  transition: background-color 150ms ease, border-color 150ms ease;
 }
 
-.agent-console {
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-  min-height: 228px;
-  padding: 24px;
-  overflow: hidden;
-  border: 1px solid #2b323b;
-  border-radius: 8px;
-  color: #f6f8fa;
-  background: #151a20;
-  box-shadow: var(--shadow);
-}
-
-.agent-console.is-running {
-  border-color: #2f6b51;
+.icon-button:not(:disabled):hover {
+  border-color: var(--line-strong);
+  background: var(--surface-muted);
 }
 
 .conversation-gate {
@@ -359,9 +341,9 @@ button:disabled {
   gap: 16px;
   padding: 24px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-card);
 }
 
 .launch-icon {
@@ -370,7 +352,7 @@ button:disabled {
   justify-content: center;
   width: 52px;
   height: 52px;
-  border-radius: 8px;
+  border-radius: var(--radius-inner);
   color: #ffffff;
   background: #202831;
 }
@@ -413,127 +395,13 @@ button:disabled {
   border-top: 1px solid var(--line);
 }
 
-.agent-console-copy {
-  display: flex;
-  align-items: flex-start;
-  gap: 15px;
-}
-
-.agent-console-copy h2 {
-  margin: 1px 0 7px;
-  font-size: 22px;
-  font-weight: 690;
-  line-height: 1.25;
-}
-
-.agent-console-copy p {
-  max-width: 570px;
-  margin: 0;
-  color: #aeb8c5;
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-.agent-icon {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 50px;
-  height: 50px;
-  border: 1px solid #3b4652;
-  border-radius: 8px;
-  color: #8eb1ff;
-  background: #20262e;
-}
-
-.agent-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: auto;
-}
-
-.quick-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.quick-item {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 11px;
-  min-height: 68px;
-  padding: 11px 13px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--ink);
-  background: var(--surface);
-  text-align: left;
-  cursor: pointer;
-}
-
-.quick-item:hover {
-  border-color: var(--line-strong);
-}
-
-.quick-item > svg {
-  color: #8b95a2;
-}
-
-.quick-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 7px;
-}
-
-.quick-icon.blue {
-  color: var(--blue);
-  background: var(--blue-soft);
-}
-
-.quick-icon.green {
-  color: var(--green);
-  background: var(--green-soft);
-}
-
-.quick-icon.amber {
-  color: var(--amber);
-  background: var(--amber-soft);
-}
-
-.quick-item span:nth-child(2) {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.quick-item small {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.quick-item strong {
-  overflow: hidden;
-  font-size: 14px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .inline-alert {
   display: flex;
   gap: 11px;
   margin-top: 14px;
   padding: 13px 14px;
   border: 1px solid;
-  border-radius: 7px;
+  border-radius: var(--radius-control);
   font-size: 13px;
 }
 
@@ -567,9 +435,9 @@ button:disabled {
 .runtime-overview {
   padding: 20px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: var(--surface);
-  box-shadow: 0 8px 24px rgb(27 39 55 / 6%);
+  box-shadow: var(--shadow-card);
 }
 
 .runtime-title-row {
@@ -585,7 +453,7 @@ button:disabled {
   justify-content: center;
   width: 48px;
   height: 48px;
-  border-radius: 8px;
+  border-radius: var(--radius-inner);
   color: #ffffff;
   background: #202831;
 }
@@ -625,10 +493,18 @@ button:disabled {
   color: var(--blue);
 }
 
+/* 百分比、字节数与计数用等宽数字：数值变化时不会左右跳动。 */
+.progress-copy strong,
+.progress-detail,
+.detail-row strong,
+.settings-status-row strong {
+  font-variant-numeric: tabular-nums;
+}
+
 .progress-track {
   height: 8px;
   overflow: hidden;
-  border-radius: 999px;
+  border-radius: var(--radius-chip);
   background: #e3e8ee;
 }
 
@@ -759,7 +635,7 @@ button:disabled {
 .detail-list {
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: var(--surface);
 }
 
@@ -769,7 +645,7 @@ button:disabled {
   justify-content: space-between;
   min-height: 52px;
   gap: 14px;
-  padding: 12px 14px;
+  padding: 13px 16px;
   border-bottom: 1px solid var(--line);
   font-size: 13px;
 }
@@ -815,8 +691,8 @@ button:disabled {
   margin-bottom: 12px;
   padding: 3px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #e8ecf1;
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
 }
 
 .segmented button {
@@ -828,11 +704,11 @@ button:disabled {
   min-height: 36px;
   padding: 7px 10px;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-inner);
   color: var(--muted);
   background: transparent;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: var(--weight-semibold);
   cursor: pointer;
 }
 
@@ -848,7 +724,7 @@ button:disabled {
   min-height: 410px;
   overflow: hidden;
   border: 1px solid #2d343d;
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: #101419;
   box-shadow: var(--shadow);
 }
@@ -873,7 +749,7 @@ button:disabled {
   gap: 7px;
   padding: 6px 9px;
   border: 1px solid #3b4652;
-  border-radius: 6px;
+  border-radius: var(--radius-inner);
   color: #c6ced8;
   background: #1e252d;
   font-size: 11px;
@@ -889,7 +765,7 @@ button:disabled {
   gap: 5px;
   padding: 5px 9px;
   border: 1px solid #3b4652;
-  border-radius: 6px;
+  border-radius: var(--radius-inner);
   background: #1b232c;
   color: #aebacb;
   font-size: 12px;
@@ -911,7 +787,7 @@ button:disabled {
   gap: 14px;
   padding: 24px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: var(--surface);
   text-align: center;
 }
@@ -922,7 +798,7 @@ button:disabled {
   justify-content: center;
   width: 54px;
   height: 54px;
-  border-radius: 8px;
+  border-radius: var(--radius-inner);
   color: var(--blue);
   background: var(--blue-soft);
 }
@@ -930,6 +806,15 @@ button:disabled {
 .empty-terminal h2 {
   margin: 0;
   font-size: 17px;
+}
+
+/* 空状态里的补充说明（例如 Shizuku 的自启动方式）：居中、弱化并限宽。 */
+.shizuku-hint {
+  max-width: 420px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .settings-form {
@@ -950,8 +835,9 @@ button:disabled {
   overflow: hidden;
   margin-bottom: 14px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: var(--surface);
+  box-shadow: var(--shadow-card);
 }
 
 .management-service,
@@ -959,10 +845,10 @@ button:disabled {
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: 13px;
   width: 100%;
-  min-height: 70px;
-  padding: 12px 14px;
+  min-height: 68px;
+  padding: 13px 16px;
   border: 0;
   border-bottom: 1px solid var(--line);
   color: var(--ink);
@@ -976,38 +862,39 @@ button:disabled {
 
 .management-row {
   cursor: pointer;
+  transition: background-color 150ms ease;
 }
 
-.management-row:hover {
-  background: #f8fafc;
+/* 悬停反馈只在指针设备上生效：触屏没有 hover，避免点击后底色残留。 */
+@media (hover: hover) {
+  .management-row:hover {
+    background: var(--surface-hover);
+  }
+}
+
+.management-row:not(:disabled):active {
+  background: var(--surface-muted);
 }
 
 .management-row > svg {
-  color: #8b95a2;
+  color: var(--muted);
 }
 
+/* 图标底色只有两种：深色代表服务与运行环境，蓝色代表设置入口。 */
 .management-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 42px;
   height: 42px;
-  border-radius: 7px;
+  border-radius: var(--radius-inner);
+  color: var(--blue);
+  background: var(--blue-soft);
 }
 
 .management-icon.dark {
   color: #ffffff;
   background: #202831;
-}
-
-.management-icon.blue {
-  color: var(--blue);
-  background: var(--blue-soft);
-}
-
-.management-icon.green {
-  color: var(--green);
-  background: var(--green-soft);
 }
 
 .management-copy {
@@ -1038,8 +925,9 @@ button:disabled {
 .settings-section {
   padding: 18px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: var(--surface);
+  box-shadow: var(--shadow-card);
 }
 
 .section-title {
@@ -1060,7 +948,7 @@ button:disabled {
   justify-content: center;
   width: 40px;
   height: 40px;
-  border-radius: 7px;
+  border-radius: var(--radius-inner);
   color: var(--blue);
   background: var(--blue-soft);
 }
@@ -1099,16 +987,22 @@ button:disabled {
 .field select {
   width: 100%;
   min-height: 44px;
-  padding: 10px 11px;
+  padding: 10px 12px;
   border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   color: var(--ink);
   background: #fbfcfd;
   font-size: 13px;
+  transition: border-color 150ms ease, background-color 150ms ease;
 }
 
 .field select {
   appearance: auto;
+}
+
+.field input:hover:not(:disabled),
+.field select:hover:not(:disabled) {
+  border-color: #9eabb9;
 }
 
 .field input:focus,
@@ -1168,6 +1062,12 @@ button:disabled {
   font-size: 11px;
 }
 
+/* 开关已打开、但系统侧条件不满足时的补充提示：用错误色与说明文案区分于普通说明。 */
+.toggle-row small.status-text-error {
+  color: var(--red);
+  font-weight: var(--weight-semibold);
+}
+
 .range-field input[type="range"] {
   width: min(46%, 210px);
   accent-color: var(--blue);
@@ -1212,12 +1112,12 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   min-height: 26px;
-  padding: 4px 8px;
-  border-radius: 999px;
+  padding: 4px 9px;
+  border-radius: var(--radius-chip);
   color: var(--muted);
   background: var(--surface-muted);
   font-size: 11px;
-  font-weight: 680;
+  font-weight: var(--weight-semibold);
 }
 
 .status-chip.success {
@@ -1266,39 +1166,6 @@ button:disabled {
   transform: scale(1.08);
 }
 
-.bottom-nav {
-  z-index: 20;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  min-height: calc(62px + env(safe-area-inset-bottom));
-  padding: 4px 4px env(safe-area-inset-bottom);
-  border-top: 1px solid var(--line);
-  background: rgb(255 255 255 / 97%);
-}
-
-.bottom-nav button {
-  display: flex;
-  min-width: 0;
-  min-height: 54px;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  padding: 4px 2px;
-  border: 0;
-  border-radius: 6px;
-  color: #778291;
-  background: transparent;
-  font-size: 10px;
-  font-weight: 650;
-  cursor: pointer;
-}
-
-.bottom-nav button.active {
-  color: var(--blue);
-  background: var(--blue-soft);
-}
-
 .dialog-backdrop {
   position: fixed;
   inset: 0;
@@ -1319,7 +1186,7 @@ button:disabled {
   overflow-y: auto;
   padding: 23px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   background: var(--surface);
   box-shadow: 0 24px 70px rgb(0 0 0 / 30%);
 }
@@ -1335,10 +1202,14 @@ button:disabled {
   height: 40px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-inner);
   color: var(--muted);
   background: transparent;
   cursor: pointer;
+}
+
+.dialog-close:not(:disabled):hover {
+  background: var(--surface-muted);
 }
 
 .dialog-danger-icon {
@@ -1347,7 +1218,7 @@ button:disabled {
   justify-content: center;
   width: 44px;
   height: 44px;
-  border-radius: 7px;
+  border-radius: var(--radius-inner);
   color: var(--red);
   background: var(--red-soft);
 }
@@ -1388,7 +1259,7 @@ button:disabled {
   min-height: 48px;
   padding: 9px 8px 9px 12px;
   border: 1px solid #333c47;
-  border-radius: 7px;
+  border-radius: var(--radius-control);
   color: #ffffff;
   background: #1c232b;
   box-shadow: 0 12px 35px rgb(0 0 0 / 24%);
@@ -1415,7 +1286,7 @@ button:disabled {
   height: 36px;
   padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-inner);
   color: #b7c0cb;
   background: transparent;
   cursor: pointer;
@@ -1443,15 +1314,6 @@ button:disabled {
     padding: 30px 28px 42px;
   }
 
-  .quick-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .agent-console {
-    min-height: 250px;
-    padding: 30px;
-  }
-
   .runtime-overview,
   .settings-section {
     padding: 22px;
@@ -1463,79 +1325,10 @@ button:disabled {
 }
 
 @media (min-width: 900px) {
-  .app-shell {
-    grid-template-columns: 228px minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr);
-  }
-
-  .desktop-sidebar {
-    display: flex;
-    min-height: 0;
-    flex-direction: column;
-    padding: 22px 14px 18px;
-    border-right: 1px solid var(--line);
-    background: var(--surface);
-  }
-
-  .desktop-sidebar .brand {
-    padding: 0 8px 21px;
-  }
-
-  .desktop-sidebar nav {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .desktop-sidebar nav button {
-    display: flex;
-    align-items: center;
-    gap: 11px;
-    min-height: 44px;
-    padding: 10px 12px;
-    border: 0;
-    border-radius: 7px;
-    color: var(--muted);
-    background: transparent;
-    font-size: 13px;
-    font-weight: 650;
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .desktop-sidebar nav button.active {
-    color: var(--blue);
-    background: var(--blue-soft);
-  }
-
-  .sidebar-runtime {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 7px;
-    margin-top: auto;
-    padding: 15px 8px 0;
-    border-top: 1px solid var(--line);
-  }
-
-  .sidebar-runtime small {
-    overflow: hidden;
-    width: 100%;
-    color: var(--muted);
-    font-size: 11px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .mobile-header,
-  .bottom-nav {
-    display: none;
-  }
-
-  .app-main {
-    grid-column: 2;
-    grid-row: 1;
+  /* 宽屏下外壳内容居中在 1040px 列内，页头随之一并对齐。 */
+  .mobile-header {
+    padding-right: max(24px, calc((100% - 1040px) / 2));
+    padding-left: max(24px, calc((100% - 1040px) / 2));
   }
 
   .screen {
@@ -1544,10 +1337,6 @@ button:disabled {
 
   .screen-heading h1 {
     font-size: 30px;
-  }
-
-  .agent-console {
-    min-height: 275px;
   }
 
   .terminal-screen {
@@ -1577,22 +1366,6 @@ button:disabled {
     right: 24px;
     bottom: 24px;
   }
-
-  .management-shell {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  .management-shell .mobile-header {
-    display: flex;
-    padding-right: max(24px, calc((100% - 1040px) / 2));
-    padding-left: max(24px, calc((100% - 1040px) / 2));
-  }
-
-  .management-shell .app-main {
-    grid-column: 1;
-    grid-row: 2;
-  }
 }
 
 @media (max-width: 390px) {
@@ -1605,17 +1378,11 @@ button:disabled {
     padding-left: 13px;
   }
 
-  .agent-console,
   .runtime-overview,
   .settings-section {
     padding: 16px;
   }
 
-  .agent-console-copy {
-    flex-direction: column;
-  }
-
-  .agent-actions .button,
   .runtime-actions .button {
     flex: 1 1 auto;
   }
@@ -1674,16 +1441,6 @@ button:disabled {
     padding-bottom: 6px;
   }
 
-  .bottom-nav {
-    min-height: calc(52px + env(safe-area-inset-bottom));
-  }
-
-  .bottom-nav button {
-    min-height: 44px;
-    flex-direction: row;
-    gap: 6px;
-  }
-
   .screen {
     padding-top: 14px;
     padding-bottom: 18px;
@@ -1709,20 +1466,20 @@ button:disabled {
 /* onboarding */
 .onboarding-dialog { max-width: 520px; }
 .onboarding-step-dots { display: flex; gap: 6px; margin: 2px 0 12px; }
-.onboarding-step-dots > span { width: 22px; height: 4px; border-radius: 2px; background: var(--dsw-alias-border-l1, rgba(127,127,127,.35)); }
-.onboarding-step-dots > span.active { background: var(--dsw-alias-accent, #4c8dff); }
-.onboarding-step-dots > span.done { background: var(--dsw-alias-success, #34a853); }
+.onboarding-step-dots > span { width: 22px; height: 4px; border-radius: var(--radius-chip); background: var(--line-strong); }
+.onboarding-step-dots > span.active { background: var(--blue); }
+.onboarding-step-dots > span.done { background: var(--green); }
 .onboarding-title { display: flex; align-items: center; gap: 9px; margin: 0 0 10px; }
-.onboarding-body { display: flex; flex-direction: column; gap: 10px; color: var(--dsw-alias-text-secondary, inherit); }
+.onboarding-body { display: flex; flex-direction: column; gap: 10px; color: var(--muted); }
 .onboarding-body ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
 .onboarding-body code { font-size: .9em; }
-.onboarding-warn { color: var(--dsw-alias-warning, #b26a00); }
+.onboarding-warn { color: var(--amber); }
 .onboarding-status { font-size: .92em; }
 .onboarding-actions-row { display: flex; gap: 9px; flex-wrap: wrap; }
 .onboarding-nav { display: flex; align-items: center; width: 100%; }
 .onboarding-spacer { flex: 1; }
 
-/* 语言页适配窄屏及英文长文案，保留现有应用的配色与控件风格。 */
+/* 语言页适配窄屏及英文长文案，沿用管理界面的配色与控件风格。 */
 .language-screen {
   min-height: 100dvh;
   display: grid;
@@ -1731,27 +1488,27 @@ button:disabled {
 }
 .language-card {
   width: min(100%, 480px);
-  padding: 28px;
-  border: 1px solid #dce1e6;
-  border-radius: 20px;
-  background: #fff;
-  box-shadow: 0 16px 48px #17202a0d;
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  box-shadow: var(--shadow);
 }
-.language-card h2 { font-size: 24px; line-height: 1.4; }
-.language-card p, .language-settings p { color: #626d79; line-height: 1.6; }
-.language-card label, .language-settings label { display: block; margin: 16px 0 8px; }
+.language-card h2 { font-size: 23px; line-height: 1.4; }
+.language-card p, .language-settings p { color: var(--muted); line-height: 1.6; }
+.language-card label, .language-settings label { display: block; margin: 16px 0 8px; font-size: 13px; font-weight: var(--weight-semibold); }
 .language-card select, .language-settings select {
   width: 100%;
-  min-height: 48px;
+  min-height: 46px;
   padding: 10px 12px;
-  border: 1px solid #c9d0d8;
-  border-radius: 10px;
-  background: white;
-  color: #17202a;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--ink);
   font: inherit;
 }
-.language-card .button { margin-top: 24px; width: 100%; }
-.language-settings { padding: 20px; margin-bottom: 16px; }
+.language-card .button { margin-top: 22px; width: 100%; }
+.language-settings { padding: 20px; margin-bottom: 14px; }
 .language-settings h2 { font-size: 18px; margin: 8px 0; }
 html[lang="en"] .button { white-space: normal; }
 html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
@@ -1851,7 +1608,7 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   padding: 10px 11px;
   overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: var(--radius-inner);
   background: #fbfcfd;
   color: var(--ink);
   font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;

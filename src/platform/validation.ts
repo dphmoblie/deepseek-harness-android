@@ -8,6 +8,7 @@ import type {
   ModelProviderId,
   NotificationPermission,
   NotificationPermissionResult,
+  OverlayBallState,
   ProviderApiKeys,
   RuntimeIntent,
   RuntimePhase,
@@ -55,6 +56,17 @@ function asRecord(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`${label}格式无效`)
   }
   return value as Record<string, unknown>
+}
+
+/**
+ * 校验布尔标量。
+ *
+ * 类型不符（含 undefined、null、字符串化的 'true'/'false' 与 1/0）一律抛错，
+ * 不做静默转换；错误消息格式与文件内其他校验辅助一致：`${label}格式无效`。
+ */
+function requiredBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== 'boolean') throw new Error(`${label}格式无效`)
+  return value
 }
 
 function requiredIdentifier(value: unknown, label: string, maximumLength = MAX_IDENTIFIER_LENGTH): string {
@@ -226,6 +238,8 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
   if (typeof autoLaunch !== 'boolean') throw new Error('自动启动设置格式无效')
   const keepRuntimeInBackground = settings.keepRuntimeInBackground === undefined ? false : settings.keepRuntimeInBackground
   if (typeof keepRuntimeInBackground !== 'boolean') throw new Error('后台保持设置格式无效')
+  const overlayBallEnabled = settings.overlayBallEnabled === undefined ? false : settings.overlayBallEnabled
+  if (typeof overlayBallEnabled !== 'boolean') throw new Error('悬浮球设置格式无效')
   return {
     ...source,
     keepScreenAwake: settings.keepScreenAwake,
@@ -237,6 +251,7 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
     }),
     autoLaunch,
     keepRuntimeInBackground,
+    overlayBallEnabled,
   }
 }
 
@@ -251,13 +266,15 @@ export function validateSettingsUpdate(settings: RuntimeSettingsUpdate): Runtime
     throw new Error('同一模型凭据不能同时更新和清除')
   }
   if (clearCustomProviderApiKeys.some(id => customProviderApiKeys[id] !== undefined)) throw new Error('同一自定义模型凭据不能同时更新和清除')
-  return {
+  const result: RuntimeSettingsUpdate = {
     ...validated,
     ...(Object.keys(providerApiKeys).length === 0 ? {} : { providerApiKeys }),
     ...(clearProviderApiKeys.length === 0 ? {} : { clearProviderApiKeys }),
     ...(Object.keys(customProviderApiKeys).length === 0 ? {} : { customProviderApiKeys }),
     ...(clearCustomProviderApiKeys.length === 0 ? {} : { clearCustomProviderApiKeys }),
   }
+  if (settings.overlayBallEnabled === undefined) delete result.overlayBallEnabled
+  return result
 }
 
 export function validateStoredSettings(value: unknown): RuntimeSettings {
@@ -277,6 +294,8 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
   if (settings.keepRuntimeInBackground !== undefined && typeof settings.keepRuntimeInBackground !== 'boolean') {
     throw new Error('后台保持设置格式无效')
   }
+  const overlayBallEnabled = settings.overlayBallEnabled === undefined ? false : settings.overlayBallEnabled
+  if (typeof overlayBallEnabled !== 'boolean') throw new Error('悬浮球设置格式无效')
   const configuredProviders = configuredModelProviders(settings.configuredModelProviders, settings.apiKey)
   const customSettings = {
     ...(settings.customModelProviders === undefined ? {} : { customModelProviders: validateCustomModelProviders(settings.customModelProviders) }),
@@ -294,6 +313,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
       ...customSettings,
       autoLaunch,
       keepRuntimeInBackground,
+      overlayBallEnabled,
     }
   }
   const source = validateRuntimeSource({
@@ -308,6 +328,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
     ...customSettings,
     autoLaunch,
     keepRuntimeInBackground,
+    overlayBallEnabled,
   }
 }
 
@@ -566,5 +587,20 @@ export function validateDeviceCommandResult(value: unknown): DeviceCommandResult
     exitCode: result.exitCode,
     text: result.text,
     truncated: result.truncated,
+  }
+}
+
+/**
+ * 校验原生返回的悬浮球状态。
+ *
+ * 三个字段都必须存在且为布尔：字段缺失时抛错，而不是补成 false ——
+ * 否则「读取失败」会被界面显示成「开关关闭」，用户点了没反应也查不出原因。
+ */
+export function validateOverlayBallState(value: unknown): OverlayBallState {
+  const source = asRecord(value, '悬浮球状态')
+  return {
+    enabled: requiredBoolean(source.enabled, '悬浮球开关'),
+    canDrawOverlays: requiredBoolean(source.canDrawOverlays, '悬浮球权限'),
+    serviceActive: requiredBoolean(source.serviceActive, '悬浮球服务状态'),
   }
 }

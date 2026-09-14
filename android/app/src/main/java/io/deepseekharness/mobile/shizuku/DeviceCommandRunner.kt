@@ -245,23 +245,26 @@ class DeviceCommandRunner(
      * uiDump 加固：先探测工具，再把 dump 的失败与 stderr 原样保留（不再被 `cat` 的 ENOENT 掩盖），
      * 最后校验产物非空。三类失败用不同退出码区分，由 [errorCodeFor] 映射成不同错误码。
      *
-     * 不做降级：本 ROM 上 `uiautomator dump` 是「退出码 0 + 零输出 + 零文件 + 约 0ms」的静默空壳，
-     * 而 `dumpsys window` 之类并不提供无障碍节点边界，冒充 UI 层级只会误导模型，故如实上报
-     * UI_DUMP_EMPTY / UI_DUMP_NO_TOOL / UI_DUMP_FAILED，由调用方决定后续动作。
+     * 不使用 `dumpsys window` 伪造无障碍层级；它不提供节点边界，冒充 UI 层级会误导模型。
+     * 两条真实 uiautomator 路径都没有有效 XML 时，才如实上报 UI_DUMP_EMPTY / UI_DUMP_FAILED。
      */
     private fun uiDumpScript(requestId: String): String {
         val temporary = "/data/local/tmp/dsh-ui-$requestId.xml"
+        val fallback = "/sdcard/dsh-ui-$requestId.xml"
         // dsh_rc 先落到 0（成功），失败分支再覆盖成 3/4/5：END 标记因此永远带着一个合法数字。
         // trap 用双引号定义：内层脚本因此不含单引号，$dsh_tmp 在定义时即展开成固定路径。
-        return "dsh_tmp=$temporary; $UI_DUMP_STATUS_VARIABLE=0; " +
-            "trap \"rm -f \$dsh_tmp\" EXIT HUP INT TERM; " +
+        return "dsh_tmp=$temporary; dsh_fallback=$fallback; $UI_DUMP_STATUS_VARIABLE=0; " +
+            "trap \"rm -f \$dsh_tmp \$dsh_fallback\" EXIT HUP INT TERM; " +
             "if command -v uiautomator >/dev/null 2>&1; then " +
-            "if uiautomator dump \$dsh_tmp 2>&1; then " +
+            "dsh_first=0; uiautomator dump --compressed \$dsh_tmp 2>&1 || dsh_first=\$?; " +
             "if [ -s \$dsh_tmp ]; then cat \$dsh_tmp; " +
-            "else echo \"UI_DUMP_EMPTY: uiautomator exited 0 but wrote no file\" >&2; " +
-            "$UI_DUMP_STATUS_VARIABLE=$UI_DUMP_EXIT_EMPTY; fi; " +
-            "else echo \"UI_DUMP_FAILED: uiautomator dump failed\" >&2; " +
-            "$UI_DUMP_STATUS_VARIABLE=$UI_DUMP_EXIT_FAILED; fi; " +
+            // Older Android releases accept the legacy form but reject --compressed.
+            "else dsh_second=0; uiautomator dump \$dsh_fallback 2>&1 || dsh_second=\$?; " +
+            "if [ -s \$dsh_fallback ]; then cat \$dsh_fallback; " +
+            "elif [ \$dsh_first -ne 0 ] || [ \$dsh_second -ne 0 ]; then echo \"UI_DUMP_FAILED: uiautomator dump failed\" >&2; " +
+            "$UI_DUMP_STATUS_VARIABLE=$UI_DUMP_EXIT_FAILED; " +
+            "else echo \"UI_DUMP_EMPTY: uiautomator produced no readable hierarchy\" >&2; " +
+            "$UI_DUMP_STATUS_VARIABLE=$UI_DUMP_EXIT_EMPTY; fi; fi; " +
             "else echo \"UI_DUMP_NO_TOOL: uiautomator is not available\" >&2; " +
             "$UI_DUMP_STATUS_VARIABLE=$UI_DUMP_EXIT_NO_TOOL; fi"
     }

@@ -37,6 +37,7 @@ import {
   validateHarnessLog,
   validateKeepAliveState,
   validateNotificationPermissionResult,
+  validateOverlayBallState,
   validateRuntimeProgress,
   validateRuntimeState,
   validateSettings,
@@ -71,6 +72,8 @@ interface NativeRuntimePlugin {
   openShizuku(): Promise<void>
   getKeepAliveState(): Promise<KeepAliveState>
   requestNotificationPermission(): Promise<NotificationPermissionResult>
+  overlayBallState(): Promise<unknown>
+  openOverlaySettings(): Promise<void>
   getHarnessLog(): Promise<HarnessLog>
   getDiagnosticLogState(): Promise<DiagnosticLogState>
   setDiagnosticLogSettings(options: { enabled: boolean; retentionDays: number }): Promise<DiagnosticLogState>
@@ -142,6 +145,8 @@ function createNativeBridge(): RuntimeBridge {
     openShizuku: () => NativeRuntime.openShizuku(),
     getKeepAliveState: () => NativeRuntime.getKeepAliveState().then(validateKeepAliveState),
     requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),
+    getOverlayBallState: () => NativeRuntime.overlayBallState().then(validateOverlayBallState),
+    openOverlaySettings: () => NativeRuntime.openOverlaySettings(),
     getHarnessLog: () => NativeRuntime.getHarnessLog().then(validateHarnessLog),
     getDiagnosticLogState: () => NativeRuntime.getDiagnosticLogState().then(validateDiagnosticLogState),
     setDiagnosticLogSettings: (enabled, retentionDays) => {

@@ -37,6 +37,8 @@ const bridge = vi.hoisted(() => ({
   connectShizuku: vi.fn(),
   openShizuku: vi.fn(),
   getKeepAliveState: vi.fn(),
+  getOverlayBallState: vi.fn(),
+  openOverlaySettings: vi.fn(),
   requestNotificationPermission: vi.fn(),
   getDiagnosticLogState: vi.fn(),
   setDiagnosticLogSettings: vi.fn(),
@@ -100,13 +102,13 @@ const diagnostic: DiagnosticLogState = {
 
 /** 主视图（对话门面）的标题。 */
 function mainViewHeading(): HTMLElement {
-  return screen.getByRole('heading', { name: '正在进入工作区' })
+  return screen.getByRole('heading', { name: '正在进入对话' })
 }
 
 /** 等待首屏渲染完成并停在外壳主视图。 */
 async function renderAtMainView(): Promise<void> {
   render(<App />)
-  expect(await screen.findByRole('heading', { name: '正在进入工作区' })).toBeVisible()
+  expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
 }
 
 /**
@@ -145,6 +147,9 @@ beforeEach(() => {
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
   bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive })
+  // 导航用例不关心悬浮球：给一个已授权、已关闭的稳定初值即可。
+  bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
+  bridge.openOverlaySettings.mockResolvedValue(undefined)
   bridge.getDiagnosticLogState.mockResolvedValue({ ...diagnostic })
   bridge.addRuntimeProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })
   bridge.saveSettings.mockImplementation((value: RuntimeSettingsUpdate) => Promise.resolve(value))
@@ -162,8 +167,8 @@ describe('返回键与视图历史', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '打开应用设置' }))
     expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: /模型与凭据/ }))
-    expect(await screen.findByRole('heading', { name: '模型与凭据' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: /模型与密钥/ }))
+    expect(await screen.findByRole('heading', { name: '模型与密钥' })).toBeVisible()
     expect(window.location.hash).toBe('#settings-models')
 
     // 二级 → 一级：视图回到设置首页，地址同步回一级页。
@@ -173,7 +178,7 @@ describe('返回键与视图历史', () => {
 
     // 一级 → 主视图。
     await pressBack()
-    expect(await screen.findByRole('heading', { name: '正在进入工作区' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
     expect(window.location.hash).toBe('')
     expect(window.history.state).toMatchObject({ dshView: 'conversation' })
   })
@@ -184,7 +189,7 @@ describe('返回键与视图历史', () => {
     fireEvent.click(screen.getByRole('button', { name: '打开应用设置' }))
     await screen.findByRole('heading', { name: '设置' })
     await pressBack()
-    expect(await screen.findByRole('heading', { name: '正在进入工作区' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
 
     // 主视图是历史栈底：原生侧此时 canGoBack() 为 false，会把任务退到后台而不是结束应用。
     const pushState = vi.spyOn(window.history, 'pushState')
@@ -199,20 +204,20 @@ describe('返回键与视图历史', () => {
     await renderAtMainView()
 
     fireEvent.click(screen.getByRole('button', { name: '打开应用设置' }))
-    fireEvent.click(await screen.findByRole('button', { name: /模型与凭据/ }))
-    expect(await screen.findByRole('heading', { name: '模型与凭据' })).toBeVisible()
+    fireEvent.click(await screen.findByRole('button', { name: /模型与密钥/ }))
+    expect(await screen.findByRole('heading', { name: '模型与密钥' })).toBeVisible()
 
     await pressBack()
     expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()
 
     // 前进回到二级页：视图与地址一起前进，不会出现「界面在一级、地址停在二级」。
     await pressForward()
-    expect(await screen.findByRole('heading', { name: '模型与凭据' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '模型与密钥' })).toBeVisible()
     expect(window.location.hash).toBe('#settings-models')
 
     await pressBack()
     await pressBack()
-    expect(await screen.findByRole('heading', { name: '正在进入工作区' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
     expect(window.location.hash).toBe('')
   })
 
@@ -233,15 +238,15 @@ describe('返回键与视图历史', () => {
 
     // 收尾：回到栈底，避免把历史位置留给下一个用例。
     await pressBack()
-    expect(await screen.findByRole('heading', { name: '正在进入工作区' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
   })
 
   it('屏幕内返回按钮回退历史，不留下会被返回键重新进入的二级页记录', async () => {
     await renderAtMainView()
 
     fireEvent.click(screen.getByRole('button', { name: '打开应用设置' }))
-    fireEvent.click(await screen.findByRole('button', { name: /模型与凭据/ }))
-    expect(await screen.findByRole('heading', { name: '模型与凭据' })).toBeVisible()
+    fireEvent.click(await screen.findByRole('button', { name: /模型与密钥/ }))
+    expect(await screen.findByRole('heading', { name: '模型与密钥' })).toBeVisible()
 
     const pushState = vi.spyOn(window.history, 'pushState')
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
@@ -251,7 +256,7 @@ describe('返回键与视图历史', () => {
 
     // 因此此时按系统返回必须回主视图，而不是被送回二级页。
     await pressBack()
-    expect(await screen.findByRole('heading', { name: '正在进入工作区' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
     expect(window.location.hash).toBe('')
   })
 
@@ -267,7 +272,7 @@ describe('返回键与视图历史', () => {
       window.dispatchEvent(new PopStateEvent('popstate', { state: null }))
     })
 
-    expect(await screen.findByRole('heading', { name: '正在进入工作区' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
     expect(window.location.hash).toBe('')
 
     // 收尾：回到栈底。

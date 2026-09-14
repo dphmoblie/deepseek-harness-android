@@ -93,6 +93,13 @@ data class RuntimeSettings(
      * 该开关不能阻止 Android 或厂商系统杀死进程。
      */
     val keepRuntimeInBackground: Boolean = false,
+    /**
+     * 设置中的「悬浮球」开关。默认关闭。
+     *
+     * 与 keepRuntimeInBackground 是两件独立的事：用户可能只想要悬浮球、
+     * 不想保持运行时，也可能反过来，因此不合并成一个开关。
+     */
+    val overlayBallEnabled: Boolean = false,
 )
 
 data class RootfsArtifact(
@@ -318,6 +325,7 @@ object RuntimeValidation {
         terminalFontSize: Int,
         autoLaunch: Boolean = true,
         keepRuntimeInBackground: Boolean = false,
+        overlayBallEnabled: Boolean = false,
     ): RuntimeSettings {
         val source = source(url, digest)
         if (terminalFontSize !in 11..24) {
@@ -330,6 +338,7 @@ object RuntimeValidation {
             terminalFontSize = terminalFontSize,
             autoLaunch = autoLaunch,
             keepRuntimeInBackground = keepRuntimeInBackground,
+            overlayBallEnabled = overlayBallEnabled,
         )
     }
 

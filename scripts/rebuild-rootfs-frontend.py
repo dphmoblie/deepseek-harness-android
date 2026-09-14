@@ -45,6 +45,11 @@ RUNTIME_METADATA_PATH = "etc/deepseek-harness-runtime.json"
 RUNTIME_EXECUTABLE_PREFIXES = ("opt/python/bin/",)
 
 
+def is_npm_runtime_executable(name: str) -> bool:
+    # Only repair the packaged DSH tree; never grant execute bits by basename.
+    return name.startswith("opt/dsh/") and _ber.is_npm_executable(_ber.PurePosixPath(name))
+
+
 def is_frontend_dist_path(name: str) -> bool:
     """路径是否落在 dsh 前端 dist 树内（含 dist 目录条目本身）。"""
     return name.endswith(DIST_MARKER) or f"{DIST_MARKER}/" in name
@@ -184,7 +189,7 @@ def stream_rebuild(
                                         member.mode = 0o644
                                         target.addfile(member, io.BytesIO(rewritten))
                                     else:
-                                        if normalized_name.startswith(RUNTIME_EXECUTABLE_PREFIXES):
+                                        if normalized_name.startswith(RUNTIME_EXECUTABLE_PREFIXES) or is_npm_runtime_executable(normalized_name):
                                             member.mode = 0o755
                                         target.addfile(member, file_object)
                                 else:
@@ -283,7 +288,7 @@ def verify_rebuilt(
             if normalized in seen_paths:
                 raise BuildError(f"重建后归档包含重复条目：{normalized}")
             seen_paths.add(normalized)
-            if member.isreg() and normalized.startswith(RUNTIME_EXECUTABLE_PREFIXES):
+            if member.isreg() and (normalized.startswith(RUNTIME_EXECUTABLE_PREFIXES) or is_npm_runtime_executable(normalized)):
                 if member.mode != 0o755:
                     raise BuildError(f"重建后运行时文件不可执行：{member.name}")
             if normalized == RUNTIME_METADATA_PATH:

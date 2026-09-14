@@ -25,7 +25,7 @@ const STEPS = [
   { id: 'runtime', title: '安装 Ubuntu 运行时', icon: Blocks },
   { id: 'apikey', title: '配置模型 API Key', icon: KeyRound },
   { id: 'shizuku', title: '设备 Shell（可选）', icon: ShieldCheck },
-  { id: 'plugins', title: '插件与移动布局', icon: Blocks },
+  { id: 'plugins', title: '界面与插件', icon: Blocks },
   { id: 'ready', title: '开始使用', icon: Rocket },
 ] as const
 
@@ -83,19 +83,19 @@ export function Onboarding({
                   <p>{t("这是一个运行在")}<strong>{t("本机")}</strong> {t("的 Harness 控制台（DSH 移动版）：")}</p>
                   <ul>
                     <li>{t("Ubuntu 运行时与 Harness 只监听")}<code>127.0.0.1</code>{t("，不出设备；")}</li>
-                    <li>{t("模型凭据只保存在本机，不经过管理界面；")}</li>
+                    <li>{t("模型密钥只保存在本机，不会回传到管理界面；")}</li>
                     <li>{t("数据与审计都在应用私有目录，可随时重置；")}</li>
                     <li>{t("容器内是")}<strong>{t("受限 root")}</strong>：<code>/system</code>、<code>/data</code> {t("等系统路径受 Android 保护，无法越权修改（apt/系统安装不可用）；")}</li>
-                    <li>{t("基础工具（node、perl、tar）已内置；python/gcc/curl 等请在后续版本通过工具链安装；")}</li>
+                    <li>{t("已内置 Node.js、Python 3 与常用工具（busybox、jq、unzip）；gcc 等编译工具不在包内；")}</li>
                     <li>{t("如需访问手机文件或系统操作，请配合 Shizuku 设备 Shell。")}</li>
                   </ul>
                 </div>
               )}
               {step === 1 && (
                 <div className="onboarding-body">
-                  <p>{t("首次使用需要安装 Ubuntu 运行时（约几百 MB，可经 Wi-Fi 下载）。")}</p>
+                  <p>{t("首次使用需要安装 Ubuntu 运行环境（数百 MB）：内置包直接读取，远程来源可经 Wi-Fi 下载。")}</p>
                   {!manifestConfigured(settings) && (
-                    <p className="onboarding-warn">{t("尚未配置运行时下载地址：请先在「设置」页填写 manifest 地址与 SHA-256（两者必须成对）。")}</p>
+                    <p className="onboarding-warn">{t("尚未配置运行时下载地址：请先在「设置 → 运行与后台」填写清单地址与 SHA-256（两者必须成对）。")}</p>
                   )}
                   <p className="onboarding-status">
                     {t("当前状态：")}{installed ? t("已安装") + (runtime.phase === 'running' ? t(" · 运行中") : '') : runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting' ? t("正在安装…") : t("未安装")}
@@ -160,7 +160,7 @@ export function Onboarding({
                     <KeyRound size={18} />{selectedProvider === 'custom' ? t('保存自定义供应商') : t('保存 API Key')}
                   </button>
                   <p className="onboarding-status">{selectedProvider === 'custom'
-                    ? t('已配置 {0} 个自定义供应商凭据', settings?.configuredCustomModelProviders?.length ?? 0)
+                    ? t('已配置 {0} 个自定义供应商密钥', settings?.configuredCustomModelProviders?.length ?? 0)
                     : settings?.configuredModelProviders.includes(selectedProvider) ? t('已配置') : t('未配置')}</p>
                 </form>
               )}
@@ -186,13 +186,13 @@ export function Onboarding({
               )}
               {step === 4 && (
                 <div className="onboarding-body">
-                  <p>{t("Harness 使用官方响应式布局：小屏下侧栏、工作区和设置仍保持原版交互，插件、模型与推理强度入口不会被移动壳替换。")}</p>
-                  <p>{t("插件均由 Harness 的插件设置管理，移动 profile 不会静默关闭宠物、实时统计或浏览器插件；更多插件可通过市场（dshmarket）按需安装。")}</p>
+                  <p>{t("对话与设置界面都使用官方 Harness 前端：只补充了安全区与触控尺寸适配，页面结构、主题与交互保持上游原样；模型、推理强度与插件入口不会被移动端改写。")}</p>
+                  <p>{t("插件统一在设置页的「插件管理」中管理，应用不会静默关闭任何插件；需要更多插件时，可在 Harness 内的市场页面按需安装。")}</p>
                 </div>
               )}
               {step === 5 && (
                 <div className="onboarding-body">
-                  <p>{t("一切就绪。打开 Harness 开始对话；随时返回本界面管理运行时与终端。")}</p>
+                  <p>{t("一切就绪。打开 Harness 开始对话；随时返回本界面管理运行环境和终端。")}</p>
                   <div className="onboarding-actions-row">
                     <button className="button button-primary" type="button" disabled={busy !== null || runtime.phase !== 'running'} onClick={onOpenHarness}>
                       <Rocket size={18} />

@@ -49,6 +49,7 @@ import type {
   HarnessLog,
   KeepAliveState,
   ModelProviderId,
+  OverlayBallState,
   ProviderApiKeys,
   RuntimePhase,
   RuntimeProgress,
@@ -76,11 +77,11 @@ type AppView =
 type SettingsPage = 'models' | 'runtime' | 'terminal' | 'shizuku' | 'diagnostics'
 
 const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView }> = {
-  models: { title: '模型与凭据', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
-  runtime: { title: '运行与后台', hint: '后台保持、前台服务与运行时来源', view: 'settings-runtime' },
-  terminal: { title: '终端与外观', hint: '字号与屏幕保持常亮', view: 'settings-terminal' },
-  shizuku: { title: 'Shizuku 与设备 Shell', hint: '授权、连接与设备命令', view: 'settings-shizuku' },
-  diagnostics: { title: '诊断与日志', hint: '采集开关、保留策略与导出', view: 'settings-diagnostics' },
+  models: { title: '模型与密钥', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
+  runtime: { title: '运行与后台', hint: '运行时来源、后台保持与前台服务', view: 'settings-runtime' },
+  terminal: { title: '终端与外观', hint: '终端字号与屏幕常亮', view: 'settings-terminal' },
+  shizuku: { title: 'Shizuku 与设备 Shell', hint: '授权、连接与设备 Shell 可用性', view: 'settings-shizuku' },
+  diagnostics: { title: '诊断与日志', hint: '采集开关、保留天数与导出', view: 'settings-diagnostics' },
 }
 
 const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'shizuku', 'diagnostics']
@@ -237,6 +238,21 @@ const NOTIFICATION_PERMISSION_TIMEOUT_MS = 30_000
  */
 const FOREGROUND_SERVICE_SETTLE_MS = 1500
 
+/**
+ * 保存设置后的前台服务生效复核。
+ *
+ * 「后台保持」与「悬浮球」各有一个前台服务，都由 Android 异步拉起：保存后紧接着读取原生状态
+ * 会看到「尚未生效」。这里等宽限期过后再读一次，把最新状态交给调用方判断与提示；
+ * 复核本身失败时静默保留「设置已保存」的提示，不猜测服务状态，也不误报未生效。
+ */
+function recheckForegroundServiceAfterSettle<T>(read: () => Promise<T>, onSettled: (latest: T) => void): void {
+  window.setTimeout(() => {
+    void read().then(onSettled).catch(() => {
+      // 复核失败时保留「设置已保存」的提示：不猜测服务状态，也不误报未生效。
+    })
+  }, FOREGROUND_SERVICE_SETTLE_MS)
+}
+
 const UNKNOWN_RUNTIME_ERROR_MESSAGE = '运行时操作失败，请稍后重试；如问题持续，请重置环境。'
 const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   SOURCE_INCOMPLETE: '请同时配置运行时清单地址和 SHA-256，或同时留空。',
@@ -295,7 +311,7 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   RUNTIME_BUSY: '请先停止 Harness 和 Ubuntu 终端。',
   RUNTIME_CORRUPTED: '运行时文件已损坏，请重置运行时后重新安装。',
   ROOTFS_LINKS_CORRUPTED: '运行时归档的关键符号链接缺失或损坏，请更换运行时来源后重新安装。',
-  RUNNER_UNAVAILABLE: 'APK 未包含当前设备架构所需的运行器。',
+  RUNNER_UNAVAILABLE: '此安装包不包含本机所需的运行组件，无法启动运行时。',
   PROOT_RUNNER_START_FAILED: 'Android 无法执行内置 PRoot，请确认安装的是新版 ARM64 应用。',
   PROOT_RUNNER_TIMEOUT: 'PRoot 自检超时，请停止其他会话后重试。',
   PROOT_RUNNER_REJECTED: '内置 PRoot 未通过启动自检。',
@@ -309,8 +325,8 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   NODE_RUNTIME_FAILED: '内置 Node.js 无法在当前设备运行。',
   NODE_CPU_UNSUPPORTED: '设备 CPU 无法执行内置 Node.js。',
   HARNESS_PREFLIGHT_FAILED: 'Harness 命令未通过启动自检。',
-  CREDENTIALS_DECRYPT_FAILED: '无法读取已保存的模型凭据；原有数据已保留，请稍后重试。',
-  CREDENTIALS_ENCRYPT_FAILED: '无法安全保存模型凭据；请稍后重试。',
+  CREDENTIALS_DECRYPT_FAILED: '无法读取已保存的模型密钥；原有数据已保留，请稍后重试。',
+  CREDENTIALS_ENCRYPT_FAILED: '无法安全保存模型密钥；请稍后重试。',
   RUNTIME_CONFIG_FAILED: '无法生成模型供应商启动配置，请检查运行时文件后重试。',
   HARNESS_PORT_IN_USE: 'Harness 本机端口已被占用，请停止占用端口的程序后重试。',
   HARNESS_MODULE_MISSING: 'Harness 运行模块不完整。',
@@ -328,7 +344,7 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
 }
 
 function runtimeErrorMessage(errorCode?: string): string {
-  if (errorCode === undefined) return t("请重试启动；重置环境仅用于清除用户数据。")
+  if (errorCode === undefined) return t("请重试；若问题持续，可在「Ubuntu 运行时」页重置后重新安装，重置会清除运行时内的数据。")
   return t(RUNTIME_ERROR_MESSAGES[errorCode] ?? UNKNOWN_RUNTIME_ERROR_MESSAGE)
 }
 
@@ -455,12 +471,12 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onO
 
   return (
     <div className="screen conversation-gate">
+      {/* 运行阶段徽章只保留页头那一处：同一屏里重复两个相同状态纯属噪声。 */}
       <div className="screen-heading">
         <div>
           <p className="eyebrow">{t("Harness 对话")}</p>
-          <h1>{updateRequired ? t("更新运行环境") : runtime.phase === 'error' ? t("运行环境需要处理") : installed ? t("正在进入工作区") : t("初始化 Ubuntu")}</h1>
+          <h1>{updateRequired ? t("更新运行环境") : runtime.phase === 'error' ? t("运行环境需要处理") : installed ? t("正在进入对话") : t("准备运行环境")}</h1>
         </div>
-        <PhaseBadge phase={runtime.phase} />
       </div>
 
       <section className="launch-panel">
@@ -470,9 +486,11 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onO
         <div className="launch-copy">
           <h2>
             {updateRequired
-              ? t("当前 APK 包含新版运行环境")
+              ? t("安装包内置了新版运行环境")
               : runtime.phase === 'error'
-              ? t("运行环境需要处理")
+              ? installed
+                ? t("运行环境启动失败")
+                : t("安装未完成")
               : transitioning
               ? t(PHASE_META[runtime.phase].label)
               : installed
@@ -481,14 +499,14 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onO
           </h2>
           <p>
             {updateRequired
-              ? t("为避免继续打开旧版 Harness，需要先更新 Ubuntu 环境。更新会替换其中的本地修改。")
+              ? t("需要先更新运行环境，才能继续打开 Harness；更新会替换其中的本地修改。")
               : runtime.phase === 'error'
               ? runtimeErrorMessage(runtime.errorCode)
               : transitioning
               ? `${formatBytes(runtime.downloadedBytes)} / ${formatBytes(runtime.totalBytes)}`
               : installed
-                ? t("应用会自动启动本机服务并进入对话，无需通过浏览器访问。")
-                : t("安装包会校验 Ubuntu 运行时，远程下载中断后可继续。")}
+                ? t("应用会自动启动本机服务并进入对话。")
+                : t("安装时会校验运行时完整性；从网络下载的，中断后可以继续。")}
           </p>
         </div>
 
@@ -514,7 +532,7 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onO
           )}
           {installed && !transitioning && !updateRequired && busy !== 'launch' && (
             <button className="button button-primary" type="button" onClick={onLaunch} disabled={busy !== null}>
-              <Play size={18} fill="currentColor" />{t("重新打开对话")}</button>
+              <Play size={18} fill="currentColor" />{t("打开对话")}</button>
           )}
           {runtime.phase === 'error' && installed && !updateRequired && (
             <button className="button button-secondary" type="button" onClick={onOpenTerminal} disabled={busy !== null}>
@@ -541,7 +559,7 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onO
       {!runtime.runnerAvailable && (
         <div className="inline-alert warning" role="alert">
           <AlertTriangle size={19} />
-          <div><strong>{t("本机运行器不可用")}</strong><span>{t("请安装包含当前 ARM64 运行器的应用版本。")}</span></div>
+          <div><strong>{t("缺少本机运行组件")}</strong><span>{t("请安装支持当前 arm64 设备的新版应用。")}</span></div>
         </div>
       )}
     </div>
@@ -588,8 +606,8 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
     <div className="screen environment-screen">
       <div className="screen-heading management-heading">
         <div>
-          <p className="eyebrow">{t("本机运行时")}</p>
-          <h1>{t("Ubuntu 环境")}</h1>
+          <p className="eyebrow">{t("应用管理")}</p>
+          <h1>{t("Ubuntu 运行时")}</h1>
         </div>
         <div className="heading-actions">
           <PhaseBadge phase={runtime.phase} />
@@ -660,7 +678,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
           {(installed || runtime.phase === 'error') && (
             <button className="button button-danger-quiet" type="button" onClick={onReset} disabled={busy !== null}>
               <RotateCcw size={18} />
-              {t("重置")}</button>
+              {t("重置环境")}</button>
           )}
         </div>
       </section>
@@ -668,7 +686,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
       {runtime.updateAvailable && installed && (
         <div className="inline-alert warning" role="alert">
           <AlertTriangle size={19} />
-          <div><strong>{t("APK 内置环境有更新")}</strong><span>{t("更新会替换当前 Ubuntu 根目录，其中安装的软件、本地修改和未导出的文件将被清除。")}</span></div>
+          <div><strong>{t("安装包内置的运行环境有更新")}</strong><span>{t("更新会替换当前 Ubuntu 根目录，其中安装的软件、本地修改和未导出的文件将被清除。")}</span></div>
         </div>
       )}
 
@@ -683,9 +701,9 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
         <h2 id="environment-details">{t("环境详情")}</h2>
         <div className="detail-list">
           <div className="detail-row"><span><Cpu size={18} />{t("架构")}</span><strong>{t(runtime.architecture)}</strong></div>
-          <div className="detail-row"><span><Database size={18} />{inProgress ? t("当前阶段总量") : t("镜像大小")}</span><strong>{formatBytes(runtime.totalBytes)}</strong></div>
-          <div className="detail-row"><span><Gauge size={18} />{t("本机运行器")}</span><strong>{runtime.runnerAvailable ? t("可用") : t("不可用")}</strong></div>
-          <div className="detail-row"><span><LockKeyhole size={18} />{t("网络入口")}</span><strong>{t("应用内")}</strong></div>
+          <div className="detail-row"><span><Database size={18} />{t("运行时大小")}</span><strong>{formatBytes(runtime.totalBytes)}</strong></div>
+          <div className="detail-row"><span><Gauge size={18} />{t("运行组件")}</span><strong>{runtime.runnerAvailable ? t("可用") : t("不可用")}</strong></div>
+          <div className="detail-row"><span><LockKeyhole size={18} />{t("网络访问")}</span><strong>{t("仅本应用内")}</strong></div>
         </div>
       </section>
     </div>
@@ -718,7 +736,7 @@ function TerminalScreen({ bridge, fontSize, onAuthorize, onBack, onConnect, onEr
     <div className="screen terminal-screen">
       <div className="screen-heading terminal-heading">
         <div>
-          <p className="eyebrow">{t("交互会话")}</p>
+          <p className="eyebrow">{t("应用管理")}</p>
           <h1>{t("终端")}</h1>
         </div>
         <div className="heading-actions">
@@ -746,7 +764,7 @@ function TerminalScreen({ bridge, fontSize, onAuthorize, onBack, onConnect, onEr
           <span><HardDrive size={27} /></span>
           <h2>{t("Ubuntu 尚未就绪")}</h2>
           <button className="button button-primary" type="button" onClick={onOpenEnvironment}>
-            {t("前往环境")}</button>
+            {t("前往运行环境")}</button>
         </div>
       ) : (
         <div className="empty-terminal">
@@ -798,7 +816,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
         </div>
         <button className="button button-primary conversation-button" type="button" onClick={onLaunch} disabled={busy !== null || !runtimeInstalled(runtime)}>
           {busy === 'launch' ? <Loader2 className="spin" size={18} /> : runtime.updateAvailable ? <RefreshCw size={18} /> : <Bot size={18} />}
-          {runtime.updateAvailable ? t("更新环境") : t("打开 Harness")}
+          {runtime.updateAvailable ? t("更新运行环境") : t("打开 Harness")}
         </button>
       </div>
 
@@ -806,15 +824,15 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
 
       <section className="management-list" aria-label={t("运行环境管理")}>
         <button className="management-row" type="button" onClick={onOpenPlugins}>
-          <span className="management-icon green"><Settings2 size={20} /></span>
-          <span className="management-copy"><strong>{t("插件管理")}</strong><small>{t("官方与第三方插件，按文件管理启停和更新")}</small></span>
+          <span className="management-icon"><Settings2 size={20} /></span>
+          <span className="management-copy"><strong>{t("插件管理")}</strong><small>{t("官方与第三方插件，按插件包管理启停与更新")}</small></span>
           <ChevronRight size={18} />
         </button>
         <div className="management-service">
           <span className="management-icon dark"><Bot size={20} /></span>
           <span className="management-copy">
             <strong>{t("Harness 服务")}</strong>
-            <small>{runtime.phase === 'running' ? t("正在本机运行") : runtimeInstalled(runtime) ? t("已停止，可随时启动") : t("等待 Ubuntu 环境")}</small>
+            <small>{runtime.phase === 'running' ? t("正在本机运行") : runtimeInstalled(runtime) ? t("已停止，可随时启动") : t("等待安装运行环境")}</small>
           </span>
           {runtime.phase === 'running' ? (
             <button className="button button-danger-quiet compact-button" type="button" onClick={onStop} disabled={busy !== null}><Square size={16} />{t("停止")}</button>
@@ -823,13 +841,13 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
           )}
         </div>
         <button className="management-row" type="button" onClick={onOpenEnvironment}>
-          <span className="management-icon green"><HardDrive size={20} /></span>
-          <span className="management-copy"><strong>{t("Ubuntu 运行时")}</strong><small>{runtime.updateAvailable ? t("发现 APK 内置环境更新") : t("安装进度、版本、来源与重置")}</small></span>
+          <span className="management-icon dark"><HardDrive size={20} /></span>
+          <span className="management-copy"><strong>{t("Ubuntu 运行时")}</strong><small>{runtime.updateAvailable ? t("发现内置运行环境更新") : t("安装进度、版本、来源与重置")}</small></span>
           <ChevronRight size={18} />
         </button>
         <button className="management-row" type="button" onClick={onOpenTerminal}>
-          <span className="management-icon blue"><SquareTerminal size={20} /></span>
-          <span className="management-copy"><strong>{t("终端与设备 Shell")}</strong><small>{t("Ubuntu 终端、Shizuku 和本机 adb")}</small></span>
+          <span className="management-icon"><SquareTerminal size={20} /></span>
+          <span className="management-copy"><strong>{t("终端与设备 Shell")}</strong><small>{t("Ubuntu 终端与设备 Shell（需 Shizuku）")}</small></span>
           <ChevronRight size={18} />
         </button>
       </section>
@@ -843,7 +861,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
                 : ''
           return (
             <button className="management-row" key={page} type="button" onClick={() => onOpenPage(page)}>
-              <span className={`management-icon ${page === 'diagnostics' ? 'dark' : 'green'}`}>
+              <span className="management-icon">
                 {page === 'models' ? <KeyRound size={20} /> : page === 'runtime' ? <Power size={20} /> : page === 'terminal' ? <SquareTerminal size={20} /> : page === 'shizuku' ? <Smartphone size={20} /> : <ScrollText size={20} />}
               </span>
               <span className="management-copy">
@@ -933,7 +951,7 @@ function HarnessLogPanel({ loadHarnessLog }: HarnessLogPanelProps) {
         <span className="section-icon"><ScrollText size={19} /></span>
         <span className="harness-log-heading">
           <strong id="harness-log-title">{t("运行日志（最近 8 KB）")}</strong>
-          <small>{t("访客进程输出尾部，用于排查工具调用失败")}</small>
+          <small>{t("Harness 进程输出尾部，用于排查工具调用失败")}</small>
         </span>
         {open ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
       </button>
@@ -946,7 +964,7 @@ function HarnessLogPanel({ loadHarnessLog }: HarnessLogPanelProps) {
         {open && (
         <>
           <p className="settings-note">
-            {t("这段内容来自访客进程输出，可能包含会话内容，仅供排障；它只在设备上的界面里显示，不会写入诊断日志，也不随诊断日志导出。")}
+            {t("这段内容来自 Harness 进程输出，可能包含会话内容，仅供排障；它只在设备界面里显示，不会写入诊断日志，也不随诊断日志导出。")}
           </p>
 
           {loading && (
@@ -959,7 +977,7 @@ function HarnessLogPanel({ loadHarnessLog }: HarnessLogPanelProps) {
             <p className="harness-log-state">{t("当前没有可读取的运行日志")}</p>
           )}
           {!loading && !failed && log !== null && log.available && log.text === '' && (
-            <p className="harness-log-state">{t("访客进程最近没有输出")}</p>
+            <p className="harness-log-state">{t("Harness 进程最近没有输出")}</p>
           )}
 
           {!loading && !failed && hasText && (
@@ -990,11 +1008,15 @@ function HarnessLogPanel({ loadHarnessLog }: HarnessLogPanelProps) {
 
 interface SettingsScreenProps {
   busy: string | null
+  settingsReadStatus: 'idle' | 'loading' | 'failed'
   /** 诊断日志状态：与设置草稿独立，由原生侧直接管理。 */
   diagnostic: DiagnosticLogState
   keepAlive: KeepAliveState
   /** 读取访客进程输出尾部；由折叠区块在展开时按需调用。 */
   loadHarnessLog: () => Promise<HarnessLog>
+  /** 未编辑的悬浮球开关跟随原生状态；null 表示尚未取得快照。 */
+  overlayBall: OverlayBallState | null
+  overlayBallReadFailed: boolean
   page: SettingsPage
   runtime: RuntimeState
   settings: RuntimeSettings | null
@@ -1005,14 +1027,18 @@ interface SettingsScreenProps {
   onConnect: () => void
   onDiagnosticSettings: (enabled: boolean, retentionDays: number) => void
   onLaunch: () => void
+  /** 跳转到系统「显示在其他应用上层」设置页；权限只能由用户手动开启。 */
+  onOpenOverlaySettings: () => void
   onOpenShizuku: () => void
   onRequestNotificationPermission: () => void
+  onReloadSettings: () => void
   onSave: (settings: RuntimeSettingsUpdate) => void
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, runtime, settings, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onOpenShizuku, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBall, overlayBallReadFailed, page, runtime, settings, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
   const [draft, setDraft] = useState<RuntimeSettings | null>(settings)
+  const [overlayBallDraft, setOverlayBallDraft] = useState<boolean | undefined>()
   const [selectedProvider, setSelectedProvider] = useState<ModelProviderId | 'custom'>('deepseek')
   const [credentialDrafts, setCredentialDrafts] = useState<ProviderApiKeys>({})
   const [clearedProviders, setClearedProviders] = useState<ModelProviderId[]>([])
@@ -1021,15 +1047,30 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
 
   useEffect(() => {
     setDraft(settings)
+    setOverlayBallDraft(undefined)
     setCredentialDrafts({})
     setClearedProviders([])
     setCustomCredentials({})
     setClearedCustomProviders([])
   }, [settings])
 
-  if (draft === null) {
+  if (settingsReadStatus === 'failed') {
+    return <div className="screen loading-screen">
+      <p role="alert">{t("无法读取最新设置，请重试")}</p>
+      <button className="button button-primary" type="button" onClick={onReloadSettings}>{t("重试")}</button>
+      <button className="button button-secondary" type="button" onClick={onBack}>{t("返回设置")}</button>
+    </div>
+  }
+  if (settingsReadStatus === 'loading' || draft === null) {
     return <div className="screen loading-screen"><Loader2 className="spin" size={24} /><span>{t("正在读取设置")}</span></div>
   }
+
+  // 只为用户主动修改的开关保留草稿；原生菜单关闭悬浮球时，不影响页内其他未保存内容。
+  const overlayBallEnabled = overlayBallDraft
+    ?? (overlayBallReadFailed ? draft.overlayBallEnabled : overlayBall?.enabled)
+    ?? draft.overlayBallEnabled
+    ?? false
+  const overlayPermissionKnown = overlayBall !== null && !overlayBallReadFailed
 
   const shizukuLabel = !shizuku.installed
     ? t("未安装")
@@ -1051,8 +1092,13 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
     draft.configuredModelProviders.includes(selectedProvider) || credentialDrafts[selectedProvider] !== undefined
   ) && !clearedProviders.includes(selectedProvider)
   const saveDraft = (): void => {
+    // 悬浮球是原生侧可被菜单直接修改的独立偏好。只有用户在本页实际拨动开关时，
+    // 才把它作为更新字段发送；否则省略该字段，让原生侧保留菜单刚写入的值。
+    const settingsWithoutOverlayBall = { ...draft }
+    delete settingsWithoutOverlayBall.overlayBallEnabled
     onSave({
-      ...draft,
+      ...settingsWithoutOverlayBall,
+      ...(overlayBallDraft === undefined ? {} : { overlayBallEnabled }),
       ...(Object.keys(credentialDrafts).length === 0 ? {} : { providerApiKeys: credentialDrafts }),
       ...(clearedProviders.length === 0 ? {} : { clearProviderApiKeys: clearedProviders }),
       ...(Object.keys(customCredentials).length === 0 ? {} : { customProviderApiKeys: customCredentials }),
@@ -1064,7 +1110,7 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
     <div className="screen settings-screen">
       <div className="screen-heading management-heading">
         <div>
-          <p className="eyebrow">{t("设置")}</p>
+          <p className="eyebrow">{t("应用管理")}</p>
           <h1>{t(SETTINGS_PAGE_META[page].title)}</h1>
         </div>
         <button className="icon-button" type="button" aria-label={t("返回设置")} title={t("返回设置")} onClick={onBack}>
@@ -1077,7 +1123,7 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
         <section className="settings-section" aria-labelledby="model-settings">
           <div className="section-title">
             <span className="section-icon"><Bot size={19} /></span>
-            <div><h2 id="model-settings">{t("模型供应商")}</h2><p>{t("凭据在设备上加密保存，并注入 Harness 运行时")}</p></div>
+            <div><h2 id="model-settings">{t("模型供应商")}</h2><p>{t("密钥在本机加密保存，只在本机启动 Harness 时使用，页面不会回显")}</p></div>
           </div>
           <label className="field">
             <span>{t("供应商")}</span>
@@ -1131,7 +1177,7 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
                 }}
               >
                 {clearedProviders.includes(selectedProvider) ? <RotateCcw size={16} /> : <Trash2 size={16} />}
-                {clearedProviders.includes(selectedProvider) ? t("撤销清除") : t("清除凭据")}
+                {clearedProviders.includes(selectedProvider) ? t("撤销清除") : t("清除密钥")}
               </button>
             </div>
           )}</>}
@@ -1160,10 +1206,10 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
         <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
-            <div><h2 id="download-settings">{t("运行时来源")}</h2><p>{t("官方包已固定下载源；仅内嵌开发包可留空")}</p></div>
+            <div><h2 id="download-settings">{t("运行时来源")}</h2><p>{t("正式版已预置下载源；两项留空表示改用 APK 内置运行时（仅内嵌构建可用）")}</p></div>
           </div>
           <label className="field">
-            <span>{t("清单地址")}</span>
+            <span>{t("运行时清单地址")}</span>
             <input
               type="url"
               inputMode="url"
@@ -1175,7 +1221,7 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
             />
           </label>
           <label className="field">
-            <span>{t("清单 SHA-256")}</span>
+            <span>{t("运行时清单 SHA-256")}</span>
             <input
               className="mono-input"
               type="text"
@@ -1197,7 +1243,7 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
         <section className="settings-section" aria-labelledby="terminal-settings">
           <div className="section-title">
             <span className="section-icon"><SquareTerminal size={19} /></span>
-            <div><h2 id="terminal-settings">{t("终端")}</h2><p>{t("应用内会话显示")}</p></div>
+            <div><h2 id="terminal-settings">{t("终端")}</h2><p>{t("应用内终端的显示方式")}</p></div>
           </div>
           <label className="range-field">
             <span><strong>{t("字号")}</strong><small>{draft.terminalFontSize}px</small></span>
@@ -1226,7 +1272,7 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
         <section className="settings-section" aria-labelledby="keep-alive-settings">
           <div className="section-title section-title-action">
             <span className="section-icon"><BellRing size={19} /></span>
-            <div><h2 id="keep-alive-settings">{t("后台保持")}</h2><p>{t("使用前台服务提升本机运行时的存活优先级")}</p></div>
+            <div><h2 id="keep-alive-settings">{t("后台保持")}</h2><p>{t("通过系统前台服务提高运行时进程的存活优先级")}</p></div>
             <span className={`status-chip ${keepAlive.foregroundServiceActive ? 'success' : ''}`}>
               {keepAlive.foregroundServiceActive ? t("前台服务运行中") : t("前台服务未运行")}
             </span>
@@ -1247,6 +1293,38 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
               }}
             />
           </label>
+          {/* 悬浮球与「后台保持」是两个互相独立的开关，但各自都会提高本应用进程被系统回收的优先级：
+              开悬浮球不会去拉起运行时的保活服务；悬浮球自身由独立的前台服务承载，
+              与「后台保持」一样只提高优先级，不保证进程不被系统结束。 */}
+          <label className="toggle-row">
+            <span>
+              <strong>{t("悬浮球")}</strong>
+              <small>
+                {!overlayPermissionKnown
+                  ? t("暂时无法确认悬浮窗权限")
+                  : overlayBall.canDrawOverlays
+                  ? t("在其他应用上层显示悬浮球，点按可快速回到对话")
+                  : t("需要「显示在其他应用上层」权限才能使用")}
+              </small>
+              {overlayBallEnabled && overlayPermissionKnown && !overlayBall.canDrawOverlays ? (
+                <small className="status-text-error">{t("系统权限已关闭")}</small>
+              ) : null}
+            </span>
+            {/* 只禁用「开启」方向：没有权限且当前是关的就禁用，防止误开后无声失败；
+                已经开着时仍允许关闭，否则权限被系统撤销后用户无法在应用内关掉这个功能。 */}
+            <input
+              type="checkbox"
+              role="switch"
+              checked={overlayBallEnabled}
+              disabled={(!overlayPermissionKnown || !overlayBall.canDrawOverlays) && !overlayBallEnabled}
+              onChange={event => setOverlayBallDraft(event.target.checked)}
+            />
+          </label>
+          {overlayBallReadFailed && <p className="status-text-error" role="alert">{t("无法读取悬浮球状态，正在重试")}</p>}
+          {overlayPermissionKnown && !overlayBall.canDrawOverlays && (
+            <button className="button button-secondary" type="button" onClick={onOpenOverlaySettings} disabled={busy !== null}>
+              <ExternalLink size={18} />{t("前往系统设置开启")}</button>
+          )}
           <div className="settings-status-list">
             <div className="settings-status-row">
               <span>{t("前台服务")}</span>
@@ -1261,7 +1339,7 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
               <strong>{lastRunLabel}</strong>
             </div>
             <div className="settings-status-row">
-              <span>{t("设备 Shell 辅助")}</span>
+              <span>{t("设备 Shell（连接恢复）")}</span>
               <strong>{keepAlive.deviceShellReady ? t("可用") : t("不可用")}</strong>
             </div>
           </div>
@@ -1325,7 +1403,7 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
         <section className="settings-section" aria-labelledby="diagnostic-settings">
           <div className="section-title section-title-action">
             <span className="section-icon"><ScrollText size={19} /></span>
-            <div><h2 id="diagnostic-settings">{t("诊断日志")}</h2><p>{t("仅记录应用内部状态码，用于把问题带出来")}</p></div>
+            <div><h2 id="diagnostic-settings">{t("诊断日志")}</h2><p>{t("只记录应用内部状态码与计数，用于排查问题")}</p></div>
             <span className={`status-chip ${diagnostic.enabled ? 'success' : ''}`}>
               {diagnostic.enabled ? t("收集中") : t("未收集")}
             </span>
@@ -1358,7 +1436,7 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
           <div className="settings-status-list">
             <div className="settings-status-row">
               <span>{t("日志文件")}</span>
-              <strong>{diagnostic.fileCount} · {formatBytes(diagnostic.totalBytes)}</strong>
+              <strong>{t("{0} 个文件 · {1}", diagnostic.fileCount, formatBytes(diagnostic.totalBytes))}</strong>
             </div>
             <div className="settings-status-row">
               <span>{t("最近记录")}</span>
@@ -1366,7 +1444,7 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, page, run
             </div>
           </div>
           <p className="settings-note">
-            {t("诊断日志只包含应用内部的事件名、状态码、布尔值与计数：不含 URL、模型凭据、Harness 临时密码、设备桥令牌、终端内容或文件路径。日志保存在应用私有目录且不参与备份，到期自动删除。")}
+            {t("诊断日志只包含应用内部的事件名、状态码、布尔值与计数：不含 URL、模型密钥、Harness 临时密码、设备桥令牌、终端内容或文件路径。日志保存在应用私有目录且不参与备份，到期自动删除。")}
           </p>
           <div className="settings-inline-actions">
             <button className="button button-secondary" type="button" onClick={onShareDiagnostic} disabled={busy !== null || diagnostic.fileCount === 0}>
@@ -1413,8 +1491,8 @@ function ResetDialog({ busy, onCancel, onConfirm }: ResetDialogProps) {
       <form className="dialog" role="dialog" aria-modal="true" aria-labelledby="reset-title" onSubmit={submitReset}>
         <button className="dialog-close" type="button" aria-label={t("关闭")} onClick={onCancel} disabled={busy}><X size={19} /></button>
         <span className="dialog-danger-icon"><Trash2 size={23} /></span>
-        <h2 id="reset-title">{t("重置 Ubuntu 环境")}</h2>
-        <p>{t("运行时覆盖层将被清除，当前终端和 Harness 会话会立即结束。")}</p>
+        <h2 id="reset-title">{t("重置运行环境")}</h2>
+        <p>{t("已安装的 Ubuntu 运行环境会被清除，其中的用户数据（会话、密钥、插件等）一并删除，终端与 Harness 会话将立即结束。")}</p>
         <label className="field confirmation-field">
           <span>{t("输入 RESET_RUNTIME 确认")}</span>
           <input
@@ -1483,8 +1561,14 @@ export function App() {
   const previousViewRef = useRef<AppView | null>(null)
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME)
   const [settings, setSettings] = useState<RuntimeSettings | null>(null)
+  const [settingsReadStatus, setSettingsReadStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
+  const settingsReadRevision = useRef(0)
   const [shizuku, setShizuku] = useState<ShizukuState>(EMPTY_SHIZUKU)
   const [keepAlive, setKeepAlive] = useState<KeepAliveState>(EMPTY_KEEP_ALIVE)
+  // 查询失败与「没有权限」分开记录，保留最近一次快照供开关关闭操作使用。
+  const [overlayBall, setOverlayBall] = useState<OverlayBallState | null>(null)
+  const [overlayBallReadFailed, setOverlayBallReadFailed] = useState(false)
+  const overlayBallReadRevision = useRef(0)
   const [diagnostic, setDiagnostic] = useState<DiagnosticLogState>(EMPTY_DIAGNOSTIC)
   const [booting, setBooting] = useState(true)
   const [onboardingOpen, setOnboardingOpen] = useState(() => {
@@ -1504,6 +1588,21 @@ export function App() {
   }, [])
 
   const terminalError = useCallback((message: string) => notify(message, 'error'), [notify])
+
+  const readOverlayBall = useCallback(async () => {
+    const revision = ++overlayBallReadRevision.current
+    try {
+      const next = await runtimeBridge.getOverlayBallState()
+      if (revision === overlayBallReadRevision.current) {
+        setOverlayBall(next)
+        setOverlayBallReadFailed(false)
+      }
+      return next
+    } catch (error) {
+      if (revision === overlayBallReadRevision.current) setOverlayBallReadFailed(true)
+      throw error
+    }
+  }, [])
 
   /**
    * 视图导航入口（取代直接调用裸的 setState）：只有视图真的变化才写历史并重渲染。
@@ -1603,8 +1702,9 @@ export function App() {
       }
     })()
 
+    const initialSettingsRevision = settingsReadRevision.current
     void runtimeBridge.getSettings()
-      .then(next => { if (!cancelled) setSettings(next) })
+      .then(next => { if (!cancelled && initialSettingsRevision === settingsReadRevision.current) setSettings(next) })
       .catch(error => { if (!cancelled) notify(errorMessage(error), 'error') })
 
     void runtimeBridge.getShizukuState()
@@ -1619,6 +1719,11 @@ export function App() {
         // 后台保持状态读取失败不阻塞界面：保持上一次的已知状态。
       })
 
+    void readOverlayBall()
+      .catch(() => {
+        // 悬浮球属于可选能力，错误由设置页单独显示。
+      })
+
     void runtimeBridge.getDiagnosticLogState()
       .then(next => { if (!cancelled) setDiagnostic(next) })
       .catch(() => {
@@ -1630,7 +1735,7 @@ export function App() {
       if (removeProgress !== undefined) void removeProgress()
       void progressHandlePromise
     }
-  }, [notify])
+  }, [notify, readOverlayBall])
 
   useEffect(() => {
     let cancelled = false
@@ -1652,15 +1757,29 @@ export function App() {
           // 轮询失败时保留上一次状态，不重复提示同一条错误。
         })
     }
+    /**
+     * 悬浮球状态同样在页面重新可见时重读：用户可能刚在系统设置里授予或撤销了
+     * 「显示在其他应用上层」权限，也可能用悬浮球菜单在原生侧关掉了球。
+     * 读取失败时保留上一次的已知值，不清零：清零会把「未知」显示成「已关闭」。
+     */
+    const refreshOverlayBall = (): void => {
+      if (document.visibilityState === 'hidden') return
+      void readOverlayBall()
+        .catch(() => {
+          // 设置页保留查询失败提示，不在轮询中重复弹通知。
+        })
+    }
     const handleVisibilityChange = (): void => {
       if (document.visibilityState === 'visible') {
         refreshShizuku()
         refreshKeepAlive()
+        refreshOverlayBall()
       }
     }
     const handleFocus = (): void => {
       refreshShizuku()
       refreshKeepAlive()
+      refreshOverlayBall()
     }
 
     window.addEventListener('focus', handleFocus)
@@ -1668,6 +1787,7 @@ export function App() {
     const timer = window.setInterval(() => {
       refreshShizuku(false)
       refreshKeepAlive()
+      refreshOverlayBall()
     }, 2500)
     return () => {
       cancelled = true
@@ -1675,7 +1795,7 @@ export function App() {
       window.removeEventListener('focus', handleFocus)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [notify])
+  }, [notify, readOverlayBall])
 
   const run = useCallback(async (id: string, operation: () => Promise<void>, success?: string) => {
     if (busyRef.current !== null) return
@@ -1711,7 +1831,7 @@ export function App() {
       setRuntime(next)
       autoLaunchAttempted.current = false
       setActiveView('conversation')
-    }, t("Ubuntu 运行时已安装"))
+    }, t("运行环境已安装"))
   }, [run, setActiveView, settings])
 
   const requestRuntimeUpdate = useCallback(() => {
@@ -1736,7 +1856,7 @@ export function App() {
       setUpdateOpen(false)
       autoLaunchAttempted.current = false
       setActiveView('conversation')
-    }, t("Ubuntu 运行环境已更新"))
+    }, t("运行环境已更新"))
   }, [run, setActiveView])
 
   const launchHarness = useCallback(() => {
@@ -1787,8 +1907,24 @@ export function App() {
   }, [activeView, booting, busy, language, launchHarness, onboardingOpen, runtime, settings])
 
   const openSettings = useCallback((page: SettingsPage) => {
+    // 最新设置读完之前不展示可编辑的旧草稿，避免迟到响应清空刚输入的内容。
+    const revision = ++settingsReadRevision.current
+    setSettingsReadStatus('loading')
+    void runtimeBridge.getSettings()
+      .then(next => {
+        if (revision !== settingsReadRevision.current) return
+        setSettings(next)
+        setSettingsReadStatus('idle')
+      })
+      .catch(() => {
+        if (revision === settingsReadRevision.current) setSettingsReadStatus('failed')
+      })
+    void readOverlayBall()
+      .catch(() => {
+        // 悬浮球查询失败不阻塞其他设置。
+      })
     setActiveView(SETTINGS_PAGE_META[page].view)
-  }, [setActiveView])
+  }, [readOverlayBall, setActiveView])
 
   /** 更新诊断日志采集开关与保留天数；原生侧会再次夹取保留范围。 */
   const saveDiagnosticSettings = useCallback((enabled: boolean, retentionDays: number) => {
@@ -1835,7 +1971,7 @@ export function App() {
       // 显式停止会同时撤销前台服务。
       setKeepAlive(await runtimeBridge.getKeepAliveState())
       setActiveView('settings')
-    }, t("运行时已停止"))
+    }, t("运行环境已停止"))
   }, [run, setActiveView])
 
   const confirmReset = useCallback(() => {
@@ -1846,34 +1982,51 @@ export function App() {
       setResetOpen(false)
       autoLaunchAttempted.current = false
       setActiveView('conversation')
-    }, t("Ubuntu 环境已重置"))
+    }, t("运行环境已重置"))
   }, [run, setActiveView])
 
   const saveSettings = useCallback((nextSettings: RuntimeSettingsUpdate) => {
     void run('save-settings', async () => {
       const saved = await runtimeBridge.saveSettings(nextSettings)
       setSettings(saved)
-      setRuntime(await runtimeBridge.getState())
-      // 保存可能改变后台保持开关，服务状态需要重新读取。
-      const nextKeepAlive = await runtimeBridge.getKeepAliveState()
-      setKeepAlive(nextKeepAlive)
-      // 「已保存」不等于「已生效」：前台服务是否真的进入前台由原生状态决定。
-      notify(t("设置已保存"), 'success')
-      if (saved.keepRuntimeInBackground !== true || nextKeepAlive.foregroundServiceActive) return
-      // 服务可能只是还在启动中，等宽限期过后用原生状态复核：
-      // 仍为「未运行」才提示未生效（缺少通知权限、后台启动被系统拒绝或厂商策略限制都会停在这里）。
-      window.setTimeout(() => {
-        void runtimeBridge.getKeepAliveState().then(latest => {
-          setKeepAlive(latest)
-          if (latest.keepRuntimeInBackground === true && !latest.foregroundServiceActive) {
-            notify(t("设置已保存，但后台保持未生效：前台服务未运行。Android 13 及以上需要通知权限，并可能受系统后台限制；请在系统设置中为本应用开启通知权限后重试。"), 'error')
-          }
-        }).catch(() => {
-          // 复核失败时保留「设置已保存」的提示：不猜测服务状态，也不误报未生效。
-        })
-      }, FOREGROUND_SERVICE_SETTLE_MS)
+      // 落盘成功后，状态查询失败不能被当成保存失败；三项查询互不阻塞。
+      const [runtimeResult, keepAliveResult, overlayResult] = await Promise.allSettled([
+        runtimeBridge.getState(), runtimeBridge.getKeepAliveState(), readOverlayBall(),
+      ])
+      if (runtimeResult.status === 'fulfilled') setRuntime(runtimeResult.value)
+      if (keepAliveResult.status === 'fulfilled') setKeepAlive(keepAliveResult.value)
+      if ([runtimeResult, keepAliveResult, overlayResult].some(result => result.status === 'rejected')) {
+        notify(t("设置已保存，但部分状态暂时无法确认，请稍后重试"), 'info')
+      } else {
+        notify(t("设置已保存"), 'success')
+      }
+      if (saved.keepRuntimeInBackground === true && keepAliveResult.status === 'fulfilled' && !keepAliveResult.value.foregroundServiceActive) {
+        // 服务可能只是还在启动中，等宽限期过后用原生状态复核：
+        // 仍为「未运行」才提示未生效（缺少通知权限、后台启动被系统拒绝或厂商策略限制都会停在这里）。
+        recheckForegroundServiceAfterSettle(
+          () => runtimeBridge.getKeepAliveState(),
+          latest => {
+            setKeepAlive(latest)
+            if (latest.keepRuntimeInBackground === true && !latest.foregroundServiceActive) {
+              notify(t("设置已保存，但后台保持未生效：前台服务未运行。Android 13 及以上需要通知权限，并可能受系统后台限制；请在系统设置中为本应用开启通知权限后重试。"), 'error')
+            }
+          },
+        )
+      }
+      if (saved.overlayBallEnabled === true && overlayResult.status === 'fulfilled' && !overlayResult.value.serviceActive) {
+        // 悬浮球走同一套节奏：原生侧启动前台服务失败时是静默吞异常的，
+        // 只有等宽限期过后复核原生状态，才能把「开关开着但球没起来」的原因告诉用户。
+        recheckForegroundServiceAfterSettle(
+          readOverlayBall,
+          latest => {
+            if (latest.enabled === true && !latest.serviceActive) {
+              notify(t("设置已保存，但悬浮球未生效：前台服务未运行。系统可能拒绝了前台服务启动，或权限不足；请在系统设置中检查「显示在其他应用上层」与通知权限后重试。"), 'error')
+            }
+          },
+        )
+      }
     })
-  }, [notify, run])
+  }, [notify, readOverlayBall, run])
 
   /**
    * 申请前台服务通知权限。
@@ -1913,6 +2066,16 @@ export function App() {
     void run('open-shizuku', () => runtimeBridge.openShizuku())
   }, [run])
 
+  /**
+   * 跳转到系统「显示在其他应用上层」设置页。
+   *
+   * 该权限只能由用户在系统界面手动开启，这里只负责把用户送到那个页面；
+   * 返回应用时由可见性刷新重读状态，开关随之从禁用变为可用。
+   */
+  const openOverlaySettings = useCallback(() => {
+    void run('open-overlay-settings', () => runtimeBridge.openOverlaySettings())
+  }, [run])
+
   const screen = (() => {
     switch (activeView) {
       case 'conversation':
@@ -1928,7 +2091,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} loadHarnessLog={loadHarnessLog} page={page} runtime={runtime} settings={settings} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onOpenShizuku={openShizuku} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} page={page} runtime={runtime} settings={settings} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

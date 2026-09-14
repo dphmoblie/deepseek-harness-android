@@ -48,6 +48,34 @@ SUPPORT_FILES = {
     "usr/local/lib/dsh-mobile-session-publish.py": Path(__file__).with_name("mobile-session-publish.py"),
 }
 
+# Match package paths, not basenames: a random file called rg is not a runtime tool.
+REQUIRED_RUNTIME_EXECUTABLES = {
+    "bash": "usr/bin/bash",
+    "ripgrep": "node_modules/@vscode/ripgrep-linux-arm64/bin/rg",
+    "landlock-run": "node_modules/@deepseek-ai/node-addon-system-linux-arm64/bin/landlock-run",
+}
+
+
+def runtime_executable_name(name: str) -> str | None:
+    for label, suffix in REQUIRED_RUNTIME_EXECUTABLES.items():
+        if (label == "bash" and name == suffix) or (
+            label != "bash" and name.startswith("opt/dsh/") and name.endswith("/" + suffix)
+        ):
+            return label
+    return None
+
+
+def validate_runtime_executable(member, header: bytes) -> None:
+    """Require a regular, executable AArch64 ELF; never accept a host-platform binary."""
+    if not member.isreg() or member.size < 64 or member.mode != 0o755:
+        raise ValueError(f"runtime executable missing, empty or not mode 0755: {member.name!r}")
+    if (
+        len(header) < 64 or header[:7] != b"\x7fELF\x02\x01\x01"
+        or int.from_bytes(header[16:18], "little") not in (2, 3)
+        or int.from_bytes(header[18:20], "little") != 183
+    ):
+        raise ValueError(f"runtime executable is not an AArch64 ELF: {member.name!r}")
+
 
 def normalized(raw: str) -> str:
     return raw.removesuffix("/")
@@ -75,6 +103,7 @@ def main() -> int:
     runtime_metadata: bytes | None = None
     dsh_package_metadata: list[bytes] = []
     support_files: dict[str, tuple[bytes, int]] = {}
+    runtime_executables: set[str] = set()
     fail = lambda msg: (_ for _ in ()).throw(SystemExit(f"BUNDLE_VERIFY_FAILED: {msg}"))
 
     import tarfile
@@ -92,6 +121,17 @@ def main() -> int:
             if name in seen:
                 fail(f"duplicate entry: {name!r}")
             seen.add(name)
+            executable = runtime_executable_name(name)
+            if executable is not None:
+                source = t.extractfile(m) if m.isreg() else None
+                try:
+                    validate_runtime_executable(m, b"" if source is None else source.read(64))
+                except ValueError as error:
+                    fail(str(error))
+                finally:
+                    if source is not None:
+                        source.close()
+                runtime_executables.add(executable)
             if m.isdir():
                 types[name] = "dir"
                 continue
@@ -149,6 +189,9 @@ def main() -> int:
             else:
                 fail(f"unsupported entry type {m.type!r}: {name!r}")
 
+    missing_executables = set(REQUIRED_RUNTIME_EXECUTABLES) - runtime_executables
+    if missing_executables:
+        fail(f"required runtime executables missing: {', '.join(sorted(missing_executables))}")
     if extracted != expected_extracted:
         fail(f"extracted size mismatch: {extracted} != {expected_extracted}")
     expected_dsh_version = manifest.get("dshVersion")

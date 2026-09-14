@@ -14,6 +14,7 @@ import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
+import io.deepseekharness.mobile.overlay.OverlayBallPolicy
 import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
@@ -37,6 +38,7 @@ import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticState
 import io.deepseekharness.mobile.shizuku.DeviceCommand
 import io.deepseekharness.mobile.shizuku.DeviceCommandResult
 import io.deepseekharness.mobile.shizuku.ShizukuState
+import org.json.JSONObject
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
@@ -47,6 +49,13 @@ import java.util.concurrent.locks.ReentrantLock
 import java.security.SecureRandom
 import java.util.Base64
 import kotlin.concurrent.withLock
+
+internal fun optionalOverlayBallEnabled(data: JSONObject): Boolean? {
+    if (!data.has("overlayBallEnabled")) return null
+    val value = data.opt("overlayBallEnabled")
+    if (value !is Boolean) throw RuntimeFailure("SETTINGS_INVALID", "悬浮球开关格式无效")
+    return value
+}
 
 /** 前台服务通知权限别名；Android 13 以下系统不需要该权限。 */
 private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
@@ -152,6 +161,17 @@ class MobileRuntimePlugin : Plugin() {
             bridgeReady = false
             android.util.Log.w("dsh-runtime", "device bridge unavailable; device shell disabled")
         }
+        // 悬浮球可以在插件加载时恢复，keep-alive 不能：后者要求运行时确实在跑，
+        // 没跑就启动只会留下一个无法解释的通知；悬浮球与运行时无关，只取决于
+        // 「用户开关 + 系统权限」（syncOverlayBallService 内部判断），所以重启应用后
+        // 必须自动把球恢复出来，否则用户强行停止后重开，球要再保存一次设置才会出现。
+        // 与设备桥同理：恢复失败（如后台启动前台服务被系统限制）不能影响插件注册，
+        // 详细结果由 syncOverlayBallService 自己记入诊断日志。
+        try {
+            syncOverlayBallService(controller.store.overlayBallEnabled())
+        } catch (_: Throwable) {
+            android.util.Log.w("dsh-runtime", "overlay ball restore failed")
+        }
         recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.SUCCEEDED)
         recordUncleanExitIfNeeded()
         diagnostics()?.record(
@@ -163,6 +183,28 @@ class MobileRuntimePlugin : Plugin() {
                 "enabled" to RuntimeHost.isForegroundServiceActive().toString(),
             ),
         )
+    }
+
+    /**
+     * 回到前台时重新对齐悬浮球服务。
+     *
+     * 「显示在其他应用之上」是特殊权限，只能由用户到系统设置页手动开启，而且**授权不会结束进程**：
+     * 用户按界面引导去授权再返回时，插件与运行时都还活着，不会重走 [load]；前端对悬浮球状态
+     * 只读不写，也没有别的入口能把球拉起来。因此这里在主界面每次 onResume 时对齐一次，
+     * 补上「权限从已撤销恢复为已授予」的复位路径。
+     *
+     * 反向变化同样由这次对齐覆盖：权限在运行期被撤销时，同一次对齐会停掉服务并撤掉通知，
+     * 不留「球没了、通知还在」的状态。刻意不做轮询：对齐只发生在用户真正回到应用时。
+     * 与 [load] 一致，失败原因由 [syncOverlayBallService] 记入诊断日志，不阻塞界面。
+     */
+    override fun handleOnResume() {
+        super.handleOnResume()
+        if (destroying.get() || !::controller.isInitialized) return
+        try {
+            syncOverlayBallService(controller.store.overlayBallEnabled())
+        } catch (_: Throwable) {
+            android.util.Log.w("dsh-runtime", "overlay ball resume sync failed")
+        }
     }
 
     /**
@@ -273,6 +315,7 @@ class MobileRuntimePlugin : Plugin() {
                 call.getArray("clearCustomProviderApiKeys"),
                 allowedCustomIds,
             )
+            val overlayBallEnabledUpdate = optionalOverlayBallEnabled(call.data)
             val settings = RuntimeValidation.settings(
                 call.getString("manifestUrl"),
                 call.getString("manifestSha256"),
@@ -280,6 +323,8 @@ class MobileRuntimePlugin : Plugin() {
                 fontSize,
                 call.getBoolean("autoLaunch", true) ?: true,
                 call.getBoolean("keepRuntimeInBackground", false) ?: false,
+                // 省略值只作为构造设置对象时的占位；是否写入由下面的可空更新参数决定。
+                overlayBallEnabledUpdate ?: false,
             )
             val saved = controller.saveSettings(
                 settings,
@@ -288,9 +333,12 @@ class MobileRuntimePlugin : Plugin() {
                 customProviders,
                 customProviderApiKeyUpdates,
                 clearedCustomProviderApiKeys,
+                overlayBallEnabledUpdate = overlayBallEnabledUpdate,
             )
             applyKeepScreenAwake(saved.keepScreenAwake)
             syncKeepAliveService(saved.keepRuntimeInBackground)
+            // 菜单可能与本次保存并发关闭悬浮球；服务启停以同步瞬间的单字段真值为准。
+            syncOverlayBallService(controller.store.overlayBallEnabled())
             saved.toJs()
         }
     }
@@ -757,6 +805,57 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 悬浮球开关、系统悬浮窗权限与服务运行状态的当前快照。
+     *
+     * 返回值只有布尔量，不含任何用户数据。`canDrawOverlays` 必须每次实时读取：
+     * 用户可能在系统设置里随时撤销，缓存下来会让界面显示错误状态。
+     */
+    @PluginMethod
+    fun overlayBallState(call: PluginCall) {
+        execute(call) {
+            JSObject()
+                .put("enabled", controller.store.overlayBallEnabled())
+                .put("canDrawOverlays", android.provider.Settings.canDrawOverlays(context))
+                .put("serviceActive", OverlayBallService.isRunning)
+        }
+    }
+
+    /**
+     * 引导用户到「显示在其他应用上层」设置页。
+     *
+     * 该权限不弹运行时对话框，只能由用户手动开启；本方法只负责跳转，
+     * 授权结果由界面在 onResume 后重新查询 [overlayBallState] 获得。
+     */
+    @PluginMethod
+    fun openOverlaySettings(call: PluginCall) {
+        execute(call) {
+            val intent = Intent(
+                android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                android.net.Uri.parse("package:${context.packageName}"),
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                context.startActivity(intent)
+            } catch (_: Throwable) {
+                // 部分 ROM 没有该设置页：退回应用详情页，至少让用户能进系统设置。
+                try {
+                    context.startActivity(
+                        Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                            .setData(android.net.Uri.parse("package:${context.packageName}"))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                } catch (fallbackError: Throwable) {
+                    throw RuntimeFailure(
+                        "OVERLAY_SETTINGS_UNAVAILABLE",
+                        "无法打开系统设置页",
+                        fallbackError,
+                    )
+                }
+            }
+            null
+        }
+    }
+
+    /**
      * 权限：应用内桥接。
      * 「所有文件访问」是特殊权限，没有运行时对话框可弹：只能跳到系统设置页由用户手动开启。
      * Android 11 以下不存在该权限，返回 supported=false 由界面隐藏入口。
@@ -838,6 +937,36 @@ class MobileRuntimePlugin : Plugin() {
                 "active" to shouldRun.toString(),
                 "running" to running.toString(),
                 "enabled" to keepRuntimeInBackground.toString(),
+            ),
+        )
+    }
+
+    /**
+     * 按设置同步悬浮球服务。
+     *
+     * 与 [syncKeepAliveService] 分开：两者的启动条件互不相干，合在一起会让
+     * 「只想开悬浮球」的用户被动拉起运行时保活服务。
+     */
+    private fun syncOverlayBallService(enabled: Boolean) {
+        val canDraw = android.provider.Settings.canDrawOverlays(context)
+        val shouldRun = OverlayBallPolicy.shouldShowBall(enabled, canDraw)
+        if (shouldRun) {
+            OverlayBallService.start(context)
+        } else {
+            OverlayBallService.stop(context)
+        }
+        // 这里有两条静默失败的路径：权限被撤销时走的是 stop，而 stopService 对未运行的
+        // 服务是空操作、不触发 onDestroy 的记录；start 内部也会吞掉系统拒绝启动前台服务的
+        // 异常。没有这条记录，「开关开着但球不出现」在诊断日志里完全查不到原因。
+        diagnostics()?.record(
+            DiagnosticLevel.INFO,
+            DiagnosticEvent.KEEP_ALIVE,
+            mapOf(
+                "reason" to "overlay_sync",
+                "active" to shouldRun.toString(),
+                "enabled" to enabled.toString(),
+                "permission" to if (canDraw) "granted" else "denied",
+                "running" to OverlayBallService.isRunning.toString(),
             ),
         )
     }
@@ -1052,6 +1181,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("configuredCustomModelProviders", org.json.JSONArray(configuredCustomModelProviders))
         .put("autoLaunch", autoLaunch)
         .put("keepRuntimeInBackground", keepRuntimeInBackground)
+        .put("overlayBallEnabled", overlayBallEnabled)
 
     private fun RuntimeKeepAliveSnapshot.toJs(): JSObject = JSObject()
         .put("keepRuntimeInBackground", keepRuntimeInBackground)

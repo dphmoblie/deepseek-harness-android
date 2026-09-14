@@ -62,6 +62,21 @@ class RuntimeStore(context: Context) {
      */
     fun keepRuntimeInBackground(): Boolean = preferences.getBoolean(KEY_KEEP_BACKGROUND, false)
 
+    /** 悬浮球开关。缺键时按 false 处理：老版本升级上来的用户不会突然多出一个球。 */
+    fun overlayBallEnabled(): Boolean = preferences.getBoolean(KEY_OVERLAY_BALL, false)
+
+    /**
+     * 由悬浮球菜单在原生侧直接关闭开关。
+     *
+     * 菜单是原生界面，没有前端调用栈可以回写设置，因此这里直接落盘。
+     * 本方法只负责写入持久化存储，不负责通知前端；界面要看到新值，
+     * 需要界面侧在进入设置页时重新读取设置，这是界面侧的职责。
+     * 只写这一个布尔量，不触碰其他设置。
+     */
+    fun setOverlayBallEnabled(enabled: Boolean) {
+        preferences.edit().putBoolean(KEY_OVERLAY_BALL, enabled).apply()
+    }
+
     /**
      * 把应用界面语言同步到 Harness 运行时的 `~/.dsh/settings.yaml`（locale.preference）。
      *
@@ -193,6 +208,7 @@ class RuntimeStore(context: Context) {
             manifestSha256 = if (usePinnedDefault) BuildConfig.DEFAULT_MANIFEST_SHA256 else storedSha256.orEmpty(),
             keepScreenAwake = keepScreenAwake(),
             keepRuntimeInBackground = keepRuntimeInBackground(),
+            overlayBallEnabled = overlayBallEnabled(),
             terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             customModelProviders = customProviders,
@@ -211,6 +227,7 @@ class RuntimeStore(context: Context) {
         customProviders: List<CustomModelProvider> = emptyList(),
         customProviderApiKeyUpdates: Map<String, String> = emptyMap(),
         clearedCustomProviderApiKeys: Set<String> = emptySet(),
+        overlayBallEnabledUpdate: Boolean? = settings.overlayBallEnabled,
     ): RuntimeSettings {
         if (providerApiKeyUpdates.keys.any(clearedProviderApiKeys::contains)) {
             throw RuntimeFailure("SETTINGS_INVALID", "同一模型凭据不能同时更新和清除")
@@ -241,6 +258,7 @@ class RuntimeStore(context: Context) {
             .putString(KEY_CUSTOM_PROVIDERS, customProvidersToJson(customProviders).toString())
             .remove(KEY_API_KEY)
             .remove("device_bridge_token")
+        overlayBallEnabledUpdate?.let { editor.putBoolean(KEY_OVERLAY_BALL, it) }
         if (encryptedCredentials == null) editor.remove(KEY_PROVIDER_CREDENTIALS)
         else editor.putString(KEY_PROVIDER_CREDENTIALS, encryptedCredentials)
         if (encryptedCustomCredentials == null) editor.remove(KEY_CUSTOM_PROVIDER_CREDENTIALS)
@@ -248,6 +266,8 @@ class RuntimeStore(context: Context) {
         val committed = editor.commit()
         if (!committed) throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法保存运行时设置")
         return settings.copy(
+            // Omitted updates are read after commit so a concurrent native-menu hide is preserved.
+            overlayBallEnabled = overlayBallEnabledUpdate ?: overlayBallEnabled(),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             customModelProviders = customProviders,
             configuredCustomModelProviders = customProviders.mapNotNullTo(linkedSetOf()) { provider ->
@@ -740,6 +760,7 @@ class RuntimeStore(context: Context) {
         private const val KEY_MANIFEST_SHA256 = "manifest_sha256"
         private const val KEY_KEEP_AWAKE = "keep_screen_awake"
         private const val KEY_KEEP_BACKGROUND = "keep_runtime_in_background"
+        private const val KEY_OVERLAY_BALL = "overlay_ball_enabled"
         // 运行时恢复记录：只保存运行意图、最近阶段与时间，绝不保存凭据。
         private const val KEY_RUNTIME_INTENT = "runtime_intent"
         private const val KEY_RUNTIME_PHASE = "runtime_last_phase"

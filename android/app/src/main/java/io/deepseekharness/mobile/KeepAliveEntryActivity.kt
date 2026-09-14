@@ -32,8 +32,13 @@ class KeepAliveEntryActivity : AppCompatActivity() {
             startActivity(
                 Intent(this, target).addFlags(
                     // NEW_TASK：从通知启动时本 Activity 可能不在任何任务栈中。
+                    // REORDER_TO_FRONT：入口 Activity 临时位于栈顶时，把已有目标活动
+                    // 移到前台而不是再创建一个 HarnessActivity；这样不会触发旧实例
+                    // 的 onDestroy，也不会撤销仍在使用的一次性会话凭据。
                     // SINGLE_TOP：目标已在栈顶时复用，不产生重复实例。
-                    Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP,
                 ),
             )
         } catch (_: Throwable) {

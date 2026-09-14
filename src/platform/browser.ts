@@ -5,6 +5,7 @@ import type {
   KeepAliveState,
   ListenerHandle,
   ModelProviderId,
+  OverlayBallState,
   ProviderApiKeys,
   RuntimeBridge,
   RuntimeProgress,
@@ -120,6 +121,11 @@ export function createBrowserBridge(): RuntimeBridge {
       validated.clearCustomProviderApiKeys?.forEach(id => configuredCustomProviders.delete(id))
       currentSettings = validateSettings({
         ...validated,
+        // The native bridge treats an omitted field as "leave unchanged" so an
+        // overlay-ball menu action cannot be overwritten by an unrelated save.
+        overlayBallEnabled: settings.overlayBallEnabled === undefined
+          ? currentSettings.overlayBallEnabled ?? false
+          : validated.overlayBallEnabled,
         configuredModelProviders: MODEL_PROVIDER_IDS.filter(provider => configuredProviders.has(provider)),
         configuredCustomModelProviders: [...configuredCustomProviders],
       })
@@ -233,6 +239,14 @@ export function createBrowserBridge(): RuntimeBridge {
       lastIntent: state.phase === 'running' ? 'running' : 'stopped',
     }),
     requestNotificationPermission: () => Promise.resolve({ granted: false, supported: false }),
+    // 浏览器预览没有系统悬浮窗：始终报告未开启且无权限，界面据此隐藏入口。
+    getOverlayBallState: (): Promise<OverlayBallState> => Promise.resolve({
+      enabled: false,
+      canDrawOverlays: false,
+      serviceActive: false,
+    }),
+    // 浏览器里没有可跳转的系统设置页；静默无操作，不抛错以免打断预览。
+    openOverlaySettings: (): Promise<void> => Promise.resolve(),
     // 浏览器预览里没有访客进程，也就没有可读的输出尾部：如实返回不可用，不编造内容。
     getHarnessLog: (): Promise<HarnessLog> => Promise.resolve({ available: false, text: '' }),
     // 浏览器预览没有原生诊断日志：保持关闭且不可导出，避免给出「已经采集到东西」的错觉。
