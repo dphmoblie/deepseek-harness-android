@@ -17,7 +17,7 @@
 [![React 18](https://img.shields.io/badge/React%2018-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 
-<img src="docs/images/app-icon-256.png" width="128" alt="App icon: white background keyed out, transparent">
+<p align="center"><img src="docs/images/app-icon-512.png" width="256" alt="App icon: white background keyed out, transparent"></p>
 
 **DeepSeek Harness for Android** runs the full [DeepSeek Harness](https://github.com/deepseek-ai/dsh) agent environment — an Ubuntu userspace, Node.js, and the official Harness web console — directly on an Android phone. No root is required: the complete Linux environment executes inside [PRoot](https://github.com/proot-me/proot), and Harness is served on Android loopback and displayed in a navigation-restricted internal WebView.
 
