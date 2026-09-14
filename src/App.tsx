@@ -91,6 +91,15 @@ function settingsPageOf(view: AppView): SettingsPage | null {
   return entry ?? null
 }
 
+/**
+ * 是否属于「设置区」（设置首页与五个二级页）。
+ *
+ * 设置草稿的作用范围就是它：区内切页共享同一份未保存内容，离开设置区即丢弃。
+ */
+function isSettingsView(view: AppView): boolean {
+  return view === 'settings' || settingsPageOf(view) !== null
+}
+
 /** 外壳视图的全部取值：历史状态与地址片段只接受这里的值，其余一律回落到主视图。 */
 const APP_VIEWS: AppView[] = [
   'conversation',
@@ -1006,11 +1015,58 @@ function HarnessLogPanel({ loadHarnessLog }: HarnessLogPanelProps) {
   )
 }
 
+/**
+ * 设置页草稿：用户尚未保存的编辑内容。
+ *
+ * 为什么由 App 持有：设置首页与五个二级页是**不同的组件**，页内状态在切页时随组件卸载丢掉
+ * —— 用户刚输入的 API Key 只要切一次页就再也找不回来（即「输入的数据没有直接保存」）。
+ * 草稿因此放在设置区之上，由设置区内的所有页面共享。
+ *
+ * 隐私边界：整份草稿只存在于内存（React 状态），不写 localStorage/sessionStorage、
+ * 不进诊断日志，也不随任何导出离开设备。其中 [credentials] 与 [customCredentials]
+ * 是密钥输入：原生侧落盘后不回显，因此它们只存在于「用户本次输入」到「保存成功」之间。
+ */
+interface SettingsDraft {
+  /** 各字段的当前编辑值，初值由落盘设置复制而来。 */
+  settings: RuntimeSettings
+  /** 正在编辑的供应商；纯界面选择，切走再回来时停在原处。 */
+  selectedProvider: ModelProviderId | 'custom'
+  /** 用户在本页拨动过悬浮球开关时才有值；null 表示沿用原生侧真值。 */
+  overlayBallEnabled: boolean | null
+  /** 仅内存的 API Key 输入。 */
+  credentials: ProviderApiKeys
+  /** 用户点过「清除密钥」的供应商，保存时才提交。 */
+  clearedProviders: ModelProviderId[]
+  /** 自定义供应商的 API Key 输入（同上，仅内存）。 */
+  customCredentials: Record<string, string>
+  clearedCustomProviders: string[]
+}
+
+/**
+ * 由落盘设置建立草稿。
+ *
+ * 凭据输入一律为空：密钥落盘后不回显，草稿里只保留用户本次输入的内容。
+ * [previous] 只用于保留用户正在查看的供应商，避免后台刷新把界面跳回默认项。
+ */
+function draftFromSettings(settings: RuntimeSettings, previous: SettingsDraft | null = null): SettingsDraft {
+  return {
+    settings,
+    selectedProvider: previous?.selectedProvider ?? 'deepseek',
+    overlayBallEnabled: null,
+    credentials: {},
+    clearedProviders: [],
+    customCredentials: {},
+    clearedCustomProviders: [],
+  }
+}
+
 interface SettingsScreenProps {
   busy: string | null
   settingsReadStatus: 'idle' | 'loading' | 'failed'
   /** 诊断日志状态：与设置草稿独立，由原生侧直接管理。 */
   diagnostic: DiagnosticLogState
+  /** 未保存的设置草稿；null 表示设置还没读到，页面显示读取中。 */
+  draft: SettingsDraft | null
   keepAlive: KeepAliveState
   /** 读取访客进程输出尾部；由折叠区块在展开时按需调用。 */
   loadHarnessLog: () => Promise<HarnessLog>
@@ -1019,13 +1075,17 @@ interface SettingsScreenProps {
   overlayBallReadFailed: boolean
   page: SettingsPage
   runtime: RuntimeState
-  settings: RuntimeSettings | null
   shizuku: ShizukuState
   onAuthorize: () => void
   onBack: () => void
   onClearDiagnostic: () => void
   onConnect: () => void
   onDiagnosticSettings: (enabled: boolean, retentionDays: number) => void
+  /**
+   * 改写草稿。[dirty] 为假表示这次只改「正在看什么」（例如切换供应商下拉框），
+   * 草稿里的值没有变化，不应妨碍后台刷新同步。
+   */
+  onDraftChange: (update: (current: SettingsDraft) => SettingsDraft, dirty?: boolean) => void
   onLaunch: () => void
   /** 跳转到系统「显示在其他应用上层」设置页；权限只能由用户手动开启。 */
   onOpenOverlaySettings: () => void
@@ -1036,24 +1096,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBall, overlayBallReadFailed, page, runtime, settings, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
-  const [draft, setDraft] = useState<RuntimeSettings | null>(settings)
-  const [overlayBallDraft, setOverlayBallDraft] = useState<boolean | undefined>()
-  const [selectedProvider, setSelectedProvider] = useState<ModelProviderId | 'custom'>('deepseek')
-  const [credentialDrafts, setCredentialDrafts] = useState<ProviderApiKeys>({})
-  const [clearedProviders, setClearedProviders] = useState<ModelProviderId[]>([])
-  const [customCredentials, setCustomCredentials] = useState<Record<string, string>>({})
-  const [clearedCustomProviders, setClearedCustomProviders] = useState<string[]>([])
-
-  useEffect(() => {
-    setDraft(settings)
-    setOverlayBallDraft(undefined)
-    setCredentialDrafts({})
-    setClearedProviders([])
-    setCustomCredentials({})
-    setClearedCustomProviders([])
-  }, [settings])
-
+function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadHarnessLog, overlayBall, overlayBallReadFailed, onDraftChange, page, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
   if (settingsReadStatus === 'failed') {
     return <div className="screen loading-screen">
       <p role="alert">{t("无法读取最新设置，请重试")}</p>
@@ -1065,10 +1108,37 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
     return <div className="screen loading-screen"><Loader2 className="spin" size={24} /><span>{t("正在读取设置")}</span></div>
   }
 
+  // 草稿由 App 持有（设置区内所有页面共享），这里只读写它，不再自己保存一份页内状态。
+  const settings = draft.settings
+  const overlayBallDraft = draft.overlayBallEnabled
+  const selectedProvider = draft.selectedProvider
+  const credentialDrafts = draft.credentials
+  const clearedProviders = draft.clearedProviders
+  const customCredentials = draft.customCredentials
+  const clearedCustomProviders = draft.clearedCustomProviders
+
+  /**
+   * 草稿的写入入口：所有字段改动都经过 [onDraftChange]，由 App 统一标记「未保存」。
+   * 命名与原来的 useState setter 保持一致，调用点无需关心草稿存在哪里。
+   */
+  const setDraft = (next: RuntimeSettings): void => onDraftChange(current => ({ ...current, settings: next }))
+  const setOverlayBallDraft = (next: boolean): void => onDraftChange(current => ({ ...current, overlayBallEnabled: next }))
+  const setSelectedProvider = (next: ModelProviderId | 'custom'): void =>
+    // 只是切换正在查看的供应商，没有改动任何字段值：不算「未保存的输入」。
+    onDraftChange(current => ({ ...current, selectedProvider: next }), false)
+  const setCredentialDrafts = (update: (current: ProviderApiKeys) => ProviderApiKeys): void =>
+    onDraftChange(current => ({ ...current, credentials: update(current.credentials) }))
+  const setClearedProviders = (update: (current: ModelProviderId[]) => ModelProviderId[]): void =>
+    onDraftChange(current => ({ ...current, clearedProviders: update(current.clearedProviders) }))
+  const setCustomCredentials = (next: Record<string, string>): void =>
+    onDraftChange(current => ({ ...current, customCredentials: next }))
+  const setClearedCustomProviders = (next: string[]): void =>
+    onDraftChange(current => ({ ...current, clearedCustomProviders: next }))
+
   // 只为用户主动修改的开关保留草稿；原生菜单关闭悬浮球时，不影响页内其他未保存内容。
   const overlayBallEnabled = overlayBallDraft
-    ?? (overlayBallReadFailed ? draft.overlayBallEnabled : overlayBall?.enabled)
-    ?? draft.overlayBallEnabled
+    ?? (overlayBallReadFailed ? settings.overlayBallEnabled : overlayBall?.enabled)
+    ?? settings.overlayBallEnabled
     ?? false
   const overlayPermissionKnown = overlayBall !== null && !overlayBallReadFailed
 
@@ -1089,16 +1159,16 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
       ? t(PHASE_META[keepAlive.lastPhase].label)
       : `${t(PHASE_META[keepAlive.lastPhase].label)} · ${keepAliveRecordedAt}`
   const selectedProviderConfigured = selectedProvider !== 'custom' && (
-    draft.configuredModelProviders.includes(selectedProvider) || credentialDrafts[selectedProvider] !== undefined
+    settings.configuredModelProviders.includes(selectedProvider) || credentialDrafts[selectedProvider] !== undefined
   ) && !clearedProviders.includes(selectedProvider)
   const saveDraft = (): void => {
     // 悬浮球是原生侧可被菜单直接修改的独立偏好。只有用户在本页实际拨动开关时，
     // 才把它作为更新字段发送；否则省略该字段，让原生侧保留菜单刚写入的值。
-    const settingsWithoutOverlayBall = { ...draft }
+    const settingsWithoutOverlayBall = { ...settings }
     delete settingsWithoutOverlayBall.overlayBallEnabled
     onSave({
       ...settingsWithoutOverlayBall,
-      ...(overlayBallDraft === undefined ? {} : { overlayBallEnabled }),
+      ...(overlayBallDraft === null ? {} : { overlayBallEnabled }),
       ...(Object.keys(credentialDrafts).length === 0 ? {} : { providerApiKeys: credentialDrafts }),
       ...(clearedProviders.length === 0 ? {} : { clearProviderApiKeys: clearedProviders }),
       ...(Object.keys(customCredentials).length === 0 ? {} : { customProviderApiKeys: customCredentials }),
@@ -1132,7 +1202,7 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
               onChange={event => setSelectedProvider(event.target.value as ModelProviderId | 'custom')}
             >
               {MODEL_PROVIDERS.map(provider => {
-                const configured = (draft.configuredModelProviders.includes(provider.id) || credentialDrafts[provider.id] !== undefined)
+                const configured = (settings.configuredModelProviders.includes(provider.id) || credentialDrafts[provider.id] !== undefined)
                   && !clearedProviders.includes(provider.id)
                 return <option key={provider.id} value={provider.id}>{provider.label}{configured ? t("（已配置）") : ''}</option>
               })}
@@ -1160,7 +1230,7 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
               }}
             />
           </label>
-          {(draft.configuredModelProviders.includes(selectedProvider) || clearedProviders.includes(selectedProvider)) && (
+          {(settings.configuredModelProviders.includes(selectedProvider) || clearedProviders.includes(selectedProvider)) && (
             <div className="credential-actions">
               <button
                 className="button button-danger-quiet compact-button"
@@ -1182,11 +1252,11 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
             </div>
           )}</>}
           {selectedProvider === 'custom' && <CustomProviders
-            providers={draft.customModelProviders ?? []}
-            configured={draft.configuredCustomModelProviders ?? []}
+            providers={settings.customModelProviders ?? []}
+            configured={settings.configuredCustomModelProviders ?? []}
             credentials={customCredentials}
             cleared={clearedCustomProviders}
-            onChange={providers => setDraft({ ...draft, customModelProviders: providers })}
+            onChange={providers => setDraft({ ...settings, customModelProviders: providers })}
             onCredentials={setCustomCredentials}
             onClear={setClearedCustomProviders}
           />}
@@ -1195,8 +1265,8 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
             <input
               type="checkbox"
               role="switch"
-              checked={draft.autoLaunch}
-              onChange={event => setDraft({ ...draft, autoLaunch: event.target.checked })}
+              checked={settings.autoLaunch}
+              onChange={event => setDraft({ ...settings, autoLaunch: event.target.checked })}
             />
           </label>
         </section>
@@ -1216,8 +1286,8 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
               autoCapitalize="none"
               autoComplete="off"
               maxLength={2048}
-              value={draft.manifestUrl}
-              onChange={event => setDraft({ ...draft, manifestUrl: event.target.value })}
+              value={settings.manifestUrl}
+              onChange={event => setDraft({ ...settings, manifestUrl: event.target.value })}
             />
           </label>
           <label className="field">
@@ -1232,8 +1302,8 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
               minLength={64}
               maxLength={64}
               pattern="[A-Fa-f0-9]{64}"
-              value={draft.manifestSha256}
-              onChange={event => setDraft({ ...draft, manifestSha256: event.target.value })}
+              value={settings.manifestSha256}
+              onChange={event => setDraft({ ...settings, manifestSha256: event.target.value })}
             />
           </label>
         </section>
@@ -1246,14 +1316,14 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
             <div><h2 id="terminal-settings">{t("终端")}</h2><p>{t("应用内终端的显示方式")}</p></div>
           </div>
           <label className="range-field">
-            <span><strong>{t("字号")}</strong><small>{draft.terminalFontSize}px</small></span>
+            <span><strong>{t("字号")}</strong><small>{settings.terminalFontSize}px</small></span>
             <input
               type="range"
               min={11}
               max={24}
               step={1}
-              value={draft.terminalFontSize}
-              onChange={event => setDraft({ ...draft, terminalFontSize: Number(event.target.value) })}
+              value={settings.terminalFontSize}
+              onChange={event => setDraft({ ...settings, terminalFontSize: Number(event.target.value) })}
             />
           </label>
           <label className="toggle-row">
@@ -1261,8 +1331,8 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
             <input
               type="checkbox"
               role="switch"
-              checked={draft.keepScreenAwake}
-              onChange={event => setDraft({ ...draft, keepScreenAwake: event.target.checked })}
+              checked={settings.keepScreenAwake}
+              onChange={event => setDraft({ ...settings, keepScreenAwake: event.target.checked })}
             />
           </label>
         </section>
@@ -1285,9 +1355,9 @@ function SettingsScreen({ busy, diagnostic, keepAlive, loadHarnessLog, overlayBa
             <input
               type="checkbox"
               role="switch"
-              checked={draft.keepRuntimeInBackground ?? false}
+              checked={settings.keepRuntimeInBackground ?? false}
               onChange={event => {
-                setDraft({ ...draft, keepRuntimeInBackground: event.target.checked })
+                setDraft({ ...settings, keepRuntimeInBackground: event.target.checked })
                 // 开启时立即申请通知权限：前台服务在 Android 13+ 需要它才能显示常驻通知。
                 if (event.target.checked) onRequestNotificationPermission()
               }}
@@ -1563,6 +1633,22 @@ export function App() {
   const [settings, setSettings] = useState<RuntimeSettings | null>(null)
   const [settingsReadStatus, setSettingsReadStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
   const settingsReadRevision = useRef(0)
+  /**
+   * 设置区未保存的草稿。
+   *
+   * 它必须由 App 持有：设置首页与五个二级页是**不同的组件**，页内状态在切页时随卸载消失
+   * —— 用户刚输入的 API Key 只要切一次页就再也找不回来。草稿放在设置区之上，
+   * 区内所有页面共享同一份未保存内容。
+   */
+  const [settingsDraft, setSettingsDraft] = useState<SettingsDraft | null>(null)
+  /**
+   * 草稿里是否有用户尚未保存的输入。
+   *
+   * 为真时后台刷新（进入设置页时的重读、以及任何迟到的读取结果）**不覆盖**草稿：
+   * 刷新是为了同步原生侧改动，绝不能把用户正在输入的内容（典型是 API Key）清掉。
+   * 只在「保存成功」与「离开设置区」两处复位。
+   */
+  const settingsDraftDirty = useRef(false)
   const [shizuku, setShizuku] = useState<ShizukuState>(EMPTY_SHIZUKU)
   const [keepAlive, setKeepAlive] = useState<KeepAliveState>(EMPTY_KEEP_ALIVE)
   // 查询失败与「没有权限」分开记录，保留最近一次快照供开关关闭操作使用。
@@ -1588,6 +1674,26 @@ export function App() {
   }, [])
 
   const terminalError = useCallback((message: string) => notify(message, 'error'), [notify])
+
+  /**
+   * 写入设置草稿。[dirty] 为假表示这次只改「正在看什么」（例如切换供应商下拉框），
+   * 草稿里的值没有变化，不应妨碍后台刷新同步。
+   */
+  const updateSettingsDraft = useCallback((update: (current: SettingsDraft) => SettingsDraft, dirty = true) => {
+    if (dirty) settingsDraftDirty.current = true
+    setSettingsDraft(current => (current === null ? current : update(current)))
+  }, [])
+
+  /**
+   * 用落盘设置重建草稿并解除「未保存」标记。
+   *
+   * 只有两个调用点：读到最新设置（且用户没有未保存的输入时）与保存成功之后。
+   * 重建时凭据输入一律清空：密钥落盘后不回显，草稿里也就不该继续留着它。
+   */
+  const resyncSettingsDraft = useCallback((next: RuntimeSettings) => {
+    settingsDraftDirty.current = false
+    setSettingsDraft(current => draftFromSettings(next, current))
+  }, [])
 
   const readOverlayBall = useCallback(async () => {
     const revision = ++overlayBallReadRevision.current
@@ -1656,6 +1762,24 @@ export function App() {
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
+
+  /**
+   * 设置草稿的作用范围就是「设置区」（设置首页与五个二级页）。
+   *
+   * 离开设置区立即丢弃草稿：未保存的输入不再保留，内存里的 API Key 也随之消失。
+   * 区内切页不清空 —— 那正是用户「输入 API Key 后做别的操作」的常见路径。
+   *
+   * 历史回退/前进可能不经 [openSettings] 直接把二级页恢复出来，这里用已有的设置快照
+   * 补建一份草稿，避免页面一直停在「正在读取设置」。
+   */
+  useEffect(() => {
+    if (!isSettingsView(activeView)) {
+      if (settingsDraft !== null) setSettingsDraft(null)
+      settingsDraftDirty.current = false
+      return
+    }
+    if (settingsDraft === null && settings !== null) setSettingsDraft(draftFromSettings(settings))
+  }, [activeView, settings, settingsDraft])
 
   useEffect(() => {
     if (notice === null) return
@@ -1914,6 +2038,9 @@ export function App() {
       .then(next => {
         if (revision !== settingsReadRevision.current) return
         setSettings(next)
+        // 只有用户没有未保存的输入时才用落盘值重建草稿：重读是为了同步原生侧改动
+        // （例如悬浮球菜单在原生侧关了球），绝不能把用户正在输入的内容覆盖掉。
+        if (!settingsDraftDirty.current) resyncSettingsDraft(next)
         setSettingsReadStatus('idle')
       })
       .catch(() => {
@@ -1924,7 +2051,7 @@ export function App() {
         // 悬浮球查询失败不阻塞其他设置。
       })
     setActiveView(SETTINGS_PAGE_META[page].view)
-  }, [readOverlayBall, setActiveView])
+  }, [readOverlayBall, resyncSettingsDraft, setActiveView])
 
   /** 更新诊断日志采集开关与保留天数；原生侧会再次夹取保留范围。 */
   const saveDiagnosticSettings = useCallback((enabled: boolean, retentionDays: number) => {
@@ -1989,6 +2116,9 @@ export function App() {
     void run('save-settings', async () => {
       const saved = await runtimeBridge.saveSettings(nextSettings)
       setSettings(saved)
+      // 保存成功：草稿以后端落盘值为准重建（含清空 API Key 输入框）并解除「未保存」标记。
+      // 不做这一步的话，旧草稿会在下一次后台刷新时把刚保存的值反向覆盖回去。
+      resyncSettingsDraft(saved)
       // 落盘成功后，状态查询失败不能被当成保存失败；三项查询互不阻塞。
       const [runtimeResult, keepAliveResult, overlayResult] = await Promise.allSettled([
         runtimeBridge.getState(), runtimeBridge.getKeepAliveState(), readOverlayBall(),
@@ -2026,7 +2156,7 @@ export function App() {
         )
       }
     })
-  }, [notify, readOverlayBall, run])
+  }, [notify, readOverlayBall, resyncSettingsDraft, run])
 
   /**
    * 申请前台服务通知权限。
@@ -2091,7 +2221,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} page={page} runtime={runtime} settings={settings} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

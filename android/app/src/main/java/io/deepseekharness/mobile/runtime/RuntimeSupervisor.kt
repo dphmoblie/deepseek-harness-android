@@ -140,9 +140,16 @@ class RuntimeSupervisor(
         reapStaleHarness()
         clearHarnessState()
 
+        // 前置校验失败不改变运行时阶段（它本来就是「未安装 / 已损坏」，不是本次启动把它弄坏的），
+        // 但仍然是一次失败的启动：统一出口会把它记进诊断时间线，
+        // 用户导出日志时才能看到「点了打开 Harness，但运行时没装好」。
         val manifest = store.installedManifest()
-            ?: throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
-        RootfsIntegrity.verifyLinks(store.currentRoot, "RUNTIME_CORRUPTED")
+            ?: failStart(RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装"), updatePhase = false)
+        try {
+            RootfsIntegrity.verifyLinks(store.currentRoot, "RUNTIME_CORRUPTED")
+        } catch (failure: RuntimeFailure) {
+            failStart(failure, updatePhase = false)
+        }
         throwIfStartCancelled()
         try {
             launchResolver.verifyGuest(
@@ -162,10 +169,9 @@ class RuntimeSupervisor(
             throwIfStartCancelled()
             ensurePortAvailable(manifest.harnessPort)
         } catch (failure: RuntimeFailure) {
-            if (failure.code != START_CANCELLED_CODE) {
-                status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
-            }
-            throw failure
+            // 用户取消不是失败：交给外层的取消分支收尾，不改阶段也不记失败记录。
+            if (failure.code == START_CANCELLED_CODE) throw failure
+            failStart(failure)
         }
 
         val password = generateToken()
@@ -184,10 +190,9 @@ class RuntimeSupervisor(
                 startCancellation::isRequested,
             )
         } catch (failure: RuntimeFailure) {
-            if (failure.code != START_CANCELLED_CODE) {
-                status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
-            }
-            throw failure
+            // 启动器装配失败（写不进补丁文件、设备桥不可用等）同样算启动失败。
+            if (failure.code == START_CANCELLED_CODE) throw failure
+            failStart(failure)
         }
         throwIfStartCancelled()
         // 记录本次启动实际注入的模型凭据**条数**，不记录变量名与取值。
@@ -216,8 +221,7 @@ class RuntimeSupervisor(
                 }
                 .start()
         } catch (error: Exception) {
-            status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = "HARNESS_START_FAILED")
-            throw RuntimeFailure("HARNESS_START_FAILED", "无法启动 Harness", error)
+            failStart(RuntimeFailure("HARNESS_START_FAILED", "无法启动 Harness", error))
         }
         harnessProcess = process
         val output = ProcessOutputTail.drain(process, "dsh-harness-output", manifest.harnessPort)
@@ -226,12 +230,18 @@ class RuntimeSupervisor(
         val launchUrl = try {
             waitForHarness(process, manifest.harnessPort, output)
         } catch (error: RuntimeFailure) {
-            terminate(process, manifest.harnessPort)
-            clearHarnessState()
-            if (error.code != START_CANCELLED_CODE) {
-                status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = error.code)
+            if (error.code == START_CANCELLED_CODE) {
+                terminate(process, manifest.harnessPort)
+                clearHarnessState()
+                throw error
             }
-            throw error
+            // 回收进程放在统一出口里执行：先置阶段并写诊断记录，再回收。
+            // terminate 自己可能抛（HARNESS_STOP_TIMEOUT），那条异常会盖掉真正的启动失败原因，
+            // 所以失败码必须已经落进诊断时间线。
+            failStart(error, cleanup = {
+                terminate(process, manifest.harnessPort)
+                clearHarnessState()
+            })
         }
         throwIfStartCancelled()
         // Credentials remain native/in-memory; status snapshots retain the public manifest URL.
@@ -256,6 +266,39 @@ class RuntimeSupervisor(
         } finally {
             startCancellation.finish()
         }
+    }
+
+    /**
+     * 启动失败的统一出口：置阶段为 ERROR、写一条受控诊断记录，执行收尾，然后抛出。
+     *
+     * 为什么集中在一处：启动流程能从近十个环节失败（前置校验、Node 自检、dsh 自检、
+     * 端口占用、启动器装配、拉起进程、等待就绪、等待被中断……），分散记录必然漏掉新增路径。
+     * 漏记的后果很具体：用户导出诊断日志后只看到成功时的 `HARNESS_START|result=ok`，
+     * 「dsh 为什么没起来」在设备上无法复盘。
+     *
+     * 记录内容由 [HarnessStartFailurePolicy] 决定：只有 `result=failed` 与受控错误码，
+     * 不含访客输出、路径、端口或凭据（见 docs/诊断日志.md 的隐私边界）。
+     *
+     * @param updatePhase 为 false 只用于「还没碰到运行时状态」的前置校验失败
+     *   （运行时未安装、rootfs 校验不过）：它们不改变运行时阶段，但同样是一次失败的启动。
+     * @param cleanup 收尾动作（回收刚拉起的进程等）。它在阶段与诊断记录**之后**执行：
+     *   收尾自己可能抛（例如 HARNESS_STOP_TIMEOUT），那条异常不该盖掉真正的失败原因。
+     */
+    private fun failStart(
+        failure: RuntimeFailure,
+        updatePhase: Boolean = true,
+        cleanup: () -> Unit = {},
+    ): Nothing {
+        if (updatePhase) {
+            status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
+        }
+        store.diagnostics.record(
+            HarnessStartFailurePolicy.LEVEL,
+            HarnessStartFailurePolicy.EVENT,
+            HarnessStartFailurePolicy.fields(failure.code),
+        )
+        cleanup()
+        throw failure
     }
 
     fun requestStartCancellation(): Boolean {

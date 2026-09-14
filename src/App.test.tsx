@@ -890,3 +890,140 @@ describe('悬浮球设置', () => {
     expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked()
   })
 })
+
+/**
+ * 未保存的输入（典型是刚输入的 API Key）必须活到用户保存为止。
+ *
+ * 设置首页与五个二级页是不同组件，草稿原先存在页内、切页即随卸载消失；
+ * 而重读设置又会用落盘值整体覆盖草稿 —— 两条路都会让用户「输入完做点别的，数据就没了」。
+ */
+describe('设置草稿与未保存的输入', () => {
+  /** 从设置二级页或终端返回设置首页；屏幕内返回按钮走历史回退，视图切换在 popstate 之后生效。 */
+  async function backToSettingsHome(): Promise<void> {
+    fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
+    await screen.findByRole('heading', { name: '设置' })
+  }
+
+  it('未保存的 API Key 在设置区内切页后仍然保留，并能随保存一起提交', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('模型与密钥')
+    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
+    fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
+
+    // 用户去别的设置页看一眼再回来：刚输入的密钥与正在编辑的供应商都必须还在。
+    await backToSettingsHome()
+    await openSettingsPage('终端与外观')
+    await backToSettingsHome()
+    await openSettingsPage('模型与密钥')
+
+    expect(screen.getByRole('combobox', { name: '供应商' })).toHaveValue('openai')
+    expect(screen.getByLabelText(/OpenAI API Key/)).toHaveValue('unit-test-openai-key')
+
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
+      ...settings,
+      providerApiKeys: { openai: 'unit-test-openai-key' },
+    }))
+  })
+
+  it('后台重读设置不会覆盖未保存的输入', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('终端与外观')
+    fireEvent.change(screen.getByRole('slider', { name: /字号/ }), { target: { value: '18' } })
+
+    // 进入每个设置二级页都会重读设置；这里让重读带回一个不同的落盘值（22）。
+    bridge.getSettings.mockResolvedValue({ ...settings, terminalFontSize: 22 })
+    await backToSettingsHome()
+    await openSettingsPage('模型与密钥')
+    await backToSettingsHome()
+    await openSettingsPage('终端与外观')
+
+    // 重读照旧发生，但草稿是「脏」的：用户输到一半的值优先。
+    expect(await screen.findByRole('slider', { name: /字号/ })).toHaveValue('18')
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalFontSize: 18 }),
+    ))
+  })
+
+  it('保存成功后草稿与落盘值重新同步：密钥不回显、也不重复提交', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    // 原生侧只回传落盘后的设置：凭据字段不回显（真实桥接同样会把它剥掉）。
+    // 这里用一个不含凭据的返回值，避免把「密钥又一次随设置对象提交」误当成草稿没清。
+    bridge.saveSettings.mockImplementationOnce(() =>
+      Promise.resolve({ ...settings, configuredModelProviders: ['openai'] }))
+
+    await openSettingsPage('模型与密钥')
+    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
+    fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    expect(await screen.findByText('设置已保存')).toBeVisible()
+
+    // 密钥落盘后不回显：草稿里那份输入随保存一起清掉，「已配置」以落盘值为准。
+    const keyInput = screen.getByLabelText(/OpenAI API Key/)
+    expect(keyInput).toHaveValue('')
+    expect(keyInput).toHaveAttribute('placeholder', '已配置，留空保持不变')
+
+    // 再保存一次：不会把内存里那份已经保存过的密钥重复提交上去。
+    const saveButton = screen.getByRole('button', { name: '保存设置' })
+    await waitFor(() => expect(saveButton).toBeEnabled())
+    fireEvent.click(saveButton)
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledTimes(2))
+    expect(bridge.saveSettings.mock.calls.at(-1)?.[0]).not.toHaveProperty('providerApiKeys')
+  })
+
+  it('离开设置区后未保存的输入被丢弃，下次进入以落盘值为准', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('终端与外观')
+    fireEvent.change(screen.getByRole('slider', { name: /字号/ }), { target: { value: '18' } })
+
+    // 终端不属于设置区：离开即丢弃草稿，未保存的输入与内存里的密钥都不再保留。
+    await backToSettingsHome()
+    fireEvent.click(screen.getByRole('button', { name: /终端与设备 Shell/ }))
+    await screen.findByRole('heading', { name: '终端' })
+    await backToSettingsHome()
+
+    await openSettingsPage('终端与外观')
+    expect(await screen.findByRole('slider', { name: /字号/ })).toHaveValue('14')
+  })
+
+  it('自定义供应商的字段与密钥在切页后同样保留', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('模型与密钥')
+    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'custom' } })
+    fireEvent.click(screen.getByRole('button', { name: '添加自定义供应商' }))
+    fireEvent.change(screen.getByLabelText('供应商名称'), { target: { value: '本地网关' } })
+    fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://gateway.example.invalid/v1' } })
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-custom-gateway' } })
+    // 必填的模型字段：表单本身会拦住缺项的提交，这两项属于同一个草稿。
+    fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'local-model' } })
+    fireEvent.change(screen.getByLabelText('模型名称'), { target: { value: 'Local Model' } })
+
+    await backToSettingsHome()
+    await openSettingsPage('运行与后台')
+    await backToSettingsHome()
+    await openSettingsPage('模型与密钥')
+
+    expect(screen.getByRole('combobox', { name: '供应商' })).toHaveValue('custom')
+    expect(screen.getByLabelText('供应商名称')).toHaveValue('本地网关')
+    expect(screen.getByLabelText('Base URL')).toHaveValue('https://gateway.example.invalid/v1')
+    expect(screen.getByLabelText('API Key')).toHaveValue('sk-custom-gateway')
+
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      customModelProviders: [
+        expect.objectContaining({ id: 'custom-1', name: '本地网关', baseUrl: 'https://gateway.example.invalid/v1' }),
+      ],
+      customProviderApiKeys: { 'custom-1': 'sk-custom-gateway' },
+    })))
+  })
+})

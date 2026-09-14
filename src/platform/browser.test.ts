@@ -31,4 +31,34 @@ describe('browser settings bridge', () => {
 
     expect((await bridge.saveSettings({ ...baseSettings, overlayBallEnabled: false })).overlayBallEnabled).toBe(false)
   })
+
+  it('keeps API keys out of the saved settings and out of storage', async () => {
+    const bridge = createBrowserBridge()
+
+    const saved = await bridge.saveSettings({
+      ...baseSettings,
+      providerApiKeys: { deepseek: 'sk-browser-preview-secret' },
+      customModelProviders: [
+        {
+          id: 'gateway-1',
+          name: '本地网关',
+          api: 'openai-completions',
+          baseUrl: 'https://gateway.example.invalid/v1',
+          models: [{ id: 'local-model', name: 'Local', contextWindow: 8192, maxTokens: 1024 }],
+        },
+      ],
+      customProviderApiKeys: { 'gateway-1': 'sk-custom-secret' },
+    })
+
+    // 密钥是敏感字段：原生侧落盘后不回显，浏览器预览也必须与生产同构。
+    expect(saved).not.toHaveProperty('providerApiKeys')
+    expect(saved).not.toHaveProperty('customProviderApiKeys')
+    expect(saved.configuredModelProviders).toEqual(['deepseek'])
+    expect(saved.configuredCustomModelProviders).toEqual(['gateway-1'])
+    // 整个网页存储里都不该留痕：草稿与密钥只存在于内存。
+    const stored = JSON.stringify(window.localStorage)
+    expect(stored).not.toContain('sk-browser-preview-secret')
+    expect(stored).not.toContain('sk-custom-secret')
+    expect(stored).not.toContain('providerApiKeys')
+  })
 })
