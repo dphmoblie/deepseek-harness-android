@@ -259,6 +259,11 @@ class RuntimeSupervisor(
             total = manifest.rootfs.compressedBytes,
             nextHarnessUrl = manifest.harnessUri.toASCIIString(),
             )
+        // 启动成功之后才登记退出观察者：阶段已是 RUNNING，它才知道「自行退出」该怎么收尾。
+        watchHarnessProcess(process, manifest)
+        // 显式取一次快照作为本次启动的返回值：上面的登记语句让代码块不再以 update() 结尾，
+        // 而「启动成功返回运行中快照」这件事必须由这里写明，不能依赖隐式返回值。
+        status.snapshot()
             }
         } catch (failure: RuntimeFailure) {
             if (failure.code != START_CANCELLED_CODE) throw failure
@@ -410,6 +415,56 @@ class RuntimeSupervisor(
         harnessOutput = null
         harnessAccess = null
         deleteHarnessPid()
+    }
+
+    /**
+     * 观察启动成功的 Harness 进程**自行退出**（空闲自动停止、崩溃、被系统结束）。
+     *
+     * 为什么必须有它：在此之前没有任何人观察启动完成后的进程 —— [RuntimeStatus] 只在阶段
+     * 变化时推送事件，而 dsh 因空闲自行退出不会经过本类的任何路径。结果是界面一直显示「运行中」，
+     * 直到某次拉取快照才发现；用户看到的只是端口与临时凭据悄悄变了。
+     *
+     * 这个线程只做三件事：等进程退出、在「它仍然是当前进程」时按停止收尾并推送一次阶段变化、
+     * 记一条受控诊断（`RECOVERY|reason=harness-exited`）。它不读输出内容、不持有凭据，
+     * 也不复用为心跳或保活手段 —— 系统仍然可以随时结束本应用进程。
+     */
+    private fun watchHarnessProcess(process: Process, manifest: RuntimeManifest) {
+        val watcher = Thread({
+            try {
+                process.waitFor()
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return@Thread
+            }
+            onHarnessExited(process, manifest)
+        }, "dsh-harness-watch")
+        watcher.isDaemon = true
+        watcher.start()
+    }
+
+    /**
+     * 自行退出的收尾：与 [stop] 串行（同一个锁），因此**用户主动停止不会被记成自行退出** ——
+     * stop 会先把进程引用清空，观察者拿到锁时已经认不出它是当前进程，直接返回。
+     */
+    private fun onHarnessExited(process: Process, manifest: RuntimeManifest) {
+        synchronized(lock) {
+            if (harnessProcess !== process) return
+            clearHarnessState()
+        }
+        store.diagnostics.record(
+            DiagnosticLevel.WARN,
+            DiagnosticEvent.RECOVERY,
+            // `reason` 与 `count` 都在字段白名单内；分词符不能用下划线（取值形态只允许 [a-z0-9._-]）。
+            mapOf("reason" to "harness-exited", "count" to "1"),
+        )
+        // 阶段回落到「已安装未运行」，并通过 update() 推送一次事件：界面据此提示
+        // 「运行环境已自行停止」，而不是继续显示运行中。update 的字节数沿用启动时的口径。
+        status.update(
+            RuntimePhase.READY,
+            downloaded = manifest.rootfs.compressedBytes,
+            total = manifest.rootfs.compressedBytes,
+            nextHarnessUrl = null,
+        )
     }
 
     /** 回收上次启动残留的 Harness 进程树；pid 文件缺失或进程已退出时仅清理记录。 */

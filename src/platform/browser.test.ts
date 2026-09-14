@@ -61,4 +61,11 @@ describe('browser settings bridge', () => {
     expect(stored).not.toContain('sk-custom-secret')
     expect(stored).not.toContain('providerApiKeys')
   })
+
+  it('浏览器预览没有运行时自检：如实拒绝，不编造一份「全部正常」', async () => {
+    const bridge = createBrowserBridge()
+
+    await expect(bridge.runRuntimeSelfCheck('check')).rejects.toThrow('浏览器预览不支持运行时自检')
+    await expect(bridge.runRuntimeSelfCheck('repair')).rejects.toThrow('浏览器预览不支持运行时自检')
+  })
 })

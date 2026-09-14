@@ -32,6 +32,7 @@ import {
   MODEL_PROVIDER_IDS,
 } from './types'
 import { validateCustomCredentialIds, validateCustomCredentialUpdates, validateCustomModelProviders } from './customProviders'
+import { validateSelfCheckReport, type SelfCheckReport } from '../runtimeSelfCheck'
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const SESSION_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i
@@ -563,6 +564,17 @@ export function validateDiagnosticLogText(value: unknown): DiagnosticLogText {
     totalBytes: diagnosticCount(record.totalBytes, '诊断日志总字节数'),
     truncated: record.truncated,
   }
+}
+
+/**
+ * 校验运行时自检结果。
+ *
+ * 契约（检查项 id、状态、结论码与形态规则）定义在 [runtimeSelfCheck] 里，
+ * 那里同时被界面直接使用；这里只是把它接进平台层统一的校验入口，
+ * 让桥接封装与其它方法保持同一种写法。
+ */
+export function validateRuntimeSelfCheckReport(value: unknown): SelfCheckReport {
+  return validateSelfCheckReport(value)
 }
 
 /** 窗口字节数必须落在界面已知的档位里；原生侧与前端共用同一组取值。 */

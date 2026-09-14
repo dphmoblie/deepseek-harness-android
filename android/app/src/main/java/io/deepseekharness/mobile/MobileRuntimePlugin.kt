@@ -26,6 +26,7 @@ import io.deepseekharness.mobile.runtime.RuntimeHost
 import io.deepseekharness.mobile.runtime.RuntimeIntent
 import io.deepseekharness.mobile.runtime.RuntimeKeepAliveSnapshot
 import io.deepseekharness.mobile.runtime.RuntimePhase
+import io.deepseekharness.mobile.runtime.RuntimeSelfCheckPolicy
 import io.deepseekharness.mobile.runtime.RuntimeSettings
 import io.deepseekharness.mobile.runtime.RuntimeStateSnapshot
 import io.deepseekharness.mobile.runtime.RuntimeValidation
@@ -284,6 +285,20 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /**
+     * 权限：应用内桥接。
+     * 运行时自检：`check` 只读（可用空间、dsh 版本与十项检查），`repair` 只补可执行位并创建附件目录。
+     * 只回传受控枚举与计数，不含路径、文件内容或原始报错文本。
+     */
+    @PluginMethod
+    fun runRuntimeSelfCheck(call: PluginCall) {
+        execute(call) {
+            val operation = RuntimeSelfCheckPolicy.operation(call.getString("operation"))
+                ?: throw RuntimeFailure("SELF_CHECK_INPUT_INVALID", "自检操作无效")
+            requireSelfCheck(operation)
+        }
+    }
+
     @PluginMethod
     fun getState(call: PluginCall) {
         resolveWhileActive(call) { controller.state().toJs() }
@@ -525,6 +540,16 @@ class MobileRuntimePlugin : Plugin() {
      */
     private fun requireDiagnostics() = diagnostics()
         ?: throw RuntimeFailure("RUNTIME_CLOSED", "本机运行时正在关闭")
+
+    /**
+     * 运行时自检（必需）。
+     * 自检实例由控制器持有（同一个 store 与同一把生命周期锁）：插件侧绝不自行构造 RuntimeStore，
+     * 自检也不会与安装、重置或 Harness 启停并发。
+     */
+    private fun requireSelfCheck(operation: String): JSObject {
+        if (this::controller.isInitialized) return controller.runRuntimeSelfCheck(operation)
+        throw RuntimeFailure("RUNTIME_CLOSED", "本机运行时正在关闭")
+    }
 
     /**
      * 记录「上次进程非正常结束」。

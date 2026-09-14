@@ -1,3 +1,5 @@
+import type { SelfCheckOperation, SelfCheckReport } from '../runtimeSelfCheck'
+
 export type RuntimePhase =
   | 'not-installed'
   | 'preparing'
@@ -318,6 +320,13 @@ export interface RuntimeBridge {
    * [maxBytes] 由原生侧收敛到受控档位（8 / 64 / 256 KB），缺省 8 KB。
    */
   getHarnessLog: (options?: { maxBytes?: number }) => Promise<HarnessLog>
+  /**
+   * 运行时自检：`check` 逐项检查运行时链路，`repair` 修复权限位与缺失目录。
+   *
+   * 不需要 bash 即可判断运行时断在哪一环。载荷只含受控枚举（检查项 id、状态、
+   * 结论码）、字节数与 dsh 版本号：不含路径、命令输出、日志正文或凭据。
+   */
+  runRuntimeSelfCheck: (operation: SelfCheckOperation) => Promise<SelfCheckReport>
   addRuntimeProgressListener: (listener: (event: RuntimeProgress) => void) => Promise<ListenerHandle>
   addTerminalOutputListener: (listener: (event: TerminalChunk) => void) => Promise<ListenerHandle>
   addTerminalExitListener: (listener: (event: TerminalExit) => void) => Promise<ListenerHandle>

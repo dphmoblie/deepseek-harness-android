@@ -25,6 +25,8 @@ class MobileRuntimeController(
     private val installer = RuntimeInstaller(store, status, externalCancellation = closed::get)
     private val supervisor = RuntimeSupervisor(context, store, status)
     private val plugins = RuntimePluginManager(context, store)
+    /** 自检实例与 store、生命周期锁同源：插件侧不自行构造 RuntimeStore。 */
+    private val selfCheck = RuntimeSelfCheck(context, store)
     val terminals = TerminalCoordinator(context, store, events::onTerminalOutput, events::onTerminalExit)
 
     fun install(source: RuntimeSource) = lifecycleLock.withLock {
@@ -65,6 +67,18 @@ class MobileRuntimeController(
     }
 
     fun requestStartCancellation(): Boolean = supervisor.requestStartCancellation()
+
+    /**
+     * 权限：仅应用内部。
+     * 运行时自检：`check` 只读，`repair` 只补可执行位与创建附件目录。
+     *
+     * 与插件操作一致地持有生命周期锁：`repair` 会改文件系统，自检不得与安装、重置或
+     * Harness 启停并发；两个操作都要求运行时已安装（未安装由自检自己抛受控错误）。
+     */
+    fun runRuntimeSelfCheck(operation: String): com.getcapacitor.JSObject = lifecycleLock.withLock {
+        ensureOpen()
+        selfCheck.run(operation)
+    }
 
     fun configureDeviceBridge(access: DeviceBridgeAccess) = lifecycleLock.withLock {
         ensureOpen()

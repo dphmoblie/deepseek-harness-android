@@ -38,6 +38,7 @@ import {
   SquareTerminal,
   Trash2,
   Wifi,
+  Wrench,
   X,
 } from 'lucide-react'
 import { TerminalPanel } from './components/TerminalPanel'
@@ -46,6 +47,16 @@ import { hasConfiguredModelCredential, MODEL_PROVIDERS } from './modelProviders'
 import { CustomProviders } from './components/CustomProviders'
 import { runtimeBridge } from './platform/native'
 import { readLogInsights } from './logInsights'
+import {
+  selfCheckAdvice,
+  selfCheckNeedsRepair,
+  type SelfCheckCheckReport,
+  type SelfCheckItem,
+  type SelfCheckOperation,
+  type SelfCheckRepairReport,
+  type SelfCheckReport,
+  type SelfCheckStatus,
+} from './runtimeSelfCheck'
 import type {
   DiagnosticLogState,
   DiagnosticLogText,
@@ -434,6 +445,21 @@ const NOTIFICATION_PERMISSION_LABELS = {
   prompt: '未授予',
   unsupported: '系统不支持',
 } as const
+
+/** 最近一次停止的判定方式：只区分「用户主动停止」与「运行时自己停了」。 */
+type LastStopReason = 'none' | 'user' | 'self'
+
+/**
+ * 「上次停止」的显示文案。
+ *
+ * `none` 表示**本次会话没有观察到停止**，不是「从未停止」：应用看不到原生侧更早的记录，
+ * 这里不替它编一个结论。
+ */
+const LAST_STOP_LABELS: Record<LastStopReason, string> = {
+  none: '本次会话未记录',
+  user: '用户停止',
+  self: '自行停止（可能空闲自动停止）',
+}
 
 /**
  * 格式化持久化的恢复记录时间。
@@ -1229,6 +1255,219 @@ function DiagnosticLogPanel({ loadDiagnosticLog }: DiagnosticLogPanelProps) {
   )
 }
 
+/** 自检状态徽章：配色与标签都由这里决定，`skipped` 用中性样式，不冒充「通过」。 */
+const SELF_CHECK_STATUS_META: Record<SelfCheckStatus, { label: string; chip: string }> = {
+  ok: { label: '正常', chip: 'success' },
+  warn: { label: '注意', chip: 'warn' },
+  fail: { label: '失败', chip: 'danger' },
+  skipped: { label: '跳过', chip: '' },
+}
+
+/** 自检给出的可用空间低于这一档时提示清理：安装、解压与会话保存都可能因空间失败。 */
+const SELF_CHECK_LOW_SPACE_BYTES = 512 * 1024 * 1024
+
+interface RuntimeSelfCheckPanelProps {
+  /** 当前运行时状态：只取已安装版本，用于「运行时版本」一行。 */
+  runtime: RuntimeState
+  /** 运行自检；只在用户点击按钮时调用，进入页面不自动跑。 */
+  runSelfCheck: (operation: SelfCheckOperation) => Promise<SelfCheckReport>
+}
+
+/**
+ * 单条自检结果：检查项标签 + 状态徽章 + 结论与下一步。
+ *
+ * 文案全部来自 [selfCheckAdvice] 的受控映射（检查项 id 与结论码都是枚举），
+ * 载荷里没有、也不会渲染任何自由文本，因此这里不存在把访客内容带进界面的路径。
+ */
+function SelfCheckRow({ item }: { item: SelfCheckItem }) {
+  const advice = selfCheckAdvice(item)
+  const meta = SELF_CHECK_STATUS_META[item.status]
+  return (
+    <div className={`self-check-row ${item.status}`}>
+      <div className="self-check-row-head">
+        <span className="self-check-label">{t(advice.label)}</span>
+        <span className={meta.chip === '' ? 'status-chip' : `status-chip ${meta.chip}`}>{t(meta.label)}</span>
+      </div>
+      {advice.meaning !== '' && <p className="self-check-meaning">{t(advice.meaning)}</p>}
+      {advice.nextStep !== '' && <p className="self-check-next">{t("下一步：")}{t(advice.nextStep)}</p>}
+    </div>
+  )
+}
+
+/**
+ * 「运行时自检」区块。
+ *
+ * 为什么需要它：运行时链路断在哪一环，通常要靠 bash 才能查——可 bash 本身可能正是断掉
+ * 的那一环。自检由原生侧逐环探测，这里把结果翻译成「哪一环断了 + 下一步」，
+ * 并让用户一眼看到非 ok 的那些项。
+ *
+ * 与日志面板同样的按需原则：进页面**不自动自检**，只有用户点「运行自检」才调用；
+ * 「修复运行时权限」也只在结果里出现权限位或缺失目录相关的结论码时才提供，
+ * 避免给出一个修不了当前问题的按钮。自检载荷只含枚举、字节数与版本号，
+ * 不含路径、命令输出或凭据，所以它会显示在界面上，但不落盘、不进诊断日志。
+ */
+function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelProps) {
+  const [report, setReport] = useState<SelfCheckCheckReport | null>(null)
+  const [repair, setRepair] = useState<SelfCheckRepairReport | null>(null)
+  const [checkedAt, setCheckedAt] = useState(0)
+  const [busy, setBusy] = useState<SelfCheckOperation | null>(null)
+  const [failed, setFailed] = useState<SelfCheckOperation | null>(null)
+  const [showOk, setShowOk] = useState(false)
+
+  const start = (operation: SelfCheckOperation): void => {
+    setBusy(operation)
+    setFailed(null)
+    void runSelfCheck(operation)
+      .then(next => {
+        if (next.operation === 'repair') {
+          setRepair(next)
+          return
+        }
+        // 新一次自检整体覆盖旧结果：上一次的修复统计属于上一次的判断，留着只会让人误读。
+        setReport(next)
+        setRepair(null)
+        setCheckedAt(Date.now())
+        // 有非 ok 项时默认收起「正常项」，让断在哪一环先出现在视野里。
+        setShowOk(false)
+      })
+      .catch(() => {
+        // 与日志面板同一条原则：要么显示本次真实结果，要么明确说读不到。
+        // 自检失败时清掉上一次的结果，避免旧结论被当成这次的结论读。
+        if (operation === 'check') {
+          setReport(null)
+          setRepair(null)
+        }
+        setFailed(operation)
+      })
+      .finally(() => setBusy(null))
+  }
+
+  const checks = report?.checks ?? []
+  const failing = checks.filter(item => item.status !== 'ok')
+  const passing = checks.filter(item => item.status === 'ok')
+  // 修复只改权限位与缺失目录，可用空间仍可能变化，因此以最新一次结果为显示值。
+  const availableBytes = repair?.availableBytes ?? report?.availableBytes
+  const lowSpace = availableBytes !== undefined && availableBytes < SELF_CHECK_LOW_SPACE_BYTES
+  const checkedAtLabel = formatRecordedAt(checkedAt)
+
+  return (
+    <section className="settings-section" aria-labelledby="runtime-self-check-title">
+      <div className="section-title">
+        <span className="section-icon"><ShieldCheck size={19} /></span>
+        <div>
+          <h2 id="runtime-self-check-title">{t("运行时自检")}</h2>
+          <p>{t("不需要 bash 也能判断运行时哪一环断了：逐项检查 Shell、Node、沙箱启动器、内核 Landlock、PTY、访客数据目录、附件目录与 ripgrep，并给出结论与下一步。")}</p>
+        </div>
+      </div>
+
+      {/* 版本一行不依赖自检：没跑自检时也能看到已安装的运行时版本。 */}
+      <div className="settings-status-list">
+        <div className="settings-status-row">
+          <span>{t("运行时版本")}</span>
+          <strong>{runtime.installedVersion ?? t("未安装")}</strong>
+        </div>
+        <div className="settings-status-row">
+          <span>{t("dsh 版本")}</span>
+          {/* dsh 版本只有真正进过访客才读得到：自检结果之外不猜、也不为它单独发起重量级调用。 */}
+          <strong>{report?.dshVersion ?? t("运行自检后显示")}</strong>
+        </div>
+      </div>
+
+      <p className="settings-note">{t("已安装插件列表见「插件管理」")}</p>
+
+      <div className="settings-inline-actions self-check-actions">
+        <button className="button button-secondary" type="button" onClick={() => start('check')} disabled={busy !== null}>
+          {busy === 'check' ? <Loader2 className="spin" size={18} /> : <ShieldCheck size={18} />}{t("运行自检")}
+        </button>
+        {selfCheckNeedsRepair(checks) && (
+          <button className="button button-secondary" type="button" onClick={() => start('repair')} disabled={busy !== null}>
+            {busy === 'repair' ? <Loader2 className="spin" size={18} /> : <Wrench size={18} />}{t("修复运行时权限")}
+          </button>
+        )}
+      </div>
+
+      <p className="harness-log-state">
+        {busy === 'check'
+          ? t("正在运行自检…")
+          : busy === 'repair'
+            ? t("正在修复运行时权限…")
+            : checkedAtLabel === ''
+              ? t("尚未自检")
+              : t("上次自检：{0}", checkedAtLabel)}
+      </p>
+
+      {failed !== null && (
+        <p className="harness-log-state" role="alert">
+          {failed === 'check' ? t("自检未完成，请稍后重试") : t("修复未完成，请稍后重试")}
+        </p>
+      )}
+
+      {availableBytes !== undefined && (
+        <div className="settings-status-list">
+          <div className="settings-status-row">
+            <span>{t("可用空间")}</span>
+            <strong>{formatBytes(availableBytes)}</strong>
+          </div>
+        </div>
+      )}
+
+      {lowSpace && (
+        <div className="inline-alert warning" role="alert">
+          <AlertTriangle size={19} />
+          <div>
+            <strong>{t("可用空间不足")}</strong>
+            <span>{t("设备可用空间低于 512 MB：安装、解压与会话保存都可能失败，请先清理空间。")}</span>
+          </div>
+        </div>
+      )}
+
+      {repair !== null && (
+        <>
+          <p className="harness-log-state">{t("已修复 {0} 项（检查 {1} 项）", repair.repaired, repair.candidates)}</p>
+          <p className="harness-log-state">{t("可重新运行「运行自检」确认修复结果。")}</p>
+        </>
+      )}
+
+      {report !== null && (
+        <>
+          {checks.length === 0 ? (
+            <p className="harness-log-state">{t("自检没有返回任何检查项")}</p>
+          ) : failing.length === 0 ? (
+            <p className="harness-log-state">{t("全部 {0} 项检查通过", checks.length)}</p>
+          ) : (
+            <div className="self-check-list" role="group" aria-label={t("自检结果")}>
+              {failing.map(item => <SelfCheckRow item={item} key={item.id} />)}
+            </div>
+          )}
+
+          {/* 正常项默认收起：没有非 ok 项时它们本来也不构成信息，需要时再展开核对。 */}
+          {passing.length > 0 && (
+            <>
+              <button
+                className="self-check-toggle"
+                type="button"
+                aria-expanded={showOk}
+                aria-controls="runtime-self-check-ok"
+                onClick={() => setShowOk(current => !current)}
+              >
+                <span>{showOk ? t("收起正常项（{0}）", passing.length) : t("正常项（{0}）", passing.length)}</span>
+                {showOk ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+              </button>
+              <div id="runtime-self-check-ok" hidden={!showOk}>
+                {showOk && (
+                  <div className="self-check-list">
+                    {passing.map(item => <SelfCheckRow item={item} key={item.id} />)}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
 /**
  * 设置页草稿：用户尚未保存的编辑内容。
  *
@@ -1291,6 +1530,10 @@ interface SettingsScreenProps {
   overlayBallReadFailed: boolean
   page: SettingsPage
   runtime: RuntimeState
+  /** 本次会话记录到的最近一次停止方式；`none` 表示本次会话还没观察到停止。 */
+  lastStop: LastStopReason
+  /** 运行自检（check / repair）；只在用户点击按钮时调用。 */
+  runSelfCheck: (operation: SelfCheckOperation) => Promise<SelfCheckReport>
   shizuku: ShizukuState
   onAuthorize: () => void
   onBack: () => void
@@ -1314,7 +1557,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, overlayBall, overlayBallReadFailed, onDraftChange, page, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
   if (settingsReadStatus === 'failed') {
     return <div className="screen loading-screen">
       <p role="alert">{t("无法读取最新设置，请重试")}</p>
@@ -1371,6 +1614,7 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog,
           : t("待授权")
   const selectedProviderOption = MODEL_PROVIDERS.find(provider => provider.id === selectedProvider) ?? MODEL_PROVIDERS[0]
   const keepAliveRecordedAt = formatRecordedAt(keepAlive.lastUpdatedAtMillis)
+  const lastStopLabel = t(LAST_STOP_LABELS[lastStop])
   const lastRunLabel = keepAlive.lastPhase === undefined
     ? t("从未记录")
     : keepAliveRecordedAt === ''
@@ -1641,6 +1885,11 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog,
               <span>{t("最近状态")}</span>
               <strong>{lastRunLabel}</strong>
             </div>
+            {/* 运行环境会被 dsh 自己在空闲后停掉：事后也要能看出这次停止是谁发起的。 */}
+            <div className="settings-status-row">
+              <span>{t("上次停止")}</span>
+              <strong>{lastStopLabel}</strong>
+            </div>
             <div className="settings-status-row">
               <span>{t("设备 Shell（连接恢复）")}</span>
               <strong>{keepAlive.deviceShellReady ? t("可用") : t("不可用")}</strong>
@@ -1669,6 +1918,10 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog,
             </div>
           )}
         </section>
+        )}
+
+        {page === 'runtime' && (
+        <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
         )}
 
         {page === 'shizuku' && (
@@ -1901,6 +2154,15 @@ export function App() {
   const noticeId = useRef(0)
   const busyRef = useRef<string | null>(null)
   const autoLaunchAttempted = useRef(false)
+  /**
+   * 运行阶段与「用户是否点过停止」的记录。
+   *
+   * 运行环境会被 dsh 自己在空闲后停掉（profile 里 idleStopMinutes: 15），随后再被自动拉起，
+   * 端口与临时凭据都会变。没有这段记录时，「自行停止」与「崩溃」在界面上完全一样。
+   */
+  const wasRunning = useRef(false)
+  const stopRequested = useRef(false)
+  const [lastStop, setLastStop] = useState<LastStopReason>('none')
 
   const notify = useCallback((message: string, tone: NoticeTone = 'info') => {
     noticeId.current += 1
@@ -2021,6 +2283,44 @@ export function App() {
     return () => window.clearTimeout(timer)
   }, [notice])
 
+  /**
+   * 记录一次**实时**运行阶段变化：运行环境自行停止时给一次性提示。
+   *
+   * 为什么需要它：运行环境会被 dsh 自己在空闲后停掉（profile 里 idleStopMinutes: 15），
+   * 随后又被自动拉起——端口与临时凭据都会变，旧会话接不回去。没有提示时，这种停止与
+   * 崩溃在界面上完全一样。用户自己点过停止时不再提示（他知道自己做了什么），
+   * 只在「上次停止」一行留下记录。
+   *
+   * 为什么只处理原生侧主动推送的阶段变化：状态快照（getState）可能落后于实际状态，
+   * 用它判断「刚才还在运行、现在停了」会误报；推送到前端的阶段变化才是真正的实时信号。
+   * `stopping` 是过渡态，等落到最终阶段再判定；`error` 与安装阶段不属于「自行停止」，
+   * 由既有的错误与进度界面负责，这里只把「运行中」的标记清掉。
+   */
+  const noteLivePhase = useCallback((phase: RuntimePhase) => {
+    if (phase === 'running') {
+      wasRunning.current = true
+      // 新一次运行开始时清掉上一次的停止意图，否则它会吃掉下一次自行停止的提示。
+      stopRequested.current = false
+      return
+    }
+    if (phase === 'stopping') return
+    if (!wasRunning.current) return
+    wasRunning.current = false
+    const userRequested = stopRequested.current
+    stopRequested.current = false
+    if (phase !== 'ready') return
+    setLastStop(userRequested ? 'user' : 'self')
+    if (userRequested) return
+    notify(t("运行环境已自行停止（可能是空闲自动停止）；点「打开 Harness」会重新启动，旧会话需要重新连接。"), 'info')
+  }, [notify])
+
+  /** 快照读取（挂载、启动、停止后的 getState）同样要维护「上一次是否在运行」，但它不触发提示。 */
+  useEffect(() => {
+    if (runtime.phase !== 'running') return
+    wasRunning.current = true
+    stopRequested.current = false
+  }, [runtime.phase])
+
   useEffect(() => {
     let cancelled = false
     let removeProgress: (() => Promise<void>) | undefined
@@ -2031,6 +2331,8 @@ export function App() {
       if (cancelled) return
       progressRevision += 1
       latestProgress = progress
+      // 先判读这次阶段变化，再用它更新状态：自行停止的判定依赖更新前的「运行中」标记。
+      noteLivePhase(progress.phase)
       setRuntime(current => mergeRuntimeProgress(current, progress))
     })
       .then(handle => {
@@ -2093,7 +2395,7 @@ export function App() {
       if (removeProgress !== undefined) void removeProgress()
       void progressHandlePromise
     }
-  }, [notify, readOverlayBall])
+  }, [noteLivePhase, notify, readOverlayBall])
 
   useEffect(() => {
     let cancelled = false
@@ -2363,10 +2665,25 @@ export function App() {
     [],
   )
 
+  /**
+   * 运行运行时自检。
+   *
+   * 与日志面板同样的按需原则：只在用户点「运行自检」或「修复运行时权限」时调用，
+   * 进入设置页不自动跑（自检要进访客逐环探测，代价不低）。引用保持稳定，区块的点击不会因此重建。
+   */
+  const runSelfCheck = useCallback(
+    (operation: SelfCheckOperation) => runtimeBridge.runRuntimeSelfCheck(operation),
+    [],
+  )
+
   const stopRuntime = useCallback(() => {
+    // 先记下「这次停止由本应用发起」：阶段变化可能早于桥接返回，晚记会把显式停止误报成自行停止。
+    stopRequested.current = true
     void run('stop', async () => {
       const next = await runtimeBridge.stopRuntime()
       setRuntime(next)
+      // 即使原生侧没有推送阶段变化，用户主动停止也要在「上次停止」里留下记录。
+      setLastStop('user')
       // 显式停止会同时撤销前台服务。
       setKeepAlive(await runtimeBridge.getKeepAliveState())
       setActiveView('settings')
@@ -2374,6 +2691,8 @@ export function App() {
   }, [run, setActiveView])
 
   const confirmReset = useCallback(() => {
+    // 重置同样会停掉正在运行的运行时：这也是用户在本应用里主动发起的停止。
+    stopRequested.current = true
     void run('reset', async () => {
       const next = await runtimeBridge.reset('RESET_RUNTIME')
       setRuntime(next)
@@ -2493,7 +2812,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

@@ -18,6 +18,7 @@ import type {
   TerminalKind,
 } from './types'
 import { DIAGNOSTIC_RETENTION_DEFAULT, MODEL_PROVIDER_IDS } from './types'
+import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
 import { assertSessionId, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
@@ -254,6 +255,11 @@ export function createBrowserBridge(): RuntimeBridge {
       text: '',
       maxBytes: options?.maxBytes === 64 * 1024 || options?.maxBytes === 256 * 1024 ? options.maxBytes : 8 * 1024,
     }),
+    // 浏览器预览没有访客运行时，也就没有可自检的链路：如实拒绝，不编造一份「全部正常」的结果。
+    runRuntimeSelfCheck: (operation: SelfCheckOperation): Promise<SelfCheckReport> => {
+      validateSelfCheckOperation(operation)
+      return Promise.reject(new Error('浏览器预览不支持运行时自检'))
+    },
     // 浏览器预览没有原生诊断日志：保持关闭且不可导出，避免给出「已经采集到东西」的错觉。
     getDiagnosticLogState: (): Promise<DiagnosticLogState> => Promise.resolve({ ...diagnosticState }),
     // 同理，预览里没有可查看的正文；返回空窗口而不是编造几条假记录。

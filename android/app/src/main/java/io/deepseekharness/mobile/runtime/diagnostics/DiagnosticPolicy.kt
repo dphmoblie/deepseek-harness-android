@@ -77,6 +77,23 @@ enum class DiagnosticEvent {
      * 探测本身失败时记 WARN + `result=denied` + `code=PROBE_FAILED`，与判据成立区分开。
      */
     MODULE_GRAPH,
+
+    /**
+     * 运行时自检结果（应用内「运行时自检」入口触发，`check` 与 `repair` 共用本事件）。
+     *
+     * 用途：设备上 dsh 的 `bash` 工具报 `PTY shell exited during startup`，而应用自己的 Ubuntu
+     * 终端正常 —— 断链只可能在「沙箱不可用 / 真实 confine exec 失败 / PTY（node-pty）本身失败」
+     * 三者之一。自检把三种可能各测一次，这条记录就是**设备侧唯一的第一手证据**。
+     *
+     * 只记录受控取值，不含路径、脚本输出或原始报错文本：
+     *  - `result=ok` 十项里没有 fail；`result=failed` 有 fail，`code` 是**按契约顺序的首个失败码**
+     *    （例如 `PTY_EXIT_EARLY` / `EXEC_LAUNCHER_FAILED` / `PROBE_UNUSABLE`），一眼能定位到层；
+     *  - `result=denied` + `code=SELF_CHECK_FAILED` 表示自检**没跑成**（脚本也没起来或载荷不可信），
+     *    与「检查项确实失败」区分开；
+     *  - `count`：`check` 时是失败项数，`repair` 时是实际改动数（补执行位 + 建附件目录）。
+     *    `warn` 与 `skipped` 不算失败，只出现在界面载荷里。
+     */
+    SELF_CHECK,
 }
 
 /**

@@ -2,6 +2,7 @@ import { validatePluginCatalog, validatePluginRequest } from './plugins'
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import type { PluginListenerHandle } from '@capacitor/core'
 import { createBrowserBridge } from './browser'
+import { validateSelfCheckOperation, type SelfCheckOperation } from '../runtimeSelfCheck'
 import type {
   PluginRequest,
   PluginCatalog,
@@ -39,6 +40,7 @@ import {
   validateNotificationPermissionResult,
   validateOverlayBallState,
   validateRuntimeProgress,
+  validateRuntimeSelfCheckReport,
   validateRuntimeState,
   validateSettings,
   validateSettingsUpdate,
@@ -75,6 +77,7 @@ interface NativeRuntimePlugin {
   overlayBallState(): Promise<unknown>
   openOverlaySettings(): Promise<void>
   getHarnessLog(options: { maxBytes?: number }): Promise<unknown>
+  runRuntimeSelfCheck(options: { operation: SelfCheckOperation }): Promise<unknown>
   getDiagnosticLogState(): Promise<DiagnosticLogState>
   readDiagnosticLog(options: { maxBytes?: number }): Promise<unknown>
   setDiagnosticLogSettings(options: { enabled: boolean; retentionDays: number }): Promise<DiagnosticLogState>
@@ -150,6 +153,10 @@ function createNativeBridge(): RuntimeBridge {
     openOverlaySettings: () => NativeRuntime.openOverlaySettings(),
     // 窗口参数由原生侧收敛到受控档位；这里只负责透传用户选择的字节数。
     getHarnessLog: options => NativeRuntime.getHarnessLog({ maxBytes: options?.maxBytes }).then(validateHarnessLog),
+    // 操作类型只允许 check / repair：未知取值在进入原生侧之前就被拒绝。
+    runRuntimeSelfCheck: operation => NativeRuntime
+      .runRuntimeSelfCheck({ operation: validateSelfCheckOperation(operation) })
+      .then(validateRuntimeSelfCheckReport),
     readDiagnosticLog: options => NativeRuntime.readDiagnosticLog({ maxBytes: options?.maxBytes }).then(validateDiagnosticLogText),
     getDiagnosticLogState: () => NativeRuntime.getDiagnosticLogState().then(validateDiagnosticLogState),
     setDiagnosticLogSettings: (enabled, retentionDays) => {
