@@ -170,7 +170,7 @@ export interface NotificationPermissionResult {
  * 诊断日志状态。
  *
  * 只包含开关、保留天数、计数与时间戳：**不含任何日志内容**，
- * 日志正文只能由用户在系统分享面板里查看。
+ * 日志正文由 [readDiagnosticLog] 单独读取（应用内查看），或经系统分享面板导出。
  */
 export interface DiagnosticLogState {
   enabled: boolean
@@ -196,8 +196,26 @@ export interface DiagnosticLogExport extends DiagnosticLogState {
 export interface HarnessLog {
   /** 当前是否有可读的进程输出；false 时 text 恒为空串。 */
   available: boolean
-  /** 输出尾部；原生侧按字节上限（默认 8192）截断，且落在 UTF-8 字符边界上。 */
+  /** 输出尾部；原生侧按字节上限截断，且落在 UTF-8 字符边界上。 */
   text: string
+  /** 原生侧实际应用的窗口字节数（受控档位，见 [HARNESS_LOG_WINDOW_OPTIONS]）。 */
+  maxBytes: number
+}
+
+/**
+ * 应用内查看诊断日志的结果。
+ *
+ * [text] 是受控字段组成的尾部窗口（见 `docs/诊断日志.md`：只有事件名、级别、
+ * 状态码与计数，不含 URL、凭据、终端内容或用户数据），因此它读进 WebView
+ * 不构成新的泄露面；[truncated] 表示前面还有被裁掉的内容。
+ */
+export interface DiagnosticLogText {
+  text: string
+  /** 原生侧实际应用的窗口字节数。 */
+  maxBytes: number
+  /** 整个诊断目录的字节数，用于说明「显示的是最近一部分」。 */
+  totalBytes: number
+  truncated: boolean
 }
 
 /** 保留天数范围；原生侧同样会夹取，前端只做先期校验。 */
@@ -208,10 +226,24 @@ export const DIAGNOSTIC_RETENTION_DEFAULT = 3
 /**
  * 界面接受的运行日志字符数上限。
  *
- * 原生侧已按 8 KB 字节（UTF-8 边界）截断后回传；这里是前端校验的兜底：
+ * 原生侧已按窗口字节数（UTF-8 边界）截断后回传；这里是前端校验的兜底：
  * 留出多字节字符与换行差异的余量，异常载荷不允许把界面撑爆。
  */
 export const HARNESS_LOG_MAX_CHARS = 32 * 1024
+
+/**
+ * 运行日志可选窗口（字节）。
+ *
+ * 8 KB 只够一段异常栈；插件安装失败、反复重试的场景需要往上翻，因此提供三档。
+ * 原生侧的缓冲区按最大档分配，请求更小的档位只是截取尾部。
+ */
+export const HARNESS_LOG_WINDOW_OPTIONS = [8 * 1024, 64 * 1024, 256 * 1024] as const
+
+/** 界面接受的诊断日志字符数上限；与 [HARNESS_LOG_MAX_CHARS] 同理，按最大窗口留余量。 */
+export const DIAGNOSTIC_LOG_MAX_CHARS = 512 * 1024
+
+/** 诊断日志应用内查看的可选窗口（字节）。 */
+export const DIAGNOSTIC_LOG_WINDOW_OPTIONS = [64 * 1024, 256 * 1024] as const
 
 export interface TerminalChunk {
   sessionId: string
@@ -273,11 +305,19 @@ export interface RuntimeBridge {
   /** 清空全部诊断日志。 */
   clearDiagnosticLog: () => Promise<DiagnosticLogState>
   /**
+   * 读取诊断日志的尾部窗口，供应用内查看。
+   *
+   * 内容只有受控字段（事件、级别、状态码、计数），不含 URL、凭据、终端内容或用户数据；
+   * [maxBytes] 缺省时由原生侧取 64 KB，并夹到 1 KB..256 KB。
+   */
+  readDiagnosticLog: (options?: { maxBytes?: number }) => Promise<DiagnosticLogText>
+  /**
    * 读取访客进程输出的尾部（只读、不落盘）。
    *
    * 可能包含会话内容：只在设备上的界面里展示，不写入诊断日志，也不随诊断日志导出。
+   * [maxBytes] 由原生侧收敛到受控档位（8 / 64 / 256 KB），缺省 8 KB。
    */
-  getHarnessLog: () => Promise<HarnessLog>
+  getHarnessLog: (options?: { maxBytes?: number }) => Promise<HarnessLog>
   addRuntimeProgressListener: (listener: (event: RuntimeProgress) => void) => Promise<ListenerHandle>
   addTerminalOutputListener: (listener: (event: TerminalChunk) => void) => Promise<ListenerHandle>
   addTerminalExitListener: (listener: (event: TerminalExit) => void) => Promise<ListenerHandle>

@@ -17,6 +17,7 @@ import com.getcapacitor.annotation.PermissionCallback
 import io.deepseekharness.mobile.overlay.OverlayBallPolicy
 import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
+import io.deepseekharness.mobile.runtime.clampHarnessTailBytes
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
 import io.deepseekharness.mobile.runtime.DeviceBridgeAccess
 import io.deepseekharness.mobile.runtime.RuntimeEventSink
@@ -34,7 +35,9 @@ import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticExport
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticPolicy
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticState
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticText
 import io.deepseekharness.mobile.shizuku.DeviceCommand
 import io.deepseekharness.mobile.shizuku.DeviceCommandResult
 import io.deepseekharness.mobile.shizuku.ShizukuState
@@ -683,7 +686,7 @@ class MobileRuntimePlugin : Plugin() {
 
     /**
      * 权限：应用内桥接。
-     * 返回 Harness 访客进程 stdout/stderr 的有界尾部（默认 8192 字节，按 UTF-8 字符边界截断），
+     * 返回 Harness 访客进程 stdout/stderr 的有界尾部（按 UTF-8 字符边界截断），
      * 供设置页的「运行日志」展示。
      *
      * 为什么需要它：工具调用失败时界面往往只显示一句没有栈的 JS 报错，排查无法进行；
@@ -691,15 +694,22 @@ class MobileRuntimePlugin : Plugin() {
      *
      * 隐私边界：这段文本可能包含会话内容，因此**只回传当前界面**——
      * 不写入诊断日志、不新增诊断事件或字段、不落盘、不随诊断日志导出。
+     *
      * 运行时不持有 Harness 输出时如实返回 available=false，不猜造内容。
+     *
+     * 窗口：`maxBytes` 由 [clampHarnessTailBytes] 收敛到 8 / 64 / 256 KB 三档，
+     * 缺省 8 KB。放大窗口不会读到缓冲区里没有的内容，因此界面可以放心多给几档。
      */
     @PluginMethod
     fun getHarnessLog(call: PluginCall) {
         resolveWhileActive(call) {
-            val text = HarnessOutputTailSource.read()
+            // 窗口由原生侧收敛到受控档位（8 / 64 / 256 KB），界面只能请求这几种大小。
+            val window = clampHarnessTailBytes(call.getInt("maxBytes"))
+            val text = HarnessOutputTailSource.read(window)
             JSObject()
                 .put("available", text != null)
                 .put("text", text.orEmpty())
+                .put("maxBytes", window)
         }
     }
 
@@ -711,6 +721,22 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun getDiagnosticLogState(call: PluginCall) {
         resolveWhileActive(call) { requireDiagnostics().state().toJs() }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 返回诊断日志的尾部窗口，供设置页在应用内直接查看。
+     *
+     * 内容仍然是受控字段（见 [DiagnosticPolicy]）：不含 URL、凭据、终端内容或用户数据，
+     * 因此读进 WebView 不构成新的泄露面。窗口由原生侧夹到 1 KB..256 KB，
+     * 缺省 64 KB；只读、不落盘、不产生导出文件。
+     */
+    @PluginMethod
+    fun readDiagnosticLog(call: PluginCall) {
+        resolveWhileActive(call) {
+            val maxBytes = DiagnosticPolicy.clampReadBytes(call.getInt("maxBytes"))
+            requireDiagnostics().read(maxBytes).toJs()
+        }
     }
 
     /**
@@ -1228,6 +1254,13 @@ class MobileRuntimePlugin : Plugin() {
         .put("fileCount", fileCount)
         .put("totalBytes", totalBytes)
         .put("lastEntryAtMillis", lastEntryAtMillis)
+
+    /** 应用内查看结果：受控字段文本 + 窗口与截断状态，不含路径或文件名。 */
+    private fun DiagnosticText.toJs(): JSObject = JSObject()
+        .put("text", text)
+        .put("maxBytes", maxBytes)
+        .put("totalBytes", totalBytes)
+        .put("truncated", truncated)
 }
 
 internal fun dispatchTerminalOutput(

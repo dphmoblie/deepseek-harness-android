@@ -1,6 +1,7 @@
 import { validatePluginRequest } from './plugins'
 import type {
   DiagnosticLogState,
+  DiagnosticLogText,
   HarnessLog,
   KeepAliveState,
   ListenerHandle,
@@ -248,9 +249,20 @@ export function createBrowserBridge(): RuntimeBridge {
     // 浏览器里没有可跳转的系统设置页；静默无操作，不抛错以免打断预览。
     openOverlaySettings: (): Promise<void> => Promise.resolve(),
     // 浏览器预览里没有访客进程，也就没有可读的输出尾部：如实返回不可用，不编造内容。
-    getHarnessLog: (): Promise<HarnessLog> => Promise.resolve({ available: false, text: '' }),
+    getHarnessLog: (options): Promise<HarnessLog> => Promise.resolve({
+      available: false,
+      text: '',
+      maxBytes: options?.maxBytes === 64 * 1024 || options?.maxBytes === 256 * 1024 ? options.maxBytes : 8 * 1024,
+    }),
     // 浏览器预览没有原生诊断日志：保持关闭且不可导出，避免给出「已经采集到东西」的错觉。
     getDiagnosticLogState: (): Promise<DiagnosticLogState> => Promise.resolve({ ...diagnosticState }),
+    // 同理，预览里没有可查看的正文；返回空窗口而不是编造几条假记录。
+    readDiagnosticLog: (options): Promise<DiagnosticLogText> => Promise.resolve({
+      text: '',
+      maxBytes: options?.maxBytes === 256 * 1024 ? 256 * 1024 : 64 * 1024,
+      totalBytes: diagnosticState.totalBytes,
+      truncated: false,
+    }),
     setDiagnosticLogSettings: (enabled: boolean, retentionDays: number) => {
       diagnosticState = { ...diagnosticState, enabled, retentionDays }
       return Promise.resolve({ ...diagnosticState })

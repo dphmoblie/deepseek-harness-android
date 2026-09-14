@@ -173,6 +173,22 @@ class DiagnosticPolicyTest {
     }
 
     @Test
+    fun clampsReadWindowIntoSupportedRange() {
+        // 缺省给默认窗口；非法输入不放大读取量。
+        assertEquals(DiagnosticPolicy.DEFAULT_READ_BYTES, DiagnosticPolicy.clampReadBytes(null))
+        assertEquals(DiagnosticPolicy.DEFAULT_READ_BYTES, DiagnosticPolicy.clampReadBytes(0))
+        assertEquals(DiagnosticPolicy.DEFAULT_READ_BYTES, DiagnosticPolicy.clampReadBytes(-1024))
+
+        // 应用内查看的窗口有上限：界面请求再大也只读这么多，避免把整个目录读进 WebView。
+        assertEquals(DiagnosticPolicy.MAX_READ_BYTES, DiagnosticPolicy.clampReadBytes(Int.MAX_VALUE))
+        assertEquals(DiagnosticPolicy.MAX_READ_BYTES, DiagnosticPolicy.clampReadBytes(DiagnosticPolicy.MAX_READ_BYTES))
+        assertEquals(32 * 1024, DiagnosticPolicy.clampReadBytes(32 * 1024))
+
+        // 下限保证窗口至少能装下几行记录，不会因为一次误传得到空内容。
+        assertEquals(1024, DiagnosticPolicy.clampReadBytes(1))
+    }
+
+    @Test
     fun selectsOnlyFilesOlderThanTheRetentionWindow() {
         val today = LocalDate.parse("2026-09-12")
         val names = listOf(

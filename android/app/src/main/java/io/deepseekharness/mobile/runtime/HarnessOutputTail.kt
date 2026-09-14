@@ -4,9 +4,34 @@ package io.deepseekharness.mobile.runtime
  * 界面「运行日志」默认读取的字节上限。
  *
  * 8 KB 足以装下一段 Node.js 异常栈或插件加载报错，又不会让设置页的一次读取明显卡顿。
- * 缓冲区本身是 16 KB（见 ProcessOutputTail.drain 的默认值），因此这里只取尾部。
+ * 缓冲区本身见 [HARNESS_OUTPUT_TAIL_MAX_BYTES]，这里只取尾部。
  */
 internal const val HARNESS_OUTPUT_TAIL_BYTES = 8 * 1024
+
+/**
+ * 界面「运行日志」可选窗口与缓冲区上限。
+ *
+ * 用户排障时经常需要往上翻：8 KB 只够一次异常栈，插件安装失败、反复重试的场景会被截断。
+ * 因此界面提供 8 KB / 64 KB / 256 KB 三档，**缓冲区按最大档分配**，读取时再截取窗口——
+ * 只有先留住内容，才可能事后放大查看。代价是每个 Harness 进程常驻 256 KB 字节数组
+ * （进程退出后留存的快照是字符串，因此堆占用约为其两倍），对单个运行时可以接受。
+ */
+internal val HARNESS_OUTPUT_TAIL_OPTIONS = intArrayOf(8 * 1024, 64 * 1024, 256 * 1024)
+
+/** 缓冲区上限：必须与可选窗口的最大档一致，否则放大窗口会读到并不存在的内容。 */
+internal const val HARNESS_OUTPUT_TAIL_MAX_BYTES = 256 * 1024
+
+/**
+ * 把界面请求的字节数收敛到受控档位。
+ *
+ * 取「不超过请求值的最大档」，因此请求 100 KB 得到 64 KB、请求 1 MB 得到 256 KB；
+ * 缺省或过小的请求回落到 8 KB。这样界面永远只能读到有限的几种窗口，
+ * 既不会因为一次读取拷贝几十 MB，也不会出现「请求 256 KB 却只缓冲了 16 KB」的错觉。
+ */
+internal fun clampHarnessTailBytes(requested: Int?): Int {
+    if (requested == null) return HARNESS_OUTPUT_TAIL_BYTES
+    return HARNESS_OUTPUT_TAIL_OPTIONS.filter { it <= requested }.maxOrNull() ?: HARNESS_OUTPUT_TAIL_BYTES
+}
 
 /** UTF-8 续字节的判定掩码与目标值：高两位为 10。 */
 private const val UTF8_CONTINUATION_MASK = 0xC0
@@ -69,5 +94,4 @@ internal object HarnessOutputTailSource {
         // 不应该把本对象的锁也卷进那条路径。
         val current = synchronized(lock) { reader } ?: return null
         return current(maxBytes)
-    }
-}
+    }}

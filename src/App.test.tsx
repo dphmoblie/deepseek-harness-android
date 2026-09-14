@@ -26,6 +26,7 @@ const bridge = vi.hoisted(() => ({
   requestNotificationPermission: vi.fn(),
   getHarnessLog: vi.fn(),
   getDiagnosticLogState: vi.fn(),
+  readDiagnosticLog: vi.fn(),
   setDiagnosticLogSettings: vi.fn(),
   shareDiagnosticLog: vi.fn(),
   clearDiagnosticLog: vi.fn(),
@@ -120,8 +121,14 @@ beforeEach(() => {
   bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
   bridge.openOverlaySettings.mockResolvedValue(undefined)
   bridge.requestNotificationPermission.mockResolvedValue({ granted: true, supported: true })
-  bridge.getHarnessLog.mockResolvedValue({ available: true, text: 'Error: tool call failed\n    at run (dsh.js:1:1)' })
+  bridge.getHarnessLog.mockResolvedValue({ available: true, text: 'Error: tool call failed\n    at run (dsh.js:1:1)', maxBytes: 8 * 1024 })
   bridge.getDiagnosticLogState.mockResolvedValue({ ...diagnostic })
+  bridge.readDiagnosticLog.mockResolvedValue({
+    text: '2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE|phase=running\n2026-09-12T10:21:04Z|WARN|MODULE_GRAPH|result=failed|count=2|files=4\n',
+    maxBytes: 64 * 1024,
+    totalBytes: 4096,
+    truncated: false,
+  })
   bridge.setDiagnosticLogSettings.mockImplementation((enabled: boolean, retentionDays: number) =>
     Promise.resolve({ ...diagnostic, enabled, retentionDays }))
   bridge.clearDiagnosticLog.mockResolvedValue({ ...diagnostic })
@@ -624,6 +631,92 @@ describe('诊断与日志', () => {
     fireEvent.click(await screen.findByRole('button', { name: '复制' }))
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(payload))
     expect(await screen.findByText('已复制')).toBeVisible()
+  })
+
+  it('运行日志可按关键字过滤，只渲染匹配行', async () => {
+    const payload = 'INFO runtime ready\nError: TOOL_CALL_FAILED\nINFO idle'
+    bridge.getHarnessLog.mockResolvedValue({ available: true, text: payload, maxBytes: 8 * 1024 })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('诊断与日志')
+    fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
+    const output = await waitFor(() => {
+      const node = document.querySelector('.harness-log-output')
+      expect(node).not.toBeNull()
+      return node as HTMLElement
+    })
+    expect(output.textContent).toBe(payload)
+
+    fireEvent.change(screen.getByRole('searchbox', { name: '过滤日志' }), { target: { value: 'tool_call' } })
+    await waitFor(() => expect(output.textContent).toBe('Error: TOOL_CALL_FAILED'))
+    expect(screen.getByText('匹配 1 / 3 行')).toBeVisible()
+  })
+
+  it('展开运行日志后给出已确诊特征的判读提示', async () => {
+    bridge.getHarnessLog.mockResolvedValue({
+      available: true,
+      text: "TypeError: Cannot read properties of undefined (reading 'prepare')",
+      maxBytes: 8 * 1024,
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('诊断与日志')
+    fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
+
+    const insights = await screen.findByRole('group', { name: '判读提示' })
+    expect(insights).toHaveTextContent('工具调用全部失败（模块身份分裂）')
+    expect(insights).toHaveTextContent('MODULE_GRAPH')
+  })
+
+  it('运行日志窗口可放大，并把窗口字节数交给原生侧', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('诊断与日志')
+    fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
+    await waitFor(() => expect(bridge.getHarnessLog).toHaveBeenCalledWith({ maxBytes: 8 * 1024 }))
+
+    fireEvent.change(screen.getByRole('combobox', { name: '读取窗口' }), { target: { value: String(64 * 1024) } })
+    await waitFor(() => expect(bridge.getHarnessLog).toHaveBeenCalledWith({ maxBytes: 64 * 1024 }))
+    // 标题跟着窗口走，用户一眼能看出自己正在看多大的一段。
+    expect(await screen.findByRole('button', { name: /运行日志（最近 64 KB）/ })).toBeVisible()
+  })
+
+  it('诊断日志可在应用内查看，含截断说明与判读提示', async () => {
+    bridge.readDiagnosticLog.mockResolvedValue({
+      text: '2026-09-12T10:21:04Z|WARN|MODULE_GRAPH|result=failed|count=2|files=4\n',
+      maxBytes: 64 * 1024,
+      totalBytes: 8192,
+      truncated: true,
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('诊断与日志')
+    const toggle = await screen.findByRole('button', { name: /诊断日志（最近 64 KB）/ })
+    // 与运行日志同样按需读取：折叠时不碰桥接。
+    expect(bridge.readDiagnosticLog).not.toHaveBeenCalled()
+
+    fireEvent.click(toggle)
+    await waitFor(() => expect(bridge.readDiagnosticLog).toHaveBeenCalledWith({ maxBytes: 64 * 1024 }))
+    const output = document.querySelector('.diagnostic-log-output')
+    expect(output?.textContent).toBe('2026-09-12T10:21:04Z|WARN|MODULE_GRAPH|result=failed|count=2|files=4\n')
+    expect(screen.getByText(/已按窗口截断/)).toBeVisible()
+    expect(await screen.findByRole('group', { name: '判读提示' })).toHaveTextContent('已确认存在两份运行时模块')
+  })
+
+  it('没有诊断日志时如实说明并提示开启采集', async () => {
+    bridge.readDiagnosticLog.mockResolvedValue({ text: '', maxBytes: 64 * 1024, totalBytes: 0, truncated: false })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('诊断与日志')
+    fireEvent.click(await screen.findByRole('button', { name: /诊断日志（最近 64 KB）/ }))
+
+    expect(await screen.findByText(/当前没有可查看的诊断日志/)).toBeVisible()
+    expect(document.querySelector('.diagnostic-log-output')).toBeNull()
   })
 })
 

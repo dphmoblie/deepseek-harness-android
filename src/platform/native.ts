@@ -9,7 +9,6 @@ import type {
   DeviceCommandResult,
   DiagnosticLogExport,
   DiagnosticLogState,
-  HarnessLog,
   KeepAliveState,
   NotificationPermissionResult,
   RuntimeBridge,
@@ -34,6 +33,7 @@ import {
   validateDeviceCommandResult,
   validateDiagnosticLogExport,
   validateDiagnosticLogState,
+  validateDiagnosticLogText,
   validateHarnessLog,
   validateKeepAliveState,
   validateNotificationPermissionResult,
@@ -74,8 +74,9 @@ interface NativeRuntimePlugin {
   requestNotificationPermission(): Promise<NotificationPermissionResult>
   overlayBallState(): Promise<unknown>
   openOverlaySettings(): Promise<void>
-  getHarnessLog(): Promise<HarnessLog>
+  getHarnessLog(options: { maxBytes?: number }): Promise<unknown>
   getDiagnosticLogState(): Promise<DiagnosticLogState>
+  readDiagnosticLog(options: { maxBytes?: number }): Promise<unknown>
   setDiagnosticLogSettings(options: { enabled: boolean; retentionDays: number }): Promise<DiagnosticLogState>
   shareDiagnosticLog(): Promise<DiagnosticLogExport>
   clearDiagnosticLog(): Promise<DiagnosticLogState>
@@ -147,7 +148,9 @@ function createNativeBridge(): RuntimeBridge {
     requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),
     getOverlayBallState: () => NativeRuntime.overlayBallState().then(validateOverlayBallState),
     openOverlaySettings: () => NativeRuntime.openOverlaySettings(),
-    getHarnessLog: () => NativeRuntime.getHarnessLog().then(validateHarnessLog),
+    // 窗口参数由原生侧收敛到受控档位；这里只负责透传用户选择的字节数。
+    getHarnessLog: options => NativeRuntime.getHarnessLog({ maxBytes: options?.maxBytes }).then(validateHarnessLog),
+    readDiagnosticLog: options => NativeRuntime.readDiagnosticLog({ maxBytes: options?.maxBytes }).then(validateDiagnosticLogText),
     getDiagnosticLogState: () => NativeRuntime.getDiagnosticLogState().then(validateDiagnosticLogState),
     setDiagnosticLogSettings: (enabled, retentionDays) => {
       const days = assertDiagnosticRetentionDays(retentionDays)

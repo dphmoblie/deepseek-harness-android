@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.os.Build
 import android.system.Os
 import io.deepseekharness.mobile.BuildConfig
+import io.deepseekharness.mobile.runtime.utf8TailWithin
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
@@ -39,6 +40,19 @@ data class DiagnosticExport(
     val sizeBytes: Long,
     val fileCount: Long,
     val absolutePath: String,
+)
+
+/**
+ * 应用内查看结果：只回传文本与计数。
+ *
+ * [text] 是**尾部窗口**（按时间顺序），[truncated] 表示前面还有被裁掉的内容，
+ * [totalBytes] 是整个诊断目录的字节数，界面用它说明「显示的是最近一部分」。
+ */
+data class DiagnosticText(
+    val text: String,
+    val maxBytes: Int,
+    val totalBytes: Long,
+    val truncated: Boolean,
 )
 
 /**
@@ -204,6 +218,38 @@ class DiagnosticLog(context: Context) {
         Files.readAllBytes(path).toString(StandardCharsets.UTF_8)
     } catch (_: Throwable) {
         "（该文件无法读取）\n"
+    }
+
+    /**
+     * 读取用于应用内查看的**尾部窗口**。
+     *
+     * 与 [export] 的区别：导出是排障产物交接（全部文件、写进 cache 再分享），
+     * 这里是界面上的即时阅读，因此只读最近的内容，并且**不落盘、不新增导出文件**。
+     *
+     * 实现按日期从新到旧读，累计超过窗口就不再往前读（单文件上限 512 KB，
+     * 因此最多多读一个文件），再按字符边界裁到窗口大小——裁在续字节上会让开头变成乱码。
+     * 读取失败的文件会被跳过（[readBounded] 返回占位文本），不让一次 IO 失败挡住整块日志。
+     */
+    @Synchronized
+    fun read(maxBytes: Int = DiagnosticPolicy.DEFAULT_READ_BYTES): DiagnosticText {
+        val budget = DiagnosticPolicy.clampReadBytes(maxBytes)
+        val names = listEntries().map { it.first }.sortedDescending()
+        val chunks = ArrayList<String>(names.size)
+        var collectedBytes = 0L
+        for (name in names) {
+            val chunk = readBounded(directory.resolve(name))
+            chunks.add(0, chunk)
+            collectedBytes += chunk.toByteArray(StandardCharsets.UTF_8).size.toLong()
+            if (collectedBytes > budget) break
+        }
+        val merged = chunks.joinToString("")
+        val mergedBytes = merged.toByteArray(StandardCharsets.UTF_8).size.toLong()
+        return DiagnosticText(
+            text = utf8TailWithin(merged, budget),
+            maxBytes = budget,
+            totalBytes = state().totalBytes,
+            truncated = mergedBytes > budget,
+        )
     }
 
     private fun ensurePrivateDirectory() {

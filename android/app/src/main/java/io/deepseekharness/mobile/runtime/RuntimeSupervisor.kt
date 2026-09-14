@@ -224,7 +224,13 @@ class RuntimeSupervisor(
             failStart(RuntimeFailure("HARNESS_START_FAILED", "无法启动 Harness", error))
         }
         harnessProcess = process
-        val output = ProcessOutputTail.drain(process, "dsh-harness-output", manifest.harnessPort)
+        // 缓冲区按界面可选窗口的最大档分配：先留住内容，事后才可能放大查看。
+        val output = ProcessOutputTail.drain(
+            process,
+            "dsh-harness-output",
+            manifest.harnessPort,
+            HARNESS_OUTPUT_TAIL_MAX_BYTES,
+        )
         harnessOutput = output
 
         val launchUrl = try {
@@ -346,7 +352,7 @@ class RuntimeSupervisor(
      *
      * 线程模型：刻意**不抢** [lock]。`startHarness` 与 `stop` 会在持锁期间等待最长数十秒，
      * 这里若也去排队，WebView 桥接线程会被一起拖住（用户点开日志就会卡住界面）。
-     * 读取只用 @Volatile 字段 + 缓冲区自身的 @Synchronized：单次拷贝上限 16 KB，
+     * 读取只用 @Volatile 字段 + 缓冲区自身的 @Synchronized：单次拷贝上限 256 KB，
      * 与写线程互斥但不会长时间阻塞。
      *
      * 隐私边界：返回的文本可能包含会话内容。它只用于设备上的界面展示：

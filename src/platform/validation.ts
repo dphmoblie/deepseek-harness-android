@@ -3,6 +3,7 @@ import type {
   DeviceCommandResult,
   DiagnosticLogExport,
   DiagnosticLogState,
+  DiagnosticLogText,
   HarnessLog,
   KeepAliveState,
   ModelProviderId,
@@ -22,9 +23,12 @@ import type {
   TerminalExit,
 } from './types'
 import {
+  DIAGNOSTIC_LOG_MAX_CHARS,
+  DIAGNOSTIC_LOG_WINDOW_OPTIONS,
   DIAGNOSTIC_RETENTION_MAX,
   DIAGNOSTIC_RETENTION_MIN,
   HARNESS_LOG_MAX_CHARS,
+  HARNESS_LOG_WINDOW_OPTIONS,
   MODEL_PROVIDER_IDS,
 } from './types'
 import { validateCustomCredentialIds, validateCustomCredentialUpdates, validateCustomModelProviders } from './customProviders'
@@ -526,7 +530,8 @@ export function validateDiagnosticLogExport(value: unknown): DiagnosticLogExport
  *
  * 这是唯一会把访客输出带回 WebView 的通道，因此只接受严格形态：
  * `available` 必须是布尔值，`text` 必须是字符串且有长度上限（防异常载荷打爆界面）；
- * `available` 为 false 时按契约必须是空串，不接受「不可用却带内容」的自相矛盾载荷。
+ * `available` 为 false 时按契约必须是空串，不接受「不可用却带内容」的自相矛盾载荷；
+ * `maxBytes` 必须是受控档位之一，避免界面按一个根本不存在的窗口去解释内容。
  */
 export function validateHarnessLog(value: unknown): HarnessLog {
   const log = asRecord(value, '运行日志')
@@ -534,7 +539,38 @@ export function validateHarnessLog(value: unknown): HarnessLog {
   if (typeof log.text !== 'string') throw new Error('运行日志内容格式无效')
   if (log.text.length > HARNESS_LOG_MAX_CHARS) throw new Error('运行日志内容长度无效')
   if (!log.available && log.text !== '') throw new Error('运行日志内容与可用状态不一致')
-  return { available: log.available, text: log.text }
+  return {
+    available: log.available,
+    text: log.text,
+    maxBytes: assertLogWindow(log.maxBytes, HARNESS_LOG_WINDOW_OPTIONS, '运行日志窗口'),
+  }
+}
+
+/**
+ * 校验诊断日志的应用内查看结果。
+ *
+ * 与状态接口不同，这里会带回日志正文；正文只有受控字段（事件、级别、状态码、计数），
+ * 因此仍然按「有上限的纯文本」校验：长度上限之外不接受其它形态。
+ */
+export function validateDiagnosticLogText(value: unknown): DiagnosticLogText {
+  const record = asRecord(value, '诊断日志内容')
+  if (typeof record.text !== 'string') throw new Error('诊断日志内容格式无效')
+  if (record.text.length > DIAGNOSTIC_LOG_MAX_CHARS) throw new Error('诊断日志内容长度无效')
+  if (typeof record.truncated !== 'boolean') throw new Error('诊断日志截断状态格式无效')
+  return {
+    text: record.text,
+    maxBytes: assertLogWindow(record.maxBytes, DIAGNOSTIC_LOG_WINDOW_OPTIONS, '诊断日志窗口'),
+    totalBytes: diagnosticCount(record.totalBytes, '诊断日志总字节数'),
+    truncated: record.truncated,
+  }
+}
+
+/** 窗口字节数必须落在界面已知的档位里；原生侧与前端共用同一组取值。 */
+function assertLogWindow(value: unknown, options: readonly number[], label: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || !options.includes(value)) {
+    throw new Error(`${label}取值无效`)
+  }
+  return value
 }
 
 export function validateTerminalSession(value: unknown): { sessionId: string } {

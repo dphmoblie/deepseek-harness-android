@@ -108,6 +108,23 @@ object DiagnosticPolicy {
     /** 单行最大长度（UTF-8 之外按字符计），防止构造出超长行。 */
     const val MAX_LINE_CHARS = 512
 
+    /**
+     * 应用内查看诊断日志的默认与最大字节数。
+     *
+     * 查看与导出是两条路径：导出给的是全部文件，查看只给**尾部窗口**——
+     * 排障时真正要看的是最近发生了什么，而把 4 MB 全部读进 WebView 既慢又没有意义。
+     * 64 KB 大约能容纳上千行受控记录，放大到 256 KB 需要用户显式选择。
+     */
+    const val DEFAULT_READ_BYTES = 64 * 1024
+    const val MAX_READ_BYTES = 256 * 1024
+
+    /** 把界面的读取请求夹到 1 KB..[MAX_READ_BYTES]；非法值回落到默认值。 */
+    fun clampReadBytes(requested: Int?): Int {
+        if (requested == null) return DEFAULT_READ_BYTES
+        if (requested <= 0) return DEFAULT_READ_BYTES
+        return requested.coerceIn(1024, MAX_READ_BYTES)
+    }
+
     private val filePattern = Regex("^diagnostic-(\\d{4}-\\d{2}-\\d{2})\\.log$")
     private val keyPattern = Regex("^[a-z][a-z0-9_]{0,23}$")
 

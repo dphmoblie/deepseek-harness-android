@@ -7,6 +7,7 @@ import {
   assertTerminalSize,
   validateDiagnosticLogExport,
   validateDiagnosticLogState,
+  validateDiagnosticLogText,
   validateHarnessLog,
   validateKeepAliveState,
   validateNotificationPermissionResult,
@@ -21,7 +22,14 @@ import {
   validateTerminalChunk,
   validateTerminalExit,
 } from './validation'
-import { DIAGNOSTIC_RETENTION_MAX, DIAGNOSTIC_RETENTION_MIN, HARNESS_LOG_MAX_CHARS } from './types'
+import {
+  DIAGNOSTIC_LOG_MAX_CHARS,
+  DIAGNOSTIC_LOG_WINDOW_OPTIONS,
+  DIAGNOSTIC_RETENTION_MAX,
+  DIAGNOSTIC_RETENTION_MIN,
+  HARNESS_LOG_MAX_CHARS,
+  HARNESS_LOG_WINDOW_OPTIONS,
+} from './types'
 
 const ipv4 = (...octets: number[]): string => octets.join('.')
 
@@ -440,25 +448,61 @@ describe('诊断日志校验', () => {
 })
 
 describe('运行日志校验', () => {
+  const window = HARNESS_LOG_WINDOW_OPTIONS[0]
+
   it('接受可用的尾部文本与不可用时的空内容', () => {
     const text = 'Error: tool call failed\n    at run (dsh.js:1:1)'
-    expect(validateHarnessLog({ available: true, text })).toEqual({ available: true, text })
+    expect(validateHarnessLog({ available: true, text, maxBytes: window })).toEqual({ available: true, text, maxBytes: window })
     // 运行时不持有 Harness 输出时如实返回不可用，且 text 为空串。
-    expect(validateHarnessLog({ available: false, text: '' })).toEqual({ available: false, text: '' })
+    expect(validateHarnessLog({ available: false, text: '', maxBytes: window }))
+      .toEqual({ available: false, text: '', maxBytes: window })
   })
 
   it('拒绝类型错误与自相矛盾的载荷', () => {
     expect(() => validateHarnessLog(null)).toThrow('运行日志')
-    expect(() => validateHarnessLog({ available: 'yes', text: '' })).toThrow('可用状态')
-    expect(() => validateHarnessLog({ available: true, text: 42 })).toThrow('内容格式')
+    expect(() => validateHarnessLog({ available: 'yes', text: '', maxBytes: window })).toThrow('可用状态')
+    expect(() => validateHarnessLog({ available: true, text: 42, maxBytes: window })).toThrow('内容格式')
     // 「不可用却带内容」是异常载荷：不接受，避免界面按 available 判定后又渲染出文本。
-    expect(() => validateHarnessLog({ available: false, text: '不该出现的内容' })).toThrow('不一致')
+    expect(() => validateHarnessLog({ available: false, text: '不该出现的内容', maxBytes: window })).toThrow('不一致')
+    // 窗口只接受受控档位：否则界面会按一个缓冲区里根本不存在的窗口去解释内容。
+    expect(() => validateHarnessLog({ available: true, text: 'x', maxBytes: 12345 })).toThrow('窗口')
+    expect(() => validateHarnessLog({ available: true, text: 'x' })).toThrow('窗口')
   })
 
   it('拒绝超长文本，边界值按字符数放行', () => {
-    expect(validateHarnessLog({ available: true, text: 'x'.repeat(HARNESS_LOG_MAX_CHARS) }).text)
+    expect(validateHarnessLog({ available: true, text: 'x'.repeat(HARNESS_LOG_MAX_CHARS), maxBytes: window }).text)
       .toHaveLength(HARNESS_LOG_MAX_CHARS)
-    expect(() => validateHarnessLog({ available: true, text: 'x'.repeat(HARNESS_LOG_MAX_CHARS + 1) }))
+    expect(() => validateHarnessLog({ available: true, text: 'x'.repeat(HARNESS_LOG_MAX_CHARS + 1), maxBytes: window }))
+      .toThrow('长度')
+  })
+
+  it('三档窗口都接受，最大档也能通过校验', () => {
+    HARNESS_LOG_WINDOW_OPTIONS.forEach(bytes => {
+      expect(validateHarnessLog({ available: true, text: 'x', maxBytes: bytes }).maxBytes).toBe(bytes)
+    })
+  })
+})
+
+describe('诊断日志正文校验', () => {
+  const payload = {
+    text: '2026-09-12T10:21:04Z|WARN|MODULE_GRAPH|result=failed|count=2|files=4\n',
+    maxBytes: DIAGNOSTIC_LOG_WINDOW_OPTIONS[0],
+    totalBytes: 4096,
+    truncated: true,
+  }
+
+  it('接受受控字段组成的正文与计数', () => {
+    expect(validateDiagnosticLogText(payload)).toEqual(payload)
+    expect(validateDiagnosticLogText({ ...payload, text: '', truncated: false }).text).toBe('')
+  })
+
+  it('拒绝异常形态与未知窗口', () => {
+    expect(() => validateDiagnosticLogText(null)).toThrow('诊断日志内容')
+    expect(() => validateDiagnosticLogText({ ...payload, text: 42 })).toThrow('内容格式')
+    expect(() => validateDiagnosticLogText({ ...payload, truncated: 'yes' })).toThrow('截断状态')
+    expect(() => validateDiagnosticLogText({ ...payload, maxBytes: 8192 })).toThrow('窗口')
+    expect(() => validateDiagnosticLogText({ ...payload, totalBytes: -1 })).toThrow('总字节数')
+    expect(() => validateDiagnosticLogText({ ...payload, text: 'x'.repeat(DIAGNOSTIC_LOG_MAX_CHARS + 1) }))
       .toThrow('长度')
   })
 })

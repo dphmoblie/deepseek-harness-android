@@ -1602,7 +1602,8 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   line-height: 1.5;
 }
 
-.harness-log-output {
+/* 日志正文共用一套等宽样式：运行日志与诊断日志的容器各自另带一个 class 便于区分与定位。 */
+.log-output {
   max-height: 240px;
   margin: 10px 0 0;
   padding: 10px 11px;
@@ -1617,4 +1618,50 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   -webkit-overflow-scrolling: touch;
+}
+
+/* 逐行渲染才能做出级别着色；换行符由行内文本节点补齐，复制出来的文本与原文一致。 */
+.log-line {
+  display: inline;
+}
+
+.log-line-error {
+  color: #9b2c2c;
+}
+
+.log-line-warn {
+  color: #8a5a11;
+}
+
+/* 判读提示：把已确诊的错误签名翻译成结论与下一步，只在命中时出现。 */
+.log-insights {
+  display: flex;
+  margin-top: 12px;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.log-insight {
+  display: flex;
+  padding: 10px 12px;
+  border: 1px solid #efd8a2;
+  border-radius: var(--radius-inner);
+  background: var(--amber-soft);
+  color: #77510a;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.log-insight strong {
+  font-size: 13px;
+}
+
+.log-insight-next {
+  color: #5f4008;
+}
+
+.log-filter {
+  margin-top: 12px;
 }

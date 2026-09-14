@@ -65,6 +65,29 @@ class HarnessOutputTailTest {
     }
 
     @Test
+    fun clampsRequestedWindowsToTheControlledOptions() {
+        // 缺省与过小的请求回落到默认档：界面永远只能读到有限的几种窗口。
+        assertEquals(HARNESS_OUTPUT_TAIL_BYTES, clampHarnessTailBytes(null))
+        assertEquals(HARNESS_OUTPUT_TAIL_BYTES, clampHarnessTailBytes(0))
+        assertEquals(HARNESS_OUTPUT_TAIL_BYTES, clampHarnessTailBytes(4096))
+
+        // 取「不超过请求值的最大档」：请求 100 KB 得到 64 KB，请求 1 MB 得到上限档。
+        assertEquals(64 * 1024, clampHarnessTailBytes(100 * 1024))
+        assertEquals(HARNESS_OUTPUT_TAIL_MAX_BYTES, clampHarnessTailBytes(1024 * 1024))
+
+        // 三档都能原样命中，否则界面会出现「选了 64 KB 却拿到别的窗口」。
+        HARNESS_OUTPUT_TAIL_OPTIONS.forEach { option ->
+            assertEquals(option, clampHarnessTailBytes(option))
+        }
+    }
+
+    @Test
+    fun bufferCoversTheLargestSelectableWindow() {
+        // 缓冲区必须按最大档分配：否则放大窗口只能读到并不存在的内容。
+        assertEquals(HARNESS_OUTPUT_TAIL_MAX_BYTES, HARNESS_OUTPUT_TAIL_OPTIONS.max())
+    }
+
+    @Test
     fun sourceReadsThroughTheRegisteredReader() {
         val requested = mutableListOf<Int>()
         HarnessOutputTailSource.register { limit ->
