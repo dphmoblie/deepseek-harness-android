@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 自适应图标：背景与前景均使用位图，由系统按启动器形状裁切。
-     前景主体宽度占 108dp 画布的 56%，落在中心 66dp 安全区内，
-     因此在圆形与圆角方形遮罩下都不会被裁到。 -->
+<!-- 自适应图标：背景位图铺满 108dp 画布，前景留空（全透明）。
+     源图是满幅画面（最外 1% 只有一圈白边，6% 处已含画面内容），因此把整幅图作为背景层，
+     由系统按启动器形状裁切边缘即是预期效果；前景层不叠任何内容，避免同一画面出现两次。
+     传统图标（mipmap-*/ic_launcher.png）按圆角方形裁切、ic_launcher_round.png 按圆形裁切。 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@mipmap/ic_launcher_background" />
     <foreground android:drawable="@mipmap/ic_launcher_foreground" />
