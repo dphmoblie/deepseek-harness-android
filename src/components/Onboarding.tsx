@@ -89,7 +89,7 @@ export function Onboarding({
                     <li>{t("Ubuntu 运行时与 Harness 只监听")}<code>127.0.0.1</code>{t("，不出设备；")}</li>
                     <li>{t("模型密钥只保存在本机，不会回传到管理界面；")}</li>
                     <li>{t("数据与审计都在应用私有目录，可随时重置；")}</li>
-                    <li>{t("容器内是")}<strong>{t("受限 root")}</strong>：<code>/system</code>、<code>/data</code> {t("等系统路径受 Android 保护，无法越权修改（apt/系统安装不可用）；")}</li>
+                    <li>{t("容器内是")}<strong>{t("受限 root")}</strong>：<code>/system</code>、<code>/data</code> {t("等系统路径受 Android 保护，无法越权修改；访客内的改动只存在于应用私有目录，重置运行环境即清除。")}</li>
                     <li>{t("已内置 Node.js、Python 3 与常用工具（busybox、jq、unzip）；gcc 等编译工具不在包内；")}</li>
                     <li>{t("如需访问手机文件或系统操作，请配合 Shizuku 设备 Shell。")}</li>
                   </ul>

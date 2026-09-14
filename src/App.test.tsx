@@ -293,7 +293,7 @@ describe('App conversation gate', () => {
 
     // 运行时来源在「运行与后台」页。
     await openSettingsPage('运行与后台')
-    expect(screen.getByText('正式版已预置下载源；两项留空表示改用 APK 内置运行时（仅内嵌构建可用）')).toBeInTheDocument()
+    expect(screen.getByText('两项留空表示使用 APK 内置的运行时（官方构建即内置，可离线安装）；填写清单地址与 SHA-256 则改为从该来源下载，两项必须成对。')).toBeInTheDocument()
     // 屏幕内返回按钮走的是历史回退，视图切换在 popstate 之后生效。
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
     expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()

@@ -1294,7 +1294,7 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadHarnessLog, ov
         <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
-            <div><h2 id="download-settings">{t("运行时来源")}</h2><p>{t("正式版已预置下载源；两项留空表示改用 APK 内置运行时（仅内嵌构建可用）")}</p></div>
+            <div><h2 id="download-settings">{t("运行时来源")}</h2><p>{t("两项留空表示使用 APK 内置的运行时（官方构建即内置，可离线安装）；填写清单地址与 SHA-256 则改为从该来源下载，两项必须成对。")}</p></div>
           </div>
           <label className="field">
             <span>{t("运行时清单地址")}</span>
