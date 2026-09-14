@@ -641,7 +641,11 @@ test('keep-alive keeps the device bridge process-scoped and the notification ent
   assert.match(keepAliveService, /Intent\(this, KeepAliveEntryActivity::class\.java\)/)
   assert.match(manifest, /android:name="\.KeepAliveEntryActivity"[\s\S]*?android:exported="false"/)
   assert.match(entryActivity, /AppAuthenticationState\.isHarnessAuthenticated\(\)/)
-  assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_NEW_TASK or Intent\.FLAG_ACTIVITY_SINGLE_TOP/)
+  // 必须把已有 HarnessActivity 调回前台，避免通知入口创建第二个实例并触发凭据释放。
+  assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_NEW_TASK/)
+  assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_REORDER_TO_FRONT/)
+  assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_SINGLE_TOP/)
+  assert.doesNotMatch(entryActivity, /Intent\.FLAG_ACTIVITY_CLEAR_TOP/)
 })
 
 test('Harness WebView serves the system file chooser and keeps page-initiated loads blocked', async () => {
