@@ -72,7 +72,8 @@ const settings: RuntimeSettings = {
   manifestSha256: 'a'.repeat(64),
   keepScreenAwake: true,
   terminalFontSize: 14,
-  configuredModelProviders: [],
+  // 已保存过模型密钥：否则「打开 Harness」会被门禁拦下，导航用例无法进入对话。
+  configuredModelProviders: ['deepseek'],
   autoLaunch: false,
 }
 

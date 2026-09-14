@@ -33,6 +33,7 @@ function renderOnboarding(overrides: Partial<Parameters<typeof Onboarding>[0]> =
     onAuthorize: vi.fn(),
     onOpenShizuku: vi.fn(),
     onOpenHarness: vi.fn(),
+    onOpenHarnessConfirmed: vi.fn(),
     onDone: vi.fn(),
     ...overrides,
   }
@@ -102,12 +103,41 @@ describe('Onboarding', () => {
     expect(props.onAuthorize).toHaveBeenCalledOnce()
   })
 
-  it('calls onOpenHarness from the final step', () => {
-    const props = renderOnboarding({ runtime: { ...runtime, phase: 'running' } })
+  // 已配置任一来源的密钥时，最后一步才提供「打开 Harness」。
+  const configuredCases: { name: string; settings: RuntimeSettings }[] = [
+    { name: '内置供应商密钥', settings: { ...settings, configuredModelProviders: ['deepseek'] } },
+    { name: '自定义供应商密钥', settings: { ...settings, configuredCustomModelProviders: ['custom-1'] } },
+  ]
+
+  it.each(configuredCases)('calls onOpenHarness from the final step with $name', ({ settings: configured }) => {
+    const props = renderOnboarding({ runtime: { ...runtime, phase: 'running' }, settings: configured })
     for (let i = 0; i < 5; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
     expect(screen.getByText('开始使用')).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
     expect(props.onOpenHarness).toHaveBeenCalledOnce()
+  })
+
+  it('blocks opening Harness until a model key is configured', () => {
+    const props = renderOnboarding({ runtime: { ...runtime, phase: 'running' } })
+    for (let i = 0; i < 5; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    expect(screen.getByText(/还没配置模型 API Key/)).toBeDefined()
+    expect(screen.queryByRole('button', { name: /打开 Harness/ })).toBeNull()
+
+    // 「去配置 API Key」把用户送回密钥步骤；保存后回到本步骤才会出现打开按钮。
+    fireEvent.click(screen.getByRole('button', { name: /去配置 API Key/ }))
+    expect(screen.getByText('配置模型 API Key')).toBeDefined()
+    expect(props.onOpenHarness).not.toHaveBeenCalled()
+  })
+
+  it('未配置密钥时只能由用户显式确认后放行打开', () => {
+    const props = renderOnboarding({ runtime: { ...runtime, phase: 'running' } })
+    for (let i = 0; i < 5; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    expect(screen.queryByRole('button', { name: /^打开 Harness$/ })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /我已在 Harness 内配置过/ }))
+    expect(props.onOpenHarnessConfirmed).toHaveBeenCalledOnce()
+    // 显式确认走的是放行入口，不会顺手把常规入口也调起来。
+    expect(props.onOpenHarness).not.toHaveBeenCalled()
   })
 
   it('skips the wizard via the close button', () => {

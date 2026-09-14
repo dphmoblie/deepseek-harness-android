@@ -27,6 +27,7 @@ import {
   Power,
   RefreshCw,
   RotateCcw,
+  Rocket,
   Save,
   ScrollText,
   Settings2,
@@ -41,7 +42,7 @@ import {
 } from 'lucide-react'
 import { TerminalPanel } from './components/TerminalPanel'
 import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
-import { MODEL_PROVIDERS } from './modelProviders'
+import { hasConfiguredModelCredential, MODEL_PROVIDERS } from './modelProviders'
 import { CustomProviders } from './components/CustomProviders'
 import { runtimeBridge } from './platform/native'
 import type {
@@ -78,10 +79,10 @@ type SettingsPage = 'models' | 'runtime' | 'terminal' | 'shizuku' | 'diagnostics
 
 const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView }> = {
   models: { title: '模型与密钥', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
-  runtime: { title: '运行与后台', hint: '运行时来源、后台保持与前台服务', view: 'settings-runtime' },
+  runtime: { title: '运行与后台', hint: '运行时来源、后台保持、悬浮球与前台服务', view: 'settings-runtime' },
   terminal: { title: '终端与外观', hint: '终端字号与屏幕常亮', view: 'settings-terminal' },
   shizuku: { title: 'Shizuku 与设备 Shell', hint: '授权、连接与设备 Shell 可用性', view: 'settings-shizuku' },
-  diagnostics: { title: '诊断与日志', hint: '采集开关、保留天数与导出', view: 'settings-diagnostics' },
+  diagnostics: { title: '诊断与日志', hint: '采集开关、保留天数、运行日志与导出', view: 'settings-diagnostics' },
 }
 
 const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'shizuku', 'diagnostics']
@@ -695,7 +696,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
       {runtime.updateAvailable && installed && (
         <div className="inline-alert warning" role="alert">
           <AlertTriangle size={19} />
-          <div><strong>{t("安装包内置的运行环境有更新")}</strong><span>{t("更新会替换当前 Ubuntu 根目录，其中安装的软件、本地修改和未导出的文件将被清除。")}</span></div>
+          <div><strong>{t("安装包内置的运行环境有更新")}</strong><span>{t("更新会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能和你安装的插件会保留。")}</span></div>
         </div>
       )}
 
@@ -1087,6 +1088,8 @@ interface SettingsScreenProps {
    */
   onDraftChange: (update: (current: SettingsDraft) => SettingsDraft, dirty?: boolean) => void
   onLaunch: () => void
+  /** 用户确认「密钥已在 Harness 内配置过」时的放行入口。 */
+  onLaunchConfirmed: () => void
   /** 跳转到系统「显示在其他应用上层」设置页；权限只能由用户手动开启。 */
   onOpenOverlaySettings: () => void
   onOpenShizuku: () => void
@@ -1096,7 +1099,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadHarnessLog, overlayBall, overlayBallReadFailed, onDraftChange, page, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadHarnessLog, overlayBall, overlayBallReadFailed, onDraftChange, page, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
   if (settingsReadStatus === 'failed') {
     return <div className="screen loading-screen">
       <p role="alert">{t("无法读取最新设置，请重试")}</p>
@@ -1195,6 +1198,21 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadHarnessLog, ov
             <span className="section-icon"><Bot size={19} /></span>
             <div><h2 id="model-settings">{t("模型供应商")}</h2><p>{t("密钥在本机加密保存，只在本机启动 Harness 时使用，页面不会回显")}</p></div>
           </div>
+          {!hasConfiguredModelCredential(settings) && (
+            /*
+             * 应用看不到 Harness 自己保存的凭据（网页端模型页写入 ~/.dsh/.credentials.yaml）。
+             * 因此这里给出显式放行入口，而不是把这类用户永久挡在门外。
+             */
+            <div className="inline-alert warning" role="alert">
+              <AlertTriangle size={19} />
+              <div>
+                <strong>{t("还没有可用的模型凭据")}</strong>
+                <span>{t("没有密钥时每一轮对话都会失败，因此应用不会打开 Harness；保存一次 API Key 即可。若你已在 Harness 页面内配置过密钥，可以直接打开。")}</span>
+              </div>
+              <button className="button button-secondary" type="button" disabled={busy !== null} onClick={onLaunchConfirmed}>
+                {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Rocket size={18} />}{t("我已在 Harness 内配置过，仍要打开")}</button>
+            </div>
+          )}
           <label className="field">
             <span>{t("供应商")}</span>
             <select
@@ -1327,7 +1345,7 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadHarnessLog, ov
             />
           </label>
           <label className="toggle-row">
-            <span><strong>{t("保持屏幕常亮")}</strong><small>{t("运行终端时生效")}</small></span>
+            <span><strong>{t("保持屏幕常亮")}</strong><small>{t("应用管理与 Harness 对话界面均保持常亮")}</small></span>
             <input
               type="checkbox"
               role="switch"
@@ -1602,7 +1620,7 @@ function UpdateDialog({ busy, onCancel, onConfirm }: UpdateDialogProps) {
         <button className="dialog-close" type="button" aria-label={t("关闭")} onClick={onCancel} disabled={busy}><X size={19} /></button>
         <span className="dialog-danger-icon"><RefreshCw size={23} /></span>
         <h2 id="update-title">{t("更新 Ubuntu 运行环境")}</h2>
-        <p>{t("当前 APK 内置了新版运行环境。继续后会替换已安装的 Ubuntu 根目录，其中安装的软件、本地修改和未导出的文件将被清除；应用设置不受影响。")}</p>
+        <p>{t("当前 APK 内置了新版运行环境。继续后会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能和你安装的插件会保留，应用设置也不受影响。")}</p>
         <div className="dialog-actions">
           <button className="button button-secondary" type="button" onClick={onCancel} disabled={busy}>{t("暂不更新")}</button>
           <button className="button button-danger" type="button" onClick={onConfirm} disabled={busy}>
@@ -1983,8 +2001,26 @@ export function App() {
     }, t("运行环境已更新"))
   }, [run, setActiveView])
 
-  const launchHarness = useCallback(() => {
+  /**
+   * 真正的打开流程。`skipCredentialGate` 只允许由用户显式确认的入口传入
+   * （引导页与「模型与密钥」页的「我已在 Harness 内配置过」按钮）：
+   * **绝不要把事件对象或其它真值直接传进来**，否则等于默认绕过门禁。
+   */
+  const openHarness = useCallback((skipCredentialGate: boolean) => {
     if (busyRef.current !== null) return
+    /*
+     * 首次配置未完成时不打开 Harness：没有模型密钥时每轮对话都会因缺少凭据失败，
+     * 打开只会看到一个用不了的界面。这里挡在唯一的打开入口上，覆盖引导页、
+     * 首页按钮与「打开应用时自动启动」，并直接把用户送到「模型与密钥」页。
+     * 设置尚未读取（settings 为 null）时放行，不做无法验证的判断；
+     * 本应用看不到 Harness 自己保存的凭据，因此留出用户显式确认后放行的通道。
+     */
+    if (!skipCredentialGate && settings !== null && !hasConfiguredModelCredential(settings)) {
+      autoLaunchAttempted.current = true
+      notify(t("未检测到模型凭据：请先在「模型与密钥」保存一次 API Key 再打开 Harness"), 'error')
+      setActiveView(SETTINGS_PAGE_META.models.view)
+      return
+    }
     if (runtime.updateAvailable) {
       autoLaunchAttempted.current = true
       requestRuntimeUpdate()
@@ -2019,7 +2055,13 @@ export function App() {
         setBusy(null)
       }
     })()
-  }, [notify, requestRuntimeUpdate, runtime, setActiveView])
+  }, [notify, requestRuntimeUpdate, runtime, setActiveView, settings])
+
+  /** 常规打开入口：没有本机模型凭据时会被拦下并跳转到「模型与密钥」。 */
+  const launchHarness = useCallback(() => openHarness(false), [openHarness])
+
+  /** 用户已确认「密钥在 Harness 里配置过」时的放行入口，只在显式按钮上使用。 */
+  const launchHarnessConfirmed = useCallback(() => openHarness(true), [openHarness])
 
   useEffect(() => {
     if (language === null || onboardingOpen || booting || activeView !== 'conversation' || busy !== null || autoLaunchAttempted.current) return
@@ -2221,7 +2263,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()
@@ -2269,6 +2311,7 @@ export function App() {
           onAuthorize={requestShizukuPermission}
           onOpenShizuku={openShizuku}
           onOpenHarness={launchHarness}
+          onOpenHarnessConfirmed={launchHarnessConfirmed}
           onDone={() => {
             try {
               window.localStorage.setItem(ONBOARDING_STORAGE_KEY, '1')

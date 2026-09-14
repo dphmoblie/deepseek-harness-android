@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { t } from '../i18n'
 import { ArrowLeft, ArrowRight, Blocks, Check, KeyRound, Loader2, Rocket, ShieldCheck, Sparkles, X } from 'lucide-react'
 import { CustomProviders } from './CustomProviders'
-import { MODEL_PROVIDERS } from '../modelProviders'
+import { hasConfiguredModelCredential, MODEL_PROVIDERS } from '../modelProviders'
 import type { CustomModelProvider, ModelProviderId, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from '../platform/types'
 
 export const ONBOARDING_STORAGE_KEY = 'dsh-mobile-onboarding-v1'
@@ -16,6 +16,8 @@ interface OnboardingProps {
   onAuthorize: () => void
   onOpenShizuku: () => void
   onOpenHarness: () => void
+  /** 用户确认「密钥已在 Harness 内配置过」时的放行入口。 */
+  onOpenHarnessConfirmed: () => void
   onDone: () => void
   onSaveSettings?: (settings: RuntimeSettingsUpdate) => void
 }
@@ -36,7 +38,7 @@ function manifestConfigured(settings: RuntimeSettings | null): boolean {
 
 export function Onboarding({
   busy, runtime, shizuku, settings,
-  onInstall, onAuthorize, onOpenShizuku, onOpenHarness, onDone, onSaveSettings,
+  onInstall, onAuthorize, onOpenShizuku, onOpenHarness, onOpenHarnessConfirmed, onDone, onSaveSettings,
 }: OnboardingProps) {
   const [step, setStep] = useState(0)
   const [apiKeyDraft, setApiKeyDraft] = useState('')
@@ -48,6 +50,8 @@ export function Onboarding({
 
   const installed = ['ready', 'running'].includes(runtime.phase)
   const authorized = shizuku.permission === 'granted'
+  // 首次配置必须完成一次模型密钥：没有密钥时 Harness 里的对话必然失败。
+  const modelConfigured = hasConfiguredModelCredential(settings)
 
   useEffect(() => {
     setCustomProviders(settings?.customModelProviders ?? [])
@@ -126,6 +130,9 @@ export function Onboarding({
                   setApiKeyDraft('')
                 }}>
                   <p>{t("选择模型供应商并保存 API Key。密钥在设备上加密保存，页面不会回显明文。")}</p>
+                  {!modelConfigured && (
+                    <p className="onboarding-warn">{t("首次配置至少要保存一份模型 API Key：没有密钥时「打开 Harness」不可用。")}</p>
+                  )}
                   <label className="field">
                     <span>{t("供应商")}</span>
                     <select value={selectedProvider} onChange={event => setSelectedProvider(event.target.value as ModelProviderId | 'custom')}>
@@ -142,7 +149,7 @@ export function Onboarding({
                       autoComplete="new-password"
                       spellCheck={false}
                       maxLength={200}
-                      placeholder={t("留空则稍后在设置页配置")}
+                      placeholder={t("粘贴 API Key（必填）")}
                       value={apiKeyDraft}
                       onChange={event => setApiKeyDraft(event.target.value)}
                     />
@@ -192,12 +199,33 @@ export function Onboarding({
               )}
               {step === 5 && (
                 <div className="onboarding-body">
-                  <p>{t("一切就绪。打开 Harness 开始对话；随时返回本界面管理运行环境和终端。")}</p>
-                  <div className="onboarding-actions-row">
-                    <button className="button button-primary" type="button" disabled={busy !== null || runtime.phase !== 'running'} onClick={onOpenHarness}>
-                      <Rocket size={18} />
-                      {t("打开 Harness")}</button>
-                  </div>
+                  {modelConfigured ? (
+                    <>
+                      <p>{t("一切就绪。打开 Harness 开始对话；随时返回本界面管理运行环境和终端。")}</p>
+                      <div className="onboarding-actions-row">
+                        <button className="button button-primary" type="button" disabled={busy !== null || runtime.phase !== 'running'} onClick={onOpenHarness}>
+                          <Rocket size={18} />
+                          {t("打开 Harness")}</button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="onboarding-warn">{t("还没配置模型 API Key，因此暂不打开 Harness：没有密钥时每一轮对话都会因缺少凭据失败。")}</p>
+                      <ul>
+                        <li>{t("密钥加密保存在本机，页面不会回显明文，也不会回传到管理界面；")}</li>
+                        <li>{t("配置成功后本步骤会出现「打开 Harness」按钮；")}</li>
+                        <li>{t("如果你已在 Harness 页面内配置过密钥，也可以直接打开：应用看不到 Harness 自己保存的凭据，不会代你确认它是否可用。")}</li>
+                      </ul>
+                      <div className="onboarding-actions-row">
+                        <button className="button button-primary" type="button" disabled={busy !== null} onClick={() => setStep(2)}>
+                          <KeyRound size={18} />{t("去配置 API Key")}
+                        </button>
+                        <button className="button button-secondary" type="button" disabled={busy !== null || runtime.phase !== 'running'} onClick={onOpenHarnessConfirmed}>
+                          <Rocket size={18} />{t("我已在 Harness 内配置过，仍要打开")}
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
               <div className="dialog-actions onboarding-nav">

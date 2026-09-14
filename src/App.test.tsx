@@ -71,7 +71,9 @@ const settings: RuntimeSettings = {
   manifestSha256: 'a'.repeat(64),
   keepScreenAwake: true,
   terminalFontSize: 14,
-  configuredModelProviders: [],
+  // 默认视为「本机已保存过一次模型密钥」：没有密钥时应用会拦住「打开 Harness」，
+  // 而这里多数用例关心的是设置与启动流程本身，门禁行为有专门用例覆盖。
+  configuredModelProviders: ['deepseek'],
 }
 
 const shizuku: ShizukuState = {
@@ -149,10 +151,35 @@ describe('App conversation gate', () => {
     expect(bridge.openHarness).not.toHaveBeenCalled()
 
     fireEvent.click(updateButton)
-    expect(await screen.findByRole('dialog', { name: '更新 Ubuntu 运行环境' })).toHaveTextContent('本地修改和未导出的文件将被清除')
+    expect(await screen.findByRole('dialog', { name: '更新 Ubuntu 运行环境' })).toHaveTextContent('会话、模型密钥、Harness 设置、附件、技能和你安装的插件会保留')
     fireEvent.click(screen.getByRole('button', { name: '确认更新' }))
 
     await waitFor(() => expect(bridge.install).toHaveBeenCalledWith({ manifestUrl: '', manifestSha256: '' }))
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  })
+
+  it('没有保存过模型密钥时不打开 Harness，而是引导到「模型与密钥」', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, configuredModelProviders: [] })
+
+    render(<App />)
+
+    // 首次配置未完成：连启动都不做，直接落在密钥设置页并说明原因。
+    expect(await screen.findByRole('heading', { name: '模型与密钥' })).toBeInTheDocument()
+    expect(await screen.findByText('未检测到模型凭据：请先在「模型与密钥」保存一次 API Key 再打开 Harness')).toBeInTheDocument()
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+    expect(bridge.openHarness).not.toHaveBeenCalled()
+  })
+
+  it('「模型与密钥」页的显式确认仍可打开 Harness', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, configuredModelProviders: [] })
+
+    render(<App />)
+
+    // 门禁先把用户送到「模型与密钥」；只有那里的放行按钮能跳过凭据检查。
+    await screen.findByRole('heading', { name: '模型与密钥' })
+    expect(bridge.openHarness).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '我已在 Harness 内配置过，仍要打开' }))
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
   })
 
