@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 自适应图标：背景位图铺满 108dp 画布，前景留空（全透明）。
-     源图是满幅画面（最外 1% 只有一圈白边，6% 处已含画面内容），因此把整幅图作为背景层，
-     由系统按启动器形状裁切边缘即是预期效果；前景层不叠任何内容，避免同一画面出现两次。
-     传统图标（mipmap-*/ic_launcher.png）按圆角方形裁切、ic_launcher_round.png 按圆形裁切。 -->
+<!-- 自适应图标：白底已从画面键出，背景层全透明，前景层是主体（缩进 66dp 安全区）。
+     源图是「主体 + 白底」，最外 1% 为纯白；直接按满幅铺开会把画面边缘连同主体一起被遮罩裁掉，
+     因此改为：只把**与画面边缘连通的**近白像素变透明（保留被主体围住的白，避免打洞），
+     再把主体缩到安全区内居中 —— 这样任何遮罩形状都只裁到透明区域。
+     传统图标（mipmap-*/ic_launcher.png）按圆角方形裁切、ic_launcher_round.png 按圆形裁切，
+     两者同样是透明背景 + 居中主体。 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@mipmap/ic_launcher_background" />
     <foreground android:drawable="@mipmap/ic_launcher_foreground" />
