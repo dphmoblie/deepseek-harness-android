@@ -17,6 +17,8 @@
 [![React 18](https://img.shields.io/badge/React%2018-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 
+<img src="docs/images/app-icon-256.png" width="128" alt="App icon: white background keyed out, transparent">
+
 **DeepSeek Harness for Android** runs the full [DeepSeek Harness](https://github.com/deepseek-ai/dsh) agent environment — an Ubuntu userspace, Node.js, and the official Harness web console — directly on an Android phone. No root is required: the complete Linux environment executes inside [PRoot](https://github.com/proot-me/proot), and Harness is served on Android loopback and displayed in a navigation-restricted internal WebView.
 
 | | |
@@ -51,6 +53,10 @@
 - **Built-in and custom model providers.** Credentials for DeepSeek, OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, xAI, Mistral, and your own OpenAI-compatible endpoints are encrypted with the Android Keystore and injected only into the runtime process. They are never returned to the WebView.
 - **Local-only by construction.** Harness binds exclusively to `127.0.0.1`. Each start generates a fresh 256-bit transport token that protects both HTTP and WebSocket requests; the token is held in process memory only and is never persisted or embedded in URLs.
 - **Integrated terminals.** Use an Ubuntu terminal inside the PRoot environment and, optionally, a Shizuku-backed Android device terminal in the same interface.
+- **In-app runtime self-check.** When the runtime misbehaves you do not need a working `bash` to find out why: the check probes the shell, Node.js, the sandbox launcher (including its executable bit), the Landlock probe, a real confined exec, two PTY smoke tests (bare and confined), writes into the guest data and attachments directories, and the ripgrep executable bit — and reports free space. Missing permission bits or directories can be repaired in place, without modifying any file content.
+- **On-demand log reading and interpretation.** The diagnostic log (internal status codes and counters only) is readable inside the app in 64 / 256 KB tail windows; the runtime log offers 8 / 64 / 256 KB windows with keyword filtering and level colouring. When a diagnosed signature appears (missing credential, split module identity, plugin load failure, port in use), the UI states a conclusion and a next step instead of leaving you with raw text.
+- **Optional background keep-alive and overlay ball.** A foreground service raises the runtime process's priority in the background — but it **cannot** stop the system from ending the process under memory, battery, or vendor policy. The overlay ball returns to the conversation on a short tap, opens a menu on a long press, persists its position, and comes back into view after a rotation.
+- **First-run credential gate.** Until a model credential has been saved on this device, Harness is not opened (a conversation cannot work without a key) and you are taken straight to Models and keys. An explicit “I configured the key inside Harness — open anyway” entry remains available.
 
 ## How it works
 
@@ -67,7 +73,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full architecture and s
 1. Download the latest APK from the [Releases](https://github.com/dphmoblie/deepseek-harness-android/releases) page.
 2. Install the APK (allow installation from the trusted source when prompted).
 3. Open the app and wait for the embedded runtime to be read, verified, and installed — no internet connection is required for the official self-contained build.
-4. Add a model provider and API key in **Settings → Model providers**, then start Harness.
+4. Add a model provider and API key in **Settings → Models and keys**, then start Harness.
 
 When the runtime is ready, the app opens the Harness console directly and restores your most recent session.
 

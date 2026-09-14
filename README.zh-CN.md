@@ -17,6 +17,8 @@
 [![React 18](https://img.shields.io/badge/React%2018-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
 
+<img src="docs/images/app-icon-256.png" width="128" alt="应用图标：白底已键出，背景透明">
+
 **DeepSeek Harness 安卓版**可在安卓手机上直接运行完整的 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) 智能体环境——包括 Ubuntu 用户空间、Node.js 以及官方 Harness 网页控制台。设备**无需 Root**：整套 Linux 环境通过 [PRoot](https://github.com/proot-me/proot) 在用户空间内执行，Harness 服务仅监听安卓回环地址，并在禁止外部导航的内置 WebView 中展示。
 
 | | |
@@ -51,6 +53,10 @@
 - **内置与自定义模型供应商。** DeepSeek、OpenAI、Anthropic、Google Gemini、OpenRouter、Groq、xAI、Mistral 以及自建 OpenAI 兼容端点的凭据均通过 Android Keystore 加密保存，且只会注入运行时进程，绝不回传至 WebView。
 - **默认仅本地通信。** Harness 只绑定 `127.0.0.1`。每次启动都会生成全新的 256 位传输令牌，同时保护 HTTP 与 WebSocket 请求；令牌仅保存在进程内存中，不会持久化，也不会写入 URL。
 - **集成终端。** 可在同一界面中使用 PRoot 环境内的 Ubuntu 终端，以及（可选）由 Shizuku 支持的安卓设备终端。
+- **应用内运行时自检。** 运行环境出问题时不必依赖 bash——自检逐项探测 shell、Node.js、沙箱启动器（含执行位）、Landlock 探测、真实沙箱内执行、PTY 的两组冒烟（裸 PTY 与沙箱内 PTY）、访客数据目录与附件目录的写入、ripgrep 执行位，并报告可用空间。发现执行位缺失或目录缺失时可以就地修复，不修改任何文件内容。
+- **日志按需查看与判读。** 只含内部状态码与计数的诊断日志可直接在应用内阅读（尾部窗口 64 / 256 KB）；运行日志窗口可选 8 / 64 / 256 KB 并支持关键字过滤与级别着色。命中已确诊的错误特征（缺凭据、模块身份分裂、插件加载失败、端口占用等）时，界面给出结论与下一步，而不是丢一段原文让人猜。
+- **后台保持与悬浮球（可选）。** 前台服务可提高运行时进程在后台的存活优先级——但**不能阻止**系统在内存、电量或厂商策略下结束进程；悬浮球支持短按回到对话、长按菜单，位置持久化并在屏幕旋转后回到可视范围。
+- **首次配置门禁。** 本机没有保存过模型凭据时不会打开 Harness（没有密钥时对话必然失败），而是直接引导到「模型与密钥」；同时保留「我已在 Harness 内配置过，仍要打开」的显式放行入口。
 
 ## 工作原理
 
@@ -67,7 +73,7 @@
 1. 从 [Releases](https://github.com/dphmoblie/deepseek-harness-android/releases) 页面下载最新版 APK。
 2. 安装 APK（按系统提示允许来自可信来源的安装）。
 3. 打开应用，等待内置运行时完成读取、校验与安装——官方自包含版本无需联网。
-4. 在**设置 → 模型供应商**中添加模型供应商与 API 密钥，随后启动 Harness。
+4. 在**设置 → 模型与密钥**中添加模型供应商与 API 密钥，随后启动 Harness。
 
 运行时就绪后，应用会直接打开 Harness 控制台并恢复最近一次会话。
 
