@@ -602,4 +602,3 @@ export function validateOverlayBallState(value: unknown): OverlayBallState {
     serviceActive: requiredBoolean(source.serviceActive, '悬浮球服务状态'),
   }
 }
-
