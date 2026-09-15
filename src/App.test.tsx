@@ -148,6 +148,11 @@ beforeEach(() => {
     Promise.resolve({ ...diagnostic, enabled, retentionDays }))
   bridge.clearDiagnosticLog.mockResolvedValue({ ...diagnostic })
   bridge.shareDiagnosticLog.mockResolvedValue({ ...diagnostic, fileName: 'dsh-diagnostic-20260912-102030.txt', exportedBytes: 512 })
+  bridge.shareRuntimeWorkspace.mockResolvedValue(undefined)
+  bridge.listRuntimeWorkspaceFiles.mockResolvedValue([])
+  bridge.shareRuntimeWorkspaceFile.mockResolvedValue(undefined)
+  bridge.openRuntimeWorkspaceFile.mockResolvedValue(undefined)
+  bridge.deleteRuntimeWorkspaceFile.mockResolvedValue(undefined)
   bridge.addRuntimeProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })
   bridge.saveSettings.mockImplementation((value: RuntimeSettingsUpdate) => Promise.resolve(value))
   bridge.install.mockResolvedValue(undefined)
@@ -357,6 +362,33 @@ describe('App conversation gate', () => {
 
     await waitFor(() => expect(bridge.reset).toHaveBeenCalledWith('RESET_RUNTIME'))
     expect(await screen.findByRole('button', { name: '安装并进入对话' })).toBeInTheDocument()
+  })
+
+  it('在工作区弹窗中浏览、操作和刷新文件', async () => {
+    bridge.listRuntimeWorkspaceFiles
+      .mockResolvedValueOnce(['reports/summary.md', 'result.json'])
+      .mockResolvedValueOnce([])
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: /Ubuntu 运行时/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '浏览文件' }))
+
+    const dialog = await screen.findByRole('dialog', { name: '工作区文件' })
+    expect(within(dialog).getByText('2 个文件')).toBeVisible()
+    expect(within(dialog).getByText('summary.md')).toBeVisible()
+    expect(within(dialog).getByText('reports')).toBeVisible()
+    expect(within(dialog).getByText('工作区根目录')).toBeVisible()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '打开 summary.md' }))
+    await waitFor(() => expect(bridge.openRuntimeWorkspaceFile).toHaveBeenCalledWith('reports/summary.md'))
+    fireEvent.click(within(dialog).getByRole('button', { name: '分享 result.json' }))
+    await waitFor(() => expect(bridge.shareRuntimeWorkspaceFile).toHaveBeenCalledWith('result.json'))
+    fireEvent.click(within(dialog).getByRole('button', { name: '刷新' }))
+
+    expect(await within(dialog).findByText('工作区中暂无文件')).toBeVisible()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '工作区文件' })).toBeNull())
   })
 
   it('does not reopen Harness when MainActivity regains focus', async () => {
