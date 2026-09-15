@@ -4,6 +4,7 @@ const crypto = require('node:crypto')
 const childProcess = require('node:child_process')
 const http = require('node:http')
 const fsp = require('node:fs/promises')
+const path = require('node:path').posix
 const { syncBuiltinESMExports } = require('node:module')
 const { promisify } = require('node:util')
 
@@ -15,6 +16,16 @@ const SESSION_PUBLISHER = '/opt/python/bin/python3'
 const SESSION_PUBLISHER_SCRIPT = '/usr/local/lib/dsh-mobile-session-publish.py'
 const SESSION_TARGET_PATTERN = /^\/root\/\.dsh\/sessions\/[^/]{1,255}\/[^/]{1,255}\/session(?:\.v[0-9]+)?\.jsonl(?:\.zstd)?$/
 const SESSION_STAGE_PATTERN = /^session\.[A-Za-z0-9._-]{1,192}\.tmp$/
+const ATTACHMENT_ROOT = '/root/.dsh/attachments/v1/'
+const UUID_PATTERN = '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}'
+const ATTACHMENT_STAGE_PATTERN = new RegExp(`^tmp/${UUID_PATTERN}$`)
+const OBJECT_PATTERN = /^(objects|file-objects|request-images)\/([a-f0-9]{2})\/([a-f0-9]{64})$/
+const ALIAS_PATTERN = /^files\/([a-f0-9]{2})\/([a-f0-9]{64})\/[^/]+$/
+const FILE_STAGE_SUFFIX = new RegExp(`^[0-9]{1,10}\\.${UUID_PATTERN}\\.tmpdir$`)
+const LINK_FALLBACK_CODES = new Set(['EACCES', 'EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'EMLINK', 'EXDEV'])
+// The helper returns Linux errno values, including when tests run on another host OS.
+const PUBLISH_ERRORS = { 1: 'EPERM', 2: 'ENOENT', 5: 'EIO', 13: 'EACCES', 17: 'EEXIST', 18: 'EXDEV',
+  20: 'ENOTDIR', 22: 'EINVAL', 27: 'EFBIG', 28: 'ENOSPC', 30: 'EROFS', 38: 'ENOSYS', 40: 'ELOOP', 95: 'ENOTSUP' }
 const token = process.env.DSH_MOBILE_AUTH_TOKEN
 
 if (typeof token !== 'string' || !TOKEN_PATTERN.test(token)) {
@@ -27,9 +38,38 @@ const expected = Buffer.from(
   'ascii',
 )
 
-// PRoot may reject hard links on Android. The fallback performs the same
-// no-replace publication with renameat2 after validating the fixed private
-// session path. syncBuiltinESMExports updates DSH's named fs/promises import.
+function canonicalPath(value) {
+  return typeof value === 'string' && value.startsWith('/') && Buffer.byteLength(value) <= 4096 &&
+    !/[\x00-\x1f\x7f]/u.test(value) && value.slice(1).split('/').every(part =>
+      part !== '' && part !== '.' && part !== '..' && Buffer.byteLength(part) <= 255)
+}
+
+// 安全校验点：仅匹配锁定版本 DSH 的三种发布布局；任意 link 调用不改变语义。
+// Python 再次校验路径，并以不跟随符号链接的目录句柄执行，不经过 Shell。
+function isDshPublication(source, target) {
+  if (!canonicalPath(source) || !canonicalPath(target) || source === target) return false
+  if (path.dirname(source) === path.dirname(target) && SESSION_STAGE_PATTERN.test(path.basename(source)) &&
+    SESSION_TARGET_PATTERN.test(target)) return true
+  if (source.startsWith(ATTACHMENT_ROOT) && target.startsWith(ATTACHMENT_ROOT)) {
+    const from = source.slice(ATTACHMENT_ROOT.length)
+    const to = target.slice(ATTACHMENT_ROOT.length)
+    const object = OBJECT_PATTERN.exec(to)
+    if (ATTACHMENT_STAGE_PATTERN.test(from) && object && object[2] === object[3].slice(0, 2)) return true
+    const original = OBJECT_PATTERN.exec(from)
+    const alias = ALIAS_PATTERN.exec(to)
+    return original?.[1] === 'file-objects' && alias !== null && original[2] === original[3].slice(0, 2) &&
+      alias[1] === original[2] && alias[2] === original[3]
+  }
+  const staging = path.dirname(source)
+  const prefix = `.${path.basename(target)}.`
+  return path.dirname(staging) === path.dirname(target) && path.basename(source) === `${path.basename(target)}.tmp` &&
+    path.basename(staging).startsWith(prefix) && FILE_STAGE_SUFFIX.test(path.basename(staging).slice(prefix.length))
+}
+
+// PRoot may reject hard links. Session publication retains its existing rename
+// path; attachments/new files use a synced private copy followed by no-replace
+// rename, preserving the source and never exposing a partially copied target.
+// syncBuiltinESMExports updates DSH's named fs/promises import.
 const execFile = promisify(childProcess.execFile)
 const originalLink = fsp.link.bind(fsp)
 fsp.link = async (source, target) => {
@@ -37,25 +77,17 @@ fsp.link = async (source, target) => {
     return await originalLink(source, target)
   } catch (error) {
     const code = error && typeof error === 'object' ? error.code : undefined
-    const separator = typeof source === 'string' ? source.lastIndexOf('/') : -1
-    const validSessionPublication = typeof source === 'string' && typeof target === 'string' &&
-      source.length <= 4096 && target.length <= 4096 && separator > 0 &&
-      source.slice(0, separator) === target.slice(0, target.lastIndexOf('/')) &&
-      SESSION_STAGE_PATTERN.test(source.slice(separator + 1)) && SESSION_TARGET_PATTERN.test(target)
-    if (!validSessionPublication || !['EACCES', 'EPERM', 'ENOTSUP', 'EOPNOTSUPP'].includes(code)) throw error
+    if (!LINK_FALLBACK_CODES.has(code) || !isDshPublication(source, target)) throw error
     try {
-      await execFile(SESSION_PUBLISHER, [SESSION_PUBLISHER_SCRIPT, source, target], {
-        timeout: 5000,
+      await execFile(SESSION_PUBLISHER, ['-I', SESSION_PUBLISHER_SCRIPT, source, target], {
+        timeout: 60_000,
+        maxBuffer: 4096,
         windowsHide: true,
       })
     } catch (publishError) {
-      if (publishError && typeof publishError === 'object' && publishError.code === 17) {
-        const collision = new Error('session already exists')
-        collision.code = 'EEXIST'
-        throw collision
-      }
-      const failure = new Error('mobile session publication failed')
-      failure.code = 'EIO'
+      // Only return a controlled errno; subprocess output may contain private paths.
+      const failure = new Error('mobile file publication failed')
+      failure.code = publishError?.killed ? 'ETIMEDOUT' : PUBLISH_ERRORS[publishError?.code] ?? 'EIO'
       throw failure
     }
   }

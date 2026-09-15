@@ -149,35 +149,50 @@ describe('mobile Harness authentication preload', () => {
   })
 })
 
-describe('mobile session publication fallback', () => {
+describe('mobile DSH publication fallback', () => {
   let fixtureDirectory
   let failurePreload
+  const uuid = '01234567-89ab-4cde-8f01-23456789abcd'
+  const digest = 'ab'.repeat(32)
+  const attachments = '/root/.dsh/attachments/v1'
+  const session = {
+    source: '/root/.dsh/sessions/project/session/session.v3.jsonl.zstd.0123456789ab.tmp',
+    target: '/root/.dsh/sessions/project/session/session.v3.jsonl.zstd',
+  }
+  const workspace = name => ({
+    source: `/root/project/.${name}.123.${uuid}.tmpdir/${name}.tmp`, target: `/root/project/${name}`,
+  })
 
   before(async () => {
     fixtureDirectory = await mkdtemp(join(tmpdir(), 'dsh-mobile-link-'))
     failurePreload = join(fixtureDirectory, 'force-link-failure.cjs')
     await writeFile(failurePreload, `
       'use strict'
+      const fixture = JSON.parse(process.env.DSH_MOBILE_LINK_TEST)
+      global.publisherCalls = 0
       const fsp = require('node:fs/promises')
       fsp.link = async () => {
+        if (fixture.linkCode === null) return
         const error = new Error('forced Android PRoot hard-link failure')
-        error.code = 'EACCES'
+        error.code = fixture.linkCode
         throw error
       }
-      require('node:child_process').execFile = (file, args, _options, callback) => {
+      require('node:child_process').execFile = (file, args, options, callback) => {
+        global.publisherCalls++
         const valid = file === '/opt/python/bin/python3' &&
-          args[0] === '/usr/local/lib/dsh-mobile-session-publish.py' &&
-          args[1] === '/root/.dsh/sessions/project/session/session.v3.jsonl.zstd.0123456789ab.tmp' &&
-          args[2] === '/root/.dsh/sessions/project/session/session.v3.jsonl.zstd'
+          args[0] === '-I' && args[1] === '/usr/local/lib/dsh-mobile-session-publish.py' &&
+          args[2] === fixture.source && args[3] === fixture.target && args.length === 4 &&
+          options.timeout === 60000 && options.maxBuffer === 4096 && options.windowsHide === true
         if (!valid) {
           const error = new Error('invalid publisher invocation')
           error.code = 5
           callback(error, '', '')
           return
         }
-        if (process.env.DSH_MOBILE_LINK_TEST_MODE === 'collision') {
-          const error = new Error('target exists')
-          error.code = 17
+        if (fixture.helperCode || fixture.timeout) {
+          const error = new Error('private subprocess output must not escape')
+          error.code = fixture.helperCode
+          error.killed = fixture.timeout
           callback(error, '', '')
         } else {
           callback(null, '', '')
@@ -190,25 +205,27 @@ describe('mobile session publication fallback', () => {
     if (fixtureDirectory !== undefined) await rm(fixtureDirectory, { recursive: true, force: true })
   })
 
-  async function runFallback(mode) {
-    const source = '/root/.dsh/sessions/project/session/session.v3.jsonl.zstd.0123456789ab.tmp'
-    const target = '/root/.dsh/sessions/project/session/session.v3.jsonl.zstd'
+  async function runFallback(fixture = {}) {
+    const input = { ...session, linkCode: 'EACCES', ...fixture }
     const childSource = `
       (async () => {
         const { link } = await import('node:fs/promises')
+        const fixture = JSON.parse(process.env.DSH_MOBILE_LINK_TEST)
+        let result = 'published'
         try {
-          await link(${JSON.stringify(source)}, ${JSON.stringify(target)})
-          process.stdout.write('published')
+          await link(fixture.source, fixture.target)
         } catch (error) {
-          process.stdout.write(String(error.code))
+          if (error.message.includes('private subprocess')) throw error
+          result = error.code
         }
+        process.stdout.write(JSON.stringify({ result, calls: global.publisherCalls }))
       })().catch(() => process.exit(2))
     `
     const child = spawn(process.execPath, ['-e', childSource], {
       env: {
         ...process.env,
         DSH_MOBILE_AUTH_TOKEN: TOKEN,
-        DSH_MOBILE_LINK_TEST_MODE: mode,
+        DSH_MOBILE_LINK_TEST: JSON.stringify(input),
         NODE_OPTIONS: `--require=${failurePreload} --require=${PRELOAD}`,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -222,14 +239,64 @@ describe('mobile session publication fallback', () => {
       child.once('exit', resolve)
     })
     assert.equal(exitCode, 0, Buffer.concat(stderr).toString('utf8'))
-    return Buffer.concat(stdout).toString('utf8')
+    return JSON.parse(Buffer.concat(stdout).toString('utf8'))
   }
 
   it('uses the bounded no-replace publisher after a PRoot permission failure', async () => {
-    assert.equal(await runFallback('success'), 'published')
+    assert.deepEqual(await runFallback(), { result: 'published', calls: 1 })
   })
 
   it('preserves EEXIST when another writer published first', async () => {
-    assert.equal(await runFallback('collision'), 'EEXIST')
+    assert.deepEqual(await runFallback({ helperCode: 17 }), { result: 'EEXIST', calls: 1 })
+  })
+
+  for (const bucket of ['objects', 'file-objects', 'request-images']) {
+    it(`publishes staged attachment ${bucket} through the ESM link import`, async () => {
+      assert.deepEqual(await runFallback({ source: `${attachments}/tmp/${uuid}`, target: `${attachments}/${bucket}/ab/${digest}` }),
+        { result: 'published', calls: 1 })
+    })
+  }
+  it('publishes immutable file aliases with names passed as literal arguments', async () => {
+    assert.deepEqual(await runFallback({ source: `${attachments}/file-objects/ab/${digest}`,
+      target: `${attachments}/files/ab/${digest}/报告 $() ' name.txt` }), { result: 'published', calls: 1 })
+  })
+  it('publishes new workspace files, including Unicode and shell metacharacters', async () => {
+    assert.deepEqual(await runFallback(workspace("报告 $() ' name.txt")), { result: 'published', calls: 1 })
+  })
+  for (const linkCode of ['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'EMLINK', 'EXDEV']) {
+    it(`allows the bounded fallback for ${linkCode}`, async () => {
+      assert.deepEqual(await runFallback({ ...workspace('new.txt'), linkCode }), { result: 'published', calls: 1 })
+    })
+  }
+  for (const linkCode of [null, 'EEXIST', 'ENOENT', 'ENOSPC', 'EIO', 'EROFS']) {
+    it(`does not invoke a fallback after ${linkCode ?? 'successful link'}`, async () => {
+      assert.deepEqual(await runFallback({ linkCode }), { result: linkCode ?? 'published', calls: 0 })
+    })
+  }
+  for (const [helperCode, result] of [[28, 'ENOSPC'], [38, 'ENOSYS'], [40, 'ELOOP'], [13, 'EACCES'], [999, 'EIO']]) {
+    it(`returns controlled ${result} without leaking helper output`, async () => {
+      assert.deepEqual(await runFallback({ helperCode }), { result, calls: 1 })
+    })
+  }
+  it('reports helper timeout without a second lossy fallback', async () => {
+    assert.deepEqual(await runFallback({ timeout: true }), { result: 'ETIMEDOUT', calls: 1 })
+  })
+  const invalid = [
+    { source: '/root/a', target: '/root/b' },
+    { ...workspace('new.txt'), target: '/root/elsewhere/new.txt' },
+    { ...workspace('new.txt'), source: workspace('new.txt').source.replace('.123.', '.bad.') },
+    { source: `${attachments}/tmp/${uuid}`, target: `${attachments}/objects/cd/${digest}` },
+    { source: `${attachments}/file-objects/ab/${digest}`, target: `${attachments}/files/cd/${'cd'.repeat(32)}/a` },
+    { ...session, source: session.source.replace('/project/', '/../') },
+    { ...session, target: `${session.target}\n` },
+    { ...session, source: session.source.replace('/project/', '//project/') },
+    { ...workspace('a'.repeat(256)) },
+    { ...workspace('界'.repeat(90)) },
+    { ...session, source: null },
+  ]
+  invalid.forEach((fixture, index) => {
+    it(`leaves unsupported or malformed publication ${index + 1} untouched`, async () => {
+      assert.deepEqual(await runFallback(fixture), { result: 'EACCES', calls: 0 })
+    })
   })
 })
