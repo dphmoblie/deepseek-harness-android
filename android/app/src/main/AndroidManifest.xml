@@ -59,7 +59,7 @@
             android:multiprocess="false"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
-        <!-- 诊断日志导出：只暴露 cacheDir/diagnostics/ 子目录，不导出、不授予持久权限。
+        <!-- 仅暴露 cacheDir 中的诊断日志和工作区临时副本，不授予持久权限。
              分享时通过 FLAG_GRANT_READ_URI_PERMISSION 临时授权给用户选中的应用。 -->
         <provider
             android:name="androidx.core.content.FileProvider"

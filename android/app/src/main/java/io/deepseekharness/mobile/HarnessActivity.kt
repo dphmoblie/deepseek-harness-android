@@ -2,6 +2,7 @@ package io.deepseekharness.mobile
 
 import android.annotation.SuppressLint
 import android.content.ContentResolver
+import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -32,6 +33,7 @@ import io.deepseekharness.mobile.runtime.HarnessAccess
 import io.deepseekharness.mobile.runtime.RuntimeStore
 import io.deepseekharness.mobile.runtime.RuntimeWorkspaceFiles
 import java.io.ByteArrayInputStream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -215,8 +217,15 @@ class HarnessActivity : AppCompatActivity() {
     /** Native file controls remain available even when the Harness page is busy or failed. */
     private fun showWorkspaceFiles() {
         lifecycleScope.launch {
-            val manager = RuntimeWorkspaceFiles(RuntimeStore(this@HarnessActivity), cacheDir)
-            val files = withContext(Dispatchers.IO) { manager.list() }
+            val files = try {
+                val manager = RuntimeWorkspaceFiles(RuntimeStore(this@HarnessActivity), cacheDir)
+                withContext(Dispatchers.IO) { manager.list() }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                Toast.makeText(this@HarnessActivity, R.string.harness_file_action_failed, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
             if (files.isEmpty()) {
                 Toast.makeText(this@HarnessActivity, R.string.harness_workspace_empty, Toast.LENGTH_SHORT).show()
                 return@launch
@@ -259,12 +268,18 @@ class HarnessActivity : AppCompatActivity() {
                     shared,
                 )
                 val intent = Intent(if (open) Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
-                    type = manager.mimeType(path)
-                    if (open) data = uri else putExtra(Intent.EXTRA_STREAM, uri)
+                    val mime = manager.mimeType(path)
+                    if (open) setDataAndType(uri, mime) else {
+                        type = mime
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                    }
+                    clipData = ClipData.newRawUri(shared.name, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 startActivity(Intent.createChooser(intent, getString(if (open) R.string.harness_file_open else R.string.harness_file_share)))
-            } catch (_: Throwable) {
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
                 Toast.makeText(this@HarnessActivity, R.string.harness_file_action_failed, Toast.LENGTH_SHORT).show()
             }
         }
@@ -282,7 +297,9 @@ class HarnessActivity : AppCompatActivity() {
                             RuntimeWorkspaceFiles(RuntimeStore(this@HarnessActivity), cacheDir).delete(path)
                         }
                         Toast.makeText(this@HarnessActivity, R.string.harness_file_deleted, Toast.LENGTH_SHORT).show()
-                    } catch (_: Throwable) {
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
                         Toast.makeText(this@HarnessActivity, R.string.harness_file_action_failed, Toast.LENGTH_SHORT).show()
                     }
                 }

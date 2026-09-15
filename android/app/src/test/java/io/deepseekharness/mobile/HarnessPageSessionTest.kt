@@ -84,6 +84,13 @@ class HarnessPageSessionTest {
         assertThrows(IllegalArgumentException::class.java) {
             HarnessPageUrl.withVersions("http://127.0.0.1:3080/", "0.1.21-preview", "bad&value")
         }
+        assertTrue(
+            HarnessPageUrl.withVersions("http://127.0.0.1:3080/", "0.1.21-preview", "v".repeat(96))
+                .contains("runtimeVersion="),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            HarnessPageUrl.withVersions("http://127.0.0.1:3080/", "0.1.21-preview", "v".repeat(97))
+        }
     }
 
     @Test

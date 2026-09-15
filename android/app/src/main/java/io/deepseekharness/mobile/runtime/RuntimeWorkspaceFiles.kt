@@ -4,7 +4,9 @@ import android.webkit.MimeTypeMap
 import java.io.File
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.SimpleFileVisitor
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 
 /** Restricts all host-side access to ordinary files below the DSH workspace. */
@@ -24,22 +26,29 @@ class RuntimeWorkspaceFiles(private val store: RuntimeStore, private val cacheDi
                 override fun visitFile(file: java.nio.file.Path, attrs: BasicFileAttributes): FileVisitResult {
                     if (result.size >= limit) return FileVisitResult.TERMINATE
                     if (attrs.isRegularFile && !attrs.isSymbolicLink) {
-                        result += root.toPath().relativize(file).toString().replace(File.separatorChar, '/')
+                        val relative = root.toPath().relativize(file).toString().replace(File.separatorChar, '/')
+                        if (relative.length in 1..MAX_RELATIVE_PATH_CHARS) result += relative
                     }
                     return FileVisitResult.CONTINUE
                 }
+
+                override fun visitFileFailed(file: java.nio.file.Path, error: java.io.IOException): FileVisitResult =
+                    FileVisitResult.CONTINUE
             }
         )
         return result.sorted()
     }
 
     fun resolve(relative: String): File {
-        if (relative.length !in 1..240 || relative.startsWith('/') || relative.contains('\\')) {
+        if (relative.length !in 1..MAX_RELATIVE_PATH_CHARS || relative.startsWith('/') || relative.contains('\\')) {
             throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径无效")
         }
         val segments = relative.split('/')
         if (segments.any { it.isEmpty() || it == "." || it == ".." }) {
             throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径无效")
+        }
+        if (!workspace.isDirectory || Files.isSymbolicLink(workspace.toPath())) {
+            throw RuntimeFailure("WORKSPACE_FILE_UNAVAILABLE", "工作区文件不可用")
         }
         val root = workspace.canonicalFile
         var cursor = root
@@ -62,8 +71,33 @@ class RuntimeWorkspaceFiles(private val store: RuntimeStore, private val cacheDi
         if ((!directory.isDirectory && !directory.mkdirs()) || Files.isSymbolicLink(directory.toPath())) {
             throw RuntimeFailure("WORKSPACE_EXPORT_FAILED", "无法准备文件分享目录")
         }
-        return File(directory, "dsh-${System.currentTimeMillis()}-${source.name}").also { target ->
-            source.copyTo(target, overwrite = false)
+        val safeName = source.name.replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(80).ifEmpty { "file" }
+        val target = File.createTempFile("dsh-", "-$safeName", directory)
+        try {
+            Files.newInputStream(source.toPath(), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use { input ->
+                Files.newOutputStream(
+                    target.toPath(),
+                    StandardOpenOption.WRITE,
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    LinkOption.NOFOLLOW_LINKS,
+                ).use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > MAX_FILE_BYTES) {
+                            throw RuntimeFailure("WORKSPACE_FILE_UNAVAILABLE", "工作区文件超过大小限制")
+                        }
+                        output.write(buffer, 0, read)
+                    }
+                }
+            }
+            return target
+        } catch (error: Throwable) {
+            target.delete()
+            throw error
         }
     }
 
@@ -78,5 +112,6 @@ class RuntimeWorkspaceFiles(private val store: RuntimeStore, private val cacheDi
 
     companion object {
         private const val MAX_FILE_BYTES = 64L * 1024 * 1024
+        private const val MAX_RELATIVE_PATH_CHARS = 240
     }
 }

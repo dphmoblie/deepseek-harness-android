@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile
 
 import android.Manifest
+import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -54,14 +55,15 @@ import java.util.concurrent.locks.ReentrantLock
 import java.security.SecureRandom
 import java.util.Base64
 import java.io.File
-import java.io.FileInputStream
 import java.io.BufferedInputStream
 import java.io.FileOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.SimpleFileVisitor
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import kotlin.concurrent.withLock
 
@@ -806,6 +808,7 @@ class MobileRuntimePlugin : Plugin() {
                 type = "text/plain"
                 putExtra(Intent.EXTRA_STREAM, uri)
                 putExtra(Intent.EXTRA_SUBJECT, context.getString(R.string.diagnostic_share_subject))
+                clipData = ClipData.newRawUri(export.fileName, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             try {
@@ -832,11 +835,14 @@ class MobileRuntimePlugin : Plugin() {
     fun shareRuntimeWorkspace(call: PluginCall) {
         execute(call) {
             val workspace = File(controller.store.currentRoot, "root/1")
-            if (!workspace.isDirectory) {
+            if (!workspace.isDirectory || Files.isSymbolicLink(workspace.toPath())) {
                 throw RuntimeFailure("WORKSPACE_EXPORT_UNAVAILABLE", "运行时工作区尚未准备好")
             }
-            val exportDir = File(context.cacheDir, "share").apply { mkdirs() }
-            val export = File(exportDir, "dsh-workspace-${System.currentTimeMillis()}.zip")
+            val exportDir = File(context.cacheDir, "share")
+            if ((!exportDir.isDirectory && !exportDir.mkdirs()) || Files.isSymbolicLink(exportDir.toPath())) {
+                throw RuntimeFailure("WORKSPACE_EXPORT_FAILED", "无法准备工作区分享目录")
+            }
+            val export = File.createTempFile("dsh-workspace-", ".zip", exportDir)
             var entries = 0
             var bytes = 0L
             try {
@@ -845,12 +851,25 @@ class MobileRuntimePlugin : Plugin() {
                         override fun visitFile(file: java.nio.file.Path, attrs: BasicFileAttributes): FileVisitResult {
                             if (!attrs.isRegularFile || attrs.isSymbolicLink) return FileVisitResult.CONTINUE
                             if (++entries > 2_000) throw RuntimeFailure("WORKSPACE_EXPORT_TOO_LARGE", "工作区文件数量超过限制")
-                            val size = attrs.size()
-                            bytes += size
-                            if (bytes > 128L * 1024 * 1024) throw RuntimeFailure("WORKSPACE_EXPORT_TOO_LARGE", "工作区大小超过限制")
+                            if (attrs.size() > 128L * 1024 * 1024 - bytes) {
+                                throw RuntimeFailure("WORKSPACE_EXPORT_TOO_LARGE", "工作区大小超过限制")
+                            }
                             val relative = workspace.toPath().relativize(file).toString().replace(File.separatorChar, '/')
                             zip.putNextEntry(ZipEntry(relative))
-                            BufferedInputStream(FileInputStream(file.toFile())).use { input -> input.copyTo(zip) }
+                            BufferedInputStream(
+                                Files.newInputStream(file, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS),
+                            ).use { input ->
+                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read < 0) break
+                                    bytes += read
+                                    if (bytes > 128L * 1024 * 1024) {
+                                        throw RuntimeFailure("WORKSPACE_EXPORT_TOO_LARGE", "工作区大小超过限制")
+                                    }
+                                    zip.write(buffer, 0, read)
+                                }
+                            }
                             zip.closeEntry()
                             return FileVisitResult.CONTINUE
                         }
@@ -861,6 +880,7 @@ class MobileRuntimePlugin : Plugin() {
                     type = "application/zip"
                     putExtra(Intent.EXTRA_STREAM, uri)
                     putExtra(Intent.EXTRA_SUBJECT, "DSH 工作区")
+                    clipData = ClipData.newRawUri(export.name, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 context.startActivity(Intent.createChooser(send, "分享 DSH 工作区").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -888,8 +908,12 @@ class MobileRuntimePlugin : Plugin() {
         val target = manager.copyForSharing(relative)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.diagnostics", target)
         val intent = Intent(if (open) Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
-            type = manager.mimeType(relative)
-            if (open) data = uri else putExtra(Intent.EXTRA_STREAM, uri)
+            val mime = manager.mimeType(relative)
+            if (open) setDataAndType(uri, mime) else {
+                type = mime
+                putExtra(Intent.EXTRA_STREAM, uri)
+            }
+            clipData = ClipData.newRawUri(target.name, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         context.startActivity(Intent.createChooser(intent, if (open) "打开 DSH 文件" else "分享 DSH 文件").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
