@@ -27,6 +27,7 @@ PRoot, and Operit runtime materials.
 | Kotlin | Android implementation language and runtime | Apache-2.0 |
 | AndroidX | Android application support libraries | Apache-2.0 |
 | Apache Commons Compress / IO | Rootfs archive handling | Apache-2.0 |
+| SnakeYAML Engine | Bounded parsing of Harness credential-presence metadata | Apache-2.0 |
 | OkHttp | Digest-pinned HTTPS downloads | Apache-2.0 |
 | Shizuku API / provider | Optional Android shell bridge | Apache-2.0 |
 | Ubuntu 24.04 ARM64 packages | Embedded or remotely installed userspace runtime | Package-specific licenses |

@@ -250,9 +250,15 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
     keepScreenAwake: settings.keepScreenAwake,
     terminalFontSize: settings.terminalFontSize,
     configuredModelProviders: configuredModelProviders(settings.configuredModelProviders, settings.apiKey),
+    ...(settings.harnessConfiguredModelProviders === undefined ? {} : {
+      harnessConfiguredModelProviders: configuredModelProviders(settings.harnessConfiguredModelProviders, undefined),
+    }),
     ...(settings.customModelProviders === undefined ? {} : { customModelProviders: validateCustomModelProviders(settings.customModelProviders) }),
     ...(settings.configuredCustomModelProviders === undefined ? {} : {
       configuredCustomModelProviders: validateCustomCredentialIds(settings.configuredCustomModelProviders, '自定义模型凭据状态'),
+    }),
+    ...(settings.harnessConfiguredCustomModelProviders === undefined ? {} : {
+      harnessConfiguredCustomModelProviders: validateCustomCredentialIds(settings.harnessConfiguredCustomModelProviders, 'Harness 自定义模型凭据状态'),
     }),
     autoLaunch,
     keepRuntimeInBackground,
@@ -303,9 +309,15 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
   if (typeof overlayBallEnabled !== 'boolean') throw new Error('悬浮球设置格式无效')
   const configuredProviders = configuredModelProviders(settings.configuredModelProviders, settings.apiKey)
   const customSettings = {
+    ...(settings.harnessConfiguredModelProviders === undefined ? {} : {
+      harnessConfiguredModelProviders: configuredModelProviders(settings.harnessConfiguredModelProviders, undefined),
+    }),
     ...(settings.customModelProviders === undefined ? {} : { customModelProviders: validateCustomModelProviders(settings.customModelProviders) }),
     ...(settings.configuredCustomModelProviders === undefined ? {} : {
       configuredCustomModelProviders: validateCustomCredentialIds(settings.configuredCustomModelProviders, '自定义模型凭据状态'),
+    }),
+    ...(settings.harnessConfiguredCustomModelProviders === undefined ? {} : {
+      harnessConfiguredCustomModelProviders: validateCustomCredentialIds(settings.harnessConfiguredCustomModelProviders, 'Harness 自定义模型凭据状态'),
     }),
   }
   if (settings.manifestUrl === '' && settings.manifestSha256 === '') {

@@ -5,7 +5,10 @@ import { MAX_CUSTOM_MODELS, MAX_CUSTOM_PROVIDERS } from '../platform/customProvi
 
 interface Props {
   providers: CustomModelProvider[]
+  /** App 加密存储中的凭据；只有这些凭据能由本组件清除。 */
   configured: string[]
+  /** Harness 自己的凭据文件中的只读配置状态。 */
+  harnessConfigured?: string[]
   credentials: Record<string, string>
   cleared: string[]
   onChange: (providers: CustomModelProvider[]) => void
@@ -13,7 +16,7 @@ interface Props {
   onClear: (ids: string[]) => void
 }
 
-export function CustomProviders({ providers, configured, credentials, cleared, onChange, onCredentials, onClear }: Props) {
+export function CustomProviders({ providers, configured, harnessConfigured = [], credentials, cleared, onChange, onCredentials, onClear }: Props) {
   const update = (index: number, changes: Partial<CustomModelProvider>): void => {
     onChange(providers.map((provider, i) => i === index ? { ...provider, ...changes } : provider))
   }
@@ -28,7 +31,7 @@ export function CustomProviders({ providers, configured, credentials, cleared, o
         }}><Trash2 size={18} /></button>
       </div>
       <div className="custom-provider-fields">
-        <label className="field"><span>{t('供应商标识')}</span><input required maxLength={48} pattern="[a-z][a-z0-9]*(?:-[a-z0-9]+)*" title={t('小写字母与数字，用连字符分隔，例如 gateway-1')} value={provider.id} disabled={configured.includes(provider.id)} onChange={event => {
+        <label className="field"><span>{t('供应商标识')}</span><input required maxLength={48} pattern="[a-z][a-z0-9]*(?:-[a-z0-9]+)*" title={t('小写字母与数字，用连字符分隔，例如 gateway-1')} value={provider.id} disabled={configured.includes(provider.id) || harnessConfigured.includes(provider.id)} onChange={event => {
           const nextId = event.target.value
           if (credentials[provider.id]) {
             const next = { ...credentials, [nextId]: credentials[provider.id] }
@@ -46,7 +49,11 @@ export function CustomProviders({ providers, configured, credentials, cleared, o
       </select></label>
       <label className="field"><span>Base URL</span><input required type="url" maxLength={2048} placeholder="https://api.example.com/v1" value={provider.baseUrl} onChange={event => update(index, { baseUrl: event.target.value })} /></label>
       <label className="field"><span>API Key</span><input type="password" autoComplete="new-password" spellCheck={false} maxLength={200} value={credentials[provider.id] ?? ''}
-        placeholder={configured.includes(provider.id) && !cleared.includes(provider.id) ? t('已配置，留空保持不变') : t('输入 API Key')}
+        placeholder={harnessConfigured.includes(provider.id) && (!configured.includes(provider.id) || cleared.includes(provider.id))
+          ? t('已在 Harness 中配置，留空保持不变')
+          : configured.includes(provider.id) && !cleared.includes(provider.id)
+            ? t('已配置，留空保持不变')
+            : t('输入 API Key')}
         onChange={event => {
           const next = { ...credentials }
           if (event.target.value) next[provider.id] = event.target.value

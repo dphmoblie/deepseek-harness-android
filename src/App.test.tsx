@@ -370,7 +370,11 @@ describe('App conversation gate', () => {
     bridge.getState.mockResolvedValueOnce({ ...runningState })
     bridge.getSettings
       .mockResolvedValueOnce({ ...settings, configuredModelProviders: [] })
-      .mockResolvedValue({ ...settings, configuredModelProviders: ['deepseek'] })
+      .mockResolvedValue({
+        ...settings,
+        configuredModelProviders: [],
+        harnessConfiguredModelProviders: ['deepseek'],
+      })
     render(<App />)
 
     await screen.findByRole('dialog', { name: '欢迎使用 DeepSeek Harness Android' })
@@ -1058,6 +1062,48 @@ describe('设置草稿与未保存的输入', () => {
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
     await screen.findByRole('heading', { name: '设置' })
   }
+
+  it('区分 Harness 网页凭据与应用凭据，网页凭据不会显示为可由管理端清除', async () => {
+    bridge.getSettings.mockResolvedValue({
+      ...settings,
+      configuredModelProviders: [],
+      harnessConfiguredModelProviders: ['openai'],
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('模型与密钥')
+    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
+
+    expect(screen.getByLabelText(/OpenAI API Key/)).toHaveAttribute('placeholder', '已在 Harness 中配置，留空保持不变')
+    expect(screen.queryByRole('button', { name: '清除密钥' })).toBeNull()
+  })
+
+  it('前台刷新会更新 Harness 网页凭据状态，同时保留未保存的密钥草稿', async () => {
+    bridge.getSettings.mockResolvedValue({
+      ...settings,
+      harnessConfiguredModelProviders: [],
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('模型与密钥')
+
+    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'anthropic' } })
+    fireEvent.change(screen.getByLabelText(/Anthropic API Key/), { target: { value: 'unit-test-anthropic-key' } })
+    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
+    expect(screen.getByLabelText(/OpenAI API Key/)).toHaveAttribute('placeholder', '输入 API Key')
+
+    bridge.getSettings.mockResolvedValue({
+      ...settings,
+      harnessConfiguredModelProviders: ['openai'],
+    })
+    fireEvent.focus(window)
+
+    await waitFor(() => expect(screen.getByLabelText(/OpenAI API Key/))
+      .toHaveAttribute('placeholder', '已在 Harness 中配置，留空保持不变'))
+    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'anthropic' } })
+    expect(screen.getByLabelText(/Anthropic API Key/)).toHaveValue('unit-test-anthropic-key')
+  })
 
   it('未保存的 API Key 在设置区内切页后仍然保留，并能随保存一起提交', async () => {
     render(<App />)

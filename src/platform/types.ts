@@ -70,9 +70,13 @@ export interface RuntimeSettings extends RuntimeSource {
   terminalFontSize: number
   /** 已配置凭据的供应商；只返回状态，不向 WebView 回传凭据明文。 */
   configuredModelProviders: ModelProviderId[]
+  /** Harness 网页凭据文件中已配置的供应商；只读状态，不可由管理端清除。 */
+  harnessConfiguredModelProviders?: ModelProviderId[]
   /** 自定义供应商元数据；旧版桥接可缺省，保存的密钥绝不回传。 */
   customModelProviders?: CustomModelProvider[]
   configuredCustomModelProviders?: string[]
+  /** Harness 网页凭据文件中已配置的自定义供应商；只读状态。 */
+  harnessConfiguredCustomModelProviders?: string[]
   /** 旧版原生桥接兼容字段；校验后只迁移为 DeepSeek 的已配置状态。 */
   apiKey?: string
   /** 打开应用时自动启动 Harness（默认 true）；旧存储/测试可能缺省。 */

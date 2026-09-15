@@ -157,6 +157,7 @@ export function Onboarding({
                   {selectedProvider === 'custom' && <CustomProviders
                     providers={customProviders}
                     configured={settings?.configuredCustomModelProviders ?? []}
+                    harnessConfigured={settings?.harnessConfiguredCustomModelProviders ?? []}
                     credentials={customCredentials}
                     cleared={clearedCustomProviders}
                     onChange={setCustomProviders}
@@ -167,8 +168,15 @@ export function Onboarding({
                     <KeyRound size={18} />{selectedProvider === 'custom' ? t('保存自定义供应商') : t('保存 API Key')}
                   </button>
                   <p className="onboarding-status">{selectedProvider === 'custom'
-                    ? t('已配置 {0} 个自定义供应商密钥', settings?.configuredCustomModelProviders?.length ?? 0)
-                    : settings?.configuredModelProviders.includes(selectedProvider) ? t('已配置') : t('未配置')}</p>
+                    ? t('已配置 {0} 个自定义供应商密钥', new Set([
+                        ...(settings?.configuredCustomModelProviders ?? []),
+                        ...(settings?.harnessConfiguredCustomModelProviders ?? []),
+                      ]).size)
+                    : settings?.configuredModelProviders.includes(selectedProvider)
+                      ? t('已配置')
+                      : settings?.harnessConfiguredModelProviders?.includes(selectedProvider)
+                        ? t('已在 Harness 中配置')
+                        : t('未配置')}</p>
                 </form>
               )}
               {step === 3 && (
@@ -214,7 +222,7 @@ export function Onboarding({
                       <ul>
                         <li>{t("密钥加密保存在本机，页面不会回显明文，也不会回传到管理界面；")}</li>
                         <li>{t("配置成功后本步骤会出现「打开 Harness」按钮；")}</li>
-                        <li>{t("如果你已在 Harness 页面内配置过密钥，也可以直接打开：应用看不到 Harness 自己保存的凭据，不会代你确认它是否可用。")}</li>
+                        <li>{t("管理端只读取 Harness 凭据文件中的配置状态，不读取密钥内容；若凭据来自其他来源，也可以直接打开，但应用不会代你确认它是否可用。")}</li>
                       </ul>
                       <div className="onboarding-actions-row">
                         <button className="button button-primary" type="button" disabled={busy !== null} onClick={() => setStep(2)}>

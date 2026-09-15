@@ -1671,8 +1671,12 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog,
       ? t(PHASE_META[keepAlive.lastPhase].label)
       : `${t(PHASE_META[keepAlive.lastPhase].label)} · ${keepAliveRecordedAt}`
   const selectedProviderConfigured = selectedProvider !== 'custom' && (
-    settings.configuredModelProviders.includes(selectedProvider) || credentialDrafts[selectedProvider] !== undefined
-  ) && !clearedProviders.includes(selectedProvider)
+    settings.harnessConfiguredModelProviders?.includes(selectedProvider) === true
+    || (
+      (settings.configuredModelProviders.includes(selectedProvider) || credentialDrafts[selectedProvider] !== undefined)
+      && !clearedProviders.includes(selectedProvider)
+    )
+  )
   const saveDraft = (): void => {
     // 悬浮球是原生侧可被菜单直接修改的独立偏好。只有用户在本页实际拨动开关时，
     // 才把它作为更新字段发送；否则省略该字段，让原生侧保留菜单刚写入的值。
@@ -1709,14 +1713,14 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog,
           </div>
           {!hasConfiguredModelCredential(settings) && (
             /*
-             * 应用看不到 Harness 自己保存的凭据（网页端模型页写入 ~/.dsh/.credentials.yaml）。
-             * 因此这里给出显式放行入口，而不是把这类用户永久挡在门外。
+             * 应用只读取 Harness 凭据文件中的白名单配置状态，不读取密钥内容，也无法识别
+             * 用户自行维护的其它来源。因此保留显式放行入口，避免这类用户被永久挡在门外。
              */
             <div className="inline-alert warning" role="alert">
               <AlertTriangle size={19} />
               <div>
                 <strong>{t("还没有可用的模型凭据")}</strong>
-                <span>{t("没有密钥时每一轮对话都会失败，因此应用不会打开 Harness；保存一次 API Key 即可。若你已在 Harness 页面内配置过密钥，可以直接打开。")}</span>
+                <span>{t("没有密钥时每一轮对话都会失败，因此应用不会打开 Harness；保存一次 API Key 即可。若状态尚未同步，或凭据来自 Harness 的其他来源，可以直接打开。")}</span>
               </div>
               <button className="button button-secondary" type="button" disabled={busy !== null} onClick={onLaunchConfirmed}>
                 {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Rocket size={18} />}{t("我已在 Harness 内配置过，仍要打开")}</button>
@@ -1729,8 +1733,9 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog,
               onChange={event => setSelectedProvider(event.target.value as ModelProviderId | 'custom')}
             >
               {MODEL_PROVIDERS.map(provider => {
-                const configured = (settings.configuredModelProviders.includes(provider.id) || credentialDrafts[provider.id] !== undefined)
-                  && !clearedProviders.includes(provider.id)
+                const configured = settings.harnessConfiguredModelProviders?.includes(provider.id) === true
+                  || ((settings.configuredModelProviders.includes(provider.id) || credentialDrafts[provider.id] !== undefined)
+                    && !clearedProviders.includes(provider.id))
                 return <option key={provider.id} value={provider.id}>{provider.label}{configured ? t("（已配置）") : ''}</option>
               })}
               <option value="custom">{t('自定义')}</option>
@@ -1743,7 +1748,10 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog,
               autoComplete="new-password"
               spellCheck={false}
               maxLength={200}
-              placeholder={selectedProviderConfigured ? t("已配置，留空保持不变") : t("输入 API Key")}
+              placeholder={settings.harnessConfiguredModelProviders?.includes(selectedProvider) === true
+                && (!settings.configuredModelProviders.includes(selectedProvider) || clearedProviders.includes(selectedProvider))
+                ? t("已在 Harness 中配置，留空保持不变")
+                : selectedProviderConfigured ? t("已配置，留空保持不变") : t("输入 API Key")}
               value={credentialDrafts[selectedProvider] ?? ''}
               onChange={event => {
                 const value = event.target.value
@@ -1781,6 +1789,7 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog,
           {selectedProvider === 'custom' && <CustomProviders
             providers={settings.customModelProviders ?? []}
             configured={settings.configuredCustomModelProviders ?? []}
+            harnessConfigured={settings.harnessConfiguredCustomModelProviders ?? []}
             credentials={customCredentials}
             cleared={clearedCustomProviders}
             onChange={providers => setDraft({ ...settings, customModelProviders: providers })}
@@ -2241,6 +2250,26 @@ export function App() {
     setSettingsDraft(current => draftFromSettings(next, current))
   }, [])
 
+  /**
+   * Applies a fresh native snapshot without discarding unsaved form input.
+   * Harness credential presence is read-only in this UI, so it can be refreshed independently.
+   */
+  const applyRefreshedSettings = useCallback((next: RuntimeSettings) => {
+    setSettings(next)
+    if (!settingsDraftDirty.current) {
+      resyncSettingsDraft(next)
+      return
+    }
+    setSettingsDraft(current => current === null ? current : {
+      ...current,
+      settings: {
+        ...current.settings,
+        harnessConfiguredModelProviders: next.harnessConfiguredModelProviders,
+        harnessConfiguredCustomModelProviders: next.harnessConfiguredCustomModelProviders,
+      },
+    })
+  }, [resyncSettingsDraft])
+
   const readOverlayBall = useCallback(async () => {
     const revision = ++overlayBallReadRevision.current
     try {
@@ -2460,8 +2489,7 @@ export function App() {
       void runtimeBridge.getSettings()
         .then(next => {
           if (cancelled || revision !== settingsReadRevision.current) return
-          setSettings(next)
-          if (!settingsDraftDirty.current) resyncSettingsDraft(next)
+          applyRefreshedSettings(next)
         })
         .catch(() => {
           // 前台恢复属于后台同步；读取失败时保留最近一次设置快照，不弹重复错误。
@@ -2525,7 +2553,7 @@ export function App() {
       window.removeEventListener('focus', handleFocus)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [notify, readOverlayBall, resyncSettingsDraft])
+  }, [applyRefreshedSettings, notify, readOverlayBall])
 
   const run = useCallback(async (id: string, operation: () => Promise<void>, success?: string) => {
     if (busyRef.current !== null) return
@@ -2600,8 +2628,8 @@ export function App() {
      * 首次配置未完成时不打开 Harness：没有模型密钥时每轮对话都会因缺少凭据失败，
      * 打开只会看到一个用不了的界面。这里挡在唯一的打开入口上，覆盖引导页、
      * 首页按钮与「打开应用时自动启动」，并直接把用户送到「模型与密钥」页。
-     * 设置尚未读取（settings 为 null）时放行，不做无法验证的判断；
-     * 本应用看不到 Harness 自己保存的凭据，因此留出用户显式确认后放行的通道。
+     * 设置尚未读取（settings 为 null）时放行，不做无法验证的判断；管理端只能识别
+     * App 加密存储与 Harness 凭据文件，因此仍为其它凭据来源保留用户显式放行通道。
      */
     if (!skipCredentialGate && settings !== null && !hasConfiguredModelCredential(settings)) {
       autoLaunchAttempted.current = true
@@ -2667,10 +2695,7 @@ export function App() {
     void runtimeBridge.getSettings()
       .then(next => {
         if (revision !== settingsReadRevision.current) return
-        setSettings(next)
-        // 只有用户没有未保存的输入时才用落盘值重建草稿：重读是为了同步原生侧改动
-        // （例如悬浮球菜单在原生侧关了球），绝不能把用户正在输入的内容覆盖掉。
-        if (!settingsDraftDirty.current) resyncSettingsDraft(next)
+        applyRefreshedSettings(next)
         setSettingsReadStatus('idle')
       })
       .catch(() => {
@@ -2681,7 +2706,7 @@ export function App() {
         // 悬浮球查询失败不阻塞其他设置。
       })
     setActiveView(SETTINGS_PAGE_META[page].view)
-  }, [readOverlayBall, resyncSettingsDraft, setActiveView])
+  }, [applyRefreshedSettings, readOverlayBall, setActiveView])
 
   /** 更新诊断日志采集开关与保留天数；原生侧会再次夹取保留范围。 */
   const saveDiagnosticSettings = useCallback((enabled: boolean, retentionDays: number) => {
@@ -2709,7 +2734,7 @@ export function App() {
 
   const shareWorkspace = useCallback(() => {
     void run('workspace-share', () => runtimeBridge.shareRuntimeWorkspace(), t('已打开分享面板'))
-  }, [notify, run])
+  }, [run])
   const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([])
   const listWorkspaceFiles = useCallback(() => { void run('workspace-files', async () => setWorkspaceFiles(await runtimeBridge.listRuntimeWorkspaceFiles())) }, [run])
   const shareWorkspaceFile = useCallback((path: string) => { void run('workspace-file-share', () => runtimeBridge.shareRuntimeWorkspaceFile(path)) }, [run])

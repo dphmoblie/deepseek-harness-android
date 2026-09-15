@@ -893,7 +893,7 @@ class MobileRuntimePlugin : Plugin() {
             val root = File(controller.store.currentRoot, "root/1")
             val files = mutableListOf<String>()
             if (root.isDirectory) root.walkTopDown().maxDepth(6).forEach { file ->
-                if (files.size < 100 && file.isFile && !file.isSymbolicLink) {
+                if (files.size < 100 && file.isFile && !Files.isSymbolicLink(file.toPath())) {
                     files += root.toPath().relativize(file.toPath()).toString().replace(File.separatorChar, '/')
                 }
             }

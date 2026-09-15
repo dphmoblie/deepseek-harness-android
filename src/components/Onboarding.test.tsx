@@ -106,7 +106,9 @@ describe('Onboarding', () => {
   // 已配置任一来源的密钥时，最后一步才提供「打开 Harness」。
   const configuredCases: { name: string; settings: RuntimeSettings }[] = [
     { name: '内置供应商密钥', settings: { ...settings, configuredModelProviders: ['deepseek'] } },
+    { name: 'Harness 网页密钥', settings: { ...settings, harnessConfiguredModelProviders: ['deepseek'] } },
     { name: '自定义供应商密钥', settings: { ...settings, configuredCustomModelProviders: ['custom-1'] } },
+    { name: 'Harness 自定义供应商密钥', settings: { ...settings, harnessConfiguredCustomModelProviders: ['custom-1'] } },
   ]
 
   it.each(configuredCases)('calls onOpenHarness from the final step with $name', ({ settings: configured }) => {

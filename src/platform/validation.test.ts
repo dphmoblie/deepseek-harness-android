@@ -30,6 +30,7 @@ import {
   HARNESS_LOG_MAX_CHARS,
   HARNESS_LOG_WINDOW_OPTIONS,
 } from './types'
+import type { RuntimeSettings } from './types'
 
 const ipv4 = (...octets: number[]): string => octets.join('.')
 
@@ -257,6 +258,30 @@ describe('settings validation', () => {
     expect(validateSettingsUpdate({ ...validSettings, overlayBallEnabled: undefined })).not.toHaveProperty('overlayBallEnabled')
     expect(validateSettingsUpdate({ ...validSettings, overlayBallEnabled: false }).overlayBallEnabled).toBe(false)
     expect(validateSettingsUpdate({ ...validSettings, overlayBallEnabled: true }).overlayBallEnabled).toBe(true)
+  })
+
+  it('保留并校验 Harness 网页凭据的只读状态', () => {
+    const stored: RuntimeSettings = {
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: false,
+      terminalFontSize: 14,
+      configuredModelProviders: [],
+      harnessConfiguredModelProviders: ['openai'],
+      configuredCustomModelProviders: [],
+      harnessConfiguredCustomModelProviders: ['gateway-1'],
+    }
+
+    expect(validateSettings(stored).harnessConfiguredModelProviders).toEqual(['openai'])
+    expect(validateStoredSettings(stored).harnessConfiguredCustomModelProviders).toEqual(['gateway-1'])
+    expect(() => validateStoredSettings({
+      ...stored,
+      harnessConfiguredModelProviders: ['openai', 'openai'],
+    })).toThrow('重复供应商')
+    expect(() => validateStoredSettings({
+      ...stored,
+      harnessConfiguredCustomModelProviders: ['gateway-1', 'gateway-1'],
+    })).toThrow('自定义模型凭据状态')
   })
 
   it('ignores retired frontend preferences and rejects invalid provider updates', () => {
