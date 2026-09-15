@@ -398,7 +398,19 @@ test('dsh-attachment-local：link 被拒时复制发布别名，且不把源对�
   }
   const { patched, linkControl } = await loadPatchedModule(t, patchedPackage('@deepseek-ai/dsh-attachment-local'))
   const work = tempDir(t, 'dsh-attachment-alias-')
-  const root = path.join(work, 'v1')
+  // `publishImmutableAlias` 内部会 `ensureDurableHome(dirname(dirname(resolve(root))))`，
+  // 也就是把 **root 的上上层**当成 DSH_HOME 并 mkdir + chmod。夹具必须让那一层落在自己的
+  // 临时目录里：若直接把 root 放在 mkdtemp 下，上上层就是 `os.tmpdir()`——Windows 本机是
+  // 用户自己的 Temp（chmod 近乎空操作，测试假绿），CI 的 Linux 上是 `/tmp`（runner 不是属主，
+  // chmod 直接 EPERM）。因此这里显式造出 home/attachments/v1 三层，并断言上上层确实是 home。
+  const home = path.join(work, 'home')
+  const root = path.join(home, 'attachments', 'v1')
+  fs.mkdirSync(root, { recursive: true })
+  assert.equal(
+    path.dirname(path.dirname(root)),
+    home,
+    '夹具的 root 层级不对：上上层必须是夹具自己的 home，不能落到 os.tmpdir()',
+  )
   const digestOf = bytes => createHash('sha256').update(bytes).digest('hex')
   const objectFor = bytes => {
     const digest = digestOf(bytes)
