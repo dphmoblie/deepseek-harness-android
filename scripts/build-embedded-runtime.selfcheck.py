@@ -86,7 +86,7 @@ def write_network_tools_fixture(
     payloads = {
         "usr/bin/curl": arm64_elf(),
         "usr/lib/git-core/git": arm64_elf(),
-        "usr/lib/git-core/git-remote-https": arm64_elf(),
+        "usr/lib/git-core/git-remote-http": arm64_elf(),
         "usr/lib/aarch64-linux-gnu/libcurl.so.4.8.0": b"libcurl",
         "usr/share/ca-certificates/mozilla/Example.crt": b"cert",
         "usr/share/git-core/templates/description": b"template",
@@ -104,6 +104,9 @@ def write_network_tools_fixture(
     # inode：预置树必须保留这个关系，同时 /usr/bin/git 仍要在归档里落成真实常规文件。
     os.link(tree / "usr/lib/git-core/git", tree / "usr/bin/git")
     os.link(tree / "usr/lib/git-core/git", tree / "usr/lib/git-core/git-add")
+    # 上游把 git-remote-https 做成指向 git-remote-http 的相对软链：软链也必须落成
+    # 真实常规文件（verify-bundle.py 的口径），否则真机 CI 会在校验阶段才暴露。
+    os.symlink("git-remote-http", tree / "usr/lib/git-core/git-remote-https")
 
 
 def check_network_tools(module: object) -> None:
@@ -138,6 +141,7 @@ def check_network_tools(module: object) -> None:
             member = members[name]
             assert member.isreg(), f"{name} 必须是真实常规文件"
             assert member.mode == 0o755, f"{name} 的执行位不对: {member.mode:o}"
+            assert member.size == 64, f"{name} 载荷为空: {member.size}"
         # 入口即使与 git-core 共 inode，也不能被去重成硬链接条目。
         assert members["usr/bin/git"].size == 64
         # git-core 内同一个 inode 的重复条目必须去重成硬链接，且指向已存在的目标。
