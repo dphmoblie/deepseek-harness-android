@@ -2,7 +2,7 @@ import appMark from './assets/app-mark.png'
 import { t, useLanguage } from './i18n'
 import { PluginSettings } from './components/PluginSettings'
 import { LanguageSettings } from './components/LanguageSettings'
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -41,7 +41,6 @@ import {
   Wrench,
   X,
 } from 'lucide-react'
-import { TerminalPanel } from './components/TerminalPanel'
 import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import { hasConfiguredModelCredential, MODEL_PROVIDERS } from './modelProviders'
 import { CustomProviders } from './components/CustomProviders'
@@ -75,6 +74,7 @@ import type {
   ShizukuState,
   TerminalKind,
 } from './platform/types'
+
 import {
   DIAGNOSTIC_LOG_WINDOW_OPTIONS,
   DIAGNOSTIC_RETENTION_MAX,
@@ -82,6 +82,8 @@ import {
   DIAGNOSTIC_RETENTION_MIN,
   HARNESS_LOG_WINDOW_OPTIONS,
 } from './platform/types'
+
+const TerminalPanel = lazy(() => import('./components/TerminalPanel').then(module => ({ default: module.TerminalPanel })))
 
 type AppView =
   | 'conversation'
@@ -819,7 +821,9 @@ function TerminalScreen({ bridge, fontSize, onAuthorize, onBack, onConnect, onEr
       </div>
 
       {ready ? (
-        <TerminalPanel key={`${kind}-${epoch}`} bridge={bridge} fontSize={fontSize} kind={kind} onError={onError} />
+        <Suspense fallback={<div className="terminal-loading"><Loader2 className="spin" size={22} /></div>}>
+          <TerminalPanel key={`${kind}-${epoch}`} bridge={bridge} fontSize={fontSize} kind={kind} onError={onError} />
+        </Suspense>
       ) : kind === 'ubuntu' ? (
         <div className="empty-terminal">
           <span><HardDrive size={27} /></span>
@@ -2653,8 +2657,10 @@ export function App() {
           nextRuntime = await runtimeBridge.startHarness()
           setRuntime(nextRuntime)
         }
-        // 启动成功后前台服务状态才可能变化（设置开启时）。
-        setKeepAlive(await runtimeBridge.getKeepAliveState())
+        // 后台状态不参与打开页面的关键路径；查询结果稍后回填即可。
+        void runtimeBridge.getKeepAliveState()
+          .then(setKeepAlive)
+          .catch(() => { /* 保留上一次已知状态。 */ })
         // HarnessActivity overlays MainActivity. Keeping settings underneath makes
         // its native management button return to the intended management surface.
         setActiveView('settings')

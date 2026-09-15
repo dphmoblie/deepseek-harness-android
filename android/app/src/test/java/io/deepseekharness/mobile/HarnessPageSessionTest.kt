@@ -76,6 +76,17 @@ class HarnessPageSessionTest {
     }
 
     @Test
+    fun harnessEntryCacheKeyIncludesRuntimeVersion() {
+        assertEquals(
+            "http://127.0.0.1:3080/?appVersion=0.1.21-preview&runtimeVersion=0.1.12",
+            HarnessPageUrl.withVersions("http://127.0.0.1:3080/", "0.1.21-preview", "0.1.12"),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            HarnessPageUrl.withVersions("http://127.0.0.1:3080/", "0.1.21-preview", "bad&value")
+        }
+    }
+
+    @Test
     fun harnessEntriesRejectUnexpectedOriginsPortsAndNoncanonicalPaths() {
         val tokenQuery = "?token=${"A".repeat(43)}"
         val invalidRoots = listOf(

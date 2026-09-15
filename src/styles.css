@@ -784,6 +784,13 @@ button:disabled {
   box-shadow: var(--shadow);
 }
 
+.terminal-loading {
+  display: grid;
+  min-height: 240px;
+  place-items: center;
+  color: var(--muted);
+}
+
 .terminal-canvas {
   position: absolute;
   inset: 0;

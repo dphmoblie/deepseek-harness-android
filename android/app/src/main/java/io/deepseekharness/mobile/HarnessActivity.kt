@@ -90,7 +90,8 @@ class HarnessActivity : AppCompatActivity() {
             finish()
             return
         }
-        if (RuntimeStore(this).keepScreenAwake()) {
+        val runtimeStore = RuntimeStore(this)
+        if (runtimeStore.keepScreenAwake()) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
 
@@ -124,7 +125,7 @@ class HarnessActivity : AppCompatActivity() {
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            cacheMode = WebSettings.LOAD_NO_CACHE
+            cacheMode = WebSettings.LOAD_DEFAULT
             allowFileAccess = false
             // 必须允许 content:// 访问，否则 <input type="file"> 选择结果（SAF 返回的都是
             // content:// URI）无法被 WebView 读取，系统文件选择器等于白弹。
@@ -163,7 +164,8 @@ class HarnessActivity : AppCompatActivity() {
             when (pageLoadGate.onCookieStored(accepted)) {
                 CookieLoadDecision.LOAD -> {
                     cookieManager.flush()
-                    webView.loadUrl(HarnessPageUrl.withAppVersion(allowedOrigin.initialUrl, BuildConfig.VERSION_NAME))
+                    val runtimeVersion = runtimeStore.installedManifest()?.version
+                    webView.loadUrl(HarnessPageUrl.withVersions(allowedOrigin.initialUrl, BuildConfig.VERSION_NAME, runtimeVersion))
                 }
                 CookieLoadDecision.REJECT -> {
                     Toast.makeText(this, R.string.harness_session_failed, Toast.LENGTH_SHORT).show()

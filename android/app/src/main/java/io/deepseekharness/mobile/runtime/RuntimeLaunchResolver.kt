@@ -116,6 +116,10 @@ class RuntimeLaunchResolver(
     }
 
     private fun detectProfile(externalCancellation: () -> Boolean): ProotLaunchProfile {
+        // Common path: validate the complete known-good mount set with one guest process.
+        // Progressive probing remains below as the diagnostic fallback for unusual ROMs.
+        fastProfile(externalCancellation)?.let { return it }
+
         val runnerResult = ProcessProbe.run(
             RuntimeLaunchSpec(
                 argv = listOf(store.launchRunnerFile.absolutePath, "--version"),
@@ -186,6 +190,30 @@ class RuntimeLaunchResolver(
             }
         }
         return profile
+    }
+
+    private fun fastProfile(externalCancellation: () -> Boolean): ProotLaunchProfile? {
+        val required = listOf(
+            ProotBindMount(store.resolverFile.absolutePath, "/etc/resolv.conf"),
+            ProotBindMount(store.hostsFile.absolutePath, "/etc/hosts"),
+            *SYSTEM_BIND_MOUNTS.toTypedArray(),
+        )
+        if (required.any { mount ->
+                !File(mount.source).exists() || !File(store.currentRoot, mount.target.removePrefix("/")).exists()
+            }
+        ) return null
+
+        val mounts = required.toMutableList()
+        val sdcard = ProotBindMount("/sdcard", "/sdcard")
+        if (File(sdcard.source).exists() && File(store.currentRoot, sdcard.target.removePrefix("/")).exists()) {
+            mounts += sdcard
+        }
+        val standard = ProotLaunchProfile(disableSeccomp = false, bindMounts = mounts)
+        val first = probeGuest(standard, externalCancellation)
+        if (first.succeeded) return standard
+        if (!RuntimeDiagnostics.shouldRetryWithoutSeccomp(first)) return null
+        val fallback = standard.copy(disableSeccomp = true)
+        return fallback.takeIf { probeGuest(it, externalCancellation).succeeded }
     }
 
     private fun probeGuest(

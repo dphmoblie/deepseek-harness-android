@@ -58,10 +58,20 @@ internal object HarnessPageUrl {
     }
 
     fun withAppVersion(entryUrl: String, appVersion: String): String {
+        return withVersions(entryUrl, appVersion, null)
+    }
+
+    fun withVersions(entryUrl: String, appVersion: String, runtimeVersion: String?): String {
         val entry = requireNotNull(parseEntryUrl(entryUrl)) { "Harness entry URL has an invalid format" }
         require(APP_VERSION.matches(appVersion)) { "Application version has an invalid format" }
-        // Retain DSH's validated bootstrap token while adding the mobile version parameter.
-        val query = listOfNotNull(entry.rawQuery, "appVersion=$appVersion").joinToString("&")
+        require(runtimeVersion == null || APP_VERSION.matches(runtimeVersion)) { "Runtime version has an invalid format" }
+        // Hashed assets may use WebView's HTTP cache. These version keys invalidate the HTML entry
+        // whenever either the APK shell or independently updated runtime frontend changes.
+        val query = listOfNotNull(
+            entry.rawQuery,
+            "appVersion=$appVersion",
+            runtimeVersion?.let { "runtimeVersion=$it" },
+        ).joinToString("&")
         return URI(entry.scheme, null, entry.host, entry.port, entry.path, query, null).toASCIIString()
     }
 }
