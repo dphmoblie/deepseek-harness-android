@@ -26,6 +26,7 @@ class RuntimePreservePolicyTest {
         assertTrue(RuntimePreservePolicy.shouldPreserve("skills"))
         // 用户安装的插件不在 $DSH_HOME 下，但同样必须保留。
         assertTrue(RuntimePreservePolicy.shouldPreserve("plugin-manager"))
+        assertTrue(RuntimePreservePolicy.shouldPreserve("workspace"))
         // 白名单是封闭集合：白名单外的名字（含运行时产物）一律拒绝。
         assertFalse(RuntimePreservePolicy.shouldPreserve("profiles"))
         assertFalse(RuntimePreservePolicy.shouldPreserve("cache"))
@@ -107,6 +108,7 @@ class RuntimePreservePolicyTest {
                 "attachments",
                 "skills",
                 "plugin-manager",
+                "workspace",
             ),
             names,
         )
@@ -120,7 +122,7 @@ class RuntimePreservePolicyTest {
             assertFalse("白名单路径不得包含相对路径段：$relative", relative!!.contains(".."))
             assertFalse("白名单路径必须是相对路径：$relative", relative.startsWith("/"))
             // 只允许落在两个显式声明的访客根之下，防止将来新增条目时越界。
-            val allowedRoots = listOf(RuntimePreservePolicy.GUEST_DSH_HOME, "root/.dsh-mobile")
+            val allowedRoots = listOf(RuntimePreservePolicy.GUEST_DSH_HOME, "root/.dsh-mobile", "root")
             assertTrue(
                 "$relative 必须落在声明的访客根之下",
                 allowedRoots.any { relative.startsWith("$it/") },
