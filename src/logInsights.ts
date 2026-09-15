@@ -36,6 +36,23 @@ interface LogInsightRule extends LogInsight {
  */
 const RULES: readonly LogInsightRule[] = [
   {
+    // 真机确诊（Android 16 / HONOR）：镜像里没有 bwrap，Landlock 启动器探测也拿不到可用结果，
+    // dsh 在要求沙箱的模式下 fail-closed —— 命令根本不执行，所以这条要排在所有泛化规则之前。
+    id: 'sandbox-backend-unavailable',
+    pattern: /no sandbox backend is usable/,
+    title: '本机没有可用的沙箱后端，命令没有被执行',
+    meaning: '这台设备上没有可用的沙箱后端：dsh 在 Linux 上按 bwrap → Landlock 的顺序探测，而报错原文说没有任何后端可用。dsh 在这里是 fail-closed——要求沙箱的模式下命令根本不会执行，报错发生在命令启动之前，不是命令本身失败。',
+    nextStep: '在 Harness 的权限预设里选择不启用沙箱的模式，然后重启运行环境；也可以先在应用内跑一次「运行时自检」确认。这是显式选择的能力降级，不是把故障修好了。',
+  },
+  {
+    // 上游缺陷（4/4 复现）：显式 undefined 与「省略该键」语义相同，但校验先判它不可序列化。
+    id: 'explicit-undefined-argument',
+    pattern: /binding arguments must be lossless json/,
+    title: '工具参数被显式传成了 undefined',
+    meaning: '这次工具调用把某个参数显式写成了 undefined（不是省略该键），dsh 的参数校验认为它无法无损序列化成 JSON，于是判为非法值。这是已知的上游校验问题，跟设备、运行时版本无关。',
+    nextStep: '让这次调用省略该键即可（例如不要写 timeoutMs: undefined）：省略与显式 undefined 语义相同，在上游修复前先按省略处理。',
+  },
+  {
     id: 'duplicate-runtime-module',
     pattern: /cannot read properties of undefined \(reading 'prepare'\)/,
     title: '工具调用全部失败（模块身份分裂）',

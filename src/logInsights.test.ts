@@ -17,6 +17,43 @@ describe('日志判读', () => {
     expect(insights[0].nextStep).toContain('MODULE_GRAPH')
   })
 
+  it('识别「本机没有可用沙箱后端」并给出可执行的能力降级指引', () => {
+    const text = 'SandboxUnavailableError: sandbox mode "workspace-write" is requested but no sandbox backend is usable on this host'
+    const insights = readLogInsights(text)
+    expect(insights.map(insight => insight.id)).toEqual(['sandbox-backend-unavailable'])
+    expect(insights[0].meaning).toContain('fail-closed')
+    // 下一步是用户显式选择的降级，不是「已修复」：文案必须指向权限预设与重启运行环境。
+    expect(insights[0].nextStep).toContain('不启用沙箱')
+    expect(insights[0].nextStep).toContain('重启运行环境')
+    // 同一特征全大写时也要命中：判读统一按小写文本匹配。
+    expect(readLogInsights('NO SANDBOX BACKEND IS USABLE').map(insight => insight.id))
+      .toEqual(['sandbox-backend-unavailable'])
+  })
+
+  it('识别工具参数被显式传成 undefined 的上游校验报错', () => {
+    const text = 'Error: binding arguments must be lossless JSON\n    at validateToolArguments'
+    const insights = readLogInsights(text)
+    expect(insights.map(insight => insight.id)).toEqual(['explicit-undefined-argument'])
+    expect(insights[0].meaning).toContain('undefined')
+    expect(insights[0].nextStep).toContain('省略')
+  })
+
+  it('相近但未确诊的沙箱与参数日志不产生结论', () => {
+    // 后端「可用」与「不可用」是两句相反的话，不能靠关键词猜。
+    expect(readLogInsights('INFO|SANDBOX|mode=workspace-write|backend=landlock|usable=true')).toEqual([])
+    expect(readLogInsights('TypeError: Cannot read properties of undefined (reading \'length\')')).toEqual([])
+  })
+
+  it('两条新规则按规则表顺序排在更泛化的规则之前', () => {
+    const text = [
+      'no sandbox backend is usable',
+      'binding arguments must be lossless JSON',
+      'Error: EADDRINUSE: address already in use :::3080',
+    ].join('\n')
+    expect(readLogInsights(text).map(insight => insight.id))
+      .toEqual(['sandbox-backend-unavailable', 'explicit-undefined-argument', 'port-in-use'])
+  })
+
   it('识别诊断日志里的受控记录', () => {
     const text = [
       '2026-09-12T10:21:04Z|WARN|MODULE_GRAPH|result=failed|count=2|files=4',

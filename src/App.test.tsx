@@ -1236,6 +1236,87 @@ describe('运行时自检', () => {
     expect(screen.queryByRole('button', { name: '修复运行时权限' })).toBeNull()
   })
 
+  it('沙箱三项失败时先给跨项汇总：说清 bash 工具为何起不来，并给出可执行指引', async () => {
+    // 真机自检的沙箱三项：探测不可用、真实执行在启动器层失败、被沙箱包裹的 PTY 秒退。
+    bridge.runRuntimeSelfCheck.mockResolvedValue({
+      operation: 'check',
+      availableBytes: 4 * 1024 * 1024 * 1024,
+      dshVersion: '0.1.5-rc.2',
+      checks: [
+        { id: 'sandbox_launcher', status: 'ok' },
+        { id: 'sandbox_probe', status: 'fail', code: 'PROBE_UNUSABLE' },
+        { id: 'sandbox_exec', status: 'fail', code: 'EXEC_LAUNCHER_FAILED' },
+        { id: 'pty_sandbox', status: 'fail', code: 'PTY_EXIT_EARLY' },
+      ],
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('运行与后台')
+    fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
+    await screen.findByRole('group', { name: '自检结果' })
+
+    const summary = screen.getByText('本机没有可用的沙箱后端').closest('[role="alert"]')
+    expect(summary).not.toBeNull()
+    // 因果链要落到用户真正看到的那条报错上，并给出「怎么继续用」的动作，而不是只列三个失败码。
+    expect(summary).toHaveTextContent('PTY shell exited during startup')
+    expect(summary).toHaveTextContent('下一步：在 Harness 的权限预设里选择不启用沙箱的模式，然后重启运行环境')
+    // 关掉沙箱是显式的能力降级：必须如实说明代价，不能写成「已修复」。
+    expect(summary).toHaveTextContent('Landlock 的文件系统隔离')
+    expect(summary).toHaveTextContent('PRoot 与 Android 应用沙箱仍然有效')
+
+    // 汇总排在逐项列表之前：先读因果，再读每一项的细节。
+    const pageText = document.body.textContent ?? ''
+    expect(pageText.indexOf('本机没有可用的沙箱后端')).toBeGreaterThanOrEqual(0)
+    expect(pageText.indexOf('本机没有可用的沙箱后端')).toBeLessThan(pageText.indexOf('沙箱探测判定为不可用'))
+  })
+
+  it('沙箱相关项全部正常时不给跨项汇总提示', async () => {
+    bridge.runRuntimeSelfCheck.mockResolvedValue({
+      operation: 'check',
+      availableBytes: 4 * 1024 * 1024 * 1024,
+      dshVersion: '0.1.5-rc.2',
+      checks: [
+        { id: 'sandbox_launcher', status: 'ok' },
+        { id: 'sandbox_probe', status: 'ok' },
+        { id: 'sandbox_exec', status: 'ok' },
+        { id: 'pty_sandbox', status: 'ok' },
+      ],
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('运行与后台')
+    fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
+
+    expect(await screen.findByText('全部 4 项检查通过')).toBeVisible()
+    expect(screen.queryByText('本机没有可用的沙箱后端')).toBeNull()
+  })
+
+  it('只有裸 PTY 失败或只支持部分 Landlock 能力时，不说成「沙箱后端不可用」', async () => {
+    // 裸 pty 上的 PTY_EXIT_EARLY 说明断在 PTY 层；PROBE_PARTIAL 是「一般仍可用」。
+    // 两者都不是「本机没有可用的沙箱后端」，汇总提示不能出现。
+    bridge.runRuntimeSelfCheck.mockResolvedValue({
+      operation: 'check',
+      availableBytes: 4 * 1024 * 1024 * 1024,
+      dshVersion: null,
+      checks: [
+        { id: 'sandbox_probe', status: 'warn', code: 'PROBE_PARTIAL' },
+        { id: 'pty', status: 'fail', code: 'PTY_EXIT_EARLY' },
+      ],
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('运行与后台')
+    fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
+    await screen.findByRole('group', { name: '自检结果' })
+
+    expect(screen.queryByText('本机没有可用的沙箱后端')).toBeNull()
+    expect(screen.getByText('PTY 子进程在就绪前退出——与 dsh bash 工具报的是同一现象')).toBeVisible()
+    expect(screen.getByText('内核只支持部分 Landlock 能力（老 ABI）')).toBeVisible()
+  })
+
   it('启动器缺失时，跳过项与失败项显示同一条结论并给出修复入口', async () => {
     // 启动器不存在时后三项没有可测的前提，原生侧报「跳过」：界面不能把它显示成
     // 「内核不支持 Landlock」这类未经验证的结论，四行共用同一条原因与下一步。

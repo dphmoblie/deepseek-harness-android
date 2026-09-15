@@ -51,6 +51,8 @@ import {
   selfCheckAdvice,
   selfCheckNeedsRepair,
   type SelfCheckCheckReport,
+  type SelfCheckCode,
+  type SelfCheckId,
   type SelfCheckItem,
   type SelfCheckOperation,
   type SelfCheckRepairReport,
@@ -1266,6 +1268,26 @@ const SELF_CHECK_STATUS_META: Record<SelfCheckStatus, { label: string; chip: str
 /** 自检给出的可用空间低于这一档时提示清理：安装、解压与会话保存都可能因空间失败。 */
 const SELF_CHECK_LOW_SPACE_BYTES = 512 * 1024 * 1024
 
+/**
+ * 出现这些「检查项 + 结论码」组合时，逐项列表之上先给一条跨项汇总。
+ *
+ * 为什么按 id 与 code 一起匹配：`PTY_EXIT_EARLY` 在裸 `pty` 上同样合法，但那说明断在 PTY 层
+ * （见 `runtimeSelfCheck.ts` 的说明），只有 `pty_sandbox` 上的这一码才能和上面两项串成
+ * 「沙箱后端不可用 → 被沙箱包裹的命令起不来」这同一条因果链。
+ * `PROBE_PARTIAL` 也不在其中：老 ABI 只支持部分 Landlock 能力，自检本身也认为一般仍可用。
+ */
+const SELF_CHECK_SANDBOX_BLOCKERS: readonly { id: SelfCheckId; code: SelfCheckCode }[] = [
+  { id: 'sandbox_probe', code: 'PROBE_UNUSABLE' },
+  { id: 'sandbox_exec', code: 'EXEC_LAUNCHER_FAILED' },
+  { id: 'pty_sandbox', code: 'PTY_EXIT_EARLY' },
+]
+
+/** 自检结果里是否出现了「本机沙箱后端不可用」这一类断点。 */
+function selfCheckSandboxBlocked(checks: readonly SelfCheckItem[]): boolean {
+  return checks.some(item =>
+    SELF_CHECK_SANDBOX_BLOCKERS.some(blocker => item.id === blocker.id && item.code === blocker.code))
+}
+
 interface RuntimeSelfCheckPanelProps {
   /** 当前运行时状态：只取已安装版本，用于「运行时版本」一行。 */
   runtime: RuntimeState
@@ -1345,6 +1367,8 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
   const checks = report?.checks ?? []
   const failing = checks.filter(item => item.status !== 'ok')
   const passing = checks.filter(item => item.status === 'ok')
+  // 沙箱三项失败是同一个根因，逐条读只会看到三条并列的现象：先给一条跨项汇总说清因果。
+  const sandboxBlocked = report !== null && selfCheckSandboxBlocked(checks)
   // 修复只改权限位与缺失目录，可用空间仍可能变化，因此以最新一次结果为显示值。
   const availableBytes = repair?.availableBytes ?? report?.availableBytes
   const lowSpace = availableBytes !== undefined && availableBytes < SELF_CHECK_LOW_SPACE_BYTES
@@ -1426,6 +1450,18 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
           <p className="harness-log-state">{t("已修复 {0} 项（检查 {1} 项）", repair.repaired, repair.candidates)}</p>
           <p className="harness-log-state">{t("可重新运行「运行自检」确认修复结果。")}</p>
         </>
+      )}
+
+      {/* 跨项汇总放在逐项列表之前：先讲清「谁导致谁」，再看每一条的细节。 */}
+      {sandboxBlocked && (
+        <div className="inline-alert danger" role="alert">
+          <AlertTriangle size={19} />
+          <div>
+            <strong>{t("本机没有可用的沙箱后端")}</strong>
+            <span>{t("在要求沙箱的模式（例如 workspace-write）下，dsh 找不到可用的沙箱后端就会拒绝执行命令，这是它的 fail-closed 行为：bash 工具报「PTY shell exited during startup」通常是这条链的结果，不是工具本身坏了。")}</span>
+            <span>{t("下一步：")}{t("在 Harness 的权限预设里选择不启用沙箱的模式，然后重启运行环境。这是明确的能力降级：访客内不再有 Landlock 的文件系统隔离；PRoot 与 Android 应用沙箱仍然有效，但 PRoot 只是用户态模拟，不提供宿主内核没有的隔离能力。")}</span>
+          </div>
+        </div>
       )}
 
       {report !== null && (
