@@ -47,4 +47,9 @@
     <string name="task_notification_installed_text">点按回到应用并打开 Harness</string>
     <string name="task_notification_updated_title">运行环境已更新</string>
     <string name="task_notification_updated_text">原有数据已保留，点按回到应用继续使用</string>
+    <!-- 带条目数的两条：条目数是操作返回的确定值，不是进度百分比。 -->
+    <string name="task_notification_exported_title">工作区已导出</string>
+    <string name="task_notification_exported_text">已把 %1$d 项写入投递区 outbox</string>
+    <string name="task_notification_imported_title">已导入到工作区</string>
+    <string name="task_notification_imported_text">已从投递区导入 %1$d 项</string>
 </resources>

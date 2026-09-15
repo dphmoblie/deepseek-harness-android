@@ -42,4 +42,8 @@
     <string name="task_notification_installed_text">Tap to return to the app and open Harness</string>
     <string name="task_notification_updated_title">Runtime updated</string>
     <string name="task_notification_updated_text">Your data was kept. Tap to return to the app.</string>
+    <string name="task_notification_exported_title">Workspace exported</string>
+    <string name="task_notification_exported_text">Wrote %1$d entries to the outbox</string>
+    <string name="task_notification_imported_title">Imported into the workspace</string>
+    <string name="task_notification_imported_text">Imported %1$d entries from the inbox</string>
 </resources>

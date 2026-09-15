@@ -67,29 +67,66 @@ internal object TaskNotification {
         post(context, titleRes, textRes)
     }
 
+    /**
+     * 发一条「工作区已导出到投递区」通知。
+     *
+     * 导出要遍历整个工作区并把 tar 写进 outbox，工作区大时要几十秒；用户按完按钮就去干别的了，
+     * 只在界面上更新状态等于什么都没告诉他。条目数是**确定值**（操作已经返回），
+     * 因此可以如实带上——这不是进度百分比。
+     */
+    fun postWorkspaceExported(context: Context, entryCount: Int) {
+        postWithCount(context, R.string.task_notification_exported_title, R.string.task_notification_exported_text, entryCount)
+    }
+
+    /** 发一条「已导入工作区」通知，语义同上。 */
+    fun postWorkspaceImported(context: Context, entryCount: Int) {
+        postWithCount(context, R.string.task_notification_imported_title, R.string.task_notification_imported_text, entryCount)
+    }
+
+    private fun postWithCount(context: Context, titleRes: Int, textRes: Int, count: Int) {
+        val manager = NotificationManagerCompat.from(context)
+        if (!manager.areNotificationsEnabled()) return
+        ensureChannel(context)
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_keep_alive)
+            .setContentTitle(context.getString(titleRes))
+            .setContentText(context.getString(textRes, count))
+            .setContentIntent(openAppIntent(context))
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .build()
+        postSafely(manager, notification)
+    }
+
+    private fun openAppIntent(context: Context): PendingIntent = PendingIntent.getActivity(
+        context,
+        0,
+        Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        },
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+    )
+
     private fun post(context: Context, titleRes: Int, textRes: Int) {
         val manager = NotificationManagerCompat.from(context)
         // areNotificationsEnabled() 覆盖两件事：用户关掉了通知，或（Android 13+）没授予权限。
         if (!manager.areNotificationsEnabled()) return
         ensureChannel(context)
-        val openApp = PendingIntent.getActivity(
-            context,
-            0,
-            Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_keep_alive)
             .setContentTitle(context.getString(titleRes))
             .setContentText(context.getString(textRes))
-            .setContentIntent(openApp)
+            .setContentIntent(openAppIntent(context))
             .setCategory(NotificationCompat.CATEGORY_STATUS)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             // 通知本身不承载动作：点一下只回到应用。隔着锁屏就能触发的破坏性入口不做。
             .build()
+        postSafely(manager, notification)
+    }
+
+    private fun postSafely(manager: NotificationManagerCompat, notification: android.app.Notification) {
         try {
             manager.notify(NOTIFICATION_ID, notification)
         } catch (_: SecurityException) {

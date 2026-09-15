@@ -24,6 +24,7 @@ import io.deepseekharness.mobile.runtime.HarnessPermissionMode
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
 import io.deepseekharness.mobile.runtime.clampHarnessTailBytes
 import io.deepseekharness.mobile.runtime.MailboxExportOutcome
+import io.deepseekharness.mobile.runtime.TaskNotification
 import io.deepseekharness.mobile.runtime.MailboxImportOutcome
 import io.deepseekharness.mobile.runtime.MailboxState
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
@@ -1042,9 +1043,13 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun importMailbox(call: PluginCall) {
         execute(call) {
-            audited(AuditEvent.MAILBOX_IMPORT) {
-                RuntimeMailbox(controller.store).importInbox().toJs()
+            // 先拿到结果对象再转成 JS 载荷：搬运工作区（大工作区要几十秒）属于用户主动发起、
+            // 且很可能在他切走之后才完成的操作，因此要发一条完成通知（登记册 §5.5 第二类）。
+            val outcome = audited(AuditEvent.MAILBOX_IMPORT) {
+                RuntimeMailbox(controller.store).importInbox()
             }
+            TaskNotification.postWorkspaceImported(context, outcome.entryCount)
+            outcome.toJs()
         }
     }
 
@@ -1059,9 +1064,11 @@ class MobileRuntimePlugin : Plugin() {
     fun exportMailbox(call: PluginCall) {
         execute(call) {
             val subdirectory = optionalMailboxSubdirectory(call.data)
-            audited(AuditEvent.MAILBOX_EXPORT) {
-                RuntimeMailbox(controller.store).exportWorkspace(subdirectory).toJs()
+            val outcome = audited(AuditEvent.MAILBOX_EXPORT) {
+                RuntimeMailbox(controller.store).exportWorkspace(subdirectory)
             }
+            TaskNotification.postWorkspaceExported(context, outcome.entryCount)
+            outcome.toJs()
         }
     }
 
