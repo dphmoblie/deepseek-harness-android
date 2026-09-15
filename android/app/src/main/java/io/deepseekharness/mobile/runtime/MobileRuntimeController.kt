@@ -20,6 +20,8 @@ class MobileRuntimeController(
 ) {
     private val lifecycleLock = ReentrantLock()
     private val closed = AtomicBoolean(false)
+    /** 任务通知要 Context 才能投递；只保留 application context，不持有 Activity。 */
+    private val appContext = context.applicationContext
     val store = RuntimeStore(context)
     val status = RuntimeStatus(store).also { it.progressListener = events::onProgress }
     private val installer = RuntimeInstaller(store, status, externalCancellation = closed::get)
@@ -34,7 +36,16 @@ class MobileRuntimeController(
         if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
             throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
         }
+        // 判定必须在安装**之前**取：装完之后「本来有没有运行时」就无从分辨，
+        // 而它决定通知说「已安装」还是「已更新」（见 TaskNotificationPolicy.forInstallCompleted）。
+        val hadRuntimeBefore = store.installedManifest() != null
         installer.install(source)
+        // 安装要下载并解压整个 rootfs（数百 MB），用户几乎必然切走：
+        // 装完只在界面上更新状态的话，他切回来之前什么都不知道。
+        TaskNotification.postInstallCompleted(
+            appContext,
+            TaskNotificationPolicy.forInstallCompleted(hadRuntimeBefore),
+        )
     }
 
     fun startHarness(): RuntimeStateSnapshot = lifecycleLock.withLock {

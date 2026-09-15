@@ -18,6 +18,12 @@ internal enum class TaskNotificationKind {
 
     /** 还没真正跑起来就退出了（启动阶段失败）：与「运行中自行退出」是两件事，文案必须不同。 */
     HARNESS_EXITED_DURING_START,
+
+    /** 首次安装运行环境完成。 */
+    RUNTIME_INSTALLED,
+
+    /** 已有运行环境被换成新版本（安装耗时最长的一种，用户几乎必然切走）。 */
+    RUNTIME_UPDATED,
 }
 
 internal object TaskNotificationPolicy {
@@ -37,5 +43,19 @@ internal object TaskNotificationPolicy {
             TaskNotificationKind.HARNESS_STOPPED
         } else {
             TaskNotificationKind.HARNESS_EXITED_DURING_START
+        }
+
+    /**
+     * 安装/更新完成该发哪一条。
+     *
+     * **判定依据必须在安装之前取**：装完之后两者都是「已安装」，再判断就只能靠猜。
+     * 这在文案上是实打实的差别——首次安装的用户需要知道「可以开始用了」，
+     * 刚更新完的用户需要知道「原来那套还在，只是换了版本」。装错了他会以为数据丢了。
+     */
+    fun forInstallCompleted(hadRuntimeBefore: Boolean): TaskNotificationKind =
+        if (hadRuntimeBefore) {
+            TaskNotificationKind.RUNTIME_UPDATED
+        } else {
+            TaskNotificationKind.RUNTIME_INSTALLED
         }
 }

@@ -38,4 +38,8 @@
     <string name="task_notification_stopped_text">The local runtime exited on its own. Tap to return to the app.</string>
     <string name="task_notification_failed_title">Harness failed to start</string>
     <string name="task_notification_failed_text">The runtime exited during startup. Tap to return to the app and see why.</string>
+    <string name="task_notification_installed_title">Runtime installed</string>
+    <string name="task_notification_installed_text">Tap to return to the app and open Harness</string>
+    <string name="task_notification_updated_title">Runtime updated</string>
+    <string name="task_notification_updated_text">Your data was kept. Tap to return to the app.</string>
 </resources>

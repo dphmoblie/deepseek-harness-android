@@ -49,4 +49,16 @@ class TaskNotificationPolicyTest {
             TaskNotificationPolicy.forHarnessExit(null),
         )
     }
+
+    @Test
+    fun `安装完成按有没有旧运行时分成两条文案`() {
+        assertEquals(
+            TaskNotificationKind.RUNTIME_UPDATED,
+            TaskNotificationPolicy.forInstallCompleted(hadRuntimeBefore = true),
+        )
+        assertEquals(
+            TaskNotificationKind.RUNTIME_INSTALLED,
+            TaskNotificationPolicy.forInstallCompleted(hadRuntimeBefore = false),
+        )
+    }
 }

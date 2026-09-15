@@ -43,4 +43,8 @@
     <string name="task_notification_stopped_text">本机运行环境已自行退出，点按回到应用查看</string>
     <string name="task_notification_failed_title">Harness 未能启动</string>
     <string name="task_notification_failed_text">运行环境在启动阶段退出，点按回到应用查看原因</string>
+    <string name="task_notification_installed_title">运行环境已安装完成</string>
+    <string name="task_notification_installed_text">点按回到应用并打开 Harness</string>
+    <string name="task_notification_updated_title">运行环境已更新</string>
+    <string name="task_notification_updated_text">原有数据已保留，点按回到应用继续使用</string>
 </resources>

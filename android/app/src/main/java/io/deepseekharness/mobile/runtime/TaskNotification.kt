@@ -37,10 +37,32 @@ internal object TaskNotification {
         val titleRes = when (kind) {
             TaskNotificationKind.HARNESS_STOPPED -> R.string.task_notification_stopped_title
             TaskNotificationKind.HARNESS_EXITED_DURING_START -> R.string.task_notification_failed_title
+            else -> return
         }
         val textRes = when (kind) {
             TaskNotificationKind.HARNESS_STOPPED -> R.string.task_notification_stopped_text
             TaskNotificationKind.HARNESS_EXITED_DURING_START -> R.string.task_notification_failed_text
+            else -> return
+        }
+        post(context, titleRes, textRes)
+    }
+
+    /**
+     * 发一条「运行环境已安装/已更新」通知。
+     *
+     * 安装要下载并解压整个 rootfs（数百 MB），用户几乎必然切走——这是三类通知里
+     * 最不会被错过、也最需要的一条：他回来时既要确认装完了，也要知道下一步做什么。
+     */
+    fun postInstallCompleted(context: Context, kind: TaskNotificationKind) {
+        val titleRes = when (kind) {
+            TaskNotificationKind.RUNTIME_INSTALLED -> R.string.task_notification_installed_title
+            TaskNotificationKind.RUNTIME_UPDATED -> R.string.task_notification_updated_title
+            else -> return
+        }
+        val textRes = when (kind) {
+            TaskNotificationKind.RUNTIME_INSTALLED -> R.string.task_notification_installed_text
+            TaskNotificationKind.RUNTIME_UPDATED -> R.string.task_notification_updated_text
+            else -> return
         }
         post(context, titleRes, textRes)
     }
