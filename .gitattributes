@@ -2,3 +2,9 @@
 *.sh text eol=lf
 gradlew text eol=lf
 *.bat text eol=crlf
+
+# pnpm 补丁必须保持仓库里的原始字节，禁止任何行尾转换：
+#  - pnpm 按行文本比对应用补丁，CRLF 会让上下文匹配不上，安装直接失败；
+#  - pnpm-lock.yaml 记录的是补丁文件字节的 sha256（patch_hash），行尾一变校验就对不上。
+# Windows 上 core.autocrlf=true 时，默认的 text=auto 会在检出时写成 CRLF，所以这里显式关掉。
+scripts/runtime-profile/patches/*.patch -text
