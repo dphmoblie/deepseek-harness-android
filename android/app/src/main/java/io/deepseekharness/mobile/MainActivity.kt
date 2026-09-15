@@ -93,12 +93,23 @@ class MainActivity : BridgeActivity() {
             )
             Intent.ACTION_SEND_MULTIPLE -> {
                 @Suppress("DEPRECATION")
-                (intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM) ?: arrayListOf<Uri>()).filterIsInstance<Uri>()
-                    .ifEmpty { (0 until (intent.clipData?.itemCount ?: 0)).map { intent.clipData!!.getItemAt(it).uri } }
+                (intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM) ?: arrayListOf<Uri>())
+                    .asSequence()
+                    .filterIsInstance<Uri>()
+                    .take(MAX_IMPORT_FILES)
+                    .toList()
+                    .ifEmpty {
+                        (0 until minOf(intent.clipData?.itemCount ?: 0, MAX_IMPORT_FILES))
+                            .map { intent.clipData!!.getItemAt(it).uri }
+                    }
             }
             else -> emptyList()
         }
-        val acceptedUris = uris.filter { it.scheme == "content" }.distinct().take(MAX_IMPORT_FILES)
+        val acceptedUris = uris.asSequence()
+            .filter { it.scheme == "content" }
+            .distinct()
+            .take(MAX_IMPORT_FILES)
+            .toList()
         if (acceptedUris.isEmpty()) {
             Toast.makeText(this, "仅支持通过系统文件提供方导入文件", Toast.LENGTH_SHORT).show()
             return
@@ -141,7 +152,8 @@ class MainActivity : BridgeActivity() {
         uris.forEachIndexed { index, uri ->
             if (Thread.currentThread().isInterrupted) return ImportResult.SOURCE_UNREADABLE
             val name = queryDisplayName(uri) ?: "shared-file-$index"
-            val safeName = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+            val safeName = name.take(MAX_SOURCE_NAME_LENGTH)
+                .replace(Regex("[^A-Za-z0-9._-]"), "_")
                 .take(MAX_FILE_NAME_LENGTH)
                 .ifEmpty { "shared-file-$index" }
             val target = File(inbox, "${UUID.randomUUID()}-$safeName")
@@ -303,6 +315,7 @@ class MainActivity : BridgeActivity() {
         private const val MAX_IMPORT_BYTES = 64L * 1024 * 1024
         private const val MAX_IMPORT_FILES = 16
         private const val MAX_FILE_NAME_LENGTH = 120
+        private const val MAX_SOURCE_NAME_LENGTH = 512
         private const val MAX_MIME_TYPES = 16
         private const val MAX_MIME_TYPE_LENGTH = 127
     }
