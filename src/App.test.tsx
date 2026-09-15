@@ -224,7 +224,11 @@ describe('App conversation gate', () => {
     expect(bridge.openHarness).not.toHaveBeenCalled()
 
     fireEvent.click(updateButton)
-    expect(await screen.findByRole('dialog', { name: '更新 Ubuntu 运行环境' })).toHaveTextContent('会话、模型密钥、Harness 设置、附件、技能和你安装的插件会保留')
+    const updateDialog = await screen.findByRole('dialog', { name: '更新 Ubuntu 运行环境' })
+    expect(updateDialog).toHaveTextContent('会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及在应用内安装的插件会保留')
+    // 这句限定必须留着：终端里 `dsh plugin add` 装的插件在会被替换的目录里，保留不了。
+    // 只写「你安装的插件会保留」对那条路径是失实的承诺（登记册 P0-5）。
+    expect(updateDialog).toHaveTextContent('在终端里用 dsh plugin add 装进运行时的插件不会保留')
     fireEvent.click(screen.getByRole('button', { name: '确认更新' }))
 
     await waitFor(() => expect(bridge.install).toHaveBeenCalledWith({ manifestUrl: '', manifestSha256: '' }))

@@ -745,7 +745,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
       {runtime.updateAvailable && installed && (
         <div className="inline-alert warning" role="alert">
           <AlertTriangle size={19} />
-          <div><strong>{t("安装包内置的运行环境有更新")}</strong><span>{t("更新会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能和你安装的插件会保留。")}</span></div>
+          <div><strong>{t("安装包内置的运行环境有更新")}</strong><span>{t("更新会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及在应用内安装的插件会保留。在终端里用 dsh plugin add 装进运行时的插件不会保留，更新后需要重装。")}</span></div>
         </div>
       )}
 
@@ -2322,7 +2322,7 @@ function UpdateDialog({ busy, onCancel, onConfirm }: UpdateDialogProps) {
         <button className="dialog-close" type="button" aria-label={t("关闭")} onClick={onCancel} disabled={busy}><X size={19} /></button>
         <span className="dialog-danger-icon"><RefreshCw size={23} /></span>
         <h2 id="update-title">{t("更新 Ubuntu 运行环境")}</h2>
-        <p>{t("当前 APK 内置了新版运行环境。继续后会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能和你安装的插件会保留，应用设置也不受影响。")}</p>
+        <p>{t("当前 APK 内置了新版运行环境。继续后会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及在应用内安装的插件会保留，应用设置也不受影响。在终端里用 dsh plugin add 装进运行时的插件不会保留，更新后需要重装。")}</p>
         <div className="dialog-actions">
           <button className="button button-secondary" type="button" onClick={onCancel} disabled={busy}>{t("暂不更新")}</button>
           <button className="button button-danger" type="button" onClick={onConfirm} disabled={busy}>
