@@ -204,3 +204,44 @@ describe('index.html 首帧脚本与主题模块一致', () => {
     expect(html).toContain("meta[name='theme-color']")
   })
 })
+
+/**
+ * 主题模式必须同步给原生（登记册 5.4 的原生半边）。
+ *
+ * 这条断言的真正价值在于：**把那行调用删掉，Web 侧一切照旧**——DOM、`data-theme`、
+ * `theme-color` 全都正确，只有真机上的状态栏会与界面不匹配。没有这条测试，
+ * 回归会一路溜到用户眼前。
+ */
+describe('主题模式同步给原生', () => {
+  beforeEach(() => {
+    window.localStorage.clear()
+  })
+
+  it('applyTheme 把「模式」而不是「解析结果」交给桥', async () => {
+    const { runtimeBridge } = await import('./platform/native')
+    const spy = vi.spyOn(runtimeBridge, 'setAppTheme').mockResolvedValue(undefined)
+    try {
+      applyTheme('dark')
+      expect(spy).toHaveBeenCalledWith('dark')
+      // 关键：`system` 要原样传过去，让原生自己按系统深色现算。
+      // 若这里传的是解析后的 light/dark，系统之后再切换深色，状态栏就不会跟随了。
+      applyTheme('system')
+      expect(spy).toHaveBeenLastCalledWith('system')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('桥失败不影响主题落地', async () => {
+    const { runtimeBridge } = await import('./platform/native')
+    const spy = vi.spyOn(runtimeBridge, 'setAppTheme').mockRejectedValue(new Error('THEME_SAVE_FAILED'))
+    try {
+      // 主题已经落到 DOM 上了，不该因为状态栏同步失败而抛出去——
+      // 那会让「切换主题」看起来失败，而界面其实已经切好了。
+      expect(() => applyTheme('dark')).not.toThrow()
+      expect(document.documentElement.dataset.theme).toBe('dark')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})

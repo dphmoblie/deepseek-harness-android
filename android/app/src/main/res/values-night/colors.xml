@@ -1,0 +1,8 @@
+<resources>
+    <!--
+      系统处于深色模式时的窗口装饰底色（首帧默认值）。
+      与 Web 侧深色背景色以及 AppThemePreference.DARK_BAR_COLOR 同一取值：
+      三处不一致就会在状态栏与页面之间露出一条色带。
+    -->
+    <color name="app_window_decoration">#111315</color>
+</resources>

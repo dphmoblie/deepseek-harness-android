@@ -93,6 +93,11 @@ export function createBrowserBridge(): RuntimeBridge {
     setAppLanguage: language => language === 'zh-CN' || language === 'en'
       ? Promise.resolve()
       : Promise.reject(new Error('不支持的应用语言')),
+    // 浏览器预览没有窗口装饰可染色：如实按「已接受」返回，不做假的成功提示。
+    // DOM 侧的主题落地由 src/theme.ts 自己完成，不经过这条桥。
+    setAppTheme: mode => mode === 'system' || mode === 'light' || mode === 'dark'
+      ? Promise.resolve()
+      : Promise.reject(new Error('不支持的主题模式')),
     getState: () => Promise.resolve({ ...state }),
     getSettings: () => {
       const saved = localStorage.getItem(SETTINGS_KEY)

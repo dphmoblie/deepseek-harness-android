@@ -4,6 +4,7 @@ import type { PluginListenerHandle } from '@capacitor/core'
 import { createBrowserBridge } from './browser'
 import { validateSelfCheckOperation, type SelfCheckOperation } from '../runtimeSelfCheck'
 import type {
+  AppThemeMode,
   PluginRequest,
   PluginCatalog,
   DeviceCommand,
@@ -64,6 +65,8 @@ import {
 interface NativeRuntimePlugin {
   managePlugins(options: PluginRequest): Promise<PluginCatalog>
   setAppLanguage(options: { language: 'zh-CN' | 'en' }): Promise<void>
+  /** 同步主题模式给原生，由原生把它落到状态栏（登记册 5.4）。 */
+  setAppTheme(options: { mode: AppThemeMode }): Promise<void>
   getState(): Promise<RuntimeState>
   getSettings(): Promise<RuntimeSettings>
   saveSettings(settings: RuntimeSettingsUpdate): Promise<RuntimeSettings>
@@ -139,6 +142,13 @@ function createNativeBridge(): RuntimeBridge {
     setAppLanguage: language => {
       if (language !== 'zh-CN' && language !== 'en') return Promise.reject(new Error('不支持的应用语言'))
       return NativeRuntime.setAppLanguage({ language })
+    },
+    setAppTheme: mode => {
+      // 与原生侧的校验保持同一组取值：非法值在过桥之前就拒绝，不让原生去猜。
+      if (mode !== 'system' && mode !== 'light' && mode !== 'dark') {
+        return Promise.reject(new Error('不支持的主题模式'))
+      }
+      return NativeRuntime.setAppTheme({ mode })
     },
     getState: () => NativeRuntime.getState().then(validateRuntimeState),
     getSettings: () => NativeRuntime.getSettings().then(validateStoredSettings),

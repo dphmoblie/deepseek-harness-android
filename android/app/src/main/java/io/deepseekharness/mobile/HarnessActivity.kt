@@ -77,6 +77,13 @@ class HarnessActivity : AppCompatActivity() {
         super.attachBaseContext(AppLanguage.localizedContext(newBase))
     }
 
+    override fun onResume() {
+        super.onResume()
+        // 控制台也是一个窗口：主题在 Web 侧改过、或系统深色模式在后台切换过之后，
+        // 回到前台都要按已保存的模式重算状态栏，否则它会与页面配色不一致。
+        AppThemePreference.apply(this)
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

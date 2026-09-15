@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { runtimeBridge } from './platform/native'
 
 /**
  * 外壳主题：三态选择 + 跟随系统。
@@ -81,6 +82,10 @@ function syncThemeColorMeta(theme: ResolvedTheme): void {
 /**
  * 把主题落到 DOM：data-theme 只写 light/dark（system 不是一种可直接渲染的外观，
  * 写进去会让 CSS 侧出现「第三套变量」），color-scheme 让原生控件与滚动条跟随。
+ *
+ * 同时把**模式**（不是解析结果）同步给原生：状态栏属于窗口，Web 改不了它，
+ * 而 `meta[name=theme-color]` 只有 Chrome for Android 认、Android WebView 不认。
+ * 传模式而非「深/浅」，是为了让原生在 system 模式下自己跟着系统切换。
  */
 export function applyTheme(mode: ThemeMode): ResolvedTheme {
   const theme = resolveTheme(mode, systemPrefersDark())
@@ -88,6 +93,9 @@ export function applyTheme(mode: ThemeMode): ResolvedTheme {
   root.dataset.theme = theme
   root.style.setProperty('color-scheme', theme)
   syncThemeColorMeta(theme)
+  // 失败只影响状态栏配色，主题本身已经落地：因此不让它抛出、也不弹错——
+  // 在这里把异常冒出去会让「切换主题」看起来失败了，而实际界面已经切好了。
+  void runtimeBridge.setAppTheme(mode).catch(() => undefined)
   return theme
 }
 

@@ -164,8 +164,7 @@ class MobileRuntimePlugin : Plugin() {
 
     /** 权限：应用内桥接；校验语言白名单；仅返回保存结果，不返回私有配置。 */
     @PluginMethod
-    fun setAppLanguage(call: PluginCall) {
-        val language = call.getString("language").orEmpty()
+    fun setAppLanguage(call: PluginCall) {        val language = call.getString("language").orEmpty()
         if (language != "zh-CN" && language != "en") {
             call.reject("不支持的应用语言", "LANGUAGE_INVALID")
             return
@@ -182,6 +181,40 @@ class MobileRuntimePlugin : Plugin() {
         } catch (_: Exception) {
             call.reject("无法保存应用语言", "LANGUAGE_SAVE_FAILED")
         }
+    }
+
+    /**
+     * 保存应用主题模式并把它落到当前窗口的状态栏上（登记册 5.4 的原生半边）。
+     *
+     * 为什么需要它：主题选择是 Web 侧的偏好，但**状态栏属于窗口，Web 改不了**——
+     * `meta[name=theme-color]` 只有 Chrome for Android 认，Android WebView 不认。
+     * 不接这一步，真机上选浅色主题时状态栏仍是深色。
+     *
+     * 只存 mode 不存「深/浅」：`system` 模式下系统在用户使用期间切换深色也要跟随，
+     * 存结论会把那一刻固化成显式选择。解析由 [AppThemePreference.apply] 每次按 `uiMode` 现算。
+     */
+    @PluginMethod
+    fun setAppTheme(call: PluginCall) {
+        val mode = call.getString("mode").orEmpty()
+        if (mode != AppThemePreference.MODE_SYSTEM &&
+            mode != AppThemePreference.MODE_LIGHT &&
+            mode != AppThemePreference.MODE_DARK
+        ) {
+            call.reject("不支持的主题模式", "THEME_INVALID")
+            return
+        }
+        val saved = try {
+            AppThemePreference.save(context, mode)
+        } catch (_: IllegalArgumentException) {
+            false
+        }
+        if (!saved) {
+            call.reject("无法保存主题", "THEME_SAVE_FAILED")
+            return
+        }
+        // 落盘成功后再改窗口；没有可用的 Activity（例如后台调用）不算失败，下次 onResume 会补上。
+        (activity as? android.app.Activity)?.let { AppThemePreference.apply(it) }
+        call.resolve()
     }
 
     override fun load() {

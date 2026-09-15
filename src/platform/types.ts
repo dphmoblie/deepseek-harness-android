@@ -457,10 +457,26 @@ export interface ListenerHandle {
   remove: () => Promise<void>
 }
 
+/**
+ * 应用主题模式。刻意在平台层**自带一份**而不是从 `src/theme.ts` 导入：
+ * 平台层是桥的契约，不该依赖界面模块（否则主题模块一改就可能连带改动桥的契约）。
+ * 两边的取值必须保持一致，`src/theme.ts` 的 `ThemeMode` 与它是同一组字符串。
+ */
+export type AppThemeMode = 'system' | 'light' | 'dark'
+
 export interface RuntimeBridge {
   managePlugins: (request: PluginRequest) => Promise<PluginCatalog>
   /** 保存应用语言，仅接受简体中文和英语。 */
   setAppLanguage: (language: 'zh-CN' | 'en') => Promise<void>
+  /**
+   * 把应用主题模式同步给原生（登记册 5.4）。
+   *
+   * **为什么需要这条**：主题选择是 Web 侧的偏好，但**状态栏属于窗口，Web 改不了**——
+   * `meta[name=theme-color]` 只有 Chrome for Android 认，Android WebView 不认。
+   * 只传模式、不传「深/浅」：原生在 `system` 模式下要自己按 `uiMode` 现算，
+   * 传结论会把某一刻的取值固化成用户的显式选择，之后系统再切就不跟随了。
+   */
+  setAppTheme: (mode: AppThemeMode) => Promise<void>
   getState: () => Promise<RuntimeState>
   getSettings: () => Promise<RuntimeSettings>
   saveSettings: (settings: RuntimeSettingsUpdate) => Promise<RuntimeSettings>

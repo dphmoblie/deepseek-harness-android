@@ -2,6 +2,7 @@ package io.deepseekharness.mobile
 
 import android.content.Intent
 import android.content.res.AssetFileDescriptor
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -67,6 +68,20 @@ class MainActivity : BridgeActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleExternalFileIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 主题可能刚在 Web 侧被改过，系统深色模式也可能在后台切换过；每次回到前台重算一次状态栏，
+        // 比在每条改动路径上分别通知可靠。
+        AppThemePreference.apply(this)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // `uiMode` 在 configChanges 列表里，系统切换深色**不会重建本 Activity**，
+        // 所以这里必须自己重算：否则「跟随系统」时状态栏会一直停在旧配色。
+        AppThemePreference.apply(this)
     }
 
     override fun onDestroy() {

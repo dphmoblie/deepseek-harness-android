@@ -2,4 +2,14 @@
     <color name="harness_toolbar_background">#111315</color>
     <color name="harness_toolbar_foreground">#F4F6F5</color>
     <color name="harness_page_background">#FFFFFF</color>
+
+    <!--
+      窗口装饰（状态栏/导航栏）的默认底色。
+
+      这里只负责**首帧之前**那一下：真正跟随用户主题的是 AppThemePreference.apply()
+      （Web 侧改主题时通过 setAppTheme 通知原生，回到前台时也会重算）。
+      静态值按系统深色模式给（本目录=浅色、values-night=深色），
+      这样「浅色主题 + 深色系统」在应用启动的那一瞬间不会先闪一下深色。
+    -->
+    <color name="app_window_decoration">#F3F5F8</color>
 </resources>
