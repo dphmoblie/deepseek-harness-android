@@ -50,6 +50,15 @@ class MainActivity : BridgeActivity() {
 
     /** Accept a user-selected content URI from another app and copy it into private inbox storage. */
     private fun handleExternalFileIntent(intent: Intent) {
+        // 普通桌面启动使用 ACTION_MAIN（或没有 action），不属于外部文件导入。
+        // 只有系统明确发起的查看/分享 Intent 才进入 URI 校验，否则每次打开应用都会
+        // 因为没有 URI 错误地弹出“仅支持通过系统文件提供方导入文件”。
+        val action = intent.action ?: return
+        if (action != Intent.ACTION_VIEW &&
+            action != Intent.ACTION_SEND &&
+            action != Intent.ACTION_SEND_MULTIPLE
+        ) return
+
         val uris = when (intent.action) {
             Intent.ACTION_VIEW -> listOfNotNull(intent.data)
             Intent.ACTION_SEND -> listOfNotNull(
