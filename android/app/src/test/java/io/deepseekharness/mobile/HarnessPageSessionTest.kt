@@ -48,8 +48,9 @@ class HarnessPageSessionTest {
 
     @Test
     fun harnessEntryUrlIncludesValidatedApplicationVersion() {
+        // 运行时版本未知时不留空档：固定回退值同样占住第二个版本维度。
         assertEquals(
-            "http://127.0.0.1:3080/?appVersion=0.1.8",
+            "http://127.0.0.1:3080/?appVersion=0.1.8&runtimeVersion=none",
             HarnessPageUrl.withAppVersion("http://127.0.0.1:3080/", "0.1.8"),
         )
         assertThrows(IllegalArgumentException::class.java) {
@@ -71,7 +72,7 @@ class HarnessPageSessionTest {
         assertEquals("127.0.0.1", page.host)
         assertEquals(3080, page.port)
         assertEquals("/", page.rawPath)
-        assertEquals("token=$token&appVersion=0.1.9-mobile.5", page.rawQuery)
+        assertEquals("token=$token&appVersion=0.1.9-mobile.5&runtimeVersion=none", page.rawQuery)
         assertNull(page.rawFragment)
     }
 

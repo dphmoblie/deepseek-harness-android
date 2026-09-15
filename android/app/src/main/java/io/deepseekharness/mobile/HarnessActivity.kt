@@ -123,11 +123,27 @@ class HarnessActivity : AppCompatActivity() {
             }
         }
 
+        // 入口 URL：index.html 是唯一没有内容哈希的产物，它的缓存键必须同时带上 APK 版本与
+        // 已安装运行时版本，否则在线更新运行之后 WebView 会继续复用旧前端。
+        // 运行时未安装 / 清单不可读时由 withVersions 落到固定占位值，不会让 URL 抖动。
+        val entryUrl = HarnessPageUrl.withVersions(
+            allowedOrigin.initialUrl,
+            BuildConfig.VERSION_NAME,
+            runtimeStore.installedManifest()?.version,
+        )
+
         webView = findViewById(R.id.harness_web_view)
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            cacheMode = WebSettings.LOAD_DEFAULT
+            // 入口 index.html 没有内容哈希，只有 URL 带全两维「真实」版本键时才允许走正常缓存；
+            // 缺任一维、或运行时版本读不到（占位值）都退回完全绕开缓存——宁可多下载一次，
+            // 也不能拿旧前端。带哈希的 /assets/* 能否真正长缓存取决于运行时的响应头，
+            // 单靠 Android 侧改不了（见 HarnessPageCache 与本次改动报告）。
+            cacheMode = when (HarnessPageCache.modeFor(entryUrl)) {
+                HarnessCacheMode.NORMAL -> WebSettings.LOAD_DEFAULT
+                HarnessCacheMode.BYPASS -> WebSettings.LOAD_NO_CACHE
+            }
             allowFileAccess = false
             // 必须允许 content:// 访问，否则 <input type="file"> 选择结果（SAF 返回的都是
             // content:// URI）无法被 WebView 读取，系统文件选择器等于白弹。
@@ -166,8 +182,7 @@ class HarnessActivity : AppCompatActivity() {
             when (pageLoadGate.onCookieStored(accepted)) {
                 CookieLoadDecision.LOAD -> {
                     cookieManager.flush()
-                    val runtimeVersion = runtimeStore.installedManifest()?.version
-                    webView.loadUrl(HarnessPageUrl.withVersions(allowedOrigin.initialUrl, BuildConfig.VERSION_NAME, runtimeVersion))
+                    webView.loadUrl(entryUrl)
                 }
                 CookieLoadDecision.REJECT -> {
                     Toast.makeText(this, R.string.harness_session_failed, Toast.LENGTH_SHORT).show()

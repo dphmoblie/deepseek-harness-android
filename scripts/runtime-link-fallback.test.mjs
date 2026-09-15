@@ -37,13 +37,18 @@ import { pathToFileURL } from 'node:url'
 const runtimeProfile = path.join(import.meta.dirname, 'runtime-profile')
 const virtualStore = path.join(runtimeProfile, 'node_modules', '.pnpm')
 
-// 回退分支在补丁后的源码里一定有的唯一标识（上游没有这个名字）。
+// 回退分支在补丁后的源码里一定有的唯一标识（上游没有这个名字）。仅用于默认的
+// `link-fallback` 类补丁；`static-cache` 类各自在元数据里给 `marker`。
 const FALLBACK_MARKER = 'isLinkUnavailableError'
 
 // 每个包的补丁元数据：通道键、补丁文件名、被改的入口函数、必须出现在补丁新增行里的语句。
+// `kind` 决定还要做哪些类型专属断言：`link-fallback` 要有三个 errno 判定；`static-cache`
+// 不需要（它改的是响应头，与 errno 无关）。`marker` 是「补丁是否落到这一份安装副本上」的判据。
 const PATCHED_PACKAGES = [
   {
     name: '@deepseek-ai/dsh-fs-local',
+    kind: 'link-fallback',
+    marker: 'isLinkUnavailableError',
     key: '@deepseek-ai/dsh-fs-local@0.1.5-rc.2',
     patchFile: '@deepseek-ai__dsh-fs-local@0.1.5-rc.2.patch',
     entry: 'writeFileAtomic',
@@ -56,6 +61,8 @@ const PATCHED_PACKAGES = [
   },
   {
     name: '@deepseek-ai/dsh-attachment-local',
+    kind: 'link-fallback',
+    marker: 'isLinkUnavailableError',
     key: '@deepseek-ai/dsh-attachment-local@0.1.5-rc.2',
     patchFile: '@deepseek-ai__dsh-attachment-local@0.1.5-rc.2.patch',
     entry: 'publishStagedObject',
@@ -69,6 +76,22 @@ const PATCHED_PACKAGES = [
       'await renameStagedObject(staged, target);',
       'await copyImmutableAlias(source, target);',
       'await removeTemporary(staged.path);',
+    ],
+  },
+  {
+    // 登记册 5.6-H：上游对控制台静态资源不发任何缓存头，宿主侧改 WebView 缓存策略的收益
+    // 因此接近 0。本补丁按「产物是否内容寻址」分岔补上 cache-control。
+    name: '@deepseek-ai/dsh-host-frontend-static',
+    kind: 'static-cache',
+    marker: 'cacheControlFor',
+    key: '@deepseek-ai/dsh-host-frontend-static@0.1.5-rc.2',
+    patchFile: '@deepseek-ai__dsh-host-frontend-static@0.1.5-rc.2.patch',
+    entry: 'cacheControlFor',
+    entries: ['cacheControlFor', 'serveStatic'],
+    addedLines: [
+      'function cacheControlFor(target, distRoot, distIndex) {',
+      'if (target === distRoot || target === distIndex) return "no-cache";',
+      'return "public, max-age=31536000, immutable";',
     ],
   },
 ]
@@ -99,6 +122,29 @@ function liveInstalledSource(name) {
   return fs.existsSync(candidate) ? fs.realpathSync(candidate) : undefined
 }
 
+/**
+ * 取「打了这个补丁的那一份」安装副本。
+ *
+ * 优先走 peer 根（与 Node 的实际解析一致，且能证明补丁落在运行时会加载的位置上）。
+ * 但**不是每个被补的包都是 `dsh-base` 的依赖**（`dsh-host-frontend-static` 就不是），
+ * 这时 peer 根里没有它；而且打过补丁与没打过补丁的两份会同时留在 `.pnpm` 下
+ * （目录名只差一个哈希后缀），所以扫描时要**按内容里的 `marker` 认**，
+ * 不能按目录名或时间挑——挑错了会让「补丁没生效」这类问题被静默放过。
+ */
+function installedSourceFor(name, marker) {
+  const direct = liveInstalledSource(name)
+  if (direct !== undefined && fs.readFileSync(direct, 'utf8').includes(marker)) return direct
+  const store = path.join(runtimeProfile, 'node_modules', '.pnpm')
+  if (!fs.existsSync(store)) return direct
+  const suffix = path.join('node_modules', name, 'lib', 'index.js')
+  for (const entry of fs.readdirSync(store)) {
+    const candidate = path.join(store, entry, suffix)
+    if (!fs.existsSync(candidate)) continue
+    if (fs.readFileSync(candidate, 'utf8').includes(marker)) return fs.realpathSync(candidate)
+  }
+  return direct
+}
+
 // 夹具：把补丁后的整份模块源码复制到临时目录，只替换 `link` 的来源与 sharp。
 const FS_PROMISES_STUB = [
   'import { link as realLink } from "node:fs/promises";',
@@ -116,16 +162,16 @@ const FS_PROMISES_STUB = [
 const SHARP_STUB = '// sharp 是原生模块；被测的发布路径不经过它，夹具只要求它能被导入。\nexport default function sharp() {\n	throw new Error("sharp 桩不应被调用");\n}\n'
 
 async function loadPatchedModule(t, patchedPackage) {
-  const { name, entry, entries = [entry] } = patchedPackage
-  const sourceFile = liveInstalledSource(name)
+  const { name, entry, entries = [entry], marker = FALLBACK_MARKER } = patchedPackage
+  const sourceFile = installedSourceFor(name, marker)
   assert.ok(
     sourceFile,
     `未能从 scripts/runtime-profile/node_modules 解析 ${name}：请先运行 pnpm --dir scripts/runtime-profile install`,
   )
   const source = fs.readFileSync(sourceFile, 'utf8')
   assert.ok(
-    source.includes(FALLBACK_MARKER),
-    `${name} 的安装副本没有找到回退分支标记 ${FALLBACK_MARKER}：补丁没有落到运行时会加载的那一份上`,
+    source.includes(marker),
+    `${name} 的安装副本没有找到补丁标记 ${marker}：补丁没有落到运行时会加载的那一份上`,
   )
 
   const require = createRequire(sourceFile)
@@ -142,7 +188,16 @@ async function loadPatchedModule(t, patchedPackage) {
   fs.writeFileSync(path.join(dir, 'fs-promises-stub.mjs'), FS_PROMISES_STUB)
   fs.writeFileSync(path.join(dir, 'sharp-stub.mjs'), SHARP_STUB)
   const fixtureFile = path.join(dir, 'patched-module.mjs')
-  fs.writeFileSync(fixtureFile, `${rewritten}\nexport { ${entries.join(', ')} };\n`)
+  // 上游有的包**本来就导出了**我们要驱动的函数（`dsh-host-frontend-static` 就导出 `serveStatic`），
+  // 无条件追加 `export { ... }` 会撞成 `Duplicate export` 语法错误。因此先解析已有的导出语句，
+  // 只补真正缺的那些。
+  const alreadyExported = new Set(
+    [...rewritten.matchAll(/export\s*\{([^}]*)\}/gu)]
+      .flatMap(match => match[1].split(',').map(part => part.trim().split(/\s+as\s+/u).pop()))
+      .filter(Boolean),
+  )
+  const pending = entries.filter(exported => !alreadyExported.has(exported))
+  fs.writeFileSync(fixtureFile, `${rewritten}${pending.length === 0 ? '' : `\nexport { ${pending.join(', ')} };\n`}`)
 
   const patched = await import(pathToFileURL(fixtureFile).href)
   for (const exported of entries) {
@@ -152,7 +207,7 @@ async function loadPatchedModule(t, patchedPackage) {
   return { patched, linkControl: stub.linkControl, sourceFile }
 }
 
-test('补丁通道登记了两个 dsh 写入回退补丁，且键跟着 dsh 版本钉走', () => {
+test('补丁通道登记了 3 个运行时补丁（2 个写入回退 + 1 个静态缓存头），且键跟着 dsh 版本钉走', () => {
   const workspace = fs.readFileSync(path.join(runtimeProfile, 'pnpm-workspace.yaml'), 'utf8')
   const lockfile = fs.readFileSync(path.join(runtimeProfile, 'pnpm-lock.yaml'), 'utf8')
   const runtimePackage = JSON.parse(fs.readFileSync(path.join(runtimeProfile, 'package.json'), 'utf8'))
@@ -160,7 +215,7 @@ test('补丁通道登记了两个 dsh 写入回退补丁，且键跟着 dsh 版�
   const overrideVersion = workspace.match(/^\s+'@deepseek-ai\/dsh-\*':\s*(\S+)\s*$/mu)?.[1]
   assert.equal(overrideVersion, pinnedDshVersion, 'pnpm-workspace.yaml 的 dsh overrides 与 package.json 版本钉不一致')
 
-  for (const { name, key, patchFile, addedLines } of PATCHED_PACKAGES) {
+  for (const { name, kind, key, patchFile, addedLines } of PATCHED_PACKAGES) {
     assert.match(
       workspace,
       new RegExp(`^\\s+'${escapeRegExp(key)}':\\s*patches/${escapeRegExp(patchFile)}\\s*$`, 'mu'),
@@ -179,18 +234,22 @@ test('补丁通道登记了两个 dsh 写入回退补丁，且键跟着 dsh 版�
     assert.match(patch, /^--- a\/lib\/index\.js$/mu, `${patchFile} 的目标不是 lib/index.js`)
     assert.match(patch, /^\+\+\+ b\/lib\/index\.js$/mu, `${patchFile} 的目标不是 lib/index.js`)
 
-    // 回退语义：EACCES / EPERM / EXDEV 三个 errno 都要判到，且必须有 rename 落地动作。
+    // 补丁类型专属断言：`link-fallback` 必须判到 EACCES / EPERM / EXDEV 三个 errno，
+    // 并新增 link 不可用判定函数；其它类型（如 static-cache）改的是响应头，与 errno 无关，
+    // 因此这些断言按 kind 分流——否则「加一个非硬链接补丁」会被硬编码的 errno 断言挡住。
     const added = patch
       .split('\n')
       .filter(line => line.startsWith('+') && !line.startsWith('+++'))
       .map(line => line.slice(1).trim())
-    for (const errno of ['"EACCES"', '"EPERM"', '"EXDEV"']) {
-      assert.ok(
-        added.some(line => line.includes(errno)),
-        `${patchFile} 的新增行里缺少 ${errno} 判定`,
-      )
+    if (kind === 'link-fallback') {
+      for (const errno of ['"EACCES"', '"EPERM"', '"EXDEV"']) {
+        assert.ok(
+          added.some(line => line.includes(errno)),
+          `${patchFile} 的新增行里缺少 ${errno} 判定`,
+        )
+      }
+      assert.ok(added.includes('function isLinkUnavailableError(error) {'), `${patchFile} 没有新增 link 不可用判定函数`)
     }
-    assert.ok(added.includes('function isLinkUnavailableError(error) {'), `${patchFile} 没有新增 link 不可用判定函数`)
     for (const expected of addedLines) {
       assert.ok(added.includes(expected), `${patchFile} 缺少必需的补丁行：${expected}`)
     }
@@ -487,4 +546,74 @@ test('dsh-attachment-local：link 被拒时复制发布别名，且不把源对�
   if (process.platform !== 'win32') {
     assert.equal(fs.statSync(hardSource).nlink, 2, 'link 可用时应仍是硬链接（同一 inode 的两个名字）')
   }
+})
+
+// 登记册 5.6-H：上游对控制台静态资源**不发任何缓存头**，于是宿主侧无论把 WebView 的
+// `cacheMode` 设成什么，每次打开控制台都要把整份前端重新下载并重新解析。
+// 本补丁按「产物是否内容寻址」分岔补上 `cache-control`：入口与未哈希资源 `no-cache`
+// （允许缓存但每次回源校验），`assets/` 下的内容哈希产物 `immutable` 长缓存。
+test('dsh-host-frontend-static：按路径给出 cache-control，且响应真的带上它', async t => {
+  if (!fs.existsSync(virtualStore)) {
+    t.skip('未安装 scripts/runtime-profile 依赖（CI 会先 pnpm install --frozen-lockfile，届时必然执行）')
+    return
+  }
+  const { patched } = await loadPatchedModule(t, patchedPackage('@deepseek-ai/dsh-host-frontend-static'))
+  const work = tempDir(t, 'dsh-static-cache-')
+  const distRoot = path.join(work, 'dist')
+  fs.mkdirSync(path.join(distRoot, 'assets'), { recursive: true })
+  const distIndex = path.join(distRoot, 'index.html')
+  fs.writeFileSync(distIndex, '<html>index</html>')
+  fs.writeFileSync(path.join(distRoot, 'assets', 'index-Cr2OHXyD.js'), 'console.log(1)')
+  fs.writeFileSync(path.join(distRoot, 'favicon.ico'), 'icon')
+
+  // 1) 分类函数本身：入口（dist 根与 index 路径）必须 no-cache。
+  assert.equal(patched.cacheControlFor(distRoot, distRoot, distIndex), 'no-cache')
+  assert.equal(patched.cacheControlFor(distIndex, distRoot, distIndex), 'no-cache')
+  // 2) 内容寻址的 assets/ 才允许 immutable。
+  assert.equal(
+    patched.cacheControlFor(path.join(distRoot, 'assets', 'index-Cr2OHXyD.js'), distRoot, distIndex),
+    'public, max-age=31536000, immutable',
+  )
+  // 3) 其余路径（favicon 等）不敢假定带哈希 ⇒ 一律 no-cache。
+  assert.equal(patched.cacheControlFor(path.join(distRoot, 'favicon.ico'), distRoot, distIndex), 'no-cache')
+  // 4) 名字里带 assets 但**不是** assets 目录的兄弟路径不能被误判成长缓存——
+  //    这里用前缀比对的实现在这一条上会翻车（`assets-extra` 以 `assets` 开头）。
+  assert.equal(
+    patched.cacheControlFor(path.join(distRoot, 'assets-extra', 'x.js'), distRoot, distIndex),
+    'no-cache',
+  )
+
+  // 5) 真正驱动 serveStatic：响应头必须落到 200 响应上，而不只是分类函数返回得对。
+  const serve = async (pathname) => {
+    const seen = { status: 0, headers: undefined, body: undefined }
+    const res = {
+      writeHead(status, headers) { seen.status = status; seen.headers = headers },
+      end(body) { seen.body = body },
+    }
+    await patched.serveStatic(pathname, res, distRoot, distIndex, () => true, async () => '<html>index</html>')
+    return seen
+  }
+  const indexResponse = await serve('/')
+  assert.equal(indexResponse.status, 200)
+  assert.equal(indexResponse.headers['cache-control'], 'no-cache', '入口页必须每次回源校验')
+
+  const assetResponse = await serve('/assets/index-Cr2OHXyD.js')
+  assert.equal(assetResponse.status, 200)
+  assert.equal(
+    assetResponse.headers['cache-control'],
+    'public, max-age=31536000, immutable',
+    '内容哈希产物应当长缓存，否则这次补丁的核心收益没有生效',
+  )
+  assert.equal(assetResponse.headers['content-type'], 'text/javascript; charset=utf-8')
+
+  const iconResponse = await serve('/favicon.ico')
+  assert.equal(iconResponse.status, 200)
+  assert.equal(iconResponse.headers['cache-control'], 'no-cache')
+
+  // 6) 路径穿越仍必须是 403（上游行为，补丁不该动它）。
+  const traversal = await serve('/../../etc/passwd')
+  assert.equal(traversal.status, 403)
+  // 7) 不存在的资源仍是 404。
+  const missing = await serve('/nope.js')
+  assert.equal(missing.status, 404)
 })

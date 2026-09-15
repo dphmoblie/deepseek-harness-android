@@ -1,0 +1,53 @@
+diff --git a/lib/index.js b/lib/index.js
+index c54123fecfb50e97d31c25c411e3c07c87ffe214..8c1c9c93f5b17ce1012a8a4afe6ffc14f99329a9 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -1,5 +1,5 @@
+ import { readFile } from "node:fs/promises";
+-import { dirname, extname, join, normalize, resolve, sep } from "node:path";
++import { dirname, extname, join, normalize, relative, resolve, sep } from "node:path";
+ import z from "@deepseek-ai/schemastery";
+ //#region lib/types/index.js
+ /**
+@@ -37,6 +37,32 @@ const STATIC_MISS_CODES = new Set([
+ 	"ENOTDIR"
+ ]);
+ /**
++* 静态响应的 `cache-control`。
++*
++* 上游原样不发任何缓存头（既无新鲜度也无校验器），按 HTTP 语义这样的响应**无法被复用**
++* （RFC 9111 §4.2.2 的启发式新鲜度要求存在 `Last-Modified`），于是宿主侧无论把 WebView 的
++* `cacheMode` 设成什么，每次打开控制台都要把整份前端重新下载并重新解析。
++*
++* 分岔依据是**产物是否内容寻址**，而不是「静态资源就一定能长缓存」：
++*  - 入口（dist 根与 `distIndex`）：文件名固定、内容随 APK 与运行时版本变化 ⇒ `no-cache`，
++*    允许缓存但每次都必须回源校验，避免拿到旧前端；
++*  - `assets/` 下的产物带内容哈希（例如 `index-Cr2OHXyD.js`）⇒ 内容变则文件名变，
++*    可以 `immutable` 长缓存；
++*  - 其余路径（favicon、webmanifest 等）：**不敢假定**带哈希，一律 `no-cache`。
++*    宁可少缓存，也不要因为一个没有哈希的文件被长缓存而让用户拿到旧界面。
++*
++* 与宿主侧的配合：入口 URL 里带 `appVersion` 与 `runtimeVersion` 两个查询参数
++* （`HarnessPageUrl.withVersions`），任一维变化即换 URL ⇒ 即使 `index.html` 被缓存也不会串版本。
++*/
++function cacheControlFor(target, distRoot, distIndex) {
++	if (target === distRoot || target === distIndex) return "no-cache";
++	const relativePath = relative(distRoot, target);
++	if (relativePath === `assets${sep}` || relativePath.startsWith(`assets${sep}`)) {
++		return "public, max-age=31536000, immutable";
++	}
++	return "no-cache";
++}
++/**
+ * Serve one GET/HEAD static request from the dist root.
+ * @param pathname - decoded URL pathname of the request.
+ * @param res - the node:http response to write.
+@@ -70,7 +96,7 @@ async function serveStatic(pathname, res, distRoot, distIndex, authorizeIndex, r
+ 		res.end();
+ 		return;
+ 	}
+-	res.writeHead(200, { "content-type": type });
++	res.writeHead(200, { "content-type": type, "cache-control": cacheControlFor(target, distRoot, distIndex) });
+ 	res.end(body);
+ }
+ /**

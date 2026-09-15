@@ -270,3 +270,6 @@ patchedDependencies:
   '@earendil-works/pi-ai@0.85.1': patches/@earendil-works__pi-ai@0.85.1.patch
   '@deepseek-ai/dsh-fs-local@0.1.5-rc.2': patches/@deepseek-ai__dsh-fs-local@0.1.5-rc.2.patch
   '@deepseek-ai/dsh-attachment-local@0.1.5-rc.2': patches/@deepseek-ai__dsh-attachment-local@0.1.5-rc.2.patch
+  # 控制台静态资源不发缓存头，宿主侧改 WebView 缓存策略的收益因此接近 0（登记册 5.6-H）。
+  # 这个补丁给入口与未哈希资源发 no-cache、给内容寻址的 assets/ 发 immutable 长缓存。
+  '@deepseek-ai/dsh-host-frontend-static@0.1.5-rc.2': patches/@deepseek-ai__dsh-host-frontend-static@0.1.5-rc.2.patch
