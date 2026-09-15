@@ -18,6 +18,8 @@ import {
   Database,
   Download,
   ExternalLink,
+  FolderInput,
+  FolderOutput,
   Gauge,
   HardDrive,
   KeyRound,
@@ -62,6 +64,9 @@ import type {
   DiagnosticLogText,
   HarnessLog,
   KeepAliveState,
+  MailboxExportResult,
+  MailboxImportResult,
+  MailboxState,
   ModelProviderId,
   OverlayBallState,
   ProviderApiKeys,
@@ -71,6 +76,7 @@ import type {
   RuntimeSettingsUpdate,
   RuntimeState,
   ShizukuState,
+  StorageAccessState,
   TerminalKind,
 } from './platform/types'
 
@@ -1573,6 +1579,19 @@ interface SettingsScreenProps {
   loadHarnessLog: (maxBytes?: number) => Promise<HarnessLog>
   /** 读取诊断日志正文窗口；同样只在展开或切换窗口时调用。 */
   loadDiagnosticLog: (maxBytes?: number) => Promise<DiagnosticLogText>
+  /** 外置投递区状态；null 表示尚未读到快照。 */
+  mailbox: MailboxState | null
+  mailboxReadFailed: boolean
+  /** 存储访问状态（T1 媒体只读 / T2 所有文件访问）；null 表示尚未读到。 */
+  storageAccess: StorageAccessState | null
+  /** 本次会话内最近一次导入/导出结果；null 表示本次会话还没有搬运。 */
+  lastMailboxImport: MailboxImportResult | null
+  lastMailboxExport: MailboxExportResult | null
+  onExportMailbox: () => void
+  onImportMailbox: () => void
+  /** 跳转到系统「所有文件访问」设置页（投递区的唯一解锁入口）。 */
+  onOpenAllFilesAccess: () => void
+  onRefreshMailbox: () => void
   /** 未编辑的悬浮球开关跟随原生状态；null 表示尚未取得快照。 */
   overlayBall: OverlayBallState | null
   overlayBallReadFailed: boolean
@@ -1605,7 +1624,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport, lastMailboxImport, loadDiagnosticLog, loadHarnessLog, lastStop, mailbox, mailboxReadFailed, overlayBall, overlayBallReadFailed, storageAccess, onDraftChange, onExportMailbox, onImportMailbox, onOpenAllFilesAccess, onRefreshMailbox, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
   if (settingsReadStatus === 'failed') {
     return <div className="screen loading-screen">
       <p role="alert">{t("无法读取最新设置，请重试")}</p>
@@ -1660,6 +1679,32 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog,
         : shizuku.permission === 'denied'
           ? t("已拒绝")
           : t("待授权")
+  /**
+   * 投递区状态文案。
+   *
+   * 四个档位各自一句，刻意不合并成「可用 / 不可用」两句：用户需要知道
+   * 「去开权限就有用」还是「这台设备根本没有这一档，只能用控制台上传」。
+   * 文案只说事实，不承诺授权一定成功。
+   */
+  const mailboxStatusLabel = mailbox === null
+    ? t("未读取")
+    : mailbox.availability === 'available'
+      ? t("可用")
+      : mailbox.availability === 'needsPermission'
+        ? t("需要授权")
+        : mailbox.availability === 'unsupported'
+          ? t("不支持")
+          : t("不可写")
+  const mailboxUnavailableReason = mailbox === null
+    ? ''
+    : mailbox.availability === 'needsPermission'
+      ? t("尚未授予「所有文件访问」。请到系统设置里为 DSH 手动开启；开启后回到本页会重新检查。没有该权限时只能用终端或控制台上传文件。")
+      : mailbox.availability === 'unsupported'
+        ? t("当前系统不存在「所有文件访问」这一档，投递区无法启用；请改用终端或控制台上传文件。Harness 本身不受影响。")
+        : mailbox.availability === 'unwritable'
+          ? t("已授予「所有文件访问」，但投递区目录仍不可读写；可能是系统限制或目录被占用。工作区与 Harness 不受影响。")
+          : ''
+
   const selectedProviderOption = MODEL_PROVIDERS.find(provider => provider.id === selectedProvider) ?? MODEL_PROVIDERS[0]
   const keepAliveRecordedAt = formatRecordedAt(keepAlive.lastUpdatedAtMillis)
   const lastStopLabel = t(LAST_STOP_LABELS[lastStop])
@@ -2002,6 +2047,113 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog,
         )}
 
         {page === 'runtime' && (
+        <section className="settings-section" aria-labelledby="mailbox-settings">
+          <div className="section-title section-title-action">
+            <span className="section-icon"><FolderInput size={19} /></span>
+            <div>
+              <h2 id="mailbox-settings">{t("投递区")}</h2>
+              <p>{t("手机侧与访客之间的批量搬运通道；不会自动搬运，必须点下面的按钮。")}</p>
+            </div>
+            <span className={`status-chip ${mailbox?.available === true ? 'success' : 'warn'}`}>{mailboxStatusLabel}</span>
+          </div>
+
+          {mailbox === null && (
+            <p className="settings-note" role={mailboxReadFailed ? 'alert' : undefined}>
+              {mailboxReadFailed ? t("无法读取投递区状态，请重试") : t("正在读取投递区状态")}
+            </p>
+          )}
+
+          {mailbox !== null && (
+            <>
+              <div className="settings-status-list">
+                <div className="settings-status-row">
+                  <span>{t("用户放入（inbox）")}</span>
+                  <code className="mailbox-path">{mailbox.inboxPath}</code>
+                </div>
+                <div className="settings-status-row">
+                  <span>{t("产物取出（outbox）")}</span>
+                  <code className="mailbox-path">{mailbox.outboxPath}</code>
+                </div>
+                <div className="settings-status-row">
+                  <span>{t("访客内挂载点")}</span>
+                  <code className="mailbox-path">{`${mailbox.guestInboxPath} · ${mailbox.guestOutboxPath}`}</code>
+                </div>
+                <div className="settings-status-row">
+                  <span>{t("inbox 内文件")}</span>
+                  <strong>{t("{0} 个", mailbox.inboxFileCount)}</strong>
+                </div>
+              </div>
+
+              {mailbox.inboxTars.length > 0 && (
+                <p className="settings-note">
+                  {t("可导入的 tar：")}
+                  {mailbox.inboxTars.map(candidate => `${candidate.name}（${formatBytes(candidate.bytes)}）`).join('、')}
+                </p>
+              )}
+
+              {/*
+                不可用说明刻意**不带 role="alert"**：它是这一页的常驻内容，不是用户操作后
+                才出现的时效性提示；设置页里真正该被播报的是那些随操作出现的警告。
+              */}
+              {!mailbox.available && (
+                <div className="inline-alert warning">
+                  <AlertTriangle size={19} />
+                  <div>
+                    <strong>{t("投递区不可用")}</strong>
+                    <span>{mailboxUnavailableReason}</span>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/*
+            按钮区始终渲染（即使状态还没读到）：布局稳定，「不可用即禁用」这条规则
+            在三种状态下是同一句话，用户不会看到按钮忽隐忽现。
+          */}
+          <div className="settings-inline-actions">
+            <button className="button button-secondary" type="button" onClick={onImportMailbox} disabled={busy !== null || mailbox?.available !== true}>
+              {busy === 'mailbox-import' ? <Loader2 className="spin" size={18} /> : <FolderInput size={18} />}{t("导入到工作区")}</button>
+            <button className="button button-secondary" type="button" onClick={onExportMailbox} disabled={busy !== null || mailbox?.available !== true}>
+              {busy === 'mailbox-export' ? <Loader2 className="spin" size={18} /> : <FolderOutput size={18} />}{t("导出工作区")}</button>
+            {mailbox !== null && mailbox.supported && !mailbox.granted && (
+              <button className="button button-secondary" type="button" onClick={onOpenAllFilesAccess} disabled={busy !== null}>
+                <ShieldCheck size={18} />{t("去开启「所有文件访问」")}</button>
+            )}
+            <button className="button button-secondary" type="button" onClick={onRefreshMailbox} disabled={busy !== null}>
+              {busy === 'mailbox-refresh' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("重新检查")}</button>
+          </div>
+
+          {mailbox !== null && (
+            <>
+              <p className="settings-note">
+                {t("导入落点是工作区内的 {0}/ 子目录；导出固定产出 {1} + {2} + {3}（含逐条 sha256）。", mailbox.importDirectory, mailbox.exportTarName, mailbox.exportManifestName, `${mailbox.exportTarName}.sha256`)}
+              </p>
+              {storageAccess !== null && (
+                <p className="settings-note">
+                  {t("存储权限：媒体读取（T1）{0} · 所有文件访问（T2）{1}。投递区需要 T2。", storageAccess.mediaGranted ? t("已授予") : t("未授予"), storageAccess.allFilesSupported ? (storageAccess.allFilesGranted ? t("已授予") : t("未授予")) : t("系统不支持"))}
+                </p>
+              )}
+              <p className="settings-note">
+                {t("投递区不是工作区：dsh 的 write 工具写 /mnt/inbox、/mnt/outbox 会失败（实测 EACCES），这是预期行为；搬运只能走这里的按钮。")}
+              </p>
+            </>
+          )}
+
+          {lastMailboxImport !== null && (
+            <p className="settings-note">
+              {t("最近一次导入：{0} 个条目 · {1} · manifest {2}", lastMailboxImport.entryCount, formatBytes(lastMailboxImport.bytes), lastMailboxImport.manifestName ?? t("未附带"))}
+            </p>
+          )}
+          {lastMailboxExport !== null && (
+            <p className="settings-note">
+              {t("最近一次导出：{0} 个条目 · {1} · manifest {2}", lastMailboxExport.entryCount, formatBytes(lastMailboxExport.bytes), lastMailboxExport.manifestName)}
+            </p>
+          )}
+        </section>
+        )}
+
+        {page === 'runtime' && (
         <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
         )}
 
@@ -2223,6 +2375,22 @@ export function App() {
   const [overlayBall, setOverlayBall] = useState<OverlayBallState | null>(null)
   const [overlayBallReadFailed, setOverlayBallReadFailed] = useState(false)
   const overlayBallReadRevision = useRef(0)
+  /**
+   * 外置投递区状态。null 表示尚未读到快照（界面显示「未读取」，不给可点的按钮）；
+   * [mailboxReadFailed] 单独记录读取失败，避免把「读取失败」显示成「投递区不可用」。
+   */
+  const [mailbox, setMailbox] = useState<MailboxState | null>(null)
+  const [storageAccess, setStorageAccess] = useState<StorageAccessState | null>(null)
+  const [mailboxReadFailed, setMailboxReadFailed] = useState(false)
+  const mailboxReadRevision = useRef(0)
+  /**
+   * 本次会话内最近一次导入/导出的结果。
+   *
+   * 只放在界面状态里，原生侧不保存历史：重进应用后显示为「本次会话还没有搬运」，
+   * 而不是编造一份上一次的记录。
+   */
+  const [lastMailboxImport, setLastMailboxImport] = useState<MailboxImportResult | null>(null)
+  const [lastMailboxExport, setLastMailboxExport] = useState<MailboxExportResult | null>(null)
   const [diagnostic, setDiagnostic] = useState<DiagnosticLogState>(EMPTY_DIAGNOSTIC)
   const [booting, setBooting] = useState(true)
   const [onboardingOpen, setOnboardingOpen] = useState(() => {
@@ -2303,6 +2471,32 @@ export function App() {
       return next
     } catch (error) {
       if (revision === overlayBallReadRevision.current) setOverlayBallReadFailed(true)
+      throw error
+    }
+  }, [])
+
+  /**
+   * 读取投递区与存储访问状态。
+   *
+   * 两个载荷一起读：投递区是否可用完全由「所有文件访问」决定，分开读会出现
+   * 「显示需要授权但按钮可点」这类自相矛盾的瞬间。失败时只置标志位，
+   * 保留上一次快照——把「读取失败」显示成「不可用」会让用户白跑一次系统设置。
+   */
+  const readMailbox = useCallback(async () => {
+    const revision = ++mailboxReadRevision.current
+    try {
+      const [nextMailbox, nextStorage] = await Promise.all([
+        runtimeBridge.getMailboxState(),
+        runtimeBridge.getStorageAccessState(),
+      ])
+      if (revision === mailboxReadRevision.current) {
+        setMailbox(nextMailbox)
+        setStorageAccess(nextStorage)
+        setMailboxReadFailed(false)
+      }
+      return nextMailbox
+    } catch (error) {
+      if (revision === mailboxReadRevision.current) setMailboxReadFailed(true)
       throw error
     }
   }, [])
@@ -2485,6 +2679,11 @@ export function App() {
         // 悬浮球属于可选能力，错误由设置页单独显示。
       })
 
+    void readMailbox()
+      .catch(() => {
+        // 投递区属于可选能力（无存储权限时是预期降级），错误由设置页单独显示。
+      })
+
     void runtimeBridge.getDiagnosticLogState()
       .then(next => { if (!cancelled) setDiagnostic(next) })
       .catch(() => {
@@ -2496,7 +2695,7 @@ export function App() {
       if (removeProgress !== undefined) void removeProgress()
       void progressHandlePromise
     }
-  }, [noteLivePhase, notify, readOverlayBall])
+  }, [noteLivePhase, notify, readMailbox, readOverlayBall])
 
   useEffect(() => {
     let cancelled = false
@@ -2547,12 +2746,26 @@ export function App() {
           // 设置页保留查询失败提示，不在轮询中重复弹通知。
         })
     }
+    /**
+     * 投递区状态在页面重新可见时重读：用户很可能刚去系统设置里开启了
+     * 「所有文件访问」，回到应用时必须立刻看到「可用」而不是旧状态。
+     * 刻意**不放进 5 秒轮询**：状态读取会做一次真实写探测（FUSE 上 canWrite 不可信），
+     * 没必要每 5 秒在用户目录里建一个临时文件。
+     */
+    const refreshMailbox = (): void => {
+      if (document.visibilityState === 'hidden') return
+      void readMailbox()
+        .catch(() => {
+          // 设置页保留查询失败提示，不在刷新中重复弹通知。
+        })
+    }
     const handleVisibilityChange = (): void => {
       if (document.visibilityState === 'visible') {
         refreshSettings()
         refreshShizuku()
         refreshKeepAlive()
         refreshOverlayBall()
+        refreshMailbox()
       }
     }
     const handleFocus = (): void => {
@@ -2575,7 +2788,7 @@ export function App() {
       window.removeEventListener('focus', handleFocus)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [applyRefreshedSettings, notify, readOverlayBall])
+  }, [applyRefreshedSettings, notify, readMailbox, readOverlayBall])
 
   const run = useCallback(async (id: string, operation: () => Promise<void>, success?: string) => {
     if (busyRef.current !== null) return
@@ -2931,6 +3144,56 @@ export function App() {
     void run('open-overlay-settings', () => runtimeBridge.openOverlaySettings())
   }, [run])
 
+  /**
+   * 跳转到系统「所有文件访问」设置页。
+   *
+   * 这是投递区**唯一**的解锁入口：该权限不会弹运行时对话框，只能由用户手动开启。
+   * 本回调只负责跳转与重读，不承诺一定授权成功——用户可能直接返回而不开启，
+   * 那时界面仍显示原来的档位。
+   */
+  const openAllFilesAccessSettings = useCallback(() => {
+    void run('open-all-files-access', async () => {
+      await runtimeBridge.openAllFilesAccessSettings()
+      await readMailbox().catch(() => {
+        // 刚跳出去还没授权时会读到「需要授权」，属正常结果，不当作错误提示。
+      })
+    })
+  }, [readMailbox, run])
+
+  /**
+   * 一键导入：inbox 的 tar → 工作区 `mailbox-import/`。
+   *
+   * 必须由用户点击触发（没有任何自动搬运路径）：导入会替换工作区里的落点目录，
+   * 静默执行会让用户在自己的工作区里看到来历不明的目录。
+   */
+  const importMailbox = useCallback(() => {
+    void run('mailbox-import', async () => {
+      const result = await runtimeBridge.importMailbox()
+      setLastMailboxImport(result)
+      await readMailbox().catch(() => {
+        // 搬运已成功；状态重读失败不影响结果展示。
+      })
+    }, t("投递区已导入工作区"))
+  }, [readMailbox, run])
+
+  /** 一键导出：工作区 → outbox 的 tar + manifest + sha256；同样必须由用户点击触发。 */
+  const exportMailbox = useCallback(() => {
+    void run('mailbox-export', async () => {
+      const result = await runtimeBridge.exportMailbox()
+      setLastMailboxExport(result)
+      await readMailbox().catch(() => {
+        // 搬运已成功；状态重读失败不影响结果展示。
+      })
+    }, t("投递区已导出到 outbox"))
+  }, [readMailbox, run])
+
+  /** 重新检查投递区可用性：用户在系统设置里授权后手动触发，避免反复进出页面。 */
+  const refreshMailbox = useCallback(() => {
+    void run('mailbox-refresh', async () => {
+      await readMailbox()
+    })
+  }, [readMailbox, run])
+
   const screen = (() => {
     switch (activeView) {
       case 'conversation':
@@ -2946,7 +3209,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} mailbox={mailbox} mailboxReadFailed={mailboxReadFailed} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} storageAccess={storageAccess} onDraftChange={updateSettingsDraft} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onRefreshMailbox={refreshMailbox} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

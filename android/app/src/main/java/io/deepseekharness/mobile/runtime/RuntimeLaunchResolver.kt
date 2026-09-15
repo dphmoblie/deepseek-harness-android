@@ -36,6 +36,12 @@ internal fun prootProfileFallbacks(
     if (includesSdcard && (!commandCanFail || RuntimeDiagnostics.prootFailure(result) != null)) {
         fallbacks += profile.copy(bindMounts = profile.bindMounts.filterNot { it.target == SDCARD_TARGET })
     }
+    // 投递区绑定与 `/sdcard` 同属可选绑定：宿主目录不可访问时本来就不会追加（见 preferredProfile），
+    // 而一旦 PRoot 因为其中任何一个绑定失败，必须整体撤掉它们 —— 可选能力不能拖垮会话启动。
+    val includesMailbox = profile.bindMounts.any { it.target in MAILBOX_BIND_TARGETS }
+    if (includesMailbox && (!commandCanFail || RuntimeDiagnostics.prootFailure(result) != null)) {
+        fallbacks += profile.copy(bindMounts = profile.bindMounts.filterNot { it.target in MAILBOX_BIND_TARGETS })
+    }
     return fallbacks.distinct()
 }
 
@@ -153,8 +159,16 @@ class RuntimeLaunchResolver(
         }
         val mounts = required.toMutableList()
         sdcardMount()?.let(mounts::add)
+        // 投递区：**只在宿主目录确实可访问时才追加**这两个绑定。
+        // 不可访问（无「所有文件访问」、目录不可写、ROM 限制）时一个都不加：
+        // 绑定一个不存在的宿主路径会让 PRoot 直接起不来，那比「投递区不可用」严重得多。
+        // 这条分支与 §4.5 的分层一致——无权限时投递区落到 T0（控制台上传），不是故障。
+        mounts.addAll(mailbox().bindMounts())
         return ProotLaunchProfile(disableSeccomp = false, bindMounts = mounts)
     }
+
+    /** 投递区门面；只用于追加可选绑定与判断可用性，不接触凭据路径。 */
+    private fun mailbox(): RuntimeMailbox = RuntimeMailbox(store)
 
     private fun sdcardMount(): ProotBindMount? {
         val source = File(SDCARD_TARGET)
@@ -241,6 +255,8 @@ class RuntimeLaunchResolver(
         manifest.rootfs.sha256,
         // Revalidate cached compatibility when shared storage becomes accessible or unavailable.
         sdcardMount() != null,
+        // 同理：投递区可用性变化（用户授予/撤销「所有文件访问」）会让绑定集合变化，缓存必须失效。
+        mailbox().mountableNow(),
     ).joinToString(":")
 
     private fun throwIfStartCancelled(externalCancellation: () -> Boolean) {
@@ -266,7 +282,10 @@ class RuntimeLaunchResolver(
      *
      * `includeCredentials` 默认取本解析器的构造参数，但**探测与自检必须显式传 false**：
      * 那些进程只跑 `node --version`、`dsh --version` 一类的命令，不需要模型凭据，
-     * 让 API Key 出现在它们的进程环境里属于无谓的暴露面（最小权限）。
+     * 让凭据落在它们的投递路径上属于无谓的暴露面（最小权限）。
+     *
+     * 秘密的落地顺序不能颠倒：先由 [RuntimeStore.prepareRuntimeSecrets] 把取值写进 0600 文件，
+     * 再把**只有路径**的投递描述交给 [RuntimeCommand.prootArgv]。argv 里因此不会出现任何取值。
      */
     private fun buildLaunch(
         profile: ProotLaunchProfile,
@@ -274,10 +293,25 @@ class RuntimeLaunchResolver(
         harnessAuthToken: String? = null,
         deviceBridgeAccess: DeviceBridgeAccess? = null,
         includeCredentials: Boolean = this.includeCredentials,
-    ): RuntimeLaunchSpec = RuntimeLaunchSpec(
-        argv = RuntimeCommand.prootArgv(store, entrypoint, profile.bindMounts, harnessAuthToken, deviceBridgeAccess, includeCredentials),
-        environment = RuntimeCommand.hostEnvironment(appContext, store, profile.disableSeccomp),
-    )
+    ): RuntimeLaunchSpec {
+        val secrets = if (includeCredentials) {
+            store.prepareRuntimeSecrets(harnessAuthToken, deviceBridgeAccess)
+        } else {
+            RuntimeSecretDelivery.NONE
+        }
+        return RuntimeLaunchSpec(
+            argv = RuntimeCommand.prootArgv(
+                store = store,
+                entrypoint = entrypoint,
+                bindMounts = profile.bindMounts,
+                secrets = secrets,
+                harnessSession = includeCredentials && harnessAuthToken != null,
+                deviceBridgePort = deviceBridgeAccess?.takeIf { includeCredentials }?.port,
+            ),
+            environment = RuntimeCommand.hostEnvironment(appContext, store, profile.disableSeccomp),
+            modelCredentialCount = secrets.modelCredentialCount,
+        )
+    }
 
     private companion object {
         val GUEST_PROBE_ENTRYPOINT = listOf("/bin/bash", "--noprofile", "--norc", "-c", "exit 0")
@@ -295,6 +329,9 @@ class RuntimeLaunchResolver(
 }
 
 private const val SDCARD_TARGET = "/sdcard"
+
+/** 投递区在访客内的固定挂载点（宿主侧目录见 `RuntimeMailboxLayout`）。 */
+private val MAILBOX_BIND_TARGETS = setOf(RuntimeMailboxLayout.GUEST_INBOX, RuntimeMailboxLayout.GUEST_OUTBOX)
 
 internal object RuntimeDiagnostics {
     fun runnerFailure(result: ProcessProbeResult): ClassifiedFailure = when {

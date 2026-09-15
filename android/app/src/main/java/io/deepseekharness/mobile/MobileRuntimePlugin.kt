@@ -20,6 +20,9 @@ import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
 import io.deepseekharness.mobile.runtime.HarnessPermissionMode
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
 import io.deepseekharness.mobile.runtime.clampHarnessTailBytes
+import io.deepseekharness.mobile.runtime.MailboxExportOutcome
+import io.deepseekharness.mobile.runtime.MailboxImportOutcome
+import io.deepseekharness.mobile.runtime.MailboxState
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
 import io.deepseekharness.mobile.runtime.DeviceBridgeAccess
 import io.deepseekharness.mobile.runtime.RuntimeEventSink
@@ -27,6 +30,7 @@ import io.deepseekharness.mobile.runtime.RuntimeFailure
 import io.deepseekharness.mobile.runtime.RuntimeHost
 import io.deepseekharness.mobile.runtime.RuntimeIntent
 import io.deepseekharness.mobile.runtime.RuntimeKeepAliveSnapshot
+import io.deepseekharness.mobile.runtime.RuntimeMailbox
 import io.deepseekharness.mobile.runtime.RuntimePhase
 import io.deepseekharness.mobile.runtime.RuntimeSelfCheckPolicy
 import io.deepseekharness.mobile.runtime.RuntimeSettings
@@ -78,6 +82,21 @@ internal fun optionalOverlayBallEnabled(data: JSONObject): Boolean? {
 /** 权限：应用私有桥接；省略保留原值，null、非法类型及未知模式一律拒绝。 */
 internal fun optionalHarnessPermissionMode(data: JSONObject): HarnessPermissionMode? =
     if (data.has("harnessPermissionMode")) HarnessPermissionMode.parse(data.opt("harnessPermissionMode")) else null
+
+/**
+ * 投递区导出的「指定子目录」参数。
+ *
+ * 省略、`null` 或空白一律等价于「整个工作区」；**非字符串直接拒绝**（不猜、不转字符串）。
+ * 路径本身（绝对路径、`..`、`.` 分段、超长、超深）由 `RuntimeMailboxPolicy.normalizeSubdirectory`
+ * 统一校验，这里只管类型，避免两套规则漂移。
+ */
+internal fun optionalMailboxSubdirectory(data: JSONObject): String? {
+    if (!data.has("subdirectory")) return null
+    val value = data.opt("subdirectory")
+    if (value == null || value == JSONObject.NULL) return null
+    if (value !is String) throw RuntimeFailure("MAILBOX_INPUT_INVALID", "投递区导出目标格式无效")
+    return value
+}
 
 /** 前台服务通知权限别名；Android 13 以下系统不需要该权限。 */
 private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
@@ -963,6 +982,50 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 权限：应用内桥接。
+     * 投递区状态：用户可见路径、访客挂载点、可用性与 inbox 计数（最多列 5 个 tar）。
+     * **不含**任何私有路径、宿主 canonical 路径或文件内容。
+     */
+    @PluginMethod
+    fun mailboxState(call: PluginCall) {
+        resolveWhileActive(call) { RuntimeMailbox(controller.store).state().toJs() }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     *
+     * 一键导入：inbox 的 tar → 工作区 `mailbox-import/`。
+     * 越界（`..` / 绝对路径 / 绝对符号链接）、超限、重复条目与摘要不符，全部在写第一个字节
+     * **之前**被拒绝；解包先落到应用私有暂存目录，最后整体改名就位，因此失败不留半截产物。
+     * 重复执行是幂等的：落点被整体替换，不会产生第二份条目。
+     */
+    @PluginMethod
+    fun importMailbox(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.MAILBOX_IMPORT) {
+                RuntimeMailbox(controller.store).importInbox().toJs()
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；`subdirectory` 省略或留空表示导出整个工作区。
+     *
+     * 一键导出：工作区（或指定子目录）→ outbox 的 `dsh-workspace.tar` +
+     * `dsh-workspace.manifest.json` + `dsh-workspace.tar.sha256`。三个文件名固定，
+     * 重复执行只覆盖同一组产物，不会在 outbox 里堆出多份。
+     */
+    @PluginMethod
+    fun exportMailbox(call: PluginCall) {
+        execute(call) {
+            val subdirectory = optionalMailboxSubdirectory(call.data)
+            audited(AuditEvent.MAILBOX_EXPORT) {
+                RuntimeMailbox(controller.store).exportWorkspace(subdirectory).toJs()
+            }
+        }
+    }
+
+    /**
      * 权限：应用内桥接；仅申请相册/视频的媒体读取权限。
      * Android 13 起用 READ_MEDIA_*，12 及以下用 READ_EXTERNAL_STORAGE；被拒绝只返回结果，
      * 不阻断其他功能（容器仍可读应用私有目录）。
@@ -1417,6 +1480,63 @@ class MobileRuntimePlugin : Plugin() {
         .put("fileCount", fileCount)
         .put("totalBytes", totalBytes)
         .put("lastEntryAtMillis", lastEntryAtMillis)
+
+    /**
+     * 投递区状态。
+     *
+     * `available` 与 `availability` 是同一事实的两种表达：前者给按钮的禁用条件，
+     * 后者给文案分档（可用 / 需要授权 / 不支持 / 已授权但不可写）。
+     * 路径是**用户可见路径**与访客挂载点，二者都在文档里公开，不属于私有信息。
+     */
+    private fun MailboxState.toJs(): JSObject = JSObject()
+        .put("availability", availability.wireValue)
+        .put("level", availability.level)
+        .put("available", available)
+        .put("supported", supported)
+        .put("granted", granted)
+        .put("inboxPath", inboxPath)
+        .put("outboxPath", outboxPath)
+        .put("guestInboxPath", guestInboxPath)
+        .put("guestOutboxPath", guestOutboxPath)
+        .put("inboxFileCount", inboxFileCount)
+        .put(
+            "inboxTars",
+            org.json.JSONArray().also { array ->
+                inboxTars.forEach { candidate ->
+                    array.put(JSObject().put("name", candidate.name).put("bytes", candidate.bytes))
+                }
+            },
+        )
+        .put("exportTarName", exportTarName)
+        .put("exportManifestName", exportManifestName)
+        .put("importDirectory", importDirectory)
+
+    /** 导入结果：只有计数、字节数、文件名与落点，不含内容。 */
+    private fun MailboxImportOutcome.toJs(): JSObject = JSObject()
+        .put("entryCount", entryCount)
+        .put("fileCount", fileCount)
+        .put("directoryCount", directoryCount)
+        .put("symlinkCount", symlinkCount)
+        .put("hardlinkCount", hardlinkCount)
+        .put("bytes", bytes)
+        .put("tarName", tarName)
+        .put("tarBytes", tarBytes)
+        .put("verified", verified)
+        .put("ignoredFiles", ignoredFiles)
+        .put("target", target)
+        .also { json -> manifestName?.let { json.put("manifestName", it) } }
+
+    /** 导出结果：产物文件名、字节数与摘要，以及被跳过的条目数。 */
+    private fun MailboxExportOutcome.toJs(): JSObject = JSObject()
+        .put("entryCount", entryCount)
+        .put("bytes", bytes)
+        .put("tarName", tarName)
+        .put("tarBytes", tarBytes)
+        .put("tarSha256", tarSha256)
+        .put("manifestName", manifestName)
+        .put("skippedLinks", skippedLinks)
+        .put("skippedSpecial", skippedSpecial)
+        .also { json -> subdirectory?.let { json.put("subdirectory", it) } }
 
     /** 应用内查看结果：受控字段文本 + 窗口与截断状态，不含路径或文件名。 */
     private fun DiagnosticText.toJs(): JSObject = JSObject()

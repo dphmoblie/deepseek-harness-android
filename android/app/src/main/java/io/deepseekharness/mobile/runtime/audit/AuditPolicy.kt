@@ -19,6 +19,12 @@ enum class AuditEvent {
     TERMINAL_OPEN,
     TERMINAL_CLOSE,
     SHIZUKU_PERMISSION,
+
+    /** 外置投递区：一键导入（inbox 的 tar → 工作区 mailbox-import）。 */
+    MAILBOX_IMPORT,
+
+    /** 外置投递区：一键导出（工作区 → outbox 的 tar + manifest + sha256）。 */
+    MAILBOX_EXPORT,
 }
 
 enum class AuditResult {

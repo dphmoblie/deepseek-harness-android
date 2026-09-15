@@ -144,6 +144,7 @@ class RuntimePreservePolicyTest {
                 "logs",
                 "llm-deepseek",
                 "launcher-providers.patch.json",
+                "runtime-secrets.env",
                 "plugins",
             ),
             RuntimePreservePolicy.RUNTIME_ARTIFACTS_NOT_PRESERVED,

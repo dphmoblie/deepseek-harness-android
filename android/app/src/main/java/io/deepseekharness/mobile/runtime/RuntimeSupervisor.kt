@@ -190,13 +190,11 @@ class RuntimeSupervisor(
             failStart(failure)
         }
         throwIfStartCancelled()
-        // 记录本次启动实际注入的模型凭据**条数**，不记录变量名与取值。
-        // 用途：导出诊断日志后即可区分「App 没有可注入的凭据」与「dsh 侧没有用上」。
-        // 命名形态取自 ModelProvider 与 CustomModelProvider，二者均以 _API_KEY 结尾；
-        // 因此 DSH_MOBILE_AUTH_TOKEN / DSH_DEVICE_BRIDGE_TOKEN 这类临时凭据不会被计入。
-        val credentialCount = launch.argv.count { entry ->
-            entry.substringBefore('=').matches(Regex("^[A-Z][A-Z0-9_]*_API_KEY$"))
-        }
+        // 记录本次启动实际投递的模型凭据**条数**，不记录变量名与取值。
+        // 用途：导出诊断日志后即可区分「App 没有可投递的凭据」与「dsh 侧没有用上」。
+        // 条数由投递计划给出（`RuntimeSecretDelivery.modelCredentialCount`）：修复后 argv 里
+        // 不再出现任何凭据赋值，因此不能再从命令行里数 `_API_KEY=` 形态。
+        val credentialCount = launch.modelCredentialCount
         store.diagnostics.record(
             DiagnosticLevel.INFO,
             DiagnosticEvent.CREDENTIALS,
@@ -410,6 +408,9 @@ class RuntimeSupervisor(
         harnessOutput = null
         harnessAccess = null
         deleteHarnessPid()
+        // 临时令牌只在一次运行内有意义：停止运行环境即从访客文件系统里抹掉，
+        // 不等待下一次启动覆盖（下一次启动无论如何都会整份重写）。
+        store.deleteRuntimeSecrets()
     }
 
     /**

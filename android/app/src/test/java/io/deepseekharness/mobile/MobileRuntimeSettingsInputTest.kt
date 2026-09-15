@@ -38,4 +38,21 @@ class MobileRuntimeSettingsInputTest {
             assertEquals("SETTINGS_INVALID", failure.code)
         }
     }
+
+    @Test
+    fun treatsOmittedAndBlankMailboxSubdirectoryAsTheWholeWorkspace() {
+        assertNull(optionalMailboxSubdirectory(JSONObject()))
+        assertNull(optionalMailboxSubdirectory(JSONObject().put("subdirectory", JSONObject.NULL)))
+        assertEquals("proj/src", optionalMailboxSubdirectory(JSONObject().put("subdirectory", "proj/src")))
+    }
+
+    @Test
+    fun rejectsNonStringMailboxSubdirectory() {
+        listOf(true, 1, listOf("proj"), JSONObject()).forEach { invalidValue ->
+            val failure = assertThrows(RuntimeFailure::class.java) {
+                optionalMailboxSubdirectory(JSONObject().put("subdirectory", invalidValue))
+            }
+            assertEquals("MAILBOX_INPUT_INVALID", failure.code)
+        }
+    }
 }

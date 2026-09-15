@@ -77,4 +77,36 @@ describe('browser settings bridge', () => {
     await expect(bridge.runRuntimeSelfCheck('check')).rejects.toThrow('浏览器预览不支持运行时自检')
     await expect(bridge.runRuntimeSelfCheck('repair')).rejects.toThrow('浏览器预览不支持运行时自检')
   })
+
+  it('浏览器预览的投递区始终报「不支持」，不编造可用状态与计数', async () => {
+    const bridge = createBrowserBridge()
+
+    const state = await bridge.getMailboxState()
+
+    // 路径是文档里的固定路径（只用于展示），但可用性与计数必须是真实的「没有」。
+    expect(state.availability).toBe('unsupported')
+    expect(state.level).toBe('T0')
+    expect(state.available).toBe(false)
+    expect(state.supported).toBe(false)
+    expect(state.granted).toBe(false)
+    expect(state.inboxFileCount).toBe(0)
+    expect(state.inboxTars).toEqual([])
+    expect(state.inboxPath).toBe('/storage/emulated/0/Documents/DSH/inbox')
+    expect(state.guestInboxPath).toBe('/mnt/inbox')
+
+    const storage = await bridge.getStorageAccessState()
+    expect(storage).toEqual({ mediaGranted: false, allFilesGranted: false, allFilesSupported: false, sdkInt: 0 })
+    // 浏览器里没有可授权的系统权限：如实返回未授予，不假装已授权。
+    await expect(bridge.requestMediaPermission()).resolves.toEqual({ granted: false })
+    await expect(bridge.openAllFilesAccessSettings()).resolves.toEqual({ supported: false, granted: false })
+  })
+
+  it('浏览器预览没有真实文件系统：导入与导出明确拒绝，不编造条目数', async () => {
+    const bridge = createBrowserBridge()
+
+    await expect(bridge.importMailbox()).rejects.toThrow('浏览器预览不支持导入投递区')
+    await expect(bridge.exportMailbox()).rejects.toThrow('浏览器预览不支持导出投递区')
+    // 非法导出起点在离开前端之前就被拒绝（同步抛错，与平台层其他入参校验同构）。
+    expect(() => bridge.exportMailbox('../outside')).toThrow('投递区导出起点格式无效')
+  })
 })

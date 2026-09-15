@@ -68,6 +68,9 @@ object RuntimePreservePolicy {
      * - `cache`、`tmp`、`logs`：缓存、临时文件与日志，由新运行时重建即可，没有跨版本价值。
      * - `llm-deepseek`：远端文件上传缓存（dsh-llm-deepseek/lib/index.js:766），与远端状态绑定。
      * - `launcher-providers.patch.json`：应用每次启动重新生成的启动配置。
+     * - `runtime-secrets.env`：应用每次启动重新生成的 0600 秘密环境文件
+     *   （`RuntimeCommand.GUEST_SECRET_ENV_PATH`）。它承载每次启动生成、只在一次运行内有效的
+     *   临时令牌，**绝不能**跨版本保留 —— 新运行时会重新投递，搬运旧文件只会把过期取值带过去。
      * - `plugins`：**这不是 dsh 的路径**（用户安装的插件真实位于 `root/.dsh-mobile/plugin-manager`，
      *   见 [PRESERVED_OUTSIDE_HOME]）。它曾被误列为保留项，已删除；列在这里是为了防止回归。
      */
@@ -78,6 +81,7 @@ object RuntimePreservePolicy {
         "logs",
         "llm-deepseek",
         "launcher-providers.patch.json",
+        "runtime-secrets.env",
         "plugins",
     )
 

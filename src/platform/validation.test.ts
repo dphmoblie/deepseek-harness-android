@@ -2,14 +2,20 @@ import { describe, expect, it } from 'vitest'
 import {
   assertBase64Input,
   assertDiagnosticRetentionDays,
+  assertMailboxSubdirectory,
   assertSessionId,
   assertTerminalKind,
   assertTerminalSize,
+  validateAllFilesAccessResult,
   validateDiagnosticLogExport,
   validateDiagnosticLogState,
   validateDiagnosticLogText,
   validateHarnessLog,
   validateKeepAliveState,
+  validateMailboxExportResult,
+  validateMailboxImportResult,
+  validateMailboxState,
+  validateMediaPermissionResult,
   validateNotificationPermissionResult,
   validateOverlayBallState,
   validateRuntimeProgress,
@@ -18,6 +24,7 @@ import {
   validateSettings,
   validateSettingsUpdate,
   validateShizukuState,
+  validateStorageAccessState,
   validateStoredSettings,
   validateTerminalChunk,
   validateTerminalExit,
@@ -551,5 +558,143 @@ describe('悬浮球状态校验', () => {
       .toThrow()
     expect(() => validateOverlayBallState({ enabled: true, canDrawOverlays: true }))
       .toThrow()
+  })
+})
+
+const mailboxState = {
+  availability: 'available',
+  level: 'T2',
+  available: true,
+  supported: true,
+  granted: true,
+  inboxPath: '/storage/emulated/0/Documents/DSH/inbox',
+  outboxPath: '/storage/emulated/0/Documents/DSH/outbox',
+  guestInboxPath: '/mnt/inbox',
+  guestOutboxPath: '/mnt/outbox',
+  inboxFileCount: 2,
+  inboxTars: [{ name: 'dsh-workspace.tar', bytes: 2048 }],
+  exportTarName: 'dsh-workspace.tar',
+  exportManifestName: 'dsh-workspace.manifest.json',
+  importDirectory: 'mailbox-import',
+}
+
+describe('投递区状态校验', () => {
+  it('接受合法的投递区状态', () => {
+    expect(validateMailboxState(mailboxState)).toEqual(mailboxState)
+    expect(validateMailboxState({ ...mailboxState, availability: 'needsPermission', level: 'T0', available: false }).available)
+      .toBe(false)
+  })
+
+  it('拒绝未知档位、缺失字段与相对路径', () => {
+    // 未知档位不能回落到「可用」：把读不懂的状态显示成可用，用户点了才发现不可用。
+    expect(() => validateMailboxState({ ...mailboxState, availability: 'maybe' })).toThrow('投递区可用性格式无效')
+    expect(() => validateMailboxState({ ...mailboxState, level: 'T3' })).toThrow('投递区权限档位格式无效')
+    expect(() => validateMailboxState({ ...mailboxState, inboxPath: 'Documents/DSH/inbox' })).toThrow()
+    expect(() => validateMailboxState({ ...mailboxState, exportTarName: 'sub/dsh.tar' })).toThrow()
+    expect(() => validateMailboxState({ ...mailboxState, inboxFileCount: -1 })).toThrow()
+    expect(() => validateMailboxState({ ...mailboxState, inboxTars: new Array(6).fill({ name: 'a.tar', bytes: 1 }) }))
+      .toThrow('投递区 tar 列表格式无效')
+    const missing: Record<string, unknown> = { ...mailboxState }
+    delete missing.guestOutboxPath
+    expect(() => validateMailboxState(missing)).toThrow()
+  })
+
+  it('拒绝自相矛盾的可用性', () => {
+    // available=true 但档位是「需要授权」：界面会出现「按钮可点 + 文案说没权限」的矛盾状态。
+    expect(() => validateMailboxState({ ...mailboxState, availability: 'needsPermission' }))
+      .toThrow('投递区状态自相矛盾')
+    expect(() => validateMailboxState({ ...mailboxState, available: false }))
+      .toThrow('投递区状态自相矛盾')
+  })
+})
+
+describe('投递区结果校验', () => {
+  it('接受合法的导入与导出结果', () => {
+    expect(validateMailboxImportResult({
+      entryCount: 3,
+      fileCount: 2,
+      directoryCount: 1,
+      symlinkCount: 0,
+      hardlinkCount: 0,
+      bytes: 2048,
+      tarName: 'dsh-workspace.tar',
+      tarBytes: 4096,
+      verified: true,
+      manifestName: 'dsh-workspace.manifest.json',
+      ignoredFiles: 0,
+      target: 'mailbox-import',
+    }).verified).toBe(true)
+
+    // 没有 manifest 时不补默认文件名：字段缺失就是「未附带」。
+    expect(validateMailboxImportResult({
+      entryCount: 1,
+      fileCount: 1,
+      directoryCount: 0,
+      symlinkCount: 0,
+      hardlinkCount: 0,
+      bytes: 4,
+      tarName: 'loose.tar',
+      tarBytes: 10240,
+      verified: false,
+      ignoredFiles: 0,
+      target: 'mailbox-import',
+    }).manifestName).toBeUndefined()
+
+    expect(validateMailboxExportResult({
+      entryCount: 5,
+      bytes: 8192,
+      tarName: 'dsh-workspace.tar',
+      tarBytes: 10240,
+      tarSha256: 'b'.repeat(64),
+      manifestName: 'dsh-workspace.manifest.json',
+      skippedLinks: 1,
+      skippedSpecial: 0,
+    }).skippedLinks).toBe(1)
+  })
+
+  it('拒绝负数计数、非法摘要与绝对路径文件名', () => {
+    expect(() => validateMailboxImportResult({
+      entryCount: -1, fileCount: 0, directoryCount: 0, symlinkCount: 0, hardlinkCount: 0,
+      bytes: 0, tarName: 'a.tar', tarBytes: 1, verified: false, ignoredFiles: 0, target: 'mailbox-import',
+    })).toThrow()
+    expect(() => validateMailboxExportResult({
+      entryCount: 1, bytes: 1, tarName: 'a.tar', tarBytes: 1, tarSha256: 'B'.repeat(64),
+      manifestName: 'a.json', skippedLinks: 0, skippedSpecial: 0,
+    })).toThrow('投递区导出摘要格式无效')
+    expect(() => validateMailboxExportResult({
+      entryCount: 1, bytes: 1, tarName: '/etc/passwd', tarBytes: 1, tarSha256: 'b'.repeat(64),
+      manifestName: 'a.json', skippedLinks: 0, skippedSpecial: 0,
+    })).toThrow()
+  })
+})
+
+describe('存储访问校验', () => {
+  it('接受合法载荷并拒绝缺失字段', () => {
+    expect(validateStorageAccessState({ mediaGranted: false, allFilesGranted: true, allFilesSupported: true, sdkInt: 34 }))
+      .toEqual({ mediaGranted: false, allFilesGranted: true, allFilesSupported: true, sdkInt: 34 })
+    // allFilesSupported 缺失时不能补成 false：那会把 Android 14 显示成「系统不支持」。
+    expect(() => validateStorageAccessState({ mediaGranted: false, allFilesGranted: true, sdkInt: 34 })).toThrow()
+    expect(() => validateStorageAccessState({ mediaGranted: false, allFilesGranted: true, allFilesSupported: true, sdkInt: -1 }))
+      .toThrow()
+    expect(validateMediaPermissionResult({ granted: true })).toEqual({ granted: true })
+    expect(() => validateMediaPermissionResult({ granted: 'true' })).toThrow()
+    expect(validateAllFilesAccessResult({ supported: false, granted: false }))
+      .toEqual({ supported: false, granted: false })
+    expect(() => validateAllFilesAccessResult({ supported: true })).toThrow()
+  })
+})
+
+describe('投递区导出起点判定', () => {
+  it('省略与空白等价于整个工作区', () => {
+    expect(assertMailboxSubdirectory(undefined)).toBeUndefined()
+    expect(assertMailboxSubdirectory('')).toBeUndefined()
+    expect(assertMailboxSubdirectory('   ')).toBeUndefined()
+    expect(assertMailboxSubdirectory(' proj/src ')).toBe('proj/src')
+  })
+
+  it('拒绝绝对路径与越界分段', () => {
+    for (const value of ['/abs', '../outside', 'proj/../../outside', 'proj/./src', 'proj//src', 'a\\b']) {
+      expect(() => assertMailboxSubdirectory(value), value).toThrow('投递区导出起点格式无效')
+    }
   })
 })

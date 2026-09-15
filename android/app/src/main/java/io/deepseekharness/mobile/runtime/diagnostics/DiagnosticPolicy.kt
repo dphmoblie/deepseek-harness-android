@@ -94,6 +94,15 @@ enum class DiagnosticEvent {
      *    `warn` 与 `skipped` 不算失败，只出现在界面载荷里。
      */
     SELF_CHECK,
+
+    /**
+     * 外置投递区（mailbox）的搬运结果。
+     *
+     * 只记录受控取值：`reason` 是 `import` / `export` / `state`，`result` 是 `ok` / `failed` /
+     * `denied`，`files` 是条目数，`bytes` 是内容总字节数，`count` 是符号链接数或跳过数。
+     * **不记录任何路径**（含用户可见路径），也不记录文件名或 manifest 内容。
+     */
+    MAILBOX,
 }
 
 /**

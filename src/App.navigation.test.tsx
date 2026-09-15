@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { DiagnosticLogState, KeepAliveState, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from './platform/types'
+import type { DiagnosticLogState, KeepAliveState, MailboxState, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState, StorageAccessState } from './platform/types'
 
 /**
  * 返回键与视图历史。
@@ -39,6 +39,8 @@ const bridge = vi.hoisted(() => ({
   getKeepAliveState: vi.fn(),
   getOverlayBallState: vi.fn(),
   openOverlaySettings: vi.fn(),
+  getMailboxState: vi.fn(),
+  getStorageAccessState: vi.fn(),
   requestNotificationPermission: vi.fn(),
   getDiagnosticLogState: vi.fn(),
   setDiagnosticLogSettings: vi.fn(),
@@ -106,6 +108,31 @@ const diagnostic: DiagnosticLogState = {
   lastEntryAtMillis: 0,
 }
 
+/** 导航用例不关心投递区：给一个「未授权」的稳定初值，界面只显示降级文案。 */
+const mailbox: MailboxState = {
+  availability: 'needsPermission',
+  level: 'T0',
+  available: false,
+  supported: true,
+  granted: false,
+  inboxPath: '/storage/emulated/0/Documents/DSH/inbox',
+  outboxPath: '/storage/emulated/0/Documents/DSH/outbox',
+  guestInboxPath: '/mnt/inbox',
+  guestOutboxPath: '/mnt/outbox',
+  inboxFileCount: 0,
+  inboxTars: [],
+  exportTarName: 'dsh-workspace.tar',
+  exportManifestName: 'dsh-workspace.manifest.json',
+  importDirectory: 'mailbox-import',
+}
+
+const storageAccess: StorageAccessState = {
+  mediaGranted: false,
+  allFilesGranted: false,
+  allFilesSupported: true,
+  sdkInt: 34,
+}
+
 /** 主视图（对话门面）的标题。 */
 function mainViewHeading(): HTMLElement {
   return screen.getByRole('heading', { name: '正在进入对话' })
@@ -156,6 +183,8 @@ beforeEach(() => {
   // 导航用例不关心悬浮球：给一个已授权、已关闭的稳定初值即可。
   bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
   bridge.openOverlaySettings.mockResolvedValue(undefined)
+  bridge.getMailboxState.mockResolvedValue({ ...mailbox })
+  bridge.getStorageAccessState.mockResolvedValue({ ...storageAccess })
   bridge.getDiagnosticLogState.mockResolvedValue({ ...diagnostic })
   bridge.addRuntimeProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })
   bridge.saveSettings.mockImplementation((value: RuntimeSettingsUpdate) => Promise.resolve(value))

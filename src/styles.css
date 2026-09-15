@@ -1614,6 +1614,16 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   text-align: right;
 }
 
+/* 投递区路径：长度可到 40+ 字符，必须允许在任意位置断行，否则会把整行撑出去。 */
+.mailbox-path {
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: right;
+  word-break: break-all;
+}
+
 .settings-note {
   margin-top: 10px;
   padding-top: 10px;

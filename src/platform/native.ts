@@ -26,9 +26,11 @@ import type {
 import {
   assertBase64Input,
   assertDiagnosticRetentionDays,
+  assertMailboxSubdirectory,
   assertSessionId,
   assertTerminalKind,
   assertTerminalSize,
+  validateAllFilesAccessResult,
   validateDeviceCommand,
   validateDeviceCommandParam,
   validateDeviceCommandResult,
@@ -37,6 +39,10 @@ import {
   validateDiagnosticLogText,
   validateHarnessLog,
   validateKeepAliveState,
+  validateMailboxExportResult,
+  validateMailboxImportResult,
+  validateMailboxState,
+  validateMediaPermissionResult,
   validateNotificationPermissionResult,
   validateOverlayBallState,
   validateRuntimeProgress,
@@ -45,6 +51,7 @@ import {
   validateSettings,
   validateSettingsUpdate,
   validateShizukuState,
+  validateStorageAccessState,
   validateStoredSettings,
   validateRuntimeSource,
   validateTerminalChunk,
@@ -76,6 +83,12 @@ interface NativeRuntimePlugin {
   requestNotificationPermission(): Promise<NotificationPermissionResult>
   overlayBallState(): Promise<unknown>
   openOverlaySettings(): Promise<void>
+  mailboxState(): Promise<unknown>
+  getStorageAccessState(): Promise<unknown>
+  requestMediaPermission(): Promise<unknown>
+  openAllFilesAccessSettings(): Promise<unknown>
+  importMailbox(): Promise<unknown>
+  exportMailbox(options: { subdirectory?: string }): Promise<unknown>
   getHarnessLog(options: { maxBytes?: number }): Promise<unknown>
   runRuntimeSelfCheck(options: { operation: SelfCheckOperation }): Promise<unknown>
   getDiagnosticLogState(): Promise<DiagnosticLogState>
@@ -165,6 +178,17 @@ function createNativeBridge(): RuntimeBridge {
     requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),
     getOverlayBallState: () => NativeRuntime.overlayBallState().then(validateOverlayBallState),
     openOverlaySettings: () => NativeRuntime.openOverlaySettings(),
+    getMailboxState: () => NativeRuntime.mailboxState().then(validateMailboxState),
+    getStorageAccessState: () => NativeRuntime.getStorageAccessState().then(validateStorageAccessState),
+    requestMediaPermission: () => NativeRuntime.requestMediaPermission().then(validateMediaPermissionResult),
+    openAllFilesAccessSettings: () => NativeRuntime.openAllFilesAccessSettings().then(validateAllFilesAccessResult),
+    importMailbox: () => NativeRuntime.importMailbox().then(validateMailboxImportResult),
+    // 导出起点先在前端拦一道明显非法的取值（绝对路径、`..`），原生侧还有同一套规则兜底。
+    exportMailbox: subdirectory => {
+      const target = assertMailboxSubdirectory(subdirectory)
+      return NativeRuntime.exportMailbox(target === undefined ? {} : { subdirectory: target })
+        .then(validateMailboxExportResult)
+    },
     // 窗口参数由原生侧收敛到受控档位；这里只负责透传用户选择的字节数。
     getHarnessLog: options => NativeRuntime.getHarnessLog({ maxBytes: options?.maxBytes }).then(validateHarnessLog),
     // 操作类型只允许 check / repair：未知取值在进入原生侧之前就被拒绝。

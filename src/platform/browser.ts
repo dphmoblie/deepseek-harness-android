@@ -5,6 +5,7 @@ import type {
   HarnessLog,
   KeepAliveState,
   ListenerHandle,
+  MailboxState,
   ModelProviderId,
   OverlayBallState,
   ProviderApiKeys,
@@ -13,15 +14,18 @@ import type {
   RuntimeSettings,
   RuntimeState,
   ShizukuState,
+  StorageAccessState,
   TerminalChunk,
   TerminalExit,
   TerminalKind,
 } from './types'
 import { DIAGNOSTIC_RETENTION_DEFAULT, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertSessionId, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
+import { assertMailboxSubdirectory, assertSessionId, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
+/** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
+const BROWSER_MAILBOX_ROOT = '/storage/emulated/0/Documents/DSH'
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
@@ -250,6 +254,45 @@ export function createBrowserBridge(): RuntimeBridge {
     }),
     // 浏览器里没有可跳转的系统设置页；静默无操作，不抛错以免打断预览。
     openOverlaySettings: (): Promise<void> => Promise.resolve(),
+    /**
+     * 浏览器预览没有 Android 的公共存储与 PRoot 访客：投递区**如实报不可用**。
+     *
+     * 刻意不走「编造一份可用的状态」这条捷径：路径是文档里的固定路径，
+     * 但 `available` 恒为 false、计数恒为 0，界面因此只会显示「不支持」而不会给出可点的按钮。
+     * 授权档位按「系统不存在这一档」上报（`unsupported` / T0），因为浏览器里确实没有
+     * 「所有文件访问」这个权限可授予。
+     */
+    getMailboxState: (): Promise<MailboxState> => Promise.resolve({
+      availability: 'unsupported',
+      level: 'T0',
+      available: false,
+      supported: false,
+      granted: false,
+      inboxPath: `${BROWSER_MAILBOX_ROOT}/inbox`,
+      outboxPath: `${BROWSER_MAILBOX_ROOT}/outbox`,
+      guestInboxPath: '/mnt/inbox',
+      guestOutboxPath: '/mnt/outbox',
+      inboxFileCount: 0,
+      inboxTars: [],
+      exportTarName: 'dsh-workspace.tar',
+      exportManifestName: 'dsh-workspace.manifest.json',
+      importDirectory: 'mailbox-import',
+    }),
+    getStorageAccessState: (): Promise<StorageAccessState> => Promise.resolve({
+      mediaGranted: false,
+      allFilesGranted: false,
+      allFilesSupported: false,
+      sdkInt: 0,
+    }),
+    // 浏览器里没有可申请的 Android 权限：不弹任何东西，也不假装已授权。
+    requestMediaPermission: () => Promise.resolve({ granted: false }),
+    openAllFilesAccessSettings: () => Promise.resolve({ supported: false, granted: false }),
+    // 没有真实文件系统可搬运：明确拒绝，不编造条目数与摘要。
+    importMailbox: () => Promise.reject(new Error('浏览器预览不支持导入投递区')),
+    exportMailbox: subdirectory => {
+      assertMailboxSubdirectory(subdirectory)
+      return Promise.reject(new Error('浏览器预览不支持导出投递区'))
+    },
     // 浏览器预览里没有访客进程，也就没有可读的输出尾部：如实返回不可用，不编造内容。
     getHarnessLog: (options): Promise<HarnessLog> => Promise.resolve({
       available: false,

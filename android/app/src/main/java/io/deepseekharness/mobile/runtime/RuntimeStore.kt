@@ -304,10 +304,252 @@ class RuntimeStore(context: Context) {
     }
 
     private fun harnessCredentialStatus(customProviders: List<CustomModelProvider>): HarnessCredentialStatus =
-        HarnessCredentialStatusReader.read(
-            File(currentRoot, "${RuntimePreservePolicy.GUEST_DSH_HOME}/.credentials.yaml"),
-            customProviders,
-        )
+        HarnessCredentialStatusReader.read(harnessCredentialsFile, customProviders)
+
+    /**
+     * Harness 自己的凭据文档（`$DSH_HOME/.credentials.yaml`，访客内 `/root/.dsh/.credentials.yaml`）。
+     *
+     * 官方前端「模型页」写的就是这一份；它也在 [RuntimePreservePolicy] 的保留白名单里，
+     * 因此 App 侧写入的是**同一份**用户数据，不引入第二处真源。
+     */
+    val harnessCredentialsFile = File(currentRoot, "${RuntimePreservePolicy.GUEST_DSH_HOME}/.credentials.yaml")
+
+    /**
+     * 访客侧 0600 环境文件（[RuntimeCommand.GUEST_SECRET_ENV_PATH] 对应的宿主路径）。
+     *
+     * 与 `launcher-providers.patch.json` 同目录、同样每次启动重新生成，不在保留白名单内 ——
+     * 运行时升级换代时随旧根目录一起消失。
+     */
+    val runtimeSecretFile = File(currentRoot, RuntimeCommand.GUEST_SECRET_ENV_PATH.removePrefix("/"))
+
+    /**
+     * 把本次启动的秘密投递到访客侧，返回**只含位置**的投递描述。
+     *
+     * 分两路：
+     *  - **模型凭据优先并写 [harnessCredentialsFile]（0600）**。pinned dsh 的
+     *    `@deepseek-ai/dsh-credentials-local` 分层是
+     *    「继承的进程环境 > `$DSH_HOME/.credentials.yaml` > `.env`」，因此**不设同名环境变量**时
+     *    dsh 就从它自己的凭据文档读取，取值连进程环境都不进。这条路径同时修掉一个既有症状：
+     *    环境层存在时 dsh 把该引用判为**只读**，模型页对同一把 key 的保存会直接报错。
+     *  - **每次启动生成的临时令牌**（`DSH_MOBILE_AUTH_TOKEN` / `DSH_DEVICE_BRIDGE_TOKEN`）
+     *    不能进那份跨升级保留的长期文档，写进访客侧 0600 环境文件，
+     *    由 argv 里那层固定的 `sh` 包装 `source` 之后 exec 真正的入口。
+     *
+     * 凭据文档不可安全编辑（形态陌生、目录/文件不可信、写入失败）时**回落**：模型凭据改由同一个
+     * 环境文件承载 —— 功能不变、argv 依旧只有路径。回落是刻意的：为了 argv 的清洁让 Harness 起不来
+     * 是本末倒置，而两条路径的 argv 形态完全相同。
+     *
+     * 顺序：先落文件、再返回描述；`RuntimeCommand.prootArgv` 只使用描述里的路径。
+     */
+    @Synchronized
+    internal fun prepareRuntimeSecrets(
+        harnessAuthToken: String?,
+        deviceBridgeAccess: DeviceBridgeAccess?,
+    ): RuntimeSecretDelivery {
+        if (harnessAuthToken != null && !RuntimeSecretPolicy.TOKEN_PATTERN.matches(harnessAuthToken)) {
+            throw RuntimeFailure("HARNESS_AUTH_INVALID", "Harness 临时凭据无效")
+        }
+        deviceBridgeAccess?.let { access ->
+            if (access.port !in 1024..65535 || !RuntimeSecretPolicy.TOKEN_PATTERN.matches(access.token)) {
+                throw RuntimeFailure("DEVICE_BRIDGE_INVALID", "设备桥临时连接信息无效")
+            }
+        }
+        val ephemeralSecrets = linkedMapOf<String, String>().apply {
+            harnessAuthToken?.let { put(MOBILE_AUTH_TOKEN_ENV, it) }
+            deviceBridgeAccess?.let { put(DEVICE_BRIDGE_TOKEN_ENV, it.token) }
+        }
+        val modelCredentials = modelCredentialValues()
+        val deliveredByFile = modelCredentials.isNotEmpty() && writeHarnessCredentials(modelCredentials)
+        val environmentValues = RuntimeSecretPolicy.route(modelCredentials, ephemeralSecrets, deliveredByFile)
+        val delivery = RuntimeSecretPolicy.delivery(environmentValues, modelCredentials.size)
+        writeRuntimeSecretFile(delivery)
+        return delivery
+    }
+
+    /**
+     * 尽力删除访客侧环境文件。
+     *
+     * 删除的是固定路径本身（`unlink` 不跟随符号链接）：访客里的同 uid 代码可以把这个路径换成
+     * 符号链接，但被摘掉的只会是链接。删除失败不算错误 —— 临时令牌每次启动重新生成，
+     * 残留文件里的旧值对下一次运行没有任何作用，且下次启动会整份重写。
+     */
+    fun deleteRuntimeSecrets() {
+        try {
+            Os.remove(runtimeSecretFile.absolutePath)
+        } catch (_: ErrnoException) {
+            // ENOENT 是常态（本次启动没有需要投递的秘密）。
+        }
+    }
+
+    /** 本机保存的模型凭据：环境变量名 → 取值。只用于写入 0600 文件与 Harness 凭据文档。 */
+    private fun modelCredentialValues(): Map<String, String> {
+        val values = linkedMapOf<String, String>()
+        val providerApiKeys = providerApiKeysLocked()
+        ModelProvider.entries.forEach { provider ->
+            providerApiKeys[provider]?.let { values[provider.environmentVariable] = it }
+        }
+        val customProviders = customModelProvidersLocked()
+        val customProviderApiKeys = customProviderApiKeysLocked(customProviders.mapTo(linkedSetOf()) { it.id })
+        customProviders.forEach { provider ->
+            customProviderApiKeys[provider.id]?.let { values[provider.environmentVariable] = it }
+        }
+        return values
+    }
+
+    /**
+     * 把模型凭据并写进 Harness 自己的凭据文档。
+     *
+     * @return 文档现在确实承载了全部 [values]（因此不需要再把取值放进环境文件）。
+     *   任何一步不确定都返回 false，由调用方回落到环境文件路径，绝不猜、也绝不覆盖可疑文件。
+     *
+     * 只并写 `refs` 段：`records`（OAuth 授权记录等）与全部注释、格式逐行保留，
+     * 且**从不删除**已有条目 —— 用户可能在模型页配了另一把 key，删掉它是破坏用户数据。
+     */
+    private fun writeHarnessCredentials(values: Map<String, String>): Boolean = try {
+        upsertHarnessCredentials(values)
+    } catch (_: Throwable) {
+        // 凭据文档不可用不是启动失败：回落到访客环境文件，功能不变、argv 依旧只有路径。
+        false
+    }
+
+    /** [writeHarnessCredentials] 的本体；任何一步不确定都返回 false。 */
+    private fun upsertHarnessCredentials(values: Map<String, String>): Boolean {
+        val directory = harnessCredentialsFile.parentFile ?: return false
+        if (!ensurePrivateDirectory(directory)) return false
+        val existing = when (val document = readCredentialsDocument()) {
+            is CredentialsDocument.Absent -> null
+            is CredentialsDocument.Text -> document.text
+            is CredentialsDocument.Untrusted -> return false
+        }
+        val updated = HarnessCredentialsDocument.upsert(existing, values) ?: return false
+        // 文档已经承载全部凭据时一个字节都不动：避免与模型页/另一个实例的写入互相覆盖。
+        if (updated == existing) return true
+        return writePrivateFile(harnessCredentialsFile, updated.toByteArray(Charsets.UTF_8))
+    }
+
+    /**
+     * 读取现有凭据文档原文。
+     *
+     * 只接受**不跟随符号链接**打开的常规文件，与 [HarnessCredentialStatusReader] 的信任模型一致。
+     */
+    private fun readCredentialsDocument(): CredentialsDocument {
+        if (!RuntimeFiles.existsNoFollow(harnessCredentialsFile)) return CredentialsDocument.Absent
+        val descriptor = try {
+            Os.open(
+                harnessCredentialsFile.absolutePath,
+                OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW,
+                0,
+            )
+        } catch (_: ErrnoException) {
+            return CredentialsDocument.Untrusted
+        }
+        return try {
+            val stat = Os.fstat(descriptor)
+            if (!OsConstants.S_ISREG(stat.st_mode) ||
+                stat.st_size !in 0..HarnessCredentialsDocument.MAX_DOCUMENT_BYTES.toLong()
+            ) {
+                Os.close(descriptor)
+                CredentialsDocument.Untrusted
+            } else {
+                val text = FileInputStream(descriptor).use { it.readBytes().toString(Charsets.UTF_8) }
+                if (text.isBlank()) CredentialsDocument.Absent else CredentialsDocument.Text(text)
+            }
+        } catch (_: Exception) {
+            try {
+                Os.close(descriptor)
+            } catch (_: Exception) {
+                // FileInputStream owns the descriptor after successful construction.
+            }
+            CredentialsDocument.Untrusted
+        }
+    }
+
+    /**
+     * 写入访客侧秘密环境文件；本次启动没有秘密可投递时删除它。
+     *
+     * 写不进去就是受控启动失败：没有这份文件 dsh 会缺临时令牌起来，
+     * 用户看到的是下游的「认证不可用」，把投递故障伪装成运行故障。
+     */
+    private fun writeRuntimeSecretFile(delivery: RuntimeSecretDelivery) {
+        if (delivery.isEmpty) {
+            deleteRuntimeSecrets()
+            return
+        }
+        val directory = runtimeSecretFile.parentFile
+            ?: throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "运行时秘密文件路径无效")
+        if (!ensurePrivateDirectory(directory)) {
+            throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "无法创建运行时秘密文件目录")
+        }
+        val bytes = RuntimeSecretPolicy.renderEnvironmentFile(delivery.environmentValues).toByteArray(Charsets.UTF_8)
+        if (!writePrivateFile(runtimeSecretFile, bytes)) {
+            throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "无法写入运行时秘密文件")
+        }
+    }
+
+    /** 确保目录存在且为 0700 的真目录；不可信时返回 false 而不是抛异常（调用方要据此回落）。 */
+    private fun ensurePrivateDirectory(directory: File): Boolean {
+        if (RuntimeFiles.existsNoFollow(directory)) {
+            if (!RuntimeFiles.isDirectoryNoFollow(directory)) return false
+        } else if (!directory.mkdirs() && !RuntimeFiles.existsNoFollow(directory)) {
+            return false
+        }
+        return try {
+            Os.chmod(directory.absolutePath, 0x1c0)
+            true
+        } catch (_: ErrnoException) {
+            false
+        }
+    }
+
+    /**
+     * 原子写入一个 0600 文件：同目录临时文件 → fsync → chmod → rename。
+     *
+     * 权限必须在 rename **之前**设好：dsh 的 `assertOwnerOnly` 会拒绝任何带 group/other 位的
+     * 凭据文档并让插件激活失败，而「先 rename 再 chmod」会留下一个已经就位、权限还宽的窗口。
+     */
+    private fun writePrivateFile(file: File, bytes: ByteArray): Boolean {
+        val directory = file.parentFile ?: return false
+        // 去掉前导点再拼 `.name.new`：`.credentials.yaml` 的临时名因此是 `.credentials.yaml.new`，
+        // 而不是看起来像父目录引用的 `..credentials.yaml.new`。
+        val pending = File(directory, ".${file.name.trimStart('.')}.new")
+        return try {
+            if (RuntimeFiles.existsNoFollow(pending) && !pending.delete()) return false
+            FileChannel.open(
+                pending.toPath(),
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE,
+                LinkOption.NOFOLLOW_LINKS,
+            ).use { channel ->
+                Channels.newOutputStream(channel).use { output ->
+                    output.write(bytes)
+                    output.flush()
+                    channel.force(true)
+                }
+            }
+            Os.chmod(pending.absolutePath, 0x180)
+            Os.rename(pending.absolutePath, file.absolutePath)
+            true
+        } catch (_: Throwable) {
+            try {
+                pending.delete()
+            } catch (_: Throwable) {
+                // 清理失败不影响返回值；下次启动会覆盖这个名字。
+            }
+            false
+        }
+    }
+
+    /** 现有凭据文档的三种状态；`Untrusted` 一律拒绝编辑，绝不覆盖。 */
+    private sealed interface CredentialsDocument {
+        /** 不存在或为空：可以新建。 */
+        object Absent : CredentialsDocument
+
+        /** 现有文档原文。 */
+        class Text(val text: String) : CredentialsDocument
+
+        /** 存在但不是可安全编辑的常规文件（符号链接、目录、超限、读取失败）。 */
+        object Untrusted : CredentialsDocument
+    }
 
     @Synchronized
     fun providerApiKeys(): Map<ModelProvider, String> = providerApiKeysLocked().toMap()
@@ -813,5 +1055,8 @@ class RuntimeStore(context: Context) {
         private const val BUNDLED_MANIFEST_ASSET = "runtime/runtime-manifest.json"
         private const val BUNDLED_ROOTFS_ASSET = "runtime/rootfs.bundle"
         private const val PROVIDER_PATCH_FILENAME = "launcher-providers.patch.json"
+        // 只经访客环境文件投递的两个临时令牌；取值每次启动重新生成，绝不进 .credentials.yaml。
+        private const val MOBILE_AUTH_TOKEN_ENV = "DSH_MOBILE_AUTH_TOKEN"
+        private const val DEVICE_BRIDGE_TOKEN_ENV = "DSH_DEVICE_BRIDGE_TOKEN"
     }
 }

@@ -176,6 +176,118 @@ export interface NotificationPermissionResult {
 }
 
 /**
+ * 投递区可用性档位。
+ *
+ * 与 `docs/真机缺陷与改进清单.md` §5.1 的 T0–T3 口径一致：
+ * `available` 对应 T2（已授予「所有文件访问」且目录真实可读写）；
+ * `needsPermission` 表示系统支持该权限但尚未授予，界面必须给出授权入口；
+ * `unsupported` 表示系统不存在这一档（Android 11 以下），界面不提供授权入口；
+ * `unwritable` 表示已授权但目录仍不可写 —— 如实报告，不猜测原因。
+ * 后三档都落回 T0（控制台上传）：投递区不可用是**预期降级**，不是故障，
+ * 任何一档都**不得**静默改用别的目录冒充投递区。
+ */
+export type MailboxAvailability = 'available' | 'needsPermission' | 'unsupported' | 'unwritable'
+
+/** inbox 里的一个 tar 候选（界面用来显示「将导入哪一个」）。 */
+export interface MailboxTarCandidate {
+  name: string
+  bytes: number
+}
+
+/**
+ * 投递区状态。
+ *
+ * 只含**用户可见路径**、访客固定挂载点、可用性档位与计数：
+ * 不含任何私有路径、宿主真实路径或文件内容。
+ */
+export interface MailboxState {
+  availability: MailboxAvailability
+  /** 与 [availability] 对应的权限档位（T2 / T0），供界面展示口径使用。 */
+  level: 'T2' | 'T0'
+  /** 是否可用；等价于 `availability === 'available'`，供按钮禁用条件直接使用。 */
+  available: boolean
+  /** 系统是否存在「所有文件访问」这一档。 */
+  supported: boolean
+  /** 是否已授予「所有文件访问」。 */
+  granted: boolean
+  /** 用户可见的 inbox 路径（`/storage/emulated/0/Documents/DSH/inbox`）。 */
+  inboxPath: string
+  outboxPath: string
+  /** 访客内固定挂载点（`/mnt/inbox` / `/mnt/outbox`）。 */
+  guestInboxPath: string
+  guestOutboxPath: string
+  /** inbox 内的常规文件数；未授予权限时恒为 0，**不代表目录是空的**。 */
+  inboxFileCount: number
+  /** inbox 内的 tar 候选，最多 5 个。 */
+  inboxTars: MailboxTarCandidate[]
+  /** 导出产物的固定文件名。 */
+  exportTarName: string
+  exportManifestName: string
+  /** 导入落点（相对工作区的固定子目录）。 */
+  importDirectory: string
+}
+
+/**
+ * 存储访问状态（原生 `getStorageAccessState` 的载荷）。
+ *
+ * 对应 `docs/真机缺陷与改进清单.md` §5.1 的权限分级：
+ * `mediaGranted` 是 T1（媒体只读），`allFilesGranted` 是 T2（所有文件访问，投递区的前提）。
+ * `allFilesSupported` 为 false 表示系统版本低于 Android 11，界面应隐藏该入口。
+ */
+export interface StorageAccessState {
+  mediaGranted: boolean
+  allFilesGranted: boolean
+  allFilesSupported: boolean
+  sdkInt: number
+}
+
+/** 权限申请结果；被拒绝时如实返回 false，不承诺一定能授权成功。 */
+export interface MediaPermissionResult {
+  granted: boolean
+}
+
+/** 「所有文件访问」设置路径的跳转结果；supported 为 false 表示系统不存在这一档。 */
+export interface AllFilesAccessResult {
+  supported: boolean
+  granted: boolean
+}
+
+/** 一次导入的结果；只有计数、字节数、文件名与落点，不含内容。 */
+export interface MailboxImportResult {
+  entryCount: number
+  fileCount: number
+  directoryCount: number
+  symlinkCount: number
+  hardlinkCount: number
+  bytes: number
+  tarName: string
+  tarBytes: number
+  /** 是否用 manifest 逐条校验过；没有 manifest 时为 false。 */
+  verified: boolean
+  /** 用的 manifest 文件名；没有时为 undefined。 */
+  manifestName?: string
+  /** inbox 里被忽略的散文件数（它们不会被写进工作区）。 */
+  ignoredFiles: number
+  target: string
+}
+
+/** 一次导出的结果。 */
+export interface MailboxExportResult {
+  entryCount: number
+  bytes: number
+  tarName: string
+  tarBytes: number
+  tarSha256: string
+  manifestName: string
+  /** 导出起点相对工作区的路径；整个工作区时为 undefined。 */
+  subdirectory?: string
+  /** 因目标越出导出起点而被跳过的符号链接数。 */
+  skippedLinks: number
+  /** 因类型无法表达（FIFO / 设备节点）而被跳过的条目数。 */
+  skippedSpecial: number
+}
+
+/**
  * 诊断日志状态。
  *
  * 只包含开关、保留天数、计数与时间戳：**不含任何日志内容**，
@@ -305,6 +417,37 @@ export interface RuntimeBridge {
   getOverlayBallState: () => Promise<OverlayBallState>
   /** 跳转到系统「显示在其他应用上层」设置页。该权限只能由用户手动开启。 */
   openOverlaySettings: () => Promise<void>
+  /**
+   * 外置投递区状态：用户可见路径、访客挂载点、可用性与 inbox 计数。
+   *
+   * 投递区目录固定为 `/storage/emulated/0/Documents/DSH/{inbox,outbox}`，访客内固定挂在
+   * `/mnt/inbox` 与 `/mnt/outbox`（仅在目录确实可访问时才绑定）。不可用时界面必须如实说明
+   * 并给出授权入口，**不得**改用别的目录。
+   */
+  getMailboxState: () => Promise<MailboxState>
+  /** 存储访问状态（T1 媒体只读 / T2 所有文件访问）；只有布尔与枚举，不含路径。 */
+  getStorageAccessState: () => Promise<StorageAccessState>
+  /** 申请媒体读取权限（T1）。它**不解锁投递区**，投递区需要 T2。 */
+  requestMediaPermission: () => Promise<MediaPermissionResult>
+  /**
+   * 跳转到系统「所有文件访问」设置页（T2，投递区的前提）。
+   *
+   * 该权限是特殊权限，不会弹运行时对话框，只能由用户手动开启；本调用只负责跳转，
+   * 授权结果由界面在回到前台后重新查询 [getStorageAccessState] 获得。
+   */
+  openAllFilesAccessSettings: () => Promise<AllFilesAccessResult>
+  /**
+   * 一键导入：inbox 的 tar → 工作区 `mailbox-import/`。
+   *
+   * 越界条目、绝对符号链接、超限与摘要不符一律在写第一个字节之前拒绝；
+   * 失败不留半截产物，重复执行幂等。**不会自动执行**，必须由用户点击触发。
+   */
+  importMailbox: () => Promise<MailboxImportResult>
+  /**
+   * 一键导出：工作区（或 [subdirectory] 指定的子目录）→ outbox 的
+   * `dsh-workspace.tar` + `dsh-workspace.manifest.json` + `dsh-workspace.tar.sha256`。
+   */
+  exportMailbox: (subdirectory?: string) => Promise<MailboxExportResult>
   /** 诊断日志状态；不含日志内容。 */
   getDiagnosticLogState: () => Promise<DiagnosticLogState>
   /** 更新采集开关与保留天数（1–30）。 */

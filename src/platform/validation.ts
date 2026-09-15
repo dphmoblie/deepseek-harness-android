@@ -1,4 +1,5 @@
 import type {
+  AllFilesAccessResult,
   DeviceCommand,
   DeviceCommandResult,
   DiagnosticLogExport,
@@ -6,6 +7,11 @@ import type {
   DiagnosticLogText,
   HarnessLog,
   KeepAliveState,
+  MailboxAvailability,
+  MailboxExportResult,
+  MailboxImportResult,
+  MailboxState,
+  MediaPermissionResult,
   ModelProviderId,
   NotificationPermission,
   NotificationPermissionResult,
@@ -19,6 +25,7 @@ import type {
   RuntimeSource,
   RuntimeState,
   ShizukuState,
+  StorageAccessState,
   TerminalChunk,
   TerminalExit,
 } from './types'
@@ -45,6 +52,17 @@ const MAX_ERROR_CODE_LENGTH = 96
 const MAX_TERMINAL_OUTPUT_BYTES = 96 * 1024
 const API_KEY_PATTERN = /^[\x21-\x7e]{1,200}$/
 const MODEL_PROVIDER_ID_SET = new Set<string>(MODEL_PROVIDER_IDS)
+/** 投递区可用性档位（与原生 `MailboxAvailability` 一一对应）。 */
+const MAILBOX_AVAILABILITIES = new Set<MailboxAvailability>([
+  'available',
+  'needsPermission',
+  'unsupported',
+  'unwritable',
+])
+/** 投递区路径与文件名的字符上限；与原生侧的 240 保持一致。 */
+const MAX_MAILBOX_PATH_LENGTH = 240
+/** 原生侧最多列出的 inbox tar 候选数；超出即视为载荷不符合契约。 */
+const MAX_MAILBOX_TARS = 5
 const RUNTIME_PHASES = new Set<RuntimePhase>([
   'not-installed',
   'preparing',
@@ -666,4 +684,173 @@ export function validateOverlayBallState(value: unknown): OverlayBallState {
     canDrawOverlays: requiredBoolean(source.canDrawOverlays, '悬浮球权限'),
     serviceActive: requiredBoolean(source.serviceActive, '悬浮球服务状态'),
   }
+}
+
+/**
+ * 校验存储访问状态。
+ *
+ * 四个字段都必须存在：`allFilesSupported` 缺失时若补成 false，界面会把一台
+ * Android 14 设备显示成「系统不支持」，用户再也不会去找那个入口。
+ */
+export function validateStorageAccessState(value: unknown): StorageAccessState {
+  const source = asRecord(value, '存储访问状态')
+  if (!Number.isSafeInteger(source.sdkInt) || (source.sdkInt as number) < 0) {
+    throw new Error('存储访问状态格式无效')
+  }
+  return {
+    mediaGranted: requiredBoolean(source.mediaGranted, '媒体读取权限'),
+    allFilesGranted: requiredBoolean(source.allFilesGranted, '所有文件访问权限'),
+    allFilesSupported: requiredBoolean(source.allFilesSupported, '所有文件访问支持状态'),
+    sdkInt: source.sdkInt as number,
+  }
+}
+
+/** 校验媒体权限申请结果；只认布尔，不做静默转换。 */
+export function validateMediaPermissionResult(value: unknown): MediaPermissionResult {
+  const source = asRecord(value, '媒体权限结果')
+  return { granted: requiredBoolean(source.granted, '媒体权限结果') }
+}
+
+/** 校验「所有文件访问」设置跳转结果。 */
+export function validateAllFilesAccessResult(value: unknown): AllFilesAccessResult {
+  const source = asRecord(value, '所有文件访问结果')
+  return {
+    supported: requiredBoolean(source.supported, '所有文件访问支持状态'),
+    granted: requiredBoolean(source.granted, '所有文件访问权限'),
+  }
+}
+
+/**
+ * 校验投递区可用性档位。
+ *
+ * 只接受四个受控取值：未知取值一律抛错，而不是回落到 `available` ——
+ * 把「读不懂的状态」显示成「可用」会让用户点了按钮才发现不可用。
+ */
+function mailboxAvailability(value: unknown): MailboxAvailability {
+  if (typeof value !== 'string' || !MAILBOX_AVAILABILITIES.has(value as MailboxAvailability)) {
+    throw new Error('投递区可用性格式无效')
+  }
+  return value as MailboxAvailability
+}
+
+function mailboxPath(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_MAILBOX_PATH_LENGTH || !value.startsWith('/')) {
+    throw new Error(`${label}格式无效`)
+  }
+  return value
+}
+
+function mailboxFileName(value: unknown, label: string): string {
+  if (
+    typeof value !== 'string' || value.length === 0 || value.length > MAX_MAILBOX_PATH_LENGTH ||
+    value.startsWith('/') || value.includes('\\') || value.includes('/')
+  ) {
+    throw new Error(`${label}格式无效`)
+  }
+  return value
+}
+
+/**
+ * 校验投递区状态。
+ *
+ * 路径只允许 `/` 开头的用户可见路径与访客挂载点：原生侧只回传这两类路径，
+ * 任何相对路径或带反斜杠的取值都说明载荷不符合契约，按格式无效处理。
+ * `available` 必须与 `availability` 自洽，避免界面出现「可用按钮 + 需要授权文案」的矛盾状态。
+ */
+export function validateMailboxState(value: unknown): MailboxState {
+  const source = asRecord(value, '投递区状态')
+  const availability = mailboxAvailability(source.availability)
+  const available = requiredBoolean(source.available, '投递区可用性')
+  if (available !== (availability === 'available')) {
+    throw new Error('投递区状态自相矛盾')
+  }
+  const level = source.level
+  if (level !== 'T2' && level !== 'T0') throw new Error('投递区权限档位格式无效')
+  if (!Array.isArray(source.inboxTars) || source.inboxTars.length > MAX_MAILBOX_TARS) {
+    throw new Error('投递区 tar 列表格式无效')
+  }
+  return {
+    availability,
+    level,
+    available,
+    supported: requiredBoolean(source.supported, '投递区支持状态'),
+    granted: requiredBoolean(source.granted, '投递区授权状态'),
+    inboxPath: mailboxPath(source.inboxPath, '投递区 inbox 路径'),
+    outboxPath: mailboxPath(source.outboxPath, '投递区 outbox 路径'),
+    guestInboxPath: mailboxPath(source.guestInboxPath, '访客 inbox 路径'),
+    guestOutboxPath: mailboxPath(source.guestOutboxPath, '访客 outbox 路径'),
+    inboxFileCount: byteCount(source.inboxFileCount, '投递区文件数'),
+    inboxTars: source.inboxTars.map(item => {
+      const candidate = asRecord(item, '投递区 tar 条目')
+      return {
+        name: mailboxFileName(candidate.name, '投递区 tar 名称'),
+        bytes: byteCount(candidate.bytes, '投递区 tar 大小'),
+      }
+    }),
+    exportTarName: mailboxFileName(source.exportTarName, '投递区导出归档名'),
+    exportManifestName: mailboxFileName(source.exportManifestName, '投递区导出清单名'),
+    importDirectory: mailboxFileName(source.importDirectory, '投递区导入落点'),
+  }
+}
+
+/** 校验导入结果；缺 `manifestName` 表示这份归档没有附带 manifest（未逐条校验）。 */
+export function validateMailboxImportResult(value: unknown): MailboxImportResult {
+  const source = asRecord(value, '投递区导入结果')
+  return {
+    entryCount: byteCount(source.entryCount, '投递区导入条目数'),
+    fileCount: byteCount(source.fileCount, '投递区导入文件数'),
+    directoryCount: byteCount(source.directoryCount, '投递区导入目录数'),
+    symlinkCount: byteCount(source.symlinkCount, '投递区导入链接数'),
+    hardlinkCount: byteCount(source.hardlinkCount, '投递区导入硬链接数'),
+    bytes: byteCount(source.bytes, '投递区导入字节数'),
+    tarName: mailboxFileName(source.tarName, '投递区导入归档名'),
+    tarBytes: byteCount(source.tarBytes, '投递区导入归档大小'),
+    verified: requiredBoolean(source.verified, '投递区导入校验状态'),
+    manifestName: source.manifestName === undefined
+      ? undefined
+      : mailboxFileName(source.manifestName, '投递区导入清单名'),
+    ignoredFiles: byteCount(source.ignoredFiles, '投递区忽略文件数'),
+    target: mailboxFileName(source.target, '投递区导入落点'),
+  }
+}
+
+/** 校验导出结果；摘要必须是 64 位小写十六进制。 */
+export function validateMailboxExportResult(value: unknown): MailboxExportResult {
+  const source = asRecord(value, '投递区导出结果')
+  if (typeof source.tarSha256 !== 'string' || !SHA256_PATTERN.test(source.tarSha256)) {
+    throw new Error('投递区导出摘要格式无效')
+  }
+  return {
+    entryCount: byteCount(source.entryCount, '投递区导出条目数'),
+    bytes: byteCount(source.bytes, '投递区导出字节数'),
+    tarName: mailboxFileName(source.tarName, '投递区导出归档名'),
+    tarBytes: byteCount(source.tarBytes, '投递区导出归档大小'),
+    tarSha256: source.tarSha256,
+    manifestName: mailboxFileName(source.manifestName, '投递区导出清单名'),
+    subdirectory: source.subdirectory === undefined
+      ? undefined
+      : optionalIdentifier(source.subdirectory, '投递区导出起点'),
+    skippedLinks: byteCount(source.skippedLinks, '投递区跳过链接数'),
+    skippedSpecial: byteCount(source.skippedSpecial, '投递区跳过特殊条目数'),
+  }
+}
+
+/**
+ * 断言导出起点的入参。
+ *
+ * 与原生侧同一套规则：省略或空白表示整个工作区；其余必须是不含 `.` / `..` 分段的相对路径。
+ * 前端先拦一道，避免明显非法的取值跨过桥接。
+ */
+export function assertMailboxSubdirectory(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return undefined
+  if (trimmed.length > MAX_MAILBOX_PATH_LENGTH || trimmed.startsWith('/') || trimmed.includes('\\')) {
+    throw new Error('投递区导出起点格式无效')
+  }
+  const segments = trimmed.split('/')
+  if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..')) {
+    throw new Error('投递区导出起点格式无效')
+  }
+  return trimmed
 }

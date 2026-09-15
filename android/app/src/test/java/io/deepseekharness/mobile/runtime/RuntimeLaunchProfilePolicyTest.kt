@@ -55,4 +55,22 @@ class RuntimeLaunchProfilePolicyTest {
             prootProfileFallbacks(profile, result, commandCanFail = false),
         )
     }
+
+    @Test
+    fun `proot failure drops the optional mailbox mounts without dropping required ones`() {
+        val profile = ProotLaunchProfile(
+            false,
+            listOf(
+                requiredMount,
+                ProotBindMount("/storage/emulated/0/Documents/DSH/inbox", "/mnt/inbox"),
+                ProotBindMount("/storage/emulated/0/Documents/DSH/outbox", "/mnt/outbox"),
+            ),
+        )
+        val result = ProcessProbeResult(1, false, "proot error: bind failed")
+
+        assertEquals(
+            listOf(profile.copy(bindMounts = listOf(requiredMount))),
+            prootProfileFallbacks(profile, result, commandCanFail = true),
+        )
+    }
 }
