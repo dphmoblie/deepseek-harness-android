@@ -312,6 +312,7 @@ export interface RuntimeBridge {
   listRuntimeWorkspaceFiles: () => Promise<string[]>
   shareRuntimeWorkspaceFile: (path: string) => Promise<void>
   openRuntimeWorkspaceFile: (path: string) => Promise<void>
+  deleteRuntimeWorkspaceFile: (path: string) => Promise<void>
   /** 清空全部诊断日志。 */
   clearDiagnosticLog: () => Promise<DiagnosticLogState>
   /**

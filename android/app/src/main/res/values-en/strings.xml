@@ -3,6 +3,14 @@
     <string name="harness_title">Harness chat</string>
     <string name="harness_back_to_app">Back to app</string>
     <string name="harness_open_management">Open app settings</string>
+    <string name="harness_workspace_files">Workspace files</string>
+    <string name="harness_workspace_empty">No files are available in the workspace</string>
+    <string name="harness_file_open">Open with</string>
+    <string name="harness_file_share">Share</string>
+    <string name="harness_file_delete">Delete</string>
+    <string name="harness_file_delete_confirm">Delete “%1$s”? This cannot be undone.</string>
+    <string name="harness_file_deleted">File deleted</string>
+    <string name="harness_file_action_failed">File operation failed</string>
     <string name="harness_session_failed">Unable to establish a local Harness session</string>
     <string name="harness_page_failed">Unable to open Harness. Please retry in Settings.</string>
     <string name="shizuku_missing">Install and start Shizuku first</string>

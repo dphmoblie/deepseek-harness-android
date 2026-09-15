@@ -2,7 +2,6 @@ package io.deepseekharness.mobile
 
 import android.Manifest
 import android.content.Intent
-import android.webkit.MimeTypeMap
 import android.content.pm.PackageManager
 import android.os.Build
 import android.view.WindowManager
@@ -31,6 +30,7 @@ import io.deepseekharness.mobile.runtime.RuntimeSelfCheckPolicy
 import io.deepseekharness.mobile.runtime.RuntimeSettings
 import io.deepseekharness.mobile.runtime.RuntimeStateSnapshot
 import io.deepseekharness.mobile.runtime.RuntimeValidation
+import io.deepseekharness.mobile.runtime.RuntimeWorkspaceFiles
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
 import io.deepseekharness.mobile.runtime.audit.AuditResult
 import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
@@ -875,41 +875,20 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
-    private fun workspaceFile(relative: String): File {
-        if (relative.length !in 1..240 || relative.contains('\\') || relative.startsWith('/') || relative.contains("..")) {
-            throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径无效")
-        }
-        val root = File(controller.store.currentRoot, "root/1").canonicalFile
-        val file = File(root, relative).canonicalFile
-        if (!file.path.startsWith(root.path + File.separator) || !file.isFile || file.length() > 64L * 1024 * 1024) {
-            throw RuntimeFailure("WORKSPACE_FILE_UNAVAILABLE", "工作区文件不可用")
-        }
-        return file
-    }
-
     @PluginMethod
     fun listRuntimeWorkspaceFiles(call: PluginCall) {
         execute(call) {
-            val root = File(controller.store.currentRoot, "root/1")
-            val files = mutableListOf<String>()
-            if (root.isDirectory) root.walkTopDown().maxDepth(6).forEach { file ->
-                if (files.size < 100 && file.isFile && !Files.isSymbolicLink(file.toPath())) {
-                    files += root.toPath().relativize(file.toPath()).toString().replace(File.separatorChar, '/')
-                }
-            }
-            JSObject().put("files", org.json.JSONArray(files.sorted()))
+            val files = RuntimeWorkspaceFiles(controller.store, context.cacheDir).list()
+            JSObject().put("files", org.json.JSONArray(files))
         }
     }
 
     private fun shareWorkspaceFile(relative: String, open: Boolean) {
-        val source = workspaceFile(relative)
-        val target = File(context.cacheDir, "share").apply { mkdirs() }
-            .let { File(it, "dsh-${System.currentTimeMillis()}-${source.name}") }
-        source.copyTo(target, overwrite = true)
+        val manager = RuntimeWorkspaceFiles(controller.store, context.cacheDir)
+        val target = manager.copyForSharing(relative)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.diagnostics", target)
-        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(source.extension.lowercase()) ?: "application/octet-stream"
         val intent = Intent(if (open) Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
-            type = mime
+            type = manager.mimeType(relative)
             if (open) data = uri else putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
@@ -924,6 +903,16 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun openRuntimeWorkspaceFile(call: PluginCall) {
         execute(call) { shareWorkspaceFile(call.getString("path") ?: throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径缺失"), true); null }
+    }
+
+    @PluginMethod
+    fun deleteRuntimeWorkspaceFile(call: PluginCall) {
+        execute(call) {
+            val path = call.getString("path")
+                ?: throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径缺失")
+            RuntimeWorkspaceFiles(controller.store, context.cacheDir).delete(path)
+            null
+        }
     }
 
     /** 权限：应用内桥接；清空全部诊断日志。 */

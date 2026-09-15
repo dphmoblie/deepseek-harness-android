@@ -604,5 +604,15 @@ export const english: Readonly<Record<string, string>> = {
   "上次停止": "Last stop",
   "用户停止": "Stopped by you",
   "自行停止（可能空闲自动停止）": "Stopped on its own (possibly idle auto-stop)",
-  "本次会话未记录": "Not recorded in this session"
+  "本次会话未记录": "Not recorded in this session",
+  "工作区文件": "Workspace files",
+  "将 DSH 在运行时工作区创建的文件打包后分享给其他应用": "Package files created by DSH in the runtime workspace and share them with another app",
+  "分享工作区": "Share workspace",
+  "选择文件": "Choose file",
+  "打开": "Open",
+  "分享": "Share",
+  "删除": "Delete",
+  "确定删除“{0}”吗？此操作无法撤销。": "Delete “{0}”? This cannot be undone.",
+  "文件已删除": "File deleted",
+  "已打开分享面板": "Share sheet opened"
 }

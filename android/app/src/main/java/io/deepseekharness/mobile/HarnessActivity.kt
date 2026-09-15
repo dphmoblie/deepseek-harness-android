@@ -2,6 +2,7 @@ package io.deepseekharness.mobile
 
 import android.annotation.SuppressLint
 import android.content.ContentResolver
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -23,10 +24,17 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.Toolbar
+import androidx.core.content.FileProvider
+import androidx.lifecycle.lifecycleScope
 import io.deepseekharness.mobile.runtime.HarnessAccess
 import io.deepseekharness.mobile.runtime.RuntimeStore
+import io.deepseekharness.mobile.runtime.RuntimeWorkspaceFiles
 import java.io.ByteArrayInputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class HarnessActivity : AppCompatActivity() {
     private lateinit var webView: WebView
@@ -99,11 +107,16 @@ class HarnessActivity : AppCompatActivity() {
         toolbar.inflateMenu(R.menu.harness_toolbar)
         toolbar.setNavigationOnClickListener { returnToMainActivity() }
         toolbar.setOnMenuItemClickListener { item ->
-            if (item.itemId == R.id.action_harness_management) {
-                returnToMainActivity()
-                true
-            } else {
-                false
+            when (item.itemId) {
+                R.id.action_harness_files -> {
+                    showWorkspaceFiles()
+                    true
+                }
+                R.id.action_harness_management -> {
+                    returnToMainActivity()
+                    true
+                }
+                else -> false
             }
         }
 
@@ -195,6 +208,84 @@ class HarnessActivity : AppCompatActivity() {
 
     private fun returnToMainActivity() {
         if (!isFinishing) finish()
+    }
+
+    /** Native file controls remain available even when the Harness page is busy or failed. */
+    private fun showWorkspaceFiles() {
+        lifecycleScope.launch {
+            val manager = RuntimeWorkspaceFiles(RuntimeStore(this@HarnessActivity), cacheDir)
+            val files = withContext(Dispatchers.IO) { manager.list() }
+            if (files.isEmpty()) {
+                Toast.makeText(this@HarnessActivity, R.string.harness_workspace_empty, Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            AlertDialog.Builder(this@HarnessActivity)
+                .setTitle(R.string.harness_workspace_files)
+                .setItems(files.toTypedArray()) { _, index -> showWorkspaceFileActions(files[index]) }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+        }
+    }
+
+    private fun showWorkspaceFileActions(path: String) {
+        val actions = arrayOf(
+            getString(R.string.harness_file_open),
+            getString(R.string.harness_file_share),
+            getString(R.string.harness_file_delete),
+        )
+        AlertDialog.Builder(this)
+            .setTitle(path)
+            .setItems(actions) { _, index ->
+                when (index) {
+                    0 -> openOrShareWorkspaceFile(path, open = true)
+                    1 -> openOrShareWorkspaceFile(path, open = false)
+                    2 -> confirmDeleteWorkspaceFile(path)
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun openOrShareWorkspaceFile(path: String, open: Boolean) {
+        lifecycleScope.launch {
+            try {
+                val manager = RuntimeWorkspaceFiles(RuntimeStore(this@HarnessActivity), cacheDir)
+                val shared = withContext(Dispatchers.IO) { manager.copyForSharing(path) }
+                val uri = FileProvider.getUriForFile(
+                    this@HarnessActivity,
+                    "${packageName}.diagnostics",
+                    shared,
+                )
+                val intent = Intent(if (open) Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
+                    type = manager.mimeType(path)
+                    if (open) data = uri else putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(intent, getString(if (open) R.string.harness_file_open else R.string.harness_file_share)))
+            } catch (_: Throwable) {
+                Toast.makeText(this@HarnessActivity, R.string.harness_file_action_failed, Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun confirmDeleteWorkspaceFile(path: String) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.harness_file_delete)
+            .setMessage(getString(R.string.harness_file_delete_confirm, path))
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.harness_file_delete) { _, _ ->
+                lifecycleScope.launch {
+                    try {
+                        withContext(Dispatchers.IO) {
+                            RuntimeWorkspaceFiles(RuntimeStore(this@HarnessActivity), cacheDir).delete(path)
+                        }
+                        Toast.makeText(this@HarnessActivity, R.string.harness_file_deleted, Toast.LENGTH_SHORT).show()
+                    } catch (_: Throwable) {
+                        Toast.makeText(this@HarnessActivity, R.string.harness_file_action_failed, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .show()
     }
 
     /**

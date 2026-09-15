@@ -627,9 +627,10 @@ interface EnvironmentScreenProps {
   workspaceFiles: string[]
   onShareFile: (path: string) => void
   onOpenFile: (path: string) => void
+  onDeleteFile: (path: string) => void
 }
 
-function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop, onUpdate, onShareWorkspace, onListFiles, workspaceFiles, onShareFile, onOpenFile }: EnvironmentScreenProps) {
+function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop, onUpdate, onShareWorkspace, onListFiles, workspaceFiles, onShareFile, onOpenFile, onDeleteFile }: EnvironmentScreenProps) {
   const inProgress = ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
   const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running'
   const progress = runtime.totalBytes > 0
@@ -764,7 +765,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
           {busy === 'workspace-share' ? <Loader2 className="spin" size={18} /> : <Share2 size={18} />}{t("分享工作区")}
         </button>
         <button className="button button-secondary" type="button" onClick={onListFiles} disabled={busy !== null}>{t("选择文件")}</button>
-        {workspaceFiles.length > 0 && <div className="workspace-file-list">{workspaceFiles.map(path => <div className="workspace-file-row" key={path}><span title={path}>{path}</span><button className="compact-button" type="button" onClick={() => onOpenFile(path)} disabled={busy !== null}>{t("打开")}</button><button className="compact-button" type="button" onClick={() => onShareFile(path)} disabled={busy !== null}>{t("分享")}</button></div>)}</div>}
+        {workspaceFiles.length > 0 && <div className="workspace-file-list">{workspaceFiles.map(path => <div className="workspace-file-row" key={path}><span title={path}>{path}</span><button className="compact-button" type="button" onClick={() => onOpenFile(path)} disabled={busy !== null}>{t("打开")}</button><button className="compact-button" type="button" onClick={() => onShareFile(path)} disabled={busy !== null}>{t("分享")}</button><button className="compact-button workspace-delete" type="button" onClick={() => onDeleteFile(path)} disabled={busy !== null}>{t("删除")}</button></div>)}</div>}
       </section>}
     </div>
   )
@@ -2739,6 +2740,13 @@ export function App() {
   const listWorkspaceFiles = useCallback(() => { void run('workspace-files', async () => setWorkspaceFiles(await runtimeBridge.listRuntimeWorkspaceFiles())) }, [run])
   const shareWorkspaceFile = useCallback((path: string) => { void run('workspace-file-share', () => runtimeBridge.shareRuntimeWorkspaceFile(path)) }, [run])
   const openWorkspaceFile = useCallback((path: string) => { void run('workspace-file-open', () => runtimeBridge.openRuntimeWorkspaceFile(path)) }, [run])
+  const deleteWorkspaceFile = useCallback((path: string) => {
+    if (!window.confirm(t('确定删除“{0}”吗？此操作无法撤销。', path))) return
+    void run('workspace-file-delete', async () => {
+      await runtimeBridge.deleteRuntimeWorkspaceFile(path)
+      setWorkspaceFiles(current => current.filter(item => item !== path))
+    }, t('文件已删除'))
+  }, [run])
 
   const clearDiagnostic = useCallback(() => {
     void run('diagnostic-clear', async () => {
@@ -2909,7 +2917,7 @@ export function App() {
       case 'plugins':
         return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
       case 'environment':
-        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} onShareWorkspace={shareWorkspace} onListFiles={listWorkspaceFiles} workspaceFiles={workspaceFiles} onShareFile={shareWorkspaceFile} onOpenFile={openWorkspaceFile} />
+        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} onShareWorkspace={shareWorkspace} onListFiles={listWorkspaceFiles} workspaceFiles={workspaceFiles} onShareFile={shareWorkspaceFile} onOpenFile={openWorkspaceFile} onDeleteFile={deleteWorkspaceFile} />
       case 'settings':
         return <SettingsHomeScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenPage={openSettings} onOpenPlugins={() => setActiveView('plugins')} onOpenTerminal={() => setActiveView('terminal')} onStop={stopRuntime} />
       default: {

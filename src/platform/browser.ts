@@ -278,6 +278,7 @@ export function createBrowserBridge(): RuntimeBridge {
     listRuntimeWorkspaceFiles: () => Promise.reject(new Error('浏览器预览不支持读取运行时工作区')),
     shareRuntimeWorkspaceFile: () => Promise.reject(new Error('浏览器预览不支持分享运行时文件')),
     openRuntimeWorkspaceFile: () => Promise.reject(new Error('浏览器预览不支持打开运行时文件')),
+    deleteRuntimeWorkspaceFile: () => Promise.reject(new Error('浏览器预览不支持删除运行时文件')),
     clearDiagnosticLog: () => {
       diagnosticState = { ...diagnosticState, fileCount: 0, totalBytes: 0, lastEntryAtMillis: 0 }
       return Promise.resolve({ ...diagnosticState })
