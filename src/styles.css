@@ -432,7 +432,10 @@ button:disabled {
   border-top: 1px solid var(--line);
 }
 
-.inline-alert {`r`n  display: flex;`r`n  min-width: 0;`r`n  flex-wrap: wrap;
+.inline-alert {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
   gap: 11px;
   margin-top: 14px;
   padding: 13px 14px;
@@ -446,12 +449,17 @@ button:disabled {
   margin-top: 1px;
 }
 
-.inline-alert div {`r`n  display: flex;`r`n  min-width: 0;`r`n  flex: 1 1 180px;
+.inline-alert div {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 180px;
   flex-direction: column;
   gap: 3px;
 }
 
-.inline-alert span {`r`n  overflow-wrap: anywhere;`r`n  line-height: 1.45;
+.inline-alert span {
+  overflow-wrap: anywhere;
+  line-height: 1.45;
 }
 
 .inline-alert.warning {
@@ -956,7 +964,10 @@ button:disabled {
   font-size: 12px;
 }
 
-.settings-section {`r`n  min-width: 0;`r`n  overflow: hidden;`r`n  padding: 18px;
+.settings-section {
+  min-width: 0;
+  overflow: hidden;
+  padding: 18px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface);
@@ -1010,12 +1021,17 @@ button:disabled {
   margin-top: 14px;
 }
 
-.field > span {`r`n  overflow-wrap: anywhere;`r`n  color: #475362;
+.field > span {
+  overflow-wrap: anywhere;
+  color: #475362;
   font-size: 12px;
   font-weight: 650;
 }
 
-.field input,`r`n.field select {`r`n  min-width: 0;`r`n  width: 100%;
+.field input,
+.field select {
+  min-width: 0;
+  width: 100%;
   min-height: 44px;
   padding: 10px 12px;
   border: 1px solid var(--line-strong);
@@ -1055,7 +1071,10 @@ button:disabled {
 .custom-model { border: 0; border-top: 1px solid #e3e6e9; padding: 12px 0 0; margin: 0; min-width: 0; }
 .custom-model legend { font-size: 14px; padding-right: 8px; }
 .custom-providers .icon-button { width: 36px; height: 36px; flex: 0 0 36px; display: inline-grid; place-items: center; }
-@media (max-width: 560px) {`r`n  .custom-provider-fields { grid-template-columns: minmax(0, 1fr); }`r`n  .inline-alert > .button { width: 100%; margin-left: 0; }`r`n}
+@media (max-width: 560px) {
+  .custom-provider-fields { grid-template-columns: minmax(0, 1fr); }
+  .inline-alert > .button { width: 100%; margin-left: 0; }
+}
 
 .mono-input {
   font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
