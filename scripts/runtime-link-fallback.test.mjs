@@ -3,7 +3,10 @@
 // 背景：Android 16 / PRoot 访客内 `link(2)` 一律被拒（同目录、跨目录都是 EACCES），
 // `rename` 正常。上游 `@deepseek-ai/dsh 0.1.5-rc.2` 有两处写入路径依赖硬链接：
 //   * `dsh-fs-local` 的 `writeFileAtomic()`：`createIfAbsent` 分支用 `linkFile()` 新建文件；
-//   * `dsh-attachment-local` 的 `publishStagedObject()`：用 `link()` 发布内容寻址对象。
+//   * `dsh-attachment-local` 的 `publishStagedObject()`：用 `link()` 发布内容寻址对象；
+//   * `dsh-attachment-local` 的 `publishImmutableAlias()`：用 `link()` 给同一个对象再挂一个只读名字，
+//     通用文件附件走的就是它（`saveFileVerbatim` / `saveFileStreamVerbatim`）。这一条**只能** copy 回退：
+//     `source` 是内容寻址对象，rename 会把对象库里那条记录本身搬走（测试用「源对象必须还在」钉住这一点）。
 // 仓库用既有的 pnpm 补丁通道（`scripts/runtime-profile/pnpm-workspace.yaml` 的
 // `patchedDependencies`）给这两处加了 rename 回退。本文件是三件事的防线：
 //   1. 补丁在通道里登记正确、且版本键跟着 dsh 版本钉走（升级不改补丁会被立刻发现）；
@@ -56,11 +59,15 @@ const PATCHED_PACKAGES = [
     key: '@deepseek-ai/dsh-attachment-local@0.1.5-rc.2',
     patchFile: '@deepseek-ai__dsh-attachment-local@0.1.5-rc.2.patch',
     entry: 'publishStagedObject',
+    // 同一个包里有两条被补的发布路径：对象发布（rename 回退）与别名发布（copy 回退）。
+    entries: ['publishStagedObject', 'publishImmutableAlias'],
     addedLines: [
       'function isLinkUnavailableError(error) {',
       'async function renameStagedObject(staged, target) {',
+      'async function copyImmutableAlias(source, target) {',
       'if (isLinkUnavailableError(error)) {',
       'await renameStagedObject(staged, target);',
+      'await copyImmutableAlias(source, target);',
       'await removeTemporary(staged.path);',
     ],
   },
@@ -109,7 +116,7 @@ const FS_PROMISES_STUB = [
 const SHARP_STUB = '// sharp 是原生模块；被测的发布路径不经过它，夹具只要求它能被导入。\nexport default function sharp() {\n	throw new Error("sharp 桩不应被调用");\n}\n'
 
 async function loadPatchedModule(t, patchedPackage) {
-  const { name, entry } = patchedPackage
+  const { name, entry, entries = [entry] } = patchedPackage
   const sourceFile = liveInstalledSource(name)
   assert.ok(
     sourceFile,
@@ -135,10 +142,12 @@ async function loadPatchedModule(t, patchedPackage) {
   fs.writeFileSync(path.join(dir, 'fs-promises-stub.mjs'), FS_PROMISES_STUB)
   fs.writeFileSync(path.join(dir, 'sharp-stub.mjs'), SHARP_STUB)
   const fixtureFile = path.join(dir, 'patched-module.mjs')
-  fs.writeFileSync(fixtureFile, `${rewritten}\nexport { ${entry} };\n`)
+  fs.writeFileSync(fixtureFile, `${rewritten}\nexport { ${entries.join(', ')} };\n`)
 
   const patched = await import(pathToFileURL(fixtureFile).href)
-  assert.equal(typeof patched[entry], 'function', `${name} 的 ${entry} 不是函数`)
+  for (const exported of entries) {
+    assert.equal(typeof patched[exported], 'function', `${name} 的 ${exported} 不是函数`)
+  }
   const stub = await import(pathToFileURL(path.join(dir, 'fs-promises-stub.mjs')).href)
   return { patched, linkControl: stub.linkControl, sourceFile }
 }
@@ -376,4 +385,94 @@ test('dsh-attachment-local：link 被拒时回退 rename 发布对象，且不�
   await patched.publishStagedObject(root, targetFor(realBytes), realStage)
   assert.ok(fs.readFileSync(targetFor(realBytes)).equals(realBytes))
   assert.deepEqual(stagedLeftovers(), [], '硬链接发布后暂存名没有被清理')
+})
+
+// 通用文件附件（`saveFileVerbatim` / `saveFileStreamVerbatim`）除了发布对象，还要用
+// `publishImmutableAlias()` 为同一对象再挂一个只读名字。这条路径的取舍与上一条不同：
+// 别名发布**不能**用 rename 回退（源是内容寻址对象，rename 会把对象库里的记录搬走），
+// 只能复制一份字节，再用写后摘要复核保证不可变性。
+test('dsh-attachment-local：link 被拒时复制发布别名，且不把源对象从对象库搬走', async t => {
+  if (!fs.existsSync(virtualStore)) {
+    t.skip('未安装 scripts/runtime-profile 依赖（CI 会先 pnpm install --frozen-lockfile，届时必然执行）')
+    return
+  }
+  const { patched, linkControl } = await loadPatchedModule(t, patchedPackage('@deepseek-ai/dsh-attachment-local'))
+  const work = tempDir(t, 'dsh-attachment-alias-')
+  const root = path.join(work, 'v1')
+  const digestOf = bytes => createHash('sha256').update(bytes).digest('hex')
+  const objectFor = bytes => {
+    const digest = digestOf(bytes)
+    return path.join(root, 'file-objects', digest.slice(0, 2), digest)
+  }
+  const aliasFor = (bytes, name) => {
+    const digest = digestOf(bytes)
+    return path.join(root, 'storefiles', digest.slice(0, 2), digest, name)
+  }
+  // 内容寻址对象：别名发布的 `source` 就是它（上游由 publishImmutableObject 写入）。
+  const putObject = bytes => {
+    const objectPath = objectFor(bytes)
+    fs.mkdirSync(path.dirname(objectPath), { recursive: true })
+    fs.writeFileSync(objectPath, bytes)
+    return objectPath
+  }
+
+  // 1) link 被拒 + 别名不存在：复制发布；**源对象必须还在**（rename 回退会在这里露馅）。
+  const bytes = Buffer.from('文件型附件的字节内容')
+  const source = putObject(bytes)
+  const alias = aliasFor(bytes, '报告.pdf')
+  linkControl.mode = 'eacces'
+  linkControl.calls = 0
+  await patched.publishImmutableAlias(root, source, alias, digestOf(bytes))
+  assert.equal(linkControl.calls, 1, '应该先尝试一次 link 再回退')
+  assert.ok(fs.readFileSync(alias).equals(bytes), '复制发布后的别名内容不正确')
+  assert.ok(fs.existsSync(source), '源对象被搬走了：对象库里那条记录必须留着（rename 回退会犯这个错）')
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(alias).mode & 0o777, 0o400, '别名的权限不是 0400')
+    assert.equal(fs.statSync(source).nlink, 1, '复制得到的是独立 inode；硬链接路径下这里才会是 2')
+  }
+
+  // 2) 别名已存在且字节相同：不覆盖、不报错（内容寻址去重语义不变）。
+  linkControl.mode = 'eacces'
+  await patched.publishImmutableAlias(root, source, alias, digestOf(bytes))
+  assert.ok(fs.readFileSync(alias).equals(bytes), '去重时别名被改写')
+  assert.ok(fs.existsSync(source), '去重时源对象不见了')
+
+  // 3) 别名已存在但字节不同：报 ATTACHMENT_CORRUPT，且**不覆盖**既有别名。
+  const other = Buffer.from('另一份字节')
+  fs.chmodSync(alias, 0o600)
+  fs.writeFileSync(alias, other)
+  linkControl.mode = 'eacces'
+  await assert.rejects(
+    patched.publishImmutableAlias(root, source, alias, digestOf(bytes)),
+    error => {
+      assert.equal(error.code, 'ATTACHMENT_CORRUPT', `字节不一致时应报 ATTACHMENT_CORRUPT，实际 ${error.code}`)
+      return true
+    },
+  )
+  assert.ok(fs.readFileSync(alias).equals(other), '回退路径覆盖了内容不一致的既有别名')
+  assert.ok(fs.existsSync(source), '完整性复核失败时源对象被改动')
+
+  // 4) 其它 errno 不被这次回退吞掉：ENOENT 仍然以 ATTACHMENT_WRITE_FAILED 失败。
+  const missingAlias = aliasFor(bytes, '不存在.pdf')
+  linkControl.mode = 'enoent'
+  await assert.rejects(
+    patched.publishImmutableAlias(root, source, missingAlias, digestOf(bytes)),
+    error => {
+      assert.equal(error.code, 'ATTACHMENT_WRITE_FAILED', `ENOENT 应保持原有失败路径，实际 ${error.code}`)
+      assert.equal(error.cause?.code, 'ENOENT', 'ENOENT 原因被吞掉了')
+      return true
+    },
+  )
+  assert.equal(fs.existsSync(missingAlias), false, 'ENOENT 被回退吞成了成功发布')
+
+  // 5) link 正常时仍走硬链接：别名与源对象是同一个 inode（回退没有把原路径换掉）。
+  linkControl.mode = 'real'
+  const hardBytes = Buffer.from('硬链接别名')
+  const hardSource = putObject(hardBytes)
+  const hardAlias = aliasFor(hardBytes, '正常.txt')
+  await patched.publishImmutableAlias(root, hardSource, hardAlias, digestOf(hardBytes))
+  assert.ok(fs.readFileSync(hardAlias).equals(hardBytes))
+  if (process.platform !== 'win32') {
+    assert.equal(fs.statSync(hardSource).nlink, 2, 'link 可用时应仍是硬链接（同一 inode 的两个名字）')
+  }
 })

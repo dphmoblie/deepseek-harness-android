@@ -22,7 +22,8 @@ P0-2（附件落盘全废）。触发方是 PRoot / 主机策略（访客内 `li
 | 编号 | 包 | 文件与函数 | 硬链接调用点 | 为什么「新建失败、覆盖正常」 |
 |---|---|---|---|---|
 | P0-1 | `@deepseek-ai/dsh-fs-local` | `lib/index.js` 的 `writeFileAtomic()`（第 494 行起） | `linkFile = internals.linkFile ?? link`（第 504 行），在 `createIfAbsent !== void 0` 分支调用（第 532–536 行） | 传了 `createIfAbsent` 就走 `link`（新建）；没传就走 `else await rename(...)`（第 543 行，覆盖） |
-| P0-2 | `@deepseek-ai/dsh-attachment-local` | `lib/index.js` 的 `publishStagedObject()`（第 528 行起） | `await link(staged.path, target)`（第 533 行） | 内容寻址对象只有这一条发布路径，没有 rename 分支 |
+| P0-2（图片 / 截图） | `@deepseek-ai/dsh-attachment-local` | `lib/index.js` 的 `publishStagedObject()`（第 528 行起） | `await link(staged.path, target)`（第 533 行） | 内容寻址对象只有这一条发布路径，没有 rename 分支 |
+| P0-2（通用文件附件） | 同上 | 同文件的 `publishImmutableAlias()`（第 467 行起） | `await link(source, target)`（第 472 行） | 对象先由 `publishImmutableObject()` 发布成功，再为它挂只读别名时失败；调用方是 `saveFileVerbatim()` / `saveFileStreamVerbatim()` |
 
 两个包**不共用 helper**：`writeFileAtomic` 是 `dsh-fs-local` 的模块内私有函数，
 `publishStagedObject` 是 `dsh-attachment-local` 的模块内私有函数，各自直接
@@ -37,13 +38,13 @@ P0-2（附件落盘全废）。触发方是 PRoot / 主机策略（访客内 `li
      `cannot write "<相对路径>": EACCES: permission denied, link '<temp>' -> '<target>'`，
      原始 errno 在 `error.cause.code`；
    - P0-2：`AttachmentError("Unable to persist attachment.", "ATTACHMENT_WRITE_FAILED", { cause })`。
-2. **P0-2 的覆盖范围比登记册写的要窄**（重要）：`publishStagedObject()` 只覆盖
+2. **P0-2 分两条发布路径**（重要）：`publishStagedObject()` 只覆盖
    **图片 / 截图**路径（`saveImageFile` → `commitPreparedImageFile` → `publishImmutableObject`
    → `publishStagedObject`）。**通用文件附件**走的是
    `saveFileVerbatim()` / `saveFileStreamVerbatim()`（第 708 / 728 行），它们除了发布对象，
    还要用 `publishImmutableAlias()`（第 467 行，内部 `link` 在第 472 行）为同一对象再挂一个
-   **只读硬链接名**（`<root>/files/<摘要>/<摘要>/<名字>`）。那个调用点本次**没有**回退，
-   详见 §八。
+   **只读名字**（`<root>/storefiles/<摘要>/<摘要>/<名字>`）。这两条路径的回退方式**必须不同**
+   （原因见 §3.3），因此各有一个分支与一组测试。
 
 ## 二、补丁通道怎么生效（沿用既有机制，没有另创机制）
 
@@ -132,6 +133,26 @@ patchedDependencies:
   `ATTACHMENT_WRITE_FAILED` / `cause=ENOENT`）。`removeTemporary` 只容忍 `ENOENT`，
   其它清理失败照旧上抛，因此没有放松失败可见性。
 
+### 3.3 `publishImmutableAlias()`：只能 copy，不能 rename
+
+同一个补丁里还有第二处回退，它**刻意不照抄** `renameStagedObject`：
+
+- **为什么不能 rename**：`renameStagedObject` 搬的是**一次性暂存名**，搬走正好；
+  而别名发布的 `source` 是**内容寻址对象**（`fileObjects/<前两位>/<sha256>`），
+  它还要被同一份 store 的其它引用复用。用 rename 等于**把对象库里那条记录搬走**，
+  别的引用与后续读取会找不到对象。
+- **因此回退是复制**：新增 `copyImmutableAlias(source, target)`——`O_EXCL` 独占创建
+  （目标已存在即不覆盖，交回调用方按原有摘要复核语义处理）→ 流式读源写入 →
+  `handle.sync()`。不可变性由**写后摘要复核**保证（目标字节必须等于声明的 `sha256`），
+  而不是由「共享同一个 inode」保证。
+- **失败清理**：半途失败（磁盘满、源读失败）必须删掉残片——否则下一次重试会看到
+  「已存在」的目标，复核不过而报 `ATTACHMENT_CORRUPT`，把「写失败」伪装成「存储损坏」。
+- **复核位置的一处调整**：原文只在 `EEXIST` 分支做摘要复核，现在两个分支都做
+  （copy 分支需要它来证明不可变性）。`EEXIST` 分支的语义与原来逐字相同。
+- **代价（如实写明）**：`link` 可用时同一份字节只占一份盘，回退路径下占两份。
+  这与该设备上 pnpm 的 store 与 `node_modules` 各存一份真实副本是同一类取舍；
+  `link(2)` 被整体拒绝的环境里，「省盘」与「可写」只能二选一，这里选可写。
+
 ## 四、回退语义与「原子性 vs 语义」的取舍
 
 **选择保留语义，放弃这一步原子性。**
@@ -154,10 +175,14 @@ patchedDependencies:
 - **不做什么**：不写 catch-all。只有 `EACCES` / `EPERM` / `EXDEV` 进回退；
   `ENOENT` / `EEXIST` / 其它任何 errno 一律走原有失败路径（回归测试逐条钉住）。
 
+**别名发布（§3.3）多一层取舍**：copy 回退保住了「对象库不被搬走」与「字节不可变」，
+但放弃了 `link` 的共享存储。**这不是等价替换，是有意识的功能优先**：
+在 `link(2)` 被拒的设备上，通用文件附件要么多占一份盘，要么完全不可用。
+
 ## 五、回归防线（本机可跑）
 
 测试文件：`scripts/runtime-link-fallback.test.mjs`（CI 的 `node --test scripts/*.test.mjs`
-会带上它）。三组断言：
+会带上它）。四组断言：
 
 1. **通道与最小化**（不需要安装 `node_modules` 也能跑）：
    - `patchedDependencies` 里有这两个键，补丁文件存在；
@@ -175,11 +200,18 @@ patchedDependencies:
    `FS_NOT_REGULAR_FILE`；`ENOENT` 仍以 `FS_IO_ERROR` + `cause.code = "ENOENT"` 失败
    （不被吞成成功写入）；`EEXIST` 语义不变；不带 `createIfAbsent` 的覆盖分支不受影响；
    `link` 正常时仍走原来的硬链接路径。
-3. **`dsh-attachment-local` 行为**：同样取自运行时实际加载的那一份。
+3. **`dsh-attachment-local` 对象发布行为**：同样取自运行时实际加载的那一份。
    `EACCES` 回退后对象字节正确、暂存名被清理、权限 `0400`（非 Windows）；
    目标已存在且字节相同 → 去重复用；字节不同 → `ATTACHMENT_CORRUPT` 且不覆盖；
    `ENOENT` → `ATTACHMENT_WRITE_FAILED` + `cause.code = "ENOENT"`；`EEXIST` 语义不变；
    `link` 正常时仍走硬链接发布。
+4. **`dsh-attachment-local` 别名发布行为**（`publishImmutableAlias`）：
+   `EACCES` 回退后别名内容正确、权限 `0400`（非 Windows）；
+   **源对象必须仍然存在**（这条断言专门钉住「不能照抄 rename 回退」），且源 `nlink` 为 1
+   （证明复制得到的是独立 inode）；别名已存在且字节相同 → 不覆盖不报错；
+   字节不同 → `ATTACHMENT_CORRUPT` 且源与目标都不被改动；
+   `ENOENT` → `ATTACHMENT_WRITE_FAILED` + `cause.code = "ENOENT"`，且不留半截目标；
+   `link` 正常时仍是硬链接（源 `nlink` 为 2）。
 
 ### 5.1 桩的做法与夹具边界
 
@@ -250,13 +282,14 @@ cd ../..; node --test scripts/*.test.mjs
 
 ## 八、已知边界与不确定之处
 
-1. **`publishImmutableAlias()` 没有回退**（`dsh-attachment-local` 第 467 行，`link` 在第 472 行）。
-   它服务于**通用文件附件**（`saveFileVerbatim` / `saveFileStreamVerbatim`）与
-   `readFileStream` 读取的那条引用路径，语义是「给同一个 inode 再挂一个只读名字」：
-   rename 无法提供第二个名字，copy 则会破坏「相同字节不重复占盘」的内容寻址性质。
-   因此它需要的是**独立决策**（copy 回退？还是让引用路径也走 rename？），
-   本次最小补丁没有碰它。**结论：图片 / 截图已修；通用文件附件在该设备上仍可能失败**，
-   需要在真机上单独确认（登记册 P0-2 的措辞建议按此拆分）。
+1. **`publishImmutableAlias()` 的回退是 copy，不是 rename**（`dsh-attachment-local`，
+   详见 §3.3）。它服务于**通用文件附件**（`saveFileVerbatim` / `saveFileStreamVerbatim`），
+   语义是「给同一份内容再挂一个只读名字」。曾经的候选是「让引用路径也走 rename」，
+   **已否决**：那会把内容寻址对象本身从对象库搬走，破坏其它引用。
+   **代价是明摆着的**：回退路径下同一份字节占两份盘（`link` 可用时占一份）。
+   这不是等价替换，是「可写优先」的有意识取舍。
+   **仍未真机确认**：真实 FUSE / f2fs 上的复制行为、以及大文件（上限见 dsh 的附件限额）
+   复制时的耗时都没在设备上量过；本机只验证了代码路径与 errno 分支。
 2. **回退窗口内的并发覆盖**：见 §四。本次选择保语义、放弃 link 的内核级 no-replace。
 3. **`createIfAbsent` 之外的写入路径未受影响**：覆盖分支本来就是 `rename`
    （Windows 上是 `replaceFile` + `rename` 兜底），本机与真机都不受影响。

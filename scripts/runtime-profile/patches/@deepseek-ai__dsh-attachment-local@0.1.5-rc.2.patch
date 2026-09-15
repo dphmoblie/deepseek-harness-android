@@ -1,5 +1,5 @@
 diff --git a/lib/index.js b/lib/index.js
-index fec538fb3ad2875aba52b8e10e6e79d3fe3b804d..08daa896115c71f433353c292837287fadaf8517 100644
+index fec538fb3ad2875aba52b8e10e6e79d3fe3b804d..d54bd3f9b177fada19dcf1de9fb08fa8dc4f4727 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -4,7 +4,7 @@ import { AttachmentError, AttachmentId, AttachmentStore, ImageVariantId, request
@@ -11,7 +11,65 @@ index fec538fb3ad2875aba52b8e10e6e79d3fe3b804d..08daa896115c71f433353c292837287f
  import sharp from "sharp";
  //#region lib/types/compression-limiter.js
  /** Instance-owned concurrency bound for native image transformations. */
-@@ -525,6 +525,34 @@ async function stageImmutableObject(root, data, signal) {
+@@ -458,6 +458,40 @@ async function publishImmutableObjectStream(root, data, targetFor, signal) {
+ 	};
+ }
+ /**
++* `publishImmutableAlias` 在 link 不可用时的回退：**复制**一份字节，而不是给同一个 inode 再挂一个名字。
++*
++* 为什么不能照抄 `renameStagedObject` 的 rename 回退：那里的暂存名是一次性的，搬走正好；
++* 而这里的 `source` 是**内容寻址对象**（`fileObjects/<前两位>/<sha256>`），它还要被同一份
++* store 的其它引用复用，rename 会把对象库里这个名字本身搬走。因此只能复制。
++*
++* 代价：link 可用时同一份字节只占一份盘，回退路径下占两份；不可变性由下面的**写后摘要复核**
++* 保证（目标字节必须等于声明的 sha256），而不是由「共享同一个 inode」保证。
++* 这与该设备上 pnpm 的 store 与 node_modules 各存一份真实副本是同一类取舍：
++* `link(2)` 被整体拒绝的环境里，「省盘」与「可写」只能二选一，这里选可写。
++*
++* 独占创建（`O_EXCL`）：目标已存在即**不覆盖**，交回调用方按原有 EEXIST 分支的摘要复核语义处理。
++* 半途失败（磁盘满、源读失败）留下的残片必须删掉——否则下一次重试会看到「已存在」的目标，
++* 复核不过而报 `ATTACHMENT_CORRUPT`，把「写失败」伪装成「存储损坏」。
++*/
++async function copyImmutableAlias(source, target) {
++	let handle;
++	try {
++		handle = await open(target, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 384);
++	} catch (error) {
++		if (error instanceof Error && "code" in error && error.code === "EEXIST") return;
++		throw error;
++	}
++	try {
++		for await (const chunk of createReadStream(source)) await handle.writeFile(chunk);
++		await handle.sync();
++	} catch (error) {
++		await handle.close().catch(() => void 0);
++		await removeTemporary(target);
++		throw error;
++	}
++	await handle.close();
++}
++/**
+ * Publish another durable hard-link name for an existing immutable object.
+ * @param root - absolute versioned attachment root.
+ * @param source - existing content-addressed object below `root`.
+@@ -471,8 +505,14 @@ async function publishImmutableAlias(root, source, target, sha256) {
+ 		try {
+ 			await link(source, target);
+ 		} catch (error) {
+-			/* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
+-			if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
++			if (isLinkUnavailableError(error)) {
++				/* 复制回退；目标已存在时 copyImmutableAlias 不覆盖，交给下面的摘要复核。 */
++				await copyImmutableAlias(source, target);
++			} else {
++				/* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
++				if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
++			}
++			/* 两条分支都必须复核：copy 回退要以字节相等证明不可变性，EEXIST 分支沿用原有去重语义。 */
+ 			if (await digestFile(target) !== sha256) throw new AttachmentError("Stored attachment failed integrity verification.", "ATTACHMENT_CORRUPT");
+ 		}
+ 		await chmod(target, 256);
+@@ -525,6 +565,34 @@ async function stageImmutableObject(root, data, signal) {
  		throw new AttachmentError("Unable to persist attachment.", "ATTACHMENT_WRITE_FAILED", { cause: error });
  	}
  }
@@ -46,7 +104,7 @@ index fec538fb3ad2875aba52b8e10e6e79d3fe3b804d..08daa896115c71f433353c292837287f
  async function publishStagedObject(root, target, staged) {
  	const parent = dirname(target);
  	try {
-@@ -532,11 +560,18 @@ async function publishStagedObject(root, target, staged) {
+@@ -532,11 +600,18 @@ async function publishStagedObject(root, target, staged) {
  		try {
  			await link(staged.path, target);
  		} catch (error) {
