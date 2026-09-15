@@ -53,6 +53,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # 不写 packages 时该 action 默认装 "tools platform-tools"，而 Google 已从
+          # SDK 源移除 tools 包，sdkmanager 会以 "Failed to find package 'tools'" 失败。
+          # 这里只装 platform-tools，platforms/build-tools/cmake/ndk 由下一步显式安装。
+          packages: 'platform-tools'
 
       - name: Install SDK components
         run: |
