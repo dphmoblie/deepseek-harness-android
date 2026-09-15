@@ -70,6 +70,16 @@ class MainActivity : BridgeActivity() {
         handleExternalFileIntent(intent)
     }
 
+    override fun onStart() {
+        super.onStart()
+        AppForeground.onActivityStarted()
+    }
+
+    override fun onStop() {
+        AppForeground.onActivityStopped()
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         // 主题可能刚在 Web 侧被改过，系统深色模式也可能在后台切换过；每次回到前台重算一次状态栏，

@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import io.deepseekharness.mobile.AppForeground
 import io.deepseekharness.mobile.MainActivity
 import io.deepseekharness.mobile.R
 
@@ -84,6 +85,7 @@ internal object TaskNotification {
     }
 
     private fun postWithCount(context: Context, titleRes: Int, textRes: Int, count: Int) {
+        if (!shouldNotify()) return
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return
         ensureChannel(context)
@@ -109,6 +111,7 @@ internal object TaskNotification {
     )
 
     private fun post(context: Context, titleRes: Int, textRes: Int) {
+        if (!shouldNotify()) return
         val manager = NotificationManagerCompat.from(context)
         // areNotificationsEnabled() 覆盖两件事：用户关掉了通知，或（Android 13+）没授予权限。
         if (!manager.areNotificationsEnabled()) return
@@ -138,6 +141,17 @@ internal object TaskNotification {
     fun clear(context: Context) {
         NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
     }
+
+    /**
+     * 应用在前台时不发：用户正看着界面，界面本身就在显示同一件事，
+     * 弹出来只是噪声（设计文档第四节「应用在前台时不应存在任务通知」）。
+     *
+     * 与 [clear] 的分工：**发之前**抑制、**回到前台**清除，两条路径合起来保证
+     * 「前台既不会新出现、也不会残留」。仅靠清除是不够的——后台完成的操作
+     * 会在用户还没回来时就弹出来，那正是任务通知存在的意义，不该被误伤；
+     * 仅靠抑制也是不够的——后台发出的那条会一直留到用户手动划掉。
+     */
+    private fun shouldNotify(): Boolean = !AppForeground.isForeground()
 
     private fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
