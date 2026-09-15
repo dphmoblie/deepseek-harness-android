@@ -590,8 +590,16 @@ internal class RuntimeMailbox(private val store: RuntimeStore) {
 
     private fun accessSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
 
+    /**
+     * 是否已授予「所有文件访问」。
+     *
+     * 版本守卫必须与调用写在**同一个表达式**里：`Environment.isExternalStorageManager()` 是 API 30 起
+     * 才有的方法，minSdk 是 26，直接调用在 Android 8–10 上是 `NoSuchMethodError`（本方法虽然有
+     * `catch (Throwable)` 兜底，但那是「掩盖问题」而不是「按版本分支」，Android Lint 的 `NewApi`
+     * 也因此会把 release 构建拦下来——本地只跑 `testDebugUnitTest` 时看不到，CI 的 `lintRelease` 才会）。
+     */
     private fun allFilesGranted(): Boolean = try {
-        Environment.isExternalStorageManager()
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()
     } catch (_: Throwable) {
         false
     }
