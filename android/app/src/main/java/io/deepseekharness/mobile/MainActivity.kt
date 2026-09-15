@@ -51,7 +51,11 @@ class MainActivity : BridgeActivity() {
     private fun handleExternalFileIntent(intent: Intent) {
         val uri = when (intent.action) {
             Intent.ACTION_VIEW -> intent.data
-            Intent.ACTION_SEND -> intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            Intent.ACTION_SEND -> {
+                @Suppress("DEPRECATION")
+                val stream = intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
+                stream ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
+            }
             else -> null
         } ?: return
         if (uri.scheme != "content") {
@@ -60,7 +64,7 @@ class MainActivity : BridgeActivity() {
         }
         val inbox = java.io.File(filesDir, "inbox")
         if (!inbox.exists() && !inbox.mkdirs()) return
-        val name = queryDisplayName(uri) ?: "shared-file"
+        val name = try { queryDisplayName(uri) } catch (_: Throwable) { null } ?: "shared-file"
         val safeName = name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(120).ifEmpty { "shared-file" }
         val target = java.io.File(inbox, "${System.currentTimeMillis()}-$safeName")
         try {
