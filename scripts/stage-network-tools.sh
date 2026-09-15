@@ -177,7 +177,11 @@ if ((CA_COUNT < CA_MIN_FILES)); then
   echo "CA 条目不足: $CA_COUNT < $CA_MIN_FILES" >&2
   exit 1
 fi
-BROKEN_LINK="$(find -L "$DEST" -type l -print -quit)"
+# 用 -xtype l 而非 -L -type l：预置树里有指向宿主机绝对路径的软链
+# （/usr/lib/ssl/private -> /etc/ssl/private，0710 root:ssl-cert），
+# -L 会真的走进去，非 root runner 立刻 EACCES、find 以 1 退出，set -e 直接终止；
+# -xtype 只 stat 链接目标、不遍历目标目录，同样能判出悬空链接。
+BROKEN_LINK="$(find "$DEST" -xtype l -print -quit)"
 if [[ -n "$BROKEN_LINK" ]]; then
   echo "预置树存在悬空符号链接: $BROKEN_LINK" >&2
   exit 1
