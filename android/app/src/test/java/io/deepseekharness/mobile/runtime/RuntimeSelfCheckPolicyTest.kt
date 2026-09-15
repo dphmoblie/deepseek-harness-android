@@ -16,9 +16,10 @@ class RuntimeSelfCheckPolicyTest {
     private fun raw(id: String, status: String, code: String? = null) =
         RuntimeSelfCheckPolicy.RawCheck(id, status, code)
 
-    /** 十项全通过的健康载荷；顺序刻意与契约不同，用来验证归一化。 */
+    /** 十一项全通过的健康载荷；顺序刻意与契约不同，用来验证归一化。 */
     private val healthy = listOf(
         raw("rg", "ok"),
+        raw("hardlink", "ok"),
         raw("attachments", "ok"),
         raw("dsh_home", "ok"),
         raw("pty_sandbox", "ok"),
@@ -79,6 +80,62 @@ class RuntimeSelfCheckPolicyTest {
         )
         assertEquals(listOf("rg"), checks.map { it.id })
         assertEquals("RG_NOT_EXECUTABLE", checks.single().code)
+    }
+
+    @Test
+    fun acceptsOnlyTheHardlinkDeniedCodeOnTheHardlinkCheck() {
+        // 契约里的 id 顺序（脚本 / 原生 / 界面三处逐字一致）：hardlink 紧跟 attachments、在 rg 之前。
+        assertEquals(
+            listOf(
+                "shell", "node", "sandbox_launcher", "sandbox_probe", "sandbox_exec",
+                "pty", "pty_sandbox", "dsh_home", "attachments", "hardlink", "rg",
+            ),
+            RuntimeSelfCheckPolicy.CHECK_IDS,
+        )
+
+        val checks = RuntimeSelfCheckPolicy.sanitize(
+            listOf(
+                raw("hardlink", "ok"),
+                // 同一个 id 重复出现时保留首个：因此这一行被丢弃，验证的是「ok 不带码」那一支。
+                raw("hardlink", "fail", "HARDLINK_DENIED"),
+            ),
+        )
+        assertEquals(listOf("hardlink"), checks.map { it.id })
+        assertEquals("ok", checks.single().status)
+        assertNull(checks.single().code)
+
+        val denied = RuntimeSelfCheckPolicy.sanitize(listOf(raw("hardlink", "fail", "HARDLINK_DENIED")))
+        assertEquals(listOf("hardlink"), denied.map { it.id })
+        assertEquals("fail", denied.single().status)
+        assertEquals("HARDLINK_DENIED", denied.single().code)
+
+        // `ok` 带码、码属于别的检查项、状态与码不一致、码不在受控集合里：四种都整条丢弃。
+        assertTrue(
+            RuntimeSelfCheckPolicy.sanitize(
+                listOf(
+                    raw("hardlink", "ok", "HARDLINK_DENIED"),
+                    raw("hardlink", "fail", "ATTACHMENTS_NOT_WRITABLE"),
+                    raw("hardlink", "warn", "HARDLINK_DENIED"),
+                    raw("hardlink", "fail", "HARDLINK_OK"),
+                ),
+            ).isEmpty(),
+        )
+
+        // 顺序证据：hardlink 在 attachments 之后、rg 之前，首个失败码必须按契约顺序取到它。
+        val ordered = RuntimeSelfCheckPolicy.sanitize(
+            listOf(
+                raw("rg", "warn", "RG_MISSING"),
+                raw("attachments", "ok"),
+                raw("hardlink", "fail", "HARDLINK_DENIED"),
+            ),
+        )
+        assertEquals(listOf("attachments", "hardlink", "rg"), ordered.map { it.id })
+        assertEquals(listOf("ok", "fail", "warn"), ordered.map { it.status })
+        // `warn` 不算失败：失败项只有 hardlink 一个。
+        assertEquals(
+            RuntimeSelfCheckPolicy.Summary("HARDLINK_DENIED", 1),
+            RuntimeSelfCheckPolicy.summarize(ordered),
+        )
     }
 
     @Test

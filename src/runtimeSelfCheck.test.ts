@@ -123,6 +123,47 @@ describe('运行时自检载荷校验', () => {
     expect(new Set(advice.map(item => item.nextStep))).toEqual(new Set(['先点「修复运行时权限」，仍失败则重装运行时']))
   })
 
+  it('hardlink 的合法与非法组合：ok 不带码，失败只认受控码 HARDLINK_DENIED', () => {
+    // 三处契约（访客脚本 / Kotlin 白名单 / 前端）的 id 顺序逐字一致：hardlink 紧跟 attachments、在 rg 之前。
+    expect(SELF_CHECK_IDS).toEqual([
+      'shell', 'node', 'sandbox_launcher', 'sandbox_probe', 'sandbox_exec',
+      'pty', 'pty_sandbox', 'dsh_home', 'attachments', 'hardlink', 'rg',
+    ])
+    expect(SELF_CHECK_CODES).toContain('HARDLINK_DENIED')
+
+    const report = validateSelfCheckReport(checkPayload({
+      checks: [
+        { id: 'rg', status: 'warn', code: 'RG_MISSING' },
+        { id: 'hardlink', status: 'ok' },
+        { id: 'attachments', status: 'ok' },
+      ],
+    }))
+    if (report.operation !== 'check') throw new Error('载荷类型判定错误')
+    // 顺序按契约归一化，不随载荷顺序变化。
+    expect(report.checks.map(item => item.id)).toEqual(['attachments', 'hardlink', 'rg'])
+    expect(report.checks[1]).toEqual({ id: 'hardlink', status: 'ok' })
+
+    const denied = validateSelfCheckReport(checkPayload({
+      checks: [{ id: 'hardlink', status: 'fail', code: 'HARDLINK_DENIED' }],
+    }))
+    if (denied.operation !== 'check') throw new Error('载荷类型判定错误')
+    expect(denied.checks).toEqual([{ id: 'hardlink', status: 'fail', code: 'HARDLINK_DENIED' }])
+
+    // 非法组合一：ok 带码（会渲染出「正常 + 修复建议」）。
+    expect(() => validateSelfCheckReport(checkPayload({
+      checks: [{ id: 'hardlink', status: 'ok', code: 'HARDLINK_DENIED' }],
+    }))).toThrow('自检项状态与结论码不一致')
+    // 非法组合二：非 ok 不带码。
+    expect(() => validateSelfCheckReport(checkPayload({
+      checks: [{ id: 'hardlink', status: 'fail' }],
+    }))).toThrow('自检项结论码无效')
+    // 非法组合三：码不在受控集合里。注意前端只查全局码表与状态规则，
+    // 「码是否属于这一项」由原生侧的白名单（RuntimeSelfCheckPolicy）负责。
+    expect(() => validateSelfCheckReport(checkPayload({
+      checks: [{ id: 'hardlink', status: 'fail', code: 'HARDLINK_OK' }],
+    }))).toThrow('自检项结论码无效')
+  })
+
   it('接受合法的 repair 载荷', () => {
     const report = validateSelfCheckReport({
       operation: 'repair',
@@ -197,14 +238,23 @@ describe('运行时自检文案', () => {
     expect(selfCheckAdvice({ id: 'pty_sandbox', status: 'ok' }).label).toBe('沙箱内 PTY')
   })
 
+  it('hardlink 项如实指向硬链接这一层，并与 en.ts 的词条逐字对应', () => {
+    // 这里的原文就是 `src/locales/en.ts` 里词条的键：改动这一句必须同步改英文。
+    const label = '硬链接（原子写入的前提）'
+    const meaning = '本机不允许创建硬链接（同目录与跨目录都被拒绝）。dsh 的 write 工具新建文件与所有附件落盘都依赖硬链接做原子安装，因此这两条链路会失败。'
+    const nextStep = '这是运行环境（PRoot/内核策略）层面的限制，应用侧无法绕过；需要写入新文件时改用 bash 重定向或终端里的 cp/mv，图片与截图类附件在当前版本上不可用。'
+    expect(selfCheckAdvice({ id: 'hardlink', status: 'ok' }).label).toBe(label)
+    expect(selfCheckAdvice({ id: 'hardlink', status: 'fail', code: 'HARDLINK_DENIED' })).toEqual({ label, meaning, nextStep })
+  })
+
   it('只在权限位或缺失目录相关的码上提供修复入口', () => {
     const repairable: SelfCheckCode[] = ['LAUNCHER_NOT_EXECUTABLE', 'LAUNCHER_MISSING', 'RG_NOT_EXECUTABLE', 'RG_MISSING', 'ATTACHMENTS_MISSING']
     for (const code of repairable) {
       expect(SELF_CHECK_REPAIRABLE_CODES).toContain(code)
       expect(selfCheckNeedsRepair([{ id: 'shell', status: 'fail', code }])).toBe(true)
     }
-    // 内核能力、Node/bash 缺失、PTY 层故障都修不了：给出修复按钮等于承诺做不到的事。
-    const notRepairable: SelfCheckCode[] = ['PROBE_UNUSABLE', 'PROBE_PARTIAL', 'SHELL_MISSING', 'NODE_MISSING', 'PTY_EXIT_EARLY', 'HOME_NOT_WRITABLE']
+    // 内核能力、Node/bash 缺失、PTY 层故障、硬链接被环境拒绝都修不了：给出修复按钮等于承诺做不到的事。
+    const notRepairable: SelfCheckCode[] = ['PROBE_UNUSABLE', 'PROBE_PARTIAL', 'SHELL_MISSING', 'NODE_MISSING', 'PTY_EXIT_EARLY', 'HOME_NOT_WRITABLE', 'HARDLINK_DENIED']
     for (const code of notRepairable) {
       expect(SELF_CHECK_REPAIRABLE_CODES).not.toContain(code)
       expect(selfCheckNeedsRepair([{ id: 'shell', status: 'fail', code }])).toBe(false)

@@ -271,7 +271,7 @@ function targetOf(key) {
 // 检查项
 //
 // id 与顺序是冻结契约：shell → node → sandbox_launcher → sandbox_probe → sandbox_exec
-// → pty → pty_sandbox → dsh_home → attachments → rg。
+// → pty → pty_sandbox → dsh_home → attachments → hardlink → rg。
 // `ok` 不带 code，非 `ok` 必须带 code，且 code 只能取受控集合里的值。
 // ---------------------------------------------------------------------------
 
@@ -445,13 +445,49 @@ function checkAttachments() {
   return entry('attachments', 'ok')
 }
 
+/**
+ * 硬链接探测：在访客数据目录里独占创建一个小文件，再为它建一个硬链接，最后两个都删掉。
+ *
+ * 为什么必须单独测：dsh 的 `write` 工具**新建**文件走 `dsh-fs-local.writeFileAtomic()` 的
+ * `linkFile()`，附件发布走 `dsh-attachment-local.publishStagedObject()` 的 `link()` ——
+ * 两者都靠硬链接做原子安装。而「目录可写」（上两项测的）与「能建硬链接」是两件事：
+ * 真机上 `open + write + unlink` 全部正常，`link(2)` 却一律被拒，
+ * 于是 `attachments=ok` 会给出「附件链路正常」的假信号，这一项就是来补这个盲区的。
+ *
+ * 失败只回受控码，**不带 errno 文本**：EACCES / EPERM（本机 PRoot 策略拒绝）与 EXDEV（跨设备）
+ * 对上层是同一个结论「硬链接在这个环境里不可用」，其中 EXDEV 的含义与权限无关，只是同样落在这里。
+ *
+ * 目录不存在时同样是 fail（不是抛出）：精确原因由 `dsh_home` / `attachments` 那两行给出，
+ * 与 `writable()` 的处理保持一致 —— 探测本身绝不打断整次自检。
+ */
+function checkHardlink() {
+  const source = path.join(home, '.dsh-self-check-' + crypto.randomUUID() + '.tmp')
+  const linkName = source + '.link'
+  let descriptor = null
+  try {
+    descriptor = fs.openSync(source, 'wx', 0o600)
+    fs.writeFileSync(descriptor, 'ok')
+    fs.linkSync(source, linkName)
+    return entry('hardlink', 'ok')
+  } catch {
+    return entry('hardlink', 'fail', 'HARDLINK_DENIED')
+  } finally {
+    // 两个文件都要清理：链接建不建得成都可能留下源文件。
+    if (descriptor !== null) {
+      try { fs.closeSync(descriptor) } catch { /* 已经关掉了。 */ }
+    }
+    try { fs.unlinkSync(linkName) } catch { /* 没建成就没什么可删。 */ }
+    try { fs.unlinkSync(source) } catch { /* 同上。 */ }
+  }
+}
+
 function checkRipgrep(ripgrep) {
   if (ripgrep === null) return entry('rg', 'warn', 'RG_MISSING')
   if (!isExecutable(ripgrep)) return entry('rg', 'warn', 'RG_NOT_EXECUTABLE')
   return entry('rg', 'ok')
 }
 
-/** 十项检查，顺序即契约顺序。 */
+/** 十一项检查，顺序即契约顺序。 */
 async function runChecks() {
   const launcher = locate(targetOf('launcher'))
   const ripgrep = locate(targetOf('ripgrep'))
@@ -468,6 +504,7 @@ async function runChecks() {
     await checkPty(module, true, launcher),
     checkHome(),
     checkAttachments(),
+    checkHardlink(),
     checkRipgrep(ripgrep),
   ]
 }

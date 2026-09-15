@@ -298,7 +298,7 @@ class MobileRuntimePlugin : Plugin() {
 
     /**
      * 权限：应用内桥接。
-     * 运行时自检：`check` 只读（可用空间、dsh 版本与十项检查），`repair` 只补可执行位并创建附件目录。
+     * 运行时自检：`check` 只读（可用空间、dsh 版本与十一项检查），`repair` 只补可执行位并创建附件目录。
      * 只回传受控枚举与计数，不含路径、文件内容或原始报错文本。
      */
     @PluginMethod

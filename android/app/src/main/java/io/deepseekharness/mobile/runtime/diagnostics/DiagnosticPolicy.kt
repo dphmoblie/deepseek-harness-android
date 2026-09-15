@@ -86,7 +86,7 @@ enum class DiagnosticEvent {
      * 三者之一。自检把三种可能各测一次，这条记录就是**设备侧唯一的第一手证据**。
      *
      * 只记录受控取值，不含路径、脚本输出或原始报错文本：
-     *  - `result=ok` 十项里没有 fail；`result=failed` 有 fail，`code` 是**按契约顺序的首个失败码**
+     *  - `result=ok` 十一项里没有 fail；`result=failed` 有 fail，`code` 是**按契约顺序的首个失败码**
      *    （例如 `PTY_EXIT_EARLY` / `EXEC_LAUNCHER_FAILED` / `PROBE_UNUSABLE`），一眼能定位到层；
      *  - `result=denied` + `code=SELF_CHECK_FAILED` 表示自检**没跑成**（脚本也没起来或载荷不可信），
      *    与「检查项确实失败」区分开；

@@ -1394,7 +1394,7 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
         <span className="section-icon"><ShieldCheck size={19} /></span>
         <div>
           <h2 id="runtime-self-check-title">{t("运行时自检")}</h2>
-          <p>{t("不需要 bash 也能判断运行时哪一环断了：逐项检查 Shell、Node、沙箱启动器、内核 Landlock、PTY、访客数据目录、附件目录与 ripgrep，并给出结论与下一步。")}</p>
+          <p>{t("不需要 bash 也能判断运行时哪一环断了：逐项检查 Shell、Node、沙箱启动器、内核 Landlock、PTY、访客数据目录、附件目录、硬链接与 ripgrep，并给出结论与下一步。")}</p>
         </div>
       </div>
 

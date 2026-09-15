@@ -14,7 +14,7 @@ internal object RuntimeSelfCheckPolicy {
     const val CHECK = "check"
     const val REPAIR = "repair"
 
-    /** 单次载荷的条目上限；自检固定只有十项，多出来的一律不可信。 */
+    /** 单次载荷的条目上限；自检固定只有十一项，多出来的一律不可信。 */
     const val MAX_CHECKS = 32
 
     /** 计数上限：修复只有三个可改目标，超过这个数就说明载荷不可信。 */
@@ -34,6 +34,7 @@ internal object RuntimeSelfCheckPolicy {
         "pty_sandbox",
         "dsh_home",
         "attachments",
+        "hardlink",
         "rg",
     )
 
@@ -89,6 +90,9 @@ internal object RuntimeSelfCheckPolicy {
             "ATTACHMENTS_MISSING" to "warn",
             "ATTACHMENTS_NOT_WRITABLE" to "fail",
         ),
+        // 硬链接在这个环境里不可用（本机被 PRoot / 内核策略一律拒绝，跨设备则是 EXDEV）：
+        // 两种 errno 对上层是同一个结论，因此共用同一个受控码。
+        "hardlink" to mapOf("HARDLINK_DENIED" to "fail"),
         "rg" to mapOf(
             "RG_MISSING" to "warn",
             "RG_NOT_EXECUTABLE" to "warn",
@@ -101,7 +105,7 @@ internal object RuntimeSelfCheckPolicy {
     /** 校验后的条目：`code` 只在该检查项非 `ok` 时存在。 */
     internal data class Check(val id: String, val status: String, val code: String?)
 
-    /** 十项检查的汇总：诊断日志只写这两个值。 */
+    /** 十一项检查的汇总：诊断日志只写这两个值。 */
     internal data class Summary(val firstFailureCode: String?, val failedCount: Int)
 
     /** 修复计数：`candidates` 是本次涉及的目标数，`repaired` 是实际改动的数量。 */

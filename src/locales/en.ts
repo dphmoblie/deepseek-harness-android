@@ -511,7 +511,7 @@ export const english: Readonly<Record<string, string>> = {
   "设置已保存，但部分状态暂时无法确认，请稍后重试": "Settings saved, but some status checks failed. Please retry shortly.",
 
   "运行时自检": "Runtime self-check",
-  "不需要 bash 也能判断运行时哪一环断了：逐项检查 Shell、Node、沙箱启动器、内核 Landlock、PTY、访客数据目录、附件目录与 ripgrep，并给出结论与下一步。": "You do not need bash to tell which link of the runtime chain is broken: the self-check probes Shell, Node, the sandbox launcher, kernel Landlock, PTY, the guest data directory, the attachments directory, and ripgrep, then gives a conclusion and a next step for each.",
+  "不需要 bash 也能判断运行时哪一环断了：逐项检查 Shell、Node、沙箱启动器、内核 Landlock、PTY、访客数据目录、附件目录、硬链接与 ripgrep，并给出结论与下一步。": "You do not need bash to tell which link of the runtime chain is broken: the self-check probes Shell, Node, the sandbox launcher, kernel Landlock, PTY, the guest data directory, the attachments directory, hard links, and ripgrep, then gives a conclusion and a next step for each.",
   "运行自检": "Run self-check",
   "修复运行时权限": "Repair runtime permissions",
   "正在运行自检…": "Running the self-check…",
@@ -596,6 +596,9 @@ export const english: Readonly<Record<string, string>> = {
   "点「修复运行时权限」会自动补建该目录": "Repair runtime permissions recreates this directory",
   "附件目录不可写——这正是「Unable to persist attachment」那类报错的成因": "The attachments directory is not writable — exactly what causes errors such as \"Unable to persist attachment\"",
   "确认剩余空间；必要时重装运行时": "Check the free space; reinstall the runtime if needed",
+  "硬链接（原子写入的前提）": "Hard links (the prerequisite for atomic writes)",
+  "本机不允许创建硬链接（同目录与跨目录都被拒绝）。dsh 的 write 工具新建文件与所有附件落盘都依赖硬链接做原子安装，因此这两条链路会失败。": "This device does not allow creating hard links (both within the same directory and across directories are denied). The dsh write tool creating new files and all attachment writes rely on hard links for atomic installation, so both of these paths will fail.",
+  "这是运行环境（PRoot/内核策略）层面的限制，应用侧无法绕过；需要写入新文件时改用 bash 重定向或终端里的 cp/mv，图片与截图类附件在当前版本上不可用。": "This is a limitation of the runtime environment (PRoot/kernel policy) that the app cannot work around; to write new files, use bash redirection or cp/mv in the terminal, and image and screenshot attachments are unavailable in the current version.",
   "运行时里找不到 ripgrep": "ripgrep was not found in the runtime",
   "ripgrep 没有执行位，grep / glob 工具会失败": "ripgrep has no execute bit, so the grep / glob tools will fail",
   "点「修复运行时权限」即可修好": "Repair runtime permissions fixes this",

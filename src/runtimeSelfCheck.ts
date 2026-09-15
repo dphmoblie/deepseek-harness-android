@@ -2,7 +2,7 @@
  * 运行时自检：把原生侧逐项检查的结果，翻译成「哪一环断了 + 下一步」。
  *
  * 为什么需要它：运行时链路（Shell → Node → 沙箱启动器 → 内核 Landlock → 沙箱内执行 →
- * PTY → 访客数据目录 → 附件目录 → ripgrep）任何一环断掉，用户看到的往往只有一句
+ * PTY → 访客数据目录 → 附件目录 → 硬链接 → ripgrep）任何一环断掉，用户看到的往往只有一句
  * 「bash 工具不可用」，而排查通常又要靠 bash —— 可 bash 本身可能正是断掉的那一环。
  * 自检由原生侧逐环探测，不依赖 bash；本模块只负责三件事：
  *
@@ -30,6 +30,7 @@ export const SELF_CHECK_IDS = [
   'pty_sandbox',
   'dsh_home',
   'attachments',
+  'hardlink',
   'rg',
 ] as const
 
@@ -62,6 +63,7 @@ export const SELF_CHECK_CODES = [
   'HOME_NOT_WRITABLE',
   'ATTACHMENTS_MISSING',
   'ATTACHMENTS_NOT_WRITABLE',
+  'HARDLINK_DENIED',
   'RG_MISSING',
   'RG_NOT_EXECUTABLE',
 ] as const
@@ -111,6 +113,7 @@ const SELF_CHECK_LABELS: Readonly<Record<SelfCheckId, string>> = {
   pty_sandbox: '沙箱内 PTY',
   dsh_home: '访客数据目录',
   attachments: '附件目录',
+  hardlink: '硬链接（原子写入的前提）',
   rg: 'ripgrep',
 }
 
@@ -196,6 +199,13 @@ const SELF_CHECK_CODE_ADVICE: Readonly<Record<SelfCheckCode, { meaning: string; 
   ATTACHMENTS_NOT_WRITABLE: {
     meaning: '附件目录不可写——这正是「Unable to persist attachment」那类报错的成因',
     nextStep: '确认剩余空间；必要时重装运行时',
+  },
+  HARDLINK_DENIED: {
+    // 与 attachments 分开报的意义：目录能写 ≠ 能建硬链接。真机上 open+write+unlink 正常而
+    // link(2) 一律被拒，只有这一项才会如实报出「附件不可能落盘、write 也建不了新文件」。
+    // EXDEV（跨设备）也落在这个码上：errno 不同，结论相同 —— 硬链接在这个环境里不可用。
+    meaning: '本机不允许创建硬链接（同目录与跨目录都被拒绝）。dsh 的 write 工具新建文件与所有附件落盘都依赖硬链接做原子安装，因此这两条链路会失败。',
+    nextStep: '这是运行环境（PRoot/内核策略）层面的限制，应用侧无法绕过；需要写入新文件时改用 bash 重定向或终端里的 cp/mv，图片与截图类附件在当前版本上不可用。',
   },
   RG_MISSING: {
     meaning: '运行时里找不到 ripgrep',
