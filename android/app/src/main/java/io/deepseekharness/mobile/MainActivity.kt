@@ -9,11 +9,16 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import com.getcapacitor.BridgeActivity
+import io.deepseekharness.mobile.runtime.RuntimeFiles
 import io.deepseekharness.mobile.runtime.RuntimeStore
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.InputStream
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
+import java.util.UUID
 import java.util.concurrent.Executors
 
 /**
@@ -131,11 +136,7 @@ class MainActivity : BridgeActivity() {
 
     private fun importFiles(uris: List<Uri>): ImportResult {
         val store = RuntimeStore(applicationContext)
-        val runtimeInbox = File(store.currentRoot, "root/1/inbox")
-        val inbox = if (store.currentRoot.isDirectory) runtimeInbox else File(filesDir, "inbox")
-        if ((!inbox.exists() && !inbox.mkdirs()) || !inbox.isDirectory) {
-            return ImportResult.DESTINATION_UNAVAILABLE
-        }
+        val inbox = prepareInbox(store) ?: return ImportResult.DESTINATION_UNAVAILABLE
 
         uris.forEachIndexed { index, uri ->
             if (Thread.currentThread().isInterrupted) return ImportResult.SOURCE_UNREADABLE
@@ -143,11 +144,32 @@ class MainActivity : BridgeActivity() {
             val safeName = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
                 .take(MAX_FILE_NAME_LENGTH)
                 .ifEmpty { "shared-file-$index" }
-            val target = File(inbox, "${System.currentTimeMillis()}-$index-$safeName")
+            val target = File(inbox, "${UUID.randomUUID()}-$safeName")
             val result = copySharedFile(uri, target)
             if (result != ImportResult.SUCCESS) return result
         }
         return ImportResult.SUCCESS
+    }
+
+    /** Fixed path segments are checked without following links before accepting provider data. */
+    private fun prepareInbox(store: RuntimeStore): File? = try {
+        if (RuntimeFiles.isDirectoryNoFollow(store.currentRoot)) {
+            val rootHome = requireDirectory(File(store.currentRoot, "root")) ?: return null
+            val workspace = requireDirectory(File(rootHome, "1"), create = true) ?: return null
+            requireDirectory(File(workspace, "inbox"), create = true)
+        } else {
+            requireDirectory(File(filesDir, "inbox"), create = true)
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun requireDirectory(directory: File, create: Boolean = false): File? {
+        if (RuntimeFiles.existsNoFollow(directory)) {
+            return directory.takeIf(RuntimeFiles::isDirectoryNoFollow)
+        }
+        if (!create || !directory.mkdir() || !RuntimeFiles.isDirectoryNoFollow(directory)) return null
+        return directory
     }
 
     private fun copySharedFile(uri: Uri, target: File): ImportResult {
@@ -163,7 +185,12 @@ class MainActivity : BridgeActivity() {
         return try {
             input.use { source ->
                 try {
-                    target.outputStream().use { output ->
+                    Files.newOutputStream(
+                        target.toPath(),
+                        StandardOpenOption.CREATE_NEW,
+                        StandardOpenOption.WRITE,
+                        LinkOption.NOFOLLOW_LINKS,
+                    ).use { output ->
                         val buffer = ByteArray(COPY_BUFFER_BYTES)
                         var total = 0L
                         while (true) {
