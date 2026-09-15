@@ -163,8 +163,137 @@ class DeviceCommandRunnerTest {
         assertEquals(0, runWithExitCode(DeviceCommand.UI_DUMP, 0).exitCode)
     }
 
-    private fun runWithExitCode(command: DeviceCommand, exitCode: Int): DeviceCommandResult {
-        val sessionId = "session-exit-$command-$exitCode"
+    /**
+     * 受控失败码的取值是**冻结契约**：补「人话说明」不得改变任何一个码。
+     *
+     * 每个码都要求三件事同时成立：码与原来一致、正文里出现可操作的简体中文指引（含「下一步：」）、
+     * 设备原始输出仍原样保留。措辞不做绝对断言。
+     */
+    @Test
+    fun controlledFailureCodesKeepTheirValuesAndCarryActionableGuidance() {
+        val expected = mapOf(
+            3 to ("UI_DUMP_NO_TOOL" to "uiautomator"),
+            4 to ("UI_DUMP_FAILED" to "uiautomator dump"),
+            5 to ("UI_DUMP_EMPTY" to "空壳"),
+            9 to ("DEVICE_COMMAND_FAILED" to "非零退出码"),
+        )
+        for ((exitCode, expectation) in expected) {
+            val (errorCode, keyword) = expectation
+            val result = runWithExitCode(DeviceCommand.UI_DUMP, exitCode)
+            assertEquals("受控码不得因补文案而改变", errorCode, result.errorCode)
+            assertFalse(result.ok)
+            assertTrue("$errorCode 的说明必须给出下一步", result.text.contains("下一步："))
+            assertTrue("$errorCode 的说明必须点到关键事实（$keyword）", result.text.contains(keyword))
+            assertTrue("$errorCode 必须保留设备原始输出", result.text.contains("UI_DUMP_FAILED: stderr kept"))
+            assertFalse("$errorCode 的说明不得做绝对断言", result.text.contains("一定") || result.text.contains("永远"))
+        }
+    }
+
+    /**
+     * `UI_DUMP_EMPTY` 的说明要能直接用：说清是本机没有产出可用层级（含空壳 ROM 这一常见来源），
+     * 给出替代观察手段（截图），并明确不会伪造层级；不承诺修好设备或 ROM 侧的东西。
+     */
+    @Test
+    fun uiDumpEmptyGuidanceGivesTheNextStepWithoutPromises() {
+        val result = runWithExitCode(DeviceCommand.UI_DUMP, 5)
+        assertEquals("UI_DUMP_EMPTY", result.errorCode)
+        assertTrue(result.text.contains("uiautomator"))
+        assertTrue(result.text.contains("没有产出可读的层级文件"))
+        assertTrue(result.text.contains("空壳"))
+        assertTrue("必须给出替代手段", result.text.contains("mobile_device_screenshot"))
+        assertTrue(result.text.contains("下一步："))
+        assertFalse("不得做绝对断言", result.text.contains("一定") || result.text.contains("永远"))
+        assertFalse("不得承诺修好设备侧", result.text.contains("保证") || result.text.contains("我们修"))
+    }
+
+    /** 成功时正文保持原样：截图 base64 之类的 payload 不得被任何说明污染。 */
+    @Test
+    fun successfulResultsKeepTheirPayloadUntouched() {
+        val payload = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
+        // payload 区间是「BEGIN 那行 echo 的换行 + 命令输出 + 其后的换行」，成功时逐字节保持原样。
+        assertEquals(
+            DeviceCommandResult(true, 0, "\r\n$payload\r\n", false, null),
+            runWithExitCode(DeviceCommand.SCREENSHOT, 0, payload),
+        )
+        // 退出码 0 的 uiDump 同样不带说明。
+        assertEquals(
+            DeviceCommandResult(true, 0, "\r\nUI_DUMP_FAILED: stderr kept\r\n", false, null),
+            runWithExitCode(DeviceCommand.UI_DUMP, 0),
+        )
+        assertFalse("成功正文不得出现说明", runWithExitCode(DeviceCommand.UI_DUMP, 0).text.contains("下一步："))
+    }
+
+    /** 超时（会话仍存活）保持 DEVICE_COMMAND_TIMEOUT，但说明要讲清「没有闭合」并给出重试建议。 */
+    @Test
+    fun timeoutKeepsItsCodeAndExplainsWhatHappened() {
+        val result = DeviceCommandRunner { _, _ -> }
+            .execute("session-timeout-guidance", DeviceCommand.TAP, "1,1", 1)
+        assertEquals("DEVICE_COMMAND_TIMEOUT", result.errorCode)
+        assertTrue(result.text.contains("超时"))
+        assertTrue(result.text.contains("下一步："))
+    }
+
+    /** 会话结束时的两种收口都带说明：BEGIN 缺失 → SESSION_LOST，BEGIN 之后无 END → 协议失败。 */
+    @Test
+    fun sessionEndedFailuresKeepTheirCodesAndExplainTheNextStep() {
+        for (withBegin in listOf(false, true)) {
+            val sessionId = "session-guidance-$withBegin"
+            val injected = CompletableFuture<String>()
+            val polling = DeviceCommandRunner { _, data ->
+                injected.complete(String(Base64.getDecoder().decode(data), Charsets.UTF_8))
+            }
+            val result = CompletableFuture.supplyAsync {
+                polling.execute(sessionId, DeviceCommand.UI_DUMP, "", TimeUnit.SECONDS.toMillis(30))
+            }
+            val input = injected.get(5, TimeUnit.SECONDS)
+            val generated = Regex("__DSH_B_([0-9a-f-]{36})_").find(input)?.groupValues?.get(1)
+            assertTrue("注入文本必须包含请求标识", generated != null)
+            if (withBegin) {
+                polling.onOutput(
+                    sessionId,
+                    Base64.getEncoder()
+                        .encodeToString("__DSH_B_${generated}_777-888__\r\npartial output".toByteArray(Charsets.UTF_8)),
+                )
+            }
+            polling.onSessionExit(sessionId)
+
+            val value = result.get(5, TimeUnit.SECONDS)
+            assertEquals(
+                if (withBegin) DeviceCommandProtocol.ERROR_PROTOCOL else DeviceCommandProtocol.ERROR_SESSION_LOST,
+                value.errorCode,
+            )
+            assertFalse(value.ok)
+            assertTrue("会话收口必须给出下一步", value.text.contains("下一步："))
+        }
+    }
+
+    /** 运行时结束（cancelAll）仍报 PLUGIN_DESTROYED，但正文说明这次调用没有执行。 */
+    @Test
+    fun teardownKeepsPluginDestroyedAndExplainsTheNextStep() {
+        val sessionId = "session-teardown-guidance"
+        val injected = CompletableFuture<String>()
+        val polling = DeviceCommandRunner { _, data ->
+            injected.complete(String(Base64.getDecoder().decode(data), Charsets.UTF_8))
+        }
+        val result = CompletableFuture.supplyAsync {
+            polling.execute(sessionId, DeviceCommand.UI_DUMP, "", TimeUnit.SECONDS.toMillis(30))
+        }
+        injected.get(5, TimeUnit.SECONDS)
+        polling.cancelAll()
+
+        val value = result.get(5, TimeUnit.SECONDS)
+        assertEquals("PLUGIN_DESTROYED", value.errorCode)
+        assertFalse(value.ok)
+        assertTrue(value.text.contains("运行时已经结束"))
+        assertTrue(value.text.contains("下一步："))
+    }
+
+    private fun runWithExitCode(
+        command: DeviceCommand,
+        exitCode: Int,
+        payload: String = "UI_DUMP_FAILED: stderr kept",
+    ): DeviceCommandResult {
+        val sessionId = "session-exit-$command-$exitCode-${payload.length}"
         val injected = CompletableFuture<String>()
         val polling = DeviceCommandRunner { _, data ->
             injected.complete(String(Base64.getDecoder().decode(data), Charsets.UTF_8))
@@ -174,7 +303,7 @@ class DeviceCommandRunnerTest {
         }
         val input = injected.get(5, TimeUnit.SECONDS)
         val generated = Regex("__DSH_B_([0-9a-f-]{36})_").find(input)?.groupValues?.get(1)
-        val stream = "__DSH_B_${generated}_777-888__\r\nUI_DUMP_FAILED: stderr kept\r\n" +
+        val stream = "__DSH_B_${generated}_777-888__\r\n$payload\r\n" +
             "__DSH_E_${generated}_777-888__:$exitCode\r\n"
         polling.onOutput(sessionId, Base64.getEncoder().encodeToString(stream.toByteArray(Charsets.UTF_8)))
         return result.get(5, TimeUnit.SECONDS)

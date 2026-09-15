@@ -37,6 +37,14 @@ enum class DeviceCommand {
     }
 }
 
+/**
+ * 一次设备命令的结果。
+ *
+ * [text] 是回给上层的正文：成功时只有命令自身的输出；**受控失败**时除设备原始输出外，
+ * 还会带一段简体中文的说明与下一步（见 [DeviceCommandRunner.explain]）——
+ * 因为上层往往只拿到 [errorCode] 这一个受控码，没有说明就只能对着码猜。
+ * [errorCode] 的取值是冻结契约，说明文字不改变它。
+ */
 data class DeviceCommandResult(
     val ok: Boolean,
     val exitCode: Int,
@@ -84,12 +92,18 @@ class DeviceCommandRunner(
             return try {
                 pending.done.get(timeoutMs, TimeUnit.MILLISECONDS)
             } catch (_: TimeoutException) {
-                DeviceCommandResult(false, -1, pending.snapshot(), pending.truncated, "DEVICE_COMMAND_TIMEOUT")
+                DeviceCommandResult(
+                    false,
+                    -1,
+                    explain("DEVICE_COMMAND_TIMEOUT", pending.snapshot()),
+                    pending.truncated,
+                    "DEVICE_COMMAND_TIMEOUT",
+                )
             } catch (error: InterruptedException) {
                 Thread.currentThread().interrupt()
                 throw RuntimeFailure("DEVICE_COMMAND_INTERRUPTED", "设备命令被中断", error)
             } catch (_: ExecutionException) {
-                DeviceCommandResult(false, -1, "", false, "DEVICE_COMMAND_FAILED")
+                DeviceCommandResult(false, -1, explain("DEVICE_COMMAND_FAILED", ""), false, "DEVICE_COMMAND_FAILED")
             }
         } finally {
             inflight.remove(sessionId, pending)
@@ -156,7 +170,9 @@ class DeviceCommandRunner(
     /** Complete all pending requests (plugin teardown). */
     fun cancelAll() {
         inflight.values.forEach { pending ->
-            if (!pending.done.isDone) pending.done.complete(DeviceCommandResult(false, -1, "", false, "PLUGIN_DESTROYED"))
+            if (!pending.done.isDone) {
+                pending.done.complete(DeviceCommandResult(false, -1, explain("PLUGIN_DESTROYED", ""), false, "PLUGIN_DESTROYED"))
+            }
         }
         inflight.clear()
     }
@@ -170,18 +186,21 @@ class DeviceCommandRunner(
             streamEnded = streamEnded,
         )
 
-    private fun completed(parsed: DeviceCommandParseResult.Completed, pending: Pending): DeviceCommandResult =
-        DeviceCommandResult(
+    private fun completed(parsed: DeviceCommandParseResult.Completed, pending: Pending): DeviceCommandResult {
+        val errorCode = errorCodeFor(pending.command, parsed.exitCode)
+        return DeviceCommandResult(
             ok = parsed.exitCode == 0,
             exitCode = parsed.exitCode,
-            text = parsed.payload,
+            // 成功时正文原样返回（截图 base64 必须保持纯净）；失败时才追加说明。
+            text = explain(errorCode, parsed.payload),
             // 正文窗口被截断，或 payload 本身就超出了窗口，都按「输出被截断」上报。
             truncated = pending.truncated || parsed.payloadTruncated,
-            errorCode = errorCodeFor(pending.command, parsed.exitCode),
+            errorCode = errorCode,
         )
+    }
 
     private fun failure(errorCode: String, pending: Pending): DeviceCommandResult =
-        DeviceCommandResult(false, -1, pending.snapshot(), pending.truncated, errorCode)
+        DeviceCommandResult(false, -1, explain(errorCode, pending.snapshot()), pending.truncated, errorCode)
 
     /**
      * uiDump 的失败分级：退出码 3/4/5 分别是「没有 uiautomator」「dump 失败」「dump 成功但为空」，
@@ -196,6 +215,57 @@ class DeviceCommandRunner(
             else -> "DEVICE_COMMAND_FAILED"
         }
         else -> "DEVICE_COMMAND_FAILED"
+    }
+
+    /**
+     * 受控失败码的**人话说明**：把「只报一个码」补成「说得清发生了什么、下一步能做什么」。
+     *
+     * 边界（不要越过）：
+     *  - **码本身不变**。受控码是冻结契约（上层按码分流、按 `^[A-Z0-9_]{1,64}$` 转发），
+     *    这里只往 [DeviceCommandResult.text] 里补说明；[guidanceFor] 的键必须与 [errorCodeFor]
+     *    以及 [DeviceCommandProtocol] 的常量逐一对应，取值不准改动；
+     *  - 设备原始输出**原样保留**在说明之后，说明不能替换证据；
+     *  - 措辞不做绝对断言（不写「一定」「永远」），也不承诺修好设备或 ROM 侧的问题；
+     *    只描述本机能确认的现象与用户可执行的下一步。
+     */
+    private fun explain(errorCode: String?, rawText: String): String {
+        val guidance = errorCode?.let { guidanceFor(it) } ?: return rawText
+        val evidence = rawText.trim()
+        return if (evidence.isEmpty()) guidance else "$guidance\n\n设备原始输出：\n$evidence"
+    }
+
+    /** 受控失败码对应的简体中文说明与下一步；没有说明的码返回 null（正文保持不变）。 */
+    private fun guidanceFor(errorCode: String): String? = when (errorCode) {
+        "UI_DUMP_EMPTY" ->
+            "本机 uiautomator 两次调用都返回 0，但在 /data/local/tmp 与 /sdcard 两条写入路径上都没有产出可读的层级文件。" +
+                "常见于把 uiautomator 做成空壳的 ROM（命令返回 0 却不写产物），也可能是产物没有落到我们检查的那两个位置。" +
+                "据此，本机的无障碍层级读取当前不可用，也没有可替代的层级来源。\n" +
+                "下一步：改用 mobile_device_screenshot 观察当前界面；点击坐标应当来自截图或其它可信观察，不要凭猜测点击。"
+        "UI_DUMP_NO_TOOL" ->
+            "本机找不到可用的 uiautomator 命令（工具探测失败），因此读不到无障碍层级。\n" +
+                "下一步：改用 mobile_device_screenshot 观察当前界面；本应用不会自行安装 uiautomator，" +
+                "也不会用其它命令伪造一份层级。"
+        "UI_DUMP_FAILED" ->
+            "uiautomator dump 以非零退出码结束，设备侧的报错已原样保留在下面的「设备原始输出」里。\n" +
+                "下一步：先看那段原始输出；也可以改用 mobile_device_screenshot 观察当前界面。"
+        "DEVICE_COMMAND_FAILED" ->
+            "设备命令以非零退出码结束（通用失败），设备侧输出已保留在下面的「设备原始输出」里。\n" +
+                "下一步：结合原始输出判断原因；需要观察界面时优先用 mobile_device_screenshot，" +
+                "失败后不要盲目重复同一操作。"
+        "DEVICE_COMMAND_TIMEOUT" ->
+            "设备命令在超时时间内没有闭合，而设备 Shell 会话仍然存活：命令可能没有跑完，" +
+                "或设备侧没有按协议给出结束标记。\n" +
+                "下一步：重试一次；若反复超时，请回到应用确认 Shizuku 状态与设备 Shell 是否正常。"
+        DeviceCommandProtocol.ERROR_PROTOCOL ->
+            "设备 Shell 的输出与协议不符：已经看到命令开始的标记，但没有等到配对的结束标记。\n" +
+                "下一步：重试一次；若反复出现，请回到应用确认 Shizuku 状态与设备 Shell 是否正常。"
+        DeviceCommandProtocol.ERROR_SESSION_LOST ->
+            "设备 Shell 会话已经结束，而且没有看到命令开始的标记：这次调用没有真正执行。\n" +
+                "下一步：回到应用确认 Shizuku 已授权并已连接，然后重试。"
+        "PLUGIN_DESTROYED" ->
+            "运行时已经结束，在途的设备命令被统一收口，这次调用没有执行。\n" +
+                "下一步：重新启动运行时后再试。"
+        else -> null
     }
 
     internal fun buildInput(requestId: String, command: DeviceCommand, param: String): String {
