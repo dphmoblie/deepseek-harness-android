@@ -43,9 +43,9 @@ class MainActivity : BridgeActivity() {
         })
     }
 
-    override fun onNewIntent(intent: Intent?) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (intent != null) handleExternalFileIntent(intent)
+        handleExternalFileIntent(intent)
     }
 
     /** Accept a user-selected content URI from another app and copy it into private inbox storage. */
@@ -59,7 +59,7 @@ class MainActivity : BridgeActivity() {
             )
             Intent.ACTION_SEND_MULTIPLE -> {
                 @Suppress("DEPRECATION")
-                (intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM) ?: arrayListOf()).filterIsInstance<Uri>()
+                (intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM) ?: arrayListOf<Uri>()).filterIsInstance<Uri>()
                     .ifEmpty { (0 until (intent.clipData?.itemCount ?: 0)).map { intent.clipData!!.getItemAt(it).uri } }
             }
             else -> emptyList()
