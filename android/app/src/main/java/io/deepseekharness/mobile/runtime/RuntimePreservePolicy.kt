@@ -56,6 +56,8 @@ object RuntimePreservePolicy {
      */
     private val PRESERVED_OUTSIDE_HOME = mapOf(
         "plugin-manager" to "root/.dsh-mobile/plugin-manager",
+        // The default dsh workspace is application-private and must survive rootfs upgrades.
+        "workspace" to "root/1",
     )
 
     /**

@@ -111,6 +111,7 @@ class RuntimeLaunchResolver(
         }
         store.prepareLaunchFiles()
         RuntimeDns.refresh(appContext, store.resolverFile)
+        RuntimeDns.refreshHosts(store.hostsFile)
         return manifest
     }
 
@@ -147,6 +148,7 @@ class RuntimeLaunchResolver(
 
         val bindCandidates = listOf(
             ProotBindMount(store.resolverFile.absolutePath, "/etc/resolv.conf"),
+            ProotBindMount(store.hostsFile.absolutePath, "/etc/hosts"),
             *SYSTEM_BIND_MOUNTS.toTypedArray(),
         )
         for (mount in bindCandidates) {

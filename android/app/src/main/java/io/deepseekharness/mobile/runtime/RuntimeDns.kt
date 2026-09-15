@@ -48,6 +48,26 @@ object RuntimeDns {
         }
     }
 
+    /** Keep localhost resolution reliable even when the embedded rootfs ships an empty hosts file. */
+    fun refreshHosts(destination: File) {
+        val content = "127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n".toByteArray(Charsets.US_ASCII)
+        val parent = destination.parentFile
+            ?: throw RuntimeFailure("FILESYSTEM_ERROR", "hosts 配置路径无效")
+        val temporary = File(parent, ".${destination.name}.${UUID.randomUUID()}.tmp")
+        try {
+            FileChannel.open(temporary.toPath(), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS).use { channel ->
+                BufferedOutputStream(Channels.newOutputStream(channel), 256).use { output ->
+                    output.write(content); output.flush(); channel.force(true)
+                }
+            }
+            Os.chmod(temporary.absolutePath, 0x180)
+            Os.rename(temporary.absolutePath, destination.absolutePath)
+        } catch (error: Throwable) {
+            temporary.delete()
+            throw RuntimeFailure("FILESYSTEM_ERROR", "无法生成 Ubuntu hosts 配置", error)
+        }
+    }
+
     internal fun formatConfig(addresses: List<InetAddress>): String {
         val normalized = addresses.asSequence()
             .filterNot { it.isAnyLocalAddress || it.isLoopbackAddress || it.isMulticastAddress }

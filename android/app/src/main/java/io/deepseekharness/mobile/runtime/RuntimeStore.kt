@@ -35,6 +35,8 @@ class RuntimeStore(context: Context) {
     val launchRunnerFile = File(launchDirectory, "proot")
     val launchLoaderFile = File(launchDirectory, "loader")
     val resolverFile = File(appContext.filesDir, "runtime-resolv.conf")
+    /** Host name map is generated alongside resolver configuration and bind-mounted into guest. */
+    val hostsFile = File(appContext.filesDir, "runtime-hosts")
     val harnessPidFile = File(appContext.noBackupFilesDir, "dsh-harness.pid")
 
     /**
