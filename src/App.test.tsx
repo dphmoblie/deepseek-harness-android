@@ -1240,6 +1240,68 @@ describe('设置草稿与未保存的输入', () => {
  * 界面只渲染受控枚举（检查项、状态、结论码）映射出来的文案。
  */
 describe('运行时自检', () => {
+  it('兼容模式只在用户选择并保存后发送，明确提示旧会话和隔离变化', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('运行与后台')
+    const select = screen.getByRole('combobox', { name: '启动默认权限' })
+    expect(select).toHaveValue('workspace-write')
+    fireEvent.change(select, { target: { value: 'danger-full-access' } })
+    expect(bridge.saveSettings).not.toHaveBeenCalled()
+    expect(screen.getByText('兼容模式会降低隔离能力')).toBeVisible()
+    expect(screen.getByText(/此项设置启动默认值；Harness 内保存的默认权限/)).toHaveTextContent('/permission danger-full-access')
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ harnessPermissionMode: 'danger-full-access' })))
+  })
+
+  it('启动默认值已关闭沙箱时仍如实显示探测失败，不冒充当前会话权限', async () => {
+    bridge.runRuntimeSelfCheck.mockResolvedValue({
+      operation: 'check', availableBytes: 147 * 1024 ** 3, dshVersion: '0.1.5-rc.2',
+      harnessPermissionMode: 'danger-full-access',
+      checks: [{ id: 'sandbox_probe', status: 'fail', code: 'PROBE_UNUSABLE' }],
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('运行与后台')
+    fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
+    expect(await screen.findByText('自检时的启动默认权限：danger-full-access（会话权限可能不同）')).toBeVisible()
+    expect(screen.getByRole('group', { name: '自检结果' })).toHaveTextContent('失败')
+    expect(screen.getByText(/自检会单独测试 Landlock 能力/)).toBeVisible()
+  })
+
+  it.each([
+    { id: 'sandbox_exec', status: 'fail', code: 'EXEC_LAUNCHER_FAILED' },
+    { id: 'pty_sandbox', status: 'fail', code: 'PTY_EXIT_EARLY' },
+  ])('单独的 $id 失败不推出 Landlock 不可用', async item => {
+    bridge.runRuntimeSelfCheck.mockResolvedValue({
+      operation: 'check', availableBytes: 1024 ** 3, dshVersion: null,
+      checks: [{ id: 'sandbox_probe', status: 'ok' }, item],
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('运行与后台')
+    fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
+    await screen.findByRole('group', { name: '自检结果' })
+    expect(screen.queryByText('本机 Landlock 沙箱不可用')).toBeNull()
+  })
+
+  it('修复后的复检失败不显示旧结果，也不丢失已经完成的修复统计', async () => {
+    bridge.runRuntimeSelfCheck
+      .mockResolvedValueOnce({ operation: 'check', availableBytes: 1024 ** 3, dshVersion: null,
+        checks: [{ id: 'rg', status: 'warn', code: 'RG_NOT_EXECUTABLE' }] })
+      .mockResolvedValueOnce({ operation: 'repair', availableBytes: 1024 ** 3, repaired: 1, candidates: 3 })
+      .mockRejectedValueOnce(new Error('SELF_CHECK_FAILED'))
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('运行与后台')
+    fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
+    fireEvent.click(await screen.findByRole('button', { name: '修复运行时权限' }))
+    expect(await screen.findByText('自检未完成，请稍后重试')).toBeVisible()
+    expect(screen.getByText('已修复 1 项（检查 3 项）')).toBeVisible()
+    expect(screen.queryByRole('group', { name: '自检结果' })).toBeNull()
+    expect(screen.queryByText('修复未完成，请稍后重试')).toBeNull()
+  })
+
   it('进入页面不自动自检，点「运行自检」才按需调用', async () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
@@ -1331,19 +1393,19 @@ describe('运行时自检', () => {
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
     await screen.findByRole('group', { name: '自检结果' })
 
-    const summary = screen.getByText('本机没有可用的沙箱后端').closest('[role="alert"]')
+    const summary = screen.getByText('本机 Landlock 沙箱不可用').closest('[role="alert"]')
     expect(summary).not.toBeNull()
     // 因果链要落到用户真正看到的那条报错上，并给出「怎么继续用」的动作，而不是只列三个失败码。
-    expect(summary).toHaveTextContent('PTY shell exited during startup')
-    expect(summary).toHaveTextContent('下一步：在 Harness 的权限预设里选择不启用沙箱的模式，然后重启运行环境')
+    expect(summary).toHaveTextContent('要求沙箱的会话无法执行命令')
+    expect(summary).toHaveTextContent('/permission danger-full-access')
     // 关掉沙箱是显式的能力降级：必须如实说明代价，不能写成「已修复」。
-    expect(summary).toHaveTextContent('Landlock 的文件系统隔离')
-    expect(summary).toHaveTextContent('PRoot 与 Android 应用沙箱仍然有效')
+    expect(summary).toHaveTextContent('关闭 dsh 文件系统沙箱和命令审批')
+    expect(summary).toHaveTextContent('Android 应用沙箱仍在')
 
     // 汇总排在逐项列表之前：先读因果，再读每一项的细节。
     const pageText = document.body.textContent ?? ''
-    expect(pageText.indexOf('本机没有可用的沙箱后端')).toBeGreaterThanOrEqual(0)
-    expect(pageText.indexOf('本机没有可用的沙箱后端')).toBeLessThan(pageText.indexOf('沙箱探测判定为不可用'))
+    expect(pageText.indexOf('本机 Landlock 沙箱不可用')).toBeGreaterThanOrEqual(0)
+    expect(pageText.indexOf('本机 Landlock 沙箱不可用')).toBeLessThan(pageText.indexOf('沙箱探测判定为不可用'))
   })
 
   it('沙箱相关项全部正常时不给跨项汇总提示', async () => {
@@ -1365,12 +1427,12 @@ describe('运行时自检', () => {
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
 
     expect(await screen.findByText('全部 4 项检查通过')).toBeVisible()
-    expect(screen.queryByText('本机没有可用的沙箱后端')).toBeNull()
+    expect(screen.queryByText('本机 Landlock 沙箱不可用')).toBeNull()
   })
 
   it('只有裸 PTY 失败或只支持部分 Landlock 能力时，不说成「沙箱后端不可用」', async () => {
     // 裸 pty 上的 PTY_EXIT_EARLY 说明断在 PTY 层；PROBE_PARTIAL 是「一般仍可用」。
-    // 两者都不是「本机没有可用的沙箱后端」，汇总提示不能出现。
+    // 两者都不是「本机 Landlock 沙箱不可用」，汇总提示不能出现。
     bridge.runRuntimeSelfCheck.mockResolvedValue({
       operation: 'check',
       availableBytes: 4 * 1024 * 1024 * 1024,
@@ -1387,12 +1449,12 @@ describe('运行时自检', () => {
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
     await screen.findByRole('group', { name: '自检结果' })
 
-    expect(screen.queryByText('本机没有可用的沙箱后端')).toBeNull()
+    expect(screen.queryByText('本机 Landlock 沙箱不可用')).toBeNull()
     expect(screen.getByText('PTY 子进程在就绪前退出——与 dsh bash 工具报的是同一现象')).toBeVisible()
     expect(screen.getByText('内核只支持部分 Landlock 能力（老 ABI）')).toBeVisible()
   })
 
-  it('启动器缺失时，跳过项与失败项显示同一条结论并给出修复入口', async () => {
+  it('启动器缺失时如实显示跳过项，不提供无法恢复程序的权限修复入口', async () => {
     // 启动器不存在时后三项没有可测的前提，原生侧报「跳过」：界面不能把它显示成
     // 「内核不支持 Landlock」这类未经验证的结论，四行共用同一条原因与下一步。
     bridge.runRuntimeSelfCheck.mockResolvedValue({
@@ -1414,15 +1476,15 @@ describe('运行时自检', () => {
 
     const results = await screen.findByRole('group', { name: '自检结果' })
     expect(results).toHaveTextContent('找不到沙箱启动器 landlock-run')
-    expect(results).toHaveTextContent('先点「修复运行时权限」，仍失败则重装运行时')
+    expect(results).toHaveTextContent('重新安装或更新运行环境；修复权限不能恢复缺失的程序')
     expect(results).toHaveTextContent('失败')
     expect(results).toHaveTextContent('跳过')
     expect(results).not.toHaveTextContent('内核不支持 Landlock')
-    // 断点在启动器本身：这是权限/缺失目录能覆盖的那一类，修复入口可用。
-    expect(screen.getByRole('button', { name: '修复运行时权限' })).toBeEnabled()
+    // 缺少程序不能靠 chmod 恢复，不提供无效的权限修复入口。
+    expect(screen.queryByRole('button', { name: '修复运行时权限' })).toBeNull()
   })
 
-  it('修复成功后显示修复统计，并提示可重新自检确认', async () => {
+  it('修复成功后自动复检，更新结果并保留修复统计', async () => {
     bridge.runRuntimeSelfCheck
       .mockResolvedValueOnce({
         operation: 'check',
@@ -1450,7 +1512,11 @@ describe('运行时自检', () => {
 
     await waitFor(() => expect(bridge.runRuntimeSelfCheck).toHaveBeenCalledWith('repair'))
     expect(await screen.findByText('已修复 1 项（检查 2 项）')).toBeVisible()
-    expect(screen.getByText('可重新运行「运行自检」确认修复结果。')).toBeVisible()
+    expect(screen.getByText('权限修复只补执行位和附件目录；修复后自动复检，不能安装内核沙箱能力。')).toBeVisible()
+    expect(await screen.findByText('全部 2 项检查通过')).toBeVisible()
+    expect(bridge.runRuntimeSelfCheck).toHaveBeenNthCalledWith(1, 'check')
+    expect(bridge.runRuntimeSelfCheck).toHaveBeenNthCalledWith(2, 'repair')
+    expect(bridge.runRuntimeSelfCheck).toHaveBeenNthCalledWith(3, 'check')
   })
 
   it('显示运行时版本、dsh 版本与插件入口提示，不为插件数量调用插件桥接', async () => {

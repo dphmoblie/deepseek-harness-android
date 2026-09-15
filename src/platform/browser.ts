@@ -123,6 +123,7 @@ export function createBrowserBridge(): RuntimeBridge {
       validated.clearCustomProviderApiKeys?.forEach(id => configuredCustomProviders.delete(id))
       currentSettings = validateSettings({
         ...validated,
+        harnessPermissionMode: validated.harnessPermissionMode ?? currentSettings.harnessPermissionMode ?? 'workspace-write',
         // The native bridge treats an omitted field as "leave unchanged" so an
         // overlay-ball menu action cannot be overwritten by an unrelated save.
         overlayBallEnabled: settings.overlayBallEnabled === undefined

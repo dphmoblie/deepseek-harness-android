@@ -17,6 +17,7 @@ import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import io.deepseekharness.mobile.overlay.OverlayBallPolicy
 import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
+import io.deepseekharness.mobile.runtime.HarnessPermissionMode
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
 import io.deepseekharness.mobile.runtime.clampHarnessTailBytes
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
@@ -73,6 +74,10 @@ internal fun optionalOverlayBallEnabled(data: JSONObject): Boolean? {
     if (value !is Boolean) throw RuntimeFailure("SETTINGS_INVALID", "悬浮球开关格式无效")
     return value
 }
+
+/** 权限：应用私有桥接；省略保留原值，null、非法类型及未知模式一律拒绝。 */
+internal fun optionalHarnessPermissionMode(data: JSONObject): HarnessPermissionMode? =
+    if (data.has("harnessPermissionMode")) HarnessPermissionMode.parse(data.opt("harnessPermissionMode")) else null
 
 /** 前台服务通知权限别名；Android 13 以下系统不需要该权限。 */
 private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
@@ -347,6 +352,7 @@ class MobileRuntimePlugin : Plugin() {
                 allowedCustomIds,
             )
             val overlayBallEnabledUpdate = optionalOverlayBallEnabled(call.data)
+            val harnessPermissionModeUpdate = optionalHarnessPermissionMode(call.data)
             val settings = RuntimeValidation.settings(
                 call.getString("manifestUrl"),
                 call.getString("manifestSha256"),
@@ -356,6 +362,7 @@ class MobileRuntimePlugin : Plugin() {
                 call.getBoolean("keepRuntimeInBackground", false) ?: false,
                 // 省略值只作为构造设置对象时的占位；是否写入由下面的可空更新参数决定。
                 overlayBallEnabledUpdate ?: false,
+                harnessPermissionModeUpdate ?: HarnessPermissionMode.WORKSPACE_WRITE,
             )
             val saved = controller.saveSettings(
                 settings,
@@ -365,6 +372,7 @@ class MobileRuntimePlugin : Plugin() {
                 customProviderApiKeyUpdates,
                 clearedCustomProviderApiKeys,
                 overlayBallEnabledUpdate = overlayBallEnabledUpdate,
+                harnessPermissionModeUpdate = harnessPermissionModeUpdate,
             )
             applyKeepScreenAwake(saved.keepScreenAwake)
             syncKeepAliveService(saved.keepRuntimeInBackground)
@@ -1362,6 +1370,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("autoLaunch", autoLaunch)
         .put("keepRuntimeInBackground", keepRuntimeInBackground)
         .put("overlayBallEnabled", overlayBallEnabled)
+        .put("harnessPermissionMode", harnessPermissionMode.wireValue)
 
     private fun RuntimeKeepAliveSnapshot.toJs(): JSObject = JSObject()
         .put("keepRuntimeInBackground", keepRuntimeInBackground)

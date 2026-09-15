@@ -114,6 +114,8 @@ class RuntimeSelfCheck(context: Context, private val store: RuntimeStore) {
         }
         return JSObject()
             .put("operation", RuntimeSelfCheckPolicy.CHECK)
+            // 仅报告启动默认值，不能据此断言当前会话的权限；会话可覆盖它。
+            .put("harnessPermissionMode", store.harnessPermissionMode().wireValue)
             .put("availableBytes", availableBytes())
             // 显式回 null（而不是省略键）：界面据此区分「读不到版本」与「字段缺失」。
             .put("dshVersion", dshVersion() ?: JSONObject.NULL)

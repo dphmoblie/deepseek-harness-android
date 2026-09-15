@@ -42,7 +42,7 @@ const RULES: readonly LogInsightRule[] = [
     pattern: /no sandbox backend is usable/,
     title: '本机没有可用的沙箱后端，命令没有被执行',
     meaning: '这台设备上没有可用的沙箱后端：dsh 在 Linux 上按 bwrap → Landlock 的顺序探测，而报错原文说没有任何后端可用。dsh 在这里是 fail-closed——要求沙箱的模式下命令根本不会执行，报错发生在命令启动之前，不是命令本身失败。',
-    nextStep: '在 Harness 的权限预设里选择不启用沙箱的模式，然后重启运行环境；也可以先在应用内跑一次「运行时自检」确认。这是显式选择的能力降级，不是把故障修好了。',
+    nextStep: '在当前 Harness 会话的权限预设中选择 danger-full-access，或输入 /permission danger-full-access 后重试。此模式关闭 dsh 文件系统沙箱和命令审批；仅重启不会改变已有会话的权限。',
   },
   {
     // 上游缺陷（4/4 复现）：显式 undefined 与「省略该键」语义相同，但校验先判它不可序列化。
