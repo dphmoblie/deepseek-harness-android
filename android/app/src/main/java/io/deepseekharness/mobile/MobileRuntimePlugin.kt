@@ -52,6 +52,16 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
 import java.security.SecureRandom
 import java.util.Base64
+import java.io.File
+import java.io.FileInputStream
+import java.io.BufferedInputStream
+import java.io.FileOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import java.nio.file.FileVisitResult
+import java.nio.file.Files
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
 import kotlin.concurrent.withLock
 
 internal fun optionalOverlayBallEnabled(data: JSONObject): Boolean? {
@@ -808,6 +818,58 @@ class MobileRuntimePlugin : Plugin() {
             log.state().toJs().also { json ->
                 json.put("fileName", export.fileName)
                 json.put("exportedBytes", export.sizeBytes)
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 将运行时工作区复制到临时 ZIP 后交给系统分享面板；不直接暴露私有运行时路径。
+     * 只跟随普通文件，拒绝符号链接，并限制条目数与总大小，避免意外打包整个运行时。
+     */
+    @PluginMethod
+    fun shareRuntimeWorkspace(call: PluginCall) {
+        execute(call) {
+            val workspace = File(controller.store.currentRoot, "root/1")
+            if (!workspace.isDirectory) {
+                throw RuntimeFailure("WORKSPACE_EXPORT_UNAVAILABLE", "运行时工作区尚未准备好")
+            }
+            val exportDir = File(context.cacheDir, "share").apply { mkdirs() }
+            val export = File(exportDir, "dsh-workspace-${System.currentTimeMillis()}.zip")
+            var entries = 0
+            var bytes = 0L
+            try {
+                ZipOutputStream(FileOutputStream(export)).use { zip ->
+                    Files.walkFileTree(workspace.toPath(), object : SimpleFileVisitor<java.nio.file.Path>() {
+                        override fun visitFile(file: java.nio.file.Path, attrs: BasicFileAttributes): FileVisitResult {
+                            if (!attrs.isRegularFile || attrs.isSymbolicLink) return FileVisitResult.CONTINUE
+                            if (++entries > 2_000) throw RuntimeFailure("WORKSPACE_EXPORT_TOO_LARGE", "工作区文件数量超过限制")
+                            val size = attrs.size()
+                            bytes += size
+                            if (bytes > 128L * 1024 * 1024) throw RuntimeFailure("WORKSPACE_EXPORT_TOO_LARGE", "工作区大小超过限制")
+                            val relative = workspace.toPath().relativize(file).toString().replace(File.separatorChar, '/')
+                            zip.putNextEntry(ZipEntry(relative))
+                            BufferedInputStream(FileInputStream(file.toFile())).use { input -> input.copyTo(zip) }
+                            zip.closeEntry()
+                            return FileVisitResult.CONTINUE
+                        }
+                    })
+                }
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.diagnostics", export)
+                val send = Intent(Intent.ACTION_SEND).apply {
+                    type = "application/zip"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    putExtra(Intent.EXTRA_SUBJECT, "DSH 工作区")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(Intent.createChooser(send, "分享 DSH 工作区").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                null
+            } catch (failure: RuntimeFailure) {
+                export.delete()
+                throw failure
+            } catch (error: Throwable) {
+                export.delete()
+                throw RuntimeFailure("WORKSPACE_EXPORT_FAILED", "无法导出 DSH 工作区", error)
             }
         }
     }

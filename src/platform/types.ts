@@ -304,6 +304,7 @@ export interface RuntimeBridge {
   setDiagnosticLogSettings: (enabled: boolean, retentionDays: number) => Promise<DiagnosticLogState>
   /** 导出全部诊断日志并打开系统分享面板。 */
   shareDiagnosticLog: () => Promise<DiagnosticLogExport>
+  shareRuntimeWorkspace: () => Promise<void>
   /** 清空全部诊断日志。 */
   clearDiagnosticLog: () => Promise<DiagnosticLogState>
   /**

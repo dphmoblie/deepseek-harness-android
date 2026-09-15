@@ -43,6 +43,7 @@ const bridge = vi.hoisted(() => ({
   getDiagnosticLogState: vi.fn(),
   setDiagnosticLogSettings: vi.fn(),
   shareDiagnosticLog: vi.fn(),
+  shareRuntimeWorkspace: vi.fn(),
   clearDiagnosticLog: vi.fn(),
   addRuntimeProgressListener: vi.fn(),
   addTerminalOutputListener: vi.fn(),

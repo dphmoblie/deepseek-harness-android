@@ -82,6 +82,7 @@ interface NativeRuntimePlugin {
   readDiagnosticLog(options: { maxBytes?: number }): Promise<unknown>
   setDiagnosticLogSettings(options: { enabled: boolean; retentionDays: number }): Promise<DiagnosticLogState>
   shareDiagnosticLog(): Promise<DiagnosticLogExport>
+  shareRuntimeWorkspace(): Promise<void>
   clearDiagnosticLog(): Promise<DiagnosticLogState>
   addListener(eventName: 'runtimeProgress', listener: (event: RuntimeProgress) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'terminalOutput', listener: (event: TerminalChunk) => void): Promise<PluginListenerHandle>
@@ -164,6 +165,7 @@ function createNativeBridge(): RuntimeBridge {
       return NativeRuntime.setDiagnosticLogSettings({ enabled, retentionDays: days }).then(validateDiagnosticLogState)
     },
     shareDiagnosticLog: () => NativeRuntime.shareDiagnosticLog().then(validateDiagnosticLogExport),
+    shareRuntimeWorkspace: () => NativeRuntime.shareRuntimeWorkspace(),
     clearDiagnosticLog: () => NativeRuntime.clearDiagnosticLog().then(validateDiagnosticLogState),
     addRuntimeProgressListener: listener => NativeRuntime.addListener('runtimeProgress', validatedListener(validateRuntimeProgress, listener)),
     addTerminalOutputListener: listener => NativeRuntime.addListener('terminalOutput', validatedListener(validateTerminalChunk, listener)),

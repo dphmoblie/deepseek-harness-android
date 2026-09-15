@@ -274,6 +274,7 @@ export function createBrowserBridge(): RuntimeBridge {
       return Promise.resolve({ ...diagnosticState })
     },
     shareDiagnosticLog: () => Promise.reject(new Error('浏览器预览不支持导出诊断日志')),
+    shareRuntimeWorkspace: () => Promise.reject(new Error('浏览器预览不支持分享运行时工作区')),
     clearDiagnosticLog: () => {
       diagnosticState = { ...diagnosticState, fileCount: 0, totalBytes: 0, lastEntryAtMillis: 0 }
       return Promise.resolve({ ...diagnosticState })

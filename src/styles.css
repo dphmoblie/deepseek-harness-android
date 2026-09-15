@@ -713,6 +713,13 @@ button:disabled {
   text-align: right;
 }
 
+.workspace-export p {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .terminal-screen {
   display: flex;
   min-height: 0;

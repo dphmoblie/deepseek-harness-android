@@ -622,9 +622,10 @@ interface EnvironmentScreenProps {
   onStart: () => void
   onStop: () => void
   onUpdate: () => void
+  onShareWorkspace: () => void
 }
 
-function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop, onUpdate }: EnvironmentScreenProps) {
+function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop, onUpdate, onShareWorkspace }: EnvironmentScreenProps) {
   const inProgress = ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
   const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running'
   const progress = runtime.totalBytes > 0
@@ -752,6 +753,13 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
           <div className="detail-row"><span><LockKeyhole size={18} />{t("网络访问")}</span><strong>{t("仅本应用内")}</strong></div>
         </div>
       </section>
+      {installed && <section className="detail-section workspace-export" aria-labelledby="workspace-export-title">
+        <h2 id="workspace-export-title">{t("工作区文件")}</h2>
+        <p>{t("将 DSH 在运行时工作区创建的文件打包后分享给其他应用")}</p>
+        <button className="button button-secondary" type="button" onClick={onShareWorkspace} disabled={busy !== null}>
+          {busy === 'workspace-share' ? <Loader2 className="spin" size={18} /> : <Share2 size={18} />}{t("分享工作区")}
+        </button>
+      </section>}
     </div>
   )
 }
@@ -2673,6 +2681,10 @@ export function App() {
     })
   }, [notify, run])
 
+  const shareWorkspace = useCallback(() => {
+    void run('workspace-share', () => runtimeBridge.shareRuntimeWorkspace(), t('已打开分享面板'))
+  }, [notify, run])
+
   const clearDiagnostic = useCallback(() => {
     void run('diagnostic-clear', async () => {
       setDiagnostic(await runtimeBridge.clearDiagnosticLog())
@@ -2842,7 +2854,7 @@ export function App() {
       case 'plugins':
         return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
       case 'environment':
-        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} />
+        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} onShareWorkspace={shareWorkspace} />
       case 'settings':
         return <SettingsHomeScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenPage={openSettings} onOpenPlugins={() => setActiveView('plugins')} onOpenTerminal={() => setActiveView('terminal')} onStop={stopRuntime} />
       default: {
