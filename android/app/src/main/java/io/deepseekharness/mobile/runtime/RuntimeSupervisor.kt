@@ -152,13 +152,8 @@ class RuntimeSupervisor(
         }
         throwIfStartCancelled()
         try {
-            launchResolver.verifyGuest(
-                NODE_PROBE_ENTRYPOINT,
-                "NODE_RUNTIME_FAILED",
-                "内置 Node.js 无法在当前设备运行",
-                NODE_PROBE_TIMEOUT_SECONDS,
-                startCancellation::isRequested,
-            )
+            // `dsh --version` starts through the embedded Node.js binary, so it validates both
+            // layers in one PRoot process. A separate `node --version` doubles cold-start work.
             launchResolver.verifyGuest(
                 HARNESS_PROBE_ENTRYPOINT,
                 "HARNESS_PREFLIGHT_FAILED",
@@ -864,7 +859,6 @@ class RuntimeSupervisor(
     }
 
     companion object {
-        private val NODE_PROBE_ENTRYPOINT = listOf("/opt/node/bin/node", "--version")
         private val HARNESS_PROBE_ENTRYPOINT = listOf("/usr/local/bin/dsh", "--version")
         private const val START_COOLDOWN_MS = 90_000L
         private const val REAP_WAIT_TIMEOUT_MS = 5_000L
@@ -877,7 +871,6 @@ class RuntimeSupervisor(
         private const val GRACEFUL_STOP_TIMEOUT_MS = 2_000L
         private const val FORCE_STOP_TIMEOUT_MS = 5_000L
         private const val PORT_RELEASE_TIMEOUT_MS = 5_000L
-        private const val NODE_PROBE_TIMEOUT_SECONDS = 15L
         private const val HARNESS_PROBE_TIMEOUT_SECONDS = 30L
         private const val POLL_INTERVAL_MS = 200L
         private const val HARNESS_STABILITY_MS = 600L
