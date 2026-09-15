@@ -277,6 +277,24 @@ const NOTIFICATION_PERMISSION_TIMEOUT_MS = 30_000
 const FOREGROUND_SERVICE_SETTLE_MS = 1500
 
 /**
+ * 后台状态轮询的周期（登记册 5.6-C）。
+ *
+ * 5 秒是「前台服务被系统结束」这类变化能被用户察觉的上限：更密没有必要（原生侧的变化本身不频繁），
+ * 更疏会让「刚在系统设置里改了权限」的反馈显得迟钝。轮询只在页面可见时进行。
+ */
+const BACKGROUND_POLL_INTERVAL_MS = 5000
+
+/**
+ * 单飞的陈旧逃逸时间。
+ *
+ * 单飞本身有风险：桥调用若卡死不返回，`Promise.allSettled` 永不结束，轮询会被**永久**停住——
+ * 那比「重复请求」糟得多。因此超过这个时间仍未结束就视为陈旧，允许下一轮重试。
+ * 取 30 秒而不是 5 秒：真机上安装/更新运行时的单次读取确实可能超过一个轮询周期，
+ * 太短会让单飞形同虚设。
+ */
+const BACKGROUND_REFRESH_STALE_MS = 30_000
+
+/**
  * 保存设置后的前台服务生效复核。
  *
  * 「后台保持」与「悬浮球」各有一个前台服务，都由 Android 异步拉起：保存后紧接着读取原生状态
@@ -2354,6 +2372,15 @@ export function App() {
   const [settingsReadStatus, setSettingsReadStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
   const settingsReadRevision = useRef(0)
   /**
+   * 后台轮询的两件状态必须放在 ref 里，**不能放在 effect 闭包里**：
+   * 这个 effect 的依赖里有若干 `useCallback`，桥调用引起的状态更新会让它们换标识、
+   * 从而让 effect 重跑；闭包里的变量会随之被重置——「单飞」会静默失效，
+   * 定时器也会被反复清掉再武装。放 ref 才能跨 effect 重跑保住语义。
+   */
+  const backgroundRefreshInFlight = useRef(false)
+  const backgroundRefreshStartedAt = useRef(0)
+  const backgroundPollTimer = useRef<number | null>(null)
+  /**
    * 设置区未保存的草稿。
    *
    * 它必须由 App 持有：设置首页与五个二级页是**不同的组件**，页内状态在切页时随卸载消失
@@ -2717,18 +2744,18 @@ export function App() {
         })
     }
 
-    const refreshShizuku = (reportError = true): void => {
-      if (document.visibilityState === 'hidden') return
-      void runtimeBridge.getShizukuState()
+    const refreshShizuku = (reportError = true): Promise<void> => {
+      if (document.visibilityState === 'hidden') return Promise.resolve()
+      return runtimeBridge.getShizukuState()
         .then(next => {
           if (!cancelled) setShizuku(next)
         })
         .catch(error => { if (!cancelled && reportError) notify(errorMessage(error), 'error') })
     }
     // 后台保持状态同时轮询：前台服务可能被系统结束，需要通过原生端才能得知。
-    const refreshKeepAlive = (): void => {
-      if (document.visibilityState === 'hidden') return
-      void runtimeBridge.getKeepAliveState()
+    const refreshKeepAlive = (): Promise<void> => {
+      if (document.visibilityState === 'hidden') return Promise.resolve()
+      return runtimeBridge.getKeepAliveState()
         .then(next => { if (!cancelled) setKeepAlive(next) })
         .catch(() => {
           // 轮询失败时保留上一次状态，不重复提示同一条错误。
@@ -2739,9 +2766,10 @@ export function App() {
      * 「显示在其他应用上层」权限，也可能用悬浮球菜单在原生侧关掉了球。
      * 读取失败时保留上一次的已知值，不清零：清零会把「未知」显示成「已关闭」。
      */
-    const refreshOverlayBall = (): void => {
-      if (document.visibilityState === 'hidden') return
-      void readOverlayBall()
+    const refreshOverlayBall = (): Promise<void> => {
+      if (document.visibilityState === 'hidden') return Promise.resolve()
+      return readOverlayBall()
+        .then(() => undefined)
         .catch(() => {
           // 设置页保留查询失败提示，不在轮询中重复弹通知。
         })
@@ -2759,32 +2787,73 @@ export function App() {
           // 设置页保留查询失败提示，不在刷新中重复弹通知。
         })
     }
+    /**
+     * 后台状态轮询：**真正停表 + 单飞**（登记册 5.6-C）。
+     *
+     * 修复前的形态有两个问题，都不显眼但都是真的：
+     *  1. `setInterval` 无条件每 5 秒触发一次，只有各个刷新器内部自查
+     *     `visibilityState === 'hidden'` 才不至于发出桥调用。结果是**后台仍在每 5 秒唤醒一次 JS**，
+     *     白白耗电；而且「后台不该轮询」这件事散落在四个刷新器里各写一遍，改一个漏一个。
+     *  2. 没有单飞保护：某个请求慢于 5 秒（真机上安装/更新期间很常见）时，下一轮 tick 会再发一遍，
+     *     请求会一层层堆积。
+     *
+     * 现在的做法：可见时才启动定时器、进入后台立刻 `clearInterval`；每轮把三路读取**合并**成一次
+     * `Promise.allSettled`，上一轮没结束就跳过这一轮。单飞与定时器句柄都放在 ref 里，
+     * 因此 effect 重跑不会把它们重置（这是第一版实现的缺陷，由单飞用例暴露出来）。
+     *
+     * 陈旧逃逸：真机上桥调用卡死时，`allSettled` 永远不会结束，单飞会把轮询**永久**停住。
+     * 因此超过 [BACKGROUND_REFRESH_STALE_MS] 仍未结束时视为陈旧，允许下一轮重试。
+     *
+     * 仍未做（需要新增原生方法，等 Kotlin 侧空闲再做）：把三路桥调用合并成**一次**原生调用，
+     * 减少 WebView ↔ 原生 的往返次数。当前只是把它们并发发出并统一收口。
+     */
+    const refreshBackgroundState = (): void => {
+      if (document.visibilityState === 'hidden') return
+      const now = Date.now()
+      const stale = now - backgroundRefreshStartedAt.current > BACKGROUND_REFRESH_STALE_MS
+      if (backgroundRefreshInFlight.current && !stale) return
+      backgroundRefreshInFlight.current = true
+      backgroundRefreshStartedAt.current = now
+      void Promise.allSettled([refreshShizuku(false), refreshKeepAlive(), refreshOverlayBall()])
+        .then(() => { backgroundRefreshInFlight.current = false })
+    }
+    const startPolling = (): void => {
+      if (backgroundPollTimer.current !== null) return
+      backgroundPollTimer.current = window.setInterval(refreshBackgroundState, BACKGROUND_POLL_INTERVAL_MS)
+    }
+    const stopPolling = (): void => {
+      if (backgroundPollTimer.current === null) return
+      window.clearInterval(backgroundPollTimer.current)
+      backgroundPollTimer.current = null
+      // 停表同时清掉单飞标志：否则「后台停表期间发起的那一轮」会把回到前台后的第一轮吃掉。
+      backgroundRefreshInFlight.current = false
+    }
     const handleVisibilityChange = (): void => {
       if (document.visibilityState === 'visible') {
         refreshSettings()
-        refreshShizuku()
-        refreshKeepAlive()
-        refreshOverlayBall()
+        void refreshShizuku()
+        void refreshKeepAlive()
+        void refreshOverlayBall()
         refreshMailbox()
+        startPolling()
+      } else {
+        // 停表：后台不轮询。回到前台时上面那一支会重新启动并立刻刷新一次。
+        stopPolling()
       }
     }
     const handleFocus = (): void => {
       refreshSettings()
-      refreshShizuku()
-      refreshKeepAlive()
-      refreshOverlayBall()
+      void refreshShizuku()
+      void refreshKeepAlive()
+      void refreshOverlayBall()
     }
 
     window.addEventListener('focus', handleFocus)
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    const timer = window.setInterval(() => {
-      refreshShizuku(false)
-      refreshKeepAlive()
-      refreshOverlayBall()
-    }, 5000)
+    startPolling()
     return () => {
       cancelled = true
-      window.clearInterval(timer)
+      stopPolling()
       window.removeEventListener('focus', handleFocus)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }

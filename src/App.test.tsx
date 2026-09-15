@@ -1847,3 +1847,106 @@ describe('投递区', () => {
     expect(screen.getByRole('button', { name: /导入到工作区/ })).toBeEnabled()
   })
 })
+
+/**
+ * 后台状态轮询（登记册 5.6-C）。
+ *
+ * 修复前的形态：`setInterval` 无条件每 5 秒触发一次，只有各刷新器内部自查
+ * `visibilityState === 'hidden'` 才不至于发出桥调用——后台仍在每 5 秒唤醒一次 JS，
+ * 且没有单飞保护，慢请求会一层层堆积。这三条用例分别钉住「停表」「恢复」「单飞」。
+ */
+describe('后台状态轮询（5.6-C）', () => {
+  const setVisibility = (value: 'visible' | 'hidden'): void => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => value })
+    document.dispatchEvent(new Event('visibilitychange'))
+  }
+
+  it('页面隐藏时停表：定时器被清除且不再重新武装，桥调用也不再发生', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const setSpy = vi.spyOn(window, 'setInterval')
+    const clearSpy = vi.spyOn(window, 'clearInterval')
+    // 只认我们那个 5 秒轮询：testing-library 的 waitFor 自己也会用 setInterval，
+    // 直接数总次数会把它的定时器算进来（第一版断言就是这么被污染的）。
+    const POLL_MS = 5000
+    const armed = (): number => setSpy.mock.calls.filter(call => call[1] === POLL_MS).length
+    const ourTimerId = (): unknown => {
+      const index = setSpy.mock.calls.findIndex(call => call[1] === POLL_MS)
+      return index === -1 ? undefined : setSpy.mock.results[index]?.value
+    }
+    try {
+      render(<App />)
+      await waitFor(() => expect(bridge.getKeepAliveState).toHaveBeenCalled())
+      // 挂载即武装轮询。
+      expect(armed()).toBe(1)
+
+      setVisibility('hidden')
+      // 关键断言：必须**真的清掉**那个定时器。只断言「后台没有桥调用」是不够的——
+      // 修复前各刷新器会自查 visibilityState 而提前返回，同样不会发调用，
+      // 于是「后台仍在每 5 秒唤醒一次 JS」这个真问题会被测试漏掉。
+      expect(clearSpy.mock.calls.some(call => call[0] === ourTimerId())).toBe(true)
+
+      // 先让挂载期那些零散的初始读取落地（它们不来自轮询），再开始计桥调用：
+      // 否则会把「初始加载晚到的调用」误判成「停表失效」。
+      await vi.advanceTimersByTimeAsync(6_000)
+      bridge.getKeepAliveState.mockClear()
+      bridge.getShizukuState.mockClear()
+      bridge.getOverlayBallState.mockClear()
+
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(armed()).toBe(1)
+      expect(bridge.getKeepAliveState).not.toHaveBeenCalled()
+      expect(bridge.getShizukuState).not.toHaveBeenCalled()
+      expect(bridge.getOverlayBallState).not.toHaveBeenCalled()
+
+      // 回到前台必须重新武装，否则轮询会永久停摆（这比不停表更糟）。
+      setVisibility('visible')
+      expect(armed()).toBe(2)
+    } finally {
+      setSpy.mockRestore()
+      clearSpy.mockRestore()
+      vi.useRealTimers()
+      setVisibility('visible')
+    }
+  })
+
+  it('回到前台立刻刷新一次，并恢复轮询', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(<App />)
+      await waitFor(() => expect(bridge.getKeepAliveState).toHaveBeenCalled())
+      setVisibility('hidden')
+      await vi.advanceTimersByTimeAsync(10_000)
+      bridge.getKeepAliveState.mockClear()
+      setVisibility('visible')
+      // 回到前台必须**立刻**读一次，而不是等下一个 5 秒：用户可能刚在系统设置里改过权限。
+      await waitFor(() => expect(bridge.getKeepAliveState).toHaveBeenCalledTimes(1))
+      await vi.advanceTimersByTimeAsync(5_000)
+      await waitFor(() => expect(bridge.getKeepAliveState.mock.calls.length).toBeGreaterThanOrEqual(2))
+    } finally {
+      vi.useRealTimers()
+      setVisibility('visible')
+    }
+  })
+
+  it('上一轮还没结束时跳过这一轮，请求不堆积', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(<App />)
+      await waitFor(() => expect(bridge.getKeepAliveState).toHaveBeenCalled())
+      // 让这一轮永远悬着：单飞保护生效时，后续 tick 应当整体跳过（三路都不再发）。
+      let releasePending: (value: typeof keepAlive) => void = () => undefined
+      bridge.getKeepAliveState.mockImplementation(() => new Promise(resolve => { releasePending = resolve }))
+      bridge.getShizukuState.mockClear()
+      bridge.getOverlayBallState.mockClear()
+      const before = bridge.getKeepAliveState.mock.calls.length
+      await vi.advanceTimersByTimeAsync(25_000)
+      expect(bridge.getKeepAliveState.mock.calls.length - before).toBe(1)
+      expect(bridge.getShizukuState).toHaveBeenCalledTimes(1)
+      expect(bridge.getOverlayBallState).toHaveBeenCalledTimes(1)
+      releasePending({ ...keepAlive })
+    } finally {
+      vi.useRealTimers()
+      setVisibility('visible')
+    }
+  })
+})
