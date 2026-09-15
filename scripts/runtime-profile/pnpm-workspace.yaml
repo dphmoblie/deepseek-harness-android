@@ -262,5 +262,11 @@ supportedArchitectures:
     - arm64
   libc:
     - glibc
+# 补丁按「包名@精确版本」登记。dsh 家族版本由上面的 overrides 钉死，所以精确版本键是稳定的；
+# 若把 dsh 升到别的版本，这些键会变成「未被使用的补丁」而让 pnpm install 直接失败
+# （allowUnusedPatches 默认 false），这正是我们要的信号：升级必须重新生成补丁，而不是静默失效。
+# peer 关系不进键名：peer 只体现在 pnpm-lock.yaml 的 snapshot 键与 .pnpm 虚拟目录名里。
 patchedDependencies:
   '@earendil-works/pi-ai@0.85.1': patches/@earendil-works__pi-ai@0.85.1.patch
+  '@deepseek-ai/dsh-fs-local@0.1.5-rc.2': patches/@deepseek-ai__dsh-fs-local@0.1.5-rc.2.patch
+  '@deepseek-ai/dsh-attachment-local@0.1.5-rc.2': patches/@deepseek-ai__dsh-attachment-local@0.1.5-rc.2.patch

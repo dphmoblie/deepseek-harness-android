@@ -1,0 +1,71 @@
+diff --git a/lib/index.js b/lib/index.js
+index fec538fb3ad2875aba52b8e10e6e79d3fe3b804d..08daa896115c71f433353c292837287fadaf8517 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -4,7 +4,7 @@ import { AttachmentError, AttachmentId, AttachmentStore, ImageVariantId, request
+ import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
+ import { createHash, randomUUID } from "node:crypto";
+ import { constants, createReadStream } from "node:fs";
+-import { chmod, link, mkdir, open, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
++import { chmod, link, lstat, mkdir, open, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+ import sharp from "sharp";
+ //#region lib/types/compression-limiter.js
+ /** Instance-owned concurrency bound for native image transformations. */
+@@ -525,6 +525,34 @@ async function stageImmutableObject(root, data, signal) {
+ 		throw new AttachmentError("Unable to persist attachment.", "ATTACHMENT_WRITE_FAILED", { cause: error });
+ 	}
+ }
++/**
++* 硬链接在本环境不可用：`EACCES` / `EPERM`（链接受权限策略拒绝）或 `EXDEV`（源与目标跨设备）。
++* Android PRoot 访客实测对 `link(2)` 一律返回 `EACCES`，因此内容寻址对象的发布路径必须有 rename 回退，
++* 否则附件（图片 / 截图）落盘整体失败在上游报 `Unable to persist attachment.`。
++*/
++function isLinkUnavailableError(error) {
++	return error instanceof Error && "code" in error && (error.code === "EACCES" || error.code === "EPERM" || error.code === "EXDEV");
++}
++/**
++* `publishStagedObject` 在 link 不可用时的 rename 回退：目标不存在才发布。
++* 取舍：rename 自身是原子的，但会覆盖已存在的目标，而 link 的「已存在即 EEXIST」拒绝与创建是同一步
++* （内核级 no-replace）。因此回退前必须重新确认目标：已存在时**不覆盖**，改按原 EEXIST 分支的
++* 摘要复核语义处理（对象按内容寻址、字节不可变，复核不过即 ATTACHMENT_CORRUPT）。
++* 复核与 rename 之间存在并发窗口，这是 link(2) 不可用的环境里换取可写性的代价。
++*/
++async function renameStagedObject(staged, target) {
++	let existing;
++	try {
++		existing = await lstat(target);
++	} catch (error) {
++		if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
++	}
++	if (existing === void 0) {
++		await rename(staged.path, target);
++		return;
++	}
++	if (await digestFile(target) !== staged.sha256) throw new AttachmentError("Stored attachment failed integrity verification.", "ATTACHMENT_CORRUPT");
++}
+ async function publishStagedObject(root, target, staged) {
+ 	const parent = dirname(target);
+ 	try {
+@@ -532,11 +560,18 @@ async function publishStagedObject(root, target, staged) {
+ 		try {
+ 			await link(staged.path, target);
+ 		} catch (error) {
+-			/* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
+-			if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+-			if (await digestFile(target) !== staged.sha256) throw new AttachmentError("Stored attachment failed integrity verification.", "ATTACHMENT_CORRUPT");
++			if (isLinkUnavailableError(error)) {
++				/* 只有「硬链接在本环境不可用」才回退；其余 errno 仍走原有分支，不做 catch-all。 */
++				await renameStagedObject(staged, target);
++			} else {
++				/* v8 ignore next -- Private same-filesystem directories make EEXIST the only recoverable link race. */
++				if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
++				if (await digestFile(target) !== staged.sha256) throw new AttachmentError("Stored attachment failed integrity verification.", "ATTACHMENT_CORRUPT");
++			}
+ 		}
+-		await unlink(staged.path);
++		/* rename 回退已经把暂存名搬成目标名，此时暂存名不存在是预期结果（removeTemporary 只容忍 ENOENT，
++		 * 其它清理失败仍然上抛），因此这里不能用 unlink。 */
++		await removeTemporary(staged.path);
+ 		await chmod(target, 256);
+ 		const stop = resolve(root);
+ 		for (let level = parent; level !== stop; level = dirname(level)) {
