@@ -2484,7 +2484,7 @@ export function App() {
       refreshShizuku(false)
       refreshKeepAlive()
       refreshOverlayBall()
-    }, 2500)
+    }, 5000)
     return () => {
       cancelled = true
       window.clearInterval(timer)
