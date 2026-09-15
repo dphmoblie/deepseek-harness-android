@@ -72,6 +72,13 @@ export const bridge = {
   openOverlaySettings: vi.fn(),
   getMailboxState: vi.fn(),
   getStorageAccessState: vi.fn(),
+  // 存储目录白名单（§5.1）。界面接线尚未做，但桩必须先在：桥加了方法而夹具没加，
+  // 用到它的界面会在 effect 阶段抛错并**整棵树卸载**，表现成「找不到任何元素」——
+  // 与真正的界面缺陷几乎无法区分（这个坑已经踩过一次）。`appTestHarness.test.ts` 里有守卫。
+  getStorageDirs: vi.fn(),
+  addStorageDirectory: vi.fn(),
+  removeStorageDirectory: vi.fn(),
+  execDeviceCommand: vi.fn(),
   requestMediaPermission: vi.fn(),
   openAllFilesAccessSettings: vi.fn(),
   importMailbox: vi.fn(),
@@ -226,6 +233,22 @@ export function beforeEachAppTest(): void {
   // 默认投递区不可用（未授予「所有文件访问」）：与真机首次安装后的状态一致。
   bridge.getMailboxState.mockResolvedValue({ ...unavailableMailbox })
   bridge.getStorageAccessState.mockResolvedValue({ ...storageAccess })
+  // 与「未授予所有文件访问」的真机初始状态一致：白名单为空、档位 T0、上限照实回 8。
+  // 给默认值而不只是 vi.fn()，是为了让桩在**被调用**时也返回符合契约的形状——
+  // 返回 undefined 会让界面侧的载荷校验抛错，那同样会整棵树卸载。
+  const emptyStorageDirs = {
+    entries: [],
+    maxDirectories: 8,
+    count: 0,
+    supported: false,
+    granted: false,
+    level: 'T0' as const,
+    active: false,
+  }
+  bridge.getStorageDirs.mockResolvedValue({ ...emptyStorageDirs })
+  bridge.addStorageDirectory.mockResolvedValue({ ...emptyStorageDirs })
+  bridge.removeStorageDirectory.mockResolvedValue({ ...emptyStorageDirs })
+  bridge.execDeviceCommand.mockResolvedValue({ ok: false, exitCode: 1, text: '', truncated: false, errorCode: 'DEVICE_COMMAND_UNAVAILABLE' })
   bridge.requestMediaPermission.mockResolvedValue({ granted: false })
   bridge.openAllFilesAccessSettings.mockResolvedValue({ supported: true, granted: false })
   bridge.requestNotificationPermission.mockResolvedValue({ granted: true, supported: true })
