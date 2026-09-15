@@ -1,8 +1,8 @@
 package io.deepseekharness.mobile
 
 import android.Manifest
+import android.content.ClipData
 import android.content.Intent
-import android.webkit.MimeTypeMap
 import android.content.pm.PackageManager
 import android.os.Build
 import android.view.WindowManager
@@ -17,6 +17,7 @@ import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import io.deepseekharness.mobile.overlay.OverlayBallPolicy
 import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
+import io.deepseekharness.mobile.runtime.HarnessPermissionMode
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
 import io.deepseekharness.mobile.runtime.clampHarnessTailBytes
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
@@ -31,6 +32,7 @@ import io.deepseekharness.mobile.runtime.RuntimeSelfCheckPolicy
 import io.deepseekharness.mobile.runtime.RuntimeSettings
 import io.deepseekharness.mobile.runtime.RuntimeStateSnapshot
 import io.deepseekharness.mobile.runtime.RuntimeValidation
+import io.deepseekharness.mobile.runtime.RuntimeWorkspaceFiles
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
 import io.deepseekharness.mobile.runtime.audit.AuditResult
 import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
@@ -54,14 +56,15 @@ import java.util.concurrent.locks.ReentrantLock
 import java.security.SecureRandom
 import java.util.Base64
 import java.io.File
-import java.io.FileInputStream
 import java.io.BufferedInputStream
 import java.io.FileOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.SimpleFileVisitor
+import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import kotlin.concurrent.withLock
 
@@ -71,6 +74,10 @@ internal fun optionalOverlayBallEnabled(data: JSONObject): Boolean? {
     if (value !is Boolean) throw RuntimeFailure("SETTINGS_INVALID", "悬浮球开关格式无效")
     return value
 }
+
+/** 权限：应用私有桥接；省略保留原值，null、非法类型及未知模式一律拒绝。 */
+internal fun optionalHarnessPermissionMode(data: JSONObject): HarnessPermissionMode? =
+    if (data.has("harnessPermissionMode")) HarnessPermissionMode.parse(data.opt("harnessPermissionMode")) else null
 
 /** 前台服务通知权限别名；Android 13 以下系统不需要该权限。 */
 private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
@@ -345,6 +352,7 @@ class MobileRuntimePlugin : Plugin() {
                 allowedCustomIds,
             )
             val overlayBallEnabledUpdate = optionalOverlayBallEnabled(call.data)
+            val harnessPermissionModeUpdate = optionalHarnessPermissionMode(call.data)
             val settings = RuntimeValidation.settings(
                 call.getString("manifestUrl"),
                 call.getString("manifestSha256"),
@@ -354,6 +362,7 @@ class MobileRuntimePlugin : Plugin() {
                 call.getBoolean("keepRuntimeInBackground", false) ?: false,
                 // 省略值只作为构造设置对象时的占位；是否写入由下面的可空更新参数决定。
                 overlayBallEnabledUpdate ?: false,
+                harnessPermissionModeUpdate ?: HarnessPermissionMode.WORKSPACE_WRITE,
             )
             val saved = controller.saveSettings(
                 settings,
@@ -363,6 +372,7 @@ class MobileRuntimePlugin : Plugin() {
                 customProviderApiKeyUpdates,
                 clearedCustomProviderApiKeys,
                 overlayBallEnabledUpdate = overlayBallEnabledUpdate,
+                harnessPermissionModeUpdate = harnessPermissionModeUpdate,
             )
             applyKeepScreenAwake(saved.keepScreenAwake)
             syncKeepAliveService(saved.keepRuntimeInBackground)
@@ -806,6 +816,7 @@ class MobileRuntimePlugin : Plugin() {
                 type = "text/plain"
                 putExtra(Intent.EXTRA_STREAM, uri)
                 putExtra(Intent.EXTRA_SUBJECT, context.getString(R.string.diagnostic_share_subject))
+                clipData = ClipData.newRawUri(export.fileName, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             try {
@@ -832,11 +843,14 @@ class MobileRuntimePlugin : Plugin() {
     fun shareRuntimeWorkspace(call: PluginCall) {
         execute(call) {
             val workspace = File(controller.store.currentRoot, "root/1")
-            if (!workspace.isDirectory) {
+            if (!workspace.isDirectory || Files.isSymbolicLink(workspace.toPath())) {
                 throw RuntimeFailure("WORKSPACE_EXPORT_UNAVAILABLE", "运行时工作区尚未准备好")
             }
-            val exportDir = File(context.cacheDir, "share").apply { mkdirs() }
-            val export = File(exportDir, "dsh-workspace-${System.currentTimeMillis()}.zip")
+            val exportDir = File(context.cacheDir, "share")
+            if ((!exportDir.isDirectory && !exportDir.mkdirs()) || Files.isSymbolicLink(exportDir.toPath())) {
+                throw RuntimeFailure("WORKSPACE_EXPORT_FAILED", "无法准备工作区分享目录")
+            }
+            val export = File.createTempFile("dsh-workspace-", ".zip", exportDir)
             var entries = 0
             var bytes = 0L
             try {
@@ -845,12 +859,25 @@ class MobileRuntimePlugin : Plugin() {
                         override fun visitFile(file: java.nio.file.Path, attrs: BasicFileAttributes): FileVisitResult {
                             if (!attrs.isRegularFile || attrs.isSymbolicLink) return FileVisitResult.CONTINUE
                             if (++entries > 2_000) throw RuntimeFailure("WORKSPACE_EXPORT_TOO_LARGE", "工作区文件数量超过限制")
-                            val size = attrs.size()
-                            bytes += size
-                            if (bytes > 128L * 1024 * 1024) throw RuntimeFailure("WORKSPACE_EXPORT_TOO_LARGE", "工作区大小超过限制")
+                            if (attrs.size() > 128L * 1024 * 1024 - bytes) {
+                                throw RuntimeFailure("WORKSPACE_EXPORT_TOO_LARGE", "工作区大小超过限制")
+                            }
                             val relative = workspace.toPath().relativize(file).toString().replace(File.separatorChar, '/')
                             zip.putNextEntry(ZipEntry(relative))
-                            BufferedInputStream(FileInputStream(file.toFile())).use { input -> input.copyTo(zip) }
+                            BufferedInputStream(
+                                Files.newInputStream(file, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS),
+                            ).use { input ->
+                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                while (true) {
+                                    val read = input.read(buffer)
+                                    if (read < 0) break
+                                    bytes += read
+                                    if (bytes > 128L * 1024 * 1024) {
+                                        throw RuntimeFailure("WORKSPACE_EXPORT_TOO_LARGE", "工作区大小超过限制")
+                                    }
+                                    zip.write(buffer, 0, read)
+                                }
+                            }
                             zip.closeEntry()
                             return FileVisitResult.CONTINUE
                         }
@@ -861,6 +888,7 @@ class MobileRuntimePlugin : Plugin() {
                     type = "application/zip"
                     putExtra(Intent.EXTRA_STREAM, uri)
                     putExtra(Intent.EXTRA_SUBJECT, "DSH 工作区")
+                    clipData = ClipData.newRawUri(export.name, uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 context.startActivity(Intent.createChooser(send, "分享 DSH 工作区").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -875,42 +903,25 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
-    private fun workspaceFile(relative: String): File {
-        if (relative.length !in 1..240 || relative.contains('\\') || relative.startsWith('/') || relative.contains("..")) {
-            throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径无效")
-        }
-        val root = File(controller.store.currentRoot, "root/1").canonicalFile
-        val file = File(root, relative).canonicalFile
-        if (!file.path.startsWith(root.path + File.separator) || !file.isFile || file.length() > 64L * 1024 * 1024) {
-            throw RuntimeFailure("WORKSPACE_FILE_UNAVAILABLE", "工作区文件不可用")
-        }
-        return file
-    }
-
     @PluginMethod
     fun listRuntimeWorkspaceFiles(call: PluginCall) {
         execute(call) {
-            val root = File(controller.store.currentRoot, "root/1")
-            val files = mutableListOf<String>()
-            if (root.isDirectory) root.walkTopDown().maxDepth(6).forEach { file ->
-                if (files.size < 100 && file.isFile && !Files.isSymbolicLink(file.toPath())) {
-                    files += root.toPath().relativize(file.toPath()).toString().replace(File.separatorChar, '/')
-                }
-            }
-            JSObject().put("files", org.json.JSONArray(files.sorted()))
+            val files = RuntimeWorkspaceFiles(controller.store, context.cacheDir).list()
+            JSObject().put("files", org.json.JSONArray(files))
         }
     }
 
     private fun shareWorkspaceFile(relative: String, open: Boolean) {
-        val source = workspaceFile(relative)
-        val target = File(context.cacheDir, "share").apply { mkdirs() }
-            .let { File(it, "dsh-${System.currentTimeMillis()}-${source.name}") }
-        source.copyTo(target, overwrite = true)
+        val manager = RuntimeWorkspaceFiles(controller.store, context.cacheDir)
+        val target = manager.copyForSharing(relative)
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.diagnostics", target)
-        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(source.extension.lowercase()) ?: "application/octet-stream"
         val intent = Intent(if (open) Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
-            type = mime
-            if (open) data = uri else putExtra(Intent.EXTRA_STREAM, uri)
+            val mime = manager.mimeType(relative)
+            if (open) setDataAndType(uri, mime) else {
+                type = mime
+                putExtra(Intent.EXTRA_STREAM, uri)
+            }
+            clipData = ClipData.newRawUri(target.name, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         context.startActivity(Intent.createChooser(intent, if (open) "打开 DSH 文件" else "分享 DSH 文件").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -924,6 +935,16 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun openRuntimeWorkspaceFile(call: PluginCall) {
         execute(call) { shareWorkspaceFile(call.getString("path") ?: throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径缺失"), true); null }
+    }
+
+    @PluginMethod
+    fun deleteRuntimeWorkspaceFile(call: PluginCall) {
+        execute(call) {
+            val path = call.getString("path")
+                ?: throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径缺失")
+            RuntimeWorkspaceFiles(controller.store, context.cacheDir).delete(path)
+            null
+        }
     }
 
     /** 权限：应用内桥接；清空全部诊断日志。 */
@@ -1349,6 +1370,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("autoLaunch", autoLaunch)
         .put("keepRuntimeInBackground", keepRuntimeInBackground)
         .put("overlayBallEnabled", overlayBallEnabled)
+        .put("harnessPermissionMode", harnessPermissionMode.wireValue)
 
     private fun RuntimeKeepAliveSnapshot.toJs(): JSObject = JSObject()
         .put("keepRuntimeInBackground", keepRuntimeInBackground)

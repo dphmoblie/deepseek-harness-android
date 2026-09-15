@@ -14,6 +14,15 @@ const baseSettings = {
 describe('browser settings bridge', () => {
   beforeEach(() => localStorage.clear())
 
+  it('persists the selected permission mode and preserves it on unrelated saves', async () => {
+    const bridge = createBrowserBridge()
+    await bridge.saveSettings({ ...baseSettings, harnessPermissionMode: 'danger-full-access' })
+    expect((await bridge.saveSettings(baseSettings)).harnessPermissionMode).toBe('danger-full-access')
+    expect((await bridge.getSettings()).harnessPermissionMode).toBe('danger-full-access')
+    await bridge.saveSettings({ ...baseSettings, harnessPermissionMode: 'workspace-write' })
+    expect((await bridge.getSettings()).harnessPermissionMode).toBe('workspace-write')
+  })
+
   it('preserves the stored overlay-ball setting when an unrelated save omits it', async () => {
     const bridge = createBrowserBridge()
     await bridge.saveSettings({ ...baseSettings, overlayBallEnabled: true })

@@ -120,7 +120,7 @@ describe('运行时自检载荷校验', () => {
     // 四项共用同一条结论与下一步：跳过的项不另编说法，用户看到的就是同一个原因。
     const advice = report.checks.map(item => selfCheckAdvice(item))
     expect(new Set(advice.map(item => item.meaning))).toEqual(new Set(['找不到沙箱启动器 landlock-run']))
-    expect(new Set(advice.map(item => item.nextStep))).toEqual(new Set(['先点「修复运行时权限」，仍失败则重装运行时']))
+    expect(new Set(advice.map(item => item.nextStep))).toEqual(new Set(['重新安装或更新运行环境；修复权限不能恢复缺失的程序']))
   })
 
   it('hardlink 的合法与非法组合：ok 不带码，失败只认受控码 HARDLINK_DENIED', () => {
@@ -234,8 +234,10 @@ describe('运行时自检文案', () => {
   })
 
   it('沙箱内 PTY 的标签与 PTY_EXIT_EARLY 的下一步对得上', () => {
-    // 「对照上一条「沙箱内 PTY」结果」这句指引必须能真的在列表里找到对应项。
     expect(selfCheckAdvice({ id: 'pty_sandbox', status: 'ok' }).label).toBe('沙箱内 PTY')
+    const advice = selfCheckAdvice({ id: 'pty_sandbox', status: 'fail', code: 'PTY_EXIT_EARLY' })
+    expect(advice.nextStep).toContain('PTY 模块 node-pty')
+    expect(advice.nextStep).not.toContain('上一条')
   })
 
   it('hardlink 项如实指向硬链接这一层，并与 en.ts 的词条逐字对应', () => {
@@ -248,13 +250,14 @@ describe('运行时自检文案', () => {
   })
 
   it('只在权限位或缺失目录相关的码上提供修复入口', () => {
-    const repairable: SelfCheckCode[] = ['LAUNCHER_NOT_EXECUTABLE', 'LAUNCHER_MISSING', 'RG_NOT_EXECUTABLE', 'RG_MISSING', 'ATTACHMENTS_MISSING']
+    const repairable: SelfCheckCode[] = ['LAUNCHER_NOT_EXECUTABLE', 'RG_NOT_EXECUTABLE', 'ATTACHMENTS_MISSING']
     for (const code of repairable) {
       expect(SELF_CHECK_REPAIRABLE_CODES).toContain(code)
       expect(selfCheckNeedsRepair([{ id: 'shell', status: 'fail', code }])).toBe(true)
     }
     // 内核能力、Node/bash 缺失、PTY 层故障、硬链接被环境拒绝都修不了：给出修复按钮等于承诺做不到的事。
-    const notRepairable: SelfCheckCode[] = ['PROBE_UNUSABLE', 'PROBE_PARTIAL', 'SHELL_MISSING', 'NODE_MISSING', 'PTY_EXIT_EARLY', 'HOME_NOT_WRITABLE', 'HARDLINK_DENIED']
+    // LAUNCHER_MISSING / RG_MISSING 也不在可修复集合里：缺失的程序补不了权限位，只能重装或更新运行时。
+    const notRepairable: SelfCheckCode[] = ['LAUNCHER_MISSING', 'RG_MISSING', 'PROBE_UNUSABLE', 'PROBE_PARTIAL', 'SHELL_MISSING', 'NODE_MISSING', 'PTY_EXIT_EARLY', 'HOME_NOT_WRITABLE', 'HARDLINK_DENIED']
     for (const code of notRepairable) {
       expect(SELF_CHECK_REPAIRABLE_CODES).not.toContain(code)
       expect(selfCheckNeedsRepair([{ id: 'shell', status: 'fail', code }])).toBe(false)

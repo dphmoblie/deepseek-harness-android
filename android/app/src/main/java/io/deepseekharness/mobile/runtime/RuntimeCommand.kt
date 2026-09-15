@@ -71,6 +71,8 @@ object RuntimeCommand {
             add("LOGNAME=root")
             add("LANG=C.UTF-8")
             add("TERM=xterm-256color")
+            // 安全校验点：来源是持久化枚举；env -i 后显式注入，父进程环境不能改变此选择。
+            add("DSH_PERMISSION_MODE=${store.harnessPermissionMode().wireValue}")
             add("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
             ModelProvider.entries.forEach { provider ->
                 providerApiKeys[provider]?.let { key -> add("${provider.environmentVariable}=$key") }

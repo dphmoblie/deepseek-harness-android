@@ -724,6 +724,7 @@ button:disabled {
 .workspace-file-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .workspace-file-row span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .workspace-file-row button { min-height: 34px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); }
+.workspace-file-row .workspace-delete { color: var(--red); border-color: var(--danger-line); }
 
 .terminal-screen {
   display: flex;
@@ -781,6 +782,13 @@ button:disabled {
   border-radius: var(--radius-card);
   background: #101419;
   box-shadow: var(--shadow);
+}
+
+.terminal-loading {
+  display: grid;
+  min-height: 240px;
+  place-items: center;
+  color: var(--muted);
 }
 
 .terminal-canvas {

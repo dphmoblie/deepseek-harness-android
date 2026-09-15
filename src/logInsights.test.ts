@@ -22,9 +22,9 @@ describe('日志判读', () => {
     const insights = readLogInsights(text)
     expect(insights.map(insight => insight.id)).toEqual(['sandbox-backend-unavailable'])
     expect(insights[0].meaning).toContain('fail-closed')
-    // 下一步是用户显式选择的降级，不是「已修复」：文案必须指向权限预设与重启运行环境。
-    expect(insights[0].nextStep).toContain('不启用沙箱')
-    expect(insights[0].nextStep).toContain('重启运行环境')
+    // 必须切换当前会话的权限；仅重启不能覆盖已保存的会话状态。
+    expect(insights[0].nextStep).toContain('/permission danger-full-access')
+    expect(insights[0].nextStep).toContain('仅重启不会改变已有会话的权限')
     // 同一特征全大写时也要命中：判读统一按小写文本匹配。
     expect(readLogInsights('NO SANDBOX BACKEND IS USABLE').map(insight => insight.id))
       .toEqual(['sandbox-backend-unavailable'])

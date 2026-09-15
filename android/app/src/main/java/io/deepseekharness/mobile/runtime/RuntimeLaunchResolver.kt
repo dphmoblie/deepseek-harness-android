@@ -1,6 +1,8 @@
 package io.deepseekharness.mobile.runtime
 
 import android.content.Context
+import android.os.Build
+import io.deepseekharness.mobile.BuildConfig
 import java.io.File
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
@@ -21,6 +23,22 @@ internal data class ProcessProbeResult(
 
 internal data class ClassifiedFailure(val code: String, val message: String)
 
+internal fun prootProfileFallbacks(
+    profile: ProotLaunchProfile,
+    result: ProcessProbeResult,
+    commandCanFail: Boolean,
+): List<ProotLaunchProfile> {
+    val fallbacks = mutableListOf<ProotLaunchProfile>()
+    if (!profile.disableSeccomp && RuntimeDiagnostics.shouldRetryWithoutSeccomp(result)) {
+        fallbacks += profile.copy(disableSeccomp = true)
+    }
+    val includesSdcard = profile.bindMounts.any { it.target == SDCARD_TARGET }
+    if (includesSdcard && (!commandCanFail || RuntimeDiagnostics.prootFailure(result) != null)) {
+        fallbacks += profile.copy(bindMounts = profile.bindMounts.filterNot { it.target == SDCARD_TARGET })
+    }
+    return fallbacks.distinct()
+}
+
 class RuntimeLaunchResolver(
     context: Context,
     private val store: RuntimeStore,
@@ -28,7 +46,13 @@ class RuntimeLaunchResolver(
 ) {
     private data class CachedProfile(val key: String, val profile: ProotLaunchProfile)
 
+    private data class ProfileProbeOutcome(
+        val profile: ProotLaunchProfile?,
+        val failureResults: List<ProcessProbeResult>,
+    )
+
     private val appContext = context.applicationContext
+    private val profilePreferences = appContext.getSharedPreferences(PROFILE_PREFERENCES, Context.MODE_PRIVATE)
     private val lock = Any()
     private var cachedProfile: CachedProfile? = null
 
@@ -50,35 +74,20 @@ class RuntimeLaunchResolver(
         timeoutSeconds: Long,
         externalCancellation: () -> Boolean = { false },
     ) = synchronized(lock) {
-        val resolved = resolveProfile(externalCancellation)
-        val firstResult = ProcessProbe.run(
-            buildLaunch(resolved.profile, entrypoint, includeCredentials = false),
-            store.currentRoot,
+        // The real preflight doubles as profile validation. A separate `bash -c exit 0`
+        // process here adds a full PRoot startup to every cold launch without increasing safety.
+        val resolved = resolveProfileForVerification(externalCancellation)
+        val outcome = probeProfiles(
+            resolved,
+            entrypoint,
             timeoutSeconds,
+            commandCanFail = true,
             externalCancellation,
         )
-        if (firstResult.succeeded) return@synchronized
-
-        var failureResults = listOf(firstResult)
-        if (!resolved.profile.disableSeccomp && RuntimeDiagnostics.shouldRetryWithoutSeccomp(firstResult)) {
-            val fallback = resolved.profile.copy(disableSeccomp = true)
-            val fallbackResult = ProcessProbe.run(
-                buildLaunch(fallback, entrypoint, includeCredentials = false),
-                store.currentRoot,
-                timeoutSeconds,
-                externalCancellation,
-            )
-            if (fallbackResult.succeeded) {
-                cachedProfile = CachedProfile(resolved.key, fallback)
-                return@synchronized
-            }
-            // Prefer the fallback's concrete failure, while retaining the explicit
-            // seccomp diagnosis if the second attempt produced no useful output.
-            failureResults = listOf(fallbackResult, firstResult)
-        }
+        if (outcome.profile != null) return@synchronized
 
         val failure = RuntimeDiagnostics.guestFailure(
-            failureResults,
+            outcome.failureResults,
             errorCode,
             message,
         )
@@ -86,21 +95,36 @@ class RuntimeLaunchResolver(
         // print credentials, but redaction protects against future dependency error messages.
         android.util.Log.w(
             "dsh-runtime",
-            "guest probe failed code=${failure.code} exit=${failureResults.firstOrNull()?.exitCode} " +
-                "timeout=${failureResults.firstOrNull()?.timedOut} output=" +
-                redactDiagnosticOutput(failureResults.firstOrNull()?.output.orEmpty()),
+            "guest probe failed code=${failure.code} exit=${outcome.failureResults.firstOrNull()?.exitCode} " +
+                "timeout=${outcome.failureResults.firstOrNull()?.timedOut} output=" +
+                redactDiagnosticOutput(outcome.failureResults.firstOrNull()?.output.orEmpty()),
         )
-        val cause = failureResults.firstNotNullOfOrNull { it.startError }
+        val cause = outcome.failureResults.firstNotNullOfOrNull { it.startError }
         throw RuntimeFailure(failure.code, failure.message, cause)
     }
 
     private fun resolveProfile(externalCancellation: () -> Boolean): CachedProfile {
         throwIfStartCancelled(externalCancellation)
         val manifest = prepareRuntime()
-        val key = "${manifest.runtimeId}:${manifest.version}:${manifest.rootfs.sha256}"
-        return cachedProfile?.takeIf { it.key == key } ?: CachedProfile(key, detectProfile(externalCancellation)).also {
-            cachedProfile = it
-        }
+        val key = profileKey(manifest)
+        existingProfile(key)?.let { return it }
+        val initial = CachedProfile(key, preferredProfile())
+        val outcome = probeProfiles(
+            initial,
+            GUEST_PROBE_ENTRYPOINT,
+            GUEST_PROBE_TIMEOUT_SECONDS,
+            commandCanFail = false,
+            externalCancellation,
+        )
+        val profile = outcome.profile ?: throw guestStartFailure(outcome.failureResults)
+        return CachedProfile(key, profile)
+    }
+
+    private fun resolveProfileForVerification(externalCancellation: () -> Boolean): CachedProfile {
+        throwIfStartCancelled(externalCancellation)
+        val manifest = prepareRuntime()
+        val key = profileKey(manifest)
+        return existingProfile(key) ?: CachedProfile(key, preferredProfile())
     }
 
     private fun prepareRuntime(): RuntimeManifest {
@@ -115,88 +139,109 @@ class RuntimeLaunchResolver(
         return manifest
     }
 
-    private fun detectProfile(externalCancellation: () -> Boolean): ProotLaunchProfile {
-        val runnerResult = ProcessProbe.run(
-            RuntimeLaunchSpec(
-                argv = listOf(store.launchRunnerFile.absolutePath, "--version"),
-                environment = RuntimeCommand.hostEnvironment(appContext, store),
-            ),
-            store.currentRoot,
-            RUNNER_PROBE_TIMEOUT_SECONDS,
-            externalCancellation,
-        )
-        if (!runnerResult.succeeded) {
-            val failure = RuntimeDiagnostics.runnerFailure(runnerResult)
-            throw RuntimeFailure(failure.code, failure.message, runnerResult.startError)
-        }
-
-        val defaultProfile = ProotLaunchProfile(disableSeccomp = false, bindMounts = emptyList())
-        val defaultResult = probeGuest(defaultProfile, externalCancellation)
-        var profile = if (defaultResult.succeeded) {
-            defaultProfile
-        } else {
-            if (!RuntimeDiagnostics.shouldRetryWithoutSeccomp(defaultResult)) {
-                throw guestStartFailure(listOf(defaultResult))
-            }
-            val fallbackProfile = defaultProfile.copy(disableSeccomp = true)
-            val fallbackResult = probeGuest(fallbackProfile, externalCancellation)
-            if (!fallbackResult.succeeded) {
-                throw guestStartFailure(listOf(fallbackResult, defaultResult))
-            }
-            fallbackProfile
-        }
-
-        val bindCandidates = listOf(
+    private fun preferredProfile(): ProotLaunchProfile {
+        val required = listOf(
             ProotBindMount(store.resolverFile.absolutePath, "/etc/resolv.conf"),
             ProotBindMount(store.hostsFile.absolutePath, "/etc/hosts"),
             *SYSTEM_BIND_MOUNTS.toTypedArray(),
         )
-        for (mount in bindCandidates) {
-            throwIfStartCancelled(externalCancellation)
+        for (mount in required) {
             val guestTarget = File(store.currentRoot, mount.target.removePrefix("/"))
             if (!File(mount.source).exists() || !guestTarget.exists()) {
                 throw requiredBindFailure()
             }
-            val candidate = profile.copy(bindMounts = profile.bindMounts + mount)
-            val firstResult = probeGuest(candidate, externalCancellation)
-            if (firstResult.succeeded) {
-                profile = candidate
-                continue
-            }
-            if (!candidate.disableSeccomp && RuntimeDiagnostics.shouldRetryWithoutSeccomp(firstResult)) {
-                val fallback = candidate.copy(disableSeccomp = true)
-                val fallbackResult = probeGuest(fallback, externalCancellation)
-                if (fallbackResult.succeeded) {
-                    profile = fallback
-                    continue
-                }
-                throw requiredBindFailure(fallbackResult.startError ?: firstResult.startError)
-            }
-            throw requiredBindFailure(firstResult.startError)
         }
-        // 可选 bind：/sdcard（Android 公共存储）——失败仅跳过，不阻断启动
-        // （荣耀等 ROM 的 SELinux 可能拒绝读取 /sdcard，不影响核心 Harness）
-        val sdcard = ProotBindMount("/sdcard", "/sdcard")
-        if (File(sdcard.source).exists()) {
-            val guestSdcard = File(store.currentRoot, sdcard.target.removePrefix("/"))
-            if (guestSdcard.exists()) {
-                val candidate = profile.copy(bindMounts = profile.bindMounts + sdcard)
-                val result = probeGuest(candidate, externalCancellation)
-                if (result.succeeded) profile = candidate
-            }
-        }
-        return profile
+        val mounts = required.toMutableList()
+        sdcardMount()?.let(mounts::add)
+        return ProotLaunchProfile(disableSeccomp = false, bindMounts = mounts)
     }
 
-    private fun probeGuest(
-        profile: ProotLaunchProfile,
+    private fun sdcardMount(): ProotBindMount? {
+        val source = File(SDCARD_TARGET)
+        val guestTarget = File(store.currentRoot, SDCARD_TARGET.removePrefix("/"))
+        // Validate access before offering the optional mount; required mounts remain mandatory.
+        return ProotBindMount(SDCARD_TARGET, SDCARD_TARGET).takeIf {
+            source.isDirectory && source.canRead() && source.canExecute() && guestTarget.isDirectory
+        }
+    }
+
+    private fun probeProfiles(
+        initial: CachedProfile,
+        entrypoint: List<String>,
+        timeoutSeconds: Long,
+        commandCanFail: Boolean,
         externalCancellation: () -> Boolean,
-    ): ProcessProbeResult = ProcessProbe.run(
-        buildLaunch(profile, GUEST_PROBE_ENTRYPOINT, includeCredentials = false),
-        store.currentRoot,
-        GUEST_PROBE_TIMEOUT_SECONDS,
-        externalCancellation,
-    )
+    ): ProfileProbeOutcome {
+        val pending = ArrayDeque<ProotLaunchProfile>().apply { add(initial.profile) }
+        val attempted = linkedSetOf<ProotLaunchProfile>()
+        val failures = mutableListOf<ProcessProbeResult>()
+        while (pending.isNotEmpty()) {
+            throwIfStartCancelled(externalCancellation)
+            val profile = pending.removeFirst()
+            if (!attempted.add(profile)) continue
+            val result = ProcessProbe.run(
+                buildLaunch(profile, entrypoint, includeCredentials = false),
+                store.currentRoot,
+                timeoutSeconds,
+                externalCancellation,
+            )
+            if (result.succeeded) {
+                rememberProfile(CachedProfile(initial.key, profile))
+                return ProfileProbeOutcome(profile, failures)
+            }
+            // Newer attempts are more compatible, so keep their classified failure first.
+            failures.add(0, result)
+            prootProfileFallbacks(profile, result, commandCanFail).forEach { fallback ->
+                if (fallback !in attempted) pending.addLast(fallback)
+            }
+        }
+        return ProfileProbeOutcome(null, failures)
+    }
+
+    private fun existingProfile(key: String): CachedProfile? {
+        cachedProfile?.takeIf { it.key == key }?.let { return it }
+        val storedKey = try {
+            profilePreferences.getString(KEY_PROFILE_KEY, null)
+        } catch (_: ClassCastException) {
+            null
+        }
+        if (storedKey != key) return null
+        val preferred = preferredProfile()
+        val disableSeccomp = try {
+            profilePreferences.getBoolean(KEY_PROFILE_DISABLE_SECCOMP, false)
+        } catch (_: ClassCastException) {
+            return null
+        }
+        val includeSdcard = try {
+            profilePreferences.getBoolean(KEY_PROFILE_INCLUDE_SDCARD, false)
+        } catch (_: ClassCastException) {
+            return null
+        }
+        val hasAvailableSdcard = preferred.bindMounts.any { it.target == SDCARD_TARGET }
+        if (includeSdcard && !hasAvailableSdcard) return null
+        val mounts = if (includeSdcard) preferred.bindMounts else preferred.bindMounts.filterNot { it.target == SDCARD_TARGET }
+        return CachedProfile(key, ProotLaunchProfile(disableSeccomp, mounts)).also { cachedProfile = it }
+    }
+
+    private fun rememberProfile(resolved: CachedProfile) {
+        cachedProfile = resolved
+        profilePreferences.edit()
+            .putString(KEY_PROFILE_KEY, resolved.key)
+            .putBoolean(KEY_PROFILE_DISABLE_SECCOMP, resolved.profile.disableSeccomp)
+            .putBoolean(KEY_PROFILE_INCLUDE_SDCARD, resolved.profile.bindMounts.any { it.target == SDCARD_TARGET })
+            .apply()
+    }
+
+    private fun profileKey(manifest: RuntimeManifest): String = listOf(
+        BuildConfig.VERSION_CODE,
+        Build.VERSION.SDK_INT,
+        Build.FINGERPRINT,
+        manifest.runtimeId,
+        manifest.version,
+        manifest.rootfs.sha256,
+        // Revalidate cached compatibility when shared storage becomes accessible or unavailable.
+        sdcardMount() != null,
+    ).joinToString(":")
 
     private fun throwIfStartCancelled(externalCancellation: () -> Boolean) {
         if (externalCancellation()) {
@@ -237,14 +282,19 @@ class RuntimeLaunchResolver(
     private companion object {
         val GUEST_PROBE_ENTRYPOINT = listOf("/bin/bash", "--noprofile", "--norc", "-c", "exit 0")
         val SYSTEM_BIND_MOUNTS = listOf(ProotBindMount("/dev"), ProotBindMount("/proc"))
-        const val RUNNER_PROBE_TIMEOUT_SECONDS = 5L
         const val GUEST_PROBE_TIMEOUT_SECONDS = 12L
+        const val PROFILE_PREFERENCES = "runtime_launch_profile"
+        const val KEY_PROFILE_KEY = "profile_key"
+        const val KEY_PROFILE_DISABLE_SECCOMP = "disable_seccomp"
+        const val KEY_PROFILE_INCLUDE_SDCARD = "include_sdcard"
 
         private fun redactDiagnosticOutput(value: String): String = value
             .replace(Regex("(?i)(api[_-]?key|token|password|secret)=?\\s*[^\\s]+"), "$1=<redacted>")
             .takeLast(4096)
     }
 }
+
+private const val SDCARD_TARGET = "/sdcard"
 
 internal object RuntimeDiagnostics {
     fun runnerFailure(result: ProcessProbeResult): ClassifiedFailure = when {

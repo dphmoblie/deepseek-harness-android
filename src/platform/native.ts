@@ -86,6 +86,7 @@ interface NativeRuntimePlugin {
   listRuntimeWorkspaceFiles(): Promise<{ files: string[] }>
   shareRuntimeWorkspaceFile(options: { path: string }): Promise<void>
   openRuntimeWorkspaceFile(options: { path: string }): Promise<void>
+  deleteRuntimeWorkspaceFile(options: { path: string }): Promise<void>
   clearDiagnosticLog(): Promise<DiagnosticLogState>
   addListener(eventName: 'runtimeProgress', listener: (event: RuntimeProgress) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'terminalOutput', listener: (event: TerminalChunk) => void): Promise<PluginListenerHandle>
@@ -94,6 +95,15 @@ interface NativeRuntimePlugin {
 
 const MAX_TERMINAL_INPUT_BYTES = 256 * 1024
 const NativeRuntime = registerPlugin<NativeRuntimePlugin>('MobileRuntime')
+
+function assertWorkspaceFilePath(path: string): string {
+  const segments = path.split('/')
+  if (path.length < 1 || path.length > 240 || path.startsWith('/') || path.includes('\\') ||
+      segments.some(segment => segment === '' || segment === '.' || segment === '..')) {
+    throw new Error('工作区文件路径无效')
+  }
+  return path
+}
 
 function validatedListener<T>(validator: (value: unknown) => T, listener: (event: T) => void): (event: T) => void {
   return event => {
@@ -170,8 +180,9 @@ function createNativeBridge(): RuntimeBridge {
     shareDiagnosticLog: () => NativeRuntime.shareDiagnosticLog().then(validateDiagnosticLogExport),
     shareRuntimeWorkspace: () => NativeRuntime.shareRuntimeWorkspace(),
     listRuntimeWorkspaceFiles: () => NativeRuntime.listRuntimeWorkspaceFiles().then(value => value.files),
-    shareRuntimeWorkspaceFile: path => NativeRuntime.shareRuntimeWorkspaceFile({ path }),
-    openRuntimeWorkspaceFile: path => NativeRuntime.openRuntimeWorkspaceFile({ path }),
+    shareRuntimeWorkspaceFile: path => NativeRuntime.shareRuntimeWorkspaceFile({ path: assertWorkspaceFilePath(path) }),
+    openRuntimeWorkspaceFile: path => NativeRuntime.openRuntimeWorkspaceFile({ path: assertWorkspaceFilePath(path) }),
+    deleteRuntimeWorkspaceFile: path => NativeRuntime.deleteRuntimeWorkspaceFile({ path: assertWorkspaceFilePath(path) }),
     clearDiagnosticLog: () => NativeRuntime.clearDiagnosticLog().then(validateDiagnosticLogState),
     addRuntimeProgressListener: listener => NativeRuntime.addListener('runtimeProgress', validatedListener(validateRuntimeProgress, listener)),
     addTerminalOutputListener: listener => NativeRuntime.addListener('terminalOutput', validatedListener(validateTerminalChunk, listener)),

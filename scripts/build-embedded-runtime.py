@@ -644,7 +644,11 @@ def add_windows_tree(
             ):
                 continue
             archive_name = runtime_archive_name(destination_root, relative, name)
-            if path.is_symlink():
+            # 要求落成真实常规文件的路径，在上游是软链时同样要跟随软链取载荷：
+            # Ubuntu 的 git-remote-https 是指向 git-remote-http 的相对软链，而
+            # verify-bundle.py 要求该入口是 0755 的非空 ARM64 ELF——软链条目不算
+            # 「真实文件载荷」。这里不 continue，交给下面的常规文件分支处理。
+            if path.is_symlink() and archive_name not in forced_regular_paths:
                 target = os.readlink(path).replace("\\", "/")
                 info = tarfile.TarInfo(archive_name)
                 info.type = tarfile.SYMTYPE
@@ -657,7 +661,10 @@ def add_windows_tree(
                 info.mtime = writer.source_date_epoch
                 writer.add(info)
                 continue
-            file_stat = path.stat()
+            try:
+                file_stat = path.stat()
+            except OSError as error:
+                raise BuildError(f"归档路径无法读取：{path}（{error}）") from error
             if not stat.S_ISREG(file_stat.st_mode):
                 raise BuildError(f"unsupported local runtime file type: {path}")
             relative_posix = PurePosixPath(local_relative.as_posix())

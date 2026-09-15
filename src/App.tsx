@@ -2,7 +2,7 @@ import appMark from './assets/app-mark.png'
 import { t, useLanguage } from './i18n'
 import { PluginSettings } from './components/PluginSettings'
 import { LanguageSettings } from './components/LanguageSettings'
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -41,18 +41,16 @@ import {
   Wrench,
   X,
 } from 'lucide-react'
-import { TerminalPanel } from './components/TerminalPanel'
 import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import { hasConfiguredModelCredential, MODEL_PROVIDERS } from './modelProviders'
 import { CustomProviders } from './components/CustomProviders'
 import { runtimeBridge } from './platform/native'
 import { readLogInsights } from './logInsights'
+import { validateHarnessPermissionMode } from './harnessPermissionMode'
 import {
   selfCheckAdvice,
   selfCheckNeedsRepair,
   type SelfCheckCheckReport,
-  type SelfCheckCode,
-  type SelfCheckId,
   type SelfCheckItem,
   type SelfCheckOperation,
   type SelfCheckRepairReport,
@@ -75,6 +73,7 @@ import type {
   ShizukuState,
   TerminalKind,
 } from './platform/types'
+
 import {
   DIAGNOSTIC_LOG_WINDOW_OPTIONS,
   DIAGNOSTIC_RETENTION_MAX,
@@ -82,6 +81,8 @@ import {
   DIAGNOSTIC_RETENTION_MIN,
   HARNESS_LOG_WINDOW_OPTIONS,
 } from './platform/types'
+
+const TerminalPanel = lazy(() => import('./components/TerminalPanel').then(module => ({ default: module.TerminalPanel })))
 
 type AppView =
   | 'conversation'
@@ -627,9 +628,10 @@ interface EnvironmentScreenProps {
   workspaceFiles: string[]
   onShareFile: (path: string) => void
   onOpenFile: (path: string) => void
+  onDeleteFile: (path: string) => void
 }
 
-function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop, onUpdate, onShareWorkspace, onListFiles, workspaceFiles, onShareFile, onOpenFile }: EnvironmentScreenProps) {
+function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop, onUpdate, onShareWorkspace, onListFiles, workspaceFiles, onShareFile, onOpenFile, onDeleteFile }: EnvironmentScreenProps) {
   const inProgress = ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
   const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running'
   const progress = runtime.totalBytes > 0
@@ -764,7 +766,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
           {busy === 'workspace-share' ? <Loader2 className="spin" size={18} /> : <Share2 size={18} />}{t("分享工作区")}
         </button>
         <button className="button button-secondary" type="button" onClick={onListFiles} disabled={busy !== null}>{t("选择文件")}</button>
-        {workspaceFiles.length > 0 && <div className="workspace-file-list">{workspaceFiles.map(path => <div className="workspace-file-row" key={path}><span title={path}>{path}</span><button className="compact-button" type="button" onClick={() => onOpenFile(path)} disabled={busy !== null}>{t("打开")}</button><button className="compact-button" type="button" onClick={() => onShareFile(path)} disabled={busy !== null}>{t("分享")}</button></div>)}</div>}
+        {workspaceFiles.length > 0 && <div className="workspace-file-list">{workspaceFiles.map(path => <div className="workspace-file-row" key={path}><span title={path}>{path}</span><button className="compact-button" type="button" onClick={() => onOpenFile(path)} disabled={busy !== null}>{t("打开")}</button><button className="compact-button" type="button" onClick={() => onShareFile(path)} disabled={busy !== null}>{t("分享")}</button><button className="compact-button workspace-delete" type="button" onClick={() => onDeleteFile(path)} disabled={busy !== null}>{t("删除")}</button></div>)}</div>}
       </section>}
     </div>
   )
@@ -818,7 +820,9 @@ function TerminalScreen({ bridge, fontSize, onAuthorize, onBack, onConnect, onEr
       </div>
 
       {ready ? (
-        <TerminalPanel key={`${kind}-${epoch}`} bridge={bridge} fontSize={fontSize} kind={kind} onError={onError} />
+        <Suspense fallback={<div className="terminal-loading"><Loader2 className="spin" size={22} /></div>}>
+          <TerminalPanel key={`${kind}-${epoch}`} bridge={bridge} fontSize={fontSize} kind={kind} onError={onError} />
+        </Suspense>
       ) : kind === 'ubuntu' ? (
         <div className="empty-terminal">
           <span><HardDrive size={27} /></span>
@@ -1282,24 +1286,9 @@ const SELF_CHECK_STATUS_META: Record<SelfCheckStatus, { label: string; chip: str
 /** 自检给出的可用空间低于这一档时提示清理：安装、解压与会话保存都可能因空间失败。 */
 const SELF_CHECK_LOW_SPACE_BYTES = 512 * 1024 * 1024
 
-/**
- * 出现这些「检查项 + 结论码」组合时，逐项列表之上先给一条跨项汇总。
- *
- * 为什么按 id 与 code 一起匹配：`PTY_EXIT_EARLY` 在裸 `pty` 上同样合法，但那说明断在 PTY 层
- * （见 `runtimeSelfCheck.ts` 的说明），只有 `pty_sandbox` 上的这一码才能和上面两项串成
- * 「沙箱后端不可用 → 被沙箱包裹的命令起不来」这同一条因果链。
- * `PROBE_PARTIAL` 也不在其中：老 ABI 只支持部分 Landlock 能力，自检本身也认为一般仍可用。
- */
-const SELF_CHECK_SANDBOX_BLOCKERS: readonly { id: SelfCheckId; code: SelfCheckCode }[] = [
-  { id: 'sandbox_probe', code: 'PROBE_UNUSABLE' },
-  { id: 'sandbox_exec', code: 'EXEC_LAUNCHER_FAILED' },
-  { id: 'pty_sandbox', code: 'PTY_EXIT_EARLY' },
-]
-
-/** 自检结果里是否出现了「本机沙箱后端不可用」这一类断点。 */
+/** 只有探测失败才能确认 Landlock 不可用；单独的 exec/PTY 失败不能推出这一结论。 */
 function selfCheckSandboxBlocked(checks: readonly SelfCheckItem[]): boolean {
-  return checks.some(item =>
-    SELF_CHECK_SANDBOX_BLOCKERS.some(blocker => item.id === blocker.id && item.code === blocker.code))
+  return checks.some(item => item.id === 'sandbox_probe' && item.status === 'fail' && item.code === 'PROBE_UNUSABLE')
 }
 
 interface RuntimeSelfCheckPanelProps {
@@ -1351,29 +1340,33 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
   const [showOk, setShowOk] = useState(false)
 
   const start = (operation: SelfCheckOperation): void => {
+    if (busy !== null) return
     setBusy(operation)
     setFailed(null)
-    void runSelfCheck(operation)
-      .then(next => {
-        if (next.operation === 'repair') {
-          setRepair(next)
-          return
-        }
-        // 新一次自检整体覆盖旧结果：上一次的修复统计属于上一次的判断，留着只会让人误读。
-        setReport(next)
-        setRepair(null)
-        setCheckedAt(Date.now())
-        // 有非 ok 项时默认收起「正常项」，让断在哪一环先出现在视野里。
-        setShowOk(false)
-      })
+    setRepair(null)
+    let activeOperation = operation
+    void (async () => {
+      if (operation === 'repair') {
+        const repaired = await runSelfCheck('repair')
+        if (repaired.operation !== 'repair') throw new Error('自检操作类型无效')
+        setRepair(repaired)
+        // 修复只确认动作完成；自动复检后才展示当前能力，期间清除旧结果。
+        activeOperation = 'check'
+        setBusy('check')
+        setReport(null)
+      }
+      const next = await runSelfCheck('check')
+      if (next.operation !== 'check') throw new Error('自检操作类型无效')
+      setReport(next)
+      setCheckedAt(Date.now())
+      setShowOk(false)
+    })()
       .catch(() => {
-        // 与日志面板同一条原则：要么显示本次真实结果，要么明确说读不到。
-        // 自检失败时清掉上一次的结果，避免旧结论被当成这次的结论读。
-        if (operation === 'check') {
+        if (activeOperation === 'check') {
           setReport(null)
-          setRepair(null)
+          setCheckedAt(0)
         }
-        setFailed(operation)
+        setFailed(activeOperation)
       })
       .finally(() => setBusy(null))
   }
@@ -1381,10 +1374,10 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
   const checks = report?.checks ?? []
   const failing = checks.filter(item => item.status !== 'ok')
   const passing = checks.filter(item => item.status === 'ok')
-  // 沙箱三项失败是同一个根因，逐条读只会看到三条并列的现象：先给一条跨项汇总说清因果。
+  // 探测失败时补充能力边界；保留 exec 和两组 PTY 的独立结果。
   const sandboxBlocked = report !== null && selfCheckSandboxBlocked(checks)
   // 修复只改权限位与缺失目录，可用空间仍可能变化，因此以最新一次结果为显示值。
-  const availableBytes = repair?.availableBytes ?? report?.availableBytes
+  const availableBytes = report?.availableBytes ?? repair?.availableBytes
   const lowSpace = availableBytes !== undefined && availableBytes < SELF_CHECK_LOW_SPACE_BYTES
   const checkedAtLabel = formatRecordedAt(checkedAt)
 
@@ -1412,6 +1405,10 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
       </div>
 
       <p className="settings-note">{t("已安装插件列表见「插件管理」")}</p>
+      <p className="settings-note">{t("自检会单独测试 Landlock 能力，不随会话权限切换。无沙箱会话可继续运行时，沙箱检查仍可能失败。")}</p>
+      {report?.harnessPermissionMode !== undefined && (
+        <p className="settings-note">{t("自检时的启动默认权限：{0}（会话权限可能不同）", report.harnessPermissionMode)}</p>
+      )}
 
       <div className="settings-inline-actions self-check-actions">
         <button className="button button-secondary" type="button" onClick={() => start('check')} disabled={busy !== null}>
@@ -1462,18 +1459,19 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
       {repair !== null && (
         <>
           <p className="harness-log-state">{t("已修复 {0} 项（检查 {1} 项）", repair.repaired, repair.candidates)}</p>
-          <p className="harness-log-state">{t("可重新运行「运行自检」确认修复结果。")}</p>
+          <p className="harness-log-state">{t("权限修复只补执行位和附件目录；修复后自动复检，不能安装内核沙箱能力。")}</p>
         </>
       )}
 
       {/* 跨项汇总放在逐项列表之前：先讲清「谁导致谁」，再看每一条的细节。 */}
       {sandboxBlocked && (
-        <div className="inline-alert danger" role="alert">
+        <div className="inline-alert warning" role="alert">
           <AlertTriangle size={19} />
           <div>
-            <strong>{t("本机没有可用的沙箱后端")}</strong>
-            <span>{t("在要求沙箱的模式（例如 workspace-write）下，dsh 找不到可用的沙箱后端就会拒绝执行命令，这是它的 fail-closed 行为：bash 工具报「PTY shell exited during startup」通常是这条链的结果，不是工具本身坏了。")}</span>
-            <span>{t("下一步：")}{t("在 Harness 的权限预设里选择不启用沙箱的模式，然后重启运行环境。这是明确的能力降级：访客内不再有 Landlock 的文件系统隔离；PRoot 与 Android 应用沙箱仍然有效，但 PRoot 只是用户态模拟，不提供宿主内核没有的隔离能力。")}</span>
+            <strong>{t("本机 Landlock 沙箱不可用")}</strong>
+            <span>{t("修复执行权限后仍出现此结果，表示 Landlock 在当前内核或启动环境中不可用。若没有其他可用后端，要求沙箱的会话无法执行命令；反复修复权限或重装运行时不能补齐内核能力。")}</span>
+            <span>{t("下一步：")}{t("在当前 Harness 会话的权限预设中选择 danger-full-access，或输入 /permission danger-full-access，然后重试命令。启动默认值可在本页「Harness 启动权限」中设置。")}</span>
+            <span>{t("danger-full-access 会关闭 dsh 文件系统沙箱和命令审批。Android 应用沙箱仍在；PRoot 不提供额外的内核隔离。")}</span>
           </div>
         </div>
       )}
@@ -1975,6 +1973,30 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, loadDiagnosticLog,
                 <span>{t("应用进程已被系统回收，旧的 Harness 会话与临时凭据无法恢复；请重新连接以启动新的本机会话。")}</span>
               </div>
             </div>
+          )}
+        </section>
+        )}
+
+        {page === 'runtime' && (
+        <section className="settings-section" aria-labelledby="harness-permission-settings">
+          <div className="section-title">
+            <span className="section-icon"><ShieldCheck size={19} /></span>
+            <div><h2 id="harness-permission-settings">{t("Harness 启动权限")}</h2><p>{t("更改后保存设置；正在运行的 Harness 会自动重启，进行中的任务会中断。")}</p></div>
+          </div>
+          <label className="field">
+            <span>{t("启动默认权限")}</span>
+            <select value={settings.harnessPermissionMode ?? 'workspace-write'} disabled={busy !== null}
+              onChange={event => setDraft({ ...settings, harnessPermissionMode: validateHarnessPermissionMode(event.target.value) })}>
+              <option value="workspace-write">{t("工作区沙箱（workspace-write）")}</option>
+              <option value="danger-full-access">{t("兼容模式，无沙箱（danger-full-access）")}</option>
+            </select>
+          </label>
+          <p className="settings-note">{t("此项设置启动默认值；Harness 内保存的默认权限和已有会话权限优先。旧会话仍报错时，在该会话输入 /permission danger-full-access。")}</p>
+          {settings.harnessPermissionMode === 'danger-full-access' && (
+            <div className="inline-alert warning" role="alert"><AlertTriangle size={19} /><div>
+              <strong>{t("兼容模式会降低隔离能力")}</strong>
+              <span>{t("danger-full-access 会关闭 dsh 文件系统沙箱和命令审批。Android 应用沙箱仍在；PRoot 不提供额外的内核隔离。")}</span>
+            </div></div>
           )}
         </section>
         )}
@@ -2652,8 +2674,10 @@ export function App() {
           nextRuntime = await runtimeBridge.startHarness()
           setRuntime(nextRuntime)
         }
-        // 启动成功后前台服务状态才可能变化（设置开启时）。
-        setKeepAlive(await runtimeBridge.getKeepAliveState())
+        // 后台状态不参与打开页面的关键路径；查询结果稍后回填即可。
+        void runtimeBridge.getKeepAliveState()
+          .then(setKeepAlive)
+          .catch(() => { /* 保留上一次已知状态。 */ })
         // HarnessActivity overlays MainActivity. Keeping settings underneath makes
         // its native management button return to the intended management surface.
         setActiveView('settings')
@@ -2739,6 +2763,13 @@ export function App() {
   const listWorkspaceFiles = useCallback(() => { void run('workspace-files', async () => setWorkspaceFiles(await runtimeBridge.listRuntimeWorkspaceFiles())) }, [run])
   const shareWorkspaceFile = useCallback((path: string) => { void run('workspace-file-share', () => runtimeBridge.shareRuntimeWorkspaceFile(path)) }, [run])
   const openWorkspaceFile = useCallback((path: string) => { void run('workspace-file-open', () => runtimeBridge.openRuntimeWorkspaceFile(path)) }, [run])
+  const deleteWorkspaceFile = useCallback((path: string) => {
+    if (!window.confirm(t('确定删除“{0}”吗？此操作无法撤销。', path))) return
+    void run('workspace-file-delete', async () => {
+      await runtimeBridge.deleteRuntimeWorkspaceFile(path)
+      setWorkspaceFiles(current => current.filter(item => item !== path))
+    }, t('文件已删除'))
+  }, [run])
 
   const clearDiagnostic = useCallback(() => {
     void run('diagnostic-clear', async () => {
@@ -2909,7 +2940,7 @@ export function App() {
       case 'plugins':
         return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
       case 'environment':
-        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} onShareWorkspace={shareWorkspace} onListFiles={listWorkspaceFiles} workspaceFiles={workspaceFiles} onShareFile={shareWorkspaceFile} onOpenFile={openWorkspaceFile} />
+        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} onShareWorkspace={shareWorkspace} onListFiles={listWorkspaceFiles} workspaceFiles={workspaceFiles} onShareFile={shareWorkspaceFile} onOpenFile={openWorkspaceFile} onDeleteFile={deleteWorkspaceFile} />
       case 'settings':
         return <SettingsHomeScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenPage={openSettings} onOpenPlugins={() => setActiveView('plugins')} onOpenTerminal={() => setActiveView('terminal')} onStop={stopRuntime} />
       default: {

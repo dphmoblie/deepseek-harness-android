@@ -19,6 +19,8 @@
  * 本模块是纯函数、不依赖 React 与桥接，便于单测。
  */
 
+import { validateHarnessPermissionMode, type HarnessPermissionMode } from './harnessPermissionMode'
+
 /** 检查项顺序：与原生侧固定一致，界面按这个顺序展示。 */
 export const SELF_CHECK_IDS = [
   'shell',
@@ -84,6 +86,8 @@ export interface SelfCheckItem {
 
 export interface SelfCheckCheckReport {
   operation: 'check'
+  /** 自检时的启动默认值，不代表任何已有会话的实际权限；旧桥接可省略。 */
+  harnessPermissionMode?: HarnessPermissionMode
   /** 运行时所在设备的可用空间（字节）；界面用 [formatBytes] 显示。 */
   availableBytes: number
   /** 访客里 dsh 的版本号；读不到时为 null。 */
@@ -144,7 +148,7 @@ const SELF_CHECK_CODE_ADVICE: Readonly<Record<SelfCheckCode, { meaning: string; 
   },
   LAUNCHER_MISSING: {
     meaning: '找不到沙箱启动器 landlock-run',
-    nextStep: '先点「修复运行时权限」，仍失败则重装运行时',
+    nextStep: '重新安装或更新运行环境；修复权限不能恢复缺失的程序',
   },
   LAUNCHER_NOT_EXECUTABLE: {
     meaning: '沙箱启动器没有执行位，任何被沙箱包裹的命令都无法启动',
@@ -154,7 +158,7 @@ const SELF_CHECK_CODE_ADVICE: Readonly<Record<SelfCheckCode, { meaning: string; 
     // 两种来源：内核确实不支持 Landlock，或启动器被尝试执行但拿不到结果（被信号杀死/超时）。
     // 后者不能说成「内核不支持」，因此文案同时覆盖两种，也不写成绝对断言。
     meaning: '沙箱探测判定为不可用（内核不支持 Landlock，或启动器无法完成探测）',
-    nextStep: '确认系统版本后反馈此结果；沙箱不可用时 dsh 的 bash 工具无法启动',
+    nextStep: '修复权限不能补齐内核能力；需要继续使用时，在当前 Harness 会话选择 danger-full-access',
   },
   PROBE_PARTIAL: {
     meaning: '内核只支持部分 Landlock 能力（老 ABI）',
@@ -162,7 +166,7 @@ const SELF_CHECK_CODE_ADVICE: Readonly<Record<SelfCheckCode, { meaning: string; 
   },
   EXEC_LAUNCHER_FAILED: {
     meaning: '沙箱启动器在真正执行时失败（授权根目录不存在或启动器级错误）',
-    nextStep: '检查工作区目录是否存在，必要时重装运行时（会话、密钥、附件会保留）',
+    nextStep: '先查看 Landlock 探测结果；探测正常时再检查访客数据目录与运行日志',
   },
   EXEC_COMMAND_FAILED: {
     meaning: '被沙箱包裹的命令执行失败',
@@ -178,7 +182,7 @@ const SELF_CHECK_CODE_ADVICE: Readonly<Record<SelfCheckCode, { meaning: string; 
   },
   PTY_EXIT_EARLY: {
     meaning: 'PTY 子进程在就绪前退出——与 dsh bash 工具报的是同一现象',
-    nextStep: '对照上一条「沙箱内 PTY」结果：两者都失败说明问题在 PTY 层，只有它失败说明问题在沙箱',
+    nextStep: '对照「PTY 模块 node-pty」与「沙箱内 PTY」：裸 PTY 正常而沙箱内失败时，优先检查沙箱；两者都失败时，先检查 PTY 和运行日志',
   },
   PTY_TIMEOUT: {
     meaning: 'PTY 在限定时间内没有就绪',
@@ -222,10 +226,8 @@ const SELF_CHECK_CODE_ADVICE: Readonly<Record<SelfCheckCode, { meaning: string; 
  * 修复动作只做补权限与补建目录，不会去动运行时里的其它文件。
  */
 export const SELF_CHECK_REPAIRABLE_CODES: readonly SelfCheckCode[] = [
-  'LAUNCHER_MISSING',
   'LAUNCHER_NOT_EXECUTABLE',
   'ATTACHMENTS_MISSING',
-  'RG_MISSING',
   'RG_NOT_EXECUTABLE',
 ]
 
@@ -326,7 +328,10 @@ export function validateSelfCheckReport(value: unknown): SelfCheckReport {
   }
   // 无论载荷里是什么顺序，界面都按固定顺序展示：同一环路的先后关系不能随载荷变化。
   checks.sort((left, right) => (SELF_CHECK_ID_ORDER.get(left.id) ?? 0) - (SELF_CHECK_ID_ORDER.get(right.id) ?? 0))
-  return { operation: 'check', availableBytes, dshVersion, checks }
+  return {
+    operation: 'check', availableBytes, dshVersion, checks,
+    ...(record.harnessPermissionMode === undefined ? {} : { harnessPermissionMode: validateHarnessPermissionMode(record.harnessPermissionMode) }),
+  }
 }
 
 /** 非抛错版本：调用方只想知道「这个载荷能不能用」时使用。 */

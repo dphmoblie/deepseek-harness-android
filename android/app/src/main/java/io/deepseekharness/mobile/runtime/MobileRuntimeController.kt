@@ -93,13 +93,16 @@ class MobileRuntimeController(
         customProviderApiKeyUpdates: Map<String, String>,
         clearedCustomProviderApiKeys: Set<String>,
         overlayBallEnabledUpdate: Boolean? = settings.overlayBallEnabled,
+        harnessPermissionModeUpdate: HarnessPermissionMode? = settings.harnessPermissionMode,
     ): RuntimeSettings = lifecycleLock.withLock {
         ensureOpen()
         val modelConfigurationChanged = providerApiKeyUpdates.isNotEmpty() || clearedProviderApiKeys.isNotEmpty() ||
             customProviderApiKeyUpdates.isNotEmpty() || clearedCustomProviderApiKeys.isNotEmpty() ||
             customProviders != store.settings().customModelProviders
-        val restartHarness = modelConfigurationChanged && supervisor.isRunning()
-        if (modelConfigurationChanged) supervisor.stop()
+        val permissionChanged = harnessPermissionModeUpdate != null && harnessPermissionModeUpdate != store.harnessPermissionMode()
+        val launchConfigurationChanged = modelConfigurationChanged || permissionChanged
+        val restartHarness = launchConfigurationChanged && supervisor.isRunning()
+        if (launchConfigurationChanged) supervisor.stop()
         val saved = store.saveSettings(
             settings,
             providerApiKeyUpdates,
@@ -108,6 +111,7 @@ class MobileRuntimeController(
             customProviderApiKeyUpdates,
             clearedCustomProviderApiKeys,
             overlayBallEnabledUpdate = overlayBallEnabledUpdate,
+            harnessPermissionModeUpdate = harnessPermissionModeUpdate,
         )
         if (restartHarness) supervisor.startHarness()
         saved

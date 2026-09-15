@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile
 
 import io.deepseekharness.mobile.runtime.RuntimeFailure
+import io.deepseekharness.mobile.runtime.HarnessPermissionMode
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -8,6 +9,19 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class MobileRuntimeSettingsInputTest {
+    @Test
+    fun validatesPermissionUpdatesWithoutCoercingOrResettingOmittedValues() {
+        assertNull(optionalHarnessPermissionMode(JSONObject()))
+        HarnessPermissionMode.entries.forEach { mode ->
+            assertEquals(mode, optionalHarnessPermissionMode(JSONObject().put("harnessPermissionMode", mode.wireValue)))
+        }
+        listOf(JSONObject.NULL, true, 1, "", "read-only", "danger-full-access\n", "x".repeat(4096)).forEach { value ->
+            assertThrows(RuntimeFailure::class.java) {
+                optionalHarnessPermissionMode(JSONObject().put("harnessPermissionMode", value))
+            }
+        }
+    }
+
     @Test
     fun parsesOmittedAndExplicitOverlayBallUpdates() {
         assertNull(optionalOverlayBallEnabled(JSONObject()))

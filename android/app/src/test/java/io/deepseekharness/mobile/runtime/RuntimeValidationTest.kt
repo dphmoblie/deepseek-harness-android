@@ -9,6 +9,13 @@ import java.net.InetAddress
 
 class RuntimeValidationTest {
     @Test
+    fun requiresExplicitFullAccessSelection() {
+        assertEquals(HarnessPermissionMode.WORKSPACE_WRITE, RuntimeValidation.settings("", "", false, 14).harnessPermissionMode)
+        assertEquals(HarnessPermissionMode.FULL_ACCESS,
+            RuntimeValidation.settings("", "", false, 14, harnessPermissionMode = HarnessPermissionMode.FULL_ACCESS).harnessPermissionMode)
+    }
+
+    @Test
     fun acceptsEmptySourceForBundledRuntime() {
         val source = RuntimeValidation.source("", "")
         assertEquals(true, source.isBundled)
