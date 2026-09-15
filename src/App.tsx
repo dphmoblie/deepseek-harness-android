@@ -415,6 +415,35 @@ function mergeRuntimeProgress(state: RuntimeState, progress: RuntimeProgress): R
   }
 }
 
+/**
+ * 轮询快照的「值相等」判据：逐字段 `Object.is`。
+ *
+ * 为什么必须有这层比较：**桥调用回来的是新对象**。`src/platform/native.ts` 的每个读取都走
+ * Capacitor 桥（JSON 序列化），再过一遍 `src/platform/validation.ts` 的
+ * `validateShizukuState` / `validateKeepAliveState` / `validateOverlayBallState`，
+ * 而这三个校验函数都以**新的对象字面量**返回。于是「5 秒一次的轮询读到的东西一个字都没变」
+ * 这件事，在 React 眼里是三个全新的引用 —— `Object.is` 的免渲染短路永远不命中，
+ * 结果就是每 5 秒把当前挂载的整棵视图白渲染一遍。
+ *
+ * 为什么不引第三方深比较：这里要比的三类快照（`ShizukuState` / `KeepAliveState` /
+ * `OverlayBallState`，见 `src/platform/types.ts`）都是**扁平对象**，字段全是布尔/字符串/数字，
+ * 逐键 `Object.is` 就是完整语义，不需要再加一个依赖。
+ *
+ * 键取**并集**而不是只遍历 `previous` 的键：可选字段（`version`、`lastPhase`、
+ * `lastUpdatedAtMillis`）在缺省时是「这个键不存在」而不是「值为 undefined」，
+ * 只比一侧会漏掉「一侧多出一个字段」的变化。任一侧缺键时另一侧读到 `undefined`，
+ * 两侧都缺即相等，正是想要的语义。
+ */
+function sameSnapshot<T extends object>(previous: T, next: T): boolean {
+  const keys = new Set([...Object.keys(previous), ...Object.keys(next)])
+  for (const key of keys) {
+    const left = (previous as Record<string, unknown>)[key]
+    const right = (next as Record<string, unknown>)[key]
+    if (!Object.is(left, right)) return false
+  }
+  return true
+}
+
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
@@ -2497,7 +2526,8 @@ export function App() {
     try {
       const next = await runtimeBridge.getOverlayBallState()
       if (revision === overlayBallReadRevision.current) {
-        setOverlayBall(next)
+        // 值没变就不要写状态：桥调用给的是新引用，写进去 React 只会认为「变了」并重渲染整棵视图。
+        setOverlayBall(previous => (previous !== null && sameSnapshot(previous, next) ? previous : next))
         setOverlayBallReadFailed(false)
       }
       return next
@@ -2753,7 +2783,8 @@ export function App() {
       if (document.visibilityState === 'hidden') return Promise.resolve()
       return runtimeBridge.getShizukuState()
         .then(next => {
-          if (!cancelled) setShizuku(next)
+          // 值没变就返回上一个引用：React 据此跳过本次更新（连同整棵视图的渲染）。
+          if (!cancelled) setShizuku(previous => (sameSnapshot(previous, next) ? previous : next))
         })
         .catch(error => { if (!cancelled && reportError) notify(errorMessage(error), 'error') })
     }
@@ -2761,7 +2792,7 @@ export function App() {
     const refreshKeepAlive = (): Promise<void> => {
       if (document.visibilityState === 'hidden') return Promise.resolve()
       return runtimeBridge.getKeepAliveState()
-        .then(next => { if (!cancelled) setKeepAlive(next) })
+        .then(next => { if (!cancelled) setKeepAlive(previous => (sameSnapshot(previous, next) ? previous : next)) })
         .catch(() => {
           // 轮询失败时保留上一次状态，不重复提示同一条错误。
         })

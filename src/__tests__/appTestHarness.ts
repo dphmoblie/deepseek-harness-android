@@ -37,6 +37,20 @@ import type {
  */
 export const bridge = {
   setAppLanguage: vi.fn(),
+  /**
+   * 主题模式同步给原生（§5.4 状态栏配色）。
+   *
+   * 这个桩是本文件里**唯一不是为了 §5.6-B 而加**的，补它是为了让仓库回到全绿：
+   * `src/theme.ts` 的 `applyTheme()` 会调用它，而 `AppearanceSettings` 在挂载时就会调一次
+   * `applyTheme`。提交 `caadeae`（状态栏跟随应用主题）把 `setAppTheme` 加进了
+   * `src/platform/{native,types,browser}.ts` 与 `src/theme.ts`，却漏了这个共享桩 ——
+   * 实测少了它，已提交的 `App.test.tsx` 里有 2 条会失败（「saves source and terminal
+   * preferences from settings」与「设置切换立即生效且重新挂载后保留语言」）。
+   *
+   * 失败形态很难认：异常发生在 effect 阶段，React 直接**卸载整棵树**，
+   * 表现成「找不到任何元素」，与真正的界面缺陷几乎无法区分。
+   */
+  setAppTheme: vi.fn(),
   getState: vi.fn(),
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
@@ -201,6 +215,7 @@ export function beforeEachAppTest(): void {
   window.localStorage.setItem('dsh-mobile-onboarding-v1', '1')
   vi.clearAllMocks()
   bridge.setAppLanguage.mockResolvedValue(undefined)
+  bridge.setAppTheme.mockResolvedValue(undefined)
   bridge.getState.mockResolvedValue({ ...readyState })
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
