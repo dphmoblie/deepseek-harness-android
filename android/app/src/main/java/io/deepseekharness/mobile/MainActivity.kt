@@ -7,6 +7,7 @@ import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import com.getcapacitor.BridgeActivity
+import io.deepseekharness.mobile.runtime.RuntimeStore
 
 /**
  * Capacitor 外壳 Activity，承载管理界面（`src/` 的 React 页面）。
@@ -49,41 +50,54 @@ class MainActivity : BridgeActivity() {
 
     /** Accept a user-selected content URI from another app and copy it into private inbox storage. */
     private fun handleExternalFileIntent(intent: Intent) {
-        val uri = when (intent.action) {
-            Intent.ACTION_VIEW -> intent.data
-            Intent.ACTION_SEND -> {
+        val uris = when (intent.action) {
+            Intent.ACTION_VIEW -> listOfNotNull(intent.data)
+            Intent.ACTION_SEND -> listOfNotNull(
                 @Suppress("DEPRECATION")
-                val stream = intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri
-                stream ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
+                (intent.getParcelableExtra(Intent.EXTRA_STREAM) as? Uri)
+                    ?: intent.clipData?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri,
+            )
+            Intent.ACTION_SEND_MULTIPLE -> {
+                @Suppress("DEPRECATION")
+                (intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM) ?: arrayListOf()).filterIsInstance<Uri>()
+                    .ifEmpty { (0 until (intent.clipData?.itemCount ?: 0)).map { intent.clipData!!.getItemAt(it).uri } }
             }
-            else -> null
-        } ?: return
-        if (uri.scheme != "content") {
+            else -> emptyList()
+        }
+        val acceptedUris = uris.filter { it.scheme == "content" }.take(MAX_IMPORT_FILES)
+        if (acceptedUris.isEmpty()) {
             Toast.makeText(this, "仅支持通过系统文件提供方导入文件", Toast.LENGTH_SHORT).show()
             return
         }
-        val inbox = java.io.File(filesDir, "inbox")
+        val runtimeInbox = java.io.File(RuntimeStore(this).currentRoot, "root/1/inbox")
+        val inbox = if (RuntimeStore(this).currentRoot.isDirectory) runtimeInbox else java.io.File(filesDir, "inbox")
         if (!inbox.exists() && !inbox.mkdirs()) return
-        val name = try { queryDisplayName(uri) } catch (_: Throwable) { null } ?: "shared-file"
-        val safeName = name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(120).ifEmpty { "shared-file" }
-        val target = java.io.File(inbox, "${System.currentTimeMillis()}-$safeName")
         try {
-            contentResolver.openInputStream(uri)?.use { input ->
-                target.outputStream().use { output ->
-                    val buffer = ByteArray(16 * 1024)
-                    var total = 0L
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        total += read
-                        if (total > MAX_IMPORT_BYTES) throw IllegalArgumentException("file too large")
-                        output.write(buffer, 0, read)
+            acceptedUris.forEachIndexed { index, uri ->
+                val name = try { queryDisplayName(uri) } catch (_: Throwable) { null } ?: "shared-file-$index"
+                val safeName = name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(120).ifEmpty { "shared-file-$index" }
+                val target = java.io.File(inbox, "${System.currentTimeMillis()}-$index-$safeName")
+                try {
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        target.outputStream().use { output ->
+                            val buffer = ByteArray(16 * 1024)
+                            var total = 0L
+                            while (true) {
+                                val read = input.read(buffer)
+                                if (read < 0) break
+                                total += read
+                                if (total > MAX_IMPORT_BYTES) throw IllegalArgumentException("file too large")
+                                output.write(buffer, 0, read)
+                            }
+                        }
+                    } ?: throw IllegalArgumentException("unreadable")
+                } catch (error: Throwable) {
+                    target.delete()
+                    throw error
                     }
-                }
-            } ?: throw IllegalArgumentException("unreadable")
+            }
             Toast.makeText(this, "文件已导入应用收件箱", Toast.LENGTH_SHORT).show()
         } catch (_: Throwable) {
-            target.delete()
             Toast.makeText(this, "文件导入失败", Toast.LENGTH_SHORT).show()
         }
     }
@@ -92,5 +106,8 @@ class MainActivity : BridgeActivity() {
         if (cursor.moveToFirst()) cursor.getString(0) else null
     }
 
-    companion object { private const val MAX_IMPORT_BYTES = 64L * 1024 * 1024 }
+    companion object {
+        private const val MAX_IMPORT_BYTES = 64L * 1024 * 1024
+        private const val MAX_IMPORT_FILES = 16
+    }
 }
