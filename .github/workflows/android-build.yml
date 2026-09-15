@@ -124,6 +124,38 @@ jobs:
           ls -la android/app/src/main/assets/runtime/
           echo "Embedded rootfs bytes: $(stat -c%s android/app/src/main/assets/runtime/rootfs.bundle)"
 
+      - name: Download runtime legal notices (Ubuntu package copyrights)
+        # 与运行时同一次构建收集的法律材料：先落到 /tmp，再由下一步铺进 APK 资产目录
+        # （assets 默认源集下的目录，无需改动 Gradle 的手工登记表）。
+        uses: actions/download-artifact@v4
+        with:
+          name: runtime-legal
+          path: /tmp/runtime-legal
+
+      - name: Install runtime legal notices into the APK assets
+        run: |
+          set -euo pipefail
+          DEST=android/app/src/main/assets/legal/ubuntu-packages
+          SRC=/tmp/runtime-legal
+          test -d "$SRC"
+          # upload-artifact 对单一目录的上传根随版本可能是该目录本身或它的父目录，
+          # 两种布局都接受，避免因为下载布局变化把法律材料静默漏在 APK 之外。
+          if [ -d "$SRC/ubuntu-packages" ] && [ ! -f "$SRC/inventory.json" ]; then
+            SRC="$SRC/ubuntu-packages"
+          fi
+          mkdir -p "$DEST"
+          cp -a "$SRC"/. "$DEST"/
+          ls -la "$DEST"
+
+      - name: Verify APK legal material for the network tool components
+        # 发版门禁：git / curl / libcurl / libexpat1 / ca-certificates 的发行版版权文件
+        # 必须齐备，且 GPL-2.0 未删节全文在位；缺一件即失败（fail-closed）。
+        run: |
+          set -euo pipefail
+          python3 scripts/legal-notices.py verify \
+            --dest android/app/src/main/assets/legal/ubuntu-packages
+          find android/app/src/main/assets/legal -maxdepth 2 -type f | sort
+
       - name: Set up Gradle (trusted distribution for wrapper bootstrap)
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -308,6 +340,33 @@ jobs:
           /tmp/toolchain/bin/jq --version
           ls /tmp/toolchain/python/bin | head -5
 
+      - name: Stage network tool component (git / curl / CA / openssh-client)
+        # 访客里原本没有 git，也没有 curl 与 CA 证书：编码 Agent 无法 clone/diff/commit。
+        # 组件在**同发行版同架构**的 runner 上取（apt 只跑在 runner 上，不跑在镜像里），
+        # 由脚本按 rootfs 路径预置；/usr/lib/git-core 的硬链接必须保留，否则体积会失控。
+        run: |
+          set -euo pipefail
+          bash scripts/stage-network-tools.sh /tmp/network-tools /tmp/ubuntu.tar.gz /tmp/network-tools-packages.txt
+          head -20 /tmp/network-tools-packages.txt
+
+      - name: Collect Ubuntu package copyright notices for the APK legal bundle
+        # 新组件的法律材料：由 CI 从 runner 的 /usr/share/doc/<pkg>/copyright 收集，
+        # 落到 APK 的 assets/legal/ubuntu-packages/（与既有 legal 机制同一套资产目录）。
+        # 必需组件的版权文件缺失时 collect 会直接失败，不会静默发出没有许可证原文的包。
+        run: |
+          set -euo pipefail
+          python3 scripts/legal-notices.py collect \
+            --dest android/app/src/main/assets/legal/ubuntu-packages \
+            --packages /tmp/network-tools-packages.txt
+          ls -la android/app/src/main/assets/legal/ubuntu-packages/
+
+      - name: Upload legal notices (Ubuntu package copyrights)
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-legal
+          path: android/app/src/main/assets/legal/ubuntu-packages/
+          if-no-files-found: error
+
       - name: Build bundle + manifest (mobile profile)
         run: |
           set -o pipefail
@@ -325,6 +384,7 @@ jobs:
               --ubuntu /tmp/ubuntu.tar.gz --ubuntu-sha256 04207713ece899c3740823d33690441ad3a7f0ded1101aca744e2b0f37ac7ff2 \
               --node /tmp/node.tar.xz --node-sha256 01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc \
               --dsh-root /tmp/dsh-root --toolchain-dir /tmp/toolchain --runtime-version "${RUNTIME_VERSION}" \
+              --network-tools-dir /tmp/network-tools \
               --rootfs-url "https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/rootfs.bundle" \
               --mobile-profile scripts/mobile-profile.example.json \
               --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json

@@ -136,6 +136,9 @@ def stream_rebuild(
     copied_paths: set[str] = set()
     deduplicated_count = 0
     runtime_metadata_bytes_delta = 0
+    trimmed_sourcemap_files = 0
+    trimmed_sourcemap_links = 0
+    trimmed_sourcemap_bytes = 0
 
     with bundle.open("rb") as raw_input:
         with gzip.open(raw_input, "rb") as compressed_input:
@@ -158,6 +161,18 @@ def stream_rebuild(
                                     and dist_index_name is None
                                 ):
                                     dist_index_name = member.name
+                                # 裁剪：原地重建的旧 bundle 里可能仍有 sourcemap，
+                                # 与构建脚本同一口径剔除并计数（只删 .map 本身）。
+                                if _ber.is_trimmed_sourcemap(member.name) or (
+                                    (member.issym() or member.islnk())
+                                    and _ber.is_trimmed_sourcemap(member.linkname)
+                                ):
+                                    if member.isreg():
+                                        trimmed_sourcemap_files += 1
+                                        trimmed_sourcemap_bytes += member.size
+                                    else:
+                                        trimmed_sourcemap_links += 1
+                                    continue
                                 if is_frontend_dist_path(member.name) or is_replaced_path(member.name, replacements):
                                     if member.isreg():
                                         skipped_bytes += member.size
@@ -228,6 +243,9 @@ def stream_rebuild(
         "addedEntries": 0,  # 由 collect_expected 阶段补充
         "addedBytes": added_bytes,
         "runtimeMetadataBytesDelta": runtime_metadata_bytes_delta,
+        "trimmedSourcemapFiles": trimmed_sourcemap_files,
+        "trimmedSourcemapLinks": trimmed_sourcemap_links,
+        "trimmedSourcemapBytes": trimmed_sourcemap_bytes,
         "distRoot": new_dist_root,
     }
 
@@ -246,6 +264,10 @@ def collect_expected_files(source_root: Path, archive_root: str, label: str) -> 
             if path.is_symlink():
                 continue
             if not stat.S_ISREG(path.stat().st_mode):
+                continue
+            # 与 add_windows_tree 同一口径：被裁剪的 sourcemap 不写入归档，
+            # 因此也不能出现在「应写入」清单里，否则重建后会误报条目缺失。
+            if _ber.is_trimmed_sourcemap((relative / name).as_posix()):
                 continue
             archive_name = f"{archive_parent}/{name}"
             expected[archive_name] = path.read_bytes()
@@ -288,6 +310,9 @@ def verify_rebuilt(
             if normalized in seen_paths:
                 raise BuildError(f"重建后归档包含重复条目：{normalized}")
             seen_paths.add(normalized)
+            if member.isreg() and _ber.is_trimmed_sourcemap(normalized):
+                # 输入流与新增树都已裁剪 sourcemap；仍有残留说明裁剪被绕过。
+                raise BuildError(f"重建后仍残留 sourcemap 条目：{normalized}")
             if member.isreg() and (normalized.startswith(RUNTIME_EXECUTABLE_PREFIXES) or is_npm_runtime_executable(normalized)):
                 if member.mode != 0o755:
                     raise BuildError(f"重建后运行时文件不可执行：{member.name}")
@@ -415,6 +440,7 @@ def main() -> None:
         manifest["rootfs"]["extractedBytes"] = (
             old_extracted_bytes
             - stats["skippedBytes"]
+            - stats["trimmedSourcemapBytes"]
             + stats["addedBytes"]
             + stats["runtimeMetadataBytesDelta"]
         )
@@ -456,6 +482,9 @@ def main() -> None:
                     "deduplicatedOldEntries": stats["deduplicatedCount"],
                     "addedNewDistEntries": stats["addedEntries"],
                     "addedNewDistBytes": stats["addedBytes"],
+                    "trimmedSourcemapFiles": stats["trimmedSourcemapFiles"],
+                    "trimmedSourcemapLinks": stats["trimmedSourcemapLinks"],
+                    "trimmedSourcemapBytes": stats["trimmedSourcemapBytes"],
                 },
                 sort_keys=True,
                 indent=2,

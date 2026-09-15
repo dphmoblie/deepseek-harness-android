@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# 在 ubuntu-24.04-arm runner 上把「网络工具」组件组预置成与 rootfs 同构的目录树。
+#
+#   stage-network-tools.sh <目标目录> [ubuntu-base 归档] [包清单输出路径]
+#
+# 包清单用于 scripts/legal-notices.py collect：每个落进镜像的文件由哪个包提供
+# （dpkg -S 反查），据此收集发行版版权文件，传递依赖库也不会漏登记。
+#
+# 为什么这样做：
+#   * runner 与镜像**同发行版同架构**（ubuntu-24.04-arm），包在 runner 上取，
+#     绝不在镜像里跑 apt —— 沿用 scripts/build-embedded-runtime.py 既有的取工具模式；
+#   * `cp -a --parents` 保留归档内绝对路径与硬链接：Ubuntu 的 git 把上百个内建
+#     子命令硬链接到同一个 git 二进制（arm64 安装体积 21.8 MB，而 .deb 只有
+#     3.6 MB）；硬链接一旦丢失，rootfs 会凭空膨胀数百 MB
+#     （build-embedded-runtime.py 有 96 MB 的体积上限兜底）；
+#   * 只复制需要的路径，不复制 /usr/share/doc、/usr/share/man、/usr/share/locale
+#     （git 的 man page 由单独的 git-man 包提供，不取）；
+#   * 共享库按 ldd 传递闭包收集，并跳过 ubuntu-base 已带的路径：rootfs 里出现
+#     重复路径会被 SafeRootfsExtractor 以 ARCHIVE_DUPLICATE_ENTRY 拒绝；
+#   * CA 信任库**重新生成**，不直接搬 runner 上的 /etc/ssl/certs：runner 上那份
+#     可能已包含本机额外注入的 CA（企业代理的中间人证书），照搬等于把额外的
+#     信任锚带进用户设备。
+#
+# 环境变量：DSH_SKIP_OPENSSH=1 时不预置 openssh-client（该组件是可选件）。
+set -euo pipefail
+
+DEST="${1:?用法: stage-network-tools.sh <目标目录> [ubuntu-base 归档] [包清单输出路径]}"
+BASE_ARCHIVE="${2:-}"
+PACKAGE_LIST="${3:-${DEST%/}-packages.txt}"
+SKIP_OPENSSH="${DSH_SKIP_OPENSSH:-0}"
+CA_KEY_DIR="/usr/share/ca-certificates/mozilla"
+CA_MIN_FILES=64
+
+log() { printf '[stage-network-tools] %s\n' "$*"; }
+
+# ---- 1. 在 runner 上安装组件（不在镜像里跑 apt）--------------------------------
+PACKAGES=(git curl ca-certificates libexpat1)
+if [[ "$SKIP_OPENSSH" != "1" ]]; then
+  PACKAGES+=(openssh-client)
+fi
+sudo apt-get update -qq
+sudo apt-get install -y -qq --no-install-recommends "${PACKAGES[@]}"
+log "已安装: ${PACKAGES[*]}"
+
+# ---- 2. 基线镜像已有路径（过滤掉，避免 rootfs 重复条目）------------------------
+BASE_PATHS="$(mktemp)"
+ALL_ENTRIES="$(mktemp)"
+COPY_LIST="$(mktemp)"
+NEW_LIBS="$(mktemp)"
+STAGED_PATHS="$(mktemp)"
+trap 'rm -f "$BASE_PATHS" "$ALL_ENTRIES" "$COPY_LIST" "$NEW_LIBS" "$NEW_LIBS.filtered" "$STAGED_PATHS"' EXIT
+if [[ -n "$BASE_ARCHIVE" && -f "$BASE_ARCHIVE" ]]; then
+  tar -tzf "$BASE_ARCHIVE" | sed 's:/$::' | LC_ALL=C sort -u > "$BASE_PATHS"
+  log "基线镜像路径数: $(wc -l < "$BASE_PATHS")"
+else
+  : > "$BASE_PATHS"
+  log "警告: 未提供 ubuntu-base 归档，无法过滤基线镜像已有路径"
+fi
+
+# ---- 3. 候选源路径 --------------------------------------------------------------
+# 注意：git 的 perl 依赖（git add -p / git send-email / git svn 等）不复制，
+# 核心的 clone/commit/diff/push/status/log 不依赖 perl。
+SOURCES=(
+  /usr/bin/git
+  /usr/lib/git-core
+  /usr/share/git-core/templates
+  /usr/bin/curl
+  /usr/lib/ssl
+  "$CA_KEY_DIR"
+)
+if [[ "$SKIP_OPENSSH" != "1" ]]; then
+  SOURCES+=(
+    /usr/bin/ssh
+    /usr/bin/scp
+    /usr/bin/sftp
+    /usr/bin/ssh-keygen
+    /usr/bin/ssh-keyscan
+    /usr/bin/ssh-add
+    /usr/bin/ssh-agent
+    /usr/lib/openssh
+  )
+fi
+
+enumerate_entries() {
+  local source entry
+  for source in "$@"; do
+    if [[ -d "$source" && ! -L "$source" ]]; then
+      while IFS= read -r entry; do
+        printf '%s\n' "$entry"
+      done < <(find "$source" \( -type f -o -type l \) -print)
+    elif [[ -e "$source" || -L "$source" ]]; then
+      printf '%s\n' "$source"
+    else
+      log "跳过不存在的路径: $source"
+    fi
+  done
+}
+
+enumerate_entries "${SOURCES[@]}" | sed 's:/$::' | LC_ALL=C sort -u > "$ALL_ENTRIES"
+LC_ALL=C comm -23 "$ALL_ENTRIES" "$BASE_PATHS" > "$COPY_LIST"
+log "候选条目: $(wc -l < "$ALL_ENTRIES")，去掉基线镜像已有后: $(wc -l < "$COPY_LIST")"
+
+# ---- 4. 一次性复制（同一次 cp 调用才会保留硬链接）------------------------------
+mkdir -p "$DEST"
+if [[ -s "$COPY_LIST" ]]; then
+  mapfile -t COPY_PATHS < "$COPY_LIST"
+  cp -a --parents "${COPY_PATHS[@]}" "$DEST/"
+  cat "$COPY_LIST" >> "$STAGED_PATHS"
+fi
+
+# ---- 5. 共享库传递闭包 ----------------------------------------------------------
+for _round in 1 2 3 4 5; do
+  : > "$NEW_LIBS"
+  while IFS= read -r -d '' binary; do
+    while IFS= read -r lib; do
+      [[ -n "$lib" && -e "$lib" ]] || continue
+      # SONAME 链接与解析后的实体都要在镜像里，动态加载器才找得到。
+      for candidate in "$lib" "$(readlink -f "$lib" 2>/dev/null || true)"; do
+        [[ -n "$candidate" && -e "$candidate" ]] || continue
+        [[ -e "$DEST/${candidate#/}" ]] && continue
+        printf '%s\n' "$candidate"
+      done
+    done < <(ldd "$binary" 2>/dev/null | awk '/=>/ {print $3} !/=>/ && /^\// {print $1}')
+  done < <(find "$DEST" -type f -print0)
+  LC_ALL=C sort -u -o "$NEW_LIBS" "$NEW_LIBS"
+  LC_ALL=C comm -23 "$NEW_LIBS" "$BASE_PATHS" > "$NEW_LIBS.filtered"
+  if [[ ! -s "$NEW_LIBS.filtered" ]]; then
+    break
+  fi
+  mapfile -t ROUND_LIBS < "$NEW_LIBS.filtered"
+  cp -a --parents "${ROUND_LIBS[@]}" "$DEST/"
+  printf '%s\n' "${ROUND_LIBS[@]}" >> "$STAGED_PATHS"
+  log "第 ${_round} 轮补齐共享库: ${#ROUND_LIBS[@]} 个"
+done
+
+# ---- 5b. 反查提供这些文件的包（供法律材料收集使用）-----------------------------
+if [[ -s "$STAGED_PATHS" ]]; then
+  mapfile -t STAGED_ARRAY < <(LC_ALL=C sort -u "$STAGED_PATHS")
+  # dpkg -S 对未登记路径会报错并返回非零：这里只取命中行，遗漏项由包清单的
+  # 必需组件校验（legal-notices.py）兜底。
+  dpkg -S "${STAGED_ARRAY[@]}" 2>/dev/null \
+    | awk -F': ' '{print $1}' \
+    | tr ',' '\n' \
+    | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+    | grep -v '^$' \
+    | LC_ALL=C sort -u > "$PACKAGE_LIST"
+  log "包清单: $(wc -l < "$PACKAGE_LIST") 个包 -> $PACKAGE_LIST"
+fi
+
+# ---- 6. 重新生成 CA 信任库 ------------------------------------------------------
+[[ -d "$CA_KEY_DIR" ]] || { echo "缺少 $CA_KEY_DIR：ca-certificates 未正确安装" >&2; exit 1; }
+mkdir -p "$DEST/etc/ssl/certs"
+: > "$DEST/etc/ssl/certs/ca-certificates.crt"
+CA_COUNT=0
+for cert in "$CA_KEY_DIR"/*.crt; do
+  [[ -f "$cert" ]] || continue
+  name="$(basename "$cert" .crt)"
+  cp "$cert" "$DEST/etc/ssl/certs/${name}.pem"
+  # 目录式查找用的 <hash>.N 链接（相对目标，guest 内可解析）
+  hash="$(openssl x509 -hash -noout -in "$cert")"
+  ln -sf "${name}.pem" "$DEST/etc/ssl/certs/${hash}.0"
+  cat "$cert" >> "$DEST/etc/ssl/certs/ca-certificates.crt"
+  CA_COUNT=$((CA_COUNT + 2))
+done
+CA_COUNT=$((CA_COUNT + 1))
+log "CA 信任库: 证书 ${CA_COUNT} 项（.pem + <hash>.0 + ca-certificates.crt）"
+
+# ---- 7. 失败即失败：必需文件、CA 下限、悬空链接 ---------------------------------
+require_file() {
+  [[ -f "$DEST/${1#/}" ]] || { echo "缺少必需文件: $1" >&2; exit 1; }
+}
+require_file usr/bin/git
+require_file usr/lib/git-core/git-remote-https
+require_file usr/bin/curl
+require_file etc/ssl/certs/ca-certificates.crt
+if ((CA_COUNT < CA_MIN_FILES)); then
+  echo "CA 条目不足: $CA_COUNT < $CA_MIN_FILES" >&2
+  exit 1
+fi
+BROKEN_LINK="$(find -L "$DEST" -type l -print -quit)"
+if [[ -n "$BROKEN_LINK" ]]; then
+  echo "预置树存在悬空符号链接: $BROKEN_LINK" >&2
+  exit 1
+fi
+
+# 预置的 git/curl 必须真能运行（同架构 runner 上直接跑）
+STAGED_GIT="$("$DEST/usr/bin/git" --version)"
+STAGED_CURL="$("$DEST/usr/bin/curl" --version | head -n1)"
+log "预置结果: ${STAGED_GIT} / ${STAGED_CURL}"
+
+# 体积口径：磁盘占用（du）远小于表观大小（apparent）说明硬链接保住了。
+APPARENT_BYTES="$(find "$DEST" -type f -printf '%s\n' | awk '{total += $1} END {print total + 0}')"
+log "文件数=$(find "$DEST" -type f | wc -l) 链接数=$(find "$DEST" -type l | wc -l) 表观字节=${APPARENT_BYTES} 磁盘字节=$(du -sb "$DEST" | cut -f1)"
+du -sh "$DEST"

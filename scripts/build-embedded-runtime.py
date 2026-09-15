@@ -71,9 +71,101 @@ RUNTIME_BUILD_METADATA_PATHS = frozenset(
     }
 )
 
+# 网络工具组件组（git / curl / libcurl / libexpat1 / ca-certificates / 可选 openssh-client）。
+# 真机实测：访客里既没有 git，也没有 curl/wget/openssh，libcurl 与 libexpat 缺失，
+# /etc/ssl/certs 是空的 —— 编码 Agent 因此无法 clone/diff/commit，插件
+# dsh-client-ui-git-graph 也拿不到数据。组件由 CI 在 ubuntu-24.04-arm runner 上
+# 经 scripts/stage-network-tools.sh 预置成与 rootfs 同构的目录树（与镜像同发行版
+# 同架构），这里只按目标路径写进镜像，**不在镜像里跑 apt**。
+NETWORK_TOOLS_EXECUTABLE_PREFIXES = (
+    PurePosixPath("usr/bin"),
+    PurePosixPath("usr/lib/git-core"),
+    PurePosixPath("usr/lib/openssh"),
+)
+# 只对 git-core 做硬链接去重：Ubuntu 的 git 包把上百个内建子命令硬链接到同一个
+# git 二进制（arm64 安装体积 21.8 MB，而 .deb 只有 3.6 MB）。逐份写成常规文件会
+# 让 rootfs 膨胀数百 MB，且丢失上游的 inode 语义。
+NETWORK_TOOLS_HARDLINK_PREFIXES = (PurePosixPath("usr/lib/git-core"),)
+# 这几个路径必须落成真实常规文件：verify-bundle.py 要求它们是 0755 的非空 ARM64
+# ELF，而硬链接/符号链接条目不是「真实文件载荷」。
+NETWORK_TOOLS_REGULAR_FILE_PATHS = frozenset(
+    {
+        "usr/bin/git",
+        "usr/bin/curl",
+        "usr/lib/git-core/git-remote-https",
+    }
+)
+NETWORK_TOOLS_REQUIRED_PATHS = (
+    "usr/bin/git",
+    "usr/lib/git-core/git-remote-https",
+    "usr/bin/curl",
+    "etc/ssl/certs/ca-certificates.crt",
+)
+NETWORK_TOOLS_CA_DIRECTORY = "etc/ssl/certs"
+CA_HASHED_LINK_PATTERN = re.compile(r"[0-9a-f]{8}\.\d+")
+# CA 文件数量下限：Ubuntu 24.04 的 ca-certificates 会生成约 140 份 Mozilla 根证书，
+# 取 64 作为下限既能拦住空目录/只剩一个 bundle，又不会因上游小幅变动误报。
+# 该值必须与 scripts/verify-bundle.py 的 MIN_CA_CERTIFICATE_FILES 保持一致。
+NETWORK_TOOLS_MIN_CA_FILES = 64
+NETWORK_TOOLS_METADATA_PATH = "etc/deepseek-harness-network-tools.json"
+# 预置树体积上限：D3 式的静默降级不可接受，硬链接没保留时要当场失败
+# （丢失硬链接的 git-core 约 500 MB，正常值约 4 MB）。
+NETWORK_TOOLS_MAX_TREE_BYTES = 96 * 1024 * 1024
+SOURCE_MAP_SUFFIX = ".map"
+
 
 class BuildError(RuntimeError):
     pass
+
+
+def is_trimmed_sourcemap(path: str | PurePosixPath) -> bool:
+    """*.map sourcemap 不是运行依赖（require.resolve 不解析 .map），打包时剔除。
+
+    只按后缀判定，.js/.json 一律保留；剔除量由 RootfsWriter 计数后写进构建日志。
+    """
+    return PurePosixPath(path).suffix.lower() == SOURCE_MAP_SUFFIX
+
+
+def count_ca_certificate_entries(directory: Path) -> int:
+    """统计 CA 目录下看起来是证书的条目数。
+
+    计入 PEM/CRT 文件与 update-ca-certificates 生成的 <hash>.N 链接，
+    空目录、只剩一个 ca-certificates.crt 的目录都会低于下限。
+    """
+    if not directory.is_dir():
+        return 0
+    total = 0
+    for entry in directory.iterdir():
+        if entry.is_dir():
+            continue
+        if entry.name.endswith((".pem", ".crt")) or CA_HASHED_LINK_PATTERN.fullmatch(entry.name):
+            total += 1
+    return total
+
+
+def shared_tree_bytes(root: Path) -> int:
+    """预置树的真实字节数（du 语义）：同一 inode 的硬链接只算一次。
+
+    不能直接累加每个名字的 st_size —— git-core 里上百个名字共享同一个 inode，
+    按名字累加会得到数百 MB 的假体积，把体积兜底检查变成永远失败。
+    """
+    total = 0
+    seen_inodes: set[tuple[int, int]] = set()
+    for entry in root.rglob("*"):
+        if entry.is_symlink():
+            continue
+        try:
+            entry_stat = entry.stat()
+        except OSError:
+            continue
+        if not stat.S_ISREG(entry_stat.st_mode):
+            continue
+        inode = (entry_stat.st_dev, entry_stat.st_ino)
+        if inode in seen_inodes:
+            continue
+        seen_inodes.add(inode)
+        total += entry_stat.st_size
+    return total
 
 
 def sha256_file(path: Path) -> str:
@@ -262,6 +354,13 @@ class RootfsWriter:
         self.seen: set[str] = set()
         self.entry_count = 0
         self.extracted_bytes = 0
+        self.trimmed_sourcemaps = 0
+        self.trimmed_sourcemap_bytes = 0
+
+    def record_trimmed_sourcemap(self, size: int) -> None:
+        """登记一个被剔除的 sourcemap：只计数，不写条目（不进入 extracted_bytes）。"""
+        self.trimmed_sourcemaps += 1
+        self.trimmed_sourcemap_bytes += size
 
     def add(self, member: tarfile.TarInfo, source: BinaryIO | None = None, *, allow_existing_dir: bool = False) -> None:
         name = normalized_path(member.name)
@@ -470,18 +569,45 @@ def is_npm_executable(relative: PurePosixPath) -> bool:
     )
 
 
+def runtime_archive_name(destination_root: str, relative: Path, name: str) -> str:
+    """本地树内条目 -> 归档路径；destination_root 为空表示直接落到 rootfs 根。"""
+    parts = [destination_root] if destination_root else []
+    if relative != Path("."):
+        parts.append(relative.as_posix())
+    parts.append(name)
+    return normalized_path("/".join(parts))
+
+
+def dedupes_hardlinks(
+    archive_name: str,
+    hardlink_dedupe_prefixes: tuple[PurePosixPath, ...],
+    forced_regular_paths: frozenset[str],
+) -> bool:
+    """该归档路径是否参与硬链接去重（硬链接写入必须留在真实常规文件上的路径除外）。"""
+    if archive_name in forced_regular_paths:
+        return False
+    target = PurePosixPath(archive_name)
+    return any(
+        target == prefix or prefix in target.parents for prefix in hardlink_dedupe_prefixes
+    )
+
+
 def add_windows_tree(
     writer: RootfsWriter,
     source_root: Path,
     destination_root: str,
     excluded_package_names: frozenset[str] = frozenset(),
     executable_prefixes: tuple[PurePosixPath, ...] = (),
+    *,
+    hardlink_dedupe_prefixes: tuple[PurePosixPath, ...] = (),
+    forced_regular_paths: frozenset[str] = frozenset(),
 ) -> None:
-    writer.add_directory(destination_root)
+    if destination_root:
+        writer.add_directory(destination_root)
+    hardlink_targets: dict[tuple[int, int], str] = {}
     for current_raw, directory_names, file_names in os.walk(source_root, topdown=True, followlinks=False):
         current = Path(current_raw)
         relative = current.relative_to(source_root)
-        archive_parent = destination_root if relative == Path(".") else f"{destination_root}/{relative.as_posix()}"
 
         for name in list(directory_names):
             path = current / name
@@ -492,7 +618,7 @@ def add_windows_tree(
             ):
                 directory_names.remove(name)
                 continue
-            archive_name = normalized_path(f"{archive_parent}/{name}")
+            archive_name = runtime_archive_name(destination_root, relative, name)
             if path.is_symlink():
                 target = os.readlink(path).replace("\\", "/")
                 info = tarfile.TarInfo(archive_name)
@@ -517,7 +643,7 @@ def add_windows_tree(
                 excluded_package_names,
             ):
                 continue
-            archive_name = normalized_path(f"{archive_parent}/{name}")
+            archive_name = runtime_archive_name(destination_root, relative, name)
             if path.is_symlink():
                 target = os.readlink(path).replace("\\", "/")
                 info = tarfile.TarInfo(archive_name)
@@ -534,14 +660,40 @@ def add_windows_tree(
             file_stat = path.stat()
             if not stat.S_ISREG(file_stat.st_mode):
                 raise BuildError(f"unsupported local runtime file type: {path}")
-            info = tarfile.TarInfo(archive_name)
-            info.size = file_stat.st_size
             relative_posix = PurePosixPath(local_relative.as_posix())
+            if is_trimmed_sourcemap(relative_posix):
+                # 裁剪：sourcemap 只服务调试，删掉不影响 require.resolve 与其他运行依赖。
+                writer.record_trimmed_sourcemap(file_stat.st_size)
+                continue
             executable = is_npm_executable(PurePosixPath(archive_name)) or any(
                 relative_posix == prefix or prefix in relative_posix.parents
                 for prefix in executable_prefixes
             )
-            info.mode = 0o755 if executable else 0o644
+            mode = 0o755 if executable else 0o644
+            if (
+                file_stat.st_nlink > 1
+                and dedupes_hardlinks(archive_name, hardlink_dedupe_prefixes, forced_regular_paths)
+            ):
+                # 上游用硬链接共享同一个二进制（git-core）；去重后 tar 条目指回首个
+                # 真实文件，既不膨胀体积，也保留内核 inode 语义。
+                hardlink_key = (file_stat.st_dev, file_stat.st_ino)
+                first_seen = hardlink_targets.get(hardlink_key)
+                if first_seen is not None:
+                    info = tarfile.TarInfo(archive_name)
+                    info.type = tarfile.LNKTYPE
+                    info.linkname = first_seen
+                    info.mode = mode
+                    info.uid = 0
+                    info.gid = 0
+                    info.uname = "root"
+                    info.gname = "root"
+                    info.mtime = writer.source_date_epoch
+                    writer.add(info)
+                    continue
+                hardlink_targets[hardlink_key] = archive_name
+            info = tarfile.TarInfo(archive_name)
+            info.size = file_stat.st_size
+            info.mode = mode
             info.uid = 0
             info.gid = 0
             info.uname = "root"
@@ -627,6 +779,64 @@ def add_toolchain(writer: RootfsWriter, toolchain_dir: Path) -> None:
         )
         writer.add_symlink("usr/local/bin/python3", "../../opt/python/bin/python3")
         writer.add_symlink("usr/local/bin/python", "../../opt/python/bin/python3")
+
+
+def add_network_tools(writer: RootfsWriter, tools_dir: Path) -> None:
+    """把预置的网络工具组件组写进 rootfs（git / curl / CA 证书 / 可选 openssh-client）。
+
+    - 归档路径与预置树一致（`usr/bin/git`、`usr/lib/git-core/…`、`etc/ssl/certs/…`）；
+    - `usr/bin`、`usr/lib/git-core`、`usr/lib/openssh` 下的常规文件一律 **0755**：
+      D3 的教训是镜像里 `rg` / `landlock-run` 被打成 0644 导致不可执行，
+      git 的子命令（`git-remote-https`、`git-credential-*`、`git-upload-pack` …）
+      同样必须可执行，只给 `/usr/bin/git` 授权是不够的；
+    - git-core 按硬链接去重，但 verify-bundle.py 要求的入口保持真实常规文件；
+    - 缺 git/curl/git-remote-https/CA bundle、CA 条目少于下限或预置树异常膨胀时
+      直接失败，不做静默降级。
+    """
+    if tools_dir is None or not tools_dir.is_dir():
+        raise BuildError("网络工具组件目录不存在或不是目录")
+    for required in NETWORK_TOOLS_REQUIRED_PATHS:
+        candidate = tools_dir / Path(required)
+        if not candidate.is_file() and not candidate.is_symlink():
+            raise BuildError(f"网络工具组件缺少必需文件：{required}")
+    ca_entries = count_ca_certificate_entries(tools_dir / Path(NETWORK_TOOLS_CA_DIRECTORY))
+    if ca_entries < NETWORK_TOOLS_MIN_CA_FILES:
+        raise BuildError(
+            f"网络工具组件的 CA 目录条目不足：{NETWORK_TOOLS_CA_DIRECTORY} 只有 {ca_entries} 项"
+            f"（要求至少 {NETWORK_TOOLS_MIN_CA_FILES}）；证书为空时 git clone https:// 会先在证书校验上失败"
+        )
+    tree_bytes = shared_tree_bytes(tools_dir)
+    if tree_bytes > NETWORK_TOOLS_MAX_TREE_BYTES:
+        raise BuildError(
+            f"网络工具组件预置树异常膨胀：{tree_bytes} 字节 > {NETWORK_TOOLS_MAX_TREE_BYTES}；"
+            "通常是预置脚本没有保留 /usr/lib/git-core 的硬链接，请检查 scripts/stage-network-tools.sh"
+        )
+    add_windows_tree(
+        writer,
+        tools_dir,
+        "",
+        executable_prefixes=NETWORK_TOOLS_EXECUTABLE_PREFIXES,
+        hardlink_dedupe_prefixes=NETWORK_TOOLS_HARDLINK_PREFIXES,
+        forced_regular_paths=NETWORK_TOOLS_REGULAR_FILE_PATHS,
+    )
+    components = ["git", "curl", "libcurl", "libexpat1", "ca-certificates"]
+    if (tools_dir / "usr/bin/ssh").is_file():
+        components.append("openssh-client")
+    metadata = {
+        "components": sorted(components),
+        "caDirectory": NETWORK_TOOLS_CA_DIRECTORY,
+        "caEntries": ca_entries,
+        "note": "staged on the matching distro/arch build runner by scripts/stage-network-tools.sh",
+    }
+    writer.add_bytes(
+        NETWORK_TOOLS_METADATA_PATH,
+        (json.dumps(metadata, ensure_ascii=True, sort_keys=True, indent=2) + "\n").encode("ascii"),
+        0o644,
+    )
+    print(
+        "network tools: "
+        f"components={','.join(sorted(components))} caEntries={ca_entries} treeBytes={tree_bytes}"
+    )
 
 
 def add_profiles_module_fallback(
@@ -745,6 +955,20 @@ def parse_arguments() -> argparse.Namespace:
         help="optional mobile profile spec (bundles subset + mobile flags); "
         "written to root/.dsh/profiles/web/package.json and reflected in the manifest 'mobile' field",
     )
+    parser.add_argument(
+        "--network-tools-dir",
+        type=Path,
+        default=None,
+        help="pre-staged network tools component tree (git/curl/CA/openssh-client), "
+        "produced on the matching distro/arch runner by scripts/stage-network-tools.sh; "
+        "required by default for mobile builds",
+    )
+    parser.add_argument(
+        "--without-network-tools",
+        action="store_true",
+        help="explicitly build without the network tools component group "
+        "(mobile builds include it by default)",
+    )
     return parser.parse_args()
 
 
@@ -799,6 +1023,23 @@ def main() -> None:
         or not (args.toolchain_dir / "python" / "bin" / "python3").is_file()
     ):
         raise BuildError("mobile runtime requires the embedded Python session publisher runtime")
+    if args.without_network_tools and args.network_tools_dir is not None:
+        raise BuildError(
+            "network tools are both requested and disabled: do not combine "
+            "--network-tools-dir with --without-network-tools"
+        )
+    if (
+        args.network_tools_dir is None
+        and mobile_spec is not None
+        and not args.without_network_tools
+    ):
+        raise BuildError(
+            "the mobile runtime includes the network tools component group "
+            "(git/curl/CA certificates) by default: pass --network-tools-dir with the tree "
+            "staged by scripts/stage-network-tools.sh, or pass --without-network-tools to opt out"
+        )
+    # 组件组开关：移动 profile 默认启用；显式 --without-network-tools 可关。
+    network_tools_enabled = args.network_tools_dir is not None and not args.without_network_tools
     if args.output.exists() or args.manifest.exists():
         raise BuildError("output archive and manifest must not already exist")
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -825,6 +1066,8 @@ def main() -> None:
             )
             inject_bundles_into_dsh_manifest(args.dsh_root, profile_bundles)
             add_toolchain(writer, args.toolchain_dir)
+            if network_tools_enabled:
+                add_network_tools(writer, args.network_tools_dir)
             writer.add_bytes("usr/local/bin/dsh-device", DEVICE_CLI, 0o755)
             writer.add_directory("sdcard/")
             disabled_profile_bundles = frozenset()
@@ -920,6 +1163,11 @@ def main() -> None:
             os.fsync(manifest_output.fileno())
         os.replace(temporary_output, args.output)
         os.replace(temporary_manifest, args.manifest)
+        # 裁剪与组件统计必须出现在构建日志里，否则 37 MB 级的回归不会被看见。
+        print(
+            f"trimmed sourcemaps: files={writer.trimmed_sourcemaps} "
+            f"bytes={writer.trimmed_sourcemap_bytes}"
+        )
         print(
             json.dumps(
                 {
@@ -929,6 +1177,9 @@ def main() -> None:
                     "entries": writer.entry_count,
                     "extractedBytes": writer.extracted_bytes,
                     "sha256": archive_sha256,
+                    "networkTools": network_tools_enabled,
+                    "trimmedSourcemaps": writer.trimmed_sourcemaps,
+                    "trimmedSourcemapBytes": writer.trimmed_sourcemap_bytes,
                 },
                 sort_keys=True,
             ),

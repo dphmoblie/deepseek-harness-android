@@ -54,6 +54,33 @@ REQUIRED_RUNTIME_EXECUTABLES = {
     "ripgrep": "node_modules/@vscode/ripgrep-linux-arm64/bin/rg",
     "landlock-run": "node_modules/@deepseek-ai/node-addon-system-linux-arm64/bin/landlock-run",
 }
+# 网络工具组件组的必需入口：路径固定在 /usr 下，必须精确匹配归档路径，
+# 不接受用相近名字的文件（如 usr/bin/git-extras 或包内同名副本）冒充。
+REQUIRED_NETWORK_EXECUTABLES = {
+    "git": "usr/bin/git",
+    "curl": "usr/bin/curl",
+    "git-remote-https": "usr/lib/git-core/git-remote-https",
+}
+# openssh-client 是可选项：存在就必须通过同样的检查，缺失不算失败。
+OPTIONAL_NETWORK_EXECUTABLES = {
+    "ssh": "usr/bin/ssh",
+    "scp": "usr/bin/scp",
+    "sftp": "usr/bin/sftp",
+    "ssh-keygen": "usr/bin/ssh-keygen",
+    "ssh-keyscan": "usr/bin/ssh-keyscan",
+    "ssh-add": "usr/bin/ssh-add",
+    "ssh-agent": "usr/bin/ssh-agent",
+}
+# git 的子命令目录：其中每个常规文件都必须 0755。只给 /usr/bin/git 授权是不够的
+# （git-remote-https、git-credential-*、git-upload-pack 等都在这里），
+# 与 D3 的 rg / landlock-run 权限口径一致。
+GIT_SUBCOMMAND_DIRECTORY = "usr/lib/git-core/"
+# /etc/ssl/certs 的 CA 文件数量下限：空目录、只剩一个 ca-certificates.crt 都算失败，
+# 否则 git clone https:// 会先在证书校验上失败。该值与
+# scripts/build-embedded-runtime.py 的 NETWORK_TOOLS_MIN_CA_FILES 保持一致。
+MIN_CA_CERTIFICATE_FILES = 64
+CA_CERTIFICATE_DIRECTORY = "etc/ssl/certs/"
+CA_HASHED_LINK_PATTERN = re.compile(r"[0-9a-f]{8}\.\d+")
 
 
 def runtime_executable_name(name: str) -> str | None:
@@ -63,6 +90,20 @@ def runtime_executable_name(name: str) -> str | None:
         ):
             return label
     return None
+
+
+def exact_executable_name(name: str, table: dict[str, str]) -> str | None:
+    """在「目标路径 -> 标签」表里精确匹配归档路径。"""
+    for label, path in table.items():
+        if name == path:
+            return label
+    return None
+
+
+def is_ca_certificate_entry(name: str) -> bool:
+    """CA 目录条目：PEM/CRT 证书，或 update-ca-certificates 生成的 <hash>.N 链接。"""
+    basename = posixpath.basename(name)
+    return basename.endswith((".pem", ".crt")) or bool(CA_HASHED_LINK_PATTERN.fullmatch(basename))
 
 
 def validate_runtime_executable(member, header: bytes) -> None:
@@ -85,6 +126,13 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", required=True)
     parser.add_argument("--manifest", required=True)
+    parser.add_argument(
+        "--without-network-tools",
+        action="store_true",
+        help="accept an image built without the network tools component group; "
+        "only for builds that explicitly passed --without-network-tools to "
+        "scripts/build-embedded-runtime.py",
+    )
     args = parser.parse_args()
 
     manifest = json.loads(open(args.manifest, encoding="utf-8").read())
@@ -104,6 +152,9 @@ def main() -> int:
     dsh_package_metadata: list[bytes] = []
     support_files: dict[str, tuple[bytes, int]] = {}
     runtime_executables: set[str] = set()
+    ca_certificate_files = 0
+    sourcemap_entries = 0
+    sourcemap_bytes = 0
     fail = lambda msg: (_ for _ in ()).throw(SystemExit(f"BUNDLE_VERIFY_FAILED: {msg}"))
 
     import tarfile
@@ -121,7 +172,21 @@ def main() -> int:
             if name in seen:
                 fail(f"duplicate entry: {name!r}")
             seen.add(name)
+            # sourcemap 只做统计（非致命）：裁剪口径见 build-embedded-runtime.py。
+            if m.isreg() and name.lower().endswith(".map"):
+                sourcemap_entries += 1
+                sourcemap_bytes += max(m.size, 0)
             executable = runtime_executable_name(name)
+            if executable is None and not args.without_network_tools:
+                executable = exact_executable_name(name, REQUIRED_NETWORK_EXECUTABLES)
+                if executable is None:
+                    executable = exact_executable_name(name, OPTIONAL_NETWORK_EXECUTABLES)
+                if (
+                    name.startswith(CA_CERTIFICATE_DIRECTORY)
+                    and (m.isreg() or m.issym())
+                    and is_ca_certificate_entry(name)
+                ):
+                    ca_certificate_files += 1
             if executable is not None:
                 source = t.extractfile(m) if m.isreg() else None
                 try:
@@ -192,6 +257,29 @@ def main() -> int:
     missing_executables = set(REQUIRED_RUNTIME_EXECUTABLES) - runtime_executables
     if missing_executables:
         fail(f"required runtime executables missing: {', '.join(sorted(missing_executables))}")
+    if not args.without_network_tools:
+        # 网络工具组件组：git/curl/git-remote-https 必须存在且是 0755 的非空 ARM64 ELF。
+        # 这与既有三个入口用同一套口径，不放宽任何一条。
+        missing_network_executables = set(REQUIRED_NETWORK_EXECUTABLES) - runtime_executables
+        if missing_network_executables:
+            fail(
+                "required network tool executables missing: "
+                f"{', '.join(sorted(missing_network_executables))}"
+            )
+        if ca_certificate_files < MIN_CA_CERTIFICATE_FILES:
+            fail(
+                f"CA certificate files under {CA_CERTIFICATE_DIRECTORY!r} are insufficient: "
+                f"{ca_certificate_files} < {MIN_CA_CERTIFICATE_FILES}"
+            )
+        # git 的子命令都在 usr/lib/git-core 下，缺执行位时 git clone/push 会静默不可用。
+        git_subcommand_files = [n for n in file_modes if n.startswith(GIT_SUBCOMMAND_DIRECTORY)]
+        if not git_subcommand_files:
+            fail(f"git subcommand directory is missing: {GIT_SUBCOMMAND_DIRECTORY!r}")
+        invalid_git_subcommands = sorted(
+            n for n in git_subcommand_files if file_modes[n] != 0o755
+        )
+        if invalid_git_subcommands:
+            fail(f"git subcommand is not mode 0755: {invalid_git_subcommands[0]!r}")
     if extracted != expected_extracted:
         fail(f"extracted size mismatch: {extracted} != {expected_extracted}")
     expected_dsh_version = manifest.get("dshVersion")
@@ -390,6 +478,10 @@ def main() -> int:
     if expected_links is not None and len(profile_links) != expected_links:
         fail(f"profiles link count mismatch: bundle has {len(profile_links)}, manifest declares {expected_links}")
     print(f"PROFILES_LINKS={len(profile_links)}")
+    # 网络工具与裁剪统计写进 CI 日志：CA 数量是硬门槛，sourcemap 残余量是预算观测值。
+    if not args.without_network_tools:
+        print(f"CA_CERTIFICATES={ca_certificate_files}")
+    print(f"SOURCEMAPS={sourcemap_entries} SOURCEMAP_BYTES={sourcemap_bytes}")
 
     print(f"BUNDLE_VERIFY_OK: entries={entry_count} extracted={extracted} symlinks={len(symlinks)} hardlinks={len(hardlinks)}")
     return 0

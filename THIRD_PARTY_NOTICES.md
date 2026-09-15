@@ -8,10 +8,12 @@ Android artifact being distributed.
 The Android build copies this notice, the application `LICENSE`, the configured
 JavaScript dependency license texts, the full GPL-2.0 and AGPL-3.0 texts
 applicable to the imported PRoot/Operit artifacts, and archived GPL-3.0 and
-LGPL-3.0 reference texts into `assets/legal/` in the APK. This generated bundle does not, by itself, satisfy
-the release-time review and corresponding-source requirements for transitive
-Android dependencies or the Ubuntu, Node.js, DeepSeek Harness, PRoot, and
-Operit runtime materials.
+LGPL-3.0 reference texts into `assets/legal/` in the APK. The network tool
+component group (see below) adds the Ubuntu package copyright files collected by
+CI into `assets/legal/ubuntu-packages/`. This generated bundle does not, by
+itself, satisfy the release-time review and corresponding-source requirements
+for transitive Android dependencies or the Ubuntu, Node.js, DeepSeek Harness,
+PRoot, and Operit runtime materials.
 
 | Component | Purpose | License |
 | --- | --- | --- |
@@ -34,6 +36,11 @@ Operit runtime materials.
 | PRoot v5.1.107.78 runner and loader | Userspace rootfs execution | GPL-2.0-or-later |
 | Operit2 Android runtime tooling and patch | Source/build provenance for the packaged PRoot artifacts | AGPL-3.0 |
 | Operit Terminal Core | Reference implementation consulted for the terminal integration | LGPL-3.0 |
+| `git` (Ubuntu 24.04 ARM64) | Version control for the coding agent inside the rootfs | GPL-2.0 |
+| `curl` and `libcurl` (Ubuntu 24.04 ARM64) | HTTPS transfer inside the rootfs | curl license |
+| `libexpat1` (Ubuntu 24.04 ARM64) | XML parsing runtime dependency of `git` | MIT |
+| `ca-certificates` (Ubuntu 24.04 ARM64) | CA trust store for `git`/`curl` TLS verification | MPL-2.0 |
+| `openssh-client` (Ubuntu 24.04 ARM64, optional) | SSH remotes for `git` | BSD-style, per-file |
 
 ## Native runtime provenance
 
@@ -75,3 +82,26 @@ The prepared rootfs must retain Ubuntu package copyright data, the Node.js
 license and bundled notices, the DeepSeek Harness license, and the licenses of
 all copied npm packages. A remote rootfs is subject to the same obligations as
 one embedded in the APK.
+
+## Network tool component provenance
+
+The embedded runtime adds a network tool component group so the agent inside the
+guest can clone, diff, and commit: `git` (with its `/usr/lib/git-core`
+subcommands), `curl`, `libcurl` and its transitive runtime libraries,
+`libexpat1`, `ca-certificates` (including the generated `/etc/ssl/certs` trust
+store), and optionally `openssh-client`. The binaries are taken from the
+`ubuntu-24.04-arm` build runner, which is the same distribution and architecture
+as the image, by `scripts/stage-network-tools.sh`; no `apt` runs inside the
+image. Man pages, `/usr/share/doc`, and locales are not copied, and the perl
+dependencies of `git` are intentionally excluded, so perl-based helpers such as
+`git add -p`, `git send-email`, and `git svn` are unavailable inside the guest.
+
+Because these components are conveyed as Ubuntu binaries, the APK carries the
+distribution copyright files collected by `scripts/legal-notices.py` under
+`assets/legal/ubuntu-packages/`, together with `inventory.json` listing every
+package that contributed a staged file (including `ldd`-resolved transitive
+libraries). `git` is GPL-2.0; the unabridged GPL-2.0 text already shipped as
+`legal/licenses/proot-GPL-2.0.txt` covers it, and the corresponding-source
+obligation is discharged under the same terms stated for the other GPL-2.0
+artifacts above and in `docs/RELEASE_CHECKLIST.md`. Stating the upstream URL and
+package version alone is not a corresponding-source offer.

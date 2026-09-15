@@ -14,6 +14,15 @@ or otherwise distributing them.
   `scripts/build-embedded-runtime.py`.
 - Verify `/usr/local/bin/dsh`, the ARM64 native Node modules, the runtime
   metadata, and the guest file permissions in the finished rootfs.
+- Verify the network tool component group in the finished rootfs: `git`, `curl`,
+  and `/usr/lib/git-core/git-remote-https` exist as non-empty mode `0755` ARM64
+  ELF files, every regular file under `/usr/lib/git-core/` is `0755`, and
+  `/etc/ssl/certs` carries at least 64 CA files (`.pem`, `<hash>.0`, or
+  `ca-certificates.crt`). `scripts/verify-bundle.py` enforces these checks; do
+  not pass `--without-network-tools` for a published release, and do not accept
+  a build whose CA directory is empty or holds only the concatenated bundle.
+  Confirm the recorded `trimmed sourcemaps: files=… bytes=…` build-log line and
+  treat a large residual `SOURCEMAPS=` count as an unexplained size increase.
 - Retain Ubuntu package copyright metadata, the Node.js license and bundled
   dependency notices, the DeepSeek Harness MIT license, and the licenses of
   every npm package copied into the rootfs.
@@ -46,6 +55,21 @@ or otherwise distributing them.
   `lib/arm64-v8a/libdsh_proot_loader.so`, verify their ARM64 ELF type and
   release-recorded SHA-256 values, and test that the loader is resolved from
   Android's native library directory.
+- On an ARM64 device with the embedded runtime installed, verify the network
+  tool component group inside the guest terminal: `git --version` succeeds,
+  `git clone` of a public HTTPS repository succeeds without disabling
+  certificate verification, a commit round-trip succeeds, and the
+  `dsh-client-ui-git-graph` plugin renders that repository. Set
+  `core.pager=cat` or use `git --no-pager` first: the image intentionally ships
+  no pager, and the resulting `less` error is not a git packaging failure. A
+  certificate verification failure means the CA directory is missing from the
+  image; fix the image instead of setting `GIT_SSL_NO_VERIFY`. A `cannot run
+  git-remote-https` or `Permission denied` failure means the execute bit
+  regressed, as in the earlier `rg`/`landlock-run` incident. Also confirm the
+  image bundles no tokens, SSH keys, or `credential.helper=store` configuration:
+  under a single guest uid such material is readable by any code running there,
+  and credentials must be injected per session with owner-only permissions
+  instead.
 
 ## Security gates
 
@@ -72,6 +96,19 @@ or otherwise distributing them.
   `LICENSE`, `THIRD_PARTY_NOTICES.md`, full GPL-2.0, GPL-3.0, AGPL-3.0, and
   LGPL-3.0 license texts, and every direct JavaScript runtime dependency license. Do not assume that a
   notice naming a license substitutes for its full text.
+- Inspect `assets/legal/ubuntu-packages/` in the generated APK and run
+  `python3 scripts/legal-notices.py verify --dest
+  android/app/src/main/assets/legal/ubuntu-packages` before packaging. The
+  distribution copyright files for `git`, `curl`, `libcurl`, `libexpat1`, and
+  `ca-certificates` (plus `openssh-client` when staged) must be present,
+  non-empty, and carry the expected license marker, and `inventory.json` must
+  list every package that contributed a staged file, including the transitive
+  libraries resolved by `ldd`. A local release build must run
+  `scripts/legal-notices.py collect` on an Ubuntu 24.04 (noble) machine first;
+  never ship an APK whose legal bundle was not collected.
+- Record the shipped `git`, `curl`, `libcurl`, `libexpat1`, `ca-certificates`,
+  and `openssh-client` package versions from `inventory.json` alongside the
+  exact binaries conveyed.
 - Record Operit2 repository
   `https://github.com/AAswordman/Operit2` at commit
   `dc4c3a9405dc7ed3ef69b2ac9a6ace65374d77cf`, its
@@ -85,6 +122,13 @@ or otherwise distributing them.
   those licenses permit. Include the patches, build and installation scripts,
   interface files, and clear no-charge retrieval instructions; an upstream
   URL and commit alone are not sufficient.
+- Apply the same corresponding-source obligation to the GPL-2.0 `git` binaries
+  conveyed in the rootfs (the Ubuntu source package for the recorded version,
+  including Debian packaging and patches, plus the `scripts/` and CI
+  instructions needed to stage and install them by the same method). The
+  unabridged GPL-2.0 text is the one already shipped as
+  `legal/licenses/proot-GPL-2.0.txt`; do not add a second, possibly abridged
+  copy.
 - Do not describe the native artifacts as independently implemented or as
   bit-for-bit reproducible unless a clean rebuild has actually demonstrated
   that result. Preserve build logs and toolchain versions as release evidence.
