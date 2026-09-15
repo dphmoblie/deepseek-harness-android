@@ -26,6 +26,9 @@ import type {
   RuntimeState,
   ShizukuState,
   StorageAccessState,
+  StorageDirAvailability,
+  StorageDirEntry,
+  StorageDirsState,
   TerminalChunk,
   TerminalExit,
 } from './types'
@@ -36,6 +39,7 @@ import {
   DIAGNOSTIC_RETENTION_MIN,
   HARNESS_LOG_MAX_CHARS,
   HARNESS_LOG_WINDOW_OPTIONS,
+  MAX_STORAGE_DIRECTORIES,
   MODEL_PROVIDER_IDS,
 } from './types'
 import { validateCustomCredentialIds, validateCustomCredentialUpdates, validateCustomModelProviders } from './customProviders'
@@ -853,4 +857,126 @@ export function assertMailboxSubdirectory(value: string | undefined): string | u
     throw new Error('投递区导出起点格式无效')
   }
   return trimmed
+}
+
+/**
+ * 目录白名单条目的可用性档位。
+ *
+ * 只接受四个受控取值：未知取值一律抛错，而不是回落到 `available` ——
+ * 把「读不懂的状态」显示成「可用」会让用户以为访客里真的能看到这个目录。
+ */
+const STORAGE_DIR_AVAILABILITIES = new Set<StorageDirAvailability>([
+  'available',
+  'unavailable',
+  'needsPermission',
+  'unsupported',
+])
+
+/** 与原生侧一致的路径上限（相对共享存储根 240 字符 + `/storage/emulated/0/` 前缀）。 */
+const MAX_STORAGE_DIR_PATH_LENGTH = 20 + 240
+const MAX_STORAGE_DIR_NAME_LENGTH = 64
+
+/**
+ * 白名单路径：必须是 `/storage/emulated/0/` 之下的绝对路径。
+ *
+ * 这条前缀是**契约的一部分**：原生侧只回传共享存储里的用户可见路径（私有路径与 rootfs 路径
+ * 不进桥接载荷），因此任何越出该前缀的取值都说明载荷不符合契约，按格式无效处理。
+ */
+function storageDirPath(value: unknown): string {
+  const label = '存储目录路径'
+  if (
+    typeof value !== 'string' || value.length < 2 || value.length > MAX_STORAGE_DIR_PATH_LENGTH ||
+    !value.startsWith('/storage/emulated/0/') || value.includes('\\') || containsControlCharacter(value)
+  ) {
+    throw new Error(`${label}格式无效`)
+  }
+  const segments = value.slice(1).split('/')
+  if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..')) {
+    throw new Error(`${label}格式无效`)
+  }
+  return value
+}
+
+/** 断言移除操作的入参；与原生侧同一套规则（前端先拦一道明显非法的取值）。 */
+export function assertStorageDirPath(path: string): string {
+  return storageDirPath(path)
+}
+
+function storageDirAvailability(value: unknown): StorageDirAvailability {
+  if (typeof value !== 'string' || !STORAGE_DIR_AVAILABILITIES.has(value as StorageDirAvailability)) {
+    throw new Error('存储目录可用性格式无效')
+  }
+  return value as StorageDirAvailability
+}
+
+/**
+ * 校验目录白名单状态。
+ *
+ * 除逐条校验外还钉住三组自洽关系：`count === entries.length`、`available === (availability
+ * === 'available')`、`level` 与 `supported`/`granted` 一致。缺一个就会出现
+ * 「按钮可点但原生说不可用」或「文案说 T2 却没有权限」这类自相矛盾的界面状态。
+ */
+export function validateStorageDirsState(value: unknown): StorageDirsState {
+  const source = asRecord(value, '存储目录白名单状态')
+  const supported = requiredBoolean(source.supported, '存储目录支持状态')
+  const granted = requiredBoolean(source.granted, '存储目录授权状态')
+  if (granted && !supported) throw new Error('存储目录白名单状态自相矛盾')
+  const level = source.level
+  if (level !== 'T2' && level !== 'T0') throw new Error('存储目录权限档位格式无效')
+  if (level !== (supported && granted ? 'T2' : 'T0')) throw new Error('存储目录白名单状态自相矛盾')
+  if (source.maxDirectories !== MAX_STORAGE_DIRECTORIES) throw new Error('存储目录上限格式无效')
+  if (!Array.isArray(source.entries) || source.entries.length > MAX_STORAGE_DIRECTORIES) {
+    throw new Error('存储目录条目格式无效')
+  }
+  if (source.count !== source.entries.length) throw new Error('存储目录白名单状态自相矛盾')
+  const entries: StorageDirEntry[] = source.entries.map((item, position) => {
+    const entry = asRecord(item, '存储目录条目')
+    // 序号来自持久化顺序：第 n 条的序号必须是 n（1 起）。重排会让 /mnt/user/<序号> 指向别的目录。
+    if (entry.index !== position + 1) throw new Error('存储目录序号格式无效')
+    const availability = storageDirAvailability(entry.availability)
+    const available = requiredBoolean(entry.available, '存储目录可用性')
+    if (available !== (availability === 'available')) throw new Error('存储目录条目自相矛盾')
+    // 逐条的权限档由可用性唯一决定：不一致说明载荷不符合契约。
+    const entryLevel: 'T2' | 'T0' = availability === 'available' ? 'T2' : 'T0'
+    if (entry.level !== entryLevel) throw new Error('存储目录权限档位格式无效')
+    if (
+      typeof entry.displayName !== 'string' || entry.displayName.length === 0 ||
+      entry.displayName.length > MAX_STORAGE_DIR_NAME_LENGTH || entry.displayName.includes('/') ||
+      containsControlCharacter(entry.displayName)
+    ) {
+      throw new Error('存储目录名称格式无效')
+    }
+    if (entry.guestPath !== `/mnt/user/${position + 1}`) throw new Error('存储目录挂载点格式无效')
+    let reasonCode: string | undefined
+    if (entry.reasonCode !== undefined) {
+      if (
+        typeof entry.reasonCode !== 'string' || entry.reasonCode.length > MAX_ERROR_CODE_LENGTH ||
+        !ERROR_CODE_PATTERN.test(entry.reasonCode) || availability === 'available'
+      ) {
+        throw new Error('存储目录错误码格式无效')
+      }
+      reasonCode = entry.reasonCode
+    }
+    return {
+      index: position + 1,
+      path: storageDirPath(entry.path),
+      displayName: entry.displayName,
+      guestPath: entry.guestPath,
+      availability,
+      level: entryLevel,
+      available,
+      reasonCode,
+    }
+  })
+  const active = requiredBoolean(source.active, '存储目录生效状态')
+  if (active !== entries.some(entry => entry.available)) throw new Error('存储目录白名单状态自相矛盾')
+  return {
+    entries,
+    maxDirectories: MAX_STORAGE_DIRECTORIES,
+    count: entries.length,
+    supported,
+    granted,
+    level,
+    active,
+  }
 }

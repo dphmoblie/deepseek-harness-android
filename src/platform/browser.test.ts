@@ -109,4 +109,25 @@ describe('browser settings bridge', () => {
     // 非法导出起点在离开前端之前就被拒绝（同步抛错，与平台层其他入参校验同构）。
     expect(() => bridge.exportMailbox('../outside')).toThrow('投递区导出起点格式无效')
   })
+
+  it('浏览器预览的目录白名单如实报「空且不可用」，不编造条目', async () => {
+    const bridge = createBrowserBridge()
+
+    const state = await bridge.getStorageDirs()
+
+    // 上限照实回传（文档里的固定值，界面要显示 0/8），但可用性必须是真实的「没有」。
+    expect(state.maxDirectories).toBe(8)
+    expect(state.entries).toEqual([])
+    expect(state.count).toBe(0)
+    expect(state.supported).toBe(false)
+    expect(state.granted).toBe(false)
+    expect(state.level).toBe('T0')
+    expect(state.active).toBe(false)
+    // 浏览器里没有可弹的 SAF 选择器：新增/移除都明确拒绝，不假装成功。
+    await expect(bridge.addStorageDirectory()).rejects.toThrow('浏览器预览不支持选择存储目录')
+    await expect(bridge.removeStorageDirectory('/storage/emulated/0/Download'))
+      .rejects.toThrow('浏览器预览不支持移除存储目录')
+    // 非法路径在离开前端之前就被拒绝（同步抛错）。
+    expect(() => bridge.removeStorageDirectory('/data/data/x')).toThrow('存储目录路径格式无效')
+  })
 })

@@ -3,6 +3,7 @@ package io.deepseekharness.mobile.runtime
 import android.content.Context
 import android.os.Build
 import io.deepseekharness.mobile.BuildConfig
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
 import java.io.File
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
@@ -32,15 +33,17 @@ internal fun prootProfileFallbacks(
     if (!profile.disableSeccomp && RuntimeDiagnostics.shouldRetryWithoutSeccomp(result)) {
         fallbacks += profile.copy(disableSeccomp = true)
     }
-    val includesSdcard = profile.bindMounts.any { it.target == SDCARD_TARGET }
-    if (includesSdcard && (!commandCanFail || RuntimeDiagnostics.prootFailure(result) != null)) {
-        fallbacks += profile.copy(bindMounts = profile.bindMounts.filterNot { it.target == SDCARD_TARGET })
-    }
-    // 投递区绑定与 `/sdcard` 同属可选绑定：宿主目录不可访问时本来就不会追加（见 preferredProfile），
+    // 投递区与用户目录白名单同属可选绑定：宿主目录不可访问时本来就不会追加（见 preferredProfile），
     // 而一旦 PRoot 因为其中任何一个绑定失败，必须整体撤掉它们 —— 可选能力不能拖垮会话启动。
     val includesMailbox = profile.bindMounts.any { it.target in MAILBOX_BIND_TARGETS }
     if (includesMailbox && (!commandCanFail || RuntimeDiagnostics.prootFailure(result) != null)) {
         fallbacks += profile.copy(bindMounts = profile.bindMounts.filterNot { it.target in MAILBOX_BIND_TARGETS })
+    }
+    val includesUserDirs = profile.bindMounts.any { RuntimeStorageDirsLayout.isGuestPath(it.target) }
+    if (includesUserDirs && (!commandCanFail || RuntimeDiagnostics.prootFailure(result) != null)) {
+        fallbacks += profile.copy(
+            bindMounts = profile.bindMounts.filterNot { RuntimeStorageDirsLayout.isGuestPath(it.target) },
+        )
     }
     return fallbacks.distinct()
 }
@@ -61,6 +64,20 @@ class RuntimeLaunchResolver(
     private val profilePreferences = appContext.getSharedPreferences(PROFILE_PREFERENCES, Context.MODE_PRIVATE)
     private val lock = Any()
     private var cachedProfile: CachedProfile? = null
+
+    /**
+     * ≤8 目录白名单门面。
+     *
+     * 与投递区并列，是**访客可见目录的唯一来源**：原先的 `/sdcard` 整体绑定已被它取代
+     * （见 `docs/存储权限与导入落点.md` §3.1）。懒初始化：构造它要读偏好，而本解析器
+     * 每次启动都会新建，没必要为「不涉及启动」的调用付这份代价。
+     */
+    private val storageDirs: RuntimeStorageDirs by lazy {
+        RuntimeStorageDirs.from(appContext, store) { level, fields ->
+            // 诊断日志自己吞掉全部异常，这里不再包一层；路径不进日志（只进受控码与计数）。
+            store.diagnostics.record(level, DiagnosticEvent.STORAGE_DIRS, fields)
+        }
+    }
 
     fun launch(
         entrypoint: List<String>,
@@ -140,6 +157,10 @@ class RuntimeLaunchResolver(
             throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
         }
         store.prepareLaunchFiles()
+        // `/sdcard` 整体绑定的旧开关已被目录白名单取代：主动删掉这个键，而不是留着不读。
+        // 留一个没人读的键比删掉更糟——后来者会以为还存在「一键把共享存储整体绑进访客」的开关。
+        // 旧的 profile_key 缓存也会因为键串内容变化而失配，从而自动重跑一次兼容性探测。
+        profilePreferences.edit().remove(LEGACY_KEY_PROFILE_INCLUDE_SDCARD).apply()
         RuntimeDns.refresh(appContext, store.resolverFile)
         RuntimeDns.refreshHosts(store.hostsFile)
         return manifest
@@ -158,26 +179,20 @@ class RuntimeLaunchResolver(
             }
         }
         val mounts = required.toMutableList()
-        sdcardMount()?.let(mounts::add)
         // 投递区：**只在宿主目录确实可访问时才追加**这两个绑定。
         // 不可访问（无「所有文件访问」、目录不可写、ROM 限制）时一个都不加：
         // 绑定一个不存在的宿主路径会让 PRoot 直接起不来，那比「投递区不可用」严重得多。
         // 这条分支与 §4.5 的分层一致——无权限时投递区落到 T0（控制台上传），不是故障。
         mounts.addAll(mailbox().bindMounts())
+        // 用户目录白名单：与投递区同属可选绑定，逐条判定、逐条跳过。
+        // **`/sdcard` 整体绑定已在这里被取代**：整体绑定让「App 有什么权限」直接等价于
+        // 「访客能看到什么」，用户没有任何表达机会（§3.1）。旧偏好键的处置见 prepareRuntime。
+        mounts.addAll(storageDirs.bindMounts())
         return ProotLaunchProfile(disableSeccomp = false, bindMounts = mounts)
     }
 
     /** 投递区门面；只用于追加可选绑定与判断可用性，不接触凭据路径。 */
     private fun mailbox(): RuntimeMailbox = RuntimeMailbox(store)
-
-    private fun sdcardMount(): ProotBindMount? {
-        val source = File(SDCARD_TARGET)
-        val guestTarget = File(store.currentRoot, SDCARD_TARGET.removePrefix("/"))
-        // Validate access before offering the optional mount; required mounts remain mandatory.
-        return ProotBindMount(SDCARD_TARGET, SDCARD_TARGET).takeIf {
-            source.isDirectory && source.canRead() && source.canExecute() && guestTarget.isDirectory
-        }
-    }
 
     private fun probeProfiles(
         initial: CachedProfile,
@@ -226,15 +241,10 @@ class RuntimeLaunchResolver(
         } catch (_: ClassCastException) {
             return null
         }
-        val includeSdcard = try {
-            profilePreferences.getBoolean(KEY_PROFILE_INCLUDE_SDCARD, false)
-        } catch (_: ClassCastException) {
-            return null
-        }
-        val hasAvailableSdcard = preferred.bindMounts.any { it.target == SDCARD_TARGET }
-        if (includeSdcard && !hasAvailableSdcard) return null
-        val mounts = if (includeSdcard) preferred.bindMounts else preferred.bindMounts.filterNot { it.target == SDCARD_TARGET }
-        return CachedProfile(key, ProotLaunchProfile(disableSeccomp, mounts)).also { cachedProfile = it }
+        // 挂载集合必须按**当下**的可选绑定可用性重建：偏好里只存「上次探测成功的 seccomp 开关」，
+        // 可选绑定（投递区、用户目录白名单）每次都重新判定，避免拿一份过期的绑定表启动。
+        return CachedProfile(key, ProotLaunchProfile(disableSeccomp, preferred.bindMounts))
+            .also { cachedProfile = it }
     }
 
     private fun rememberProfile(resolved: CachedProfile) {
@@ -242,7 +252,6 @@ class RuntimeLaunchResolver(
         profilePreferences.edit()
             .putString(KEY_PROFILE_KEY, resolved.key)
             .putBoolean(KEY_PROFILE_DISABLE_SECCOMP, resolved.profile.disableSeccomp)
-            .putBoolean(KEY_PROFILE_INCLUDE_SDCARD, resolved.profile.bindMounts.any { it.target == SDCARD_TARGET })
             .apply()
     }
 
@@ -253,10 +262,11 @@ class RuntimeLaunchResolver(
         manifest.runtimeId,
         manifest.version,
         manifest.rootfs.sha256,
-        // Revalidate cached compatibility when shared storage becomes accessible or unavailable.
-        sdcardMount() != null,
         // 同理：投递区可用性变化（用户授予/撤销「所有文件访问」）会让绑定集合变化，缓存必须失效。
         mailbox().mountableNow(),
+        // 用户目录白名单的内容（条数与路径摘要）一变，缓存的启动档就必须失效 ——
+        // 与投递区同一机制，只是白名单还要看「用户选了什么」，不能只看可用性。
+        storageDirs.cacheToken(),
     ).joinToString(":")
 
     private fun throwIfStartCancelled(externalCancellation: () -> Boolean) {
@@ -320,15 +330,18 @@ class RuntimeLaunchResolver(
         const val PROFILE_PREFERENCES = "runtime_launch_profile"
         const val KEY_PROFILE_KEY = "profile_key"
         const val KEY_PROFILE_DISABLE_SECCOMP = "disable_seccomp"
-        const val KEY_PROFILE_INCLUDE_SDCARD = "include_sdcard"
+
+        /**
+         * 旧的整体 `/sdcard` 绑定开关。**保留常量只为了把它从偏好里删掉**（见 prepareRuntime），
+         * 一旦设备上都跑过至少一次新版，这个常量就可以连同删除语句一起去掉。
+         */
+        const val LEGACY_KEY_PROFILE_INCLUDE_SDCARD = "include_sdcard"
 
         private fun redactDiagnosticOutput(value: String): String = value
             .replace(Regex("(?i)(api[_-]?key|token|password|secret)=?\\s*[^\\s]+"), "$1=<redacted>")
             .takeLast(4096)
     }
 }
-
-private const val SDCARD_TARGET = "/sdcard"
 
 /** 投递区在访客内的固定挂载点（宿主侧目录见 `RuntimeMailboxLayout`）。 */
 private val MAILBOX_BIND_TARGETS = setOf(RuntimeMailboxLayout.GUEST_INBOX, RuntimeMailboxLayout.GUEST_OUTBOX)

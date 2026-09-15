@@ -15,13 +15,14 @@ import type {
   RuntimeState,
   ShizukuState,
   StorageAccessState,
+  StorageDirsState,
   TerminalChunk,
   TerminalExit,
   TerminalKind,
 } from './types'
-import { DIAGNOSTIC_RETENTION_DEFAULT, MODEL_PROVIDER_IDS } from './types'
+import { DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertSessionId, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
+import { assertMailboxSubdirectory, assertSessionId, assertStorageDirPath, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
@@ -292,6 +293,28 @@ export function createBrowserBridge(): RuntimeBridge {
     exportMailbox: subdirectory => {
       assertMailboxSubdirectory(subdirectory)
       return Promise.reject(new Error('浏览器预览不支持导出投递区'))
+    },
+    /**
+     * 浏览器预览没有 Android 的共享存储、没有 SAF 选择器，也没有 PRoot 访客：
+     * 目录白名单**如实报不可用**（空列表 + `supported`/`granted` 全 false）。
+     *
+     * 与投递区同一口径：不编造一份「看起来能用」的状态。上限照实回传 8 —— 它是文档里的固定值，
+     * 界面据此显示「0/8」而不是把上限也藏起来。
+     */
+    getStorageDirs: (): Promise<StorageDirsState> => Promise.resolve({
+      entries: [],
+      maxDirectories: MAX_STORAGE_DIRECTORIES,
+      count: 0,
+      supported: false,
+      granted: false,
+      level: 'T0',
+      active: false,
+    }),
+    // 浏览器里没有可弹的目录选择器：明确拒绝，不假装加了一条。
+    addStorageDirectory: () => Promise.reject(new Error('浏览器预览不支持选择存储目录')),
+    removeStorageDirectory: path => {
+      assertStorageDirPath(path)
+      return Promise.reject(new Error('浏览器预览不支持移除存储目录'))
     },
     // 浏览器预览里没有访客进程，也就没有可读的输出尾部：如实返回不可用，不编造内容。
     getHarnessLog: (options): Promise<HarnessLog> => Promise.resolve({

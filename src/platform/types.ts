@@ -241,6 +241,75 @@ export interface StorageAccessState {
   sdkInt: number
 }
 
+/**
+ * 目录白名单的固定上限。
+ *
+ * 与原生侧 `RuntimeStorageDirsLimits.MAX_DIRECTORIES` 必须是同一个数：界面用它做禁用条件，
+ * 不一致会出现「按钮还能点、原生直接拒绝」的矛盾状态。
+ */
+export const MAX_STORAGE_DIRECTORIES = 8
+
+/**
+ * 单条白名单目录的可用性（与原生 `StorageDirAvailability` 一一对应）。
+ *
+ * - `available`：T2，目录存在且可读，会出现在访客内的 `/mnt/user/<序号>`；
+ * - `unavailable`：已被删除/改名/不可读，或不再满足规则 —— **只影响这一条**，其余条目照常；
+ * - `needsPermission`：尚未授予「所有文件访问」（此时不判断目录是否存在，避免误导）；
+ * - `unsupported`：系统不存在这一档（Android 11 以下），条目只保留不生效。
+ */
+export type StorageDirAvailability = 'available' | 'unavailable' | 'needsPermission' | 'unsupported'
+
+/**
+ * 白名单里的一条目录。
+ *
+ * `path` 是**用户自己通过 SAF 点选过的**宿主路径（`/storage/emulated/0/...`），与投递区的
+ * `inboxPath` 同类，属于用户可见信息；原生侧不会回传应用私有路径或 rootfs 路径。
+ */
+export interface StorageDirEntry {
+  /**
+   * 序号（1 起）。访客内挂载点为 `/mnt/user/<index>`。
+   *
+   * 序号来自**持久化顺序**：某条目录失效时只跳过该条（访客里留下空洞），不会重排 ——
+   * 否则一次失效就会让别的条目换到另一个挂载点上。
+   */
+  index: number
+  /** 宿主侧的真实路径（已解析符号链接，不是 `/sdcard`）。 */
+  path: string
+  /** 展示名（目录的最后一级名字）。 */
+  displayName: string
+  /** 访客内固定挂载点：`/mnt/user/<index>`。 */
+  guestPath: string
+  availability: StorageDirAvailability
+  /** 与 [availability] 对应的权限档（T2 / T0）。 */
+  level: 'T2' | 'T0'
+  /** 是否可用；等价于 `availability === 'available'`，供按钮/文案直接使用。 */
+  available: boolean
+  /** 不可用时的受控错误码（如 `STORAGE_DIR_NOT_A_DIRECTORY`）；可用时不存在。 */
+  reasonCode?: string
+}
+
+/**
+ * ≤8 目录白名单状态。
+ *
+ * 这是访客内可见目录的**唯一来源**：旧的 `/sdcard` 整体绑定已被它取代
+ * （`docs/存储权限与导入落点.md` §3.1），因此 `entries` 为空时访客里就没有任何用户目录。
+ */
+export interface StorageDirsState {
+  entries: StorageDirEntry[]
+  /** 上限（固定 8）；与 [MAX_STORAGE_DIRECTORIES] 一致。 */
+  maxDirectories: number
+  /** 条数；等价于 `entries.length`。 */
+  count: number
+  /** 系统是否存在「所有文件访问」这一档。 */
+  supported: boolean
+  /** 是否已授予「所有文件访问」（T2）。 */
+  granted: boolean
+  /** 整档口径：`supported && granted` 为 T2，否则 T0。 */
+  level: 'T2' | 'T0'
+  /** 是否至少有一条目录会真的出现在访客里。 */
+  active: boolean
+}
+
 /** 权限申请结果；被拒绝时如实返回 false，不承诺一定能授权成功。 */
 export interface MediaPermissionResult {
   granted: boolean
@@ -448,6 +517,29 @@ export interface RuntimeBridge {
    * `dsh-workspace.tar` + `dsh-workspace.manifest.json` + `dsh-workspace.tar.sha256`。
    */
   exportMailbox: (subdirectory?: string) => Promise<MailboxExportResult>
+  /**
+   * ≤8 目录白名单状态：访客内 `/mnt/user/<序号>` 的**唯一来源**。
+   *
+   * 取代了旧的 `/sdcard` 整体绑定：用户没点过的目录不会出现在访客里，「App 有什么权限」
+   * 不再等价于「访客能看到什么」。每条都带可用性与受控错误码，界面据此逐条显示状态。
+   */
+  getStorageDirs: () => Promise<StorageDirsState>
+  /**
+   * 新增一条：Android 侧弹 SAF 目录选择器（`ACTION_OPEN_DOCUMENT_TREE`），
+   * 回调里做映射与校验，**全部通过才落盘**。
+   *
+   * 非 `primary:` 卷（SD 卡/OTG）、共享存储根、`Android/` 及其子目录、应用私有目录、
+   * 符号链接逃逸、重复选择、超过 8 条、路径含运行时不支持的字符，一律以受控错误码拒绝
+   * （错误码见 `StorageDirEntry.reasonCode` 的同一套取值）。用户取消是 `STORAGE_DIR_CANCELLED`，
+   * 界面不应把它当故障。成功与失败都不返回增量，只返回**最新状态**。
+   */
+  addStorageDirectory: () => Promise<StorageDirsState>
+  /**
+   * 按 [path]（取自 [getStorageDirs] 的条目）移除一条。
+   *
+   * 用路径而不是序号作为标识：序号会随增删变化，用序号删除可能删掉另一条目录。
+   */
+  removeStorageDirectory: (path: string) => Promise<StorageDirsState>
   /** 诊断日志状态；不含日志内容。 */
   getDiagnosticLogState: () => Promise<DiagnosticLogState>
   /** 更新采集开关与保留天数（1–30）。 */

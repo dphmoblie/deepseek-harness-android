@@ -4,6 +4,7 @@ import {
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
   assertSessionId,
+  assertStorageDirPath,
   assertTerminalKind,
   assertTerminalSize,
   validateAllFilesAccessResult,
@@ -25,6 +26,7 @@ import {
   validateSettingsUpdate,
   validateShizukuState,
   validateStorageAccessState,
+  validateStorageDirsState,
   validateStoredSettings,
   validateTerminalChunk,
   validateTerminalExit,
@@ -695,6 +697,128 @@ describe('投递区导出起点判定', () => {
   it('拒绝绝对路径与越界分段', () => {
     for (const value of ['/abs', '../outside', 'proj/../../outside', 'proj/./src', 'proj//src', 'a\\b']) {
       expect(() => assertMailboxSubdirectory(value), value).toThrow('投递区导出起点格式无效')
+    }
+  })
+})
+
+describe('存储目录白名单校验', () => {
+  const entry = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    index: 1,
+    path: '/storage/emulated/0/Download',
+    displayName: 'Download',
+    guestPath: '/mnt/user/1',
+    availability: 'available',
+    level: 'T2',
+    available: true,
+    ...overrides,
+  })
+
+  const state = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    entries: [entry()],
+    maxDirectories: 8,
+    count: 1,
+    supported: true,
+    granted: true,
+    level: 'T2',
+    active: true,
+    ...overrides,
+  })
+
+  it('接受合法载荷并保留受控字段', () => {
+    expect(validateStorageDirsState(state())).toEqual({
+      entries: [{
+        index: 1,
+        path: '/storage/emulated/0/Download',
+        displayName: 'Download',
+        guestPath: '/mnt/user/1',
+        availability: 'available',
+        level: 'T2',
+        available: true,
+        reasonCode: undefined,
+      }],
+      maxDirectories: 8,
+      count: 1,
+      supported: true,
+      granted: true,
+      level: 'T2',
+      active: true,
+    })
+  })
+
+  it('接受不可用条目并保留受控错误码', () => {
+    const value = validateStorageDirsState(state({
+      entries: [entry({
+        availability: 'unavailable',
+        level: 'T0',
+        available: false,
+        reasonCode: 'STORAGE_DIR_NOT_A_DIRECTORY',
+      })],
+      active: false,
+    }))
+    expect(value.entries[0].availability).toBe('unavailable')
+    expect(value.entries[0].reasonCode).toBe('STORAGE_DIR_NOT_A_DIRECTORY')
+    expect(value.active).toBe(false)
+  })
+
+  it('接受空白名单与 T0 档', () => {
+    const value = validateStorageDirsState({
+      entries: [],
+      maxDirectories: 8,
+      count: 0,
+      supported: true,
+      granted: false,
+      level: 'T0',
+      active: false,
+    })
+    expect(value.entries).toEqual([])
+    expect(value.level).toBe('T0')
+  })
+
+  it('拒绝自相矛盾的载荷', () => {
+    // count 与条目数不符、available 与 availability 不符、level 与权限不符、active 与实际不符。
+    expect(() => validateStorageDirsState(state({ count: 0 }))).toThrow()
+    expect(() => validateStorageDirsState(state({ entries: [entry({ available: false })] }))).toThrow()
+    expect(() => validateStorageDirsState(state({ level: 'T0' }))).toThrow()
+    expect(() => validateStorageDirsState(state({ active: false }))).toThrow()
+    expect(() => validateStorageDirsState(state({ granted: false }))).toThrow()
+    expect(() => validateStorageDirsState(state({ supported: false, granted: true }))).toThrow()
+  })
+
+  it('拒绝未知档位与越界的序号、挂载点', () => {
+    expect(() => validateStorageDirsState(state({ entries: [entry({ availability: 'ok' })] }))).toThrow()
+    // 序号必须等于持久化顺序（第 n 条的序号是 n）：重排会让 /mnt/user/<序号> 指向别的目录。
+    expect(() => validateStorageDirsState(state({ entries: [entry({ index: 2 })] }))).toThrow()
+    expect(() => validateStorageDirsState(state({ entries: [entry({ guestPath: '/mnt/user/2' })] }))).toThrow()
+    expect(() => validateStorageDirsState(state({ count: 1, entries: [entry(), entry({ index: 2 })] }))).toThrow()
+  })
+
+  it('拒绝越出共享存储的路径与非法错误码', () => {
+    for (const path of [
+      '/data/data/io.deepseekharness.mobile/files',
+      '/sdcard/Download',
+      '/storage/emulated/0/../Download',
+      '/storage/emulated/0/',
+      'storage/emulated/0/Download',
+    ]) {
+      expect(() => validateStorageDirsState(state({ entries: [entry({ path })] })), path).toThrow()
+    }
+    expect(() => validateStorageDirsState(state({ entries: [entry({ reasonCode: 'lowercase_code' })] }))).toThrow()
+    // 可用条目不该带错误码：那是自相矛盾的状态。
+    expect(() => validateStorageDirsState(state({ entries: [entry({ reasonCode: 'STORAGE_DIR_UNREADABLE' })] })))
+      .toThrow()
+  })
+
+  it('拒绝把别的东西冒充成白名单', () => {
+    expect(() => validateStorageDirsState(null)).toThrow()
+    expect(() => validateStorageDirsState(state({ maxDirectories: 9 }))).toThrow()
+    expect(() => validateStorageDirsState(state({ entries: [entry({ displayName: '' })] }))).toThrow()
+    expect(() => validateStorageDirsState(state({ entries: [entry({ displayName: 'a/b' })] }))).toThrow()
+  })
+
+  it('移除入参只接受共享存储下的绝对路径', () => {
+    expect(assertStorageDirPath('/storage/emulated/0/Download')).toBe('/storage/emulated/0/Download')
+    for (const path of ['', 'Download', '/sdcard/Download', '/storage/emulated/0/', '/storage/emulated/0/a/../b']) {
+      expect(() => assertStorageDirPath(path), path).toThrow('存储目录路径格式无效')
     }
   })
 })

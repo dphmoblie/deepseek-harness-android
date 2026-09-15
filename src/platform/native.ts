@@ -28,6 +28,7 @@ import {
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
   assertSessionId,
+  assertStorageDirPath,
   assertTerminalKind,
   assertTerminalSize,
   validateAllFilesAccessResult,
@@ -52,6 +53,7 @@ import {
   validateSettingsUpdate,
   validateShizukuState,
   validateStorageAccessState,
+  validateStorageDirsState,
   validateStoredSettings,
   validateRuntimeSource,
   validateTerminalChunk,
@@ -89,6 +91,9 @@ interface NativeRuntimePlugin {
   openAllFilesAccessSettings(): Promise<unknown>
   importMailbox(): Promise<unknown>
   exportMailbox(options: { subdirectory?: string }): Promise<unknown>
+  storageDirsState(): Promise<unknown>
+  addStorageDirectory(): Promise<unknown>
+  removeStorageDirectory(options: { path: string }): Promise<unknown>
   getHarnessLog(options: { maxBytes?: number }): Promise<unknown>
   runRuntimeSelfCheck(options: { operation: SelfCheckOperation }): Promise<unknown>
   getDiagnosticLogState(): Promise<DiagnosticLogState>
@@ -189,6 +194,12 @@ function createNativeBridge(): RuntimeBridge {
       return NativeRuntime.exportMailbox(target === undefined ? {} : { subdirectory: target })
         .then(validateMailboxExportResult)
     },
+    // 目录白名单：选区与校验都在原生侧（SAF 回调里做），这里只负责校验载荷与路径入参。
+    getStorageDirs: () => NativeRuntime.storageDirsState().then(validateStorageDirsState),
+    addStorageDirectory: () => NativeRuntime.addStorageDirectory().then(validateStorageDirsState),
+    removeStorageDirectory: path => NativeRuntime
+      .removeStorageDirectory({ path: assertStorageDirPath(path) })
+      .then(validateStorageDirsState),
     // 窗口参数由原生侧收敛到受控档位；这里只负责透传用户选择的字节数。
     getHarnessLog: options => NativeRuntime.getHarnessLog({ maxBytes: options?.maxBytes }).then(validateHarnessLog),
     // 操作类型只允许 check / repair：未知取值在进入原生侧之前就被拒绝。

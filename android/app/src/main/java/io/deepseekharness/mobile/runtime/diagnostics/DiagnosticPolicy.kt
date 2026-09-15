@@ -103,6 +103,18 @@ enum class DiagnosticEvent {
      * **不记录任何路径**（含用户可见路径），也不记录文件名或 manifest 内容。
      */
     MAILBOX,
+
+    /**
+     * ≤8 目录白名单（§5.1）的增删与绑定结果。
+     *
+     * 只记录受控取值：`reason` 是 `add` / `remove` / `read` / `bind`，`result` 是 `ok` /
+     * `skipped` / `failed`，`count` 是白名单条数、被丢弃的坏条目数或被跳过的条数，
+     * `code` 是受控错误码（如 `STORAGE_DIR_NOT_A_DIRECTORY`）。
+     *
+     * **不记录路径与目录名**：白名单路径会暴露用户的目录结构（可能含姓名、项目名），
+     * 而诊断日志可以经系统分享面板导出。排障只需要「第几条、因为什么码被跳过」。
+     */
+    STORAGE_DIRS,
 }
 
 /**

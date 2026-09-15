@@ -222,7 +222,14 @@ object RuntimeCommand {
         }
     }
 
-    private fun isSafeAbsolutePath(value: String): Boolean {
+    /**
+     * 绑定路径的字符白名单（`/` 开头的绝对路径，分段不含 `.` / `..`）。
+     *
+     * 提到 `internal` 是因为**用户目录白名单必须用同一个判定**：那里如果放行一个
+     * 这里会拒绝的路径（例如含空格或中文的目录名），失败会以「PRoot 起不来」的形式出现，
+     * 而不是在选择的当下被拒绝。判定只有一份，两处才不会漂移。
+     */
+    internal fun isSafeAbsolutePath(value: String): Boolean {
         if (value.length !in 2..MAX_ABSOLUTE_PATH_LENGTH || !SAFE_ABSOLUTE_PATH.matches(value)) return false
         return value.drop(1).split('/').all { segment ->
             segment.isNotEmpty() && segment != "." && segment != ".."

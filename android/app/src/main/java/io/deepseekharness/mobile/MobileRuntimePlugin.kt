@@ -5,13 +5,16 @@ import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.DocumentsContract
 import android.view.WindowManager
+import androidx.activity.result.ActivityResult
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
+import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
@@ -35,8 +38,12 @@ import io.deepseekharness.mobile.runtime.RuntimePhase
 import io.deepseekharness.mobile.runtime.RuntimeSelfCheckPolicy
 import io.deepseekharness.mobile.runtime.RuntimeSettings
 import io.deepseekharness.mobile.runtime.RuntimeStateSnapshot
+import io.deepseekharness.mobile.runtime.RuntimeStorageDirs
 import io.deepseekharness.mobile.runtime.RuntimeValidation
 import io.deepseekharness.mobile.runtime.RuntimeWorkspaceFiles
+import io.deepseekharness.mobile.runtime.StorageDirCodes
+import io.deepseekharness.mobile.runtime.StorageDirStatus
+import io.deepseekharness.mobile.runtime.StorageDirsState
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
 import io.deepseekharness.mobile.runtime.audit.AuditResult
 import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
@@ -1026,6 +1033,103 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 权限：应用内桥接。
+     *
+     * ≤8 目录白名单状态：每条的用户可见路径、展示名、访客挂载点 `/mnt/user/<序号>`、可用性与
+     * 不可用时的受控错误码，以及上限与权限档。
+     *
+     * **序号来自持久化顺序**：某条目录失效时只跳过该条（访客里留下空洞），不重排 —— 否则一次
+     * 失效就会让别的条目换到另一个挂载点上。**不含**应用私有路径、rootfs 路径或文件内容。
+     */
+    @PluginMethod
+    fun storageDirsState(call: PluginCall) {
+        resolveWhileActive(call) { storageDirs().state().toJs() }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     *
+     * 新增一个要绑进访客的目录：Android 侧弹 SAF 目录选择器（`ACTION_OPEN_DOCUMENT_TREE`），
+     * 回调里做「document id → 真实路径 → 白名单准入」全套校验，**全部通过才落盘**。
+     *
+     * 拒绝一律给受控错误码（非 primary 卷、共享存储根、Android/、应用私有目录、符号链接逃逸、
+     * 重复、超限、路径含运行时不支持的字符），失败不写入任何东西。用户取消返回
+     * `STORAGE_DIR_CANCELLED`，界面据此不当作故障。
+     */
+    @PluginMethod
+    fun addStorageDirectory(call: PluginCall) {
+        val currentActivity = activity
+        if (currentActivity == null) {
+            call.reject("当前没有可用的界面，无法打开目录选择器", StorageDirCodes.PICKER_UNAVAILABLE)
+            return
+        }
+        try {
+            // 先判档位再弹选择器：让用户白点一次目录、回来才被告知「需要授权」是纯粹的浪费，
+            // 而判定规则仍然只有白名单门面那一份（这里不重复实现）。
+            storageDirs().requireReady()
+        } catch (failure: RuntimeFailure) {
+            call.reject(failure.message ?: "存储目录白名单当前不可用", failure.code)
+            return
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }
+        // Capacitor 的插件方法运行在桥接线程上，而启动选择器必须从主线程发起（同 requestMediaPermission）。
+        currentActivity.runOnUiThread {
+            try {
+                startActivityForResult(call, intent, "storageDirectoryPicked")
+            } catch (_: Throwable) {
+                // 部分精简 ROM 没有文件选择器：如实报「没有可用入口」，而不是静默什么都不发生。
+                call.reject("设备上没有可用的目录选择器", StorageDirCodes.PICKER_UNAVAILABLE)
+            }
+        }
+    }
+
+    /**
+     * SAF 目录选择器回调。
+     *
+     * 这里**刻意不调用 `takePersistableUriPermission`**：白名单存的是解析后的真实路径，
+     * 之后再也不碰 tree URI，持久化一份用不到的授权只会多出一条不随白名单条目一起消失的访问路径。
+     * 决定权在用户（存的是用户点过的目录），而实际读写能力来自 T2 的「所有文件访问」。
+     */
+    @ActivityCallback
+    private fun storageDirectoryPicked(call: PluginCall?, result: ActivityResult) {
+        if (call == null) return
+        val uri = result.data?.data
+        if (result.resultCode != android.app.Activity.RESULT_OK || uri == null) {
+            call.reject("已取消目录选择", StorageDirCodes.CANCELLED)
+            return
+        }
+        val documentId = try {
+            DocumentsContract.getTreeDocumentId(uri)
+        } catch (_: Throwable) {
+            call.reject("目录选择结果不是可识别的目录树", StorageDirCodes.DOCUMENT_ID_INVALID)
+            return
+        }
+        // 解析与落盘放到执行器上：canonicalFile 与目录探测都要碰文件系统。
+        // execute 支持「稍后 resolve」——回调此刻返回不影响这条调用最终的结果。
+        execute(call) {
+            audited(AuditEvent.STORAGE_DIR_ADD) { storageDirs().add(documentId).toJs() }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；按 `path` 移除一条白名单目录（`path` 取自 [storageDirsState] 的条目）。
+     *
+     * 用路径而不是序号作为标识：序号会因增删而变，用序号删除可能删掉另一条目录。
+     * 不在白名单里时如实报 `STORAGE_DIR_NOT_FOUND`，不做「看起来成功」的空操作。
+     */
+    @PluginMethod
+    fun removeStorageDirectory(call: PluginCall) {
+        execute(call) {
+            val path = call.getString("path")?.takeIf { it.isNotEmpty() }
+                ?: throw RuntimeFailure(StorageDirCodes.PATH_REQUIRED, "存储目录路径缺失")
+            audited(AuditEvent.STORAGE_DIR_REMOVE) { storageDirs().remove(path).toJs() }
+        }
+    }
+
+    /**
      * 权限：应用内桥接；仅申请相册/视频的媒体读取权限。
      * Android 13 起用 READ_MEDIA_*，12 及以下用 READ_EXTERNAL_STORAGE；被拒绝只返回结果，
      * 不阻断其他功能（容器仍可读应用私有目录）。
@@ -1158,6 +1262,20 @@ class MobileRuntimePlugin : Plugin() {
 
     private fun permissionGranted(permission: String): Boolean =
         ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * 目录白名单门面。
+     *
+     * 懒初始化：构造它要读偏好，而在插件 load 阶段读一份用户设置既没必要、也可能在
+     * 「插件注册失败」这条路径上多出一个失败点（插件注册失败的代价是整个管理界面失去原生桥）。
+     */
+    private val storageDirsFacade: RuntimeStorageDirs by lazy {
+        RuntimeStorageDirs.from(context, controller.store) { level, fields ->
+            controller.store.diagnostics.record(level, DiagnosticEvent.STORAGE_DIRS, fields)
+        }
+    }
+
+    private fun storageDirs(): RuntimeStorageDirs = storageDirsFacade
 
     /** 存储访问状态：只有布尔与枚举，不含路径或目录内容。 */
     private fun storageAccessStateJson(): JSObject = JSObject()
@@ -1511,9 +1629,37 @@ class MobileRuntimePlugin : Plugin() {
         .put("exportManifestName", exportManifestName)
         .put("importDirectory", importDirectory)
 
+    /**
+     * 目录白名单状态。
+     *
+     * `level` 给界面展示口径（T2 / T0），逐条 `availability` + `level` 给「这一条现在能不能用」，
+     * `reasonCode` 只在不可用时出现（受控错误码，界面据此给不同提示）。
+     * 路径是**用户自己选过的用户可见路径**与访客挂载点，与投递区的 inboxPath 同类，不属于私有信息。
+     */
+    private fun StorageDirsState.toJs(): JSObject = JSObject()
+        .put("supported", supported)
+        .put("granted", granted)
+        .put("level", level)
+        .put("maxDirectories", maxDirectories)
+        .put("count", entries.size)
+        .put("active", active)
+        .put(
+            "entries",
+            org.json.JSONArray().also { array -> entries.forEach { status -> array.put(status.toJs()) } },
+        )
+
+    private fun StorageDirStatus.toJs(): JSObject = JSObject()
+        .put("index", index)
+        .put("path", entry.path)
+        .put("displayName", entry.displayName)
+        .put("guestPath", guestPath)
+        .put("availability", availability.wireValue)
+        .put("level", availability.level)
+        .put("available", available)
+        .also { json -> reasonCode?.let { json.put("reasonCode", it) } }
+
     /** 导入结果：只有计数、字节数、文件名与落点，不含内容。 */
-    private fun MailboxImportOutcome.toJs(): JSObject = JSObject()
-        .put("entryCount", entryCount)
+    private fun MailboxImportOutcome.toJs(): JSObject = JSObject()        .put("entryCount", entryCount)
         .put("fileCount", fileCount)
         .put("directoryCount", directoryCount)
         .put("symlinkCount", symlinkCount)

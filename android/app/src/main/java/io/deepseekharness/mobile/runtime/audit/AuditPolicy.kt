@@ -25,6 +25,12 @@ enum class AuditEvent {
 
     /** 外置投递区：一键导出（工作区 → outbox 的 tar + manifest + sha256）。 */
     MAILBOX_EXPORT,
+
+    /** 存储目录白名单：用户通过 SAF 新增一个要绑进访客的目录。 */
+    STORAGE_DIR_ADD,
+
+    /** 存储目录白名单：用户移除一个目录。 */
+    STORAGE_DIR_REMOVE,
 }
 
 enum class AuditResult {

@@ -5,7 +5,7 @@ import org.junit.Test
 
 class RuntimeLaunchProfilePolicyTest {
     private val requiredMount = ProotBindMount("/dev", "/dev")
-    private val sdcardMount = ProotBindMount("/sdcard", "/sdcard")
+    private val userDirectoryMount = ProotBindMount("/storage/emulated/0/Download", "/mnt/user/1")
 
     @Test
     fun `explicit seccomp failure retries the same mounts without seccomp`() {
@@ -23,8 +23,8 @@ class RuntimeLaunchProfilePolicyTest {
     }
 
     @Test
-    fun `proot failure drops optional sdcard without dropping required mounts`() {
-        val profile = ProotLaunchProfile(false, listOf(requiredMount, sdcardMount))
+    fun `proot failure drops optional user directories without dropping required mounts`() {
+        val profile = ProotLaunchProfile(false, listOf(requiredMount, userDirectoryMount))
         val result = ProcessProbeResult(1, false, "proot error: bind failed")
 
         assertEquals(
@@ -34,8 +34,8 @@ class RuntimeLaunchProfilePolicyTest {
     }
 
     @Test
-    fun `probe timeout drops optional sdcard without dropping required mounts`() {
-        val profile = ProotLaunchProfile(false, listOf(requiredMount, sdcardMount))
+    fun `probe timeout drops optional user directories without dropping required mounts`() {
+        val profile = ProotLaunchProfile(false, listOf(requiredMount, userDirectoryMount))
         val result = ProcessProbeResult(exitCode = null, timedOut = true, output = "")
 
         assertEquals(
@@ -46,7 +46,7 @@ class RuntimeLaunchProfilePolicyTest {
 
     @Test
     fun `command failure does not trigger an unrelated mount retry`() {
-        val profile = ProotLaunchProfile(false, listOf(requiredMount, sdcardMount))
+        val profile = ProotLaunchProfile(false, listOf(requiredMount, userDirectoryMount))
         val result = ProcessProbeResult(1, false, "Error [ERR_MODULE_NOT_FOUND]")
 
         assertEquals(emptyList<ProotLaunchProfile>(), prootProfileFallbacks(profile, result, commandCanFail = true))
@@ -72,5 +72,28 @@ class RuntimeLaunchProfilePolicyTest {
             listOf(profile.copy(bindMounts = listOf(requiredMount))),
             prootProfileFallbacks(profile, result, commandCanFail = true),
         )
+    }
+
+    /**
+     * 投递区与用户目录同时在场时，两种可选绑定各自生成一个回退档，且都保住必需绑定。
+     *
+     * 这条用例钉住「可选能力不能拖垮会话启动」：任何一次 PRoot 失败都必须能找到一份
+     * 少掉某一类可选绑定的启动档，而不是只剩「全部撤掉」或「全部保留」两个极端。
+     */
+    @Test
+    fun `optional bindings are dropped independently of each other`() {
+        val mailboxMount = ProotBindMount("/storage/emulated/0/Documents/DSH/inbox", "/mnt/inbox")
+        val profile = ProotLaunchProfile(false, listOf(requiredMount, mailboxMount, userDirectoryMount))
+        val result = ProcessProbeResult(1, false, "proot error: bind failed")
+
+        val fallbacks = prootProfileFallbacks(profile, result, commandCanFail = true)
+
+        assertEquals(2, fallbacks.size)
+        assertEquals(
+            listOf(listOf(requiredMount, userDirectoryMount), listOf(requiredMount, mailboxMount)),
+            fallbacks.map { it.bindMounts },
+        )
+        // `/sdcard` 整体绑定已被白名单取代：它的固定挂载点不再出现在任何回退档里。
+        assertEquals(0, fallbacks.count { fallback -> fallback.bindMounts.any { it.target == "/sdcard" } })
     }
 }
