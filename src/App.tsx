@@ -623,9 +623,13 @@ interface EnvironmentScreenProps {
   onStop: () => void
   onUpdate: () => void
   onShareWorkspace: () => void
+  onListFiles: () => void
+  workspaceFiles: string[]
+  onShareFile: (path: string) => void
+  onOpenFile: (path: string) => void
 }
 
-function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop, onUpdate, onShareWorkspace }: EnvironmentScreenProps) {
+function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop, onUpdate, onShareWorkspace, onListFiles, workspaceFiles, onShareFile, onOpenFile }: EnvironmentScreenProps) {
   const inProgress = ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
   const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running'
   const progress = runtime.totalBytes > 0
@@ -759,6 +763,8 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
         <button className="button button-secondary" type="button" onClick={onShareWorkspace} disabled={busy !== null}>
           {busy === 'workspace-share' ? <Loader2 className="spin" size={18} /> : <Share2 size={18} />}{t("分享工作区")}
         </button>
+        <button className="button button-secondary" type="button" onClick={onListFiles} disabled={busy !== null}>{t("选择文件")}</button>
+        {workspaceFiles.length > 0 && <div className="workspace-file-list">{workspaceFiles.map(path => <div className="workspace-file-row" key={path}><span title={path}>{path}</span><button className="compact-button" type="button" onClick={() => onOpenFile(path)} disabled={busy !== null}>{t("打开")}</button><button className="compact-button" type="button" onClick={() => onShareFile(path)} disabled={busy !== null}>{t("分享")}</button></div>)}</div>}
       </section>}
     </div>
   )
@@ -2444,6 +2450,24 @@ export function App() {
   useEffect(() => {
     let cancelled = false
 
+    /**
+     * Harness 的 Models 页面会直接更新访客内的凭据文件。MainActivity 恢复前台时重读设置，
+     * 让原生侧识别到的「已配置」状态及时进入管理界面；用户正在编辑的草稿仍优先保留。
+     */
+    const refreshSettings = (): void => {
+      if (document.visibilityState === 'hidden') return
+      const revision = ++settingsReadRevision.current
+      void runtimeBridge.getSettings()
+        .then(next => {
+          if (cancelled || revision !== settingsReadRevision.current) return
+          setSettings(next)
+          if (!settingsDraftDirty.current) resyncSettingsDraft(next)
+        })
+        .catch(() => {
+          // 前台恢复属于后台同步；读取失败时保留最近一次设置快照，不弹重复错误。
+        })
+    }
+
     const refreshShizuku = (reportError = true): void => {
       if (document.visibilityState === 'hidden') return
       void runtimeBridge.getShizukuState()
@@ -2475,12 +2499,14 @@ export function App() {
     }
     const handleVisibilityChange = (): void => {
       if (document.visibilityState === 'visible') {
+        refreshSettings()
         refreshShizuku()
         refreshKeepAlive()
         refreshOverlayBall()
       }
     }
     const handleFocus = (): void => {
+      refreshSettings()
       refreshShizuku()
       refreshKeepAlive()
       refreshOverlayBall()
@@ -2499,7 +2525,7 @@ export function App() {
       window.removeEventListener('focus', handleFocus)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [notify, readOverlayBall])
+  }, [notify, readOverlayBall, resyncSettingsDraft])
 
   const run = useCallback(async (id: string, operation: () => Promise<void>, success?: string) => {
     if (busyRef.current !== null) return
@@ -2684,6 +2710,10 @@ export function App() {
   const shareWorkspace = useCallback(() => {
     void run('workspace-share', () => runtimeBridge.shareRuntimeWorkspace(), t('已打开分享面板'))
   }, [notify, run])
+  const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([])
+  const listWorkspaceFiles = useCallback(() => { void run('workspace-files', async () => setWorkspaceFiles(await runtimeBridge.listRuntimeWorkspaceFiles())) }, [run])
+  const shareWorkspaceFile = useCallback((path: string) => { void run('workspace-file-share', () => runtimeBridge.shareRuntimeWorkspaceFile(path)) }, [run])
+  const openWorkspaceFile = useCallback((path: string) => { void run('workspace-file-open', () => runtimeBridge.openRuntimeWorkspaceFile(path)) }, [run])
 
   const clearDiagnostic = useCallback(() => {
     void run('diagnostic-clear', async () => {
@@ -2854,7 +2884,7 @@ export function App() {
       case 'plugins':
         return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
       case 'environment':
-        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} onShareWorkspace={shareWorkspace} />
+        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} onShareWorkspace={shareWorkspace} onListFiles={listWorkspaceFiles} workspaceFiles={workspaceFiles} onShareFile={shareWorkspaceFile} onOpenFile={openWorkspaceFile} />
       case 'settings':
         return <SettingsHomeScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenPage={openSettings} onOpenPlugins={() => setActiveView('plugins')} onOpenTerminal={() => setActiveView('terminal')} onStop={stopRuntime} />
       default: {

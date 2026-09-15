@@ -719,6 +719,11 @@ button:disabled {
   font-size: 13px;
   line-height: 1.5;
 }
+.workspace-export > .button { margin-right: 8px; }
+.workspace-file-list { display: grid; gap: 8px; margin-top: 14px; }
+.workspace-file-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.workspace-file-row span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.workspace-file-row button { min-height: 34px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); }
 
 .terminal-screen {
   display: flex;

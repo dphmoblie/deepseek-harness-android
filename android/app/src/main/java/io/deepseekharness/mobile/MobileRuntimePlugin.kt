@@ -2,6 +2,7 @@ package io.deepseekharness.mobile
 
 import android.Manifest
 import android.content.Intent
+import android.webkit.MimeTypeMap
 import android.content.pm.PackageManager
 import android.os.Build
 import android.view.WindowManager
@@ -874,6 +875,57 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    private fun workspaceFile(relative: String): File {
+        if (relative.length !in 1..240 || relative.contains('\\') || relative.startsWith('/') || relative.contains("..")) {
+            throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径无效")
+        }
+        val root = File(controller.store.currentRoot, "root/1").canonicalFile
+        val file = File(root, relative).canonicalFile
+        if (!file.path.startsWith(root.path + File.separator) || !file.isFile || file.length() > 64L * 1024 * 1024) {
+            throw RuntimeFailure("WORKSPACE_FILE_UNAVAILABLE", "工作区文件不可用")
+        }
+        return file
+    }
+
+    @PluginMethod
+    fun listRuntimeWorkspaceFiles(call: PluginCall) {
+        execute(call) {
+            val root = File(controller.store.currentRoot, "root/1")
+            val files = mutableListOf<String>()
+            if (root.isDirectory) root.walkTopDown().maxDepth(6).forEach { file ->
+                if (files.size < 100 && file.isFile && !file.isSymbolicLink) {
+                    files += root.toPath().relativize(file.toPath()).toString().replace(File.separatorChar, '/')
+                }
+            }
+            JSObject().put("files", org.json.JSONArray(files.sorted()))
+        }
+    }
+
+    private fun shareWorkspaceFile(relative: String, open: Boolean) {
+        val source = workspaceFile(relative)
+        val target = File(context.cacheDir, "share").apply { mkdirs() }
+            .let { File(it, "dsh-${System.currentTimeMillis()}-${source.name}") }
+        source.copyTo(target, overwrite = true)
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.diagnostics", target)
+        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(source.extension.lowercase()) ?: "application/octet-stream"
+        val intent = Intent(if (open) Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
+            type = mime
+            if (open) data = uri else putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, if (open) "打开 DSH 文件" else "分享 DSH 文件").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    @PluginMethod
+    fun shareRuntimeWorkspaceFile(call: PluginCall) {
+        execute(call) { shareWorkspaceFile(call.getString("path") ?: throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径缺失"), false); null }
+    }
+
+    @PluginMethod
+    fun openRuntimeWorkspaceFile(call: PluginCall) {
+        execute(call) { shareWorkspaceFile(call.getString("path") ?: throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径缺失"), true); null }
+    }
+
     /** 权限：应用内桥接；清空全部诊断日志。 */
     @PluginMethod
     fun clearDiagnosticLog(call: PluginCall) {
@@ -1276,6 +1328,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("keepScreenAwake", keepScreenAwake)
         .put("terminalFontSize", terminalFontSize)
         .put("configuredModelProviders", org.json.JSONArray(configuredModelProviders.map { it.wireValue }))
+        .put("harnessConfiguredModelProviders", org.json.JSONArray(harnessConfiguredModelProviders.map { it.wireValue }))
         .put("customModelProviders", org.json.JSONArray().also { providers ->
             customModelProviders.forEach { provider ->
                 providers.put(JSObject()
@@ -1292,6 +1345,7 @@ class MobileRuntimePlugin : Plugin() {
             }
         })
         .put("configuredCustomModelProviders", org.json.JSONArray(configuredCustomModelProviders))
+        .put("harnessConfiguredCustomModelProviders", org.json.JSONArray(harnessConfiguredCustomModelProviders))
         .put("autoLaunch", autoLaunch)
         .put("keepRuntimeInBackground", keepRuntimeInBackground)
         .put("overlayBallEnabled", overlayBallEnabled)

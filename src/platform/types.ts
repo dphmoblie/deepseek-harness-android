@@ -305,6 +305,9 @@ export interface RuntimeBridge {
   /** 导出全部诊断日志并打开系统分享面板。 */
   shareDiagnosticLog: () => Promise<DiagnosticLogExport>
   shareRuntimeWorkspace: () => Promise<void>
+  listRuntimeWorkspaceFiles: () => Promise<string[]>
+  shareRuntimeWorkspaceFile: (path: string) => Promise<void>
+  openRuntimeWorkspaceFile: (path: string) => Promise<void>
   /** 清空全部诊断日志。 */
   clearDiagnosticLog: () => Promise<DiagnosticLogState>
   /**

@@ -84,8 +84,11 @@ data class RuntimeSettings(
     val keepScreenAwake: Boolean,
     val terminalFontSize: Int,
     val configuredModelProviders: Set<ModelProvider> = emptySet(),
+    /** Providers configured in Harness' own credential file; values never leave that file. */
+    val harnessConfiguredModelProviders: Set<ModelProvider> = emptySet(),
     val customModelProviders: List<CustomModelProvider> = emptyList(),
     val configuredCustomModelProviders: Set<String> = emptySet(),
+    val harnessConfiguredCustomModelProviders: Set<String> = emptySet(),
     val autoLaunch: Boolean = false,
     /**
      * 后台保持 Harness：运行时启动后启用前台服务，提升本应用进程的存活优先级。

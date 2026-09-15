@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DiagnosticLogState, KeepAliveState, RuntimeProgress, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from './platform/types'
 
@@ -363,6 +363,30 @@ describe('App conversation gate', () => {
     fireEvent.focus(window)
     await waitFor(() => expect(bridge.getShizukuState).toHaveBeenCalled())
     expect(bridge.openHarness).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshes web-configured model credential status when MainActivity regains focus', async () => {
+    window.localStorage.removeItem('dsh-mobile-onboarding-v1')
+    bridge.getState.mockResolvedValueOnce({ ...runningState })
+    bridge.getSettings
+      .mockResolvedValueOnce({ ...settings, configuredModelProviders: [] })
+      .mockResolvedValue({ ...settings, configuredModelProviders: ['deepseek'] })
+    render(<App />)
+
+    await screen.findByRole('dialog', { name: '欢迎使用 DeepSeek Harness Android' })
+    for (let index = 0; index < 5; index += 1) {
+      fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    }
+    expect(screen.getByText(/还没配置模型 API Key/)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: /我已在 Harness 内配置过/ }))
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    fireEvent.focus(window)
+
+    await waitFor(() => expect(bridge.getSettings).toHaveBeenCalledTimes(2))
+    const onboarding = screen.getByRole('dialog', { name: '开始使用' })
+    expect(within(onboarding).getByRole('button', { name: /^打开 Harness$/ })).toBeVisible()
+    expect(within(onboarding).queryByText(/还没配置模型 API Key/)).toBeNull()
   })
 
   it('keeps Shizuku disconnected until the user explicitly reconnects it', async () => {

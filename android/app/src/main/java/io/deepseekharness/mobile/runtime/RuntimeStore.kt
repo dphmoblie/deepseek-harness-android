@@ -205,6 +205,7 @@ class RuntimeStore(context: Context) {
         val providerApiKeys = providerApiKeysLocked()
         val customProviders = customModelProvidersLocked()
         val customProviderApiKeys = customProviderApiKeysLocked(customProviders.mapTo(linkedSetOf()) { it.id })
+        val harnessCredentials = harnessCredentialStatus(customProviders)
         return RuntimeSettings(
             manifestUrl = if (usePinnedDefault) BuildConfig.DEFAULT_MANIFEST_URL else storedUrl.orEmpty(),
             manifestSha256 = if (usePinnedDefault) BuildConfig.DEFAULT_MANIFEST_SHA256 else storedSha256.orEmpty(),
@@ -213,10 +214,12 @@ class RuntimeStore(context: Context) {
             overlayBallEnabled = overlayBallEnabled(),
             terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
+            harnessConfiguredModelProviders = harnessCredentials.modelProviders,
             customModelProviders = customProviders,
             configuredCustomModelProviders = customProviders.mapNotNullTo(linkedSetOf()) { provider ->
                 provider.id.takeIf(customProviderApiKeys::containsKey)
             },
+            harnessConfiguredCustomModelProviders = harnessCredentials.customProviderIds,
             autoLaunch = preferences.getBoolean(KEY_AUTO_LAUNCH, false),
         )
     }
@@ -267,16 +270,25 @@ class RuntimeStore(context: Context) {
         else editor.putString(KEY_CUSTOM_PROVIDER_CREDENTIALS, encryptedCustomCredentials)
         val committed = editor.commit()
         if (!committed) throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法保存运行时设置")
+        val harnessCredentials = harnessCredentialStatus(customProviders)
         return settings.copy(
             // Omitted updates are read after commit so a concurrent native-menu hide is preserved.
             overlayBallEnabled = overlayBallEnabledUpdate ?: overlayBallEnabled(),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
+            harnessConfiguredModelProviders = harnessCredentials.modelProviders,
             customModelProviders = customProviders,
             configuredCustomModelProviders = customProviders.mapNotNullTo(linkedSetOf()) { provider ->
                 provider.id.takeIf(customProviderApiKeys::containsKey)
             },
+            harnessConfiguredCustomModelProviders = harnessCredentials.customProviderIds,
         )
     }
+
+    private fun harnessCredentialStatus(customProviders: List<CustomModelProvider>): HarnessCredentialStatus =
+        HarnessCredentialStatusReader.read(
+            File(currentRoot, "${RuntimePreservePolicy.GUEST_DSH_HOME}/.credentials.yaml"),
+            customProviders,
+        )
 
     @Synchronized
     fun providerApiKeys(): Map<ModelProvider, String> = providerApiKeysLocked().toMap()
