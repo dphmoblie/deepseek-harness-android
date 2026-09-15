@@ -157,6 +157,10 @@ class HarnessActivity : AppCompatActivity() {
             builtInZoomControls = false
             displayZoomControls = false
             safeBrowsingEnabled = true
+            // 控制台界面的字号跟随系统字号（登记册 5.6-I）：外壳 CSS 已全部 rem 化，
+            // 但 WebView 不会因为系统字号变化就改变 rem 基准，只有 textZoom 能带上这件事。
+            // fontScale 不在 configChanges 里，系统改字号会重建本 Activity，因此读一次即可。
+            textZoom = AppTextScale.percentOf(resources.configuration.fontScale)
         }
         val cookieManager = CookieManager.getInstance().apply {
             setAcceptCookie(true)

@@ -48,6 +48,7 @@ class MainActivity : BridgeActivity() {
         registerPlugin(MobileRuntimePlugin::class.java)
         super.onCreate(savedInstanceState)
         handleExternalFileIntent(intent)
+        applySystemFontScale()
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -71,6 +72,22 @@ class MainActivity : BridgeActivity() {
     override fun onDestroy() {
         importExecutor.shutdownNow()
         super.onDestroy()
+    }
+
+    /**
+     * 管理界面的字号跟随系统字号（登记册 5.6-I）。
+     *
+     * 外壳的 CSS 已经把字号全部 rem 化、根字号也不写死，但 **WebView 不会因为系统字号变大
+     * 就改变 rem 基准**——只有 `WebSettings.textZoom` 能带上这件事。不接这一步，
+     * 用户在系统设置里把字体调到最大，应用内文字仍然纹丝不动。
+     *
+     * 时机：`fontScale` **不在** `configChanges` 列表里（见 AndroidManifest 的 MainActivity），
+     * 所以系统改字号会重建 Activity，在 `onCreate` 里读一次就够；不需要额外监听。
+     * `bridge` 在 `super.onCreate` 之后才可用，因此调用点放在那之后。
+     */
+    private fun applySystemFontScale() {
+        val settings = bridge?.webView?.settings ?: return
+        settings.textZoom = AppTextScale.percentOf(resources.configuration.fontScale)
     }
 
     /** Accept a user-selected content URI from another app and copy it into private inbox storage. */
