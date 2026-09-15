@@ -2,6 +2,7 @@ import appMark from './assets/app-mark.png'
 import { t, useLanguage } from './i18n'
 import { PluginSettings } from './components/PluginSettings'
 import { LanguageSettings } from './components/LanguageSettings'
+import { AppearanceSettings } from './components/AppearanceSettings'
 import { lazy, Suspense, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
@@ -1934,6 +1935,10 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport,
           </label>
         </section>
         )}
+
+        {/* 外观（登记册 5.4）：落在「终端与外观」页——登记册指定的现成落点。
+            组件无 props，主题的存储与 DOM 落地全在 src/theme.ts，这里只负责挂载。 */}
+        {page === 'terminal' && <AppearanceSettings />}
 
         {page === 'runtime' && (
         <section className="settings-section" aria-labelledby="keep-alive-settings">

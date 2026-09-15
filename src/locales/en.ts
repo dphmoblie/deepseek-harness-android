@@ -716,5 +716,12 @@ export const english: Readonly<Record<string, string>> = {
   "删除": "Delete",
   "确定删除“{0}”吗？此操作无法撤销。": "Delete “{0}”? This cannot be undone.",
   "文件已删除": "File deleted",
-  "已打开分享面板": "Share sheet opened"
+  "已打开分享面板": "Share sheet opened",
+  "界面主题": "Interface theme",
+  "立即生效，下次打开仍使用此主题。": "Applies immediately and is remembered next time.",
+  "跟随系统": "Follow system",
+  "浅色": "Light",
+  "深色": "Dark",
+  "当前显示：{0}": "Currently showing: {0}",
+  "无法保存主题，请重试。": "Unable to save the theme. Please retry."
 }

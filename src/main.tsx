@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import '@xterm/xterm/css/xterm.css'
+// xterm 的样式表不在这里引入：终端面板本身是懒加载的（见 App.tsx 的 lazy import），
+// 样式跟着 TerminalPanel 走才能让首屏 CSS 不包含终端相关的规则。
 import './styles.css'
 import { App } from './App'
 import { AppErrorBoundary } from './components/AppErrorBoundary'

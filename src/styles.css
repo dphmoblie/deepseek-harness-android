@@ -1,32 +1,94 @@
 /*
  * 设计令牌：颜色、圆角、字重与阴影都只在这里定义，其余规则一律引用变量。
  * 圆角只保留三档（控件 / 卡片 / 胶囊），避免同一界面出现多种圆角。
+ * 颜色定义两份：:root 是浅色（沿用本仓库原有外观，取值与原硬编码值一一对应），
+ * :root[data-theme='dark'] 是深色；主题由 <html data-theme> 决定，取值只有
+ * light / dark 两种，「跟随系统」是在 JS 里解析完再写入的，不会写进 DOM。
  */
 :root {
-  color: #17202b;
-  background: #f3f5f8;
+  color: var(--ink);
+  background: var(--bg);
   font-family: Inter, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   color-scheme: light;
+  /* 表面与文字 */
   --bg: #f3f5f8;
   --surface: #ffffff;
   --surface-muted: #edf1f5;
   --surface-hover: #f8fafc;
+  --surface-sunken: #fbfcfd;
+  --header-bg: rgb(255 255 255 / 96%);
   --ink: #17202b;
   --muted: #667181;
+  --field-label: #475362;
+  --icon-muted: #8893a1;
+  --brand-bg: #17202b;
+  --icon-solid-bg: #202831;
+  --on-accent: #ffffff;
+  --on-solid: #ffffff;
+  /* 线条、轨道与开关 */
   --line: #dce2e9;
   --line-strong: #c8d0da;
+  --line-hover: #9eabb9;
+  --line-alt: #d8dde2;
+  --line-faint: #e3e6e9;
+  --track: #e3e8ee;
+  --dot-idle: #9099a5;
+  --step-idle: #8a94a2;
+  --switch-off: #aab3bf;
+  --switch-knob: #ffffff;
+  /* 主色与语义色 */
   --blue: #315fcf;
   --blue-hover: #274faa;
   --blue-soft: #e8efff;
+  --blue-line: #cbd9fb;
   --green: #177a50;
   --green-soft: #e6f5ee;
+  --green-line: #c6e5d7;
+  --green-line-strong: #b3ddcb;
+  --green-track: #a8d7c3;
   --amber: #9a6500;
   --amber-soft: #fff2d5;
+  --amber-line: #efd8a2;
+  --amber-line-strong: #efdba9;
+  --amber-text: #77510a;
+  --amber-text-strong: #5f4008;
+  --amber-dot: #d28b00;
   --red: #b33535;
   --red-soft: #fdeaea;
+  --red-line: #efc4c4;
+  --red-text: #8d2a2a;
   --danger-line: #edc4c4;
+  --log-error: #9b2c2c;
+  --log-warn: #8a5a11;
+  /* 终端：外壳在两种主题下都是深色，单独一套值以便与页面背景拉开层次 */
+  --terminal-bg: #101419;
+  --terminal-line: #2d343d;
+  --terminal-chip-bg: #1e252d;
+  --terminal-chip-bg-strong: #1b232c;
+  --terminal-chip-line: #3b4652;
+  --terminal-chip-text: #c6ced8;
+  --terminal-chip-text-dim: #aebacb;
+  /* 浮动提示条：浅色页面上的深色条，两种主题下都保持深底白字 */
+  --toast-bg: #1c232b;
+  --toast-line: #333c47;
+  --toast-text: #ffffff;
+  --toast-close: #b7c0cb;
+  --toast-success: #79d4a9;
+  --toast-error: #ff9d9d;
+  --toast-info: #94b8ff;
+  --scrim: rgb(9 13 18 / 58%);
+  /* 阴影与焦点环：深色下要更重才看得出层次，所以它们也是随主题变化的令牌 */
+  --shadow: 0 10px 34px rgb(27 39 55 / 8%);
+  --shadow-card: 0 1px 2px rgb(23 32 43 / 4%);
+  --shadow-segment: 0 1px 4px rgb(21 32 45 / 13%);
+  --shadow-knob: 0 1px 3px rgb(0 0 0 / 20%);
+  --shadow-toast: 0 12px 35px rgb(0 0 0 / 24%);
+  --shadow-dialog: 0 24px 70px rgb(0 0 0 / 30%);
+  --ring: 3px solid rgb(65 118 230 / 28%);
+  /* 尺度令牌与主题无关（圆角、字重不含颜色），所以只在 :root 定义一次，
+     不在深色块里成对重复——重复只会制造两处需要同步维护的假约束。 */
   --radius-control: 10px;
   --radius-card: 12px;
   --radius-chip: 999px;
@@ -34,9 +96,95 @@
   --weight-bold: 700;
   --weight-semibold: 650;
   --weight-medium: 600;
-  --shadow: 0 10px 34px rgb(27 39 55 / 8%);
-  --shadow-card: 0 1px 2px rgb(23 32 43 / 4%);
-  --ring: 3px solid rgb(65 118 230 / 28%);
+}
+
+/*
+ * 深色一套：与 :root 的颜色令牌一一对应。取值按可读性重选而不是简单反相——
+ * 反相会把「蓝底白字」变成「深蓝底黑字」，对比度反而更差。
+ * 漏写一个令牌不会有任何报错，只会在深色下静默沿用浅色值，所以两块的
+ * 颜色令牌集合必须始终一致。
+ */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0f1317;
+  --surface: #171d24;
+  --surface-muted: #1f262e;
+  --surface-hover: #1c222a;
+  --surface-sunken: #12171d;
+  --header-bg: rgb(15 19 23 / 96%);
+  --ink: #e8eef5;
+  --muted: #9dabbb;
+  --field-label: #b9c5d3;
+  --icon-muted: #8b98a7;
+  --brand-bg: #2a3440;
+  --icon-solid-bg: #2b3641;
+  --on-accent: #0f1317;
+  --on-solid: #ffffff;
+  --line: #2b333d;
+  --line-strong: #3d4854;
+  --line-hover: #566370;
+  --line-alt: #2b333d;
+  --line-faint: #262d35;
+  --track: #242c35;
+  --dot-idle: #6b7686;
+  --step-idle: #8b97a4;
+  --switch-off: #636e7b;
+  --switch-knob: #f1f5f9;
+  --blue: #86abff;
+  --blue-hover: #a3c0ff;
+  --blue-soft: #1d2b4a;
+  --blue-line: #35507f;
+  --green: #5cc796;
+  --green-soft: #143326;
+  --green-line: #27553d;
+  --green-line-strong: #2c6047;
+  --green-track: #2c6047;
+  --amber: #e9bd6b;
+  --amber-soft: #362a12;
+  --amber-line: #57431c;
+  --amber-line-strong: #5d4a20;
+  --amber-text: #f0d29a;
+  --amber-text-strong: #f6e0b6;
+  --amber-dot: #e9bd6b;
+  --red: #ff9292;
+  --red-soft: #3a1f1f;
+  --red-line: #6c3434;
+  --red-text: #ffb5b5;
+  --danger-line: #6b3131;
+  --log-error: #ff9a9a;
+  --log-warn: #e6b768;
+  --terminal-bg: #0b0f13;
+  --terminal-line: #303a45;
+  --terminal-chip-bg: #1c242c;
+  --terminal-chip-bg-strong: #1a222a;
+  --terminal-chip-line: #3d4854;
+  --terminal-chip-text: #ccd5df;
+  --terminal-chip-text-dim: #b0bccb;
+  --toast-bg: #232b34;
+  --toast-line: #3d4854;
+  --toast-text: #ffffff;
+  --toast-close: #b7c0cb;
+  --toast-success: #7fd8ae;
+  --toast-error: #ffa8a8;
+  --toast-info: #9dbcff;
+  --scrim: rgb(0 0 0 / 68%);
+  --shadow: 0 10px 34px rgb(0 0 0 / 45%);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-segment: 0 1px 4px rgb(0 0 0 / 45%);
+  --shadow-knob: 0 1px 3px rgb(0 0 0 / 55%);
+  --shadow-toast: 0 12px 35px rgb(0 0 0 / 55%);
+  --shadow-dialog: 0 24px 70px rgb(0 0 0 / 65%);
+  --ring: 3px solid rgb(134 171 255 / 45%);
+}
+
+/*
+ * 根字号写 100%（即用户代理默认字号，等于不干预），而不是写死 16px：
+ * 全壳的 font-size 已改成 rem，只有根字号不被写死，宿主把根字号调大
+ * （Android 侧由 WebView 的 textZoom / 系统字体设置推动，属另一条任务）时
+ * 整个外壳才会跟着放大。
+ */
+html {
+  font-size: 100%;
 }
 
 * {
@@ -79,12 +227,12 @@ body {
 
 .error-screen button {
   justify-self: center;
-  min-height: 44px;
+  min-height: 2.75rem;
   padding: 0 20px;
   border: 0;
   border-radius: var(--radius-control);
   background: var(--blue);
-  color: #fff;
+  color: var(--on-accent);
   font-weight: var(--weight-semibold);
   cursor: pointer;
 }
@@ -130,10 +278,10 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: calc(58px + env(safe-area-inset-top));
+  min-height: calc(3.625rem + env(safe-area-inset-top));
   padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
   border-bottom: 1px solid var(--line);
-  background: rgb(255 255 255 / 96%);
+  background: var(--header-bg);
 }
 
 .header-actions,
@@ -166,12 +314,12 @@ button:disabled {
   height: 32px;
   margin-right: 8px;
   border-radius: 8px;
-  color: #ffffff;
-  background: #17202b;
+  color: var(--on-solid);
+  background: var(--brand-bg);
 }
 
 .brand-name {
-  font-size: 16px;
+  font-size: 1rem;
   font-weight: var(--weight-bold);
 }
 
@@ -179,9 +327,9 @@ button:disabled {
   margin-left: 7px;
   padding: 3px 5px;
   border-radius: 4px;
-  color: #ffffff;
-  background: #17202b;
-  font-size: 9px;
+  color: var(--on-solid);
+  background: var(--brand-bg);
+  font-size: 0.5625rem;
   font-weight: var(--weight-bold);
   line-height: 1;
 }
@@ -197,7 +345,7 @@ button:disabled {
   border-radius: var(--radius-chip);
   color: var(--muted);
   background: var(--surface);
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: var(--weight-semibold);
   white-space: nowrap;
 }
@@ -206,12 +354,12 @@ button:disabled {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #9099a5;
+  background: var(--dot-idle);
 }
 
 .phase-blue {
   color: var(--blue);
-  border-color: #cbd9fb;
+  border-color: var(--blue-line);
   background: var(--blue-soft);
 }
 
@@ -222,7 +370,7 @@ button:disabled {
 
 .phase-green {
   color: var(--green);
-  border-color: #c6e5d7;
+  border-color: var(--green-line);
   background: var(--green-soft);
 }
 
@@ -232,18 +380,18 @@ button:disabled {
 
 .phase-amber {
   color: var(--amber);
-  border-color: #efdba9;
+  border-color: var(--amber-line-strong);
   background: var(--amber-soft);
 }
 
 .phase-amber .phase-dot {
-  background: #d28b00;
+  background: var(--amber-dot);
   animation: pulse 1.7s ease-in-out infinite;
 }
 
 .phase-red {
   color: var(--red);
-  border-color: #efc4c4;
+  border-color: var(--red-line);
   background: var(--red-soft);
 }
 
@@ -282,14 +430,14 @@ button:disabled {
 .screen-heading h1 {
   margin-top: 3px;
   color: var(--ink);
-  font-size: 27px;
+  font-size: 1.6875rem;
   font-weight: 720;
   line-height: 1.16;
 }
 
 .eyebrow {
   color: var(--blue);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 730;
   letter-spacing: 0;
   text-transform: uppercase;
@@ -300,11 +448,11 @@ button:disabled {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 44px;
+  min-height: 2.75rem;
   padding: 10px 15px;
   border: 1px solid transparent;
   border-radius: var(--radius-control);
-  font-size: 14px;
+  font-size: 0.875rem;
   font-weight: var(--weight-semibold);
   cursor: pointer;
   transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, transform 150ms ease;
@@ -315,7 +463,7 @@ button:disabled {
 }
 
 .button-primary {
-  color: #ffffff;
+  color: var(--on-accent);
   background: var(--blue);
 }
 
@@ -330,12 +478,12 @@ button:disabled {
 }
 
 .button-secondary:not(:disabled):hover {
-  border-color: #9eabb9;
+  border-color: var(--line-hover);
   background: var(--surface-muted);
 }
 
 .button-danger {
-  color: #ffffff;
+  color: var(--on-accent);
   background: var(--red);
 }
 
@@ -390,8 +538,8 @@ button:disabled {
   width: 52px;
   height: 52px;
   border-radius: var(--radius-inner);
-  color: #ffffff;
-  background: #202831;
+  color: var(--on-solid);
+  background: var(--icon-solid-bg);
 }
 
 .launch-copy {
@@ -404,14 +552,14 @@ button:disabled {
 }
 
 .launch-copy h2 {
-  font-size: 19px;
+  font-size: 1.1875rem;
   line-height: 1.3;
 }
 
 .launch-copy p {
   margin-top: 7px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.55;
 }
 
@@ -441,7 +589,7 @@ button:disabled {
   padding: 13px 14px;
   border: 1px solid;
   border-radius: var(--radius-control);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .inline-alert > svg {
@@ -463,14 +611,14 @@ button:disabled {
 }
 
 .inline-alert.warning {
-  color: #77510a;
-  border-color: #efd8a2;
+  color: var(--amber-text);
+  border-color: var(--amber-line);
   background: var(--amber-soft);
 }
 
 .inline-alert.danger {
-  color: #8d2a2a;
-  border-color: #efc4c4;
+  color: var(--red-text);
+  border-color: var(--red-line);
   background: var(--red-soft);
 }
 
@@ -496,8 +644,8 @@ button:disabled {
   width: 48px;
   height: 48px;
   border-radius: var(--radius-inner);
-  color: #ffffff;
-  background: #202831;
+  color: var(--on-solid);
+  background: var(--icon-solid-bg);
 }
 
 .runtime-title-row h2,
@@ -506,13 +654,13 @@ button:disabled {
 }
 
 .runtime-title-row h2 {
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .runtime-title-row p {
   margin-top: 4px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .download-progress {
@@ -528,7 +676,7 @@ button:disabled {
 
 .progress-copy {
   margin-bottom: 9px;
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .progress-copy strong {
@@ -547,7 +695,7 @@ button:disabled {
   height: 8px;
   overflow: hidden;
   border-radius: var(--radius-chip);
-  background: #e3e8ee;
+  background: var(--track);
 }
 
 .progress-track span {
@@ -567,7 +715,7 @@ button:disabled {
 .progress-detail {
   margin-top: 7px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 
 .install-steps {
@@ -583,7 +731,7 @@ button:disabled {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  color: #8a94a2;
+  color: var(--step-idle);
 }
 
 .install-step::before,
@@ -620,7 +768,7 @@ button:disabled {
   border: 1px solid var(--line-strong);
   border-radius: 50%;
   background: var(--surface);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 700;
 }
 
@@ -629,7 +777,7 @@ button:disabled {
 }
 
 .install-step.active > span {
-  color: #ffffff;
+  color: var(--on-accent);
   border-color: var(--blue);
   background: var(--blue);
 }
@@ -641,19 +789,19 @@ button:disabled {
 .install-step.complete::before,
 .install-step.complete::after,
 .install-step.complete + .install-step::before {
-  background: #a8d7c3;
+  background: var(--green-track);
 }
 
 .install-step.complete > span {
   color: var(--green);
-  border-color: #b3ddcb;
+  border-color: var(--green-line-strong);
   background: var(--green-soft);
 }
 
 .install-step small {
   overflow: hidden;
   max-width: 100%;
-  font-size: 11px;
+  font-size: 0.6875rem;
   text-overflow: ellipsis;
 }
 
@@ -671,7 +819,7 @@ button:disabled {
 
 .detail-section > h2 {
   margin: 0 0 11px;
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 
 .detail-list {
@@ -689,7 +837,7 @@ button:disabled {
   gap: 14px;
   padding: 13px 16px;
   border-bottom: 1px solid var(--line);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .detail-row:last-child {
@@ -704,7 +852,7 @@ button:disabled {
 }
 
 .detail-row > span svg {
-  color: #8893a1;
+  color: var(--icon-muted);
 }
 
 .detail-row strong {
@@ -716,13 +864,13 @@ button:disabled {
 .workspace-export p {
   margin: 0 0 14px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.5;
 }
 .workspace-export > .button { margin-right: 8px; }
 .workspace-file-list { display: grid; gap: 8px; margin-top: 14px; }
 .workspace-file-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.workspace-file-row span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.workspace-file-row span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; }
 .workspace-file-row button { min-height: 34px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius-control); background: var(--surface); color: var(--ink); }
 .workspace-file-row .workspace-delete { color: var(--red); border-color: var(--danger-line); }
 
@@ -742,7 +890,7 @@ button:disabled {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 3px;
   width: min(100%, 420px);
-  min-height: 44px;
+  min-height: 2.75rem;
   margin-bottom: 12px;
   padding: 3px;
   border: 1px solid var(--line);
@@ -756,13 +904,13 @@ button:disabled {
   justify-content: center;
   gap: 7px;
   min-width: 0;
-  min-height: 36px;
+  min-height: 2.25rem;
   padding: 7px 10px;
   border: 0;
   border-radius: var(--radius-inner);
   color: var(--muted);
   background: transparent;
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: var(--weight-semibold);
   cursor: pointer;
 }
@@ -770,17 +918,19 @@ button:disabled {
 .segmented button.active {
   color: var(--ink);
   background: var(--surface);
-  box-shadow: 0 1px 4px rgb(21 32 45 / 13%);
+  box-shadow: var(--shadow-segment);
 }
 
 .terminal-frame {
   position: relative;
   flex: 1;
+  /* 刻意保留 px：终端容器是外部尺寸，行数由 xterm 自己的字号（设置项
+     terminalFontSize）决定，跟着根字号涨只会让可视行数忽多忽少。 */
   min-height: 410px;
   overflow: hidden;
-  border: 1px solid #2d343d;
+  border: 1px solid var(--terminal-line);
   border-radius: var(--radius-card);
-  background: #101419;
+  background: var(--terminal-bg);
   box-shadow: var(--shadow);
 }
 
@@ -810,11 +960,11 @@ button:disabled {
   align-items: center;
   gap: 7px;
   padding: 6px 9px;
-  border: 1px solid #3b4652;
+  border: 1px solid var(--terminal-chip-line);
   border-radius: var(--radius-inner);
-  color: #c6ced8;
-  background: #1e252d;
-  font-size: 11px;
+  color: var(--terminal-chip-text);
+  background: var(--terminal-chip-bg);
+  font-size: 0.6875rem;
 }
 
 .terminal-copy {
@@ -826,11 +976,11 @@ button:disabled {
   align-items: center;
   gap: 5px;
   padding: 5px 9px;
-  border: 1px solid #3b4652;
+  border: 1px solid var(--terminal-chip-line);
   border-radius: var(--radius-inner);
-  background: #1b232c;
-  color: #aebacb;
-  font-size: 12px;
+  background: var(--terminal-chip-bg-strong);
+  color: var(--terminal-chip-text-dim);
+  font-size: 0.75rem;
   cursor: pointer;
 }
 
@@ -867,7 +1017,7 @@ button:disabled {
 
 .empty-terminal h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: 1.0625rem;
 }
 
 /* 空状态里的补充说明（例如 Shizuku 的自启动方式）：居中、弱化并限宽。 */
@@ -875,7 +1025,7 @@ button:disabled {
   max-width: 420px;
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.6;
 }
 
@@ -955,8 +1105,8 @@ button:disabled {
 }
 
 .management-icon.dark {
-  color: #ffffff;
-  background: #202831;
+  color: var(--on-solid);
+  background: var(--icon-solid-bg);
 }
 
 .management-copy {
@@ -967,21 +1117,21 @@ button:disabled {
 }
 
 .management-copy strong {
-  font-size: 14px;
+  font-size: 0.875rem;
 }
 
 .management-copy small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .compact-button {
-  min-height: 36px;
+  min-height: 2.25rem;
   padding: 7px 10px;
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .settings-section {
@@ -1023,13 +1173,13 @@ button:disabled {
 }
 
 .section-title h2 {
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 
 .section-title p {
   margin-top: 3px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.35;
 }
 
@@ -1043,8 +1193,8 @@ button:disabled {
 
 .field > span {
   overflow-wrap: anywhere;
-  color: #475362;
-  font-size: 12px;
+  color: var(--field-label);
+  font-size: 0.75rem;
   font-weight: 650;
 }
 
@@ -1052,13 +1202,13 @@ button:disabled {
 .field select {
   min-width: 0;
   width: 100%;
-  min-height: 44px;
+  min-height: 2.75rem;
   padding: 10px 12px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-control);
   color: var(--ink);
-  background: #fbfcfd;
-  font-size: 13px;
+  background: var(--surface-sunken);
+  font-size: 0.8125rem;
   transition: border-color 150ms ease, background-color 150ms ease;
 }
 
@@ -1068,13 +1218,13 @@ button:disabled {
 
 .field input:hover:not(:disabled),
 .field select:hover:not(:disabled) {
-  border-color: #9eabb9;
+  border-color: var(--line-hover);
 }
 
 .field input:focus,
 .field select:focus {
   border-color: var(--blue);
-  background: #ffffff;
+  background: var(--surface);
 }
 
 .credential-actions {
@@ -1084,12 +1234,12 @@ button:disabled {
 }
 
 .custom-providers, .custom-provider { display: grid; gap: 16px; min-width: 0; }
-.custom-provider { border-bottom: 1px solid #d8dde2; padding-bottom: 20px; }
+.custom-provider { border-bottom: 1px solid var(--line-alt); padding-bottom: 20px; }
 .custom-provider-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
-.custom-provider-heading h3 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.custom-provider-heading h3 { margin: 0; font-size: 1rem; overflow-wrap: anywhere; }
 .custom-provider-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-.custom-model { border: 0; border-top: 1px solid #e3e6e9; padding: 12px 0 0; margin: 0; min-width: 0; }
-.custom-model legend { font-size: 14px; padding-right: 8px; }
+.custom-model { border: 0; border-top: 1px solid var(--line-faint); padding: 12px 0 0; margin: 0; min-width: 0; }
+.custom-model legend { font-size: 0.875rem; padding-right: 8px; }
 .custom-providers .icon-button { width: 36px; height: 36px; flex: 0 0 36px; display: inline-grid; place-items: center; }
 @media (max-width: 560px) {
   .custom-provider-fields { grid-template-columns: minmax(0, 1fr); }
@@ -1098,7 +1248,7 @@ button:disabled {
 
 .mono-input {
   font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
-  font-size: 12px !important;
+  font-size: 0.75rem !important;
 }
 
 .range-field,
@@ -1122,13 +1272,13 @@ button:disabled {
 
 .range-field strong,
 .toggle-row strong {
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .range-field small,
 .toggle-row small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 0.6875rem;
 }
 
 /* 开关已打开、但系统侧条件不满足时的补充提示：用错误色与说明文案区分于普通说明。 */
@@ -1151,7 +1301,7 @@ button:disabled {
   border: 0;
   border-radius: 999px;
   appearance: none;
-  background: #aab3bf;
+  background: var(--switch-off);
   cursor: pointer;
   transition: background-color 150ms ease;
 }
@@ -1163,8 +1313,8 @@ button:disabled {
   width: 19px;
   height: 19px;
   border-radius: 50%;
-  background: #ffffff;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 20%);
+  background: var(--switch-knob);
+  box-shadow: var(--shadow-knob);
   content: '';
   transition: transform 150ms ease;
 }
@@ -1185,7 +1335,7 @@ button:disabled {
   border-radius: var(--radius-chip);
   color: var(--muted);
   background: var(--surface-muted);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: var(--weight-semibold);
 }
 
@@ -1204,7 +1354,7 @@ button:disabled {
   align-items: center;
   gap: 8px;
   color: var(--green);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 650;
 }
 
@@ -1220,7 +1370,7 @@ button:disabled {
   justify-content: center;
   gap: 11px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .boot-screen {
@@ -1244,7 +1394,7 @@ button:disabled {
   justify-content: center;
   overflow-y: auto;
   padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
-  background: rgb(9 13 18 / 58%);
+  background: var(--scrim);
   overscroll-behavior: contain;
 }
 
@@ -1257,7 +1407,7 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface);
-  box-shadow: 0 24px 70px rgb(0 0 0 / 30%);
+  box-shadow: var(--shadow-dialog);
 }
 
 .dialog-close {
@@ -1294,13 +1444,13 @@ button:disabled {
 
 .dialog h2 {
   margin: 14px 0 7px;
-  font-size: 19px;
+  font-size: 1.1875rem;
 }
 
 .dialog > p {
   margin: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.55;
 }
 
@@ -1327,24 +1477,24 @@ button:disabled {
   width: min(calc(100% - 28px), 390px);
   min-height: 48px;
   padding: 9px 8px 9px 12px;
-  border: 1px solid #333c47;
+  border: 1px solid var(--toast-line);
   border-radius: var(--radius-control);
-  color: #ffffff;
-  background: #1c232b;
-  box-shadow: 0 12px 35px rgb(0 0 0 / 24%);
-  font-size: 13px;
+  color: var(--toast-text);
+  background: var(--toast-bg);
+  box-shadow: var(--shadow-toast);
+  font-size: 0.8125rem;
 }
 
 .toast-success > svg {
-  color: #79d4a9;
+  color: var(--toast-success);
 }
 
 .toast-error > svg {
-  color: #ff9d9d;
+  color: var(--toast-error);
 }
 
 .toast-info > svg {
-  color: #94b8ff;
+  color: var(--toast-info);
 }
 
 .toast button {
@@ -1356,7 +1506,7 @@ button:disabled {
   padding: 0;
   border: 0;
   border-radius: var(--radius-inner);
-  color: #b7c0cb;
+  color: var(--toast-close);
   background: transparent;
   cursor: pointer;
 }
@@ -1405,7 +1555,7 @@ button:disabled {
   }
 
   .screen-heading h1 {
-    font-size: 30px;
+    font-size: 1.875rem;
   }
 
   .terminal-screen {
@@ -1486,7 +1636,7 @@ button:disabled {
   .conversation-button {
     min-height: 40px;
     padding: 8px 10px;
-    font-size: 12px;
+    font-size: 0.75rem;
   }
 
   .management-service,
@@ -1563,9 +1713,9 @@ button:disabled {
   background: var(--surface);
   box-shadow: var(--shadow);
 }
-.language-card h2 { font-size: 23px; line-height: 1.4; }
+.language-card h2 { font-size: 1.4375rem; line-height: 1.4; }
 .language-card p, .language-settings p { color: var(--muted); line-height: 1.6; }
-.language-card label, .language-settings label { display: block; margin: 16px 0 8px; font-size: 13px; font-weight: var(--weight-semibold); }
+.language-card label, .language-settings label { display: block; margin: 16px 0 8px; font-size: 0.8125rem; font-weight: var(--weight-semibold); }
 .language-card select, .language-settings select {
   width: 100%;
   min-height: 46px;
@@ -1578,9 +1728,57 @@ button:disabled {
 }
 .language-card .button { margin-top: 22px; width: 100%; }
 .language-settings { padding: 20px; margin-bottom: 14px; }
-.language-settings h2 { font-size: 18px; margin: 8px 0; }
+.language-settings h2 { font-size: 1.125rem; margin: 8px 0; }
 html[lang="en"] .button { white-space: normal; }
 html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
+
+/* 外观设置：三个选项并排，窄屏或大字号下自动换行成两行，不会把文字压出容器。 */
+.appearance-settings h2 { font-size: 1.125rem; margin: 8px 0; }
+.appearance-settings p { color: var(--muted); line-height: 1.6; }
+.appearance-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.appearance-option {
+  position: relative;
+  display: inline-flex;
+  flex: 1 1 96px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 2.75rem;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.8125rem;
+  font-weight: var(--weight-semibold);
+  text-align: center;
+  cursor: pointer;
+}
+.appearance-option.active {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+/* 原生 radio 铺满整块：既保留键盘与读屏语义，又能让整块都可点、
+   焦点环也画在整块上（全局的 input:focus-visible 规则直接复用）。 */
+.appearance-option input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: inherit;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.appearance-hint { margin: 10px 0 0; font-size: 0.75rem; }
 
 /* 后台保持：告警条上的操作按钮推到右侧。 */
 .inline-alert > .button {
@@ -1605,12 +1803,12 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   padding: 8px 0;
   border-top: 1px solid var(--line);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .settings-status-row strong {
   color: var(--ink);
-  font-size: 12px;
+  font-size: 0.75rem;
   text-align: right;
 }
 
@@ -1618,7 +1816,7 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 .mailbox-path {
   color: var(--ink);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1.45;
   text-align: right;
   word-break: break-all;
@@ -1629,7 +1827,7 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   padding-top: 10px;
   border-top: 1px solid var(--line);
   color: var(--muted);
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1.55;
 }
 
@@ -1658,12 +1856,12 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 }
 
 .harness-log-heading strong {
-  font-size: 15px;
+  font-size: 0.9375rem;
 }
 
 .harness-log-heading small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.35;
 }
 
@@ -1677,22 +1875,23 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   gap: 8px;
   margin-top: 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.5;
 }
 
 /* 日志正文共用一套等宽样式：运行日志与诊断日志的容器各自另带一个 class 便于区分与定位。 */
 .log-output {
-  max-height: 240px;
+  /* 跟着根字号涨：日志字号变大时可视行数才不会被固定高度吃掉。 */
+  max-height: 15rem;
   margin: 10px 0 0;
   padding: 10px 11px;
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius-inner);
-  background: #fbfcfd;
+  background: var(--surface-sunken);
   color: var(--ink);
   font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
-  font-size: 11px;
+  font-size: 0.6875rem;
   line-height: 1.5;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -1705,11 +1904,11 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 }
 
 .log-line-error {
-  color: #9b2c2c;
+  color: var(--log-error);
 }
 
 .log-line-warn {
-  color: #8a5a11;
+  color: var(--log-warn);
 }
 
 /* 判读提示：把已确诊的错误签名翻译成结论与下一步，只在命中时出现。 */
@@ -1723,22 +1922,22 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 .log-insight {
   display: flex;
   padding: 10px 12px;
-  border: 1px solid #efd8a2;
+  border: 1px solid var(--amber-line);
   border-radius: var(--radius-inner);
   background: var(--amber-soft);
-  color: #77510a;
+  color: var(--amber-text);
   flex-direction: column;
   gap: 4px;
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.5;
 }
 
 .log-insight strong {
-  font-size: 13px;
+  font-size: 0.8125rem;
 }
 
 .log-insight-next {
-  color: #5f4008;
+  color: var(--amber-text-strong);
 }
 
 .log-filter {
@@ -1776,7 +1975,7 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 }
 
 .self-check-row.warn {
-  border-color: #efd8a2;
+  border-color: var(--amber-line);
   background: var(--amber-soft);
 }
 
@@ -1789,21 +1988,21 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 
 .self-check-label {
   color: var(--ink);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: var(--weight-semibold);
 }
 
 .self-check-meaning {
   margin: 0;
   color: var(--ink);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.5;
 }
 
 .self-check-next {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.5;
 }
 
@@ -1821,7 +2020,7 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   background: var(--surface-hover);
   color: var(--muted);
   font: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   text-align: left;
   cursor: pointer;
 }
