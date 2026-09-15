@@ -1,6 +1,10 @@
 package io.deepseekharness.mobile
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.provider.OpenableColumns
+import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import com.getcapacitor.BridgeActivity
 
@@ -22,6 +26,7 @@ class MainActivity : BridgeActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         registerPlugin(MobileRuntimePlugin::class.java)
         super.onCreate(savedInstanceState)
+        handleExternalFileIntent(intent)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -36,4 +41,52 @@ class MainActivity : BridgeActivity() {
             }
         })
     }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        if (intent != null) handleExternalFileIntent(intent)
+    }
+
+    /** Accept a user-selected content URI from another app and copy it into private inbox storage. */
+    private fun handleExternalFileIntent(intent: Intent) {
+        val uri = when (intent.action) {
+            Intent.ACTION_VIEW -> intent.data
+            Intent.ACTION_SEND -> intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+            else -> null
+        } ?: return
+        if (uri.scheme != "content") {
+            Toast.makeText(this, "仅支持通过系统文件提供方导入文件", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val inbox = java.io.File(filesDir, "inbox")
+        if (!inbox.exists() && !inbox.mkdirs()) return
+        val name = queryDisplayName(uri) ?: "shared-file"
+        val safeName = name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(120).ifEmpty { "shared-file" }
+        val target = java.io.File(inbox, "${System.currentTimeMillis()}-$safeName")
+        try {
+            contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { output ->
+                    val buffer = ByteArray(16 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > MAX_IMPORT_BYTES) throw IllegalArgumentException("file too large")
+                        output.write(buffer, 0, read)
+                    }
+                }
+            } ?: throw IllegalArgumentException("unreadable")
+            Toast.makeText(this, "文件已导入应用收件箱", Toast.LENGTH_SHORT).show()
+        } catch (_: Throwable) {
+            target.delete()
+            Toast.makeText(this, "文件导入失败", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun queryDisplayName(uri: Uri): String? = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) cursor.getString(0) else null
+    }
+
+    companion object { private const val MAX_IMPORT_BYTES = 64L * 1024 * 1024 }
 }
