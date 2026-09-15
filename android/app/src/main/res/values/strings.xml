@@ -31,4 +31,16 @@
     <string name="overlay_ball_notification_text">点按可快速回到 Harness 对话</string>
     <string name="overlay_ball_menu_return">回到应用</string>
     <string name="overlay_ball_menu_hide">隐藏悬浮球</string>
+
+    <!--
+      任务通知（登记册 §5.5）。与保活通知分开一个通道：保活必须常驻静默，
+      任务通知的价值在于离开应用后仍能得知，两者的用户预期相反。
+      文案刻意**不说**「正在运行中」这类无法证实的话，只陈述已经发生的事。
+    -->
+    <string name="task_notification_channel_name">运行状态提醒</string>
+    <string name="task_notification_channel_description">本机 Harness 停止或启动失败时提醒你</string>
+    <string name="task_notification_stopped_title">Harness 已停止</string>
+    <string name="task_notification_stopped_text">本机运行环境已自行退出，点按回到应用查看</string>
+    <string name="task_notification_failed_title">Harness 未能启动</string>
+    <string name="task_notification_failed_text">运行环境在启动阶段退出，点按回到应用查看原因</string>
 </resources>

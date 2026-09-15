@@ -443,6 +443,9 @@ class RuntimeSupervisor(
      * stop 会先把进程引用清空，观察者拿到锁时已经认不出它是当前进程，直接返回。
      */
     private fun onHarnessExited(process: Process, manifest: RuntimeManifest) {
+        // 退出前所处的阶段要在 update 之前取：它决定通知文案是「已停止」还是「未能启动」
+        // （见 TaskNotificationPolicy.forHarnessExit）。
+        val previousPhase = status.snapshot().phase
         synchronized(lock) {
             if (harnessProcess !== process) return
             clearHarnessState()
@@ -460,6 +463,12 @@ class RuntimeSupervisor(
             downloaded = manifest.rootfs.compressedBytes,
             total = manifest.rootfs.compressedBytes,
             nextHarnessUrl = null,
+        )
+        // 界面提示只在用户看着界面时有用；自行退出往往发生在他已经切走之后（登记册 §5.5）。
+        // 这里只发一条，不做任何重试与保活 —— 通知不是保活手段。
+        TaskNotification.postHarnessStopped(
+            appContext,
+            TaskNotificationPolicy.forHarnessExit(previousPhase),
         )
     }
 

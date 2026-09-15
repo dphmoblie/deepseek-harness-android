@@ -31,4 +31,11 @@
     <string name="overlay_ball_notification_text">Tap to return to the Harness conversation</string>
     <string name="overlay_ball_menu_return">Return to app</string>
     <string name="overlay_ball_menu_hide">Hide floating ball</string>
+
+    <string name="task_notification_channel_name">Runtime status</string>
+    <string name="task_notification_channel_description">Alerts you when the local Harness stops or fails to start</string>
+    <string name="task_notification_stopped_title">Harness stopped</string>
+    <string name="task_notification_stopped_text">The local runtime exited on its own. Tap to return to the app.</string>
+    <string name="task_notification_failed_title">Harness failed to start</string>
+    <string name="task_notification_failed_text">The runtime exited during startup. Tap to return to the app and see why.</string>
 </resources>
