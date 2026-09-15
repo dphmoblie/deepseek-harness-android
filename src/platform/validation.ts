@@ -33,6 +33,7 @@ import {
 } from './types'
 import { validateCustomCredentialIds, validateCustomCredentialUpdates, validateCustomModelProviders } from './customProviders'
 import { validateSelfCheckReport, type SelfCheckReport } from '../runtimeSelfCheck'
+import { validateHarnessPermissionMode } from '../harnessPermissionMode'
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const SESSION_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i
@@ -247,6 +248,7 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
   if (typeof overlayBallEnabled !== 'boolean') throw new Error('悬浮球设置格式无效')
   return {
     ...source,
+    ...(settings.harnessPermissionMode === undefined ? {} : { harnessPermissionMode: validateHarnessPermissionMode(settings.harnessPermissionMode) }),
     keepScreenAwake: settings.keepScreenAwake,
     terminalFontSize: settings.terminalFontSize,
     configuredModelProviders: configuredModelProviders(settings.configuredModelProviders, settings.apiKey),
@@ -309,6 +311,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
   if (typeof overlayBallEnabled !== 'boolean') throw new Error('悬浮球设置格式无效')
   const configuredProviders = configuredModelProviders(settings.configuredModelProviders, settings.apiKey)
   const customSettings = {
+    ...(settings.harnessPermissionMode === undefined ? {} : { harnessPermissionMode: validateHarnessPermissionMode(settings.harnessPermissionMode) }),
     ...(settings.harnessConfiguredModelProviders === undefined ? {} : {
       harnessConfiguredModelProviders: configuredModelProviders(settings.harnessConfiguredModelProviders, undefined),
     }),
