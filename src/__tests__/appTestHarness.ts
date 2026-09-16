@@ -291,9 +291,18 @@ export function beforeEachAppTest(): void {
  * 「进设置」这个动作能不能立刻点，取决于启动流程跑到哪一步。用同步查询等于把用例的成败
  * 押在「启动链是否已经在同一个微任务里跑完」上——实测在并行跑多个测试文件（CPU 争抢）时会直接失败。
  * 改成有界等待后，前置条件变成「设置首页出现了」，用例自己的断言一条都没有放宽。
+ *
+ * **为什么显式给 5 s**：`findBy*` 的默认上限只有 1 s，而这个用例**单独跑**时这条等待就要
+ * 842 ms（实测），全量并行跑（CPU 争抢 + 4 个 worker）时越过 1 s 直接失败——
+ * 失败信息是「找不到入口按钮」，看起来像功能坏了，实际上是等待上限太短。
+ * 5 s 只放宽**等待**，不放宽断言：入口真的不出现时依然失败，只是失败得更慢一点。
  */
+const SETTINGS_NAV_TIMEOUT_MS = 5_000
+
 export async function openSettingsPage(name: string): Promise<void> {
-  const entry = await screen.findByRole('button', { name: new RegExp(name) })
+  const entry = await screen.findByRole('button', { name: new RegExp(name) }, {
+    timeout: SETTINGS_NAV_TIMEOUT_MS,
+  })
   fireEvent.click(entry)
-  await screen.findByRole('heading', { name })
+  await screen.findByRole('heading', { name }, { timeout: SETTINGS_NAV_TIMEOUT_MS })
 }

@@ -1,12 +1,16 @@
-# 移动端 0.1.9 真机验收清单
+# 移动端真机验收清单（随版本滚动，不绑定某个历史版本号）
 
 > 适用范围：荣耀 Android 16（arm64/16KB）及至少一台其他 arm64 真机。验收对象为
-> 同一个 `v0.1.9-mobile-<run_number>`（正式版为 `v0.1.9`）Release 中的内嵌 APK、
-> `runtime-manifest.json` 与 `rootfs.bundle`。
+> **同一个 Release** 中的内嵌 APK、`runtime-manifest.json` 与 `rootfs.bundle`
+> （正式版 tag 为 `v<versionName>`，预览版为 `v<versionName>-mobile-<run_number>`）。
+> 各项验收请记录**实际执行的** `versionName` / `versionCode`；本文档里的版本数字只是示例，
+> 当前值以 `android/app/build.gradle` 与 `.github/workflows/android-build.yml` 的 `APP_VERSION` 为准。
+> 含修复的版本**不能**用旧回执抵账——凡是被某个缺陷影响过的条目，都要在装了修复版之后重跑。
 
 ## 0. 发布资产前置
 
-- [ ] APK 的 `versionCode=9`、`versionName=0.1.9`，并通过团队签名校验。
+- [ ] APK 的 `versionCode` / `versionName` 与 `android/app/build.gradle`、
+      `.github/workflows/android-build.yml` 的 `APP_VERSION` **三者一致**（以仓库当前值为准），并通过团队签名校验。
 - [ ] Release 同时包含 APK、`runtime-manifest.json`、`rootfs.bundle`，三者来自同一次 CI run。
 - [ ] APK 内恰有一份 `assets/runtime/rootfs.bundle` 和运行时 manifest，没有 `.bak` 或其他 rootfs 副本。
 - [ ] 内嵌 manifest 的 rootfs SHA-256 与 APK 内 bundle 一致；全新安装无需手工填写运行时来源。
@@ -215,7 +219,8 @@ K15 若失败，请一并抓取 `adb logcat -b crash -d | tail -n 80`：插件�
 ```text
 设备/系统：
 Android 页面大小：
-Release tag：v0.1.9-mobile-____
+Release tag：v____（正式版）/ v____-mobile-____（预览版）
+versionName / versionCode：
 Git commit：
 APK SHA-256：
 manifest SHA-256：
@@ -315,3 +320,25 @@ R8 的计数命令来自真机实测（修复前为 3），修复后必须重跑
 - [ ] T6 必须实际做一次「删除白名单目录后重启」，这是唯一能证明「跳过而不是整体失败」的操作。
 - [ ] T7 若本轮**没有**提供删除/覆盖入口，记「未实现（无入口）」，不要记「通过」。
 - [ ] T8 的文案核对要落到界面文字上：出现「root」即判失败。
+
+## 12. 内置 Git 与网络工具链（R-§5.7，四条）
+
+前置与口径见 `docs/真机缺陷与改进清单.md` §5.7。**为什么单列一节**：0.2.0 真机上出现
+「二进制在、共享库不在」——`git --version` 可用，而 `curl` / `ssh` / `git ls-remote` 全部因缺库起不来。
+该缺陷已修（`scripts/stage-network-tools.sh` 的共享库闭包从未生效，以及同一条因果链上的另外五处问题），
+`verify-bundle.py` 也加了**产物级 `DT_NEEDED` 校验**，但**修复只在 CI 产物上验证过**。
+因此这四条必须在**装了修复版之后**重新逐条执行；在拿到结果之前，不要按「已通过」记。
+
+| # | 操作 | 预期 |
+|---|---|---|
+| R-§5.7-1 | 访客内执行 `curl --version` | 打印版本号（含 `libcurl/…` 与 SSL 后端）。报 `error while loading shared libraries: libcurl.so.4` 即**失败**——这正是 0.2.0 的表现 |
+| R-§5.7-2 | 访客内执行 `ssh -V` | 打印 `OpenSSH_…`。报 `libgssapi_krb5.so.2` / `libkrb5` 缺失即**失败**。另记 `DSH_SKIP_OPENSSH=1` 是否被用于本次构建：该组件是可选件，跳过时本条记「未包含」而不是「失败」 |
+| R-§5.7-3 | 访客内执行 `git ls-remote https://github.com/octocat/Hello-World` | 输出 ref 列表（能出列表即证明**证书链与 `git-remote-https` 同时可用**）。只做本地 `init/add/commit` **不能**替代本条——0.2.0 的本地 git 本来就是好的 |
+| R-§5.7-4 | 访客内对四个入口逐个检查依赖：`git`、`curl`、`ssh`、`/usr/lib/git-core/git-remote-https`，例如 `ldd /usr/bin/curl \| grep -i 'not found'` | **四个都不得出现 `not found`**。某个二进制存在但库缺失，会让「命令装了」和「命令能用」被混为一谈——本条是第 1–3 条的共同根因断言 |
+
+- [ ] 四条都在**同一个**修复版上执行，并在备注里写明版本号（`versionName` / `versionCode`）与是否跳过 openssh。
+- [ ] R-§5.7-3 必须走**真实 HTTPS**：`git ls-remote` 指向内网或本地路径不算，证书链才是本条的判定点。
+- [ ] R-§5.7-4 要覆盖 `git-remote-https`（在 `/usr/lib/git-core/` 下，不在 `PATH` 里，容易漏检）。
+- [ ] 四条全绿之后再验**插件侧**：`@linxin666/dsh-client-ui-git-graph` 能出提交图（它假设 git 存在）。
+      这一步失败但四条通过时，问题在插件而不是工具链，分开记。
+- [ ] 若仍失败，把 `ldd` 的原始输出整段贴回回执，不要只写「curl 不可用」——缺哪个 SONAME 直接决定下一轮改哪里。
