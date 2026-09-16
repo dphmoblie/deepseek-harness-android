@@ -165,6 +165,24 @@ if [[ -n "$SAMPLE_BIN" ]]; then
 else
   log "  样例二进制: **DEST 里没有可执行文件**（说明第 4 步的复制没落地）"
 fi
+# usr-merge 归一化：把 /lib、/bin、/sbin 下的路径映射到 /usr 下的真实位置。
+#
+# **为什么必须做**：Ubuntu 是 usr-merge，最终 rootfs 里 `lib` / `bin` / `sbin` 是**符号链接**；
+# 而 `cp -a --parents /lib/aarch64-linux-gnu/libfoo.so.8` 会在增量树里造出 `lib/...` 的**真实目录**。
+# 两者合并后直接冲突，CI 上就是这样被拦下的：
+#   BUNDLE_VERIFY_FAILED: path conflict: parent of 'lib/aarch64-linux-gnu' is occupied by sym entry 'lib'
+# 映射之后写进镜像的都是 `/usr/lib/...`，与基线里 `lib -> usr/lib` 的符号链接自然一致。
+usr_merge_path() {
+  case "$1" in
+    /lib) printf '%s\n' /usr/lib ;;
+    /lib/*) printf '%s\n' "/usr/lib/${1#/lib/}" ;;
+    /bin) printf '%s\n' /usr/bin ;;
+    /bin/*) printf '%s\n' "/usr/bin/${1#/bin/}" ;;
+    /sbin) printf '%s\n' /usr/sbin ;;
+    /sbin/*) printf '%s\n' "/usr/sbin/${1#/sbin/}" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
 for _round in 1 2 3 4 5; do
   : > "$NEW_LIBS"
   while IFS= read -r -d '' binary; do
@@ -173,6 +191,7 @@ for _round in 1 2 3 4 5; do
       # SONAME 链接与解析后的实体都要在镜像里，动态加载器才找得到。
       for candidate in "$lib" "$(readlink -f "$lib" 2>/dev/null || true)"; do
         [[ -n "$candidate" && -e "$candidate" ]] || continue
+        candidate="$(usr_merge_path "$candidate")"
         [[ -e "$DEST/${candidate#/}" ]] && continue
         printf '%s\n' "$candidate"
       done
