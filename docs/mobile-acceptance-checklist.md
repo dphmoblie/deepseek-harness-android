@@ -328,11 +328,12 @@ R8 的计数命令来自真机实测（修复前为 3），修复后必须重跑
 该缺陷已修（`scripts/stage-network-tools.sh` 的共享库闭包从未生效，以及同一条因果链上的另外五处问题），
 `verify-bundle.py` 也加了**产物级 `DT_NEEDED` 校验**，但**修复只在 CI 产物上验证过**。
 因此这四条必须在**装了修复版之后**重新逐条执行；在拿到结果之前，不要按「已通过」记。
+当前可用载体是预发布版 **`v0.2.0-mobile-294`**（2026-09-16，含本次全部修复；日志显示补齐共享库 41 个、
+产物条目 45,439 → 45,480、`BUNDLE_VERIFY_OK` 在真实产物上通过）。若已发布更新的版本，用更新的那一版。
 
 | # | 操作 | 预期 |
 |---|---|---|
-| R-§5.7-1 | 访客内执行 `curl --version` | 打印版本号（含 `libcurl/…` 与 SSL 后端）。报 `error while loading shared libraries: libcurl.so.4` 即**失败**——这正是 0.2.0 的表现 |
-| R-§5.7-2 | 访客内执行 `ssh -V` | 打印 `OpenSSH_…`。报 `libgssapi_krb5.so.2` / `libkrb5` 缺失即**失败**。另记 `DSH_SKIP_OPENSSH=1` 是否被用于本次构建：该组件是可选件，跳过时本条记「未包含」而不是「失败」 |
+| R-§5.7-1 | 访客内执行 `curl --version` | 打印版本号（含 `libcurl/…` 与 SSL 后端）。报 `error while loading shared libraries: libcurl.so.4` 即**失败**——这正是 0.2.0 的表现 || R-§5.7-2 | 访客内执行 `ssh -V` | 打印 `OpenSSH_…`。报 `libgssapi_krb5.so.2` / `libkrb5` 缺失即**失败**。另记 `DSH_SKIP_OPENSSH=1` 是否被用于本次构建：该组件是可选件，跳过时本条记「未包含」而不是「失败」 |
 | R-§5.7-3 | 访客内执行 `git ls-remote https://github.com/octocat/Hello-World` | 输出 ref 列表（能出列表即证明**证书链与 `git-remote-https` 同时可用**）。只做本地 `init/add/commit` **不能**替代本条——0.2.0 的本地 git 本来就是好的 |
 | R-§5.7-4 | 访客内对四个入口逐个检查依赖：`git`、`curl`、`ssh`、`/usr/lib/git-core/git-remote-https`，例如 `ldd /usr/bin/curl \| grep -i 'not found'` | **四个都不得出现 `not found`**。某个二进制存在但库缺失，会让「命令装了」和「命令能用」被混为一谈——本条是第 1–3 条的共同根因断言 |
 
