@@ -171,7 +171,12 @@ for _round in 1 2 3 4 5; do
         printf '%s\n' "$candidate"
       done
     done < <(collect_lib_paths "$binary")
-  done < <(find "$DEST" -type f -print0)
+  done < <(find "$DEST" -type f -print0) > "$NEW_LIBS"
+  #                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  # 这个重定向是 O-7 的**真正根因**：原来这里没有它，于是 `printf '%s\n' "$candidate"`
+  # 收集到的库路径全部打到了**脚本的标准输出**（进了 CI 日志），而 `$NEW_LIBS` 自始至终是空的
+  # —— `sort -u -o "$NEW_LIBS" "$NEW_LIBS"` 排的是一个永远空的文件，闭包从未生效。
+  # 表现就是：二进制装进了镜像、运行库一个都没有，而所有「存在 + 0755 + ELF」的校验都是绿的。
   LC_ALL=C sort -u -o "$NEW_LIBS" "$NEW_LIBS"
   LC_ALL=C comm -23 "$NEW_LIBS" "$BASE_PATHS" > "$NEW_LIBS.filtered"
   if [[ ! -s "$NEW_LIBS.filtered" ]]; then
