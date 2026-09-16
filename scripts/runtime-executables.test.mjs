@@ -77,19 +77,18 @@ with tempfile.TemporaryDirectory(prefix='dsh-tool-modes-') as directory:
     assert verify.runtime_executable_name(rg) == 'ripgrep'
     assert verify.runtime_executable_name(landlock) == 'landlock-run'
     assert verify.runtime_executable_name('usr/bin/bash') == 'bash'
-    # N-4: usr/local/bin/python3 was written with two '..' and resolved to
-    # /usr/opt/python/bin/python3 (absent). The old check only asked "does it escape
-    # the root", so a dangling link passed. Pin the resolved path itself, and pin the
-    # expectation table too, so the guard cannot be turned into a wrong table.
-    assert str(verify.resolved_symlink_target('usr/local/bin/python3', '../../opt/python/bin/python3')) == '/usr/opt/python/bin/python3'
-    assert str(verify.resolved_symlink_target('usr/local/bin/python3', '../../../opt/python/bin/python3')) == '/opt/python/bin/python3'
-    assert str(verify.resolved_symlink_target('usr/local/bin/python', '../../../opt/python/bin/python3')) == '/opt/python/bin/python3'
-    assert verify.resolved_symlink_target('usr/local/bin/python3', '../../../../etc/passwd') is None
-    assert verify.REQUIRED_SYMLINKS['usr/local/bin/python3'] == 'opt/python/bin/python3'
-    assert verify.REQUIRED_SYMLINKS['usr/local/bin/python'] == 'opt/python/bin/python3'
-    # And pin the production call site itself: the resolver logic above is only useful if
-    # the build script actually writes three levels. Asserting the exact call means the
-    # two-level form cannot come back unnoticed.
+    # N-4: usr/local/bin is three levels deep, so reaching opt/python/bin needs three '..'.
+    # The table used to carry the two-level form and therefore *agreed* with the wrong
+    # build script: the verifier compared a wrong expectation against a wrong artifact and
+    # passed, while PATH python3 was a dangling link on the device. Pin the exact expected
+    # targets, and pin the build call site too, so the two cannot drift back together.
+    table = dict(verify.REQUIRED_SYMLINKS)
+    assert table['usr/local/bin/python3'] == '../../../opt/python/bin/python3'
+    assert table['usr/local/bin/python'] == '../../../opt/python/bin/python3'
+    # node entries were always correct; keep them pinned so a "fix" cannot touch them.
+    assert table['usr/local/bin/node'] == '../../../opt/node/bin/node'
+    assert table['usr/local/bin/npm'] == '../../../opt/node/bin/npm'
+    assert '../../opt/python/bin/python3' not in table.values(), 'two-level python target is back in the table'
     build_source = Path('scripts/build-embedded-runtime.py').read_text(encoding='utf-8')
     assert 'add_symlink("usr/local/bin/python3", "../../../opt/python/bin/python3")' in build_source
     assert 'add_symlink("usr/local/bin/python", "../../../opt/python/bin/python3")' in build_source

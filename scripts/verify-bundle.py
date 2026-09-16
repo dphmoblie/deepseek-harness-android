@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """CI-side faithful simulation of SafeRootfsExtractor's rejection rules.
 
 Runs against a freshly built bundle + manifest and fails with the exact
@@ -82,40 +82,28 @@ MIN_CA_CERTIFICATE_FILES = 64
 CA_CERTIFICATE_DIRECTORY = "etc/ssl/certs/"
 CA_HASHED_LINK_PATTERN = re.compile(r"[0-9a-f]{8}\.\d+")
 
-
-def resolved_symlink_target(name: str, target: str) -> PurePosixPath | None:
-    """按 POSIX 语义折叠链接目标，返回解析后的绝对路径；跑出 root 时返回 None。
-
-    **返回路径而不只是布尔值**是 N-4 的教训：原来只判断「有没有跑出 root」，
-    于是**断链**（指向一个不存在的位置）完全看不出来 ——
-    `usr/local/bin/python3` 若写成 `../../opt/python/bin/python3`，解析到
-    `/usr/opt/python/bin/python3`：既不越界、也不存在，校验一路放行，
-    直到真机上敲 `python3` 才暴露。`main()` 用它做「落点必须存在」的检查，
-    单测直接断言这条解析结果（见 `scripts/runtime-executables.test.mjs`）。
-    """
-    parent = PurePosixPath(name).parent
-    base = PurePosixPath("/") if target.startswith("/") else parent
-    rel = target.lstrip("/")
-    stack: list[str] = []
-    for part in (str(base) + "/" + rel).split("/"):
-        if part in ("", ".", "/"):
-            continue
-        if part == "..":
-            if not stack:
-                return None
-            stack.pop()
-        else:
-            stack.append(part)
-    return PurePosixPath("/" + "/".join(stack)) if stack else None
-
-
-# 明确要求的链接：解析结果必须**正好落在期望的位置，且该位置存在**。
-# 这一条专门防「相对层数写错」——它同时抓住「指向错误位置」与「指向不存在的位置」，
-# 而两者在真机上的表现都是「命令找不到」，排查成本很高。
-REQUIRED_SYMLINKS = {
-    "usr/local/bin/python3": "opt/python/bin/python3",
-    "usr/local/bin/python": "opt/python/bin/python3",
-}
+# 必须存在、且目标解析一致的符号链接（与 App 侧 `RootfsIntegrity` 的口径一致：
+# 缺失或损坏会在安装后报 ROOTFS_LINKS_CORRUPTED）。
+#
+# **python 这两行曾把相对层数写错**：源在 `usr/local/bin`（三层深），需要三个 `..`
+# 才能回到根再去 `opt/python/bin`；写成两个 `..` 会解析到 `/usr/opt/python/bin/python3`
+# （不存在）—— 也就是真机反馈的 N-4：PATH 上的 `python3` / `python` 一直是断链。
+# 注意同表的 node 四项一直是对的（三层），python 这两行当初是照着错值写进来的。
+REQUIRED_SYMLINKS: list[tuple[str, str]] = [
+    ("bin", "usr/bin"),
+    ("lib", "usr/lib"),
+    ("sbin", "usr/sbin"),
+    ("usr/bin/sh", "dash"),
+    ("etc/mtab", "../proc/self/mounts"),
+    ("etc/os-release", "../usr/lib/os-release"),
+    ("etc/localtime", "/usr/share/zoneinfo/Etc/UTC"),
+    ("usr/local/bin/node", "../../../opt/node/bin/node"),
+    ("usr/local/bin/npm", "../../../opt/node/bin/npm"),
+    ("usr/local/bin/npx", "../../../opt/node/bin/npx"),
+    ("usr/local/bin/corepack", "../../../opt/node/bin/corepack"),
+    ("usr/local/bin/python3", "../../../opt/python/bin/python3"),
+    ("usr/local/bin/python", "../../../opt/python/bin/python3"),
+]
 
 
 # 基线镜像（ubuntu-base）一定会提供的 SONAME，属于预期不出现在 rootfs bundle 里的：
@@ -466,29 +454,27 @@ def main() -> int:
             p = str(PurePosixPath(p).parent)
 
     # 符号链接：目标解析不越界（绝对目标落在 root 内；相对目标折叠后不越界）
+    # 判定「折叠过程中 `..` 把栈压空」即为逃出 root —— 不能用 canonical_target，
+    # 它对越界目标同样返回以 `/` 开头的路径，判不出来。
+    def resolve_link_within_root(name: str, target: str) -> bool:
+        base = PurePosixPath("/") if target.startswith("/") else PurePosixPath(name).parent
+        stack: list[str] = []
+        for part in (str(base) + "/" + target.lstrip("/")).split("/"):
+            if part in ("", ".", "/"):
+                continue
+            if part == "..":
+                if not stack:
+                    return False
+                stack.pop()
+            else:
+                stack.append(part)
+        return bool(stack)
+
     for name, target in symlinks:
-        if resolved_symlink_target(name, target) is None:
+        if not resolve_link_within_root(name, target):
             fail(f"symlink escapes root: {name!r} -> {target!r}")
         if name in seen and any(n == name for n, _ in symlinks[:symlinks.index((name, target))]):
             fail(f"duplicate symlink path: {name!r}")
-
-    # 要求的链接：解析结果必须正好落在期望位置且该位置存在（防相对层数写错，见 N-4）。
-    for link, expected in REQUIRED_SYMLINKS.items():
-        actual = next((t for n, t in symlinks if n == link), None)
-        # 镜像里没装 python 时不强制：与构建脚本「python 目录存在才建链」的条件一致。
-        if actual is None:
-            continue
-        resolved = resolved_symlink_target(link, actual)
-        if resolved is None:
-            fail(f"{link} escapes root: -> {actual!r}")
-        resolved_name = str(resolved).lstrip("/")
-        if resolved_name != expected:
-            fail(
-                f"{link} resolves to /{resolved_name}, expected /{expected}: "
-                f"relative target {actual!r} has the wrong number of '..' levels"
-            )
-        if expected not in seen:
-            fail(f"{link} points at /{expected}, which is missing from the bundle")
 
     # 依赖可解析性（O-7）：预置的网络工具必须能在**这个镜像内**解析到自己的共享库。
     #
@@ -537,27 +523,12 @@ def main() -> int:
 
     # 与 App 侧 RootfsIntegrity.REQUIRED_LINKS 保持一致：
     # 关键符号链接必须存在且目标解析一致（缺失/损坏会在安装后报 ROOTFS_LINKS_CORRUPTED）。
-    required_links = [
-        ("bin", "usr/bin"),
-        ("lib", "usr/lib"),
-        ("sbin", "usr/sbin"),
-        ("usr/bin/sh", "dash"),
-        ("etc/mtab", "../proc/self/mounts"),
-        ("etc/os-release", "../usr/lib/os-release"),
-        ("etc/localtime", "/usr/share/zoneinfo/Etc/UTC"),
-        ("usr/local/bin/node", "../../../opt/node/bin/node"),
-        ("usr/local/bin/npm", "../../../opt/node/bin/npm"),
-        ("usr/local/bin/npx", "../../../opt/node/bin/npx"),
-        ("usr/local/bin/corepack", "../../../opt/node/bin/corepack"),
-        ("usr/local/bin/python3", "../../opt/python/bin/python3"),
-        ("usr/local/bin/python", "../../opt/python/bin/python3"),
-    ]
-
+    # 表本身在模块级 `REQUIRED_SYMLINKS`（单测直接断言它，避免「表写错了守卫也跟着错」）。
     def canonical_target(name: str, target: str) -> str:
         base = "/" if target.startswith("/") else "/" + posixpath.dirname(name)
         return posixpath.normpath(posixpath.join(base, target))
 
-    for name, expected in required_links:
+    for name, expected in REQUIRED_SYMLINKS:
         if types.get(name) != "sym":
             fail(f"required symlink missing or not a symlink: {name!r}")
         actual = next(target for n, target in symlinks if n == name)
