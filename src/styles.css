@@ -2034,3 +2034,69 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   color: var(--red);
   background: var(--red-soft);
 }
+
+/*
+ * 共享目录（登记册 §5.1 的 ≤8 条目录白名单）：一条目录一行，含显示名、访客内挂载点、
+ * 宿主路径、逐条不可用原因与移除按钮。
+ *
+ * 两个路径都可能很长（宿主路径上限 240 字符），所以可断行处一律允许在任意位置断行；
+ * 与投递区 `.mailbox-path` 是同一条规则，否则长路径会把整张设置卡片撑宽。
+ */
+.storage-dirs-actions > .button {
+  margin-right: 8px;
+}
+
+.storage-dir-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.storage-dir-row {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-inner);
+  background: var(--surface-hover);
+}
+
+.storage-dir-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.storage-dir-name {
+  color: var(--ink);
+  font-size: 0.8125rem;
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+/* 访客内挂载点是用户要在访客里照着用的那个路径：仍按左对齐的等宽显示。 */
+.storage-dir-path {
+  text-align: left;
+}
+
+/* 宿主路径只是补充信息（用户自己的选择），弱化显示但仍要能读全。 */
+.storage-dir-source {
+  text-align: left;
+  color: var(--muted);
+}
+
+.storage-dir-reason {
+  margin: 0;
+  color: var(--amber-text-strong);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.storage-dir-actions {
+  display: flex;
+  justify-content: flex-end;
+}

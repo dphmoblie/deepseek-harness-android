@@ -78,6 +78,8 @@ import type {
   RuntimeState,
   ShizukuState,
   StorageAccessState,
+  StorageDirEntry,
+  StorageDirsState,
   TerminalKind,
 } from './platform/types'
 
@@ -87,6 +89,7 @@ import {
   DIAGNOSTIC_RETENTION_DEFAULT,
   DIAGNOSTIC_RETENTION_MIN,
   HARNESS_LOG_WINDOW_OPTIONS,
+  MAX_STORAGE_DIRECTORIES,
 } from './platform/types'
 
 const TerminalPanel = lazy(() => import('./components/TerminalPanel').then(module => ({ default: module.TerminalPanel })))
@@ -398,6 +401,93 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   SHIZUKU_UNBIND_INTERRUPTED: 'Shizuku 设备服务停止操作被中断，请重试。',
   SHIZUKU_UNBIND_FAILED: '无法停止 Shizuku 设备服务，请重试。',
   SHIZUKU_DISCONNECTING: 'Shizuku 设备服务正在停止，请稍后重试。',
+}
+
+/**
+ * 目录白名单（登记册 §5.1）的受控错误码 → 中文说明。
+ *
+ * 一张表服务两处，因为两边用的是**原生侧同一套码**：
+ *  1. **添加/移除失败**时桥 reject 的码（`RuntimeStorageDirs.StorageDirCodes`）；
+ *  2. **已选条目不可用**时的 `StorageDirEntry.reasonCode`。
+ * 分开写两张表迟早会漂移：同一个码在两处给出不同说法，用户以为是两回事。
+ *
+ * 文案要求是「看完知道下一步做什么」，所以每条都带动作（去哪开权限、换哪种目录名），
+ * 而不是复述码的字面意思。{0} 由 [storageDirMessage] 填成目录数量上限。
+ */
+const STORAGE_DIR_ERROR_MESSAGES: Record<string, string> = {
+  STORAGE_DIR_UNSUPPORTED: '本机系统没有「所有文件访问」这一档（需要 Android 11 及以上），目录白名单无法启用；这些设备上访客内不提供共享存储。',
+  STORAGE_DIR_NEEDS_PERMISSION: '还没有「所有文件访问」权限：现在不能选新目录，已选的目录也不会挂进访客。请先在系统设置里为本应用开启该权限，再回到本页重试。',
+  STORAGE_DIR_PICKER_UNAVAILABLE: '这台设备上没有可用的目录选择器（部分精简系统移除了文件管理器），无法选择目录。',
+  STORAGE_DIR_DOCUMENT_ID_INVALID: '系统返回的选择结果不是可识别的目录，请重新选择一次目录。',
+  STORAGE_DIR_VOLUME_UNSUPPORTED: '只能选择「内部共享存储」里的目录：SD 卡、U 盘以及下载页面里的位置都不支持。请从「内部共享存储」进入后再选目录。',
+  STORAGE_DIR_ROOT_REJECTED: '不能选择共享存储的根目录，请进入它下面的某个具体目录后再确认。',
+  STORAGE_DIR_OUTSIDE_PUBLIC: '这个目录不在本机的内部共享存储范围内（例如来自副用户或工作资料），当前不支持。',
+  STORAGE_DIR_ANDROID_REJECTED: '不能选择 Android/ 目录及其子目录，那里是应用私有数据。',
+  STORAGE_DIR_PRIVATE_REJECTED: '不能选择应用私有目录，请换一个共享存储里的普通目录。',
+  STORAGE_DIR_NOT_A_DIRECTORY: '这个位置已经不是真实目录（可能被删除、改名，或被替换成链接），请重新选择。',
+  STORAGE_DIR_UNRESOLVED: '无法把这个选择解析成手机上的真实路径，请换一个目录再试。',
+  STORAGE_DIR_UNREADABLE: '这个目录当前不可读（可能已被删除、改名，或系统没有真正授权），请检查后重新选择。',
+  STORAGE_DIR_UNBINDABLE: '这个目录名里有运行时不支持的字符（中文、空格或其它特殊符号），无法绑定进访客；请改用只含字母、数字、点、下划线和短横线的目录名。',
+  STORAGE_DIR_DUPLICATE: '这个目录已经在列表里了，不用重复添加。',
+  STORAGE_DIR_LIMIT_REACHED: '最多只能添加 {0} 个目录，请先移除一个再添加。',
+  STORAGE_DIR_SAVE_FAILED: '白名单保存失败（应用私有存储不可写），请稍后重试。',
+  STORAGE_DIR_PATH_REQUIRED: '没有拿到要移除的目录路径，无法移除；请重新进入本页后再试。',
+  STORAGE_DIR_NOT_FOUND: '这条目录已经不在白名单里了（可能在别处被移除）；请点上面的「重新检查」刷新列表。',
+  STORAGE_DIR_PATH_INVALID: '目录路径格式不符合要求，这一条没有被接受。',
+  STORAGE_DIR_PREFERENCES_INVALID: '白名单的本地记录已损坏，无法读取；请移除后重新添加目录。',
+}
+
+/**
+ * 未知错误码的兜底文案：**不把码直接甩给用户当答案**，但把码留在文案里 ——
+ * 用户截图反馈时维护者能一眼定位，比「未知错误」有用得多。
+ */
+const UNKNOWN_STORAGE_DIR_ERROR_MESSAGE = '目录操作失败（错误码 {0}）。请重试；若持续失败，可先移除该条目再重新添加。'
+
+/** 用户在 SAF 选择器里点了返回/取消时的码；它不是故障，界面据此不报错。 */
+const STORAGE_DIR_CANCELLED = 'STORAGE_DIR_CANCELLED'
+
+/**
+ * 目录白名单操作的 busy 标识（`busy` 是单个字符串，同一时刻只允许一个操作在飞）。
+ *
+ * 移除**按路径区分**：同一屏可以有多条目录，共用一个标识会让每条都转圈，
+ * 用户以为自己点了好几条。路径只做内存里的键，不进任何提示文案。
+ */
+const STORAGE_DIR_ADD_BUSY_ID = 'storage-dir-add'
+function storageDirRemoveBusyId(path: string): string {
+  return `storage-dir-remove:${path}`
+}
+
+/**
+ * 从桥调用抛出的错误里取出受控错误码。
+ *
+ * 正常路径上码在 `error.code`：原生侧 `call.reject(message, code)` 过桥后，
+ * Capacitor 会把 `{message, code}` 拷进一个 `Error` 实例（`native-bridge.js` 的
+ * `returnResult`），所以 `.code` 是字符串。但错误也可能来自浏览器预览桥或更外层的包装，
+ * 因此这里**同时接受「message 本身就是一个码」**这一种形态；两处都拿不到时返回 undefined，
+ * 由文案兜底如实说明，不猜一个码出来。
+ */
+function storageDirErrorCode(error: unknown): string | undefined {
+  if (typeof error === 'object' && error !== null) {
+    const code = (error as { code?: unknown }).code
+    if (typeof code === 'string' && code.startsWith('STORAGE_DIR_')) return code
+  }
+  const message = error instanceof Error ? error.message.trim() : ''
+  return message.startsWith('STORAGE_DIR_') && /^[A-Z_]+$/.test(message) ? message : undefined
+}
+
+/**
+ * 目录白名单操作的失败文案。
+ *
+ * 已知码一律换成可操作的中文；未知的 `STORAGE_DIR_*` 码进兜底文案（带码）；
+ * 完全取不到码时退回通用 [errorMessage] —— 原生侧那句 message 可能是技术描述，
+ * 但它至少是真的，比编一句话好。
+ */
+function storageDirMessage(code: string | undefined, error: unknown): string {
+  if (code === undefined) return errorMessage(error)
+  const known = STORAGE_DIR_ERROR_MESSAGES[code]
+  return known === undefined
+    ? t(UNKNOWN_STORAGE_DIR_ERROR_MESSAGE, code)
+    : t(known, MAX_STORAGE_DIRECTORIES)
 }
 
 function runtimeErrorMessage(errorCode?: string): string {
@@ -1632,6 +1722,13 @@ interface SettingsScreenProps {
   mailboxReadFailed: boolean
   /** 存储访问状态（T1 媒体只读 / T2 所有文件访问）；null 表示尚未读到。 */
   storageAccess: StorageAccessState | null
+  /** 目录白名单（访客内 `/mnt/user/<序号>` 的唯一来源）；null 表示尚未读到快照。 */
+  storageDirs: StorageDirsState | null
+  storageDirsReadFailed: boolean
+  /** 新增一条：原生侧弹 SAF 目录选择器，用户取消不算故障。 */
+  onAddStorageDirectory: () => void
+  /** 按宿主路径移除一条（用路径而不是序号：序号会随增删变化）。 */
+  onRemoveStorageDirectory: (path: string) => void
   /** 本次会话内最近一次导入/导出结果；null 表示本次会话还没有搬运。 */
   lastMailboxImport: MailboxImportResult | null
   lastMailboxExport: MailboxExportResult | null
@@ -1672,7 +1769,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport, lastMailboxImport, loadDiagnosticLog, loadHarnessLog, lastStop, mailbox, mailboxReadFailed, overlayBall, overlayBallReadFailed, storageAccess, onDraftChange, onExportMailbox, onImportMailbox, onOpenAllFilesAccess, onRefreshMailbox, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport, lastMailboxImport, loadDiagnosticLog, loadHarnessLog, lastStop, mailbox, mailboxReadFailed, overlayBall, overlayBallReadFailed, storageAccess, storageDirs, storageDirsReadFailed, onAddStorageDirectory, onDraftChange, onExportMailbox, onImportMailbox, onOpenAllFilesAccess, onRefreshMailbox, onRemoveStorageDirectory, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
   if (settingsReadStatus === 'failed') {
     return <div className="screen loading-screen">
       <p role="alert">{t("无法读取最新设置，请重试")}</p>
@@ -1752,6 +1849,62 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport,
         : mailbox.availability === 'unwritable'
           ? t("已授予「所有文件访问」，但投递区目录仍不可读写；可能是系统限制或目录被占用。工作区与 Harness 不受影响。")
           : ''
+
+  /**
+   * 共享目录（≤8 条白名单）的状态文案与禁用条件。
+   *
+   * 判定顺序是有意的：先看「系统有没有这一档」，再看「有没有授权」。系统根本没有这一档时
+   * 说「需要授权」会把用户引到一个不存在的开关上（与投递区同一口径）。
+   */
+  const storageDirsStatusLabel = storageDirs === null
+    ? ''
+    : !storageDirs.supported
+      ? t("系统不支持")
+      : !storageDirs.granted
+        ? t("需要授权")
+        : t("已授权")
+  const storageDirsLevelLabel = storageDirs === null
+    ? ''
+    : storageDirs.level === 'T2'
+      ? t("T2 · 所有文件访问（可读可写）")
+      : storageDirs.supported ? t("T0 · 未授予「所有文件访问」") : t("T0 · 本机没有这一档")
+  /**
+   * 未启用时的整段说明；空串表示当前可用。
+   *
+   * 不支持那一档必须说清**代价**（这些设备上访客内没有共享存储），否则用户会以为功能坏了
+   * ——`docs/存储权限与导入落点.md` §4.5 明确要求如此。
+   */
+  const storageDirsBlockedReason = storageDirs === null
+    ? ''
+    : !storageDirs.supported
+      ? t("当前系统没有「所有文件访问」这一档（Android 11 以下），目录白名单无法启用：这些设备上访客内不提供共享存储。这是用「用户点选的目录」取代 /sdcard 整体绑定的必然代价，不是故障；控制台上传与投递区照常可用。")
+      : !storageDirs.granted
+        ? t("还没有「所有文件访问」权限：现在不能选新目录，已经选好的目录也不会挂进访客。请点下面的按钮去系统设置开启；回到本页会自动重新检查。")
+        : ''
+  /**
+   * 三种情况都禁用「添加目录」：状态未读到、未授权、已达上限。
+   * 上限用 `MAX_STORAGE_DIRECTORIES`（平台层与原生侧钉住是同一个数）：让按钮还能点、
+   * 再由原生回一个 `STORAGE_DIR_LIMIT_REACHED`，是纯粹的浪费。
+   */
+  const storageDirAddDisabled = busy !== null || storageDirs === null || !storageDirs.granted || storageDirs.count >= MAX_STORAGE_DIRECTORIES
+  const storageDirLimitReached = storageDirs !== null && storageDirs.granted && storageDirs.count >= MAX_STORAGE_DIRECTORIES
+  /** 逐条的可用性标签；四档各一句，与投递区一样不合并成「能用/不能用」。 */
+  const storageDirAvailabilityLabel = (entry: StorageDirEntry): string =>
+    entry.availability === 'available'
+      ? t("可用")
+      : entry.availability === 'needsPermission'
+        ? t("需要授权")
+        : entry.availability === 'unsupported' ? t("系统不支持") : t("不可用")
+  /**
+   * 逐条不可用的原因。
+   *
+   * `reasonCode` 在契约里是可选的（校验只要求它与可用性不矛盾），所以缺码时必须如实说
+   * 「没给原因」，而不是编一句「可能已被删除」——那是猜测，用户会照着猜错的方向排查。
+   */
+  const storageDirEntryReason = (entry: StorageDirEntry): string =>
+    entry.reasonCode === undefined
+      ? t("这一条当前不可用，但原生侧没有返回原因码；请移除后重新添加。")
+      : storageDirMessage(entry.reasonCode, undefined)
 
   const selectedProviderOption = MODEL_PROVIDERS.find(provider => provider.id === selectedProvider) ?? MODEL_PROVIDERS[0]
   const keepAliveRecordedAt = formatRecordedAt(keepAlive.lastUpdatedAtMillis)
@@ -2206,6 +2359,129 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport,
         )}
 
         {page === 'runtime' && (
+        <section className="settings-section" aria-labelledby="storage-dirs-settings">
+          <div className="section-title section-title-action">
+            <span className="section-icon"><HardDrive size={19} /></span>
+            <div>
+              <h2 id="storage-dirs-settings">{t("共享目录")}</h2>
+              {/*
+                说明里必须写明「访客内不再有 /sdcard」：旧的 /sdcard 整体绑定已被这份白名单取代
+                （登记册 §5.1 / §3.1），用户看不到目录时最容易怀疑是权限坏了。
+              */}
+              <p>{t("这里点选过的目录会挂进访客：手机上的目录 → 访客内 /mnt/user/<序号>。访客里不再有 /sdcard，能看到哪些用户目录完全由这份列表决定。")}</p>
+            </div>
+            {storageDirs !== null && (
+              <span className={`status-chip ${storageDirs.level === 'T2' ? 'success' : 'warn'}`}>{storageDirsStatusLabel}</span>
+            )}
+          </div>
+
+          {storageDirs === null && (
+            <p className="settings-note" role={storageDirsReadFailed ? 'alert' : undefined}>
+              {storageDirsReadFailed ? t("无法读取共享目录状态，请重试") : t("正在读取共享目录状态")}
+            </p>
+          )}
+
+          {storageDirs !== null && (
+            <>
+              <div className="settings-status-list">
+                <div className="settings-status-row">
+                  <span>{t("已选目录")}</span>
+                  {/* 上限与原生侧同一个数；载荷校验已把它钉成 8，这里不再自己算一遍。 */}
+                  <strong>{`${storageDirs.count}/${MAX_STORAGE_DIRECTORIES}`}</strong>
+                </div>
+                <div className="settings-status-row">
+                  <span>{t("权限档位")}</span>
+                  <strong>{storageDirsLevelLabel}</strong>
+                </div>
+              </div>
+
+              {/*
+                与投递区同一口径：不可用说明刻意**不带 role="alert"**——它是这一页的常驻内容，
+                不是用户操作后才出现的时效性提示；真正该被播报的是随操作出现的警告（toast）。
+              */}
+              {storageDirsBlockedReason !== '' && (
+                <div className="inline-alert warning">
+                  <AlertTriangle size={19} />
+                  <div>
+                    <strong>{t("目录白名单当前不可用")}</strong>
+                    <span>{storageDirsBlockedReason}</span>
+                  </div>
+                </div>
+              )}
+
+              {storageDirs.entries.length > 0 && (
+                <div className="storage-dir-list">
+                  {storageDirs.entries.map(entry => (
+                    <div className="storage-dir-row" key={entry.path}>
+                      <div className="storage-dir-head">
+                        <strong className="storage-dir-name">{entry.displayName}</strong>
+                        <span className={`status-chip ${entry.available ? 'success' : 'warn'}`}>{storageDirAvailabilityLabel(entry)}</span>
+                      </div>
+                      <code className="mailbox-path storage-dir-path">{entry.guestPath}</code>
+                      <code className="mailbox-path storage-dir-source">{entry.path}</code>
+                      {!entry.available && <p className="storage-dir-reason">{storageDirEntryReason(entry)}</p>}
+                      {/*
+                        移除按钮对**每一条**都渲染并且始终可点（只受 busy 影响）：
+                        条目不可用时用户更需要能清掉它，禁用等于把人锁在失效状态里。
+                      */}
+                      <div className="storage-dir-actions">
+                        <button
+                          className="button button-danger-quiet compact-button"
+                          type="button"
+                          disabled={busy !== null}
+                          onClick={() => onRemoveStorageDirectory(entry.path)}
+                        >
+                          {busy === storageDirRemoveBusyId(entry.path) ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}{t("移除")}</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+
+          {/*
+            按钮区始终渲染（与投递区一致）：布局稳定，「不可用即禁用」这条规则在所有状态下
+            是同一句话，用户不会看到按钮忽隐忽现。
+          */}
+          <div className="settings-inline-actions storage-dirs-actions">
+            <button className="button button-secondary" type="button" onClick={onAddStorageDirectory} disabled={storageDirAddDisabled}>
+              {busy === STORAGE_DIR_ADD_BUSY_ID ? <Loader2 className="spin" size={18} /> : <FolderInput size={18} />}{t("添加目录")}</button>
+            {storageDirs !== null && storageDirs.supported && !storageDirs.granted && (
+              // 文案与投递区的入口**刻意不同名**：同一个动作在两处出现时，
+              // 同名按钮会让「按名字取元素」的测试与读屏用户都分不清点的是哪一个。
+              <button className="button button-secondary" type="button" onClick={onOpenAllFilesAccess} disabled={busy !== null}>
+                <ShieldCheck size={18} />{t("去系统设置开启所有文件访问")}</button>
+            )}
+          </div>
+
+          {storageDirs !== null && (
+            <>
+              <p className="settings-note">
+                {t("每行下面两个路径：第一个是访客内的挂载点（/mnt/user/<序号>），第二个是这个目录在手机上的真实位置。")}
+              </p>
+              {/*
+                挂载点跳号是**刻意的稳定语义**（序号来自持久化顺序），必须写成事实而不是 bug：
+                用户看到 1、3 没有 2 时最容易以为界面出错。
+              */}
+              <p className="settings-note">
+                {t("不可用的条目仍然占着它的序号：访客里的挂载点会跳号（例如有 1、3 而没有 2）。这是刻意的稳定语义——移除别的条目不会让一个目录换到另一个挂载点上。")}
+              </p>
+              <p className="settings-note">
+                {t("目录白名单是 T2「所有文件访问」这一档的能力；未授予时只能查看，不能添加。")}
+              </p>
+              <p className="settings-note">
+                {t("目录改动在下次启动运行环境时生效：正在运行的访客不会热更新挂载点。")}
+              </p>
+              {storageDirLimitReached && (
+                <p className="settings-note">{t("已达上限：最多只能添加 {0} 个目录，请先移除一个再添加。", MAX_STORAGE_DIRECTORIES)}</p>
+              )}
+            </>
+          )}
+        </section>
+        )}
+
+        {page === 'runtime' && (
         <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
         )}
 
@@ -2442,7 +2718,14 @@ export function App() {
    */
   const [mailbox, setMailbox] = useState<MailboxState | null>(null)
   const [storageAccess, setStorageAccess] = useState<StorageAccessState | null>(null)
+  /**
+   * 目录白名单（访客内 `/mnt/user/<序号>` 的唯一来源）。与投递区同一套口径：
+   * null 表示尚未读到快照，读取失败单独记录，绝不把「读取失败」显示成「没有目录」——
+   * 后者会让用户以为自己的选择被清空了。
+   */
+  const [storageDirs, setStorageDirs] = useState<StorageDirsState | null>(null)
   const [mailboxReadFailed, setMailboxReadFailed] = useState(false)
+  const [storageDirsReadFailed, setStorageDirsReadFailed] = useState(false)
   const mailboxReadRevision = useRef(0)
   /**
    * 本次会话内最近一次导入/导出的结果。
@@ -2538,27 +2821,37 @@ export function App() {
   }, [])
 
   /**
-   * 读取投递区与存储访问状态。
+   * 读取投递区、存储权限档与目录白名单。
    *
-   * 两个载荷一起读：投递区是否可用完全由「所有文件访问」决定，分开读会出现
-   * 「显示需要授权但按钮可点」这类自相矛盾的瞬间。失败时只置标志位，
-   * 保留上一次快照——把「读取失败」显示成「不可用」会让用户白跑一次系统设置。
+   * 三个载荷一起并行读：它们互相决定对方的显示 —— 投递区是否可用由「所有文件访问」决定，
+   * 目录白名单能不能添加也由它决定，分开读会出现「显示需要授权但按钮可点」这类
+   * 自相矛盾的瞬间。失败时只置标志位，保留上一次快照——把「读取失败」显示成
+   * 「不可用」会让用户白跑一次系统设置。
+   *
+   * 三路用同一个版本号收口：它们是**一屏状态**，版本不一致就会出现「投递区是新的、
+   * 白名单是旧的」这种半个屏幕的组合，比整体用上一批快照更难解释。
    */
   const readMailbox = useCallback(async () => {
     const revision = ++mailboxReadRevision.current
     try {
-      const [nextMailbox, nextStorage] = await Promise.all([
+      const [nextMailbox, nextStorage, nextDirs] = await Promise.all([
         runtimeBridge.getMailboxState(),
         runtimeBridge.getStorageAccessState(),
+        runtimeBridge.getStorageDirs(),
       ])
       if (revision === mailboxReadRevision.current) {
         setMailbox(nextMailbox)
         setStorageAccess(nextStorage)
+        setStorageDirs(nextDirs)
         setMailboxReadFailed(false)
+        setStorageDirsReadFailed(false)
       }
       return nextMailbox
     } catch (error) {
-      if (revision === mailboxReadRevision.current) setMailboxReadFailed(true)
+      if (revision === mailboxReadRevision.current) {
+        setMailboxReadFailed(true)
+        setStorageDirsReadFailed(true)
+      }
       throw error
     }
   }, [])
@@ -2811,10 +3104,11 @@ export function App() {
         })
     }
     /**
-     * 投递区状态在页面重新可见时重读：用户很可能刚去系统设置里开启了
-     * 「所有文件访问」，回到应用时必须立刻看到「可用」而不是旧状态。
-     * 刻意**不放进 5 秒轮询**：状态读取会做一次真实写探测（FUSE 上 canWrite 不可信），
-     * 没必要每 5 秒在用户目录里建一个临时文件。
+     * 投递区与目录白名单状态在页面重新可见时重读：用户很可能刚去系统设置里开启了
+     * 「所有文件访问」、或者刚在系统文件管理器里删掉了一个已选目录，回到应用时必须
+     * 立刻看到新状态而不是旧状态。
+     * 刻意**不放进 5 秒轮询**：投递区读取会做一次真实写探测（FUSE 上 canWrite 不可信），
+     * 白名单读取要对每条目录做一次真实 stat，两者都没必要每 5 秒跑一遍。
      */
     const refreshMailbox = (): void => {
       if (document.visibilityState === 'hidden') return
@@ -3252,7 +3546,7 @@ export function App() {
   /**
    * 跳转到系统「所有文件访问」设置页。
    *
-   * 这是投递区**唯一**的解锁入口：该权限不会弹运行时对话框，只能由用户手动开启。
+   * 这是投递区与目录白名单**共用**的解锁入口：该权限不会弹运行时对话框，只能由用户手动开启。
    * 本回调只负责跳转与重读，不承诺一定授权成功——用户可能直接返回而不开启，
    * 那时界面仍显示原来的档位。
    */
@@ -3299,6 +3593,49 @@ export function App() {
     })
   }, [readMailbox, run])
 
+  /**
+   * 目录白名单操作（添加/移除）的统一收口。
+   *
+   * 与 [run] 的差别只有一处，但很关键：**用户取消不是故障**。在 SAF 选择器里点返回会以
+   * `STORAGE_DIR_CANCELLED` 拒绝，那什么都没发生过，弹一条错误提示会让用户以为坏了。
+   * 其余错误码一律换成可操作的中文（见 [STORAGE_DIR_ERROR_MESSAGES]），不把码甩给用户。
+   *
+   * 成功与失败都用**桥返回的最新状态**覆盖本地快照，不做本地增量合并：条目的序号来自
+   * 原生侧的持久化顺序，界面自己算一遍迟早会和它对不上（界面上就会显示出错的挂载点）。
+   */
+  const runStorageDirAction = useCallback(async (id: string, operation: () => Promise<StorageDirsState>): Promise<void> => {
+    if (busyRef.current !== null) return
+    busyRef.current = id
+    setBusy(id)
+    try {
+      const next = await operation()
+      setStorageDirs(next)
+      // 这一次是真的拿到了原生快照：顺手清掉读取失败标记，界面不必再让用户手动重试。
+      setStorageDirsReadFailed(false)
+    } catch (error) {
+      const code = storageDirErrorCode(error)
+      if (code !== STORAGE_DIR_CANCELLED) notify(storageDirMessage(code, error), 'error')
+    } finally {
+      busyRef.current = null
+      setBusy(null)
+    }
+  }, [notify])
+
+  /**
+   * 添加一条目录：原生侧弹系统 SAF 目录选择器（`ACTION_OPEN_DOCUMENT_TREE`）。
+   *
+   * 选择与校验全在原生侧（映射、规范化、准入规则都只有那一份实现），这里只负责发起与
+   * 用返回值刷新界面；用户在系统界面里取消时静默返回，什么都不改也不提示。
+   */
+  const addStorageDirectory = useCallback(() => {
+    void runStorageDirAction(STORAGE_DIR_ADD_BUSY_ID, () => runtimeBridge.addStorageDirectory())
+  }, [runStorageDirAction])
+
+  /** 移除一条目录：用宿主路径定位，不用序号（序号会随增删变化，用序号可能删掉另一条）。 */
+  const removeStorageDirectory = useCallback((path: string) => {
+    void runStorageDirAction(storageDirRemoveBusyId(path), () => runtimeBridge.removeStorageDirectory(path))
+  }, [runStorageDirAction])
+
   const screen = (() => {
     switch (activeView) {
       case 'conversation':
@@ -3314,7 +3651,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} mailbox={mailbox} mailboxReadFailed={mailboxReadFailed} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} storageAccess={storageAccess} onDraftChange={updateSettingsDraft} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onRefreshMailbox={refreshMailbox} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} mailbox={mailbox} mailboxReadFailed={mailboxReadFailed} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} storageAccess={storageAccess} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onDraftChange={updateSettingsDraft} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()
