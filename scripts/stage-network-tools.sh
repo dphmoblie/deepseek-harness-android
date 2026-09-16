@@ -257,16 +257,33 @@ fi
 # -L 会真的走进去，非 root runner 立刻 EACCES、find 以 1 退出，set -e 直接终止；
 # -xtype 只 stat 链接目标、不遍历目标目录，同样能判出悬空链接。
 #
-# **但「在本树里解析不到」不等于「悬空」**：本树是**基线镜像之上的增量**，
-# 指向基线提供文件的链接（例如 libc 家族的 SONAME 链接）在这里当然解析不到，
-# 而在最终 rootfs 里（base + delta）是完好的。CI 上就撞到过一条：
-# `/lib/aarch64-linux-gnu/libffi.so.8` —— 目标由基线镜像提供，被误判成悬空。
-# 因此判定改为：宿主上解析得到、且解析结果在基线清单里 ⇒ 放过；否则才算真悬空。
+# **但「在本树里解析不到」不等于「悬空」**，有两个原因，都必须按**最终 rootfs 的语义**判定：
+#   1) 本树是**基线镜像之上的增量**：指向基线提供文件的链接（libc 家族的 SONAME 链接）
+#      在这里解析不到，在最终 rootfs 里是完好的；
+#   2) Ubuntu 是 usr-merge：最终 rootfs 里 `/lib`、`/bin`、`/sbin` 都是 `usr/` 下的**符号链接**，
+#      而 `cp -a --parents` 在预置树里把它们建成了**真实目录**。于是 `/lib/.../libk5crypto.so.3`
+#      这类 SONAME 链接会指向同目录的实体，而实体按 `readlink -f` 的解析结果落在 `usr/lib/...` 下
+#      —— 在本树里看是悬空，在最终 rootfs 里完全正常（CI 上撞到的两条都是这一类）。
+# 因此：把 `/lib|x`、`/bin|x`、`/sbin|x` 映射到 `usr/` 下，再分别在本树与基线清单里找目标。
 BROKEN_LINK=""
 while IFS= read -r link; do
   rel="${link#"$DEST"/}"
-  resolved="$(readlink -f "/$rel" 2>/dev/null | sed 's:^/::' || true)"
-  if [[ -n "$resolved" ]] && grep -qxF "/$resolved" "$BASE_PATHS"; then
+  dir="$(dirname "$rel")"
+  case "$dir" in
+    lib|bin|sbin|lib/*|bin/*|sbin/*) mapped="usr/$dir" ;;
+    *) mapped="$dir" ;;
+  esac
+  target="$(readlink "$link" 2>/dev/null || true)"
+  if [[ -z "$target" ]]; then
+    BROKEN_LINK="$link"
+    break
+  fi
+  if [[ "$target" == /* ]]; then
+    candidate="${target#/}"
+  else
+    candidate="$mapped/$target"
+  fi
+  if [[ -e "$DEST/$candidate" ]] || grep -qxF "/$candidate" "$BASE_PATHS"; then
     continue
   fi
   BROKEN_LINK="$link"
