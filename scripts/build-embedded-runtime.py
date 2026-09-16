@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Build a deterministic ARM64 Ubuntu/Harness rootfs without unpacking it on Windows."""
 
 from __future__ import annotations
@@ -784,8 +784,12 @@ def add_toolchain(writer: RootfsWriter, toolchain_dir: Path) -> None:
             "opt/python",
             executable_prefixes=(PurePosixPath("bin"),),
         )
-        writer.add_symlink("usr/local/bin/python3", "../../opt/python/bin/python3")
-        writer.add_symlink("usr/local/bin/python", "../../opt/python/bin/python3")
+        # 相对目标的层数必须与源目录深度一致：源在 `usr/local/bin`（三层），
+        # 因此要用三个 `../` 才能回到根再去 `opt/python/bin`。此前写的是两个 `../`，
+        # 解析结果是 `/usr/opt/python/bin/python3`（不存在）——PATH 上的 `python3` 一直是断链，
+        # 只因为预载脚本用绝对路径 `/opt/python/bin/python3` 调起才长期没被发现（N-4）。
+        writer.add_symlink("usr/local/bin/python3", "../../../opt/python/bin/python3")
+        writer.add_symlink("usr/local/bin/python", "../../../opt/python/bin/python3")
 
 
 def add_network_tools(writer: RootfsWriter, tools_dir: Path) -> None:

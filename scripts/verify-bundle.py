@@ -83,6 +83,41 @@ CA_CERTIFICATE_DIRECTORY = "etc/ssl/certs/"
 CA_HASHED_LINK_PATTERN = re.compile(r"[0-9a-f]{8}\.\d+")
 
 
+def resolved_symlink_target(name: str, target: str) -> PurePosixPath | None:
+    """按 POSIX 语义折叠链接目标，返回解析后的绝对路径；跑出 root 时返回 None。
+
+    **返回路径而不只是布尔值**是 N-4 的教训：原来只判断「有没有跑出 root」，
+    于是**断链**（指向一个不存在的位置）完全看不出来 ——
+    `usr/local/bin/python3` 若写成 `../../opt/python/bin/python3`，解析到
+    `/usr/opt/python/bin/python3`：既不越界、也不存在，校验一路放行，
+    直到真机上敲 `python3` 才暴露。`main()` 用它做「落点必须存在」的检查，
+    单测直接断言这条解析结果（见 `scripts/runtime-executables.test.mjs`）。
+    """
+    parent = PurePosixPath(name).parent
+    base = PurePosixPath("/") if target.startswith("/") else parent
+    rel = target.lstrip("/")
+    stack: list[str] = []
+    for part in (str(base) + "/" + rel).split("/"):
+        if part in ("", ".", "/"):
+            continue
+        if part == "..":
+            if not stack:
+                return None
+            stack.pop()
+        else:
+            stack.append(part)
+    return PurePosixPath("/" + "/".join(stack)) if stack else None
+
+
+# 明确要求的链接：解析结果必须**正好落在期望的位置，且该位置存在**。
+# 这一条专门防「相对层数写错」——它同时抓住「指向错误位置」与「指向不存在的位置」，
+# 而两者在真机上的表现都是「命令找不到」，排查成本很高。
+REQUIRED_SYMLINKS = {
+    "usr/local/bin/python3": "opt/python/bin/python3",
+    "usr/local/bin/python": "opt/python/bin/python3",
+}
+
+
 def runtime_executable_name(name: str) -> str | None:
     for label, suffix in REQUIRED_RUNTIME_EXECUTABLES.items():
         if (label == "bash" and name == suffix) or (
@@ -338,27 +373,29 @@ def main() -> int:
             p = str(PurePosixPath(p).parent)
 
     # 符号链接：目标解析不越界（绝对目标落在 root 内；相对目标折叠后不越界）
-    def resolve_link(name: str, target: str) -> bool:
-        parent = PurePosixPath(name).parent
-        base = PurePosixPath("/") if target.startswith("/") else parent
-        rel = target.lstrip("/")
-        stack: list[str] = []
-        for part in (str(base) + "/" + rel).split("/"):
-            if part in ("", ".", "/"):
-                continue
-            if part == "..":
-                if not stack:
-                    return False
-                stack.pop()
-            else:
-                stack.append(part)
-        return bool(stack)
-
     for name, target in symlinks:
-        if not resolve_link(name, target):
+        if resolved_symlink_target(name, target) is None:
             fail(f"symlink escapes root: {name!r} -> {target!r}")
         if name in seen and any(n == name for n, _ in symlinks[:symlinks.index((name, target))]):
             fail(f"duplicate symlink path: {name!r}")
+
+    # 要求的链接：解析结果必须正好落在期望位置且该位置存在（防相对层数写错，见 N-4）。
+    for link, expected in REQUIRED_SYMLINKS.items():
+        actual = next((t for n, t in symlinks if n == link), None)
+        # 镜像里没装 python 时不强制：与构建脚本「python 目录存在才建链」的条件一致。
+        if actual is None:
+            continue
+        resolved = resolved_symlink_target(link, actual)
+        if resolved is None:
+            fail(f"{link} escapes root: -> {actual!r}")
+        resolved_name = str(resolved).lstrip("/")
+        if resolved_name != expected:
+            fail(
+                f"{link} resolves to /{resolved_name}, expected /{expected}: "
+                f"relative target {actual!r} has the wrong number of '..' levels"
+            )
+        if expected not in seen:
+            fail(f"{link} points at /{expected}, which is missing from the bundle")
     # 符号链接延后创建冲突（提取器：目录/文件先写，symlink 创建时路径已存在则 ARCHIVE_DUPLICATE_ENTRY）
     for name, _ in symlinks:
         others = [n for n, t in types.items() if t != "sym" and n == name]

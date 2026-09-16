@@ -77,6 +77,23 @@ with tempfile.TemporaryDirectory(prefix='dsh-tool-modes-') as directory:
     assert verify.runtime_executable_name(rg) == 'ripgrep'
     assert verify.runtime_executable_name(landlock) == 'landlock-run'
     assert verify.runtime_executable_name('usr/bin/bash') == 'bash'
+    # N-4: usr/local/bin/python3 was written with two '..' and resolved to
+    # /usr/opt/python/bin/python3 (absent). The old check only asked "does it escape
+    # the root", so a dangling link passed. Pin the resolved path itself, and pin the
+    # expectation table too, so the guard cannot be turned into a wrong table.
+    assert str(verify.resolved_symlink_target('usr/local/bin/python3', '../../opt/python/bin/python3')) == '/usr/opt/python/bin/python3'
+    assert str(verify.resolved_symlink_target('usr/local/bin/python3', '../../../opt/python/bin/python3')) == '/opt/python/bin/python3'
+    assert str(verify.resolved_symlink_target('usr/local/bin/python', '../../../opt/python/bin/python3')) == '/opt/python/bin/python3'
+    assert verify.resolved_symlink_target('usr/local/bin/python3', '../../../../etc/passwd') is None
+    assert verify.REQUIRED_SYMLINKS['usr/local/bin/python3'] == 'opt/python/bin/python3'
+    assert verify.REQUIRED_SYMLINKS['usr/local/bin/python'] == 'opt/python/bin/python3'
+    # And pin the production call site itself: the resolver logic above is only useful if
+    # the build script actually writes three levels. Asserting the exact call means the
+    # two-level form cannot come back unnoticed.
+    build_source = Path('scripts/build-embedded-runtime.py').read_text(encoding='utf-8')
+    assert 'add_symlink("usr/local/bin/python3", "../../../opt/python/bin/python3")' in build_source
+    assert 'add_symlink("usr/local/bin/python", "../../../opt/python/bin/python3")' in build_source
+    assert '"../../opt/python/bin/python3"' not in build_source, 'two-level relative target is back'
     symlink = tarfile.TarInfo(rg)
     symlink.type = tarfile.SYMTYPE
     symlink.mode = 0o755
