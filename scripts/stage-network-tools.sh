@@ -50,7 +50,11 @@ NEW_LIBS="$(mktemp)"
 STAGED_PATHS="$(mktemp)"
 trap 'rm -f "$BASE_PATHS" "$ALL_ENTRIES" "$COPY_LIST" "$NEW_LIBS" "$NEW_LIBS.filtered" "$STAGED_PATHS"' EXIT
 if [[ -n "$BASE_ARCHIVE" && -f "$BASE_ARCHIVE" ]]; then
-  tar -tzf "$BASE_ARCHIVE" | sed 's:/$::' | LC_ALL=C sort -u > "$BASE_PATHS"
+  # **必须归一化成与候选清单同一种写法（前导 `/`）**：tar 列出的是 `./usr/…` 或 `usr/…`，
+  # 而候选清单来自 `find /usr/bin/...` 的绝对路径。写法不一致时 `comm` 永远不匹配，
+  # 过滤等于没做——CI 日志里「候选条目: 357，去掉基线镜像已有后: 357」就是它的表现。
+  # 后果不只是白复制：把基线已有的文件再放进增量树，会在最终 rootfs 里形成重复条目。
+  tar -tzf "$BASE_ARCHIVE" | sed 's:/$::; s:^\./::; s:^:/:' | LC_ALL=C sort -u > "$BASE_PATHS"
   log "基线镜像路径数: $(wc -l < "$BASE_PATHS")"
 else
   : > "$BASE_PATHS"
@@ -252,9 +256,24 @@ fi
 # （/usr/lib/ssl/private -> /etc/ssl/private，0710 root:ssl-cert），
 # -L 会真的走进去，非 root runner 立刻 EACCES、find 以 1 退出，set -e 直接终止；
 # -xtype 只 stat 链接目标、不遍历目标目录，同样能判出悬空链接。
-BROKEN_LINK="$(find "$DEST" -xtype l -print -quit)"
+#
+# **但「在本树里解析不到」不等于「悬空」**：本树是**基线镜像之上的增量**，
+# 指向基线提供文件的链接（例如 libc 家族的 SONAME 链接）在这里当然解析不到，
+# 而在最终 rootfs 里（base + delta）是完好的。CI 上就撞到过一条：
+# `/lib/aarch64-linux-gnu/libffi.so.8` —— 目标由基线镜像提供，被误判成悬空。
+# 因此判定改为：宿主上解析得到、且解析结果在基线清单里 ⇒ 放过；否则才算真悬空。
+BROKEN_LINK=""
+while IFS= read -r link; do
+  rel="${link#"$DEST"/}"
+  resolved="$(readlink -f "/$rel" 2>/dev/null | sed 's:^/::' || true)"
+  if [[ -n "$resolved" ]] && grep -qxF "/$resolved" "$BASE_PATHS"; then
+    continue
+  fi
+  BROKEN_LINK="$link"
+  break
+done < <(find "$DEST" -xtype l)
 if [[ -n "$BROKEN_LINK" ]]; then
-  echo "预置树存在悬空符号链接: $BROKEN_LINK" >&2
+  echo "预置树存在悬空符号链接（目标既不在本树也不在基线镜像里）: $BROKEN_LINK" >&2
   exit 1
 fi
 
