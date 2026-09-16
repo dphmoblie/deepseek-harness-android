@@ -130,7 +130,9 @@ collect_lib_paths() {
   if [[ "$via_ldd" == "0" ]]; then
     while IFS= read -r soname; do
       [[ -n "$soname" ]] || continue
-      resolved="$(ldconfig -p 2>/dev/null | awk -v s="$soname" '$1 == s {print $NF; exit}')"
+      # `|| true` 同样是为了不被 `set -e` 打死：`ldconfig -p` 在某些环境需要额外权限，
+      # 一旦非零退出，赋值语句就带上非零状态，脚本会**无声退出**（这一整类问题的共同形态）。
+      resolved="$( { ldconfig -p 2>/dev/null || true; } | awk -v s="$soname" '$1 == s {print $NF; exit}')"
       [[ -n "$resolved" ]] || continue
       via_readelf=$((via_readelf + 1))
       printf '%s\n' "$resolved"
@@ -201,7 +203,13 @@ if [[ -s "$STAGED_PATHS" ]]; then
   mapfile -t STAGED_ARRAY < <(LC_ALL=C sort -u "$STAGED_PATHS")
   # dpkg -S 对未登记路径会报错并返回非零：这里只取命中行，遗漏项由包清单的
   # 必需组件校验（legal-notices.py）兜底。
-  dpkg -S "${STAGED_ARRAY[@]}" 2>/dev/null \
+  #
+  # **必须显式 `|| true`**：脚本开着 `set -o pipefail`，dpkg 的非零退出会顺着管道
+  # 把整个脚本**静默终止**（只留下 exit code 1，没有任何错误信息）。
+  # 这个坑一直被上一条问题掩盖着：闭包坏掉时 STAGED_PATHS 里只有二进制、全都能被 dpkg 认出来；
+  # 闭包修好后一下子多出两百多个库路径，只要有一个不属于任何包，脚本就在这一步无声死掉。
+  log "反查包清单: $(wc -l < "$STAGED_PATHS") 条路径"
+  { dpkg -S "${STAGED_ARRAY[@]}" 2>/dev/null || true; } \
     | awk -F': ' '{print $1}' \
     | tr ',' '\n' \
     | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
