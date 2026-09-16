@@ -24,7 +24,7 @@
 | | |
 | --- | --- |
 | 应用包名 | `io.deepseekharness.mobile` |
-| 当前版本 | `0.1.21-preview` |
+| 当前版本 | `0.2.0` |
 | 最低系统 | Android 8.0（API 26）及以上 |
 | 支持架构 | 仅 `arm64-v8a` |
 | 内置运行时 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.1.5-rc.2 |

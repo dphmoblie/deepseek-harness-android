@@ -19,9 +19,10 @@ permissions:
   contents: read
 
 env:
-  # 测试版版本号：与 android/app/build.gradle 的 versionName 保持一致。
-  # CI 会据此生成运行时版本与 Release 标签（形如 v0.1.12-preview-mobile-<run_number>）。
-  APP_VERSION: '0.1.21-preview'
+  # 应用版本号：与 android/app/build.gradle 的 versionName 保持一致。
+  # CI 据此生成运行时版本与 Release 标签：预发布走 v<版本>-mobile-<run_number>，
+  # 正式版（release_type=stable）直接用 v<版本>。本次为首个正式版，故去掉 -preview 后缀。
+  APP_VERSION: '0.2.0'
 
 jobs:
   build:

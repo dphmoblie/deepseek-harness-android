@@ -24,7 +24,7 @@
 | | |
 | --- | --- |
 | Application package | `io.deepseekharness.mobile` |
-| Current version | `0.1.21-preview` |
+| Current version | `0.2.0` |
 | Minimum system | Android 8.0 (API 26) or newer |
 | Architecture | `arm64-v8a` only |
 | Embedded runtime | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.1.5-rc.2 |
