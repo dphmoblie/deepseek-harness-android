@@ -109,6 +109,37 @@ if [[ -s "$COPY_LIST" ]]; then
 fi
 
 # ---- 5. 共享库传递闭包 ----------------------------------------------------------
+# 两种取依赖的方式，**ldd 优先、readelf 兜底**：
+#   * `ldd` 直接给出解析后的路径，最省事；
+#   * 但它必须能「把这个二进制跑起来」才有输出，一旦失败（缺解释器、被执行策略挡下、
+#     ldd 自身不可用），输出为空而错误被 `2>/dev/null` 吞掉 —— **闭包会静默变成空集**。
+#     O-7 就是这个后果：已发布的产物里 `usr/bin/curl` / `usr/bin/ssh` / `git-remote-https` 都在，
+#     而 libcurl / libgssapi / libkrb5 **一个都没进去**（45,439 个条目里零命中），
+#     真机上三个命令全部启动失败，而所有「存在 + 0755 + ELF」的校验都是绿的。
+#   * `readelf -d` 只读 DT_NEEDED 的 SONAME，再用 `ldconfig -p` 解析成路径，
+#     完全不依赖能否运行文件；某条二进制用 ldd 取不到依赖时会自动改走它。
+LIBDEPS_METHOD_COUNTS=""
+collect_lib_paths() {
+  local binary="$1" lib soname resolved
+  local via_ldd=0 via_readelf=0
+  while IFS= read -r lib; do
+    [[ -n "$lib" ]] || continue
+    via_ldd=$((via_ldd + 1))
+    printf '%s\n' "$lib"
+  done < <(ldd "$binary" 2>/dev/null | awk '/=>/ {print $3} !/=>/ && /^\// {print $1}')
+  if [[ "$via_ldd" == "0" ]]; then
+    while IFS= read -r soname; do
+      [[ -n "$soname" ]] || continue
+      resolved="$(ldconfig -p 2>/dev/null | awk -v s="$soname" '$1 == s {print $NF; exit}')"
+      [[ -n "$resolved" ]] || continue
+      via_readelf=$((via_readelf + 1))
+      printf '%s\n' "$resolved"
+    done < <(readelf -d "$binary" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')
+  fi
+  LIBDEPS_METHOD_COUNTS="${LIBDEPS_METHOD_COUNTS}${via_ldd}/${via_readelf} "
+}
+
+TOTAL_LIBS_COLLECTED=0
 for _round in 1 2 3 4 5; do
   : > "$NEW_LIBS"
   while IFS= read -r -d '' binary; do
@@ -120,7 +151,7 @@ for _round in 1 2 3 4 5; do
         [[ -e "$DEST/${candidate#/}" ]] && continue
         printf '%s\n' "$candidate"
       done
-    done < <(ldd "$binary" 2>/dev/null | awk '/=>/ {print $3} !/=>/ && /^\// {print $1}')
+    done < <(collect_lib_paths "$binary")
   done < <(find "$DEST" -type f -print0)
   LC_ALL=C sort -u -o "$NEW_LIBS" "$NEW_LIBS"
   LC_ALL=C comm -23 "$NEW_LIBS" "$BASE_PATHS" > "$NEW_LIBS.filtered"
@@ -130,8 +161,16 @@ for _round in 1 2 3 4 5; do
   mapfile -t ROUND_LIBS < "$NEW_LIBS.filtered"
   cp -a --parents "${ROUND_LIBS[@]}" "$DEST/"
   printf '%s\n' "${ROUND_LIBS[@]}" >> "$STAGED_PATHS"
-  log "第 ${_round} 轮补齐共享库: ${#ROUND_LIBS[@]} 个"
+  TOTAL_LIBS_COLLECTED=$((TOTAL_LIBS_COLLECTED + ${#ROUND_LIBS[@]}))
+  log "第 ${_round} 轮补齐共享库: ${#ROUND_LIBS[@]} 个（各二进制的 ldd/readelf 命中数: ${LIBDEPS_METHOD_COUNTS}）"
 done
+
+# 熔断：一个共享库都没收集到，说明两种取依赖的方式都失效了。
+# 这种情况**绝不能继续**——产物会带着一批「装得上、跑不起来」的命令发布出去（O-7）。
+if ((TOTAL_LIBS_COLLECTED == 0)); then
+  echo "共享库闭包为空：ldd 与 readelf 都没取到依赖，拒绝产出一个跑不起来的组件组" >&2
+  exit 1
+fi
 
 # ---- 5b. 反查提供这些文件的包（供法律材料收集使用）-----------------------------
 if [[ -s "$STAGED_PATHS" ]]; then

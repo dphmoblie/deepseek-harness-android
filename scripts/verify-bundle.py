@@ -118,6 +118,99 @@ REQUIRED_SYMLINKS = {
 }
 
 
+# 基线镜像（ubuntu-base）一定会提供的 SONAME，属于预期不出现在 rootfs bundle 里的：
+# 动态加载器与 libc 家族。**刻意保持很短**——每多写一个名字就等于放过一类缺库，
+# 而 O-7 的教训正是「缺库没人管」。网络工具自己的依赖（libcurl / libgssapi 等）绝不在此列。
+BASE_IMAGE_SONAMES = frozenset({
+    "ld-linux-aarch64.so.1",
+    "libc.so.6",
+    "libm.so.6",
+    "libdl.so.2",
+    "libpthread.so.0",
+    "librt.so.1",
+    "libgcc_s.so.1",
+})
+
+# 必须做「依赖可解析性」检查的二进制：用户会直接敲的，以及 git 走 HTTPS 的必经之路。
+# 少列一个就等于放过一条「命令在真机上起不来」的路径。
+DEPENDENCY_CHECKED_BINARIES = (
+    "usr/bin/git",
+    "usr/bin/curl",
+    "usr/bin/ssh",
+    "usr/lib/git-core/git-remote-https",
+)
+
+
+def elf_needed_sonames(data: bytes) -> list[str]:
+    """读 ELF64 小端文件的 DT_NEEDED（它依赖的 SONAME 列表）。
+
+    **为什么必须解析 ELF，而不是「在 runner 上跑一下 --version」**：runner 上装着这些库，
+    动态加载器会从**宿主**解析，缺库的镜像照样能跑起来 —— O-7 就是这么漏出去的：
+    已发布的 rootfs.bundle 里 `usr/bin/curl`、`usr/bin/ssh`、`git-remote-https` 都在，
+    而 libcurl / libgssapi / libkrb5 **一个都没有**（实测：45,439 个条目里零命中）。
+    只有把依赖名抠出来、再对着**产物内容**逐个查，才验得出「这个镜像能不能自己跑起来」。
+
+    非 ELF 或结构异常时返回空列表（调用方只在明确的 ELF 上调用）。
+    """
+    if len(data) < 64 or data[:4] != b"\x7fELF" or data[4] != 2 or data[5] != 1:
+        return []
+    phoff = int.from_bytes(data[0x20:0x28], "little")
+    phentsize = int.from_bytes(data[0x36:0x38], "little")
+    phnum = int.from_bytes(data[0x38:0x3A], "little")
+    if phentsize < 56 or phnum == 0 or phoff + phentsize * phnum > len(data):
+        return []
+    loads: list[tuple[int, int, int]] = []
+    dynamic_offset: int | None = None
+    dynamic_size = 0
+    for index in range(phnum):
+        base = phoff + index * phentsize
+        p_type = int.from_bytes(data[base:base + 4], "little")
+        p_offset = int.from_bytes(data[base + 8:base + 16], "little")
+        p_vaddr = int.from_bytes(data[base + 16:base + 24], "little")
+        p_filesz = int.from_bytes(data[base + 32:base + 40], "little")
+        if p_type == 1:  # PT_LOAD
+            loads.append((p_vaddr, p_offset, p_filesz))
+        elif p_type == 2:  # PT_DYNAMIC
+            dynamic_offset, dynamic_size = p_offset, p_filesz
+    if dynamic_offset is None or dynamic_offset + dynamic_size > len(data):
+        return []
+
+    def vaddr_to_offset(vaddr: int) -> int | None:
+        for start, offset, size in loads:
+            if start <= vaddr < start + size:
+                return offset + (vaddr - start)
+        return None
+
+    strtab: int | None = None
+    strsz = 0
+    needed_offsets: list[int] = []
+    for index in range(dynamic_size // 16):
+        base = dynamic_offset + index * 16
+        d_tag = int.from_bytes(data[base:base + 8], "little", signed=True)
+        d_val = int.from_bytes(data[base + 8:base + 16], "little")
+        if d_tag == 0:  # DT_NULL：动态段到此为止
+            break
+        if d_tag == 1:  # DT_NEEDED
+            needed_offsets.append(d_val)
+        elif d_tag == 5:  # DT_STRTAB
+            strtab = vaddr_to_offset(d_val)
+        elif d_tag == 10:  # DT_STRSZ
+            strsz = d_val
+    if strtab is None or strsz <= 0 or strtab + strsz > len(data):
+        return []
+    names: list[str] = []
+    for offset in needed_offsets:
+        if offset >= strsz:
+            continue
+        end = data.find(b"\x00", strtab + offset, strtab + strsz)
+        if end < 0:
+            continue
+        name = data[strtab + offset:end].decode("utf-8", "replace")
+        if name:
+            names.append(name)
+    return names
+
+
 def runtime_executable_name(name: str) -> str | None:
     for label, suffix in REQUIRED_RUNTIME_EXECUTABLES.items():
         if (label == "bash" and name == suffix) or (
@@ -396,6 +489,36 @@ def main() -> int:
             )
         if expected not in seen:
             fail(f"{link} points at /{expected}, which is missing from the bundle")
+
+    # 依赖可解析性（O-7）：预置的网络工具必须能在**这个镜像内**解析到自己的共享库。
+    #
+    # 为什么这一条非有不可：已发布的产物里 `usr/bin/curl`、`usr/bin/ssh`、`git-remote-https` 都在，
+    # 而 libcurl / libgssapi / libkrb5 **一个都没有**（45,439 个条目里零命中），
+    # 真机上这三个命令全部启动失败。原有校验只查「存在 + 0755 + ELF」，
+    # 查不出缺库；在 runner 上跑 `--version` 也查不出，因为加载器会用宿主的库。
+    # 只有把 DT_NEEDED 抠出来对着产物内容查，才拦得住。
+    bundle_basenames = {PurePosixPath(entry).name for entry in seen}
+    unresolved: list[str] = []
+    with tarfile.open(args.bundle, "r:gz") as t:
+        for name in DEPENDENCY_CHECKED_BINARIES:
+            # `--without-network-tools` 的镜像里这些文件本就不存在，跳过而不是报错。
+            if name not in seen:
+                continue
+            member = t.getmember(name)
+            if not member.isreg():
+                continue
+            executable = t.extractfile(member)
+            if executable is None:
+                continue
+            for soname in elf_needed_sonames(executable.read()):
+                if soname in bundle_basenames or soname in BASE_IMAGE_SONAMES:
+                    continue
+                unresolved.append(f"{name} -> {soname}")
+    if unresolved:
+        fail(
+            "unresolved shared libraries (these commands will not start in the guest): "
+            + ", ".join(sorted(set(unresolved)))
+        )
     # 符号链接延后创建冲突（提取器：目录/文件先写，symlink 创建时路径已存在则 ARCHIVE_DUPLICATE_ENTRY）
     for name, _ in symlinks:
         others = [n for n, t in types.items() if t != "sym" and n == name]
