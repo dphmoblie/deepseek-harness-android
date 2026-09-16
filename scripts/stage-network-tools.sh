@@ -140,6 +140,25 @@ collect_lib_paths() {
 }
 
 TOTAL_LIBS_COLLECTED=0
+# 闭包前诊断：这一步是把「闭包为空」从一句结论变成可定位的事实。
+# 实测教训：CI 上第一次加了熔断后只看到「闭包为空」，但看不出是「没复制进文件」、
+# 「工具不可用」还是「工具取不到依赖」——三者修法完全不同，所以先把它们分开打出来。
+log "闭包前诊断: DEST 文件数=$(find "$DEST" -type f 2>/dev/null | wc -l) 候选清单行数=$(wc -l < "$COPY_LIST")"
+for tool in ldd readelf ldconfig; do
+  if command -v "$tool" >/dev/null 2>&1; then
+    log "  工具 $tool: $(command -v "$tool")"
+  else
+    log "  工具 $tool: **不可用**"
+  fi
+done
+SAMPLE_BIN="$(find "$DEST" -type f -perm -u+x 2>/dev/null | head -n1 || true)"
+if [[ -n "$SAMPLE_BIN" ]]; then
+  log "  样例二进制: $SAMPLE_BIN"
+  log "    ldd 输出行数=$( { ldd "$SAMPLE_BIN" 2>&1 || true; } | wc -l)  首行=$( { ldd "$SAMPLE_BIN" 2>&1 || true; } | head -n1)"
+  log "    readelf -d 行数=$( { readelf -d "$SAMPLE_BIN" 2>&1 || true; } | wc -l)  首行=$( { readelf -d "$SAMPLE_BIN" 2>&1 || true; } | head -n1)"
+else
+  log "  样例二进制: **DEST 里没有可执行文件**（说明第 4 步的复制没落地）"
+fi
 for _round in 1 2 3 4 5; do
   : > "$NEW_LIBS"
   while IFS= read -r -d '' binary; do
