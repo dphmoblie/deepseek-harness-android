@@ -16,6 +16,12 @@ enum class AuditEvent {
     RUNTIME_START,
     RUNTIME_STOP,
     RUNTIME_RESET,
+
+    /** 运行时版本：切换到保留下来的上一版本。 */
+    RUNTIME_VERSION_SWITCH,
+
+    /** 运行时版本：删除保留下来的上一版本。 */
+    RUNTIME_VERSION_DELETE,
     TERMINAL_OPEN,
     TERMINAL_CLOSE,
     SHIZUKU_PERMISSION,

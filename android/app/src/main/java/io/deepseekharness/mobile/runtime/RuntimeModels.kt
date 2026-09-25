@@ -134,6 +134,13 @@ data class RuntimeManifest(
     val harnessArgv: List<String>,
     val harnessUri: URI,
     val harnessPort: Int,
+    /**
+     * 归档内的 dsh 版本，仅用于展示（版本列表与自检回执）。
+     *
+     * 它是清单里的**可选**字段：旧清单没有它，界面就退回「进访客读 package.json」或直接不显示，
+     * 因此解析时格式不合规一律按「未声明」处理，绝不因为一个展示字段让整份清单不可用。
+     */
+    val dshVersion: String? = null,
 ) {
     companion object {
         private val identifierPattern = Regex("^[A-Za-z0-9._-]{1,96}$")
@@ -200,6 +207,8 @@ data class RuntimeManifest(
             }
 
             val harnessUri = validateHarnessUri(requiredString(json, "harnessUrl"), port)
+            // 展示字段：形态不合规就当没写（规则见 RuntimeVersionPolicy.DSH_VERSION）。
+            val dshVersion = json.optString("dshVersion", "").takeIf { RuntimeVersionPolicy.DSH_VERSION.matches(it) }
             return RuntimeManifest(
                 rawBytes = bytes.copyOf(),
                 runtimeId = runtimeId,
@@ -210,6 +219,7 @@ data class RuntimeManifest(
                 harnessArgv = harnessArgv,
                 harnessUri = harnessUri,
                 harnessPort = port,
+                dshVersion = dshVersion,
             )
         }
 

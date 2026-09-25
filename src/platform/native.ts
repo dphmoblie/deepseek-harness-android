@@ -28,6 +28,7 @@ import {
   assertBase64Input,
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
+  assertRuntimeVersionTarget,
   assertSessionId,
   assertStorageDirPath,
   assertTerminalKind,
@@ -50,6 +51,7 @@ import {
   validateRuntimeProgress,
   validateRuntimeSelfCheckReport,
   validateRuntimeState,
+  validateRuntimeVersions,
   validateSettings,
   validateSettingsUpdate,
   validateShizukuState,
@@ -99,6 +101,9 @@ interface NativeRuntimePlugin {
   removeStorageDirectory(options: { path: string }): Promise<unknown>
   getHarnessLog(options: { maxBytes?: number }): Promise<unknown>
   runRuntimeSelfCheck(options: { operation: SelfCheckOperation }): Promise<unknown>
+  runtimeVersions(): Promise<unknown>
+  switchRuntimeVersion(options: { target: string }): Promise<unknown>
+  deleteRuntimeVersion(options: { target: string }): Promise<unknown>
   getDiagnosticLogState(): Promise<DiagnosticLogState>
   readDiagnosticLog(options: { maxBytes?: number }): Promise<unknown>
   setDiagnosticLogSettings(options: { enabled: boolean; retentionDays: number }): Promise<DiagnosticLogState>
@@ -216,6 +221,14 @@ function createNativeBridge(): RuntimeBridge {
     runRuntimeSelfCheck: operation => NativeRuntime
       .runRuntimeSelfCheck({ operation: validateSelfCheckOperation(operation) })
       .then(validateRuntimeSelfCheckReport),
+    // 版本槽与体积由原生侧回传；目标取值在前端就拦死（目前只有上一版本可切换或删除）。
+    getRuntimeVersions: () => NativeRuntime.runtimeVersions().then(validateRuntimeVersions),
+    switchRuntimeVersion: target => NativeRuntime
+      .switchRuntimeVersion({ target: assertRuntimeVersionTarget(target) })
+      .then(validateRuntimeVersions),
+    deleteRuntimeVersion: target => NativeRuntime
+      .deleteRuntimeVersion({ target: assertRuntimeVersionTarget(target) })
+      .then(validateRuntimeVersions),
     readDiagnosticLog: options => NativeRuntime.readDiagnosticLog({ maxBytes: options?.maxBytes }).then(validateDiagnosticLogText),
     getDiagnosticLogState: () => NativeRuntime.getDiagnosticLogState().then(validateDiagnosticLogState),
     setDiagnosticLogSettings: (enabled, retentionDays) => {

@@ -86,6 +86,11 @@ export const bridge = {
   requestNotificationPermission: vi.fn(),
   getHarnessLog: vi.fn(),
   runRuntimeSelfCheck: vi.fn(),
+  // 运行时版本管理（双槽）：界面进「运行环境」页就会读一次列表，
+  // 桩必须先在，否则那次 effect 会抛错并整棵树卸载（同上一条注释里的坑）。
+  getRuntimeVersions: vi.fn(),
+  switchRuntimeVersion: vi.fn(),
+  deleteRuntimeVersion: vi.fn(),
   managePlugins: vi.fn(),
   getDiagnosticLogState: vi.fn(),
   readDiagnosticLog: vi.fn(),
@@ -260,6 +265,31 @@ export function beforeEachAppTest(): void {
     dshVersion: '0.1.5-rc.2',
     checks: [{ id: 'shell', status: 'ok' }, { id: 'node', status: 'ok' }],
   })
+  // 默认只有「当前版本 + 内置版本」，没有上一版本：多数用例只关心设置页本身，
+  // 不该被一个可切换的版本槽影响；涉及切换/删除的用例自己覆盖这三条桩。
+  bridge.getRuntimeVersions.mockResolvedValue({
+    versions: [
+      {
+        slot: 'current',
+        version: '2026.08.17',
+        dshVersion: '0.1.5-rc.2',
+        runtimeId: 'ubuntu-24.04-arm64-deepseek-harness',
+        extractedBytes: 640 * 1024 * 1024,
+        active: true,
+      },
+      {
+        slot: 'bundled',
+        version: '2026.09.01',
+        runtimeId: 'ubuntu-24.04-arm64-deepseek-harness',
+        extractedBytes: 660 * 1024 * 1024,
+        active: false,
+      },
+    ],
+    canSwitch: false,
+    canDelete: false,
+  })
+  bridge.switchRuntimeVersion.mockResolvedValue({ versions: [], canSwitch: false, canDelete: false })
+  bridge.deleteRuntimeVersion.mockResolvedValue({ versions: [], canSwitch: false, canDelete: false })
   bridge.managePlugins.mockResolvedValue({ plugins: [] })
   bridge.getDiagnosticLogState.mockResolvedValue({ ...diagnostic })
   bridge.readDiagnosticLog.mockResolvedValue({

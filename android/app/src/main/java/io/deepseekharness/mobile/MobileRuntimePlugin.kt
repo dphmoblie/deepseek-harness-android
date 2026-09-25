@@ -10,6 +10,7 @@ import android.view.WindowManager
 import androidx.activity.result.ActivityResult
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -41,6 +42,8 @@ import io.deepseekharness.mobile.runtime.RuntimeSettings
 import io.deepseekharness.mobile.runtime.RuntimeStateSnapshot
 import io.deepseekharness.mobile.runtime.RuntimeStorageDirs
 import io.deepseekharness.mobile.runtime.RuntimeValidation
+import io.deepseekharness.mobile.runtime.RuntimeVersionInfo
+import io.deepseekharness.mobile.runtime.RuntimeVersionPolicy
 import io.deepseekharness.mobile.runtime.RuntimeWorkspaceFiles
 import io.deepseekharness.mobile.runtime.StorageDirCodes
 import io.deepseekharness.mobile.runtime.StorageDirStatus
@@ -380,6 +383,41 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun getState(call: PluginCall) {
         resolveWhileActive(call) { controller.state().toJs() }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 运行时版本列表：只回传槽位、版本号、dsh 版本、体积与可用操作，不含路径或下载地址。
+     */
+    @PluginMethod
+    fun runtimeVersions(call: PluginCall) {
+        resolveWhileActive(call) { controller.runtimeVersions().toJs() }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 切换运行时版本：目前只支持切回保留下来的上一版本（`target = "previous"`）。
+     */
+    @PluginMethod
+    fun switchRuntimeVersion(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.RUNTIME_VERSION_SWITCH) {
+                controller.switchRuntimeVersion(RuntimeVersionPolicy.requireTarget(call.getString("target"))).toJs()
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 删除保留下来的上一版本：只删 `retained*`，当前运行时不受影响。
+     */
+    @PluginMethod
+    fun deleteRuntimeVersion(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.RUNTIME_VERSION_DELETE) {
+                controller.deleteRuntimeVersion(RuntimeVersionPolicy.requireTarget(call.getString("target"))).toJs()
+            }
+        }
     }
 
     @PluginMethod
@@ -1624,8 +1662,34 @@ class MobileRuntimePlugin : Plugin() {
             errorCode?.let { json.put("errorCode", it) }
         }
 
-    private fun ShizukuState.toJs(): JSObject = JSObject()
-        .put("installed", installed)
+    /**
+     * 运行时版本列表。
+     *
+     * `canSwitch`/`canDelete` 只说「磁盘上有没有可用的上一版本」这个真值，**不含**「此刻是否在跑」：
+     * 运行中不允许切换由界面按 `phase` 决定按钮是否可用，而请求本身仍会被控制器以 `RUNTIME_BUSY` 拒绝。
+     */
+    private fun List<RuntimeVersionInfo>.toJs(): JSObject {
+        val array = JSArray()
+        forEach { info ->
+            array.put(
+                JSObject()
+                    .put("slot", info.slot)
+                    .put("version", info.version)
+                    .put("runtimeId", info.runtimeId)
+                    .put("extractedBytes", info.extractedBytes)
+                    .put("active", info.active)
+                    .also { json -> info.dshVersion?.let { json.put("dshVersion", it) } },
+            )
+        }
+        val hasCurrent = any { it.slot == RuntimeVersionPolicy.SLOT_CURRENT }
+        val hasPrevious = any { it.slot == RuntimeVersionPolicy.SLOT_PREVIOUS }
+        return JSObject()
+            .put("versions", array)
+            .put("canSwitch", RuntimeVersionPolicy.canSwitch(hasCurrent, hasPrevious))
+            .put("canDelete", RuntimeVersionPolicy.canDelete(hasPrevious))
+    }
+
+    private fun ShizukuState.toJs(): JSObject = JSObject()        .put("installed", installed)
         .put("running", running)
         .put("permission", permission)
         .put("connected", connected)

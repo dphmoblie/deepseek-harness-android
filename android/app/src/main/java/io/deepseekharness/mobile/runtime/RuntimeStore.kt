@@ -27,8 +27,23 @@ class RuntimeStore(context: Context) {
     val runtimeParent = File(appContext.noBackupFilesDir, "dsh-runtime")
     val currentRoot = File(runtimeParent, "current")
     val currentManifest = File(runtimeParent, "current-manifest.json")
+
+    /**
+     * 安装期间的瞬时槽：提升新运行时前，旧运行时先改名到这里。
+     * 它**不是**用户可以切换的版本，提升成功后会被 [retainedRoot] 接手（见 RuntimeInstaller）。
+     */
     val backupRoot = File(runtimeParent, "previous")
     val backupManifest = File(runtimeParent, "previous-manifest.json")
+
+    /**
+     * 上一版本槽：上一次提升成功后，被换下来的那一份运行时留在这里。
+     *
+     * 与 [backupRoot] 分开是有意的：`previous*` 的语义是「提升正在进行」，
+     * 中断恢复逻辑据此判断该前滚还是回滚；已完成的版本必须用一个不会被恢复逻辑
+     * 误判的独立名字保存，否则用户会在下次安装开始时丢掉可回退的副本。
+     */
+    val retainedRoot = File(runtimeParent, "retained")
+    val retainedManifest = File(runtimeParent, "retained-manifest.json")
     val runnerFile get() = File(appContext.applicationInfo.nativeLibraryDir, RUNNER_NAME)
     val loaderFile get() = File(appContext.applicationInfo.nativeLibraryDir, LOADER_NAME)
     private val launchDirectory = File(appContext.noBackupFilesDir, "dsh-runner")
@@ -52,6 +67,8 @@ class RuntimeStore(context: Context) {
 
     @Volatile private var manifestCacheLoaded = false
     @Volatile private var manifestCache: RuntimeManifest? = null
+    @Volatile private var retainedCacheLoaded = false
+    @Volatile private var retainedCache: RuntimeManifest? = null
     @Volatile private var bundledManifestCacheLoaded = false
     @Volatile private var bundledManifestCache: RuntimeManifest? = null
 
@@ -896,6 +913,8 @@ class RuntimeStore(context: Context) {
                     .put("harness", JSONArray(manifest.harnessArgv)),
             )
             .put("harnessUrl", manifest.harnessUri.toASCIIString())
+            // 展示字段：装上的是哪个 dsh 版本，版本列表不必进访客读包内 package.json 就能显示。
+            .apply { manifest.dshVersion?.let { put("dshVersion", it) } }
             .toString()
             .toByteArray(Charsets.UTF_8)
         if (bytes.size > RuntimeLimits.MAX_MANIFEST_BYTES) {
@@ -915,10 +934,33 @@ class RuntimeStore(context: Context) {
         }
     }
 
-    private fun readInstalledManifest(): RuntimeManifest? {
-        if (!RuntimeFiles.isDirectoryNoFollow(currentRoot)) return null
+    /**
+     * 上一版本（被换下来的那一份）的清单。
+     *
+     * 与 [installedManifest] 采用同一套读取规则：清单必须与根目录同时存在，
+     * 且必须是常规文件、不跟随符号链接、大小受限。任一条不满足都视为「没有上一版本」，
+     * 界面据此不展示切换入口——版本信息宁可少报，也不能指向一个不可用的根目录。
+     */
+    @Synchronized
+    fun retainedManifest(): RuntimeManifest? {
+        if (retainedCacheLoaded) return retainedCache
+        retainedCache = readManifestAt(retainedRoot, retainedManifest)
+        retainedCacheLoaded = true
+        return retainedCache
+    }
+
+    @Synchronized
+    fun invalidateRetainedManifest() {
+        retainedCache = null
+        retainedCacheLoaded = false
+    }
+
+    private fun readInstalledManifest(): RuntimeManifest? = readManifestAt(currentRoot, currentManifest)
+
+    private fun readManifestAt(root: File, manifestFile: File): RuntimeManifest? {
+        if (!RuntimeFiles.isDirectoryNoFollow(root)) return null
         val descriptor = try {
-            Os.open(currentManifest.absolutePath, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
+            Os.open(manifestFile.absolutePath, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
         } catch (error: ErrnoException) {
             if (error.errno == OsConstants.ENOENT || error.errno == OsConstants.ELOOP) return null
             return null

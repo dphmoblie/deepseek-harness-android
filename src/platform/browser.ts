@@ -13,6 +13,7 @@ import type {
   RuntimeProgress,
   RuntimeSettings,
   RuntimeState,
+  RuntimeVersionsState,
   ShizukuState,
   StorageAccessState,
   StorageDirsState,
@@ -22,7 +23,7 @@ import type {
 } from './types'
 import { DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertSessionId, assertStorageDirPath, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
+import { assertMailboxSubdirectory, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
@@ -331,6 +332,16 @@ export function createBrowserBridge(): RuntimeBridge {
     runRuntimeSelfCheck: (operation: SelfCheckOperation): Promise<SelfCheckReport> => {
       validateSelfCheckOperation(operation)
       return Promise.reject(new Error('浏览器预览不支持运行时自检'))
+    },
+    // 浏览器预览里没有访客运行时，也就没有版本槽可列出或切换：如实拒绝，不编造版本列表。
+    getRuntimeVersions: (): Promise<RuntimeVersionsState> => Promise.reject(new Error('浏览器预览不支持运行时版本管理')),
+    switchRuntimeVersion: (target): Promise<RuntimeVersionsState> => {
+      assertRuntimeVersionTarget(target)
+      return Promise.reject(new Error('浏览器预览不支持运行时版本管理'))
+    },
+    deleteRuntimeVersion: (target): Promise<RuntimeVersionsState> => {
+      assertRuntimeVersionTarget(target)
+      return Promise.reject(new Error('浏览器预览不支持运行时版本管理'))
     },
     // 浏览器预览没有原生诊断日志：保持关闭且不可导出，避免给出「已经采集到东西」的错觉。
     getDiagnosticLogState: (): Promise<DiagnosticLogState> => Promise.resolve({ ...diagnosticState }),

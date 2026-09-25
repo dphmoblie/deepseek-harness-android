@@ -24,6 +24,8 @@ import type {
   RuntimeSettingsUpdate,
   RuntimeSource,
   RuntimeState,
+  RuntimeVersionInfo,
+  RuntimeVersionsState,
   ShizukuState,
   StorageAccessState,
   StorageDirAvailability,
@@ -67,6 +69,8 @@ const MAILBOX_AVAILABILITIES = new Set<MailboxAvailability>([
 const MAX_MAILBOX_PATH_LENGTH = 240
 /** 原生侧最多列出的 inbox tar 候选数；超出即视为载荷不符合契约。 */
 const MAX_MAILBOX_TARS = 5
+/** 原生侧最多回传的版本槽数（当前 + 上一版本 + 内置）；超出即视为载荷不符合契约。 */
+const MAX_RUNTIME_VERSIONS = 3
 const RUNTIME_PHASES = new Set<RuntimePhase>([
   'not-installed',
   'preparing',
@@ -439,8 +443,47 @@ export function validateRuntimeState(value: unknown): RuntimeState {
   }
 }
 
-export function validateRuntimeProgress(value: unknown): RuntimeProgress {
-  const progress = asRecord(value, '运行时进度')
+/**
+ * 运行时版本操作目标：目前只有「上一版本」可切换或删除。
+ *
+ * 取值在前端就拦死，不让原生侧去猜未知目标。
+ */
+export function assertRuntimeVersionTarget(value: unknown): 'previous' {
+  if (value !== 'previous') throw new Error('运行时版本操作目标无效')
+  return value
+}
+
+export function validateRuntimeVersions(value: unknown): RuntimeVersionsState {
+  const state = asRecord(value, '运行时版本状态')
+  const source = state.versions
+  if (!Array.isArray(source) || source.length > MAX_RUNTIME_VERSIONS) throw new Error('运行时版本列表格式无效')
+  if (typeof state.canSwitch !== 'boolean') throw new Error('运行时版本切换状态格式无效')
+  if (typeof state.canDelete !== 'boolean') throw new Error('运行时版本删除状态格式无效')
+
+  const versions: RuntimeVersionInfo[] = source.map(entry => {
+    const item = asRecord(entry, '运行时版本条目')
+    if (item.slot !== 'current' && item.slot !== 'previous' && item.slot !== 'bundled') {
+      throw new Error('运行时版本槽位格式无效')
+    }
+    if (typeof item.active !== 'boolean') throw new Error('运行时版本使用状态格式无效')
+    const version = requiredIdentifier(item.version, '运行时版本号')
+    const runtimeId = requiredIdentifier(item.runtimeId, '运行时标识')
+    const extractedBytes = byteCount(item.extractedBytes, '运行时体积')
+    const dshVersion = optionalIdentifier(item.dshVersion, 'dsh 版本')
+    return {
+      slot: item.slot,
+      version,
+      runtimeId,
+      extractedBytes,
+      active: item.active,
+      ...(dshVersion === undefined ? {} : { dshVersion }),
+    }
+  })
+
+  return { versions, canSwitch: state.canSwitch, canDelete: state.canDelete }
+}
+
+export function validateRuntimeProgress(value: unknown): RuntimeProgress {  const progress = asRecord(value, '运行时进度')
   const downloadedBytes = byteCount(progress.downloadedBytes, '已处理字节数')
   const totalBytes = byteCount(progress.totalBytes, '总字节数')
   if (totalBytes > 0 && downloadedBytes > totalBytes) throw new Error('运行时进度无效')

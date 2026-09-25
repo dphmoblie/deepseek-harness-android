@@ -105,7 +105,7 @@ class RuntimeInstaller(
             checkCancellation()
             RootfsIntegrity.verifyLinks(workspace.stagingRoot, "ROOTFS_LINKS_CORRUPTED")
             store.writeInstalledManifest(workspace.stagingManifest, manifest)
-            promoteStaging(workspace)
+            promoteRuntime(workspace.stagingRoot, workspace.stagingManifest)
             store.updateInstalledManifest(manifest)
             cleanupIfPresent(workspace.archivePart)
             status.update(
@@ -153,9 +153,69 @@ class RuntimeInstaller(
             cleanResumeFilesExcept(null)
             cleanupIfPresent(store.backupManifest)
             cleanupIfPresent(store.backupRoot)
+            cleanupIfPresent(store.retainedManifest)
+            cleanupIfPresent(store.retainedRoot)
             cleanupIfPresent(store.currentManifest)
             cleanupIfPresent(store.currentRoot)
             store.updateInstalledManifest(null)
+            store.invalidateRetainedManifest()
+            status.refreshIdle()
+        } finally {
+            installLock.unlock()
+        }
+    }
+
+    /**
+     * 切换到保留下来的上一版本（`retained*`）。
+     *
+     * 实现上就是一次没有下载、没有解压的提升：源目录是上一版本的根目录，访客用户数据照旧跨过去。
+     * 成功后原来那一版会被旋转进 `retained*`（见 [retainPreviousRoot]），所以同一个入口可以来回切换，
+     * 不需要为「切回去」再写一条独立路径。
+     *
+     * 调用方（[MobileRuntimeController]）负责保证此刻没有 Harness 或终端在运行。
+     */
+    fun switchToRetained() {
+        if (!installLock.tryLock()) throw RuntimeFailure("INSTALL_IN_PROGRESS", "安装期间不能切换运行时版本")
+        try {
+            cancellationRequested.set(false)
+            prepareRuntimeParent()
+            // 先读清单：既能拿到切换后的版本信息，也能在缺清单时提前失败（此时还没动过任何文件）。
+            val retainedManifest = store.retainedManifest()
+                ?: throw RuntimeFailure("RUNTIME_VERSION_MISSING", "没有可切换的上一版本")
+            if (!RuntimeFiles.isDirectoryNoFollow(store.currentRoot) ||
+                !RuntimeFiles.existsNoFollow(store.currentManifest)
+            ) {
+                throw RuntimeFailure("RUNTIME_VERSION_MISSING", "当前运行时不可用，无法切换版本")
+            }
+            status.update(RuntimePhase.PREPARING)
+            promoteRuntime(store.retainedRoot, store.retainedManifest)
+            store.updateInstalledManifest(retainedManifest)
+            status.update(RuntimePhase.READY)
+        } catch (error: Throwable) {
+            status.refreshIdle()
+            throw error as? RuntimeFailure
+                ?: RuntimeFailure("RUNTIME_VERSION_SWITCH_FAILED", "无法切换到上一版本", error)
+        } finally {
+            installLock.unlock()
+        }
+    }
+
+    /**
+     * 删除保留下来的上一版本，交还它占用的磁盘空间。
+     *
+     * 只删 `retained*`：当前运行时不受影响，而且下一次安装仍会重新留下一个回滚点。
+     */
+    fun deleteRetained() {
+        if (!installLock.tryLock()) throw RuntimeFailure("INSTALL_IN_PROGRESS", "安装期间不能删除运行时版本")
+        try {
+            val hasRoot = RuntimeFiles.existsNoFollow(store.retainedRoot)
+            val hasManifest = RuntimeFiles.existsNoFollow(store.retainedManifest)
+            if (!hasRoot && !hasManifest) {
+                throw RuntimeFailure("RUNTIME_VERSION_MISSING", "没有可删除的上一版本")
+            }
+            cleanupIfPresent(store.retainedManifest)
+            cleanupIfPresent(store.retainedRoot)
+            store.invalidateRetainedManifest()
             status.refreshIdle()
         } finally {
             installLock.unlock()
@@ -351,6 +411,28 @@ class RuntimeInstaller(
         }
         // 回填必须在上面的分支把 backupRoot 恢复成 currentRoot 之后进行。
         restorePreservedWorkspaces(preservedRoots)
+        reconcileRetainedSlot()
+    }
+
+    /**
+     * 让「上一版本槽」自洽：`retained*` 只有在根目录与清单同时存在时才可用。
+     *
+     * 旋转期间被杀进程可能只留下其中一半（例如根目录已改名、清单还没改名）：这种半份副本
+     * 既不能切换，也不该继续占着数百 MB 磁盘，在这里直接丢弃。丢弃是安全的：清单缺失就意味着
+     * 这份副本已经无法被提升（提升需要清单里的摘要与入口定义）。
+     */
+    private fun reconcileRetainedSlot() {
+        val hasRoot = RuntimeFiles.existsNoFollow(store.retainedRoot)
+        val hasManifest = RuntimeFiles.existsNoFollow(store.retainedManifest)
+        if (hasRoot != hasManifest) {
+            try {
+                cleanupIfPresent(store.retainedManifest)
+                cleanupIfPresent(store.retainedRoot)
+            } catch (_: Exception) {
+                // 清理失败就留到下次启动：半份副本不会被界面当成可用版本。
+            }
+        }
+        store.invalidateRetainedManifest()
     }
 
     /**
@@ -373,14 +455,18 @@ class RuntimeInstaller(
     }
 
     /**
-     * 提升暂存根目录为新运行时，并保证访客用户数据跨升级存活。
+     * 把一份已就位的运行时提升为当前运行时，并保证访客用户数据跨版本存活。
+     *
+     * 两个入口共用它：安装（源是刚解压好的 `staging-*`）与版本切换（源是保留下来的 `retained`）。
+     * 两者在文件系统上的形状完全一样——一个根目录加一份清单——所以提升逻辑只应有一份。
      *
      * 顺序（见 `docs/运行时更新与数据保留.md` 的实现约定 2）：
      * 1. 备份旧根目录**之前**，先把白名单用户数据移出到 `preserve-<uuid>`；
      * 2. 备份旧根目录与清单，提升新根目录与清单；
-     * 3. 把用户数据回填到新根目录的同一相对路径；**只有全部回填成功**才删除 `backupRoot`。
+     * 3. 把用户数据回填到新根目录的同一相对路径；**只有全部回填成功**才把被换下来的旧版本
+     *    旋转到 `retained*`（见 [retainPreviousRoot]）。
      */
-    private fun promoteStaging(workspace: Workspace) {
+    private fun promoteRuntime(sourceRoot: File, sourceManifest: File) {
         val preservedRoot = File(
             store.runtimeParent,
             RuntimePreservePolicy.preserveDirectoryName(UUID.randomUUID().toString()),
@@ -412,9 +498,9 @@ class RuntimeInstaller(
                 Os.rename(store.currentManifest.absolutePath, store.backupManifest.absolutePath)
                 progress.manifestBackedUp = true
             }
-            Os.rename(workspace.stagingRoot.absolutePath, store.currentRoot.absolutePath)
+            Os.rename(sourceRoot.absolutePath, store.currentRoot.absolutePath)
             progress.rootPromoted = true
-            Os.rename(workspace.stagingManifest.absolutePath, store.currentManifest.absolutePath)
+            Os.rename(sourceManifest.absolutePath, store.currentManifest.absolutePath)
             progress.manifestPromoted = true
         } catch (error: Throwable) {
             rollbackPromotion(progress, preservedRoot, moved)
@@ -433,8 +519,38 @@ class RuntimeInstaller(
         if (unplaced.isNotEmpty()) {
             throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", unpreservedMessage(unplaced))
         }
-        cleanupIfPresent(store.backupManifest)
-        cleanupIfPresent(store.backupRoot)
+        retainPreviousRoot()
+    }
+
+    /**
+     * 把刚被换下来的旧运行时从 `previous*`（提升期间瞬时槽）旋转到 `retained*`（上一版本槽）。
+     *
+     * 这就是「安装成功后旧版本不再被删掉」的位置：安装或切换成功时保留一份可回退的副本，
+     * 代价是一份根目录的磁盘占用（约数百 MB），由界面上的「删除上一版本」交还给用户决定。
+     *
+     * 旋转失败**不算**安装失败：丢一个回滚点比让新运行时用不上轻得多。此时把 `retained*`
+     * 清理干净，把 `previous*` 留给下次启动的中断恢复流程收拾（见 [recoverInterruptedPromotion]）。
+     */
+    private fun retainPreviousRoot() {
+        try {
+            cleanupIfPresent(store.retainedManifest)
+            cleanupIfPresent(store.retainedRoot)
+            if (RuntimeFiles.existsNoFollow(store.backupRoot)) {
+                Os.rename(store.backupRoot.absolutePath, store.retainedRoot.absolutePath)
+            }
+            if (RuntimeFiles.existsNoFollow(store.backupManifest)) {
+                Os.rename(store.backupManifest.absolutePath, store.retainedManifest.absolutePath)
+            }
+        } catch (_: Exception) {
+            try {
+                cleanupIfPresent(store.retainedManifest)
+                cleanupIfPresent(store.retainedRoot)
+            } catch (_: Exception) {
+                // 清理失败也继续：残留的 retained* 在下次中断恢复时按「清单缺失」被丢弃。
+            }
+        } finally {
+            store.invalidateRetainedManifest()
+        }
     }
 
     /**

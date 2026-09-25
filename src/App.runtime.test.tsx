@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { FOREGROUND_SERVICE_SETTLE_MS, beforeEachAppTest, bridge, keepAlive, notInstalledState, openSettingsPage, readyState, runningState, settings } from './__tests__/appTestHarness'
-import type { RuntimeProgress } from './platform/types'
+import type { RuntimeProgress, RuntimeVersionsState } from './platform/types'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
 vi.mock('./components/TerminalPanel', () => ({
@@ -557,5 +557,147 @@ describe('空闲自行停止', () => {
     })
 
     expect(screen.queryByText(/已自行停止/)).toBeNull()
+  })
+})
+
+describe('运行时版本管理', () => {
+  beforeEach(beforeEachAppTest)
+
+  const runtimeId = 'ubuntu-24.04-arm64-deepseek-harness'
+
+  /** 常见的三槽状态：当前 0.1.5-rc.2、上一版本 0.1.7-rc.2、内置版本未解压。 */
+  const threeSlots: RuntimeVersionsState = {
+    versions: [
+      { slot: 'current', version: '2026.08.17', dshVersion: '0.1.5-rc.2', runtimeId, extractedBytes: 640 * 1024 * 1024, active: true },
+      { slot: 'previous', version: '2026.09.01', dshVersion: '0.1.7-rc.2', runtimeId, extractedBytes: 660 * 1024 * 1024, active: false },
+      { slot: 'bundled', version: '2026.09.15', runtimeId, extractedBytes: 672 * 1024 * 1024, active: false },
+    ],
+    canSwitch: true,
+    canDelete: true,
+  }
+
+  it('列出当前、上一版本与内置版本，并显示各自的 dsh 版本', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getRuntimeVersions.mockResolvedValue(threeSlots)
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('运行与后台')
+
+    expect(await screen.findByRole('heading', { name: '运行时版本管理' })).toBeVisible()
+    expect(screen.getByText('当前使用')).toBeVisible()
+    expect(screen.getByText('上一版本')).toBeVisible()
+    expect(screen.getByText('随安装包内置')).toBeVisible()
+    // 每行都带 dsh 版本：这决定访客里跑的是哪一版 dsh，是版本管理要回答的核心问题。
+    expect(screen.getByText(/2026\.09\.01 · dsh 0\.1\.7-rc\.2 · 660 MB/)).toBeVisible()
+    // 内置版本还没解压，读不到 dsh 版本就如实说「未读到」，不能编一个。
+    expect(screen.getByText(/2026\.09\.15 · dsh 版本未读到/)).toBeVisible()
+    expect(bridge.getRuntimeVersions).toHaveBeenCalledTimes(1)
+  })
+
+  it('运行中不给切换版本，说明要先停止运行环境', async () => {
+    bridge.getState.mockResolvedValue({ ...runningState })
+    bridge.getRuntimeVersions.mockResolvedValue(threeSlots)
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('运行与后台')
+
+    expect(await screen.findByText('运行中不能切换版本：请先停止运行环境与 Ubuntu 终端。')).toBeVisible()
+    expect(screen.getByRole('button', { name: '切换到上一版本' })).toBeDisabled()
+  })
+
+  it('切换上一版本后重新读运行时状态，界面不沿用旧的已安装版本', async () => {
+    // 切换版本的前提是运行环境已停下：应用启动时会自动拉起一次，这里让它停在 ready，
+    // 否则按钮会因为「运行中」而按设计禁用，用例就测不到真正的切换路径。
+    bridge.startHarness.mockResolvedValue({ ...readyState })
+    bridge.getState
+      .mockResolvedValueOnce({ ...readyState })
+      .mockResolvedValue({ ...readyState, installedVersion: '2026.09.01' })
+    bridge.getRuntimeVersions.mockResolvedValue(threeSlots)
+    bridge.switchRuntimeVersion.mockResolvedValue({
+      versions: [
+        { slot: 'current', version: '2026.09.01', dshVersion: '0.1.7-rc.2', runtimeId, extractedBytes: 660 * 1024 * 1024, active: true },
+        { slot: 'previous', version: '2026.08.17', dshVersion: '0.1.5-rc.2', runtimeId, extractedBytes: 640 * 1024 * 1024, active: false },
+      ],
+      canSwitch: true,
+      canDelete: true,
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('运行与后台')
+    fireEvent.click(await screen.findByRole('button', { name: '切换到上一版本' }))
+
+    expect(await screen.findByText('已切换到上一版本')).toBeVisible()
+    expect(bridge.switchRuntimeVersion).toHaveBeenCalledWith('previous')
+    // 切换后「当前使用」换了人：状态里那一行必须重读，显示新的已安装版本。
+    expect(bridge.getState).toHaveBeenCalledTimes(2)
+    expect(await screen.findByText('2026.09.01')).toBeVisible()
+  })
+
+  it('切换失败时如实提示，并保留原来的版本列表', async () => {
+    // 同上：停在 ready 才走得到切换这条路径。
+    bridge.startHarness.mockResolvedValue({ ...readyState })
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getRuntimeVersions.mockResolvedValue(threeSlots)
+    bridge.switchRuntimeVersion.mockRejectedValue(new Error('请先停止 Harness 和 Ubuntu 终端'))
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('运行与后台')
+    fireEvent.click(await screen.findByRole('button', { name: '切换到上一版本' }))
+
+    expect(await screen.findByText('请先停止 Harness 和 Ubuntu 终端')).toBeVisible()
+    expect(screen.queryByText('已切换到上一版本')).toBeNull()
+    // 失败不该把界面清空：原来的三槽仍然在，按钮还是可点的状态。
+    expect(screen.getByText(/2026\.09\.01 · dsh 0\.1\.7-rc\.2/)).toBeVisible()
+    expect(screen.getByRole('button', { name: '切换到上一版本' })).toBeEnabled()
+  })
+
+  it('删除上一版本要先确认，确认后只删这份副本', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getRuntimeVersions.mockResolvedValue(threeSlots)
+    bridge.deleteRuntimeVersion.mockResolvedValue({
+      versions: [threeSlots.versions[0], threeSlots.versions[2]],
+      canSwitch: false,
+      canDelete: false,
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('运行与后台')
+    fireEvent.click(await screen.findByRole('button', { name: '删除上一版本' }))
+
+    // 一次点击只进入确认：磁盘上的副本不能因为点错就没了。
+    expect(bridge.deleteRuntimeVersion).not.toHaveBeenCalled()
+    expect(screen.getByText('删除上一版本会永久删掉这份副本，无法撤销；当前使用的版本不受影响。')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
+
+    expect(await screen.findByText('已删除上一版本')).toBeVisible()
+    expect(bridge.deleteRuntimeVersion).toHaveBeenCalledWith('previous')
+    // 删完就没有上一版本了：不能再给一个切不动的按钮，也要说清为什么。
+    expect(screen.getByRole('button', { name: '切换到上一版本' })).toBeDisabled()
+    expect(screen.queryByText('上一版本')).toBeNull()
+    expect(screen.getByText('现在没有可切换的上一版本：安装一次新版本后才会保留。')).toBeVisible()
+  })
+
+  it('读不到版本列表时给出重试入口，不谎报「没有安装运行时」', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getRuntimeVersions.mockRejectedValue(new Error('RUNTIME_CLOSED'))
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('运行与后台')
+
+    expect(await screen.findByText('暂时读不到运行时版本列表')).toBeVisible()
+    expect(screen.queryByText('还没有安装运行时：安装后这里会列出当前版本与上一版本。')).toBeNull()
+
+    bridge.getRuntimeVersions.mockResolvedValue(threeSlots)
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+
+    expect(await screen.findByText(/2026\.09\.01 · dsh 0\.1\.7-rc\.2/)).toBeVisible()
+    expect(screen.queryByText('暂时读不到运行时版本列表')).toBeNull()
   })
 })

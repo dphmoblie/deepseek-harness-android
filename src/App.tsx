@@ -76,6 +76,8 @@ import type {
   RuntimeSettings,
   RuntimeSettingsUpdate,
   RuntimeState,
+  RuntimeVersionSlot,
+  RuntimeVersionsState,
   ShizukuState,
   StorageAccessState,
   StorageDirEntry,
@@ -1435,6 +1437,213 @@ function selfCheckSandboxBlocked(checks: readonly SelfCheckItem[]): boolean {
   return checks.some(item => item.id === 'sandbox_probe' && item.status === 'fail' && item.code === 'PROBE_UNUSABLE')
 }
 
+/** 版本槽的显示元数据：标签与徽章配色都在这里定，不把原始槽位名丢给用户看。 */
+const RUNTIME_VERSION_SLOT_META: Record<RuntimeVersionSlot, { label: string; chip: string }> = {
+  current: { label: '当前使用', chip: 'success' },
+  previous: { label: '上一版本', chip: 'warn' },
+  bundled: { label: '随安装包内置', chip: '' },
+}
+
+/** 这些阶段里运行环境正忙：切换要改名根目录并搬迁访客数据，必须先停下来。 */
+const RUNTIME_VERSION_SWITCH_BLOCKED_PHASES: readonly RuntimePhase[] = [
+  'preparing', 'downloading', 'verifying', 'extracting', 'running', 'stopping',
+]
+
+interface RuntimeVersionsPanelProps {
+  /** 当前运行时状态：只用于判断此刻能不能切换版本。 */
+  runtime: RuntimeState
+  /** 版本列表与两个操作；由 App 里引用稳定的回调提供。 */
+  loadVersions: () => Promise<RuntimeVersionsState>
+  switchVersion: (target: 'previous') => Promise<RuntimeVersionsState>
+  deleteVersion: (target: 'previous') => Promise<RuntimeVersionsState>
+  /** 切换成功后重新读取运行时状态：已安装版本与阶段都会变。 */
+  refreshRuntime: () => Promise<void>
+  notify: (message: string, tone: NoticeTone) => void
+}
+
+/**
+ * 运行时版本管理：当前使用的版本、保留下来的上一版本与随安装包内置的版本。
+ *
+ * 这里只做原生侧真正支持的两件事：切回上一版本、删除上一版本。
+ * 「装到新版本」仍然走运行环境页原有的安装入口（内置，或 manifest 地址 + SHA-256），
+ * 所以本区块不提供下载、也不能选任意版本——磁盘上只有两个解压后的槽位，
+ * 多留一份的代价约等于再解压一份完整的运行时。
+ *
+ * 列表是只读的轻量查询（读清单与小体积包描述），进页面即读，不需要先跑自检；
+ * 删除只影响上一版本，运行中的当前版本不受影响；切换会改名根目录并搬迁访客数据，
+ * 所以运行中禁用按钮，原生侧另有 `RUNTIME_BUSY` 兜底。
+ */
+function RuntimeVersionsPanel({
+  runtime,
+  loadVersions,
+  switchVersion,
+  deleteVersion,
+  refreshRuntime,
+  notify,
+}: RuntimeVersionsPanelProps) {
+  const [versions, setVersions] = useState<RuntimeVersionsState | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [failed, setFailed] = useState(false)
+  const [busy, setBusy] = useState<'switch' | 'delete' | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    setFailed(false)
+    void (async () => {
+      try {
+        setVersions(await loadVersions())
+      } catch {
+        setFailed(true)
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [loadVersions])
+
+  useEffect(() => { load() }, [load])
+
+  const switchToPrevious = (): void => {
+    if (busy !== null) return
+    setBusy('switch')
+    void (async () => {
+      try {
+        setVersions(await switchVersion('previous'))
+        // 切换后当前版本已经换人：状态里的已安装版本必须重新读，不能沿用旧值。
+        await refreshRuntime()
+        notify(t("已切换到上一版本"), 'success')
+      } catch (error) {
+        notify(errorMessage(error), 'error')
+      } finally {
+        setBusy(null)
+      }
+    })()
+  }
+
+  const removePrevious = (): void => {
+    if (busy !== null) return
+    setBusy('delete')
+    void (async () => {
+      try {
+        setVersions(await deleteVersion('previous'))
+        setConfirmDelete(false)
+        notify(t("已删除上一版本"), 'success')
+      } catch (error) {
+        notify(errorMessage(error), 'error')
+      } finally {
+        setBusy(null)
+      }
+    })()
+  }
+
+  const phaseBlocked = RUNTIME_VERSION_SWITCH_BLOCKED_PHASES.includes(runtime.phase)
+  const canSwitch = versions?.canSwitch === true && !phaseBlocked
+  const canDelete = versions?.canDelete === true
+  const list = versions?.versions ?? []
+
+  return (
+    <section className="settings-section" aria-labelledby="runtime-versions-title">
+      <div className="section-title">
+        <span className="section-icon"><HardDrive size={19} /></span>
+        <div>
+          <h2 id="runtime-versions-title">{t("运行时版本管理")}</h2>
+          <p>{t("当前使用的运行时、保留下来的上一版本，以及随安装包内置的版本。装新版本仍在运行环境页：内置更新，或填写 manifest 地址与 SHA-256。")}</p>
+        </div>
+      </div>
+
+      {loading && <p className="harness-log-state">{t("正在读取运行时版本…")}</p>}
+
+      {!loading && failed && (
+        <>
+          <p className="harness-log-state" role="alert">{t("暂时读不到运行时版本列表")}</p>
+          <div className="settings-inline-actions">
+            <button className="button button-secondary" type="button" onClick={load}>
+              <RefreshCw size={18} />{t("重试")}
+            </button>
+          </div>
+        </>
+      )}
+
+      {!loading && !failed && list.length === 0 && (
+        <p className="harness-log-state">{t("还没有安装运行时：安装后这里会列出当前版本与上一版本。")}</p>
+      )}
+
+      {!loading && !failed && list.length > 0 && (
+        <div className="settings-status-list">
+          {list.map(info => {
+            const meta = RUNTIME_VERSION_SLOT_META[info.slot]
+            const parts = [info.version]
+            parts.push(info.dshVersion === undefined ? t("dsh 版本未读到") : `dsh ${info.dshVersion}`)
+            parts.push(formatBytes(info.extractedBytes))
+            if (info.active) parts.push(t("使用中"))
+            return (
+              <div className="settings-status-row" key={info.slot}>
+                <span className={`status-chip ${meta.chip}`}>{t(meta.label)}</span>
+                <strong>{parts.join(' · ')}</strong>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {!loading && !failed && (
+        <>
+          <p className="settings-note">
+            {t("上一版本是上一次安装时保留下来的完整副本，切换与删除都只动它。删除后无法恢复，也不再占用磁盘。")}
+          </p>
+          {phaseBlocked && versions?.canSwitch === true && (
+            <p className="settings-note">{t("运行中不能切换版本：请先停止运行环境与 Ubuntu 终端。")}</p>
+          )}
+
+          <div className="settings-inline-actions">
+            <button
+              className="button button-secondary"
+              type="button"
+              onClick={switchToPrevious}
+              disabled={!canSwitch || busy !== null}
+            >
+              {busy === 'switch' ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
+              {t("切换到上一版本")}
+            </button>
+            {!confirmDelete && (
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+                disabled={!canDelete || busy !== null}
+              >
+                <Trash2 size={18} />{t("删除上一版本")}
+              </button>
+            )}
+            {confirmDelete && (
+              <>
+                <button className="button button-danger" type="button" onClick={removePrevious} disabled={busy !== null}>
+                  {busy === 'delete' ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}{t("确认删除")}
+                </button>
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  onClick={() => setConfirmDelete(false)}
+                  disabled={busy !== null}
+                >
+                  {t("取消")}
+                </button>
+              </>
+            )}
+          </div>
+
+          {confirmDelete && (
+            <p className="settings-note">{t("删除上一版本会永久删掉这份副本，无法撤销；当前使用的版本不受影响。")}</p>
+          )}
+          {versions !== null && !versions.canSwitch && !versions.canDelete && (
+            <p className="settings-note">{t("现在没有可切换的上一版本：安装一次新版本后才会保留。")}</p>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
 interface RuntimeSelfCheckPanelProps {
   /** 当前运行时状态：只取已安装版本，用于「运行时版本」一行。 */
   runtime: RuntimeState
@@ -1746,6 +1955,16 @@ interface SettingsScreenProps {
   lastStop: LastStopReason
   /** 运行自检（check / repair）；只在用户点击按钮时调用。 */
   runSelfCheck: (operation: SelfCheckOperation) => Promise<SelfCheckReport>
+  /** 运行时版本列表；只读的轻量查询，进页面即可调用。 */
+  loadRuntimeVersions: () => Promise<RuntimeVersionsState>
+  /** 切回上一版本；运行中会被原生侧以 RUNTIME_BUSY 拒绝。 */
+  switchRuntimeVersion: (target: 'previous') => Promise<RuntimeVersionsState>
+  /** 删除上一版本；只影响保留下来的副本。 */
+  deleteRuntimeVersion: (target: 'previous') => Promise<RuntimeVersionsState>
+  /** 切换成功后重新读运行时状态（已安装版本与阶段都会变）。 */
+  refreshRuntime: () => Promise<void>
+  /** 顶部提示条；版本切换与删除的结果用它回报。 */
+  notify: (message: string, tone: NoticeTone) => void
   shizuku: ShizukuState
   onAuthorize: () => void
   onBack: () => void
@@ -1769,7 +1988,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport, lastMailboxImport, loadDiagnosticLog, loadHarnessLog, lastStop, mailbox, mailboxReadFailed, overlayBall, overlayBallReadFailed, storageAccess, storageDirs, storageDirsReadFailed, onAddStorageDirectory, onDraftChange, onExportMailbox, onImportMailbox, onOpenAllFilesAccess, onRefreshMailbox, onRemoveStorageDirectory, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport, lastMailboxImport, loadDiagnosticLog, loadHarnessLog, loadRuntimeVersions, switchRuntimeVersion, deleteRuntimeVersion, refreshRuntime, notify, lastStop, mailbox, mailboxReadFailed, overlayBall, overlayBallReadFailed, storageAccess, storageDirs, storageDirsReadFailed, onAddStorageDirectory, onDraftChange, onExportMailbox, onImportMailbox, onOpenAllFilesAccess, onRefreshMailbox, onRemoveStorageDirectory, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
   if (settingsReadStatus === 'failed') {
     return <div className="screen loading-screen">
       <p role="alert">{t("无法读取最新设置，请重试")}</p>
@@ -2482,7 +2701,17 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport,
         )}
 
         {page === 'runtime' && (
-        <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
+        <>
+          <RuntimeVersionsPanel
+            runtime={runtime}
+            loadVersions={loadRuntimeVersions}
+            switchVersion={switchRuntimeVersion}
+            deleteVersion={deleteRuntimeVersion}
+            refreshRuntime={refreshRuntime}
+            notify={notify}
+          />
+          <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
+        </>
         )}
 
         {page === 'shizuku' && (
@@ -3422,6 +3651,31 @@ export function App() {
     [],
   )
 
+  /**
+   * 运行时版本列表：只读的轻量查询（原生侧读清单与包描述），进页面即读。
+   *
+   * 与自检不同，这里不启动访客进程，所以不需要「按需触发」那条纪律；
+   * 引用保持稳定，版本区块不会因为父组件重渲染而反复拉取。
+   */
+  const loadRuntimeVersions = useCallback(() => runtimeBridge.getRuntimeVersions(), [])
+
+  /** 切回上一版本：改名根目录并搬迁访客数据，运行中会被原生侧以 RUNTIME_BUSY 拒绝。 */
+  const switchRuntimeVersion = useCallback(
+    (target: 'previous') => runtimeBridge.switchRuntimeVersion(target),
+    [],
+  )
+
+  /** 删除上一版本：只动保留下来的副本，当前运行时不受影响。 */
+  const deleteRuntimeVersion = useCallback(
+    (target: 'previous') => runtimeBridge.deleteRuntimeVersion(target),
+    [],
+  )
+
+  /** 切换成功后重新读运行时状态：已安装版本与阶段都变了，不能沿用旧值。 */
+  const refreshRuntimeState = useCallback(async () => {
+    setRuntime(await runtimeBridge.getState())
+  }, [])
+
   const stopRuntime = useCallback(() => {
     // 先记下「这次停止由本应用发起」：阶段变化可能早于桥接返回，晚记会把显式停止误报成自行停止。
     stopRequested.current = true
@@ -3651,7 +3905,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} mailbox={mailbox} mailboxReadFailed={mailboxReadFailed} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} storageAccess={storageAccess} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onDraftChange={updateSettingsDraft} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} loadRuntimeVersions={loadRuntimeVersions} switchRuntimeVersion={switchRuntimeVersion} deleteRuntimeVersion={deleteRuntimeVersion} refreshRuntime={refreshRuntimeState} notify={notify} mailbox={mailbox} mailboxReadFailed={mailboxReadFailed} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} storageAccess={storageAccess} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onDraftChange={updateSettingsDraft} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

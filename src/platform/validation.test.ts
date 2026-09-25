@@ -3,6 +3,7 @@ import {
   assertBase64Input,
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
+  assertRuntimeVersionTarget,
   assertSessionId,
   assertStorageDirPath,
   assertTerminalKind,
@@ -22,6 +23,7 @@ import {
   validateRuntimeProgress,
   validateRuntimeSource,
   validateRuntimeState,
+  validateRuntimeVersions,
   validateSettings,
   validateSettingsUpdate,
   validateShizukuState,
@@ -819,6 +821,58 @@ describe('存储目录白名单校验', () => {
     expect(assertStorageDirPath('/storage/emulated/0/Download')).toBe('/storage/emulated/0/Download')
     for (const path of ['', 'Download', '/sdcard/Download', '/storage/emulated/0/', '/storage/emulated/0/a/../b']) {
       expect(() => assertStorageDirPath(path), path).toThrow('存储目录路径格式无效')
+    }
+  })
+})
+
+describe('运行时版本校验', () => {
+  const runtimeId = 'ubuntu-24.04-arm64-deepseek-harness'
+  const state = (overrides: Record<string, unknown> = {}) => ({
+    versions: [
+      { slot: 'current', version: '2026.08.17', dshVersion: '0.1.5-rc.2', runtimeId, extractedBytes: 640 * 1024 * 1024, active: true },
+      { slot: 'previous', version: '2026.09.01', dshVersion: '0.1.7-rc.2', runtimeId, extractedBytes: 660 * 1024 * 1024, active: false },
+      { slot: 'bundled', version: '2026.09.15', runtimeId, extractedBytes: 672 * 1024 * 1024, active: false },
+    ],
+    canSwitch: true,
+    canDelete: true,
+    ...overrides,
+  })
+
+  it('接受三槽状态，并允许缺少 dsh 版本', () => {
+    expect(validateRuntimeVersions(state()).versions).toHaveLength(3)
+    // 内置版本只有清单声明，没有解压目录就读不到 dsh 版本：这是正常状态，不是错误。
+    expect(validateRuntimeVersions(state()).versions[2].dshVersion).toBeUndefined()
+  })
+
+  it('拒绝未知槽位、非法版本号与凭空多出来的槽', () => {
+    expect(() => validateRuntimeVersions(state({ versions: [{ ...state().versions[0], slot: 'retained' }] })))
+      .toThrow('运行时版本槽位格式无效')
+    expect(() => validateRuntimeVersions(state({ versions: [{ ...state().versions[0], version: 'v 1' }] })))
+      .toThrow('运行时版本号格式无效')
+    expect(() => validateRuntimeVersions(state({ versions: [{ ...state().versions[0], runtimeId: '' }] })))
+      .toThrow('运行时标识格式无效')
+    expect(() => validateRuntimeVersions(state({ versions: [{ ...state().versions[0], extractedBytes: -1 }] })))
+      .toThrow('运行时体积格式无效')
+    expect(() => validateRuntimeVersions(state({ versions: [{ ...state().versions[0], dshVersion: 'not a version' }] })))
+      .toThrow('dsh 版本格式无效')
+    expect(() => validateRuntimeVersions(state({ versions: [{ ...state().versions[0], active: 'true' }] })))
+      .toThrow('运行时版本使用状态格式无效')
+    // 槽位最多三个（当前 / 上一版本 / 内置）：多出来的条目说明原生侧回了一份读不懂的状态。
+    expect(() => validateRuntimeVersions(state({ versions: new Array(4).fill(state().versions[0]) })))
+      .toThrow('运行时版本列表格式无效')
+  })
+
+  it('拒绝缺失或类型不符的整体状态', () => {
+    expect(() => validateRuntimeVersions(null)).toThrow('运行时版本状态格式无效')
+    expect(() => validateRuntimeVersions(state({ versions: 'three' }))).toThrow('运行时版本列表格式无效')
+    expect(() => validateRuntimeVersions(state({ canSwitch: 1 }))).toThrow('运行时版本切换状态格式无效')
+    expect(() => validateRuntimeVersions(state({ canDelete: 'yes' }))).toThrow('运行时版本删除状态格式无效')
+  })
+
+  it('操作目标只认「上一版本」', () => {
+    expect(assertRuntimeVersionTarget('previous')).toBe('previous')
+    for (const target of ['current', 'bundled', 'retained', '', null, 7]) {
+      expect(() => assertRuntimeVersionTarget(target), String(target)).toThrow('运行时版本操作目标无效')
     }
   })
 })

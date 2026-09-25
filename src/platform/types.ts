@@ -61,11 +61,38 @@ export interface RuntimeState {
   errorCode?: string
 }
 
+/** 运行时版本槽：当前使用的版本、保留下来的上一版本、APK 内置版本。 */
+export type RuntimeVersionSlot = 'current' | 'previous' | 'bundled'
+
+export interface RuntimeVersionInfo {
+  slot: RuntimeVersionSlot
+  version: string
+  /** 归档内的 dsh 版本；清单里没有且读不到包描述时缺省。 */
+  dshVersion?: string
+  runtimeId: string
+  /** 解压后的字节数；内置版本取自清单声明，不是本机实测。 */
+  extractedBytes: number
+  /** 当前正在使用的槽位。 */
+  active: boolean
+}
+
+/**
+ * 运行时版本列表与可执行操作。
+ *
+ * [canSwitch] / [canDelete] 只说明「磁盘上有没有可用的上一版本」这个事实；
+ * 运行中不允许切换由界面按 [RuntimeState.phase] 决定按钮是否可用，
+ * 请求本身仍由原生侧以 `RUNTIME_BUSY` 兜底。
+ */
+export interface RuntimeVersionsState {
+  versions: RuntimeVersionInfo[]
+  canSwitch: boolean
+  canDelete: boolean
+}
+
 export interface RuntimeSource {
   manifestUrl: string
   manifestSha256: string
 }
-
 export interface RuntimeSettings extends RuntimeSource {
   /** dsh 启动默认值；省略更新时保留原值，默认要求工作区沙箱。 */
   harnessPermissionMode?: HarnessPermissionMode
@@ -590,6 +617,22 @@ export interface RuntimeBridge {
    * 结论码）、字节数与 dsh 版本号：不含路径、命令输出、日志正文或凭据。
    */
   runRuntimeSelfCheck: (operation: SelfCheckOperation) => Promise<SelfCheckReport>
+  /**
+   * 运行时版本列表：当前版本、保留下来的上一版本与 APK 内置版本。
+   *
+   * 只读：不需要停止运行时；载荷只有槽位、版本号、dsh 版本、字节数与可用操作，
+   * 不含路径、下载地址或凭据。
+   */
+  getRuntimeVersions: () => Promise<RuntimeVersionsState>
+  /**
+   * 切换到上一版本（目前只支持 `target = 'previous'`）。
+   *
+   * 会改名运行时根目录并搬迁访客数据（会话、设置、凭据、工作区），
+   * 所以运行中会被拒绝：界面应在运行时按 phase 禁用按钮，原生侧另有兜底。
+   */
+  switchRuntimeVersion: (target: 'previous') => Promise<RuntimeVersionsState>
+  /** 删除保留下来的上一版本以释放磁盘空间；只影响上一版本，不需要停止运行时。 */
+  deleteRuntimeVersion: (target: 'previous') => Promise<RuntimeVersionsState>
   addRuntimeProgressListener: (listener: (event: RuntimeProgress) => void) => Promise<ListenerHandle>
   addTerminalOutputListener: (listener: (event: TerminalChunk) => void) => Promise<ListenerHandle>
   addTerminalExitListener: (listener: (event: TerminalExit) => void) => Promise<ListenerHandle>

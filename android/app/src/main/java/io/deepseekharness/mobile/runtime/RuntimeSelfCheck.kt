@@ -170,15 +170,10 @@ class RuntimeSelfCheck(context: Context, private val store: RuntimeStore) {
     /**
      * 访客里实际安装的 dsh 版本：读 `package.json` 的 `version`，**只有通过 semver 形态校验才回传**，
      * 否则回 null。**绝不回传路径**，也不回传未校验的原文。
+     *
+     * 读取规则与运行时版本列表共用 [RuntimeDshVersion]，两处对「什么算读到了版本」必须完全一致。
      */
-    private fun dshVersion(): String? = try {
-        val manifest = File(store.currentRoot, DSH_MANIFEST_PATH)
-        val readable = Files.isRegularFile(manifest.toPath()) && manifest.length() in 1..MANIFEST_LIMIT_BYTES
-        val raw = if (readable) manifest.readText() else ""
-        JSONObject(raw).optString("version", "").takeIf { VERSION.matches(it) }
-    } catch (_: Throwable) {
-        null
-    }
+    private fun dshVersion(): String? = RuntimeDshVersion.read(store.currentRoot)
 
     /**
      * 把 APK 资产里的自检脚本安全地放到访客根下（`root/.dsh-mobile/runtime-self-check.cjs`），
@@ -234,11 +229,7 @@ class RuntimeSelfCheck(context: Context, private val store: RuntimeStore) {
         const val SCRIPT_NAME = "runtime-self-check.cjs"
         const val SCRIPT_PATH = "/root/.dsh-mobile/$SCRIPT_NAME"
 
-        /** dsh 安装清单：只读它的 version 字段，路径本身绝不回传。 */
-        const val DSH_MANIFEST_PATH = "opt/dsh/node_modules/@deepseek-ai/dsh/package.json"
-
-        /** 清单读取上限：正常的 package.json 只有几 KB，超过就不读。 */
-        const val MANIFEST_LIMIT_BYTES = 256L * 1024
+        /** dsh 安装清单的读取规则（路径与上限）统一在 [RuntimeDshVersion]，这里不再重复定义。 */
 
         /** 自检要跑探针与两组 PTY 冒烟（各 5 秒上限），给足时间但仍是有限等待。 */
         const val TIMEOUT_SECONDS = 45L
@@ -248,9 +239,6 @@ class RuntimeSelfCheck(context: Context, private val store: RuntimeStore) {
         const val MAX_PAYLOAD_CHARS = 64 * 1024
 
         const val DENIED_CODE = "SELF_CHECK_FAILED"
-
-        /** 与访客脚本一致的 semver 形态校验；不合法一律回 null。 */
-        val VERSION = Regex("^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[A-Za-z0-9.-]+)?$")
 
         /** 与 DiagnosticPolicy 的 code 字段同形，保证写入的诊断字段一定合法。 */
         val CONTROLLED_CODE = Regex("^[A-Z][A-Z0-9_]{0,47}$")

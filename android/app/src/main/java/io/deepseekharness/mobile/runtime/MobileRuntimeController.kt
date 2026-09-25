@@ -29,6 +29,8 @@ class MobileRuntimeController(
     private val plugins = RuntimePluginManager(context, store)
     /** 自检实例与 store、生命周期锁同源：插件侧不自行构造 RuntimeStore。 */
     private val selfCheck = RuntimeSelfCheck(context, store)
+    /** 版本列表只读清单与小文件；切换、删除仍由 installer 在安装锁内完成。 */
+    private val versions = RuntimeVersionCatalog(store)
     val terminals = TerminalCoordinator(context, store, events::onTerminalOutput, events::onTerminalExit)
 
     fun install(source: RuntimeSource) = lifecycleLock.withLock {
@@ -48,8 +50,47 @@ class MobileRuntimeController(
         )
     }
 
-    fun startHarness(): RuntimeStateSnapshot = lifecycleLock.withLock {
+    /**
+     * 运行时版本列表：当前版本、保留下来的上一版本、APK 内置版本。
+     *
+     * 只读（清单与包内 `package.json`），因此**不要求**运行时已停止：用户正跑着 Harness 时
+     * 也能看到自己装的是什么版本。
+     */
+    fun runtimeVersions(): List<RuntimeVersionInfo> = lifecycleLock.withLock {
         ensureOpen()
+        versions.list()
+    }
+
+    /**
+     * 切换到上一版本。
+     *
+     * 与安装同等对待：它会改名 `currentRoot` 并把用户数据搬过去，所以必须先停掉 Harness 与终端，
+     * 否则正在跑的访客进程会踩到被改名根目录。
+     */
+    fun switchRuntimeVersion(target: String): List<RuntimeVersionInfo> = lifecycleLock.withLock {
+        ensureOpen()
+        RuntimeVersionPolicy.requireTarget(target)
+        if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
+            throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
+        }
+        installer.switchToRetained()
+        versions.list()
+    }
+
+    /**
+     * 删除保留下来的上一版本。
+     *
+     * 这里**不**要求运行时已停止：删除只动 `retained*`，与正在运行的当前运行时无关，
+     * 用户清理磁盘空间不该被迫先停服务。
+     */
+    fun deleteRuntimeVersion(target: String): List<RuntimeVersionInfo> = lifecycleLock.withLock {
+        ensureOpen()
+        RuntimeVersionPolicy.requireTarget(target)
+        installer.deleteRetained()
+        versions.list()
+    }
+
+    fun startHarness(): RuntimeStateSnapshot = lifecycleLock.withLock {        ensureOpen()
         if (!supervisor.isRunning()) {
             supervisor.preparePluginManagement()
             plugins.recoverIfNeeded()
