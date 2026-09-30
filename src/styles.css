@@ -325,6 +325,11 @@ button:disabled {
   height: 100dvh;
   overflow: hidden;
 }
+.app-background { position: fixed; inset: 0; z-index: -1; overflow: hidden; background: var(--bg); }
+.app-background::after { content: ''; position: absolute; inset: 0; background: rgb(8 14 24 / 20%); pointer-events: none; }
+.app-background img, .app-background video { width: 100%; height: 100%; object-fit: cover; }
+.settings-section, .runtime-overview, .management-row, .management-service, .detail-section, .launch-panel { background: color-mix(in srgb, var(--card-color) var(--card-opacity), transparent); backdrop-filter: blur(var(--card-blur)); color: var(--card-ink); }
+.settings-section p, .management-copy small, .detail-section p { color: var(--card-muted); }
 
 .app-frame {
   display: grid;
@@ -333,6 +338,10 @@ button:disabled {
   min-height: 0;
   overflow: hidden;
 }
+
+.header-brand-group { display: flex; align-items: center; min-width: 0; gap: 8px; }
+.whale-mark { object-fit: contain; flex-shrink: 0; }
+.bottom-navigation, .mobile-session-entry { display: none; }
 
 /*
  * 侧栏在窄屏是固定的图标轨道，宽屏仍保持轻量，不抢占对话内容空间。
@@ -1769,23 +1778,50 @@ button:disabled {
   }
 }
 
-@media (max-width: 620px) {
+@media (max-width: 899px) {
   .app-shell {
-    grid-template-columns: 58px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
   }
 
-  .app-sidebar {
-    padding-right: 5px;
-    padding-left: 5px;
+  .app-sidebar { display: none; }
+  .mobile-session-entry { display: inline-flex; flex-shrink: 0; color: var(--blue); }
+  .bottom-navigation {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+    padding: 5px max(8px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+    border-top: 1px solid var(--line);
+    background: var(--surface);
   }
-
-  .sidebar-whale,
-  .sidebar-item {
-    width: 48px;
+  .bottom-navigation-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+    min-height: 48px;
+    padding: 5px 2px;
+    border: 1px solid transparent;
     border-radius: 12px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.6875rem;
+    cursor: pointer;
   }
+  .bottom-navigation-item.is-active { color: var(--blue); background: var(--blue-soft); font-weight: var(--weight-semibold); }
+  .bottom-navigation-item:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+  .app-main { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+  .toast { bottom: calc(70px + env(safe-area-inset-bottom)); }
+}
 
-  .sidebar-whale { min-height: 50px; }
+/* 横屏压缩装饰占位，点击目标仍至少为 44px。 */
+@media (max-width: 899px) and (max-height: 480px) {
+  .mobile-header { min-height: 44px; padding-top: max(3px, env(safe-area-inset-top)); padding-bottom: 3px; }
+  .bottom-navigation { padding-top: 2px; }
+  .bottom-navigation-item { flex-direction: row; gap: 7px; min-height: 44px; }
+  .screen { padding-top: 16px; padding-bottom: 20px; }
 }
 
 @media (max-width: 390px) {
@@ -2554,3 +2590,17 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   display: flex;
   justify-content: flex-end;
 }
+
+/* 用户自定义卡片仅影响内容表面，弹窗和输入控件保留可读底色。 */
+.management-shell { position: relative; isolation: isolate; }
+.management-shell :is(.settings-section, .runtime-overview, .management-list, .detail-section, .launch-panel) {
+  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  backdrop-filter: blur(var(--card-blur, 0px));
+  color: var(--card-ink, var(--ink));
+}
+.management-shell :is(.management-row, .management-service) { background: transparent; }
+.management-shell :is(.settings-section, .management-list, .detail-section) :is(p, small) { color: var(--card-muted, var(--muted)); }
+.appearance-customization { display: grid; gap: 16px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
+.appearance-range-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 16px; }
+.appearance-customization input[type=file] { width: 100%; min-width: 0; font-size: 0.75rem; }
+.appearance-customization input[type=color] { width: 64px; min-height: 44px; }

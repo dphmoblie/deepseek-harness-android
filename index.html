@@ -15,7 +15,7 @@
       （这里刻意不写「提取脚本正文」的示例命令：注释里一旦出现脚本标签本身，
       任何基于正则的提取都会先匹配到注释，反而更容易算错。）
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-javvCx0kT2GbJ+kLjBPjKsgpQBbQljpMAVGqIh9JX48='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-javvCx0kT2GbJ+kLjBPjKsgpQBbQljpMAVGqIh9JX48='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <!--
       首帧脚本：必须在样式表与模块之前先把 <html data-theme> 与 <html data-accent> 定下来，否则会先按
       默认配色画一帧再切主题。它是 src/theme.ts 里 readThemeMode/resolveTheme/

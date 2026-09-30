@@ -1,0 +1,9 @@
+.application-picker { margin: 12px 0; min-width: 0; }
+.application-picker-panel { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-inner); }
+.application-picker-list { max-height: min(360px, 48dvh); overflow-y: auto; overscroll-behavior: contain; }
+.application-picker-row { display: flex; align-items: center; gap: 12px; padding: 10px 4px; min-height: 48px; border-bottom: 1px solid var(--line); }
+.application-picker-row input { width: 20px; height: 20px; flex: none; }
+.application-picker-row span { min-width: 0; }
+.application-picker-row strong, .application-picker-row small { display: block; overflow-wrap: anywhere; }
+.application-picker-row small { color: var(--muted); font-size: .75rem; margin-top: 4px; }
+.application-picker-panel > small { display: block; margin-top: 10px; color: var(--muted); }

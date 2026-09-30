@@ -125,6 +125,7 @@ class HarnessActivity : AppCompatActivity() {
         }
 
         setContentView(R.layout.activity_harness)
+        AppWindowInsets.apply(this)
         val toolbar = findViewById<Toolbar>(R.id.harness_toolbar)
         toolbar.inflateMenu(R.menu.harness_toolbar)
         toolbar.setNavigationOnClickListener { returnToMainActivity() }

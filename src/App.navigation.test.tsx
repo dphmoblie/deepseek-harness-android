@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DiagnosticLogState, KeepAliveState, MailboxState, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState, StorageAccessState } from './platform/types'
 
@@ -328,12 +328,27 @@ describe('返回键与视图历史', () => {
   it('侧栏鲸鱼入口打开会话管理页并保留可回退历史', async () => {
     await renderAtMainView()
 
-    fireEvent.click(screen.getByRole('button', { name: '会话管理' }))
+    fireEvent.click(within(screen.getByRole('complementary', { name: '应用导航' })).getByRole('button', { name: '会话管理' }))
     expect(await screen.findByRole('heading', { name: '会话管理' })).toBeVisible()
     expect(window.location.hash).toBe('#sessions')
 
     await pressBack()
     expect(mainViewHeading()).toBeVisible()
+    expect(window.location.hash).toBe('')
+  })
+
+  it('底部三个图标切换页面并保持唯一选中项与返回历史', async () => {
+    await renderAtMainView()
+    const nav = within(screen.getByRole('navigation', { name: '底部导航' }))
+    expect(nav.getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['首页', '插件', '设置'])
+    expect(nav.getAllByRole('button').every(button => button.textContent === '')).toBe(true)
+    for (const [name, hash] of [['插件', '#plugins'], ['设置', '#settings']]) {
+      fireEvent.click(nav.getByRole('button', { name: new RegExp(`^${name}$`) }))
+      await waitFor(() => expect(window.location.hash).toBe(hash))
+      expect(nav.getAllByRole('button', { current: 'page' })).toHaveLength(1)
+      expect(nav.getByRole('button', { name: new RegExp(`^${name}$`) })).toHaveAttribute('aria-current', 'page')
+      await pressBack()
+    }
     expect(window.location.hash).toBe('')
   })
 })

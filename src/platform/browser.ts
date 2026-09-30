@@ -90,6 +90,9 @@ export function createBrowserBridge(): RuntimeBridge {
   }
 
   return {
+    listInstalledApplications: () => Promise.reject(new Error('应用列表仅在安卓设备上可用')),
+    getDeviceShellAccess: () => Promise.resolve({ enabled: false }),
+    setDeviceShellAccess: () => Promise.reject(new Error('AI Shell 仅在安卓设备上可用')),
     managePlugins: request => {
       validatePluginRequest(request)
       if (request.operation !== 'list') return Promise.reject(new Error('浏览器预览不支持修改设备插件'))

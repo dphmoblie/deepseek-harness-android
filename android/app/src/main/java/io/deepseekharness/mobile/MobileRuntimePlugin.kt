@@ -644,6 +644,19 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /** 权限：本应用桥接。仅枚举操作与 SHA-256 标识；不返回本机路径或凭据。 */
+    @PluginMethod
+    fun manageRuntimeLibrary(call: PluginCall) {
+        execute(call) {
+            val operation = call.getString("operation").orEmpty()
+            if (operation !in setOf("list", "check", "download", "select")) throw RuntimeFailure("RUNTIME_VERSION_INVALID", "版本操作无效")
+            val source = if (operation == "download") io.deepseekharness.mobile.runtime.RuntimeValidation.source(
+                call.getString("manifestUrl"), call.getString("manifestSha256"),
+            ) else null
+            JSObject(controller.manageRuntimeLibrary(operation, call.getString("id"), source).toString())
+        }
+    }
+
     /**
      * 受控失败码：RuntimeFailure 携带固定枚举码，其他异常统一归一化为 INTERNAL_ERROR。
      * 绝不写入异常消息——那里可能包含路径或凭据片段。
@@ -745,6 +758,9 @@ class MobileRuntimePlugin : Plugin() {
             val sessionId = call.getString("sessionId") ?: throw RuntimeFailure("SESSION_ID_INVALID", "终端会话标识缺失")
             val commandName = call.getString("command") ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令缺失")
             val command = DeviceCommand.fromName(commandName) ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令不支持")
+            if (command in setOf(DeviceCommand.SHELL, DeviceCommand.BACKGROUND_TASKS) && !io.deepseekharness.mobile.shizuku.DeviceShellAccess.enabled(context)) {
+                throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请先开启 AI Shell")
+            }
             if (!controller.hasDeviceSession(sessionId)) {
                 throw RuntimeFailure("SESSION_NOT_FOUND", "设备 Shell 会话不存在或已结束")
             }
@@ -1071,12 +1087,48 @@ class MobileRuntimePlugin : Plugin() {
         resolveWhileActive(call) { RuntimeMailbox(controller.store).state().toJs() }
     }
 
+    @PluginMethod
+    fun getDeviceShellAccess(call: PluginCall) {
+        resolveWhileActive(call) { JSObject().put("enabled", io.deepseekharness.mobile.shizuku.DeviceShellAccess.enabled(context)) }
+    }
+
+    /** 只允许壳内用户修改授权；设备桥不提供开启此开关的接口。 */
+    @PluginMethod
+    fun setDeviceShellAccess(call: PluginCall) {
+        execute(call) {
+            val enabled = call.data.opt("enabled") as? Boolean
+                ?: throw RuntimeFailure("SETTINGS_INVALID", "Shell 授权开关必须是布尔值")
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                io.deepseekharness.mobile.shizuku.DeviceShellAccess.save(context, enabled)
+                JSObject().put("enabled", enabled)
+            }
+        }
+    }
+
     /** 读取无障碍服务状态与用户维护的目标应用白名单；不返回当前窗口内容。 */
     @PluginMethod
     fun getAccessibilityAutomationState(call: PluginCall) {
         resolveWhileActive(call) {
             audited(AuditEvent.ACCESSIBILITY_CONFIG) {
                 accessibilityStateToJs(AccessibilityAutomationStore.state(context))
+            }
+        }
+    }
+
+    /** 权限：仅壳内桥接；查询参数有界，按页返回应用名称与包名，不返回应用数据。 */
+    @PluginMethod
+    fun listInstalledApplications(call: PluginCall) {
+        execute(call) {
+            val query = call.data.opt("query") as? String
+                ?: throw RuntimeFailure("APPLICATION_QUERY_INVALID", "应用筛选词必须是字符串")
+            val offset = call.data.opt("offset")
+            if (offset !is Number || offset.toDouble() != offset.toInt().toDouble() || offset.toInt() < 0) {
+                throw RuntimeFailure("APPLICATION_QUERY_INVALID", "应用分页参数无效")
+            }
+            try {
+                JSObject(io.deepseekharness.mobile.accessibility.InstalledApplications.list(context, query, offset.toInt()).toString())
+            } catch (_: IllegalArgumentException) {
+                throw RuntimeFailure("APPLICATION_QUERY_INVALID", "应用筛选参数无效")
             }
         }
     }
@@ -1089,9 +1141,6 @@ class MobileRuntimePlugin : Plugin() {
                 val raw = call.data.opt("packages")
                 val array = raw as? org.json.JSONArray
                     ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "无障碍白名单格式无效")
-                if (array.length() > 16) {
-                    throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "无障碍白名单最多允许 16 个应用")
-                }
                 val packages = buildList(array.length()) {
                     for (index in 0 until array.length()) {
                         val value = array.opt(index)

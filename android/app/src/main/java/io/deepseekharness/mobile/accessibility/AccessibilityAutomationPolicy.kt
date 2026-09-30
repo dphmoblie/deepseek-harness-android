@@ -4,7 +4,6 @@ import org.json.JSONObject
 
 /** 无障碍自动化的纯参数规则；业务层与服务层共用，避免只在界面校验。 */
 internal object AccessibilityAutomationPolicy {
-    const val MAX_PACKAGES = 16
     const val MAX_INPUT_CHARS = 512
     private val packagePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*){1,12}$")
     private val viewIdPattern = Regex("^([A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*){1,12}):id/[A-Za-z_][A-Za-z0-9_]{0,79}$")
@@ -12,10 +11,6 @@ internal object AccessibilityAutomationPolicy {
         "android", "com.android.settings", "com.android.systemui", "com.android.packageinstaller",
         "com.google.android.packageinstaller", "com.google.android.permissioncontroller",
         "com.android.permissioncontroller", "io.deepseekharness.mobile",
-    )
-    private val reservedPrefixes = listOf(
-        "com.android.", "com.miui.", "com.coloros.", "com.oplus.", "com.huawei.",
-        "com.samsung.android.", "com.vivo.",
     )
     private val sensitiveText = Regex(
         "密码|口令|验证码|验证代码|动态码|支付|付款|收款|转账|转帐|银行卡|银行账户|授权|权限申请|" +
@@ -35,10 +30,10 @@ internal object AccessibilityAutomationPolicy {
 
     fun validPackage(packageName: String): Boolean =
         packageName.length <= 160 && packagePattern.matches(packageName) &&
-            packageName !in reservedPackages && reservedPrefixes.none(packageName::startsWith)
+            packageName !in reservedPackages
 
     fun validPackages(packages: List<String>): Boolean =
-        packages.size <= MAX_PACKAGES && packages.distinct().size == packages.size &&
+        packages.distinct().size == packages.size &&
             packages.all(::validPackage)
 
     fun containsSensitiveText(value: CharSequence?): Boolean =

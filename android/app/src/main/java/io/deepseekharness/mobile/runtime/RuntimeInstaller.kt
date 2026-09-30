@@ -58,10 +58,12 @@ class RuntimeInstaller(
                 )
                 return
             }
-            workspace = createWorkspace(manifest, source.isBundled)
+            workspace = createWorkspace(manifest, source.isBundled || source.libraryId != null)
             status.update(transferPhase, downloaded = 0, total = manifest.rootfs.compressedBytes)
 
-            if (source.isBundled) {
+            if (source.libraryId != null) {
+                RuntimeLibrary(store).copyArchive(source.libraryId, workspace.archivePart)
+            } else if (source.isBundled) {
                 copyBundledRootfs(workspace.archivePart, manifest.rootfs) { copied ->
                     status.update(
                         RuntimePhase.PREPARING,
@@ -104,6 +106,8 @@ class RuntimeInstaller(
             }
             checkCancellation()
             RootfsIntegrity.verifyLinks(workspace.stagingRoot, "ROOTFS_LINKS_CORRUPTED")
+            // 成功解压并检查后保存干净安装包，后续切换不再依赖网络。
+            if (source.libraryId == null) RuntimeLibrary(store).retain(manifest, workspace.archivePart)
             store.writeInstalledManifest(workspace.stagingManifest, manifest)
             promoteRuntime(workspace.stagingRoot, workspace.stagingManifest)
             store.updateInstalledManifest(manifest)
@@ -232,6 +236,7 @@ class RuntimeInstaller(
     }
 
     private fun loadManifest(source: RuntimeSource): RuntimeManifest {
+        source.libraryId?.let { return RuntimeLibrary(store).manifest(it) }
         if (source.isBundled) {
             val bytes = try {
                 store.openBundledManifest().use {

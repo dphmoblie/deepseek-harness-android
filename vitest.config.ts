@@ -21,7 +21,12 @@ export default defineConfig({
     testTimeout: 20_000,
     // Node.js 25+ 的原生网页存储会覆盖 jsdom 存储；测试进程使用浏览器模拟实现。
     poolOptions: {
-      forks: { execArgv: Number(process.versions.node.split('.')[0]) >= 25 ? ['--no-experimental-webstorage'] : [] },
+      forks: {
+        execArgv: Number(process.versions.node.split('.')[0]) >= 25 ? ['--no-experimental-webstorage'] : [],
+        // 默认进程池同样限流，避免同时创建大量 jsdom 实例。
+        maxForks: 4,
+        minForks: 1,
+      },
       threads: {
         execArgv: Number(process.versions.node.split('.')[0]) >= 25 ? ['--no-experimental-webstorage'] : [],
         /*

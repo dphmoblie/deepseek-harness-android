@@ -15,6 +15,29 @@ class DeviceCommandRunnerTest {
     private val runner = DeviceCommandRunner { _, _ -> }
 
     @Test
+    fun multilineShellIsEncodedWithoutChangingTheProtocol() {
+        val script = "printf '%s\\n' '中文内容'\nexit 7"
+        val input = runner.buildInput(requestId, DeviceCommand.SHELL, script)
+        assertTrue(input.contains(Base64.getEncoder().encodeToString(script.toByteArray(Charsets.UTF_8))))
+        assertTrue(input.contains("toybox base64 -d | /system/bin/sh -s"))
+        assertFalse(input.contains(script))
+        assertEquals(1, input.count { it == '\n' })
+    }
+
+    @Test
+    fun shellLimitsUtf8BytesAndRejectsInvalidControlCharacters() {
+        runner.buildInput(requestId, DeviceCommand.SHELL, "x".repeat(16384))
+        listOf("x".repeat(16385), "中".repeat(5462), " \n", "id\r", "id\u0000").forEach { script ->
+            try {
+                runner.buildInput(requestId, DeviceCommand.SHELL, script)
+                fail("应拒绝空脚本、过长字节或控制字符")
+            } catch (_: RuntimeFailure) {
+                // 参数在进入设备解释器之前被拒绝。
+            }
+        }
+    }
+
+    @Test
     fun injectedScriptIsOneShellWordAroundAFixedTemplate() {
         val parameters = mapOf(
             DeviceCommand.SCREENSHOT to "",

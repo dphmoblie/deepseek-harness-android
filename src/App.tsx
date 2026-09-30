@@ -1,6 +1,9 @@
-import appMark from './assets/app-mark.png'
+import appMark from './assets/whale-mark.png'
 import { t, useLanguage } from './i18n'
 import { PluginSettings } from './components/PluginSettings'
+import { ApplicationPicker } from './components/ApplicationPicker'
+import { DeviceShellSettings } from './components/DeviceShellSettings'
+import { AppBackground } from './components/AppBackground'
 import { LanguageSettings } from './components/LanguageSettings'
 import { AppearanceSettings } from './components/AppearanceSettings'
 import { SessionManager } from './components/SessionManager'
@@ -600,7 +603,7 @@ interface AppSidebarProps {
  * 因此侧栏不会把会话正文、凭据或终端输出放进 DOM。
  */
 function AppSidebar({ activeView, onNavigate }: AppSidebarProps) {
-  const settingsActive = isSettingsView(activeView) || activeView === 'plugins' || activeView === 'environment' || activeView === 'terminal'
+  const settingsActive = isSettingsView(activeView) || activeView === 'environment' || activeView === 'terminal'
   const item = (view: AppView, label: string, icon: ReactNode, active: boolean, className = '') => (
     <button
       className={`sidebar-item ${active ? 'is-active' : ''} ${className}`}
@@ -635,6 +638,25 @@ function AppSidebar({ activeView, onNavigate }: AppSidebarProps) {
         {item('settings', '应用设置', <Settings2 size={20} />, settingsActive)}
       </div>
     </aside>
+  )
+}
+
+/** 手机横竖屏使用底部导航；会话管理由页头鲸鱼入口打开。 */
+function BottomNavigation({ activeView, onNavigate }: AppSidebarProps) {
+  const items: { view: AppView; label: string; icon: ReactNode; active: boolean }[] = [
+    { view: 'conversation', label: '首页', icon: <MessageSquare size={20} />, active: activeView === 'conversation' || activeView === 'sessions' },
+    { view: 'plugins', label: '插件', icon: <Blocks size={20} />, active: activeView === 'plugins' },
+    { view: 'settings', label: '设置', icon: <Settings2 size={20} />, active: isSettingsView(activeView) || activeView === 'environment' || activeView === 'terminal' },
+  ]
+  return (
+    <nav className="bottom-navigation" aria-label={t('底部导航')}>
+      {items.map(item => (
+        <button key={item.view} type="button" className={`bottom-navigation-item ${item.active ? 'is-active' : ''}`}
+          aria-label={t(item.label)} title={t(item.label)} aria-current={item.active ? 'page' : undefined} onClick={() => onNavigate(item.view)}>
+          {item.icon}
+        </button>
+      ))}
+    </nav>
   )
 }
 
@@ -2066,12 +2088,10 @@ interface SettingsScreenProps {
 }
 
 function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, lastMailboxExport, lastMailboxImport, loadDiagnosticLog, loadHarnessLog, loadRuntimeVersions, switchRuntimeVersion, deleteRuntimeVersion, refreshRuntime, notify, lastStop, mailbox, mailboxReadFailed, mailboxDirectory, mailboxDirectoryReadFailed, overlayBall, overlayBallReadFailed, storageAccess, storageDirs, storageDirsReadFailed, onAddStorageDirectory, onDraftChange, onExportMailbox, onImportMailbox, onMailboxRootChange, onOpenMailboxDirectory, onCreateMailboxFolder, onOpenAllFilesAccess, onRefreshMailbox, onRemoveStorageDirectory, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onSaveAccessibilityPackages, onShareDiagnostic }: SettingsScreenProps) {
-  const accessibilityPackagesInput = useRef<HTMLTextAreaElement | null>(null)
+  const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   useEffect(() => {
-    if (accessibilityPackagesInput.current !== null) {
-      accessibilityPackagesInput.current.value = accessibility.allowedPackages.join('\n')
-    }
-  }, [accessibility.allowedPackages])
+    if (page === 'shizuku') setAccessibilityDraft(accessibility.allowedPackages.join('\n'))
+  }, [accessibility.allowedPackages, page])
   if (settingsReadStatus === 'failed') {
     return <div className="screen loading-screen">
       <p role="alert">{t("无法读取最新设置，请重试")}</p>
@@ -2892,8 +2912,9 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, las
             )}
           </div>
           <p className="settings-note">
-            {t("Shizuku 只用于设备 Shell 的授权与连接状态检测、连接恢复辅助和健康检查；实际权限取决于 Shizuku 的启动模式，应用始终只开放固定命令白名单，也不提供永久保活能力。未安装、未授权或断开时，设备 Shell 功能自动降级，不影响 Ubuntu 终端与 Harness。")}
+            {t("Shizuku 提供设备命令和文件操作能力，权限取决于其启动模式。未安装、未授权或断开时，设备工具不可用，不影响 Ubuntu 终端与 Harness。")}
           </p>
+          <DeviceShellSettings bridge={runtimeBridge} disabled={busy !== null} />
           <div className="settings-subsection" aria-labelledby="accessibility-automation-settings">
             <div className="section-title section-title-action">
               <span className="section-icon"><Bot size={19} /></span>
@@ -2901,16 +2922,17 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, las
               <span className={`status-chip ${accessibility.enabled ? 'success' : ''}`}>{accessibility.enabled ? t("服务已开启") : t("需要手动开启")}</span>
             </div>
             <p className="settings-note">
-              {t("只允许你列出的第三方应用。锁屏、系统设置、权限、支付、验证码和密码页面会被原生层拒绝；服务必须由你在系统无障碍设置中手动开启。")}
+              {t("允许你列出的应用，包括厂商自带的普通应用。锁屏、系统设置及涉及权限、支付、验证码和密码的页面仍受保护；服务必须由你在系统无障碍设置中手动开启。")}
             </p>
+            <ApplicationPicker bridge={runtimeBridge} disabled={busy !== null}
+              selected={[...new Set(accessibilityDraft.split(/[\n,]/u).map(value => value.trim()).filter(Boolean))]}
+              onChange={packages => setAccessibilityDraft(packages.join('\n'))} />
             <label className="field">
-              <span>{t("目标应用包名（每行一个，最多 16 个）")}</span>
+              <span>{t("目标应用包名（每行一个，数量不限）")}</span>
               <textarea
-                ref={accessibilityPackagesInput}
-                defaultValue={accessibility.allowedPackages.join('\n')}
-                onChange={event => { if (event.target.value.length > 2800) event.target.value = event.target.value.slice(0, 2800) }}
+                value={accessibilityDraft}
+                onChange={event => setAccessibilityDraft(event.target.value)}
                 rows={Math.min(8, Math.max(3, accessibility.allowedPackages.length + 2))}
-                maxLength={2800}
                 spellCheck={false}
                 placeholder="com.example.reader\ncom.example.notes"
                 aria-label={t("目标应用包名")}
@@ -2918,7 +2940,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, las
             </label>
             <div className="settings-inline-actions">
               <button className="button button-secondary" type="button" onClick={() => {
-                const packages = (accessibilityPackagesInput.current?.value ?? '').split(/[\n,]/u).map(value => value.trim()).filter(Boolean)
+                const packages = accessibilityDraft.split(/[\n,]/u).map(value => value.trim()).filter(Boolean)
                 onSaveAccessibilityPackages([...new Set(packages)])
               }} disabled={busy !== null}>
                 <Save size={18} />{t("保存白名单")}
@@ -2990,6 +3012,14 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, las
         {/* 诊断日志正文可直接在应用内查看；运行日志是访客输出尾部，只在界面展示、不进导出。 */}
         <DiagnosticLogPanel loadDiagnosticLog={loadDiagnosticLog} />
         <HarnessLogPanel loadHarnessLog={loadHarnessLog} />
+        <section className="settings-section" aria-labelledby="feedback-title">
+          <h2 id="feedback-title">{t('问题反馈')}</h2>
+          <p>{t('反馈时请附上应用版本、屏幕方向和复现步骤。分享日志前请检查是否包含个人信息。')}</p>
+          <p>QQ {t('交流群')}：1108895375</p>
+          <a className="button button-secondary" href="https://github.com/dphmoblie/deepseek-harness-android/issues" target="_blank" rel="noopener noreferrer">
+            <ExternalLink size={18} />{t('在 GitHub 反馈问题')}
+          </a>
+        </section>
         </>
         )}
 
@@ -4232,10 +4262,17 @@ export function App() {
 
   return (
     <div className="app-shell management-shell">
+      <AppBackground />
       <AppSidebar activeView={activeView} onNavigate={setActiveView} />
       <div className="app-frame">
         <header className="mobile-header">
-          <Brand />
+          <div className="header-brand-group">
+            <button className="icon-button mobile-session-entry" type="button" aria-label={t('会话管理')}
+              aria-current={activeView === 'sessions' ? 'page' : undefined} onClick={() => setActiveView('sessions')}>
+              <WhaleMark size={24} />
+            </button>
+            <Brand />
+          </div>
           <div className="header-actions">
             <PhaseBadge phase={runtime.phase} />
             {activeView === 'conversation' && (
@@ -4248,6 +4285,7 @@ export function App() {
 
         <main className="app-main">{screen}</main>
       </div>
+      <BottomNavigation activeView={activeView} onNavigate={setActiveView} />
 
       {resetOpen && <ResetDialog busy={busy === 'reset'} onCancel={() => setResetOpen(false)} onConfirm={confirmReset} />}
       {updateOpen && <UpdateDialog busy={busy === 'update-runtime'} onCancel={() => setUpdateOpen(false)} onConfirm={confirmRuntimeUpdate} />}

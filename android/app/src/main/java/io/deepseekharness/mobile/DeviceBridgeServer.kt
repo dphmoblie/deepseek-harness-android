@@ -44,6 +44,7 @@ class DeviceBridgeServer(
     private val runner: DeviceCommandRunner,
     private val token: String,
     port: Int = 0,
+    private val shellEnabled: () -> Boolean = { false },
 ) : RuntimeScopedResource {
     private val server = ServerSocket(port, 4, InetAddress.getByName("127.0.0.1"))
     private val executor = ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(4))
@@ -169,8 +170,17 @@ class DeviceBridgeServer(
                         throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备参数过长")
                     }
                     // 无障碍命令不经过 Shell：由用户手动开启的服务在原生侧再次校验
+                    if (commandName == "automationPolicy") {
+                        if (param.isNotEmpty()) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "能力查询不接受参数")
+                        respondResult(output, io.deepseekharness.mobile.shizuku.DeviceCommandResult(
+                            true, 0, JSONObject().put("schemaVersion", 3).put("allowlistedAutomation", true)
+                                .put("shellEnabled", shellEnabled()).put("backgroundTasks", true)
+                                .put("directDeviceOperations", true).toString(), false, null,
+                        ))
+                        return
+                    }
                     // 白名单、前台包名、锁屏状态、敏感窗口和动作频率。
-                    if (commandName == "accessibilityTree" || commandName == "accessibilityAction") {
+                    if (commandName in setOf("accessibilityTree", "accessibilityAction", "tap", "inputText")) {
                         val service = DeepSeekAccessibilityService.current()
                         val result = service?.execute(commandName, param)
                             ?: io.deepseekharness.mobile.shizuku.DeviceCommandResult(
@@ -185,6 +195,9 @@ class DeviceBridgeServer(
                     }
                     val command = DeviceCommand.fromName(commandName)
                         ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令不支持")
+                    if (command in setOf(DeviceCommand.SHELL, DeviceCommand.BACKGROUND_TASKS) && !shellEnabled()) {
+                        throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请在 Shizuku 设置中开启 AI Shell")
+                    }
                     val sessionId = shizuku.create(
                         DEFAULT_COLUMNS,
                         DEFAULT_ROWS,

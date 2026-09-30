@@ -106,6 +106,23 @@ class MobileRuntimeController(
         supervisor.startHarness(expectedStartEpoch)
     }
 
+    /** 仅应用内版本管理调用；切换后的 current 持久化为下次启动的默认版本。 */
+    fun manageRuntimeLibrary(operation: String, id: String?, source: RuntimeSource?): org.json.JSONObject = lifecycleLock.withLock {
+        ensureOpen()
+        val library = RuntimeLibrary(store)
+        when (operation) {
+            "list" -> Unit
+            "check" -> return@withLock org.json.JSONObject().put("local", library.list()).put("official", RuntimeReleaseCatalog().check())
+            "download" -> library.download(source ?: throw RuntimeFailure("SOURCE_INCOMPLETE", "缺少版本来源"))
+            "select" -> {
+                if (supervisor.isRunning() || terminals.hasRuntimeSessions()) throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
+                installer.install(RuntimeSource(null, null, RuntimeLibrary.requireId(id.orEmpty())))
+            }
+            else -> throw RuntimeFailure("RUNTIME_VERSION_INVALID", "版本管理操作无效")
+        }
+        org.json.JSONObject().put("local", library.list())
+    }
+
     /** 返回当前启动代次，供系统恢复入口校验控制器身份与取消竞态。 */
     fun currentStartEpoch(): Long = lifecycleLock.withLock {
         ensureOpen()

@@ -711,6 +711,8 @@ const DEVICE_COMMANDS = new Set<DeviceCommand>([
   'fileMkdir',
   'fileDownload',
   'fileUpload',
+  'shell',
+  'backgroundTasks',
 ])
 // 文件上传通过 Base64 传递，原生侧仍有 128 KiB 解码上限；这里保留 JSON 参数的有界窗口。
 const MAX_DEVICE_PARAM_CHARS = 180_000
@@ -759,10 +761,17 @@ export function validateAccessibilityAutomationState(value: unknown): Accessibil
     }
     return value
   })
-  if (packages.length > 16 || new Set(packages).size !== packages.length) {
-    throw new Error('无障碍白名单数量或重复项无效')
+  if (new Set(packages).size !== packages.length) {
+    throw new Error('无障碍白名单包含重复项')
   }
   return { enabled: state.enabled, allowedPackages: packages }
+}
+
+export function validateDeviceShellAccess(value: unknown): { enabled: boolean } {
+  if (!value || typeof value !== 'object' || typeof (value as Record<string, unknown>).enabled !== 'boolean') {
+    throw new Error('AI Shell 授权状态格式无效')
+  }
+  return { enabled: (value as Record<string, boolean>).enabled }
 }
 
 /**

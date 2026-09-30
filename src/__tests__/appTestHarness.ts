@@ -68,6 +68,9 @@ export const bridge = {
   connectShizuku: vi.fn(),
   openShizuku: vi.fn(),
   getAccessibilityAutomationState: vi.fn(),
+  listInstalledApplications: vi.fn().mockResolvedValue({ apps: [], total: 0, nextOffset: null }),
+  getDeviceShellAccess: vi.fn().mockResolvedValue({ enabled: false }),
+  setDeviceShellAccess: vi.fn().mockImplementation((enabled: boolean) => Promise.resolve({ enabled })),
   setAccessibilityAutomationPackages: vi.fn(),
   openAccessibilitySettings: vi.fn(),
   getKeepAliveState: vi.fn(),
@@ -237,6 +240,9 @@ export function beforeEachAppTest(): void {
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
   bridge.getAccessibilityAutomationState.mockResolvedValue({ enabled: false, allowedPackages: [] })
+  bridge.listInstalledApplications.mockResolvedValue({ apps: [], total: 0, nextOffset: null })
+  bridge.getDeviceShellAccess.mockResolvedValue({ enabled: false })
+  bridge.setDeviceShellAccess.mockImplementation((enabled: boolean) => Promise.resolve({ enabled }))
   bridge.setAccessibilityAutomationPackages.mockImplementation((packages: string[]) => Promise.resolve({ enabled: false, allowedPackages: [...new Set(packages)] }))
   bridge.openAccessibilitySettings.mockResolvedValue(undefined)
   bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive })

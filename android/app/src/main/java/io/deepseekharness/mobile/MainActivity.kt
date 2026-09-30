@@ -48,6 +48,7 @@ class MainActivity : BridgeActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         registerPlugin(MobileRuntimePlugin::class.java)
         super.onCreate(savedInstanceState)
+        AppWindowInsets.apply(this)
         handleExternalFileIntent(intent)
         applySystemFontScale()
 

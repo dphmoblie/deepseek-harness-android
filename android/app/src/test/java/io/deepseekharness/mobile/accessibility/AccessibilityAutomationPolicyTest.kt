@@ -9,6 +9,14 @@ import org.junit.Test
 
 class AccessibilityAutomationPolicyTest {
     @Test
+    fun whitelistHasNoCountLimitAndAllowsOrdinaryVendorApplications() {
+        assertTrue(AccessibilityAutomationPolicy.validPackages((1..300).map { "com.example.app$it" }))
+        assertTrue(AccessibilityAutomationPolicy.validPackage("com.miui.calculator"))
+        assertTrue(AccessibilityAutomationPolicy.validPackage("com.samsung.android.calendar"))
+        assertFalse(AccessibilityAutomationPolicy.validPackage("com.android.permissioncontroller"))
+    }
+
+    @Test
     fun onlyValidUserApplicationPackagesAreAccepted() {
         assertTrue(AccessibilityAutomationPolicy.validPackage("com.example.reader"))
         assertFalse(AccessibilityAutomationPolicy.validPackage("com.android.settings"))

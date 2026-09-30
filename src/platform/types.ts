@@ -33,6 +33,8 @@ export type DeviceCommand =
   | 'fileMkdir'
   | 'fileDownload'
   | 'fileUpload'
+  | 'shell'
+  | 'backgroundTasks'
 
 export const MODEL_PROVIDER_IDS = [
   'deepseek',
@@ -271,6 +273,19 @@ export interface MailboxState {
   /** 导入落点（相对工作区的固定子目录）。 */
   importDirectory: string
 }
+
+export interface InstalledApplication {
+  packageName: string
+  label: string
+  system: boolean
+  selectable: boolean
+}
+export interface InstalledApplicationsPage {
+  apps: InstalledApplication[]
+  total: number
+  nextOffset: number | null
+}
+export interface DeviceShellAccessState { enabled: boolean }
 
 /** 无障碍服务状态；只返回是否已由用户开启及用户维护的目标包白名单。 */
 export interface AccessibilityAutomationState {
@@ -568,6 +583,10 @@ export interface RuntimeBridge {
   openShizuku: () => Promise<void>
   /** 读取无障碍服务状态和目标应用白名单；不会返回当前窗口内容。 */
   getAccessibilityAutomationState: () => Promise<AccessibilityAutomationState>
+  /** 本机应用选择器的分页查询，数量不限；不向 AI 自动发送清单。 */
+  listInstalledApplications: (query: string, offset: number) => Promise<InstalledApplicationsPage>
+  getDeviceShellAccess: () => Promise<DeviceShellAccessState>
+  setDeviceShellAccess: (enabled: boolean) => Promise<DeviceShellAccessState>
   /** 保存目标应用包名白名单；只能由用户在设置页修改。 */
   setAccessibilityAutomationPackages: (packages: string[]) => Promise<AccessibilityAutomationState>
   /** 跳转系统无障碍设置，由用户手动开启服务。 */

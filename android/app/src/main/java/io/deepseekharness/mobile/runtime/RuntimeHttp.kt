@@ -41,6 +41,29 @@ class RuntimeHttp {
         client.dispatcher.cancelAll()
     }
 
+    /** 目录元数据只允许两个固定上游地址；实际归档仍需清单和 SHA-256 校验。 */
+    fun catalogBytes(source: String): ByteArray {
+        if (source !in setOf(
+                "https://registry.npmjs.org/@deepseek-ai%2fdsh",
+                "https://api.github.com/repos/dphmoblie/deepseek-harness-android/releases?per_page=30",
+            )) throw RuntimeFailure("URL_INVALID", "目录来源不受支持")
+        return withResponse(URI(source)) { response, input ->
+            if (response.code != 200) throw RuntimeFailure("DOWNLOAD_HTTP_ERROR", "版本目录暂不可用")
+            val limit = 4 * 1024 * 1024
+            enforceContentLength(response, limit.toLong())
+            // 按块限制实际读取量，兼容 Android 8；不依赖服务器声明的长度。
+            val output = java.io.ByteArrayOutputStream(32 * 1024)
+            val buffer = ByteArray(32 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                if (output.size() + read > limit) throw RuntimeFailure("DOWNLOAD_TOO_LARGE", "版本目录超过大小限制")
+                output.write(buffer, 0, read)
+            }
+            output.toByteArray()
+        }
+    }
+
     fun downloadBytes(source: URI, expectedSha256: String, maximumBytes: Int): ByteArray {
         val output = java.io.ByteArrayOutputStream(minOf(maximumBytes, 64 * 1024))
         val result = withResponse(source) { response, input ->

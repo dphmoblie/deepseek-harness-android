@@ -71,6 +71,9 @@ internal object AppThemePreference {
     fun apply(activity: Activity) {
         val dark = isDark(current(activity), systemNight(activity))
         val window = activity.window
+        // 安全区由原生容器留出，背景随主题同步，避免透明系统栏下出现色块。
+        activity.findViewById<android.view.View>(android.R.id.content)
+            ?.setBackgroundColor(if (dark) DARK_BAR_COLOR else LIGHT_BAR_COLOR)
         @Suppress("DEPRECATION")
         window.statusBarColor = if (dark) DARK_BAR_COLOR else LIGHT_BAR_COLOR
         @Suppress("DEPRECATION")

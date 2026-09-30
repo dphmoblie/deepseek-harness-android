@@ -49,7 +49,11 @@ enum class DeviceCommand {
     /** 文件通道的语义别名：从 Android 下载到 AI。 */
     FILE_DOWNLOAD,
     /** 文件通道的语义别名：从 AI 上传到 Android。 */
-    FILE_UPLOAD;
+    FILE_UPLOAD,
+    /** AI 提交给 Shizuku 的一次性 Shell 脚本；脚本正文不写入日志。 */
+    SHELL,
+    /** 查询系统允许 Shell 观察的进程、服务或 Activity 摘要。 */
+    BACKGROUND_TASKS;
 
     companion object {
         fun fromName(name: String): DeviceCommand? = when (name) {
@@ -70,6 +74,8 @@ enum class DeviceCommand {
             "fileMkdir" -> FILE_MKDIR
             "fileDownload" -> FILE_DOWNLOAD
             "fileUpload" -> FILE_UPLOAD
+            "shell" -> SHELL
+            "backgroundTasks" -> BACKGROUND_TASKS
             else -> null
         }
     }
@@ -230,7 +236,7 @@ class DeviceCommandRunner(
             ok = parsed.exitCode == 0,
             exitCode = parsed.exitCode,
             // 成功时正文原样返回（截图 base64 必须保持纯净）；失败时才追加说明。
-            text = explain(errorCode, parsed.payload),
+            text = if (pending.command == DeviceCommand.SHELL) parsed.payload else explain(errorCode, parsed.payload),
             // 正文窗口被截断，或 payload 本身就超出了窗口，都按「输出被截断」上报。
             truncated = pending.truncated || parsed.payloadTruncated,
             errorCode = errorCode,
@@ -448,6 +454,36 @@ class DeviceCommandRunner(
         DeviceCommand.FILE_READ, DeviceCommand.FILE_DOWNLOAD -> fileReadBody(param)
         DeviceCommand.FILE_WRITE, DeviceCommand.FILE_UPLOAD -> fileWriteBody(param)
         DeviceCommand.FILE_MKDIR -> fileMkdirBody(param)
+        DeviceCommand.BACKGROUND_TASKS -> {
+            if (param.length > 240) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "后台任务查询参数过长")
+            val request = try { org.json.JSONObject(param) } catch (_: Exception) {
+                throw RuntimeFailure("DEVICE_COMMAND_INVALID", "后台任务查询参数格式无效")
+            }
+            val packageName = request.opt("packageName") as? String
+                ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "需要目标应用包名")
+            val kind = request.opt("kind") as? String
+            if (request.length() != 2 || packageName.length > MAX_PACKAGE_NAME_CHARS || !PACKAGE_NAME_PATTERN.matches(packageName)) {
+                throw RuntimeFailure("DEVICE_COMMAND_INVALID", "后台任务查询包名无效")
+            }
+            val target = singleQuote(packageName)
+            val script = when (kind) {
+                // 精确匹配主进程及包名冒号后缀，避免读到名称相似的其他应用。
+                "processes" -> "ps -A -o PID,PPID,NAME | awk -v packageName=$target 'NR == 1 || \$3 == packageName || index(\$3, packageName \":\") == 1' | head -n 128"
+                "services" -> "dumpsys activity services $target | grep -E 'ServiceRecord|app=ProcessRecord|isForeground=' | head -n 128"
+                "activities" -> "dumpsys activity activities $target | grep -E 'ActivityRecord|Task\\{|mResumedActivity|topResumedActivity' | head -n 128"
+                else -> throw RuntimeFailure("DEVICE_COMMAND_INVALID", "后台任务查询类型无效")
+            }
+            Body(script, "\$?")
+        }
+        DeviceCommand.SHELL -> {
+            if (param.isBlank() || param.toByteArray(Charsets.UTF_8).size > MAX_SHELL_SCRIPT_CHARS || param.any { it == '\u0000' || it == '\r' }) {
+                throw RuntimeFailure("DEVICE_COMMAND_INVALID", "Shell 脚本为空、过长或包含非法控制字符")
+            }
+            // 脚本作为编码后的标准输入送入独立解释器，不能破坏外层结果协议。
+            // 不使用关键字黑名单；命令的实际能力由用户授予的 Shizuku 身份决定。
+            val encoded = Base64.getEncoder().encodeToString(param.toByteArray(Charsets.UTF_8))
+            Body("printf '%s' '$encoded' | toybox base64 -d | /system/bin/sh -s", "\$?")
+        }
     }
 
     /** 生成投递区文件命令的公共安全检查：根目录固定，真实路径由 readlink 再次收敛。 */
@@ -574,6 +610,7 @@ class DeviceCommandRunner(
          */
         private const val MAX_CONTROL_TAIL_CHARS = 512
         private const val MAX_TEXT_CHARS = 1024
+        private const val MAX_SHELL_SCRIPT_CHARS = 16 * 1024
         private const val MAX_PACKAGE_QUERY_CHARS = 128
         private const val MAX_PACKAGE_NAME_CHARS = 192
         private const val MAX_SETTING_PARAM_CHARS = 256

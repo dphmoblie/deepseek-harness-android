@@ -346,6 +346,7 @@ test('the mobile profile ships model-facing Shizuku tools without exposing bridg
   assert.match(patch, /name: '@deepseek-harness\/dsh-mobile-shizuku'/)
   assert.match(plugin, /export const inject = \['tools', 'systemPrompt', 'attachments', 'llm'\]/)
   for (const tool of [
+    'mobile_device_background_tasks',
     'mobile_device_screenshot',
     'mobile_device_ui_dump',
     'mobile_device_tap',
@@ -363,6 +364,7 @@ test('the mobile profile ships model-facing Shizuku tools without exposing bridg
     'mobile_device_file_write',
     'mobile_device_file_upload',
     'mobile_device_file_mkdir',
+    'mobile_device_shell',
   ]) {
     assert.match(plugin, new RegExp(`name: '${tool}'`))
   }
@@ -399,7 +401,9 @@ test('the mobile profile ships model-facing Shizuku tools without exposing bridg
   assert.deepEqual(
     registeredTools.map(tool => tool.name),
     [
+      'mobile_device_background_tasks',
       'mobile_device_screenshot',
+      'mobile_device_shell',
       'mobile_device_ui_dump',
       'mobile_accessibility_tree',
       'mobile_accessibility_action',
@@ -454,6 +458,7 @@ test('the mobile profile ships model-facing Shizuku tools without exposing bridg
   )
 
   const screenshot = registeredTools.find(tool => tool.name === 'mobile_device_screenshot')
+  assert.deepEqual(screenshot.output.schema.properties.image.properties.mediaType.enum, ['image/png', 'image/jpeg', 'image/webp'])
   const screenshotContent = screenshot.output.render({}, {
     ok: true,
     image: {

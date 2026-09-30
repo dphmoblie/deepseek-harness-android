@@ -1,4 +1,5 @@
 import { validatePluginCatalog, validatePluginRequest } from './plugins'
+import { validateInstalledApplications } from './installedApplications'
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import type { PluginListenerHandle } from '@capacitor/core'
 import { createBrowserBridge } from './browser'
@@ -36,6 +37,7 @@ import {
   assertTerminalSize,
   validateAllFilesAccessResult,
   validateAccessibilityAutomationState,
+  validateDeviceShellAccess,
   validateDeviceCommand,
   validateDeviceCommandParam,
   validateDeviceCommandResult,
@@ -90,6 +92,9 @@ interface NativeRuntimePlugin {
   connectShizuku(): Promise<ShizukuState>
   openShizuku(): Promise<void>
   getAccessibilityAutomationState(): Promise<unknown>
+  listInstalledApplications(options: { query: string; offset: number }): Promise<unknown>
+  getDeviceShellAccess(): Promise<unknown>
+  setDeviceShellAccess(options: { enabled: boolean }): Promise<unknown>
   setAccessibilityAutomationPackages(options: { packages: string[] }): Promise<unknown>
   openAccessibilitySettings(): Promise<void>
   getKeepAliveState(): Promise<KeepAliveState>
@@ -199,14 +204,26 @@ function createNativeBridge(): RuntimeBridge {
       return NativeRuntime.execDeviceCommand(validated).then(validateDeviceCommandResult)
     },
     getShizukuState: () => NativeRuntime.getShizukuState().then(validateShizukuState),
+    getDeviceShellAccess: () => NativeRuntime.getDeviceShellAccess().then(validateDeviceShellAccess),
+    setDeviceShellAccess: enabled => {
+      if (typeof enabled !== 'boolean') return Promise.reject(new Error('AI Shell 授权状态格式无效'))
+      return NativeRuntime.setDeviceShellAccess({ enabled }).then(validateDeviceShellAccess)
+    },
     requestShizukuPermission: () => NativeRuntime.requestShizukuPermission().then(validateShizukuState),
     connectShizuku: () => NativeRuntime.connectShizuku().then(validateShizukuState),
     openShizuku: () => NativeRuntime.openShizuku(),
     getAccessibilityAutomationState: () => NativeRuntime.getAccessibilityAutomationState().then(validateAccessibilityAutomationState),
+    listInstalledApplications: (query, offset) => {
+      if (typeof query !== 'string' || query.length > 160 || [...query].some(char => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f) || !Number.isSafeInteger(offset) || offset < 0) {
+        return Promise.reject(new Error('应用筛选参数无效'))
+      }
+      return NativeRuntime.listInstalledApplications({ query, offset }).then(validateInstalledApplications)
+    },
     setAccessibilityAutomationPackages: packages => {
-      if (!Array.isArray(packages) || packages.length > 16 || packages.some(value => typeof value !== 'string')) {
+      if (!Array.isArray(packages) || packages.some(value => typeof value !== 'string')) {
         return Promise.reject(new Error('无障碍白名单格式无效'))
       }
+      validateAccessibilityAutomationState({ enabled: false, allowedPackages: packages })
       return NativeRuntime.setAccessibilityAutomationPackages({ packages }).then(validateAccessibilityAutomationState)
     },
     openAccessibilitySettings: () => NativeRuntime.openAccessibilitySettings(),
