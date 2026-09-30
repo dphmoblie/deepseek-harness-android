@@ -664,7 +664,10 @@ test('keep-alive keeps the device bridge process-scoped and the notification ent
   // 回归 4：桥必须与运行时同生命周期持有与拆除。
   assert.match(runtimeHost, /interface RuntimeScopedResource/)
   assert.match(runtimeHost, /private fun releaseDeviceResourcesLocked\(\)/)
-  assert.match(runtimeHost, /controller = null\s*releaseDeviceResourcesLocked\(\)\s*return current/)
+  assert.match(
+    runtimeHost,
+    /current\.shutdown\(\)\s*releaseDeviceResourcesLocked\(\)\s*controller = null\s*return current/,
+  )
   assert.match(deviceBridge, /\) : RuntimeScopedResource \{/)
   assert.match(deviceBridge, /override fun stop\(\)/)
 
