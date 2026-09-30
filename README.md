@@ -16,12 +16,13 @@
 [![Capacitor 7](https://img.shields.io/badge/Capacitor%207-119EFC?logo=capacitor&logoColor=white)](https://capacitorjs.com/)
 [![React 18](https://img.shields.io/badge/React%2018-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
+[![QQ Group](https://img.shields.io/badge/QQ%20Group-1108895375-12B7F5?style=for-the-badge)](#community-qq-group)
 
 <p align="center"><img src="docs/images/app-icon-512.png" width="256" alt="App icon: white background keyed out, transparent"></p>
 
 **DeepSeek Harness for Android** runs the full [DeepSeek Harness](https://github.com/deepseek-ai/dsh) agent environment — an Ubuntu userspace, Node.js, and the official Harness web console — directly on an Android phone. No root is required: the complete Linux environment executes inside [PRoot](https://github.com/proot-me/proot), and Harness is served on Android loopback and displayed in a navigation-restricted internal WebView.
 
-**Community QQ group:** `1108895375`
+<a id="community-qq-group"></a>**Community QQ group:** `1108895375`
 
 | | |
 | --- | --- |
