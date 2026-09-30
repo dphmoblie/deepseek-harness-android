@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#071c32">
+  <title>DSH Mobile · 深海里的移动智能体</title>
+  <style>
+    :root {
+      --深海: #061627;
+      --海水: #0b304c;
+      --浪花: #dffcff;
+      --冰蓝: #63e6ff;
+      --鲸光: #36c8e8;
+      --珊瑚: #ff9b83;
+      --墨色: #03101c;
+      --玻璃: rgba(7, 33, 54, .68);
+      --边框: rgba(173, 241, 255, .22);
+      --显示字体: "华文中宋", "STSong", Georgia, serif;
+      --正文: "微软雅黑", "Microsoft YaHei", sans-serif;
+      --等宽: "Cascadia Code", "Consolas", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--深海); }
+    body {
+      display: grid;
+      min-height: 100vh;
+      place-items: center;
+      overflow-x: hidden;
+      color: var(--浪花);
+      font-family: var(--正文);
+    }
+
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+
+    .舞台 {
+      position: relative;
+      width: min(100vw, 177.78vh);
+      min-height: min(100vh, 56.25vw);
+      aspect-ratio: 16 / 9;
+      overflow: hidden;
+      isolation: isolate;
+      background:
+        radial-gradient(circle at 72% 20%, rgba(77, 203, 237, .24), transparent 25%),
+        radial-gradient(circle at 20% 80%, rgba(255, 155, 131, .12), transparent 28%),
+        linear-gradient(135deg, var(--深海), var(--海水) 58%, #154d67);
+    }
+
+    .舞台::before {
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      background-image:
+        linear-gradient(rgba(174, 244, 255, .045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(174, 244, 255, .045) 1px, transparent 1px);
+      background-size: 44px 44px;
+      content: "";
+      mask-image: linear-gradient(to bottom, black, transparent 80%);
+    }
+
+    .舞台::after {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
+      pointer-events: none;
+      background: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.15'/%3E%3C/svg%3E");
+      mix-blend-mode: soft-light;
+      opacity: .25;
+    }
+
+    .顶栏 {
+      position: absolute;
+      top: 4.5%;
+      right: 5.5%;
+      left: 5.5%;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      font: 600 clamp(9px, .85vw, 13px) var(--等宽);
+      color: rgba(223, 252, 255, .72);
+    }
+
+    .标识 {
+      display: inline-flex;
+      align-items: center;
+      gap: .65rem;
+    }
+
+    .标识点 {
+      width: .6rem;
+      height: .6rem;
+      border-radius: 50%;
+      background: var(--珊瑚);
+      box-shadow: 0 0 18px var(--珊瑚);
+      animation: 呼吸 2.4s ease-in-out infinite;
+    }
+
+    .版本 { color: rgba(223, 252, 255, .42); }
+
+    .主文案 {
+      position: absolute;
+      top: 22%;
+      left: 8%;
+      z-index: 4;
+      width: 42%;
+      animation: 入场 .8s cubic-bezier(.2, .75, .25, 1) both;
+    }
+
+    .眉题 {
+      margin: 0 0 1.4rem;
+      color: var(--冰蓝);
+      font: 600 clamp(10px, 1.05vw, 15px) var(--等宽);
+      letter-spacing: .2em;
+    }
+
+    h1 {
+      margin: 0;
+      color: var(--浪花);
+      font: 400 clamp(42px, 6.7vw, 112px) / .94 var(--显示字体);
+      letter-spacing: -.06em;
+      text-wrap: balance;
+      text-shadow: 0 0 34px rgba(99, 230, 255, .18);
+    }
+
+    .副标题 {
+      max-width: 28rem;
+      margin: 2rem 0 0;
+      color: rgba(223, 252, 255, .7);
+      font: 400 clamp(12px, 1.2vw, 18px) / 1.8 var(--正文);
+    }
+
+    .行动区 {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      margin-top: 2.5rem;
+    }
+
+    .播放键 {
+      display: inline-flex;
+      align-items: center;
+      gap: .65rem;
+      border: 1px solid rgba(223, 252, 255, .6);
+      border-radius: 999px;
+      padding: .85rem 1.35rem;
+      background: var(--浪花);
+      color: var(--墨色);
+      box-shadow: 0 9px 28px rgba(0, 0, 0, .18);
+      font-weight: 700;
+      transition: transform .25s ease, box-shadow .25s ease;
+    }
+
+    .播放键:hover, .播放键:focus-visible {
+      transform: translateY(-3px);
+      box-shadow: 0 13px 34px rgba(99, 230, 255, .25);
+      outline: none;
+    }
+
+    .播放符号 { font-size: 1.1em; }
+
+    .音频入口 {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: .45rem;
+      color: rgba(223, 252, 255, .64);
+      font-size: clamp(10px, .9vw, 13px);
+    }
+
+    .音频入口 input {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      cursor: pointer;
+      opacity: 0;
+    }
+
+    .音频入口 span { border-bottom: 1px dashed rgba(223, 252, 255, .45); }
+
+    .鲸鱼插画 {
+      position: absolute;
+      right: 6%;
+      bottom: 19%;
+      z-index: 3;
+      width: 45%;
+      max-width: 680px;
+      overflow: visible;
+      filter: drop-shadow(0 28px 38px rgba(0, 0, 0, .24));
+      animation: 漂浮 6s ease-in-out infinite;
+    }
+
+    .鲸鱼轮廓 { transform-origin: 50% 50%; animation: 轻摆 7s ease-in-out infinite; }
+    .鲸鱼尾巴 { transform-origin: 50% 70%; animation: 尾鳍 3.5s ease-in-out infinite; }
+    .泡泡 { transform-origin: center; animation: 上浮 5s ease-in-out infinite; }
+    .泡泡:nth-of-type(2) { animation-delay: -1.7s; }
+    .泡泡:nth-of-type(3) { animation-delay: -3.1s; }
+
+    .功能条 {
+      position: absolute;
+      right: 5.5%;
+      bottom: 8%;
+      left: 5.5%;
+      z-index: 5;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      border-top: 1px solid var(--边框);
+      border-bottom: 1px solid var(--边框);
+      background: var(--边框);
+    }
+
+    .功能项 {
+      min-height: 5.2rem;
+      padding: 1rem 1.1rem;
+      background: rgba(5, 27, 45, .68);
+      transition: background .3s ease, transform .3s ease;
+    }
+
+    .功能项.当前, .功能项:hover { background: rgba(57, 155, 183, .25); }
+    .功能编号 { color: var(--珊瑚); font: 600 10px var(--等宽); letter-spacing: .14em; }
+    .功能名 { margin-top: .55rem; font: 600 clamp(10px, 1vw, 14px) var(--等宽); letter-spacing: .08em; }
+    .功能说明 { margin-top: .4rem; color: rgba(223, 252, 255, .52); font-size: clamp(9px, .75vw, 12px); }
+
+    .场景文案 {
+      position: absolute;
+      right: 8%;
+      top: 18%;
+      z-index: 6;
+      width: 22%;
+      padding: 1rem 1.1rem;
+      border-left: 2px solid var(--珊瑚);
+      background: linear-gradient(90deg, rgba(3, 16, 28, .48), rgba(3, 16, 28, 0));
+      backdrop-filter: blur(5px);
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity .45s ease, transform .45s ease;
+      pointer-events: none;
+    }
+
+    .场景文案.显示 { opacity: 1; transform: translateY(0); }
+    .场景标签 { color: var(--珊瑚); font: 600 clamp(9px, .9vw, 12px) var(--等宽); letter-spacing: .18em; }
+    .场景标题 { margin: .8rem 0; font: 400 clamp(21px, 2.3vw, 37px) / 1.05 var(--显示字体); }
+    .场景说明 { color: rgba(223, 252, 255, .64); font-size: clamp(10px, .85vw, 14px); line-height: 1.65; }
+
+    .控制栏 {
+      position: absolute;
+      right: 5.5%;
+      bottom: 2.2%;
+      left: 5.5%;
+      z-index: 7;
+      display: flex;
+      align-items: center;
+      gap: .8rem;
+      color: rgba(223, 252, 255, .48);
+      font: 10px var(--等宽);
+    }
+
+    .进度轨 {
+      position: relative;
+      height: 3px;
+      flex: 1;
+      overflow: hidden;
+      border-radius: 9px;
+      background: rgba(223, 252, 255, .18);
+    }
+
+    .进度 {
+      width: 0;
+      height: 100%;
+      background: linear-gradient(90deg, var(--冰蓝), var(--珊瑚));
+      transition: width .1s linear;
+    }
+
+    .控制按钮 {
+      border: 0;
+      padding: .25rem .4rem;
+      background: transparent;
+      color: inherit;
+    }
+
+    .提示 {
+      position: absolute;
+      right: 5.5%;
+      bottom: 9.2%;
+      z-index: 8;
+      max-width: 18rem;
+      padding: .7rem 1rem;
+      border: 1px solid rgba(99, 230, 255, .28);
+      border-radius: 12px;
+      background: rgba(2, 16, 29, .8);
+      color: rgba(223, 252, 255, .72);
+      font-size: 11px;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity .3s ease, transform .3s ease;
+      pointer-events: none;
+    }
+
+    .提示.显示 { opacity: 1; transform: translateY(0); }
+
+    @keyframes 入场 { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes 呼吸 { 50% { opacity: .4; transform: scale(.72); } }
+    @keyframes 漂浮 { 50% { transform: translateY(-10px); } }
+    @keyframes 轻摆 { 50% { transform: rotate(-2deg) translateY(4px); } }
+    @keyframes 尾鳍 { 50% { transform: rotate(6deg) translateY(-4px); } }
+    @keyframes 上浮 { 0%, 100% { opacity: .25; transform: translate(0, 10px) scale(.8); } 45% { opacity: .9; } 75% { opacity: .1; transform: translate(16px, -80px) scale(1.15); } }
+
+    @media (max-width: 780px) {
+      body { display: block; }
+      .舞台 { width: 100vw; min-height: 100vh; aspect-ratio: auto; }
+      .顶栏 { top: 3%; }
+      .主文案 { top: 13%; left: 8%; width: 84%; }
+      h1 { max-width: 70%; font-size: clamp(42px, 15vw, 74px); }
+      .副标题 { max-width: 65%; margin-top: 1.25rem; }
+      .行动区 { margin-top: 1.4rem; }
+      .鲸鱼插画 { right: -12%; bottom: 25%; width: 75%; opacity: .86; }
+      .场景文案 { top: 55%; right: 8%; width: 40%; }
+      .功能条 { right: 5%; bottom: 8%; left: 5%; grid-template-columns: repeat(2, 1fr); }
+      .功能项 { min-height: 4.1rem; padding: .7rem .8rem; }
+      .功能说明 { display: none; }
+      .提示 { right: 5%; bottom: 27%; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="舞台" aria-label="DeepSeek Harness 安卓版宣传动画">
+    <header class="顶栏">
+      <div class="标识"><i class="标识点" aria-hidden="true"></i><span>DEEPSEEK HARNESS / ANDROID</span></div>
+      <span class="版本">MOBILE FIELD TEST · 0.2.0</span>
+    </header>
+
+    <section class="主文案">
+      <p class="眉题">把智能体带入深海，也带进手机</p>
+      <h1>深海里的<br>移动智能体</h1>
+      <p class="副标题">Shizuku 工具通道、投递区文件管理、无障碍自动化与后台保持，收进一枚会发光的安卓壳。</p>
+      <div class="行动区">
+        <button class="播放键" id="播放" type="button" aria-label="播放或暂停宣传动画"><span class="播放符号">▶</span><span>开始预览</span></button>
+        <label class="音频入口"><span id="音频文字">添加已授权音乐</span><input id="音频文件" type="file" accept="audio/*" aria-label="选择已授权的背景音乐"></label>
+      </div>
+    </section>
+
+    <section class="场景文案" id="场景文案" aria-live="polite">
+      <div class="场景标签" id="场景标签">01 / SHIZUKU</div>
+      <h2 class="场景标题" id="场景标题">一条经过收敛的设备通道</h2>
+      <p class="场景说明" id="场景说明">让模型调用经过白名单与参数校验的设备能力，保持边界清晰，也让手机真正成为智能体的现场。</p>
+    </section>
+
+    <svg class="鲸鱼插画" viewBox="0 0 620 560" role="img" aria-label="原创鲸鱼娘风格的深海角色插画" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="鲸身" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#9bf3ff"/><stop offset=".52" stop-color="#38b7d8"/><stop offset="1" stop-color="#1c5b83"/></linearGradient>
+        <linearGradient id="发光" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e5ffff"/><stop offset="1" stop-color="#70def3"/></linearGradient>
+        <filter id="柔光"><feGaussianBlur stdDeviation="8"/></filter>
+      </defs>
+      <g class="鲸鱼轮廓">
+        <ellipse cx="362" cy="334" rx="190" ry="145" fill="#43cbe6" opacity=".16" filter="url(#柔光)"/>
+        <path d="M194 332c15-92 96-158 198-158 92 0 162 49 194 122-29-10-50-9-74 2 15 18 19 42 9 67-28 70-93 111-177 111-87 0-151-42-150-144Z" fill="url(#鲸身)" stroke="#b9f7ff" stroke-opacity=".62" stroke-width="3"/>
+        <path d="M456 315c46-35 96-42 142-18-18 12-37 27-47 49 26 0 47 11 63 29-53 17-105 8-147-20Z" fill="#7be6f6" stroke="#b9f7ff" stroke-opacity=".54" stroke-width="3"/>
+        <path d="M228 244c18-62 61-106 125-126-12 31-8 57 15 77-39 0-76 17-103 51Z" fill="url(#发光)" stroke="#dcffff" stroke-opacity=".58" stroke-width="3"/>
+        <path d="M252 196c23 18 45 24 66 20-12 23-31 37-58 42" fill="none" stroke="#1d6d93" stroke-width="7" stroke-linecap="round" opacity=".75"/>
+        <path d="M329 188c-8-31-4-56 13-77 15 22 35 37 59 45-26 7-49 18-72 32Z" fill="#8beafa" stroke="#d9ffff" stroke-opacity=".58" stroke-width="3"/>
+        <path d="M257 290c19-30 45-46 80-48 36-2 66 10 91 36-18 31-50 50-91 51-34 1-61-12-80-39Z" fill="#06223b" opacity=".93"/>
+        <ellipse cx="318" cy="273" rx="13" ry="16" fill="#f7ffff"/><circle cx="321" cy="275" r="6" fill="#08304b"/>
+        <ellipse cx="387" cy="270" rx="13" ry="16" fill="#f7ffff"/><circle cx="390" cy="272" r="6" fill="#08304b"/>
+        <path d="M333 323c21 15 43 15 65 0" fill="none" stroke="#ffb5a1" stroke-width="7" stroke-linecap="round"/>
+        <path d="M267 359c37 28 101 39 159 18" fill="none" stroke="#b8f7ff" stroke-opacity=".55" stroke-width="3" stroke-linecap="round"/>
+        <path d="M266 392c-28 32-30 63-7 90 21-23 46-35 75-35-9-26-31-44-68-55Z" fill="#ff9b83" opacity=".88"/>
+        <path d="M416 394c32 21 47 48 43 81-26-11-52-14-78-7 0-29 12-53 35-74Z" fill="#ff9b83" opacity=".7"/>
+        <g class="鲸鱼尾巴"><path d="M217 401c-57 5-91 29-102 72 45-6 77 4 105 30 19-35 18-68-3-102Z" fill="#2e91bb" stroke="#b8f7ff" stroke-opacity=".5" stroke-width="3"/><path d="M219 402c-8 42-1 75 22 99 31-30 42-61 29-96-16-8-33-9-51-3Z" fill="#52bfd7" stroke="#b8f7ff" stroke-opacity=".5" stroke-width="3"/></g>
+      </g>
+      <g class="泡泡" fill="none" stroke="#b5f7ff" stroke-opacity=".62" stroke-width="3"><circle cx="164" cy="172" r="13"/><circle cx="115" cy="123" r="6"/><circle cx="188" cy="87" r="9"/></g>
+    </svg>
+
+    <section class="功能条" aria-label="项目能力">
+      <article class="功能项 当前" data-scene="0"><div class="功能编号">01 / CHANNEL</div><div class="功能名">SHIZUKU 通道</div><div class="功能说明">固定命令 · 参数白名单</div></article>
+      <article class="功能项" data-scene="1"><div class="功能编号">02 / DROP ZONE</div><div class="功能名">投递区文件</div><div class="功能说明">文件夹 · 导入 · 导出</div></article>
+      <article class="功能项" data-scene="2"><div class="功能编号">03 / AUTOMATION</div><div class="功能名">无障碍自动化</div><div class="功能说明">逐次确认 · 审计记录</div></article>
+      <article class="功能项" data-scene="3"><div class="功能编号">04 / KEEP ALIVE</div><div class="功能名">后台保持</div><div class="功能说明">悬浮球 · 启动恢复</div></article>
+    </section>
+
+    <div class="提示" id="提示">音乐仅支持用户拥有授权的音频文件。</div>
+    <footer class="控制栏">
+      <button class="控制按钮" id="重播" type="button" aria-label="重新播放">↺</button>
+      <span id="时间">00:00</span>
+      <div class="进度轨" aria-hidden="true"><div class="进度" id="进度"></div></div>
+      <span>01:00</span>
+    </footer>
+    <audio id="背景音乐" loop></audio>
+  </main>
+
+  <script>
+    const 场景 = [
+      { 标签: '01 / SHIZUKU', 标题: '一条经过收敛的设备通道', 说明: '让模型调用经过白名单与参数校验的设备能力，保持边界清晰，也让手机真正成为智能体的现场。' },
+      { 标签: '02 / DROP ZONE', 标题: '把文件交给下一步', 说明: 'inbox 与 outbox 拥有自己的文件夹、面包屑和导入导出边界，投递区不再是一堆找不到的附件。' },
+      { 标签: '03 / AUTOMATION', 标题: '每一次动作都看得见', 说明: '无障碍自动化在执行前展示目标、动作与输入长度，用户确认后才会触达白名单应用。' },
+      { 标签: '04 / KEEP ALIVE', 标题: '锁屏之后，现场仍在', 说明: '前台服务、启动恢复与悬浮球协同工作；系统策略仍由系统掌握，但恢复路径已经准备好。' },
+    ];
+    const 总时长 = 60;
+    const 场景文案 = document.querySelector('#场景文案');
+    const 场景标签 = document.querySelector('#场景标签');
+    const 场景标题 = document.querySelector('#场景标题');
+    const 场景说明 = document.querySelector('#场景说明');
+    const 进度 = document.querySelector('#进度');
+    const 时间 = document.querySelector('#时间');
+    const 播放 = document.querySelector('#播放');
+    const 重播 = document.querySelector('#重播');
+    const 提示 = document.querySelector('#提示');
+    const 背景音乐 = document.querySelector('#背景音乐');
+    const 音频文件 = document.querySelector('#音频文件');
+    const 音频文字 = document.querySelector('#音频文字');
+    const 功能项 = [...document.querySelectorAll('.功能项')];
+    let 当前时间 = 0;
+    let 上次时间戳 = 0;
+    let 播放中 = false;
+    let 动画帧 = 0;
+
+    function 格式时间(秒) {
+      const 分钟 = String(Math.floor(秒 / 60)).padStart(2, '0');
+      const 剩余秒 = String(Math.floor(秒 % 60)).padStart(2, '0');
+      return `${分钟}:${剩余秒}`;
+    }
+
+    function 更新场景(索引) {
+      const 数据 = 场景[索引];
+      场景文案.classList.remove('显示');
+      window.setTimeout(() => {
+        场景标签.textContent = 数据.标签;
+        场景标题.textContent = 数据.标题;
+        场景说明.textContent = 数据.说明;
+        场景文案.classList.add('显示');
+      }, 180);
+      功能项.forEach((项目, 项目索引) => 项目.classList.toggle('当前', 项目索引 === 索引));
+    }
+
+    function 刷新() {
+      const 进度比例 = Math.min(当前时间 / 总时长, 1);
+      进度.style.width = `${进度比例 * 100}%`;
+      时间.textContent = 格式时间(当前时间);
+      const 索引 = Math.min(Math.floor(进度比例 * 场景.length), 场景.length - 1);
+      if (!功能项[索引].classList.contains('当前')) 更新场景(索引);
+      if (当前时间 >= 总时长) {
+        播放中 = false;
+        播放.querySelector('.播放符号').textContent = '▶';
+        播放.querySelector('span:last-child').textContent = '再次播放';
+      }
+    }
+
+    function 动画循环(时间戳) {
+      if (!播放中) return;
+      if (!上次时间戳) 上次时间戳 = 时间戳;
+      当前时间 += (时间戳 - 上次时间戳) / 1000;
+      上次时间戳 = 时间戳;
+      if (!背景音乐.paused) 背景音乐.currentTime = 当前时间 % Math.max(背景音乐.duration || 总时长, 1);
+      刷新();
+      动画帧 = requestAnimationFrame(动画循环);
+    }
+
+    function 切换播放() {
+      播放中 = !播放中;
+      if (播放中) {
+        if (当前时间 >= 总时长) 当前时间 = 0;
+        上次时间戳 = 0;
+        背景音乐.play().catch(() => {});
+        播放.querySelector('.播放符号').textContent = 'Ⅱ';
+        播放.querySelector('span:last-child').textContent = '暂停预览';
+        cancelAnimationFrame(动画帧);
+        动画帧 = requestAnimationFrame(动画循环);
+      } else {
+        背景音乐.pause();
+        播放.querySelector('.播放符号').textContent = '▶';
+        播放.querySelector('span:last-child').textContent = '继续预览';
+      }
+    }
+
+    播放.addEventListener('click', 切换播放);
+    重播.addEventListener('click', () => { 当前时间 = 0; 刷新(); if (!播放中) 切换播放(); });
+    功能项.forEach((项目, 索引) => 项目.addEventListener('click', () => { 当前时间 = 索引 * 15; 刷新(); }));
+    音频文件.addEventListener('change', () => {
+      const 文件 = 音频文件.files?.[0];
+      if (!文件) return;
+      背景音乐.src = URL.createObjectURL(文件);
+      音频文字.textContent = `已载入：${文件.name}`;
+      提示.textContent = '已载入本地音频；请确认你拥有公开使用授权。';
+      提示.classList.add('显示');
+      window.setTimeout(() => 提示.classList.remove('显示'), 3600);
+    });
+
+    更新场景(0);
+    window.setTimeout(() => 场景文案.classList.add('显示'), 500);
+    刷新();
+  </script>
+</body>
+</html>
