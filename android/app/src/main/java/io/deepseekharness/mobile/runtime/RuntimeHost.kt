@@ -1,7 +1,10 @@
 package io.deepseekharness.mobile.runtime
 
 import android.content.Context
+import io.deepseekharness.mobile.DeviceBridgeServer
 import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
+import java.security.SecureRandom
+import java.util.Base64
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -34,8 +37,8 @@ interface RuntimeScopedResource {
  *  - 前台服务销毁：仅在没有任何插件订阅者时释放运行时与设备桥。
  *  - 两者都不再持有：调用 [MobileRuntimeController.shutdown]，语义与旧的插件销毁路径一致。
  *
- * 线程模型：本对象的全部状态变更都在 [lock] 内完成，回调与 shutdown 一律在锁外执行，
- * 避免阻塞式关停（最长数秒）与事件分发互相等待。
+ * 线程模型：本对象的状态变更与运行时关停在 [lock] 内串行完成。关停可能持续数秒，
+ * 但这样可以阻止新的 acquire 与旧实例并发，避免旧实例收尾时误杀新实例或提前拆桥。
  */
 object RuntimeHost {
     private val lock = ReentrantLock()
@@ -102,7 +105,6 @@ object RuntimeHost {
                 null
             }
         }
-        released?.shutdown()
         return released != null
     }
 
@@ -117,7 +119,6 @@ object RuntimeHost {
             foregroundServiceActive = false
             if (sinks.isEmpty()) takeControllerLocked() else null
         }
-        released?.shutdown()
         return released != null
     }
 
@@ -136,6 +137,54 @@ object RuntimeHost {
      */
     fun acquireDeviceBridge(create: () -> RuntimeScopedResource): RuntimeScopedResource = lock.withLock {
         deviceBridge ?: create().also { deviceBridge = it }
+    }
+
+    /**
+     * 幂等初始化设备桥，供插件加载与系统启动恢复共用。
+     *
+     * 必须先在 RuntimeHost 锁内登记桥，再由控制器配置运行时，保证恢复服务在
+     * startHarness 前完成端口与令牌注入；桥不可用时抛出受控异常，由调用方降级，
+     * 不阻止 Harness 本身启动。
+     */
+    fun ensureDeviceBridge(controller: MobileRuntimeController): RuntimeScopedResource = lock.withLock {
+        if (this.controller !== controller) {
+            throw RuntimeFailure("RUNTIME_CLOSED", "本机运行时正在关闭")
+        }
+        deviceBridge ?: run {
+            val tokenBytes = ByteArray(32).also(SecureRandom()::nextBytes)
+            val token = Base64.getUrlEncoder().withoutPadding().encodeToString(tokenBytes)
+            tokenBytes.fill(0)
+            val bridge = DeviceBridgeServer(
+                shizuku = controller.terminals.shizuku,
+                runner = deviceCommands(),
+                token = token,
+            )
+            try {
+                bridge.start()
+                controller.configureDeviceBridge(io.deepseekharness.mobile.runtime.DeviceBridgeAccess(bridge.localPort, token))
+                deviceBridge = bridge
+                bridge
+            } catch (error: Throwable) {
+                bridge.stop()
+                throw error
+            }
+        }
+    }
+
+    /**
+     * 由系统恢复入口调用的带身份与启动代次校验的启动包装。
+     *
+     * 代次在本对象锁内读取；服务销毁时先递增代次，再摘除控制器。这样恢复线程即使
+     * 已通过一次身份检查，也会在真正启动前因代次变化而取消，不会拉起孤儿 Harness。
+     */
+    fun startHarness(controller: MobileRuntimeController): RuntimeStateSnapshot {
+        val epoch = lock.withLock {
+            if (this.controller !== controller) {
+                throw RuntimeFailure("RUNTIME_CLOSED", "本机运行时正在关闭")
+            }
+            controller.currentStartEpoch()
+        }
+        return controller.startHarness(epoch)
     }
 
     /** 设备桥实例；未创建时为 null（调用方自行决定是否降级）。 */
@@ -169,7 +218,6 @@ object RuntimeHost {
             foregroundServiceActive = false
             takeControllerLocked()
         }
-        released?.shutdown()
     }
 
     private fun createLocked(context: Context): MobileRuntimeController {
@@ -179,15 +227,18 @@ object RuntimeHost {
     }
 
     /**
-     * 摘除运行时，并一并拆除设备桥与设备命令。
-     * 桥必须在 harness 停止之后再拆：guest 会在运行时存活期间持续使用它。
+     * 串行关停运行时，并在 Harness 停止后拆除设备桥与设备命令。
+     * 此方法只在 [lock] 内调用，确保关停期间不会创建第二个控制器。
      */
     private fun takeControllerLocked(): MobileRuntimeController? {
         val current = controller ?: return null
         // 运行时释放时清空输出尾部登记，避免已结束会话继续驻留内存。
         HarnessOutputTailSource.clear()
-        controller = null
+        // 先取消桥上的等待命令，再停止 Harness；桥要保持到 guest 完全退出后再拆。
+        deviceCommands?.cancelAll()
+        current.shutdown()
         releaseDeviceResourcesLocked()
+        controller = null
         return current
     }
 

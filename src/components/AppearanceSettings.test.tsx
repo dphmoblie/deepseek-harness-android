@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { AppearanceSettings } from './AppearanceSettings'
 import { saveLanguage } from '../i18n'
-import { THEME_COLORS, THEME_STORAGE_KEY } from '../theme'
+import { ACCENT_STORAGE_KEY, THEME_COLORS, THEME_STORAGE_KEY } from '../theme'
 
 type MediaListener = (event: { matches: boolean }) => void
 
@@ -38,6 +38,7 @@ describe('外观设置', () => {
   beforeEach(() => {
     window.localStorage.clear()
     document.documentElement.removeAttribute('data-theme')
+    document.documentElement.removeAttribute('data-accent')
     document.head.innerHTML = `<meta name="theme-color" content="${THEME_COLORS.dark}" />`
     media = installMatchMedia(false)
   })
@@ -66,6 +67,14 @@ describe('外观设置', () => {
     expect(document.documentElement.dataset.theme).toBe('dark')
     expect(themeColor()).toBe(THEME_COLORS.dark)
     expect(screen.getByRole('radio', { name: '深色' })).toBeChecked()
+  })
+
+  it('选择强调色后写入存储并更新 data-accent', () => {
+    render(<AppearanceSettings />)
+    pick('薄荷绿')
+    expect(window.localStorage.getItem(ACCENT_STORAGE_KEY)).toBe('mint')
+    expect(document.documentElement.dataset.accent).toBe('mint')
+    expect(screen.getByRole('radio', { name: '薄荷绿' })).toBeChecked()
   })
 
   it('选择浅色时不跟随系统深色偏好', () => {

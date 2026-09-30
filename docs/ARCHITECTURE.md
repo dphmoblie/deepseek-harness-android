@@ -182,8 +182,9 @@ terminal ready. The public `connected` state is true only when Shizuku is
 running, permission is granted, and that UserService binder is alive. Device
 sessions then start a fixed `/system/bin/sh`. The Capacitor bridge cannot
 choose another executable, add process arguments, or run a background command
-without an open user-visible terminal session. Shizuku supplies shell-level
-privileges, not root or Android hardware virtualization. `healthCheck()` is a
+without an open user-visible terminal session. Shizuku UserService 权限取决于启动模式；应用仍通过
+固定白名单限制命令；文件命令仅能访问投递区 inbox/outbox 的相对路径，采用 128 KiB 小文件上限，
+不提供 Android 硬件虚拟化或通用 Shell。`healthCheck()` is a
 read-only snapshot used for degraded-mode decisions and the background
 keep-alive status line: it never throws, never runs a command, and never logs,
 so it cannot leak credentials or command arguments. Shizuku never influences

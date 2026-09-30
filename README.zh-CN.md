@@ -21,6 +21,8 @@
 
 **DeepSeek Harness 安卓版**可在安卓手机上直接运行完整的 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) 智能体环境——包括 Ubuntu 用户空间、Node.js 以及官方 Harness 网页控制台。设备**无需 Root**：整套 Linux 环境通过 [PRoot](https://github.com/proot-me/proot) 在用户空间内执行，Harness 服务仅监听安卓回环地址，并在禁止外部导航的内置 WebView 中展示。
 
+**项目 QQ 群：** `1108895375`
+
 | | |
 | --- | --- |
 | 应用包名 | `io.deepseekharness.mobile` |

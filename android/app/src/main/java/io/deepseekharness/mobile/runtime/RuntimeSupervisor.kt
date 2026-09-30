@@ -121,8 +121,11 @@ class RuntimeSupervisor(
         deviceBridgeAccess = access
     }
 
-    fun startHarness(): RuntimeStateSnapshot {
-        val startEpoch = startCancellationEpoch.get()
+    fun startHarness(expectedStartEpoch: Long? = null): RuntimeStateSnapshot {
+        val startEpoch = expectedStartEpoch ?: startCancellationEpoch.get()
+        if (expectedStartEpoch != null && startCancellationEpoch.get() != startEpoch) {
+            throw RuntimeFailure(START_CANCELLED_CODE, "Harness 启动已取消")
+        }
         if (!startCancellation.tryBegin()) return status.snapshot()
         try {
             if (startCancellationEpoch.get() != startEpoch) {
@@ -309,6 +312,9 @@ class RuntimeSupervisor(
         startCancellationEpoch.incrementAndGet()
         return startCancellation.request()
     }
+
+    /** 返回启动代次；恢复入口用它把「确认控制器」与「实际启动」连接起来。 */
+    fun currentStartEpoch(): Long = startCancellationEpoch.get()
 
     fun isStarting(): Boolean = startCancellation.isStarting()
 

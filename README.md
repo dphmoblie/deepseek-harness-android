@@ -21,6 +21,8 @@
 
 **DeepSeek Harness for Android** runs the full [DeepSeek Harness](https://github.com/deepseek-ai/dsh) agent environment — an Ubuntu userspace, Node.js, and the official Harness web console — directly on an Android phone. No root is required: the complete Linux environment executes inside [PRoot](https://github.com/proot-me/proot), and Harness is served on Android loopback and displayed in a navigation-restricted internal WebView.
 
+**Community QQ group:** `1108895375`
+
 | | |
 | --- | --- |
 | Application package | `io.deepseekharness.mobile` |
@@ -47,7 +49,7 @@
 
 - **A complete Linux agent environment on your phone.** Ubuntu 24.04 runs on device through PRoot. There is no cloud server, no remote desktop, and no account sign-up: the agent runtime and its web console run locally.
 - **Official Harness web console.** The app packages the official `dsh web` frontend, adapted only for mobile viewport sizing and safe areas. Desktop-oriented DSH web plugins load through the standard Harness plugin loader and receive mobile-friendly layouts.
-- **Works without rooting.** PRoot provides userspace containment on stock devices. An optional [Shizuku](https://shizuku.rikka.app/) integration adds a shell-level device terminal (`/system/bin/sh`) when you choose to authorize it. Shizuku grants Android shell privileges — never root.
+- **Works without rooting.** PRoot provides userspace containment on stock devices. An optional [Shizuku](https://shizuku.rikka.app/) integration adds a device terminal (`/system/bin/sh`) when you choose to authorize it. The effective UserService uid follows the Shizuku startup mode; the app still enforces its fixed command and parameter allowlists and does not expose a general shell.
 - **Self-contained and offline-capable.** The release APK embeds a verified `rootfs.bundle` plus a signed manifest, so the runtime can be installed with no network connection. Remote, digest-pinned runtime sources are also supported.
 - **Tamper-resistant runtime delivery.** Every manifest and rootfs image is verified by exact length and SHA-256 before use; downloads only accept HTTPS destinations, reject private-address DNS answers, resume with HTTP range requests, and extract with path-traversal and device-node protections. Promotion to an active environment is atomic.
 - **Built-in and custom model providers.** Credentials for DeepSeek, OpenAI, Anthropic, Google Gemini, OpenRouter, Groq, xAI, Mistral, and your own OpenAI-compatible endpoints are encrypted with the Android Keystore and injected only into the runtime process. They are never returned to the WebView.

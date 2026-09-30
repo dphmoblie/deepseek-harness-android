@@ -15,6 +15,7 @@ import {
   validateHarnessLog,
   validateKeepAliveState,
   validateMailboxExportResult,
+  validateMailboxDirectoryState,
   validateMailboxImportResult,
   validateMailboxState,
   validateMediaPermissionResult,
@@ -669,6 +670,23 @@ describe('投递区结果校验', () => {
       entryCount: 1, bytes: 1, tarName: '/etc/passwd', tarBytes: 1, tarSha256: 'b'.repeat(64),
       manifestName: 'a.json', skippedLinks: 0, skippedSpecial: 0,
     })).toThrow()
+  })
+
+  it('校验目录快照、相对路径和条目类型', () => {
+    const snapshot = {
+      root: 'outbox',
+      path: 'exports/weekly',
+      entries: [
+        { name: 'reports', kind: 'directory', bytes: 0 },
+        { name: 'result.tar', kind: 'file', bytes: 12 },
+      ],
+      truncated: false,
+    }
+    expect(validateMailboxDirectoryState(snapshot)).toEqual(snapshot)
+    expect(() => validateMailboxDirectoryState({ ...snapshot, root: '/storage/emulated/0' })).toThrow()
+    expect(() => validateMailboxDirectoryState({ ...snapshot, path: '../outside' })).toThrow()
+    expect(() => validateMailboxDirectoryState({ ...snapshot, entries: [{ name: 'a', kind: 'symlink', bytes: 0 }] })).toThrow()
+    expect(() => validateMailboxDirectoryState({ ...snapshot, truncated: 'false' })).toThrow()
   })
 })
 

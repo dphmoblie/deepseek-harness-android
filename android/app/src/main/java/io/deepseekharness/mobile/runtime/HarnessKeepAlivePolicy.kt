@@ -47,6 +47,18 @@ object HarnessKeepAlivePolicy {
         keepRuntimeInBackground && runtimeRunning
 
     /**
+     * 设备启动完成后是否允许重建 Harness。
+     *
+     * 只接受用户显式开启后台保持且上次持久化意图为运行中两项条件；
+     * 不根据残留进程、旧阶段或最近任务状态猜测，避免误启动或重复启动。
+     * 恢复过程会生成新的会话凭据，不尝试复用进程被杀前的临时凭据。
+     */
+    fun shouldRecoverAfterBoot(
+        keepRuntimeInBackground: Boolean,
+        lastIntent: RuntimeIntent,
+    ): Boolean = keepRuntimeInBackground && lastIntent == RuntimeIntent.RUNNING
+
+    /**
      * 插件销毁时是否必须释放共享运行时。
      * 前台服务仍负责运行时时不得立即 shutdown，否则划掉最近任务会终结 Harness。
      */

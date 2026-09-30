@@ -3,7 +3,9 @@ import { t, useLanguage } from './i18n'
 import { PluginSettings } from './components/PluginSettings'
 import { LanguageSettings } from './components/LanguageSettings'
 import { AppearanceSettings } from './components/AppearanceSettings'
-import { lazy, Suspense, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { SessionManager } from './components/SessionManager'
+import { WhaleMark } from './components/WhaleMark'
+import { lazy, Suspense, type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -19,7 +21,10 @@ import {
   Database,
   Download,
   ExternalLink,
+  FileText,
+  Folder,
   FolderInput,
+  FolderPlus,
   FolderOutput,
   Gauge,
   HardDrive,
@@ -43,6 +48,8 @@ import {
   Wifi,
   Wrench,
   X,
+  Blocks,
+  MessageSquare,
 } from 'lucide-react'
 import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import { hasConfiguredModelCredential, MODEL_PROVIDERS } from './modelProviders'
@@ -50,6 +57,7 @@ import { CustomProviders } from './components/CustomProviders'
 import { runtimeBridge } from './platform/native'
 import { readLogInsights } from './logInsights'
 import { validateHarnessPermissionMode } from './harnessPermissionMode'
+import { assertMailboxSubdirectory } from './platform/validation'
 import {
   selfCheckAdvice,
   selfCheckNeedsRepair,
@@ -63,10 +71,13 @@ import {
 import type {
   DiagnosticLogState,
   DiagnosticLogText,
+  AccessibilityAutomationState,
   HarnessLog,
   KeepAliveState,
+  MailboxDirectoryState,
   MailboxExportResult,
   MailboxImportResult,
+  MailboxRoot,
   MailboxState,
   ModelProviderId,
   OverlayBallState,
@@ -98,6 +109,7 @@ const TerminalPanel = lazy(() => import('./components/TerminalPanel').then(modul
 
 type AppView =
   | 'conversation'
+  | 'sessions'
   | 'settings'
   | 'settings-models'
   | 'settings-runtime'
@@ -138,6 +150,7 @@ function isSettingsView(view: AppView): boolean {
 /** 外壳视图的全部取值：历史状态与地址片段只接受这里的值，其余一律回落到主视图。 */
 const APP_VIEWS: AppView[] = [
   'conversation',
+  'sessions',
   'settings',
   'settings-models',
   'settings-runtime',
@@ -567,6 +580,61 @@ function Brand() {
       <span className="brand-name">deepseek</span>
       <span className="brand-badge">HARNESS</span>
     </div>
+  )
+}
+
+const EMPTY_ACCESSIBILITY: AccessibilityAutomationState = {
+  enabled: false,
+  allowedPackages: [],
+}
+
+interface AppSidebarProps {
+  activeView: AppView
+  onNavigate: (view: AppView) => void
+}
+
+/**
+ * 外壳导航轨道：窄屏保留图标，宽屏显示文字。
+ *
+ * 入口只负责切换外壳视图，真正的 Harness 会话仍由运行时页面管理；
+ * 因此侧栏不会把会话正文、凭据或终端输出放进 DOM。
+ */
+function AppSidebar({ activeView, onNavigate }: AppSidebarProps) {
+  const settingsActive = isSettingsView(activeView) || activeView === 'plugins' || activeView === 'environment' || activeView === 'terminal'
+  const item = (view: AppView, label: string, icon: ReactNode, active: boolean, className = '') => (
+    <button
+      className={`sidebar-item ${active ? 'is-active' : ''} ${className}`}
+      type="button"
+      aria-label={t(label)}
+      aria-current={active ? 'page' : undefined}
+      title={t(label)}
+      onClick={() => onNavigate(view)}
+    >
+      {icon}<span>{t(label)}</span>
+    </button>
+  )
+
+  return (
+    <aside className="app-sidebar" aria-label={t('应用导航')}>
+      <button
+        className={`sidebar-whale ${activeView === 'sessions' ? 'is-active' : ''}`}
+        type="button"
+        aria-label={t('会话管理')}
+        aria-current={activeView === 'sessions' ? 'page' : undefined}
+        title={t('会话管理')}
+        onClick={() => onNavigate('sessions')}
+      >
+        <WhaleMark size={26} />
+        <span>{t('会话')}</span>
+      </button>
+      <nav className="sidebar-nav">
+        {item('conversation', '对话', <MessageSquare size={20} />, activeView === 'conversation')}
+        {item('plugins', '插件管理', <Blocks size={20} />, activeView === 'plugins')}
+      </nav>
+      <div className="sidebar-bottom">
+        {item('settings', '应用设置', <Settings2 size={20} />, settingsActive)}
+      </div>
+    </aside>
   )
 }
 
@@ -1929,6 +1997,9 @@ interface SettingsScreenProps {
   /** 外置投递区状态；null 表示尚未读到快照。 */
   mailbox: MailboxState | null
   mailboxReadFailed: boolean
+  /** 当前选中的投递区根目录与目录快照。 */
+  mailboxDirectory: MailboxDirectoryState | null
+  mailboxDirectoryReadFailed: boolean
   /** 存储访问状态（T1 媒体只读 / T2 所有文件访问）；null 表示尚未读到。 */
   storageAccess: StorageAccessState | null
   /** 目录白名单（访客内 `/mnt/user/<序号>` 的唯一来源）；null 表示尚未读到快照。 */
@@ -1943,6 +2014,9 @@ interface SettingsScreenProps {
   lastMailboxExport: MailboxExportResult | null
   onExportMailbox: () => void
   onImportMailbox: () => void
+  onMailboxRootChange: (root: MailboxRoot) => void
+  onOpenMailboxDirectory: (path?: string) => void
+  onCreateMailboxFolder: () => void
   /** 跳转到系统「所有文件访问」设置页（投递区的唯一解锁入口）。 */
   onOpenAllFilesAccess: () => void
   onRefreshMailbox: () => void
@@ -1966,6 +2040,7 @@ interface SettingsScreenProps {
   /** 顶部提示条；版本切换与删除的结果用它回报。 */
   notify: (message: string, tone: NoticeTone) => void
   shizuku: ShizukuState
+  accessibility: AccessibilityAutomationState
   onAuthorize: () => void
   onBack: () => void
   onClearDiagnostic: () => void
@@ -1982,13 +2057,21 @@ interface SettingsScreenProps {
   /** 跳转到系统「显示在其他应用上层」设置页；权限只能由用户手动开启。 */
   onOpenOverlaySettings: () => void
   onOpenShizuku: () => void
+  onOpenAccessibilitySettings: () => void
+  onSaveAccessibilityPackages: (packages: string[]) => void
   onRequestNotificationPermission: () => void
   onReloadSettings: () => void
   onSave: (settings: RuntimeSettingsUpdate) => void
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport, lastMailboxImport, loadDiagnosticLog, loadHarnessLog, loadRuntimeVersions, switchRuntimeVersion, deleteRuntimeVersion, refreshRuntime, notify, lastStop, mailbox, mailboxReadFailed, overlayBall, overlayBallReadFailed, storageAccess, storageDirs, storageDirsReadFailed, onAddStorageDirectory, onDraftChange, onExportMailbox, onImportMailbox, onOpenAllFilesAccess, onRefreshMailbox, onRemoveStorageDirectory, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, lastMailboxExport, lastMailboxImport, loadDiagnosticLog, loadHarnessLog, loadRuntimeVersions, switchRuntimeVersion, deleteRuntimeVersion, refreshRuntime, notify, lastStop, mailbox, mailboxReadFailed, mailboxDirectory, mailboxDirectoryReadFailed, overlayBall, overlayBallReadFailed, storageAccess, storageDirs, storageDirsReadFailed, onAddStorageDirectory, onDraftChange, onExportMailbox, onImportMailbox, onMailboxRootChange, onOpenMailboxDirectory, onCreateMailboxFolder, onOpenAllFilesAccess, onRefreshMailbox, onRemoveStorageDirectory, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onSaveAccessibilityPackages, onShareDiagnostic }: SettingsScreenProps) {
+  const accessibilityPackagesInput = useRef<HTMLTextAreaElement | null>(null)
+  useEffect(() => {
+    if (accessibilityPackagesInput.current !== null) {
+      accessibilityPackagesInput.current.value = accessibility.allowedPackages.join('\n')
+    }
+  }, [accessibility.allowedPackages])
   if (settingsReadStatus === 'failed') {
     return <div className="screen loading-screen">
       <p role="alert">{t("无法读取最新设置，请重试")}</p>
@@ -2515,6 +2598,72 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport,
                 </p>
               )}
 
+              <div className="mailbox-browser" aria-label={t("投递区文件夹管理")}>
+                <div className="mailbox-browser-heading">
+                  <div>
+                    <strong>{t("文件夹管理")}</strong>
+                    <span>{t("按 inbox / outbox 与子目录分类浏览投递文件")}</span>
+                  </div>
+                  <button className="button button-secondary mailbox-create-button" type="button" onClick={onCreateMailboxFolder}
+                    disabled={busy !== null || mailbox.available !== true}>
+                    {busy === 'mailbox-folder-create' ? <Loader2 className="spin" size={17} /> : <FolderPlus size={17} />}
+                    {t("新建文件夹")}
+                  </button>
+                </div>
+                <div className="mailbox-root-tabs" role="tablist" aria-label={t("投递区根目录")}>
+                  <button className={`mailbox-root-tab ${mailboxDirectory?.root === 'inbox' ? 'active' : ''}`} type="button" role="tab"
+                    aria-selected={mailboxDirectory?.root === 'inbox'} onClick={() => onMailboxRootChange('inbox')}
+                    disabled={busy !== null || mailbox.available !== true}>
+                    <Folder size={16} />{t("inbox · 用户放入")}
+                  </button>
+                  <button className={`mailbox-root-tab ${mailboxDirectory?.root === 'outbox' ? 'active' : ''}`} type="button" role="tab"
+                    aria-selected={mailboxDirectory?.root === 'outbox'} onClick={() => onMailboxRootChange('outbox')}
+                    disabled={busy !== null || mailbox.available !== true}>
+                    <Folder size={16} />{t("outbox · 产物取出")}
+                  </button>
+                </div>
+                {mailboxDirectoryReadFailed && (
+                  <p className="settings-note" role="alert">{t("无法读取当前投递目录，请重试")}</p>
+                )}
+                {mailboxDirectory !== null && !mailboxDirectoryReadFailed && (
+                  <>
+                    <nav className="mailbox-breadcrumb" aria-label={t("当前投递目录")}>
+                      <button type="button" onClick={() => onOpenMailboxDirectory()} disabled={busy !== null}>
+                        {mailboxDirectory.root}
+                      </button>
+                      {(mailboxDirectory.path?.split('/') ?? []).map((segment, index, segments) => {
+                        const path = segments.slice(0, index + 1).join('/')
+                        return <span key={path} className="mailbox-breadcrumb-segment">
+                          <ChevronRight size={14} aria-hidden="true" />
+                          <button type="button" onClick={() => onOpenMailboxDirectory(path)} disabled={busy !== null}>{segment}</button>
+                        </span>
+                      })}
+                    </nav>
+                    {mailboxDirectory.entries.length === 0 && (
+                      <p className="settings-note">{t("当前目录为空")}</p>
+                    )}
+                    {mailboxDirectory.entries.length > 0 && (
+                      <div className="mailbox-entry-list" role="list">
+                        {mailboxDirectory.entries.map(entry => {
+                          const nextPath = mailboxDirectory.path ? `${mailboxDirectory.path}/${entry.name}` : entry.name
+                          return entry.kind === 'directory'
+                            ? <button className="mailbox-entry mailbox-entry-directory" key={entry.name} type="button" role="listitem"
+                              onClick={() => onOpenMailboxDirectory(nextPath)} disabled={busy !== null}>
+                              <Folder size={17} /><span>{entry.name}</span><ChevronRight size={15} />
+                            </button>
+                            : <div className="mailbox-entry mailbox-entry-file" key={entry.name} role="listitem">
+                              <FileText size={17} /><span>{entry.name}</span><small>{formatBytes(entry.bytes)}</small>
+                            </div>
+                        })}
+                      </div>
+                    )}
+                    {mailboxDirectory.truncated && (
+                      <p className="settings-note">{t("当前目录条目较多，仅显示前 {0} 项；请进入子目录继续浏览。", mailboxDirectory.entries.length)}</p>
+                    )}
+                  </>
+                )}
+              </div>
+
               {/*
                 不可用说明刻意**不带 role="alert"**：它是这一页的常驻内容，不是用户操作后
                 才出现的时效性提示；设置页里真正该被播报的是那些随操作出现的警告。
@@ -2539,7 +2688,8 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport,
             <button className="button button-secondary" type="button" onClick={onImportMailbox} disabled={busy !== null || mailbox?.available !== true}>
               {busy === 'mailbox-import' ? <Loader2 className="spin" size={18} /> : <FolderInput size={18} />}{t("导入到工作区")}</button>
             <button className="button button-secondary" type="button" onClick={onExportMailbox} disabled={busy !== null || mailbox?.available !== true}>
-              {busy === 'mailbox-export' ? <Loader2 className="spin" size={18} /> : <FolderOutput size={18} />}{t("导出工作区")}</button>
+              {busy === 'mailbox-export' ? <Loader2 className="spin" size={18} /> : <FolderOutput size={18} />}
+              {mailboxDirectory?.root === 'outbox' && mailboxDirectory.path ? t("导出到当前目录") : t("导出工作区")}</button>
             {mailbox !== null && mailbox.supported && !mailbox.granted && (
               <button className="button button-secondary" type="button" onClick={onOpenAllFilesAccess} disabled={busy !== null}>
                 <ShieldCheck size={18} />{t("去开启「所有文件访问」")}</button>
@@ -2553,6 +2703,9 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport,
               <p className="settings-note">
                 {t("导入落点是工作区内的 {0}/ 子目录；导出固定产出 {1} + {2} + {3}（含逐条 sha256）。", mailbox.importDirectory, mailbox.exportTarName, mailbox.exportManifestName, `${mailbox.exportTarName}.sha256`)}
               </p>
+              {mailboxDirectory?.root === 'outbox' && mailboxDirectory.path && (
+                <p className="settings-note">{t("当前导出目标：outbox/{0}", mailboxDirectory.path)}</p>
+              )}
               {storageAccess !== null && (
                 <p className="settings-note">
                   {t("存储权限：媒体读取（T1）{0} · 所有文件访问（T2）{1}。投递区需要 T2。", storageAccess.mediaGranted ? t("已授予") : t("未授予"), storageAccess.allFilesSupported ? (storageAccess.allFilesGranted ? t("已授予") : t("未授予")) : t("系统不支持"))}
@@ -2739,8 +2892,43 @@ function SettingsScreen({ busy, diagnostic, draft, keepAlive, lastMailboxExport,
             )}
           </div>
           <p className="settings-note">
-            {t("Shizuku 只用于设备 Shell 的授权与连接状态检测、连接恢复辅助和健康检查；它不是 root，也不提供永久保活能力。未安装、未授权或断开时，设备 Shell 功能自动降级，不影响 Ubuntu 终端与 Harness。")}
+            {t("Shizuku 只用于设备 Shell 的授权与连接状态检测、连接恢复辅助和健康检查；实际权限取决于 Shizuku 的启动模式，应用始终只开放固定命令白名单，也不提供永久保活能力。未安装、未授权或断开时，设备 Shell 功能自动降级，不影响 Ubuntu 终端与 Harness。")}
           </p>
+          <div className="settings-subsection" aria-labelledby="accessibility-automation-settings">
+            <div className="section-title section-title-action">
+              <span className="section-icon"><Bot size={19} /></span>
+              <div><h3 id="accessibility-automation-settings">{t("无障碍应用自动化")}</h3><p>{t("读取白名单应用的界面并执行受控动作")}</p></div>
+              <span className={`status-chip ${accessibility.enabled ? 'success' : ''}`}>{accessibility.enabled ? t("服务已开启") : t("需要手动开启")}</span>
+            </div>
+            <p className="settings-note">
+              {t("只允许你列出的第三方应用。锁屏、系统设置、权限、支付、验证码和密码页面会被原生层拒绝；服务必须由你在系统无障碍设置中手动开启。")}
+            </p>
+            <label className="field">
+              <span>{t("目标应用包名（每行一个，最多 16 个）")}</span>
+              <textarea
+                ref={accessibilityPackagesInput}
+                defaultValue={accessibility.allowedPackages.join('\n')}
+                onChange={event => { if (event.target.value.length > 2800) event.target.value = event.target.value.slice(0, 2800) }}
+                rows={Math.min(8, Math.max(3, accessibility.allowedPackages.length + 2))}
+                maxLength={2800}
+                spellCheck={false}
+                placeholder="com.example.reader\ncom.example.notes"
+                aria-label={t("目标应用包名")}
+              />
+            </label>
+            <div className="settings-inline-actions">
+              <button className="button button-secondary" type="button" onClick={() => {
+                const packages = (accessibilityPackagesInput.current?.value ?? '').split(/[\n,]/u).map(value => value.trim()).filter(Boolean)
+                onSaveAccessibilityPackages([...new Set(packages)])
+              }} disabled={busy !== null}>
+                <Save size={18} />{t("保存白名单")}
+              </button>
+              <button className="button button-secondary" type="button" onClick={onOpenAccessibilitySettings} disabled={busy !== null}>
+                <ExternalLink size={18} />{t("打开系统无障碍设置")}
+              </button>
+            </div>
+            <p className="settings-note">{t("当前白名单：{0}", accessibility.allowedPackages.length ? accessibility.allowedPackages.join("、") : t("未配置"))}</p>
+          </div>
         </section>
         )}
 
@@ -2936,6 +3124,7 @@ export function App() {
    */
   const settingsDraftDirty = useRef(false)
   const [shizuku, setShizuku] = useState<ShizukuState>(EMPTY_SHIZUKU)
+  const [accessibility, setAccessibility] = useState<AccessibilityAutomationState>(EMPTY_ACCESSIBILITY)
   const [keepAlive, setKeepAlive] = useState<KeepAliveState>(EMPTY_KEEP_ALIVE)
   // 查询失败与「没有权限」分开记录，保留最近一次快照供开关关闭操作使用。
   const [overlayBall, setOverlayBall] = useState<OverlayBallState | null>(null)
@@ -2946,6 +3135,10 @@ export function App() {
    * [mailboxReadFailed] 单独记录读取失败，避免把「读取失败」显示成「投递区不可用」。
    */
   const [mailbox, setMailbox] = useState<MailboxState | null>(null)
+  const [mailboxDirectory, setMailboxDirectory] = useState<MailboxDirectoryState | null>(null)
+  const [mailboxDirectoryReadFailed, setMailboxDirectoryReadFailed] = useState(false)
+  const [mailboxRoot, setMailboxRoot] = useState<MailboxRoot>('inbox')
+  const [mailboxPath, setMailboxPath] = useState<string | undefined>(undefined)
   const [storageAccess, setStorageAccess] = useState<StorageAccessState | null>(null)
   /**
    * 目录白名单（访客内 `/mnt/user/<序号>` 的唯一来源）。与投递区同一套口径：
@@ -2956,6 +3149,7 @@ export function App() {
   const [mailboxReadFailed, setMailboxReadFailed] = useState(false)
   const [storageDirsReadFailed, setStorageDirsReadFailed] = useState(false)
   const mailboxReadRevision = useRef(0)
+  const mailboxDirectoryReadRevision = useRef(0)
   /**
    * 本次会话内最近一次导入/导出的结果。
    *
@@ -3081,6 +3275,24 @@ export function App() {
         setMailboxReadFailed(true)
         setStorageDirsReadFailed(true)
       }
+      throw error
+    }
+  }, [])
+
+  /** 读取固定投递区根目录下的当前子目录；只接受桥接层返回的受控快照。 */
+  const readMailboxDirectory = useCallback(async (root: MailboxRoot, subdirectory?: string): Promise<MailboxDirectoryState> => {
+    const revision = ++mailboxDirectoryReadRevision.current
+    try {
+      const next = await runtimeBridge.getMailboxDirectory(root, subdirectory)
+      if (revision === mailboxDirectoryReadRevision.current) {
+        setMailboxDirectory(next)
+        setMailboxRoot(next.root)
+        setMailboxPath(next.path)
+        setMailboxDirectoryReadFailed(false)
+      }
+      return next
+    } catch (error) {
+      if (revision === mailboxDirectoryReadRevision.current) setMailboxDirectoryReadFailed(true)
       throw error
     }
   }, [])
@@ -3252,6 +3464,20 @@ export function App() {
         // Shizuku is optional and must never block the Harness conversation.
       })
 
+    void runtimeBridge.getAccessibilityAutomationState()
+      .then(next => {
+        if (!cancelled) setAccessibility(previous => (
+          previous.enabled === next.enabled &&
+          previous.allowedPackages.length === next.allowedPackages.length &&
+          previous.allowedPackages.every((value, index) => value === next.allowedPackages[index])
+            ? previous
+            : next
+        ))
+      })
+      .catch(() => {
+        // 无障碍是可选能力；读取失败时保持关闭且不阻塞 Harness。
+      })
+
     void runtimeBridge.getKeepAliveState()
       .then(next => { if (!cancelled) setKeepAlive(next) })
       .catch(() => {
@@ -3264,6 +3490,11 @@ export function App() {
       })
 
     void readMailbox()
+      .then(next => {
+        if (next.available) void readMailboxDirectory('inbox').catch(() => {
+          // 目录浏览失败只影响文件夹列表；投递区状态本身已读取成功。
+        })
+      })
       .catch(() => {
         // 投递区属于可选能力（无存储权限时是预期降级），错误由设置页单独显示。
       })
@@ -3279,7 +3510,7 @@ export function App() {
       if (removeProgress !== undefined) void removeProgress()
       void progressHandlePromise
     }
-  }, [noteLivePhase, notify, readMailbox, readOverlayBall])
+  }, [noteLivePhase, notify, readMailbox, readMailboxDirectory, readOverlayBall])
 
   useEffect(() => {
     let cancelled = false
@@ -3307,6 +3538,20 @@ export function App() {
         .then(next => {
           // 值没变就返回上一个引用：React 据此跳过本次更新（连同整棵视图的渲染）。
           if (!cancelled) setShizuku(previous => (sameSnapshot(previous, next) ? previous : next))
+        })
+        .catch(error => { if (!cancelled && reportError) notify(errorMessage(error), 'error') })
+    }
+    const refreshAccessibility = (reportError = false): Promise<void> => {
+      if (document.visibilityState === 'hidden') return Promise.resolve()
+      return runtimeBridge.getAccessibilityAutomationState()
+        .then(next => {
+          if (!cancelled) setAccessibility(previous => (
+            previous.enabled === next.enabled &&
+            previous.allowedPackages.length === next.allowedPackages.length &&
+            previous.allowedPackages.every((value, index) => value === next.allowedPackages[index])
+              ? previous
+              : next
+          ))
         })
         .catch(error => { if (!cancelled && reportError) notify(errorMessage(error), 'error') })
     }
@@ -3373,7 +3618,7 @@ export function App() {
       if (backgroundRefreshInFlight.current && !stale) return
       backgroundRefreshInFlight.current = true
       backgroundRefreshStartedAt.current = now
-      void Promise.allSettled([refreshShizuku(false), refreshKeepAlive(), refreshOverlayBall()])
+      void Promise.allSettled([refreshShizuku(false), refreshAccessibility(), refreshKeepAlive(), refreshOverlayBall()])
         .then(() => { backgroundRefreshInFlight.current = false })
     }
     const startPolling = (): void => {
@@ -3391,6 +3636,7 @@ export function App() {
       if (document.visibilityState === 'visible') {
         refreshSettings()
         void refreshShizuku()
+        void refreshAccessibility()
         void refreshKeepAlive()
         void refreshOverlayBall()
         refreshMailbox()
@@ -3403,6 +3649,7 @@ export function App() {
     const handleFocus = (): void => {
       refreshSettings()
       void refreshShizuku()
+      void refreshAccessibility()
       void refreshKeepAlive()
       void refreshOverlayBall()
     }
@@ -3787,6 +4034,17 @@ export function App() {
     void run('open-shizuku', () => runtimeBridge.openShizuku())
   }, [run])
 
+  const openAccessibilitySettings = useCallback(() => {
+    void run('open-accessibility-settings', () => runtimeBridge.openAccessibilitySettings())
+  }, [run])
+
+  const saveAccessibilityPackages = useCallback((packages: string[]) => {
+    void run('save-accessibility-packages', async () => {
+      const next = await runtimeBridge.setAccessibilityAutomationPackages(packages)
+      setAccessibility(next)
+    }, t("无障碍应用白名单已保存"))
+  }, [run])
+
   /**
    * 跳转到系统「显示在其他应用上层」设置页。
    *
@@ -3832,13 +4090,59 @@ export function App() {
   /** 一键导出：工作区 → outbox 的 tar + manifest + sha256；同样必须由用户点击触发。 */
   const exportMailbox = useCallback(() => {
     void run('mailbox-export', async () => {
-      const result = await runtimeBridge.exportMailbox()
+      const destinationDirectory = mailboxRoot === 'outbox' ? mailboxPath : undefined
+      const result = await runtimeBridge.exportMailbox(undefined, destinationDirectory)
       setLastMailboxExport(result)
       await readMailbox().catch(() => {
         // 搬运已成功；状态重读失败不影响结果展示。
       })
+      if (mailboxRoot === 'outbox') await readMailboxDirectory(mailboxRoot, mailboxPath).catch(() => {
+        // 产物已导出；列表重读失败可由用户手动刷新。
+      })
     }, t("投递区已导出到 outbox"))
-  }, [readMailbox, run])
+  }, [mailboxPath, mailboxRoot, readMailbox, readMailboxDirectory, run])
+
+  /** 切换投递区根目录；根目录切换不会触碰文件，只重新读取受控目录快照。 */
+  const changeMailboxRoot = useCallback((root: MailboxRoot) => {
+    if (root !== 'inbox' && root !== 'outbox') return
+    setMailboxRoot(root)
+    setMailboxPath(undefined)
+    void run('mailbox-directory', async () => {
+      await readMailboxDirectory(root)
+    })
+  }, [readMailboxDirectory, run])
+
+  /** 打开投递区子目录；路径由桥接层与原生 RuntimeMailboxPolicy 再次校验。 */
+  const openMailboxDirectory = useCallback((path?: string) => {
+    void run('mailbox-directory', async () => {
+      await readMailboxDirectory(mailboxRoot, path)
+    })
+  }, [mailboxRoot, readMailboxDirectory, run])
+
+  /** 在当前目录创建一个新文件夹；创建前要求用户明确输入名称，避免静默写入公共存储。 */
+  const createMailboxFolder = useCallback(() => {
+    if (busyRef.current !== null || mailbox?.available !== true) return
+    const raw = window.prompt(t("请输入新文件夹名称（仅支持单层名称）"))
+    if (raw === null) return
+    const name = raw.trim()
+    const target = mailboxPath ? `${mailboxPath}/${name}` : name
+    try {
+      const normalized = assertMailboxSubdirectory(target)
+      if (normalized === undefined || normalized.split('/').length !== (mailboxPath ? mailboxPath.split('/').length + 1 : 1)) {
+        throw new Error('投递区文件夹名称格式无效')
+      }
+    } catch (error) {
+      notify(errorMessage(error), 'error')
+      return
+    }
+    void run('mailbox-folder-create', async () => {
+      const next = await runtimeBridge.createMailboxFolder(mailboxRoot, target)
+      setMailboxDirectory(next)
+      setMailboxRoot(next.root)
+      setMailboxPath(next.path)
+      setMailboxDirectoryReadFailed(false)
+    }, t("投递区文件夹已创建"))
+  }, [mailbox, mailboxPath, mailboxRoot, notify, run])
 
   /** 重新检查投递区可用性：用户在系统设置里授权后手动触发，避免反复进出页面。 */
   const refreshMailbox = useCallback(() => {
@@ -3894,6 +4198,8 @@ export function App() {
     switch (activeView) {
       case 'conversation':
         return <ConversationScreen busy={busy} keepAlive={keepAlive} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} onOpenTerminal={() => setActiveView('terminal')} onUpdate={requestRuntimeUpdate} />
+      case 'sessions':
+        return <SessionManager onBack={() => backToView('conversation')} onOpenHarness={launchHarness} />
       case 'terminal':
         return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
       case 'plugins':
@@ -3905,7 +4211,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} loadRuntimeVersions={loadRuntimeVersions} switchRuntimeVersion={switchRuntimeVersion} deleteRuntimeVersion={deleteRuntimeVersion} refreshRuntime={refreshRuntimeState} notify={notify} mailbox={mailbox} mailboxReadFailed={mailboxReadFailed} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} storageAccess={storageAccess} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onDraftChange={updateSettingsDraft} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} loadRuntimeVersions={loadRuntimeVersions} switchRuntimeVersion={switchRuntimeVersion} deleteRuntimeVersion={deleteRuntimeVersion} refreshRuntime={refreshRuntimeState} notify={notify} mailbox={mailbox} mailboxReadFailed={mailboxReadFailed} mailboxDirectory={mailboxDirectory} mailboxDirectoryReadFailed={mailboxDirectoryReadFailed} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} storageAccess={storageAccess} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onDraftChange={updateSettingsDraft} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onMailboxRootChange={changeMailboxRoot} onOpenMailboxDirectory={openMailboxDirectory} onCreateMailboxFolder={createMailboxFolder} onOpenAllFilesAccess={openAllFilesAccessSettings} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()
@@ -3926,19 +4232,22 @@ export function App() {
 
   return (
     <div className="app-shell management-shell">
-      <header className="mobile-header">
-        <Brand />
-        <div className="header-actions">
-          <PhaseBadge phase={runtime.phase} />
-          {activeView === 'conversation' && (
-            <button className="icon-button header-settings" type="button" aria-label={t("打开应用设置")} title={t("应用设置")} onClick={() => setActiveView('settings')}>
-              <Settings2 size={19} />
-            </button>
-          )}
-        </div>
-      </header>
+      <AppSidebar activeView={activeView} onNavigate={setActiveView} />
+      <div className="app-frame">
+        <header className="mobile-header">
+          <Brand />
+          <div className="header-actions">
+            <PhaseBadge phase={runtime.phase} />
+            {activeView === 'conversation' && (
+              <button className="icon-button header-settings" type="button" aria-label={t("打开应用设置")} title={t("应用设置")} onClick={() => setActiveView('settings')}>
+                <Settings2 size={19} />
+              </button>
+            )}
+          </div>
+        </header>
 
-      <main className="app-main">{screen}</main>
+        <main className="app-main">{screen}</main>
+      </div>
 
       {resetOpen && <ResetDialog busy={busy === 'reset'} onCancel={() => setResetOpen(false)} onConfirm={confirmReset} />}
       {updateOpen && <UpdateDialog busy={busy === 'update-runtime'} onCancel={() => setUpdateOpen(false)} onConfirm={confirmRuntimeUpdate} />}

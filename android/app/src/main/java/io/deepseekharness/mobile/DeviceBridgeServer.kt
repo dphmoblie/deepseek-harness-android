@@ -3,8 +3,10 @@ package io.deepseekharness.mobile
 import io.deepseekharness.mobile.runtime.RuntimeFailure
 import io.deepseekharness.mobile.runtime.RuntimeScopedResource
 import io.deepseekharness.mobile.shizuku.DeviceCommand
+import io.deepseekharness.mobile.shizuku.DeviceFilePolicy
 import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
 import io.deepseekharness.mobile.shizuku.ShizukuRuntime
+import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
 import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -25,7 +27,7 @@ import java.security.MessageDigest
 /**
  * 设备命令桥：把容器内 dsh 的工具调用转成宿主 Shizuku 执行。
  *
- * 容器内 agent 通过 dsh-device screenshot|uiDump|tap|inputText [param] 调用
+ * 容器内 agent 通过 dsh-device 的固定白名单命令调用；文件命令只允许投递区 inbox/outbox 的相对路径。
  * http://127.0.0.1:<动态端口>/device-command（容器与宿主共享 loopback）。
  * 桥按白名单命令执行：自动创建一次性设备 Shell 会话 -> DeviceCommandRunner -> 关闭。
  * 认证：Bearer token（App 生成并注入容器环境 DSH_DEVICE_BRIDGE_TOKEN）。
@@ -146,7 +148,7 @@ class DeviceBridgeServer(
                             }
                             "content-length" -> {
                                 if (contentLength != 0) throw RuntimeFailure("DEVICE_REQUEST_INVALID", "设备桥请求长度重复")
-                                contentLength = value.toIntOrNull()?.takeIf { it in 1..16_384 }
+                                contentLength = value.toIntOrNull()?.takeIf { it in 1..MAX_REQUEST_BODY_BYTES }
                                     ?: throw RuntimeFailure("DEVICE_REQUEST_INVALID", "设备桥请求长度无效")
                             }
                             "transfer-encoding" -> throw RuntimeFailure("DEVICE_REQUEST_INVALID", "设备桥不支持分块请求")
@@ -163,7 +165,24 @@ class DeviceBridgeServer(
                         ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令格式无效")
                     val param = parsed.opt("param") as? String
                         ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备参数格式无效")
-                    if (commandName.length > 32 || param.length > 1024) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备参数过长")
+                    if (commandName.length > 32 || param.length > DeviceFilePolicy.MAX_PARAM_CHARS) {
+                        throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备参数过长")
+                    }
+                    // 无障碍命令不经过 Shell：由用户手动开启的服务在原生侧再次校验
+                    // 白名单、前台包名、锁屏状态、敏感窗口和动作频率。
+                    if (commandName == "accessibilityTree" || commandName == "accessibilityAction") {
+                        val service = DeepSeekAccessibilityService.current()
+                        val result = service?.execute(commandName, param)
+                            ?: io.deepseekharness.mobile.shizuku.DeviceCommandResult(
+                                ok = false,
+                                exitCode = 1,
+                                text = "请先在系统设置中手动开启 Harness 无障碍服务",
+                                truncated = false,
+                                errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
+                            )
+                        respondResult(output, result)
+                        return
+                    }
                     val command = DeviceCommand.fromName(commandName)
                         ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令不支持")
                     val sessionId = shizuku.create(
@@ -205,8 +224,18 @@ class DeviceBridgeServer(
         }
     }
 
+    private fun respondResult(output: BufferedOutputStream, result: io.deepseekharness.mobile.shizuku.DeviceCommandResult) {
+        val errorJson = result.errorCode?.let { JSONObject.quote(it) } ?: "null"
+        val textJson = JSONObject.quote(result.text)
+        respond(
+            output,
+            200,
+            "{\"ok\":" + result.ok + ",\"exitCode\":" + result.exitCode + ",\"text\":" + textJson + ",\"truncated\":" + result.truncated + ",\"errorCode\":" + errorJson + "}",
+        )
+    }
+
     private fun readBody(input: BufferedInputStream, contentLength: Int): String {
-        if (contentLength !in 1..16_384) throw RuntimeFailure("DEVICE_REQUEST_INVALID", "设备桥请求长度无效")
+        if (contentLength !in 1..MAX_REQUEST_BODY_BYTES) throw RuntimeFailure("DEVICE_REQUEST_INVALID", "设备桥请求长度无效")
         val buffer = ByteArrayOutputStream()
         val chunk = ByteArray(8192)
         var remaining = contentLength
@@ -253,5 +282,7 @@ class DeviceBridgeServer(
         private const val STOP_WAIT_MILLIS = 500L
         private const val DEFAULT_COLUMNS = 80
         private const val DEFAULT_ROWS = 24
+        /** 文件上传包含 Base64；仍保持一个受控上限，避免把桥变成无限内存入口。 */
+        private const val MAX_REQUEST_BODY_BYTES = 200_000
     }
 }

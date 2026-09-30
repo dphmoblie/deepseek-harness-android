@@ -121,6 +121,7 @@ describe('browser settings bridge', () => {
     await expect(bridge.exportMailbox()).rejects.toThrow('浏览器预览不支持导出投递区')
     // 非法导出起点在离开前端之前就被拒绝（同步抛错，与平台层其他入参校验同构）。
     expect(() => bridge.exportMailbox('../outside')).toThrow('投递区导出起点格式无效')
+    expect(() => bridge.exportMailbox(undefined, '../outside')).toThrow('投递区导出起点格式无效')
   })
 
   it('浏览器预览的目录白名单如实报「空且不可用」，不编造条目', async () => {

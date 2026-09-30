@@ -20,16 +20,18 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import io.deepseekharness.mobile.overlay.OverlayBallPolicy
+import io.deepseekharness.mobile.accessibility.AccessibilityAutomationStore
 import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
 import io.deepseekharness.mobile.runtime.HarnessPermissionMode
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
 import io.deepseekharness.mobile.runtime.clampHarnessTailBytes
 import io.deepseekharness.mobile.runtime.MailboxExportOutcome
+import io.deepseekharness.mobile.runtime.MailboxDirectoryEntry
+import io.deepseekharness.mobile.runtime.MailboxDirectoryState
 import io.deepseekharness.mobile.runtime.TaskNotification
 import io.deepseekharness.mobile.runtime.MailboxImportOutcome
 import io.deepseekharness.mobile.runtime.MailboxState
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
-import io.deepseekharness.mobile.runtime.DeviceBridgeAccess
 import io.deepseekharness.mobile.runtime.RuntimeEventSink
 import io.deepseekharness.mobile.runtime.RuntimeFailure
 import io.deepseekharness.mobile.runtime.RuntimeHost
@@ -68,8 +70,6 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.ReentrantLock
-import java.security.SecureRandom
-import java.util.Base64
 import java.io.File
 import java.io.BufferedInputStream
 import java.io.FileOutputStream
@@ -106,6 +106,24 @@ internal fun optionalMailboxSubdirectory(data: JSONObject): String? {
     val value = data.opt("subdirectory")
     if (value == null || value == JSONObject.NULL) return null
     if (value !is String) throw RuntimeFailure("MAILBOX_INPUT_INVALID", "投递区导出目标格式无效")
+    return value
+}
+
+/** 投递区根目录只允许两个固定名称；不把任意路径交给 RuntimeMailbox。 */
+internal fun requiredMailboxRoot(data: JSONObject): String {
+    val value = data.opt("root") as? String
+    if (value != "inbox" && value != "outbox") {
+        throw RuntimeFailure("MAILBOX_ROOT_INVALID", "投递区根目录无效")
+    }
+    return value
+}
+
+/** 可选的 outbox 子目录参数；类型必须是字符串，路径策略由 RuntimeMailbox 统一校验。 */
+internal fun optionalMailboxDirectory(data: JSONObject, key: String): String? {
+    if (!data.has(key)) return null
+    val value = data.opt(key)
+    if (value == null || value == JSONObject.NULL) return null
+    if (value !is String) throw RuntimeFailure("MAILBOX_PATH_INVALID", "投递区目标目录格式无效")
     return value
 }
 
@@ -604,42 +622,25 @@ class MobileRuntimePlugin : Plugin() {
      * 而 Activity 重建时重复配置正是「插件注册失败」的根因。
      */
     private fun ensureDeviceBridge() {
-        if (RuntimeHost.deviceBridgeOrNull() != null) {
-            // 复用的是前台服务保留下来的同一个桥：这正是保活生效时的正常路径。
-            diagnostics()?.record(
-                DiagnosticLevel.INFO,
-                DiagnosticEvent.DEVICE_BRIDGE,
-                mapOf("result" to "reused"),
-            )
-            return
-        }
-        RuntimeHost.acquireDeviceBridge {
-            val bridgeTokenBytes = ByteArray(32).also(SecureRandom()::nextBytes)
-            val bridgeToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bridgeTokenBytes)
-            bridgeTokenBytes.fill(0)
-            val bridge = DeviceBridgeServer(
-                shizuku = controller.terminals.shizuku,
-                runner = RuntimeHost.deviceCommands(),
-                token = bridgeToken,
-            )
-            try {
-                bridge.start()
-                controller.configureDeviceBridge(DeviceBridgeAccess(bridge.localPort, bridgeToken))
-            } catch (error: Throwable) {
-                diagnostics()?.record(
-                    DiagnosticLevel.WARN,
-                    DiagnosticEvent.DEVICE_BRIDGE,
-                    mapOf("result" to "failed", "code" to failureCode(error)),
-                )
-                bridge.stop()
-                throw error
+        val reused = RuntimeHost.deviceBridgeOrNull() != null
+        try {
+            // acquireDeviceBridge 保留「同一进程只创建一次」的显式契约；实际构建逻辑
+            // 由 RuntimeHost.ensureDeviceBridge 统一执行，供启动恢复与 WebView 共用。
+            RuntimeHost.acquireDeviceBridge {
+                RuntimeHost.ensureDeviceBridge(controller)
             }
             diagnostics()?.record(
                 DiagnosticLevel.INFO,
                 DiagnosticEvent.DEVICE_BRIDGE,
-                mapOf("result" to "created"),
+                mapOf("result" to if (reused) "reused" else "created"),
             )
-            bridge
+        } catch (error: Throwable) {
+            diagnostics()?.record(
+                DiagnosticLevel.WARN,
+                DiagnosticEvent.DEVICE_BRIDGE,
+                mapOf("result" to "failed", "code" to failureCode(error)),
+            )
+            throw error
         }
     }
 
@@ -1070,6 +1071,77 @@ class MobileRuntimePlugin : Plugin() {
         resolveWhileActive(call) { RuntimeMailbox(controller.store).state().toJs() }
     }
 
+    /** 读取无障碍服务状态与用户维护的目标应用白名单；不返回当前窗口内容。 */
+    @PluginMethod
+    fun getAccessibilityAutomationState(call: PluginCall) {
+        resolveWhileActive(call) {
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                accessibilityStateToJs(AccessibilityAutomationStore.state(context))
+            }
+        }
+    }
+
+    /** 保存无障碍目标应用白名单；数组元素必须是字符串，原生策略再次校验包名与数量。 */
+    @PluginMethod
+    fun setAccessibilityAutomationPackages(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                val raw = call.data.opt("packages")
+                val array = raw as? org.json.JSONArray
+                    ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "无障碍白名单格式无效")
+                if (array.length() > 16) {
+                    throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "无障碍白名单最多允许 16 个应用")
+                }
+                val packages = buildList(array.length()) {
+                    for (index in 0 until array.length()) {
+                        val value = array.opt(index)
+                        if (value !is String) {
+                            throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "无障碍白名单必须全部是字符串")
+                        }
+                        add(value)
+                    }
+                }
+                try {
+                    accessibilityStateToJs(AccessibilityAutomationStore.setAllowedPackages(context, packages))
+                } catch (_: IllegalArgumentException) {
+                    throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "无障碍白名单包含无效或重复包名")
+                }
+            }
+        }
+    }
+
+    /** 只跳转系统设置，由用户手动开启或关闭无障碍服务。 */
+    @PluginMethod
+    fun openAccessibilitySettings(call: PluginCall) {
+        resolveWhileActive(call) {
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                AccessibilityAutomationStore.openSettings(context)
+                null
+            }
+        }
+    }
+
+    /** 权限：应用内桥接；浏览固定 inbox/outbox 根目录下的相对目录。 */
+    @PluginMethod
+    fun mailboxDirectory(call: PluginCall) {
+        execute(call) {
+            val root = requiredMailboxRoot(call.data)
+            val subdirectory = optionalMailboxSubdirectory(call.data)
+            RuntimeMailbox(controller.store).listDirectory(root, subdirectory).toJs()
+        }
+    }
+
+    /** 权限：应用内桥接；在固定投递区根目录下创建相对目录，不覆盖已有条目。 */
+    @PluginMethod
+    fun createMailboxFolder(call: PluginCall) {
+        execute(call) {
+            val root = requiredMailboxRoot(call.data)
+            val subdirectory = optionalMailboxSubdirectory(call.data)
+                ?: throw RuntimeFailure("MAILBOX_PATH_INVALID", "投递区新目录路径不能为空")
+            RuntimeMailbox(controller.store).createDirectory(root, subdirectory).toJs()
+        }
+    }
+
     /**
      * 权限：应用内桥接。
      *
@@ -1102,8 +1174,9 @@ class MobileRuntimePlugin : Plugin() {
     fun exportMailbox(call: PluginCall) {
         execute(call) {
             val subdirectory = optionalMailboxSubdirectory(call.data)
+            val destinationDirectory = optionalMailboxDirectory(call.data, "destinationDirectory")
             val outcome = audited(AuditEvent.MAILBOX_EXPORT) {
-                RuntimeMailbox(controller.store).exportWorkspace(subdirectory)
+                RuntimeMailbox(controller.store).exportWorkspace(subdirectory, destinationDirectory)
             }
             TaskNotification.postWorkspaceExported(context, outcome.entryCount)
             outcome.toJs()
@@ -1695,6 +1768,10 @@ class MobileRuntimePlugin : Plugin() {
         .put("connected", connected)
         .put("version", version)
 
+    private fun accessibilityStateToJs(state: JSONObject): JSObject = JSObject()
+        .put("enabled", state.optBoolean("enabled", false))
+        .put("allowedPackages", state.optJSONArray("allowedPackages") ?: org.json.JSONArray())
+
     /** 诊断日志状态：只有布尔值、计数与时间戳，不含任何日志内容。 */
     private fun DiagnosticState.toJs(): JSObject = JSObject()
         .put("enabled", enabled)
@@ -1732,6 +1809,22 @@ class MobileRuntimePlugin : Plugin() {
         .put("exportTarName", exportTarName)
         .put("exportManifestName", exportManifestName)
         .put("importDirectory", importDirectory)
+
+    private fun MailboxDirectoryState.toJs(): JSObject = JSObject()
+        .put("root", root)
+        .put("path", path ?: JSONObject.NULL)
+        .put(
+            "entries",
+            org.json.JSONArray().also { array ->
+                entries.forEach { entry -> array.put(entry.toJs()) }
+            },
+        )
+        .put("truncated", truncated)
+
+    private fun MailboxDirectoryEntry.toJs(): JSObject = JSObject()
+        .put("name", name)
+        .put("kind", kind)
+        .put("bytes", bytes)
 
     /**
      * 目录白名单状态。
@@ -1787,6 +1880,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("skippedLinks", skippedLinks)
         .put("skippedSpecial", skippedSpecial)
         .also { json -> subdirectory?.let { json.put("subdirectory", it) } }
+        .also { json -> destinationDirectory?.let { json.put("destinationDirectory", it) } }
 
     /** 应用内查看结果：受控字段文本 + 窗口与截断状态，不含路径或文件名。 */
     private fun DiagnosticText.toJs(): JSObject = JSObject()

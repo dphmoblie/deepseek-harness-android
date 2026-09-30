@@ -17,10 +17,19 @@ export type ThemeMode = 'system' | 'light' | 'dark'
 /** 真正写到 DOM 上的只有两种取值，CSS 侧据此覆盖变量。 */
 export type ResolvedTheme = 'light' | 'dark'
 
+/**
+ * 强调色是外壳主题的一部分：只允许预置色板，避免把存储值直接写进选择器。
+ * 预置色板分别对应冷静的海洋蓝、清爽的薄荷绿、温暖的琥珀橙与醒目的玫瑰红。
+ */
+export type AccentMode = 'ocean' | 'mint' | 'amber' | 'rose'
+
 export const THEME_STORAGE_KEY = 'dsh-mobile-theme-v1'
+export const ACCENT_STORAGE_KEY = 'dsh-mobile-accent-v1'
 /** 默认跟随系统：用户没表过态时，尊重系统的深色偏好比替他做决定更合理。 */
 export const DEFAULT_THEME_MODE: ThemeMode = 'system'
 export const THEME_MODES: readonly ThemeMode[] = ['system', 'light', 'dark']
+export const DEFAULT_ACCENT_MODE: AccentMode = 'ocean'
+export const ACCENT_MODES: readonly AccentMode[] = ['ocean', 'mint', 'amber', 'rose']
 
 /**
  * theme-color 与各自主题的页面背景取同一个值，否则 Android 状态栏会和页面顶部
@@ -41,6 +50,11 @@ export function isThemeMode(value: unknown): value is ThemeMode {
   return typeof value === 'string' && (THEME_MODES as readonly string[]).includes(value)
 }
 
+/** 安全校验：强调色只接受白名单字面量，非法值一律回退海洋蓝。 */
+export function isAccentMode(value: unknown): value is AccentMode {
+  return typeof value === 'string' && (ACCENT_MODES as readonly string[]).includes(value)
+}
+
 /** 纯函数：三态 + 系统偏好在「跟随系统」时合成唯一的落地取值。 */
 export function resolveTheme(mode: ThemeMode, systemPrefersDark: boolean): ResolvedTheme {
   if (mode === 'light' || mode === 'dark') return mode
@@ -55,6 +69,15 @@ export function readThemeMode(): ThemeMode {
   } catch {
     // 无痕模式等场景下 localStorage 会直接抛错：按默认值继续，界面不能因此崩掉。
     return DEFAULT_THEME_MODE
+  }
+}
+
+export function readAccentMode(): AccentMode {
+  try {
+    const value = window.localStorage.getItem(ACCENT_STORAGE_KEY)
+    return isAccentMode(value) ? value : DEFAULT_ACCENT_MODE
+  } catch {
+    return DEFAULT_ACCENT_MODE
   }
 }
 
@@ -79,6 +102,11 @@ function syncThemeColorMeta(theme: ResolvedTheme): void {
   meta.setAttribute('content', THEME_COLORS[theme])
 }
 
+/** 将已校验的强调色写入 DOM 数据属性，由 CSS 统一切换整套语义色。 */
+export function applyAccent(mode: AccentMode): void {
+  document.documentElement.dataset.accent = mode
+}
+
 /**
  * 把主题落到 DOM：data-theme 只写 light/dark（system 不是一种可直接渲染的外观，
  * 写进去会让 CSS 侧出现「第三套变量」），color-scheme 让原生控件与滚动条跟随。
@@ -91,6 +119,7 @@ export function applyTheme(mode: ThemeMode): ResolvedTheme {
   const theme = resolveTheme(mode, systemPrefersDark())
   const root = document.documentElement
   root.dataset.theme = theme
+  applyAccent(readAccentMode())
   root.style.setProperty('color-scheme', theme)
   syncThemeColorMeta(theme)
   // 失败只影响状态栏配色，主题本身已经落地：因此不让它抛出、也不弹错——
@@ -107,6 +136,18 @@ export function saveThemeMode(value: string): boolean {
     return false
   }
   applyTheme(value)
+  window.dispatchEvent(new Event(THEME_EVENT))
+  return true
+}
+
+export function saveAccentMode(value: string): boolean {
+  if (!isAccentMode(value)) return false
+  try {
+    window.localStorage.setItem(ACCENT_STORAGE_KEY, value)
+  } catch {
+    return false
+  }
+  applyAccent(value)
   window.dispatchEvent(new Event(THEME_EVENT))
   return true
 }
@@ -135,6 +176,10 @@ function subscribe(listener: () => void): () => void {
 
 export function useThemeMode(): ThemeMode {
   return useSyncExternalStore(subscribe, readThemeMode, () => DEFAULT_THEME_MODE)
+}
+
+export function useAccentMode(): AccentMode {
+  return useSyncExternalStore(subscribe, readAccentMode, () => DEFAULT_ACCENT_MODE)
 }
 
 /**

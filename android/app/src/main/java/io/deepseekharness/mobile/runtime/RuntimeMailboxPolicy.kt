@@ -89,6 +89,9 @@ object RuntimeMailboxLimits {
 
     /** manifest 文本的字节上限：8 MiB（覆盖 2 万条目绰绰有余）。 */
     const val MAX_MANIFEST_BYTES = 8L * 1024 * 1024
+
+    /** 单次目录浏览最多返回的条目数；超出时由目录快照的 truncated 标记说明。 */
+    const val MAX_DIRECTORY_ENTRIES = 256
 }
 
 /**
@@ -158,6 +161,18 @@ internal object MailboxCodes {
 
     /** 其它文件系统失败（创建目录、写文件、原子改名）。 */
     const val FILESYSTEM_ERROR = "MAILBOX_FILESYSTEM_ERROR"
+
+    /** 根目录只能是固定的 inbox 或 outbox。 */
+    const val ROOT_INVALID = "MAILBOX_ROOT_INVALID"
+
+    /** 要浏览的相对目录不存在，或其中一段是符号链接。 */
+    const val DIRECTORY_NOT_FOUND = "MAILBOX_DIRECTORY_NOT_FOUND"
+
+    /** 目录浏览或创建发生文件系统错误。 */
+    const val DIRECTORY_FAILED = "MAILBOX_DIRECTORY_FAILED"
+
+    /** 创建目录时发现目标已存在。 */
+    const val FOLDER_EXISTS = "MAILBOX_FOLDER_EXISTS"
 }
 
 /** 归档内允许落地的条目类型。FIFO / 设备节点 / 稀疏文件不在其中。 */

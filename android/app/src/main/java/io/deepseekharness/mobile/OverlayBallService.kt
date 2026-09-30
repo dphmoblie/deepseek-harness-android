@@ -80,6 +80,15 @@ class OverlayBallService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // START_STICKY 可能收到系统重启产生的空 Intent；每次启动都重新读取持久化开关，
+        // 避免用户已关闭悬浮球后服务仍被系统拉起并重新显示。
+        val enabled = runCatching { RuntimeStore(applicationContext).overlayBallEnabled() }
+            .getOrDefault(false)
+        if (!enabled) {
+            stopForegroundCompat()
+            stopSelf()
+            return START_NOT_STICKY
+        }
         // 必须最先进入前台状态：Android 12+ 对 startForegroundService() 启动的服务有
         // 5 秒硬性要求，超时未调用 startForeground() 会终结整个进程。
         if (!startForegroundCompat()) {
@@ -90,10 +99,8 @@ class OverlayBallService : Service() {
             return START_NOT_STICKY
         }
         // 权限可能在服务运行期间被系统或用户在设置里撤销，每次启动都重新确认。
-        // 这里只确认权限：用户开关由调用方负责（设置项写入后才启动本服务），
-        // 传 true 表示「走到这一步就说明开关已开」，不是要再核对一次偏好。
         if (!OverlayBallPolicy.shouldShowBall(
-                enabled = true,
+                enabled = enabled,
                 canDrawOverlays = Settings.canDrawOverlays(this),
             )
         ) {
@@ -116,9 +123,9 @@ class OverlayBallService : Service() {
             DiagnosticEvent.KEEP_ALIVE,
             mapOf("reason" to "overlay_ball", "active" to "true"),
         )
-        // 故意不使用 START_STICKY：系统重启本服务时球的位置与权限状态都可能已变，
-        // 重新拉起只会留下一个位置错误的球。
-        return START_NOT_STICKY
+        // 允许系统在进程被回收后按用户开关重启服务；启动路径会重新校验悬浮窗权限，
+        // 并对保存坐标执行 clamp，避免恢复到屏幕外。用户显式 stopService 后不会重启。
+        return START_STICKY
     }
 
     /** 划掉最近任务时不主动停止：由系统与厂商后台策略决定后续行为。 */

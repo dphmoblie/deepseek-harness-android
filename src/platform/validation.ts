@@ -1,4 +1,5 @@
 import type {
+  AccessibilityAutomationState,
   AllFilesAccessResult,
   DeviceCommand,
   DeviceCommandResult,
@@ -8,8 +9,10 @@ import type {
   HarnessLog,
   KeepAliveState,
   MailboxAvailability,
+  MailboxDirectoryState,
   MailboxExportResult,
   MailboxImportResult,
+  MailboxRoot,
   MailboxState,
   MediaPermissionResult,
   ModelProviderId,
@@ -69,6 +72,8 @@ const MAILBOX_AVAILABILITIES = new Set<MailboxAvailability>([
 const MAX_MAILBOX_PATH_LENGTH = 240
 /** 原生侧最多列出的 inbox tar 候选数；超出即视为载荷不符合契约。 */
 const MAX_MAILBOX_TARS = 5
+/** 单次目录浏览最多返回的条目数；原生侧超出时以 truncated 标记。 */
+const MAX_MAILBOX_DIRECTORY_ENTRIES = 256
 /** 原生侧最多回传的版本槽数（当前 + 上一版本 + 内置）；超出即视为载荷不符合契约。 */
 const MAX_RUNTIME_VERSIONS = 3
 const RUNTIME_PHASES = new Set<RuntimePhase>([
@@ -688,8 +693,27 @@ export function validateTerminalExit(value: unknown): TerminalExit {
   return { sessionId: assertSessionId(exit.sessionId), exitCode: exit.exitCode as number }
 }
 
-const DEVICE_COMMANDS = new Set<DeviceCommand>(['screenshot', 'uiDump', 'tap', 'inputText'])
-const MAX_DEVICE_PARAM_CHARS = 4096
+const DEVICE_COMMANDS = new Set<DeviceCommand>([
+  'screenshot',
+  'uiDump',
+  'tap',
+  'inputText',
+  'deviceInfo',
+  'listPackages',
+  'getSetting',
+  'battery',
+  'launchApp',
+  'foregroundPackage',
+  'wait',
+  'fileList',
+  'fileRead',
+  'fileWrite',
+  'fileMkdir',
+  'fileDownload',
+  'fileUpload',
+])
+// 文件上传通过 Base64 传递，原生侧仍有 128 KiB 解码上限；这里保留 JSON 参数的有界窗口。
+const MAX_DEVICE_PARAM_CHARS = 180_000
 
 export function validateDeviceCommand(value: unknown): DeviceCommand {
   if (typeof value !== 'string' || !DEVICE_COMMANDS.has(value as DeviceCommand)) throw new Error('设备命令不支持')
@@ -710,12 +734,35 @@ export function validateDeviceCommandResult(value: unknown): DeviceCommandResult
   if (typeof result.exitCode !== 'number' || !Number.isInteger(result.exitCode) || result.exitCode < -1 || result.exitCode > 255) {
     throw new Error('设备命令退出码无效')
   }
+  const errorCode = result.errorCode === undefined
+    ? undefined
+    : optionalIdentifier(result.errorCode, '设备命令错误码', ERROR_CODE_PATTERN, MAX_ERROR_CODE_LENGTH)
   return {
     ok: result.ok,
     exitCode: result.exitCode,
     text: result.text,
     truncated: result.truncated,
+    ...(errorCode === undefined ? {} : { errorCode }),
   }
+}
+
+/** 校验无障碍服务状态：包名只接受原生层已经约束的标准格式，且去重。 */
+export function validateAccessibilityAutomationState(value: unknown): AccessibilityAutomationState {
+  const state = asRecord(value, '无障碍自动化状态')
+  if (typeof state.enabled !== 'boolean' || !Array.isArray(state.allowedPackages)) {
+    throw new Error('无障碍自动化状态格式无效')
+  }
+  const packages = state.allowedPackages.map((value, index) => {
+    if (typeof value !== 'string' || value.length < 3 || value.length > 160 ||
+        !/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*){1,12}$/u.test(value)) {
+      throw new Error(`无障碍白名单第 ${index + 1} 项无效`)
+    }
+    return value
+  })
+  if (packages.length > 16 || new Set(packages).size !== packages.length) {
+    throw new Error('无障碍白名单数量或重复项无效')
+  }
+  return { enabled: state.enabled, allowedPackages: packages }
 }
 
 /**
@@ -840,6 +887,36 @@ export function validateMailboxState(value: unknown): MailboxState {
   }
 }
 
+/** 校验投递区目录浏览快照；路径和条目均只允许固定根下的相对值。 */
+export function validateMailboxDirectoryState(value: unknown): MailboxDirectoryState {
+  const source = asRecord(value, '投递区目录状态')
+  const root = source.root
+  if (root !== 'inbox' && root !== 'outbox') throw new Error('投递区根目录格式无效')
+  if (!Array.isArray(source.entries) || source.entries.length > MAX_MAILBOX_DIRECTORY_ENTRIES) {
+    throw new Error('投递区目录条目格式无效')
+  }
+  const path = source.path === undefined || source.path === null
+    ? undefined
+    : typeof source.path === 'string'
+      ? assertMailboxSubdirectory(source.path)
+      : (() => { throw new Error('投递区目录路径格式无效') })()
+  return {
+    root: root as MailboxRoot,
+    path,
+    entries: source.entries.map(item => {
+      const entry = asRecord(item, '投递区目录条目')
+      const kind = entry.kind
+      if (kind !== 'file' && kind !== 'directory') throw new Error('投递区目录条目类型无效')
+      return {
+        name: mailboxFileName(entry.name, '投递区目录条目名称'),
+        kind,
+        bytes: byteCount(entry.bytes, '投递区目录条目大小'),
+      }
+    }),
+    truncated: requiredBoolean(source.truncated, '投递区目录截断状态'),
+  }
+}
+
 /** 校验导入结果；缺 `manifestName` 表示这份归档没有附带 manifest（未逐条校验）。 */
 export function validateMailboxImportResult(value: unknown): MailboxImportResult {
   const source = asRecord(value, '投递区导入结果')
@@ -876,7 +953,14 @@ export function validateMailboxExportResult(value: unknown): MailboxExportResult
     manifestName: mailboxFileName(source.manifestName, '投递区导出清单名'),
     subdirectory: source.subdirectory === undefined
       ? undefined
-      : optionalIdentifier(source.subdirectory, '投递区导出起点'),
+      : typeof source.subdirectory === 'string'
+        ? assertMailboxSubdirectory(source.subdirectory)
+        : (() => { throw new Error('投递区导出起点格式无效') })(),
+    destinationDirectory: source.destinationDirectory === undefined
+      ? undefined
+      : typeof source.destinationDirectory === 'string'
+        ? assertMailboxSubdirectory(source.destinationDirectory)
+        : (() => { throw new Error('投递区导出目标目录格式无效') })(),
     skippedLinks: byteCount(source.skippedLinks, '投递区跳过链接数'),
     skippedSpecial: byteCount(source.skippedSpecial, '投递区跳过特殊条目数'),
   }

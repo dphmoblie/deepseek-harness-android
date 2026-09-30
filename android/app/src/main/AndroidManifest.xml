@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 仅用于用户解锁后恢复用户已开启的后台服务与悬浮球；不会静默启动界面。 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- 后台保持 Harness：前台服务及其通知权限。
          targetSdk 35 下前台服务必须声明具体类型；本服务不属于媒体、定位、数据同步
          等既有类型，只用于维持本机运行时进程，因此使用 specialUse 并给出用途说明。
@@ -70,9 +72,11 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        <!-- Shizuku Manager 以独立 UID 绑定用户服务；必须允许外部绑定，
+             同时由 Shizuku 官方 API_V23 权限保护，未获 Shizuku 授权的调用方无法访问。 -->
         <service
             android:name=".shizuku.DeviceShellUserService"
-            android:exported="false"
+            android:exported="true"
             android:permission="moe.shizuku.manager.permission.API_V23"
             tools:ignore="Instantiatable">
             <intent-filter>
@@ -106,6 +110,34 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="在其他应用上层显示悬浮球，点按返回 Harness 对话" />
         </service>
+
+        <!-- 需要用户手动在系统设置中开启。只读取白名单应用的当前窗口，不能静默开启，
+             也不声明执行密码、验证码、支付、权限和锁屏操作。 -->
+        <service
+            android:name=".accessibility.DeepSeekAccessibilityService"
+            android:description="@string/accessibility_service_description"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- 系统启动/用户解锁恢复入口。非导出且不接收外部数据，不启动 Activity。 -->
+        <receiver
+            android:name=".BootRecoveryReceiver"
+            android:directBootAware="false"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.USER_UNLOCKED" />
+            </intent-filter>
+        </receiver>
 
         <activity
             android:name=".HarnessActivity"

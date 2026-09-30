@@ -15,27 +15,33 @@
       （这里刻意不写「提取脚本正文」的示例命令：注释里一旦出现脚本标签本身，
       任何基于正则的提取都会先匹配到注释，反而更容易算错。）
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-b0aSQVyj1etKkutOy9S6NR4eYUsFx57L27VXdPfpUG0='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-javvCx0kT2GbJ+kLjBPjKsgpQBbQljpMAVGqIh9JX48='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <!--
-      首帧脚本：必须在样式表与模块之前先把 <html data-theme> 定下来，否则会先按
-      默认底色画一帧再切主题。它是 src/theme.ts 里 readThemeMode/resolveTheme/
+      首帧脚本：必须在样式表与模块之前先把 <html data-theme> 与 <html data-accent> 定下来，否则会先按
+      默认配色画一帧再切主题。它是 src/theme.ts 里 readThemeMode/resolveTheme/
       applyTheme 的最小副本：CSP 只允许同源脚本，这里无法 import，所以存储键与
       解析规则必须两边同步。它也只在这里追加一个「系统主题变化」监听——模块要等
       App 挂载后才加载，做不到从第一帧起就跟随系统。
     -->
     <script>(function () {
   var KEY = 'dsh-mobile-theme-v1';
+  var ACCENT_KEY = 'dsh-mobile-accent-v1';
+  var ACCENTS = { ocean: true, mint: true, amber: true, rose: true };
   var COLORS = { light: '#f3f5f8', dark: '#111315' };
   var query = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   function apply() {
     var mode = 'system';
+    var accent = 'ocean';
     try {
       var stored = window.localStorage.getItem(KEY);
       if (stored === 'system' || stored === 'light' || stored === 'dark') mode = stored;
+      var storedAccent = window.localStorage.getItem(ACCENT_KEY);
+      if (Object.prototype.hasOwnProperty.call(ACCENTS, storedAccent)) accent = storedAccent;
     } catch (error) { /* 无痕模式等场景 localStorage 会抛错：按默认值继续，不能因此白屏。 */ }
     var theme = mode === 'system' ? (query && query.matches ? 'dark' : 'light') : mode;
     var root = document.documentElement;
     root.dataset.theme = theme;
+    root.dataset.accent = accent;
     root.style.colorScheme = theme;
     var meta = document.querySelector("meta[name='theme-color']");
     if (meta) meta.setAttribute('content', COLORS[theme]);

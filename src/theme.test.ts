@@ -5,12 +5,17 @@ import { resolve } from 'node:path'
 import { act, renderHook } from '@testing-library/react'
 import {
   DEFAULT_THEME_MODE,
+  ACCENT_STORAGE_KEY,
+  DEFAULT_ACCENT_MODE,
   THEME_COLORS,
   THEME_STORAGE_KEY,
   applyTheme,
+  isAccentMode,
   isThemeMode,
+  readAccentMode,
   readThemeMode,
   resolveTheme,
+  saveAccentMode,
   saveThemeMode,
   systemPrefersDark,
   useResolvedTheme,
@@ -50,6 +55,7 @@ describe('主题解析', () => {
   beforeEach(() => {
     window.localStorage.clear()
     document.documentElement.removeAttribute('data-theme')
+    document.documentElement.removeAttribute('data-accent')
     document.head.innerHTML = '<meta name="theme-color" content="#111315" />'
     media = installMatchMedia(false)
   })
@@ -70,6 +76,25 @@ describe('主题解析', () => {
     for (const value of ['', 'System', 'DARK', 'auto', '../dark', '<script>', 'dark'.repeat(500), null, 42, {}]) {
       expect(isThemeMode(value)).toBe(false)
     }
+  })
+
+  it('强调色只接受预置白名单，非法值回退海洋蓝', () => {
+    for (const value of ['ocean', 'mint', 'amber', 'rose']) expect(isAccentMode(value)).toBe(true)
+    for (const value of ['', 'blue', '../mint', '<script>', 'mint'.repeat(500), null, 42, {}]) {
+      expect(isAccentMode(value)).toBe(false)
+    }
+    expect(readAccentMode()).toBe(DEFAULT_ACCENT_MODE)
+    window.localStorage.setItem(ACCENT_STORAGE_KEY, 'mint')
+    expect(readAccentMode()).toBe('mint')
+  })
+
+  it('保存强调色后同步到 DOM，并在主题重绘时恢复', () => {
+    expect(saveAccentMode('mint')).toBe(true)
+    expect(window.localStorage.getItem(ACCENT_STORAGE_KEY)).toBe('mint')
+    expect(document.documentElement.dataset.accent).toBe('mint')
+    applyTheme('dark')
+    expect(document.documentElement.dataset.accent).toBe('mint')
+    expect(saveAccentMode('../mint')).toBe(false)
   })
 
   it('存储非法值或为空时回退到默认值且不抛错', () => {

@@ -90,7 +90,7 @@ class MobileRuntimeController(
         versions.list()
     }
 
-    fun startHarness(): RuntimeStateSnapshot = lifecycleLock.withLock {        ensureOpen()
+    fun startHarness(expectedStartEpoch: Long? = null): RuntimeStateSnapshot = lifecycleLock.withLock {        ensureOpen()
         if (!supervisor.isRunning()) {
             supervisor.preparePluginManagement()
             plugins.recoverIfNeeded()
@@ -103,7 +103,13 @@ class MobileRuntimeController(
             // store 里已无引用的陈旧目录，**不等于**运行中的进程确实加载了两份。
             plugins.recordModuleGraph()
         }
-        supervisor.startHarness()
+        supervisor.startHarness(expectedStartEpoch)
+    }
+
+    /** 返回当前启动代次，供系统恢复入口校验控制器身份与取消竞态。 */
+    fun currentStartEpoch(): Long = lifecycleLock.withLock {
+        ensureOpen()
+        supervisor.currentStartEpoch()
     }
 
     /** 权限：仅应用内部；生命周期锁防止插件写入与启动、安装、终端并发。 */

@@ -85,7 +85,7 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
       <h2>{t(official ? '官方插件' : '第三方插件')}</h2>
       {official && <p className="plugin-description">{t('官方包随运行时更新，避免覆盖 Android 兼容修补。安全组件不可禁用。')}</p>}
       {catalog?.plugins.filter(group => group.official === official).map(group => <details className="plugin-file" key={group.id}>
-        <summary><Package size={20} /><span><strong>{group.id}</strong><small>{group.file} · {group.version ?? t('未安装')}</small></span><span className="plugin-state">{t(group.enabled ? '已启用' : '已禁用')}</span><ChevronDown size={18} /></summary>
+        <summary><Package className="plugin-summary-icon" size={20} /><span className="plugin-summary-copy"><strong>{group.id}</strong><small>{group.file} · {group.version ?? t('未安装')}</small></span><span className="plugin-state plugin-summary-state">{t(group.enabled ? '已启用' : '已禁用')}</span><ChevronDown className="plugin-summary-chevron" size={18} /></summary>
         <div className="plugin-file-actions">
           <label><input type="checkbox" aria-label={t('启用文件 {0}', group.id)} checked={group.enabled} disabled={locked || group.protected} onChange={event => { void run({ operation: 'enable', id: group.id, enabled: event.target.checked }) }} />{t('启用整个文件')}</label>
           <button className="button button-secondary compact-button" disabled={locked || group.official} type="button" onClick={() => { void run({ operation: 'update', id: group.id }) }}>{t('更新所属插件包')}</button>

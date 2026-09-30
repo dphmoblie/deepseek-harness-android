@@ -122,6 +122,41 @@ describe('投递区', () => {
     expect(await screen.findByText(/最近一次导出：5 个条目 · 8\.0 KB · manifest dsh-workspace\.manifest\.json/)).toBeVisible()
   })
 
+  it('可在投递区根目录间切换、进入子目录并创建分类文件夹', async () => {
+    bridge.getMailboxState.mockResolvedValue({ ...availableMailbox })
+    bridge.getStorageAccessState.mockResolvedValue({ ...storageAccess, allFilesGranted: true })
+    bridge.getMailboxDirectory.mockImplementation((root: 'inbox' | 'outbox', path?: string) => ({
+      root,
+      path,
+      entries: path === undefined
+        ? [{ name: 'weekly', kind: 'directory' as const, bytes: 0 }, { name: 'readme.txt', kind: 'file' as const, bytes: 5 }]
+        : [],
+      truncated: false,
+    }))
+    bridge.createMailboxFolder.mockResolvedValue({
+      root: 'inbox',
+      path: undefined,
+      entries: [{ name: 'new-folder', kind: 'directory', bytes: 0 }],
+      truncated: false,
+    })
+
+    render(<App />)
+    await waitFor(() => expect(bridge.getMailboxDirectory).toHaveBeenCalledWith('inbox', undefined))
+    await openSettingsPage('运行与后台')
+
+    expect(await screen.findByText('weekly')).toBeVisible()
+    fireEvent.click(screen.getByText('weekly'))
+    await waitFor(() => expect(bridge.getMailboxDirectory).toHaveBeenCalledWith('inbox', 'weekly'))
+
+    fireEvent.click(screen.getByRole('tab', { name: /outbox · 产物取出/ }))
+    await waitFor(() => expect(bridge.getMailboxDirectory).toHaveBeenCalledWith('outbox', undefined))
+
+    const prompt = vi.spyOn(window, 'prompt').mockReturnValue('new-folder')
+    fireEvent.click(screen.getByRole('button', { name: /新建文件夹/ }))
+    await waitFor(() => expect(bridge.createMailboxFolder).toHaveBeenCalledWith('outbox', 'new-folder'))
+    prompt.mockRestore()
+  })
+
   it('缺少 manifest 的导入如实显示「未附带」而不是编造文件名', async () => {
     bridge.getMailboxState.mockResolvedValue({ ...availableMailbox })
     bridge.importMailbox.mockResolvedValue({

@@ -7,6 +7,7 @@ import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.file.FileAlreadyExistsException
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -59,6 +60,21 @@ internal data class MailboxState(
     val available: Boolean get() = availability == MailboxAvailability.AVAILABLE
 }
 
+/** 投递区目录浏览条目；符号链接与特殊文件不会通过此接口暴露。 */
+internal data class MailboxDirectoryEntry(
+    val name: String,
+    val kind: String,
+    val bytes: Long,
+)
+
+/** 投递区目录浏览快照；path 为空表示当前位于所选根目录。 */
+internal data class MailboxDirectoryState(
+    val root: String,
+    val path: String?,
+    val entries: List<MailboxDirectoryEntry>,
+    val truncated: Boolean,
+)
+
 /** 一次导入的结果。 */
 internal data class MailboxImportOutcome(
     /** 归档条目数（目录 + 文件 + 链接）。 */
@@ -91,6 +107,8 @@ internal data class MailboxExportOutcome(
     val manifestName: String,
     /** 导出起点相对工作区的路径；null 表示整个工作区。 */
     val subdirectory: String?,
+    /** 产物落在 outbox 下的相对目录；null 表示 outbox 根目录。 */
+    val destinationDirectory: String?,
     /** 因目标越出导出起点而被跳过的符号链接数。 */
     val skippedLinks: Int,
     /** 因类型无法表达（FIFO / 设备节点 / 套接字）而被跳过的条目数。 */
@@ -161,17 +179,15 @@ internal object MailboxManifestCodec {
         } catch (error: Exception) {
             throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 不是合法的 JSON", error)
         }
-        val format = json.optString("format", "")
+        val format = json.requiredString("format")
         if (format != RuntimeMailboxLayout.MANIFEST_FORMAT) {
             throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 格式标识不受支持")
         }
-        val subdirectory = if (json.isNull("subdirectory")) {
-            null
-        } else {
+        val subdirectory = json.optionalString("subdirectory")?.let { rawSubdirectory ->
             // manifest 是一份整体产物：其中任何路径不合法都按「结构非法」报，
             // 不把内部的路径码泄漏成两种失败口径。
             try {
-                RuntimeMailboxPolicy.normalizeSubdirectory(json.optString("subdirectory", ""))
+                RuntimeMailboxPolicy.normalizeSubdirectory(rawSubdirectory)
             } catch (error: RuntimeFailure) {
                 throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 导出起点无效", error)
             }
@@ -179,11 +195,11 @@ internal object MailboxManifestCodec {
         val entryCount = json.requiredCount("entryCount")
         val totalBytes = json.requiredCount("totalBytes")
         val tarBytes = json.requiredCount("tarBytes")
-        val tarName = json.optString("tarName", "")
+        val tarName = json.requiredString("tarName")
         if (tarName.isEmpty() || tarName.contains('/') || tarName.length > 255) {
             throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 归档名无效")
         }
-        val tarSha256 = json.optString("tarSha256", "").lowercase()
+        val tarSha256 = json.requiredString("tarSha256").lowercase()
         if (!SHA256_PATTERN.matches(tarSha256)) {
             throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 归档摘要无效")
         }
@@ -201,20 +217,20 @@ internal object MailboxManifestCodec {
             val item = array.optJSONObject(index)
                 ?: throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 条目格式无效")
             val path = try {
-                RuntimeMailboxPolicy.normalizeManifestPath(item.optString("path", ""))
+                RuntimeMailboxPolicy.normalizeManifestPath(item.requiredString("path"))
             } catch (error: RuntimeFailure) {
                 throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 条目路径无效", error)
             }
-            val type = item.optString("type", "")
+            val type = item.requiredString("type")
             if (type !in WIRE_TYPES) {
                 throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 条目类型无效")
             }
             val bytes = item.requiredCount("bytes")
-            val sha256 = item.optString("sha256", "").ifEmpty { null }
+            val sha256 = item.optionalString("sha256")?.ifEmpty { null }
             if (type == WIRE_FILE && (sha256 == null || !SHA256_PATTERN.matches(sha256))) {
                 throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 文件条目缺少有效摘要")
             }
-            val target = item.optString("target", "").ifEmpty { null }
+            val target = item.optionalString("target")?.ifEmpty { null }
             if (type == WIRE_SYMLINK) {
                 if (target == null || target.startsWith('/')) {
                     throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 符号链接目标无效")
@@ -246,6 +262,23 @@ internal object MailboxManifestCodec {
             throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 数值字段越界")
         }
         return asLong
+    }
+
+    private fun JSONObject.requiredString(key: String): String {
+        val value = opt(key)
+        if (value !is String || value.isEmpty()) {
+            throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 缺少文本字段")
+        }
+        return value
+    }
+
+    private fun JSONObject.optionalString(key: String): String? {
+        if (!has(key) || isNull(key)) return null
+        val value = opt(key)
+        if (value !is String) {
+            throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 文本字段类型无效")
+        }
+        return value
     }
 
     const val WIRE_FILE = "file"
@@ -306,6 +339,81 @@ internal class RuntimeMailbox(private val store: RuntimeStore) {
             exportManifestName = RuntimeMailboxLayout.EXPORT_MANIFEST_NAME,
             importDirectory = RuntimeMailboxLayout.IMPORT_DIRECTORY,
         )
+    }
+
+    /**
+     * 列出固定 inbox/outbox 根目录下的一个相对目录。
+     *
+     * 目录解析逐级使用 NoFollow 检查，符号链接不会把浏览范围带出投递区；只返回常规文件和
+     * 真实目录，最多 [RuntimeMailboxLimits.MAX_DIRECTORY_ENTRIES] 项并以 truncated 标记截断。
+     */
+    fun listDirectory(rootName: String, subdirectory: String?): MailboxDirectoryState {
+        val directories = requireDirectories()
+        val normalized = RuntimeMailboxPolicy.normalizeSubdirectory(subdirectory)
+        val root = directoryFor(directories, rootName)
+        val target = resolveDirectory(root, normalized)
+        val allEntries = try {
+            Files.newDirectoryStream(target.toPath()).use { stream ->
+                stream.asSequence()
+                    .filter { path ->
+                        val name = path.fileName?.toString() ?: return@filter false
+                        isVisibleMailboxName(name) && isSafeEntryName(name)
+                    }
+                    .mapNotNull { path ->
+                        val attributes = MailboxTree.readAttributesNoFollow(path) ?: return@mapNotNull null
+                        when {
+                            attributes.isDirectory && !attributes.isSymbolicLink ->
+                                MailboxDirectoryEntry(path.fileName.toString(), "directory", 0L)
+                            attributes.isRegularFile && !attributes.isSymbolicLink ->
+                                MailboxDirectoryEntry(
+                                    path.fileName.toString(),
+                                    "file",
+                                    MailboxTree.sizeOrNull(path) ?: 0L,
+                                )
+                            else -> null
+                        }
+                    }
+                    // 只多读一项即可判断是否截断，避免公共目录中有大量条目时把整棵列表读入内存。
+                    .take(RuntimeMailboxLimits.MAX_DIRECTORY_ENTRIES + 1)
+                    .toList()
+            }
+        } catch (error: IOException) {
+            throw RuntimeFailure(MailboxCodes.DIRECTORY_FAILED, "无法读取投递区目录", error)
+        }
+        return MailboxDirectoryState(
+            root = rootName,
+            path = normalized,
+            entries = allEntries
+                .sortedWith(compareBy<MailboxDirectoryEntry>({ if (it.kind == "directory") 0 else 1 }, { it.name }))
+                .take(RuntimeMailboxLimits.MAX_DIRECTORY_ENTRIES),
+            truncated = allEntries.size > RuntimeMailboxLimits.MAX_DIRECTORY_ENTRIES,
+        )
+    }
+
+    /**
+     * 在固定根目录下创建一个相对目录。父目录可按需创建，但最终目录必须通过 CREATE_NEW
+     * 建立，已有文件或目录一律拒绝，避免把用户误操作变成静默覆盖。
+     */
+    fun createDirectory(rootName: String, subdirectory: String): MailboxDirectoryState {
+        val directories = requireDirectories()
+        val normalized = RuntimeMailboxPolicy.normalizeSubdirectory(subdirectory)
+            ?: throw RuntimeFailure(MailboxCodes.PATH_INVALID, "投递区新目录路径不能为空")
+        val root = directoryFor(directories, rootName)
+        val target = root.toPath().resolve(normalized).normalize()
+        if (!target.startsWith(root.toPath().toAbsolutePath().normalize())) {
+            throw RuntimeFailure(MailboxCodes.PATH_INVALID, "投递区目录越出根目录")
+        }
+        try {
+            // 逐级 NoFollow 创建父目录，拒绝任何中间符号链接。
+            target.parent?.let { parent -> MailboxTree.createDirectoriesNoFollow(root.toPath(), parent) }
+            Files.createDirectory(target)
+        } catch (_: FileAlreadyExistsException) {
+            throw RuntimeFailure(MailboxCodes.FOLDER_EXISTS, "投递区目录已存在")
+        } catch (error: IOException) {
+            throw RuntimeFailure(MailboxCodes.DIRECTORY_FAILED, "无法创建投递区目录", error)
+        }
+        val parent = normalized.substringBeforeLast("/", "")
+        return listDirectory(rootName, parent.ifEmpty { null })
     }
 
     /**
@@ -384,19 +492,21 @@ internal class RuntimeMailbox(private val store: RuntimeStore) {
         )
     }
 
-    fun exportWorkspace(subdirectory: String?): MailboxExportOutcome {
+    fun exportWorkspace(subdirectory: String?, destinationDirectory: String? = null): MailboxExportOutcome {
         val directories = requireDirectories()
         val target = requireWorkspace()
         val normalized = RuntimeMailboxPolicy.normalizeSubdirectory(subdirectory)
+        val normalizedDestination = RuntimeMailboxPolicy.normalizeSubdirectory(destinationDirectory)
+        val outputDirectory = resolveDirectory(directories.outbox, normalizedDestination)
         val plan = MailboxWorkspaceScanner().scan(target.toPath(), normalized)
         // 导出起点：整个工作区，或用户指定的子目录。tar 条目名以子目录名为前缀，
         // 因此写盘时必须以导出起点（而不是工作区）为基准解析源文件。
         val exportRoot = normalized?.let { File(target, it) } ?: target
 
         val suffix = UUID.randomUUID().toString()
-        val tarTemp = File(directories.outbox, ".dsh-export-$suffix.tar.tmp")
-        val manifestTemp = File(directories.outbox, ".dsh-export-$suffix.manifest.tmp")
-        val shaTemp = File(directories.outbox, ".dsh-export-$suffix.sha256.tmp")
+        val tarTemp = File(outputDirectory, ".dsh-export-$suffix.tar.tmp")
+        val manifestTemp = File(outputDirectory, ".dsh-export-$suffix.manifest.tmp")
+        val shaTemp = File(outputDirectory, ".dsh-export-$suffix.sha256.tmp")
         try {
             MailboxArchiveWriter().write(exportRoot.toPath(), plan, tarTemp)
             val (tarBytes, tarSha256) = MailboxDigest.bytesAndSha256(tarTemp)
@@ -416,14 +526,14 @@ internal class RuntimeMailbox(private val store: RuntimeStore) {
                 MailboxArchiveReader().plan(tarTemp, store.runtimeParent.toPath()),
             )
             // 三个产物全部写完之后才改名：中途失败只会留下临时文件，不会留下半个产物。
-            MailboxTree.move(tarTemp.toPath(), File(directories.outbox, RuntimeMailboxLayout.EXPORT_TAR_NAME).toPath())
+            MailboxTree.move(tarTemp.toPath(), File(outputDirectory, RuntimeMailboxLayout.EXPORT_TAR_NAME).toPath())
             MailboxTree.move(
                 manifestTemp.toPath(),
-                File(directories.outbox, RuntimeMailboxLayout.EXPORT_MANIFEST_NAME).toPath(),
+                File(outputDirectory, RuntimeMailboxLayout.EXPORT_MANIFEST_NAME).toPath(),
             )
             MailboxTree.move(
                 shaTemp.toPath(),
-                File(directories.outbox, RuntimeMailboxLayout.EXPORT_SHA256_NAME).toPath(),
+                File(outputDirectory, RuntimeMailboxLayout.EXPORT_SHA256_NAME).toPath(),
             )
             recordOutcome(
                 DiagnosticEvent.MAILBOX,
@@ -443,6 +553,7 @@ internal class RuntimeMailbox(private val store: RuntimeStore) {
                 tarSha256 = tarSha256,
                 manifestName = RuntimeMailboxLayout.EXPORT_MANIFEST_NAME,
                 subdirectory = normalized,
+                destinationDirectory = normalizedDestination,
                 skippedLinks = plan.skippedLinks,
                 skippedSpecial = plan.skippedSpecial,
             )
@@ -469,6 +580,37 @@ internal class RuntimeMailbox(private val store: RuntimeStore) {
         return hostDirectories(create = true, probeWrite = true)
             ?: throw RuntimeFailure(MailboxCodes.UNAVAILABLE, "投递区目录不可读写")
     }
+
+    private fun directoryFor(directories: HostDirectories, rootName: String): File = when (rootName) {
+        RuntimeMailboxLayout.INBOX_DIRECTORY -> directories.inbox
+        RuntimeMailboxLayout.OUTBOX_DIRECTORY -> directories.outbox
+        else -> throw RuntimeFailure(MailboxCodes.ROOT_INVALID, "投递区根目录无效")
+    }
+
+    /** 逐级确认相对目录中的每一段都是真实目录，拒绝中间符号链接。 */
+    private fun resolveDirectory(root: File, normalized: String?): File {
+        var cursor = root.toPath().toAbsolutePath().normalize()
+        if (!MailboxTree.isRealDirectory(cursor)) {
+            throw RuntimeFailure(MailboxCodes.DIRECTORY_NOT_FOUND, "投递区根目录不可用")
+        }
+        normalized.orEmpty().split('/').filter { it.isNotEmpty() }.forEach { component ->
+            cursor = cursor.resolve(component)
+            if (!MailboxTree.isRealDirectory(cursor)) {
+                throw RuntimeFailure(MailboxCodes.DIRECTORY_NOT_FOUND, "投递区目录不存在")
+            }
+        }
+        return cursor.toFile()
+    }
+
+    private fun isSafeEntryName(name: String): Boolean = try {
+        RuntimeMailboxPolicy.normalizeEntryName(name)
+        true
+    } catch (_: RuntimeFailure) {
+        false
+    }
+
+    private fun isVisibleMailboxName(name: String): Boolean =
+        name.isNotEmpty() && !name.startsWith(PROBE_PREFIX) && !name.startsWith(".dsh-export-")
 
     private fun requireWorkspace(): File {
         if (!MailboxTree.isRealDirectory(workspace.toPath())) {

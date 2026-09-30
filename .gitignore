@@ -74,5 +74,7 @@ Thumbs.db
 .wrapper-bootstrap/*
 !.wrapper-bootstrap/build.gradle
 !.wrapper-bootstrap/settings.gradle
+# 本机安全扫描工具，仅供提交钩子调用，禁止提交二进制文件
+.tools/
 legal/.operit-license-import/
 legal/operit-license.tar

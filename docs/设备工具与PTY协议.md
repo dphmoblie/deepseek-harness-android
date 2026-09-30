@@ -1,7 +1,13 @@
 # 设备工具与 PTY 协议
 
 本文说明 `mobile_device_screenshot` / `mobile_device_ui_dump` / `mobile_device_tap` /
-`mobile_device_input_text` 四个工具在设备侧的执行链路、双哨兵协议，以及为什么旧方案
+`mobile_device_input_text`、应用自动化工具 `mobile_device_app_launch` /
+`mobile_device_current_app` / `mobile_device_wait`、只读诊断工具 `mobile_device_info` /
+`mobile_device_list_packages` / `mobile_device_get_setting` / `mobile_device_battery`，
+以及仅限投递区的 `mobile_device_file_list` / `mobile_device_file_read` /
+`mobile_device_file_write` / `mobile_device_file_mkdir` /
+`mobile_device_file_upload` / `mobile_device_file_download`
+在设备侧的执行链路、双哨兵协议，以及为什么旧方案
 （按回显间隙解析）在真机上必然失败。
 
 ## 1. 链路
@@ -10,14 +16,28 @@
 dsh 会话里的 mobile_device_* 工具
   → 插件 scripts/runtime-profile/plugins/dsh-mobile-shizuku
   → POST http://127.0.0.1:<动态端口>/device-command（Bearer token，来自 guest 环境变量）
-  → 宿主 DeviceBridgeServer（白名单：screenshot / uiDump / tap / inputText）
+  → 宿主 DeviceBridgeServer（固定白名单：交互、诊断与投递区文件操作）
   → 一次性设备 Shell 会话（Shizuku UserService，/system/bin/sh，80x24 PTY）
   → DeviceCommandRunner 注入命令并解析输出
 ```
 
-命令类型与参数校验都在 `DeviceCommandRunner` 里完成：调用方只能选四个白名单操作，
+命令类型与参数校验都在 `DeviceCommandRunner` 里完成：调用方只能选固定白名单操作，
 `tap` 坐标必须是 `0..65535` 的整数，`inputText` 只接受 1..1024 个可打印 ASCII 且不含
-引号、分号、反斜杠、`$`、反引号。命令内容不写入审计日志。
+引号、分号、反斜杠、`$`、反引号；`listPackages` 只接受受限包名片段并最多返回 256 行，
+`getSetting` 只允许预设的非敏感键，`battery` 不接受参数。应用启动只接受标准包名；前台查询不接受参数；等待只接受
+100 毫秒至 10 秒。命令内容不写入审计日志。
+
+文件命令另有一层独立策略：根目录只允许 `/storage/emulated/0/Documents/DSH/inbox` 与
+`outbox`，请求参数是严格 JSON，路径只能是相对路径（禁止绝对路径、`.`、`..`、控制字符、
+Shell 元字符与越界符号链接），单个文件解码后最多 128 KiB，目录列表最多 256 条。写入/上传
+默认不覆盖已有条目，并且模型工具层要求用户确认；文件读回只提供 Base64。超过此限额的文件
+请使用应用内投递区归档导入/导出，避免把设备桥变成大文件或任意 Shell 通道。
+
+应用自动化按“观察 → 单步操作 → 再观察”执行：先用包名列表选择目标，再由
+`mobile_device_app_launch` 启动默认入口，使用截图或 UI 层级读取界面，最后调用点击或文本输入。
+启动、点击和文本输入均有用户审批；`mobile_device_current_app` 只返回受限前台诊断行，
+`mobile_device_wait` 只负责有限等待。它们不能静默开启无障碍服务、绕过锁屏、读取目标应用私有数据，
+也不能代替目标应用的登录、支付或验证码流程。
 
 ## 2. 旧方案为什么必然失败（已实测）
 
@@ -110,6 +130,12 @@ echo "__DSH_E_<请求标识>_${dsh_nonce}__:$?"
 | `UI_DUMP_NO_TOOL` | `command -v uiautomator` 失败（脚本退出码 3） |
 | `UI_DUMP_FAILED` | `uiautomator dump` 返回非零（脚本退出码 4），其 stderr 保留在 payload 里 |
 | `UI_DUMP_EMPTY` | `uiautomator` 返回 0，但目标文件不存在或为空（脚本退出码 5） |
+| `DEVICE_FILE_INVALID` | 文件根目录、相对路径、JSON 或 Base64 参数不符合白名单 |
+| `DEVICE_FILE_NOT_FOUND` | 投递区目标不存在，或目标类型与操作不匹配 |
+| `DEVICE_FILE_ESCAPE` | 真实路径解析越出 inbox/outbox，或命中了不受信任的符号链接 |
+| `DEVICE_FILE_TOO_LARGE` | 单文件超过 128 KiB 小文件通道限额 |
+| `DEVICE_FILE_EXISTS` | 写入/建目录目标已存在且未明确允许覆盖 |
+| `DEVICE_FILE_FAILED` | 设备侧文件操作失败 |
 
 uiDump 的脚本顺序是：**先探测工具** → 使用 `--compressed` 写入 `/data/local/tmp` →
 用 `[ -s ]` 校验产物非空 → 失败时再用兼容旧版的参数形式写入 `/sdcard` → 把 stderr

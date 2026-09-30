@@ -12,6 +12,7 @@ import type {
   DiagnosticLogExport,
   DiagnosticLogState,
   KeepAliveState,
+  MailboxRoot,
   NotificationPermissionResult,
   RuntimeBridge,
   RuntimeProgress,
@@ -34,6 +35,7 @@ import {
   assertTerminalKind,
   assertTerminalSize,
   validateAllFilesAccessResult,
+  validateAccessibilityAutomationState,
   validateDeviceCommand,
   validateDeviceCommandParam,
   validateDeviceCommandResult,
@@ -44,6 +46,7 @@ import {
   validateKeepAliveState,
   validateMailboxExportResult,
   validateMailboxImportResult,
+  validateMailboxDirectoryState,
   validateMailboxState,
   validateMediaPermissionResult,
   validateNotificationPermissionResult,
@@ -86,16 +89,21 @@ interface NativeRuntimePlugin {
   requestShizukuPermission(): Promise<ShizukuState>
   connectShizuku(): Promise<ShizukuState>
   openShizuku(): Promise<void>
+  getAccessibilityAutomationState(): Promise<unknown>
+  setAccessibilityAutomationPackages(options: { packages: string[] }): Promise<unknown>
+  openAccessibilitySettings(): Promise<void>
   getKeepAliveState(): Promise<KeepAliveState>
   requestNotificationPermission(): Promise<NotificationPermissionResult>
   overlayBallState(): Promise<unknown>
   openOverlaySettings(): Promise<void>
   mailboxState(): Promise<unknown>
+  mailboxDirectory(options: { root: MailboxRoot; subdirectory?: string }): Promise<unknown>
+  createMailboxFolder(options: { root: MailboxRoot; subdirectory: string }): Promise<unknown>
   getStorageAccessState(): Promise<unknown>
   requestMediaPermission(): Promise<unknown>
   openAllFilesAccessSettings(): Promise<unknown>
   importMailbox(): Promise<unknown>
-  exportMailbox(options: { subdirectory?: string }): Promise<unknown>
+  exportMailbox(options: { subdirectory?: string; destinationDirectory?: string }): Promise<unknown>
   storageDirsState(): Promise<unknown>
   addStorageDirectory(): Promise<unknown>
   removeStorageDirectory(options: { path: string }): Promise<unknown>
@@ -194,19 +202,37 @@ function createNativeBridge(): RuntimeBridge {
     requestShizukuPermission: () => NativeRuntime.requestShizukuPermission().then(validateShizukuState),
     connectShizuku: () => NativeRuntime.connectShizuku().then(validateShizukuState),
     openShizuku: () => NativeRuntime.openShizuku(),
+    getAccessibilityAutomationState: () => NativeRuntime.getAccessibilityAutomationState().then(validateAccessibilityAutomationState),
+    setAccessibilityAutomationPackages: packages => {
+      if (!Array.isArray(packages) || packages.length > 16 || packages.some(value => typeof value !== 'string')) {
+        return Promise.reject(new Error('无障碍白名单格式无效'))
+      }
+      return NativeRuntime.setAccessibilityAutomationPackages({ packages }).then(validateAccessibilityAutomationState)
+    },
+    openAccessibilitySettings: () => NativeRuntime.openAccessibilitySettings(),
     getKeepAliveState: () => NativeRuntime.getKeepAliveState().then(validateKeepAliveState),
     requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),
     getOverlayBallState: () => NativeRuntime.overlayBallState().then(validateOverlayBallState),
     openOverlaySettings: () => NativeRuntime.openOverlaySettings(),
     getMailboxState: () => NativeRuntime.mailboxState().then(validateMailboxState),
+    getMailboxDirectory: (root, subdirectory) => NativeRuntime
+      .mailboxDirectory({ root, ...(subdirectory === undefined ? {} : { subdirectory }) })
+      .then(validateMailboxDirectoryState),
+    createMailboxFolder: (root, subdirectory) => NativeRuntime
+      .createMailboxFolder({ root, subdirectory })
+      .then(validateMailboxDirectoryState),
     getStorageAccessState: () => NativeRuntime.getStorageAccessState().then(validateStorageAccessState),
     requestMediaPermission: () => NativeRuntime.requestMediaPermission().then(validateMediaPermissionResult),
     openAllFilesAccessSettings: () => NativeRuntime.openAllFilesAccessSettings().then(validateAllFilesAccessResult),
     importMailbox: () => NativeRuntime.importMailbox().then(validateMailboxImportResult),
     // 导出起点先在前端拦一道明显非法的取值（绝对路径、`..`），原生侧还有同一套规则兜底。
-    exportMailbox: subdirectory => {
+    exportMailbox: (subdirectory, destinationDirectory) => {
       const target = assertMailboxSubdirectory(subdirectory)
-      return NativeRuntime.exportMailbox(target === undefined ? {} : { subdirectory: target })
+      const destination = assertMailboxSubdirectory(destinationDirectory)
+      return NativeRuntime.exportMailbox({
+        ...(target === undefined ? {} : { subdirectory: target }),
+        ...(destination === undefined ? {} : { destinationDirectory: destination }),
+      })
         .then(validateMailboxExportResult)
     },
     // 目录白名单：选区与校验都在原生侧（SAF 回调里做），这里只负责校验载荷与路径入参。

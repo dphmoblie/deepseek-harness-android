@@ -55,4 +55,29 @@ class MobileRuntimeSettingsInputTest {
             assertEquals("MAILBOX_INPUT_INVALID", failure.code)
         }
     }
+
+    @Test
+    fun validatesMailboxRootWithoutCoercion() {
+        assertEquals("inbox", requiredMailboxRoot(JSONObject().put("root", "inbox")))
+        assertEquals("outbox", requiredMailboxRoot(JSONObject().put("root", "outbox")))
+        listOf(JSONObject.NULL, true, 1, "INBOX", "../inbox").forEach { invalidValue ->
+            val failure = assertThrows(RuntimeFailure::class.java) {
+                requiredMailboxRoot(JSONObject().put("root", invalidValue))
+            }
+            assertEquals("MAILBOX_ROOT_INVALID", failure.code)
+        }
+    }
+
+    @Test
+    fun validatesOptionalMailboxDestinationDirectoryWithoutCoercion() {
+        assertNull(optionalMailboxDirectory(JSONObject(), "destinationDirectory"))
+        assertNull(optionalMailboxDirectory(JSONObject().put("destinationDirectory", JSONObject.NULL), "destinationDirectory"))
+        assertEquals("exports/weekly", optionalMailboxDirectory(JSONObject().put("destinationDirectory", "exports/weekly"), "destinationDirectory"))
+        listOf(true, 1, JSONObject()).forEach { invalidValue ->
+            val failure = assertThrows(RuntimeFailure::class.java) {
+                optionalMailboxDirectory(JSONObject().put("destinationDirectory", invalidValue), "destinationDirectory")
+            }
+            assertEquals("MAILBOX_PATH_INVALID", failure.code)
+        }
+    }
 }

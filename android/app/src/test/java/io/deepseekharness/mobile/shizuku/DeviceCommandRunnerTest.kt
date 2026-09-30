@@ -4,6 +4,7 @@ import io.deepseekharness.mobile.runtime.RuntimeFailure
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.util.Base64
 import java.util.concurrent.CompletableFuture
@@ -92,6 +93,80 @@ class DeviceCommandRunnerTest {
     @Test(expected = RuntimeFailure::class)
     fun inputTextRejectsShellMetacharacters() {
         runner.buildInput(requestId, DeviceCommand.INPUT_TEXT, "a;reboot")
+    }
+
+    @Test
+    fun readOnlyDiagnosticsUseAllowlistedCommands() {
+        val info = runner.buildInput(requestId, DeviceCommand.DEVICE_INFO, "")
+        assertTrue(info.contains("getprop ro.product.model"))
+        val packages = runner.buildInput(requestId, DeviceCommand.LIST_PACKAGES, "com.example")
+        assertTrue(packages.contains("pm list packages | grep -F -- \"com.example\" | head -n 256"))
+        val setting = runner.buildInput(requestId, DeviceCommand.GET_SETTING, "global,adb_enabled")
+        assertTrue(setting.contains("settings get global adb_enabled"))
+        val battery = runner.buildInput(requestId, DeviceCommand.BATTERY, "")
+        assertTrue(battery.contains("dumpsys battery"))
+    }
+
+    @Test
+    fun diagnosticsRejectShellInjectionAndPrivateSettings() {
+        listOf(
+            DeviceCommand.LIST_PACKAGES to "com.example;reboot",
+            DeviceCommand.GET_SETTING to "secure,android_id",
+            DeviceCommand.GET_SETTING to "global,adb_enabled;reboot",
+        ).forEach { (command, param) ->
+            try {
+                runner.buildInput(requestId, command, param)
+                fail("应拒绝不安全参数：$command")
+            } catch (_: RuntimeFailure) {
+                // 预期拒绝。
+            }
+        }
+    }
+
+    @Test
+    fun appAutomationUsesFixedCommandsAndBoundedWait() {
+        val launch = runner.buildInput(requestId, DeviceCommand.LAUNCH_APP, "com.example.demo")
+        assertTrue(launch.contains("monkey -p \"com.example.demo\" 1"))
+        val current = runner.buildInput(requestId, DeviceCommand.FOREGROUND_PACKAGE, "")
+        assertTrue(current.contains("dumpsys activity activities"))
+        assertTrue(current.contains("mResumedActivity"))
+        val wait = runner.buildInput(requestId, DeviceCommand.WAIT, "250")
+        assertTrue(wait.contains("sleep 0.25"))
+        assertEquals(DeviceCommand.LAUNCH_APP, DeviceCommand.fromName("appLaunch"))
+        assertEquals(DeviceCommand.FOREGROUND_PACKAGE, DeviceCommand.fromName("currentApp"))
+    }
+
+    @Test
+    fun appAutomationRejectsUnsafePackageAndWaitParameters() {
+        listOf(
+            DeviceCommand.LAUNCH_APP to "com.example;reboot",
+            DeviceCommand.LAUNCH_APP to "../../settings",
+            DeviceCommand.LAUNCH_APP to "com." + "a".repeat(189),
+            DeviceCommand.FOREGROUND_PACKAGE to "unexpected",
+            DeviceCommand.WAIT to "99",
+            DeviceCommand.WAIT to "10001",
+            DeviceCommand.WAIT to "sleep 1",
+        ).forEach { (command, param) ->
+            try {
+                runner.buildInput(requestId, command, param)
+                fail("应拒绝不安全自动化参数：$command")
+            } catch (_: RuntimeFailure) {
+                // 预期拒绝。
+            }
+        }
+    }
+
+    @Test
+    fun mkdirRejectsSymlinkTargetsAndRechecksEveryPathComponent() {
+        val input = runner.buildInput(
+            requestId,
+            DeviceCommand.FILE_MKDIR,
+            "{\"root\":\"inbox\",\"path\":\"nested/folder\"}",
+        )
+        assertTrue(input.contains("[ ! -L \"\$dsh_target\" ] || exit 6"))
+        assertTrue(input.contains("nested"))
+        assertTrue(input.contains("folder"))
+        assertTrue("mkdir 后必须再次执行逐级 NoFollow 检查", input.indexOf("mkdir -p") < input.lastIndexOf("dsh_root"))
     }
 
     /**

@@ -41,6 +41,8 @@ class ShizukuRuntime(
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
     private val sessions = ConcurrentHashMap.newKeySet<String>()
+    /** 客户端侧预检，配合 UserService 的信号量共同限制 PTY 资源。 */
+    private val sessionCreateLock = Any()
     private val binderFutureLock = Any()
     private val connectionFutureLock = Any()
     private var binderFuture: CompletableFuture<Unit>? = null
@@ -301,14 +303,26 @@ class ShizukuRuntime(
         requirePermission()
         val current = requireService(permitted)
         if (!permitted()) throw RuntimeFailure("DEVICE_BRIDGE_STOPPED", "设备桥已停止")
-        val id = try {
-            current.createSession(columns, rows, callback(suppressPublicOutput, onSessionExit))
-        } catch (error: RemoteException) {
-            service = null
-            throw RuntimeFailure("SHIZUKU_SERVICE_FAILED", "无法创建设备 Shell", error)
-        }
-        if (!SESSION_PATTERN.matches(id)) {
-            throw RuntimeFailure("SESSION_ID_INVALID", "设备 Shell 返回无效会话标识")
+        val id = synchronized(sessionCreateLock) {
+            if (sessions.size >= MAX_SESSIONS) {
+                throw RuntimeFailure("DEVICE_SESSION_LIMIT", "设备 Shell 会话数已达上限，请先关闭已有会话")
+            }
+            val created = try {
+                current.createSession(columns, rows, callback(suppressPublicOutput, onSessionExit))
+            } catch (error: RemoteException) {
+                service = null
+                throw RuntimeFailure("SHIZUKU_SERVICE_FAILED", "无法创建设备 Shell", error)
+            }
+            if (!SESSION_PATTERN.matches(created)) {
+                try {
+                    current.closeSession(created)
+                } catch (_: RemoteException) {
+                    // 无效标识无法由客户端追踪；UserService 会在连接回收时清理。
+                }
+                throw RuntimeFailure("SESSION_ID_INVALID", "设备 Shell 返回无效会话标识")
+            }
+            sessions.add(created)
+            created
         }
         if (!permitted()) {
             try {
@@ -318,7 +332,6 @@ class ShizukuRuntime(
             }
             throw RuntimeFailure("DEVICE_BRIDGE_STOPPED", "设备桥已停止")
         }
-        sessions.add(id)
         return id
     }
 
@@ -609,6 +622,7 @@ class ShizukuRuntime(
         private const val SERVICE_TIMEOUT_SECONDS = 10L
         private const val SERVICE_EXIT_TIMEOUT_SECONDS = 5L
         private const val USER_SERVICE_VERSION = 3
+        private const val MAX_SESSIONS = 4
         private val SESSION_PATTERN = Regex("^[a-f0-9-]{36}$")
     }
 }

@@ -8,7 +8,7 @@
 :root {
   color: var(--ink);
   background: var(--bg);
-  font-family: Inter, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+  font-family: "Avenir Next", "DIN Alternate", "Segoe UI Variable", "Microsoft YaHei", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   color-scheme: light;
@@ -177,6 +177,55 @@
   --ring: 3px solid rgb(134 171 255 / 45%);
 }
 
+/* 强调色主题：只覆盖语义色令牌，背景与文本对比度仍由明暗主题统一管理。 */
+:root[data-accent='mint'] {
+  --blue: #087f73;
+  --blue-hover: #06665d;
+  --blue-soft: #e3f5f2;
+  --blue-line: #b7ded8;
+  --ring: 3px solid rgb(8 127 115 / 28%);
+}
+
+:root[data-accent='amber'] {
+  --blue: #b45c0a;
+  --blue-hover: #8f4705;
+  --blue-soft: #fff0df;
+  --blue-line: #efc79c;
+  --ring: 3px solid rgb(180 92 10 / 28%);
+}
+
+:root[data-accent='rose'] {
+  --blue: #b33a61;
+  --blue-hover: #8f2c4b;
+  --blue-soft: #fbe8ee;
+  --blue-line: #edbfd0;
+  --ring: 3px solid rgb(179 58 97 / 28%);
+}
+
+:root[data-theme='dark'][data-accent='mint'] {
+  --blue: #58d7c5;
+  --blue-hover: #7de5d6;
+  --blue-soft: #123732;
+  --blue-line: #28685e;
+  --ring: 3px solid rgb(88 215 197 / 42%);
+}
+
+:root[data-theme='dark'][data-accent='amber'] {
+  --blue: #ffb36d;
+  --blue-hover: #ffc58e;
+  --blue-soft: #3c2918;
+  --blue-line: #79552f;
+  --ring: 3px solid rgb(255 179 109 / 42%);
+}
+
+:root[data-theme='dark'][data-accent='rose'] {
+  --blue: #ff9fbe;
+  --blue-hover: #ffbad0;
+  --blue-soft: #3b202b;
+  --blue-line: #754257;
+  --ring: 3px solid rgb(255 159 190 / 42%);
+}
+
 /*
  * 根字号写 100%（即用户代理默认字号，等于不干预），而不是写死 16px：
  * 全壳的 font-size 已改成 rem，只有根字号不被写死，宿主把根字号调大
@@ -202,7 +251,10 @@ body,
 
 body {
   overflow: hidden;
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 7% -12%, color-mix(in srgb, var(--blue) 10%, transparent), transparent 34%),
+    radial-gradient(circle at 100% 12%, color-mix(in srgb, var(--blue) 7%, transparent), transparent 30%),
+    var(--bg);
 }
 
 .error-screen {
@@ -267,11 +319,99 @@ button:disabled {
 
 .app-shell {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: 68px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   width: 100%;
   height: 100dvh;
   overflow: hidden;
 }
+
+.app-frame {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/*
+ * 侧栏在窄屏是固定的图标轨道，宽屏仍保持轻量，不抢占对话内容空间。
+ * 文字标签由媒体查询隐藏，图标按钮仍保留 title 与无障碍名称。
+ */
+.app-sidebar {
+  z-index: 30;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: calc(10px + env(safe-area-inset-top)) 8px 12px;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, var(--bg));
+  box-shadow: 6px 0 24px rgb(20 29 40 / 4%);
+}
+
+.sidebar-whale,
+.sidebar-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 50px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, transform 150ms ease;
+}
+
+.sidebar-whale {
+  flex-direction: column;
+  gap: 2px;
+  min-height: 54px;
+  color: var(--on-accent);
+  background: linear-gradient(150deg, var(--blue), color-mix(in srgb, var(--blue) 50%, var(--brand-bg)));
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--blue) 20%, transparent);
+}
+
+.sidebar-whale .whale-mark { --whale-mark-detail: color-mix(in srgb, var(--on-accent) 70%, transparent); }
+
+.sidebar-whale span,
+.sidebar-item span {
+  overflow: hidden;
+  max-width: 0;
+  font-size: 0;
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0;
+  transition: max-width 150ms ease, opacity 150ms ease, font-size 150ms ease;
+}
+
+.sidebar-nav,
+.sidebar-bottom {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
+
+.sidebar-bottom { margin-top: auto; }
+
+.sidebar-item.is-active,
+.sidebar-item:hover {
+  color: var(--blue);
+  border-color: var(--blue-line);
+  background: var(--blue-soft);
+}
+
+.sidebar-whale.is-active { box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 22%, transparent), 0 8px 18px color-mix(in srgb, var(--blue) 20%, transparent); }
+
+.sidebar-whale:active,
+.sidebar-item:active { transform: translateY(1px); }
 
 .mobile-header {
   z-index: 20;
@@ -282,6 +422,8 @@ button:disabled {
   padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
   border-bottom: 1px solid var(--line);
   background: var(--header-bg);
+  box-shadow: 0 8px 28px rgb(20 29 40 / 5%);
+  backdrop-filter: blur(18px);
 }
 
 .header-actions,
@@ -315,7 +457,8 @@ button:disabled {
   margin-right: 8px;
   border-radius: 8px;
   color: var(--on-solid);
-  background: var(--brand-bg);
+  background: linear-gradient(145deg, var(--brand-bg), color-mix(in srgb, var(--blue) 45%, var(--brand-bg)));
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--blue) 18%, transparent);
 }
 
 .brand-name {
@@ -432,6 +575,7 @@ button:disabled {
   color: var(--ink);
   font-size: 1.6875rem;
   font-weight: 720;
+  letter-spacing: -0.025em;
   line-height: 1.16;
 }
 
@@ -455,7 +599,8 @@ button:disabled {
   font-size: 0.875rem;
   font-weight: var(--weight-semibold);
   cursor: pointer;
-  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, transform 150ms ease;
+  box-shadow: 0 1px 1px rgb(20 29 40 / 5%);
+  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
 }
 
 .button:not(:disabled):active {
@@ -465,10 +610,12 @@ button:disabled {
 .button-primary {
   color: var(--on-accent);
   background: var(--blue);
+  box-shadow: 0 7px 18px color-mix(in srgb, var(--blue) 22%, transparent);
 }
 
 .button-primary:not(:disabled):hover {
   background: var(--blue-hover);
+  box-shadow: 0 9px 22px color-mix(in srgb, var(--blue) 28%, transparent);
 }
 
 .button-secondary {
@@ -527,8 +674,10 @@ button:disabled {
   padding: 24px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  background: var(--surface);
-  box-shadow: var(--shadow-card);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 65%, var(--surface)), var(--surface) 42%),
+    var(--surface);
+  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 7%, transparent);
 }
 
 .launch-icon {
@@ -626,8 +775,8 @@ button:disabled {
   padding: 20px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  background: var(--surface);
-  box-shadow: var(--shadow-card);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 48%, var(--surface)), var(--surface) 38%);
+  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 6%, transparent);
 }
 
 .runtime-title-row {
@@ -1049,7 +1198,7 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 5%, transparent);
 }
 
 .management-service,
@@ -1074,13 +1223,14 @@ button:disabled {
 
 .management-row {
   cursor: pointer;
-  transition: background-color 150ms ease;
+  transition: background-color 150ms ease, padding-left 150ms ease;
 }
 
 /* 悬停反馈只在指针设备上生效：触屏没有 hover，避免点击后底色残留。 */
 @media (hover: hover) {
   .management-row:hover {
     background: var(--surface-hover);
+    padding-left: 19px;
   }
 }
 
@@ -1141,7 +1291,7 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface);
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 5%, transparent);
 }
 
 .section-title {
@@ -1544,6 +1694,38 @@ button:disabled {
 }
 
 @media (min-width: 900px) {
+  .app-shell {
+    grid-template-columns: 208px minmax(0, 1fr);
+  }
+
+  .app-sidebar {
+    align-items: stretch;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .sidebar-whale,
+  .sidebar-item {
+    justify-content: flex-start;
+    width: 100%;
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .sidebar-whale {
+    flex-direction: row;
+    gap: 10px;
+    min-height: 58px;
+  }
+
+  .sidebar-whale span,
+  .sidebar-item span {
+    max-width: 140px;
+    font-size: 0.8125rem;
+    font-weight: var(--weight-semibold);
+    opacity: 1;
+  }
+
   /* 宽屏下外壳内容居中在 1040px 列内，页头随之一并对齐。 */
   .mobile-header {
     padding-right: max(24px, calc((100% - 1040px) / 2));
@@ -1587,7 +1769,33 @@ button:disabled {
   }
 }
 
+@media (max-width: 620px) {
+  .app-shell {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+
+  .app-sidebar {
+    padding-right: 5px;
+    padding-left: 5px;
+  }
+
+  .sidebar-whale,
+  .sidebar-item {
+    width: 48px;
+    border-radius: 12px;
+  }
+
+  .sidebar-whale { min-height: 50px; }
+}
+
 @media (max-width: 390px) {
+  .mobile-header {
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .header-actions { gap: 4px; }
+
   .brand-badge {
     display: none;
   }
@@ -1780,6 +1988,83 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 }
 .appearance-hint { margin: 10px 0 0; font-size: 0.75rem; }
 
+.appearance-accent-block {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.appearance-accent-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ink);
+  font-size: 0.8125rem;
+}
+
+.appearance-accent-heading span {
+  color: var(--muted);
+  font-size: 0.6875rem;
+}
+
+.appearance-accent-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.appearance-accent-option {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 2.5rem;
+  padding: 7px 9px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 0.75rem;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease;
+}
+
+.appearance-accent-option.active {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.appearance-accent-option input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  appearance: none;
+  cursor: pointer;
+}
+
+.accent-swatch {
+  width: 11px;
+  height: 11px;
+  flex: none;
+  border: 2px solid color-mix(in srgb, var(--surface) 80%, transparent);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent);
+}
+
+@media (max-width: 440px) {
+  .appearance-accent-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .appearance-accent-heading { align-items: flex-start; flex-direction: column; gap: 3px; }
+}
+
 /* 后台保持：告警条上的操作按钮推到右侧。 */
 .inline-alert > .button {
   flex: none;
@@ -1820,6 +2105,175 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   line-height: 1.45;
   text-align: right;
   word-break: break-all;
+}
+
+/* 投递区文件夹浏览器：窄屏下根目录、面包屑和条目都允许换行，不把设置卡片撑宽。 */
+.mailbox-browser {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-inner);
+  background: var(--surface-hover);
+}
+
+.mailbox-browser-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.mailbox-browser-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mailbox-browser-heading strong {
+  color: var(--ink);
+  font-size: 0.8125rem;
+}
+
+.mailbox-browser-heading span {
+  color: var(--muted);
+  font-size: 0.6875rem;
+}
+
+.mailbox-create-button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.mailbox-root-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.mailbox-root-tab,
+.mailbox-breadcrumb button,
+.mailbox-entry {
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--surface);
+  font: inherit;
+  cursor: pointer;
+}
+
+.mailbox-root-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: var(--radius-inner);
+  font-size: 0.6875rem;
+  text-align: center;
+}
+
+.mailbox-root-tab.active {
+  border-color: color-mix(in srgb, var(--blue) 52%, var(--line));
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.mailbox-root-tab:disabled,
+.mailbox-breadcrumb button:disabled,
+.mailbox-entry:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.mailbox-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px;
+  min-width: 0;
+  padding-top: 3px;
+  color: var(--muted);
+  font-size: 0.6875rem;
+}
+
+.mailbox-breadcrumb button {
+  min-height: 26px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: var(--ink);
+  font-size: inherit;
+}
+
+.mailbox-breadcrumb-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.mailbox-entry-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.mailbox-entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  text-align: left;
+}
+
+.mailbox-entry:hover,
+.mailbox-entry:focus-visible,
+.mailbox-root-tab:hover,
+.mailbox-root-tab:focus-visible,
+.mailbox-breadcrumb button:hover,
+.mailbox-breadcrumb button:focus-visible {
+  border-color: color-mix(in srgb, var(--blue) 42%, var(--line));
+  color: var(--blue);
+}
+
+.mailbox-entry span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 0.75rem;
+}
+
+.mailbox-entry small {
+  color: var(--muted);
+  font-size: 0.625rem;
+  white-space: nowrap;
+}
+
+.mailbox-entry-file {
+  cursor: default;
+}
+
+@media (max-width: 520px) {
+  .mailbox-browser-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .mailbox-create-button {
+    width: 100%;
+    justify-content: center;
+  }
 }
 
 .settings-note {

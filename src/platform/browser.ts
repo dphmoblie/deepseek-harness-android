@@ -1,9 +1,12 @@
 import { validatePluginRequest } from './plugins'
 import type {
   DiagnosticLogState,
+  AccessibilityAutomationState,
   DiagnosticLogText,
   HarnessLog,
   KeepAliveState,
+  MailboxRoot,
+  MailboxDirectoryState,
   ListenerHandle,
   MailboxState,
   ModelProviderId,
@@ -64,6 +67,7 @@ export function createBrowserBridge(): RuntimeBridge {
     runnerAvailable: true,
   }
   let shizuku: ShizukuState = { installed: true, running: true, permission: 'undetermined', connected: false }
+  let accessibility: AccessibilityAutomationState = { enabled: false, allowedPackages: [] }
   let diagnosticState: DiagnosticLogState = {
     enabled: false,
     retentionDays: DIAGNOSTIC_RETENTION_DEFAULT,
@@ -243,6 +247,15 @@ export function createBrowserBridge(): RuntimeBridge {
       return Promise.resolve({ ...shizuku })
     },
     openShizuku: () => Promise.resolve(),
+    getAccessibilityAutomationState: () => Promise.resolve({ ...accessibility, allowedPackages: [...accessibility.allowedPackages] }),
+    setAccessibilityAutomationPackages: packages => {
+      if (!Array.isArray(packages) || packages.length > 16 || packages.some(value => typeof value !== 'string')) {
+        return Promise.reject(new Error('无障碍白名单格式无效'))
+      }
+      accessibility = { ...accessibility, allowedPackages: [...new Set(packages)] }
+      return Promise.resolve({ ...accessibility, allowedPackages: [...accessibility.allowedPackages] })
+    },
+    openAccessibilitySettings: () => Promise.reject(new Error('浏览器预览不支持打开系统无障碍设置')),
     // 浏览器预览没有 Android 前台服务：如实报告未运行，避免误导保活预期。
     getKeepAliveState: (): Promise<KeepAliveState> => Promise.resolve({
       keepRuntimeInBackground: currentSettings.keepRuntimeInBackground === true,
@@ -285,6 +298,16 @@ export function createBrowserBridge(): RuntimeBridge {
       exportManifestName: 'dsh-workspace.manifest.json',
       importDirectory: 'mailbox-import',
     }),
+    getMailboxDirectory: (root: MailboxRoot, subdirectory?: string): Promise<MailboxDirectoryState> => {
+      if (root !== 'inbox' && root !== 'outbox') throw new Error('投递区根目录格式无效')
+      assertMailboxSubdirectory(subdirectory)
+      return Promise.reject(new Error('浏览器预览不支持浏览投递区'))
+    },
+    createMailboxFolder: (root: MailboxRoot, subdirectory: string): Promise<MailboxDirectoryState> => {
+      if (root !== 'inbox' && root !== 'outbox') throw new Error('投递区根目录格式无效')
+      assertMailboxSubdirectory(subdirectory)
+      return Promise.reject(new Error('浏览器预览不支持创建投递区目录'))
+    },
     getStorageAccessState: (): Promise<StorageAccessState> => Promise.resolve({
       mediaGranted: false,
       allFilesGranted: false,
@@ -296,8 +319,9 @@ export function createBrowserBridge(): RuntimeBridge {
     openAllFilesAccessSettings: () => Promise.resolve({ supported: false, granted: false }),
     // 没有真实文件系统可搬运：明确拒绝，不编造条目数与摘要。
     importMailbox: () => Promise.reject(new Error('浏览器预览不支持导入投递区')),
-    exportMailbox: subdirectory => {
+    exportMailbox: (subdirectory, destinationDirectory) => {
       assertMailboxSubdirectory(subdirectory)
+      assertMailboxSubdirectory(destinationDirectory)
       return Promise.reject(new Error('浏览器预览不支持导出投递区'))
     },
     /**

@@ -24,6 +24,35 @@ class HarnessKeepAlivePolicyTest {
     }
 
     @Test
+    fun recoversAfterBootOnlyForExplicitRunningIntent() {
+        assertTrue(
+            HarnessKeepAlivePolicy.shouldRecoverAfterBoot(
+                keepRuntimeInBackground = true,
+                lastIntent = RuntimeIntent.RUNNING,
+            ),
+        )
+        // 后台保持关闭或用户已停止时，不因系统广播擅自启动运行时。
+        assertFalse(
+            HarnessKeepAlivePolicy.shouldRecoverAfterBoot(
+                keepRuntimeInBackground = false,
+                lastIntent = RuntimeIntent.RUNNING,
+            ),
+        )
+        assertFalse(
+            HarnessKeepAlivePolicy.shouldRecoverAfterBoot(
+                keepRuntimeInBackground = true,
+                lastIntent = RuntimeIntent.STOPPED,
+            ),
+        )
+        assertFalse(
+            HarnessKeepAlivePolicy.shouldRecoverAfterBoot(
+                keepRuntimeInBackground = true,
+                lastIntent = RuntimeIntent.UNKNOWN,
+            ),
+        )
+    }
+
+    @Test
     fun keepsRuntimeWhileForegroundServiceIsResponsible() {
         // 划掉最近任务：前台服务仍在负责运行时时，插件销毁不得 shutdown。
         assertFalse(HarnessKeepAlivePolicy.shouldReleaseRuntimeOnPluginDetach(foregroundServiceActive = true))

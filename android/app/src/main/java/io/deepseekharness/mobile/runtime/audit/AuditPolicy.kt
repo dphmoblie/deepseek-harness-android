@@ -26,6 +26,15 @@ enum class AuditEvent {
     TERMINAL_CLOSE,
     SHIZUKU_PERMISSION,
 
+    /** 无障碍应用白名单与系统设置入口。 */
+    ACCESSIBILITY_CONFIG,
+
+    /** 无障碍窗口读取；不记录窗口内容、包名或资源 ID。 */
+    ACCESSIBILITY_READ,
+
+    /** 无障碍节点动作；不记录输入内容、包名或资源 ID。 */
+    ACCESSIBILITY_ACTION,
+
     /** 外置投递区：一键导入（inbox 的 tar → 工作区 mailbox-import）。 */
     MAILBOX_IMPORT,
 

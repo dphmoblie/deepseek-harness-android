@@ -36,10 +36,15 @@ const bridge = vi.hoisted(() => ({
   requestShizukuPermission: vi.fn(),
   connectShizuku: vi.fn(),
   openShizuku: vi.fn(),
+  getAccessibilityAutomationState: vi.fn(),
+  setAccessibilityAutomationPackages: vi.fn(),
+  openAccessibilitySettings: vi.fn(),
   getKeepAliveState: vi.fn(),
   getOverlayBallState: vi.fn(),
   openOverlaySettings: vi.fn(),
   getMailboxState: vi.fn(),
+  getMailboxDirectory: vi.fn(),
+  createMailboxFolder: vi.fn(),
   getStorageAccessState: vi.fn(),
   requestNotificationPermission: vi.fn(),
   getDiagnosticLogState: vi.fn(),
@@ -179,11 +184,16 @@ beforeEach(() => {
   bridge.getState.mockResolvedValue({ ...readyState })
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
+  bridge.getAccessibilityAutomationState.mockResolvedValue({ enabled: false, allowedPackages: [] })
+  bridge.setAccessibilityAutomationPackages.mockResolvedValue({ enabled: false, allowedPackages: [] })
+  bridge.openAccessibilitySettings.mockResolvedValue(undefined)
   bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive })
   // 导航用例不关心悬浮球：给一个已授权、已关闭的稳定初值即可。
   bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
   bridge.openOverlaySettings.mockResolvedValue(undefined)
   bridge.getMailboxState.mockResolvedValue({ ...mailbox })
+  bridge.getMailboxDirectory.mockResolvedValue({ root: 'inbox', path: undefined, entries: [], truncated: false })
+  bridge.createMailboxFolder.mockResolvedValue({ root: 'inbox', path: undefined, entries: [], truncated: false })
   bridge.getStorageAccessState.mockResolvedValue({ ...storageAccess })
   bridge.getDiagnosticLogState.mockResolvedValue({ ...diagnostic })
   bridge.addRuntimeProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })
@@ -313,5 +323,17 @@ describe('返回键与视图历史', () => {
     // 收尾：回到栈底。
     await pressBack()
     expect(mainViewHeading()).toBeVisible()
+  })
+
+  it('侧栏鲸鱼入口打开会话管理页并保留可回退历史', async () => {
+    await renderAtMainView()
+
+    fireEvent.click(screen.getByRole('button', { name: '会话管理' }))
+    expect(await screen.findByRole('heading', { name: '会话管理' })).toBeVisible()
+    expect(window.location.hash).toBe('#sessions')
+
+    await pressBack()
+    expect(mainViewHeading()).toBeVisible()
+    expect(window.location.hash).toBe('')
   })
 })

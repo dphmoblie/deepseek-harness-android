@@ -12,7 +12,7 @@ import java.util.concurrent.TimeoutException
 /**
  * Device UI automation over an existing, user-visible device Shell session.
  *
- * 安全模型（不变的部分）：不引入新的可执行文件；调用方只能从四个白名单操作里选一个，
+ * 安全模型（不变的部分）：不引入新的可执行文件；调用方只能从固定白名单操作里选一个，
  * 参数在这里校验，危险 shell 语法在构造阶段就被拒绝；命令内容不写入审计日志。
  *
  * 变化的部分（本次修复）：注入文本由「直接打进交互式 PTY 的一行命令」改为
@@ -24,7 +24,32 @@ import java.util.concurrent.TimeoutException
  * 即使字段校验被绕过也无法逃出模板。
  */
 enum class DeviceCommand {
-    SCREENSHOT, UI_DUMP, TAP, INPUT_TEXT;
+    SCREENSHOT,
+    UI_DUMP,
+    TAP,
+    INPUT_TEXT,
+    DEVICE_INFO,
+    LIST_PACKAGES,
+    GET_SETTING,
+    BATTERY,
+    /** 启动指定包名的默认入口。 */
+    LAUNCH_APP,
+    /** 读取当前前台 Activity 对应的包名诊断行。 */
+    FOREGROUND_PACKAGE,
+    /** 等待有限时长，用于等待应用状态稳定。 */
+    WAIT,
+    /** 只读列出投递区目录的一层条目。 */
+    FILE_LIST,
+    /** 读取投递区文件并返回有界 Base64。 */
+    FILE_READ,
+    /** 写入投递区文件，默认不覆盖已有文件。 */
+    FILE_WRITE,
+    /** 创建投递区目录。 */
+    FILE_MKDIR,
+    /** 文件通道的语义别名：从 Android 下载到 AI。 */
+    FILE_DOWNLOAD,
+    /** 文件通道的语义别名：从 AI 上传到 Android。 */
+    FILE_UPLOAD;
 
     companion object {
         fun fromName(name: String): DeviceCommand? = when (name) {
@@ -32,6 +57,19 @@ enum class DeviceCommand {
             "uiDump" -> UI_DUMP
             "tap" -> TAP
             "inputText" -> INPUT_TEXT
+            "deviceInfo" -> DEVICE_INFO
+            "listPackages" -> LIST_PACKAGES
+            "getSetting" -> GET_SETTING
+            "battery" -> BATTERY
+            "launchApp", "appLaunch" -> LAUNCH_APP
+            "foregroundPackage", "currentApp" -> FOREGROUND_PACKAGE
+            "wait" -> WAIT
+            "fileList" -> FILE_LIST
+            "fileRead" -> FILE_READ
+            "fileWrite" -> FILE_WRITE
+            "fileMkdir" -> FILE_MKDIR
+            "fileDownload" -> FILE_DOWNLOAD
+            "fileUpload" -> FILE_UPLOAD
             else -> null
         }
     }
@@ -208,6 +246,14 @@ class DeviceCommandRunner(
      */
     private fun errorCodeFor(command: DeviceCommand, exitCode: Int): String? = when {
         exitCode == 0 -> null
+        command.isFileCommand() -> when (exitCode) {
+            FILE_NOT_FOUND_EXIT -> "DEVICE_FILE_NOT_FOUND"
+            FILE_ESCAPE_EXIT -> "DEVICE_FILE_ESCAPE"
+            FILE_TOO_LARGE_EXIT -> "DEVICE_FILE_TOO_LARGE"
+            FILE_EXISTS_EXIT -> "DEVICE_FILE_EXISTS"
+            FILE_FAILED_EXIT -> "DEVICE_FILE_FAILED"
+            else -> "DEVICE_FILE_FAILED"
+        }
         command == DeviceCommand.UI_DUMP -> when (exitCode) {
             UI_DUMP_EXIT_NO_TOOL -> "UI_DUMP_NO_TOOL"
             UI_DUMP_EXIT_FAILED -> "UI_DUMP_FAILED"
@@ -215,6 +261,17 @@ class DeviceCommandRunner(
             else -> "DEVICE_COMMAND_FAILED"
         }
         else -> "DEVICE_COMMAND_FAILED"
+    }
+
+    private fun DeviceCommand.isFileCommand(): Boolean = when (this) {
+        DeviceCommand.FILE_LIST,
+        DeviceCommand.FILE_READ,
+        DeviceCommand.FILE_WRITE,
+        DeviceCommand.FILE_MKDIR,
+        DeviceCommand.FILE_DOWNLOAD,
+        DeviceCommand.FILE_UPLOAD,
+        -> true
+        else -> false
     }
 
     /**
@@ -264,7 +321,21 @@ class DeviceCommandRunner(
                 "下一步：回到应用确认 Shizuku 已授权并已连接，然后重试。"
         "PLUGIN_DESTROYED" ->
             "运行时已经结束，在途的设备命令被统一收口，这次调用没有执行。\n" +
-                "下一步：重新启动运行时后再试。"
+            "下一步：重新启动运行时后再试。"
+        "DEVICE_COMMAND_INVALID" ->
+            "设备命令参数未通过安全校验，本次调用没有执行。\n下一步：只使用界面提供的白名单选项与格式。"
+        "DEVICE_FILE_INVALID" ->
+            "文件通道参数未通过安全校验，本次调用没有执行。\n下一步：只使用投递区 inbox/outbox 和相对路径。"
+        "DEVICE_FILE_NOT_FOUND" ->
+            "投递区目标不存在，或目标类型与操作不匹配。\n下一步：先用 mobile_device_file_list 查看目录条目。"
+        "DEVICE_FILE_ESCAPE" ->
+            "投递区路径解析越出固定目录，或目录包含不受信任的符号链接；本次调用已拒绝。\n下一步：改用 inbox/outbox 下的普通相对路径。"
+        "DEVICE_FILE_TOO_LARGE" ->
+            "文件超过 128 KiB 的 Shizuku 小文件通道限额。\n下一步：使用应用内投递区归档搬运较大文件。"
+        "DEVICE_FILE_EXISTS" ->
+            "目标已经存在；为避免静默覆盖，本次调用已拒绝。\n下一步：明确设置 overwrite=true 后再重试。"
+        "DEVICE_FILE_FAILED" ->
+            "投递区文件操作在设备侧失败，设备输出已保留在下面的原始输出中。\n下一步：检查投递区权限与目标目录后再重试。"
         else -> null
     }
 
@@ -309,6 +380,149 @@ class DeviceCommandRunner(
             // 与外层的单引号包裹不冲突。
             Body("input text \"$param\"", "\$?")
         }
+        // 只读设备信息：限定字段，避免把完整 getprop（可能含厂商私有信息）回传到 WebView。
+        DeviceCommand.DEVICE_INFO -> Body(
+            "printf 'manufacturer='; getprop ro.product.manufacturer; " +
+                "printf 'model='; getprop ro.product.model; " +
+                "printf 'androidRelease='; getprop ro.build.version.release; " +
+                "printf 'sdk='; getprop ro.build.version.sdk",
+            "\$?",
+        )
+        // 仅列出已安装包名；查询字符串严格限制为包名字符，不能拼出 Shell 语法。
+        DeviceCommand.LIST_PACKAGES -> {
+            if (param.length > MAX_PACKAGE_QUERY_CHARS ||
+                param.any { it !in PACKAGE_QUERY_CHARS }
+            ) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "包名筛选条件无效")
+            val filter = param.trim()
+            val script = if (filter.isEmpty()) {
+                "pm list packages | head -n 256"
+            } else {
+                "pm list packages | grep -F -- \"$filter\" | head -n 256"
+            }
+            Body(script, "\$?")
+        }
+        // 只开放对保活、屏幕与调试状态有用的非敏感设置键，拒绝读取 android_id 等隐私字段。
+        DeviceCommand.GET_SETTING -> {
+            if (param.length > MAX_SETTING_PARAM_CHARS) {
+                throw RuntimeFailure("DEVICE_COMMAND_INVALID", "系统设置参数过长")
+            }
+            val parts = param.split(',', limit = 2).map { it.trim() }
+            val namespace = parts.getOrNull(0).orEmpty()
+            val key = parts.getOrNull(1).orEmpty()
+            if (namespace !in SETTING_NAMESPACES || key !in SAFE_SETTING_KEYS) {
+                throw RuntimeFailure("DEVICE_COMMAND_INVALID", "系统设置键不在允许范围内")
+            }
+            Body("settings get $namespace $key", "\$?")
+        }
+        // 电池状态是只读诊断信息，输出由上层的固定缓冲窗口限制大小。
+        DeviceCommand.BATTERY -> {
+            if (param.isNotBlank()) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "电池诊断不接受参数")
+            Body("dumpsys battery | head -n 64", "\$?")
+        }
+        // 只允许标准 Android 包名，并通过 monkey 启动其默认入口；不接受 Activity、Intent 或 Shell 参数。
+        DeviceCommand.LAUNCH_APP -> {
+            if (param.length > MAX_PACKAGE_NAME_CHARS || !PACKAGE_NAME_PATTERN.matches(param)) {
+                throw RuntimeFailure("DEVICE_COMMAND_INVALID", "应用包名格式无效")
+            }
+            Body("monkey -p \"$param\" 1", "\$?")
+        }
+        // 读取当前前台包名相关的系统诊断行，不返回完整 dumpsys，减少设备信息暴露。
+        DeviceCommand.FOREGROUND_PACKAGE -> {
+            if (param.isNotBlank()) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "前台应用查询不接受参数")
+            Body(
+                "dumpsys activity activities | grep -E \"mResumedActivity|mFocusedApp|topResumedActivity\" | head -n 4",
+                "\$?",
+            )
+        }
+        // 等待仅接受 100ms..10s，使用固定秒数表达式，避免把任意字符串送入 Shell。
+        DeviceCommand.WAIT -> {
+            val millis = param.toLongOrNull()
+                ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "等待时长无效")
+            if (millis !in MIN_WAIT_MILLIS..MAX_WAIT_MILLIS) {
+                throw RuntimeFailure("DEVICE_COMMAND_INVALID", "等待时长超出允许范围")
+            }
+            val seconds = millis / 1000.0
+            Body("sleep $seconds", "\$?")
+        }
+        DeviceCommand.FILE_LIST -> fileListBody(param)
+        DeviceCommand.FILE_READ, DeviceCommand.FILE_DOWNLOAD -> fileReadBody(param)
+        DeviceCommand.FILE_WRITE, DeviceCommand.FILE_UPLOAD -> fileWriteBody(param)
+        DeviceCommand.FILE_MKDIR -> fileMkdirBody(param)
+    }
+
+    /** 生成投递区文件命令的公共安全检查：根目录固定，真实路径由 readlink 再次收敛。 */
+    private fun filePrelude(request: DeviceFilePolicy.Request): String {
+        val root = singleQuote(request.root.absolutePath)
+        val path = singleQuote(request.path)
+        return "dsh_root=$root; " +
+            "dsh_root_real=\$(readlink -f \"\$dsh_root\" 2>/dev/null) || exit $FILE_ESCAPE_EXIT; " +
+            "[ \"\$dsh_root_real\" = \"\$dsh_root\" ] || exit $FILE_ESCAPE_EXIT; " +
+            "dsh_target=\"\$dsh_root\"/$path; " +
+            "dsh_parent=\$(dirname \"\$dsh_target\"); " +
+            "dsh_parent_real=\$(readlink -f \"\$dsh_parent\" 2>/dev/null) || exit $FILE_ESCAPE_EXIT; " +
+            "case \"\$dsh_parent_real\" in \"\$dsh_root\"|\"\$dsh_root\"/*) ;; *) exit $FILE_ESCAPE_EXIT ;; esac; "
+    }
+
+    private fun fileListBody(param: String): Body {
+        val request = DeviceFilePolicy.parse(param)
+        val script = filePrelude(request) +
+            "if [ -L \"\$dsh_target\" ] || [ ! -d \"\$dsh_target\" ]; then exit $FILE_NOT_FOUND_EXIT; fi; " +
+            "ls -1Ap \"\$dsh_target\" | head -n ${DeviceFilePolicy.MAX_LIST_ENTRIES}"
+        return Body(script, "\$?")
+    }
+
+    private fun fileReadBody(param: String): Body {
+        val request = DeviceFilePolicy.parse(param)
+        if (request.path.isEmpty()) throw RuntimeFailure("DEVICE_FILE_INVALID", "读取目标不能为空")
+        val script = filePrelude(request) +
+            "if [ -L \"\$dsh_target\" ] || [ ! -f \"\$dsh_target\" ]; then exit $FILE_NOT_FOUND_EXIT; fi; " +
+            "dsh_real=\$(readlink -f \"\$dsh_target\" 2>/dev/null) || exit $FILE_ESCAPE_EXIT; " +
+            "case \"\$dsh_real\" in \"\$dsh_root\"|\"\$dsh_root\"/*) ;; *) exit $FILE_ESCAPE_EXIT ;; esac; " +
+            "dsh_size=\$(wc -c < \"\$dsh_target\") || exit $FILE_FAILED_EXIT; " +
+            "[ \"\$dsh_size\" -le ${DeviceFilePolicy.MAX_FILE_BYTES} ] || exit $FILE_TOO_LARGE_EXIT; " +
+            "toybox base64 \"\$dsh_target\""
+        return Body(script, "\$?")
+    }
+
+    private fun fileWriteBody(param: String): Body {
+        val request = DeviceFilePolicy.parse(param, requireContent = true)
+        if (request.path.isEmpty()) throw RuntimeFailure("DEVICE_FILE_INVALID", "写入目标不能为空")
+        val content = request.contentBase64 ?: throw RuntimeFailure("DEVICE_FILE_INVALID", "文件内容缺失")
+        val encoded = singleQuote(content)
+        val overwrite = if (request.overwrite) "1" else "0"
+        val script = filePrelude(request) +
+            "if [ -e \"\$dsh_target\" ] || [ -L \"\$dsh_target\" ]; then " +
+            "[ \"$overwrite\" = 1 ] || exit $FILE_EXISTS_EXIT; fi; " +
+            "dsh_tmp=\"\$dsh_parent/.dsh-upload-\$\$\"; " +
+            "rm -f \"\$dsh_tmp\"; " +
+            "printf '%s' $encoded | toybox base64 -d > \"\$dsh_tmp\" || { rm -f \"\$dsh_tmp\"; exit $FILE_FAILED_EXIT; }; " +
+            "dsh_size=\$(wc -c < \"\$dsh_tmp\") || { rm -f \"\$dsh_tmp\"; exit $FILE_FAILED_EXIT; }; " +
+            "[ \"\$dsh_size\" -le ${DeviceFilePolicy.MAX_FILE_BYTES} ] || { rm -f \"\$dsh_tmp\"; exit $FILE_TOO_LARGE_EXIT; }; " +
+            "mv -f \"\$dsh_tmp\" \"\$dsh_target\" || { rm -f \"\$dsh_tmp\"; exit $FILE_FAILED_EXIT; }"
+        return Body(script, "\$?")
+    }
+
+    private fun fileMkdirBody(param: String): Body {
+        val request = DeviceFilePolicy.parse(param)
+        if (request.path.isEmpty()) throw RuntimeFailure("DEVICE_FILE_INVALID", "目录目标不能为空")
+        // mkdir -p 会跟随中间目录的符号链接；先后逐级检查，避免投递区内的链接把目标带出固定根目录。
+        val noFollowChecks = buildString {
+            append("dsh_cursor=\"\$dsh_root\"; ")
+            append("[ ! -L \"\$dsh_cursor\" ] || exit $FILE_ESCAPE_EXIT; ")
+            request.path.split('/').forEach { component ->
+                append("dsh_cursor=\"\$dsh_cursor\"/${singleQuote(component)}; ")
+                append("[ ! -L \"\$dsh_cursor\" ] || exit $FILE_ESCAPE_EXIT; ")
+            }
+        }
+        val script = filePrelude(request) +
+            noFollowChecks +
+            "if [ -e \"\$dsh_target\" ] || [ -L \"\$dsh_target\" ]; then " +
+            "[ ! -L \"\$dsh_target\" ] || exit $FILE_ESCAPE_EXIT; " +
+            "[ -d \"\$dsh_target\" ] || exit $FILE_EXISTS_EXIT; " +
+            "else mkdir -p \"\$dsh_target\" || exit $FILE_FAILED_EXIT; fi" +
+            noFollowChecks +
+            "[ -d \"\$dsh_cursor\" ] || exit $FILE_FAILED_EXIT; "
+        return Body(script, "\$?")
     }
 
     /**
@@ -347,6 +561,11 @@ class DeviceCommandRunner(
         private const val UI_DUMP_EXIT_NO_TOOL = 3
         private const val UI_DUMP_EXIT_FAILED = 4
         private const val UI_DUMP_EXIT_EMPTY = 5
+        private const val FILE_NOT_FOUND_EXIT = 4
+        private const val FILE_TOO_LARGE_EXIT = 5
+        private const val FILE_ESCAPE_EXIT = 6
+        private const val FILE_EXISTS_EXIT = 7
+        private const val FILE_FAILED_EXIT = 8
         private const val MAX_BUFFER_CHARS = 8 * 1024 * 1024
 
         /**
@@ -355,6 +574,23 @@ class DeviceCommandRunner(
          */
         private const val MAX_CONTROL_TAIL_CHARS = 512
         private const val MAX_TEXT_CHARS = 1024
+        private const val MAX_PACKAGE_QUERY_CHARS = 128
+        private const val MAX_PACKAGE_NAME_CHARS = 192
+        private const val MAX_SETTING_PARAM_CHARS = 256
+        private const val MIN_WAIT_MILLIS = 100L
+        private const val MAX_WAIT_MILLIS = 10_000L
+        private val PACKAGE_QUERY_CHARS = ('a'..'z').toSet() + ('A'..'Z').toSet() + ('0'..'9').toSet() + setOf('.', '_', '-')
+        private val PACKAGE_NAME_PATTERN = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)*$")
+        private val SETTING_NAMESPACES = setOf("system", "secure", "global")
+        private val SAFE_SETTING_KEYS = setOf(
+            "adb_enabled",
+            "development_settings_enabled",
+            "stay_on_while_plugged_in",
+            "screen_brightness",
+            "screen_off_timeout",
+            "accelerometer_rotation",
+            "user_rotation",
+        )
         private val REQUEST_ID_PATTERN = Regex("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
     }
 }

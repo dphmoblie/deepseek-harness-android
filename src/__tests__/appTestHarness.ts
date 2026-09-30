@@ -67,10 +67,15 @@ export const bridge = {
   requestShizukuPermission: vi.fn(),
   connectShizuku: vi.fn(),
   openShizuku: vi.fn(),
+  getAccessibilityAutomationState: vi.fn(),
+  setAccessibilityAutomationPackages: vi.fn(),
+  openAccessibilitySettings: vi.fn(),
   getKeepAliveState: vi.fn(),
   getOverlayBallState: vi.fn(),
   openOverlaySettings: vi.fn(),
   getMailboxState: vi.fn(),
+  getMailboxDirectory: vi.fn(),
+  createMailboxFolder: vi.fn(),
   getStorageAccessState: vi.fn(),
   // 存储目录白名单（§5.1）。界面接线尚未做，但桩必须先在：桥加了方法而夹具没加，
   // 用到它的界面会在 effect 阶段抛错并**整棵树卸载**，表现成「找不到任何元素」——
@@ -231,12 +236,17 @@ export function beforeEachAppTest(): void {
   bridge.getState.mockResolvedValue({ ...readyState })
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
+  bridge.getAccessibilityAutomationState.mockResolvedValue({ enabled: false, allowedPackages: [] })
+  bridge.setAccessibilityAutomationPackages.mockImplementation((packages: string[]) => Promise.resolve({ enabled: false, allowedPackages: [...new Set(packages)] }))
+  bridge.openAccessibilitySettings.mockResolvedValue(undefined)
   bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive })
   // 默认已授予「显示在其他应用上层」权限：与用例无关的测试不该被一个禁用开关影响。
   bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
   bridge.openOverlaySettings.mockResolvedValue(undefined)
   // 默认投递区不可用（未授予「所有文件访问」）：与真机首次安装后的状态一致。
   bridge.getMailboxState.mockResolvedValue({ ...unavailableMailbox })
+  bridge.getMailboxDirectory.mockResolvedValue({ root: 'inbox', path: undefined, entries: [], truncated: false })
+  bridge.createMailboxFolder.mockResolvedValue({ root: 'inbox', path: undefined, entries: [], truncated: false })
   bridge.getStorageAccessState.mockResolvedValue({ ...storageAccess })
   // 与「未授予所有文件访问」的真机初始状态一致：白名单为空、档位 T0、上限照实回 8。
   // 给默认值而不只是 vi.fn()，是为了让桩在**被调用**时也返回符合契约的形状——

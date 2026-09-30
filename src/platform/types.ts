@@ -14,7 +14,25 @@ export type RuntimePhase =
 
 export type TerminalKind = 'ubuntu' | 'device'
 
-export type DeviceCommand = 'screenshot' | 'uiDump' | 'tap' | 'inputText'
+/** Shizuku 设备命令：只读诊断与受控交互均由原生白名单兜底。 */
+export type DeviceCommand =
+  | 'screenshot'
+  | 'uiDump'
+  | 'tap'
+  | 'inputText'
+  | 'deviceInfo'
+  | 'listPackages'
+  | 'getSetting'
+  | 'battery'
+  | 'launchApp'
+  | 'foregroundPackage'
+  | 'wait'
+  | 'fileList'
+  | 'fileRead'
+  | 'fileWrite'
+  | 'fileMkdir'
+  | 'fileDownload'
+  | 'fileUpload'
 
 export const MODEL_PROVIDER_IDS = [
   'deepseek',
@@ -254,6 +272,31 @@ export interface MailboxState {
   importDirectory: string
 }
 
+/** 无障碍服务状态；只返回是否已由用户开启及用户维护的目标包白名单。 */
+export interface AccessibilityAutomationState {
+  enabled: boolean
+  allowedPackages: string[]
+}
+
+/** 投递区固定根目录。只允许 inbox / outbox，不能把任意宿主路径交给文件浏览器。 */
+export type MailboxRoot = 'inbox' | 'outbox'
+
+/** 投递区当前目录中的一项；符号链接和特殊文件不会出现在此列表中。 */
+export interface MailboxDirectoryEntry {
+  name: string
+  kind: 'file' | 'directory'
+  bytes: number
+}
+
+/** 投递区目录浏览快照；[path] 为空表示当前位于所选根目录。 */
+export interface MailboxDirectoryState {
+  root: MailboxRoot
+  path?: string
+  entries: MailboxDirectoryEntry[]
+  /** 条目超过上限时只返回排序后的前一部分，界面应提示用户继续缩小目录范围。 */
+  truncated: boolean
+}
+
 /**
  * 存储访问状态（原生 `getStorageAccessState` 的载荷）。
  *
@@ -377,6 +420,8 @@ export interface MailboxExportResult {
   manifestName: string
   /** 导出起点相对工作区的路径；整个工作区时为 undefined。 */
   subdirectory?: string
+  /** 产物所在的 outbox 相对目录；省略表示 outbox 根目录。 */
+  destinationDirectory?: string
   /** 因目标越出导出起点而被跳过的符号链接数。 */
   skippedLinks: number
   /** 因类型无法表达（FIFO / 设备节点）而被跳过的条目数。 */
@@ -521,6 +566,12 @@ export interface RuntimeBridge {
   requestShizukuPermission: () => Promise<ShizukuState>
   connectShizuku: () => Promise<ShizukuState>
   openShizuku: () => Promise<void>
+  /** 读取无障碍服务状态和目标应用白名单；不会返回当前窗口内容。 */
+  getAccessibilityAutomationState: () => Promise<AccessibilityAutomationState>
+  /** 保存目标应用包名白名单；只能由用户在设置页修改。 */
+  setAccessibilityAutomationPackages: (packages: string[]) => Promise<AccessibilityAutomationState>
+  /** 跳转系统无障碍设置，由用户手动开启服务。 */
+  openAccessibilitySettings: () => Promise<void>
   /** 后台保持与恢复状态；不含任何凭据或用户数据。 */
   getKeepAliveState: () => Promise<KeepAliveState>
   /** 申请前台服务通知权限；Android 13 以下直接返回已授予。 */
@@ -537,6 +588,10 @@ export interface RuntimeBridge {
    * 并给出授权入口，**不得**改用别的目录。
    */
   getMailboxState: () => Promise<MailboxState>
+  /** 浏览固定 inbox/outbox 根目录下的相对目录，返回受限且经过 NoFollow 检查的条目。 */
+  getMailboxDirectory: (root: MailboxRoot, subdirectory?: string) => Promise<MailboxDirectoryState>
+  /** 在固定 inbox/outbox 根目录下创建相对目录；不会覆盖已有条目。 */
+  createMailboxFolder: (root: MailboxRoot, subdirectory: string) => Promise<MailboxDirectoryState>
   /** 存储访问状态（T1 媒体只读 / T2 所有文件访问）；只有布尔与枚举，不含路径。 */
   getStorageAccessState: () => Promise<StorageAccessState>
   /** 申请媒体读取权限（T1）。它**不解锁投递区**，投递区需要 T2。 */
@@ -556,10 +611,10 @@ export interface RuntimeBridge {
    */
   importMailbox: () => Promise<MailboxImportResult>
   /**
-   * 一键导出：工作区（或 [subdirectory] 指定的子目录）→ outbox 的
+   * 一键导出：工作区（或 [subdirectory] 指定的子目录）→ outbox（或 [destinationDirectory] 子目录）的
    * `dsh-workspace.tar` + `dsh-workspace.manifest.json` + `dsh-workspace.tar.sha256`。
    */
-  exportMailbox: (subdirectory?: string) => Promise<MailboxExportResult>
+  exportMailbox: (subdirectory?: string, destinationDirectory?: string) => Promise<MailboxExportResult>
   /**
    * ≤8 目录白名单状态：访客内 `/mnt/user/<序号>` 的**唯一来源**。
    *

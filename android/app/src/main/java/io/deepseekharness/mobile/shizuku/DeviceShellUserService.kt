@@ -10,6 +10,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -29,32 +30,50 @@ class DeviceShellUserService() : IDeviceShellService.Stub() {
     }
 
     private val sessions = ConcurrentHashMap<String, Session>()
+    /** 限制单个 Shizuku 用户服务的 PTY、文件描述符与读线程总量。 */
+    private val sessionSlots = Semaphore(MAX_SESSIONS, true)
     private val ioExecutor = Executors.newCachedThreadPool()
     private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
 
     override fun createSession(columns: Int, rows: Int, callback: IDeviceShellCallback?): String {
         UbuntuTerminalManager.validateSize(columns, rows)
         requireNotNull(callback) { "Terminal callback is required" }
-        val handles = NativePty.spawn(
-            arrayOf(DEVICE_SHELL),
-            arrayOf(
-                "HOME=/data/local/tmp",
-                // Android framework tools read these variables during bootstrap. The PTY
-                // intentionally starts with a small environment, so provide the platform
-                // roots explicitly instead of relying on the parent Shizuku process.
-                "ANDROID_DATA=/data",
-                "ANDROID_ROOT=/system",
-                "ANDROID_STORAGE=/storage",
-                "EXTERNAL_STORAGE=/sdcard",
-                "LANG=C.UTF-8",
-                "PATH=/system/bin:/system/xbin",
-                "TERM=xterm-256color",
-                "TMPDIR=/data/local/tmp",
-            ),
-            columns,
-            rows,
-        )
-        check(handles.size == 2 && handles[0] > 1 && handles[1] >= 0) { "Invalid terminal handles" }
+        check(sessionSlots.tryAcquire()) { "设备 Shell 会话数已达上限，请先关闭已有会话" }
+        val handles = try {
+            NativePty.spawn(
+                arrayOf(DEVICE_SHELL),
+                arrayOf(
+                    "HOME=/data/local/tmp",
+                    // Android framework tools read these variables during bootstrap. The PTY
+                    // intentionally starts with a small environment, so provide the platform
+                    // roots explicitly instead of relying on the parent Shizuku process.
+                    "ANDROID_DATA=/data",
+                    "ANDROID_ROOT=/system",
+                    "ANDROID_STORAGE=/storage",
+                    "EXTERNAL_STORAGE=/sdcard",
+                    "LANG=C.UTF-8",
+                    "PATH=/system/bin:/system/xbin",
+                    "TERM=xterm-256color",
+                    "TMPDIR=/data/local/tmp",
+                ),
+                columns,
+                rows,
+            )
+        } catch (error: Throwable) {
+            sessionSlots.release()
+            throw error
+        }
+        if (handles.size != 2 || handles[0] <= 1 || handles[1] < 0) {
+            if (handles.size >= 1 && handles[0] > 1) {
+                runCatching { NativePty.signal(handles[0].toInt(), SIGNAL_KILL) }
+                runCatching { NativePty.waitFor(handles[0].toInt()) }
+            }
+            if (handles.size >= 2 && handles[1] >= 0) {
+                runCatching { NativePty.close(handles[1].toInt()) }
+            }
+            sessionSlots.release()
+            error("终端句柄无效")
+        }
         val session = Session(UUID.randomUUID().toString(), handles[0].toInt(), handles[1].toInt(), callback)
         session.deathRecipient = IBinder.DeathRecipient { close(session) }
         try {
@@ -63,10 +82,21 @@ class DeviceShellUserService() : IDeviceShellService.Stub() {
             NativePty.signal(session.processId, SIGNAL_KILL)
             NativePty.waitFor(session.processId)
             NativePty.close(session.fileDescriptor)
+            sessionSlots.release()
             throw error
         }
         sessions[session.id] = session
-        ioExecutor.execute { readLoop(session) }
+        try {
+            ioExecutor.execute { readLoop(session) }
+        } catch (error: Throwable) {
+            sessions.remove(session.id, session)
+            runCatching { session.callback.asBinder().unlinkToDeath(session.deathRecipient, 0) }
+            runCatching { NativePty.signal(session.processId, SIGNAL_KILL) }
+            runCatching { NativePty.waitFor(session.processId) }
+            runCatching { NativePty.close(session.fileDescriptor) }
+            sessionSlots.release()
+            throw error
+        }
         return session.id
     }
 
@@ -151,6 +181,7 @@ class DeviceShellUserService() : IDeviceShellService.Stub() {
             } catch (_: RemoteException) {
                 // The client may have closed with the terminal.
             }
+            sessionSlots.release()
         }
     }
 
@@ -181,6 +212,7 @@ class DeviceShellUserService() : IDeviceShellService.Stub() {
         private const val DEVICE_SHELL = "/system/bin/sh"
         private const val SIGNAL_TERM = 15
         private const val SIGNAL_KILL = 9
+        private const val MAX_SESSIONS = 4
         private val SESSION_PATTERN = Regex("^[a-f0-9-]{36}$")
     }
 }
