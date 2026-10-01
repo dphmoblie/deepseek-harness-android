@@ -19,6 +19,7 @@ import type {
   RuntimeVersionsState,
   ShizukuState,
   StorageAccessState,
+  StorageDirectoryState,
   StorageDirsState,
   TerminalChunk,
   TerminalExit,
@@ -311,6 +312,12 @@ export function createBrowserBridge(): RuntimeBridge {
       assertMailboxSubdirectory(subdirectory)
       return Promise.reject(new Error('浏览器预览不支持创建投递区目录'))
     },
+    // 浏览器模式下没有共享目录：白名单（`/mnt/user/<序号>`）只存在于设备上。
+    // 明确拒绝，而不是回一份空快照——空快照会被界面显示成「这个目录是空的」。
+    getStorageDirectory: (): Promise<StorageDirectoryState> =>
+      Promise.reject(new Error('浏览器模式下没有共享目录')),
+    createStorageFolder: (): Promise<StorageDirectoryState> =>
+      Promise.reject(new Error('浏览器模式下没有共享目录')),
     getStorageAccessState: (): Promise<StorageAccessState> => Promise.resolve({
       mediaGranted: false,
       allFilesGranted: false,

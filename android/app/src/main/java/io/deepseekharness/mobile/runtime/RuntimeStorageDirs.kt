@@ -109,6 +109,18 @@ internal object StorageDirCodes {
     const val UNREADABLE = "STORAGE_DIR_UNREADABLE"
 
     /**
+     * 文件系统层面的失败：目录列举不出来。
+     *
+     * 与 [UNREADABLE] 分开：那条是「进来之前就判定读不了」（白名单条目本身不可用，界面该提示用户
+     * 重新选择目录），这条是「判定通过、真去读的时候 IO 失败」（删到一半、介质被卸载……），
+     * 属于瞬时故障，用户重试可能就好了。
+     */
+    const val DIRECTORY_FAILED = "STORAGE_DIR_DIRECTORY_FAILED"
+
+    /** 新建子目录时目标已存在（文件或目录）：`CREATE_NEW` 语义，绝不覆盖用户的东西。 */
+    const val FOLDER_EXISTS = "STORAGE_DIR_FOLDER_EXISTS"
+
+    /**
      * 路径含 PRoot 绑定源不接受的字符（只有 ASCII 字母数字与 `._-`）。
      *
      * 这条不是洁癖：`RuntimeCommand` 的绑定参数校验是白名单正则，非 ASCII 或带空格的目录名
@@ -200,6 +212,21 @@ internal data class StorageDirsState(
     /** 至少有一条目录会真的出现在访客里；界面用它决定是否承诺「访客可见」。 */
     val active: Boolean get() = entries.any { it.available }
 }
+
+/**
+ * 一条白名单目录下某个相对目录的列举快照（共享目录侧的目录浏览载荷）。
+ *
+ * 与投递区的 `MailboxDirectoryState` **只差根标识的名字**：那边是 `root`（inbox/outbox），
+ * 这里是 `guestPath`（`/mnt/user/<序号>`）。条目类型也**刻意复用** `MailboxDirectoryEntry`——
+ * 前端用的是同一个文件浏览组件，线形状必须逐字相同（`{ name, kind, bytes }`，
+ * `kind` 取 `directory` / `file`）。
+ */
+internal data class StorageDirectoryState(
+    val guestPath: String,
+    val path: String?,
+    val entries: List<MailboxDirectoryEntry>,
+    val truncated: Boolean,
+)
 
 /**
  * 判定白名单所需的最小文件系统视图。
@@ -390,6 +417,32 @@ internal object RuntimeStorageDirsPolicy {
         }
         return value
     }
+
+    /**
+     * 访客路径（`/mnt/user/<序号>`）→ 白名单序号（1 起）。
+     *
+     * 只接受这一种形态：`/mnt/user`、`/mnt/user/01`、`/mnt/user/1/extra`、`/mnt/user/+1` 一律
+     * 拒绝。**不能宽松匹配**——严格形态检查是「这个 guestPath 到底指哪条目录」的唯一依据；
+     * 一旦允许别名（前导零、正号、尾随空格），同一个序号就会有多种写法，前端缓存的
+     * guestPath ↔ 目录映射会随之漂移。
+     *
+     * 序号本身是**持久化顺序**，只做范围与形态校验，不参与任何排序：序号与绑定顺序、与
+     * [StorageDirStatus.index] 必须是同一个数。
+     */
+    fun guestDirectoryIndex(guestPath: String): Int {
+        val prefix = "${RuntimeStorageDirsLayout.GUEST_PREFIX}/"
+        val digits = guestPath.removePrefix(prefix)
+        if (digits == guestPath) {
+            throw RuntimeFailure(StorageDirCodes.PATH_INVALID, "共享目录路径格式无效")
+        }
+        val index = digits.toIntOrNull()
+        if (index == null || index < 1 ||
+            RuntimeStorageDirsLayout.guestPath(index) != guestPath
+        ) {
+            throw RuntimeFailure(StorageDirCodes.PATH_INVALID, "共享目录路径格式无效")
+        }
+        return index
+    }
 }
 
 /**
@@ -452,7 +505,10 @@ internal class RuntimeStorageDirs(
     private val guestRoot: () -> File,
     /** 诊断出口：只记受控字段（reason/result/count/code），绝不记路径。 */
     private val record: (DiagnosticLevel, Map<String, String>) -> Unit = { _, _ -> },
-) {
+) : OptionalBindProvider {
+    /** 白名单可选绑定的归类：访客侧 `/mnt/user/<序号>` 整体一类，一起加、一起撤。 */
+    override val group: OptionalBindGroup get() = OptionalBindGroup.USER_DIRECTORIES
+
     /** 上一次已上报的读取丢弃数：避免界面每次轮询状态都刷一条同样的诊断。 */
     private var reportedDrops = -1
 
@@ -527,12 +583,83 @@ internal class RuntimeStorageDirs(
     }
 
     /**
+     * 浏览一条白名单目录下的相对目录（用户共享目录侧的 `RuntimeMailbox.listDirectory` 对应物）。
+     *
+     * 与投递区**共用同一段列举实现**（`RuntimeDirectoryBrowser`）：路径规则、排序、截断上限、
+     * 符号链接判定都只有一份。这不是省事，而是要求——前端用同一个文件浏览组件打开两类目录，
+     * 两边的口径一旦分叉，就会变成「同一个页面里两个目录行为不一样」。
+     */
+    fun directory(guestPath: String, subdirectory: String?): StorageDirectoryState {
+        val status = requireGuestDirectory(guestPath)
+        val normalized = normalizeSharedSubdirectory(subdirectory)
+        val snapshot = RuntimeDirectoryBrowser.snapshot(
+            File(status.entry.path),
+            normalized,
+            RuntimeDirectoryBrowser.SHARED_STORAGE,
+        )
+        return StorageDirectoryState(
+            guestPath = guestPath,
+            path = snapshot.path,
+            entries = snapshot.entries,
+            truncated = snapshot.truncated,
+        )
+    }
+
+    /**
+     * 在一条白名单目录下创建相对子目录，建完即回一份新快照（与 `createMailboxFolder` 对齐）。
+     *
+     * 与投递区同一套规则：父目录可按需创建，最终目录必须 `CREATE_NEW`（已有同名条目一律拒绝，
+     * 绝不覆盖用户的东西），建完走 [directory] 重新列举，保证返回的列表与「再浏览一次」同源。
+     */
+    fun createFolder(guestPath: String, subdirectory: String): StorageDirectoryState {
+        val status = requireGuestDirectory(guestPath)
+        val normalized = normalizeSharedSubdirectory(subdirectory)
+            ?: throw RuntimeFailure(StorageDirCodes.PATH_INVALID, "存储目录新目录路径不能为空")
+        RuntimeDirectoryBrowser.createFolder(
+            File(status.entry.path),
+            normalized,
+            RuntimeDirectoryBrowser.SHARED_STORAGE,
+        )
+        val parent = normalized.substringBeforeLast("/", "")
+        return directory(guestPath, parent.ifEmpty { null })
+    }
+
+    /**
+     * 把一个访客路径（`/mnt/user/<序号>`）解析成**当前可用**的白名单条目。
+     *
+     * 序号即持久化顺序（与 [statuses] 的编号一致），**不重排**：界面上的 `/mnt/user/3` 必须永远
+     * 指同一条目录，否则用户按序号做的选择会漂移（跳过失效条目会留下空洞，但空洞不补位）。
+     *
+     * 失败一律走受控码：档位不满足 → UNSUPPORTED / NEEDS_PERMISSION（复用 [requireReady]）；
+     * 形态非法 → PATH_INVALID；序号越界 → NOT_FOUND；条目自身失效 → 它自己的 reasonCode。
+     * 码里**不带路径**。
+     */
+    internal fun requireGuestDirectory(guestPath: String): StorageDirStatus {
+        requireReady()
+        val index = RuntimeStorageDirsPolicy.guestDirectoryIndex(guestPath)
+        val entry = read().entries.getOrNull(index - 1)
+            ?: throw RuntimeFailure(StorageDirCodes.NOT_FOUND, "该共享目录不在白名单中")
+        val status = entryStatus(index, entry)
+        if (!status.available) {
+            throw RuntimeFailure(status.reasonCode ?: StorageDirCodes.NOT_A_DIRECTORY, "该共享目录当前不可用")
+        }
+        return status
+    }
+
+    /** 子目录参数：规则与投递区同一份（`RuntimeMailboxPolicy`），只有错误码族换成共享目录的。 */
+    private fun normalizeSharedSubdirectory(raw: String?): String? = RuntimeMailboxPolicy.normalizeSubdirectory(
+        raw,
+        StorageDirCodes.PATH_INVALID,
+        "存储目录路径无效",
+    )
+
+    /**
      * 追加到 PRoot 启动档的绑定：逐条检查、逐条跳过。
      *
      * **不可用就返回空列表**（未授权 / Android 11 以下 / 一条都不可用）：绑定不存在的宿主路径
      * 会让 PRoot 直接起不来。
      */
-    fun bindMounts(): List<ProotBindMount> {
+    override fun bindMounts(): List<ProotBindMount> {
         if (!fileSystem.isFeatureSupported() || !fileSystem.isSharedStorageAccessible()) return emptyList()
         val entries = read().entries
         if (entries.isEmpty()) return emptyList()
@@ -552,7 +679,8 @@ internal class RuntimeStorageDirs(
                 skipped += "${status.index}:${StorageDirCodes.UNREADABLE}"
                 return@forEach
             }
-            if (!ensureGuestMountPoint(status.guestPath)) {
+            // 挂载点创建与投递区共用同一份实现（见 OptionalBindProvider.kt）。
+            if (!ensureGuestMountPoint(root, status.guestPath)) {
                 skipped += "${status.index}:${StorageDirCodes.PATH_INVALID}"
                 return@forEach
             }
@@ -568,7 +696,7 @@ internal class RuntimeStorageDirs(
      * 只取计数与路径摘要：`profile_key` 存在应用私有偏好里，**不把用户目录路径写进去**，
      * 同时保证「内容一变，缓存即失效」（与投递区把可用性放进 `profileKey` 是同一机制）。
      */
-    fun cacheToken(): String {
+    override fun cacheToken(): String {
         val entries = read().entries
         if (entries.isEmpty()) return "dirs:0"
         val digest = MessageDigest.getInstance("SHA-256")
@@ -627,18 +755,6 @@ internal class RuntimeStorageDirs(
             StorageDirStatus(index, entry, StorageDirAvailability.AVAILABLE, null)
         } catch (failure: RuntimeFailure) {
             StorageDirStatus(index, entry, StorageDirAvailability.UNAVAILABLE, failure.code)
-        }
-    }
-
-    private fun ensureGuestMountPoint(guestPath: String): Boolean {
-        val root = guestRoot()
-        if (!MailboxTree.isRealDirectory(root.toPath())) return false
-        val directory = File(root, guestPath.removePrefix("/"))
-        return try {
-            MailboxTree.createDirectoriesNoFollow(root.toPath(), directory.toPath())
-            true
-        } catch (_: Throwable) {
-            false
         }
     }
 

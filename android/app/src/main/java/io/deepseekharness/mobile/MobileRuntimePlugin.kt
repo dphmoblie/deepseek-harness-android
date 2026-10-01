@@ -48,6 +48,7 @@ import io.deepseekharness.mobile.runtime.RuntimeVersionInfo
 import io.deepseekharness.mobile.runtime.RuntimeVersionPolicy
 import io.deepseekharness.mobile.runtime.RuntimeWorkspaceFiles
 import io.deepseekharness.mobile.runtime.StorageDirCodes
+import io.deepseekharness.mobile.runtime.StorageDirectoryState
 import io.deepseekharness.mobile.runtime.StorageDirStatus
 import io.deepseekharness.mobile.runtime.StorageDirsState
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
@@ -124,6 +125,34 @@ internal fun optionalMailboxDirectory(data: JSONObject, key: String): String? {
     val value = data.opt(key)
     if (value == null || value == JSONObject.NULL) return null
     if (value !is String) throw RuntimeFailure("MAILBOX_PATH_INVALID", "投递区目标目录格式无效")
+    return value
+}
+
+/**
+ * 共享目录的 `guestPath` 参数：`/mnt/user/<序号>`（取自 [storageDirsState] 条目里的同名字段）。
+ *
+ * 这里只拒绝「缺失 / 空白 / 非字符串」，**形态与序号范围由
+ * `RuntimeStorageDirsPolicy.guestDirectoryIndex` 统一校验**（白名单里的序号语义、越界判定都只有
+ * 那一份）。错误码用共享目录这一族的 `STORAGE_DIR_PATH_INVALID`，并且不带路径。
+ */
+internal fun requiredStorageGuestPath(data: JSONObject): String {
+    val value = data.opt("guestPath") as? String
+    if (value.isNullOrBlank()) throw RuntimeFailure(StorageDirCodes.PATH_INVALID, "共享目录访客路径缺失")
+    return value
+}
+
+/**
+ * 共享目录的 `subdirectory` 参数：语义与投递区**逐字相同**（省略/空白 = 该目录本身）。
+ *
+ * 这里只做类型检查；路径规则（绝对路径、`..`、`.` 分段、超长、超深）仍旧只有
+ * `RuntimeMailboxPolicy.normalizeSubdirectory` 一份——与投递区共用实现，只有错误码族按链路分开
+ * （`MAILBOX_INPUT_INVALID` / `STORAGE_DIR_PATH_INVALID` 都是已发布的契约，不能互换）。
+ */
+internal fun optionalStorageSubdirectory(data: JSONObject): String? {
+    if (!data.has("subdirectory")) return null
+    val value = data.opt("subdirectory")
+    if (value == null || value == JSONObject.NULL) return null
+    if (value !is String) throw RuntimeFailure(StorageDirCodes.PATH_INVALID, "存储目录子路径格式无效")
     return value
 }
 
@@ -1330,6 +1359,45 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 权限：应用内桥接；浏览共享目录白名单里某一条目录下的相对目录。
+     *
+     * 与 [mailboxDirectory] **同形状**——前端用同一个文件浏览组件打开投递区与共享目录：
+     * 入参 `guestPath`（`/mnt/user/<序号>`，取自 [storageDirsState] 条目里的同名字段）+
+     * 可选 `subdirectory`；返回 `{ guestPath, path, entries, truncated }`，条目的线形状与投递区
+     * 逐字相同（`{ name, kind, bytes }`，`kind` 为 `directory` / `file`）。
+     *
+     * **序号语义是持久化顺序**：`/mnt/user/3` 永远指白名单里第 3 条，不因别的条目失效而重排，
+     * 因此前端可以放心把它当成稳定标识。
+     */
+    @PluginMethod
+    fun storageDirectory(call: PluginCall) {
+        execute(call) {
+            val guestPath = requiredStorageGuestPath(call.data)
+            val subdirectory = optionalStorageSubdirectory(call.data)
+            storageDirs().directory(guestPath, subdirectory).toJs()
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；在共享目录白名单的某一条目录下新建子目录。
+     *
+     * 与 [createMailboxFolder] 行为对齐：校验通过才创建，建完即回一份**新的列举快照**
+     * （同一个 `guestPath`，`path` 指向新目录），前端不必再发一次浏览请求。
+     *
+     * 规则与投递区完全共用（`RuntimeDirectoryBrowser` + `RuntimeMailboxPolicy`）：
+     * 父目录可按需创建，目标已存在时报 `STORAGE_DIR_FOLDER_EXISTS`，绝不覆盖用户已有的东西。
+     */
+    @PluginMethod
+    fun createStorageFolder(call: PluginCall) {
+        execute(call) {
+            val guestPath = requiredStorageGuestPath(call.data)
+            val subdirectory = optionalStorageSubdirectory(call.data)
+                ?: throw RuntimeFailure(StorageDirCodes.PATH_INVALID, "存储目录新目录路径不能为空")
+            storageDirs().createFolder(guestPath, subdirectory).toJs()
+        }
+    }
+
+    /**
      * 权限：应用内桥接；仅申请相册/视频的媒体读取权限。
      * Android 13 起用 READ_MEDIA_*，12 及以下用 READ_EXTERNAL_STORAGE；被拒绝只返回结果，
      * 不阻断其他功能（容器仍可读应用私有目录）。
@@ -1874,6 +1942,24 @@ class MobileRuntimePlugin : Plugin() {
         .put("name", name)
         .put("kind", kind)
         .put("bytes", bytes)
+
+    /**
+     * 共享目录里某一条目录的浏览载荷。
+     *
+     * 与 [MailboxDirectoryState.toJs] **只差根字段的名字**（`root` → `guestPath`），条目用的是同一个
+     * [MailboxDirectoryEntry.toJs]：前端用同一个文件浏览组件，两边的线形状必须逐字相同，
+     * 任何一边多一个字段都会让「同一个组件」退化成两套渲染分支。
+     */
+    private fun StorageDirectoryState.toJs(): JSObject = JSObject()
+        .put("guestPath", guestPath)
+        .put("path", path ?: JSONObject.NULL)
+        .put(
+            "entries",
+            org.json.JSONArray().also { array ->
+                entries.forEach { entry -> array.put(entry.toJs()) }
+            },
+        )
+        .put("truncated", truncated)
 
     /**
      * 目录白名单状态。

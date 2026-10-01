@@ -61,6 +61,7 @@ import {
   validateSettingsUpdate,
   validateShizukuState,
   validateStorageAccessState,
+  validateStorageDirectoryState,
   validateStorageDirsState,
   validateStoredSettings,
   validateRuntimeSource,
@@ -104,6 +105,8 @@ interface NativeRuntimePlugin {
   mailboxState(): Promise<unknown>
   mailboxDirectory(options: { root: MailboxRoot; subdirectory?: string }): Promise<unknown>
   createMailboxFolder(options: { root: MailboxRoot; subdirectory: string }): Promise<unknown>
+  storageDirectory(options: { guestPath: string; subdirectory?: string }): Promise<unknown>
+  createStorageFolder(options: { guestPath: string; subdirectory: string }): Promise<unknown>
   getStorageAccessState(): Promise<unknown>
   requestMediaPermission(): Promise<unknown>
   openAllFilesAccessSettings(): Promise<unknown>
@@ -238,6 +241,14 @@ function createNativeBridge(): RuntimeBridge {
     createMailboxFolder: (root, subdirectory) => NativeRuntime
       .createMailboxFolder({ root, subdirectory })
       .then(validateMailboxDirectoryState),
+    // 共享目录：与投递区逐字对齐的两条。`guestPath` 只来自白名单条目的同名字段，
+    // 其形态由原生侧与 validateStorageDirectoryState 两侧各守一遍。
+    getStorageDirectory: (guestPath, subdirectory) => NativeRuntime
+      .storageDirectory({ guestPath, ...(subdirectory === undefined ? {} : { subdirectory }) })
+      .then(validateStorageDirectoryState),
+    createStorageFolder: (guestPath, subdirectory) => NativeRuntime
+      .createStorageFolder({ guestPath, subdirectory })
+      .then(validateStorageDirectoryState),
     getStorageAccessState: () => NativeRuntime.getStorageAccessState().then(validateStorageAccessState),
     requestMediaPermission: () => NativeRuntime.requestMediaPermission().then(validateMediaPermissionResult),
     openAllFilesAccessSettings: () => NativeRuntime.openAllFilesAccessSettings().then(validateAllFilesAccessResult),

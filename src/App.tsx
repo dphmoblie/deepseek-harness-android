@@ -41,6 +41,7 @@ import {
   Rocket,
   Save,
   ScrollText,
+  Search,
   Settings2,
   Share2,
   ShieldCheck,
@@ -95,6 +96,7 @@ import type {
   ShizukuState,
   StorageAccessState,
   StorageDirEntry,
+  StorageDirectoryState,
   StorageDirsState,
   TerminalKind,
 } from './platform/types'
@@ -122,6 +124,8 @@ type AppView =
   | 'terminal'
   | 'environment'
   | 'plugins'
+  | 'versions'
+  | 'files'
 
 /** 设置二级页：把原先的单页设置按功能分类，避免所有选项挤在一屏里。 */
 type SettingsPage = 'models' | 'runtime' | 'terminal' | 'shizuku' | 'diagnostics'
@@ -150,6 +154,182 @@ function isSettingsView(view: AppView): boolean {
   return view === 'settings' || settingsPageOf(view) !== null
 }
 
+/**
+ * 设置首页的入口分组。
+ *
+ * 为什么要把「运行与后台」从「设置分类」里拆出来：它管的是运行环境本身（保活、前台服务、
+ * 悬浮球、投递区），和「模型与密钥 / 终端与外观 / 诊断与日志」这类改一次就生效的配置不是一回事。
+ * 混在一张列表里时，用户要么在「设置」里翻运行环境，要么在运行环境里找设置。
+ */
+type SettingsHomeGroup = 'runtime' | 'files' | 'versions' | 'settings'
+
+/** 分组顺序即界面顺序；没有命中入口的分组（含暂时还没有入口的分组）整组不渲染。 */
+const SETTINGS_HOME_GROUPS: { id: SettingsHomeGroup; label: string }[] = [
+  { id: 'runtime', label: '运行与后台' },
+  { id: 'files', label: '文件管理' },
+  { id: 'versions', label: '版本管理' },
+  { id: 'settings', label: '设置' },
+]
+
+/** 入口点下去要去哪：设置二级页、外壳一级页，或者干脆不跳转（Harness 服务行本身带按钮）。 */
+type SettingsHomeTarget = { kind: 'page'; page: SettingsPage } | { kind: 'view'; view: AppView } | { kind: 'service' }
+
+interface SettingsHomeEntry {
+  /** 稳定标识：只用于 React key、图标与测试定位；改标题不影响它，也不参与匹配。 */
+  id: string
+  group: SettingsHomeGroup
+  /** 标题与说明就是入口按钮上显示的文字（与二级页标题逐字一致，匹配时也算进去）。 */
+  title: string
+  hint: string
+  /**
+   * 同义关键词：写「用户会说的词」，不是界面上出现过的词。
+   *
+   * 界面上只有「后台保持」「诊断与日志」，而用户输入的是「保活」「省电」「日志」「log」「key」——
+   * 不补这些词，按功能词搜就是一个都搜不到。全部小写；英文补常见形态（plugin/plugins）。
+   */
+  keywords: string[]
+  target: SettingsHomeTarget
+  icon: ReactNode
+}
+
+/**
+ * 设置首页的全部入口。
+ *
+ * 四组都有实际入口：运行与后台、文件管理、版本管理、设置。投递区与共享目录已从
+ * 「运行与后台」页搬进「文件管理」一级页，功能词也跟着搬（同一件事不写两处词）。
+ *
+ * 这里的标题与说明是**裸字符串**，渲染时才交给 `t()`；仓库外的 `locales-check.cjs`
+ * 只认字面量 `t("…")` 调用，看不见这张表。补英文词条时必须手工同步 `src/locales/en.ts`，
+ * 兜底的是 `src/App.settingsHome.test.tsx` 里「切成英文后整屏入口都是英文」那条用例。
+ */
+const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
+  // —— 运行与后台：把运行环境跑起来、留在后台、跑不动时排查。
+  {
+    id: 'service',
+    group: 'runtime',
+    title: 'Harness 服务',
+    hint: '启动、停止与当前状态',
+    keywords: ['harness', '服务', '进程', '停止', '启动', '运行中', '本机', '端口', 'service', 'stop', 'start'],
+    target: { kind: 'service' },
+    icon: <Bot size={20} />,
+  },
+  {
+    id: 'plugins',
+    group: 'runtime',
+    title: '插件管理',
+    hint: '官方与第三方插件，按插件包管理启停与更新',
+    keywords: ['插件', 'plugin', 'plugins', '扩展', '启停', '启用', '禁用', '市场', '更新', '修复', '重装'],
+    target: { kind: 'view', view: 'plugins' },
+    icon: <Settings2 size={20} />,
+  },
+  {
+    id: 'environment',
+    group: 'runtime',
+    title: 'Ubuntu 运行时',
+    hint: '安装进度、版本、来源与重置',
+    keywords: ['ubuntu', '运行时', '运行环境', '安装', '更新', '重置', '镜像', 'rootfs', '磁盘', '空间', '存储', '占用', '下载', 'runtime', 'install', 'image', 'reset', 'disk'],
+    target: { kind: 'view', view: 'environment' },
+    icon: <HardDrive size={20} />,
+  },
+  {
+    id: 'runtime-page',
+    group: 'runtime',
+    title: '运行与后台',
+    hint: '运行时来源、后台保持、悬浮球与前台服务',
+    keywords: ['后台', '保活', '后台保持', '前台服务', '通知', '悬浮球', '省电', '电池', '自启', '开机', '唤醒', 'background', 'keepalive', 'notification', 'battery', 'float'],
+    target: { kind: 'page', page: 'runtime' },
+    icon: <Power size={20} />,
+  },
+  {
+    id: 'terminal-view',
+    group: 'runtime',
+    title: '终端与设备 Shell',
+    hint: 'Ubuntu 终端与设备 Shell（需 Shizuku）',
+    keywords: ['终端', 'terminal', 'shell', '命令行', 'bash', '脚本', '设备', 'shizuku', 'adb', '命令'],
+    target: { kind: 'view', view: 'terminal' },
+    icon: <SquareTerminal size={20} />,
+  },
+
+  // —— 文件管理：手机侧与访客之间对外可见的目录都在这一个页面里。
+  {
+    id: 'files',
+    group: 'files',
+    title: '文件管理',
+    hint: '投递区与共享目录：一处浏览、建文件夹与搬运',
+    // 这组功能词从「运行与后台」搬过来：投递区与共享目录不再挂在那页上，
+    // 搜「导入」「投递区」的人要找的是这一页。
+    keywords: ['文件', '文件夹', '目录', '投递区', '共享目录', '导入', '导出', '搬运', '浏览', '新建文件夹', 'mailbox', 'storage', 'file', 'files', 'folder', 'directory'],
+    target: { kind: 'view', view: 'files' },
+    icon: <FolderInput size={20} />,
+  },
+
+  // —— 版本管理：磁盘上有哪几份运行时、现在用哪一份。
+  {
+    id: 'versions',
+    group: 'versions',
+    title: '版本管理',
+    hint: '保留上一版本，可一键切回；装新版本仍在运行环境页',
+    keywords: ['版本', 'version', '运行时版本', '上一版本', '回退', '切回', '切换', '回滚', '降级', '升级', '更新', 'dsh', 'previous', 'rollback', 'switch', 'retained'],
+    target: { kind: 'view', view: 'versions' },
+    icon: <RotateCcw size={20} />,
+  },
+
+  // —— 设置：改一次就生效的配置项。
+  {
+    id: 'models',
+    group: 'settings',
+    title: '模型与密钥',
+    hint: '供应商、API Key 与自定义模型',
+    keywords: ['模型', '密钥', 'key', 'api', 'apikey', 'api key', '供应商', 'provider', 'token', '凭据', '自定义模型'],
+    target: { kind: 'page', page: 'models' },
+    icon: <KeyRound size={20} />,
+  },
+  {
+    id: 'terminal-settings',
+    group: 'settings',
+    title: '终端与外观',
+    hint: '终端字号与屏幕常亮',
+    keywords: ['终端', '外观', '字号', '字体', '常亮', '屏幕', '显示', '主题', '深色', '浅色', 'appearance', 'font', 'theme'],
+    target: { kind: 'page', page: 'terminal' },
+    icon: <SquareTerminal size={20} />,
+  },
+  {
+    id: 'shizuku',
+    group: 'settings',
+    title: 'Shizuku 与设备 Shell',
+    hint: '授权、连接与设备 Shell 可用性',
+    keywords: ['shizuku', '授权', '权限', '连接', '设备', 'shell', 'adb', '服务'],
+    target: { kind: 'page', page: 'shizuku' },
+    icon: <Smartphone size={20} />,
+  },
+  {
+    id: 'diagnostics',
+    group: 'settings',
+    title: '诊断与日志',
+    hint: '采集开关、保留天数、运行日志与导出',
+    keywords: ['诊断', '日志', 'log', 'logs', '采集', '保留', '导出', '排查', '报错', '错误', '崩溃', '重启'],
+    target: { kind: 'page', page: 'diagnostics' },
+    icon: <ScrollText size={20} />,
+  },
+]
+
+/**
+ * 按功能词本地匹配入口：不发请求、不写存储、不改运行状态。
+ *
+ * 规则刻意保持简单，让用户能预期、不用猜：
+ *  - 大小写不敏感；
+ *  - 查询按空白拆成多个词，**全部命中**才算匹配（多词顺序无关，可当「缩小范围」用）；
+ *  - 匹配范围 = 标题 + 说明 + 同义关键词。
+ *
+ * 断网、运行时没装好时一样可用——「找不到入口」恰恰是用户最需要搜的时候。
+ */
+function matchesSettingsHomeQuery(entry: SettingsHomeEntry, query: string): boolean {
+  const tokens = query.toLowerCase().split(/\s+/).filter(token => token !== '')
+  if (tokens.length === 0) return true
+  const haystack = `${entry.title} ${entry.hint} ${entry.keywords.join(' ')}`.toLowerCase()
+  return tokens.every(token => haystack.includes(token))
+}
+
 /** 外壳视图的全部取值：历史状态与地址片段只接受这里的值，其余一律回落到主视图。 */
 const APP_VIEWS: AppView[] = [
   'conversation',
@@ -163,6 +343,8 @@ const APP_VIEWS: AppView[] = [
   'terminal',
   'environment',
   'plugins',
+  'versions',
+  'files',
 ]
 
 /**
@@ -476,6 +658,15 @@ function storageDirRemoveBusyId(path: string): string {
 }
 
 /**
+ * 「文件管理」页里共享目录那一路的 busy 标识。
+ *
+ * 投递区那一路复用既有的 `mailbox-directory` / `mailbox-folder-create`：同一个浏览器、
+ * 同一时刻只可能有一条链路在飞，用两组标识只是为了让两条桥调用在日志里分得清。
+ */
+const FILES_STORAGE_DIRECTORY_BUSY_ID = 'files-storage-directory'
+const FILES_STORAGE_FOLDER_CREATE_BUSY_ID = 'files-storage-folder-create'
+
+/**
  * 从桥调用抛出的错误里取出受控错误码。
  *
  * 正常路径上码在 `error.code`：原生侧 `call.reject(message, code)` 过桥后，
@@ -603,7 +794,10 @@ interface AppSidebarProps {
  * 因此侧栏不会把会话正文、凭据或终端输出放进 DOM。
  */
 function AppSidebar({ activeView, onNavigate }: AppSidebarProps) {
-  const settingsActive = isSettingsView(activeView) || activeView === 'environment' || activeView === 'terminal'
+  // 「版本管理」也归在设置轨道高亮里：它是从设置首页进入的一级页，底部导航不该看起来像「没进设置」。
+  // 「文件管理」与「版本管理」是从设置首页进入的一级页：底部导航/侧栏仍算在设置里，
+  // 否则用户进到这两页会觉得「我没在设置里」。
+  const settingsActive = isSettingsView(activeView) || activeView === 'environment' || activeView === 'terminal' || activeView === 'versions' || activeView === 'files'
   const item = (view: AppView, label: string, icon: ReactNode, active: boolean, className = '') => (
     <button
       className={`sidebar-item ${active ? 'is-active' : ''} ${className}`}
@@ -646,7 +840,7 @@ function BottomNavigation({ activeView, onNavigate }: AppSidebarProps) {
   const items: { view: AppView; label: string; icon: ReactNode; active: boolean }[] = [
     { view: 'conversation', label: '首页', icon: <MessageSquare size={20} />, active: activeView === 'conversation' || activeView === 'sessions' },
     { view: 'plugins', label: '插件', icon: <Blocks size={20} />, active: activeView === 'plugins' },
-    { view: 'settings', label: '设置', icon: <Settings2 size={20} />, active: isSettingsView(activeView) || activeView === 'environment' || activeView === 'terminal' },
+    { view: 'settings', label: '设置', icon: <Settings2 size={20} />, active: isSettingsView(activeView) || activeView === 'environment' || activeView === 'terminal' || activeView === 'versions' || activeView === 'files' },
   ]
   return (
     <nav className="bottom-navigation" aria-label={t('底部导航')}>
@@ -1096,18 +1290,47 @@ interface SettingsHomeScreenProps {
   diagnostic: DiagnosticLogState
   shizuku: ShizukuState
   onLaunch: () => void
-  onOpenEnvironment: () => void
   onOpenPage: (page: SettingsPage) => void
-  onOpenPlugins: () => void
-  onOpenTerminal: () => void
+  onOpenView: (view: AppView) => void
   onStop: () => void
 }
 
 /**
- * 设置首页：只保留语言、运行环境管理与五个设置分类入口。
- * 具体选项在各自二级页里，避免单页堆叠过多控件。
+ * 设置首页：按分组列出全部入口，并支持按功能词本地过滤。
+ *
+ * 过滤只决定这一屏显示哪些入口，不改变任何行为：命中后点下去走的是同一条路，
+ * 所以「搜出来的按钮能点、点了到对地方」可以用测试钉住。
  */
-function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenEnvironment, onOpenPage, onOpenPlugins, onOpenTerminal, onStop }: SettingsHomeScreenProps) {
+function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenPage, onOpenView, onStop }: SettingsHomeScreenProps) {
+  /** 过滤词只活在组件里：离开设置首页即清空，下次进来不该被上次的搜索框卡住。 */
+  const [query, setQuery] = useState('')
+  /** 每个分组只留命中的入口；整组都没命中就连标题一起不渲染，避免空标题刷屏。 */
+  const groups = SETTINGS_HOME_GROUPS
+    .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id && matchesSettingsHomeQuery(entry, query)) }))
+    .filter(item => item.entries.length > 0)
+  const matched = groups.reduce((total, item) => total + item.entries.length, 0)
+  const searching = query.trim() !== ''
+
+  /** 服务行没有跳转，说明文字跟着运行状态走，所以按 id 现算；其余入口用固定说明。 */
+  const hintOf = (entry: SettingsHomeEntry): string => entry.id === 'service'
+    ? (runtime.phase === 'running' ? t("正在本机运行") : runtimeInstalled(runtime) ? t("已停止，可随时启动") : t("等待安装运行环境"))
+    : entry.id === 'environment' && runtime.updateAvailable ? t("发现内置运行环境更新")
+      : t(entry.hint)
+
+  /** 右侧状态徽标：与二级页里显示的是同一个事实，不在两处各写一遍。 */
+  const badgeOf = (entry: SettingsHomeEntry): string => entry.id === 'runtime-page'
+    ? (keepAlive.foregroundServiceActive ? t("后台保持中") : keepAlive.keepRuntimeInBackground ? t("已开启") : t("未开启"))
+    : entry.id === 'shizuku'
+      ? (!shizuku.installed ? t("未安装") : shizuku.connected ? t("已连接") : shizuku.permission === 'granted' ? t("已授权") : t("待授权"))
+      : entry.id === 'diagnostics'
+        ? (diagnostic.enabled ? t("收集中") : t("未收集"))
+        : ''
+
+  const openEntry = (entry: SettingsHomeEntry): void => {
+    if (entry.target.kind === 'page') onOpenPage(entry.target.page)
+    else if (entry.target.kind === 'view') onOpenView(entry.target.view)
+  }
+
   return (
     <div className="screen settings-screen">
       <div className="screen-heading management-heading">
@@ -1123,57 +1346,63 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
 
       <LanguageSettings />
 
-      <section className="management-list" aria-label={t("运行环境管理")}>
-        <button className="management-row" type="button" onClick={onOpenPlugins}>
-          <span className="management-icon"><Settings2 size={20} /></span>
-          <span className="management-copy"><strong>{t("插件管理")}</strong><small>{t("官方与第三方插件，按插件包管理启停与更新")}</small></span>
-          <ChevronRight size={18} />
-        </button>
-        <div className="management-service">
-          <span className="management-icon dark"><Bot size={20} /></span>
-          <span className="management-copy">
-            <strong>{t("Harness 服务")}</strong>
-            <small>{runtime.phase === 'running' ? t("正在本机运行") : runtimeInstalled(runtime) ? t("已停止，可随时启动") : t("等待安装运行环境")}</small>
-          </span>
-          {runtime.phase === 'running' ? (
-            <button className="button button-danger-quiet compact-button" type="button" onClick={onStop} disabled={busy !== null}><Square size={16} />{t("停止")}</button>
-          ) : (
-            <PhaseBadge phase={runtime.phase} />
-          )}
-        </div>
-        <button className="management-row" type="button" onClick={onOpenEnvironment}>
-          <span className="management-icon dark"><HardDrive size={20} /></span>
-          <span className="management-copy"><strong>{t("Ubuntu 运行时")}</strong><small>{runtime.updateAvailable ? t("发现内置运行环境更新") : t("安装进度、版本、来源与重置")}</small></span>
-          <ChevronRight size={18} />
-        </button>
-        <button className="management-row" type="button" onClick={onOpenTerminal}>
-          <span className="management-icon"><SquareTerminal size={20} /></span>
-          <span className="management-copy"><strong>{t("终端与设备 Shell")}</strong><small>{t("Ubuntu 终端与设备 Shell（需 Shizuku）")}</small></span>
-          <ChevronRight size={18} />
-        </button>
-      </section>
+      {/* 搜索框固定在入口列表上方：入口一多，用户第一反应是找框，而不是往下翻。 */}
+      <div className="settings-search">
+        <Search size={18} aria-hidden="true" />
+        <input
+          type="search"
+          value={query}
+          onChange={event => setQuery(event.target.value)}
+          placeholder={t("按功能词查找入口")}
+          aria-label={t("按功能词查找入口")}
+          autoComplete="off"
+        />
+        {query !== '' && (
+          <button className="settings-search-clear" type="button" onClick={() => setQuery('')} aria-label={t("清空查找词")}>
+            <X size={16} />
+          </button>
+        )}
+      </div>
 
-      <section className="management-list" aria-label={t("设置分类")}>
-        {SETTINGS_PAGES.map(page => {
-          const meta = SETTINGS_PAGE_META[page]
-          const badge = page === 'runtime' ? (keepAlive.foregroundServiceActive ? t("后台保持中") : keepAlive.keepRuntimeInBackground ? t("已开启") : t("未开启"))
-            : page === 'shizuku' ? (!shizuku.installed ? t("未安装") : shizuku.connected ? t("已连接") : shizuku.permission === 'granted' ? t("已授权") : t("待授权"))
-              : page === 'diagnostics' ? (diagnostic.enabled ? t("收集中") : t("未收集"))
-                : ''
-          return (
-            <button className="management-row" key={page} type="button" onClick={() => onOpenPage(page)}>
-              <span className="management-icon">
-                {page === 'models' ? <KeyRound size={20} /> : page === 'runtime' ? <Power size={20} /> : page === 'terminal' ? <SquareTerminal size={20} /> : page === 'shizuku' ? <Smartphone size={20} /> : <ScrollText size={20} />}
-              </span>
+      {/* 结果条用 role="status"：输入时读屏能听到「找到几个」，而不是列表安静地变了一下。 */}
+      {searching && (
+        <p className="settings-note" role="status">
+          {matched === 0
+            ? t("没有匹配的入口：试试「导入」「日志」「保活」这类功能词")
+            : t("找到 {0} 个匹配的入口", matched)}
+        </p>
+      )}
+
+      {groups.map(({ group, entries }) => (
+        <section className="management-list" key={group.id} aria-label={t(group.label)}>
+          {/* 分组标题刻意不用 h1/h2：页头已经有一个「设置」，再加一个同名标题会让
+              「按标题名找元素」一次命中两个（测试与读屏都受影响），分组名走 section 的 aria-label。 */}
+          <p className="management-group-title">{t(group.label)}</p>
+          {entries.map(entry => (entry.target.kind === 'service' ? (
+            <div className="management-service" key={entry.id}>
+              <span className="management-icon dark">{entry.icon}</span>
               <span className="management-copy">
-                <strong>{t(meta.title)}</strong>
-                <small>{badge === '' ? t(meta.hint) : `${t(meta.hint)} · ${badge}`}</small>
+                <strong>{t(entry.title)}</strong>
+                <small>{hintOf(entry)}</small>
+              </span>
+              {runtime.phase === 'running' ? (
+                <button className="button button-danger-quiet compact-button" type="button" onClick={onStop} disabled={busy !== null}><Square size={16} />{t("停止")}</button>
+              ) : (
+                <PhaseBadge phase={runtime.phase} />
+              )}
+            </div>
+          ) : (
+            <button className="management-row" key={entry.id} type="button" onClick={() => openEntry(entry)}>
+              <span className="management-icon">{entry.icon}</span>
+              <span className="management-copy">
+                <strong>{t(entry.title)}</strong>
+                <small>{badgeOf(entry) === '' ? hintOf(entry) : `${hintOf(entry)} · ${badgeOf(entry)}`}</small>
               </span>
               <ChevronRight size={18} />
             </button>
-          )
-        })}
-      </section>
+          )))}
+        </section>
+      ))}
     </div>
   )
 }
@@ -1735,6 +1964,574 @@ function RuntimeVersionsPanel({
   )
 }
 
+interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
+  /** 返回设置首页：版本管理是一级页，返回键回设置首页，而不是回「运行与后台」。 */
+  onBack: () => void
+}
+
+/**
+ * 版本管理（一级页）：把运行时版本从「运行与后台」页里拆出来，单独占一屏。
+ *
+ * 为什么要拆：这一屏管的是「磁盘上有哪几份运行时、现在用哪一份」，和「保活、悬浮球、
+ * 前台服务、投递区」这些运行期开关不是一类事。混在一页里时，用户得在很长的运行页里
+ * 往下翻才能找到版本；拆开之后设置首页的「版本管理」分组才有对应入口可命中
+ * （搜索框里输入「版本」「回退」「切回」能直接到这一屏）。
+ *
+ * 页内不复制第二份实现：列表与两个操作仍然只有 `RuntimeVersionsPanel` 那一份，
+ * 这里只补页头、返回键与状态徽标。
+ */
+function RuntimeVersionsScreen({ runtime, loadVersions, switchVersion, deleteVersion, refreshRuntime, notify, onBack }: RuntimeVersionsScreenProps) {
+  return (
+    <div className="screen versions-screen">
+      <div className="screen-heading management-heading">
+        <div>
+          <p className="eyebrow">{t("应用管理")}</p>
+          <h1>{t("版本管理")}</h1>
+        </div>
+        <div className="heading-actions">
+          <PhaseBadge phase={runtime.phase} />
+          <button className="icon-button" type="button" aria-label={t("返回设置")} title={t("返回设置")} onClick={onBack}><ArrowLeft size={19} /></button>
+        </div>
+      </div>
+
+      <RuntimeVersionsPanel
+        runtime={runtime}
+        loadVersions={loadVersions}
+        switchVersion={switchVersion}
+        deleteVersion={deleteVersion}
+        refreshRuntime={refreshRuntime}
+        notify={notify}
+      />
+    </div>
+  )
+}
+
+/**
+ * 「文件管理」页当前浏览的根。
+ *
+ * 两种根的**语义不同**，这里只是把它们放进同一个浏览器里：
+ *  - 投递区（inbox / outbox）是「校验式批量搬运」通道：目录由原生侧管理，导入/导出走 tar + manifest；
+ *  - 共享目录是「实时挂载」：用户在系统里点选的手机目录，挂进访客的 `/mnt/user/<序号>`，直接可读可写。
+ *
+ * 正因为语义不同，导入到工作区/导出工作区**只在投递区根上渲染**；把两套动作混在一起会让
+ * 用户以为共享目录也要「搬运」一次才能用。
+ */
+type FilesRoot = { kind: 'mailbox'; root: MailboxRoot } | { kind: 'storage'; guestPath: string }
+
+interface FilesScreenProps {
+  busy: string | null
+  /** 投递区状态：null 表示尚未读到快照。 */
+  mailbox: MailboxState | null
+  mailboxReadFailed: boolean
+  /** 投递区当前目录快照；null 表示还没读到（尚未浏览过，或读取失败）。 */
+  mailboxDirectory: MailboxDirectoryState | null
+  mailboxDirectoryReadFailed: boolean
+  /** 存储访问状态（T1 媒体只读 / T2 所有文件访问）；null 表示尚未读到。 */
+  storageAccess: StorageAccessState | null
+  /** 目录白名单（共享目录的唯一来源）；null 表示尚未读到快照。 */
+  storageDirs: StorageDirsState | null
+  storageDirsReadFailed: boolean
+  /** 当前浏览的共享目录快照；null 表示还没读到。 */
+  storageDirectory: StorageDirectoryState | null
+  storageDirectoryReadFailed: boolean
+  /** 当前浏览的根：投递区（inbox/outbox）或一条共享目录。 */
+  filesRoot: FilesRoot
+  /** 本次会话内最近一次导入/导出结果；null 表示本次会话还没有搬运。 */
+  lastMailboxImport: MailboxImportResult | null
+  lastMailboxExport: MailboxExportResult | null
+  /** 新增一条共享目录：原生侧弹 SAF 目录选择器，用户取消不算故障。 */
+  onAddStorageDirectory: () => void
+  /** 按宿主路径移除一条共享目录（用路径而不是序号：序号会随增删变化）。 */
+  onRemoveStorageDirectory: (path: string) => void
+  onImportMailbox: () => void
+  onExportMailbox: () => void
+  /** 跳转到系统「所有文件访问」设置页（投递区与共享目录的唯一解锁入口）。 */
+  onOpenAllFilesAccess: () => void
+  onRefreshMailbox: () => void
+  /** 切换当前浏览的根：只换光标，不动任何文件。 */
+  onSelectFilesRoot: (root: FilesRoot) => void
+  /** 进入当前根下的子目录（不传表示回到该根目录）。 */
+  onOpenFilesDirectory: (path?: string) => void
+  /** 在当前目录新建文件夹；名称由用户输入，创建前一律校验。 */
+  onCreateFilesFolder: () => void
+  onBack: () => void
+}
+
+/**
+ * 文件管理（一级页）：把投递区与共享目录收敛成**同一个文件浏览器**。
+ *
+ * 为什么合并浏览层：对用户来说这两边都是「我在里面能看到、能建文件夹的目录」，
+ * 分成两套界面时，用户要在两个地方各学一遍「怎么看子目录、怎么建文件夹」；
+ * 合并之后只有一套面包屑 + 条目列表 + 新建文件夹，根用一个选择器切换。
+ *
+ * 为什么不把协议也合并：投递区是校验式搬运（tar + manifest + sha256，落点是工作区），
+ * 共享目录是实时挂载（直接读写）。协议动作只在投递区根上出现，避免把「实时挂载」
+ * 误当成「还要再搬运一次」。底层那部分重复（绑定/缓存、路径校验、列举与建目录）
+ * 已经在原生侧合并成一份实现（`RuntimeDirectoryBrowser` + `OptionalBindProvider`）。
+ */
+function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailboxDirectoryReadFailed, storageAccess, storageDirs, storageDirsReadFailed, storageDirectory, storageDirectoryReadFailed, filesRoot, lastMailboxImport, lastMailboxExport, onAddStorageDirectory, onRemoveStorageDirectory, onImportMailbox, onExportMailbox, onOpenAllFilesAccess, onRefreshMailbox, onSelectFilesRoot, onOpenFilesDirectory, onCreateFilesFolder, onBack }: FilesScreenProps) {
+  /**
+   * 投递区状态文案。
+   *
+   * 四个档位各自一句，刻意不合并成「可用 / 不可用」两句：用户需要知道
+   * 「去开权限就有用」还是「这台设备根本没有这一档，只能用控制台上传」。
+   * 文案只说事实，不承诺授权一定成功。
+   */
+  const mailboxStatusLabel = mailbox === null
+    ? t("未读取")
+    : mailbox.availability === 'available'
+      ? t("可用")
+      : mailbox.availability === 'needsPermission'
+        ? t("需要授权")
+        : mailbox.availability === 'unsupported'
+          ? t("不支持")
+          : t("不可写")
+  const mailboxUnavailableReason = mailbox === null
+    ? ''
+    : mailbox.availability === 'needsPermission'
+      ? t("尚未授予「所有文件访问」。请到系统设置里为 DSH 手动开启；开启后回到本页会重新检查。没有该权限时只能用终端或控制台上传文件。")
+      : mailbox.availability === 'unsupported'
+        ? t("当前系统不存在「所有文件访问」这一档，投递区无法启用；请改用终端或控制台上传文件。Harness 本身不受影响。")
+        : mailbox.availability === 'unwritable'
+          ? t("已授予「所有文件访问」，但投递区目录仍不可读写；可能是系统限制或目录被占用。工作区与 Harness 不受影响。")
+          : ''
+  /**
+   * 共享目录（≤8 条白名单）的状态文案与禁用条件。
+   *
+   * 判定顺序是有意的：先看「系统有没有这一档」，再看「有没有授权」。系统根本没有这一档时
+   * 说「需要授权」会把用户引到一个不存在的开关上（与投递区同一口径）。
+   */
+  const storageDirsStatusLabel = storageDirs === null
+    ? ''
+    : !storageDirs.supported
+      ? t("系统不支持")
+      : !storageDirs.granted
+        ? t("需要授权")
+        : t("已授权")
+  const storageDirsLevelLabel = storageDirs === null
+    ? ''
+    : storageDirs.level === 'T2'
+      ? t("T2 · 所有文件访问（可读可写）")
+      : storageDirs.supported ? t("T0 · 未授予「所有文件访问」") : t("T0 · 本机没有这一档")
+  /**
+   * 未启用时的整段说明；空串表示当前可用。
+   *
+   * 不支持那一档必须说清**代价**（这些设备上访客内没有共享存储），否则用户会以为功能坏了
+   * ——`docs/存储权限与导入落点.md` §4.5 明确要求如此。
+   */
+  const storageDirsBlockedReason = storageDirs === null
+    ? ''
+    : !storageDirs.supported
+      ? t("当前系统没有「所有文件访问」这一档（Android 11 以下），目录白名单无法启用：这些设备上访客内不提供共享存储。这是用「用户点选的目录」取代 /sdcard 整体绑定的必然代价，不是故障；控制台上传与投递区照常可用。")
+      : !storageDirs.granted
+        ? t("还没有「所有文件访问」权限：现在不能选新目录，已经选好的目录也不会挂进访客。请点下面的按钮去系统设置开启；回到本页会自动重新检查。")
+        : ''
+  /**
+   * 三种情况都禁用「添加目录」：状态未读到、未授权、已达上限。
+   * 上限用 `MAX_STORAGE_DIRECTORIES`（平台层与原生侧钉住是同一个数）：让按钮还能点、
+   * 再由原生回一个 `STORAGE_DIR_LIMIT_REACHED`，是纯粹的浪费。
+   */
+  const storageDirAddDisabled = busy !== null || storageDirs === null || !storageDirs.granted || storageDirs.count >= MAX_STORAGE_DIRECTORIES
+  const storageDirLimitReached = storageDirs !== null && storageDirs.granted && storageDirs.count >= MAX_STORAGE_DIRECTORIES
+  /** 逐条的可用性标签；四档各一句，与投递区一样不合并成「能用/不能用」。 */
+  const storageDirAvailabilityLabel = (entry: StorageDirEntry): string =>
+    entry.availability === 'available'
+      ? t("可用")
+      : entry.availability === 'needsPermission'
+        ? t("需要授权")
+        : entry.availability === 'unsupported' ? t("系统不支持") : t("不可用")
+  /**
+   * 逐条不可用的原因。
+   *
+   * `reasonCode` 在契约里是可选的（校验只要求它与可用性不矛盾），所以缺码时必须如实说
+   * 「没给原因」，而不是编一句「可能已被删除」——那是猜测，用户会照着猜错的方向排查。
+   */
+  const storageDirEntryReason = (entry: StorageDirEntry): string =>
+    entry.reasonCode === undefined
+      ? t("这一条当前不可用，但原生侧没有返回原因码；请移除后重新添加。")
+      : storageDirMessage(entry.reasonCode, undefined)
+
+  const browsingMailbox = filesRoot.kind === 'mailbox'
+  /** 当前根下正在浏览的相对路径；undefined 表示就在根目录上。 */
+  const currentPath = browsingMailbox ? mailboxDirectory?.path : storageDirectory?.path
+  /**
+   * 两种根的条目形状本来就一样（`{ name, kind, bytes }`，共用同一个原生 `toJs()`），
+   * 所以列表只写一份；这不是「凑巧」，是原生两侧刻意共用同一份实现。
+   */
+  const entries = (browsingMailbox ? mailboxDirectory?.entries : storageDirectory?.entries) ?? []
+  const readFailed = browsingMailbox ? mailboxDirectoryReadFailed : storageDirectoryReadFailed
+  const snapshotReady = browsingMailbox ? mailboxDirectory !== null : storageDirectory !== null
+  const truncated = (browsingMailbox ? mailboxDirectory?.truncated : storageDirectory?.truncated) === true
+  /** 投递区不可用时不能浏览它；共享目录能不能浏览由白名单条目的可用性决定（读取失败会另行提示）。 */
+  const rootUsable = browsingMailbox ? mailbox?.available === true : true
+  const storageEntries = storageDirs?.entries ?? []
+  const currentStorageEntry = filesRoot.kind === 'storage'
+    ? storageEntries.find(entry => entry.guestPath === filesRoot.guestPath)
+    : undefined
+  /** 面包屑最左边的根名字：投递区是 inbox/outbox，共享目录用它的显示名（没有就退回挂载点）。 */
+  const rootLabel = browsingMailbox
+    ? (filesRoot.root)
+    : (currentStorageEntry?.displayName ?? filesRoot.guestPath)
+  const exportToCurrentDirectory = mailboxDirectory?.root === 'outbox' && mailboxDirectory.path !== undefined
+  const createFolderDisabled = busy !== null || !rootUsable || !snapshotReady
+
+  return (
+    <div className="screen files-screen">
+      <div className="screen-heading management-heading">
+        <div>
+          <p className="eyebrow">{t("应用管理")}</p>
+          <h1>{t("文件管理")}</h1>
+        </div>
+        <div className="heading-actions">
+          <button className="icon-button" type="button" aria-label={t("返回设置")} title={t("返回设置")} onClick={onBack}><ArrowLeft size={19} /></button>
+        </div>
+      </div>
+
+      {/*
+        这一段是这一页的存在理由，必须写在最前面：用户最容易搞混的正是
+        「哪些目录是搬进来的、哪些是本来就挂着的」，以及为什么只有投递区有搬运按钮。
+      */}
+      <p className="settings-note">
+        {t("这里能看到所有对外目录：投递区（inbox / outbox，靠按钮批量搬运）与共享目录（手机上的文件夹，挂进访客的 /mnt/user/<序号>，可直接读写）。")}
+      </p>
+
+      <section className="settings-section" aria-labelledby="files-browser">
+        <div className="section-title section-title-action">
+          <span className="section-icon"><FolderInput size={19} /></span>
+          <div>
+            <h2 id="files-browser">{t("文件夹管理")}</h2>
+            <p>{t("选一个目录浏览它的子目录；导入到工作区与导出工作区只对投递区有效。")}</p>
+          </div>
+          <button className="button button-secondary mailbox-create-button" type="button" onClick={onCreateFilesFolder} disabled={createFolderDisabled}>
+            {busy === 'mailbox-folder-create' || busy === 'files-storage-folder-create' ? <Loader2 className="spin" size={17} /> : <FolderPlus size={17} />}
+            {t("新建文件夹")}
+          </button>
+        </div>
+
+        <div className="mailbox-root-tabs" role="tablist" aria-label={t("选择要浏览的目录")}>
+          <button className={`mailbox-root-tab ${browsingMailbox && filesRoot.root === 'inbox' ? 'active' : ''}`} type="button" role="tab"
+            aria-selected={browsingMailbox && filesRoot.root === 'inbox'} onClick={() => onSelectFilesRoot({ kind: 'mailbox', root: 'inbox' })}
+            disabled={busy !== null || mailbox?.available !== true}>
+            <Folder size={16} />{t("inbox · 用户放入")}
+          </button>
+          <button className={`mailbox-root-tab ${browsingMailbox && filesRoot.root === 'outbox' ? 'active' : ''}`} type="button" role="tab"
+            aria-selected={browsingMailbox && filesRoot.root === 'outbox'} onClick={() => onSelectFilesRoot({ kind: 'mailbox', root: 'outbox' })}
+            disabled={busy !== null || mailbox?.available !== true}>
+            <Folder size={16} />{t("outbox · 产物取出")}
+          </button>
+          {storageEntries.map(entry => {
+            const selected = filesRoot.kind === 'storage' && filesRoot.guestPath === entry.guestPath
+            return (
+              <button className={`mailbox-root-tab ${selected ? 'active' : ''}`} key={entry.guestPath} type="button" role="tab"
+                aria-selected={selected} onClick={() => onSelectFilesRoot({ kind: 'storage', guestPath: entry.guestPath })}
+                /*
+                  不可用的条目禁用但要留下原因：禁用按钮不参与焦点，读屏用户看不到 title，
+                  所以下面白名单列表里那条「不可用原因」才是真正的解释入口，这里只补一个悬停提示。
+                */
+                title={entry.available ? entry.guestPath : `${entry.guestPath} · ${storageDirEntryReason(entry)}`}
+                disabled={busy !== null || !entry.available}>
+                <HardDrive size={16} />{entry.displayName}
+              </button>
+            )
+          })}
+        </div>
+
+        {storageEntries.length === 0 && (
+          <p className="settings-note">{t("还没有共享目录：在下面「共享目录」里添加一个手机上的目录，它会出现在这里。")}</p>
+        )}
+
+        {readFailed && (
+          <p className="settings-note" role="alert">
+            {browsingMailbox ? t("无法读取当前投递目录，请重试") : t("无法读取当前共享目录，请重试")}
+            <button className="button button-secondary compact-button" type="button" onClick={() => onOpenFilesDirectory(currentPath)} disabled={busy !== null}>{t("重试")}</button>
+          </p>
+        )}
+
+        {snapshotReady && !readFailed && (
+          <>
+            <nav className="mailbox-breadcrumb" aria-label={t("当前目录")}>
+              <button type="button" onClick={() => onOpenFilesDirectory()} disabled={busy !== null}>
+                {rootLabel}
+              </button>
+              {(currentPath?.split('/') ?? []).map((segment, index, segments) => {
+                const path = segments.slice(0, index + 1).join('/')
+                return <span key={path} className="mailbox-breadcrumb-segment">
+                  <ChevronRight size={14} aria-hidden="true" />
+                  <button type="button" onClick={() => onOpenFilesDirectory(path)} disabled={busy !== null}>{segment}</button>
+                </span>
+              })}
+            </nav>
+            {entries.length === 0 && (
+              <p className="settings-note">{t("当前目录为空")}</p>
+            )}
+            {entries.length > 0 && (
+              <div className="mailbox-entry-list" role="list">
+                {entries.map(entry => {
+                  const nextPath = currentPath ? `${currentPath}/${entry.name}` : entry.name
+                  return entry.kind === 'directory'
+                    ? <button className="mailbox-entry mailbox-entry-directory" key={entry.name} type="button" role="listitem"
+                      onClick={() => onOpenFilesDirectory(nextPath)} disabled={busy !== null}>
+                      <Folder size={17} /><span>{entry.name}</span><ChevronRight size={15} />
+                    </button>
+                    : <div className="mailbox-entry mailbox-entry-file" key={entry.name} role="listitem">
+                      <FileText size={17} /><span>{entry.name}</span><small>{formatBytes(entry.bytes)}</small>
+                    </div>
+                })}
+              </div>
+            )}
+            {truncated && (
+              <p className="settings-note">{t("当前目录条目较多，仅显示前 {0} 项；请进入子目录继续浏览。", entries.length)}</p>
+            )}
+          </>
+        )}
+      </section>
+
+      {/*
+        投递区专属区：状态、搬运按钮与说明。
+        只在浏览投递区根时渲染 —— 协议动作只属于投递区，摆在共享目录下面会让人以为它也能用。
+      */}
+      {browsingMailbox && (
+        <section className="settings-section" aria-labelledby="files-mailbox">
+          <div className="section-title section-title-action">
+            <span className="section-icon"><FolderInput size={19} /></span>
+            <div>
+              <h2 id="files-mailbox">{t("投递区")}</h2>
+              <p>{t("手机侧与访客之间的批量搬运通道；不会自动搬运，必须点下面的按钮。")}</p>
+            </div>
+            <span className={`status-chip ${mailbox?.available === true ? 'success' : 'warn'}`}>{mailboxStatusLabel}</span>
+          </div>
+
+          {mailbox === null && (
+            <p className="settings-note" role={mailboxReadFailed ? 'alert' : undefined}>
+              {mailboxReadFailed ? t("无法读取投递区状态，请重试") : t("正在读取投递区状态")}
+            </p>
+          )}
+
+          {mailbox !== null && (
+            <>
+              <div className="settings-status-list">
+                <div className="settings-status-row">
+                  <span>{t("用户放入（inbox）")}</span>
+                  <code className="mailbox-path">{mailbox.inboxPath}</code>
+                </div>
+                <div className="settings-status-row">
+                  <span>{t("产物取出（outbox）")}</span>
+                  <code className="mailbox-path">{mailbox.outboxPath}</code>
+                </div>
+                <div className="settings-status-row">
+                  <span>{t("访客内挂载点")}</span>
+                  <code className="mailbox-path">{`${mailbox.guestInboxPath} · ${mailbox.guestOutboxPath}`}</code>
+                </div>
+                <div className="settings-status-row">
+                  <span>{t("inbox 内文件")}</span>
+                  <strong>{t("{0} 个", mailbox.inboxFileCount)}</strong>
+                </div>
+              </div>
+
+              {mailbox.inboxTars.length > 0 && (
+                <p className="settings-note">
+                  {t("可导入的 tar：")}
+                  {mailbox.inboxTars.map(candidate => `${candidate.name}（${formatBytes(candidate.bytes)}）`).join('、')}
+                </p>
+              )}
+
+              {/*
+                不可用说明刻意**不带 role="alert"**：它是这一页的常驻内容，不是用户操作后
+                才出现的时效性提示；真正该被播报的是那些随操作出现的警告。
+              */}
+              {!mailbox.available && (
+                <div className="inline-alert warning">
+                  <AlertTriangle size={19} />
+                  <div>
+                    <strong>{t("投递区不可用")}</strong>
+                    <span>{mailboxUnavailableReason}</span>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/*
+            按钮区始终渲染（即使状态还没读到）：布局稳定，「不可用即禁用」这条规则
+            在三种状态下是同一句话，用户不会看到按钮忽隐忽现。
+          */}
+          <div className="settings-inline-actions">
+            <button className="button button-secondary" type="button" onClick={onImportMailbox} disabled={busy !== null || mailbox?.available !== true}>
+              {busy === 'mailbox-import' ? <Loader2 className="spin" size={18} /> : <FolderInput size={18} />}{t("导入到工作区")}</button>
+            <button className="button button-secondary" type="button" onClick={onExportMailbox} disabled={busy !== null || mailbox?.available !== true}>
+              {busy === 'mailbox-export' ? <Loader2 className="spin" size={18} /> : <FolderOutput size={18} />}
+              {exportToCurrentDirectory ? t("导出到当前目录") : t("导出工作区")}</button>
+            {mailbox !== null && mailbox.supported && !mailbox.granted && (
+              <button className="button button-secondary" type="button" onClick={onOpenAllFilesAccess} disabled={busy !== null}>
+                <ShieldCheck size={18} />{t("去开启「所有文件访问」")}</button>
+            )}
+            <button className="button button-secondary" type="button" onClick={onRefreshMailbox} disabled={busy !== null}>
+              {busy === 'mailbox-refresh' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("重新检查")}</button>
+          </div>
+
+          {mailbox !== null && (
+            <>
+              <p className="settings-note">
+                {t("导入落点是工作区内的 {0}/ 子目录；导出固定产出 {1} + {2} + {3}（含逐条 sha256）。", mailbox.importDirectory, mailbox.exportTarName, mailbox.exportManifestName, `${mailbox.exportTarName}.sha256`)}
+              </p>
+              {exportToCurrentDirectory && (
+                <p className="settings-note">{t("当前导出目标：outbox/{0}", mailboxDirectory?.path ?? '')}</p>
+              )}
+              {storageAccess !== null && (
+                <p className="settings-note">
+                  {t("存储权限：媒体读取（T1）{0} · 所有文件访问（T2）{1}。投递区需要 T2。", storageAccess.mediaGranted ? t("已授予") : t("未授予"), storageAccess.allFilesSupported ? (storageAccess.allFilesGranted ? t("已授予") : t("未授予")) : t("系统不支持"))}
+                </p>
+              )}
+              <p className="settings-note">
+                {t("投递区不是工作区：dsh 的 write 工具写 /mnt/inbox、/mnt/outbox 会失败（实测 EACCES），这是预期行为；搬运只能走这里的按钮。")}
+              </p>
+            </>
+          )}
+
+          {lastMailboxImport !== null && (
+            <p className="settings-note">
+              {t("最近一次导入：{0} 个条目 · {1} · manifest {2}", lastMailboxImport.entryCount, formatBytes(lastMailboxImport.bytes), lastMailboxImport.manifestName ?? t("未附带"))}
+            </p>
+          )}
+          {lastMailboxExport !== null && (
+            <p className="settings-note">
+              {t("最近一次导出：{0} 个条目 · {1} · manifest {2}", lastMailboxExport.entryCount, formatBytes(lastMailboxExport.bytes), lastMailboxExport.manifestName)}
+            </p>
+          )}
+        </section>
+      )}
+
+      {/*
+        共享目录白名单管理：这一页同时是「看有哪些目录」和「决定有哪些目录」的地方 ——
+        用户发现某个目录不在列表里时，下一步就是在这里添加它，不该再跳回另一页。
+      */}
+      <section className="settings-section" aria-labelledby="files-storage-dirs">
+        <div className="section-title section-title-action">
+          <span className="section-icon"><HardDrive size={19} /></span>
+          <div>
+            <h2 id="files-storage-dirs">{t("共享目录")}</h2>
+            {/*
+              说明里必须写明「访客内不再有 /sdcard」：旧的 /sdcard 整体绑定已被这份白名单取代
+              （登记册 §5.1 / §3.1），用户看不到目录时最容易怀疑是权限坏了。
+            */}
+            <p>{t("这里点选过的目录会挂进访客：手机上的目录 → 访客内 /mnt/user/<序号>。访客里不再有 /sdcard，能看到哪些用户目录完全由这份列表决定。")}</p>
+          </div>
+          {storageDirs !== null && (
+            <span className={`status-chip ${storageDirs.level === 'T2' ? 'success' : 'warn'}`}>{storageDirsStatusLabel}</span>
+          )}
+        </div>
+
+        {storageDirs === null && (
+          <p className="settings-note" role={storageDirsReadFailed ? 'alert' : undefined}>
+            {storageDirsReadFailed ? t("无法读取共享目录状态，请重试") : t("正在读取共享目录状态")}
+          </p>
+        )}
+
+        {storageDirs !== null && (
+          <>
+            <div className="settings-status-list">
+              <div className="settings-status-row">
+                <span>{t("已选目录")}</span>
+                {/* 上限与原生侧同一个数；载荷校验已把它钉成 8，这里不再自己算一遍。 */}
+                <strong>{`${storageDirs.count}/${MAX_STORAGE_DIRECTORIES}`}</strong>
+              </div>
+              <div className="settings-status-row">
+                <span>{t("权限档位")}</span>
+                <strong>{storageDirsLevelLabel}</strong>
+              </div>
+            </div>
+
+            {/*
+              与投递区同一口径：不可用说明刻意**不带 role="alert"**——它是这一页的常驻内容，
+              不是用户操作后才出现的时效性提示；真正该被播报的是随操作出现的警告（toast）。
+            */}
+            {storageDirsBlockedReason !== '' && (
+              <div className="inline-alert warning">
+                <AlertTriangle size={19} />
+                <div>
+                  <strong>{t("目录白名单当前不可用")}</strong>
+                  <span>{storageDirsBlockedReason}</span>
+                </div>
+              </div>
+            )}
+
+            {storageDirs.entries.length > 0 && (
+              <div className="storage-dir-list">
+                {storageDirs.entries.map(entry => (
+                  <div className="storage-dir-row" key={entry.path}>
+                    <div className="storage-dir-head">
+                      <strong className="storage-dir-name">{entry.displayName}</strong>
+                      <span className={`status-chip ${entry.available ? 'success' : 'warn'}`}>{storageDirAvailabilityLabel(entry)}</span>
+                    </div>
+                    <code className="mailbox-path storage-dir-path">{entry.guestPath}</code>
+                    <code className="mailbox-path storage-dir-source">{entry.path}</code>
+                    {!entry.available && <p className="storage-dir-reason">{storageDirEntryReason(entry)}</p>}
+                    {/*
+                      移除按钮对**每一条**都渲染并且始终可点（只受 busy 影响）：
+                      条目不可用时用户更需要能清掉它，禁用等于把人锁在失效状态里。
+                    */}
+                    <div className="storage-dir-actions">
+                      <button
+                        className="button button-danger-quiet compact-button"
+                        type="button"
+                        disabled={busy !== null}
+                        onClick={() => onRemoveStorageDirectory(entry.path)}
+                      >
+                        {busy === storageDirRemoveBusyId(entry.path) ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}{t("移除")}</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/*
+          按钮区始终渲染（与投递区一致）：布局稳定，「不可用即禁用」这条规则在所有状态下
+          是同一句话，用户不会看到按钮忽隐忽现。
+        */}
+        <div className="settings-inline-actions storage-dirs-actions">
+          <button className="button button-secondary" type="button" onClick={onAddStorageDirectory} disabled={storageDirAddDisabled}>
+            {busy === STORAGE_DIR_ADD_BUSY_ID ? <Loader2 className="spin" size={18} /> : <FolderInput size={18} />}{t("添加目录")}</button>
+          {storageDirs !== null && storageDirs.supported && !storageDirs.granted && (
+            // 文案与投递区的入口**刻意不同名**：同一个动作在两处出现时，
+            // 同名按钮会让「按名字取元素」的测试与读屏用户都分不清点的是哪一个。
+            <button className="button button-secondary" type="button" onClick={onOpenAllFilesAccess} disabled={busy !== null}>
+              <ShieldCheck size={18} />{t("去系统设置开启所有文件访问")}</button>
+          )}
+        </div>
+
+        {storageDirs !== null && (
+          <>
+            <p className="settings-note">
+              {t("每行下面两个路径：第一个是访客内的挂载点（/mnt/user/<序号>），第二个是这个目录在手机上的真实位置。")}
+            </p>
+            {/*
+              挂载点跳号是**刻意的稳定语义**（序号来自持久化顺序），必须写成事实而不是 bug：
+              用户看到 1、3 没有 2 时最容易以为界面出错。
+            */}
+            <p className="settings-note">
+              {t("不可用的条目仍然占着它的序号：访客里的挂载点会跳号（例如有 1、3 而没有 2）。这是刻意的稳定语义——移除别的条目不会让一个目录换到另一个挂载点上。")}
+            </p>
+            <p className="settings-note">
+              {t("目录白名单是 T2「所有文件访问」这一档的能力；未授予时只能查看，不能添加。")}
+            </p>
+            <p className="settings-note">
+              {t("目录改动在下次启动运行环境时生效：正在运行的访客不会热更新挂载点。")}
+            </p>
+            <p className="settings-note">
+              {t("共享目录是实时挂载：进去之后可以直接读写，不需要像投递区那样先搬运一次。")}
+            </p>
+            {storageDirLimitReached && (
+              <p className="settings-note">{t("已达上限：最多只能添加 {0} 个目录，请先移除一个再添加。", MAX_STORAGE_DIRECTORIES)}</p>
+            )}
+          </>
+        )}
+      </section>
+    </div>
+  )
+}
+
 interface RuntimeSelfCheckPanelProps {
   /** 当前运行时状态：只取已安装版本，用于「运行时版本」一行。 */
   runtime: RuntimeState
@@ -2017,33 +2814,6 @@ interface SettingsScreenProps {
   loadHarnessLog: (maxBytes?: number) => Promise<HarnessLog>
   /** 读取诊断日志正文窗口；同样只在展开或切换窗口时调用。 */
   loadDiagnosticLog: (maxBytes?: number) => Promise<DiagnosticLogText>
-  /** 外置投递区状态；null 表示尚未读到快照。 */
-  mailbox: MailboxState | null
-  mailboxReadFailed: boolean
-  /** 当前选中的投递区根目录与目录快照。 */
-  mailboxDirectory: MailboxDirectoryState | null
-  mailboxDirectoryReadFailed: boolean
-  /** 存储访问状态（T1 媒体只读 / T2 所有文件访问）；null 表示尚未读到。 */
-  storageAccess: StorageAccessState | null
-  /** 目录白名单（访客内 `/mnt/user/<序号>` 的唯一来源）；null 表示尚未读到快照。 */
-  storageDirs: StorageDirsState | null
-  storageDirsReadFailed: boolean
-  /** 新增一条：原生侧弹 SAF 目录选择器，用户取消不算故障。 */
-  onAddStorageDirectory: () => void
-  /** 按宿主路径移除一条（用路径而不是序号：序号会随增删变化）。 */
-  onRemoveStorageDirectory: (path: string) => void
-  /** 本次会话内最近一次导入/导出结果；null 表示本次会话还没有搬运。 */
-  lastMailboxImport: MailboxImportResult | null
-  lastMailboxExport: MailboxExportResult | null
-  onExportMailbox: () => void
-  onImportMailbox: () => void
-  onMailboxRootChange: (root: MailboxRoot) => void
-  onOpenMailboxDirectory: (path?: string) => void
-  onCreateMailboxFolder: () => void
-  /** 跳转到系统「所有文件访问」设置页（投递区的唯一解锁入口）。 */
-  onOpenAllFilesAccess: () => void
-  onRefreshMailbox: () => void
-  /** 未编辑的悬浮球开关跟随原生状态；null 表示尚未取得快照。 */
   overlayBall: OverlayBallState | null
   overlayBallReadFailed: boolean
   page: SettingsPage
@@ -2052,16 +2822,6 @@ interface SettingsScreenProps {
   lastStop: LastStopReason
   /** 运行自检（check / repair）；只在用户点击按钮时调用。 */
   runSelfCheck: (operation: SelfCheckOperation) => Promise<SelfCheckReport>
-  /** 运行时版本列表；只读的轻量查询，进页面即可调用。 */
-  loadRuntimeVersions: () => Promise<RuntimeVersionsState>
-  /** 切回上一版本；运行中会被原生侧以 RUNTIME_BUSY 拒绝。 */
-  switchRuntimeVersion: (target: 'previous') => Promise<RuntimeVersionsState>
-  /** 删除上一版本；只影响保留下来的副本。 */
-  deleteRuntimeVersion: (target: 'previous') => Promise<RuntimeVersionsState>
-  /** 切换成功后重新读运行时状态（已安装版本与阶段都会变）。 */
-  refreshRuntime: () => Promise<void>
-  /** 顶部提示条；版本切换与删除的结果用它回报。 */
-  notify: (message: string, tone: NoticeTone) => void
   shizuku: ShizukuState
   accessibility: AccessibilityAutomationState
   onAuthorize: () => void
@@ -2088,7 +2848,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, lastMailboxExport, lastMailboxImport, loadDiagnosticLog, loadHarnessLog, loadRuntimeVersions, switchRuntimeVersion, deleteRuntimeVersion, refreshRuntime, notify, lastStop, mailbox, mailboxReadFailed, mailboxDirectory, mailboxDirectoryReadFailed, overlayBall, overlayBallReadFailed, storageAccess, storageDirs, storageDirsReadFailed, onAddStorageDirectory, onDraftChange, onExportMailbox, onImportMailbox, onMailboxRootChange, onOpenMailboxDirectory, onCreateMailboxFolder, onOpenAllFilesAccess, onRefreshMailbox, onRemoveStorageDirectory, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onSaveAccessibilityPackages, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onSaveAccessibilityPackages, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   useEffect(() => {
     if (page === 'shizuku') setAccessibilityDraft(accessibility.allowedPackages.join('\n'))
@@ -2147,88 +2907,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, las
         : shizuku.permission === 'denied'
           ? t("已拒绝")
           : t("待授权")
-  /**
-   * 投递区状态文案。
-   *
-   * 四个档位各自一句，刻意不合并成「可用 / 不可用」两句：用户需要知道
-   * 「去开权限就有用」还是「这台设备根本没有这一档，只能用控制台上传」。
-   * 文案只说事实，不承诺授权一定成功。
-   */
-  const mailboxStatusLabel = mailbox === null
-    ? t("未读取")
-    : mailbox.availability === 'available'
-      ? t("可用")
-      : mailbox.availability === 'needsPermission'
-        ? t("需要授权")
-        : mailbox.availability === 'unsupported'
-          ? t("不支持")
-          : t("不可写")
-  const mailboxUnavailableReason = mailbox === null
-    ? ''
-    : mailbox.availability === 'needsPermission'
-      ? t("尚未授予「所有文件访问」。请到系统设置里为 DSH 手动开启；开启后回到本页会重新检查。没有该权限时只能用终端或控制台上传文件。")
-      : mailbox.availability === 'unsupported'
-        ? t("当前系统不存在「所有文件访问」这一档，投递区无法启用；请改用终端或控制台上传文件。Harness 本身不受影响。")
-        : mailbox.availability === 'unwritable'
-          ? t("已授予「所有文件访问」，但投递区目录仍不可读写；可能是系统限制或目录被占用。工作区与 Harness 不受影响。")
-          : ''
-
-  /**
-   * 共享目录（≤8 条白名单）的状态文案与禁用条件。
-   *
-   * 判定顺序是有意的：先看「系统有没有这一档」，再看「有没有授权」。系统根本没有这一档时
-   * 说「需要授权」会把用户引到一个不存在的开关上（与投递区同一口径）。
-   */
-  const storageDirsStatusLabel = storageDirs === null
-    ? ''
-    : !storageDirs.supported
-      ? t("系统不支持")
-      : !storageDirs.granted
-        ? t("需要授权")
-        : t("已授权")
-  const storageDirsLevelLabel = storageDirs === null
-    ? ''
-    : storageDirs.level === 'T2'
-      ? t("T2 · 所有文件访问（可读可写）")
-      : storageDirs.supported ? t("T0 · 未授予「所有文件访问」") : t("T0 · 本机没有这一档")
-  /**
-   * 未启用时的整段说明；空串表示当前可用。
-   *
-   * 不支持那一档必须说清**代价**（这些设备上访客内没有共享存储），否则用户会以为功能坏了
-   * ——`docs/存储权限与导入落点.md` §4.5 明确要求如此。
-   */
-  const storageDirsBlockedReason = storageDirs === null
-    ? ''
-    : !storageDirs.supported
-      ? t("当前系统没有「所有文件访问」这一档（Android 11 以下），目录白名单无法启用：这些设备上访客内不提供共享存储。这是用「用户点选的目录」取代 /sdcard 整体绑定的必然代价，不是故障；控制台上传与投递区照常可用。")
-      : !storageDirs.granted
-        ? t("还没有「所有文件访问」权限：现在不能选新目录，已经选好的目录也不会挂进访客。请点下面的按钮去系统设置开启；回到本页会自动重新检查。")
-        : ''
-  /**
-   * 三种情况都禁用「添加目录」：状态未读到、未授权、已达上限。
-   * 上限用 `MAX_STORAGE_DIRECTORIES`（平台层与原生侧钉住是同一个数）：让按钮还能点、
-   * 再由原生回一个 `STORAGE_DIR_LIMIT_REACHED`，是纯粹的浪费。
-   */
-  const storageDirAddDisabled = busy !== null || storageDirs === null || !storageDirs.granted || storageDirs.count >= MAX_STORAGE_DIRECTORIES
-  const storageDirLimitReached = storageDirs !== null && storageDirs.granted && storageDirs.count >= MAX_STORAGE_DIRECTORIES
-  /** 逐条的可用性标签；四档各一句，与投递区一样不合并成「能用/不能用」。 */
-  const storageDirAvailabilityLabel = (entry: StorageDirEntry): string =>
-    entry.availability === 'available'
-      ? t("可用")
-      : entry.availability === 'needsPermission'
-        ? t("需要授权")
-        : entry.availability === 'unsupported' ? t("系统不支持") : t("不可用")
-  /**
-   * 逐条不可用的原因。
-   *
-   * `reasonCode` 在契约里是可选的（校验只要求它与可用性不矛盾），所以缺码时必须如实说
-   * 「没给原因」，而不是编一句「可能已被删除」——那是猜测，用户会照着猜错的方向排查。
-   */
-  const storageDirEntryReason = (entry: StorageDirEntry): string =>
-    entry.reasonCode === undefined
-      ? t("这一条当前不可用，但原生侧没有返回原因码；请移除后重新添加。")
-      : storageDirMessage(entry.reasonCode, undefined)
-
   const selectedProviderOption = MODEL_PROVIDERS.find(provider => provider.id === selectedProvider) ?? MODEL_PROVIDERS[0]
   const keepAliveRecordedAt = formatRecordedAt(keepAlive.lastUpdatedAtMillis)
   const lastStopLabel = t(LAST_STOP_LABELS[lastStop])
@@ -2575,317 +3253,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, las
         )}
 
         {page === 'runtime' && (
-        <section className="settings-section" aria-labelledby="mailbox-settings">
-          <div className="section-title section-title-action">
-            <span className="section-icon"><FolderInput size={19} /></span>
-            <div>
-              <h2 id="mailbox-settings">{t("投递区")}</h2>
-              <p>{t("手机侧与访客之间的批量搬运通道；不会自动搬运，必须点下面的按钮。")}</p>
-            </div>
-            <span className={`status-chip ${mailbox?.available === true ? 'success' : 'warn'}`}>{mailboxStatusLabel}</span>
-          </div>
-
-          {mailbox === null && (
-            <p className="settings-note" role={mailboxReadFailed ? 'alert' : undefined}>
-              {mailboxReadFailed ? t("无法读取投递区状态，请重试") : t("正在读取投递区状态")}
-            </p>
-          )}
-
-          {mailbox !== null && (
-            <>
-              <div className="settings-status-list">
-                <div className="settings-status-row">
-                  <span>{t("用户放入（inbox）")}</span>
-                  <code className="mailbox-path">{mailbox.inboxPath}</code>
-                </div>
-                <div className="settings-status-row">
-                  <span>{t("产物取出（outbox）")}</span>
-                  <code className="mailbox-path">{mailbox.outboxPath}</code>
-                </div>
-                <div className="settings-status-row">
-                  <span>{t("访客内挂载点")}</span>
-                  <code className="mailbox-path">{`${mailbox.guestInboxPath} · ${mailbox.guestOutboxPath}`}</code>
-                </div>
-                <div className="settings-status-row">
-                  <span>{t("inbox 内文件")}</span>
-                  <strong>{t("{0} 个", mailbox.inboxFileCount)}</strong>
-                </div>
-              </div>
-
-              {mailbox.inboxTars.length > 0 && (
-                <p className="settings-note">
-                  {t("可导入的 tar：")}
-                  {mailbox.inboxTars.map(candidate => `${candidate.name}（${formatBytes(candidate.bytes)}）`).join('、')}
-                </p>
-              )}
-
-              <div className="mailbox-browser" aria-label={t("投递区文件夹管理")}>
-                <div className="mailbox-browser-heading">
-                  <div>
-                    <strong>{t("文件夹管理")}</strong>
-                    <span>{t("按 inbox / outbox 与子目录分类浏览投递文件")}</span>
-                  </div>
-                  <button className="button button-secondary mailbox-create-button" type="button" onClick={onCreateMailboxFolder}
-                    disabled={busy !== null || mailbox.available !== true}>
-                    {busy === 'mailbox-folder-create' ? <Loader2 className="spin" size={17} /> : <FolderPlus size={17} />}
-                    {t("新建文件夹")}
-                  </button>
-                </div>
-                <div className="mailbox-root-tabs" role="tablist" aria-label={t("投递区根目录")}>
-                  <button className={`mailbox-root-tab ${mailboxDirectory?.root === 'inbox' ? 'active' : ''}`} type="button" role="tab"
-                    aria-selected={mailboxDirectory?.root === 'inbox'} onClick={() => onMailboxRootChange('inbox')}
-                    disabled={busy !== null || mailbox.available !== true}>
-                    <Folder size={16} />{t("inbox · 用户放入")}
-                  </button>
-                  <button className={`mailbox-root-tab ${mailboxDirectory?.root === 'outbox' ? 'active' : ''}`} type="button" role="tab"
-                    aria-selected={mailboxDirectory?.root === 'outbox'} onClick={() => onMailboxRootChange('outbox')}
-                    disabled={busy !== null || mailbox.available !== true}>
-                    <Folder size={16} />{t("outbox · 产物取出")}
-                  </button>
-                </div>
-                {mailboxDirectoryReadFailed && (
-                  <p className="settings-note" role="alert">{t("无法读取当前投递目录，请重试")}</p>
-                )}
-                {mailboxDirectory !== null && !mailboxDirectoryReadFailed && (
-                  <>
-                    <nav className="mailbox-breadcrumb" aria-label={t("当前投递目录")}>
-                      <button type="button" onClick={() => onOpenMailboxDirectory()} disabled={busy !== null}>
-                        {mailboxDirectory.root}
-                      </button>
-                      {(mailboxDirectory.path?.split('/') ?? []).map((segment, index, segments) => {
-                        const path = segments.slice(0, index + 1).join('/')
-                        return <span key={path} className="mailbox-breadcrumb-segment">
-                          <ChevronRight size={14} aria-hidden="true" />
-                          <button type="button" onClick={() => onOpenMailboxDirectory(path)} disabled={busy !== null}>{segment}</button>
-                        </span>
-                      })}
-                    </nav>
-                    {mailboxDirectory.entries.length === 0 && (
-                      <p className="settings-note">{t("当前目录为空")}</p>
-                    )}
-                    {mailboxDirectory.entries.length > 0 && (
-                      <div className="mailbox-entry-list" role="list">
-                        {mailboxDirectory.entries.map(entry => {
-                          const nextPath = mailboxDirectory.path ? `${mailboxDirectory.path}/${entry.name}` : entry.name
-                          return entry.kind === 'directory'
-                            ? <button className="mailbox-entry mailbox-entry-directory" key={entry.name} type="button" role="listitem"
-                              onClick={() => onOpenMailboxDirectory(nextPath)} disabled={busy !== null}>
-                              <Folder size={17} /><span>{entry.name}</span><ChevronRight size={15} />
-                            </button>
-                            : <div className="mailbox-entry mailbox-entry-file" key={entry.name} role="listitem">
-                              <FileText size={17} /><span>{entry.name}</span><small>{formatBytes(entry.bytes)}</small>
-                            </div>
-                        })}
-                      </div>
-                    )}
-                    {mailboxDirectory.truncated && (
-                      <p className="settings-note">{t("当前目录条目较多，仅显示前 {0} 项；请进入子目录继续浏览。", mailboxDirectory.entries.length)}</p>
-                    )}
-                  </>
-                )}
-              </div>
-
-              {/*
-                不可用说明刻意**不带 role="alert"**：它是这一页的常驻内容，不是用户操作后
-                才出现的时效性提示；设置页里真正该被播报的是那些随操作出现的警告。
-              */}
-              {!mailbox.available && (
-                <div className="inline-alert warning">
-                  <AlertTriangle size={19} />
-                  <div>
-                    <strong>{t("投递区不可用")}</strong>
-                    <span>{mailboxUnavailableReason}</span>
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-
-          {/*
-            按钮区始终渲染（即使状态还没读到）：布局稳定，「不可用即禁用」这条规则
-            在三种状态下是同一句话，用户不会看到按钮忽隐忽现。
-          */}
-          <div className="settings-inline-actions">
-            <button className="button button-secondary" type="button" onClick={onImportMailbox} disabled={busy !== null || mailbox?.available !== true}>
-              {busy === 'mailbox-import' ? <Loader2 className="spin" size={18} /> : <FolderInput size={18} />}{t("导入到工作区")}</button>
-            <button className="button button-secondary" type="button" onClick={onExportMailbox} disabled={busy !== null || mailbox?.available !== true}>
-              {busy === 'mailbox-export' ? <Loader2 className="spin" size={18} /> : <FolderOutput size={18} />}
-              {mailboxDirectory?.root === 'outbox' && mailboxDirectory.path ? t("导出到当前目录") : t("导出工作区")}</button>
-            {mailbox !== null && mailbox.supported && !mailbox.granted && (
-              <button className="button button-secondary" type="button" onClick={onOpenAllFilesAccess} disabled={busy !== null}>
-                <ShieldCheck size={18} />{t("去开启「所有文件访问」")}</button>
-            )}
-            <button className="button button-secondary" type="button" onClick={onRefreshMailbox} disabled={busy !== null}>
-              {busy === 'mailbox-refresh' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("重新检查")}</button>
-          </div>
-
-          {mailbox !== null && (
-            <>
-              <p className="settings-note">
-                {t("导入落点是工作区内的 {0}/ 子目录；导出固定产出 {1} + {2} + {3}（含逐条 sha256）。", mailbox.importDirectory, mailbox.exportTarName, mailbox.exportManifestName, `${mailbox.exportTarName}.sha256`)}
-              </p>
-              {mailboxDirectory?.root === 'outbox' && mailboxDirectory.path && (
-                <p className="settings-note">{t("当前导出目标：outbox/{0}", mailboxDirectory.path)}</p>
-              )}
-              {storageAccess !== null && (
-                <p className="settings-note">
-                  {t("存储权限：媒体读取（T1）{0} · 所有文件访问（T2）{1}。投递区需要 T2。", storageAccess.mediaGranted ? t("已授予") : t("未授予"), storageAccess.allFilesSupported ? (storageAccess.allFilesGranted ? t("已授予") : t("未授予")) : t("系统不支持"))}
-                </p>
-              )}
-              <p className="settings-note">
-                {t("投递区不是工作区：dsh 的 write 工具写 /mnt/inbox、/mnt/outbox 会失败（实测 EACCES），这是预期行为；搬运只能走这里的按钮。")}
-              </p>
-            </>
-          )}
-
-          {lastMailboxImport !== null && (
-            <p className="settings-note">
-              {t("最近一次导入：{0} 个条目 · {1} · manifest {2}", lastMailboxImport.entryCount, formatBytes(lastMailboxImport.bytes), lastMailboxImport.manifestName ?? t("未附带"))}
-            </p>
-          )}
-          {lastMailboxExport !== null && (
-            <p className="settings-note">
-              {t("最近一次导出：{0} 个条目 · {1} · manifest {2}", lastMailboxExport.entryCount, formatBytes(lastMailboxExport.bytes), lastMailboxExport.manifestName)}
-            </p>
-          )}
-        </section>
-        )}
-
-        {page === 'runtime' && (
-        <section className="settings-section" aria-labelledby="storage-dirs-settings">
-          <div className="section-title section-title-action">
-            <span className="section-icon"><HardDrive size={19} /></span>
-            <div>
-              <h2 id="storage-dirs-settings">{t("共享目录")}</h2>
-              {/*
-                说明里必须写明「访客内不再有 /sdcard」：旧的 /sdcard 整体绑定已被这份白名单取代
-                （登记册 §5.1 / §3.1），用户看不到目录时最容易怀疑是权限坏了。
-              */}
-              <p>{t("这里点选过的目录会挂进访客：手机上的目录 → 访客内 /mnt/user/<序号>。访客里不再有 /sdcard，能看到哪些用户目录完全由这份列表决定。")}</p>
-            </div>
-            {storageDirs !== null && (
-              <span className={`status-chip ${storageDirs.level === 'T2' ? 'success' : 'warn'}`}>{storageDirsStatusLabel}</span>
-            )}
-          </div>
-
-          {storageDirs === null && (
-            <p className="settings-note" role={storageDirsReadFailed ? 'alert' : undefined}>
-              {storageDirsReadFailed ? t("无法读取共享目录状态，请重试") : t("正在读取共享目录状态")}
-            </p>
-          )}
-
-          {storageDirs !== null && (
-            <>
-              <div className="settings-status-list">
-                <div className="settings-status-row">
-                  <span>{t("已选目录")}</span>
-                  {/* 上限与原生侧同一个数；载荷校验已把它钉成 8，这里不再自己算一遍。 */}
-                  <strong>{`${storageDirs.count}/${MAX_STORAGE_DIRECTORIES}`}</strong>
-                </div>
-                <div className="settings-status-row">
-                  <span>{t("权限档位")}</span>
-                  <strong>{storageDirsLevelLabel}</strong>
-                </div>
-              </div>
-
-              {/*
-                与投递区同一口径：不可用说明刻意**不带 role="alert"**——它是这一页的常驻内容，
-                不是用户操作后才出现的时效性提示；真正该被播报的是随操作出现的警告（toast）。
-              */}
-              {storageDirsBlockedReason !== '' && (
-                <div className="inline-alert warning">
-                  <AlertTriangle size={19} />
-                  <div>
-                    <strong>{t("目录白名单当前不可用")}</strong>
-                    <span>{storageDirsBlockedReason}</span>
-                  </div>
-                </div>
-              )}
-
-              {storageDirs.entries.length > 0 && (
-                <div className="storage-dir-list">
-                  {storageDirs.entries.map(entry => (
-                    <div className="storage-dir-row" key={entry.path}>
-                      <div className="storage-dir-head">
-                        <strong className="storage-dir-name">{entry.displayName}</strong>
-                        <span className={`status-chip ${entry.available ? 'success' : 'warn'}`}>{storageDirAvailabilityLabel(entry)}</span>
-                      </div>
-                      <code className="mailbox-path storage-dir-path">{entry.guestPath}</code>
-                      <code className="mailbox-path storage-dir-source">{entry.path}</code>
-                      {!entry.available && <p className="storage-dir-reason">{storageDirEntryReason(entry)}</p>}
-                      {/*
-                        移除按钮对**每一条**都渲染并且始终可点（只受 busy 影响）：
-                        条目不可用时用户更需要能清掉它，禁用等于把人锁在失效状态里。
-                      */}
-                      <div className="storage-dir-actions">
-                        <button
-                          className="button button-danger-quiet compact-button"
-                          type="button"
-                          disabled={busy !== null}
-                          onClick={() => onRemoveStorageDirectory(entry.path)}
-                        >
-                          {busy === storageDirRemoveBusyId(entry.path) ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}{t("移除")}</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-
-          {/*
-            按钮区始终渲染（与投递区一致）：布局稳定，「不可用即禁用」这条规则在所有状态下
-            是同一句话，用户不会看到按钮忽隐忽现。
-          */}
-          <div className="settings-inline-actions storage-dirs-actions">
-            <button className="button button-secondary" type="button" onClick={onAddStorageDirectory} disabled={storageDirAddDisabled}>
-              {busy === STORAGE_DIR_ADD_BUSY_ID ? <Loader2 className="spin" size={18} /> : <FolderInput size={18} />}{t("添加目录")}</button>
-            {storageDirs !== null && storageDirs.supported && !storageDirs.granted && (
-              // 文案与投递区的入口**刻意不同名**：同一个动作在两处出现时，
-              // 同名按钮会让「按名字取元素」的测试与读屏用户都分不清点的是哪一个。
-              <button className="button button-secondary" type="button" onClick={onOpenAllFilesAccess} disabled={busy !== null}>
-                <ShieldCheck size={18} />{t("去系统设置开启所有文件访问")}</button>
-            )}
-          </div>
-
-          {storageDirs !== null && (
-            <>
-              <p className="settings-note">
-                {t("每行下面两个路径：第一个是访客内的挂载点（/mnt/user/<序号>），第二个是这个目录在手机上的真实位置。")}
-              </p>
-              {/*
-                挂载点跳号是**刻意的稳定语义**（序号来自持久化顺序），必须写成事实而不是 bug：
-                用户看到 1、3 没有 2 时最容易以为界面出错。
-              */}
-              <p className="settings-note">
-                {t("不可用的条目仍然占着它的序号：访客里的挂载点会跳号（例如有 1、3 而没有 2）。这是刻意的稳定语义——移除别的条目不会让一个目录换到另一个挂载点上。")}
-              </p>
-              <p className="settings-note">
-                {t("目录白名单是 T2「所有文件访问」这一档的能力；未授予时只能查看，不能添加。")}
-              </p>
-              <p className="settings-note">
-                {t("目录改动在下次启动运行环境时生效：正在运行的访客不会热更新挂载点。")}
-              </p>
-              {storageDirLimitReached && (
-                <p className="settings-note">{t("已达上限：最多只能添加 {0} 个目录，请先移除一个再添加。", MAX_STORAGE_DIRECTORIES)}</p>
-              )}
-            </>
-          )}
-        </section>
-        )}
-
-        {page === 'runtime' && (
-        <>
-          <RuntimeVersionsPanel
-            runtime={runtime}
-            loadVersions={loadRuntimeVersions}
-            switchVersion={switchRuntimeVersion}
-            deleteVersion={deleteRuntimeVersion}
-            refreshRuntime={refreshRuntime}
-            notify={notify}
-          />
-          <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
-        </>
+        <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
         )}
 
         {page === 'shizuku' && (
@@ -3179,8 +3547,19 @@ export function App() {
   const [storageDirs, setStorageDirs] = useState<StorageDirsState | null>(null)
   const [mailboxReadFailed, setMailboxReadFailed] = useState(false)
   const [storageDirsReadFailed, setStorageDirsReadFailed] = useState(false)
+  /**
+   * 「文件管理」页当前浏览的根，以及共享目录那份目录快照。
+   *
+   * 投递区的光标仍然由 [mailboxRoot]/[mailboxPath] 持有（导出目标要用它），这里只记
+   * 「这一页现在在看哪一边」；共享目录没有第二份光标，因为它的根由白名单条目决定，
+   * 子目录路径直接进请求参数。读取失败单独记录，与投递区同一口径。
+   */
+  const [filesRoot, setFilesRoot] = useState<FilesRoot>({ kind: 'mailbox', root: 'inbox' })
+  const [storageDirectory, setStorageDirectory] = useState<StorageDirectoryState | null>(null)
+  const [storageDirectoryReadFailed, setStorageDirectoryReadFailed] = useState(false)
   const mailboxReadRevision = useRef(0)
   const mailboxDirectoryReadRevision = useRef(0)
+  const storageDirectoryReadRevision = useRef(0)
   /**
    * 本次会话内最近一次导入/导出的结果。
    *
@@ -3324,6 +3703,27 @@ export function App() {
       return next
     } catch (error) {
       if (revision === mailboxDirectoryReadRevision.current) setMailboxDirectoryReadFailed(true)
+      throw error
+    }
+  }, [])
+
+  /**
+   * 读取共享目录（白名单里某一条）下的当前子目录；只接受桥接层返回的受控快照。
+   *
+   * 与投递区那条结构相同但**不共用**：两条链路的修订号必须各自独立，否则用户在
+   * 投递区里快速点几下就能把共享目录那次读取的结果丢掉（反之亦然）。
+   */
+  const readStorageDirectory = useCallback(async (guestPath: string, subdirectory?: string): Promise<StorageDirectoryState> => {
+    const revision = ++storageDirectoryReadRevision.current
+    try {
+      const next = await runtimeBridge.getStorageDirectory(guestPath, subdirectory)
+      if (revision === storageDirectoryReadRevision.current) {
+        setStorageDirectory(next)
+        setStorageDirectoryReadFailed(false)
+      }
+      return next
+    } catch (error) {
+      if (revision === storageDirectoryReadRevision.current) setStorageDirectoryReadFailed(true)
       throw error
     }
   }, [])
@@ -4133,54 +4533,78 @@ export function App() {
     }, t("投递区已导出到 outbox"))
   }, [mailboxPath, mailboxRoot, readMailbox, readMailboxDirectory, run])
 
-  /** 切换投递区根目录；根目录切换不会触碰文件，只重新读取受控目录快照。 */
-  const changeMailboxRoot = useCallback((root: MailboxRoot) => {
-    if (root !== 'inbox' && root !== 'outbox') return
-    setMailboxRoot(root)
-    setMailboxPath(undefined)
-    void run('mailbox-directory', async () => {
-      await readMailboxDirectory(root)
-    })
-  }, [readMailboxDirectory, run])
-
-  /** 打开投递区子目录；路径由桥接层与原生 RuntimeMailboxPolicy 再次校验。 */
-  const openMailboxDirectory = useCallback((path?: string) => {
-    void run('mailbox-directory', async () => {
-      await readMailboxDirectory(mailboxRoot, path)
-    })
-  }, [mailboxRoot, readMailboxDirectory, run])
-
-  /** 在当前目录创建一个新文件夹；创建前要求用户明确输入名称，避免静默写入公共存储。 */
-  const createMailboxFolder = useCallback(() => {
-    if (busyRef.current !== null || mailbox?.available !== true) return
-    const raw = window.prompt(t("请输入新文件夹名称（仅支持单层名称）"))
-    if (raw === null) return
-    const name = raw.trim()
-    const target = mailboxPath ? `${mailboxPath}/${name}` : name
-    try {
-      const normalized = assertMailboxSubdirectory(target)
-      if (normalized === undefined || normalized.split('/').length !== (mailboxPath ? mailboxPath.split('/').length + 1 : 1)) {
-        throw new Error('投递区文件夹名称格式无效')
-      }
-    } catch (error) {
-      notify(errorMessage(error), 'error')
-      return
-    }
-    void run('mailbox-folder-create', async () => {
-      const next = await runtimeBridge.createMailboxFolder(mailboxRoot, target)
-      setMailboxDirectory(next)
-      setMailboxRoot(next.root)
-      setMailboxPath(next.path)
-      setMailboxDirectoryReadFailed(false)
-    }, t("投递区文件夹已创建"))
-  }, [mailbox, mailboxPath, mailboxRoot, notify, run])
-
   /** 重新检查投递区可用性：用户在系统设置里授权后手动触发，避免反复进出页面。 */
   const refreshMailbox = useCallback(() => {
     void run('mailbox-refresh', async () => {
       await readMailbox()
     })
   }, [readMailbox, run])
+
+  /**
+   * 切换「文件管理」页浏览的根。
+   *
+   * 换根只换光标，不动任何文件：「看」永远不写。投递区走既有的受控目录读取，
+   * 共享目录走白名单条目的挂载点（`guestPath` 由白名单提供，界面从不自己拼路径）。
+   */
+  const selectFilesRoot = useCallback((next: FilesRoot) => {
+    setFilesRoot(next)
+    void run('files-root', async () => {
+      if (next.kind === 'mailbox') await readMailboxDirectory(next.root)
+      else await readStorageDirectory(next.guestPath)
+    })
+  }, [readMailboxDirectory, readStorageDirectory, run])
+
+  /** 进入当前根下的子目录（不传表示回到该根目录）；路径由桥接层与原生策略再次校验。 */
+  const openFilesDirectory = useCallback((path?: string) => {
+    void run(filesRoot.kind === 'mailbox' ? 'mailbox-directory' : FILES_STORAGE_DIRECTORY_BUSY_ID, async () => {
+      if (filesRoot.kind === 'mailbox') await readMailboxDirectory(filesRoot.root, path)
+      else await readStorageDirectory(filesRoot.guestPath, path)
+    })
+  }, [filesRoot, readMailboxDirectory, readStorageDirectory, run])
+
+  /**
+   * 在当前目录新建文件夹：名称必须由用户明确输入（避免静默写入公共存储）。
+   *
+   * 校验复用投递区那一个 `assertMailboxSubdirectory`（平台层只有这一份实现），并要求名称是
+   * **单层**的：目标是「当前目录下的一个名字」，写成 `a/b` 会把子目录悄悄建到别处。
+   * 两条链路真正的差别只有最后那次桥调用；原生侧同样是同一份实现（CREATE_NEW 语义，不覆盖）。
+   */
+  const createFilesFolder = useCallback(() => {
+    if (busyRef.current !== null) return
+    const browsingMailbox = filesRoot.kind === 'mailbox'
+    if (browsingMailbox && mailbox?.available !== true) return
+    const currentPath = browsingMailbox ? mailboxPath : storageDirectory?.path
+    const raw = window.prompt(t("请输入新文件夹名称（仅支持单层名称）"))
+    if (raw === null) return
+    const name = raw.trim()
+    const target = currentPath ? `${currentPath}/${name}` : name
+    try {
+      const normalized = assertMailboxSubdirectory(target)
+      if (normalized === undefined || normalized.split('/').length !== (currentPath ? currentPath.split('/').length + 1 : 1)) {
+        throw new Error('文件夹名称格式无效')
+      }
+    } catch (error) {
+      notify(errorMessage(error), 'error')
+      return
+    }
+    if (filesRoot.kind === 'mailbox') {
+      const root = filesRoot.root
+      void run('mailbox-folder-create', async () => {
+        const next = await runtimeBridge.createMailboxFolder(root, target)
+        setMailboxDirectory(next)
+        setMailboxRoot(next.root)
+        setMailboxPath(next.path)
+        setMailboxDirectoryReadFailed(false)
+      }, t("投递区文件夹已创建"))
+      return
+    }
+    const guestPath = filesRoot.guestPath
+    void run(FILES_STORAGE_FOLDER_CREATE_BUSY_ID, async () => {
+      const next = await runtimeBridge.createStorageFolder(guestPath, target)
+      setStorageDirectory(next)
+      setStorageDirectoryReadFailed(false)
+    }, t("文件夹已创建"))
+  }, [filesRoot, mailbox, mailboxPath, notify, run, storageDirectory])
 
   /**
    * 目录白名单操作（添加/移除）的统一收口。
@@ -4237,12 +4661,16 @@ export function App() {
         return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
       case 'environment':
         return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} onShareWorkspace={shareWorkspace} onListFiles={listWorkspaceFiles} workspaceFiles={workspaceFiles} onShareFile={shareWorkspaceFile} onOpenFile={openWorkspaceFile} onDeleteFile={deleteWorkspaceFile} />
+      case 'versions':
+        return <RuntimeVersionsScreen runtime={runtime} loadVersions={loadRuntimeVersions} switchVersion={switchRuntimeVersion} deleteVersion={deleteRuntimeVersion} refreshRuntime={refreshRuntimeState} notify={notify} onBack={() => backToView('settings')} />
+      case 'files':
+        return <FilesScreen busy={busy} filesRoot={filesRoot} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} mailbox={mailbox} mailboxDirectory={mailboxDirectory} mailboxDirectoryReadFailed={mailboxDirectoryReadFailed} mailboxReadFailed={mailboxReadFailed} storageAccess={storageAccess} storageDirectory={storageDirectory} storageDirectoryReadFailed={storageDirectoryReadFailed} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onBack={() => backToView('settings')} onCreateFilesFolder={createFilesFolder} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onOpenFilesDirectory={openFilesDirectory} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} onSelectFilesRoot={selectFilesRoot} />
       case 'settings':
-        return <SettingsHomeScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={launchHarness} onOpenEnvironment={() => setActiveView('environment')} onOpenPage={openSettings} onOpenPlugins={() => setActiveView('plugins')} onOpenTerminal={() => setActiveView('terminal')} onStop={stopRuntime} />
+        return <SettingsHomeScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={launchHarness} onOpenPage={openSettings} onOpenView={setActiveView} onStop={stopRuntime} />
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} loadRuntimeVersions={loadRuntimeVersions} switchRuntimeVersion={switchRuntimeVersion} deleteRuntimeVersion={deleteRuntimeVersion} refreshRuntime={refreshRuntimeState} notify={notify} mailbox={mailbox} mailboxReadFailed={mailboxReadFailed} mailboxDirectory={mailboxDirectory} mailboxDirectoryReadFailed={mailboxDirectoryReadFailed} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} storageAccess={storageAccess} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onDraftChange={updateSettingsDraft} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onMailboxRootChange={changeMailboxRoot} onOpenMailboxDirectory={openMailboxDirectory} onCreateMailboxFolder={createMailboxFolder} onOpenAllFilesAccess={openAllFilesAccessSettings} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

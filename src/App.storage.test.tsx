@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEachAppTest, bridge, openSettingsPage } from './__tests__/appTestHarness'
+import { beforeEachAppTest, bridge, openFilesPage } from './__tests__/appTestHarness'
 import type { StorageDirEntry, StorageDirsState } from './platform/types'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
@@ -23,7 +23,7 @@ import { App } from './App'
 
 /** 区块容器：`<section aria-labelledby>` 有可访问名，因此按 region 查是稳定的。 */
 async function openStorageSection(): Promise<HTMLElement> {
-  await openSettingsPage('运行与后台')
+  await openFilesPage()
   return screen.findByRole('region', { name: '共享目录' })
 }
 

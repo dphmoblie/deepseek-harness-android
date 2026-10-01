@@ -34,16 +34,13 @@ internal fun prootProfileFallbacks(
         fallbacks += profile.copy(disableSeccomp = true)
     }
     // 投递区与用户目录白名单同属可选绑定：宿主目录不可访问时本来就不会追加（见 preferredProfile），
-    // 而一旦 PRoot 因为其中任何一个绑定失败，必须整体撤掉它们 —— 可选能力不能拖垮会话启动。
-    val includesMailbox = profile.bindMounts.any { it.target in MAILBOX_BIND_TARGETS }
-    if (includesMailbox && (!commandCanFail || RuntimeDiagnostics.prootFailure(result) != null)) {
-        fallbacks += profile.copy(bindMounts = profile.bindMounts.filterNot { it.target in MAILBOX_BIND_TARGETS })
-    }
-    val includesUserDirs = profile.bindMounts.any { RuntimeStorageDirsLayout.isGuestPath(it.target) }
-    if (includesUserDirs && (!commandCanFail || RuntimeDiagnostics.prootFailure(result) != null)) {
-        fallbacks += profile.copy(
-            bindMounts = profile.bindMounts.filterNot { RuntimeStorageDirsLayout.isGuestPath(it.target) },
-        )
+    // 而一旦 PRoot 因为其中任何一个绑定失败，必须**按类**整体撤掉它们 —— 可选能力不能拖垮会话启动。
+    // 归类判定只有一份（OptionalBindGroup），顺序即 profileKey 里的顺序，也即用户看到的顺序。
+    OptionalBindGroup.entries.forEach { group ->
+        val included = profile.bindMounts.any { group.owns(it.target) }
+        if (included && (!commandCanFail || RuntimeDiagnostics.prootFailure(result) != null)) {
+            fallbacks += profile.copy(bindMounts = profile.bindMounts.filterNot { group.owns(it.target) })
+        }
     }
     return fallbacks.distinct()
 }
@@ -179,20 +176,29 @@ class RuntimeLaunchResolver(
             }
         }
         val mounts = required.toMutableList()
-        // 投递区：**只在宿主目录确实可访问时才追加**这两个绑定。
+        // 可选绑定（投递区 + 用户目录白名单）：**只在宿主侧确实可访问时才追加**。
         // 不可访问（无「所有文件访问」、目录不可写、ROM 限制）时一个都不加：
-        // 绑定一个不存在的宿主路径会让 PRoot 直接起不来，那比「投递区不可用」严重得多。
-        // 这条分支与 §4.5 的分层一致——无权限时投递区落到 T0（控制台上传），不是故障。
-        mounts.addAll(mailbox().bindMounts())
-        // 用户目录白名单：与投递区同属可选绑定，逐条判定、逐条跳过。
+        // 绑定一个不存在的宿主路径会让 PRoot 直接起不来，那比「这个能力不可用」严重得多。
+        // 这条分支与 §4.5 的分层一致——不可用时落到 T0（控制台上传），不是故障。
         // **`/sdcard` 整体绑定已在这里被取代**：整体绑定让「App 有什么权限」直接等价于
         // 「访客能看到什么」，用户没有任何表达机会（§3.1）。旧偏好键的处置见 prepareRuntime。
-        mounts.addAll(storageDirs.bindMounts())
+        // 顺序即 [optionalBinds] 的顺序，也即 profileKey 里缓存键片段的顺序。
+        optionalBinds.forEach { mounts.addAll(it.bindMounts()) }
         return ProotLaunchProfile(disableSeccomp = false, bindMounts = mounts)
     }
 
     /** 投递区门面；只用于追加可选绑定与判断可用性，不接触凭据路径。 */
     private fun mailbox(): RuntimeMailbox = RuntimeMailbox(store)
+
+    /**
+     * 可选绑定提供者，**顺序即绑定顺序**：投递区（`/mnt/inbox`、`/mnt/outbox`）在前，
+     * 用户目录白名单（`/mnt/user/<序号>`）在后。
+     *
+     * 两条链路在「不可用返回空列表」「可用性/内容折进缓存键」上共用同一个接口
+     * （见 `OptionalBindProvider`），这里只负责把它们按固定顺序摆好；顺序变了，
+     * 启动档里的挂载顺序与缓存键都会跟着变，因此不要随手调整。
+     */
+    private val optionalBinds: List<OptionalBindProvider> get() = listOf(mailbox(), storageDirs)
 
     private fun probeProfiles(
         initial: CachedProfile,
@@ -255,19 +261,25 @@ class RuntimeLaunchResolver(
             .apply()
     }
 
-    private fun profileKey(manifest: RuntimeManifest): String = listOf(
-        BuildConfig.VERSION_CODE,
-        Build.VERSION.SDK_INT,
-        Build.FINGERPRINT,
-        manifest.runtimeId,
-        manifest.version,
-        manifest.rootfs.sha256,
-        // 同理：投递区可用性变化（用户授予/撤销「所有文件访问」）会让绑定集合变化，缓存必须失效。
-        mailbox().mountableNow(),
-        // 用户目录白名单的内容（条数与路径摘要）一变，缓存的启动档就必须失效 ——
-        // 与投递区同一机制，只是白名单还要看「用户选了什么」，不能只看可用性。
-        storageDirs.cacheToken(),
-    ).joinToString(":")
+    /**
+     * 启动档缓存键。
+     *
+     * 末尾两个片段来自 [optionalBinds]（顺序即此处的顺序）：
+     * - 投递区：**可用性**变化（用户授予/撤销「所有文件访问」）会让绑定集合变化，缓存必须失效；
+     * - 用户目录白名单：**内容**（条数与路径摘要）一变就必须失效 —— 与投递区同一机制，
+     *   只是白名单还要看「用户选了什么」，不能只看可用性。
+     * **键串必须逐字不变**：它存在应用私有偏好里，改了就等于让所有设备重跑一次兼容性探测。
+     */
+    private fun profileKey(manifest: RuntimeManifest): String = (
+        listOf(
+            BuildConfig.VERSION_CODE,
+            Build.VERSION.SDK_INT,
+            Build.FINGERPRINT,
+            manifest.runtimeId,
+            manifest.version,
+            manifest.rootfs.sha256,
+        ) + optionalBinds.map { it.cacheToken() }
+        ).joinToString(":")
 
     private fun throwIfStartCancelled(externalCancellation: () -> Boolean) {
         if (externalCancellation()) {
@@ -342,9 +354,6 @@ class RuntimeLaunchResolver(
             .takeLast(4096)
     }
 }
-
-/** 投递区在访客内的固定挂载点（宿主侧目录见 `RuntimeMailboxLayout`）。 */
-private val MAILBOX_BIND_TARGETS = setOf(RuntimeMailboxLayout.GUEST_INBOX, RuntimeMailboxLayout.GUEST_OUTBOX)
 
 internal object RuntimeDiagnostics {
     fun runnerFailure(result: ProcessProbeResult): ClassifiedFailure = when {

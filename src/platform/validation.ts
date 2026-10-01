@@ -32,6 +32,7 @@ import type {
   ShizukuState,
   StorageAccessState,
   StorageDirAvailability,
+  StorageDirectoryState,
   StorageDirEntry,
   StorageDirsState,
   TerminalChunk,
@@ -923,6 +924,52 @@ export function validateMailboxDirectoryState(value: unknown): MailboxDirectoryS
       }
     }),
     truncated: requiredBoolean(source.truncated, '投递区目录截断状态'),
+  }
+}
+
+/**
+ * 共享目录的访客路径：严格是 `/mnt/user/<序号>`，序号从 1 起且没有前导零。
+ *
+ * 与原生侧同一套形态规则：`/mnt/user`、`/mnt/user/01`、`/mnt/user/+1`、`/mnt/user/1/`、
+ * `/mnt/user/1/extra` 全都不是合法取值 —— 它们指不到白名单里的任何一条目录。
+ */
+const STORAGE_GUEST_PATH_PATTERN = /^\/mnt\/user\/[1-9]\d*$/
+
+/**
+ * 校验共享目录浏览快照；访客路径与条目都只允许白名单里的受控取值。
+ *
+ * `path` 复用投递区的相对子目录规则（[assertMailboxSubdirectory]）：原生回传根目录时给的是
+ * `null`，这里统一收敛成 `undefined`。条目的线形状与投递区逐字相同（`kind` 只有
+ * `file` / `directory`，没有 `type`），单次上限也复用投递区那个常量。
+ */
+export function validateStorageDirectoryState(value: unknown): StorageDirectoryState {
+  const source = asRecord(value, '共享目录状态')
+  const guestPath = source.guestPath
+  if (typeof guestPath !== 'string' || !STORAGE_GUEST_PATH_PATTERN.test(guestPath)) {
+    throw new Error('共享目录路径格式无效')
+  }
+  if (!Array.isArray(source.entries) || source.entries.length > MAX_MAILBOX_DIRECTORY_ENTRIES) {
+    throw new Error('共享目录条目格式无效')
+  }
+  const path = source.path === undefined || source.path === null
+    ? undefined
+    : typeof source.path === 'string'
+      ? assertMailboxSubdirectory(source.path)
+      : (() => { throw new Error('共享目录子路径格式无效') })()
+  return {
+    guestPath,
+    path,
+    entries: source.entries.map(item => {
+      const entry = asRecord(item, '共享目录条目')
+      const kind = entry.kind
+      if (kind !== 'file' && kind !== 'directory') throw new Error('共享目录条目类型无效')
+      return {
+        name: mailboxFileName(entry.name, '共享目录条目名称'),
+        kind,
+        bytes: byteCount(entry.bytes, '共享目录条目大小'),
+      }
+    }),
+    truncated: requiredBoolean(source.truncated, '共享目录截断状态'),
   }
 }
 

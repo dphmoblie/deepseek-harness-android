@@ -7,7 +7,6 @@ import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.nio.file.FileAlreadyExistsException
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -306,7 +305,7 @@ internal object MailboxManifestCodec {
  * 3. **无权限不静默降级**：没有「所有文件访问」时如实返回不可用并给出授权入口，
  *    绝不退回到别的目录冒充投递区。
  */
-internal class RuntimeMailbox(private val store: RuntimeStore) {
+internal class RuntimeMailbox(private val store: RuntimeStore) : OptionalBindProvider {
     private data class HostDirectories(val inbox: File, val outbox: File) {
         fun byName(name: String): File =
             if (name == RuntimeMailboxLayout.INBOX_DIRECTORY) inbox else outbox
@@ -314,6 +313,9 @@ internal class RuntimeMailbox(private val store: RuntimeStore) {
 
     /** 工作区：与 `RuntimeWorkspaceFiles` 同一路径口径（`currentRoot/root/1`）。 */
     private val workspace: File get() = File(store.currentRoot, "root/1")
+
+    /** 投递区可选绑定的归类：`/mnt/inbox` 与 `/mnt/outbox` 同属一类，一起加、一起撤。 */
+    override val group: OptionalBindGroup get() = OptionalBindGroup.MAILBOX
 
     fun state(): MailboxState {
         val supported = accessSupported()
@@ -344,74 +346,37 @@ internal class RuntimeMailbox(private val store: RuntimeStore) {
     /**
      * 列出固定 inbox/outbox 根目录下的一个相对目录。
      *
-     * 目录解析逐级使用 NoFollow 检查，符号链接不会把浏览范围带出投递区；只返回常规文件和
-     * 真实目录，最多 [RuntimeMailboxLimits.MAX_DIRECTORY_ENTRIES] 项并以 truncated 标记截断。
+     * 目录解析、条目过滤与截断都在 [RuntimeDirectoryBrowser] 里，与用户目录白名单共用同一段实现：
+     * 前端用的是同一个文件浏览组件，两边的排序与截断口径不能有任何差别。
+     * 这里只负责「投递区」这一侧的三件事：可用性（[requireDirectories]）、根名解析
+     * （inbox/outbox）、以及错误码与文案族。
      */
     fun listDirectory(rootName: String, subdirectory: String?): MailboxDirectoryState {
         val directories = requireDirectories()
         val normalized = RuntimeMailboxPolicy.normalizeSubdirectory(subdirectory)
         val root = directoryFor(directories, rootName)
-        val target = resolveDirectory(root, normalized)
-        val allEntries = try {
-            Files.newDirectoryStream(target.toPath()).use { stream ->
-                stream.asSequence()
-                    .filter { path ->
-                        val name = path.fileName?.toString() ?: return@filter false
-                        isVisibleMailboxName(name) && isSafeEntryName(name)
-                    }
-                    .mapNotNull { path ->
-                        val attributes = MailboxTree.readAttributesNoFollow(path) ?: return@mapNotNull null
-                        when {
-                            attributes.isDirectory && !attributes.isSymbolicLink ->
-                                MailboxDirectoryEntry(path.fileName.toString(), "directory", 0L)
-                            attributes.isRegularFile && !attributes.isSymbolicLink ->
-                                MailboxDirectoryEntry(
-                                    path.fileName.toString(),
-                                    "file",
-                                    MailboxTree.sizeOrNull(path) ?: 0L,
-                                )
-                            else -> null
-                        }
-                    }
-                    // 只多读一项即可判断是否截断，避免公共目录中有大量条目时把整棵列表读入内存。
-                    .take(RuntimeMailboxLimits.MAX_DIRECTORY_ENTRIES + 1)
-                    .toList()
-            }
-        } catch (error: IOException) {
-            throw RuntimeFailure(MailboxCodes.DIRECTORY_FAILED, "无法读取投递区目录", error)
-        }
+        val snapshot = RuntimeDirectoryBrowser.snapshot(root, normalized, RuntimeDirectoryBrowser.MAILBOX)
         return MailboxDirectoryState(
             root = rootName,
-            path = normalized,
-            entries = allEntries
-                .sortedWith(compareBy<MailboxDirectoryEntry>({ if (it.kind == "directory") 0 else 1 }, { it.name }))
-                .take(RuntimeMailboxLimits.MAX_DIRECTORY_ENTRIES),
-            truncated = allEntries.size > RuntimeMailboxLimits.MAX_DIRECTORY_ENTRIES,
+            path = snapshot.path,
+            entries = snapshot.entries,
+            truncated = snapshot.truncated,
         )
     }
 
     /**
      * 在固定根目录下创建一个相对目录。父目录可按需创建，但最终目录必须通过 CREATE_NEW
      * 建立，已有文件或目录一律拒绝，避免把用户误操作变成静默覆盖。
+     *
+     * 建完就走 [listDirectory] 回一份新快照：这样「建目录返回的列表」与「再浏览一次的列表」
+     * 必然同源，不会出现两份口径不同的列举实现。
      */
     fun createDirectory(rootName: String, subdirectory: String): MailboxDirectoryState {
         val directories = requireDirectories()
         val normalized = RuntimeMailboxPolicy.normalizeSubdirectory(subdirectory)
             ?: throw RuntimeFailure(MailboxCodes.PATH_INVALID, "投递区新目录路径不能为空")
         val root = directoryFor(directories, rootName)
-        val target = root.toPath().resolve(normalized).normalize()
-        if (!target.startsWith(root.toPath().toAbsolutePath().normalize())) {
-            throw RuntimeFailure(MailboxCodes.PATH_INVALID, "投递区目录越出根目录")
-        }
-        try {
-            // 逐级 NoFollow 创建父目录，拒绝任何中间符号链接。
-            target.parent?.let { parent -> MailboxTree.createDirectoriesNoFollow(root.toPath(), parent) }
-            Files.createDirectory(target)
-        } catch (_: FileAlreadyExistsException) {
-            throw RuntimeFailure(MailboxCodes.FOLDER_EXISTS, "投递区目录已存在")
-        } catch (error: IOException) {
-            throw RuntimeFailure(MailboxCodes.DIRECTORY_FAILED, "无法创建投递区目录", error)
-        }
+        RuntimeDirectoryBrowser.createFolder(root, normalized, RuntimeDirectoryBrowser.MAILBOX)
         val parent = normalized.substringBeforeLast("/", "")
         return listDirectory(rootName, parent.ifEmpty { null })
     }
@@ -424,10 +389,12 @@ internal class RuntimeMailbox(private val store: RuntimeStore) {
      * 这条分支（可用 → 追加两个绑定；不可用 → 一个也不追加）是设计的一部分，
      * 不是降级。
      */
-    fun bindMounts(): List<ProotBindMount> {
+    override fun bindMounts(): List<ProotBindMount> {
         val directories = hostDirectories(create = true, probeWrite = false) ?: return emptyList()
-        if (!ensureGuestMountPoint(RuntimeMailboxLayout.GUEST_INBOX)) return emptyList()
-        if (!ensureGuestMountPoint(RuntimeMailboxLayout.GUEST_OUTBOX)) return emptyList()
+        // 挂载点创建与用户目录白名单共用同一份实现（见 OptionalBindProvider.kt）：两条链路在
+        // 「挂载点建不出来就跳过这条绑定」上的口径必须一致。
+        if (!ensureGuestMountPoint(store.currentRoot, RuntimeMailboxLayout.GUEST_INBOX)) return emptyList()
+        if (!ensureGuestMountPoint(store.currentRoot, RuntimeMailboxLayout.GUEST_OUTBOX)) return emptyList()
         return RuntimeMailboxLayout.MOUNT_POINTS.map { (target, name) ->
             ProotBindMount(directories.byName(name).absolutePath, target)
         }
@@ -435,6 +402,12 @@ internal class RuntimeMailbox(private val store: RuntimeStore) {
 
     /** 便宜的可用性判断（供启动档缓存键使用，不创建任何文件）。 */
     fun mountableNow(): Boolean = hostDirectories(create = false, probeWrite = false) != null
+
+    /**
+     * 启动档缓存键片段：投递区**没有内容维度的缓存**（搬运是显式动作，浏览不缓存），
+     * 只有可用性——「所有文件访问」被授予或撤销都会改变这一项。
+     */
+    override fun cacheToken(): String = mountableNow().toString()
 
     fun importInbox(): MailboxImportOutcome {
         val directories = requireDirectories()
@@ -587,30 +560,14 @@ internal class RuntimeMailbox(private val store: RuntimeStore) {
         else -> throw RuntimeFailure(MailboxCodes.ROOT_INVALID, "投递区根目录无效")
     }
 
-    /** 逐级确认相对目录中的每一段都是真实目录，拒绝中间符号链接。 */
-    private fun resolveDirectory(root: File, normalized: String?): File {
-        var cursor = root.toPath().toAbsolutePath().normalize()
-        if (!MailboxTree.isRealDirectory(cursor)) {
-            throw RuntimeFailure(MailboxCodes.DIRECTORY_NOT_FOUND, "投递区根目录不可用")
-        }
-        normalized.orEmpty().split('/').filter { it.isNotEmpty() }.forEach { component ->
-            cursor = cursor.resolve(component)
-            if (!MailboxTree.isRealDirectory(cursor)) {
-                throw RuntimeFailure(MailboxCodes.DIRECTORY_NOT_FOUND, "投递区目录不存在")
-            }
-        }
-        return cursor.toFile()
-    }
-
-    private fun isSafeEntryName(name: String): Boolean = try {
-        RuntimeMailboxPolicy.normalizeEntryName(name)
-        true
-    } catch (_: RuntimeFailure) {
-        false
-    }
-
-    private fun isVisibleMailboxName(name: String): Boolean =
-        name.isNotEmpty() && !name.startsWith(PROBE_PREFIX) && !name.startsWith(".dsh-export-")
+    /**
+     * 解析投递区内的相对目录（导出目标目录用）。
+     *
+     * 只做「解析」不做「列举」，但逐级 NoFollow 的口径与浏览完全一致：直接委托给共享浏览核心，
+     * 避免导出与浏览各判一套，出现「列不出来却写得进去」这种不一致。
+     */
+    private fun resolveDirectory(root: File, path: String?): File =
+        RuntimeDirectoryBrowser.requireDirectory(root, path, RuntimeDirectoryBrowser.MAILBOX)
 
     private fun requireWorkspace(): File {
         if (!MailboxTree.isRealDirectory(workspace.toPath())) {
@@ -675,18 +632,6 @@ internal class RuntimeMailbox(private val store: RuntimeStore) {
             false
         } finally {
             probe.delete()
-        }
-    }
-
-    /** 访客侧挂载点：落在 rootfs 里的 `/mnt/inbox`、`/mnt/outbox`，不存在时创建（逐级 NoFollow）。 */
-    private fun ensureGuestMountPoint(guestPath: String): Boolean {
-        if (!MailboxTree.isRealDirectory(store.currentRoot.toPath())) return false
-        val directory = File(store.currentRoot, guestPath.removePrefix("/"))
-        return try {
-            MailboxTree.createDirectoriesNoFollow(store.currentRoot.toPath(), directory.toPath())
-            true
-        } catch (_: Throwable) {
-            false
         }
     }
 

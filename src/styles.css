@@ -1211,6 +1211,72 @@ button:disabled {
   box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 5%, transparent);
 }
 
+/*
+ * 设置首页的功能词搜索。
+ *
+ * 输入框自己不自带边框（这一块整体就是输入框），焦点态因此必须画在容器上：
+ * 不做 focus-within 高亮，键盘用户看不出焦点在哪一格。
+ */
+.settings-search {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.settings-search:focus-within {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent);
+}
+
+.settings-search > svg {
+  color: var(--muted);
+}
+
+.settings-search input {
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+}
+
+.settings-search input:focus {
+  outline: none;
+}
+
+.settings-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--surface-muted);
+  cursor: pointer;
+}
+
+.settings-search-clear:hover {
+  color: var(--ink);
+}
+
+/* 分组标题：只是列表内的分组说明，不做成标题元素（页头已经有一个同名「设置」）。 */
+.management-group-title {
+  margin: 0;
+  padding: 13px 16px 5px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
 .management-service,
 .management-row {
   display: grid;

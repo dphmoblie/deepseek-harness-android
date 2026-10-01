@@ -79,6 +79,11 @@ export const bridge = {
   getMailboxState: vi.fn(),
   getMailboxDirectory: vi.fn(),
   createMailboxFolder: vi.fn(),
+  // 「文件管理」一级页会读共享目录（`/mnt/user/<序号>`）。放在投递区两条旁边：
+  // 两者的线形状只差根字段，缺桩的后果与上面 §5.1 那条注释一样——effect 阶段抛错、
+  // 整棵树卸载，表现成「找不到任何元素」。
+  getStorageDirectory: vi.fn(),
+  createStorageFolder: vi.fn(),
   getStorageAccessState: vi.fn(),
   // 存储目录白名单（§5.1）。界面接线尚未做，但桩必须先在：桥加了方法而夹具没加，
   // 用到它的界面会在 effect 阶段抛错并**整棵树卸载**，表现成「找不到任何元素」——
@@ -253,6 +258,10 @@ export function beforeEachAppTest(): void {
   bridge.getMailboxState.mockResolvedValue({ ...unavailableMailbox })
   bridge.getMailboxDirectory.mockResolvedValue({ root: 'inbox', path: undefined, entries: [], truncated: false })
   bridge.createMailboxFolder.mockResolvedValue({ root: 'inbox', path: undefined, entries: [], truncated: false })
+  // 共享目录的默认值同样给「第 1 条 + 根目录 + 空目录」：形状必须过得了 validateStorageDirectoryState，
+  // 否则界面侧的载荷校验会抛错（同 §5.1 那条注释）。
+  bridge.getStorageDirectory.mockResolvedValue({ guestPath: '/mnt/user/1', path: undefined, entries: [], truncated: false })
+  bridge.createStorageFolder.mockResolvedValue({ guestPath: '/mnt/user/1', path: undefined, entries: [], truncated: false })
   bridge.getStorageAccessState.mockResolvedValue({ ...storageAccess })
   // 与「未授予所有文件访问」的真机初始状态一致：白名单为空、档位 T0、上限照实回 8。
   // 给默认值而不只是 vi.fn()，是为了让桩在**被调用**时也返回符合契约的形状——
@@ -351,4 +360,19 @@ export async function openSettingsPage(name: string): Promise<void> {
   })
   fireEvent.click(entry)
   await screen.findByRole('heading', { name }, { timeout: SETTINGS_NAV_TIMEOUT_MS })
+}
+
+/**
+ * 打开「文件管理」一级页（投递区与共享目录现在都在这里，不再挂在「运行与后台」页）。
+ *
+ * 与 [openSettingsPage] 同一条等待口径，理由也一样：`findBy*` 默认只等 1 s，
+ * 而这条链路要先等设置首页出现。先点入口按钮、再等页面标题，顺序不能反
+ * （入口按钮的 accessible name 里也含「文件管理」，先找标题会命中按钮）。
+ */
+export async function openFilesPage(): Promise<void> {
+  const entry = await screen.findByRole('button', { name: /文件管理/ }, {
+    timeout: SETTINGS_NAV_TIMEOUT_MS,
+  })
+  fireEvent.click(entry)
+  await screen.findByRole('heading', { name: '文件管理', level: 1 }, { timeout: SETTINGS_NAV_TIMEOUT_MS })
 }

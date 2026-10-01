@@ -313,6 +313,34 @@ export interface MailboxDirectoryState {
 }
 
 /**
+ * 共享目录（`/mnt/user/<序号>`）当前目录中的一项。
+ *
+ * 与投递区条目**共用同一个线形状**（原生侧两处用的是同一个 `MailboxDirectoryEntry.toJs`）：
+ * 字段逐字为 `name` / `kind` / `bytes`，没有 `type`。共享目录里的符号链接、硬链接与特殊文件
+ * 不会被列出。
+ */
+export type StorageDirectoryEntry = MailboxDirectoryEntry
+
+/**
+ * 共享目录浏览快照；与 [MailboxDirectoryState] 只差根字段（`root` → `guestPath`）。
+ *
+ * - `guestPath` 严格形如 `/mnt/user/<序号>`，序号从 1 起，取自 [StorageDirsState] 条目里的
+ *   同名字段。序号是**持久化顺序**（`/mnt/user/3` 永远指白名单里的第 3 条，不因别的条目失效而重排），
+ *   因此界面可以把它当稳定标识用；它标识的是「白名单里的第几条」，不是任意宿主路径。
+ * - `path` 为 `undefined` 表示当前就位于该目录根；否则是规范化后的相对子目录
+ *   （语义与 [MailboxDirectoryState] 的 `path` 完全一致，原生回传根目录时给的是 `null`）。
+ * - `entries` 单次最多 256 条（与投递区同一个上限）。超出上限时只返回一部分且
+ *   `truncated` 为 true，界面应提示用户继续缩小目录范围，而不是把它当成目录的全部内容。
+ */
+export interface StorageDirectoryState {
+  guestPath: string
+  path?: string
+  entries: StorageDirectoryEntry[]
+  /** 条目超过上限时只返回一部分，界面应提示用户继续缩小目录范围。 */
+  truncated: boolean
+}
+
+/**
  * 存储访问状态（原生 `getStorageAccessState` 的载荷）。
  *
  * 对应 `docs/真机缺陷与改进清单.md` §5.1 的权限分级：
@@ -611,6 +639,20 @@ export interface RuntimeBridge {
   getMailboxDirectory: (root: MailboxRoot, subdirectory?: string) => Promise<MailboxDirectoryState>
   /** 在固定 inbox/outbox 根目录下创建相对目录；不会覆盖已有条目。 */
   createMailboxFolder: (root: MailboxRoot, subdirectory: string) => Promise<MailboxDirectoryState>
+  /**
+   * 浏览共享目录白名单里某一条目录下的相对目录。
+   *
+   * `guestPath` **只能取自运行时状态**（[StorageDirsState] 条目里的同名字段，形如 `/mnt/user/1`）：
+   * 它标识的是白名单里的第几条，不接受任意宿主路径，界面也不能直接接用户输入。
+   * `subdirectory` 省略表示该目录本身。
+   */
+  getStorageDirectory: (guestPath: string, subdirectory?: string) => Promise<StorageDirectoryState>
+  /**
+   * 在共享目录的某条目录下创建相对目录，返回建完后的新快照（界面不必再发一次浏览请求）。
+   *
+   * 语义是 CREATE_NEW：父目录可按需创建，目标已存在时报错，**绝不覆盖**用户已有的条目。
+   */
+  createStorageFolder: (guestPath: string, subdirectory: string) => Promise<StorageDirectoryState>
   /** 存储访问状态（T1 媒体只读 / T2 所有文件访问）；只有布尔与枚举，不含路径。 */
   getStorageAccessState: () => Promise<StorageAccessState>
   /** 申请媒体读取权限（T1）。它**不解锁投递区**，投递区需要 T2。 */

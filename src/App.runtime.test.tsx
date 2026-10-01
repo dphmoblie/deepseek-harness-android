@@ -565,6 +565,19 @@ describe('运行时版本管理', () => {
 
   const runtimeId = 'ubuntu-24.04-arm64-deepseek-harness'
 
+  /**
+   * 进「版本管理」一级页：设置首页 → 版本管理。
+   *
+   * 版本管理已经不从「运行与后台」页里渲染，而是独立的一级页，所以断言前必须先走到那一屏。
+   * 两步都用有界等待：这一步依赖启动链把视图推到设置首页（与 `openSettingsPage` 同一条理由），
+   * 同步查询等于把成败押在启动链的时序上。
+   */
+  async function openVersionsPage(): Promise<void> {
+    await screen.findByRole('heading', { name: '设置' }, { timeout: 5_000 })
+    fireEvent.click(await screen.findByRole('button', { name: /版本管理/ }, { timeout: 5_000 }))
+    await screen.findByRole('heading', { name: '版本管理' }, { timeout: 5_000 })
+  }
+
   /** 常见的三槽状态：当前 0.1.5-rc.2、上一版本 0.1.7-rc.2、内置版本未解压。 */
   const threeSlots: RuntimeVersionsState = {
     versions: [
@@ -582,7 +595,7 @@ describe('运行时版本管理', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openVersionsPage()
 
     expect(await screen.findByRole('heading', { name: '运行时版本管理' })).toBeVisible()
     expect(screen.getByText('当前使用')).toBeVisible()
@@ -601,7 +614,7 @@ describe('运行时版本管理', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openVersionsPage()
 
     expect(await screen.findByText('运行中不能切换版本：请先停止运行环境与 Ubuntu 终端。')).toBeVisible()
     expect(screen.getByRole('button', { name: '切换到上一版本' })).toBeDisabled()
@@ -626,13 +639,17 @@ describe('运行时版本管理', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openVersionsPage()
     fireEvent.click(await screen.findByRole('button', { name: '切换到上一版本' }))
 
     expect(await screen.findByText('已切换到上一版本')).toBeVisible()
     expect(bridge.switchRuntimeVersion).toHaveBeenCalledWith('previous')
-    // 切换后「当前使用」换了人：状态里那一行必须重读，显示新的已安装版本。
+    // 切换后「当前使用」换了人：状态里那一行必须重读，不能沿用旧值。
     expect(bridge.getState).toHaveBeenCalledTimes(2)
+    // 重读的效果要看得见：回设置首页再进「运行与后台」，已安装版本那一行已经换成新版本。
+    fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
+    await screen.findByRole('heading', { name: '设置' }, { timeout: 5_000 })
+    await openSettingsPage('运行与后台')
     expect(await screen.findByText('2026.09.01')).toBeVisible()
   })
 
@@ -645,7 +662,7 @@ describe('运行时版本管理', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openVersionsPage()
     fireEvent.click(await screen.findByRole('button', { name: '切换到上一版本' }))
 
     expect(await screen.findByText('请先停止 Harness 和 Ubuntu 终端')).toBeVisible()
@@ -666,7 +683,7 @@ describe('运行时版本管理', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openVersionsPage()
     fireEvent.click(await screen.findByRole('button', { name: '删除上一版本' }))
 
     // 一次点击只进入确认：磁盘上的副本不能因为点错就没了。
@@ -689,7 +706,7 @@ describe('运行时版本管理', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openVersionsPage()
 
     expect(await screen.findByText('暂时读不到运行时版本列表')).toBeVisible()
     expect(screen.queryByText('还没有安装运行时：安装后这里会列出当前版本与上一版本。')).toBeNull()

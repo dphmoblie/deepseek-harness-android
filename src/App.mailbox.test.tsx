@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { availableMailbox, beforeEachAppTest, bridge, openSettingsPage, storageAccess, unavailableMailbox } from './__tests__/appTestHarness'
+import { availableMailbox, beforeEachAppTest, bridge, openFilesPage, storageAccess, unavailableMailbox } from './__tests__/appTestHarness'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
 vi.mock('./components/TerminalPanel', () => ({
@@ -23,7 +23,7 @@ describe('投递区', () => {
     render(<App />)
     await waitFor(() => expect(bridge.getMailboxState).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openFilesPage()
 
     // 档位与原因都如实显示：不把「需要授权」写成「故障」。
     expect(await screen.findByText('需要授权')).toBeVisible()
@@ -58,7 +58,7 @@ describe('投递区', () => {
 
     render(<App />)
     await waitFor(() => expect(bridge.getMailboxState).toHaveBeenCalledTimes(1))
-    await openSettingsPage('运行与后台')
+    await openFilesPage()
 
     expect(await screen.findByText('不支持')).toBeVisible()
     expect(screen.getByText(/不存在「所有文件访问」这一档/)).toBeVisible()
@@ -98,7 +98,7 @@ describe('投递区', () => {
 
     render(<App />)
     await waitFor(() => expect(bridge.getMailboxState).toHaveBeenCalledTimes(1))
-    await openSettingsPage('运行与后台')
+    await openFilesPage()
 
     expect(await screen.findByText('可用')).toBeVisible()
     expect(screen.getByText(/可导入的 tar：dsh-workspace\.tar/)).toBeVisible()
@@ -142,7 +142,7 @@ describe('投递区', () => {
 
     render(<App />)
     await waitFor(() => expect(bridge.getMailboxDirectory).toHaveBeenCalledWith('inbox', undefined))
-    await openSettingsPage('运行与后台')
+    await openFilesPage()
 
     expect(await screen.findByText('weekly')).toBeVisible()
     fireEvent.click(screen.getByText('weekly'))
@@ -175,7 +175,7 @@ describe('投递区', () => {
 
     render(<App />)
     await waitFor(() => expect(bridge.getMailboxState).toHaveBeenCalledTimes(1))
-    await openSettingsPage('运行与后台')
+    await openFilesPage()
     fireEvent.click(await screen.findByRole('button', { name: /导入到工作区/ }))
 
     await waitFor(() => expect(bridge.importMailbox).toHaveBeenCalledTimes(1))
@@ -187,7 +187,7 @@ describe('投递区', () => {
 
     render(<App />)
     await waitFor(() => expect(bridge.getMailboxState).toHaveBeenCalledTimes(1))
-    await openSettingsPage('运行与后台')
+    await openFilesPage()
 
     expect(await screen.findByText('无法读取投递区状态，请重试')).toBeVisible()
     expect(screen.getByText('未读取')).toBeVisible()

@@ -29,6 +29,7 @@ import {
   validateSettingsUpdate,
   validateShizukuState,
   validateStorageAccessState,
+  validateStorageDirectoryState,
   validateStorageDirsState,
   validateStoredSettings,
   validateTerminalChunk,
@@ -687,6 +688,39 @@ describe('投递区结果校验', () => {
     expect(() => validateMailboxDirectoryState({ ...snapshot, path: '../outside' })).toThrow()
     expect(() => validateMailboxDirectoryState({ ...snapshot, entries: [{ name: 'a', kind: 'symlink', bytes: 0 }] })).toThrow()
     expect(() => validateMailboxDirectoryState({ ...snapshot, truncated: 'false' })).toThrow()
+  })
+
+  it('校验共享目录快照、访客路径与条目类型', () => {
+    const snapshot = {
+      guestPath: '/mnt/user/2',
+      path: 'projects/demo',
+      entries: [
+        { name: 'src', kind: 'directory', bytes: 0 },
+        { name: 'notes.md', kind: 'file', bytes: 42 },
+      ],
+      truncated: false,
+    }
+    expect(validateStorageDirectoryState(snapshot)).toEqual(snapshot)
+    // 根目录：原生回传的是 path: null，前端统一收敛成 undefined（与投递区同一口径）。
+    expect(validateStorageDirectoryState({ ...snapshot, path: null, truncated: true }))
+      .toEqual({ ...snapshot, path: undefined, truncated: true })
+    // 序号从 1 起且没有前导零：以下写法都指不到白名单里的任何一条目录。
+    const invalidGuestPaths: unknown[] = [
+      '/mnt/user', '/mnt/user/', '/mnt/user/0', '/mnt/user/1/', '/mnt/user/01',
+      '/mnt/user/+1', '/mnt/user/1/extra', '/mnt/user/1 ', '/storage/emulated/0', 1, null, undefined,
+    ]
+    for (const guestPath of invalidGuestPaths) {
+      expect(() => validateStorageDirectoryState({ ...snapshot, guestPath })).toThrow()
+    }
+    expect(() => validateStorageDirectoryState({ ...snapshot, path: '../outside' })).toThrow()
+    expect(() => validateStorageDirectoryState({ ...snapshot, path: '/etc' })).toThrow()
+    expect(() => validateStorageDirectoryState({ ...snapshot, entries: [{ name: 'a', kind: 'symlink', bytes: 0 }] })).toThrow()
+    // 条目数上限与投递区同一个常量（256）；超一条即视为载荷不符合契约。
+    expect(() => validateStorageDirectoryState({
+      ...snapshot,
+      entries: Array.from({ length: 257 }, (_, index) => ({ name: `f${index}`, kind: 'file', bytes: 0 })),
+    })).toThrow()
+    expect(() => validateStorageDirectoryState({ ...snapshot, truncated: 'false' })).toThrow()
   })
 })
 

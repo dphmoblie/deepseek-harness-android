@@ -260,12 +260,20 @@ internal object RuntimeMailboxPolicy {
      * 接受：`a/b.txt`、`./a/b.txt`（GNU tar 常见前缀）、`dir/`（目录条目）。
      * 拒绝：绝对路径、`..`、`.` 分段、空分段（`a//b`）、反斜杠、NUL、CR/LF、超长、超深。
      * 返回：去掉前导 `./` 与尾部 `/` 的规范形式。
+     *
+     * [code] 与 [message] 只在**跨链路复用同一条规则**时才覆盖：用户目录白名单里的相对路径
+     * （`/mnt/user/<序号>` 之下）与归档条目走的是同一套判定，但对外仍然是 `STORAGE_DIR_*` 那族
+     * 错误码，不能因为内部实现合并就把已发布的码换掉。默认值即归档链路原本的码与文案。
      */
-    fun normalizeEntryName(rawName: String): String {
+    fun normalizeEntryName(
+        rawName: String,
+        code: String = MailboxCodes.PATH_INVALID,
+        message: String = "归档条目路径无效",
+    ): String {
         var name = rawName
         while (name.startsWith(LEADING_DOT_SLASH)) name = name.removePrefix(LEADING_DOT_SLASH)
         name = name.removeSuffix("/")
-        validateRelative(name, MailboxCodes.PATH_INVALID, "归档条目路径无效")
+        validateRelative(name, code, message)
         return name
     }
 
@@ -321,13 +329,20 @@ internal object RuntimeMailboxPolicy {
     }
 
     /**
-     * 校验导出子目录参数：省略或空白等价于「整个工作区」；其余必须是通过同一套规则
+     * 校验「子目录」参数：省略或空白等价于「该目录本身」；其余必须是通过同一套规则
      * 的相对路径（不含 `.` / `..` 分段）。
+     *
+     * 投递区的导出目标、投递区与**用户目录白名单**的目录浏览/新建都走这里：三条链路的
+     * 路径规则必须完全一致，只有 [code] / [message] 按链路注入。
      */
-    fun normalizeSubdirectory(raw: String?): String? {
+    fun normalizeSubdirectory(
+        raw: String?,
+        code: String = MailboxCodes.PATH_INVALID,
+        message: String = "归档条目路径无效",
+    ): String? {
         val trimmed = raw?.trim().orEmpty()
         if (trimmed.isEmpty()) return null
-        return normalizeEntryName(trimmed)
+        return normalizeEntryName(trimmed, code, message)
     }
 
     /** manifest 条目路径必须与归档条目同规则：绝不允许把绝对路径或宿主路径写进产物。 */
