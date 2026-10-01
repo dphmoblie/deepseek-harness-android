@@ -38,6 +38,9 @@ export function AppBackground() {
     return () => { document.removeEventListener('visibilitychange', sync); reduced?.removeEventListener('change', sync) }
   }, [media])
   return media && <div className="app-background" aria-hidden="true">
-    {media.video ? <video ref={video} src={media.url} muted loop playsInline preload="metadata" /> : <img src={media.url} alt="" />}
+    {media.video ? <video ref={video} src={media.url} muted autoPlay loop playsInline controls={false} disablePictureInPicture preload="auto"
+      onLoadedData={() => { if (!document.hidden && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) void video.current?.play().catch(() => undefined) }}
+      onCanPlay={() => { if (!document.hidden && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) void video.current?.play().catch(() => undefined) }}
+    /> : <img src={media.url} alt="" />}
   </div>
 }

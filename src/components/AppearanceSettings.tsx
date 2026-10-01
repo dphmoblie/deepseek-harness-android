@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Moon, Palette, Sun, SunMoon, RotateCcw } from 'lucide-react'
 import { t } from '../i18n'
-import { applyTheme, readThemeMode, saveAccentMode, saveThemeMode, useAccentMode, useResolvedTheme, useThemeMode } from '../theme'
+import { applyTheme, clearCustomAccentColor, readCustomAccentColor, readThemeMode, saveAccentMode, saveCustomAccentColor, saveThemeMode, useAccentMode, useResolvedTheme, useThemeMode } from '../theme'
 import type { AccentMode, ThemeMode } from '../theme'
 import { applyCard, clearBackground, DEFAULT_CARD, readCard, saveBackground, saveCard, type CardAppearance } from '../appearance'
 
@@ -30,6 +30,7 @@ export function AppearanceSettings() {
   const [failed, setFailed] = useState<'theme' | 'accent' | null>(null)
   const [card, setCard] = useState<CardAppearance>(() => readCard())
   const [backgroundError, setBackgroundError] = useState('')
+  const [customAccent, setCustomAccent] = useState(() => readCustomAccentColor())
   const updateCard = (next: CardAppearance) => {
     try { saveCard(next); setCard(next); setBackgroundError('') }
     catch { setBackgroundError(t('无法保存外观，请检查本地存储空间')) }
@@ -91,6 +92,10 @@ export function AppearanceSettings() {
             </label>
           ))}
         </div>
+        <label className="appearance-custom-accent"><span>{t('自定义强调色')}</span><input type="color" value={customAccent || '#315fcf'} onChange={event => {
+          const value = event.target.value
+          if (saveCustomAccentColor(value)) setCustomAccent(value)
+        }} /><button type="button" className="compact-button" onClick={() => { clearCustomAccentColor(); setCustomAccent('') }}>{t('使用默认')}</button></label>
       </div>
       {failed !== null && <p role="alert">{t(failed === 'accent' ? '无法保存强调色，请重试。' : '无法保存主题，请重试。')}</p>}
       <div className="appearance-customization">

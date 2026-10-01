@@ -11,6 +11,7 @@ interface SessionEntry {
 interface SessionManagerProps {
   onBack: () => void
   onOpenHarness: () => void
+  embedded?: boolean
 }
 
 const INITIAL_SESSIONS: SessionEntry[] = []
@@ -21,7 +22,7 @@ const INITIAL_SESSIONS: SessionEntry[] = []
  * Harness 内部的会话由运行时管理，外壳不读取也不复制会话正文；这里仅提供
  * 轻量入口、筛选和本地导航状态，避免把可能含敏感信息的对话内容写入浏览器存储。
  */
-export function SessionManager({ onBack, onOpenHarness }: SessionManagerProps) {
+export function SessionManager({ onBack, onOpenHarness, embedded = false }: SessionManagerProps) {
   useLanguage()
   const [sessions, setSessions] = useState<SessionEntry[]>(INITIAL_SESSIONS)
   const [query, setQuery] = useState('')
@@ -43,8 +44,8 @@ export function SessionManager({ onBack, onOpenHarness }: SessionManagerProps) {
   }
 
   return (
-    <div className="screen session-screen">
-      <div className="screen-heading management-heading session-heading">
+    <div className={embedded ? 'session-manager-embedded' : 'screen session-screen'}>
+      {!embedded && <div className="screen-heading management-heading session-heading">
         <div>
           <p className="eyebrow">{t('会话工作区')}</p>
           <h1>{t('会话管理')}</h1>
@@ -57,7 +58,7 @@ export function SessionManager({ onBack, onOpenHarness }: SessionManagerProps) {
             <ArrowLeft size={19} />
           </button>
         </div>
-      </div>
+      </div>}
 
       <div className="session-toolbar">
         <label className="session-search">

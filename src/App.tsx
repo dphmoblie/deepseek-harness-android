@@ -845,6 +845,7 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onO
           <div><strong>{t("缺少本机运行组件")}</strong><span>{t("请安装支持当前 arm64 设备的新版应用。")}</span></div>
         </div>
       )}
+      <SessionManager embedded onBack={() => undefined} onOpenHarness={onLaunch} />
     </div>
   )
 }
@@ -4266,13 +4267,7 @@ export function App() {
       <AppSidebar activeView={activeView} onNavigate={setActiveView} />
       <div className="app-frame">
         <header className="mobile-header">
-          <div className="header-brand-group">
-            <button className="icon-button mobile-session-entry" type="button" aria-label={t('会话管理')}
-              aria-current={activeView === 'sessions' ? 'page' : undefined} onClick={() => setActiveView('sessions')}>
-              <WhaleMark size={24} />
-            </button>
-            <Brand />
-          </div>
+          <div className="header-brand-group"><Brand /></div>
           <div className="header-actions">
             <PhaseBadge phase={runtime.phase} />
             {activeView === 'conversation' && (

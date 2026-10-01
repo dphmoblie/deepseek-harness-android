@@ -356,7 +356,8 @@ button:disabled {
   gap: 12px;
   padding: calc(10px + env(safe-area-inset-top)) 8px 12px;
   border-right: 1px solid var(--line);
-  background: color-mix(in srgb, var(--surface) 92%, var(--bg));
+  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 92%), transparent);
+  backdrop-filter: blur(var(--card-blur, 0px));
   box-shadow: 6px 0 24px rgb(20 29 40 / 4%);
 }
 
@@ -430,7 +431,7 @@ button:disabled {
   min-height: calc(3.625rem + env(safe-area-inset-top));
   padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
   border-bottom: 1px solid var(--line);
-  background: var(--header-bg);
+  background: color-mix(in srgb, var(--card-color, var(--header-bg)) var(--card-opacity, 92%), transparent);
   box-shadow: 0 8px 28px rgb(20 29 40 / 5%);
   backdrop-filter: blur(18px);
 }
@@ -1792,7 +1793,8 @@ button:disabled {
     gap: 4px;
     padding: 5px max(8px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
     border-top: 1px solid var(--line);
-    background: var(--surface);
+    background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 92%), transparent);
+    backdrop-filter: blur(var(--card-blur, 0px));
   }
   .bottom-navigation-item {
     display: flex;
@@ -2599,8 +2601,19 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   color: var(--card-ink, var(--ink));
 }
 .management-shell :is(.management-row, .management-service) { background: transparent; }
+.management-shell :is(.management-row, .management-service) {
+  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  backdrop-filter: blur(var(--card-blur, 0px));
+  color: var(--card-ink, var(--ink));
+}
 .management-shell :is(.settings-section, .management-list, .detail-section) :is(p, small) { color: var(--card-muted, var(--muted)); }
 .appearance-customization { display: grid; gap: 16px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
 .appearance-range-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 16px; }
 .appearance-customization input[type=file] { width: 100%; min-width: 0; font-size: 0.75rem; }
 .appearance-customization input[type=color] { width: 64px; min-height: 44px; }
+.appearance-custom-accent { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.appearance-custom-accent > span { color: var(--card-muted, var(--muted)); }
+.session-manager-embedded { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.session-manager-embedded .session-toolbar { max-width: 680px; }
+.session-manager-embedded .session-list { grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); }
+.session-manager-embedded .session-note { color: var(--card-muted, var(--muted)); }

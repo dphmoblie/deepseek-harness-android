@@ -235,7 +235,7 @@ class MobileRuntimePlugin : Plugin() {
             return
         }
         // 落盘成功后再改窗口；没有可用的 Activity（例如后台调用）不算失败，下次 onResume 会补上。
-        (activity as? android.app.Activity)?.let { AppThemePreference.apply(it) }
+        (activity as? android.app.Activity)?.let { AppThemePreference.applySafely(it) }
         call.resolve()
     }
 

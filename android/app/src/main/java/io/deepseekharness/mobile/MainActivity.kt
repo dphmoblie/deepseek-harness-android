@@ -85,7 +85,7 @@ class MainActivity : BridgeActivity() {
         super.onResume()
         // 主题可能刚在 Web 侧被改过，系统深色模式也可能在后台切换过；每次回到前台重算一次状态栏，
         // 比在每条改动路径上分别通知可靠。
-        AppThemePreference.apply(this)
+        AppThemePreference.applySafely(this)
         // 用户已经回到应用，界面本身就会显示运行时状态：任务通知在这里没有存在价值（登记册 §5.5）。
         io.deepseekharness.mobile.runtime.TaskNotification.clear(this)
     }
@@ -94,7 +94,7 @@ class MainActivity : BridgeActivity() {
         super.onConfigurationChanged(newConfig)
         // `uiMode` 在 configChanges 列表里，系统切换深色**不会重建本 Activity**，
         // 所以这里必须自己重算：否则「跟随系统」时状态栏会一直停在旧配色。
-        AppThemePreference.apply(this)
+        AppThemePreference.applySafely(this)
     }
 
     override fun onDestroy() {

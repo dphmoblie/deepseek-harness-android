@@ -25,6 +25,7 @@ export type AccentMode = 'ocean' | 'mint' | 'amber' | 'rose'
 
 export const THEME_STORAGE_KEY = 'dsh-mobile-theme-v1'
 export const ACCENT_STORAGE_KEY = 'dsh-mobile-accent-v1'
+export const CUSTOM_ACCENT_STORAGE_KEY = 'dsh-mobile-custom-accent-v1'
 /** 默认跟随系统：用户没表过态时，尊重系统的深色偏好比替他做决定更合理。 */
 export const DEFAULT_THEME_MODE: ThemeMode = 'system'
 export const THEME_MODES: readonly ThemeMode[] = ['system', 'light', 'dark']
@@ -104,7 +105,41 @@ function syncThemeColorMeta(theme: ResolvedTheme): void {
 
 /** 将已校验的强调色写入 DOM 数据属性，由 CSS 统一切换整套语义色。 */
 export function applyAccent(mode: AccentMode): void {
-  document.documentElement.dataset.accent = mode
+  const root = document.documentElement
+  root.dataset.accent = mode
+  const custom = readCustomAccentColor()
+  if (custom) {
+    root.style.setProperty('--blue', custom)
+    root.style.setProperty('--blue-hover', custom)
+    root.style.setProperty('--blue-soft', 'color-mix(in srgb, ' + custom + ' 14%, transparent)')
+    root.style.setProperty('--blue-line', 'color-mix(in srgb, ' + custom + ' 38%, transparent)')
+    root.style.setProperty('--ring', '3px solid color-mix(in srgb, ' + custom + ' 35%, transparent)')
+  } else {
+    for (const name of ['--blue', '--blue-hover', '--blue-soft', '--blue-line', '--ring']) root.style.removeProperty(name)
+  }
+}
+
+export function readCustomAccentColor(): string {
+  try {
+    const value = window.localStorage.getItem(CUSTOM_ACCENT_STORAGE_KEY) ?? ''
+    return /^#[0-9a-f]{6}$/i.test(value) ? value : ''
+  } catch { return '' }
+}
+
+export function saveCustomAccentColor(value: string): boolean {
+  if (!/^#[0-9a-f]{6}$/i.test(value)) return false
+  try {
+    window.localStorage.setItem(CUSTOM_ACCENT_STORAGE_KEY, value)
+    applyAccent(readAccentMode())
+    window.dispatchEvent(new Event(THEME_EVENT))
+    return true
+  } catch { return false }
+}
+
+export function clearCustomAccentColor(): void {
+  try { window.localStorage.removeItem(CUSTOM_ACCENT_STORAGE_KEY) } catch { /* 存储不可用时仅清理当前页面 */ }
+  applyAccent(readAccentMode())
+  window.dispatchEvent(new Event(THEME_EVENT))
 }
 
 /**

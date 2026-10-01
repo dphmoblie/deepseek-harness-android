@@ -69,19 +69,27 @@ internal object AppThemePreference {
 
     /** 按已保存的模式给窗口上色与设置图标明暗。需要 Activity，因此不做 JVM 单测。 */
     fun apply(activity: Activity) {
-        val dark = isDark(current(activity), systemNight(activity))
-        val window = activity.window
-        // 安全区由原生容器留出，背景随主题同步，避免透明系统栏下出现色块。
-        activity.findViewById<android.view.View>(android.R.id.content)
-            ?.setBackgroundColor(if (dark) DARK_BAR_COLOR else LIGHT_BAR_COLOR)
-        @Suppress("DEPRECATION")
-        window.statusBarColor = if (dark) DARK_BAR_COLOR else LIGHT_BAR_COLOR
-        @Suppress("DEPRECATION")
-        window.navigationBarColor = if (dark) DARK_BAR_COLOR else LIGHT_BAR_COLOR
-        WindowInsetsControllerCompat(window, window.decorView).apply {
-            // 深色底要配浅色图标，反之亦然——注意这里是「取反」，写反了图标会糊在背景里看不见。
-            isAppearanceLightStatusBars = !dark
-            isAppearanceLightNavigationBars = !dark
+        applySafely(activity)
+    }
+
+    /** 主题切换属于装饰性操作，窗口处于销毁/过渡态时必须静默降级，不能杀死进程。 */
+    fun applySafely(activity: Activity) {
+        if (activity.isFinishing || activity.isDestroyed) return
+        runCatching {
+            val dark = isDark(current(activity), systemNight(activity))
+            val window = activity.window
+            val color = if (dark) DARK_BAR_COLOR else LIGHT_BAR_COLOR
+            activity.findViewById<android.view.View>(android.R.id.content)?.setBackgroundColor(color)
+            @Suppress("DEPRECATION")
+            window.statusBarColor = color
+            @Suppress("DEPRECATION")
+            window.navigationBarColor = color
+            runCatching {
+                WindowInsetsControllerCompat(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !dark
+                    isAppearanceLightNavigationBars = !dark
+                }
+            }
         }
     }
 }
