@@ -340,7 +340,7 @@ button:disabled {
 }
 
 .header-brand-group { display: flex; align-items: center; min-width: 0; gap: 8px; }
-.whale-mark { object-fit: contain; flex-shrink: 0; }
+.app-mark { object-fit: contain; flex-shrink: 0; }
 .bottom-navigation, .mobile-session-entry { display: none; }
 
 /*
@@ -361,7 +361,7 @@ button:disabled {
   box-shadow: 6px 0 24px rgb(20 29 40 / 4%);
 }
 
-.sidebar-whale,
+.sidebar-mark,
 .sidebar-item {
   display: inline-flex;
   align-items: center;
@@ -378,7 +378,7 @@ button:disabled {
   transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, transform 150ms ease;
 }
 
-.sidebar-whale {
+.sidebar-mark {
   flex-direction: column;
   gap: 2px;
   min-height: 54px;
@@ -387,9 +387,8 @@ button:disabled {
   box-shadow: 0 8px 18px color-mix(in srgb, var(--blue) 20%, transparent);
 }
 
-.sidebar-whale .whale-mark { --whale-mark-detail: color-mix(in srgb, var(--on-accent) 70%, transparent); }
 
-.sidebar-whale span,
+.sidebar-mark span,
 .sidebar-item span {
   overflow: hidden;
   max-width: 0;
@@ -418,9 +417,9 @@ button:disabled {
   background: var(--blue-soft);
 }
 
-.sidebar-whale.is-active { box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 22%, transparent), 0 8px 18px color-mix(in srgb, var(--blue) 20%, transparent); }
+.sidebar-mark.is-active { box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 22%, transparent), 0 8px 18px color-mix(in srgb, var(--blue) 20%, transparent); }
 
-.sidebar-whale:active,
+.sidebar-mark:active,
 .sidebar-item:active { transform: translateY(1px); }
 
 .mobile-header {
@@ -1680,8 +1679,15 @@ button:disabled {
   line-height: 1.55;
 }
 
-.confirmation-field {
-  margin-top: 17px;
+/*
+ * 重置确认的倒计时提示。
+ * 需要盖过 `.dialog > p` 的 `margin: 0`，所以这里带上父选择器；
+ * 用等宽数字，倒计时逐秒变化时文字不会左右跳动。
+ */
+.dialog > .dialog-countdown {
+  margin-top: 10px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 
 .dialog-actions {
@@ -1780,7 +1786,7 @@ button:disabled {
     padding-left: 12px;
   }
 
-  .sidebar-whale,
+  .sidebar-mark,
   .sidebar-item {
     justify-content: flex-start;
     width: 100%;
@@ -1788,13 +1794,13 @@ button:disabled {
     padding-left: 12px;
   }
 
-  .sidebar-whale {
+  .sidebar-mark {
     flex-direction: row;
     gap: 10px;
     min-height: 58px;
   }
 
-  .sidebar-whale span,
+  .sidebar-mark span,
   .sidebar-item span {
     max-width: 140px;
     font-size: 0.8125rem;
@@ -2387,6 +2393,70 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   color: var(--muted);
   font-size: 0.6875rem;
   line-height: 1.55;
+}
+
+/*
+ * 版本管理里的「一行一条 + 右侧动作」列表（可安装版本、会话备份）。
+ *
+ * 不复用 .settings-status-row：那是「标签 + 右对齐文本」的两栏结构，塞进按钮后
+ * 文本会跟按钮抢宽度，窄屏上会挤成一层压一层。这里显式给文本列 min-width: 0，
+ * 让长版本号能换行而不是把按钮顶出卡片。
+ */
+.release-list {
+  display: flex;
+  flex-direction: column;
+  margin-top: 12px;
+}
+
+.release-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.release-row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.release-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.release-copy strong {
+  color: var(--ink);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.release-copy small {
+  color: var(--muted);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.release-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 应用更新的更新说明：原文换行要保留，长内容也不许撑破卡片。 */
+.update-notes {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* 运行日志折叠区块：标题行与 .section-title 对齐，正文等宽、可滚动。 */

@@ -21,8 +21,10 @@ permissions:
 env:
   # 应用版本号：与 android/app/build.gradle 的 versionName 保持一致。
   # CI 据此生成运行时版本与 Release 标签：预发布走 v<版本>-mobile-<run_number>，
-  # 正式版（release_type=stable）直接用 v<版本>。本次为首个正式版，故去掉 -preview 后缀。
-  APP_VERSION: '0.2.0'
+  # 正式版（release_type=stable）直接用 v<版本>。0.2.1 相对 0.2.0 的改动：
+  # 无障碍白名单自动项与验证密码、安装运行时的会话快照与应用内更新（APK）、
+  # 版本管理页新增远端版本列表，以及应用标识统一换成应用图标。
+  APP_VERSION: '0.2.1'
 
 jobs:
   build:

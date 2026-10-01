@@ -1,6 +1,7 @@
 import type {
   AccessibilityAutomationState,
   AllFilesAccessResult,
+  AppUpdateState,
   DeviceCommand,
   DeviceCommandResult,
   DiagnosticLogExport,
@@ -20,9 +21,15 @@ import type {
   NotificationPermissionResult,
   OverlayBallState,
   ProviderApiKeys,
+  RuntimeInstallResult,
   RuntimeIntent,
   RuntimePhase,
   RuntimeProgress,
+  RuntimeReleaseEntry,
+  RuntimeReleaseList,
+  RuntimeSessionSnapshot,
+  RuntimeSessionSnapshotRestoreResult,
+  RuntimeSessionSnapshotState,
   RuntimeSettings,
   RuntimeSettingsUpdate,
   RuntimeSource,
@@ -717,6 +724,11 @@ const DEVICE_COMMANDS = new Set<DeviceCommand>([
 ])
 // 文件上传通过 Base64 传递，原生侧仍有 128 KiB 解码上限；这里保留 JSON 参数的有界窗口。
 const MAX_DEVICE_PARAM_CHARS = 180_000
+/** 无障碍白名单条目上限（原生侧同一数值）；自动项也计入这个上限。 */
+const MAX_ACCESSIBILITY_PACKAGES = 16
+/** 「白名单验证密码」的长度区间；密码本身不会被前端留存或回显。 */
+const ACCESSIBILITY_PASSWORD_MIN_CHARS = 6
+const ACCESSIBILITY_PASSWORD_MAX_CHARS = 64
 
 export function validateDeviceCommand(value: unknown): DeviceCommand {
   if (typeof value !== 'string' || !DEVICE_COMMANDS.has(value as DeviceCommand)) throw new Error('设备命令不支持')
@@ -749,23 +761,60 @@ export function validateDeviceCommandResult(value: unknown): DeviceCommandResult
   }
 }
 
-/** 校验无障碍服务状态：包名只接受原生层已经约束的标准格式，且去重。 */
-export function validateAccessibilityAutomationState(value: unknown): AccessibilityAutomationState {
-  const state = asRecord(value, '无障碍自动化状态')
-  if (typeof state.enabled !== 'boolean' || !Array.isArray(state.allowedPackages)) {
-    throw new Error('无障碍自动化状态格式无效')
-  }
-  const packages = state.allowedPackages.map((value, index) => {
-    if (typeof value !== 'string' || value.length < 3 || value.length > 160 ||
-        !/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*){1,12}$/u.test(value)) {
+/**
+ * 校验一份无障碍包名列表：只接受原生层已经约束的标准格式，数量有上限，重复项直接拒绝。
+ *
+ * 去重与否刻意**不在这里悄悄修正**：重复项说明原生回了一份读不懂的状态，
+ * 静默去重会让「白名单里有两条一样的东西」这种缺陷永远查不出来。
+ */
+function accessibilityPackages(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`${label}格式无效`)
+  if (value.length > MAX_ACCESSIBILITY_PACKAGES) throw new Error(`${label}最多 ${MAX_ACCESSIBILITY_PACKAGES} 项`)
+  const packages = value.map((item, index) => {
+    if (typeof item !== 'string' || item.length < 3 || item.length > 160 ||
+        !/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*){1,12}$/u.test(item)) {
       throw new Error(`无障碍白名单第 ${index + 1} 项无效`)
     }
-    return value
+    return item
   })
-  if (new Set(packages).size !== packages.length) {
-    throw new Error('无障碍白名单包含重复项')
+  if (new Set(packages).size !== packages.length) throw new Error(`${label}包含重复项`)
+  return packages
+}
+
+/**
+ * 校验无障碍服务状态。
+ *
+ * 四个字段都必须存在：`alwaysAllowedPackages` 或 `passwordConfigured` 缺失时若补成默认值，
+ * 界面会把「读不到状态」显示成「没有自动项 / 没设密码」，用户照着点下去只会不断失败。
+ * `passwordConfigured` 只是布尔——**本函数不接触、也不返回任何密码内容**。
+ */
+export function validateAccessibilityAutomationState(value: unknown): AccessibilityAutomationState {
+  const state = asRecord(value, '无障碍自动化状态')
+  if (typeof state.enabled !== 'boolean') throw new Error('无障碍自动化状态格式无效')
+  return {
+    enabled: state.enabled,
+    allowedPackages: accessibilityPackages(state.allowedPackages, '无障碍白名单'),
+    alwaysAllowedPackages: accessibilityPackages(state.alwaysAllowedPackages, '无障碍自动白名单'),
+    passwordConfigured: requiredBoolean(state.passwordConfigured, '无障碍验证密码状态'),
   }
-  return { enabled: state.enabled, allowedPackages: packages }
+}
+
+/**
+ * 校验「白名单验证密码」入参：只在前端拦明显不合法的取值，真正的比对在原生侧。
+ *
+ * 密码**只用于本次过桥**：这里不记录、不缓存、不拼接进任何错误消息，
+ * 错误文案里因此也不会出现用户输入的那串字符。
+ */
+export function validateAccessibilityPasswordInput(value: unknown, label: string): string {
+  if (typeof value !== 'string') throw new Error(`${label}格式无效`)
+  if (value.length < ACCESSIBILITY_PASSWORD_MIN_CHARS || value.length > ACCESSIBILITY_PASSWORD_MAX_CHARS) {
+    throw new Error(`${label}需要 ${ACCESSIBILITY_PASSWORD_MIN_CHARS} 到 ${ACCESSIBILITY_PASSWORD_MAX_CHARS} 个字符`)
+  }
+  if (containsControlCharacter(value)) throw new Error(`${label}包含不可用字符`)
+  // 首尾空白几乎都是粘贴带进来的：原样送过去只会让用户在原生侧反复收到「密码不正确」。
+  if (value.trim() === '') throw new Error(`${label}不能全是空白`)
+  if (value !== value.trim()) throw new Error(`${label}首尾不能有空白`)
+  return value
 }
 
 export function validateDeviceShellAccess(value: unknown): { enabled: boolean } {
@@ -1161,5 +1210,237 @@ export function validateStorageDirsState(value: unknown): StorageDirsState {
     granted,
     level,
     active,
+  }
+}
+
+/** 原生侧单次最多列出的运行时可用版本数；超出即视为载荷不符合契约。 */
+const MAX_RUNTIME_RELEASES = 40
+/** 运行时版本清单地址的长度上限；与原生侧保持一致。 */
+const MAX_RELEASE_MANIFEST_URL_LENGTH = 1024
+/** Android versionCode 的受控上限；超出说明这份载荷不是本应用该有的版本代码。 */
+const MAX_APP_VERSION_CODE = 2_100_000_000
+/** 单个应用更新包的体积上限（4 GiB = 4294967296 字节）。 */
+const MAX_APP_UPDATE_BYTES = 4 * 1024 * 1024 * 1024
+/** 更新说明的字符上限；超出直接报错，不截断——截断会改变用户读到的更新内容。 */
+const MAX_APP_UPDATE_NOTES_LENGTH = 4000
+
+/**
+ * 校验运行时可用版本列表。
+ *
+ * `manifestUrl` 与 `manifestSha256` 要么都有、要么都没有：只有一个说明原生侧回了一份
+ * 半截载荷，宁可报错也不能让界面把它当成「可安装」，更不能替它补另一半。
+ */
+export function validateRuntimeReleaseList(value: unknown): RuntimeReleaseList {
+  const list = asRecord(value, '运行时可用版本状态')
+  const source = list.entries
+  if (!Array.isArray(source) || source.length > MAX_RUNTIME_RELEASES) {
+    throw new Error('运行时可用版本列表格式无效')
+  }
+
+  const entries: RuntimeReleaseEntry[] = source.map(item => {
+    const entry = asRecord(item, '运行时可用版本条目')
+    const version = requiredIdentifier(entry.version, '运行时可用版本号')
+    const dshVersion = optionalIdentifier(entry.dshVersion, '运行时内置 dsh 版本')
+    const hasManifestUrl = entry.manifestUrl !== undefined
+    const hasManifestSha256 = entry.manifestSha256 !== undefined
+    if (hasManifestUrl !== hasManifestSha256) {
+      throw new Error('运行时版本清单地址与 SHA-256 必须同时出现或同时缺失')
+    }
+    if (!hasManifestUrl) {
+      return { version, ...(dshVersion === undefined ? {} : { dshVersion }) }
+    }
+
+    const manifestUrl = entry.manifestUrl
+    if (
+      typeof manifestUrl !== 'string' || manifestUrl.length > MAX_RELEASE_MANIFEST_URL_LENGTH ||
+      !manifestUrl.startsWith('https://')
+    ) {
+      throw new Error('运行时版本清单地址格式无效')
+    }
+    const manifestSha256 = entry.manifestSha256
+    if (typeof manifestSha256 !== 'string' || !SHA256_PATTERN.test(manifestSha256)) {
+      throw new Error('运行时版本清单 SHA-256 必须是 64 位小写十六进制')
+    }
+    return { version, manifestUrl, manifestSha256, ...(dshVersion === undefined ? {} : { dshVersion }) }
+  })
+
+  return { entries }
+}
+
+function appVersionCode(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > MAX_APP_VERSION_CODE) {
+    throw new Error('已安装应用版本代码格式无效')
+  }
+  return value as number
+}
+
+function appUpdateBytes(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0 || (value as number) > MAX_APP_UPDATE_BYTES) {
+    throw new Error('应用更新包大小格式无效')
+  }
+  return value as number
+}
+
+/**
+ * 校验应用自身的更新状态。
+ *
+ * `installAllowed` 缺失或非布尔一律报错：把未知当成 false 会让已授权的用户白跑一趟
+ * 系统设置页，当成 true 则会让界面承诺一次必然失败的安装。
+ */
+export function validateAppUpdateState(value: unknown): AppUpdateState {
+  const state = asRecord(value, '应用更新状态')
+  const installedVersion = requiredIdentifier(state.installedVersion, '已安装应用版本号')
+  const installedVersionCode = appVersionCode(state.installedVersionCode)
+  if (typeof state.installAllowed !== 'boolean') throw new Error('应用更新安装权限状态无效')
+
+  if (state.available === undefined) {
+    return { installedVersion, installedVersionCode, installAllowed: state.installAllowed }
+  }
+
+  const release = asRecord(state.available, '可用应用更新')
+  const version = requiredIdentifier(release.version, '应用更新版本号')
+  const bytes = appUpdateBytes(release.bytes)
+  if (typeof release.sha256 !== 'string' || !SHA256_PATTERN.test(release.sha256)) {
+    throw new Error('应用更新包 SHA-256 必须是 64 位小写十六进制')
+  }
+  if (typeof release.notes !== 'string') throw new Error('应用更新说明格式无效')
+  if (release.notes.length > MAX_APP_UPDATE_NOTES_LENGTH) throw new Error('应用更新说明长度无效')
+
+  return {
+    installedVersion,
+    installedVersionCode,
+    installAllowed: state.installAllowed,
+    available: { version, bytes, sha256: release.sha256, notes: release.notes },
+  }
+}
+
+/** 会话快照份数的防御性上限：原生当前上限是 3，但上限本身会变，校验不该把 4 当非法。 */
+const MAX_RUNTIME_SESSION_SNAPSHOTS = 32
+/** 会话快照占用空间的上限（512 MiB）；与原生侧保持一致。 */
+const MAX_RUNTIME_SESSION_SNAPSHOT_BYTES = 512 * 1024 * 1024
+/**
+ * 快照标识：`snap-<毫秒时间戳>-<序号>`。
+ *
+ * **故意宽松**：不写死序号位数（原生现在是 8 位十六进制）。原生以后改格式不该把界面打死，
+ * 这条只用来挡住「明显不是标识」的值（空串、带路径、带斜杠）。
+ */
+const RUNTIME_SESSION_SNAPSHOT_ID_PATTERN = /^snap-[0-9]{10,16}-[0-9a-zA-Z]{1,16}$/
+
+/** 快照标识的宽松校验：只看形态，不查它是否真的存在（那是原生侧的事）。 */
+function requiredSnapshotId(value: unknown): string {
+  if (typeof value !== 'string' || !RUNTIME_SESSION_SNAPSHOT_ID_PATTERN.test(value)) {
+    throw new Error('运行时会话快照标识格式无效')
+  }
+  return value
+}
+
+/** 正整数且不超过 [maximum]；用于「上限」这类有防御性天花板的字段。 */
+function boundedPositiveInteger(value: unknown, maximum: number, message: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) <= 0 || (value as number) > maximum) {
+    throw new Error(message)
+  }
+  return value as number
+}
+
+/** `evictedIds` 是契约之外的附加字段：存在时必须是快照标识数组，否则这份载荷不可信。 */
+function snapshotIdList(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error('运行时自动快照淘汰列表格式无效')
+  return value.map(item => requiredSnapshotId(item))
+}
+
+/**
+ * 校验会话快照总览。
+ *
+ * 未知键一律忽略：原生侧以后加字段不该让整块界面失败（`evictedIds` 就是这么加进来的）。
+ * `snapshots` 的长度上限用载荷自己给的 `maxSnapshots`，而不是写死原生今天那个 3——
+ * 上限会变，界面跟着载荷走。
+ */
+export function validateRuntimeSessionSnapshotState(value: unknown): RuntimeSessionSnapshotState {
+  const state = asRecord(value, '运行时会话快照状态')
+  const maxSnapshots = boundedPositiveInteger(state.maxSnapshots, MAX_RUNTIME_SESSION_SNAPSHOTS, '会话快照份数上限无效')
+  const maxBytes = boundedPositiveInteger(state.maxBytes, MAX_RUNTIME_SESSION_SNAPSHOT_BYTES, '会话快照空间上限无效')
+  const totalBytes = state.totalBytes
+  if (!Number.isSafeInteger(totalBytes) || (totalBytes as number) < 0 || (totalBytes as number) > maxBytes) {
+    throw new Error('会话快照已用空间无效')
+  }
+
+  const source = state.snapshots
+  if (!Array.isArray(source) || source.length > maxSnapshots) throw new Error('运行时会话快照列表格式无效')
+
+  const snapshots: RuntimeSessionSnapshot[] = source.map(item => {
+    const entry = asRecord(item, '运行时会话快照条目')
+    const id = requiredSnapshotId(entry.id)
+    const createdAt = entry.createdAt
+    if (typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt))) {
+      throw new Error('运行时会话快照创建时间格式无效')
+    }
+    const bytes = boundedPositiveInteger(entry.bytes, maxBytes, '运行时会话快照大小格式无效')
+    const fileCount = byteCount(entry.fileCount, '运行时会话快照文件数格式无效')
+    const runtimeVersion = optionalIdentifier(entry.runtimeVersion, '运行时会话快照运行时版本')
+    const dshVersion = optionalIdentifier(entry.dshVersion, '运行时会话快照内置 dsh 版本')
+    return {
+      id,
+      createdAt,
+      bytes,
+      fileCount,
+      ...(runtimeVersion === undefined ? {} : { runtimeVersion }),
+      ...(dshVersion === undefined ? {} : { dshVersion }),
+    }
+  })
+
+  return { maxSnapshots, maxBytes, totalBytes: totalBytes as number, snapshots }
+}
+
+/** 校验快照恢复结果：两个计数都是非负整数，内嵌的总览走上面同一套校验。 */
+export function validateRuntimeSessionSnapshotRestoreResult(value: unknown): RuntimeSessionSnapshotRestoreResult {
+  const result = asRecord(value, '运行时会话快照恢复结果')
+  return {
+    restoredFileCount: byteCount(result.restoredFileCount, '运行时会话快照恢复文件数格式无效'),
+    skippedFileCount: byteCount(result.skippedFileCount, '运行时会话快照跳过文件数格式无效'),
+    state: validateRuntimeSessionSnapshotState(result.state),
+  }
+}
+
+/**
+ * 校验运行时安装结果。
+ *
+ * `undefined` / `null` / `{}` 都合法，一律归一化成 `{}`：安装本来就可以没有自动快照这个键
+ * （旧版原生桥接的 `install` 什么都不返回），界面不该因为少了一个可选结论就报错。
+ */
+export function validateRuntimeInstallResult(value: unknown): RuntimeInstallResult {
+  if (value === undefined || value === null) return {}
+  const result = asRecord(value, '运行时安装结果')
+  if (result.autoSnapshot === undefined) return {}
+
+  const outcome = asRecord(result.autoSnapshot, '运行时自动快照结论')
+  const status = outcome.status
+  if (status !== 'created' && status !== 'skipped' && status !== 'failed') {
+    throw new Error('运行时自动快照结论状态无效')
+  }
+  const evictedIds = outcome.evictedIds === undefined ? undefined : snapshotIdList(outcome.evictedIds)
+
+  if (status === 'created') {
+    if (outcome.snapshotId === undefined) throw new Error('运行时自动快照结论缺少快照标识')
+    return {
+      autoSnapshot: {
+        status,
+        snapshotId: requiredSnapshotId(outcome.snapshotId),
+        ...(evictedIds === undefined ? {} : { evictedIds }),
+      },
+    }
+  }
+
+  // skipped / failed：错误码必须存在（受控枚举由原生侧保证），给用户看的说明去空白后不能为空。
+  if (typeof outcome.code !== 'string' || outcome.code === '') throw new Error('运行时自动快照结论缺少错误码')
+  if (typeof outcome.message !== 'string' || outcome.message.trim() === '') {
+    throw new Error('运行时自动快照结论缺少说明')
+  }
+  return {
+    autoSnapshot: {
+      status,
+      code: outcome.code,
+      message: outcome.message,
+      ...(evictedIds === undefined ? {} : { evictedIds }),
+    },
   }
 }

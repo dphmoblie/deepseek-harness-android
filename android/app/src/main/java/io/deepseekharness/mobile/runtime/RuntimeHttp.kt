@@ -41,12 +41,14 @@ class RuntimeHttp {
         client.dispatcher.cancelAll()
     }
 
-    /** 目录元数据只允许两个固定上游地址；实际归档仍需清单和 SHA-256 校验。 */
+    /**
+     * 目录元数据只允许一个固定上游地址；实际归档仍需清单和 SHA-256 校验。
+     *
+     * 这里不再接受 npm registry：安装对象是 Android 运行时镜像（清单 + rootfs + 自定义入口），
+     * npm 上的 dsh 包版本装不进设备，混在一起会列出「点不动」的版本。
+     */
     fun catalogBytes(source: String): ByteArray {
-        if (source !in setOf(
-                "https://registry.npmjs.org/@deepseek-ai%2fdsh",
-                "https://api.github.com/repos/dphmoblie/deepseek-harness-android/releases?per_page=30",
-            )) throw RuntimeFailure("URL_INVALID", "目录来源不受支持")
+        if (source != GitHubReleases.URL) throw RuntimeFailure("URL_INVALID", "目录来源不受支持")
         return withResponse(URI(source)) { response, input ->
             if (response.code != 200) throw RuntimeFailure("DOWNLOAD_HTTP_ERROR", "版本目录暂不可用")
             val limit = 4 * 1024 * 1024

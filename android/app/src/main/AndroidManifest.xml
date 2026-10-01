@@ -38,6 +38,10 @@
          用途仅限：在其他应用上层显示一个可拖动的球，点按回到 Harness 对话。 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- 应用自身更新。Android 不允许应用静默安装，这个权限只是让系统安装器能被调起来；
+         用户仍会在安装界面上看到一次确认，确认与否由用户决定。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
         <provider android:authorities="moe.shizuku.privileged.api.shizuku" />
@@ -73,6 +77,20 @@
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
+        </provider>
+
+        <!-- 应用更新安装包专用：只暴露 cacheDir 下的 app-updates/，与诊断导出的路径文件分开。
+             必须用独立子类（AppUpdateFileProvider）而不是直接复用上面的 android:name，
+             否则同名的两个 provider 会被 PackageManager 去重，这个 authority 在真机上解析不到。
+             同样不授予持久权限：安装时按次授权，系统安装器读完那一次就够了。 -->
+        <provider
+            android:name=".AppUpdateFileProvider"
+            android:authorities="${applicationId}.appupdates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/app_update_paths" />
         </provider>
         <!-- Shizuku Manager 以独立 UID 绑定用户服务；必须允许外部绑定，
              同时由 Shizuku 官方 API_V23 权限保护，未获 Shizuku 授权的调用方无法访问。 -->

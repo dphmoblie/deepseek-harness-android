@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 悬浮球的视图：一个圆形背景 + 居中的品牌符号。 -->
+<!-- 悬浮球的视图：圆形底 + 铺满球面的应用图标（与手机桌面上的图标同一张图）。 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:contentDescription="@string/overlay_ball_content_description"
@@ -9,10 +8,10 @@
     android:background="@drawable/bg_overlay_ball">
 
     <androidx.appcompat.widget.AppCompatImageView
-        android:layout_width="24dp"
-        android:layout_height="24dp"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
         android:layout_gravity="center"
         android:importantForAccessibility="no"
-        android:src="@drawable/ic_overlay_ball"
-        app:tint="#A9F0D5" />
+        android:scaleType="fitCenter"
+        android:src="@mipmap/ic_launcher_round" />
 </FrameLayout>

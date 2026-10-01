@@ -211,15 +211,20 @@ describe('App conversation gate', () => {
     }))
   })
 
-  it('requires an explicit bounded confirmation before resetting Ubuntu', async () => {
+  it('requires a bounded consideration time before resetting Ubuntu', async () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
     fireEvent.click(screen.getByRole('button', { name: /Ubuntu 运行时/ }))
     fireEvent.click(await screen.findByRole('button', { name: '重置环境' }))
-    const confirmation = screen.getByLabelText('输入 RESET_RUNTIME 确认')
-    fireEvent.change(confirmation, { target: { value: ' reset_runtime ' } })
-    fireEvent.click(screen.getByRole('button', { name: '确认重置' }))
+
+    // 考虑时间内按钮保持禁用：点它不会触发任何重置动作。
+    const counting = await screen.findByRole('button', { name: /请稍候 \d 秒/ })
+    expect(counting).toBeDisabled()
+    fireEvent.click(counting)
+    expect(bridge.reset).not.toHaveBeenCalled()
+
+    fireEvent.click(await screen.findByRole('button', { name: '确认重置' }, { timeout: 5_000 }))
 
     await waitFor(() => expect(bridge.reset).toHaveBeenCalledWith('RESET_RUNTIME'))
     expect(await screen.findByRole('button', { name: '安装并进入对话' })).toBeInTheDocument()

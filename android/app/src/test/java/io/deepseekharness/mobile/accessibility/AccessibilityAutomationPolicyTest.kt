@@ -20,9 +20,53 @@ class AccessibilityAutomationPolicyTest {
     fun onlyValidUserApplicationPackagesAreAccepted() {
         assertTrue(AccessibilityAutomationPolicy.validPackage("com.example.reader"))
         assertFalse(AccessibilityAutomationPolicy.validPackage("com.android.settings"))
-        assertFalse(AccessibilityAutomationPolicy.validPackage("io.deepseekharness.mobile"))
         assertFalse(AccessibilityAutomationPolicy.validPackage("com.example.reader;id"))
         assertFalse(AccessibilityAutomationPolicy.validPackages(listOf("com.example.reader", "com.example.reader")))
+    }
+
+    /** 本应用是自动化目标之一（用户不必手动添加），但其它系统包仍然被拒。 */
+    @Test
+    fun selfPackageIsAlwaysAcceptedWhileSystemPackagesStayRejected() {
+        assertTrue(AccessibilityAutomationPolicy.validPackage(AccessibilityAutomationPolicy.SELF_PACKAGE))
+        assertTrue(AccessibilityAutomationPolicy.validPackages(listOf(AccessibilityAutomationPolicy.SELF_PACKAGE)))
+        // 只放开了自己一个：保留清单里的系统包一个都不能漏。
+        assertFalse(AccessibilityAutomationPolicy.validPackage("com.android.settings"))
+        assertFalse(AccessibilityAutomationPolicy.validPackage("com.android.permissioncontroller"))
+        assertFalse(AccessibilityAutomationPolicy.validPackage("com.android.systemui"))
+        assertFalse(AccessibilityAutomationPolicy.validPackage("android"))
+        assertFalse(AccessibilityAutomationPolicy.validPackage("com.android.packageinstaller"))
+        assertFalse(AccessibilityAutomationPolicy.validPackage("com.google.android.permissioncontroller"))
+    }
+
+    @Test
+    fun withSelfAddsSelfOnceAndKeepsOrderStable() {
+        val added = AccessibilityAutomationPolicy.withSelf(listOf("com.example.reader", "com.example.writer"))
+        assertEquals(listOf("com.example.reader", "com.example.writer", AccessibilityAutomationPolicy.SELF_PACKAGE).sorted(), added)
+
+        // 幂等：再来一次结果完全相同。
+        assertEquals(added, AccessibilityAutomationPolicy.withSelf(added))
+        // 已经在里面时不会出现第二份。
+        assertEquals(1, added.count { it == AccessibilityAutomationPolicy.SELF_PACKAGE })
+        // 空列表也要带上自己：新装应用的白名单不是「空的」。
+        assertEquals(listOf(AccessibilityAutomationPolicy.SELF_PACKAGE), AccessibilityAutomationPolicy.withSelf(emptyList()))
+    }
+
+    @Test
+    fun withSelfTrimsDropsDuplicatesAndKeepsInvalidEntries() {
+        assertEquals(
+            listOf("com.example.reader", AccessibilityAutomationPolicy.SELF_PACKAGE),
+            AccessibilityAutomationPolicy.withSelf(listOf(" com.example.reader ", "com.example.reader")),
+        )
+        // 排序稳定：输入顺序不影响结果，`state()` 里那份 sorted 也就不用再排一次。
+        assertEquals(
+            AccessibilityAutomationPolicy.withSelf(listOf("com.example.writer", "com.example.reader")),
+            AccessibilityAutomationPolicy.withSelf(listOf("com.example.reader", "com.example.writer")),
+        )
+        // `withSelf` **不做**合法性过滤：非法包名照旧由 validPackages 整份拒绝，
+        // 否则这里会变成一处「悄悄丢掉非法项」的地方，与「异常即全失效」的语义冲突。
+        val invalid = AccessibilityAutomationPolicy.withSelf(listOf("com.example.reader;id"))
+        assertTrue(invalid.contains("com.example.reader;id"))
+        assertFalse(AccessibilityAutomationPolicy.validPackages(invalid))
     }
 
     @Test

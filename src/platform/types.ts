@@ -109,6 +109,121 @@ export interface RuntimeVersionsState {
   canDelete: boolean
 }
 
+/**
+ * 一份运行时会话快照。
+ *
+ * 快照只装访客里的**可变数据**（会话、设置、凭据、工作区），存在应用私有目录
+ * （Android 的 `filesDir`）下：不进云备份、不进 rootfs，卸载应用即随应用一起消失。
+ * [runtimeVersion] / [dshVersion] 缺失表示当时没读到（与 [RuntimeVersionInfo.dshVersion]
+ * 同一约定），界面显示「未知」即可，不影响恢复。
+ */
+export interface RuntimeSessionSnapshot {
+  id: string
+  /** ISO8601 时刻，例如 `2023-11-14T22:13:21Z`。 */
+  createdAt: string
+  bytes: number
+  fileCount: number
+  runtimeVersion?: string
+  dshVersion?: string
+}
+
+/**
+ * 会话快照总览（四条快照桥方法里三条的返回体）。
+ *
+ * 上限是 [maxSnapshots] 份 / [maxBytes] 字节；超限时原生侧从**最旧**的一份开始淘汰，
+ * 所以界面不能假设「刚创建的那份一定还在」。[snapshots] 新的在前，顺序由原生侧决定，前端不重排。
+ */
+export interface RuntimeSessionSnapshotState {
+  maxSnapshots: number
+  maxBytes: number
+  totalBytes: number
+  snapshots: RuntimeSessionSnapshot[]
+}
+
+/**
+ * 恢复一份快照的结果。
+ *
+ * 恢复是**合并回填**而不是覆盖：目标位置已有同名文件时跳过并计入 [skippedFileCount]。
+ * 两个计数都要如实展示——只报「恢复成功」会把被跳过的文件藏起来。
+ */
+export interface RuntimeSessionSnapshotRestoreResult {
+  restoredFileCount: number
+  skippedFileCount: number
+  state: RuntimeSessionSnapshotState
+}
+
+/**
+ * 安装/更新前自动快照的结论；不阻断安装，只如实报告。
+ *
+ * 三态而不是布尔：`skipped` 表示**没有可备份的会话数据**（首次安装、会话目录为空），
+ * 与 `failed`（真的出错）不是同一件事——把首次安装报成「快照失败」只会制造噪音，
+ * 把真正的失败混进 `skipped` 又会让用户以为已经有了备份。
+ * [evictedIds] 是契约之外的附加字段（这次淘汰了哪些旧快照）：允许存在，界面可以忽略。
+ */
+export interface RuntimeAutoSnapshotOutcome {
+  status: 'created' | 'skipped' | 'failed'
+  /** 仅 `created`：新建快照的标识。 */
+  snapshotId?: string
+  /** 仅 `skipped` / `failed`：受控错误码，取值见 [RuntimeBridge.install]。 */
+  code?: string
+  /** 仅 `skipped` / `failed`：给用户看的中文说明。 */
+  message?: string
+  evictedIds?: string[]
+}
+
+/** 运行时安装的结果；[autoSnapshot] 缺失表示这次没有自动快照这回事（旧版原生桥接也会缺失）。 */
+export interface RuntimeInstallResult {
+  autoSnapshot?: RuntimeAutoSnapshotOutcome
+}
+
+/**
+ * 运行时镜像的一个可用版本。
+ *
+ * [dshVersion] 是从清单里读到的内置 dsh 版本，读不到就缺失（界面显示成「未知」即可，不影响安装）。
+ * [manifestUrl] 与 [manifestSha256] **缺失**表示「这个版本出现过，但没有通过验证的清单」：
+ * 界面只能把它列出来、不能安装。两者要么都有、要么都没有——只有一个说明原生侧
+ * 回了一份半截载荷，校验侧按错误处理，不替它猜另一半。
+ */
+export interface RuntimeReleaseEntry {
+  version: string
+  dshVersion?: string
+  manifestUrl?: string
+  manifestSha256?: string
+}
+
+/** 原生侧已知的运行时可用版本；新的在前，顺序由原生侧决定，前端不重排。 */
+export interface RuntimeReleaseList {
+  entries: RuntimeReleaseEntry[]
+}
+
+/** 一个可安装的应用自身更新（APK）。[notes] 是给用户看的更新说明。 */
+export interface AppUpdateRelease {
+  version: string
+  bytes: number
+  sha256: string
+  notes: string
+}
+
+/**
+ * 应用自身的更新状态。
+ *
+ * `installedVersionCode` 是 Android 的 versionCode（单调递增，用来判断新旧），
+ * 与给人看的 `installedVersion` 是两件事，界面不要拿版本字符串比大小。
+ * [available] 缺失表示没有可用更新。
+ */
+export interface AppUpdateState {
+  installedVersion: string
+  installedVersionCode: number
+  /**
+   * 本应用是否已被授予「安装未知应用」权限（原生 `canRequestPackageInstalls()`）。
+   *
+   * 为 false 时下载仍可能成功，但安装会被系统拦下：界面应引导用户去
+   * [RuntimeBridge.openAppUpdateInstallSettings] 授权，而不是假装下一步一定能装上。
+   */
+  installAllowed: boolean
+  available?: AppUpdateRelease
+}
+
 export interface RuntimeSource {
   manifestUrl: string
   manifestSha256: string
@@ -287,10 +402,29 @@ export interface InstalledApplicationsPage {
 }
 export interface DeviceShellAccessState { enabled: boolean }
 
-/** 无障碍服务状态；只返回是否已由用户开启及用户维护的目标包白名单。 */
+/**
+ * 无障碍自动化永远自动包含、界面上不可移除的包名。
+ *
+ * 本应用自己必须在白名单里：用户若把它删掉，AI 就再也无法通过无障碍看到本应用的界面，
+ * 连回来重新勾上的入口都会消失。因此原生侧把它写成自动项，前端**只从这一处取**，
+ * 界面据此把对应条目渲染成不可移除（而不是在别处再硬编码一遍包名）。
+ */
+export const ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES: string[] = ['io.deepseekharness.mobile']
+
+/**
+ * 无障碍自动化状态；只返回是否已由用户开启、用户维护的目标包白名单与密码是否已设置。
+ *
+ * **密码本身永远不过这条线**：`passwordConfigured` 只是个布尔，界面上要展示的信息仅此而已。
+ * 校验密码（含生物识别重置）是原生侧的事，前端既不保存密码、也不写日志。
+ */
 export interface AccessibilityAutomationState {
   enabled: boolean
+  /** 有效白名单：已包含自动项（本应用）。 */
   allowedPackages: string[]
+  /** 自动包含、界面上不可移除的包名（当前恒为 [ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES]）。 */
+  alwaysAllowedPackages: string[]
+  /** 是否已设置「白名单验证密码」；不返回任何密码信息。 */
+  passwordConfigured: boolean
 }
 
 /** 投递区固定根目录。只允许 inbox / outbox，不能把任意宿主路径交给文件浏览器。 */
@@ -595,7 +729,16 @@ export interface RuntimeBridge {
   getState: () => Promise<RuntimeState>
   getSettings: () => Promise<RuntimeSettings>
   saveSettings: (settings: RuntimeSettingsUpdate) => Promise<RuntimeSettings>
-  install: (source?: RuntimeSource) => Promise<void>
+  /**
+   * 安装（或更新到）[source] 指定的运行时镜像；省略 `source` 表示用内置/已下载的镜像。
+   *
+   * 原生侧在动手之前会先做一次**更新前自动快照**，结论放在返回值的 `autoSnapshot` 里：
+   * `skipped`（没有可备份的会话数据，例如首次安装）与 `failed` 都要让用户看见，但不必阻断安装。
+   * 相关错误码：`RUNTIME_SNAPSHOT_EMPTY`（没有可备份数据）、`RUNTIME_SNAPSHOT_ID_INVALID`、
+   * `RUNTIME_SNAPSHOT_NOT_FOUND`、`RUNTIME_SNAPSHOT_TOO_LARGE`、`RUNTIME_SNAPSHOT_FAILED`。
+   * 快照本身的成败不影响安装结果，界面按 `phase`/`errorCode` 判断安装是否失败。
+   */
+  install: (source?: RuntimeSource) => Promise<RuntimeInstallResult>
   startHarness: () => Promise<RuntimeState>
   openHarness: () => Promise<void>
   stopRuntime: () => Promise<RuntimeState>
@@ -609,14 +752,38 @@ export interface RuntimeBridge {
   requestShizukuPermission: () => Promise<ShizukuState>
   connectShizuku: () => Promise<ShizukuState>
   openShizuku: () => Promise<void>
-  /** 读取无障碍服务状态和目标应用白名单；不会返回当前窗口内容。 */
+  /** 读取无障碍服务状态和目标应用白名单；不会返回当前窗口内容，也不返回任何密码信息。 */
   getAccessibilityAutomationState: () => Promise<AccessibilityAutomationState>
   /** 本机应用选择器的分页查询，数量不限；不向 AI 自动发送清单。 */
   listInstalledApplications: (query: string, offset: number) => Promise<InstalledApplicationsPage>
   getDeviceShellAccess: () => Promise<DeviceShellAccessState>
   setDeviceShellAccess: (enabled: boolean) => Promise<DeviceShellAccessState>
-  /** 保存目标应用包名白名单；只能由用户在设置页修改。 */
-  setAccessibilityAutomationPackages: (packages: string[]) => Promise<AccessibilityAutomationState>
+  /**
+   * 保存目标应用包名白名单；只能由用户在设置页修改。
+   *
+   * **每次修改都要带验证密码**（`password`），由原生侧比对后才会落盘；
+   * 密码只在这一次调用里出现过桥，**不落到前端存储、也不进日志**。
+   * 返回值里的 `allowedPackages` 是原生合并自动项之后的**有效白名单**，界面必须用它刷新，
+   * 不能拿本地那份入参当结果。[alwaysAllowedPackages] 里的条目由原生自动保证，界面不可移除。
+   */
+  setAccessibilityAutomationPackages: (packages: string[], password?: string) => Promise<AccessibilityAutomationState>
+  /**
+   * 设置或修改「白名单验证密码」。
+   *
+   * 首次设置不需要 `currentPassword`；已设置过密码时**必须**带上当前密码，由原生侧校验。
+   * 密码只作为本次调用的入参，前端不留存、不缓存、也不写日志。
+   */
+  setAccessibilityPassword: (password: string, currentPassword?: string) => Promise<AccessibilityAutomationState>
+  /** 清除「白名单验证密码」，必须带当前密码；**白名单本身不受影响**。 */
+  clearAccessibilityPassword: (currentPassword: string) => Promise<AccessibilityAutomationState>
+  /**
+   * 用系统生物识别 / 锁屏密码重置验证密码——「忘记密码」的唯一出路。
+   *
+   * 重置**只清掉密码、保留白名单**：用户丢的是那串数字，不是自己配好的目标应用清单。
+   * 这条不需要（也不能）带旧密码：能过系统生物识别/锁屏就说明是机主本人。
+   * 浏览器预览里没有系统生物识别，不得谎报成功。
+   */
+  resetAccessibilityPasswordWithBiometric: () => Promise<AccessibilityAutomationState>
   /** 跳转系统无障碍设置，由用户手动开启服务。 */
   openAccessibilitySettings: () => Promise<void>
   /** 后台保持与恢复状态；不含任何凭据或用户数据。 */
@@ -749,6 +916,63 @@ export interface RuntimeBridge {
   switchRuntimeVersion: (target: 'previous') => Promise<RuntimeVersionsState>
   /** 删除保留下来的上一版本以释放磁盘空间；只影响上一版本，不需要停止运行时。 */
   deleteRuntimeVersion: (target: 'previous') => Promise<RuntimeVersionsState>
+  /**
+   * 会话快照总览（无参数，只读）。
+   *
+   * 快照存在应用私有目录里：不进云备份、不进 rootfs；上限 3 份 / 512 MiB，
+   * 超限时原生侧从最旧的一份开始淘汰，返回的只是**当前实际还在**的那些。
+   */
+  getRuntimeSessionSnapshotState: () => Promise<RuntimeSessionSnapshotState>
+  /**
+   * 立即创建一份会话快照，返回**创建之后的最新总览**。
+   *
+   * 没有可备份的会话数据时原生侧以 `RUNTIME_SNAPSHOT_EMPTY` 拒绝，**不产出空快照**：
+   * 界面如实提示即可，不要自己往列表里插一条来「表示成功」。
+   */
+  createRuntimeSessionSnapshot: () => Promise<RuntimeSessionSnapshotState>
+  /**
+   * 把一份快照**合并回填**到运行时数据目录。
+   *
+   * 同名文件已存在时跳过并计入 `skippedFileCount`——不是覆盖，也不会删掉现有数据。
+   * `id` 形态非法是 `RUNTIME_SNAPSHOT_ID_INVALID`，找不到是 `RUNTIME_SNAPSHOT_NOT_FOUND`。
+   */
+  restoreRuntimeSessionSnapshot: (id: string) => Promise<RuntimeSessionSnapshotRestoreResult>
+  /**
+   * 删除一份快照并返回最新总览。
+   *
+   * `id` 不存在是 `RUNTIME_SNAPSHOT_NOT_FOUND`：如实提示即可，不用重试。
+   */
+  deleteRuntimeSessionSnapshot: (id: string) => Promise<RuntimeSessionSnapshotState>
+  /**
+   * 列出原生侧已知的运行时可用版本（无参数，只读）。
+   *
+   * 条目缺 `manifestUrl`/`manifestSha256` 的版本只可展示、不可安装（见 [RuntimeReleaseEntry]）：
+   * 界面要按「能不能装」分开渲染，而不是把列表里的每一项都当成可安装。
+   */
+  listRuntimeReleases: () => Promise<RuntimeReleaseList>
+  /** 应用自身的更新状态：已安装版本，以及是否有可用更新。 */
+  getAppUpdateState: () => Promise<AppUpdateState>
+  /**
+   * 下载应用更新包（目标是原生侧当前认定的那个可用更新）。
+   *
+   * **不接受 URL**：下载地址由原生侧自己决定，前端不能指定任意地址——
+   * 否则等于给 WebView 开了一个「下载并安装任意 APK」的口子。
+   */
+  downloadAppUpdate: () => Promise<void>
+  /**
+   * 安装已下载的应用更新包，交给系统安装器接管。
+   *
+   * 未授予「安装未知应用」权限时原生侧会拒绝（错误码 `APP_UPDATE_INSTALL_PERMISSION`）：
+   * 界面如实显示中文错误并引导授权即可，不要重试或绕过。
+   */
+  installAppUpdate: () => Promise<void>
+  /**
+   * 跳转系统「安装未知应用」授权页。
+   *
+   * 是否授权由用户在系统界面决定，返回成功只代表页面打开了，不代表已授权：
+   * 回来后必须重新 [RuntimeBridge.getAppUpdateState]，不能自己把 installAllowed 置为 true。
+   */
+  openAppUpdateInstallSettings: () => Promise<void>
   addRuntimeProgressListener: (listener: (event: RuntimeProgress) => void) => Promise<ListenerHandle>
   addTerminalOutputListener: (listener: (event: TerminalChunk) => void) => Promise<ListenerHandle>
   addTerminalExitListener: (listener: (event: TerminalExit) => void) => Promise<ListenerHandle>

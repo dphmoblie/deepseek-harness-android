@@ -1,5 +1,6 @@
 import { validatePluginRequest } from './plugins'
 import type {
+  AppUpdateState,
   DiagnosticLogState,
   AccessibilityAutomationState,
   DiagnosticLogText,
@@ -13,7 +14,11 @@ import type {
   OverlayBallState,
   ProviderApiKeys,
   RuntimeBridge,
+  RuntimeInstallResult,
   RuntimeProgress,
+  RuntimeReleaseList,
+  RuntimeSessionSnapshotRestoreResult,
+  RuntimeSessionSnapshotState,
   RuntimeSettings,
   RuntimeState,
   RuntimeVersionsState,
@@ -25,13 +30,17 @@ import type {
   TerminalExit,
   TerminalKind,
 } from './types'
-import { DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
+import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
+import { assertMailboxSubdirectory, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
 const BROWSER_MAILBOX_ROOT = '/storage/emulated/0/Documents/DSH'
+/** 无障碍白名单条目上限，与原生侧同一数值（自动项也计入）。 */
+const MAX_ACCESSIBILITY_PACKAGES = 16
+/** 包名格式与原生侧逐字一致：预览环境也不接受一份原生永远回不出来的状态。 */
+const PACKAGE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*){1,12}$/u
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
@@ -68,7 +77,15 @@ export function createBrowserBridge(): RuntimeBridge {
     runnerAvailable: true,
   }
   let shizuku: ShizukuState = { installed: true, running: true, permission: 'undetermined', connected: false }
-  let accessibility: AccessibilityAutomationState = { enabled: false, allowedPackages: [] }
+  // 浏览器预览里没有原生侧可用，这份状态**只活在内存中**（刷新即丢）。
+  // 验证密码同样只存在这个变量里，绝不写进 localStorage：浏览器桥不是凭据存储。
+  let accessibility = {
+    enabled: false,
+    allowedPackages: [] as string[],
+    alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
+    passwordConfigured: false,
+  }
+  let accessibilityPassword: string | undefined
   let diagnosticState: DiagnosticLogState = {
     enabled: false,
     retentionDays: DIAGNOSTIC_RETENTION_DEFAULT,
@@ -89,6 +106,19 @@ export function createBrowserBridge(): RuntimeBridge {
     }
     progressListeners.forEach(listener => listener(event))
   }
+
+  /**
+   * 无障碍状态的对外快照：每次都新建数组，调用方改不到桥内部的这份状态。
+   *
+   * 快照里**只有那一个布尔** `passwordConfigured`，没有任何密码字段——
+   * 预览环境也不给「顺手把密码读出来」留口子。
+   */
+  const accessibilitySnapshot = (): AccessibilityAutomationState => ({
+    enabled: accessibility.enabled,
+    allowedPackages: [...accessibility.allowedPackages],
+    alwaysAllowedPackages: [...accessibility.alwaysAllowedPackages],
+    passwordConfigured: accessibility.passwordConfigured,
+  })
 
   return {
     listInstalledApplications: () => Promise.reject(new Error('应用列表仅在安卓设备上可用')),
@@ -154,7 +184,7 @@ export function createBrowserBridge(): RuntimeBridge {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(currentSettings))
       return Promise.resolve({ ...currentSettings })
     },
-    install: async source => {
+    install: async (source): Promise<RuntimeInstallResult> => {
       const validatedSource = source === undefined ? undefined : validateRuntimeSource(source)
       const acquisitionPhase = validatedSource === undefined || validatedSource.manifestUrl === '' ? 'preparing' : 'downloading'
       state = { ...state, phase: acquisitionPhase, downloadedBytes: 0, errorCode: undefined }
@@ -176,6 +206,8 @@ export function createBrowserBridge(): RuntimeBridge {
       }
       state = { ...state, phase: 'ready', installedVersion: '2026.08.1', updateAvailable: false }
       emitProgress()
+      // 预览里没有原生侧的会话快照能力：安装结果不带 autoSnapshot，不编造「已自动备份」的结论。
+      return {}
     },
     startHarness: () => {
       state = { ...state, phase: 'running', harnessUrl: 'http://127.0.0.1:3080/' }
@@ -251,14 +283,52 @@ export function createBrowserBridge(): RuntimeBridge {
       return Promise.resolve({ ...shizuku })
     },
     openShizuku: () => Promise.resolve(),
-    getAccessibilityAutomationState: () => Promise.resolve({ ...accessibility, allowedPackages: [...accessibility.allowedPackages] }),
-    setAccessibilityAutomationPackages: packages => {
-      if (!Array.isArray(packages) || packages.length > 16 || packages.some(value => typeof value !== 'string')) {
+    getAccessibilityAutomationState: (): Promise<AccessibilityAutomationState> => Promise.resolve(accessibilitySnapshot()),
+    // 白名单的修改必须带验证密码（与原生侧同一语义）；未设置密码时放行。
+    setAccessibilityAutomationPackages: (packages: string[], password?: string): Promise<AccessibilityAutomationState> => {
+      if (!Array.isArray(packages) || packages.length > MAX_ACCESSIBILITY_PACKAGES ||
+          packages.some(value => typeof value !== 'string' || !PACKAGE_NAME_PATTERN.test(value))) {
         return Promise.reject(new Error('无障碍白名单格式无效'))
       }
-      accessibility = { ...accessibility, allowedPackages: [...new Set(packages)] }
-      return Promise.resolve({ ...accessibility, allowedPackages: [...accessibility.allowedPackages] })
+      // 已设置密码却没带、或带错：**明确拒绝**，不谎报成功（预览环境也不能假装改成功了）。
+      if (accessibility.passwordConfigured) {
+        if (password === undefined) return Promise.reject(new Error('需要验证密码'))
+        const validated = validateAccessibilityPasswordInput(password, '验证密码')
+        if (validated !== accessibilityPassword) return Promise.reject(new Error('验证密码不正确'))
+      } else if (password !== undefined) {
+        // 未设置密码时也允许带密码（用户在界面上可能刚设过）：照样按格式校验，只是不做比对。
+        validateAccessibilityPasswordInput(password, '验证密码')
+      }
+      // 自动项：无论用户传什么都在结果里，且排在前面（原生侧返回的有效白名单就是这个形态）。
+      accessibility = {
+        ...accessibility,
+        allowedPackages: [...new Set([...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, ...packages])],
+      }
+      return Promise.resolve(accessibilitySnapshot())
     },
+    setAccessibilityPassword: (password: string, currentPassword?: string): Promise<AccessibilityAutomationState> => {
+      const next = validateAccessibilityPasswordInput(password, '验证密码')
+      if (accessibility.passwordConfigured) {
+        if (currentPassword === undefined) return Promise.reject(new Error('需要当前验证密码'))
+        const current = validateAccessibilityPasswordInput(currentPassword, '当前验证密码')
+        if (current !== accessibilityPassword) return Promise.reject(new Error('当前验证密码不正确'))
+      }
+      accessibilityPassword = next
+      accessibility = { ...accessibility, passwordConfigured: true }
+      return Promise.resolve(accessibilitySnapshot())
+    },
+    clearAccessibilityPassword: (currentPassword: string): Promise<AccessibilityAutomationState> => {
+      if (!accessibility.passwordConfigured) return Promise.reject(new Error('尚未设置验证密码'))
+      const current = validateAccessibilityPasswordInput(currentPassword, '当前验证密码')
+      if (current !== accessibilityPassword) return Promise.reject(new Error('当前验证密码不正确'))
+      // 只清密码，**白名单原样保留**——用户要清掉的是那串数字，不是自己配好的目标清单。
+      accessibilityPassword = undefined
+      accessibility = { ...accessibility, passwordConfigured: false }
+      return Promise.resolve(accessibilitySnapshot())
+    },
+    // 浏览器预览没有系统生物识别 / 锁屏：如实拒绝，不谎报「重置成功」。
+    resetAccessibilityPasswordWithBiometric: (): Promise<AccessibilityAutomationState> =>
+      Promise.reject(new Error('浏览器预览不支持系统生物识别验证')),
     openAccessibilitySettings: () => Promise.reject(new Error('浏览器预览不支持打开系统无障碍设置')),
     // 浏览器预览没有 Android 前台服务：如实报告未运行，避免误导保活预期。
     getKeepAliveState: (): Promise<KeepAliveState> => Promise.resolve({
@@ -377,6 +447,23 @@ export function createBrowserBridge(): RuntimeBridge {
       assertRuntimeVersionTarget(target)
       return Promise.reject(new Error('浏览器预览不支持运行时版本管理'))
     },
+    // 预览里没有原生侧的会话快照能力：四条一律如实拒绝。
+    // **不要**返回空状态对象——那会让界面显示成「还没有快照」，等于编造一次成功。
+    getRuntimeSessionSnapshotState: (): Promise<RuntimeSessionSnapshotState> =>
+      Promise.reject(new Error('浏览器模式下没有运行时会话快照')),
+    createRuntimeSessionSnapshot: (): Promise<RuntimeSessionSnapshotState> =>
+      Promise.reject(new Error('浏览器模式下不能创建运行时会话快照')),
+    restoreRuntimeSessionSnapshot: (): Promise<RuntimeSessionSnapshotRestoreResult> =>
+      Promise.reject(new Error('浏览器模式下不能恢复运行时会话快照')),
+    deleteRuntimeSessionSnapshot: (): Promise<RuntimeSessionSnapshotState> =>
+      Promise.reject(new Error('浏览器模式下不能删除运行时会话快照')),
+    // 浏览器预览里没有原生侧的更新渠道，也没有可下载安装的 APK：如实拒绝，
+    // 不编造版本列表或更新状态，否则界面会把「预览里的假版本」当成真能装的东西。
+    listRuntimeReleases: (): Promise<RuntimeReleaseList> => Promise.reject(new Error('浏览器模式下没有更新渠道')),
+    getAppUpdateState: (): Promise<AppUpdateState> => Promise.reject(new Error('浏览器模式下没有应用更新')),
+    downloadAppUpdate: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能下载安装包')),
+    installAppUpdate: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能安装应用')),
+    openAppUpdateInstallSettings: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能打开安装授权页面')),
     // 浏览器预览没有原生诊断日志：保持关闭且不可导出，避免给出「已经采集到东西」的错觉。
     getDiagnosticLogState: (): Promise<DiagnosticLogState> => Promise.resolve({ ...diagnosticState }),
     // 同理，预览里没有可查看的正文；返回空窗口而不是编造几条假记录。

@@ -1,13 +1,18 @@
 package io.deepseekharness.mobile
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
+import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.result.ActivityResult
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.getcapacitor.JSArray
@@ -21,6 +26,12 @@ import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import io.deepseekharness.mobile.overlay.OverlayBallPolicy
 import io.deepseekharness.mobile.accessibility.AccessibilityAutomationStore
+import io.deepseekharness.mobile.accessibility.AccessibilityBiometricCodes
+import io.deepseekharness.mobile.accessibility.AccessibilityGuardException
+import io.deepseekharness.mobile.accessibility.AccessibilityPasswordStore
+import io.deepseekharness.mobile.runtime.AppReleaseCatalog
+import io.deepseekharness.mobile.runtime.AppUpdateInstallPolicy
+import io.deepseekharness.mobile.runtime.AppUpdateStorage
 import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
 import io.deepseekharness.mobile.runtime.HarnessPermissionMode
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
@@ -35,11 +46,16 @@ import io.deepseekharness.mobile.runtime.MobileRuntimeController
 import io.deepseekharness.mobile.runtime.RuntimeEventSink
 import io.deepseekharness.mobile.runtime.RuntimeFailure
 import io.deepseekharness.mobile.runtime.RuntimeHost
+import io.deepseekharness.mobile.runtime.RuntimeHttp
 import io.deepseekharness.mobile.runtime.RuntimeIntent
 import io.deepseekharness.mobile.runtime.RuntimeKeepAliveSnapshot
 import io.deepseekharness.mobile.runtime.RuntimeMailbox
 import io.deepseekharness.mobile.runtime.RuntimePhase
+import io.deepseekharness.mobile.runtime.RuntimeAutoSnapshotOutcome
+import io.deepseekharness.mobile.runtime.RuntimeAutoSnapshotStatus
+import io.deepseekharness.mobile.runtime.RuntimeReleaseCatalog
 import io.deepseekharness.mobile.runtime.RuntimeSelfCheckPolicy
+import io.deepseekharness.mobile.runtime.RuntimeSessionSnapshotCodes
 import io.deepseekharness.mobile.runtime.RuntimeSettings
 import io.deepseekharness.mobile.runtime.RuntimeStateSnapshot
 import io.deepseekharness.mobile.runtime.RuntimeStorageDirs
@@ -156,6 +172,30 @@ internal fun optionalStorageSubdirectory(data: JSONObject): String? {
     return value
 }
 
+/**
+ * 无障碍白名单写入的可选「验证密码」参数。
+ *
+ * 省略、`null` 等价于「没带密码」（由原生侧按「是否已配置」决定放行还是拒绝）；
+ * **非字符串直接拒绝**（不猜、不转字符串）——密码是信任边界上的输入，类型模糊时宁可让用户重填。
+ * 这里只做取值与类型判断，长度/空白/控制字符的规则只有 `AccessibilityPasswordPolicy` 一份。
+ */
+internal fun optionalAccessibilityPassword(data: JSONObject, key: String): String? {
+    if (!data.has(key)) return null
+    val value = data.opt(key)
+    if (value == null || value == JSONObject.NULL) return null
+    if (value !is String) throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "无障碍验证密码格式无效")
+    return value
+}
+
+/** 必填的验证密码参数：缺失、`null` 与非字符串一律按配置格式无效拒绝。 */
+internal fun requiredAccessibilityPassword(data: JSONObject, key: String): String =
+    optionalAccessibilityPassword(data, key)
+        ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "无障碍验证密码缺失")
+
+/** 验证密码族的受控失败 → 桥接失败码；只做转换，不另立第二套码。 */
+internal fun accessibilityGuardFailure(failure: AccessibilityGuardException): RuntimeFailure =
+    RuntimeFailure(failure.code, failure.message ?: "无障碍验证密码校验未通过")
+
 /** 前台服务通知权限别名；Android 13 以下系统不需要该权限。 */
 private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
 
@@ -168,6 +208,21 @@ private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
 private const val MEDIA_IMAGES_ALIAS = "mediaImages"
 private const val MEDIA_VIDEO_ALIAS = "mediaVideo"
 private const val LEGACY_STORAGE_ALIAS = "legacyStorage"
+
+/** 系统安装器认的 APK MIME 类型；缺了它 Android 会按未知文件处理，安装界面通常打不开。 */
+private const val APP_UPDATE_MIME = "application/vnd.android.package-archive"
+
+/**
+ * `org.json.JSONObject` → Capacitor 的 `JSObject`。
+ *
+ * `runtime` 层只依赖 `org.json`（那部分要能在纯 JVM 单测里跑），桥层负责把载荷搬到
+ * Capacitor 的类型上。逐键复制而不是解析字符串：不引入可抛异常的路径，嵌套对象原样带过去。
+ */
+private fun JSONObject.toJsObject(): JSObject {
+    val result = JSObject()
+    for (key in keys()) result.put(key, get(key))
+    return result
+}
 
 /**
  * 本进程是否已经记录过「上次非正常结束」。
@@ -204,6 +259,17 @@ class MobileRuntimePlugin : Plugin() {
      * 订阅者对象：插件销毁后取消订阅，运行时不会继续向已销毁的 WebView 派发事件。
      */
     private val eventSink = PluginEventSink()
+
+    /**
+     * 进行中的系统身份确认（`resetAccessibilityPasswordWithBiometric`）。
+     *
+     * 平台要求调用方保留 `BiometricPrompt` 的引用，否则提示可能被回收后回调丢失；它同时是
+     * 「上一次确认还没结束」的唯一标记（见 [clearPendingBiometricReset]）——用户连点两次时，
+     * 旧的提示会被主动取消，那次调用据实回报 `BIOMETRIC_CANCELLED`，两次点击各自结清。
+     * 只在主线程创建的提示与回调之间流转，因此用 `@Volatile` 而不是锁：读一次、判一次身份就够了。
+     */
+    @Volatile
+    private var pendingBiometricResetPrompt: BiometricPrompt? = null
 
     companion object {
         private const val DEVICE_COMMAND_TIMEOUT_MS = 60_000L
@@ -443,6 +509,18 @@ class MobileRuntimePlugin : Plugin() {
 
     /**
      * 权限：应用内桥接。
+     * 远端可安装的运行时版本：只回传版本号、dsh 版本与清单地址/摘要，不含 rootfs 地址或凭据。
+     *
+     * 要下载并校验每个版本的清单，所以放在后台执行器上。目录取不到时以 [RuntimeFailure] 明确失败，
+     * 不会用空列表冒充「没有可用版本」——那会让界面把一次失败显示成一个查过的事实。
+     */
+    @PluginMethod
+    fun listRuntimeReleases(call: PluginCall) {
+        execute(call) { JSObject().put("entries", RuntimeReleaseCatalog().list()) }
+    }
+
+    /**
+     * 权限：应用内桥接。
      * 切换运行时版本：目前只支持切回保留下来的上一版本（`target = "previous"`）。
      */
     @PluginMethod
@@ -465,6 +543,143 @@ class MobileRuntimePlugin : Plugin() {
                 controller.deleteRuntimeVersion(RuntimeVersionPolicy.requireTarget(call.getString("target"))).toJs()
             }
         }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 应用自身更新状态：本机已安装版本、是否已授权安装未知应用，以及**严格更新**时才出现的 available。
+     *
+     * 没有可用更新时 `available` 键不出现（界面按「键缺失＝没有更新」判读）；要读一次远端目录，
+     * 因此放在后台执行器上。只回传版本号、体积、摘要与更新说明，不含下载地址。
+     */
+    @PluginMethod
+    fun getAppUpdateState(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.APP_UPDATE) {
+                appUpdateCatalog().state(
+                    AppReleaseCatalog.installed(context),
+                    AppReleaseCatalog.installAllowed(context),
+                ).toJsObject()
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 下载应用更新包到应用私有目录；频道与地址由原生自己决定，前端**不能**传任意 URL。
+     *
+     * 先落到 `.part`，摘要核对通过后才改名成正式安装包，所以目录里存在的 `.apk` 一定是完整的包。
+     * 这个方法没有进度事件通道（前端只等一个完成或失败），因此只有开始与结束两态。
+     */
+    @PluginMethod
+    fun downloadAppUpdate(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.APP_UPDATE) {
+                val release = requireAppUpdate()
+                val target = AppUpdateStorage.partialFile(context.cacheDir, release.version)
+                try {
+                    RuntimeHttp().downloadFile(
+                        RuntimeValidation.requireHttpsUri(release.url, rejectPrivateHost = true),
+                        target,
+                        release.bytes,
+                        release.sha256,
+                    ) { _, _ -> }
+                } catch (failure: RuntimeFailure) {
+                    throw appUpdateDownloadFailure(failure)
+                }
+                AppUpdateStorage.commit(context.cacheDir, release.version)
+                null
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 调起系统安装器安装已下载的更新包。
+     *
+     * Android **不允许**应用静默安装：这里只把文件交给系统安装器，是否安装、装的是哪个包，
+     * 都要用户在系统界面上确认一次。未授权安装未知应用时抛 `APP_UPDATE_INSTALL_PERMISSION`，
+     * 界面据此引导用户去 [openAppUpdateInstallSettings]。
+     */
+    @PluginMethod
+    fun installAppUpdate(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.APP_UPDATE) {
+                val apk = AppUpdateInstallPolicy.requireInstallable(
+                    AppReleaseCatalog.installAllowed(context),
+                    AppUpdateStorage.downloaded(context.cacheDir),
+                )
+                val uri = try {
+                    // authority 与 AndroidManifest 里的 ${applicationId}.appupdates 一致，
+                    // 路径白名单见 res/xml/app_update_paths.xml（只暴露 app-updates/）。
+                    FileProvider.getUriForFile(context, "${context.packageName}.appupdates", apk)
+                } catch (error: Throwable) {
+                    throw RuntimeFailure("APP_UPDATE_SHARE_FAILED", "无法把安装包交给系统安装器", error)
+                }
+                val intent = Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, APP_UPDATE_MIME)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                try {
+                    context.startActivity(intent)
+                } catch (error: Throwable) {
+                    throw RuntimeFailure("APP_UPDATE_INSTALL_UNAVAILABLE", "无法打开系统安装器", error)
+                }
+                null
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 打开「安装未知应用」授权页：这是每个应用一个开关的系统权限，只能由用户手动开启，
+     * 不会弹运行时对话框，也不该由应用替用户打开。
+     */
+    @PluginMethod
+    fun openAppUpdateInstallSettings(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.APP_UPDATE) {
+                val packageUri = Uri.parse("package:${context.packageName}")
+                try {
+                    context.startActivity(
+                        Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, packageUri)
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                } catch (_: Throwable) {
+                    // 个别 ROM 没有这一页：退回应用详情页，用户在那里仍能找到权限入口。
+                    try {
+                        context.startActivity(
+                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    } catch (error: Throwable) {
+                        throw RuntimeFailure("APP_UPDATE_SETTINGS_UNAVAILABLE", "无法打开安装授权设置页", error)
+                    }
+                }
+                null
+            }
+        }
+    }
+
+    /** 应用更新目录：唯一的上游地址写在 GitHubReleases.URL 常量里，桥层不暴露任何 URL 参数。 */
+    private fun appUpdateCatalog(): AppReleaseCatalog = AppReleaseCatalog()
+
+    /** 取远端「严格更新」的那一个包；没有可用更新时明确失败，而不是让下载去猜一个版本。 */
+    private fun requireAppUpdate(): AppReleaseCatalog.Release =
+        appUpdateCatalog().availableRelease(AppReleaseCatalog.installed(context))
+            ?: throw RuntimeFailure("APP_UPDATE_UNAVAILABLE", "当前没有可用的应用更新")
+
+    /**
+     * 下载层用的是运行时归档的失败码与文案，这里翻译成应用更新的说法。
+     * 错误码仍是受控的大写下划线形态，可以直接作为审计详情。
+     */
+    private fun appUpdateDownloadFailure(failure: RuntimeFailure): RuntimeFailure = when (failure.code) {
+        "ROOTFS_DIGEST_MISMATCH" ->
+            RuntimeFailure("APP_UPDATE_DIGEST_MISMATCH", "更新安装包摘要校验失败，请重新下载", failure)
+
+        "MANIFEST_SIZE_INVALID" -> RuntimeFailure("APP_UPDATE_SIZE_INVALID", "更新安装包大小无效", failure)
+        "DOWNLOAD_INCOMPLETE" -> RuntimeFailure("DOWNLOAD_INCOMPLETE", "更新安装包下载未完成，请重试", failure)
+        else -> failure
     }
 
     @PluginMethod
@@ -536,8 +751,11 @@ class MobileRuntimePlugin : Plugin() {
                     call.getString("manifestUrl") ?: settings.manifestUrl,
                     call.getString("manifestSha256") ?: settings.manifestSha256,
                 )
-                controller.install(source)
-                null
+                // 安装前已自动拍下会话快照（controller.install 内，与手动快照同一套实现）。
+                // 快照结论单独记一条审计与诊断：安装本身照旧成功，但用户必须能看出这次有没有备份。
+                val autoSnapshot = controller.install(source)
+                recordAutoSnapshotAudit(autoSnapshot)
+                JSObject().put("autoSnapshot", autoSnapshot.toJs())
             }
         }
     }
@@ -682,7 +900,12 @@ class MobileRuntimePlugin : Plugin() {
             val source = if (operation == "download") io.deepseekharness.mobile.runtime.RuntimeValidation.source(
                 call.getString("manifestUrl"), call.getString("manifestSha256"),
             ) else null
-            JSObject(controller.manageRuntimeLibrary(operation, call.getString("id"), source).toString())
+            val result = controller.manageRuntimeLibrary(operation, call.getString("id"), source)
+            // 只有「安装本地版本」这一支会带自动快照结论；`list`/`check`/`download` 是 null，
+            // 不要写成「快照失败」——那会把「本来就没拍」说成「拍了但没成」。
+            recordAutoSnapshotAudit(result.autoSnapshot)
+            result.autoSnapshot?.let { result.payload.put("autoSnapshot", it.toJs()) }
+            JSObject(result.payload.toString())
         }
     }
 
@@ -693,8 +916,101 @@ class MobileRuntimePlugin : Plugin() {
     private fun failureCode(error: Throwable): String =
         (error as? RuntimeFailure)?.code?.takeIf { code -> code.matches(CONTROLLED_CODE) } ?: "INTERNAL_ERROR"
 
-    /** 诊断日志；控制器尚未就绪时返回 null（排障不得影响主流程）。 */
+    /**
+     * 会话快照总览。
+     *
+     * 只返回**快照元数据**：标识、创建时间、版本、文件数与字节数，以及快照根目录（应用私有路径）。
+     * 不含任何会话内容、不含访客路径，也不读会话文件本身，因此是只读操作。
+     */
+    @PluginMethod
+    fun getRuntimeSessionSnapshotState(call: PluginCall) {
+        resolveWhileActive(call) { JSObject(controller.sessionSnapshotState().toJs().toString()) }
+    }
+
+    /**
+     * 手动创建一份会话快照（更新前自动快照与它共用同一套实现）。
+     *
+     * 会话目录不存在或为空 → `RUNTIME_SNAPSHOT_EMPTY`：**不产出空快照**，
+     * 否则界面会出现一份「看起来有备份、其实什么都没有」的记录。
+     */
+    @PluginMethod
+    fun createRuntimeSessionSnapshot(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.RUNTIME_SNAPSHOT) {
+                JSObject(controller.createSessionSnapshot().toJs().toString())
+            }
+        }
+    }
+
+    /**
+     * 把一份快照合并回填到当前运行时的会话目录；**同名文件不覆盖**，跳过的计入 `skippedFileCount`。
+     */
+    @PluginMethod
+    fun restoreRuntimeSessionSnapshot(call: PluginCall) {
+        execute(call) {
+            val id = call.getString("id")
+                ?: throw RuntimeFailure(RuntimeSessionSnapshotCodes.ID_INVALID, "快照标识缺失")
+            audited(AuditEvent.RUNTIME_SNAPSHOT) {
+                JSObject(controller.restoreSessionSnapshot(id).toJs().toString())
+            }
+        }
+    }
+
+    /** 删除一份快照；id 不存在 → `RUNTIME_SNAPSHOT_NOT_FOUND`。 */
+    @PluginMethod
+    fun deleteRuntimeSessionSnapshot(call: PluginCall) {
+        execute(call) {
+            val id = call.getString("id")
+                ?: throw RuntimeFailure(RuntimeSessionSnapshotCodes.ID_INVALID, "快照标识缺失")
+            audited(AuditEvent.RUNTIME_SNAPSHOT) {
+                JSObject(controller.deleteSessionSnapshot(id).toJs().toString())
+            }
+        }
+    }
+
+    /**
+     * 诊断日志；控制器尚未就绪时返回 null（排障不得影响主流程）。
+     */
     private fun diagnostics() = if (this::controller.isInitialized) controller.store.diagnostics else null
+
+    /**
+     * 「更新前自动快照」的结果必须**单独可见**。
+     *
+     * 它不阻断安装，所以不会出现在任何被拒绝的调用里：只写审计的话，用户在设备上就只剩
+     * 审计日志一条线索；这里补一条诊断，回答「这次更新到底有没有可用的备份」。
+     *
+     * `null` 表示这次操作本来就不拍快照（`list`/`check`/`download`、切换回上一版本），
+     * **不记任何东西** —— 把「没拍」记成「失败」等于制造假故障。
+     * 只写受控取值与计数，不写路径、不写快照标识。
+     */
+    private fun recordAutoSnapshotAudit(outcome: RuntimeAutoSnapshotOutcome?) {
+        if (outcome == null) return
+        val succeeded = outcome.status != RuntimeAutoSnapshotStatus.FAILED
+        when {
+            outcome.status == RuntimeAutoSnapshotStatus.CREATED ->
+                recordAudit(AuditEvent.RUNTIME_SNAPSHOT, AuditResult.SUCCEEDED)
+            succeeded ->
+                recordAudit(AuditEvent.RUNTIME_SNAPSHOT, AuditResult.SUCCEEDED, outcome.code)
+            else ->
+                recordAudit(AuditEvent.RUNTIME_SNAPSHOT, AuditResult.FAILED, outcome.code)
+        }
+        val log = diagnostics() ?: return
+        val state = controller.sessionSnapshotState()
+        log.record(
+            if (succeeded) DiagnosticLevel.INFO else DiagnosticLevel.WARN,
+            DiagnosticEvent.RUNTIME_SNAPSHOT,
+            buildMap {
+                put("reason", "auto")
+                put("result", outcome.status)
+                outcome.code?.let { put("code", it) }
+                put("count", state.snapshots.size.toString())
+                state.snapshots.firstOrNull()?.let { first ->
+                    put("files", first.fileCount.toString())
+                    put("bytes", first.totalBytes.toString())
+                }
+            },
+        )
+    }
 
     /**
      * 诊断日志（必需）。
@@ -1162,7 +1478,13 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
-    /** 保存无障碍目标应用白名单；数组元素必须是字符串，原生策略再次校验包名与数量。 */
+    /**
+     * 保存无障碍目标应用白名单；数组元素必须是字符串，原生策略再次校验包名与数量。
+     *
+     * 已设置「验证密码」时 `password` 必填：校验顺序与失败码全部由
+     * `AccessibilityWhitelistWritePolicy` / `AccessibilityPasswordStore` 决定（先密码、后格式），
+     * 这里只负责取值、映射失败码与审计。密码**不进**审计字段、返回值与异常文案。
+     */
     @PluginMethod
     fun setAccessibilityAutomationPackages(call: PluginCall) {
         execute(call) {
@@ -1179,13 +1501,218 @@ class MobileRuntimePlugin : Plugin() {
                         add(value)
                     }
                 }
+                val password = optionalAccessibilityPassword(call.data, "password")
                 try {
-                    accessibilityStateToJs(AccessibilityAutomationStore.setAllowedPackages(context, packages))
+                    // 本应用恒在白名单里（`withSelf`），用户传不传都会补上；已配置密码时缺密码/错密码
+                    // 分别以 ACCESSIBILITY_PASSWORD_REQUIRED / _INVALID / _LOCKED 拒绝。
+                    accessibilityStateToJs(AccessibilityAutomationStore.setAllowedPackages(context, packages, password))
+                } catch (failure: AccessibilityGuardException) {
+                    throw accessibilityGuardFailure(failure)
                 } catch (_: IllegalArgumentException) {
                     throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "无障碍白名单包含无效或重复包名")
                 }
             }
         }
+    }
+
+    /**
+     * 权限：应用内桥接；设置或修改「无障碍白名单验证密码」。
+     *
+     * 首次设置不需要 `currentPassword`；已设置过的必须先通过当前密码（含锁定与失败计数）。
+     * `password` 只作为 PBKDF2 入参使用，**不落盘明文、不进审计与诊断、不进返回值**——
+     * 返回的是与读写白名单同一形状的状态（只有 `passwordConfigured` 这个布尔）。
+     */
+    @PluginMethod
+    fun setAccessibilityPassword(call: PluginCall) {
+        execute(call) {
+            val password = requiredAccessibilityPassword(call.data, "password")
+            val currentPassword = optionalAccessibilityPassword(call.data, "currentPassword")
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                try {
+                    AccessibilityPasswordStore.set(context, password, currentPassword)
+                } catch (failure: AccessibilityGuardException) {
+                    throw accessibilityGuardFailure(failure)
+                } catch (failure: IllegalArgumentException) {
+                    // 只可能是「还没设过密码却传了 currentPassword」这类参数矛盾；文案是固定字面量。
+                    throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", failure.message ?: "无障碍验证密码参数无效")
+                }
+                accessibilityStateToJs(AccessibilityAutomationStore.state(context))
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；清除验证密码（必须带当前密码）。
+     *
+     * **只清密码，白名单原样保留**：用户想撤销的是「每次改白名单都要输密码」这件事，
+     * 不是自己配好的目标应用清单。忘记密码走 [resetAccessibilityPasswordWithBiometric]。
+     */
+    @PluginMethod
+    fun clearAccessibilityPassword(call: PluginCall) {
+        execute(call) {
+            val currentPassword = requiredAccessibilityPassword(call.data, "currentPassword")
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                try {
+                    AccessibilityPasswordStore.clear(context, currentPassword)
+                } catch (failure: AccessibilityGuardException) {
+                    throw accessibilityGuardFailure(failure)
+                }
+                accessibilityStateToJs(AccessibilityAutomationStore.state(context))
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；忘记验证密码的唯一恢复路径——由**系统界面**确认身份。
+     *
+     * 确认结果只可能来自系统：API 30+ 用 `BiometricPrompt` 且允许
+     * `BIOMETRIC_STRONG or DEVICE_CREDENTIAL`（带设备凭据时不能设负按钮，系统会用「取消」项）；
+     * API 26–29 不允许这个组合，因此直接用 `KeyguardManager` 的确认凭据界面
+     * （二选一的理由：那条路上 androidx 的 `DEVICE_CREDENTIAL` 兜底走的也是同一把系统界面，
+     * 与其多一层间接，不如把「通过/取消」当成唯一的两个结果）。两条路都只拿到结果，
+     * 应用侧无法伪造确认，也无法读到用户的生物特征或锁屏密码。
+     *
+     * 通过后只清密码与失败计数，白名单保留。
+     */
+    @PluginMethod
+    fun resetAccessibilityPasswordWithBiometric(call: PluginCall) {
+        val currentActivity = activity
+        if (currentActivity == null) {
+            call.reject("当前没有可用的界面，无法进行系统身份确认", AccessibilityBiometricCodes.UNAVAILABLE)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            requestBiometricPasswordReset(currentActivity, call)
+        } else {
+            requestDeviceCredentialPasswordReset(currentActivity, call)
+        }
+    }
+
+    /**
+     * API 30+：系统生物识别或锁屏密码。
+     *
+     * `BiometricPrompt` 的引用由 [pendingBiometricResetPrompt] 持有：平台要求调用方保留它，
+     * 同时它也是「上一次确认还没结束」的唯一标记——用户连点两次时，旧的一次会被取消并回报
+     * `BIOMETRIC_CANCELLED`，而不是让两次确认的结果落到同一个调用上。
+     */
+    private fun requestBiometricPasswordReset(currentActivity: android.app.Activity, call: PluginCall) {
+        val fragmentActivity = currentActivity as? androidx.fragment.app.FragmentActivity
+        if (fragmentActivity == null) {
+            call.reject("当前界面不支持系统身份确认", AccessibilityBiometricCodes.UNAVAILABLE)
+            return
+        }
+        val manager = BiometricManager.from(fragmentActivity)
+        val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or
+            BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        if (manager.canAuthenticate(authenticators) != BiometricManager.BIOMETRIC_SUCCESS) {
+            call.reject("设备上没有可用的生物识别或锁屏密码", AccessibilityBiometricCodes.UNAVAILABLE)
+            return
+        }
+        // 上一次确认还开着就先取消：它自己的回调会带着它的调用报 BIOMETRIC_CANCELLED，
+        // 两次点击因此各自结清，不会有一个调用永远挂着。
+        pendingBiometricResetPrompt?.cancelAuthentication()
+        lateinit var prompt: BiometricPrompt
+        prompt = BiometricPrompt(
+            fragmentActivity,
+            ContextCompat.getMainExecutor(fragmentActivity),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    clearPendingBiometricReset(prompt)
+                    execute(call) {
+                        audited(AuditEvent.ACCESSIBILITY_CONFIG) { resetAccessibilityPasswordAfterConfirmation() }
+                    }
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    clearPendingBiometricReset(prompt)
+                    call.reject(
+                        "系统身份确认未通过",
+                        if (errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
+                            errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+                            errorCode == BiometricPrompt.ERROR_CANCELED
+                        ) {
+                            AccessibilityBiometricCodes.CANCELLED
+                        } else {
+                            AccessibilityBiometricCodes.FAILED
+                        },
+                    )
+                }
+            },
+        )
+        pendingBiometricResetPrompt = prompt
+        val info = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("确认身份")
+            .setSubtitle("通过后清除无障碍验证密码（白名单保留）")
+            .setAllowedAuthenticators(authenticators)
+            .build()
+        fragmentActivity.runOnUiThread {
+            try {
+                prompt.authenticate(info)
+            } catch (_: Throwable) {
+                clearPendingBiometricReset(prompt)
+                call.reject("设备上没有可用的身份确认界面", AccessibilityBiometricCodes.UNAVAILABLE)
+            }
+        }
+    }
+
+    /**
+     * API 26–29：系统确认凭据界面（`KeyguardManager`）。
+     *
+     * 与 SAF 目录选择器同一条范式：主线程发起、`@ActivityCallback` 收结果。设备没有锁屏密码时
+     * 系统直接给不出确认界面，如实报 `BIOMETRIC_UNAVAILABLE`，不退化成「直接放行」。
+     */
+    @Suppress("DEPRECATION")
+    private fun requestDeviceCredentialPasswordReset(currentActivity: android.app.Activity, call: PluginCall) {
+        val keyguard = currentActivity.getSystemService(KeyguardManager::class.java)
+        val intent = keyguard?.createConfirmDeviceCredentialIntent(
+            "确认身份",
+            "通过后清除无障碍验证密码（白名单保留）",
+        )
+        if (intent == null) {
+            call.reject("设备未设置锁屏密码，无法确认身份", AccessibilityBiometricCodes.UNAVAILABLE)
+            return
+        }
+        currentActivity.runOnUiThread {
+            try {
+                startActivityForResult(call, intent, "accessibilityPasswordResetConfirmed")
+            } catch (_: Throwable) {
+                call.reject("设备上没有可用的身份确认界面", AccessibilityBiometricCodes.UNAVAILABLE)
+            }
+        }
+    }
+
+    /** 系统锁屏密码确认回调（API 26–29 那条路）：只有 `RESULT_OK` 才算确认。 */
+    @ActivityCallback
+    private fun accessibilityPasswordResetConfirmed(call: PluginCall?, result: ActivityResult) {
+        if (call == null) return
+        if (result.resultCode != android.app.Activity.RESULT_OK) {
+            call.reject("已取消系统身份确认", AccessibilityBiometricCodes.CANCELLED)
+            return
+        }
+        execute(call) {
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) { resetAccessibilityPasswordAfterConfirmation() }
+        }
+    }
+
+    /**
+     * 系统身份确认通过后的唯一后续：清密码与失败计数、**保留白名单**，回报新的状态。
+     *
+     * 除了上面两个回调，没有别的调用点——桥上也不提供任何「不验证就能重置密码」的方法。
+     */
+    private fun resetAccessibilityPasswordAfterConfirmation(): JSObject {
+        AccessibilityPasswordStore.resetAfterDeviceConfirmation(context)
+        return accessibilityStateToJs(AccessibilityAutomationStore.state(context))
+    }
+
+    /**
+     * 结清一次系统身份确认的引用（只做簿记，不决定要不要回报结果）。
+     *
+     * 每个回调只结清自己的那一次调用：用户连点两次时，被取消的那一次如实报
+     * `BIOMETRIC_CANCELLED`，不会因为「当前提示已经不是它」而永远挂着；
+     * 这里只保证字段不会停在已经作废的那个提示上。
+     */
+    private fun clearPendingBiometricReset(prompt: BiometricPrompt) {
+        if (pendingBiometricResetPrompt === prompt) pendingBiometricResetPrompt = null
     }
 
     /** 只跳转系统设置，由用户手动开启或关闭无障碍服务。 */
@@ -1885,9 +2412,19 @@ class MobileRuntimePlugin : Plugin() {
         .put("connected", connected)
         .put("version", version)
 
+    /**
+     * 无障碍状态过桥。
+     *
+     * 四个字段一个都不能少：`src/platform/validation.ts` 的形状校验要求它们同时存在，
+     * 缺一个整份状态就被判成「格式无效」，界面会把「读不到」显示成「没有自动项 / 没设密码」。
+     * `alwaysAllowedPackages`（恒为 `[SELF_PACKAGE]`）与 `passwordConfigured` 都是布尔/包名，
+     * **不含任何密码内容**。
+     */
     private fun accessibilityStateToJs(state: JSONObject): JSObject = JSObject()
         .put("enabled", state.optBoolean("enabled", false))
         .put("allowedPackages", state.optJSONArray("allowedPackages") ?: org.json.JSONArray())
+        .put("alwaysAllowedPackages", state.optJSONArray("alwaysAllowedPackages") ?: org.json.JSONArray())
+        .put("passwordConfigured", state.optBoolean("passwordConfigured", false))
 
     /** 诊断日志状态：只有布尔值、计数与时间戳，不含任何日志内容。 */
     private fun DiagnosticState.toJs(): JSObject = JSObject()

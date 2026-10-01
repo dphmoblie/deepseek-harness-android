@@ -17,6 +17,7 @@
  */
 import { fireEvent, screen } from '@testing-library/react'
 import { vi } from 'vitest'
+import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES } from '../platform/types'
 import type {
   DiagnosticLogState,
   KeepAliveState,
@@ -72,6 +73,11 @@ export const bridge = {
   getDeviceShellAccess: vi.fn().mockResolvedValue({ enabled: false }),
   setDeviceShellAccess: vi.fn().mockImplementation((enabled: boolean) => Promise.resolve({ enabled })),
   setAccessibilityAutomationPackages: vi.fn(),
+  // 验证密码三条（设置/清除/生物识别重置）。与上面同一道理：桥加了方法而夹具没加，
+  // 用到它的界面会在 effect 阶段抛错并**整棵树卸载**，表现成「找不到任何元素」。
+  setAccessibilityPassword: vi.fn(),
+  clearAccessibilityPassword: vi.fn(),
+  resetAccessibilityPasswordWithBiometric: vi.fn(),
   openAccessibilitySettings: vi.fn(),
   getKeepAliveState: vi.fn(),
   getOverlayBallState: vi.fn(),
@@ -104,6 +110,18 @@ export const bridge = {
   getRuntimeVersions: vi.fn(),
   switchRuntimeVersion: vi.fn(),
   deleteRuntimeVersion: vi.fn(),
+  // 会话快照：界面进「运行环境」页会读一次总览，缺桩同样会让 effect 抛错并卸载整棵树。
+  getRuntimeSessionSnapshotState: vi.fn(),
+  createRuntimeSessionSnapshot: vi.fn(),
+  restoreRuntimeSessionSnapshot: vi.fn(),
+  deleteRuntimeSessionSnapshot: vi.fn(),
+  // 更新：可用版本列表与应用自更新同样有默认桩——界面一进相关页面就会读一次，
+  // 缺桩会让 effect 抛错并卸载整棵树（同上一条注释里的坑）。
+  listRuntimeReleases: vi.fn(),
+  getAppUpdateState: vi.fn(),
+  downloadAppUpdate: vi.fn(),
+  installAppUpdate: vi.fn(),
+  openAppUpdateInstallSettings: vi.fn(),
   managePlugins: vi.fn(),
   getDiagnosticLogState: vi.fn(),
   readDiagnosticLog: vi.fn(),
@@ -244,11 +262,40 @@ export function beforeEachAppTest(): void {
   bridge.getState.mockResolvedValue({ ...readyState })
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
-  bridge.getAccessibilityAutomationState.mockResolvedValue({ enabled: false, allowedPackages: [] })
+  bridge.getAccessibilityAutomationState.mockResolvedValue({
+    enabled: false,
+    allowedPackages: [],
+    alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
+    passwordConfigured: false,
+  })
   bridge.listInstalledApplications.mockResolvedValue({ apps: [], total: 0, nextOffset: null })
   bridge.getDeviceShellAccess.mockResolvedValue({ enabled: false })
   bridge.setDeviceShellAccess.mockImplementation((enabled: boolean) => Promise.resolve({ enabled }))
-  bridge.setAccessibilityAutomationPackages.mockImplementation((packages: string[]) => Promise.resolve({ enabled: false, allowedPackages: [...new Set(packages)] }))
+  // 第二个参数是「本次修改白名单」的验证密码；夹具不比对密码（那是原生侧的事），
+  // 但**签名必须收**，否则用例里带密码调用会落进 `undefined` 分支，测的还是旧行为。
+  bridge.setAccessibilityAutomationPackages.mockImplementation((packages: string[], ...rest: [password?: string]) => {
+    // 收下密码只为证明「带密码调用」也走同一条路径：夹具不校验它，也绝不回显它。
+    const passwordIgnored = rest.length
+    void passwordIgnored
+    return Promise.resolve({
+      enabled: false,
+      allowedPackages: [...new Set([...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, ...packages])],
+      alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
+      passwordConfigured: false,
+    })
+  })
+  // 三条密码桩的默认返回：形状必须过得了 validateAccessibilityAutomationState，
+  // 否则界面侧的载荷校验会抛错（同上面 getStorageDirectory 那条注释）。
+  // 每次都新建数组，避免不同用例共用同一个引用。
+  const accessibilityState = (passwordConfigured: boolean) => ({
+    enabled: false,
+    allowedPackages: [] as string[],
+    alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
+    passwordConfigured,
+  })
+  bridge.setAccessibilityPassword.mockResolvedValue(accessibilityState(true))
+  bridge.clearAccessibilityPassword.mockResolvedValue(accessibilityState(false))
+  bridge.resetAccessibilityPasswordWithBiometric.mockResolvedValue(accessibilityState(false))
   bridge.openAccessibilitySettings.mockResolvedValue(undefined)
   bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive })
   // 默认已授予「显示在其他应用上层」权限：与用例无关的测试不该被一个禁用开关影响。
@@ -315,6 +362,28 @@ export function beforeEachAppTest(): void {
   })
   bridge.switchRuntimeVersion.mockResolvedValue({ versions: [], canSwitch: false, canDelete: false })
   bridge.deleteRuntimeVersion.mockResolvedValue({ versions: [], canSwitch: false, canDelete: false })
+  // 默认「没有任何快照」：多数用例只关心别的页面，不该被一份假快照影响；
+  // 关心快照的用例自己覆盖这四条桩。上限取值与原生侧一致（3 份 / 512 MiB）。
+  const emptySnapshotState = () => ({ maxSnapshots: 3, maxBytes: 512 * 1024 * 1024, totalBytes: 0, snapshots: [] })
+  bridge.getRuntimeSessionSnapshotState.mockResolvedValue(emptySnapshotState())
+  bridge.createRuntimeSessionSnapshot.mockResolvedValue(emptySnapshotState())
+  bridge.restoreRuntimeSessionSnapshot.mockResolvedValue({
+    restoredFileCount: 0,
+    skippedFileCount: 0,
+    state: emptySnapshotState(),
+  })
+  bridge.deleteRuntimeSessionSnapshot.mockResolvedValue(emptySnapshotState())
+  // 默认空版本列表（没有可用版本可装）+ 未授权安装权限：多数用例只关心别的页面，
+  // 真正关心更新的用例自己覆盖这几条桩。
+  bridge.listRuntimeReleases.mockResolvedValue({ entries: [] })
+  bridge.getAppUpdateState.mockResolvedValue({
+    installedVersion: '0.2.0',
+    installedVersionCode: 22,
+    installAllowed: false,
+  })
+  bridge.downloadAppUpdate.mockResolvedValue(undefined)
+  bridge.installAppUpdate.mockResolvedValue(undefined)
+  bridge.openAppUpdateInstallSettings.mockResolvedValue(undefined)
   bridge.managePlugins.mockResolvedValue({ plugins: [] })
   bridge.getDiagnosticLogState.mockResolvedValue({ ...diagnostic })
   bridge.readDiagnosticLog.mockResolvedValue({
@@ -329,7 +398,9 @@ export function beforeEachAppTest(): void {
   bridge.shareDiagnosticLog.mockResolvedValue({ ...diagnostic, fileName: 'dsh-diagnostic-20260912-102030.txt', exportedBytes: 512 })
   bridge.addRuntimeProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })
   bridge.saveSettings.mockImplementation((value: RuntimeSettingsUpdate) => Promise.resolve(value))
-  bridge.install.mockResolvedValue(undefined)
+  // 安装结果默认**不带** autoSnapshot：界面就不会多显示一条快照结论，
+  // 用例若自己设成 undefined，桥的校验也会把它归一化成 {}。
+  bridge.install.mockResolvedValue({})
   bridge.startHarness.mockResolvedValue({ ...runningState })
   bridge.openHarness.mockResolvedValue(undefined)
   bridge.stopRuntime.mockResolvedValue({ ...readyState })

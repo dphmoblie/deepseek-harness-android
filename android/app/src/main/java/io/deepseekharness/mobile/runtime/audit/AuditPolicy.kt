@@ -22,6 +22,14 @@ enum class AuditEvent {
 
     /** 运行时版本：删除保留下来的上一版本。 */
     RUNTIME_VERSION_DELETE,
+
+    /**
+     * 运行时会话快照：创建、恢复、删除，以及安装/更新前的自动快照。
+     *
+     * 只记结果与受控错误码（如 `RUNTIME_SNAPSHOT_EMPTY`）；快照标识是应用自己生成的
+     * `snap-<时间戳>-<随机>`，不含用户内容，因此可作为详情记录。
+     */
+    RUNTIME_SNAPSHOT,
     TERMINAL_OPEN,
     TERMINAL_CLOSE,
     SHIZUKU_PERMISSION,
@@ -46,6 +54,14 @@ enum class AuditEvent {
 
     /** 存储目录白名单：用户移除一个目录。 */
     STORAGE_DIR_REMOVE,
+
+    /**
+     * 应用自身更新：检查、下载、调起系统安装器、打开安装授权设置页。
+     *
+     * 只记动作与受控结果码（如 `APP_UPDATE_FILE_MISSING`、`APP_UPDATE_INSTALL_PERMISSION`）；
+     * 下载地址、落地路径与更新说明一律不落审计。
+     */
+    APP_UPDATE,
 }
 
 enum class AuditResult {

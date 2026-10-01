@@ -111,8 +111,8 @@ android {
         applicationId 'io.deepseekharness.mobile'
         minSdk 26
         targetSdk 35
-        versionCode 22
-        versionName '0.2.0'
+        versionCode 23
+        versionName '0.2.1'
 
         buildConfigField 'String', 'DEFAULT_MANIFEST_URL', envBuildValue('DSH_RUNTIME_MANIFEST_URL')
         buildConfigField 'String', 'DEFAULT_MANIFEST_SHA256', envBuildValue('DSH_RUNTIME_MANIFEST_SHA256')
@@ -196,6 +196,11 @@ dependencies {
     implementation 'androidx.activity:activity-ktx:1.10.1'
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'androidx.core:core-ktx:1.15.0'
+    // 忘记验证密码时的系统身份确认（生物识别 / 锁屏密码）。用 androidx 封装而不是平台的
+    // android.hardware.biometrics.BiometricPrompt：后者的 API 30 常量需要 Build.VERSION.SDK_INT
+    // 守卫写在**调用点**，而回调在匿名类里，Lint 的 NewApi 看不到外层的 if（本仓库在
+    // RuntimeStorageDirs.kt 上已经吃过一次「单测全绿、lintRelease 失败」的亏）。
+    implementation 'androidx.biometric:biometric:1.1.0'
     implementation 'org.apache.commons:commons-compress:1.27.1'
     implementation 'commons-io:commons-io:2.17.0'
     implementation 'org.snakeyaml:snakeyaml-engine:2.9'

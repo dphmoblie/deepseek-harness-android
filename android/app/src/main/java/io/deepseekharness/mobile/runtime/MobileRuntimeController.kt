@@ -2,9 +2,22 @@ package io.deepseekharness.mobile.runtime
 
 import android.content.Context
 import io.deepseekharness.mobile.shizuku.ShizukuState
+import java.io.File
 import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.withLock
+
+/**
+ * 版本管理操作的结果。
+ *
+ * 拆成「载荷 + 自动快照结论」两个字段而不是塞进同一个 JSON：自动快照的结论要同时进审计与
+ * 诊断日志，塞进载荷后桥层就没法区分「这次操作根本没跑快照」（如 `list`/`check`）与
+ * 「跑了但因为没有会话数据而跳过」，而这两件事对用户的含义完全不同。
+ */
+class RuntimeLibraryResult(
+    val payload: org.json.JSONObject,
+    val autoSnapshot: RuntimeAutoSnapshotOutcome?,
+)
 
 /**
  * 本机运行时控制器。
@@ -33,7 +46,35 @@ class MobileRuntimeController(
     private val versions = RuntimeVersionCatalog(store)
     val terminals = TerminalCoordinator(context, store, events::onTerminalOutput, events::onTerminalExit)
 
-    fun install(source: RuntimeSource) = lifecycleLock.withLock {
+    /**
+     * 运行时会话快照（备份与恢复）。
+     *
+     * 快照根在应用私有 `filesDir` 下，**绝不在 rootfs 里**：rootfs 在更新事务中会被整体替换，
+     * 把备份放进去等于没有备份（`AndroidManifest.xml` 的 `allowBackup="false"` 同时保证它
+     * 不会被云备份带走）。会话目录取「当前已安装运行时」的访客路径，与 [RuntimePreservePolicy]
+     * 的保留项同源。
+     */
+    private val snapshots = RuntimeSessionSnapshots(
+        sessionRoot = File(store.currentRoot, RuntimeSessionSnapshotLimits.SESSIONS_RELATIVE_PATH),
+        snapshotsRoot = File(appContext.filesDir, RuntimeSessionSnapshotLimits.DIRECTORY_NAME),
+        identity = {
+            // 版本读不到就写 null，不猜：元数据里写错版本会让用户以为恢复的是另一份运行时。
+            val manifest = store.installedManifest()
+            RuntimeIdentitySnapshot(
+                dshVersion = manifest?.dshVersion ?: RuntimeDshVersion.read(store.currentRoot),
+                runtimeVersion = manifest?.version,
+                runtimeId = manifest?.runtimeId,
+            )
+        },
+    )
+
+    /**
+     * 安装/更新运行时。
+     *
+     * 返回值是**更新前自动快照**的结论：快照失败**不阻断安装**（用户选的是「更新前自动备份」，
+     * 不是「备份失败就别更新」），但结论必须回到界面与审计，否则用户会以为已经有备份了。
+     */
+    fun install(source: RuntimeSource): RuntimeAutoSnapshotOutcome = lifecycleLock.withLock {
         ensureOpen()
         if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
             throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
@@ -41,6 +82,9 @@ class MobileRuntimeController(
         // 判定必须在安装**之前**取：装完之后「本来有没有运行时」就无从分辨，
         // 而它决定通知说「已安装」还是「已更新」（见 TaskNotificationPolicy.forInstallCompleted）。
         val hadRuntimeBefore = store.installedManifest() != null
+        // 自动快照与手动快照走**同一套实现**（RuntimeSessionSnapshots.createBeforeUpdate），
+        // 它内部永不抛异常：这里不需要 try/catch，也不允许它挡住 installer.install。
+        val autoSnapshot = snapshots.createBeforeUpdate()
         installer.install(source)
         // 安装要下载并解压整个 rootfs（数百 MB），用户几乎必然切走：
         // 装完只在界面上更新状态的话，他切回来之前什么都不知道。
@@ -48,6 +92,7 @@ class MobileRuntimeController(
             appContext,
             TaskNotificationPolicy.forInstallCompleted(hadRuntimeBefore),
         )
+        autoSnapshot
     }
 
     /**
@@ -107,20 +152,57 @@ class MobileRuntimeController(
     }
 
     /** 仅应用内版本管理调用；切换后的 current 持久化为下次启动的默认版本。 */
-    fun manageRuntimeLibrary(operation: String, id: String?, source: RuntimeSource?): org.json.JSONObject = lifecycleLock.withLock {
+    fun manageRuntimeLibrary(operation: String, id: String?, source: RuntimeSource?): RuntimeLibraryResult = lifecycleLock.withLock {
         ensureOpen()
         val library = RuntimeLibrary(store)
+        // 只有「安装某个本地版本」（select）才会替换 rootfs，因此在那一支才拍自动快照；
+        // 切换回上一版本（switchVersion）刻意不拍：它不经过这里，也不换镜像。
+        var autoSnapshot: RuntimeAutoSnapshotOutcome? = null
         when (operation) {
             "list" -> Unit
-            "check" -> return@withLock org.json.JSONObject().put("local", library.list()).put("official", RuntimeReleaseCatalog().check())
+            // 远端可用版本改由 MobileRuntimePlugin.listRuntimeReleases 单独回传：
+            // 它要发网络请求，混进「本地版本管理」会让一次检查同时依赖本地与远端两件事。
+            "check" -> return@withLock RuntimeLibraryResult(org.json.JSONObject().put("local", library.list()), null)
             "download" -> library.download(source ?: throw RuntimeFailure("SOURCE_INCOMPLETE", "缺少版本来源"))
             "select" -> {
                 if (supervisor.isRunning() || terminals.hasRuntimeSessions()) throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
+                autoSnapshot = snapshots.createBeforeUpdate()
                 installer.install(RuntimeSource(null, null, RuntimeLibrary.requireId(id.orEmpty())))
             }
             else -> throw RuntimeFailure("RUNTIME_VERSION_INVALID", "版本管理操作无效")
         }
-        org.json.JSONObject().put("local", library.list())
+        RuntimeLibraryResult(org.json.JSONObject().put("local", library.list()), autoSnapshot)
+    }
+
+    /**
+     * 会话快照总览：只读，**不要求**运行时已停止（界面在任何阶段都能看到现有备份）。
+     */
+    fun sessionSnapshotState(): RuntimeSessionSnapshotState = lifecycleLock.withLock {
+        ensureOpen()
+        snapshots.state()
+    }
+
+    /** 手动创建一份会话快照；会话目录不存在或为空时拒绝，不产出空快照。 */
+    fun createSessionSnapshot(): RuntimeSessionSnapshotState = lifecycleLock.withLock {
+        ensureOpen()
+        snapshots.create()
+    }
+
+    /**
+     * 把一份快照合并回填到当前运行时的会话目录：**同名文件不覆盖**。
+     *
+     * 刻意**不要求**运行时已停止：更新后发现会话读不出来时，用户不该被迫先去做「停服务」这一步。
+     * 不覆盖同名文件这条规则正是为了让「新 dsh 已经写过的新会话」不被旧内容盖掉。
+     */
+    fun restoreSessionSnapshot(id: String): RuntimeSessionSnapshotRestoreResult = lifecycleLock.withLock {
+        ensureOpen()
+        snapshots.restore(id)
+    }
+
+    /** 删除一份快照（只删备份，绝不触碰会话目录）。 */
+    fun deleteSessionSnapshot(id: String): RuntimeSessionSnapshotState = lifecycleLock.withLock {
+        ensureOpen()
+        snapshots.delete(id)
     }
 
     /** 返回当前启动代次，供系统恢复入口校验控制器身份与取消竞态。 */

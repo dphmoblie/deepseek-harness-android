@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 只暴露应用私有缓存里的更新安装包目录（AppUpdateStorage 的落地位置）。
+     运行时文件、诊断日志与工作区副本都不在这里，各由自己的 provider 声明负责。 -->
+<paths>
+    <cache-path
+        name="app-updates"
+        path="app-updates/" />
+</paths>

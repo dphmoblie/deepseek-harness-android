@@ -5,12 +5,25 @@ import org.json.JSONObject
 /** 无障碍自动化的纯参数规则；业务层与服务层共用，避免只在界面校验。 */
 internal object AccessibilityAutomationPolicy {
     const val MAX_INPUT_CHARS = 512
+
+    /**
+     * 本应用自己的包名。
+     *
+     * 它**恒为白名单成员**：桥接层与策略层都会在规范化时补回来，用户无法删掉。原因是壳内界面
+     * 本身就是用户要自动化的目标之一（读取层级、点击自己的控件），而把「本应用」排除在白名单外
+     * 只会让同一台设备上出现两套规则。注意这**不等于**放宽任何自动化护栏：服务侧的敏感窗口拒绝
+     * （密码框、验证码、支付、权限弹窗）与设备端确认一概照旧，本应用进白名单拿到的仍是同样的拒绝。
+     */
+    const val SELF_PACKAGE = "io.deepseekharness.mobile"
+
     private val packagePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*){1,12}$")
     private val viewIdPattern = Regex("^([A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*){1,12}):id/[A-Za-z_][A-Za-z0-9_]{0,79}$")
+
+    /** 敏感系统组件：这些包名永远不能进白名单。本应用不在其中（见 [SELF_PACKAGE]）。 */
     private val reservedPackages = setOf(
         "android", "com.android.settings", "com.android.systemui", "com.android.packageinstaller",
         "com.google.android.packageinstaller", "com.google.android.permissioncontroller",
-        "com.android.permissioncontroller", "io.deepseekharness.mobile",
+        "com.android.permissioncontroller",
     )
     private val sensitiveText = Regex(
         "密码|口令|验证码|验证代码|动态码|支付|付款|收款|转账|转帐|银行卡|银行账户|授权|权限申请|" +
@@ -35,6 +48,20 @@ internal object AccessibilityAutomationPolicy {
     fun validPackages(packages: List<String>): Boolean =
         packages.distinct().size == packages.size &&
             packages.all(::validPackage)
+
+    /**
+     * 白名单的唯一规范化口径：`trim` → 去重 → 补上 [SELF_PACKAGE] → 排序。
+     *
+     * 幂等（再跑一次结果不变），因此写入路径与读取路径可以各调用一次而不必担心漂移；
+     * 排序与 [AccessibilityAutomationStore.state] 里 `allowedPackages` 的既有顺序一致，
+     * 界面上不会因为「补了本应用」而重排。
+     *
+     * 这里**不做合法性判定**（非法包名照原样留着）：校验是写入边界的事，
+     * 由调用方用 [validPackages] 判定后决定是拒绝还是整份失效；规范化里夹带过滤会让
+     * 「用户以为删掉了、其实是被静默丢弃」这类问题变得不可见。
+     */
+    fun withSelf(packages: List<String>): List<String> =
+        (packages.map(String::trim) + SELF_PACKAGE).distinct().sorted()
 
     fun containsSensitiveText(value: CharSequence?): Boolean =
         value != null && sensitiveText.containsMatchIn(value)

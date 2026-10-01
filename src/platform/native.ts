@@ -26,6 +26,7 @@ import type {
   TerminalExit,
   TerminalKind,
 } from './types'
+import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES } from './types'
 import {
   assertBase64Input,
   assertDiagnosticRetentionDays,
@@ -36,7 +37,9 @@ import {
   assertTerminalKind,
   assertTerminalSize,
   validateAllFilesAccessResult,
+  validateAppUpdateState,
   validateAccessibilityAutomationState,
+  validateAccessibilityPasswordInput,
   validateDeviceShellAccess,
   validateDeviceCommand,
   validateDeviceCommandParam,
@@ -54,6 +57,10 @@ import {
   validateNotificationPermissionResult,
   validateOverlayBallState,
   validateRuntimeProgress,
+  validateRuntimeInstallResult,
+  validateRuntimeReleaseList,
+  validateRuntimeSessionSnapshotRestoreResult,
+  validateRuntimeSessionSnapshotState,
   validateRuntimeSelfCheckReport,
   validateRuntimeState,
   validateRuntimeVersions,
@@ -78,7 +85,11 @@ interface NativeRuntimePlugin {
   getState(): Promise<RuntimeState>
   getSettings(): Promise<RuntimeSettings>
   saveSettings(settings: RuntimeSettingsUpdate): Promise<RuntimeSettings>
-  install(source?: RuntimeSource): Promise<void>
+  install(source?: RuntimeSource): Promise<unknown>
+  getRuntimeSessionSnapshotState(): Promise<unknown>
+  createRuntimeSessionSnapshot(): Promise<unknown>
+  restoreRuntimeSessionSnapshot(options: { id: string }): Promise<unknown>
+  deleteRuntimeSessionSnapshot(options: { id: string }): Promise<unknown>
   startHarness(): Promise<RuntimeState>
   openHarness(): Promise<void>
   stopRuntime(): Promise<RuntimeState>
@@ -96,7 +107,14 @@ interface NativeRuntimePlugin {
   listInstalledApplications(options: { query: string; offset: number }): Promise<unknown>
   getDeviceShellAccess(): Promise<unknown>
   setDeviceShellAccess(options: { enabled: boolean }): Promise<unknown>
-  setAccessibilityAutomationPackages(options: { packages: string[] }): Promise<unknown>
+  /** 保存白名单；`password` 只在用户已设置验证密码时出现，原生侧负责比对。 */
+  setAccessibilityAutomationPackages(options: { packages: string[]; password?: string }): Promise<unknown>
+  /** 设置/修改验证密码；首次设置时 `currentPassword` 不出现。 */
+  setAccessibilityPassword(options: { password: string; currentPassword?: string }): Promise<unknown>
+  /** 清除验证密码（白名单保留）；必须带当前密码。 */
+  clearAccessibilityPassword(options: { currentPassword: string }): Promise<unknown>
+  /** 用系统生物识别 / 锁屏密码重置验证密码；只清密码、保留白名单。 */
+  resetAccessibilityPasswordWithBiometric(): Promise<unknown>
   openAccessibilitySettings(): Promise<void>
   getKeepAliveState(): Promise<KeepAliveState>
   requestNotificationPermission(): Promise<NotificationPermissionResult>
@@ -120,6 +138,12 @@ interface NativeRuntimePlugin {
   runtimeVersions(): Promise<unknown>
   switchRuntimeVersion(options: { target: string }): Promise<unknown>
   deleteRuntimeVersion(options: { target: string }): Promise<unknown>
+  /** 列出原生侧已知的运行时可用版本；结果由 TS 侧校验后再交给界面。 */
+  listRuntimeReleases(): Promise<unknown>
+  getAppUpdateState(): Promise<unknown>
+  downloadAppUpdate(): Promise<void>
+  installAppUpdate(): Promise<void>
+  openAppUpdateInstallSettings(): Promise<void>
   getDiagnosticLogState(): Promise<DiagnosticLogState>
   readDiagnosticLog(options: { maxBytes?: number }): Promise<unknown>
   setDiagnosticLogSettings(options: { enabled: boolean; retentionDays: number }): Promise<DiagnosticLogState>
@@ -174,7 +198,9 @@ function createNativeBridge(): RuntimeBridge {
     getState: () => NativeRuntime.getState().then(validateRuntimeState),
     getSettings: () => NativeRuntime.getSettings().then(validateStoredSettings),
     saveSettings: settings => NativeRuntime.saveSettings(validateSettingsUpdate(settings)).then(validateSettings),
-    install: source => NativeRuntime.install(source === undefined ? undefined : validateRuntimeSource(source)),
+    install: source => NativeRuntime
+      .install(source === undefined ? undefined : validateRuntimeSource(source))
+      .then(validateRuntimeInstallResult),
     startHarness: () => NativeRuntime.startHarness().then(validateRuntimeState),
     openHarness: () => NativeRuntime.openHarness(),
     stopRuntime: () => NativeRuntime.stopRuntime().then(validateRuntimeState),
@@ -222,13 +248,44 @@ function createNativeBridge(): RuntimeBridge {
       }
       return NativeRuntime.listInstalledApplications({ query, offset }).then(validateInstalledApplications)
     },
-    setAccessibilityAutomationPackages: packages => {
+    // 白名单：发送前先自检一遍形状（含自动项与密码状态这几个必填字段），
+    // 密码只在用户带了的时候校验——未设置密码的设备上，undefined 是合法取值。
+    setAccessibilityAutomationPackages: (packages, password) => {
       if (!Array.isArray(packages) || packages.some(value => typeof value !== 'string')) {
         return Promise.reject(new Error('无障碍白名单格式无效'))
       }
-      validateAccessibilityAutomationState({ enabled: false, allowedPackages: packages })
-      return NativeRuntime.setAccessibilityAutomationPackages({ packages }).then(validateAccessibilityAutomationState)
+      const validatedPassword = password === undefined
+        ? undefined
+        : validateAccessibilityPasswordInput(password, '验证密码')
+      validateAccessibilityAutomationState({
+        enabled: false,
+        allowedPackages: packages,
+        alwaysAllowedPackages: ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES,
+        passwordConfigured: false,
+      })
+      // 可选字段只在有值时出现：与文件内其他方法保持同一写法（原生侧据「有没有这个键」区分
+      // 「本次不带密码」和「带了一个空密码」）。
+      return NativeRuntime.setAccessibilityAutomationPackages({
+        packages,
+        ...(validatedPassword === undefined ? {} : { password: validatedPassword }),
+      }).then(validateAccessibilityAutomationState)
     },
+    setAccessibilityPassword: (password, currentPassword) => {
+      const next = validateAccessibilityPasswordInput(password, '验证密码')
+      const current = currentPassword === undefined
+        ? undefined
+        : validateAccessibilityPasswordInput(currentPassword, '当前验证密码')
+      return NativeRuntime.setAccessibilityPassword({
+        password: next,
+        ...(current === undefined ? {} : { currentPassword: current }),
+      }).then(validateAccessibilityAutomationState)
+    },
+    clearAccessibilityPassword: currentPassword => NativeRuntime
+      .clearAccessibilityPassword({ currentPassword: validateAccessibilityPasswordInput(currentPassword, '当前验证密码') })
+      .then(validateAccessibilityAutomationState),
+    resetAccessibilityPasswordWithBiometric: () => NativeRuntime
+      .resetAccessibilityPasswordWithBiometric()
+      .then(validateAccessibilityAutomationState),
     openAccessibilitySettings: () => NativeRuntime.openAccessibilitySettings(),
     getKeepAliveState: () => NativeRuntime.getKeepAliveState().then(validateKeepAliveState),
     requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),
@@ -283,6 +340,27 @@ function createNativeBridge(): RuntimeBridge {
     deleteRuntimeVersion: target => NativeRuntime
       .deleteRuntimeVersion({ target: assertRuntimeVersionTarget(target) })
       .then(validateRuntimeVersions),
+    // 快照标识的形态由原生侧把关（`RUNTIME_SNAPSHOT_ID_INVALID`）：前端原样传过去，
+    // 不在这里另造一套错误文案，避免两边对「什么算合法 id」说法不一。
+    getRuntimeSessionSnapshotState: () => NativeRuntime
+      .getRuntimeSessionSnapshotState()
+      .then(validateRuntimeSessionSnapshotState),
+    createRuntimeSessionSnapshot: () => NativeRuntime
+      .createRuntimeSessionSnapshot()
+      .then(validateRuntimeSessionSnapshotState),
+    restoreRuntimeSessionSnapshot: id => NativeRuntime
+      .restoreRuntimeSessionSnapshot({ id })
+      .then(validateRuntimeSessionSnapshotRestoreResult),
+    deleteRuntimeSessionSnapshot: id => NativeRuntime
+      .deleteRuntimeSessionSnapshot({ id })
+      .then(validateRuntimeSessionSnapshotState),
+    // 可用版本列表由原生侧给出：缺清单的条目只可展示，校验侧不允许它混成「可安装」。
+    listRuntimeReleases: () => NativeRuntime.listRuntimeReleases().then(validateRuntimeReleaseList),
+    getAppUpdateState: () => NativeRuntime.getAppUpdateState().then(validateAppUpdateState),
+    // 下载与安装都不接收 URL：地址由原生侧自己决定，前端不能让它去取任意地址。
+    downloadAppUpdate: () => NativeRuntime.downloadAppUpdate(),
+    installAppUpdate: () => NativeRuntime.installAppUpdate(),
+    openAppUpdateInstallSettings: () => NativeRuntime.openAppUpdateInstallSettings(),
     readDiagnosticLog: options => NativeRuntime.readDiagnosticLog({ maxBytes: options?.maxBytes }).then(validateDiagnosticLogText),
     getDiagnosticLogState: () => NativeRuntime.getDiagnosticLogState().then(validateDiagnosticLogState),
     setDiagnosticLogSettings: (enabled, retentionDays) => {

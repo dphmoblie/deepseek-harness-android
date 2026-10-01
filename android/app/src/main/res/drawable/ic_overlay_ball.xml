@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 悬浮球球面：与启动图标同一套「终端提示符」基因，单色便于按主题着色。 -->
+<!-- 通知栏小图标（单色剪影）：状态栏图标必须是不透明的单色图形，彩色应用图标在那里只会显示成一个白块，所以这里保留终端提示符形状，不跟随悬浮球换成应用图标。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"

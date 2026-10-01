@@ -1,4 +1,4 @@
-import appMark from './assets/whale-mark.png'
+import appMark from './assets/app-mark.png'
 import { t, useLanguage } from './i18n'
 import { PluginSettings } from './components/PluginSettings'
 import { ApplicationPicker } from './components/ApplicationPicker'
@@ -7,8 +7,7 @@ import { AppBackground } from './components/AppBackground'
 import { LanguageSettings } from './components/LanguageSettings'
 import { AppearanceSettings } from './components/AppearanceSettings'
 import { SessionManager } from './components/SessionManager'
-import { WhaleMark } from './components/WhaleMark'
-import { lazy, Suspense, type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -61,7 +60,7 @@ import { CustomProviders } from './components/CustomProviders'
 import { runtimeBridge } from './platform/native'
 import { readLogInsights } from './logInsights'
 import { validateHarnessPermissionMode } from './harnessPermissionMode'
-import { assertMailboxSubdirectory } from './platform/validation'
+import { assertMailboxSubdirectory, validateAccessibilityPasswordInput } from './platform/validation'
 import {
   selfCheckAdvice,
   selfCheckNeedsRepair,
@@ -76,6 +75,7 @@ import type {
   DiagnosticLogState,
   DiagnosticLogText,
   AccessibilityAutomationState,
+  AppUpdateState,
   HarnessLog,
   KeepAliveState,
   MailboxDirectoryState,
@@ -86,8 +86,14 @@ import type {
   ModelProviderId,
   OverlayBallState,
   ProviderApiKeys,
+  RuntimeInstallResult,
   RuntimePhase,
   RuntimeProgress,
+  RuntimeReleaseEntry,
+  RuntimeReleaseList,
+  RuntimeSessionSnapshotRestoreResult,
+  RuntimeSessionSnapshotState,
+  RuntimeSource,
   RuntimeSettings,
   RuntimeSettingsUpdate,
   RuntimeState,
@@ -464,7 +470,14 @@ const EMPTY_DIAGNOSTIC: DiagnosticLogState = {
   lastEntryAtMillis: 0,
 }
 const MAX_NOTICE_CHARACTERS = 240
-const RESET_CONFIRMATION = 'RESET_RUNTIME'
+/**
+ * 重置确认的考虑时间（秒）。
+ *
+ * 重置会连同用户数据一起清除，所以确认按钮在这段时间内保持禁用，给用户一个反悔的机会；
+ * 但不再要求输入确认词——在手机上敲单词既费力又拦不住真正的误触。
+ * 交给原生侧的确认口令（`RESET_RUNTIME`）不变，这里只改交互。
+ */
+const RESET_CONSIDERATION_SECONDS = 3
 /**
  * 通知权限申请的兜底超时：系统对话框在极端情况下可能不返回结果，
  * 超时后按“未授予”处理，避免界面一直停留在忙碌状态。
@@ -777,9 +790,13 @@ function Brand() {
   )
 }
 
+// 读取之前的占位状态：什么都还没读到，因此列表空、密码标记为未设置。
+// 真实取值由 getAccessibilityAutomationState 回填，这里不预置任何包名。
 const EMPTY_ACCESSIBILITY: AccessibilityAutomationState = {
   enabled: false,
   allowedPackages: [],
+  alwaysAllowedPackages: [],
+  passwordConfigured: false,
 }
 
 interface AppSidebarProps {
@@ -814,14 +831,14 @@ function AppSidebar({ activeView, onNavigate }: AppSidebarProps) {
   return (
     <aside className="app-sidebar" aria-label={t('应用导航')}>
       <button
-        className={`sidebar-whale ${activeView === 'sessions' ? 'is-active' : ''}`}
+        className={`sidebar-mark ${activeView === 'sessions' ? 'is-active' : ''}`}
         type="button"
         aria-label={t('会话管理')}
         aria-current={activeView === 'sessions' ? 'page' : undefined}
         title={t('会话管理')}
         onClick={() => onNavigate('sessions')}
       >
-        <WhaleMark size={26} />
+        <img className="app-mark" src={appMark} alt="" width={26} height={26} />
         <span>{t('会话')}</span>
       </button>
       <nav className="sidebar-nav">
@@ -1964,9 +1981,461 @@ function RuntimeVersionsPanel({
   )
 }
 
+interface RuntimeReleasesSectionProps {
+  /** 当前已安装的运行时版本：列表里同版本那一行标成「已安装」，不必再装一遍。 */
+  installedVersion?: string
+  /** 发起安装：确认弹窗、忙碌状态与安装后的提示都由 App 统一负责。 */
+  onInstall: (entry: RuntimeReleaseEntry) => void
+  listReleases: () => Promise<RuntimeReleaseList>
+}
+
+/**
+ * 可从 GitHub 发布页安装的运行时版本。
+ *
+ * 列表里的条目都由原生侧先验证过（清单能解析、摘要格式正确、下载地址确实在发布页域名下）；
+ * 缺 `manifestUrl` 或 `manifestSha256` 的条目只能看不能装——按钮禁用并在行内说明原因，
+ * 而不是让用户点下去再吃一个报错。
+ *
+ * 不自动查询：查一次要打 GitHub API（未登录时限流很低），进页面就打属于浪费，
+ * 所以只由用户点「检查可用版本」触发。
+ */
+function RuntimeReleasesSection({ installedVersion, onInstall, listReleases }: RuntimeReleasesSectionProps) {
+  const [entries, setEntries] = useState<RuntimeReleaseEntry[] | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState(false)
+
+  const check = useCallback(() => {
+    setLoading(true)
+    setFailed(false)
+    void (async () => {
+      try {
+        setEntries((await listReleases()).entries)
+      } catch {
+        setFailed(true)
+        setEntries(null)
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [listReleases])
+
+  return (
+    <section className="settings-section" aria-labelledby="runtime-releases-title">
+      <div className="section-title">
+        <span className="section-icon"><CloudDownload size={19} /></span>
+        <div>
+          <h2 id="runtime-releases-title">{t("可从 GitHub 安装的版本")}</h2>
+          <p>{t("从本项目的 GitHub 发布页读取带运行时清单的版本。安装要下载并校验整份 rootfs，所以不会自动查询。")}</p>
+        </div>
+      </div>
+
+      <div className="settings-inline-actions">
+        <button className="button button-secondary" type="button" onClick={check} disabled={loading}>
+          {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+          {loading ? t("正在查询") : t("检查可用版本")}
+        </button>
+      </div>
+
+      {failed && <p className="harness-log-state" role="alert">{t("查不到可用版本：请检查网络后重试。")}</p>}
+
+      {!failed && entries !== null && entries.length === 0 && (
+        <p className="harness-log-state">{t("发布页上还没有带运行时清单的版本。")}</p>
+      )}
+
+      {!failed && entries !== null && entries.length > 0 && (
+        <div className="release-list">
+          {entries.map(entry => {
+            const installable = entry.manifestUrl !== undefined && entry.manifestSha256 !== undefined
+            const installed = installedVersion !== undefined && installedVersion === entry.version
+            return (
+              <div className="release-row" key={entry.version}>
+                <div className="release-copy">
+                  <strong>{installed ? `${entry.version} · ${t("已安装")}` : entry.version}</strong>
+                  <small>
+                    {entry.dshVersion === undefined
+                      ? t("清单里没有 dsh 版本：安装后以运行环境页显示的为准。")
+                      : `dsh ${entry.dshVersion}`}
+                  </small>
+                  {!installable && <small>{t("这个版本的清单没通过校验，只能查看、不能安装。")}</small>}
+                </div>
+                <div className="release-actions">
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => onInstall(entry)}
+                    disabled={!installable || installed}
+                  >
+                    <Download size={18} />
+                    {installed ? t("已安装") : t("安装这个版本")}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <p className="settings-note">{t("安装会先自动备份会话，再下载、校验并切换新运行时；这一步失败不影响当前正在使用的版本。")}</p>
+    </section>
+  )
+}
+
+/** 快照时间显示：原生给的是 ISO 8601；解析不了就原样显示，绝不显示成 Invalid Date。 */
+function formatSnapshotTime(createdAt: string): string {
+  const millis = Date.parse(createdAt)
+  return Number.isNaN(millis) ? createdAt : new Date(millis).toLocaleString()
+}
+
+interface RuntimeSnapshotsSectionProps {
+  loadSnapshots: () => Promise<RuntimeSessionSnapshotState>
+  createSnapshot: () => Promise<RuntimeSessionSnapshotState>
+  restoreSnapshot: (id: string) => Promise<RuntimeSessionSnapshotRestoreResult>
+  deleteSnapshot: (id: string) => Promise<RuntimeSessionSnapshotState>
+  notify: (message: string, tone: NoticeTone) => void
+}
+
+/**
+ * 会话备份：安装/更新运行时会自动拍一份，这里也能手动拍、恢复、删除。
+ *
+ * 为什么需要它：会话文件本身不会因为更新被删——它们按保留白名单搬进新根；真正的风险是
+ * 新镜像里的 dsh 版本与现在不同，可能读不出旧版本写的会话（会话格式版本与压缩方式都可能变）。
+ * 快照存在应用私有目录（不进系统云备份，也绝不进 rootfs），恢复是合并回填：
+ * 同名文件不覆盖，跳过的数量会如实报出来。
+ */
+function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restoreSnapshot, deleteSnapshot, notify }: RuntimeSnapshotsSectionProps) {
+  const [state, setState] = useState<RuntimeSessionSnapshotState | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [failed, setFailed] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [confirmId, setConfirmId] = useState<string | null>(null)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    setFailed(false)
+    void (async () => {
+      try {
+        setState(await loadSnapshots())
+      } catch {
+        setFailed(true)
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [loadSnapshots])
+
+  useEffect(() => { load() }, [load])
+
+  const create = (): void => {
+    if (busy !== null) return
+    setBusy('create')
+    void (async () => {
+      try {
+        setState(await createSnapshot())
+        notify(t("会话备份已创建"), 'success')
+      } catch (error) {
+        notify(errorMessage(error), 'error')
+      } finally {
+        setBusy(null)
+      }
+    })()
+  }
+
+  const restore = (id: string): void => {
+    if (busy !== null) return
+    setBusy(`restore:${id}`)
+    void (async () => {
+      try {
+        const result = await restoreSnapshot(id)
+        setState(result.state)
+        notify(
+          result.skippedFileCount > 0
+            ? t("会话已恢复：回填 {0} 个文件，跳过 {1} 个已存在的文件。", String(result.restoredFileCount), String(result.skippedFileCount))
+            : t("会话已恢复：回填 {0} 个文件。", String(result.restoredFileCount)),
+          'success',
+        )
+      } catch (error) {
+        notify(errorMessage(error), 'error')
+      } finally {
+        setBusy(null)
+      }
+    })()
+  }
+
+  const remove = (id: string): void => {
+    if (busy !== null) return
+    setBusy(`delete:${id}`)
+    void (async () => {
+      try {
+        setState(await deleteSnapshot(id))
+        setConfirmId(null)
+        notify(t("会话备份已删除"), 'success')
+      } catch (error) {
+        notify(errorMessage(error), 'error')
+      } finally {
+        setBusy(null)
+      }
+    })()
+  }
+
+  const snapshots = state?.snapshots ?? []
+
+  return (
+    <section className="settings-section" aria-labelledby="runtime-snapshots-title">
+      <div className="section-title">
+        <span className="section-icon"><Database size={19} /></span>
+        <div>
+          <h2 id="runtime-snapshots-title">{t("会话备份")}</h2>
+          <p>{t("备份是当前会话目录的一份字节副本，放在应用私有目录里：不进系统云备份，也不进运行时镜像。安装或更新运行环境前会自动拍一份。")}</p>
+        </div>
+      </div>
+
+      {loading && <p className="harness-log-state">{t("正在读取会话备份…")}</p>}
+
+      {!loading && failed && (
+        <>
+          <p className="harness-log-state" role="alert">{t("暂时读不到会话备份列表")}</p>
+          <div className="settings-inline-actions">
+            <button className="button button-secondary" type="button" onClick={load}>
+              <RefreshCw size={18} />{t("重试")}
+            </button>
+          </div>
+        </>
+      )}
+
+      {!loading && !failed && state !== null && (
+        <>
+          {snapshots.length === 0
+            ? <p className="harness-log-state">{t("还没有会话备份。可以现在拍一份，也可以在安装运行时前由应用自动拍。")}</p>
+            : (
+              <div className="release-list">
+                {snapshots.map(snapshot => (
+                  <div className="release-row" key={snapshot.id}>
+                    <div className="release-copy">
+                      <strong>{formatSnapshotTime(snapshot.createdAt)}</strong>
+                      <small>
+                        {[
+                          t("{0} 个文件", String(snapshot.fileCount)),
+                          formatBytes(snapshot.bytes),
+                          snapshot.dshVersion === undefined ? t("dsh 版本未读到") : `dsh ${snapshot.dshVersion}`,
+                          snapshot.runtimeVersion === undefined ? t("运行时版本未读到") : snapshot.runtimeVersion,
+                        ].join(' · ')}
+                      </small>
+                    </div>
+                    <div className="release-actions">
+                      <button
+                        className="button button-secondary"
+                        type="button"
+                        onClick={() => restore(snapshot.id)}
+                        disabled={busy !== null}
+                      >
+                        {busy === `restore:${snapshot.id}` ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
+                        {t("恢复")}
+                      </button>
+                      {confirmId === snapshot.id ? (
+                        <button
+                          className="button button-danger"
+                          type="button"
+                          onClick={() => remove(snapshot.id)}
+                          disabled={busy !== null}
+                        >
+                          {busy === `delete:${snapshot.id}` ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+                          {t("确认删除")}
+                        </button>
+                      ) : (
+                        <button
+                          className="button button-secondary"
+                          type="button"
+                          onClick={() => setConfirmId(snapshot.id)}
+                          disabled={busy !== null}
+                        >
+                          <Trash2 size={18} />{t("删除")}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+          <p className="settings-note">
+            {t("最多保留 {0} 份、合计 {1}：超出后从最旧的备份开始淘汰。恢复只做合并回填，同名文件不会被覆盖。", String(state.maxSnapshots), formatBytes(state.maxBytes))}
+          </p>
+
+          <div className="settings-inline-actions">
+            <button className="button button-secondary" type="button" onClick={create} disabled={busy !== null}>
+              {busy === 'create' ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
+              {t("现在备份一次")}
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+interface AppUpdateSectionProps {
+  /** 读取应用自身（APK）的更新状态：包含已安装版本、是否允许安装未知来源、有没有新版本。 */
+  loadUpdate: () => Promise<AppUpdateState>
+  downloadUpdate: () => Promise<void>
+  installUpdate: () => Promise<void>
+  /** 去系统设置里为本应用打开「安装未知应用」；返回后重新读一次状态。 */
+  openInstallSettings: () => Promise<void>
+  notify: (message: string, tone: NoticeTone) => void
+}
+
+/**
+ * 应用更新（APK 自身）：从 GitHub 发布页取最新正式构建，下载校验后交给系统安装器。
+ *
+ * 与「运行环境更新」是两层：这里换的是应用 APK（外壳与内置运行时一起变），
+ * 上面几块换的是运行时镜像。安装必须由系统安装器完成，应用只能把包递过去，
+ * 所以这里会如实说明「会跳到系统安装界面」以及「需要允许安装未知来源」。
+ */
+function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInstallSettings, notify }: AppUpdateSectionProps) {
+  const [state, setState] = useState<AppUpdateState | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [failed, setFailed] = useState(false)
+  const [busy, setBusy] = useState<'download' | 'install' | null>(null)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    setFailed(false)
+    void (async () => {
+      try {
+        setState(await loadUpdate())
+      } catch {
+        setFailed(true)
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [loadUpdate])
+
+  useEffect(() => { load() }, [load])
+
+  const runStep = (step: 'download' | 'install', action: () => Promise<void>, success: string): void => {
+    if (busy !== null) return
+    setBusy(step)
+    void (async () => {
+      try {
+        await action()
+        notify(success, 'success')
+      } catch (error) {
+        notify(errorMessage(error), 'error')
+      } finally {
+        setBusy(null)
+      }
+    })()
+  }
+
+  const available = state?.available
+
+  return (
+    <section className="settings-section" aria-labelledby="app-update-title">
+      <div className="section-title">
+        <span className="section-icon"><Smartphone size={19} /></span>
+        <div>
+          <h2 id="app-update-title">{t("应用更新")}</h2>
+          <p>{t("这里更新的是应用本身（APK），更新后会连内置运行时一起换；只换运行时请用上面的运行环境更新。")}</p>
+        </div>
+      </div>
+
+      {loading && <p className="harness-log-state">{t("正在读取应用版本…")}</p>}
+
+      {!loading && failed && (
+        <>
+          <p className="harness-log-state" role="alert">{t("暂时读不到应用更新状态：请检查网络后重试。")}</p>
+          <div className="settings-inline-actions">
+            <button className="button button-secondary" type="button" onClick={load}>
+              <RefreshCw size={18} />{t("重试")}
+            </button>
+          </div>
+        </>
+      )}
+
+      {!loading && !failed && state !== null && (
+        <>
+          <div className="settings-status-list">
+            <div className="settings-status-row">
+              <span className="status-chip">{t("当前应用")}</span>
+              <strong>{`${state.installedVersion}（${state.installedVersionCode}）`}</strong>
+            </div>
+            <div className="settings-status-row">
+              <span className={`status-chip ${available === undefined ? 'success' : 'warn'}`}>
+                {available === undefined ? t("已是最新") : t("可更新")}
+              </span>
+              <strong>{available === undefined ? t("发布页上没有更新的正式版本") : `${available.version} · ${formatBytes(available.bytes)}`}</strong>
+            </div>
+          </div>
+
+          {available !== undefined && available.notes.trim() !== '' && (
+            <p className="update-notes">{available.notes}</p>
+          )}
+
+          {state.installAllowed
+            ? (
+              <p className="settings-note">{t("下载完成后交给系统安装器安装：会跳到系统界面，需要你确认；装完应用会重启，当前对话会中断。")}</p>
+            )
+            : (
+              <>
+                <p className="settings-note">{t("系统还没有允许本应用安装其它应用。下载可以照常进行，但安装前必须先去系统设置里打开「安装未知应用」。")}</p>
+                <div className="settings-inline-actions">
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => { void (async () => { await openInstallSettings(); load() })() }}
+                  >
+                    <ExternalLink size={18} />{t("去系统设置允许安装")}
+                  </button>
+                </div>
+              </>
+            )}
+
+          <div className="settings-inline-actions">
+            <button
+              className="button button-secondary"
+              type="button"
+              onClick={() => runStep('download', downloadUpdate, t("更新包已下载并通过校验"))}
+              disabled={available === undefined || busy !== null}
+            >
+              {busy === 'download' ? <Loader2 className="spin" size={18} /> : <Download size={18} />}
+              {t("下载更新")}
+            </button>
+            <button
+              className="button button-secondary"
+              type="button"
+              onClick={() => runStep('install', installUpdate, t("已交给系统安装器"))}
+              disabled={available === undefined || busy !== null}
+            >
+              {busy === 'install' ? <Loader2 className="spin" size={18} /> : <Rocket size={18} />}
+              {t("安装更新")}
+            </button>
+            <button className="button button-secondary" type="button" onClick={load} disabled={busy !== null}>
+              <RefreshCw size={18} />{t("重新检查")}
+            </button>
+          </div>
+
+          <p className="settings-note">{t("安装更新需要先下载一次：没下载就点安装，会提示先下载。下载只走 GitHub 发布页，校验不过不会安装。")}</p>
+        </>
+      )}
+    </section>
+  )
+}
+
 interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
   /** 返回设置首页：版本管理是一级页，返回键回设置首页，而不是回「运行与后台」。 */
   onBack: () => void
+  /** 已安装运行时的版本号：给「可从 GitHub 安装的版本」列表标记「已安装」。 */
+  installedVersion?: string
+  listReleases: () => Promise<RuntimeReleaseList>
+  installRelease: (entry: RuntimeReleaseEntry) => void
+  loadSnapshots: () => Promise<RuntimeSessionSnapshotState>
+  createSnapshot: () => Promise<RuntimeSessionSnapshotState>
+  restoreSnapshot: (id: string) => Promise<RuntimeSessionSnapshotRestoreResult>
+  deleteSnapshot: (id: string) => Promise<RuntimeSessionSnapshotState>
+  loadUpdate: () => Promise<AppUpdateState>
+  downloadUpdate: () => Promise<void>
+  installUpdate: () => Promise<void>
+  openInstallSettings: () => Promise<void>
 }
 
 /**
@@ -1980,7 +2449,26 @@ interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
  * 页内不复制第二份实现：列表与两个操作仍然只有 `RuntimeVersionsPanel` 那一份，
  * 这里只补页头、返回键与状态徽标。
  */
-function RuntimeVersionsScreen({ runtime, loadVersions, switchVersion, deleteVersion, refreshRuntime, notify, onBack }: RuntimeVersionsScreenProps) {
+function RuntimeVersionsScreen({
+  runtime,
+  loadVersions,
+  switchVersion,
+  deleteVersion,
+  refreshRuntime,
+  notify,
+  onBack,
+  installedVersion,
+  listReleases,
+  installRelease,
+  loadSnapshots,
+  createSnapshot,
+  restoreSnapshot,
+  deleteSnapshot,
+  loadUpdate,
+  downloadUpdate,
+  installUpdate,
+  openInstallSettings,
+}: RuntimeVersionsScreenProps) {
   return (
     <div className="screen versions-screen">
       <div className="screen-heading management-heading">
@@ -2000,6 +2488,29 @@ function RuntimeVersionsScreen({ runtime, loadVersions, switchVersion, deleteVer
         switchVersion={switchVersion}
         deleteVersion={deleteVersion}
         refreshRuntime={refreshRuntime}
+        notify={notify}
+      />
+
+      {/* 顺序即用户关心顺序：磁盘上有哪几份 → 能装哪一版 → 会话备份 → 应用自身。 */}
+      <RuntimeReleasesSection
+        installedVersion={installedVersion}
+        onInstall={installRelease}
+        listReleases={listReleases}
+      />
+
+      <RuntimeSnapshotsSection
+        loadSnapshots={loadSnapshots}
+        createSnapshot={createSnapshot}
+        restoreSnapshot={restoreSnapshot}
+        deleteSnapshot={deleteSnapshot}
+        notify={notify}
+      />
+
+      <AppUpdateSection
+        loadUpdate={loadUpdate}
+        downloadUpdate={downloadUpdate}
+        installUpdate={installUpdate}
+        openInstallSettings={openInstallSettings}
         notify={notify}
       />
     </div>
@@ -2841,17 +3352,72 @@ interface SettingsScreenProps {
   onOpenOverlaySettings: () => void
   onOpenShizuku: () => void
   onOpenAccessibilitySettings: () => void
-  onSaveAccessibilityPackages: (packages: string[]) => void
+  /**
+   * 保存白名单。已设置验证密码时**必须**带上 `password`：
+   * 原生侧会拒绝不带密码的修改，这里也先在前端拦一道，省掉一次必然失败的桥调用。
+   */
+  onSaveAccessibilityPackages: (packages: string[], password?: string) => void
+  /** 设置（省略 currentPassword）或修改（必须带 currentPassword）白名单验证密码。 */
+  onSaveAccessibilityPassword: (password: string, currentPassword?: string) => void
+  /** 清除验证密码；必须带上当前密码。 */
+  onClearAccessibilityPassword: (currentPassword: string) => void
+  /** 忘记密码时的退路：走系统生物识别/锁屏密码重置，只清密码、保留白名单。 */
+  onResetAccessibilityPassword: () => void
   onRequestNotificationPermission: () => void
   onReloadSettings: () => void
   onSave: (settings: RuntimeSettingsUpdate) => void
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onSave, onSaveAccessibilityPackages, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
+  /**
+   * 保存白名单时要输入的验证密码。
+   *
+   * 它**只活在这个组件里**：验证密码是原生侧的事，前端既不持久化、也不放进设置草稿，
+   * 保存成功或离开这一页就清空，避免留在内存里被后续请求带上。
+   */
+  const [whitelistPassword, setWhitelistPassword] = useState('')
+  /** 「设置/修改验证密码」表单的临时内容；语义同 whitelistPassword，用完即清。 */
+  const [passwordDraft, setPasswordDraft] = useState({ current: '', next: '', confirm: '' })
+  /** 「设置/修改验证密码」表单的本地校验提示；原生侧的错误照旧走顶部提示。 */
+  const [passwordMessage, setPasswordMessage] = useState<string | null>(null)
+  /**
+   * 提交「设置/修改验证密码」表单。
+   *
+   * 两次输入不一致、或长度与字符不合规时在前端就挡下来，省掉一次必然失败的桥调用；
+   * 提交后立刻清空三个输入框：密码只是本次过桥用的临时输入，界面不留存
+   * （原生侧也只保存盐与哈希，明文不落盘）。
+   */
+  const submitAccessibilityPassword = () => {
+    if (passwordDraft.next !== passwordDraft.confirm) {
+      setPasswordMessage(t("两次输入的新密码不一致"))
+      return
+    }
+    try {
+      // 复用平台层同一套规则，避免界面和桥各写一份长度与空白判定。
+      validateAccessibilityPasswordInput(passwordDraft.next, t("新验证密码"))
+    } catch (error) {
+      setPasswordMessage(errorMessage(error))
+      return
+    }
+    setPasswordMessage(null)
+    onSaveAccessibilityPassword(passwordDraft.next, accessibility.passwordConfigured ? passwordDraft.current : undefined)
+    setPasswordDraft({ current: '', next: '', confirm: '' })
+  }
+  /** 保存白名单：把当前输入框里的验证密码一起交出去（未设置密码时传 undefined）。 */
+  const saveAccessibilityDraft = () => {
+    const packages = accessibilityDraft.split(/[\n,]/u).map(value => value.trim()).filter(Boolean)
+    const password = accessibility.passwordConfigured && whitelistPassword !== '' ? whitelistPassword : undefined
+    onSaveAccessibilityPackages([...new Set(packages)], password)
+    setWhitelistPassword('')
+  }
   useEffect(() => {
-    if (page === 'shizuku') setAccessibilityDraft(accessibility.allowedPackages.join('\n'))
+    if (page !== 'shizuku') return
+    setAccessibilityDraft(accessibility.allowedPackages.join('\n'))
+    // 每次回到这一页都从空白开始：密码是临时输入，不回填、不残留。
+    setWhitelistPassword('')
+    setPasswordDraft({ current: '', next: '', confirm: '' })
   }, [accessibility.allowedPackages, page])
   if (settingsReadStatus === 'failed') {
     return <div className="screen loading-screen">
@@ -3293,6 +3859,9 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             <p className="settings-note">
               {t("允许你列出的应用，包括厂商自带的普通应用。锁屏、系统设置及涉及权限、支付、验证码和密码的页面仍受保护；服务必须由你在系统无障碍设置中手动开启。")}
             </p>
+            <p className="settings-note">
+              {t("本应用（{0}）始终在白名单里：服务重启、连接重建都不会掉，也不需要写进下面的列表。", accessibility.alwaysAllowedPackages.length ? accessibility.alwaysAllowedPackages.join("、") : t("未配置"))}
+            </p>
             <ApplicationPicker bridge={runtimeBridge} disabled={busy !== null}
               selected={[...new Set(accessibilityDraft.split(/[\n,]/u).map(value => value.trim()).filter(Boolean))]}
               onChange={packages => setAccessibilityDraft(packages.join('\n'))} />
@@ -3307,11 +3876,22 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 aria-label={t("目标应用包名")}
               />
             </label>
+            {accessibility.passwordConfigured && (
+              <label className="field">
+                <span>{t("验证密码（修改白名单需要）")}</span>
+                <input
+                  type="password"
+                  value={whitelistPassword}
+                  onChange={event => setWhitelistPassword(event.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={64}
+                  aria-label={t("修改白名单的验证密码")}
+                />
+              </label>
+            )}
             <div className="settings-inline-actions">
-              <button className="button button-secondary" type="button" onClick={() => {
-                const packages = accessibilityDraft.split(/[\n,]/u).map(value => value.trim()).filter(Boolean)
-                onSaveAccessibilityPackages([...new Set(packages)])
-              }} disabled={busy !== null}>
+              <button className="button button-secondary" type="button" onClick={saveAccessibilityDraft} disabled={busy !== null}>
                 <Save size={18} />{t("保存白名单")}
               </button>
               <button className="button button-secondary" type="button" onClick={onOpenAccessibilitySettings} disabled={busy !== null}>
@@ -3319,6 +3899,91 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               </button>
             </div>
             <p className="settings-note">{t("当前白名单：{0}", accessibility.allowedPackages.length ? accessibility.allowedPackages.join("、") : t("未配置"))}</p>
+            <div className="settings-subsection" aria-labelledby="accessibility-password-settings">
+              <div className="section-title section-title-action">
+                <span className="section-icon"><KeyRound size={19} /></span>
+                <div>
+                  <h3 id="accessibility-password-settings">{t("白名单验证密码")}</h3>
+                  <p>{t("设置后，每次修改白名单都要输入")}</p>
+                </div>
+                <span className={`status-chip ${accessibility.passwordConfigured ? 'success' : ''}`}>
+                  {accessibility.passwordConfigured ? t("已设置") : t("未设置")}
+                </span>
+              </div>
+              <p className="settings-note">
+                {t("密码只以加盐哈希保存在设备上，不写日志、不随桥返回，界面上输入后也不保留；忘记时可用系统生物识别或锁屏密码重置，重置只清密码，白名单保留。")}
+              </p>
+              {accessibility.passwordConfigured && (
+                <label className="field">
+                  <span>{t("当前密码")}</span>
+                  <input
+                    type="password"
+                    value={passwordDraft.current}
+                    onChange={event => setPasswordDraft(draft => ({ ...draft, current: event.target.value }))}
+                    autoComplete="off"
+                    spellCheck={false}
+                    maxLength={64}
+                    aria-label={t("当前验证密码")}
+                  />
+                </label>
+              )}
+              <label className="field">
+                <span>{t("新密码（6 到 64 个字符）")}</span>
+                <input
+                  type="password"
+                  value={passwordDraft.next}
+                  onChange={event => setPasswordDraft(draft => ({ ...draft, next: event.target.value }))}
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={64}
+                  aria-label={t("新验证密码")}
+                />
+              </label>
+              <label className="field">
+                <span>{t("再输一次新密码")}</span>
+                <input
+                  type="password"
+                  value={passwordDraft.confirm}
+                  onChange={event => setPasswordDraft(draft => ({ ...draft, confirm: event.target.value }))}
+                  autoComplete="off"
+                  spellCheck={false}
+                  maxLength={64}
+                  aria-label={t("确认新验证密码")}
+                />
+              </label>
+              <div className="settings-inline-actions">
+                <button className="button button-secondary" type="button" onClick={submitAccessibilityPassword} disabled={busy !== null}>
+                  <Save size={18} />{accessibility.passwordConfigured ? t("修改密码") : t("设置密码")}
+                </button>
+                {accessibility.passwordConfigured && (
+                  <>
+                    <button
+                      className="button button-secondary"
+                      type="button"
+                      disabled={busy !== null || passwordDraft.current === ''}
+                      onClick={() => {
+                        onClearAccessibilityPassword(passwordDraft.current)
+                        setPasswordDraft({ current: '', next: '', confirm: '' })
+                      }}
+                    >
+                      <Trash2 size={18} />{t("清除密码")}
+                    </button>
+                    <button
+                      className="button button-secondary"
+                      type="button"
+                      disabled={busy !== null}
+                      onClick={() => {
+                        onResetAccessibilityPassword()
+                        setPasswordDraft({ current: '', next: '', confirm: '' })
+                      }}
+                    >
+                      <ShieldCheck size={18} />{t("用生物识别重置")}
+                    </button>
+                  </>
+                )}
+              </div>
+              {passwordMessage !== null && <p className="settings-note" role="alert">{passwordMessage}</p>}
+            </div>
           </div>
         </section>
         )}
@@ -3409,64 +4074,64 @@ interface ResetDialogProps {
 }
 
 function ResetDialog({ busy, onCancel, onConfirm }: ResetDialogProps) {
-  const [confirmation, setConfirmation] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-  const confirmed = confirmation.trim().toUpperCase() === RESET_CONFIRMATION
-
-  const submitReset = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (busy || !confirmed) return
-    inputRef.current?.blur()
-    onConfirm()
-  }
+  const [remaining, setRemaining] = useState(RESET_CONSIDERATION_SECONDS)
+  /**
+   * 只在还有剩余时间时排下一个 tick：归零后不再有定时器在后台空转。
+   * 卸载时清掉定时器，避免对话框关掉后仍然 setState。
+   */
+  useEffect(() => {
+    if (remaining <= 0) return
+    const timer = window.setTimeout(() => setRemaining(value => value - 1), 1_000)
+    return () => window.clearTimeout(timer)
+  }, [remaining])
+  const ready = remaining <= 0
 
   return (
     <div className="dialog-backdrop" role="presentation" onPointerDown={event => { if (event.target === event.currentTarget && !busy) onCancel() }}>
-      <form className="dialog" role="dialog" aria-modal="true" aria-labelledby="reset-title" onSubmit={submitReset}>
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="reset-title">
         <button className="dialog-close" type="button" aria-label={t("关闭")} onClick={onCancel} disabled={busy}><X size={19} /></button>
         <span className="dialog-danger-icon"><Trash2 size={23} /></span>
         <h2 id="reset-title">{t("重置运行环境")}</h2>
         <p>{t("已安装的 Ubuntu 运行环境会被清除，其中的用户数据（会话、密钥、插件等）一并删除，终端与 Harness 会话将立即结束。")}</p>
-        <label className="field confirmation-field">
-          <span>{t("输入 RESET_RUNTIME 确认")}</span>
-          <input
-            ref={inputRef}
-            type="text"
-            autoComplete="off"
-            autoCapitalize="characters"
-            enterKeyHint="done"
-            spellCheck={false}
-            maxLength={32}
-            value={confirmation}
-            onChange={event => setConfirmation(event.target.value)}
-          />
-        </label>
+        <p className="dialog-countdown" aria-live="polite">
+          {ready ? t("确认后立即开始重置。") : t("请先看清上面的影响：{0} 秒后可以确认。", remaining)}
+        </p>
         <div className="dialog-actions">
           <button className="button button-secondary" type="button" onClick={onCancel} disabled={busy}>{t("取消")}</button>
-          <button className="button button-danger" type="submit" disabled={busy || !confirmed}>
+          <button className="button button-danger" type="button" onClick={onConfirm} disabled={busy || !ready}>
             {busy ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
-            {busy ? t("正在重置") : t("确认重置")}
+            {busy ? t("正在重置") : ready ? t("确认重置") : t("请稍候 {0} 秒", remaining)}
           </button>
         </div>
-      </form>
+      </div>
     </div>
   )
 }
 
 interface UpdateDialogProps {
   busy: boolean
+  /**
+   * 这次要装的运行时版本号；`null` 表示用的是 APK 内置镜像（界面上的「更新运行环境」）。
+   * 只在弹窗里做一句说明，不参与任何判断。
+   */
+  version: string | null
   onCancel: () => void
   onConfirm: () => void
 }
 
-function UpdateDialog({ busy, onCancel, onConfirm }: UpdateDialogProps) {
+function UpdateDialog({ busy, version, onCancel, onConfirm }: UpdateDialogProps) {
   return (
     <div className="dialog-backdrop" role="presentation" onPointerDown={event => { if (event.target === event.currentTarget && !busy) onCancel() }}>
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="update-title">
         <button className="dialog-close" type="button" aria-label={t("关闭")} onClick={onCancel} disabled={busy}><X size={19} /></button>
         <span className="dialog-danger-icon"><RefreshCw size={23} /></span>
         <h2 id="update-title">{t("更新 Ubuntu 运行环境")}</h2>
-        <p>{t("当前 APK 内置了新版运行环境。继续后会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及在应用内安装的插件会保留，应用设置也不受影响。在终端里用 dsh plugin add 装进运行时的插件不会保留，更新后需要重装。")}</p>
+        <p>
+          {version === null
+            ? t("当前 APK 内置了新版运行环境。继续后会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及在应用内安装的插件会保留，应用设置也不受影响。在终端里用 dsh plugin add 装进运行时的插件不会保留，更新后需要重装。")
+            : t("即将安装运行时 {0}。继续后会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及在应用内安装的插件会保留，应用设置也不受影响。在终端里用 dsh plugin add 装进运行时的插件不会保留，更新后需要重装。", version)}
+        </p>
+        <p>{t("开始前会先把当前会话自动备份一份（在「版本管理 → 会话备份」里能看到）。新镜像里的 dsh 版本可能与现在不同，读不出旧会话时可以用那份备份恢复。")}</p>
         <div className="dialog-actions">
           <button className="button button-secondary" type="button" onClick={onCancel} disabled={busy}>{t("暂不更新")}</button>
           <button className="button button-danger" type="button" onClick={onConfirm} disabled={busy}>
@@ -3576,7 +4241,13 @@ export function App() {
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [resetOpen, setResetOpen] = useState(false)
-  const [updateOpen, setUpdateOpen] = useState(false)
+  /**
+   * 待用户确认的运行时安装；`null` 表示没有待确认的安装。
+   *
+   * 只在**已经装过运行时**时才需要提醒（首次安装没有会话可丢、也没有旧 dsh 的会话格式问题，
+   * 弹窗只会挡路）。`version` 只用于弹窗文案，`bundled` 决定安装成功后提示「已更新」还是「已安装」。
+   */
+  const [pendingInstall, setPendingInstall] = useState<{ source?: RuntimeSource; version: string | null; bundled: boolean } | null>(null)
   const noticeId = useRef(0)
   const busyRef = useRef<string | null>(null)
   const autoLaunchAttempted = useRef(false)
@@ -4111,13 +4782,17 @@ export function App() {
     }
   }, [notify])
 
-  const installRuntime = useCallback(() => {
+  /**
+   * 安装/更新运行时：真正干活的那一步，只在用户确认过之后调用。
+   *
+   * `autoSnapshot` 是这次安装前自动备份会话的结论，必须如实报出来：
+   * 安装本身成功不代表备份成功，反过来备份失败也不该把安装说成失败。
+   */
+  const performRuntimeInstall = useCallback((source: RuntimeSource | undefined, successMessage: string) => {
     void run('install', async () => {
+      let result: RuntimeInstallResult
       try {
-        await runtimeBridge.install(settings === null ? undefined : {
-          manifestUrl: settings.manifestUrl,
-          manifestSha256: settings.manifestSha256,
-        })
+        result = await runtimeBridge.install(source)
       } catch (error) {
         try {
           setRuntime(await runtimeBridge.getState())
@@ -4128,35 +4803,73 @@ export function App() {
       }
       const next = await runtimeBridge.getState()
       setRuntime(next)
+      setPendingInstall(null)
       autoLaunchAttempted.current = false
       setActiveView('conversation')
-    }, t("运行环境已安装"))
-  }, [run, setActiveView, settings])
-
-  const requestRuntimeUpdate = useCallback(() => {
-    if (busyRef.current === null) setUpdateOpen(true)
-  }, [])
-
-  const confirmRuntimeUpdate = useCallback(() => {
-    void run('update-runtime', async () => {
-      try {
-        // Empty source fields explicitly select the APK-bundled, digest-verified runtime.
-        await runtimeBridge.install({ manifestUrl: '', manifestSha256: '' })
-      } catch (error) {
-        try {
-          setRuntime(await runtimeBridge.getState())
-        } catch {
-          // Preserve the update failure; state refresh is best effort.
+      const outcome = result.autoSnapshot
+      if (outcome === undefined) return
+      if (outcome.status === 'created') {
+        if (outcome.evictedIds !== undefined && outcome.evictedIds.length > 0) {
+          notify(t("安装前已自动备份会话（{0}）；因超出保留上限，淘汰了 {1} 份最旧的备份。", outcome.snapshotId ?? '', String(outcome.evictedIds.length)), 'success')
+          return
         }
-        throw error
+        notify(t("安装前已自动备份会话（{0}）", outcome.snapshotId ?? ''), 'success')
+        return
       }
-      const next = await runtimeBridge.getState()
-      setRuntime(next)
-      setUpdateOpen(false)
-      autoLaunchAttempted.current = false
-      setActiveView('conversation')
-    }, t("运行环境已更新"))
-  }, [run, setActiveView])
+      if (outcome.status === 'skipped') {
+        notify(outcome.message ?? t("没有需要备份的会话数据，这次没有生成备份。"), 'info')
+        return
+      }
+      notify(t("会话自动备份失败：{0}", outcome.message ?? t("原因未提供")), 'error')
+    }, successMessage)
+  }, [notify, run, setActiveView])
+
+  /**
+   * 带提醒的安装入口：已经装过运行时先弹一次确认（讲清会丢什么、并说明会先备份会话），
+   * 没装过就直接装——首次安装没有会话可丢，弹窗只会多一步。
+   */
+  const requestRuntimeInstall = useCallback((source: RuntimeSource | undefined, version: string | null, bundled: boolean) => {
+    if (busyRef.current !== null) return
+    if (runtimeInstalled(runtime)) {
+      setPendingInstall({ source, version, bundled })
+      return
+    }
+    performRuntimeInstall(source, bundled ? t("运行环境已更新") : t("运行环境已安装"))
+  }, [performRuntimeInstall, runtime])
+
+  const installRuntime = useCallback(() => {
+    requestRuntimeInstall(settings === null ? undefined : {
+      manifestUrl: settings.manifestUrl,
+      manifestSha256: settings.manifestSha256,
+    }, null, false)
+  }, [requestRuntimeInstall, settings])
+
+  /** 「更新运行环境」按钮：用 APK 内置的、带摘要校验的镜像。 */
+  const requestRuntimeUpdate = useCallback(() => {
+    requestRuntimeInstall({ manifestUrl: '', manifestSha256: '' }, null, true)
+  }, [requestRuntimeInstall])
+
+  /** 从「可从 GitHub 安装的版本」列表里选定的版本：清单地址与摘要都已由原生验证过。 */
+  const installRuntimeRelease = useCallback((entry: RuntimeReleaseEntry) => {
+    if (entry.manifestUrl === undefined || entry.manifestSha256 === undefined) return
+    requestRuntimeInstall({ manifestUrl: entry.manifestUrl, manifestSha256: entry.manifestSha256 }, entry.version, false)
+  }, [requestRuntimeInstall])
+
+  const confirmPendingInstall = useCallback(() => {
+    if (pendingInstall === null) return
+    performRuntimeInstall(pendingInstall.source, pendingInstall.bundled ? t("运行环境已更新") : t("运行环境已安装"))
+  }, [pendingInstall, performRuntimeInstall])
+
+  /** 版本管理页读的三块数据：都只是读，失败由各自的区块自己显示。 */
+  const listRuntimeReleases = useCallback(() => runtimeBridge.listRuntimeReleases(), [])
+  const loadSessionSnapshots = useCallback(() => runtimeBridge.getRuntimeSessionSnapshotState(), [])
+  const createSessionSnapshot = useCallback(() => runtimeBridge.createRuntimeSessionSnapshot(), [])
+  const restoreSessionSnapshot = useCallback((id: string) => runtimeBridge.restoreRuntimeSessionSnapshot(id), [])
+  const deleteSessionSnapshot = useCallback((id: string) => runtimeBridge.deleteRuntimeSessionSnapshot(id), [])
+  const loadAppUpdate = useCallback(() => runtimeBridge.getAppUpdateState(), [])
+  const downloadAppUpdate = useCallback(() => runtimeBridge.downloadAppUpdate(), [])
+  const installAppUpdate = useCallback(() => runtimeBridge.installAppUpdate(), [])
+  const openAppUpdateInstallSettings = useCallback(() => runtimeBridge.openAppUpdateInstallSettings(), [])
 
   /**
    * 真正的打开流程。`skipCredentialGate` 只允许由用户显式确认的入口传入
@@ -4469,11 +5182,45 @@ export function App() {
     void run('open-accessibility-settings', () => runtimeBridge.openAccessibilitySettings())
   }, [run])
 
-  const saveAccessibilityPackages = useCallback((packages: string[]) => {
+  const saveAccessibilityPackages = useCallback((packages: string[], password?: string) => {
+    // 已设置验证密码却没交密码：在本地就挡下来，不白发一次必然失败的桥调用。
+    // 错误文案里不出现用户输入的任何内容。
+    if (accessibility.passwordConfigured && (password === undefined || password === '')) {
+      notify(t("修改无障碍白名单需要先输入验证密码"), 'error')
+      return
+    }
     void run('save-accessibility-packages', async () => {
-      const next = await runtimeBridge.setAccessibilityAutomationPackages(packages)
+      const next = await runtimeBridge.setAccessibilityAutomationPackages(packages, password)
       setAccessibility(next)
     }, t("无障碍应用白名单已保存"))
+  }, [accessibility.passwordConfigured, notify, run])
+
+  /** 设置（首次）或修改（已设置时）白名单验证密码；成功后原生返回最新状态。 */
+  const saveAccessibilityPassword = useCallback((password: string, currentPassword?: string) => {
+    void run('save-accessibility-password', async () => {
+      const next = await runtimeBridge.setAccessibilityPassword(password, currentPassword)
+      setAccessibility(next)
+    }, t("验证密码已更新"))
+  }, [run])
+
+  /** 清除验证密码：必须带当前密码，白名单保持不变。 */
+  const clearAccessibilityPassword = useCallback((currentPassword: string) => {
+    void run('clear-accessibility-password', async () => {
+      const next = await runtimeBridge.clearAccessibilityPassword(currentPassword)
+      setAccessibility(next)
+    }, t("验证密码已清除"))
+  }, [run])
+
+  /**
+   * 忘记密码时的退路：交给系统生物识别/锁屏密码确认。
+   *
+   * 只清密码、保留白名单——这条路是「用户本人证明了身份」，不是绕过保护。
+   */
+  const resetAccessibilityPassword = useCallback(() => {
+    void run('reset-accessibility-password', async () => {
+      const next = await runtimeBridge.resetAccessibilityPasswordWithBiometric()
+      setAccessibility(next)
+    }, t("验证密码已重置"))
   }, [run])
 
   /**
@@ -4662,7 +5409,28 @@ export function App() {
       case 'environment':
         return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} onShareWorkspace={shareWorkspace} onListFiles={listWorkspaceFiles} workspaceFiles={workspaceFiles} onShareFile={shareWorkspaceFile} onOpenFile={openWorkspaceFile} onDeleteFile={deleteWorkspaceFile} />
       case 'versions':
-        return <RuntimeVersionsScreen runtime={runtime} loadVersions={loadRuntimeVersions} switchVersion={switchRuntimeVersion} deleteVersion={deleteRuntimeVersion} refreshRuntime={refreshRuntimeState} notify={notify} onBack={() => backToView('settings')} />
+        return (
+        <RuntimeVersionsScreen
+          runtime={runtime}
+          loadVersions={loadRuntimeVersions}
+          switchVersion={switchRuntimeVersion}
+          deleteVersion={deleteRuntimeVersion}
+          refreshRuntime={refreshRuntimeState}
+          notify={notify}
+          onBack={() => backToView('settings')}
+          installedVersion={runtime.installedVersion}
+          listReleases={listRuntimeReleases}
+          installRelease={installRuntimeRelease}
+          loadSnapshots={loadSessionSnapshots}
+          createSnapshot={createSessionSnapshot}
+          restoreSnapshot={restoreSessionSnapshot}
+          deleteSnapshot={deleteSessionSnapshot}
+          loadUpdate={loadAppUpdate}
+          downloadUpdate={downloadAppUpdate}
+          installUpdate={installAppUpdate}
+          openInstallSettings={openAppUpdateInstallSettings}
+        />
+      )
       case 'files':
         return <FilesScreen busy={busy} filesRoot={filesRoot} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} mailbox={mailbox} mailboxDirectory={mailboxDirectory} mailboxDirectoryReadFailed={mailboxDirectoryReadFailed} mailboxReadFailed={mailboxReadFailed} storageAccess={storageAccess} storageDirectory={storageDirectory} storageDirectoryReadFailed={storageDirectoryReadFailed} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onBack={() => backToView('settings')} onCreateFilesFolder={createFilesFolder} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onOpenFilesDirectory={openFilesDirectory} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} onSelectFilesRoot={selectFilesRoot} />
       case 'settings':
@@ -4670,7 +5438,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()
@@ -4711,7 +5479,7 @@ export function App() {
       <BottomNavigation activeView={activeView} onNavigate={setActiveView} />
 
       {resetOpen && <ResetDialog busy={busy === 'reset'} onCancel={() => setResetOpen(false)} onConfirm={confirmReset} />}
-      {updateOpen && <UpdateDialog busy={busy === 'update-runtime'} onCancel={() => setUpdateOpen(false)} onConfirm={confirmRuntimeUpdate} />}
+      {pendingInstall !== null && <UpdateDialog busy={busy === 'install'} version={pendingInstall.version} onCancel={() => setPendingInstall(null)} onConfirm={confirmPendingInstall} />}
 
       {onboardingOpen && (
         <Onboarding

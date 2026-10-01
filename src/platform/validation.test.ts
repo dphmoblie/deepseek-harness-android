@@ -9,6 +9,9 @@ import {
   assertTerminalKind,
   assertTerminalSize,
   validateAllFilesAccessResult,
+  validateAppUpdateState,
+  validateAccessibilityAutomationState,
+  validateAccessibilityPasswordInput,
   validateDiagnosticLogExport,
   validateDiagnosticLogState,
   validateDiagnosticLogText,
@@ -21,7 +24,11 @@ import {
   validateMediaPermissionResult,
   validateNotificationPermissionResult,
   validateOverlayBallState,
+  validateRuntimeInstallResult,
   validateRuntimeProgress,
+  validateRuntimeReleaseList,
+  validateRuntimeSessionSnapshotRestoreResult,
+  validateRuntimeSessionSnapshotState,
   validateRuntimeSource,
   validateRuntimeState,
   validateRuntimeVersions,
@@ -36,6 +43,7 @@ import {
   validateTerminalExit,
 } from './validation'
 import {
+  ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES,
   DIAGNOSTIC_LOG_MAX_CHARS,
   DIAGNOSTIC_LOG_WINDOW_OPTIONS,
   DIAGNOSTIC_RETENTION_MAX,
@@ -877,6 +885,86 @@ describe('存储目录白名单校验', () => {
   })
 })
 
+describe('无障碍自动化状态与验证密码校验', () => {
+  const state = (overrides: Record<string, unknown> = {}) => ({
+    enabled: true,
+    allowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, 'com.example.target'],
+    alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
+    passwordConfigured: false,
+    ...overrides,
+  })
+
+  it('合法状态原样通过（自动项与密码标记都被保留）', () => {
+    const result = validateAccessibilityAutomationState(state())
+    expect(result.enabled).toBe(true)
+    expect(result.allowedPackages).toEqual([...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, 'com.example.target'])
+    expect(result.alwaysAllowedPackages).toEqual([...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES])
+    expect(result.passwordConfigured).toBe(false)
+    // 已设密码的设备：只有这个布尔为 true，返回体里没有任何密码字段。
+    expect(validateAccessibilityAutomationState(state({ passwordConfigured: true })).passwordConfigured).toBe(true)
+    expect(Object.keys(validateAccessibilityAutomationState(state({ passwordConfigured: true }))).sort())
+      .toEqual(['allowedPackages', 'alwaysAllowedPackages', 'enabled', 'passwordConfigured'])
+  })
+
+  it('缺 alwaysAllowedPackages 或 passwordConfigured 时抛错', () => {
+    expect(() => validateAccessibilityAutomationState({
+      enabled: false,
+      allowedPackages: [],
+      passwordConfigured: false,
+    })).toThrow('无障碍自动白名单格式无效')
+    expect(() => validateAccessibilityAutomationState({
+      enabled: false,
+      allowedPackages: [],
+      alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
+    })).toThrow('无障碍验证密码状态格式无效')
+    expect(() => validateAccessibilityAutomationState(state({ passwordConfigured: 'true' })))
+      .toThrow('无障碍验证密码状态格式无效')
+    expect(() => validateAccessibilityAutomationState(state({ alwaysAllowedPackages: 'io.deepseekharness.mobile' })))
+      .toThrow('无障碍自动白名单格式无效')
+  })
+
+  it('自动白名单拒绝空串、超 16 条与非数组', () => {
+    expect(() => validateAccessibilityAutomationState(state({ alwaysAllowedPackages: [''] })))
+      .toThrow('无障碍白名单第 1 项无效')
+    expect(() => validateAccessibilityAutomationState(state({ alwaysAllowedPackages: ['com.example.'] })))
+      .toThrow('无障碍白名单第 1 项无效')
+    expect(() => validateAccessibilityAutomationState(state({ alwaysAllowedPackages: [' com.example.app'] })))
+      .toThrow('无障碍白名单第 1 项无效')
+    expect(() => validateAccessibilityAutomationState(state({ alwaysAllowedPackages: null })))
+      .toThrow('无障碍自动白名单格式无效')
+    const seventeen = Array.from({ length: 17 }, (_, index) => `com.example.app${index}`)
+    expect(() => validateAccessibilityAutomationState(state({ alwaysAllowedPackages: seventeen })))
+      .toThrow('无障碍自动白名单最多 16 项')
+    expect(() => validateAccessibilityAutomationState(state({ alwaysAllowedPackages: ['com.example.app', 'com.example.app'] })))
+      .toThrow('无障碍自动白名单包含重复项')
+    // 16 条正好是上限，必须放过。
+    expect(validateAccessibilityAutomationState(state({ alwaysAllowedPackages: seventeen.slice(0, 16) })).alwaysAllowedPackages)
+      .toHaveLength(16)
+  })
+
+  it('验证密码输入：5 种边界拒绝、6 位与 64 位通过', () => {
+    expect(validateAccessibilityPasswordInput('123456', '验证密码')).toBe('123456')
+    expect(validateAccessibilityPasswordInput('a'.repeat(64), '验证密码')).toHaveLength(64)
+    // 太短 / 太长。
+    expect(() => validateAccessibilityPasswordInput('12345', '验证密码')).toThrow('验证密码需要 6 到 64 个字符')
+    expect(() => validateAccessibilityPasswordInput('a'.repeat(65), '验证密码')).toThrow('验证密码需要 6 到 64 个字符')
+    // 全空白 / 首尾带空白 / 含控制字符。
+    expect(() => validateAccessibilityPasswordInput('      ', '验证密码')).toThrow('验证密码不能全是空白')
+    expect(() => validateAccessibilityPasswordInput(' 123456', '验证密码')).toThrow('验证密码首尾不能有空白')
+    expect(() => validateAccessibilityPasswordInput('12345\n6', '验证密码')).toThrow('验证密码包含不可用字符')
+    expect(() => validateAccessibilityPasswordInput('12345\u007f6', '验证密码')).toThrow('验证密码包含不可用字符')
+    // 类型不符与错误文案：文案里不出现用户输入的那串字符。
+    expect(() => validateAccessibilityPasswordInput(123456, '验证密码')).toThrow('验证密码格式无效')
+    expect(() => validateAccessibilityPasswordInput(undefined, '验证密码')).toThrow('验证密码格式无效')
+    try {
+      validateAccessibilityPasswordInput(' 123456', '验证密码')
+      throw new Error('应当抛错')
+    } catch (error) {
+      expect((error as Error).message).not.toContain('123456')
+    }
+  })
+})
+
 describe('运行时版本校验', () => {
   const runtimeId = 'ubuntu-24.04-arm64-deepseek-harness'
   const state = (overrides: Record<string, unknown> = {}) => ({
@@ -925,6 +1013,416 @@ describe('运行时版本校验', () => {
     expect(assertRuntimeVersionTarget('previous')).toBe('previous')
     for (const target of ['current', 'bundled', 'retained', '', null, 7]) {
       expect(() => assertRuntimeVersionTarget(target), String(target)).toThrow('运行时版本操作目标无效')
+    }
+  })
+})
+
+describe('运行时可用版本校验', () => {
+  const sha256 = 'a'.repeat(64)
+  const manifestUrl = 'https://example.com/runtime.json'
+  const list = (overrides: Record<string, unknown> = {}) => ({
+    entries: [
+      { version: '0.2.0-mobile-308', dshVersion: '0.1.5-rc.2', manifestUrl, manifestSha256: sha256 },
+      { version: '0.1.9-mobile-300' },
+    ],
+    ...overrides,
+  })
+
+  it('接受带清单与只可展示的条目，并允许缺少内置 dsh 版本', () => {
+    const parsed = validateRuntimeReleaseList(list())
+
+    expect(parsed.entries).toHaveLength(2)
+    expect(parsed.entries[0]).toEqual({
+      version: '0.2.0-mobile-308',
+      dshVersion: '0.1.5-rc.2',
+      manifestUrl,
+      manifestSha256: sha256,
+    })
+    // 没有清单的版本只可展示：解析结果里不该凭空长出地址与摘要，也不该多出 dshVersion。
+    expect(parsed.entries[1]).toEqual({ version: '0.1.9-mobile-300' })
+  })
+
+  it('清单地址与摘要必须同时出现或同时缺失', () => {
+    expect(() => validateRuntimeReleaseList(list({ entries: [{ version: '0.2.0', manifestUrl }] })))
+      .toThrow('运行时版本清单地址与 SHA-256 必须同时出现或同时缺失')
+    expect(() => validateRuntimeReleaseList(list({ entries: [{ version: '0.2.0', manifestSha256: sha256 }] })))
+      .toThrow('运行时版本清单地址与 SHA-256 必须同时出现或同时缺失')
+  })
+
+  it('清单地址只认 https，长度上限 1024', () => {
+    const base = { version: '0.2.0', manifestSha256: sha256 }
+    for (const url of ['http://example.com/runtime.json', 'example.com/runtime.json', 'ftp://example.com/runtime.json']) {
+      expect(() => validateRuntimeReleaseList(list({ entries: [{ ...base, manifestUrl: url }] })), url)
+        .toThrow('运行时版本清单地址格式无效')
+    }
+    // 正好 1024 字符要放过，多一个字符就拒绝。
+    const prefix = 'https://example.com/'
+    expect(validateRuntimeReleaseList(list({ entries: [{ ...base, manifestUrl: prefix + 'a'.repeat(1024 - prefix.length) }] })).entries)
+      .toHaveLength(1)
+    expect(() => validateRuntimeReleaseList(list({ entries: [{ ...base, manifestUrl: prefix + 'a'.repeat(1025 - prefix.length) }] })))
+      .toThrow('运行时版本清单地址格式无效')
+    expect(() => validateRuntimeReleaseList(list({ entries: [{ ...base, manifestUrl: 7 }] })))
+      .toThrow('运行时版本清单地址格式无效')
+  })
+
+  it('清单摘要必须是 64 位小写十六进制', () => {
+    const base = { version: '0.2.0', manifestUrl }
+    for (const value of [sha256.slice(0, 63), sha256.toUpperCase(), `${sha256}a`, 'A'.repeat(64), '', 7, null]) {
+      expect(() => validateRuntimeReleaseList(list({ entries: [{ ...base, manifestSha256: value }] })), String(value))
+        .toThrow('运行时版本清单 SHA-256 必须是 64 位小写十六进制')
+    }
+  })
+
+  it('版本号与内置 dsh 版本都走标识符规则', () => {
+    expect(() => validateRuntimeReleaseList(list({ entries: [{ version: '0.2.0 mobile 308' }] })))
+      .toThrow('运行时可用版本号格式无效')
+    expect(() => validateRuntimeReleaseList(list({ entries: [{ version: '' }] })))
+      .toThrow('运行时可用版本号格式无效')
+    expect(() => validateRuntimeReleaseList(list({ entries: [{ version: `v${'1'.repeat(96)}` }] })))
+      .toThrow('运行时可用版本号格式无效')
+    expect(() => validateRuntimeReleaseList(list({ entries: [{ version: '0.2.0', dshVersion: '0.1.5 rc.2' }] })))
+      .toThrow('运行时内置 dsh 版本格式无效')
+    expect(() => validateRuntimeReleaseList(list({ entries: [{ version: '0.2.0', dshVersion: 7 }] })))
+      .toThrow('运行时内置 dsh 版本格式无效')
+  })
+
+  it('列表最多 40 条，且拒绝类型不符的整体载荷', () => {
+    const entry = { version: '0.2.0-mobile-308' }
+    expect(validateRuntimeReleaseList(list({ entries: new Array(40).fill(entry) })).entries).toHaveLength(40)
+    expect(() => validateRuntimeReleaseList(list({ entries: new Array(41).fill(entry) })))
+      .toThrow('运行时可用版本列表格式无效')
+    expect(() => validateRuntimeReleaseList(null)).toThrow('运行时可用版本状态格式无效')
+    expect(() => validateRuntimeReleaseList([])).toThrow('运行时可用版本状态格式无效')
+    expect(() => validateRuntimeReleaseList({})).toThrow('运行时可用版本列表格式无效')
+    expect(() => validateRuntimeReleaseList(list({ entries: 'two' }))).toThrow('运行时可用版本列表格式无效')
+    expect(() => validateRuntimeReleaseList(list({ entries: [null] }))).toThrow('运行时可用版本条目格式无效')
+  })
+})
+
+describe('应用更新状态校验', () => {
+  const sha256 = 'b'.repeat(64)
+  const state = (overrides: Record<string, unknown> = {}) => ({
+    installedVersion: '0.2.0',
+    installedVersionCode: 22,
+    installAllowed: false,
+    ...overrides,
+  })
+  const release = (overrides: Record<string, unknown> = {}) => ({
+    version: '0.3.0',
+    bytes: 48 * 1024 * 1024,
+    sha256,
+    notes: '修复窄屏下的按钮遮挡。',
+    ...overrides,
+  })
+
+  it('无可用更新时只回已安装信息，不凭空造一条 available', () => {
+    expect(validateAppUpdateState(state())).toEqual({
+      installedVersion: '0.2.0',
+      installedVersionCode: 22,
+      installAllowed: false,
+    })
+    expect(validateAppUpdateState(state({ installAllowed: true })).installAllowed).toBe(true)
+    // 版本代码边界：0 与上限本身都必须放过。
+    expect(validateAppUpdateState(state({ installedVersionCode: 0 })).installedVersionCode).toBe(0)
+    expect(validateAppUpdateState(state({ installedVersionCode: 2_100_000_000 })).installedVersionCode).toBe(2_100_000_000)
+  })
+
+  it('有可用更新时逐字段校验并原样保留', () => {
+    const parsed = validateAppUpdateState(state({ available: release() }))
+
+    expect(parsed.available).toEqual({ version: '0.3.0', bytes: 48 * 1024 * 1024, sha256, notes: '修复窄屏下的按钮遮挡。' })
+    // 体积上限 4 GiB 本身要放过，多 1 字节就拒绝。
+    expect(validateAppUpdateState(state({ available: release({ bytes: 4_294_967_296 }) })).available?.bytes).toBe(4_294_967_296)
+    expect(() => validateAppUpdateState(state({ available: release({ bytes: 4_294_967_297 }) })))
+      .toThrow('应用更新包大小格式无效')
+    expect(() => validateAppUpdateState(state({ available: release({ bytes: 0 }) })))
+      .toThrow('应用更新包大小格式无效')
+    expect(() => validateAppUpdateState(state({ available: release({ bytes: 1.5 }) })))
+      .toThrow('应用更新包大小格式无效')
+  })
+
+  it('安装权限状态缺失或非布尔一律拒绝', () => {
+    for (const value of [undefined, null, 'true', 1, 0]) {
+      expect(() => validateAppUpdateState(state({ installAllowed: value })), String(value))
+        .toThrow('应用更新安装权限状态无效')
+    }
+  })
+
+  it('已安装版本与版本代码走同一套规则', () => {
+    for (const value of ['', 'v 1', 7, undefined, `v${'1'.repeat(96)}`]) {
+      expect(() => validateAppUpdateState(state({ installedVersion: value })), String(value))
+        .toThrow('已安装应用版本号格式无效')
+    }
+    for (const value of [-1, 2_100_000_001, 1.5, '22', null, Number.MAX_SAFE_INTEGER]) {
+      expect(() => validateAppUpdateState(state({ installedVersionCode: value })), String(value))
+        .toThrow('已安装应用版本代码格式无效')
+    }
+  })
+
+  it('更新包的摘要与说明按契约校验，说明超长直接报错不截断', () => {
+    expect(() => validateAppUpdateState(state({ available: release({ sha256: sha256.toUpperCase() }) })))
+      .toThrow('应用更新包 SHA-256 必须是 64 位小写十六进制')
+    expect(() => validateAppUpdateState(state({ available: release({ sha256: sha256.slice(0, 63) }) })))
+      .toThrow('应用更新包 SHA-256 必须是 64 位小写十六进制')
+    expect(() => validateAppUpdateState(state({ available: release({ notes: 7 }) })))
+      .toThrow('应用更新说明格式无效')
+    // 正好 4000 字符必须原样保留（截断会改变用户读到的更新内容）。
+    expect(validateAppUpdateState(state({ available: release({ notes: '说'.repeat(4000) }) })).available?.notes)
+      .toHaveLength(4000)
+    expect(() => validateAppUpdateState(state({ available: release({ notes: '说'.repeat(4001) }) })))
+      .toThrow('应用更新说明长度无效')
+    expect(() => validateAppUpdateState(state({ available: release({ version: 'v 3' }) })))
+      .toThrow('应用更新版本号格式无效')
+  })
+
+  it('拒绝类型不符的整体载荷与可用更新', () => {
+    expect(() => validateAppUpdateState(null)).toThrow('应用更新状态格式无效')
+    expect(() => validateAppUpdateState('0.2.0')).toThrow('应用更新状态格式无效')
+    expect(() => validateAppUpdateState(state({ available: null }))).toThrow('可用应用更新格式无效')
+    expect(() => validateAppUpdateState(state({ available: [] }))).toThrow('可用应用更新格式无效')
+  })
+})
+
+describe('运行时会话快照校验', () => {
+  // 下面这几个载荷是原生侧**真跑出来**的原文，逐字照抄：手写近似值会让校验与真实契约悄悄漂移。
+  const liveSnapshotState = {
+    maxSnapshots: 3,
+    maxBytes: 536870912,
+    totalBytes: 8,
+    snapshots: [
+      {
+        id: 'snap-1700000001000-00000002',
+        createdAt: '2023-11-14T22:13:21Z',
+        bytes: 4,
+        fileCount: 1,
+        dshVersion: '0.2.0',
+        runtimeVersion: '2026.01.01',
+      },
+      {
+        id: 'snap-1700000000000-00000001',
+        createdAt: '2023-11-14T22:13:20Z',
+        bytes: 4,
+        fileCount: 1,
+        dshVersion: '0.2.0',
+        runtimeVersion: '2026.01.01',
+      },
+    ],
+  }
+  const state = (overrides: Record<string, unknown> = {}) => ({ ...liveSnapshotState, ...overrides })
+  const snapshot = (overrides: Record<string, unknown> = {}) => ({ ...liveSnapshotState.snapshots[0], ...overrides })
+  const restore = (overrides: Record<string, unknown> = {}) => ({
+    restoredFileCount: 0,
+    skippedFileCount: 1,
+    state: liveSnapshotState,
+    ...overrides,
+  })
+
+  it('接受原生侧真跑出来的总览，新的在前且字段逐字保留', () => {
+    const parsed = validateRuntimeSessionSnapshotState(liveSnapshotState)
+
+    expect(parsed).toEqual(liveSnapshotState)
+    expect(parsed.snapshots.map(item => item.id)).toEqual([
+      'snap-1700000001000-00000002',
+      'snap-1700000000000-00000001',
+    ])
+  })
+
+  it('上限跟着载荷走：原生今天给 3，改天给 4 也不算非法', () => {
+    const four = {
+      maxSnapshots: 4,
+      maxBytes: 536870912,
+      totalBytes: 8,
+      snapshots: [
+        { ...liveSnapshotState.snapshots[0], id: 'snap-1700000003000-00000004' },
+        { ...liveSnapshotState.snapshots[0], id: 'snap-1700000002000-00000003' },
+        liveSnapshotState.snapshots[0],
+        liveSnapshotState.snapshots[1],
+      ],
+    }
+    expect(validateRuntimeSessionSnapshotState(four).snapshots).toHaveLength(4)
+    // 但载荷自己说只能有 3 份、却回了 4 条，就是自相矛盾。
+    expect(() => validateRuntimeSessionSnapshotState({ ...four, maxSnapshots: 3 }))
+      .toThrow('运行时会话快照列表格式无效')
+  })
+
+  it('上限字段只接受正整数，且有防御性天花板', () => {
+    for (const value of [0, -1, 1.5, '3', null, undefined]) {
+      expect(() => validateRuntimeSessionSnapshotState(state({ maxSnapshots: value })), String(value))
+        .toThrow('会话快照份数上限无效')
+      expect(() => validateRuntimeSessionSnapshotState(state({ maxBytes: value })), String(value))
+        .toThrow('会话快照空间上限无效')
+    }
+    expect(validateRuntimeSessionSnapshotState(state({ maxSnapshots: 32 })).maxSnapshots).toBe(32)
+    expect(() => validateRuntimeSessionSnapshotState(state({ maxSnapshots: 33 }))).toThrow('会话快照份数上限无效')
+    expect(validateRuntimeSessionSnapshotState(state({ maxBytes: 512 * 1024 * 1024 })).maxBytes)
+      .toBe(512 * 1024 * 1024)
+    expect(() => validateRuntimeSessionSnapshotState(state({ maxBytes: 512 * 1024 * 1024 + 1 })))
+      .toThrow('会话快照空间上限无效')
+  })
+
+  it('已用空间必须在 0 与空间上限之间', () => {
+    expect(validateRuntimeSessionSnapshotState(state({ totalBytes: 0 })).totalBytes).toBe(0)
+    expect(validateRuntimeSessionSnapshotState(state({ totalBytes: 536870912 })).totalBytes).toBe(536870912)
+    for (const value of [-1, 536870913, 1.5, '8', null]) {
+      expect(() => validateRuntimeSessionSnapshotState(state({ totalBytes: value })), String(value))
+        .toThrow('会话快照已用空间无效')
+    }
+  })
+
+  it('快照条目：标识宽松、时间可解析、字节与文件数有界', () => {
+    // 宽松形态：序号位数不写死，原生改格式不该把界面打死。
+    for (const id of ['snap-1700000001000-00000002', 'snap-1700000001-a', 'snap-1700000001000-0A1b2C3d']) {
+      expect(validateRuntimeSessionSnapshotState(state({ snapshots: [snapshot({ id })] })).snapshots[0].id).toBe(id)
+    }
+    for (const id of ['', 'snap-1-1', 'snap-1700000001000-', 'snap-1700000001000-00000002/x', 'snap-1700000001000-0000 0002', 7, null]) {
+      expect(() => validateRuntimeSessionSnapshotState(state({ snapshots: [snapshot({ id })] })), String(id))
+        .toThrow('运行时会话快照标识格式无效')
+    }
+
+    for (const createdAt of ['', '昨天', '1700000001000', 7, null]) {
+      expect(() => validateRuntimeSessionSnapshotState(state({ snapshots: [snapshot({ createdAt })] })), String(createdAt))
+        .toThrow('运行时会话快照创建时间格式无效')
+    }
+    // 只要 Date.parse 认得就行：带偏移量的写法同样合法。
+    expect(validateRuntimeSessionSnapshotState(state({ snapshots: [snapshot({ createdAt: '2023-11-14T22:13:21+08:00' })] })).snapshots)
+      .toHaveLength(1)
+
+    for (const bytes of [0, -1, 1.5, 536870913, null]) {
+      expect(() => validateRuntimeSessionSnapshotState(state({ snapshots: [snapshot({ bytes })] })), String(bytes))
+        .toThrow('运行时会话快照大小格式无效')
+    }
+    for (const fileCount of [-1, 1.5, '1', null]) {
+      expect(() => validateRuntimeSessionSnapshotState(state({ snapshots: [snapshot({ fileCount })] })), String(fileCount))
+        .toThrow('运行时会话快照文件数格式无效')
+    }
+    for (const key of ['dshVersion', 'runtimeVersion']) {
+      expect(() => validateRuntimeSessionSnapshotState(state({ snapshots: [snapshot({ [key]: '0.2.0 beta' })] })))
+        .toThrow('格式无效')
+    }
+  })
+
+  it('缺失的可选版本字段不产出空键，未知键一律忽略', () => {
+    const parsed = validateRuntimeSessionSnapshotState(state({
+      snapshots: [{ id: 'snap-1700000001000-00000002', createdAt: '2023-11-14T22:13:21Z', bytes: 4, fileCount: 1 }],
+      // 原生侧以后加字段不该让整块界面失败（`evictedIds` 就是这么加进来的）。
+      directory: '/data/user/0/io.deepseekharness.mobile/files/snapshots',
+    }))
+
+    expect(parsed).toEqual({
+      maxSnapshots: 3,
+      maxBytes: 536870912,
+      totalBytes: 8,
+      snapshots: [{ id: 'snap-1700000001000-00000002', createdAt: '2023-11-14T22:13:21Z', bytes: 4, fileCount: 1 }],
+    })
+    // 路径一类不该过桥的字段不许被带进来。
+    expect('directory' in parsed).toBe(false)
+    expect('dshVersion' in parsed.snapshots[0]).toBe(false)
+  })
+
+  it('拒绝类型不符的总览与快照条目', () => {
+    for (const value of [null, undefined, '{}', [], 7]) {
+      expect(() => validateRuntimeSessionSnapshotState(value), String(value)).toThrow('运行时会话快照状态格式无效')
+    }
+    expect(() => validateRuntimeSessionSnapshotState(state({ snapshots: 'none' })))
+      .toThrow('运行时会话快照列表格式无效')
+    expect(() => validateRuntimeSessionSnapshotState(state({ snapshots: [null] })))
+      .toThrow('运行时会话快照条目格式无效')
+  })
+
+  it('恢复结果：两个计数都是非负整数，内嵌总览走同一套校验', () => {
+    const parsed = validateRuntimeSessionSnapshotRestoreResult(restore())
+
+    expect(parsed.restoredFileCount).toBe(0)
+    // 同名文件被跳过必须如实计数：只报「恢复成功」会把跳过的文件藏起来。
+    expect(parsed.skippedFileCount).toBe(1)
+    expect(parsed.state).toEqual(liveSnapshotState)
+
+    for (const key of ['restoredFileCount', 'skippedFileCount']) {
+      for (const value of [-1, 1.5, '0', null, undefined]) {
+        expect(() => validateRuntimeSessionSnapshotRestoreResult(restore({ [key]: value })), `${key}=${String(value)}`)
+          .toThrow(key === 'restoredFileCount' ? '运行时会话快照恢复文件数格式无效' : '运行时会话快照跳过文件数格式无效')
+      }
+    }
+    expect(() => validateRuntimeSessionSnapshotRestoreResult(restore({ state: { ...liveSnapshotState, totalBytes: 536870913 } })))
+      .toThrow('会话快照已用空间无效')
+    expect(() => validateRuntimeSessionSnapshotRestoreResult(null)).toThrow('运行时会话快照恢复结果格式无效')
+  })
+
+  it('安装结果：没有 autoSnapshot 的三个取值都合法，一律归一化为空对象', () => {
+    for (const value of [undefined, null, {}]) {
+      expect(validateRuntimeInstallResult(value)).toEqual({})
+    }
+    // 旧版原生桥接什么都不返回：结果对象里不该凭空长出 autoSnapshot。
+    expect('autoSnapshot' in validateRuntimeInstallResult(undefined)).toBe(false)
+    // 未知键忽略，但也不带进结果。
+    expect(validateRuntimeInstallResult({ installedBytes: 7 })).toEqual({})
+    expect(() => validateRuntimeInstallResult('ok')).toThrow('运行时安装结果格式无效')
+    expect(() => validateRuntimeInstallResult([])).toThrow('运行时安装结果格式无效')
+  })
+
+  it('自动快照结论：created 必须带标识，skipped/failed 必须带错误码与说明', () => {
+    // 原生侧真跑出来的三条载荷。
+    expect(validateRuntimeInstallResult({
+      autoSnapshot: { status: 'created', snapshotId: 'snap-1700000000000-00000001' },
+    })).toEqual({ autoSnapshot: { status: 'created', snapshotId: 'snap-1700000000000-00000001' } })
+
+    const skipped = { status: 'skipped', code: 'RUNTIME_SNAPSHOT_EMPTY', message: '当前没有可备份的会话数据，未生成快照' }
+    expect(validateRuntimeInstallResult({ autoSnapshot: skipped })).toEqual({ autoSnapshot: skipped })
+
+    const failed = { status: 'failed', code: 'RUNTIME_SNAPSHOT_FAILED', message: '磁盘空间不足，无法生成会话快照' }
+    expect(validateRuntimeInstallResult({ autoSnapshot: failed })).toEqual({ autoSnapshot: failed })
+
+    expect(() => validateRuntimeInstallResult({ autoSnapshot: { status: 'created' } }))
+      .toThrow('运行时自动快照结论缺少快照标识')
+    expect(() => validateRuntimeInstallResult({ autoSnapshot: { status: 'created', snapshotId: 'snap-1-1' } }))
+      .toThrow('运行时会话快照标识格式无效')
+    for (const autoSnapshot of [
+      { status: 'skipped', message: '没有数据' },
+      { status: 'failed', message: '出错了' },
+      { status: 'skipped', code: '', message: '没有数据' },
+    ]) {
+      expect(() => validateRuntimeInstallResult({ autoSnapshot })).toThrow('运行时自动快照结论缺少错误码')
+    }
+    for (const autoSnapshot of [
+      { status: 'skipped', code: 'RUNTIME_SNAPSHOT_EMPTY' },
+      { status: 'failed', code: 'RUNTIME_SNAPSHOT_FAILED', message: '   ' },
+      { status: 'failed', code: 'RUNTIME_SNAPSHOT_FAILED', message: 7 },
+    ]) {
+      expect(() => validateRuntimeInstallResult({ autoSnapshot })).toThrow('运行时自动快照结论缺少说明')
+    }
+    for (const status of ['ok', '', 'CREATED', null, undefined]) {
+      expect(() => validateRuntimeInstallResult({ autoSnapshot: { status, snapshotId: 'snap-1700000000000-00000001' } }), String(status))
+        .toThrow('运行时自动快照结论状态无效')
+    }
+    expect(() => validateRuntimeInstallResult({ autoSnapshot: null })).toThrow('运行时自动快照结论格式无效')
+  })
+
+  it('evictedIds 是契约之外的附加字段：合法时保留，非法时报错', () => {
+    const created = {
+      status: 'created',
+      snapshotId: 'snap-1700000002000-00000003',
+      evictedIds: ['snap-1700000000000-00000001'],
+    }
+    expect(validateRuntimeInstallResult({ autoSnapshot: created })).toEqual({ autoSnapshot: created })
+    // 没有淘汰时原生侧不写这个键：结果里也不该多出空数组。
+    expect(validateRuntimeInstallResult({
+      autoSnapshot: { status: 'created', snapshotId: 'snap-1700000002000-00000003', evictedIds: [] },
+    })).toEqual({ autoSnapshot: { status: 'created', snapshotId: 'snap-1700000002000-00000003', evictedIds: [] } })
+    expect(validateRuntimeInstallResult({
+      autoSnapshot: { status: 'skipped', code: 'RUNTIME_SNAPSHOT_EMPTY', message: '没有数据', evictedIds: ['snap-1700000000000-00000001'] },
+    }).autoSnapshot?.evictedIds).toEqual(['snap-1700000000000-00000001'])
+
+    // 整个字段不是数组：这是「淘汰列表」本身不合法。
+    for (const evictedIds of ['snap-1700000000000-00000001', {}, null]) {
+      expect(() => validateRuntimeInstallResult({
+        autoSnapshot: { status: 'created', snapshotId: 'snap-1700000002000-00000003', evictedIds },
+      }), JSON.stringify(evictedIds)).toThrow('运行时自动快照淘汰列表格式无效')
+    }
+    // 是数组但元素不是合法标识：报的是标识本身的形态问题，便于定位到具体哪一项。
+    for (const evictedIds of [['nope'], [7]]) {
+      expect(() => validateRuntimeInstallResult({
+        autoSnapshot: { status: 'created', snapshotId: 'snap-1700000002000-00000003', evictedIds },
+      }), JSON.stringify(evictedIds)).toThrow('运行时会话快照标识格式无效')
     }
   })
 })

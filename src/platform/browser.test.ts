@@ -145,3 +145,107 @@ describe('browser settings bridge', () => {
     expect(() => bridge.removeStorageDirectory('/data/data/x')).toThrow('存储目录路径格式无效')
   })
 })
+
+describe('浏览器桥的无障碍白名单与验证密码', () => {
+  it('白名单永远带上自动项，且按白名单上限拒绝超长输入', async () => {
+    const bridge = createBrowserBridge()
+
+    const initial = await bridge.getAccessibilityAutomationState()
+    expect(initial.alwaysAllowedPackages).toEqual(['io.deepseekharness.mobile'])
+    expect(initial.allowedPackages).toEqual([])
+    expect(initial.passwordConfigured).toBe(false)
+
+    const saved = await bridge.setAccessibilityAutomationPackages(['com.example.target', 'io.deepseekharness.mobile'])
+    // 用户即使没传自动项，结果里也必须还有它，且不重复。
+    expect(saved.allowedPackages).toEqual(['io.deepseekharness.mobile', 'com.example.target'])
+    expect(saved.alwaysAllowedPackages).toEqual(['io.deepseekharness.mobile'])
+
+    const seventeen = Array.from({ length: 17 }, (_, index) => `com.example.app${index}`)
+    await expect(bridge.setAccessibilityAutomationPackages(seventeen)).rejects.toThrow('无障碍白名单格式无效')
+    await expect(bridge.setAccessibilityAutomationPackages(['not a package'])).rejects.toThrow('无障碍白名单格式无效')
+  })
+
+  it('设过密码后改白名单必须带对密码；密码错误时明确拒绝', async () => {
+    const bridge = createBrowserBridge()
+    await bridge.setAccessibilityPassword('123456')
+
+    await expect(bridge.setAccessibilityAutomationPackages(['com.example.target'])).rejects.toThrow('需要验证密码')
+    await expect(bridge.setAccessibilityAutomationPackages(['com.example.target'], '654321')).rejects.toThrow('验证密码不正确')
+    expect((await bridge.getAccessibilityAutomationState()).allowedPackages).toEqual([])
+
+    const saved = await bridge.setAccessibilityAutomationPackages(['com.example.target'], '123456')
+    expect(saved.allowedPackages).toEqual(['io.deepseekharness.mobile', 'com.example.target'])
+    expect(saved.passwordConfigured).toBe(true)
+  })
+
+  it('清除密码必须带当前密码，且白名单原样保留', async () => {
+    const bridge = createBrowserBridge()
+    await bridge.setAccessibilityPassword('123456')
+    await bridge.setAccessibilityAutomationPackages(['com.example.target'], '123456')
+
+    await expect(bridge.clearAccessibilityPassword('654321')).rejects.toThrow('当前验证密码不正确')
+    const cleared = await bridge.clearAccessibilityPassword('123456')
+    expect(cleared.passwordConfigured).toBe(false)
+    // 清掉的是密码，不是用户配好的目标清单。
+    expect(cleared.allowedPackages).toEqual(['io.deepseekharness.mobile', 'com.example.target'])
+    // 密码已清：此后改白名单不再需要密码。
+    await expect(bridge.setAccessibilityAutomationPackages(['com.example.target'])).resolves.toBeTruthy()
+  })
+
+  it('未设置密码时不能清；浏览器没有系统生物识别，如实拒绝', async () => {
+    const bridge = createBrowserBridge()
+
+    await expect(bridge.clearAccessibilityPassword('123456')).rejects.toThrow('尚未设置验证密码')
+    // 首次设置不需要当前密码：多带的 currentPassword 也不参与比对。
+    expect((await bridge.setAccessibilityPassword('123456', '654321')).passwordConfigured).toBe(true)
+    // 已设置过之后再改，就必须带对了。
+    await expect(bridge.setAccessibilityPassword('654321')).rejects.toThrow('需要当前验证密码')
+    // 浏览器预览里没有指纹/锁屏密码可验：不谎报「重置成功」。
+    await expect(bridge.resetAccessibilityPasswordWithBiometric()).rejects.toThrow('浏览器预览不支持系统生物识别验证')
+  })
+})
+
+describe('浏览器桥的更新渠道与应用自更新', () => {
+  it('没有更新渠道：可用版本列表与应用更新状态都如实拒绝，不编造版本', async () => {
+    const bridge = createBrowserBridge()
+
+    await expect(bridge.listRuntimeReleases()).rejects.toThrow('浏览器模式下没有更新渠道')
+    await expect(bridge.getAppUpdateState()).rejects.toThrow('浏览器模式下没有应用更新')
+  })
+
+  it('没有可下载安装的 APK：下载、安装与授权页都如实拒绝，不假装成功', async () => {
+    const bridge = createBrowserBridge()
+
+    await expect(bridge.downloadAppUpdate()).rejects.toThrow('浏览器模式下不能下载安装包')
+    await expect(bridge.installAppUpdate()).rejects.toThrow('浏览器模式下不能安装应用')
+    await expect(bridge.openAppUpdateInstallSettings()).rejects.toThrow('浏览器模式下不能打开安装授权页面')
+  })
+})
+
+describe('浏览器桥的运行时会话快照', () => {
+  it('没有快照能力：四条都如实拒绝，不编造空快照', async () => {
+    const bridge = createBrowserBridge()
+
+    await expect(bridge.getRuntimeSessionSnapshotState()).rejects.toThrow('浏览器模式下没有运行时会话快照')
+    await expect(bridge.createRuntimeSessionSnapshot()).rejects.toThrow('浏览器模式下不能创建运行时会话快照')
+    await expect(bridge.restoreRuntimeSessionSnapshot('snap-1700000001000-00000002'))
+      .rejects.toThrow('浏览器模式下不能恢复运行时会话快照')
+    await expect(bridge.deleteRuntimeSessionSnapshot('snap-1700000001000-00000002'))
+      .rejects.toThrow('浏览器模式下不能删除运行时会话快照')
+  })
+
+  it('拒绝时不给「还没有快照」的假状态：只会拿到错误，拿不到状态对象', async () => {
+    const bridge = createBrowserBridge()
+
+    // 返回 `{ maxSnapshots: 3, ..., snapshots: [] }` 会被界面渲染成「还没有快照」——那是编造一次成功。
+    const outcome = await bridge.getRuntimeSessionSnapshotState().then(
+      () => null,
+      (reason: unknown) => reason,
+    )
+
+    if (!(outcome instanceof Error)) {
+      throw new Error('浏览器桩不允许 resolve 出状态对象')
+    }
+    expect(outcome.message).toBe('浏览器模式下没有运行时会话快照')
+  })
+})
