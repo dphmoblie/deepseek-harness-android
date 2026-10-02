@@ -1,6 +1,6 @@
 # DeepSeek Harness 安卓版
 
-[English](README.md) · [简体中文](README.zh-CN.md)
+[项目首页](README.md) · 使用与构建说明
 
 [![最新版本](https://img.shields.io/github/v/release/dphmoblie/deepseek-harness-android?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&logo=github)](https://github.com/dphmoblie/deepseek-harness-android/releases)
 [![下载总量](https://img.shields.io/github/downloads/dphmoblie/deepseek-harness-android/total?label=%E4%B8%8B%E8%BD%BD%E6%80%BB%E9%87%8F&logo=github)](https://github.com/dphmoblie/deepseek-harness-android/releases)
@@ -20,15 +20,20 @@
 
 <p align="center"><img src="docs/images/app-icon-512.png" width="256" alt="应用图标：白底已键出，背景透明"></p>
 
-**DeepSeek Harness 安卓版**可在安卓手机上直接运行完整的 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) 智能体环境——包括 Ubuntu 用户空间、Node.js 以及官方 Harness 网页控制台。设备**无需 Root**：整套 Linux 环境通过 [PRoot](https://github.com/proot-me/proot) 在用户空间内执行，Harness 服务仅监听安卓回环地址，并在禁止外部导航的内置 WebView 中展示。
+**DeepSeek Harness 安卓版**是面向 Android 的本地 AI 工作台，将 [DeepSeek Harness](https://github.com/deepseek-ai/dsh)、Ubuntu 运行环境、会话与插件管理、文件管理，以及用户授权的设备自动化整合到手机中。设备**无需 Root（超级用户权限）**：Linux 环境通过 [PRoot](https://github.com/proot-me/proot) 在用户空间运行，Harness 控制台由内置网页视图展示。
+
+“本地”指运行环境与控制台在手机上执行；模型推理使用你配置的服务，对话和 AI 工具返回的文件内容、截图可能发送至该模型服务。
+
+> 本文对应当前源码。源码声明的应用版本为 `0.2.2`；目标应用副屏是当前源码新增、尚未发布的实验功能，下载包包含的功能以对应版本发布说明为准。
 
 <a id="qq-group"></a>**项目 QQ 群：** `1108895375`
 
 | | |
 | --- | --- |
 | 应用包名 | `io.deepseekharness.mobile` |
-| 当前版本 | `0.2.0` |
+| 源码声明版本 | `0.2.2`（不代表下载包已包含全部源码改动） |
 | 最低系统 | Android 8.0（API 26）及以上 |
+| 目标应用副屏 | Android 10（API 29）及以上，需 Shizuku 与设备验证 |
 | 支持架构 | 仅 `arm64-v8a` |
 | 内置运行时 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.0-rc.2 |
 | 应用许可证 | MIT（运行时组件沿用各自许可证，见[许可证](#许可证)一节） |
@@ -40,6 +45,7 @@
 - [安装](#安装)
 - [模型供应商](#模型供应商)
 - [可选的 Shizuku 集成](#可选的-shizuku-集成)
+- [目标应用副屏（实验功能）](#目标应用副屏实验功能)
 - [从源码构建](#从源码构建)
 - [安全与隐私](#安全与隐私)
 - [参与贡献](#参与贡献)
@@ -49,12 +55,14 @@
 ## 功能特性
 
 - **手机上的完整 Linux 智能体环境。** Ubuntu 24.04 完全在设备本地通过 PRoot 运行，不依赖云服务器、远程桌面，也无需注册账号：智能体运行时与网页控制台均在本地执行。
-- **官方 Harness 网页控制台。** 应用内置官方 `dsh web` 前端，仅针对移动端视口尺寸与安全区域做了适配。桌面端 DSH 网页插件可通过标准 Harness 插件加载器使用，并获得适配移动端的布局形态。
+- **适配手机的 Harness 控制台。** 壳内以首页、插件、设置三个底部入口组织功能，并为窄屏、横屏和安全区域提供适配；会话管理整合到首页。第三方网页插件的界面与依赖各不相同，兼容性需按插件和版本验证。
+- **插件导入、更新与回滚。** 支持从 npm 包名、HTTPS 压缩包链接或 `git+https` 仓库地址导入，管理包与子插件的启停；更新时按支持的目录规则保留数据，并可切回上一版。需要安装脚本、原生编译或不同核心 SDK 的包存在限制，详见[插件管理](docs/插件管理.md)。
+- **文件与外观管理。** 投递区支持文件夹分类；壳内可选图片或视频背景，调整卡片颜色、通透度、模糊程度与强调色。
 - **免 Root 运行。** 在普通原厂设备上即可通过 PRoot 实现用户空间容器化。可选的 [Shizuku](https://shizuku.rikka.app/) 集成可在用户主动授权后额外提供 Shell 级别的设备终端（`/system/bin/sh`）。Shizuku 提供的是安卓 Shell 权限，而非 Root 权限。
 - **开箱即用、支持离线安装。** 正式版 APK 内置经过校验的 `rootfs.bundle` 与清单文件，无网络环境也可完成运行时安装；同时也支持经摘要固定（digest-pinned）的远程运行时来源。
 - **防篡改的运行时分发。** 每份清单与根文件系统镜像在使用前均按精确长度与 SHA-256 校验；下载仅接受 HTTPS 目标地址、拒绝指向私有地址的 DNS 解析结果，支持 HTTP 范围请求断点续传，解压时具备路径穿越与设备节点防护。环境就绪后以原子方式切换生效。
 - **内置与自定义模型供应商。** DeepSeek、OpenAI、Anthropic、Google Gemini、OpenRouter、Groq、xAI、Mistral 以及自建 OpenAI 兼容端点的凭据均通过 Android Keystore 加密保存，且只会注入运行时进程，绝不回传至 WebView。
-- **默认仅本地通信。** Harness 只绑定 `127.0.0.1`。每次启动都会生成全新的 256 位传输令牌，同时保护 HTTP 与 WebSocket 请求；令牌仅保存在进程内存中，不会持久化，也不会写入 URL。
+- **本机控制台访问。** Harness 只绑定 `127.0.0.1`。每次启动都会生成全新的 256 位传输令牌，同时保护 HTTP 与 WebSocket 请求；令牌仅保存在进程内存中，不会持久化，也不会写入 URL。模型调用和用户发起的下载、插件安装等仍可能访问网络。
 - **集成终端。** 可在同一界面中使用 PRoot 环境内的 Ubuntu 终端，以及（可选）由 Shizuku 支持的安卓设备终端。
 - **应用内运行时自检。** 运行环境出问题时不必依赖 bash——自检逐项探测 shell、Node.js、沙箱启动器（含执行位）、Landlock 探测、真实沙箱内执行、PTY 的两组冒烟（裸 PTY 与沙箱内 PTY）、访客数据目录与附件目录的写入、ripgrep 执行位，并报告可用空间。发现执行位缺失或目录缺失时可以就地修复，不修改任何文件内容。
 - **日志按需查看与判读。** 只含内部状态码与计数的诊断日志可直接在应用内阅读（尾部窗口 64 / 256 KB）；运行日志窗口可选 8 / 64 / 256 KB 并支持关键字过滤与级别着色。命中已确诊的错误特征（缺凭据、模块身份分裂、插件加载失败、端口占用等）时，界面给出结论与下一步，而不是丢一段原文让人猜。
@@ -106,12 +114,22 @@ Shizuku 完全可选，且不会随应用捆绑安装：
 
 当 Shizuku 不可用、未授权或连接断开时，设备工具会明确报错；Ubuntu 运行时与 Harness 不受影响。
 
+## 目标应用副屏（实验功能）
+
+在 **设置 → AI Shell → 目标应用副屏（实验功能）** 中选择目标应用，可尝试将其运行到独立虚拟显示，并通过原生预览页或可拖动小窗查看和操作。此处展示的是目标应用界面；AI 对话悬浮窗是另一项功能。
+
+当前源码已接入副屏状态、PNG 截图、点击、滑动、返回和结束会话的 AI 工具。入口要求 Android 10 及以上、已授权并连接 Shizuku，且用户已开启 AI Shell。锁屏或熄屏时，该副屏通道暂停读取与输入。
+
+截至 2026-10-02，已在 MuMu Android 15 中以普通 Shell 权限验证测试应用的横竖屏截图、定向点击和会话回收，并检查 `363×800 dp` 与 `800×363 dp` 的原生选择页布局。**尚未验证完整 Shizuku 授权与绑定链路、真实第三方应用、小窗互切、长期后台与锁屏恢复**；模拟器探针结果不能视为所有手机或所有应用的兼容保证。
+
+已有运行环境还需要更新或重新打包 `dsh-mobile-shizuku` 插件，才能使用新增 AI 工具；仅安装新 APK 不会改写现有插件数据。机制、工具接口与完整验证范围见[目标应用副屏说明](docs/目标应用副屏.md)。
+
 ## 从源码构建
 
 ### 构建依赖
 
 - Node.js `^22.19.0` 或 `>=24.0.0`，以及 [pnpm](https://pnpm.io/) 11
-- Android SDK 35、NDK、CMake 3.22.1、JDK 23、Gradle 8.11.1
+- Android SDK 35、NDK、CMake 3.22.1、JDK 21、Gradle 8.11.1
 - 来自 Operit2 安卓运行时工具链、与发布版本固定对应的 ARM64 PRoot 运行器与加载器（`libdsh_proot.so`、`libdsh_proot_loader.so`）——准确的上游版本号与哈希见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 - 自包含构建还需从同一源码版本生成的 `runtime-manifest.json` 与 `rootfs.bundle`
 
@@ -139,6 +157,7 @@ pnpm lint          # ESLint，零警告通过
 
 ## 安全与隐私
 
+- **模型数据去向。** 本机控制台不等于离线模型。对话、AI 工具返回的文件内容及截图可能进入当前会话并发送至配置的模型服务；本地副屏预览本身不上传图像。只授权与当前任务相关的应用和数据。
 - **仅监听回环地址。** Harness 不会绑定任何非回环网络接口；内置 WebView 阻止访问回环源之外的导航与 HTTP 资源。
 - **临时传输凭据。** 每次启动 Harness 都会通过 `SecureRandom` 生成全新的 256 位令牌。令牌不会持久化、不会写入日志或 URL，也不会返回给 JavaScript。
 - **凭据存储。** 供应商 API 密钥通过 Android Keystore 加密，离开管理界面时仅作为 PRoot 运行时的进程环境变量存在。
@@ -178,6 +197,10 @@ pnpm lint          # ESLint，零警告通过
 
 ## 相关文档
 
+- [目标应用副屏与验证范围](docs/目标应用副屏.md)
+- [应用读取与无障碍自动化](docs/应用自动化能力.md)
+- [插件导入、数据保留与回滚](docs/插件管理.md)
+- [投递区与存储权限](docs/存储权限与导入落点.md)
 - [架构与安全边界](docs/ARCHITECTURE.md)
 - [移动端插件兼容设计](docs/mobile-plugin-compat.md)
 - [发布检查清单](docs/RELEASE_CHECKLIST.md)

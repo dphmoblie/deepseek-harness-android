@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.19.0",
-  "description": "Capacitor Android control surface for a local DeepSeek Harness Ubuntu runtime",
+  "description": "面向 Android 的本地 AI 工作台：集成 DeepSeek Harness、Ubuntu 运行环境、插件与文件管理，以及用户授权的 Shizuku 和无障碍自动化。",
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
