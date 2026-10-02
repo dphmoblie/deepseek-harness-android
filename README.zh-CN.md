@@ -30,7 +30,7 @@
 | 当前版本 | `0.2.0` |
 | 最低系统 | Android 8.0（API 26）及以上 |
 | 支持架构 | 仅 `arm64-v8a` |
-| 内置运行时 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.1.5-rc.2 |
+| 内置运行时 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.0-rc.2 |
 | 应用许可证 | MIT（运行时组件沿用各自许可证，见[许可证](#许可证)一节） |
 
 ## 目录

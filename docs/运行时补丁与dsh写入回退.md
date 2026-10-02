@@ -17,7 +17,7 @@ P0-2（附件落盘全废）。触发方是 PRoot / 主机策略（访客内 `li
   - `write` 工具**新建**文件失败，**覆盖**已存在的文件正常；
   - `read_image` / `mobile_device_screenshot` 报 `Unable to persist attachment.`。
 
-### 1.2 上游代码位置（`@deepseek-ai/dsh 0.1.5-rc.2`，两个互不共享的包）
+### 1.2 上游代码位置（`@deepseek-ai/dsh 0.2.0-rc.2`，两个互不共享的包）
 
 | 编号 | 包 | 文件与函数 | 硬链接调用点 | 为什么「新建失败、覆盖正常」 |
 |---|---|---|---|---|
@@ -58,15 +58,15 @@ P0-2（附件落盘全废）。触发方是 PRoot / 主机策略（访客内 `li
    `patches/` / `plugins/` 复制到 `/tmp/dsh-root` 后 `pnpm install --frozen-lockfile`，
    再把整棵 `node_modules` 打进 `opt/dsh`（`scripts/build-embedded-runtime.py`）。
    **因此补丁代码随 rootfs 一起进设备**，设备侧不需要任何后处理。
-4. 本仓库既有的同类先例是 `patches/@earendil-works__pi-ai@0.85.1.patch`（同一个通道）。
+4. 本仓库既有的同类先例是 `patches/@earendil-works__pi-ai@0.87.1.patch`（同一个通道）。
 
 ### 2.1 键名写法与 peer 关系
 
 ```yaml
 patchedDependencies:
-  '@earendil-works/pi-ai@0.85.1': patches/@earendil-works__pi-ai@0.85.1.patch
-  '@deepseek-ai/dsh-fs-local@0.1.5-rc.2': patches/@deepseek-ai__dsh-fs-local@0.1.5-rc.2.patch
-  '@deepseek-ai/dsh-attachment-local@0.1.5-rc.2': patches/@deepseek-ai__dsh-attachment-local@0.1.5-rc.2.patch
+  '@earendil-works/pi-ai@0.87.1': patches/@earendil-works__pi-ai@0.87.1.patch
+  '@deepseek-ai/dsh-fs-local@0.2.0-rc.2': patches/@deepseek-ai__dsh-fs-local@0.2.0-rc.2.patch
+  '@deepseek-ai/dsh-attachment-local@0.2.0-rc.2': patches/@deepseek-ai__dsh-attachment-local@0.2.0-rc.2.patch
 ```
 
 - 键用 **精确版本**：`pnpm-workspace.yaml` 的 `overrides` 已把 `@deepseek-ai/dsh-*` 钉死在
@@ -75,7 +75,7 @@ patchedDependencies:
   （pnpm 11 里补丁应用失败一律抛错）。这正是我们要的失败模式：**升级必须重做补丁，
   而不是补丁静默失效**。
 - **peer 关系不进键名**。peer 只体现在两处：`pnpm-lock.yaml` 的 snapshot 键
-  （`@deepseek-ai/dsh-fs-local@0.1.5-rc.2(patch_hash=…)(@deepseek-ai/cordis@4.0.2)(…)`）与
+  （`@deepseek-ai/dsh-fs-local@0.2.0-rc.2(patch_hash=…)(@deepseek-ai/cordis@4.0.4)(…)`）与
   `node_modules/.pnpm/` 的虚拟目录名。补丁文件的命名沿用既有约定：
   `@scope/name@version.patch` 里的 `/` 换成 `__`。
 - 键所指向的补丁文件内容变了，就必须重新 `pnpm install`：lockfile 里记录的是
@@ -84,7 +84,7 @@ patchedDependencies:
 
 ## 三、补丁内容（最小化：只改 `lib/index.js`，只加回退必需的行）
 
-### 3.1 `patches/@deepseek-ai__dsh-fs-local@0.1.5-rc.2.patch`
+### 3.1 `patches/@deepseek-ai__dsh-fs-local@0.2.0-rc.2.patch`
 
 - 新增模块内私有判定 `isLinkUnavailableError(error)`：`EACCES` / `EPERM` / `EXDEV`。
 - `writeFileAtomic()` 的 `createIfAbsent` 分支的 `catch` 里：
@@ -106,7 +106,7 @@ patchedDependencies:
 未改动：其它分支、错误消息、导出签名、依赖、`internals` 测试钩子（`linkFile` 仍然是
 `internals.linkFile ?? link`，回退只在 `link` 真的抛错后发生）。
 
-### 3.2 `patches/@deepseek-ai__dsh-attachment-local@0.1.5-rc.2.patch`
+### 3.2 `patches/@deepseek-ai__dsh-attachment-local@0.2.0-rc.2.patch`
 
 - `node:fs/promises` 的导入增加 `lstat`（复核目标存在性用）。
 - 新增 `isLinkUnavailableError(error)` 与 `renameStagedObject(staged, target)`：
@@ -294,7 +294,7 @@ cd ../..; node --test scripts/*.test.mjs
 3. **`createIfAbsent` 之外的写入路径未受影响**：覆盖分支本来就是 `rename`
    （Windows 上是 `replaceFile` + `rename` 兜底），本机与真机都不受影响。
 4. **补丁与上游版本强耦合**：`pnpm-lock.yaml` 的 `patch_hash`、回归测试里的锚点
-   （函数名、模块内私有标识符）都按 `0.1.5-rc.2` 写死。上游改这些名字时测试会失败——
+   （函数名、模块内私有标识符）都按 `0.2.0-rc.2` 写死。上游改这些名字时测试会失败——
    这是刻意的：它提示「补丁需要重新对齐」。
 5. **真机实测数据来自父 agent 的登记册**：本文的「真机现象」一节引用登记册，
    我没有独立复现 PRoot 环境；本机复现的是**同一 errno 下的代码行为**

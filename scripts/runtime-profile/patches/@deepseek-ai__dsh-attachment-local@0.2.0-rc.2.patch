@@ -1,17 +1,17 @@
 diff --git a/lib/index.js b/lib/index.js
-index fec538fb3ad2875aba52b8e10e6e79d3fe3b804d..d54bd3f9b177fada19dcf1de9fb08fa8dc4f4727 100644
+index 882005fc045c07a4d51a47c3783f4e48d5af95d3..2844713cef126aadf60745770fd51c9f986d5075 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -4,7 +4,7 @@ import { AttachmentError, AttachmentId, AttachmentStore, ImageVariantId, request
- import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
+ import { dshCachePath, resolveDshHome } from "@deepseek-ai/dsh-home-paths";
  import { createHash, randomUUID } from "node:crypto";
  import { constants, createReadStream } from "node:fs";
 -import { chmod, link, mkdir, open, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 +import { chmod, link, lstat, mkdir, open, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
- import sharp from "sharp";
+ import { createLazyRequire } from "@deepseek-ai/dsh-lazy-require";
  //#region lib/types/compression-limiter.js
  /** Instance-owned concurrency bound for native image transformations. */
-@@ -458,6 +458,40 @@ async function publishImmutableObjectStream(root, data, targetFor, signal) {
+@@ -466,6 +466,40 @@ async function publishImmutableObjectStream(root, data, targetFor, signal) {
  	};
  }
  /**
@@ -52,7 +52,7 @@ index fec538fb3ad2875aba52b8e10e6e79d3fe3b804d..d54bd3f9b177fada19dcf1de9fb08fa8
  * Publish another durable hard-link name for an existing immutable object.
  * @param root - absolute versioned attachment root.
  * @param source - existing content-addressed object below `root`.
-@@ -471,8 +505,14 @@ async function publishImmutableAlias(root, source, target, sha256) {
+@@ -479,8 +513,14 @@ async function publishImmutableAlias(root, source, target, sha256) {
  		try {
  			await link(source, target);
  		} catch (error) {
@@ -69,7 +69,7 @@ index fec538fb3ad2875aba52b8e10e6e79d3fe3b804d..d54bd3f9b177fada19dcf1de9fb08fa8
  			if (await digestFile(target) !== sha256) throw new AttachmentError("Stored attachment failed integrity verification.", "ATTACHMENT_CORRUPT");
  		}
  		await chmod(target, 256);
-@@ -525,6 +565,34 @@ async function stageImmutableObject(root, data, signal) {
+@@ -533,6 +573,34 @@ async function stageImmutableObject(root, data, signal) {
  		throw new AttachmentError("Unable to persist attachment.", "ATTACHMENT_WRITE_FAILED", { cause: error });
  	}
  }
@@ -104,7 +104,7 @@ index fec538fb3ad2875aba52b8e10e6e79d3fe3b804d..d54bd3f9b177fada19dcf1de9fb08fa8
  async function publishStagedObject(root, target, staged) {
  	const parent = dirname(target);
  	try {
-@@ -532,11 +600,18 @@ async function publishStagedObject(root, target, staged) {
+@@ -540,11 +608,18 @@ async function publishStagedObject(root, target, staged) {
  		try {
  			await link(staged.path, target);
  		} catch (error) {

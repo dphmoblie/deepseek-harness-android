@@ -53,7 +53,7 @@ allow executing newly downloaded code from writable app storage. Generated
 
 ## 运行时依赖版本钉与 Symbol 身份（dsh 全家桶必须整族同版本）
 
-移动运行时依赖的整个 `@deepseek-ai/dsh` 家族必须**精确钉死在同一版本**（当前 `0.1.5-rc.2`），
+移动运行时依赖的整个 `@deepseek-ai/dsh` 家族必须**精确钉死在同一版本**（当前 `0.2.0-rc.2`），
 并由 `scripts/runtime-profile/pnpm-workspace.yaml` 的 `overrides` 兜底。这不是洁癖，是硬约束：
 
 1. `@deepseek-ai/dsh-tools` 导出 `TOOL_RUNTIME_SCHEDULER = Symbol('@deepseek-ai/dsh-tools.scheduler')`。

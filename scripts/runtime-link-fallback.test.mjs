@@ -1,7 +1,7 @@
 // 访客侧 dsh 写入回退的回归防线（登记册 P0-1 / P0-2）。
 //
 // 背景：Android 16 / PRoot 访客内 `link(2)` 一律被拒（同目录、跨目录都是 EACCES），
-// `rename` 正常。上游 `@deepseek-ai/dsh 0.1.5-rc.2` 有两处写入路径依赖硬链接：
+// `rename` 正常。上游 `@deepseek-ai/dsh 0.2.0-rc.2` 有两处写入路径依赖硬链接：
 //   * `dsh-fs-local` 的 `writeFileAtomic()`：`createIfAbsent` 分支用 `linkFile()` 新建文件；
 //   * `dsh-attachment-local` 的 `publishStagedObject()`：用 `link()` 发布内容寻址对象；
 //   * `dsh-attachment-local` 的 `publishImmutableAlias()`：用 `link()` 给同一个对象再挂一个只读名字，
@@ -49,8 +49,8 @@ const PATCHED_PACKAGES = [
     name: '@deepseek-ai/dsh-fs-local',
     kind: 'link-fallback',
     marker: 'isLinkUnavailableError',
-    key: '@deepseek-ai/dsh-fs-local@0.1.5-rc.2',
-    patchFile: '@deepseek-ai__dsh-fs-local@0.1.5-rc.2.patch',
+    key: '@deepseek-ai/dsh-fs-local@0.2.0-rc.2',
+    patchFile: '@deepseek-ai__dsh-fs-local@0.2.0-rc.2.patch',
     entry: 'writeFileAtomic',
     addedLines: [
       'function isLinkUnavailableError(error) {',
@@ -63,8 +63,8 @@ const PATCHED_PACKAGES = [
     name: '@deepseek-ai/dsh-attachment-local',
     kind: 'link-fallback',
     marker: 'isLinkUnavailableError',
-    key: '@deepseek-ai/dsh-attachment-local@0.1.5-rc.2',
-    patchFile: '@deepseek-ai__dsh-attachment-local@0.1.5-rc.2.patch',
+    key: '@deepseek-ai/dsh-attachment-local@0.2.0-rc.2',
+    patchFile: '@deepseek-ai__dsh-attachment-local@0.2.0-rc.2.patch',
     entry: 'publishStagedObject',
     // 同一个包里有两条被补的发布路径：对象发布（rename 回退）与别名发布（copy 回退）。
     entries: ['publishStagedObject', 'publishImmutableAlias'],
@@ -84,8 +84,8 @@ const PATCHED_PACKAGES = [
     name: '@deepseek-ai/dsh-host-frontend-static',
     kind: 'static-cache',
     marker: 'cacheControlFor',
-    key: '@deepseek-ai/dsh-host-frontend-static@0.1.5-rc.2',
-    patchFile: '@deepseek-ai__dsh-host-frontend-static@0.1.5-rc.2.patch',
+    key: '@deepseek-ai/dsh-host-frontend-static@0.2.0-rc.2',
+    patchFile: '@deepseek-ai__dsh-host-frontend-static@0.2.0-rc.2.patch',
     entry: 'cacheControlFor',
     entries: ['cacheControlFor', 'serveStatic'],
     addedLines: [

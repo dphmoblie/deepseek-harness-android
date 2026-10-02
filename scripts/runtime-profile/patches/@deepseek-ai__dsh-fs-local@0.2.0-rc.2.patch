@@ -1,8 +1,8 @@
 diff --git a/lib/index.js b/lib/index.js
-index 1d1ae89c55d3629c25f9ccd06ff5d15f7b139a1f..0a2be0a960ba3a250dcbc62da8cc60e5964070c3 100644
+index b77bf6ce9faefdd2deceb945236c4c8234d7f0dc..e462e82209b09cf5369ab36fc09b64ef097180f7 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -120,6 +120,14 @@ function errorMessage(error) {
+@@ -123,6 +123,14 @@ function errorMessage(error) {
  function isPermissionError(error) {
  	return error instanceof Error && "code" in error && (error.code === "EACCES" || error.code === "EPERM");
  }
@@ -17,7 +17,7 @@ index 1d1ae89c55d3629c25f9ccd06ff5d15f7b139a1f..0a2be0a960ba3a250dcbc62da8cc60e5
  function throwIfAborted(signal, verb) {
  	if (signal?.aborted) throw new FsError(`${verb} aborted`, "FS_ABORTED");
  }
-@@ -532,7 +540,24 @@ async function writeFileAtomic(absolutePath, content, mode, signal, internals =
+@@ -550,7 +558,24 @@ async function writeFileAtomic(absolutePath, content, mode, signal, internals =
  		if (createIfAbsent !== void 0) try {
  			await linkFile(tempPath, absolutePath);
  		} catch (error) {
