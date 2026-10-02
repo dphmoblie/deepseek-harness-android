@@ -28,6 +28,7 @@ import {
   FolderInput,
   FolderPlus,
   FolderOutput,
+  FolderOpen,
   Gauge,
   HardDrive,
   KeyRound,
@@ -1073,13 +1074,16 @@ interface EnvironmentScreenProps {
   onUpdate: () => void
   onShareWorkspace: () => void
   onListFiles: () => void
-  workspaceFiles: string[]
+  workspaceFiles: string[] | null
   onShareFile: (path: string) => void
   onOpenFile: (path: string) => void
   onDeleteFile: (path: string) => void
 }
 
 function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop, onUpdate, onShareWorkspace, onListFiles, workspaceFiles, onShareFile, onOpenFile, onDeleteFile }: EnvironmentScreenProps) {
+  const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false)
+  const browseFilesButton = useRef<HTMLButtonElement>(null)
+  const backButton = useRef<HTMLButtonElement>(null)
   const inProgress = ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
   const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running'
   const progress = runtime.totalBytes > 0
@@ -1112,7 +1116,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
         </div>
         <div className="heading-actions">
           <PhaseBadge phase={runtime.phase} />
-          <button className="icon-button" type="button" aria-label={t("返回设置")} title={t("返回设置")} onClick={onBack}><ArrowLeft size={19} /></button>
+          <button ref={backButton} className="icon-button" type="button" aria-label={t("返回设置")} title={t("返回设置")} onClick={onBack}><ArrowLeft size={19} /></button>
         </div>
       </div>
 
@@ -1209,15 +1213,107 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
       </section>
       {installed && <section className="detail-section workspace-export" aria-labelledby="workspace-export-title">
         <h2 id="workspace-export-title">{t("工作区文件")}</h2>
-        <p>{t("将 DSH 在运行时工作区创建的文件打包后分享给其他应用")}</p>
-        <button className="button button-secondary" type="button" onClick={onShareWorkspace} disabled={busy !== null}>
-          {busy === 'workspace-share' ? <Loader2 className="spin" size={18} /> : <Share2 size={18} />}{t("分享工作区")}
-        </button>
-        <button className="button button-secondary" type="button" onClick={onListFiles} disabled={busy !== null}>{t("选择文件")}</button>
-        {workspaceFiles.length > 0 && <div className="workspace-file-list">{workspaceFiles.map(path => <div className="workspace-file-row" key={path}><span title={path}>{path}</span><button className="compact-button" type="button" onClick={() => onOpenFile(path)} disabled={busy !== null}>{t("打开")}</button><button className="compact-button" type="button" onClick={() => onShareFile(path)} disabled={busy !== null}>{t("分享")}</button><button className="compact-button workspace-delete" type="button" onClick={() => onDeleteFile(path)} disabled={busy !== null}>{t("删除")}</button></div>)}</div>}
+        <p>{t("浏览、打开或分享 DSH 在运行时工作区创建的文件")}</p>
+        <div className="workspace-actions">
+          <button className="button button-secondary" type="button" onClick={onShareWorkspace} disabled={busy !== null}>
+            {busy === 'workspace-share' ? <Loader2 className="spin" size={18} /> : <Share2 size={18} />}{t("分享工作区")}
+          </button>
+          <button ref={browseFilesButton} className="button button-secondary" type="button" onClick={() => {
+            setWorkspaceDialogOpen(true)
+            onListFiles()
+          }} disabled={busy !== null}>
+            <FolderOpen size={18} />{t("浏览文件")}
+          </button>
+        </div>
       </section>}
+      {workspaceDialogOpen && <WorkspaceFilesDialog
+        busy={busy}
+        files={workspaceFiles}
+        onClose={() => {
+          setWorkspaceDialogOpen(false)
+          if (browseFilesButton.current?.disabled) backButton.current?.focus()
+          else browseFilesButton.current?.focus()
+        }}
+        onDelete={onDeleteFile}
+        onOpen={onOpenFile}
+        onRefresh={onListFiles}
+        onShare={onShareFile}
+      />}
     </div>
   )
+}
+
+interface WorkspaceFilesDialogProps {
+  busy: string | null
+  files: string[] | null
+  onClose: () => void
+  onDelete: (path: string) => void
+  onOpen: (path: string) => void
+  onRefresh: () => void
+  onShare: (path: string) => void
+}
+
+function WorkspaceFilesDialog({ busy, files, onClose, onDelete, onOpen, onRefresh, onShare }: WorkspaceFilesDialogProps) {
+  const loading = busy === 'workspace-files'
+  const closeButton = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (busy !== null || !document.activeElement?.closest('.workspace-dialog')) closeButton.current?.focus()
+  }, [busy])
+
+  return <div className="dialog-backdrop workspace-dialog-backdrop" role="presentation" onPointerDown={event => {
+    if (event.target === event.currentTarget) onClose()
+  }}>
+    <section className="dialog workspace-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-dialog-title" onKeyDown={event => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+      } else if (event.key === 'Tab') {
+        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
+        const first = buttons[0]
+        const last = buttons[buttons.length - 1]
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault()
+          last?.focus()
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault()
+          first?.focus()
+        }
+      }
+    }}>
+      <header className="workspace-dialog-header">
+        <span className="workspace-dialog-icon" aria-hidden="true"><FolderOpen size={22} /></span>
+        <div>
+          <h2 id="workspace-dialog-title">{t("工作区文件")}</h2>
+          <p>{loading ? t("正在读取文件") : files === null ? t("读取失败") : t("{0} 个文件", files.length)}</p>
+        </div>
+        <button className="icon-button" type="button" aria-label={t("刷新")} title={t("刷新")} onClick={onRefresh} disabled={busy !== null}>
+          {loading ? <Loader2 className="spin" size={19} /> : <RefreshCw size={19} />}
+        </button>
+        <button ref={closeButton} className="icon-button" type="button" aria-label={t("关闭")} title={t("关闭")} onClick={onClose}>
+          <X size={19} />
+        </button>
+      </header>
+      <div className="workspace-dialog-body" aria-live="polite">
+        {loading ? <div className="workspace-empty"><Loader2 className="spin" size={24} /><span>{t("正在读取工作区文件")}</span></div>
+          : files === null ? <div className="workspace-empty" role="alert"><AlertTriangle size={26} /><strong>{t("无法读取工作区文件，请重试")}</strong></div>
+            : files.length === 0 ? <div className="workspace-empty"><FileText size={26} /><strong>{t("工作区中暂无文件")}</strong><span>{t("DSH 创建的文件会显示在这里")}</span></div>
+            : <div className="workspace-file-list">{files.map(path => {
+                const separator = path.lastIndexOf('/')
+                const name = separator < 0 ? path : path.slice(separator + 1)
+                const directory = separator < 0 ? t("工作区根目录") : path.slice(0, separator)
+                return <div className="workspace-file-row" key={path}>
+                  <span className="workspace-file-icon" aria-hidden="true"><FileText size={18} /></span>
+                  <span className="workspace-file-copy" title={path}><strong>{name}</strong><small>{directory}</small></span>
+                  <span className="workspace-file-actions">
+                    <button className="icon-button" type="button" aria-label={t("打开 {0}", name)} title={t("打开")} onClick={() => onOpen(path)} disabled={busy !== null}><ExternalLink size={17} /></button>
+                    <button className="icon-button" type="button" aria-label={t("分享 {0}", name)} title={t("分享")} onClick={() => onShare(path)} disabled={busy !== null}><Share2 size={17} /></button>
+                    <button className="icon-button workspace-delete" type="button" aria-label={t("删除 {0}", name)} title={t("删除")} onClick={() => onDelete(path)} disabled={busy !== null}><Trash2 size={17} /></button>
+                  </span>
+                </div>
+              })}</div>}
+      </div>
+    </section>
+  </div>
 }
 
 interface TerminalScreenProps {
@@ -4991,15 +5087,18 @@ export function App() {
   const shareWorkspace = useCallback(() => {
     void run('workspace-share', () => runtimeBridge.shareRuntimeWorkspace(), t('已打开分享面板'))
   }, [run])
-  const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([])
-  const listWorkspaceFiles = useCallback(() => { void run('workspace-files', async () => setWorkspaceFiles(await runtimeBridge.listRuntimeWorkspaceFiles())) }, [run])
+  const [workspaceFiles, setWorkspaceFiles] = useState<string[] | null>(null)
+  const listWorkspaceFiles = useCallback(() => {
+    setWorkspaceFiles(null)
+    void run('workspace-files', async () => setWorkspaceFiles(await runtimeBridge.listRuntimeWorkspaceFiles()))
+  }, [run])
   const shareWorkspaceFile = useCallback((path: string) => { void run('workspace-file-share', () => runtimeBridge.shareRuntimeWorkspaceFile(path)) }, [run])
   const openWorkspaceFile = useCallback((path: string) => { void run('workspace-file-open', () => runtimeBridge.openRuntimeWorkspaceFile(path)) }, [run])
   const deleteWorkspaceFile = useCallback((path: string) => {
     if (!window.confirm(t('确定删除“{0}”吗？此操作无法撤销。', path))) return
     void run('workspace-file-delete', async () => {
       await runtimeBridge.deleteRuntimeWorkspaceFile(path)
-      setWorkspaceFiles(current => current.filter(item => item !== path))
+      setWorkspaceFiles(current => current?.filter(item => item !== path) ?? null)
     }, t('文件已删除'))
   }, [run])
 

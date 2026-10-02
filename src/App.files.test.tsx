@@ -205,3 +205,59 @@ describe('文件管理（投递区与共享目录同一个浏览器）', () => {
     expect(screen.queryByText('无法读取当前共享目录，请重试')).toBeNull()
   })
 })
+
+describe('运行时工作区文件弹窗', () => {
+  beforeEach(beforeEachAppTest)
+
+  it('浏览文件，读取失败时清除旧列表，并可刷新重试', async () => {
+    bridge.listRuntimeWorkspaceFiles
+      .mockResolvedValueOnce(['reports/summary.md', 'result.json'])
+      .mockRejectedValueOnce(new Error('read failed'))
+      .mockResolvedValueOnce([])
+    bridge.openRuntimeWorkspaceFile.mockResolvedValue(undefined)
+    bridge.shareRuntimeWorkspaceFile.mockResolvedValue(undefined)
+
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: /Ubuntu 运行时/ }))
+    const browse = await screen.findByRole('button', { name: '浏览文件' })
+    fireEvent.click(browse)
+
+    const dialog = await screen.findByRole('dialog', { name: '工作区文件' })
+    expect(await within(dialog).findByText('2 个文件')).toBeVisible()
+    expect(within(dialog).getByRole('button', { name: '关闭' })).toHaveFocus()
+    expect(within(dialog).getByText('summary.md')).toBeVisible()
+    expect(within(dialog).getByText('reports')).toBeVisible()
+    fireEvent.click(within(dialog).getByRole('button', { name: '打开 summary.md' }))
+    await waitFor(() => expect(bridge.openRuntimeWorkspaceFile).toHaveBeenCalledWith('reports/summary.md'))
+    fireEvent.click(within(dialog).getByRole('button', { name: '分享 result.json' }))
+    await waitFor(() => expect(bridge.shareRuntimeWorkspaceFile).toHaveBeenCalledWith('result.json'))
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '刷新' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('无法读取工作区文件，请重试')
+    expect(within(dialog).queryByText('summary.md')).toBeNull()
+    fireEvent.click(within(dialog).getByRole('button', { name: '刷新' }))
+    expect(await within(dialog).findByText('工作区中暂无文件')).toBeVisible()
+
+    fireEvent.keyDown(within(dialog).getByRole('button', { name: '关闭' }), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '工作区文件' })).toBeNull())
+    expect(browse).toHaveFocus()
+  })
+
+  it('读取仍在进行时可以关闭弹窗', async () => {
+    bridge.listRuntimeWorkspaceFiles.mockImplementation(() => new Promise(() => undefined))
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: /Ubuntu 运行时/ }))
+    const browse = await screen.findByRole('button', { name: '浏览文件' })
+    fireEvent.click(browse)
+
+    const dialog = await screen.findByRole('dialog', { name: '工作区文件' })
+    expect(within(dialog).getByText('正在读取工作区文件')).toBeVisible()
+    const close = within(dialog).getByRole('button', { name: '关闭' })
+    expect(close).toBeEnabled()
+    fireEvent.click(close)
+    expect(screen.queryByRole('dialog', { name: '工作区文件' })).toBeNull()
+    expect(screen.getByRole('button', { name: '返回设置' })).toHaveFocus()
+  })
+})
