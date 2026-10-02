@@ -27,10 +27,14 @@
     <!-- 悬浮球。文案固定，不含 URL、端口、凭据或会话内容。 -->
     <!-- 球本身的读屏名称：名词性短语，不复用下面那句状态语形式的通知标题。 -->
     <string name="overlay_ball_content_description">悬浮球</string>
+    <string name="overlay_conversation_title">Harness AI 对话</string>
+    <string name="overlay_conversation_expand">全屏</string>
+    <string name="overlay_conversation_close">关闭</string>
+    <string name="overlay_conversation_unavailable">对话尚未启动，点按返回应用开启 Harness</string>
     <string name="overlay_ball_channel_name">悬浮球</string>
-    <string name="overlay_ball_channel_description">在其他应用上层显示悬浮球，点按可快速回到 Harness 对话</string>
+    <string name="overlay_ball_channel_description">在其他应用上层显示悬浮球，点按展开 Harness 对话小窗</string>
     <string name="overlay_ball_notification_title">悬浮球已开启</string>
-    <string name="overlay_ball_notification_text">点按可快速回到 Harness 对话</string>
+    <string name="overlay_ball_notification_text">点按返回应用，悬浮球可展开对话小窗</string>
     <string name="overlay_ball_menu_return">回到应用</string>
     <string name="overlay_ball_menu_hide">隐藏悬浮球</string>
 

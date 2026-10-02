@@ -225,6 +225,7 @@ class HarnessActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         pageLoadGate.cancel()
+        if (!isChangingConfigurations) OverlayBallService.closeConversation()
         // 页面可能仍在等待选择结果：必须显式回传 null，否则该 input 会永久处于"等待选择文件"。
         deliverFileChooserResult(emptyList())
         if (::webView.isInitialized) {
@@ -406,7 +407,7 @@ class HarnessActivity : AppCompatActivity() {
         returnToMainActivity()
     }
 
-    private class Origin(val scheme: String, val host: String, val port: Int, val initialUrl: String) {
+    internal class Origin(val scheme: String, val host: String, val port: Int, val initialUrl: String) {
         fun allows(uri: Uri): Boolean =
             uri.scheme == scheme && uri.host == host && uri.port == port && uri.userInfo == null
 
@@ -418,11 +419,15 @@ class HarnessActivity : AppCompatActivity() {
         }
     }
 
-    private class RestrictedWebViewClient(
+    internal class RestrictedWebViewClient(
         private val origin: Origin,
         private val username: String,
         private val password: String,
         private val onMainFrameFailure: () -> Unit,
+        private val onRendererGone: (WebView?) -> Unit = { view ->
+            view?.destroy()
+            (view?.context as? HarnessActivity)?.finish()
+        },
     ) : WebViewClient() {
         override fun onReceivedHttpAuthRequest(
             view: WebView?,
@@ -460,8 +465,7 @@ class HarnessActivity : AppCompatActivity() {
         }
 
         override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
-            view?.destroy()
-            (view?.context as? HarnessActivity)?.finish()
+            onRendererGone(view)
             return true
         }
 

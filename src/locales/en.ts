@@ -406,7 +406,7 @@ export const english: Readonly<Record<string, string>> = {
   "通过系统前台服务提高运行时进程的存活优先级": "Uses a system foreground service to raise the priority of the runtime process",
   "开启后需要常驻通知；锁屏、返回桌面或划掉最近任务后仍可能继续运行": "Requires an ongoing notification; the runtime may keep running after locking the screen, returning home, or swiping the task away",
   "悬浮球": "Floating ball",
-  "在其他应用上层显示悬浮球，点按可快速回到对话": "Shows a floating ball above other apps; tap to return to the conversation",
+  "在其他应用上层显示悬浮球，点按展开 AI 对话小窗": "Shows a floating ball above other apps; tap to open a small AI chat window",
   "需要「显示在其他应用上层」权限才能使用": "Requires the \"Display over other apps\" permission",
   "系统权限已关闭": "System permission is off",
   "前往系统设置开启": "Open system settings",
