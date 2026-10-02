@@ -72,6 +72,7 @@ export const bridge = {
   listInstalledApplications: vi.fn().mockResolvedValue({ apps: [], total: 0, nextOffset: null }),
   getDeviceShellAccess: vi.fn().mockResolvedValue({ enabled: false }),
   setDeviceShellAccess: vi.fn().mockImplementation((enabled: boolean) => Promise.resolve({ enabled })),
+  openVirtualScreen: vi.fn().mockResolvedValue(undefined),
   setAccessibilityAutomationPackages: vi.fn(),
   // 验证密码三条（设置/清除/生物识别重置）。与上面同一道理：桥加了方法而夹具没加，
   // 用到它的界面会在 effect 阶段抛错并**整棵树卸载**，表现成「找不到任何元素」。
@@ -271,6 +272,7 @@ export function beforeEachAppTest(): void {
   bridge.listInstalledApplications.mockResolvedValue({ apps: [], total: 0, nextOffset: null })
   bridge.getDeviceShellAccess.mockResolvedValue({ enabled: false })
   bridge.setDeviceShellAccess.mockImplementation((enabled: boolean) => Promise.resolve({ enabled }))
+  bridge.openVirtualScreen.mockResolvedValue(undefined)
   // 第二个参数是「本次修改白名单」的验证密码；夹具不比对密码（那是原生侧的事），
   // 但**签名必须收**，否则用例里带密码调用会落进 `undefined` 分支，测的还是旧行为。
   bridge.setAccessibilityAutomationPackages.mockImplementation((packages: string[], ...rest: [password?: string]) => {

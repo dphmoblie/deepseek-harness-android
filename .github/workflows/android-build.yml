@@ -21,10 +21,9 @@ permissions:
 env:
   # 应用版本号：与 android/app/build.gradle 的 versionName 保持一致。
   # CI 据此生成运行时版本与 Release 标签：预发布走 v<版本>-mobile-<run_number>，
-  # 正式版（release_type=stable）直接用 v<版本>。0.2.2 相对 0.2.1 的改动：
-  # 内置 dsh 内核从 0.1.5-rc.2 升到 0.2.0-rc.2（官方前端同族同步），四个运行时补丁按新版本重建；
-  # 旧会话由上游的会话格式 v3 → v4 迁移在第一次取得写权时升级（v3 原文件保留）。
-  APP_VERSION: '0.2.2'
+  # 正式版（release_type=stable）直接用 v<版本>。0.2.3 新增目标应用副屏实验功能，
+  # 包含独立预览页、小窗和 AI 状态/截图/动作工具；内置 dsh 仍为 0.2.0-rc.2。
+  APP_VERSION: '0.2.3'
 
 jobs:
   build:
@@ -500,7 +499,7 @@ jobs:
               PRE="false"
             else
               TAG="v${APP_VERSION}-mobile-${{ github.run_number }}"
-              NAME="Mobile test build #${{ github.run_number }}"
+              NAME="DeepSeek Harness Android v${APP_VERSION} 测试版 #${{ github.run_number }}"
               PRE="true"
             fi
             APK="$(ls /tmp/apk/*.apk | head -n1)"
@@ -553,6 +552,12 @@ jobs:
 
           runtime-manifest.json SHA-256：${MANIFEST_SHA}
           EOF
+            # 将随源码评审的版本说明一起发布，保留实验状态、升级注意与验证范围。
+            VERSION_NOTES="docs/发布说明-${APP_VERSION}.md"
+            if [ -f "$VERSION_NOTES" ]; then
+              printf '\n\n' >> /tmp/notes.md
+              cat "$VERSION_NOTES" >> /tmp/notes.md
+            fi
             RESP="$(curl -sS -f -X POST \
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
