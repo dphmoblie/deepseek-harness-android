@@ -243,7 +243,7 @@ describe('悬浮球设置', () => {
       await Promise.resolve()
     })
     expect(screen.queryByText('无法读取悬浮球状态，正在重试')).toBeNull()
-    expect(screen.getByText('在其他应用上层显示悬浮球，点按可快速回到对话')).toBeVisible()
+    expect(screen.getByText('在其他应用上层显示悬浮球，点按展开 AI 对话小窗')).toBeVisible()
   })
 
   it('设置已落盘后悬浮球查询失败不会误报保存失败', async () => {

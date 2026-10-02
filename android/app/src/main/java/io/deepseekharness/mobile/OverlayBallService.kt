@@ -11,8 +11,11 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
@@ -21,6 +24,11 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.webkit.CookieManager
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.app.NotificationCompat
@@ -32,13 +40,15 @@ import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLog
 import io.deepseekharness.mobile.runtime.RuntimeStore
+import io.deepseekharness.mobile.runtime.RuntimeHost
+import io.deepseekharness.mobile.runtime.HarnessAccess
 
 /**
  * 悬浮球前台服务。
  *
  * 职责边界：
- *  - 只做一件事：在其他应用上层显示一个可拖动的球，短按回到 Harness 对话；
- *  - 不执行任何 Shell 命令，不连接 Shizuku，不持有或读取任何凭据；
+ *  - 显示可拖动的球；短按展开同源 Harness 对话小窗；
+ *  - 不执行 Shell 命令，也不连接 Shizuku；小窗仅在已授权会话存活时使用内存中的一次性凭据；
  *  - 通知内容固定，不含 URL、端口、密码、终端输出或其他用户数据；
  *  - 明确不承诺常驻：Android 与厂商系统的内存回收、强制停止、电池与后台策略
  *    仍然可以随时结束本进程，球会随进程一起消失。
@@ -64,6 +74,13 @@ class OverlayBallService : Service() {
 
     private var menuScrim: View? = null
     private var menuView: View? = null
+    private var conversationView: View? = null
+    private var conversationWebView: WebView? = null
+    private var conversationError: TextView? = null
+    private var conversationParams: WindowManager.LayoutParams? = null
+    private var conversationAccess: HarnessAccess? = null
+    private var conversationOpening = false
+    private var conversationRequest = 0L
     private lateinit var layoutParams: WindowManager.LayoutParams
 
     private var touchStartX = 0f
@@ -75,6 +92,7 @@ class OverlayBallService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activeService = this
         ensureNotificationChannel()
         windowManager = getSystemService(WindowManager::class.java)
     }
@@ -158,9 +176,21 @@ class OverlayBallService : Service() {
         layoutParams.y = y
         runCatching { windowManager.updateViewLayout(view, layoutParams) }
         preferences.writePosition(x, y)
+        conversationParams?.let { params ->
+            val (width, height) = conversationSize(metrics.widthPixels, metrics.heightPixels)
+            params.width = width
+            params.height = height
+            val (panelX, panelY) = OverlayBallPolicy.menuPosition(
+                x, y, layoutParams.width, width, height, metrics.widthPixels, metrics.heightPixels,
+            )
+            params.x = panelX
+            params.y = panelY
+            conversationView?.let { runCatching { windowManager.updateViewLayout(it, params) } }
+        }
     }
 
     override fun onDestroy() {
+        detachConversation()
         detachMenu()
         detachBall()
         stopForegroundCompat()
@@ -168,6 +198,7 @@ class OverlayBallService : Service() {
         // 清掉运行标记：它对外表示「当前是否在运行」，只有 onDestroy 是所有结束路径的
         // 唯一汇合点；不在这里清，界面会把已经结束的服务一直显示成运行中。
         isRunning = false
+        if (activeService === this) activeService = null
         diagnostics.record(
             DiagnosticLevel.INFO,
             DiagnosticEvent.KEEP_ALIVE,
@@ -253,7 +284,7 @@ class OverlayBallService : Service() {
 
         // 触摸与无障碍操作共用语义点击入口，TalkBack 可直接点击或长按球体。
         view.setOnClickListener {
-            if (!stopIfOverlayPermissionRevoked()) openHarness()
+            if (!stopIfOverlayPermissionRevoked()) toggleConversation()
         }
         view.setOnLongClickListener {
             if (!stopIfOverlayPermissionRevoked()) showMenu()
@@ -412,6 +443,224 @@ class OverlayBallService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         runCatching { pending.send() }
+    }
+
+    private fun toggleConversation() {
+        if (conversationView != null || conversationOpening) {
+            detachConversation()
+        } else {
+            conversationOpening = true
+            val request = ++conversationRequest
+            Thread({
+                // Startup may hold the runtime lock for several seconds; never wait on the overlay UI thread.
+                val access = RuntimeHost.controllerOrNull()?.let {
+                    runCatching { it.openHarnessAccess() }.getOrNull()
+                }
+                Handler(Looper.getMainLooper()).post {
+                    if (request != conversationRequest || activeService !== this) return@post
+                    conversationOpening = false
+                    if (!stopIfOverlayPermissionRevoked()) showConversation(access)
+                }
+            }, "dsh-overlay-access").start()
+        }
+    }
+
+    /** The small window uses the same authenticated local page as the full Harness screen. */
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun showConversation(access: HarnessAccess?) {
+        detachMenu()
+        val metrics = resources.displayMetrics
+        val (width, height) = conversationSize(metrics.widthPixels, metrics.heightPixels)
+        val (x, y) = OverlayBallPolicy.menuPosition(
+            layoutParams.x, layoutParams.y, layoutParams.width,
+            width, height, metrics.widthPixels, metrics.heightPixels,
+        )
+        val frame = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(MENU_BACKGROUND_COLOR)
+                cornerRadius = dp(18).toFloat()
+            }
+            clipToOutline = true
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setOnTouchListener(object : View.OnTouchListener {
+                var startX = 0f
+                var startY = 0f
+                var panelX = 0
+                var panelY = 0
+
+                override fun onTouch(view: View, event: MotionEvent): Boolean {
+                    val params = conversationParams ?: return false
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            startX = event.rawX
+                            startY = event.rawY
+                            panelX = params.x
+                            panelY = params.y
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            val screen = resources.displayMetrics
+                            params.x = (panelX + (event.rawX - startX).toInt())
+                                .coerceIn(0, (screen.widthPixels - params.width).coerceAtLeast(0))
+                            params.y = (panelY + (event.rawY - startY).toInt())
+                                .coerceIn(0, (screen.heightPixels - params.height).coerceAtLeast(0))
+                            conversationView?.let { runCatching { windowManager.updateViewLayout(it, params) } }
+                        }
+                    }
+                    return true
+                }
+            })
+        }
+        header.addView(TextView(this).apply {
+            text = getString(R.string.overlay_conversation_title)
+            setTextColor(MENU_TEXT_COLOR)
+            textSize = 16f
+            setPadding(dp(16), 0, 0, 0)
+        }, LinearLayout.LayoutParams(0, dp(52), 1f))
+        header.addView(conversationAction(R.string.overlay_conversation_expand) {
+            if (access != null) AppAuthenticationState.authorizeHarnessLaunch(access)
+            detachConversation()
+            openHarness()
+        })
+        header.addView(conversationAction(R.string.overlay_conversation_close) { detachConversation() })
+        frame.addView(header)
+
+        val body = FrameLayout(this)
+        frame.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
+        val origin = HarnessActivity.Origin.parse(access?.url)
+        val cookie = access?.password?.let { runCatching { HarnessSessionCookie.authenticated(it) }.getOrNull() }
+        if (access == null || origin == null || cookie == null) {
+            body.addView(TextView(this).apply {
+                text = getString(R.string.overlay_conversation_unavailable)
+                setTextColor(MENU_TEXT_COLOR)
+                gravity = Gravity.CENTER
+                setOnClickListener {
+                    detachConversation()
+                    openHarness()
+                }
+            }, FrameLayout.LayoutParams(-1, -1))
+        } else {
+            val web = WebView(this)
+            web.settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                allowFileAccess = false
+                allowContentAccess = false
+                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                javaScriptCanOpenWindowsAutomatically = false
+                setSupportMultipleWindows(false)
+                safeBrowsingEnabled = true
+            }
+            CookieManager.getInstance().setAcceptThirdPartyCookies(web, false)
+            val error = TextView(this).apply {
+                text = getString(R.string.harness_page_failed)
+                setTextColor(MENU_TEXT_COLOR)
+                gravity = Gravity.CENTER
+                visibility = View.GONE
+            }
+            body.addView(web, FrameLayout.LayoutParams(-1, -1))
+            body.addView(error, FrameLayout.LayoutParams(-1, -1))
+            conversationWebView = web
+            conversationError = error
+            web.webViewClient = HarnessActivity.RestrictedWebViewClient(
+                origin, access.username, access.password,
+                onMainFrameFailure = { if (conversationWebView === web) error.visibility = View.VISIBLE },
+                onRendererGone = { detachConversation() },
+            )
+        }
+
+        val params = WindowManager.LayoutParams(
+            width, height, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            this.x = x
+            this.y = y
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        }
+        if (runCatching { windowManager.addView(frame, params) }.isFailure) {
+            conversationWebView?.destroy()
+            conversationWebView = null
+            conversationError = null
+            return
+        }
+        conversationView = frame
+        conversationParams = params
+        conversationAccess = access
+        if (access == null || origin == null || cookie == null) return
+        val web = conversationWebView ?: return
+        val entry = runCatching {
+            HarnessPageUrl.withVersions(
+                origin.initialUrl, BuildConfig.VERSION_NAME,
+                RuntimeStore(this).installedManifest()?.version,
+            )
+        }.getOrNull() ?: run {
+            conversationError?.visibility = View.VISIBLE
+            return
+        }
+        web.settings.cacheMode = when (HarnessPageCache.modeFor(entry)) {
+            HarnessCacheMode.NORMAL -> WebSettings.LOAD_DEFAULT
+            HarnessCacheMode.BYPASS -> WebSettings.LOAD_NO_CACHE
+        }
+        CookieManager.getInstance().setCookie(HarnessSessionCookie.origin(origin.port), cookie) { accepted ->
+            if (conversationWebView !== web) return@setCookie
+            if (!accepted || AppAuthenticationState.harnessAccess()?.password != access.password) {
+                conversationError?.visibility = View.VISIBLE
+                return@setCookie
+            }
+            CookieManager.getInstance().flush()
+            web.loadUrl(entry)
+        }
+    }
+
+    private fun conversationAction(label: Int, action: () -> Unit): TextView = TextView(this).apply {
+        text = getString(label)
+        contentDescription = text
+        setTextColor(MENU_TEXT_COLOR)
+        gravity = Gravity.CENTER
+        textSize = 14f
+        minWidth = dp(48)
+        minHeight = dp(48)
+        setOnClickListener { action() }
+    }
+
+    private fun conversationSize(screenWidth: Int, screenHeight: Int): Pair<Int, Int> =
+        minOf(dp(360), (screenWidth - dp(24)).coerceAtLeast(1)) to
+            minOf(dp(560), (screenHeight - dp(72)).coerceAtLeast(1))
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun detachConversation() {
+        conversationRequest++
+        conversationOpening = false
+        val access = conversationAccess
+        conversationAccess = null
+        conversationView?.let { runCatching { windowManager.removeView(it) } }
+        conversationView = null
+        conversationParams = null
+        conversationError = null
+        conversationWebView?.let { web ->
+            conversationWebView = null
+            runCatching {
+                web.stopLoading()
+                web.webViewClient = WebViewClient()
+                web.destroy()
+            }
+        }
+        // The full-page Activity owns its cookie; a standalone small window clears only its own.
+        if (!AppAuthenticationState.isHarnessAuthenticated() && access != null) {
+            HarnessActivity.Origin.parse(access.url)?.let { origin ->
+                val cookies = CookieManager.getInstance()
+                cookies.setCookie(HarnessSessionCookie.origin(origin.port), HarnessSessionCookie.expired()) {
+                    cookies.flush()
+                }
+            }
+        }
     }
 
     // ── 长按菜单 ────────────────────────────────────────────────────────────
@@ -622,6 +871,13 @@ class OverlayBallService : Service() {
     }
 
     companion object {
+        @Volatile private var activeService: OverlayBallService? = null
+
+        /** A full-page logout invalidates the shared one-time session immediately. */
+        fun closeConversation() {
+            activeService?.detachConversation()
+        }
+
         private const val CHANNEL_ID = "harness_overlay_ball"
         private const val NOTIFICATION_ID = 0x44534802
         private const val BALL_SIZE_DP = 48

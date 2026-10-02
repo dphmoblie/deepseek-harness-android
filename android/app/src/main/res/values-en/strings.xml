@@ -27,10 +27,14 @@
     <!-- Floating ball. Fixed copy: no URL, port, credential, or session content. -->
     <!-- Screen-reader name for the ball itself: a noun phrase, not the status-sentence notification title below. -->
     <string name="overlay_ball_content_description">Floating ball</string>
+    <string name="overlay_conversation_title">Harness AI chat</string>
+    <string name="overlay_conversation_expand">Full screen</string>
+    <string name="overlay_conversation_close">Close</string>
+    <string name="overlay_conversation_unavailable">Chat is not running. Tap to open Harness in the app.</string>
     <string name="overlay_ball_channel_name">Floating ball</string>
-    <string name="overlay_ball_channel_description">Shows a floating ball above other apps; tap to return to the Harness conversation</string>
+    <string name="overlay_ball_channel_description">Shows a floating ball above other apps; tap it to open a small Harness chat window</string>
     <string name="overlay_ball_notification_title">Floating ball is on</string>
-    <string name="overlay_ball_notification_text">Tap to return to the Harness conversation</string>
+    <string name="overlay_ball_notification_text">Tap to open the app; use the ball for a small chat window</string>
     <string name="overlay_ball_menu_return">Return to app</string>
     <string name="overlay_ball_menu_hide">Hide floating ball</string>
 

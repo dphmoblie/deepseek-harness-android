@@ -3724,7 +3724,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 {!overlayPermissionKnown
                   ? t("暂时无法确认悬浮窗权限")
                   : overlayBall.canDrawOverlays
-                  ? t("在其他应用上层显示悬浮球，点按可快速回到对话")
+                  ? t("在其他应用上层显示悬浮球，点按展开 AI 对话小窗")
                   : t("需要「显示在其他应用上层」权限才能使用")}
               </small>
               {overlayBallEnabled && overlayPermissionKnown && !overlayBall.canDrawOverlays ? (
