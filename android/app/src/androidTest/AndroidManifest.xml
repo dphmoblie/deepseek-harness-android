@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 仅在测试 APK 中安装的无用户数据测试应用。主 APK 不包含此入口。 -->
+    <application>
+        <activity
+            android:name="io.deepseekharness.mobile.virtualscreen.VirtualScreenProbeActivity"
+            android:exported="true"
+            android:resizeableActivity="true"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+    </application>
+</manifest>

@@ -330,6 +330,7 @@ export function createBrowserBridge(): RuntimeBridge {
     resetAccessibilityPasswordWithBiometric: (): Promise<AccessibilityAutomationState> =>
       Promise.reject(new Error('浏览器预览不支持系统生物识别验证')),
     openAccessibilitySettings: () => Promise.reject(new Error('浏览器预览不支持打开系统无障碍设置')),
+    openVirtualScreen: () => Promise.reject(new Error('目标应用副屏需要 Android 10 以上设备与 Shizuku')),
     // 浏览器预览没有 Android 前台服务：如实报告未运行，避免误导保活预期。
     getKeepAliveState: (): Promise<KeepAliveState> => Promise.resolve({
       keepRuntimeInBackground: currentSettings.keepRuntimeInBackground === true,

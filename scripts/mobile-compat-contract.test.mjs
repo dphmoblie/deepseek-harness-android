@@ -401,6 +401,9 @@ test('the mobile profile ships model-facing Shizuku tools without exposing bridg
   assert.deepEqual(
     registeredTools.map(tool => tool.name),
     [
+      'mobile_virtual_screen_state',
+      'mobile_virtual_screen_screenshot',
+      'mobile_virtual_screen_action',
       'mobile_device_background_tasks',
       'mobile_device_screenshot',
       'mobile_device_shell',
@@ -524,7 +527,7 @@ test('Shizuku UserService uses the reserved removal transaction and stops with t
     assert.match(aidl, new RegExp(`${method}\\([^;]*\\)\\s*=\\s*${transaction};`))
   }
   assert.match(aidl, /void destroy\(\)\s*=\s*16777114;/)
-  assert.match(shizukuRuntime, /private const val USER_SERVICE_VERSION = 3/)
+  assert.match(shizukuRuntime, /private const val USER_SERVICE_VERSION = 4/)
   assert.match(shizukuRuntime, /fun disconnect\(\)/)
   assert.match(shizukuRuntime, /activeServiceGeneration = serviceGeneration\.incrementAndGet\(\)/)
   assert.match(shizukuRuntime, /if \(tryPingBinder\(\)\)[\s\S]*?activeServiceGeneration = serviceGeneration\.incrementAndGet\(\)[\s\S]*?activeConnection = null/)

@@ -55,6 +55,11 @@ enum class AuditEvent {
     /** 无障碍节点动作；不记录输入内容、包名或资源 ID。 */
     ACCESSIBILITY_ACTION,
 
+    /** 副屏生命周期、读取与操作；仅记录动作类别和结果，不记录应用、图像、坐标或输入。 */
+    VIRTUAL_SCREEN_SESSION,
+    VIRTUAL_SCREEN_READ,
+    VIRTUAL_SCREEN_ACTION,
+
     /** 外置投递区：一键导入（inbox 的 tar → 工作区 mailbox-import）。 */
     MAILBOX_IMPORT,
 

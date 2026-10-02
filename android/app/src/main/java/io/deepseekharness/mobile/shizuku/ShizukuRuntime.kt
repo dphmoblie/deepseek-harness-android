@@ -51,6 +51,8 @@ class ShizukuRuntime(
     @Volatile private var permissionDeniedThisSession = false
     @Volatile private var permissionFuture: CompletableFuture<Int>? = null
     @Volatile private var service: IDeviceShellService? = null
+    // 保留创建副屏的那条连接，主 Shizuku Binder 撤销后仍可尽力回收旧会话。
+    @Volatile private var virtualScreenOwner: Pair<IDeviceShellService, String>? = null
     @Volatile private var activeServiceGeneration = 0L
     @Volatile private var activeConnection: ServiceConnection? = null
     @Volatile private var disconnecting = false
@@ -291,6 +293,56 @@ class ShizukuRuntime(
         return state()
     }
 
+    fun startVirtualScreen(component: String, width: Int, height: Int, dpi: Int, owner: IBinder): org.json.JSONObject {
+        requirePermission()
+        io.deepseekharness.mobile.virtualscreen.VirtualScreenPolicy.component(component)
+        io.deepseekharness.mobile.virtualscreen.VirtualScreenPolicy.dimensions(width, height, dpi)
+        val connection = requireService()
+        val created = org.json.JSONObject(connection.startVirtualScreen(component, width, height, dpi, owner))
+        virtualScreenOwner = connection to created.getString("sessionId")
+        return created
+    }
+
+    fun virtualScreenState(): org.json.JSONObject {
+        requirePermission()
+        return org.json.JSONObject(requireService().virtualScreenState())
+    }
+
+    fun virtualScreenAction(parameters: String): org.json.JSONObject {
+        requirePermission()
+        require(parameters.length <= 4096)
+        return org.json.JSONObject(requireService().virtualScreenAction(parameters))
+    }
+
+    /** 仅用于回收已拥有的副屏；撤销权限后仍尝试通过旧连接释放，不重新绑定服务。 */
+    fun closeVirtualScreen(sessionId: String) {
+        require(SESSION_PATTERN.matches(sessionId))
+        val owned = virtualScreenOwner?.takeIf { it.second == sessionId } ?: return
+        try {
+            if (owned.first.asBinder().isBinderAlive) owned.first.virtualScreenAction(org.json.JSONObject().put("sessionId", sessionId).put("action", "stop").toString())
+        } finally {
+            if (virtualScreenOwner === owned) virtualScreenOwner = null
+        }
+    }
+
+    fun virtualScreenSnapshot(sessionId: String): ByteArray {
+        requirePermission()
+        require(SESSION_PATTERN.matches(sessionId))
+        val pipe = requireService().virtualScreenSnapshot(sessionId)
+        return android.os.ParcelFileDescriptor.AutoCloseInputStream(pipe).use { input ->
+            val out = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                check(out.size() + n <= 8 * 1024 * 1024) { "副屏截图过大" }
+                out.write(buffer, 0, n)
+            }
+            pipe.checkError()
+            out.toByteArray()
+        }
+    }
+
     fun create(
         columns: Int,
         rows: Int,
@@ -394,6 +446,7 @@ class ShizukuRuntime(
 
     fun disconnect() {
         disconnecting = true
+        virtualScreenOwner?.let { runCatching { closeVirtualScreen(it.second) } }
         var failure: RuntimeFailure? = null
         val current = service
         val currentBinder = current?.asBinder()?.takeIf { it.isBinderAlive }
@@ -621,7 +674,7 @@ class ShizukuRuntime(
         private const val BINDER_TIMEOUT_SECONDS = 8L
         private const val SERVICE_TIMEOUT_SECONDS = 10L
         private const val SERVICE_EXIT_TIMEOUT_SECONDS = 5L
-        private const val USER_SERVICE_VERSION = 3
+        private const val USER_SERVICE_VERSION = 4
         private const val MAX_SESSIONS = 4
         private val SESSION_PATTERN = Regex("^[a-f0-9-]{36}$")
     }

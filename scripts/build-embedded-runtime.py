@@ -739,15 +739,15 @@ def inject_bundles_into_dsh_manifest(dsh_root: Path, bundle_names: Iterable[str]
 
 DEVICE_CLI = """#!/usr/bin/env node
 'use strict';
-// dsh-device: 通过宿主 Shizuku 执行设备命令
-// 用法: dsh-device screenshot|uiDump|tap|inputText|deviceInfo|listPackages|getSetting|battery|launchApp|foregroundPackage|wait|fileList|fileRead|fileWrite|fileMkdir|fileDownload|fileUpload [json-param]
+// dsh-device: 通过宿主 Shizuku 执行设备命令；副屏会话由安卓壳页面先创建
+// 用法: dsh-device screenshot|uiDump|tap|inputText|deviceInfo|listPackages|getSetting|battery|launchApp|foregroundPackage|wait|fileList|fileRead|fileWrite|fileMkdir|fileDownload|fileUpload|virtualScreenState|virtualScreenCapture|virtualScreenAction [json-param]
 const token = process.env.DSH_DEVICE_BRIDGE_TOKEN || '';
 const port = Number(process.env.DSH_DEVICE_BRIDGE_PORT);
 if (!/^[A-Za-z0-9_-]{43}$/.test(token) || !Number.isInteger(port) || port < 1024 || port > 65535) {
   console.error('DEVICE_BRIDGE_UNAVAILABLE'); process.exit(2);
 }
 const cmd = process.argv[2];
-if (!cmd) { console.error('用法: dsh-device screenshot|uiDump|tap|inputText|deviceInfo|listPackages|getSetting|battery|launchApp|foregroundPackage|wait|fileList|fileRead|fileWrite|fileMkdir|fileDownload|fileUpload [json-param]'); process.exit(2); }
+if (!cmd) { console.error('用法: dsh-device screenshot|uiDump|tap|inputText|deviceInfo|listPackages|getSetting|battery|launchApp|foregroundPackage|wait|fileList|fileRead|fileWrite|fileMkdir|fileDownload|fileUpload|virtualScreenState|virtualScreenCapture|virtualScreenAction [json-param]'); process.exit(2); }
 const param = process.argv.slice(3).join(' ');
 fetch('http://127.0.0.1:' + port + '/device-command', {
   signal: AbortSignal.timeout(75000),

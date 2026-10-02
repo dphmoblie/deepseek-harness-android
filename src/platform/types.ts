@@ -765,6 +765,8 @@ export interface RuntimeBridge {
   requestShizukuPermission: () => Promise<ShizukuState>
   connectShizuku: () => Promise<ShizukuState>
   openShizuku: () => Promise<void>
+  /** 打开目标应用副屏选择和预览页；仅安卓可用。 */
+  openVirtualScreen: () => Promise<void>
   /** 读取无障碍服务状态和目标应用白名单；不会返回当前窗口内容，也不返回任何密码信息。 */
   getAccessibilityAutomationState: () => Promise<AccessibilityAutomationState>
   /** 本机应用选择器的分页查询，数量不限；不向 AI 自动发送清单。 */

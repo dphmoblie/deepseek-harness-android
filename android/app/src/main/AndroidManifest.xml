@@ -14,6 +14,7 @@
          POST_NOTIFICATIONS 仅影响 Android 13+ 是否显示通知，服务本身不依赖它。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 目标应用副屏预览需要独立的前台服务；通知用于让用户随时结束会话。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
@@ -131,6 +132,17 @@
                 android:value="在其他应用上层显示悬浮球，点按返回 Harness 对话" />
         </service>
 
+        <service
+            android:name=".virtualscreen.VirtualScreenService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false"
+            tools:ignore="Instantiatable">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="在独立虚拟屏幕运行并预览用户选择的目标应用" />
+        </service>
+
         <!-- 需要用户手动在系统设置中开启。只读取白名单应用的当前窗口，不能静默开启，
              也不声明执行密码、验证码、支付、权限和锁屏操作。 -->
         <service
@@ -165,6 +177,13 @@
             android:screenOrientation="unspecified"
             android:theme="@style/AppTheme.NoActionBar"
             android:windowSoftInputMode="adjustResize" />
+
+        <activity
+            android:name=".virtualscreen.VirtualScreenActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:screenOrientation="unspecified"
+            android:theme="@style/AppTheme.NoActionBar" />
 
         <!-- Only the Service-owned overlay WebView can launch this SAF result bridge. -->
         <activity

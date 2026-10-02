@@ -1154,6 +1154,18 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /** 仅壳内入口；不接受外部包名或命令，目标应用在原生页面选择。 */
+    @PluginMethod
+    fun openVirtualScreen(call: PluginCall) {
+        activity?.runOnUiThread {
+            resolveWhileActive(call) {
+                if (Build.VERSION.SDK_INT < 29) throw RuntimeFailure("VIRTUAL_SCREEN_UNSUPPORTED", "副屏需要 Android 10 或更高版本")
+                activity.startActivity(Intent(activity, io.deepseekharness.mobile.virtualscreen.VirtualScreenActivity::class.java))
+                null
+            }
+        } ?: call.reject("当前没有可用的页面", "ACTIVITY_UNAVAILABLE")
+    }
+
     /**
      * 权限：应用内桥接。
      * 只返回后台保持与恢复状态（布尔值、枚举、时间戳），不含 URL、凭据或终端内容。

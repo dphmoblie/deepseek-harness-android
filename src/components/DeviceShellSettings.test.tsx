@@ -4,6 +4,18 @@ import type { RuntimeBridge } from '../platform/types'
 import { DeviceShellSettings } from './DeviceShellSettings'
 
 describe('AI Shell 持续授权', () => {
+  it('副屏入口跟随授权开关，并报告原生页面打开失败', async () => {
+    const open = vi.fn().mockRejectedValue(new Error('设备不支持'))
+    const bridge = { getDeviceShellAccess: vi.fn().mockResolvedValue({ enabled: true }), openVirtualScreen: open } as unknown as RuntimeBridge
+    render(<DeviceShellSettings bridge={bridge} disabled={false} />)
+    const button = screen.getByRole('button', { name: '目标应用副屏（实验功能）' })
+    expect(button).toBeDisabled()
+    await waitFor(() => expect(button).toBeEnabled())
+    fireEvent.click(button)
+    await screen.findByRole('alert')
+    expect(open).toHaveBeenCalledOnce()
+    expect(button).toBeEnabled()
+  })
   it('读取之前不可操作，保存后以原生返回值为准', async () => {
     let resolve!: (value: { enabled: boolean }) => void
     const get = vi.fn(() => new Promise<{ enabled: boolean }>(done => { resolve = done }))

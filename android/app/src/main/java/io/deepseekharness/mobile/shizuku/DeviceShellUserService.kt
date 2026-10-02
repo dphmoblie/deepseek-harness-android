@@ -15,6 +15,19 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 class DeviceShellUserService() : IDeviceShellService.Stub() {
+    private val virtualScreen = io.deepseekharness.mobile.virtualscreen.ShellVirtualScreen()
+
+    // 特权操作以用户服务进程身份执行，权限由 Shizuku 与宿主授权共同控制。
+    private fun <T> asService(operation: () -> T): T {
+        val identity = android.os.Binder.clearCallingIdentity()
+        try { return operation() } finally { android.os.Binder.restoreCallingIdentity(identity) }
+    }
+
+    override fun startVirtualScreen(component: String, width: Int, height: Int, dpi: Int, owner: IBinder): String =
+        asService { virtualScreen.start(component, width, height, dpi, owner) }
+    override fun virtualScreenState(): String = asService { virtualScreen.state().toString() }
+    override fun virtualScreenAction(parameters: String): String = asService { virtualScreen.action(parameters) }
+    override fun virtualScreenSnapshot(sessionId: String): android.os.ParcelFileDescriptor = asService { virtualScreen.snapshot(sessionId) }
     @Suppress("UNUSED_PARAMETER")
     constructor(context: Context) : this()
 
@@ -126,6 +139,7 @@ class DeviceShellUserService() : IDeviceShellService.Stub() {
     }
 
     override fun closeAll() {
+        virtualScreen.close()
         sessions.values.toList().forEach(::close)
     }
 

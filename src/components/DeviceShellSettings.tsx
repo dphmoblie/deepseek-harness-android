@@ -8,6 +8,8 @@ export function DeviceShellSettings({ bridge, disabled }: { bridge: RuntimeBridg
   const [loaded, setLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
   const [failed, setFailed] = useState(false)
+  const [opening, setOpening] = useState(false)
+  const [screenError, setScreenError] = useState('')
   const refresh = useCallback(async () => {
     setLoaded(false); setFailed(false)
     try { const state = await bridge.getDeviceShellAccess(); setEnabled(state.enabled); setLoaded(true) }
@@ -20,6 +22,12 @@ export function DeviceShellSettings({ bridge, disabled }: { bridge: RuntimeBridg
     catch { setFailed(true); setLoaded(false) }
     finally { setSaving(false) }
   }
+  async function openScreen() {
+    setOpening(true); setScreenError('')
+    try { await bridge.openVirtualScreen() }
+    catch { setScreenError(t('无法打开副屏页面，请确认当前使用安卓壳且系统为 Android 10 或更高版本')) }
+    finally { setOpening(false) }
+  }
   return <div className="settings-subsection" aria-labelledby="device-shell-settings">
     <div className="section-title"><span className="section-icon"><TerminalSquare size={19} /></span>
       <div><h3 id="device-shell-settings">AI Shell</h3><p>{t('通过 Shizuku 执行 Android 命令，支持读写文件和查看后台任务。')}</p></div>
@@ -29,6 +37,9 @@ export function DeviceShellSettings({ bridge, disabled }: { bridge: RuntimeBridg
     </label>
     <p className="settings-note">{t('Shell 使用 Shizuku 的实际权限，不受无障碍应用白名单限制。命令和输出不写入诊断日志；需要返回给 AI 的内容会进入当前会话及所选模型服务。')}</p>
     <p className="settings-note"><strong>{t('写入、覆盖、删除会修改真实设备数据，请让 AI 只处理本次任务需要的文件。')}</strong></p>
+    <button type="button" disabled={disabled || !loaded || !enabled || opening || saving} onClick={() => { void openScreen() }}>{t('目标应用副屏（实验功能）')}</button>
+    <p className="settings-note">{t('选择应用在独立副屏运行，可切换页面或小窗查看，并让 AI 截图、点击、滑动。需要 Shizuku 和设备支持；首次使用请先验证目标应用兼容性。')}</p>
+    {screenError && <p role="alert">{screenError}</p>}
     {failed && <p role="alert">{t('无法读取或保存 AI Shell 授权状态')} <button type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
   </div>
 }

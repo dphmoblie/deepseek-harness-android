@@ -203,6 +203,7 @@ class DeviceBridgeServer(
                         respondResult(output, io.deepseekharness.mobile.shizuku.DeviceCommandResult(
                             true, 0, JSONObject().put("schemaVersion", 3).put("allowlistedAutomation", true)
                                 .put("shellEnabled", shellEnabled()).put("backgroundTasks", true)
+                                .put("virtualScreen", true)
                                 .put("directDeviceOperations", true).toString(), false, null,
                         ))
                         return
@@ -219,6 +220,11 @@ class DeviceBridgeServer(
                                 errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
                             )
                         respondResult(output, result)
+                        return
+                    }
+                    if (commandName in setOf("virtualScreenState", "virtualScreenCapture", "virtualScreenAction")) {
+                        if (!shellEnabled()) throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请在 Shizuku 设置中开启 AI Shell")
+                        respondResult(output, io.deepseekharness.mobile.virtualscreen.VirtualScreenCommands.execute(commandName, param))
                         return
                     }
                     // 访客侧「一轮任务已完成」的收单点（登记册 §5.5）。

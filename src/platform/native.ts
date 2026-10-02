@@ -103,6 +103,7 @@ interface NativeRuntimePlugin {
   requestShizukuPermission(): Promise<ShizukuState>
   connectShizuku(): Promise<ShizukuState>
   openShizuku(): Promise<void>
+  openVirtualScreen(): Promise<void>
   getAccessibilityAutomationState(): Promise<unknown>
   listInstalledApplications(options: { query: string; offset: number }): Promise<unknown>
   getDeviceShellAccess(): Promise<unknown>
@@ -241,6 +242,7 @@ function createNativeBridge(): RuntimeBridge {
     requestShizukuPermission: () => NativeRuntime.requestShizukuPermission().then(validateShizukuState),
     connectShizuku: () => NativeRuntime.connectShizuku().then(validateShizukuState),
     openShizuku: () => NativeRuntime.openShizuku(),
+    openVirtualScreen: () => NativeRuntime.openVirtualScreen(),
     getAccessibilityAutomationState: () => NativeRuntime.getAccessibilityAutomationState().then(validateAccessibilityAutomationState),
     listInstalledApplications: (query, offset) => {
       if (typeof query !== 'string' || query.length > 160 || [...query].some(char => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f) || !Number.isSafeInteger(offset) || offset < 0) {
