@@ -212,7 +212,7 @@ class MobileRuntimeController(
     }
 
     /** 权限：仅应用内部；生命周期锁防止插件写入与启动、安装、终端并发。 */
-    fun managePlugins(operation: String, id: String?, enabled: Boolean?, childId: String?): com.getcapacitor.JSObject = lifecycleLock.withLock {
+    fun managePlugins(operation: String, id: String?, enabled: Boolean?, childId: String?, source: String? = null): com.getcapacitor.JSObject = lifecycleLock.withLock {
         ensureOpen()
         if (operation != "list") {
             if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
@@ -220,7 +220,7 @@ class MobileRuntimeController(
             }
             supervisor.preparePluginManagement()
         }
-        plugins.run(operation, id, enabled, childId)
+        plugins.run(operation, id, enabled, childId, source)
     }
 
     fun requestStartCancellation(): Boolean = supervisor.requestStartCancellation()
@@ -390,6 +390,8 @@ class MobileRuntimeController(
             lastIntent = record.intent,
             lastPhase = record.phase,
             lastUpdatedAtMillis = record.updatedAtMillis,
+            lastTurnCompletedAtMillis = TaskNotification.lastTurnCompletedAtMillis,
+            turnCompletionSequence = TaskNotification.turnCompletionSequence,
         )
     }
 

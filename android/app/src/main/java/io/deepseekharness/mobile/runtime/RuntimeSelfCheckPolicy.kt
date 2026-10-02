@@ -14,7 +14,7 @@ internal object RuntimeSelfCheckPolicy {
     const val CHECK = "check"
     const val REPAIR = "repair"
 
-    /** 单次载荷的条目上限；自检固定只有十一项，多出来的一律不可信。 */
+    /** 单次载荷的条目上限；自检固定只有十四项（十一项链路 + 三项编译环境能力），多出来的一律不可信。 */
     const val MAX_CHECKS = 32
 
     /** 计数上限：修复只有三个可改目标，超过这个数就说明载荷不可信。 */
@@ -36,6 +36,10 @@ internal object RuntimeSelfCheckPolicy {
         "attachments",
         "hardlink",
         "rg",
+        // 追加的编译环境能力项：既有 11 项的 id 与相对顺序不得改动（hardlink 仍是索引 9）。
+        "c_compiler",
+        "make",
+        "python3",
     )
 
     /** 状态白名单。`ok` 不带 `code`，其余状态必须带 `code`。 */
@@ -97,6 +101,25 @@ internal object RuntimeSelfCheckPolicy {
             "RG_MISSING" to "warn",
             "RG_NOT_EXECUTABLE" to "warn",
         ),
+        // 编译环境是**能力项**，不是链路故障：缺编译器只影响需要现场构建原生模块的插件，
+        // 所以三态一律 `warn` —— 能力缺失不参与 `summarize` 的失败判定，也不会让整次自检变红。
+        // 三态逐项对应「确实没有 / 工具自己回了非 0 / 没拿到退出码（进程没起来或超时）」，
+        // 最后一态按不可用呈现：绝不把没测出来的编译器算成可用。
+        "c_compiler" to mapOf(
+            "CC_MISSING" to "warn",
+            "CC_UNUSABLE" to "warn",
+            "CC_PROBE_UNKNOWN" to "warn",
+        ),
+        "make" to mapOf(
+            "MAKE_MISSING" to "warn",
+            "MAKE_UNUSABLE" to "warn",
+            "MAKE_PROBE_UNKNOWN" to "warn",
+        ),
+        "python3" to mapOf(
+            "PYTHON3_MISSING" to "warn",
+            "PYTHON3_UNUSABLE" to "warn",
+            "PYTHON3_PROBE_UNKNOWN" to "warn",
+        ),
     )
 
     /** 访客脚本回传的原始条目：字段都还没校验过。 */
@@ -105,7 +128,7 @@ internal object RuntimeSelfCheckPolicy {
     /** 校验后的条目：`code` 只在该检查项非 `ok` 时存在。 */
     internal data class Check(val id: String, val status: String, val code: String?)
 
-    /** 十一项检查的汇总：诊断日志只写这两个值。 */
+    /** 十四项检查的汇总：诊断日志只写这两个值。 */
     internal data class Summary(val firstFailureCode: String?, val failedCount: Int)
 
     /** 修复计数：`candidates` 是本次涉及的目标数，`repaired` 是实际改动的数量。 */

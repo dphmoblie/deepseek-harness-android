@@ -315,6 +315,19 @@ export interface KeepAliveState {
   lastPhase?: RuntimePhase
   /** 最近一次状态写入时间（毫秒时间戳）；从未记录时为 0。 */
   lastUpdatedAtMillis?: number
+  /**
+   * 最近一次「一轮对话结束」被原生受理的毫秒时间戳；与 `lastUpdatedAtMillis` 同源时钟，从未收到时为 0。
+   *
+   * 与 `lastUpdatedAtMillis` 的区别：后者任何一次状态写入都会刷新，前者只在受理到「本轮对话完成」时刷新，
+   * 因此可用它判断"这一轮的收尾是否真的被原生侧接住"，而不会被无关的状态变更顶掉。
+   */
+  lastTurnCompletedAtMillis?: number
+  /**
+   * 「一轮对话结束」被受理的累计序号；进程重启后从 0 重新计数。
+   *
+   * 时间戳可能因同毫秒内多次受理而无法区分先后，序号专门用来消除这种歧义。
+   */
+  turnCompletionSequence?: number
 }
 
 /**
@@ -990,6 +1003,13 @@ export interface PluginGroup {
   id: string
   file: string
   version: string | null
+  /**
+   * 可以回滚到的上一版版本号；没有上一版、上一版目录已被清理或该包受保护时为 `null`。
+   *
+   * 桥接返回值里**总是**带有这个键；类型上可选只是为了兼容手工构造的目录对象（界面按
+   * `group.rollback ?? null` 读取即可）。
+   */
+  rollback?: string | null
   enabled: boolean
   protected: boolean
   official: boolean
@@ -999,8 +1019,14 @@ export interface PluginGroup {
 }
 export interface PluginCatalog { plugins: PluginGroup[] }
 export interface PluginRequest {
-  operation: 'list' | 'enable' | 'child' | 'update'
+  /**
+   * `import`：受控导入（npm 包名 / `https://` 直链 / `git+https://` 地址），需要 `source`；
+   * `rollback`：回滚到该插件的上一版，需要 `id`。
+   */
+  operation: 'list' | 'enable' | 'child' | 'update' | 'import' | 'rollback'
   id?: string
   enabled?: boolean
   childId?: string
+  /** 仅 `import` 使用：来源地址或包名；地址形态可用 `id` 提示期望的包名（可选）。 */
+  source?: string
 }

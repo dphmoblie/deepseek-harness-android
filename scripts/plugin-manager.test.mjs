@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
-const { createManager, within, parseVersion, compareVersions, satisfiesRange, selectNewestCompatible, safeDetail, packageNameOf, collectBareSpecifiers, GRAPH_LIMITS } =
+const { createManager, within, parseVersion, compareVersions, satisfiesRange, selectNewestCompatible, safeDetail, packageNameOf, collectBareSpecifiers, validateImportSource, gitAvailability, GRAPH_LIMITS } =
   require('../android/app/src/main/assets/support/plugin-manager.cjs')
 
 test('裸导入抽取只认包名，路径与内建模块一律忽略', () => {
@@ -222,7 +222,7 @@ test('根目录路径校验兼容真实 Ubuntu 根路径', () => {
   assert.equal(within('/sandbox', '/sandbox-other'), false)
 })
 
-function fixture(t, install) {
+function fixture(t, install, probeGit) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-plugins-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
   const write = (file, data) => {
@@ -238,7 +238,7 @@ function fixture(t, install) {
   }
   pkg('@deepseek-ai/dsh-base', [{ insert: [{ id: 'sandbox', name: 'sandbox' }, { id: 'optional', name: 'optional' }] }])
   const pluginFile = pkg('test-plugin', [{ insert: [{ id: 'tools', name: 'group', group: true, config: [{ id: 'child', name: 'test-plugin/child' }] }] }])
-  return { root, write, profile, pluginFile, manager: createManager(root, install, JSON.parse) }
+  return { root, write, profile, pluginFile, manager: createManager(root, install, JSON.parse, probeGit) }
 }
 
 test('不启动 Harness 即可列出官方、第三方配置文件及子插件', t => {
@@ -708,4 +708,439 @@ test('模块图探测的预算按真实规模设定：截断会少算真实副�
   assert.equal(graph.links, entries)
   assert.equal(graph.realCopies, 1)
   assert.equal(graph.distinctRealpaths, 1)
+})
+
+// ---------------------------------------------------------------------------
+// 受控导入通道：npm 包名 / https 直链 / git+https（与更新共用同一条事务路径）
+// ---------------------------------------------------------------------------
+
+/** 往 staging 里放一个声明了 dsh 补丁的插件包；返回包目录。 */
+function stagePlugin(directory, name, version, files = null) {
+  const target = path.join(directory, 'node_modules', name)
+  fs.mkdirSync(target, { recursive: true })
+  fs.writeFileSync(path.join(target, 'package.json'), JSON.stringify({ name, version, dsh: { bundle: { patch: './cordis.patch.json' } } }))
+  fs.writeFileSync(path.join(target, 'cordis.patch.json'), JSON.stringify([{ insert: [{ id: 'child', name: `${name}/child` }] }]))
+  for (const [file, content] of Object.entries(files ?? {})) {
+    const full = path.join(target, file)
+    fs.mkdirSync(path.dirname(full), { recursive: true })
+    fs.writeFileSync(full, content)
+  }
+  return target
+}
+
+/** 不含 dsh 补丁的普通依赖（导入时无法据此推导出插件包名）。 */
+function stageLibrary(directory, name) {
+  const target = path.join(directory, 'node_modules', name)
+  fs.mkdirSync(target, { recursive: true })
+  fs.writeFileSync(path.join(target, 'package.json'), JSON.stringify({ name, version: '1.0.0' }))
+  return target
+}
+
+/** 固定包名的安装器：记下每次收到的来源字符串（包名或地址）。 */
+function pluginInstaller(name, version, seen = null, files = null) {
+  return (spec, directory) => {
+    if (seen !== null) seen.push(spec)
+    return stagePlugin(directory, name, version, files)
+  }
+}
+
+function capture(run) {
+  try { run(); return null } catch (error) { return error }
+}
+
+function dataFile(root, id, relative) {
+  return path.join(fs.realpathSync(path.join(root, 'opt/dsh/node_modules', id)), relative)
+}
+
+test('导入 npm 包名：新包进入清单且重复导入不产生重复条目', t => {
+  const { manager, profile } = fixture(t, pluginInstaller('extra-plugin', '2.0.0'))
+  const first = manager.importPackage('extra-plugin')
+  const imported = first.plugins.find(row => row.id === 'extra-plugin')
+  assert.equal(imported.version, '2.0.0')
+  assert.equal(imported.enabled, true)
+  assert.equal(imported.rollback, null)
+  const value = JSON.parse(fs.readFileSync(profile))
+  assert.deepEqual(value.dsh.profile.bundles, ['@deepseek-ai/dsh-base', 'test-plugin', 'extra-plugin'])
+  assert.deepEqual(value.dshMobile.bundleOrder, ['@deepseek-ai/dsh-base', 'test-plugin', 'extra-plugin'])
+  assert.deepEqual(value.dshMobile.disabledBundles, [])
+  // 重复导入同一个包等同更新：清单里不得出现第二条，打包顺序也不重排。
+  manager.importPackage('extra-plugin')
+  const after = JSON.parse(fs.readFileSync(profile))
+  assert.deepEqual(after.dsh.profile.bundles, value.dsh.profile.bundles)
+  assert.deepEqual(after.dshMobile.bundleOrder, value.dshMobile.bundleOrder)
+  assert.equal(manager.list().plugins.filter(row => row.id === 'extra-plugin').length, 1)
+})
+
+test('导入 https 直链：原地址交给 npm，包名从安装结果推导，返回值不回传地址', t => {
+  const seen = []
+  const { manager, profile } = fixture(t, pluginInstaller('linked-plugin', '3.0.0', seen))
+  const result = manager.importPackage('https://example.com/linked-plugin-3.0.0.tgz')
+  assert.deepEqual(seen, ['https://example.com/linked-plugin-3.0.0.tgz'])
+  assert.equal(result.plugins.find(row => row.id === 'linked-plugin').version, '3.0.0')
+  assert.ok(JSON.parse(fs.readFileSync(profile)).dsh.profile.bundles.includes('linked-plugin'))
+  // 返回值沿用 list() 投影：不含地址全文、路径或凭据。
+  assert.equal(JSON.stringify(result).includes('example.com'), false)
+})
+
+test('导入清单里已有的包等同更新：保留数据目录且不重复登记', t => {
+  const { manager, root, profile } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
+  fs.mkdirSync(path.join(root, 'opt/dsh/node_modules/test-plugin/data'), { recursive: true })
+  fs.writeFileSync(path.join(root, 'opt/dsh/node_modules/test-plugin/data/settings.json'), '{"keep":true}')
+  const result = manager.importPackage('test-plugin')
+  assert.equal(result.plugins.find(row => row.id === 'test-plugin').version, '2.0.0')
+  assert.equal(fs.readFileSync(dataFile(root, 'test-plugin', 'data/settings.json'), 'utf8'), '{"keep":true}')
+  assert.deepEqual(JSON.parse(fs.readFileSync(profile)).dsh.profile.bundles, ['@deepseek-ai/dsh-base', 'test-plugin'])
+})
+
+test('导入 git 地址：git 确实没有与探测不可判定给出不同受控错误码', t => {
+  const seen = []
+  const missing = fixture(t, pluginInstaller('git-plugin', '1.0.0', seen), () => 'missing')
+  assert.throws(() => missing.manager.importPackage('git+https://github.com/u/r.git#v1.2.3'), /PLUGIN_GIT_MISSING/)
+  assert.deepEqual(seen, [])
+  // 暂存目录整体清掉，只留下空的版本父目录（不能留下半装好的包）。
+  assert.deepEqual(fs.readdirSync(path.join(missing.root, 'root/.dsh-mobile/plugin-manager/versions')), [])
+  assert.equal(JSON.parse(fs.readFileSync(missing.profile, 'utf8')).dsh.profile.bundles.includes('git-plugin'), false)
+
+  const unverified = fixture(t, pluginInstaller('git-plugin', '1.0.0', seen), () => 'unverified')
+  assert.throws(() => unverified.manager.importPackage('git+https://github.com/u/r.git#v1.2.3'), /PLUGIN_GIT_UNVERIFIED/)
+  assert.deepEqual(seen, [])
+
+  const available = fixture(t, pluginInstaller('git-plugin', '1.0.0', seen), () => 'available')
+  assert.equal(available.manager.importPackage('git+https://github.com/u/r.git#v1.2.3').plugins.find(row => row.id === 'git-plugin').version, '1.0.0')
+  assert.deepEqual(seen, ['git+https://github.com/u/r.git#v1.2.3'])
+})
+
+test('导入来源校验：只接受包名、https 直链与 git+https，拒绝时一律不回显', t => {
+  assert.deepEqual(validateImportSource('@scope/foo'), { kind: 'npm', source: '@scope/foo', name: '@scope/foo' })
+  assert.deepEqual(validateImportSource('foo'), { kind: 'npm', source: 'foo', name: 'foo' })
+  assert.deepEqual(validateImportSource('https://example.com/x.tgz'), { kind: 'url', source: 'https://example.com/x.tgz', name: null })
+  assert.deepEqual(validateImportSource('git+https://github.com/u/r.git#v1.2.3'), { kind: 'git', source: 'git+https://github.com/u/r.git#v1.2.3', name: null })
+  const rejected = [
+    '-foo',
+    'http://example.com/x.tgz',
+    'git://example.com/x.git',
+    'ssh://git@example.com/x.git',
+    'file:///etc/passwd',
+    'data:text/plain,x',
+    'https://user:pass@example.com/x.tgz',
+    'https://example.com/../x.tgz',
+    'https://example.com/%2e%2e/x.tgz',
+    'foo bar',
+    'foo"bar',
+    'foo<bar>',
+    'foo`bar',
+    'foo\nbar',
+    '',
+    `foo${'a'.repeat(520)}`,
+    `https://example.com/${'a'.repeat(520)}.tgz`,
+  ]
+  for (const source of rejected) {
+    const error = capture(() => validateImportSource(source))
+    assert.ok(error !== null, `应当拒绝：${JSON.stringify(source.slice(0, 24))}`)
+    assert.equal(error.message, 'PLUGIN_SOURCE_INVALID')
+    // 被拒内容可能含凭据或路径：错误里不得带上它，连 detail 都不该有。
+    assert.equal(error.detail, undefined)
+    assert.equal(String(error.message).includes('example.com'), false)
+  }
+  // 探测函数的结论必须落在三态之内（可用 / 确实没有 / 探测不了），且不抛异常。
+  assert.ok(['available', 'missing', 'unverified'].includes(gitAvailability()))
+})
+
+test('导入受保护包或无法推导包名时受控失败，且不改动清单', t => {
+  const { manager, profile } = fixture(t, (spec, directory) => stageLibrary(directory, 'library-only'))
+  const before = fs.readFileSync(profile, 'utf8')
+  assert.throws(() => manager.importPackage('@deepseek-ai/dsh-base'), /PLUGIN_PROTECTED/)
+  assert.throws(() => manager.importPackage('https://example.com/x.tgz', '@deepseek-ai/dsh-base'), /PLUGIN_PROTECTED/)
+  assert.throws(() => manager.importPackage('https://example.com/x.tgz', '../evil'), /PLUGIN_INPUT_INVALID/)
+  // 安装结果里没有声明 dsh 补丁的包：推导不出插件包名，拒绝而不是猜一个。
+  assert.throws(() => manager.importPackage('https://example.com/x.tgz'), /PLUGIN_IMPORT_UNRESOLVED/)
+  assert.throws(() => manager.importPackage('https://example.com/x.tgz', 'other-name'), /PLUGIN_IMPORT_UNRESOLVED/)
+  assert.equal(fs.readFileSync(profile, 'utf8'), before)
+})
+
+test('导入结果里出现两个候选插件包时拒绝自动推导', t => {
+  const { manager, profile } = fixture(t, (spec, directory) => {
+    stagePlugin(directory, 'first-plugin', '1.0.0')
+    stageLibrary(directory, 'shadow-library')
+    // 第二个候选：同为声明了 dsh 补丁的插件包，且都不在清单里 —— 无法判断用户要装哪个。
+    const second = stagePlugin(directory, 'second-plugin', '1.0.0')
+    return second
+  })
+  const before = fs.readFileSync(profile, 'utf8')
+  assert.throws(() => manager.importPackage('https://example.com/bundle.tgz'), /PLUGIN_IMPORT_UNRESOLVED/)
+  assert.equal(fs.readFileSync(profile, 'utf8'), before)
+})
+
+// ---------------------------------------------------------------------------
+// 插件数据目录：更新/导入前后保留（不跟随符号链接、有累计上限）
+// ---------------------------------------------------------------------------
+
+test('更新保留插件数据目录：内容与嵌套子目录一致，新包自带文件不被误删', t => {
+  const files = { 'data/shipped-by-new.json': '{"fromNew":true}' }
+  const { manager, root } = fixture(t, pluginInstaller('test-plugin', '2.0.0', null, files))
+  const old = path.join(root, 'opt/dsh/node_modules/test-plugin')
+  const payload = {
+    'data/settings.json': '{"keep":1}',
+    'data/nested/deep/notes.txt': 'nested',
+    'data/shipped-by-new.json': '{"fromNew":true}',
+    'config/state.json': '{"c":2}',
+    '.config/hidden.json': '{"h":3}',
+    'storage/cache.bin': 'cache',
+  }
+  for (const [file, content] of Object.entries(payload)) {
+    const full = path.join(old, file)
+    fs.mkdirSync(path.dirname(full), { recursive: true })
+    fs.writeFileSync(full, content)
+  }
+  const result = manager.update('test-plugin')
+  assert.equal(result.plugins.find(row => row.id === 'test-plugin').version, '2.0.0')
+  const bytes = Object.values(payload).reduce((total, content) => total + Buffer.byteLength(content), 0)
+  assert.deepEqual(result.data, { directories: 4, files: 6, bytes })
+  for (const [file, content] of Object.entries(payload)) {
+    assert.equal(fs.readFileSync(dataFile(root, 'test-plugin', file), 'utf8'), content, file)
+  }
+})
+
+test('数据目录超限时受控失败且旧版本完好', t => {
+  const { manager, root } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
+  const old = path.join(root, 'opt/dsh/node_modules/test-plugin')
+  fs.mkdirSync(path.join(old, 'data'))
+  // 16 MiB 是约定上限；写超一个字节，验证判据确实按累计大小而不是按单个目录判断。
+  fs.writeFileSync(path.join(old, 'data/big.bin'), Buffer.alloc(16 * 1024 * 1024 + 1))
+  assert.throws(() => manager.update('test-plugin'), /PLUGIN_DATA_TOO_LARGE/)
+  assert.equal(manager.list().plugins.find(row => row.id === 'test-plugin').version, '1.0.0')
+  assert.equal(fs.lstatSync(old).isSymbolicLink(), false)
+  assert.equal(fs.existsSync(path.join(root, 'root/.dsh-mobile/plugin-manager/transaction.json')), false)
+  assert.deepEqual(fs.readdirSync(path.join(root, 'root/.dsh-mobile/plugin-manager/versions')), [])
+})
+
+test('数据目录里有符号链接时受控失败，旧版本完好', t => {
+  const { manager, root } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
+  const old = path.join(root, 'opt/dsh/node_modules/test-plugin')
+  const outside = path.join(root, 'outside')
+  fs.mkdirSync(path.join(old, 'data'), { recursive: true })
+  fs.mkdirSync(outside)
+  fs.writeFileSync(path.join(old, 'data/ok.json'), '{"ok":true}')
+  fs.symlinkSync(outside, path.join(old, 'data/link'), 'junction')
+  assert.throws(() => manager.update('test-plugin'), /PLUGIN_DATA_UNSAFE/)
+  assert.equal(manager.list().plugins.find(row => row.id === 'test-plugin').version, '1.0.0')
+  assert.equal(fs.lstatSync(old).isSymbolicLink(), false)
+  assert.equal(fs.readFileSync(path.join(old, 'data/ok.json'), 'utf8'), '{"ok":true}')
+  // 数据目录本身是链接：同样不接受（复制会把外面的内容带进安装目录）。
+  fs.rmSync(path.join(old, 'data'), { recursive: true, force: true })
+  fs.symlinkSync(outside, path.join(old, 'data'), 'junction')
+  assert.throws(() => manager.update('test-plugin'), /PLUGIN_DATA_UNSAFE/)
+  assert.equal(manager.list().plugins.find(row => row.id === 'test-plugin').version, '1.0.0')
+})
+
+test('旧包没有数据目录时正常更新，且不误报错误', t => {
+  const { manager } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
+  const result = manager.update('test-plugin')
+  assert.equal(result.plugins.find(row => row.id === 'test-plugin').version, '2.0.0')
+  assert.deepEqual(result.data, { directories: 0, files: 0, bytes: 0 })
+})
+
+// ---------------------------------------------------------------------------
+// 启停状态跨运行时升级：自身快照 + 清单被重建时幂等回填
+// ---------------------------------------------------------------------------
+
+const stateFileOf = root => path.join(root, 'root/.dsh-mobile/plugin-manager/state-snapshot.json')
+const previousFileOf = root => path.join(root, 'root/.dsh-mobile/plugin-manager/previous.json')
+
+/** 模拟运行时升级：profiles 清单与 launcher patch 不在保留区，运行时按 --mobile-profile 重建清单。 */
+function simulateRuntimeUpgrade(root, profile, bundles = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']) {
+  fs.rmSync(profile)
+  fs.writeFileSync(profile, JSON.stringify({ dsh: { profile: { bundles } } }))
+  fs.rmSync(path.join(root, 'root/.dsh-mobile/launcher-plugins.patch.json'), { force: true })
+}
+
+test('运行时升级后幂等回填启停状态：包级与子插件级都恢复', t => {
+  const { manager, root, profile } = fixture(t)
+  manager.setChildEnabled('test-plugin', 'child', false)
+  manager.setEnabled('test-plugin', false)
+  simulateRuntimeUpgrade(root, profile)
+  const restarted = createManager(root, undefined, JSON.parse)
+  const state = restarted.recover()
+  assert.equal(state.restored, true)
+  assert.equal(state.reason, 'merged')
+  assert.equal(state.plugins, 1)
+  assert.equal(state.children, 1)
+  const plugin = restarted.list().plugins.find(row => row.id === 'test-plugin')
+  assert.equal(plugin.enabled, false)
+  assert.equal(plugin.children.find(row => row.id === 'child').enabled, false)
+  // 幂等：清单里已经有我们的 token，第二次恢复什么都不写，也不产生重复条目。
+  const before = fs.readFileSync(profile, 'utf8')
+  assert.deepEqual(restarted.recover(), { restored: false, reason: 'current' })
+  assert.equal(fs.readFileSync(profile, 'utf8'), before)
+  const value = JSON.parse(before)
+  assert.deepEqual(value.dsh.profile.bundles, ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'])
+  assert.deepEqual(value.dshMobile.disabledBundles, ['test-plugin'])
+})
+
+test('清单里已有用户选择时绝不覆盖（升级后用户先选过）', t => {
+  const { manager, root, profile } = fixture(t)
+  manager.setEnabled('test-plugin', false)
+  fs.rmSync(profile)
+  // 用户在新运行时里自己重新启用了 test-plugin，并且没有动过子插件开关。
+  fs.writeFileSync(profile, JSON.stringify({ dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'test-plugin'] } }, dshMobile: { disabledBundles: [] } }))
+  const restarted = createManager(root, undefined, JSON.parse)
+  const state = restarted.recover()
+  assert.equal(state.plugins, 0)
+  const value = JSON.parse(fs.readFileSync(profile, 'utf8'))
+  assert.deepEqual(value.dsh.profile.bundles, ['@deepseek-ai/dsh-base', 'test-plugin'])
+  assert.deepEqual(value.dshMobile.disabledBundles, [])
+  assert.equal(restarted.list().plugins.find(row => row.id === 'test-plugin').enabled, true)
+})
+
+test('清单文件整个缺失时按快照重建，重建结果仍受后续操作保护', t => {
+  const { manager, root, profile } = fixture(t)
+  manager.setEnabled('test-plugin', false)
+  fs.rmSync(profile)
+  const restarted = createManager(root, undefined, JSON.parse)
+  const state = restarted.recover()
+  assert.equal(state.restored, true)
+  assert.equal(state.reason, 'rebuilt')
+  assert.deepEqual(JSON.parse(fs.readFileSync(profile, 'utf8')).dshMobile.disabledBundles, ['test-plugin'])
+  assert.equal(restarted.list().plugins.find(row => row.id === 'test-plugin').enabled, false)
+  // 重建后 token 仍然一致：再恢复一次不再改动清单。
+  assert.equal(restarted.recover().reason, 'current')
+})
+
+test('快照损坏或清单损坏时受控处理：不崩、不清空用户数据', t => {
+  const { manager, root, profile } = fixture(t)
+  const broken = [
+    '{not json',
+    JSON.stringify({ version: 1, token: 'not-a-token' }),
+    '[]',
+    JSON.stringify({ version: 1, token: '12345678-1234-1234-1234-123456789abc', bundles: ['ok', '../etc'], bundleOrder: [], disabledBundles: [] }),
+  ]
+  for (const content of broken) {
+    fs.mkdirSync(path.dirname(stateFileOf(root)), { recursive: true })
+    fs.writeFileSync(stateFileOf(root), content)
+    const before = fs.readFileSync(profile, 'utf8')
+    assert.deepEqual(createManager(root, undefined, JSON.parse).recover(), { restored: false, reason: 'missing' })
+    assert.equal(fs.readFileSync(profile, 'utf8'), before)
+    assert.equal(manager.list().plugins.length, 2)
+  }
+  // 快照可用但清单损坏：只报"没回填"，不覆盖、不清空那份损坏的清单。
+  fs.writeFileSync(stateFileOf(root), JSON.stringify({ version: 1, token: '12345678-1234-1234-1234-123456789abc', bundles: ['test-plugin'], bundleOrder: ['test-plugin'], disabledBundles: [], children: [] }))
+  fs.writeFileSync(profile, '{broken')
+  assert.deepEqual(manager.recover(), { restored: false, reason: 'invalid' })
+  assert.equal(fs.readFileSync(profile, 'utf8'), '{broken')
+})
+
+test('list 保持只读：既不写快照也不回填清单', t => {
+  const { manager, root, profile } = fixture(t)
+  const before = fs.readFileSync(profile, 'utf8')
+  manager.list()
+  assert.equal(fs.existsSync(stateFileOf(root)), false)
+  assert.equal(fs.readFileSync(profile, 'utf8'), before)
+  // 没有快照时 recover 只做事务恢复，不写清单。
+  assert.deepEqual(manager.recover(), { restored: false, reason: 'missing' })
+  assert.equal(fs.readFileSync(profile, 'utf8'), before)
+})
+
+// ---------------------------------------------------------------------------
+// 版本回滚：每个插件保留上一版一份，滚动可再滚动
+// ---------------------------------------------------------------------------
+
+test('更新后可回滚到上一版，回滚本身可再回滚', t => {
+  let round = 0
+  const versions = ['2.0.0', '3.0.0']
+  const { manager, root } = fixture(t, (spec, directory) => stagePlugin(directory, 'test-plugin', versions[Math.min(round++, versions.length - 1)]))
+  const pluginOf = () => manager.list().plugins.find(row => row.id === 'test-plugin')
+  assert.equal(manager.update('test-plugin').plugins.find(row => row.id === 'test-plugin').version, '2.0.0')
+  // 首次更新的旧版是运行时自带目录（不在 versions/ 里）：没有版本目录可回滚，如实报 null。
+  assert.equal(pluginOf().rollback, null)
+  assert.equal(manager.update('test-plugin').plugins.find(row => row.id === 'test-plugin').version, '3.0.0')
+  assert.equal(pluginOf().rollback, '2.0.0')
+  assert.equal(manager.rollback('test-plugin').plugins.find(row => row.id === 'test-plugin').version, '2.0.0')
+  // 刚被换下的那一版成为新的"上一版"：回滚可再回滚。
+  assert.equal(pluginOf().rollback, '3.0.0')
+  assert.equal(manager.rollback('test-plugin').plugins.find(row => row.id === 'test-plugin').version, '3.0.0')
+  assert.equal(pluginOf().rollback, '2.0.0')
+  assert.equal(fs.existsSync(path.join(root, 'root/.dsh-mobile/plugin-manager/transaction.json')), false)
+})
+
+test('回滚结果不被 repair / recover 改回去', t => {
+  let round = 0
+  const { manager } = fixture(t, (spec, directory) => stagePlugin(directory, 'test-plugin', round++ === 0 ? '2.0.0' : '3.0.0'))
+  manager.update('test-plugin')
+  manager.update('test-plugin')
+  manager.rollback('test-plugin')
+  const pluginOf = () => manager.list().plugins.find(row => row.id === 'test-plugin')
+  assert.equal(pluginOf().version, '2.0.0')
+  assert.equal(pluginOf().rollback, '3.0.0')
+  // repair 只对齐 @deepseek-ai/* 运行时副本，recover 只管未完成事务：都不动已提交的回滚。
+  manager.repair()
+  assert.equal(pluginOf().version, '2.0.0')
+  assert.equal(manager.recover().reason, 'current')
+  assert.equal(pluginOf().version, '2.0.0')
+  assert.equal(pluginOf().rollback, '3.0.0')
+})
+
+test('没有上一版、登记损坏或上一版目录被清掉时都按不可回滚处理', t => {
+  const { manager, root } = fixture(t)
+  assert.throws(() => manager.rollback('test-plugin'), /PLUGIN_ROLLBACK_UNAVAILABLE/)
+  fs.mkdirSync(path.dirname(previousFileOf(root)), { recursive: true })
+  fs.writeFileSync(previousFileOf(root), '{not json')
+  assert.equal(manager.list().plugins.find(row => row.id === 'test-plugin').rollback, null)
+  assert.throws(() => manager.rollback('test-plugin'), /PLUGIN_ROLLBACK_UNAVAILABLE/)
+  assert.equal(manager.list().plugins.find(row => row.id === 'test-plugin').version, '1.0.0')
+
+  let round = 0
+  const other = fixture(t, (spec, directory) => stagePlugin(directory, 'test-plugin', round++ === 0 ? '2.0.0' : '3.0.0'))
+  other.manager.update('test-plugin')
+  other.manager.update('test-plugin')
+  assert.equal(other.manager.list().plugins.find(row => row.id === 'test-plugin').rollback, '2.0.0')
+  const record = JSON.parse(fs.readFileSync(previousFileOf(other.root), 'utf8'))
+  fs.rmSync(path.join(other.root, 'root/.dsh-mobile/plugin-manager/versions', record.entries[0].transaction), { recursive: true, force: true })
+  assert.equal(other.manager.list().plugins.find(row => row.id === 'test-plugin').rollback, null)
+  assert.throws(() => other.manager.rollback('test-plugin'), /PLUGIN_ROLLBACK_UNAVAILABLE/)
+  assert.equal(other.manager.list().plugins.find(row => row.id === 'test-plugin').version, '3.0.0')
+})
+
+test('回滚受保护包与未安装包一律拒绝', t => {
+  const { manager } = fixture(t)
+  assert.throws(() => manager.rollback('@deepseek-ai/dsh-base'), /PLUGIN_PROTECTED/)
+  assert.throws(() => manager.rollback('react'), /PLUGIN_PROTECTED/)
+  assert.throws(() => manager.rollback('absent-plugin'), /PLUGIN_NOT_FOUND/)
+  assert.throws(() => manager.rollback('../evil'), /PLUGIN_INPUT_INVALID/)
+})
+
+test('回滚失败时先前状态完好且事务记录被清理', t => {
+  let round = 0
+  const { manager, root } = fixture(t, (spec, directory) => stagePlugin(directory, 'test-plugin', round++ === 0 ? '2.0.0' : '3.0.0'))
+  manager.update('test-plugin')
+  manager.update('test-plugin')
+  const pluginOf = () => manager.list().plugins.find(row => row.id === 'test-plugin')
+  assert.equal(pluginOf().version, '3.0.0')
+  const target = path.join(root, 'opt/dsh/node_modules/test-plugin')
+  const original = fs.symlinkSync
+  t.after(() => { fs.symlinkSync = original })
+  fs.symlinkSync = (source, dest, type) => {
+    if (dest === target) throw new Error('PLUGIN_LINK_UNSUPPORTED')
+    return original(source, dest, type)
+  }
+  assert.throws(() => manager.rollback('test-plugin'), /PLUGIN_LINK_UNSUPPORTED/)
+  fs.symlinkSync = original
+  assert.equal(pluginOf().version, '3.0.0')
+  assert.equal(fs.lstatSync(target).isSymbolicLink(), true)
+  assert.equal(fs.existsSync(path.join(root, 'root/.dsh-mobile/plugin-manager/transaction.json')), false)
+  // 失败的回滚没有改动登记：这一版仍然可以回滚过去。
+  assert.equal(pluginOf().rollback, '2.0.0')
+  assert.equal(manager.rollback('test-plugin').plugins.find(row => row.id === 'test-plugin').version, '2.0.0')
+})
+
+test('导入与回滚都会刷新状态快照，供下次运行时升级回填', t => {
+  let round = 0
+  const { manager, root } = fixture(t, (spec, directory) => stagePlugin(directory, 'test-plugin', round++ === 0 ? '2.0.0' : '3.0.0'))
+  manager.update('test-plugin')
+  manager.update('test-plugin')
+  manager.importPackage('test-plugin')
+  const saved = JSON.parse(fs.readFileSync(stateFileOf(root), 'utf8'))
+  assert.deepEqual(saved.bundles, ['@deepseek-ai/dsh-base', 'test-plugin'])
+  assert.equal(typeof saved.token, 'string')
+  manager.rollback('test-plugin')
+  assert.deepEqual(JSON.parse(fs.readFileSync(stateFileOf(root), 'utf8')).bundles, ['@deepseek-ai/dsh-base', 'test-plugin'])
 })

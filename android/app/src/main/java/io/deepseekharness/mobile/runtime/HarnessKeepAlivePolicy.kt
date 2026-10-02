@@ -60,10 +60,15 @@ object HarnessKeepAlivePolicy {
 
     /**
      * 插件销毁时是否必须释放共享运行时。
-     * 前台服务仍负责运行时时不得立即 shutdown，否则划掉最近任务会终结 Harness。
+     *
+     * 两个条件必须同时满足：前台服务不再负责（否则划掉最近任务会终结 Harness），
+     * 且没有其他订阅者（否则「新插件实例已接管、旧实例才收尾」时会把新实例正在使用的
+     * 运行时关掉，界面接下来只会拿到 `RUNTIME_CLOSED`）。
      */
-    fun shouldReleaseRuntimeOnPluginDetach(foregroundServiceActive: Boolean): Boolean =
-        !foregroundServiceActive
+    fun shouldReleaseRuntimeOnPluginDetach(
+        foregroundServiceActive: Boolean,
+        hasOtherSubscribers: Boolean,
+    ): Boolean = !foregroundServiceActive && !hasOtherSubscribers
 
     /**
      * 服务重新收到启动请求时是否应当立刻结束。

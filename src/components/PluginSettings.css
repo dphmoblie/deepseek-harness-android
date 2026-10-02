@@ -21,10 +21,24 @@
 .plugin-children strong { font-size: 0.875rem; }
 .plugin-hint { padding: 0 18px; font-size: 0.75rem; }
 .plugin-notice { margin: 14px 0 0; padding: 12px 14px; border-left: 3px solid var(--blue); border-radius: var(--radius-inner); background: var(--blue-soft); font-size: 0.8125rem; }
+/* 导入入口：与「停止运行环境」条分开成块，避免"要装东西"和"要先停机"两件事混在一起。 */
+.plugin-import { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--surface); }
+.plugin-import h2 { margin: 0 0 6px; font-size: 1rem; }
+.plugin-import-row { display: flex; gap: 10px; margin-top: 10px; }
+.plugin-import-row input, .plugin-import-expected input { min-width: 0; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius-inner); background: var(--surface-muted); color: var(--ink); font: inherit; }
+.plugin-import-row input { flex: 1; }
+/* 输入框自带边框，聚焦态画在自己身上，不再依赖容器光晕。 */
+.plugin-import-row input:focus, .plugin-import-expected input:focus { outline: 2px solid var(--blue); outline-offset: 1px; }
+.plugin-import-expected { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; font-size: 0.8125rem; color: var(--muted); }
+/* 一个包的两个动作（更新、回滚）成组，窄屏时整组竖排。 */
+.plugin-file-buttons { display: flex; gap: 8px; flex-shrink: 0; }
 @media (max-width: 620px) {
   .plugin-screen { padding-right: 10px; padding-left: 10px; }
   .plugin-stop, .plugin-file-actions { align-items: stretch; flex-direction: column; }
   .plugin-stop .button, .plugin-file-actions .button { width: 100%; }
+  .plugin-import-row { flex-direction: column; }
+  .plugin-import-row .button { width: 100%; }
+  .plugin-file-buttons { flex-direction: column; width: 100%; }
   .plugin-file summary { grid-template-columns: auto minmax(0, 1fr) auto; padding: 13px 12px; gap: 8px; }
   .plugin-summary-state { grid-column: 2; grid-row: 2; justify-self: start; }
   .plugin-summary-chevron { grid-column: 3; grid-row: 1 / span 2; align-self: center; }

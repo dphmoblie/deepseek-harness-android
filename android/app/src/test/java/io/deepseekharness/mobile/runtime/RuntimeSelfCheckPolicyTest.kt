@@ -16,8 +16,11 @@ class RuntimeSelfCheckPolicyTest {
     private fun raw(id: String, status: String, code: String? = null) =
         RuntimeSelfCheckPolicy.RawCheck(id, status, code)
 
-    /** 十一项全通过的健康载荷；顺序刻意与契约不同，用来验证归一化。 */
+    /** 十四项全通过的健康载荷；顺序刻意与契约不同，用来验证归一化。 */
     private val healthy = listOf(
+        raw("python3", "ok"),
+        raw("make", "ok"),
+        raw("c_compiler", "ok"),
         raw("rg", "ok"),
         raw("hardlink", "ok"),
         raw("attachments", "ok"),
@@ -84,14 +87,17 @@ class RuntimeSelfCheckPolicyTest {
 
     @Test
     fun acceptsOnlyTheHardlinkDeniedCodeOnTheHardlinkCheck() {
-        // 契约里的 id 顺序（脚本 / 原生 / 界面三处逐字一致）：hardlink 紧跟 attachments、在 rg 之前。
+        // 契约里的 id 顺序（脚本 / 原生 / 界面三处逐字一致）：hardlink 紧跟 attachments、在 rg 之前；
+        // 后三项编译环境能力项是追加的，既有 11 项的相对顺序一个字都不动。
         assertEquals(
             listOf(
                 "shell", "node", "sandbox_launcher", "sandbox_probe", "sandbox_exec",
                 "pty", "pty_sandbox", "dsh_home", "attachments", "hardlink", "rg",
+                "c_compiler", "make", "python3",
             ),
             RuntimeSelfCheckPolicy.CHECK_IDS,
         )
+        assertEquals(9, RuntimeSelfCheckPolicy.CHECK_IDS.indexOf("hardlink"))
 
         val checks = RuntimeSelfCheckPolicy.sanitize(
             listOf(
@@ -188,6 +194,47 @@ class RuntimeSelfCheckPolicyTest {
                     raw("sandbox_probe", "fail", "LAUNCHER_MISSING"),
                     raw("sandbox_exec", "skipped", "EXEC_LAUNCHER_FAILED"),
                     raw("sandbox_exec", "fail", "LAUNCHER_MISSING"),
+                ),
+            ).isEmpty(),
+        )
+    }
+
+    @Test
+    fun treatsToolchainChecksAsCapabilitiesThatOnlyWarn() {
+        // 能力项三态：确实没有 / 工具自己回了非 0 / 没拿到退出码。三者都只能是 warn。
+        val checks = RuntimeSelfCheckPolicy.sanitize(
+            listOf(
+                raw("python3", "ok"),
+                raw("c_compiler", "warn", "CC_MISSING"),
+                raw("make", "warn", "MAKE_PROBE_UNKNOWN"),
+            ),
+        )
+        assertEquals(listOf("c_compiler", "make", "python3"), checks.map { it.id })
+        assertEquals(listOf("warn", "warn", "ok"), checks.map { it.status })
+        // 缺编译器不是运行时故障：三项都只 warn，失败计数必须仍是 0，不能让整次自检变红。
+        assertEquals(RuntimeSelfCheckPolicy.Summary(null, 0), RuntimeSelfCheckPolicy.summarize(checks))
+        assertNull(checks.first { it.id == "python3" }.code)
+
+        // 同一个 id 重复出现时保留首个（这里是 CC_MISSING 先到）。
+        val threeStates = RuntimeSelfCheckPolicy.sanitize(
+            listOf(
+                raw("c_compiler", "warn", "CC_MISSING"),
+                raw("c_compiler", "warn", "CC_UNUSABLE"),
+                raw("make", "warn", "MAKE_UNUSABLE"),
+                raw("python3", "warn", "PYTHON3_UNUSABLE"),
+            ),
+        )
+        assertEquals(listOf("c_compiler", "make", "python3"), threeStates.map { it.id })
+        assertEquals("CC_MISSING", threeStates.first().code)
+
+        // 能力项的码不许越界：fail / skipped 状态、别的检查项的码、编造的码，一律整条丢弃。
+        assertTrue(
+            RuntimeSelfCheckPolicy.sanitize(
+                listOf(
+                    raw("c_compiler", "fail", "CC_MISSING"),
+                    raw("make", "skipped", "MAKE_MISSING"),
+                    raw("python3", "warn", "CC_MISSING"),
+                    raw("python3", "warn", "PYTHON3_FIXED"),
                 ),
             ).isEmpty(),
         )

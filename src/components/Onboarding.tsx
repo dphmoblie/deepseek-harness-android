@@ -104,6 +104,7 @@ export function Onboarding({
                   <p className="onboarding-status">
                     {t("当前状态：")}{installed ? t("已安装") + (runtime.phase === 'running' ? t(" · 运行中") : '') : runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting' ? t("正在安装…") : t("未安装")}
                   </p>
+                  <p className="onboarding-status">{t("运行时包里不带 C 编译器：装好后在「设置 → 版本管理」页的「运行时自检」里会如实报告 cc / gcc / clang、make、python3 是否可用，缺失只作为能力提示、不算故障。需要编译的项目请自行在运行时里准备工具链（apt 在包内，能否联网取包未经验证）。")}</p>
                   <button className="button button-primary" type="button" disabled={busy !== null || installed} onClick={onInstall}>
                     {busy === 'install' ? <Loader2 className="spin" size={18} /> : <Blocks size={18} />}
                     {t("安装运行时")}</button>

@@ -594,8 +594,16 @@ test('background keep-alive delegates the shared runtime and never claims to def
   assert.match(nativePlugin, /syncKeepAliveService\(saved\.keepRuntimeInBackground\)/)
   assert.match(nativePlugin, /syncKeepAliveService\(controller\.store\.keepRuntimeInBackground\(\)\)/)
 
-  // 运行时归属：前台服务决定插件销毁后是否保留运行时。
-  assert.match(runtimeHost, /HarnessKeepAlivePolicy\.shouldReleaseRuntimeOnPluginDetach\(foregroundServiceActive\)/)
+  // 运行时归属：前台服务**与其余订阅者**共同决定插件销毁后是否保留运行时。
+  //
+  // 2026-10-02 收紧：原来只看 `foregroundServiceActive`，于是保活关闭时「旧插件实例收尾」
+  // 会把新实例刚接管的运行时关掉——真机日志里表现为 `DEVICE_BRIDGE|result=reused` 之后
+  // 连续三条 `HARNESS_START|result=failed|code=RUNTIME_CLOSED`。现在必须两个条件同时成立
+  // （没有前台服务负责 **且** 没有其他订阅者）才释放，且读的是「移除自己之后」的剩余订阅者。
+  assert.match(
+    runtimeHost,
+    /HarnessKeepAlivePolicy\.shouldReleaseRuntimeOnPluginDetach\(\s*foregroundServiceActive = foregroundServiceActive,\s*hasOtherSubscribers = sinks\.isNotEmpty\(\),\s*\)/,
+  )
   assert.match(runtimeHost, /if \(sinks\.isEmpty\(\)\) takeControllerLocked\(\) else null/)
 
   // 划掉最近任务不得结束服务，且服务不执行 Shell 命令、不接触凭据。
@@ -669,9 +677,12 @@ test('keep-alive keeps the device bridge process-scoped and the notification ent
   // 回归 4：桥必须与运行时同生命周期持有与拆除。
   assert.match(runtimeHost, /interface RuntimeScopedResource/)
   assert.match(runtimeHost, /private fun releaseDeviceResourcesLocked\(\)/)
+  // 顺序也是契约（2026-10-02 收紧）：先摘引用、再清理，且进程级资源拆除放在 finally 里。
+  // 旧顺序是「清理完再 `controller = null`」，任意一步抛错都会留下「已关闭但仍被登记」的
+  // 控制器——之后每一次 acquire 都拿到死句柄，界面只能一直报 RUNTIME_CLOSED。
   assert.match(
     runtimeHost,
-    /current\.shutdown\(\)\s*releaseDeviceResourcesLocked\(\)\s*controller = null\s*return current/,
+    /val current = controller \?: return null\s*controller = null\s*try \{[\s\S]*?current\.shutdown\(\)[\s\S]*?\} finally \{[\s\S]*?releaseDeviceResourcesLocked\(\)[\s\S]*?return current/,
   )
   assert.match(deviceBridge, /\) : RuntimeScopedResource \{/)
   assert.match(deviceBridge, /override fun stop\(\)/)

@@ -10,6 +10,18 @@ enum class AuditEvent {
     PLUGIN_LIST,
     PLUGIN_ENABLE,
     PLUGIN_UPDATE,
+
+    /**
+     * 插件导入：从 npm 包名、`https://` 直链或 `git+https://` 地址受控导入。
+     *
+     * 只记动作与受控错误码（如 `PLUGIN_SOURCE_INVALID`、`PLUGIN_GIT_MISSING`、`PLUGIN_IMPORT_UNRESOLVED`）；
+     * 用户填的来源地址**一律不落审计**——地址可能带内网主机名、端口甚至凭据，
+     * 写进来等于把"谁从哪儿装了什么"长期留在本地。
+     */
+    PLUGIN_IMPORT,
+
+    /** 插件回滚：把运行时指向该插件的链接切回上一版；只记动作与受控码（如 `PLUGIN_ROLLBACK_UNAVAILABLE`）。 */
+    PLUGIN_ROLLBACK,
     PLUGIN_LOAD,
     PLUGIN_DESTROY,
     RUNTIME_INSTALL,
@@ -62,6 +74,18 @@ enum class AuditEvent {
      * 下载地址、落地路径与更新说明一律不落审计。
      */
     APP_UPDATE,
+
+    /**
+     * 访客侧「任务完成」事件经设备桥的受控收单（`notify-turn-complete`）。
+     *
+     * 只记动作与受控结果码：结果码枚举写死在本仓
+     * （`TURN_NOTIFY_INVALID` / `TURN_NOTIFY_TOO_SOON` / `TURN_NOTIFY_RATE_LIMITED` /
+     * `TURN_NOTIFY_UNAVAILABLE` / `TURN_NOTIFY_POSTED` / `TURN_NOTIFY_SUPPRESSED`），
+     * 其中 `TURN_NOTIFY_POSTED`·`TURN_NOTIFY_SUPPRESSED` 是**受理成功**的两种落点
+     * （前台抑制时为 SUPPRESSED）。请求参数里的会话摘要**一律不落审计**——
+     * 它与会话一一对应，写进来等于把「哪一轮是谁的」长期留在本地。
+     */
+    TURN_NOTIFY,
 }
 
 enum class AuditResult {

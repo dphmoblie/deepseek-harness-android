@@ -41,4 +41,18 @@ data class RuntimeKeepAliveSnapshot(
     val lastPhase: RuntimePhase?,
     /** 最近一次状态写入时间；从未记录时为 0。 */
     val lastUpdatedAtMillis: Long,
+    /**
+     * 最近一次「一轮对话结束」被原生受理的毫秒时间戳，与 [lastUpdatedAtMillis] 同源时钟；从未收到时为 0。
+     *
+     * 这是**进程内**状态：只在访客侧 `notify-turn-complete` 真正被受理时推进，被限流静默忽略时不推进，
+     * 进程被回收后归零 —— 不要在界面上把它当持久事实使用。
+     */
+    val lastTurnCompletedAtMillis: Long = 0L,
+    /**
+     * 成功受理的完成事件累计序号（从 0 开始）。
+     *
+     * 序号**只在真正受理成功时**自增：被 `TurnCompletionPolicy` 限流丢弃的那次不自增，
+     * 因此「序号变了」与「完成事件确实被受理过」始终是同一件事。进程重启后从 0 重新计数。
+     */
+    val turnCompletionSequence: Long = 0L,
 )

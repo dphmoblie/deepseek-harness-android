@@ -24,6 +24,15 @@ internal enum class TaskNotificationKind {
 
     /** 已有运行环境被换成新版本（安装耗时最长的一种，用户几乎必然切走）。 */
     RUNTIME_UPDATED,
+
+    /**
+     * 一轮对话任务**已完成**（由访客内 dsh 的 `turn/end` 事件经设备桥转达）。
+     *
+     * 与上面四种的关键差别：前四种都是**异常或一次性操作**的结果，这条是**正常收尾**。
+     * 因此它受更严的节流约束（[TurnCompletionNotificationPolicy]）：用户在一个下午里
+     * 完全可能完成几十轮任务，一条一轮会立刻把这条通知通道刷成噪声并被用户关掉。
+     */
+    TURN_COMPLETED,
 }
 
 internal object TaskNotificationPolicy {
@@ -58,4 +67,13 @@ internal object TaskNotificationPolicy {
         } else {
             TaskNotificationKind.RUNTIME_INSTALLED
         }
+
+    /**
+     * 「任务完成」只有一条文案，不存在分岔依据。
+     *
+     * 刻意**不做**成「成功/失败」两条：访客侧只在 `turn/end` 时说一句「结束了」，
+     * 原生侧拿不到这一轮是正常收尾还是被中断——按 `turn-error` 另编一套文案，
+     * 就会在用户正常结束一轮时说是失败。**拿不到的内容就不显示**（本文档开头第一条）。
+     */
+    fun forTurnCompleted(): TaskNotificationKind = TaskNotificationKind.TURN_COMPLETED
 }

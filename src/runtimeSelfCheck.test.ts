@@ -125,10 +125,13 @@ describe('运行时自检载荷校验', () => {
 
   it('hardlink 的合法与非法组合：ok 不带码，失败只认受控码 HARDLINK_DENIED', () => {
     // 三处契约（访客脚本 / Kotlin 白名单 / 前端）的 id 顺序逐字一致：hardlink 紧跟 attachments、在 rg 之前。
+    // 后三项编译环境能力项是**追加**的：既有 11 项的 id 与相对顺序（含 hardlink 在索引 9）不得变动。
     expect(SELF_CHECK_IDS).toEqual([
       'shell', 'node', 'sandbox_launcher', 'sandbox_probe', 'sandbox_exec',
       'pty', 'pty_sandbox', 'dsh_home', 'attachments', 'hardlink', 'rg',
+      'c_compiler', 'make', 'python3',
     ])
+    expect(SELF_CHECK_IDS.indexOf('hardlink')).toBe(9)
     expect(SELF_CHECK_CODES).toContain('HARDLINK_DENIED')
 
     const report = validateSelfCheckReport(checkPayload({
@@ -264,5 +267,34 @@ describe('运行时自检文案', () => {
     }
     const okItems: SelfCheckItem[] = [{ id: 'shell', status: 'ok' }]
     expect(selfCheckNeedsRepair(okItems)).toBe(false)
+  })
+
+  it('编译环境能力项：三态码齐备、按不可用呈现、不给修复入口', () => {
+    // 能力项回答的是「这台设备能不能现场编译原生模块」，不是「哪一环断了」：
+    // 每个工具都要分清「确实没有 / 工具自己判了不可用 / 拿不到判决」，少一态就会把某一种情况误报成可用。
+    const capabilityIds = ['c_compiler', 'make', 'python3'] as const
+    const triples: Record<string, [SelfCheckCode, SelfCheckCode, SelfCheckCode]> = {
+      c_compiler: ['CC_MISSING', 'CC_UNUSABLE', 'CC_PROBE_UNKNOWN'],
+      make: ['MAKE_MISSING', 'MAKE_UNUSABLE', 'MAKE_PROBE_UNKNOWN'],
+      python3: ['PYTHON3_MISSING', 'PYTHON3_UNUSABLE', 'PYTHON3_PROBE_UNKNOWN'],
+    }
+    for (const id of capabilityIds) {
+      expect(SELF_CHECK_IDS).toContain(id)
+      const [missing, unusable, unknown] = triples[id]
+      for (const code of [missing, unusable, unknown]) {
+        expect(SELF_CHECK_CODES).toContain(code)
+        // 缺能力不该让整次自检显示为失败，也不该出现「修复」按钮：编译器不是应用能替用户装的东西。
+        expect(SELF_CHECK_REPAIRABLE_CODES).not.toContain(code)
+        expect(selfCheckNeedsRepair([{ id, status: 'warn', code }])).toBe(false)
+        const advice = selfCheckAdvice({ id, status: 'warn', code })
+        expect(advice.label.length).toBeGreaterThan(0)
+        expect(advice.meaning.length).toBeGreaterThan(0)
+        expect(advice.nextStep.length).toBeGreaterThan(0)
+      }
+      // 拿不到判决与判定不可用都必须写成「不可用」口径，不能出现「可能已支持」这类会让用户以为能编译的措辞。
+      expect(selfCheckAdvice({ id, status: 'warn', code: unknown }).meaning).toContain('无法确认')
+      // 安装提示只讲前提，不讲结果：本应用不内置编译器，也不代为安装。
+      expect(selfCheckAdvice({ id, status: 'warn', code: missing }).nextStep).toContain('不内置编译器')
+    }
   })
 })

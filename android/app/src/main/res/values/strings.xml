@@ -37,6 +37,20 @@
     <string name="overlay_ball_notification_text">点按返回应用，悬浮球可展开对话小窗</string>
     <string name="overlay_ball_menu_return">回到应用</string>
     <string name="overlay_ball_menu_hide">隐藏悬浮球</string>
+    <!--
+      二级悬浮球：长按主球展开，每个按钮一个动作。contentDescription 与可见文字分开写，
+      是为了让 TalkBack 在按钮上没有文字时（或文字被截断时）仍然说明这个按钮会做什么。
+    -->
+    <string name="overlay_ball_secondary_return">回到应用</string>
+    <string name="overlay_ball_secondary_return_description">回到应用，打开 Harness 对话界面</string>
+    <string name="overlay_ball_secondary_hide">隐藏悬浮球</string>
+    <string name="overlay_ball_secondary_hide_description">隐藏悬浮球并关闭悬浮球服务</string>
+    <string name="overlay_ball_secondary_accessibility_on">关闭无障碍</string>
+    <string name="overlay_ball_secondary_accessibility_on_description">关闭 Harness 无障碍服务（当前已开启）</string>
+    <string name="overlay_ball_secondary_accessibility_off">无障碍未开启</string>
+    <string name="overlay_ball_secondary_accessibility_off_description">Harness 无障碍服务当前未开启，无需关闭</string>
+    <string name="overlay_ball_secondary_accessibility_disabled_toast">无障碍服务当前未开启，无需关闭</string>
+    <string name="overlay_ball_secondary_accessibility_closed_toast">已关闭无障碍服务</string>
 
     <!--
       任务通知（登记册 §5.5）。与保活通知分开一个通道：保活必须常驻静默，
@@ -58,4 +72,13 @@
     <string name="task_notification_exported_text">已把 %1$d 项写入投递区 outbox</string>
     <string name="task_notification_imported_title">已导入到工作区</string>
     <string name="task_notification_imported_text">已从投递区导入 %1$d 项</string>
+    <!--
+      「任务完成」：由访客内 dsh 的 turn/end 经设备桥转达，原生侧只发固定文案。
+      带合并计数：连续的几轮会合并成一条，%1$d 是本次合并的条数（至少 1）。
+    -->
+    <string name="task_notification_turn_completed_title">任务已完成</string>
+    <string name="task_notification_turn_completed_text">已完成 %1$d 项任务，点按回到对话界面</string>
+
+    <!-- 对话小窗的缩放手柄：拖动它改变小窗大小，右下角内缩 4dp。 -->
+    <string name="overlay_conversation_resize_description">拖动调整对话小窗大小</string>
 </resources>

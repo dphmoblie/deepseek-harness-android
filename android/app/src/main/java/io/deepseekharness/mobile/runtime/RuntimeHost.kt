@@ -33,9 +33,14 @@ interface RuntimeScopedResource {
  * 重复配置），也不能拆桥（guest 仍在用它）。因此这里与运行时同生命周期地持有它们。
  *
  * 释放规则：
- *  - 插件销毁（WebView 侧消失）：仅移除订阅者；前台服务仍在负责时保留运行时与设备桥。
+ *  - 插件销毁（WebView 侧消失）：仅移除订阅者；前台服务仍在负责、或还有其他订阅者
+ *    （新实例已经接管）时保留运行时与设备桥。
  *  - 前台服务销毁：仅在没有任何插件订阅者时释放运行时与设备桥。
  *  - 两者都不再持有：调用 [MobileRuntimeController.shutdown]，语义与旧的插件销毁路径一致。
+ *
+ * 不变量：[controller] 要么指向可用的运行时，要么为 null；[takeControllerLocked] 先摘除
+ * 引用再清理，任何清理步骤抛错都不得留下「已关闭但仍被登记」的控制器——那样的句柄会让
+ * 之后每一次启动都只得到 `RUNTIME_CLOSED`，界面无论重试多少次都无法恢复。
  *
  * 线程模型：本对象的状态变更与运行时关停在 [lock] 内串行完成。关停可能持续数秒，
  * 但这样可以阻止新的 acquire 与旧实例并发，避免旧实例收尾时误杀新实例或提前拆桥。
@@ -93,13 +98,20 @@ object RuntimeHost {
     }
 
     /**
-     * 插件（WebView 侧）销毁：移除订阅者，并在没有前台服务负责时释放运行时。
-     * 返回值仅用于测试断言，调用方无需处理。
+     * 插件（WebView 侧）销毁：移除订阅者，并在「没有前台服务负责、且没有其他订阅者」时释放运行时。
+     *
+     * `sinks.remove(sink)` 之后才读取剩余订阅者：新插件实例已经接管运行时（划掉最近任务后
+     * 立刻重进应用）时，旧实例的收尾不得关掉新实例正在使用的控制器。返回值仅用于测试断言。
      */
     fun detachPluginSink(sink: RuntimeEventSink): Boolean {
         val released = lock.withLock {
             sinks.remove(sink)
-            if (HarnessKeepAlivePolicy.shouldReleaseRuntimeOnPluginDetach(foregroundServiceActive)) {
+            if (
+                HarnessKeepAlivePolicy.shouldReleaseRuntimeOnPluginDetach(
+                    foregroundServiceActive = foregroundServiceActive,
+                    hasOtherSubscribers = sinks.isNotEmpty(),
+                )
+            ) {
                 takeControllerLocked()
             } else {
                 null
@@ -230,16 +242,28 @@ object RuntimeHost {
     /**
      * 串行关停运行时，并在 Harness 停止后拆除设备桥与设备命令。
      * 此方法只在 [lock] 内调用，确保关停期间不会创建第二个控制器。
+     *
+     * 先摘除 [controller] 引用再清理：任何清理步骤抛错都不能把「已关闭但仍被登记」的控制器
+     * 留给下一次 [acquire]（真机上出现过这种状态：设备桥仍是 `reused`，而随后每一次
+     * `startHarness` 都只返回 `RUNTIME_CLOSED`，且保持 24 秒不可恢复）。
      */
     private fun takeControllerLocked(): MobileRuntimeController? {
         val current = controller ?: return null
-        // 运行时释放时清空输出尾部登记，避免已结束会话继续驻留内存。
-        HarnessOutputTailSource.clear()
-        // 先取消桥上的等待命令，再停止 Harness；桥要保持到 guest 完全退出后再拆。
-        deviceCommands?.cancelAll()
-        current.shutdown()
-        releaseDeviceResourcesLocked()
         controller = null
+        try {
+            // 运行时释放时清空输出尾部登记，避免已结束会话继续驻留内存。
+            HarnessOutputTailSource.clear()
+            // 先取消桥上的等待命令，再停止 Harness；桥要保持到 guest 完全退出后再拆。
+            deviceCommands?.cancelAll()
+            current.shutdown()
+        } finally {
+            // 即使关停失败也要拆除进程级资源，避免残留的桥阻塞下一次运行时创建。
+            try {
+                releaseDeviceResourcesLocked()
+            } catch (_: Throwable) {
+                // 进程级资源拆除失败不阻断运行时释放。
+            }
+        }
         return current
     }
 

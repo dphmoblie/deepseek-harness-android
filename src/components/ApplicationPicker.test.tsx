@@ -36,4 +36,30 @@ describe('已安装应用选择器', () => {
     await waitFor(() => expect(screen.queryByText('旧结果')).not.toBeInTheDocument())
     expect(screen.getByText('新结果')).toBeInTheDocument()
   })
+
+  it('如实说明白名单上限，并在已选超过上限时提醒保存会被拒绝', async () => {
+    const list = vi.fn().mockResolvedValue({
+      apps: [{ label: 'reader', packageName: 'com.example.reader', selectable: true }], nextOffset: null, total: 1,
+    })
+    const selected = Array.from({ length: 17 }, (_, index) => `com.example.app${index}`)
+    render(<ApplicationPicker bridge={{ listInstalledApplications: list } as unknown as RuntimeBridge}
+      selected={selected} onChange={vi.fn()} disabled={false} />)
+    fireEvent.click(screen.getByRole('button', { name: '从已安装应用选择' }))
+    await screen.findByText('reader')
+    expect(screen.getByText('已选择 17 个应用，白名单最多 16 个；勾选后点击保存白名单。')).toBeInTheDocument()
+    expect(screen.getByText('已选 17 个，超过上限 1 个；保存前请先取消多余的勾选，否则保存会被拒绝。')).toBeInTheDocument()
+  })
+
+  it('正好到达上限时不提醒', async () => {
+    const list = vi.fn().mockResolvedValue({
+      apps: [{ label: 'reader', packageName: 'com.example.reader', selectable: true }], nextOffset: null, total: 1,
+    })
+    const selected = Array.from({ length: 16 }, (_, index) => `com.example.app${index}`)
+    render(<ApplicationPicker bridge={{ listInstalledApplications: list } as unknown as RuntimeBridge}
+      selected={selected} onChange={vi.fn()} disabled={false} />)
+    fireEvent.click(screen.getByRole('button', { name: '从已安装应用选择' }))
+    await screen.findByText('reader')
+    expect(screen.getByText('已选择 16 个应用，白名单最多 16 个；勾选后点击保存白名单。')).toBeInTheDocument()
+    expect(screen.queryByText(/超过上限/)).not.toBeInTheDocument()
+  })
 })

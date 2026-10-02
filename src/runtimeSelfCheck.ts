@@ -2,7 +2,7 @@
  * 运行时自检：把原生侧逐项检查的结果，翻译成「哪一环断了 + 下一步」。
  *
  * 为什么需要它：运行时链路（Shell → Node → 沙箱启动器 → 内核 Landlock → 沙箱内执行 →
- * PTY → 访客数据目录 → 附件目录 → 硬链接 → ripgrep）任何一环断掉，用户看到的往往只有一句
+ * PTY → 访客数据目录 → 附件目录 → 硬链接 → ripgrep → C 编译环境）任何一环断掉，用户看到的往往只有一句
  * 「bash 工具不可用」，而排查通常又要靠 bash —— 可 bash 本身可能正是断掉的那一环。
  * 自检由原生侧逐环探测，不依赖 bash；本模块只负责三件事：
  *
@@ -11,6 +11,12 @@
  *  - 严格校验：[validateSelfCheckReport] 按冻结契约校验形态，包括
  *    「ok 不带 code、非 ok 必须带 code」以及重复项、越界计数这类自相矛盾的组合；
  *  - 文案映射：[selfCheckAdvice] 给出每一项的结论与下一步，界面再包一层 `t()`。
+ *
+ * 最后三项（`c_compiler` / `make` / `python3`）与其他项不同：它们是**能力项**而不是断链项 ——
+ * 回答「这台设备能不能现场构建含原生模块的插件」。它们只用 `warn`（缺能力不该让整次自检显示为
+ * 失败），并且三态分得清：确实没有（`_MISSING`）、工具自己回答了可用（`ok`）、工具起了但给出非 0
+ * 退出码（`_UNUSABLE`）、**没拿到退出码**（`_PROBE_UNKNOWN`，进程没起来 / 超时 / 没有可写临时目录）。
+ * 后两者都按不可用呈现：绝不把不可用的编译器说成已支持，也不承诺装完就能编译。
  *
  * 措辞边界：沙箱与内核相关的结论只复述已确认的现象，不把可能的来源写成单一断言
  * （例如「沙箱探测判定为不可用」同时列出「内核不支持」与「启动器无法完成探测」两种可能），
@@ -34,6 +40,10 @@ export const SELF_CHECK_IDS = [
   'attachments',
   'hardlink',
   'rg',
+  // 以下三项是**追加**的编译环境能力项：前 11 项的 id 与索引是冻结契约（`hardlink` 必须仍是索引 9）。
+  'c_compiler',
+  'make',
+  'python3',
 ] as const
 
 export type SelfCheckId = typeof SELF_CHECK_IDS[number]
@@ -68,6 +78,16 @@ export const SELF_CHECK_CODES = [
   'HARDLINK_DENIED',
   'RG_MISSING',
   'RG_NOT_EXECUTABLE',
+  // 编译环境能力项：每个工具三态 —— 确实没有 / 工具给出非 0 退出码 / 没拿到退出码。
+  'CC_MISSING',
+  'CC_UNUSABLE',
+  'CC_PROBE_UNKNOWN',
+  'MAKE_MISSING',
+  'MAKE_UNUSABLE',
+  'MAKE_PROBE_UNKNOWN',
+  'PYTHON3_MISSING',
+  'PYTHON3_UNUSABLE',
+  'PYTHON3_PROBE_UNKNOWN',
 ] as const
 
 export type SelfCheckCode = typeof SELF_CHECK_CODES[number]
@@ -119,6 +139,9 @@ const SELF_CHECK_LABELS: Readonly<Record<SelfCheckId, string>> = {
   attachments: '附件目录',
   hardlink: '硬链接（原子写入的前提）',
   rg: 'ripgrep',
+  c_compiler: 'C 编译器（cc / gcc / clang）',
+  make: 'make 构建工具',
+  python3: 'Python 3（node-gyp 的前提）',
 }
 
 export interface SelfCheckAdvice {
@@ -218,6 +241,46 @@ const SELF_CHECK_CODE_ADVICE: Readonly<Record<SelfCheckCode, { meaning: string; 
   RG_NOT_EXECUTABLE: {
     meaning: 'ripgrep 没有执行位，grep / glob 工具会失败',
     nextStep: '点「修复运行时权限」即可修好',
+  },
+  CC_MISSING: {
+    // 能力项：说的是「这台设备现在能不能编译」，不是「运行时哪一环断了」。安装提示只给
+    // 「可以装什么、装它要什么前提」—— 运行时自带 apt，但访客内能否联网取包尚未验证，
+    // 因此不写「装完就能编译」，也不写「一定能修好」。
+    meaning: '运行时里没有 C 编译器（cc、gcc、clang 都没有找到）',
+    nextStep: '本应用不内置编译器，也不代为安装：需要现场编译原生模块（node-gyp 一类）的插件在当前设备上装不上。要自己补，可在运行时自带的 Ubuntu 终端里尝试安装 Debian/Ubuntu 系的 build-essential —— 运行时基于 ubuntu-base-24.04、apt 存在，但访客内能否联网取包尚未验证。',
+  },
+  CC_UNUSABLE: {
+    meaning: '找到了 C 编译器，但一次最小的编译加链接没有通过（通常是缺工具链的其余部分：binutils、C 库头文件，或没有可用的临时目录）',
+    nextStep: '在运行时自带的 Ubuntu 终端里补齐该工具链（Debian/Ubuntu 系是 build-essential），或先在该终端手动编译一个最小程序看具体报错；补齐之前需要现场编译原生模块的插件装不上。',
+  },
+  CC_PROBE_UNKNOWN: {
+    // 没拿到退出码一律按不可用呈现：这里绝不能出现「可能已经支持」这类会让用户以为能编译的措辞。
+    meaning: '编译器文件在，但探测没有拿到它的退出码（进程没起来、超时被杀，或连可写的产物目录都没有），因此无法确认它能编译',
+    nextStep: '按不可用处理：需要现场编译原生模块的插件在当前设备上装不上。可在运行时自带的 Ubuntu 终端里手动跑一次 cc --version 与一次最小编译，看是不是探测本身被挡住了。',
+  },
+  MAKE_MISSING: {
+    meaning: '运行时里没有 make',
+    nextStep: '本应用不内置编译器，也不代为安装：make 是 node-gyp 构建原生模块的必需项，缺它时含原生模块的插件在当前设备上装不上。要自己补，可在运行时自带的 Ubuntu 终端里尝试安装 build-essential 或单装 make（apt 存在，但访客内能否联网取包尚未验证）。',
+  },
+  MAKE_UNUSABLE: {
+    meaning: '找到了 make，但它没能正常回答版本查询',
+    nextStep: 'node-gyp 需要一个能正常运行的 GNU make；可在运行时自带的 Ubuntu 终端里手动跑一次 make --version 看具体报错。',
+  },
+  MAKE_PROBE_UNKNOWN: {
+    meaning: 'make 文件在，但探测没有拿到它的退出码（进程没起来或超时），因此无法确认它能用',
+    nextStep: '按不可用处理；可在运行时自带的 Ubuntu 终端里手动跑一次 make --version 确认。',
+  },
+  PYTHON3_MISSING: {
+    meaning: '运行时里没有 python3',
+    nextStep: '本应用不内置编译器，也不代为安装：node-gyp 依赖 python3，缺它时含原生模块的插件在当前设备上装不上；带 Python 3 的运行时包不会缺这一项，请先重装或更新运行时。',
+  },
+  PYTHON3_UNUSABLE: {
+    meaning: '找到了 python3，但它没能正常回答版本查询',
+    nextStep: 'node-gyp 需要一个能正常启动的 python3；可在运行时自带的 Ubuntu 终端里手动跑一次 python3 --version 看具体报错。',
+  },
+  PYTHON3_PROBE_UNKNOWN: {
+    meaning: 'python3 文件在，但探测没有拿到它的退出码（进程没起来或超时），因此无法确认它能用',
+    nextStep: '按不可用处理；可在运行时自带的 Ubuntu 终端里手动跑一次 python3 --version 确认。',
   },
 }
 

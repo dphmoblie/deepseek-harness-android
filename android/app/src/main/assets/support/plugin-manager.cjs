@@ -45,6 +45,42 @@ const REPAIR_MAX_VERSIONS = 64
 const TRANSACTION_ID = /^[a-f0-9-]{36}$/
 
 /**
+ * 导入通道（`import`）的来源白名单与统一输入校验。
+ *
+ * 三种来源：①npm 包名（裸名或作用域名 `@scope/foo`）；②`https://` 直链（npm 按 tarball
+ * 地址安装）；③`git+https://` 仓库地址（可带 `#<ref>`）。访客脚本、原生桥与前端三处必须
+ * 用同一套规则，否则绕过点就落在最宽松的那一处。
+ *
+ * 为什么以 `-` 开头一律拒绝：npm 把位置参数当安装目标，`--registry=…` 这类字符串会被
+ * 解析成选项（选项注入面），必须在进入 npm 之前挡掉。为什么拒绝 `..` 与 `%2e`：两者都
+ * 可能被下游当成路径穿越。为什么 URL 里出现 userinfo 必须拒绝：`https://user:pass@host/x`
+ * 的凭据会随 npm 的错误原文回流到 WebView，所以拒绝时**不回显**被拒内容。
+ */
+const SOURCE_MAX = 512
+const SOURCE_CHARS = /^[A-Za-z0-9@/:._~%+?#=&-]+$/
+const SOURCE_HOST = /^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/
+const SOURCE_REF = /^[A-Za-z0-9._/-]{1,128}$/
+const SOURCE_GIT_PREFIX = 'git+https://'
+const SOURCE_HTTPS_PREFIX = 'https://'
+
+/**
+ * 插件包内的可变数据目录（与既有约定名一致）：更新/导入时从当前已安装版本完整带到新版本。
+ *
+ * 只在包目录内部搬运，不跟随符号链接，累计上限 16 MiB：插件配置是用户资产，丢了不可恢复；
+ * 但"搬运"本身不能成为提权或磁盘炸弹的入口。
+ */
+const DATA_DIRECTORIES = ['data', 'config', 'storage', '.config']
+const DATA_MAX_BYTES = 16 * 1024 * 1024
+const DATA_MAX_FILES = 4096
+const DATA_MAX_DEPTH = 8
+
+/** 「上一版」登记表与状态快照的上限；token 是 UUID，不含任何个人信息。 */
+const PREVIOUS_LIMIT = 256
+const SNAPSHOT_CHILDREN_LIMIT = 256
+const SNAPSHOT_FILE_LIMIT = 65536
+const STATE_TOKEN = /^[a-f0-9-]{36}$/
+
+/**
  * 模块图探测的目标包与它的作用域。
  *
  * `dsh-tools` 是**带 Symbol 服务身份**的模块：`Symbol('@deepseek-ai/dsh-tools.scheduler')`
@@ -333,9 +369,48 @@ function validName(name) {
   if (typeof name !== 'string' || name.length > 214 || !NAME.test(name) || name.includes('..')) fail('PLUGIN_INPUT_INVALID')
   return name
 }
+/**
+ * 校验导入来源并归类，返回 `{ kind: 'npm' | 'url' | 'git', source, name }`。
+ *
+ * 拒绝一律用 `PLUGIN_SOURCE_INVALID` 且**不带 detail**：被拒内容可能含凭据或路径，回显即泄漏。
+ */
+function validateImportSource(raw) {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > SOURCE_MAX) fail('PLUGIN_SOURCE_INVALID')
+  if (raw.startsWith('-') || raw.includes('..') || /%2e/i.test(raw)) fail('PLUGIN_SOURCE_INVALID')
+  if (!SOURCE_CHARS.test(raw)) fail('PLUGIN_SOURCE_INVALID')
+  // 裸 npm 包名（含作用域名）直接就是来源本身。
+  if (NAME.test(raw)) return { kind: 'npm', source: raw, name: raw }
+  const prefix = raw.startsWith(SOURCE_GIT_PREFIX) ? SOURCE_GIT_PREFIX : raw.startsWith(SOURCE_HTTPS_PREFIX) ? SOURCE_HTTPS_PREFIX : null
+  if (prefix === null) fail('PLUGIN_SOURCE_INVALID')
+  const rest = raw.slice(prefix.length)
+  const authority = rest.split(/[/?#]/, 1)[0]
+  // 只接受纯主机名（可带端口）：出现 `@` 即 userinfo，连同其他畸形主机一律拒绝。
+  if (!SOURCE_HOST.test(authority)) fail('PLUGIN_SOURCE_INVALID')
+  if (prefix === SOURCE_GIT_PREFIX) {
+    const hash = rest.indexOf('#')
+    if (hash !== -1 && !SOURCE_REF.test(rest.slice(hash + 1))) fail('PLUGIN_SOURCE_INVALID')
+  }
+  return { kind: prefix === SOURCE_GIT_PREFIX ? 'git' : 'url', source: raw, name: null }
+}
+/**
+ * 探测访客内是否真的有 git。三种结论必须区分，否则会把"探测不了"谎报成"没有 git"：
+ *   - `'available'`：`git --version` 正常返回；
+ *   - `'missing'`：spawn 报 `ENOENT`——这是唯一能确定"确实没有"的信号；
+ *   - `'unverified'`：超时、被沙箱拦、被信号中断、异常退出——结论不可用，交给上层报
+ *     `PLUGIN_GIT_UNVERIFIED`，而不是断言"没有 git"。
+ * 不抛异常、不带 detail：探测过程的任何输出都可能含绝对路径。
+ */
+function gitAvailability() {
+  let probe
+  try { probe = spawnSync('git', ['--version'], { encoding: 'utf8', timeout: 15000, maxBuffer: 65536 }) }
+  catch { return 'unverified' }
+  if (probe.error) return probe.error.code === 'ENOENT' ? 'missing' : 'unverified'
+  if (probe.signal) return 'unverified'
+  return probe.status === 0 ? 'available' : 'unverified'
+}
 
 // 管理器只解析包清单，不导入插件，不启动 Harness；插件启动失败时仍可恢复配置。
-function createManager(rootDirectory, installPackage, parseYaml) {
+function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
   const root = fs.realpathSync(rootDirectory)
   const profile = path.join(root, 'root/.dsh/profiles/web/package.json')
   const home = path.join(root, 'root/.dsh-mobile/plugin-manager')
@@ -533,6 +608,243 @@ function createManager(rootDirectory, installPackage, parseYaml) {
       const value = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8'))
       return typeof value.version === 'string' && value.version.length <= 64 ? value.version : null
     } catch { return null }
+  }
+
+  // -------------------------------------------------------------------------
+  // 插件自有数据的跨版本搬运
+  //
+  // 更新是把新版本装进新的事务目录再切链，旧包里的 `data`/`config`/`storage`/`.config`
+  // 不会自动跟着走（用户会看到"配置在更新后消失"）。这里在提交之前从当前已安装版本
+  // 递归搬到新版本，同名文件以**用户数据为准**（新包自带同名文件被覆盖，新包独有的
+  // 文件保持不变）。
+  //
+  // 三条硬约束：不跟随符号链接（否则等于把包外文件写进安装目录）、累计 ≤16 MiB、
+  // 失败一律受控。搬运发生在写事务日志之前，因此任何失败都等于"这次更新没发生"。
+  // -------------------------------------------------------------------------
+
+  /** 单个数据目录内部递归复制；`summary` 累计文件数与字节数。 */
+  function copyDataTree(source, target, summary, depth) {
+    if (depth > DATA_MAX_DEPTH) fail('PLUGIN_DATA_UNSAFE')
+    let items
+    try { items = fs.readdirSync(source, { withFileTypes: true }) } catch { fail('PLUGIN_DATA_UNSAFE') }
+    // 目标侧同样不接受链接：新包里的同名链接会把写入带出安装目录。
+    if (exists(target) && fs.lstatSync(target).isSymbolicLink()) fail('PLUGIN_DATA_UNSAFE')
+    try { fs.mkdirSync(target, { recursive: true, mode: 0o700 }) } catch { fail('PLUGIN_DATA_UNSAFE') }
+    for (const item of items) {
+      const from = path.join(source, item.name)
+      const to = path.join(target, item.name)
+      let stats
+      try { stats = fs.lstatSync(from) } catch { fail('PLUGIN_DATA_UNSAFE') }
+      if (stats.isSymbolicLink()) fail('PLUGIN_DATA_UNSAFE')
+      if (stats.isDirectory()) { copyDataTree(from, to, summary, depth + 1); continue }
+      if (!stats.isFile()) fail('PLUGIN_DATA_UNSAFE')
+      if (summary.files >= DATA_MAX_FILES || summary.bytes + stats.size > DATA_MAX_BYTES) fail('PLUGIN_DATA_TOO_LARGE')
+      if (exists(to) && fs.lstatSync(to).isSymbolicLink()) fail('PLUGIN_DATA_UNSAFE')
+      try { fs.copyFileSync(from, to) } catch { fail('PLUGIN_DATA_UNSAFE') }
+      summary.files += 1
+      summary.bytes += stats.size
+    }
+  }
+  /** 把 [id] 当前安装版本的数据目录搬到 [destination]（新版本的包目录）。 */
+  function preservePluginData(id, destination) {
+    const summary = { directories: 0, files: 0, bytes: 0 }
+    const installed = resolvePackage(id)
+    if (installed === null || !within(root, installed)) return summary
+    for (const name of DATA_DIRECTORIES) {
+      const source = path.join(installed, name)
+      if (!exists(source)) continue
+      if (fs.lstatSync(source).isSymbolicLink()) fail('PLUGIN_DATA_UNSAFE')
+      if (!fs.lstatSync(source).isDirectory()) continue
+      summary.directories += 1
+      copyDataTree(source, path.join(destination, name), summary, 0)
+    }
+    return summary
+  }
+
+  // -------------------------------------------------------------------------
+  // 「上一版」登记（每个插件只留一份，可再回滚）
+  // -------------------------------------------------------------------------
+
+  const previousFile = path.join(home, 'previous.json')
+  /**
+   * 读取上一版登记表。任何损坏都按"没有可回滚版本"处理：登记表读不了绝不能导致
+   * 删除、移动或改写任何插件目录。
+   */
+  function previousEntries() {
+    if (!exists(previousFile)) return []
+    try {
+      safe(previousFile)
+      if (!fs.lstatSync(previousFile).isFile() || fs.statSync(previousFile).size > SNAPSHOT_FILE_LIMIT) return []
+      const value = JSON.parse(fs.readFileSync(previousFile, 'utf8'))
+      if (!value || typeof value !== 'object' || !Array.isArray(value.entries) || value.entries.length > PREVIOUS_LIMIT) return []
+      const rows = new Map()
+      for (const row of value.entries) {
+        if (!row || typeof row !== 'object') return []
+        if (typeof row.id !== 'string' || row.id.length > 214 || !NAME.test(row.id) || row.id.includes('..')) return []
+        if (typeof row.version !== 'string' || !VERSION.test(row.version)) return []
+        if (typeof row.transaction !== 'string' || !TRANSACTION_ID.test(row.transaction)) return []
+        rows.set(row.id, { id: row.id, version: row.version, transaction: row.transaction })
+      }
+      return [...rows.values()]
+    } catch { return [] }
+  }
+  /** 形如 `versions/<事务>/node_modules/<name>` 的版本目录；其他形态返回 null。 */
+  function versionDirectory(id, directory) {
+    if (typeof directory !== 'string' || directory.length === 0) return null
+    const parts = path.relative(home, directory).split(path.sep)
+    if (parts.length !== 4 || parts[0] !== 'versions' || parts[2] !== 'node_modules' || parts[3] !== id) return null
+    if (!TRANSACTION_ID.test(parts[1])) return null
+    const version = versionOf(directory)
+    return version === null ? null : { version, transaction: parts[1] }
+  }
+  /** 该插件当前可回滚到的版本；登记存在但目录不可用时返回 null。 */
+  function previousFor(id) {
+    const row = previousEntries().find(entry => entry.id === id)
+    if (!row) return null
+    const directory = path.join(home, 'versions', row.transaction, 'node_modules', id)
+    try {
+      if (!within(home, fs.realpathSync(directory))) return null
+      if (!fs.lstatSync(directory).isDirectory()) return null
+    } catch { return null }
+    return versionOf(directory) === row.version ? { version: row.version, transaction: row.transaction, directory } : null
+  }
+  /**
+   * 登记（或清除）某插件的上一版。每个插件只保留一份：再次更新时覆盖为上一条记录。
+   *
+   * 被淘汰的旧版本目录**不删除**：解析闭包补全会在别的暂存目录里建指向任意事务目录的
+   * 链接（linkUnresolvedRuntimeDependencies），要靠一份廉价检查证明"没人引用它"是不成立的，
+   * 拿不准就不删——宁可留下磁盘占用，也不制造悬空链接。详见 docs/插件管理.md。
+   */
+  function recordPrevious(id, row) {
+    const rows = previousEntries().filter(entry => entry.id !== id)
+    if (row !== null) {
+      if (rows.length >= PREVIOUS_LIMIT) rows.shift()
+      rows.push({ id, version: row.version, transaction: row.transaction })
+    }
+    atomic(previousFile, { version: 1, entries: rows })
+  }
+
+  // -------------------------------------------------------------------------
+  // 启停状态快照（跨运行时升级）
+  //
+  // 插件启停写在 `profiles/web/package.json`（`dsh.profile.bundles` / `dshMobile.*`）与
+  // `launcher-plugins.patch.json` 里，而运行时升级只保留 `plugin-manager` 目录
+  // （RuntimePreservePolicy.PRESERVED_OUTSIDE_HOME）——升级后这两处状态都会丢。
+  // 因此在保留区内留一份自身快照：只有包名、启停、子插件 disabled 行与一个随机 token，
+  // 不含路径、URL、时间戳或个人数据。
+  // -------------------------------------------------------------------------
+
+  const snapshotFile = path.join(home, 'state-snapshot.json')
+  const snapshotNames = rows => {
+    if (!Array.isArray(rows) || rows.length > 64) return null
+    for (const name of rows) if (typeof name !== 'string' || name.length > 214 || !NAME.test(name) || name.includes('..')) return null
+    return [...rows]
+  }
+  /** 读取快照；缺失或损坏都返回 null（按"没有快照"处理，绝不清空任何用户数据）。 */
+  function snapshot() {
+    if (!exists(snapshotFile)) return null
+    try {
+      safe(snapshotFile)
+      if (!fs.lstatSync(snapshotFile).isFile() || fs.statSync(snapshotFile).size > SNAPSHOT_FILE_LIMIT) return null
+      const value = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'))
+      if (!value || typeof value !== 'object') return null
+      if (typeof value.token !== 'string' || !STATE_TOKEN.test(value.token)) return null
+      const bundles = snapshotNames(value.bundles)
+      const bundleOrder = snapshotNames(value.bundleOrder)
+      const disabledBundles = snapshotNames(value.disabledBundles)
+      if (bundles === null || bundleOrder === null || disabledBundles === null) return null
+      if (!Array.isArray(value.children) || value.children.length > SNAPSHOT_CHILDREN_LIMIT) return null
+      const children = []
+      for (const row of value.children) {
+        if (!row || typeof row !== 'object' || !entryId(row.id) || typeof row.disabled !== 'boolean') return null
+        children.push({ id: row.id, disabled: row.disabled })
+      }
+      return { token: value.token, bundles, bundleOrder, disabledBundles, children }
+    } catch { return null }
+  }
+  /** 清单里记录的 token（我们上次写的标记）；没有或格式不符时返回 null。 */
+  function manifestToken(config) {
+    const token = config.value.dshMobile?.stateToken
+    return typeof token === 'string' && STATE_TOKEN.test(token) ? token : null
+  }
+  /**
+   * 把当前启停状态写进快照，并把 token 记进清单。
+   *
+   * 只在"清单还是我们自己写的"（token 一致，或快照尚不存在）时更新：清单已被运行时重建、
+   * 回填还没发生时更新快照，会把升级前的状态覆盖掉——正是这里要避免的事。
+   */
+  function refreshState() {
+    const config = manifest()
+    const existing = snapshot()
+    const token = manifestToken(config)
+    if (existing !== null && existing.token !== token) return null
+    const order = Array.isArray(config.value.dshMobile?.bundleOrder) && config.value.dshMobile.bundleOrder.length <= 64 ? [...config.value.dshMobile.bundleOrder] : [...config.names]
+    const value = {
+      version: 1,
+      token: token ?? crypto.randomUUID(),
+      bundles: [...config.enabled],
+      bundleOrder: order,
+      disabledBundles: [...config.disabled],
+      children: overrides().slice(0, SNAPSHOT_CHILDREN_LIMIT).map(row => ({ id: row.id, disabled: row.disabled })),
+    }
+    atomic(snapshotFile, value)
+    if (token !== value.token) atomic(profile, { ...config.value, dshMobile: { ...config.value.dshMobile, stateToken: value.token } })
+    return value.token
+  }
+  /**
+   * 快照是升级迁移的辅助副本：清单才是启停状态的唯一事实来源，快照写失败不影响
+   * 已经生效的变更（也不该让用户看到"操作失败"却发现配置已经改了）。
+   */
+  function snapshotQuiet() {
+    try { refreshState() } catch { /* 忽略：下次成功的变更会再写一次。 */ }
+  }
+  /**
+   * 清单被重建后幂等回填状态。
+   *
+   * 只补**缺失项**：名字已经出现在 enabled/disabled 任一处（用户在新运行时里已经选过，
+   * 或运行时自带的默认值）就跳过，绝不覆盖用户当前选择；`bundleOrder` 只追加不重排；
+   * 子插件 disabled 行同样只补清单里没有的 id。全部走 atomic 写，任何失败都只是"没回填"，
+   * 不会破坏现有配置，也不会把只读操作变成写操作（回填只在 `recover()` 里发生）。
+   */
+  function restoreState() {
+    const saved = snapshot()
+    if (saved === null) return { restored: false, reason: 'missing' }
+    const rebuild = !exists(profile)
+    let config = null
+    if (!rebuild) {
+      try { config = manifest() } catch { return { restored: false, reason: 'invalid' } }
+      if (manifestToken(config) === saved.token) return { restored: false, reason: 'current' }
+    }
+    const bundles = rebuild ? [...saved.bundles] : [...config.enabled]
+    const disabled = rebuild ? [...saved.disabledBundles] : [...config.disabled]
+    const order = rebuild ? [...saved.bundleOrder] : (Array.isArray(config.value.dshMobile?.bundleOrder) && config.value.dshMobile.bundleOrder.length <= 64 ? [...config.value.dshMobile.bundleOrder] : [...config.names])
+    const known = new Set([...bundles, ...disabled])
+    let limit = 32 - known.size
+    const restored = []
+    for (const name of saved.bundles) {
+      if (known.has(name) || limit <= 0) continue
+      known.add(name); limit -= 1; bundles.push(name); restored.push(name)
+    }
+    for (const name of saved.disabledBundles) {
+      if (known.has(name) || limit <= 0) continue
+      known.add(name); limit -= 1; disabled.push(name); restored.push(name)
+    }
+    for (const name of saved.bundleOrder) if (known.has(name) && !order.includes(name)) order.push(name)
+    let children = 0
+    try {
+      const rows = overrides()
+      const present = new Set(rows.map(row => row.id))
+      const missing = saved.children.filter(row => !present.has(row.id))
+      if (missing.length > 0 && rows.length + missing.length <= 512) { atomic(overrideFile, [...rows, ...missing]); children = missing.length }
+    } catch { /* 子插件行补不上不影响包级启停的回填。 */ }
+    try {
+      const value = rebuild
+        ? { dsh: { profile: { bundles } }, dshMobile: { bundleOrder: order, disabledBundles: disabled, stateToken: saved.token } }
+        : { ...config.value, dsh: { ...config.value.dsh, profile: { ...config.value.dsh.profile, bundles } }, dshMobile: { ...config.value.dshMobile, bundleOrder: order, disabledBundles: disabled, stateToken: saved.token } }
+      atomic(profile, value)
+    } catch { return { restored: false, reason: 'failed' } }
+    // 目录里已经不存在的包照样回填：装回同名包即恢复可用，清单本身不制造悬空引用。
+    return { restored: true, reason: rebuild ? 'rebuilt' : 'merged', plugins: restored.length, children }
   }
   /**
    * 修复已安装插件：扫描 `versions/<事务目录>/node_modules`，把其中的 `@deepseek-ai/*`
@@ -739,7 +1051,7 @@ function createManager(rootDirectory, installPackage, parseYaml) {
           if (pkg.name === id && typeof pkg.version === 'string' && pkg.version.length <= 64 && VERSION.test(pkg.version)) version = pkg.version
         } catch { /* 损坏插件仍保留禁用入口。 */ }
       }
-      return { id, version, enabled: config.enabled.includes(id), protected: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'].includes(id), official: officialPackage(id), installed: version !== null }
+      return { id, version, rollback: previousFor(id)?.version ?? null, enabled: config.enabled.includes(id), protected: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'].includes(id), official: officialPackage(id), installed: version !== null }
     }) }
   }
   const overrideFile = path.join(root, 'root/.dsh-mobile/launcher-plugins.patch.json')
@@ -882,6 +1194,7 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     if (rows.length >= 512) fail('PLUGIN_CONFIG_INVALID')
     rows.push({ id: childId, disabled: !enabled })
     atomic(overrideFile, rows)
+    snapshotQuiet()
     return list()
   }
   function requireEditable(id) {
@@ -904,9 +1217,22 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     config.value.dsh.profile.bundles = bundles
     config.value.dshMobile = { ...config.value.dshMobile, bundleOrder: order, disabledBundles: config.names.filter(name => !bundles.includes(name)) }
     atomic(profile, config.value)
+    snapshotQuiet()
     return list()
   }
+  /**
+   * 恢复入口：先回滚未提交的安装事务，再尝试回填被重建掉的启停状态。
+   *
+   * 回填只在这里发生（`list()` 保持纯读）：它会写清单，因此必须挂在"启动前的恢复调用点"
+   * 上——app 侧持生命周期锁、Harness 未运行，不会与运行中的写入打架；反过来若放进
+   * `list()`，一个只读查询就会变成写操作，还可能覆盖用户当前选择。
+   */
   function recover() {
+    recoverJournal()
+    try { return restoreState() } catch { return { restored: false, reason: 'failed' } }
+  }
+  /** 回滚未提交的安装事务：按恢复记录把备份换回原位，然后删掉记录（=事务结束）。 */
+  function recoverJournal() {
     if (!exists(journal)) return
     const transaction = read(journal)
     if (!Array.isArray(transaction.entries) || transaction.entries.length > 256) fail('PLUGIN_RECOVERY_FAILED')
@@ -967,6 +1293,17 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     // 使用隔离配置和参数数组；不继承模型凭据，不执行依赖安装脚本。
     const environment = { HOME: directory, PATH: path.dirname(process.execPath) + ':/usr/bin:/bin', LANG: 'C.UTF-8', TMPDIR: directory }
     const common = ['--registry=https://registry.npmjs.org', '--userconfig=' + path.join(directory, 'npmrc'), '--globalconfig=' + path.join(directory, 'global-npmrc')]
+    // 安装命令只定义一次；参数数组、`--ignore-scripts` 恒开、不经过 Shell。
+    const install = spec => spawnSync(process.execPath, [npm, 'install', spec, '--ignore-scripts', '--legacy-peer-deps', '--bin-links=false', '--no-audit', '--no-fund', '--omit=dev', '--fetch-retries=1', '--fetch-timeout=30000', ...common], {
+      cwd: directory, env: environment, encoding: 'utf8', timeout: 180000, maxBuffer: 1024 * 1024,
+    })
+    atomic(path.join(directory, 'package.json'), { name: 'dsh-mobile-plugin-update', version: '1.0.0', private: true })
+    if (!NAME.test(id)) {
+      // 直链 / git 地址：版本由上游决定，不做引擎兼容版本选择（npm 把 https 直链当
+      // tarball 安装，git+https 交给 git；git 是否可用由 installInternal 先探测）。
+      if (install(id).status !== 0) fail('PLUGIN_UPDATE_FAILED')
+      return
+    }
     const runtimeDsh = runtimeDshVersion()
     let version = null
     if (runtimeDsh === null) {
@@ -993,11 +1330,7 @@ function createManager(rootDirectory, installPackage, parseYaml) {
       if (selection === null) fail('PLUGIN_ENGINE_UNSUPPORTED', `${id} dsh=${runtimeDsh}`)
       version = selection.version
     }
-    atomic(path.join(directory, 'package.json'), { name: 'dsh-mobile-plugin-update', version: '1.0.0', private: true })
-    const result = spawnSync(process.execPath, [npm, 'install', id + '@' + version, '--ignore-scripts', '--legacy-peer-deps', '--bin-links=false', '--no-audit', '--no-fund', '--omit=dev', '--fetch-retries=1', '--fetch-timeout=30000', ...common], {
-      cwd: directory, env: environment, encoding: 'utf8', timeout: 180000, maxBuffer: 1024 * 1024,
-    })
-    if (result.status !== 0) fail('PLUGIN_UPDATE_FAILED')
+    if (install(id + '@' + version).status !== 0) fail('PLUGIN_UPDATE_FAILED')
   }
   /** 解析闭包补全：详见 updateInternal 里的调用点说明。 */
   function linkUnresolvedRuntimeDependencies(stageModules, stagedNames) {
@@ -1051,15 +1384,32 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     }
   }
 
-  function updateInternal(id, directory, transactionId) {
-    requireEditable(id)
-    if (protectedPackage(id)) fail('PLUGIN_PROTECTED')
+  /**
+   * 安装事务：更新（`update`）与导入（`importPackage`）共用这一条路径，安全校验完全一致。
+   *
+   * [spec] = `{ kind: 'npm' | 'url' | 'git', source, name, hint, requireListed }`：
+   *   - npm：`name`/`source` 都是包名，走既有的引擎兼容版本选择；
+   *   - url / git：`source` 是已校验的地址，版本由上游决定，包名在安装后从 staging 推导。
+   *
+   * 顺序不可调换：探测 → 安装 → 运行时包消重 → 校验包与补丁 → 解析闭包补全 → 搬运用户
+   * 数据 → 写恢复记录 → 切换链接 → 注册清单 → 校验安装结果 → 提交（删恢复记录）。
+   * 提交点之前任何失败都会整体回滚；提交点之后只做登记与快照，不得再动暂存目录。
+   */
+  function installInternal(spec, directory, transactionId, markCommitted) {
+    const requested = spec.kind === 'npm' ? spec.name : spec.hint
+    if (typeof requested === 'string') {
+      validName(requested)
+      if (protectedPackage(requested) || ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'].includes(requested)) fail('PLUGIN_PROTECTED')
+    }
+    if (spec.requireListed && !manifest().names.includes(spec.name)) fail('PLUGIN_NOT_FOUND')
     recover()
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
     // 先检测符号链接能力；不支持时保留现有插件，绝不降级到破坏性覆盖。
     const probe = path.join(directory, 'link-probe')
     try { fs.symlinkSync(directory, probe, 'junction'); fs.unlinkSync(probe) } catch { fail('PLUGIN_LINK_UNSUPPORTED') }
-    ;(installPackage ?? npmInstall)(id, directory)
+    // git 地址需要访客里真的有 git：先探测，探测不出结论时绝不谎报"没有 git"。
+    if (spec.kind === 'git') requireGit()
+    ;(installPackage ?? npmInstall)(spec.kind === 'npm' ? spec.name : spec.source, directory)
     const stageModules = path.join(directory, 'node_modules')
     // 安装后消重：npm 会把插件依赖的 `@deepseek-ai/*` 装成真实副本，留在插件目录里就是
     // 同一份运行时服务模块的第二份物理副本（Symbol 身份失配 → 所有工具调用失败）。
@@ -1072,7 +1422,11 @@ function createManager(rootDirectory, installPackage, parseYaml) {
         for (const child of fs.readdirSync(path.join(stageModules, item))) stagedNames.push(validName(item + '/' + child))
       } else stagedNames.push(validName(item))
     }
-    if (!stagedNames.includes(id) || stagedNames.length > 256) fail('PLUGIN_UPDATE_FAILED')
+    if (stagedNames.length > 256) fail('PLUGIN_UPDATE_FAILED')
+    const id = spec.kind === 'npm'
+      ? (stagedNames.includes(spec.name) ? spec.name : fail('PLUGIN_UPDATE_FAILED'))
+      : deriveImportedName(stageModules, stagedNames, spec.hint)
+    if (protectedPackage(id) || ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'].includes(id)) fail('PLUGIN_PROTECTED')
     const selected = read(path.join(stageModules, id, 'package.json'))
     if (selected.name !== id || !VERSION.test(selected.version ?? '') || typeof selected.dsh?.bundle?.patch !== 'string') fail('PLUGIN_UPDATE_FAILED')
     const patch = path.resolve(stageModules, id, selected.dsh.bundle.patch)
@@ -1088,6 +1442,10 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     // 这里把 staging 内解析不到、但运行时确实存在的裸导入链回运行时实例。只在 staging
     // 内部建链、不写事务日志：失败时整个 staging 会被丢弃，不会影响任何既有安装。
     linkUnresolvedRuntimeDependencies(stageModules, stagedNames)
+    // 用户数据搬运必须在写恢复记录之前：失败时旧版本、清单都还没被碰过，等于这次更新没发生。
+    const data = preservePluginData(id, path.join(stageModules, id))
+    const installed = resolvePackage(id)
+    const previous = installed === null ? null : versionDirectory(id, installed)
     const entries = []
     for (const name of stagedNames) {
       const source = safe(path.join(stageModules, name))
@@ -1125,34 +1483,150 @@ function createManager(rootDirectory, installPackage, parseYaml) {
     fs.mkdirSync(path.join(home, 'backups', transactionId), { recursive: true, mode: 0o700 })
     for (const entry of entries) fs.mkdirSync(safe(path.dirname(entry.target)), { recursive: true, mode: 0o700 })
     atomic(journal, { entries: entries.map(entry => ({ target: path.relative(root, entry.target), backup: path.relative(root, entry.backup), hadOriginal: entry.hadOriginal })) })
+    let registered = false
+    let profileBefore = null
     try {
       for (const entry of entries) {
         if (entry.hadOriginal) fs.renameSync(entry.target, entry.backup)
         fs.symlinkSync(entry.source, entry.target, 'junction')
       }
-      const result = list()
-      if (result.plugins.find(plugin => plugin.id === id)?.version !== selected.version) fail('PLUGIN_UPDATE_FAILED')
+      // 导入的新包在清单里还没有位置，而 list() 只报告清单里的包：先注册再校验结果。
+      const before = manifest()
+      if (!before.names.includes(id)) { profileBefore = before.value; registerBundle(id); registered = true }
+      const after = resolvePackage(id)
+      if (after === null || versionOf(after) !== selected.version) fail('PLUGIN_UPDATE_FAILED')
       fs.unlinkSync(journal)
-      // 提交点之后仅清理备份，清理失败不得把成功更新报告为失败。
-      try { fs.rmSync(path.join(home, 'backups', transactionId), { recursive: true, force: true }) } catch {}
-      // 消重计数随结果一起回传：只含计数，不含任何路径。
-      return { ...result, runtimeDedupe }
+      markCommitted()
+    } catch (error) {
+      // 回滚链接之前先把清单恢复原样：新包的条目不能留在清单里指向一个被丢弃的暂存目录。
+      if (registered) { try { atomic(profile, profileBefore) } catch { /* 继续回滚链接，清单问题不掩盖更严重的失败。 */ } }
+      recover()
+      throw error
+    }
+    // ---- 提交点之后 ----
+    // 到这里包已经装好：登记上一版、写快照、清备份都只是收尾，失败不得把成功报成失败。
+    const result = list()
+    try { recordPrevious(id, previous) } catch { /* 登记失败只是暂时没有可回滚版本。 */ }
+    snapshotQuiet()
+    try { fs.rmSync(path.join(home, 'backups', transactionId), { recursive: true, force: true }) } catch {}
+    // 消重计数与数据搬运统计随结果一起回传：只含计数，不含任何路径。
+    return { ...result, runtimeDedupe, data }
+  }
+  /** git 地址的前置探测：三种结论（可用 / 确实没有 / 探测不了）必须区分开。 */
+  function requireGit() {
+    const state = (probeGit ?? gitAvailability)()
+    if (state === 'available') return
+    if (state === 'missing') fail('PLUGIN_GIT_MISSING')
+    fail('PLUGIN_GIT_UNVERIFIED')
+  }
+  /**
+   * URL / git 形态的包名推导：安装结果里"声明了 dsh 补丁、又不是受保护包"的那个包。
+   * 候选不唯一（插件顺带装了另一个 DSH 插件）时用"清单里还没有的那个"消歧；仍不唯一就
+   * 受控失败——宁可让用户改用包名导入，也不猜一个包名去切链接。
+   */
+  function deriveImportedName(stageModules, stagedNames, hint) {
+    if (typeof hint === 'string') {
+      const name = validName(hint)
+      if (!stagedNames.includes(name)) fail('PLUGIN_IMPORT_UNRESOLVED')
+      return name
+    }
+    const candidates = stagedNames.filter(name => {
+      if (protectedPackage(name)) return false
+      try { return typeof read(path.join(stageModules, name, 'package.json')).dsh?.bundle?.patch === 'string' } catch { return false }
+    })
+    if (candidates.length === 1) return candidates[0]
+    const absent = candidates.filter(name => !manifest().names.includes(name))
+    if (absent.length === 1) return absent[0]
+    fail('PLUGIN_IMPORT_UNRESOLVED')
+  }
+  /**
+   * 把新导入的包注册进 profile 清单（幂等：已在清单里就什么都不做）。
+   * 沿用既有约定：`dsh.profile.bundles` 与 `dshMobile.{bundleOrder,disabledBundles}`；
+   * 新包排在 `bundleOrder` 末尾，不改变既有组合包的覆盖顺序。
+   */
+  function registerBundle(id) {
+    const config = manifest()
+    if (config.names.includes(id)) return false
+    // 清单名字总数上限与 manifest() 一致（32）：超了会让清单整个读不出来，宁可拒绝导入。
+    if (config.names.length >= 32) fail('PLUGIN_CONFIG_INVALID')
+    const order = Array.isArray(config.value.dshMobile?.bundleOrder) ? [...config.value.dshMobile.bundleOrder] : [...config.names]
+    if (order.length > 31 || order.some(name => !NAME.test(name) || name.length > 214 || name.includes('..'))) fail('PLUGIN_CONFIG_INVALID')
+    const bundles = config.enabled.filter(name => name !== id)
+    bundles.push(id)
+    order.push(id)
+    config.value.dsh = { ...config.value.dsh, profile: { ...config.value.dsh.profile, bundles } }
+    config.value.dshMobile = { ...config.value.dshMobile, bundleOrder: order, disabledBundles: config.disabled.filter(name => name !== id) }
+    atomic(profile, config.value)
+    return true
+  }
+  /** 一次安装事务的外壳：分配事务目录、标记提交点、失败时丢弃暂存目录。 */
+  function runInstall(spec) {
+    const transactionId = crypto.randomUUID()
+    const directory = safe(path.join(home, 'versions', transactionId))
+    let committed = false
+    try { return installInternal(spec, directory, transactionId, () => { committed = true }) }
+    catch (error) {
+      // 恢复记录仍在时保留暂存目录，供下次启动恢复；提交之后绝不再删（链接已指向它）。
+      if (!committed && !exists(journal) && exists(directory)) fs.rmSync(directory, { recursive: true, force: true })
+      throw error
+    }
+  }
+  /** 更新已安装的包（按 npm 引擎兼容版本选择）。 */
+  function update(id) {
+    validName(id)
+    return runInstall({ kind: 'npm', source: id, name: id, hint: null, requireListed: true })
+  }
+  /**
+   * 受控导入：npm 包名 / `https://` 直链 / `git+https://` 地址（可带 `#<ref>`）。
+   *
+   * 语义与更新一致（共用同一事务）：包已在清单里等同更新；不在清单里则安装成功后注册进
+   * `dsh.profile.bundles`。`source` 是权威来源；`hint`（包名）仅用于把地址安装出的包
+   * 对应到清单中的名字，可选。返回值沿用 `list()` 投影，不含地址、路径或凭据。
+   */
+  function importPackage(source, hint) {
+    const spec = validateImportSource(source)
+    const name = typeof hint === 'string' && hint.length > 0 ? validName(hint) : null
+    return runInstall({ ...spec, hint: name, requireListed: false })
+  }
+  /**
+   * 回滚到该插件的上一版。
+   *
+   * 与更新共用同一套事务：先写恢复记录，再把 `modules/<id>` 切到上一版目录。回滚本身可再
+   * 回滚——刚被换下的那一版成为新的"上一版"（换下的是版本目录里的链接时才有记录可留）。
+   */
+  function rollback(id) {
+    validName(id)
+    if (protectedPackage(id) || ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'].includes(id)) fail('PLUGIN_PROTECTED')
+    if (!manifest().names.includes(id)) fail('PLUGIN_NOT_FOUND')
+    recover()
+    const previous = previousFor(id)
+    if (previous === null) fail('PLUGIN_ROLLBACK_UNAVAILABLE')
+    const current = resolvePackage(id)
+    if (current === null) fail('PLUGIN_NOT_FOUND')
+    const target = modules.map(base => path.join(base, id)).find(exists)
+    if (target === undefined) fail('PLUGIN_NOT_FOUND')
+    const replaced = versionDirectory(id, current)
+    const transactionId = crypto.randomUUID()
+    const backup = path.join(home, 'backups', transactionId, '0')
+    fs.mkdirSync(safe(path.dirname(backup)), { recursive: true, mode: 0o700 })
+    fs.mkdirSync(safe(path.dirname(target)), { recursive: true, mode: 0o700 })
+    atomic(journal, { entries: [{ target: path.relative(root, target), backup: path.relative(root, backup), hadOriginal: true }] })
+    try {
+      fs.renameSync(target, backup)
+      fs.symlinkSync(previous.directory, target, 'junction')
+      const resolved = resolvePackage(id)
+      if (resolved === null || versionOf(resolved) !== previous.version) fail('PLUGIN_ROLLBACK_FAILED')
+      fs.unlinkSync(journal)
     } catch (error) {
       recover()
       throw error
     }
+    // 提交点之后：登记"刚被换下的那一版"与清理备份都只是收尾。
+    try { recordPrevious(id, replaced) } catch { /* 登记失败只是失去再回滚一次的能力。 */ }
+    try { fs.rmSync(path.join(home, 'backups', transactionId), { recursive: true, force: true }) } catch {}
+    return list()
   }
-  function update(id) {
-    const transactionId = crypto.randomUUID()
-    const directory = safe(path.join(home, 'versions', transactionId))
-    try { return updateInternal(id, directory, transactionId) }
-    catch (error) {
-      // 恢复记录仍在时保留暂存目录，供下次启动恢复；否则清除失败下载。
-      if (!exists(journal) && exists(directory)) fs.rmSync(directory, { recursive: true, force: true })
-      throw error
-    }
-  }
-  return { list, setEnabled, setChildEnabled, update, recover, repair, scanRuntimeGraph }
+  return { list, setEnabled, setChildEnabled, update, importPackage, rollback, recover, repair, scanRuntimeGraph }
 }
 
 module.exports = {
@@ -1164,6 +1638,10 @@ module.exports = {
   compareVersions,
   satisfiesRange,
   selectNewestCompatible,
+  // 供单测直接覆盖导入来源校验（决定哪些地址能进 npm/git）。
+  validateImportSource,
+  // 供单测直接覆盖 git 探测的三态判定（可用 / 确实没有 / 探测不了）。
+  gitAvailability,
   // 供单测覆盖受控详情过滤（决定哪些字符能回到 WebView）。
   safeDetail,
   // 供单测覆盖裸导入抽取（决定哪些宿主依赖会被链进 staging）。
@@ -1179,16 +1657,20 @@ module.exports = {
 if (require.main === module) {
   try {
     const manager = createManager('/')
-    const [operation, id, flag, childId] = process.argv.slice(2)
+    const [operation, first, second, third] = process.argv.slice(2)
     let result
     if (operation === 'list') result = manager.list()
-    else if (operation === 'recover') { manager.recover(); result = { recovered: true } }
+    // 状态回填只发生在 recover 里（list 保持纯读）；回填结果随恢复结果一起回传。
+    else if (operation === 'recover') result = { recovered: true, state: manager.recover() }
     else if (operation === 'repair') { manager.recover(); result = manager.repair() }
     // 模块图探测是只读的：不走 recover()，也不参与 repair 的代次指纹，可随时独立触发。
     else if (operation === 'graph') result = manager.scanRuntimeGraph()
-    else if (operation === 'enable' && (flag === 'true' || flag === 'false')) { manager.recover(); result = manager.setEnabled(id, flag === 'true') }
-    else if (operation === 'child' && (flag === 'true' || flag === 'false')) { manager.recover(); result = manager.setChildEnabled(id, childId, flag === 'true') }
-    else if (operation === 'update') result = manager.update(id)
+    else if (operation === 'enable' && (second === 'true' || second === 'false')) { manager.recover(); result = manager.setEnabled(first, second === 'true') }
+    else if (operation === 'child' && (second === 'true' || second === 'false')) { manager.recover(); result = manager.setChildEnabled(first, third, second === 'true') }
+    else if (operation === 'update') result = manager.update(first)
+    // import 的参数顺序是"来源优先"：`import <来源> [<包名>]`，包名只是可选提示。
+    else if (operation === 'import') result = manager.importPackage(first, second ?? null)
+    else if (operation === 'rollback') result = manager.rollback(first)
     else fail('PLUGIN_INPUT_INVALID')
     const output = JSON.stringify(result)
     if (Buffer.byteLength(output) > 220000) fail('PLUGIN_CONFIG_INVALID')

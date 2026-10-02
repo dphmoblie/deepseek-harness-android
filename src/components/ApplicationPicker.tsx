@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Search, Smartphone } from 'lucide-react'
 import type { InstalledApplication, RuntimeBridge } from '../platform/types'
+import { MAX_ACCESSIBILITY_PACKAGES } from '../platform/validation'
 import { t } from '../i18n'
 import './ApplicationPicker.css'
 
@@ -51,7 +52,11 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
       <label className="field"><span><Search size={16} />{t('搜索应用名称或包名')}</span>
         <input value={query} maxLength={160} onChange={event => setQuery(event.target.value)} placeholder={t('输入应用名称或包名')} />
       </label>
-      <p className="settings-note">{t('已选择 {0} 个应用，不限制白名单数量；勾选后点击保存白名单。', selected.length)}</p>
+      <p className="settings-note">{t('已选择 {0} 个应用，白名单最多 {1} 个；勾选后点击保存白名单。', selected.length, MAX_ACCESSIBILITY_PACKAGES)}</p>
+      {/* 已选项**不因为超过上限被丢弃**（可能有历史数据），但要说清楚：这样保存会被拒绝。 */}
+      {selected.length > MAX_ACCESSIBILITY_PACKAGES && <p className="settings-note" role="status">
+        {t('已选 {0} 个，超过上限 {1} 个；保存前请先取消多余的勾选，否则保存会被拒绝。', selected.length, selected.length - MAX_ACCESSIBILITY_PACKAGES)}
+      </p>}
       {failed && <p role="alert">{t('无法读取应用列表，请在安卓设备上重试。')} <button type="button" onClick={() => setAttempt(value => value + 1)}>{t('重试')}</button></p>}
       <div className="application-picker-list" aria-busy={loading}>
         {apps.map(app => <label className="application-picker-row" key={app.packageName}>

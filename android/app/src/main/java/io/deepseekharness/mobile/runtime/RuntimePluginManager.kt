@@ -134,9 +134,16 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         }
     }
 
-    fun run(operation: String, id: String?, enabled: Boolean?, childId: String?): JSObject {
-        if (operation !in setOf("list", "enable", "child", "update", "recover", "repair", "graph")) invalid()
-        if (operation !in setOf("list", "recover", "repair", "graph")) {
+    fun run(operation: String, id: String?, enabled: Boolean?, childId: String?, source: String? = null): JSObject {
+        if (operation !in setOf("list", "enable", "child", "update", "import", "rollback", "recover", "repair", "graph")) invalid()
+        if (operation == "import") {
+            // 来源必填，且与访客脚本 `validateImportSource`、前端 `src/platform/plugins.ts` 是
+            // **同一套规则**（逐条对应见 `PluginSourcePolicy`）：三处任意一处放松，
+            // 别的入口就能把危险字符串送进 npm。这里只做"是否合法"的判定，不回显输入。
+            if (PluginSourcePolicy.classify(source) == null) invalid()
+            // 包名只是"期望的名字"，用于装完后消歧；给了就必须合法。
+            if (id != null && (id.length !in 1..214 || !PACKAGE.matches(id) || ".." in id)) invalid()
+        } else if (operation !in setOf("list", "recover", "repair", "graph")) {
             if (id == null || id.length !in 1..214 || !PACKAGE.matches(id) || ".." in id) invalid()
             if (operation in setOf("enable", "child") && enabled == null) invalid()
             if (operation == "child" && (childId == null || !ENTRY.matches(childId))) invalid()
@@ -144,11 +151,19 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         if (store.installedManifest() == null) throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "请先安装 Ubuntu 运行时")
         prepareScript()
         val argv = mutableListOf("/opt/node/bin/node", "/root/.dsh-mobile/plugin-manager.cjs", operation)
-        if (id != null) argv.add(id)
-        if (enabled != null) argv.add(enabled.toString())
-        if (childId != null) argv.add(childId)
+        if (operation == "import") {
+            // 约定：`import <来源> [<包名>]`——来源在前，包名只在需要消歧时给。
+            argv.add(source.orEmpty())
+            if (id != null) argv.add(id)
+        } else {
+            if (id != null) argv.add(id)
+            if (enabled != null) argv.add(enabled.toString())
+            if (childId != null) argv.add(childId)
+        }
         val timeoutSeconds = when (operation) {
             "update" -> 250L
+            // 导入要跑一次 npm 安装（可能下载 tarball 或 clone 仓库），与更新同一量级。
+            "import" -> 250L
             // 修复要遍历已安装的插件目录，给足时间但仍是有限等待。
             "repair" -> 90L
             // 模块图探测是只读遍历（有深度与条目上限），不需要修复那么长的等待。
@@ -176,7 +191,7 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             }
             throw RuntimeFailure(code, detail ?: "插件操作失败，请检查运行时状态后重试")
         }
-        if (operation in setOf("list", "enable", "child", "update") && payload.optJSONArray("plugins") == null) {
+        if (operation in setOf("list", "enable", "child", "update", "import", "rollback") && payload.optJSONArray("plugins") == null) {
             throw RuntimeFailure("PLUGIN_OPERATION_FAILED", "插件返回数据无效")
         }
         // 修复只回传计数（处理了多少个包、失败多少个），没有插件清单。
@@ -220,6 +235,56 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         val ENTRY = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
         /** 受控详情：包名、版本号与 semver 范围字符集；拒绝引号、反斜杠、冒号与控制字符。 */
         val DETAIL = Regex("^[A-Za-z0-9@/._+, =!<>~^|()\\-]{1,300}$")
-        val ERROR_CODES = setOf("PLUGIN_INPUT_INVALID", "PLUGIN_PATH_INVALID", "PLUGIN_CONFIG_INVALID", "PLUGIN_NOT_FOUND", "PLUGIN_PROTECTED", "PLUGIN_RECOVERY_FAILED", "PLUGIN_UPDATER_MISSING", "PLUGIN_UPDATE_FAILED", "PLUGIN_LINK_UNSUPPORTED", "PLUGIN_DEPENDENCY_UNSUPPORTED", "PLUGIN_ENGINE_UNSUPPORTED", "PLUGIN_GROUP_DISABLED", "PLUGIN_OPERATION_FAILED")
+        val ERROR_CODES = setOf("PLUGIN_INPUT_INVALID", "PLUGIN_PATH_INVALID", "PLUGIN_CONFIG_INVALID", "PLUGIN_NOT_FOUND", "PLUGIN_PROTECTED", "PLUGIN_RECOVERY_FAILED", "PLUGIN_UPDATER_MISSING", "PLUGIN_UPDATE_FAILED", "PLUGIN_LINK_UNSUPPORTED", "PLUGIN_DEPENDENCY_UNSUPPORTED", "PLUGIN_ENGINE_UNSUPPORTED", "PLUGIN_GROUP_DISABLED", "PLUGIN_OPERATION_FAILED", "PLUGIN_SOURCE_INVALID", "PLUGIN_IMPORT_UNRESOLVED", "PLUGIN_GIT_MISSING", "PLUGIN_GIT_UNVERIFIED", "PLUGIN_DATA_TOO_LARGE", "PLUGIN_DATA_UNSAFE", "PLUGIN_ROLLBACK_UNAVAILABLE", "PLUGIN_ROLLBACK_FAILED")
+    }
+}
+
+/**
+ * 插件导入来源的判定规则。
+ *
+ * **为什么要有这个对象**：同一条规则要出现在三个地方——访客脚本 `validateImportSource`、
+ * 这里（原生侧最后一道闸）、前端 `src/platform/plugins.ts`——三处任意一处放松，
+ * 别的入口就能把危险字符串送进 npm。把它抽成不依赖 Android 的纯对象，是为了能用普通
+ * 单元测试逐条对照三处规则，而不是只能靠真机跑一遍"看起来没问题"。
+ *
+ * 判据（与访客脚本逐条对应）：
+ *  - 长度 1..512；
+ *  - 拒绝以 `-` 开头（`npm install -x` 形态的选项注入）、任何 `..`（含 URL 编码的 `%2e`）；
+ *  - 字符白名单 `[A-Za-z0-9@/:._~%+?#=&-]`：空白、引号、尖括号、反引号、换行都在此被拒；
+ *  - 裸 npm 包名（含作用域名）直接合法；
+ *  - 否则必须是 `https://` 或 `git+https://`，主机名只能是字母数字点横线（可带端口）——
+ *    不允许 `@`，因此 `https://user:pass@host/x.tgz` 这类带 userinfo 的地址进不来；
+ *  - `git+https://…#<ref>` 的 ref 只允许 `[A-Za-z0-9._/-]{1,128}`。
+ */
+internal object PluginSourcePolicy {
+    const val MAX = 512
+    const val GIT_PREFIX = "git+https://"
+    const val HTTPS_PREFIX = "https://"
+    private val packageName = Regex("^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
+    private val chars = Regex("^[A-Za-z0-9@/:._~%+?#=&-]+$")
+    private val host = Regex("^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$")
+    private val ref = Regex("^[A-Za-z0-9._/-]{1,128}$")
+    /** 大小写不敏感的 `%2e`：URL 编码的点同样能拼出 `..`，必须和明文一起拒绝。 */
+    private val percentDot = Regex("%2e", RegexOption.IGNORE_CASE)
+
+    /** 合法时返回 `"npm"` / `"url"` / `"git"`，不合法时返回 `null`；调用方只看到结论。 */
+    fun classify(raw: String?): String? {
+        val candidate = raw ?: return null
+        if (candidate.length !in 1..MAX) return null
+        if (candidate.startsWith("-") || ".." in candidate || percentDot.containsMatchIn(candidate)) return null
+        if (!chars.matches(candidate)) return null
+        if (packageName.matches(candidate)) return "npm"
+        val prefix = when {
+            candidate.startsWith(GIT_PREFIX) -> GIT_PREFIX
+            candidate.startsWith(HTTPS_PREFIX) -> HTTPS_PREFIX
+            else -> return null
+        }
+        val rest = candidate.removePrefix(prefix)
+        if (!host.matches(rest.split('/', '?', '#').first())) return null
+        if (prefix == GIT_PREFIX) {
+            val hash = rest.indexOf('#')
+            if (hash >= 0 && !ref.matches(rest.substring(hash + 1))) return null
+        }
+        return if (prefix == GIT_PREFIX) "git" else "url"
     }
 }

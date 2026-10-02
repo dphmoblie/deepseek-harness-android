@@ -7,7 +7,10 @@ import io.deepseekharness.mobile.shizuku.DeviceFilePolicy
 import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
 import io.deepseekharness.mobile.shizuku.ShizukuRuntime
 import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
+import io.deepseekharness.mobile.runtime.TaskNotification
+import io.deepseekharness.mobile.runtime.TurnCompletionPolicy
 import org.json.JSONObject
+import android.content.Context
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
@@ -31,6 +34,10 @@ import java.security.MessageDigest
  * http://127.0.0.1:<动态端口>/device-command（容器与宿主共享 loopback）。
  * 桥按白名单命令执行：自动创建一次性设备 Shell 会话 -> DeviceCommandRunner -> 关闭。
  * 认证：Bearer token（App 生成并注入容器环境 DSH_DEVICE_BRIDGE_TOKEN）。
+ *
+ * 两个不经过 Shell 的内建命令：`automationPolicy`（能力查询）与 `notify-turn-complete`
+ * （访客侧「一轮任务已完成」的收单点，只触发固定文案的通知，见
+ * `TurnCompletionPolicy`）。后者受严格参数校验与限流约束，限流命中静默忽略。
  *
  * 注意：Android 运行时没有 com.sun.net.httpserver，这里用 ServerSocket 实现
  * 极简 HTTP/1.1 服务（只支持单个 POST 端点 + 固定 Content-Length 请求体）。
@@ -56,6 +63,27 @@ class DeviceBridgeServer(
         val thread = Thread({ acceptLoop() }, "dsh-device-bridge")
         thread.isDaemon = true
         thread.start()
+    }
+
+    /**
+     * 取得进程级 Application 上下文；拿不到时返回 null。
+     *
+     * 为什么用反射而不是构造参数：本类的构造点固定在 `RuntimeHost.ensureDeviceBridge`
+     * 内，而只有 `notify-turn-complete` 这一条命令需要 Context（发通知与写审计）。
+     * 为了它给全类加一个构造参数，会让所有既有调用方与顺序依赖一起动；而
+     * `ActivityThread.currentApplication()` 是进程级单例，桥只可能在
+     * `Application.onCreate()` 之后被创建，因此**实际可达的失败只有一种**：
+     * 拿不到 Context，此时该命令返回 `TURN_NOTIFY_UNAVAILABLE` 并静默降级，
+     * 绝不影响任何别的命令。若后续要接更正规的注入，把本方法换成构造参数即可，
+     * 调用点只有下面那一处。
+     */
+    private fun applicationContextOrNull(): Context? = try {
+        val current = Class.forName("android.app.ActivityThread")
+            .getMethod("currentApplication")
+            .invoke(null)
+        (current as? Context)?.applicationContext
+    } catch (_: Throwable) {
+        null
     }
 
     override fun stop() {
@@ -191,6 +219,30 @@ class DeviceBridgeServer(
                                 errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
                             )
                         respondResult(output, result)
+                        return
+                    }
+                    // 访客侧「一轮任务已完成」的收单点（登记册 §5.5）。
+                    // 这条命令**只**能触发一条固定文案的通知，不读会话内容、不返回任何用户数据：
+                    // 访客进程因此无法用它在通知栏或锁屏上写任意文本。
+                    // 限流命中一律静默忽略（ok=true, accepted=false），不报错刷屏。
+                    if (commandName == "notify-turn-complete") {
+                        if (param.length > TurnCompletionPolicy.MAX_PARAM_CHARS) {
+                            throw RuntimeFailure("DEVICE_COMMAND_INVALID", "任务完成事件参数过长")
+                        }
+                        val receipt = TaskNotification.recordTurnCompleted(
+                            applicationContextOrNull(),
+                            param,
+                        )
+                        respondResult(output, io.deepseekharness.mobile.shizuku.DeviceCommandResult(
+                            ok = receipt.ok,
+                            exitCode = if (receipt.ok) 0 else 1,
+                            text = JSONObject()
+                                .put("accepted", receipt.accepted)
+                                .put("queued", receipt.queued)
+                                .toString(),
+                            truncated = false,
+                            errorCode = receipt.errorCode,
+                        ))
                         return
                     }
                     val command = DeviceCommand.fromName(commandName)

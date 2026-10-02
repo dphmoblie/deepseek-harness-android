@@ -35,11 +35,15 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
 import io.deepseekharness.mobile.overlay.OverlayBallPolicy
 import io.deepseekharness.mobile.overlay.OverlayBallPreferences
+import io.deepseekharness.mobile.overlay.OverlayBallSecondaryPolicy
+import io.deepseekharness.mobile.overlay.OverlayConversationSizePolicy
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLog
@@ -77,8 +81,6 @@ class OverlayBallService : Service() {
      */
     private var ballAttached = false
 
-    private var menuScrim: View? = null
-    private var menuView: View? = null
     private var conversationView: View? = null
     private var conversationWebView: WebView? = null
     private var conversationError: TextView? = null
@@ -89,6 +91,24 @@ class OverlayBallService : Service() {
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
     private var fileChooserRequest: String? = null
     private lateinit var layoutParams: WindowManager.LayoutParams
+
+    /**
+     * 已挂到窗口上的二级球（按 [OverlayBallSecondaryPolicy.CHOICE_ORDER] 顺序）。
+     *
+     * 二级球的「是否展开」就等于这个列表是否为空 —— 不另设布尔字段，理由见策略里的说明。
+     */
+    private val secondaryViews = mutableListOf<View>()
+
+    /** 缩放手柄所在的独立 overlay 窗口；小窗关闭时一并摘除。 */
+    private var conversationResizeHandle: View? = null
+
+    /** 拖动开始时的尺寸基准：以「按下时的尺寸 + 位移」计算，保证拖动可逆。 */
+    private var resizeStartWidth = 0
+    private var resizeStartHeight = 0
+
+    /** 按下时的绝对坐标：手柄窗口会随缩放移动，只能用 raw 坐标算位移。 */
+    private var resizeTouchStartX = 0f
+    private var resizeTouchStartY = 0f
 
     private var touchStartX = 0f
     private var touchStartY = 0f
@@ -183,6 +203,9 @@ class OverlayBallService : Service() {
         layoutParams.y = y
         runCatching { windowManager.updateViewLayout(view, layoutParams) }
         preferences.writePosition(x, y)
+        // 二级球跟随主球，并重新做一次安全区夹取：旋转后可用宽高都变了，
+        // 原来「排得下」的一列可能已经压到手势条区域。
+        layoutSecondaryChoices()
         conversationParams?.let { params ->
             val (width, height) = conversationSize(metrics.widthPixels, metrics.heightPixels)
             params.width = width
@@ -193,12 +216,16 @@ class OverlayBallService : Service() {
             params.x = panelX
             params.y = panelY
             conversationView?.let { runCatching { windowManager.updateViewLayout(it, params) } }
+            // 小窗尺寸变了，手柄必须跟着挪，否则它会悬在小窗外面（那里已经没有可拖的边角）。
+            updateResizeHandlePosition()
         }
     }
 
     override fun onDestroy() {
         detachConversation()
-        detachMenu()
+        // 二级球必须先摘：它们的位置依赖 layoutParams，虽然在 onDestroy 里已经用不到，
+        // 但顺序反过来会让「先摘主球、后摘二级球」出现一次以失效坐标重排的窗口调用。
+        detachSecondaryChoices()
         detachBall()
         stopForegroundCompat()
         // 服务结束（含进入前台失败、权限被撤销、用户点「隐藏悬浮球」等自停路径）后必须
@@ -294,7 +321,10 @@ class OverlayBallService : Service() {
             if (!stopIfOverlayPermissionRevoked()) toggleConversation()
         }
         view.setOnLongClickListener {
-            if (!stopIfOverlayPermissionRevoked()) showMenu()
+            // 长按已从「弹出文字菜单」改成「展开/收起二级球」：二级球上的每一项就是原来
+            // 菜单项的动作（外加减一个「关闭无障碍」）。不保留文字菜单，是因为同一组动作
+            // 有两个入口时，用户无法从界面判断哪个是权威入口。
+            if (!stopIfOverlayPermissionRevoked()) toggleSecondaryChoices()
             true
         }
         view.setOnTouchListener { touched, event -> handleTouch(touched, event, size) }
@@ -388,6 +418,9 @@ class OverlayBallService : Service() {
                     layoutParams.x = x
                     layoutParams.y = y
                     runCatching { windowManager.updateViewLayout(ballView, layoutParams) }
+                    // 二级球跟随主球：它们的位置全部由主球坐标推导，因此这里不需要缓存
+                    // 每个按钮的旧坐标，直接按新坐标重排一次即可。
+                    layoutSecondaryChoices()
                 } else if (!longPressFired &&
                     OverlayBallPolicy.isLongPress(
                         deltaX, deltaY, slop,
@@ -425,6 +458,7 @@ class OverlayBallService : Service() {
                     )
                     runCatching { windowManager.updateViewLayout(ballView, layoutParams) }
                     preferences.writePosition(layoutParams.x, layoutParams.y)
+                    layoutSecondaryChoices()
                 }
                 return true
             }
@@ -475,7 +509,9 @@ class OverlayBallService : Service() {
     /** The small window uses the same authenticated local page as the full Harness screen. */
     @SuppressLint("SetJavaScriptEnabled")
     private fun showConversation(access: HarnessAccess?) {
-        detachMenu()
+        // 同一时刻只应有一个「展开物」：小窗打开时收起二级球，否则按钮会浮在小窗之上，
+        // 用户点哪里都像在跟另一个界面打架。
+        detachSecondaryChoices()
         val metrics = resources.displayMetrics
         val (width, height) = conversationSize(metrics.widthPixels, metrics.heightPixels)
         val (x, y) = OverlayBallPolicy.menuPosition(
@@ -624,6 +660,7 @@ class OverlayBallService : Service() {
         conversationView = frame
         conversationParams = params
         conversationAccess = access
+        attachResizeHandle()
         if (access == null || origin == null || cookie == null) return
         val web = conversationWebView ?: return
         val entry = runCatching {
@@ -651,8 +688,185 @@ class OverlayBallService : Service() {
         }
     }
 
-    private fun conversationAction(label: Int, action: () -> Unit): TextView = TextView(this).apply {
-        text = getString(label)
+    // ── 小窗缩放 ────────────────────────────────────────────────────────────
+
+    /**
+     * 挂上右下角的缩放手柄。
+     *
+     * 为什么手柄是**独立窗口**而不是小窗内部的子视图：小窗的根是 `showConversation` 里
+     * 现搭的 `LinearLayout`，往里面塞一个悬浮在内容之上的手柄需要把根换成 `FrameLayout`
+     * 并重排 header/body 两层（还要动 `res/layout`，那不在本轮范围内）。独立窗口只依赖
+     * 已经存在的 `WindowManager` 与 `conversationParams`，和二级球用的是同一套机制。
+     *
+     * 代价说清楚：手柄窗口会盖住小窗右下角约 44dp 的一小块内容（它就落在那里，否则用户
+     * 找不到它），以及拖动时多一次 `updateViewLayout`。两者都不影响内容本身。
+     */
+    private fun attachResizeHandle() {
+        detachResizeHandle()
+        val params = conversationParams ?: return
+        val size = dp(OverlayConversationSizePolicy.HANDLE_TOUCH_SIZE_DP)
+        val handle = FrameLayout(this).apply {
+            contentDescription = getString(R.string.overlay_conversation_resize_description)
+            isClickable = true
+            addView(TextView(this@OverlayBallService).apply {
+                text = RESIZE_GLYPH
+                setTextColor(MENU_TEXT_COLOR)
+                textSize = 14f
+                gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(HANDLE_BACKGROUND_COLOR)
+                }
+                val visual = dp(OverlayConversationSizePolicy.HANDLE_VISUAL_SIZE_DP)
+                layoutParams = FrameLayout.LayoutParams(visual, visual, Gravity.CENTER)
+                isClickable = false
+                isFocusable = false
+                contentDescription = (parent as? View)?.contentDescription
+            }, FrameLayout.LayoutParams(size, size, Gravity.CENTER))
+            setOnTouchListener { _, event -> handleResizeTouch(event, size) }
+        }
+        val windowParams = WindowManager.LayoutParams(
+            size,
+            size,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+        }
+        val (handleX, handleY) = resizeHandlePosition(params, size)
+        windowParams.x = handleX
+        windowParams.y = handleY
+        if (runCatching { windowManager.addView(handle, windowParams) }.isFailure) {
+            // 手柄挂不上不算失败：小窗本身照常用，只是这次不能缩放。
+            return
+        }
+        conversationResizeHandle = handle
+    }
+
+    private fun detachResizeHandle() {
+        conversationResizeHandle?.let { runCatching { windowManager.removeView(it) } }
+        conversationResizeHandle = null
+    }
+
+    /**
+     * 手柄在小窗**外面**的那点内缩怎么算：手柄的左上角 = 面板右下角 - 手柄边长 - 内缩。
+     *
+     * 全部用绝对屏幕坐标，因为手柄是独立窗口，不共享小窗的坐标系。
+     */
+    private fun resizeHandlePosition(
+        params: WindowManager.LayoutParams,
+        handleSize: Int,
+    ): Pair<Int, Int> {
+        val inset = dp(OverlayConversationSizePolicy.HANDLE_INSET_DP)
+        val (localX, localY) = OverlayConversationSizePolicy.handlePosition(
+            panelWidth = params.width,
+            panelHeight = params.height,
+            handleSize = handleSize,
+            inset = inset,
+        )
+        return params.x + localX to params.y + localY
+    }
+
+    private fun updateResizeHandlePosition() {
+        val handle = conversationResizeHandle ?: return
+        val params = conversationParams ?: return
+        val size = dp(OverlayConversationSizePolicy.HANDLE_TOUCH_SIZE_DP)
+        val windowParams = handle.layoutParams as? WindowManager.LayoutParams ?: return
+        val (x, y) = resizeHandlePosition(params, size)
+        windowParams.x = x
+        windowParams.y = y
+        runCatching { windowManager.updateViewLayout(handle, windowParams) }
+    }
+
+    /**
+     * 手柄拖动：按下时记基准尺寸，移动时按位移算新尺寸并夹取。
+     *
+     * 以**按下时的尺寸 + 位移**为基准（而不是逐帧累加当前尺寸）：后者会把夹取结果当成
+     * 用户意图，手指拖回原处时窗口回不到原大小。
+     *
+     * 用 `event.rawX/rawY` 而不是局部坐标：手柄窗口本身会随着缩放一起移动，
+     * 局部坐标在拖动过程中同时被「手指位移」和「窗口位移」改变，算出来的位移会翻倍。
+     */
+    private fun handleResizeTouch(event: MotionEvent, handleSize: Int): Boolean {
+        val params = conversationParams ?: return false
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                resizeStartWidth = params.width
+                resizeStartHeight = params.height
+                resizeTouchStartX = event.rawX
+                resizeTouchStartY = event.rawY
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val screen = resources.displayMetrics
+                val minWidth = dp(OverlayConversationSizePolicy.MIN_WIDTH_DP)
+                val minHeight = dp(OverlayConversationSizePolicy.MIN_HEIGHT_DP)
+                val availableWidth = (screen.widthPixels - dp(CONVERSATION_MARGIN_H_DP)).coerceAtLeast(1)
+                val availableHeight = (screen.heightPixels - dp(CONVERSATION_MARGIN_V_DP)).coerceAtLeast(1)
+                val (width, height) = OverlayConversationSizePolicy.resized(
+                    startWidth = resizeStartWidth,
+                    startHeight = resizeStartHeight,
+                    deltaX = (event.rawX - resizeTouchStartX).toInt(),
+                    deltaY = (event.rawY - resizeTouchStartY).toInt(),
+                    availableWidth = availableWidth,
+                    availableHeight = availableHeight,
+                    minWidth = minWidth,
+                    minHeight = minHeight,
+                )
+                applyConversationSize(width, height)
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // 只在手指抬起时落盘：拖动过程中每一帧都写一次偏好没有意义，
+                // 而且中途被杀会留下一个用户从没确认过的尺寸。
+                persistConversationSize()
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * 应用新的小窗尺寸，并把内容重新量一遍。
+     *
+     * 内容不会溢出/裁切，靠的是三层：
+     *  1. `updateViewLayout` 带上新宽高会让 WindowManager 重新 measure/layout 整个
+     *     overlay 视图树（header 是固定 52dp + weight，body 是 weight=1 的 FrameLayout），
+     *     因此 WebView 自身会拿到新的尺寸；
+     *  2. 这里再显式 `requestLayout()` 一次：拖动到系统帧边界时窗口尺寸可能没变
+     *     （被夹取到同一个值），此时 WebView 仍需要一次重排来刷新它的 viewport；
+     *  3. 窗口参数里的 `SOFT_INPUT_ADJUST_RESIZE` 保持不变，因此键盘弹出/收起时
+     *     内容区高度照旧由系统重新计算，不依赖这一次缩放。
+     */
+    private fun applyConversationSize(width: Int, height: Int) {
+        val params = conversationParams ?: return
+        params.width = width
+        params.height = height
+        val screen = resources.displayMetrics
+        // 变大之后右下角可能越界：位置必须一起夹，否则窗口会有一半在屏幕外。
+        params.x = params.x.coerceIn(0, (screen.widthPixels - width).coerceAtLeast(0))
+        params.y = params.y.coerceIn(0, (screen.heightPixels - height).coerceAtLeast(0))
+        conversationView?.let { view ->
+            runCatching { windowManager.updateViewLayout(view, params) }
+            view.requestLayout()
+            view.invalidate()
+        }
+        conversationWebView?.let { web ->
+            web.requestLayout()
+            web.invalidate()
+        }
+        updateResizeHandlePosition()
+    }
+
+    private fun persistConversationSize() {
+        val params = conversationParams ?: return
+        val screen = resources.displayMetrics
+        writeStoredSize(params.width, params.height, screen.widthPixels, screen.heightPixels)
+    }
+
+    private fun conversationAction(label: Int, action: () -> Unit): TextView = TextView(this).apply {        text = getString(label)
         contentDescription = text
         setTextColor(MENU_TEXT_COLOR)
         gravity = Gravity.CENTER
@@ -662,9 +876,71 @@ class OverlayBallService : Service() {
         setOnClickListener { action() }
     }
 
-    private fun conversationSize(screenWidth: Int, screenHeight: Int): Pair<Int, Int> =
-        minOf(dp(360), (screenWidth - dp(24)).coerceAtLeast(1)) to
-            minOf(dp(560), (screenHeight - dp(72)).coerceAtLeast(1))
+    /**
+     * 小窗的初始尺寸。
+     *
+     * 优先用用户上次调好并留下的大小（同屏幕宽高时），否则用默认值；两种情况都会按
+     * 「最小尺寸 / 屏幕可用区域的 90%」夹取一次，因此历史值损坏、或来自另一块屏幕的
+     * 离谱数值都不会被直接套用（[OverlayConversationSizePolicy.storedState] 只负责判断
+     * 「还算不算数」，合法范围一律走 clamp）。
+     */
+    private fun conversationSize(screenWidth: Int, screenHeight: Int): Pair<Int, Int> {
+        val minWidth = dp(OverlayConversationSizePolicy.MIN_WIDTH_DP)
+        val minHeight = dp(OverlayConversationSizePolicy.MIN_HEIGHT_DP)
+        val availableWidth = (screenWidth - dp(CONVERSATION_MARGIN_H_DP)).coerceAtLeast(1)
+        val availableHeight = (screenHeight - dp(CONVERSATION_MARGIN_V_DP)).coerceAtLeast(1)
+        val storedState = OverlayConversationSizePolicy.storedState(
+            storedWidth = storedInt(KEY_CONVERSATION_WIDTH),
+            storedHeight = storedInt(KEY_CONVERSATION_HEIGHT),
+            storedScreenWidth = storedInt(KEY_CONVERSATION_SCREEN_W),
+            storedScreenHeight = storedInt(KEY_CONVERSATION_SCREEN_H),
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+        )
+        val requestedWidth = if (storedState == OverlayConversationSizePolicy.Stored.USABLE) {
+            storedInt(KEY_CONVERSATION_WIDTH) ?: 0
+        } else {
+            dp(OverlayConversationSizePolicy.DEFAULT_WIDTH_DP)
+        }
+        val requestedHeight = if (storedState == OverlayConversationSizePolicy.Stored.USABLE) {
+            storedInt(KEY_CONVERSATION_HEIGHT) ?: 0
+        } else {
+            dp(OverlayConversationSizePolicy.DEFAULT_HEIGHT_DP)
+        }
+        val width = OverlayConversationSizePolicy.clampWidth(requestedWidth, availableWidth, minWidth)
+        val height = OverlayConversationSizePolicy.clampHeight(requestedHeight, availableHeight, minHeight)
+        // 记下「这套尺寸是在哪块屏幕上定的」：旋转/分屏之后这份记录就对不上了，
+        // 下次开窗会退回默认尺寸而不是把一张横向的宽窗硬塞进竖向屏幕。
+        writeStoredSize(width, height, screenWidth, screenHeight)
+        return width to height
+    }
+
+    /**
+     * 尺寸存盘。
+     *
+     * 与球的位置共用 `dsh-overlay-ball` 偏好文件（同一份纯视图状态，不需要参与备份/清理），
+     * 但**不复用 `OverlayBallPreferences`**：那个类的 `Storage` 抽象只暴露 int 的键值读写，
+     * 尺寸需要的是「一组四个整数必须同时成立或同时作废」的语义，塞进去只会让位置那条
+     * 已经稳定的路径跟着变复杂。这里用同一份 SharedPreferences 的独立键，互不影响。
+     */
+    private fun writeStoredSize(width: Int, height: Int, screenWidth: Int, screenHeight: Int) {
+        runCatching {
+            overlayPreferences().edit()
+                .putInt(KEY_CONVERSATION_WIDTH, width)
+                .putInt(KEY_CONVERSATION_HEIGHT, height)
+                .putInt(KEY_CONVERSATION_SCREEN_W, screenWidth)
+                .putInt(KEY_CONVERSATION_SCREEN_H, screenHeight)
+                .apply()
+        }
+    }
+
+    private fun storedInt(key: String): Int? = runCatching {
+        val preferences = overlayPreferences()
+        if (preferences.contains(key)) preferences.getInt(key, 0) else null
+    }.getOrNull()
+
+    private fun overlayPreferences() = applicationContext
+        .getSharedPreferences(OVERLAY_PREFERENCES_FILE, Context.MODE_PRIVATE)
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
@@ -693,6 +969,7 @@ class OverlayBallService : Service() {
         conversationRequest++
         conversationOpening = false
         cancelFileChooser()
+        detachResizeHandle()
         val access = conversationAccess
         conversationAccess = null
         conversationView?.let { runCatching { windowManager.removeView(it) } }
@@ -719,49 +996,215 @@ class OverlayBallService : Service() {
         }
     }
 
-    // ── 长按菜单 ────────────────────────────────────────────────────────────
+    // ── 二级球（长按主球展开） ──────────────────────────────────────────────
 
     /**
-     * 弹出长按菜单。
+     * 长按主球：展开或收起二级球。
      *
-     * **刻意不用 [`PopupWindow`]**：从 Service 弹 PopupWindow 需要一个有效的 window
-     * token 来挂载，而 Service 上下文没有（那要 Activity 的 token），`showAsDropDown`
-     * 会抛 `BadTokenException` —— 就算用 try/catch 兜住不崩，菜单也根本不会出现。
-     * 球本身就是 WindowManager 上的 overlay 视图，菜单用同一机制添加更可靠，
-     * 位置也完全可控。
+     * 为什么用**长按**而不是单击展开：单击已经是「打开/关闭对话小窗」，那是这个球最高频的
+     * 动作，把它换成二级球会让老用户每次都要多点一下；而长按本来就没有占用（旧实现是弹
+     * 文字菜单）。代价是二级球的可发现性依赖用户愿意长按 —— 这一点由资源文案里的
+     * `contentDescription` 与文档里的真机验收项兜住，不做额外引导蒙层。
      *
-     * 另外补一层全屏透明遮罩：overlay 菜单带 `FLAG_NOT_FOCUSABLE`，无法感知「点击别处」，
-     * 没有遮罩的话菜单会一直挂在屏幕上直到用户点了某一项。
+     * 打开对话小窗 / 隐藏球 / 服务结束都会收起二级球：悬浮球同一时刻只应有一个「展开物」，
+     * 否则用户点哪个都像是在跟另一个打架。
      */
-    private fun showMenu() {
-        detachMenu()
+    private fun toggleSecondaryChoices() {
+        when (OverlayBallSecondaryPolicy.toggleChoice(expanded = secondaryViews.isNotEmpty())) {
+            OverlayBallSecondaryPolicy.Decision.COLLAPSE -> detachSecondaryChoices()
+            OverlayBallSecondaryPolicy.Decision.EXPAND -> showSecondaryChoices()
+        }
+    }
+
+    private fun showSecondaryChoices() {
+        detachSecondaryChoices()
         if (ballView == null) return
+        val order = OverlayBallSecondaryPolicy.CHOICE_ORDER
+        val size = dp(OverlayBallSecondaryPolicy.BUTTON_SIZE_DP)
+        for (choice in order) {
+            val view = buildSecondaryChoice(choice, size)
+            // 先加到屏幕外再统一排位：直接放在 0,0 会让第一帧闪现在左上角。
+            val params = secondaryParams(0, 0, size)
+            val added = runCatching { windowManager.addView(view, params) }
+            if (added.isFailure) {
+                // 加不上就整组收回：只剩一半的二级球比没有更让人困惑。
+                detachSecondaryChoices()
+                return
+            }
+            secondaryViews += view
+        }
+        layoutSecondaryChoices()
+    }
 
-        val scrim = View(this).apply { setOnClickListener { detachMenu() } }
-        runCatching { windowManager.addView(scrim, fullScreenOverlayParams()) }
-        menuScrim = scrim
+    private fun buildSecondaryChoice(
+        choice: OverlayBallSecondaryPolicy.Choice,
+        size: Int,
+    ): View {
+        val connected = DeepSeekAccessibilityService.current() != null
+        val labelRes = when (choice) {
+            OverlayBallSecondaryPolicy.Choice.RETURN_TO_APP ->
+                R.string.overlay_ball_secondary_return_description
+            OverlayBallSecondaryPolicy.Choice.HIDE_BALL ->
+                R.string.overlay_ball_secondary_hide_description
+            OverlayBallSecondaryPolicy.Choice.DISABLE_ACCESSIBILITY ->
+                if (OverlayBallSecondaryPolicy.showsDisabledState(connected)) {
+                    R.string.overlay_ball_secondary_accessibility_off_description
+                } else {
+                    R.string.overlay_ball_secondary_accessibility_on_description
+                }
+        }
+        return FrameLayout(this).apply {
+            // 命中区就是这个视图本身，尺寸由布局参数钉死不小于 40dp；里面那个圆点更小，
+            // 但按下判定的边界仍是这里，因此不需要额外的 touch delegate。
+            contentDescription = getString(labelRes)
+            isClickable = true
+            addView(secondaryGlyph(choice, size, connected), FrameLayout.LayoutParams(size, size, Gravity.CENTER))
+            setOnClickListener {
+                // 点完先收起：动作本身可能让球消失（隐藏球）或让应用切到前台，
+                // 留着展开态只会出现「球没了、按钮还在」。
+                detachSecondaryChoices()
+                onSecondaryChoice(choice)
+            }
+        }
+    }
 
-        val menu = buildMenu()
-        // 位置计算依赖菜单的实际尺寸，而 WRAP_CONTENT 的尺寸要先测量才知道。
-        menu.measure(
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-        )
+    private fun secondaryGlyph(
+        choice: OverlayBallSecondaryPolicy.Choice,
+        size: Int,
+        accessibilityConnected: Boolean,
+    ): TextView = TextView(this).apply {
+        val visual = dp(OverlayBallSecondaryPolicy.VISUAL_SIZE_DP)
+        text = when (choice) {
+            OverlayBallSecondaryPolicy.Choice.RETURN_TO_APP -> SECONDARY_GLYPH_RETURN
+            OverlayBallSecondaryPolicy.Choice.HIDE_BALL -> SECONDARY_GLYPH_HIDE
+            OverlayBallSecondaryPolicy.Choice.DISABLE_ACCESSIBILITY ->
+                if (OverlayBallSecondaryPolicy.showsDisabledState(accessibilityConnected)) {
+                    SECONDARY_GLYPH_DISABLED
+                } else {
+                    SECONDARY_GLYPH_CLOSE
+                }
+        }
+        setTextColor(SECONDARY_TEXT_COLOR)
+        textSize = SECONDARY_TEXT_SIZE_SP
+        gravity = Gravity.CENTER
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(
+                if (OverlayBallSecondaryPolicy.showsDisabledState(accessibilityConnected) &&
+                    choice == OverlayBallSecondaryPolicy.Choice.DISABLE_ACCESSIBILITY
+                ) {
+                    SECONDARY_BACKGROUND_DISABLED_COLOR
+                } else {
+                    SECONDARY_BACKGROUND_COLOR
+                },
+            )
+        }
+        layoutParams = FrameLayout.LayoutParams(visual, visual, Gravity.CENTER)
+        // 圆点自己也报一次：TalkBack 的焦点会落在最外层的可点击 FrameLayout 上，
+        // 但那层没有文字；两层都有描述时读数一致，不会出现「焦点在一处、描述在另一处」。
+        contentDescription = (parent as? View)?.contentDescription
+        // 不能设为可点击：抢占焦点会让无障碍用户在按钮组里多跳一层空视图。
+        isClickable = false
+        isFocusable = false
+    }
+
+    private fun onSecondaryChoice(choice: OverlayBallSecondaryPolicy.Choice) {
+        when (choice) {
+            OverlayBallSecondaryPolicy.Choice.RETURN_TO_APP -> returnToApp()
+            OverlayBallSecondaryPolicy.Choice.HIDE_BALL -> hideBall()
+            OverlayBallSecondaryPolicy.Choice.DISABLE_ACCESSIBILITY -> disableAccessibilityService()
+        }
+    }
+
+    /**
+     * 「关闭无障碍服务」。
+     *
+     * `disableSelf()` 只在**本应用进程当前正持有该服务**时有效（它是 `AccessibilityService`
+     * 的实例方法），因此判断服务是否连着的唯一入口就是 `current()`：
+     *  - 连着 → 关闭。系统会在服务断开后回调 `onDestroy`，`current()` 随之变 null。
+     *  - 没连着 → 明确提示一次，不做任何动作。这里**不能**静默：用户点了一个按钮却什么都没发生，
+     *    会以为是按钮坏了，而真实原因（服务早就关掉了）恰恰是他最需要知道的那一条。
+     *
+     * 厂商 ROM 上 `disableSelf()` 的实际行为需要在真机上确认（见 `docs/悬浮球与内容分享.md`）：
+     * 有的 ROM 会把它当成「用户主动关闭」并记住，有的会立刻被系统重新拉起。
+     * 外壳设置页的状态来自 5 秒轮询，因此关闭之后界面可能短暂仍显示「已开启」——
+     * 这是**已知且不掩盖**的时延，不在这里假装同步。
+     */
+    private fun disableAccessibilityService() {
+        val service = DeepSeekAccessibilityService.current()
+        when (OverlayBallSecondaryPolicy.accessibilityState(serviceConnected = service != null)) {
+            OverlayBallSecondaryPolicy.AccessibilityAction.DISABLE_SELF -> {
+                runCatching { service?.disableSelf() }
+                toastCurrentThread(getString(R.string.overlay_ball_secondary_accessibility_closed_toast))
+            }
+            OverlayBallSecondaryPolicy.AccessibilityAction.ALREADY_OFF ->
+                toastCurrentThread(getString(R.string.overlay_ball_secondary_accessibility_disabled_toast))
+        }
+    }
+
+    private fun toastCurrentThread(message: String) {
+        // 点按来自窗口回调，本来就在主线程；仍然走一次 Handler 是为了让本方法在任何
+        // 调用点都成立（例如将来从桥的回调里复用），而不是靠「现在只在主线程调」的隐含前提。
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            runCatching { Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
+        } else {
+            Handler(Looper.getMainLooper()).post {
+                runCatching { Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
+            }
+        }
+    }
+
+    /** 按当前主球坐标重排二级球；没有展开时是无操作。 */
+    private fun layoutSecondaryChoices() {
+        if (secondaryViews.isEmpty()) return
         val metrics = resources.displayMetrics
-        val (x, y) = OverlayBallPolicy.menuPosition(
+        val size = dp(OverlayBallSecondaryPolicy.BUTTON_SIZE_DP)
+        val gap = dp(OverlayBallSecondaryPolicy.GAP_DP)
+        val layout = OverlayBallSecondaryPolicy.layout(
             ballX = layoutParams.x,
             ballY = layoutParams.y,
             ballSize = layoutParams.width,
-            menuWidth = menu.measuredWidth,
-            menuHeight = menu.measuredHeight,
+            buttonSize = size,
+            count = secondaryViews.size,
             screenWidth = metrics.widthPixels,
             screenHeight = metrics.heightPixels,
+            gap = gap,
+            reserveTop = overlayReserveTop(),
+            reserveBottom = overlayReserveBottom(),
         )
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
+        secondaryViews.forEachIndexed { index, view ->
+            val (x, y) = OverlayBallSecondaryPolicy.buttonPosition(
+                layout = layout,
+                index = index,
+                layerX = 0,
+                layerY = 0,
+                buttonSize = size,
+                screenWidth = metrics.widthPixels,
+                screenHeight = metrics.heightPixels,
+                reserveTop = overlayReserveTop(),
+                reserveBottom = overlayReserveBottom(),
+            )
+            val params = view.layoutParams as? WindowManager.LayoutParams ?: return@forEachIndexed
+            params.x = x
+            params.y = y
+            runCatching { windowManager.updateViewLayout(view, params) }
+        }
+    }
+
+    private fun detachSecondaryChoices() {
+        // 倒序摘除：后加的在下层，先摘上层可以避免出现一帧「缺了一个洞」的画面。
+        for (view in secondaryViews.asReversed()) {
+            runCatching { windowManager.removeView(view) }
+        }
+        secondaryViews.clear()
+    }
+
+    private fun secondaryParams(x: Int, y: Int, size: Int): WindowManager.LayoutParams =
+        WindowManager.LayoutParams(
+            size,
+            size,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            // 同样不可获焦：菜单不该抢输入法。能接收触摸（不加 NOT_TOUCHABLE）。
+            // 与主球同一组标志：不可获焦，但必须能收触摸。
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
@@ -770,56 +1213,19 @@ class OverlayBallService : Service() {
             this.x = x
             this.y = y
         }
-        runCatching { windowManager.addView(menu, params) }
-        menuView = menu
-    }
 
-    /** 全屏透明遮罩的窗口参数：只负责接住「点击别处」这一下。 */
-    private fun fullScreenOverlayParams(): WindowManager.LayoutParams =
-        WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.START }
+    /**
+     * 二级球要避开的安全区高度。
+     *
+     * 取「状态栏 / 导航栏」与一个固定余量的较大者：overlay 窗口的坐标是相对整个屏幕的，
+     * 而 `FLAG_LAYOUT_IN_SCREEN` 会让它铺到状态栏下面，因此不加余量时贴边的二级球
+     * 会压在状态栏或手势条上——看得见、点不准（系统手势区会先吃掉那一下）。
+     * 真实 inset 需要 `WindowInsets`，而 Service 侧拿不到可靠的 Activity 窗口，
+     * 所以这里用固定余量：宁可多让一点，也不要压到系统手势区。
+     */
+    private fun overlayReserveTop(): Int = dp(SYSTEM_BAR_RESERVE_DP)
 
-    private fun buildMenu(): View {
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(MENU_BACKGROUND_COLOR)
-            setPadding(0, MENU_PADDING_DP, 0, MENU_PADDING_DP)
-        }
-        container.addView(menuItem(R.string.overlay_ball_menu_return) {
-            detachMenu()
-            returnToApp()
-        })
-        container.addView(menuItem(R.string.overlay_ball_menu_hide) {
-            detachMenu()
-            hideBall()
-        })
-        return container
-    }
-
-    private fun menuItem(labelRes: Int, onClick: () -> Unit): TextView =
-        TextView(this).apply {
-            text = getString(labelRes)
-            setTextColor(MENU_TEXT_COLOR)
-            textSize = MENU_TEXT_SIZE_SP
-            setPadding(MENU_ITEM_PADDING_H_DP, MENU_ITEM_PADDING_V_DP,
-                MENU_ITEM_PADDING_H_DP, MENU_ITEM_PADDING_V_DP)
-            isClickable = true
-            setOnClickListener { onClick() }
-        }
-
-    private fun detachMenu() {
-        // 先移菜单再移遮罩：顺序反了会让遮罩短暂盖住菜单，出现一次闪烁。
-        menuView?.let { view -> runCatching { windowManager.removeView(view) } }
-        menuView = null
-        menuScrim?.let { view -> runCatching { windowManager.removeView(view) } }
-        menuScrim = null
-    }
+    private fun overlayReserveBottom(): Int = dp(SYSTEM_BAR_RESERVE_DP)
 
     /**
      * 「回到应用」：把应用带回前台。
@@ -943,12 +1349,53 @@ class OverlayBallService : Service() {
         private const val NOTIFICATION_ID = 0x44534802
         private const val BALL_SIZE_DP = 48
         private const val DEFAULT_MARGIN_DP = 12
-        private const val MENU_PADDING_DP = 8
-        private const val MENU_ITEM_PADDING_H_DP = 20
-        private const val MENU_ITEM_PADDING_V_DP = 12
         private const val MENU_TEXT_SIZE_SP = 15f
         private const val MENU_BACKGROUND_COLOR = 0xFF1B2220.toInt()
         private const val MENU_TEXT_COLOR = 0xFFE8F5EF.toInt()
+
+        /**
+         * 二级球外观。
+         *
+         * 图标用 Unicode 字符而不是新 drawable：本仓的 `res/drawable` 不在本轮可改范围，
+         * 而这三个动作的语义（回首页 / 关闭 / 禁用）在 Unicode 里都有无歧义的现成字符。
+         * 每个按钮同时带 `contentDescription`，因此即便字体缺字（只有豆腐块）也不会失去含义。
+         */
+        private const val SECONDARY_GLYPH_RETURN = "\u2302"      // ⌂
+        private const val SECONDARY_GLYPH_HIDE = "\u2715"        // ✕
+        private const val SECONDARY_GLYPH_CLOSE = "\u2298"       // ⊘ 关闭无障碍（已开启）
+        private const val SECONDARY_GLYPH_DISABLED = "\u2013"    // – 无障碍未开启（禁用态）
+        private const val SECONDARY_TEXT_SIZE_SP = 18f
+        private const val SECONDARY_TEXT_COLOR = 0xFFE8F5EF.toInt()
+        private const val SECONDARY_BACKGROUND_COLOR = 0xE6323D38.toInt()
+        private const val SECONDARY_BACKGROUND_DISABLED_COLOR = 0x80323D38.toInt()
+
+        /**
+         * overlay 窗口要避开的顶部 / 底部安全区高度（dp）。
+         *
+         * 24dp 覆盖绝大多数状态栏与手势条；取固定值而不是真实 inset，是因为 Service 侧
+         * 拿不到可靠的 Activity 窗口（见调用点的说明）。宁可多让一点。
+         */
+        private const val SYSTEM_BAR_RESERVE_DP = 24
+
+        /**
+         * 小窗的可缩放范围与留白。
+         *
+         * 上下留出 72dp / 左右留出 24dp 是改动前 `conversationSize` 里的既有边距，
+         * 保持不变：它同时保证了「小窗不会铺满屏幕」与「窗口边缘不贴手势区」。
+         */
+        private const val CONVERSATION_MARGIN_H_DP = 24
+        private const val CONVERSATION_MARGIN_V_DP = 72
+
+        /** 缩放手柄的图标：右下角的双斜线是缩放手柄的通用符号。 */
+        private const val RESIZE_GLYPH = "\u25E2" // ◢
+        private const val HANDLE_BACKGROUND_COLOR = 0xCC3A4741.toInt()
+
+        /** 小窗尺寸存盘用的键；与球的位置共用 `dsh-overlay-ball` 偏好文件。 */
+        private const val OVERLAY_PREFERENCES_FILE = "dsh-overlay-ball"
+        private const val KEY_CONVERSATION_WIDTH = "conversation_width"
+        private const val KEY_CONVERSATION_HEIGHT = "conversation_height"
+        private const val KEY_CONVERSATION_SCREEN_W = "conversation_screen_w"
+        private const val KEY_CONVERSATION_SCREEN_H = "conversation_screen_h"
 
         /** 服务当前是否在运行；仅用于界面显示状态，不参与任何决策。 */
         @Volatile

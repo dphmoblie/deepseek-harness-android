@@ -556,6 +556,22 @@ export function validateKeepAliveState(value: unknown): KeepAliveState {
     }
     lastUpdatedAtMillis = state.lastUpdatedAtMillis as number
   }
+  // 「一轮对话结束」的两项信号：原生侧始终带上（从未收到时为 0），这里与其它可选字段一致，
+  // 缺失就不写回，调用方按 0 处理——外壳只比较"序号有没有变新"，不依赖字段一定存在。
+  let lastTurnCompletedAtMillis: number | undefined
+  if (state.lastTurnCompletedAtMillis !== undefined) {
+    if (!Number.isSafeInteger(state.lastTurnCompletedAtMillis) || (state.lastTurnCompletedAtMillis as number) < 0) {
+      throw new Error('对话完成时间格式无效')
+    }
+    lastTurnCompletedAtMillis = state.lastTurnCompletedAtMillis as number
+  }
+  let turnCompletionSequence: number | undefined
+  if (state.turnCompletionSequence !== undefined) {
+    if (!Number.isSafeInteger(state.turnCompletionSequence) || (state.turnCompletionSequence as number) < 0) {
+      throw new Error('对话完成序号格式无效')
+    }
+    turnCompletionSequence = state.turnCompletionSequence as number
+  }
   return {
     keepRuntimeInBackground: state.keepRuntimeInBackground,
     foregroundServiceActive: state.foregroundServiceActive,
@@ -565,6 +581,8 @@ export function validateKeepAliveState(value: unknown): KeepAliveState {
     lastIntent: state.lastIntent as RuntimeIntent,
     ...(lastPhase === undefined ? {} : { lastPhase }),
     ...(lastUpdatedAtMillis === undefined ? {} : { lastUpdatedAtMillis }),
+    ...(lastTurnCompletedAtMillis === undefined ? {} : { lastTurnCompletedAtMillis }),
+    ...(turnCompletionSequence === undefined ? {} : { turnCompletionSequence }),
   }
 }
 
@@ -724,8 +742,13 @@ const DEVICE_COMMANDS = new Set<DeviceCommand>([
 ])
 // 文件上传通过 Base64 传递，原生侧仍有 128 KiB 解码上限；这里保留 JSON 参数的有界窗口。
 const MAX_DEVICE_PARAM_CHARS = 180_000
-/** 无障碍白名单条目上限（原生侧同一数值）；自动项也计入这个上限。 */
-const MAX_ACCESSIBILITY_PACKAGES = 16
+/**
+ * 无障碍白名单条目上限；自动项也计入这个上限。
+ *
+ * 注意：这个上限**只由前端把关**——原生侧（`AccessibilityAutomationPolicy`）只校验包名格式与
+ * 重复项，不限制数量。选择器界面据此如实展示上限，避免把「界面说随便加、保存却会被拒」留给用户。
+ */
+export const MAX_ACCESSIBILITY_PACKAGES = 16
 /** 「白名单验证密码」的长度区间；密码本身不会被前端留存或回显。 */
 const ACCESSIBILITY_PASSWORD_MIN_CHARS = 6
 const ACCESSIBILITY_PASSWORD_MAX_CHARS = 64

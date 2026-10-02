@@ -583,6 +583,14 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   INSTALL_CANCELLED: '运行时安装已取消，再次安装时可继续下载。',
   INSTALL_FAILED: '运行时安装失败，请稍后重试。',
   RUNTIME_BUSY: '请先停止 Harness 和 Ubuntu 终端。',
+  /*
+   * 桥接实例（WebView 插件实例）被销毁、进程级运行时控制器已释放后仍来启动的失败。
+   *
+   * 文案必须与实际情况一致：调用方**已经**自动重连过一次（见 `openHarness` 的至多一次恢复重试），
+   * 所以这里不能写「正在连接」或「请等待」——那会让用户对着一个不会再发生的事等下去。
+   * 写清「旧连接已失效 + 已尝试重连 + 请再试一次」，用户才知道下一次点击是有意义的。
+   */
+  RUNTIME_CLOSED: '运行时已关闭，旧连接已失效；已尝试重新连接，请再试一次。',
   RUNTIME_CORRUPTED: '运行时文件已损坏，请重置运行时后重新安装。',
   ROOTFS_LINKS_CORRUPTED: '运行时归档的关键符号链接缺失或损坏，请更换运行时来源后重新安装。',
   RUNNER_UNAVAILABLE: '此安装包不包含本机所需的运行组件，无法启动运行时。',
@@ -779,6 +787,21 @@ function errorMessage(error: unknown): string {
     .join('')
     .trim()
   return message === '' ? t("操作失败，请稍后重试") : t(message)
+}
+
+/**
+ * 从桥调用抛出的异常里取出原生错误码；取不到就回 `undefined`。
+ *
+ * 为什么不能写成 `error instanceof Error && error.code === 'RUNTIME_CLOSED'`：
+ * 原生侧的错误码挂在 Capacitor 的 `CapacitorException` 上（`@capacitor/core` 里
+ * `this.code = code`），它在真实设备上**未必**是 `Error` 的实例，只保证「是个带 `code` 的对象」。
+ * [errorMessage] 早就按后者判断（`'code' in error`），这里必须与它同一口径——
+ * 两边对「什么算有码的错误」判断不一致时，会出现「文案认得这个码、重试却不认得」的诡异分裂。
+ */
+function bridgedRuntimeCode(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined
+  const code = error.code
+  return typeof code === 'string' ? code : undefined
 }
 
 function Brand() {
@@ -3235,7 +3258,7 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
         <span className="section-icon"><ShieldCheck size={19} /></span>
         <div>
           <h2 id="runtime-self-check-title">{t("运行时自检")}</h2>
-          <p>{t("不需要 bash 也能判断运行时哪一环断了：逐项检查 Shell、Node、沙箱启动器、内核 Landlock、PTY、访客数据目录、附件目录、硬链接与 ripgrep，并给出结论与下一步。")}</p>
+          <p>{t("不需要 bash 也能判断运行时哪一环断了：逐项检查 Shell、Node、沙箱启动器、内核 Landlock、PTY、访客数据目录、附件目录、硬链接、ripgrep 与 C 编译环境（cc/gcc/clang、make、python3），并给出结论与下一步。")}</p>
         </div>
       </div>
 
@@ -4268,6 +4291,15 @@ export function App() {
   const backgroundRefreshStartedAt = useRef(0)
   const backgroundPollTimer = useRef<number | null>(null)
   /**
+   * 「一轮对话刚结束」的基线序号，来自原生侧 `turnCompletionSequence`。
+   *
+   * `null` 表示还没读到过：应用冷启动时这个序号往往已经不是 0（此前跑过若干轮），
+   * 首次读到只记基线、不跳视图，否则每次打开应用都会被历史完成事件拽回对话界面。
+   * 原生进程重启后序号从 0 重新计数，新值小于等于基线时同样只更新基线。
+   * 与轮询状态放在一起的原因相同：必须跨 effect 重跑保住，否则每次重跑都会退化成「首次读到」。
+   */
+  const lastTurnCompletionSequence = useRef<number | null>(null)
+  /**
    * 设置区未保存的草稿。
    *
    * 它必须由 App 持有：设置首页与五个二级页是**不同的组件**，页内状态在切页时随卸载消失
@@ -4753,11 +4785,33 @@ export function App() {
         })
         .catch(error => { if (!cancelled && reportError) notify(errorMessage(error), 'error') })
     }
+    /**
+     * 一轮对话结束时把外壳切回对话界面（需求 5.6-F 里的「任务完成回到对话」）。
+     *
+     * 判定只用原生侧受理成功的累计序号：它由原生侧在真正受理一次「一轮结束」时才自增，
+     * 被节流丢弃的通知**不**自增，因此这里不会因为重复上报而反复跳视图。
+     *
+     * 刻意只做视图切换，不额外弹提示：锁屏/通知栏那条通知由原生侧负责，
+     * 而用户已经回到前台时，界面自己就是最直接的反馈。
+     */
+    const handleTurnCompletion = (sequence: number | undefined): void => {
+      const value = typeof sequence === 'number' && Number.isFinite(sequence) && sequence > 0 ? Math.floor(sequence) : 0
+      const previous = lastTurnCompletionSequence.current
+      lastTurnCompletionSequence.current = value
+      // 首次读到（previous === null）、序号没变或回退（原生进程重启）都不动视图。
+      if (previous === null || value <= previous) return
+      if (activeViewRef.current === 'conversation') return
+      setActiveView('conversation')
+    }
     // 后台保持状态同时轮询：前台服务可能被系统结束，需要通过原生端才能得知。
     const refreshKeepAlive = (): Promise<void> => {
       if (document.visibilityState === 'hidden') return Promise.resolve()
       return runtimeBridge.getKeepAliveState()
-        .then(next => { if (!cancelled) setKeepAlive(previous => (sameSnapshot(previous, next) ? previous : next)) })
+        .then(next => {
+          if (cancelled) return
+          setKeepAlive(previous => (sameSnapshot(previous, next) ? previous : next))
+          handleTurnCompletion(next.turnCompletionSequence)
+        })
         .catch(() => {
           // 轮询失败时保留上一次状态，不重复提示同一条错误。
         })
@@ -4861,7 +4915,7 @@ export function App() {
       window.removeEventListener('focus', handleFocus)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [applyRefreshedSettings, notify, readMailbox, readOverlayBall])
+  }, [applyRefreshedSettings, notify, readMailbox, readOverlayBall, setActiveView])
 
   const run = useCallback(async (id: string, operation: () => Promise<void>, success?: string) => {
     if (busyRef.current !== null) return
@@ -4996,7 +5050,12 @@ export function App() {
     busyRef.current = 'launch'
     setBusy('launch')
     void (async () => {
-      try {
+      /*
+       * 打开序列。抽成函数是为了让「失败后重连一次」走的是**同一条**路径：
+       * 抄一遍重试分支，迟早出现「重试时漏掉了 getKeepAliveState，或在重试成功时仍然弹了错误提示」
+       * 这类只在罕见路径上才暴露的漂移。
+       */
+      const launchSequence = async (): Promise<void> => {
         let nextRuntime = runtime
         if (nextRuntime.phase !== 'running') {
           nextRuntime = await runtimeBridge.startHarness()
@@ -5010,6 +5069,40 @@ export function App() {
         // its native management button return to the intended management surface.
         setActiveView('settings')
         await runtimeBridge.openHarness()
+      }
+
+      /** 陈旧句柄的恢复代价：刷新一次状态，成功才让用户看得见。失败保持原样，不打断启动失败的主线。 */
+      const recoverFromClosedRuntime = async (): Promise<void> => {
+        try {
+          setRuntime(await runtimeBridge.getState())
+        } catch {
+          // 刷新只是重连前的准备；刷不动就按原样重试，失败原因仍由原来的错误来交代。
+        }
+      }
+
+      try {
+        try {
+          await launchSequence()
+        } catch (error) {
+          /*
+           * `RUNTIME_CLOSED` 是**唯一**值得自动重试的码，而且只重试一次。
+           *
+           * 为什么单独放行它：这个码的含义是「句柄所指向的插件实例已经不在了」，而
+           * WebView 插件实例销毁与进程级运行时控制器释放是**两件事**——前者刚发生时后者
+           * 往往还活着。也就是说此刻的失败多半是「拿着刚失效的句柄问了一次」，
+           * 重连一次就能拿到新实例，用户不必自己再点一次「重新连接」。
+           *
+           * 为什么其他码一次都不重试：它们描述的失败重试一次只会得到同样的结果
+           * （下载失败、架构不兼容、没有安装运行时……），多试一次只是让用户多等一轮，
+           * 还会把真正的失败原因往后拖。这里刻意**不**做「任何错误都重试」的通用退避。
+           *
+           * 为什么必须有上限：真机上 `RUNTIME_CLOSED` 曾经三连出现。启动失败时若不加约束地
+           * 重试，界面会陷进「一直连不上、一直重连」，连带 busy 永远不释放——比直接报错更糟。
+           */
+          if (bridgedRuntimeCode(error) !== 'RUNTIME_CLOSED') throw error
+          await recoverFromClosedRuntime()
+          await launchSequence()
+        }
       } catch (error) {
         setActiveView('conversation')
         try {

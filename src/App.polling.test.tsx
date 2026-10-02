@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge, keepAlive, settings } from './__tests__/appTestHarness'
 
@@ -133,6 +133,86 @@ describe('后台状态轮询（5.6-C）', () => {
     } finally {
       vi.useRealTimers()
       setVisibility('visible')
+    }
+  })
+})
+
+/**
+ * 任务完成回到对话界面（登记册 5.6-F）。
+ *
+ * 判定只认原生侧受理成功的累计序号：原生侧在真正受理一次「一轮结束」时才自增它，
+ * 被节流丢弃的上报**不**自增，因此这里不会因为重复上报反复跳视图。
+ * 三条用例分别钉住「首次读到只记基线」「真的自增才跳」「序号回退不跳」。
+ */
+describe('任务完成回到对话界面（5.6-F）', () => {
+  beforeEach(beforeEachAppTest)
+
+  const stayOnMainView = (): void => {
+    bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false })
+  }
+
+  /** 让下一轮轮询读到指定序号；时间戳与序号同源，界面上不显示。 */
+  const reportSequence = (sequence: number): void => {
+    bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive, lastTurnCompletedAtMillis: 1_700_000_000_000, turnCompletionSequence: sequence })
+  }
+
+  /** 切到设置页：这里只是「用户不在对话界面」的一个真实落点。 */
+  const openSettingsView = async (): Promise<void> => {
+    fireEvent.click(await screen.findByRole('button', { name: '设置' }))
+    await screen.findByRole('heading', { name: '设置' })
+  }
+
+  it('首次读到完成序号只记基线，不把用户从别的页面拽回对话', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      stayOnMainView()
+      reportSequence(7)
+      render(<App />)
+      // 先切到设置页，再让**第一次后台轮询**读到序号：对应真机上「用户已经在别的页面，
+      // 序号来自此前跑过的若干轮」——此时只记基线，视图必须不动。
+      await openSettingsView()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('序号自增时把外壳切回对话界面', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      stayOnMainView()
+      reportSequence(7)
+      render(<App />)
+      // 先让轮询读到 7 记下基线（启动链自己那次读取不算：它不参与完成判定）。
+      await vi.advanceTimersByTimeAsync(5_000)
+      await openSettingsView()
+      reportSequence(8)
+      await vi.advanceTimersByTimeAsync(5_000)
+      await waitFor(() => expect(screen.queryByRole('heading', { name: '设置' })).not.toBeInTheDocument())
+      expect(screen.getByRole('heading', { name: '正在进入对话' })).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('序号不变或回退（原生进程重启）都不跳视图', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      stayOnMainView()
+      reportSequence(7)
+      render(<App />)
+      await vi.advanceTimersByTimeAsync(5_000)
+      await openSettingsView()
+      // 同一序号反复读到：没有任何新的一轮结束，不该动视图。
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument()
+      // 原生进程重启后序号从 0 重数：回退只能更新基线，绝不能当成「刚完成一轮」。
+      reportSequence(3)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
     }
   })
 })

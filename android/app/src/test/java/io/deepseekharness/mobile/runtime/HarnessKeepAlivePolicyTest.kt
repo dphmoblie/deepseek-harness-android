@@ -55,9 +55,39 @@ class HarnessKeepAlivePolicyTest {
     @Test
     fun keepsRuntimeWhileForegroundServiceIsResponsible() {
         // 划掉最近任务：前台服务仍在负责运行时时，插件销毁不得 shutdown。
-        assertFalse(HarnessKeepAlivePolicy.shouldReleaseRuntimeOnPluginDetach(foregroundServiceActive = true))
-        // 没有前台服务时保持旧行为：插件销毁即释放运行时。
-        assertTrue(HarnessKeepAlivePolicy.shouldReleaseRuntimeOnPluginDetach(foregroundServiceActive = false))
+        assertFalse(
+            HarnessKeepAlivePolicy.shouldReleaseRuntimeOnPluginDetach(
+                foregroundServiceActive = true,
+                hasOtherSubscribers = false,
+            ),
+        )
+        // 没有前台服务时保持旧行为：最后一个订阅者退出即释放运行时。
+        assertTrue(
+            HarnessKeepAlivePolicy.shouldReleaseRuntimeOnPluginDetach(
+                foregroundServiceActive = false,
+                hasOtherSubscribers = false,
+            ),
+        )
+    }
+
+    @Test
+    fun keepsRuntimeWhileAnotherPluginInstanceSubscribes() {
+        // 新插件实例已经接管运行时（划掉最近任务后立刻重进应用），旧实例收尾时
+        // 保活尚未恢复也不能释放：否则新实例手里的控制器被关闭，之后每次启动都
+        // 只能得到 RUNTIME_CLOSED（真机 0.2.2 日志中出现过三连该错误码）。
+        assertFalse(
+            HarnessKeepAlivePolicy.shouldReleaseRuntimeOnPluginDetach(
+                foregroundServiceActive = false,
+                hasOtherSubscribers = true,
+            ),
+        )
+        // 前台服务与另一个订阅者都在：同样保留运行时（两个条件都满足才允许释放）。
+        assertFalse(
+            HarnessKeepAlivePolicy.shouldReleaseRuntimeOnPluginDetach(
+                foregroundServiceActive = true,
+                hasOtherSubscribers = true,
+            ),
+        )
     }
 
     @Test

@@ -422,6 +422,30 @@ describe('后台保持状态校验', () => {
     expect(validateKeepAliveState(base)).toEqual(base)
   })
 
+  it('对话完成信号：时间戳与序号成对保留，缺省时不写回', () => {
+    // 这两项是「任务完成 → 回到对话界面」的唯一依据：时间戳给用户看，序号用来判断"有没有新的一轮结束"。
+    expect(validateKeepAliveState({
+      ...base,
+      lastTurnCompletedAtMillis: 1_700_000_000_000,
+      turnCompletionSequence: 7,
+    })).toEqual({
+      ...base,
+      lastTurnCompletedAtMillis: 1_700_000_000_000,
+      turnCompletionSequence: 7,
+    })
+    // 从未收到时（旧原生、预览实现）整体缺省：外壳按 0 处理，不得当成"刚完成"。
+    expect(validateKeepAliveState(base)).toEqual(base)
+    expect(validateKeepAliveState({ ...base, turnCompletionSequence: 0 })).toEqual({ ...base, turnCompletionSequence: 0 })
+  })
+
+  it('拒绝非整数或负数的对话完成信号', () => {
+    expect(() => validateKeepAliveState({ ...base, lastTurnCompletedAtMillis: -1 })).toThrow('对话完成时间')
+    expect(() => validateKeepAliveState({ ...base, lastTurnCompletedAtMillis: 1.5 })).toThrow('对话完成时间')
+    expect(() => validateKeepAliveState({ ...base, lastTurnCompletedAtMillis: '1700000000000' })).toThrow('对话完成时间')
+    expect(() => validateKeepAliveState({ ...base, turnCompletionSequence: -1 })).toThrow('对话完成序号')
+    expect(() => validateKeepAliveState({ ...base, turnCompletionSequence: 2.5 })).toThrow('对话完成序号')
+  })
+
   it('拒绝非法枚举、非布尔值与负数时间', () => {
     expect(() => validateKeepAliveState({ ...base, notificationPermission: 'root' })).toThrow('通知权限')
     expect(() => validateKeepAliveState({ ...base, lastIntent: 'paused' })).toThrow('运行意图')

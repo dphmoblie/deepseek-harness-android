@@ -1,4 +1,5 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { installTurnSignal } from './turn-signal.js'
 
 export const name = 'mobile-shizuku'
 export const inject = ['tools', 'systemPrompt', 'attachments', 'llm']
@@ -367,6 +368,10 @@ function formatScreenshotOutput(image) {
 
 export function apply(ctx) {
   ctx.systemPrompt.section({ name: 'tool:mobile-shizuku', order: 1800, text: PROMPT })
+
+  // 一轮任务收口的通知：订阅 dsh 会话的 turn/end 并尽力而为地上报给原生，
+  // 由原生决定前台/后台怎么提示。放在最前面注册，工具审批钩子仍是最后注册的那个。
+  installTurnSignal(ctx, { bridgeConfig })
 
   ctx.on('tools/pre-execute', async (exec, next) => {
     const decision = await next()

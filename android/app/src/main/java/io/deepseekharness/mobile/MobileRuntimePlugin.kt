@@ -471,17 +471,28 @@ class MobileRuntimePlugin : Plugin() {
                 "list" -> AuditEvent.PLUGIN_LIST
                 "enable", "child" -> AuditEvent.PLUGIN_ENABLE
                 "update" -> AuditEvent.PLUGIN_UPDATE
+                "import" -> AuditEvent.PLUGIN_IMPORT
+                "rollback" -> AuditEvent.PLUGIN_ROLLBACK
                 else -> throw RuntimeFailure("PLUGIN_INPUT_INVALID", "插件操作无效")
             }
             audited(event) {
-                controller.managePlugins(operation, call.getString("id"), call.getBoolean("enabled"), call.getString("childId"))
+                // 来源地址只在这一次调用里透传，既不进审计也不出现在返回值中。
+                controller.managePlugins(
+                    operation,
+                    call.getString("id"),
+                    call.getBoolean("enabled"),
+                    call.getString("childId"),
+                    call.getString("source"),
+                )
             }
         }
     }
 
     /**
      * 权限：应用内桥接。
-     * 运行时自检：`check` 只读（可用空间、dsh 版本与十一项检查），`repair` 只补可执行位并创建附件目录。
+     * 运行时自检：`check` 只读（可用空间、dsh 版本与十四项检查 —— 前 11 项是冻结契约，
+     * 后 3 项 `c_compiler`/`make`/`python3` 是编译环境能力项，只报 warn、不进失败判定），
+     * `repair` 只补可执行位并创建附件目录。
      * 只回传受控枚举与计数，不含路径、文件内容或原始报错文本。
      */
     @PluginMethod
@@ -2355,6 +2366,9 @@ class MobileRuntimePlugin : Plugin() {
         .put("deviceShellReady", deviceShellReady)
         .put("reconnectRequired", reconnectRequired)
         .put("lastIntent", lastIntent.wireValue)
+        // 两个进程内字段无条件出现：前端把缺省当 0，但语义上它们总是有意义的。
+        .put("lastTurnCompletedAtMillis", lastTurnCompletedAtMillis.coerceAtLeast(0L))
+        .put("turnCompletionSequence", turnCompletionSequence.coerceAtLeast(0L))
         .also { json ->
             lastPhase?.let { json.put("lastPhase", it.wireValue) }
             json.put("lastUpdatedAtMillis", lastUpdatedAtMillis.coerceAtLeast(0L))
