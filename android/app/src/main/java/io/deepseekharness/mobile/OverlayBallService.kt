@@ -1,11 +1,13 @@
 package io.deepseekharness.mobile
 
 import android.annotation.SuppressLint
+import android.net.Uri
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -25,6 +27,8 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.webkit.CookieManager
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -42,6 +46,7 @@ import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLog
 import io.deepseekharness.mobile.runtime.RuntimeStore
 import io.deepseekharness.mobile.runtime.RuntimeHost
 import io.deepseekharness.mobile.runtime.HarnessAccess
+import java.util.UUID
 
 /**
  * 悬浮球前台服务。
@@ -81,6 +86,8 @@ class OverlayBallService : Service() {
     private var conversationAccess: HarnessAccess? = null
     private var conversationOpening = false
     private var conversationRequest = 0L
+    private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
+    private var fileChooserRequest: String? = null
     private lateinit var layoutParams: WindowManager.LayoutParams
 
     private var touchStartX = 0f
@@ -548,13 +555,17 @@ class OverlayBallService : Service() {
                 javaScriptEnabled = true
                 domStorageEnabled = true
                 allowFileAccess = false
-                allowContentAccess = false
+                // SAF grants access only to the user's selected content:// URI.
+                allowContentAccess = true
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 javaScriptCanOpenWindowsAutomatically = false
                 setSupportMultipleWindows(false)
                 safeBrowsingEnabled = true
             }
-            CookieManager.getInstance().setAcceptThirdPartyCookies(web, false)
+            CookieManager.getInstance().apply {
+                setAcceptCookie(true)
+                setAcceptThirdPartyCookies(web, false)
+            }
             val error = TextView(this).apply {
                 text = getString(R.string.harness_page_failed)
                 setTextColor(MENU_TEXT_COLOR)
@@ -570,6 +581,27 @@ class OverlayBallService : Service() {
                 onMainFrameFailure = { if (conversationWebView === web) error.visibility = View.VISIBLE },
                 onRendererGone = { detachConversation() },
             )
+            web.webChromeClient = object : WebChromeClient() {
+                override fun onShowFileChooser(
+                    view: WebView?,
+                    callback: ValueCallback<Array<Uri>>?,
+                    params: FileChooserParams?,
+                ): Boolean {
+                    if (callback == null) return false
+                    if (view !== conversationWebView) {
+                        callback.onReceiveValue(null)
+                        return true
+                    }
+                    cancelFileChooser()
+                    val request = UUID.randomUUID().toString()
+                    fileChooserRequest = request
+                    fileChooserCallback = callback
+                    if (!OverlayFileChooserActivity.open(this@OverlayBallService, request, params)) {
+                        deliverFileChooserResult(request, emptyList())
+                    }
+                    return true
+                }
+            }
         }
 
         val params = WindowManager.LayoutParams(
@@ -609,7 +641,8 @@ class OverlayBallService : Service() {
         }
         CookieManager.getInstance().setCookie(HarnessSessionCookie.origin(origin.port), cookie) { accepted ->
             if (conversationWebView !== web) return@setCookie
-            if (!accepted || AppAuthenticationState.harnessAccess()?.password != access.password) {
+            // This window can be opened before the full-page Activity creates its own auth state.
+            if (!accepted || conversationAccess !== access) {
                 conversationError?.visibility = View.VISIBLE
                 return@setCookie
             }
@@ -635,9 +668,31 @@ class OverlayBallService : Service() {
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
+    private fun cancelFileChooser() {
+        fileChooserRequest = null
+        val callback = fileChooserCallback ?: return
+        fileChooserCallback = null
+        runCatching { callback.onReceiveValue(null) }
+    }
+
+    private fun deliverFileChooserResult(request: String, uris: List<Uri>) {
+        if (request != fileChooserRequest) return
+        val callback = fileChooserCallback ?: return
+        fileChooserRequest = null
+        fileChooserCallback = null
+        // The picker result is external input; WebView must never receive file:// or another scheme.
+        val accepted = uris.filter {
+            it.scheme == ContentResolver.SCHEME_CONTENT &&
+                (it.authority?.length?.let { length -> length in 1..255 } == true) &&
+                it.toString().length <= 4096
+        }.take(16)
+        runCatching { callback.onReceiveValue(accepted.takeIf { it.isNotEmpty() }?.toTypedArray()) }
+    }
+
     private fun detachConversation() {
         conversationRequest++
         conversationOpening = false
+        cancelFileChooser()
         val access = conversationAccess
         conversationAccess = null
         conversationView?.let { runCatching { windowManager.removeView(it) } }
@@ -648,6 +703,7 @@ class OverlayBallService : Service() {
             conversationWebView = null
             runCatching {
                 web.stopLoading()
+                web.webChromeClient = null
                 web.webViewClient = WebViewClient()
                 web.destroy()
             }
@@ -876,6 +932,11 @@ class OverlayBallService : Service() {
         /** A full-page logout invalidates the shared one-time session immediately. */
         fun closeConversation() {
             activeService?.detachConversation()
+        }
+
+        /** Result from the non-exported SAF trampoline; stale picker results are ignored. */
+        internal fun deliverFileChooserResult(request: String, uris: List<Uri>) {
+            activeService?.deliverFileChooserResult(request, uris)
         }
 
         private const val CHANNEL_ID = "harness_overlay_ball"

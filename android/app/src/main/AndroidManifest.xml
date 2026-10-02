@@ -166,6 +166,13 @@
             android:theme="@style/AppTheme.NoActionBar"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- Only the Service-owned overlay WebView can launch this SAF result bridge. -->
+        <activity
+            android:name=".OverlayFileChooserActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/AppTheme.Transparent" />
+
         <!-- 常驻通知的点击入口：全透明转发后立即 finish。
              noHistory + excludeFromRecents：不留在任务栈与最近任务里。
              保留默认 taskAffinity：任务已存在时它直接叠在 HarnessActivity 之上，
