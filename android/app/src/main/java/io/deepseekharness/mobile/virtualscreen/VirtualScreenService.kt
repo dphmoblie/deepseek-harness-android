@@ -276,7 +276,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
 
     private fun clearFrame() {
         down = null
-        setImageDrawable(null); displayed?.recycle(); displayed = null
+        setImageDrawable(null); displayed = null
         observedSession = ""; observedAt = 0
     }
 
@@ -296,11 +296,11 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     "副屏预览 · 点击或滑动操作 · 静止页面复用最近一帧"
                 } catch (_: Exception) { "等待副屏画面；锁屏、断连或应用离开副屏时暂停显示" }
                 main.post {
-                    if (version != generation || executor == null) { bitmap?.recycle(); return@post }
+                    if (version != generation || executor == null) { return@post }
                     val current = VirtualScreenService.current
-                    if (current?.canObserve() != true || current.state().optString("sessionId") != id) { bitmap?.recycle(); bitmap = null }
+                    if (current?.canObserve() != true || current.state().optString("sessionId") != id) { bitmap = null }
                     setImageBitmap(bitmap)
-                    displayed?.recycle(); displayed = bitmap
+                    displayed = bitmap
                     observedSession = id; observedAt = SystemClock.elapsedRealtime()
                     report(message)
                     main.postDelayed(this, 250)
