@@ -1,4 +1,7 @@
 <resources>
+    <color name="harness_toolbar_background">#0F1317</color>
+    <color name="harness_toolbar_foreground">#F4F6F5</color>
+    <color name="harness_page_background">#0F1317</color>
     <!--
       系统处于深色模式时的窗口装饰底色（首帧默认值）。
       与 Web 侧深色背景色以及 AppThemePreference.DARK_BAR_COLOR 同一取值：

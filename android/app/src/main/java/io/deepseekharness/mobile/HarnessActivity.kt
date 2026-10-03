@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.content.ContentResolver
 import android.content.ClipData
 import android.content.Intent
+import android.content.res.Configuration
+import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -28,6 +30,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.Toolbar
 import androidx.core.content.FileProvider
+import androidx.core.graphics.drawable.DrawableCompat
 import androidx.lifecycle.lifecycleScope
 import io.deepseekharness.mobile.runtime.HarnessAccess
 import io.deepseekharness.mobile.runtime.RuntimeStore
@@ -81,7 +84,7 @@ class HarnessActivity : AppCompatActivity() {
         super.onResume()
         // 控制台也是一个窗口：主题在 Web 侧改过、或系统深色模式在后台切换过之后，
         // 回到前台都要按已保存的模式重算状态栏，否则它会与页面配色不一致。
-        AppThemePreference.applySafely(this)
+        applyNativeChrome()
     }
 
     override fun onStart() {
@@ -142,6 +145,7 @@ class HarnessActivity : AppCompatActivity() {
                 else -> false
             }
         }
+        applyNativeChrome()
 
         // 入口 URL：index.html 是唯一没有内容哈希的产物，它的缓存键必须同时带上 APK 版本与
         // 已安装运行时版本，否则在线更新运行之后 WebView 会继续复用旧前端。
@@ -252,6 +256,37 @@ class HarnessActivity : AppCompatActivity() {
 
     private fun returnToMainActivity() {
         if (!isFinishing) finish()
+    }
+
+    /** Keep the native frame visually continuous with the selected app theme. */
+    private fun applyNativeChrome() {
+        if (isFinishing || isDestroyed) return
+        val toolbar = findViewById<Toolbar>(R.id.harness_toolbar) ?: return
+        val dark = AppThemePreference.isDark(
+            AppThemePreference.current(this),
+            AppThemePreference.systemNight(this),
+        )
+        // Resolve native resources using the saved mode even when it differs from the system.
+        val configuration = Configuration(resources.configuration).apply {
+            uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+        }
+        val palette = createConfigurationContext(configuration)
+        val background = palette.getColor(R.color.harness_toolbar_background)
+        val foreground = palette.getColor(R.color.harness_toolbar_foreground)
+        AppThemePreference.applySafely(this, backgroundColor = background)
+        window.setBackgroundDrawable(ColorDrawable(background))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
+        findViewById<WebView>(R.id.harness_web_view)
+            .setBackgroundColor(palette.getColor(R.color.harness_page_background))
+        toolbar.setBackgroundColor(background)
+        toolbar.setTitleTextColor(foreground)
+        toolbar.navigationIcon?.let { DrawableCompat.setTint(it.mutate(), foreground) }
+        for (index in 0 until toolbar.menu.size()) {
+            toolbar.menu.getItem(index).icon?.let { DrawableCompat.setTint(it.mutate(), foreground) }
+        }
     }
 
     /** Native file controls remain available even when the Harness page is busy or failed. */

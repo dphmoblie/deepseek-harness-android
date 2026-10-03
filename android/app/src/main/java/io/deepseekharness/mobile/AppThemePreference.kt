@@ -72,13 +72,13 @@ internal object AppThemePreference {
         applySafely(activity)
     }
 
-    /** 主题切换属于装饰性操作，窗口处于销毁/过渡态时必须静默降级，不能杀死进程。 */
-    fun applySafely(activity: Activity) {
+    /** Native screens may supply their surface color so safe areas match their own toolbar. */
+    fun applySafely(activity: Activity, backgroundColor: Int? = null) {
         if (activity.isFinishing || activity.isDestroyed) return
         runCatching {
             val dark = isDark(current(activity), systemNight(activity))
             val window = activity.window
-            val color = if (dark) DARK_BAR_COLOR else LIGHT_BAR_COLOR
+            val color = backgroundColor ?: if (dark) DARK_BAR_COLOR else LIGHT_BAR_COLOR
             activity.findViewById<android.view.View>(android.R.id.content)?.setBackgroundColor(color)
             @Suppress("DEPRECATION")
             window.statusBarColor = color

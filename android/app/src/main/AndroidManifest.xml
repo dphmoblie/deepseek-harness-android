@@ -175,7 +175,7 @@
             android:name=".HarnessActivity"
             android:exported="false"
             android:screenOrientation="unspecified"
-            android:theme="@style/AppTheme.NoActionBar"
+            android:theme="@style/AppTheme.Harness"
             android:windowSoftInputMode="adjustResize" />
 
         <activity
