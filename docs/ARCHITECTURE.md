@@ -229,6 +229,24 @@ only; confined (`workspace-write`) execution still requires the copy inside the
 authorized root. Every launch records `RUNTIME_PHASE|phase=launcher` so a
 degraded fallback is visible in an exported diagnostic log.
 
+The same failure class reaches further into the guest. SELinux on some ROMs
+(for example Honor builds) forbids the app from creating symlinks and hardlinks
+inside app data, so the rootfs extractor degrades those archive entries by
+copying the link target's contents. Those copies used to set the execute bit
+with `File.setExecutable`, which fails silently on exactly those ROMs: the
+extracted `/lib/ld-linux-aarch64.so.1` chain then ends in a dynamic loader copy
+without the owner execute bit, and every dynamically linked guest program dies
+in `execve` with `EACCES` (`proot error: execve("/usr/bin/env"): Permission
+denied`) while SELinux still logs `granted { execute }` for the program itself,
+because the interpreter check is denied in DAC before any hook runs. Degraded
+copies therefore apply the source file's mode with `Os.chmod`, and every launch
+performs one bounded pass over the runtime root that adds the owner execute bit
+to regular files whose header is ELF or `#!` and that lack it, plus a direct
+`exec` probe of the in-root loader to separate mode problems from system policy.
+Each runtime root is scanned once (a marker file inside the loader directory is
+removed when the loader is rewritten) and records
+`RUNTIME_PHASE|phase=exec_repair`; permission details stay in logcat only.
+
 PRoot is GPL-2.0-or-later. Operit2 is AGPL-3.0. Release provenance must retain
 the exact upstream revision, the hashes of both shipped ELF files, all local
 patches, and usable build/source instructions. Distribution must include the

@@ -20,6 +20,7 @@ import java.nio.channels.FileChannel
 import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
+import java.util.concurrent.TimeUnit
 
 class RuntimeStore(context: Context) {
     private val appContext = context.applicationContext
@@ -90,6 +91,21 @@ class RuntimeStore(context: Context) {
 
     private val launcherConfigDirectory = File(currentRoot, "root/.dsh-mobile")
     private val providerPatchFile = File(launcherConfigDirectory, PROVIDER_PATCH_FILENAME)
+
+    /**
+     * 运行时根的执行位一次性修复。
+     *
+     * 已经装好的根救不了「解压器改对」——旧版本在链接降级路径上用 `File.setExecutable` 落执行位，
+     * 该 API 在荣耀等 ROM 上静默失败，于是根内的动态链接器副本可能没有执行位，只能就地补。
+     * 标记文件放在运行器私有目录里，[writeGuestLoaderCopy] 重写 loader 时会一并清掉（= 重装后重扫）。
+     */
+    private val guestExecutableRepair: RuntimeExecutableRepair by lazy {
+        RuntimeExecutableRepair(
+            root = currentRoot,
+            markerFile = File(guestLoaderDirectory, EXEC_REPAIR_MARKER_NAME),
+            log = { android.util.Log.w("dsh-runtime", it) },
+        )
+    }
 
     @Volatile private var manifestCacheLoaded = false
     @Volatile private var manifestCache: RuntimeManifest? = null
@@ -859,6 +875,7 @@ class RuntimeStore(context: Context) {
             Os.chmod(guestLoaderDirectory.absolutePath, 0x1c0)
             refreshExecutableLink(runnerFile, launchRunnerFile)
             installGuestLoader()
+            auditGuestExecutables()
         } catch (error: Throwable) {
             if (error is RuntimeFailure) throw error
             throw RuntimeFailure("RUNNER_PREPARE_FAILED", "无法准备受信任运行器", error)
@@ -1141,6 +1158,9 @@ class RuntimeStore(context: Context) {
         if (!hasGuestLoaderContent()) {
             throw RuntimeFailure("RUNNER_PREPARE_FAILED", "运行时根内的运行器文件不可用")
         }
+        // 刚重写过 loader 说明运行时根是新的一份：清掉执行位修复的标记，让它重新扫一遍。
+        val repairMarker = File(guestLoaderDirectory, EXEC_REPAIR_MARKER_NAME)
+        if (RuntimeFiles.existsNoFollow(repairMarker)) repairMarker.delete()
     }
 
     /**
@@ -1235,6 +1255,77 @@ class RuntimeStore(context: Context) {
                 "reason" to reason,
             ),
         )
+    }
+
+    /**
+     * 访客侧可执行性巡检。
+     *
+     * 真机回归的第二层成因：rootfs 里的符号链接在荣耀等 ROM 上被降级成「复制目标内容」，
+     * 而复制时用的 `File.setExecutable` 会静默失败，于是动态链接器副本一落地就缺执行位 ——
+     * 任何动态链接程序 execve 都拿到 EACCES，PRoot 只能报
+     * `proot error: execve("/usr/bin/env"): Permission denied`，SELinux 那边却还是
+     * `granted { execute }`。这里做三件事，把「权限位问题」与「系统策略问题」分开：
+     * 1）每次启动把关键路径的落地形态写进 logcat（9 次 lstat，成本可忽略）；
+     * 2）对已经装好的运行时根做**一次**执行位补齐（标记保护，重装后重扫）；
+     * 3）实测一次「运行时根里的静态 ELF 能不能被执行」。
+     */
+    private fun auditGuestExecutables() {
+        RuntimeGuestExecutables.CRITICAL_PATHS.forEach { relativePath ->
+            android.util.Log.w(
+                "dsh-runtime",
+                "guest file: " + RuntimeGuestExecutables.describe(currentRoot, relativePath),
+            )
+        }
+        val outcome = guestExecutableRepair.runIfNeeded()
+        if (!outcome.ran) return
+        android.util.Log.w(
+            "dsh-runtime",
+            "exec repair: scanned=" + outcome.scanned + ",repaired=" + outcome.repaired +
+                ",failed=" + outcome.failed + ",elapsedMs=" + outcome.elapsedMillis +
+                ",completed=" + outcome.completed,
+        )
+        probeGuestExecutable()
+        diagnostics.record(
+            if (outcome.repaired > 0) DiagnosticLevel.WARN else DiagnosticLevel.INFO,
+            DiagnosticEvent.RUNTIME_PHASE,
+            mapOf(
+                "phase" to "exec_repair",
+                "result" to if (outcome.completed) "ok" else "failed",
+                "code" to if (outcome.repaired > 0) "EXEC_BIT_REPAIRED" else "EXEC_BIT_INTACT",
+                "reason" to if (outcome.completed) "scan_completed" else "scan_stopped",
+            ),
+        )
+    }
+
+    /**
+     * 实测运行时根里的 loader（静态 ELF、无 PT_INTERP）能否被本应用执行。
+     *
+     * 成败都是证据：起得来说明「应用数据目录里可以 exec」，权限位之外没有系统级封锁；
+     * 起不来时异常的 message 里带 errno（例如 `Cannot run program …: error=13, Permission denied`），
+     * 正是判定「权限位 vs 系统策略」需要的那一条。
+     */
+    private fun probeGuestExecutable() {
+        val candidate = File(launchLoaderPath())
+        val result = try {
+            // 只求「起没起来」：不重定向（这台设备的编译类路径里没有 ProcessBuilder.Redirect），
+            // 用 redirectErrorStream 合并输出后在进程结束后一次性读干，避免子进程写满管道阻塞。
+            val process = ProcessBuilder(candidate.absolutePath).redirectErrorStream(true).start()
+            if (process.waitFor(EXEC_PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                val output = try {
+                    process.inputStream.readBytes().decodeToString().replace('\n', ' ').trim()
+                } catch (_: Throwable) {
+                    ""
+                }
+                "started,exit=" + process.exitValue() +
+                    if (output.isEmpty()) "" else ",output=" + output.take(EXEC_PROBE_OUTPUT_CHARS)
+            } else {
+                process.destroyForcibly()
+                "started,timeout=true"
+            }
+        } catch (error: Throwable) {
+            "failed,detail=" + (error.message ?: error.javaClass.simpleName)
+        }
+        android.util.Log.w("dsh-runtime", "exec probe: path=" + candidate.name + ",result=" + result)
     }
 
     /**
@@ -1358,6 +1449,10 @@ class RuntimeStore(context: Context) {
         private const val LOADER_NAME = "libdsh_proot_loader.so"
         private const val EXEC_XATTR_NAME = "security.android.exec"
         private val EXEC_XATTR_VALUE: ByteArray = byteArrayOf('1'.code.toByte())
+        // 执行位一次性修复的标记：跟着运行时根走，重装（重写 loader）时清掉。
+        private const val EXEC_REPAIR_MARKER_NAME = ".exec-repair.done"
+        private const val EXEC_PROBE_TIMEOUT_SECONDS = 3L
+        private const val EXEC_PROBE_OUTPUT_CHARS = 160
         private const val BUNDLED_MANIFEST_ASSET = "runtime/runtime-manifest.json"
         private const val BUNDLED_ROOTFS_ASSET = "runtime/rootfs.bundle"
         private const val PROVIDER_PATCH_FILENAME = "launcher-providers.patch.json"

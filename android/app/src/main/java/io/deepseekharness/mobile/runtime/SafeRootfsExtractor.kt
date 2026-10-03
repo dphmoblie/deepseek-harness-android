@@ -2,6 +2,7 @@ package io.deepseekharness.mobile.runtime
 
 import android.system.Os
 import android.system.OsConstants
+import android.util.Log
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
@@ -182,6 +183,10 @@ class SafeRootfsExtractor {
             for ((path, mode) in directoryModes.asReversed()) {
                 Os.chmod(path.toString(), mode)
             }
+            if (degradedSymlinkCount > 0) {
+                // 降级复制是「执行位可能丢失」的高危路径，必须留一条真机可见的证据。
+                Log.w(RUNTIME_LOG_TAG, "rootfs links degraded: symlinks=" + degradedSymlinkCount)
+            }
         } catch (error: Throwable) {
             try {
                 RuntimeFiles.deleteTreeNoFollow(destination, destinationParent)
@@ -260,7 +265,7 @@ class SafeRootfsExtractor {
                         val targetFile = link.target.toFile()
                         link.path.parent.toFile().mkdirs()
                         targetFile.copyTo(link.path.toFile(), overwrite = false)
-                        link.path.toFile().setExecutable(targetFile.canExecute(), false)
+                        applyCopiedFallbackMode(targetFile, link.path.toFile())
                     } else {
                         throw error
                     }
@@ -304,13 +309,13 @@ class SafeRootfsExtractor {
                 } else {
                     targetFile.parentFile?.mkdirs()
                     file.copyTo(targetFile, overwrite = false)
-                    targetFile.setExecutable(file.canExecute(), false)
+                    applyCopiedFallbackMode(file, targetFile)
                 }
             }
         } else if (sourceFile.isFile) {
             destination.parent.toFile().mkdirs()
             sourceFile.copyTo(destination.toFile(), overwrite = false)
-            destination.toFile().setExecutable(sourceFile.canExecute(), false)
+            applyCopiedFallbackMode(sourceFile, destination.toFile())
         } else {
             throw RuntimeFailure("ARCHIVE_LINK_INVALID", "符号链接降级目标不可用: $rawTarget")
         }
@@ -369,11 +374,46 @@ class SafeRootfsExtractor {
         return if (directory) permissionBits or 0x1c0 else permissionBits or 0x180
     }
 
+    /**
+     * 链接降级复制后，按**源文件的真实权限位**给复制品落位。
+     *
+     * 这里只能走 `Os.chmod`，不能用 `File.setExecutable`：后者在部分 ROM（如荣耀）上会**静默失败**，
+     * 于是被降级复制的动态链接器副本（`/lib/ld-linux-aarch64.so.1` 这类）没有执行位，
+     * 任何动态链接程序 execve 都会拿到 EACCES —— PRoot 只能报
+     * `proot error: execve("/usr/bin/env"): Permission denied`，而 SELinux 依旧对程序本身记
+     * `granted { execute }`，从日志完全看不出缺的是哪个文件的权限位。
+     */
+    private fun applyCopiedFallbackMode(source: File, destination: File) {
+        val sourceMode = try {
+            Os.stat(source.absolutePath).st_mode and 0x1ff
+        } catch (_: Throwable) {
+            0
+        }
+        val executable = (sourceMode and EXECUTE_BITS) != 0 || source.canExecute()
+        val mode = when {
+            sourceMode == 0 && executable -> 0x1c0
+            sourceMode == 0 -> 0x180
+            executable -> sourceMode or 0x1c0
+            else -> sourceMode or 0x180
+        }
+        try {
+            Os.chmod(destination.absolutePath, mode)
+        } catch (error: Throwable) {
+            Log.w(
+                RUNTIME_LOG_TAG,
+                "rootfs copy chmod failed: path=" + destination.name + ",mode=0" +
+                    Integer.toOctalString(mode) + ",detail=" + (error.message ?: error.javaClass.simpleName),
+            )
+        }
+    }
+
     companion object {
         private const val BUFFER_SIZE = 64 * 1024
         private const val EXEC_XATTR_NAME = "security.android.exec"
         private const val EXEC_XATTR_VALUE_BYTE: Byte = '1'.code.toByte()
         private const val EXEC_STAMP_EARLY_ABORT_FAILURES = 8
+        private const val RUNTIME_LOG_TAG = "dsh-runtime"
+        private const val EXECUTE_BITS = 0x49
         private val SHA256_PATTERN = Regex("^[a-f0-9]{64}$")
     }
 }
