@@ -109,9 +109,18 @@ class VirtualScreenService : Service() {
         if (!canObserve()) throw RuntimeFailure("VIRTUAL_SCREEN_LOCKED", "锁屏或熄屏时暂停读取与操作")
     }
 
+    /**
+     * 会话校验：请求的会话与当前会话不一致说明用户已重新开始或结束副屏，属于可重试情形，
+     * 按 [VirtualScreenPolicy.sessionFailure] 返回 `VIRTUAL_SCREEN_STOPPED`；
+     * 会话尚未建立时返回瞬时的 `VIRTUAL_SCREEN_BUSY`，都不再报成「副屏不可用」。
+     */
+    private fun requireSession(requested: String) {
+        VirtualScreenPolicy.sessionFailure(session, requested)?.let { throw it }
+    }
+
     fun screenshot(id: String, fromAi: Boolean = false): ByteArray {
         requireAccess()
-        check(id.isNotEmpty() && id == session) { "副屏会话已失效" }
+        requireSession(id)
         if (!actionSlot.tryAcquire()) throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "上一步副屏操作尚未完成")
         return try {
             checkNotNull(shizuku).virtualScreenSnapshot(id).also {
@@ -124,7 +133,10 @@ class VirtualScreenService : Service() {
         } finally { actionSlot.release() }
     }
 
-    /** 返回截图与帧新鲜度元数据；图像仍只在内存和受控管道中传输。 */
+    /**
+     * 返回截图与帧新鲜度元数据；图像仍只在内存和受控管道中传输。
+     * `frameBlank` 由宿主状态原样透传，宿主状态里没有该字段时不给出默认值。
+     */
     fun screenshotEnvelope(id: String): JSONObject {
         val bytes = screenshot(id, fromAi = true)
         val meta = runCatching { checkNotNull(shizuku).virtualScreenState() }
@@ -133,14 +145,16 @@ class VirtualScreenService : Service() {
         val frameAt = meta.optLong("frameAtElapsedMs", 0L)
         val reused = frameAt > 0L && frameAt == lastAiFrameAt
         lastAiFrameAt = frameAt
-        return JSONObject().put("imageBase64", java.util.Base64.getEncoder().encodeToString(bytes))
+        val envelope = JSONObject().put("imageBase64", java.util.Base64.getEncoder().encodeToString(bytes))
             .put("packageName", meta.optString("packageName"))
             .put("frameAtElapsedMs", frameAt)
             .put("frameReused", reused)
+        if (meta.has("frameBlank")) envelope.put("frameBlank", meta.optBoolean("frameBlank"))
+        return envelope
     }
 
     fun action(parameters: JSONObject): JSONObject {
-        check(parameters.getString("sessionId") == session && session.isNotEmpty()) { "副屏会话已失效" }
+        requireSession(parameters.getString("sessionId"))
         if (parameters.getString("action") == "stop") {
             main.post { stopSelf() }
             return JSONObject().put("stopping", true)

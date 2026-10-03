@@ -90,4 +90,29 @@ class VirtualScreenPolicyTest {
             assertThrows(IllegalArgumentException::class.java) { VirtualScreenPolicy.session(id) }
         }
     }
+
+    @Test fun `执行层分发的副屏动作必须与策略层白名单一致`() {
+        // 真机缺陷：策略层已支持 long_press/keyevent/text，执行层的 when 却只认 tap/swipe/back，
+        // 这三个动作会走到「不支持的副屏操作」，再被映射成 VIRTUAL_SCREEN_UNAVAILABLE。
+        // 执行层现在按 INPUT_ACTIONS 分发，这里保证白名单、策略层解析、插件声明三者不脱节。
+        val requests = mapOf(
+            "tap" to JSONObject().put("action", "tap").put("x", 1).put("y", 2),
+            "swipe" to JSONObject().put("action", "swipe").put("x", 1).put("y", 2).put("endX", 3).put("endY", 4).put("durationMs", 300),
+            "long_press" to JSONObject().put("action", "long_press").put("x", 1).put("y", 2).put("durationMs", 600),
+            "keyevent" to JSONObject().put("action", "keyevent").put("key", "ENTER"),
+            "text" to JSONObject().put("action", "text").put("text", "ok"),
+            "back" to JSONObject().put("action", "back"),
+        )
+        assertEquals(requests.keys, VirtualScreenPolicy.INPUT_ACTIONS)
+        for ((action, request) in requests) {
+            assertEquals(
+                "动作 $action 必须能生成 /system/bin/input 命令",
+                listOf("/system/bin/input", "-d", "4"),
+                VirtualScreenPolicy.inputArguments(request, 4, 726, 1600).take(3),
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            VirtualScreenPolicy.inputArguments(JSONObject().put("action", "pinch").put("x", 1).put("y", 2), 4, 726, 1600)
+        }
+    }
 }

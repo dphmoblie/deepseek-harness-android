@@ -26,11 +26,8 @@ object VirtualScreenCommands {
             }
             return DeviceCommandResult(true, 0, text, false, null)
         } catch (e: Exception) {
-            val code = when (e) {
-                is RuntimeFailure -> e.code
-                is IllegalArgumentException, is org.json.JSONException -> "VIRTUAL_SCREEN_INVALID"
-                else -> "VIRTUAL_SCREEN_UNAVAILABLE"
-            }
+            // 映射规则与单测共用同一份纯函数：会话切换等可重试情形必须保留自己的错误码。
+            val code = VirtualScreenPolicy.errorCode(e)
             return DeviceCommandResult(false, 1, "副屏请求未完成，请检查会话与目标应用状态", false, code)
         }
     }
