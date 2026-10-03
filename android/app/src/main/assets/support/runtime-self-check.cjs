@@ -358,6 +358,22 @@ function checkProbe(launcher) {
 }
 
 /**
+ * 启动器级失败的细分：退出码 125 只说明「启动器自己失败了」，**为什么**失败要到它的输出里看。
+ *
+ * 真机上出现过的一条是 `landlock-run: exec failed: Permission denied` —— 受限执行时内核拒绝对
+ * `PROOT_LOADER` 的 execve（0.2.3 及更早版本的 loader 落在授权根之外，PRoot 会把 tracee 的 exec
+ * 改写成对 loader 的 exec）。只报 `EXEC_LAUNCHER_FAILED` 时，「被权限拒绝」与「启动器起不来」
+ * 分不开，这正是当初只能靠人工上机复现的原因。
+ *
+ * 仍然只回受控码、不回原文：本脚本对外只允许固定枚举与计数，判据留在脚本内部。
+ */
+function launcherFailureCode(result) {
+  const stderr = typeof result.stderr === 'string' ? result.stderr : ''
+  const stdout = typeof result.stdout === 'string' ? result.stdout : ''
+  return (stderr + stdout).includes('Permission denied') ? 'EXEC_LAUNCHER_DENIED' : 'EXEC_LAUNCHER_FAILED'
+}
+
+/**
  * 真实 confine exec：`--ro / --rw <家目录> -- /bin/true`。
  * 启动器级失败一律退出码 125；**没有退出码**（进程没起来、被信号杀死或超时）同属启动器级失败，
  * 其余非零码表示启动器起来了但命令失败 —— 两者混在一起就无法区分「沙箱层」与「命令层」。
@@ -372,7 +388,9 @@ function checkExec(launcher, paths) {
     maxBuffer: SPAWN_MAX_BUFFER,
   })
   if (result.status === 0) return entry('sandbox_exec', 'ok')
-  if (result.status === null || result.status === 125) return entry('sandbox_exec', 'fail', 'EXEC_LAUNCHER_FAILED')
+  if (result.status === null || result.status === 125) {
+    return entry('sandbox_exec', 'fail', launcherFailureCode(result))
+  }
   return entry('sandbox_exec', 'fail', 'EXEC_COMMAND_FAILED')
 }
 
@@ -787,6 +805,7 @@ module.exports = {
   toolStatus,
   compilerArguments,
   judgeTool,
+  launcherFailureCode,
   checkCompiler,
   checkVersionTool,
   runToolchainChecks,

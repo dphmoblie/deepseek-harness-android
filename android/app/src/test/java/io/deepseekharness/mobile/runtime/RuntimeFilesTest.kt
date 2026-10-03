@@ -113,6 +113,30 @@ class RuntimeFilesTest {
         assumeTrue("Default provider does not support secure directory streams", supportsSecureDirectoryStreams(path))
     }
 
+    /**
+     * 根内 loader 拷贝的判定依据：长度不同立刻判否；任一文件读不到同样判否（调用方会重建而不是报错）。
+     */
+    @Test
+    fun comparesContentOnlyWhenBothFilesAreReadable() {
+        val first = temporaryFolder.newFile("first.bin")
+        val second = temporaryFolder.newFile("second.bin")
+        val payload = ByteArray(200_000) { (it % 251).toByte() }
+        first.writeBytes(payload)
+        second.writeBytes(payload)
+
+        assertTrue(RuntimeFiles.sameContent(first, second))
+
+        second.writeBytes(payload.copyOf(payload.size - 1))
+        assertFalse(RuntimeFiles.sameContent(first, second))
+
+        val flipped = payload.copyOf()
+        flipped[payload.size / 2] = (flipped[payload.size / 2] + 1).toByte()
+        second.writeBytes(flipped)
+        assertFalse(RuntimeFiles.sameContent(first, second))
+
+        assertFalse(RuntimeFiles.sameContent(first, temporaryFolder.root.toPath().resolve("missing.bin").toFile()))
+    }
+
     private fun supportsSecureDirectoryStreams(path: Path): Boolean =
         Files.newDirectoryStream(path).use { it is SecureDirectoryStream<*> }
 

@@ -66,6 +66,7 @@ export const SELF_CHECK_CODES = [
   'PROBE_UNUSABLE',
   'PROBE_PARTIAL',
   'EXEC_LAUNCHER_FAILED',
+  'EXEC_LAUNCHER_DENIED',
   'EXEC_COMMAND_FAILED',
   'PTY_MODULE_MISSING',
   'PTY_LOAD_FAILED',
@@ -190,6 +191,11 @@ const SELF_CHECK_CODE_ADVICE: Readonly<Record<SelfCheckCode, { meaning: string; 
   EXEC_LAUNCHER_FAILED: {
     meaning: '沙箱启动器在真正执行时失败（授权根目录不存在或启动器级错误）',
     nextStep: '先查看 Landlock 探测结果；探测正常时再检查访客数据目录与运行日志',
+  },
+  EXEC_LAUNCHER_DENIED: {
+    // 与上一条分开：这一条说明受限执行被内核拒绝（权限被判否），不是授权根缺失。
+    meaning: '沙箱启动器执行被内核拒绝（受限进程拿不到启动器文件）',
+    nextStep: '先看 Landlock 探测：探测通过却报这一条时，升级应用版本或导出诊断日志反馈；修复权限位对此无效',
   },
   EXEC_COMMAND_FAILED: {
     meaning: '被沙箱包裹的命令执行失败',

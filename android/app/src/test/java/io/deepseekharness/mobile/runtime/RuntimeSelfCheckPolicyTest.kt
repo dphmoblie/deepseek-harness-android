@@ -199,6 +199,24 @@ class RuntimeSelfCheckPolicyTest {
         )
     }
 
+    /** 新码必须与旧码一样走白名单：状态对不上就整条丢弃，不能当成自由文本显示出来。 */
+    @Test
+    fun acceptsTheDeniedLauncherCodeOnlyAsFailure() {
+        val checks = RuntimeSelfCheckPolicy.sanitize(
+            listOf(
+                raw("sandbox_exec", "fail", "EXEC_LAUNCHER_DENIED"),
+                raw("sandbox_probe", "warn", "EXEC_LAUNCHER_DENIED"),
+                raw("pty_sandbox", "fail", "EXEC_LAUNCHER_DENIED"),
+            ),
+        )
+        assertEquals(listOf("sandbox_exec"), checks.map { it.id })
+        assertEquals("EXEC_LAUNCHER_DENIED", checks.single().code)
+        assertEquals(
+            RuntimeSelfCheckPolicy.Summary("EXEC_LAUNCHER_DENIED", 1),
+            RuntimeSelfCheckPolicy.summarize(checks),
+        )
+    }
+
     @Test
     fun treatsToolchainChecksAsCapabilitiesThatOnlyWarn() {
         // 能力项三态：确实没有 / 工具自己回了非 0 / 没拿到退出码。三者都只能是 warn。

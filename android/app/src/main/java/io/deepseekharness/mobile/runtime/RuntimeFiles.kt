@@ -142,6 +142,44 @@ object RuntimeFiles {
 
     private class DeleteBudget(var entries: Int = 0)
 
+    /**
+     * 两个文件是否字节一致（长度不同直接判否；任一文件读不到也算不一致）。
+     *
+     * 用途只有一个：判断运行时根里那份 loader 拷贝是否还需要重建。它同时兜住「APK 升级换了
+     * loader」与「根内文件被替换/截断」两种情况，所以调用方拿到 false 时的动作是重建、不是报错。
+     * 读失败一律按「不一致」处理：真正读不到源文件时，随后的复制会抛出带原因的失败。
+     */
+    fun sameContent(first: File, second: File): Boolean = try {
+        if (first.length() != second.length()) {
+            false
+        } else {
+            first.inputStream().use { a ->
+                second.inputStream().use { b ->
+                    val left = ByteArray(CONTENT_COMPARE_BUFFER)
+                    val right = ByteArray(CONTENT_COMPARE_BUFFER)
+                    var equal = true
+                    while (true) {
+                        val readLeft = a.read(left)
+                        val readRight = b.read(right)
+                        if (readLeft != readRight) {
+                            equal = false
+                            break
+                        }
+                        if (readLeft <= 0) break
+                        if (!left.copyOf(readLeft).contentEquals(right.copyOf(readRight))) {
+                            equal = false
+                            break
+                        }
+                    }
+                    equal
+                }
+            }
+        }
+    } catch (_: IOException) {
+        false
+    }
+
+    private const val CONTENT_COMPARE_BUFFER = 64 * 1024
     private const val MAX_DELETE_DEPTH = 256
     private const val MAX_DELETE_ENTRIES = 250_000
 }

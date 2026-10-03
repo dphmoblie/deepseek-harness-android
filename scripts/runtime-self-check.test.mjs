@@ -124,6 +124,23 @@ test('三态判定：找不到 / 非 0 退出码 / 没拿到退出码', () => {
   assert.deepEqual(judge('make', 'MAKE', missingExecutable, undefined), { id: 'make', status: 'warn', code: 'MAKE_PROBE_UNKNOWN' })
 })
 
+test('启动器失败的细分：EACCES 与「其它启动器级失败」不能混成一个码', () => {
+  const denied = selfCheck.launcherFailureCode({
+    status: 125,
+    stderr: 'landlock-run: exec failed: Permission denied\n',
+    stdout: '',
+  })
+  assert.equal(denied, 'EXEC_LAUNCHER_DENIED')
+  // 真机上 loader 落在授权根之外时，报错文本就是这个形状；stdout 里出现同样要认出来。
+  assert.equal(
+    selfCheck.launcherFailureCode({ status: 125, stderr: '', stdout: 'exec failed: Permission denied' }),
+    'EXEC_LAUNCHER_DENIED',
+  )
+  // 其余启动器级失败（规则集写错、被信号杀死、超时没有退出码）保持原码，不冒充权限结论。
+  assert.equal(selfCheck.launcherFailureCode({ status: 125, stderr: 'landlock: invalid ruleset', stdout: '' }), 'EXEC_LAUNCHER_FAILED')
+  assert.equal(selfCheck.launcherFailureCode({ status: null, stderr: null, stdout: null }), 'EXEC_LAUNCHER_FAILED')
+})
+
 test('pathDirectories：只收绝对路径、去重、限量', () => {
   const entries = Array.from({ length: 40 }, (unused, index) => `/path-${index}`)
   const directories = selfCheck.pathDirectories({

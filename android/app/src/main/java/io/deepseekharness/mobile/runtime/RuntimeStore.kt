@@ -46,9 +46,19 @@ class RuntimeStore(context: Context) {
     val retainedManifest = File(runtimeParent, "retained-manifest.json")
     val runnerFile get() = File(appContext.applicationInfo.nativeLibraryDir, RUNNER_NAME)
     val loaderFile get() = File(appContext.applicationInfo.nativeLibraryDir, LOADER_NAME)
-    private val launchDirectory = File(appContext.noBackupFilesDir, "dsh-runner")
-    val launchRunnerFile = File(launchDirectory, "proot")
-    val launchLoaderFile = File(launchDirectory, "loader")
+
+    /** proot 本体：由应用自身执行，留在私有目录（访客看不到，见 [RuntimeLauncherFiles]）。 */
+    private val launchDirectory = RuntimeLauncherFiles.runnerDirectory(appContext.noBackupFilesDir)
+    val launchRunnerFile = RuntimeLauncherFiles.runnerFile(appContext.noBackupFilesDir)
+
+    /**
+     * loader 的落点：**运行时根之内**的实体拷贝。
+     *
+     * 不能放私有目录、也不能用符号链接：Landlock 只授权运行时根，且按最终 inode 判定，
+     * 落在授权树之外会让受限进程的 execve 直接 EACCES（真机表现为 125 + 「沙箱内命令/PTY 全失败」）。
+     */
+    private val guestLoaderDirectory = RuntimeLauncherFiles.loaderDirectory(currentRoot)
+    val launchLoaderFile = RuntimeLauncherFiles.loaderFile(currentRoot)
     val resolverFile = File(appContext.filesDir, "runtime-resolv.conf")
     /** Host name map is generated alongside resolver configuration and bind-mounted into guest. */
     val hostsFile = File(appContext.filesDir, "runtime-hosts")
@@ -815,20 +825,29 @@ class RuntimeStore(context: Context) {
         if (!runnerAvailable()) {
             throw RuntimeFailure("RUNNER_UNAVAILABLE", "APK 未包含当前架构的受信任运行器")
         }
-        if (RuntimeFiles.existsNoFollow(launchDirectory)) {
-            if (!RuntimeFiles.isDirectoryNoFollow(launchDirectory)) {
-                throw RuntimeFailure("RUNNER_PREPARE_FAILED", "运行器私有目录无效")
-            }
-        } else if (!launchDirectory.mkdir()) {
-            throw RuntimeFailure("RUNNER_PREPARE_FAILED", "无法创建运行器私有目录")
-        }
+        ensureLaunchDirectory(launchDirectory, "运行器私有目录")
+        ensureLaunchDirectory(guestLoaderDirectory, "运行时根内的运行器目录")
         try {
             Os.chmod(launchDirectory.absolutePath, 0x1c0)
+            // 根内目录跟随运行时根：权限与私有目录一致即可，真正的约束来自 Landlock 与 PRoot。
+            Os.chmod(guestLoaderDirectory.absolutePath, 0x1c0)
             refreshExecutableLink(runnerFile, launchRunnerFile)
-            refreshExecutableLink(loaderFile, launchLoaderFile)
+            installGuestLoader()
         } catch (error: Throwable) {
             if (error is RuntimeFailure) throw error
             throw RuntimeFailure("RUNNER_PREPARE_FAILED", "无法准备受信任运行器", error)
+        }
+    }
+
+    private fun ensureLaunchDirectory(directory: File, label: String) {
+        if (RuntimeFiles.existsNoFollow(directory)) {
+            if (!RuntimeFiles.isDirectoryNoFollow(directory)) {
+                throw RuntimeFailure("RUNNER_PREPARE_FAILED", "$label 无效")
+            }
+            return
+        }
+        if (!directory.mkdirs()) {
+            throw RuntimeFailure("RUNNER_PREPARE_FAILED", "无法创建$label")
         }
     }
 
@@ -1018,7 +1037,7 @@ class RuntimeStore(context: Context) {
                     error.errno == android.system.OsConstants.ENOTSUP ||
                     error.errno == android.system.OsConstants.EXDEV
                 ) {
-                    copyRunnerFallback(target, pending)
+                    copyExecutableFallback(target, pending)
                 } else {
                     throw error
                 }
@@ -1034,6 +1053,51 @@ class RuntimeStore(context: Context) {
         if (!isPreparedRunner(target, link)) {
             throw RuntimeFailure("RUNNER_PREPARE_FAILED", "运行器私有链接不可执行")
         }
+    }
+
+    /**
+     * 把 loader 以**实体文件**落进运行时根（[launchLoaderFile]）。
+     *
+     * 与 [refreshExecutableLink] 的区别不能合并：Landlock 只授权运行时根、且按最终 inode 判定，
+     * 所以这里既不能放私有目录，也不能建符号链接 —— 指向 `nativeLibraryDir` 的链接实测仍然
+     * 让受限进程的 execve 返回 EACCES（退出码 125，沙箱内命令与 PTY 全失败）。
+     *
+     * 内容一致时不动它：正在运行的 PRoot 会把 loader 映射进自己的地址空间，无谓重写只会制造竞态。
+     * 不一致（APK 升级换了 loader，或旧版本留下的是链接/被改写的文件）时先写临时文件再原子改名。
+     */
+    private fun installGuestLoader() {
+        if (isGuestLoaderUpToDate()) return
+        val pending = File(guestLoaderDirectory, ".${launchLoaderFile.name}.new")
+        if (RuntimeFiles.existsNoFollow(pending) && !pending.delete()) {
+            throw RuntimeFailure("RUNNER_PREPARE_FAILED", "无法清理运行时根内的运行器临时文件")
+        }
+        try {
+            copyExecutableFallback(loaderFile, pending)
+            if (!isPreparedRunner(loaderFile, pending)) {
+                throw RuntimeFailure("RUNNER_PREPARE_FAILED", "运行时根内的运行器临时文件不可执行")
+            }
+            Os.rename(pending.absolutePath, launchLoaderFile.absolutePath)
+        } finally {
+            if (RuntimeFiles.existsNoFollow(pending)) pending.delete()
+        }
+        if (!isGuestLoaderUpToDate()) {
+            throw RuntimeFailure("RUNNER_PREPARE_FAILED", "运行时根内的运行器文件不可用")
+        }
+    }
+
+    /**
+     * 根内 loader 是否需要重建：只认**常规文件且与 APK 里的字节一致**。
+     *
+     * 链接形态（旧版本的遗留）会因为 `S_ISREG` 为假而重建；被替换或截断的内容会因为长度或
+     * 字节不一致而重建 —— 这一条同时兜住了运行时切换后残留的旧 loader。
+     */
+    private fun isGuestLoaderUpToDate(): Boolean = try {
+        val stat = Os.lstat(launchLoaderFile.absolutePath)
+        OsConstants.S_ISREG(stat.st_mode) &&
+            stat.st_size == loaderFile.length() &&
+            RuntimeFiles.sameContent(loaderFile, launchLoaderFile)
+    } catch (error: ErrnoException) {
+        if (error.errno == OsConstants.ENOENT) false else throw error
     }
 
     private fun isExecutableLinkTo(target: File, link: File): Boolean = try {
@@ -1057,11 +1121,13 @@ class RuntimeStore(context: Context) {
     }
 
     /**
-     * 符号链接被 ROM 拒绝时的降级：把运行器复制到私有启动目录，
+     * 符号链接不可用时的降级复制：把受信任运行器文件复制到目标位置，
      * 设置 owner 可执行并尝试打 Android 15+ 要求的 security.android.exec 标记
      * （与 rootfs 可执行文件盖章一致；旧系统不支持时忽略）。
+     *
+     * 两处调用：ROM 拒绝创建符号链接时的 proot 本体，以及**必须**是实体文件的根内 loader。
      */
-    private fun copyRunnerFallback(target: File, pending: File) {
+    private fun copyExecutableFallback(target: File, pending: File) {
         target.copyTo(pending, overwrite = false)
         pending.setExecutable(true, false)
         try {

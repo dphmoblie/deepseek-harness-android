@@ -202,12 +202,19 @@ APK packages `libdsh_proot.so` and `libdsh_proot_loader.so` obtained from the
 Operit2 Android runtime toolchain at commit
 `dc4c3a9405dc7ed3ef69b2ac9a6ace65374d77cf`, under
 `tools/android-runtime/`. The runner is used through app-private links to the
-APK native libraries, with `PROOT_LOADER` pointing to the corresponding trusted
-loader link. The app probes the runner and guest before use, retries with the
-no-seccomp profile when required, and enables only validated bind mounts that
-the device accepts. Runtime execution still originates from
-the loader in Android's native library directory; it is not copied to and
-executed from writable storage.
+APK native libraries. The loader is copied as a real file into the runtime root
+(`<currentRoot>/root/.dsh-mobile/dsh-runner/loader`) and `PROOT_LOADER` points
+there: PRoot rewrites the confined tracee's `execve` into an `execve` of
+`PROOT_LOADER`, and Landlock judges the final object of that path, so a loader
+kept outside the authorized root — or reached through a symlink — is denied
+with `landlock-run: exec failed: Permission denied` (exit 125) while `--probe`,
+which executes nothing, still passes. The app probes the runner and guest
+before use, retries with the no-seccomp profile when required, and enables only
+validated bind mounts that the device accepts. Runtime execution therefore
+still originates from the trusted loader shipped inside the APK: the copy in the
+runtime root is byte-compared against the packaged file and rewritten from it
+whenever it differs, and the PRoot binary itself is never copied into guest
+storage.
 
 PRoot is GPL-2.0-or-later. Operit2 is AGPL-3.0. Release provenance must retain
 the exact upstream revision, the hashes of both shipped ELF files, all local

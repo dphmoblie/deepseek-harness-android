@@ -71,6 +71,9 @@ internal object RuntimeSelfCheckPolicy {
         "sandbox_exec" to mapOf(
             "LAUNCHER_MISSING" to "skipped",
             "EXEC_LAUNCHER_FAILED" to "fail",
+            // 与上一条分开：受限执行被内核拒绝（真机上表现为 loader 落在授权根之外）时，
+            // 处置方向是版本/布局，而不是「检查访客数据目录」。
+            "EXEC_LAUNCHER_DENIED" to "fail",
             "EXEC_COMMAND_FAILED" to "fail",
         ),
         "pty" to mapOf(
