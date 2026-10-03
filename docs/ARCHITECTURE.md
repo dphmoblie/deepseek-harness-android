@@ -202,50 +202,55 @@ APK packages `libdsh_proot.so` and `libdsh_proot_loader.so` obtained from the
 Operit2 Android runtime toolchain at commit
 `dc4c3a9405dc7ed3ef69b2ac9a6ace65374d77cf`, under
 `tools/android-runtime/`. The runner is used through app-private links to the
-APK native libraries. The loader is copied as a real file into the runtime root
-(`<currentRoot>/root/.dsh-mobile/dsh-runner/loader`) and `PROOT_LOADER` points
-there: PRoot rewrites the confined tracee's `execve` into an `execve` of
-`PROOT_LOADER`, and Landlock judges the final object of that path, so a loader
-kept outside the authorized root — or reached through a symlink — is denied
-with `landlock-run: exec failed: Permission denied` (exit 125) while `--probe`,
-which executes nothing, still passes. The app probes the runner and guest
-before use, retries with the no-seccomp profile when required, and enables only
-validated bind mounts that the device accepts. Runtime execution therefore
-still originates from the trusted loader shipped inside the APK: the copy in the
-runtime root is byte-compared against the packaged file and rewritten from it
-whenever it differs, and the PRoot binary itself is never copied into guest
-storage. A byte-identical copy is not sufficient, though: the root copy must also
-carry the owner execute bit, or PRoot's `execve` of the loader fails inside the
-DAC check with `EACCES` — no SELinux denial is logged in that case, and a device
-build of 0.2.4 reproduced exactly this ("`PRoot 无法加载 Ubuntu 程序。`" on the
-device, six times, because the readiness check only compared content and the
-writer ignored the result of `File.setExecutable`). Placement therefore verifies
-each copy with `RuntimeLauncherPolicy` (regular file, non-empty, owner execute
-bit, `access(X_OK)`), repairs the mode in place when only the bit is missing,
-drops the `security.android.exec` stamp when execute permission is present yet
-the kernel still refuses, and otherwise falls back to an app-private loader copy
-that is known to be executable. The fallback keeps unconfined startup working
-only; confined (`workspace-write`) execution still requires the copy inside the
-authorized root. Every launch records `RUNTIME_PHASE|phase=launcher` so a
-degraded fallback is visible in an exported diagnostic log.
+APK native libraries. PRoot rewrites a confined tracee's `execve` into an
+`execve` of `PROOT_LOADER`, so the loader's placement is what decides whether a
+guest program can start at all — and placement is not portable across ROMs, so
+the app now **probes the real thing**: it tries the loader forms in order —
+a real file inside the runtime root (`root/.dsh-mobile/dsh-runner/loader`,
+the form Landlock needs because it authorizes the runtime root), a symlink in
+the same place pointing at the packaged loader in `nativeLibraryDir` (whose
+target is an `apk_data_file`, executable by system policy), and finally an
+app-private copy — and keeps the first form whose `exec` actually started
+(`exec probe: name=loader,path=…,result=started,exit=N`, recorded on every
+launch). The winning form is remembered in the app's preferences so later
+launches do not rewrite the file back and forth, and a `RUNTIME_PHASE|phase=launcher`
+line is written for every launch. Byte-identity and permission bits are *not*
+sufficient evidence: a device build of 0.2.4 demonstrated a root copy that was
+byte-identical, `mode=0700`, `access(X_OK)`-positive, SELinux-`granted` and on a
+mount without `noexec`, and still could not be executed by the app
+("`PRoot 无法加载 Ubuntu 程序。`"). The app can neither create the
+`security.android.exec` attribute it would need (`Os.setxattr` fails silently,
+observed as `stamped=false`) nor rely on `File.setExecutable`, which ignores its
+return value here. Content is still verified: a root copy is byte-compared
+against the packaged file and rewritten from it whenever it differs, and the
+PRoot binary itself is never copied into guest storage. The app-private form
+keeps unconfined startup working only; confined (`workspace-write`) execution
+still requires a loader reachable inside the authorized root. Every launch
+records `RUNTIME_PHASE|phase=launcher` so the chosen form is visible in an
+exported diagnostic log.
 
 The same failure class reaches further into the guest. SELinux on some ROMs
 (for example Honor builds) forbids the app from creating symlinks and hardlinks
 inside app data, so the rootfs extractor degrades those archive entries by
 copying the link target's contents. Those copies used to set the execute bit
-with `File.setExecutable`, which fails silently on exactly those ROMs: the
-extracted `/lib/ld-linux-aarch64.so.1` chain then ends in a dynamic loader copy
-without the owner execute bit, and every dynamically linked guest program dies
-in `execve` with `EACCES` (`proot error: execve("/usr/bin/env"): Permission
+with `File.setExecutable`, which fails silently on exactly those ROMs, so a
+degraded `/lib/ld-linux-aarch64.so.1` chain could end in a dynamic loader copy
+without the owner execute bit and every dynamically linked guest program would
+die in `execve` with `EACCES` (`proot error: execve("/usr/bin/env"): Permission
 denied`) while SELinux still logs `granted { execute }` for the program itself,
-because the interpreter check is denied in DAC before any hook runs. Degraded
-copies therefore apply the source file's mode with `Os.chmod`, and every launch
-performs one bounded pass over the runtime root that adds the owner execute bit
-to regular files whose header is ELF or `#!` and that lack it, plus a direct
-`exec` probe of the in-root loader to separate mode problems from system policy.
-Each runtime root is scanned once (a marker file inside the loader directory is
+because the interpreter check is denied in DAC before any hook runs. Device
+evidence later showed this was *not* what blocked the 0.2.4 device build — all
+nine probed paths reported `execAccess=true`, the interpreter copy was `0755`,
+and the failure was unchanged — so it is kept as hardening rather than as the
+root cause: degraded copies apply the source file's mode with `Os.chmod`, and
+every launch performs one bounded pass over the runtime root that adds the owner
+execute bit to regular files whose header is ELF or `#!` and that lack it. Each
+runtime root is scanned once (a marker file inside the loader directory is
 removed when the loader is rewritten) and records
-`RUNTIME_PHASE|phase=exec_repair`; permission details stay in logcat only.
+`RUNTIME_PHASE|phase=exec_repair`; permission details stay in logcat only. The
+direct `exec` probe of the loader path runs on **every** launch, independently
+of the scan marker, so "the scan already ran" can never hide the executable
+evidence again.
 
 PRoot is GPL-2.0-or-later. Operit2 is AGPL-3.0. Release provenance must retain
 the exact upstream revision, the hashes of both shipped ELF files, all local

@@ -72,10 +72,14 @@ class RuntimeStore(context: Context) {
     /**
      * 本次启动实际要交给 `PROOT_LOADER` 的 loader。
      *
-     * 空 = 正常形态（根内实体拷贝）；非空 = 根内拷贝在这台设备上确实执行不了，已回退到私有副本。
+     * 空 = 落在 [launchLoaderFile]（根内实体拷贝，或指回 APK 的符号链接）；
+     * 非空 = 两种根内形态都执行不了，已回退到私有副本 [privateLoaderFile]。
      * 取值只由 [prepareLaunchFiles] 刷新，启动路径一律通过 [launchLoaderPath] 读取。
      */
     @Volatile private var launchLoaderOverride: File? = null
+
+    /** 最近一次 loader 实测执行的结果（[probeExecutable] 的原样输出），只用于日志与诊断。 */
+    @Volatile private var lastLoaderProbe: String? = null
     val resolverFile = File(appContext.filesDir, "runtime-resolv.conf")
     /** Host name map is generated alongside resolver configuration and bind-mounted into guest. */
     val hostsFile = File(appContext.filesDir, "runtime-hosts")
@@ -853,12 +857,13 @@ class RuntimeStore(context: Context) {
     }
 
     /**
-     * `PROOT_LOADER` 的取值：正常是运行时根内的实体拷贝，万一它在这台设备上执行不了，
-     * 则是 [prepareLaunchFiles] 验证过的私有兜底副本。
+     * `PROOT_LOADER` 的取值：正常是运行时根内的 loader —— [RuntimeLauncherPolicy.FORM_ROOT_COPY]
+     * 的实体拷贝，或 [RuntimeLauncherPolicy.FORM_SYMLINK] 指回 `nativeLibraryDir` 的符号链接；
+     * 两种根内形态都执行不了时才是私有兜底副本（[RuntimeLauncherPolicy.FORM_PRIVATE]）。
      *
-     * 这里必须返回「刚刚验证过能不能执行」的那一个：真机回归里，内容正确但缺属主执行位的
-     * 根内 loader 被旧的就绪判定反复复用，表现就是每次启动都
-     * `proot error: execve("/usr/bin/env"): Permission denied`。
+     * 这里必须返回「刚刚实测能执行」的那一个：真机回归里，内容正确、权限位齐全、
+     * `access(X_OK)` 也通过的 loader 被就绪判定反复复用，而系统实际上不允许执行它，
+     * 表现就是每次启动都 `proot error: execve("/usr/bin/env"): Permission denied`。
      */
     fun launchLoaderPath(): String = (launchLoaderOverride ?: launchLoaderFile).absolutePath
 
@@ -1099,45 +1104,109 @@ class RuntimeStore(context: Context) {
     }
 
     /**
-     * 把 loader 以**实体文件**落进运行时根（[launchLoaderFile]），并确认它真的能被执行。
+     * 选定 `PROOT_LOADER` 的落地形态：按候选形态依次落地，**第一个实测能执行的胜出**。
      *
-     * 与 [refreshExecutableLink] 的区别不能合并：Landlock 只授权运行时根、且按最终 inode 判定，
-     * 所以这里既不能放私有目录，也不能建符号链接 —— 指向 `nativeLibraryDir` 的链接实测仍然
-     * 让受限进程的 execve 返回 EACCES（退出码 125，沙箱内命令与 PTY 全失败）。
+     * 判定标准只有「本应用能不能真的 exec 它」这一条。真机证据（HONOR AAP-AN00 / Android 17，
+     * 0.2.4 第二次真机回归）：根内实体拷贝的权限位与系统记录全都正常 ——
+     * `mode=0700`、`access(X_OK)=true`、SELinux `avc: granted { execute }`、挂载也不是 noexec ——
+     * 而 PRoot 仍然报 `proot error: execve("/usr/bin/env"): Permission denied`。
+     * 反证是 proot 本体：它以「私有目录里的符号链接指回 `nativeLibraryDir`」的形态跑得起来，
+     * 说明这台 ROM 拦的是**应用数据目录里的常规文件**，而不是链接的执行目标（`apk_data_file`）。
      *
-     * 内容一致时不动它：正在运行的 PRoot 会把 loader 映射进自己的地址空间，无谓重写只会制造竞态。
-     * 不一致（APK 升级换了 loader，或旧版本留下的是链接/被改写的文件）时先写临时文件再原子改名。
-     *
-     * 落地之后**必须**确认它真的可执行。真机回归（0.2.4 首次真机启动全部失败）的成因就是
-     * 「内容正确但缺属主执行位」的根内 loader 被旧的就绪判定反复复用，PRoot 每次启动都
-     * `execve: Permission denied`，界面只显示「PRoot 无法加载 Ubuntu 程序」。
-     * 因此这里按「观测 → 就地修 → 回退私有副本」三级处理，并保证 [launchLoaderPath] 指向能用的那份。
+     * 所以形态只能实测决定，而且要记住上次胜出的那种：每次都先试失败的形态，
+     * 会在两种形态之间来回改写文件（还会连带清掉执行位巡检的标记）。
      */
     private fun installGuestLoader() {
-        if (!isGuestLoaderUpToDate()) {
-            writeGuestLoaderCopy()
+        val attempts = ArrayList<String>(3)
+        for (form in RuntimeLauncherPolicy.loaderFormOrder(rememberedLoaderForm())) {
+            if (installLoaderForm(form, attempts)) return
         }
-        var observation = observeRunner(launchLoaderFile)
-        if (RuntimeLauncherPolicy.isUsable(observation)) {
-            launchLoaderOverride = null
-            recordLauncherState(DiagnosticLevel.INFO, "ok", RuntimeLauncherPolicy.OK, "loader_in_root", observation)
-            return
+        throw RuntimeFailure(
+            "RUNNER_PREPARE_FAILED",
+            "运行器 loader 在本机无法执行（" + attempts.joinToString("；") + "）",
+        )
+    }
+
+    /**
+     * 落地一种 loader 形态并实测执行；不通过就交给下一个候选。
+     *
+     * 已就位的形态不重写（正在运行的 PRoot 会把 loader 映射进自己的地址空间，无谓重写只会制造竞态）；
+     * 观测到「缺属主执行位」时先就地补位，再实测 —— 「我改过权限了」从来不算可用性证据。
+     */
+    private fun installLoaderForm(form: String, attempts: MutableList<String>): Boolean {
+        val path = if (form == RuntimeLauncherPolicy.FORM_PRIVATE) privateLoaderFile else launchLoaderFile
+        try {
+            when (form) {
+                RuntimeLauncherPolicy.FORM_ROOT_COPY ->
+                    if (!isGuestLoaderUpToDate()) writeGuestLoaderCopy()
+                RuntimeLauncherPolicy.FORM_SYMLINK ->
+                    if (!isExecutableLinkTo(loaderFile, launchLoaderFile)) linkLoaderToApk()
+                else -> if (!isExecutableLinkTo(loaderFile, privateLoaderFile)) {
+                    refreshExecutableLink(loaderFile, privateLoaderFile)
+                }
+            }
+        } catch (error: Throwable) {
+            attempts += form + "（准备失败：" + (error.message ?: error.javaClass.simpleName) + "）"
+            return false
         }
-        // 记下「修之前」的失败原因：日志里要能看出这次为什么需要修，而不只是「修过了」。
-        val failureBeforeRepair = RuntimeLauncherPolicy.failureCode(observation) ?: RuntimeLauncherPolicy.OK
-        observation = repairGuestLoaderIfPossible(observation)
-        if (RuntimeLauncherPolicy.isUsable(observation)) {
-            launchLoaderOverride = null
+        var observation = observeRunner(path)
+        if (RuntimeLauncherPolicy.repairableInPlace(observation)) {
+            observation = repairExecutableMode(path, observation)
+        }
+        val probe = probeExecutable(path)
+        lastLoaderProbe = probe
+        attempts += form + "（" + RuntimeLauncherPolicy.describe(observation) + "," + probe + "）"
+        if (!probe.startsWith(EXEC_PROBE_STARTED)) {
             recordLauncherState(
                 DiagnosticLevel.WARN,
-                "ok",
-                failureBeforeRepair,
-                "loader_root_repaired",
+                "failed",
+                RuntimeLauncherPolicy.codeForProbe(observation, false),
+                form,
                 observation,
+                probe,
             )
-            return
+            return false
         }
-        fallBackToPrivateLoader(observation)
+        launchLoaderOverride = if (form == RuntimeLauncherPolicy.FORM_PRIVATE) privateLoaderFile else null
+        rememberLoaderForm(form)
+        recordLauncherState(
+            DiagnosticLevel.INFO,
+            "ok",
+            RuntimeLauncherPolicy.codeForProbe(observation, true),
+            form,
+            observation,
+            probe,
+        )
+        return true
+    }
+
+    /**
+     * 把 loader 建成「指回 APK 的符号链接」（0.2.3 的原始形态）。
+     *
+     * 这里刻意**不**降级复制：复制出来的常规文件落在应用数据目录，正是本机 exec 被拒的那种形态；
+     * 复制由候选循环里的 [RuntimeLauncherPolicy.FORM_ROOT_COPY] 单独负责。
+     */
+    private fun linkLoaderToApk() {
+        val pending = File(guestLoaderDirectory, ".${launchLoaderFile.name}.link")
+        if (RuntimeFiles.existsNoFollow(pending) && !pending.delete()) {
+            throw RuntimeFailure("RUNNER_PREPARE_FAILED", "无法清理运行时根内的运行器临时链接")
+        }
+        try {
+            Os.symlink(loaderFile.absolutePath, pending.absolutePath)
+            Os.rename(pending.absolutePath, launchLoaderFile.absolutePath)
+        } finally {
+            if (RuntimeFiles.existsNoFollow(pending)) pending.delete()
+        }
+        if (!isExecutableLinkTo(loaderFile, launchLoaderFile)) {
+            throw RuntimeFailure("RUNNER_PREPARE_FAILED", "运行时根内的运行器链接不可用")
+        }
+    }
+
+    /** 上次实测能执行的 loader 形态；没有记录时返回 null（走默认顺序）。 */
+    private fun rememberedLoaderForm(): String? = preferences.getString(KEY_LOADER_FORM, null)
+
+    private fun rememberLoaderForm(form: String) {
+        if (rememberedLoaderForm() != form) preferences.edit().putString(KEY_LOADER_FORM, form).apply()
     }
 
     /** 原子写入根内 loader 的实体拷贝（内容校验只在这里做，可执行性留给 [installGuestLoader]）。 */
@@ -1164,75 +1233,69 @@ class RuntimeStore(context: Context) {
     }
 
     /**
-     * 就地把根内 loader 修成可执行：先补属主执行位，再针对「有执行位仍被拒」尝试去掉执行标记。
+     * 就行地把运行器文件修成可执行：先补属主执行位，再针对「有执行位仍被拒」尝试去掉执行标记。
      *
-     * 修不动只返回最新观测（不抛异常）：根内不可用时还能回退私有副本，属于可接受的降级，
-     * 不该让整个启动失败。真正的可用性判定始终是 `access(X_OK)`，不是「我改过权限了」。
+     * 修不动只返回最新观测（不抛异常）：候选循环会继续试下一种形态，真正的可用性判定始终是
+     * **实测执行**（见 [probeExecutable]），不是 `access(X_OK)`，更不是「我改过权限了」。
      */
-    private fun repairGuestLoaderIfPossible(
+    private fun repairExecutableMode(
+        path: File,
         observation: RuntimeLauncherPolicy.Observation?,
     ): RuntimeLauncherPolicy.Observation? {
         var current = observation
         if (RuntimeLauncherPolicy.repairableInPlace(current)) {
             try {
-                Os.chmod(launchLoaderFile.absolutePath, RuntimeLauncherPolicy.EXECUTABLE_FILE_MODE)
+                Os.chmod(path.absolutePath, RuntimeLauncherPolicy.EXECUTABLE_FILE_MODE)
             } catch (_: Throwable) {
                 // 补权限失败会体现在下面的观测里；日志与失败消息给出的是观测而不是「预期」。
             }
-            current = observeRunner(launchLoaderFile)
+            current = observeRunner(path)
         }
         if (RuntimeLauncherPolicy.shouldDropStamp(current)) {
             try {
-                Os.removexattr(launchLoaderFile.absolutePath, EXEC_XATTR_NAME)
-                current = observeRunner(launchLoaderFile)
+                Os.removexattr(path.absolutePath, EXEC_XATTR_NAME)
+                current = observeRunner(path)
             } catch (_: Throwable) {
-                // 去不掉标记时保持原观测：能否执行最终由 access(X_OK) 决定。
+                // 去不掉标记时保持原观测：能否执行最终由实测决定。
             }
         }
         return current
     }
 
     /**
-     * 根内 loader 怎么都不可执行时的降级：改用私有目录里的那份。
+     * 实测一个文件能不能被本应用执行，返回可进日志的一行结果。
      *
-     * 代价必须说清：受限进程（沙箱内命令与沙箱内 PTY）只认 Landlock 授权树内的 loader，
-     * 回退形态下它们仍会失败；但**未受限启动**保持可用，好过整个运行时起不来。
-     * 私有副本自身也要确认存在且可执行，两条路都不可用才让启动失败（消息里带两边的观测）。
+     * 成败都是证据：`started` 说明权限位之外没有系统级封锁；失败时异常消息里带 errno
+     * （例如 `Cannot run program …: error=13, Permission denied`），正是判定
+     * 「权限位问题 vs 系统策略问题」需要的那一条。0.2.4 第二次真机回归就是靠它定案的。
+     *
+     * 不重定向到外部文件（这台设备的编译类路径里没有 `ProcessBuilder.Redirect`）：
+     * 合并 stderr 后在进程结束后一次性读干，避免子进程写满管道阻塞。
      */
-    private fun fallBackToPrivateLoader(observation: RuntimeLauncherPolicy.Observation?) {
-        val rootDescription = RuntimeLauncherPolicy.describe(observation)
-        try {
-            refreshExecutableLink(loaderFile, privateLoaderFile)
-        } catch (error: Throwable) {
-            throw RuntimeFailure(
-                "RUNNER_PREPARE_FAILED",
-                "运行时根内的运行器文件不可执行（$rootDescription），私有回退副本也不可用",
-                error,
-            )
+    private fun probeExecutable(path: File): String = try {
+        val process = ProcessBuilder(path.absolutePath).redirectErrorStream(true).start()
+        if (process.waitFor(EXEC_PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            val output = try {
+                process.inputStream.readBytes().decodeToString().replace('\n', ' ').trim()
+            } catch (_: Throwable) {
+                ""
+            }
+            EXEC_PROBE_STARTED + ",exit=" + process.exitValue() +
+                if (output.isEmpty()) "" else ",output=" + output.take(EXEC_PROBE_OUTPUT_CHARS)
+        } else {
+            process.destroyForcibly()
+            EXEC_PROBE_STARTED + ",timeout=true"
         }
-        val fallbackObservation = observeRunner(privateLoaderFile)
-        if (!RuntimeLauncherPolicy.isUsablePath(fallbackObservation)) {
-            throw RuntimeFailure(
-                "RUNNER_PREPARE_FAILED",
-                "运行时根内的运行器文件不可执行（$rootDescription），私有回退副本同样不可执行" +
-                    "（${RuntimeLauncherPolicy.describe(fallbackObservation)}）",
-            )
-        }
-        launchLoaderOverride = privateLoaderFile
-        recordLauncherState(
-            DiagnosticLevel.WARN,
-            "ok",
-            RuntimeLauncherPolicy.failureCode(observation) ?: RuntimeLauncherPolicy.OK,
-            "loader_private",
-            observation,
-        )
+    } catch (error: Throwable) {
+        "failed,detail=" + (error.message ?: error.javaClass.simpleName)
     }
 
     /**
-     * 记录 loader 的落地形态。
+     * 记录 loader 的落地形态与实测结果。
      *
-     * 诊断日志只接受受控枚举与白名单字段（`phase`/`result`/`code`/`reason`），权限位这类细节
-     * 进不了日志文件，所以同时写一条 logcat —— 真机排障靠的就是这一行（`adb logcat -s dsh-runtime`）。
+     * 诊断日志只接受受控枚举与白名单字段（`phase`/`result`/`code`/`reason`），权限位与 errno
+     * 这类细节进不了日志文件，所以同时写一条 logcat —— 真机排障靠的就是这一行
+     * （`adb logcat -s dsh-runtime`）。
      */
     private fun recordLauncherState(
         level: DiagnosticLevel,
@@ -1240,10 +1303,12 @@ class RuntimeStore(context: Context) {
         code: String,
         reason: String,
         observation: RuntimeLauncherPolicy.Observation?,
+        probe: String,
     ) {
         android.util.Log.w(
             "dsh-runtime",
-            "loader state: code=$code,reason=$reason,detail=${RuntimeLauncherPolicy.describe(observation)}",
+            "loader state: code=$code,reason=$reason,probe=$probe," +
+                "detail=${RuntimeLauncherPolicy.describe(observation)}",
         )
         diagnostics.record(
             level,
@@ -1258,16 +1323,14 @@ class RuntimeStore(context: Context) {
     }
 
     /**
-     * 访客侧可执行性巡检。
+     * 访客侧可执行性巡检：每次启动把关键路径的落地形态与 loader 实测结果写进 logcat，
+     * 并对已经装好的运行时根做**一次**执行位补齐（标记保护，重装后重扫）。
      *
-     * 真机回归的第二层成因：rootfs 里的符号链接在荣耀等 ROM 上被降级成「复制目标内容」，
-     * 而复制时用的 `File.setExecutable` 会静默失败，于是动态链接器副本一落地就缺执行位 ——
-     * 任何动态链接程序 execve 都拿到 EACCES，PRoot 只能报
-     * `proot error: execve("/usr/bin/env"): Permission denied`，SELinux 那边却还是
-     * `granted { execute }`。这里做三件事，把「权限位问题」与「系统策略问题」分开：
-     * 1）每次启动把关键路径的落地形态写进 logcat（9 次 lstat，成本可忽略）；
-     * 2）对已经装好的运行时根做**一次**执行位补齐（标记保护，重装后重扫）；
-     * 3）实测一次「运行时根里的静态 ELF 能不能被执行」。
+     * 这两件事是为了把三类原因分开（0.2.4 两次真机回归各命中一类）：
+     * 1）权限位：`File.setExecutable` 在部分 ROM 上静默失败，链接降级出的动态链接器副本天然缺 +x；
+     * 2）系统策略：权限位齐全、`access(X_OK)` 通过、SELinux 也 `granted { execute }`，execve 仍 EACCES ——
+     *    本轮真机的 loader 属于这一类（应用数据目录里的常规文件），补权限位永远修不好；
+     * 3）内容：与 APK 内的字节不一致（由 [installGuestLoader] 负责改写形态）。
      */
     private fun auditGuestExecutables() {
         RuntimeGuestExecutables.CRITICAL_PATHS.forEach { relativePath ->
@@ -1277,55 +1340,33 @@ class RuntimeStore(context: Context) {
             )
         }
         val outcome = guestExecutableRepair.runIfNeeded()
-        if (!outcome.ran) return
+        if (outcome.ran) {
+            android.util.Log.w(
+                "dsh-runtime",
+                "exec repair: scanned=" + outcome.scanned + ",repaired=" + outcome.repaired +
+                    ",failed=" + outcome.failed + ",elapsedMs=" + outcome.elapsedMillis +
+                    ",completed=" + outcome.completed,
+            )
+            diagnostics.record(
+                if (outcome.repaired > 0) DiagnosticLevel.WARN else DiagnosticLevel.INFO,
+                DiagnosticEvent.RUNTIME_PHASE,
+                mapOf(
+                    "phase" to "exec_repair",
+                    "result" to if (outcome.completed) "ok" else "failed",
+                    "code" to if (outcome.repaired > 0) "EXEC_BIT_REPAIRED" else "EXEC_BIT_INTACT",
+                    "reason" to if (outcome.completed) "scan_completed" else "scan_stopped",
+                ),
+            )
+        } else {
+            android.util.Log.w("dsh-runtime", "exec repair: skipped,reason=marker")
+        }
+        // 每次启动都写这条：它是「应用数据目录里的文件到底能不能执行」的唯一直接证据，
+        // 不能因为执行位巡检跑过就省掉（0.2.4 第二次真机回归正是被那个提前返回挡住的）。
         android.util.Log.w(
             "dsh-runtime",
-            "exec repair: scanned=" + outcome.scanned + ",repaired=" + outcome.repaired +
-                ",failed=" + outcome.failed + ",elapsedMs=" + outcome.elapsedMillis +
-                ",completed=" + outcome.completed,
+            "exec probe: name=loader,path=" + launchLoaderPath() +
+                ",result=" + (lastLoaderProbe ?: EXEC_PROBE_SKIPPED),
         )
-        probeGuestExecutable()
-        diagnostics.record(
-            if (outcome.repaired > 0) DiagnosticLevel.WARN else DiagnosticLevel.INFO,
-            DiagnosticEvent.RUNTIME_PHASE,
-            mapOf(
-                "phase" to "exec_repair",
-                "result" to if (outcome.completed) "ok" else "failed",
-                "code" to if (outcome.repaired > 0) "EXEC_BIT_REPAIRED" else "EXEC_BIT_INTACT",
-                "reason" to if (outcome.completed) "scan_completed" else "scan_stopped",
-            ),
-        )
-    }
-
-    /**
-     * 实测运行时根里的 loader（静态 ELF、无 PT_INTERP）能否被本应用执行。
-     *
-     * 成败都是证据：起得来说明「应用数据目录里可以 exec」，权限位之外没有系统级封锁；
-     * 起不来时异常的 message 里带 errno（例如 `Cannot run program …: error=13, Permission denied`），
-     * 正是判定「权限位 vs 系统策略」需要的那一条。
-     */
-    private fun probeGuestExecutable() {
-        val candidate = File(launchLoaderPath())
-        val result = try {
-            // 只求「起没起来」：不重定向（这台设备的编译类路径里没有 ProcessBuilder.Redirect），
-            // 用 redirectErrorStream 合并输出后在进程结束后一次性读干，避免子进程写满管道阻塞。
-            val process = ProcessBuilder(candidate.absolutePath).redirectErrorStream(true).start()
-            if (process.waitFor(EXEC_PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                val output = try {
-                    process.inputStream.readBytes().decodeToString().replace('\n', ' ').trim()
-                } catch (_: Throwable) {
-                    ""
-                }
-                "started,exit=" + process.exitValue() +
-                    if (output.isEmpty()) "" else ",output=" + output.take(EXEC_PROBE_OUTPUT_CHARS)
-            } else {
-                process.destroyForcibly()
-                "started,timeout=true"
-            }
-        } catch (error: Throwable) {
-            "failed,detail=" + (error.message ?: error.javaClass.simpleName)
-        }
-        android.util.Log.w("dsh-runtime", "exec probe: path=" + candidate.name + ",result=" + result)
     }
 
     /**
@@ -1410,8 +1451,9 @@ class RuntimeStore(context: Context) {
      *
      * 两步都**不**因失败而中断：真机上该属性是否必需、语义是放行还是禁止都还没有定论
      * （应用读不回来，壳 uid 连 `setfattr` 都是 EPERM），所以它们只是尽力而为的一步；
-     * 最终判据是 `access(X_OK)`，若「有执行位却仍被拒」，[repairGuestLoaderIfPossible]
-     * 会试着去掉这个标记。失败原因写进 logcat，方便下次真机复现时一次定位。
+     * 最终判据是**真实执行探测**（`probeExecutable`），若「有执行位却仍被拒」，
+     * [repairExecutableMode] 会试着去掉这个标记，仍不行就换下一种 loader 落地形态。
+     * 失败原因写进 logcat，方便下次真机复现时一次定位。
      */
     private fun applyExecutableMode(path: File) {
         try {
@@ -1453,6 +1495,11 @@ class RuntimeStore(context: Context) {
         private const val EXEC_REPAIR_MARKER_NAME = ".exec-repair.done"
         private const val EXEC_PROBE_TIMEOUT_SECONDS = 3L
         private const val EXEC_PROBE_OUTPUT_CHARS = 160
+        // 实测结果的两种可辨识前缀：起得来 / 根本没轮到（巡检提前返回）。
+        private const val EXEC_PROBE_STARTED = "started"
+        private const val EXEC_PROBE_SKIPPED = "skipped"
+        // 上次实测能执行的 loader 形态（loader_root_copy / loader_symlink / loader_private）。
+        private const val KEY_LOADER_FORM = "runtime_loader_form"
         private const val BUNDLED_MANIFEST_ASSET = "runtime/runtime-manifest.json"
         private const val BUNDLED_ROOTFS_ASSET = "runtime/rootfs.bundle"
         private const val PROVIDER_PATCH_FILENAME = "launcher-providers.patch.json"

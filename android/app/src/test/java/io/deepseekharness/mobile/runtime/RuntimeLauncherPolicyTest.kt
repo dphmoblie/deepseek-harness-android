@@ -122,4 +122,49 @@ class RuntimeLauncherPolicyTest {
         assertFalse(RuntimeLauncherPolicy.hasOwnerExecute(0x100))
         assertFalse(RuntimeLauncherPolicy.hasOwnerExecute(0))
     }
+
+    @Test
+    fun prefersRememberedLoaderFormOverTheDefaultOrder() {
+        assertEquals(
+            listOf(
+                RuntimeLauncherPolicy.FORM_ROOT_COPY,
+                RuntimeLauncherPolicy.FORM_SYMLINK,
+                RuntimeLauncherPolicy.FORM_PRIVATE,
+            ),
+            RuntimeLauncherPolicy.loaderFormOrder(null),
+        )
+        assertEquals(
+            listOf(
+                RuntimeLauncherPolicy.FORM_SYMLINK,
+                RuntimeLauncherPolicy.FORM_ROOT_COPY,
+                RuntimeLauncherPolicy.FORM_PRIVATE,
+            ),
+            RuntimeLauncherPolicy.loaderFormOrder(RuntimeLauncherPolicy.FORM_SYMLINK),
+        )
+        // 记住的取值来自 SharedPreferences：可能是旧版本写的、也可能被人改过，必须退回默认顺序。
+        assertEquals(RuntimeLauncherPolicy.FORM_ORDER, RuntimeLauncherPolicy.loaderFormOrder("loader_unknown"))
+    }
+
+    @Test
+    fun reportsProbeResultBeforePermissionDetails() {
+        // 起得来就是 RUNNER_OK，哪怕权限位看起来「不齐」——真机上 0700 的 loader 反而更能执行。
+        assertEquals(RuntimeLauncherPolicy.OK, RuntimeLauncherPolicy.codeForProbe(observation(), true))
+        assertEquals(
+            RuntimeLauncherPolicy.OK,
+            RuntimeLauncherPolicy.codeForProbe(observation(mode = 0x80, execAccess = false), true),
+        )
+        // 起不来时回落成失败原因；权限位齐全却仍起不来，正是「系统策略不让执行」那一类。
+        assertEquals(
+            RuntimeLauncherPolicy.NOT_EXECUTABLE,
+            RuntimeLauncherPolicy.codeForProbe(observation(mode = 0x180, execAccess = false), false),
+        )
+        assertEquals(RuntimeLauncherPolicy.EXEC_DENIED, RuntimeLauncherPolicy.codeForProbe(observation(), false))
+        // 观测不到文件时，缺文件本身就是最有用的原因，不该笼统报「被拒」。
+        assertEquals(RuntimeLauncherPolicy.MISSING, RuntimeLauncherPolicy.codeForProbe(null, false))
+        // 盖了章仍被拒也只报「被拒」；stamped 的细节在 detail 里，判定码不额外分叉。
+        assertEquals(
+            RuntimeLauncherPolicy.EXEC_DENIED,
+            RuntimeLauncherPolicy.codeForProbe(observation(execAccess = false, stamped = true), false),
+        )
+    }
 }
