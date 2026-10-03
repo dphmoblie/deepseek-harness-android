@@ -55,6 +55,12 @@ function pathsOf(rootArgument) {
     shellBinary: path.join(root, 'bin/bash'),
     /** dsh 的安装锚点：node-pty 按它解析，等价于运行时自己加载模块的方式。 */
     dshAnchor: path.join(root, 'opt/dsh/node_modules/@deepseek-ai/dsh/package.json'),
+    /**
+     * 移动端沙箱运行器：由 App 随每次启动写进这个位置（Kotlin 侧 RuntimeSandboxRunner）。
+     * 沙箱内执行与沙箱内 PTY 都应当经它——它把档参数翻译成 landlock-run 的授权参数，
+     * 并补上 PRoot loader 真实路径的读 + 执行授权；缺这条授权，内核会拒绝 execve loader。
+     */
+    sandboxRunner: path.join(root, 'root/.dsh-mobile/sandbox-runner.sh'),
   }
 }
 
@@ -370,11 +376,47 @@ function checkProbe(launcher) {
 function launcherFailureCode(result) {
   const stderr = typeof result.stderr === 'string' ? result.stderr : ''
   const stdout = typeof result.stdout === 'string' ? result.stdout : ''
-  return (stderr + stdout).includes('Permission denied') ? 'EXEC_LAUNCHER_DENIED' : 'EXEC_LAUNCHER_FAILED'
+  const output = stderr + stdout
+  // 运行器自己的失败（档参数不认识、授权路径打不开）优先归因：它的报错里可能同时含
+  // 「Permission denied」，只按关键词判定会把它误判成「内核拒绝了 exec」。
+  if (output.includes(SANDBOX_RUNNER_SIGNATURE)) return 'EXEC_LAUNCHER_FAILED'
+  return output.includes('Permission denied') ? 'EXEC_LAUNCHER_DENIED' : 'EXEC_LAUNCHER_FAILED'
+}
+
+/** 运行器自身的失败签名：与 Kotlin 侧 RuntimeSandboxRunner.FAILURE_SIGNATURE 逐字一致。 */
+const SANDBOX_RUNNER_SIGNATURE = 'dsh-sandbox-runner: '
+
+/**
+ * 沙箱档参数：**bwrap 参数名**（由运行器翻译成 landlock-run 的授权参数），
+ * 形状与上游 workspace-write 档一致：只读整根、共享 `/dev` 与 `/proc`、有临时目录、工作区可写。
+ * 省掉 PID/挂载隔离是有意的：上游的 landlock 档本来就没有它们，Android 应用也没有那个权限。
+ */
+function sandboxProfileArgs(paths) {
+  return [
+    '--ro-bind', '/', '/',
+    '--dev', '/dev',
+    '--proc', '/proc',
+    '--tmpfs', '/tmp',
+    '--bind', paths.home, paths.home,
+  ]
 }
 
 /**
- * 真实 confine exec：`--ro / --rw <家目录> -- /bin/true`。
+ * 沙箱内命令的完整 argv。
+ *
+ * 优先走**运行器**：那才是 Harness 实际使用的形态（`sandbox-local` 的 `runnerCommand`），
+ * 只测启动器会漏掉「档参数翻译」这一层。运行器不存在（旧运行时）时退回直接调用启动器，
+ * 至少仍能报出启动器级失败，不会假装这一项通过。
+ */
+function sandboxArgv(paths, launcher, command) {
+  if (isFile(paths.sandboxRunner)) {
+    return [paths.shellBinary, paths.sandboxRunner, ...sandboxProfileArgs(paths), '--', ...command]
+  }
+  return [launcher, '--ro', paths.root, '--rw', paths.home, '--', ...command]
+}
+
+/**
+ * 真实 confine exec：跑 `/bin/true`，argv 由 [sandboxArgv] 给出（优先经运行器）。
  * 启动器级失败一律退出码 125；**没有退出码**（进程没起来、被信号杀死或超时）同属启动器级失败，
  * 其余非零码表示启动器起来了但命令失败 —— 两者混在一起就无法区分「沙箱层」与「命令层」。
  *
@@ -382,7 +424,8 @@ function launcherFailureCode(result) {
  */
 function checkExec(launcher, paths) {
   if (launcher === null || !isExecutable(launcher)) return entry('sandbox_exec', 'skipped', 'LAUNCHER_MISSING')
-  const result = spawnSync(launcher, ['--ro', paths.root, '--rw', paths.home, '--', '/bin/true'], {
+  const argv = sandboxArgv(paths, launcher, ['/bin/true'])
+  const result = spawnSync(argv[0], argv.slice(1), {
     encoding: 'utf8',
     timeout: EXEC_TIMEOUT_MS,
     maxBuffer: SPAWN_MAX_BUFFER,
@@ -450,7 +493,7 @@ function ptySmoke(pty, command) {
 
 /**
  * PTY 检查项：`sandboxed=false` 是裸 PTY（只测 node-pty 与 /dev/ptmx），
- * `sandboxed=true` 是把同一条命令放进 `landlock-run` 的授权根里再跑一遍。
+ * `sandboxed=true` 是把同一条命令经**沙箱运行器**放进 `landlock-run` 的授权根里再跑一遍。
  *
  * 启动器不可用（缺失或没有执行位）时沙箱内那组直接跳过：拿一个不可用的启动器去做冒烟，
  * 只会得到一条误导性的「PTY 秒退」—— 真正的判据在 sandbox_launcher 那一行。
@@ -462,7 +505,7 @@ async function checkPty(module, sandboxed, launcher, paths) {
   }
   if (sandboxed && (launcher === null || !isExecutable(launcher))) return entry(id, 'skipped', 'LAUNCHER_MISSING')
   const command = sandboxed
-    ? [launcher, '--ro', paths.root, '--rw', paths.home, '--', paths.shellBinary, '-lc', 'echo ' + MARKER]
+    ? sandboxArgv(paths, launcher, [paths.shellBinary, '-lc', 'echo ' + MARKER])
     : [paths.shellBinary, '-lc', 'echo ' + MARKER]
   const outcome = await ptySmoke(module.pty, command)
   return entry(id, outcome.status, outcome.code)

@@ -228,6 +228,12 @@ object RuntimeCommand {
      * 提到 `internal` 是因为**用户目录白名单必须用同一个判定**：那里如果放行一个
      * 这里会拒绝的路径（例如含空格或中文的目录名），失败会以「PRoot 起不来」的形式出现，
      * 而不是在选择的当下被拒绝。判定只有一份，两处才不会漂移。
+     *
+     * 放行 `~` 与 `=` 是**必需的**，不是放宽：Android 把应用装进
+     * `/data/app/~~<随机串>==/<包名>-<签名串>==/`，`nativeLibraryDir` 因此带这两个字符，
+     * 而它现在是移动端沙箱运行器的绑定来源（见 [RuntimeSandboxRunner]）。
+     * 这两个字符在这里是惰性的：路径作为 argv 元素由 `ProcessBuilder` 直接交给 PRoot，
+     * 不经过 shell（没有波浪号展开），`=` 也不参与 `-b <源>[:<目标>]` 的分隔（分隔符是 `:`）。
      */
     internal fun isSafeAbsolutePath(value: String): Boolean {
         if (value.length !in 2..MAX_ABSOLUTE_PATH_LENGTH || !SAFE_ABSOLUTE_PATH.matches(value)) return false
@@ -236,6 +242,6 @@ object RuntimeCommand {
         }
     }
 
-    private val SAFE_ABSOLUTE_PATH = Regex("^/[A-Za-z0-9._/-]+$")
+    private val SAFE_ABSOLUTE_PATH = Regex("^/[A-Za-z0-9._~=/-]+$")
     private const val MAX_ABSOLUTE_PATH_LENGTH = 4096
 }

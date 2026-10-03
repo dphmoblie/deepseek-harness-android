@@ -50,6 +50,9 @@ class RuntimeSelfCheck(context: Context, private val store: RuntimeStore) {
             throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "请先安装 Ubuntu 运行时")
         }
         prepareScript()
+        // 沙箱组（`sandbox_exec` / `pty_sandbox`）执行时走的是沙箱运行器，脚本必须在场，
+        // 否则自检测的就是另一条路径 —— 用户会在「运行时明明能跑」的时候看到假的失败。
+        RuntimeSandboxRunner.prepare(appContext, store)
         return try {
             val payload = execute(selected)
             if (selected == RuntimeSelfCheckPolicy.CHECK) checkPayload(payload) else repairPayload(payload)

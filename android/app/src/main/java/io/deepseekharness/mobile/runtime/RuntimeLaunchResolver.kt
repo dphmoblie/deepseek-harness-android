@@ -154,6 +154,9 @@ class RuntimeLaunchResolver(
             throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
         }
         store.prepareLaunchFiles()
+        // 沙箱运行器脚本随每次启动刷新：脚本必须与当前 APK 的 Kotlin 侧常量同版本
+        // （访客路径、绑定点、失败签名都在两边各写了一份）。
+        RuntimeSandboxRunner.prepare(appContext, store)
         // `/sdcard` 整体绑定的旧开关已被目录白名单取代：主动删掉这个键，而不是留着不读。
         // 留一个没人读的键比删掉更糟——后来者会以为还存在「一键把共享存储整体绑进访客」的开关。
         // 旧的 profile_key 缓存也会因为键串内容变化而失配，从而自动重跑一次兼容性探测。
@@ -176,6 +179,15 @@ class RuntimeLaunchResolver(
             }
         }
         val mounts = required.toMutableList()
+        // 移动端沙箱运行器的绑定：把 APK 的 `nativeLibraryDir`（**`PROOT_LOADER` 的真实路径**）
+        // 暴露到访客固定路径。访客里不会物化这个目录（PRoot 的绑定是虚拟的），所以它不像上面
+        // 那些必需绑定那样能检查访客目标是否存在，只能检查宿主来源。
+        // 它**不属于任何可选绑定类**：缺了它，受限执行会以 125 失败（见 RuntimeSandboxRunner），
+        // 因此不能被按类回退撤掉 —— prootProfileFallbacks 只撤可选组。
+        if (!RuntimeFiles.isDirectoryNoFollow(store.nativeLibraryDirectory)) {
+            throw RuntimeFailure("RUNNER_ARGUMENT_INVALID", "运行时运行器目录不可用")
+        }
+        mounts += RuntimeSandboxRunner.bindMount(store)
         // 可选绑定（投递区 + 用户目录白名单）：**只在宿主侧确实可访问时才追加**。
         // 不可访问（无「所有文件访问」、目录不可写、ROM 限制）时一个都不加：
         // 绑定一个不存在的宿主路径会让 PRoot 直接起不来，那比「这个能力不可用」严重得多。
@@ -269,6 +281,10 @@ class RuntimeLaunchResolver(
      * - 用户目录白名单：**内容**（条数与路径摘要）一变就必须失效 —— 与投递区同一机制，
      *   只是白名单还要看「用户选了什么」，不能只看可用性。
      * **键串必须逐字不变**：它存在应用私有偏好里，改了就等于让所有设备重跑一次兼容性探测。
+     *
+     * [PROFILE_KEY_SANDBOX_BIND] 是这条规矩的**唯一有意例外**：加入沙箱运行器绑定那一次，
+     * 缓存过的档里没有这个绑定，不换键串就会一直复用旧档、沙箱永远拿不到授权。
+     * 以后再加绑定，同样必须动这个键串（VERSION_CODE 也会变，但那要靠发版，不能指望）。
      */
     private fun profileKey(manifest: RuntimeManifest): String = (
         listOf(
@@ -278,6 +294,7 @@ class RuntimeLaunchResolver(
             manifest.runtimeId,
             manifest.version,
             manifest.rootfs.sha256,
+            PROFILE_KEY_SANDBOX_BIND,
         ) + optionalBinds.map { it.cacheToken() }
         ).joinToString(":")
 
@@ -348,6 +365,12 @@ class RuntimeLaunchResolver(
          * 一旦设备上都跑过至少一次新版，这个常量就可以连同删除语句一起去掉。
          */
         const val LEGACY_KEY_PROFILE_INCLUDE_SDCARD = "include_sdcard"
+
+        /**
+         * 沙箱运行器绑定引入时的缓存键 token：见 [profileKey] 的说明。
+         * 取值只需要「与上一个版本不同」，不需要表达语义。
+         */
+        const val PROFILE_KEY_SANDBOX_BIND = "sandbox-bind-v1"
 
         private fun redactDiagnosticOutput(value: String): String = value
             .replace(Regex("(?i)(api[_-]?key|token|password|secret)=?\\s*[^\\s]+"), "$1=<redacted>")
