@@ -80,7 +80,7 @@
   --toast-info: #94b8ff;
   --scrim: rgb(9 13 18 / 58%);
   /* 阴影与焦点环：深色下要更重才看得出层次，所以它们也是随主题变化的令牌 */
-  --shadow: 0 10px 34px rgb(27 39 55 / 8%);
+  --shadow: 0 4px 20px rgb(27 39 55 / 5%);
   --shadow-card: 0 1px 2px rgb(23 32 43 / 4%);
   --shadow-segment: 0 1px 4px rgb(21 32 45 / 13%);
   --shadow-knob: 0 1px 3px rgb(0 0 0 / 20%);
@@ -89,8 +89,8 @@
   --ring: 3px solid rgb(65 118 230 / 28%);
   /* 尺度令牌与主题无关（圆角、字重不含颜色），所以只在 :root 定义一次，
      不在深色块里成对重复——重复只会制造两处需要同步维护的假约束。 */
-  --radius-control: 10px;
-  --radius-card: 12px;
+  --radius-control: 12px;
+  --radius-card: 16px;
   --radius-chip: 999px;
   --radius-inner: 8px;
   --weight-bold: 700;
@@ -168,7 +168,7 @@
   --toast-error: #ffa8a8;
   --toast-info: #9dbcff;
   --scrim: rgb(0 0 0 / 68%);
-  --shadow: 0 10px 34px rgb(0 0 0 / 45%);
+  --shadow: 0 4px 20px rgb(0 0 0 / 25%);
   --shadow-card: 0 1px 2px rgb(0 0 0 / 40%);
   --shadow-segment: 0 1px 4px rgb(0 0 0 / 45%);
   --shadow-knob: 0 1px 3px rgb(0 0 0 / 55%);
@@ -295,7 +295,9 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
   letter-spacing: 0;
 }
@@ -443,8 +445,8 @@ button:disabled {
 }
 
 .header-settings {
-  width: 38px;
-  height: 38px;
+  width: 44px;
+  height: 44px;
   border-color: transparent;
   background: var(--surface-muted);
 }
@@ -556,6 +558,21 @@ button:disabled {
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+/* Keep labels available to screen readers without leaving a second visible
+   label above compact controls. */
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
 }
 
 .screen {
@@ -672,7 +689,7 @@ button:disabled {
 .conversation-gate {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   max-width: 760px;
 }
 
@@ -1224,7 +1241,17 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface);
-  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 5%, transparent);
+  box-shadow: var(--shadow-card);
+}
+
+.settings-directory {
+  display: grid;
+  gap: 14px;
+  align-items: start;
+}
+
+.settings-directory .management-list {
+  margin-bottom: 0;
 }
 
 /*
@@ -1270,8 +1297,8 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 44px;
   border: 0;
   border-radius: 50%;
   color: var(--muted);
@@ -1366,8 +1393,8 @@ button:disabled {
   overflow: hidden;
   color: var(--muted);
   font-size: 0.75rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
 }
 
 .compact-button {
@@ -1659,8 +1686,8 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-inner);
@@ -1750,8 +1777,8 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-inner);
@@ -1892,7 +1919,7 @@ button:disabled {
     flex-direction: column;
     gap: 4px;
     min-width: 0;
-    min-height: 48px;
+    min-height: 54px;
     padding: 5px 2px;
     border: 1px solid transparent;
     border-radius: 12px;
@@ -1900,6 +1927,15 @@ button:disabled {
     color: var(--muted);
     font-size: 0.6875rem;
     cursor: pointer;
+  }
+
+  .bottom-navigation-item span {
+    overflow: hidden;
+    max-width: 100%;
+    font-size: 0.6875rem;
+    line-height: 1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .bottom-navigation-item.is-active { color: var(--blue); background: var(--blue-soft); font-weight: var(--weight-semibold); }
   .bottom-navigation-item:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
@@ -1912,7 +1948,7 @@ button:disabled {
   .mobile-header { min-height: 44px; padding-top: max(3px, env(safe-area-inset-top)); padding-bottom: 3px; }
   .bottom-navigation { padding-top: 2px; }
   .bottom-navigation-item { flex-direction: row; gap: 7px; min-height: 44px; }
-  .screen { padding-top: 16px; padding-bottom: 20px; }
+  .screen { padding-top: 16px; padding-bottom: 28px; }
 }
 
 @media (max-width: 390px) {
@@ -1930,6 +1966,7 @@ button:disabled {
   .screen {
     padding-right: 13px;
     padding-left: 13px;
+    padding-bottom: 32px;
   }
 
   .runtime-overview,
@@ -2059,6 +2096,9 @@ button:disabled {
 .language-card h2 { font-size: 1.4375rem; line-height: 1.4; }
 .language-card p, .language-settings p { color: var(--muted); line-height: 1.6; }
 .language-card label, .language-settings label { display: block; margin: 16px 0 8px; font-size: 0.8125rem; font-weight: var(--weight-semibold); }
+.language-settings .language-copy h2 { margin: 8px 0; font-size: 1.125rem; }
+.language-settings .language-control { grid-column: 1 / -1; }
+.language-settings .language-control label { margin-top: 12px; }
 .language-card select, .language-settings select {
   width: 100%;
   min-height: 46px;
@@ -2072,6 +2112,11 @@ button:disabled {
 .language-card .button { margin-top: 22px; width: 100%; }
 .language-settings { padding: 20px; margin-bottom: 14px; }
 .language-settings h2 { font-size: 1.125rem; margin: 8px 0; }
+.language-settings { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: center; column-gap: 12px; row-gap: 10px; }
+.language-settings > svg { color: var(--blue); }
+.language-settings .language-copy h2 { margin: 0; font-size: 0.9375rem; }
+.language-settings .language-copy p { margin: 3px 0 0; font-size: 0.75rem; }
+.language-settings > [role='alert'] { grid-column: 1 / -1; margin: 0; }
 html[lang="en"] .button { white-space: normal; }
 html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 
@@ -2778,3 +2823,23 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 .session-manager-embedded .session-toolbar { max-width: 680px; }
 .session-manager-embedded .session-list { grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); }
 .session-manager-embedded .session-note { color: var(--card-muted, var(--muted)); }
+
+/* Coarse pointers use real layout boxes, so neighbouring actions never share
+   an overlapping invisible hit area. Keep form text legible in a WebView. */
+@media (pointer: coarse), (max-width: 560px) {
+  .compact-button, .custom-providers .icon-button, .terminal-copy { min-height: 44px; }
+  .custom-providers .icon-button { width: 44px; flex-basis: 44px; }
+  .field input, .field select, .mono-input, .settings-search input, .session-search input { font-size: 1rem !important; }
+  .field input, .field select { min-height: 48px; }
+  .settings-search { min-height: 48px; padding-top: 2px; padding-bottom: 2px; }
+  .settings-search input { min-height: 44px; }
+  .launch-actions > .button { flex: 1 1 auto; }
+  .save-button { width: 100%; min-height: 48px; }
+  .section-title p, .settings-note { line-height: 1.65; }
+}
+
+/* 手机端入口卡片保持单列，避免标题和说明被压成逐字换行；平板和桌面使用双列。 */
+@media (min-width: 720px) {
+  .settings-directory { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .settings-directory .management-list:first-child { grid-row: span 2; }
+}

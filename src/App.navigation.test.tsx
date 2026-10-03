@@ -341,7 +341,7 @@ describe('返回键与视图历史', () => {
     await renderAtMainView()
     const nav = within(screen.getByRole('navigation', { name: '底部导航' }))
     expect(nav.getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['首页', '插件', '设置'])
-    expect(nav.getAllByRole('button').every(button => button.textContent === '')).toBe(true)
+    expect(nav.getAllByRole('button').map(button => button.textContent)).toEqual(['首页', '插件', '设置'])
     for (const [name, hash] of [['插件', '#plugins'], ['设置', '#settings']]) {
       fireEvent.click(nav.getByRole('button', { name: new RegExp(`^${name}$`) }))
       await waitFor(() => expect(window.location.hash).toBe(hash))

@@ -8,4 +8,15 @@
       三处不一致就会在状态栏与页面之间露出一条色带。
     -->
     <color name="app_window_decoration">#111315</color>
+
+    <color name="overlay_panel_background">#0F1317</color>
+    <color name="overlay_panel_foreground">#F4F6F5</color>
+    <color name="overlay_panel_action_pressed">#2B3C35</color>
+    <color name="overlay_secondary_background">#1D2B4A</color>
+    <color name="overlay_secondary_background_disabled">#27352F</color>
+    <color name="overlay_secondary_foreground">#86ABFF</color>
+    <color name="overlay_resize_background">#CC3A4741</color>
+    <color name="overlay_ball_background">#111315</color>
+    <color name="overlay_ball_pressed">#263C33</color>
+    <color name="overlay_ball_stroke">#4D7664</color>
 </resources>

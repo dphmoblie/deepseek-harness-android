@@ -889,6 +889,7 @@ function BottomNavigation({ activeView, onNavigate }: AppSidebarProps) {
         <button key={item.view} type="button" className={`bottom-navigation-item ${item.active ? 'is-active' : ''}`}
           aria-label={t(item.label)} title={t(item.label)} aria-current={item.active ? 'page' : undefined} onClick={() => onNavigate(item.view)}>
           {item.icon}
+          <span>{t(item.label)}</span>
         </button>
       ))}
     </nav>
@@ -1080,7 +1081,7 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onO
           <div><strong>{t("缺少本机运行组件")}</strong><span>{t("请安装支持当前 arm64 设备的新版应用。")}</span></div>
         </div>
       )}
-      <SessionManager embedded onBack={() => undefined} onOpenHarness={onLaunch} />
+      {installed && !transitioning && !updateRequired && <SessionManager embedded disabled={busy !== null} onBack={() => undefined} onOpenHarness={onLaunch} />}
     </div>
   )
 }
@@ -1509,6 +1510,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
         </p>
       )}
 
+      <div className="settings-directory">
       {groups.map(({ group, entries }) => (
         <section className="management-list" key={group.id} aria-label={t(group.label)}>
           {/* 分组标题刻意不用 h1/h2：页头已经有一个「设置」，再加一个同名标题会让
@@ -1539,6 +1541,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
           )))}
         </section>
       ))}
+      </div>
     </div>
   )
 }
@@ -5666,7 +5669,8 @@ export function App() {
           </div>
         </header>
 
-        <main className="app-main">{screen}</main>
+        {/* A new page starts at its heading, not the previous page's scroll offset. */}
+        <main className="app-main" key={activeView}>{screen}</main>
       </div>
       <BottomNavigation activeView={activeView} onNavigate={setActiveView} />
 

@@ -5,6 +5,8 @@
     android:layout_height="match_parent"
     android:contentDescription="@string/overlay_ball_content_description"
     android:focusable="true"
+    android:clickable="true"
+    android:foreground="?attr/selectableItemBackgroundBorderless"
     android:background="@drawable/bg_overlay_ball">
 
     <androidx.appcompat.widget.AppCompatImageView

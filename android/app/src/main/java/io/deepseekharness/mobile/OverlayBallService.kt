@@ -521,9 +521,10 @@ class OverlayBallService : Service() {
         val frame = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
-                setColor(MENU_BACKGROUND_COLOR)
+                setColor(overlayColor(R.color.overlay_panel_background))
                 cornerRadius = dp(18).toFloat()
             }
+            elevation = dp(4).toFloat()
             clipToOutline = true
         }
         val header = LinearLayout(this).apply {
@@ -559,10 +560,13 @@ class OverlayBallService : Service() {
         }
         header.addView(TextView(this).apply {
             text = getString(R.string.overlay_conversation_title)
-            setTextColor(MENU_TEXT_COLOR)
+            setTextColor(overlayColor(R.color.overlay_panel_foreground))
             textSize = 16f
+            gravity = Gravity.CENTER_VERTICAL
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
             setPadding(dp(16), 0, 0, 0)
-        }, LinearLayout.LayoutParams(0, dp(52), 1f))
+        }, LinearLayout.LayoutParams(0, dp(56), 1f))
         header.addView(conversationAction(R.string.overlay_conversation_expand) {
             if (access != null) AppAuthenticationState.authorizeHarnessLaunch(access)
             detachConversation()
@@ -578,8 +582,9 @@ class OverlayBallService : Service() {
         if (access == null || origin == null || cookie == null) {
             body.addView(TextView(this).apply {
                 text = getString(R.string.overlay_conversation_unavailable)
-                setTextColor(MENU_TEXT_COLOR)
+                setTextColor(overlayColor(R.color.overlay_panel_foreground))
                 gravity = Gravity.CENTER
+                setPadding(dp(24), dp(16), dp(24), dp(16))
                 setOnClickListener {
                     detachConversation()
                     openHarness()
@@ -587,6 +592,7 @@ class OverlayBallService : Service() {
             }, FrameLayout.LayoutParams(-1, -1))
         } else {
             val web = WebView(this)
+            web.setBackgroundColor(overlayColor(R.color.harness_page_background))
             web.settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -597,6 +603,7 @@ class OverlayBallService : Service() {
                 javaScriptCanOpenWindowsAutomatically = false
                 setSupportMultipleWindows(false)
                 safeBrowsingEnabled = true
+                textZoom = AppTextScale.percentOf(resources.configuration.fontScale)
             }
             CookieManager.getInstance().apply {
                 setAcceptCookie(true)
@@ -604,8 +611,10 @@ class OverlayBallService : Service() {
             }
             val error = TextView(this).apply {
                 text = getString(R.string.harness_page_failed)
-                setTextColor(MENU_TEXT_COLOR)
+                setTextColor(overlayColor(R.color.overlay_panel_foreground))
                 gravity = Gravity.CENTER
+                setBackgroundColor(overlayColor(R.color.overlay_panel_background))
+                setPadding(dp(24), dp(16), dp(24), dp(16))
                 visibility = View.GONE
             }
             body.addView(web, FrameLayout.LayoutParams(-1, -1))
@@ -710,12 +719,12 @@ class OverlayBallService : Service() {
             isClickable = true
             addView(TextView(this@OverlayBallService).apply {
                 text = RESIZE_GLYPH
-                setTextColor(MENU_TEXT_COLOR)
+                setTextColor(overlayColor(R.color.overlay_panel_foreground))
                 textSize = 14f
                 gravity = Gravity.CENTER
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
-                    setColor(HANDLE_BACKGROUND_COLOR)
+                    setColor(overlayColor(R.color.overlay_resize_background))
                 }
                 val visual = dp(OverlayConversationSizePolicy.HANDLE_VISUAL_SIZE_DP)
                 layoutParams = FrameLayout.LayoutParams(visual, visual, Gravity.CENTER)
@@ -866,15 +875,31 @@ class OverlayBallService : Service() {
         writeStoredSize(params.width, params.height, screen.widthPixels, screen.heightPixels)
     }
 
-    private fun conversationAction(label: Int, action: () -> Unit): TextView = TextView(this).apply {        text = getString(label)
+    private fun conversationAction(label: Int, action: () -> Unit): TextView = TextView(this).apply {
+        text = getString(label)
         contentDescription = text
-        setTextColor(MENU_TEXT_COLOR)
+        setTextColor(overlayColor(R.color.overlay_panel_foreground))
         gravity = Gravity.CENTER
         textSize = 14f
         minWidth = dp(48)
         minHeight = dp(48)
+        isFocusable = true
+        background = overlayPalette().getDrawable(R.drawable.bg_overlay_action)
+        setPadding(dp(8), 0, dp(8), 0)
         setOnClickListener { action() }
     }
+
+    /** The overlay uses the same saved theme as the full-size native container. */
+    private fun overlayPalette(): Context {
+        val dark = AppThemePreference.isDark(AppThemePreference.current(this), AppThemePreference.systemNight(this))
+        val configuration = Configuration(resources.configuration).apply {
+            uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+        }
+        return createConfigurationContext(configuration)
+    }
+
+    private fun overlayColor(resId: Int): Int = overlayPalette().getColor(resId)
 
     /**
      * 小窗的初始尺寸。
@@ -1058,6 +1083,8 @@ class OverlayBallService : Service() {
             // 但按下判定的边界仍是这里，因此不需要额外的 touch delegate。
             contentDescription = getString(labelRes)
             isClickable = true
+            isFocusable = true
+            background = overlayPalette().getDrawable(R.drawable.bg_overlay_secondary_action)
             addView(secondaryGlyph(choice, size, connected), FrameLayout.LayoutParams(size, size, Gravity.CENTER))
             setOnClickListener {
                 // 点完先收起：动作本身可能让球消失（隐藏球）或让应用切到前台，
@@ -1084,7 +1111,7 @@ class OverlayBallService : Service() {
                     SECONDARY_GLYPH_CLOSE
                 }
         }
-        setTextColor(SECONDARY_TEXT_COLOR)
+        setTextColor(overlayColor(R.color.overlay_secondary_foreground))
         textSize = SECONDARY_TEXT_SIZE_SP
         gravity = Gravity.CENTER
         background = GradientDrawable().apply {
@@ -1093,9 +1120,9 @@ class OverlayBallService : Service() {
                 if (OverlayBallSecondaryPolicy.showsDisabledState(accessibilityConnected) &&
                     choice == OverlayBallSecondaryPolicy.Choice.DISABLE_ACCESSIBILITY
                 ) {
-                    SECONDARY_BACKGROUND_DISABLED_COLOR
+                    overlayColor(R.color.overlay_secondary_background_disabled)
                 } else {
-                    SECONDARY_BACKGROUND_COLOR
+                    overlayColor(R.color.overlay_secondary_background)
                 },
             )
         }
@@ -1350,8 +1377,6 @@ class OverlayBallService : Service() {
         private const val BALL_SIZE_DP = 48
         private const val DEFAULT_MARGIN_DP = 12
         private const val MENU_TEXT_SIZE_SP = 15f
-        private const val MENU_BACKGROUND_COLOR = 0xFF1B2220.toInt()
-        private const val MENU_TEXT_COLOR = 0xFFE8F5EF.toInt()
 
         /**
          * 二级球外观。
@@ -1365,9 +1390,6 @@ class OverlayBallService : Service() {
         private const val SECONDARY_GLYPH_CLOSE = "\u2298"       // ⊘ 关闭无障碍（已开启）
         private const val SECONDARY_GLYPH_DISABLED = "\u2013"    // – 无障碍未开启（禁用态）
         private const val SECONDARY_TEXT_SIZE_SP = 18f
-        private const val SECONDARY_TEXT_COLOR = 0xFFE8F5EF.toInt()
-        private const val SECONDARY_BACKGROUND_COLOR = 0xE6323D38.toInt()
-        private const val SECONDARY_BACKGROUND_DISABLED_COLOR = 0x80323D38.toInt()
 
         /**
          * overlay 窗口要避开的顶部 / 底部安全区高度（dp）。
@@ -1388,7 +1410,6 @@ class OverlayBallService : Service() {
 
         /** 缩放手柄的图标：右下角的双斜线是缩放手柄的通用符号。 */
         private const val RESIZE_GLYPH = "\u25E2" // ◢
-        private const val HANDLE_BACKGROUND_COLOR = 0xCC3A4741.toInt()
 
         /** 小窗尺寸存盘用的键；与球的位置共用 `dsh-overlay-ball` 偏好文件。 */
         private const val OVERLAY_PREFERENCES_FILE = "dsh-overlay-ball"
