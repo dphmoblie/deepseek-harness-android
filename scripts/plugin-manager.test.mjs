@@ -477,7 +477,7 @@ test('修复动作：已安装插件里的真实副本与悬空链接重新指�
   stagedPackage(path.join(modules, 'demo-plugin/node_modules'), '@deepseek-ai/dsh-tools', '0.1.4')
 
   const runtimeTools = fs.realpathSync(path.join(root, 'opt/dsh/node_modules/@deepseek-ai/dsh-tools'))
-  assert.deepEqual(manager.repair(), { versions: 1, scanned: 4, linked: 3, unchanged: 1, versionMismatch: 2, failed: 0, refused: 0 })
+  assert.deepEqual(manager.repair(), { versions: 1, scanned: 4, linked: 3, unchanged: 1, versionMismatch: 2, failed: 0, refused: 0, plugins: 1, relinked: 0, missing: 0 })
   for (const relative of ['@deepseek-ai/dsh-tools', 'demo-plugin/node_modules/@deepseek-ai/dsh-tools']) {
     assert.equal(fs.lstatSync(path.join(modules, relative)).isSymbolicLink(), true, relative)
     assert.equal(fs.realpathSync(path.join(modules, relative)), runtimeTools, relative)
@@ -488,7 +488,7 @@ test('修复动作：已安装插件里的真实副本与悬空链接重新指�
   assert.equal(fs.lstatSync(path.join(modules, 'demo-plugin')).isSymbolicLink(), false)
 
   // 幂等：再跑一次不改动任何东西，全部计入 unchanged。
-  assert.deepEqual(manager.repair(), { versions: 1, scanned: 4, linked: 0, unchanged: 4, versionMismatch: 0, failed: 0, refused: 0 })
+  assert.deepEqual(manager.repair(), { versions: 1, scanned: 4, linked: 0, unchanged: 4, versionMismatch: 0, failed: 0, refused: 0, plugins: 1, relinked: 0, missing: 0 })
 })
 
 test('修复动作拒绝越界路径：链接指向处理范围之外时一处都不动', t => {
@@ -513,12 +513,64 @@ test('修复动作拒绝越界路径：链接指向处理范围之外时一处�
   fs.symlinkSync(path.join(outside, 'nested'), path.join(nestedLink, 'demo-plugin'), 'junction')
 
   // 形态一被整体拒绝（不计入处理数），形态二、三的链接一律不进入：没有任何包被处理。
-  assert.deepEqual(manager.repair(), { versions: 2, scanned: 0, linked: 0, unchanged: 0, versionMismatch: 0, failed: 0, refused: 0 })
+  assert.deepEqual(manager.repair(), { versions: 2, scanned: 0, linked: 0, unchanged: 0, versionMismatch: 0, failed: 0, refused: 0, plugins: 1, relinked: 0, missing: 0 })
   for (const relative of ['modules/@deepseek-ai/dsh-tools', 'scope/@deepseek-ai/dsh-tools', 'nested/node_modules/@deepseek-ai/dsh-tools']) {
     const copy = path.join(outside, relative)
     assert.equal(fs.lstatSync(copy).isSymbolicLink(), false, relative)
     assert.equal(JSON.parse(fs.readFileSync(path.join(copy, 'package.json'), 'utf8')).version, '1.0.0', relative)
   }
+})
+
+test('运行时升级把插件链接换掉后，修复动作按保留区的副本接回去，不必重装', t => {
+  const { manager, root, profile } = fixture(t, installer)
+  // 真机形态：插件不在运行时自带目录里，安装时的链接落点就是 profiles/node_modules（兜底位置）。
+  fs.rmSync(path.join(root, 'opt/dsh/node_modules/test-plugin'), { recursive: true, force: true })
+  assert.equal(manager.update('test-plugin').plugins[1].version, '2.0.0')
+  const link = path.join(root, 'root/.dsh/profiles/node_modules/test-plugin')
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true)
+  const kept = fs.realpathSync(link)
+  assert.equal(within(path.join(root, 'root/.dsh-mobile/plugin-manager'), kept), true)
+
+  // 升级：profiles 不在保留名单里 —— 清单与链接随新 rootfs 一起重建，包本体留在保留区。
+  simulateRuntimeUpgrade(root, profile)
+  fs.rmSync(path.join(root, 'root/.dsh/profiles/node_modules'), { recursive: true, force: true })
+  const restarted = createManager(root, installer, JSON.parse)
+  assert.equal(restarted.recover().plugins, 1)
+  // 链接没了，清单里却还登记着它：这正是真机上「已启用 / 未安装」的样子。
+  assert.equal(restarted.list().plugins.find(row => row.id === 'test-plugin').installed, false)
+
+  const repaired = restarted.repair()
+  assert.equal(repaired.plugins, 1)
+  assert.equal(repaired.relinked, 1)
+  assert.equal(repaired.missing, 0)
+  assert.equal(fs.realpathSync(link), kept)
+  const plugin = restarted.list().plugins.find(row => row.id === 'test-plugin')
+  assert.equal(plugin.installed, true)
+  assert.equal(plugin.version, '2.0.0')
+
+  // 幂等：接回去之后再跑一次什么都不动。
+  const again = restarted.repair()
+  assert.equal(again.plugins, 1)
+  assert.equal(again.relinked, 0)
+  assert.equal(fs.realpathSync(link), kept)
+})
+
+test('保留区里已经没有副本时只记 missing，不造悬空链接', t => {
+  const { manager, root, profile } = fixture(t, installer)
+  fs.rmSync(path.join(root, 'opt/dsh/node_modules/test-plugin'), { recursive: true, force: true })
+  manager.update('test-plugin')
+  const versions = path.join(root, 'root/.dsh-mobile/plugin-manager/versions')
+  for (const entry of fs.readdirSync(versions)) fs.rmSync(path.join(versions, entry), { recursive: true, force: true })
+  fs.rmSync(path.join(root, 'root/.dsh/profiles/node_modules'), { recursive: true, force: true })
+  simulateRuntimeUpgrade(root, profile)
+  const restarted = createManager(root, installer, JSON.parse)
+  restarted.recover()
+  const repaired = restarted.repair()
+  assert.equal(repaired.plugins, 1)
+  assert.equal(repaired.relinked, 0)
+  assert.equal(repaired.missing, 1)
+  assert.equal(fs.existsSync(path.join(root, 'root/.dsh/profiles/node_modules/test-plugin')), false)
+  assert.equal(restarted.list().plugins.find(row => row.id === 'test-plugin').installed, false)
 })
 
 test('安装后消重：版本与运行时不一致也改用运行时实例，而不是让整次更新失败', t => {

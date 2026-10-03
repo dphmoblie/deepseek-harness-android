@@ -848,16 +848,18 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
   }
   /**
    * 修复已安装插件：扫描 `versions/<事务目录>/node_modules`，把其中的 `@deepseek-ai/*`
-   * 真实副本与悬空链接对齐到当前运行时实例。
+   * 真实副本与悬空链接对齐到当前运行时实例，并把被运行时升级抹掉的插件自身链接接回 profile
+   * 模块根（见 `relinkPreservedPlugins`）。
    *
    * 用于「不重新下载插件就把已装坏的插件恢复」：运行时升级后插件目录被保留，而里面指向
    * 旧运行时副本的绝对路径（带旧版本号与 peer 哈希）已经不存在，插件加载会直接失败。
    * 幂等、可重复调用，失败只计数（受控错误码由 CLI 层给出，这里不抛未分类异常）。
    */
   function repair() {
-    const summary = { versions: 0, scanned: 0, linked: 0, unchanged: 0, versionMismatch: 0, failed: 0, refused: 0 }
-    let items
-    try { items = fs.readdirSync(path.join(home, 'versions'), { withFileTypes: true }) } catch { return summary }
+    const summary = { versions: 0, scanned: 0, linked: 0, unchanged: 0, versionMismatch: 0, failed: 0, refused: 0, plugins: 0, relinked: 0, missing: 0 }
+    // 版本目录可能整个不存在（从没装过插件）：那不是失败，插件接回的判定照样要走一遍。
+    let items = []
+    try { items = fs.readdirSync(path.join(home, 'versions'), { withFileTypes: true }) } catch { items = [] }
     for (const item of items) {
       if (summary.versions >= REPAIR_MAX_VERSIONS) break
       if (!TRANSACTION_ID.test(item.name)) continue
@@ -876,6 +878,83 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
       summary.versions += 1
       const result = reconcileRuntimePackages(modulesDirectory, directory)
       for (const key of ['scanned', 'linked', 'unchanged', 'versionMismatch', 'failed', 'refused']) summary[key] += result[key]
+    }
+    // 运行时升级会把插件自身在 profile 里的链接一起换掉：包本体在保留区，接回去即可，不必重装。
+    const relink = relinkPreservedPlugins()
+    summary.plugins = relink.plugins
+    summary.relinked = relink.relinked
+    summary.missing = relink.missing
+    summary.failed += relink.failed
+    summary.refused += relink.refused
+    return summary
+  }
+  /**
+   * 把被运行时升级抹掉的**插件自身链接**接回 profile 模块根（幂等自愈）。
+   *
+   * 背景：插件的包本体装在保留区 `~/.dsh-mobile/plugin-manager/versions/<事务>/node_modules/<包名>`
+   * （`home` 由 RuntimePreservePolicy 跨版本保留），而让运行时解析到它的链接落在 `profiles/` 下
+   * （安装时按 `modules` 顺序挑落点，都没有时落到 `profiles/node_modules`）。`profiles` 不在保留
+   * 名单里，升级后随新 rootfs 整体重建：清单被状态快照回填后仍把插件列为「已启用」，包本体也还在
+   * 保留区，可是已经没有模块根指向它 —— `resolvePackage` 返回 null、插件列表显示「未安装」、
+   * Harness 也加载不到这个 bundle。真机回执：0.2.4 运行时升级后 `dshmarket`、`dsh-web`、
+   * `dsh-web-mobile` 三条同时从「可解析」变成「未安装」，重装一次才恢复。
+   *
+   * 边界：只处理**清单里登记过**的名字（版本目录里的传递依赖不碰），跳过受保护包与运行时作用域
+   * （`@deepseek-ai/*` 由 `reconcileRuntimePackages` 负责），只接保留区内的真实目录；已经能解析、
+   * 或目标位被别的有效实体占着时一律不动（`refused`），保留区里找不到副本则记 `missing`
+   * （这种只能重装，不在本动作能力范围内）。整体失败只计数，不抛未分类异常。
+   */
+  function relinkPreservedPlugins() {
+    const summary = { plugins: 0, relinked: 0, missing: 0, failed: 0, refused: 0 }
+    let names
+    try { names = manifest().names } catch { return summary }
+    const candidates = []
+    let items
+    try { items = fs.readdirSync(path.join(home, 'versions'), { withFileTypes: true }) } catch { return summary }
+    for (const item of items) {
+      if (candidates.length >= REPAIR_MAX_VERSIONS) break
+      if (!TRANSACTION_ID.test(item.name)) continue
+      const directory = path.join(home, 'versions', item.name)
+      let stats
+      try { stats = fs.lstatSync(directory) } catch { continue }
+      if (!stats.isDirectory()) continue
+      try { if (!within(home, fs.realpathSync(directory))) continue } catch { continue }
+      candidates.push({ directory, modified: stats.mtimeMs })
+    }
+    // 每次安装/更新都是新的事务目录：可用副本按时间从新到旧找，命中的第一份就是最近一次安装。
+    candidates.sort((left, right) => right.modified - left.modified)
+    for (const name of names) {
+      if (protectedPackage(name) || name.startsWith(RUNTIME_SCOPE)) continue
+      summary.plugins += 1
+      let installed = false
+      try { installed = resolvePackage(name) !== null } catch { installed = false }
+      if (installed) continue
+      let source = null
+      for (const entry of candidates) {
+        const candidate = path.join(entry.directory, 'node_modules', name)
+        try {
+          if (!exists(candidate)) continue
+          const resolved = fs.realpathSync(candidate)
+          if (!within(home, resolved) || !fs.statSync(resolved).isDirectory()) continue
+          source = resolved
+          break
+        } catch { /* 这一份副本不可用：继续看下一份。 */ }
+      }
+      if (source === null) { summary.missing += 1; continue }
+      let target
+      try { target = modules.map(base => path.join(base, name)).find(exists) ?? safe(path.join(fallbackModules, name)) } catch { summary.failed += 1; continue }
+      if (exists(target)) {
+        // 目标位已经有东西却不是有效解析结果：只清掉「本来就是坏的」悬空链接，其余留给人工处理。
+        let usable = true
+        try { fs.realpathSync(target) } catch { usable = false }
+        if (usable || !fs.lstatSync(target).isSymbolicLink()) { summary.refused += 1; continue }
+        try { fs.unlinkSync(target) } catch { summary.failed += 1; continue }
+      }
+      try {
+        fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 })
+        fs.symlinkSync(source, target, 'junction')
+        summary.relinked += 1
+      } catch { summary.failed += 1 }
     }
     return summary
   }
