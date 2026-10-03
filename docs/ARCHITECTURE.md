@@ -266,9 +266,19 @@ uses the provider's documented seam, `runnerCommand`, through the same Cordis
 overlay file that carries provider configuration:
 
 ```json
-{"id":"sandbox-local","config":{"runnerCommand":["/bin/sh","/root/.dsh-mobile/sandbox-runner.sh"],
+{"id":"sandbox","config":{"runnerCommand":["/bin/sh","/root/.dsh-mobile/sandbox-runner.sh"],
  "runnerFailureSignatures":["dsh-sandbox-runner: "]}}
 ```
+
+The entry id is `sandbox`, not the package-derived `sandbox-local`: `dsh-base`'s
+own `cordis.patch.yml` declares `- id: sandbox` with
+`name: '@deepseek-ai/dsh-sandbox-local'`, and an overlay targets an entry **by id
+only**. A non-matching entry is warned about and skipped
+(`dsh-app-boot@0.2.0-rc.2`: `patch: entry %C not found`), so a wrong id fails
+silently — the sandbox keeps denying commands with no hint that the runner was
+never called. The same overlay replaces the entry's whole `config` (upstream
+replaces rather than deep-merges); that entry ships without one, so nothing else
+is lost.
 
 It binds `nativeLibraryDir` to the guest path `/.dsh-native` (a requirement-class
 mount that no compatibility fallback drops) and ships

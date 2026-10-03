@@ -21,7 +21,9 @@ class RuntimeSandboxRunnerTest {
         val entry = RuntimeSandboxRunner.overlayEntry()
         val config = entry.getJSONObject("config")
 
-        assertEquals("sandbox-local", entry.getString("id"))
+        // id 必须是运行时 cordis 配置里真实存在的条目名（dsh-base 里 `- id: sandbox`），
+        // 写错时上游只 warn 一句就跳过，表现为沙箱静默失效。
+        assertEquals("sandbox", entry.getString("id"))
         assertEquals(setOf("runnerCommand", "runnerFailureSignatures"), config.keys().asSequence().toSet())
         assertEquals(
             listOf("/bin/sh", "/root/.dsh-mobile/sandbox-runner.sh"),
@@ -41,7 +43,7 @@ class RuntimeSandboxRunnerTest {
 
         val overlay = RuntimeSandboxRunner.overlay(providers)
         assertEquals(2, overlay.length())
-        assertEquals("sandbox-local", overlay.getJSONObject(0).getString("id"))
+        assertEquals("sandbox", overlay.getJSONObject(0).getString("id"))
         assertEquals("llm-pi-ai", overlay.getJSONObject(1).getString("id"))
     }
 

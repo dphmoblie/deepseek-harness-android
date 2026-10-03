@@ -24,7 +24,7 @@ import org.json.JSONObject
  *  1. 每次启动把 [nativeLibraryDirectory] 绑定到访客固定路径 [GUEST_NATIVE_LIB_PATH]；
  *  2. 把 `assets/support/sandbox-runner.sh` 写进访客 [GUEST_SCRIPT_PATH]（0755），
  *     由它把 bwrap 形态参数翻译成 `landlock-run` 的授权参数并追加 loader 目录授权；
- *  3. 在 Cordis 覆盖里给 `sandbox-local` 设 `runnerCommand` 与失败签名（[overlayEntry]）。
+ *  3. 在 Cordis 覆盖里给 `sandbox` 这个插件条目设 `runnerCommand` 与失败签名（[overlayEntry]）。
  *
  * 覆盖条目与供应商条目同属一个补丁文件（`RuntimeStore.prepareProviderPatch` 写出），
  * 但**与用户是否配置模型供应商无关**：一个供应商都没配时它照样要写。
@@ -44,8 +44,20 @@ internal object RuntimeSandboxRunner {
      */
     const val GUEST_NATIVE_LIB_PATH = "/.dsh-native"
 
-    /** Cordis 插件 id：按短名约定对应 `@deepseek-ai/dsh-sandbox-local`。 */
-    const val PLUGIN_ID = "sandbox-local"
+    /**
+     * Cordis 插件条目 id：**`sandbox`**，不是按包名缩写出来的 `sandbox-local`。
+     *
+     * 真机取证（`@deepseek-ai/dsh-base@0.2.0-rc.2` 的 `cordis.patch.yml`）：
+     * ```
+     * - id: sandbox
+     *   name: '@deepseek-ai/dsh-sandbox-local'
+     * ```
+     * id 与包名不同名，而覆盖条目**只按 id 定位**；对不上的条目上游只 warn 一句就跳过
+     * （`dsh-app-boot@0.2.0-rc.2` 的 `patch: entry %C not found`），于是写错 id 时
+     * 运行器永远不会被调用，而沙箱内执行照旧失败——静默失效，最难受的一种错法。
+     * 以后升级运行时若发现沙箱又坏了，第一件事是核对这个 id 是否仍然存在。
+     */
+    const val PLUGIN_ID = "sandbox"
 
     /**
      * 运行器自身的失败签名（脚本 `fail()` 打印的前缀）。
@@ -65,11 +77,14 @@ internal object RuntimeSandboxRunner {
     fun guestScript(store: RuntimeStore): File = File(guestDirectory(store), SCRIPT_NAME)
 
     /**
-     * `sandbox-local` 的覆盖条目。
+     * `sandbox` 条目的覆盖配置。
      *
      * 只写这两个键：`runnerCommand` 让上游把档参数交给我们的运行器；
      * `runnerFailureSignatures` 让运行器的失败有一条可识别的签名。
      * **不写** `probeTimeoutMs` 之类的默认值：默认值由上游决定，覆盖它等于把上游的改动吃掉。
+     *
+     * 注意上游是「config 整体替换」而不是深合并：这里的 `config` 会把条目的原有 config 整段换掉。
+     * 真机核对过 dsh-base 里这个条目**本来没有 config**，所以整体替换不会吃掉别的东西。
      */
     fun overlayEntry(): JSONObject = JSONObject()
         .put("id", PLUGIN_ID)
