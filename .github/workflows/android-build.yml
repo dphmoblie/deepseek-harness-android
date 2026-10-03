@@ -209,17 +209,29 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p downloads sources
+          # 每个源允许给一组镜像（英文逗号分隔）并逐个尝试：上游站点会短时不可达
+          # （2026-10-03 busybox.net 对 GitHub runner 连续三次连不通，curl 退 56，
+          # 整个构建卡在这一步），而校验用的 sha256 仍是同一份，换镜像换不来信任。
           fetch() {
-            local name="$1" url="$2" archive="$3" sha="$4"
+            local name="$1" url_list="$2" archive="$3" sha="$4"
             echo "downloading $name"
-            curl -fL --retry 3 -o "downloads/$archive" "$url"
+            local ok=0
+            local IFS=','
+            for url in $url_list; do
+              if curl -fL --retry 3 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o "downloads/$archive" "$url"; then
+                ok=1
+                break
+              fi
+              echo "mirror failed: $url" >&2
+            done
+            [ "$ok" -eq 1 ] || { echo "all mirrors failed for $name" >&2; exit 1; }
             echo "$sha  downloads/$archive" | sha256sum -c -
             tar -xf "downloads/$archive" -C sources
           }
-          fetch busybox https://busybox.net/downloads/busybox-1.38.0.tar.bz2 busybox-1.38.0.tar.bz2 34f9ea6ff8636f2c9241153b9114eefa9e65674a45318ae1ef95bb5f31c53bb2
+          fetch busybox 'https://busybox.net/downloads/busybox-1.38.0.tar.bz2,https://sources.buildroot.net/busybox/busybox-1.38.0.tar.bz2' busybox-1.38.0.tar.bz2 34f9ea6ff8636f2c9241153b9114eefa9e65674a45318ae1ef95bb5f31c53bb2
           fetch proot https://github.com/termux/proot/archive/refs/tags/v5.1.107.78.tar.gz termux-proot-v5.1.107.78.tar.gz f3377ba49dcd833370420c34c5081b4c243ecbb85b2a9881a4f4586012599afa
           fetch talloc https://www.samba.org/ftp/talloc/talloc-2.4.3.tar.gz talloc-2.4.3.tar.gz dc46c40b9f46bb34dd97fe41f548b0e8b247b77a918576733c528e83abd854dd
-          fetch bash https://ftp.gnu.org/gnu/bash/bash-5.2.37.tar.gz bash-5.2.37.tar.gz 9599b22ecd1d5787ad7d3b7bf0c59f312b3396d1e281175dd1f8a4014da621ff
+          fetch bash 'https://ftp.gnu.org/gnu/bash/bash-5.2.37.tar.gz,https://mirrors.kernel.org/gnu/bash/bash-5.2.37.tar.gz' bash-5.2.37.tar.gz 9599b22ecd1d5787ad7d3b7bf0c59f312b3396d1e281175dd1f8a4014da621ff
 
       - name: Install NDK r29-beta4
         run: |

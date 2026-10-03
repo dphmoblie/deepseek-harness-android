@@ -50,15 +50,32 @@ class RuntimeStore(context: Context) {
     val runnerFile get() = File(appContext.applicationInfo.nativeLibraryDir, RUNNER_NAME)
     val loaderFile get() = File(appContext.applicationInfo.nativeLibraryDir, LOADER_NAME)
 
+    /**
+     * APK 的 `nativeLibraryDir`：`libdsh_proot*.so` 的宿主真实路径所在目录。
+     *
+     * 移动端沙箱必须把这个目录授权进 Landlock 规则集，否则受限进程 execve `PROOT_LOADER`
+     * 会被内核拒绝（详见 [RuntimeSandboxRunner]）。
+     */
+    val nativeLibraryDirectory get() = File(appContext.applicationInfo.nativeLibraryDir)
+
     /** proot 本体：由应用自身执行，留在私有目录（访客看不到，见 [RuntimeLauncherFiles]）。 */
     private val launchDirectory = RuntimeLauncherFiles.runnerDirectory(appContext.noBackupFilesDir)
     val launchRunnerFile = RuntimeLauncherFiles.runnerFile(appContext.noBackupFilesDir)
 
     /**
-     * loader 的落点：**运行时根之内**的实体拷贝。
+     * loader 的落点：**运行时根之内**（实体拷贝，或指回 [loaderFile] 的符号链接）。
      *
-     * 不能放私有目录、也不能用符号链接：Landlock 只授权运行时根，且按最终 inode 判定，
-     * 落在授权树之外会让受限进程的 execve 直接 EACCES（真机表现为 125 + 「沙箱内命令/PTY 全失败」）。
+     * 三种形态由 [installGuestLoader] 按**实测**挑选，结论来自真机取证（见
+     * `docs/真机缺陷与改进清单.md` 的 P0-3 段）：
+     *  - 根内**实体拷贝**在 Android 17 上根本执行不了：SELinux 拒绝
+     *    `execute_no_trans` 于 `app_data_file` 的**常规文件**，而应用设不上
+     *    `security.android.exec` 属性（`Os.setxattr` 静默失败，实测 `stamped=false`）；
+     *  - 指回 APK `nativeLibraryDir` 的**符号链接**可用——执行的是 `apk_data_file`；
+     *  - 私有目录里的那份（0.2.3 的老位置）同样落在应用数据目录，只能救未受限启动。
+     *
+     * 「Landlock 只授权运行时根、且按最终 inode 判定」这条约束依然成立，它约束的是**沙箱内**
+     * 的运行；沙箱侧的补齐方式是把这个真实路径授权进规则集（见 [RuntimeSandboxRunner]），
+     * 而不是把 loader 搬回根内。
      */
     private val guestLoaderDirectory = RuntimeLauncherFiles.loaderDirectory(currentRoot)
     val launchLoaderFile = RuntimeLauncherFiles.loaderFile(currentRoot)
@@ -623,15 +640,17 @@ class RuntimeStore(context: Context) {
         return customProviderApiKeysLocked(allowedIds).toMap()
     }
 
-    /** Writes a fixed, secret-free Cordis overlay for the configured pi-ai routes. */
+    /**
+     * 写出固定的、无密钥的 Cordis 覆盖：**沙箱运行器条目始终存在**，模型供应商条目按配置可选。
+     *
+     * 沙箱条目与“用户有没有配模型供应商”无关：缺了它，访客里的受限执行会在 execve
+     * `PROOT_LOADER` 时被内核拒绝（真机表现为「沙箱内命令/沙箱内 PTY 全失败」，见
+     * [RuntimeSandboxRunner]）。因此这里不再有“没配供应商就删掉补丁文件”的分支。
+     */
     @Synchronized
-    fun prepareProviderPatch(configuredProviders: Set<ModelProvider>): String? {
+    fun prepareProviderPatch(configuredProviders: Set<ModelProvider>): String {
         val enabled = ModelProvider.entries.filter { it != ModelProvider.DEEPSEEK && configuredProviders.contains(it) }
         val customProviders = customModelProvidersLocked()
-        if (enabled.isEmpty() && customProviders.isEmpty()) {
-            deleteGeneratedFile(providerPatchFile)
-            return null
-        }
         val rootHome = File(currentRoot, "root")
         if (!RuntimeFiles.isDirectoryNoFollow(rootHome)) {
             throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "Ubuntu 主目录无效")
@@ -669,12 +688,14 @@ class RuntimeStore(context: Context) {
                     }),
             )
         }
-        val bytes = JSONArray()
-            .put(
-                JSONObject()
-                    .put("id", "llm-pi-ai")
-                    .put("config", JSONObject().put("providers", providers)),
-            )
+        val providersEntry = if (enabled.isEmpty() && customProviders.isEmpty()) {
+            null
+        } else {
+            JSONObject()
+                .put("id", "llm-pi-ai")
+                .put("config", JSONObject().put("providers", providers))
+        }
+        val bytes = RuntimeSandboxRunner.overlay(providersEntry)
             .toString()
             .toByteArray(Charsets.UTF_8)
         val pending = File(launcherConfigDirectory, ".$PROVIDER_PATCH_FILENAME.new")

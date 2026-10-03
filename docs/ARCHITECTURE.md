@@ -252,6 +252,58 @@ direct `exec` probe of the loader path runs on **every** launch, independently
 of the scan marker, so "the scan already ran" can never hide the executable
 evidence again.
 
+### Mobile sandbox (confined execution)
+
+`workspace-write` cannot use the upstream defaults on this platform. The
+upstream landlock rung authorizes only the guest root (`--ro /` plus `/tmp` and
+the workspace), while PRoot rewrites a confined tracee's `execve` into an
+`execve` of `PROOT_LOADER` — a file in the APK's `nativeLibraryDir`, that is,
+outside every authorized root — so the kernel denies it (exit code 125,
+`landlock-run: exec failed: Permission denied`) and the harness reports the
+user's own command as permission-denied. Upstream offers no way to add a grant:
+`landlock-run` reads argv only (its source has no `getenv`). The app therefore
+uses the provider's documented seam, `runnerCommand`, through the same Cordis
+overlay file that carries provider configuration:
+
+```json
+{"id":"sandbox","config":{"runnerCommand":["/bin/sh","/root/.dsh-mobile/sandbox-runner.sh"],
+ "runnerFailureSignatures":["dsh-sandbox-runner: "]}}
+```
+
+The entry id is `sandbox`, not the package-derived `sandbox-local`: `dsh-base`'s
+own `cordis.patch.yml` declares `- id: sandbox` with
+`name: '@deepseek-ai/dsh-sandbox-local'`, and an overlay targets an entry **by id
+only**. A non-matching entry is warned about and skipped
+(`dsh-app-boot@0.2.0-rc.2`: `patch: entry %C not found`), so a wrong id fails
+silently — the sandbox keeps denying commands with no hint that the runner was
+never called. The same overlay replaces the entry's whole `config` (upstream
+replaces rather than deep-merges); that entry ships without one, so nothing else
+is lost.
+
+It binds `nativeLibraryDir` to the guest path `/.dsh-native` (a requirement-class
+mount that no compatibility fallback drops) and ships
+`assets/support/sandbox-runner.sh`, written to the guest on every launch. The
+wrapper translates the bwrap-shaped profile arguments the provider would
+otherwise pass to bwrap into `landlock-run` grants (`--ro-bind`/`--bind` →
+`--ro`/`--rw`, `--tmpfs` → `--rw` only when the path exists, `--dev`/`--proc`/
+`--unshare-pid`/`--die-with-parent` are ignored because upstream's landlock rung
+has no PID or mount isolation either), appends grants for the loader directory
+and for `/dev`, `/proc`, `/dev/null`, `/dev/ptmx`, `/dev/pts` (host bind mounts
+whose real paths lie outside the guest root), and fails closed with
+`dsh-sandbox-runner: …` at exit 125 on any argument it does not recognize — an
+upstream profile change can never make it silently run a command with the wrong
+grants. The overlay file is rewritten on every launch and written even when no
+model provider is configured, and the cached launch profile key carries a
+constant segment for this binding, because devices that cached a profile before
+the binding existed would otherwise keep reusing it.
+
+What confined execution provides is therefore **Landlock file-effect confinement
+only**: no PID namespace and no mount namespace (Android apps cannot create user
+namespaces). Verified on the device through a shell-uid reproduction tree —
+sandboxed `/bin/true` exits 0, `/dev/ptmx` opens, writes outside the grants are
+denied, and a missing loader grant fails closed with 125. App-uid verification of
+this layer is still pending.
+
 PRoot is GPL-2.0-or-later. Operit2 is AGPL-3.0. Release provenance must retain
 the exact upstream revision, the hashes of both shipped ELF files, all local
 patches, and usable build/source instructions. Distribution must include the
