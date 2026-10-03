@@ -35,6 +35,21 @@ object VirtualScreenPolicy {
         }
         fun x(key: String) = coordinate(integer(key), width).toString()
         fun y(key: String) = coordinate(integer(key), height).toString()
+        fun keyCode(): String {
+            val value = p.getString("key")
+            return mapOf(
+                "BACK" to "4", "ENTER" to "66", "DEL" to "67", "TAB" to "61",
+                "DPAD_UP" to "19", "DPAD_DOWN" to "20", "DPAD_LEFT" to "21", "DPAD_RIGHT" to "22",
+                "DPAD_CENTER" to "23", "SPACE" to "62", "ESC" to "111",
+            )[value] ?: throw IllegalArgumentException("副屏按键不在允许列表")
+        }
+        fun inputText(): String {
+            val value = p.optString("text", "")
+            require(value.isNotEmpty() && value.length <= 512) { "副屏文本长度无效" }
+            require(value.all { it.code in 0x20..0x7e }) { "副屏文本仅支持可打印 ASCII" }
+            // Android input text 用 %s 表示空格；百分号必须先编码，避免被 input 解析器误读。
+            return value.replace("%", "%25").replace(" ", "%s")
+        }
         val arguments = when (p.getString("action")) {
             "tap" -> listOf("tap", x("x"), y("y"))
             "swipe" -> {
@@ -42,6 +57,13 @@ object VirtualScreenPolicy {
                 require(duration in 100..2000) { "滑动时间必须为 100～2000 毫秒" }
                 listOf("swipe", x("x"), y("y"), x("endX"), y("endY"), duration.toString())
             }
+            "long_press" -> {
+                val duration = integer("durationMs")
+                require(duration in 500..3000) { "长按时间必须为 500～3000 毫秒" }
+                listOf("swipe", x("x"), y("y"), x("x"), y("y"), duration.toString())
+            }
+            "keyevent" -> listOf("keyevent", keyCode())
+            "text" -> listOf("text", inputText())
             "back" -> listOf("keyevent", "4")
             else -> error("不支持的副屏操作")
         }

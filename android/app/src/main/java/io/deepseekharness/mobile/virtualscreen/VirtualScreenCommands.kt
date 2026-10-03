@@ -3,7 +3,6 @@ package io.deepseekharness.mobile.virtualscreen
 import io.deepseekharness.mobile.runtime.RuntimeFailure
 import io.deepseekharness.mobile.shizuku.DeviceCommandResult
 import org.json.JSONObject
-import java.util.Base64
 
 /** 复用已鉴权的本机设备桥，只操作用户在原生页面创建的副屏会话。 */
 object VirtualScreenCommands {
@@ -20,7 +19,7 @@ object VirtualScreenCommands {
                 val request = JSONObject(param)
                 VirtualScreenPolicy.session(request.getString("sessionId"))
                 when (command) {
-                    "virtualScreenCapture" -> Base64.getEncoder().encodeToString(service.screenshot(request.getString("sessionId"), fromAi = true))
+                    "virtualScreenCapture" -> service.screenshotEnvelope(request.getString("sessionId")).toString()
                     "virtualScreenAction" -> service.action(request).toString()
                     else -> throw IllegalArgumentException("副屏命令不支持")
                 }

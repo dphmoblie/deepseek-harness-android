@@ -63,6 +63,27 @@ class VirtualScreenPolicyTest {
         assertThrows(IllegalArgumentException::class.java) { VirtualScreenPolicy.inputArguments(JSONObject(swipe.toString()).put("endY", 1600), 4, 726, 1600) }
     }
 
+    @Test fun `副屏动作支持受控长按按键和 ASCII 文本`() {
+        assertEquals(
+            listOf("/system/bin/input", "-d", "4", "swipe", "10", "20", "10", "20", "600"),
+            VirtualScreenPolicy.inputArguments(JSONObject().put("action", "long_press").put("x", 10).put("y", 20).put("durationMs", 600), 4, 726, 1600),
+        )
+        assertEquals(
+            listOf("/system/bin/input", "-d", "4", "keyevent", "66"),
+            VirtualScreenPolicy.inputArguments(JSONObject().put("action", "keyevent").put("key", "ENTER"), 4, 726, 1600),
+        )
+        assertEquals(
+            listOf("/system/bin/input", "-d", "4", "text", "hello%sworld"),
+            VirtualScreenPolicy.inputArguments(JSONObject().put("action", "text").put("text", "hello world"), 4, 726, 1600),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            VirtualScreenPolicy.inputArguments(JSONObject().put("action", "text").put("text", "中文"), 4, 726, 1600)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            VirtualScreenPolicy.inputArguments(JSONObject().put("action", "keyevent").put("key", "POWER"), 4, 726, 1600)
+        }
+    }
+
     @Test fun `会话标识不可用任意显示编号代替`() {
         VirtualScreenPolicy.session("00000000-1111-2222-3333-444444444444")
         listOf("0", "4", "", "00000000-1111-2222-3333-444444444444\n").forEach { id ->

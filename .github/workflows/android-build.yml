@@ -21,9 +21,9 @@ permissions:
 env:
   # 应用版本号：与 android/app/build.gradle 的 versionName 保持一致。
   # CI 据此生成运行时版本与 Release 标签：预发布走 v<版本>-mobile-<run_number>，
-  # 正式版（release_type=stable）直接用 v<版本>。0.2.3 新增目标应用副屏实验功能，
-  # 包含独立预览页、小窗和 AI 状态/截图/动作工具；内置 dsh 仍为 0.2.0-rc.2。
-  APP_VERSION: '0.2.3'
+  # 正式版（release_type=stable）直接用 v<版本>。0.2.4 根据 HONOR Android 17 真机回执
+  # 改进副屏动作协议与截图帧新鲜度信息；内置 dsh 仍为 0.2.0-rc.2。
+  APP_VERSION: '0.2.4'
 
 jobs:
   build:

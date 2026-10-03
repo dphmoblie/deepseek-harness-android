@@ -31,6 +31,7 @@ class VirtualScreenService : Service() {
     private val actionSlot = java.util.concurrent.Semaphore(1)
     private var shizuku: ShizukuRuntime? = null
     @Volatile private var session = ""
+    private var lastAiFrameAt = 0L
     @Volatile private var snapshot = JSONObject().put("active", false)
     private var overlay: View? = null
     private var preview: VirtualScreenPreview? = null
@@ -121,6 +122,21 @@ class VirtualScreenService : Service() {
             if (fromAi) audit.record(AuditEvent.VIRTUAL_SCREEN_READ, AuditResult.FAILED)
             throw e
         } finally { actionSlot.release() }
+    }
+
+    /** 返回截图与帧新鲜度元数据；图像仍只在内存和受控管道中传输。 */
+    fun screenshotEnvelope(id: String): JSONObject {
+        val bytes = screenshot(id, fromAi = true)
+        val meta = runCatching { checkNotNull(shizuku).virtualScreenState() }
+            .getOrElse { state() }
+        snapshot = meta
+        val frameAt = meta.optLong("frameAtElapsedMs", 0L)
+        val reused = frameAt > 0L && frameAt == lastAiFrameAt
+        lastAiFrameAt = frameAt
+        return JSONObject().put("imageBase64", java.util.Base64.getEncoder().encodeToString(bytes))
+            .put("packageName", meta.optString("packageName"))
+            .put("frameAtElapsedMs", frameAt)
+            .put("frameReused", reused)
     }
 
     fun action(parameters: JSONObject): JSONObject {

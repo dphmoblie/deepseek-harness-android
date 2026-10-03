@@ -41,6 +41,10 @@ test('副屏动作只发送会话与受控动作参数，不接受任意显示�
     { sessionId: virtualSession, action: 'swipe', x: 0, y: 0, endX: 1, endY: 1, durationMs: 3000 },
   ]) await assert.rejects(tool.execute(request, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
   assert.equal(f.requests.length, 1)
+  await tool.execute({ sessionId: virtualSession, action: 'long_press', x: 10, y: 20, durationMs: 600 }, {})
+  await tool.execute({ sessionId: virtualSession, action: 'keyevent', key: 'ENTER' }, {})
+  await tool.execute({ sessionId: virtualSession, action: 'text', text: 'hello world' }, {})
+  assert.deepEqual(f.requests.slice(1).map(request => JSON.parse(request.param).action), ['long_press', 'keyevent', 'text'])
   assert.deepEqual(await f.hook({ name: 'mobile_virtual_screen_action' }, () => ({ kind: 'allow' })), { kind: 'allow' })
   assert.deepEqual(await f.hook({ name: 'mobile_virtual_screen_action' }, () => ({ kind: 'deny', reason: '用户已禁用' })), { kind: 'deny', reason: '用户已禁用' })
 })
@@ -54,7 +58,7 @@ test('副屏尚未启动时保留错误，不调用主屏工具', async t => {
 test('副屏截图保持真实附件格式，并说明缩放后的副屏操作坐标', async t => {
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64')
   let saved
-  const f = fixture(t, () => ok(png), {
+  const f = fixture(t, () => ok(JSON.stringify({ imageBase64: png, packageName: 'com.example.target', frameAtElapsedMs: 1234, frameReused: true })), {
     llm: { resolveModelInfo: async () => ({ inputModalities: ['image'] }) },
     attachments: { saveImage: async options => {
       saved = options
@@ -71,6 +75,9 @@ test('副屏截图保持真实附件格式，并说明缩放后的副屏操作�
   assert.match(text, /mobile_virtual_screen_action/)
   assert.doesNotMatch(text, /mobile_device_tap/)
   assert.match(text, /横坐标按 726\/363、纵坐标按 1600\/800/)
+  assert.match(text, /com.example.target/)
+  assert.match(text, /frameAtElapsedMs=1234/)
+  assert.match(text, /复用了缓存帧/)
 })
 
 test('Shell 原样传送多行中文脚本并保留非零退出码', async t => {
