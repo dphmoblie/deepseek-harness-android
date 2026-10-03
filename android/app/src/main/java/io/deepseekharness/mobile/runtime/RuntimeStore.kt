@@ -6,6 +6,8 @@ import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import io.deepseekharness.mobile.BuildConfig
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLog
 import org.json.JSONArray
 import org.json.JSONObject
@@ -59,6 +61,20 @@ class RuntimeStore(context: Context) {
      */
     private val guestLoaderDirectory = RuntimeLauncherFiles.loaderDirectory(currentRoot)
     val launchLoaderFile = RuntimeLauncherFiles.loaderFile(currentRoot)
+
+    /**
+     * 根内 loader 不可执行时的兜底落点：私有目录里的那份（0.2.3 的老位置）。
+     * 只救未受限启动，见 [RuntimeLauncherFiles.privateLoaderFile]。
+     */
+    private val privateLoaderFile = RuntimeLauncherFiles.privateLoaderFile(appContext.noBackupFilesDir)
+
+    /**
+     * 本次启动实际要交给 `PROOT_LOADER` 的 loader。
+     *
+     * 空 = 正常形态（根内实体拷贝）；非空 = 根内拷贝在这台设备上确实执行不了，已回退到私有副本。
+     * 取值只由 [prepareLaunchFiles] 刷新，启动路径一律通过 [launchLoaderPath] 读取。
+     */
+    @Volatile private var launchLoaderOverride: File? = null
     val resolverFile = File(appContext.filesDir, "runtime-resolv.conf")
     /** Host name map is generated alongside resolver configuration and bind-mounted into guest. */
     val hostsFile = File(appContext.filesDir, "runtime-hosts")
@@ -820,6 +836,16 @@ class RuntimeStore(context: Context) {
         return missing.isEmpty()
     }
 
+    /**
+     * `PROOT_LOADER` 的取值：正常是运行时根内的实体拷贝，万一它在这台设备上执行不了，
+     * 则是 [prepareLaunchFiles] 验证过的私有兜底副本。
+     *
+     * 这里必须返回「刚刚验证过能不能执行」的那一个：真机回归里，内容正确但缺属主执行位的
+     * 根内 loader 被旧的就绪判定反复复用，表现就是每次启动都
+     * `proot error: execve("/usr/bin/env"): Permission denied`。
+     */
+    fun launchLoaderPath(): String = (launchLoaderOverride ?: launchLoaderFile).absolutePath
+
     @Synchronized
     fun prepareLaunchFiles() {
         if (!runnerAvailable()) {
@@ -1056,7 +1082,7 @@ class RuntimeStore(context: Context) {
     }
 
     /**
-     * 把 loader 以**实体文件**落进运行时根（[launchLoaderFile]）。
+     * 把 loader 以**实体文件**落进运行时根（[launchLoaderFile]），并确认它真的能被执行。
      *
      * 与 [refreshExecutableLink] 的区别不能合并：Landlock 只授权运行时根、且按最终 inode 判定，
      * 所以这里既不能放私有目录，也不能建符号链接 —— 指向 `nativeLibraryDir` 的链接实测仍然
@@ -1064,9 +1090,41 @@ class RuntimeStore(context: Context) {
      *
      * 内容一致时不动它：正在运行的 PRoot 会把 loader 映射进自己的地址空间，无谓重写只会制造竞态。
      * 不一致（APK 升级换了 loader，或旧版本留下的是链接/被改写的文件）时先写临时文件再原子改名。
+     *
+     * 落地之后**必须**确认它真的可执行。真机回归（0.2.4 首次真机启动全部失败）的成因就是
+     * 「内容正确但缺属主执行位」的根内 loader 被旧的就绪判定反复复用，PRoot 每次启动都
+     * `execve: Permission denied`，界面只显示「PRoot 无法加载 Ubuntu 程序」。
+     * 因此这里按「观测 → 就地修 → 回退私有副本」三级处理，并保证 [launchLoaderPath] 指向能用的那份。
      */
     private fun installGuestLoader() {
-        if (isGuestLoaderUpToDate()) return
+        if (!isGuestLoaderUpToDate()) {
+            writeGuestLoaderCopy()
+        }
+        var observation = observeRunner(launchLoaderFile)
+        if (RuntimeLauncherPolicy.isUsable(observation)) {
+            launchLoaderOverride = null
+            recordLauncherState(DiagnosticLevel.INFO, "ok", RuntimeLauncherPolicy.OK, "loader_in_root", observation)
+            return
+        }
+        // 记下「修之前」的失败原因：日志里要能看出这次为什么需要修，而不只是「修过了」。
+        val failureBeforeRepair = RuntimeLauncherPolicy.failureCode(observation) ?: RuntimeLauncherPolicy.OK
+        observation = repairGuestLoaderIfPossible(observation)
+        if (RuntimeLauncherPolicy.isUsable(observation)) {
+            launchLoaderOverride = null
+            recordLauncherState(
+                DiagnosticLevel.WARN,
+                "ok",
+                failureBeforeRepair,
+                "loader_root_repaired",
+                observation,
+            )
+            return
+        }
+        fallBackToPrivateLoader(observation)
+    }
+
+    /** 原子写入根内 loader 的实体拷贝（内容校验只在这里做，可执行性留给 [installGuestLoader]）。 */
+    private fun writeGuestLoaderCopy() {
         val pending = File(guestLoaderDirectory, ".${launchLoaderFile.name}.new")
         if (RuntimeFiles.existsNoFollow(pending) && !pending.delete()) {
             throw RuntimeFailure("RUNNER_PREPARE_FAILED", "无法清理运行时根内的运行器临时文件")
@@ -1080,18 +1138,116 @@ class RuntimeStore(context: Context) {
         } finally {
             if (RuntimeFiles.existsNoFollow(pending)) pending.delete()
         }
-        if (!isGuestLoaderUpToDate()) {
+        if (!hasGuestLoaderContent()) {
             throw RuntimeFailure("RUNNER_PREPARE_FAILED", "运行时根内的运行器文件不可用")
         }
     }
 
     /**
-     * 根内 loader 是否需要重建：只认**常规文件且与 APK 里的字节一致**。
+     * 就地把根内 loader 修成可执行：先补属主执行位，再针对「有执行位仍被拒」尝试去掉执行标记。
      *
-     * 链接形态（旧版本的遗留）会因为 `S_ISREG` 为假而重建；被替换或截断的内容会因为长度或
-     * 字节不一致而重建 —— 这一条同时兜住了运行时切换后残留的旧 loader。
+     * 修不动只返回最新观测（不抛异常）：根内不可用时还能回退私有副本，属于可接受的降级，
+     * 不该让整个启动失败。真正的可用性判定始终是 `access(X_OK)`，不是「我改过权限了」。
      */
-    private fun isGuestLoaderUpToDate(): Boolean = try {
+    private fun repairGuestLoaderIfPossible(
+        observation: RuntimeLauncherPolicy.Observation?,
+    ): RuntimeLauncherPolicy.Observation? {
+        var current = observation
+        if (RuntimeLauncherPolicy.repairableInPlace(current)) {
+            try {
+                Os.chmod(launchLoaderFile.absolutePath, RuntimeLauncherPolicy.EXECUTABLE_FILE_MODE)
+            } catch (_: Throwable) {
+                // 补权限失败会体现在下面的观测里；日志与失败消息给出的是观测而不是「预期」。
+            }
+            current = observeRunner(launchLoaderFile)
+        }
+        if (RuntimeLauncherPolicy.shouldDropStamp(current)) {
+            try {
+                Os.removexattr(launchLoaderFile.absolutePath, EXEC_XATTR_NAME)
+                current = observeRunner(launchLoaderFile)
+            } catch (_: Throwable) {
+                // 去不掉标记时保持原观测：能否执行最终由 access(X_OK) 决定。
+            }
+        }
+        return current
+    }
+
+    /**
+     * 根内 loader 怎么都不可执行时的降级：改用私有目录里的那份。
+     *
+     * 代价必须说清：受限进程（沙箱内命令与沙箱内 PTY）只认 Landlock 授权树内的 loader，
+     * 回退形态下它们仍会失败；但**未受限启动**保持可用，好过整个运行时起不来。
+     * 私有副本自身也要确认存在且可执行，两条路都不可用才让启动失败（消息里带两边的观测）。
+     */
+    private fun fallBackToPrivateLoader(observation: RuntimeLauncherPolicy.Observation?) {
+        val rootDescription = RuntimeLauncherPolicy.describe(observation)
+        try {
+            refreshExecutableLink(loaderFile, privateLoaderFile)
+        } catch (error: Throwable) {
+            throw RuntimeFailure(
+                "RUNNER_PREPARE_FAILED",
+                "运行时根内的运行器文件不可执行（$rootDescription），私有回退副本也不可用",
+                error,
+            )
+        }
+        val fallbackObservation = observeRunner(privateLoaderFile)
+        if (!RuntimeLauncherPolicy.isUsablePath(fallbackObservation)) {
+            throw RuntimeFailure(
+                "RUNNER_PREPARE_FAILED",
+                "运行时根内的运行器文件不可执行（$rootDescription），私有回退副本同样不可执行" +
+                    "（${RuntimeLauncherPolicy.describe(fallbackObservation)}）",
+            )
+        }
+        launchLoaderOverride = privateLoaderFile
+        recordLauncherState(
+            DiagnosticLevel.WARN,
+            "ok",
+            RuntimeLauncherPolicy.failureCode(observation) ?: RuntimeLauncherPolicy.OK,
+            "loader_private",
+            observation,
+        )
+    }
+
+    /**
+     * 记录 loader 的落地形态。
+     *
+     * 诊断日志只接受受控枚举与白名单字段（`phase`/`result`/`code`/`reason`），权限位这类细节
+     * 进不了日志文件，所以同时写一条 logcat —— 真机排障靠的就是这一行（`adb logcat -s dsh-runtime`）。
+     */
+    private fun recordLauncherState(
+        level: DiagnosticLevel,
+        result: String,
+        code: String,
+        reason: String,
+        observation: RuntimeLauncherPolicy.Observation?,
+    ) {
+        android.util.Log.w(
+            "dsh-runtime",
+            "loader state: code=$code,reason=$reason,detail=${RuntimeLauncherPolicy.describe(observation)}",
+        )
+        diagnostics.record(
+            level,
+            DiagnosticEvent.RUNTIME_PHASE,
+            mapOf(
+                "phase" to "launcher",
+                "result" to result,
+                "code" to code,
+                "reason" to reason,
+            ),
+        )
+    }
+
+    /**
+     * 根内 loader 是否已就绪：**常规文件、与 APK 里的字节一致、且真的可执行**。
+     *
+     * 前两条兜住链接形态（旧版本遗留）与内容被替换/截断；第三条是 0.2.4 真机回归的修复点 ——
+     * 只看内容会让「内容对但缺属主执行位」的文件被永久复用，而那种文件在 PRoot 里必然 EACCES。
+     */
+    private fun isGuestLoaderUpToDate(): Boolean =
+        hasGuestLoaderContent() && RuntimeLauncherPolicy.isUsable(observeRunner(launchLoaderFile))
+
+    /** 只比内容形态：常规文件、长度一致、字节一致；可执行性由 [RuntimeLauncherPolicy] 单独判定。 */
+    private fun hasGuestLoaderContent(): Boolean = try {
         val stat = Os.lstat(launchLoaderFile.absolutePath)
         OsConstants.S_ISREG(stat.st_mode) &&
             stat.st_size == loaderFile.length() &&
@@ -1109,31 +1265,73 @@ class RuntimeStore(context: Context) {
         if (error.errno == OsConstants.ENOENT) false else throw error
     }
 
-    /** 运行器已就绪的判定：符号链接形态，或 ROM 拒绝链接时的降级复制形态（常规文件且非空）。 */
+    /**
+     * 运行器已就绪的判定：指向 APK 的符号链接，或 ROM 拒绝链接时的降级复制形态。
+     *
+     * 复制形态必须是**真的可执行**（而不只是非空）：真机回归正是被这条宽松判定放过去的 ——
+     * 内容正确的拷贝缺了属主执行位，`isPreparedRunner` 仍然通过，于是坏文件被反复复用。
+     */
     private fun isPreparedRunner(target: File, path: File): Boolean {
         if (isExecutableLinkTo(target, path)) return true
-        return try {
-            val stat = Os.lstat(path.absolutePath)
-            OsConstants.S_ISREG(stat.st_mode) && stat.st_size > 0
-        } catch (error: ErrnoException) {
-            if (error.errno == OsConstants.ENOENT) false else throw error
-        }
+        return RuntimeLauncherPolicy.isUsable(observeRunner(path))
     }
 
     /**
-     * 符号链接不可用时的降级复制：把受信任运行器文件复制到目标位置，
-     * 设置 owner 可执行并尝试打 Android 15+ 要求的 security.android.exec 标记
-     * （与 rootfs 可执行文件盖章一致；旧系统不支持时忽略）。
+     * 观测一个运行器文件：是否常规文件、字节数、权限位、系统是否允许执行、是否带执行标记。
+     *
+     * `lstat`（而不是 `stat`）是有意的：一旦谁把 loader 换回符号链接，这里必须报 S_ISREG 为假，
+     * 而不是跟随链接给出「看起来正常」的结论。返回 null 表示路径不存在。
+     */
+    private fun observeRunner(path: File): RuntimeLauncherPolicy.Observation? = try {
+        val stat = Os.lstat(path.absolutePath)
+        val stamp: ByteArray? = try {
+            Os.getxattr(path.absolutePath, EXEC_XATTR_NAME)
+        } catch (_: Throwable) {
+            null
+        }
+        RuntimeLauncherPolicy.Observation(
+            regular = OsConstants.S_ISREG(stat.st_mode),
+            size = stat.st_size,
+            mode = stat.st_mode,
+            execAccess = Os.access(path.absolutePath, OsConstants.X_OK),
+            stamped = stamp != null,
+        )
+    } catch (error: ErrnoException) {
+        if (error.errno == OsConstants.ENOENT) null else throw error
+    }
+
+    /**
+     * 符号链接不可用时的降级复制：把受信任运行器文件复制到目标位置并标成可执行。
      *
      * 两处调用：ROM 拒绝创建符号链接时的 proot 本体，以及**必须**是实体文件的根内 loader。
+     * 复制完只保证「文件已就位、权限已尽力设置」，是否真的可执行交给调用方的观测判定 ——
+     * 这里不再用 `File.setExecutable`：它在部分 ROM 上会静默失败（返回值过去也没检查），
+     * 而 `Os.chmod` 的 errno 至少能进日志。
      */
     private fun copyExecutableFallback(target: File, pending: File) {
         target.copyTo(pending, overwrite = false)
-        pending.setExecutable(true, false)
+        applyExecutableMode(pending)
+    }
+
+    /**
+     * 给运行器文件设置属主可执行位（0o700），并尽力打上 Android 15+ 的 `security.android.exec`
+     * 标记（与 rootfs 可执行文件的盖章一致）。
+     *
+     * 两步都**不**因失败而中断：真机上该属性是否必需、语义是放行还是禁止都还没有定论
+     * （应用读不回来，壳 uid 连 `setfattr` 都是 EPERM），所以它们只是尽力而为的一步；
+     * 最终判据是 `access(X_OK)`，若「有执行位却仍被拒」，[repairGuestLoaderIfPossible]
+     * 会试着去掉这个标记。失败原因写进 logcat，方便下次真机复现时一次定位。
+     */
+    private fun applyExecutableMode(path: File) {
         try {
-            Os.setxattr(pending.absolutePath, EXEC_XATTR_NAME, EXEC_XATTR_VALUE, 0)
-        } catch (_: Throwable) {
-            // 旧内核/ROM 不支持该属性时忽略，能否执行由系统策略决定。
+            Os.chmod(path.absolutePath, RuntimeLauncherPolicy.EXECUTABLE_FILE_MODE)
+        } catch (error: ErrnoException) {
+            android.util.Log.w("dsh-runtime", "runner chmod failed: errno=" + error.errno)
+        }
+        try {
+            Os.setxattr(path.absolutePath, EXEC_XATTR_NAME, EXEC_XATTR_VALUE, 0)
+        } catch (error: Throwable) {
+            android.util.Log.w("dsh-runtime", "runner exec stamp failed: " + error.javaClass.simpleName)
         }
     }
 

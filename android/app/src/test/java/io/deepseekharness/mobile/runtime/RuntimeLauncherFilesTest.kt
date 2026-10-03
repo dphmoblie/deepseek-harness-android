@@ -49,6 +49,24 @@ class RuntimeLauncherFilesTest {
         assertTrue(RuntimeLauncherFiles.isInside(loaderDirectory, currentRoot))
     }
 
+    /**
+     * 兜底 loader 必须留在运行时根之外：它只在根内实体拷贝确实执行不了时使用，
+     * 与 proot 本体同目录，好让「未受限启动」至少可用。
+     */
+    @Test
+    fun keepsFallbackLoaderOutsideTheRuntimeRoot() {
+        val fallback = RuntimeLauncherFiles.privateLoaderFile(noBackup)
+
+        assertFalse(RuntimeLauncherFiles.isInside(fallback, currentRoot))
+        assertEquals(
+            "dsh-runner/loader",
+            fallback.absoluteFile.toPath().normalize()
+                .let { noBackup.absoluteFile.toPath().normalize().relativize(it).toString() }
+                .replace(File.separatorChar, '/'),
+        )
+        assertEquals(RuntimeLauncherFiles.runnerDirectory(noBackup), fallback.parentFile)
+    }
+
     @Test
     fun treatsRootItselfAndSiblingsAsOutside() {
         assertFalse(RuntimeLauncherFiles.isInside(currentRoot, currentRoot))

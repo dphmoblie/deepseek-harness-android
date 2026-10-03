@@ -42,6 +42,17 @@ object RuntimeLauncherFiles {
     fun loaderFile(currentRoot: File): File = File(loaderDirectory(currentRoot), LAUNCH_LOADER_NAME)
 
     /**
+     * 私有目录里的 loader 落点（0.2.3 的老位置），**只作为兜底**。
+     *
+     * 正常情况下必须用 [loaderFile]：受限进程的 execve 只有在 Landlock 授权树内才被放行。
+     * 但当根内实体拷贝在这台设备上怎么都执行不了时（真机出现过「内容对、权限对、系统仍拒绝」的
+     * 形态），退回这里至少能让**未受限启动**可用 —— 沙箱内命令会退化，好过完全起不来，
+     * 并且每次启动都会重试根内拷贝，设备一旦允许就自动回到正常形态。
+     */
+    fun privateLoaderFile(noBackupFilesDir: File): File =
+        File(runnerDirectory(noBackupFilesDir), LAUNCH_LOADER_NAME)
+
+    /**
      * 只读判定：[candidate] 是否严格位于 [root] 之内（`root` 自身不算）。
      *
      * 供单测守住「loader 在运行时根内、proot 在运行时根外」这条不变量：一旦有人把 loader

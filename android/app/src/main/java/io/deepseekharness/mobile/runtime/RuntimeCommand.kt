@@ -208,7 +208,7 @@ object RuntimeCommand {
             "HOME" to context.filesDir.absolutePath,
             "LANG" to "C.UTF-8",
             "LD_LIBRARY_PATH" to "",
-            "PROOT_LOADER" to store.launchLoaderFile.absolutePath,
+            "PROOT_LOADER" to store.launchLoaderPath(),
             "PROOT_TMP_DIR" to temporary.absolutePath,
             "TMPDIR" to temporary.absolutePath,
         ).apply {

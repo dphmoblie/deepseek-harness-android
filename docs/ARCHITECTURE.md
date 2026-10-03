@@ -214,7 +214,20 @@ validated bind mounts that the device accepts. Runtime execution therefore
 still originates from the trusted loader shipped inside the APK: the copy in the
 runtime root is byte-compared against the packaged file and rewritten from it
 whenever it differs, and the PRoot binary itself is never copied into guest
-storage.
+storage. A byte-identical copy is not sufficient, though: the root copy must also
+carry the owner execute bit, or PRoot's `execve` of the loader fails inside the
+DAC check with `EACCES` — no SELinux denial is logged in that case, and a device
+build of 0.2.4 reproduced exactly this ("`PRoot 无法加载 Ubuntu 程序。`" on the
+device, six times, because the readiness check only compared content and the
+writer ignored the result of `File.setExecutable`). Placement therefore verifies
+each copy with `RuntimeLauncherPolicy` (regular file, non-empty, owner execute
+bit, `access(X_OK)`), repairs the mode in place when only the bit is missing,
+drops the `security.android.exec` stamp when execute permission is present yet
+the kernel still refuses, and otherwise falls back to an app-private loader copy
+that is known to be executable. The fallback keeps unconfined startup working
+only; confined (`workspace-write`) execution still requires the copy inside the
+authorized root. Every launch records `RUNTIME_PHASE|phase=launcher` so a
+degraded fallback is visible in an exported diagnostic log.
 
 PRoot is GPL-2.0-or-later. Operit2 is AGPL-3.0. Release provenance must retain
 the exact upstream revision, the hashes of both shipped ELF files, all local
