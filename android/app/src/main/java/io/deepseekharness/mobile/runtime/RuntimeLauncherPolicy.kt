@@ -26,6 +26,39 @@ object RuntimeLauncherPolicy {
     const val NOT_EXECUTABLE = "RUNNER_NOT_EXECUTABLE"
     const val EXEC_DENIED = "RUNNER_EXEC_DENIED"
 
+    /** loader 的落地形态：既是诊断日志的 `reason`，也是「上次实测能执行的形态」的记忆值。 */
+    const val FORM_ROOT_COPY = "loader_root_copy"
+    const val FORM_SYMLINK = "loader_symlink"
+    const val FORM_PRIVATE = "loader_private"
+
+    /**
+     * 默认尝试顺序：根内实体拷贝（Landlock 只认授权树内的最终 inode，沙箱路径需要它）→
+     * 指回 APK 的符号链接（exec 的目标落在 `nativeLibraryDir`，系统允许执行）→ 私有目录兜底。
+     */
+    val FORM_ORDER: List<String> = listOf(FORM_ROOT_COPY, FORM_SYMLINK, FORM_PRIVATE)
+
+    /**
+     * 把上次实测能执行的形态排到最前。
+     *
+     * 真机（HONOR AAP-AN00 / Android 17）上「根内实体拷贝」根本无法被 exec：每次都先试它，
+     * 就会在两种形态之间来回改写文件，还会连带清掉执行位巡检的标记（等于每次启动都重扫）。
+     */
+    fun loaderFormOrder(remembered: String?): List<String> {
+        if (remembered == null || remembered !in FORM_ORDER) return FORM_ORDER
+        return listOf(remembered) + FORM_ORDER.filter { it != remembered }
+    }
+
+    /**
+     * 判定码：**实测起得来**就是 [OK]；起不来时再给观测层面的原因（缺执行位 / 被策略拒绝）。
+     *
+     * 实测必须排在权限位之前：真机回归证明「权限位齐全、`access(X_OK)` 通过」的常规文件
+     * 仍然可能 `execve` 拿到 EACCES（应用数据目录里的文件在本 ROM 上就是这种形态）。
+     */
+    fun codeForProbe(observation: Observation?, started: Boolean): String {
+        if (started) return OK
+        return failureCode(observation) ?: EXEC_DENIED
+    }
+
     /**
      * 一次观测：是否常规文件、字节数、权限位、系统是否允许执行、是否带执行标记。
      *
