@@ -92,7 +92,8 @@ class ShellVirtualScreen {
             independentFocus = trusted && Build.VERSION.SDK_INT >= 34
             if (independentFocus) flags = flags or (1 shl 14) or (1 shl 16)
             // 触摸直传：进程内通道可用则逐事件注入，否则整段手势在抬起时合成 tap/swipe 交给 input 命令。
-            gesture = VirtualScreenInjector.Gesture(id(), w, h) { args ->
+            // 显示器要等下面才创建，所以手势只持有取编号的函数；真正注入时编号仍为 0 或 -1 就拒绝，绝不落到主屏。
+            gesture = VirtualScreenInjector.Gesture({ id() }, w, h) { args ->
                 command(listOf("/system/bin/input", "-d", id().toString()) + args)
             }
             // 下列标志属于 AOSP 的隐藏副屏能力，公开 SDK 的 IntDef 未列出；仅特权进程按系统版本使用。

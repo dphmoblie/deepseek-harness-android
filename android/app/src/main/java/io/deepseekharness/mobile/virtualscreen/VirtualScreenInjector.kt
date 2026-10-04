@@ -84,7 +84,9 @@ object VirtualScreenInjector {
      * 由调用方补上可执行文件与 `-d`；只有离散通道会用到它。
      */
     class Gesture(
-        private val displayId: Int,
+        // 以取值函数传入：创建会话时副屏显示器还没建好，只能在注入那一刻再取编号。
+        // 这样既守住「绝不注入主屏」，也不会因为构造顺序把「显示器尚未创建」误判成参数错误。
+        private val displayId: () -> Int,
         private val width: Int,
         private val height: Int,
         private val fallback: (List<String>) -> Unit,
@@ -101,7 +103,6 @@ object VirtualScreenInjector {
         private val points = ArrayList<IntArray>()
 
         init {
-            require(displayId > 0) { "不能向主屏发送副屏输入" }
             require(width > 0 && height > 0) { "副屏尺寸无效" }
         }
 
@@ -110,6 +111,7 @@ object VirtualScreenInjector {
          * 采样点数），交给调用方拼进动作结果；异常只可能是参数问题，注入失败不抛异常。
          */
         fun handle(touch: Touch): JSONObject {
+            require(displayId() > 0) { "副屏显示器尚未就绪" }
             val now = SystemClock.uptimeMillis()
             if (!active) {
                 if (touch.phase != "down" && touch.phase != "move") require(false) { "副屏触摸必须先按下" }
@@ -174,10 +176,13 @@ object VirtualScreenInjector {
         /** 进程内注入一个事件；任何失败都返回 false，由调用方决定是回落还是提前结束整段手势。 */
         private fun send(action: Int, x: Int, y: Int, down: Long): Boolean {
             val a = access ?: return false
+            // 显示器已释放（编号回到 -1）时不再注入，避免事件落到主屏。
+            val id = displayId()
+            if (id <= 0) return false
             val event = runCatching { MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x.toFloat(), y.toFloat(), 0) }
                 .getOrNull() ?: return false
             return try {
-                a.setDisplayId.invoke(event, displayId)
+                a.setDisplayId.invoke(event, id)
                 a.inject.invoke(a.manager, event, MODE_ASYNC) as? Boolean ?: false
             } catch (_: Exception) {
                 false

@@ -71,9 +71,12 @@ class VirtualScreenService : Service() {
                 session = value.getString("sessionId")
                 snapshot = value
                 audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, AuditResult.SUCCEEDED)
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, AuditResult.FAILED)
-                lastError = "副屏启动失败：请检查 Shizuku 授权、目标应用和设备副屏支持"; main.post { stopSelf() }
+                // 原生失败原因（调用方的 check/require 文案）直接带给界面：否则只剩一句泛化提示，真机排查无从下手。
+                val reason = error.cause?.message ?: error.message
+                lastError = if (reason.isNullOrBlank()) "副屏启动失败：请检查 Shizuku 授权、目标应用和设备副屏支持" else "副屏启动失败：$reason"
+                main.post { stopSelf() }
             }
         }
         main.postDelayed(health, 1500)

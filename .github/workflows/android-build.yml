@@ -21,10 +21,11 @@ permissions:
 env:
   # 应用版本号：与 android/app/build.gradle 的 versionName 保持一致。
   # CI 据此生成运行时版本与 Release 标签：预发布走 v<版本>-mobile-<run_number>，
-  # 正式版（release_type=stable）直接用 v<版本>。0.2.5 修复运行时更新在清理阶段以
-  # FILESYSTEM_ERROR 失败、把用户锁在更新页的问题（清理失败改为把暂存目录挪到
-  # stale-* ，不再阻塞安装），并把安装失败步骤写进诊断日志；内置 dsh 仍为 0.2.0-rc.2。
-  APP_VERSION: '0.2.5'
+  # 正式版（release_type=stable）直接用 v<版本>。0.2.6 修复 0.2.4/0.2.5 引入的副屏回归：
+  # 触摸手势在副屏显示器创建之前就构造，取值得到 -1 被构造函数的「不向主屏发送」校验
+  # 直接拒绝，导致副屏会话必定启动失败；现在手势改为在注入那一刻取显示编号，启动不再
+  # 受构造顺序影响，同时把原生失败原因回显到界面上。0.2.5 的运行环境更新修复仍在。
+  APP_VERSION: '0.2.6'
 
 jobs:
   build:
