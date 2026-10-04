@@ -846,41 +846,72 @@ class RuntimeInstaller(
      */
     private fun retireIfPresent(target: File, reason: String) {
         if (!RuntimeFiles.existsNoFollow(target)) return
+        val strictFailure = deleteRelaxed(target, reason) ?: return
+        // 安装流程随后要用 previous/、current/ 这些固定路径，残留必须离开原位：
+        // 删不掉就改名挪到一边，并把原因与失败类别记进诊断日志。
+        // 每次尝试留下的是唯一名字，所以旧残留本身就删不掉也不会再挡住下一次安装。
+        val leftovers = staleSiblings(target.name)
+        leftovers.take(MAX_STALE_RETRIES).forEach { stale ->
+            deleteRelaxed(stale, staleReason(target.name))?.let { ignored ->
+                recordRetireFailure(ignored, staleReason(target.name), leftovers.size)
+            }
+        }
+        val aside = File(store.runtimeParent, uniqueAsideName(target.name))
         try {
+            Os.rename(target.absolutePath, aside.absolutePath)
+        } catch (error: Throwable) {
+            // 连改名都不行：这才是真正需要用户处理的故障（例如父目录不可写）。
+            recordRetireFailure(error, reason, leftovers.size)
+            throw strictFailure
+        }
+        recordRetireFailure(strictFailure, reason, leftovers.size)
+        store.diagnostics.record(
+            DiagnosticLevel.WARN,
+            DiagnosticEvent.RUNTIME_PHASE,
+            mapOf(
+                "phase" to "cleanup",
+                "result" to "skipped",
+                "code" to strictFailure.code,
+                "reason" to reason,
+                "count" to leftovers.size.toString(),
+            ),
+        )
+    }
+
+    /**
+     * 先走严格删除器，失败再走不跟随符号链接的兜底删除器（见 [RuntimeFiles.deleteTreeNoFollowFallback]）。
+     *
+     * 真机上严格删除器会在这类大目录树上直接失败，兜底删除器能把残留真正回收掉，因此：
+     *
+     *  - 返回 `null` 表示已经删干净（无论用的哪条路径）；
+     *  - 兜底也失败时返回**兜底那次**失败，它才是「为什么还是删不掉」的最终解释。
+     *
+     * 兜底成功时会记一条 `result=succeeded` + `code=<严格删除器失败类别>`：诊断日志因此既证明残留被回收，
+     * 也留下严格删除器在真机上失败的事实，供后续定位。
+     */
+    private fun deleteRelaxed(target: File, reason: String): RuntimeFailure? {
+        val strictFailure = try {
             RuntimeFiles.deleteTreeNoFollow(target, store.runtimeParent)
-            return
+            return null
         } catch (failure: RuntimeFailure) {
-            // 安装流程随后要用 previous/、current/ 这些固定路径，残留必须离开原位：
-            // 删不掉就改名挪到一边，并把原因与失败类别记进诊断日志。
-            // 每次尝试留下的是唯一名字，所以旧残留本身就删不掉也不会再挡住下一次安装。
-            val leftovers = staleSiblings(target.name)
-            leftovers.take(MAX_STALE_RETRIES).forEach { stale ->
-                try {
-                    RuntimeFiles.deleteTreeNoFollow(stale, store.runtimeParent)
-                } catch (ignored: Throwable) {
-                    recordRetireFailure(ignored, staleReason(target.name), leftovers.size)
-                }
-            }
-            val aside = File(store.runtimeParent, uniqueAsideName(target.name))
-            try {
-                Os.rename(target.absolutePath, aside.absolutePath)
-            } catch (error: Throwable) {
-                // 连改名都不行：这才是真正需要用户处理的故障（例如父目录不可写）。
-                recordRetireFailure(error, reason, leftovers.size)
-                throw failure
-            }
-            recordRetireFailure(failure, reason, leftovers.size)
+            failure
+        }
+        return try {
+            RuntimeFiles.deleteTreeNoFollowFallback(target, store.runtimeParent)
             store.diagnostics.record(
                 DiagnosticLevel.WARN,
                 DiagnosticEvent.RUNTIME_PHASE,
                 mapOf(
                     "phase" to "cleanup",
-                    "result" to "skipped",
-                    "code" to failure.code,
-                    "reason" to reason,
-                    "count" to leftovers.size.toString(),
+                    "result" to "succeeded",
+                    "code" to RuntimeRetireTokens.of(strictFailure),
+                    "reason" to fallbackReason(reason),
+                    "count" to "0",
                 ),
             )
+            null
+        } catch (fallbackFailure: RuntimeFailure) {
+            fallbackFailure
         }
     }
 
@@ -897,6 +928,10 @@ class RuntimeInstaller(
     /** 残留目录的 reason 取值必须匹配诊断日志的 token 规则：小写字母开头、只含 `[a-z0-9._-]`。 */
     private fun staleReason(name: String): String =
         "stale_" + name.lowercase().replace(Regex("[^a-z0-9._-]"), "_")
+
+    /** 兜底删除成功时的 reason：同样受 token 规则约束（最长 32 字符）。 */
+    private fun fallbackReason(reason: String): String =
+        ("fallback_" + reason.lowercase().replace(Regex("[^a-z0-9._-]"), "_")).take(32)
 
     private fun recordRetireFailure(error: Throwable, reason: String, leftovers: Int) {
         store.diagnostics.record(

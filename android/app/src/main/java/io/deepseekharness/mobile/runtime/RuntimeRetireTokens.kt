@@ -2,8 +2,12 @@ package io.deepseekharness.mobile.runtime
 
 import android.system.ErrnoException
 import java.io.IOException
+import java.nio.file.AccessDeniedException
 import java.nio.file.DirectoryIteratorException
+import java.nio.file.DirectoryNotEmptyException
 import java.nio.file.FileSystemException
+import java.nio.file.NoSuchFileException
+import java.nio.file.NotDirectoryException
 
 /**
  * 把「清理运行时残留失败」的原因压缩成诊断日志能容纳的状态码。
@@ -31,6 +35,12 @@ internal object RuntimeRetireTokens {
         is SecurityException -> "SECURITY"
         // DirectoryIteratorException 自带 IOException cause，必须先于 IOException 判断。
         is DirectoryIteratorException -> "DIR_ITER"
+        // FileSystemException 的子类必须排在它前面：真机上观测到的就是这一族，
+        // 顺序错了就会全部塌成 FILESYSTEM，丢掉「权限被拒 / 目录非空 / 条目消失」的区分度。
+        is AccessDeniedException -> "ACCESS_DENIED"
+        is DirectoryNotEmptyException -> "NOT_EMPTY"
+        is NoSuchFileException -> "NO_SUCH_FILE"
+        is NotDirectoryException -> "NOT_A_DIR"
         is FileSystemException -> "FILESYSTEM"
         is IOException -> "IO"
         is UnsupportedOperationException -> "UNSUPPORTED"

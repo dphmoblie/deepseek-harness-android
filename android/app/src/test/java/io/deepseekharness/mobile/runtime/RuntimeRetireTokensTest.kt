@@ -3,8 +3,12 @@ package io.deepseekharness.mobile.runtime
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.io.IOException
+import java.nio.file.AccessDeniedException
 import java.nio.file.DirectoryIteratorException
+import java.nio.file.DirectoryNotEmptyException
+import java.nio.file.FileSystemException
 import java.nio.file.NoSuchFileException
+import java.nio.file.NotDirectoryException
 
 /**
  * 清理失败的状态码映射：真机上只能靠这些 token 区分权限、占用与 IO 故障，所以固定住它们的取值。
@@ -26,13 +30,25 @@ class RuntimeRetireTokensTest {
     fun `非 errno 的异常按类别映射`() {
         assertEquals("SECURITY", RuntimeRetireTokens.of(SecurityException("没有权限")))
         assertEquals("IO", RuntimeRetireTokens.of(IOException("io")))
-        assertEquals("FILESYSTEM", RuntimeRetireTokens.of(NoSuchFileException("missing")))
+        assertEquals("FILESYSTEM", RuntimeRetireTokens.of(FileSystemException("generic")))
         assertEquals(
             "DIR_ITER",
             RuntimeRetireTokens.of(DirectoryIteratorException(IOException("iterate"))),
         )
         assertEquals("UNSUPPORTED", RuntimeRetireTokens.of(UnsupportedOperationException("no")))
         assertEquals(RuntimeRetireTokens.UNKNOWN, RuntimeRetireTokens.of(IllegalStateException("?")))
+    }
+
+    /**
+     * 真机上抛的是 `java.nio.file.FileSystemException` 这一族，子类必须各有自己的状态码：
+     * 全都塌成 `FILESYSTEM` 就看不出是权限被拒、目录非空还是条目已经消失。
+     */
+    @Test
+    fun `FileSystemException 的子类先于父类判定`() {
+        assertEquals("ACCESS_DENIED", RuntimeRetireTokens.of(AccessDeniedException("文件", "denied", "权限被拒")))
+        assertEquals("NOT_EMPTY", RuntimeRetireTokens.of(DirectoryNotEmptyException("目录非空")))
+        assertEquals("NO_SUCH_FILE", RuntimeRetireTokens.of(NoSuchFileException("missing")))
+        assertEquals("NOT_A_DIR", RuntimeRetireTokens.of(NotDirectoryException("not-a-dir")))
     }
 
     @Test
