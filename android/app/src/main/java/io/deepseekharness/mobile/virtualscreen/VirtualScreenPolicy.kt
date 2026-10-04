@@ -25,6 +25,36 @@ object VirtualScreenPolicy {
         return value
     }
 
+    /** 预览动作字段名：宿主 config 动作与工具面、设置页共用的稳定字段标识。 */
+    const val PREVIEW_FIELD = "previewMode"
+
+    /** 目标应用动作字段名：宿主 target 动作与工具面、设置页共用的稳定字段标识。 */
+    const val TARGET_FIELD = "component"
+
+    /**
+     * 预览模式到采集间隔（毫秒）的映射；模式名是工具面与设置页共用的稳定标识。
+     * 顺序与取值是调用端与宿主共用的稳定契约，不要调整：`limited` 保持限帧（180 毫秒，历史硬编码值），
+     * 其余模式分别对应 15/30/60 帧每秒的采集间隔。
+     */
+    val FRAME_MODES: Map<String, Int> = mapOf("limited" to 180, "15fps" to 66, "30fps" to 33, "60fps" to 16)
+
+    /** 校验预览模式并返回采集间隔；未知模式抛 [IllegalArgumentException]。 */
+    fun frameInterval(mode: String): Int =
+        FRAME_MODES[mode] ?: throw IllegalArgumentException("副屏预览模式不在允许列表")
+
+    /** 预览模式对应的状态标签：limited → "limited-fps"，其余 → "realtime-<模式名>"（例如 "realtime-30fps"）。 */
+    fun frameModeLabel(mode: String): String = if (mode == "limited") "limited-fps" else "realtime-$mode"
+
+    /** 从请求里取出并校验目标应用入口（字段名 [TARGET_FIELD]），复用 [component] 的规则。 */
+    fun targetRequest(p: JSONObject): String = component(p.getString(TARGET_FIELD))
+
+    /**
+     * 文本输入的分流判据：只有可打印 ASCII 能交给设备 Shell 的 `input text` 命令，
+     * 含中文、emoji 或任何其它 Unicode 字符时必须改走无障碍服务的定向注入。
+     * 这个判断是纯函数，真机行为与单测共用同一份规则。
+     */
+    fun needsAccessibilityText(value: String): Boolean = value.any { it.code < 0x20 || it.code > 0x7e }
+
     /**
      * 副屏输入动作白名单。
      * 执行层（ShellVirtualScreen.action）必须按同一个集合分发：此前出现过策略层已经支持

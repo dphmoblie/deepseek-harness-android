@@ -115,4 +115,53 @@ class VirtualScreenPolicyTest {
             VirtualScreenPolicy.inputArguments(JSONObject().put("action", "pinch").put("x", 1).put("y", 2), 4, 726, 1600)
         }
     }
+
+    @Test fun `预览模式到采集间隔的映射覆盖三个允许模式并拒绝未知模式`() {
+        // 三个模式各自的毫秒数是调用端与宿主共用的稳定契约，取值被改动会让「模式」与「实测帧率」脱节。
+        assertEquals(180, VirtualScreenPolicy.frameInterval("limited"))
+        assertEquals(66, VirtualScreenPolicy.frameInterval("15fps"))
+        assertEquals(33, VirtualScreenPolicy.frameInterval("30fps"))
+        assertEquals(16, VirtualScreenPolicy.frameInterval("60fps"))
+        // 映射表本身就是工具面与设置页的选项来源，键集合必须与上面四个模式完全一致。
+        assertEquals(listOf("limited", "15fps", "30fps", "60fps"), VirtualScreenPolicy.FRAME_MODES.keys.toList())
+        // 未知模式必须报出固定错误文案，不能回落到默认间隔悄悄生效。
+        for (mode in listOf("", "realtime", "24fps", "120FPS", "Limited", "limited ")) {
+            val error = assertThrows(IllegalArgumentException::class.java) { VirtualScreenPolicy.frameInterval(mode) }
+            assertEquals("副屏预览模式不在允许列表", error.message)
+        }
+    }
+
+    @Test fun `预览状态标签把 limited 映射为限帧标签其余映射为实时标签`() {
+        assertEquals("limited-fps", VirtualScreenPolicy.frameModeLabel("limited"))
+        assertEquals("realtime-15fps", VirtualScreenPolicy.frameModeLabel("15fps"))
+        assertEquals("realtime-30fps", VirtualScreenPolicy.frameModeLabel("30fps"))
+        assertEquals("realtime-60fps", VirtualScreenPolicy.frameModeLabel("60fps"))
+    }
+
+    @Test fun `目标应用入口必须来自 component 字段且与启动校验同规则`() {
+        assertEquals("com.example/.Main", VirtualScreenPolicy.targetRequest(JSONObject().put("component", "com.example/.Main")))
+        assertEquals("com.example.target/.MainActivity", VirtualScreenPolicy.targetRequest(JSONObject().put("component", "com.example.target/.MainActivity")))
+        // 非法入口沿用 component(...) 的规则报错，不接受附加参数或换行。
+        for (value in listOf("a/b", "com.example/", "com.example/.Main;id", "com.example/.Main --display 0", "com.example/.Main\n", "")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                VirtualScreenPolicy.targetRequest(JSONObject().put("component", value))
+            }
+        }
+        // 缺字段属于 JSON 解析问题；字段名由策略层常量固定，调用端不能改名。
+        assertEquals("component", VirtualScreenPolicy.TARGET_FIELD)
+        assertThrows(org.json.JSONException::class.java) { VirtualScreenPolicy.targetRequest(JSONObject()) }
+    }
+
+    @Test fun `只有可打印 ASCII 走设备 Shell 其余文本改走无障碍注入`() {
+        // 纯 ASCII（含空格与常见符号）保持既有行为：仍由 /system/bin/input text 输入。
+        for (value in listOf("a", "hello world", "dsh-sandbox-ok", "!@#%^&*()_+-=[]{}|;':\",./<>?", "~")) {
+            assertFalse("「$value」不应改走无障碍", VirtualScreenPolicy.needsAccessibilityText(value))
+        }
+        // 中文、emoji、全角符号、换行、制表符与 DEL 都必须分流到无障碍服务。
+        for (value in listOf("你好", "微信", "中文😀", "，。！", "a\nb", "a\tb", "a\u007fb", "é", "日本語")) {
+            assertTrue("「$value」应改走无障碍", VirtualScreenPolicy.needsAccessibilityText(value))
+        }
+        // 空串没有可注入的内容，不属于无障碍场景（长度校验由调用端负责）。
+        assertFalse(VirtualScreenPolicy.needsAccessibilityText(""))
+    }
 }
