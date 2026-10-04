@@ -140,8 +140,8 @@ type SettingsPage = 'models' | 'runtime' | 'terminal' | 'shizuku' | 'diagnostics
 const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView }> = {
   models: { title: '模型与密钥', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
   runtime: { title: '运行与后台', hint: '运行时来源、后台保持、悬浮球与前台服务', view: 'settings-runtime' },
-  terminal: { title: '终端与外观', hint: '终端字号与屏幕常亮', view: 'settings-terminal' },
-  shizuku: { title: 'Shizuku 与设备 Shell', hint: '授权、连接与设备 Shell 可用性', view: 'settings-shizuku' },
+  terminal: { title: '终端与外观', hint: '主题、图片与视频背景、卡片颜色与透明度、字号', view: 'settings-terminal' },
+  shizuku: { title: 'Shizuku 与设备 Shell', hint: 'Shizuku 授权、AI Shell、无障碍白名单与副屏', view: 'settings-shizuku' },
   diagnostics: { title: '诊断与日志', hint: '采集开关、保留天数、运行日志与导出', view: 'settings-diagnostics' },
 }
 
@@ -161,21 +161,18 @@ function isSettingsView(view: AppView): boolean {
   return view === 'settings' || settingsPageOf(view) !== null
 }
 
-/**
- * 设置首页的入口分组。
- *
- * 为什么要把「运行与后台」从「设置分类」里拆出来：它管的是运行环境本身（保活、前台服务、
- * 悬浮球、投递区），和「模型与密钥 / 终端与外观 / 诊断与日志」这类改一次就生效的配置不是一回事。
- * 混在一张列表里时，用户要么在「设置」里翻运行环境，要么在运行环境里找设置。
- */
-type SettingsHomeGroup = 'runtime' | 'files' | 'versions' | 'settings'
+/** 按用户用途分类；分类和搜索只影响入口展示，不改动设置草稿。 */
+type SettingsHomeGroup = 'runtime' | 'files' | 'versions' | 'models' | 'appearance' | 'device' | 'plugins' | 'diagnostics'
 
-/** 分组顺序即界面顺序；没有命中入口的分组（含暂时还没有入口的分组）整组不渲染。 */
 const SETTINGS_HOME_GROUPS: { id: SettingsHomeGroup; label: string }[] = [
+  { id: 'models', label: '模型连接' },
+  { id: 'appearance', label: '外观与显示' },
+  { id: 'device', label: '设备与自动化' },
   { id: 'runtime', label: '运行与后台' },
+  { id: 'plugins', label: '插件扩展' },
   { id: 'files', label: '文件管理' },
   { id: 'versions', label: '版本管理' },
-  { id: 'settings', label: '设置' },
+  { id: 'diagnostics', label: '日志与排查' },
 ]
 
 /** 入口点下去要去哪：设置二级页、外壳一级页，或者干脆不跳转（Harness 服务行本身带按钮）。 */
@@ -202,8 +199,7 @@ interface SettingsHomeEntry {
 /**
  * 设置首页的全部入口。
  *
- * 四组都有实际入口：运行与后台、文件管理、版本管理、设置。投递区与共享目录已从
- * 「运行与后台」页搬进「文件管理」一级页，功能词也跟着搬（同一件事不写两处词）。
+ * 每个入口归属一个用途分类，关键词覆盖二级页内的功能。
  *
  * 这里的标题与说明是**裸字符串**，渲染时才交给 `t()`；仓库外的 `locales-check.cjs`
  * 只认字面量 `t("…")` 调用，看不见这张表。补英文词条时必须手工同步 `src/locales/en.ts`，
@@ -222,7 +218,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
   },
   {
     id: 'plugins',
-    group: 'runtime',
+    group: 'plugins',
     title: '插件管理',
     hint: '官方与第三方插件，按插件包管理启停与更新',
     keywords: ['插件', 'plugin', 'plugins', '扩展', '启停', '启用', '禁用', '市场', '更新', '修复', '重装'],
@@ -249,7 +245,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
   },
   {
     id: 'terminal-view',
-    group: 'runtime',
+    group: 'device',
     title: '终端与设备 Shell',
     hint: 'Ubuntu 终端与设备 Shell（需 Shizuku）',
     keywords: ['终端', 'terminal', 'shell', '命令行', 'bash', '脚本', '设备', 'shizuku', 'adb', '命令'],
@@ -281,10 +277,10 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     icon: <RotateCcw size={20} />,
   },
 
-  // —— 设置：改一次就生效的配置项。
+  // —— 配置入口按模型、外观、设备与诊断分别归类。
   {
     id: 'models',
-    group: 'settings',
+    group: 'models',
     title: '模型与密钥',
     hint: '供应商、API Key 与自定义模型',
     keywords: ['模型', '密钥', 'key', 'api', 'apikey', 'api key', '供应商', 'provider', 'token', '凭据', '自定义模型'],
@@ -293,25 +289,25 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
   },
   {
     id: 'terminal-settings',
-    group: 'settings',
+    group: 'appearance',
     title: '终端与外观',
-    hint: '终端字号与屏幕常亮',
-    keywords: ['终端', '外观', '字号', '字体', '常亮', '屏幕', '显示', '主题', '深色', '浅色', 'appearance', 'font', 'theme'],
+    hint: '主题、图片与视频背景、卡片颜色与透明度、字号',
+    keywords: ['终端', '外观', '字号', '字体', '常亮', '屏幕', '显示', '主题', '深色', '浅色', 'appearance', 'font', 'theme', '背景', '壁纸', '视频', '图片', 'mp4', '模糊', '透明', '卡片', '颜色', '强调色', 'background', 'opacity'],
     target: { kind: 'page', page: 'terminal' },
     icon: <SquareTerminal size={20} />,
   },
   {
     id: 'shizuku',
-    group: 'settings',
+    group: 'device',
     title: 'Shizuku 与设备 Shell',
-    hint: '授权、连接与设备 Shell 可用性',
-    keywords: ['shizuku', '授权', '权限', '连接', '设备', 'shell', 'adb', '服务'],
+    hint: 'Shizuku 授权、AI Shell、无障碍白名单与副屏',
+    keywords: ['shizuku', '授权', '权限', '连接', '设备', 'shell', 'adb', '服务', '无障碍', '自动化', '白名单', '应用列表', '副屏', '虚拟屏幕', '小窗', '截图', '点击', 'accessibility', 'automation', 'display'],
     target: { kind: 'page', page: 'shizuku' },
     icon: <Smartphone size={20} />,
   },
   {
     id: 'diagnostics',
-    group: 'settings',
+    group: 'diagnostics',
     title: '诊断与日志',
     hint: '采集开关、保留天数、运行日志与导出',
     keywords: ['诊断', '日志', 'log', 'logs', '采集', '保留', '导出', '排查', '报错', '错误', '崩溃', '重启'],
@@ -333,7 +329,8 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
 function matchesSettingsHomeQuery(entry: SettingsHomeEntry, query: string): boolean {
   const tokens = query.toLowerCase().split(/\s+/).filter(token => token !== '')
   if (tokens.length === 0) return true
-  const haystack = `${entry.title} ${entry.hint} ${entry.keywords.join(' ')}`.toLowerCase()
+  const group = SETTINGS_HOME_GROUPS.find(item => item.id === entry.group)
+  const haystack = `${entry.title} ${t(entry.title)} ${entry.hint} ${t(entry.hint)} ${group?.label} ${t(group?.label ?? '')} ${entry.keywords.join(' ')}`.toLowerCase()
   return tokens.every(token => haystack.includes(token))
 }
 
@@ -1441,8 +1438,10 @@ interface SettingsHomeScreenProps {
 function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenPage, onOpenView, onStop }: SettingsHomeScreenProps) {
   /** 过滤词只活在组件里：离开设置首页即清空，下次进来不该被上次的搜索框卡住。 */
   const [query, setQuery] = useState('')
+  const [category, setCategory] = useState<SettingsHomeGroup | 'all'>('all')
   /** 每个分组只留命中的入口；整组都没命中就连标题一起不渲染，避免空标题刷屏。 */
   const groups = SETTINGS_HOME_GROUPS
+    .filter(group => category === 'all' || category === group.id)
     .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id && matchesSettingsHomeQuery(entry, query)) }))
     .filter(item => item.entries.length > 0)
   const matched = groups.reduce((total, item) => total + item.entries.length, 0)
@@ -1489,7 +1488,8 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
         <input
           type="search"
           value={query}
-          onChange={event => setQuery(event.target.value)}
+          onChange={event => { setQuery(event.target.value); setCategory('all') }}
+          maxLength={120}
           placeholder={t("按功能词查找入口")}
           aria-label={t("按功能词查找入口")}
           autoComplete="off"
@@ -1499,6 +1499,14 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
             <X size={16} />
           </button>
         )}
+      </div>
+
+      <div className="settings-categories" role="listbox" aria-label={t("筛选功能分类")}>
+        <button type="button" role="option" aria-label={t("筛选分类：全部分类")} aria-selected={category === 'all'} onClick={() => setCategory('all')}>{t("全部分类")}</button>
+        {SETTINGS_HOME_GROUPS.map(group => (
+          <button key={group.id} type="button" role="option" aria-label={`${t("筛选分类：")} ${t(group.label)}`} aria-selected={category === group.id}
+            onClick={() => { setCategory(group.id); setQuery('') }}>{t(group.label)}</button>
+        ))}
       </div>
 
       {/* 结果条用 role="status"：输入时读屏能听到「找到几个」，而不是列表安静地变了一下。 */}

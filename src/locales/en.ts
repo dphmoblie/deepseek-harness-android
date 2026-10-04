@@ -1,5 +1,16 @@
 // 应用界面英文词典；不翻译用户输入、凭据或终端输出。
 export const english: Readonly<Record<string, string>> = {
+  "模型连接": "Model connections",
+  "外观与显示": "Appearance and display",
+  "设备与自动化": "Device and automation",
+  "插件扩展": "Plugin extensions",
+  "日志与排查": "Logs and troubleshooting",
+  "筛选功能分类": "Filter settings categories",
+  "全部分类": "All categories",
+  "筛选分类：全部分类": "Filter category: all",
+  "筛选分类：": "Filter category:",
+  "主题、图片与视频背景、卡片颜色与透明度、字号": "Theme, image and video backgrounds, card colors and opacity, text size",
+  "Shizuku 授权、AI Shell、无障碍白名单与副屏": "Shizuku access, AI Shell, accessibility allowlist and virtual display",
   "应用导航": "App navigation",
   "会话": "Sessions",
   "会话工作区": "Session workspace",

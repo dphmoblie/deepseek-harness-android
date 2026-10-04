@@ -2,8 +2,6 @@ package io.deepseekharness.mobile
 
 import android.annotation.SuppressLint
 import android.content.ContentResolver
-import android.content.ClipData
-import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.drawable.ColorDrawable
 import android.net.Uri
@@ -27,19 +25,9 @@ import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.widget.Toolbar
-import androidx.core.content.FileProvider
-import androidx.core.graphics.drawable.DrawableCompat
-import androidx.lifecycle.lifecycleScope
 import io.deepseekharness.mobile.runtime.HarnessAccess
 import io.deepseekharness.mobile.runtime.RuntimeStore
-import io.deepseekharness.mobile.runtime.RuntimeWorkspaceFiles
 import java.io.ByteArrayInputStream
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class HarnessActivity : AppCompatActivity() {
     private lateinit var webView: WebView
@@ -129,22 +117,7 @@ class HarnessActivity : AppCompatActivity() {
 
         setContentView(R.layout.activity_harness)
         AppWindowInsets.apply(this)
-        val toolbar = findViewById<Toolbar>(R.id.harness_toolbar)
-        toolbar.inflateMenu(R.menu.harness_toolbar)
-        toolbar.setNavigationOnClickListener { returnToMainActivity() }
-        toolbar.setOnMenuItemClickListener { item ->
-            when (item.itemId) {
-                R.id.action_harness_files -> {
-                    showWorkspaceFiles()
-                    true
-                }
-                R.id.action_harness_management -> {
-                    returnToMainActivity()
-                    true
-                }
-                else -> false
-            }
-        }
+        // 会话页让出整条工具栏空间，返回交给系统手势与返回键。
         applyNativeChrome()
 
         // 入口 URL：index.html 是唯一没有内容哈希的产物，它的缓存键必须同时带上 APK 版本与
@@ -258,22 +231,20 @@ class HarnessActivity : AppCompatActivity() {
         if (!isFinishing) finish()
     }
 
-    /** Keep the native frame visually continuous with the selected app theme. */
+    /** 系统栏和网页背景跟随应用主题，不额外占用会话高度。 */
     private fun applyNativeChrome() {
         if (isFinishing || isDestroyed) return
-        val toolbar = findViewById<Toolbar>(R.id.harness_toolbar) ?: return
         val dark = AppThemePreference.isDark(
             AppThemePreference.current(this),
             AppThemePreference.systemNight(this),
         )
-        // Resolve native resources using the saved mode even when it differs from the system.
+        // 按保存的主题解析颜色，允许应用主题与系统不同。
         val configuration = Configuration(resources.configuration).apply {
             uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
                 if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
         }
         val palette = createConfigurationContext(configuration)
         val background = palette.getColor(R.color.harness_toolbar_background)
-        val foreground = palette.getColor(R.color.harness_toolbar_foreground)
         AppThemePreference.applySafely(this, backgroundColor = background)
         window.setBackgroundDrawable(ColorDrawable(background))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -281,105 +252,6 @@ class HarnessActivity : AppCompatActivity() {
         }
         findViewById<WebView>(R.id.harness_web_view)
             .setBackgroundColor(palette.getColor(R.color.harness_page_background))
-        toolbar.setBackgroundColor(background)
-        toolbar.setTitleTextColor(foreground)
-        toolbar.navigationIcon?.let { DrawableCompat.setTint(it.mutate(), foreground) }
-        for (index in 0 until toolbar.menu.size()) {
-            toolbar.menu.getItem(index).icon?.let { DrawableCompat.setTint(it.mutate(), foreground) }
-        }
-    }
-
-    /** Native file controls remain available even when the Harness page is busy or failed. */
-    private fun showWorkspaceFiles() {
-        lifecycleScope.launch {
-            val files = try {
-                val manager = RuntimeWorkspaceFiles(RuntimeStore(this@HarnessActivity), cacheDir)
-                withContext(Dispatchers.IO) { manager.list() }
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                Toast.makeText(this@HarnessActivity, R.string.harness_file_action_failed, Toast.LENGTH_SHORT).show()
-                return@launch
-            }
-            if (files.isEmpty()) {
-                Toast.makeText(this@HarnessActivity, R.string.harness_workspace_empty, Toast.LENGTH_SHORT).show()
-                return@launch
-            }
-            AlertDialog.Builder(this@HarnessActivity)
-                .setTitle(R.string.harness_workspace_files)
-                .setItems(files.toTypedArray()) { _, index -> showWorkspaceFileActions(files[index]) }
-                .setNegativeButton(android.R.string.cancel, null)
-                .show()
-        }
-    }
-
-    private fun showWorkspaceFileActions(path: String) {
-        val actions = arrayOf(
-            getString(R.string.harness_file_open),
-            getString(R.string.harness_file_share),
-            getString(R.string.harness_file_delete),
-        )
-        AlertDialog.Builder(this)
-            .setTitle(path)
-            .setItems(actions) { _, index ->
-                when (index) {
-                    0 -> openOrShareWorkspaceFile(path, open = true)
-                    1 -> openOrShareWorkspaceFile(path, open = false)
-                    2 -> confirmDeleteWorkspaceFile(path)
-                }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    private fun openOrShareWorkspaceFile(path: String, open: Boolean) {
-        lifecycleScope.launch {
-            try {
-                val manager = RuntimeWorkspaceFiles(RuntimeStore(this@HarnessActivity), cacheDir)
-                val shared = withContext(Dispatchers.IO) { manager.copyForSharing(path) }
-                val uri = FileProvider.getUriForFile(
-                    this@HarnessActivity,
-                    "${packageName}.diagnostics",
-                    shared,
-                )
-                val intent = Intent(if (open) Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
-                    val mime = manager.mimeType(path)
-                    if (open) setDataAndType(uri, mime) else {
-                        type = mime
-                        putExtra(Intent.EXTRA_STREAM, uri)
-                    }
-                    clipData = ClipData.newRawUri(shared.name, uri)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                startActivity(Intent.createChooser(intent, getString(if (open) R.string.harness_file_open else R.string.harness_file_share)))
-            } catch (error: CancellationException) {
-                throw error
-            } catch (_: Exception) {
-                Toast.makeText(this@HarnessActivity, R.string.harness_file_action_failed, Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun confirmDeleteWorkspaceFile(path: String) {
-        AlertDialog.Builder(this)
-            .setTitle(R.string.harness_file_delete)
-            .setMessage(getString(R.string.harness_file_delete_confirm, path))
-            .setNegativeButton(android.R.string.cancel, null)
-            .setPositiveButton(R.string.harness_file_delete) { _, _ ->
-                lifecycleScope.launch {
-                    try {
-                        withContext(Dispatchers.IO) {
-                            RuntimeWorkspaceFiles(RuntimeStore(this@HarnessActivity), cacheDir).delete(path)
-                        }
-                        Toast.makeText(this@HarnessActivity, R.string.harness_file_deleted, Toast.LENGTH_SHORT).show()
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (_: Exception) {
-                        Toast.makeText(this@HarnessActivity, R.string.harness_file_action_failed, Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-            .show()
     }
 
     /**
