@@ -850,30 +850,74 @@ class RuntimeInstaller(
             RuntimeFiles.deleteTreeNoFollow(target, store.runtimeParent)
             return
         } catch (failure: RuntimeFailure) {
-            val aside = File(store.runtimeParent, "stale-${target.name}")
+            // 安装流程随后要用 previous/、current/ 这些固定路径，残留必须离开原位：
+            // 删不掉就改名挪到一边，并把原因与失败类别记进诊断日志。
+            // 每次尝试留下的是唯一名字，所以旧残留本身就删不掉也不会再挡住下一次安装。
+            val leftovers = staleSiblings(target.name)
+            leftovers.take(MAX_STALE_RETRIES).forEach { stale ->
+                try {
+                    RuntimeFiles.deleteTreeNoFollow(stale, store.runtimeParent)
+                } catch (ignored: Throwable) {
+                    recordRetireFailure(ignored, staleReason(target.name), leftovers.size)
+                }
+            }
+            val aside = File(store.runtimeParent, uniqueAsideName(target.name))
             try {
-                if (RuntimeFiles.existsNoFollow(aside)) RuntimeFiles.deleteTreeNoFollow(aside, store.runtimeParent)
                 Os.rename(target.absolutePath, aside.absolutePath)
-                store.diagnostics.record(
-                    DiagnosticLevel.WARN,
-                    DiagnosticEvent.RUNTIME_PHASE,
-                    mapOf(
-                        "phase" to "cleanup",
-                        "result" to "skipped",
-                        "code" to failure.code,
-                        "reason" to reason,
-                    ),
-                )
-            } catch (_: Throwable) {
+            } catch (error: Throwable) {
                 // 连改名都不行：这才是真正需要用户处理的故障（例如父目录不可写）。
+                recordRetireFailure(error, reason, leftovers.size)
                 throw failure
             }
+            recordRetireFailure(failure, reason, leftovers.size)
+            store.diagnostics.record(
+                DiagnosticLevel.WARN,
+                DiagnosticEvent.RUNTIME_PHASE,
+                mapOf(
+                    "phase" to "cleanup",
+                    "result" to "skipped",
+                    "code" to failure.code,
+                    "reason" to reason,
+                    "count" to leftovers.size.toString(),
+                ),
+            )
         }
     }
 
+    /** 同一个名字可能对应多份改名残留（每次删除失败都会新增一份），返回它们供尽力清理。 */
+    private fun staleSiblings(name: String): List<File> {
+        val prefix = "stale-$name"
+        val children = store.runtimeParent.listFiles() ?: return emptyList()
+        return children.filter { it.name == prefix || it.name.startsWith("$prefix-") }
+    }
+
+    private fun uniqueAsideName(name: String): String =
+        "stale-$name-${System.currentTimeMillis().toString(36)}"
+
+    /** 残留目录的 reason 取值必须匹配诊断日志的 token 规则：小写字母开头、只含 `[a-z0-9._-]`。 */
+    private fun staleReason(name: String): String =
+        "stale_" + name.lowercase().replace(Regex("[^a-z0-9._-]"), "_")
+
+    private fun recordRetireFailure(error: Throwable, reason: String, leftovers: Int) {
+        store.diagnostics.record(
+            DiagnosticLevel.WARN,
+            DiagnosticEvent.RUNTIME_PHASE,
+            mapOf(
+                "phase" to "cleanup",
+                "result" to "failed",
+                "code" to RuntimeRetireTokens.of(error),
+                "reason" to reason,
+                "count" to leftovers.toString(),
+            ),
+        )
+    }
+
+    /**
+     * 清理指定路径。删不掉时按 [retireIfPresent] 的规则改名挪开并记录原因：
+     * 清理只是收尾，绝不该让一次能装上的更新失败（真机上 previous/ 这类整份 rootfs 可能删不掉）。
+     */
     private fun cleanupIfPresent(target: File) {
-        if (!RuntimeFiles.existsNoFollow(target)) return
-        RuntimeFiles.deleteTreeNoFollow(target, store.runtimeParent)
+        retireIfPresent(target, "cleanup")
     }
 
     private fun checkCancellation() {
@@ -886,5 +930,8 @@ class RuntimeInstaller(
         private val UUID_SUFFIX = Regex("^[a-f0-9-]{36}$")
         private val RESUME_FILE = Regex("^rootfs-[a-f0-9]{64}\\.part$")
         private const val BUFFER_SIZE = 64 * 1024
+
+        /** 每次清理最多重试几份改名残留：真删不掉时也避免每次安装都在几份 rootfs 上白走一遍。 */
+        private const val MAX_STALE_RETRIES = 3
     }
 }
