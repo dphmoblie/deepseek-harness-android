@@ -32,15 +32,19 @@
     <string name="overlay_conversation_close">关闭</string>
     <string name="overlay_conversation_unavailable">对话尚未启动，点按返回应用开启 Harness</string>
     <string name="overlay_ball_channel_name">悬浮球</string>
-    <string name="overlay_ball_channel_description">在其他应用上层显示悬浮球，点按展开 Harness 对话小窗</string>
+    <string name="overlay_ball_channel_description">在其他应用上层显示悬浮球，点按打开快捷菜单（对话 / 副屏）</string>
     <string name="overlay_ball_notification_title">悬浮球已开启</string>
-    <string name="overlay_ball_notification_text">点按返回应用，悬浮球可展开对话小窗</string>
+    <string name="overlay_ball_notification_text">点按打开快捷菜单，可进入对话或副屏</string>
     <string name="overlay_ball_menu_return">回到应用</string>
     <string name="overlay_ball_menu_hide">隐藏悬浮球</string>
     <!--
-      二级悬浮球：长按主球展开，每个按钮一个动作。contentDescription 与可见文字分开写，
-      是为了让 TalkBack 在按钮上没有文字时（或文字被截断时）仍然说明这个按钮会做什么。
+      二级悬浮球：短按主球展开，每个按钮一个动作（长按主球＝直接打开对话）。contentDescription
+      与可见文字分开写，是为了让 TalkBack 在按钮上没有文字时（或文字被截断时）仍然说明这个
+      按钮会做什么。
     -->
+    <string name="overlay_ball_secondary_conversation_description">打开 Harness AI 对话小窗</string>
+    <string name="overlay_ball_secondary_virtual_screen_description">打开目标应用副屏悬浮窗</string>
+    <string name="overlay_ball_secondary_virtual_screen_unavailable_toast">副屏尚未运行，请先在 Harness 里打开「目标应用副屏」</string>
     <string name="overlay_ball_secondary_return">回到应用</string>
     <string name="overlay_ball_secondary_return_description">回到应用，打开 Harness 对话界面</string>
     <string name="overlay_ball_secondary_hide">隐藏悬浮球</string>
@@ -51,6 +55,12 @@
     <string name="overlay_ball_secondary_accessibility_off_description">Harness 无障碍服务当前未开启，无需关闭</string>
     <string name="overlay_ball_secondary_accessibility_disabled_toast">无障碍服务当前未开启，无需关闭</string>
     <string name="overlay_ball_secondary_accessibility_closed_toast">已关闭无障碍服务</string>
+
+    <!-- 副屏预览档位：副屏页面与副屏悬浮窗共用同一组标签。 -->
+    <string name="virtual_screen_mode_limited">省电</string>
+    <string name="virtual_screen_mode_15fps">15 FPS</string>
+    <string name="virtual_screen_mode_30fps">30 FPS</string>
+    <string name="virtual_screen_mode_60fps">60 FPS</string>
 
     <!--
       任务通知（登记册 §5.5）。与保活通知分开一个通道：保活必须常驻静默，

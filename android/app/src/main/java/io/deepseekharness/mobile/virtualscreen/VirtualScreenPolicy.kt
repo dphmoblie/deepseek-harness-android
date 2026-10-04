@@ -45,6 +45,28 @@ object VirtualScreenPolicy {
     /** 预览模式对应的状态标签：limited → "limited-fps"，其余 → "realtime-<模式名>"（例如 "realtime-30fps"）。 */
     fun frameModeLabel(mode: String): String = if (mode == "limited") "limited-fps" else "realtime-$mode"
 
+    /**
+     * 把 [frameModeLabel] 写出去的状态值反解回档位，供「显示当前档位」「重发 config」使用。
+     *
+     * 认不出来时回落到 `limited`：这是最省电、也最不可能让用户觉得「怎么突然很烫」的一档。
+     */
+    fun frameModeOf(label: String): String = when {
+        label == "limited-fps" -> "limited"
+        label.startsWith("realtime-") -> label.removePrefix("realtime-").takeIf { it in FRAME_MODES } ?: "limited"
+        label in FRAME_MODES -> label
+        else -> "limited"
+    }
+
+    /**
+     * 预览窗口拉取一帧 PNG 的间隔：跟随当前档位，但不下探到 [PREVIEW_PULL_FLOOR_MILLIS]。
+     *
+     * 采集与出帧始终按 [frameInterval] 跑；这里限制的只是「截图 → 解码 PNG → 贴图」这条更贵的链路，
+     * 否则 60fps 档位会把主线程压满，用户看到的反而更卡。
+     */
+    const val PREVIEW_PULL_FLOOR_MILLIS = 120
+
+    fun previewPullInterval(mode: String): Int = maxOf(PREVIEW_PULL_FLOOR_MILLIS, frameInterval(mode))
+
     /** 从请求里取出并校验目标应用入口（字段名 [TARGET_FIELD]），复用 [component] 的规则。 */
     fun targetRequest(p: JSONObject): String = component(p.getString(TARGET_FIELD))
 

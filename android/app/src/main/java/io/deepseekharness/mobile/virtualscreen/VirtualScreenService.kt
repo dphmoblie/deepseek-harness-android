@@ -10,6 +10,7 @@ import android.view.*
 import android.widget.*
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.runtime.*
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
 import io.deepseekharness.mobile.runtime.audit.AuditResult
@@ -21,6 +22,14 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** 持有副屏会话；退出预览页或收起小窗不会销毁目标应用。 */
+/** 档位 → 标题资源；副屏页面、副屏悬浮窗与状态行共用，避免几处各写一份中文。 */
+private fun modeTitleRes(mode: String): Int = when (mode) {
+    "15fps" -> R.string.virtual_screen_mode_15fps
+    "30fps" -> R.string.virtual_screen_mode_30fps
+    "60fps" -> R.string.virtual_screen_mode_60fps
+    else -> R.string.virtual_screen_mode_limited
+}
+
 class VirtualScreenService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
     private val owner = Binder()
@@ -235,6 +244,41 @@ class VirtualScreenService : Service() {
         }
         val close = Button(this).apply { text = "收起"; setOnClickListener { hideOverlay() } }
         toolbar.addView(page); toolbar.addView(close); panel.addView(toolbar)
+        // 档位行：副屏页里能选的几档，在悬浮窗上也能选，不必「先展开、改完再收回来」。
+        // 档位只改采集间隔；预览拉取另有下限（见 VirtualScreenPolicy.previewPullInterval）。
+        val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val modeButtons = mutableListOf<Button>()
+        val currentMode = {
+            VirtualScreenPolicy.frameModeOf(state().optString(VirtualScreenPolicy.PREVIEW_FIELD))
+        }
+        val paintModes = {
+            val active = currentMode()
+            modeButtons.forEach { button -> button.alpha = if (button.tag == active) 1f else 0.5f }
+        }
+        VirtualScreenPolicy.FRAME_MODES.keys.forEach { mode ->
+            val button = Button(this).apply {
+                text = getString(modeTitleRes(mode))
+                tag = mode
+                setPadding(6, 0, 6, 0)
+                setOnClickListener {
+                    runCatching {
+                        action(
+                            JSONObject()
+                                .put("sessionId", session)
+                                .put("action", "config")
+                                .put(VirtualScreenPolicy.PREVIEW_FIELD, mode),
+                        )
+                    }.onFailure {
+                        Toast.makeText(this@VirtualScreenService, "切换档位失败，请重试", Toast.LENGTH_SHORT).show()
+                    }
+                    paintModes()
+                }
+            }
+            modeButtons += button
+            modeRow.addView(button, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        panel.addView(modeRow)
+        paintModes()
         val image = VirtualScreenPreview(this).also { preview = it }
         panel.addView(image, LinearLayout.LayoutParams(-1, 0, 1f))
         val w = minOf((320 * metrics.density).toInt(), (metrics.widthPixels * .9f).toInt())
@@ -419,19 +463,22 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                 var bitmap: android.graphics.Bitmap? = null
                 var id = ""
                 var channel = ""
+                var mode = "limited"
                 val message = try {
                     val service = checkNotNull(VirtualScreenService.current)
                     val state = service.state()
                     id = state.getString("sessionId")
                     channel = state.optString("touchChannel", "")
+                    mode = VirtualScreenPolicy.frameModeOf(state.optString(VirtualScreenPolicy.PREVIEW_FIELD))
                     val fps = state.optDouble("frameFps", 0.0)
                     val bytes = service.screenshot(id)
                     bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     checkNotNull(bitmap)
-                    // 状态行如实展示当前通道与实测帧率，方便用户判断直传/帧率是否生效。
+                    // 状态行如实展示当前通道、实测帧率与所选档位，方便用户判断直传/帧率是否生效。
+                    // 这里不再写「静止页面复用最近一帧」：复用行为已按用户要求关闭，写它就是假话。
                     val touch = if (channel == "stream") "触摸直传" else "点击或滑动操作"
                     val rate = if (fps > 0.0) String.format(java.util.Locale.US, "%.1f fps", fps) else "等待首帧"
-                    "副屏预览 · $touch · $rate · 静止页面复用最近一帧"
+                    "副屏预览 · $touch · $rate · 档位 ${context.getString(modeTitleRes(mode))}"
                 } catch (_: Exception) { "等待副屏画面；锁屏、断连或应用离开副屏时暂停显示" }
                 main.post {
                     if (version != generation || executor == null) { return@post }
@@ -442,7 +489,9 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     observedSession = id; observedAt = SystemClock.elapsedRealtime()
                     if (channel.isNotEmpty()) observedChannel = channel
                     report(message)
-                    main.postDelayed(this, 250)
+                    // 拉取间隔跟随档位（下限见 VirtualScreenPolicy.previewPullInterval）：
+                    // 档位在这里改、运行中立刻生效，不必重开副屏。
+                    main.postDelayed(this, VirtualScreenPolicy.previewPullInterval(mode).toLong())
                 }
             }
         }

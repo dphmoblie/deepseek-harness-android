@@ -20,6 +20,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -50,13 +51,15 @@ import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLog
 import io.deepseekharness.mobile.runtime.RuntimeStore
 import io.deepseekharness.mobile.runtime.RuntimeHost
 import io.deepseekharness.mobile.runtime.HarnessAccess
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenService
 import java.util.UUID
 
 /**
  * 悬浮球前台服务。
  *
  * 职责边界：
- *  - 显示可拖动的球；短按展开同源 Harness 对话小窗；
+ *  - 显示可拖动的球；短按展开二级球（对话 / 副屏 / 回到应用 / 隐藏球 / 关闭无障碍），
+ *    长按直接展开同源 Harness 对话小窗；
  *  - 不执行 Shell 命令，也不连接 Shizuku；小窗仅在已授权会话存活时使用内存中的一次性凭据；
  *  - 通知内容固定，不含 URL、端口、密码、终端输出或其他用户数据；
  *  - 明确不承诺常驻：Android 与厂商系统的内存回收、强制停止、电池与后台策略
@@ -285,7 +288,26 @@ class OverlayBallService : Service() {
         val metrics = resources.displayMetrics
         val size = (BALL_SIZE_DP * metrics.density).toInt()
 
-        val view = LayoutInflater.from(this).inflate(R.layout.view_overlay_ball, null)
+        // 充气必须显式带 AppCompat 主题：厂商「强制深色 / 强制主题」会把服务当前主题
+        // 换成平台主题，此时布局里的 AppCompat 属性解析不到，inflate 抛
+        // UnsupportedOperationException，异常从这里逃出去会终结整个进程 ——
+        // 真机表现为「一打开悬浮球开关，App 启动就闪退」。
+        val themed = ContextThemeWrapper(this, R.style.AppTheme)
+        val view = runCatching { LayoutInflater.from(themed).inflate(R.layout.view_overlay_ball, null) }
+            .getOrElse { error ->
+                diagnostics.record(
+                    DiagnosticLevel.WARN,
+                    DiagnosticEvent.KEEP_ALIVE,
+                    mapOf("reason" to "overlay_inflate_failed", "active" to "false"),
+                )
+                android.util.Log.w(
+                    "dsh-runtime",
+                    "overlay ball inflate failed: ${error.javaClass.simpleName}",
+                )
+                stopForegroundCompat()
+                stopSelf()
+                return false
+            }
         val params = WindowManager.LayoutParams(
             size,
             size,
@@ -317,14 +339,16 @@ class OverlayBallService : Service() {
         params.y = y
 
         // 触摸与无障碍操作共用语义点击入口，TalkBack 可直接点击或长按球体。
+        // 短按＝展开/收起二级球：二级球上给出「会话」与「副屏」两个入口，以及
+        // 回到应用 / 隐藏悬浮球 / 关闭无障碍。短按是最高频的动作，因此把「选择去哪里」
+        // 放在短按上，而不是继续沿用「短按直接进对话」——那会让副屏没有同等入口。
         view.setOnClickListener {
-            if (!stopIfOverlayPermissionRevoked()) toggleConversation()
+            if (!stopIfOverlayPermissionRevoked()) toggleSecondaryChoices()
         }
         view.setOnLongClickListener {
-            // 长按已从「弹出文字菜单」改成「展开/收起二级球」：二级球上的每一项就是原来
-            // 菜单项的动作（外加减一个「关闭无障碍」）。不保留文字菜单，是因为同一组动作
-            // 有两个入口时，用户无法从界面判断哪个是权威入口。
-            if (!stopIfOverlayPermissionRevoked()) toggleSecondaryChoices()
+            // 长按＝直接打开 Harness 对话小窗（原来短按的动作搬到长按），
+            // 让熟手不必经二级球绕一次。
+            if (!stopIfOverlayPermissionRevoked()) toggleConversation()
             true
         }
         view.setOnTouchListener { touched, event -> handleTouch(touched, event, size) }
@@ -380,7 +404,7 @@ class OverlayBallService : Service() {
     }
 
     /**
-     * 触摸处理：短按回对话、长按弹菜单、拖动移动球。
+     * 触摸处理：短按弹二级球、长按直接回对话、拖动移动球。
      *
      * 判定复用 [OverlayBallPolicy]，与单测覆盖的是同一套规则。
      */
@@ -1067,6 +1091,10 @@ class OverlayBallService : Service() {
     ): View {
         val connected = DeepSeekAccessibilityService.current() != null
         val labelRes = when (choice) {
+            OverlayBallSecondaryPolicy.Choice.CONVERSATION ->
+                R.string.overlay_ball_secondary_conversation_description
+            OverlayBallSecondaryPolicy.Choice.VIRTUAL_SCREEN ->
+                R.string.overlay_ball_secondary_virtual_screen_description
             OverlayBallSecondaryPolicy.Choice.RETURN_TO_APP ->
                 R.string.overlay_ball_secondary_return_description
             OverlayBallSecondaryPolicy.Choice.HIDE_BALL ->
@@ -1102,6 +1130,8 @@ class OverlayBallService : Service() {
     ): TextView = TextView(this).apply {
         val visual = dp(OverlayBallSecondaryPolicy.VISUAL_SIZE_DP)
         text = when (choice) {
+            OverlayBallSecondaryPolicy.Choice.CONVERSATION -> SECONDARY_GLYPH_CONVERSATION
+            OverlayBallSecondaryPolicy.Choice.VIRTUAL_SCREEN -> SECONDARY_GLYPH_SCREEN
             OverlayBallSecondaryPolicy.Choice.RETURN_TO_APP -> SECONDARY_GLYPH_RETURN
             OverlayBallSecondaryPolicy.Choice.HIDE_BALL -> SECONDARY_GLYPH_HIDE
             OverlayBallSecondaryPolicy.Choice.DISABLE_ACCESSIBILITY ->
@@ -1137,9 +1167,26 @@ class OverlayBallService : Service() {
 
     private fun onSecondaryChoice(choice: OverlayBallSecondaryPolicy.Choice) {
         when (choice) {
+            OverlayBallSecondaryPolicy.Choice.CONVERSATION -> toggleConversation()
+            OverlayBallSecondaryPolicy.Choice.VIRTUAL_SCREEN -> openVirtualScreen()
             OverlayBallSecondaryPolicy.Choice.RETURN_TO_APP -> returnToApp()
             OverlayBallSecondaryPolicy.Choice.HIDE_BALL -> hideBall()
             OverlayBallSecondaryPolicy.Choice.DISABLE_ACCESSIBILITY -> disableAccessibilityService()
+        }
+    }
+
+    /**
+     * 「打开副屏」：把目标应用副屏以系统级悬浮窗的形式显示出来。
+     *
+     * 窗口本身、触摸直传与帧率档位都在 [VirtualScreenService.showOverlay] 里
+     * （见 `docs/目标应用副屏.md`），这里只负责一件事：副屏没在跑时说清楚该从哪里打开，
+     * 而不是让按钮看起来坏了。
+     */
+    private fun openVirtualScreen() {
+        val screen = VirtualScreenService.current
+        val shown = runCatching { screen?.showOverlay() }
+        if (screen == null || shown.isFailure) {
+            toastCurrentThread(getString(R.string.overlay_ball_secondary_virtual_screen_unavailable_toast))
         }
     }
 
@@ -1385,6 +1432,8 @@ class OverlayBallService : Service() {
          * 而这三个动作的语义（回首页 / 关闭 / 禁用）在 Unicode 里都有无歧义的现成字符。
          * 每个按钮同时带 `contentDescription`，因此即便字体缺字（只有豆腐块）也不会失去含义。
          */
+        private const val SECONDARY_GLYPH_CONVERSATION = "\u2630" // ☰ 打开 Harness 对话
+        private const val SECONDARY_GLYPH_SCREEN = "\u25A3"       // ▣ 打开目标应用副屏
         private const val SECONDARY_GLYPH_RETURN = "\u2302"      // ⌂
         private const val SECONDARY_GLYPH_HIDE = "\u2715"        // ✕
         private const val SECONDARY_GLYPH_CLOSE = "\u2298"       // ⊘ 关闭无障碍（已开启）

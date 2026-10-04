@@ -1,12 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 悬浮球的视图：圆形底 + 铺满球面的应用图标（与手机桌面上的图标同一张图）。 -->
+<!-- 悬浮球的视图：圆形底 + 铺满球面的应用图标（与手机桌面上的图标同一张图）。
+
+     foreground 必须用平台属性 ?android:attr/... 而不是 ?attr/...：服务里充气时用的主题
+     可能被厂商 ROM 的「强制深色 / 强制主题」替换成平台主题，此时 AppCompat 属性
+     (androidx.appcompat.R.attr.selectableItemBackgroundBorderless) 解析不到，
+     TypedArray.getDrawable 会抛 UnsupportedOperationException 让整个进程闪退
+     （真机回执见 docs/发布说明-0.2.9.md）。平台属性在两种主题下都存在。 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:contentDescription="@string/overlay_ball_content_description"
     android:focusable="true"
     android:clickable="true"
-    android:foreground="?attr/selectableItemBackgroundBorderless"
+    android:foreground="?android:attr/selectableItemBackgroundBorderless"
     android:background="@drawable/bg_overlay_ball">
 
     <androidx.appcompat.widget.AppCompatImageView

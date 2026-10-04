@@ -164,4 +164,35 @@ class VirtualScreenPolicyTest {
         // 空串没有可注入的内容，不属于无障碍场景（长度校验由调用端负责）。
         assertFalse(VirtualScreenPolicy.needsAccessibilityText(""))
     }
+
+    @Test fun `状态行标签能反解回档位且未知标签回落到省电`() {
+        // 副屏页与副屏悬浮窗拿到的都是状态行标签（frameModeLabel 的输出），必须能反解回档位，
+        // 否则悬浮窗上的档位高亮会永远停在省电，用户看不出当前是哪一档。
+        for (mode in VirtualScreenPolicy.FRAME_MODES.keys) {
+            assertEquals(mode, VirtualScreenPolicy.frameModeOf(VirtualScreenPolicy.frameModeLabel(mode)))
+        }
+        // 直接传档位名也要能用（调用端可能已经反解过一次）。
+        for (mode in VirtualScreenPolicy.FRAME_MODES.keys) {
+            assertEquals(mode, VirtualScreenPolicy.frameModeOf(mode))
+        }
+        // 反解必须是全函数：状态行可能来自旧版本或异常会话，不能因为一个陌生标签就让预览线程崩掉。
+        for (label in listOf("", "realtime", "realtime-24fps", "limited-fps ", "Realtime-15fps", "120FPS")) {
+            assertEquals("「$label」应回落到省电档", "limited", VirtualScreenPolicy.frameModeOf(label))
+        }
+    }
+
+    @Test fun `预览拉取间隔不低于下限且必须先用反解归一档位`() {
+        // 省电档 180ms 慢于下限，按档位走；其余三档都快于下限，必须夹到 120ms，
+        // 否则预览线程会以 16ms 轮询截图接口，把 shell 通道压满。
+        assertEquals(180, VirtualScreenPolicy.previewPullInterval("limited"))
+        assertEquals(120, VirtualScreenPolicy.previewPullInterval("15fps"))
+        assertEquals(120, VirtualScreenPolicy.previewPullInterval("30fps"))
+        assertEquals(120, VirtualScreenPolicy.previewPullInterval("60fps"))
+        assertEquals(120, VirtualScreenPolicy.PREVIEW_PULL_FLOOR_MILLIS)
+        // 未知模式沿用 frameInterval 的严格契约（不悄悄回落），调用端要先用 frameModeOf 归一。
+        for (mode in listOf("", "realtime-15fps", "24fps")) {
+            val error = assertThrows(IllegalArgumentException::class.java) { VirtualScreenPolicy.previewPullInterval(mode) }
+            assertEquals("副屏预览模式不在允许列表", error.message)
+        }
+    }
 }
