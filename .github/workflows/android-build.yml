@@ -21,9 +21,10 @@ permissions:
 env:
   # 应用版本号：与 android/app/build.gradle 的 versionName 保持一致。
   # CI 据此生成运行时版本与 Release 标签：预发布走 v<版本>-mobile-<run_number>，
-  # 正式版（release_type=stable）直接用 v<版本>。0.2.4 根据 HONOR Android 17 真机回执
-  # 改进副屏动作协议与截图帧新鲜度信息；内置 dsh 仍为 0.2.0-rc.2。
-  APP_VERSION: '0.2.4'
+  # 正式版（release_type=stable）直接用 v<版本>。0.2.5 修复运行时更新在清理阶段以
+  # FILESYSTEM_ERROR 失败、把用户锁在更新页的问题（清理失败改为把暂存目录挪到
+  # stale-* ，不再阻塞安装），并把安装失败步骤写进诊断日志；内置 dsh 仍为 0.2.0-rc.2。
+  APP_VERSION: '0.2.5'
 
 jobs:
   build:

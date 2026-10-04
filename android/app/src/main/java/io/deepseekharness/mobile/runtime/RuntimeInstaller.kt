@@ -16,6 +16,8 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 
 class RuntimeInstaller(
     private val store: RuntimeStore,
@@ -34,19 +36,30 @@ class RuntimeInstaller(
     private val installLock = ReentrantLock()
     private val cancellationRequested = AtomicBoolean(false)
 
+    /**
+     * 本次安装当前所处的步骤名，用于失败时写进诊断日志。
+     *
+     * 只能是受控 token（诊断字段不允许中文、空格与路径）：原生失败细节从来不进 logcat，
+     * 只有这一行能让排障的人知道「安装到底卡在哪一步」。
+     */
+    private var currentStep: String = "start"
+
     fun install(source: RuntimeSource) {
         if (!installLock.tryLock()) throw RuntimeFailure("INSTALL_IN_PROGRESS", "运行时安装正在进行")
         cancellationRequested.set(false)
         var workspace: Workspace? = null
         try {
+            currentStep = "runner_check"
             if (!store.runnerAvailable()) {
                 throw RuntimeFailure("RUNNER_UNAVAILABLE", "APK 未包含当前架构的受信任运行器")
             }
+            currentStep = "parent_prepare"
             prepareRuntimeParent()
             checkCancellation()
 
             val transferPhase = if (source.isBundled) RuntimePhase.PREPARING else RuntimePhase.DOWNLOADING
             status.update(transferPhase, downloaded = 0, total = 0)
+            currentStep = "manifest"
             val manifest = loadManifest(source)
             checkCancellation()
             if (isCurrent(manifest)) {
@@ -58,9 +71,11 @@ class RuntimeInstaller(
                 )
                 return
             }
+            currentStep = "workspace"
             workspace = createWorkspace(manifest, source.isBundled || source.libraryId != null)
             status.update(transferPhase, downloaded = 0, total = manifest.rootfs.compressedBytes)
 
+            currentStep = "transfer"
             if (source.libraryId != null) {
                 RuntimeLibrary(store).copyArchive(source.libraryId, workspace.archivePart)
             } else if (source.isBundled) {
@@ -83,6 +98,7 @@ class RuntimeInstaller(
                 }
             }
             checkCancellation()
+            currentStep = "verify"
             status.update(
                 RuntimePhase.VERIFYING,
                 downloaded = manifest.rootfs.compressedBytes,
@@ -93,6 +109,7 @@ class RuntimeInstaller(
                 downloaded = 0,
                 total = manifest.rootfs.extractedBytes,
             )
+            currentStep = "extract"
             extractor.extract(
                 workspace.archivePart,
                 workspace.stagingRoot,
@@ -105,13 +122,18 @@ class RuntimeInstaller(
                 status.update(RuntimePhase.EXTRACTING, downloaded = extracted, total = total)
             }
             checkCancellation()
+            currentStep = "verify_links"
             RootfsIntegrity.verifyLinks(workspace.stagingRoot, "ROOTFS_LINKS_CORRUPTED")
             // 成功解压并检查后保存干净安装包，后续切换不再依赖网络。
+            currentStep = "retain"
             if (source.libraryId == null) RuntimeLibrary(store).retain(manifest, workspace.archivePart)
             store.writeInstalledManifest(workspace.stagingManifest, manifest)
+            currentStep = "promote"
             promoteRuntime(workspace.stagingRoot, workspace.stagingManifest)
             store.updateInstalledManifest(manifest)
+            currentStep = "cleanup_archive"
             cleanupIfPresent(workspace.archivePart)
+            currentStep = "ready"
             status.update(
                 RuntimePhase.READY,
                 downloaded = manifest.rootfs.compressedBytes,
@@ -134,8 +156,23 @@ class RuntimeInstaller(
             } else {
                 error as? RuntimeFailure ?: RuntimeFailure("INSTALL_FAILED", "运行时安装失败", error)
             }
-            if (failure.code == "INSTALL_CANCELLED") status.refreshIdle()
-            else status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
+            if (failure.code == "INSTALL_CANCELLED") {
+                status.refreshIdle()
+            } else {
+                status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
+                // 原生失败细节既不进 logcat 也不进审计，只在这里留一行受控记录：
+                // code 说明失败类别，reason 说明卡在哪一步（都是 token，不含路径与文本）。
+                store.diagnostics.record(
+                    DiagnosticLevel.ERROR,
+                    DiagnosticEvent.RUNTIME_PHASE,
+                    mapOf(
+                        "phase" to "error",
+                        "code" to failure.code,
+                        "reason" to currentStep,
+                        "result" to "failed",
+                    ),
+                )
+            }
             throw failure
         } finally {
             installLock.unlock()
@@ -352,13 +389,17 @@ class RuntimeInstaller(
     }
 
     private fun prepareRuntimeParent() {
+        currentStep = "parent_check"
         if (!RuntimeFiles.existsNoFollow(store.runtimeParent)) {
             Files.createDirectory(store.runtimeParent.toPath())
         } else if (!RuntimeFiles.isDirectoryNoFollow(store.runtimeParent)) {
             throw RuntimeFailure("FILESYSTEM_ERROR", "运行时父路径不是目录")
         }
+        currentStep = "recovery"
         recoverInterruptedPromotion()
+        currentStep = "transient_cleanup"
         cleanTransientWorkspaces()
+        currentStep = "parent_ready"
     }
 
     private fun createWorkspace(manifest: RuntimeManifest, bundled: Boolean): Workspace {
@@ -375,6 +416,7 @@ class RuntimeInstaller(
     private fun recoverInterruptedPromotion() {
         // 中断的提升可能把用户数据留在 preserve-* 暂存目录里：这些目录不具备"暂存文件"语义，
         // 绝不能被 cleanTransientWorkspaces 之类清理掉，只能回填或原样保留。
+        currentStep = "recovery_scan"
         val preservedRoots = preservedWorkspaces()
         val currentRoot = RuntimeFiles.existsNoFollow(store.currentRoot)
         val currentManifest = RuntimeFiles.existsNoFollow(store.currentManifest)
@@ -386,27 +428,32 @@ class RuntimeInstaller(
                     // 存在遗留 preserve-* 时不得删除 backupRoot（实现约定 5）：回填可能尚未完成，
                     // 旧根目录是排查与人工取回用户数据的最后依据。
                     if (preservedRoots.isEmpty()) {
-                        cleanupIfPresent(store.backupManifest)
-                        cleanupIfPresent(store.backupRoot)
+                        currentStep = "recovery_drop_backup"
+                        retireIfPresent(store.backupManifest, "backup_manifest")
+                        retireIfPresent(store.backupRoot, "backup_root")
                     }
                 }
                 !currentRoot && currentManifest && backupRoot && !backupManifest -> {
+                    currentStep = "recovery_rename_backup"
                     Os.rename(store.backupRoot.absolutePath, store.currentRoot.absolutePath)
                 }
                 currentRoot && !currentManifest && backupRoot && backupManifest -> {
-                    cleanupIfPresent(store.currentRoot)
+                    currentStep = "recovery_swap_current"
+                    retireIfPresent(store.currentRoot, "current_root")
                     Os.rename(store.backupRoot.absolutePath, store.currentRoot.absolutePath)
                     Os.rename(store.backupManifest.absolutePath, store.currentManifest.absolutePath)
                 }
                 !currentRoot && !currentManifest && backupRoot && backupManifest -> {
+                    currentStep = "recovery_adopt_backup"
                     Os.rename(store.backupRoot.absolutePath, store.currentRoot.absolutePath)
                     Os.rename(store.backupManifest.absolutePath, store.currentManifest.absolutePath)
                 }
                 else -> {
-                    cleanupIfPresent(store.currentManifest)
-                    cleanupIfPresent(store.currentRoot)
-                    cleanupIfPresent(store.backupManifest)
-                    cleanupIfPresent(store.backupRoot)
+                    currentStep = "recovery_clear_all"
+                    retireIfPresent(store.currentManifest, "current_manifest")
+                    retireIfPresent(store.currentRoot, "current_root")
+                    retireIfPresent(store.backupManifest, "backup_manifest")
+                    retireIfPresent(store.backupRoot, "backup_root")
                 }
             }
         } catch (error: ErrnoException) {
@@ -415,7 +462,9 @@ class RuntimeInstaller(
             store.invalidateInstalledManifest()
         }
         // 回填必须在上面的分支把 backupRoot 恢复成 currentRoot 之后进行。
+        currentStep = "restore_preserved"
         restorePreservedWorkspaces(preservedRoots)
+        currentStep = "retained_slot"
         reconcileRetainedSlot()
     }
 
@@ -613,7 +662,7 @@ class RuntimeInstaller(
                 (name.startsWith("manifest-") && name.endsWith(".json") && UUID_SUFFIX.matches(name.removePrefix("manifest-").removeSuffix(".json"))) ||
                 (name.startsWith("download-") && name.endsWith(".part") && UUID_SUFFIX.matches(name.removePrefix("download-").removeSuffix(".part")))
             ) {
-                cleanupIfPresent(child)
+                retireIfPresent(child, "transient")
             }
         }
         // 注意：`preserve-*` 目录**不在此列**。它装的是用户数据，只允许在用户显式重置时清理。
@@ -784,7 +833,41 @@ class RuntimeInstaller(
         val children = store.runtimeParent.listFiles() ?: return
         for (child in children) {
             val name = child.name
-            if (RESUME_FILE.matches(name) && name != keepName) cleanupIfPresent(child)
+            if (RESUME_FILE.matches(name) && name != keepName) retireIfPresent(child, "resume_part")
+        }
+    }
+
+    /**
+     * 清理不再需要的目录：删不掉就改名挪到一边，绝不让清理失败拖垮整次安装。
+     *
+     * 挪走（而不是留在原地）是必须的：`previous/`、`current/` 这类路径随后要被提升流程改名占用，
+     * 只把失败吞掉会让安装换一个地方继续失败。挪到 `stale-*` 后目标路径立即空出来，
+     * 磁盘占用留到用户显式重置环境时随其他目录一起清理。
+     */
+    private fun retireIfPresent(target: File, reason: String) {
+        if (!RuntimeFiles.existsNoFollow(target)) return
+        try {
+            RuntimeFiles.deleteTreeNoFollow(target, store.runtimeParent)
+            return
+        } catch (failure: RuntimeFailure) {
+            val aside = File(store.runtimeParent, "stale-${target.name}")
+            try {
+                if (RuntimeFiles.existsNoFollow(aside)) RuntimeFiles.deleteTreeNoFollow(aside, store.runtimeParent)
+                Os.rename(target.absolutePath, aside.absolutePath)
+                store.diagnostics.record(
+                    DiagnosticLevel.WARN,
+                    DiagnosticEvent.RUNTIME_PHASE,
+                    mapOf(
+                        "phase" to "cleanup",
+                        "result" to "skipped",
+                        "code" to failure.code,
+                        "reason" to reason,
+                    ),
+                )
+            } catch (_: Throwable) {
+                // 连改名都不行：这才是真正需要用户处理的故障（例如父目录不可写）。
+                throw failure
+            }
         }
     }
 
