@@ -29,7 +29,13 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
     private var repairFailureAtMillis: Long = 0L
 
     fun recoverIfNeeded() {
-        if (File(directory, "plugin-manager/transaction.json").exists()) run("recover", null, null, null)
+        // 运行时升级通常不会留下 transaction.json：它会重建 profiles 清单，但保留
+        // plugin-manager/state-snapshot.json。只检查事务文件会跳过正常升级后的状态回填，
+        // 结果是市场插件本体还在保留区，清单却没有插件名，后续 repair 也无法接回链接。
+        // 两个文件都不存在时不启动 Node，避免首次安装每次启动都做无意义的恢复探测。
+        val transaction = File(directory, "transaction.json").exists()
+        val snapshot = File(directory, "state-snapshot.json").exists()
+        if (transaction || snapshot) run("recover", null, null, null)
     }
 
     /**
