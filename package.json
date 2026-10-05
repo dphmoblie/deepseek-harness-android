@@ -1,6 +1,6 @@
 {
   "name": "deepseek-harness-mobile",
-  "version": "0.2.10",
+  "version": "0.2.11",
   "license": "MIT",
   "private": true,
   "type": "module",
