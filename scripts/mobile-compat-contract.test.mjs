@@ -526,12 +526,16 @@ test('Shizuku UserService uses the reserved removal transaction and stops with t
     ['resize', 2],
     ['closeSession', 3],
     ['closeAll', 4],
+    ['startVirtualScreen', 5],
+    ['virtualScreenState', 6],
+    ['virtualScreenAction', 7],
+    ['virtualScreenSnapshot', 8],
+    ['virtualScreenFrame', 9],
   ]) {
     assert.match(aidl, new RegExp(`${method}\\([^;]*\\)\\s*=\\s*${transaction};`))
   }
   assert.match(aidl, /void destroy\(\)\s*=\s*16777114;/)
-  // The AIDL gained the zero-copy HardwareBuffer frame method, so the
-  // UserService protocol version must advance with that interface change.
+  // UserService 版本号必须在改动 AIDL 时有意提升：这里钉死当前值，改接口就得同步改这条断言。
   assert.match(shizukuRuntime, /private const val USER_SERVICE_VERSION = 5/)
   assert.match(shizukuRuntime, /fun disconnect\(\)/)
   assert.match(shizukuRuntime, /activeServiceGeneration = serviceGeneration\.incrementAndGet\(\)/)

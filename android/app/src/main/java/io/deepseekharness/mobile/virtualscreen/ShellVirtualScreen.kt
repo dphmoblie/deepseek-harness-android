@@ -114,7 +114,9 @@ class ShellVirtualScreen {
             }
             // 下列标志属于 AOSP 的隐藏副屏能力，公开 SDK 的 IntDef 未列出；仅特权进程按系统版本使用。
             @android.annotation.SuppressLint("WrongConstant")
-            val created = if (Build.VERSION.SDK_INT >= 31) {
+            // VirtualDisplayConfig 与 createVirtualDisplay(VirtualDisplayConfig) 都是 API 34 才有的，
+            // 低版本必须走下面的旧重载，否则会在 API 31–33 真机上抛 NoClassDefFoundError。
+            val created = if (Build.VERSION.SDK_INT >= 34) {
                 val refresh = 185f
                 val config = android.hardware.display.VirtualDisplayConfig.Builder("DSH 目标应用", w, h, dpi)
                     .setSurface(capture.surface).setFlags(flags).setRequestedRefreshRate(refresh).build()
