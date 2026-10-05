@@ -93,15 +93,21 @@ test('副屏动作允许中文文本，仍拒绝控制字符与超长输入', as
   assert.equal(f.requests.length, 2)
 })
 
-test('副屏帧率配置只接受四种预览模式', async t => {
+test('副屏帧率配置接受六种预览模式', async t => {
   const f = fixture(t, () => ok('{"previewMode":"realtime-30fps"}'))
   const tool = f.tools.get('mobile_virtual_screen_config')
   await tool.execute({ sessionId: virtualSession, previewMode: '30fps' }, {})
-  assert.deepEqual(f.requests, [{ command: 'virtualScreenAction', param: JSON.stringify({ sessionId: virtualSession, action: 'config', previewMode: '30fps' }) }])
+  await tool.execute({ sessionId: virtualSession, previewMode: '120fps' }, {})
+  await tool.execute({ sessionId: virtualSession, previewMode: '185fps' }, {})
+  assert.deepEqual(f.requests, [
+    { command: 'virtualScreenAction', param: JSON.stringify({ sessionId: virtualSession, action: 'config', previewMode: '30fps' }) },
+    { command: 'virtualScreenAction', param: JSON.stringify({ sessionId: virtualSession, action: 'config', previewMode: '120fps' }) },
+    { command: 'virtualScreenAction', param: JSON.stringify({ sessionId: virtualSession, action: 'config', previewMode: '185fps' }) },
+  ])
   for (const previewMode of ['60', 'realtime', 'limited-fps', '']) {
     await assert.rejects(tool.execute({ sessionId: virtualSession, previewMode }, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
   }
-  assert.equal(f.requests.length, 1)
+  assert.equal(f.requests.length, 3)
 })
 
 test('副屏目标切换只接受完整包名，不发送显示编号', async t => {
