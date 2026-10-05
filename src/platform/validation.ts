@@ -87,6 +87,9 @@ const MAX_MAILBOX_PATH_LENGTH = 240
 const MAX_MAILBOX_TARS = 5
 /** 单次目录浏览最多返回的条目数；原生侧超出时以 truncated 标记。 */
 const MAX_MAILBOX_DIRECTORY_ENTRIES = 256
+/** 工作区文件列表与原生 `RuntimeWorkspaceFiles` 的上限保持一致。 */
+const MAX_RUNTIME_WORKSPACE_FILES = 100
+const MAX_RUNTIME_WORKSPACE_PATH_LENGTH = 240
 /** 原生侧最多回传的版本槽数（当前 + 上一版本 + 内置）；超出即视为载荷不符合契约。 */
 const MAX_RUNTIME_VERSIONS = 3
 const RUNTIME_PHASES = new Set<RuntimePhase>([
@@ -149,6 +152,37 @@ function containsControlCharacter(value: string): boolean {
     const code = character.charCodeAt(0)
     return code <= 31 || code === 127
   })
+}
+
+/**
+ * 工作区文件只能是运行时工作区下的相对普通文件路径。
+ *
+ * 这条校验同时用于原生返回的列表和后续打开/分享/删除的入参：列表不是可信来源，
+ * 不能让畸形载荷先进入 UI 再等用户点按钮时才失败。
+ */
+export function validateRuntimeWorkspaceFilePath(value: unknown): string {
+  if (
+    typeof value !== 'string' || value.length < 1 || value.length > MAX_RUNTIME_WORKSPACE_PATH_LENGTH ||
+    value.startsWith('/') || value.includes('\\') || containsControlCharacter(value)
+  ) {
+    throw new Error('工作区文件路径无效')
+  }
+  const segments = value.split('/')
+  if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..')) {
+    throw new Error('工作区文件路径无效')
+  }
+  return value
+}
+
+/** 原生工作区文件列表的结构校验；未知字段被忽略，路径逐条走同一套规则。 */
+export function validateRuntimeWorkspaceFileList(value: unknown): string[] {
+  const source = asRecord(value, '工作区文件列表')
+  if (!Array.isArray(source.files) || source.files.length > MAX_RUNTIME_WORKSPACE_FILES) {
+    throw new Error('工作区文件列表格式无效')
+  }
+  const files = source.files.map(validateRuntimeWorkspaceFilePath)
+  if (new Set(files).size !== files.length) throw new Error('工作区文件列表包含重复路径')
+  return files
 }
 
 function modelProviderId(value: unknown): ModelProviderId {

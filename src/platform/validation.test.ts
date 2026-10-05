@@ -30,6 +30,8 @@ import {
   validateRuntimeSessionListResult,
   validateRuntimeSessionSnapshotRestoreResult,
   validateRuntimeSessionSnapshotState,
+  validateRuntimeWorkspaceFileList,
+  validateRuntimeWorkspaceFilePath,
   validateRuntimeSource,
   validateRuntimeState,
   validateRuntimeVersions,
@@ -1559,5 +1561,26 @@ describe('会话列表元数据校验', () => {
     for (const updatedAt of [0, 4_102_444_800_000]) {
       expect(validateRuntimeSessionListResult(ready({ sessions: [session({ updatedAt })] })).status).toBe('ready')
     }
+  })
+})
+
+describe('运行时工作区文件列表校验', () => {
+  it('只接受受控的相对路径，并保留原生返回的文件顺序', () => {
+    expect(validateRuntimeWorkspaceFileList({ files: ['reports/summary.md', 'result.json'] }))
+      .toEqual(['reports/summary.md', 'result.json'])
+  })
+
+  it('拒绝路径穿越、绝对路径、控制字符和超长列表', () => {
+    for (const path of ['', '../secret', 'reports/../secret', '/etc/passwd', 'a\\b', 'a\nb', 'x'.repeat(241)]) {
+      expect(() => validateRuntimeWorkspaceFilePath(path), path).toThrow('工作区文件路径无效')
+    }
+    expect(validateRuntimeWorkspaceFilePath('x'.repeat(240))).toHaveLength(240)
+    expect(() => validateRuntimeWorkspaceFileList(null)).toThrow('工作区文件列表格式无效')
+    expect(() => validateRuntimeWorkspaceFileList({ files: 'result.json' })).toThrow('工作区文件列表格式无效')
+    expect(() => validateRuntimeWorkspaceFileList({ files: new Array(101).fill('result.json') }))
+      .toThrow('工作区文件列表格式无效')
+    expect(() => validateRuntimeWorkspaceFileList({ files: ['../secret'] })).toThrow('工作区文件路径无效')
+    expect(() => validateRuntimeWorkspaceFileList({ files: ['same.txt', 'same.txt'] }))
+      .toThrow('工作区文件列表包含重复路径')
   })
 })
