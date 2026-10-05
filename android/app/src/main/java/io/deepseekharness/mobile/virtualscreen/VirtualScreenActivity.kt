@@ -55,7 +55,9 @@ class VirtualScreenActivity : Activity() {
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        // 这一页**不再加 FLAG_SECURE**：加了以后用户自己截不了图、远端也取不了证，
+        // 排查「预览页读到白帧」这类问题时就只能靠猜。悬浮小窗（0.2.9 起）同样没加，两边行为一致。
+        // 隐私提醒仍写在页面上与 docs/目标应用副屏.md 里：画面按需发送至当前模型服务，不要打开含隐私信息的页面。
         val shortScreen = resources.configuration.screenHeightDp < 480
         // 颜色一律取主题令牌（res/values{,-night}/colors.xml），不在这里写死十六进制色值：
         // surface 与 Web 侧 --bg 同值、ink 与 Web 侧 --ink 同值，深浅两套在资源里成对定义。
@@ -72,7 +74,7 @@ class VirtualScreenActivity : Activity() {
         }
         val header = LinearLayout(this)
         header.addView(Button(this).apply { text = "返回"; setOnClickListener { finish() } })
-        header.addView(TextView(this).apply { text = "目标应用副屏 · 实验功能"; textSize = 17f; setTextColor(ink) }, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(TextView(this).apply { text = getString(R.string.virtual_screen_title); textSize = 17f; setTextColor(ink) }, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(header)
         status = TextView(this).apply { setTextColor(ink); textSize = 12f; maxLines = if (shortScreen) 1 else 3 }
         root.addView(status)
@@ -85,10 +87,26 @@ class VirtualScreenActivity : Activity() {
             filters = arrayOf(android.text.InputFilter.LengthFilter(160))
         }
         picker.addView(query)
-        val landscape = CheckBox(this).apply { text = "使用横屏副屏（800 × 363 dp）"; setTextColor(ink) }
+        // 两档尺寸都从规格对象读：文案里的数字与真正建会话用的像素值同源，
+        // 不会再出现「文案写 800 × 363、代码里却是 1280 × 580」这种两处各写一遍的漂移。
+        val density = resources.displayMetrics.density
+        val portraitSpec = VirtualScreenSpec.PORTRAIT
+        val landscapeSpec = VirtualScreenSpec.LANDSCAPE
+        val landscape = CheckBox(this).apply {
+            text = getString(
+                R.string.virtual_screen_orientation_landscape,
+                landscapeSpec.dpWidth(density),
+                landscapeSpec.dpHeight(density),
+            )
+            setTextColor(ink)
+        }
         picker.addView(landscape)
         picker.addView(TextView(this).apply {
-            text = "默认竖屏 363 × 800 dp。启动后可在页面或小窗操作，AI 使用副屏专用工具。画面按需发送至当前模型服务；请勿打开包含隐私信息的页面。"
+            text = getString(
+                R.string.virtual_screen_orientation_hint,
+                portraitSpec.dpWidth(density),
+                portraitSpec.dpHeight(density),
+            )
             setTextColor(ink); textSize = 12f
             visibility = if (shortScreen) View.GONE else View.VISIBLE
         })
@@ -117,7 +135,10 @@ class VirtualScreenActivity : Activity() {
             try {
                 launchPendingUntil = android.os.SystemClock.elapsedRealtime() + 2000
                 ContextCompat.startForegroundService(this, Intent(this, VirtualScreenService::class.java)
-                    .putExtra("component", selected.component).putExtra("landscape", landscape.isChecked))
+                    .putExtra("component", selected.component)
+                    // 规格走三个整型 extra；同一份 Intent 里仍带上旧的 landscape 布尔，
+                    // 让「页面已更新、会话服务还是旧版」的升级中途组合也能正常起会话。
+                    .putVirtualScreenSpec(VirtualScreenSpec.preset(landscape.isChecked), landscape.isChecked))
                 status.text = "正在创建目标应用副屏…"
             } catch (_: Exception) { launchPendingUntil = 0; toast("无法启动副屏服务，请回到前台重试") }
         }
@@ -135,7 +156,7 @@ class VirtualScreenActivity : Activity() {
         // 预览帧率切换：与 AI 侧的 mobile_virtual_screen_config 走同一条 config 动作，
         // 会话不重启；实际帧率受目标渲染与设备负载限制，状态行里的 fps 才是实测值。
         modes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; visibility = View.GONE }
-        listOf("limited" to "省电", "15fps" to "15fps", "30fps" to "30fps", "60fps" to "60fps").forEach { (mode, label) ->
+        listOf("limited" to "省电", "15fps" to "15fps", "30fps" to "30fps", "60fps" to "60fps", "120fps" to "120fps", "185fps" to "185fps").forEach { (mode, label) ->
             modeButtons[mode] = Button(this).apply {
                 text = label; textSize = 12f
                 setOnClickListener { selectMode(mode) }
@@ -145,6 +166,10 @@ class VirtualScreenActivity : Activity() {
         content.addView(modes, FrameLayout.LayoutParams(-1, -2, android.view.Gravity.BOTTOM))
         root.addView(controls)
         setContentView(root)
+        // 档位行与底部按钮不受预览影响：底部按钮本来就独占 root 的一行（不与预览同层），
+        // 档位行则是 content 里最后加的那个子控件，再抬一次确保它压在预览之上。
+        modes.bringToFront()
+        controls.bringToFront()
         // 传入与页面同一枚令牌：状态栏/导航栏与页面底色同源，不会在安全区露出一条色带。
         AppThemePreference.applySafely(this, surface)
         worker.execute {
@@ -196,7 +221,13 @@ class VirtualScreenActivity : Activity() {
                 else if (preview == null) {
                     preview = VirtualScreenPreview(this@VirtualScreenActivity).also {
                         it.report = { text -> status.text = text }
+                        // 预览第一个加进 content：它是最底层，档位行与底部按钮都画在它上面
+                        // （规则见 VirtualScreenPolicy.foregroundOnTop）。
+                        // 这里与小窗用的是同一个控件类，取帧判定与状态行文案也共用
+                        // VirtualScreenPolicy.previewOutcome / previewLine，页面不会再单独走一套判定。
                         content.addView(it, FrameLayout.LayoutParams(-1, -1))
+                        // 显式再抬一次档位行：预览刚加进来时子控件顺序变了，抬一次比假设顺序可靠。
+                        modes.bringToFront()
                     }
                 }
             }

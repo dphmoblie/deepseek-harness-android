@@ -29,6 +29,8 @@ private fun modeTitleRes(mode: String): Int = when (mode) {
     "15fps" -> R.string.virtual_screen_mode_15fps
     "30fps" -> R.string.virtual_screen_mode_30fps
     "60fps" -> R.string.virtual_screen_mode_60fps
+    "120fps" -> R.string.virtual_screen_mode_120fps
+    "185fps" -> R.string.virtual_screen_mode_185fps
     else -> R.string.virtual_screen_mode_limited
 }
 
@@ -42,6 +44,11 @@ class VirtualScreenService : Service() {
     private val actionSlot = java.util.concurrent.Semaphore(1)
     private var shizuku: ShizukuRuntime? = null
     @Volatile private var session = ""
+    /**
+     * 本次会话使用的副屏规格，在 onStartCommand 里从 Intent 解码后写入。
+     * 悬浮小窗按它换算面板比例；`onStartCommand` 一开始就写入，所以「重开服务」不会沿用上一次的方向。
+     */
+    @Volatile private var spec = VirtualScreenSpec.PORTRAIT
     private var lastAiFrameAt = 0L
     @Volatile private var snapshot = JSONObject().put("active", false)
     private var overlay: View? = null
@@ -69,7 +76,10 @@ class VirtualScreenService : Service() {
         current = this
         lastError = ""
         val component = intent.getStringExtra("component") ?: ""
-        val landscape = intent.getBooleanExtra("landscape", false)
+        // 尺寸来源收敛到规格层：三个整型 extra 读不到或读到非法值一律回退竖屏预设，
+        // 所以只有旧 `landscape` 布尔的 Intent（升级中途的旧页面、旧通知）仍按原样工作。
+        // 解码后立刻写进字段：小窗换算用的是本次会话真正生效的那一份规格。
+        spec = VirtualScreenSpec.decode(intent)
         executor.execute {
             audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, AuditResult.STARTED)
             try {
@@ -78,7 +88,8 @@ class VirtualScreenService : Service() {
                 acquiredRuntime = true
                 shizuku = runtime
                 check(!ending.get())
-                val value = runtime.startVirtualScreen(component, if (landscape) 1280 else 726, if (landscape) 580 else 1600, if (landscape) 256 else 320, owner)
+                val sessionSpec = spec
+                val value = runtime.startVirtualScreen(component, sessionSpec.widthPx, sessionSpec.heightPx, sessionSpec.densityDpi, owner)
                 session = value.getString("sessionId")
                 snapshot = value
                 audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, AuditResult.SUCCEEDED)
@@ -155,6 +166,13 @@ class VirtualScreenService : Service() {
             if (fromAi) audit.record(AuditEvent.VIRTUAL_SCREEN_READ, AuditResult.FAILED)
             throw e
         } finally { actionSlot.release() }
+    }
+
+    /** 预览专用硬件帧，绕过 PNG；调用方必须在替换或销毁画面时关闭缓冲区。 */
+    fun hardwareFrame(id: String): android.hardware.HardwareBuffer {
+        requireAccess()
+        requireSession(id)
+        return checkNotNull(shizuku).virtualScreenFrame(id)
     }
 
     /**
@@ -432,12 +450,24 @@ class VirtualScreenService : Service() {
         panel.addView(modeRow)
         paintModes()
         panel.addView(status)
+        // 小窗尺寸由虚拟屏规格换算（VirtualScreenWindow.overlaySize）。面板宽度取**画面宽度**而不是
+        // 标称的 320dp：面板固定高度里已经含了工具栏与状态行的预算，若宽度还按 320dp 满宽，
+        // 画面区比例就会比副屏更宽，`FIT_CENTER` 照样会在左右/上下留黑边。
+        // 面板宽度 == 画面宽度，画面区就是「面板减去上面几行的预算」这块矩形，比例等于副屏比例。
+        val liveSpec = VirtualScreenSpec.decodeState(snapshot)
+        val size = VirtualScreenWindow.overlaySize(liveSpec, metrics.widthPixels, metrics.heightPixels, metrics.density)
         val image = VirtualScreenPreview(this).also { preview = it }
         // 预览每一拍把状态行文案回报到这里（档位、实测帧率、画面状态都在里面）。
         image.report = { line -> if (overlay === panel) status.text = line }
-        panel.addView(image, LinearLayout.LayoutParams(-1, 0, 1f))
-        val w = minOf((320 * metrics.density).toInt(), (metrics.widthPixels * .9f).toInt())
-        val h = minOf((480 * metrics.density).toInt(), (metrics.heightPixels * .7f).toInt())
+        // 画面区不参与 LinearLayout 的均分（weight = 0，高度 = 换算出来的像素值），
+        // 多出来/不够的高度只会落在这一块之外，不会把画面的宽高比拉变形。
+        panel.addView(image, LinearLayout.LayoutParams(-1, size.contentHeightPx))
+        // 画面区是第一个加进面板的子控件，画在最底层；档位行与状态行必须压在它上面，
+        // 否则预览会把「省电/15fps/…」这一排按钮吃掉（规则见 VirtualScreenPolicy.foregroundOnTop）。
+        modeRow.bringToFront()
+        status.bringToFront()
+        val w = size.widthPx
+        val h = size.heightPx
         // 悬浮小窗**不加 FLAG_SECURE**：加了以后用户自己截图和 adb screencap 都会失败
         // （0.2.9 真机实测报 "Failed to take take screenshot. Capturing failed."），而用户明确要能看到小窗内容。
         // 全屏查看器 VirtualScreenActivity 的 FLAG_SECURE 保持不动，隐私提醒见 docs/目标应用副屏.md。
@@ -447,8 +477,13 @@ class VirtualScreenService : Service() {
         }
         var downX = 0f; var downY = 0f; var originX = 0; var originY = 0
         drag.setOnTouchListener { view, e ->
+            // 面板尺寸按会话建立时算出的 w/h 固定，拖动过程中不变，因此这里的夹取基准始终有效。
+            val current = panel.layoutParams as? WindowManager.LayoutParams
             when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { downX = e.rawX; downY = e.rawY; originX = params.x; originY = params.y }
+                MotionEvent.ACTION_DOWN -> {
+                    downX = e.rawX; downY = e.rawY
+                    originX = current?.x ?: params.x; originY = current?.y ?: params.y
+                }
                 MotionEvent.ACTION_MOVE -> {
                     params.x = (originX + e.rawX - downX).toInt().coerceIn(0, maxOf(0, metrics.widthPixels - w))
                     params.y = (originY + e.rawY - downY).toInt().coerceIn(0, maxOf(0, metrics.heightPixels - h))
@@ -518,6 +553,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private var previousSamples: IntArray? = null
     /** 逐采样行读像素时复用的整行缓冲，避免每一拍都新建数组。 */
     private var rowPixels = IntArray(0)
+    private var displayedHardware: android.hardware.HardwareBuffer? = null
     private val screenOff = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: Intent?) { clearFrame() }
     }
@@ -616,6 +652,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         setImageDrawable(null); displayed = null
         observedSession = ""; observedAt = 0
         previousSamples = null
+        displayedHardware?.close(); displayedHardware = null
     }
 
     /**
@@ -646,7 +683,8 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                 var id = ""
                 var channel = ""
                 var mode = "limited"
-                var fps = 0.0
+                    var fps = 0.0
+                    var blank = false
                 // 这一拍的亮度采样；null 表示这一拍没拿到可解码的画面（不等于「画面是空的」）。
                 var samples: IntArray? = null
                 try {
@@ -657,9 +695,20 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     channel = state.optString("touchChannel", "")
                     mode = VirtualScreenPolicy.frameModeOf(state.optString(VirtualScreenPolicy.PREVIEW_FIELD))
                     fps = state.optDouble("frameFps", 0.0)
-                    val bytes = service.screenshot(id)
-                    bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    if (bitmap != null) samples = sampleFrame(bitmap)
+                    blank = state.optBoolean("frameBlank", false)
+                    if (android.os.Build.VERSION.SDK_INT >= 30) {
+                        val hardware = service.hardwareFrame(id)
+                        displayedHardware?.close()
+                        displayedHardware = hardware
+                        bitmap = android.graphics.Bitmap.wrapHardwareBuffer(
+                            hardware,
+                            android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB),
+                        )
+                    } else {
+                        val bytes = service.screenshot(id)
+                        bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        if (bitmap != null) samples = sampleFrame(bitmap)
+                    }
                 } catch (_: Exception) { samples = null; bitmap = null }
                 main.post {
                     if (version != generation || executor == null) { return@post }
@@ -668,15 +717,22 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     val alive = current?.canObserve() == true && current.state().optString("sessionId") == id
                     // 判定权威在客户端：宿主那个只看固定采样线的 frameBlank 只作提示，不再决定清不清屏
                     // （0.2.9 的真机黑屏就是把它当成了「不能显示」）。接近纯色的帧一律不显示，并如实写进状态行。
-                    val hasContent = samples != null && VirtualScreenPolicy.frameHasContent(samples)
+                    val hasContent = if (android.os.Build.VERSION.SDK_INT >= 30) !blank
+                        else samples != null && VirtualScreenPolicy.frameHasContent(samples)
                     val changed = samples == null || VirtualScreenPolicy.frameChanged(previousSamples, samples)
                     val outcome = VirtualScreenPolicy.previewOutcome(alive, samples != null, !hasContent, changed)
                     // 还没有任何可显示画面时必须说「等待……」，不能假称「画面暂无变化」；
                     // 这里用 lambda 在读数时求值：SHOW 已经把画面画上去之后，状态行就不该再说「等待」。
-                    val line = { VirtualScreenPolicy.previewStatusLine(channel, outcome.pause, fps, context.getString(modeTitleRes(mode)), displayed == null) }
+                    // 文案由 VirtualScreenPolicy.previewLine 统一生成：页面大预览与悬浮小窗共用同一份规则。
+                    val line = {
+                        VirtualScreenPolicy.previewLine(
+                            channel, outcome.pause, fps, context.getString(modeTitleRes(mode)), displayed == null,
+                        )
+                    }
                     when (outcome.action) {
                         VirtualScreenPolicy.PreviewFrameAction.SHOW -> {
                             bitmap?.let {
+                                displayedHardware?.close(); displayedHardware = null
                                 setImageBitmap(it); displayed = it
                                 // 只有真帧才刷新画面时刻：不能让触摸与「画面新鲜」判定误以为刚更新过。
                                 observedSession = id; observedAt = SystemClock.elapsedRealtime()

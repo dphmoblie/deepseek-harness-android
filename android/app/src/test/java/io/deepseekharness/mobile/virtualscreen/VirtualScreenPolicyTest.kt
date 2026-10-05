@@ -122,8 +122,10 @@ class VirtualScreenPolicyTest {
         assertEquals(66, VirtualScreenPolicy.frameInterval("15fps"))
         assertEquals(33, VirtualScreenPolicy.frameInterval("30fps"))
         assertEquals(16, VirtualScreenPolicy.frameInterval("60fps"))
+        assertEquals(8, VirtualScreenPolicy.frameInterval("120fps"))
+        assertEquals(5, VirtualScreenPolicy.frameInterval("185fps"))
         // 映射表本身就是工具面与设置页的选项来源，键集合必须与上面四个模式完全一致。
-        assertEquals(listOf("limited", "15fps", "30fps", "60fps"), VirtualScreenPolicy.FRAME_MODES.keys.toList())
+        assertEquals(listOf("limited", "15fps", "30fps", "60fps", "120fps", "185fps"), VirtualScreenPolicy.FRAME_MODES.keys.toList())
         // 未知模式必须报出固定错误文案，不能回落到默认间隔悄悄生效。
         for (mode in listOf("", "realtime", "24fps", "120FPS", "Limited", "limited ")) {
             val error = assertThrows(IllegalArgumentException::class.java) { VirtualScreenPolicy.frameInterval(mode) }
@@ -136,6 +138,8 @@ class VirtualScreenPolicyTest {
         assertEquals("realtime-15fps", VirtualScreenPolicy.frameModeLabel("15fps"))
         assertEquals("realtime-30fps", VirtualScreenPolicy.frameModeLabel("30fps"))
         assertEquals("realtime-60fps", VirtualScreenPolicy.frameModeLabel("60fps"))
+        assertEquals("realtime-120fps", VirtualScreenPolicy.frameModeLabel("120fps"))
+        assertEquals("realtime-185fps", VirtualScreenPolicy.frameModeLabel("185fps"))
     }
 
     @Test fun `目标应用入口必须来自 component 字段且与启动校验同规则`() {
@@ -185,10 +189,12 @@ class VirtualScreenPolicyTest {
         // 省电档 180ms 慢于下限，按档位走；其余三档都快于下限，必须夹到 120ms，
         // 否则预览线程会以 16ms 轮询截图接口，把 shell 通道压满。
         assertEquals(180, VirtualScreenPolicy.previewPullInterval("limited"))
-        assertEquals(120, VirtualScreenPolicy.previewPullInterval("15fps"))
-        assertEquals(120, VirtualScreenPolicy.previewPullInterval("30fps"))
-        assertEquals(120, VirtualScreenPolicy.previewPullInterval("60fps"))
-        assertEquals(120, VirtualScreenPolicy.PREVIEW_PULL_FLOOR_MILLIS)
+        assertEquals(66, VirtualScreenPolicy.previewPullInterval("15fps"))
+        assertEquals(33, VirtualScreenPolicy.previewPullInterval("30fps"))
+        assertEquals(16, VirtualScreenPolicy.previewPullInterval("60fps"))
+        assertEquals(8, VirtualScreenPolicy.previewPullInterval("120fps"))
+        assertEquals(5, VirtualScreenPolicy.previewPullInterval("185fps"))
+        assertEquals(5, VirtualScreenPolicy.PREVIEW_PULL_FLOOR_MILLIS)
         // 未知模式沿用 frameInterval 的严格契约（不悄悄回落），调用端要先用 frameModeOf 归一。
         for (mode in listOf("", "realtime-15fps", "24fps")) {
             val error = assertThrows(IllegalArgumentException::class.java) { VirtualScreenPolicy.previewPullInterval(mode) }

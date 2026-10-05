@@ -37,7 +37,18 @@ object VirtualScreenPolicy {
      * 顺序与取值是调用端与宿主共用的稳定契约，不要调整：`limited` 保持限帧（180 毫秒，历史硬编码值），
      * 其余模式分别对应 15/30/60 帧每秒的采集间隔。
      */
-    val FRAME_MODES: Map<String, Int> = mapOf("limited" to 180, "15fps" to 66, "30fps" to 33, "60fps" to 16)
+    val FRAME_MODES: Map<String, Int> = mapOf(
+        "limited" to 180, "15fps" to 66, "30fps" to 33, "60fps" to 16,
+        "120fps" to 8, "185fps" to 5,
+    )
+
+    /** 虚拟显示器请求的合成刷新率；设备会把它夹到自身支持的档位。 */
+    fun requestedRefreshRate(mode: String): Float = when (mode) {
+        "185fps" -> 185f
+        "120fps" -> 120f
+        "60fps" -> 60f
+        else -> 60f
+    }
 
     /** 校验预览模式并返回采集间隔；未知模式抛 [IllegalArgumentException]。 */
     fun frameInterval(mode: String): Int =
@@ -64,7 +75,8 @@ object VirtualScreenPolicy {
      * 采集与出帧始终按 [frameInterval] 跑；这里限制的只是「截图 → 解码 PNG → 贴图」这条更贵的链路，
      * 否则 60fps 档位会把主线程压满，用户看到的反而更卡。
      */
-    const val PREVIEW_PULL_FLOOR_MILLIS = 120
+    // PNG 兼容预览的保守下限；GPU 直出预览不走这个轮询路径。
+    const val PREVIEW_PULL_FLOOR_MILLIS = 5
 
     fun previewPullInterval(mode: String): Int = maxOf(PREVIEW_PULL_FLOOR_MILLIS, frameInterval(mode))
 
@@ -447,6 +459,26 @@ object VirtualScreenPolicy {
      */
     fun previewStatusLine(touchChannel: String, pause: PreviewPause, fps: Double, modeTitle: String, waiting: Boolean = false): String =
         "副屏预览 · ${previewTouchLabel(touchChannel)} · ${previewFrameLabel(pause, fps, waiting)} · 档位 $modeTitle"
+
+    /**
+     * 预览实例把某一次取帧结论转成状态行文字的唯一入口。
+     *
+     * [VirtualScreenPreview] 是页面大预览与悬浮小窗**共用**的同一个控件类，本函数把「取帧结论 → 文案」
+     * 这一步也钉在同一个纯函数上，避免两边各自拼串后语义漂移（0.2.10 那次修复只在小窗生效、
+     * 页面仍复现白帧，就是因为两侧的状态来源不同）。
+     */
+    fun previewLine(channel: String, pause: PreviewPause, fps: Double, modeTitle: String, waiting: Boolean): String =
+        previewStatusLine(channel, pause, fps, modeTitle, waiting)
+
+    /**
+     * 前景控件（档位行/状态行/按钮）是否**画在预览之上**：它的子控件下标必须大于预览的下标
+     * （后加的画在上面，也先拿到触摸）。
+     *
+     * 页面大预览与悬浮小窗都遵守这条约定：预览先加（下标 0，画在最底层），前景控件最后加。
+     * 用下标与计数表达，这条规则就能脱离 View 单测——真机上「档位按钮点不到」正是这里顺序写反的症状。
+     */
+    fun foregroundAbove(childCount: Int, previewIndex: Int, foregroundIndex: Int): Boolean =
+        childCount > 0 && previewIndex >= 0 && foregroundIndex > previewIndex && foregroundIndex < childCount
 
     // ------------------------------------------------------------------
     // AI 手势直传：action = "gesture"

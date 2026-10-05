@@ -61,6 +61,16 @@
     <string name="virtual_screen_mode_15fps">15 FPS</string>
     <string name="virtual_screen_mode_30fps">30 FPS</string>
     <string name="virtual_screen_mode_60fps">60 FPS</string>
+    <string name="virtual_screen_mode_120fps">120 FPS</string>
+    <string name="virtual_screen_mode_185fps">185 FPS</string>
+
+    <!--
+      副屏选择页的标题与方向文案。两处 dp 数字都由 VirtualScreenSpec 的两个预设现算（%1$d/%2$d），
+      不再把「800 × 363 dp」这类值写死在文案里，避免与真正建会话用的像素尺寸各写一份、互相漂移。
+    -->
+    <string name="virtual_screen_title">目标应用副屏</string>
+    <string name="virtual_screen_orientation_landscape">使用横屏副屏（%1$d × %2$d dp）</string>
+    <string name="virtual_screen_orientation_hint">默认竖屏 %1$d × %2$d dp。启动后可在页面或小窗操作，AI 使用副屏专用工具。画面按需发送至当前模型服务；请勿打开包含隐私信息的页面。</string>
 
     <!--
       任务通知（登记册 §5.5）。与保活通知分开一个通道：保活必须常驻静默，

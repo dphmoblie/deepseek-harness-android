@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.hardware.HardwareBuffer
 import android.media.ImageReader
 import android.os.*
 import android.view.KeyCharacterMap
@@ -38,11 +39,17 @@ class ShellVirtualScreen {
     // 最近一次采集失败的异常类名；空串表示没有失败。只作诊断用，不含命令输出或画面内容。
     private var frameError = ""
     private var encodedFrame: ByteArray? = null
+    /** 最近一帧的图形缓冲区；预览通过 Binder 传递句柄，避免 PNG 编解码。 */
+    private var hardwareFrame: HardwareBuffer? = null
+    private var hardwareImage: android.media.Image? = null
+    // 连续预览只保留硬件缓冲区；完整 CPU 位图仅在 AI 请求截图时生成。
+    @Volatile private var cpuCaptureRequested = false
+    private var cpuFrameAt = 0L
     private var pixels: java.nio.ByteBuffer? = null
     // 空白判定只取采样行，复用这一小块缓冲，不每帧分配整帧数组。
     private var samplePixels = IntArray(0)
-    // 预览限帧模式：默认 limited 保持改动前的 180 毫秒限帧行为；间隔一律由 VirtualScreenPolicy.frameInterval 求值，不再硬编码。
-    @Volatile private var frameMode = "limited"
+    // 默认 60fps 保证人眼预览流畅；需要省电时可切回 limited。
+    @Volatile private var frameMode = "60fps"
     // 最近若干帧的采集时刻环形缓冲（毫秒，elapsedRealtime），在 frameLock 内读写，实测帧率据此换算。
     private val frameStamps = LongArray(FRAME_SAMPLE_COUNT)
     private var frameStampCount = 0
@@ -69,7 +76,12 @@ class ShellVirtualScreen {
             death = recipient
             client.linkToDeath(recipient, 0)
             worker = HandlerThread("dsh-virtual-frames").also { it.start() }
-            val capture = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+            val capture = if (Build.VERSION.SDK_INT >= 29) {
+                ImageReader.newInstance(
+                    w, h, PixelFormat.RGBA_8888, 3,
+                    HardwareBuffer.USAGE_CPU_READ_OFTEN or HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE,
+                )
+            } else ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
             reader = capture
             val handler = Handler(worker!!.looper)
             var scheduled = false
@@ -102,7 +114,12 @@ class ShellVirtualScreen {
             }
             // 下列标志属于 AOSP 的隐藏副屏能力，公开 SDK 的 IntDef 未列出；仅特权进程按系统版本使用。
             @android.annotation.SuppressLint("WrongConstant")
-            val created = manager.createVirtualDisplay("DSH 目标应用", w, h, dpi, capture.surface, flags)
+            val created = if (Build.VERSION.SDK_INT >= 31) {
+                val refresh = 185f
+                val config = android.hardware.display.VirtualDisplayConfig.Builder("DSH 目标应用", w, h, dpi)
+                    .setSurface(capture.surface).setFlags(flags).setRequestedRefreshRate(refresh).build()
+                manager.createVirtualDisplay(config)
+            } else manager.createVirtualDisplay("DSH 目标应用", w, h, dpi, capture.surface, flags)
             display = created
             check(id() > 0) { "系统未创建独立副屏" }
             // 参数数组直传，不经 Shell 字符串解释；不会退回主屏启动。
@@ -119,38 +136,51 @@ class ShellVirtualScreen {
     private fun collectFrame(source: ImageReader) {
         // 回调与关闭可能并发；迟到帧不得重新写回已销毁会话。
         runCatching {
-            source.acquireLatestImage()?.use { image ->
+            source.acquireLatestImage()?.let { image ->
+                var retained = false
                 synchronized(frameLock) {
-                    if (reader !== source) return@use
+                    if (reader !== source) { image.close(); return@let }
                     val plane = image.planes[0]
+                    if (Build.VERSION.SDK_INT >= 30) {
+                        runCatching { image.hardwareBuffer }.getOrNull()?.let { next ->
+                            hardwareImage?.close()
+                            hardwareImage = image
+                            retained = true
+                            hardwareFrame?.close()
+                            hardwareFrame = next
+                        }
+                    }
                     check(plane.pixelStride == 4 && plane.rowStride >= image.width * 4)
                     check(image.width == width && image.height == height)
-                    val rowBytes = image.width * 4
-                    val packed = pixels ?: java.nio.ByteBuffer.allocateDirect(rowBytes * image.height).also { pixels = it }
-                    packed.clear()
-                    val sourceBytes = plane.buffer.duplicate()
-                    val available = sourceBytes.limit()
-                    // 最后一行可能没有尾部填充；逐行收紧缓冲区，避免按整块 stride 读取越界。
-                    for (row in 0 until image.height) {
-                        val offset = row * plane.rowStride
-                        check(offset.toLong() + rowBytes <= available)
-                        sourceBytes.limit(offset + rowBytes).position(offset)
-                        packed.put(sourceBytes)
+                    // 预览不再每帧把整张 RGBA 搬到 CPU；硬件缓冲区直接交给前台 GPU。
+                    if (cpuCaptureRequested) {
+                        val rowBytes = image.width * 4
+                        val packed = pixels ?: java.nio.ByteBuffer.allocateDirect(rowBytes * image.height).also { pixels = it }
+                        packed.clear()
+                        val sourceBytes = plane.buffer.duplicate()
+                        val available = sourceBytes.limit()
+                        for (row in 0 until image.height) {
+                            val offset = row * plane.rowStride
+                            check(offset.toLong() + rowBytes <= available)
+                            sourceBytes.limit(offset + rowBytes).position(offset)
+                            packed.put(sourceBytes)
+                        }
+                        packed.flip()
+                        val bitmap = frame ?: Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888).also { frame = it }
+                        bitmap.copyPixelsFromBuffer(packed)
+                        cpuFrameAt = SystemClock.elapsedRealtime()
+                        cpuCaptureRequested = false
                     }
-                    packed.flip()
-                    val bitmap = frame ?: Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888).also { frame = it }
-                    bitmap.copyPixelsFromBuffer(packed)
-                    // 按 frameSampleRows 取采样行做空白判定（每行内再按步长取样），采样缓冲按需扩容后复用，
-                    // 不做整帧遍历。采样行从 3 行加密到 24 行：真机上大片白底的页面曾被 3 行采样误判成空白帧。
-                    val rows = VirtualScreenPolicy.frameSampleRows(image.height)
-                    val buffer = samplePixels.takeIf { it.size >= rows.size * image.width }
-                        ?: IntArray(rows.size * image.width).also { samplePixels = it }
-                    var offset = 0
-                    for (row in rows) {
-                        bitmap.getPixels(buffer, offset, image.width, 0, row, image.width, 1)
-                        offset += image.width
-                    }
-                    frameBlank = rows.isNotEmpty() && VirtualScreenPolicy.blankFrame(buffer, image.width, rows.size)
+                    // 空白判断只在需要 CPU 位图时执行，避免高刷新率下重复遍历采样行。
+                    frameBlank = if (frame != null) {
+                        val rows = VirtualScreenPolicy.frameSampleRows(image.height)
+                        val buffer = samplePixels.takeIf { it.size >= rows.size * image.width }
+                            ?: IntArray(rows.size * image.width).also { samplePixels = it }
+                        var offset = 0
+                        val bitmap = checkNotNull(frame)
+                        for (row in rows) { bitmap.getPixels(buffer, offset, image.width, 0, row, image.width, 1); offset += image.width }
+                        rows.isNotEmpty() && VirtualScreenPolicy.blankFrame(buffer, image.width, rows.size)
+                    } else false
                     frameSampledAt = SystemClock.elapsedRealtime()
                     // 记录本次采集时刻并按最近若干帧重算实测帧率，不额外起采样线程。
                     frameStamps[frameStampNext] = frameSampledAt
@@ -161,7 +191,10 @@ class ShellVirtualScreen {
                     encodedFrame = null
                     frameAt = frameSampledAt
                     frameError = ""
+                    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+                    (frameLock as java.lang.Object).notifyAll()
                 }
+                if (!retained) image.close()
             }
         }.onFailure { error ->
             // 采集失败以前被静默吞掉，预览只能看到「未读到新帧」；这里留下异常类名，
@@ -185,6 +218,7 @@ class ShellVirtualScreen {
         return JSONObject().put("active", display != null)
             .put("sessionId", session).put("displayId", id()).put("packageName", targetPackage)
             .put("width", width).put("height", height).put("frameAtElapsedMs", frames.at)
+            .put("displayRefreshRate", display?.display?.refreshRate ?: 0f)
             // frameBlank=true 表示最近一帧被判定为空白或未渲染（尚未采集到画面时也为 true）。
             .put("frameBlank", frames.blank)
             // 空白判定与新帧采集同一次完成，因此它与 frameAtElapsedMs 取同一时刻。
@@ -371,7 +405,16 @@ class ShellVirtualScreen {
         requireSession(sessionId)
         check(targetVisible()) { "目标应用已离开副屏或无法确认其状态" }
         val bytes = synchronized(frameLock) {
-            check(frameAt > 0) { "副屏尚未产生画面" }
+            val before = cpuFrameAt
+            cpuCaptureRequested = true
+            val deadline = SystemClock.elapsedRealtime() + 800L
+            while (frame == null || cpuFrameAt <= before) {
+                val remain = deadline - SystemClock.elapsedRealtime()
+                if (remain <= 0) break
+                @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+                (frameLock as java.lang.Object).wait(minOf(40L, remain))
+            }
+            check(frameAt > 0 && frame != null) { "副屏尚未产生画面" }
             val current = checkNotNull(frame)
             // 静止页面复用最后一帧，不能把“画面未变化”误判成连接失效；
             // 但空白帧绝不写入缓存：每次按当前 Bitmap 重新编码，让调用方依据 frameBlank 决定是否重试，
@@ -388,6 +431,14 @@ class ShellVirtualScreen {
             finally { timeout.cancel(false); transfers.release() }
         }
         return pipe[0]
+    }
+
+    /** 返回最近一帧的硬件缓冲区，供页面预览直接交给 GPU；调用方完成使用后必须关闭句柄。 */
+    @Synchronized fun frame(sessionId: String): HardwareBuffer {
+        requireSession(sessionId)
+        check(Build.VERSION.SDK_INT >= 30) { "硬件帧预览需要 Android 11 或更高版本" }
+        check(frameAt > 0 && hardwareFrame != null) { "副屏尚未产生硬件画面" }
+        return checkNotNull(hardwareFrame)
     }
 
     private fun id(): Int = display?.display?.displayId ?: -1
@@ -660,7 +711,9 @@ class ShellVirtualScreen {
         synchronized(frameLock) {
             val old = reader; reader = null
             runCatching { old?.close() }
-            frame?.recycle(); frame = null; frameAt = 0; encodedFrame = null; pixels = null
+            hardwareImage?.close(); hardwareImage = null
+            frame?.recycle(); frame = null; frameAt = 0; cpuFrameAt = 0; cpuCaptureRequested = false; encodedFrame = null; pixels = null
+            hardwareFrame?.close(); hardwareFrame = null
             // 会话结束后没有可信画面：恢复为「未渲染」，避免下一次截图沿用旧判定。
             frameBlank = true; frameSampledAt = 0; frameError = ""
             // 采集时刻与实测帧率同属本次会话，一并清空，下一次会话重新采样。

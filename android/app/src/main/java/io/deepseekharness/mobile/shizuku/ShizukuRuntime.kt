@@ -343,6 +343,13 @@ class ShizukuRuntime(
         }
     }
 
+    /** 预览专用硬件帧；像素不再经过 PNG 编解码。 */
+    fun virtualScreenFrame(sessionId: String): android.hardware.HardwareBuffer {
+        requirePermission()
+        require(SESSION_PATTERN.matches(sessionId))
+        return requireService().virtualScreenFrame(sessionId)
+    }
+
     fun create(
         columns: Int,
         rows: Int,
@@ -674,7 +681,7 @@ class ShizukuRuntime(
         private const val BINDER_TIMEOUT_SECONDS = 8L
         private const val SERVICE_TIMEOUT_SECONDS = 10L
         private const val SERVICE_EXIT_TIMEOUT_SECONDS = 5L
-        private const val USER_SERVICE_VERSION = 4
+        private const val USER_SERVICE_VERSION = 5
         private const val MAX_SESSIONS = 4
         private val SESSION_PATTERN = Regex("^[a-f0-9-]{36}$")
     }
