@@ -683,8 +683,9 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                 var id = ""
                 var channel = ""
                 var mode = "limited"
-                    var fps = 0.0
-                    var blank = false
+                var fps = 0.0
+                var hardwareFrame = false
+                var fetchedHardware: android.hardware.HardwareBuffer? = null
                 // 这一拍的亮度采样；null 表示这一拍没拿到可解码的画面（不等于「画面是空的」）。
                 var samples: IntArray? = null
                 try {
@@ -695,11 +696,10 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     channel = state.optString("touchChannel", "")
                     mode = VirtualScreenPolicy.frameModeOf(state.optString(VirtualScreenPolicy.PREVIEW_FIELD))
                     fps = state.optDouble("frameFps", 0.0)
-                    blank = state.optBoolean("frameBlank", false)
                     if (android.os.Build.VERSION.SDK_INT >= 30) {
                         val hardware = service.hardwareFrame(id)
-                        displayedHardware?.close()
-                        displayedHardware = hardware
+                        hardwareFrame = true
+                        fetchedHardware = hardware
                         bitmap = android.graphics.Bitmap.wrapHardwareBuffer(
                             hardware,
                             android.graphics.ColorSpace.get(android.graphics.ColorSpace.Named.SRGB),
@@ -709,18 +709,31 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                         bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                         if (bitmap != null) samples = sampleFrame(bitmap)
                     }
-                } catch (_: Exception) { samples = null; bitmap = null }
+                } catch (_: Exception) {
+                    fetchedHardware?.close()
+                    fetchedHardware = null
+                    samples = null
+                    bitmap = null
+                }
                 main.post {
-                    if (version != generation || executor == null) { return@post }
+                    if (version != generation || executor == null) {
+                        fetchedHardware?.close()
+                        return@post
+                    }
                     val current = VirtualScreenService.current
                     // 会话不可观察（已切换、已释放）才是唯一允许清屏的情形。
                     val alive = current?.canObserve() == true && current.state().optString("sessionId") == id
                     // 判定权威在客户端：宿主那个只看固定采样线的 frameBlank 只作提示，不再决定清不清屏
                     // （0.2.9 的真机黑屏就是把它当成了「不能显示」）。接近纯色的帧一律不显示，并如实写进状态行。
-                    val hasContent = if (android.os.Build.VERSION.SDK_INT >= 30) !blank
+                    // HardwareBuffer 已由 Bitmap.wrapHardwareBuffer 成功解码，但不会生成 CPU samples；
+                    // 也不能拿尚未做 CPU 采样的 frameBlank=true 把有效硬件帧误判成纯色。
+                    // 硬件路径的内容判定交给 Bitmap 解码结果，PNG 路径继续使用采样启发式。
+                    val decoded = bitmap != null
+                    val hasContent = if (hardwareFrame) decoded
                         else samples != null && VirtualScreenPolicy.frameHasContent(samples)
-                    val changed = samples == null || VirtualScreenPolicy.frameChanged(previousSamples, samples)
-                    val outcome = VirtualScreenPolicy.previewOutcome(alive, samples != null, !hasContent, changed)
+                    val changed = if (hardwareFrame) decoded
+                        else samples == null || VirtualScreenPolicy.frameChanged(previousSamples, samples)
+                    val outcome = VirtualScreenPolicy.previewOutcome(alive, decoded, !hasContent, changed)
                     // 还没有任何可显示画面时必须说「等待……」，不能假称「画面暂无变化」；
                     // 这里用 lambda 在读数时求值：SHOW 已经把画面画上去之后，状态行就不该再说「等待」。
                     // 文案由 VirtualScreenPolicy.previewLine 统一生成：页面大预览与悬浮小窗共用同一份规则。
@@ -732,8 +745,11 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     when (outcome.action) {
                         VirtualScreenPolicy.PreviewFrameAction.SHOW -> {
                             bitmap?.let {
-                                displayedHardware?.close(); displayedHardware = null
+                                val oldHardware = displayedHardware
+                                displayedHardware = fetchedHardware
+                                fetchedHardware = null
                                 setImageBitmap(it); displayed = it
+                                oldHardware?.close()
                                 // 只有真帧才刷新画面时刻：不能让触摸与「画面新鲜」判定误以为刚更新过。
                                 observedSession = id; observedAt = SystemClock.elapsedRealtime()
                                 // 只有真正显示过的画面才算「上一帧」，状态行的「画面暂无变化」才有所指。
@@ -744,13 +760,15 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                         }
                         VirtualScreenPolicy.PreviewFrameAction.KEEP -> {
                             // 接近纯色的新帧或这一拍读不到帧：保留最近一张非空白画面（绝不清屏），也不动画面时刻。
+                            fetchedHardware?.close()
+                            fetchedHardware = null
                             if (channel.isNotEmpty()) observedChannel = channel
                             report(line())
                         }
                         VirtualScreenPolicy.PreviewFrameAction.CLEAR -> {
-                            setImageBitmap(null); displayed = null
-                            observedSession = ""; observedAt = 0
-                            previousSamples = null
+                            fetchedHardware?.close()
+                            fetchedHardware = null
+                            clearFrame()
                             report(VirtualScreenPolicy.PREVIEW_GONE_MESSAGE)
                         }
                     }

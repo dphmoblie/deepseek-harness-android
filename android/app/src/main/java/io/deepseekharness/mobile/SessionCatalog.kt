@@ -107,8 +107,8 @@ internal object SessionCatalogPayload {
     }
 
     private fun readIdentifier(entry: JSONObject): String? {
-        if (!entry.has("id")) return null
-        val id = entry.optString("id")
+        // 安全校验点：元数据类型必须符合协议，不把数值、null 或对象强制转换成字符串。
+        val id = entry.opt("id") as? String ?: return null
         if (id.isEmpty() || id.length > 200) return null
         if (id.startsWith(".")) return null
         if (FORBIDDEN_IN_IDENTIFIER.containsMatchIn(id)) return null
@@ -116,15 +116,18 @@ internal object SessionCatalogPayload {
     }
 
     private fun readTimestamp(entry: JSONObject): Long? {
-        if (!entry.has("updatedAt")) return null
-        val updatedAt = entry.optLong("updatedAt", -1L)
+        // 安全校验点：只接受 JSON 整数，禁止字符串转数值或小数截断。
+        val updatedAt = when (val value = entry.opt("updatedAt")) {
+            is Int -> value.toLong()
+            is Long -> value
+            else -> return null
+        }
         return updatedAt.takeIf { it in 0..MAX_TIMESTAMP_MILLIS }
     }
 
     /** 标题取不到时回空串：界面据此显示「未命名会话」，而不是拿 id 或时间冒充标题。 */
     private fun readTitle(entry: JSONObject): String {
-        if (!entry.has("title")) return ""
-        val title = entry.optString("title")
+        val title = entry.opt("title") as? String ?: return ""
         if (title.isEmpty() || title.length > MAX_TITLE_CHARS) return ""
         if (CONTROL_IN_TITLE.containsMatchIn(title)) return ""
         return title

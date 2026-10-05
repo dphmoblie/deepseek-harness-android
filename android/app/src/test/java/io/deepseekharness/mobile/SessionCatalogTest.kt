@@ -142,6 +142,37 @@ class SessionCatalogTest {
     }
 
     @Test
+    fun doesNotCoerceIdentifierOrTimestampTypes() {
+        val invalidValues = listOf(123, true, JSONObject.NULL, JSONObject(), JSONArray())
+        for (id in invalidValues) {
+            val invalid = entry("session-a", "标题", 1000L).put("id", id)
+            val result = SessionCatalogPayload.fromProbe(true, false, payload(invalid).toString())
+            assertEquals(SessionCatalogPayload.FAILED, result.getString("error"))
+        }
+        for (updatedAt in listOf("1000", 1000.5, true, JSONObject.NULL, JSONObject(), JSONArray())) {
+            val invalid = entry("session-a", "标题", 1000L).put("updatedAt", updatedAt)
+            val result = SessionCatalogPayload.fromProbe(true, false, payload(invalid).toString())
+            assertEquals(SessionCatalogPayload.FAILED, result.getString("error"))
+        }
+        val valid = SessionCatalogPayload.fromProbe(
+            true,
+            false,
+            payload(entry("session-a", "标题", 0L), entry("session-b", "标题", SessionCatalogPayload.MAX_TIMESTAMP_MILLIS)).toString(),
+        )
+        assertEquals(2, valid.getJSONArray("sessions").length())
+    }
+
+    @Test
+    fun blanksNonStringTitlesWithoutLeakingTheirContents() {
+        for (title in listOf(123, true, JSONObject.NULL, JSONObject().put("body", "BODY-SENTINEL"), JSONArray())) {
+            val invalid = entry("session-a", "标题", 1000L).put("title", title)
+            val result = SessionCatalogPayload.fromProbe(true, false, payload(invalid).toString())
+            assertEquals("", result.getJSONArray("sessions").getJSONObject(0).getString("title"))
+            assertFalse(result.toString().contains("BODY-SENTINEL"))
+        }
+    }
+
+    @Test
     fun blanksUnusableTitlesButKeepsTheSession() {
         val result = SessionCatalogPayload.fromProbe(
             true,

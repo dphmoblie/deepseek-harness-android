@@ -530,7 +530,9 @@ test('Shizuku UserService uses the reserved removal transaction and stops with t
     assert.match(aidl, new RegExp(`${method}\\([^;]*\\)\\s*=\\s*${transaction};`))
   }
   assert.match(aidl, /void destroy\(\)\s*=\s*16777114;/)
-  assert.match(shizukuRuntime, /private const val USER_SERVICE_VERSION = 4/)
+  // The AIDL gained the zero-copy HardwareBuffer frame method, so the
+  // UserService protocol version must advance with that interface change.
+  assert.match(shizukuRuntime, /private const val USER_SERVICE_VERSION = 5/)
   assert.match(shizukuRuntime, /fun disconnect\(\)/)
   assert.match(shizukuRuntime, /activeServiceGeneration = serviceGeneration\.incrementAndGet\(\)/)
   assert.match(shizukuRuntime, /if \(tryPingBinder\(\)\)[\s\S]*?activeServiceGeneration = serviceGeneration\.incrementAndGet\(\)[\s\S]*?activeConnection = null/)
