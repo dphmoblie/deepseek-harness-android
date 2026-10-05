@@ -50,6 +50,14 @@ object VirtualScreenTree {
     const val MAX_TEXT_CHARS = 512
 
     /**
+     * 「这次文字注入必须回到主进程的无障碍通道执行」的机器可读标识。
+     *
+     * 出现的唯一场合：设备 Shell 进程（Shizuku 用户服务）里 [DeepSeekAccessibilityService.current] 为 null，
+     * 而那正是无障碍定向注入唯一能真正落地的地方。它**不是错误**——副屏本身正常，主进程入口换个通道重试即可。
+     */
+    const val TEXT_INJECTION_REQUIRED = "VIRTUAL_SCREEN_TEXT_INJECTION_REQUIRED"
+
+    /**
      * 节点字段里文本类字段（className/text/viewId/desc）的单条上限。
      * 比 [MAX_TEXT_CHARS] 更小是刻意的：一屏几百个节点，每个都带上限长文本会很快把调用方的上下文吃光。
      */
@@ -120,6 +128,263 @@ object VirtualScreenTree {
      * 顺序固定：先 [validText]，再 `displayId` 合法性，然后由服务执行同一套闸门（锁定/熄屏 → 频率限制 →
      * 按显示编号取窗口 → 敏感窗口 → `findFocus(FOCUS_INPUT)` 且可编辑）并派发 `ACTION_SET_TEXT`。
      * 任何一步失败都返回 false，不抛异常；服务在其中的每次失败都会写审计。
+     */
+    /**
+     * 把 [text] 写进 [displayId] 上副屏窗口里的输入框，并按决策模型逐级尝试、逐级记账。
+     *
+     * 与 [setText] 的区别：那个是「只走聚焦节点直接写入」的老入口（`VirtualScreenService` 的既有中文路径
+     * 仍在用），这个是**回退链入口**，多出来的能力是「没有聚焦节点时先聚焦候选输入框」以及「每一级的
+     * 真实方法 / 失败码 / 提示都如实返回」。
+     *
+     * 返回值的语义：
+     * - `succeeded=true` 时 [TextWrite.succeeded] 为 true、[TextWrite.method] 是真正生效的那一级；
+     * - `succeeded=false` 且 [TextWrite.method] 为 null：一条路都没有（链路为空，`code` 与 `message` 已给出）；
+     * - `succeeded=false` 且 [TextWrite.method] 非 null：`attempts` 非空，`code` 是最后一级的失败码——
+     *   若那一级是「按键事件」（纯 ASCII 兜底），调用方应把它接到自己的注入通道上，成功后再记为
+     *   [VirtualScreenTextPolicy.TextMethod.KEY_EVENTS]。
+     *
+     * 真机行为一律**待真机**：无障碍服务能否看到另一进程在虚拟显示器上创建的窗口，本模块无法在
+     * 单元测试里验证。
+     *
+     * [submit] 为 true 时，只有文字**确实写进去之后**才按一次回车（搜索框/聊天发送）；写入失败时不按。
+     * 回车是否真的送出去在 [TextWrite.submitted] 里如实返回，不因为请求过就宣称已提交。
+     */
+    fun writeText(displayId: Int, text: String, submit: Boolean = false): TextWrite {
+        // 非法文本（超长、控制字符、零宽字符）一律不进入回退链：这不是「能不能注入」的问题。
+        if (!validText(text)) {
+            return TextWrite.failed(
+                VirtualScreenTextPolicy.TextOutcome.Failure(
+                    0,
+                    VirtualScreenTextPolicy.FailureCode.ACTION_INVALID,
+                    "副屏文本参数无效：请使用 1～$MAX_TEXT_CHARS 个字符、不含控制字符",
+                    emptyList(),
+                ),
+            )
+        }
+        val service = DeepSeekAccessibilityService.current()
+        val kind = VirtualScreenTextPolicy.classify(text)
+        if (service == null) {
+            // 无障碍没连上：决策模型会给出「纯 ASCII 走按键事件 / 非 ASCII 直接不可用」两种结果。
+            val decision = VirtualScreenTextPolicy.plan(
+                kind,
+                VirtualScreenTextPolicy.TextConditions(
+                    asciiOnly = kind.asciiOnly,
+                    accessibilityAvailable = false,
+                    hasFocusedEditable = false,
+                    hasFocusTarget = false,
+                    clipboardAvailable = false,
+                ),
+            )
+            // 链路里排了按键事件时，先把「等待调用方的按键通道」记进去：调用方据此就能看到
+            // 这段纯 ASCII 还能靠设备 Shell 送（TextWrite.awaitsKeyEvents 也才为 true），
+            // 成功了再由 VirtualScreenTree.markKeyEvents 翻成成功。
+            val attempts = ArrayList<VirtualScreenTextPolicy.TextAttempt>(1)
+            if (decision.chain.contains(VirtualScreenTextPolicy.TextMethod.KEY_EVENTS)) {
+                attempts += VirtualScreenTextPolicy.TextAttempt(
+                    VirtualScreenTextPolicy.TextMethod.KEY_EVENTS,
+                    false,
+                    VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
+                    "无障碍服务未启用，等待调用方的按键通道",
+                )
+            }
+            return TextWrite(VirtualScreenTextPolicy.resolve(decision, attempts), attempts)
+        }
+        val root = service.displayRootFor(displayId)
+        val windowRoot = root.root
+            ?: return TextWrite.failed(
+                VirtualScreenTextPolicy.TextOutcome.Failure(
+                    0,
+                    root.code ?: VirtualScreenTextPolicy.FailureCode.WINDOW_UNAVAILABLE,
+                    root.reason ?: VirtualScreenTextPolicy.failureMessage(VirtualScreenTextPolicy.FailureCode.WINDOW_UNAVAILABLE),
+                    emptyList(),
+                ),
+            )
+        val focused = windowRoot.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        val hasFocusedEditable = focused != null && focused.isEditable && !focused.isPassword
+        val candidate = findFocusable(windowRoot)
+        val hasFocusTarget = hasFocusedEditable || candidate != null
+        // 上面三个节点都只用于判定「有没有候选输入框」：查完立刻回收，绝不交给执行层持有，
+        // 否则会和下面的 writeTextOnDisplay 各自持有的根节点把手互相污染。
+        // 判定用同一个 `!==` 守卫：万一系统把同一个把手对象又给了 [findFocusable]，这里也只回收一次。
+        if (candidate != null && candidate !== focused && candidate !== windowRoot) candidate.recycle()
+        if (focused != null && focused !== windowRoot) focused.recycle()
+        windowRoot.recycle()
+        val decision = VirtualScreenTextPolicy.plan(
+            kind,
+            VirtualScreenTextPolicy.TextConditions(
+                asciiOnly = kind.asciiOnly,
+                accessibilityAvailable = true,
+                hasFocusedEditable = hasFocusedEditable,
+                hasFocusTarget = hasFocusTarget,
+                // 剪贴板这一级是否能真的落地由执行层决定（Android 10+ 后台读剪贴板受限），
+                // 策略层只负责把这一步排进链路，失败时如实记账。
+                clipboardAvailable = true,
+            ),
+        )
+        val attempts = ArrayList<VirtualScreenTextPolicy.TextAttempt>(decision.chain.size)
+        var outcome: VirtualScreenTextPolicy.TextOutcome = VirtualScreenTextPolicy.resolve(decision, attempts)
+        // 链路为空（例如非 ASCII 且无障碍不可用）：不要白跑一次写入。
+        var submitted = false
+        if (decision.chain.isNotEmpty()) {
+            val result = service.writeTextOnDisplay(
+                displayId,
+                text,
+                submit = submit,
+                clipboardAvailable = true,
+            )
+            attempts += VirtualScreenTextPolicy.TextAttempt(
+                result.method,
+                result.succeeded,
+                result.code,
+                result.detail,
+            )
+            submitted = result.succeeded && result.submit
+            outcome = VirtualScreenTextPolicy.resolve(decision, attempts)
+            if (!result.succeeded &&
+                result.code == VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED &&
+                decision.chain.contains(VirtualScreenTextPolicy.TextMethod.KEY_EVENTS)
+            ) {
+                // 只剩按键事件兜底：把失败交给上层的注入通道，成功了再补一条记账。
+                attempts += VirtualScreenTextPolicy.TextAttempt(
+                    VirtualScreenTextPolicy.TextMethod.KEY_EVENTS,
+                    false,
+                    VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
+                    "等待调用方的按键通道",
+                )
+                outcome = VirtualScreenTextPolicy.resolve(decision, attempts)
+            }
+        }
+        return TextWrite(outcome, attempts, submitted = submitted, submitRequested = submit)
+    }
+
+    /**
+     * 按键事件兜底成功后的补记账：把链路里最后那条「等待调用方的按键通道」改成成功，
+     * 于是 [TextWrite.method] 变成 [VirtualScreenTextPolicy.TextMethod.KEY_EVENTS]。
+     */
+    fun markKeyEvents(attempts: List<VirtualScreenTextPolicy.TextAttempt>): List<VirtualScreenTextPolicy.TextAttempt> =
+        attempts.mapIndexed { index, attempt ->
+            if (index == attempts.lastIndex && !attempt.succeeded &&
+                attempt.method == VirtualScreenTextPolicy.TextMethod.KEY_EVENTS
+            ) {
+                attempt.copy(succeeded = true, code = null, detail = "已通过 input keyevent 逐字符输入")
+            } else {
+                attempt
+            }
+        }
+
+    /**
+     * 回退链的执行结果：结构化，能直接转成给模型看的 JSON（`method`/`chars`/`code`/`steps`）。
+     *
+     * [method] 取得成功（或最后尝试）的那一级的**枚举名**，`chars` 是实际写入的 UTF-16 代码单元数。
+     * [submitted] 只在真的按出了回车时为 true；[submitRequested] 记录调用方是否请求过提交，好把
+     * 「请求了但没按成」与「没请求」区分开。
+     */
+    class TextWrite internal constructor(
+        val outcome: VirtualScreenTextPolicy.TextOutcome,
+        val attempts: List<VirtualScreenTextPolicy.TextAttempt>,
+        val submitted: Boolean = false,
+        val submitRequested: Boolean = false,
+    ) {
+        val succeeded: Boolean get() = outcome is VirtualScreenTextPolicy.TextOutcome.Success
+        val method: VirtualScreenTextPolicy.TextMethod? get() = outcome.attemptedMethod
+        val code: String? get() = VirtualScreenTextPolicy.codeOf(outcome)
+        val chars: Int get() = outcome.chars
+        val message: String get() = VirtualScreenTextPolicy.messageOf(outcome)
+
+        /** 逐级记账 + 提交状态：把「请求了提交但没按成」如实写出来，不让调用方以为已经发送。 */
+        val steps: String
+            get() = VirtualScreenTextPolicy.describe(attempts) +
+                VirtualScreenTextPolicy.submitNote(succeeded, submitted, submitRequested)
+
+        /** 纯 ASCII 的候选输入框写入没成，且链路里排了按键事件兜底。 */
+        val awaitsKeyEvents: Boolean
+            get() = !succeeded && method == VirtualScreenTextPolicy.TextMethod.KEY_EVENTS
+
+        /** 结构化 JSON：`submit` 用**实际提交结果**，不是调用方的请求值。 */
+        fun encode(submit: Boolean = submitted): JSONObject =
+            VirtualScreenTextPolicy.encode(outcome, submit).put("steps", steps)
+
+        companion object {
+            internal fun failed(outcome: VirtualScreenTextPolicy.TextOutcome): TextWrite =
+                TextWrite(outcome, outcome.attempts)
+        }
+    }
+
+    /**
+     * 「无障碍定向注入必须回到主进程执行」的信封。
+     *
+     * `VirtualScreenTree` 只能在本应用**主进程**里工作（无障碍服务的实例引用是进程内的，
+     * [DeepSeekAccessibilityService.current] 在 Shizuku 用户服务进程里必然为 null）。设备 Shell 侧的
+     * [ShellVirtualScreen] 跑在用户服务进程里，所以它遇到 text 动作时会把话讲清楚、让主进程的调用方
+     * （`ShizukuRuntime.virtualScreenAction` 这类能在主进程里拿到服务实例的入口）改用 [writeText]。
+     *
+     * 这里刻意不改写成 `VIRTUAL_SCREEN_UNAVAILABLE`：这条路径上的副屏本身完全正常。
+     */
+    fun injectionRequired(displayId: Int, reason: String): JSONObject = JSONObject()
+        .put("code", TEXT_INJECTION_REQUIRED)
+        .put("reason", reason)
+        .put("chars", 0)
+        .put("displayId", displayId)
+
+    /**
+     * 按键事件通道的结构化结果信封，供设备 Shell 侧在 `input text` / 逐字符 `input keyevent` 之后使用。
+     *
+     * 成败**由调用方显式给出**（[succeeded]），本函数不推断：靠「最后一条按键事件尝试」猜会把
+     * 「字符映射不出来、直接放弃」误记成成功，于是 `chars` 会虚报成整段文本的长度。
+     *
+     * [chars] 是**真正写进去的字符数**（写了一半就是一半，没写进去就是 0；失败时依然如实给出），
+     * [submitted] 是回车是否真的按出去了、[submitRequested] 是调用方是否请求过提交，
+     * 两者一起才够把「写进去了但没发出去」讲清楚。
+     */
+    fun encodeKeyEvents(
+        attempts: List<VirtualScreenTextPolicy.TextAttempt>,
+        chars: Int,
+        succeeded: Boolean,
+        submitted: Boolean = false,
+        submitRequested: Boolean = false,
+    ): JSONObject {
+        val json = JSONObject()
+            .put("method", VirtualScreenTextPolicy.TextMethod.KEY_EVENTS.name)
+            .put("chars", chars)
+            .put("submit", succeeded && submitted)
+            .put(
+                "steps",
+                VirtualScreenTextPolicy.describe(attempts) +
+                    VirtualScreenTextPolicy.submitNote(succeeded, succeeded && submitted, submitRequested),
+            )
+        return if (succeeded) {
+            json
+        } else {
+            json.put("code", VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED)
+                .put(
+                    "reason",
+                    VirtualScreenTextPolicy.failureMessage(VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED) +
+                        "（设备 Shell 侧的 input 通道没能把这段文字送完）",
+                )
+        }
+    }
+
+    /** 深度优先找第一个可聚焦且可编辑的节点。
+     *
+     * **只用于「有没有候选输入框」这一判定**：返回的节点立刻回收，不交给调用方持有。
+     */
+    private fun findFocusable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isEditable && node.isEnabled && node.isFocusable) return node
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            val found = findFocusable(child)
+            if (found != null) {
+                if (found !== child) child.recycle()
+                return found
+            }
+            child.recycle()
+        }
+        return null
+    }
+
+    /**
+     * 旧的直接写入入口：语义保持「只走聚焦节点 + `ACTION_SET_TEXT`」，返回值仍是 Boolean，
+     * 以免改坏 `VirtualScreenService` 的既有中文路径。需要完整回退链时用 [writeText]。
      */
     fun setText(displayId: Int, text: String): Boolean {
         if (!validText(text)) return false

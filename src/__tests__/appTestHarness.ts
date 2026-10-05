@@ -111,11 +111,18 @@ export const bridge = {
   getRuntimeVersions: vi.fn(),
   switchRuntimeVersion: vi.fn(),
   deleteRuntimeVersion: vi.fn(),
+  // 「运行时占用」卡片进版本管理页就会读一次残留（清理按钮另有一条）；缺桩会让那次 effect 抛错，
+  // 同上一条注释里的坑。
+  getRuntimeResidue: vi.fn(),
+  cleanRuntimeResidue: vi.fn(),
   // 会话快照：界面进「运行环境」页会读一次总览，缺桩同样会让 effect 抛错并卸载整棵树。
   getRuntimeSessionSnapshotState: vi.fn(),
   createRuntimeSessionSnapshot: vi.fn(),
   restoreRuntimeSessionSnapshot: vi.fn(),
   deleteRuntimeSessionSnapshot: vi.fn(),
+  // 会话工作区：首页一挂载就会调一次 listSessions()，缺这个桩同样会让 effect 抛错并卸载整棵树
+  // （见上面 `setAppTheme` 的注释：表现成「找不到任何元素」，与真正的界面缺陷几乎无法区分）。
+  listSessions: vi.fn(),
   // 更新：可用版本列表与应用自更新同样有默认桩——界面一进相关页面就会读一次，
   // 缺桩会让 effect 抛错并卸载整棵树（同上一条注释里的坑）。
   listRuntimeReleases: vi.fn(),
@@ -364,6 +371,10 @@ export function beforeEachAppTest(): void {
   })
   bridge.switchRuntimeVersion.mockResolvedValue({ versions: [], canSwitch: false, canDelete: false })
   bridge.deleteRuntimeVersion.mockResolvedValue({ versions: [], canSwitch: false, canDelete: false })
+  // 默认「没有可回收的残留」：多数用例只关心别的页面，不该被一张写着残留的卡片影响；
+  // 关心这张卡片的用例自己覆盖这两条桩。
+  bridge.getRuntimeResidue.mockResolvedValue({ count: 0, bytes: 0, truncated: false })
+  bridge.cleanRuntimeResidue.mockResolvedValue({ cleaned: 0, failed: 0, reclaimedBytes: 0, message: '没有可回收的残留，无需清理' })
   // 默认「没有任何快照」：多数用例只关心别的页面，不该被一份假快照影响；
   // 关心快照的用例自己覆盖这四条桩。上限取值与原生侧一致（3 份 / 512 MiB）。
   const emptySnapshotState = () => ({ maxSnapshots: 3, maxBytes: 512 * 1024 * 1024, totalBytes: 0, snapshots: [] })
@@ -375,6 +386,10 @@ export function beforeEachAppTest(): void {
     state: emptySnapshotState(),
   })
   bridge.deleteRuntimeSessionSnapshot.mockResolvedValue(emptySnapshotState())
+  // 默认「确实没有会话」（ready + 空列表）：多数用例只关心别的页面，不该被一份假会话影响；
+  // 关心会话列表的用例自己覆盖这条桩。注意不要用 unavailable 当默认值——
+  // 那会让首页显示「读不到会话列表」，等于把一件没发生的事故塞给所有用例。
+  bridge.listSessions.mockResolvedValue({ status: 'ready', sessions: [], truncated: false })
   // 默认空版本列表（没有可用版本可装）+ 未授权安装权限：多数用例只关心别的页面，
   // 真正关心更新的用例自己覆盖这几条桩。
   bridge.listRuntimeReleases.mockResolvedValue({ entries: [] })

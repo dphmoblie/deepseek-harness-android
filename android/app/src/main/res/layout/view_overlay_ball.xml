@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 悬浮球的视图：圆形底 + 铺满球面的应用图标（与手机桌面上的图标同一张图）。
 
+     图标换成满幅素材 @drawable/overlay_ball_mark（drawable-nodpi 下 = src/assets/app-mark.png
+     的逐字节副本）并配 scaleType="fitXY"。原因：旧的 @mipmap/ic_launcher_round 主体只占画布
+     76%x74%，fitCenter 又原样保留四周透明边，于是球面里空出一圈（用户反馈的「留白」）。
+     满幅素材本身是圆形徽标、四角透明，球面是正方形，所以 fitXY 铺满后圆面正好贴合球面，
+     也不会在四角露出方角——不铺满只会在球面里留下可见的空白环。
+
      foreground 必须用平台属性 ?android:attr/... 而不是 ?attr/...：服务里充气时用的主题
      可能被厂商 ROM 的「强制深色 / 强制主题」替换成平台主题，此时 AppCompat 属性
      (androidx.appcompat.R.attr.selectableItemBackgroundBorderless) 解析不到，
@@ -20,6 +26,6 @@
         android:layout_height="match_parent"
         android:layout_gravity="center"
         android:importantForAccessibility="no"
-        android:scaleType="fitCenter"
-        android:src="@mipmap/ic_launcher_round" />
+        android:scaleType="fitXY"
+        android:src="@drawable/overlay_ball_mark" />
 </FrameLayout>

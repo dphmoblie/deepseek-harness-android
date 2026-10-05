@@ -19,7 +19,11 @@
 .session-delete { width: 44px; height: 44px; color: var(--muted); border-color: transparent; background: transparent; }
 .session-delete:hover { color: var(--red); border-color: var(--danger-line); background: var(--red-soft); }
 .session-empty { display: grid; place-items: center; gap: 8px; min-height: 180px; padding: 24px; border: 1px dashed var(--line-strong); border-radius: var(--radius-card); color: var(--muted); text-align: center; background: color-mix(in srgb, var(--surface) 76%, transparent); }
-.session-empty svg { color: var(--blue); }
+/* 空态图标：占框宽 48%（落在反馈要求的 40%–55% 区间），并用 aspect-ratio 保证缩放不变形。
+   原来这里只有一个 24px 的线性图标，框高却有 180px 起，视觉上就是「一片空白」。
+   图片本身四角透明（是圆形徽标），所以底衬用 --blue-soft + --radius-card，
+   与 .session-icon / .workspace-dialog-icon 的既有配色一致。 */
+.session-empty-mark { width: 48%; max-width: 168px; height: auto; aspect-ratio: 1 / 1; object-fit: contain; padding: 8px; border-radius: var(--radius-card); background: var(--blue-soft); box-shadow: var(--shadow-card); }
 .session-empty strong { color: var(--ink); font-size: .9375rem; }
 .session-empty p { margin: 0; font-size: .8125rem; line-height: 1.6; }
 .session-note { margin: 16px 2px 0; color: var(--muted); font-size: .75rem; line-height: 1.6; }

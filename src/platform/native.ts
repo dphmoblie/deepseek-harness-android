@@ -59,6 +59,9 @@ import {
   validateRuntimeProgress,
   validateRuntimeInstallResult,
   validateRuntimeReleaseList,
+  validateRuntimeResidue,
+  validateRuntimeResidueCleanup,
+  validateRuntimeSessionListResult,
   validateRuntimeSessionSnapshotRestoreResult,
   validateRuntimeSessionSnapshotState,
   validateRuntimeSelfCheckReport,
@@ -86,6 +89,8 @@ interface NativeRuntimePlugin {
   getSettings(): Promise<RuntimeSettings>
   saveSettings(settings: RuntimeSettingsUpdate): Promise<RuntimeSettings>
   install(source?: RuntimeSource): Promise<unknown>
+  /** 会话工作区的会话元数据；返回值在 TS 侧走校验（`unknown` → validate）。 */
+  sessionList(): Promise<unknown>
   getRuntimeSessionSnapshotState(): Promise<unknown>
   createRuntimeSessionSnapshot(): Promise<unknown>
   restoreRuntimeSessionSnapshot(options: { id: string }): Promise<unknown>
@@ -139,6 +144,8 @@ interface NativeRuntimePlugin {
   runtimeVersions(): Promise<unknown>
   switchRuntimeVersion(options: { target: string }): Promise<unknown>
   deleteRuntimeVersion(options: { target: string }): Promise<unknown>
+  getRuntimeResidue(): Promise<unknown>
+  cleanRuntimeResidue(): Promise<unknown>
   /** 列出原生侧已知的运行时可用版本；结果由 TS 侧校验后再交给界面。 */
   listRuntimeReleases(): Promise<unknown>
   getAppUpdateState(): Promise<unknown>
@@ -342,6 +349,13 @@ function createNativeBridge(): RuntimeBridge {
     deleteRuntimeVersion: target => NativeRuntime
       .deleteRuntimeVersion({ target: assertRuntimeVersionTarget(target) })
       .then(validateRuntimeVersions),
+    // 残留载荷只有份数/字节数/截断标记与一句说明：原生侧连目录名都不回传，这里也就无从泄漏；
+    // 清理幂等且不抛，失败（含单份删不掉）由 failed 与 message 如实体现。
+    getRuntimeResidue: () => NativeRuntime.getRuntimeResidue().then(validateRuntimeResidue),
+    cleanRuntimeResidue: () => NativeRuntime.cleanRuntimeResidue().then(validateRuntimeResidueCleanup),
+    // 会话工作区：只取元数据（标识/标题/更新时间），读不到时原生侧回受控错误字段而不是空列表，
+    // 这里也不把「读不到」改写成空列表——校验器只认这两种形状。
+    listSessions: () => NativeRuntime.sessionList().then(validateRuntimeSessionListResult),
     // 快照标识的形态由原生侧把关（`RUNTIME_SNAPSHOT_ID_INVALID`）：前端原样传过去，
     // 不在这里另造一套错误文案，避免两边对「什么算合法 id」说法不一。
     getRuntimeSessionSnapshotState: () => NativeRuntime

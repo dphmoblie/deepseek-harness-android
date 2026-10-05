@@ -84,13 +84,6 @@ license and bundled notices, the DeepSeek Harness license, and the licenses of
 all copied npm packages. A remote rootfs is subject to the same obligations as
 one embedded in the APK.
 
-## 目标应用副屏机制参考
-
-2026-10-02 研究了 `Aliothmoon/MAA-Meow` 提交
-`faf7ef0e57dbf4e70d5b6e422b74ce5d887c50a3` 的虚拟显示与指定显示输入机制。
-该仓库主许可证为 AGPL-3.0。本次未引入其源码或二进制，副屏实现、图像管道和
-生命周期管理另行编写。参考范围、接口与设备验证说明见 `docs/目标应用副屏.md`。
-
 ## Network tool component provenance
 
 The embedded runtime adds a network tool component group so the agent inside the

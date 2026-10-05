@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile.virtualscreen
 
 import android.app.*
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
@@ -10,6 +11,7 @@ import android.view.*
 import android.widget.*
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import io.deepseekharness.mobile.AppThemePreference
 import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.runtime.*
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
@@ -140,12 +142,6 @@ class VirtualScreenService : Service() {
         return id
     }
 
-    /**
-     * 文本分流：可打印 ASCII 继续走设备 Shell 的 `input text`（与现有行为完全一致），
-     * 含中文、emoji 等字符时改由无障碍服务定向注入——只有它能送出 Unicode。
-     */
-    private fun needsAccessibilityText(value: String): Boolean = VirtualScreenPolicy.needsAccessibilityText(value)
-
     fun screenshot(id: String, fromAi: Boolean = false): ByteArray {
         requireAccess()
         requireSession(id)
@@ -162,14 +158,22 @@ class VirtualScreenService : Service() {
     }
 
     /**
+     * 向宿主刷新一次状态快照并返回（预览与 AI 截图共用，因此不写审计、不参与 frameReused 判定）。
+     * `frameBlank` 与 `frameAtElapsedMs` 是判断「这一帧是不是空白、是不是新帧」的唯一依据：
+     * health 每 1500 毫秒才刷一次快照，拿旧快照给当前帧贴标签会慢半拍到一拍半。
+     * 读不到宿主状态时回落到本地快照，不抛异常——预览不该因为一次状态读取失败就停摆。
+     */
+    fun freshState(): JSONObject = runCatching { checkNotNull(shizuku).virtualScreenState() }
+        .getOrElse { state() }
+        .also { snapshot = it }
+
+    /**
      * 返回截图与帧新鲜度元数据；图像仍只在内存和受控管道中传输。
      * `frameBlank` 由宿主状态原样透传，宿主状态里没有该字段时不给出默认值。
      */
     fun screenshotEnvelope(id: String): JSONObject {
         val bytes = screenshot(id, fromAi = true)
-        val meta = runCatching { checkNotNull(shizuku).virtualScreenState() }
-            .getOrElse { state() }
-        snapshot = meta
+        val meta = freshState()
         val frameAt = meta.optLong("frameAtElapsedMs", 0L)
         val reused = frameAt > 0L && frameAt == lastAiFrameAt
         lastAiFrameAt = frameAt
@@ -184,6 +188,11 @@ class VirtualScreenService : Service() {
     fun action(parameters: JSONObject): JSONObject {
         requireSession(parameters.getString("sessionId"))
         val verb = parameters.getString("action")
+        // 跟随要排除「本应用自己」（副屏预览界面就跑在本应用里，把自己拉到副屏等于盖掉会话），
+        // 而 Shizuku 用户服务进程里拿不到宿主包名：统一在这里注入一次；调用方显式传值时以调用方为准。
+        if (verb == "follow" && !parameters.has(VirtualScreenPolicy.SELF_PACKAGE_FIELD)) {
+            parameters.put(VirtualScreenPolicy.SELF_PACKAGE_FIELD, packageName)
+        }
         if (verb == "stop") {
             main.post { stopSelf() }
             return JSONObject().put("stopping", true)
@@ -195,25 +204,18 @@ class VirtualScreenService : Service() {
             requireAccess()
             return checkNotNull(shizuku).virtualScreenAction(parameters.toString())
         }
-        // 节点树与中文注入都跑在本进程的无障碍服务里，不经过设备 Shell：
+        // 节点树与**所有**文字注入都跑在本进程：无障碍回退链只有这里才拿得到服务实例；
+        // 纯 ASCII 的按键兜底再由 textOnDisplay 接回设备 Shell 的既有通道（见该函数）。
         // 显示编号取宿主状态里的值，读不到时按可重试的瞬时状态报错。
-        if (verb == "tree" || (verb == "text" && needsAccessibilityText(parameters.optString("text")))) {
+        if (verb == "tree" || verb == "text") {
             requireAccess()
             val id = displayId()
-            return if (verb == "tree") {
-                VirtualScreenTree.dump(id, parameters.optInt("maxDepth", 4), VirtualScreenTree.MAX_NODES).also {
+            if (verb == "tree") {
+                return VirtualScreenTree.dump(id, parameters.optInt("maxDepth", 4), VirtualScreenTree.MAX_NODES).also {
                     audit.record(AuditEvent.VIRTUAL_SCREEN_READ, AuditResult.SUCCEEDED)
                 }
-            } else {
-                val text = parameters.optString("text")
-                val injected = runCatching { VirtualScreenTree.setText(id, text) }.getOrDefault(false)
-                audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, if (injected) AuditResult.SUCCEEDED else AuditResult.FAILED)
-                if (!injected) {
-                    throw RuntimeFailure("VIRTUAL_SCREEN_UNAVAILABLE", "中文文本注入未完成：请确认已在系统设置里开启 DeepSeek 的无障碍服务，并让目标输入框保持聚焦")
-                }
-                JSONObject().put("sessionId", parameters.getString("sessionId")).put("displayId", id)
-                    .put("injected", text.length)
             }
+            return textOnDisplay(parameters, id)
         }
         if (!actionSlot.tryAcquire(2, java.util.concurrent.TimeUnit.SECONDS)) throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "上一步副屏操作尚未完成")
         return try {
@@ -223,6 +225,129 @@ class VirtualScreenService : Service() {
         finally { actionSlot.release() }
     }
 
+    /**
+     * `text` 动作：一律走本进程的回退链（[VirtualScreenTree.writeText]），再把「无障碍这条链没落地、
+     * 但纯 ASCII 还能靠设备 Shell 送」的那一级接到既有 Shizuku 按键通道上。
+     *
+     * 返回结构与设备 Shell 侧共用同一份字段形状：`method`/`chars`/`submit`/`submitRequested`/`steps`。
+     * 失败时抛 [RuntimeFailure]，码用回退链给出的那个（`VIRTUAL_SCREEN_TEXT_UNSUPPORTED` 等）——
+     * **不再一律报 `VIRTUAL_SCREEN_UNAVAILABLE`**：副屏本身正常，写不进去是目标输入框的限制。
+     */
+    private fun textOnDisplay(parameters: JSONObject, displayId: Int): JSONObject {
+        val submit = parameters.optBoolean("submit", false)
+        val write = try {
+            VirtualScreenTree.writeText(displayId, parameters.optString("text"), submit = submit)
+        } catch (e: Exception) {
+            audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.FAILED)
+            throw RuntimeFailure(
+                VirtualScreenTextPolicy.FailureCode.INVALID,
+                VirtualScreenTextPolicy.failureMessage(VirtualScreenTextPolicy.FailureCode.INVALID),
+                e,
+            )
+        }
+        // 无障碍这一侧写不进去、链路里只剩纯 ASCII 的按键兜底：交给设备 Shell 再算一次真实结果。
+        if (write.awaitsKeyEvents) return shellKeyEvents(parameters, write, submit)
+        if (!write.succeeded) {
+            audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.FAILED)
+            throw RuntimeFailure(
+                write.code ?: VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
+                write.message,
+            )
+        }
+        audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.SUCCEEDED)
+        return textEnvelope(parameters, displayId, write.method, write.chars, write.submitted, submit, write.steps)
+    }
+
+    /**
+     * 纯 ASCII 的按键兜底：复用既有 Shizuku 通道（`ShellVirtualScreen.textAction` 的 `input text` /
+     * 逐字符 `input keyevent`），把它的**真实**读数并进返回结构。
+     *
+     * `chars`/`submit` 只认实际写进去的数字：通道拿不到、写了一半、回车没按成，都如实报出来，
+     * 不因为「请求过」就宣称成功；失败时把已经写进多少个字符也写清楚。
+     */
+    private fun shellKeyEvents(
+        parameters: JSONObject,
+        write: VirtualScreenTree.TextWrite,
+        submit: Boolean,
+    ): JSONObject {
+        val total = parameters.optString("text").length
+        // 设备 Shell 的回执分两种：正常回执是结构化 JSON（失败时带 code/reason，chars 仍是真实写入数）；
+        // Binder 侧直接抛异常时（Shizuku 未就绪、会话已换、目标已离开副屏）这里如实降级并带上原因。
+        val raw = runCatching { checkNotNull(shizuku).virtualScreenAction(parameters.toString()) }
+        val shell = raw.getOrNull()
+        val chars = shell?.optInt("chars", 0) ?: 0
+        val submitted = shell?.optBoolean("submit", false) ?: false
+        val shellSteps = shell?.optString("steps").orEmpty()
+        val succeeded = shell != null && !shell.has("code")
+        val attemptSteps = if (succeeded) {
+            VirtualScreenTextPolicy.describe(keyEventAttempts(write.attempts)) +
+                VirtualScreenTextPolicy.submitNote(true, submitted, submit)
+        } else {
+            VirtualScreenTextPolicy.describe(write.attempts) +
+                VirtualScreenTextPolicy.submitNote(false, false, submit)
+        }
+        val steps = attemptSteps + if (shellSteps.isEmpty()) "" else "；设备 Shell：$shellSteps"
+        if (succeeded) {
+            audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.SUCCEEDED)
+            return textEnvelope(
+                parameters,
+                displayId(),
+                VirtualScreenTextPolicy.TextMethod.KEY_EVENTS,
+                chars,
+                submitted,
+                submit,
+                steps,
+            )
+        }
+        audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.FAILED)
+        val reason = shell?.optString("reason").orEmpty().ifEmpty {
+            if (shell == null) {
+                val detail = raw.exceptionOrNull()?.message?.takeIf { it.isNotBlank() }?.let { "：$it" }.orEmpty()
+                "设备 Shell 按键通道不可用（Shizuku 或副屏会话未就绪$detail）"
+            } else {
+                "设备 Shell 按键通道没能写入"
+            }
+        }
+        throw RuntimeFailure(
+            VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
+            VirtualScreenTextPolicy.failureMessage(VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED) +
+                "（$reason；${if (chars <= 0) "一个字符也没写进去" else "只写进了 $chars/$total 个字符"}）；$steps",
+        )
+    }
+
+    /** 按键兜底成功后的补记账：把「等待调用方的按键通道」翻成成功；没有这一条时补一条。 */
+    private fun keyEventAttempts(
+        attempts: List<VirtualScreenTextPolicy.TextAttempt>,
+    ): List<VirtualScreenTextPolicy.TextAttempt> {
+        val marked = VirtualScreenTree.markKeyEvents(attempts)
+        if (marked.any { it.method == VirtualScreenTextPolicy.TextMethod.KEY_EVENTS && it.succeeded }) return marked
+        return marked + VirtualScreenTextPolicy.TextAttempt(
+            VirtualScreenTextPolicy.TextMethod.KEY_EVENTS,
+            true,
+            null,
+            "已通过设备 Shell 的 input 通道输入",
+        )
+    }
+
+    /** 文字注入的结构化回执；`method`/`chars`/`submit` 都取真实读数，`submitRequested` 记录调用方的请求。 */
+    private fun textEnvelope(
+        parameters: JSONObject,
+        displayId: Int,
+        method: VirtualScreenTextPolicy.TextMethod?,
+        chars: Int,
+        submitted: Boolean,
+        submitRequested: Boolean,
+        steps: String,
+    ): JSONObject = JSONObject()
+        .put("sessionId", parameters.getString("sessionId"))
+        .put("displayId", displayId)
+        .put("method", method?.name)
+        .put("label", method?.label)
+        .put("chars", chars)
+        .put("submit", submitted)
+        .put("submitRequested", submitRequested)
+        .put("steps", steps)
+
     fun showOverlay() {
         check(Looper.myLooper() == Looper.getMainLooper())
         check(Settings.canDrawOverlays(this)) { "请先授予悬浮窗权限" }
@@ -230,11 +355,26 @@ class VirtualScreenService : Service() {
         if (overlay != null) return
         val wm = getSystemService(WindowManager::class.java)
         val metrics = resources.displayMetrics
-        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setBackgroundColor(0xf0222630.toInt()) }
-        val toolbar = LinearLayout(this)
-        val drag = TextView(this).apply { text = "目标应用 · 拖动"; setTextColor(-1); setPadding(12, 12, 12, 12) }
+        // 悬浮面板的颜色与控件默认样式都按**已保存的应用主题**解析。
+        // Service 没有 Activity 那样的主题入口，直接 new Button(this) 会拿系统深浅去解析默认样式：
+        // 应用选了深色、系统还是浅色时，一块深色面板上会浮出几个浅色按钮，看着就是「没跟主题走」。
+        // 这里沿用悬浮球那套 ContextThemeWrapper(this, R.style.AppTheme)（见 OverlayBallService），
+        // 再叠一层 AppThemePreference.palette() 把 uiMode 换成应用主题。
+        val ui: Context = ContextThemeWrapper(AppThemePreference.palette(this), R.style.AppTheme)
+        // 底色与文字色一律取主题令牌（res/values{,-night}/colors.xml），不再写死 0xf0222630 这种值：
+        // 那个深色底在浅色主题下就是一块突兀的深色砖。
+        val panel = LinearLayout(ui).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(AppThemePreference.color(this@VirtualScreenService, R.color.overlay_panel_background))
+        }
+        val toolbar = LinearLayout(ui)
+        val drag = TextView(ui).apply {
+            text = "目标应用 · 拖动"
+            setTextColor(AppThemePreference.color(this@VirtualScreenService, R.color.overlay_panel_foreground))
+            setPadding(12, 12, 12, 12)
+        }
         toolbar.addView(drag, LinearLayout.LayoutParams(0, -2, 1f))
-        val page = Button(this).apply {
+        val page = Button(ui).apply {
             text = "展开"
             setOnClickListener {
                 runCatching { startActivity(Intent(this@VirtualScreenService, VirtualScreenActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
@@ -242,11 +382,20 @@ class VirtualScreenService : Service() {
                     .onFailure { Toast.makeText(this@VirtualScreenService, "无法展开，请从通知打开副屏页面", Toast.LENGTH_LONG).show() }
             }
         }
-        val close = Button(this).apply { text = "收起"; setOnClickListener { hideOverlay() } }
+        val close = Button(ui).apply { text = "收起"; setOnClickListener { hideOverlay() } }
+        // 状态行：档位按钮下面一行，如实显示当前档位、实测帧率与画面状态（「画面暂无变化」「当前帧接近纯色」
+        // 等措辞都来自 VirtualScreenPolicy）。没有它时，预览暂停或黑屏时用户在悬浮窗里看不到任何原因——
+        // 0.2.9 真机上就是一块黑面板。声明放在档位按钮之前，按钮的点击回调要在切档成功后立刻改这一行。
+        val status = TextView(ui).apply {
+            setTextColor(AppThemePreference.color(this@VirtualScreenService, R.color.overlay_panel_foreground))
+            setPadding(12, 4, 12, 4)
+            setTextSize(12f)
+            text = getString(R.string.virtual_screen_overlay_status_waiting)
+        }
         toolbar.addView(page); toolbar.addView(close); panel.addView(toolbar)
         // 档位行：副屏页里能选的几档，在悬浮窗上也能选，不必「先展开、改完再收回来」。
         // 档位只改采集间隔；预览拉取另有下限（见 VirtualScreenPolicy.previewPullInterval）。
-        val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val modeRow = LinearLayout(ui).apply { orientation = LinearLayout.HORIZONTAL }
         val modeButtons = mutableListOf<Button>()
         val currentMode = {
             VirtualScreenPolicy.frameModeOf(state().optString(VirtualScreenPolicy.PREVIEW_FIELD))
@@ -256,7 +405,7 @@ class VirtualScreenService : Service() {
             modeButtons.forEach { button -> button.alpha = if (button.tag == active) 1f else 0.5f }
         }
         VirtualScreenPolicy.FRAME_MODES.keys.forEach { mode ->
-            val button = Button(this).apply {
+            val button = Button(ui).apply {
                 text = getString(modeTitleRes(mode))
                 tag = mode
                 setPadding(6, 0, 6, 0)
@@ -268,6 +417,9 @@ class VirtualScreenService : Service() {
                                 .put("action", "config")
                                 .put(VirtualScreenPolicy.PREVIEW_FIELD, mode),
                         )
+                    }.onSuccess {
+                        // 如实说明「已经切了、读数还没到」；下一次取帧会用真实读数覆盖这一行。
+                        status.text = getString(R.string.virtual_screen_overlay_mode_switched, getString(modeTitleRes(mode)))
                     }.onFailure {
                         Toast.makeText(this@VirtualScreenService, "切换档位失败，请重试", Toast.LENGTH_SHORT).show()
                     }
@@ -279,12 +431,18 @@ class VirtualScreenService : Service() {
         }
         panel.addView(modeRow)
         paintModes()
+        panel.addView(status)
         val image = VirtualScreenPreview(this).also { preview = it }
+        // 预览每一拍把状态行文案回报到这里（档位、实测帧率、画面状态都在里面）。
+        image.report = { line -> if (overlay === panel) status.text = line }
         panel.addView(image, LinearLayout.LayoutParams(-1, 0, 1f))
         val w = minOf((320 * metrics.density).toInt(), (metrics.widthPixels * .9f).toInt())
         val h = minOf((480 * metrics.density).toInt(), (metrics.heightPixels * .7f).toInt())
+        // 悬浮小窗**不加 FLAG_SECURE**：加了以后用户自己截图和 adb screencap 都会失败
+        // （0.2.9 真机实测报 "Failed to take take screenshot. Capturing failed."），而用户明确要能看到小窗内容。
+        // 全屏查看器 VirtualScreenActivity 的 FLAG_SECURE 保持不动，隐私提醒见 docs/目标应用副屏.md。
         val params = WindowManager.LayoutParams(w, h, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_SECURE, android.graphics.PixelFormat.TRANSLUCENT).apply {
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, android.graphics.PixelFormat.TRANSLUCENT).apply {
             gravity = Gravity.TOP or Gravity.START; x = 0; y = (60 * metrics.density).toInt()
         }
         var downX = 0f; var downY = 0f; var originX = 0; var originY = 0
@@ -356,6 +514,10 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private var streaming = false
     private var lastMoveAt = 0L
     private var queuedMove: FloatArray? = null
+    /** 上一张已显示画面的亮度采样，用来判断「画面暂无变化」；null 表示还没显示过画面。 */
+    private var previousSamples: IntArray? = null
+    /** 逐采样行读像素时复用的整行缓冲，避免每一拍都新建数组。 */
+    private var rowPixels = IntArray(0)
     private val screenOff = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: Intent?) { clearFrame() }
     }
@@ -453,6 +615,26 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         down = null
         setImageDrawable(null); displayed = null
         observedSession = ""; observedAt = 0
+        previousSamples = null
+    }
+
+    /**
+     * 把一帧采成亮度样本（[VirtualScreenPolicy.previewSampleRows] × [VirtualScreenPolicy.previewSampleColumns]）：
+     * 每个采样行只调一次 `getPixels` 取整行，再按采样列挑点，既避开上万次逐像素 JNI 调用，
+     * 也不会像 0.2.9 之前那样只取固定几行、正好从文字上下穿过去。
+     */
+    private fun sampleFrame(bitmap: android.graphics.Bitmap): IntArray {
+        val rows = VirtualScreenPolicy.previewSampleRows(bitmap.height)
+        val columns = VirtualScreenPolicy.previewSampleColumns(bitmap.width)
+        if (rows.isEmpty() || columns.isEmpty()) return IntArray(0)
+        val line = rowPixels.takeIf { it.size >= bitmap.width } ?: IntArray(bitmap.width).also { rowPixels = it }
+        val samples = IntArray(rows.size * columns.size)
+        var index = 0
+        for (row in rows) {
+            bitmap.getPixels(line, 0, bitmap.width, 0, row, bitmap.width, 1)
+            for (column in columns) samples[index++] = VirtualScreenPolicy.luminance(line[column])
+        }
+        return samples
     }
 
     private val tick = object : Runnable {
@@ -464,31 +646,58 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                 var id = ""
                 var channel = ""
                 var mode = "limited"
-                val message = try {
+                var fps = 0.0
+                // 这一拍的亮度采样；null 表示这一拍没拿到可解码的画面（不等于「画面是空的」）。
+                var samples: IntArray? = null
+                try {
                     val service = checkNotNull(VirtualScreenService.current)
-                    val state = service.state()
+                    // 帧率必须来自与这一帧同一拍的状态：health 的快照最多旧 1500 毫秒，拿它贴帧率会慢半拍。
+                    val state = service.freshState()
                     id = state.getString("sessionId")
                     channel = state.optString("touchChannel", "")
                     mode = VirtualScreenPolicy.frameModeOf(state.optString(VirtualScreenPolicy.PREVIEW_FIELD))
-                    val fps = state.optDouble("frameFps", 0.0)
+                    fps = state.optDouble("frameFps", 0.0)
                     val bytes = service.screenshot(id)
                     bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    checkNotNull(bitmap)
-                    // 状态行如实展示当前通道、实测帧率与所选档位，方便用户判断直传/帧率是否生效。
-                    // 这里不再写「静止页面复用最近一帧」：复用行为已按用户要求关闭，写它就是假话。
-                    val touch = if (channel == "stream") "触摸直传" else "点击或滑动操作"
-                    val rate = if (fps > 0.0) String.format(java.util.Locale.US, "%.1f fps", fps) else "等待首帧"
-                    "副屏预览 · $touch · $rate · 档位 ${context.getString(modeTitleRes(mode))}"
-                } catch (_: Exception) { "等待副屏画面；锁屏、断连或应用离开副屏时暂停显示" }
+                    if (bitmap != null) samples = sampleFrame(bitmap)
+                } catch (_: Exception) { samples = null; bitmap = null }
                 main.post {
                     if (version != generation || executor == null) { return@post }
                     val current = VirtualScreenService.current
-                    if (current?.canObserve() != true || current.state().optString("sessionId") != id) { bitmap = null }
-                    setImageBitmap(bitmap)
-                    displayed = bitmap
-                    observedSession = id; observedAt = SystemClock.elapsedRealtime()
-                    if (channel.isNotEmpty()) observedChannel = channel
-                    report(message)
+                    // 会话不可观察（已切换、已释放）才是唯一允许清屏的情形。
+                    val alive = current?.canObserve() == true && current.state().optString("sessionId") == id
+                    // 判定权威在客户端：宿主那个只看固定采样线的 frameBlank 只作提示，不再决定清不清屏
+                    // （0.2.9 的真机黑屏就是把它当成了「不能显示」）。接近纯色的帧一律不显示，并如实写进状态行。
+                    val hasContent = samples != null && VirtualScreenPolicy.frameHasContent(samples)
+                    val changed = samples == null || VirtualScreenPolicy.frameChanged(previousSamples, samples)
+                    val outcome = VirtualScreenPolicy.previewOutcome(alive, samples != null, !hasContent, changed)
+                    // 还没有任何可显示画面时必须说「等待……」，不能假称「画面暂无变化」；
+                    // 这里用 lambda 在读数时求值：SHOW 已经把画面画上去之后，状态行就不该再说「等待」。
+                    val line = { VirtualScreenPolicy.previewStatusLine(channel, outcome.pause, fps, context.getString(modeTitleRes(mode)), displayed == null) }
+                    when (outcome.action) {
+                        VirtualScreenPolicy.PreviewFrameAction.SHOW -> {
+                            bitmap?.let {
+                                setImageBitmap(it); displayed = it
+                                // 只有真帧才刷新画面时刻：不能让触摸与「画面新鲜」判定误以为刚更新过。
+                                observedSession = id; observedAt = SystemClock.elapsedRealtime()
+                                // 只有真正显示过的画面才算「上一帧」，状态行的「画面暂无变化」才有所指。
+                                previousSamples = samples
+                            }
+                            if (channel.isNotEmpty()) observedChannel = channel
+                            report(line())
+                        }
+                        VirtualScreenPolicy.PreviewFrameAction.KEEP -> {
+                            // 接近纯色的新帧或这一拍读不到帧：保留最近一张非空白画面（绝不清屏），也不动画面时刻。
+                            if (channel.isNotEmpty()) observedChannel = channel
+                            report(line())
+                        }
+                        VirtualScreenPolicy.PreviewFrameAction.CLEAR -> {
+                            setImageBitmap(null); displayed = null
+                            observedSession = ""; observedAt = 0
+                            previousSamples = null
+                            report(VirtualScreenPolicy.PREVIEW_GONE_MESSAGE)
+                        }
+                    }
                     // 拉取间隔跟随档位（下限见 VirtualScreenPolicy.previewPullInterval）：
                     // 档位在这里改、运行中立刻生效，不必重开副屏。
                     main.postDelayed(this, VirtualScreenPolicy.previewPullInterval(mode).toLong())

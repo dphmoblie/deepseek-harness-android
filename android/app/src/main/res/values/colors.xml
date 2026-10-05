@@ -16,6 +16,8 @@
     <!-- Native overlay surfaces resolve the saved theme before showing. -->
     <color name="overlay_panel_background">#F3F5F8</color>
     <color name="overlay_panel_foreground">#18212A</color>
+    <!-- 浮层里的次要文字（详情/说明）。取值与 Web 侧同名 CSS 变量 muted 一致，深浅两套成对定义。 -->
+    <color name="overlay_panel_muted_foreground">#667181</color>
     <color name="overlay_panel_action_pressed">#E3EAF0</color>
     <color name="overlay_secondary_background">#E8EFFF</color>
     <color name="overlay_secondary_background_disabled">#DCE4E1</color>

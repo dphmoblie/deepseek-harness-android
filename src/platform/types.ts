@@ -110,6 +110,32 @@ export interface RuntimeVersionsState {
 }
 
 /**
+ * 运行时占用：运行时目录里可回收的 `stale-*` 残留（删除失败后被改名挪到一边的整份运行时目录）。
+ *
+ * 只回传份数、字节数与截断标记，**不含路径、目录名或文件名**；[truncated] 为真表示盘点因条目
+ * 预算提前停止，[bytes] 只是下界。只读：不需要停止运行时。
+ */
+export interface RuntimeResidueState {
+  count: number
+  bytes: number
+  truncated: boolean
+}
+
+/**
+ * 一次「清理残留」的结果。
+ *
+ * [cleaned] / [failed] / [reclaimedBytes] 是**这一次尝试**的结果，不是清理之后的当前状态：
+ * 界面想知道还剩几份，必须重新调 [RuntimeBridge.getRuntimeResidue]，不许自己相减。
+ * [message] 是给人看的一句如实说明（中文），同样不含任何路径。
+ */
+export interface RuntimeResidueCleanupState {
+  cleaned: number
+  failed: number
+  reclaimedBytes: number
+  message: string
+}
+
+/**
  * 一份运行时会话快照。
  *
  * 快照只装访客里的**可变数据**（会话、设置、凭据、工作区），存在应用私有目录
@@ -151,6 +177,40 @@ export interface RuntimeSessionSnapshotRestoreResult {
   skippedFileCount: number
   state: RuntimeSessionSnapshotState
 }
+
+/**
+ * 会话工作区里的一条会话：**只有元数据**。
+ *
+ * 标题取自会话日志里最后一条 `session/title` 事件（宿主自己也这么做），没有标题事件时是原生侧
+ * 按同一套规则从首条用户消息折叠出的回退标题。[title] 为空串表示这条会话读不到标题，
+ * 界面显示「未命名会话」即可，**不要**拿 id 或时间冒充标题。
+ * 正文、消息片段与搜索 snippet 从不经过这条通道（见 [RuntimeBridge.listSessions]）。
+ */
+export interface RuntimeSessionSummary {
+  id: string
+  title: string
+  /** 最近更新时间的毫秒时间戳（会话日志文件的修改时间）。 */
+  updatedAt: number
+}
+
+/**
+ * 会话列表读不到的原因（受控枚举；对用户可见的文案由界面决定，桥不返回句子）。
+ *
+ * 三者都**不是**「没有会话」：界面显示空态时必须同时说明这一点。
+ */
+export type RuntimeSessionListReason = 'RUNTIME_NOT_INSTALLED' | 'SESSION_CATALOG_TIMEOUT' | 'SESSION_CATALOG_FAILED'
+
+/**
+ * 会话列表的读取结果。
+ *
+ * 只有两态，**没有**「静默的空列表」这种形态：读不到就明确回 `unavailable`，
+ * 否则界面会把一次失败显示成「暂无会话」——那是编造出来的事实。
+ * `truncated` 为真表示**没读全**（会话条数超过上限，或本次读取的时间预算用尽）：
+ * 列表本身仍然可用，但要如实说明「还有没列出来的」。
+ */
+export type RuntimeSessionListResult =
+  | { status: 'ready'; sessions: RuntimeSessionSummary[]; truncated: boolean }
+  | { status: 'unavailable'; reason: RuntimeSessionListReason }
 
 /**
  * 安装/更新前自动快照的结论；不阻断安装，只如实报告。
@@ -931,6 +991,30 @@ export interface RuntimeBridge {
   switchRuntimeVersion: (target: 'previous') => Promise<RuntimeVersionsState>
   /** 删除保留下来的上一版本以释放磁盘空间；只影响上一版本，不需要停止运行时。 */
   deleteRuntimeVersion: (target: 'previous') => Promise<RuntimeVersionsState>
+  /**
+   * 运行时占用的可回收残留（份数与字节数，只读）。
+   *
+   * 载荷只有数字与一个截断标记，不含路径；读不到时回 0 份且 `truncated: true`，
+   * 而不是假装「确认没有残留」。
+   */
+  getRuntimeResidue: () => Promise<RuntimeResidueState>
+  /**
+   * 清理运行时残留，返回**这一次尝试**回收的份数、字节数与一句如实说明。
+   *
+   * 只删除运行时目录下由本应用生成的 `stale-*` 残留，不影响会话、设置与当前运行时；
+   * 幂等：没有残留时回全 0 且不报错。清理后界面应重新调 [RuntimeBridge.getRuntimeResidue]。
+   */
+  cleanRuntimeResidue: () => Promise<RuntimeResidueCleanupState>
+  /**
+   * 会话工作区的会话元数据（无参数，只读）。
+   *
+   * 只回传会话标识、标题与最近更新时间，**只取元数据**：会话正文、消息片段与搜索 snippet
+   * 永远不经过这条通道，也**不写入任何浏览器存储**（localStorage/sessionStorage/IndexedDB）。
+   * 读不到时回 `status: 'unavailable'` 而不是空列表，见 [RuntimeSessionListResult]。
+   *
+   * 注意与下面的「会话快照」区分：那是**整目录备份/恢复**，这里只是列表元数据。
+   */
+  listSessions: () => Promise<RuntimeSessionListResult>
   /**
    * 会话快照总览（无参数，只读）。
    *

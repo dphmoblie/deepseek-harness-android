@@ -91,4 +91,9 @@
 
     <!-- 对话小窗的缩放手柄：拖动它改变小窗大小，右下角内缩 4dp。 -->
     <string name="overlay_conversation_resize_description">拖动调整对话小窗大小</string>
+
+    <!-- 副屏悬浮小窗：档位行下面那行状态文字。还没有任何画面时如实说「等待」，不假称有画面。 -->
+    <string name="virtual_screen_overlay_status_waiting">等待副屏画面</string>
+    <!-- 切档成功后立刻显示这一条，下一次取帧会用真实读数覆盖它；%1$s 是档位名。 -->
+    <string name="virtual_screen_overlay_mode_switched">已切到 %1$s，等待新的帧率读数</string>
 </resources>

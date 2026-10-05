@@ -58,6 +58,7 @@ import {
 import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import { hasConfiguredModelCredential, MODEL_PROVIDERS } from './modelProviders'
 import { CustomProviders } from './components/CustomProviders'
+import { RuntimeResidueCard } from './components/RuntimeResidueCard'
 import { runtimeBridge } from './platform/native'
 import { readLogInsights } from './logInsights'
 import { validateHarnessPermissionMode } from './harnessPermissionMode'
@@ -2052,6 +2053,8 @@ function RuntimeVersionsPanel({
           })}
         </div>
       )}
+
+      <RuntimeResidueCard />
 
       {!loading && !failed && (
         <>

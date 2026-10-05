@@ -37,6 +37,14 @@ class RuntimeInstaller(
     private val cancellationRequested = AtomicBoolean(false)
 
     /**
+     * 残留清扫用的分级删除器（严格删除器 → 兜底删除器）。
+     *
+     * 与 [deleteRelaxed] 共用同一份实现：清理语义只有一处，避免两条路径对「删不掉的残留怎么办」
+     * 给出不同答案。
+     */
+    private val residueCleanup = RuntimeResidueCleanup()
+
+    /**
      * 本次安装当前所处的步骤名，用于失败时写进诊断日志。
      *
      * 只能是受控 token（诊断字段不允许中文、空格与路径）：原生失败细节从来不进 logcat，
@@ -56,6 +64,7 @@ class RuntimeInstaller(
             currentStep = "parent_prepare"
             prepareRuntimeParent()
             checkCancellation()
+            recordRuntimeInventory("parent_prepare")
 
             val transferPhase = if (source.isBundled) RuntimePhase.PREPARING else RuntimePhase.DOWNLOADING
             status.update(transferPhase, downloaded = 0, total = 0)
@@ -69,6 +78,8 @@ class RuntimeInstaller(
                     total = manifest.rootfs.compressedBytes,
                     nextHarnessUrl = null,
                 )
+                // 这次没有换版本，但上一次更新失败留下的 stale-* 残留还在盘上：收尾时顺手回收一次。
+                finishRuntimeMaintenance()
                 return
             }
             currentStep = "workspace"
@@ -140,6 +151,7 @@ class RuntimeInstaller(
                 total = manifest.rootfs.compressedBytes,
                 nextHarnessUrl = null,
             )
+            finishRuntimeMaintenance()
         } catch (error: Throwable) {
             val cleanupFailure = workspace?.let {
                 try {
@@ -191,6 +203,10 @@ class RuntimeInstaller(
             // 用户显式清空运行时：中断更新遗留的用户数据暂存目录一并清理
             // （与下面删除 currentRoot/backupRoot 的语义一致）。
             cleanPreservedWorkspaces()
+            // 语义同上：删除失败被改名挪到一边的 stale-* 残留也在这里一次性收回。
+            // 它们和 current/previous 一样是整份 rootfs（约 960 MB 一份），仅仅删不掉而已，
+            // 「重置环境」必须真的把盘上这些空间交还回来。
+            retireStaleResidue()
             cleanResumeFilesExcept(null)
             cleanupIfPresent(store.backupManifest)
             cleanupIfPresent(store.backupRoot)
@@ -201,6 +217,7 @@ class RuntimeInstaller(
             store.updateInstalledManifest(null)
             store.invalidateRetainedManifest()
             status.refreshIdle()
+            recordRuntimeInventory("reset")
         } finally {
             installLock.unlock()
         }
@@ -842,7 +859,8 @@ class RuntimeInstaller(
      *
      * 挪走（而不是留在原地）是必须的：`previous/`、`current/` 这类路径随后要被提升流程改名占用，
      * 只把失败吞掉会让安装换一个地方继续失败。挪到 `stale-*` 后目标路径立即空出来，
-     * 磁盘占用留到用户显式重置环境时随其他目录一起清理。
+     * 磁盘占用随后由 [retireStaleResidue] 回收：用户显式重置环境时会清，
+     * 安装成功收尾也会尽力清一次（见 [finishRuntimeMaintenance]），不再是「只挪不清」。
      */
     private fun retireIfPresent(target: File, reason: String) {
         if (!RuntimeFiles.existsNoFollow(target)) return
@@ -881,7 +899,8 @@ class RuntimeInstaller(
     /**
      * 先走严格删除器，失败再走不跟随符号链接的兜底删除器（见 [RuntimeFiles.deleteTreeNoFollowFallback]）。
      *
-     * 真机上严格删除器会在这类大目录树上直接失败，兜底删除器能把残留真正回收掉，因此：
+     * 分级删除本身在 [RuntimeResidueCleanup] 里，与残留清扫器共用同一份实现；这里只负责把它翻成
+     * 「可继续 / 失败」并保留原有的诊断记录：
      *
      *  - 返回 `null` 表示已经删干净（无论用的哪条路径）；
      *  - 兜底也失败时返回**兜底那次**失败，它才是「为什么还是删不掉」的最终解释。
@@ -889,45 +908,36 @@ class RuntimeInstaller(
      * 兜底成功时会记一条 `result=succeeded` + `code=<严格删除器失败类别>`：诊断日志因此既证明残留被回收，
      * 也留下严格删除器在真机上失败的事实，供后续定位。
      */
-    private fun deleteRelaxed(target: File, reason: String): RuntimeFailure? {
-        val strictFailure = try {
-            RuntimeFiles.deleteTreeNoFollow(target, store.runtimeParent)
-            return null
-        } catch (failure: RuntimeFailure) {
-            failure
+    private fun deleteRelaxed(target: File, reason: String): RuntimeFailure? =
+        when (val outcome = residueCleanup.delete(target, store.runtimeParent)) {
+            is ResidueDeleteOutcome.Cleaned -> null
+
+            is ResidueDeleteOutcome.CleanedByFallback -> {
+                store.diagnostics.record(
+                    DiagnosticLevel.WARN,
+                    DiagnosticEvent.RUNTIME_PHASE,
+                    mapOf(
+                        "phase" to "cleanup",
+                        "result" to "succeeded",
+                        "code" to outcome.strictCode,
+                        "reason" to fallbackReason(reason),
+                        "count" to "0",
+                    ),
+                )
+                null
+            }
+
+            is ResidueDeleteOutcome.Failed -> outcome.failure
         }
-        return try {
-            RuntimeFiles.deleteTreeNoFollowFallback(target, store.runtimeParent)
-            store.diagnostics.record(
-                DiagnosticLevel.WARN,
-                DiagnosticEvent.RUNTIME_PHASE,
-                mapOf(
-                    "phase" to "cleanup",
-                    "result" to "succeeded",
-                    "code" to RuntimeRetireTokens.of(strictFailure),
-                    "reason" to fallbackReason(reason),
-                    "count" to "0",
-                ),
-            )
-            null
-        } catch (fallbackFailure: RuntimeFailure) {
-            fallbackFailure
-        }
-    }
 
     /** 同一个名字可能对应多份改名残留（每次删除失败都会新增一份），返回它们供尽力清理。 */
-    private fun staleSiblings(name: String): List<File> {
-        val prefix = "stale-$name"
-        val children = store.runtimeParent.listFiles() ?: return emptyList()
-        return children.filter { it.name == prefix || it.name.startsWith("$prefix-") }
-    }
+    private fun staleSiblings(name: String): List<File> = RuntimeResidueNames.siblingsOf(store.runtimeParent, name)
 
     private fun uniqueAsideName(name: String): String =
-        "stale-$name-${System.currentTimeMillis().toString(36)}"
+        RuntimeResidueNames.asideName(name, System.currentTimeMillis())
 
-    /** 残留目录的 reason 取值必须匹配诊断日志的 token 规则：小写字母开头、只含 `[a-z0-9._-]`。 */
-    private fun staleReason(name: String): String =
-        "stale_" + name.lowercase().replace(Regex("[^a-z0-9._-]"), "_")
+    /** 残留目录的 reason 取值必须匹配诊断日志的 token 规则（超长名字会被截断到 32 字符）。 */
+    private fun staleReason(name: String): String = RuntimeResidueNames.reason(name)
 
     /** 兜底删除成功时的 reason：同样受 token 规则约束（最长 32 字符）。 */
     private fun fallbackReason(reason: String): String =
@@ -955,6 +965,72 @@ class RuntimeInstaller(
         retireIfPresent(target, "cleanup")
     }
 
+    /**
+     * 回收 `stale-*` 残留（删除失败后被改名挪到一边的整份 rootfs），返回回收的份数与字节数。
+     *
+     * 单独可调：用户显式重置环境会走它（[resetWorkspace]），安装成功收尾也会**尽力而为**走一次
+     * （[finishRuntimeMaintenance]）。它自己绝不抛出，失败的每一份都会在诊断日志里留下
+     * `result=failed`，所以调用方不必为它加 try：清理失败不该让一次成功的安装变成失败，
+     * 但也绝不静默。
+     */
+    internal fun retireStaleResidue(): RuntimeResidueSweepResult = RuntimeResidueSweeper(
+        runtimeParent = store.runtimeParent,
+        cleanup = residueCleanup,
+        record = { level, fields ->
+            store.diagnostics.record(level, DiagnosticEvent.RUNTIME_PHASE, fields)
+        },
+    ).sweep()
+
+    /**
+     * 把运行时父目录的占用盘点写进诊断日志：只记**类别、份数、总字节**，不记任何路径名。
+     *
+     * 为什么需要它：设备上根本看不见这些目录——容器里只挂载 `current/`，release 包的私有目录
+     * 又不可 `run-as` 读取，于是「哪一类占了几份、共多少字节」只能靠日志里的这一行。
+     * 盘点只是可观测性，失败也不能影响主流程，所以这里自己兜住异常。
+     */
+    private fun recordRuntimeInventory(site: String) {
+        try {
+            RuntimeResidueInventory(store.runtimeParent).lines(site).forEach { line ->
+                store.diagnostics.record(line.level, DiagnosticEvent.RUNTIME_PHASE, line.fields)
+            }
+        } catch (error: Throwable) {
+            store.diagnostics.record(
+                DiagnosticLevel.WARN,
+                DiagnosticEvent.RUNTIME_PHASE,
+                mapOf(
+                    "phase" to "inventory",
+                    "result" to "failed",
+                    "code" to RuntimeRetireTokens.of(error),
+                    "reason" to RuntimeResidueTokens.of(site, fallback = "scan"),
+                ),
+            )
+        }
+    }
+
+    /**
+     * 安装成功后的收尾：尽力回收残留 + 写一条占用盘点。
+     *
+     * 调用点都在安装结果已经确定之后（[RuntimePhase.READY] 已上报），所以这里发生的任何事都不得
+     * 改变安装结果——失败只记一行日志，也不重试：真删不掉时反复重试只会把一次真故障变成静默重试。
+     */
+    private fun finishRuntimeMaintenance() {
+        try {
+            retireStaleResidue()
+            recordRuntimeInventory("ready")
+        } catch (error: Throwable) {
+            store.diagnostics.record(
+                DiagnosticLevel.WARN,
+                DiagnosticEvent.RUNTIME_PHASE,
+                mapOf(
+                    "phase" to "cleanup",
+                    "result" to "failed",
+                    "code" to RuntimeRetireTokens.of(error),
+                    "reason" to "runtime_maintenance",
+                ),
+            )
+        }
+    }
+
     private fun checkCancellation() {
         if (isCancelled()) throw RuntimeFailure("INSTALL_CANCELLED", "运行时安装已取消")
     }
@@ -963,7 +1039,9 @@ class RuntimeInstaller(
 
     companion object {
         private val UUID_SUFFIX = Regex("^[a-f0-9-]{36}$")
-        private val RESUME_FILE = Regex("^rootfs-[a-f0-9]{64}\\.part$")
+
+        /** 断点续传留下的分片文件；占用盘点归类时也要认得它（见 [RuntimeResidueInventory]）。 */
+        internal val RESUME_FILE = Regex("^rootfs-[a-f0-9]{64}\\.part$")
         private const val BUFFER_SIZE = 64 * 1024
 
         /** 每次清理最多重试几份改名残留：真删不掉时也避免每次安装都在几份 rootfs 上白走一遍。 */

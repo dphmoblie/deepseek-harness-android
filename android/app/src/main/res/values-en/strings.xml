@@ -72,4 +72,9 @@
     <string name="task_notification_turn_completed_title">Task completed</string>
     <string name="task_notification_turn_completed_text">%1$d task(s) completed. Tap to return to the chat screen.</string>
     <string name="overlay_conversation_resize_description">Drag to resize the chat window</string>
+
+    <!-- Virtual-screen overlay: the status line below the mode buttons. It says "waiting" until a picture exists. -->
+    <string name="virtual_screen_overlay_status_waiting">Waiting for the virtual screen picture</string>
+    <!-- Shown right after a mode switch; the next frame pull replaces it with real readings. %1$s is the mode name. -->
+    <string name="virtual_screen_overlay_mode_switched">Switched to %1$s; waiting for a fresh frame-rate reading</string>
 </resources>

@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile.virtualscreen
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -15,6 +16,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import io.deepseekharness.mobile.AppThemePreference
+import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.shizuku.DeviceShellAccess
 import org.json.JSONObject
 import java.util.concurrent.Executors
@@ -37,15 +39,31 @@ class VirtualScreenActivity : Activity() {
     private var launchPendingUntil = 0L
     private data class Entry(val label: String, val component: String)
 
+    /**
+     * 让本页面的颜色令牌与控件默认样式都按**已保存的应用主题**解析。
+     *
+     * `values/` 与 `values-night/` 的资源限定符认的是**系统**深色模式，而应用主题可以和系统不同：
+     * 用户选了深色、系统还是浅色时，本页背景会自己判深浅画成深色，而 Button / CheckBox /
+     * EditText / ListView 的默认样式仍由 `Theme.AppCompat.DayNight.NoActionBar` 按系统解析成
+     * 浅色（浅底深字），叠在深色页面上就是「副屏这页没跟主题走」的样子。
+     * 在 attachBaseContext 阶段覆写 `uiMode` 之后，`getColor(R.color.*)`、`?attr/colorAccent`
+     * 与控件默认样式就统一到同一套主题上了。
+     */
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(AppThemePreference.palette(base))
+    }
+
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        val dark = AppThemePreference.isDark(AppThemePreference.current(this), AppThemePreference.systemNight(this))
         val shortScreen = resources.configuration.screenHeightDp < 480
-        val ink = if (dark) 0xffedf1f7.toInt() else 0xff19202a.toInt()
+        // 颜色一律取主题令牌（res/values{,-night}/colors.xml），不在这里写死十六进制色值：
+        // surface 与 Web 侧 --bg 同值、ink 与 Web 侧 --ink 同值，深浅两套在资源里成对定义。
+        val surface = AppThemePreference.color(this, R.color.harness_toolbar_background)
+        val ink = AppThemePreference.color(this, R.color.harness_toolbar_foreground)
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(if (dark) AppThemePreference.DARK_BAR_COLOR else AppThemePreference.LIGHT_BAR_COLOR)
+            setBackgroundColor(surface)
         }
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             val safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
@@ -127,7 +145,8 @@ class VirtualScreenActivity : Activity() {
         content.addView(modes, FrameLayout.LayoutParams(-1, -2, android.view.Gravity.BOTTOM))
         root.addView(controls)
         setContentView(root)
-        AppThemePreference.applySafely(this)
+        // 传入与页面同一枚令牌：状态栏/导航栏与页面底色同源，不会在安全区露出一条色带。
+        AppThemePreference.applySafely(this, surface)
         worker.execute {
             val found = runCatching {
                 @Suppress("DEPRECATION")

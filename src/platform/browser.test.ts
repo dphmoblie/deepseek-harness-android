@@ -249,3 +249,26 @@ describe('浏览器桥的运行时会话快照', () => {
     expect(outcome.message).toBe('浏览器模式下没有运行时会话快照')
   })
 })
+
+describe('浏览器桥的会话工作区元数据', () => {
+  it('没有会话列表通道：如实拒绝，不编造一份列表', async () => {
+    const bridge = createBrowserBridge()
+
+    await expect(bridge.listSessions()).rejects.toThrow('浏览器模式下没有运行时会话列表')
+  })
+
+  it('拒绝时不给「暂无会话」的假状态：只会拿到错误，拿不到结果对象', async () => {
+    const bridge = createBrowserBridge()
+
+    // 返回 `{ status: 'ready', sessions: [], truncated: false }` 会被界面渲染成「暂无会话」——那是编造一次成功。
+    const outcome = await bridge.listSessions().then(
+      () => null,
+      (reason: unknown) => reason,
+    )
+
+    if (!(outcome instanceof Error)) {
+      throw new Error('浏览器桩不允许 resolve 出会话列表结果')
+    }
+    expect(outcome.message).toBe('浏览器模式下没有运行时会话列表')
+  })
+})
