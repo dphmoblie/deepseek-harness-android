@@ -80,6 +80,53 @@ test('副屏截图保持真实附件格式，并说明缩放后的副屏操作�
   assert.match(text, /复用了缓存帧/)
 })
 
+test('副屏动作允许中文文本，仍拒绝控制字符与超长输入', async t => {
+  const f = fixture(t, () => ok('{"active":true}'))
+  const tool = f.tools.get('mobile_virtual_screen_action')
+  await tool.execute({ sessionId: virtualSession, action: 'text', text: '你好，微信' }, {})
+  await tool.execute({ sessionId: virtualSession, action: 'text', text: 'a'.repeat(512) }, {})
+  assert.deepEqual(f.requests.map(request => JSON.parse(request.param).text), ['你好，微信', 'a'.repeat(512)])
+  for (const text of ['', 'a'.repeat(513), 'a\nb', 'a\u0000b', 5]) {
+    await assert.rejects(tool.execute({ sessionId: virtualSession, action: 'text', text }, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
+  }
+  assert.equal(f.requests.length, 2)
+})
+
+test('副屏帧率配置只接受四种预览模式', async t => {
+  const f = fixture(t, () => ok('{"previewMode":"realtime-30fps"}'))
+  const tool = f.tools.get('mobile_virtual_screen_config')
+  await tool.execute({ sessionId: virtualSession, previewMode: '30fps' }, {})
+  assert.deepEqual(f.requests, [{ command: 'virtualScreenAction', param: JSON.stringify({ sessionId: virtualSession, action: 'config', previewMode: '30fps' }) }])
+  for (const previewMode of ['60', 'realtime', 'limited-fps', '']) {
+    await assert.rejects(tool.execute({ sessionId: virtualSession, previewMode }, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
+  }
+  assert.equal(f.requests.length, 1)
+})
+
+test('副屏目标切换只接受完整包名，不发送显示编号', async t => {
+  const f = fixture(t, () => ok('{"packageName":"com.tencent.mm"}'))
+  const tool = f.tools.get('mobile_virtual_screen_target')
+  await tool.execute({ sessionId: virtualSession, packageName: 'com.tencent.mm' }, {})
+  assert.deepEqual(f.requests, [{ command: 'virtualScreenAction', param: JSON.stringify({ sessionId: virtualSession, action: 'target', packageName: 'com.tencent.mm' }) }])
+  for (const packageName of ['com.tencent.mm;id', 'com/tencent', 'com.tencent.mm.\u0000', 'A'.repeat(200), 7]) {
+    await assert.rejects(tool.execute({ sessionId: virtualSession, packageName }, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
+  }
+  assert.equal(f.requests.length, 1)
+})
+
+test('副屏节点树默认深度 4，只接受 1～8', async t => {
+  const f = fixture(t, () => ok('{"available":false,"reason":"ACCESSIBILITY_DISABLED"}'))
+  const tool = f.tools.get('mobile_virtual_screen_tree')
+  await tool.execute({ sessionId: virtualSession }, {})
+  await tool.execute({ sessionId: virtualSession, maxDepth: 8 }, {})
+  assert.deepEqual(f.requests.map(request => JSON.parse(request.param).maxDepth), [4, 8])
+  assert.deepEqual(f.requests.map(request => JSON.parse(request.param).action), ['tree', 'tree'])
+  for (const maxDepth of [0, 9, 2.5]) {
+    await assert.rejects(tool.execute({ sessionId: virtualSession, maxDepth }, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
+  }
+  assert.equal(f.requests.length, 2)
+})
+
 test('Shell 原样传送多行中文脚本并保留非零退出码', async t => {
   const f = fixture(t, () => ({ ...ok('部分结果'), ok: false, exitCode: 7, errorCode: 'DEVICE_COMMAND_FAILED' }))
   const tool = f.tools.get('mobile_device_shell')

@@ -7,6 +7,7 @@ import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.ImageReader
 import android.os.*
+import io.deepseekharness.mobile.runtime.RuntimeFailure
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.util.UUID
@@ -29,8 +30,22 @@ class ShellVirtualScreen {
     private val frameLock = Any()
     private var frame: Bitmap? = null
     private var frameAt = 0L
+    // 最近一帧的空白判定；尚未采集到画面时为 true（未渲染），避免被当成有效画面。
+    private var frameBlank = true
+    private var frameSampledAt = 0L
     private var encodedFrame: ByteArray? = null
     private var pixels: java.nio.ByteBuffer? = null
+    // 空白判定只取采样行，复用这一小块缓冲，不每帧分配整帧数组。
+    private var samplePixels = IntArray(0)
+    // 预览限帧模式：默认 limited 保持改动前的 180 毫秒限帧行为；间隔一律由 VirtualScreenPolicy.frameInterval 求值，不再硬编码。
+    @Volatile private var frameMode = "limited"
+    // 最近若干帧的采集时刻环形缓冲（毫秒，elapsedRealtime），在 frameLock 内读写，实测帧率据此换算。
+    private val frameStamps = LongArray(FRAME_SAMPLE_COUNT)
+    private var frameStampCount = 0
+    private var frameStampNext = 0
+    private var frameFps = 0.0
+    // 会话级触摸手势；随副屏会话创建与释放，停止会话时必须取消未结束的手势。
+    private var gesture: VirtualScreenInjector.Gesture? = null
     private val timers = Executors.newSingleThreadScheduledExecutor()
     private val writers = Executors.newFixedThreadPool(2)
     private val transfers = Semaphore(2)
@@ -55,10 +70,10 @@ class ShellVirtualScreen {
             val handler = Handler(worker!!.looper)
             var scheduled = false
             capture.setOnImageAvailableListener({ source ->
-                // 延后读取最新缓冲区，既限帧又不丢弃界面静止前的最后一次更新。
+                // 延后读取最新缓冲区，既限帧又不丢弃界面静止前的最后一次更新；延迟取当前预览模式的采集间隔。
                 if (!scheduled) {
                     scheduled = true
-                    handler.postDelayed({ scheduled = false; collectFrame(source) }, 180)
+                    handler.postDelayed({ scheduled = false; collectFrame(source) }, VirtualScreenPolicy.frameInterval(frameMode).toLong())
                 }
             }, handler)
             val threadClass = Class.forName("android.app.ActivityThread")
@@ -76,6 +91,11 @@ class ShellVirtualScreen {
             if (trusted) flags = flags or (1 shl 10)
             independentFocus = trusted && Build.VERSION.SDK_INT >= 34
             if (independentFocus) flags = flags or (1 shl 14) or (1 shl 16)
+            // 触摸直传：进程内通道可用则逐事件注入，否则整段手势在抬起时合成 tap/swipe 交给 input 命令。
+            // 显示器要等下面才创建，所以手势只持有取编号的函数；真正注入时编号仍为 0 或 -1 就拒绝，绝不落到主屏。
+            gesture = VirtualScreenInjector.Gesture({ id() }, w, h) { args ->
+                command(listOf("/system/bin/input", "-d", id().toString()) + args)
+            }
             // 下列标志属于 AOSP 的隐藏副屏能力，公开 SDK 的 IntDef 未列出；仅特权进程按系统版本使用。
             @android.annotation.SuppressLint("WrongConstant")
             val created = manager.createVirtualDisplay("DSH 目标应用", w, h, dpi, capture.surface, flags)
@@ -116,28 +136,95 @@ class ShellVirtualScreen {
                     packed.flip()
                     val bitmap = frame ?: Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888).also { frame = it }
                     bitmap.copyPixelsFromBuffer(packed)
+                    // 只按固定步长取采样行做空白判定，采样缓冲按需扩容后复用，不做整帧遍历。
+                    val rows = VirtualScreenPolicy.frameSampleLines(image.height)
+                    val buffer = samplePixels.takeIf { it.size >= rows.size * image.width }
+                        ?: IntArray(rows.size * image.width).also { samplePixels = it }
+                    var offset = 0
+                    for (row in rows) {
+                        bitmap.getPixels(buffer, offset, image.width, 0, row, image.width, 1)
+                        offset += image.width
+                    }
+                    frameBlank = rows.isNotEmpty() && VirtualScreenPolicy.blankFrame(buffer, image.width, rows.size)
+                    frameSampledAt = SystemClock.elapsedRealtime()
+                    // 记录本次采集时刻并按最近若干帧重算实测帧率，不额外起采样线程。
+                    frameStamps[frameStampNext] = frameSampledAt
+                    frameStampNext = (frameStampNext + 1) % frameStamps.size
+                    if (frameStampCount < frameStamps.size) frameStampCount++
+                    frameFps = measuredFps()
+                    // 新帧未编码：空白帧同样不留下缓存，后续截图必须重新判断当前画面。
                     encodedFrame = null
-                    frameAt = SystemClock.elapsedRealtime()
+                    frameAt = frameSampledAt
                 }
             }
         }
     }
 
-    @Synchronized fun state(): JSONObject = JSONObject().put("active", display != null)
-        .put("sessionId", session).put("displayId", id()).put("packageName", targetPackage)
-        .put("width", width).put("height", height).put("frameAtElapsedMs", synchronized(frameLock) { frameAt })
-        .put("previewMode", "limited-fps").put("uiTreeSupported", false)
-        .put("independentFocusRequested", independentFocus)
+    /** 用最近 [FRAME_SAMPLE_COUNT] 帧采集时刻的相邻间隔均值换算每秒帧数；样本少于 2 个时为 0.0。 */
+    private fun measuredFps(): Double {
+        if (frameStampCount < 2) return 0.0
+        val oldest = (frameStampNext - frameStampCount + frameStamps.size) % frameStamps.size
+        val span = frameStamps[(frameStampNext - 1 + frameStamps.size) % frameStamps.size] - frameStamps[oldest]
+        // 同一毫秒内连续到达的帧会算出无穷大，按至少 1 毫秒的采样间隔计入。
+        return (frameStampCount - 1) * 1000.0 / maxOf(span, 1L)
+    }
+
+    @Synchronized fun state(): JSONObject {
+        // 画面相关字段在同一个锁内一次读出，避免状态里混用不同帧的快照。
+        val frames = synchronized(frameLock) { FrameState(frameAt, frameBlank, frameSampledAt, frameFps) }
+        return JSONObject().put("active", display != null)
+            .put("sessionId", session).put("displayId", id()).put("packageName", targetPackage)
+            .put("width", width).put("height", height).put("frameAtElapsedMs", frames.at)
+            // frameBlank=true 表示最近一帧被判定为空白或未渲染（尚未采集到画面时也为 true）。
+            .put("frameBlank", frames.blank)
+            // 空白判定与新帧采集同一次完成，因此它与 frameAtElapsedMs 取同一时刻。
+            .put("frameSampledAtElapsedMs", frames.sampledAt)
+            // previewMode 是当前预览模式的稳定标签，frameIntervalMs 是它对应的采集间隔，frameFps 是实测帧率。
+            .put("previewMode", VirtualScreenPolicy.frameModeLabel(frameMode))
+            .put("frameIntervalMs", VirtualScreenPolicy.frameInterval(frameMode))
+            // 一位小数即可，调用方不需要更高精度。
+            .put("frameFps", Math.round(frames.fps * 10.0) / 10.0)
+            // 触摸通道：stream 为逐事件直传，discrete 为抬起时合成 tap/swipe。
+            .put("touchChannel", VirtualScreenInjector.channel())
+            .put("uiTreeSupported", false)
+            .put("independentFocusRequested", independentFocus)
+    }
 
     @Synchronized fun action(raw: String): String {
         require(raw.length <= 4096)
         val p = JSONObject(raw)
         requireSession(p.getString("sessionId"))
         when (p.getString("action")) {
+            // 会话控制。
             "stop" -> close()
-            "tap", "swipe", "back" -> {
+            // 分发集合与策略层共用：新增动作必须同时出现在 VirtualScreenPolicy.INPUT_ACTIONS 里。
+            in VirtualScreenPolicy.INPUT_ACTIONS -> {
                 check(targetVisible()) { "目标应用已离开副屏或系统无法确认其状态" }
                 command(VirtualScreenPolicy.inputArguments(p, id(), width, height))
+            }
+            // 预览限帧模式：校验通过后立即生效，采集间隔按新模式求值。
+            "config" -> {
+                val mode = p.getString(VirtualScreenPolicy.PREVIEW_FIELD)
+                VirtualScreenPolicy.frameInterval(mode)
+                frameMode = mode
+            }
+            // 目标应用热切换：沿用同一个虚拟显示器与采集器，不释放也不重建。
+            "target" -> {
+                val component = VirtualScreenPolicy.targetRequest(p)
+                command(listOf("/system/bin/am", "start", "-W", "--display", id().toString(), "-n", component))
+                check(targetVisible()) { "目标应用未能切换到副屏，此设备或应用暂不兼容" }
+                targetPackage = component.substringBefore('/')
+            }
+            // 触摸直传：逐事件注入，不逐事件跑 targetVisible()（它要起 dumpsys 进程，会毁掉直传帧率）。
+            "touch" -> {
+                val touch = VirtualScreenInjector.request(p, width, height)
+                if (touch.phase == "down") check(targetVisible()) { "目标应用已离开副屏或系统无法确认其状态" }
+                val gesture = checkNotNull(gesture) { "副屏会话尚未就绪" }
+                val result = gesture.handle(touch)
+                return JSONObject()
+                    .put("sessionId", session).put("displayId", id())
+                    .put("touchChannel", VirtualScreenInjector.channel()).put("touch", result)
+                    .toString()
             }
             else -> error("不支持的副屏操作")
         }
@@ -149,11 +236,11 @@ class ShellVirtualScreen {
         check(targetVisible()) { "目标应用已离开副屏或无法确认其状态" }
         val bytes = synchronized(frameLock) {
             check(frameAt > 0) { "副屏尚未产生画面" }
-            // 静止页面复用最后一帧，不能把“画面未变化”误判成连接失效。
-            encodedFrame ?: ByteArrayOutputStream().use { out ->
-                checkNotNull(frame).compress(Bitmap.CompressFormat.PNG, 100, out)
-                out.toByteArray().also { check(it.size <= 6 * 1024 * 1024) { "副屏截图过大" }; encodedFrame = it }
-            }
+            val current = checkNotNull(frame)
+            // 静止页面复用最后一帧，不能把“画面未变化”误判成连接失效；
+            // 但空白帧绝不写入缓存：每次按当前 Bitmap 重新编码，让调用方依据 frameBlank 决定是否重试，
+            // 而不是拿一张空白画面的缓存冒充新画面。
+            if (frameBlank) encodeFrame(current) else encodedFrame ?: encodeFrame(current).also { encodedFrame = it }
         }
         check(transfers.tryAcquire()) { "副屏截图传输繁忙" }
         val pipe = try { ParcelFileDescriptor.createReliablePipe() } catch (e: Exception) { transfers.release(); throw e }
@@ -168,7 +255,22 @@ class ShellVirtualScreen {
     }
 
     private fun id(): Int = display?.display?.displayId ?: -1
-    private fun requireSession(value: String) { VirtualScreenPolicy.session(value); check(id() > 0 && value == session) { "副屏会话已失效" } }
+
+    /**
+     * 会话校验：会话已切换（用户重新开始副屏）或显示已释放都是可重试的瞬时情形，
+     * 必须抛 `VIRTUAL_SCREEN_STOPPED`，不能被上层统一映射成「副屏不可用」。
+     */
+    private fun requireSession(value: String) {
+        VirtualScreenPolicy.session(value)
+        if (id() <= 0 || value != session) throw RuntimeFailure("VIRTUAL_SCREEN_STOPPED", "副屏会话已切换，请重新读取状态")
+    }
+
+    /** PNG 编码并限制体积；调用方必须已持有 [frameLock]。 */
+    private fun encodeFrame(bitmap: Bitmap): ByteArray = ByteArrayOutputStream().use { out ->
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
+        out.toByteArray().also { check(it.size <= 6 * 1024 * 1024) { "副屏截图过大" } }
+    }
+
     private fun targetVisible() = VirtualScreenPolicy.targetResumed(command(listOf("/system/bin/dumpsys", "activity", "activities")), id(), targetPackage)
 
     private fun command(args: List<String>): String {
@@ -195,13 +297,27 @@ class ShellVirtualScreen {
 
     @Synchronized fun close() {
         death?.let { recipient -> owner?.let { runCatching { it.unlinkToDeath(recipient, 0) } } }; owner = null; death = null
+        // 会话结束前取消未完成的触摸手势（进程内通道补一个取消事件，离散通道丢弃半截手势）；只在此处取消一次。
+        gesture?.let { runCatching { it.abort() } }; gesture = null
         runCatching { display?.release() }; display = null
         synchronized(frameLock) {
             val old = reader; reader = null
             runCatching { old?.close() }
             frame?.recycle(); frame = null; frameAt = 0; encodedFrame = null; pixels = null
+            // 会话结束后没有可信画面：恢复为「未渲染」，避免下一次截图沿用旧判定。
+            frameBlank = true; frameSampledAt = 0
+            // 采集时刻与实测帧率同属本次会话，一并清空，下一次会话重新采样。
+            frameStampCount = 0; frameStampNext = 0; frameFps = 0.0
         }
         worker?.quitSafely(); worker = null
         session = ""; targetPackage = ""; width = 0; height = 0; independentFocus = false
     }
+
+    private companion object {
+        /** 实测帧率使用的采样帧数：只统计最近这么多帧，避免很久以前的间隔拉扁当前帧率。 */
+        const val FRAME_SAMPLE_COUNT = 24
+    }
+
+    /** 状态里画面相关字段的一次性快照，保证同一份状态描述同一帧。 */
+    private class FrameState(val at: Long, val blank: Boolean, val sampledAt: Long, val fps: Double)
 }

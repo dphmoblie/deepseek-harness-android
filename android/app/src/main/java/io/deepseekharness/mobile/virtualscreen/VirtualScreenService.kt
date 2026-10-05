@@ -10,6 +10,7 @@ import android.view.*
 import android.widget.*
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.runtime.*
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
 import io.deepseekharness.mobile.runtime.audit.AuditResult
@@ -21,6 +22,14 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** 持有副屏会话；退出预览页或收起小窗不会销毁目标应用。 */
+/** 档位 → 标题资源；副屏页面、副屏悬浮窗与状态行共用，避免几处各写一份中文。 */
+private fun modeTitleRes(mode: String): Int = when (mode) {
+    "15fps" -> R.string.virtual_screen_mode_15fps
+    "30fps" -> R.string.virtual_screen_mode_30fps
+    "60fps" -> R.string.virtual_screen_mode_60fps
+    else -> R.string.virtual_screen_mode_limited
+}
+
 class VirtualScreenService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
     private val owner = Binder()
@@ -71,9 +80,12 @@ class VirtualScreenService : Service() {
                 session = value.getString("sessionId")
                 snapshot = value
                 audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, AuditResult.SUCCEEDED)
-            } catch (_: Exception) {
+            } catch (error: Exception) {
                 audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, AuditResult.FAILED)
-                lastError = "副屏启动失败：请检查 Shizuku 授权、目标应用和设备副屏支持"; main.post { stopSelf() }
+                // 原生失败原因（调用方的 check/require 文案）直接带给界面：否则只剩一句泛化提示，真机排查无从下手。
+                val reason = error.cause?.message ?: error.message
+                lastError = if (reason.isNullOrBlank()) "副屏启动失败：请检查 Shizuku 授权、目标应用和设备副屏支持" else "副屏启动失败：$reason"
+                main.post { stopSelf() }
             }
         }
         main.postDelayed(health, 1500)
@@ -99,6 +111,9 @@ class VirtualScreenService : Service() {
 
     fun state(): JSONObject = JSONObject(snapshot.toString()).put("starting", session.isEmpty() && !ending.get())
         .put("active", snapshot.optBoolean("active") && !ending.get()).put("stopping", ending.get()).put("error", lastError)
+        // 节点树能不能读只取决于无障碍服务是否已连接：把它放进状态里，
+        // 让调用方一眼看出「读不到树」是无障碍没开还是副屏没起来。
+        .put("treeSupported", VirtualScreenTree.available())
 
     fun canObserve(): Boolean = !ending.get() && DeviceShellAccess.enabled(this) &&
         !getSystemService(KeyguardManager::class.java).isDeviceLocked && getSystemService(PowerManager::class.java).isInteractive
@@ -109,9 +124,31 @@ class VirtualScreenService : Service() {
         if (!canObserve()) throw RuntimeFailure("VIRTUAL_SCREEN_LOCKED", "锁屏或熄屏时暂停读取与操作")
     }
 
+    /**
+     * 会话校验：请求的会话与当前会话不一致说明用户已重新开始或结束副屏，属于可重试情形，
+     * 按 [VirtualScreenPolicy.sessionFailure] 返回 `VIRTUAL_SCREEN_STOPPED`；
+     * 会话尚未建立时返回瞬时的 `VIRTUAL_SCREEN_BUSY`，都不再报成「副屏不可用」。
+     */
+    private fun requireSession(requested: String) {
+        VirtualScreenPolicy.sessionFailure(session, requested)?.let { throw it }
+    }
+
+    /** 副屏显示编号来自宿主状态快照；还没拿到时属于瞬时状态，调用方稍后重试即可。 */
+    private fun displayId(): Int {
+        val id = snapshot.optInt("displayId", 0)
+        if (id <= 0) throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "尚未取得副屏显示编号，请稍后重试")
+        return id
+    }
+
+    /**
+     * 文本分流：可打印 ASCII 继续走设备 Shell 的 `input text`（与现有行为完全一致），
+     * 含中文、emoji 等字符时改由无障碍服务定向注入——只有它能送出 Unicode。
+     */
+    private fun needsAccessibilityText(value: String): Boolean = VirtualScreenPolicy.needsAccessibilityText(value)
+
     fun screenshot(id: String, fromAi: Boolean = false): ByteArray {
         requireAccess()
-        check(id.isNotEmpty() && id == session) { "副屏会话已失效" }
+        requireSession(id)
         if (!actionSlot.tryAcquire()) throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "上一步副屏操作尚未完成")
         return try {
             checkNotNull(shizuku).virtualScreenSnapshot(id).also {
@@ -124,7 +161,10 @@ class VirtualScreenService : Service() {
         } finally { actionSlot.release() }
     }
 
-    /** 返回截图与帧新鲜度元数据；图像仍只在内存和受控管道中传输。 */
+    /**
+     * 返回截图与帧新鲜度元数据；图像仍只在内存和受控管道中传输。
+     * `frameBlank` 由宿主状态原样透传，宿主状态里没有该字段时不给出默认值。
+     */
     fun screenshotEnvelope(id: String): JSONObject {
         val bytes = screenshot(id, fromAi = true)
         val meta = runCatching { checkNotNull(shizuku).virtualScreenState() }
@@ -133,17 +173,47 @@ class VirtualScreenService : Service() {
         val frameAt = meta.optLong("frameAtElapsedMs", 0L)
         val reused = frameAt > 0L && frameAt == lastAiFrameAt
         lastAiFrameAt = frameAt
-        return JSONObject().put("imageBase64", java.util.Base64.getEncoder().encodeToString(bytes))
+        val envelope = JSONObject().put("imageBase64", java.util.Base64.getEncoder().encodeToString(bytes))
             .put("packageName", meta.optString("packageName"))
             .put("frameAtElapsedMs", frameAt)
             .put("frameReused", reused)
+        if (meta.has("frameBlank")) envelope.put("frameBlank", meta.optBoolean("frameBlank"))
+        return envelope
     }
 
     fun action(parameters: JSONObject): JSONObject {
-        check(parameters.getString("sessionId") == session && session.isNotEmpty()) { "副屏会话已失效" }
-        if (parameters.getString("action") == "stop") {
+        requireSession(parameters.getString("sessionId"))
+        val verb = parameters.getString("action")
+        if (verb == "stop") {
             main.post { stopSelf() }
             return JSONObject().put("stopping", true)
+        }
+        // 触摸直传是逐事件的高频路径（拖动时每秒可能几十个事件）：
+        // 不能和单次动作共用那把 2 秒的信号量，否则第二个事件就会报成「上一步尚未完成」。
+        // 真正的串行由宿主侧的 @Synchronized 保证，这里只做访问前提检查。
+        if (verb == "touch") {
+            requireAccess()
+            return checkNotNull(shizuku).virtualScreenAction(parameters.toString())
+        }
+        // 节点树与中文注入都跑在本进程的无障碍服务里，不经过设备 Shell：
+        // 显示编号取宿主状态里的值，读不到时按可重试的瞬时状态报错。
+        if (verb == "tree" || (verb == "text" && needsAccessibilityText(parameters.optString("text")))) {
+            requireAccess()
+            val id = displayId()
+            return if (verb == "tree") {
+                VirtualScreenTree.dump(id, parameters.optInt("maxDepth", 4), VirtualScreenTree.MAX_NODES).also {
+                    audit.record(AuditEvent.VIRTUAL_SCREEN_READ, AuditResult.SUCCEEDED)
+                }
+            } else {
+                val text = parameters.optString("text")
+                val injected = runCatching { VirtualScreenTree.setText(id, text) }.getOrDefault(false)
+                audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, if (injected) AuditResult.SUCCEEDED else AuditResult.FAILED)
+                if (!injected) {
+                    throw RuntimeFailure("VIRTUAL_SCREEN_UNAVAILABLE", "中文文本注入未完成：请确认已在系统设置里开启 DeepSeek 的无障碍服务，并让目标输入框保持聚焦")
+                }
+                JSONObject().put("sessionId", parameters.getString("sessionId")).put("displayId", id)
+                    .put("injected", text.length)
+            }
         }
         if (!actionSlot.tryAcquire(2, java.util.concurrent.TimeUnit.SECONDS)) throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "上一步副屏操作尚未完成")
         return try {
@@ -174,6 +244,41 @@ class VirtualScreenService : Service() {
         }
         val close = Button(this).apply { text = "收起"; setOnClickListener { hideOverlay() } }
         toolbar.addView(page); toolbar.addView(close); panel.addView(toolbar)
+        // 档位行：副屏页里能选的几档，在悬浮窗上也能选，不必「先展开、改完再收回来」。
+        // 档位只改采集间隔；预览拉取另有下限（见 VirtualScreenPolicy.previewPullInterval）。
+        val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val modeButtons = mutableListOf<Button>()
+        val currentMode = {
+            VirtualScreenPolicy.frameModeOf(state().optString(VirtualScreenPolicy.PREVIEW_FIELD))
+        }
+        val paintModes = {
+            val active = currentMode()
+            modeButtons.forEach { button -> button.alpha = if (button.tag == active) 1f else 0.5f }
+        }
+        VirtualScreenPolicy.FRAME_MODES.keys.forEach { mode ->
+            val button = Button(this).apply {
+                text = getString(modeTitleRes(mode))
+                tag = mode
+                setPadding(6, 0, 6, 0)
+                setOnClickListener {
+                    runCatching {
+                        action(
+                            JSONObject()
+                                .put("sessionId", session)
+                                .put("action", "config")
+                                .put(VirtualScreenPolicy.PREVIEW_FIELD, mode),
+                        )
+                    }.onFailure {
+                        Toast.makeText(this@VirtualScreenService, "切换档位失败，请重试", Toast.LENGTH_SHORT).show()
+                    }
+                    paintModes()
+                }
+            }
+            modeButtons += button
+            modeRow.addView(button, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        panel.addView(modeRow)
+        paintModes()
         val image = VirtualScreenPreview(this).also { preview = it }
         panel.addView(image, LinearLayout.LayoutParams(-1, 0, 1f))
         val w = minOf((320 * metrics.density).toInt(), (metrics.widthPixels * .9f).toInt())
@@ -231,6 +336,9 @@ class VirtualScreenService : Service() {
     }
 }
 
+/** 逐事件触摸直传时 MOVE 的最小发送间隔；屏幕采样可到 120 Hz，合并后只丢中间采样点，抬起前那一个点仍会补发。 */
+private const val MOVE_INTERVAL_MILLIS = 16L
+
 /** 限帧预览只在可见时拉取 PNG；副屏采集在 Shizuku 进程持续运行。 */
 class VirtualScreenPreview(context: android.content.Context) : androidx.appcompat.widget.AppCompatImageView(context) {
     private var executor: java.util.concurrent.ExecutorService? = null
@@ -239,10 +347,15 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private var displayed: android.graphics.Bitmap? = null
     private var observedSession = ""
     private var observedAt = 0L
+    /** 最近一次状态里的触摸通道：`stream` 表示可逐事件直传，其它值退回离散点击/滑动。 */
+    private var observedChannel = ""
     private val inputBusy = AtomicBoolean(false)
     private var down: FloatArray? = null
     private var downSession = ""
     private var downAt = 0L
+    private var streaming = false
+    private var lastMoveAt = 0L
+    private var queuedMove: FloatArray? = null
     private val screenOff = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: Intent?) { clearFrame() }
     }
@@ -252,32 +365,78 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         setBackgroundColor(android.graphics.Color.BLACK)
         contentDescription = "目标应用副屏画面，支持点击和滑动"
         setOnTouchListener { view, e ->
-            if (e.actionMasked == MotionEvent.ACTION_DOWN) {
-                down = point(e); downSession = observedSession; downAt = e.eventTime
-            } else if (e.actionMasked == MotionEvent.ACTION_CANCEL || e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
-                down = null
-            } else if (e.actionMasked == MotionEvent.ACTION_UP) {
-                view.performClick()
-                val start = down; down = null
-                val end = point(e)
-                val service = VirtualScreenService.current
-                val worker = executor
-                if (start != null && end != null && service != null && worker != null && downSession == observedSession &&
-                    service.canObserve() && SystemClock.elapsedRealtime() - observedAt < 3000 && inputBusy.compareAndSet(false, true)) {
-                    val swipe = kotlin.math.hypot(end[0] - start[0], end[1] - start[1]) > 12
-                    val request = JSONObject().put("sessionId", observedSession).put("action", if (swipe) "swipe" else "tap")
-                        .put("x", start[0].toInt()).put("y", start[1].toInt())
-                    if (swipe) request.put("endX", end[0].toInt()).put("endY", end[1].toInt()).put("durationMs", (e.eventTime - downAt).coerceIn(100, 2000).toInt())
-                    val version = generation
-                    worker.execute {
-                        try {
-                            if (version == generation) service.action(request)
-                        } catch (_: Exception) { main.post { report("操作未执行，请确认副屏中的目标应用状态") } }
-                        finally { inputBusy.set(false) }
+            val service = VirtualScreenService.current
+            val worker = executor
+            val at = point(e)
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    down = at; downSession = observedSession; downAt = e.eventTime
+                    streaming = false; queuedMove = null; lastMoveAt = 0L
+                    // 只有设备端报告 stream 通道、且会话与画面都新鲜时才逐事件直传；
+                    // 否则保持原先的「抬起时发一个 tap/swipe」行为。
+                    if (at != null && service != null && worker != null && observedChannel == "stream" &&
+                        service.canObserve() && SystemClock.elapsedRealtime() - observedAt < 3000) {
+                        streaming = true
+                        sendTouch(worker, service, "down", at)
                     }
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (streaming && at != null) {
+                        // 直传的 MOVE 按最短间隔合并：屏幕采样可能到 120 Hz，逐个转发会压满 Binder，
+                        // 合并后只丢中间采样点，抬起前那一个点仍会补发。
+                        val now = SystemClock.elapsedRealtime()
+                        if (now - lastMoveAt < MOVE_INTERVAL_MILLIS) queuedMove = at
+                        else { lastMoveAt = now; queuedMove = null; sendTouch(worker, service, "move", at) }
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    view.performClick()
+                    val start = down; down = null
+                    if (streaming) {
+                        streaming = false
+                        (queuedMove ?: at)?.let { sendTouch(worker, service, "up", it) }
+                        queuedMove = null
+                    } else if (start != null && at != null && service != null && worker != null && downSession == observedSession &&
+                        service.canObserve() && SystemClock.elapsedRealtime() - observedAt < 3000 && inputBusy.compareAndSet(false, true)) {
+                        val swipe = kotlin.math.hypot(at[0] - start[0], at[1] - start[1]) > 12
+                        val request = JSONObject().put("sessionId", observedSession).put("action", if (swipe) "swipe" else "tap")
+                            .put("x", start[0].toInt()).put("y", start[1].toInt())
+                        if (swipe) request.put("endX", at[0].toInt()).put("endY", at[1].toInt()).put("durationMs", (e.eventTime - downAt).coerceIn(100, 2000).toInt())
+                        val version = generation
+                        worker.execute {
+                            try {
+                                if (version == generation) service.action(request)
+                            } catch (_: Exception) { main.post { report("操作未执行，请确认副屏中的目标应用状态") } }
+                            finally { inputBusy.set(false) }
+                        }
+                    }
+                }
+                MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> {
+                    if (streaming) {
+                        streaming = false
+                        (queuedMove ?: at)?.let { sendTouch(worker, service, "cancel", it) }
+                        queuedMove = null
+                    }
+                    down = null
                 }
             }
             true
+        }
+    }
+
+    /** 逐事件触摸直传；设备端对 touch 不占用单次动作信号量，串行由宿主侧保证。 */
+    private fun sendTouch(worker: java.util.concurrent.ExecutorService?, service: VirtualScreenService?, phase: String, at: FloatArray) {
+        if (worker == null || service == null) return
+        val version = generation
+        val session = downSession.ifEmpty { observedSession }
+        val request = JSONObject().put("sessionId", session).put("action", "touch").put("phase", phase)
+            .put("x", at[0].toInt()).put("y", at[1].toInt())
+        worker.execute {
+            try {
+                if (version == generation) service.action(request)
+            } catch (_: Exception) {
+                if (phase == "down") main.post { report("触摸直传未生效，可改用点击或滑动操作") }
+            }
         }
     }
 
@@ -303,13 +462,23 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
             worker.execute {
                 var bitmap: android.graphics.Bitmap? = null
                 var id = ""
+                var channel = ""
+                var mode = "limited"
                 val message = try {
                     val service = checkNotNull(VirtualScreenService.current)
-                    id = service.state().getString("sessionId")
+                    val state = service.state()
+                    id = state.getString("sessionId")
+                    channel = state.optString("touchChannel", "")
+                    mode = VirtualScreenPolicy.frameModeOf(state.optString(VirtualScreenPolicy.PREVIEW_FIELD))
+                    val fps = state.optDouble("frameFps", 0.0)
                     val bytes = service.screenshot(id)
                     bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
                     checkNotNull(bitmap)
-                    "副屏预览 · 点击或滑动操作 · 静止页面复用最近一帧"
+                    // 状态行如实展示当前通道、实测帧率与所选档位，方便用户判断直传/帧率是否生效。
+                    // 这里不再写「静止页面复用最近一帧」：复用行为已按用户要求关闭，写它就是假话。
+                    val touch = if (channel == "stream") "触摸直传" else "点击或滑动操作"
+                    val rate = if (fps > 0.0) String.format(java.util.Locale.US, "%.1f fps", fps) else "等待首帧"
+                    "副屏预览 · $touch · $rate · 档位 ${context.getString(modeTitleRes(mode))}"
                 } catch (_: Exception) { "等待副屏画面；锁屏、断连或应用离开副屏时暂停显示" }
                 main.post {
                     if (version != generation || executor == null) { return@post }
@@ -318,8 +487,11 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     setImageBitmap(bitmap)
                     displayed = bitmap
                     observedSession = id; observedAt = SystemClock.elapsedRealtime()
+                    if (channel.isNotEmpty()) observedChannel = channel
                     report(message)
-                    main.postDelayed(this, 250)
+                    // 拉取间隔跟随档位（下限见 VirtualScreenPolicy.previewPullInterval）：
+                    // 档位在这里改、运行中立刻生效，不必重开副屏。
+                    main.postDelayed(this, VirtualScreenPolicy.previewPullInterval(mode).toLong())
                 }
             }
         }

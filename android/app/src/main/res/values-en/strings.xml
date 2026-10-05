@@ -32,11 +32,14 @@
     <string name="overlay_conversation_close">Close</string>
     <string name="overlay_conversation_unavailable">Chat is not running. Tap to open Harness in the app.</string>
     <string name="overlay_ball_channel_name">Floating ball</string>
-    <string name="overlay_ball_channel_description">Shows a floating ball above other apps; tap it to open a small Harness chat window</string>
+    <string name="overlay_ball_channel_description">Shows a floating ball above other apps; tap it to open a shortcut menu (chat / virtual screen)</string>
     <string name="overlay_ball_notification_title">Floating ball is on</string>
-    <string name="overlay_ball_notification_text">Tap to open the app; use the ball for a small chat window</string>
+    <string name="overlay_ball_notification_text">Tap to open the shortcut menu: chat or virtual screen</string>
     <string name="overlay_ball_menu_return">Return to app</string>
     <string name="overlay_ball_menu_hide">Hide floating ball</string>
+    <string name="overlay_ball_secondary_conversation_description">Open the small Harness AI chat window</string>
+    <string name="overlay_ball_secondary_virtual_screen_description">Open the target-app virtual screen overlay</string>
+    <string name="overlay_ball_secondary_virtual_screen_unavailable_toast">The virtual screen is not running yet. Open “Target-app virtual screen” in Harness first.</string>
     <string name="overlay_ball_secondary_return">Return to app</string>
     <string name="overlay_ball_secondary_return_description">Return to the app and open the Harness chat screen</string>
     <string name="overlay_ball_secondary_hide">Hide floating ball</string>
@@ -47,6 +50,10 @@
     <string name="overlay_ball_secondary_accessibility_off_description">The Harness accessibility service is off; nothing to turn off</string>
     <string name="overlay_ball_secondary_accessibility_disabled_toast">The accessibility service is already off</string>
     <string name="overlay_ball_secondary_accessibility_closed_toast">Accessibility service turned off</string>
+    <string name="virtual_screen_mode_limited">Battery saver</string>
+    <string name="virtual_screen_mode_15fps">15 FPS</string>
+    <string name="virtual_screen_mode_30fps">30 FPS</string>
+    <string name="virtual_screen_mode_60fps">60 FPS</string>
 
     <string name="task_notification_channel_name">Runtime status</string>
     <string name="task_notification_channel_description">Alerts you when the local Harness stops or fails to start</string>

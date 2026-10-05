@@ -155,6 +155,12 @@ object OverlayBallSecondaryPolicy {
      * 后者是一个用户很难自己恢复的系统设置变更。
      */
     enum class Choice {
+        /** 打开 Harness 对话小窗。 */
+        CONVERSATION,
+
+        /** 打开目标应用副屏悬浮窗；副屏没在运行时由服务给出提示。 */
+        VIRTUAL_SCREEN,
+
         /** 回到应用（走 [io.deepseekharness.mobile.KeepAliveEntryActivity] 转发入口）。 */
         RETURN_TO_APP,
 
@@ -167,6 +173,8 @@ object OverlayBallSecondaryPolicy {
 
     /** 二级球从内到外的固定顺序。 */
     val CHOICE_ORDER: List<Choice> = listOf(
+        Choice.CONVERSATION,
+        Choice.VIRTUAL_SCREEN,
         Choice.RETURN_TO_APP,
         Choice.HIDE_BALL,
         Choice.DISABLE_ACCESSIBILITY,

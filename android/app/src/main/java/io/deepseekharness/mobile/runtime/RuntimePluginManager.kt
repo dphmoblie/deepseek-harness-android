@@ -29,7 +29,13 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
     private var repairFailureAtMillis: Long = 0L
 
     fun recoverIfNeeded() {
-        if (File(directory, "plugin-manager/transaction.json").exists()) run("recover", null, null, null)
+        // 运行时升级通常不会留下 transaction.json：它会重建 profiles 清单，但保留
+        // plugin-manager/state-snapshot.json。只检查事务文件会跳过正常升级后的状态回填，
+        // 结果是市场插件本体还在保留区，清单却没有插件名，后续 repair 也无法接回链接。
+        // 两个文件都不存在时不启动 Node，避免首次安装每次启动都做无意义的恢复探测。
+        val transaction = File(directory, "transaction.json").exists()
+        val snapshot = File(directory, "state-snapshot.json").exists()
+        if (transaction || snapshot) run("recover", null, null, null)
     }
 
     /**
@@ -58,9 +64,12 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         try {
             val summary = run("repair", null, null, null)
             repairedGeneration = generation
-            // 只记计数，让下次导出的诊断日志能直接回答「设备上到底有没有重复的运行时包」：
-            //  - files = 修复动作实际扫到了多少个包条目；
-            //  - count = 其中多少个被重新指向运行时实例（**count > 0 即确实存在重复副本**）；
+            // 只记计数，让下次导出的诊断日志能直接回答两个问题：
+            //  一、设备上到底有没有重复的运行时包：files = 扫到多少个包条目，count = 其中多少个
+            //      被重新指向运行时实例（**count > 0 即确实存在重复副本**）；
+            //  二、这次运行时升级有没有抹掉插件链接：plugins = 清单里登记的第三方插件数，
+            //      relinked = 其中多少个被接回 profile 模块根（**relinked > 0 即确实抹掉过**，
+            //      包本体仍在保留区，所以不需要重装），missing = 保留区里已无副本、只能重装的数量；
             //  - result = denied 表示有包没能修复（拒绝或失败），需要人工介入。
             val linked = summary.optInt("linked", 0)
             val unfixed = summary.optInt("failed", 0) + summary.optInt("refused", 0)
@@ -71,6 +80,9 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
                     "result" to if (unfixed > 0) "denied" else "ok",
                     "count" to linked.toString(),
                     "files" to summary.optInt("scanned", 0).toString(),
+                    "plugins" to summary.optInt("plugins", 0).toString(),
+                    "relinked" to summary.optInt("relinked", 0).toString(),
+                    "missing" to summary.optInt("missing", 0).toString(),
                 ),
             )
         } catch (_: Exception) {

@@ -167,9 +167,11 @@ class OverlayBallSecondaryPolicyTest {
     }
 
     @Test
-    fun `动作顺序是回到应用 隐藏悬浮球 关闭无障碍`() {
+    fun `动作顺序是打开对话 打开副屏 回到应用 隐藏悬浮球 关闭无障碍`() {
         assertEquals(
             listOf(
+                OverlayBallSecondaryPolicy.Choice.CONVERSATION,
+                OverlayBallSecondaryPolicy.Choice.VIRTUAL_SCREEN,
                 OverlayBallSecondaryPolicy.Choice.RETURN_TO_APP,
                 OverlayBallSecondaryPolicy.Choice.HIDE_BALL,
                 OverlayBallSecondaryPolicy.Choice.DISABLE_ACCESSIBILITY,

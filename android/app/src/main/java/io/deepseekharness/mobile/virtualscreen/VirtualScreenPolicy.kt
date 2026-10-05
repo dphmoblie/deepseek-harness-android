@@ -1,5 +1,7 @@
 package io.deepseekharness.mobile.virtualscreen
 
+import io.deepseekharness.mobile.runtime.RuntimeFailure
+import org.json.JSONException
 import org.json.JSONObject
 
 /** 副屏协议校验独立于系统接口，调用端与特权服务均执行校验。 */
@@ -22,6 +24,66 @@ object VirtualScreenPolicy {
         require(Regex("[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}").matches(value)) { "副屏会话标识无效" }
         return value
     }
+
+    /** 预览动作字段名：宿主 config 动作与工具面、设置页共用的稳定字段标识。 */
+    const val PREVIEW_FIELD = "previewMode"
+
+    /** 目标应用动作字段名：宿主 target 动作与工具面、设置页共用的稳定字段标识。 */
+    const val TARGET_FIELD = "component"
+
+    /**
+     * 预览模式到采集间隔（毫秒）的映射；模式名是工具面与设置页共用的稳定标识。
+     * 顺序与取值是调用端与宿主共用的稳定契约，不要调整：`limited` 保持限帧（180 毫秒，历史硬编码值），
+     * 其余模式分别对应 15/30/60 帧每秒的采集间隔。
+     */
+    val FRAME_MODES: Map<String, Int> = mapOf("limited" to 180, "15fps" to 66, "30fps" to 33, "60fps" to 16)
+
+    /** 校验预览模式并返回采集间隔；未知模式抛 [IllegalArgumentException]。 */
+    fun frameInterval(mode: String): Int =
+        FRAME_MODES[mode] ?: throw IllegalArgumentException("副屏预览模式不在允许列表")
+
+    /** 预览模式对应的状态标签：limited → "limited-fps"，其余 → "realtime-<模式名>"（例如 "realtime-30fps"）。 */
+    fun frameModeLabel(mode: String): String = if (mode == "limited") "limited-fps" else "realtime-$mode"
+
+    /**
+     * 把 [frameModeLabel] 写出去的状态值反解回档位，供「显示当前档位」「重发 config」使用。
+     *
+     * 认不出来时回落到 `limited`：这是最省电、也最不可能让用户觉得「怎么突然很烫」的一档。
+     */
+    fun frameModeOf(label: String): String = when {
+        label == "limited-fps" -> "limited"
+        label.startsWith("realtime-") -> label.removePrefix("realtime-").takeIf { it in FRAME_MODES } ?: "limited"
+        label in FRAME_MODES -> label
+        else -> "limited"
+    }
+
+    /**
+     * 预览窗口拉取一帧 PNG 的间隔：跟随当前档位，但不下探到 [PREVIEW_PULL_FLOOR_MILLIS]。
+     *
+     * 采集与出帧始终按 [frameInterval] 跑；这里限制的只是「截图 → 解码 PNG → 贴图」这条更贵的链路，
+     * 否则 60fps 档位会把主线程压满，用户看到的反而更卡。
+     */
+    const val PREVIEW_PULL_FLOOR_MILLIS = 120
+
+    fun previewPullInterval(mode: String): Int = maxOf(PREVIEW_PULL_FLOOR_MILLIS, frameInterval(mode))
+
+    /** 从请求里取出并校验目标应用入口（字段名 [TARGET_FIELD]），复用 [component] 的规则。 */
+    fun targetRequest(p: JSONObject): String = component(p.getString(TARGET_FIELD))
+
+    /**
+     * 文本输入的分流判据：只有可打印 ASCII 能交给设备 Shell 的 `input text` 命令，
+     * 含中文、emoji 或任何其它 Unicode 字符时必须改走无障碍服务的定向注入。
+     * 这个判断是纯函数，真机行为与单测共用同一份规则。
+     */
+    fun needsAccessibilityText(value: String): Boolean = value.any { it.code < 0x20 || it.code > 0x7e }
+
+    /**
+     * 副屏输入动作白名单。
+     * 执行层（ShellVirtualScreen.action）必须按同一个集合分发：此前出现过策略层已经支持
+     * long_press/keyevent/text、执行层的 when 却只认 tap/swipe/back 的漏接线，真机上这三个动作会
+     * 直接落到「不支持的副屏操作」并被映射成 VIRTUAL_SCREEN_UNAVAILABLE。
+     */
+    val INPUT_ACTIONS = setOf("tap", "swipe", "long_press", "keyevent", "text", "back")
 
     /** 必须指定本次会话拥有的非主屏编号；数值必须是真实整数，不接受字符串或小数截断。 */
     fun inputArguments(p: JSONObject, displayId: Int, width: Int, height: Int): List<String> {
@@ -50,7 +112,9 @@ object VirtualScreenPolicy {
             // Android input text 用 %s 表示空格；百分号必须先编码，避免被 input 解析器误读。
             return value.replace("%", "%25").replace(" ", "%s")
         }
-        val arguments = when (p.getString("action")) {
+        val action = p.getString("action")
+        require(action in INPUT_ACTIONS) { "不支持的副屏操作" }
+        val arguments = when (action) {
             "tap" -> listOf("tap", x("x"), y("y"))
             "swipe" -> {
                 val duration = integer("durationMs")
@@ -91,5 +155,109 @@ object VirtualScreenPolicy {
                 Regex("(?:\\s|\\{)" + Regex.escape(packageName) + "/").containsMatchIn(line)) return true
         }
         return false
+    }
+
+    /**
+     * 会话判定（纯函数，供宿主与单测共用）：把「副屏正在启动」与「会话已切换或已结束」区分开，
+     * 避免把可重试的瞬时情形一律报成「副屏不可用」。
+     * - 宿主还没有会话：副屏正在启动，应等待后重新观察 → `VIRTUAL_SCREEN_BUSY`；
+     * - 请求的会话不是当前会话：会话已切换（用户重新开始副屏）或已结束，重新读取状态后可重试 → `VIRTUAL_SCREEN_STOPPED`；
+     * - 一致：返回 null，调用方继续执行。
+     */
+    fun sessionFailure(current: String, requested: String): RuntimeFailure? = when {
+        current.isEmpty() -> RuntimeFailure("VIRTUAL_SCREEN_BUSY", "副屏正在启动，等待后重新观察")
+        requested != current -> RuntimeFailure("VIRTUAL_SCREEN_STOPPED", "副屏会话已切换，请重新读取状态")
+        else -> null
+    }
+
+    /**
+     * 异常到副屏错误码的映射（纯函数，供命令层与单测共用）。
+     * [RuntimeFailure] 保留自身 code（`VIRTUAL_SCREEN_STOPPED`、`VIRTUAL_SCREEN_BUSY` 等）；
+     * 参数校验与 JSON 解析失败属于调用方输入问题；只有其余未知异常才归为 `VIRTUAL_SCREEN_UNAVAILABLE`。
+     */
+    fun errorCode(error: Throwable): String = when (error) {
+        is RuntimeFailure -> error.code
+        is IllegalArgumentException, is JSONException -> "VIRTUAL_SCREEN_INVALID"
+        else -> "VIRTUAL_SCREEN_UNAVAILABLE"
+    }
+
+    /** 空白帧采样线数量：横向与纵向各取这么多条线，覆盖首尾但不遍历整帧。 */
+    const val FRAME_SAMPLE_LINES = 3
+
+    /** 单条采样线上的采样点上限；配合 [FRAME_SAMPLE_LINES] 把总采样点限制在数百以内。 */
+    const val FRAME_SAMPLE_LINE_POINTS = 48
+
+    /** 采样点各颜色通道允许的最大极差，不超过它视为「几乎同色」。 */
+    const val FRAME_BLANK_TOLERANCE = 8
+
+    /**
+     * 采样线规则：在 `0..extent-1` 上均分取最多 [FRAME_SAMPLE_LINES] 条线，且包含首尾。
+     * 宿主采集采样行与 [blankFrame] 共用这一份规则，保证单测结论与真机一致。
+     * `extent` 非正时返回空数组，`extent == 1` 时只有第 0 条，不产生除零。
+     */
+    fun frameSampleLines(extent: Int): IntArray {
+        if (extent <= 0) return IntArray(0)
+        val count = minOf(FRAME_SAMPLE_LINES, extent)
+        if (count <= 1) return intArrayOf(0)
+        return IntArray(count) { index -> index * (extent - 1) / (count - 1) }
+    }
+
+    /**
+     * 空白帧判定（纯函数，不依赖 Android 类，可在 JVM 单测中覆盖）。
+     *
+     * [pixels] 为按行排列的 ARGB 像素，长度至少 `width * height`。判定只按固定步长采样：
+     * 横向与纵向各取 [FRAME_SAMPLE_LINES] 条线，每条线最多取 [FRAME_SAMPLE_LINE_POINTS] 个点，
+     * 总采样点不超过 `2 * FRAME_SAMPLE_LINES * FRAME_SAMPLE_LINE_POINTS`，不做整帧遍历。
+     * 采样点各颜色通道极差都不超过 [FRAME_BLANK_TOLERANCE] 时判为空白帧（白帧、黑帧或纯色未渲染画面）。
+     *
+     * 这是启发式判定：目标应用确实有内容、但恰好采样处同色的画面也会被判为空白。
+     * 调用方应结合截图内容与 `frameBlank` 一起判断，不要把它当成绝对结论。
+     * `width`/`height` 非正或 [pixels] 为空时无从判定，返回 false；采样点越界时按已有像素判定，不抛异常。
+     */
+    fun blankFrame(pixels: IntArray, width: Int, height: Int): Boolean {
+        if (width <= 0 || height <= 0 || pixels.isEmpty()) return false
+        var sampled = 0
+        var minRed = 0xFF
+        var maxRed = 0
+        var minGreen = 0xFF
+        var maxGreen = 0
+        var minBlue = 0xFF
+        var maxBlue = 0
+        fun accept(index: Int) {
+            if (index < 0 || index >= pixels.size) return
+            val color = pixels[index]
+            val red = (color shr 16) and 0xFF
+            val green = (color shr 8) and 0xFF
+            val blue = color and 0xFF
+            if (red < minRed) minRed = red
+            if (red > maxRed) maxRed = red
+            if (green < minGreen) minGreen = green
+            if (green > maxGreen) maxGreen = green
+            if (blue < minBlue) minBlue = blue
+            if (blue > maxBlue) maxBlue = blue
+            sampled++
+        }
+        val stepX = maxOf(1, width / FRAME_SAMPLE_LINE_POINTS)
+        for (row in frameSampleLines(height)) {
+            var column = 0
+            var points = 0
+            while (column < width && points < FRAME_SAMPLE_LINE_POINTS) {
+                accept(row * width + column)
+                column += stepX
+                points++
+            }
+        }
+        val stepY = maxOf(1, height / FRAME_SAMPLE_LINE_POINTS)
+        for (column in frameSampleLines(width)) {
+            var row = 0
+            var points = 0
+            while (row < height && points < FRAME_SAMPLE_LINE_POINTS) {
+                accept(row * width + column)
+                row += stepY
+                points++
+            }
+        }
+        if (sampled == 0) return false
+        return maxOf(maxRed - minRed, maxGreen - minGreen, maxBlue - minBlue) <= FRAME_BLANK_TOLERANCE
     }
 }

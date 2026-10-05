@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.graphics.Color
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -15,6 +16,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -372,6 +374,156 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         val power = getSystemService(PowerManager::class.java)
         return keyguard?.isKeyguardLocked == true || power?.isInteractive == false
     }
+
+    /**
+     * 副屏（虚拟显示器）读路径的闸门 + 窗口根节点：只匹配传入的显示编号，**绝不**回退到当前主屏窗口
+     * （`rootInActiveWindow`）。这是副屏读取的唯一入口，调用方是 `VirtualScreenTree.dump`。
+     *
+     * 与既有主屏自动化路径的三点刻意差异（其余闸门共用同一份实现，没有为副屏放宽）：
+     * 1. **不查无障碍自动化包白名单**：白名单拦的是「本应用替用户在别处乱点」，而副屏会话是用户在原生
+     *    页面里明确选择、并且此刻正看着画面的那块屏；再要求用户把自己的目标应用抄进白名单，只是把同一次
+     *    选择做两遍，换不来额外安全。
+     * 2. **不做动作频率限制**：这是读路径，本来就不限频（与既有的 accessibilityTree 一致）。
+     * 3. **不加文本敏感词拦截**：那是主屏 `inputText` 的事，副屏只写用户自己看得见的那个输入框。
+     *
+     * 没有放宽的是：锁定/熄屏、敏感窗口（[containsSensitiveWindow]）、以及**只认传入的显示编号**——
+     * 0（主屏）与负数一律拒绝，避免这里成为绕过包白名单去读主屏的后门。
+     *
+     * 返回的 [DisplayAccess.root] 由调用方持有，读完必须 `recycle()`。
+     */
+    internal fun displayRootFor(displayId: Int): DisplayAccess {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return denied("ACCESSIBILITY_WINDOW_UNAVAILABLE", "系统版本低于 Android 11，没有按显示编号取窗口的公开 API")
+        }
+        if (displayId <= 0) {
+            return denied("ACCESSIBILITY_WINDOW_UNAVAILABLE", "显示编号 $displayId 无效：副屏编号必须大于 0（0 是主屏）")
+        }
+        if (isLockedOrScreenOff()) {
+            return denied("ACCESSIBILITY_DEVICE_LOCKED", "设备已锁定或屏幕未交互")
+        }
+        val root = displayWindowRoot(displayId)
+            ?: return denied("ACCESSIBILITY_WINDOW_UNAVAILABLE", "显示编号 $displayId 上没有可读取的窗口")
+        if (containsSensitiveWindow(root)) {
+            root.recycle()
+            return denied("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到密码、验证码、支付或权限窗口，已拒绝读取")
+        }
+        PrivateAuditLog(this).record(AuditEvent.ACCESSIBILITY_READ, AuditResult.SUCCEEDED, "display=$displayId")
+        return DisplayAccess(root, null, null)
+    }
+
+    /**
+     * 按显示编号取窗口根节点；找不到返回 null。
+     *
+     * 只从 `getWindows()` 里挑 `displayId` 相等的窗口：拿不到就返回 null，**不会**退化成「当前主屏窗口」
+     * （宁可让上层如实报「没有可读取的窗口」，也不能悄悄读到别的屏）。
+     *
+     * 同一显示编号上可能同时存在多个窗口（应用主窗口、弹窗、输入法）。优先级：非输入法且 `isActive` 的窗口
+     * → 其它非输入法窗口 → 剩下的（输入法）。`AccessibilityWindowInfo.recycle()` 与它给出的根节点是两回事：
+     * 取到根节点后就回收窗口信息，落选的根节点也一并回收，避免在旧版本上把节点池耗光。
+     */
+    private fun displayWindowRoot(displayId: Int): AccessibilityNodeInfo? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        val windows = try {
+            getWindows()
+        } catch (_: Throwable) {
+            null
+        } ?: return null
+        var best: AccessibilityNodeInfo? = null
+        var bestRank = Int.MAX_VALUE
+        for (window in windows) {
+            val sameDisplay = window.displayId == displayId
+            val root = if (sameDisplay) window.root else null
+            val rank = when {
+                root == null -> Int.MAX_VALUE
+                window.isActive && window.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD -> 0
+                window.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD -> 1
+                else -> 2
+            }
+            window.recycle()
+            if (root == null) continue
+            if (rank < bestRank) {
+                val previous = best
+                best = root
+                bestRank = rank
+                if (previous != null && previous !== root) previous.recycle()
+            } else {
+                root.recycle()
+            }
+        }
+        return best
+    }
+
+    /**
+     * 副屏（虚拟显示器）写路径：把文本注入 [displayId] 上窗口里当前聚焦的可编辑节点。
+     *
+     * 顺序固定且不放松：锁定/熄屏 → 频率限制（[ACTION_INTERVAL_MS]，只有成功才记账）→ 按显示编号取窗口 →
+     * 敏感窗口 → `findFocus(FOCUS_INPUT)` 且可编辑。**不查包白名单**的理由见 [displayRootFor]。
+     *
+     * 刻意不做的一件事：**不按文本内容做敏感词拦截**。既有主屏 `inputText` 会因为文本里出现「密码」「验证码」
+     * 这类词而在 `AccessibilityAutomationPolicy.parseAction` 里被整体拒绝，那对副屏是误伤——用户可能就是要
+     * 在聊天框里输入这些词。真正拦住敏感输入的是整窗拒绝（[containsSensitiveWindow]）与节点上的 `isPassword`。
+     *
+     * `ACTION_SET_TEXT` 是远程输入，中文等任意 Unicode 都不需要输入法；这正是 `input text`（只支持可打印
+     * ASCII）做不到的那一步。
+     */
+    @Synchronized
+    internal fun injectTextOnDisplay(displayId: Int, text: String): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || displayId <= 0) {
+            return rejectWrite("ACCESSIBILITY_ACTION_INVALID")
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (isLockedOrScreenOff()) return rejectWrite("ACCESSIBILITY_DEVICE_LOCKED")
+        if (now - lastActionAt < ACTION_INTERVAL_MS) return rejectWrite("ACCESSIBILITY_RATE_LIMITED")
+        val root = displayWindowRoot(displayId) ?: return rejectWrite("ACCESSIBILITY_WINDOW_UNAVAILABLE")
+        if (containsSensitiveWindow(root)) {
+            root.recycle()
+            return rejectWrite("ACCESSIBILITY_SENSITIVE_WINDOW")
+        }
+        val node = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        val accepted = when {
+            node == null -> false
+            !node.isEditable || node.isPassword -> false
+            else -> node.performAction(
+                AccessibilityNodeInfo.ACTION_SET_TEXT,
+                Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                },
+            )
+        }
+        // 审计详情必须在回收之前算：回收后读 node 的属性在旧版本上不可靠。
+        val detail = when {
+            accepted -> "display=$displayId"
+            node != null && node.isEditable && !node.isPassword -> "ACCESSIBILITY_ACTION_REJECTED"
+            else -> "ACCESSIBILITY_NODE_NOT_FOUND"
+        }
+        if (node !== null && node !== root) node.recycle()
+        root.recycle()
+        if (accepted) lastActionAt = now
+        PrivateAuditLog(this).record(
+            AuditEvent.ACCESSIBILITY_ACTION,
+            if (accepted) AuditResult.SUCCEEDED else AuditResult.DENIED,
+            detail,
+        )
+        return accepted
+    }
+
+    /** 拒绝结果同时写审计（沿用既有事件类别，不新增枚举）。 */
+    private fun denied(code: String, reason: String): DisplayAccess {
+        PrivateAuditLog(this).record(AuditEvent.ACCESSIBILITY_READ, AuditResult.DENIED, code)
+        return DisplayAccess(null, code, reason)
+    }
+
+    /** 写路径的拒绝：写审计后返回 false，调用方不需要再关心错误码。 */
+    private fun rejectWrite(code: String): Boolean {
+        PrivateAuditLog(this).record(AuditEvent.ACCESSIBILITY_ACTION, AuditResult.DENIED, code)
+        return false
+    }
+
+    /**
+     * 副屏定向访问的判定结果：允许时 [root] 非空（调用方持有，用完必须 `recycle()`）；
+     * 否则 [root] 为 null，[code] 是写进审计的稳定错误码，[reason] 是给用户看的中文原因。
+     */
+    internal class DisplayAccess(val root: AccessibilityNodeInfo?, val code: String?, val reason: String?)
 
     private fun failure(code: String, text: String): DeviceCommandResult = DeviceCommandResult(false, 1, text, false, code)
 

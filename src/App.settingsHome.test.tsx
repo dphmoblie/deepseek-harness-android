@@ -14,7 +14,7 @@ import { App } from './App'
  *
  * 为什么要有这一组：改动前入口是一张平列表，用户想找「保活」「日志」「导入」这类功能时
  * 只能逐行读标题 —— 而界面上根本没有这几个词。这里钉住三件事：
- *  1. 分组把「运行与后台」和「设置」分开（运行环境相关入口不再混在设置分类里）；
+ *  1. 按用途细分模型、外观、设备、运行、插件、文件、版本和诊断；
  *  2. 过滤是本地的：只影响显示哪些入口，不重读设置、不改任何状态；
  *  3. 搜不到就如实说搜不到，不装作「本来就没有这个功能」。
  */
@@ -54,27 +54,27 @@ describe('设置首页：分组与功能词过滤', () => {
     return screen.getByRole('searchbox', { name: '按功能词查找入口' })
   }
 
-  it('按分组列出入口：运行与后台与设置分开', async () => {
+  it('按用途分组列出入口', async () => {
     await openSettingsHome()
 
     const runtimeGroup = screen.getByRole('region', { name: '运行与后台' })
-    expect(within(runtimeGroup).getByRole('button', { name: /插件管理/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '插件扩展' })).getByRole('button', { name: /插件管理/ })).toBeVisible()
     expect(within(runtimeGroup).getByRole('button', { name: /Ubuntu 运行时/ })).toBeVisible()
-    expect(within(runtimeGroup).getByRole('button', { name: /终端与设备 Shell/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByRole('button', { name: /终端与设备 Shell/ })).toBeVisible()
     // 服务行的说明跟着运行状态走，三种真实状态之一，不写死其中一种。
     expect(within(runtimeGroup).getByText('Harness 服务')).toBeVisible()
     expect(within(runtimeGroup).getByText(/正在本机运行|已停止，可随时启动|等待安装运行环境/)).toBeVisible()
 
-    const settingsGroup = screen.getByRole('region', { name: '设置' })
+    const settingsGroup = screen.getByRole('region', { name: '模型连接' })
     expect(within(settingsGroup).getByRole('button', { name: /模型与密钥/ })).toBeVisible()
-    expect(within(settingsGroup).getByRole('button', { name: /终端与外观/ })).toBeVisible()
-    expect(within(settingsGroup).getByRole('button', { name: /Shizuku 与设备 Shell/ })).toBeVisible()
-    expect(within(settingsGroup).getByRole('button', { name: /诊断与日志/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '外观与显示' })).getByRole('button', { name: /终端与外观/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByRole('button', { name: /Shizuku 与设备 Shell/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '日志与排查' })).getByRole('button', { name: /诊断与日志/ })).toBeVisible()
 
     // 「运行与后台」既是分组名也是二级页入口，两种身份不能混成两行入口。
     expect(within(settingsGroup).queryByRole('button', { name: /运行与后台/ })).toBeNull()
     expect(within(settingsGroup).queryByRole('button', { name: /插件管理/ })).toBeNull()
-    expect(screen.getAllByRole('button', { name: /运行与后台/ })).toHaveLength(1)
+    expect(screen.getByRole('region', { name: '运行与后台' })).toBeVisible()
   })
 
   it('按功能词过滤：界面上没有的词也能定位到入口', async () => {
@@ -83,11 +83,30 @@ describe('设置首页：分组与功能词过滤', () => {
     // 「保活」只出现在关键词里（界面上写的是「后台保持」），这正是这次改造要解决的场景。
     fireEvent.change(searchBox(), { target: { value: '保活' } })
 
-    expect(screen.getByRole('button', { name: /运行与后台/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '运行与后台' })).getByRole('button', { name: /运行与后台/ })).toBeVisible()
     expect(screen.queryByRole('button', { name: /模型与密钥/ })).toBeNull()
     // 命中的分组才留下：设置分组整组消失，不留一个空标题。
-    expect(screen.queryByRole('region', { name: '设置' })).toBeNull()
+    expect(screen.queryByRole('region', { name: '模型连接' })).toBeNull()
     expect(screen.getByText('找到 1 个匹配的入口')).toBeVisible()
+  })
+
+  it('分类筛选后搜索仍覆盖所有分类，并能直接进入对应设置', async () => {
+    await openSettingsHome()
+    fireEvent.click(screen.getByRole('option', { name: /筛选分类： 外观与显示/ }))
+    expect(screen.queryByRole('button', { name: /模型与密钥/ })).toBeNull()
+    expect(screen.getByRole('button', { name: /终端与外观/ })).toBeVisible()
+    fireEvent.change(searchBox(), { target: { value: '无障碍 白名单' } })
+    fireEvent.click(screen.getByRole('button', { name: /Shizuku 与设备 Shell/ }))
+    expect(await screen.findByRole('heading', { name: '无障碍应用自动化' })).toBeVisible()
+  })
+
+  it('背景视频和卡片透明度均可检索到外观入口', async () => {
+    await openSettingsHome()
+    for (const value of ['视频', '卡片 透明', 'mp4']) {
+      fireEvent.change(searchBox(), { target: { value } })
+      expect(screen.getByRole('button', { name: /终端与外观/ })).toBeVisible()
+      expect(screen.getByText('找到 1 个匹配的入口')).toBeVisible()
+    }
   })
 
   it('英文功能词同样命中，且大小写不敏感', async () => {
@@ -120,7 +139,7 @@ describe('设置首页：分组与功能词过滤', () => {
 
     expect(screen.getByText('没有匹配的入口：试试「导入」「日志」「保活」这类功能词')).toBeVisible()
     expect(screen.queryByRole('region', { name: '运行与后台' })).toBeNull()
-    expect(screen.queryByRole('region', { name: '设置' })).toBeNull()
+    expect(screen.queryByRole('region', { name: '模型连接' })).toBeNull()
     expect(screen.queryByRole('button', { name: /模型与密钥/ })).toBeNull()
   })
 
@@ -140,11 +159,11 @@ describe('设置首页：分组与功能词过滤', () => {
     await openSettingsHome()
 
     fireEvent.change(searchBox(), { target: { value: '保活' } })
-    expect(screen.queryByRole('region', { name: '设置' })).toBeNull()
+    expect(screen.queryByRole('region', { name: '模型连接' })).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: '清空查找词' }))
 
-    expect(screen.getByRole('region', { name: '设置' })).toBeVisible()
+    expect(screen.getByRole('region', { name: '模型连接' })).toBeVisible()
     expect(screen.getByRole('button', { name: /模型与密钥/ })).toBeVisible()
     // 结果条也一起收掉：没有过滤词时不该还挂着「找到几个」。
     expect(screen.queryByText(/找到 \d+ 个匹配的入口/)).toBeNull()
@@ -193,12 +212,12 @@ describe('设置首页：分组与功能词过滤', () => {
     // 「导入」「搬运」是搬运语义的词，改造后跟着入口一起从「运行与后台」搬了过来：
     // 只剩一个入口命中，说明旧入口的关键词确实删干净了（没留下两份）。
     fireEvent.change(searchBox(), { target: { value: '导入' } })
-    expect(screen.getByRole('button', { name: /文件管理/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '文件管理' })).getByRole('button', { name: /文件管理/ })).toBeVisible()
     expect(screen.queryByRole('button', { name: /运行与后台/ })).toBeNull()
     expect(screen.getByText('找到 1 个匹配的入口')).toBeVisible()
 
     fireEvent.change(searchBox(), { target: { value: '搬运' } })
-    fireEvent.click(screen.getByRole('button', { name: /文件管理/ }))
+    fireEvent.click(within(screen.getByRole('region', { name: '文件管理' })).getByRole('button', { name: /文件管理/ }))
 
     // 进得去，而且是一个浏览器：标题是这一页自己的，投递区与共享目录都在里面。
     expect(await screen.findByRole('heading', { level: 1, name: '文件管理' })).toBeVisible()
@@ -214,13 +233,13 @@ describe('设置首页：分组与功能词过滤', () => {
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
     const runtimeGroup = await screen.findByRole('region', { name: 'Runtime and background' }, { timeout: SETTINGS_HOME_TIMEOUT_MS })
-    expect(within(runtimeGroup).getByRole('button', { name: /Plugins/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: 'Plugin extensions' })).getByRole('button', { name: /Plugins/ })).toBeVisible()
     expect(within(runtimeGroup).getByRole('button', { name: /Ubuntu runtime/ })).toBeVisible()
     expect(within(runtimeGroup).getByText('Harness service')).toBeVisible()
 
-    const settingsGroup = screen.getByRole('region', { name: 'Settings' })
+    const settingsGroup = screen.getByRole('region', { name: 'Model connections' })
     expect(within(settingsGroup).getByRole('button', { name: /Models and keys/ })).toBeVisible()
-    expect(within(settingsGroup).getByRole('button', { name: /Diagnostics and logs/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: 'Logs and troubleshooting' })).getByRole('button', { name: /Diagnostics and logs/ })).toBeVisible()
 
     // 「版本管理」是独立分组：连标题带说明一起查有没有中文残留（漏词条时 t() 会回落成中文键本身）。
     const versionsGroup = screen.getByRole('region', { name: 'Version management' })

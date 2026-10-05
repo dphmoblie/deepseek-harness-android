@@ -109,6 +109,64 @@ class RuntimeFilesTest {
         assertTrue(Files.isDirectory(target, LinkOption.NOFOLLOW_LINKS))
     }
 
+    /**
+     * 兜底删除器是真机上唯一能把 `stale-*` 残留真正回收掉的路径（严格删除器在真机上会失败），
+     * 它不依赖 [SecureDirectoryStream]，所以在任何宿主机上都应该可用。
+     */
+    @Test
+    fun fallbackDeletesNestedTreeWithoutSecureDirectoryStreams() {
+        val sandbox = temporaryFolder.newFolder("sandbox").toPath()
+        val allowedParent = Files.createDirectory(sandbox.resolve("runtime"))
+        val target = Files.createDirectories(allowedParent.resolve("target/nested"))
+            .parent
+        Files.write(target.resolve("nested/payload.txt"), "payload".toByteArray())
+        Files.createDirectories(target.resolve("empty"))
+
+        RuntimeFiles.deleteTreeNoFollowFallback(target.toFile(), allowedParent.toFile())
+
+        assertFalse(Files.exists(target, LinkOption.NOFOLLOW_LINKS))
+        assertTrue(Files.isDirectory(allowedParent, LinkOption.NOFOLLOW_LINKS))
+    }
+
+    @Test
+    fun fallbackIsIdempotentForMissingTarget() {
+        val sandbox = temporaryFolder.newFolder("sandbox").toPath()
+        val allowedParent = Files.createDirectory(sandbox.resolve("runtime"))
+
+        RuntimeFiles.deleteTreeNoFollowFallback(allowedParent.resolve("missing").toFile(), allowedParent.toFile())
+
+        assertTrue(Files.isDirectory(allowedParent, LinkOption.NOFOLLOW_LINKS))
+    }
+
+    @Test
+    fun fallbackRejectsDeletionOutsideTheImmediateAllowedParent() {
+        val sandbox = temporaryFolder.newFolder("sandbox").toPath()
+        val allowedParent = Files.createDirectory(sandbox.resolve("runtime"))
+        val outside = Files.createDirectory(sandbox.resolve("outside"))
+
+        val failure = assertThrows(RuntimeFailure::class.java) {
+            RuntimeFiles.deleteTreeNoFollowFallback(outside.toFile(), allowedParent.toFile())
+        }
+
+        assertEquals("RESET_SCOPE_INVALID", failure.code)
+        assertTrue(Files.isDirectory(outside, LinkOption.NOFOLLOW_LINKS))
+    }
+
+    @Test
+    fun fallbackDeletesSymbolicLinkWithoutFollowingItsTarget() {
+        val sandbox = temporaryFolder.newFolder("sandbox").toPath()
+        val allowedParent = Files.createDirectory(sandbox.resolve("runtime"))
+        val target = Files.createDirectory(allowedParent.resolve("target"))
+        val external = Files.createDirectory(sandbox.resolve("external"))
+        val marker = Files.write(external.resolve("keep.txt"), "keep".toByteArray())
+        createSymbolicLinkOrSkip(target.resolve("external-link"), external)
+
+        RuntimeFiles.deleteTreeNoFollowFallback(target.toFile(), allowedParent.toFile())
+
+        assertFalse(Files.exists(target, LinkOption.NOFOLLOW_LINKS))
+        assertTrue(Files.exists(marker, LinkOption.NOFOLLOW_LINKS))
+    }
+
     private fun assumeSecureDirectoryStreams(path: Path) {
         assumeTrue("Default provider does not support secure directory streams", supportsSecureDirectoryStreams(path))
     }

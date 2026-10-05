@@ -1383,6 +1383,8 @@ button:disabled {
   min-width: 0;
   flex-direction: column;
   gap: 4px;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
 }
 
 .management-copy strong {
@@ -1405,6 +1407,7 @@ button:disabled {
 
 .settings-section {
   min-width: 0;
+  overflow-wrap: anywhere;
   overflow: hidden;
   padding: 18px;
   border: 1px solid var(--line);
@@ -2841,5 +2844,26 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 /* 手机端入口卡片保持单列，避免标题和说明被压成逐字换行；平板和桌面使用双列。 */
 @media (min-width: 720px) {
   .settings-directory { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .settings-directory .management-list:first-child { grid-row: span 2; }
+}
+
+/* 分类完整换行，窄屏和放大字体时不隐藏入口，也不依赖横向滑动发现分类。 */
+.settings-categories { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.settings-categories button {
+  max-width: 100%; min-height: 44px; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: var(--radius-control);
+  background: var(--surface); color: var(--ink); font: inherit;
+  font-size: 0.8125rem; line-height: 1.5; overflow-wrap: anywhere; cursor: pointer;
+}
+.settings-categories button[aria-selected="true"] { background: var(--blue-soft); color: var(--blue); border-color: var(--blue); }
+.settings-screen .screen-heading > div, .settings-screen .section-title > div { min-width: 0; }
+.settings-screen :is(h1, h2, h3, .button, .status-chip) { overflow-wrap: anywhere; }
+.settings-screen .button { white-space: normal; }
+.settings-search input { min-width: 0; }
+@media (max-width: 560px) {
+  .settings-screen .section-title-action { grid-template-columns: 40px minmax(0, 1fr); }
+  .settings-screen .section-title-action > .status-chip { grid-column: 2; justify-self: start; white-space: normal; }
+  .settings-screen .management-service { grid-template-columns: 42px minmax(0, 1fr); }
+  .settings-screen .management-service > :last-child { grid-column: 2; justify-self: start; }
+  .settings-screen .range-field { flex-wrap: wrap; gap: 12px; }
+  .settings-screen .range-field input[type="range"] { width: 100%; }
 }
