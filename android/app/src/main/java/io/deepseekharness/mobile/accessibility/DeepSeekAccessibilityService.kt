@@ -2,7 +2,6 @@ package io.deepseekharness.mobile.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
-import android.graphics.Color
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
@@ -11,6 +10,10 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.app.KeyguardManager
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -20,7 +23,10 @@ import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import io.deepseekharness.mobile.AppThemePreference
+import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.shizuku.DeviceCommandResult
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenTextPolicy
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
 import io.deepseekharness.mobile.runtime.audit.AuditResult
 import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
@@ -204,29 +210,38 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     private fun showConfirmation(confirmation: PendingConfirmation) {
         if (confirmation.cancelled.get() || pendingConfirmation.get() !== confirmation) return
         val windowManager = getSystemService(WindowManager::class.java) ?: return finishConfirmation(confirmation, false)
-        val panel = LinearLayout(this).apply {
+        // 这块面板是「盖在目标应用之上的原生浮层」，因此按 colors.xml 里 overlay_* 那组令牌跟随
+        // **已保存的应用主题**，而不是写死白底黑字：写死的话，深色主题下这块白板会刺眼地糊在
+        // 目标应用上，也和用户刚在设置里选好的配色对不上。
+        // 控件默认样式也要跟主题走：AccessibilityService 里直接 new Button(this) 会按**系统**
+        // 深浅解析 AppCompat 默认样式，沿用悬浮球那套 ContextThemeWrapper + palette() 即可。
+        val ui: Context = ContextThemeWrapper(AppThemePreference.palette(this), R.style.AppTheme)
+        val surface = AppThemePreference.color(this, R.color.overlay_panel_background)
+        val foreground = AppThemePreference.color(this, R.color.overlay_panel_foreground)
+        val muted = AppThemePreference.color(this, R.color.overlay_panel_muted_foreground)
+        val panel = LinearLayout(ui).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(36, 28, 36, 24)
-            setBackgroundColor(Color.WHITE)
+            setBackgroundColor(surface)
         }
-        val title = TextView(this).apply {
+        val title = TextView(ui).apply {
             text = "确认无障碍动作"
             textSize = 19f
-            setTextColor(Color.BLACK)
+            setTextColor(foreground)
         }
-        val details = TextView(this).apply {
+        val details = TextView(ui).apply {
             val input = confirmation.request.text?.length?.toString() ?: "0"
             text = "应用：${confirmation.request.packageName}\n动作：${confirmation.request.action}\nviewId：${confirmation.request.viewId}\n输入长度：$input"
             textSize = 14f
-            setTextColor(Color.DKGRAY)
+            setTextColor(muted)
             setPadding(0, 16, 0, 18)
         }
-        val buttons = LinearLayout(this).apply { gravity = Gravity.END }
-        val reject = Button(this).apply {
+        val buttons = LinearLayout(ui).apply { gravity = Gravity.END }
+        val reject = Button(ui).apply {
             text = "拒绝"
             setOnClickListener { finishConfirmation(confirmation, false) }
         }
-        val approve = Button(this).apply {
+        val approve = Button(ui).apply {
             text = "确认执行"
             setOnClickListener { finishConfirmation(confirmation, true) }
         }
@@ -467,44 +482,268 @@ class DeepSeekAccessibilityService : AccessibilityService() {
      * ASCII）做不到的那一步。
      */
     @Synchronized
-    internal fun injectTextOnDisplay(displayId: Int, text: String): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || displayId <= 0) {
-            return rejectWrite("ACCESSIBILITY_ACTION_INVALID")
-        }
+    internal fun injectTextOnDisplay(displayId: Int, text: String): Boolean =
+        writeTextOnDisplay(displayId, text).succeeded
+
+    /**
+     * 副屏文本写入的分级实现（回退链的后端）：无障碍直接写入 → 聚焦候选输入框后写入 → 剪贴板粘贴。
+     *
+     * 分工与 [VirtualScreenTextPolicy] 严格分开：**「该走哪几步、失败该报什么码」在策略层**，
+     * 这里只负责真正碰 Android API，并把每一级的结果如实记账（[TextWriteResult]）。这里不吞异常、
+     * 也不把「写不进去」说成「副屏不可用」——错误码原样交给上层。
+     *
+     * 刻意不放松的安全判定：
+     * - 只作用于传入的 [displayId]（`0` 是主屏，一律拒绝）；
+     * - 锁定/熄屏拒绝；敏感窗口（密码、验证码、支付、授权弹窗）整窗拒绝；
+     * - `isPassword` 节点永不被写入；
+     * - [ACTION_INTERVAL_MS] 节流，且**只有系统接受才推进计时**（被拒不算做过动作）。
+     *
+     * 剪贴板这一级的真实限制（**待真机验证**）：Android 10 起应用在后台读剪贴板受限，而目标应用属于
+     * **另一个进程**。本应用写入剪贴板本身应当成功，但目标输入框能否读到那条 ClipData 由系统与目标应用
+     * 决定；`ACTION_PASTE` 返回 false 时如实往下一级报，不假装粘贴成功。
+     */
+    @Synchronized
+    internal fun writeTextOnDisplay(
+        displayId: Int,
+        text: String,
+        submit: Boolean = false,
+        clipboardAvailable: Boolean = false,
+    ): TextWriteResult {
+        VirtualScreenTextPolicy.requireInjectable(text)
         val now = SystemClock.elapsedRealtime()
-        if (isLockedOrScreenOff()) return rejectWrite("ACCESSIBILITY_DEVICE_LOCKED")
-        if (now - lastActionAt < ACTION_INTERVAL_MS) return rejectWrite("ACCESSIBILITY_RATE_LIMITED")
-        val root = displayWindowRoot(displayId) ?: return rejectWrite("ACCESSIBILITY_WINDOW_UNAVAILABLE")
-        if (containsSensitiveWindow(root)) {
-            root.recycle()
-            return rejectWrite("ACCESSIBILITY_SENSITIVE_WINDOW")
+        val resolved = resolveDisplayInput(displayId, now) ?: return TextWriteResult.denied(
+            "ACCESSIBILITY_WINDOW_UNAVAILABLE",
+        )
+        // 候选输入框：已有聚焦可编辑节点时就是它；否则是第一个可聚焦且可编辑的节点（聚焦→再写入那一支）。
+        val focusNode = resolved.focus ?: findFocusable(resolved.root, editableOnly = true)
+        val target = resolved.focus
+            ?: focusNode
+            ?: return TextWriteResult.failure(
+                VirtualScreenTextPolicy.TextMethod.UNSUPPORTED,
+                VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
+                "副屏当前没有可编辑的输入框",
+            ).also { resolved.root.recycle() }
+        val hasFocusTarget = focusNode != null
+        val attempted = if (resolved.focus != null) {
+            VirtualScreenTextPolicy.TextMethod.SET_TEXT
+        } else {
+            VirtualScreenTextPolicy.TextMethod.FOCUS_THEN_SET_TEXT
         }
-        val node = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        val accepted = when {
-            node == null -> false
-            !node.isEditable || node.isPassword -> false
-            else -> node.performAction(
-                AccessibilityNodeInfo.ACTION_SET_TEXT,
-                Bundle().apply {
-                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        // 「聚焦后写入」这一级的真实动作：没有聚焦节点时先取一次焦点（节点自己可点时再补一次点击），
+        // 再写入。取焦点失败不提前放弃：SET_TEXT 仍然会试一次，成败由真实回执决定，不靠推测。
+        if (resolved.focus == null) acquireFocus(target, displayId)
+        val accepted = setText(target, text)
+        if (accepted) lastActionAt = SystemClock.elapsedRealtime()
+        val result = when {
+            // 只有确实写进去了才按回车：写入被拒时绝不提交，否则会把上一次留在输入框里的内容提交出去。
+            accepted -> TextWriteResult.success(
+                attempted,
+                hasFocusTarget,
+                submit && pressImeEnter(displayId, target, text.length),
+            )
+            clipboardAvailable -> pasteInto(displayId, target, text, now, hasFocusTarget, submit)
+            else -> TextWriteResult.failure(
+                attempted,
+                VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
+                if (hasFocusTarget) {
+                    "输入框拒绝了写入，且剪贴板通道不可用${tapHint(target)}"
+                } else {
+                    "输入框拒绝了写入（未能取得焦点）"
                 },
+                hasFocusTarget,
             )
         }
-        // 审计详情必须在回收之前算：回收后读 node 的属性在旧版本上不可靠。
-        val detail = when {
-            accepted -> "display=$displayId"
-            node != null && node.isEditable && !node.isPassword -> "ACCESSIBILITY_ACTION_REJECTED"
-            else -> "ACCESSIBILITY_NODE_NOT_FOUND"
-        }
-        if (node !== null && node !== root) node.recycle()
-        root.recycle()
-        if (accepted) lastActionAt = now
+        if (focusNode != null && focusNode !== resolved.focus && focusNode !== target) focusNode.recycle()
+        if (target !== resolved.root) target.recycle()
+        resolved.root.recycle()
+        return result
+    }
+
+    /**
+     * 「聚焦后写入」的焦点动作：先 `ACTION_FOCUS`，不被接受且节点自己可点时再补一次 `ACTION_CLICK`
+     * （对 EditText 而言等同于点进输入框）。
+     *
+     * 刻意**不合成手势**：本方法跑在无障碍服务进程里，合成手势只能打到默认显示，副屏上的点击由
+     * `VirtualScreenInjector` 那条独立通道负责（取不到焦点时失败回执里会带上 [tapHint] 给出的坐标）。
+     *
+     * 只有系统确实接受（或节点本来就已聚焦）才算一次动作，并推进写节流计时。
+     */
+    private fun acquireFocus(node: AccessibilityNodeInfo, displayId: Int): Boolean {
+        val focused = node.performAction(AccessibilityNodeInfo.ACTION_FOCUS) || node.isFocused
+        val clicked = !focused && node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        val acquired = focused || clicked
+        if (acquired) lastActionAt = SystemClock.elapsedRealtime()
         PrivateAuditLog(this).record(
             AuditEvent.ACCESSIBILITY_ACTION,
-            if (accepted) AuditResult.SUCCEEDED else AuditResult.DENIED,
-            detail,
+            if (acquired) AuditResult.SUCCEEDED else AuditResult.DENIED,
+            if (acquired) "display=$displayId ACTION_FOCUS" else "ACCESSIBILITY_FOCUS_REJECTED",
         )
-        return accepted
+        return acquired
+    }
+
+    /**
+     * `submit=true` 的后半段：文字**确实写进去之后**，对同一个节点按下一次输入法回车
+     * （搜索框等同于提交、聊天框等同于发送）。
+     *
+     * 只用 `ACTION_IME_ENTER`（API 30 起可用；副屏本身也要求 SDK≥30，这里的版本判断是防御性的，
+     * 让低版本设备如实失败而不是崩在 lint/运行期），因此不依赖输入法本身。
+     * 写入刚推进过节流，这里等满 [ACTION_INTERVAL_MS] 再发回车，避免两次动作被目标应用合并掉。
+     * 返回 false 表示那一刻没送出去，调用方应如实把 `submit` 标成未完成，而不是宣称「已经发送」。
+     */
+    private fun pressImeEnter(displayId: Int, node: AccessibilityNodeInfo, chars: Int): Boolean {
+        // `ACTION_IME_ENTER` 是 API 30（Android 11）才有的动作，而本应用的 minSdk 是 26。
+        // 低版本没有任何等价的「让输入法回车」入口：这里如实拒绝并把原因记进审计，绝不按一个别的键
+        // 或用别的手段假装提交成功——调用方据此把 submit 标成未完成。真机行为待真机验证。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            PrivateAuditLog(this).record(
+                AuditEvent.ACCESSIBILITY_ACTION,
+                AuditResult.DENIED,
+                "ACCESSIBILITY_IME_ENTER_UNSUPPORTED display=$displayId api=${Build.VERSION.SDK_INT}",
+            )
+            return false
+        }
+        val waited = SystemClock.elapsedRealtime() - lastActionAt
+        if (waited in 0 until ACTION_INTERVAL_MS) SystemClock.sleep(ACTION_INTERVAL_MS - waited)
+        // 走 AccessibilityAction 常量取 id：ACTION_IME_ENTER 的顶层 int 别名并不在所有 compileSdk
+        // 的公开存根里，而这个内部类常量从 API 30 起一直是公开的。
+        val enterAction = AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id
+        val sent = node.performAction(enterAction)
+        if (sent) lastActionAt = SystemClock.elapsedRealtime()
+        PrivateAuditLog(this).record(
+            AuditEvent.ACCESSIBILITY_ACTION,
+            if (sent) AuditResult.SUCCEEDED else AuditResult.DENIED,
+            if (sent) "display=$displayId submitted=$chars" else "ACCESSIBILITY_IME_ENTER_REJECTED",
+        )
+        return sent
+    }
+
+    /**
+     * 候选输入框写不进去时，把它的屏幕中心坐标写进失败回执：上层（主进程）可以据此先向副屏注入
+     * 一次真实点击让它取得焦点，再重试写入。取不到有效矩形时返回空串，不编造坐标。
+     */
+    private fun tapHint(node: AccessibilityNodeInfo): String {
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+        return if (bounds.isEmpty) {
+            ""
+        } else {
+            "；可先向副屏注入一次点击 (${bounds.centerX()}, ${bounds.centerY()}) 让输入框取得焦点后重试"
+        }
+    }
+
+    /**
+     * 写路径的前置闸门：版本/编号 → 锁定 → 频率限制 → 取窗口 → 敏感窗口 → 解析聚焦/候选输入框。
+     *
+     * 返回 null 表示拒绝（审计与原因已由 [rejectWrite] 写下）；返回非 null 时 **调用方持有 [WriteScope.root]，
+     * 用完必须 `recycle()`**；[WriteScope.focus] 是当前聚焦的可编辑非密码节点（可为 null），属于复用节点无需单独回收。
+     */
+    private fun resolveDisplayInput(displayId: Int, now: Long): WriteScope? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || displayId <= 0) {
+            rejectWrite("ACCESSIBILITY_ACTION_INVALID")
+            return null
+        }
+        if (isLockedOrScreenOff()) {
+            rejectWrite("ACCESSIBILITY_DEVICE_LOCKED")
+            return null
+        }
+        if (now - lastActionAt < ACTION_INTERVAL_MS) {
+            rejectWrite("ACCESSIBILITY_RATE_LIMITED")
+            return null
+        }
+        val root = displayWindowRoot(displayId) ?: run {
+            rejectWrite("ACCESSIBILITY_WINDOW_UNAVAILABLE")
+            return null
+        }
+        if (containsSensitiveWindow(root)) {
+            root.recycle()
+            rejectWrite("ACCESSIBILITY_SENSITIVE_WINDOW")
+            return null
+        }
+        // 不在这里按下焦点：取焦点是**公开动作**（会推进节流并写审计），只能由真正要写的动作触发。
+        // 这一步只如实报告「有没有一个可以写的节点」，把选择权留给调用方。
+        val focus = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable && !it.isPassword }
+        return WriteScope(root, focus)
+    }
+
+    /** 收到确认的聚焦/可编辑节点。 */
+    private class WriteScope(val root: AccessibilityNodeInfo, val focus: AccessibilityNodeInfo?)
+
+    /** 无障碍写入原语，单独抽出来便于对照 [VirtualScreenTextPolicy.TextMethod]。 */
+    private fun setText(node: AccessibilityNodeInfo, text: String): Boolean = node.performAction(
+        AccessibilityNodeInfo.ACTION_SET_TEXT,
+        Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        },
+    )
+
+    /** 剪贴板分级：本进程写入 ClipData，再对目标节点 `ACTION_PASTE`；失败如实返回码。 */
+    private fun pasteInto(
+        displayId: Int,
+        target: AccessibilityNodeInfo,
+        text: String,
+        now: Long,
+        hasFocusTarget: Boolean,
+        submit: Boolean,
+    ): TextWriteResult {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: return TextWriteResult.failure(
+                VirtualScreenTextPolicy.TextMethod.PASTE,
+                VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
+                "本应用拿不到剪贴板服务",
+                hasFocusTarget,
+            )
+        try {
+            clipboard.setPrimaryClip(ClipData.newPlainText("DSH 副屏文本", text))
+        } catch (error: Throwable) {
+            // Android 10+ 对剪贴板写入有限制，失败要如实报，不能回退成「写成功了」。
+            return TextWriteResult.failure(
+                VirtualScreenTextPolicy.TextMethod.PASTE,
+                VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
+                "剪贴板写入被系统拒绝（${error.javaClass.simpleName}）",
+                hasFocusTarget,
+            )
+        }
+        val pasted = target.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        if (pasted) lastActionAt = now
+        PrivateAuditLog(this).record(
+            AuditEvent.ACCESSIBILITY_ACTION,
+            if (pasted) AuditResult.SUCCEEDED else AuditResult.DENIED,
+            if (pasted) "display=$displayId ACTION_PASTE" else "ACCESSIBILITY_PASTE_REJECTED",
+        )
+        return if (pasted) {
+            // 粘贴同样只有确实贴进去之后才按回车。
+            TextWriteResult.success(
+                VirtualScreenTextPolicy.TextMethod.PASTE,
+                hasFocusTarget,
+                submit && pressImeEnter(displayId, target, text.length),
+            )
+        } else {
+            TextWriteResult.failure(
+                VirtualScreenTextPolicy.TextMethod.PASTE,
+                VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
+                "目标输入框拒绝了剪贴板粘贴",
+                hasFocusTarget,
+            )
+        }
+    }
+
+    /**
+     * 深度优先找第一个可聚焦且（可选）可编辑的节点。
+     *
+     * 返回的节点**由调用方持有**，用完必须 `recycle()`；只返回一个节点，不做整棵树快照。
+     */
+    private fun findFocusable(node: AccessibilityNodeInfo, editableOnly: Boolean = false): AccessibilityNodeInfo? {
+        if ((!editableOnly || node.isEditable) && node.isEnabled && node.isFocusable) return node
+        for (index in 0 until node.childCount) {
+            val child = node.getChild(index) ?: continue
+            val found = findFocusable(child, editableOnly)
+            if (found != null) {
+                if (found !== child) child.recycle()
+                return found
+            }
+            child.recycle()
+        }
+        return null
     }
 
     /** 拒绝结果同时写审计（沿用既有事件类别，不新增枚举）。 */
@@ -524,6 +763,51 @@ class DeepSeekAccessibilityService : AccessibilityService() {
      * 否则 [root] 为 null，[code] 是写进审计的稳定错误码，[reason] 是给用户看的中文原因。
      */
     internal class DisplayAccess(val root: AccessibilityNodeInfo?, val code: String?, val reason: String?)
+
+    /**
+     * 副屏文本写入某一级的真实结果。
+     *
+     * [method] 是**实际走到**的那一级（不是计划里的那一级）：没有聚焦节点时是
+     * [VirtualScreenTextPolicy.TextMethod.FOCUS_THEN_SET_TEXT]，被拒后改走剪贴板则是
+     * [VirtualScreenTextPolicy.TextMethod.PASTE]。[code] 只在 [succeeded] 为 false 时有意义，
+     * 取值来自 [VirtualScreenTextPolicy.FailureCode] 或 `ACCESSIBILITY_*` 审计码，原样交给上层。
+     */
+    internal class TextWriteResult(
+        val succeeded: Boolean,
+        val method: VirtualScreenTextPolicy.TextMethod,
+        val code: String?,
+        val detail: String,
+        val focusedCandidate: Boolean,
+        val submit: Boolean,
+    ) {
+        companion object {
+            fun success(
+                method: VirtualScreenTextPolicy.TextMethod,
+                focusedCandidate: Boolean,
+                submit: Boolean = false,
+            ): TextWriteResult = TextWriteResult(true, method, null, "", focusedCandidate, submit)
+
+            fun failure(
+                method: VirtualScreenTextPolicy.TextMethod,
+                code: String,
+                detail: String,
+                focusedCandidate: Boolean = false,
+            ): TextWriteResult = TextWriteResult(false, method, code, detail, focusedCandidate, false)
+
+            /**
+             * 前置闸门（锁定、节流、无窗口、敏感窗口）的拒绝：选用的方法按「聚焦后写入」记账，
+             * 因为下一级一定是先取焦点；真正的失败原因在 [code] 里。
+             */
+            fun denied(code: String): TextWriteResult = TextWriteResult(
+                false,
+                VirtualScreenTextPolicy.TextMethod.FOCUS_THEN_SET_TEXT,
+                code,
+                VirtualScreenTextPolicy.failureMessage(code),
+                false,
+                false,
+            )
+        }
+    }
 
     private fun failure(code: String, text: String): DeviceCommandResult = DeviceCommandResult(false, 1, text, false, code)
 

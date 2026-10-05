@@ -54,6 +54,13 @@
     <string name="virtual_screen_mode_15fps">15 FPS</string>
     <string name="virtual_screen_mode_30fps">30 FPS</string>
     <string name="virtual_screen_mode_60fps">60 FPS</string>
+    <string name="virtual_screen_mode_120fps">120 FPS</string>
+    <string name="virtual_screen_mode_185fps">185 FPS</string>
+
+    <!-- Target-app virtual screen: picker title and orientation labels. Both dp values come from VirtualScreenSpec. -->
+    <string name="virtual_screen_title">Target-app virtual screen</string>
+    <string name="virtual_screen_orientation_landscape">Use a landscape virtual screen (%1$d × %2$d dp)</string>
+    <string name="virtual_screen_orientation_hint">Portrait is the default: %1$d × %2$d dp. Once started you can operate it on this page or in the floating window; the AI uses virtual-screen tools. Pictures are sent to the current model service on demand, so avoid opening pages that show private information.</string>
 
     <string name="task_notification_channel_name">Runtime status</string>
     <string name="task_notification_channel_description">Alerts you when the local Harness stops or fails to start</string>
@@ -72,4 +79,9 @@
     <string name="task_notification_turn_completed_title">Task completed</string>
     <string name="task_notification_turn_completed_text">%1$d task(s) completed. Tap to return to the chat screen.</string>
     <string name="overlay_conversation_resize_description">Drag to resize the chat window</string>
+
+    <!-- Virtual-screen overlay: the status line below the mode buttons. It says "waiting" until a picture exists. -->
+    <string name="virtual_screen_overlay_status_waiting">Waiting for the virtual screen picture</string>
+    <!-- Shown right after a mode switch; the next frame pull replaces it with real readings. %1$s is the mode name. -->
+    <string name="virtual_screen_overlay_mode_switched">Switched to %1$s; waiting for a fresh frame-rate reading</string>
 </resources>

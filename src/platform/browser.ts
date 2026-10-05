@@ -17,6 +17,9 @@ import type {
   RuntimeInstallResult,
   RuntimeProgress,
   RuntimeReleaseList,
+  RuntimeResidueCleanupState,
+  RuntimeResidueState,
+  RuntimeSessionListResult,
   RuntimeSessionSnapshotRestoreResult,
   RuntimeSessionSnapshotState,
   RuntimeSettings,
@@ -448,6 +451,15 @@ export function createBrowserBridge(): RuntimeBridge {
       assertRuntimeVersionTarget(target)
       return Promise.reject(new Error('浏览器预览不支持运行时版本管理'))
     },
+    // 预览里既没有运行时目录，也谈不上「残留」：如实拒绝，不编造「0 份 0 字节」——
+    // 那会被界面显示成「没有可回收的残留」，等于把「做不到」说成「确认干净」。
+    getRuntimeResidue: (): Promise<RuntimeResidueState> => Promise.reject(new Error('浏览器预览不支持运行时占用盘点')),
+    cleanRuntimeResidue: (): Promise<RuntimeResidueCleanupState> => Promise.reject(new Error('浏览器预览不支持运行时残留清理')),
+    // 会话工作区在预览里没有原生侧那条只读通道：如实拒绝，让界面显示「读不到会话列表」+
+    // 一句诚实说明。**不要**返回 `{ status: 'ready', sessions: [] }`——那会显示成「暂无会话」，
+    // 等于把「读不到」编造成「确认没有」。
+    listSessions: (): Promise<RuntimeSessionListResult> =>
+      Promise.reject(new Error('浏览器模式下没有运行时会话列表')),
     // 预览里没有原生侧的会话快照能力：四条一律如实拒绝。
     // **不要**返回空状态对象——那会让界面显示成「还没有快照」，等于编造一次成功。
     getRuntimeSessionSnapshotState: (): Promise<RuntimeSessionSnapshotState> =>

@@ -67,6 +67,31 @@ internal object AppThemePreference {
         (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
 
+    /**
+     * 按已保存的模式解析资源用的 [Context]。
+     *
+     * **为什么取颜色之前必须过这一步**：`values/` 与 `values-night/` 的限定符是**系统**深色模式，
+     * 而应用主题允许与系统不同（用户显式选了浅色、系统却停在深色）。不覆写 `uiMode` 就直接
+     * `getColor(R.color.xxx)`，拿到的是系统那一套，界面就会和刚选的主题对不上——副屏页面
+     * 与悬浮面板此前的「没有主题色」正是这个原因。
+     *
+     * 手法与 [AppLanguage.localizedContext] 完全一致，只换了轴：那边换 locale，这边换 uiMode。
+     */
+    fun palette(context: Context): Context {
+        val dark = isDark(current(context), systemNight(context))
+        val configuration = Configuration(context.resources.configuration).apply {
+            uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+        }
+        return context.createConfigurationContext(configuration)
+    }
+
+    /**
+     * 取一个随应用主题变化的颜色令牌（`res/values/colors.xml` 与 `res/values-night/colors.xml`
+     * 成对定义）。原生侧一律走这里，不要写死十六进制色值，也不要只看系统深浅自己判断。
+     */
+    fun color(context: Context, resId: Int): Int = palette(context).getColor(resId)
+
     /** 按已保存的模式给窗口上色与设置图标明暗。需要 Activity，因此不做 JVM 单测。 */
     fun apply(activity: Activity) {
         applySafely(activity)

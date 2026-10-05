@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { TerminalSquare } from 'lucide-react'
+import { ShieldCheck, TerminalSquare } from 'lucide-react'
 import { t } from '../i18n'
 import type { RuntimeBridge } from '../platform/types'
 
@@ -41,5 +41,14 @@ export function DeviceShellSettings({ bridge, disabled }: { bridge: RuntimeBridg
     <p className="settings-note">{t('选择应用在独立副屏运行，可切换页面或小窗查看，并让 AI 截图、点击、滑动。需要 Shizuku 和设备支持；首次使用请先验证目标应用兼容性。')}</p>
     {screenError && <p role="alert">{screenError}</p>}
     {failed && <p role="alert">{t('无法读取或保存 AI Shell 授权状态')} <button type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
+    {/* 免责说明：只追加一小块，不动这个子区块的既有结构与文案。 */}
+    <div className="settings-subsection" aria-labelledby="accessibility-disclaimer">
+      <div className="section-title"><span className="section-icon"><ShieldCheck size={19} /></span>
+        <div><h3 id="accessibility-disclaimer">{t('免责说明')}</h3></div>
+      </div>
+      <p className="settings-note">{t('无障碍自动化是你自行开启、自行选择目标应用的能力；请只对自己有权操作的应用启用。')}</p>
+      <p className="settings-note">{t('自动化可能误点或误读界面，涉及支付、验证码与隐私信息的页面请自行确认，由此产生的后果由使用者承担。')}</p>
+      <p className="settings-note">{t('该能力只在本机生效：服务不做后台监听，也不批量上传界面；只有你让 AI 执行操作时，读取到的界面节点才会按需进入当前会话与所选模型服务。')}</p>
+    </div>
   </div>
 }

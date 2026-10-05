@@ -303,6 +303,20 @@ class MobileRuntimeController(
         }
     }
 
+    /**
+     * 回收 `stale-*` 残留（删除失败后被改名挪到一边的整份运行时目录），返回本次回收的份数与字节数。
+     *
+     * 为什么在这里多一条转发：版本管理页的「清理残留」需要一个模块外可见的入口，而
+     * [RuntimeInstaller.retireStaleResidue] 是 internal。转发的意义是不让插件层另建一份清扫器——
+     * 删除器、字节统计与记账回调必须始终只有 [installer] 那一份，否则两处将来会漂移。
+     * 它与安装、重置共用同一把生命周期锁，所以不会和一次正在进行的安装删到同一份残留；
+     * 单份删不掉不抛，在返回的 `failed` 与诊断日志（`phase=cleanup`）里如实体现。
+     */
+    internal fun retireStaleResidue(): RuntimeResidueSweepResult = lifecycleLock.withLock {
+        ensureOpen()
+        installer.retireStaleResidue()
+    }
+
     fun createTerminal(kind: String, columns: Int, rows: Int): String = lifecycleLock.withLock {
         ensureOpen()
         terminals.create(kind, columns, rows)

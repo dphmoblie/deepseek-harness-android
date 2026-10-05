@@ -11,6 +11,8 @@
 
     <color name="overlay_panel_background">#0F1317</color>
     <color name="overlay_panel_foreground">#F4F6F5</color>
+    <!-- 浮层里的次要文字（详情/说明）。取值与 Web 侧同名 CSS 变量 muted 一致。 -->
+    <color name="overlay_panel_muted_foreground">#9DABBB</color>
     <color name="overlay_panel_action_pressed">#2B3C35</color>
     <color name="overlay_secondary_background">#1D2B4A</color>
     <color name="overlay_secondary_background_disabled">#27352F</color>

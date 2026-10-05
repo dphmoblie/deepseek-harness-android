@@ -1,10 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 自适应图标：白底已从画面键出，背景层全透明，前景层是主体（缩进 66dp 安全区）。
-     源图是「主体 + 白底」，最外 1% 为纯白；直接按满幅铺开会把画面边缘连同主体一起被遮罩裁掉，
-     因此改为：只把**与画面边缘连通的**近白像素变透明（保留被主体围住的白，避免打洞），
-     再把主体缩到安全区内居中 —— 这样任何遮罩形状都只裁到透明区域。
-     传统图标（mipmap-*/ic_launcher.png）按圆角方形裁切、ic_launcher_round.png 按圆形裁切，
-     两者同样是透明背景 + 居中主体。 -->
+<!-- 自适应图标：背景层保持原样（@mipmap/ic_launcher_background，全透明），前景层是主体。
+
+     本次改动（用户反馈「图标小一圈」）的取舍，分三层说明：
+
+     1) 前景层比例：**刻意不放大**，按画布边长 62% 重绘（源图 src/assets/app-mark.png，
+        生成脚本 _probe\gen-android-icons.ps1 的 -ForegroundFill 0.62）。实测主体包围盒
+        60.6%x59.5%（432px 画布上的 (82,89)-(344,345)），旧图是 64.1%x62.7%
+        （(74,84)-(350,354)）——本次不升反降，因为 62% 是贴着安全区上限的取值：
+        自适应图标画布 108dp，系统只保证中心 66dp 直径圆（=画布的 61.1%）一定可见，
+        80% 之类的大比例在圆形/水滴/方形等遮罩下必然被裁掉外圈，而自适应图标本身
+        就是「整张画布被缩放进遮罩」的，加大前景并不会让桌面上显得更大，只会切掉边缘。
+        安全区上限就是 61.1%，本图 60.6% 已经贴到上限。
+        换算到实际可见区：前景主体挂在 72dp 视口里约占 90.9%，观感是「铺满」的。
+
+     2) 真正解决「小一圈」的是传统图标（不走自适应遮罩、不裁边，主体占比即所见占比）：
+        · mipmap-{m,h,xh,xxh,xxx}dpi/ic_launcher.png —— 由 app-mark 按画布 97% 重绘，
+          实测主体 94.8%x92.2%（旧图 76.0%x74.5%，就是那圈空白）；
+        · 同密度 ic_launcher_round.png —— 按画布 100% 重绘，实测主体 97.4%x95.3%。
+        两张图故意取不同比例（97% / 100%）：内容若完全相同，lint 会报 IconDuplicates
+        「unrelated icon files have identical contents」（改动前 5 个密度各报 2 条，共 10 条）。
+
+     3) 若真机上仍觉得前景偏小、且宿主遮罩够宽容，把脚本的 -ForegroundFill 调成 0.667
+        （=72dp 视口对应的零裁剪上限）重新生成即可；再往上就是必然裁边。 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@mipmap/ic_launcher_background" />
     <foreground android:drawable="@mipmap/ic_launcher_foreground" />

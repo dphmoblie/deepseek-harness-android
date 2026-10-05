@@ -356,7 +356,11 @@ class HarnessActivity : AppCompatActivity() {
 
         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
             val uri = request?.url ?: return blockedResponse()
-            return if (origin.allows(uri)) null else blockedResponse()
+            // 市场目录和缩略图由插件直接请求 HTTPS 资源站；交给 WebView 执行正常的 TLS/CORS 校验。
+            // 不添加本机 Authorization 或 Cookie，也不允许资源站替换会话主页面。
+            return if (origin.allows(uri) || HarnessPluginResources.allows(
+                    uri.toString(), request.method, request.isForMainFrame,
+                )) null else blockedResponse()
         }
 
         override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: android.net.http.SslError?) {

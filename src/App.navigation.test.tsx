@@ -59,6 +59,8 @@ const bridge = vi.hoisted(() => ({
   addRuntimeProgressListener: vi.fn(),
   addTerminalOutputListener: vi.fn(),
   addTerminalExitListener: vi.fn(),
+  // 首页内嵌的「会话工作区」一挂载就读一次会话列表：缺这个桩会让 effect 抛错并卸载整棵树。
+  listSessions: vi.fn(),
 }))
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
@@ -200,6 +202,8 @@ beforeEach(() => {
   bridge.saveSettings.mockImplementation((value: RuntimeSettingsUpdate) => Promise.resolve(value))
   bridge.startHarness.mockResolvedValue({ ...readyState, phase: 'running' })
   bridge.openHarness.mockResolvedValue(undefined)
+  // 导航用例不关心会话列表：默认「读得到，而且确实没有会话」。
+  bridge.listSessions.mockResolvedValue({ status: 'ready', sessions: [], truncated: false })
 })
 
 afterEach(() => {

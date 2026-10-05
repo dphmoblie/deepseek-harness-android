@@ -21,10 +21,11 @@ function fixture(t, answer, extras = {}) {
     return Response.json(await answer(request))
   })
   const tools = new Map()
+  const prompts = []
   let hook
-  apply({ systemPrompt: { section() {} }, tools: { register(tool) { tools.set(tool.name, tool) } },
+  apply({ systemPrompt: { section(value) { prompts.push(value) } }, tools: { register(tool) { tools.set(tool.name, tool) } },
     on(_name, listener) { hook = listener }, ...extras })
-  return { tools, requests, hook }
+  return { tools, requests, hook, prompts }
 }
 const ok = text => ({ ok: true, exitCode: 0, text, truncated: false, errorCode: null })
 const virtualSession = '00000000-1111-2222-3333-444444444444'
@@ -92,15 +93,21 @@ test('副屏动作允许中文文本，仍拒绝控制字符与超长输入', as
   assert.equal(f.requests.length, 2)
 })
 
-test('副屏帧率配置只接受四种预览模式', async t => {
+test('副屏帧率配置接受六种预览模式', async t => {
   const f = fixture(t, () => ok('{"previewMode":"realtime-30fps"}'))
   const tool = f.tools.get('mobile_virtual_screen_config')
   await tool.execute({ sessionId: virtualSession, previewMode: '30fps' }, {})
-  assert.deepEqual(f.requests, [{ command: 'virtualScreenAction', param: JSON.stringify({ sessionId: virtualSession, action: 'config', previewMode: '30fps' }) }])
+  await tool.execute({ sessionId: virtualSession, previewMode: '120fps' }, {})
+  await tool.execute({ sessionId: virtualSession, previewMode: '185fps' }, {})
+  assert.deepEqual(f.requests, [
+    { command: 'virtualScreenAction', param: JSON.stringify({ sessionId: virtualSession, action: 'config', previewMode: '30fps' }) },
+    { command: 'virtualScreenAction', param: JSON.stringify({ sessionId: virtualSession, action: 'config', previewMode: '120fps' }) },
+    { command: 'virtualScreenAction', param: JSON.stringify({ sessionId: virtualSession, action: 'config', previewMode: '185fps' }) },
+  ])
   for (const previewMode of ['60', 'realtime', 'limited-fps', '']) {
     await assert.rejects(tool.execute({ sessionId: virtualSession, previewMode }, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
   }
-  assert.equal(f.requests.length, 1)
+  assert.equal(f.requests.length, 3)
 })
 
 test('副屏目标切换只接受完整包名，不发送显示编号', async t => {
@@ -114,6 +121,66 @@ test('副屏目标切换只接受完整包名，不发送显示编号', async t 
   assert.equal(f.requests.length, 1)
 })
 
+test('副屏目标切换超时保留语义准确的新错误码，不伪装成副屏不可用', async t => {
+  // 切换是「有界轮询确认」：超时必须原样报 VIRTUAL_SCREEN_TARGET_TIMEOUT，
+  // 被改写成 VIRTUAL_SCREEN_UNAVAILABLE 会让模型以为副屏功能不存在，从而放弃重试。
+  const f = fixture(t, () => ({ ok: false, exitCode: 1, text: '副屏请求未完成，请检查会话与目标应用状态', truncated: false, errorCode: 'VIRTUAL_SCREEN_TARGET_TIMEOUT' }))
+  const tool = f.tools.get('mobile_virtual_screen_target')
+  await assert.rejects(tool.execute({ sessionId: virtualSession, packageName: 'com.tencent.mm' }, {}), error => {
+    assert.match(error.message, /VIRTUAL_SCREEN_TARGET_TIMEOUT/u)
+    assert.doesNotMatch(error.message, /VIRTUAL_SCREEN_UNAVAILABLE/u)
+    return true
+  })
+  assert.equal(f.requests.length, 1)
+  // 工具描述与系统提示都要把这个码讲清楚，否则模型只会把它当成又一次「副屏不可用」。
+  assert.match(tool.description, /VIRTUAL_SCREEN_TARGET_TIMEOUT/u)
+  assert.match(tool.description, /仍然正常/u)
+  assert.equal(f.prompts.length, 1)
+  assert.match(f.prompts[0].text, /VIRTUAL_SCREEN_TARGET_TIMEOUT/u)
+  assert.match(f.prompts[0].text, /不要当成副屏不可用/u)
+})
+
+test('副屏文本输入只在显式 true 时才带 submit，写入失败不会按回车', async t => {
+  const f = fixture(t, () => ok('{"method":"SET_TEXT","chars":5,"submit":true,"steps":"无障碍直接写入成功"}'))
+  const tool = f.tools.get('mobile_virtual_screen_action')
+  await tool.execute({ sessionId: virtualSession, action: 'text', text: 'hello', submit: true }, {})
+  await tool.execute({ sessionId: virtualSession, action: 'text', text: 'hello', submit: false }, {})
+  await tool.execute({ sessionId: virtualSession, action: 'text', text: 'hello' }, {})
+  // 只认显式布尔量：缺省与 false 都不把 submit 发给设备端，字符串 'true' 这类模糊输入直接拒绝。
+  assert.deepEqual(f.requests.map(request => JSON.parse(request.param)), [
+    { sessionId: virtualSession, action: 'text', text: 'hello', submit: true },
+    { sessionId: virtualSession, action: 'text', text: 'hello', submit: false },
+    { sessionId: virtualSession, action: 'text', text: 'hello' },
+  ])
+  for (const submit of ['true', 1, 0, null, {}]) {
+    await assert.rejects(tool.execute({ sessionId: virtualSession, action: 'text', text: 'hello', submit }, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
+  }
+  assert.equal(f.requests.length, 3)
+})
+
+test('副屏文本写不进去时保留 VIRTUAL_SCREEN_TEXT_UNSUPPORTED，不伪装成副屏不可用', async t => {
+  // 回退链（无障碍直接写入 → 聚焦后写入 → 剪贴板 → 纯 ASCII 按键兜底）全失败时才报这个码。
+  // 被改写成 VIRTUAL_SCREEN_UNAVAILABLE 会让模型以为副屏功能不存在，从而放弃「在副屏上手动输入」这一步。
+  const f = fixture(t, () => ({ ok: false, exitCode: 1, text: '副屏请求未完成，请检查会话与目标应用状态', truncated: false, errorCode: 'VIRTUAL_SCREEN_TEXT_UNSUPPORTED' }))
+  const tool = f.tools.get('mobile_virtual_screen_action')
+  await assert.rejects(tool.execute({ sessionId: virtualSession, action: 'text', text: '你好，微信' }, {}), error => {
+    assert.match(error.message, /VIRTUAL_SCREEN_TEXT_UNSUPPORTED/u)
+    assert.doesNotMatch(error.message, /VIRTUAL_SCREEN_UNAVAILABLE/u)
+    return true
+  })
+  assert.equal(f.requests.length, 1)
+  // 工具说明与系统提示都要讲清这个码的语义，否则模型只会当成又一次「副屏不可用」。
+  // 回退链的逐级细节写在 text 参数说明与系统提示里，这里只钉住「码 + 该干什么」两句。
+  assert.match(tool.description, /VIRTUAL_SCREEN_TEXT_UNSUPPORTED|文本输入/u)
+  const { text, submit } = tool.parameters.properties
+  assert.match(text.description, /VIRTUAL_SCREEN_TEXT_UNSUPPORTED/u)
+  assert.match(text.description, /不是副屏不可用/u)
+  assert.match(submit.description, /写入失败时不会按回车/u)
+  assert.equal(f.prompts.length, 1)
+  assert.match(f.prompts[0].text, /VIRTUAL_SCREEN_TEXT_UNSUPPORTED/u)
+  assert.match(f.prompts[0].text, /不等于 VIRTUAL_SCREEN_UNAVAILABLE/u)
+})
+
 test('副屏节点树默认深度 4，只接受 1～8', async t => {
   const f = fixture(t, () => ok('{"available":false,"reason":"ACCESSIBILITY_DISABLED"}'))
   const tool = f.tools.get('mobile_virtual_screen_tree')
@@ -125,6 +192,101 @@ test('副屏节点树默认深度 4，只接受 1～8', async t => {
     await assert.rejects(tool.execute({ sessionId: virtualSession, maxDepth }, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
   }
   assert.equal(f.requests.length, 2)
+})
+
+test('副屏手势只回传受控的 {x,y} 点列，点数、坐标与时长都在入口拦下', async t => {
+  const f = fixture(t, () => ok('{"active":true}'))
+  const tool = f.tools.get('mobile_virtual_screen_action')
+  await tool.execute({ sessionId: virtualSession, action: 'gesture', points: [{ x: 10, y: 20 }, { x: 300, y: 400 }], durationMs: 300 }, {})
+  assert.deepEqual(f.requests, [{
+    command: 'virtualScreenAction',
+    param: JSON.stringify({ sessionId: virtualSession, action: 'gesture', points: [{ x: 10, y: 20 }, { x: 300, y: 400 }], durationMs: 300 }),
+  }])
+  // 省略 durationMs 时不替调用方补默认值：设备端自己取 300，两边只保留一个默认值来源。
+  await tool.execute({ sessionId: virtualSession, action: 'gesture', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }, {})
+  assert.equal(JSON.parse(f.requests[1].param).durationMs, undefined)
+  for (const request of [
+    { sessionId: virtualSession, action: 'gesture', points: [{ x: 0, y: 0 }] },
+    { sessionId: virtualSession, action: 'gesture', points: Array.from({ length: 65 }, () => ({ x: 0, y: 0 })) },
+    { sessionId: virtualSession, action: 'gesture', points: 'x' },
+    { sessionId: virtualSession, action: 'gesture', points: [{ x: 0, y: 0 }, { x: 0.5, y: 1 }] },
+    { sessionId: virtualSession, action: 'gesture', points: [{ x: 0, y: 0 }, { x: -1, y: 1 }] },
+    { sessionId: virtualSession, action: 'gesture', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }], durationMs: 49 },
+    { sessionId: virtualSession, action: 'gesture', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }], durationMs: 5001 },
+    { sessionId: virtualSession, action: 'gesture', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }], durationMs: 300.5 },
+  ]) await assert.rejects(tool.execute(request, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
+  assert.equal(f.requests.length, 2)
+  assert.equal(tool.parameters.properties.points.type, 'array')
+  assert.equal(tool.parameters.properties.points.items.properties.x.type, 'integer')
+})
+
+test('副屏触摸直传只放行 down/move/up/cancel，坐标仍受控', async t => {
+  const f = fixture(t, () => ok('{"active":true}'))
+  const tool = f.tools.get('mobile_virtual_screen_action')
+  for (const phase of ['down', 'move', 'up', 'cancel']) {
+    await tool.execute({ sessionId: virtualSession, action: 'touch', phase, x: 5, y: 6 }, {})
+  }
+  assert.deepEqual(f.requests.map(request => JSON.parse(request.param)), [
+    { sessionId: virtualSession, action: 'touch', phase: 'down', x: 5, y: 6 },
+    { sessionId: virtualSession, action: 'touch', phase: 'move', x: 5, y: 6 },
+    { sessionId: virtualSession, action: 'touch', phase: 'up', x: 5, y: 6 },
+    { sessionId: virtualSession, action: 'touch', phase: 'cancel', x: 5, y: 6 },
+  ])
+  for (const request of [
+    { sessionId: virtualSession, action: 'touch', phase: 'press', x: 5, y: 6 },
+    { sessionId: virtualSession, action: 'touch', phase: 'down', x: 5.5, y: 6 },
+    { sessionId: virtualSession, action: 'touch', phase: 'down', x: 1440, y: 0 },
+  ]) await assert.rejects(tool.execute(request, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
+  assert.equal(f.requests.length, 4)
+})
+
+test('副屏启动应用三选一：组件、包名与白名单链接各走一种参数形态', async t => {
+  const f = fixture(t, () => ok('{"active":true}'))
+  const tool = f.tools.get('mobile_virtual_screen_action')
+  await tool.execute({ sessionId: virtualSession, action: 'launch', component: 'com.example.app/.MainActivity' }, {})
+  await tool.execute({ sessionId: virtualSession, action: 'launch', package: 'com.example.app' }, {})
+  await tool.execute({ sessionId: virtualSession, action: 'launch', uri: 'https://example.com/a?b=1' }, {})
+  assert.deepEqual(f.requests.map(request => JSON.parse(request.param)), [
+    { sessionId: virtualSession, action: 'launch', component: 'com.example.app/.MainActivity' },
+    { sessionId: virtualSession, action: 'launch', package: 'com.example.app' },
+    { sessionId: virtualSession, action: 'launch', uri: 'https://example.com/a?b=1' },
+  ])
+  for (const request of [
+    { sessionId: virtualSession, action: 'launch' },
+    { sessionId: virtualSession, action: 'launch', component: 'com.example.app/.MainActivity', package: 'com.example.app' },
+    { sessionId: virtualSession, action: 'launch', package: 'com.example.app', uri: 'https://example.com' },
+    { sessionId: virtualSession, action: 'launch', component: 'com.example.app' },
+    { sessionId: virtualSession, action: 'launch', package: '1com.example' },
+    { sessionId: virtualSession, action: 'launch', uri: 'file:///sdcard/secret' },
+    { sessionId: virtualSession, action: 'launch', uri: 'https://example.com/a;id' },
+    { sessionId: virtualSession, action: 'launch', uri: 'https://example.com/a b' },
+    { sessionId: virtualSession, action: 'launch', uri: `https://example.com/${'a'.repeat(2048)}` },
+  ]) await assert.rejects(tool.execute(request, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
+  assert.equal(f.requests.length, 3)
+})
+
+test('副屏 follow 只发会话；没有可跟随目标时保留 FOLLOW_NONE，不伪装成副屏不可用', async t => {
+  let payload = ok('{"active":true}')
+  const f = fixture(t, () => payload)
+  const tool = f.tools.get('mobile_virtual_screen_action')
+  await tool.execute({ sessionId: virtualSession, action: 'follow' }, {})
+  assert.deepEqual(f.requests, [{ command: 'virtualScreenAction', param: JSON.stringify({ sessionId: virtualSession, action: 'follow' }) }])
+  // 「主屏没有可跟随的应用」是正常结论：改写成 VIRTUAL_SCREEN_UNAVAILABLE 会让模型以为副屏坏了。
+  payload = { ok: false, exitCode: 1, text: '副屏请求未完成，请检查会话与目标应用状态', truncated: false, errorCode: 'VIRTUAL_SCREEN_FOLLOW_NONE' }
+  await assert.rejects(tool.execute({ sessionId: virtualSession, action: 'follow' }, {}), error => {
+    assert.match(error.message, /VIRTUAL_SCREEN_FOLLOW_NONE/u)
+    assert.doesNotMatch(error.message, /VIRTUAL_SCREEN_UNAVAILABLE/u)
+    return true
+  })
+  const { action, phase } = tool.parameters.properties
+  for (const name of ['touch', 'gesture', 'launch', 'follow']) assert.ok(action.enum.includes(name), name)
+  assert.deepEqual(phase.enum, ['down', 'move', 'up', 'cancel'])
+  // 说明面必须点明「在这块副屏上」与「拉回副屏」，否则模型会改用主屏工具。
+  assert.match(tool.description, /launch 是「在这块副屏上」/u)
+  assert.match(tool.description, /拉回副屏/u)
+  assert.equal(f.prompts.length, 1)
+  assert.match(f.prompts[0].text, /gesture/u)
+  assert.match(f.prompts[0].text, /VIRTUAL_SCREEN_FOLLOW_NONE/u)
 })
 
 test('Shell 原样传送多行中文脚本并保留非零退出码', async t => {

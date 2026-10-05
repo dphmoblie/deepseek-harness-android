@@ -21,6 +21,10 @@
   --header-bg: rgb(255 255 255 / 96%);
   --ink: #17202b;
   --muted: #667181;
+  /* 背景图之上压的一层暗色遮罩：同一张照片在深浅两套主题下都要保证文字可读。 */
+  --bg-scrim: rgb(8 14 24 / 20%);
+  /* 卡片、抽屉与分隔线的投影颜色。深色底需要更实的阴影才分得出层级。 */
+  --shadow-color: rgb(20 29 40 / 5%);
   --field-label: #475362;
   --icon-muted: #8893a1;
   --brand-bg: #17202b;
@@ -114,6 +118,9 @@
   --header-bg: rgb(15 19 23 / 96%);
   --ink: #e8eef5;
   --muted: #9dabbb;
+  /* 深色主题下遮罩略重（明亮照片上仍要托得住浅色文字），阴影用纯黑而不是深蓝灰。 */
+  --bg-scrim: rgb(8 14 24 / 32%);
+  --shadow-color: rgb(0 0 0 / 45%);
   --field-label: #b9c5d3;
   --icon-muted: #8b98a7;
   --brand-bg: #2a3440;
@@ -328,9 +335,11 @@ button:disabled {
   overflow: hidden;
 }
 .app-background { position: fixed; inset: 0; z-index: -1; overflow: hidden; background: var(--bg); }
-.app-background::after { content: ''; position: absolute; inset: 0; background: rgb(8 14 24 / 20%); pointer-events: none; }
+.app-background::after { content: ''; position: absolute; inset: 0; background: var(--bg-scrim); pointer-events: none; }
 .app-background img, .app-background video { width: 100%; height: 100%; object-fit: cover; }
-.settings-section, .runtime-overview, .management-row, .management-service, .detail-section, .launch-panel { background: color-mix(in srgb, var(--card-color) var(--card-opacity), transparent); backdrop-filter: blur(var(--card-blur)); color: var(--card-ink); }
+/* `--card-*` 由 src/appearance.ts 写在根元素上（用户自定义卡片配色）。这里保留令牌默认值：
+   变量未定义时 color-mix() 会让整条声明在计算值阶段失效，卡片底色会直接掉成透明。 */
+.settings-section, .runtime-overview, .management-row, .management-service, .detail-section, .launch-panel { background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent); backdrop-filter: blur(var(--card-blur, 0px)); color: var(--card-ink, var(--ink)); }
 .settings-section p, .management-copy small, .detail-section p { color: var(--card-muted); }
 
 .app-frame {
@@ -360,7 +369,7 @@ button:disabled {
   border-right: 1px solid var(--line);
   background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 92%), transparent);
   backdrop-filter: blur(var(--card-blur, 0px));
-  box-shadow: 6px 0 24px rgb(20 29 40 / 4%);
+  box-shadow: 6px 0 24px var(--shadow-color);
 }
 
 .sidebar-mark,
@@ -433,7 +442,7 @@ button:disabled {
   padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--card-color, var(--header-bg)) var(--card-opacity, 92%), transparent);
-  box-shadow: 0 8px 28px rgb(20 29 40 / 5%);
+  box-shadow: 0 8px 28px var(--shadow-color);
   backdrop-filter: blur(18px);
 }
 
@@ -625,7 +634,7 @@ button:disabled {
   font-size: 0.875rem;
   font-weight: var(--weight-semibold);
   cursor: pointer;
-  box-shadow: 0 1px 1px rgb(20 29 40 / 5%);
+  box-shadow: 0 1px 1px var(--shadow-color);
   transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
 }
 
@@ -2848,10 +2857,15 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 
 /* 分类完整换行，窄屏和放大字体时不隐藏入口，也不依赖横向滑动发现分类。 */
 .settings-categories { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+/* 分类芯片与同页的卡片共用同一套卡片令牌（`--card-*` 由 src/appearance.ts 写在根元素上）：
+   用户改「卡片颜色/不透明度/模糊」时芯片跟着一起变，不会再出现「卡片换了色、芯片还是老底色」。
+   令牌没设过时回落到主题基础色（--surface/--ink），所以没自定义卡片配色的环境下外观与从前一致。 */
 .settings-categories button {
   max-width: 100%; min-height: 44px; padding: 8px 12px;
   border: 1px solid var(--line); border-radius: var(--radius-control);
-  background: var(--surface); color: var(--ink); font: inherit;
+  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  backdrop-filter: blur(var(--card-blur, 0px));
+  color: var(--card-ink, var(--ink)); font: inherit;
   font-size: 0.8125rem; line-height: 1.5; overflow-wrap: anywhere; cursor: pointer;
 }
 .settings-categories button[aria-selected="true"] { background: var(--blue-soft); color: var(--blue); border-color: var(--blue); }

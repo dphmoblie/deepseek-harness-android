@@ -28,6 +28,7 @@ class DeviceShellUserService() : IDeviceShellService.Stub() {
     override fun virtualScreenState(): String = asService { virtualScreen.state().toString() }
     override fun virtualScreenAction(parameters: String): String = asService { virtualScreen.action(parameters) }
     override fun virtualScreenSnapshot(sessionId: String): android.os.ParcelFileDescriptor = asService { virtualScreen.snapshot(sessionId) }
+    override fun virtualScreenFrame(sessionId: String): android.hardware.HardwareBuffer = asService { virtualScreen.frame(sessionId) }
     @Suppress("UNUSED_PARAMETER")
     constructor(context: Context) : this()
 

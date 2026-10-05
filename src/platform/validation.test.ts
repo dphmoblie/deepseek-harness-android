@@ -27,6 +27,7 @@ import {
   validateRuntimeInstallResult,
   validateRuntimeProgress,
   validateRuntimeReleaseList,
+  validateRuntimeSessionListResult,
   validateRuntimeSessionSnapshotRestoreResult,
   validateRuntimeSessionSnapshotState,
   validateRuntimeSource,
@@ -1447,6 +1448,116 @@ describe('运行时会话快照校验', () => {
       expect(() => validateRuntimeInstallResult({
         autoSnapshot: { status: 'created', snapshotId: 'snap-1700000002000-00000003', evictedIds },
       }), JSON.stringify(evictedIds)).toThrow('运行时会话快照标识格式无效')
+    }
+  })
+})
+
+describe('会话列表元数据校验', () => {
+  // 原生侧真跑出来的「ready」载荷（访客脚本 → Kotlin → 桥接），逐字照抄：
+  // 手写近似值会让校验与真实契约悄悄漂移。
+  const liveReady = {
+    status: 'ready',
+    sessions: [
+      { id: 'aaaa1111-bbbb-4ccc-8ddd-eeee22223333', title: '整理运行时会话列表', updatedAt: 1770000000000 },
+      { id: 'local-1700000000000', title: '', updatedAt: 1769999999000 },
+    ],
+    truncated: false,
+  }
+  const ready = (overrides: Record<string, unknown> = {}) => ({ ...liveReady, ...overrides })
+  const session = (overrides: Record<string, unknown> = {}) => ({ ...liveReady.sessions[0], ...overrides })
+
+  it('接受原生侧真跑出来的列表，字段逐字保留', () => {
+    expect(validateRuntimeSessionListResult(liveReady)).toEqual(liveReady)
+  })
+
+  it('只保留元数据三个键：正文、片段与路径混进载荷也到不了界面', () => {
+    const tainted = ready({
+      sessions: [session({
+        body: 'ZZ-CONVERSATION-BODY-SENTINEL-ZZ',
+        snippet: 'ZZ-CONVERSATION-BODY-SENTINEL-ZZ',
+        cwd: '/root/secret-project',
+        message: 'secret',
+      })],
+    })
+
+    const parsed = validateRuntimeSessionListResult(tainted)
+
+    expect(Object.keys(parsed.status === 'ready' ? parsed.sessions[0] : {})).toEqual(['id', 'title', 'updatedAt'])
+    expect(JSON.stringify(parsed)).not.toContain('ZZ-CONVERSATION-BODY-SENTINEL-ZZ')
+    expect(JSON.stringify(parsed)).not.toContain('secret-project')
+  })
+
+  it('ready + 空列表是合法的：那就是「确实没有会话」', () => {
+    expect(validateRuntimeSessionListResult(ready({ sessions: [] })))
+      .toEqual({ status: 'ready', sessions: [], truncated: false })
+    // 空列表却标记截断只是奇怪，不算非法：截断标记是原生侧的事实陈述，不该被本地改写。
+    expect(validateRuntimeSessionListResult(ready({ sessions: [], truncated: true })).status).toBe('ready')
+  })
+
+  it('unavailable 的三种原因都合法，别的原因一律报错', () => {
+    for (const reason of ['RUNTIME_NOT_INSTALLED', 'SESSION_CATALOG_TIMEOUT', 'SESSION_CATALOG_FAILED']) {
+      expect(validateRuntimeSessionListResult({ status: 'unavailable', reason })).toEqual({ status: 'unavailable', reason })
+    }
+    for (const reason of ['', 'FAILED', 'SESSION_CATALOG_UNREADABLE', 7, null, undefined]) {
+      expect(() => validateRuntimeSessionListResult({ status: 'unavailable', reason }), String(reason))
+        .toThrow('会话列表读取失败原因无效')
+    }
+  })
+
+  it('状态与整体形态：未知状态与不是对象的值都报错', () => {
+    for (const status of ['loading', 'READY', '', null, undefined]) {
+      expect(() => validateRuntimeSessionListResult({ status, sessions: [] }), String(status)).toThrow('会话列表状态无效')
+    }
+    for (const value of [null, undefined, 'ready', 7, []]) {
+      expect(() => validateRuntimeSessionListResult(value), String(value)).toThrow('会话列表格式无效')
+    }
+  })
+
+  it('条数上限、数组形态与截断标记', () => {
+    const many = Array.from({ length: 51 }, (_, index) => session({ id: `session-${index}` }))
+
+    expect(() => validateRuntimeSessionListResult(ready({ sessions: many }))).toThrow('会话列表格式无效')
+    expect(validateRuntimeSessionListResult(ready({ sessions: many.slice(0, 50) })).status).toBe('ready')
+    for (const [label, sessions] of [['字符串', 'none'], ['对象', {}], ['null', null], ['undefined', undefined]] as const) {
+      expect(() => validateRuntimeSessionListResult(ready({ sessions })), label).toThrow('会话列表格式无效')
+    }
+    for (const truncated of [undefined, null, 'false', 0, 1]) {
+      expect(() => validateRuntimeSessionListResult(ready({ truncated })), String(truncated))
+        .toThrow('会话列表截断标记格式无效')
+    }
+  })
+
+  it('会话标识：路径、控制字符、空白、点开头与超长都报错', () => {
+    for (const id of ['../../etc/passwd', 'sessions/1', 'a\\b', 'a b', '', '.hidden', 'x'.repeat(201), 7, null]) {
+      expect(() => validateRuntimeSessionListResult(ready({ sessions: [session({ id })] })), String(id))
+        .toThrow('会话标识格式无效')
+    }
+    // 用「危险字符」黑名单而不是窄白名单：会话标识由 dsh 生成、形态可能变化，合法的一律照收。
+    for (const id of ['aaaa1111-bbbb-4ccc-8ddd-eeee22223333', 'local-1700000000000', 'session_v4.test~002E']) {
+      expect(validateRuntimeSessionListResult(ready({ sessions: [session({ id })] })).status).toBe('ready')
+    }
+    for (const entry of [null, 'session', 7, []]) {
+      expect(() => validateRuntimeSessionListResult(ready({ sessions: [entry] })), String(entry)).toThrow('会话条目格式无效')
+    }
+  })
+
+  it('标题：非字符串、控制字符与超长都报错', () => {
+    for (const title of [7, null, undefined, 'a\u0000b', 'a\nb', 'x'.repeat(201)]) {
+      expect(() => validateRuntimeSessionListResult(ready({ sessions: [session({ title })] })), String(title))
+        .toThrow('会话标题格式无效')
+    }
+    // 空标题合法：读不到标题是事实，界面显示「未命名会话」，不是编造。
+    expect(validateRuntimeSessionListResult(ready({ sessions: [session({ title: '' })] })).status).toBe('ready')
+    expect(validateRuntimeSessionListResult(ready({ sessions: [session({ title: 'x'.repeat(200) })] })).status).toBe('ready')
+  })
+
+  it('更新时间：负数、小数、非数、字符串与越界都报错', () => {
+    for (const updatedAt of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 4_102_444_800_001, '1770000000000', null, undefined]) {
+      expect(() => validateRuntimeSessionListResult(ready({ sessions: [session({ updatedAt })] })), String(updatedAt))
+        .toThrow('会话更新时间格式无效')
+    }
+    for (const updatedAt of [0, 4_102_444_800_000]) {
+      expect(validateRuntimeSessionListResult(ready({ sessions: [session({ updatedAt })] })).status).toBe('ready')
     }
   })
 })

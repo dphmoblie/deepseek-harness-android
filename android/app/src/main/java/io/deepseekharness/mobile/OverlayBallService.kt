@@ -913,17 +913,17 @@ class OverlayBallService : Service() {
         setOnClickListener { action() }
     }
 
-    /** The overlay uses the same saved theme as the full-size native container. */
-    private fun overlayPalette(): Context {
-        val dark = AppThemePreference.isDark(AppThemePreference.current(this), AppThemePreference.systemNight(this))
-        val configuration = Configuration(resources.configuration).apply {
-            uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
-                if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
-        }
-        return createConfigurationContext(configuration)
-    }
+    /**
+     * 悬浮球与二级菜单取颜色、取 drawable 用的资源上下文。
+     *
+     * 直接复用 [AppThemePreference.palette]（不再在这里手抄一遍覆写 uiMode 的逻辑）：
+     * 只有按**已保存的应用主题**覆写过 `uiMode`，`R.color.*` 才会解析成用户选的那一套；
+     * 否则「应用选了浅色、系统停在深色」时悬浮球菜单会拿到系统主题的颜色，看起来就是没跟主题走。
+     */
+    private fun overlayPalette(): Context = AppThemePreference.palette(this)
 
-    private fun overlayColor(resId: Int): Int = overlayPalette().getColor(resId)
+    /** 取一个随应用主题变化的颜色令牌（`res/values{,-night}/colors.xml`）。 */
+    private fun overlayColor(resId: Int): Int = AppThemePreference.color(this, resId)
 
     /**
      * 小窗的初始尺寸。

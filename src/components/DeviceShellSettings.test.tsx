@@ -48,4 +48,16 @@ describe('AI Shell 持续授权', () => {
     await waitFor(() => expect(toggle).toBeEnabled())
     expect(get).toHaveBeenCalledTimes(2)
   })
+
+  it('给出无障碍自动化的免责说明，且不依赖读取授权状态是否成功', () => {
+    const bridge = { getDeviceShellAccess: vi.fn().mockResolvedValue({ enabled: false }) } as unknown as RuntimeBridge
+    const { container } = render(<DeviceShellSettings bridge={bridge} disabled={false} />)
+    const disclaimer = container.querySelector('[aria-labelledby="accessibility-disclaimer"]')
+    expect(disclaimer).not.toBeNull()
+    expect(disclaimer?.textContent).toContain('免责说明')
+    // 三件事必须说全：只对自己有权操作的应用启用、误点与敏感页面的风险、后果自负。
+    expect(disclaimer?.textContent).toContain('请只对自己有权操作的应用启用')
+    expect(disclaimer?.textContent).toContain('涉及支付、验证码与隐私信息')
+    expect(disclaimer?.textContent).toContain('由使用者承担')
+  })
 })

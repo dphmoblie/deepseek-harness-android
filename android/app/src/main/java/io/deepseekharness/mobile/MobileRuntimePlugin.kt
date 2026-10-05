@@ -54,6 +54,7 @@ import io.deepseekharness.mobile.runtime.RuntimePhase
 import io.deepseekharness.mobile.runtime.RuntimeAutoSnapshotOutcome
 import io.deepseekharness.mobile.runtime.RuntimeAutoSnapshotStatus
 import io.deepseekharness.mobile.runtime.RuntimeReleaseCatalog
+import io.deepseekharness.mobile.runtime.RuntimeResidueInventory
 import io.deepseekharness.mobile.runtime.RuntimeSelfCheckPolicy
 import io.deepseekharness.mobile.runtime.RuntimeSessionSnapshotCodes
 import io.deepseekharness.mobile.runtime.RuntimeSettings
@@ -270,6 +271,12 @@ class MobileRuntimePlugin : Plugin() {
      */
     @Volatile
     private var pendingBiometricResetPrompt: BiometricPrompt? = null
+
+    /**
+     * 壳页「会话工作区」的会话元数据读取器（见 [SessionCatalog]）。
+     * 懒建：没打开过会话工作区就不付 profile 解析与脚本投放的代价。
+     */
+    private val sessionCatalog: SessionCatalog by lazy { SessionCatalog(context, controller.store) }
 
     companion object {
         private const val DEVICE_COMMAND_TIMEOUT_MS = 60_000L
@@ -926,6 +933,23 @@ class MobileRuntimePlugin : Plugin() {
      */
     private fun failureCode(error: Throwable): String =
         (error as? RuntimeFailure)?.code?.takeIf { code -> code.matches(CONTROLLED_CODE) } ?: "INTERNAL_ERROR"
+
+    /**
+     * 权限：应用内桥接。
+     * 会话工作区：只回传**元数据**（会话标识、标题、最近更新时间）与是否截断。
+     *
+     * 标题来自会话日志里最后一条 `session/title` 事件（没有标题事件时按宿主同款规则从首条
+     * 用户消息折叠出回退标题）；**正文、消息片段、`cwd` 与会话文件路径一律不进 WebView**，
+     * 也不写任何浏览器存储。读取走访客内既有执行通道，凭据不参与（见 [SessionCatalog]）。
+     *
+     * 读不到时回受控错误字段（`RUNTIME_NOT_INSTALLED`/`SESSION_CATALOG_TIMEOUT`/
+     * `SESSION_CATALOG_FAILED`），并**resolve**而不是 reject：壳页据此显示空态 + 一句诚实说明，
+     * 绝不把一次失败显示成「暂无会话」。
+     */
+    @PluginMethod
+    fun sessionList(call: PluginCall) {
+        execute(call) { sessionCatalog.list() }
+    }
 
     /**
      * 会话快照总览。
@@ -2056,6 +2080,49 @@ class MobileRuntimePlugin : Plugin() {
             }
         }
         call.resolve(JSObject().put("supported", true).put("granted", allFilesAccessGranted()))
+    }
+
+    /**
+     * 运行时占用查询：运行时目录里还有多少份可回收的 `stale-*` 残留、合计多少字节。
+     *
+     * 只读：不停止运行时，也不删任何东西。载荷只有份数、字节数与一个布尔量
+     * （`truncated`：条目预算提前停止，体积只是下界），**不含路径、目录名或文件名**——
+     * 残留目录名里带版本号、时间戳与 uuid，没有理由把它交给界面或日志。
+     * 读不到也绝不抛：按 0 份 + `truncated=true` 回，界面显示的是「读不到」而不是「确认没有」。
+     */
+    @PluginMethod
+    fun getRuntimeResidue(call: PluginCall) {
+        execute(call) { residuePayload().status().toBridgeObject() }
+    }
+
+    /**
+     * 运行时占用清理：回收 `stale-*` 残留（删除失败后被改名挪到一边的整份运行时目录）。
+     *
+     * 走 [MobileRuntimeController.retireStaleResidue]，与安装收尾、显式重置共用同一套删除语义与
+     * 记账（每份一条 `phase=cleanup` 诊断行），插件层不另建清扫器。返回的是**这一次尝试**的份数与
+     * 字节数：界面想知道「还剩几份」必须重新查一次 [getRuntimeResidue]，不许拿 cleaned/failed 自算。
+     * 单份删不掉不算失败，`failed` 与 `message` 如实体现，绝不抛出。
+     */
+    @PluginMethod
+    fun cleanRuntimeResidue(call: PluginCall) {
+        execute(call) { residuePayload().clean().toBridgeObject() }
+    }
+
+    /** 查询与清理共用一份整形：盘点读运行时父目录，清理走控制器入口（两者都在 runtime 模块内可见）。 */
+    private fun residuePayload() = RuntimeResiduePayload(
+        report = { RuntimeResidueInventory(controller.store.runtimeParent).report() },
+        sweep = { controller.retireStaleResidue() },
+    )
+
+    /**
+     * 把纯 JVM 载荷（数字 / 布尔 / 受控中文说明）搬到 Capacitor 的 `JSObject` 上：只有桥层认识
+     * Capacitor 类型，`RuntimeResiduePayload` 因此能在没有 Android 的单测里直接跑
+     * （与文件顶部 `JSONObject.toJsObject()` 同一分工）。
+     */
+    private fun Map<String, Any>.toBridgeObject(): JSObject {
+        val payload = JSObject()
+        forEach { (key, value) -> payload.put(key, value) }
+        return payload
     }
 
     private fun mediaPermissionGranted(): Boolean = when {

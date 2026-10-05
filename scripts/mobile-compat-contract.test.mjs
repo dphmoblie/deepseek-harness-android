@@ -764,7 +764,23 @@ test('Harness WebView serves the system file chooser and keeps page-initiated lo
   assert.match(activity, /deliverFileChooserResult\(emptyList\(\)\)[\s\S]{0,400}?webView\.webChromeClient = null/)
 
   // 页面自身发起的非回环请求仍然被拦成 403：放开 content 访问不等于放开任意 provider 读取。
-  assert.match(activity, /return if \(origin\.allows\(uri\)\) null else blockedResponse\(\)/)
+  // 自「修复插件市场皮肤资源加载」起，市场只读资源走了严格白名单，允许条件因此从单条回环
+  // 判定扩展为「本机回环 或 白名单」，但兜底分支必须仍然是 blockedResponse()。
+  assert.match(activity, /return if \(origin\.allows\(uri\)[\s\S]{0,240}?\) null else blockedResponse\(\)/)
+  assert.match(activity, /HarnessPluginResources\.allows\(/)
+})
+
+test('插件市场只读资源必须落在严格主机白名单内', async () => {
+  const resources = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/HarnessPluginResources.kt',
+  ), 'utf8')
+
+  // 主机、端口、方法、顶层导航与用户信息逐项限制，避免把本机凭据转发给任意网址。
+  assert.match(resources, /uri\.host\.equals\("dsh-market\.com", ignoreCase = true\)/)
+  assert.match(resources, /uri\.port in setOf\(-1, 443\)/)
+  assert.match(resources, /mainFrame \|\| method !in setOf\("GET", "HEAD", "OPTIONS"\)/)
+  assert.match(resources, /uri\.rawUserInfo == null/)
 })
 
 test('runtime packaging leaves the version-matched official client immutable', async () => {

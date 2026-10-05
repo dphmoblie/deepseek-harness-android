@@ -27,9 +27,14 @@ import type {
   RuntimeProgress,
   RuntimeReleaseEntry,
   RuntimeReleaseList,
+  RuntimeSessionListReason,
+  RuntimeSessionListResult,
+  RuntimeSessionSummary,
   RuntimeSessionSnapshot,
   RuntimeSessionSnapshotRestoreResult,
   RuntimeSessionSnapshotState,
+  RuntimeResidueCleanupState,
+  RuntimeResidueState,
   RuntimeSettings,
   RuntimeSettingsUpdate,
   RuntimeSource,
@@ -494,6 +499,42 @@ export function validateRuntimeVersions(value: unknown): RuntimeVersionsState {
   })
 
   return { versions, canSwitch: state.canSwitch, canDelete: state.canDelete }
+}
+
+/**
+ * 运行时占用盘点：份数、字节数与截断标记。
+ *
+ * 只认这三个字段的形状——残留载荷里根本没有路径字段的位置，这里也就不该有。
+ */
+export function validateRuntimeResidue(value: unknown): RuntimeResidueState {
+  const state = asRecord(value, '运行时占用状态')
+  return {
+    count: byteCount(state.count, '运行时残留份数'),
+    bytes: byteCount(state.bytes, '运行时残留体积'),
+    truncated: requiredBoolean(state.truncated, '运行时残留截断标记'),
+  }
+}
+
+const MAX_RESIDUE_MESSAGE_LENGTH = 200
+
+/**
+ * 一次清理残留的结果：**这一次尝试**的份数、字节数与一句如实说明。
+ *
+ * `cleaned` / `failed` 不是「当前还剩几份」——界面一律重新查一次盘点；`message` 只给人看不参与
+ * 判断，但空串与超长仍然拦掉，免得把一条没有内容的提示渲染给用户。
+ */
+export function validateRuntimeResidueCleanup(value: unknown): RuntimeResidueCleanupState {
+  const state = asRecord(value, '运行时残留清理结果')
+  const message = state.message
+  if (typeof message !== 'string' || message.trim().length === 0 || message.length > MAX_RESIDUE_MESSAGE_LENGTH) {
+    throw new Error('运行时残留清理说明格式无效')
+  }
+  return {
+    cleaned: byteCount(state.cleaned, '运行时残留回收份数'),
+    failed: byteCount(state.failed, '运行时残留失败份数'),
+    reclaimedBytes: byteCount(state.reclaimedBytes, '运行时残留回收体积'),
+    message,
+  }
 }
 
 export function validateRuntimeProgress(value: unknown): RuntimeProgress {  const progress = asRecord(value, '运行时进度')
@@ -1337,6 +1378,39 @@ export function validateAppUpdateState(value: unknown): AppUpdateState {
   }
 }
 
+/**
+ * 会话标识形态：**与原生侧 `SessionCatalogPayload` 同一条规则**——拒绝控制字符、斜杠、反斜杠与
+ * 空白，长度 1..200，且不以 `.` 开头。
+ *
+ * 两层必须一致：这里放松会让带路径的 id 进到界面，这里收紧会让真实会话整块读取失败。
+ * 用「危险字符」而不是窄字符集白名单，是因为会话 id 由 dsh 生成，形态可能变化。
+ *
+ * 按码点扫描而不是写正则：`[\u0000-\u001F]` 这样的字符组会触发 `no-control-regex`，
+ * 本仓库没有豁免先例，而扫描与文件内 `containsControlCharacter` 是同一套写法。
+ */
+function isCatalogSessionId(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_SESSION_ID_CHARS) return false
+  if (value.startsWith('.')) return false
+  return !Array.from(value).some(character => {
+    const code = character.charCodeAt(0)
+    return code <= 31 || code === 127 || character === '/' || character === '\\' || /\s/.test(character)
+  })
+}
+/** 会话标识长度上限：与原生侧 `SessionCatalogPayload.MAX_IDENTIFIER_CHARS` 同值。 */
+const MAX_SESSION_ID_CHARS = 200
+/** 会话条数上限：访客脚本与原生侧都按 50 截断，超出的载荷视为不可信。 */
+const MAX_RUNTIME_SESSIONS = 50
+/** 标题长度上限（UTF-16 字符数，与原生侧 `MAX_TITLE_CHARS` 同口径）：宿主侧标题最长 80 字节，200 字符只是防御性天花板。 */
+const MAX_SESSION_TITLE_CHARS = 200
+/** 更新时间上限（毫秒，2100-01-01）：明显越界的取值视为不可信。 */
+const MAX_SESSION_UPDATED_AT = 4_102_444_800_000
+/** 受控的读取失败原因：多一个少一个都要在这里显式登记，界面才能给出对应说明。 */
+const SESSION_LIST_REASONS = new Set<RuntimeSessionListReason>([
+  'RUNTIME_NOT_INSTALLED',
+  'SESSION_CATALOG_TIMEOUT',
+  'SESSION_CATALOG_FAILED',
+])
+
 /** 会话快照份数的防御性上限：原生当前上限是 3，但上限本身会变，校验不该把 4 当非法。 */
 const MAX_RUNTIME_SESSION_SNAPSHOTS = 32
 /** 会话快照占用空间的上限（512 MiB）；与原生侧保持一致。 */
@@ -1422,6 +1496,52 @@ export function validateRuntimeSessionSnapshotRestoreResult(value: unknown): Run
     skippedFileCount: byteCount(result.skippedFileCount, '运行时会话快照跳过文件数格式无效'),
     state: validateRuntimeSessionSnapshotState(result.state),
   }
+}
+
+/**
+ * 校验会话列表读取结果。
+ *
+ * 两态判别只看 `status`，未知键一律忽略（原生侧以后加字段不该让整块界面失败）。
+ * 每条**只取** `id` / `title` / `updatedAt` 三个字段：正文、路径、`cwd` 之类即便混进载荷也到不了
+ * 界面——这里的返回体是与界面之间的最后一个约定点。
+ *
+ * 校验器只负责拒绝「形状不符」的载荷，不负责过滤：一条不合规的会话（含路径、含控制字符）
+ * 会让整块读取失败，而不是被悄悄丢掉——静默少一条会话同样是编造事实。
+ */
+export function validateRuntimeSessionListResult(value: unknown): RuntimeSessionListResult {
+  const result = asRecord(value, '会话列表')
+  if (result.status === 'unavailable') {
+    const reason = result.reason
+    if (typeof reason !== 'string' || !SESSION_LIST_REASONS.has(reason as RuntimeSessionListReason)) {
+      throw new Error('会话列表读取失败原因无效')
+    }
+    return { status: 'unavailable', reason: reason as RuntimeSessionListReason }
+  }
+  if (result.status !== 'ready') throw new Error('会话列表状态无效')
+
+  const source = result.sessions
+  if (!Array.isArray(source) || source.length > MAX_RUNTIME_SESSIONS) throw new Error('会话列表格式无效')
+
+  const sessions: RuntimeSessionSummary[] = source.map(item => {
+    const entry = asRecord(item, '会话条目')
+    const id = entry.id
+    if (!isCatalogSessionId(id)) throw new Error('会话标识格式无效')
+    const title = entry.title
+    if (
+      typeof title !== 'string' ||
+      title.length > MAX_SESSION_TITLE_CHARS ||
+      containsControlCharacter(title)
+    ) {
+      throw new Error('会话标题格式无效')
+    }
+    const updatedAt = entry.updatedAt
+    if (!Number.isSafeInteger(updatedAt) || (updatedAt as number) < 0 || (updatedAt as number) > MAX_SESSION_UPDATED_AT) {
+      throw new Error('会话更新时间格式无效')
+    }
+    return { id, title, updatedAt: updatedAt as number }
+  })
+
+  return { status: 'ready', sessions, truncated: requiredBoolean(result.truncated, '会话列表截断标记') }
 }
 
 /**

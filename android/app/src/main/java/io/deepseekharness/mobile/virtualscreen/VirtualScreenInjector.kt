@@ -150,6 +150,83 @@ object VirtualScreenInjector {
             return result
         }
 
+        /**
+         * 整段手势直传（AI 的 `gesture` 动作用）：按下 → 按约 16 毫秒步进插值移动 → 抬起。
+         *
+         * 与 [handle] 的区别：这里一次拿到完整路径与总时长，插值与节拍都由本方法负责，因此要求
+         * 「直传通道可用、且当前没有半截手势」。注入失败不抛异常（与 [handle] 同一约定）：失败时
+         * 补发 ACTION_CANCEL 结束整段手势，并在返回里写 `streamed=false`、`aborted=true`，由调用方
+         * 决定怎么报错——把按下事件留在系统里会让副屏一直处于「被按住」状态，绝不能静默报成功。
+         * 直传通道不可用时退回离散通道，用一次 `input swipe`（首尾点 + 时长）近似整条路径，
+         * 返回的 `approximated=true` 与夹取后的 `durationMs` 如实说明这是一次近似而不是逐点直传。
+         */
+        fun stroke(path: List<VirtualScreenPolicy.GesturePoint>, durationMillis: Int): JSONObject {
+            require(displayId() > 0) { "副屏显示器尚未就绪" }
+            require(!active) { "上一次副屏触摸手势尚未结束" }
+            require(path.size >= 2) { "副屏手势至少需要两个坐标点" }
+            val samples = VirtualScreenPolicy.gesturePath(path, durationMillis)
+            val first = samples.first()
+            val last = samples.last()
+            val downTime = SystemClock.uptimeMillis()
+            if (!available() || !send(MotionEvent.ACTION_DOWN, first.x, first.y, downTime)) {
+                // 离散通道：整条路径只能用首尾点近似；时长按 input 的既有上限夹取，不假装还是原来的时长。
+                val duration = durationMillis.coerceIn(100, 2000)
+                fallback(
+                    listOf(
+                        "swipe", first.x.toString(), first.y.toString(),
+                        last.x.toString(), last.y.toString(), duration.toString(),
+                    ),
+                )
+                return strokeResult("discrete", streamed = false, aborted = false, approximated = true, samples = 0, moves = 0, durationMillis = duration)
+            }
+            // 已经按下：从这里开始无论成功还是失败，都必须发出抬起或取消。
+            active = true
+            stream = true
+            this.downTime = downTime
+            startX = first.x; startY = first.y
+            lastX = first.x; lastY = first.y
+            var injected = 0
+            var aborted = false
+            try {
+                for (index in 1 until samples.size) {
+                    SystemClock.sleep(VirtualScreenPolicy.GESTURE_STEP_MILLIS.toLong())
+                    val sample = samples[index]
+                    if (!send(MotionEvent.ACTION_MOVE, sample.x, sample.y, downTime)) {
+                        aborted = true
+                        break
+                    }
+                    lastX = sample.x; lastY = sample.y; injected++
+                }
+                if (!aborted && !send(MotionEvent.ACTION_UP, lastX, lastY, downTime)) aborted = true
+                // 中途失败要么已经补过（移动到一半）要么现在补：抬起/取消必须成对出现。
+                if (aborted) send(MotionEvent.ACTION_CANCEL, lastX, lastY, downTime)
+            } finally {
+                reset()
+            }
+            return strokeResult(
+                channel = "stream",
+                streamed = !aborted,
+                aborted = aborted,
+                approximated = false,
+                samples = samples.size,
+                moves = injected,
+                durationMillis = durationMillis,
+            )
+        }
+
+        private fun strokeResult(
+            channel: String,
+            streamed: Boolean,
+            aborted: Boolean,
+            approximated: Boolean,
+            samples: Int,
+            moves: Int,
+            durationMillis: Int,
+        ): JSONObject = JSONObject()
+            .put("channel", channel).put("streamed", streamed).put("aborted", aborted)
+            .put("approximated", approximated).put("samples", samples).put("moves", moves)
+            .put("durationMs", durationMillis)
+
         /** 会话切换或服务停止时必须调用：进程内通道要补一个取消事件，离散通道要丢掉半截手势。 */
         fun abort() {
             if (!active) return
