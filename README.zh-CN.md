@@ -175,10 +175,7 @@ pnpm lint          # ESLint，零警告通过
 
 ### 贡献者
 
-感谢以下贡献者对本项目的付出：
-
-- [@standtrain](https://github.com/standtrain)
-- [@11hyy](https://github.com/11hyy)
+感谢 [standtrain](https://github.com/standtrain)、[11hyy](https://github.com/11hyy) 等贡献者对本项目的付出。
 
 ### 交流社区
 
