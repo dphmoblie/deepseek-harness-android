@@ -168,7 +168,8 @@ in particular, do not weaken loopback access control, digest verification, the e
 
 More developers are welcome — your name can appear here too.
 
-<a id="qq-group"></a><a id="community-qq-group"></a>### Community
+<a id="qq-group"></a><a id="community-qq-group"></a>
+### Community
 
 - **QQ group: 1108895375** — ask questions, send feedback and get release notifications.
 

@@ -168,7 +168,8 @@ pnpm lint          # ESLint，零警告通过
 
 欢迎更多开发者参与，你的名字也可以出现在这里。
 
-<a id="qq-group"></a><a id="community-qq-group"></a>### 交流社区
+<a id="qq-group"></a><a id="community-qq-group"></a>
+### 交流社区
 
 - **QQ 交流群：1108895375**——欢迎入群提问、反馈建议、获取版本发布通知。
 
