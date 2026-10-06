@@ -365,6 +365,7 @@ test('the mobile profile ships model-facing Shizuku tools without exposing bridg
     'mobile_device_file_upload',
     'mobile_device_file_mkdir',
     'mobile_device_shell',
+    'mobile_virtual_screen_shell',
   ]) {
     assert.match(plugin, new RegExp(`name: '${tool}'`))
   }
@@ -410,6 +411,7 @@ test('the mobile profile ships model-facing Shizuku tools without exposing bridg
       'mobile_device_background_tasks',
       'mobile_device_screenshot',
       'mobile_device_shell',
+      'mobile_virtual_screen_shell',
       'mobile_device_ui_dump',
       'mobile_accessibility_tree',
       'mobile_accessibility_action',
@@ -557,6 +559,83 @@ test('Shizuku UserService uses the reserved removal transaction and stops with t
   assert.match(nativePlugin, /fun stopRuntime[\s\S]*?RuntimeHost\.cancelDeviceCommands\(\)\s*controller\.stopRuntime\(\)/)
   assert.match(nativePlugin, /fun startHarness[\s\S]*?harnessStartScheduled\.compareAndSet\(false, true\)[\s\S]*?ensureDeviceBridge\(\)/)
   assert.match(nativePlugin, /if \(confirmation != "RESET_RUNTIME"\)[\s\S]*?RuntimeHost\.cancelDeviceCommands\(\)\s*controller\.reset\(confirmation\)/)
+})
+
+test('副屏新动作与细分错误码从插件面一直通到设备 Shell（少一环 AI 就调不到）', async () => {
+  const plugin = await readFile(resolve(
+    appRoot,
+    'scripts/runtime-profile/plugins/dsh-mobile-shizuku/lib/index.js',
+  ), 'utf8')
+  const policy = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/VirtualScreenPolicy.kt',
+  ), 'utf8')
+  const shell = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/ShellVirtualScreen.kt',
+  ), 'utf8')
+  const commands = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/VirtualScreenCommands.kt',
+  ), 'utf8')
+
+  // AI 工具面不走 Capacitor @PluginMethod，而是 callBridge → POST /device-command → DeviceBridgeServer 分派，
+  // 因此「插件枚举放行」「桥命令存在」「设备 Shell 有对应分支」三件事缺一不可。
+  const actionEnum = plugin.match(/action: \{ type: 'string', required: true, enum: \[([^\]]*)\] \}/u)
+  assert.ok(actionEnum, 'mobile_virtual_screen_action 必须声明 action 枚举')
+  const whitelist = plugin.match(/if \(!\[([^\]]*)\]\.includes\(args\.action\)\) throw new Error\('VIRTUAL_SCREEN_INVALID'\)/u)
+  assert.ok(whitelist, 'virtualAction 必须保留动作白名单')
+  for (const action of ['tap', 'follow', 'start', 'restart', 'reconnect', 'autoFollowTick']) {
+    assert.ok(actionEnum[1].includes(`'${action}'`), `action 枚举缺少 ${action}`)
+    assert.ok(whitelist[1].includes(`'${action}'`), `动作白名单缺少 ${action}`)
+  }
+
+  // target 的三个新参数：插件只做类型与粗略上界校验，夹取与默认值在设备端唯一实现。
+  for (const field of ['confirm_budget_ms', 'prewarm', 'rollback']) {
+    assert.match(plugin, new RegExp(`${field}: \\{ type: '(?:integer|boolean)'`))
+  }
+  assert.match(plugin, /request\.confirm_budget_ms = args\.confirm_budget_ms/)
+  assert.match(plugin, /for \(const field of \['prewarm', 'rollback'\]\)/)
+  assert.match(plugin, /request\[field\] = args\[field\]/)
+  assert.match(policy, /const val CONFIRM_BUDGET_DEFAULT_MILLIS = 3000L/)
+  assert.match(policy, /const val CONFIRM_BUDGET_MIN_MILLIS = 500L/)
+  assert.match(policy, /const val CONFIRM_BUDGET_MAX_MILLIS = 15000L/)
+
+  // 副屏前台可观测量与自动跟随策略必须出现在状态渲染里，否则模型看不到这两个读数。
+  assert.match(plugin, /const VIRTUAL_STATE_OUTPUT = \{/)
+  assert.match(plugin, /state\.virtualForegroundPackage/)
+  assert.match(plugin, /state\.virtualForegroundActivity/)
+  assert.match(plugin, /state\.autoFollow/)
+  assert.match(plugin, /output: VIRTUAL_STATE_OUTPUT,/)
+  // 前沿字段名与设备端常量必须同名：以前插件发 packageName、设备端只认 component，target 一发就 INVALID。
+  assert.match(plugin, /request\.packageName = args\.packageName/)
+  assert.match(policy, /const val TARGET_PACKAGE_FIELD = "packageName"/)
+  assert.match(policy, /fun targetRequestField\(p: JSONObject\): String \{/)
+
+  assert.match(commands, /"virtualScreenAction" -> service\.action\(request\)\.toString\(\)/)
+  for (const branch of [
+    /in VirtualScreenPolicy\.LIFECYCLE_ACTIONS ->/,
+    /VirtualScreenPolicy\.AUTO_FOLLOW_TICK_ACTION ->/,
+    /VirtualScreenPolicy\.targetRequestField\(p\)/,
+    /VirtualScreenPolicy\.clipboardProbe\(/,
+    /private fun nonAsciiTextAction\(/,
+  ]) {
+    assert.match(shell, branch)
+  }
+
+  assert.match(policy, /val LIFECYCLE_ACTIONS = setOf\("start", "restart", "reconnect"\)/)
+  assert.match(policy, /const val AUTO_FOLLOW_TICK_ACTION = "autoFollowTick"/)
+  assert.match(policy, /const val AUTO_FOLLOW_THROTTLE_MILLIS = 2000L/)
+  assert.match(policy, /class FollowThrottle\(/)
+  // 细分错误码：三个新码互相独立，且都不等于兜底的 UNAVAILABLE。
+  for (const code of ['VIRTUAL_SCREEN_SESSION_DEAD', 'VIRTUAL_SCREEN_TARGET_LEFT', 'VIRTUAL_SCREEN_STALE_FRAME']) {
+    assert.match(policy, new RegExp(`const val \\w+_CODE = "${code}"`))
+  }
+  for (const code of ['VIRTUAL_SCREEN_RESTART_UNSUPPORTED', 'VIRTUAL_SCREEN_RECONNECT_UNSUPPORTED']) {
+    assert.match(policy, new RegExp(`const val \\w+_CODE = "${code}"`))
+  }
+  // AIDL 没有新增事务（本轮全部复用 virtualScreenAction），UserService 版本号保持 5。
+  assert.match(policy, /const val FRAME_STALE_AFTER_MILLIS = 2000L/)
 })
 
 test('background keep-alive delegates the shared runtime and never claims to defeat the system', async () => {

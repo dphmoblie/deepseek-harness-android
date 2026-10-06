@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Search, Smartphone } from 'lucide-react'
 import type { InstalledApplication, RuntimeBridge } from '../platform/types'
-import { MAX_ACCESSIBILITY_PACKAGES } from '../platform/validation'
 import { t } from '../i18n'
 import { isVisible, normalizeSearchQuery, orderForDisplay, type VisibilityFilters } from './applicationSearchQuery'
 import './ApplicationPicker.css'
@@ -98,11 +97,8 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
         <label><input type="checkbox" checked={hideSystem} disabled={disabled}
           onChange={event => toggleFilter(setHideSystem, event.target.checked)} /><span>{t('隐藏系统组件')}</span></label>
       </div>
-      <p className="settings-note">{t('已选择 {0} 个应用，白名单最多 {1} 个；勾选后点击保存白名单。', selected.length, MAX_ACCESSIBILITY_PACKAGES)}</p>
-      {/* 已选项**不因为超过上限被丢弃**（可能有历史数据），但要说清楚：这样保存会被拒绝。 */}
-      {selected.length > MAX_ACCESSIBILITY_PACKAGES && <p className="settings-note" role="status">
-        {t('已选 {0} 个，超过上限 {1} 个；保存前请先取消多余的勾选，否则保存会被拒绝。', selected.length, selected.length - MAX_ACCESSIBILITY_PACKAGES)}
-      </p>}
+      {/* 条目数量不设上限（原生侧从不限制条数）：只报已选个数，不再给「会被拒绝」的警告。 */}
+      <p className="settings-note">{t('已选择 {0} 个应用；勾选后点击保存白名单。', selected.length)}</p>
       {failed && <p role="alert">{t('无法读取应用列表，请在安卓设备上重试。')} <button type="button" onClick={retry}>{t('重试')}</button></p>}
       <div className="application-picker-list" aria-busy={loading}>
         {orderForDisplay(visible, selected).map(app => <label className="application-picker-row" key={app.packageName}>

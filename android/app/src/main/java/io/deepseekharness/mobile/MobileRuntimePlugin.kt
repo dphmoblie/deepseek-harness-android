@@ -5,10 +5,13 @@ import android.app.KeyguardManager
 import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.Settings
+import android.util.DisplayMetrics
+import android.view.Display
 import android.view.WindowManager
 import androidx.activity.result.ActivityResult
 import androidx.biometric.BiometricManager
@@ -80,6 +83,16 @@ import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticText
 import io.deepseekharness.mobile.shizuku.DeviceCommand
 import io.deepseekharness.mobile.shizuku.DeviceCommandResult
 import io.deepseekharness.mobile.shizuku.ShizukuState
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenPolicy
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenPreferences
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenService
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenSettings
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenSettingsUpdate
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenSpec
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenStart
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenStartRequest
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenTargetKind
+import io.deepseekharness.mobile.virtualscreen.putVirtualScreenStart
 import org.json.JSONObject
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -281,6 +294,10 @@ class MobileRuntimePlugin : Plugin() {
     companion object {
         private const val DEVICE_COMMAND_TIMEOUT_MS = 60_000L
         private const val DESTROY_WAIT_SECONDS = 10L
+
+        /** 副屏直通 Shell 的一次性设备会话尺寸；与设备桥的默认列宽/行数保持一致。 */
+        private const val VIRTUAL_SCREEN_COLUMNS = 80
+        private const val VIRTUAL_SCREEN_ROWS = 24
 
         /** 受控错误码：大写字母、数字与下划线，与审计日志的策略一致。 */
         private val CONTROLLED_CODE = Regex("^[A-Z][A-Z0-9_]{0,63}$")
@@ -1155,6 +1172,51 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /**
+     * 副屏直通 Shell（壳内入口）：在会话副屏的 displayId 上执行一次性脚本。
+     *
+     * 与 [execDeviceCommand] 的唯一区别是执行前把副屏编号注入脚本环境（见
+     * [io.deepseekharness.mobile.virtualscreen.VirtualScreenShellPolicy] 的 `prefix`），
+     * 于是脚本里的 `input -d "$DISPLAY_ID"` 与 `am start --display "$DISPLAY_ID"` 会确定地
+     * 落在那块虚拟屏上——这正是 AI 在副屏上注入输入唯一缺的一环。
+     *
+     * 执行路径复用既有设备终端会话与 [RuntimeHost.deviceCommands]，不新建执行器；
+     * 副屏状态只读，不启动、不切换、不结束任何会话。
+     */
+    @PluginMethod
+    fun virtualScreenShell(call: PluginCall) {
+        execute(call) {
+            if (!io.deepseekharness.mobile.shizuku.DeviceShellAccess.enabled(context)) {
+                throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请先开启 AI Shell")
+            }
+            val state = io.deepseekharness.mobile.virtualscreen.VirtualScreenService.current?.state()
+            val plan = io.deepseekharness.mobile.virtualscreen.VirtualScreenShellPolicy.plan(
+                script = call.getString("script"),
+                requestedDisplayId = call.getInt("displayId"),
+                active = state?.optBoolean("active") == true,
+                sessionDisplayId = state?.optInt("displayId", 0) ?: 0,
+            )
+            val sessionId = controller.createTerminal("device", VIRTUAL_SCREEN_COLUMNS, VIRTUAL_SCREEN_ROWS)
+            val result = try {
+                RuntimeHost.deviceCommands()
+                    .execute(sessionId, DeviceCommand.SHELL, plan.command, DEVICE_COMMAND_TIMEOUT_MS)
+            } finally {
+                // 清理失败不覆盖已经拿到的执行结果（与桥里关闭一次性会话的处理一致）。
+                try {
+                    controller.closeTerminal(sessionId)
+                } catch (_: Throwable) {
+                }
+            }
+            JSObject()
+                .put("ok", result.ok)
+                .put("exitCode", result.exitCode)
+                .put("output", result.text)
+                .put("truncated", result.truncated)
+                .put("displayId", plan.displayId)
+                .also { if (result.errorCode != null) it.put("errorCode", result.errorCode) }
+        }
+    }
+
     @PluginMethod
     fun getShizukuState(call: PluginCall) {
         resolveWhileActive(call) { controller.shizukuState().toJs() }
@@ -1188,6 +1250,173 @@ class MobileRuntimePlugin : Plugin() {
                 null
             }
         } ?: call.reject("当前没有可用的页面", "ACTIVITY_UNAVAILABLE")
+    }
+
+    /**
+     * 读取副屏设置：偏好 7 项 + 「下一次启动会用到」的实际规格。
+     *
+     * `widthPx`/`heightPx`/`densityDpi` 是**用户自定义值**（0 表示没自定义过），
+     * 真正会生效的规格在 `effective` 里 —— 前端不要把两者混着显示。
+     */
+    @PluginMethod
+    fun getVirtualScreenSettings(call: PluginCall) {
+        resolveWhileActive(call) { virtualScreenSettingsPayload() }
+    }
+
+    /**
+     * 写入副屏设置：枚举非法**整条拒绝**（一个字段都不落盘），数值越界夹取。
+     * 失败码 [VirtualScreenPreferences.INVALID_CODE]；成功时回写后的完整设置。
+     */
+    @PluginMethod
+    fun setVirtualScreenSettings(call: PluginCall) {
+        val data = call.data ?: JSObject()
+        resolveWhileActive(call) {
+            val update: VirtualScreenSettingsUpdate = VirtualScreenPreferences.parseUpdate(JSONObject(data.toString()))
+            VirtualScreenPreferences.apply(context, update)
+            virtualScreenSettingsPayload()
+        }
+    }
+
+    /**
+     * 启动副屏：`packageName` 可给包名或完整组件名，其余字段只对本次会话生效、不写回偏好。
+     * 规格由 [VirtualScreenStart.resolve] 定（自适应 → 请求里的尺寸 → 偏好里的尺寸 → 方向预设），
+     * 保证过得了设备端 `VirtualScreenPolicy.dimensions` 那道启动闸门。
+     */
+    @PluginMethod
+    fun startVirtualScreen(call: PluginCall) {
+        val data = call.data ?: JSObject()
+        resolveWhileActive(call) {
+            if (Build.VERSION.SDK_INT < 29) throw RuntimeFailure("VIRTUAL_SCREEN_UNSUPPORTED", "副屏需要 Android 10 或更高版本")
+            if (VirtualScreenService.current != null) throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "副屏已经在运行，先停止再启动")
+            val request: VirtualScreenStartRequest = VirtualScreenPreferences.parseStart(JSONObject(data.toString()))
+            val component = virtualScreenComponent(request.target)
+            val settings: VirtualScreenSettings = VirtualScreenPreferences.read(context)
+            val (screenWidth, screenHeight, density) = virtualScreenScreenSize()
+            val spec = VirtualScreenStart.resolve(request, settings, screenWidth, screenHeight, density)
+            val orientation = request.orientation ?: settings.orientation
+            val adaptive = request.adaptive ?: settings.adaptive
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, VirtualScreenService::class.java)
+                    .putExtra("component", component)
+                    // 尺寸只在服务侧换算一次；页面勾的方向就是本次会话的方向。
+                    .putVirtualScreenStart(spec, adaptive, orientation)
+            )
+            JSObject()
+                .put("component", component)
+                .put("orientation", orientation)
+                .put("adaptive", adaptive)
+                .put("widthPx", spec.widthPx)
+                .put("heightPx", spec.heightPx)
+                .put("densityDpi", spec.densityDpi)
+        }
+    }
+
+    /** 停止副屏：这里只是请求，收尾由服务的通知动作完成；本来就没有会话时直接报「已停止」。 */
+    @PluginMethod
+    fun stopVirtualScreen(call: PluginCall) {
+        resolveWhileActive(call) {
+            val service = VirtualScreenService.current
+            if (service == null) {
+                context.stopService(Intent(context, VirtualScreenService::class.java))
+                JSObject().put("stopping", false).put("active", false)
+            } else {
+                service.requestStop()
+                JSObject().put("stopping", true).put("active", true)
+            }
+        }
+    }
+
+    /** 会话快照 + 偏好 + 真实读数合并成的状态对象；字段表见 `docs/副屏设置桥.md`。 */
+    @PluginMethod
+    fun getVirtualScreenState(call: PluginCall) {
+        resolveWhileActive(call) { virtualScreenStatePayload() }
+    }
+
+    /**
+     * 设置页要的「偏好 + 实际生效规格」。没有会话时 `effective` 是按当前屏幕与偏好**推算**的
+     * 下次启动规格（供页面预览），不代表此刻已有副屏 —— 所以另外带上 `active`。
+     */
+    private fun virtualScreenSettingsPayload(): JSObject {
+        val settings = VirtualScreenPreferences.read(context)
+        val (screenWidth, screenHeight, density) = virtualScreenScreenSize()
+        val effective = VirtualScreenStart.resolve(settings, screenWidth, screenHeight, density)
+        return JSObject()
+            .put("previewMode", settings.previewMode)
+            .put("autoFollow", settings.autoFollow)
+            .put("orientation", settings.orientation)
+            .put("adaptive", settings.adaptive)
+            .put("widthPx", settings.widthPx)
+            .put("heightPx", settings.heightPx)
+            .put("densityDpi", settings.densityDpi)
+            .put(
+                "effective",
+                JSObject().put("widthPx", effective.widthPx).put("heightPx", effective.heightPx).put("densityDpi", effective.densityDpi),
+            )
+            .put("active", VirtualScreenService.current != null)
+    }
+
+    /**
+     * 状态对象有三个来源：设备端会话快照（真机读数）、本次会话的方向/自适应、偏好。
+     *
+     * 尺寸优先用宿主从 `DisplayManager` 读回的真实参数（[VirtualScreenService.displayReadback]），
+     * 读不到才退到会话请求值，再退到偏好 —— 设置页显示的因此永远是真正生效的规格。
+     */
+    private fun virtualScreenStatePayload(): JSObject {
+        val settings = VirtualScreenPreferences.read(context)
+        val (screenWidth, screenHeight, density) = virtualScreenScreenSize()
+        val fallback = VirtualScreenStart.resolve(settings, screenWidth, screenHeight, density)
+        val service = VirtualScreenService.current
+            ?: return VirtualScreenPreferences.mergeState(null, settings, fallback).toJsObject()
+        val session = runCatching { JSONObject(service.state().toString()) }.getOrNull()
+        val summary = runCatching { JSONObject(service.sessionSummary().toString()) }.getOrNull()
+        summary?.let { value ->
+            // 会话里记的方向/自适应就是本次真正用的值：并进快照，交给 mergeState 按「会话优先」合并。
+            session?.put("orientation", value.optString("orientation"))
+            session?.put("adaptive", value.optBoolean("adaptive"))
+        }
+        val requested = summary?.let {
+            VirtualScreenSpec(
+                it.optInt("widthPx", fallback.widthPx),
+                it.optInt("heightPx", fallback.heightPx),
+                it.optInt("densityDpi", fallback.densityDpi),
+            )
+        } ?: fallback
+        val readback = runCatching { service.displayReadback() }.getOrNull()
+        return VirtualScreenPreferences.mergeState(session, settings, requested, readback).toJsObject()
+    }
+
+    /**
+     * 目标串 → 组件名：完整组件名直接用（再走一次既有校验），包名则由系统查启动入口。
+     * 校验失败一律转成 [RuntimeFailure]，否则会被 [resolveSafely] 吞成 INTERNAL_ERROR。
+     */
+    private fun virtualScreenComponent(target: String): String = when (VirtualScreenPreferences.targetKind(target)) {
+        VirtualScreenTargetKind.COMPONENT -> requireComponent(target)
+        VirtualScreenTargetKind.PACKAGE -> {
+            val launch = context.packageManager.getLaunchIntentForPackage(target)
+            val component = launch?.component?.flattenToShortString()
+                ?: throw RuntimeFailure(VirtualScreenPolicy.LAUNCH_UNRESOLVED_CODE, "没有找到 $target 的可启动入口")
+            requireComponent(component)
+        }
+        VirtualScreenTargetKind.INVALID -> throw RuntimeFailure(VirtualScreenPreferences.INVALID_CODE, "目标应用无效：$target")
+    }
+
+    private fun requireComponent(value: String): String = runCatching { VirtualScreenPolicy.component(value) }
+        .getOrElse { throw RuntimeFailure(VirtualScreenPreferences.INVALID_CODE, it.message ?: "目标应用入口无效") }
+
+    /**
+     * 真实屏幕宽高与显示密度：优先 `DisplayManager` 的 real metrics（含系统栏），读不到退到
+     * 插件上下文自己的 displayMetrics。两条路都在读本机真实值，不编造数字。
+     */
+    private fun virtualScreenScreenSize(): Triple<Int, Int, Float> {
+        val metrics = DisplayMetrics()
+        val display = context.getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)
+        runCatching { display?.getRealMetrics(metrics) }
+        if (metrics.widthPixels > 0 && metrics.heightPixels > 0 && metrics.density > 0f) {
+            return Triple(metrics.widthPixels, metrics.heightPixels, metrics.density)
+        }
+        val fallback = context.resources.displayMetrics
+        return Triple(fallback.widthPixels, fallback.heightPixels, fallback.density)
     }
 
     /**
@@ -1526,7 +1755,7 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
-     * 保存无障碍目标应用白名单；数组元素必须是字符串，原生策略再次校验包名与数量。
+     * 保存无障碍目标应用白名单；数组元素必须是字符串，原生策略再次校验包名格式与重复项（不限制条数）。
      *
      * 已设置「验证密码」时 `password` 必填：校验顺序与失败码全部由
      * `AccessibilityWhitelistWritePolicy` / `AccessibilityPasswordStore` 决定（先密码、后格式），

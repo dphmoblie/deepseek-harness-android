@@ -7,6 +7,8 @@ import io.deepseekharness.mobile.shizuku.DeviceFilePolicy
 import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
 import io.deepseekharness.mobile.shizuku.ShizukuRuntime
 import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenService
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenShellPolicy
 import io.deepseekharness.mobile.runtime.TaskNotification
 import io.deepseekharness.mobile.runtime.TurnCompletionPolicy
 import org.json.JSONObject
@@ -227,6 +229,33 @@ class DeviceBridgeServer(
                         respondResult(output, io.deepseekharness.mobile.virtualscreen.VirtualScreenCommands.execute(commandName, param))
                         return
                     }
+                    // 副屏直通 Shell：把会话副屏的 displayId 注入脚本环境后，走与通用命令**同一条**
+                    // 一次性 Shell 路径。param 是 JSON：{"script":"…","displayId":38}（displayId 可省）。
+                    // 校验与错误码全部由 VirtualScreenShellPolicy 决定，这里只负责取只读状态并执行。
+                    if (commandName == VirtualScreenShellPolicy.COMMAND) {
+                        if (!shellEnabled()) throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请在 Shizuku 设置中开启 AI Shell")
+                        val request = try {
+                            JSONObject(param)
+                        } catch (error: Throwable) {
+                            throw RuntimeFailure("DEVICE_COMMAND_INVALID", "副屏 Shell 参数不是合法 JSON", error)
+                        }
+                        // 只认 JSON 字符串与 JSON 数字：`{"script":null}` 这类形状不能变成一段可执行脚本文本。
+                        val script = request.opt("script") as? String
+                        val requestedDisplayId = when (val raw = request.opt("displayId")) {
+                            null -> null
+                            is Number -> raw.toInt()
+                            else -> throw RuntimeFailure("DEVICE_COMMAND_INVALID", "displayId 必须是整数")
+                        }
+                        val state = VirtualScreenService.current?.state()
+                        val plan = VirtualScreenShellPolicy.plan(
+                            script = script,
+                            requestedDisplayId = requestedDisplayId,
+                            active = state?.optBoolean("active") == true,
+                            sessionDisplayId = state?.optInt("displayId", 0) ?: 0,
+                        )
+                        respondResult(output, runOneShot(DeviceCommand.SHELL, plan.command), plan.displayId)
+                        return
+                    }
                     // 访客侧「一轮任务已完成」的收单点（登记册 §5.5）。
                     // 这条命令**只**能触发一条固定文案的通知，不读会话内容、不返回任何用户数据：
                     // 访客进程因此无法用它在通知栏或锁屏上写任意文本。
@@ -256,30 +285,7 @@ class DeviceBridgeServer(
                     if (command in setOf(DeviceCommand.SHELL, DeviceCommand.BACKGROUND_TASKS) && !shellEnabled()) {
                         throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请在 Shizuku 设置中开启 AI Shell")
                     }
-                    val sessionId = shizuku.create(
-                        DEFAULT_COLUMNS,
-                        DEFAULT_ROWS,
-                        suppressPublicOutput = true,
-                        permitted = running::get,
-                        // 会话退出（Shell 死亡 / Shizuku 断开）后不会再有输出：
-                        // 在途的设备命令立刻按协议错误收口，不必空等到 60 秒超时。
-                        onSessionExit = { id -> runner.onSessionExit(id) },
-                    )
-                    try {
-                        val result = runner.execute(sessionId, command, param, COMMAND_TIMEOUT_MS)
-                        val errorJson = result.errorCode?.let { JSONObject.quote(it) } ?: "null"
-                        val textJson = JSONObject.quote(result.text)
-                        respond(
-                            output,
-                            200,
-                            "{\"ok\":" + result.ok + ",\"exitCode\":" + result.exitCode + ",\"text\":" + textJson + ",\"truncated\":" + result.truncated + ",\"errorCode\":" + errorJson + "}",
-                        )
-                    } finally {
-                        try {
-                            shizuku.close(sessionId)
-                        } catch (_: Throwable) {
-                        }
-                    }
+                    respondResult(output, runOneShot(command, param))
                 } catch (error: Throwable) {
                     val code = (error as? RuntimeFailure)?.code ?: "BRIDGE_FAILED"
                     respond(
@@ -295,13 +301,43 @@ class DeviceBridgeServer(
         }
     }
 
-    private fun respondResult(output: BufferedOutputStream, result: io.deepseekharness.mobile.shizuku.DeviceCommandResult) {
+    /**
+     * 一次性设备 Shell 会话：创建 → 执行一条命令 → 关闭。
+     *
+     * 会话退出（Shell 死亡 / Shizuku 断开）后不会再有输出：在途的设备命令立刻按协议错误收口，
+     * 不必空等到 60 秒超时。通用命令与副屏直通命令共用这一条路径，只有命令与脚本文本不同。
+     */
+    private fun runOneShot(command: DeviceCommand, param: String): io.deepseekharness.mobile.shizuku.DeviceCommandResult {
+        val sessionId = shizuku.create(
+            DEFAULT_COLUMNS,
+            DEFAULT_ROWS,
+            suppressPublicOutput = true,
+            permitted = running::get,
+            onSessionExit = { id -> runner.onSessionExit(id) },
+        )
+        try {
+            return runner.execute(sessionId, command, param, COMMAND_TIMEOUT_MS)
+        } finally {
+            try {
+                shizuku.close(sessionId)
+            } catch (_: Throwable) {
+            }
+        }
+    }
+
+    private fun respondResult(
+        output: BufferedOutputStream,
+        result: io.deepseekharness.mobile.shizuku.DeviceCommandResult,
+        // 只有副屏直通命令会带上它：调用方据此确认这次脚本到底落在哪块屏上。
+        displayId: Int? = null,
+    ) {
         val errorJson = result.errorCode?.let { JSONObject.quote(it) } ?: "null"
         val textJson = JSONObject.quote(result.text)
+        val displayJson = displayId?.let { ",\"displayId\":" + it } ?: ""
         respond(
             output,
             200,
-            "{\"ok\":" + result.ok + ",\"exitCode\":" + result.exitCode + ",\"text\":" + textJson + ",\"truncated\":" + result.truncated + ",\"errorCode\":" + errorJson + "}",
+            "{\"ok\":" + result.ok + ",\"exitCode\":" + result.exitCode + ",\"text\":" + textJson + ",\"truncated\":" + result.truncated + displayJson + ",\"errorCode\":" + errorJson + "}",
         )
     }
 

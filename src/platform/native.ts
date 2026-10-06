@@ -25,6 +25,8 @@ import type {
   TerminalChunk,
   TerminalExit,
   TerminalKind,
+  VirtualScreenSettingsUpdate,
+  VirtualScreenStartRequest,
 } from './types'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES } from './types'
 import {
@@ -36,6 +38,8 @@ import {
   assertStorageDirPath,
   assertTerminalKind,
   assertTerminalSize,
+  assertVirtualScreenSettingsUpdate,
+  assertVirtualScreenStartRequest,
   validateAllFilesAccessResult,
   validateAppUpdateState,
   validateAccessibilityAutomationState,
@@ -80,6 +84,8 @@ import {
   validateTerminalChunk,
   validateTerminalExit,
   validateTerminalSession,
+  validateVirtualScreenSettings,
+  validateVirtualScreenState,
 } from './validation'
 
 interface NativeRuntimePlugin {
@@ -111,6 +117,14 @@ interface NativeRuntimePlugin {
   connectShizuku(): Promise<ShizukuState>
   openShizuku(): Promise<void>
   openVirtualScreen(): Promise<void>
+  /** 副屏设置：读全量、写局部；写请求只带这次要改的字段。 */
+  getVirtualScreenSettings(): Promise<unknown>
+  setVirtualScreenSettings(options: VirtualScreenSettingsUpdate): Promise<void>
+  /** 目标应用副屏的启动/停止；启动参数里的目标必须是包名或完整组件名。 */
+  startVirtualScreen(options: VirtualScreenStartRequest): Promise<void>
+  stopVirtualScreen(): Promise<void>
+  /** 副屏运行期读数；读不到时原生侧应抛错，本层不做兜底。 */
+  getVirtualScreenState(): Promise<unknown>
   getAccessibilityAutomationState(): Promise<unknown>
   listInstalledApplications(options: { query: string; offset: number }): Promise<unknown>
   getDeviceShellAccess(): Promise<unknown>
@@ -243,6 +257,13 @@ function createNativeBridge(): RuntimeBridge {
     connectShizuku: () => NativeRuntime.connectShizuku().then(validateShizukuState),
     openShizuku: () => NativeRuntime.openShizuku(),
     openVirtualScreen: () => NativeRuntime.openVirtualScreen(),
+    // 副屏：读回来的两份一律过校验（字段缺失就抛错，不补默认值，否则「读不到」会被显示成默认设置）；
+    // 发出去的两条在过桥前自检，档位/方向/自动跟随与宽高 DPI 的非法取值在这里就被拒绝。
+    getVirtualScreenSettings: () => NativeRuntime.getVirtualScreenSettings().then(validateVirtualScreenSettings),
+    setVirtualScreenSettings: update => NativeRuntime.setVirtualScreenSettings(assertVirtualScreenSettingsUpdate(update)),
+    startVirtualScreen: request => NativeRuntime.startVirtualScreen(assertVirtualScreenStartRequest(request)),
+    stopVirtualScreen: () => NativeRuntime.stopVirtualScreen(),
+    getVirtualScreenState: () => NativeRuntime.getVirtualScreenState().then(validateVirtualScreenState),
     getAccessibilityAutomationState: () => NativeRuntime.getAccessibilityAutomationState().then(validateAccessibilityAutomationState),
     listInstalledApplications: (query, offset) => {
       if (typeof query !== 'string' || query.length > 160 || [...query].some(char => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f) || !Number.isSafeInteger(offset) || offset < 0) {

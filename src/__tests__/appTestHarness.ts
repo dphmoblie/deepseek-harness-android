@@ -73,6 +73,24 @@ export const bridge = {
   getDeviceShellAccess: vi.fn().mockResolvedValue({ enabled: false }),
   setDeviceShellAccess: vi.fn().mockImplementation((enabled: boolean) => Promise.resolve({ enabled })),
   openVirtualScreen: vi.fn().mockResolvedValue(undefined),
+  // 副屏独立设置页的五条桥方法（授权范围：只追加这 5 条）。默认值与原生侧同形——
+  // `VirtualScreenPreferences` 的默认（60fps / off / auto / 未自定义尺寸的三项 0）与
+  // `mergeState()` 的空状态（未运行、displayId 用 -1、读数用 0、文本字段为空串）。
+  // 两条读方法不能是裸桩：设置页会读它们的字段，返回 undefined 会在渲染里抛。
+  // 三条写方法回 undefined 就是真实契约（原生桥只回 void，界面靠重新读取拿显示依据）。
+  getVirtualScreenSettings: vi.fn().mockResolvedValue({
+    previewMode: '60fps', autoFollow: 'off', orientation: 'auto', adaptive: false,
+    widthPx: 0, heightPx: 0, densityDpi: 0,
+  }),
+  setVirtualScreenSettings: vi.fn().mockResolvedValue(undefined),
+  startVirtualScreen: vi.fn().mockResolvedValue(undefined),
+  stopVirtualScreen: vi.fn().mockResolvedValue(undefined),
+  getVirtualScreenState: vi.fn().mockResolvedValue({
+    active: false, sessionId: '', displayId: -1, previewMode: '60fps', autoFollow: 'off',
+    orientation: 'auto', adaptive: false, widthPx: 0, heightPx: 0, densityDpi: 0,
+    targetPackage: '', frameFps: 0, displayRefreshRate: 0,
+    virtualForegroundPackage: '', virtualForegroundActivity: '',
+  }),
   setAccessibilityAutomationPackages: vi.fn(),
   // 验证密码三条（设置/清除/生物识别重置）。与上面同一道理：桥加了方法而夹具没加，
   // 用到它的界面会在 effect 阶段抛错并**整棵树卸载**，表现成「找不到任何元素」。

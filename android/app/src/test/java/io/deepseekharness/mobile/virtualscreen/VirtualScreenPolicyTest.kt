@@ -123,9 +123,16 @@ class VirtualScreenPolicyTest {
         assertEquals(33, VirtualScreenPolicy.frameInterval("30fps"))
         assertEquals(16, VirtualScreenPolicy.frameInterval("60fps"))
         assertEquals(8, VirtualScreenPolicy.frameInterval("120fps"))
+        assertEquals(11, VirtualScreenPolicy.frameInterval("90fps"))
+        assertEquals(6, VirtualScreenPolicy.frameInterval("144fps"))
+        assertEquals(6, VirtualScreenPolicy.frameInterval("165fps"))
         assertEquals(5, VirtualScreenPolicy.frameInterval("185fps"))
-        // 映射表本身就是工具面与设置页的选项来源，键集合必须与上面四个模式完全一致。
-        assertEquals(listOf("limited", "15fps", "30fps", "60fps", "120fps", "185fps"), VirtualScreenPolicy.FRAME_MODES.keys.toList())
+        assertEquals(4, VirtualScreenPolicy.frameInterval("240fps"))
+        // 映射表本身就是工具面与设置页的选项来源，键集合必须与上面列出的十档完全一致。
+        assertEquals(
+            listOf("limited", "15fps", "30fps", "60fps", "90fps", "120fps", "144fps", "165fps", "185fps", "240fps"),
+            VirtualScreenPolicy.FRAME_MODES.keys.toList(),
+        )
         // 未知模式必须报出固定错误文案，不能回落到默认间隔悄悄生效。
         for (mode in listOf("", "realtime", "24fps", "120FPS", "Limited", "limited ")) {
             val error = assertThrows(IllegalArgumentException::class.java) { VirtualScreenPolicy.frameInterval(mode) }
@@ -186,15 +193,21 @@ class VirtualScreenPolicyTest {
     }
 
     @Test fun `预览拉取间隔不低于下限且必须先用反解归一档位`() {
-        // 省电档 180ms 慢于下限，按档位走；其余三档都快于下限，必须夹到 120ms，
-        // 否则预览线程会以 16ms 轮询截图接口，把 shell 通道压满。
+        // 拉取间隔 = maxOf(下限, 档位间隔)：十档里只有最快档会撞到下限，其余都按档位自身走。
+        // 这条链路是「截图 → 解码 PNG → 贴图」，比采集贵得多，不能让它跟着最快档无限加速。
         assertEquals(180, VirtualScreenPolicy.previewPullInterval("limited"))
         assertEquals(66, VirtualScreenPolicy.previewPullInterval("15fps"))
         assertEquals(33, VirtualScreenPolicy.previewPullInterval("30fps"))
         assertEquals(16, VirtualScreenPolicy.previewPullInterval("60fps"))
+        assertEquals(11, VirtualScreenPolicy.previewPullInterval("90fps"))
         assertEquals(8, VirtualScreenPolicy.previewPullInterval("120fps"))
+        assertEquals(6, VirtualScreenPolicy.previewPullInterval("144fps"))
+        assertEquals(6, VirtualScreenPolicy.previewPullInterval("165fps"))
         assertEquals(5, VirtualScreenPolicy.previewPullInterval("185fps"))
-        assertEquals(5, VirtualScreenPolicy.PREVIEW_PULL_FLOOR_MILLIS)
+        assertEquals(4, VirtualScreenPolicy.previewPullInterval("240fps"))
+        // 下限不能高于最快档位的间隔：240fps 档是 4ms，下限若停在 5 就会把最快那一档悄悄夹慢，
+        // 采集节奏与预览拉取节奏对不上（档位是给用户看的契约，不能被下限偷偷改掉）。
+        assertEquals(4, VirtualScreenPolicy.PREVIEW_PULL_FLOOR_MILLIS)
         // 未知模式沿用 frameInterval 的严格契约（不悄悄回落），调用端要先用 frameModeOf 归一。
         for (mode in listOf("", "realtime-15fps", "24fps")) {
             val error = assertThrows(IllegalArgumentException::class.java) { VirtualScreenPolicy.previewPullInterval(mode) }

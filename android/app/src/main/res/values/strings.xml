@@ -63,6 +63,11 @@
     <string name="virtual_screen_mode_60fps">60 FPS</string>
     <string name="virtual_screen_mode_120fps">120 FPS</string>
     <string name="virtual_screen_mode_185fps">185 FPS</string>
+    <string name="virtual_screen_mode_90fps">90 FPS</string>
+    <string name="virtual_screen_mode_144fps">144 FPS</string>
+    <string name="virtual_screen_mode_165fps">165 FPS</string>
+    <string name="virtual_screen_mode_240fps">240 FPS</string>
+
 
     <!--
       副屏选择页的标题与方向文案。两处 dp 数字都由 VirtualScreenSpec 的两个预设现算（%1$d/%2$d），

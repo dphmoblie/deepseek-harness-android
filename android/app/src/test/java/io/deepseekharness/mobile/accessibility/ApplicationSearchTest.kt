@@ -69,6 +69,23 @@ class ApplicationSearchTest {
         assertEquals(listOf("com.tencent.mm", "com.tencent.mm.pay"), packageNames("WeiXin"))
     }
 
+    /**
+     * 真机反馈（0.2.11）：无障碍白名单里输入 `gkd` 或 `GKD` 都搜不到「GKD」，用户最后是滚动列表找到的。
+     *
+     * 规则侧必须命中，所以把这条钉成用例：包名 `li.songe.gkd` 含子串 `gkd`、标签「GKD」大小写不敏感。
+     * 这条过了就意味着「搜不到」不是匹配规则的问题，而要往设备侧的应用列表查。
+     */
+    @Test
+    fun `包名子串与英文标签都能搜到 GKD`() {
+        val gkd = ApplicationSearch.installed(
+            listOf(ApplicationSearch.InstalledApplication("li.songe.gkd", "GKD", false, true)),
+            ::stubTransliterate,
+        )
+        assertEquals(listOf("li.songe.gkd"), packageNamesOf(gkd, "gkd"))
+        assertEquals(listOf("li.songe.gkd"), packageNamesOf(gkd, "GKD"))
+        assertEquals(listOf("li.songe.gkd"), packageNamesOf(gkd, "songe"))
+    }
+
     /** 改前：首字母不是标签子串，`wx` 搜不到「微信」。 */
     @Test
     fun `中文应用名能用首字母搜到`() {

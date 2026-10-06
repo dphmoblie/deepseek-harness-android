@@ -147,7 +147,7 @@ describe('browser settings bridge', () => {
 })
 
 describe('浏览器桥的无障碍白名单与验证密码', () => {
-  it('白名单永远带上自动项，且按白名单上限拒绝超长输入', async () => {
+  it('白名单永远带上自动项；条目数量不设上限，但包名格式仍然校验', async () => {
     const bridge = createBrowserBridge()
 
     const initial = await bridge.getAccessibilityAutomationState()
@@ -160,8 +160,9 @@ describe('浏览器桥的无障碍白名单与验证密码', () => {
     expect(saved.allowedPackages).toEqual(['io.deepseekharness.mobile', 'com.example.target'])
     expect(saved.alwaysAllowedPackages).toEqual(['io.deepseekharness.mobile'])
 
-    const seventeen = Array.from({ length: 17 }, (_, index) => `com.example.app${index}`)
-    await expect(bridge.setAccessibilityAutomationPackages(seventeen)).rejects.toThrow('无障碍白名单格式无效')
+    // 条目数量不设上限（原生侧也从不限制条数）：40 条一律收下，另加恒在的自动项。
+    const many = Array.from({ length: 40 }, (_, index) => `com.example.app${index}`)
+    expect((await bridge.setAccessibilityAutomationPackages(many)).allowedPackages).toHaveLength(41)
     await expect(bridge.setAccessibilityAutomationPackages(['not a package'])).rejects.toThrow('无障碍白名单格式无效')
   })
 

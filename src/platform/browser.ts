@@ -40,8 +40,6 @@ import { assertMailboxSubdirectory, assertRuntimeVersionTarget, assertSessionId,
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
 const BROWSER_MAILBOX_ROOT = '/storage/emulated/0/Documents/DSH'
-/** 无障碍白名单条目上限，与原生侧同一数值（自动项也计入）。 */
-const MAX_ACCESSIBILITY_PACKAGES = 16
 /** 包名格式与原生侧逐字一致：预览环境也不接受一份原生永远回不出来的状态。 */
 const PACKAGE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*){1,12}$/u
 const encoder = new TextEncoder()
@@ -289,7 +287,7 @@ export function createBrowserBridge(): RuntimeBridge {
     getAccessibilityAutomationState: (): Promise<AccessibilityAutomationState> => Promise.resolve(accessibilitySnapshot()),
     // 白名单的修改必须带验证密码（与原生侧同一语义）；未设置密码时放行。
     setAccessibilityAutomationPackages: (packages: string[], password?: string): Promise<AccessibilityAutomationState> => {
-      if (!Array.isArray(packages) || packages.length > MAX_ACCESSIBILITY_PACKAGES ||
+      if (!Array.isArray(packages) ||
           packages.some(value => typeof value !== 'string' || !PACKAGE_NAME_PATTERN.test(value))) {
         return Promise.reject(new Error('无障碍白名单格式无效'))
       }
@@ -334,6 +332,19 @@ export function createBrowserBridge(): RuntimeBridge {
       Promise.reject(new Error('浏览器预览不支持系统生物识别验证')),
     openAccessibilitySettings: () => Promise.reject(new Error('浏览器预览不支持打开系统无障碍设置')),
     openVirtualScreen: () => Promise.reject(new Error('目标应用副屏需要 Android 10 以上设备与 Shizuku')),
+    /*
+     * 副屏的设置与状态在浏览器预览里**没有对应物**：虚拟显示器、取帧读数、副屏前台应用
+     * 都只有 Android 上存在，因此这四条一律如实拒绝。
+     *
+     * 刻意不返回一份「看起来正常」的默认设置（档位 60 FPS、方向自动、未运行）：
+     * 那会让界面把「这里根本没有副屏」显示成「已读取，只是没启动」，
+     * 用户接着点启动、再收到一个说不清原因的成功或失败。
+     */
+    getVirtualScreenSettings: () => Promise.reject(new Error('目标应用副屏需要 Android 10 以上设备与 Shizuku')),
+    setVirtualScreenSettings: () => Promise.reject(new Error('目标应用副屏需要 Android 10 以上设备与 Shizuku')),
+    startVirtualScreen: () => Promise.reject(new Error('目标应用副屏需要 Android 10 以上设备与 Shizuku')),
+    stopVirtualScreen: () => Promise.reject(new Error('目标应用副屏需要 Android 10 以上设备与 Shizuku')),
+    getVirtualScreenState: () => Promise.reject(new Error('目标应用副屏需要 Android 10 以上设备与 Shizuku')),
     // 浏览器预览没有 Android 前台服务：如实报告未运行，避免误导保活预期。
     getKeepAliveState: (): Promise<KeepAliveState> => Promise.resolve({
       keepRuntimeInBackground: currentSettings.keepRuntimeInBackground === true,

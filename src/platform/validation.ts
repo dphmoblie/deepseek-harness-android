@@ -49,6 +49,13 @@ import type {
   StorageDirsState,
   TerminalChunk,
   TerminalExit,
+  VirtualScreenAutoFollow,
+  VirtualScreenOrientation,
+  VirtualScreenPreviewMode,
+  VirtualScreenSettings,
+  VirtualScreenSettingsUpdate,
+  VirtualScreenStartRequest,
+  VirtualScreenState,
 } from './types'
 import {
   DIAGNOSTIC_LOG_MAX_CHARS,
@@ -59,6 +66,14 @@ import {
   HARNESS_LOG_WINDOW_OPTIONS,
   MAX_STORAGE_DIRECTORIES,
   MODEL_PROVIDER_IDS,
+  VIRTUAL_SCREEN_AUTO_FOLLOW_VALUES,
+  VIRTUAL_SCREEN_MAX_DPI,
+  VIRTUAL_SCREEN_MAX_EDGE,
+  VIRTUAL_SCREEN_MIN_DPI,
+  VIRTUAL_SCREEN_MIN_EDGE,
+  VIRTUAL_SCREEN_ORIENTATION_VALUES,
+  VIRTUAL_SCREEN_PREVIEW_MODES,
+  normalizeVirtualScreenPreviewMode,
 } from './types'
 import { validateCustomCredentialIds, validateCustomCredentialUpdates, validateCustomModelProviders } from './customProviders'
 import { validateSelfCheckReport, type SelfCheckReport } from '../runtimeSelfCheck'
@@ -817,13 +832,6 @@ const DEVICE_COMMANDS = new Set<DeviceCommand>([
 ])
 // 文件上传通过 Base64 传递，原生侧仍有 128 KiB 解码上限；这里保留 JSON 参数的有界窗口。
 const MAX_DEVICE_PARAM_CHARS = 180_000
-/**
- * 无障碍白名单条目上限；自动项也计入这个上限。
- *
- * 注意：这个上限**只由前端把关**——原生侧（`AccessibilityAutomationPolicy`）只校验包名格式与
- * 重复项，不限制数量。选择器界面据此如实展示上限，避免把「界面说随便加、保存却会被拒」留给用户。
- */
-export const MAX_ACCESSIBILITY_PACKAGES = 16
 /** 「白名单验证密码」的长度区间；密码本身不会被前端留存或回显。 */
 const ACCESSIBILITY_PASSWORD_MIN_CHARS = 6
 const ACCESSIBILITY_PASSWORD_MAX_CHARS = 64
@@ -860,14 +868,13 @@ export function validateDeviceCommandResult(value: unknown): DeviceCommandResult
 }
 
 /**
- * 校验一份无障碍包名列表：只接受原生层已经约束的标准格式，数量有上限，重复项直接拒绝。
+ * 校验一份无障碍包名列表：只接受原生层已经约束的标准格式，重复项直接拒绝（条目数量不设上限）。
  *
  * 去重与否刻意**不在这里悄悄修正**：重复项说明原生回了一份读不懂的状态，
  * 静默去重会让「白名单里有两条一样的东西」这种缺陷永远查不出来。
  */
 function accessibilityPackages(value: unknown, label: string): string[] {
   if (!Array.isArray(value)) throw new Error(`${label}格式无效`)
-  if (value.length > MAX_ACCESSIBILITY_PACKAGES) throw new Error(`${label}最多 ${MAX_ACCESSIBILITY_PACKAGES} 项`)
   const packages = value.map((item, index) => {
     if (typeof item !== 'string' || item.length < 3 || item.length > 160 ||
         !/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*){1,12}$/u.test(item)) {
@@ -1620,4 +1627,199 @@ export function validateRuntimeInstallResult(value: unknown): RuntimeInstallResu
       ...(evictedIds === undefined ? {} : { evictedIds }),
     },
   }
+}
+
+/**
+ * 目标应用副屏：档位 / 自动跟随 / 方向的受控枚举。
+ *
+ * 用 `Set` 查询而不是逐项 `!==` 串联：档位有 10 档，写成一串比较既容易漏项，
+ * 也没法在别处复用同一份口径（界面与校验共用 `types.ts` 里的那三个数组）。
+ */
+const VIRTUAL_SCREEN_PREVIEW_MODE_SET = new Set<string>(VIRTUAL_SCREEN_PREVIEW_MODES)
+const VIRTUAL_SCREEN_AUTO_FOLLOW_SET = new Set<string>(VIRTUAL_SCREEN_AUTO_FOLLOW_VALUES)
+const VIRTUAL_SCREEN_ORIENTATION_SET = new Set<string>(VIRTUAL_SCREEN_ORIENTATION_VALUES)
+
+/** 副屏包名与无障碍白名单同一条规则：至少一个点、以字母开头，避免把畸形字符串送进原生。 */
+const PACKAGE_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*){1,12}$/u
+
+function virtualScreenPreviewMode(value: unknown): VirtualScreenPreviewMode {
+  if (typeof value !== 'string' || !VIRTUAL_SCREEN_PREVIEW_MODE_SET.has(value)) throw new Error('副屏取帧档位格式无效')
+  return value as VirtualScreenPreviewMode
+}
+
+/**
+ * 校验状态里的档位：原生写状态时用的是标签形式（`limited-fps` / `realtime-60fps`）。
+ *
+ * 认不出时回落 `limited`，与原生 `VirtualScreenPolicy.frameModeOf` 同一口径——
+ * 状态是**读数**，为一个看不懂的档位整条读失败、让界面显示「读不到状态」，对用户更没用。
+ */
+function virtualScreenStatePreviewMode(value: unknown): VirtualScreenPreviewMode {
+  if (typeof value !== 'string') throw new Error('副屏状态格式无效')
+  return normalizeVirtualScreenPreviewMode(value) ?? 'limited'
+}
+
+function virtualScreenAutoFollow(value: unknown): VirtualScreenAutoFollow {
+  if (typeof value !== 'string' || !VIRTUAL_SCREEN_AUTO_FOLLOW_SET.has(value)) throw new Error('副屏自动跟随策略格式无效')
+  return value as VirtualScreenAutoFollow
+}
+
+function virtualScreenOrientation(value: unknown): VirtualScreenOrientation {
+  if (typeof value !== 'string' || !VIRTUAL_SCREEN_ORIENTATION_SET.has(value)) throw new Error('副屏方向格式无效')
+  return value as VirtualScreenOrientation
+}
+
+/** 非负有限数：帧率与刷新率是浮点读数，0 表示未采样（界面显示「未知」）。 */
+function requiredNonNegativeNumber(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error(`${label}格式无效`)
+  return value
+}
+
+/** 非负安全整数：宽高与 DPI 未就绪时是 0（界面显示「未知」），负数一律拒绝。 */
+function requiredNonNegativeInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label}格式无效`)
+  return value as number
+}
+
+/**
+ * 可负的安全整数：`displayId` 未就绪时原生给的是 -1。
+ *
+ * 与宽高、DPI 分开两条规则，正是因为 -1 在这里是**合法读数**：
+ * 若一并要求非负，副屏没启动时整条状态读取都会失败，界面就永远只能显示「读不到状态」。
+ */
+function requiredIntegerValue(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value)) throw new Error(`${label}格式无效`)
+  return value as number
+}
+
+/**
+ * 允许「没有值」的短文本。
+ *
+ * 副屏状态里「取不到」既可能是空串（会话标识），也可能是 JSON 的 `null`
+ * （本轮前台应用、Activity、目标包名：原生侧刻意写 null 而不是编一个包名）：
+ * 两种都收敛成空串交给界面显示「未知」，**不补默认值、也不当成读取失败**。
+ */
+function optionalStateText(value: unknown, label: string, maximumLength = 200): string {
+  if (value === null || value === undefined) return ''
+  if (typeof value !== 'string' || value.length > maximumLength || containsControlCharacter(value)) {
+    throw new Error(`${label}格式无效`)
+  }
+  return value
+}
+
+/**
+ * 这一项到底传没传。
+ *
+ * 原生侧（与 `docs/副屏设置桥.md` 的约定）把 `undefined` 与 `null` 都当作「这一项不改」：
+ * 前端必须原样放过，别把 `null` 当成非法值拦下来，也别拿默认值补上去。
+ */
+function present(value: unknown): boolean {
+  return value !== undefined && value !== null
+}
+
+/**
+ * 写入路径的宽高：**0 与负数表示「清掉自定义尺寸」**，正数越界按原生 `coerceIn` 夹取。
+ *
+ * 与读取路径（`requiredNonNegativeInteger`）刻意不同：原生侧 0 的语义是「没有自定义过」，
+ * 界面靠它把尺寸重置回自适应或方向预设；要是像越界那样一律夹成 200，用户就再也回不到预设规格了。
+ * 类型错误仍然直接拒绝——静默把 `"800"` 当数字会让写错入参的人看不出问题。
+ */
+function virtualScreenEdge(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('副屏宽高格式无效')
+  if (value <= 0) return 0
+  return Math.min(Math.max(Math.round(value), VIRTUAL_SCREEN_MIN_EDGE), VIRTUAL_SCREEN_MAX_EDGE)
+}
+
+/** 写入路径的 DPI：规则同 `virtualScreenEdge`（0 与负数清掉自定义尺寸，正数夹进区间）。 */
+function virtualScreenDensity(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('副屏像素密度格式无效')
+  if (value <= 0) return 0
+  return Math.min(Math.max(Math.round(value), VIRTUAL_SCREEN_MIN_DPI), VIRTUAL_SCREEN_MAX_DPI)
+}
+
+/**
+ * 校验原生返回的副屏设置。
+ *
+ * 七个字段一个都不能少：缺字段时若补默认值，界面会把「读不到设置」显示成
+ * 「档位 60 FPS、方向自动」，用户改完保存才发现原生根本没读到——这里必须抛错。
+ *
+ * 宽高与 DPI 这三项**允许 0**：原生侧用 0 表示「用户没有自定义尺寸」，
+ * 这时生效规格由规格层按自适应开关与屏幕方向算出来。三者的区间校验留在
+ * `assertVirtualScreenSettingsUpdate`（写入路径）——把 0 也要求成 200..4096，
+ * 一台没自定义过尺寸的设备会永远读不出设置。
+ */
+export function validateVirtualScreenSettings(value: unknown): VirtualScreenSettings {
+  const source = asRecord(value, '副屏设置')
+  return {
+    previewMode: virtualScreenPreviewMode(source.previewMode),
+    autoFollow: virtualScreenAutoFollow(source.autoFollow),
+    orientation: virtualScreenOrientation(source.orientation),
+    adaptive: requiredBoolean(source.adaptive, '副屏自适应开关'),
+    widthPx: requiredNonNegativeInteger(source.widthPx, '副屏宽度'),
+    heightPx: requiredNonNegativeInteger(source.heightPx, '副屏高度'),
+    densityDpi: requiredNonNegativeInteger(source.densityDpi, '副屏像素密度'),
+  }
+}
+
+/**
+ * 校验原生返回的副屏状态。
+ *
+ * 十五个字段都必须存在（`active` 为假时其余字段照样要在，只是取值为空/0/-1）：
+ * 与悬浮球、存储访问那两条同一理由——字段缺失时抛错，而不是补成「未运行」，
+ * 否则「读不到状态」会被界面显示成「副屏没在跑」，用户以为停掉了、其实还在跑。
+ */
+export function validateVirtualScreenState(value: unknown): VirtualScreenState {
+  const source = asRecord(value, '副屏状态')
+  return {
+    active: requiredBoolean(source.active, '副屏运行状态'),
+    sessionId: optionalStateText(source.sessionId, '副屏会话标识', 160),
+    displayId: requiredIntegerValue(source.displayId, '副屏显示标识'),
+    previewMode: virtualScreenStatePreviewMode(source.previewMode),
+    autoFollow: virtualScreenAutoFollow(source.autoFollow),
+    orientation: virtualScreenOrientation(source.orientation),
+    adaptive: requiredBoolean(source.adaptive, '副屏自适应开关'),
+    widthPx: requiredNonNegativeInteger(source.widthPx, '副屏宽度'),
+    heightPx: requiredNonNegativeInteger(source.heightPx, '副屏高度'),
+    densityDpi: requiredNonNegativeInteger(source.densityDpi, '副屏像素密度'),
+    targetPackage: optionalStateText(source.targetPackage, '副屏目标应用', 160),
+    frameFps: requiredNonNegativeNumber(source.frameFps, '副屏采集帧率'),
+    displayRefreshRate: requiredNonNegativeNumber(source.displayRefreshRate, '副屏实际刷新率'),
+    virtualForegroundPackage: optionalStateText(source.virtualForegroundPackage, '副屏前台应用', 160),
+    virtualForegroundActivity: optionalStateText(source.virtualForegroundActivity, '副屏前台页面', 200),
+  }
+}
+
+/**
+ * 校验「保存副屏设置」的入参：只在前端拦明显不合法的取值，落盘与否在原生侧。
+ *
+ * 只处理**出现过的**字段——没传的字段必须原样缺席，不能补成某个默认值再发过去：
+ * 那等于用界面的默认值覆盖用户在别处（悬浮窗快捷入口）刚改过的设置。
+ * 宽高与 DPI 允许 0：0 是原生侧「清掉自定义尺寸」的合法取值（页面拿它做重置），不算越界。
+ */
+export function assertVirtualScreenSettingsUpdate(value: unknown): VirtualScreenSettingsUpdate {
+  const source = asRecord(value, '副屏设置更新')
+  const update: VirtualScreenSettingsUpdate = {}
+  if (present(source.previewMode)) update.previewMode = virtualScreenPreviewMode(source.previewMode)
+  if (present(source.autoFollow)) update.autoFollow = virtualScreenAutoFollow(source.autoFollow)
+  if (present(source.orientation)) update.orientation = virtualScreenOrientation(source.orientation)
+  if (present(source.adaptive)) update.adaptive = requiredBoolean(source.adaptive, '副屏自适应开关')
+  if (present(source.widthPx)) update.widthPx = virtualScreenEdge(source.widthPx)
+  if (present(source.heightPx)) update.heightPx = virtualScreenEdge(source.heightPx)
+  if (present(source.densityDpi)) update.densityDpi = virtualScreenDensity(source.densityDpi)
+  return update
+}
+
+/** 校验「启动副屏」的入参：包名必填且必须是标准包名，其余可选字段与保存设置同一套规则。 */
+export function assertVirtualScreenStartRequest(value: unknown): VirtualScreenStartRequest {
+  const source = asRecord(value, '启动副屏参数')
+  const packageName = source.packageName
+  if (typeof packageName !== 'string' || packageName.length < 3 || packageName.length > 160 || !PACKAGE_NAME_PATTERN.test(packageName)) {
+    throw new Error('目标应用包名格式无效')
+  }
+  const request: VirtualScreenStartRequest = { packageName }
+  if (present(source.adaptive)) request.adaptive = requiredBoolean(source.adaptive, '副屏自适应开关')
+  if (present(source.orientation)) request.orientation = virtualScreenOrientation(source.orientation)
+  if (present(source.widthPx)) request.widthPx = virtualScreenEdge(source.widthPx)
+  if (present(source.heightPx)) request.heightPx = virtualScreenEdge(source.heightPx)
+  if (present(source.densityDpi)) request.densityDpi = virtualScreenDensity(source.densityDpi)
+  return request
 }

@@ -27,6 +27,10 @@ class ShellVirtualScreen {
     private var death: IBinder.DeathRecipient? = null
     private var session = ""
     private var targetPackage = ""
+    // 会话规格原样留档：`restart` 要用**同一份规格**重建显示与会话（组件、分辨率、DPI），
+    // 而设备 Shell 侧没有别的来源能拿到它们（宿主只在 start 时传进来一次）。
+    private var targetComponent = ""
+    private var displayDpi = 0
     private var width = 0
     private var height = 0
     private var independentFocus = false
@@ -50,6 +54,20 @@ class ShellVirtualScreen {
     private var samplePixels = IntArray(0)
     // 默认 60fps 保证人眼预览流畅；需要省电时可切回 limited。
     @Volatile private var frameMode = "60fps"
+
+    /**
+     * 当前自动跟随策略（`off` / `pull_back` / `promote`），由 `config` 动作写入、在 [state] 里回显。
+     * 宿主的健康循环正是靠回显值决定要不要周期性调用 `autoFollowTick`：不回显等于自动跟随永远不触发。
+     */
+    @Volatile private var autoFollow = VirtualScreenPolicy.AUTO_FOLLOW_OFF
+
+    /**
+     * 自动跟随的节流器（按「规则 + 目标」计时，默认两秒）。真机时钟传 `SystemClock.elapsedRealtime`，
+     * 与单测共用同一份状态机逻辑。
+     */
+    private val followThrottle = VirtualScreenPolicy.FollowThrottle(
+        now = { SystemClock.elapsedRealtime() },
+    )
     // 最近若干帧的采集时刻环形缓冲（毫秒，elapsedRealtime），在 frameLock 内读写，实测帧率据此换算。
     private val frameStamps = LongArray(FRAME_SAMPLE_COUNT)
     private var frameStampCount = 0
@@ -57,6 +75,16 @@ class ShellVirtualScreen {
     private var frameFps = 0.0
     // 会话级触摸手势；随副屏会话创建与释放，停止会话时必须取消未结束的手势。
     private var gesture: VirtualScreenInjector.Gesture? = null
+    // 最近一次触摸/手势注入的实测读数（沿用 frame* 系列的做法）：只记通道名、计数与异常类名，
+    // 不含命令输出、路径或画面内容。注入耗时与事件数是判断「离散通道到底注入了多少」的唯一依据。
+    private var injectionChannel = ""
+    private var injectionAt = 0L
+    private var injectionMillis = 0L
+    private var injectionEvents = 0
+    private var injectionMerged = 0
+    private var injectionDropped = 0
+    // 最近一次注入失败的原因标签（形如 discrete:move:IOException）；空串表示这次注入没有失败。
+    private var injectionError = ""
     private val timers = Executors.newSingleThreadScheduledExecutor()
     private val writers = Executors.newFixedThreadPool(2)
     private val transfers = Semaphore(2)
@@ -69,6 +97,8 @@ class ShellVirtualScreen {
         try {
             // 清除应用 Binder 身份，系统服务应按 Shizuku 进程的真实权限判断。
             width = w; height = h; targetPackage = component.substringBefore('/')
+            // 规格原样留档，供 restart 用同一份规格重建（见字段区注释）。
+            targetComponent = component; displayDpi = dpi
             session = UUID.randomUUID().toString()
             val thisSession = session
             owner = client
@@ -107,7 +137,7 @@ class ShellVirtualScreen {
             if (trusted) flags = flags or (1 shl 10)
             independentFocus = trusted && Build.VERSION.SDK_INT >= 34
             if (independentFocus) flags = flags or (1 shl 14) or (1 shl 16)
-            // 触摸直传：进程内通道可用则逐事件注入，否则整段手势在抬起时合成 tap/swipe 交给 input 命令。
+            // 触摸直传：进程内通道可用则逐事件注入；按下事件没被接受时改走离散通道，逐事件 input motionevent。
             // 显示器要等下面才创建，所以手势只持有取编号的函数；真正注入时编号仍为 0 或 -1 就拒绝，绝不落到主屏。
             gesture = VirtualScreenInjector.Gesture({ id() }, w, h) { args ->
                 command(listOf("/system/bin/input", "-d", id().toString()) + args)
@@ -117,7 +147,10 @@ class ShellVirtualScreen {
             // VirtualDisplayConfig 与 createVirtualDisplay(VirtualDisplayConfig) 都是 API 34 才有的，
             // 低版本必须走下面的旧重载，否则会在 API 31–33 真机上抛 NoClassDefFoundError。
             val created = if (Build.VERSION.SDK_INT >= 34) {
-                val refresh = 185f
+                // 请求刷新率按当前档位求值（limited → 60f，其余按档位名）。
+                // 系统**可能忽略**这个请求（本机该虚拟屏的 supportedModes 只有 60.0 一档），
+                // 所以请求值只是「意图」；真实值一律以创建后读回的 display.refreshRate 为准（见 state）。
+                val refresh = VirtualScreenPolicy.requestedRefreshRate(frameMode)
                 val config = android.hardware.display.VirtualDisplayConfig.Builder("DSH 目标应用", w, h, dpi)
                     .setSurface(capture.surface).setFlags(flags).setRequestedRefreshRate(refresh).build()
                 manager.createVirtualDisplay(config)
@@ -143,13 +176,24 @@ class ShellVirtualScreen {
                 synchronized(frameLock) {
                     if (reader !== source) { image.close(); return@let }
                     val plane = image.planes[0]
+                    // 本拍的失败原因：改前取硬件缓冲区失败是被静默吞掉的（预览只说「没画面」不说为什么）。
+                    var failure = ""
                     if (Build.VERSION.SDK_INT >= 30) {
-                        runCatching { image.hardwareBuffer }.getOrNull()?.let { next ->
+                        val next = try {
+                            image.hardwareBuffer
+                        } catch (error: Throwable) {
+                            // 只记异常类名，不写命令输出、文件路径或画面内容。
+                            failure = error.javaClass.simpleName
+                            null
+                        }
+                        if (next != null) {
                             hardwareImage?.close()
                             hardwareImage = image
                             retained = true
                             hardwareFrame?.close()
                             hardwareFrame = next
+                        } else if (failure.isEmpty()) {
+                            failure = "HardwareBufferUnavailable"
                         }
                     }
                     check(plane.pixelStride == 4 && plane.rowStride >= image.width * 4)
@@ -192,7 +236,9 @@ class ShellVirtualScreen {
                     // 新帧未编码：空白帧同样不留下缓存，后续截图必须重新判断当前画面。
                     encodedFrame = null
                     frameAt = frameSampledAt
-                    frameError = ""
+                    // 本拍采集成功：清掉上一拍的异常，但本拍自己的硬件缓冲区失败原因要留着上报，
+                    // 直到下一拍真正拿到缓冲区才自然清空——取硬件帧失败不再被静默吞掉。
+                    frameError = failure
                     @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
                     (frameLock as java.lang.Object).notifyAll()
                 }
@@ -217,6 +263,8 @@ class ShellVirtualScreen {
     @Synchronized fun state(): JSONObject {
         // 画面相关字段在同一个锁内一次读出，避免状态里混用不同帧的快照。
         val frames = synchronized(frameLock) { FrameState(frameAt, frameBlank, frameSampledAt, frameFps, frameError) }
+        // 副屏最前台要起一个 dumpsys 进程，只查一次，供下面两个字段共用。
+        val virtualForeground = resumeForeground()
         return JSONObject().put("active", display != null)
             .put("sessionId", session).put("displayId", id()).put("packageName", targetPackage)
             .put("width", width).put("height", height).put("frameAtElapsedMs", frames.at)
@@ -232,10 +280,34 @@ class ShellVirtualScreen {
             .put("frameIntervalMs", VirtualScreenPolicy.frameInterval(frameMode))
             // 一位小数即可，调用方不需要更高精度。
             .put("frameFps", Math.round(frames.fps * 10.0) / 10.0)
-            // 触摸通道：stream 为逐事件直传，discrete 为抬起时合成 tap/swipe。
+            // 触摸通道：stream 为进程内逐事件直传，discrete 为逐事件走 input motionevent（合并采样点、丢弃过期移动）。
             .put("touchChannel", VirtualScreenInjector.channel())
+            // 注入诊断：通道、上次注入的时刻/耗时/落地事件数/合并与丢弃数，以及失败原因标签（空串=没失败）。
+            .put("injectionChannel", injectionChannel)
+            .put("injectionAtElapsedMs", injectionAt)
+            .put("injectionMillis", injectionMillis)
+            .put("injectionEvents", injectionEvents)
+            .put("injectionMerged", injectionMerged)
+            .put("injectionDropped", injectionDropped)
+            .put("injectionError", injectionError)
             .put("uiTreeSupported", false)
             .put("independentFocusRequested", independentFocus)
+            // 自动跟随策略回显：宿主健康循环读它决定要不要周期性调用 autoFollowTick。
+            .put(VirtualScreenPolicy.AUTO_FOLLOW_FIELD, autoFollow)
+            // 副屏最前台（数据来源：`dumpsys activity activities` 按本会话 displayId 分段取 topResumedActivity）。
+            // 会话不在或解析不到时留空串：**不能**用主屏前台顶替，否则调用方会以为目标已经在副屏上。
+            .put(VirtualScreenPolicy.VIRTUAL_FOREGROUND_PACKAGE_FIELD, virtualForeground?.substringBefore('/') ?: "")
+            .put(VirtualScreenPolicy.VIRTUAL_FOREGROUND_ACTIVITY_FIELD, virtualForeground ?: "")
+    }
+
+    /**
+     * 本次会话副屏上最前台的组件名（解析不到返回 null）。为了不让每次 `state()` 都起一个 `dumpsys` 进程，
+     * 只在会话真的活着时查，且任何异常都收敛成 null——观测量缺失只该让字段为空，不该让状态读取失败。
+     */
+    private fun resumeForeground(): String? {
+        val displayId = id()
+        if (displayId <= 0) return null
+        return runCatching { foregroundComponent(displayId) }.getOrNull()
     }
 
     @Synchronized fun action(raw: String): String {
@@ -253,28 +325,74 @@ class ShellVirtualScreen {
                 check(targetVisible()) { "目标应用已离开副屏或系统无法确认其状态" }
                 command(VirtualScreenPolicy.inputArguments(p, id(), width, height))
             }
+            // 生命周期动作：start/restart/reconnect。语义判定在 VirtualScreenPolicy.lifecycleOutcome 里（纯函数），
+            // 这里只负责把它翻译成可区分的返回字段。做不到的动作如实返回带码的失败，绝不假装成功。
+            in VirtualScreenPolicy.LIFECYCLE_ACTIONS -> return lifecycleAction(p.getString("action"))
+            // 自动跟随：由宿主健康循环周期性调用（不是 AI 直接调的动作），一次最多做一个动作，带节流且幂等。
+            VirtualScreenPolicy.AUTO_FOLLOW_TICK_ACTION -> return autoFollowTick(p)
             // 预览限帧模式：校验通过后立即生效，采集间隔按新模式求值。
+            // autoFollow 是同一条 config 消息里的第二项（宿主启动时发的就是 VirtualScreenPreferences.configuration()），
+            // 缺省不动：老调用方没带这个字段时不能把用户已选的策略悄悄改掉。
             "config" -> {
                 val mode = p.getString(VirtualScreenPolicy.PREVIEW_FIELD)
                 VirtualScreenPolicy.frameInterval(mode)
                 frameMode = mode
+                if (!p.isNull(VirtualScreenPolicy.AUTO_FOLLOW_FIELD)) {
+                    autoFollow = VirtualScreenPolicy.autoFollow(p.getString(VirtualScreenPolicy.AUTO_FOLLOW_FIELD))
+                }
             }
             // 目标应用热切换：沿用同一个虚拟显示器与采集器，不释放也不重建。
+            // 三个可选参数：confirm_budget_ms（确认窗口，默认 3 秒、夹取 500..15000）、
+            // prewarm（先冷启动一次目标再确认）、rollback（失败时把原目标拉回副屏）。
             "target" -> {
-                val component = VirtualScreenPolicy.targetRequest(p)
-                val requested = component.substringBefore('/')
-                command(listOf("/system/bin/am", "start", "-W", "--display", id().toString(), "-n", component))
-                // `am start -W` 返回只代表命令派发完成，不等于目标已经在新屏 resume：在一个有界预算内反复确认。
-                // 超时抛带明确 code 的 VIRTUAL_SCREEN_TARGET_TIMEOUT；不能再用 check 抛 IllegalStateException，
-                // 那会顺着 VirtualScreenPolicy.errorCode 的 else 兜底变成「副屏不可用」。
-                val switched = VirtualScreenPolicy.waitUntilVisible(
-                    elapsedMillis = { SystemClock.elapsedRealtime() },
-                    sleepMillis = { SystemClock.sleep(it) },
-                    // 确认的是刚请求的包名：这一步 targetPackage 还是旧值，拿它去查等于没查。
-                    visible = { targetVisible(requested) },
-                )
-                if (!switched) throw VirtualScreenPolicy.targetSwitchFailure()
-                targetPackage = requested
+                // 目标入口有两种字段形状（组件 / 包名，见 targetRequestField）：这里是设备侧唯一做解析的地方，
+                // 宿主设置页与 AI 工具面因此可以各说各的写法，而不必让上层先把它翻译成组件。
+                val request = VirtualScreenPolicy.targetRequestField(p)
+                val previous = targetPackage.takeIf { it.isNotEmpty() }?.let { resolveComponent(it) }
+                val budget = VirtualScreenPolicy.confirmBudgetMillis(p)
+                val prewarm = p.optBoolean(VirtualScreenPolicy.PREWARM_FIELD, false)
+                val rollback = p.optBoolean(VirtualScreenPolicy.ROLLBACK_FIELD, false)
+                var warmUpError = ""
+                var component = request
+                try {
+                    // 只给包名时先解析启动入口，再走既有的启动与确认。解析失败放在 try 里统一处理：
+                    // 「这套入口不成立」与「am start 被拒」同属 NOT_ACCEPTED，调用方该换入口而不是重试。
+                    if (!component.contains('/')) {
+                        component = resolveComponent(component) ?: throw VirtualScreenPolicy.launchUnresolvedFailure(component)
+                    }
+                    if (prewarm) warmUpError = warmUp(component)
+                    launchOnDisplay(listOf("-n", component), component, component.substringBefore('/'), budget)
+                    targetPackage = component.substringBefore('/')
+                } catch (error: Exception) {
+                    // 失败时把「哪一类失败 + 为什么」分开放：错误码回答哪一类（会话失效 / 切换超时 / 启动被拒），
+                    // reason 回答为什么（NOT_ACCEPTED / NOT_FOREGROUND / SESSION_DEAD），调用方据此决定重试还是换入口。
+                    // reason 进 message 前缀，是因为 RuntimeFailure 只有 code 与 message 两个字段（见 runtime 包），
+                    // 没有地方挂结构化字段；需要区分的话调用方读 "REASON: 详情" 的前缀即可。
+                    val reason = VirtualScreenPolicy.switchFailureReason(error)
+                    val code = VirtualScreenPolicy.errorCode(error)
+                    val detail = error.message?.takeIf { it.isNotBlank() } ?: "目标应用未能在副屏上进入前台"
+                    // 回滚：把原目标拉回副屏。回滚**自己也会失败**，两种结果都要如实说，
+                    // 不能让调用方以为「请求了回滚就等于回到了原目标」。
+                    var suffix = ""
+                    if (rollback && previous != null) {
+                        if (rollbackTarget(previous, budget)) {
+                            // 回滚成功时把原目标写回 targetPackage：不写会让 state/snapshot 继续指向一个其实不在副屏上的目标。
+                            targetPackage = previous.substringBefore('/')
+                            suffix = "；已回滚到原目标 $previous"
+                        } else {
+                            suffix = "；回滚到原目标 $previous 也没能确认上屏"
+                        }
+                    }
+                    throw VirtualScreenPolicy.failure(code, "${VirtualScreenPolicy.SWITCH_REASON_FIELD}=$reason: $detail$suffix")
+                }
+                return JSONObject()
+                    .put("sessionId", session).put("displayId", id())
+                    .put("targetPackage", targetPackage).put("component", component)
+                    .put("confirmBudgetMillis", budget)
+                    .put("prewarm", prewarm).put("rollback", rollback)
+                    // 预热失败不影响这次切换的结果，但如实回报，免得「预热过了」被当成事实。
+                    .put("prewarmError", warmUpError)
+                    .toString()
             }
             // 触摸直传：逐事件注入，不逐事件跑 targetVisible()（它要起 dumpsys 进程，会毁掉直传帧率）。
             "touch" -> {
@@ -282,13 +400,24 @@ class ShellVirtualScreen {
                 if (touch.phase == "down") check(targetVisible()) { "目标应用已离开副屏或系统无法确认其状态" }
                 val gesture = checkNotNull(gesture) { "副屏会话尚未就绪" }
                 val result = gesture.handle(touch)
+                // 失败只可能出在抬起阶段（离散通道那时才逐事件跑 input 命令）：照实报错并留下诊断，
+                // 不能只给一个 streamed=false 让调用方以为「大概是没做吧」——改前正是这样静默过去的。
+                recordInjection(result)
+                val failure = result.optString("failure")
+                if (failure.isNotEmpty()) {
+                    throw RuntimeFailure(
+                        VirtualScreenPolicy.INJECTION_FAILED_CODE,
+                        "副屏触摸注入未完成：$failure（副屏会话本身正常，可稍后重试）",
+                    )
+                }
                 return JSONObject()
                     .put("sessionId", session).put("displayId", id())
                     .put("touchChannel", VirtualScreenInjector.channel()).put("touch", result)
                     .toString()
             }
-            // AI 手势：整段路径交给注入器一次直传（down → 约 16 毫秒步进 move → up），
-            // 插值与节拍都在进程内完成，不逐点起 shell 进程；失败在返回里标 aborted，这里翻译成错误码。
+            // AI 手势：整段路径交给注入器——进程内通道按约 16 毫秒步进直传；不可用时走离散通道逐事件
+            // 注入 input motionevent（按合并/丢弃规则封顶事件数）。失败在返回里标 failure/aborted，
+            // 这里翻译成注入错误码：没落地就绝不报成功。
             "gesture" -> {
                 check(targetVisible()) { "目标应用已离开副屏或系统无法确认其状态" }
                 val points = VirtualScreenPolicy.gestureRequest(p, width, height)
@@ -302,6 +431,13 @@ class ShellVirtualScreen {
                         VirtualScreenPolicy.INJECTION_FAILED_CODE,
                         "副屏手势注入未完成：${error.message ?: "触摸通道拒绝了这次手势"}（副屏会话本身正常，可稍后重试或改用 tap/swipe）",
                     )
+                }
+                recordInjection(result)
+                // 离散通道的失败：`failure` + `failedAt` 说明是按下/移动/抬起哪个事件没落地、已落地多少、
+                // 丢弃了多少过期移动；改前这里只发一次 input swipe 就返回成功，画面不动却报成功。
+                val failure = result.optString("failure")
+                if (failure.isNotEmpty()) {
+                    throw RuntimeFailure(VirtualScreenPolicy.INJECTION_FAILED_CODE, "副屏手势注入未完成：$failure")
                 }
                 if (result.optBoolean("aborted")) {
                     throw RuntimeFailure(
@@ -403,26 +539,30 @@ class ShellVirtualScreen {
         return state().toString()
     }
 
-    @Synchronized fun snapshot(sessionId: String): ParcelFileDescriptor {
-        requireSession(sessionId)
-        check(targetVisible()) { "目标应用已离开副屏或无法确认其状态" }
-        val bytes = synchronized(frameLock) {
-            val before = cpuFrameAt
-            cpuCaptureRequested = true
-            val deadline = SystemClock.elapsedRealtime() + 800L
-            while (frame == null || cpuFrameAt <= before) {
-                val remain = deadline - SystemClock.elapsedRealtime()
-                if (remain <= 0) break
-                @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
-                (frameLock as java.lang.Object).wait(minOf(40L, remain))
+    /**
+     * 抓一张 PNG 截图，供 `virtualScreenSnapshot`（事务 8）回传。
+     *
+     * **这条路径刻意不再 `@Synchronized`**：它要等应用侧发起一次 CPU 取帧（最多 800 毫秒），而
+     * `Object.wait()` 只释放 [frameLock]、不释放实例监视器。改前等待期间 `action`（输入注入）、
+     * `frame`（预览取硬件帧，5–16 毫秒一次）与 `state` 全都要排在这个等待后面——应用侧按预览帧率
+     * 轮询事务 9 时，输入注入就被一次次推到队列尾，用户看到的就是「通过悬浮窗操作副屏很慢」。
+     * 现在只有会话校验与目标判定这一小段拿实例监视器，等待只在 [awaitFrame] 里进行；锁序仍是
+     * 「实例监视器 → frameLock」，且持 [frameLock] 时绝不回头取实例监视器。
+     */
+    fun snapshot(sessionId: String): ParcelFileDescriptor {
+        synchronized(this) {
+            requireSession(sessionId)
+            // 错误码细分（交付项 2）：这两条此前都是 `check(...)` → IllegalStateException，
+            // 顺着 errorCode 的兜底统一变成「副屏不可用」，调用方只能盲目重试。现在分开：
+            // - 目标已离开副屏 → TARGET_LEFT（要先把目标切回来，重试没有用）；
+            // - 画面还没就绪/已过期 → STALE_FRAME（原地等几百毫秒重试即可，由 [awaitFrame] 抛）。
+            // 仍然无法区分的只有一种：`dumpsys` 本身跑不起来（命令异常会原样向上抛，兜底码不变）。
+            if (!targetVisible()) {
+                throw VirtualScreenPolicy.failure(VirtualScreenPolicy.TARGET_LEFT_CODE, VirtualScreenPolicy.TARGET_LEFT_MESSAGE)
             }
-            check(frameAt > 0 && frame != null) { "副屏尚未产生画面" }
-            val current = checkNotNull(frame)
-            // 静止页面复用最后一帧，不能把“画面未变化”误判成连接失效；
-            // 但空白帧绝不写入缓存：每次按当前 Bitmap 重新编码，让调用方依据 frameBlank 决定是否重试，
-            // 而不是拿一张空白画面的缓存冒充新画面。
-            if (frameBlank) encodeFrame(current) else encodedFrame ?: encodeFrame(current).also { encodedFrame = it }
         }
+        // 等待与空白帧的取舍全在 [awaitFrame]：那里只持 frameLock，不占实例监视器。
+        val bytes = awaitFrame()
         check(transfers.tryAcquire()) { "副屏截图传输繁忙" }
         val pipe = try { ParcelFileDescriptor.createReliablePipe() } catch (e: Exception) { transfers.release(); throw e }
         // 管道绕开 Binder 事务大小上限；未读取的客户端最多占用五秒资源。
@@ -435,12 +575,67 @@ class ShellVirtualScreen {
         return pipe[0]
     }
 
+    /**
+     * 请求一次 CPU 取帧并等它就绪（最多 800 毫秒），返回要回传的 PNG 字节。
+     *
+     * 只持 [frameLock]：`wait()` 会释放它，采集线程照常写入新帧，实例监视器完全不参与，
+     * 因此输入注入与预览取硬件帧不会被这段等待挡住（问题 A 的修法就在这一行边界上）。
+     * 等待期间会话被关闭时 [close] 会在 [frameLock] 内清空 frame/frameAt，下面照旧按 STALE_FRAME 抛。
+     */
+    private fun awaitFrame(): ByteArray = synchronized(frameLock) {
+        val before = cpuFrameAt
+        cpuCaptureRequested = true
+        val deadline = SystemClock.elapsedRealtime() + 800L
+        while (frame == null || cpuFrameAt <= before) {
+            val remain = deadline - SystemClock.elapsedRealtime()
+            if (remain <= 0) break
+            @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+            (frameLock as java.lang.Object).wait(minOf(40L, remain))
+        }
+        // 仍然按 STALE_FRAME 抛：这个码是「稍后重试」的语义，不该被上层兜底成「副屏不可用」。
+        if (frameAt <= 0 || frame == null) {
+            throw VirtualScreenPolicy.failure(VirtualScreenPolicy.STALE_FRAME_CODE, VirtualScreenPolicy.STALE_FRAME_MESSAGE)
+        }
+        val current = checkNotNull(frame)
+        // 静止页面复用最后一帧，不能把“画面未变化”误判成连接失效；
+        // 但空白帧绝不写入缓存：每次按当前 Bitmap 重新编码，让调用方依据 frameBlank 决定是否重试，
+        // 而不是拿一张空白画面的缓存冒充新画面。
+        if (frameBlank) encodeFrame(current) else encodedFrame ?: encodeFrame(current).also { encodedFrame = it }
+    }
+
     /** 返回最近一帧的硬件缓冲区，供页面预览直接交给 GPU；调用方完成使用后必须关闭句柄。 */
     @Synchronized fun frame(sessionId: String): HardwareBuffer {
         requireSession(sessionId)
         check(Build.VERSION.SDK_INT >= 30) { "硬件帧预览需要 Android 11 或更高版本" }
-        check(frameAt > 0 && hardwareFrame != null) { "副屏尚未产生硬件画面" }
+        // 预览路径刻意**不**查 targetVisible()：那要起一个 dumpsys 进程，每帧都查会把预览帧率打下来。
+        // 也刻意**不**套 frameStale() 的两秒窗口：静止页面本来就不再产生新帧，
+        // 按「帧老于两秒」判会把这帧正常的静止画面误报成过期。
+        // 这里只区分「还没有任何一帧」——那才是 STALE_FRAME（调用方下一帧重试即可），而不是「副屏不可用」。
+        if (frameAt <= 0 || hardwareFrame == null) {
+            throw VirtualScreenPolicy.failure(VirtualScreenPolicy.STALE_FRAME_CODE, VirtualScreenPolicy.STALE_FRAME_MESSAGE)
+        }
         return checkNotNull(hardwareFrame)
+    }
+
+    /**
+     * 记下这次注入的实测读数（通道、耗时、落地事件数、合并与丢弃数、失败原因标签），供 [state] 上报。
+     *
+     * 只记通道名、计数与异常类名：失败标签形如 `discrete:move:Rejected`，**不含**命令输出、文件路径或密钥。
+     * 调用方是 [action]（已持实例监视器），所以这里不再加锁。
+     */
+    private fun recordInjection(result: JSONObject, at: Long = SystemClock.elapsedRealtime()) {
+        injectionChannel = result.optString("channel", VirtualScreenInjector.channel())
+        injectionAt = at
+        injectionMillis = result.optLong("millis", 0L)
+        injectionEvents = result.optInt("events", 0)
+        injectionMerged = result.optInt("merged", 0)
+        injectionDropped = result.optInt("dropped", 0)
+        val failure = result.optString("failure")
+        injectionError = if (failure.isEmpty()) "" else {
+            val phase = result.optString("failedAt").ifEmpty { result.optString("phase", "unknown") }
+            val kind = result.optString("failureKind").ifEmpty { "Failed" }
+            "$injectionChannel:$phase:$kind"
+        }
     }
 
     private fun id(): Int = display?.display?.displayId ?: -1
@@ -523,8 +718,17 @@ class ShellVirtualScreen {
      * - 确认超时 → 复用 [VirtualScreenPolicy.targetSwitchFailure]（同样是有界轮询，不新增「副屏不可用」误报）；
      * - 返回确认到的包名：优先用调用方给的目标包名；链接情形退化为 `am start` 输出里的组件；
      *   两者都没有时只能确认「副屏前台换成了另一个组件」，此时返回 null。
+     *
+     * [budgetMillis] 是**确认窗口**（`target` 动作的 `confirm_budget_ms`，默认 3 秒、夹取 500..15000）。
+     * `launch`/`follow` 沿用默认值，只有显式带预算的 `target` 会把它传进来：
+     * 给得越短，「目标其实慢了一点点才上屏」就越容易被判成超时，但调用方的等待也更短。
      */
-    private fun launchOnDisplay(arguments: List<String>, label: String, expected: String?): String? {
+    private fun launchOnDisplay(
+        arguments: List<String>,
+        label: String,
+        expected: String?,
+        budgetMillis: Long = VirtualScreenPolicy.TARGET_SWITCH_TIMEOUT_MILLIS,
+    ): String? {
         // 链接没有已知包名：先记下副屏当前前台，用于「换了一个前台」这条退路判定。
         val before = if (expected == null) foregroundComponent(id()) else null
         val output = try {
@@ -542,6 +746,7 @@ class ShellVirtualScreen {
             { foregroundComponent(id())?.let { it != before } == true }
         }
         val switched = VirtualScreenPolicy.waitUntilVisible(
+            timeoutMillis = budgetMillis,
             elapsedMillis = { SystemClock.elapsedRealtime() },
             sleepMillis = { SystemClock.sleep(it) },
             visible = visible,
@@ -556,9 +761,9 @@ class ShellVirtualScreen {
      * 1. 纯 ASCII：`input text` 直接写（它内部就是合成键事件，比逐字符更稳）；
      * 2. `input text` 没成：用 [KeyCharacterMap] 把字符映射成键码，逐字符 `input keyevent` 兜底——
      *    **绝不自己拼 shell 字符串**，映射不出来（需要 Shift 组合的大写字母、部分符号）就如实失败；
-     * 3. 含非 ASCII：这条路根本送不进去（`input text` 只吃可打印 ASCII）。这里是 Shizuku 用户服务进程，
-     *    拿不到无障碍服务实例（`DeepSeekAccessibilityService.current()` 是进程内静态引用），所以只如实回报
-     *    「这次注入必须回到主进程的无障碍通道」——**不是**「副屏不可用」，副屏本身一切正常。
+     * 3. 含非 ASCII：`input text` / `input keyevent` 都送不进去（前者只吃可打印 ASCII，后者要靠无 Shift 的
+     *    单键映射）。改走 [nonAsciiTextAction] 的剪贴板 + 粘贴键通道（同样不依赖无障碍）；
+     *    通道没打通时**如实失败**，回 `VIRTUAL_SCREEN_TEXT_UNSUPPORTED` 并按探测结论给可操作提示。
      * 4. `submit=true`：文字**确实写进去之后**才按一次回车（键码复用策略层那唯一一份映射），失败不按。
      */
     private fun textAction(p: JSONObject): String {
@@ -567,12 +772,7 @@ class ShellVirtualScreen {
         // 参数与前置条件（长度、控制字符、零宽字符）与无障碍路径共用同一份判定：
         // 不合法时抛 IllegalArgumentException，上层映射成 VIRTUAL_SCREEN_INVALID。
         VirtualScreenTextPolicy.requireInjectable(text)
-        if (VirtualScreenTextPolicy.classify(text).hasNonAscii) {
-            throw RuntimeFailure(
-                VirtualScreenTree.TEXT_INJECTION_REQUIRED,
-                "这段文本含非 ASCII 字符，只能由主进程通过无障碍定向注入通道写入（设备 Shell 进程拿不到无障碍服务实例）。副屏会话本身正常。",
-            )
-        }
+        if (VirtualScreenTextPolicy.classify(text).hasNonAscii) return nonAsciiTextAction(text, submit)
         check(targetVisible()) { "目标应用已离开副屏或系统无法确认其状态" }
         val attempts = ArrayList<VirtualScreenTextPolicy.TextAttempt>(3)
         val written = runCatching { command(VirtualScreenPolicy.inputArguments(p, id(), width, height)) }
@@ -655,6 +855,68 @@ class ShellVirtualScreen {
         .put("displayId", id())
 
     /**
+     * 非 ASCII 文本在设备 Shell 侧的通道：**剪贴板 + 粘贴键**（这条路上不需要无障碍服务）。
+     *
+     * 为什么只有这一条：「input text」只接受可打印 ASCII；无障碍定向写入（`ACTION_SET_TEXT`/`ACTION_PASTE`）
+     * 需要无障碍服务的实例，而那是主进程的进程内静态引用，Shizuku 用户服务进程拿不到。
+     * 于是能试的是：`cmd clipboard set-primary-clip <文本>` 把文本写进系统剪贴板，
+     * 再用 `input -d <副屏> keyevent 279`（KEYCODE_PASTE）让副屏上**已聚焦**的输入框自己粘贴。
+     *
+     * 诚实边界（都写进返回值，不让调用方猜）：
+     * - 写入之后**立刻读回核对**（`cmd clipboard get-primary-clip` 的前 16 个字符），对不上就不算通道可用；
+     * - 读得到 ≠ 粘得上：设备 Shell 侧读不到副屏输入框的内容，所以成功回执里带 `verified=false`
+     *   与 [VirtualScreenPolicy.CLIPBOARD_VERIFY_NOTE]，粘贴到底落没落进目标字段由调用方用截图/节点树复核；
+     * - 通道没打通（命令不存在/被拒/读回对不上）或粘贴键发不出去时**如实失败**，
+     *   抛 `VIRTUAL_SCREEN_TEXT_UNSUPPORTED`，并按探测结论给一句可操作提示；
+     * - 这个动作会改写系统剪贴板（与主进程无障碍链的粘贴方案同源），失败时**不回滚**剪贴板内容。
+     */
+    private fun nonAsciiTextAction(text: String, submit: Boolean): String {
+        val written = runCatching {
+            command(listOf("/system/bin/cmd", "clipboard", "set-primary-clip", text))
+        }
+        val readback = if (written.isSuccess) {
+            runCatching { command(listOf("/system/bin/cmd", "clipboard", "get-primary-clip")) }
+        } else {
+            null
+        }
+        val probe = VirtualScreenPolicy.clipboardProbe(
+            succeeded = readback?.isSuccess == true,
+            output = readback?.getOrNull().orEmpty(),
+            failure = written.exceptionOrNull()?.message.orEmpty(),
+            expected = text,
+        )
+        if (probe != VirtualScreenPolicy.ClipboardProbe.AVAILABLE) {
+            val (code, message) = VirtualScreenPolicy.nonAsciiTextFailure(probe)
+            throw RuntimeFailure(code, message)
+        }
+        val pasted = runCatching {
+            command(listOf("/system/bin/input", "-d", id().toString(), "keyevent", CLIPBOARD_PASTE_KEYCODE.toString()))
+        }
+        if (pasted.isFailure) {
+            // 文本已经在剪贴板里了，所以这里给的是「手动粘贴」的提示，而不是「换个通道」。
+            val detail = pasted.exceptionOrNull()?.message?.takeIf { it.isNotBlank() } ?: "未知原因"
+            throw RuntimeFailure(
+                VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
+                "${VirtualScreenPolicy.CLIPBOARD_HINT_PASTE_FAILED}（发送粘贴键失败：$detail）",
+            )
+        }
+        // 提交键与 ASCII 路径共用同一份映射与同一条「只有真的送出去才算 submitted」的规矩。
+        val submitted = submit && runCatching { command(submitArguments()) }.isSuccess
+        val attempt = VirtualScreenTextPolicy.TextAttempt(
+            VirtualScreenTextPolicy.TextMethod.PASTE,
+            true,
+            null,
+            "已把文本写入系统剪贴板并在副屏上发送 KEYCODE_PASTE（$CLIPBOARD_PASTE_KEYCODE）",
+        )
+        return envelope(listOf(attempt), text.length, succeeded = true, submitted = submitted, submitRequested = submit)
+            // encodeKeyEvents 固定写 method=KEY_EVENTS（它原本只有按键这一种场景），这里覆写成真实通道。
+            .put("method", VirtualScreenTextPolicy.TextMethod.PASTE.name)
+            .put("verified", false)
+            .put("note", VirtualScreenPolicy.CLIPBOARD_VERIFY_NOTE)
+            .toString()
+    }
+
+    /**
      * 逐字符按键兜底用的键码：字符 → `KeyCharacterMap.VIRTUAL_KEYBOARD` 映射，绝不自己拼 shell 字符串。
      *
      * 只接受「单个按键就能打出来」的字符：`input keyevent` 送不出 Shift 组合，因此需要组合键的大写字母
@@ -682,6 +944,175 @@ class ShellVirtualScreen {
         width,
         height,
     )
+
+    /**
+     * 生命周期动作（`start` / `restart` / `reconnect`）在设备 Shell 侧的真实语义。
+     *
+     * 判定交给 [VirtualScreenPolicy.lifecycleOutcome]（纯函数、有单测），这里只把结论变成事实：
+     * - `start`：**只观察**，不新建会话——规格（目标应用、分辨率、DPI、调用方 binder）只有宿主手里有，
+     *   设备 Shell 侧凭空造一个会话等于替用户决定目标应用；
+     * - `restart`：用**留档的同一份规格**重建显示与会话（[restartSession]），并保住原会话编号；
+     * - `reconnect`：把调用方 binder 重新挂上（[rebindOwner]），显示器还在就真能绑上，绑不上就抛异常。
+     *
+     * 返回体固定带 `action`/`ok`/`state`/`sessionId`/`displayId`/`reason`，
+     * 让调用方一眼看出「哪一类结果」，不必靠 message 猜。
+     */
+    private fun lifecycleAction(action: String): String {
+        val outcome = VirtualScreenPolicy.lifecycleOutcome(action, id(), session, session)
+        // 判定说不该继续时，异常里的码就是 policy 给的那个（SESSION_DEAD / RESTART_UNSUPPORTED /
+        // RECONNECT_UNSUPPORTED），**不**换成「副屏不可用」——这三种情况的处置方式完全不同。
+        if (!outcome.startable) throw checkNotNull(outcome.failure)
+        val previous = session
+        when (action) {
+            "restart" -> restartSession()
+            "reconnect" -> rebindOwner()
+        }
+        return JSONObject()
+            .put("action", action)
+            .put("ok", true)
+            .put("state", outcome.state)
+            .put("sessionId", session)
+            .put("displayId", id())
+            // restart 会把会话编号恢复成原来那一个（宿主的健康循环按编号核对会话，换号会被当成会话失效并停掉整条链路）。
+            .put("previousSessionId", previous)
+            .put("targetPackage", targetPackage)
+            .put("reason", "")
+            .toString()
+    }
+
+    /**
+     * `restart`：释放当前显示与采集器，再按**同一份规格**重建。
+     *
+     * 规格来自 [start] 时留档的 [targetComponent] / [width] / [height] / [displayDpi]，
+     * 调用方 binder 也在手上，所以「重建」是真做得到的，不需要骗调用方去设置页重开。
+     *
+     * 两个关键点：
+     * - 重建后把会话编号**恢复成原来那一个**：宿主 `VirtualScreenService.health` 每 800 毫秒核对
+     *   `state.sessionId == 自己缓存的编号`，换了编号会被判成「副屏会话失效」并把整条副屏链路停掉；
+     * - 恢复编号之后必须重挂一次死亡回调：`start` 里那个闭包捕获的是新建时生成的 UUID，
+     *   编号被改回去后它永远不等，调用方一死就没人收尾（[rebindOwner]）。
+     */
+    private fun restartSession() {
+        val client = owner ?: throw VirtualScreenPolicy.failure(VirtualScreenPolicy.SESSION_DEAD_CODE, VirtualScreenPolicy.SESSION_DEAD_MESSAGE)
+        if (targetComponent.isEmpty() || width <= 0 || height <= 0 || displayDpi <= 0) {
+            throw VirtualScreenPolicy.failure(
+                VirtualScreenPolicy.SESSION_DEAD_CODE,
+                "副屏会话的规格已经不在了（目标应用 / 分辨率 / DPI），无法按原规格重建；请重新开始副屏会话",
+            )
+        }
+        val previous = session
+        val component = targetComponent
+        val w = width
+        val h = height
+        val dpi = displayDpi
+        close()
+        start(component, w, h, dpi, client)
+        session = previous
+        rebindOwner(client)
+    }
+
+    /**
+     * `reconnect`：重新绑定调用方 binder —— 解掉旧的生命周期回调，按**当前**会话编号重新注册一次。
+     *
+     * 这是「Shizuku 连接/会话掉线后重新绑定」在设备 Shell 侧**真能做到**的那一部分：
+     * 调用方 binder 还活着就能绑上；已经死了 [IBinder.linkToDeath] 会抛 DeadObjectException，
+     * 调用方看到的是真实失败，而不是一个「成功」的空转。
+     */
+    private fun rebindOwner() {
+        val client = owner ?: throw VirtualScreenPolicy.failure(VirtualScreenPolicy.SESSION_DEAD_CODE, VirtualScreenPolicy.SESSION_DEAD_MESSAGE)
+        rebindOwner(client)
+    }
+
+    private fun rebindOwner(client: IBinder) {
+        death?.let { recipient -> runCatching { client.unlinkToDeath(recipient, 0) } }
+        val thisSession = session
+        val recipient = IBinder.DeathRecipient { synchronized(this) { if (session == thisSession) close() } }
+        death = recipient
+        owner = client
+        client.linkToDeath(recipient, 0)
+    }
+
+    /**
+     * 自动跟随的一次 tick（宿主健康循环约 800 毫秒调一次）。
+     *
+     * 判定全在 [VirtualScreenPolicy.autoFollowDecision]（纯函数、单测覆盖），这里只做四件事：
+     * 读主屏与副屏的最前台、把判定拿去节流、动手、把**真实结果**回报给调用方（失败不吞异常）。
+     * 幂等与节流都在纯函数/节流器里：判定为不动手的那一 tick 不占用节流窗口（[FollowThrottle.attempt] 的约定）。
+     */
+    private fun autoFollowTick(p: JSONObject): String {
+        val policy = VirtualScreenPolicy.autoFollow(autoFollow)
+        val selfPackage = p.optString(VirtualScreenPolicy.SELF_PACKAGE_FIELD, "")
+        val dump = command(listOf("/system/bin/dumpsys", "activity", "activities"))
+        val decision = VirtualScreenPolicy.autoFollowDecision(
+            policy = policy,
+            sessionAlive = VirtualScreenPolicy.sessionAlive(id(), session, session),
+            sessionTarget = targetComponent,
+            virtualForeground = resumeForeground(),
+            mainForeground = VirtualScreenPolicy.resumedComponent(dump, 0),
+            selfPackage = selfPackage,
+            inputMethods = inputMethods(),
+            // 桌面判定三级兜底与 `follow` 动作保持同一份来源，免得两处对「桌面是谁」给出不同答案。
+            homePackage = VirtualScreenPolicy.homePackage(dump) ?: homeProcessFromActivity() ?: homeComponent(),
+        )
+        if (decision is VirtualScreenPolicy.AutoFollowDecision.Skipped) {
+            return tickResult(policy, "", decision.reason, applied = false)
+        }
+        val applied = decision as VirtualScreenPolicy.AutoFollowDecision.Applied
+        if (!followThrottle.attempt(applied.rule, applied.target)) {
+            return tickResult(policy, applied.rule, "${applied.reason}；两秒内已经对同一个目标动作过，这次跳过", applied = false)
+        }
+        val component = resolveComponent(applied.target)
+        if (component == null) {
+            return tickResult(policy, applied.rule, "${applied.reason}；但解析不到 $applied.target 的启动入口，未动作", applied = false)
+        }
+        return runCatching {
+            launchOnDisplay(listOf("-n", component), component, applied.target)
+            // 会话目标跟着换：不换的话下一次 tick 还会把旧目标当会话目标，来回抢前台。
+            targetPackage = applied.target
+            targetComponent = component
+            tickResult(policy, applied.rule, applied.reason, applied = true)
+        }.getOrElse { error ->
+            // 动作失败也要如实回报（含错误码）：调用方据此提示用户，而不是以为自动跟随在正常工作。
+            val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
+            tickResult(policy, applied.rule, "${applied.reason}；执行失败（${VirtualScreenPolicy.errorCode(error)}）：$detail", applied = false)
+        }
+    }
+
+    /** 自动跟随 tick 的回执：策略、是否真的动了手、用了哪条规则、为什么（不动手时就是被哪条门槛拦下）。 */
+    private fun tickResult(policy: String, rule: String, reason: String, applied: Boolean): String = JSONObject()
+        .put("sessionId", session)
+        .put("displayId", id())
+        .put(VirtualScreenPolicy.AUTO_FOLLOW_FIELD, policy)
+        .put("applied", applied)
+        .put("rule", rule)
+        .put(VirtualScreenPolicy.SWITCH_REASON_FIELD, reason)
+        .toString()
+
+    /**
+     * `prewarm`：把目标的冷启动**提前到确认窗口之前**。
+     *
+     * 实现就是提前做一次真正的副屏启动（`am start -W --display <副屏> -n <组件>`）：
+     * `-W` 会一直等到该 Activity 真正显示出来，于是「进程冷启动」这段最长的耗时落在这一次调用里，
+     * 而不是吃掉 `target` 那点确认窗口。刻意**不**在主屏上先起一次：那会让目标应用在主屏上闪一下，
+     * 用户看到的「副屏目标」和实际前台会对不上。
+     *
+     * 返回空串＝这次预热（也就是这次提前启动）成功；否则返回一句可读原因——预热失败**不抛异常**，
+     * 因为「要不要继续切」由后面的正常流程决定，调用方只需要知道预热没成（回执里的 `prewarmError`）。
+     */
+    private fun warmUp(component: String): String = runCatching {
+        command(listOf("/system/bin/am", "start", "-W", "--display", id().toString(), "-n", component))
+        ""
+    }.getOrElse { error -> error.message.orEmpty().take(120).ifEmpty { "预热命令未成功执行" } }
+
+    /**
+     * `rollback`：把原目标拉回副屏。成功返回 true，失败返回 false —— **不抛异常**：
+     * 调用方此刻已经在处理一次切换失败，回滚再抛会把「哪一类失败」的读数盖掉。
+     * 确认窗口复用同一个预算，不额外放宽。
+     */
+    private fun rollbackTarget(component: String, budgetMillis: Long): Boolean = runCatching {
+        launchOnDisplay(listOf("-n", component), component, component.substringBefore('/'), budgetMillis)
+        true
+    }.getOrElse { false }
 
     private fun command(args: List<String>): String {
         val process = ProcessBuilder(args).redirectErrorStream(true).start()
@@ -723,11 +1154,19 @@ class ShellVirtualScreen {
         }
         worker?.quitSafely(); worker = null
         session = ""; targetPackage = ""; width = 0; height = 0; independentFocus = false
+        // 规格也要清：留着会让「会话已经结束」与「还能按原规格 restart」看起来是同一件事。
+        targetComponent = ""; displayDpi = 0
     }
 
     private companion object {
         /** 实测帧率使用的采样帧数：只统计最近这么多帧，避免很久以前的间隔拉扁当前帧率。 */
         const val FRAME_SAMPLE_COUNT = 24
+
+        /**
+         * `KeyEvent.KEYCODE_PASTE`（API 11 起就有）。Android 的 `input keyevent` 只接受数字键码，
+         * 所以这里直接写数值，不走 `KeyEvent.KEYCODE_PASTE`（那是 android.view 的常量，值也是 279）。
+         */
+        const val CLIPBOARD_PASTE_KEYCODE = 279
     }
 
     /** 状态里画面相关字段的一次性快照，保证同一份状态描述同一帧。 */

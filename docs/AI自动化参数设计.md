@@ -1,4 +1,4 @@
-# AI 自动化参数设计
+﻿# AI 自动化参数设计
 
 > **状态**：设计稿（本文只描述参数模型、工具面、执行模型与边界，**不含实现代码**）。
 > **范围**：让 AI 通过工具把「自动化参数」写进应用，应用按参数自动操作**前台应用**；参数模型、抑制机制与匹配口径均由本项目自定（见 §2、§3）。
@@ -657,3 +657,77 @@ param   = {"op":"status"|"set"|"enable"|"trial", ...}
 | 4 | `expectedDigest` **强制** | 与第 3 条同一实现；首次写入用「不存在的包」的空摘要常量，读→改→写必须回传上一次的摘要。 |
 | 5 | **写规则前必须校验白名单** | 补 `AutomationRuleStore.savePackage` 只校验包名格式的缺口：校验放在**桥接层**（不放松存储层职责），白名单外的包一律拒写并给明确错误码。 |
 | 6 | **执行器必须接事件** | `DeepSeekAccessibilityService.kt:65` 现在是 `onAccessibilityEvent = Unit`；接管时必须：只在白名单内且在前台的应用上评估、锁屏/敏感窗口一律跳过、遵守四层节流（`notificationTimeout=100L` → `ACTION_INTERVAL_MS=350L` → 规则冷却 → `maxActions`）、节点指纹去重防自己触发自己、连续失败 3 次自动停用该规则并回报。 |
+
+---
+
+## 执行器（已落地 / 未验证）
+
+> 2026-10-06 追加。上一节 P1 是**交付清单**；这一节记录**本轮真正落地的东西、边界，以及没有验证的部分**。
+> 最重要的前提：**全部只在 JVM 单测与编译层面验证过，没有任何真机/MuMu 验证**，下面的"已落地"都不等于"真机可用"。
+
+### 落地的文件
+
+| 文件 | 内容 |
+| --- | --- |
+| `android/app/src/main/java/io/deepseekharness/mobile/accessibility/AutomationRuleExecutor.kt`（新增） | 纯函数闸门 `AutomationRuleGate` + 状态 `AutomationGateState` + 执行器 `AutomationRuleExecutor.execute(...)` + 节点执行后端接口 `AutomationNodeBackend`。**刻意不 import 任何 `android.*`**，所以能直接 JVM 单测；时间一律由参数注入，内部不取 `System.currentTimeMillis()` |
+| `android/app/src/main/java/io/deepseekharness/mobile/accessibility/DeepSeekAccessibilityService.kt`（修改） | `onAccessibilityEvent` 从 `= Unit` 改为接入执行器；新增 `automationRules` 命令；companion 新增 8 个常量。既有 `executeChecked` 的频率限制、30 秒原生确认浮层、`accessibilityTree`/`accessibilityAction`/`tap`/`inputText` 分支**逐字未改** |
+| `android/app/src/test/java/io/deepseekharness/mobile/accessibility/AutomationRuleGateTest.kt`（新增） | 闸门用例：四层节流各自拒绝、叠加取最严、时钟回退、指纹去重与上限、白名单/自身包名/锁定/敏感窗口、连续失败与自动停用、冷却重开配额 |
+| `android/app/src/test/java/io/deepseekharness/mobile/accessibility/AutomationRuleExecutorTest.kt`（新增） | 执行器用例（含假后端 `FakeBackend`）：命中点击、降级链、失败计数与自动停用、试运行、`NODE_STALE`/`NODE_UNRESOLVED`、各动作的下发与被拒 |
+| 未改动 | `AutomationRule.kt`、`AutomationRuleMatcher.kt`、`AutomationRuleStore.kt`、`AccessibilityAutomation*.kt`、`res/**`、`MobileRuntimePlugin.kt`、`scripts/**`、`src/**`、`build.gradle` |
+
+### 四层节流的确切顺序（代码即口径）
+
+事件进入 `DeepSeekAccessibilityService.handleAutomationEvent`：执行开关 → 包名合法 → 跳过 `android` / `com.android.systemui` → 白名单 → **第 1 层** `AutomationRuleGate.admitEvent`（`EVENT_THROTTLE_MS = 100L`，与 `notificationTimeout = 100L` 同值）→ 读界面树 → 锁屏直接返回 → 标记敏感窗口 → 读规则 → 逐条判定。
+
+判定内部顺序固定，**返回第一个拒绝原因**（因此"叠加时取最严" = 顺序最前的那一层）：
+
+1. 已自动停用 / 规则 `enabled = false` / 包名非法 / 不在白名单 / 系统保留包名 / 自身包名 / 锁屏 / 敏感窗口 / `launch` 目标包不在白名单；
+2. 结算配额（`syncQuotaWindow` → `syncIdentityWindow` → 冷却到点则 `reopenQuota`）；
+3. **第 2 层**绝对间隔 `ACTION_INTERVAL_MS = 350L`：**所有规则共用**一个 `lastActionAt`，不是每条规则各一份；
+4. **第 3 层**规则自身冷却 `actionCoolDownMs`：冷却中报 `AUTOMATION_GATE_COOLDOWN_ACTIVE`；
+5. **第 4 层** `maxActions`：用满报 `AUTOMATION_GATE_ACTION_MAX_REACHED`；
+6. 指纹去重。
+
+- **`maxActions` 是唯一的次数闸门**；**冷却只决定配额何时重开**（冷却到点或时钟回退时把该规则的计数清零）。`actionCoolDownMs = 0` 时报告文案是"冷却已到点，下次判定即重开"。
+- 第 1 层**丢弃事件时不刷新基准**：连续高频事件不会把放行时刻越推越远。
+- **时钟回退**（`nowMs` 小于上次时间）按放行处理并重置基准——用户改系统时间不该把规则永久卡死。
+- 事件量大时**直接丢弃、不排队**：服务侧只有一个 `postDelayed` 令牌（`AutomationReevalToken` 按身份比对），新排期顶掉旧排期。
+
+### 去重、状态提交与自动停用
+
+- **指纹** = 窗口（`包名/Activity`）+ 规则 id + 节点身份（`pathText` / 类名 / 文本 / `viewId` / `bounds`，**故意不含 `clickable`**：按钮从"未激活"变成可点击恰恰是最值得执行的情形，算进身份会被误判 `NODE_STALE`）；同规则、同界面、同节点只执行一次，每规则最多 32 条（FIFO）。
+- **状态只在动作成功之后提交**：`recordSuccess` 记配额 + 记指纹 + 连续失败清零；失败走 `recordFailure`。
+- **连续失败 3 次（`FAILURE_LIMIT`）自动停用该规则**：服务侧把 `enabled = false` 写回存储（`AutomationRuleStore.savePackage`），Toast 回报，并记审计 `ACCESSIBILITY_CONFIG` + `AUTOMATION_GATE_RULE_AUTO_DISABLED`。
+- **只有"动作真的发给了后端、并被拒绝"的失败才计入连续失败**（`CLICK_FAILED` / `LONG_CLICK_FAILED` / `SWIPE_FAILED` / `BACK_FAILED` / `KEY_FAILED` / `LAUNCH_FAILED`，含手势不可用导致的降级链失败）；`NODE_STALE` / `NODE_UNRESOLVED` / `BACKEND_UNAVAILABLE` / `ACTION_UNSUPPORTED` 这类**没有发出动作**的结果只如实上报，不消耗失败额度——否则界面刷新频繁时会把一条本来能用的规则误停用。
+- 所有结果码都是稳定码（形如 `AUTOMATION_GATE_*`），可直接进审计的受控 detail 字段。
+
+### 安全边界（都落在执行侧，不依赖调用方自觉）
+
+- `automationEnabled` 默认 **false**，只由 `automationRules` 命令打开，**不落盘**（进程重启回到关闭）。命令要求包名合法且在白名单内，否则拒绝并保持关闭。
+- 事件包名必须在白名单内；`android`、`com.android.systemui` 直接跳过；**默认不对应用自身包名（`io.deepseekharness.mobile`）执行动作**（防自触发，显式放行才执行）。
+- 锁屏/息屏：在**进入闸门之前就返回**。
+- 敏感窗口（`containsSensitiveWindow`）照常传进闸门，拒绝码 `AUTOMATION_GATE_SENSITIVE_WINDOW`；白名单与敏感词口径沿用既有 `AccessibilityAutomationPolicy`。
+- 执行前最后一道防线：`resolveNode` 重新读节点并比对身份 → 不一致 `NODE_STALE`、节点已消失 `NODE_UNRESOLVED`，两种情况都不动作。
+- `launch` 的目标包也必须在白名单内，否则 `PACKAGE_NOT_ALLOWED`，不启动。
+
+### 本轮明确没做 / 没验的（不要当成已可用）
+
+1. **没有任何真机验证**：只跑了 JVM 单测与编译。真机上的"进界面自动点一次""再进一次不再点""支付页拒动"都**未验证**。
+2. **手势路径真机上大概率不可用**：`android/app/src/main/res/xml/accessibility_service_config.xml` **没有声明 `android:canPerformGestures`**，`dispatchGesture` 运行期会返回 false，于是 `clickCenter` / `swipe` / `longClick` 会一路失败到 `CLICK_FAILED` / `SWIPE_FAILED` / `LONG_CLICK_FAILED`（拒绝码 `AUTOMATION_GESTURE_UNAVAILABLE`，文案里写明"服务当前声明里没有 canPerformGestures 能力"）。该文件不在本轮可改范围内——**要真机可用就必须给它加 `canPerformGestures`**。
+3. `key`：只有**返回键**与**方向键**可达（`GLOBAL_ACTION_BACK` / `GLOBAL_ACTION_DPAD_*`），方向键还需 Android 12+（API 31+）；`ENTER` / `TAB` / `SPACE` / `DEL` / `ESC` 在**发出动作之前**就返回 `ACTION_UNSUPPORTED`（不计失败）。
+4. `launch` 走 `startActivity`（`FLAG_ACTIVITY_NEW_TASK`）：**不经过手势，也不弹原生确认浮层**——外部请求路径的 30 秒确认浮层完全保留、未改动，两条路径互不影响。`uri` 只接受 `http/https/market`。
+5. `wait` 不碰界面，只回报 `nextEvaluationDelayMs`，由服务侧 `postDelayed` 重新读树判定；`matchDelayMs` 同理（**一次排期**，不是每个事件重新计时）。
+6. 生产路径的配额窗口是"包名/Activity"：`resetOn = "screen"` 的"每个事件都是新窗口"只在单测里用注入的 `eventSequence` 覆盖；服务侧固定传 `eventSequence = 0L`，所以在事件路径上 `resetOn = "screen"` 与 `"activity"` 等价，`maxActions` 始终是唯一闸门（与拍板结论第 6 条一致）。
+7. 闸门里的 `DEVICE_LOCKED` 分支**目前只被单测覆盖**（服务侧在进闸门之前就 return 了）。
+8. 桥接命令 `automationRules` 只做了"读规则 + 打开本次会话的执行开关"（`op` 概念没实现）；`automationPolicy` 的能力位、`mobile_automation_trial` 试运行入口、规则列表 UI、审计查看入口都**还没做**。
+9. **口径冲突未动、需要下一轮先定**：本文档与拍板结论第 2 条说 `selectors` 列表是 **OR**，而 `AutomationRuleMatcher.firstMatch`（`AutomationRuleMatcher.kt:371` 一带）与 `AutomationRule.kt:475-476` 的注释是 **AND**（要求全部选择器命中）。匹配器不在本轮可改范围，只记录不改；**这一条直接决定 AI 生成多个选择器时的行为**。
+10. 本轮修掉的两个真缺陷（写测试时发现的，已改）：降级点击的身份基准原先用了"中心点矩形"，会让每次降级点击都被判成 `NODE_STALE`；连续失败原先把"没发出动作"的结果也算进去，会误停用规则。
+
+### 本轮验证状态（照实记录）
+
+- **`android/app` 主源码编译：通过**。`gradle.bat --no-daemon "-Pkotlin.compiler.execution.strategy=in-process" --max-workers=1 "-Dorg.gradle.jvmargs=-Xmx1536m -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=96m -XX:MaxMetaspaceSize=640m -XX:+UseSerialGC" --console=plain :app:compileDebugKotlin` → `BUILD SUCCESSFUL`，只有既有文件的 `deprecation` 警告（`recycle()` / `getRealMetrics` / `SOFT_INPUT_ADJUST_RESIZE`），没有错误。
+- **单元测试：尚未跑成功（被并行改动阻塞）**。`gradle.bat ... :app:testDebugUnitTest --tests io.deepseekharness.mobile.accessibility.AutomationRuleGateTest --tests io.deepseekharness.mobile.accessibility.AutomationRuleExecutorTest` 在 `:app:compileDebugUnitTestKotlin` 阶段失败，**错误不在本轮的三个文件里**：`android/app/src/test/java/io/deepseekharness/mobile/virtualscreen/VirtualScreenSizingTest.kt:388,389` → `Unresolved reference 'NOMINAL_WIDTH_DP'` / `'NOMINAL_HEIGHT_DP'`（另一位写者改了 `VirtualScreenSizing.kt` 却没同步这份既有测试）。单测任务把整个模块的测试源集一起编译，所以上面两个测试类**一个用例都还没跑过**——在它们跑通之前，本文档里所有执行器行为都只是"代码写了 + 主源码编译通过"，**不是"已验证"**。
+- 另一个真实的阻塞来自环境：本机 JVM **原生内存**耗尽，Gradle 崩过一次，`android/hs_err_pid8688.log:3` 写的是 `Native memory allocation (malloc) failed to allocate 1150880 bytes. Error detail: Chunk::new` / `Out of Memory Error (arena.cpp:168)`（崩在 `C2 CompilerThread2`，当时可用虚拟内存只剩约 3.6 GB）；另一次是外部 `gradle --stop` 打断了正在编译的构建（`Gradle build daemon has been stopped: stop command received`）。上面的 `--no-daemon` + `-XX:TieredStopAtLevel=1` + `SerialGC` 参数组合就是为绕开这两件事。
+- 复跑命令（`android` 目录下，`ANDROID_HOME` 指向 SDK）：
+  - 编译：`gradle.bat --no-daemon "-Pkotlin.compiler.execution.strategy=in-process" --max-workers=1 "-Dorg.gradle.jvmargs=-Xmx1536m -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=96m -XX:MaxMetaspaceSize=640m -XX:+UseSerialGC" --console=plain :app:compileDebugKotlin`
+  - 单测：同上参数，任务换成 `:app:testDebugUnitTest --tests io.deepseekharness.mobile.accessibility.AutomationRuleGateTest --tests io.deepseekharness.mobile.accessibility.AutomationRuleExecutorTest`（用**全限定名**，不要用通配）；结果 XML 在 `android/app/build/test-results/testDebugUnitTest/`。

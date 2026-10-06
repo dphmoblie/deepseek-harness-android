@@ -1,0 +1,213 @@
+/*
+ * 目标应用副屏独立设置页。
+ *
+ * 这里只用仓库既有的主题变量（--surface / --ink / --muted / --line / --card-color / --card-ink …），
+ * 不写死任何颜色：浅色、深色与用户自定义卡片配色三套都跟着全局走。
+ */
+
+.virtual-screen-screen {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+}
+
+.virtual-screen-description {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+/* 各分区与仓库里的设置卡片同款：跟随用户自定义的卡片配色与不透明度。 */
+.virtual-screen-screen .settings-subsection {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  backdrop-filter: blur(var(--card-blur, 0px));
+  box-shadow: var(--shadow-card);
+  color: var(--card-ink, var(--ink));
+}
+
+.virtual-screen-screen .settings-subsection .section-title {
+  margin-bottom: 0;
+}
+
+.virtual-screen-screen .settings-subsection h3 {
+  margin: 0;
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+/* 状态读数：一行一项，右侧是取值；取不到时右侧写「未知」，不留空白。 */
+.virtual-screen-readings {
+  display: grid;
+  margin: 0;
+}
+
+.virtual-screen-readings > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 14px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line-faint);
+}
+
+.virtual-screen-readings > div:first-child {
+  border-top: 0;
+}
+
+.virtual-screen-readings dt {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.virtual-screen-readings dd {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.virtual-screen-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.virtual-screen-legend {
+  padding: 0;
+  color: var(--field-label);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.virtual-screen-choices {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.virtual-screen-choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-sunken);
+  cursor: pointer;
+}
+
+.virtual-screen-choice:has(input:checked) {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.virtual-screen-choice input[type='radio'] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--blue);
+}
+
+.virtual-screen-choice span {
+  font-size: 0.8125rem;
+  font-weight: var(--weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.virtual-screen-choice small {
+  grid-column: 2;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  line-height: 1.45;
+}
+
+/* 三格规格输入：窄屏改成竖排，免得 200..4096 这样的数字被挤成两行。 */
+.virtual-screen-spec {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.virtual-screen-spec .field {
+  margin-top: 0;
+}
+
+.virtual-screen-spec input:disabled {
+  color: var(--muted);
+  background: var(--surface-muted);
+  cursor: not-allowed;
+}
+
+.virtual-screen-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.virtual-screen-actions > .settings-note {
+  flex: 1 1 200px;
+}
+
+/* 失败与提示：失败用错误色，提示用弱化文字，两者都不吞掉原因。 */
+.virtual-screen-failure {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-control);
+  background: var(--red-soft);
+  color: var(--red-text);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.virtual-screen-failure > svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.virtual-screen-failure strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.virtual-screen-failure p {
+  margin: 0 0 9px;
+  overflow-wrap: anywhere;
+}
+
+.virtual-screen-notice {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 560px) {
+  .virtual-screen-spec {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .virtual-screen-readings > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  .virtual-screen-readings dd {
+    text-align: left;
+  }
+}

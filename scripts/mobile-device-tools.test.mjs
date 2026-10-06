@@ -346,3 +346,55 @@ test('后台任务只接受完整包名与固定查询类型', async t => {
   await tool.execute({ packageName: 'com.example', kind: 'processes' }, {})
   assert.deepEqual(f.requests, [{ command: 'backgroundTasks', param: JSON.stringify({ packageName: 'com.example', kind: 'processes' }) }])
 })
+
+test('副屏直通 Shell 默认沿用会话副屏并原样传送脚本', async t => {
+  const f = fixture(t, () => ok('已点击副屏'))
+  const tool = f.tools.get('mobile_virtual_screen_shell')
+  const script = 'input -d "$DISPLAY_ID" tap 622 880\nam start --display "$DISPLAY_ID" -a android.intent.action.VIEW -d https://example.com'
+  const result = await tool.execute({ script }, {})
+  assert.deepEqual(f.requests, [{ command: 'virtualScreenShell', param: JSON.stringify({ script }) }])
+  assert.deepEqual(result, { ok: true, exitCode: 0, output: '已点击副屏', truncated: false })
+  assert.deepEqual(Object.keys(tool.output.schema.properties), ['ok', 'output', 'truncated', 'exitCode'])
+  assert.equal(tool.output.schema.properties.exitCode.type, 'integer')
+  assert.match(tool.output.render({}, { ...result, exitCode: 7 })[0].text, /副屏 Shell 退出码：7/u)
+  assert.match(tool.parameters.properties.displayId.description, /主屏/u)
+  assert.match(tool.description, /DISPLAY_ID/u)
+  assert.equal(tool.presentCall({ script }).rawInput, undefined)
+})
+
+test('副屏直通 Shell 只在显式传入时带上 displayId', async t => {
+  const f = fixture(t, () => ok(''))
+  await f.tools.get('mobile_virtual_screen_shell').execute({ script: 'pwd', displayId: 38 }, {})
+  assert.deepEqual(f.requests, [{ command: 'virtualScreenShell', param: JSON.stringify({ script: 'pwd', displayId: 38 }) }])
+})
+
+test('副屏直通 Shell 复用脚本校验并拒绝非法 displayId', async t => {
+  const f = fixture(t, () => ok(''))
+  const tool = f.tools.get('mobile_virtual_screen_shell')
+  for (const args of [{}, { script: ' ' }, { script: '中'.repeat(5500) }, { script: 'a\u0000b' }, { script: 'a\rb' }]) {
+    await assert.rejects(tool.execute(args, {}), /DEVICE_COMMAND_INVALID|invalid arguments/u)
+  }
+  for (const displayId of [-1, '38', 1.5, null]) {
+    await assert.rejects(tool.execute({ script: 'pwd', displayId }, {}), /DEVICE_COMMAND_INVALID|invalid arguments/u)
+  }
+  assert.equal(f.requests.length, 0)
+})
+
+test('副屏直通 Shell 保留设备侧错误码，不伪装成已执行', async t => {
+  let code = 'VIRTUAL_SCREEN_DISPLAY_INVALID'
+  const f = fixture(t, () => ({ ok: false, exitCode: -1, text: '主屏不接受本通道', truncated: false, errorCode: code }))
+  const tool = f.tools.get('mobile_virtual_screen_shell')
+  await assert.rejects(tool.execute({ script: 'pwd', displayId: 0 }, {}), /VIRTUAL_SCREEN_DISPLAY_INVALID/u)
+  code = 'VIRTUAL_SCREEN_UNAVAILABLE'
+  await assert.rejects(tool.execute({ script: 'pwd' }, {}), /VIRTUAL_SCREEN_UNAVAILABLE/u)
+  code = 'DEVICE_SHELL_DISABLED'
+  await assert.rejects(tool.execute({ script: 'pwd' }, {}), /DEVICE_SHELL_DISABLED/u)
+})
+
+test('副屏直通 Shell 不进入逐次确认钩子，提示文案说明通道用法', async t => {
+  const f = fixture(t, () => ok(''))
+  assert.deepEqual(await f.hook({ name: 'mobile_virtual_screen_shell' }, () => ({ kind: 'allow' })), { kind: 'allow' })
+  assert.match(f.prompts[0].text, /mobile_virtual_screen_shell/u)
+  assert.match(f.prompts[0].text, /DISPLAY_ID/u)
+  assert.match(f.prompts[0].text, /VIRTUAL_SCREEN_DISPLAY_INVALID/u)
+})

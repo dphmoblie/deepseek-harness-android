@@ -2,6 +2,8 @@ package io.deepseekharness.mobile.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.accessibilityservice.GestureDescription
+import android.graphics.Path
 import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
@@ -12,7 +14,10 @@ import android.os.SystemClock
 import android.app.KeyguardManager
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.View
@@ -23,6 +28,7 @@ import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import io.deepseekharness.mobile.AppThemePreference
 import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.shizuku.DeviceCommandResult
@@ -48,9 +54,28 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pendingConfirmation = AtomicReference<PendingConfirmation?>(null)
 
+    /**
+     * 事件驱动自动化的闸门状态（四层节流 + 配额 + 节点指纹 + 连续失败计数）。
+     *
+     * 只在主线程访问：所有读写都发生在 [onAccessibilityEvent] 与它派生的排期回调里（两者都跑在主线程），
+     * 因此这里不需要额外加锁，也不该加——加锁会让「事件量大时按节流丢弃、不排队堆积」变成阻塞等待。
+     */
+    private val automationGate = AutomationGateState()
+
+    /**
+     * 已排期的「稍后重新判定」令牌（`wait` 动作或规则的 `matchDelayMs`）。
+     *
+     * 同时只允许一个在飞：每个新令牌都会替换掉旧的，旧令牌醒来后按身份比对自行放弃（见 [reevaluateAutomation]），
+     * 所以密集事件不会堆积出一串待执行的排期任务。
+     */
+    private val automationReevalToken = AtomicReference<AutomationReevalToken?>(null)
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         serviceRef.set(this)
+        // 新连接 = 新的事件时间基准。上一次连接的动作时间戳/配额/指纹留着会让刚连上的服务被"冷却中"挡住。
+        automationGate.reset()
+        automationReevalToken.set(null)
         serviceInfo = serviceInfo.apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                 AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
@@ -58,16 +83,34 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
-            notificationTimeout = 100L
+            // 第 1 层节流：与闸门里的 EVENT_THROTTLE_MS 同源（配置里的 notificationTimeout 也写成 100）。
+            notificationTimeout = AutomationRuleGate.EVENT_THROTTLE_MS
         }
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    /**
+     * 事件入口。**只做一件事**：按第 1 层节流决定这次事件要不要评估，然后同步评估一次。
+     *
+     * 被节流的事件直接丢弃（不排队、不补做），异常一律吞掉（自动化评估不能让无障碍服务崩掉）。
+     * 事件驱动的自动化与既有行为互不影响：既有链路是「外部请求 + 原生确认浮层」，准入/白名单/审计仍在
+     * [executeChecked] 与 [performConfirmedAction] 里；自动化这条路自己实现后端
+     * （[AndroidAutomationNodeBackend]），因为它执行的是规则，不是外部请求。
+     */
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+        try {
+            handleAutomationEvent(event, SystemClock.elapsedRealtime())
+        } catch (_: Throwable) {
+            // 任何异常都当作"这次不动作"。
+        }
+    }
 
     override fun onInterrupt() = cancelPendingConfirmation()
 
     override fun onDestroy() {
         cancelPendingConfirmation()
+        // 与 [AutomationReevalToken] 的身份比对配对：置空之后，已排期的重新判定会发现"令牌不是自己"而放弃。
+        automationReevalToken.set(null)
         serviceRef.compareAndSet(this, null)
         super.onDestroy()
     }
@@ -103,6 +146,8 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             else failure("ACCESSIBILITY_ACTION_INVALID", "无障碍层级读取不接受参数")
             "accessibilityAction" -> action(root, packageName, param).also { if (it.ok) lastActionAt = now }
             "tap", "inputText" -> observedAction(root, packageName, command, param).also { if (it.ok) lastActionAt = now }
+            // 事件驱动自动化的入口：报告规则统计并打开本进程的事件评估（详见 [automationRules]）。
+            "automationRules" -> automationRules(packageName, param)
             else -> failure("DEVICE_COMMAND_INVALID", "无障碍命令不受支持")
         }
     }
@@ -809,6 +854,554 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         }
     }
 
+    // ------------------------------------------------------------------
+    // 事件驱动的自动化：规则读取 → 判定 → 闸门 → 执行 → 回报
+    // ------------------------------------------------------------------
+
+    /**
+     * 用户通过 `automationRules` 命令打开「自动化评估」之后，事件回调才会真的去读规则。
+     *
+     * 默认关闭，且不落盘：无障碍服务是常驻的，一个进程里第一次连接时不应该在用户还没看过规则的情况下
+     * 就开始点界面。这个开关是**会话级**的，进程重启后回到关闭状态。
+     */
+    private var automationEnabled = false
+
+    /**
+     * 最近一次 `TYPE_WINDOW_STATE_CHANGED` 报上来的 Activity 名（也是配额窗口的一部分）。
+     *
+     * 只在这个事件类型上更新：`TYPE_WINDOW_CONTENT_CHANGED` 的 `className` 是**视图**类名
+     * （`android.widget.FrameLayout` 之类），拿它当 Activity 会让配额窗口每个事件都变一次，
+     * 等于把 `actionMaximum` 这道唯一的闸门废掉。缓存住之后窗口就是稳定的「包名/Activity」，
+     * 规则的 `allowActivities` / `denyActivities` 也才有意义。
+     */
+    private var automationActivityName: String? = null
+
+    /** 「稍后重新判定」的令牌：只用来标识一次排期（见 [reevaluateAutomation] 的身份比对）。 */
+    private class AutomationReevalToken
+
+    /** 一次事件评估的共享上下文：树只读一次，规则判定与执行后端都用它。 */
+    private class AutomationTreeSnapshot(
+        val tree: AutomationNode?,
+        val packageName: String,
+    )
+
+    private class AutomationEvaluation(
+        val allowedPackages: Set<String>,
+        val tree: AutomationTreeSnapshot,
+        val deviceLocked: Boolean,
+        val sensitiveWindow: Boolean,
+    )
+
+    /**
+     * 事件入口的主体：白名单/系统界面早筛 → 第 1 层事件节流 → 读树 → 读规则 → 判定与执行。
+     *
+     * 每一次事件都是「同步评估一次」，没有队列、没有重试：事件太密时前面的层会把它丢掉。
+     */
+    private fun handleAutomationEvent(event: AccessibilityEvent, nowMs: Long) {
+        // enabled 标志只由 `automationRules` 命令改写；事件回调只读它。
+        if (!automationEnabled) return
+        val eventPackage = event.packageName?.toString().orEmpty()
+        if (!AccessibilityAutomationPolicy.validPackage(eventPackage)) return
+        // 系统界面的窗口变化太频繁，也不该成为自动化的输入：它们只是"屏幕上多了个东西"。
+        if (eventPackage == "android" || eventPackage == "com.android.systemui") return
+        val allowed = AccessibilityAutomationStore.allowedPackages(this)
+        // 执行前的第一道白名单：事件包名必须被允许。应用自身包名也在白名单里（策略如此），
+        // 但闸门默认额外拒绝对自身执行动作（防自触发），所以这里不需要特殊处理。
+        if (eventPackage !in allowed) return
+        // 第 1 层：事件准入。被节流的事件直接丢弃，不排队、不补做。
+        if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) return
+        val root = rootInActiveWindow ?: return
+        val snapshot = buildAutomationTree(root)
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && eventPackage == snapshot.packageName) {
+            automationActivityName = event.className?.toString()
+        }
+        val deviceLocked = isLockedOrScreenOff()
+        // 锁屏时不读树、不读规则：拍板口径是"锁屏一律跳过"，连评估都不做。
+        if (deviceLocked) return
+        val sensitiveWindow = containsSensitiveWindow(root)
+        val rules = loadAutomationRules(snapshot.packageName)
+        if (rules.isEmpty()) return
+        runAutomationEvaluation(
+            AutomationEvaluation(
+                allowedPackages = allowed,
+                tree = snapshot,
+                deviceLocked = false,
+                sensitiveWindow = sensitiveWindow,
+            ),
+            rules,
+            nowMs,
+            apply = true,
+            eventSequence = 0L,
+        )
+    }
+
+    /** 「稍后重新判定」：`wait` 动作与规则的 `matchDelayMs` 都排到这里；同时只允许一个在飞。 */
+    private fun scheduleAutomationReevaluation(delayMs: Int) {
+        if (delayMs <= 0) return
+        val token = AutomationReevalToken()
+        automationReevalToken.set(token)
+        mainHandler.postDelayed(
+            {
+                // 身份比对：被更新的排期顶掉、或服务已销毁（令牌被置空）时，这次唤醒什么都不做。
+                if (automationReevalToken.get() !== token) return@postDelayed
+                automationReevalToken.set(null)
+                try {
+                    reevaluateAutomation()
+                } catch (_: Throwable) {
+                    // 自动化的任何异常都不该冒泡到主线程消息循环。
+                }
+            },
+            delayMs.toLong(),
+        )
+    }
+
+    /**
+     * 延迟时间到点后**重新读一遍界面再判定一次**（与事件回调走同一条评估链）。
+     *
+     * 不缓存事件里的树：`wait` 与 `matchDelayMs` 的语义就是等界面变化，用旧树判定等于没等。
+     */
+    private fun reevaluateAutomation() {
+        if (!automationEnabled) return
+        val root = rootInActiveWindow ?: return
+        val nowMs = SystemClock.elapsedRealtime()
+        val allowed = AccessibilityAutomationStore.allowedPackages(this)
+        if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) return
+        val snapshot = buildAutomationTree(root)
+        if (snapshot.packageName !in allowed) return
+        if (isLockedOrScreenOff()) return
+        val rules = loadAutomationRules(snapshot.packageName)
+        if (rules.isEmpty()) return
+        runAutomationEvaluation(
+            AutomationEvaluation(
+                allowedPackages = allowed,
+                tree = snapshot,
+                deviceLocked = false,
+                sensitiveWindow = containsSensitiveWindow(root),
+            ),
+            rules,
+            nowMs,
+            apply = true,
+            eventSequence = 0L,
+        )
+    }
+
+    /**
+     * 把一次评估交给执行器，然后回报结果。
+     *
+     * `eventSequence` 只在「每个事件都是新配额窗口」时才需要区分，本实现传 0：批量限流靠的是
+     * 第 2 层的绝对间隔与等待重排期，不是把配额窗口切开。
+     */
+    private fun runAutomationEvaluation(
+        evaluation: AutomationEvaluation,
+        rules: List<AutomationRule>,
+        nowMs: Long,
+        apply: Boolean,
+        eventSequence: Long,
+    ) {
+        val snapshot = evaluation.tree
+        val root = snapshot.tree ?: return
+        val report = AutomationRuleExecutor.execute(
+            backend = AndroidAutomationNodeBackend(),
+            root = root,
+            screen = AutomationScreenInfo(
+                packageName = snapshot.packageName,
+                activityName = automationActivityName,
+            ),
+            rules = rules,
+            gate = automationGate,
+            nowMs = nowMs,
+            allowedPackages = evaluation.allowedPackages,
+            deviceLocked = evaluation.deviceLocked,
+            sensitiveWindow = evaluation.sensitiveWindow,
+            apply = apply,
+            eventSequence = eventSequence,
+        )
+        handleAutomationReport(report)
+    }
+
+    /** 回报：审计 → 落盘自动停用 → 提示用户 → 需要的重新判定排期。 */
+    private fun handleAutomationReport(report: AutomationExecutionReport) {
+        if (report.performed.isEmpty() && report.autoDisabledRuleIds.isEmpty() && report.notices.isEmpty()) {
+            // 只挂了一个排期也要处理（wait / matchDelayMs）。
+            report.nextEvaluationDelayMs?.let(::scheduleAutomationReevaluation)
+            return
+        }
+        val audit = PrivateAuditLog(this)
+        for (result in report.performed) {
+            // 审计只记受控码与结果：不带包名、viewId、界面文本（AuditPolicy.detailPattern 也只接受这个形状）。
+            audit.record(
+                AuditEvent.ACCESSIBILITY_ACTION,
+                if (result.ok) AuditResult.SUCCEEDED else AuditResult.FAILED,
+                result.code,
+            )
+        }
+        for (ruleId in report.autoDisabledRuleIds) {
+            audit.record(AuditEvent.ACCESSIBILITY_CONFIG, AuditResult.SUCCEEDED, AutomationGateCodes.RULE_DISABLED)
+            // 自动停用必须落盘：只在内存里停用的话，进程被系统回收后规则会"复活"，用户会看到它继续点错。
+            if (!disableAutomationRule(ruleId)) {
+                notifyAutomation("规则「$ruleId」已自动停用，但写盘失败；请到自动化设置里手动关掉它")
+            }
+        }
+        if (report.notices.isNotEmpty()) notifyAutomation(report.notices.joinToString("；"))
+        report.nextEvaluationDelayMs?.let(::scheduleAutomationReevaluation)
+    }
+
+    /**
+     * 把自动停用的规则写盘（`enabled = false`）。
+     *
+     * 返回 false 只表示「找到了规则但没写成功」：这种情况必须提示用户，因为进程重启后规则会重新生效。
+     */
+    private fun disableAutomationRule(ruleId: String): Boolean {
+        val store = AutomationRulePreferences.from(this)
+        var handled = true
+        for (packageName in AutomationRuleStore.packages(store)) {
+            if (!AccessibilityAutomationPolicy.validPackage(packageName)) continue
+            val read = AutomationRuleStore.readPackage(store, packageName)
+            if (read !is AutomationRuleStore.PackageRead.Ok) continue
+            val target = read.rules.firstOrNull { it.id == ruleId } ?: continue
+            if (!target.enabled) continue
+            val updated = read.rules.map { if (it.id == ruleId) it.copy(enabled = false) else it }
+            if (runCatching { AutomationRuleStore.savePackage(store, packageName, updated) }.isFailure) handled = false
+        }
+        return handled
+    }
+
+    /**
+     * 读取本次要评估的规则：当前前台包 + 全部已保存的包。
+     *
+     * 白名单与包名合法性都在 [AutomationRuleStore.readPackage] **之前**校验：它内部对包名有 `require`，
+     * 非法包名会抛异常，而事件回调不该被一条脏数据打断。
+     */
+    private fun loadAutomationRules(packageName: String): List<AutomationRule> {
+        val store = AutomationRulePreferences.from(this)
+        val allowed = AccessibilityAutomationStore.allowedPackages(this)
+        val candidates = ArrayList<String>()
+        if (packageName in allowed && AccessibilityAutomationPolicy.validPackage(packageName)) candidates += packageName
+        for (candidate in AutomationRuleStore.packages(store)) {
+            if (candidate in candidates) continue
+            if (candidate !in allowed || !AccessibilityAutomationPolicy.validPackage(candidate)) continue
+            candidates += candidate
+        }
+        val rules = ArrayList<AutomationRule>()
+        for (candidate in candidates) {
+            val read = AutomationRuleStore.readPackage(store, candidate)
+            if (read !is AutomationRuleStore.PackageRead.Ok) continue
+            for (rule in read.rules) {
+                // 内存里的自动停用标记与磁盘状态保持一致：读到 enabled = true 说明用户刚重新启用，清掉标记。
+                if (rule.enabled) automationGate.clearAutoDisabled(rule.id)
+                rules += rule
+            }
+        }
+        return rules
+    }
+
+    /**
+     * `automationRules` 命令：报告某个包的规则统计，并把本进程的自动化评估置为开启。
+     *
+     * 参数留空时用当前前台包（由 [executeChecked] 解析后传入）。它**只读**规则文件，不改规则内容：
+     * 改规则要走 AI 生成 + 用户在设置页确认的那条链路，不在本命令的范围里。
+     */
+    private fun automationRules(rootPackage: String, param: String?): DeviceCommandResult {
+        val requested = param?.trim().orEmpty().ifEmpty { rootPackage }
+        if (!AccessibilityAutomationPolicy.validPackage(requested)) {
+            return failure("AUTOMATION_RULES_PACKAGE_INVALID", "包名不合法：$requested")
+        }
+        if (requested !in AccessibilityAutomationStore.allowedPackages(this)) {
+            automationEnabled = false
+            return failure("AUTOMATION_RULES_PACKAGE_DENIED", "应用 $requested 不在无障碍自动化白名单内")
+        }
+        val read = AutomationRuleStore.readPackage(AutomationRulePreferences.from(this), requested)
+        return when (read) {
+            is AutomationRuleStore.PackageRead.Ok -> {
+                automationEnabled = true
+                val disabled = read.rules.filter { !it.enabled }.map { it.id }
+                val text = "包 $requested：规则 ${read.rules.size} 条，启用 ${read.rules.count { it.enabled }} 条" +
+                    if (disabled.isEmpty()) "" else "；已停用：${disabled.joinToString("、")}"
+                auditAutomationEnabled()
+                DeviceCommandResult(true, 0, text, false, null)
+            }
+            is AutomationRuleStore.PackageRead.Corrupt ->
+                failure(read.code, "读取规则失败：${read.message}")
+        }
+    }
+
+    /** 打开自动化评估这件事本身要留痕；detail 只带受控码，不带包名。 */
+    private fun auditAutomationEnabled() {
+        runCatching {
+            PrivateAuditLog(this).record(
+                AuditEvent.ACCESSIBILITY_CONFIG,
+                AuditResult.SUCCEEDED,
+                "AUTOMATION_EVENT_DRIVER_ENABLED",
+            )
+        }
+    }
+
+    /** 回报用户：弹一条短提示。绝不让提示本身影响执行结果（弹不出来就算了）。 */
+    private fun notifyAutomation(message: String) {
+        runCatching { Toast.makeText(this, message, Toast.LENGTH_LONG).show() }
+    }
+
+    /**
+     * 读取当前窗口的界面树，并把它拷成纯 JVM 的 [AutomationNode]。
+     *
+     * 为什么非要拷贝：`AccessibilityNodeInfo` 的对象会失效（`refresh()` 返回 false），而且在后台线程上
+     * 根本不是安全 API；匹配器与执行器的判定又必须能在 JVM 单测里跑（那里没有 Android 框架）。
+     * 所以约定是：**服务侧负责把树拷成不可变快照，判定与计数全部用快照**；真正要执行动作时再用
+     * [AndroidAutomationNodeBackend.resolveNode] 按路径重新读一次真实节点（届时会再做一次身份校验）。
+     */
+    private fun buildAutomationTree(root: AccessibilityNodeInfo): AutomationTreeSnapshot {
+        val packageName = root.packageName?.toString().orEmpty()
+        val budget = intArrayOf(MAX_AUTOMATION_NODES)
+        val tree = copyAutomationNode(root, 0, budget)
+        return AutomationTreeSnapshot(tree = tree, packageName = packageName)
+    }
+
+    /**
+     * 递归拷贝节点（深度与节点数都给上限，超出就截断）。
+     *
+     * 截断的取舍：走在前面的节点是树的"上半部分"（标题、按钮通常在上面），截断只会丢掉深处的节点；
+     * 一旦在某条分支上触顶，同一分支的更深处不再访问，避免用无限递归去读一个正在变化的树。
+     */
+    private fun copyAutomationNode(node: AccessibilityNodeInfo, depth: Int, budget: IntArray): AutomationNode? {
+        if (depth > MAX_AUTOMATION_DEPTH || budget[0] <= 0) return null
+        budget[0]--
+        val rect = Rect().also(node::getBoundsInScreen)
+        val children = ArrayList<AutomationNode>()
+        val childCount = node.childCount
+        for (index in 0 until childCount) {
+            if (budget[0] <= 0) break
+            val child = node.getChild(index) ?: continue
+            children += copyAutomationNode(child, depth + 1, budget) ?: continue
+        }
+        return AutomationNode(
+            className = node.className?.toString(),
+            text = node.text?.toString(),
+            viewId = node.viewIdResourceName,
+            desc = node.contentDescription?.toString(),
+            clickable = node.isClickable,
+            enabled = node.isEnabled,
+            editable = node.isEditable,
+            bounds = AutomationBounds(rect.left, rect.top, rect.right, rect.bottom),
+            children = children,
+        )
+    }
+
+    /**
+     * 把纯 JVM 的执行器接到真实的 `AccessibilityNodeInfo` 与手势上。
+     *
+     * 所有回调都在主线程（事件回调与排期回调都在主线程），所以这里不需要切线程；
+     * 也正因为同线程，执行器那次 `resolveNode` 读到的节点几乎总是与判定时的同一个。
+     */
+    private inner class AndroidAutomationNodeBackend : AutomationNodeBackend {
+
+        override fun resolveNode(path: List<Int>, bounds: AutomationBounds): AutomationNodeHandle? {
+            var node: AccessibilityNodeInfo? = rootInActiveWindow ?: return null
+            for (index in path) {
+                val current = node ?: return null
+                node = current.getChild(index) ?: return null
+            }
+            val resolved = node ?: return null
+            return AutomationNodeHandle(resolved, snapshotOf(resolved))
+        }
+
+        override fun clickNode(node: Any): BackendOutcome {
+            val info = node as? AccessibilityNodeInfo
+                ?: return BackendOutcome.Refused("AUTOMATION_NODE_INVALID", "节点对象类型不对")
+            if (!info.isClickable) {
+                return BackendOutcome.Refused("AUTOMATION_NODE_NOT_CLICKABLE", "节点 clickable=false")
+            }
+            val performed = runCatching { info.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
+            if (!performed) {
+                return BackendOutcome.Refused(
+                    "AUTOMATION_NODE_ACTION_REFUSED",
+                    "ACTION_CLICK 返回 false（节点已失效，或应用不在这个节点上处理点击）",
+                )
+            }
+            return BackendOutcome.Done
+        }
+
+        override fun clickClickableAncestor(node: Any): BackendOutcome {
+            val start = node as? AccessibilityNodeInfo
+                ?: return BackendOutcome.Refused("AUTOMATION_NODE_INVALID", "节点对象类型不对")
+            var parent = runCatching { start.parent }.getOrNull()
+            var depth = 0
+            while (parent != null && depth < MAX_ANCESTOR_DEPTH) {
+                val current = parent
+                if (current.isClickable) {
+                    val performed = runCatching { current.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
+                    if (performed) return BackendOutcome.Done
+                }
+                parent = runCatching { current.parent }.getOrNull()
+                depth++
+            }
+            return BackendOutcome.Refused(
+                "AUTOMATION_ANCESTOR_MISSING",
+                "向上 $MAX_ANCESTOR_DEPTH 层没有可点击的祖先节点，或可点击的祖先都拒绝了 ACTION_CLICK",
+            )
+        }
+
+        override fun clickCenter(bounds: AutomationBounds): BackendOutcome {
+            if (bounds.width <= 0 || bounds.height <= 0) {
+                return BackendOutcome.Refused("AUTOMATION_BOUNDS_EMPTY", "命中节点没有可见区域（宽高为 0），无法派发点击")
+            }
+            val path = Path().apply {
+                moveTo(bounds.centerX.toFloat(), bounds.centerY.toFloat())
+            }
+            return dispatch(
+                GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0L, TAP_DURATION_MS))
+                    .build(),
+            )
+        }
+
+        override fun longClickNode(node: Any): BackendOutcome {
+            val info = node as? AccessibilityNodeInfo
+                ?: return BackendOutcome.Refused("AUTOMATION_NODE_INVALID", "节点对象类型不对")
+            val rect = Rect().also(info::getBoundsInScreen)
+            if (rect.isEmpty) {
+                return BackendOutcome.Refused("AUTOMATION_BOUNDS_EMPTY", "命中节点没有可见区域，无法派发长按")
+            }
+            // 无障碍没有"长按"这个 performAction 常量，只能用一次按压时长为长按时长的手势来表达。
+            val path = Path().apply {
+                moveTo(rect.exactCenterX(), rect.exactCenterY())
+            }
+            return dispatch(
+                GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0L, LONG_PRESS_DURATION_MS))
+                    .build(),
+            )
+        }
+
+        override fun pressBack(): BackendOutcome {
+            val performed = runCatching { performGlobalAction(GLOBAL_ACTION_BACK) }.getOrDefault(false)
+            if (!performed) {
+                return BackendOutcome.Refused("AUTOMATION_GLOBAL_ACTION_REFUSED", "GLOBAL_ACTION_BACK 返回 false")
+            }
+            return BackendOutcome.Done
+        }
+
+        override fun swipe(direction: String, durationMs: Int): BackendOutcome {
+            val screen = rootInActiveWindow?.let { Rect().also(it::getBoundsInScreen) } ?: Rect()
+            val metrics = resources.displayMetrics
+            val width = if (screen.width() > 0) screen.width() else metrics.widthPixels
+            val height = if (screen.height() > 0) screen.height() else metrics.heightPixels
+            if (width <= 0 || height <= 0) {
+                return BackendOutcome.Refused("AUTOMATION_BOUNDS_EMPTY", "当前窗口没有可用的屏幕区域，无法滑动")
+            }
+            val left = screen.left
+            val top = screen.top
+            val insetX = (width * SWIPE_INSET_RATIO).toInt().coerceAtLeast(1)
+            val insetY = (height * SWIPE_INSET_RATIO).toInt().coerceAtLeast(1)
+            val centerX = left + width / 2f
+            val centerY = top + height / 2f
+            val path = Path()
+            // direction 是**手指移动方向**：`up` = 手指从下往上滑（内容向上滚动）。
+            when (direction) {
+                "up" -> {
+                    path.moveTo(centerX, (top + height - insetY).toFloat())
+                    path.lineTo(centerX, (top + insetY).toFloat())
+                }
+                "down" -> {
+                    path.moveTo(centerX, (top + insetY).toFloat())
+                    path.lineTo(centerX, (top + height - insetY).toFloat())
+                }
+                "left" -> {
+                    path.moveTo((left + width - insetX).toFloat(), centerY)
+                    path.lineTo((left + insetX).toFloat(), centerY)
+                }
+                "right" -> {
+                    path.moveTo((left + insetX).toFloat(), centerY)
+                    path.lineTo((left + width - insetX).toFloat(), centerY)
+                }
+                else -> return BackendOutcome.Refused("AUTOMATION_SWIPE_DIRECTION_INVALID", "不支持的滑动方向：$direction")
+            }
+            val duration = durationMs.coerceIn(MIN_SWIPE_DURATION_MS, MAX_SWIPE_DURATION_MS)
+            return dispatch(
+                GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0L, duration.toLong()))
+                    .build(),
+            )
+        }
+
+        override fun sendKey(keyCode: Int): BackendOutcome {
+            val name = AutomationKeyRouting.globalActionName(keyCode)
+                ?: return BackendOutcome.Refused("AUTOMATION_KEY_UNROUTABLE", "按键码 $keyCode 没有对应的无障碍全局动作")
+            val dpadReady = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+            val action = when (name) {
+                AutomationKeyRouting.BACK -> GLOBAL_ACTION_BACK
+                AutomationKeyRouting.DPAD_UP -> if (dpadReady) GLOBAL_ACTION_DPAD_UP else -1
+                AutomationKeyRouting.DPAD_DOWN -> if (dpadReady) GLOBAL_ACTION_DPAD_DOWN else -1
+                AutomationKeyRouting.DPAD_LEFT -> if (dpadReady) GLOBAL_ACTION_DPAD_LEFT else -1
+                AutomationKeyRouting.DPAD_RIGHT -> if (dpadReady) GLOBAL_ACTION_DPAD_RIGHT else -1
+                AutomationKeyRouting.DPAD_CENTER -> if (dpadReady) GLOBAL_ACTION_DPAD_CENTER else -1
+                else -> -1
+            }
+            if (action < 0) {
+                return BackendOutcome.Refused(
+                    "AUTOMATION_KEY_UNAVAILABLE",
+                    "按键 $name 需要 Android 12 及以上（当前 API ${Build.VERSION.SDK_INT}）",
+                )
+            }
+            val performed = runCatching { performGlobalAction(action) }.getOrDefault(false)
+            if (!performed) {
+                return BackendOutcome.Refused("AUTOMATION_KEY_REFUSED", "按键 $name 的全局动作返回 false")
+            }
+            return BackendOutcome.Done
+        }
+
+        override fun launch(component: String?, uri: String?): BackendOutcome {
+            val service = this@DeepSeekAccessibilityService
+            val intent = try {
+                when {
+                    // 两个都给时 uri 优先：它比「包名/类名」更明确（能直接落到某个页面或商店详情页）。
+                    !uri.isNullOrEmpty() -> Intent(Intent.ACTION_VIEW, Uri.parse(uri))
+                    !component.isNullOrEmpty() -> {
+                        val targetPackage = component.substringBefore('/')
+                        val className = component.substringAfter('/', "")
+                        if (className.isEmpty()) {
+                            return BackendOutcome.Refused("AUTOMATION_LAUNCH_TARGET_INVALID", "component 缺少类名")
+                        }
+                        Intent().setComponent(ComponentName(targetPackage, className))
+                    }
+                    else -> return BackendOutcome.Refused("AUTOMATION_LAUNCH_TARGET_MISSING", "launch 动作缺少 component 与 uri")
+                }
+            } catch (error: Throwable) {
+                return BackendOutcome.Refused("AUTOMATION_LAUNCH_TARGET_INVALID", "启动目标不合法：${error.javaClass.simpleName}")
+            }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            return try {
+                service.startActivity(intent)
+                BackendOutcome.Done
+            } catch (error: Throwable) {
+                BackendOutcome.Refused("AUTOMATION_LAUNCH_FAILED", "启动失败：${error.javaClass.simpleName}")
+            }
+        }
+
+        /** 手势派发：`dispatchGesture` 返回 false 就说明这条路走不通（最常见的原因是服务没有声明手势能力）。 */
+        private fun dispatch(gesture: GestureDescription): BackendOutcome {
+            val dispatched = runCatching { dispatchGesture(gesture, null, null) }.getOrDefault(false)
+            if (!dispatched) {
+                return BackendOutcome.Refused(
+                    "AUTOMATION_GESTURE_UNAVAILABLE",
+                    "dispatchGesture 返回 false（服务当前声明里没有 canPerformGestures 能力，或系统拒绝了这次手势）",
+                )
+            }
+            return BackendOutcome.Done
+        }
+
+        /** 执行时的节点快照：文本传**原始值**，归一化只在执行器的身份计算里做一次。 */
+        private fun snapshotOf(node: AccessibilityNodeInfo): AutomationNodeSnapshot {
+            val rect = Rect().also(node::getBoundsInScreen)
+            return AutomationNodeSnapshot(
+                className = node.className?.toString(),
+                text = node.text?.toString(),
+                viewId = node.viewIdResourceName,
+                clickable = node.isClickable,
+                bounds = AutomationBounds(rect.left, rect.top, rect.right, rect.bottom),
+            )
+        }
+    }
+
     private fun failure(code: String, text: String): DeviceCommandResult = DeviceCommandResult(false, 1, text, false, code)
 
     companion object {
@@ -826,6 +1419,30 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             "ACCESSIBILITY_ACTION_TIMEOUT",
         )
         private val serviceRef = AtomicReference<DeepSeekAccessibilityService?>(null)
+
+        /** 事件评估里界面树拷贝的节点上限（比只读快照的 MAX_TREE_NODES 大一些，但仍是硬上限）。 */
+        private const val MAX_AUTOMATION_NODES = 400
+
+        /** 事件评估里界面树拷贝的深度上限。 */
+        private const val MAX_AUTOMATION_DEPTH = 24
+
+        /** `clickCenter` 降级链向上找可点击祖先的最大层数。 */
+        private const val MAX_ANCESTOR_DEPTH = 8
+
+        /** 一次点击手势的按压时长（毫秒）。 */
+        private const val TAP_DURATION_MS = 50L
+
+        /** 长按手势的按压时长（毫秒）：低于系统长按阈值（约 500 毫秒）不会被识别成长按。 */
+        private const val LONG_PRESS_DURATION_MS = 600L
+
+        /** 滑动手势时长下限（毫秒）：与规则模型里 swipe 允许的 100..2000 对齐。 */
+        private const val MIN_SWIPE_DURATION_MS = 100
+
+        /** 滑动手势时长上限（毫秒）：与规则模型里 swipe 允许的 100..2000 对齐。 */
+        private const val MAX_SWIPE_DURATION_MS = 2_000
+
+        /** 滑动起止点距屏幕边缘的比例：避免从边缘起手被系统手势区吃掉。 */
+        private const val SWIPE_INSET_RATIO = 0.1f
 
         fun current(): DeepSeekAccessibilityService? = serviceRef.get()
     }

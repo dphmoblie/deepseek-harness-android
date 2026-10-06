@@ -136,9 +136,15 @@ class VirtualScreenActivity : Activity() {
                 launchPendingUntil = android.os.SystemClock.elapsedRealtime() + 2000
                 ContextCompat.startForegroundService(this, Intent(this, VirtualScreenService::class.java)
                     .putExtra("component", selected.component)
-                    // 规格走三个整型 extra；同一份 Intent 里仍带上旧的 landscape 布尔，
-                    // 让「页面已更新、会话服务还是旧版」的升级中途组合也能正常起会话。
-                    .putVirtualScreenSpec(VirtualScreenSpec.preset(landscape.isChecked), landscape.isChecked))
+                    // 页面的横竖屏勾选就是本次会话的方向；自适应开关沿用设置页里的偏好：
+                    // 关自适应时三项尺寸仍取方向预设（与改造前逐字一致），开自适应时由服务侧
+                    // 按真实屏幕尺寸算规格。规格仍走三个整型 extra，让「页面已更新、会话服务
+                    // 还是旧版」的升级中途组合也能正常起会话。
+                    .putVirtualScreenStart(
+                        VirtualScreenSpec.preset(landscape.isChecked),
+                        VirtualScreenPreferences.read(this).adaptive,
+                        if (landscape.isChecked) "landscape" else "portrait"
+                    ))
                 status.text = "正在创建目标应用副屏…"
             } catch (_: Exception) { launchPendingUntil = 0; toast("无法启动副屏服务，请回到前台重试") }
         }

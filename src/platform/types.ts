@@ -500,6 +500,143 @@ export interface AccessibilityAutomationState {
   passwordConfigured: boolean
 }
 
+/**
+ * 目标应用副屏的取帧档位。
+ *
+ * 这 10 个值**不是显示器刷新率档位**：它们决定预览多久从虚拟屏取一帧
+ * （档位越高取帧越密、越耗电）。原生侧实测本机虚拟屏只有 60.0 一档，
+ * 请求更高的值很可能被系统忽略，所以界面把「虚拟屏实际刷新率」单独读数展示，
+ * **不拿这里的档位冒充刷新率**。
+ */
+export type VirtualScreenPreviewMode =
+  | 'limited' | '15fps' | '30fps' | '60fps' | '90fps'
+  | '120fps' | '144fps' | '165fps' | '185fps' | '240fps'
+
+/** 允许的取帧档位全集；顺序即界面顺序，取值与原生 `VirtualScreenPolicy` 的档位表逐字一致。 */
+export const VIRTUAL_SCREEN_PREVIEW_MODES: VirtualScreenPreviewMode[] = [
+  'limited', '15fps', '30fps', '60fps', '90fps', '120fps', '144fps', '165fps', '185fps', '240fps',
+]
+
+/** 自动跟随：不跟随 / 拉回目标应用 / 提升副屏前台应用。 */
+export type VirtualScreenAutoFollow = 'off' | 'pull_back' | 'promote'
+export const VIRTUAL_SCREEN_AUTO_FOLLOW_VALUES: VirtualScreenAutoFollow[] = ['off', 'pull_back', 'promote']
+
+/** 副屏方向。 */
+export type VirtualScreenOrientation = 'auto' | 'portrait' | 'landscape'
+export const VIRTUAL_SCREEN_ORIENTATION_VALUES: VirtualScreenOrientation[] = ['auto', 'portrait', 'landscape']
+
+/**
+ * 手填规格的边界，与原生 `VirtualScreenSizing` 的 MIN_EDGE / MAX_EDGE / MIN_DPI / MAX_DPI 一致。
+ *
+ * 两边都夹取（原生用 `coerceIn` 不抛异常）：界面先夹一次让用户看见结果，原生再夹一次兜底，
+ * 谁都不会把一个越界的数字送进虚拟屏。
+ */
+export const VIRTUAL_SCREEN_MIN_EDGE = 200
+export const VIRTUAL_SCREEN_MAX_EDGE = 4096
+export const VIRTUAL_SCREEN_MIN_DPI = 120
+export const VIRTUAL_SCREEN_MAX_DPI = 640
+
+/** 副屏设置的全量快照；`adaptive` 为真时宽高与 DPI 由原生按屏幕与方向计算。 */
+export interface VirtualScreenSettings {
+  previewMode: VirtualScreenPreviewMode
+  autoFollow: VirtualScreenAutoFollow
+  orientation: VirtualScreenOrientation
+  adaptive: boolean
+  widthPx: number
+  heightPx: number
+  densityDpi: number
+}
+
+/** 设置更新的局部载荷：只带要改的字段，其余保持原生侧现值。 */
+export interface VirtualScreenSettingsUpdate {
+  previewMode?: VirtualScreenPreviewMode
+  autoFollow?: VirtualScreenAutoFollow
+  orientation?: VirtualScreenOrientation
+  adaptive?: boolean
+  widthPx?: number
+  heightPx?: number
+  densityDpi?: number
+}
+
+/** 启动副屏的入参；`packageName` 是唯一必填项，其余缺省时由原生按已存设置补齐。 */
+export interface VirtualScreenStartRequest {
+  packageName: string
+  adaptive?: boolean
+  orientation?: VirtualScreenOrientation
+  widthPx?: number
+  heightPx?: number
+  densityDpi?: number
+}
+
+/**
+ * 副屏运行状态。
+ *
+ * 「读不到」在这个结构里有明确的表示法，界面必须照它显示而不是显示 0：
+ * `sessionId` / `targetPackage` 取不到时是空串，`displayId` 未就绪时是 -1，
+ * `frameFps` / `displayRefreshRate` 未采样时是 0。
+ * `virtualForegroundPackage` / `virtualForegroundActivity` 取不到时同样是空串——
+ * 原生侧明确**不用主屏前台顶替**，界面也不许拿别的字段补位。
+ */
+export interface VirtualScreenState {
+  active: boolean
+  sessionId: string
+  displayId: number
+  previewMode: VirtualScreenPreviewMode
+  autoFollow: VirtualScreenAutoFollow
+  orientation: VirtualScreenOrientation
+  adaptive: boolean
+  widthPx: number
+  heightPx: number
+  densityDpi: number
+  targetPackage: string
+  frameFps: number
+  displayRefreshRate: number
+  virtualForegroundPackage: string
+  virtualForegroundActivity: string
+}
+
+/** 档位的中文标签：`limited` 是「省电」，其余照写 FPS 值（`15fps` → `15 FPS`）。 */
+export function virtualScreenPreviewModeLabel(mode: VirtualScreenPreviewMode): string {
+  return mode === 'limited' ? '省电' : `${Number.parseInt(mode, 10)} FPS`
+}
+
+/**
+ * 把原生侧的档位写法归一化成档位值。
+ *
+ * 原生**写**状态时用的是标签形式（`limited-fps` / `realtime-60fps`），而设置接口收发的是
+ * 裸档位（`limited` / `60fps`）：两种都认，认不出返回 null，由调用方决定是拒绝还是回落。
+ */
+export function normalizeVirtualScreenPreviewMode(value: string): VirtualScreenPreviewMode | null {
+  const bare = value === 'limited-fps'
+    ? 'limited'
+    : value.startsWith('realtime-') ? value.slice('realtime-'.length) : value
+  return VIRTUAL_SCREEN_PREVIEW_MODES.includes(bare as VirtualScreenPreviewMode)
+    ? bare as VirtualScreenPreviewMode
+    : null
+}
+
+function clampVirtualScreenNumber(value: number, minimum: number, maximum: number): number {
+  // 非有限值（NaN / Infinity）取最小值：宁可显示边界值，也不要放一个「看起来能过」的 NaN 过桥。
+  if (!Number.isFinite(value)) return minimum
+  return Math.min(maximum, Math.max(minimum, Math.round(value)))
+}
+
+/**
+ * 把一份手填规格夹取到允许区间内，越界就地取边界值。
+ *
+ * 与原生 `VirtualScreenSizing.normalize` 同一口径（夹取、不抛异常）：界面据此让用户
+ * **立刻看见**被夹到哪个值，而不是等他点了启动才在原生侧失败。
+ */
+export function clampVirtualScreenSpec(widthPx: number, heightPx: number, densityDpi: number): {
+  widthPx: number; heightPx: number; densityDpi: number
+} {
+  return {
+    widthPx: clampVirtualScreenNumber(widthPx, VIRTUAL_SCREEN_MIN_EDGE, VIRTUAL_SCREEN_MAX_EDGE),
+    heightPx: clampVirtualScreenNumber(heightPx, VIRTUAL_SCREEN_MIN_EDGE, VIRTUAL_SCREEN_MAX_EDGE),
+    densityDpi: clampVirtualScreenNumber(densityDpi, VIRTUAL_SCREEN_MIN_DPI, VIRTUAL_SCREEN_MAX_DPI),
+  }
+}
+
 /** 投递区固定根目录。只允许 inbox / outbox，不能把任意宿主路径交给文件浏览器。 */
 export type MailboxRoot = 'inbox' | 'outbox'
 
@@ -827,6 +964,31 @@ export interface RuntimeBridge {
   openShizuku: () => Promise<void>
   /** 打开目标应用副屏选择和预览页；仅安卓可用。 */
   openVirtualScreen: () => Promise<void>
+  /**
+   * 读取副屏的持久化设置（取帧档位、自动跟随、方向、自适应与手填规格）。
+   *
+   * 设置是**跨会话**的：页面重新打开、应用重启后都要能读回同一份值，
+   * 所以界面不以本地默认值起手，而是先读原生、读到什么显示什么。
+   */
+  getVirtualScreenSettings: () => Promise<VirtualScreenSettings>
+  /**
+   * 保存副屏设置；只传要改的字段，未传的字段保持原生侧现值。
+   *
+   * 返回值刻意是 `void`：界面保存后**重新读一次** `getVirtualScreenSettings()` 作为显示依据——
+   * 原生可能夹取越界规格或回落未知档位，拿本地那份入参当结果会把「实际生效的值」显示错。
+   */
+  setVirtualScreenSettings: (update: VirtualScreenSettingsUpdate) => Promise<void>
+  /** 用指定目标应用启动副屏；成功不代表画面已就绪，帧率与前台应用以 `getVirtualScreenState()` 为准。 */
+  startVirtualScreen: (request: VirtualScreenStartRequest) => Promise<void>
+  /** 停止副屏并释放虚拟显示器；没有在运行时调用它不算错误。 */
+  stopVirtualScreen: () => Promise<void>
+  /**
+   * 读取副屏运行状态；读不到时**必须抛错**，界面据此显示「读不到状态」而不是空态。
+   *
+   * 这里返回的是运行期真实读数（含原生侧实测的 `frameFps` 与 `displayRefreshRate`），
+   * 与设置里的取帧档位是两码事：后者只是请求值，前者才是实际生效值。
+   */
+  getVirtualScreenState: () => Promise<VirtualScreenState>
   /** 读取无障碍服务状态和目标应用白名单；不会返回当前窗口内容，也不返回任何密码信息。 */
   getAccessibilityAutomationState: () => Promise<AccessibilityAutomationState>
   /** 本机应用选择器的分页查询，数量不限；不向 AI 自动发送清单。 */

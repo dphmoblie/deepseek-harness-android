@@ -3,6 +3,7 @@ import { t, useLanguage } from './i18n'
 import { PluginSettings } from './components/PluginSettings'
 import { ApplicationPicker } from './components/ApplicationPicker'
 import { DeviceShellSettings } from './components/DeviceShellSettings'
+import { VirtualScreenSettings } from './components/VirtualScreenSettings'
 import { AppBackground } from './components/AppBackground'
 import { LanguageSettings } from './components/LanguageSettings'
 import { AppearanceSettings } from './components/AppearanceSettings'
@@ -129,6 +130,7 @@ type AppView =
   | 'settings-terminal'
   | 'settings-shizuku'
   | 'settings-diagnostics'
+  | 'settings-virtual-screen'
   | 'terminal'
   | 'environment'
   | 'plugins'
@@ -154,12 +156,14 @@ function settingsPageOf(view: AppView): SettingsPage | null {
 }
 
 /**
- * 是否属于「设置区」（设置首页与五个二级页）。
+ * 是否属于「设置区」（设置首页、五个二级页与副屏独立页）。
  *
  * 设置草稿的作用范围就是它：区内切页共享同一份未保存内容，离开设置区即丢弃。
+ * 副屏页有自己的读写生命周期，但它也是从设置里进去的，所以留在区内，
+ * 免得从 Shizuku 页跳过去时把用户还没保存的设置草稿丢掉。
  */
 function isSettingsView(view: AppView): boolean {
-  return view === 'settings' || settingsPageOf(view) !== null
+  return view === 'settings' || view === 'settings-virtual-screen' || settingsPageOf(view) !== null
 }
 
 /** 按用户用途分类；分类和搜索只影响入口展示，不改动设置草稿。 */
@@ -345,6 +349,7 @@ const APP_VIEWS: AppView[] = [
   'settings-terminal',
   'settings-shizuku',
   'settings-diagnostics',
+  'settings-virtual-screen',
   'terminal',
   'environment',
   'plugins',
@@ -3484,6 +3489,8 @@ interface SettingsScreenProps {
   /** 跳转到系统「显示在其他应用上层」设置页；权限只能由用户手动开启。 */
   onOpenOverlaySettings: () => void
   onOpenShizuku: () => void
+  /** 跳转到副屏的独立设置页；副屏的读写有自己的生命周期，不走设置草稿那套。 */
+  onOpenVirtualScreen: () => void
   onOpenAccessibilitySettings: () => void
   /**
    * 保存白名单。已设置验证密码时**必须**带上 `password`：
@@ -3502,7 +3509,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenVirtualScreen, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   /**
    * 保存白名单时要输入的验证密码。
@@ -3982,7 +3989,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           <p className="settings-note">
             {t("Shizuku 提供设备命令和文件操作能力，权限取决于其启动模式。未安装、未授权或断开时，设备工具不可用，不影响 Ubuntu 终端与 Harness。")}
           </p>
-          <DeviceShellSettings bridge={runtimeBridge} disabled={busy !== null} />
+          <DeviceShellSettings bridge={runtimeBridge} disabled={busy !== null} onOpenVirtualScreen={onOpenVirtualScreen} />
           <div className="settings-subsection" aria-labelledby="accessibility-automation-settings">
             <div className="section-title section-title-action">
               <span className="section-icon"><Bot size={19} /></span>
@@ -5612,6 +5619,10 @@ export function App() {
         return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
       case 'plugins':
         return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
+      /* 副屏的独立设置页：不放进 SETTINGS_PAGES，也不吃 settingsReadStatus 与设置草稿那两道门，
+         它自己读原生设置与运行状态，返回时回到刚才那一页（入口通常在 Shizuku 页）。 */
+      case 'settings-virtual-screen':
+        return <VirtualScreenSettings bridge={runtimeBridge} onBack={() => backToView('settings-shizuku')} />
       case 'environment':
         return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} onShareWorkspace={shareWorkspace} onListFiles={listWorkspaceFiles} workspaceFiles={workspaceFiles} onShareFile={shareWorkspaceFile} onOpenFile={openWorkspaceFile} onDeleteFile={deleteWorkspaceFile} />
       case 'versions':
@@ -5644,7 +5655,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenVirtualScreen={() => setActiveView('settings-virtual-screen')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

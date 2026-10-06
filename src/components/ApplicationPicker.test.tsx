@@ -50,8 +50,8 @@ describe('已安装应用选择器', () => {
     fireEvent.click(appBoxes(container)[1])
     expect(onChange).toHaveBeenCalledWith([...selected, 'com.example.notes'])
     expect(list).toHaveBeenNthCalledWith(2, '', 1)
-    // 已选 40 个仍在白名单里（超过上限也不丢，交给保存时校验）。
-    expect(screen.getByText('已选择 40 个应用，白名单最多 16 个；勾选后点击保存白名单。')).toBeInTheDocument()
+    // 已选 40 个照旧一并在白名单里：这些条目只是「已选」，界面不再给任何上限提示。
+    expect(screen.getByText('已选择 40 个应用；勾选后点击保存白名单。')).toBeInTheDocument()
   })
 
   it('搜索更新后忽略上一条慢请求的返回值，并且不会被它清掉读取状态', async () => {
@@ -70,22 +70,23 @@ describe('已安装应用选择器', () => {
     expect(screen.queryByText('正在读取应用列表')).not.toBeInTheDocument()
   })
 
-  it('如实说明白名单上限，并在已选超过上限时提醒保存会被拒绝', () => {
+  it('已选 17 个也只报个数，不再提示上限或被拒绝', () => {
     const { bridge } = bridgeReturning([{ apps: [app('reader')], nextOffset: null, total: 1 }])
     const selected = Array.from({ length: 17 }, (_, index) => `com.example.app${index}`)
     const { container } = render(<ApplicationPicker bridge={bridge} selected={selected} onChange={vi.fn()} disabled={false} />)
     fireEvent.click(screen.getByRole('button', { name: '从已安装应用选择' }))
-    expect(container.textContent).toContain('已选择 17 个应用，白名单最多 16 个；勾选后点击保存白名单。')
-    expect(container.textContent).toContain('已选 17 个，超过上限 1 个；保存前请先取消多余的勾选，否则保存会被拒绝。')
+    expect(container.textContent).toContain('已选择 17 个应用；勾选后点击保存白名单。')
+    expect(container.textContent).not.toContain('白名单最多')
+    expect(container.textContent).not.toContain('超过上限')
   })
 
-  it('正好到达上限时不提醒', () => {
+  it('条目数量不设上限：已选 60 个同样只报个数', () => {
     const { bridge } = bridgeReturning([{ apps: [app('reader')], nextOffset: null, total: 1 }])
-    const selected = Array.from({ length: 16 }, (_, index) => `com.example.app${index}`)
+    const selected = Array.from({ length: 60 }, (_, index) => `com.example.app${index}`)
     const { container } = render(<ApplicationPicker bridge={bridge} selected={selected} onChange={vi.fn()} disabled={false} />)
     fireEvent.click(screen.getByRole('button', { name: '从已安装应用选择' }))
-    expect(container.textContent).toContain('已选择 16 个应用，白名单最多 16 个；勾选后点击保存白名单。')
-    expect(container.textContent).not.toContain('超过上限')
+    expect(container.textContent).toContain('已选择 60 个应用；勾选后点击保存白名单。')
+    expect(container.textContent).not.toContain('上限')
   })
 
   it('搜索词先规范化再交给桥：全角空格、首尾空白与零宽字符都不原样发出去', async () => {

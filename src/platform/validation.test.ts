@@ -950,7 +950,7 @@ describe('无障碍自动化状态与验证密码校验', () => {
       .toThrow('无障碍自动白名单格式无效')
   })
 
-  it('自动白名单拒绝空串、超 16 条与非数组', () => {
+  it('自动白名单拒绝空串、非法格式、重复项与非数组；条目数量不设上限', () => {
     expect(() => validateAccessibilityAutomationState(state({ alwaysAllowedPackages: [''] })))
       .toThrow('无障碍白名单第 1 项无效')
     expect(() => validateAccessibilityAutomationState(state({ alwaysAllowedPackages: ['com.example.'] })))
@@ -959,14 +959,12 @@ describe('无障碍自动化状态与验证密码校验', () => {
       .toThrow('无障碍白名单第 1 项无效')
     expect(() => validateAccessibilityAutomationState(state({ alwaysAllowedPackages: null })))
       .toThrow('无障碍自动白名单格式无效')
-    const seventeen = Array.from({ length: 17 }, (_, index) => `com.example.app${index}`)
-    expect(() => validateAccessibilityAutomationState(state({ alwaysAllowedPackages: seventeen })))
-      .toThrow('无障碍自动白名单最多 16 项')
     expect(() => validateAccessibilityAutomationState(state({ alwaysAllowedPackages: ['com.example.app', 'com.example.app'] })))
       .toThrow('无障碍自动白名单包含重复项')
-    // 16 条正好是上限，必须放过。
-    expect(validateAccessibilityAutomationState(state({ alwaysAllowedPackages: seventeen.slice(0, 16) })).alwaysAllowedPackages)
-      .toHaveLength(16)
+    // 条目数量不设上限（原生侧从不按条数拒绝）：40 条照样放过，只校验每一条的格式。
+    const many = Array.from({ length: 40 }, (_, index) => `com.example.app${index}`)
+    expect(validateAccessibilityAutomationState(state({ alwaysAllowedPackages: many })).alwaysAllowedPackages)
+      .toHaveLength(40)
   })
 
   it('验证密码输入：5 种边界拒绝、6 位与 64 位通过', () => {

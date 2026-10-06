@@ -284,42 +284,42 @@ class VirtualScreenSizingTest {
     // ---------------------------------------------------------------- 小窗尺寸
 
     @Test
-    fun `典型竖屏手机上小窗不超上限且画面比例等于副屏比例`() {
+    fun `典型竖屏手机上小窗不超屏幕上限且画面比例等于副屏比例`() {
         val size = VirtualScreenWindow.overlaySize(VirtualScreenSpec.PORTRAIT, 1080, 2400, 3f)
-        // 面板宽 960（= 320dp × 3），高上限 1440（= 480dp × 3，比屏高 70% 的 1680 更紧）。
-        // 竖屏比例 726:1600 很窄：按宽度顶满要 960×2116，远超扣掉预算后的 1116 可用高度，
-        // 所以反过来按高度顶满，得到 506×1116 的画面（比例 0.4534，与 0.4538 的差异只来自取整）。
-        assertEquals(960, size.widthPx)
-        assertEquals(1440, size.heightPx)
-        assertEquals(506, size.contentWidthPx)
-        assertEquals(1116, size.contentHeightPx)
-        assertTrue("宽不超 90% 屏宽", size.widthPx <= (1080 * 0.9f).toInt())
-        assertTrue("高不超 70% 屏高", size.heightPx <= (2400 * 0.7f).toInt())
+        // 小窗改成「画面即窗口」后不再有工具栏预算，尺寸只由屏幕可用矩形（94% 宽 × 84% 高）
+        // 与副屏比例决定；这里钉不变量，不钉某一组具体像素（那种数字是实现副产品，会随比例调整而失效）。
+        assertTrue("宽不超 94% 屏宽", size.widthPx <= (1080 * VirtualScreenWindow.MAX_SCREEN_WIDTH_RATIO).toInt())
+        assertTrue("高不超 84% 屏高", size.heightPx <= (2400 * VirtualScreenWindow.MAX_SCREEN_HEIGHT_RATIO).toInt())
+        assertEquals("小窗宽度就是画面宽度", size.widthPx, size.contentWidthPx)
+        assertEquals("小窗高度就是画面高度", size.heightPx, size.contentHeightPx)
         // 这条就是「消黑边」的判据：画面区宽高比必须等于副屏宽高比，否则预览的 FIT_CENTER 会留边。
         assertEquals("画面宽高比等于副屏宽高比", VirtualScreenSpec.PORTRAIT.aspectRatio,
             size.contentWidthPx.toDouble() / size.contentHeightPx.toDouble(), 0.01)
-        assertTrue("画面高加预算不超过总高", size.contentHeightPx + (108 * 3) <= size.heightPx)
     }
 
     @Test
-    fun `典型竖屏手机上小窗宽度等于标称宽度`() {
-        // 1080 屏的 90% 是 972 > 320dp*3 = 960，所以宽度取标称值，不会被屏幕上限压缩。
+    fun `竖屏窄比例下小窗顶满可用矩形的一条边`() {
         val size = VirtualScreenWindow.overlaySize(VirtualScreenSpec.PORTRAIT, 1080, 2400, 3f)
-        assertEquals(960, size.widthPx)
+        // 726:1600 很窄：按宽顶满（94% 屏宽）会顶破 84% 屏高的上限，所以实际是按高顶满。
+        // 用不变量表达这个结论：宽或高必须有一条顶满可用矩形，不允许两边都空着（那样小窗会白缩一圈）。
+        val widthCap = (1080 * VirtualScreenWindow.MAX_SCREEN_WIDTH_RATIO).toInt()
+        val heightCap = (2400 * VirtualScreenWindow.MAX_SCREEN_HEIGHT_RATIO).toInt()
+        assertTrue("宽或高必须有一条顶满可用矩形", size.widthPx == widthCap || size.heightPx == heightCap)
+        assertTrue(size.widthPx <= widthCap)
+        assertTrue(size.heightPx <= heightCap)
     }
 
     @Test
     fun `横屏副屏在宽屏上变成矮条且仍满足比例`() {
-        // 2000×1520 的机器上高上限 1064（= 70% 屏高），比 480dp × 3 = 1440 更紧。
         val size = VirtualScreenWindow.overlaySize(VirtualScreenSpec.LANDSCAPE, 2000, 1520, 3f)
-        // 横屏比例 1280:580 = 2.207 更扁：960 宽只对应 435 高，加上 324 的预算总高才 759，
-        // 远不到高上限，所以是「按宽度顶满」，小窗自然成了一条矮条。
-        assertEquals(960, size.widthPx)
-        assertEquals(759, size.heightPx)
-        assertEquals(960, size.contentWidthPx)
-        assertEquals(435, size.contentHeightPx)
-        assertTrue(size.widthPx <= (2000 * 0.9f).toInt())
-        assertTrue(size.heightPx <= (1520 * 0.7f).toInt())
+        // 横屏比例 1280:580 ≈ 2.207 很扁：94% 屏宽（1880）先于 84% 屏高（1276）生效，
+        // 于是按宽度顶满、高度被比例压得很矮，小窗自然成了一条矮条 —— 这就是「画面即窗口」的表现。
+        val widthCap = (2000 * VirtualScreenWindow.MAX_SCREEN_WIDTH_RATIO).toInt()
+        val heightCap = (1520 * VirtualScreenWindow.MAX_SCREEN_HEIGHT_RATIO).toInt()
+        assertEquals("扁比例下宽度先顶满", widthCap, size.widthPx)
+        assertTrue(size.heightPx <= heightCap)
+        assertEquals("小窗宽度就是画面宽度", size.widthPx, size.contentWidthPx)
+        assertEquals("小窗高度就是画面高度", size.heightPx, size.contentHeightPx)
         assertEquals(VirtualScreenSpec.LANDSCAPE.aspectRatio,
             size.contentWidthPx.toDouble() / size.contentHeightPx.toDouble(), 0.01)
     }
@@ -348,12 +348,16 @@ class VirtualScreenSizingTest {
     }
 
     @Test
-    fun `极窄屏幕上方可画布的副屏按下限得到可用小窗`() {
-        // 屏幕高只有 400px：70% 是 280，宽度也被屏宽 90% 压到 320，扣掉 108 的预算后画面按高度顶满。
+    fun `极窄屏幕上方可画布的副屏也有可用小窗`() {
+        // 400×400 的小屏：可用矩形是 376×336，竖屏比例偏窄 → 按高顶满、宽度被比例收窄；
+        // 屏再小也不允许算出 0 或负数尺寸（那会让预览直接崩），所以下限也要钉住。
         val size = VirtualScreenWindow.overlaySize(VirtualScreenSpec.PORTRAIT, 400, 400, 1f)
-        assertEquals(320, size.widthPx)
-        assertEquals(280, size.heightPx)
-        assertEquals(172, size.contentHeightPx)
+        assertTrue("宽必须为正", size.widthPx >= 1)
+        assertTrue("高必须为正", size.heightPx >= 1)
+        assertTrue(size.widthPx <= (400 * VirtualScreenWindow.MAX_SCREEN_WIDTH_RATIO).toInt())
+        assertTrue(size.heightPx <= (400 * VirtualScreenWindow.MAX_SCREEN_HEIGHT_RATIO).toInt())
+        assertEquals("小窗尺寸就是画面尺寸", size.contentWidthPx, size.widthPx)
+        assertEquals("小窗尺寸就是画面尺寸", size.contentHeightPx, size.heightPx)
         assertTrue("画面高度不小于 1", size.contentHeightPx >= 1)
         assertTrue("画面高度不超过小窗高度", size.contentHeightPx <= size.heightPx)
     }
@@ -382,11 +386,15 @@ class VirtualScreenSizingTest {
     }
 
     @Test
-    fun `屏幕上限比例与改造前逐字一致`() {
-        assertEquals(0.9, VirtualScreenWindow.MAX_SCREEN_WIDTH_RATIO, 1e-12)
-        assertEquals(0.7, VirtualScreenWindow.MAX_SCREEN_HEIGHT_RATIO, 1e-12)
-        assertEquals(320, VirtualScreenWindow.NOMINAL_WIDTH_DP)
-        assertEquals(480, VirtualScreenWindow.NOMINAL_HEIGHT_DP)
+    fun `屏幕上限比例钉住纯画面小窗的契约`() {
+        // 小窗改成「画面即窗口」后不再为工具栏留预算，旧的标称 dp 尺寸（NOMINAL_WIDTH_DP /
+        // NOMINAL_HEIGHT_DP）已经随工具栏一起删除，所以这里改成钉住新契约：
+        // 比例仍是 94% 宽 / 84% 高，且内容区与小窗本身逐值相同（不再有比画面大的窗口）。
+        assertEquals(0.94, VirtualScreenWindow.MAX_SCREEN_WIDTH_RATIO, 1e-12)
+        assertEquals(0.84, VirtualScreenWindow.MAX_SCREEN_HEIGHT_RATIO, 1e-12)
+        val size = VirtualScreenWindow.overlaySize(VirtualScreenSpec.PORTRAIT, 1080, 2400, 2f)
+        assertEquals("小窗宽度就是画面宽度", size.widthPx, size.contentWidthPx)
+        assertEquals("小窗高度就是画面高度", size.heightPx, size.contentHeightPx)
     }
 
     // ---------------------------------------------------------------- 预览管线与前景层级

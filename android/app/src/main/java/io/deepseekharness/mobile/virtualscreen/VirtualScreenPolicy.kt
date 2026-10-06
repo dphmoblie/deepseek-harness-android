@@ -29,8 +29,34 @@ object VirtualScreenPolicy {
     /** 预览动作字段名：宿主 config 动作与工具面、设置页共用的稳定字段标识。 */
     const val PREVIEW_FIELD = "previewMode"
 
-    /** 目标应用动作字段名：宿主 target 动作与工具面、设置页共用的稳定字段标识。 */
+    /** 目标应用动作字段名：宿主 target 动作与设置页共用的稳定字段标识（值是组件，含 `/`）。 */
     const val TARGET_FIELD = "component"
+
+    /**
+     * 目标应用的第二种字段形状：[TARGET_FIELD] 之外的包名写法。
+     *
+     * 存在的理由是两层调用方对「目标」的表达不同：宿主设置页拿到的是可启动组件（含 `/`），
+     * 而 AI 工具面（`mobile_virtual_screen_action` 的 `target` 动作）传的是包名。
+     * 缺了这一层，工具面的 target 会在设备侧因为读不到 `component` 直接报参数错误。
+     */
+    const val TARGET_PACKAGE_FIELD = "packageName"
+
+    /**
+     * 目标动作的字段解析（纯函数）：[TARGET_FIELD] 与 [TARGET_PACKAGE_FIELD] **二选一**。
+     * 两者都给、或两者都不给都算意图不明，一律拒绝——同时接受两种写法时「以谁为准」会变成隐式规则。
+     *
+     * 返回组件（含 `/`）就是最终入口；返回包名（不含 `/`）由执行层再去解析启动入口，
+     * 解析不到时归入 `NOT_ACCEPTED`（这套入口不成立），而不是 `NOT_FOREGROUND`（还没到前台）。
+     */
+    fun targetRequestField(p: JSONObject): String {
+        val hasComponent = !p.isNull(TARGET_FIELD)
+        val hasPackage = !p.isNull(TARGET_PACKAGE_FIELD)
+        require(hasComponent != hasPackage) { "副屏目标需要且只需要 component 或 packageName 之一" }
+        if (hasComponent) return component(p.getString(TARGET_FIELD))
+        val packageName = p.getString(TARGET_PACKAGE_FIELD)
+        require(validPackageName(packageName)) { "副屏目标包名格式无法识别" }
+        return packageName
+    }
 
     /**
      * 预览模式到采集间隔（毫秒）的映射；模式名是工具面与设置页共用的稳定标识。
@@ -39,15 +65,19 @@ object VirtualScreenPolicy {
      */
     val FRAME_MODES: Map<String, Int> = mapOf(
         "limited" to 180, "15fps" to 66, "30fps" to 33, "60fps" to 16,
-        "120fps" to 8, "185fps" to 5,
+        "90fps" to 11, "120fps" to 8, "144fps" to 6, "165fps" to 6, "185fps" to 5, "240fps" to 4,
     )
 
     /** 虚拟显示器请求的合成刷新率；设备会把它夹到自身支持的档位。 */
-    fun requestedRefreshRate(mode: String): Float = when (mode) {
-        "185fps" -> 185f
-        "120fps" -> 120f
-        "60fps" -> 60f
-        else -> 60f
+    fun requestedRefreshRate(mode: String): Float {
+        frameInterval(mode)
+        return if (mode == "limited") 60f else mode.removeSuffix("fps").toFloat()
+    }
+
+    /** 配置入口只接受明确的自动切换策略，拒绝未知值。 */
+    fun autoFollow(value: String): String {
+        require(value in setOf("off", "pull_back", "promote")) { "自动切换策略无效" }
+        return value
     }
 
     /** 校验预览模式并返回采集间隔；未知模式抛 [IllegalArgumentException]。 */
@@ -76,7 +106,7 @@ object VirtualScreenPolicy {
      * 否则 60fps 档位会把主线程压满，用户看到的反而更卡。
      */
     // PNG 兼容预览的保守下限；GPU 直出预览不走这个轮询路径。
-    const val PREVIEW_PULL_FLOOR_MILLIS = 5
+    const val PREVIEW_PULL_FLOOR_MILLIS = 4
 
     fun previewPullInterval(mode: String): Int = maxOf(PREVIEW_PULL_FLOOR_MILLIS, frameInterval(mode))
 
@@ -792,5 +822,426 @@ object VirtualScreenPolicy {
         packageName in inputMethods -> "$FOLLOW_NONE_MESSAGE（主屏最前台是输入法）"
         packageName in FOLLOW_EXCLUDED_PACKAGES -> "$FOLLOW_NONE_MESSAGE（主屏最前台是系统界面）"
         else -> FOLLOW_NONE_MESSAGE
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 错误码细分（会话失效 / 目标离开副屏 / 取不到新帧）
+    //
+    // 这一段的由来：真机上三种完全不同的情形此前共用 `VIRTUAL_SCREEN_UNAVAILABLE` 一个码，
+    // 调用方看到它只能得到「副屏不可用」这一个结论，于是把「等一会儿再截」和「目标已经不在副屏上、
+    // 得先把它拉回来」也当成「这台设备不支持副屏」。判据在这里写死成纯函数，执行层只负责把观察结果传进来。
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * 会话已失效：虚拟显示器被释放、会话编号被换掉，或设备 Shell 进程没有了这次会话。
+     * 语义是「这次会话没了」，与「这次操作没成」不同，但**副屏功能本身仍然可用**——重新建立会话即可。
+     */
+    const val SESSION_DEAD_CODE = "VIRTUAL_SCREEN_SESSION_DEAD"
+
+    /** 目标应用已不在副屏上（系统能确认它去了别处或退出了）。先把它拉回副屏，再继续观察/操作。 */
+    const val TARGET_LEFT_CODE = "VIRTUAL_SCREEN_TARGET_LEFT"
+
+    /**
+     * 有会话、目标也还在，只是**当前这一帧过期或还没产生**：刚切换完目标、页面正在首帧渲染、
+     * 或采集器这一刻取不到帧。可重试，且重试间隔通常只要几百毫秒。
+     */
+    const val STALE_FRAME_CODE = "VIRTUAL_SCREEN_STALE_FRAME"
+
+    /** 会话已失效的中文提示。 */
+    const val SESSION_DEAD_MESSAGE = "副屏会话已失效，请重新建立副屏会话后再试"
+
+    /** 目标已离开副屏的中文提示。 */
+    const val TARGET_LEFT_MESSAGE = "目标应用已不在副屏上，请先把它切回副屏再操作"
+
+    /** 帧过期/未就绪的中文提示。 */
+    const val STALE_FRAME_MESSAGE = "副屏画面尚未就绪或已过期，请稍后重试"
+
+    /** 截图等待新帧的上限（毫秒）：超过它仍取不到新帧就判为过期，而不是无限等或当成会话失效。 */
+    const val FRAME_STALE_AFTER_MILLIS = 2000L
+
+    /** 构造带明确 code 的失败对象；凡是「能用上面三个码区分」的场合都必须用它，不要用 IllegalStateException。 */
+    fun failure(code: String, message: String): RuntimeFailure = RuntimeFailure(code, message)
+
+    /** 会话是否仍然活着（纯函数）：会话编号一致且显示器仍持有有效编号。 */
+    fun sessionAlive(displayId: Int, currentSession: String, requestedSession: String): Boolean =
+        displayId > 0 && requestedSession == currentSession
+
+    /**
+     * 帧是否「过期或尚未产生」（纯函数）：没有帧、最近一帧早于 [FRAME_STALE_AFTER_MILLIS]，
+     * 或采集器报过错都算。
+     *
+     * [nowElapsedMillis]/[frameAtElapsedMillis] 都是 `SystemClock.elapsedRealtime` 口径（单调、可跨休眠），
+     * 用注入的方式传进来才能在 JVM 单测里表驱动覆盖，不必真的等两秒。
+     */
+    fun frameStale(nowElapsedMillis: Long, frameAtElapsedMillis: Long, frameError: String): Boolean =
+        frameError.isNotEmpty() || frameAtElapsedMillis <= 0L ||
+            nowElapsedMillis - frameAtElapsedMillis >= FRAME_STALE_AFTER_MILLIS
+
+    /**
+     * 「要画面却拿不到」的失败判定（纯函数），三支互斥且覆盖全部情形：
+     * - 会话不在 → [SESSION_DEAD_CODE]（重建会话才有意义，重试同一个会话没有用）；
+     * - 会话在、目标不在副屏 → [TARGET_LEFT_CODE]（先把目标拉回来，再取画面）；
+     * - 会话与目标都在、只是帧过期 → [STALE_FRAME_CODE]（原地重试即可）。
+     *
+     * 返回 null 表示「画面可用」，调用方继续走正常出帧逻辑。
+     */
+    fun frameFailure(
+        sessionAlive: Boolean,
+        targetVisible: Boolean,
+        frameStale: Boolean,
+    ): RuntimeFailure? = when {
+        !sessionAlive -> failure(SESSION_DEAD_CODE, SESSION_DEAD_MESSAGE)
+        !targetVisible -> failure(TARGET_LEFT_CODE, TARGET_LEFT_MESSAGE)
+        frameStale -> failure(STALE_FRAME_CODE, STALE_FRAME_MESSAGE)
+        else -> null
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 生命周期动作（start / restart / reconnect）
+    // ---------------------------------------------------------------------------------------------
+
+    /** 生命周期动作白名单。执行层的 `when` 必须与它一致，漏接线的教训见 [INPUT_ACTIONS] 的注释。 */
+    val LIFECYCLE_ACTIONS = setOf("start", "restart", "reconnect")
+
+    /** 重建显示与会话**不可能在设备 Shell 侧完成**时用的码：不是「副屏不可用」，而是「这个入口做不到，请走别的入口」。 */
+    const val RESTART_UNSUPPORTED_CODE = "VIRTUAL_SCREEN_RESTART_UNSUPPORTED"
+
+    /** `reconnect` 无法重新绑定（会话的底层虚拟显示器已经不存在）时用的码。 */
+    const val RECONNECT_UNSUPPORTED_CODE = "VIRTUAL_SCREEN_RECONNECT_UNSUPPORTED"
+
+    /**
+     * 生命周期动作的判定结果。[state] 是给调用方看的稳定枚举（`already_active` / `no_session` / …），
+     * [failure] 非空时动作失败，且**必须**带上面那两个码之一，不能假装成功。
+     */
+    data class LifecycleOutcome(val startable: Boolean, val state: String, val failure: RuntimeFailure?)
+
+    /**
+     * 生命周期动作判定（纯函数）。三种语义如实区分：
+     * - `start`：只回答「现在有没有活着的会话」。**不会**新建会话——规格（组件、分辨率、DPI、客户端 binder）
+     *   只有宿主进程手里有，设备 Shell 侧没有这些参数，凭空造一个会话等于替用户决定目标应用；
+     * - `restart`：会话还活着时返回 `rebuild`（startable=true），由执行层用**手里那份原规格**重建显示与会话
+     *   （架构上规格一直在 [ShellVirtualScreen] 里，重建可行）；会话已经没了就没有规格可依，如实返回
+     *   [RESTART_UNSUPPORTED_CODE] 并指路设置页，不做「看起来成功」的空转；
+     * - `reconnect`：会话还在、虚拟显示器还在时，重新绑定调用方 binder 是真能做到的（返回 `rebound`）；
+     *   显示器已经被释放就返回 [RECONNECT_UNSUPPORTED_CODE]，同样不假装成功。
+     */
+    fun lifecycleOutcome(action: String, displayId: Int, currentSession: String, requestedSession: String): LifecycleOutcome {
+        require(action in LIFECYCLE_ACTIONS) { "不支持的生命周期动作" }
+        val alive = sessionAlive(displayId, currentSession, requestedSession)
+        return when (action) {
+            "start" -> if (alive) {
+                LifecycleOutcome(true, "already_active", null)
+            } else {
+                LifecycleOutcome(false, "no_session", failure(SESSION_DEAD_CODE, SESSION_DEAD_MESSAGE))
+            }
+            "restart" -> if (alive) {
+                LifecycleOutcome(true, "rebuild", null)
+            } else {
+                LifecycleOutcome(
+                    false,
+                    "no_session",
+                    failure(
+                        RESTART_UNSUPPORTED_CODE,
+                        "副屏会话已经不存在，重建会话需要的原规格（目标应用、分辨率、DPI）也没了；" +
+                            "请回到设置的目标应用副屏页面重新开始副屏",
+                    ),
+                )
+            }
+            "reconnect" -> if (alive) {
+                LifecycleOutcome(true, "rebound", null)
+            } else {
+                LifecycleOutcome(
+                    false,
+                    "display_released",
+                    failure(RECONNECT_UNSUPPORTED_CODE, "副屏的虚拟显示器已经释放，无法重新绑定；请重新开始副屏会话"),
+                )
+            }
+            else -> error("不支持的生命周期动作")
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 自动跟随（autoFollowTick）
+    // ---------------------------------------------------------------------------------------------
+
+    /** `state` 里回显当前自动跟随策略的字段名（宿主的健康循环读它决定是否发 [AUTO_FOLLOW_TICK_ACTION]）。 */
+    const val AUTO_FOLLOW_FIELD = "autoFollow"
+
+    /** `state` 里副屏最前台包名 / 组件名的字段名。 */
+    const val VIRTUAL_FOREGROUND_PACKAGE_FIELD = "virtualForegroundPackage"
+
+    /** `state` 里副屏最前台组件名的字段名。 */
+    const val VIRTUAL_FOREGROUND_ACTIVITY_FIELD = "virtualForegroundActivity"
+
+    /** 由宿主健康循环周期性调用的动作名（不是 AI 直接调的动作）。 */
+    const val AUTO_FOLLOW_TICK_ACTION = "autoFollowTick"
+
+    /** 同一个目标两次自动跟随动作之间的最短间隔（毫秒）：健康循环约 800 毫秒一次，没有节流会反复触发。 */
+    const val AUTO_FOLLOW_THROTTLE_MILLIS = 2000L
+
+    /** 自动跟随的三条规则（与 [autoFollow] 接受的策略一一对应）。 */
+    const val AUTO_FOLLOW_OFF = "off"
+    const val AUTO_FOLLOW_PULL_BACK = "pull_back"
+    const val AUTO_FOLLOW_PROMOTE = "promote"
+
+    /** 策略标签：`+` 表示两种规则可以叠加，`-` 表示不动作。 */
+    val AUTO_FOLLOW_POLICIES = mapOf(
+        AUTO_FOLLOW_OFF to "不动作",
+        AUTO_FOLLOW_PULL_BACK to "拉回副屏",
+        AUTO_FOLLOW_PROMOTE to "提升为会话目标",
+    )
+
+    /** 自动跟随决策：一次 tick 最多做一个动作，[Applied] 表示这次要真的下手。 */
+    sealed class AutoFollowDecision {
+        /** 这一次不动手；[reason] 说清是哪一条门槛拦下的，供 state 回显与排查。 */
+        data class Skipped(val reason: String) : AutoFollowDecision()
+
+        /** 真的要做动作；[rule] 是 [AUTO_FOLLOW_PULL_BACK] / [AUTO_FOLLOW_PROMOTE] 之一。 */
+        data class Applied(val rule: String, val target: String, val reason: String) : AutoFollowDecision()
+    }
+
+    /**
+     * 自动跟随判定（纯函数，表驱动可测）。判据顺序即优先级，先到先得：
+     * 1. 策略是 `off`（或空）→ 什么都不做；
+     * 2. 没有会话 / 会话已失效 → 不做（会话重建由宿主负责，自动跟随不能替用户重开会话）；
+     * 3. `promote`：副屏最前台是**可跟随**的真实应用且不是会话目标 → 提升为会话目标（幂等：已是目标就不动）；
+     * 4. `pull_back`：会话目标**此刻在主屏最前台**（用户在主屏上点了它）且不在副屏 → 把它拉回副屏；
+     * 5. 其余一律不动作。
+     *
+     * 两点刻意的设计：
+     * - `promote` 不做「目标离开副屏」的判断：目标离开副屏时副屏前台可能变成桌面，把桌面提升成会话目标
+     *   等于把用户的副屏会话直接毁掉，所以提升前必须过 [followable]（排除桌面、输入法、系统界面与本应用）；
+     * - `pull_back` 只认「目标在主屏最前台」这一种离开方式：目标跳去了第三个显示器的情形无从判断，
+     *   宁可不动手，也不要凭猜测反复 `am start` 抢用户的前台。
+     */
+    fun autoFollowDecision(
+        policy: String,
+        sessionAlive: Boolean,
+        sessionTarget: String,
+        virtualForeground: String?,
+        mainForeground: String?,
+        selfPackage: String,
+        inputMethods: Set<String>,
+        homePackage: String?,
+    ): AutoFollowDecision {
+        if (policy !in AUTO_FOLLOW_POLICIES) {
+            return AutoFollowDecision.Skipped("自动跟随策略无效：$policy")
+        }
+        if (policy == AUTO_FOLLOW_OFF) return AutoFollowDecision.Skipped("自动跟随已关闭")
+        if (!sessionAlive) return AutoFollowDecision.Skipped(SESSION_DEAD_MESSAGE)
+        if (sessionTarget.isEmpty()) return AutoFollowDecision.Skipped("会话还没有目标应用")
+        val sessionPackage = sessionTarget.substringBefore('/')
+        if (policy == AUTO_FOLLOW_PROMOTE) {
+            val candidate = virtualForeground?.substringBefore('/')
+            val followable = candidate != null &&
+                followable(candidate, selfPackage, inputMethods, homePackage)
+            return when {
+                candidate == null -> AutoFollowDecision.Skipped("副屏上没有解析到最前台应用")
+                !followable -> AutoFollowDecision.Skipped(
+                    followNoneReason(candidate, selfPackage, inputMethods, homePackage),
+                )
+                // 幂等：副屏最前台已经是会话目标，重复提升等于白跑一次启动命令。
+                sessionTarget.startsWith("$candidate/") -> AutoFollowDecision.Skipped("副屏最前台已经是会话目标：$candidate")
+                else -> AutoFollowDecision.Applied(
+                    AUTO_FOLLOW_PROMOTE,
+                    candidate,
+                    "副屏最前台 $candidate 不在会话目标上，提升为会话目标",
+                )
+            }
+        }
+        val mainCandidate = mainForeground?.substringBefore('/')
+        return when {
+            mainCandidate == null -> AutoFollowDecision.Skipped("主屏上没有解析到最前台应用")
+            mainCandidate != sessionPackage -> AutoFollowDecision.Skipped("主屏最前台不是会话目标：$mainCandidate")
+            virtualForeground?.substringBefore('/') == sessionPackage ->
+                AutoFollowDecision.Skipped("会话目标仍在副屏上：$sessionPackage")
+            else -> AutoFollowDecision.Applied(
+                AUTO_FOLLOW_PULL_BACK,
+                sessionPackage,
+                "会话目标 $sessionPackage 出现在主屏最前台，拉回副屏",
+            )
+        }
+    }
+
+    /**
+     * 自动跟随的节流（按规则 + 目标）：
+     * - 同一个「规则 + 目标」在 [AUTO_FOLLOW_THROTTLE_MILLIS] 内只执行一次——健康循环约 800 毫秒一次，
+     *   没有它会在确认失败时把 `am start` 打成连发；
+     * - 换了规则或换了目标立刻放行：用户切了应用就该马上跟过去，不该还在等上一次的节流窗口；
+     * - [attempt] 返回 true 时才算「用掉」这次机会，判定为不动手的那一 tick 不能占用窗口。
+     *
+     * 时钟是注入点（真机传 `SystemClock.elapsedRealtime`），因此这里是纯状态机、可在单测里用假时钟覆盖。
+     */
+    class FollowThrottle(
+        private val windowMillis: Long = AUTO_FOLLOW_THROTTLE_MILLIS,
+        private val now: () -> Long,
+    ) {
+        private var lastRule = ""
+        private var lastTarget = ""
+        private var lastAttemptMillis = Long.MIN_VALUE
+
+        /** 是否允许现在动手；允许则同时记录这次尝试。 */
+        fun attempt(rule: String, target: String): Boolean {
+            val current = now()
+            val same = rule == lastRule && target == lastTarget
+            if (same && current - lastAttemptMillis < windowMillis) return false
+            lastRule = rule
+            lastTarget = target
+            lastAttemptMillis = current
+            return true
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 目标切换的预算与失败原因
+    // ---------------------------------------------------------------------------------------------
+
+    /** `target` 的确认预算默认值（毫秒）：与 [TARGET_SWITCH_TIMEOUT_MILLIS] 同值，只是现在可以由调用方指定。 */
+    const val CONFIRM_BUDGET_DEFAULT_MILLIS = 3000L
+
+    /** `target` 的确认预算下限（毫秒）：再短就没有一次 `dumpsys` + 一次前台切换的时间。 */
+    const val CONFIRM_BUDGET_MIN_MILLIS = 500L
+
+    /** `target` 的确认预算上限（毫秒）：再长也不会让冷启动更快，只会让调用方白等。 */
+    const val CONFIRM_BUDGET_MAX_MILLIS = 15000L
+
+    /** 请求字段名。 */
+    const val CONFIRM_BUDGET_FIELD = "confirm_budget_ms"
+
+    /** 请求字段名。 */
+    const val PREWARM_FIELD = "prewarm"
+
+    /** 请求字段名。 */
+    const val ROLLBACK_FIELD = "rollback"
+
+    /** 返回字段名：失败原因（三选一），与错误码分开——错误码回答「哪一类失败」，原因回答「为什么失败」。 */
+    const val SWITCH_REASON_FIELD = "reason"
+
+    /** 失败原因：系统的启动命令没被接受（包名没有启动入口、被安全策略拒绝、命令非零退出）。 */
+    const val REASON_NOT_ACCEPTED = "NOT_ACCEPTED"
+
+    /** 失败原因：命令接受了，但目标没能在预算内取代副屏前台。 */
+    const val REASON_NOT_FOREGROUND = "NOT_FOREGROUND"
+
+    /** 失败原因：会话在切换过程中失效。 */
+    const val REASON_SESSION_DEAD = "SESSION_DEAD"
+
+    /**
+     * 解析 `confirm_budget_ms`（纯函数）：接受整数或浮点，**夹取**到 [CONFIRM_BUDGET_MIN_MILLIS]..[CONFIRM_BUDGET_MAX_MILLIS]
+     * 而不是抛异常——预算是性能旋钮，给超范围的值仍然能跑，直接拒会让调用方白改一轮参数。
+     * 非数字类型抛 [IllegalArgumentException]（那是真的调用错误）。
+     */
+    fun confirmBudgetMillis(p: JSONObject): Long {
+        if (p.isNull(CONFIRM_BUDGET_FIELD)) return CONFIRM_BUDGET_DEFAULT_MILLIS
+        val value = p.get(CONFIRM_BUDGET_FIELD)
+        require(value is Number) { "副屏目标确认预算必须为整数毫秒" }
+        return value.toLong().coerceIn(CONFIRM_BUDGET_MIN_MILLIS, CONFIRM_BUDGET_MAX_MILLIS)
+    }
+
+    /**
+     * 目标切换失败的原因判定（纯函数）：只看执行层抓到的错误，不去猜设备状态。
+     *
+     * 判据（与执行层抛出的对象一一对应）：
+     * - 会话码（[SESSION_DEAD_CODE] / `VIRTUAL_SCREEN_STOPPED`）→ [REASON_SESSION_DEAD]；
+     * - 启动被拒（[LAUNCH_FAILED_CODE]、`am start` 的 `Error:`/非零退出、启动入口解析不出来）→ [REASON_NOT_ACCEPTED]；
+     * - 其余（超时、轮询里冒出来的异常）→ [REASON_NOT_FOREGROUND]。
+     */
+    fun switchFailureReason(error: Throwable): String = when {
+        error is RuntimeFailure && error.code in setOf(SESSION_DEAD_CODE, "VIRTUAL_SCREEN_STOPPED", "VIRTUAL_SCREEN_BUSY") ->
+            REASON_SESSION_DEAD
+        error is RuntimeFailure && error.code in setOf(LAUNCH_FAILED_CODE, LAUNCH_UNRESOLVED_CODE) -> REASON_NOT_ACCEPTED
+        REJECTED_SWITCH_MARKERS.any { error.message.orEmpty().contains(it) } -> REASON_NOT_ACCEPTED
+        else -> REASON_NOT_FOREGROUND
+    }
+
+    /** `am start` 被系统拒绝时命令层给出的文案片段（见 `ShellVirtualScreen.command` 与 `launchOnDisplay`）。 */
+    private val REJECTED_SWITCH_MARKERS = listOf(
+        "系统命令未成功执行",
+        "系统拒绝副屏命令",
+        "没有启动入口",
+    )
+
+    // ---------------------------------------------------------------------------------------------
+    // 非 ASCII 文本：设备 Shell 侧的剪贴板通道
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * 设备 Shell 侧能不能把文本放进剪贴板。探测结果三态，**不是**「成功/失败」两态：
+     * 探测本身失败（命令不存在、被系统策略拒绝）与「命令在但这次没成/没法确认」是两件事，
+     * 文案不同、排查方向也不同，所以合并不了。
+     */
+    enum class ClipboardProbe(val wire: String, val label: String) {
+        /** `cmd clipboard set-primary-clip ...` 可用且**读回核对一致**：文本确实进了剪贴板。 */
+        AVAILABLE("available", "可用"),
+
+        /** 命令在，但这次没能确认写入成功（返回非零 / 输出报错 / 读回对不上）。 */
+        FAILED("failed", "未能确认"),
+
+        /** 命令不存在或探测过程本身失败。 */
+        ABSENT("absent", "不可用"),
+    }
+
+    /** 剪贴板通道的可操作提示：无障碍是当前唯一能把非 ASCII 文本**定向写进副屏输入框**的通道。 */
+    const val CLIPBOARD_HINT_ACCESSIBILITY = "开启无障碍服务后可走剪贴板与聚焦写入通道（含中文）"
+
+    /** 剪贴板可用、但设备 Shell 侧没法替调用方把内容粘进输入框时的提示。 */
+    const val CLIPBOARD_HINT_MANUAL_PASTE =
+        "已把文本写入系统剪贴板，但设备 Shell 侧没有可编辑节点可以粘贴；请在副屏输入框里长按选择「粘贴」"
+
+    /** 剪贴板不可用时的提示。 */
+    const val CLIPBOARD_HINT_UNAVAILABLE = "$CLIPBOARD_HINT_ACCESSIBILITY；本次未找到可用的剪贴板通道"
+
+    /** 剪贴板写入成功、粘贴键却没能发到副屏时的提示（文本已经在剪贴板里了，只差一次粘贴）。 */
+    const val CLIPBOARD_HINT_PASTE_FAILED =
+        "已把文本写入系统剪贴板，但粘贴键没能发到副屏；请在副屏输入框里长按选择「粘贴」"
+
+    /**
+     * 剪贴板通道成功后的**复核提示**：设备 Shell 侧读不到副屏输入框的内容，
+     * 「文本进了剪贴板 + 粘贴键发出去了」并不等于「粘贴真的落进了目标字段」。
+     */
+    const val CLIPBOARD_VERIFY_NOTE =
+        "文本已写入系统剪贴板并发送了粘贴键，但设备 Shell 侧读不到副屏输入框内容，是否落到目标字段请用截图或节点树复核"
+
+    /** 读回核对时比对的字符数：输出可能被截断，但开头一定在，取前 16 个字符足够证明写入落地。 */
+    const val CLIPBOARD_VERIFY_CHARS = 16
+
+    /**
+     * 非 ASCII 文本的失败判定（纯函数）：设备 Shell 侧最多只能做到「把文本放进剪贴板 + 发一次粘贴键」，
+     * 而粘贴要落在输入框上得有已聚焦的可编辑节点 ⇒ 通道没打通时这次注入必须如实失败。
+     *
+     * 返回的 `message` 按剪贴板探测结果分支，保证提示是**可操作**的而不是一句「不支持」：
+     * 剪贴板可用时说清「已经放进剪贴板了，请手动粘贴」并**同时**指路无障碍（手动粘贴是这一次的
+     * 出路，开无障碍是以后不用再手动的出路）；不可用时直接指路无障碍。
+     */
+    fun nonAsciiTextFailure(probe: ClipboardProbe): Pair<String, String> {
+        val code = VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED
+        val message = when (probe) {
+            // AVAILABLE 在设备 Shell 的调用路径上到不了（探测可用就直接去发粘贴键了，见 ShellVirtualScreen.nonAsciiTextAction），
+            // 但纯函数要自带完整提示：万一以后有调用方把「剪贴板可用但没能粘贴」直接报上来，两条出路都得给全。
+            ClipboardProbe.AVAILABLE -> "$CLIPBOARD_HINT_MANUAL_PASTE；$CLIPBOARD_HINT_ACCESSIBILITY"
+            ClipboardProbe.FAILED -> "$CLIPBOARD_HINT_UNAVAILABLE（剪贴板命令存在，但这次没能确认写入）"
+            ClipboardProbe.ABSENT -> CLIPBOARD_HINT_UNAVAILABLE
+        }
+        return code to "$message。设备 Shell 进程拿不到无障碍服务实例，副屏会话本身正常。"
+    }
+
+    /**
+     * 把探测结果翻译成 [ClipboardProbe]（纯函数）：`command` 抛异常 = 命令不存在/被拒绝 ⇒ [ClipboardProbe.ABSENT]；
+     * 输出里带 `Error:`/`Exception`/`not found` 之类也算不可用；输出里出现使用者自报的成功标记
+     * （`clipboard set-primary-clip`、`Clipboard service`）才算 [ClipboardProbe.AVAILABLE]；
+     * 其余（`Ok` 之外的说明文字、空输出、认不出来的输出）一律算 [ClipboardProbe.FAILED]「未能确认」——
+     * 宁可让调用方多看一眼提示，也不要把「没证据」说成「通道可用」。
+     *
+     * [expected] 非空时**先做读回核对**：`get-primary-clip` 的输出里出现它的前 [CLIPBOARD_VERIFY_CHARS] 个字符
+     * 就判可用。这一步必须排在上面的报错正则**之前**——否则用户要输入的文字里只要带 `error` 这类英文单词，
+     * 读回输出就会命中正则，把一条本来能用的通道判成不可用。
+     */
+    fun clipboardProbe(succeeded: Boolean, output: String, failure: String, expected: String = ""): ClipboardProbe = when {
+        !succeeded -> ClipboardProbe.ABSENT
+        failure.isNotEmpty() -> ClipboardProbe.ABSENT
+        expected.isNotEmpty() && output.contains(expected.take(CLIPBOARD_VERIFY_CHARS)) -> ClipboardProbe.AVAILABLE
+        Regex("(?i)\\b(error|exception|unknown command|not found)\\b").containsMatchIn(output) -> ClipboardProbe.ABSENT
+        output.contains("clipboard set-primary-clip") || output.contains("Clipboard service") -> ClipboardProbe.AVAILABLE
+        else -> ClipboardProbe.FAILED
     }
 }

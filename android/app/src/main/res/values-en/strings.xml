@@ -56,6 +56,11 @@
     <string name="virtual_screen_mode_60fps">60 FPS</string>
     <string name="virtual_screen_mode_120fps">120 FPS</string>
     <string name="virtual_screen_mode_185fps">185 FPS</string>
+    <string name="virtual_screen_mode_90fps">90 FPS</string>
+    <string name="virtual_screen_mode_144fps">144 FPS</string>
+    <string name="virtual_screen_mode_165fps">165 FPS</string>
+    <string name="virtual_screen_mode_240fps">240 FPS</string>
+
 
     <!-- Target-app virtual screen: picker title and orientation labels. Both dp values come from VirtualScreenSpec. -->
     <string name="virtual_screen_title">Target-app virtual screen</string>

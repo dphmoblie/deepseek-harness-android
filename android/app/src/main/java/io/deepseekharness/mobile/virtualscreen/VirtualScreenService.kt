@@ -30,6 +30,10 @@ private fun modeTitleRes(mode: String): Int = when (mode) {
     "30fps" -> R.string.virtual_screen_mode_30fps
     "60fps" -> R.string.virtual_screen_mode_60fps
     "120fps" -> R.string.virtual_screen_mode_120fps
+    "90fps" -> R.string.virtual_screen_mode_90fps
+    "144fps" -> R.string.virtual_screen_mode_144fps
+    "165fps" -> R.string.virtual_screen_mode_165fps
+    "240fps" -> R.string.virtual_screen_mode_240fps
     "185fps" -> R.string.virtual_screen_mode_185fps
     else -> R.string.virtual_screen_mode_limited
 }
@@ -49,10 +53,25 @@ class VirtualScreenService : Service() {
      * 悬浮小窗按它换算面板比例；`onStartCommand` 一开始就写入，所以「重开服务」不会沿用上一次的方向。
      */
     @Volatile private var spec = VirtualScreenSpec.PORTRAIT
+    /**
+     * 本次会话生效的方向与自适应开关（请求里的值优先，否则取偏好）。
+     * 状态合并要报告真正生效的那一份，而不是用户刚改过、还没重启副屏的那一份。
+     */
+    @Volatile private var orientation = "auto"
+    @Volatile private var adaptive = false
     private var lastAiFrameAt = 0L
     @Volatile private var snapshot = JSONObject().put("active", false)
     private var overlay: View? = null
     private var preview: VirtualScreenPreview? = null
+    /** 悬浮小窗的窗口参数与可用区域：拖动改的是这两个值，hideOverlay 时一并清掉。 */
+    @Volatile private var overlayParams: WindowManager.LayoutParams? = null
+    @Volatile private var overlayArea: OverlayArea? = null
+    /** 拖动起点与最近一次生效的位置：位移换算成绝对坐标时用，避免把节流丢掉的中间位移累计错。 */
+    private var dragOriginX = 0
+    private var dragOriginY = 0
+    private var dragLastX = 0
+    private var dragLastY = 0
+    private var dragging = false
     private val sink = object : RuntimeEventSink {
         override fun onProgress(snapshot: RuntimeStateSnapshot) = Unit
         override fun onTerminalOutput(sessionId: String, dataBase64: String, suppressPublicOutput: Boolean) = Unit
@@ -76,10 +95,16 @@ class VirtualScreenService : Service() {
         current = this
         lastError = ""
         val component = intent.getStringExtra("component") ?: ""
-        // 尺寸来源收敛到规格层：三个整型 extra 读不到或读到非法值一律回退竖屏预设，
-        // 所以只有旧 `landscape` 布尔的 Intent（升级中途的旧页面、旧通知）仍按原样工作。
-        // 解码后立刻写进字段：小窗换算用的是本次会话真正生效的那一份规格。
-        spec = VirtualScreenSpec.decode(intent)
+        // 尺寸来源收敛到规格层，且**只在这里换算一次**：页面与桥只投递「意图」（三项尺寸 / 自适应开关 /
+        // 方向），真正的宽高与 dpi 由这里结合真实屏幕和偏好算出来。
+        // 历史 Intent（只有旧 `landscape` 布尔、没有新 extra）走同一套规则：三项尺寸读不到 = 没给自定义尺寸，
+        // 偏好里也没有尺寸时就回退方向预设，与改造前行为一致；自适应开关的默认值也是「关」。
+        val requested = virtualScreenStartRequest(intent)
+        val settings = VirtualScreenPreferences.read(this)
+        val screen = virtualScreenScreenSize()
+        spec = VirtualScreenStart.resolve(requested, settings, screen.first, screen.second, resources.displayMetrics.density)
+        orientation = requested.orientation ?: settings.orientation
+        adaptive = requested.adaptive ?: settings.adaptive
         executor.execute {
             audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, AuditResult.STARTED)
             try {
@@ -92,6 +117,7 @@ class VirtualScreenService : Service() {
                 val value = runtime.startVirtualScreen(component, sessionSpec.widthPx, sessionSpec.heightPx, sessionSpec.densityDpi, owner)
                 session = value.getString("sessionId")
                 snapshot = value
+                action(VirtualScreenPreferences.configuration(this).put("sessionId", session).put("action", "config"))
                 audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, AuditResult.SUCCEEDED)
             } catch (error: Exception) {
                 audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, AuditResult.FAILED)
@@ -112,12 +138,16 @@ class VirtualScreenService : Service() {
                 try {
                     check(DeviceShellAccess.enabled(this@VirtualScreenService))
                     if (session.isNotEmpty()) {
+                        if (snapshot.optString("autoFollow", "off") != "off" && canObserve() && actionSlot.tryAcquire()) {
+                            try { shizuku?.virtualScreenAction(JSONObject().put("sessionId", session).put("action", "autoFollowTick").put("selfPackage", packageName).toString()) }
+                            finally { actionSlot.release() }
+                        }
                         val live = checkNotNull(shizuku).virtualScreenState()
                         check(live.optString("sessionId") == session && live.optBoolean("active"))
                         snapshot = live
                     }
                 } catch (_: Exception) { lastError = "副屏已停止：授权、Shizuku 连接或副屏会话失效"; main.post { stopSelf() } }
-                if (!ending.get()) main.postDelayed(this, 1500)
+                if (!ending.get()) main.postDelayed(this, 800)
             }
         }
     }
@@ -128,8 +158,84 @@ class VirtualScreenService : Service() {
         // 让调用方一眼看出「读不到树」是无障碍没开还是副屏没起来。
         .put("treeSupported", VirtualScreenTree.available())
 
+    /**
+     * 副屏的**真实生效**参数（宽 / 高 / dpi / 刷新率）：直接问系统那块副屏 display，不回显请求值。
+     *
+     * 为什么必须读回：自适应规格是按屏幕预算算出来的，设备端建显示时还可能被系统缩放或裁掉一部分；
+     * 桥里若回显请求值，设置页显示的就会是一个用户其实看不到的尺寸。
+     *
+     * 返回 null 表示「此刻拿不到读数」（会话刚建立、display 尚未就绪、系统不允许查询该显示）：
+     * 调用方回退到会话快照与本次会话规格；刷新率读不到时最终回 0（未知），不去猜屏幕标称值。
+     */
+    fun displayReadback(): JSONObject? {
+        val id = snapshot.optInt("displayId", 0)
+        // 没有会话时绝不读默认显示：那会把手机自己的分辨率当副屏尺寸报给设置页。
+        if (id <= 0) return null
+        val manager = getSystemService(android.hardware.display.DisplayManager::class.java) ?: return null
+        val display = runCatching { manager.getDisplay(id) }.getOrNull() ?: return null
+        val metrics = android.util.DisplayMetrics()
+        if (runCatching { display.getRealMetrics(metrics) }.isFailure) return null
+        if (metrics.widthPixels <= 0 || metrics.heightPixels <= 0) return null
+        return JSONObject()
+            .put("widthPx", metrics.widthPixels)
+            .put("heightPx", metrics.heightPixels)
+            .put("densityDpi", metrics.densityDpi)
+            .put("refreshRate", runCatching { display.refreshRate.toDouble() }.getOrDefault(0.0))
+    }
+
+    /** 本次会话的启动参数（方向、自适应）与规格，供桥在合并状态时优先于偏好使用。 */
+    fun sessionSummary(): JSONObject = JSONObject()
+        .put("orientation", orientation)
+        .put("adaptive", adaptive)
+        .put("widthPx", spec.widthPx)
+        .put("heightPx", spec.heightPx)
+        .put("densityDpi", spec.densityDpi)
+
+    /**
+     * 从启动 Intent 还原「本次请求」。三项尺寸读不到时保持 0 语义（= 没给自定义尺寸），
+     * 自适应开关只有显式写过才非 null —— 旧页面没有这个 extra，于是继续沿用偏好里的开关而不是被强制关掉。
+     */
+    private fun virtualScreenStartRequest(intent: Intent) = VirtualScreenStartRequest(
+        target = intent.getStringExtra("component") ?: "",
+        adaptive = if (intent.hasExtra(VirtualScreenStart.EXTRA_ADAPTIVE)) intent.getBooleanExtra(VirtualScreenStart.EXTRA_ADAPTIVE, false) else null,
+        orientation = intent.getStringExtra(VirtualScreenStart.EXTRA_ORIENTATION)?.takeIf { it in VirtualScreenPreferences.ORIENTATION_VALUES },
+        widthPx = intent.getIntExtra(VirtualScreenSpec.EXTRA_WIDTH, 0).takeIf { it > 0 },
+        heightPx = intent.getIntExtra(VirtualScreenSpec.EXTRA_HEIGHT, 0).takeIf { it > 0 },
+        densityDpi = intent.getIntExtra(VirtualScreenSpec.EXTRA_DPI, 0).takeIf { it > 0 },
+    )
+
+    /**
+     * 自适应用的**真实屏幕**尺寸：`DisplayManager` 的默认显示优先，取不到再退回资源里的当前显示尺寸。
+     *
+     * 不用本服务的窗口尺寸：应用可能被分屏或自由窗口缩小，拿窗口尺寸会算出偏小的副屏；
+     * 也不用 `resources.displayMetrics` 作为首选，它可能已经按窗口/系统裁剪过。
+     */
+    private fun virtualScreenScreenSize(): Pair<Int, Int> {
+        val metrics = android.util.DisplayMetrics()
+        val display = runCatching {
+            getSystemService(android.hardware.display.DisplayManager::class.java)?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+        }.getOrNull()
+        if (display != null && runCatching { display.getRealMetrics(metrics) }.isSuccess &&
+            metrics.widthPixels > 0 && metrics.heightPixels > 0) {
+            return metrics.widthPixels to metrics.heightPixels
+        }
+        val fallback = resources.displayMetrics
+        return fallback.widthPixels.coerceAtLeast(1) to fallback.heightPixels.coerceAtLeast(1)
+    }
+
     fun canObserve(): Boolean = !ending.get() && DeviceShellAccess.enabled(this) &&
         !getSystemService(KeyguardManager::class.java).isDeviceLocked && getSystemService(PowerManager::class.java).isInteractive
+
+    /**
+     * 请求结束会话：与 `action({"action":"stop"})` 同一套收尾，但**不需要调用方先知道 sessionId**
+     * —— 独立设置页只想知道「副屏还在不在」。返回 `{stopping, active}`：
+     * `active=false` 表示本来就没有会话（含「正在启动、还没拿到 sessionId」），调用方据此把界面置为已停止。
+     */
+    fun requestStop(): JSONObject {
+        if (ending.get()) return JSONObject().put("stopping", false).put("active", false)
+        main.post { stopSelf() }
+        return JSONObject().put("stopping", true).put("active", session.isNotEmpty())
+    }
 
     private fun requireAccess() {
         if (!DeviceShellAccess.enabled(this)) throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请先开启 AI Shell")
@@ -238,7 +344,11 @@ class VirtualScreenService : Service() {
         if (!actionSlot.tryAcquire(2, java.util.concurrent.TimeUnit.SECONDS)) throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "上一步副屏操作尚未完成")
         return try {
             requireAccess()
-            checkNotNull(shizuku).virtualScreenAction(parameters.toString()).also { audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.SUCCEEDED) }
+            checkNotNull(shizuku).virtualScreenAction(parameters.toString()).also {
+                if (verb == "config") VirtualScreenPreferences.save(this, parameters)
+                if (it.has("active")) snapshot = it
+                audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.SUCCEEDED)
+            }
         } catch (e: Exception) { audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.FAILED); throw e }
         finally { actionSlot.release() }
     }
@@ -373,133 +483,98 @@ class VirtualScreenService : Service() {
         if (overlay != null) return
         val wm = getSystemService(WindowManager::class.java)
         val metrics = resources.displayMetrics
-        // 悬浮面板的颜色与控件默认样式都按**已保存的应用主题**解析。
-        // Service 没有 Activity 那样的主题入口，直接 new Button(this) 会拿系统深浅去解析默认样式：
-        // 应用选了深色、系统还是浅色时，一块深色面板上会浮出几个浅色按钮，看着就是「没跟主题走」。
-        // 这里沿用悬浮球那套 ContextThemeWrapper(this, R.style.AppTheme)（见 OverlayBallService），
-        // 再叠一层 AppThemePreference.palette() 把 uiMode 换成应用主题。
-        val ui: Context = ContextThemeWrapper(AppThemePreference.palette(this), R.style.AppTheme)
-        // 底色与文字色一律取主题令牌（res/values{,-night}/colors.xml），不再写死 0xf0222630 这种值：
-        // 那个深色底在浅色主题下就是一块突兀的深色砖。
-        val panel = LinearLayout(ui).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(AppThemePreference.color(this@VirtualScreenService, R.color.overlay_panel_background))
+        val bounds = if (Build.VERSION.SDK_INT >= 30) wm.currentWindowMetrics.bounds else android.graphics.Rect(0, 0, metrics.widthPixels, metrics.heightPixels)
+        // 系统栏与刘海的边距只在 API 30 以上取：`android.graphics.Insets` 是 API 29 才有的类型，
+        // 把它放到三元表达式的 else 分支会让低版本机型加载到这个类，lint 也会按 NewApi 报错。
+        // 低版本一律按 0 处理（与改动前 `Insets.NONE` 的行为一致）：只影响居中与夹取，不会越界。
+        var insetLeft = 0
+        var insetTop = 0
+        var insetRight = 0
+        var insetBottom = 0
+        if (Build.VERSION.SDK_INT >= 30) {
+            val insets = wm.currentWindowMetrics.windowInsets.getInsetsIgnoringVisibility(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            insetLeft = insets.left
+            insetTop = insets.top
+            insetRight = insets.right
+            insetBottom = insets.bottom
         }
-        val toolbar = LinearLayout(ui)
-        val drag = TextView(ui).apply {
-            text = "目标应用 · 拖动"
-            setTextColor(AppThemePreference.color(this@VirtualScreenService, R.color.overlay_panel_foreground))
-            setPadding(12, 12, 12, 12)
-        }
-        toolbar.addView(drag, LinearLayout.LayoutParams(0, -2, 1f))
-        val page = Button(ui).apply {
-            text = "展开"
-            setOnClickListener {
-                runCatching { startActivity(Intent(this@VirtualScreenService, VirtualScreenActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                    .onSuccess { hideOverlay() }
-                    .onFailure { Toast.makeText(this@VirtualScreenService, "无法展开，请从通知打开副屏页面", Toast.LENGTH_LONG).show() }
-            }
-        }
-        val close = Button(ui).apply { text = "收起"; setOnClickListener { hideOverlay() } }
-        // 状态行：档位按钮下面一行，如实显示当前档位、实测帧率与画面状态（「画面暂无变化」「当前帧接近纯色」
-        // 等措辞都来自 VirtualScreenPolicy）。没有它时，预览暂停或黑屏时用户在悬浮窗里看不到任何原因——
-        // 0.2.9 真机上就是一块黑面板。声明放在档位按钮之前，按钮的点击回调要在切档成功后立刻改这一行。
-        val status = TextView(ui).apply {
-            setTextColor(AppThemePreference.color(this@VirtualScreenService, R.color.overlay_panel_foreground))
-            setPadding(12, 4, 12, 4)
-            setTextSize(12f)
-            text = getString(R.string.virtual_screen_overlay_status_waiting)
-        }
-        toolbar.addView(page); toolbar.addView(close); panel.addView(toolbar)
-        // 档位行：副屏页里能选的几档，在悬浮窗上也能选，不必「先展开、改完再收回来」。
-        // 档位只改采集间隔；预览拉取另有下限（见 VirtualScreenPolicy.previewPullInterval）。
-        val modeRow = LinearLayout(ui).apply { orientation = LinearLayout.HORIZONTAL }
-        val modeButtons = mutableListOf<Button>()
-        val currentMode = {
-            VirtualScreenPolicy.frameModeOf(state().optString(VirtualScreenPolicy.PREVIEW_FIELD))
-        }
-        val paintModes = {
-            val active = currentMode()
-            modeButtons.forEach { button -> button.alpha = if (button.tag == active) 1f else 0.5f }
-        }
-        VirtualScreenPolicy.FRAME_MODES.keys.forEach { mode ->
-            val button = Button(ui).apply {
-                text = getString(modeTitleRes(mode))
-                tag = mode
-                setPadding(6, 0, 6, 0)
-                setOnClickListener {
-                    runCatching {
-                        action(
-                            JSONObject()
-                                .put("sessionId", session)
-                                .put("action", "config")
-                                .put(VirtualScreenPolicy.PREVIEW_FIELD, mode),
-                        )
-                    }.onSuccess {
-                        // 如实说明「已经切了、读数还没到」；下一次取帧会用真实读数覆盖这一行。
-                        status.text = getString(R.string.virtual_screen_overlay_mode_switched, getString(modeTitleRes(mode)))
-                    }.onFailure {
-                        Toast.makeText(this@VirtualScreenService, "切换档位失败，请重试", Toast.LENGTH_SHORT).show()
-                    }
-                    paintModes()
-                }
-            }
-            modeButtons += button
-            modeRow.addView(button, LinearLayout.LayoutParams(0, -2, 1f))
-        }
-        panel.addView(modeRow)
-        paintModes()
-        panel.addView(status)
-        // 小窗尺寸由虚拟屏规格换算（VirtualScreenWindow.overlaySize）。面板宽度取**画面宽度**而不是
-        // 标称的 320dp：面板固定高度里已经含了工具栏与状态行的预算，若宽度还按 320dp 满宽，
-        // 画面区比例就会比副屏更宽，`FIT_CENTER` 照样会在左右/上下留黑边。
-        // 面板宽度 == 画面宽度，画面区就是「面板减去上面几行的预算」这块矩形，比例等于副屏比例。
-        val liveSpec = VirtualScreenSpec.decodeState(snapshot)
-        val size = VirtualScreenWindow.overlaySize(liveSpec, metrics.widthPixels, metrics.heightPixels, metrics.density)
+        val size = VirtualScreenWindow.overlaySize(VirtualScreenSpec.decodeState(snapshot),
+            bounds.width() - insetLeft - insetRight, bounds.height() - insetTop - insetBottom, metrics.density)
+        // 小窗只有应用画面：位置靠直接拖小窗本身（拖动之外的手势照旧透传给副屏），
+        // 收起与结束仍在独立设置页或通知里操作。
         val image = VirtualScreenPreview(this).also { preview = it }
-        // 预览每一拍把状态行文案回报到这里（档位、实测帧率、画面状态都在里面）。
-        image.report = { line -> if (overlay === panel) status.text = line }
-        // 画面区不参与 LinearLayout 的均分（weight = 0，高度 = 换算出来的像素值），
-        // 多出来/不够的高度只会落在这一块之外，不会把画面的宽高比拉变形。
-        panel.addView(image, LinearLayout.LayoutParams(-1, size.contentHeightPx))
-        // 画面区是第一个加进面板的子控件，画在最底层；档位行与状态行必须压在它上面，
-        // 否则预览会把「省电/15fps/…」这一排按钮吃掉（规则见 VirtualScreenPolicy.foregroundOnTop）。
-        modeRow.bringToFront()
-        status.bringToFront()
-        val w = size.widthPx
-        val h = size.heightPx
-        // 悬浮小窗**不加 FLAG_SECURE**：加了以后用户自己截图和 adb screencap 都会失败
-        // （0.2.9 真机实测报 "Failed to take take screenshot. Capturing failed."），而用户明确要能看到小窗内容。
-        // 全屏查看器 VirtualScreenActivity 的 FLAG_SECURE 保持不动，隐私提醒见 docs/目标应用副屏.md。
-        val params = WindowManager.LayoutParams(w, h, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        image.dragHost = overlayDragHost
+        val params = WindowManager.LayoutParams(size.widthPx, size.heightPx, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, android.graphics.PixelFormat.TRANSLUCENT).apply {
-            gravity = Gravity.TOP or Gravity.START; x = 0; y = (60 * metrics.density).toInt()
+            gravity = Gravity.TOP or Gravity.START
+            x = (bounds.width() - size.widthPx) / 2
+            y = (bounds.height() - insetTop - insetBottom - size.heightPx) / 2
         }
-        var downX = 0f; var downY = 0f; var originX = 0; var originY = 0
-        drag.setOnTouchListener { view, e ->
-            // 面板尺寸按会话建立时算出的 w/h 固定，拖动过程中不变，因此这里的夹取基准始终有效。
-            val current = panel.layoutParams as? WindowManager.LayoutParams
-            when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downX = e.rawX; downY = e.rawY
-                    originX = current?.x ?: params.x; originY = current?.y ?: params.y
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    params.x = (originX + e.rawX - downX).toInt().coerceIn(0, maxOf(0, metrics.widthPixels - w))
-                    params.y = (originY + e.rawY - downY).toInt().coerceIn(0, maxOf(0, metrics.heightPixels - h))
-                    if (overlay === panel) runCatching { wm.updateViewLayout(panel, params) }.onFailure { hideOverlay() }
-                }
-                MotionEvent.ACTION_UP -> view.performClick()
-            }
-            true
+        try {
+            wm.addView(image, params)
+            overlay = image
+            // 拖动需要的窗口参数与边界只在这里赋值：hideOverlay 时清掉，
+            // 免得下一次拖动拿的是上一次会话、上一次旋转之前的边界去做夹取。
+            overlayParams = params
+            overlayArea = OverlayArea(bounds.width(), bounds.height(), insetTop, insetBottom)
+        } catch (e: Exception) {
+            preview = null
+            throw e
         }
-        try { wm.addView(panel, params); overlay = panel }
-        catch (e: Exception) { preview = null; throw e }
     }
 
     fun hideOverlay() {
         overlay?.let { runCatching { getSystemService(WindowManager::class.java).removeView(it) } }
         overlay = null; preview = null
+        overlayParams = null; overlayArea = null; dragging = false
+    }
+
+    /**
+     * 拖动小窗：只改窗口的 x/y，尺寸与内容都不动。
+     *
+     * 位移一律相对**按下那一刻的窗口原点**换算（而不是累加上一次的位置），
+     * 这样被 `MOVE_INTERVAL_MILLIS` 节流丢掉的中间点不会让窗口越拖越偏。
+     */
+    private val overlayDragHost = object : VirtualScreenDragHost {
+        override fun beginDrag(): Boolean {
+            check(Looper.myLooper() == Looper.getMainLooper())
+            val params = overlayParams ?: return false
+            if (overlay == null) return false
+            dragOriginX = params.x
+            dragOriginY = params.y
+            dragLastX = params.x
+            dragLastY = params.y
+            dragging = true
+            return true
+        }
+
+        override fun drag(deltaX: Int, deltaY: Int) = move(deltaX, deltaY)
+
+        override fun endDrag(deltaX: Int, deltaY: Int) {
+            if (dragging) move(deltaX, deltaY)
+            dragging = false
+        }
+
+        private fun move(deltaX: Int, deltaY: Int) {
+            if (!dragging) return
+            val view = overlay ?: return
+            val params = overlayParams ?: return
+            val area = overlayArea ?: return
+            // 视图还没量出尺寸时退回窗口参数里的尺寸，避免用 0 去算夹取上界。
+            val viewWidth = if (view.width > 0) view.width else params.width
+            val viewHeight = if (view.height > 0) view.height else params.height
+            val (x, y) = VirtualScreenWindow.dragPosition(dragOriginX, dragOriginY, deltaX, deltaY,
+                area.widthPx, area.heightPx, area.topInsetPx, area.bottomInsetPx, viewWidth, viewHeight)
+            if (x == dragLastX && y == dragLastY) return
+            params.x = x
+            params.y = y
+            dragLastX = x
+            dragLastY = y
+            // 更新窗口位置可能因为窗口已被系统移除而抛异常（拖到一半按了「结束副屏」），
+            // 这种收尾竞态不该把整次手势打崩。
+            runCatching { getSystemService(WindowManager::class.java).updateViewLayout(view, params) }
+        }
     }
 
     override fun onDestroy() {
@@ -530,11 +605,32 @@ class VirtualScreenService : Service() {
 }
 
 /** 逐事件触摸直传时 MOVE 的最小发送间隔；屏幕采样可到 120 Hz，合并后只丢中间采样点，抬起前那一个点仍会补发。 */
-private const val MOVE_INTERVAL_MILLIS = 16L
+private const val MOVE_INTERVAL_MILLIS = 8L
+
+/** 悬浮小窗当前可用的屏幕区域（像素）：宽高是整屏，上下留出状态栏与导航栏。 */
+private data class OverlayArea(val widthPx: Int, val heightPx: Int, val topInsetPx: Int, val bottomInsetPx: Int)
+
+/**
+ * 悬浮小窗的拖动端口：预览控件只判定「这次手势是拖动」，位置换算与窗口更新都由服务负责。
+ *
+ * 这样切分的原因：拖动数学（[VirtualScreenWindow.dragPosition]）要能在 JVM 单测里跑，
+ * 而窗口更新必须发生在主线程、且只有服务手里有 `WindowManager.LayoutParams`。
+ */
+interface VirtualScreenDragHost {
+    /** 手势被判定为拖动；返回 false 表示当前没有可拖的窗口，这次手势继续按原语义透传。 */
+    fun beginDrag(): Boolean
+
+    /** 拖动过程（已按 [MOVE_INTERVAL_MILLIS] 节流）；参数是相对按下点的位移，单位像素。 */
+    fun drag(deltaX: Int, deltaY: Int)
+
+    /** 拖动结束；参数是最后一次位移，用于补发被节流丢掉的末位置。 */
+    fun endDrag(deltaX: Int, deltaY: Int)
+}
 
 /** 限帧预览只在可见时拉取 PNG；副屏采集在 Shizuku 进程持续运行。 */
 class VirtualScreenPreview(context: android.content.Context) : androidx.appcompat.widget.AppCompatImageView(context) {
     private var executor: java.util.concurrent.ExecutorService? = null
+    private var touchExecutor: java.util.concurrent.ExecutorService? = null
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var generation = 0
     private var displayed: android.graphics.Bitmap? = null
@@ -549,6 +645,26 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private var streaming = false
     private var lastMoveAt = 0L
     private var queuedMove: FloatArray? = null
+    /**
+     * 拖动端口：悬浮小窗会装上它，原生预览页不装 —— 于是预览页里的手势语义与改造前完全一致。
+     */
+    var dragHost: VirtualScreenDragHost? = null
+    /** 按下点的屏幕坐标：拖动改的是窗口位置，用屏幕位移而不是视图内坐标，不受缩放矩阵与视图边界影响。 */
+    private var downRawX = 0f
+    private var downRawY = 0f
+    private var dragActive = false
+    private var dragLastAt = 0L
+    private var queuedDrag: FloatArray? = null
+    /**
+     * 取「现在」的单调时钟（毫秒），长按判定用。默认是 `SystemClock.uptimeMillis()`；
+     * 留成可注入的字段是为了让计时判定不必绑死 Android 时钟（判定本身抽在纯函数
+     * `VirtualScreenWindow.dragArmed`，单测直接注入毫秒数）。
+     */
+    var clock: () -> Long = { SystemClock.uptimeMillis() }
+    /** 按下时刻（`clock()` 的读数）：拖动改成长按触发后，这里决定「已经按了多久」。 */
+    private var downHeldAt = 0L
+    /** 静置容差（像素）：按下后累计位移不超过它才算「按住不动」，按下时按当前显示密度换算一次。 */
+    private var dragSlopPx = 0f
     /** 上一张已显示画面的亮度采样，用来判断「画面暂无变化」；null 表示还没显示过画面。 */
     private var previousSamples: IntArray? = null
     /** 逐采样行读像素时复用的整行缓冲，避免每一拍都新建数组。 */
@@ -564,12 +680,17 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         contentDescription = "目标应用副屏画面，支持点击和滑动"
         setOnTouchListener { view, e ->
             val service = VirtualScreenService.current
-            val worker = executor
+            val worker = touchExecutor
             val at = point(e)
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     down = at; downSession = observedSession; downAt = e.eventTime
                     streaming = false; queuedMove = null; lastMoveAt = 0L
+                    downRawX = e.rawX; downRawY = e.rawY
+                    dragActive = false; queuedDrag = null; dragLastAt = 0L
+                    dragSlopPx = VirtualScreenWindow.DRAG_SLOP_DP * resources.displayMetrics.density
+                    // 长按计时的起点：只有「按住不动够久」才允许改判成拖窗。
+                    downHeldAt = clock()
                     // 只有设备端报告 stream 通道、且会话与画面都新鲜时才逐事件直传；
                     // 否则保持原先的「抬起时发一个 tap/swipe」行为。
                     if (at != null && service != null && worker != null && observedChannel == "stream" &&
@@ -579,7 +700,32 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     }
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (streaming && at != null) {
+                    val drag = dragHost
+                    // 先长按再拖：按住不动 LONG_PRESS_DRAG_MILLIS 之后才允许改判成拖窗，
+                    // 这之前的移动一律照常透传给副屏（所以滑动、翻页不会被吞掉）。
+                    if (!dragActive && drag != null && VirtualScreenWindow.dragArmed(
+                            clock() - downHeldAt,
+                            e.rawX - downRawX,
+                            e.rawY - downRawY,
+                            dragSlopPx,
+                        )) {
+                        dragActive = drag.beginDrag()
+                        if (dragActive) {
+                            // 手势在这一刻改判为拖动：副屏那边已经收到 down，必须补一个 cancel，
+                            // 否则目标应用会一直停在「按下」状态；之后的 MOVE 都归拖动，不再透传。
+                            if (streaming) { streaming = false; (queuedMove ?: down ?: at)?.let { sendTouch(worker, service, "cancel", it) } }
+                            queuedMove = null
+                        }
+                    }
+                    if (dragActive && drag != null) {
+                        // 位置更新按与触摸直传相同的最短间隔节流：屏幕采样可到 120 Hz，
+                        // 每个采样都调一次 updateViewLayout 会白白占用合成器。
+                        val now = SystemClock.elapsedRealtime()
+                        val dx = (e.rawX - downRawX).toInt()
+                        val dy = (e.rawY - downRawY).toInt()
+                        if (now - dragLastAt < MOVE_INTERVAL_MILLIS) queuedDrag = floatArrayOf(e.rawX - downRawX, e.rawY - downRawY)
+                        else { dragLastAt = now; queuedDrag = null; drag.drag(dx, dy) }
+                    } else if (streaming && at != null) {
                         // 直传的 MOVE 按最短间隔合并：屏幕采样可能到 120 Hz，逐个转发会压满 Binder，
                         // 合并后只丢中间采样点，抬起前那一个点仍会补发。
                         val now = SystemClock.elapsedRealtime()
@@ -588,9 +734,17 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     }
                 }
                 MotionEvent.ACTION_UP -> {
-                    view.performClick()
+                    // 拖动结束时不再补发一次「点击」：这次手势的归属是窗口位置，不是副屏内容。
+                    if (!dragActive) view.performClick()
                     val start = down; down = null
-                    if (streaming) {
+                    if (dragActive) {
+                        // 补发被节流丢掉的末位置（手指停下的地方才是用户要的位置），
+                        // 不补发 up/tap/swipe —— 副屏那侧在 beginDrag 时已经收到 cancel。
+                        val lastX = queuedDrag?.get(0) ?: (e.rawX - downRawX)
+                        val lastY = queuedDrag?.get(1) ?: (e.rawY - downRawY)
+                        dragActive = false; queuedDrag = null
+                        dragHost?.endDrag(lastX.toInt(), lastY.toInt())
+                    } else if (streaming) {
                         streaming = false
                         (queuedMove ?: at)?.let { sendTouch(worker, service, "up", it) }
                         queuedMove = null
@@ -610,6 +764,8 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     }
                 }
                 MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> {
+                    // 手势被取消（第二根手指按下、系统抢走手势）：窗口停在当前位置，不补发末位置。
+                    dragActive = false; queuedDrag = null
                     if (streaming) {
                         streaming = false
                         (queuedMove ?: at)?.let { sendTouch(worker, service, "cancel", it) }
@@ -631,7 +787,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
             .put("x", at[0].toInt()).put("y", at[1].toInt())
         worker.execute {
             try {
-                if (version == generation) service.action(request)
+                if (version == generation || phase == "cancel") service.action(request)
             } catch (_: Exception) {
                 if (phase == "down") main.post { report("触摸直传未生效，可改用点击或滑动操作") }
             }
@@ -783,10 +939,15 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         androidx.core.content.ContextCompat.registerReceiver(context, screenOff, android.content.IntentFilter(Intent.ACTION_SCREEN_OFF), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
-        executor = Executors.newSingleThreadExecutor(); generation++; main.post(tick)
+        executor = Executors.newSingleThreadExecutor()
+        touchExecutor = Executors.newSingleThreadExecutor()
+        generation++; main.post(tick)
     }
     override fun onDetachedFromWindow() {
+        // 先把未完成的触摸取消排到输入队列尾部，避免离开页面后目标仍处于按下状态。
+        if (streaming) sendTouch(touchExecutor, VirtualScreenService.current, "cancel", queuedMove ?: down ?: floatArrayOf(0f, 0f))
         generation++; main.removeCallbacks(tick); executor?.shutdown(); executor = null
+        touchExecutor?.shutdown(); touchExecutor = null
         runCatching { context.unregisterReceiver(screenOff) }
         clearFrame()
         super.onDetachedFromWindow()
