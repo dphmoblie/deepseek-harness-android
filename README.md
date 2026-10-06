@@ -98,7 +98,9 @@
 
 欢迎提交问题反馈和合并请求。报告兼容性问题时，请说明设备与系统版本、应用版本、目标应用或插件版本、复现步骤，并先移除截图和日志中的个人信息。
 
-感谢 [@standtrain](https://github.com/standtrain) 和 [@11hyy](https://github.com/11hyy) 等贡献者。
+[![贡献者](https://contrib.rocks/image?repo=dphmoblie/deepseek-harness-android)](https://github.com/dphmoblie/deepseek-harness-android/graphs/contributors)
+
+欢迎更多开发者参与，你的名字也可以出现在这里。
 
 ## 许可证
 

@@ -175,10 +175,9 @@ pnpm lint          # ESLint，零警告通过
 
 ### 贡献者
 
-感谢以下贡献者对本项目的付出：
+感谢以下贡献者对项目的付出：
 
-- [@standtrain](https://github.com/standtrain)
-- [@11hyy](https://github.com/11hyy)
+[![贡献者](https://contrib.rocks/image?repo=dphmoblie/deepseek-harness-android)](https://github.com/dphmoblie/deepseek-harness-android/graphs/contributors)
 
 ### 交流社区
 
