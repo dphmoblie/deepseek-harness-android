@@ -1,6 +1,6 @@
 # DeepSeek Harness 安卓版
 
-项目概览 · [使用与构建说明](README.zh-CN.md)
+项目概览 · [使用与构建说明](README.zh-CN.md) · [English](README.en.md)
 
 [![最新版本](https://img.shields.io/github/v/release/dphmoblie/deepseek-harness-android?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC&logo=github)](https://github.com/dphmoblie/deepseek-harness-android/releases)
 [![下载总量](https://img.shields.io/github/downloads/dphmoblie/deepseek-harness-android/total?label=%E4%B8%8B%E8%BD%BD%E6%80%BB%E9%87%8F&logo=github)](https://github.com/dphmoblie/deepseek-harness-android/releases)
