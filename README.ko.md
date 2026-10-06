@@ -10,14 +10,13 @@
 [![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![arm64-v8a](https://img.shields.io/badge/ABI-arm64--v8a-3DDC84?logo=arm&logoColor=white)](https://developer.android.com/ndk/guides/abis)
 [![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
+[![QQ 그룹](https://img.shields.io/badge/QQ%E7%BE%A4-1108895375-12B7F5?style=for-the-badge)](#qq-group)
 
 <p align="center"><img src="docs/images/app-icon-512.png" width="256" alt="DeepSeek Harness 安卓版应用图标"></p>
 
 **Android를 위한 로컬 AI 워크벤치입니다.** [DeepSeek Harness](https://github.com/deepseek-ai/dsh), Ubuntu 실행 환경, 세션, 플러그인 및 파일 관리를 스마트폰 하나에 통합합니다. 해당 권한을 활성화하면 AI가 Shizuku를 통해 기기 Shell(명령줄) 작업을 실행하거나, 접근성 서비스를 통해 지정한 앱을 조작할 수도 있습니다.
 
 Root(최고 관리자 권한)는 필요하지 않습니다. Linux 환경은 [PRoot](https://github.com/proot-me/proot)를 통해 사용자 공간에서 실행되며, 콘솔은 내장 웹뷰로 표시됩니다. 모델 추론에는 사용자가 구성한 서비스를 사용합니다.
-
-<a id="qq-group"></a><a id="community-qq-group"></a>**프로젝트 QQ 그룹:** `1108895375`, 사용 경험 공유와 문제 제보, 개발 참여를 환영합니다.
 
 | | |
 | --- | --- |
@@ -169,7 +168,7 @@ pnpm lint          # ESLint，零警告通过
 
 더 많은 개발자의 참여를 환영합니다. 여러분의 이름도 여기에 나타날 수 있습니다.
 
-### 커뮤니티
+<a id="qq-group"></a><a id="community-qq-group"></a>### 커뮤니티
 
 - **QQ 그룹: 1108895375** — 궁금한 점을 묻고, 의견을 피드백하고, 버전 릴리스 알림을 받아 보세요.
 

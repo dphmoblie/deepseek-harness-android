@@ -10,14 +10,13 @@
 [![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![arm64-v8a](https://img.shields.io/badge/ABI-arm64--v8a-3DDC84?logo=arm&logoColor=white)](https://developer.android.com/ndk/guides/abis)
 [![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
+[![QQグループ](https://img.shields.io/badge/QQ%E7%BE%A4-1108895375-12B7F5?style=for-the-badge)](#qq-group)
 
 <p align="center"><img src="docs/images/app-icon-512.png" width="256" alt="DeepSeek Harness 安卓版应用图标"></p>
 
 **Android 向けのローカル AI ワークベンチです。** [DeepSeek Harness](https://github.com/deepseek-ai/dsh)、Ubuntu 実行環境、セッション、プラグイン、ファイル管理をスマートフォンに統合します。対応する権限を有効にすると、AI は Shizuku を介してデバイスの Shell（コマンドライン）タスクを実行したり、アクセシビリティサービスを介して指定したアプリを操作したりできます。
 
 Root（スーパーユーザー権限）は不要です。Linux 環境は [PRoot](https://github.com/proot-me/proot) によってユーザー空間で動作し、コンソールは内蔵の WebView で表示されます。モデルの推論には、あなたが設定したサービスを使用します。
-
-<a id="qq-group"></a><a id="community-qq-group"></a>**プロジェクトの QQ グループ：** `1108895375`。使用感の共有、問題のフィードバック、開発への参加を歓迎します。
 
 | | |
 | --- | --- |
@@ -169,7 +168,7 @@ pnpm lint          # ESLint，零警告通过
 
 より多くの開発者の参加を歓迎します。あなたの名前もここに載るかもしれません。
 
-### コミュニティ
+<a id="qq-group"></a><a id="community-qq-group"></a>### コミュニティ
 
 - **QQ 交流グループ：1108895375**——質問、フィードバック、リリース通知の受け取りにぜひご参加ください。
 

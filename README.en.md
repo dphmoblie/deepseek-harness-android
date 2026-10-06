@@ -10,14 +10,13 @@
 [![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![arm64-v8a](https://img.shields.io/badge/ABI-arm64--v8a-3DDC84?logo=arm&logoColor=white)](https://developer.android.com/ndk/guides/abis)
 [![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
+[![QQ group](https://img.shields.io/badge/QQ%20group-1108895375-12B7F5?style=for-the-badge)](#qq-group)
 
 <p align="center"><img src="docs/images/app-icon-512.png" width="256" alt="DeepSeek Harness for Android app icon"></p>
 
 **A local AI workbench for Android.** It brings [DeepSeek Harness](https://github.com/deepseek-ai/dsh), an Ubuntu runtime, sessions, plugins and file management onto your phone. Once you grant the relevant permissions, the AI can also run device shell commands through Shizuku or operate selected apps through the accessibility service.
 
 No root required. The Linux environment runs in userspace through [PRoot](https://github.com/proot-me/proot) and the console is rendered by a bundled web view; model inference uses whatever service you configure.
-
-<a id="qq-group"></a><a id="community-qq-group"></a>**Project QQ group:** `1108895375` — for usage questions, feedback and development discussion.
 
 | | |
 | --- | --- |
@@ -169,7 +168,7 @@ in particular, do not weaken loopback access control, digest verification, the e
 
 More developers are welcome — your name can appear here too.
 
-### Community
+<a id="qq-group"></a><a id="community-qq-group"></a>### Community
 
 - **QQ group: 1108895375** — ask questions, send feedback and get release notifications.
 

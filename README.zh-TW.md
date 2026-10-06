@@ -10,14 +10,13 @@
 [![Android 8.0+](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![arm64-v8a](https://img.shields.io/badge/ABI-arm64--v8a-3DDC84?logo=arm&logoColor=white)](https://developer.android.com/ndk/guides/abis)
 [![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org/)
+[![QQ群](https://img.shields.io/badge/QQ%E7%BE%A4-1108895375-12B7F5?style=for-the-badge)](#qq-group)
 
 <p align="center"><img src="docs/images/app-icon-512.png" width="256" alt="DeepSeek Harness 安卓版應用程式圖示"></p>
 
 **專為 Android 打造的本機 AI 工作台。** 將 [DeepSeek Harness](https://github.com/deepseek-ai/dsh)、Ubuntu 執行環境、工作階段、外掛與檔案管理整合到手機中；開啟相應授權後，AI 還能透過 Shizuku 執行裝置 Shell（命令列）工作，或透過無障礙服務操作指定應用程式。
 
 無需 Root（超級使用者權限）。Linux 環境透過 [PRoot](https://github.com/proot-me/proot) 在使用者空間執行，主控台由內建網頁檢視畫面呈現；模型推論使用你設定的服務。
-
-<a id="qq-group"></a><a id="community-qq-group"></a>**專案 QQ 群：** `1108895375`，歡迎交流使用體驗、回報問題與參與開發。
 
 | | |
 | --- | --- |
@@ -169,7 +168,7 @@ pnpm lint          # ESLint，零警告通過
 
 歡迎更多開發者參與，你的名字也可以出現在這裡。
 
-### 交流社群
+<a id="qq-group"></a><a id="community-qq-group"></a>### 交流社群
 
 - **QQ 交流群：1108895375**——歡迎入群提問、回饋建議、取得版本發行通知。
 
