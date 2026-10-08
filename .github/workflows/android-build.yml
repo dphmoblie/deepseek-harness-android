@@ -41,7 +41,12 @@ env:
   # 设备命令（mobile_virtual_screen_shell）、悬浮窗恢复拖动、修「注入被取帧锁拖住」与「报成功
   # 但画面不动」（逐事件注入、退出码 0 不再当落地）、无障碍规则的事件驱动执行器、
   # 无障碍白名单 16 项上限按用户要求移除。
-  APP_VERSION: '0.2.12'
+  # 0.2.13：Shizuku 集成修复——状态读取加闸门（同一时刻只读一次，在途复用上一次结果、从未成功
+  # 读取时回不碰 binder 的兜底状态），getShizukuState / openShizuku 移出 WebView 线程，binder
+  # 到达或断开时作废缓存与在途读取；界面把「Shizuku 应用版本」与「服务端 API 版本」分开显示
+  # （getVersion() 读的是服务端 API 版本，权限未授予时返回 -1，不再当成版本显示）；Shizuku 连接
+  # 五条错误码补上可执行中文文案（更新 Shizuku 后需在 Shizuku 中停止服务再重新启动）。
+  APP_VERSION: '0.2.13'
 
 jobs:
   build:

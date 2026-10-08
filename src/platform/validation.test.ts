@@ -381,6 +381,14 @@ describe('native bridge output validation', () => {
     expect(() => validateShizukuState({ installed: true, running: true, permission: 'denied', connected: true })).toThrow('连接')
     expect(validateShizukuState({ installed: true, running: true, permission: 'granted', connected: true, version: '13' }).version).toBe('13')
     expect(() => validateShizukuState({ installed: true, running: true, permission: 'granted', connected: true, version: '<script>' })).toThrow('版本')
+    // 两种版本分开校验：`version` 是服务端 API 版本（13.x 各版应用都报 13），
+    // `appVersion` 才是已安装应用的版本名（13.6.0 这种），各自独立非法、独立保留。
+    const versions = validateShizukuState({ installed: true, running: true, permission: 'granted', connected: true, version: '13', appVersion: '13.6.0' })
+    expect(versions.appVersion).toBe('13.6.0')
+    expect(versions.version).toBe('13')
+    expect(() => validateShizukuState({ installed: true, running: true, permission: 'granted', connected: true, appVersion: '<script>' })).toThrow('应用版本')
+    // 缺省不算非法：老版本原生桥不返回该字段，界面就不显示应用版本。
+    expect(validateShizukuState({ installed: true, running: true, permission: 'granted', connected: true }).appVersion).toBeUndefined()
     expect(() => assertSessionId('------------------------------------')).toThrow('会话')
     expect(() => validateTerminalChunk({ sessionId, dataBase64: '***=' })).toThrow('编码')
     expect(() => validateTerminalExit({ sessionId, exitCode: 999 })).toThrow('退出码')

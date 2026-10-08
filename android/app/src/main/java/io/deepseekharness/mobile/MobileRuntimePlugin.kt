@@ -1217,9 +1217,16 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /**
+     * 读取 Shizuku 状态。
+     *
+     * 必须走 [execute]（后台执行线程），不能像普通读取那样同步跑在 WebView 的 JS 桥线程上：
+     * 前端每 5 秒轮询一次，而读取本身要与 Shizuku 服务端做 binder 调用——服务端卡住时
+     * 同步调用会把整个界面一起卡住（真机反馈「打开 Shizuku 会卡」）。
+     */
     @PluginMethod
     fun getShizukuState(call: PluginCall) {
-        resolveWhileActive(call) { controller.shizukuState().toJs() }
+        execute(call) { controller.shizukuState().toJs() }
     }
 
     @PluginMethod
@@ -1232,9 +1239,15 @@ class MobileRuntimePlugin : Plugin() {
         execute(call) { controller.connectShizuku().toJs() }
     }
 
+    /**
+     * 打开 Shizuku（拉起管理界面，未安装时指向官方仓库）。
+     *
+     * 同样不能在 JS 桥线程上同步执行：它要拿 [io.deepseekharness.mobile.runtime.MobileRuntimeController]
+     * 的生命周期锁，只要有一次状态读取还挂在卡住的 Shizuku 服务端上，等待就会传导到 WebView 线程。
+     */
     @PluginMethod
     fun openShizuku(call: PluginCall) {
-        resolveWhileActive(call) {
+        execute(call) {
             controller.openShizukuManager()
             null
         }
@@ -2728,11 +2741,20 @@ class MobileRuntimePlugin : Plugin() {
             .put("canDelete", RuntimeVersionPolicy.canDelete(hasPrevious))
     }
 
-    private fun ShizukuState.toJs(): JSObject = JSObject()        .put("installed", installed)
+    /**
+     * Shizuku 状态过桥。
+     *
+     * `version` 是**服务端 API 版本**（13.x 的应用都上报 13），`appVersion` 才是已安装
+     * Shizuku 应用的版本名（如 13.6.0）；两者都要给前端，界面必须分开显示，
+     * 否则用户更新 Shizuku 后会以为「版本识别错了」。
+     */
+    private fun ShizukuState.toJs(): JSObject = JSObject()
+        .put("installed", installed)
         .put("running", running)
         .put("permission", permission)
         .put("connected", connected)
         .put("version", version)
+        .put("appVersion", appVersion)
 
     /**
      * 无障碍状态过桥。

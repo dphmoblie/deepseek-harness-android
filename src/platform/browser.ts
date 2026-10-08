@@ -77,7 +77,15 @@ export function createBrowserBridge(): RuntimeBridge {
     totalBytes: 640 * 1024 * 1024,
     runnerAvailable: true,
   }
-  let shizuku: ShizukuState = { installed: true, running: true, permission: 'undetermined', connected: false }
+  let shizuku: ShizukuState = {
+    installed: true,
+    running: true,
+    permission: 'undetermined',
+    connected: false,
+    // 浏览器预览没有原生侧：这里给一个固定的 Shizuku 应用版本，只为让界面上的
+    // 「Shizuku 应用 · 服务端 API」两种版本都有值可显示。
+    appVersion: '13.6.0',
+  }
   // 浏览器预览里没有原生侧可用，这份状态**只活在内存中**（刷新即丢）。
   // 验证密码同样只存在这个变量里，绝不写进 localStorage：浏览器桥不是凭据存储。
   let accessibility = {

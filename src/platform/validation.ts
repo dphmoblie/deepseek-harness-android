@@ -606,12 +606,18 @@ export function validateShizukuState(value: unknown): ShizukuState {
   const version = state.version === undefined
     ? undefined
     : optionalIdentifier(state.version, 'Shizuku 版本', IDENTIFIER_PATTERN, 32)
+  // 应用版本名（13.6.0 这种）与服务端 API 版本是两件事，走同一条标识符校验；
+  // 原生侧已先按同一字符集过滤过，这里只做兜底。
+  const appVersion = state.appVersion === undefined
+    ? undefined
+    : optionalIdentifier(state.appVersion, 'Shizuku 应用版本', IDENTIFIER_PATTERN, 32)
   return {
     installed: state.installed,
     running: state.running,
     permission: state.permission,
     connected: state.connected,
     ...(version === undefined ? {} : { version }),
+    ...(appVersion === undefined ? {} : { appVersion }),
   }
 }
 

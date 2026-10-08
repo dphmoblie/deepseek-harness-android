@@ -342,8 +342,10 @@ export interface ShizukuState {
   running: boolean
   permission: 'granted' | 'denied' | 'undetermined'
   connected: boolean
-  /** Shizuku 服务端版本（诊断用；未安装为空串）。 */
+  /** Shizuku 服务端 API 版本（诊断用；未安装或未运行时为空串）。13.x 的应用上报的都是 13。 */
   version?: string
+  /** 已安装 Shizuku **应用**的版本名（如 13.6.0；读不到为空串）。与上面的服务端 API 版本是两件事。 */
+  appVersion?: string
 }
 
 /** Android 13+ 前台服务通知权限；unsupported 表示系统版本低于 Android 13。 */

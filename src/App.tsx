@@ -626,6 +626,19 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   SHIZUKU_UNBIND_INTERRUPTED: 'Shizuku 设备服务停止操作被中断，请重试。',
   SHIZUKU_UNBIND_FAILED: '无法停止 Shizuku 设备服务，请重试。',
   SHIZUKU_DISCONNECTING: 'Shizuku 设备服务正在停止，请稍后重试。',
+  /*
+   * Shizuku 连接失败的文案必须给出「下一步做什么」。
+   *
+   * 真机反馈的场景是**刚更新过 Shizuku**：手机上还在跑更新前启动的那个服务端进程，
+   * 于是绑定用户服务超时或失败（状态读取也可能一起挂在它上面）。本应用没有重启
+   * Shizuku 服务的接口——那是 Shizuku 自己的事——所以这里直说两条可行操作：
+   * 在 Shizuku 里停止服务后重新启动，或重启手机。
+   */
+  SHIZUKU_SERVICE_TIMEOUT: '连接 Shizuku 设备服务超时。若刚更新过 Shizuku，请在 Shizuku 中停止服务后重新启动（或重启手机），再回到本页重试。',
+  SHIZUKU_SERVICE_FAILED: '无法连接 Shizuku 设备服务。若刚更新过 Shizuku，请在 Shizuku 中停止服务后重新启动（或重启手机），再回到本页重试。',
+  SHIZUKU_SERVICE_INTERRUPTED: '连接 Shizuku 设备服务被中断，请重试。',
+  SHIZUKU_BINDER_TIMEOUT: '未能连接 Shizuku：请先打开 Shizuku 确认服务已启动；若刚更新过 Shizuku，请停止服务后重新启动。',
+  SHIZUKU_BINDER_UNAVAILABLE: 'Shizuku 连接已断开：请打开 Shizuku 重新启动服务后再连接。',
 }
 
 /**
@@ -1404,7 +1417,7 @@ function TerminalScreen({ bridge, fontSize, onAuthorize, onBack, onConnect, onEr
       ) : (
         <div className="empty-terminal">
           <span><KeyRound size={27} /></span>
-          <h2>{!shizuku.installed ? t("未安装 Shizuku") : !shizuku.running ? t("Shizuku 未运行{0}", shizuku.version ? '（v' + shizuku.version + '）' : '') : shizuku.permission !== 'granted' ? t("需要 Shizuku 授权") : t("Shizuku 连接未就绪")}</h2>
+          <h2>{!shizuku.installed ? t("未安装 Shizuku") : !shizuku.running ? t("Shizuku 未运行{0}", shizuku.appVersion ? '（' + shizuku.appVersion + '）' : '') : shizuku.permission !== 'granted' ? t("需要 Shizuku 授权") : t("Shizuku 连接未就绪")}</h2>
           {shizuku.installed && !shizuku.running && (
             <p className="shizuku-hint">{t("Shizuku 服务不会自动启动：请在 Shizuku App 内通过无线调试或 adb 启动服务（设备重启后需重新启动）。")}</p>
           )}
@@ -3607,12 +3620,19 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   const shizukuLabel = !shizuku.installed
     ? t("未安装")
     : !shizuku.running
-      ? t("未运行") + (shizuku.version ? '（v' + shizuku.version + '）' : '')
+      ? t("未运行")
       : shizuku.permission === 'granted'
         ? shizuku.connected ? t("已连接") : t("已授权")
         : shizuku.permission === 'denied'
           ? t("已拒绝")
           : t("待授权")
+  // 两种版本必须分开显示：`version` 是服务端 API 版本（13.x 的 Shizuku 应用上报的都是 13），
+  // `appVersion` 才是已安装应用的版本名（13.6.0 这种）。以前只显示前者，
+  // 用户更新 Shizuku 后会以为「版本识别错了」（真机反馈）。
+  const shizukuVersions = [
+    shizuku.appVersion ? t("Shizuku 应用 {0}", shizuku.appVersion) : '',
+    shizuku.version ? t("服务端 API {0}", shizuku.version) : '',
+  ].filter(value => value !== '').join(' · ')
   const selectedProviderOption = MODEL_PROVIDERS.find(provider => provider.id === selectedProvider) ?? MODEL_PROVIDERS[0]
   const keepAliveRecordedAt = formatRecordedAt(keepAlive.lastUpdatedAtMillis)
   const lastStopLabel = t(LAST_STOP_LABELS[lastStop])
@@ -3966,7 +3986,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <section className="settings-section" aria-labelledby="shizuku-settings">
           <div className="section-title section-title-action">
             <span className="section-icon"><Smartphone size={19} /></span>
-            <div><h2 id="shizuku-settings">Shizuku</h2><p>{t("设备 Shell ·")}{shizukuLabel}</p></div>
+            <div><h2 id="shizuku-settings">Shizuku</h2><p>{t("设备 Shell ·")}{shizukuLabel}{shizukuVersions === '' ? '' : ` · ${shizukuVersions}`}</p></div>
             <span className={`status-chip ${shizuku.permission === 'granted' ? 'success' : ''}`}>{shizukuLabel}</span>
           </div>
           <div className="settings-inline-actions">

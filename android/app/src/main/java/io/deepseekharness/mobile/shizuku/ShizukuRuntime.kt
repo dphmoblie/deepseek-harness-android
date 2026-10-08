@@ -29,8 +29,20 @@ data class ShizukuState(
     val running: Boolean,
     val permission: String,
     val connected: Boolean,
-    /** Shizuku 服务端版本（未安装时为空串；诊断用）。 */
+    /**
+     * Shizuku **服务端 API 版本**（未安装或未运行时为空串）。
+     *
+     * 注意它不是 Shizuku 应用的版本号：13.x 的各版应用（13.5.x、13.6.0…）上报的都是 `13`，
+     * 因此在界面上必须与 [appVersion] 分开显示，否则用户会以为「版本识别错了」。
+     */
     val version: String,
+    /**
+     * 已安装的 Shizuku **应用版本名**（读不到时为空串）。
+     *
+     * 用户更新 Shizuku 后最需要看到的就是它：拿它可以和 Shizuku 应用里显示的版本对齐，
+     * 也能判断「服务端 API 13」到底是哪个版本的 Shizuku 在提供。
+     */
+    val appVersion: String,
 )
 
 class ShizukuRuntime(
@@ -66,8 +78,23 @@ class ShizukuRuntime(
         .debuggable(BuildConfig.DEBUG)
         .version(USER_SERVICE_VERSION)
 
+    /**
+     * 状态读取闸门。
+     *
+     * 前端每 5 秒轮询一次 [state]；服务端卡住时读取会一直挂在 binder 上，
+     * 闸门保证「同时只有一次读取」，后续轮询直接复用上一次结果，不再占用执行线程。
+     * binder 到达或断开时要作废一次（见 [binderReceivedListener] 与 [binderDeadListener]）：
+     * 那时服务端已经换了，卡死在途的那次读取永远不会回来，不作废就再也读不出真实状态。
+     */
+    private val stateCache = ShizukuStateCache(
+        read = { readState() },
+        fallback = { fallbackState() },
+    )
+
     private val binderReceivedListener = Shizuku.OnBinderReceivedListener {
         permissionDeniedThisSession = false
+        // 服务端到达（含重启后的重新到达）：上一茬的读数、以及可能卡死在途的那次读取一起作废。
+        stateCache.invalidate()
         synchronized(binderFutureLock) {
             binderFuture?.complete(Unit)
         }
@@ -88,6 +115,8 @@ class ShizukuRuntime(
             }
         }
         if (staleNotification) return@OnBinderDeadListener
+        // binder 真的断了（不是「ping 得到」的旧通知）：此刻的读数与在途读取都属于上一茬服务端。
+        stateCache.invalidate()
         permissionFuture?.completeExceptionally(error)
         synchronized(binderFutureLock) {
             binderFuture?.completeExceptionally(error)
@@ -152,7 +181,16 @@ class ShizukuRuntime(
         }
     }
 
-    fun state(): ShizukuState {
+    /**
+     * Shizuku 当前状态。
+     *
+     * 走 [ShizukuStateCache]：服务端卡住时，新的调用不会继续堆在 binder 上
+     * （真机反馈的「点打开 Shizuku 会卡」正是这么来的），界面最多显示上一次的结果。
+     */
+    fun state(): ShizukuState = stateCache.current()
+
+    /** 真实读取一次：只读状态，不执行任何设备命令。 */
+    private fun readState(): ShizukuState {
         val installed = appContext.packageManager.resolveContentProvider(SHIZUKU_AUTHORITY, 0) != null
         val running = installed && try {
             Shizuku.pingBinder()
@@ -170,16 +208,57 @@ class ShizukuRuntime(
             else -> "undetermined"
         }
         val connected = granted && liveService() != null
+        // 服务端 API 版本：`Shizuku.getVersion()` 在权限未授予时不抛异常而是返回 -1，
+        // 直接显示会变成「服务端 API -1」这种像乱码的版本，所以只认正数。
         val version = if (installed && running) {
             try {
-                Shizuku.getVersion().toString()
+                Shizuku.getVersion().takeIf { it > 0 }?.toString() ?: ""
             } catch (_: Throwable) {
                 ""
             }
         } else {
             ""
         }
-        return ShizukuState(installed, running, permission, connected, version)
+        return ShizukuState(installed, running, permission, connected, version, installedAppVersion(installed))
+    }
+
+    /**
+     * 有另一次读取在途时的兜底状态：只查「是否安装」，一个 binder 调用都不做。
+     *
+     * 结果偏向保守（`running = false`）：服务端既然卡到读不出状态，界面上按「未运行」显示
+     * 反而给出正确的下一步——点「打开 Shizuku」去重启服务，而不是让用户对着转圈等。
+     */
+    private fun fallbackState(): ShizukuState {
+        val installed = try {
+            appContext.packageManager.resolveContentProvider(SHIZUKU_AUTHORITY, 0) != null
+        } catch (_: Throwable) {
+            false
+        }
+        return ShizukuState(
+            installed = installed,
+            running = false,
+            permission = "undetermined",
+            connected = false,
+            version = "",
+            appVersion = installedAppVersion(installed),
+        )
+    }
+
+    /**
+     * 已安装 Shizuku 应用的版本名（如 `13.6.0`）。
+     *
+     * 只回传能过前端标识符校验的字符（字母、数字、点、下划线、连字符，最多 32 个字符）：
+     * 版本名里混进别的字符（空格、括号、中文等）时宁可不显示，也不让整份状态
+     * 因为前端格式校验失败被整体丢弃——那样界面会连「已安装」都读不出来。
+     */
+    private fun installedAppVersion(installed: Boolean): String {
+        if (!installed) return ""
+        return try {
+            val raw = appContext.packageManager.getPackageInfo(SHIZUKU_PACKAGE, 0).versionName ?: ""
+            raw.filter { APP_VERSION_ALLOWED.contains(it) }.take(APP_VERSION_MAX_LENGTH)
+        } catch (_: Throwable) {
+            ""
+        }
     }
 
     /**
@@ -194,18 +273,25 @@ class ShizukuRuntime(
     fun healthCheck(): ShizukuState = try {
         state()
     } catch (_: Throwable) {
-        ShizukuState(installed = false, running = false, permission = "undetermined", connected = false, version = "")
+        ShizukuState(
+            installed = false,
+            running = false,
+            permission = "undetermined",
+            connected = false,
+            version = "",
+            appVersion = "",
+        )
     }
 
     @Synchronized
     fun requestPermission(): ShizukuState {
-        val current = state()
+        val current = readState()
         if (!current.installed) throw RuntimeFailure("SHIZUKU_UNAVAILABLE", "请先安装 Shizuku")
         if (!current.running) awaitBinder()
         if (Shizuku.isPreV11()) {
             throw RuntimeFailure("SHIZUKU_VERSION_UNSUPPORTED", "当前 Shizuku 版本过旧，请升级后重试")
         }
-        if (state().permission == "granted") return connect()
+        if (readState().permission == "granted") return connect()
 
         val result = CompletableFuture<Int>()
         val listener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
@@ -290,7 +376,8 @@ class ShizukuRuntime(
     fun connect(): ShizukuState {
         requirePermission()
         requireService()
-        return state()
+        // 用户显式连接后必须回真实读数，不能复用轮询结果（否则刚连上却显示未连接）。
+        return readState()
     }
 
     fun startVirtualScreen(component: String, width: Int, height: Int, dpi: Int, owner: IBinder): org.json.JSONObject {
@@ -683,6 +770,17 @@ class ShizukuRuntime(
         private const val SERVICE_EXIT_TIMEOUT_SECONDS = 5L
         private const val USER_SERVICE_VERSION = 5
         private const val MAX_SESSIONS = 4
+
+        /**
+         * 应用版本名允许回传给前端的字符集。
+         *
+         * 与前端 `src/platform/validation.ts` 的 `IDENTIFIER_PATTERN` 保持一致：
+         * 版本名里出现集合外的字符时会被过滤掉，宁可少显示也不让整份状态被前端丢弃。
+         */
+        private const val APP_VERSION_ALLOWED = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ._-"
+
+        /** 与前端 `optionalIdentifier` 的长度上限（32）一致。 */
+        private const val APP_VERSION_MAX_LENGTH = 32
         private val SESSION_PATTERN = Regex("^[a-f0-9-]{36}$")
     }
 }
