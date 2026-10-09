@@ -926,6 +926,7 @@ describe('无障碍自动化状态与验证密码校验', () => {
     allowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, 'com.example.target'],
     alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
     passwordConfigured: false,
+    whitelistEnabled: true,
     ...overrides,
   })
 

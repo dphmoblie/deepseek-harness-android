@@ -7,6 +7,8 @@ import android.graphics.drawable.ColorDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
@@ -34,6 +36,10 @@ class HarnessActivity : AppCompatActivity() {
     private lateinit var allowedOrigin: Origin
     private val pageLoadGate = HarnessPageLoadGate()
     private var pageFailureHandled = false
+    private var pageRetryCount = 0
+    private var rendererRecovery = false
+    private var entryUrlForRetry: String? = null
+    private val pageRetryHandler = Handler(Looper.getMainLooper())
 
     /** 等待用户从系统选择器返回的 WebView 回调；同一时刻只允许一个，页面靠它继续上传。 */
     private var pendingFileChooser: ValueCallback<Array<Uri>>? = null
@@ -128,6 +134,7 @@ class HarnessActivity : AppCompatActivity() {
             BuildConfig.VERSION_NAME,
             runtimeStore.installedManifest()?.version,
         )
+        entryUrlForRetry = entryUrl
 
         webView = findViewById(R.id.harness_web_view)
         webView.settings.apply {
@@ -212,7 +219,8 @@ class HarnessActivity : AppCompatActivity() {
             webView.removeAllViews()
             webView.destroy()
         }
-        if (!isChangingConfigurations) {
+        pageRetryHandler.removeCallbacksAndMessages(null)
+        if (!isChangingConfigurations && !rendererRecovery) {
             AppAuthenticationState.revokeHarness()
         }
         if (::allowedOrigin.isInitialized && !isChangingConfigurations) {
@@ -308,10 +316,21 @@ class HarnessActivity : AppCompatActivity() {
     }
 
     private fun handleMainFrameFailure() {
-        if (pageFailureHandled || isFinishing || isDestroyed) return
+        if (isFinishing || isDestroyed) return
+        if (pageRetryCount < 2) {
+            pageRetryCount++
+            val delay = 300L * pageRetryCount
+            pageRetryHandler.postDelayed({
+                if (isFinishing || isDestroyed || !::webView.isInitialized) return@postDelayed
+                webView.settings.cacheMode = WebSettings.LOAD_NO_CACHE
+                webView.loadUrl(entryUrlForRetry ?: return@postDelayed)
+            }, delay)
+            Toast.makeText(this, "页面连接中断，正在重试（${pageRetryCount}/2）", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (pageFailureHandled) return
         pageFailureHandled = true
         Toast.makeText(this, R.string.harness_page_failed, Toast.LENGTH_SHORT).show()
-        returnToMainActivity()
     }
 
     internal class Origin(val scheme: String, val host: String, val port: Int, val initialUrl: String) {
@@ -376,7 +395,11 @@ class HarnessActivity : AppCompatActivity() {
         }
 
         override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
-            onRendererGone(view)
+            val activity = view?.context as? HarnessActivity
+            if (activity != null && !activity.isFinishing) {
+                activity.rendererRecovery = true
+                activity.recreate()
+            } else onRendererGone(view)
             return true
         }
 

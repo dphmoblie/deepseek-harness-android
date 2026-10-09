@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile.accessibility
 
 import android.content.Context
+import android.content.ComponentName
 import android.content.Intent
 import android.provider.Settings
 import org.json.JSONArray
@@ -41,7 +42,7 @@ internal object AccessibilityWhitelistWritePolicy {
 object AccessibilityAutomationStore {
     private const val PREFERENCES = "accessibility_automation"
     private const val KEY_PACKAGES = "allowed_packages"
-    private const val KEY_WHITELIST_ENABLED = "whitelist_enabled"
+    private const val KEY_WHITELIST_ENABLED = "enforce_whitelist"
 
     // 旧安装与异常配置一律保留限制，只有明确保存 false 才关闭。
     fun whitelistEnabled(context: Context): Boolean = context.applicationContext
@@ -84,8 +85,7 @@ object AccessibilityAutomationStore {
         val values = JSONArray()
         allowedPackages(context).sorted().forEach(values::put)
         return JSONObject()
-            .put("enabled", DeepSeekAccessibilityService.current() != null)
-            .put("whitelistEnabled", whitelistEnabled(context))
+            .put("enabled", isServiceEnabled(context))
             .put("allowedPackages", values)
             // 前端按「固定成员」单独渲染这一项（灰显、不可删除）；它同时也在 allowedPackages 里，
             // 两个字段都出现是刻意的：字段齐全才能过 src/platform/validation.ts 的形状校验。
@@ -94,6 +94,15 @@ object AccessibilityAutomationStore {
                 JSONArray().put(AccessibilityAutomationPolicy.SELF_PACKAGE),
             )
             .put("passwordConfigured", AccessibilityPasswordStore.configured(context))
+            .put("whitelistEnabled", whitelistEnabled(context))
+    }
+
+    /** 同时检查服务引用与系统安全设置，避免进程重建或服务掉线后继续显示已连接。 */
+    private fun isServiceEnabled(context: Context): Boolean {
+        val expected = ComponentName(context, DeepSeekAccessibilityService::class.java).flattenToString()
+        val configured = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+            .orEmpty().split(':').any { it.equals(expected, ignoreCase = true) }
+        return configured && DeepSeekAccessibilityService.current() != null
     }
 
     fun openSettings(context: Context) {

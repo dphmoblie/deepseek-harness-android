@@ -2779,6 +2779,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("allowedPackages", state.optJSONArray("allowedPackages") ?: org.json.JSONArray())
         .put("alwaysAllowedPackages", state.optJSONArray("alwaysAllowedPackages") ?: org.json.JSONArray())
         .put("passwordConfigured", state.optBoolean("passwordConfigured", false))
+        .put("whitelistEnabled", state.optBoolean("whitelistEnabled", true))
 
     /** 诊断日志状态：只有布尔值、计数与时间戳，不含任何日志内容。 */
     private fun DiagnosticState.toJs(): JSObject = JSObject()
