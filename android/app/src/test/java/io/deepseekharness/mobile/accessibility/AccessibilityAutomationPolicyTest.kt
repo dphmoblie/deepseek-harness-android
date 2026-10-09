@@ -110,6 +110,25 @@ class AccessibilityAutomationPolicyTest {
     }
 
     @Test
+    fun sensitiveTextDetectionSurvivesSplitAndZeroWidthObfuscation() {
+        // 对抗性应用把敏感词拆开或插入不可见字符，归一化后仍必须命中。
+        assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("密 码"))
+        assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("密​码"))
+        assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("密  码"))
+        assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("验‍证⁠码"))
+        assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("支　付"))
+        assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("p a s s w o r d"))
+        assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("pay​ment"))
+        assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("请输入\n支付密码"))
+        // 归一化不能误伤正常文本：含空白的普通句子依然放行。
+        assertFalse(AccessibilityAutomationPolicy.containsSensitiveText("请输入用户名"))
+        assertFalse(AccessibilityAutomationPolicy.containsSensitiveText("search for articles"))
+        assertFalse(AccessibilityAutomationPolicy.containsSensitiveText("用 户 名"))
+        assertFalse(AccessibilityAutomationPolicy.containsSensitiveText(null))
+        assertFalse(AccessibilityAutomationPolicy.containsSensitiveText(""))
+    }
+
+    @Test
     fun scrollAcceptsOnlyTwoDirections() {
         val value = "{" +
             "\"packageName\":\"com.example.reader\"," +

@@ -531,27 +531,6 @@ class VirtualScreenService : Service() {
         }
     }
 
-    /**
-     * 将副屏悬浮窗重新放到窗口队列末端，使最近一次点击的副屏成为可见焦点层。
-     * 重新挂载延后到触摸事件返回后执行，避免同步移除窗口导致当前手势被系统取消。
-     */
-    fun bringOverlayToFront() {
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            main.post { bringOverlayToFront() }
-            return
-        }
-        val view = overlay ?: return
-        val params = overlayParams ?: return
-        val wm = getSystemService(WindowManager::class.java)
-        // 不能用 removeView/addView 伪造置顶：那会触发预览控件的 onDetachedFromWindow，
-        // 关闭取帧线程，重新挂回后反而变成“永远停在最后一帧”。在不打断预览生命周期的
-        // 前提下刷新窗口参数和子视图顺序；系统会按最近一次窗口交互重新合成该层。
-        runCatching {
-            view.bringToFront()
-            wm.updateViewLayout(view, params)
-        }
-    }
-
     fun hideOverlay() {
         overlay?.let { runCatching { getSystemService(WindowManager::class.java).removeView(it) } }
         overlay = null; preview = null
@@ -768,8 +747,11 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     }
                 }
                 MotionEvent.ACTION_UP -> {
-                    // 手势结束后再提升层级，不会取消本次触摸，也不会打断目标应用的输入。
-                    main.post { VirtualScreenService.current?.bringOverlayToFront() }
+                    // 这里不做「把小窗提到最上层」：TYPE_APPLICATION_OVERLAY 的层序由系统按
+                    // 窗口添加顺序决定，`updateViewLayout` 改不了 z-order，`View.bringToFront()`
+                    // 只对同一 ViewGroup 内的兄弟视图有效（而这是窗口根视图）；唯一真正能提到顶的
+                    // removeView+addView 会触发预览的 onDetachedFromWindow，关掉取帧线程，重新挂回后
+                    // 反而永远停在最后一帧。用户刚刚点到的那块小窗本来就在他手指下面，不需要置顶。
                     // 拖动结束时不再补发一次「点击」：这次手势的归属是窗口位置，不是副屏内容。
                     if (!dragActive) view.performClick()
                     val start = down; down = null

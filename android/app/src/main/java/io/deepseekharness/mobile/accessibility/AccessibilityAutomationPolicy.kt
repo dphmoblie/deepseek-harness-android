@@ -33,6 +33,12 @@ internal object AccessibilityAutomationPolicy {
         RegexOption.IGNORE_CASE,
     )
 
+    /** 匹配前把文本归一化：去零宽字符、折叠所有空白。否则把「密码」拆成两个节点、
+     *  插入零宽字符或空格，就能让逐词匹配全部失配，对抗性应用借此绕过敏感界面拦截。 */
+    private val zeroWidthChars = Regex("[\\u200B\\u200C\\u200D\\u2060\\uFEFF]")
+    // \s 在 Java 默认只覆盖 ASCII 空白，全角空格（U+3000）要单列，否则「支　付」照样绕过。
+    private val allWhitespace = Regex("[\\s\\u3000]+")
+
     data class ActionRequest(
         val packageName: String,
         val action: String,
@@ -67,8 +73,14 @@ internal object AccessibilityAutomationPolicy {
     fun withSelf(packages: List<String>): List<String> =
         (packages.map(String::trim) + SELF_PACKAGE).distinct().sorted()
 
-    fun containsSensitiveText(value: CharSequence?): Boolean =
-        value != null && sensitiveText.containsMatchIn(value)
+    fun containsSensitiveText(value: CharSequence?): Boolean {
+        if (value == null) return false
+        // 先归一化再匹配：把所有空白与零宽字符全部删掉，使「密 码」「密​码」
+        // 「p a s s w o r d」这类拆字/插字符的绕过尝试重新拼回原词。代价是
+        // 「pass word」这类自然分词也会被拼合，但敏感词命中即拒属安全方向。
+        val normalized = allWhitespace.replace(zeroWidthChars.replace(value, ""), "")
+        return sensitiveText.containsMatchIn(normalized)
+    }
 
     fun parseAction(param: String): ActionRequest? {
         if (param.length !in 2..2048) return null

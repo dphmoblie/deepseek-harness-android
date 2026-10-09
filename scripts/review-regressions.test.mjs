@@ -54,8 +54,8 @@ test('accessibility launch checks resolved recipient and pins that component bef
   const launch = accessibility.slice(accessibility.indexOf('override fun launch('), accessibility.indexOf('private fun dispatch('))
   assert.match(launch, /ComponentName\.unflattenFromString\(component\)/)
   assert.ok(launch.indexOf('!uri.isNullOrEmpty()') < launch.indexOf('!component.isNullOrEmpty()'))
-  assert.ok(launch.indexOf('intent.resolveActivity') < launch.indexOf('AutomationLaunchPolicy.allowed(resolved.packageName'))
-  assert.ok(launch.indexOf('AutomationLaunchPolicy.allowed(resolved.packageName') < launch.indexOf('intent.component = resolved'))
+  assert.ok(launch.indexOf('intent.resolveActivity') < launch.indexOf('packageAllowed(service, resolved.packageName)'))
+  assert.ok(launch.indexOf('packageAllowed(service, resolved.packageName)') < launch.indexOf('intent.component = resolved'))
   assert.ok(launch.indexOf('intent.component = resolved') < launch.indexOf('service.startActivity(intent)'))
 })
 

@@ -107,6 +107,29 @@ class AutomationRuleExecutorTest {
         assertEquals(listOf("click"), backend.calls)
     }
 
+    @Test
+    fun `screen 口径靠事件序号重开配额，activity 口径不受事件序号影响`() {
+        val first = container(text("确定"))
+        val second = container(text("确定", row(1)))
+        val third = container(text("确定", row(2)))
+        // 三棵树的节点位置不同 → 指纹不同，于是"能不能执行"只由配额窗口决定。
+        val screenRule = rule(Selector(text = "确定"), maxActions = 1).copy(resetOn = AutomationRule.RESET_SCREEN)
+        val state = AutomationGateState()
+        assertTrue(execute(FakeBackend(first), first, screenRule, state, nowMs = 0L, eventSequence = 0L).performed.single().ok)
+        val sameWindow = execute(FakeBackend(second), second, screenRule, state, nowMs = 400L, eventSequence = 0L)
+        assertEquals(AutomationGateCodes.ACTION_MAX_REACHED, sameWindow.skipped.single().code)
+        assertTrue("新的窗口更新重开配额", execute(FakeBackend(third), third, screenRule, state, nowMs = 800L, eventSequence = 1L).performed.single().ok)
+
+        // activity 口径只认包名/Activity：序号变了也不重开，否则 screen 的序号会顺手废掉它。
+        val activityState = AutomationGateState()
+        val activityRule = rule(Selector(text = "确定"), maxActions = 1)
+        assertTrue(execute(FakeBackend(first), first, activityRule, activityState, nowMs = 0L, eventSequence = 0L).performed.single().ok)
+        assertEquals(
+            AutomationGateCodes.ACTION_MAX_REACHED,
+            execute(FakeBackend(second), second, activityRule, activityState, nowMs = 400L, eventSequence = 1L).skipped.single().code,
+        )
+    }
+
     // ---- 连续失败与自动停用 ----
 
     @Test

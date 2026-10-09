@@ -876,6 +876,18 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     private var automationActivityName: String? = null
     private var automationActivityPackage: String? = null
 
+    /**
+     * 屏幕周期序号：`resetOn = "screen"` 的配额窗口靠它区分（见 [AutomationRuleExecutor.quotaWindowKey]）。
+     *
+     * 只在 `TYPE_WINDOW_STATE_CHANGED` 上递增：那是「窗口更新」这个信号本身（对话框弹出、同一 Activity
+     * 内的页面切换都算）。`TYPE_WINDOW_CONTENT_CHANGED` 每次文本滚动都会来，拿它当周期会让
+     * `screen` 口径退化成「每个事件都是新窗口」，也就是 `maxActions` 彻底失效。
+     *
+     * 它只重开**次数配额**，不动指纹（[AutomationGateState.syncIdentityWindow] 只认包名/Activity），
+     * 所以「窗口更新 → 又点同一个按钮」仍然被指纹挡住，`screen` 不会变成自触发循环。
+     */
+    private var automationScreenSeq = 0L
+
     /** 「稍后重新判定」的令牌：只用来标识一次排期（见 [reevaluateAutomation] 的身份比对）。 */
     private class AutomationReevalToken(val dueAtMs: Long)
 
@@ -905,6 +917,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             automationActivityPackage = eventPackage
             automationActivityName = event.className?.toString()
+            automationScreenSeq += 1
             automationGate.beginMatchWindow(AutomationRuleExecutor.baseWindowKey(
                 AutomationScreenInfo(eventPackage, event.className?.toString()),
             ))
@@ -938,7 +951,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             rules,
             nowMs,
             apply = true,
-            eventSequence = 0L,
+            eventSequence = automationScreenSeq,
         )
     }
 
@@ -995,15 +1008,16 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             rules,
             nowMs,
             apply = true,
-            eventSequence = 0L,
+            // 重判定没有新事件，沿用最近一次窗口更新的周期：`resetOn="screen"` 的配额
+            // 不会因为「等待到期」被白白重开一次（那会让 matchDelayMs 变成绕过 maxActions 的口子）。
+            eventSequence = automationScreenSeq,
         )
     }
 
     /**
      * 把一次评估交给执行器，然后回报结果。
      *
-     * `eventSequence` 只在「每个事件都是新配额窗口」时才需要区分，本实现传 0：批量限流靠的是
-     * 第 2 层的绝对间隔与等待重排期，不是把配额窗口切开。
+     * `eventSequence` 是 [automationScreenSeq]：只在 `resetOn = "screen"` 的规则上起作用
      */
     private fun runAutomationEvaluation(
         evaluation: AutomationEvaluation,
