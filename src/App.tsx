@@ -837,6 +837,7 @@ const EMPTY_ACCESSIBILITY: AccessibilityAutomationState = {
   allowedPackages: [],
   alwaysAllowedPackages: [],
   passwordConfigured: false,
+  whitelistEnabled: true,
 }
 
 interface AppSidebarProps {
@@ -3510,6 +3511,7 @@ interface SettingsScreenProps {
    * 原生侧会拒绝不带密码的修改，这里也先在前端拦一道，省掉一次必然失败的桥调用。
    */
   onSaveAccessibilityPackages: (packages: string[], password?: string) => void
+  onSetAccessibilityWhitelistEnabled: (enabled: boolean) => void
   /** 设置（省略 currentPassword）或修改（必须带 currentPassword）白名单验证密码。 */
   onSaveAccessibilityPassword: (password: string, currentPassword?: string) => void
   /** 清除验证密码；必须带上当前密码。 */
@@ -3522,7 +3524,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenVirtualScreen, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenVirtualScreen, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSetAccessibilityWhitelistEnabled, onSaveAccessibilityPassword, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   /**
    * 保存白名单时要输入的验证密码。
@@ -4019,6 +4021,18 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             <p className="settings-note">
               {t("允许你列出的应用，包括厂商自带的普通应用。锁屏、系统设置及涉及权限、支付、验证码和密码的页面仍受保护；服务必须由你在系统无障碍设置中手动开启。")}
             </p>
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={accessibility.whitelistEnabled}
+                onChange={event => onSetAccessibilityWhitelistEnabled(event.target.checked)}
+                disabled={busy !== null}
+              />
+              <span>{t("启用应用白名单（关闭后允许 AI 读取普通应用页面）")}</span>
+            </label>
+            {!accessibility.whitelistEnabled && (
+              <p className="settings-note">{t("白名单已关闭。锁屏、敏感窗口和动作频率限制仍然有效。")}</p>
+            )}
             <p className="settings-note">
               {t("本应用（{0}）始终在白名单里：服务重启、连接重建都不会掉，也不需要写进下面的列表。", accessibility.alwaysAllowedPackages.length ? accessibility.alwaysAllowedPackages.join("、") : t("未配置"))}
             </p>
@@ -4739,6 +4753,7 @@ export function App() {
       .then(next => {
         if (!cancelled) setAccessibility(previous => (
           previous.enabled === next.enabled &&
+          previous.whitelistEnabled === next.whitelistEnabled &&
           previous.allowedPackages.length === next.allowedPackages.length &&
           previous.allowedPackages.every((value, index) => value === next.allowedPackages[index])
             ? previous
@@ -4818,6 +4833,7 @@ export function App() {
         .then(next => {
           if (!cancelled) setAccessibility(previous => (
             previous.enabled === next.enabled &&
+            previous.whitelistEnabled === next.whitelistEnabled &&
             previous.allowedPackages.length === next.allowedPackages.length &&
             previous.allowedPackages.every((value, index) => value === next.allowedPackages[index])
               ? previous
@@ -5428,6 +5444,13 @@ export function App() {
     }, t("无障碍应用白名单已保存"))
   }, [accessibility.passwordConfigured, notify, run])
 
+  const setAccessibilityWhitelistEnabled = useCallback((enabled: boolean) => {
+    void run('toggle-accessibility-whitelist', async () => {
+      const next = await runtimeBridge.setAccessibilityWhitelistEnabled(enabled)
+      setAccessibility(next)
+    }, enabled ? t("无障碍白名单已开启") : t("无障碍白名单已关闭，可读取普通应用页面"))
+  }, [run])
+
   /** 设置（首次）或修改（已设置时）白名单验证密码；成功后原生返回最新状态。 */
   const saveAccessibilityPassword = useCallback((password: string, currentPassword?: string) => {
     void run('save-accessibility-password', async () => {
@@ -5675,7 +5698,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenVirtualScreen={() => setActiveView('settings-virtual-screen')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenVirtualScreen={() => setActiveView('settings-virtual-screen')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSetAccessibilityWhitelistEnabled={setAccessibilityWhitelistEnabled} onSaveAccessibilityPassword={saveAccessibilityPassword} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

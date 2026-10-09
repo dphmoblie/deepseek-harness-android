@@ -1809,6 +1809,18 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /** 切换无障碍包名白名单；关闭仅解除包名准入，其他原生安全策略仍生效。 */
+    @PluginMethod
+    fun setAccessibilityWhitelistEnabled(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                val enabled = call.data.opt("enabled") as? Boolean
+                    ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "无障碍白名单开关格式无效")
+                accessibilityStateToJs(AccessibilityAutomationStore.setWhitelistEnabled(context, enabled))
+            }
+        }
+    }
+
     /**
      * 权限：应用内桥接；设置或修改「无障碍白名单验证密码」。
      *
@@ -2774,6 +2786,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("allowedPackages", state.optJSONArray("allowedPackages") ?: org.json.JSONArray())
         .put("alwaysAllowedPackages", state.optJSONArray("alwaysAllowedPackages") ?: org.json.JSONArray())
         .put("passwordConfigured", state.optBoolean("passwordConfigured", false))
+        .put("whitelistEnabled", state.optBoolean("whitelistEnabled", true))
 
     /** 诊断日志状态：只有布尔值、计数与时间戳，不含任何日志内容。 */
     private fun DiagnosticState.toJs(): JSObject = JSObject()

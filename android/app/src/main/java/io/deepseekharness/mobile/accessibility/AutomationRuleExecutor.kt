@@ -279,6 +279,8 @@ internal data class AutomationGateContext(
     val packageName: String,
     /** 服务侧当前的白名单（`AccessibilityAutomationStore.allowedPackages`）。空集合 = 一律拒绝。 */
     val allowedPackages: Set<String>,
+    /** 白名单开关关闭时允许读取普通应用页面，但仍保留其他策略闸门。 */
+    val enforceWhitelist: Boolean = true,
     /** 身份窗口：包名/Activity 维度，只用它决定指纹何时失效。 */
     val identityWindowKey: String,
     /** 配额窗口：`resetOn="screen"` 时随每个事件推进，决定次数何时清零。 */
@@ -364,7 +366,7 @@ internal object AutomationRuleGate {
                 "事件包名不是可自动化的应用包名（${context.packageName}），已跳过",
             )
         }
-        if (context.packageName !in context.allowedPackages) {
+        if (context.enforceWhitelist && context.packageName !in context.allowedPackages) {
             return reject(
                 AutomationGateCodes.PACKAGE_NOT_ALLOWED,
                 "应用 ${context.packageName} 不在无障碍自动化白名单内",
@@ -385,7 +387,8 @@ internal object AutomationRuleGate {
         if (rule.action.type == AutomationRuleMatcher.ACTION_LAUNCH && rule.action.uri.isNullOrEmpty()) {
             // launch 的目标应用同样受白名单约束：白名单之外的应用，连"打开"都不做。
             val target = rule.action.component?.substringBefore('/')?.trim().orEmpty()
-            if (target.isNotEmpty() && (!AccessibilityAutomationPolicy.validPackage(target) || target !in context.allowedPackages)) {
+            if (target.isNotEmpty() && (!AccessibilityAutomationPolicy.validPackage(target) ||
+                    (context.enforceWhitelist && target !in context.allowedPackages))) {
                 return reject(AutomationGateCodes.PACKAGE_NOT_ALLOWED, "launch 目标应用 $target 不在无障碍自动化白名单内")
             }
         }
@@ -623,6 +626,7 @@ internal object AutomationRuleExecutor {
         gate: AutomationGateState,
         nowMs: Long,
         allowedPackages: Set<String>,
+        enforceWhitelist: Boolean = true,
         deviceLocked: Boolean = false,
         sensitiveWindow: Boolean = false,
         apply: Boolean = true,
@@ -672,6 +676,7 @@ internal object AutomationRuleExecutor {
                 fingerprint = fingerprint,
                 packageName = screen.packageName,
                 allowedPackages = allowedPackages,
+                enforceWhitelist = enforceWhitelist,
                 identityWindowKey = identityWindow,
                 quotaWindowKey = quotaWindowKey(rule, screen, eventSequence),
                 nowMs = nowMs,

@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile
 
 import android.app.Notification
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -8,6 +9,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -50,7 +52,7 @@ class HarnessKeepAliveService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        ensureNotificationChannel()
+        runCatching { ensureNotificationChannel() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -177,6 +179,13 @@ class HarnessKeepAliveService : Service() {
      * 记录受控诊断后返回 false，由调用方结束服务，Harness 继续以普通后台进程运行。
      */
     private fun startForegroundCompat(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            diagnostics.record(DiagnosticLevel.INFO, DiagnosticEvent.KEEP_ALIVE,
+                mapOf("reason" to "notification_permission_missing", "active" to "false"))
+            return false
+        }
         val notification = buildNotification()
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {

@@ -137,7 +137,8 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return failure("ACCESSIBILITY_WINDOW_UNAVAILABLE", "当前没有可读取的应用窗口")
         val packageName = root.packageName?.toString().orEmpty()
         val allowed = AccessibilityAutomationStore.allowedPackages(this)
-        if (!AccessibilityAutomationPolicy.validPackage(packageName) || packageName !in allowed) {
+        if (!AccessibilityAutomationPolicy.validPackage(packageName) ||
+            (AccessibilityAutomationStore.whitelistEnabled(this) && packageName !in allowed)) {
             return failure("ACCESSIBILITY_PACKAGE_DENIED", "当前应用不在无障碍自动化白名单中")
         }
         if (containsSensitiveWindow(root)) return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到密码、验证码、支付或权限窗口，已拒绝自动化")
@@ -363,7 +364,8 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         if (now - lastActionAt < ACTION_INTERVAL_MS) return failure("ACCESSIBILITY_RATE_LIMITED", "无障碍动作过于频繁，请稍后再试")
         val root = rootInActiveWindow ?: return failure("ACCESSIBILITY_WINDOW_UNAVAILABLE", "当前没有可读取的应用窗口")
         val packageName = root.packageName?.toString().orEmpty()
-        if (packageName != request.packageName || packageName !in AccessibilityAutomationStore.allowedPackages(this)) {
+        if (packageName != request.packageName ||
+            (AccessibilityAutomationStore.whitelistEnabled(this) && packageName !in AccessibilityAutomationStore.allowedPackages(this))) {
             return failure("ACCESSIBILITY_PACKAGE_DENIED", "确认后前台应用已变化")
         }
         if (containsSensitiveWindow(root)) return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "确认后检测到敏感窗口")
@@ -915,7 +917,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         val allowed = AccessibilityAutomationStore.allowedPackages(this)
         // 执行前的第一道白名单：事件包名必须被允许。应用自身包名也在白名单里（策略如此），
         // 但闸门默认额外拒绝对自身执行动作（防自触发），所以这里不需要特殊处理。
-        if (eventPackage !in allowed) return
+        if (AccessibilityAutomationStore.whitelistEnabled(this) && eventPackage !in allowed) return
         // 第 1 层：事件准入。被节流的事件直接丢弃，不排队、不补做。
         if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) return
         val root = rootInActiveWindow ?: return
@@ -977,7 +979,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             return
         }
         val snapshot = buildAutomationTree(root)
-        if (snapshot.packageName !in allowed) return
+        if (AccessibilityAutomationStore.whitelistEnabled(this) && snapshot.packageName !in allowed) return
         if (isLockedOrScreenOff()) return
         val rules = loadAutomationRules(snapshot.packageName)
         if (rules.isEmpty()) return
@@ -1021,6 +1023,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             gate = automationGate,
             nowMs = nowMs,
             allowedPackages = evaluation.allowedPackages,
+            enforceWhitelist = AccessibilityAutomationStore.whitelistEnabled(this),
             deviceLocked = evaluation.deviceLocked,
             sensitiveWindow = evaluation.sensitiveWindow,
             apply = apply,
@@ -1071,8 +1074,11 @@ class DeepSeekAccessibilityService : AccessibilityService() {
 
     /** 只读取当前应用规则；规则状态使用包名与 ID 的组合键。 */
     private fun loadAutomationRules(packageName: String): List<AutomationRule> {
-        if (!AccessibilityAutomationPolicy.validPackage(packageName) ||
-            packageName !in AccessibilityAutomationStore.allowedPackages(this)) return emptyList()
+        // 合并说明：上游把这里收敛成「只读当前包」的隔离开关（不再遍历 AutomationRuleStore.packages），
+        // 这里保留上游的隔离写法，只把白名单开关（whitelistEnabled）的判断接上。
+        if (!AccessibilityAutomationPolicy.validPackage(packageName)) return emptyList()
+        val enforceWhitelist = AccessibilityAutomationStore.whitelistEnabled(this)
+        if (enforceWhitelist && packageName !in AccessibilityAutomationStore.allowedPackages(this)) return emptyList()
         val read = AutomationRuleStore.readPackage(AutomationRulePreferences.from(this), packageName)
         if (read !is AutomationRuleStore.PackageRead.Ok) return emptyList()
         for (rule in read.rules) {
@@ -1092,7 +1098,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         if (!AccessibilityAutomationPolicy.validPackage(requested)) {
             return failure("AUTOMATION_RULES_PACKAGE_INVALID", "包名不合法：$requested")
         }
-        if (requested !in AccessibilityAutomationStore.allowedPackages(this)) {
+        if (AccessibilityAutomationStore.whitelistEnabled(this) && requested !in AccessibilityAutomationStore.allowedPackages(this)) {
             automationEnabled = false
             return failure("AUTOMATION_RULES_PACKAGE_DENIED", "应用 $requested 不在无障碍自动化白名单内")
         }

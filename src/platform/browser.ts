@@ -93,6 +93,7 @@ export function createBrowserBridge(): RuntimeBridge {
     allowedPackages: [] as string[],
     alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
     passwordConfigured: false,
+    whitelistEnabled: true,
   }
   let accessibilityPassword: string | undefined
   let diagnosticState: DiagnosticLogState = {
@@ -127,6 +128,7 @@ export function createBrowserBridge(): RuntimeBridge {
     allowedPackages: [...accessibility.allowedPackages],
     alwaysAllowedPackages: [...accessibility.alwaysAllowedPackages],
     passwordConfigured: accessibility.passwordConfigured,
+    whitelistEnabled: accessibility.whitelistEnabled,
   })
 
   return {
@@ -293,6 +295,11 @@ export function createBrowserBridge(): RuntimeBridge {
     },
     openShizuku: () => Promise.resolve(),
     getAccessibilityAutomationState: (): Promise<AccessibilityAutomationState> => Promise.resolve(accessibilitySnapshot()),
+    setAccessibilityWhitelistEnabled: (enabled: boolean): Promise<AccessibilityAutomationState> => {
+      if (typeof enabled !== 'boolean') return Promise.reject(new Error('无障碍白名单开关格式无效'))
+      accessibility = { ...accessibility, whitelistEnabled: enabled }
+      return Promise.resolve(accessibilitySnapshot())
+    },
     // 白名单的修改必须带验证密码（与原生侧同一语义）；未设置密码时放行。
     setAccessibilityAutomationPackages: (packages: string[], password?: string): Promise<AccessibilityAutomationState> => {
       if (!Array.isArray(packages) ||

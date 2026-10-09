@@ -926,6 +926,7 @@ describe('无障碍自动化状态与验证密码校验', () => {
     allowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, 'com.example.target'],
     alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
     passwordConfigured: false,
+    whitelistEnabled: true,
     ...overrides,
   })
 
@@ -938,7 +939,7 @@ describe('无障碍自动化状态与验证密码校验', () => {
     // 已设密码的设备：只有这个布尔为 true，返回体里没有任何密码字段。
     expect(validateAccessibilityAutomationState(state({ passwordConfigured: true })).passwordConfigured).toBe(true)
     expect(Object.keys(validateAccessibilityAutomationState(state({ passwordConfigured: true }))).sort())
-      .toEqual(['allowedPackages', 'alwaysAllowedPackages', 'enabled', 'passwordConfigured'])
+      .toEqual(['allowedPackages', 'alwaysAllowedPackages', 'enabled', 'passwordConfigured', 'whitelistEnabled'])
   })
 
   it('缺 alwaysAllowedPackages 或 passwordConfigured 时抛错', () => {

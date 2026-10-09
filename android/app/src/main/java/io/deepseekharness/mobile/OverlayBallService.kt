@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile
 
 import android.annotation.SuppressLint
+import android.Manifest
 import android.net.Uri
 import android.app.Notification
 import android.app.NotificationChannel
@@ -11,6 +12,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -123,7 +125,7 @@ class OverlayBallService : Service() {
     override fun onCreate() {
         super.onCreate()
         activeService = this
-        ensureNotificationChannel()
+        runCatching { ensureNotificationChannel() }
         windowManager = getSystemService(WindowManager::class.java)
     }
 
@@ -1341,6 +1343,13 @@ class OverlayBallService : Service() {
     // ── 前台通知 ────────────────────────────────────────────────────────────
 
     private fun startForegroundCompat(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            diagnostics.record(DiagnosticLevel.INFO, DiagnosticEvent.KEEP_ALIVE,
+                mapOf("reason" to "overlay_notification_permission_missing", "active" to "false"))
+            return false
+        }
         val notification = buildNotification()
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {

@@ -907,6 +907,7 @@ export function validateAccessibilityAutomationState(value: unknown): Accessibil
     allowedPackages: accessibilityPackages(state.allowedPackages, '无障碍白名单'),
     alwaysAllowedPackages: accessibilityPackages(state.alwaysAllowedPackages, '无障碍自动白名单'),
     passwordConfigured: requiredBoolean(state.passwordConfigured, '无障碍验证密码状态'),
+    whitelistEnabled: requiredBoolean(state.whitelistEnabled, '无障碍白名单开关状态'),
   }
 }
 

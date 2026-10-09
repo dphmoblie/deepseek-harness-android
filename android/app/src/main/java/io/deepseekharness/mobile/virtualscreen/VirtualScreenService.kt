@@ -1,9 +1,11 @@
 package io.deepseekharness.mobile.virtualscreen
 
 import android.app.*
+import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.os.*
 import android.provider.Settings
@@ -82,8 +84,15 @@ class VirtualScreenService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            lastError = "未授予通知权限，副屏已安全停止；请在设置中允许通知后重试"
+            stopSelf()
+            return START_NOT_STICKY
+        }
         val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel(CHANNEL, "目标应用副屏", NotificationManager.IMPORTANCE_LOW))
+        runCatching { manager.createNotificationChannel(NotificationChannel(CHANNEL, "目标应用副屏", NotificationManager.IMPORTANCE_LOW)) }
         val open = PendingIntent.getActivity(this, 0, Intent(this, VirtualScreenActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val stop = PendingIntent.getService(this, 1, Intent(this, javaClass).setAction("stop"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = NotificationCompat.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.ic_menu_view)
@@ -503,7 +512,8 @@ class VirtualScreenService : Service() {
         val image = VirtualScreenPreview(this).also { preview = it }
         image.dragHost = overlayDragHost
         val params = WindowManager.LayoutParams(size.widthPx, size.heightPx, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, android.graphics.PixelFormat.TRANSLUCENT).apply {
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            android.graphics.PixelFormat.TRANSLUCENT).apply {
             gravity = Gravity.TOP or Gravity.START
             x = (bounds.width() - size.widthPx) / 2
             y = (bounds.height() - insetTop - insetBottom - size.heightPx) / 2
@@ -518,6 +528,27 @@ class VirtualScreenService : Service() {
         } catch (e: Exception) {
             preview = null
             throw e
+        }
+    }
+
+    /**
+     * 将副屏悬浮窗重新放到窗口队列末端，使最近一次点击的副屏成为可见焦点层。
+     * 重新挂载延后到触摸事件返回后执行，避免同步移除窗口导致当前手势被系统取消。
+     */
+    fun bringOverlayToFront() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { bringOverlayToFront() }
+            return
+        }
+        val view = overlay ?: return
+        val params = overlayParams ?: return
+        val wm = getSystemService(WindowManager::class.java)
+        // 不能用 removeView/addView 伪造置顶：那会触发预览控件的 onDetachedFromWindow，
+        // 关闭取帧线程，重新挂回后反而变成“永远停在最后一帧”。在不打断预览生命周期的
+        // 前提下刷新窗口参数和子视图顺序；系统会按最近一次窗口交互重新合成该层。
+        runCatching {
+            view.bringToFront()
+            wm.updateViewLayout(view, params)
         }
     }
 
@@ -737,6 +768,8 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     }
                 }
                 MotionEvent.ACTION_UP -> {
+                    // 手势结束后再提升层级，不会取消本次触摸，也不会打断目标应用的输入。
+                    main.post { VirtualScreenService.current?.bringOverlayToFront() }
                     // 拖动结束时不再补发一次「点击」：这次手势的归属是窗口位置，不是副屏内容。
                     if (!dragActive) view.performClick()
                     val start = down; down = null

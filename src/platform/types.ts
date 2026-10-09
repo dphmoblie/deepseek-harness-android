@@ -500,6 +500,8 @@ export interface AccessibilityAutomationState {
   alwaysAllowedPackages: string[]
   /** 是否已设置「白名单验证密码」；不返回任何密码信息。 */
   passwordConfigured: boolean
+  /** 是否启用包名白名单；关闭时仍保留锁屏、敏感窗口与频率限制。 */
+  whitelistEnabled: boolean
 }
 
 /**
@@ -1006,6 +1008,7 @@ export interface RuntimeBridge {
    * 不能拿本地那份入参当结果。[alwaysAllowedPackages] 里的条目由原生自动保证，界面不可移除。
    */
   setAccessibilityAutomationPackages: (packages: string[], password?: string) => Promise<AccessibilityAutomationState>
+  setAccessibilityWhitelistEnabled: (enabled: boolean) => Promise<AccessibilityAutomationState>
   /**
    * 设置或修改「白名单验证密码」。
    *

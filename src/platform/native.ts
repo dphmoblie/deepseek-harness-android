@@ -126,6 +126,7 @@ interface NativeRuntimePlugin {
   /** 副屏运行期读数；读不到时原生侧应抛错，本层不做兜底。 */
   getVirtualScreenState(): Promise<unknown>
   getAccessibilityAutomationState(): Promise<unknown>
+  setAccessibilityWhitelistEnabled(options: { enabled: boolean }): Promise<unknown>
   listInstalledApplications(options: { query: string; offset: number }): Promise<unknown>
   getDeviceShellAccess(): Promise<unknown>
   setDeviceShellAccess(options: { enabled: boolean }): Promise<unknown>
@@ -265,6 +266,10 @@ function createNativeBridge(): RuntimeBridge {
     stopVirtualScreen: () => NativeRuntime.stopVirtualScreen(),
     getVirtualScreenState: () => NativeRuntime.getVirtualScreenState().then(validateVirtualScreenState),
     getAccessibilityAutomationState: () => NativeRuntime.getAccessibilityAutomationState().then(validateAccessibilityAutomationState),
+    setAccessibilityWhitelistEnabled: enabled => {
+      if (typeof enabled !== 'boolean') return Promise.reject(new Error('无障碍白名单开关格式无效'))
+      return NativeRuntime.setAccessibilityWhitelistEnabled({ enabled }).then(validateAccessibilityAutomationState)
+    },
     listInstalledApplications: (query, offset) => {
       if (typeof query !== 'string' || query.length > 160 || [...query].some(char => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f) || !Number.isSafeInteger(offset) || offset < 0) {
         return Promise.reject(new Error('应用筛选参数无效'))
@@ -285,6 +290,7 @@ function createNativeBridge(): RuntimeBridge {
         allowedPackages: packages,
         alwaysAllowedPackages: ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES,
         passwordConfigured: false,
+        whitelistEnabled: true,
       })
       // 可选字段只在有值时出现：与文件内其他方法保持同一写法（原生侧据「有没有这个键」区分
       // 「本次不带密码」和「带了一个空密码」）。

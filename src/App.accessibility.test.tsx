@@ -31,6 +31,7 @@ describe('无障碍白名单与验证密码', () => {
       allowedPackages: [...new Set([...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, ...allowed])],
       alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
       passwordConfigured,
+      whitelistEnabled: true,
     }
   }
 

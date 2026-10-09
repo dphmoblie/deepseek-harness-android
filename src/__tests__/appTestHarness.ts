@@ -92,6 +92,7 @@ export const bridge = {
     virtualForegroundPackage: '', virtualForegroundActivity: '',
   }),
   setAccessibilityAutomationPackages: vi.fn(),
+  setAccessibilityWhitelistEnabled: vi.fn(),
   // 验证密码三条（设置/清除/生物识别重置）。与上面同一道理：桥加了方法而夹具没加，
   // 用到它的界面会在 effect 阶段抛错并**整棵树卸载**，表现成「找不到任何元素」。
   setAccessibilityPassword: vi.fn(),
@@ -293,6 +294,7 @@ export function beforeEachAppTest(): void {
     allowedPackages: [],
     alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
     passwordConfigured: false,
+    whitelistEnabled: true,
   })
   bridge.listInstalledApplications.mockResolvedValue({ apps: [], total: 0, nextOffset: null })
   bridge.getDeviceShellAccess.mockResolvedValue({ enabled: false })
@@ -309,6 +311,7 @@ export function beforeEachAppTest(): void {
       allowedPackages: [...new Set([...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, ...packages])],
       alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
       passwordConfigured: false,
+      whitelistEnabled: true,
     })
   })
   // 三条密码桩的默认返回：形状必须过得了 validateAccessibilityAutomationState，
@@ -319,6 +322,7 @@ export function beforeEachAppTest(): void {
     allowedPackages: [] as string[],
     alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
     passwordConfigured,
+    whitelistEnabled: true,
   })
   bridge.setAccessibilityPassword.mockResolvedValue(accessibilityState(true))
   bridge.clearAccessibilityPassword.mockResolvedValue(accessibilityState(false))
