@@ -82,7 +82,7 @@ class AutomationRuleGateTest {
         val rule = rule(actionCoolDownMs = 5_000, maxActions = 5)
         assertAllowed(check(state, rule, nowMs = 0L))
         AutomationRuleGate.recordAttempt(state, 0L)
-        AutomationRuleGate.recordSuccess(state, rule.id, "fp-1")
+        AutomationRuleGate.recordSuccess(state, rule.stateKey, "fp-1")
 
         val cooling = check(state, rule, nowMs = 1_000L, fingerprint = "fp-2")
         assertEquals(AutomationGateCodes.COOLDOWN_ACTIVE, rejectCode(cooling))
@@ -96,7 +96,7 @@ class AutomationRuleGateTest {
         val rule = rule(actionCoolDownMs = 10_000, maxActions = 5)
         assertAllowed(check(state, rule, nowMs = 0L))
         AutomationRuleGate.recordAttempt(state, 0L)
-        AutomationRuleGate.recordSuccess(state, rule.id, "fp-1")
+        AutomationRuleGate.recordSuccess(state, rule.stateKey, "fp-1")
 
         // 100 毫秒时"绝对间隔"与"规则冷却"同时成立。先判的绝对间隔是更严的那一层（还要等 250 毫秒），
         // 上报它用户拿到的是可操作的等待时间，而不是"还要等 9900 毫秒"。
@@ -118,8 +118,8 @@ class AutomationRuleGateTest {
         val rule = rule(actionCoolDownMs = 1_000, maxActions = 1)
         assertAllowed(check(state, rule, nowMs = 0L, fingerprint = "fp-1"))
         AutomationRuleGate.recordAttempt(state, 0L)
-        assertEquals(1, AutomationRuleGate.recordSuccess(state, rule.id, "fp-1"))
-        assertEquals(1, state.used(rule.id))
+        assertEquals(1, AutomationRuleGate.recordSuccess(state, rule.stateKey, "fp-1"))
+        assertEquals(1, state.used(rule.stateKey))
 
         // 冷却还没到点：拒绝的是冷却层。
         assertEquals(
@@ -128,7 +128,7 @@ class AutomationRuleGateTest {
         )
         // 冷却到点：配额重开（次数清零），换一个节点就能再执行一次。
         assertAllowed(check(state, rule, nowMs = 1_000L, fingerprint = "fp-2"))
-        assertEquals(0, state.used(rule.id))
+        assertEquals(0, state.used(rule.stateKey))
     }
 
     @Test
@@ -137,7 +137,7 @@ class AutomationRuleGateTest {
         val rule = rule(actionCoolDownMs = 0, maxActions = 1)
         assertAllowed(check(state, rule, nowMs = 0L, fingerprint = "fp-1"))
         AutomationRuleGate.recordAttempt(state, 0L)
-        AutomationRuleGate.recordSuccess(state, rule.id, "fp-1")
+        AutomationRuleGate.recordSuccess(state, rule.stateKey, "fp-1")
 
         val exhausted = check(state, rule, nowMs = 60_000L, fingerprint = "fp-2")
         assertEquals(AutomationGateCodes.ACTION_MAX_REACHED, rejectCode(exhausted))
@@ -163,7 +163,7 @@ class AutomationRuleGateTest {
         val rule = rule(actionCoolDownMs = 0, maxActions = 9)
         assertAllowed(check(state, rule, nowMs = 0L, fingerprint = "fp-a"))
         AutomationRuleGate.recordAttempt(state, 0L)
-        AutomationRuleGate.recordSuccess(state, rule.id, "fp-a")
+        AutomationRuleGate.recordSuccess(state, rule.stateKey, "fp-a")
 
         assertEquals(
             AutomationGateCodes.DUPLICATE_FINGERPRINT,
@@ -178,9 +178,9 @@ class AutomationRuleGateTest {
         val state = AutomationGateState()
         val rule = rule(actionCoolDownMs = 0, maxActions = 99)
         repeat(AutomationRuleGate.MAX_FINGERPRINTS_PER_RULE + 5) { index ->
-            AutomationRuleGate.recordSuccess(state, rule.id, "fp-$index")
+            AutomationRuleGate.recordSuccess(state, rule.stateKey, "fp-$index")
         }
-        assertEquals(AutomationRuleGate.MAX_FINGERPRINTS_PER_RULE, state.fingerprintCount(rule.id))
+        assertEquals(AutomationRuleGate.MAX_FINGERPRINTS_PER_RULE, state.fingerprintCount(rule.stateKey))
     }
 
     // ---- 策略层 ----
@@ -241,7 +241,7 @@ class AutomationRuleGateTest {
         )
         // 策略层拒绝发生在结算之前：没有动作尝试，也没有占用配额。
         assertNull(state.lastActionAt)
-        assertEquals(0, state.used(rule.id))
+        assertEquals(0, state.used(rule.stateKey))
     }
 
     @Test
@@ -253,14 +253,14 @@ class AutomationRuleGateTest {
         )
 
         val auto = rule(id = "r-auto")
-        repeat(AutomationRuleGate.FAILURE_LIMIT) { AutomationRuleGate.recordFailure(state, auto.id) }
-        assertTrue(state.isAutoDisabled(auto.id))
+        repeat(AutomationRuleGate.FAILURE_LIMIT) { AutomationRuleGate.recordFailure(state, auto.stateKey) }
+        assertTrue(state.isAutoDisabled(auto.stateKey))
         assertEquals(
             AutomationGateCodes.RULE_AUTO_DISABLED,
             rejectCode(check(state, auto, nowMs = 0L)),
         )
         // 人工重新启用（规则表里重新启用时会清掉自动停用标记）之后恢复判定。
-        assertTrue(state.clearAutoDisabled(auto.id))
+        assertTrue(state.clearAutoDisabled(auto.stateKey))
         assertAllowed(check(state, auto, nowMs = 0L))
     }
 
@@ -274,11 +274,11 @@ class AutomationRuleGateTest {
         repeat(AutomationRuleGate.FAILURE_LIMIT) { index ->
             assertAllowed(check(state, rule, nowMs = nowMs, fingerprint = "fp-$index"))
             AutomationRuleGate.recordAttempt(state, nowMs)
-            assertEquals(index + 1, AutomationRuleGate.recordFailure(state, rule.id))
+            assertEquals(index + 1, AutomationRuleGate.recordFailure(state, rule.stateKey))
             nowMs += AutomationRuleGate.ACTION_INTERVAL_MS
         }
-        assertTrue(state.isAutoDisabled(rule.id))
-        assertEquals(listOf(rule.id), state.autoDisabledRuleIds())
+        assertTrue(state.isAutoDisabled(rule.stateKey))
+        assertEquals(listOf(rule.stateKey), state.autoDisabledRuleIds())
         assertEquals(
             AutomationGateCodes.RULE_AUTO_DISABLED,
             rejectCode(check(state, rule, nowMs = nowMs, fingerprint = "fp-x")),
@@ -293,27 +293,27 @@ class AutomationRuleGateTest {
         repeat(2) { index ->
             assertAllowed(check(state, rule, nowMs = nowMs, fingerprint = "fp-f$index"))
             AutomationRuleGate.recordAttempt(state, nowMs)
-            AutomationRuleGate.recordFailure(state, rule.id)
+            AutomationRuleGate.recordFailure(state, rule.stateKey)
             nowMs += AutomationRuleGate.ACTION_INTERVAL_MS
         }
-        assertEquals(2, state.failureStreak(rule.id))
-        assertFalse(state.isAutoDisabled(rule.id))
+        assertEquals(2, state.failureStreak(rule.stateKey))
+        assertFalse(state.isAutoDisabled(rule.stateKey))
 
         assertAllowed(check(state, rule, nowMs = nowMs, fingerprint = "fp-ok"))
         AutomationRuleGate.recordAttempt(state, nowMs)
-        AutomationRuleGate.recordSuccess(state, rule.id, "fp-ok")
-        assertEquals(0, state.failureStreak(rule.id))
+        AutomationRuleGate.recordSuccess(state, rule.stateKey, "fp-ok")
+        assertEquals(0, state.failureStreak(rule.stateKey))
 
         // 清零之后再连续失败两次，仍然不该被停用。
         nowMs += AutomationRuleGate.ACTION_INTERVAL_MS
         repeat(2) { index ->
             assertAllowed(check(state, rule, nowMs = nowMs, fingerprint = "fp-g$index"))
             AutomationRuleGate.recordAttempt(state, nowMs)
-            AutomationRuleGate.recordFailure(state, rule.id)
+            AutomationRuleGate.recordFailure(state, rule.stateKey)
             nowMs += AutomationRuleGate.ACTION_INTERVAL_MS
         }
-        assertEquals(2, state.failureStreak(rule.id))
-        assertFalse(state.isAutoDisabled(rule.id))
+        assertEquals(2, state.failureStreak(rule.stateKey))
+        assertFalse(state.isAutoDisabled(rule.stateKey))
     }
 
     // ---- launch 的目标包 ----
@@ -331,6 +331,40 @@ class AutomationRuleGateTest {
 
         val allowed = rule(action = AutomationAction(type = "launch", component = "$APP/.MainActivity"))
         assertAllowed(check(state, allowed, nowMs = 0L))
+    }
+
+    @Test
+    fun `配额重开同时清除已有次数与指纹`() {
+        val state = AutomationGateState()
+        val rule = rule()
+        AutomationRuleGate.recordSuccess(state, rule.stateKey, "same-node")
+        assertTrue(state.reopenQuota(rule.stateKey))
+        assertEquals(0, state.used(rule.stateKey))
+        assertFalse(state.hasFingerprint(rule.stateKey, "same-node"))
+        assertFalse(state.reopenQuota(rule.stateKey))
+    }
+
+    @Test
+    fun `同名规则的失败停用与冷却按应用隔离`() {
+        val state = AutomationGateState()
+        val first = rule(actionCoolDownMs = 10000)
+        val other = first.copy(packageName = "com.other.app")
+        assertAllowed(check(state, first, nowMs = 0))
+        repeat(3) { AutomationRuleGate.recordFailure(state, first.stateKey) }
+        assertAllowed(check(state, other, nowMs = 400, packageName = other.packageName, allowedPackages = setOf(other.packageName)))
+        assertFalse(state.isAutoDisabled(other.stateKey))
+        assertEquals(0, state.failureStreak(other.stateKey))
+        assertFalse(state.clearAutoDisabled(other.stateKey))
+        assertTrue(state.isAutoDisabled(first.stateKey))
+    }
+
+    @Test
+    fun `实际启动目标必须在白名单且不是自身或系统包`() {
+        assertTrue(AutomationLaunchPolicy.allowed(APP, setOf(APP)))
+        assertFalse(AutomationLaunchPolicy.allowed("com.browser.app", setOf(APP)))
+        assertFalse(AutomationLaunchPolicy.allowed("android", setOf("android")))
+        val self = AccessibilityAutomationPolicy.SELF_PACKAGE
+        assertTrue(AutomationLaunchPolicy.allowed(self, setOf(self)))
     }
 
     // ---- 辅助 ----

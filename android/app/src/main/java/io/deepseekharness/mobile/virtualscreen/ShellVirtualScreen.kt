@@ -30,6 +30,7 @@ class ShellVirtualScreen {
     // 会话规格原样留档：`restart` 要用**同一份规格**重建显示与会话（组件、分辨率、DPI），
     // 而设备 Shell 侧没有别的来源能拿到它们（宿主只在 start 时传进来一次）。
     private var targetComponent = ""
+    private var virtualForeground: String? = null
     private var displayDpi = 0
     private var width = 0
     private var height = 0
@@ -264,7 +265,7 @@ class ShellVirtualScreen {
         // 画面相关字段在同一个锁内一次读出，避免状态里混用不同帧的快照。
         val frames = synchronized(frameLock) { FrameState(frameAt, frameBlank, frameSampledAt, frameFps, frameError) }
         // 副屏最前台要起一个 dumpsys 进程，只查一次，供下面两个字段共用。
-        val virtualForeground = resumeForeground()
+        val virtualForeground = this.virtualForeground
         return JSONObject().put("active", display != null)
             .put("sessionId", session).put("displayId", id()).put("packageName", targetPackage)
             .put("width", width).put("height", height).put("frameAtElapsedMs", frames.at)
@@ -298,16 +299,6 @@ class ShellVirtualScreen {
             // 会话不在或解析不到时留空串：**不能**用主屏前台顶替，否则调用方会以为目标已经在副屏上。
             .put(VirtualScreenPolicy.VIRTUAL_FOREGROUND_PACKAGE_FIELD, virtualForeground?.substringBefore('/') ?: "")
             .put(VirtualScreenPolicy.VIRTUAL_FOREGROUND_ACTIVITY_FIELD, virtualForeground ?: "")
-    }
-
-    /**
-     * 本次会话副屏上最前台的组件名（解析不到返回 null）。为了不让每次 `state()` 都起一个 `dumpsys` 进程，
-     * 只在会话真的活着时查，且任何异常都收敛成 null——观测量缺失只该让字段为空，不该让状态读取失败。
-     */
-    private fun resumeForeground(): String? {
-        val displayId = id()
-        if (displayId <= 0) return null
-        return runCatching { foregroundComponent(displayId) }.getOrNull()
     }
 
     @Synchronized fun action(raw: String): String {
@@ -348,7 +339,7 @@ class ShellVirtualScreen {
                 // 目标入口有两种字段形状（组件 / 包名，见 targetRequestField）：这里是设备侧唯一做解析的地方，
                 // 宿主设置页与 AI 工具面因此可以各说各的写法，而不必让上层先把它翻译成组件。
                 val request = VirtualScreenPolicy.targetRequestField(p)
-                val previous = targetPackage.takeIf { it.isNotEmpty() }?.let { resolveComponent(it) }
+                val previous = targetComponent.takeIf { it.isNotEmpty() }
                 val budget = VirtualScreenPolicy.confirmBudgetMillis(p)
                 val prewarm = p.optBoolean(VirtualScreenPolicy.PREWARM_FIELD, false)
                 val rollback = p.optBoolean(VirtualScreenPolicy.ROLLBACK_FIELD, false)
@@ -363,6 +354,7 @@ class ShellVirtualScreen {
                     if (prewarm) warmUpError = warmUp(component)
                     launchOnDisplay(listOf("-n", component), component, component.substringBefore('/'), budget)
                     targetPackage = component.substringBefore('/')
+                    targetComponent = component
                 } catch (error: Exception) {
                     // 失败时把「哪一类失败 + 为什么」分开放：错误码回答哪一类（会话失效 / 切换超时 / 启动被拒），
                     // reason 回答为什么（NOT_ACCEPTED / NOT_FOREGROUND / SESSION_DEAD），调用方据此决定重试还是换入口。
@@ -378,6 +370,7 @@ class ShellVirtualScreen {
                         if (rollbackTarget(previous, budget)) {
                             // 回滚成功时把原目标写回 targetPackage：不写会让 state/snapshot 继续指向一个其实不在副屏上的目标。
                             targetPackage = previous.substringBefore('/')
+                            targetComponent = previous
                             suffix = "；已回滚到原目标 $previous"
                         } else {
                             suffix = "；回滚到原目标 $previous 也没能确认上屏"
@@ -484,16 +477,20 @@ class ShellVirtualScreen {
                 }
                 val launched = launchOnDisplay(arguments, label, expected)
                 // 只有确认上屏才更新目标包名：失败路径不写，避免状态里出现一个其实没在副屏上的目标。
-                if (launched != null) targetPackage = launched
+                if (launched != null) {
+                    targetPackage = launched.substringBefore('/')
+                    targetComponent = launched
+                }
                 return JSONObject()
                     .put("sessionId", session).put("displayId", id())
-                    .put("launched", launched ?: "").put("targetPackage", targetPackage)
+                    .put("launched", launched?.substringBefore('/') ?: "").put("targetPackage", targetPackage)
                     .toString()
             }
             // 跟随：目标应用内部跳转会把新 Activity 落到主屏（display 0），把主屏最前台的可跟随包拉回副屏。
             "follow" -> {
                 val dump = command(listOf("/system/bin/dumpsys", "activity", "activities"))
-                val candidate = VirtualScreenPolicy.resumedComponent(dump, 0)
+                val foreground = VirtualScreenPolicy.resumedComponent(dump, 0)
+                val candidate = foreground?.substringBefore('/')
                 val selfPackage = p.optString(VirtualScreenPolicy.SELF_PACKAGE_FIELD)
                 val inputMethods = inputMethods()
                 // 桌面排除项共三级来源（2026-10-05 真机实测：`dumpsys activity activities` 里**没有** `mHomeProcess`，
@@ -516,19 +513,10 @@ class ShellVirtualScreen {
                         .put("message", "$candidate 已经在副屏前台，无需跟随")
                         .toString()
                 }
-                val component = resolveComponent(candidate)
-                if (component == null) {
-                    // 解析不到启动入口（该应用没有任何可用 `-n` 启动的 Activity）时也**不**抛「副屏不可用」：
-                    // 这是一次正常的「跟随不了」结论，把包名、错误码与原因如实回报，由调用方决定下一步。
-                    return JSONObject()
-                        .put("sessionId", session).put("displayId", id())
-                        .put("followed", false).put("packageName", candidate)
-                        .put("code", VirtualScreenPolicy.LAUNCH_UNRESOLVED_CODE)
-                        .put("message", VirtualScreenPolicy.launchUnresolvedFailure(candidate).message)
-                        .toString()
-                }
+                val component = foreground
                 launchOnDisplay(listOf("-n", component), candidate, candidate)
                 targetPackage = candidate
+                targetComponent = component
                 return JSONObject()
                     .put("sessionId", session).put("displayId", id())
                     .put("followed", true).put("packageName", candidate).put("component", component)
@@ -656,12 +644,20 @@ class ShellVirtualScreen {
     }
 
     /** 确认某个包名已在本次会话的副屏上 resume；热切换过程中必须传刚请求的包名，默认值只用于当前目标。 */
-    private fun targetVisible(packageName: String = targetPackage) =
-        VirtualScreenPolicy.targetResumed(command(listOf("/system/bin/dumpsys", "activity", "activities")), id(), packageName)
+    private fun targetVisible(packageName: String = targetPackage): Boolean {
+        val dump = command(listOf("/system/bin/dumpsys", "activity", "activities"))
+        virtualForeground = VirtualScreenPolicy.resumedComponent(dump, id())
+        return VirtualScreenPolicy.targetResumed(dump, id(), packageName)
+    }
 
     /** 指定显示器上最前台的组件名（0 为主屏，会话副屏用 [id]）；解析不到返回 null。 */
-    private fun foregroundComponent(displayId: Int): String? =
-        VirtualScreenPolicy.resumedComponent(command(listOf("/system/bin/dumpsys", "activity", "activities")), displayId)
+    private fun foregroundComponent(displayId: Int): String? {
+        val component = VirtualScreenPolicy.resumedComponent(
+            command(listOf("/system/bin/dumpsys", "activity", "activities")), displayId,
+        )
+        if (displayId == id()) virtualForeground = component
+        return component
+    }
 
     /**
      * 用设备侧 `cmd package resolve-activity --brief <包名>` 把包名解析成可启动组件；解析不到返回 null。
@@ -716,8 +712,8 @@ class ShellVirtualScreen {
      * 在副屏上执行 `am start -W --display <编号> <arguments>` 并确认目标真的上了副屏。
      * - 命令被系统拒绝（非零退出 / 输出含 `Error:`）→ [VirtualScreenPolicy.launchFailedFailure]；
      * - 确认超时 → 复用 [VirtualScreenPolicy.targetSwitchFailure]（同样是有界轮询，不新增「副屏不可用」误报）；
-     * - 返回确认到的包名：优先用调用方给的目标包名；链接情形退化为 `am start` 输出里的组件；
-     *   两者都没有时只能确认「副屏前台换成了另一个组件」，此时返回 null。
+     * - 返回确认到的前台组件，确保目标包名与重启入口保持一致；
+     *   URI 启动同样使用观测到的真实前台组件。
      *
      * [budgetMillis] 是**确认窗口**（`target` 动作的 `confirm_budget_ms`，默认 3 秒、夹取 500..15000）。
      * `launch`/`follow` 沿用默认值，只有显式带预算的 `target` 会把它传进来：
@@ -752,7 +748,8 @@ class ShellVirtualScreen {
             visible = visible,
         )
         if (!switched) throw VirtualScreenPolicy.targetSwitchFailure()
-        return confirmed
+        return virtualForeground?.takeIf { confirmed == null || it.substringBefore('/') == confirmed }
+            ?: throw VirtualScreenPolicy.targetSwitchFailure()
     }
 
     /**
@@ -1042,12 +1039,17 @@ class ShellVirtualScreen {
     private fun autoFollowTick(p: JSONObject): String {
         val policy = VirtualScreenPolicy.autoFollow(autoFollow)
         val selfPackage = p.optString(VirtualScreenPolicy.SELF_PACKAGE_FIELD, "")
+        // 健康循环低频刷新前台缓存；逐帧 state() 只读取缓存，不启动系统进程。
         val dump = command(listOf("/system/bin/dumpsys", "activity", "activities"))
+        virtualForeground = VirtualScreenPolicy.resumedComponent(dump, id())
+        if (policy == VirtualScreenPolicy.AUTO_FOLLOW_OFF) {
+            return tickResult(policy, "", "自动跟随已关闭", applied = false)
+        }
         val decision = VirtualScreenPolicy.autoFollowDecision(
             policy = policy,
             sessionAlive = VirtualScreenPolicy.sessionAlive(id(), session, session),
             sessionTarget = targetComponent,
-            virtualForeground = resumeForeground(),
+            virtualForeground = virtualForeground,
             mainForeground = VirtualScreenPolicy.resumedComponent(dump, 0),
             selfPackage = selfPackage,
             inputMethods = inputMethods(),
@@ -1155,7 +1157,7 @@ class ShellVirtualScreen {
         worker?.quitSafely(); worker = null
         session = ""; targetPackage = ""; width = 0; height = 0; independentFocus = false
         // 规格也要清：留着会让「会话已经结束」与「还能按原规格 restart」看起来是同一件事。
-        targetComponent = ""; displayDpi = 0
+        targetComponent = ""; displayDpi = 0; virtualForeground = null
     }
 
     private companion object {

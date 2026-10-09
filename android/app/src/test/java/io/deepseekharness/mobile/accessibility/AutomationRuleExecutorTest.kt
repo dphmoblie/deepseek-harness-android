@@ -35,9 +35,9 @@ class AutomationRuleExecutorTest {
         assertEquals(1, result.quotaUsed)
         assertEquals(listOf("click"), backend.calls)
         // 状态只在动作成功之后提交。
-        assertEquals(1, state.used(rule.id))
-        assertEquals(0, state.failureStreak(rule.id))
-        assertTrue(state.hasFingerprint(rule.id, result.fingerprint))
+        assertEquals(1, state.used(rule.stateKey))
+        assertEquals(0, state.failureStreak(rule.stateKey))
+        assertTrue(state.hasFingerprint(rule.stateKey, result.fingerprint))
         assertEquals(0L, state.lastActionAt ?: -1L)
     }
 
@@ -87,9 +87,9 @@ class AutomationRuleExecutorTest {
         assertEquals(AutomationGateCodes.CLICK_FAILED, result.code)
         assertEquals(listOf("ancestor", "center"), backend.calls)
         // 失败不占用配额，但计入连续失败。
-        assertEquals(0, state.used(rule.id))
-        assertEquals(1, state.failureStreak(rule.id))
-        assertFalse(state.hasFingerprint(rule.id, result.fingerprint))
+        assertEquals(0, state.used(rule.stateKey))
+        assertEquals(1, state.failureStreak(rule.stateKey))
+        assertFalse(state.hasFingerprint(rule.stateKey, result.fingerprint))
     }
 
     @Test
@@ -132,8 +132,8 @@ class AutomationRuleExecutorTest {
         assertEquals(listOf(rule.id), last.autoDisabledRuleIds)
         assertEquals(1, last.notices.size)
         assertTrue("回报要写清失败次数与后果：${last.notices.single()}", last.notices.single().contains("连续失败 3 次"))
-        assertTrue(state.isAutoDisabled(rule.id))
-        assertEquals(0, state.used(rule.id))
+        assertTrue(state.isAutoDisabled(rule.stateKey))
+        assertEquals(0, state.used(rule.stateKey))
 
         // 自动停用之后闸门直接拒绝：一次后端调用都不该再发生（被停用的规则不能继续"试")。
         val callsBefore = backend.calls.size
@@ -159,8 +159,8 @@ class AutomationRuleExecutorTest {
         assertFalse(result.performed)
         assertFalse(result.ok)
         assertTrue(backend.calls.isEmpty())
-        assertEquals(0, state.used(rule.id))
-        assertEquals(0, state.failureStreak(rule.id))
+        assertEquals(0, state.used(rule.stateKey))
+        assertEquals(0, state.failureStreak(rule.stateKey))
         assertNull(state.lastActionAt)
     }
 
@@ -217,7 +217,7 @@ class AutomationRuleExecutorTest {
         assertFalse(result.performed)
         assertTrue(backend.calls.isEmpty())
         // 没有发出动作的失败不计入连续失败：界面刷新导致的偶发"节点被替换"不该把一条能用的规则自动停用。
-        assertEquals(0, state.failureStreak(rule.id))
+        assertEquals(0, state.failureStreak(rule.stateKey))
     }
 
     @Test
@@ -283,7 +283,7 @@ class AutomationRuleExecutorTest {
         assertTrue("原因要说清可达的按键范围：${result.reason}", result.reason.contains("无法通过无障碍注入"))
         assertTrue(backend.calls.isEmpty())
         // 连一次后端调用都没有，因此不该被记成失败（否则规则会因为"不支持"而被自动停用）。
-        assertEquals(0, state.failureStreak(rule.id))
+        assertEquals(0, state.failureStreak(rule.stateKey))
     }
 
     @Test
@@ -373,6 +373,66 @@ class AutomationRuleExecutorTest {
         assertTrue(result.ok)
         assertEquals(AutomationGateCodes.LAUNCH_PERFORMED, result.code)
         assertEquals(listOf("launch:$APP/.MainActivity"), backend.calls)
+    }
+
+    @Test
+    fun `同 ID 的其他应用规则不会覆盖当前应用的动作或配额`() {
+        val tree = container(text("确定"))
+        val first = rule(Selector(text = "确定"), action = AutomationAction(type = "wait", delayMs = 100))
+        val other = first.copy(packageName = "com.other.app", action = AutomationAction(type = "wait", delayMs = 900))
+        val state = AutomationGateState()
+        val backend = FakeBackend(tree)
+        fun run(current: AutomationRule, now: Long) = AutomationRuleExecutor.execute(
+            backend, tree, screen(packageName = current.packageName), listOf(first, other), state, now,
+            allowedPackages = setOf(APP, other.packageName),
+        )
+        assertEquals(100, run(first, 0).nextEvaluationDelayMs)
+        assertEquals(900, run(other, 400).nextEvaluationDelayMs)
+        assertEquals(1, state.used(first.stateKey))
+        assertEquals(1, state.used(other.stateKey))
+        assertTrue(run(first, 800).results.isEmpty())
+    }
+
+    @Test
+    fun `延迟到期执行且中间事件只等待剩余时间`() {
+        val tree = container(text("确定"))
+        val rule = rule(Selector(text = "确定"), matchDelayMs = 500)
+        val backend = FakeBackend(tree)
+        val state = AutomationGateState()
+        assertEquals(500, execute(backend, tree, rule, state, 0).nextEvaluationDelayMs)
+        assertEquals(100, execute(backend, tree, rule, state, 400).nextEvaluationDelayMs)
+        val ready = execute(backend, tree, rule, state, 500)
+        assertTrue(ready.performed.single().ok)
+        assertNull(ready.nextEvaluationDelayMs)
+        assertEquals(listOf("click"), backend.calls)
+    }
+
+    @Test
+    fun `窗口切换规则修改与时钟回退都重新等待`() {
+        val tree = container(text("确定"))
+        val rule = rule(Selector(text = "确定"), matchDelayMs = 500)
+        val state = AutomationGateState()
+        val backend = FakeBackend(tree)
+        execute(backend, tree, rule, state, 100)
+        assertEquals(500, execute(backend, tree, rule, state, 400, screen = screen(activity = "Other")).nextEvaluationDelayMs)
+        assertEquals(500, execute(backend, tree, rule, state, 450).nextEvaluationDelayMs)
+        val edited = rule.copy(action = AutomationAction(type = "back"))
+        assertEquals(500, execute(backend, tree, edited, state, 600).nextEvaluationDelayMs)
+        assertEquals(500, execute(backend, tree, edited, state, 50).nextEvaluationDelayMs)
+        assertTrue(backend.calls.isEmpty())
+    }
+
+    @Test
+    fun `延迟到期必须用新树重新匹配`() {
+        val tree = container(text("确定"))
+        val rule = rule(Selector(text = "确定"), matchDelayMs = 200)
+        val backend = FakeBackend(tree)
+        val state = AutomationGateState()
+        execute(backend, tree, rule, state, 0)
+        val gone = execute(backend, container(text("取消")), rule, state, 200)
+        assertTrue(gone.results.isEmpty())
+        assertEquals(AutomationSkipCodes.NODE_NOT_FOUND, gone.skipped.single().code)
+        assertTrue(backend.calls.isEmpty())
     }
 
     // ---- 辅助 ----

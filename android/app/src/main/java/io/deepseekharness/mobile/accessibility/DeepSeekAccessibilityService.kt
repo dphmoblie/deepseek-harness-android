@@ -875,9 +875,10 @@ class DeepSeekAccessibilityService : AccessibilityService() {
      * 规则的 `allowActivities` / `denyActivities` 也才有意义。
      */
     private var automationActivityName: String? = null
+    private var automationActivityPackage: String? = null
 
     /** 「稍后重新判定」的令牌：只用来标识一次排期（见 [reevaluateAutomation] 的身份比对）。 */
-    private class AutomationReevalToken
+    private class AutomationReevalToken(val dueAtMs: Long)
 
     /** 一次事件评估的共享上下文：树只读一次，规则判定与执行后端都用它。 */
     private class AutomationTreeSnapshot(
@@ -901,6 +902,13 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         // enabled 标志只由 `automationRules` 命令改写；事件回调只读它。
         if (!automationEnabled) return
         val eventPackage = event.packageName?.toString().orEmpty()
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            automationActivityPackage = eventPackage
+            automationActivityName = event.className?.toString()
+            automationGate.beginMatchWindow(AutomationRuleExecutor.baseWindowKey(
+                AutomationScreenInfo(eventPackage, event.className?.toString()),
+            ))
+        }
         if (!AccessibilityAutomationPolicy.validPackage(eventPackage)) return
         // 系统界面的窗口变化太频繁，也不该成为自动化的输入：它们只是"屏幕上多了个东西"。
         if (eventPackage == "android" || eventPackage == "com.android.systemui") return
@@ -912,9 +920,6 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) return
         val root = rootInActiveWindow ?: return
         val snapshot = buildAutomationTree(root)
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && eventPackage == snapshot.packageName) {
-            automationActivityName = event.className?.toString()
-        }
         val deviceLocked = isLockedOrScreenOff()
         // 锁屏时不读树、不读规则：拍板口径是"锁屏一律跳过"，连评估都不做。
         if (deviceLocked) return
@@ -938,7 +943,9 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     /** 「稍后重新判定」：`wait` 动作与规则的 `matchDelayMs` 都排到这里；同时只允许一个在飞。 */
     private fun scheduleAutomationReevaluation(delayMs: Int) {
         if (delayMs <= 0) return
-        val token = AutomationReevalToken()
+        val dueAtMs = SystemClock.elapsedRealtime() + delayMs
+        if (automationReevalToken.get()?.dueAtMs?.let { it <= dueAtMs } == true) return
+        val token = AutomationReevalToken(dueAtMs)
         automationReevalToken.set(token)
         mainHandler.postDelayed(
             {
@@ -965,7 +972,10 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return
         val nowMs = SystemClock.elapsedRealtime()
         val allowed = AccessibilityAutomationStore.allowedPackages(this)
-        if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) return
+        if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) {
+            scheduleAutomationReevaluation(AutomationRuleGate.EVENT_THROTTLE_MS.toInt())
+            return
+        }
         val snapshot = buildAutomationTree(root)
         if (snapshot.packageName !in allowed) return
         if (isLockedOrScreenOff()) return
@@ -1005,7 +1015,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             root = root,
             screen = AutomationScreenInfo(
                 packageName = snapshot.packageName,
-                activityName = automationActivityName,
+                activityName = automationActivityName.takeIf { automationActivityPackage == snapshot.packageName },
             ),
             rules = rules,
             gate = automationGate,
@@ -1016,11 +1026,11 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             apply = apply,
             eventSequence = eventSequence,
         )
-        handleAutomationReport(report)
+        handleAutomationReport(report, snapshot.packageName)
     }
 
     /** 回报：审计 → 落盘自动停用 → 提示用户 → 需要的重新判定排期。 */
-    private fun handleAutomationReport(report: AutomationExecutionReport) {
+    private fun handleAutomationReport(report: AutomationExecutionReport, packageName: String) {
         if (report.performed.isEmpty() && report.autoDisabledRuleIds.isEmpty() && report.notices.isEmpty()) {
             // 只挂了一个排期也要处理（wait / matchDelayMs）。
             report.nextEvaluationDelayMs?.let(::scheduleAutomationReevaluation)
@@ -1038,7 +1048,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         for (ruleId in report.autoDisabledRuleIds) {
             audit.record(AuditEvent.ACCESSIBILITY_CONFIG, AuditResult.SUCCEEDED, AutomationGateCodes.RULE_DISABLED)
             // 自动停用必须落盘：只在内存里停用的话，进程被系统回收后规则会"复活"，用户会看到它继续点错。
-            if (!disableAutomationRule(ruleId)) {
+            if (!disableAutomationRule(packageName, ruleId)) {
                 notifyAutomation("规则「$ruleId」已自动停用，但写盘失败；请到自动化设置里手动关掉它")
             }
         }
@@ -1051,48 +1061,24 @@ class DeepSeekAccessibilityService : AccessibilityService() {
      *
      * 返回 false 只表示「找到了规则但没写成功」：这种情况必须提示用户，因为进程重启后规则会重新生效。
      */
-    private fun disableAutomationRule(ruleId: String): Boolean {
+    private fun disableAutomationRule(packageName: String, ruleId: String): Boolean {
         val store = AutomationRulePreferences.from(this)
-        var handled = true
-        for (packageName in AutomationRuleStore.packages(store)) {
-            if (!AccessibilityAutomationPolicy.validPackage(packageName)) continue
-            val read = AutomationRuleStore.readPackage(store, packageName)
-            if (read !is AutomationRuleStore.PackageRead.Ok) continue
-            val target = read.rules.firstOrNull { it.id == ruleId } ?: continue
-            if (!target.enabled) continue
-            val updated = read.rules.map { if (it.id == ruleId) it.copy(enabled = false) else it }
-            if (runCatching { AutomationRuleStore.savePackage(store, packageName, updated) }.isFailure) handled = false
-        }
-        return handled
+        val read = AutomationRuleStore.readPackage(store, packageName)
+        if (read !is AutomationRuleStore.PackageRead.Ok) return false
+        val updated = read.rules.map { if (it.id == ruleId) it.copy(enabled = false) else it }
+        return runCatching { AutomationRuleStore.savePackage(store, packageName, updated) }.isSuccess
     }
 
-    /**
-     * 读取本次要评估的规则：当前前台包 + 全部已保存的包。
-     *
-     * 白名单与包名合法性都在 [AutomationRuleStore.readPackage] **之前**校验：它内部对包名有 `require`，
-     * 非法包名会抛异常，而事件回调不该被一条脏数据打断。
-     */
+    /** 只读取当前应用规则；规则状态使用包名与 ID 的组合键。 */
     private fun loadAutomationRules(packageName: String): List<AutomationRule> {
-        val store = AutomationRulePreferences.from(this)
-        val allowed = AccessibilityAutomationStore.allowedPackages(this)
-        val candidates = ArrayList<String>()
-        if (packageName in allowed && AccessibilityAutomationPolicy.validPackage(packageName)) candidates += packageName
-        for (candidate in AutomationRuleStore.packages(store)) {
-            if (candidate in candidates) continue
-            if (candidate !in allowed || !AccessibilityAutomationPolicy.validPackage(candidate)) continue
-            candidates += candidate
+        if (!AccessibilityAutomationPolicy.validPackage(packageName) ||
+            packageName !in AccessibilityAutomationStore.allowedPackages(this)) return emptyList()
+        val read = AutomationRuleStore.readPackage(AutomationRulePreferences.from(this), packageName)
+        if (read !is AutomationRuleStore.PackageRead.Ok) return emptyList()
+        for (rule in read.rules) {
+            if (rule.enabled) automationGate.clearAutoDisabled(rule.stateKey)
         }
-        val rules = ArrayList<AutomationRule>()
-        for (candidate in candidates) {
-            val read = AutomationRuleStore.readPackage(store, candidate)
-            if (read !is AutomationRuleStore.PackageRead.Ok) continue
-            for (rule in read.rules) {
-                // 内存里的自动停用标记与磁盘状态保持一致：读到 enabled = true 说明用户刚重新启用，清掉标记。
-                if (rule.enabled) automationGate.clearAutoDisabled(rule.id)
-                rules += rule
-            }
-        }
-        return rules
+        return read.rules
     }
 
     /**
@@ -1261,7 +1247,10 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             if (rect.isEmpty) {
                 return BackendOutcome.Refused("AUTOMATION_BOUNDS_EMPTY", "命中节点没有可见区域，无法派发长按")
             }
-            // 无障碍没有"长按"这个 performAction 常量，只能用一次按压时长为长按时长的手势来表达。
+            // 优先节点语义动作；平台拒绝时才回退到坐标手势。
+            if (runCatching { info.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK) }.getOrDefault(false)) {
+                return BackendOutcome.Done
+            }
             val path = Path().apply {
                 moveTo(rect.exactCenterX(), rect.exactCenterY())
             }
@@ -1356,18 +1345,28 @@ class DeepSeekAccessibilityService : AccessibilityService() {
                     // 两个都给时 uri 优先：它比「包名/类名」更明确（能直接落到某个页面或商店详情页）。
                     !uri.isNullOrEmpty() -> Intent(Intent.ACTION_VIEW, Uri.parse(uri))
                     !component.isNullOrEmpty() -> {
-                        val targetPackage = component.substringBefore('/')
-                        val className = component.substringAfter('/', "")
-                        if (className.isEmpty()) {
-                            return BackendOutcome.Refused("AUTOMATION_LAUNCH_TARGET_INVALID", "component 缺少类名")
+                        val target = ComponentName.unflattenFromString(component)
+                            ?: return BackendOutcome.Refused("AUTOMATION_LAUNCH_TARGET_INVALID", "component 不合法")
+                        val className = target.className
+                        val expanded = if (className.startsWith(".")) {
+                            ComponentName(target.packageName, target.packageName + className)
+                        } else {
+                            target
                         }
-                        Intent().setComponent(ComponentName(targetPackage, className))
+                        Intent().setComponent(expanded)
                     }
                     else -> return BackendOutcome.Refused("AUTOMATION_LAUNCH_TARGET_MISSING", "launch 动作缺少 component 与 uri")
                 }
             } catch (error: Throwable) {
                 return BackendOutcome.Refused("AUTOMATION_LAUNCH_TARGET_INVALID", "启动目标不合法：${error.javaClass.simpleName}")
             }
+            // 安全校验实际接收应用，并绑定组件，防止默认处理程序变化后绕过白名单。
+            val resolved = intent.resolveActivity(service.packageManager)
+                ?: return BackendOutcome.Refused("AUTOMATION_LAUNCH_TARGET_INVALID", "无法解析启动目标")
+            if (!AutomationLaunchPolicy.allowed(resolved.packageName, AccessibilityAutomationStore.allowedPackages(service))) {
+                return BackendOutcome.Refused(AutomationGateCodes.PACKAGE_NOT_ALLOWED, "启动目标不在自动化白名单内")
+            }
+            intent.component = resolved
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             return try {
                 service.startActivity(intent)

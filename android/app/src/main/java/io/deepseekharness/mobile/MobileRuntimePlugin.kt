@@ -1325,17 +1325,22 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
-    /** 停止副屏：这里只是请求，收尾由服务的通知动作完成；本来就没有会话时直接报「已停止」。 */
+    /** 后台等待旧显示释放后才完成 stop，保证前端可以直接 await stop 再启动。 */
     @PluginMethod
     fun stopVirtualScreen(call: PluginCall) {
-        resolveWhileActive(call) {
+        execute(call) {
             val service = VirtualScreenService.current
             if (service == null) {
                 context.stopService(Intent(context, VirtualScreenService::class.java))
                 JSObject().put("stopping", false).put("active", false)
             } else {
-                service.requestStop()
-                JSObject().put("stopping", true).put("active", true)
+                val released = try {
+                    service.requestStop().get(30, TimeUnit.SECONDS)
+                } catch (_: java.util.concurrent.TimeoutException) {
+                    throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "副屏仍在结束，请稍后重试")
+                }
+                if (!released) throw RuntimeFailure("VIRTUAL_SCREEN_CLOSE_FAILED", "旧副屏未能释放，请检查 Shizuku 连接")
+                JSObject().put("stopping", false).put("active", false)
             }
         }
     }

@@ -102,6 +102,14 @@ internal object AutomationKeyRouting {
         AutomationKeyCodes.names().firstOrNull { AutomationKeyCodes.codeOf(it) == keyCode } ?: keyCode.toString()
 }
 
+internal object AutomationLaunchPolicy {
+    fun allowed(packageName: String, allowedPackages: Set<String>): Boolean =
+        AccessibilityAutomationPolicy.validPackage(packageName) &&
+            packageName in allowedPackages
+}
+
+internal val AutomationRule.stateKey: String get() = "$packageName/$id"
+
 /**
  * 闸门的既往状态：四层节流的时间基准、每条规则的配额/指纹/连续失败，以及内存里的自动停用标记。
  *
@@ -112,6 +120,27 @@ internal object AutomationKeyRouting {
  * 一个是可被用户改的墙上时钟，一个是开机以来的时长，混用会让冷却判定直接错乱。
  */
 internal class AutomationGateState {
+    private var matchWindow: String? = null
+    private val matchStarts = mutableMapOf<String, Pair<AutomationRule, Long>>()
+
+    fun beginMatchWindow(window: String) {
+        if (matchWindow == window) return
+        matchWindow = window
+        matchStarts.clear()
+    }
+
+    fun delayedRules(rules: List<AutomationRule>, nowMs: Long): List<AutomationRule> {
+        matchStarts.keys.retainAll(rules.map { it.stateKey }.toSet())
+        return rules.map { rule ->
+            val previous = matchStarts[rule.stateKey]
+            val start = if (previous == null || previous.first != rule || nowMs < previous.second) {
+                matchStarts[rule.stateKey] = rule to nowMs
+                nowMs
+            } else previous.second
+            rule.copy(matchDelayMs = (rule.matchDelayMs - (nowMs - start)).coerceAtLeast(0).toInt())
+        }
+    }
+
     private var lastEventAtMs: Long? = null
     private var lastAttemptAtMs: Long? = null
     private var selfPackageBlocked = true
@@ -160,6 +189,8 @@ internal class AutomationGateState {
     fun fingerprintCount(ruleId: String): Int = fingerprints[ruleId]?.size ?: 0
 
     fun reset() {
+        matchWindow = null
+        matchStarts.clear()
         lastEventAtMs = null
         lastAttemptAtMs = null
         attemptAtMs.clear()
@@ -212,8 +243,9 @@ internal class AutomationGateState {
 
     /** 配额重开（冷却到点或时钟回退）：次数清零 + 指纹清空。 */
     internal fun reopenQuota(ruleId: String): Boolean {
-        val had = usedCount.remove(ruleId) != null || fingerprints.remove(ruleId) != null
-        return had
+        val hadCount = usedCount.remove(ruleId) != null
+        val hadFingerprints = fingerprints.remove(ruleId) != null
+        return hadCount || hadFingerprints
     }
 
     internal fun countSuccess(ruleId: String, fingerprint: String): Int {
@@ -312,9 +344,12 @@ internal object AutomationRuleGate {
     fun check(state: AutomationGateState, context: AutomationGateContext): AutomationGateDecision {
         val rule = context.rule
         val nowMs = context.nowMs
+        if (rule.packageName != context.packageName) {
+            return reject(AutomationGateCodes.PACKAGE_NOT_ALLOWED, "规则与当前应用不匹配")
+        }
 
         // ---- 第 0 层：策略 ----
-        if (state.isAutoDisabled(rule.id)) {
+        if (state.isAutoDisabled(rule.stateKey)) {
             return reject(
                 AutomationGateCodes.RULE_AUTO_DISABLED,
                 "规则「${rule.id}」连续失败 $FAILURE_LIMIT 次后已被自动停用，需人工重新启用",
@@ -347,7 +382,7 @@ internal object AutomationRuleGate {
         if (context.sensitiveWindow) {
             return reject(AutomationGateCodes.SENSITIVE_WINDOW, "检测到密码、验证码、支付或权限窗口")
         }
-        if (rule.action.type == AutomationRuleMatcher.ACTION_LAUNCH) {
+        if (rule.action.type == AutomationRuleMatcher.ACTION_LAUNCH && rule.action.uri.isNullOrEmpty()) {
             // launch 的目标应用同样受白名单约束：白名单之外的应用，连"打开"都不做。
             val target = rule.action.component?.substringBefore('/')?.trim().orEmpty()
             if (target.isNotEmpty() && (!AccessibilityAutomationPolicy.validPackage(target) || target !in context.allowedPackages)) {
@@ -356,15 +391,15 @@ internal object AutomationRuleGate {
         }
 
         // ---- 结算：窗口推进 + 配额重开 ----
-        state.syncQuotaWindow(rule.id, context.quotaWindowKey)
-        state.syncIdentityWindow(rule.id, context.identityWindowKey)
-        val lastAttempt = state.lastRuleAttemptAt(rule.id)
+        state.syncQuotaWindow(rule.stateKey, context.quotaWindowKey)
+        state.syncIdentityWindow(rule.stateKey, context.identityWindowKey)
+        val lastAttempt = state.lastRuleAttemptAt(rule.stateKey)
         val elapsed = lastAttempt?.let { nowMs - it }
         val rolledBack = elapsed != null && elapsed < 0
         val cooldown = rule.actionCoolDownMs
         when {
-            rolledBack -> state.reopenQuota(rule.id)
-            elapsed != null && cooldown > 0 && elapsed >= cooldown -> state.reopenQuota(rule.id)
+            rolledBack -> state.reopenQuota(rule.stateKey)
+            elapsed != null && cooldown > 0 && elapsed >= cooldown -> state.reopenQuota(rule.stateKey)
         }
 
         // ---- 第 2 层：绝对间隔（所有规则共用；先于规则冷却判定，因此叠加时上报它） ----
@@ -385,7 +420,7 @@ internal object AutomationRuleGate {
         }
 
         // ---- 第 4 层：actionMaximum（唯一闸门；冷却只决定配额何时重开） ----
-        val used = state.used(rule.id)
+        val used = state.used(rule.stateKey)
         if (used >= rule.maxActions) {
             val reopen = if (cooldown > 0) "冷却到点后重开" else "冷却为 0 毫秒，只在界面变化时重开"
             return reject(
@@ -395,7 +430,7 @@ internal object AutomationRuleGate {
         }
 
         // ---- 指纹去重 ----
-        if (state.hasFingerprint(rule.id, context.fingerprint)) {
+        if (state.hasFingerprint(rule.stateKey, context.fingerprint)) {
             return reject(
                 AutomationGateCodes.DUPLICATE_FINGERPRINT,
                 "同一节点指纹在本轮配额内已执行过（防自触发循环），本次跳过",
@@ -403,7 +438,7 @@ internal object AutomationRuleGate {
         }
         // 判定放行 = 动作即将执行：在这里登记本规则的尝试时间，冷却与配额重开都从这一刻起算。
         // 缺了这一步，lastRuleAttemptAt 永远是 null，第 3 层冷却与「冷却到点重开配额」就整层失效。
-        state.markRuleAttempt(rule.id, nowMs)
+        state.markRuleAttempt(rule.stateKey, nowMs)
         return AutomationGateDecision.Allowed
     }
 
@@ -593,10 +628,14 @@ internal object AutomationRuleExecutor {
         apply: Boolean = true,
         eventSequence: Long = 0L,
     ): AutomationExecutionReport {
-        if (rules.isEmpty()) return AutomationExecutionReport.EMPTY
-        // 一次性的空抑制状态：匹配器只做匹配，节流判定全在闸门里（见文件头第 1 条取舍）。
-        val matched = AutomationRuleMatcher.match(root, screen, rules, AutomationMatchState(), nowMs)
-        val rulesById = rules.associateBy { it.id }
+        val currentRules = rules.filter { it.packageName == screen.packageName }
+        gate.beginMatchWindow(baseWindowKey(screen))
+        val delayedRules = gate.delayedRules(currentRules, nowMs)
+        if (currentRules.isEmpty()) return AutomationExecutionReport.EMPTY
+        // 保留原规则用于执行，只把本窗口尚需等待的时间交给匹配器。
+        val matched = AutomationRuleMatcher.match(root, screen, delayedRules, AutomationMatchState(), nowMs)
+        val rulesById = currentRules.associateBy { it.id }
+        val delayById = delayedRules.associateBy { it.id }
         val refsByPath = root?.flatten().orEmpty().associateBy { it.path }
         val identityWindow = baseWindowKey(screen)
         val results = ArrayList<AutomationActionResult>()
@@ -609,7 +648,7 @@ internal object AutomationRuleExecutor {
         // 「稍后重新判定一次」交给服务侧排期——延迟后重新匹配是服务侧的责任，不是匹配器的。
         for (skip in matched.skipped) {
             if (skip.code != AutomationSkipCodes.MATCH_DELAY_PENDING) continue
-            val rule = rulesById[skip.ruleId] ?: continue
+            val rule = delayById[skip.ruleId] ?: continue
             if (rule.matchDelayMs > 0) nextDelayMs = earliest(nextDelayMs, rule.matchDelayMs)
         }
 
@@ -649,12 +688,12 @@ internal object AutomationRuleExecutor {
                     var streak: Int? = null
                     if (apply) {
                         if (outcome.ok) {
-                            quotaUsed = AutomationRuleGate.recordSuccess(gate, rule.id, fingerprint)
+                            quotaUsed = AutomationRuleGate.recordSuccess(gate, rule.stateKey, fingerprint)
                         } else if (outcome.performed) {
                             // 只有「动作真的发给了后端、并被平台拒绝」的失败才计入连续失败。节点在判定与执行之间
                             // 被替换/消失、服务没接后端、按键不可注入这类结果根本没发出动作，属于瞬时或环境问题：
                             // 把它们算进失败，会在界面刷新频繁时误停用一条本来能用的规则。
-                            streak = AutomationRuleGate.recordFailure(gate, rule.id)
+                            streak = AutomationRuleGate.recordFailure(gate, rule.stateKey)
                             if (streak >= AutomationRuleGate.FAILURE_LIMIT) {
                                 autoDisabledIds += rule.id
                                 notices += "规则「${rule.id}」（应用 ${screen.packageName}）连续失败 $streak 次，" +

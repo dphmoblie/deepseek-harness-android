@@ -1,23 +1,4 @@
-# Gitleaks 配置：沿用官方内建规则，只放行「故意的诱饵凭据」所在文件。
-#
-# 背景：`.env.example` 里放的是**假密钥**，用于让「扫描公开仓库、收集疑似 API Key
-# 再逐个试探」的自动化工具浪费配额、产生无法与真钥匙区分的噪声。这些值不是凭据，
-# 但它们**必须**长得和真钥匙一样（前缀、长度、字符集一致）才有效果，因此必然会被
-# 通用规则命中。放行范围严格限定在这一个文件，其他任何文件照常扫描。
-#
-# 注意：这是**纵深防御的最后一层**，不是主防线。真正防泄露的是
-#   * `.gitignore` 忽略 `.env` / `*.keystore` / `keystore.properties`；
-#   * 供应商密钥经 Android Keystore 加密，只以进程环境变量注入运行时；
-#   * 提交前人工 `git diff` 检查。
-# 诱饵只影响「已经泄露出去之后」的攻击者成本。
-title = "DeepSeek Harness 安卓版 gitleaks 配置"
-
+# All source and example files use the default credential-scanning rules.
+title = "DeepSeek Harness Android"
 [extend]
-# 保留官方全部内建规则；下面只是在它们之上加放行项。
 useDefault = true
-
-[allowlists]
-description = "示例配置中的诱饵凭据：故意公开，不构成泄露"
-paths = [
-  '''^\.env\.example$''',
-]

@@ -42,6 +42,7 @@ class VirtualScreenService : Service() {
     private val executor = Executors.newSingleThreadExecutor()
     private val owner = Binder()
     private val ending = AtomicBoolean(false)
+    private val stopped = java.util.concurrent.CompletableFuture<Boolean>()
     private val main = Handler(Looper.getMainLooper())
     private val audit by lazy { PrivateAuditLog(this) }
     private var acquiredRuntime = false
@@ -138,7 +139,7 @@ class VirtualScreenService : Service() {
                 try {
                     check(DeviceShellAccess.enabled(this@VirtualScreenService))
                     if (session.isNotEmpty()) {
-                        if (snapshot.optString("autoFollow", "off") != "off" && canObserve() && actionSlot.tryAcquire()) {
+                        if (canObserve() && actionSlot.tryAcquire()) {
                             try { shizuku?.virtualScreenAction(JSONObject().put("sessionId", session).put("action", "autoFollowTick").put("selfPackage", packageName).toString()) }
                             finally { actionSlot.release() }
                         }
@@ -226,15 +227,11 @@ class VirtualScreenService : Service() {
     fun canObserve(): Boolean = !ending.get() && DeviceShellAccess.enabled(this) &&
         !getSystemService(KeyguardManager::class.java).isDeviceLocked && getSystemService(PowerManager::class.java).isInteractive
 
-    /**
-     * 请求结束会话：与 `action({"action":"stop"})` 同一套收尾，但**不需要调用方先知道 sessionId**
-     * —— 独立设置页只想知道「副屏还在不在」。返回 `{stopping, active}`：
-     * `active=false` 表示本来就没有会话（含「正在启动、还没拿到 sessionId」），调用方据此把界面置为已停止。
-     */
-    fun requestStop(): JSONObject {
-        if (ending.get()) return JSONObject().put("stopping", false).put("active", false)
+    /** 停止请求立即封锁输入；完成信号只在旧显示真正释放后发出。 */
+    fun requestStop(): java.util.concurrent.CompletableFuture<Boolean> {
+        ending.set(true)
         main.post { stopSelf() }
-        return JSONObject().put("stopping", true).put("active", session.isNotEmpty())
+        return stopped
     }
 
     private fun requireAccess() {
@@ -579,7 +576,6 @@ class VirtualScreenService : Service() {
 
     override fun onDestroy() {
         ending.set(true)
-        if (current === this) current = null
         main.removeCallbacks(health)
         hideOverlay()
         executor.execute {
@@ -588,9 +584,16 @@ class VirtualScreenService : Service() {
                 if (session.isNotEmpty()) shizuku?.closeVirtualScreen(session)
             } catch (_: Exception) { released = false }
             finally {
-                audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, if (released) AuditResult.SUCCEEDED else AuditResult.FAILED,
-                    if (released) "CLOSED" else "CLOSE_FAILED")
-                if (acquiredRuntime) RuntimeHost.detachPluginSink(sink)
+                try {
+                    audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, if (released) AuditResult.SUCCEEDED else AuditResult.FAILED,
+                        if (released) "CLOSED" else "CLOSE_FAILED")
+                } finally {
+                    if (acquiredRuntime) runCatching { RuntimeHost.detachPluginSink(sink) }
+                    main.post {
+                        if (current === this) current = null
+                        stopped.complete(released)
+                    }
+                }
             }
         }
         executor.shutdown()

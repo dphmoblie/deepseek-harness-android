@@ -310,8 +310,10 @@ describe('目标应用副屏设置页', () => {
     expect(await screen.findByText('已请求停止副屏')).toBeInTheDocument()
   })
 
-  it('重启先停再起，两步都真的发出去', async () => {
-    const stop = vi.fn().mockResolvedValue(undefined)
+  it('重启先等旧显示释放再启动，两步都真的发出去', async () => {
+    let release!: () => void
+    const stopping = new Promise<void>((resolve) => { release = resolve })
+    const stop = vi.fn(() => stopping)
     const start = vi.fn().mockResolvedValue(undefined)
     const bridge = bridgeWith({
       getVirtualScreenSettings: vi.fn().mockResolvedValue(settings()),
@@ -321,9 +323,31 @@ describe('目标应用副屏设置页', () => {
     })
     render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
     fireEvent.click(await screen.findByRole('button', { name: '重启副屏' }))
+    await waitFor(() => expect(stop).toHaveBeenCalledOnce())
+    expect(start).not.toHaveBeenCalled()
+    release()
     await waitFor(() => expect(start).toHaveBeenCalledOnce())
-    expect(stop).toHaveBeenCalledOnce()
     expect(await screen.findByText('已请求重启副屏；画面与帧率以状态区读数为准')).toBeInTheDocument()
+  })
+
+  it('重启等待原生停止完成，停止失败时不启动新副屏', async () => {
+    let rejectStop!: (error: Error) => void
+    const stopping = new Promise<void>((_, reject) => { rejectStop = reject })
+    const stop = vi.fn(() => stopping)
+    const start = vi.fn().mockResolvedValue(undefined)
+    const bridge = bridgeWith({
+      getVirtualScreenSettings: vi.fn().mockResolvedValue(settings()),
+      getVirtualScreenState: vi.fn().mockResolvedValue(state({ targetPackage: 'com.example.target' })),
+      stopVirtualScreen: stop,
+      startVirtualScreen: start,
+    })
+    render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
+    fireEvent.click(await screen.findByRole('button', { name: '重启副屏' }))
+    await waitFor(() => expect(stop).toHaveBeenCalledOnce())
+    expect(start).not.toHaveBeenCalled()
+    rejectStop(new Error('旧副屏尚未释放'))
+    await screen.findByRole('alert')
+    expect(start).not.toHaveBeenCalled()
   })
 
   it('打开系统副屏页面失败时如实报错，不假装打开了', async () => {
