@@ -494,6 +494,8 @@ export const ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES: string[] = ['io.deepseekharn
  */
 export interface AccessibilityAutomationState {
   enabled: boolean
+  /** 是否限制为白名单内应用；默认开启，与无障碍服务是否开启独立。 */
+  whitelistEnabled: boolean
   /** 有效白名单：已包含自动项（本应用）。 */
   allowedPackages: string[]
   /** 自动包含、界面上不可移除的包名（当前恒为 [ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES]）。 */
@@ -998,14 +1000,14 @@ export interface RuntimeBridge {
   getDeviceShellAccess: () => Promise<DeviceShellAccessState>
   setDeviceShellAccess: (enabled: boolean) => Promise<DeviceShellAccessState>
   /**
-   * 保存目标应用包名白名单；只能由用户在设置页修改。
+   * 保存目标应用包名白名单及限制开关；省略开关时保留现值，只能由用户在设置页修改。
    *
    * **每次修改都要带验证密码**（`password`），由原生侧比对后才会落盘；
    * 密码只在这一次调用里出现过桥，**不落到前端存储、也不进日志**。
    * 返回值里的 `allowedPackages` 是原生合并自动项之后的**有效白名单**，界面必须用它刷新，
    * 不能拿本地那份入参当结果。[alwaysAllowedPackages] 里的条目由原生自动保证，界面不可移除。
    */
-  setAccessibilityAutomationPackages: (packages: string[], password?: string) => Promise<AccessibilityAutomationState>
+  setAccessibilityAutomationPackages: (packages: string[], password?: string, whitelistEnabled?: boolean) => Promise<AccessibilityAutomationState>
   /**
    * 设置或修改「白名单验证密码」。
    *

@@ -147,6 +147,25 @@ describe('browser settings bridge', () => {
 })
 
 describe('浏览器桥的无障碍白名单与验证密码', () => {
+  it('限制开关默认开启，密码验证后可关闭并恢复；旧调用和清密码保留开关', async () => {
+    const bridge = createBrowserBridge()
+    expect((await bridge.getAccessibilityAutomationState()).whitelistEnabled).toBe(true)
+    const packages = ['com.example.reader']
+    await bridge.setAccessibilityAutomationPackages(packages)
+    const before = await bridge.setAccessibilityPassword('test-passphrase')
+    await expect(bridge.setAccessibilityAutomationPackages(packages, undefined, false)).rejects.toThrow('需要验证密码')
+    await expect(bridge.setAccessibilityAutomationPackages(packages, 'wrong-passphrase', false)).rejects.toThrow('验证密码不正确')
+    expect(await bridge.getAccessibilityAutomationState()).toEqual(before)
+    const disabled = await bridge.setAccessibilityAutomationPackages(packages, 'test-passphrase', false)
+    expect(disabled.whitelistEnabled).toBe(false)
+    expect(disabled.allowedPackages).toEqual(before.allowedPackages)
+    expect((await bridge.setAccessibilityAutomationPackages(packages, 'test-passphrase')).whitelistEnabled).toBe(false)
+    expect((await bridge.clearAccessibilityPassword('test-passphrase')).whitelistEnabled).toBe(false)
+    const enabled = await bridge.setAccessibilityAutomationPackages(packages, undefined, true)
+    expect(enabled.whitelistEnabled).toBe(true)
+    expect(enabled.allowedPackages).toEqual(before.allowedPackages)
+  })
+
   it('白名单永远带上自动项；条目数量不设上限，但包名格式仍然校验', async () => {
     const bridge = createBrowserBridge()
 

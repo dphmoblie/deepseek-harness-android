@@ -905,6 +905,8 @@ export function validateAccessibilityAutomationState(value: unknown): Accessibil
   return {
     enabled: state.enabled,
     allowedPackages: accessibilityPackages(state.allowedPackages, '无障碍白名单'),
+    // 兼容旧版壳：缺省仍开启限制，其他非布尔值拒绝。
+    whitelistEnabled: state.whitelistEnabled === undefined ? true : requiredBoolean(state.whitelistEnabled, '无障碍白名单开关'),
     alwaysAllowedPackages: accessibilityPackages(state.alwaysAllowedPackages, '无障碍自动白名单'),
     passwordConfigured: requiredBoolean(state.passwordConfigured, '无障碍验证密码状态'),
   }

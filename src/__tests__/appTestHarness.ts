@@ -290,6 +290,7 @@ export function beforeEachAppTest(): void {
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
   bridge.getAccessibilityAutomationState.mockResolvedValue({
     enabled: false,
+    whitelistEnabled: true,
     allowedPackages: [],
     alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
     passwordConfigured: false,
@@ -300,12 +301,13 @@ export function beforeEachAppTest(): void {
   bridge.openVirtualScreen.mockResolvedValue(undefined)
   // 第二个参数是「本次修改白名单」的验证密码；夹具不比对密码（那是原生侧的事），
   // 但**签名必须收**，否则用例里带密码调用会落进 `undefined` 分支，测的还是旧行为。
-  bridge.setAccessibilityAutomationPackages.mockImplementation((packages: string[], ...rest: [password?: string]) => {
+  bridge.setAccessibilityAutomationPackages.mockImplementation((packages: string[], ...rest: [password?: string, whitelistEnabled?: boolean]) => {
     // 收下密码只为证明「带密码调用」也走同一条路径：夹具不校验它，也绝不回显它。
     const passwordIgnored = rest.length
     void passwordIgnored
     return Promise.resolve({
       enabled: false,
+      whitelistEnabled: rest[1] ?? true,
       allowedPackages: [...new Set([...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, ...packages])],
       alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
       passwordConfigured: false,
@@ -316,6 +318,7 @@ export function beforeEachAppTest(): void {
   // 每次都新建数组，避免不同用例共用同一个引用。
   const accessibilityState = (passwordConfigured: boolean) => ({
     enabled: false,
+    whitelistEnabled: true,
     allowedPackages: [] as string[],
     alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
     passwordConfigured,

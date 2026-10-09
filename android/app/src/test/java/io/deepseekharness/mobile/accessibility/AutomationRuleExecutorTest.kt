@@ -167,6 +167,21 @@ class AutomationRuleExecutorTest {
     // ---- 策略：白名单与自身包名 ----
 
     @Test
+    fun `限制关闭后名单外应用可以执行再开启立即拒绝`() {
+        val tree = container(text("确定"))
+        val rule = rule(Selector(text = "确定"))
+        val backend = FakeBackend(tree)
+        val state = AutomationGateState()
+        val allowed = execute(backend, tree, rule, state, 0, allowedPackages = emptySet(), whitelistEnabled = false)
+        assertTrue(allowed.performed.single().ok)
+        assertEquals(listOf("click"), backend.calls)
+        val blocked = execute(backend, tree, rule, state, 1000, allowedPackages = emptySet(), whitelistEnabled = true)
+        assertTrue(blocked.results.isEmpty())
+        assertEquals(AutomationGateCodes.PACKAGE_NOT_ALLOWED, blocked.skipped.single().code)
+        assertEquals(listOf("click"), backend.calls)
+    }
+
+    @Test
     fun `白名单外的应用一次动作都不执行`() {
         val tree = container(text("确定"))
         val rule = rule(Selector(text = "确定"))
@@ -447,6 +462,7 @@ class AutomationRuleExecutorTest {
         screen: AutomationScreenInfo = screen(),
         apply: Boolean = true,
         eventSequence: Long = 0L,
+        whitelistEnabled: Boolean = true,
     ): AutomationExecutionReport = AutomationRuleExecutor.execute(
         backend = backend,
         root = tree,
@@ -457,6 +473,7 @@ class AutomationRuleExecutorTest {
         allowedPackages = allowedPackages,
         apply = apply,
         eventSequence = eventSequence,
+        whitelistEnabled = whitelistEnabled,
     )
 
     private fun rule(

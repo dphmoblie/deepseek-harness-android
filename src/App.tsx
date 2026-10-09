@@ -834,6 +834,7 @@ function Brand() {
 // 真实取值由 getAccessibilityAutomationState 回填，这里不预置任何包名。
 const EMPTY_ACCESSIBILITY: AccessibilityAutomationState = {
   enabled: false,
+  whitelistEnabled: true,
   allowedPackages: [],
   alwaysAllowedPackages: [],
   passwordConfigured: false,
@@ -3509,7 +3510,7 @@ interface SettingsScreenProps {
    * 保存白名单。已设置验证密码时**必须**带上 `password`：
    * 原生侧会拒绝不带密码的修改，这里也先在前端拦一道，省掉一次必然失败的桥调用。
    */
-  onSaveAccessibilityPackages: (packages: string[], password?: string) => void
+  onSaveAccessibilityPackages: (packages: string[], password?: string, whitelistEnabled?: boolean) => void
   /** 设置（省略 currentPassword）或修改（必须带 currentPassword）白名单验证密码。 */
   onSaveAccessibilityPassword: (password: string, currentPassword?: string) => void
   /** 清除验证密码；必须带上当前密码。 */
@@ -3524,6 +3525,7 @@ interface SettingsScreenProps {
 
 function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenVirtualScreen, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
+  const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
   /**
    * 保存白名单时要输入的验证密码。
    *
@@ -3562,16 +3564,17 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   const saveAccessibilityDraft = () => {
     const packages = accessibilityDraft.split(/[\n,]/u).map(value => value.trim()).filter(Boolean)
     const password = accessibility.passwordConfigured && whitelistPassword !== '' ? whitelistPassword : undefined
-    onSaveAccessibilityPackages([...new Set(packages)], password)
+    onSaveAccessibilityPackages([...new Set(packages)], password, whitelistEnabledDraft)
     setWhitelistPassword('')
   }
   useEffect(() => {
     if (page !== 'shizuku') return
     setAccessibilityDraft(accessibility.allowedPackages.join('\n'))
+    setWhitelistEnabledDraft(accessibility.whitelistEnabled ?? true)
     // 每次回到这一页都从空白开始：密码是临时输入，不回填、不残留。
     setWhitelistPassword('')
     setPasswordDraft({ current: '', next: '', confirm: '' })
-  }, [accessibility.allowedPackages, page])
+  }, [accessibility.allowedPackages, accessibility.whitelistEnabled, page])
   if (settingsReadStatus === 'failed') {
     return <div className="screen loading-screen">
       <p role="alert">{t("无法读取最新设置，请重试")}</p>
@@ -4013,11 +4016,20 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           <div className="settings-subsection" aria-labelledby="accessibility-automation-settings">
             <div className="section-title section-title-action">
               <span className="section-icon"><Bot size={19} /></span>
-              <div><h3 id="accessibility-automation-settings">{t("无障碍应用自动化")}</h3><p>{t("读取白名单应用的界面并执行受控动作")}</p></div>
+              <div><h3 id="accessibility-automation-settings">{t("无障碍应用自动化")}</h3><p>{t("读取允许的应用界面并执行受控动作")}</p></div>
               <span className={`status-chip ${accessibility.enabled ? 'success' : ''}`}>{accessibility.enabled ? t("服务已开启") : t("需要手动开启")}</span>
             </div>
             <p className="settings-note">
-              {t("允许你列出的应用，包括厂商自带的普通应用。锁屏、系统设置及涉及权限、支付、验证码和密码的页面仍受保护；服务必须由你在系统无障碍设置中手动开启。")}
+              {t("开启白名单限制时仅允许列表内的应用；关闭后可操作未加入名单的普通应用。锁屏、系统设置及涉及权限、支付、验证码和密码的页面仍受保护；服务必须由你在系统无障碍设置中手动开启。")}
+            </p>
+            <label className="toggle-row">
+              <span><strong>{t("启用无障碍白名单限制")}</strong><small>{t("关闭不会清空名单；修改后点击「保存白名单」生效，已设密码时仍需验证。")}</small></span>
+              <input type="checkbox" role="switch" aria-label={t("启用无障碍白名单限制")}
+                checked={whitelistEnabledDraft} disabled={busy !== null}
+                onChange={event => setWhitelistEnabledDraft(event.target.checked)} />
+            </label>
+            <p className="settings-note" role="status">
+              {accessibility.whitelistEnabled === false ? t("当前生效：白名单限制已关闭") : t("当前生效：白名单限制已开启")}
             </p>
             <p className="settings-note">
               {t("本应用（{0}）始终在白名单里：服务重启、连接重建都不会掉，也不需要写进下面的列表。", accessibility.alwaysAllowedPackages.length ? accessibility.alwaysAllowedPackages.join("、") : t("未配置"))}
@@ -4739,6 +4751,8 @@ export function App() {
       .then(next => {
         if (!cancelled) setAccessibility(previous => (
           previous.enabled === next.enabled &&
+          previous.whitelistEnabled === next.whitelistEnabled &&
+          previous.passwordConfigured === next.passwordConfigured &&
           previous.allowedPackages.length === next.allowedPackages.length &&
           previous.allowedPackages.every((value, index) => value === next.allowedPackages[index])
             ? previous
@@ -4818,6 +4832,8 @@ export function App() {
         .then(next => {
           if (!cancelled) setAccessibility(previous => (
             previous.enabled === next.enabled &&
+            previous.whitelistEnabled === next.whitelistEnabled &&
+            previous.passwordConfigured === next.passwordConfigured &&
             previous.allowedPackages.length === next.allowedPackages.length &&
             previous.allowedPackages.every((value, index) => value === next.allowedPackages[index])
               ? previous
@@ -5415,7 +5431,7 @@ export function App() {
     void run('open-accessibility-settings', () => runtimeBridge.openAccessibilitySettings())
   }, [run])
 
-  const saveAccessibilityPackages = useCallback((packages: string[], password?: string) => {
+  const saveAccessibilityPackages = useCallback((packages: string[], password?: string, whitelistEnabled?: boolean) => {
     // 已设置验证密码却没交密码：在本地就挡下来，不白发一次必然失败的桥调用。
     // 错误文案里不出现用户输入的任何内容。
     if (accessibility.passwordConfigured && (password === undefined || password === '')) {
@@ -5423,7 +5439,7 @@ export function App() {
       return
     }
     void run('save-accessibility-packages', async () => {
-      const next = await runtimeBridge.setAccessibilityAutomationPackages(packages, password)
+      const next = await runtimeBridge.setAccessibilityAutomationPackages(packages, password, whitelistEnabled)
       setAccessibility(next)
     }, t("无障碍应用白名单已保存"))
   }, [accessibility.passwordConfigured, notify, run])

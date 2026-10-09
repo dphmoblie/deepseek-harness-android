@@ -136,8 +136,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         }
         val root = rootInActiveWindow ?: return failure("ACCESSIBILITY_WINDOW_UNAVAILABLE", "当前没有可读取的应用窗口")
         val packageName = root.packageName?.toString().orEmpty()
-        val allowed = AccessibilityAutomationStore.allowedPackages(this)
-        if (!AccessibilityAutomationPolicy.validPackage(packageName) || packageName !in allowed) {
+        if (!AccessibilityAutomationStore.packageAllowed(this, packageName)) {
             return failure("ACCESSIBILITY_PACKAGE_DENIED", "当前应用不在无障碍自动化白名单中")
         }
         if (containsSensitiveWindow(root)) return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到密码、验证码、支付或权限窗口，已拒绝自动化")
@@ -363,7 +362,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         if (now - lastActionAt < ACTION_INTERVAL_MS) return failure("ACCESSIBILITY_RATE_LIMITED", "无障碍动作过于频繁，请稍后再试")
         val root = rootInActiveWindow ?: return failure("ACCESSIBILITY_WINDOW_UNAVAILABLE", "当前没有可读取的应用窗口")
         val packageName = root.packageName?.toString().orEmpty()
-        if (packageName != request.packageName || packageName !in AccessibilityAutomationStore.allowedPackages(this)) {
+        if (packageName != request.packageName || !AccessibilityAutomationStore.packageAllowed(this, packageName)) {
             return failure("ACCESSIBILITY_PACKAGE_DENIED", "确认后前台应用已变化")
         }
         if (containsSensitiveWindow(root)) return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "确认后检测到敏感窗口")
@@ -888,6 +887,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
 
     private class AutomationEvaluation(
         val allowedPackages: Set<String>,
+        val whitelistEnabled: Boolean,
         val tree: AutomationTreeSnapshot,
         val deviceLocked: Boolean,
         val sensitiveWindow: Boolean,
@@ -913,9 +913,10 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         // 系统界面的窗口变化太频繁，也不该成为自动化的输入：它们只是"屏幕上多了个东西"。
         if (eventPackage == "android" || eventPackage == "com.android.systemui") return
         val allowed = AccessibilityAutomationStore.allowedPackages(this)
+        val whitelistEnabled = AccessibilityAutomationStore.whitelistEnabled(this)
         // 执行前的第一道白名单：事件包名必须被允许。应用自身包名也在白名单里（策略如此），
         // 但闸门默认额外拒绝对自身执行动作（防自触发），所以这里不需要特殊处理。
-        if (eventPackage !in allowed) return
+        if (!AccessibilityAutomationPolicy.packageAllowed(eventPackage, allowed, whitelistEnabled)) return
         // 第 1 层：事件准入。被节流的事件直接丢弃，不排队、不补做。
         if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) return
         val root = rootInActiveWindow ?: return
@@ -929,6 +930,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         runAutomationEvaluation(
             AutomationEvaluation(
                 allowedPackages = allowed,
+                whitelistEnabled = whitelistEnabled,
                 tree = snapshot,
                 deviceLocked = false,
                 sensitiveWindow = sensitiveWindow,
@@ -972,18 +974,20 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return
         val nowMs = SystemClock.elapsedRealtime()
         val allowed = AccessibilityAutomationStore.allowedPackages(this)
+        val whitelistEnabled = AccessibilityAutomationStore.whitelistEnabled(this)
         if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) {
             scheduleAutomationReevaluation(AutomationRuleGate.EVENT_THROTTLE_MS.toInt())
             return
         }
         val snapshot = buildAutomationTree(root)
-        if (snapshot.packageName !in allowed) return
+        if (!AccessibilityAutomationPolicy.packageAllowed(snapshot.packageName, allowed, whitelistEnabled)) return
         if (isLockedOrScreenOff()) return
         val rules = loadAutomationRules(snapshot.packageName)
         if (rules.isEmpty()) return
         runAutomationEvaluation(
             AutomationEvaluation(
                 allowedPackages = allowed,
+                whitelistEnabled = whitelistEnabled,
                 tree = snapshot,
                 deviceLocked = false,
                 sensitiveWindow = containsSensitiveWindow(root),
@@ -1021,6 +1025,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             gate = automationGate,
             nowMs = nowMs,
             allowedPackages = evaluation.allowedPackages,
+            whitelistEnabled = evaluation.whitelistEnabled,
             deviceLocked = evaluation.deviceLocked,
             sensitiveWindow = evaluation.sensitiveWindow,
             apply = apply,
@@ -1071,8 +1076,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
 
     /** 只读取当前应用规则；规则状态使用包名与 ID 的组合键。 */
     private fun loadAutomationRules(packageName: String): List<AutomationRule> {
-        if (!AccessibilityAutomationPolicy.validPackage(packageName) ||
-            packageName !in AccessibilityAutomationStore.allowedPackages(this)) return emptyList()
+        if (!AccessibilityAutomationStore.packageAllowed(this, packageName)) return emptyList()
         val read = AutomationRuleStore.readPackage(AutomationRulePreferences.from(this), packageName)
         if (read !is AutomationRuleStore.PackageRead.Ok) return emptyList()
         for (rule in read.rules) {
@@ -1092,7 +1096,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         if (!AccessibilityAutomationPolicy.validPackage(requested)) {
             return failure("AUTOMATION_RULES_PACKAGE_INVALID", "包名不合法：$requested")
         }
-        if (requested !in AccessibilityAutomationStore.allowedPackages(this)) {
+        if (!AccessibilityAutomationStore.packageAllowed(this, requested)) {
             automationEnabled = false
             return failure("AUTOMATION_RULES_PACKAGE_DENIED", "应用 $requested 不在无障碍自动化白名单内")
         }
@@ -1363,7 +1367,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             // 安全校验实际接收应用，并绑定组件，防止默认处理程序变化后绕过白名单。
             val resolved = intent.resolveActivity(service.packageManager)
                 ?: return BackendOutcome.Refused("AUTOMATION_LAUNCH_TARGET_INVALID", "无法解析启动目标")
-            if (!AutomationLaunchPolicy.allowed(resolved.packageName, AccessibilityAutomationStore.allowedPackages(service))) {
+            if (!AccessibilityAutomationStore.packageAllowed(service, resolved.packageName)) {
                 return BackendOutcome.Refused(AutomationGateCodes.PACKAGE_NOT_ALLOWED, "启动目标不在自动化白名单内")
             }
             intent.component = resolved

@@ -25,9 +25,10 @@ describe('无障碍白名单与验证密码', () => {
   afterEach(() => vi.restoreAllMocks())
 
   /** 原生侧返回的白名单状态：有效白名单里已包含自动项，与真机语义一致。 */
-  function accessibilityState(passwordConfigured: boolean, allowed: string[] = []) {
+  function accessibilityState(passwordConfigured: boolean, allowed: string[] = [], whitelistEnabled = true) {
     return {
       enabled: false,
+      whitelistEnabled,
       allowedPackages: [...new Set([...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, ...allowed])],
       alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
       passwordConfigured,
@@ -60,7 +61,7 @@ describe('无障碍白名单与验证密码', () => {
     fireEvent.change(await screen.findByLabelText('目标应用包名'), { target: { value: 'com.example.reader' } })
     fireEvent.click(screen.getByRole('button', { name: '保存白名单' }))
 
-    await waitFor(() => expect(bridge.setAccessibilityAutomationPackages).toHaveBeenCalledWith(['com.example.reader'], undefined))
+    await waitFor(() => expect(bridge.setAccessibilityAutomationPackages).toHaveBeenCalledWith(['com.example.reader'], undefined, true))
     expect(await screen.findByText('无障碍应用白名单已保存')).toBeInTheDocument()
   })
 
@@ -87,9 +88,59 @@ describe('无障碍白名单与验证密码', () => {
     await waitFor(() => expect(bridge.setAccessibilityAutomationPackages).toHaveBeenCalledWith(
       ['com.example.reader', 'com.example.notes'],
       'passphrase-1',
+      true,
     ))
     // 密码只用于本次过桥：提交后界面不留存（原生侧也只保存盐与哈希）。
     await waitFor(() => expect(passwordInput.value).toBe(''))
+  })
+
+  it('默认开启限制，关闭并保存后保留名单，再开启恢复限制', async () => {
+    await openAccessibilityPage(false, ['com.example.reader'])
+    const toggle = screen.getByRole('switch', { name: '启用无障碍白名单限制' })
+    const packages = [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, 'com.example.reader']
+    expect(toggle).toBeChecked()
+    fireEvent.click(toggle)
+    expect(screen.getByText('当前生效：白名单限制已开启')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '保存白名单' }))
+    await waitFor(() => expect(bridge.setAccessibilityAutomationPackages).toHaveBeenCalledWith(packages, undefined, false))
+    expect(await screen.findByText('当前生效：白名单限制已关闭')).toBeInTheDocument()
+    expect(screen.getByLabelText('目标应用包名')).toHaveValue(packages.join('\n'))
+    fireEvent.click(toggle)
+    fireEvent.click(screen.getByRole('button', { name: '保存白名单' }))
+    await waitFor(() => expect(bridge.setAccessibilityAutomationPackages).toHaveBeenLastCalledWith(packages, undefined, true))
+    expect(await screen.findByText('当前生效：白名单限制已开启')).toBeInTheDocument()
+  })
+
+  it('关闭限制仍需密码；保存失败不改变当前生效状态', async () => {
+    await openAccessibilityPage(true, ['com.example.reader'])
+    fireEvent.click(screen.getByRole('switch', { name: '启用无障碍白名单限制' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存白名单' }))
+    expect(await screen.findByText('修改无障碍白名单需要先输入验证密码')).toBeInTheDocument()
+    expect(bridge.setAccessibilityAutomationPackages).not.toHaveBeenCalled()
+    bridge.setAccessibilityAutomationPackages.mockRejectedValueOnce(new Error('验证密码不正确'))
+    fireEvent.change(screen.getByLabelText('修改白名单的验证密码'), { target: { value: 'wrong-passphrase' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存白名单' }))
+    expect(await screen.findByText('验证密码不正确')).toBeInTheDocument()
+    expect(screen.getByText('当前生效：白名单限制已开启')).toBeInTheDocument()
+    expect(screen.queryByText('当前生效：白名单限制已关闭')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('修改白名单的验证密码')).toHaveValue('')
+    bridge.setAccessibilityAutomationPackages.mockResolvedValueOnce(accessibilityState(true, ['com.example.reader'], false))
+    fireEvent.change(screen.getByLabelText('修改白名单的验证密码'), { target: { value: 'test-passphrase' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存白名单' }))
+    expect(await screen.findByText('当前生效：白名单限制已关闭')).toBeInTheDocument()
+    expect(bridge.setAccessibilityAutomationPackages).toHaveBeenLastCalledWith(
+      [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, 'com.example.reader'], 'test-passphrase', false,
+    )
+  })
+
+  it('重新读取已关闭的配置时正确回显开关与名单', async () => {
+    bridge.getAccessibilityAutomationState.mockResolvedValue(accessibilityState(false, ['com.example.reader'], false))
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('Shizuku 与设备 Shell')
+    expect(screen.getByRole('switch', { name: '启用无障碍白名单限制' })).not.toBeChecked()
+    expect(screen.getByText('当前生效：白名单限制已关闭')).toBeInTheDocument()
+    expect(screen.getByLabelText('目标应用包名')).toHaveValue('io.deepseekharness.mobile\ncom.example.reader')
   })
 
   it('两次输入的新密码不一致时在本地报错，桥一次都不调用', async () => {

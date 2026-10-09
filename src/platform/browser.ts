@@ -90,6 +90,7 @@ export function createBrowserBridge(): RuntimeBridge {
   // 验证密码同样只存在这个变量里，绝不写进 localStorage：浏览器桥不是凭据存储。
   let accessibility = {
     enabled: false,
+    whitelistEnabled: true,
     allowedPackages: [] as string[],
     alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
     passwordConfigured: false,
@@ -124,6 +125,7 @@ export function createBrowserBridge(): RuntimeBridge {
    */
   const accessibilitySnapshot = (): AccessibilityAutomationState => ({
     enabled: accessibility.enabled,
+    whitelistEnabled: accessibility.whitelistEnabled,
     allowedPackages: [...accessibility.allowedPackages],
     alwaysAllowedPackages: [...accessibility.alwaysAllowedPackages],
     passwordConfigured: accessibility.passwordConfigured,
@@ -294,7 +296,10 @@ export function createBrowserBridge(): RuntimeBridge {
     openShizuku: () => Promise.resolve(),
     getAccessibilityAutomationState: (): Promise<AccessibilityAutomationState> => Promise.resolve(accessibilitySnapshot()),
     // 白名单的修改必须带验证密码（与原生侧同一语义）；未设置密码时放行。
-    setAccessibilityAutomationPackages: (packages: string[], password?: string): Promise<AccessibilityAutomationState> => {
+    setAccessibilityAutomationPackages: (packages: string[], password?: string, whitelistEnabled?: boolean): Promise<AccessibilityAutomationState> => {
+      if (whitelistEnabled !== undefined && typeof whitelistEnabled !== 'boolean') {
+        return Promise.reject(new Error('无障碍白名单开关格式无效'))
+      }
       if (!Array.isArray(packages) ||
           packages.some(value => typeof value !== 'string' || !PACKAGE_NAME_PATTERN.test(value))) {
         return Promise.reject(new Error('无障碍白名单格式无效'))
@@ -311,6 +316,7 @@ export function createBrowserBridge(): RuntimeBridge {
       // 自动项：无论用户传什么都在结果里，且排在前面（原生侧返回的有效白名单就是这个形态）。
       accessibility = {
         ...accessibility,
+        whitelistEnabled: whitelistEnabled ?? accessibility.whitelistEnabled,
         allowedPackages: [...new Set([...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, ...packages])],
       }
       return Promise.resolve(accessibilitySnapshot())

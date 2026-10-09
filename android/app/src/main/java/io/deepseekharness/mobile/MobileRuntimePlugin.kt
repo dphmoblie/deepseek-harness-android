@@ -1799,7 +1799,11 @@ class MobileRuntimePlugin : Plugin() {
                 try {
                     // 本应用恒在白名单里（`withSelf`），用户传不传都会补上；已配置密码时缺密码/错密码
                     // 分别以 ACCESSIBILITY_PASSWORD_REQUIRED / _INVALID / _LOCKED 拒绝。
-                    accessibilityStateToJs(AccessibilityAutomationStore.setAllowedPackages(context, packages, password))
+                    val whitelistEnabled = if (call.data.has("whitelistEnabled")) {
+                        call.data.opt("whitelistEnabled") as? Boolean
+                            ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "无障碍白名单开关格式无效")
+                    } else null
+                    accessibilityStateToJs(AccessibilityAutomationStore.setAllowedPackages(context, packages, password, whitelistEnabled))
                 } catch (failure: AccessibilityGuardException) {
                     throw accessibilityGuardFailure(failure)
                 } catch (_: IllegalArgumentException) {
@@ -2764,13 +2768,14 @@ class MobileRuntimePlugin : Plugin() {
     /**
      * 无障碍状态过桥。
      *
-     * 四个字段一个都不能少：`src/platform/validation.ts` 的形状校验要求它们同时存在，
+     * 状态字段完整返回：`src/platform/validation.ts` 会校验它们的格式，
      * 缺一个整份状态就被判成「格式无效」，界面会把「读不到」显示成「没有自动项 / 没设密码」。
      * `alwaysAllowedPackages`（恒为 `[SELF_PACKAGE]`）与 `passwordConfigured` 都是布尔/包名，
      * **不含任何密码内容**。
      */
     private fun accessibilityStateToJs(state: JSONObject): JSObject = JSObject()
         .put("enabled", state.optBoolean("enabled", false))
+        .put("whitelistEnabled", state.optBoolean("whitelistEnabled", true))
         .put("allowedPackages", state.optJSONArray("allowedPackages") ?: org.json.JSONArray())
         .put("alwaysAllowedPackages", state.optJSONArray("alwaysAllowedPackages") ?: org.json.JSONArray())
         .put("passwordConfigured", state.optBoolean("passwordConfigured", false))

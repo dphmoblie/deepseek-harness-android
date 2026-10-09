@@ -103,9 +103,8 @@ internal object AutomationKeyRouting {
 }
 
 internal object AutomationLaunchPolicy {
-    fun allowed(packageName: String, allowedPackages: Set<String>): Boolean =
-        AccessibilityAutomationPolicy.validPackage(packageName) &&
-            packageName in allowedPackages
+    fun allowed(packageName: String, allowedPackages: Set<String>, whitelistEnabled: Boolean = true): Boolean =
+        AccessibilityAutomationPolicy.packageAllowed(packageName, allowedPackages, whitelistEnabled)
 }
 
 internal val AutomationRule.stateKey: String get() = "$packageName/$id"
@@ -277,7 +276,7 @@ internal data class AutomationGateContext(
     val fingerprint: String,
     /** 事件所属包名（前台应用），不是规则里写的包名。 */
     val packageName: String,
-    /** 服务侧当前的白名单（`AccessibilityAutomationStore.allowedPackages`）。空集合 = 一律拒绝。 */
+    /** 服务侧当前的白名单；限制开启时空集合一律拒绝。 */
     val allowedPackages: Set<String>,
     /** 身份窗口：包名/Activity 维度，只用它决定指纹何时失效。 */
     val identityWindowKey: String,
@@ -286,6 +285,7 @@ internal data class AutomationGateContext(
     val nowMs: Long,
     val deviceLocked: Boolean = false,
     val sensitiveWindow: Boolean = false,
+    val whitelistEnabled: Boolean = true,
 )
 
 /** 闸门判定：放行，或者拒绝并带上受控原因码与给用户看的中文原因。 */
@@ -364,7 +364,7 @@ internal object AutomationRuleGate {
                 "事件包名不是可自动化的应用包名（${context.packageName}），已跳过",
             )
         }
-        if (context.packageName !in context.allowedPackages) {
+        if (!AccessibilityAutomationPolicy.packageAllowed(context.packageName, context.allowedPackages, context.whitelistEnabled)) {
             return reject(
                 AutomationGateCodes.PACKAGE_NOT_ALLOWED,
                 "应用 ${context.packageName} 不在无障碍自动化白名单内",
@@ -383,9 +383,9 @@ internal object AutomationRuleGate {
             return reject(AutomationGateCodes.SENSITIVE_WINDOW, "检测到密码、验证码、支付或权限窗口")
         }
         if (rule.action.type == AutomationRuleMatcher.ACTION_LAUNCH && rule.action.uri.isNullOrEmpty()) {
-            // launch 的目标应用同样受白名单约束：白名单之外的应用，连"打开"都不做。
+            // launch 目标与当前应用使用同一准入策略。
             val target = rule.action.component?.substringBefore('/')?.trim().orEmpty()
-            if (target.isNotEmpty() && (!AccessibilityAutomationPolicy.validPackage(target) || target !in context.allowedPackages)) {
+            if (target.isNotEmpty() && !AutomationLaunchPolicy.allowed(target, context.allowedPackages, context.whitelistEnabled)) {
                 return reject(AutomationGateCodes.PACKAGE_NOT_ALLOWED, "launch 目标应用 $target 不在无障碍自动化白名单内")
             }
         }
@@ -627,6 +627,7 @@ internal object AutomationRuleExecutor {
         sensitiveWindow: Boolean = false,
         apply: Boolean = true,
         eventSequence: Long = 0L,
+        whitelistEnabled: Boolean = true,
     ): AutomationExecutionReport {
         val currentRules = rules.filter { it.packageName == screen.packageName }
         gate.beginMatchWindow(baseWindowKey(screen))
@@ -672,6 +673,7 @@ internal object AutomationRuleExecutor {
                 fingerprint = fingerprint,
                 packageName = screen.packageName,
                 allowedPackages = allowedPackages,
+                whitelistEnabled = whitelistEnabled,
                 identityWindowKey = identityWindow,
                 quotaWindowKey = quotaWindowKey(rule, screen, eventSequence),
                 nowMs = nowMs,

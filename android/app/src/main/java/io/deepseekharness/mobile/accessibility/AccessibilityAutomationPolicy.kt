@@ -49,6 +49,10 @@ internal object AccessibilityAutomationPolicy {
         packages.distinct().size == packages.size &&
             packages.all(::validPackage)
 
+    /** 关闭名单限制只放行普通应用，包名格式与受保护系统组件校验仍然生效。 */
+    fun packageAllowed(packageName: String, allowedPackages: Set<String>, whitelistEnabled: Boolean = true): Boolean =
+        validPackage(packageName) && (!whitelistEnabled || packageName in allowedPackages)
+
     /**
      * 白名单的唯一规范化口径：`trim` → 去重 → 补上 [SELF_PACKAGE] → 排序。
      *

@@ -9,6 +9,21 @@ import org.junit.Test
 
 class AccessibilityAutomationPolicyTest {
     @Test
+    fun whitelistToggleOnlyChangesOrdinaryPackageMembership() {
+        val listed = setOf("com.example.reader")
+        assertTrue(AccessibilityAutomationPolicy.packageAllowed("com.example.reader", listed))
+        assertFalse(AccessibilityAutomationPolicy.packageAllowed("com.example.notes", listed))
+        assertTrue(AccessibilityAutomationPolicy.packageAllowed("com.example.notes", listed, false))
+        assertTrue(AccessibilityAutomationPolicy.packageAllowed("com.miui.calculator", emptySet(), false))
+        assertFalse(AccessibilityAutomationPolicy.packageAllowed("com.example.notes", listed, true))
+        for (invalid in listOf("", "bad package", "com.example.reader;id", "android", "com.android.settings",
+            "com.android.systemui", "com.android.packageinstaller", "com.google.android.packageinstaller",
+            "com.google.android.permissioncontroller", "com.android.permissioncontroller")) {
+            assertFalse(invalid, AccessibilityAutomationPolicy.packageAllowed(invalid, setOf(invalid), false))
+        }
+    }
+
+    @Test
     fun whitelistHasNoCountLimitAndAllowsOrdinaryVendorApplications() {
         assertTrue(AccessibilityAutomationPolicy.validPackages((1..300).map { "com.example.app$it" }))
         assertTrue(AccessibilityAutomationPolicy.validPackage("com.miui.calculator"))

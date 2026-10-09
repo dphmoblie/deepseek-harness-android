@@ -359,12 +359,38 @@ class AutomationRuleGateTest {
     }
 
     @Test
-    fun `实际启动目标必须在白名单且不是自身或系统包`() {
+    fun `实际启动目标服从白名单开关且仍拒绝系统包`() {
         assertTrue(AutomationLaunchPolicy.allowed(APP, setOf(APP)))
         assertFalse(AutomationLaunchPolicy.allowed("com.browser.app", setOf(APP)))
         assertFalse(AutomationLaunchPolicy.allowed("android", setOf("android")))
         val self = AccessibilityAutomationPolicy.SELF_PACKAGE
         assertTrue(AutomationLaunchPolicy.allowed(self, setOf(self)))
+        assertTrue(AutomationLaunchPolicy.allowed("com.browser.app", setOf(APP), false))
+        assertFalse(AutomationLaunchPolicy.allowed("com.android.settings", emptySet(), false))
+        assertFalse(AutomationLaunchPolicy.allowed("invalid", emptySet(), false))
+    }
+
+    @Test
+    fun `关闭限制放行普通包和启动目标但不绕过锁屏或敏感窗口`() {
+        val state = AutomationGateState()
+        val rule = rule()
+        assertAllowed(check(state, rule, 0, allowedPackages = emptySet(), whitelistEnabled = false))
+        assertEquals(AutomationGateCodes.DEVICE_LOCKED, rejectCode(check(
+            state, rule, 0, allowedPackages = emptySet(), whitelistEnabled = false, deviceLocked = true,
+        )))
+        assertEquals(AutomationGateCodes.SENSITIVE_WINDOW, rejectCode(check(
+            state, rule, 0, allowedPackages = emptySet(), whitelistEnabled = false, sensitiveWindow = true,
+        )))
+        val launch = rule.copy(action = AutomationAction(type = "launch", component = "com.browser.app/.MainActivity"))
+        assertAllowed(check(state, launch, 0, allowedPackages = emptySet(), whitelistEnabled = false))
+        assertEquals(AutomationGateCodes.PACKAGE_NOT_ALLOWED, rejectCode(check(
+            state, launch.copy(action = launch.action.copy(component = "com.android.settings/.Settings")),
+            0, allowedPackages = emptySet(), whitelistEnabled = false,
+        )))
+        val self = AccessibilityAutomationPolicy.SELF_PACKAGE
+        assertEquals(AutomationGateCodes.SELF_PACKAGE_BLOCKED, rejectCode(check(
+            state, rule.copy(packageName = self), 0, packageName = self, allowedPackages = emptySet(), whitelistEnabled = false,
+        )))
     }
 
     // ---- 辅助 ----
@@ -380,6 +406,7 @@ class AutomationRuleGateTest {
         quotaWindowKey: String = "com.example.app/com.example.app.MainActivity",
         deviceLocked: Boolean = false,
         sensitiveWindow: Boolean = false,
+        whitelistEnabled: Boolean = true,
     ): AutomationGateDecision = AutomationRuleGate.check(
         state,
         AutomationGateContext(
@@ -392,6 +419,7 @@ class AutomationRuleGateTest {
             nowMs = nowMs,
             deviceLocked = deviceLocked,
             sensitiveWindow = sensitiveWindow,
+            whitelistEnabled = whitelistEnabled,
         ),
     )
 

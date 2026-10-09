@@ -938,7 +938,16 @@ describe('无障碍自动化状态与验证密码校验', () => {
     // 已设密码的设备：只有这个布尔为 true，返回体里没有任何密码字段。
     expect(validateAccessibilityAutomationState(state({ passwordConfigured: true })).passwordConfigured).toBe(true)
     expect(Object.keys(validateAccessibilityAutomationState(state({ passwordConfigured: true }))).sort())
-      .toEqual(['allowedPackages', 'alwaysAllowedPackages', 'enabled', 'passwordConfigured'])
+      .toEqual(['allowedPackages', 'alwaysAllowedPackages', 'enabled', 'passwordConfigured', 'whitelistEnabled'])
+  })
+
+  it('旧版缺省开关保持开启；仅接受明确的布尔状态', () => {
+    expect(validateAccessibilityAutomationState(state()).whitelistEnabled).toBe(true)
+    expect(validateAccessibilityAutomationState(state({ whitelistEnabled: true })).whitelistEnabled).toBe(true)
+    expect(validateAccessibilityAutomationState(state({ whitelistEnabled: false })).whitelistEnabled).toBe(false)
+    for (const whitelistEnabled of [null, 0, 1, 'false', {}, []]) {
+      expect(() => validateAccessibilityAutomationState(state({ whitelistEnabled }))).toThrow('无障碍白名单开关格式无效')
+    }
   })
 
   it('缺 alwaysAllowedPackages 或 passwordConfigured 时抛错', () => {

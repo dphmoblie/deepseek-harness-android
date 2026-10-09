@@ -130,7 +130,7 @@ interface NativeRuntimePlugin {
   getDeviceShellAccess(): Promise<unknown>
   setDeviceShellAccess(options: { enabled: boolean }): Promise<unknown>
   /** 保存白名单；`password` 只在用户已设置验证密码时出现，原生侧负责比对。 */
-  setAccessibilityAutomationPackages(options: { packages: string[]; password?: string }): Promise<unknown>
+  setAccessibilityAutomationPackages(options: { packages: string[]; password?: string; whitelistEnabled?: boolean }): Promise<unknown>
   /** 设置/修改验证密码；首次设置时 `currentPassword` 不出现。 */
   setAccessibilityPassword(options: { password: string; currentPassword?: string }): Promise<unknown>
   /** 清除验证密码（白名单保留）；必须带当前密码。 */
@@ -273,7 +273,7 @@ function createNativeBridge(): RuntimeBridge {
     },
     // 白名单：发送前先自检一遍形状（含自动项与密码状态这几个必填字段），
     // 密码只在用户带了的时候校验——未设置密码的设备上，undefined 是合法取值。
-    setAccessibilityAutomationPackages: (packages, password) => {
+    setAccessibilityAutomationPackages: (packages, password, whitelistEnabled) => {
       if (!Array.isArray(packages) || packages.some(value => typeof value !== 'string')) {
         return Promise.reject(new Error('无障碍白名单格式无效'))
       }
@@ -282,6 +282,7 @@ function createNativeBridge(): RuntimeBridge {
         : validateAccessibilityPasswordInput(password, '验证密码')
       validateAccessibilityAutomationState({
         enabled: false,
+        whitelistEnabled,
         allowedPackages: packages,
         alwaysAllowedPackages: ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES,
         passwordConfigured: false,
@@ -290,6 +291,7 @@ function createNativeBridge(): RuntimeBridge {
       // 「本次不带密码」和「带了一个空密码」）。
       return NativeRuntime.setAccessibilityAutomationPackages({
         packages,
+        ...(whitelistEnabled === undefined ? {} : { whitelistEnabled }),
         ...(validatedPassword === undefined ? {} : { password: validatedPassword }),
       }).then(validateAccessibilityAutomationState)
     },

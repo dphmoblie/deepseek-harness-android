@@ -41,6 +41,15 @@ internal object AccessibilityWhitelistWritePolicy {
 object AccessibilityAutomationStore {
     private const val PREFERENCES = "accessibility_automation"
     private const val KEY_PACKAGES = "allowed_packages"
+    private const val KEY_WHITELIST_ENABLED = "whitelist_enabled"
+
+    // 旧安装与异常配置一律保留限制，只有明确保存 false 才关闭。
+    fun whitelistEnabled(context: Context): Boolean = context.applicationContext
+        .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).all[KEY_WHITELIST_ENABLED] as? Boolean ?: true
+
+    fun packageAllowed(context: Context, packageName: String): Boolean = AccessibilityAutomationPolicy.packageAllowed(
+        packageName, allowedPackages(context), whitelistEnabled(context),
+    )
 
     fun allowedPackages(context: Context): Set<String> {
         val values = context.applicationContext
@@ -62,10 +71,12 @@ object AccessibilityAutomationStore {
      * @throws AccessibilityGuardException 密码缺失 / 错误 / 被锁定 / 记录损坏
      * @throws IllegalArgumentException 白名单格式无效
      */
-    fun setAllowedPackages(context: Context, packages: List<String>, password: String?): JSONObject {
+    fun setAllowedPackages(context: Context, packages: List<String>, password: String?, whitelistEnabled: Boolean? = null): JSONObject {
         val normalized = AccessibilityWhitelistWritePolicy.authorize(guard(context), packages, password)
+        // 开关与名单共用密码验证并一次写入；省略开关的旧调用保持现值。
         context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
-            .edit().putStringSet(KEY_PACKAGES, normalized.toSet()).apply()
+            .edit().putStringSet(KEY_PACKAGES, normalized.toSet())
+            .also { editor -> whitelistEnabled?.let { editor.putBoolean(KEY_WHITELIST_ENABLED, it) } }.apply()
         return state(context)
     }
 
@@ -74,6 +85,7 @@ object AccessibilityAutomationStore {
         allowedPackages(context).sorted().forEach(values::put)
         return JSONObject()
             .put("enabled", DeepSeekAccessibilityService.current() != null)
+            .put("whitelistEnabled", whitelistEnabled(context))
             .put("allowedPackages", values)
             // 前端按「固定成员」单独渲染这一项（灰显、不可删除）；它同时也在 allowedPackages 里，
             // 两个字段都出现是刻意的：字段齐全才能过 src/platform/validation.ts 的形状校验。
