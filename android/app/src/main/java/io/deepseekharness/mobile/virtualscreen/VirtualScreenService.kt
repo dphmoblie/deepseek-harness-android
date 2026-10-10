@@ -75,6 +75,12 @@ class VirtualScreenService : Service() {
     private var dragLastX = 0
     private var dragLastY = 0
     private var dragging = false
+
+    /**
+     * 上一次把悬浮小窗重新挂到窗口队列末端的时间（[SystemClock.uptimeMillis]）。
+     * 重挂会带来一次可见的重建，所以只允许「用户点了一下小窗」这种低频动作触发，并且节流。
+     */
+    private var lastFrontAtMs = 0L
     private val sink = object : RuntimeEventSink {
         override fun onProgress(snapshot: RuntimeStateSnapshot) = Unit
         override fun onTerminalOutput(sessionId: String, dataBase64: String, suppressPublicOutput: Boolean) = Unit
@@ -505,12 +511,21 @@ class VirtualScreenService : Service() {
             insetRight = insets.right
             insetBottom = insets.bottom
         }
-        val size = VirtualScreenWindow.overlaySize(VirtualScreenSpec.decodeState(snapshot),
-            bounds.width() - insetLeft - insetRight, bounds.height() - insetTop - insetBottom, metrics.density)
+        // 可用来放小窗的区域（扣掉系统栏与刘海）：既是这次算尺寸的输入，也是之后缩放与拖动的夹取边界，
+        // 因此要随窗口参数一起存下来 —— 缩放时屏幕没变，但若重新用 displayMetrics 算，就可能与当初不一致。
+        val sizingWidth = bounds.width() - insetLeft - insetRight
+        val sizingHeight = bounds.height() - insetTop - insetBottom
+        val size = VirtualScreenWindow.overlaySize(VirtualScreenSpec.decodeState(snapshot), sizingWidth, sizingHeight, metrics.density,
+            // 用户上次拖出来的宽度（0 = 跟随屏幕最大）。横竖屏切换后可能已经超出新屏幕，
+            // 夹取在 overlaySize 内部完成，这里不再判断。
+            VirtualScreenPreferences.read(this).overlayWidthPx)
         // 小窗只有应用画面：位置靠直接拖小窗本身（拖动之外的手势照旧透传给副屏），
         // 收起与结束仍在独立设置页或通知里操作。
-        val image = VirtualScreenPreview(this).also { preview = it }
-        image.dragHost = overlayDragHost
+        // 画面与缩放手柄收在同一个 VirtualScreenFrame 里：手柄是它的子视图而不是另一个窗口，
+        // 于是预览页与小窗能共用同一份「多大、怎么调」的行为。
+        val frame = VirtualScreenFrame(this).also { preview = it.preview }
+        frame.preview.dragHost = overlayDragHost
+        frame.installResize(overlayResizeGesture)
         val params = WindowManager.LayoutParams(size.widthPx, size.heightPx, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             android.graphics.PixelFormat.TRANSLUCENT).apply {
@@ -519,22 +534,97 @@ class VirtualScreenService : Service() {
             y = (bounds.height() - insetTop - insetBottom - size.heightPx) / 2
         }
         try {
-            wm.addView(image, params)
-            overlay = image
+            wm.addView(frame, params)
+            overlay = frame
             // 拖动需要的窗口参数与边界只在这里赋值：hideOverlay 时清掉，
             // 免得下一次拖动拿的是上一次会话、上一次旋转之前的边界去做夹取。
             overlayParams = params
-            overlayArea = OverlayArea(bounds.width(), bounds.height(), insetTop, insetBottom)
+            overlayArea = OverlayArea(bounds.width(), bounds.height(), insetTop, insetBottom, sizingWidth, sizingHeight)
+            lastFrontAtMs = 0L
         } catch (e: Exception) {
             preview = null
             throw e
         }
     }
 
+    /**
+     * 把副屏悬浮窗重新放到窗口队列末端，让刚点过的那个窗口成为同层里最后加入的那个。
+     *
+     * 为什么只能摘下来重挂：`TYPE_APPLICATION_OVERLAY` 的窗口之间，系统只按「谁后 addView」决定叠放顺序；
+     * `View.bringToFront()` 改的是父容器里的子视图顺序（对窗口层无效），`updateViewLayout()` 也不重排队列。
+     * 所以真正能改顺序的只有 `removeViewImmediate` + `addView`（两者必须在同一帧里完成，否则会看到一次空窗）。
+     *
+     * 摘下来会不会把画面弄死：不会 —— 重挂前把 [VirtualScreenPreview.retainFrameLoopOnDetach] 置位，
+     * 取帧线程与调度因此活过这次 detach（否则 `onDetachedFromWindow` 会关线程、清帧，重挂后就永远停在最后一帧）。
+     *
+     * 代价与取舍：重挂毕竟是一次可见的重建，所以只允许「点一下小窗」触发，并在 [FRONT_THROTTLE_MILLIS] 内去重。
+     * 副屏窗口永远压在状态栏、输入法与系统面板之下，这一点第三方应用改不了。
+     */
+    fun bringOverlayToFront() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { bringOverlayToFront() }
+            return
+        }
+        val view = overlay ?: return
+        val params = overlayParams ?: return
+        val now = SystemClock.uptimeMillis()
+        if (now - lastFrontAtMs < FRONT_THROTTLE_MILLIS) return
+        lastFrontAtMs = now
+        val wm = getSystemService(WindowManager::class.java)
+        runCatching {
+            preview?.retainFrameLoopOnDetach = true
+            wm.removeViewImmediate(view)
+            wm.addView(view, params)
+        }
+    }
+
+    /**
+     * 按新宽度等比缩放悬浮小窗（设置页改宽度、拖手柄都走这里）。
+     *
+     * 只认宽度，高度由 [VirtualScreenWindow.overlaySize] 按画面比例反算 —— 比例一变，
+     * `FIT_CENTER` 就会在画面四周补黑边，触摸坐标也会跟着失真。
+     * 位置保持不动，只做一次夹取：缩小后可能离边缘更远（无需处理），放大后才可能越界。
+     */
+    fun applyOverlayWidth(widthPx: Int) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            main.post { applyOverlayWidth(widthPx) }
+            return
+        }
+        val view = overlay ?: return
+        val params = overlayParams ?: return
+        val area = overlayArea ?: return
+        val size = VirtualScreenWindow.overlaySize(VirtualScreenSpec.decodeState(snapshot),
+            area.sizingWidthPx, area.sizingHeightPx, resources.displayMetrics.density, widthPx)
+        if (params.width == size.widthPx && params.height == size.heightPx) return
+        val position = VirtualScreenWindow.dragPosition(params.x, params.y, 0, 0,
+            area.widthPx, area.heightPx, area.topInsetPx, area.bottomInsetPx, size.widthPx, size.heightPx)
+        params.width = size.widthPx
+        params.height = size.heightPx
+        params.x = position.first
+        params.y = position.second
+        runCatching { getSystemService(WindowManager::class.java).updateViewLayout(view, params) }
+    }
+
+    /**
+     * 手柄拖动：读数都取**当前**窗口与当前会话的值，因此旋转、换档、重启副屏之后不需要换一份手势对象。
+     */
+    private val overlayResizeGesture = VirtualScreenResizeGesture(
+        displayWidthPx = { overlayArea?.sizingWidthPx ?: resources.displayMetrics.widthPixels },
+        displayHeightPx = { overlayArea?.sizingHeightPx ?: resources.displayMetrics.heightPixels },
+        minWidthPx = { maxOf((VirtualScreenWindow.MIN_OVERLAY_WIDTH_DP * resources.displayMetrics.density).toInt(), VirtualScreenWindow.MIN_OVERLAY_WIDTH_PX) },
+        aspectRatio = { VirtualScreenSpec.decodeState(snapshot).aspectRatio },
+        currentWidthPx = { overlayParams?.width ?: 0 },
+        applyWidth = { applyOverlayWidth(it) },
+        persistWidth = { VirtualScreenPreferences.saveOverlayWidth(this, it) },
+    )
+
     fun hideOverlay() {
+        // 先撤掉「保留取帧循环」的开关再摘窗口：否则这一次 onDetachedFromWindow 不会关线程，
+        // 小窗收起来之后取帧线程与调度会一直活着。
+        preview?.retainFrameLoopOnDetach = false
         overlay?.let { runCatching { getSystemService(WindowManager::class.java).removeView(it) } }
         overlay = null; preview = null
-        overlayParams = null; overlayArea = null; dragging = false
+        overlayParams = null; overlayArea = null; dragging = false; lastFrontAtMs = 0L
     }
 
     /**
@@ -620,8 +710,29 @@ class VirtualScreenService : Service() {
 /** 逐事件触摸直传时 MOVE 的最小发送间隔；屏幕采样可到 120 Hz，合并后只丢中间采样点，抬起前那一个点仍会补发。 */
 private const val MOVE_INTERVAL_MILLIS = 8L
 
-/** 悬浮小窗当前可用的屏幕区域（像素）：宽高是整屏，上下留出状态栏与导航栏。 */
-private data class OverlayArea(val widthPx: Int, val heightPx: Int, val topInsetPx: Int, val bottomInsetPx: Int)
+/**
+ * 两次「重新挂到最前」之间的最小间隔（毫秒）。
+ *
+ * 摘下来重挂是一次可见的重建，连点小窗时不该每次都重建；1200 毫秒足够让用户感觉到「点一下就上来了」，
+ * 又不至于在一次连续操作里反复闪。
+ */
+private const val FRONT_THROTTLE_MILLIS = 1200L
+
+/**
+ * 悬浮小窗当前可用的屏幕区域（像素）：宽高是整屏，上下留出状态栏与导航栏。
+ *
+ * [sizingWidthPx]/[sizingHeightPx] 是**算小窗尺寸时用的那块区域**（整屏扣掉系统栏与刘海）：
+ * 缩放要按同一块区域夹取，否则旋转后重新用 `displayMetrics` 算出来的边界会与当初建窗时不一致，
+ * 手柄一拖就可能跳到一个当初不被允许的尺寸。
+ */
+private data class OverlayArea(
+    val widthPx: Int,
+    val heightPx: Int,
+    val topInsetPx: Int,
+    val bottomInsetPx: Int,
+    val sizingWidthPx: Int,
+    val sizingHeightPx: Int,
+)
 
 /**
  * 悬浮小窗的拖动端口：预览控件只判定「这次手势是拖动」，位置换算与窗口更新都由服务负责。
@@ -686,6 +797,10 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private val screenOff = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: Intent?) { clearFrame() }
     }
+    /** 息屏接收器是否已注册：重挂时不能重复注册（否则息屏会收到两次）。 */
+    private var screenOffRegistered = false
+    /** 取帧循环是否已经在跑：重挂时不能重复 post，否则同一拍跑两遍、帧率翻倍。 */
+    private var loopRunning = false
     var report: (String) -> Unit = {}
     init {
         scaleType = ScaleType.FIT_CENTER
@@ -747,13 +862,15 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     }
                 }
                 MotionEvent.ACTION_UP -> {
-                    // 这里不做「把小窗提到最上层」：TYPE_APPLICATION_OVERLAY 的层序由系统按
-                    // 窗口添加顺序决定，`updateViewLayout` 改不了 z-order，`View.bringToFront()`
-                    // 只对同一 ViewGroup 内的兄弟视图有效（而这是窗口根视图）；唯一真正能提到顶的
-                    // removeView+addView 会触发预览的 onDetachedFromWindow，关掉取帧线程，重新挂回后
-                    // 反而永远停在最后一帧。用户刚刚点到的那块小窗本来就在他手指下面，不需要置顶。
-                    // 拖动结束时不再补发一次「点击」：这次手势的归属是窗口位置，不是副屏内容。
-                    if (!dragActive) view.performClick()
+                    // 手势结束后再提升层级：不会取消本次触摸，也不会打断目标应用的输入。
+                    // 同层窗口只能靠 remove + addView 改叠放顺序（见 bringOverlayToFront），
+                    // 而取帧循环靠 VirtualScreenPreview.retainFrameLoopOnDetach 活过那次 detach；
+                    // 只在「点一下」之后触发（拖动结束不触发），再加 1200 毫秒去重，避免频繁重建窗口。
+                    if (!dragActive) {
+                        main.post { VirtualScreenService.current?.bringOverlayToFront() }
+                        // 拖动结束时不再补发一次「点击」：这次手势的归属是窗口位置，不是副屏内容。
+                        view.performClick()
+                    }
                     val start = down; down = null
                     if (dragActive) {
                         // 补发被节流丢掉的末位置（手指停下的地方才是用户要的位置），
@@ -954,19 +1071,49 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         }
     }
 
+    /**
+     * 取下窗口时是否保留取帧循环。默认 false —— 离开页面/收起小窗就该停线程、清画面。
+     *
+     * 「重新挂到最前」是唯一把它置位的场景：那一次 detach 之后马上还会 attach，
+     * 若照默认逻辑关掉线程、清掉画面，重新挂回就只能停在最后一帧。
+     */
+    var retainFrameLoopOnDetach = false
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        androidx.core.content.ContextCompat.registerReceiver(context, screenOff, android.content.IntentFilter(Intent.ACTION_SCREEN_OFF), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
-        executor = Executors.newSingleThreadExecutor()
-        touchExecutor = Executors.newSingleThreadExecutor()
-        generation++; main.post(tick)
+        // 重挂时这两件事必须只做一次：接收器重复注册会收到两次息屏通知，
+        // 而每重挂一次就新建一对线程池，等于每次点击都泄漏一对线程。
+        if (executor == null) executor = Executors.newSingleThreadExecutor()
+        if (touchExecutor == null) touchExecutor = Executors.newSingleThreadExecutor()
+        if (!screenOffRegistered) {
+            androidx.core.content.ContextCompat.registerReceiver(context, screenOff, android.content.IntentFilter(Intent.ACTION_SCREEN_OFF), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+            screenOffRegistered = true
+        }
+        generation++
+        // 只有第一次挂载要启动取帧循环；重挂时旧的 tick 仍在队列里（generation 已变，
+        // 在途的那一拍会自行作废），再 post 一次会让同一拍跑两遍。
+        if (!loopRunning) {
+            loopRunning = true
+            main.post(tick)
+        }
     }
+
     override fun onDetachedFromWindow() {
         // 先把未完成的触摸取消排到输入队列尾部，避免离开页面后目标仍处于按下状态。
         if (streaming) sendTouch(touchExecutor, VirtualScreenService.current, "cancel", queuedMove ?: down ?: floatArrayOf(0f, 0f))
-        generation++; main.removeCallbacks(tick); executor?.shutdown(); executor = null
+        if (retainFrameLoopOnDetach) {
+            // 「重新挂到最前」的中间态：只让在途的一拍作废，线程、调度、接收器与画面全部留着。
+            generation++
+            super.onDetachedFromWindow()
+            return
+        }
+        generation++; main.removeCallbacks(tick); loopRunning = false
+        executor?.shutdown(); executor = null
         touchExecutor?.shutdown(); touchExecutor = null
-        runCatching { context.unregisterReceiver(screenOff) }
+        if (screenOffRegistered) {
+            runCatching { context.unregisterReceiver(screenOff) }
+            screenOffRegistered = false
+        }
         clearFrame()
         super.onDetachedFromWindow()
     }

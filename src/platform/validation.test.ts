@@ -8,6 +8,7 @@ import {
   assertStorageDirPath,
   assertTerminalKind,
   assertTerminalSize,
+  assertVirtualScreenSettingsUpdate,
   validateAllFilesAccessResult,
   validateAppUpdateState,
   validateAccessibilityAutomationState,
@@ -44,6 +45,7 @@ import {
   validateStoredSettings,
   validateTerminalChunk,
   validateTerminalExit,
+  validateVirtualScreenSettings,
 } from './validation'
 import {
   ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES,
@@ -1598,5 +1600,69 @@ describe('运行时工作区文件列表校验', () => {
     expect(() => validateRuntimeWorkspaceFileList({ files: ['../secret'] })).toThrow('工作区文件路径无效')
     expect(() => validateRuntimeWorkspaceFileList({ files: ['same.txt', 'same.txt'] }))
       .toThrow('工作区文件列表包含重复路径')
+  })
+})
+
+describe('副屏设置的悬浮窗宽度校验', () => {
+  /** 一份最小的合法副屏设置：七个必填字段齐了，`overlayWidthPx` 是唯一的选填字段。 */
+  function settings(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      previewMode: '60fps',
+      autoFollow: 'off',
+      orientation: 'auto',
+      adaptive: false,
+      widthPx: 0,
+      heightPx: 0,
+      densityDpi: 0,
+      ...overrides,
+    }
+  }
+
+  it('缺失（或 null）时按 0 收敛：旧壳不发这个字段也能读出设置', () => {
+    expect(validateVirtualScreenSettings(settings()).overlayWidthPx).toBe(0)
+    expect(validateVirtualScreenSettings(settings({ overlayWidthPx: null })).overlayWidthPx).toBe(0)
+  })
+
+  it('0 表示「跟随屏幕最大」，原样读回且不带偏其余字段', () => {
+    const read = validateVirtualScreenSettings(settings({ overlayWidthPx: 0, widthPx: 720, densityDpi: 320 }))
+    expect(read.overlayWidthPx).toBe(0)
+    expect(read.widthPx).toBe(720)
+    expect(read.densityDpi).toBe(320)
+  })
+
+  it('正数原样读回，不设前端上限（120..4096 与按屏幕夹取都在原生侧做）', () => {
+    expect(validateVirtualScreenSettings(settings({ overlayWidthPx: 820 })).overlayWidthPx).toBe(820)
+    expect(validateVirtualScreenSettings(settings({ overlayWidthPx: 120 })).overlayWidthPx).toBe(120)
+    expect(validateVirtualScreenSettings(settings({ overlayWidthPx: 4096 })).overlayWidthPx).toBe(4096)
+    expect(validateVirtualScreenSettings(settings({ overlayWidthPx: 99999 })).overlayWidthPx).toBe(99999)
+  })
+
+  it('负数、小数与非数字一律拒绝，不静默夹取', () => {
+    for (const value of [-1, -820]) {
+      expect(() => validateVirtualScreenSettings(settings({ overlayWidthPx: value })), String(value))
+        .toThrow('悬浮窗宽度需要是非负整数')
+    }
+    // 这些非法值里有 `{}` 与 NaN，`String()` 只会给出 "[object Object]" 这类废话，
+    // 所以用序号标注，失败时能直接对上数组里的位置。
+    const badValues: unknown[] = [820.5, -0.5, '820', true, {}, Number.NaN, Number.POSITIVE_INFINITY]
+    badValues.forEach((value, index) => {
+      expect(() => validateVirtualScreenSettings(settings({ overlayWidthPx: value })), `第 ${index + 1} 个非法值`)
+        .toThrow('悬浮窗宽度需要是非负整数')
+    })
+  })
+
+  it('写入路径：0 与负数清掉自定义宽度，正数原样送出（前端不夹上限）', () => {
+    expect(assertVirtualScreenSettingsUpdate({ overlayWidthPx: 820 })).toEqual({ overlayWidthPx: 820 })
+    expect(assertVirtualScreenSettingsUpdate({ overlayWidthPx: 0 })).toEqual({ overlayWidthPx: 0 })
+    expect(assertVirtualScreenSettingsUpdate({ overlayWidthPx: -1 })).toEqual({ overlayWidthPx: 0 })
+    // 越界交给原生夹（120..4096 再按屏幕夹一次）：前端只把它收敛成整数。
+    expect(assertVirtualScreenSettingsUpdate({ overlayWidthPx: 99999 })).toEqual({ overlayWidthPx: 99999 })
+    expect(assertVirtualScreenSettingsUpdate({ overlayWidthPx: 820.4 })).toEqual({ overlayWidthPx: 820 })
+    expect(() => assertVirtualScreenSettingsUpdate({ overlayWidthPx: '820' })).toThrow('悬浮窗宽度格式无效')
+    expect(() => assertVirtualScreenSettingsUpdate({ overlayWidthPx: Number.NaN })).toThrow('悬浮窗宽度格式无效')
+    // 没传这一项时必须原样缺席，不能补 0 发过去（那会覆盖别处刚改的宽度）。
+    expect(assertVirtualScreenSettingsUpdate({ previewMode: '60fps' })).toEqual({ previewMode: '60fps' })
+    expect(assertVirtualScreenSettingsUpdate({ widthPx: 0, heightPx: 0, densityDpi: 0 }))
+      .toEqual({ widthPx: 0, heightPx: 0, densityDpi: 0 })
   })
 })

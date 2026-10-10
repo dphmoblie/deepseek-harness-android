@@ -1715,6 +1715,20 @@ function optionalStateText(value: unknown, label: string, maximumLength = 200): 
 }
 
 /**
+ * 读取路径的悬浮窗宽度：**这一项可以缺**，出现时必须是有限的安全整数且非负。
+ *
+ * 与宽高、DPI 的 `requiredNonNegativeInteger` 分开一条，正因为它是后加的字段：
+ * 旧壳不发它，缺失（或 `null`）必须当成「跟随屏幕最大」，也就是 0，而不是读取失败——
+ * 否则一台还没升级壳的设备会连档位、方向一起读不出来。反过来，出现负数或小数
+ * 说明桥那头写坏了：宁可整条读失败，也别把 -1 画成「-1 像素」。
+ */
+function optionalOverlayWidth(value: unknown): number {
+  if (value === undefined || value === null) return 0
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error('悬浮窗宽度需要是非负整数')
+  return value as number
+}
+
+/**
  * 这一项到底传没传。
  *
  * 原生侧（与 `docs/副屏设置桥.md` 的约定）把 `undefined` 与 `null` 都当作「这一项不改」：
@@ -1745,6 +1759,20 @@ function virtualScreenDensity(value: unknown): number {
 }
 
 /**
+ * 写入路径的悬浮窗宽度：**0 与负数表示「清掉自定义宽度」**（回到跟随屏幕最大），正数原样交给原生。
+ *
+ * 与 `virtualScreenEdge` 的关键区别是**前端不夹上限**：原生侧会把正数夹到 120..4096、
+ * 再按屏幕尺寸夹一次，界面在这儿提前夹一遍只会造出第二个真相——界面显示 4096、
+ * 原生实际生效另一个值时，用户读到的数就不是真在用的数。类型错误仍然直接拒绝：
+ * 静默把 `"800"` 当数字会让写错入参的人看不出问题。
+ */
+function virtualScreenOverlayWidth(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error('悬浮窗宽度格式无效')
+  if (value <= 0) return 0
+  return Math.round(value)
+}
+
+/**
  * 校验原生返回的副屏设置。
  *
  * 七个字段一个都不能少：缺字段时若补默认值，界面会把「读不到设置」显示成
@@ -1754,6 +1782,9 @@ function virtualScreenDensity(value: unknown): number {
  * 这时生效规格由规格层按自适应开关与屏幕方向算出来。三者的区间校验留在
  * `assertVirtualScreenSettingsUpdate`（写入路径）——把 0 也要求成 200..4096，
  * 一台没自定义过尺寸的设备会永远读不出设置。
+ *
+ * 悬浮窗宽度（`overlayWidthPx`）是唯一**可以缺**的字段：缺失与 `null` 都收敛成 0
+ * （跟随屏幕默认最大），这样旧壳与既有夹具都不用改；出现时仍必须是有限整数且非负。
  */
 export function validateVirtualScreenSettings(value: unknown): VirtualScreenSettings {
   const source = asRecord(value, '副屏设置')
@@ -1765,6 +1796,7 @@ export function validateVirtualScreenSettings(value: unknown): VirtualScreenSett
     widthPx: requiredNonNegativeInteger(source.widthPx, '副屏宽度'),
     heightPx: requiredNonNegativeInteger(source.heightPx, '副屏高度'),
     densityDpi: requiredNonNegativeInteger(source.densityDpi, '副屏像素密度'),
+    overlayWidthPx: optionalOverlayWidth(source.overlayWidthPx),
   }
 }
 
@@ -1802,6 +1834,7 @@ export function validateVirtualScreenState(value: unknown): VirtualScreenState {
  * 只处理**出现过的**字段——没传的字段必须原样缺席，不能补成某个默认值再发过去：
  * 那等于用界面的默认值覆盖用户在别处（悬浮窗快捷入口）刚改过的设置。
  * 宽高与 DPI 允许 0：0 是原生侧「清掉自定义尺寸」的合法取值（页面拿它做重置），不算越界。
+ * 悬浮窗宽度同理：0 与负数都清掉自定义宽度，正数**不在前端夹上限**（见 `virtualScreenOverlayWidth`）。
  */
 export function assertVirtualScreenSettingsUpdate(value: unknown): VirtualScreenSettingsUpdate {
   const source = asRecord(value, '副屏设置更新')
@@ -1813,6 +1846,7 @@ export function assertVirtualScreenSettingsUpdate(value: unknown): VirtualScreen
   if (present(source.widthPx)) update.widthPx = virtualScreenEdge(source.widthPx)
   if (present(source.heightPx)) update.heightPx = virtualScreenEdge(source.heightPx)
   if (present(source.densityDpi)) update.densityDpi = virtualScreenDensity(source.densityDpi)
+  if (present(source.overlayWidthPx)) update.overlayWidthPx = virtualScreenOverlayWidth(source.overlayWidthPx)
   return update
 }
 

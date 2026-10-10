@@ -18,6 +18,14 @@ internal data class VirtualScreenSettings(
     val widthPx: Int,
     val heightPx: Int,
     val densityDpi: Int,
+    /**
+     * 悬浮小窗的宽度（像素）。`0` 表示「跟随屏幕最大」（94% 宽 / 84% 高，等比），
+     * 也就是改造前的行为；正数来自用户拖动右下角手柄或在设置页里填的值。
+     *
+     * 只存宽度不存高度：小窗永远按画面比例等比缩放（见 [VirtualScreenWindow.resizedOverlayWidth]），
+     * 存两个自由度反而会让画面出现黑边。
+     */
+    val overlayWidthPx: Int = 0,
 )
 
 /** 桥的写请求：只带这次显式给出的字段，null 表示「这一项不改」。 */
@@ -29,6 +37,7 @@ internal data class VirtualScreenSettingsUpdate(
     val widthPx: Int? = null,
     val heightPx: Int? = null,
     val densityDpi: Int? = null,
+    val overlayWidthPx: Int? = null,
 )
 
 /** 桥的启动请求：目标应用 + 只对本次会话生效的覆盖项（不写回偏好）。 */
@@ -61,6 +70,13 @@ internal object VirtualScreenPreferences {
     private const val KEY_WIDTH = "widthPx"
     private const val KEY_HEIGHT = "heightPx"
     private const val KEY_DPI = "densityDpi"
+
+    /**
+     * 悬浮小窗宽度（像素）。沿用 `widthPx/heightPx/densityDpi` 那条约定：`0` = 没有自定义值，
+     * 也就是「跟随屏幕最大」。正数由手柄拖动或设置页写入，读取时按 120..4096 夹取，
+     * 真正上屏前还要按当前屏幕（94% 宽 / 84% 高）再夹一次。
+     */
+    private const val KEY_OVERLAY_WIDTH = "overlayWidthPx"
 
     /** `autoFollow` 的合法取值；与 [VirtualScreenPolicy.autoFollow] 的允许列表逐字一致。 */
     val FOLLOW_VALUES = setOf("off", "pull_back", "promote")
@@ -107,7 +123,19 @@ internal object VirtualScreenPreferences {
             widthPx = store.getInt(KEY_WIDTH, 0),
             heightPx = store.getInt(KEY_HEIGHT, 0),
             densityDpi = store.getInt(KEY_DPI, 0),
+            overlayWidthPx = store.getInt(KEY_OVERLAY_WIDTH, 0),
         )
+    }
+
+    /**
+     * 只落盘悬浮小窗宽度（`0` = 回到跟随屏幕最大）。
+     *
+     * 手柄拖动结束时走这里，而不是走 [apply]：拖动只改宽度一项，用 [apply] 得先构造一个
+     * `VirtualScreenSettingsUpdate`，反而多一层可能写错别的字段的机会。
+     */
+    fun saveOverlayWidth(context: Context, widthPx: Int) {
+        val value = widthPx.coerceIn(0, VirtualScreenWindow.MAX_OVERLAY_WIDTH_PX)
+        store(context).edit().putInt(KEY_OVERLAY_WIDTH, value).apply()
     }
 
     fun configuration(context: Context) = JSONObject().put(KEY_PREVIEW_MODE, mode(context)).put(KEY_AUTO_FOLLOW, follow(context))
@@ -147,6 +175,9 @@ internal object VirtualScreenPreferences {
             widthPx = data.edgeField(KEY_WIDTH, VirtualScreenSpec.MIN_EDGE, VirtualScreenSpec.MAX_EDGE),
             heightPx = data.edgeField(KEY_HEIGHT, VirtualScreenSpec.MIN_EDGE, VirtualScreenSpec.MAX_EDGE),
             densityDpi = data.edgeField(KEY_DPI, VirtualScreenSpec.MIN_DPI, VirtualScreenSpec.MAX_DPI),
+            // 与边长/dpi 同一套语义：0 与负数 = 清掉自定义宽度（回到跟随屏幕最大），
+            // 正数先夹到 120..4096，真正上屏时再按屏幕 94% 宽 / 84% 高夹一次。
+            overlayWidthPx = data.edgeField(KEY_OVERLAY_WIDTH, VirtualScreenWindow.MIN_OVERLAY_WIDTH_PX, VirtualScreenWindow.MAX_OVERLAY_WIDTH_PX),
         )
     }
 
@@ -178,6 +209,7 @@ internal object VirtualScreenPreferences {
         update.widthPx?.let { editor.putInt(KEY_WIDTH, it) }
         update.heightPx?.let { editor.putInt(KEY_HEIGHT, it) }
         update.densityDpi?.let { editor.putInt(KEY_DPI, it) }
+        update.overlayWidthPx?.let { editor.putInt(KEY_OVERLAY_WIDTH, it) }
         editor.apply()
     }
 
