@@ -320,7 +320,8 @@ describe('目标应用副屏设置页', () => {
     })
     render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
     expect(await screen.findByText('跟随屏幕')).toBeInTheDocument()
-    expect((screen.getByRole('spinbutton', { name: '悬浮窗宽度' })).value).toBe('')
+    // 数字输入框清空后 value 是空串，jest-dom 对 type=number 统一按 null 断言。
+    expect(screen.getByRole('spinbutton', { name: '悬浮窗宽度' })).toHaveValue(null)
     expect(screen.getByRole('button', { name: '恢复跟随屏幕' })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     expect(await screen.findByText('没有需要保存的改动')).toBeInTheDocument()
@@ -358,7 +359,7 @@ describe('目标应用副屏设置页', () => {
     fireEvent.click(reset)
     expect(await screen.findByText('跟随屏幕')).toBeInTheDocument()
     // 输入框也要一起清空：否则「当前值说跟随屏幕、框里还留着 820」自相矛盾。
-    expect((screen.getByRole('spinbutton', { name: '悬浮窗宽度' })).value).toBe('')
+    expect(screen.getByRole('spinbutton', { name: '悬浮窗宽度' })).toHaveValue(null)
     expect(reset).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     await waitFor(() => expect(save).toHaveBeenCalledWith({ overlayWidthPx: 0 }))
