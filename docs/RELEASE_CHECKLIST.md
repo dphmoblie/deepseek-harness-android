@@ -1,14 +1,14 @@
 # Release checklist
 
 Generated rootfs and native ELF files are intentionally excluded from Git.
-The official `0.1.9` workflow publishes a self-contained APK plus matching
+The official `0.2.13` workflow publishes a self-contained APK plus matching
 runtime assets for inspection and explicit remote installation. Complete every
 applicable item below for the exact APK, manifest, and rootfs before publishing
 or otherwise distributing them.
 
 ## Runtime artifacts
 
-- Build the release image from Ubuntu 24.04 ARM64, Node.js 24.19.0, and
+- Build the release image from Ubuntu 24.04 ARM64, Node.js 24.14.0, and
   `@deepseek-ai/dsh` 0.2.0-rc.2. Record and independently verify the SHA-256
   of every source archive and package used by
   `scripts/build-embedded-runtime.py`.
@@ -26,8 +26,8 @@ or otherwise distributing them.
 - Retain Ubuntu package copyright metadata, the Node.js license and bundled
   dependency notices, the DeepSeek Harness MIT license, and the licenses of
   every npm package copied into the rootfs.
-- Confirm the workflow tag is exactly `v0.1.9-mobile-<run_number>` (or
-  `v0.1.9` for a stable release) and that the rootfs URL recorded in
+- Confirm the workflow tag is exactly `v0.2.13-mobile-<run_number>` (or
+  `v0.2.13` for a stable release) and that the rootfs URL recorded in
   `runtime-manifest.json` points to `rootfs.bundle` under that same tag.
 - Independently verify the finished manifest SHA-256, rootfs SHA-256, byte
   lengths, `arm64-v8a` architecture, `gzip` compression value, and runtime
@@ -89,7 +89,11 @@ or otherwise distributing them.
 ## Reproducibility and licensing
 
 - Generate the Gradle wrapper from the pinned Gradle version on a trusted build machine; dependency binaries are intentionally not stored in this repository.
-- Add and independently verify the official `distributionSha256Sum` for the exact Gradle distribution before publishing a build.
+- The Gradle wrapper distribution digest is already pinned in
+  `android/gradle/wrapper/gradle-wrapper.properties`
+  (`distributionSha256Sum=f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6`).
+  Re-verify it against the official digest for the exact Gradle distribution
+  whenever the Gradle version changes.
 - Resolve release gate `DEP-001` for the unsupported development-only archive dependency and record a clean package-manager audit.
 - Generate and review a full JavaScript and Android dependency inventory from the lockfile and resolved Gradle graph.
 - Inspect the generated APK `assets/legal/` bundle for the application
@@ -141,3 +145,31 @@ or otherwise distributing them.
   (`readelf -l <lib> | grep LOAD` → p_align == 0x4000) before release, and record the
   Honor / Android 16 on-device page-size test (`adb shell getconf PAGE_SIZE` == 16384)
   in the release notes.
+
+## 发布工程自动门禁（CI 强制执行，2026-10-11 起）
+
+以下四条由 `scripts/mobile-compat-contract.test.mjs` 断言，跑在 CI 的
+`pnpm run test:scripts`（`node --test scripts/*.test.mjs`）里，本地同样可以复跑：
+
+- **版本号只有一个来源**：根 `package.json` 的 `version`、`android/app/build.gradle`
+  的 `versionName`、`.github/workflows/android-build.yml` 的 `APP_VERSION` 必须相等，
+  `versionCode` 必须是正整数。改版本号时必须三处一起改，漏一处 CI 直接失败——
+  否则会产出「APK 自称旧版本、Release 标成新版本」的错版。
+- **`harness-web` 冻结指针**：`harness-web.pin` 里的 40 位 sha1 必须同时等于
+  索引里的 gitlink 与 HEAD 里已提交的 gitlink。子模块换版要单独提交：先把
+  `harness-web` 切到目标提交，再改 `harness-web.pin`，然后一起提交。
+  本地子模块工作区落后不影响 CI（CI 按 gitlink 重新检出），测试只打印提示。
+- **工具链钉死、运行器不浮动**：Node / JDK / Gradle 必须写全补丁号，
+  `sdkmanager` 逐个列出带版本的组件，`runs-on` 必须写具体镜像
+  （`ubuntu-24.04`、`ubuntu-24.04-arm`），不允许 `ubuntu-latest` 这类浮动标签。
+- **发布后复核已发布资产**：`publish-release` 上传完成后会把资产重新下载回来，
+  由 `scripts/verify-release-assets.py` 按 `checksums.txt` 逐项核对 SHA-256 与文件
+  集合（`--expect app-release.apk,rootfs.bundle,runtime-manifest.json` 保证既不缺件
+  也不多件）。上传被截断、多传一份 bundle、漏传清单都会在这里失败；该脚本自己的
+  夹具测试在 `scripts/verify-release-assets.test.mjs`。
+
+发布作业的失败处置（2026-10-11 起）：创建 Release 或上传资产失败仍是 `exit 1`；
+**复核失败**时额外执行「把本次 Release 转为草稿」（`if: failure()` 里 PATCH
+`{"draft":true}`）——用户看不到这次发布，但资产与发布说明都还在。确认是误报可以
+改回正式；确属坏版本则删除该 Release 与标签、升 `APP_VERSION` 重发。
+**不原地覆盖已发布的 tag，也不自动删资产**：网络抖动不该造成不可恢复的删除。

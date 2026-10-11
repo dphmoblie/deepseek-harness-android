@@ -51,7 +51,7 @@ env:
 jobs:
   build:
     needs: [build-runners, build-rootfs]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       # 团队统一签名：密钥库与密码经 GitHub Secrets 注入（base64 编码的 dsh-mobile-team.jks）
       DSH_KEYSTORE_BASE64: ${{ secrets.DSH_KEYSTORE_BASE64 }}
@@ -217,7 +217,7 @@ jobs:
 
   build-runners:
     name: Build PRoot runners (Operit2 toolchain, arm64-v8a)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -497,7 +497,7 @@ jobs:
       contents: write
     # 推送分支只做构建与验证；发布必须手动 workflow_dispatch 并选择 release_type
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.release_type != '' && (github.event.inputs.release_type != 'stable' || github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       # 需要完整历史与标签：Release 说明里的「变更内容」由上一个发布标签到本次提交的
       # 提交列表生成，浅克隆既没有历史也没有标签。
@@ -613,7 +613,53 @@ jobs:
                 "${UPLOAD_BASE}?name=${name}" >/dev/null
             done
             echo "RELEASE_URL=https://github.com/${{ github.repository }}/releases/tag/${TAG}"
+            # 复核与撤回步骤要用到标签（按名重新下载资产）与 id（把复核失败的
+            # Release 转为草稿），因此写进后续步骤可见的 GITHUB_ENV。
+            {
+              echo "RELEASE_TAG=${TAG}"
+              echo "RELEASE_ID=${RELEASE_ID}"
+            } >> "$GITHUB_ENV"
           ) 2>&1 | tee /tmp/release.log
           STATUS="$?"
           set -e
           if [ "$STATUS" != "0" ]; then exit 1; fi
+
+      - name: 复核已发布资产（重新下载并核对摘要）
+        # 上传之后的字节不再受本仓库控制：只有把资产重新下载回来重算摘要，才能证明
+        # 用户拿到的就是本次构建产物。上传被截断、多传一份 bundle、漏传清单都会在这里失败。
+        # 走 gh（带 token）而不是匿名下载地址，私有仓库也不会把 404 误判成坏发布。
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -n "${RELEASE_TAG:-}"
+          VERIFY_DIR="$(mktemp -d)"
+          gh release download "${RELEASE_TAG}" \
+            --repo "${{ github.repository }}" \
+            --dir "${VERIFY_DIR}" \
+            --pattern '*'
+          ls -la "${VERIFY_DIR}"
+          python3 scripts/verify-release-assets.py \
+            --dir "${VERIFY_DIR}" \
+            --expect app-release.apk,rootfs.bundle,runtime-manifest.json
+
+      - name: 复核失败即把本次发布转为草稿
+        # 处置口径见 docs/RELEASE_CHECKLIST.md：坏版本不原地覆盖 tag。转为草稿后用户
+        # 看不到这次发布，但资产与说明都还在，确认是误报可以改回正式；确属坏版本就
+        # 删掉该 Release 与标签、升 APP_VERSION 重发。构建产物仍在本次 run 的 artifact 里。
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +x
+          set -euo pipefail
+          if [ -z "${RELEASE_ID:-}" ]; then
+            echo "本次尚未创建 Release，无需撤回"
+            exit 0
+          fi
+          curl -sS -f -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d '{"draft":true}' \
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}" >/dev/null
+          echo "已把 ${RELEASE_TAG} 转为草稿：确认误报改回正式，确属坏版本则删除该 Release 与标签后升 APP_VERSION 重发"
