@@ -18,7 +18,7 @@ test('hardware Bitmaps remain decoded without CPU samples or a CPU blank flag', 
 test('frame fetching never closes or replaces the currently displayed hardware buffer', () => {
   assert.doesNotMatch(fetch, /displayedHardware/u)
   assert.match(fetch, /catch \(_: Exception\) \{\s*fetchedHardware\?\.close\(\)\s*fetchedHardware = null/u)
-  assert.match(tick, /if \(version != generation \|\| executor == null\) \{\s*fetchedHardware\?\.close\(\)\s*return@post/u)
+  assert.match(tick, /if \(version != lifecycle\.generation \|\| executor == null\) \{\s*fetchedHardware\?\.close\(\)\s*return@post/u)
 })
 
 test('UI frame replacement transfers ownership while rejected and cleared frames release their buffers', () => {
