@@ -102,6 +102,7 @@ import type {
   RuntimeState,
   RuntimeVersionSlot,
   RuntimeVersionsState,
+  RuntimeWorkspaceFileList,
   ShizukuState,
   StorageAccessState,
   StorageDirEntry,
@@ -1115,7 +1116,7 @@ interface EnvironmentScreenProps {
   onUpdate: () => void
   onShareWorkspace: () => void
   onListFiles: () => void
-  workspaceFiles: string[] | null
+  workspaceFiles: RuntimeWorkspaceFileList | null
   onShareFile: (path: string) => void
   onOpenFile: (path: string) => void
   onDeleteFile: (path: string) => void
@@ -1286,7 +1287,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
 
 interface WorkspaceFilesDialogProps {
   busy: string | null
-  files: string[] | null
+  files: RuntimeWorkspaceFileList | null
   onClose: () => void
   onDelete: (path: string) => void
   onOpen: (path: string) => void
@@ -1325,7 +1326,7 @@ function WorkspaceFilesDialog({ busy, files, onClose, onDelete, onOpen, onRefres
         <span className="workspace-dialog-icon" aria-hidden="true"><FolderOpen size={22} /></span>
         <div>
           <h2 id="workspace-dialog-title">{t("工作区文件")}</h2>
-          <p>{loading ? t("正在读取文件") : files === null ? t("读取失败") : t("{0} 个文件", files.length)}</p>
+          <p>{loading ? t("正在读取文件") : files === null ? t("读取失败") : t("{0} 个文件", files.files.length)}</p>
         </div>
         <button className="icon-button" type="button" aria-label={t("刷新")} title={t("刷新")} onClick={onRefresh} disabled={busy !== null}>
           {loading ? <Loader2 className="spin" size={19} /> : <RefreshCw size={19} />}
@@ -1337,8 +1338,8 @@ function WorkspaceFilesDialog({ busy, files, onClose, onDelete, onOpen, onRefres
       <div className="workspace-dialog-body" aria-live="polite">
         {loading ? <div className="workspace-empty"><Loader2 className="spin" size={24} /><span>{t("正在读取工作区文件")}</span></div>
           : files === null ? <div className="workspace-empty" role="alert"><AlertTriangle size={26} /><strong>{t("无法读取工作区文件，请重试")}</strong></div>
-            : files.length === 0 ? <div className="workspace-empty"><FileText size={26} /><strong>{t("工作区中暂无文件")}</strong><span>{t("DSH 创建的文件会显示在这里")}</span></div>
-            : <div className="workspace-file-list">{files.map(path => {
+            : files.files.length === 0 ? <div className="workspace-empty"><FileText size={26} /><strong>{t("工作区中暂无文件")}</strong><span>{t("DSH 创建的文件会显示在这里")}</span></div>
+            : <div className="workspace-file-list">{files.files.map(path => {
                 const separator = path.lastIndexOf('/')
                 const name = separator < 0 ? path : path.slice(separator + 1)
                 const directory = separator < 0 ? t("工作区根目录") : path.slice(0, separator)
@@ -1351,7 +1352,7 @@ function WorkspaceFilesDialog({ busy, files, onClose, onDelete, onOpen, onRefres
                     <button className="icon-button workspace-delete" type="button" aria-label={t("删除 {0}", name)} title={t("删除")} onClick={() => onDelete(path)} disabled={busy !== null}><Trash2 size={17} /></button>
                   </span>
                 </div>
-              })}</div>}
+              })}{files.truncated && <p className="settings-note" role="status">{t("文件过多，仅显示前 100 个；请缩小工作区范围后重试")}</p>}</div>}
       </div>
     </section>
   </div>
@@ -2679,7 +2680,7 @@ function RuntimeVersionsScreen({
  * 正因为语义不同，导入到工作区/导出工作区**只在投递区根上渲染**；把两套动作混在一起会让
  * 用户以为共享目录也要「搬运」一次才能用。
  */
-type FilesRoot = { kind: 'mailbox'; root: MailboxRoot } | { kind: 'storage'; guestPath: string }
+type FilesRoot = { kind: 'mailbox'; root: MailboxRoot } | { kind: 'storage'; guestPath: string; path: string }
 
 interface FilesScreenProps {
   busy: string | null
@@ -2704,7 +2705,7 @@ interface FilesScreenProps {
   lastMailboxExport: MailboxExportResult | null
   /** 新增一条共享目录：原生侧弹 SAF 目录选择器，用户取消不算故障。 */
   onAddStorageDirectory: () => void
-  /** 按宿主路径移除一条共享目录（用路径而不是序号：序号会随增删变化）。 */
+  /** 按宿主路径移除一条共享目录。 */
   onRemoveStorageDirectory: (path: string) => void
   onImportMailbox: () => void
   onExportMailbox: () => void
@@ -2815,28 +2816,30 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
       : storageDirMessage(entry.reasonCode, undefined)
 
   const browsingMailbox = filesRoot.kind === 'mailbox'
+  const storageEntries = storageDirs?.entries ?? []
+  const currentStorageEntry = filesRoot.kind === 'storage'
+    ? storageEntries.find(entry => entry.guestPath === filesRoot.guestPath && entry.path === filesRoot.path)
+    : undefined
+  const directory = browsingMailbox
+    ? mailboxDirectory?.root === filesRoot.root ? mailboxDirectory : null
+    : storageDirectory?.guestPath === filesRoot.guestPath && currentStorageEntry?.path === filesRoot.path ? storageDirectory : null
   /** 当前根下正在浏览的相对路径；undefined 表示就在根目录上。 */
-  const currentPath = browsingMailbox ? mailboxDirectory?.path : storageDirectory?.path
+  const currentPath = directory?.path
   /**
    * 两种根的条目形状本来就一样（`{ name, kind, bytes }`，共用同一个原生 `toJs()`），
    * 所以列表只写一份；这不是「凑巧」，是原生两侧刻意共用同一份实现。
    */
-  const entries = (browsingMailbox ? mailboxDirectory?.entries : storageDirectory?.entries) ?? []
+  const entries = directory?.entries ?? []
   const readFailed = browsingMailbox ? mailboxDirectoryReadFailed : storageDirectoryReadFailed
-  const snapshotReady = browsingMailbox ? mailboxDirectory !== null : storageDirectory !== null
-  const truncated = (browsingMailbox ? mailboxDirectory?.truncated : storageDirectory?.truncated) === true
-  /** 投递区不可用时不能浏览它；共享目录能不能浏览由白名单条目的可用性决定（读取失败会另行提示）。 */
-  const rootUsable = browsingMailbox ? mailbox?.available === true : true
-  const storageEntries = storageDirs?.entries ?? []
-  const currentStorageEntry = filesRoot.kind === 'storage'
-    ? storageEntries.find(entry => entry.guestPath === filesRoot.guestPath)
-    : undefined
+  const snapshotReady = directory !== null
+  const truncated = directory?.truncated === true
+  const rootUsable = browsingMailbox ? mailbox?.available === true : currentStorageEntry?.available === true
   /** 面包屑最左边的根名字：投递区是 inbox/outbox，共享目录用它的显示名（没有就退回挂载点）。 */
   const rootLabel = browsingMailbox
     ? (filesRoot.root)
     : (currentStorageEntry?.displayName ?? filesRoot.guestPath)
-  const exportToCurrentDirectory = mailboxDirectory?.root === 'outbox' && mailboxDirectory.path !== undefined
-  const createFolderDisabled = busy !== null || !rootUsable || !snapshotReady
+  const exportToCurrentDirectory = browsingMailbox && filesRoot.root === 'outbox' && directory?.path !== undefined
+  const createFolderDisabled = busy !== null || !rootUsable || !snapshotReady || readFailed
 
   return (
     <div className="screen files-screen">
@@ -2883,10 +2886,10 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
             <Folder size={16} />{t("outbox · 产物取出")}
           </button>
           {storageEntries.map(entry => {
-            const selected = filesRoot.kind === 'storage' && filesRoot.guestPath === entry.guestPath
+            const selected = filesRoot.kind === 'storage' && filesRoot.guestPath === entry.guestPath && filesRoot.path === entry.path
             return (
               <button className={`mailbox-root-tab ${selected ? 'active' : ''}`} key={entry.guestPath} type="button" role="tab"
-                aria-selected={selected} onClick={() => onSelectFilesRoot({ kind: 'storage', guestPath: entry.guestPath })}
+                aria-selected={selected} onClick={() => onSelectFilesRoot({ kind: 'storage', guestPath: entry.guestPath, path: entry.path })}
                 /*
                   不可用的条目禁用但要留下原因：禁用按钮不参与焦点，读屏用户看不到 title，
                   所以下面白名单列表里那条「不可用原因」才是真正的解释入口，这里只补一个悬停提示。
@@ -2910,7 +2913,7 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
           </p>
         )}
 
-        {snapshotReady && !readFailed && (
+        {snapshotReady && !readFailed && rootUsable && (
           <>
             <nav className="mailbox-breadcrumb" aria-label={t("当前目录")}>
               <button type="button" onClick={() => onOpenFilesDirectory()} disabled={busy !== null}>
@@ -4382,8 +4385,6 @@ export function App() {
   const [mailbox, setMailbox] = useState<MailboxState | null>(null)
   const [mailboxDirectory, setMailboxDirectory] = useState<MailboxDirectoryState | null>(null)
   const [mailboxDirectoryReadFailed, setMailboxDirectoryReadFailed] = useState(false)
-  const [mailboxRoot, setMailboxRoot] = useState<MailboxRoot>('inbox')
-  const [mailboxPath, setMailboxPath] = useState<string | undefined>(undefined)
   const [storageAccess, setStorageAccess] = useState<StorageAccessState | null>(null)
   /**
    * 目录白名单（访客内 `/mnt/user/<序号>` 的唯一来源）。与投递区同一套口径：
@@ -4396,11 +4397,10 @@ export function App() {
   /**
    * 「文件管理」页当前浏览的根，以及共享目录那份目录快照。
    *
-   * 投递区的光标仍然由 [mailboxRoot]/[mailboxPath] 持有（导出目标要用它），这里只记
-   * 「这一页现在在看哪一边」；共享目录没有第二份光标，因为它的根由白名单条目决定，
-   * 子目录路径直接进请求参数。读取失败单独记录，与投递区同一口径。
+   * 子目录光标只取当前根匹配的快照；共享目录还保留宿主路径以识别被重新分配的槽位。
    */
   const [filesRoot, setFilesRoot] = useState<FilesRoot>({ kind: 'mailbox', root: 'inbox' })
+  const filesRootRef = useRef(filesRoot)
   const [storageDirectory, setStorageDirectory] = useState<StorageDirectoryState | null>(null)
   const [storageDirectoryReadFailed, setStorageDirectoryReadFailed] = useState(false)
   const mailboxReadRevision = useRef(0)
@@ -4510,8 +4510,7 @@ export function App() {
    *
    * 三个载荷一起并行读：它们互相决定对方的显示 —— 投递区是否可用由「所有文件访问」决定，
    * 目录白名单能不能添加也由它决定，分开读会出现「显示需要授权但按钮可点」这类
-   * 自相矛盾的瞬间。失败时只置标志位，保留上一次快照——把「读取失败」显示成
-   * 「不可用」会让用户白跑一次系统设置。
+   * 自相矛盾的瞬间。失败时清除旧快照并单独提示读取失败，旧权限不能继续授权写入。
    *
    * 三路用同一个版本号收口：它们是**一屏状态**，版本不一致就会出现「投递区是新的、
    * 白名单是旧的」这种半个屏幕的组合，比整体用上一批快照更难解释。
@@ -4528,12 +4527,28 @@ export function App() {
         setMailbox(nextMailbox)
         setStorageAccess(nextStorage)
         setStorageDirs(nextDirs)
+        const root = filesRootRef.current
+        if (!nextMailbox.available) {
+          mailboxDirectoryReadRevision.current += 1
+          setMailboxDirectory(null)
+        }
+        if (root.kind === 'storage' && !nextDirs.entries.some(entry => entry.guestPath === root.guestPath && entry.path === root.path && entry.available)) {
+          storageDirectoryReadRevision.current += 1
+          setStorageDirectory(null)
+        }
         setMailboxReadFailed(false)
         setStorageDirsReadFailed(false)
       }
       return nextMailbox
     } catch (error) {
       if (revision === mailboxReadRevision.current) {
+        mailboxDirectoryReadRevision.current += 1
+        storageDirectoryReadRevision.current += 1
+        setMailbox(null)
+        setStorageAccess(null)
+        setStorageDirs(null)
+        setMailboxDirectory(null)
+        setStorageDirectory(null)
         setMailboxReadFailed(true)
         setStorageDirsReadFailed(true)
       }
@@ -4546,15 +4561,18 @@ export function App() {
     const revision = ++mailboxDirectoryReadRevision.current
     try {
       const next = await runtimeBridge.getMailboxDirectory(root, subdirectory)
-      if (revision === mailboxDirectoryReadRevision.current) {
+      if (next.root !== root || next.path !== subdirectory) throw new Error('投递区目录响应与请求不一致')
+      const selected = filesRootRef.current
+      if (revision === mailboxDirectoryReadRevision.current && selected.kind === 'mailbox' && selected.root === root) {
         setMailboxDirectory(next)
-        setMailboxRoot(next.root)
-        setMailboxPath(next.path)
         setMailboxDirectoryReadFailed(false)
       }
       return next
     } catch (error) {
-      if (revision === mailboxDirectoryReadRevision.current) setMailboxDirectoryReadFailed(true)
+      if (revision === mailboxDirectoryReadRevision.current) {
+        setMailboxDirectory(null)
+        setMailboxDirectoryReadFailed(true)
+      }
       throw error
     }
   }, [])
@@ -4569,16 +4587,24 @@ export function App() {
     const revision = ++storageDirectoryReadRevision.current
     try {
       const next = await runtimeBridge.getStorageDirectory(guestPath, subdirectory)
-      if (revision === storageDirectoryReadRevision.current) {
+      if (next.guestPath !== guestPath || next.path !== subdirectory) throw new Error('共享目录响应与请求不一致')
+      const selected = filesRootRef.current
+      const selectedEntry = selected.kind === 'storage'
+        ? storageDirs?.entries.find(entry => entry.guestPath === selected.guestPath && entry.path === selected.path && entry.available)
+        : undefined
+      if (revision === storageDirectoryReadRevision.current && selected.kind === 'storage' && selected.guestPath === guestPath && selectedEntry?.path === selected.path) {
         setStorageDirectory(next)
         setStorageDirectoryReadFailed(false)
       }
       return next
     } catch (error) {
-      if (revision === storageDirectoryReadRevision.current) setStorageDirectoryReadFailed(true)
+      if (revision === storageDirectoryReadRevision.current) {
+        setStorageDirectory(null)
+        setStorageDirectoryReadFailed(true)
+      }
       throw error
     }
-  }, [])
+  }, [storageDirs])
 
   /**
    * 视图导航入口（取代直接调用裸的 setState）：只有视图真的变化才写历史并重渲染。
@@ -5237,7 +5263,7 @@ export function App() {
   const shareWorkspace = useCallback(() => {
     void run('workspace-share', () => runtimeBridge.shareRuntimeWorkspace(), t('已打开分享面板'))
   }, [run])
-  const [workspaceFiles, setWorkspaceFiles] = useState<string[] | null>(null)
+  const [workspaceFiles, setWorkspaceFiles] = useState<RuntimeWorkspaceFileList | null>(null)
   const listWorkspaceFiles = useCallback(() => {
     setWorkspaceFiles(null)
     void run('workspace-files', async () => setWorkspaceFiles(await runtimeBridge.listRuntimeWorkspaceFiles()))
@@ -5248,7 +5274,7 @@ export function App() {
     if (!window.confirm(t('确定删除“{0}”吗？此操作无法撤销。', path))) return
     void run('workspace-file-delete', async () => {
       await runtimeBridge.deleteRuntimeWorkspaceFile(path)
-      setWorkspaceFiles(current => current?.filter(item => item !== path) ?? null)
+      setWorkspaceFiles(current => current === null ? null : { ...current, files: current.files.filter(item => item !== path) })
     }, t('文件已删除'))
   }, [run])
 
@@ -5516,18 +5542,20 @@ export function App() {
 
   /** 一键导出：工作区 → outbox 的 tar + manifest + sha256；同样必须由用户点击触发。 */
   const exportMailbox = useCallback(() => {
+    if (filesRoot.kind !== 'mailbox' || mailbox?.available !== true) return
+    const root = filesRoot.root
+    const destinationDirectory = root === 'outbox' && mailboxDirectory?.root === root ? mailboxDirectory.path : undefined
     void run('mailbox-export', async () => {
-      const destinationDirectory = mailboxRoot === 'outbox' ? mailboxPath : undefined
       const result = await runtimeBridge.exportMailbox(undefined, destinationDirectory)
       setLastMailboxExport(result)
       await readMailbox().catch(() => {
         // 搬运已成功；状态重读失败不影响结果展示。
       })
-      if (mailboxRoot === 'outbox') await readMailboxDirectory(mailboxRoot, mailboxPath).catch(() => {
+      if (root === 'outbox') await readMailboxDirectory(root, destinationDirectory).catch(() => {
         // 产物已导出；列表重读失败可由用户手动刷新。
       })
     }, t("投递区已导出到 outbox"))
-  }, [mailboxPath, mailboxRoot, readMailbox, readMailboxDirectory, run])
+  }, [filesRoot, mailbox, mailboxDirectory, readMailbox, readMailboxDirectory, run])
 
   /** 重新检查投递区可用性：用户在系统设置里授权后手动触发，避免反复进出页面。 */
   const refreshMailbox = useCallback(() => {
@@ -5543,8 +5571,15 @@ export function App() {
    * 共享目录走白名单条目的挂载点（`guestPath` 由白名单提供，界面从不自己拼路径）。
    */
   const selectFilesRoot = useCallback((next: FilesRoot) => {
-    setFilesRoot(next)
     void run('files-root', async () => {
+      filesRootRef.current = next
+      setFilesRoot(next)
+      mailboxDirectoryReadRevision.current += 1
+      storageDirectoryReadRevision.current += 1
+      setMailboxDirectory(null)
+      setStorageDirectory(null)
+      setMailboxDirectoryReadFailed(false)
+      setStorageDirectoryReadFailed(false)
       if (next.kind === 'mailbox') await readMailboxDirectory(next.root)
       else await readStorageDirectory(next.guestPath)
     })
@@ -5569,7 +5604,12 @@ export function App() {
     if (busyRef.current !== null) return
     const browsingMailbox = filesRoot.kind === 'mailbox'
     if (browsingMailbox && mailbox?.available !== true) return
-    const currentPath = browsingMailbox ? mailboxPath : storageDirectory?.path
+    const directory = browsingMailbox
+      ? mailboxDirectory?.root === filesRoot.root ? mailboxDirectory : null
+      : storageDirectory?.guestPath === filesRoot.guestPath && storageDirs?.entries.some(entry => entry.guestPath === filesRoot.guestPath && entry.path === filesRoot.path && entry.available) ? storageDirectory : null
+    if (directory === null || (browsingMailbox ? mailboxDirectoryReadFailed : storageDirectoryReadFailed)) return
+    if (filesRoot.kind === 'storage' && !storageDirs?.entries.some(entry => entry.guestPath === filesRoot.guestPath && entry.path === filesRoot.path && entry.available)) return
+    const currentPath = directory.path
     const raw = window.prompt(t("请输入新文件夹名称（仅支持单层名称）"))
     if (raw === null) return
     const name = raw.trim()
@@ -5587,9 +5627,8 @@ export function App() {
       const root = filesRoot.root
       void run('mailbox-folder-create', async () => {
         const next = await runtimeBridge.createMailboxFolder(root, target)
+        if (next.root !== root) throw new Error('投递区目录响应与请求不一致')
         setMailboxDirectory(next)
-        setMailboxRoot(next.root)
-        setMailboxPath(next.path)
         setMailboxDirectoryReadFailed(false)
       }, t("投递区文件夹已创建"))
       return
@@ -5597,10 +5636,13 @@ export function App() {
     const guestPath = filesRoot.guestPath
     void run(FILES_STORAGE_FOLDER_CREATE_BUSY_ID, async () => {
       const next = await runtimeBridge.createStorageFolder(guestPath, target)
+      if (next.guestPath !== guestPath || !storageDirs?.entries.some(entry => entry.guestPath === guestPath && entry.path === filesRoot.path && entry.available)) {
+        throw new Error('共享目录响应与请求不一致')
+      }
       setStorageDirectory(next)
       setStorageDirectoryReadFailed(false)
     }, t("文件夹已创建"))
-  }, [filesRoot, mailbox, mailboxPath, notify, run, storageDirectory])
+  }, [filesRoot, mailbox, mailboxDirectory, mailboxDirectoryReadFailed, notify, run, storageDirectory, storageDirectoryReadFailed, storageDirs])
 
   /**
    * 目录白名单操作（添加/移除）的统一收口。
@@ -5610,15 +5652,24 @@ export function App() {
    * 其余错误码一律换成可操作的中文（见 [STORAGE_DIR_ERROR_MESSAGES]），不把码甩给用户。
    *
    * 成功与失败都用**桥返回的最新状态**覆盖本地快照，不做本地增量合并：条目的序号来自
-   * 原生侧的持久化顺序，界面自己算一遍迟早会和它对不上（界面上就会显示出错的挂载点）。
+   * 原生侧的持久化槽位，界面不再按数组位置生成挂载点。
    */
   const runStorageDirAction = useCallback(async (id: string, operation: () => Promise<StorageDirsState>): Promise<void> => {
     if (busyRef.current !== null) return
+    if (filesRootRef.current.kind === 'storage') {
+      storageDirectoryReadRevision.current += 1
+      setStorageDirectory(null)
+    }
     busyRef.current = id
     setBusy(id)
     try {
       const next = await operation()
       setStorageDirs(next)
+      const root = filesRootRef.current
+      if (root.kind === 'storage' && !next.entries.some(entry => entry.guestPath === root.guestPath && entry.path === root.path && entry.available)) {
+        storageDirectoryReadRevision.current += 1
+        setStorageDirectory(null)
+      }
       // 这一次是真的拿到了原生快照：顺手清掉读取失败标记，界面不必再让用户手动重试。
       setStorageDirsReadFailed(false)
     } catch (error) {
@@ -5640,7 +5691,7 @@ export function App() {
     void runStorageDirAction(STORAGE_DIR_ADD_BUSY_ID, () => runtimeBridge.addStorageDirectory())
   }, [runStorageDirAction])
 
-  /** 移除一条目录：用宿主路径定位，不用序号（序号会随增删变化，用序号可能删掉另一条）。 */
+  /** 移除一条目录：用宿主路径定位，不能把已经复用的槽位当作原目录。 */
   const removeStorageDirectory = useCallback((path: string) => {
     void runStorageDirAction(storageDirRemoveBusyId(path), () => runtimeBridge.removeStorageDirectory(path))
   }, [runStorageDirAction])

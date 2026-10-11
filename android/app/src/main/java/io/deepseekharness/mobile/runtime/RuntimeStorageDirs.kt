@@ -15,10 +15,10 @@ import java.security.MessageDigest
  * 手机侧（用户通过 SAF 显式点选）                     访客内（固定挂载点）
  * /storage/emulated/0/Download          →  /mnt/user/1
  * /storage/emulated/0/Documents/Project →  /mnt/user/2
- * 序号 = 白名单里的持久化顺序（稳定，不因某条失效而重排）
+ * 序号 = 白名单里的持久化槽位（稳定，不因删除或失效而重排）
  * ```
  *
- * **序号取自持久化顺序而不是「当前可用条目的序号」**：某一条目录被用户删掉/改名时只跳过该条
+ * **序号取自持久化槽位而不是「当前可用条目的序号」**：某一条目录被用户删掉/改名时只跳过该条
  * （诊断日志里留痕），其余条目的访客路径不变——否则一次失效就会让所有会话里写死的
  * `/mnt/user/2` 指向另一个目录，那比留一个空洞危险得多。
  *
@@ -174,10 +174,11 @@ internal enum class StorageDirAvailability(val wireValue: String, val level: Str
     UNSUPPORTED("unsupported", "T0"),
 }
 
-/** 一条白名单条目：**持久化的真实路径 + 展示名**；顺序即数组顺序（序号 = 下标 + 1）。 */
+/** 一条白名单条目；持久化槽位不会随其它目录被移除而改变。 */
 internal data class StorageDirEntry(
     val path: String,
     val displayName: String,
+    val index: Int = 0,
 )
 
 /** 一次读取的结果：[dropped] 是被丢弃的条目数（形态非法、重复或超限）。 */
@@ -426,7 +427,7 @@ internal object RuntimeStorageDirsPolicy {
      * 一旦允许别名（前导零、正号、尾随空格），同一个序号就会有多种写法，前端缓存的
      * guestPath ↔ 目录映射会随之漂移。
      *
-     * 序号本身是**持久化顺序**，只做范围与形态校验，不参与任何排序：序号与绑定顺序、与
+     * 序号本身是**持久化槽位**，只做范围与形态校验，不参与任何排序：序号与绑定顺序、与
      * [StorageDirStatus.index] 必须是同一个数。
      */
     fun guestDirectoryIndex(guestPath: String): Int {
@@ -494,7 +495,7 @@ internal class AndroidStorageDirFileSystem : StorageDirFileSystem {
  *    会让 PRoot 直接起不来，那比「白名单不可用」严重得多；
  * 2. **可选绑定**：单条目录失效（被删/改名/不可读/挂载点建不出来）只跳过该条并记诊断，
  *    其余条目照常，绝不影响会话启动；
- * 3. **序号稳定**：序号来自持久化顺序，跳过条目会留下空洞，但不重排。
+ * 3. **序号稳定**：序号来自持久化槽位，跳过或删除条目会留下空洞，但不重排。
  *
  * 生产构造见 [from]；单测用内存偏好替身 + 假文件系统直接构造（见 `RuntimeStorageDirsTest`）。
  */
@@ -552,6 +553,7 @@ internal class RuntimeStorageDirs(
         val updated = stored + StorageDirEntry(
             path = canonical,
             displayName = RuntimeStorageDirsPolicy.displayNameOf(canonical),
+            index = (1..RuntimeStorageDirsLimits.MAX_DIRECTORIES).first { slot -> stored.none { it.index == slot } },
         )
         write(updated)
         record(
@@ -627,8 +629,7 @@ internal class RuntimeStorageDirs(
     /**
      * 把一个访客路径（`/mnt/user/<序号>`）解析成**当前可用**的白名单条目。
      *
-     * 序号即持久化顺序（与 [statuses] 的编号一致），**不重排**：界面上的 `/mnt/user/3` 必须永远
-     * 指同一条目录，否则用户按序号做的选择会漂移（跳过失效条目会留下空洞，但空洞不补位）。
+     * 使用持久化槽位，不按数组位置编号；移除条目不会改变其它目录的挂载点。
      *
      * 失败一律走受控码：档位不满足 → UNSUPPORTED / NEEDS_PERMISSION（复用 [requireReady]）；
      * 形态非法 → PATH_INVALID；序号越界 → NOT_FOUND；条目自身失效 → 它自己的 reasonCode。
@@ -637,7 +638,7 @@ internal class RuntimeStorageDirs(
     internal fun requireGuestDirectory(guestPath: String): StorageDirStatus {
         requireReady()
         val index = RuntimeStorageDirsPolicy.guestDirectoryIndex(guestPath)
-        val entry = read().entries.getOrNull(index - 1)
+        val entry = read().entries.find { it.index == index }
             ?: throw RuntimeFailure(StorageDirCodes.NOT_FOUND, "该共享目录不在白名单中")
         val status = entryStatus(index, entry)
         if (!status.available) {
@@ -701,6 +702,8 @@ internal class RuntimeStorageDirs(
         if (entries.isEmpty()) return "dirs:0"
         val digest = MessageDigest.getInstance("SHA-256")
         entries.forEach { entry ->
+            digest.update(entry.index.toString().toByteArray(Charsets.UTF_8))
+            digest.update(0)
             digest.update(entry.path.toByteArray(Charsets.UTF_8))
             digest.update(0)
         }
@@ -730,7 +733,7 @@ internal class RuntimeStorageDirs(
     }
 
     private fun statuses(entries: List<StorageDirEntry>): List<StorageDirStatus> =
-        entries.mapIndexed { position, entry -> entryStatus(position + 1, entry) }
+        entries.map { entry -> entryStatus(entry.index, entry) }
 
     private fun entryStatus(index: Int, entry: StorageDirEntry): StorageDirStatus {
         if (!fileSystem.isFeatureSupported()) {

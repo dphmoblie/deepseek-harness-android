@@ -1666,8 +1666,8 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun listRuntimeWorkspaceFiles(call: PluginCall) {
         execute(call) {
-            val files = RuntimeWorkspaceFiles(controller.store, context.cacheDir).list()
-            JSObject().put("files", org.json.JSONArray(files))
+            val snapshot = RuntimeWorkspaceFiles(controller.store, context.cacheDir).list()
+            JSObject().put("files", org.json.JSONArray(snapshot.files)).put("truncated", snapshot.truncated)
         }
     }
 
@@ -2098,7 +2098,7 @@ class MobileRuntimePlugin : Plugin() {
      * ≤8 目录白名单状态：每条的用户可见路径、展示名、访客挂载点 `/mnt/user/<序号>`、可用性与
      * 不可用时的受控错误码，以及上限与权限档。
      *
-     * **序号来自持久化顺序**：某条目录失效时只跳过该条（访客里留下空洞），不重排 —— 否则一次
+     * **序号来自持久化槽位**：某条目录失效或被删除时只跳过该条（访客里留下空洞），不重排 —— 否则一次
      * 失效就会让别的条目换到另一个挂载点上。**不含**应用私有路径、rootfs 路径或文件内容。
      */
     @PluginMethod
@@ -2127,6 +2127,7 @@ class MobileRuntimePlugin : Plugin() {
             // 先判档位再弹选择器：让用户白点一次目录、回来才被告知「需要授权」是纯粹的浪费，
             // 而判定规则仍然只有白名单门面那一份（这里不重复实现）。
             storageDirs().requireReady()
+            controller.withStorageDirsMutation { Unit }
         } catch (failure: RuntimeFailure) {
             call.reject(failure.message ?: "存储目录白名单当前不可用", failure.code)
             return
@@ -2170,7 +2171,9 @@ class MobileRuntimePlugin : Plugin() {
         // 解析与落盘放到执行器上：canonicalFile 与目录探测都要碰文件系统。
         // execute 支持「稍后 resolve」——回调此刻返回不影响这条调用最终的结果。
         execute(call) {
-            audited(AuditEvent.STORAGE_DIR_ADD) { storageDirs().add(documentId).toJs() }
+            audited(AuditEvent.STORAGE_DIR_ADD) {
+                controller.withStorageDirsMutation { storageDirs().add(documentId).toJs() }
+            }
         }
     }
 
@@ -2185,7 +2188,9 @@ class MobileRuntimePlugin : Plugin() {
         execute(call) {
             val path = call.getString("path")?.takeIf { it.isNotEmpty() }
                 ?: throw RuntimeFailure(StorageDirCodes.PATH_REQUIRED, "存储目录路径缺失")
-            audited(AuditEvent.STORAGE_DIR_REMOVE) { storageDirs().remove(path).toJs() }
+            audited(AuditEvent.STORAGE_DIR_REMOVE) {
+                controller.withStorageDirsMutation { storageDirs().remove(path).toJs() }
+            }
         }
     }
 
@@ -2197,7 +2202,7 @@ class MobileRuntimePlugin : Plugin() {
      * 可选 `subdirectory`；返回 `{ guestPath, path, entries, truncated }`，条目的线形状与投递区
      * 逐字相同（`{ name, kind, bytes }`，`kind` 为 `directory` / `file`）。
      *
-     * **序号语义是持久化顺序**：`/mnt/user/3` 永远指白名单里第 3 条，不因别的条目失效而重排，
+     * **序号语义是持久化槽位**：`/mnt/user/3` 永远指槽位 3，不因别的条目失效或被删除而重排，
      * 因此前端可以放心把它当成稳定标识。
      */
     @PluginMethod

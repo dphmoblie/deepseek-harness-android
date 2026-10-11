@@ -873,6 +873,13 @@ describe('存储目录白名单校验', () => {
     expect(value.level).toBe('T0')
   })
 
+  it('接受删除后留下空洞的持久化槽位', () => {
+    const value = validateStorageDirsState(state({
+      entries: [entry({ index: 2, guestPath: '/mnt/user/2' })],
+    }))
+    expect(value.entries[0].index).toBe(2)
+  })
+
   it('拒绝自相矛盾的载荷', () => {
     // count 与条目数不符、available 与 availability 不符、level 与权限不符、active 与实际不符。
     expect(() => validateStorageDirsState(state({ count: 0 }))).toThrow()
@@ -885,7 +892,7 @@ describe('存储目录白名单校验', () => {
 
   it('拒绝未知档位与越界的序号、挂载点', () => {
     expect(() => validateStorageDirsState(state({ entries: [entry({ availability: 'ok' })] }))).toThrow()
-    // 序号必须等于持久化顺序（第 n 条的序号是 n）：重排会让 /mnt/user/<序号> 指向别的目录。
+    // 单条载荷若声明槽位 2，挂载点也必须是 /mnt/user/2。
     expect(() => validateStorageDirsState(state({ entries: [entry({ index: 2 })] }))).toThrow()
     expect(() => validateStorageDirsState(state({ entries: [entry({ guestPath: '/mnt/user/2' })] }))).toThrow()
     expect(() => validateStorageDirsState(state({ count: 1, entries: [entry(), entry({ index: 2 })] }))).toThrow()
@@ -1584,8 +1591,8 @@ describe('会话列表元数据校验', () => {
 
 describe('运行时工作区文件列表校验', () => {
   it('只接受受控的相对路径，并保留原生返回的文件顺序', () => {
-    expect(validateRuntimeWorkspaceFileList({ files: ['reports/summary.md', 'result.json'] }))
-      .toEqual(['reports/summary.md', 'result.json'])
+    expect(validateRuntimeWorkspaceFileList({ files: ['reports/summary.md', 'result.json'], truncated: false }))
+      .toEqual({ files: ['reports/summary.md', 'result.json'], truncated: false })
   })
 
   it('拒绝路径穿越、绝对路径、控制字符和超长列表', () => {
@@ -1594,12 +1601,13 @@ describe('运行时工作区文件列表校验', () => {
     }
     expect(validateRuntimeWorkspaceFilePath('x'.repeat(240))).toHaveLength(240)
     expect(() => validateRuntimeWorkspaceFileList(null)).toThrow('工作区文件列表格式无效')
-    expect(() => validateRuntimeWorkspaceFileList({ files: 'result.json' })).toThrow('工作区文件列表格式无效')
-    expect(() => validateRuntimeWorkspaceFileList({ files: new Array(101).fill('result.json') }))
+    expect(() => validateRuntimeWorkspaceFileList({ files: 'result.json', truncated: false })).toThrow('工作区文件列表格式无效')
+    expect(() => validateRuntimeWorkspaceFileList({ files: new Array(101).fill('result.json'), truncated: false }))
       .toThrow('工作区文件列表格式无效')
-    expect(() => validateRuntimeWorkspaceFileList({ files: ['../secret'] })).toThrow('工作区文件路径无效')
-    expect(() => validateRuntimeWorkspaceFileList({ files: ['same.txt', 'same.txt'] }))
+    expect(() => validateRuntimeWorkspaceFileList({ files: ['../secret'], truncated: false })).toThrow('工作区文件路径无效')
+    expect(() => validateRuntimeWorkspaceFileList({ files: ['same.txt', 'same.txt'], truncated: false }))
       .toThrow('工作区文件列表包含重复路径')
+    expect(() => validateRuntimeWorkspaceFileList({ files: [], truncated: 'false' })).toThrow('截断标记')
   })
 })
 

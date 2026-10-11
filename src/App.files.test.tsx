@@ -211,9 +211,9 @@ describe('运行时工作区文件弹窗', () => {
 
   it('浏览文件，读取失败时清除旧列表，并可刷新重试', async () => {
     bridge.listRuntimeWorkspaceFiles
-      .mockResolvedValueOnce(['reports/summary.md', 'result.json'])
+      .mockResolvedValueOnce({ files: ['reports/summary.md', 'result.json'], truncated: false })
       .mockRejectedValueOnce(new Error('read failed'))
-      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ files: [], truncated: false })
     bridge.openRuntimeWorkspaceFile.mockResolvedValue(undefined)
     bridge.shareRuntimeWorkspaceFile.mockResolvedValue(undefined)
 

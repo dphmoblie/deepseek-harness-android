@@ -13,6 +13,7 @@ import io.deepseekharness.mobile.runtime.RuntimeFailure
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.Semaphore
@@ -95,7 +96,7 @@ class ShellVirtualScreen {
         check(display == null) { "请先结束当前副屏会话" }
         try {
             // 清除应用 Binder 身份，系统服务应按 Shizuku 进程的真实权限判断。
-            width = w; height = h; targetPackage = component.substringBefore('/')
+            width = w; height = h; setTargetPackage(component.substringBefore('/'))
             // 规格原样留档，供 restart 用同一份规格重建（见字段区注释）。
             targetComponent = component; displayDpi = dpi
             session = UUID.randomUUID().toString()
@@ -321,8 +322,9 @@ class ShellVirtualScreen {
                         component = resolveComponent(component) ?: throw VirtualScreenPolicy.launchUnresolvedFailure(component)
                     }
                     if (prewarm) warmUpError = warmUp(component)
+                    invalidateFrameCache()
                     launchOnDisplay(listOf("-n", component), component, component.substringBefore('/'), budget)
-                    targetPackage = component.substringBefore('/')
+                    assignTargetPackage(component.substringBefore('/'))
                     targetComponent = component
                 } catch (error: Exception) {
                     // 失败时把「哪一类失败 + 为什么」分开放：错误码回答哪一类（会话失效 / 切换超时 / 启动被拒），
@@ -338,7 +340,7 @@ class ShellVirtualScreen {
                     if (rollback && previous != null) {
                         if (rollbackTarget(previous, budget)) {
                             // 回滚成功时把原目标写回 targetPackage：不写会让 state/snapshot 继续指向一个其实不在副屏上的目标。
-                            targetPackage = previous.substringBefore('/')
+                            assignTargetPackage(previous.substringBefore('/'))
                             targetComponent = previous
                             suffix = "；已回滚到原目标 $previous"
                         } else {
@@ -444,10 +446,11 @@ class ShellVirtualScreen {
                         expected = null
                     }
                 }
+                invalidateFrameCache()
                 val launched = launchOnDisplay(arguments, label, expected)
                 // 只有确认上屏才更新目标包名：失败路径不写，避免状态里出现一个其实没在副屏上的目标。
                 if (launched != null) {
-                    targetPackage = launched.substringBefore('/')
+                    assignTargetPackage(launched.substringBefore('/'))
                     targetComponent = launched
                 }
                 return JSONObject()
@@ -483,8 +486,9 @@ class ShellVirtualScreen {
                         .toString()
                 }
                 val component = foreground
+                invalidateFrameCache()
                 launchOnDisplay(listOf("-n", component), candidate, candidate)
-                targetPackage = candidate
+                assignTargetPackage(candidate)
                 targetComponent = component
                 return JSONObject()
                     .put("sessionId", session).put("displayId", id())
@@ -528,10 +532,54 @@ class ShellVirtualScreen {
         return pipe[0]
     }
 
+    /** PNG bytes and metadata are written through a pipe from one retained frame. */
+    fun snapshotEnvelope(sessionId: String): ParcelFileDescriptor {
+        val source = synchronized(this) {
+            requireSession(sessionId)
+            if (!targetVisible()) throw VirtualScreenPolicy.failure(
+                VirtualScreenPolicy.TARGET_LEFT_CODE, VirtualScreenPolicy.TARGET_LEFT_MESSAGE,
+            )
+            checkNotNull(reader)
+        }
+        val snapshot = awaitFrameSnapshot(source)
+        check(transfers.tryAcquire()) { "副屏截图传输繁忙" }
+        val pipe = try { ParcelFileDescriptor.createReliablePipe() } catch (error: Exception) {
+            transfers.release()
+            throw error
+        }
+        val timeout = timers.schedule({ runCatching { pipe[1].closeWithError("副屏截图传输超时") } }, 5, TimeUnit.SECONDS)
+        writers.execute {
+            try {
+                ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]).use { output ->
+                    val header = JSONObject()
+                        .put("frameAtElapsedMs", snapshot.at)
+                        .put("frameBlank", snapshot.blank)
+                        .put("packageName", snapshot.packageName)
+                        .toString().toByteArray(Charsets.UTF_8)
+                    DataOutputStream(output).use { data ->
+                        data.writeInt(header.size)
+                        data.write(header)
+                        data.write(snapshot.bytes)
+                    }
+                }
+            } catch (_: Exception) {
+                runCatching { pipe[1].close() }
+            } finally {
+                timeout.cancel(false)
+                transfers.release()
+            }
+        }
+        return pipe[0]
+    }
+
+    private data class SnapshotFrame(val bytes: ByteArray, val at: Long, val blank: Boolean, val packageName: String)
+
     /**
      * 静止页直接读取保留的 Image；只有尚未收到首帧才等待，期间禁止切到另一会话。
      */
-    private fun awaitFrame(source: ImageReader): ByteArray = synchronized(frameLock) {
+    private fun awaitFrame(source: ImageReader): ByteArray = awaitFrameSnapshot(source).bytes
+
+    private fun awaitFrameSnapshot(source: ImageReader): SnapshotFrame = synchronized(frameLock) {
         val deadline = SystemClock.elapsedRealtime() + 800L
         while (reader === source && latestImage == null) {
             val remain = deadline - SystemClock.elapsedRealtime()
@@ -545,10 +593,11 @@ class ShellVirtualScreen {
         if (frameAt <= 0 || image == null) {
             throw VirtualScreenPolicy.failure(VirtualScreenPolicy.STALE_FRAME_CODE, VirtualScreenPolicy.STALE_FRAME_MESSAGE)
         }
-        encodedFrame?.let { return@synchronized it }
+        encodedFrame?.let { return@synchronized SnapshotFrame(it, frameAt, frameBlank, targetPackage) }
         val current = copyFrame(image)
         // 只缓存非空白截图；新 Image 到达时会清除缓存。
-        if (frameBlank) encodeFrame(current) else encodedFrame ?: encodeFrame(current).also { encodedFrame = it }
+        val bytes = if (frameBlank) encodeFrame(current) else encodedFrame ?: encodeFrame(current).also { encodedFrame = it }
+        SnapshotFrame(bytes, frameAt, frameBlank, targetPackage)
     }
 
     /** 调用方持有 frameLock，保证读取期间 Image 不会被采集线程替换或释放。 */
@@ -589,7 +638,16 @@ class ShellVirtualScreen {
         if (frameAt <= 0 || hardwareFrame == null) {
             throw VirtualScreenPolicy.failure(VirtualScreenPolicy.STALE_FRAME_CODE, VirtualScreenPolicy.STALE_FRAME_MESSAGE)
         }
-        return checkNotNull(hardwareFrame)
+        // Binder marshals the returned object after this method returns. Parcel roundtrip
+        // creates an independent native handle before the collector can close the shared one.
+        return synchronized(frameLock) {
+            val parcel = Parcel.obtain()
+            try {
+                checkNotNull(hardwareFrame).writeToParcel(parcel, 0)
+                parcel.setDataPosition(0)
+                HardwareBuffer.CREATOR.createFromParcel(parcel)
+            } finally { parcel.recycle() }
+        }
     }
 
     /**
@@ -1055,9 +1113,10 @@ class ShellVirtualScreen {
             return tickResult(policy, applied.rule, "${applied.reason}；但解析不到 $applied.target 的启动入口，未动作", applied = false)
         }
         return runCatching {
+            invalidateFrameCache()
             launchOnDisplay(listOf("-n", component), component, applied.target)
             // 会话目标跟着换：不换的话下一次 tick 还会把旧目标当会话目标，来回抢前台。
-            targetPackage = applied.target
+            assignTargetPackage(applied.target)
             targetComponent = component
             tickResult(policy, applied.rule, applied.reason, applied = true)
         }.getOrElse { error ->
@@ -1147,6 +1206,25 @@ class ShellVirtualScreen {
         session = ""; targetPackage = ""; width = 0; height = 0; independentFocus = false
         // 规格也要清：留着会让「会话已经结束」与「还能按原规格 restart」看起来是同一件事。
         targetComponent = ""; displayDpi = 0; virtualForeground = null
+    }
+
+    /** A newly selected target must never inherit the previous target's captured frame. */
+    private fun setTargetPackage(value: String) = synchronized(frameLock) {
+        targetPackage = value
+        invalidateFrameCacheLocked()
+    }
+
+    private fun assignTargetPackage(value: String) = synchronized(frameLock) {
+        targetPackage = value
+    }
+
+    private fun invalidateFrameCache() = synchronized(frameLock) { invalidateFrameCacheLocked() }
+
+    private fun invalidateFrameCacheLocked() {
+        latestImage?.close(); latestImage = null
+        encodedFrame = null
+        hardwareFrame?.close(); hardwareFrame = null
+        frameAt = 0L; frameBlank = true; frameSampledAt = 0L
     }
 
     private companion object {

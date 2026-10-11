@@ -326,7 +326,9 @@ class VirtualScreenActivity : Activity() {
     override fun onResume() { super.onResume(); resumed = true; VirtualScreenService.current?.hideOverlay(); main.post(refresh) }
     override fun onPause() {
         resumed = false; main.removeCallbacks(refresh)
-        preview?.let { content.removeView(it) }; preview = null
+        if (isFinishing) {
+            preview?.let { content.removeView(it) }; preview = null
+        }
         super.onPause()
     }
     override fun onDestroy() { main.removeCallbacksAndMessages(null); worker.shutdown(); super.onDestroy() }

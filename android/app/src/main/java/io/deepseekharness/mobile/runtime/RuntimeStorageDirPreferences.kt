@@ -35,19 +35,26 @@ internal class RuntimeStorageDirPreferences(private val storage: Storage) {
         }
         val entries = mutableListOf<StorageDirEntry>()
         val seen = mutableSetOf<String>()
+        val slots = mutableSetOf<Int>()
         var dropped = 0
         for (index in 0 until array.length()) {
             val item = array.optJSONObject(index)
-            val path = item?.optString(KEY_PATH, "").orEmpty()
-            val name = item?.optString(KEY_NAME, "").orEmpty()
-            val accepted = path.isNotEmpty() && name.isNotEmpty() && seen.add(path) &&
+            val path = item?.opt(KEY_PATH) as? String ?: ""
+            val name = item?.opt(KEY_NAME) as? String ?: ""
+            // 旧记录没有槽位字段，按旧版本「有效条目顺序」迁移；新记录则严格保留显式槽位。
+            val slot = if (item?.has(KEY_INDEX) == true) item.opt(KEY_INDEX) as? Int
+            else (1..RuntimeStorageDirsLimits.MAX_DIRECTORIES).firstOrNull { it !in slots }
+            val accepted = slot != null && slot in 1..RuntimeStorageDirsLimits.MAX_DIRECTORIES &&
+                slot !in slots && path !in seen && path.isNotEmpty() && name.isNotEmpty() &&
                 entries.size < RuntimeStorageDirsLimits.MAX_DIRECTORIES &&
                 path.length <= MAX_STORED_PATH_CHARS
             if (!accepted) {
                 dropped += 1
                 continue
             }
-            entries += StorageDirEntry(path, name.take(RuntimeStorageDirsLimits.MAX_DISPLAY_NAME_CHARS))
+            slots += slot!!
+            seen += path
+            entries += StorageDirEntry(path, name.take(RuntimeStorageDirsLimits.MAX_DISPLAY_NAME_CHARS), slot)
         }
         return StoredStorageDirs(entries, dropped)
     }
@@ -66,11 +73,17 @@ internal class RuntimeStorageDirPreferences(private val storage: Storage) {
             )
         }
         val array = JSONArray()
-        entries.forEach { entry ->
+        val slots = mutableSetOf<Int>()
+        entries.forEachIndexed { position, entry ->
+            val slot = if (entry.index == 0) position + 1 else entry.index
+            if (slot !in 1..RuntimeStorageDirsLimits.MAX_DIRECTORIES || !slots.add(slot)) {
+                throw RuntimeFailure(StorageDirCodes.PREFERENCES_INVALID, "目录白名单序号无效")
+            }
             array.put(
                 JSONObject()
                     .put(KEY_PATH, entry.path)
-                    .put(KEY_NAME, entry.displayName),
+                    .put(KEY_NAME, entry.displayName)
+                    .put(KEY_INDEX, slot),
             )
         }
         storage.writeString(KEY_ENTRIES, array.toString())
@@ -80,6 +93,7 @@ internal class RuntimeStorageDirPreferences(private val storage: Storage) {
         const val KEY_ENTRIES = "entries"
         private const val KEY_PATH = "path"
         private const val KEY_NAME = "name"
+        private const val KEY_INDEX = "index"
 
         /** 存储内容自证：比共享存储根还长的路径不可能合法，读到就当坏条目丢掉。 */
         private const val MAX_STORED_PATH_CHARS = RuntimeStorageDirsLimits.MAX_RELATIVE_PATH_CHARS + 64

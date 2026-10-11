@@ -142,6 +142,22 @@ class RuntimeStorageDirsTest {
         assertEquals(StorageDirCodes.NOT_FOUND, failure.code)
     }
 
+    @Test
+    fun `removing the first entry does not renumber the remaining mount`() {
+        val fileSystem = downloadable()
+        val dirs = facade(fileSystem)
+        dirs.add("primary:Download")
+        dirs.add("primary:Documents/Project")
+
+        dirs.remove("$root/Download")
+
+        assertEquals(
+            listOf(ProotBindMount("$root/Documents/Project", "/mnt/user/2")),
+            dirs.bindMounts(),
+        )
+        assertEquals(2, dirs.state().entries.single().index)
+    }
+
     /**
      * 移除是纯账本操作：权限被撤销、系统不支持、目录早就不存在时**都必须能清理条目**。
      *

@@ -23,3 +23,9 @@ test('pending controls cannot be re-enabled by periodic state refresh', () => {
   assert.match(refresh, /updateControls\(snapshot\)/)
   assert.doesNotMatch(refresh, /\.isEnabled =/)
 })
+
+test('preview survives a transient pause such as a permission dialog', () => {
+  const pause = source.slice(source.indexOf('override fun onPause()'), source.indexOf('override fun onDestroy()'))
+  assert.match(pause, /if \(isFinishing\)/u)
+  assert.doesNotMatch(pause, /preview\?\.let \{ content\.removeView\(it\) \}; preview = null\s*super/u)
+})

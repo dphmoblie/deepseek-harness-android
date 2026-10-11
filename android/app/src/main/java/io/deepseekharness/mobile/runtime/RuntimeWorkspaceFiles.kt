@@ -2,29 +2,42 @@ package io.deepseekharness.mobile.runtime
 
 import android.webkit.MimeTypeMap
 import java.io.File
+import java.io.IOException
+import java.nio.channels.Channels
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.SecureDirectoryStream
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributeView
 import java.nio.file.attribute.BasicFileAttributes
 
 /** Restricts all host-side access to ordinary files below the DSH workspace. */
-class RuntimeWorkspaceFiles(private val store: RuntimeStore, private val cacheDir: File) {
-    private val workspace get() = File(store.currentRoot, "root/1")
+class RuntimeWorkspaceFiles internal constructor(
+    private val workspace: File,
+    private val cacheDir: File,
+    private val trustedParent: File,
+) {
+    constructor(store: RuntimeStore, cacheDir: File) : this(
+        File(store.currentRoot, "root/1"), cacheDir, store.runtimeParent.parentFile!!,
+    )
 
-    fun list(maxFiles: Int = 100, maxDepth: Int = 6): List<String> {
+    data class Snapshot(val files: List<String>, val truncated: Boolean)
+
+    fun list(maxFiles: Int = 100, maxDepth: Int = 6): Snapshot {
         val root = workspace
-        if (!root.isDirectory || Files.isSymbolicLink(root.toPath())) return emptyList()
+        if (!root.isDirectory || Files.isSymbolicLink(root.toPath())) return Snapshot(emptyList(), false)
         val limit = maxFiles.coerceIn(1, 100)
-        val result = ArrayList<String>(limit)
+        val result = ArrayList<String>(limit + 1)
         Files.walkFileTree(
             root.toPath(),
             emptySet(),
             maxDepth.coerceIn(1, 6),
             object : SimpleFileVisitor<java.nio.file.Path>() {
                 override fun visitFile(file: java.nio.file.Path, attrs: BasicFileAttributes): FileVisitResult {
-                    if (result.size >= limit) return FileVisitResult.TERMINATE
+                    if (result.size > limit) return FileVisitResult.TERMINATE
                     if (attrs.isRegularFile && !attrs.isSymbolicLink) {
                         val relative = root.toPath().relativize(file).toString().replace(File.separatorChar, '/')
                         if (relative.length in 1..MAX_RELATIVE_PATH_CHARS) result += relative
@@ -36,45 +49,65 @@ class RuntimeWorkspaceFiles(private val store: RuntimeStore, private val cacheDi
                     FileVisitResult.CONTINUE
             }
         )
-        return result.sorted()
+        val sorted = result.sorted()
+        return Snapshot(sorted.take(limit), sorted.size > limit)
     }
 
-    fun resolve(relative: String): File {
-        if (relative.length !in 1..MAX_RELATIVE_PATH_CHARS || relative.startsWith('/') || relative.contains('\\')) {
+    internal fun <T> withFile(relative: String, action: (SecureDirectoryStream<Path>, Path) -> T): T {
+        if (relative.length !in 1..MAX_RELATIVE_PATH_CHARS || relative.startsWith('/') || relative.contains('\\') ||
+            relative.any { it == '\u0000' || it == '\r' || it == '\n' }
+        ) {
             throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径无效")
         }
         val segments = relative.split('/')
         if (segments.any { it.isEmpty() || it == "." || it == ".." }) {
             throw RuntimeFailure("WORKSPACE_PATH_INVALID", "工作区文件路径无效")
         }
-        if (!workspace.isDirectory || Files.isSymbolicLink(workspace.toPath())) {
+        val trusted = trustedParent.toPath().toAbsolutePath().normalize()
+        val root = workspace.toPath().toAbsolutePath().normalize()
+        if (root == trusted || !root.startsWith(trusted)) {
             throw RuntimeFailure("WORKSPACE_FILE_UNAVAILABLE", "工作区文件不可用")
         }
-        val root = workspace.canonicalFile
-        var cursor = root
-        for (segment in segments) {
-            cursor = File(cursor, segment)
-            if (Files.isSymbolicLink(cursor.toPath())) {
+        val names = trusted.relativize(root).toList() + segments.map { root.fileSystem.getPath(it) }
+        fun visit(parent: SecureDirectoryStream<Path>, index: Int): T {
+            val name = names[index]
+            if (index < names.lastIndex) {
+                return parent.newDirectoryStream(name, LinkOption.NOFOLLOW_LINKS).use { visit(it, index + 1) }
+            }
+            val attributes = parent.getFileAttributeView(name, BasicFileAttributeView::class.java, LinkOption.NOFOLLOW_LINKS)
+                ?.readAttributes()
+            if (attributes == null || !attributes.isRegularFile || attributes.isSymbolicLink || attributes.size() > MAX_FILE_BYTES) {
                 throw RuntimeFailure("WORKSPACE_FILE_UNAVAILABLE", "工作区文件不可用")
             }
+            return action(parent, name)
         }
-        val file = cursor.canonicalFile
-        if (!file.path.startsWith(root.path + File.separator) || !file.isFile || file.length() > MAX_FILE_BYTES) {
-            throw RuntimeFailure("WORKSPACE_FILE_UNAVAILABLE", "工作区文件不可用")
+        try {
+            // Keep every guest-controlled parent pinned until the operation has finished.
+            return Files.newDirectoryStream(trusted).use { stream ->
+                if (stream !is SecureDirectoryStream<*>) {
+                    throw RuntimeFailure("WORKSPACE_SECURE_ACCESS_UNAVAILABLE", "系统不支持安全访问工作区文件")
+                }
+                @Suppress("UNCHECKED_CAST")
+                visit(stream as SecureDirectoryStream<Path>, 0)
+            }
+        } catch (error: IOException) {
+            throw RuntimeFailure("WORKSPACE_FILE_UNAVAILABLE", "工作区文件不可用", error)
+        } catch (error: UnsupportedOperationException) {
+            throw RuntimeFailure("WORKSPACE_SECURE_ACCESS_UNAVAILABLE", "系统不支持安全访问工作区文件", error)
+        } catch (error: SecurityException) {
+            throw RuntimeFailure("WORKSPACE_FILE_UNAVAILABLE", "工作区文件不可用", error)
         }
-        return file
     }
 
-    fun copyForSharing(relative: String): File {
-        val source = resolve(relative)
+    fun copyForSharing(relative: String): File = withFile(relative) { parent, name ->
         val directory = File(cacheDir, "share")
         if ((!directory.isDirectory && !directory.mkdirs()) || Files.isSymbolicLink(directory.toPath())) {
             throw RuntimeFailure("WORKSPACE_EXPORT_FAILED", "无法准备文件分享目录")
         }
-        val safeName = source.name.replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(80).ifEmpty { "file" }
+        val safeName = name.toString().replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(80).ifEmpty { "file" }
         val target = File.createTempFile("dsh-", "-$safeName", directory)
         try {
-            Files.newInputStream(source.toPath(), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use { input ->
+            Channels.newInputStream(parent.newByteChannel(name, setOf(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS))).use { input ->
                 Files.newOutputStream(
                     target.toPath(),
                     StandardOpenOption.WRITE,
@@ -94,7 +127,7 @@ class RuntimeWorkspaceFiles(private val store: RuntimeStore, private val cacheDi
                     }
                 }
             }
-            return target
+            target
         } catch (error: Throwable) {
             target.delete()
             throw error
@@ -102,8 +135,13 @@ class RuntimeWorkspaceFiles(private val store: RuntimeStore, private val cacheDi
     }
 
     fun delete(relative: String) {
-        val file = resolve(relative)
-        if (!file.delete()) throw RuntimeFailure("WORKSPACE_DELETE_FAILED", "无法删除工作区文件")
+        withFile(relative) { parent, name ->
+            try {
+                parent.deleteFile(name)
+            } catch (error: IOException) {
+                throw RuntimeFailure("WORKSPACE_DELETE_FAILED", "无法删除工作区文件", error)
+            }
+        }
     }
 
     fun mimeType(relative: String): String = MimeTypeMap.getSingleton()
