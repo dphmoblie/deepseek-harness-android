@@ -1666,8 +1666,8 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun listRuntimeWorkspaceFiles(call: PluginCall) {
         execute(call) {
-            val files = RuntimeWorkspaceFiles(controller.store, context.cacheDir).list()
-            JSObject().put("files", org.json.JSONArray(files))
+            val snapshot = RuntimeWorkspaceFiles(controller.store, context.cacheDir).list()
+            JSObject().put("files", org.json.JSONArray(snapshot.files)).put("truncated", snapshot.truncated)
         }
     }
 
