@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
+import io.deepseekharness.mobile.runtime.diagnostics.TransferFields
 
 class RuntimeInstaller(
     private val store: RuntimeStore,
@@ -25,6 +26,8 @@ class RuntimeInstaller(
     private val http: RuntimeHttp = RuntimeHttp(),
     private val extractor: SafeRootfsExtractor = SafeRootfsExtractor(),
     private val externalCancellation: () -> Boolean = { false },
+    /** 可用空间读数；只用于失败时写进诊断日志，判据与文案都不依赖它。 */
+    private val availableBytes: (File) -> Long? = RuntimeStorageSpace::availableBytes,
 ) {
     private data class Workspace(
         val stagingRoot: File,
@@ -174,14 +177,16 @@ class RuntimeInstaller(
                 status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
                 // 原生失败细节既不进 logcat 也不进审计，只在这里留一行受控记录：
                 // code 说明失败类别，reason 说明卡在哪一步（都是 token，不含路径与文本）。
+                // transfer 阶段的失败再补字节数与摘要结论：只报「校验没过」无法区分
+                // 「读短了」「读到的不是同一份」「空间不够」三种完全不同的故障。
                 store.diagnostics.record(
                     DiagnosticLevel.ERROR,
                     DiagnosticEvent.RUNTIME_PHASE,
-                    mapOf(
-                        "phase" to "error",
-                        "code" to failure.code,
-                        "reason" to currentStep,
-                        "result" to "failed",
+                    TransferFields.failureFields(
+                        code = failure.code,
+                        reason = currentStep,
+                        availableBytes = availableBytes(store.runtimeParent),
+                        details = failure.details,
                     ),
                 )
             }
@@ -343,7 +348,11 @@ class RuntimeInstaller(
                             if (read < 0) break
                             if (read == 0) continue
                             if (written > artifact.compressedBytes - read) {
-                                throw RuntimeFailure("ARCHIVE_SIZE_MISMATCH", "APK 内置运行时归档大小无效")
+                                throw RuntimeFailure(
+                                    "ARCHIVE_SIZE_MISMATCH",
+                                    "APK 内置运行时归档大小无效",
+                                    details = TransferFields.of(artifact.compressedBytes, written),
+                                )
                             }
                             output.write(buffer, 0, read)
                             digest.update(buffer, 0, read)
@@ -367,11 +376,22 @@ class RuntimeInstaller(
                 }
                 throw error
             }
-            throw RuntimeFailure("BUNDLED_RUNTIME_READ_FAILED", "无法读取 APK 内置运行时", error)
+            // 读资产抛错时也带上已写入的字节数：它是「读到一半才失败」还是「一开始就读不了」的唯一证据。
+            throw RuntimeFailure(
+                "BUNDLED_RUNTIME_READ_FAILED",
+                "无法读取 APK 内置运行时",
+                error,
+                TransferFields.of(artifact.compressedBytes, written),
+            )
         }
-        if (written != artifact.compressedBytes || digest.digest().toLowerHex() != artifact.sha256) {
+        val digestOk = digest.digest().toLowerHex() == artifact.sha256
+        if (written != artifact.compressedBytes || !digestOk) {
             cleanupIfPresent(destination)
-            throw RuntimeFailure("ARCHIVE_DIGEST_MISMATCH", "APK 内置运行时完整性校验失败")
+            throw RuntimeFailure(
+                "ARCHIVE_DIGEST_MISMATCH",
+                "APK 内置运行时完整性校验失败",
+                details = TransferFields.of(artifact.compressedBytes, written, digestOk),
+            )
         }
     }
 

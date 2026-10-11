@@ -157,8 +157,9 @@ class DiagnosticLog(context: Context) {
     /**
      * 把全部诊断日志合并成一个文本文件，供系统分享面板导出。
      *
-     * 文件头只包含应用版本、Android SDK 级别与 ABI：这些是排障必需且不构成用户数据，
-     * 不含设备标识、账号、URL、路径或凭据。返回 null 表示没有可导出的内容。
+     * 文件头包含应用版本、机型与 ROM 构建串、Android SDK 级别与 ABI：这些都是排障必需、
+     * 且不构成用户数据。**不含**序列号、IMEI/MEID、Android ID、账号、URL、路径或凭据；
+     * 机型与 ROM 的取值范围见 [DiagnosticDevice]。返回 null 表示没有可导出的内容。
      */
     @Synchronized
     fun export(instant: Instant = Instant.now()): DiagnosticExport? {
@@ -169,10 +170,14 @@ class DiagnosticLog(context: Context) {
             append("# 生成时间: ").append(instant.toString()).append('\n')
             append("# 应用版本: ").append(BuildConfig.VERSION_NAME)
                 .append(" (").append(BuildConfig.VERSION_CODE).append(")\n")
+            DiagnosticDevice.current().headerLines().forEach { append(it).append('\n') }
             append("# Android SDK: ").append(Build.VERSION.SDK_INT)
                 .append("  ABI: ").append(Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown").append('\n')
             append("# 保留策略: ").append(retentionDays()).append(" 天\n")
-            append("# 内容说明: 仅包含应用内部状态码与布尔值，不含 URL、凭据、终端内容或用户数据。\n")
+            append(
+                "# 内容说明: 记录只有应用内部事件名、状态码、布尔值与计数；文件头另有应用版本、"
+                    + "机型与 ROM 构建串。不含 URL、凭据、终端内容或用户数据。\n",
+            )
             entries.forEach { (name, _, _) ->
                 append("\n===== ").append(name).append(" =====\n")
                 append(readBounded(directory.resolve(name)))

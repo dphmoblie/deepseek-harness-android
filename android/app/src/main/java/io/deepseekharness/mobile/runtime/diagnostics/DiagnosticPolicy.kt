@@ -203,12 +203,19 @@ object DiagnosticPolicy {
         "version",
         "sdk",
         "abi",
+        // transfer 阶段的字节证据（见 [TransferFields]）：全是数字与布尔，没有路径与文本。
+        "expected_bytes",
+        "actual_bytes",
+        "free_bytes",
+        "digest_ok",
     )
 
     // 按字段类型校验取值。单纯用字符集是不够的：`sk-` 开头的 API Key 也能匹配
     // `[A-Za-z0-9._-]+`，所以每种字段都收紧到它实际可能出现的形态。
-    private val booleanKeys = setOf("enabled", "active", "installed", "running", "connected", "residual")
-    private val countKeys = setOf("days", "files", "bytes", "count", "sdk")
+    private val booleanKeys =
+        setOf("enabled", "active", "installed", "running", "connected", "residual", "digest_ok")
+    private val countKeys =
+        setOf("days", "files", "bytes", "count", "sdk", "expected_bytes", "actual_bytes", "free_bytes")
     private val countPattern = Regex("^[0-9]{1,12}$")
     private val codePattern = Regex("^[A-Z][A-Z0-9_]{0,47}$")
     private val permittedResults =
@@ -268,8 +275,8 @@ object DiagnosticPolicy {
      *
      * 只做字符集校验是不够的 —— `sk-` 开头的 API Key 同样由 `[A-Za-z0-9._-]` 组成。
      * 因此每个字段都被收紧到它实际可能出现的取值：
-     *  - 布尔字段只接受 `true` / `false`；
-     *  - 计数字段只接受 1–12 位数字；
+     *  - 布尔字段只接受 `true` / `false`（含 `digest_ok`，它只是「摘要对不对」的结论）；
+     *  - 计数字段只接受 1–12 位数字（含 `expected_bytes` / `actual_bytes` / `free_bytes` 三个字节数）；
      *  - `code` 只接受大写错误码，`result` / `permission` 只接受封闭集合；
      *  - `phase` / `reason` / `version` / `abi` 只接受小写 token。
      */

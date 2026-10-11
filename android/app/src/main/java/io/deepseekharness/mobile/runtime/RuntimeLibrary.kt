@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile.runtime
 
 import android.system.Os
+import io.deepseekharness.mobile.runtime.diagnostics.TransferFields
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -101,8 +102,17 @@ class RuntimeLibrary(private val store: RuntimeStore) {
         }
     }
     private fun verify(file: File, manifest: RuntimeManifest) {
-        if (!Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS) || Files.size(file.toPath()) != manifest.rootfs.compressedBytes) {
-            throw RuntimeFailure("ARCHIVE_DIGEST_MISMATCH", "本地安装包长度不正确")
+        // 失败时带上长度证据：安装器把它写进诊断日志，用户不用再猜「哪一份安装包有问题」。
+        val expectedBytes = manifest.rootfs.compressedBytes
+        val path = file.toPath()
+        val regular = Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
+        val actualBytes = if (regular) Files.size(path) else 0L
+        if (!regular || actualBytes != expectedBytes) {
+            throw RuntimeFailure(
+                "ARCHIVE_DIGEST_MISMATCH",
+                "本地安装包长度不正确",
+                details = TransferFields.of(expectedBytes, actualBytes),
+            )
         }
         val digest = MessageDigest.getInstance("SHA-256")
         Files.newInputStream(file.toPath(), LinkOption.NOFOLLOW_LINKS).use { input ->
@@ -110,7 +120,11 @@ class RuntimeLibrary(private val store: RuntimeStore) {
             while (true) { val count = input.read(buffer); if (count < 0) break; digest.update(buffer, 0, count) }
         }
         if (digest.digest().joinToString("") { "%02x".format(it) } != manifest.rootfs.sha256) {
-            throw RuntimeFailure("ARCHIVE_DIGEST_MISMATCH", "本地安装包校验失败，请重新下载")
+            throw RuntimeFailure(
+                "ARCHIVE_DIGEST_MISMATCH",
+                "本地安装包校验失败，请重新下载",
+                details = TransferFields.of(expectedBytes, actualBytes, digestOk = false),
+            )
         }
     }
 }

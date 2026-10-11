@@ -337,7 +337,7 @@ export const english: Readonly<Record<string, string>> = {
   "日志文件": "Log files",
   "{0} 个文件 · {1}": "{0} files · {1}",
   "最近记录": "Last entry",
-  "诊断日志只包含应用内部的事件名、状态码、布尔值与计数：不含 URL、模型密钥、Harness 临时密码、设备桥令牌、终端内容或文件路径。日志保存在应用私有目录且不参与备份，到期自动删除。": "The diagnostic log contains only internal event names, status codes, booleans, and counters. It never contains URLs, model keys, the temporary Harness password, the device bridge token, terminal content, or file paths. It is stored in private app storage, excluded from backups, and deleted automatically when it expires.",
+  "诊断日志只包含应用内部的事件名、状态码、布尔值与计数；导出文件头另有应用版本、机型与 ROM 构建串（不含序列号、IMEI、Android ID、账号）。不含 URL、模型密钥、Harness 临时密码、设备桥令牌、终端内容或文件路径。日志保存在应用私有目录且不参与备份，到期自动删除。": "The diagnostic log contains only internal event names, status codes, booleans, and counters; the export header additionally carries the app version, device model, and ROM build string (never serial numbers, IMEI, Android ID, or accounts). It never contains URLs, model keys, the temporary Harness password, the device bridge token, terminal content, or file paths. It is stored in private app storage, excluded from backups, and deleted automatically when it expires.",
   "导出并分享": "Export and share",
   "清空日志": "Clear log",
   "诊断日志已清空": "Diagnostic log cleared",

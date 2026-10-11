@@ -99,6 +99,15 @@ class DiagnosticPolicyTest {
         assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE|phase=not-installed\n", line(fields = mapOf("phase" to "not-installed")))
         assertEquals("2026-09-12T10:20:30Z|WARN|RECOVERY|reason=reaped_pid_file\n",
             line(level = DiagnosticLevel.WARN, event = DiagnosticEvent.RECOVERY, fields = mapOf("reason" to "reaped_pid_file")))
+        // transfer 字节证据字段（`TransferFields`）：数字与布尔；负号、路径、自由文本一律丢弃。
+        assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE|expected_bytes=311733891\n",
+            line(fields = mapOf("expected_bytes" to "311733891")))
+        assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE|free_bytes=0\n", line(fields = mapOf("free_bytes" to "0")))
+        assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE\n", line(fields = mapOf("expected_bytes" to "-1")))
+        assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE\n", line(fields = mapOf("actual_bytes" to "4kb")))
+        assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE\n", line(fields = mapOf("free_bytes" to "/data/user/0")))
+        assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE|digest_ok=false\n", line(fields = mapOf("digest_ok" to "false")))
+        assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE\n", line(fields = mapOf("digest_ok" to "0")))
     }
 
     @Test
@@ -120,6 +129,17 @@ class DiagnosticPolicyTest {
             mapOf("reason" to "reaped_pid_file", "count" to "1"),
             mapOf("enabled" to "true", "days" to "3"),
             mapOf("files" to "2", "bytes" to "4096"),
+            // 安装失败的完整行：4 个基础字段 + free_bytes + 3 个字节证据字段，正好用满上限。
+            mapOf(
+                "phase" to "error",
+                "code" to "ARCHIVE_DIGEST_MISMATCH",
+                "reason" to "transfer",
+                "result" to "failed",
+                "free_bytes" to "2147483648",
+                "expected_bytes" to "311733891",
+                "actual_bytes" to "311733891",
+                "digest_ok" to "false",
+            ),
         )
         realFields.forEach { fields ->
             val result = line(fields = fields)
@@ -144,6 +164,7 @@ class DiagnosticPolicyTest {
         assertFalse(DiagnosticPolicy.isAllowedKey("token"))
         assertFalse(DiagnosticPolicy.isAllowedKey("path"))
         assertTrue(DiagnosticPolicy.isAllowedKey("phase"))
+        assertTrue(DiagnosticPolicy.isAllowedKey("expected_bytes"))
     }
 
     @Test
