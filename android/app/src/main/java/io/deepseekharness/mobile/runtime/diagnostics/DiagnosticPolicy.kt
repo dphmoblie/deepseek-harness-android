@@ -86,9 +86,11 @@ enum class DiagnosticEvent {
      * 三者之一。自检把三种可能各测一次，这条记录就是**设备侧唯一的第一手证据**。
      *
      * 只记录受控取值，不含路径、脚本输出或原始报错文本：
-     *  - `result=ok` 十四项里没有 fail（编译环境能力项只报 `warn`，不会让整体转 `failed`）；
+     *  - `result=ok` 十八项里没有 fail（编译环境能力项与宿主追加的三项设备事实只报 `warn`，
+     *    不会让整体转 `failed`；只有系统 WebView 不可用是 fail）；
      *    `result=failed` 有 fail，`code` 是**按契约顺序的首个失败码**
-     *    （例如 `PTY_EXIT_EARLY` / `EXEC_LAUNCHER_FAILED` / `PROBE_UNUSABLE`），一眼能定位到层；
+     *    （例如 `PTY_EXIT_EARLY` / `EXEC_LAUNCHER_FAILED` / `PROBE_UNUSABLE` / `WEBVIEW_UNAVAILABLE`），
+     *    一眼能定位到层；
      *  - `result=denied` + `code=SELF_CHECK_FAILED` 表示自检**没跑成**（脚本也没起来或载荷不可信），
      *    与「检查项确实失败」区分开；
      *  - `count`：`check` 时是失败项数，`repair` 时是实际改动数（补执行位 + 建附件目录）。

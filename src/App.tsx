@@ -3291,7 +3291,7 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
         <span className="section-icon"><ShieldCheck size={19} /></span>
         <div>
           <h2 id="runtime-self-check-title">{t("运行时自检")}</h2>
-          <p>{t("不需要 bash 也能判断运行时哪一环断了：逐项检查 Shell、Node、沙箱启动器、内核 Landlock、PTY、访客数据目录、附件目录、硬链接、ripgrep 与 C 编译环境（cc/gcc/clang、make、python3），并给出结论与下一步。")}</p>
+          <p>{t("不需要 bash 也能判断运行时哪一环断了：逐项检查 Shell、Node、沙箱启动器、内核 Landlock、PTY、访客数据目录、附件目录、硬链接、ripgrep 与 C 编译环境（cc/gcc/clang、make、python3），再由宿主补上插件链接、无障碍服务、副屏所需的悬浮窗权限与系统 WebView 四项设备事实，并给出结论与下一步。")}</p>
         </div>
       </div>
 
@@ -3305,6 +3305,11 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
           <span>{t("dsh 版本")}</span>
           {/* dsh 版本只有真正进过访客才读得到：自检结果之外不猜、也不为它单独发起重量级调用。 */}
           <strong>{report?.dshVersion ?? t("运行自检后显示")}</strong>
+        </div>
+        <div className="settings-status-row">
+          <span>{t("系统 WebView 版本")}</span>
+          {/* 宿主在自检时顺带读到的版本号（纯信息）；读不到或旧版本桥接时显示占位，不影响检查项。 */}
+          <strong>{report?.webViewVersion ?? t("运行自检后显示")}</strong>
         </div>
       </div>
 

@@ -520,9 +520,10 @@ class MobileRuntimePlugin : Plugin() {
 
     /**
      * 权限：应用内桥接。
-     * 运行时自检：`check` 只读（可用空间、dsh 版本与十四项检查 —— 前 11 项是冻结契约，
-     * 后 3 项 `c_compiler`/`make`/`python3` 是编译环境能力项，只报 warn、不进失败判定），
-     * `repair` 只补可执行位并创建附件目录。
+     * 运行时自检：`check` 只读（可用空间、dsh 版本、WebView 版本与十八项检查 —— 访客脚本产出 14 项：
+     * 前 11 项是冻结契约，后 3 项 `c_compiler`/`make`/`python3` 是编译环境能力项，只报 warn、不进失败判定；
+     * 宿主再追加 4 项设备事实：`plugins`/`accessibility`/`virtualscreen`/`webview`，同样只读），
+     * `repair` 只补可执行位并创建附件目录 —— **不新增任何副作用**，不动插件链接、无障碍与权限。
      * 只回传受控枚举与计数，不含路径、文件内容或原始报错文本。
      */
     @PluginMethod

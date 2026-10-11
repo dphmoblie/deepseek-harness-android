@@ -16,6 +16,18 @@ class RuntimeSelfCheckPolicyTest {
     private fun raw(id: String, status: String, code: String? = null) =
         RuntimeSelfCheckPolicy.RawCheck(id, status, code)
 
+    /**
+     * 访客脚本产出的那 14 项（前 11 项链路 + 3 项编译环境能力）。
+     *
+     * 宿主追加的 4 项设备事实（`plugins`/`accessibility`/`virtualscreen`/`webview`）不在这段里：
+     * 访客脚本一行没改，因此这些用例的载荷与断言仍按这 14 项写。
+     */
+    private val guestIds = listOf(
+        "shell", "node", "sandbox_launcher", "sandbox_probe", "sandbox_exec",
+        "pty", "pty_sandbox", "dsh_home", "attachments", "hardlink", "rg",
+        "c_compiler", "make", "python3",
+    )
+
     /** 十四项全通过的健康载荷；顺序刻意与契约不同，用来验证归一化。 */
     private val healthy = listOf(
         raw("python3", "ok"),
@@ -37,7 +49,8 @@ class RuntimeSelfCheckPolicyTest {
     @Test
     fun keepsAWellFormedPayloadInContractOrder() {
         val checks = RuntimeSelfCheckPolicy.sanitize(healthy)
-        assertEquals(RuntimeSelfCheckPolicy.CHECK_IDS, checks.map { it.id })
+        // 访客的 14 项归一化后仍是契约顺序（宿主 4 项不在这一载荷里，自然也不出现）。
+        assertEquals(guestIds, checks.map { it.id })
         assertTrue(checks.all { it.status == "ok" && it.code == null })
         // 全 ok 时汇总必须是「没有失败」：否则界面会显示一个并不存在的失败码。
         assertEquals(RuntimeSelfCheckPolicy.Summary(null, 0), RuntimeSelfCheckPolicy.summarize(checks))
@@ -51,7 +64,7 @@ class RuntimeSelfCheckPolicyTest {
     @Test
     fun dropsUnknownIdentifiers() {
         val checks = RuntimeSelfCheckPolicy.sanitize(healthy + raw("sandbox", "fail", "PROBE_UNUSABLE"))
-        assertEquals(RuntimeSelfCheckPolicy.CHECK_IDS, checks.map { it.id })
+        assertEquals(guestIds, checks.map { it.id })
     }
 
     @Test
@@ -88,16 +101,24 @@ class RuntimeSelfCheckPolicyTest {
     @Test
     fun acceptsOnlyTheHardlinkDeniedCodeOnTheHardlinkCheck() {
         // 契约里的 id 顺序（脚本 / 原生 / 界面三处逐字一致）：hardlink 紧跟 attachments、在 rg 之前；
-        // 后三项编译环境能力项是追加的，既有 11 项的相对顺序一个字都不动。
+        // 后三项编译环境能力项与宿主追加的四项设备事实都是追加的，既有 11 项的相对顺序一个字都不动。
         assertEquals(
             listOf(
                 "shell", "node", "sandbox_launcher", "sandbox_probe", "sandbox_exec",
                 "pty", "pty_sandbox", "dsh_home", "attachments", "hardlink", "rg",
                 "c_compiler", "make", "python3",
+                "plugins", "accessibility", "virtualscreen", "webview",
             ),
             RuntimeSelfCheckPolicy.CHECK_IDS,
         )
         assertEquals(9, RuntimeSelfCheckPolicy.CHECK_IDS.indexOf("hardlink"))
+        // 防恒真：总项数就是 18（访客 14 + 宿主 4），且前 14 项与访客契约逐字相同、宿主 4 项只能在末尾。
+        assertEquals(18, RuntimeSelfCheckPolicy.CHECK_IDS.size)
+        assertEquals(guestIds, RuntimeSelfCheckPolicy.CHECK_IDS.take(14))
+        assertEquals(
+            listOf("plugins", "accessibility", "virtualscreen", "webview"),
+            RuntimeSelfCheckPolicy.CHECK_IDS.takeLast(4),
+        )
 
         val checks = RuntimeSelfCheckPolicy.sanitize(
             listOf(
@@ -256,6 +277,95 @@ class RuntimeSelfCheckPolicyTest {
                 ),
             ).isEmpty(),
         )
+    }
+
+    /**
+     * 宿主追加的四项设备事实：码表与访客 14 项走**同一套**校验，没有免检通道。
+     */
+    @Test
+    fun acceptsOnlyTheDeclaredCodesOnTheHostFactChecks() {
+        val checks = RuntimeSelfCheckPolicy.sanitize(
+            listOf(
+                raw("webview", "fail", "WEBVIEW_UNAVAILABLE"),
+                raw("plugins", "warn", "PLUGIN_LINK_MISSING"),
+                raw("accessibility", "warn", "ACCESSIBILITY_NOT_CONNECTED"),
+                raw("virtualscreen", "warn", "OVERLAY_PERMISSION_MISSING"),
+            ),
+        )
+        assertEquals(listOf("plugins", "accessibility", "virtualscreen", "webview"), checks.map { it.id })
+        assertEquals(listOf("warn", "warn", "warn", "fail"), checks.map { it.status })
+
+        // 每项的探测失败码（`*_PROBE_UNKNOWN`）只能是 warn：「没读到」既不是故障，也绝不算 ok。
+        val unknown = RuntimeSelfCheckPolicy.sanitize(
+            listOf(
+                raw("plugins", "warn", "PLUGIN_PROBE_UNKNOWN"),
+                raw("accessibility", "warn", "ACCESSIBILITY_PROBE_UNKNOWN"),
+                raw("virtualscreen", "warn", "OVERLAY_PROBE_UNKNOWN"),
+                raw("webview", "warn", "WEBVIEW_PROBE_UNKNOWN"),
+            ),
+        )
+        assertEquals(listOf("plugins", "accessibility", "virtualscreen", "webview"), unknown.map { it.id })
+        assertTrue(unknown.all { it.status == "warn" && it.code?.endsWith("_PROBE_UNKNOWN") == true })
+
+        // WebView 之外三项不许报 fail：可选功能没开、插件链接需人工修，都不是运行时链路故障。
+        assertTrue(
+            RuntimeSelfCheckPolicy.sanitize(
+                listOf(
+                    raw("plugins", "fail", "PLUGIN_LINK_MISSING"),
+                    raw("accessibility", "fail", "ACCESSIBILITY_NOT_CONNECTED"),
+                    raw("virtualscreen", "fail", "OVERLAY_PERMISSION_MISSING"),
+                    // WebView 反过来也不许降级成 warn：它不可用是致命项。
+                    raw("webview", "warn", "WEBVIEW_UNAVAILABLE"),
+                ),
+            ).isEmpty(),
+        )
+        // 宿主项的 `*_PROBE_UNKNOWN` 不接受 skipped：skipped 的语义是「这一项没有可测的前提」，
+        // 而这四项的前提（插件管理器 / 系统服务 / 包管理器）一直都在，只是这次没读到。
+        assertTrue(
+            RuntimeSelfCheckPolicy.sanitize(
+                listOf(
+                    raw("plugins", "skipped", "PLUGIN_PROBE_UNKNOWN"),
+                    raw("accessibility", "skipped", "ACCESSIBILITY_PROBE_UNKNOWN"),
+                    raw("virtualscreen", "skipped", "OVERLAY_PROBE_UNKNOWN"),
+                    raw("webview", "skipped", "WEBVIEW_PROBE_UNKNOWN"),
+                ),
+            ).isEmpty(),
+        )
+        // 码不许跨项或编造：把无障碍的码报到 webview 上、给插件报一个不存在的码，两条都整条丢弃。
+        assertTrue(
+            RuntimeSelfCheckPolicy.sanitize(
+                listOf(
+                    raw("webview", "fail", "ACCESSIBILITY_NOT_CONNECTED"),
+                    raw("plugins", "warn", "PLUGIN_LINK_MISSING_FIXED"),
+                ),
+            ).isEmpty(),
+        )
+    }
+
+    /** 首个失败码按契约顺序取：访客段排在宿主段之前，宿主段内部也按追加顺序。 */
+    @Test
+    fun summarizesHostFactFailuresAfterTheGuestSegment() {
+        val checks = RuntimeSelfCheckPolicy.sanitize(
+            listOf(
+                raw("plugins", "warn", "PLUGIN_LINK_MISSING"),
+                raw("webview", "fail", "WEBVIEW_UNAVAILABLE"),
+                raw("pty", "fail", "PTY_EXIT_EARLY"),
+            ),
+        )
+        assertEquals(listOf("pty", "plugins", "webview"), checks.map { it.id })
+        assertEquals(
+            RuntimeSelfCheckPolicy.Summary("PTY_EXIT_EARLY", 2),
+            RuntimeSelfCheckPolicy.summarize(checks),
+        )
+        // 只有 WebView 失败时失败码就是它（宿主四项里唯一一项 fail）。
+        assertEquals(
+            RuntimeSelfCheckPolicy.Summary("WEBVIEW_UNAVAILABLE", 1),
+            RuntimeSelfCheckPolicy.summarize(
+                RuntimeSelfCheckPolicy.sanitize(listOf(raw("webview", "fail", "WEBVIEW_UNAVAILABLE"))),
+            ),
+        )
+        // 宿主三项 warn 不参与失败判定：插件链接缺失不会让整次自检变红。
+        assertEquals(0, RuntimeSelfCheckPolicy.summarize(checks.filter { it.status != "fail" }).failedCount)
     }
 
     @Test
