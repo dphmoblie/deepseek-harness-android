@@ -75,6 +75,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         serviceRef.set(this)
         // 新连接 = 新的事件时间基准。上一次连接的动作时间戳/配额/指纹留着会让刚连上的服务被"冷却中"挡住。
         automationGate.reset()
+        automationScreenSequence.reset()
         automationReevalToken.set(null)
         serviceInfo = serviceInfo.apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
@@ -886,7 +887,8 @@ class DeepSeekAccessibilityService : AccessibilityService() {
      * 它只重开**次数配额**，不动指纹（[AutomationGateState.syncIdentityWindow] 只认包名/Activity），
      * 所以「窗口更新 → 又点同一个按钮」仍然被指纹挡住，`screen` 不会变成自触发循环。
      */
-    private var automationScreenSeq = 0L
+    /** 每个目标应用独立的窗口序号，避免其他允许应用的事件重开当前应用配额。 */
+    private val automationScreenSequence = AutomationScreenSequence()
 
     /** 「稍后重新判定」的令牌：只用来标识一次排期（见 [reevaluateAutomation] 的身份比对）。 */
     private class AutomationReevalToken(val dueAtMs: Long)
@@ -914,14 +916,6 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         // enabled 标志只由 `automationRules` 命令改写；事件回调只读它。
         if (!automationEnabled) return
         val eventPackage = event.packageName?.toString().orEmpty()
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            automationActivityPackage = eventPackage
-            automationActivityName = event.className?.toString()
-            automationScreenSeq += 1
-            automationGate.beginMatchWindow(AutomationRuleExecutor.baseWindowKey(
-                AutomationScreenInfo(eventPackage, event.className?.toString()),
-            ))
-        }
         if (!AccessibilityAutomationPolicy.validPackage(eventPackage)) return
         // 系统界面的窗口变化太频繁，也不该成为自动化的输入：它们只是"屏幕上多了个东西"。
         if (eventPackage == "android" || eventPackage == "com.android.systemui") return
@@ -937,6 +931,14 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         val deviceLocked = isLockedOrScreenOff()
         // 锁屏时不读树、不读规则：拍板口径是"锁屏一律跳过"，连评估都不做。
         if (deviceLocked) return
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && snapshot.packageName == eventPackage) {
+            automationActivityPackage = eventPackage
+            automationActivityName = event.className?.toString()
+            automationScreenSequence.advance(eventPackage)
+            automationGate.beginMatchWindow(AutomationRuleExecutor.baseWindowKey(
+                AutomationScreenInfo(eventPackage, event.className?.toString()),
+            ))
+        }
         val sensitiveWindow = containsSensitiveWindow(root)
         val rules = loadAutomationRules(snapshot.packageName)
         if (rules.isEmpty()) return
@@ -951,7 +953,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             rules,
             nowMs,
             apply = true,
-            eventSequence = automationScreenSeq,
+            eventSequence = automationScreenSequence.current(snapshot.packageName),
         )
     }
 
@@ -1010,14 +1012,14 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             apply = true,
             // 重判定没有新事件，沿用最近一次窗口更新的周期：`resetOn="screen"` 的配额
             // 不会因为「等待到期」被白白重开一次（那会让 matchDelayMs 变成绕过 maxActions 的口子）。
-            eventSequence = automationScreenSeq,
+            eventSequence = automationScreenSequence.current(snapshot.packageName),
         )
     }
 
     /**
      * 把一次评估交给执行器，然后回报结果。
      *
-     * `eventSequence` 是 [automationScreenSeq]：只在 `resetOn = "screen"` 的规则上起作用
+     * `eventSequence` 是目标应用自己的窗口序号：只在 `resetOn = "screen"` 的规则上起作用
      */
     private fun runAutomationEvaluation(
         evaluation: AutomationEvaluation,

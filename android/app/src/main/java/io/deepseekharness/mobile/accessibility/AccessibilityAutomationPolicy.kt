@@ -79,7 +79,8 @@ internal object AccessibilityAutomationPolicy {
         // 「p a s s w o r d」这类拆字/插字符的绕过尝试重新拼回原词。代价是
         // 「pass word」这类自然分词也会被拼合，但敏感词命中即拒属安全方向。
         val normalized = allWhitespace.replace(zeroWidthChars.replace(value, ""), "")
-        return sensitiveText.containsMatchIn(normalized)
+        // 保留原文匹配，避免归一化移除单词边界后漏报「Enter OTP」等提示。
+        return sensitiveText.containsMatchIn(value) || sensitiveText.containsMatchIn(normalized)
     }
 
     fun parseAction(param: String): ActionRequest? {

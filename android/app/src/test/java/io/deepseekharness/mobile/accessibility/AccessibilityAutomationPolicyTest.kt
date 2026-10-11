@@ -119,6 +119,8 @@ class AccessibilityAutomationPolicyTest {
         assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("支　付"))
         assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("p a s s w o r d"))
         assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("pay​ment"))
+        assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("Enter OTP"))
+        assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("OTP code"))
         assertTrue(AccessibilityAutomationPolicy.containsSensitiveText("请输入\n支付密码"))
         // 归一化不能误伤正常文本：含空白的普通句子依然放行。
         assertFalse(AccessibilityAutomationPolicy.containsSensitiveText("请输入用户名"))

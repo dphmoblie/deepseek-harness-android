@@ -717,7 +717,7 @@ param   = {"op":"status"|"set"|"enable"|"trial", ...}
 3. `key`：只有**返回键**与**方向键**可达（`GLOBAL_ACTION_BACK` / `GLOBAL_ACTION_DPAD_*`），方向键还需 Android 12+（API 31+）；`ENTER` / `TAB` / `SPACE` / `DEL` / `ESC` 在**发出动作之前**就返回 `ACTION_UNSUPPORTED`（不计失败）。
 4. `launch` 走 `startActivity`（`FLAG_ACTIVITY_NEW_TASK`）：**不经过手势，也不弹原生确认浮层**——外部请求路径的 30 秒确认浮层完全保留、未改动，两条路径互不影响。`uri` 只接受 `http/https/market`。
 5. `wait` 不碰界面，只回报 `nextEvaluationDelayMs`，由服务侧 `postDelayed` 重新读树判定；`matchDelayMs` 同理（**一次排期**，不是每个事件重新计时）。
-6. 生产路径的配额窗口是"包名/Activity"：`resetOn = "screen"` 的"每个事件都是新窗口"只在单测里用注入的 `eventSequence` 覆盖；服务侧固定传 `eventSequence = 0L`，所以在事件路径上 `resetOn = "screen"` 与 `"activity"` 等价，`maxActions` 始终是唯一闸门（与拍板结论第 6 条一致）。
+6. 生产路径的配额窗口是"包名/Activity"：`resetOn = "screen"` 使用按应用隔离的窗口序号，只有该应用通过准入的 `TYPE_WINDOW_STATE_CHANGED` 才会推进；其他应用或系统窗口事件不会重开当前应用的配额。
 7. 闸门里的 `DEVICE_LOCKED` 分支**目前只被单测覆盖**（服务侧在进闸门之前就 return 了）。
 8. 桥接命令 `automationRules` 只做了"读规则 + 打开本次会话的执行开关"（`op` 概念没实现）；`automationPolicy` 的能力位、`mobile_automation_trial` 试运行入口、规则列表 UI、审计查看入口都**还没做**。
 9. **口径冲突未动、需要下一轮先定**：本文档与拍板结论第 2 条说 `selectors` 列表是 **OR**，而 `AutomationRuleMatcher.firstMatch`（`AutomationRuleMatcher.kt:371` 一带）与 `AutomationRule.kt:475-476` 的注释是 **AND**（要求全部选择器命中）。匹配器不在本轮可改范围，只记录不改；**这一条直接决定 AI 生成多个选择器时的行为**。

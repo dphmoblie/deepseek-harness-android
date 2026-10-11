@@ -269,6 +269,21 @@ internal class AutomationGateState {
     }
 }
 
+/** `screen` 配额按应用保存窗口序号，避免其他应用事件重开当前应用的配额。 */
+internal class AutomationScreenSequence {
+    private val sequenceByPackage = mutableMapOf<String, Long>()
+
+    fun advance(packageName: String): Long {
+        val next = (sequenceByPackage[packageName] ?: 0L) + 1L
+        sequenceByPackage[packageName] = next
+        return next
+    }
+
+    fun current(packageName: String): Long = sequenceByPackage[packageName] ?: 0L
+
+    fun reset() = sequenceByPackage.clear()
+}
+
 /** 一次规则判定的全部输入。不含任何可变状态，方便表驱动测试逐条构造。 */
 internal data class AutomationGateContext(
     val rule: AutomationRule,

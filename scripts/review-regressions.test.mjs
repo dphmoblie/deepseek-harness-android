@@ -59,6 +59,18 @@ test('accessibility launch checks resolved recipient and pins that component bef
   assert.ok(launch.indexOf('intent.component = resolved') < launch.indexOf('service.startActivity(intent)'))
 })
 
+test('screen quota sequence advances only for an admitted target window event', () => {
+  const start = accessibility.indexOf('private fun handleAutomationEvent(')
+  const event = accessibility.slice(start, accessibility.indexOf('/** 「稍后重新判定」', start))
+  const admitted = event.indexOf('AutomationRuleGate.admitEvent')
+  const sequence = event.indexOf('automationScreenSequence.advance(eventPackage)')
+  const snapshot = event.indexOf('val snapshot = buildAutomationTree(root)')
+  assert.ok(admitted >= 0 && snapshot >= 0 && sequence >= 0)
+  assert.ok(admitted < snapshot && snapshot < sequence)
+  assert.match(event, /snapshot\.packageName == eventPackage/)
+  assert.match(event, /automationScreenSequence\.current\(snapshot\.packageName\)/)
+})
+
 test('gesture capability is declared and long click prefers the node action', async () => {
   assert.match(await read('res/xml/accessibility_service_config.xml'), /android:canPerformGestures="true"/)
   const press = accessibility.slice(accessibility.indexOf('override fun longClickNode('), accessibility.indexOf('override fun pressBack('))

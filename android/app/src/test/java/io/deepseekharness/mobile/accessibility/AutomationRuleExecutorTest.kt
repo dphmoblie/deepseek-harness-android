@@ -15,6 +15,15 @@ import org.junit.Test
  * 这些真机上极难复现的分支——而那几条分支恰好是"绝不误点"的最后一道防线。
  */
 class AutomationRuleExecutorTest {
+    @Test
+    fun `screen 序号按应用隔离，其他应用事件不重开当前应用配额`() {
+        val sequence = AutomationScreenSequence()
+        assertEquals(1L, sequence.advance("com.example.first"))
+        assertEquals(1L, sequence.advance("com.example.other"))
+        assertEquals(1L, sequence.current("com.example.first"))
+        assertEquals(2L, sequence.advance("com.example.first"))
+    }
+
 
     // ---- 点击 ----
 
