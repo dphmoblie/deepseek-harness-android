@@ -55,36 +55,70 @@ function RecoveryNotice({ recovery, unresolved, locked, onRepair }: {
   onRepair: () => void
 }) {
   const reported = recovery !== undefined && recovery.status !== 'none'
-  if (!reported && unresolved === 0) return null
   const restored = recovery?.restored ?? 0
   const relinked = recovery?.relinked ?? 0
   const missing = recovery?.missing ?? 0
   const failed = recovery?.failed ?? 0
   const refused = recovery?.refused ?? 0
+  const migration = recovery?.migration ?? 'none'
+  const lock = recovery?.lock ?? 'missing'
+  const checked = recovery?.checked ?? 0
   const changed = restored + relinked
   const issueCount = reported ? missing + failed + refused : unresolved
-  const tone = recovery !== undefined && recovery.status !== 'none' ? recovery.status : 'partial'
+  /*
+   * 应用升级迁移（`migration`）与版本记录可用性（`lock`）是后加的状态，提示出现的规则有意收窄：
+   * 只有「迁移只完成一部分 / 迁移没成功 / 版本记录损坏或写不进去」这四种要单独提示；迁移正常完成
+   * 时并入下面已有文案，免得每次应用升级都在设置页留一条用户读完也不知道要做什么的提示。
+   */
+  const attention = migration === 'partial' || migration === 'failed' || lock === 'invalid' || lock === 'unwritable'
+  if (!reported && !attention && unresolved === 0) return null
+  const tone = recovery !== undefined && recovery.status !== 'none'
+    ? recovery.status
+    : migration === 'failed'
+      ? 'failed'
+      : 'partial'
   const mark = tone === 'restored' ? '✓' : tone === 'partial' ? '!' : '×'
-  const title = !reported
-    ? '有插件未接回运行时'
-    : tone === 'restored'
+  const title = reported
+    ? tone === 'restored'
       ? '插件已恢复'
       : tone === 'partial'
         ? '插件已部分恢复'
         : '插件恢复失败'
-  const detail = !reported
-    ? t('有 {0} 个已启用插件在当前运行时里解析不到，通常发生在运行时或应用升级之后。', unresolved)
-    : changed > 0
+    : migration === 'failed'
+      ? '插件迁移没有完成'
+      : unresolved > 0
+        ? '有插件未接回运行时'
+        : migration === 'partial'
+          ? '有插件需要重新安装'
+          : '插件版本记录有问题'
+  const detail = reported
+    ? changed > 0
       ? t('已恢复 {0} 个配置、重新链接 {1} 个插件。', restored, relinked)
       : t('没有可直接恢复的插件链接。')
-  const issues = !reported
-    ? ''
-    : issueCount > 0
-      ? t('缺失 {0} 个，失败 {1} 个，拒绝 {2} 个。', missing, failed, refused)
+    : unresolved > 0
+      ? t('有 {0} 个已启用插件在当前运行时里解析不到，通常发生在运行时或应用升级之后。', unresolved)
+      : ''
+  const issues = reported && issueCount > 0
+    ? t('缺失 {0} 个，失败 {1} 个，拒绝 {2} 个。', missing, failed, refused)
+    : ''
+  // 迁移结果只用用户看得懂的说法：说"版本记录"与"包还在不在设备上"，不出现内部文件名与字段名。
+  const migrationNote = migration === 'done'
+    ? checked > 0
+      ? t('应用升级迁移已完成，已按版本记录核对 {0} 个插件，包都在设备上。', checked)
+      : t('应用升级迁移已完成。')
+    : migration === 'partial'
+      ? t('应用升级迁移只完成了一部分，有插件的包已不在设备上，需要重新安装。')
+      : migration === 'failed'
+        ? t('应用升级迁移没有成功，下次启动 Harness 时会自动重试。')
+        : ''
+  const lockNote = lock === 'invalid'
+    ? t('已装插件的版本记录已损坏，无法据此核对插件是否还在设备上。')
+    : lock === 'unwritable'
+      ? t('已装插件的版本记录写不进去（磁盘空间或权限问题），下次启动会再试一次。')
       : ''
   return <section className={`plugin-recovery plugin-recovery-${tone}`} aria-live="polite" role={tone === 'failed' ? 'alert' : 'status'}>
     <div className="plugin-recovery-mark" aria-hidden="true">{mark}</div>
-    <div><strong>{t(title)}</strong><p>{detail} {issues}</p>
+    <div><strong>{t(title)}</strong><p>{detail} {issues} {migrationNote} {lockNote}</p>
       <div className="plugin-recovery-actions">
         <button className="button button-secondary compact-button" type="button" disabled={locked} onClick={onRepair}>{t('立即修复插件')}</button>
         <span className="plugin-hint">{t('按保留的插件包重新接回运行时链接，不重新下载；包本体已被清除的插件修不回来，需要重新安装。')}</span>

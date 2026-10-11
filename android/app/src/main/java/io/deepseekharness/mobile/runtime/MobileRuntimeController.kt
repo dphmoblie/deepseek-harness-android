@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile.runtime
 
 import android.content.Context
+import io.deepseekharness.mobile.BuildConfig
 import io.deepseekharness.mobile.shizuku.ShizukuState
 import java.io.File
 import java.util.concurrent.locks.ReentrantLock
@@ -40,8 +41,8 @@ class MobileRuntimeController(
     private val installer = RuntimeInstaller(store, status, externalCancellation = closed::get)
     private val supervisor = RuntimeSupervisor(context, store, status)
     private val plugins = RuntimePluginManager(context, store)
-    /** 自检实例与 store、生命周期锁同源：插件侧不自行构造 RuntimeStore。 */
-    private val selfCheck = RuntimeSelfCheck(context, store)
+    /** 自检实例与 store、生命周期锁同源：插件侧不自行构造 RuntimeStore；插件管理器复用上面那一个实例（计数是实例内状态）。 */
+    private val selfCheck = RuntimeSelfCheck(context, store, plugins)
     /** 版本列表只读清单与小文件；切换、删除仍由 installer 在安装锁内完成。 */
     private val versions = RuntimeVersionCatalog(store)
     val terminals = TerminalCoordinator(context, store, events::onTerminalOutput, events::onTerminalExit)
@@ -138,9 +139,15 @@ class MobileRuntimeController(
     fun startHarness(expectedStartEpoch: Long? = null): RuntimeStateSnapshot = lifecycleLock.withLock {        ensureOpen()
         if (!supervisor.isRunning()) {
             supervisor.preparePluginManagement()
-            plugins.recoverIfNeeded()
-            // 启动前自愈：运行时升级后插件目录里的链接可能已悬空，修复必须在插件被加载前完成。
-            plugins.repairInstalledIfNeeded()
+            // 应用（APK）升级迁移：判定是「上次迁移成功的 versionCode + 当前 versionCode +
+            // 运行时代次是否变化」（[PluginMigrationPolicy]，纯逻辑）。需要迁移时由它**串行复用**
+            // 下面两步（先回放未提交事务，再按代次自愈链接）并按版本账本核对包目录，因此这时不再
+            // 重复调用 —— recover 虽然幂等，但多调用一次就多起一次访客 Node 进程。
+            if (!plugins.migrateIfNeeded(BuildConfig.VERSION_CODE)) {
+                plugins.recoverIfNeeded()
+                // 启动前自愈：运行时升级后插件目录里的链接可能已悬空，修复必须在插件被加载前完成。
+                plugins.repairInstalledIfNeeded()
+            }
             // 启动前取证：自愈按代次指纹只跑一次，探测则每次都跑 —— 它只读、只遍历固定候选根，
             // 而「装了新插件」不换代次，缓存会漏掉那个时机。
             // 结果只写计数（MODULE_GRAPH）。判读要分清方向：**count=1 是很强的否定结论**

@@ -1290,6 +1290,20 @@ export interface PluginGroup {
  * 前端按「没有迁移结果」处理，保持向后兼容。
  */
 export type PluginRecoveryStatus = 'none' | 'restored' | 'partial' | 'failed'
+/**
+ * 应用（APK）升级后的插件迁移结果。
+ *
+ * `none`：本次进程还没跑（首次安装、或版本号与上次迁移一致）；
+ * `done`：跑完且没有缺口；`partial`：跑完但版本记录不可用、或仍有插件缺失/失败；
+ * `failed`：这一步没做成（下次启动会自动重试）—— 迁移本身失败时启动会照旧中断并报错，
+ * 界面能看到这个状态的是「跑完了但记账没写成」这一种。
+ */
+export type PluginMigrationStatus = 'none' | 'done' | 'partial' | 'failed'
+/**
+ * 已装插件的「版本事实」记录（由访客侧维护、原生侧只读）在设备上的可用性：
+ * `ok` 可用、`missing` 还没有（新设备或从未装过插件）、`invalid` 已损坏、`unwritable` 写不进去。
+ */
+export type PluginLockStatus = 'ok' | 'missing' | 'invalid' | 'unwritable'
 export interface PluginRecoveryState {
   status: PluginRecoveryStatus
   restored: number
@@ -1297,6 +1311,14 @@ export interface PluginRecoveryState {
   missing: number
   failed: number
   refused: number
+  /**
+   * 下面三项是后加的：旧版原生侧不带这些键，此时保持 `undefined`，界面按「没有迁移信息」处理。
+   * 只要带了就必须落在受控取值里，否则整份目录数据视为无效。
+   */
+  migration?: PluginMigrationStatus
+  lock?: PluginLockStatus
+  /** 迁移时按版本记录逐条核对过的已装插件数；没有版本记录时为 0。 */
+  checked?: number
 }
 export interface PluginCatalog {
   plugins: PluginGroup[]

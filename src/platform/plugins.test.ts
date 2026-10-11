@@ -68,4 +68,16 @@ describe('插件桥接校验', () => {
     expect(() => validatePluginCatalog({ ...group({}), recovery: { status: 'restored', restored: 1025, relinked: 0, missing: 0, failed: 0, refused: 0 } })).toThrow()
     expect(() => validatePluginCatalog({ ...group({}), recovery: { status: 'unknown', restored: 0, relinked: 0, missing: 0, failed: 0, refused: 0 } })).toThrow()
   })
+  it('迁移结果与版本记录是后加字段：旧版不带时保持缺省，带了就必须落在受控取值内', () => {
+    const base = { status: 'restored', restored: 1, relinked: 0, missing: 0, failed: 0, refused: 0 }
+    // 旧版原生侧不带这三个键：照旧接受，且不凭空补值（界面按「没有迁移信息」处理）。
+    expect(validatePluginCatalog({ ...group({}), recovery: { ...base } }).recovery).toEqual(base)
+    expect(validatePluginCatalog({
+      ...group({}),
+      recovery: { ...base, migration: 'partial', lock: 'invalid', checked: 3 },
+    }).recovery).toEqual({ ...base, migration: 'partial', lock: 'invalid', checked: 3 })
+    for (const bad of [{ migration: 'unknown' }, { lock: 'broken' }, { checked: -1 }, { checked: 1025 }]) {
+      expect(() => validatePluginCatalog({ ...group({}), recovery: { ...base, ...bad } })).toThrow()
+    }
+  })
 })

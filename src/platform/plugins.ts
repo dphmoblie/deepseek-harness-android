@@ -28,7 +28,7 @@ function count(value: unknown): number {
 function recovery(value: unknown): PluginRecoveryState {
   const state = record(value)
   if (!['none', 'restored', 'partial', 'failed'].includes(state.status as string)) invalid()
-  return {
+  const result: PluginRecoveryState = {
     status: state.status as PluginRecoveryState['status'],
     restored: count(state.restored),
     relinked: count(state.relinked),
@@ -36,6 +36,20 @@ function recovery(value: unknown): PluginRecoveryState {
     failed: count(state.failed),
     refused: count(state.refused),
   }
+  /*
+   * 应用升级迁移的三项是后加的：旧版原生侧不带这些键，此时保持 undefined（界面按「没有迁移信息」
+   * 处理，向后兼容）；但只要带了就必须落在受控取值内 —— 放宽会让一个没人认识的状态悄悄漏到界面上。
+   */
+  if (state.migration !== undefined) {
+    if (!['none', 'done', 'partial', 'failed'].includes(state.migration as string)) invalid()
+    result.migration = state.migration as PluginRecoveryState['migration']
+  }
+  if (state.lock !== undefined) {
+    if (!['ok', 'missing', 'invalid', 'unwritable'].includes(state.lock as string)) invalid()
+    result.lock = state.lock as PluginRecoveryState['lock']
+  }
+  if (state.checked !== undefined) result.checked = count(state.checked)
+  return result
 }
 /**
  * 导入来源：npm 包名（含作用域名）或 `https://` / `git+https://` 地址。
