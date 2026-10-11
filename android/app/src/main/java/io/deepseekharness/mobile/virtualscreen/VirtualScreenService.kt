@@ -974,6 +974,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         override fun run() {
             val worker = executor ?: return
             val version = lifecycle.generation
+            val startedAt = SystemClock.elapsedRealtime()
             worker.execute {
                 var bitmap: android.graphics.Bitmap? = null
                 var id = ""
@@ -1070,7 +1071,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     }
                     // 拉取间隔跟随档位（下限见 VirtualScreenPolicy.previewPullInterval）：
                     // 档位在这里改、运行中立刻生效，不必重开副屏。
-                    main.postDelayed(this, VirtualScreenPolicy.previewPullInterval(mode).toLong())
+                    main.postDelayed(this, VirtualScreenPolicy.previewPullDelay(mode, SystemClock.elapsedRealtime() - startedAt))
                 }
             }
         }

@@ -99,16 +99,14 @@ object VirtualScreenPolicy {
         else -> "limited"
     }
 
-    /**
-     * 预览窗口拉取一帧 PNG 的间隔：跟随当前档位，但不下探到 [PREVIEW_PULL_FLOOR_MILLIS]。
-     *
-     * 采集与出帧始终按 [frameInterval] 跑；这里限制的只是「截图 → 解码 PNG → 贴图」这条更贵的链路，
-     * 否则 60fps 档位会把主线程压满，用户看到的反而更卡。
-     */
-    // PNG 兼容预览的保守下限；GPU 直出预览不走这个轮询路径。
+    /** 预览取帧的起始间隔；硬件帧和 PNG 兼容路径共用，档位不绕过此下限。 */
     const val PREVIEW_PULL_FLOOR_MILLIS = 4
 
     fun previewPullInterval(mode: String): Int = maxOf(PREVIEW_PULL_FLOOR_MILLIS, frameInterval(mode))
+
+    /** 扣除本拍取帧与上屏耗时，不追赶积压帧，也不额外再等一个完整周期。 */
+    fun previewPullDelay(mode: String, elapsedMillis: Long): Long =
+        (previewPullInterval(mode).toLong() - elapsedMillis.coerceAtLeast(0L)).coerceAtLeast(1L)
 
     /** 从请求里取出并校验目标应用入口（字段名 [TARGET_FIELD]），复用 [component] 的规则。 */
     fun targetRequest(p: JSONObject): String = component(p.getString(TARGET_FIELD))

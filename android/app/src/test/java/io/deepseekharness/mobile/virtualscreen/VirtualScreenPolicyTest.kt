@@ -192,6 +192,18 @@ class VirtualScreenPolicyTest {
         }
     }
 
+    @Test fun `取帧耗时计入每拍间隔且慢帧不会积压追赶`() {
+        assertEquals(16L, VirtualScreenPolicy.previewPullDelay("60fps", 0L))
+        assertEquals(9L, VirtualScreenPolicy.previewPullDelay("60fps", 7L))
+        assertEquals(1L, VirtualScreenPolicy.previewPullDelay("60fps", 16L))
+        assertEquals(1L, VirtualScreenPolicy.previewPullDelay("60fps", 1000L))
+        assertEquals(1L, VirtualScreenPolicy.previewPullDelay("60fps", Long.MAX_VALUE))
+        assertEquals(16L, VirtualScreenPolicy.previewPullDelay("60fps", -1L))
+        assertEquals(150L, VirtualScreenPolicy.previewPullDelay("limited", 30L))
+        assertEquals(2L, VirtualScreenPolicy.previewPullDelay("240fps", 2L))
+        assertThrows(IllegalArgumentException::class.java) { VirtualScreenPolicy.previewPullDelay("unknown", 0L) }
+    }
+
     @Test fun `预览拉取间隔不低于下限且必须先用反解归一档位`() {
         // 拉取间隔 = maxOf(下限, 档位间隔)：十档里只有最快档会撞到下限，其余都按档位自身走。
         // 这条链路是「截图 → 解码 PNG → 贴图」，比采集贵得多，不能让它跟着最快档无限加速。
