@@ -407,8 +407,14 @@ class ShizukuRuntime(
         val owned = virtualScreenOwner?.takeIf { it.second == sessionId } ?: return
         try {
             if (owned.first.asBinder().isBinderAlive) owned.first.virtualScreenAction(org.json.JSONObject().put("sessionId", sessionId).put("action", "stop").toString())
+            else throw RuntimeFailure("SHIZUKU_SERVICE_FAILED", "Shizuku 用户服务已断开")
+            virtualScreenOwner = null
+        } catch (error: Exception) {
+            // Keep the owner so disconnect/shutdown can retry while the old binder is alive.
+            throw if (error is RuntimeFailure) error else RuntimeFailure("VIRTUAL_SCREEN_CLOSE_FAILED", "无法关闭副屏", error)
         } finally {
-            if (virtualScreenOwner === owned) virtualScreenOwner = null
+            // A dead binder cannot be retried; a live binder remains owned on failure.
+            if (!owned.first.asBinder().isBinderAlive && virtualScreenOwner === owned) virtualScreenOwner = null
         }
     }
 
@@ -434,7 +440,33 @@ class ShizukuRuntime(
     fun virtualScreenFrame(sessionId: String): android.hardware.HardwareBuffer {
         requirePermission()
         require(SESSION_PATTERN.matches(sessionId))
-        return requireService().virtualScreenFrame(sessionId)
+        return requireService().virtualScreenFrame(sessionId).buffer
+    }
+
+    /** Reads the same-frame PNG envelope through a pipe; image bytes never cross Binder inline. */
+    fun virtualScreenScreenshot(sessionId: String): org.json.JSONObject {
+        requirePermission()
+        require(SESSION_PATTERN.matches(sessionId))
+        val pipe = requireService().virtualScreenSnapshotEnvelope(sessionId)
+        return android.os.ParcelFileDescriptor.AutoCloseInputStream(pipe).use { input ->
+            val data = java.io.DataInputStream(java.io.BufferedInputStream(input))
+            val headerLength = data.readInt()
+            require(headerLength in 1..4096) { "副屏截图元数据无效" }
+            val header = ByteArray(headerLength)
+            data.readFully(header)
+            val result = org.json.JSONObject(String(header, Charsets.UTF_8))
+            val image = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = data.read(buffer)
+                if (count < 0) break
+                check(image.size() + count <= 8 * 1024 * 1024) { "副屏截图过大" }
+                image.write(buffer, 0, count)
+            }
+            pipe.checkError()
+            check(image.size() > 0) { "副屏截图为空" }
+            result.put("imageBase64", java.util.Base64.getEncoder().encodeToString(image.toByteArray()))
+        }
     }
 
     fun create(
@@ -540,8 +572,15 @@ class ShizukuRuntime(
 
     fun disconnect() {
         disconnecting = true
-        virtualScreenOwner?.let { runCatching { closeVirtualScreen(it.second) } }
         var failure: RuntimeFailure? = null
+        virtualScreenOwner?.let {
+            try {
+                closeVirtualScreen(it.second)
+            } catch (error: RuntimeFailure) {
+                // Do not hide a failed stop: callers must know the display may still be alive.
+                failure = error
+            }
+        }
         val current = service
         val currentBinder = current?.asBinder()?.takeIf { it.isBinderAlive }
         val serviceStopped = CountDownLatch(if (currentBinder != null) 1 else 0)
@@ -563,7 +602,7 @@ class ShizukuRuntime(
         try {
             closeAllAndWait()
         } catch (error: RuntimeFailure) {
-            failure = error
+            if (failure == null) failure = error
         }
         val unbound = CountDownLatch(1)
         val unbind = Runnable {
@@ -768,7 +807,7 @@ class ShizukuRuntime(
         private const val BINDER_TIMEOUT_SECONDS = 8L
         private const val SERVICE_TIMEOUT_SECONDS = 10L
         private const val SERVICE_EXIT_TIMEOUT_SECONDS = 5L
-        private const val USER_SERVICE_VERSION = 5
+        private const val USER_SERVICE_VERSION = 6
         private const val MAX_SESSIONS = 4
 
         /**

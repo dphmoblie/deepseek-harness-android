@@ -41,6 +41,7 @@ import type {
   RuntimeState,
   RuntimeVersionInfo,
   RuntimeVersionsState,
+  RuntimeWorkspaceFileList,
   ShizukuState,
   StorageAccessState,
   StorageDirAvailability,
@@ -190,14 +191,15 @@ export function validateRuntimeWorkspaceFilePath(value: unknown): string {
 }
 
 /** 原生工作区文件列表的结构校验；未知字段被忽略，路径逐条走同一套规则。 */
-export function validateRuntimeWorkspaceFileList(value: unknown): string[] {
+export function validateRuntimeWorkspaceFileList(value: unknown): RuntimeWorkspaceFileList {
   const source = asRecord(value, '工作区文件列表')
   if (!Array.isArray(source.files) || source.files.length > MAX_RUNTIME_WORKSPACE_FILES) {
     throw new Error('工作区文件列表格式无效')
   }
   const files = source.files.map(validateRuntimeWorkspaceFilePath)
   if (new Set(files).size !== files.length) throw new Error('工作区文件列表包含重复路径')
-  return files
+  if (typeof source.truncated !== 'boolean') throw new Error('工作区文件列表截断标记格式无效')
+  return { files, truncated: source.truncated }
 }
 
 function modelProviderId(value: unknown): ModelProviderId {
@@ -1274,10 +1276,13 @@ export function validateStorageDirsState(value: unknown): StorageDirsState {
     throw new Error('存储目录条目格式无效')
   }
   if (source.count !== source.entries.length) throw new Error('存储目录白名单状态自相矛盾')
-  const entries: StorageDirEntry[] = source.entries.map((item, position) => {
+  const slots = new Set<number>()
+  const entries: StorageDirEntry[] = source.entries.map(item => {
     const entry = asRecord(item, '存储目录条目')
-    // 序号来自持久化顺序：第 n 条的序号必须是 n（1 起）。重排会让 /mnt/user/<序号> 指向别的目录。
-    if (entry.index !== position + 1) throw new Error('存储目录序号格式无效')
+    // 删除条目后允许槽位留下空洞，但必须保持唯一并与挂载点一致。
+    if (typeof entry.index !== 'number' || !Number.isInteger(entry.index) || entry.index < 1 ||
+      entry.index > MAX_STORAGE_DIRECTORIES || slots.has(entry.index)) throw new Error('存储目录序号格式无效')
+    slots.add(entry.index)
     const availability = storageDirAvailability(entry.availability)
     const available = requiredBoolean(entry.available, '存储目录可用性')
     if (available !== (availability === 'available')) throw new Error('存储目录条目自相矛盾')
@@ -1291,7 +1296,7 @@ export function validateStorageDirsState(value: unknown): StorageDirsState {
     ) {
       throw new Error('存储目录名称格式无效')
     }
-    if (entry.guestPath !== `/mnt/user/${position + 1}`) throw new Error('存储目录挂载点格式无效')
+    if (entry.guestPath !== `/mnt/user/${entry.index}`) throw new Error('存储目录挂载点格式无效')
     let reasonCode: string | undefined
     if (entry.reasonCode !== undefined) {
       if (
@@ -1303,7 +1308,7 @@ export function validateStorageDirsState(value: unknown): StorageDirsState {
       reasonCode = entry.reasonCode
     }
     return {
-      index: position + 1,
+      index: entry.index,
       path: storageDirPath(entry.path),
       displayName: entry.displayName,
       guestPath: entry.guestPath,

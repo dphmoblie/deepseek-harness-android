@@ -36,7 +36,7 @@ test('static pages can be captured from the retained image without waiting for a
   const snapshot = shell.slice(shell.indexOf('private fun awaitFrame('), shell.indexOf('private fun copyFrame('))
   assert.match(snapshot, /while \(reader === source && latestImage == null\)/u)
   assert.match(snapshot, /if \(reader !== source\) throw RuntimeFailure\("VIRTUAL_SCREEN_STOPPED"/u)
-  assert.match(snapshot, /encodedFrame\?\.let \{ return@synchronized it \}/u)
+  assert.match(snapshot, /encodedFrame\?\.let \{ return@synchronized SnapshotFrame\(it,/u)
   assert.match(snapshot, /val current = copyFrame\(image\)/u)
   assert.doesNotMatch(shell, /cpuCaptureRequested|cpuFrameAt/u)
   const close = shell.slice(shell.indexOf('@Synchronized fun close()'))

@@ -242,6 +242,19 @@ class MobileRuntimeController(
         supervisor.configureDeviceBridge(access)
     }
 
+    /**
+     * Mutates the shared-directory allowlist while holding the same lock as launch/stop.
+     * Mounts are snapshotted when PRoot starts, so changing the list during a live session
+     * would otherwise make the UI and the guest disagree until the next restart.
+     */
+    fun <T> withStorageDirsMutation(operation: () -> T): T = lifecycleLock.withLock {
+        ensureOpen()
+        if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
+            throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
+        }
+        operation()
+    }
+
     fun saveSettings(
         settings: RuntimeSettings,
         providerApiKeyUpdates: Map<ModelProvider, String>,

@@ -904,6 +904,7 @@ export const english: Readonly<Record<string, string>> = {
   "无法读取工作区文件，请重试": "Could not load workspace files. Please try again.",
   "工作区中暂无文件": "No files in the workspace",
   "DSH 创建的文件会显示在这里": "Files created by DSH will appear here",
+  "文件过多，仅显示前 100 个；请缩小工作区范围后重试": "Too many files; showing the first 100. Narrow the workspace and retry.",
   "工作区根目录": "Workspace root",
   "打开 {0}": "Open {0}",
   "分享 {0}": "Share {0}",

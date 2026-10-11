@@ -8,6 +8,7 @@ const base = 'java/io/deepseekharness/mobile/'
 const shell = await read(base + 'virtualscreen/ShellVirtualScreen.kt')
 const service = await read(base + 'virtualscreen/VirtualScreenService.kt')
 const plugin = await read(base + 'MobileRuntimePlugin.kt')
+const controller = await read(base + 'runtime/MobileRuntimeController.kt')
 const accessibility = await read(base + 'accessibility/DeepSeekAccessibilityService.kt')
 
 // Native wiring checks complement JVM policy tests; device behavior still needs instrumentation.
@@ -32,12 +33,19 @@ test('target changes keep restart component and package in sync, including URI a
     ['candidate', 'component'],
     ['applied.target', 'component'],
   ]) {
-    const assignments = `targetPackage = ${packageValue} targetComponent = ${component}`
+    const assignments = `assignTargetPackage(${packageValue}) targetComponent = ${component}`
     assert.ok(shell.replace(/\s+/g, ' ').includes(assignments))
   }
   assert.match(shell, /val previous = targetComponent\.takeIf/)
   assert.match(shell, /return virtualForeground\?\.takeIf/)
   assert.match(shell, /val candidate = foreground\?\.substringBefore\('\/'\)/)
+})
+
+test('shared-directory mutations are serialized with runtime launch state', () => {
+  assert.match(controller, /fun <T> withStorageDirsMutation\(operation: \(\) -> T\): T = lifecycleLock\.withLock/u)
+  assert.match(controller, /if \(supervisor\.isRunning\(\) \|\| terminals\.hasRuntimeSessions\(\)\) \{[\s\S]*?RUNTIME_BUSY/u)
+  assert.match(plugin, /controller\.withStorageDirsMutation\s*\{\s*storageDirs\(\)\.add\(documentId\)\.toJs\(\)\s*\}/u)
+  assert.match(plugin, /controller\.withStorageDirsMutation\s*\{\s*storageDirs\(\)\.remove\(path\)\.toJs\(\)\s*\}/u)
 })
 
 test('stop bridge waits off main thread and release signal follows native close', () => {

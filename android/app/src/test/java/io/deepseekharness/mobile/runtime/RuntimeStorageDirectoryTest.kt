@@ -64,7 +64,7 @@ class RuntimeStorageDirectoryTest {
         val first = facade.requireGuestDirectory("/mnt/user/1")
         val second = facade.requireGuestDirectory("/mnt/user/2")
 
-        // 序号就是「持久化顺序」（与 StorageDirStatus.index 同一个数），不是排序结果：
+        // 序号就是持久化槽位（与 StorageDirStatus.index 同一个数），不是排序结果：
         // 这条断言防的是「顺手按路径/名称重排」——那会让用户的挂载点凭空换位置。
         assertEquals(1, first.index)
         assertEquals("$root/Download", first.entry.path)

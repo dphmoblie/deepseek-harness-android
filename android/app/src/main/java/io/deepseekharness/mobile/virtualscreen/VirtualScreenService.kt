@@ -308,17 +308,26 @@ class VirtualScreenService : Service() {
      * `frameBlank` 由宿主状态原样透传，宿主状态里没有该字段时不给出默认值。
      */
     fun screenshotEnvelope(id: String): JSONObject {
-        val bytes = screenshot(id, fromAi = true)
-        val meta = freshState()
-        val frameAt = meta.optLong("frameAtElapsedMs", 0L)
-        val reused = frameAt > 0L && frameAt == lastAiFrameAt
-        lastAiFrameAt = frameAt
-        val envelope = JSONObject().put("imageBase64", java.util.Base64.getEncoder().encodeToString(bytes))
-            .put("packageName", meta.optString("packageName"))
-            .put("frameAtElapsedMs", frameAt)
-            .put("frameReused", reused)
-        if (meta.has("frameBlank")) envelope.put("frameBlank", meta.optBoolean("frameBlank"))
-        return envelope
+        requireAccess()
+        requireSession(id)
+        if (!actionSlot.tryAcquire()) throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "上一步副屏操作尚未完成")
+        return try {
+            val meta = checkNotNull(shizuku).virtualScreenScreenshot(id)
+            requireAccess()
+            audit.record(AuditEvent.VIRTUAL_SCREEN_READ, AuditResult.SUCCEEDED)
+            val frameAt = meta.optLong("frameAtElapsedMs", 0L)
+            val reused = frameAt > 0L && frameAt == lastAiFrameAt
+            lastAiFrameAt = frameAt
+            val envelope = JSONObject().put("imageBase64", meta.getString("imageBase64"))
+                .put("packageName", meta.optString("packageName"))
+                .put("frameAtElapsedMs", frameAt)
+                .put("frameReused", reused)
+            if (meta.has("frameBlank")) envelope.put("frameBlank", meta.optBoolean("frameBlank"))
+            envelope
+        } catch (error: Exception) {
+            audit.record(AuditEvent.VIRTUAL_SCREEN_READ, AuditResult.FAILED)
+            throw error
+        } finally { actionSlot.release() }
     }
 
     fun action(parameters: JSONObject): JSONObject {

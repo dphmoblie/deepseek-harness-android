@@ -77,6 +77,7 @@ class RuntimeStorageDirPreferencesTest {
             listOf("$root/Download" to "Download", "$root/DCIM" to "DCIM"),
             stored.entries.map { it.path to it.displayName },
         )
+        assertEquals(listOf(1, 2), stored.entries.map { it.index })
         assertEquals(5, stored.dropped)
         assertFalse(stored.corrupt)
     }

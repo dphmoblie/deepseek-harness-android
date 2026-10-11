@@ -687,8 +687,7 @@ export type StorageDirectoryEntry = MailboxDirectoryEntry
  * 共享目录浏览快照；与 [MailboxDirectoryState] 只差根字段（`root` → `guestPath`）。
  *
  * - `guestPath` 严格形如 `/mnt/user/<序号>`，序号从 1 起，取自 [StorageDirsState] 条目里的
- *   同名字段。序号是**持久化顺序**（`/mnt/user/3` 永远指白名单里的第 3 条，不因别的条目失效而重排），
- *   因此界面可以把它当稳定标识用；它标识的是「白名单里的第几条」，不是任意宿主路径。
+ *   同名字段。序号是**持久化槽位**（删除别的条目不会重排），因此界面可以把它当稳定标识用。
  * - `path` 为 `undefined` 表示当前就位于该目录根；否则是规范化后的相对子目录
  *   （语义与 [MailboxDirectoryState] 的 `path` 完全一致，原生回传根目录时给的是 `null`）。
  * - `entries` 单次最多 256 条（与投递区同一个上限）。超出上限时只返回一部分且
@@ -744,8 +743,7 @@ export interface StorageDirEntry {
   /**
    * 序号（1 起）。访客内挂载点为 `/mnt/user/<index>`。
    *
-   * 序号来自**持久化顺序**：某条目录失效时只跳过该条（访客里留下空洞），不会重排 ——
-   * 否则一次失效就会让别的条目换到另一个挂载点上。
+   * 序号来自**持久化槽位**：某条目录失效或被删除时只留下空洞，不会让别的条目换挂载点。
    */
   index: number
   /** 宿主侧的真实路径（已解析符号链接，不是 `/sdcard`）。 */
@@ -941,6 +939,11 @@ export interface ListenerHandle {
  */
 export type AppThemeMode = 'system' | 'light' | 'dark'
 
+export interface RuntimeWorkspaceFileList {
+  files: string[]
+  truncated: boolean
+}
+
 export interface RuntimeBridge {
   managePlugins: (request: PluginRequest) => Promise<PluginCatalog>
   /** 保存应用语言，仅接受简体中文和英语。 */
@@ -1128,7 +1131,7 @@ export interface RuntimeBridge {
   /** 导出全部诊断日志并打开系统分享面板。 */
   shareDiagnosticLog: () => Promise<DiagnosticLogExport>
   shareRuntimeWorkspace: () => Promise<void>
-  listRuntimeWorkspaceFiles: () => Promise<string[]>
+  listRuntimeWorkspaceFiles: () => Promise<RuntimeWorkspaceFileList>
   shareRuntimeWorkspaceFile: (path: string) => Promise<void>
   openRuntimeWorkspaceFile: (path: string) => Promise<void>
   deleteRuntimeWorkspaceFile: (path: string) => Promise<void>
