@@ -185,6 +185,10 @@ or otherwise distributing them.
 
 2026-10-11 起 `.github/workflows/android-build.yml` 里各作业实际跑的门禁。除标「新增」的以外，
 都是原本就在跑的检查，这里只是列清楚它们在哪个作业、挡什么问题，方便本机复现同一批结论。
+**真跑状态（2026-10-11）**：新增门禁已随 `598e673` 进入 CI，run `38138857777` 里作业
+「Quality gates (whitespace / Android resources / manifest schema / secrets)」**success**
+（同一 run 的 `Publish release` 仍是 skipped）。失败路径（诱饵区间命中 / 区间取错 / 扫描器缺失）
+目前只有本机证据——CI 上这些步骤只走通过分支。
 
 ### 新增的 `gates` 作业（4 个步骤，按轻到重排序）
 
