@@ -765,10 +765,18 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private val main = Handler(Looper.getMainLooper())
     private val lifecycle = VirtualScreenPreviewLifecycle()
     private var displayed: android.graphics.Bitmap? = null
-    private var observedSession = ""
-    private var observedAt = 0L
-    /** 最近一次状态里的触摸通道：`stream` 表示可逐事件直传，其它值退回离散点击/滑动。 */
-    private var observedChannel = ""
+    /**
+     * 上屏判定与观测状态（画面时刻 / 会话 / 触摸通道 / 上一次采样）都在这里：判定与它改动的状态
+     * 必须是同一份，各存一份迟早会漂移。纯 Kotlin，可在 JVM 单测里逐拍覆盖。
+     */
+    private val core = VirtualScreenPreviewCore(
+        sessionAlive = { id ->
+            val current = VirtualScreenService.current
+            // 会话不可观察（已切换、已释放）才是唯一允许清屏的情形。
+            current?.canObserve() == true && current.state().optString("sessionId") == id
+        },
+        modeTitle = { mode -> context.getString(modeTitleRes(mode)) },
+    )
     private val inputBusy = AtomicBoolean(false)
     private var down: FloatArray? = null
     private var downSession = ""
@@ -796,8 +804,6 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private var downHeldAt = 0L
     /** 静置容差（像素）：按下后累计位移不超过它才算「按住不动」，按下时按当前显示密度换算一次。 */
     private var dragSlopPx = 0f
-    /** 上一张已显示画面的亮度采样，用来判断「画面暂无变化」；null 表示还没显示过画面。 */
-    private var previousSamples: IntArray? = null
     /** 逐采样行读像素时复用的整行缓冲，避免每一拍都新建数组。 */
     private var rowPixels = IntArray(0)
     private var displayedHardware: android.hardware.HardwareBuffer? = null
@@ -817,7 +823,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
             val at = point(e)
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    down = at; downSession = observedSession; downAt = e.eventTime
+                    down = at; downSession = core.observedSession; downAt = e.eventTime
                     streaming = false; queuedMove = null; lastMoveAt = 0L
                     downRawX = e.rawX; downRawY = e.rawY
                     dragActive = false; queuedDrag = null; dragLastAt = 0L
@@ -826,8 +832,8 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     downHeldAt = clock()
                     // 只有设备端报告 stream 通道、且会话与画面都新鲜时才逐事件直传；
                     // 否则保持原先的「抬起时发一个 tap/swipe」行为。
-                    if (at != null && service != null && worker != null && observedChannel == "stream" &&
-                        service.canObserve() && SystemClock.elapsedRealtime() - observedAt < 3000) {
+                    if (at != null && service != null && worker != null && core.observedChannel == "stream" &&
+                        service.canObserve() && SystemClock.elapsedRealtime() - core.observedAtMillis < 3000) {
                         streaming = true
                         sendTouch(worker, service, "down", at)
                     }
@@ -888,10 +894,10 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                         streaming = false
                         (queuedMove ?: at)?.let { sendTouch(worker, service, "up", it) }
                         queuedMove = null
-                    } else if (start != null && at != null && service != null && worker != null && downSession == observedSession &&
-                        service.canObserve() && SystemClock.elapsedRealtime() - observedAt < 3000 && inputBusy.compareAndSet(false, true)) {
+                    } else if (start != null && at != null && service != null && worker != null && downSession == core.observedSession &&
+                        service.canObserve() && SystemClock.elapsedRealtime() - core.observedAtMillis < 3000 && inputBusy.compareAndSet(false, true)) {
                         val swipe = kotlin.math.hypot(at[0] - start[0], at[1] - start[1]) > 12
-                        val request = JSONObject().put("sessionId", observedSession).put("action", if (swipe) "swipe" else "tap")
+                        val request = JSONObject().put("sessionId", core.observedSession).put("action", if (swipe) "swipe" else "tap")
                             .put("x", start[0].toInt()).put("y", start[1].toInt())
                         if (swipe) request.put("endX", at[0].toInt()).put("endY", at[1].toInt()).put("durationMs", (e.eventTime - downAt).coerceIn(100, 2000).toInt())
                         val version = lifecycle.generation
@@ -922,7 +928,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private fun sendTouch(worker: java.util.concurrent.ExecutorService?, service: VirtualScreenService?, phase: String, at: FloatArray) {
         if (worker == null || service == null) return
         val version = lifecycle.generation
-        val session = downSession.ifEmpty { observedSession }
+        val session = downSession.ifEmpty { core.observedSession }
         val request = JSONObject().put("sessionId", session).put("action", "touch").put("phase", phase)
             .put("x", at[0].toInt()).put("y", at[1].toInt())
         worker.execute {
@@ -946,8 +952,8 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private fun clearFrame() {
         down = null
         setImageDrawable(null); displayed = null
-        observedSession = ""; observedAt = 0
-        previousSamples = null
+        // 观测状态（画面时刻 / 会话 / 上一次采样）与画面一起清空：判定核心持有它们，清屏只有这一条路径。
+        core.clear()
         displayedHardware?.close(); displayedHardware = null
     }
 
@@ -974,7 +980,8 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         override fun run() {
             val worker = executor ?: return
             val version = lifecycle.generation
-            val startedAt = SystemClock.elapsedRealtime()
+            // 本拍开始时刻由拍子调度器记账：续排延迟要用它扣掉本拍耗时（见 VirtualScreenPreviewPump）。
+            pump.fetchStarted()
             worker.execute {
                 var bitmap: android.graphics.Bitmap? = null
                 var id = ""
@@ -1017,29 +1024,23 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                         fetchedHardware?.close()
                         return@post
                     }
-                    val current = VirtualScreenService.current
-                    // 会话不可观察（已切换、已释放）才是唯一允许清屏的情形。
-                    val alive = current?.canObserve() == true && current.state().optString("sessionId") == id
                     // 判定权威在客户端：宿主那个只看固定采样线的 frameBlank 只作提示，不再决定清不清屏
-                    // （0.2.9 的真机黑屏就是把它当成了「不能显示」）。接近纯色的帧一律不显示，并如实写进状态行。
-                    // HardwareBuffer 已由 Bitmap.wrapHardwareBuffer 成功解码，但不会生成 CPU samples；
-                    // 也不能拿尚未做 CPU 采样的 frameBlank=true 把有效硬件帧误判成纯色。
-                    // 硬件路径的内容判定交给 Bitmap 解码结果，PNG 路径继续使用采样启发式。
+                    // （0.2.9 的真机黑屏就是把它当成了「不能显示」）。判定与状态行已抽到
+                    // VirtualScreenPreviewCore：这里只把这一拍的事实交给它，再按结论转移缓冲所有权。
                     val decoded = bitmap != null
-                    val hasContent = if (hardwareFrame) decoded
-                        else samples != null && VirtualScreenPolicy.frameHasContent(samples)
-                    val changed = if (hardwareFrame) decoded
-                        else samples == null || VirtualScreenPolicy.frameChanged(previousSamples, samples)
-                    val outcome = VirtualScreenPolicy.previewOutcome(alive, decoded, !hasContent, changed)
-                    // 还没有任何可显示画面时必须说「等待……」，不能假称「画面暂无变化」；
-                    // 这里用 lambda 在读数时求值：SHOW 已经把画面画上去之后，状态行就不该再说「等待」。
-                    // 文案由 VirtualScreenPolicy.previewLine 统一生成：页面大预览与悬浮小窗共用同一份规则。
-                    val line = {
-                        VirtualScreenPolicy.previewLine(
-                            channel, outcome.pause, fps, context.getString(modeTitleRes(mode)), displayed == null,
-                        )
-                    }
-                    when (outcome.action) {
+                    val result = core.accept(
+                        PreviewSample(
+                            sessionId = id,
+                            channel = channel,
+                            mode = mode,
+                            fps = fps,
+                            decoded = decoded,
+                            samples = samples,
+                            hardwareFrame = hardwareFrame,
+                        ),
+                        SystemClock.elapsedRealtime(),
+                    )
+                    when (result.action) {
                         VirtualScreenPolicy.PreviewFrameAction.SHOW -> {
                             bitmap?.let {
                                 val oldHardware = displayedHardware
@@ -1047,20 +1048,14 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                                 fetchedHardware = null
                                 setImageBitmap(it); displayed = it
                                 oldHardware?.close()
-                                // 只有真帧才刷新画面时刻：不能让触摸与「画面新鲜」判定误以为刚更新过。
-                                observedSession = id; observedAt = SystemClock.elapsedRealtime()
-                                // 只有真正显示过的画面才算「上一帧」，状态行的「画面暂无变化」才有所指。
-                                previousSamples = samples
                             }
-                            if (channel.isNotEmpty()) observedChannel = channel
-                            report(line())
+                            report(result.line)
                         }
                         VirtualScreenPolicy.PreviewFrameAction.KEEP -> {
                             // 接近纯色的新帧或这一拍读不到帧：保留最近一张非空白画面（绝不清屏），也不动画面时刻。
                             fetchedHardware?.close()
                             fetchedHardware = null
-                            if (channel.isNotEmpty()) observedChannel = channel
-                            report(line())
+                            report(result.line)
                         }
                         VirtualScreenPolicy.PreviewFrameAction.CLEAR -> {
                             fetchedHardware?.close()
@@ -1071,11 +1066,23 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     }
                     // 拉取间隔跟随档位（下限见 VirtualScreenPolicy.previewPullInterval）：
                     // 档位在这里改、运行中立刻生效，不必重开副屏。
-                    main.postDelayed(this, VirtualScreenPolicy.previewPullDelay(mode, SystemClock.elapsedRealtime() - startedAt))
+                    pump.fetchLanded(mode)
                 }
             }
         }
     }
+
+    /**
+     * 取帧拍子：一拍只续排一次、延迟 = 档位间隔 − 本拍耗时、慢帧不追赶积压（见 VirtualScreenPreviewPump）。
+     *
+     * `beat = tick`：投递与取消必须是同一个 Runnable 实例，`Handler.removeCallbacks` 按实例匹配。
+     */
+    private val pump: VirtualScreenPreviewPump = VirtualScreenPreviewPump(
+        now = { SystemClock.elapsedRealtime() },
+        postDelayed = { delay, action -> main.postDelayed(action, delay) },
+        removeCallbacks = { action -> main.removeCallbacks(action) },
+        beat = tick,
+    )
 
     /**
      * 取下窗口时是否保留取帧循环。默认 false —— 离开页面/收起小窗就该停线程、清画面。
@@ -1097,7 +1104,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         }
         // 临时重挂保持同代号：在途帧负责续排下一拍，排队中的 UP 也必须执行。
         if (lifecycle.attach()) {
-            main.post(tick)
+            pump.start()
         }
     }
 
@@ -1111,7 +1118,8 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         // 先把未完成的触摸取消排到输入队列尾部，避免离开页面后目标仍处于按下状态。
         if (streaming) sendTouch(touchExecutor, VirtualScreenService.current, "cancel", queuedMove ?: down ?: floatArrayOf(0f, 0f))
         streaming = false
-        main.removeCallbacks(tick)
+        // 停拍子：取消排队中的那一拍，在途帧回到主线程后也不再续排。
+        pump.stop()
         executor?.shutdown(); executor = null
         touchExecutor?.shutdown(); touchExecutor = null
         if (screenOffRegistered) {

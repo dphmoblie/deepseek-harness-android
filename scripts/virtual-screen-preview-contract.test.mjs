@@ -4,7 +4,12 @@ import assert from 'node:assert/strict'
 
 const service = await readFile(new URL('../android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/VirtualScreenService.kt', import.meta.url), 'utf8')
 const shell = await readFile(new URL('../android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/ShellVirtualScreen.kt', import.meta.url), 'utf8')
-const tick = service.slice(service.indexOf('private val tick = object : Runnable'))
+// 上屏判定与拍子调度已抽成纯 Kotlin：判定权威现在在 VirtualScreenPreviewCore，续排延迟在
+// VirtualScreenPreviewPump；控件仍负责取帧、缓冲所有权与线程代号校验。下面把两处源码拼在一起检查，
+// 断言本身不变 —— 换的只是「判定写在哪一行」。
+const core = await readFile(new URL('../android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/VirtualScreenPreviewCore.kt', import.meta.url), 'utf8')
+const pump = await readFile(new URL('../android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/VirtualScreenPreviewPump.kt', import.meta.url), 'utf8')
+const tick = service.slice(service.indexOf('private val tick = object : Runnable')) + '\n' + core
 const fetch = tick.slice(tick.indexOf('worker.execute {'), tick.indexOf('main.post {'))
 
 test('hardware Bitmaps remain decoded without CPU samples or a CPU blank flag', () => {
@@ -23,9 +28,13 @@ test('frame fetching never closes or replaces the currently displayed hardware b
 })
 
 test('preview cadence subtracts fetch and presentation time without scheduling overlapping fetches', () => {
-  assert.ok(tick.indexOf('val startedAt = SystemClock.elapsedRealtime()') < tick.indexOf('worker.execute {'))
-  assert.match(tick, /main\.postDelayed\(this, VirtualScreenPolicy\.previewPullDelay\(mode, SystemClock\.elapsedRealtime\(\) - startedAt\)\)/u)
-  assert.equal((tick.match(/main\.postDelayed\(this,/gu) ?? []).length, 1)
+  assert.ok(tick.indexOf('pump.fetchStarted()') < tick.indexOf('worker.execute {'))
+  assert.doesNotMatch(tick, /main\.postDelayed\(this,/u)
+  assert.match(pump, /VirtualScreenPolicy\.previewPullDelay\(mode, now\(\) - startedAtMillis\)/u)
+  const start = pump.slice(pump.indexOf('fun start('), pump.indexOf('fun stop('))
+  assert.equal((start.match(/^\s*postDelayed\(/gmu) ?? []).length, 1)
+  const landed = pump.slice(pump.indexOf('fun fetchLanded('))
+  assert.equal((landed.match(/^\s*postDelayed\(/gmu) ?? []).length, 1)
 })
 
 test('static pages can be captured from the retained image without waiting for another frame', () => {
