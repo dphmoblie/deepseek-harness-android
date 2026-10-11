@@ -35,6 +35,7 @@ import io.deepseekharness.mobile.accessibility.AccessibilityGuardException
 import io.deepseekharness.mobile.accessibility.AccessibilityPasswordStore
 import io.deepseekharness.mobile.accessibility.AutomationControlPolicy
 import io.deepseekharness.mobile.accessibility.AutomationControlStore
+import io.deepseekharness.mobile.accessibility.AutomationRuleEditor
 import io.deepseekharness.mobile.accessibility.AutomationRulePreferences
 import io.deepseekharness.mobile.accessibility.AutomationRuleStore
 import io.deepseekharness.mobile.accessibility.AutomationRunLogPolicy
@@ -2067,6 +2068,127 @@ class MobileRuntimePlugin : Plugin() {
             }
         }
     }
+
+    /**
+     * 权限：应用内桥接；新建或整条替换一条自动化规则。
+     *
+     * 参数：`packageName`、`mode`（`create` / `update`）、`rule`（完整规则 JSON，字段与
+     * `AutomationRule.fromJson` 同一套，未知字段一律拒收）。
+     * 写之前**必须过白名单**（与单条开关同一个口径）：白名单外的包一律拒写，否则「AI 不能绕过
+     * 白名单」这条硬约束会在应用内这条路径上被绕开。
+     * 审计只记「新建/替换了一条规则」这个受控码，**不带规则内容**——选择器里的文本能反推界面内容。
+     */
+    @PluginMethod
+    fun saveAccessibilityAutomationRule(call: PluginCall) {
+        execute(call) {
+            val packageName = requiredAutomationPackage(call)
+            val draft = call.data.opt("rule") as? org.json.JSONObject
+                ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "规则内容必须是对象")
+            val mode = call.data.opt("mode") as? String
+                ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "规则的写入方式必须是字符串")
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                requireAutomationWriteAllowed(packageName)
+                val outcome = AutomationRuleEditor.save(
+                    AutomationRulePreferences.from(context),
+                    packageName,
+                    draft,
+                    mode,
+                )
+                when (outcome) {
+                    is AutomationRuleEditor.Outcome.Applied ->
+                        recordAudit(
+                            AuditEvent.ACCESSIBILITY_CONFIG,
+                            AuditResult.SUCCEEDED,
+                            if (mode == AutomationRuleEditor.MODE_CREATE) {
+                                "AUTOMATION_RULE_CREATED"
+                            } else {
+                                "AUTOMATION_RULE_UPDATED"
+                            },
+                        )
+
+                    is AutomationRuleEditor.Outcome.Rejected -> throw automationRuleFailure(outcome)
+                }
+                accessibilityRulesToJs(packageName)
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；删除一条自动化规则。
+     *
+     * 与写入同一套口径：白名单外拒删（它不是「危险操作」而是「这个包本来就不归自动化管」），
+     * 找不到即拒，删空之后存储层等价于把这个包的规则整份清掉。
+     */
+    @PluginMethod
+    fun deleteAccessibilityAutomationRule(call: PluginCall) {
+        execute(call) {
+            val packageName = requiredAutomationPackage(call)
+            val ruleId = call.data.opt("ruleId") as? String
+                ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "规则标识必须是字符串")
+            if (!AUTOMATION_RULE_ID.matches(ruleId)) {
+                throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "规则标识格式不合法")
+            }
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                requireAutomationWriteAllowed(packageName)
+                val outcome = AutomationRuleEditor.delete(
+                    AutomationRulePreferences.from(context),
+                    packageName,
+                    ruleId,
+                )
+                when (outcome) {
+                    is AutomationRuleEditor.Outcome.Applied -> recordAudit(
+                        AuditEvent.ACCESSIBILITY_CONFIG,
+                        AuditResult.SUCCEEDED,
+                        "AUTOMATION_RULE_DELETED",
+                    )
+
+                    is AutomationRuleEditor.Outcome.Rejected -> throw automationRuleFailure(outcome)
+                }
+                accessibilityRulesToJs(packageName)
+            }
+        }
+    }
+
+    /**
+     * 规则写入的白名单闸门。
+     *
+     * 抽出来是因为新建/替换/删除/单条开关四条路径必须**同一句话、同一个判定**：任一条路径自己
+     * 写一遍，将来就有一天只在某一条上漏检。
+     */
+    private fun requireAutomationWriteAllowed(packageName: String) {
+        if (!AccessibilityAutomationStore.packageAllowed(context, packageName)) {
+            throw RuntimeFailure(
+                "ACCESSIBILITY_CONFIG_DENIED",
+                "应用 $packageName 不在无障碍自动化白名单内，规则写入被拒绝",
+            )
+        }
+    }
+
+    /**
+     * 把编辑侧的受控码翻成界面认识的那一组 `ACCESSIBILITY_CONFIG_*`。
+     *
+     * 界面的文案按这一组码分流（冲突 / 找不到 / 超限 / 数据损坏 / 写失败 / 参数问题），
+     * 编辑侧的内部码不外泄——否则前端要同时认识两套词汇表。
+     */
+    private fun automationRuleFailure(rejected: AutomationRuleEditor.Outcome.Rejected): RuntimeFailure =
+        when (rejected.code) {
+            AutomationRuleEditor.Codes.ID_CONFLICT ->
+                RuntimeFailure("ACCESSIBILITY_CONFIG_CONFLICT", rejected.message)
+
+            AutomationRuleEditor.Codes.NOT_FOUND ->
+                RuntimeFailure("ACCESSIBILITY_CONFIG_NOT_FOUND", rejected.message)
+
+            AutomationRuleEditor.Codes.LIMIT_REACHED ->
+                RuntimeFailure("ACCESSIBILITY_CONFIG_LIMIT", rejected.message)
+
+            AutomationRuleEditor.Codes.CORRUPT ->
+                RuntimeFailure("ACCESSIBILITY_CONFIG_CORRUPT", rejected.message)
+
+            AutomationRuleEditor.Codes.STORAGE_FAILED ->
+                RuntimeFailure("ACCESSIBILITY_CONFIG_SAVE_FAILED", rejected.message)
+
+            else -> RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", rejected.message)
+        }
 
     /** 把某个包的规则渲染成界面读数；`corrupt` 非空表示这份数据不可用且已被清掉。 */
     private fun accessibilityRulesToJs(packageName: String): JSObject {
