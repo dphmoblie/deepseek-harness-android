@@ -220,11 +220,19 @@ class MobileRuntimeController(
             }
             supervisor.preparePluginManagement()
         }
-        return@withLock plugins.run(operation, id, enabled, childId, source).apply {
-            // 插件页面只需要受控迁移状态；计数由原生侧生成，避免把路径或访客日志回传到 WebView。
-            put("recovery", plugins.recoverySnapshot())
+        // `repair` 是用户主动触发的显式修复：绕过「同一代次只修一次」的自愈闸门，也不进冷却
+        // 窗口退避。它不另造返回形状，而是紧接着回读一次 `list` —— 刚接回的插件直接出现在列表里，
+        // 修复失败则按受控错误码 reject（不吞异常，否则按钮点下去界面上什么都不会变）。
+        if (operation == "repair") {
+            plugins.repairInstalledIfNeeded(explicit = true)
+            return@withLock withRecovery(plugins.run("list", null, null, null, null))
         }
+        return@withLock withRecovery(plugins.run(operation, id, enabled, childId, source))
     }
+
+    /** 插件页面只需要受控迁移状态；计数由原生侧生成，避免把路径或访客日志回传到 WebView。 */
+    private fun withRecovery(payload: com.getcapacitor.JSObject): com.getcapacitor.JSObject =
+        payload.apply { put("recovery", plugins.recoverySnapshot()) }
 
     fun requestStartCancellation(): Boolean = supervisor.requestStartCancellation()
 

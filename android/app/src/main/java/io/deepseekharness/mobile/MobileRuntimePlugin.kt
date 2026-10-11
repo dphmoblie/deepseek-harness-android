@@ -486,7 +486,12 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
-    /** 权限：应用私有桥接；白名单操作、包名与条目标识校验；只返回插件元数据。 */
+    /**
+     * 权限：应用私有桥接；白名单操作、包名与条目标识校验；只返回插件元数据。
+     *
+     * `repair` 是唯一会改动运行时链接的只读形态操作（受控重试），因此单列一个审计事件：
+     * 自愈触发不经过桥接、也不进审计，审计日志里出现 `PLUGIN_REPAIR` 就代表**用户手动点过修复**。
+     */
     @PluginMethod
     fun managePlugins(call: PluginCall) {
         execute(call) {
@@ -497,6 +502,7 @@ class MobileRuntimePlugin : Plugin() {
                 "update" -> AuditEvent.PLUGIN_UPDATE
                 "import" -> AuditEvent.PLUGIN_IMPORT
                 "rollback" -> AuditEvent.PLUGIN_ROLLBACK
+                "repair" -> AuditEvent.PLUGIN_REPAIR
                 else -> throw RuntimeFailure("PLUGIN_INPUT_INVALID", "插件操作无效")
             }
             audited(event) {

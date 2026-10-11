@@ -1305,9 +1305,11 @@ export interface PluginCatalog {
 export interface PluginRequest {
   /**
    * `import`：受控导入（npm 包名 / `https://` 直链 / `git+https://` 地址），需要 `source`；
-   * `rollback`：回滚到该插件的上一版，需要 `id`。
+   * `rollback`：回滚到该插件的上一版，需要 `id`；
+   * `repair`：不带参数，由用户主动触发一次插件链接接回（绕过原生侧「同一代次只修一次」的自愈闸门），
+   * 返回形状与 `list` 相同，并附带本次修复后的受控计数。
    */
-  operation: 'list' | 'enable' | 'child' | 'update' | 'import' | 'rollback'
+  operation: 'list' | 'enable' | 'child' | 'update' | 'import' | 'rollback' | 'repair'
   id?: string
   enabled?: boolean
   childId?: string

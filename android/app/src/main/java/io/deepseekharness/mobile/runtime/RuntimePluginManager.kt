@@ -88,21 +88,30 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
      * 同一运行时代次只做一次（指纹为 runtimeId + 版本 + rootfs 摘要）：没有换运行时就不会
      * 产生新的坏形态。失败不抛给调用方，并进入冷却窗口（判定见 [PluginRepairPolicy]）——
      * 插件列表与 Harness 启动不应因为一次自愈失败而反复中断。
+     *
+     * @param explicit 是否由用户主动触发（设置页的「立即修复插件」）。true 时不受上面那道自愈
+     *   闸门约束：用户点了按钮就是要现在重试一次，同一代次、冷却窗口内都照做；计数按本次结果
+     *   覆盖而不再取历史最大值（否则重装好插件后再修一次，界面还会停在上一轮的「缺失 N 个」）；
+     *   失败也会**抛出**而不是吞掉，让界面能如实回显失败原因。
      */
-    fun repairInstalledIfNeeded() {
-        val generation = store.installedManifest()?.let { "${it.runtimeId}|${it.version}|${it.rootfs.sha256}" } ?: return
+    fun repairInstalledIfNeeded(explicit: Boolean = false) {
+        val generation = installedGeneration()
+        // 自愈路径读不到清单就直接放弃；用户主动修复继续往下走，由 run() 抛出受控错误码
+        // （例如 RUNTIME_NOT_INSTALLED），而不是按钮点下去毫无反应。
+        if (generation == null && !explicit) return
         val now = System.currentTimeMillis()
         val attempt = PluginRepairPolicy.shouldAttempt(
-            generation = generation,
+            generation = generation.orEmpty(),
             repairedGeneration = repairedGeneration,
             lastFailureGeneration = repairFailureGeneration,
             lastFailureAtMillis = repairFailureAtMillis,
             nowMillis = now,
+            explicit = explicit,
         )
         if (!attempt) return
         try {
             val summary = run("repair", null, null, null)
-            repairedGeneration = generation
+            if (generation != null) repairedGeneration = generation
             // 只记计数，让下次导出的诊断日志能直接回答两个问题：
             //  一、设备上到底有没有重复的运行时包：files = 扫到多少个包条目，count = 其中多少个
             //      被重新指向运行时实例（**count > 0 即确实存在重复副本**）；
@@ -117,10 +126,12 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             val missing = summary.optInt("missing", 0)
             val failed = summary.optInt("failed", 0)
             val refused = summary.optInt("refused", 0)
+            // 用户主动修复时按本次结果覆盖历史计数：上一轮缺失的插件可能已经重装好了，
+            // 继续取历史最大值会让界面永远停在「缺失 N 个」，反而看不出这次修复到底有没有用。
             recoveryRelinked = relinked
-            recoveryMissing = maxOf(recoveryMissing, missing)
-            recoveryFailed = maxOf(recoveryFailed, failed)
-            recoveryRefused = maxOf(recoveryRefused, refused)
+            recoveryMissing = if (explicit) missing else maxOf(recoveryMissing, missing)
+            recoveryFailed = if (explicit) failed else maxOf(recoveryFailed, failed)
+            recoveryRefused = if (explicit) refused else maxOf(recoveryRefused, refused)
             recoveryStatus = when {
                 recoveryFailed > 0 || recoveryRefused > 0 -> if (restored + relinked > 0) "partial" else "failed"
                 recoveryMissing > 0 -> if (restored + relinked > 0) "partial" else "failed"
@@ -139,7 +150,7 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
                     "missing" to summary.optInt("missing", 0).toString(),
                 ),
             )
-        } catch (_: Exception) {
+        } catch (failure: Exception) {
             // run() 已把失败转成受控错误码；自愈是尽力而为，因此不抛出。
             // 记录失败时刻并进入冷却：失败通常是确定性的，立刻重试只会让下一次
             // 读取插件列表再白等一次完整超时。
@@ -150,10 +161,18 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             )
             recoveryStatus = "failed"
             recoveryFailed = 1
-            repairFailureGeneration = generation
-            repairFailureAtMillis = now
+            if (generation != null) {
+                repairFailureGeneration = generation
+                repairFailureAtMillis = now
+            }
+            // 用户主动点的修复必须如实回显失败：把受控错误码交给调用方（自愈路径照旧吞掉）。
+            if (explicit) throw failure
         }
     }
+
+    /** 当前已安装运行时的代次指纹（runtimeId + 版本 + rootfs 摘要）；未安装时为 null。 */
+    private fun installedGeneration(): String? =
+        store.installedManifest()?.let { "${it.runtimeId}|${it.version}|${it.rootfs.sha256}" }
 
     /**
      * 只读模块图探测：统计访客里 `@deepseek-ai/dsh-tools` 出现了几处，以及**不同真实路径数**。

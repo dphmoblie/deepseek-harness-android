@@ -22,6 +22,15 @@ enum class AuditEvent {
 
     /** 插件回滚：把运行时指向该插件的链接切回上一版；只记动作与受控码（如 `PLUGIN_ROLLBACK_UNAVAILABLE`）。 */
     PLUGIN_ROLLBACK,
+
+    /**
+     * 插件修复：用户在插件设置页点了「立即修复插件」，显式重跑一次链接接回。
+     *
+     * 只记动作与受控码（如 `PLUGIN_OPERATION_FAILED`、`RUNTIME_NOT_INSTALLED`）；修复计数
+     * 走诊断事件 `REPAIR`，不进审计。自愈路径（启动时的 `repairInstalledIfNeeded()`）
+     * 不经过桥接、不产生本事件，因此审计里出现它就等于「用户手动重试过一次」。
+     */
+    PLUGIN_REPAIR,
     PLUGIN_LOAD,
     PLUGIN_DESTROY,
     RUNTIME_INSTALL,

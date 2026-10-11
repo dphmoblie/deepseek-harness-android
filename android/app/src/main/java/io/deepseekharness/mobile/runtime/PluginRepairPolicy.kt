@@ -13,6 +13,9 @@ package io.deepseekharness.mobile.runtime
  *    （新坏形态的两个来源是运行时升级与插件安装/更新，二者都会让代次或插件目录内容变化）。
  *  - **换代次必须立即重试**：哪怕上次失败过，换了运行时代次也要重新尝试，
  *    否则一次失败会把自愈永久堵死。
+ *
+ * 这两条只约束**自愈**。用户主动点「立即修复插件」属于人工重试，走 [shouldAttempt] 的
+ * `explicit` 分支：闸门与冷却窗口都不再拦它，否则用户点一次没反应、再点还是没反应。
  */
 object PluginRepairPolicy {
     /**
@@ -31,6 +34,7 @@ object PluginRepairPolicy {
      * @param lastFailureGeneration 最近一次**失败**所对应的代次
      * @param lastFailureAtMillis 最近一次失败的时刻；从未失败时为 0
      * @param nowMillis 当前时刻
+     * @param explicit 是否为用户主动触发的修复；true 时无条件尝试（绕过闸门与冷却）
      */
     fun shouldAttempt(
         generation: String,
@@ -38,7 +42,10 @@ object PluginRepairPolicy {
         lastFailureGeneration: String?,
         lastFailureAtMillis: Long,
         nowMillis: Long,
+        explicit: Boolean = false,
     ): Boolean {
+        // 人工重试：这次调用本身就是「再试一次」的意思，不接受任何退避判定。
+        if (explicit) return true
         if (generation == repairedGeneration) return false
         // 代次不同（含从未失败过）时立即尝试：换代次意味着运行时被替换，必须重新自愈。
         if (generation != lastFailureGeneration) return true

@@ -63,8 +63,10 @@ function importSource(value: unknown): string {
 
 /** 原生接口和浏览器预览共用输入校验，防止任意路径或命令进入设备。 */
 export function validatePluginRequest(request: PluginRequest): PluginRequest {
-  if (!['list', 'enable', 'child', 'update', 'import', 'rollback'].includes(request.operation)) invalid()
+  if (!['list', 'enable', 'child', 'update', 'import', 'rollback', 'repair'].includes(request.operation)) invalid()
   if (request.operation === 'list') return { operation: 'list' }
+  // 修复不带任何参数：原生侧只认操作名，插件目录、包名与事务都由它自己按运行时状态决定。
+  if (request.operation === 'repair') return { operation: 'repair' }
   if (request.operation === 'import') {
     const source = importSource(request.source)
     // `id` 只是「期望的包名」，用于地址形态装完后消歧；不填则由访客脚本按补丁声明推导。

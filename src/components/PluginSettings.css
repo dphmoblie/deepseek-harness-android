@@ -25,6 +25,10 @@
 .plugin-recovery-mark { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 50%; background: var(--blue-soft); color: var(--blue); font-weight: 700; }
 .plugin-recovery strong { display: block; font-size: 0.875rem; }
 .plugin-recovery p { margin: 4px 0 0; color: var(--muted); font-size: 0.75rem; line-height: 1.55; }
+/* 人工恢复入口：按钮与它的说明排在同一行，窄屏自动换行。 */
+.plugin-recovery-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; margin-top: 10px; }
+/* 说明文字沿用 .plugin-hint 的字号与颜色，但它在卡片内部，不需要那 18px 的左右内边距。 */
+.plugin-recovery-actions .plugin-hint { padding: 0; }
 .plugin-recovery-partial { border-left-color: var(--warning, #c17b19); }
 .plugin-recovery-partial .plugin-recovery-mark { background: color-mix(in srgb, var(--warning, #c17b19) 16%, transparent); color: var(--warning, #c17b19); }
 .plugin-recovery-failed { border-left-color: var(--danger, #c64b55); }

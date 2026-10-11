@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 const appRoot = resolve(import.meta.dirname, '..')
 const NATIVE = 'src/platform/native.ts'
 const BROWSER = 'src/platform/browser.ts'
+const PLUGINS = 'src/platform/plugins.ts'
 const PLUGIN = 'android/app/src/main/java/io/deepseekharness/mobile/MobileRuntimePlugin.kt'
 
 // Capacitor 内置方法：`addListener` 由 `@capacitor/core` 在 JS 侧实现（原生只负责 notifyListeners），
@@ -97,4 +98,42 @@ test('浏览器模拟桥与原生桥受同一个 RuntimeBridge 类型约束', as
   // 这里只钉住「这个约束没有被绕过」（例如把返回类型改成 any 或 as unknown as）。
   assert.match(await source(BROWSER), /export function createBrowserBridge\(\): RuntimeBridge/u)
   assert.match(await source(NATIVE), /export const runtimeBridge: RuntimeBridge =/u)
+})
+
+// 插件操作名是另一处「一边改名、另一边不报错」的接缝：TS 白名单放行的操作，原生必须有对应分支，
+// 否则用户点下去只会拿到 PLUGIN_INPUT_INVALID；反过来原生支持了某操作却忘了放行，功能就永远用不上
+// （`repair` 就属于这一类：原生侧先有自愈入口，后来才接到界面上）。
+/** Kotlin `managePlugins` 认的操作名：`when (operation)` 里映射到审计事件的分支（含一行多值）。 */
+function nativePluginOperations(text) {
+  const start = text.indexOf('fun managePlugins(call: PluginCall)')
+  assert.ok(start >= 0, `${PLUGIN} 里找不到 managePlugins`)
+  const fallback = text.indexOf('else -> throw RuntimeFailure("PLUGIN_INPUT_INVALID"', start)
+  assert.ok(fallback > start, 'managePlugins 里看不到 PLUGIN_INPUT_INVALID 兜底分支')
+  const block = text.slice(start, fallback)
+  assert.match(block, /AuditEvent\.PLUGIN_/u, 'managePlugins 的操作分支应当映射到 PLUGIN_* 审计事件')
+  return new Set([...block.matchAll(/"([a-z]+)"\s*(?:,|->)/gu)].map(match => match[1]))
+}
+
+/** TS 侧 `validatePluginRequest` 的操作白名单。 */
+function webviewPluginOperations(text) {
+  const allowlist = /\['((?:[a-z]+', ')*[a-z]+')\]\.includes\(request\.operation\)/u.exec(text)?.[1]
+  assert.ok(allowlist, `${PLUGINS} 里找不到插件操作白名单`)
+  return new Set(allowlist.split("', '").map(value => value.replace(/'/gu, '')))
+}
+
+test('插件操作白名单两侧一致', async () => {
+  const native = nativePluginOperations(await source(PLUGIN))
+  const webview = webviewPluginOperations(await source(PLUGINS))
+  const onlyNative = [...native].filter(name => !webview.has(name)).sort()
+  const onlyWebview = [...webview].filter(name => !native.has(name)).sort()
+  assert.deepEqual(onlyNative, [], `原生支持但前端没放行：${onlyNative.join('、')}`)
+  assert.deepEqual(onlyWebview, [], `前端放行但原生没有分支：${onlyWebview.join('、')}`)
+})
+
+test('两侧都解析出插件操作，避免解析失效后契约恒真', async () => {
+  const native = nativePluginOperations(await source(PLUGIN))
+  const webview = webviewPluginOperations(await source(PLUGINS))
+  assert.ok(native.size > 5, `原生侧只解析出 ${native.size} 个插件操作，解析规则可能已失效`)
+  assert.ok(webview.size > 5, `前端只解析出 ${webview.size} 个插件操作，解析规则可能已失效`)
+  assert.ok(native.has('list') && webview.has('list'), '两侧都必须包含 list')
 })
