@@ -350,8 +350,42 @@ async function checkSettingsDialog(page, width, height) {
   return '通过'
 }
 
-// ---------------------------------------------------------------- 主流程
+// 压力档：同一份官方设置结构夹具，把一条分类名换成超长中文文案，并把文字整体放大 150%。
+// 真机的系统字体放大走 WebView 的 textZoom（原生侧设置），浏览器回归里没有等价开关，
+// 这里用注入 `html { font-size: 150% }` 近似——验的是「长文案 + 放大后的文字会不会把
+// 版面挤破」，**不等于**真机 textZoom 的逐像素结果（口径已写进 docs/RELEASE_CHECKLIST.md）。
+const STRESS_LONG_TEXT = '这是一个非常长的设置分类名称用来验证超长中文文案在窄屏下不会把版面挤破更不能出现整页横向滚动'
+const STRESS_LABEL = `配置项目 ${'很长很长的标题'.repeat(6)}`
 
+async function checkSettingsStress(page, width, height) {
+  const fixture = await officialFixture()
+  if (!fixture) return '跳过（未安装运行时 profile 依赖，或找不到官方设置客户端包）'
+  const androidCss = await readFile(join(ROOT, 'harness-web', 'android.css'), 'utf8')
+  const stressed = fixture.replace('高级设置', STRESS_LONG_TEXT).replace('配置项目 0', STRESS_LABEL)
+  await page.evaluate(`(() => {
+    document.open()
+    document.write(${JSON.stringify(stressed)})
+    document.close()
+    const style = document.createElement('style')
+    style.textContent = ${JSON.stringify(androidCss)} + 'html { font-size: 150% }'
+    document.head.appendChild(style)
+    return true
+  })()`)
+  await sleep(200)
+
+  const box = await page.evaluate('(() => { const node = document.querySelector("[role=dialog]"); const rect = node.getBoundingClientRect(); return { x: rect.x, y: rect.y, width: rect.width, height: rect.height } })()')
+  check(box.x >= 0 && box.y >= 0 && box.x + box.width <= width + 1 && box.y + box.height <= height + 1, '压力档：设置弹窗越出视口')
+  check(await page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1'), '压力档：超长文案或放大文字导致整页横向溢出')
+  const optionsWidth = await page.evaluate('document.querySelector("[class$=_options]").getBoundingClientRect().width')
+  check(optionsWidth >= (width < 900 ? width - 48 : 580), '压力档：设置正文被侧栏挤压')
+  // 超长文案必须还在页面里（没被 CSS 整块藏掉），否则上面的断言会因为「东西不见了」而假通过。
+  const longTextPresent = await page.evaluate(`document.body.innerText.includes(${JSON.stringify('这是一个非常长的设置分类名称')})`)
+  check(longTextPresent, '压力档：超长分类名没有渲染出来，断言等于没验')
+  await page.screenshot(`dsh-settings-stress-${width}x${height}.png`)
+  return `通过（正文 ${Math.round(optionsWidth)}px、文字 150%）`
+}
+
+// ---------------------------------------------------------------- 主流程
 // 开一个隔离页面跑一段检查：每档视口 / 每种系统主题各用一个独立浏览器上下文，
 // localStorage 与引导状态不会互相漏档（Playwright 版用的是 new_context，语义一致）。
 async function withPage(cdp, { width, height, mobile, theme }, run) {
@@ -430,11 +464,12 @@ async function main() {
     }
     for (const { width, height } of VIEWPORTS) {
       const mobile = width < 900
-      const dialog = await withPage(cdp, { width, height, mobile }, async page => {
+      const artifacts = await withPage(cdp, { width, height, mobile }, async page => {
         await checkShell(page, options.url, width, height)
-        const result = await checkSettingsDialog(page, width, height)
+        const dialog = await checkSettingsDialog(page, width, height)
+        const stress = await checkSettingsStress(page, width, height)
         check(page.failures.length === 0, `页面出现运行错误：${JSON.stringify(page.failures.slice(0, 3))}`)
-        return result
+        return { dialog, stress }
       })
       // 主题矩阵：系统偏好浅 / 深各跑一遍，断言主题真的跟着走（而不是只有一套配色）。
       const backgrounds = {}
@@ -453,7 +488,8 @@ async function main() {
         width,
         height,
         外壳: '通过',
-        官方设置结构夹具: dialog,
+        官方设置结构夹具: artifacts.dialog,
+        长文本与放大: artifacts.stress,
         主题跟随: `通过（浅色 ${backgrounds.light} / 深色 ${backgrounds.dark}）`,
       })
     }

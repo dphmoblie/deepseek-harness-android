@@ -103,3 +103,19 @@ test('主题矩阵用 CDP 模拟系统偏好，并且明暗底色必须不同', 
   assert.match(source, /async function withPage\(/u)
   assert.equal([...source.matchAll(/Target\.createBrowserContext/gu)].length, 1, '建上下文只应有一处（withPage）')
 })
+
+// 长文本与字体放大这一档只能是「近似验证」：真机的系统字体放大走 WebView 的 textZoom
+// （原生侧设置），浏览器里没有等价开关。这条用例守住三件事：近似手段还在、断言仍是
+// 页面级不溢出、以及脚本里写明了它不等于真机 textZoom。
+test('压力档：超长文案 + 文字放大 150%，并且注明这是近似', async () => {
+  const source = await read(CDP)
+  assert.match(source, /async function checkSettingsStress\(/u)
+  assert.match(source, /html \{ font-size: 150% \}/u)
+  assert.match(source, /const STRESS_LONG_TEXT = '/u)
+  assert.match(source, /document\.documentElement\.scrollWidth <= innerWidth \+ 1/u, '压力档必须断言整页不横向溢出')
+  assert.match(source, /dsh-settings-stress-\$\{width\}x\$\{height\}\.png/u, '压力档要留截图')
+  // 防恒真：必须有「长文案真的渲染出来了」这一步，否则上面几条会因为在测空白页而假通过。
+  assert.match(source, /长文案必须还在页面里|超长分类名没有渲染出来/u)
+  // 近似口径必须写在脚本里，别只写在文档里。
+  assert.match(source, /textZoom/u, '压力档没有注明它与真机 textZoom 的区别')
+})
