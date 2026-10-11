@@ -31,7 +31,7 @@ class VirtualScreenActivity : Activity() {
     private lateinit var back: Button
     private lateinit var floating: Button
     private lateinit var stop: Button
-    private lateinit var modes: LinearLayout
+    private lateinit var modes: HorizontalScrollView
     private val modeButtons = mutableMapOf<String, Button>()
     /**
      * 页面里的预览：与悬浮小窗同样是一个 [VirtualScreenFrame]（画面 + 右下角缩放手柄），
@@ -40,6 +40,7 @@ class VirtualScreenActivity : Activity() {
     private var preview: VirtualScreenFrame? = null
     private var selecting = true
     private var resumed = false
+    private var actionPending = false
     private var launchPendingUntil = 0L
     private data class Entry(val label: String, val component: String)
 
@@ -169,21 +170,23 @@ class VirtualScreenActivity : Activity() {
         listOf(back, floating, stop).forEach { controls.addView(it, LinearLayout.LayoutParams(0, -2, 1f)) }
         // 预览帧率切换：与 AI 侧的 mobile_virtual_screen_config 走同一条 config 动作，
         // 会话不重启；实际帧率受目标渲染与设备负载限制，状态行里的 fps 才是实测值。
-        modes = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; visibility = View.GONE }
+        val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        modes = HorizontalScrollView(this).apply {
+            visibility = View.GONE
+            isHorizontalScrollBarEnabled = true
+            addView(modeRow)
+        }
         listOf("limited" to "省电", "15fps" to "15fps", "30fps" to "30fps", "60fps" to "60fps", "120fps" to "120fps", "185fps" to "185fps").forEach { (mode, label) ->
             modeButtons[mode] = Button(this).apply {
                 text = label; textSize = 12f
                 setOnClickListener { selectMode(mode) }
             }
-            modes.addView(modeButtons.getValue(mode), LinearLayout.LayoutParams(0, -2, 1f))
+            modeRow.addView(modeButtons.getValue(mode), LinearLayout.LayoutParams(dp(80), dp(48)))
         }
-        content.addView(modes, FrameLayout.LayoutParams(-1, -2, android.view.Gravity.BOTTOM))
+        // 独占一行并允许横向滚动：小屏不挤压按钮，也不挡住目标应用的底部内容。
+        root.addView(modes, LinearLayout.LayoutParams(-1, -2))
         root.addView(controls)
         setContentView(root)
-        // 档位行与底部按钮不受预览影响：底部按钮本来就独占 root 的一行（不与预览同层），
-        // 档位行则是 content 里最后加的那个子控件，再抬一次确保它压在预览之上。
-        modes.bringToFront()
-        controls.bringToFront()
         // 传入与页面同一枚令牌：状态栏/导航栏与页面底色同源，不会在安全区露出一条色带。
         AppThemePreference.applySafely(this, surface)
         worker.execute {
@@ -203,30 +206,53 @@ class VirtualScreenActivity : Activity() {
     }
 
     private fun sendBack() {
-        val service = VirtualScreenService.current ?: return
-        val request = JSONObject().put("sessionId", service.state().optString("sessionId")).put("action", "back")
-        back.isEnabled = false
-        worker.execute {
-            runCatching { service.action(request) }.onFailure { main.post { if (!isDestroyed) toast("无法返回，请确认目标应用仍在副屏") } }
-            main.post { if (!isDestroyed) back.isEnabled = true }
-        }
+        sendAction("back", "无法返回，请确认目标应用仍在副屏")
     }
 
     /** 与 AI 侧的 mobile_virtual_screen_config 走同一条 config 动作，不重启会话。 */
     private fun selectMode(mode: String) {
+        sendAction("config", "帧率未生效，请确认副屏仍在运行", mode)
+    }
+
+    private fun sendAction(action: String, failureMessage: String, mode: String? = null) {
+        // 不把重复点击排成未来的操作；状态轮询也不能提前解除这道门禁。
+        if (actionPending || !resumed) return
         val service = VirtualScreenService.current ?: return
-        val request = JSONObject().put("sessionId", service.state().optString("sessionId")).put("action", "config").put("previewMode", mode)
+        val snapshot = service.state()
+        if (!snapshot.optBoolean("active")) return
+        val request = JSONObject().put("sessionId", snapshot.optString("sessionId")).put("action", action)
+        if (mode != null) request.put("previewMode", mode)
+        actionPending = true
+        updateControls(snapshot)
         worker.execute {
-            runCatching { service.action(request) }
-                .onFailure { main.post { if (!isDestroyed) toast("帧率未生效，请确认副屏仍在运行") } }
+            val failed = runCatching { service.action(request) }.isFailure
+            main.post {
+                actionPending = false
+                if (!isDestroyed) {
+                    updateControls(VirtualScreenService.current?.state())
+                    if (failed) toast(failureMessage)
+                }
+            }
         }
+    }
+
+    private fun updateControls(snapshot: JSONObject?) {
+        val running = snapshot?.optBoolean("active") == true
+        back.isEnabled = running && !actionPending
+        floating.isEnabled = running
+        stop.isEnabled = snapshot != null
+        modes.visibility = if (running) View.VISIBLE else View.GONE
+        val active = snapshot?.optString("previewMode").orEmpty()
+            .let { if (it == "limited-fps") "limited" else it.removePrefix("realtime-") }
+        modeButtons.forEach { (mode, button) -> button.isEnabled = running && !actionPending && mode != active }
     }
 
     private val refresh = object : Runnable {
         override fun run() {
             if (!resumed) return
             val service = VirtualScreenService.current
-            val running = service?.state()?.optBoolean("active") == true
+            val snapshot = service?.state()
+            val running = snapshot?.optBoolean("active") == true
             val picking = service == null
             if (picking != selecting || (running && preview == null)) {
                 selecting = picking
@@ -236,26 +262,14 @@ class VirtualScreenActivity : Activity() {
                     val frame = VirtualScreenFrame(this@VirtualScreenActivity).also {
                         it.preview.report = { text -> status.text = text }
                         it.installResize(pageResizeGesture)
-                        // 预览第一个加进 content：它是最底层，档位行与底部按钮都画在它上面
-                        // （规则见 VirtualScreenPolicy.foregroundOnTop）。
-                        // 这里与小窗用的是同一个外壳：画面控件、缩放手柄、取帧判定与状态行文案全部共用，
-                        // 页面不会再单独走一套判定，两处看到的画面尺寸也就是同一个。
+                        // 控制栏在 content 外；此处仅放画面，保留与小窗共用的缩放与坐标换算。
                         it.layoutParams = pagePreviewParams(pageWidthPreferencePx())
                         content.addView(it)
-                        // 显式再抬一次档位行：预览刚加进来时子控件顺序变了，抬一次比假设顺序可靠。
-                        modes.bringToFront()
                     }
                     preview = frame
                 }
             }
-            back.isEnabled = running; floating.isEnabled = running; stop.isEnabled = service != null
-            modes.visibility = if (running) View.VISIBLE else View.GONE
-            if (running) {
-                // 状态里的标签反解回模式名，把当前生效的那个按钮置灰，避免重复点击造成误解。
-                val active = service?.state()?.optString("previewMode").orEmpty()
-                    .let { if (it == "limited-fps") "limited" else it.removePrefix("realtime-") }
-                modeButtons.forEach { (mode, button) -> button.isEnabled = mode != active }
-            }
+            updateControls(snapshot)
             if (!running) status.text = when {
                 service != null || android.os.SystemClock.elapsedRealtime() < launchPendingUntil -> "正在创建副屏，请稍候…"
                 VirtualScreenService.lastError.isNotEmpty() -> VirtualScreenService.lastError

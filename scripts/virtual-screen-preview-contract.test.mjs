@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 const service = await readFile(new URL('../android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/VirtualScreenService.kt', import.meta.url), 'utf8')
+const shell = await readFile(new URL('../android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/ShellVirtualScreen.kt', import.meta.url), 'utf8')
 const tick = service.slice(service.indexOf('private val tick = object : Runnable'))
 const fetch = tick.slice(tick.indexOf('worker.execute {'), tick.indexOf('main.post {'))
 
@@ -18,7 +19,29 @@ test('hardware Bitmaps remain decoded without CPU samples or a CPU blank flag', 
 test('frame fetching never closes or replaces the currently displayed hardware buffer', () => {
   assert.doesNotMatch(fetch, /displayedHardware/u)
   assert.match(fetch, /catch \(_: Exception\) \{\s*fetchedHardware\?\.close\(\)\s*fetchedHardware = null/u)
-  assert.match(tick, /if \(version != generation \|\| executor == null\) \{\s*fetchedHardware\?\.close\(\)\s*return@post/u)
+  assert.match(tick, /if \(version != lifecycle\.generation \|\| executor == null\) \{\s*fetchedHardware\?\.close\(\)\s*return@post/u)
+})
+
+test('preview cadence subtracts fetch and presentation time without scheduling overlapping fetches', () => {
+  assert.ok(tick.indexOf('val startedAt = SystemClock.elapsedRealtime()') < tick.indexOf('worker.execute {'))
+  assert.match(tick, /main\.postDelayed\(this, VirtualScreenPolicy\.previewPullDelay\(mode, SystemClock\.elapsedRealtime\(\) - startedAt\)\)/u)
+  assert.equal((tick.match(/main\.postDelayed\(this,/gu) ?? []).length, 1)
+})
+
+test('static pages can be captured from the retained image without waiting for another frame', () => {
+  const collect = shell.slice(shell.indexOf('private fun collectFrame('), shell.indexOf('private fun measuredFps('))
+  assert.match(collect, /latestImage\?\.close\(\)\s*latestImage = image\s*retained = true/u)
+  assert.match(collect, /finally \{ if \(!retained\) image\.close\(\)/u)
+  assert.doesNotMatch(collect, /copyPixelsFromBuffer|getPixels|blankFrame\(/u)
+  const snapshot = shell.slice(shell.indexOf('private fun awaitFrame('), shell.indexOf('private fun copyFrame('))
+  assert.match(snapshot, /while \(reader === source && latestImage == null\)/u)
+  assert.match(snapshot, /if \(reader !== source\) throw RuntimeFailure\("VIRTUAL_SCREEN_STOPPED"/u)
+  assert.match(snapshot, /encodedFrame\?\.let \{ return@synchronized it \}/u)
+  assert.match(snapshot, /val current = copyFrame\(image\)/u)
+  assert.doesNotMatch(shell, /cpuCaptureRequested|cpuFrameAt/u)
+  const close = shell.slice(shell.indexOf('@Synchronized fun close()'))
+  assert.match(close, /latestImage\?\.close\(\); latestImage = null/u)
+  assert.match(close, /notifyAll\(\)/u)
 })
 
 test('UI frame replacement transfers ownership while rejected and cleared frames release their buffers', () => {

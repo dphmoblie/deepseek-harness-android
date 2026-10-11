@@ -46,10 +46,8 @@ class ShellVirtualScreen {
     private var encodedFrame: ByteArray? = null
     /** 最近一帧的图形缓冲区；预览通过 Binder 传递句柄，避免 PNG 编解码。 */
     private var hardwareFrame: HardwareBuffer? = null
-    private var hardwareImage: android.media.Image? = null
-    // 连续预览只保留硬件缓冲区；完整 CPU 位图仅在 AI 请求截图时生成。
-    @Volatile private var cpuCaptureRequested = false
-    private var cpuFrameAt = 0L
+    // 保留最近一帧供按需截图；静止页面不会再触发 ImageReader 回调。
+    private var latestImage: android.media.Image? = null
     private var pixels: java.nio.ByteBuffer? = null
     // 空白判定只取采样行，复用这一小块缓冲，不每帧分配整帧数组。
     private var samplePixels = IntArray(0)
@@ -174,9 +172,11 @@ class ShellVirtualScreen {
         runCatching {
             source.acquireLatestImage()?.let { image ->
                 var retained = false
-                synchronized(frameLock) {
-                    if (reader !== source) { image.close(); return@let }
+                try { synchronized(frameLock) {
+                    if (reader !== source) return@let
                     val plane = image.planes[0]
+                    check(plane.pixelStride == 4 && plane.rowStride >= image.width * 4)
+                    check(image.width == width && image.height == height)
                     // 本拍的失败原因：改前取硬件缓冲区失败是被静默吞掉的（预览只说「没画面」不说为什么）。
                     var failure = ""
                     if (Build.VERSION.SDK_INT >= 30) {
@@ -187,63 +187,32 @@ class ShellVirtualScreen {
                             failure = error.javaClass.simpleName
                             null
                         }
-                        if (next != null) {
-                            hardwareImage?.close()
-                            hardwareImage = image
-                            retained = true
-                            hardwareFrame?.close()
-                            hardwareFrame = next
-                        } else if (failure.isEmpty()) {
+                        hardwareFrame?.close()
+                        hardwareFrame = next
+                        if (next == null && failure.isEmpty()) {
                             failure = "HardwareBufferUnavailable"
                         }
                     }
-                    check(plane.pixelStride == 4 && plane.rowStride >= image.width * 4)
-                    check(image.width == width && image.height == height)
-                    // 预览不再每帧把整张 RGBA 搬到 CPU；硬件缓冲区直接交给前台 GPU。
-                    if (cpuCaptureRequested) {
-                        val rowBytes = image.width * 4
-                        val packed = pixels ?: java.nio.ByteBuffer.allocateDirect(rowBytes * image.height).also { pixels = it }
-                        packed.clear()
-                        val sourceBytes = plane.buffer.duplicate()
-                        val available = sourceBytes.limit()
-                        for (row in 0 until image.height) {
-                            val offset = row * plane.rowStride
-                            check(offset.toLong() + rowBytes <= available)
-                            sourceBytes.limit(offset + rowBytes).position(offset)
-                            packed.put(sourceBytes)
-                        }
-                        packed.flip()
-                        val bitmap = frame ?: Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888).also { frame = it }
-                        bitmap.copyPixelsFromBuffer(packed)
-                        cpuFrameAt = SystemClock.elapsedRealtime()
-                        cpuCaptureRequested = false
-                    }
-                    // 空白判断只在需要 CPU 位图时执行，避免高刷新率下重复遍历采样行。
-                    frameBlank = if (frame != null) {
-                        val rows = VirtualScreenPolicy.frameSampleRows(image.height)
-                        val buffer = samplePixels.takeIf { it.size >= rows.size * image.width }
-                            ?: IntArray(rows.size * image.width).also { samplePixels = it }
-                        var offset = 0
-                        val bitmap = checkNotNull(frame)
-                        for (row in rows) { bitmap.getPixels(buffer, offset, image.width, 0, row, image.width, 1); offset += image.width }
-                        rows.isNotEmpty() && VirtualScreenPolicy.blankFrame(buffer, image.width, rows.size)
-                    } else false
-                    frameSampledAt = SystemClock.elapsedRealtime()
+                    latestImage?.close()
+                    latestImage = image
+                    retained = true
+                    // 新画面尚未做 CPU 采样，不能沿用上一张截图的空白判定。
+                    frameBlank = false
+                    frameSampledAt = 0L
+                    frameAt = SystemClock.elapsedRealtime()
                     // 记录本次采集时刻并按最近若干帧重算实测帧率，不额外起采样线程。
-                    frameStamps[frameStampNext] = frameSampledAt
+                    frameStamps[frameStampNext] = frameAt
                     frameStampNext = (frameStampNext + 1) % frameStamps.size
                     if (frameStampCount < frameStamps.size) frameStampCount++
                     frameFps = measuredFps()
                     // 新帧未编码：空白帧同样不留下缓存，后续截图必须重新判断当前画面。
                     encodedFrame = null
-                    frameAt = frameSampledAt
                     // 本拍采集成功：清掉上一拍的异常，但本拍自己的硬件缓冲区失败原因要留着上报，
                     // 直到下一拍真正拿到缓冲区才自然清空——取硬件帧失败不再被静默吞掉。
                     frameError = failure
                     @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
                     (frameLock as java.lang.Object).notifyAll()
-                }
-                if (!retained) image.close()
+                } } finally { if (!retained) image.close() }
             }
         }.onFailure { error ->
             // 采集失败以前被静默吞掉，预览只能看到「未读到新帧」；这里留下异常类名，
@@ -272,7 +241,7 @@ class ShellVirtualScreen {
             .put("displayRefreshRate", display?.display?.refreshRate ?: 0f)
             // frameBlank=true 表示最近一帧被判定为空白或未渲染（尚未采集到画面时也为 true）。
             .put("frameBlank", frames.blank)
-            // 空白判定与新帧采集同一次完成，因此它与 frameAtElapsedMs 取同一时刻。
+            // 仅截图时采样；0 表示当前帧尚未判断空白，否则为被采样帧的采集时刻。
             .put("frameSampledAtElapsedMs", frames.sampledAt)
             // frameError 是最近一次采集失败的异常类名，空串表示没有失败；只作诊断用。
             .put("frameError", frames.error)
@@ -530,15 +499,10 @@ class ShellVirtualScreen {
     /**
      * 抓一张 PNG 截图，供 `virtualScreenSnapshot`（事务 8）回传。
      *
-     * **这条路径刻意不再 `@Synchronized`**：它要等应用侧发起一次 CPU 取帧（最多 800 毫秒），而
-     * `Object.wait()` 只释放 [frameLock]、不释放实例监视器。改前等待期间 `action`（输入注入）、
-     * `frame`（预览取硬件帧，5–16 毫秒一次）与 `state` 全都要排在这个等待后面——应用侧按预览帧率
-     * 轮询事务 9 时，输入注入就被一次次推到队列尾，用户看到的就是「通过悬浮窗操作副屏很慢」。
-     * 现在只有会话校验与目标判定这一小段拿实例监视器，等待只在 [awaitFrame] 里进行；锁序仍是
-     * 「实例监视器 → frameLock」，且持 [frameLock] 时绝不回头取实例监视器。
+     * 只在校验时拿实例监视器，首帧等待不占该锁；锁序为「实例监视器 → frameLock」。
      */
     fun snapshot(sessionId: String): ParcelFileDescriptor {
-        synchronized(this) {
+        val source = synchronized(this) {
             requireSession(sessionId)
             // 错误码细分（交付项 2）：这两条此前都是 `check(...)` → IllegalStateException，
             // 顺着 errorCode 的兜底统一变成「副屏不可用」，调用方只能盲目重试。现在分开：
@@ -548,9 +512,10 @@ class ShellVirtualScreen {
             if (!targetVisible()) {
                 throw VirtualScreenPolicy.failure(VirtualScreenPolicy.TARGET_LEFT_CODE, VirtualScreenPolicy.TARGET_LEFT_MESSAGE)
             }
+            checkNotNull(reader)
         }
         // 等待与空白帧的取舍全在 [awaitFrame]：那里只持 frameLock，不占实例监视器。
-        val bytes = awaitFrame()
+        val bytes = awaitFrame(source)
         check(transfers.tryAcquire()) { "副屏截图传输繁忙" }
         val pipe = try { ParcelFileDescriptor.createReliablePipe() } catch (e: Exception) { transfers.release(); throw e }
         // 管道绕开 Binder 事务大小上限；未读取的客户端最多占用五秒资源。
@@ -564,31 +529,53 @@ class ShellVirtualScreen {
     }
 
     /**
-     * 请求一次 CPU 取帧并等它就绪（最多 800 毫秒），返回要回传的 PNG 字节。
-     *
-     * 只持 [frameLock]：`wait()` 会释放它，采集线程照常写入新帧，实例监视器完全不参与，
-     * 因此输入注入与预览取硬件帧不会被这段等待挡住（问题 A 的修法就在这一行边界上）。
-     * 等待期间会话被关闭时 [close] 会在 [frameLock] 内清空 frame/frameAt，下面照旧按 STALE_FRAME 抛。
+     * 静止页直接读取保留的 Image；只有尚未收到首帧才等待，期间禁止切到另一会话。
      */
-    private fun awaitFrame(): ByteArray = synchronized(frameLock) {
-        val before = cpuFrameAt
-        cpuCaptureRequested = true
+    private fun awaitFrame(source: ImageReader): ByteArray = synchronized(frameLock) {
         val deadline = SystemClock.elapsedRealtime() + 800L
-        while (frame == null || cpuFrameAt <= before) {
+        while (reader === source && latestImage == null) {
             val remain = deadline - SystemClock.elapsedRealtime()
             if (remain <= 0) break
             @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
             (frameLock as java.lang.Object).wait(minOf(40L, remain))
         }
+        if (reader !== source) throw RuntimeFailure("VIRTUAL_SCREEN_STOPPED", "副屏会话已切换，请重新读取状态")
         // 仍然按 STALE_FRAME 抛：这个码是「稍后重试」的语义，不该被上层兜底成「副屏不可用」。
-        if (frameAt <= 0 || frame == null) {
+        val image = latestImage
+        if (frameAt <= 0 || image == null) {
             throw VirtualScreenPolicy.failure(VirtualScreenPolicy.STALE_FRAME_CODE, VirtualScreenPolicy.STALE_FRAME_MESSAGE)
         }
-        val current = checkNotNull(frame)
-        // 静止页面复用最后一帧，不能把“画面未变化”误判成连接失效；
-        // 但空白帧绝不写入缓存：每次按当前 Bitmap 重新编码，让调用方依据 frameBlank 决定是否重试，
-        // 而不是拿一张空白画面的缓存冒充新画面。
+        encodedFrame?.let { return@synchronized it }
+        val current = copyFrame(image)
+        // 只缓存非空白截图；新 Image 到达时会清除缓存。
         if (frameBlank) encodeFrame(current) else encodedFrame ?: encodeFrame(current).also { encodedFrame = it }
+    }
+
+    /** 调用方持有 frameLock，保证读取期间 Image 不会被采集线程替换或释放。 */
+    private fun copyFrame(image: android.media.Image): Bitmap {
+        val plane = image.planes[0]
+        val rowBytes = image.width * 4
+        val packed = pixels ?: java.nio.ByteBuffer.allocateDirect(rowBytes * image.height).also { pixels = it }
+        packed.clear()
+        val sourceBytes = plane.buffer.duplicate()
+        val available = sourceBytes.limit()
+        for (row in 0 until image.height) {
+            val offset = row * plane.rowStride
+            check(offset.toLong() + rowBytes <= available)
+            sourceBytes.limit(offset + rowBytes).position(offset)
+            packed.put(sourceBytes)
+        }
+        packed.flip()
+        val bitmap = frame ?: Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888).also { frame = it }
+        bitmap.copyPixelsFromBuffer(packed)
+        val rows = VirtualScreenPolicy.frameSampleRows(image.height)
+        val buffer = samplePixels.takeIf { it.size >= rows.size * image.width }
+            ?: IntArray(rows.size * image.width).also { samplePixels = it }
+        var offset = 0
+        for (row in rows) { bitmap.getPixels(buffer, offset, image.width, 0, row, image.width, 1); offset += image.width }
+        frameBlank = rows.isNotEmpty() && VirtualScreenPolicy.blankFrame(buffer, image.width, rows.size)
+        frameSampledAt = frameAt
+        return bitmap
     }
 
     /** 返回最近一帧的硬件缓冲区，供页面预览直接交给 GPU；调用方完成使用后必须关闭句柄。 */
@@ -1146,13 +1133,15 @@ class ShellVirtualScreen {
         synchronized(frameLock) {
             val old = reader; reader = null
             runCatching { old?.close() }
-            hardwareImage?.close(); hardwareImage = null
-            frame?.recycle(); frame = null; frameAt = 0; cpuFrameAt = 0; cpuCaptureRequested = false; encodedFrame = null; pixels = null
+            latestImage?.close(); latestImage = null
+            frame?.recycle(); frame = null; frameAt = 0; encodedFrame = null; pixels = null
             hardwareFrame?.close(); hardwareFrame = null
             // 会话结束后没有可信画面：恢复为「未渲染」，避免下一次截图沿用旧判定。
             frameBlank = true; frameSampledAt = 0; frameError = ""
             // 采集时刻与实测帧率同属本次会话，一并清空，下一次会话重新采样。
             frameStampCount = 0; frameStampNext = 0; frameFps = 0.0
+            @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+            (frameLock as java.lang.Object).notifyAll()
         }
         worker?.quitSafely(); worker = null
         session = ""; targetPackage = ""; width = 0; height = 0; independentFocus = false

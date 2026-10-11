@@ -56,6 +56,53 @@ test('副屏尚未启动时保留错误，不调用主屏工具', async t => {
   assert.deepEqual(f.requests.map(request => request.command), ['virtualScreenAction'])
 })
 
+test('副屏错误给固定恢复建议，不转发设备原文或自动重放动作', async t => {
+  let code = 'VIRTUAL_SCREEN_BUSY'
+  const f = fixture(t, () => ({ ...ok('DEVICE_PRIVATE_TEXT_DO_NOT_FORWARD'), ok: false, exitCode: 1, errorCode: code }))
+  const tool = f.tools.get('mobile_virtual_screen_action')
+  for (const [errorCode, advice] of [
+    ['VIRTUAL_SCREEN_BUSY', /短暂等待后重新观察/],
+    ['VIRTUAL_SCREEN_STALE_FRAME', /重试一次观察/],
+    ['VIRTUAL_SCREEN_TARGET_LEFT', /不要操作主屏/],
+    ['VIRTUAL_SCREEN_TARGET_TIMEOUT', /不要直接重复启动/],
+    ['VIRTUAL_SCREEN_STOPPED', /当前有效 sessionId/],
+    ['VIRTUAL_SCREEN_SESSION_DEAD', /原生入口重新开始/],
+    ['VIRTUAL_SCREEN_TEXT_UNSUPPORTED', /可能已有部分写入/],
+  ]) {
+    code = errorCode
+    const before = f.requests.length
+    await assert.rejects(tool.execute({ sessionId: virtualSession, action: 'text', text: 'LOCAL_INPUT_DO_NOT_FORWARD' }, {}), error => {
+      assert.ok(error.message.startsWith(`${errorCode}:`))
+      assert.match(error.message, advice)
+      assert.doesNotMatch(error.message, /DEVICE_PRIVATE_TEXT_DO_NOT_FORWARD|LOCAL_INPUT_DO_NOT_FORWARD/)
+      return true
+    })
+    assert.equal(f.requests.length, before + 1)
+  }
+  assert.ok(f.requests.every(request => request.command === 'virtualScreenAction'))
+  code = 'VIRTUAL_SCREEN_UNKNOWN'
+  await assert.rejects(tool.execute({ sessionId: virtualSession, action: 'back' }, {}), { message: code })
+})
+
+test('副屏流程按需选择树或截图，但保留同屏观察与动作后验证', t => {
+  const f = fixture(t, () => ok('{}'))
+  const prompt = f.prompts[0].text
+  assert.match(prompt, /For main-screen operations only/)
+  assert.match(prompt, /must not be used to observe a virtual-screen task/)
+  assert.match(prompt, /首次读取 mobile_virtual_screen_state/)
+  assert.match(prompt, /不必每步重复查状态/)
+  assert.match(prompt, /不要无条件同时读取树和截图/)
+  assert.match(prompt, /STOPPED 或 SESSION_DEAD 时重新取状态，不复用旧 sessionId/)
+  assert.match(prompt, /动作完成后重新观察验证/)
+  assert.match(prompt, /敏感窗口整棵拒绝，不能用截图绕过/)
+  const action = f.tools.get('mobile_virtual_screen_action').description
+  assert.match(action, /同一副屏的最近一次观察/)
+  assert.match(action, /动作后用树或截图验证结果/)
+  assert.doesNotMatch(action, /动作后重新截图/)
+  assert.match(f.tools.get('mobile_virtual_screen_target').description, /无需再查 state/)
+  assert.match(f.tools.get('mobile_virtual_screen_tree').description, /不调用主屏无障碍动作/)
+})
+
 test('副屏截图保持真实附件格式，并说明缩放后的副屏操作坐标', async t => {
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64')
   let saved
@@ -79,6 +126,18 @@ test('副屏截图保持真实附件格式，并说明缩放后的副屏操作�
   assert.match(text, /com.example.target/)
   assert.match(text, /frameAtElapsedMs=1234/)
   assert.match(text, /复用了缓存帧/)
+  assert.match(text, /不.*反复截图/)
+  assert.match(text, /不能仅凭该帧确认刚才的动作已完成/)
+})
+
+test('旧版副屏截图缺少帧元数据时不宣称拿到了新帧', t => {
+  const f = fixture(t, () => ok('{}'))
+  const tool = f.tools.get('mobile_virtual_screen_screenshot')
+  const image = { attachmentId: 'legacy-frame', mediaType: 'image/png', bytes: 8, width: 720, height: 1600 }
+  const text = tool.output.render({ sessionId: virtualSession }, { ok: true, image })[0].text
+  assert.match(text, /未提供帧新鲜度信息/)
+  assert.doesNotMatch(text, /取得了新帧/)
+  assert.match(tool.output.render({ sessionId: virtualSession }, { ok: true, image: { ...image, frameReused: false } })[0].text, /取得了新帧/)
 })
 
 test('副屏动作允许中文文本，仍拒绝控制字符与超长输入', async t => {
