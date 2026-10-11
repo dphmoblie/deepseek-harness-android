@@ -284,10 +284,15 @@ or otherwise distributing them.
   `scripts/mobile-layout-contract.test.mjs` 保证视口档位、报告字段与产物目录两边一致。
   2026-10-11 本机实跑读数：三档（363×800 / 800×363 / 1280×900）外壳与官方设置结构夹具**全部通过**，
   末行 `LAYOUT_OK: 3 视口全过（Edg/155.0.4283.45 …）`。
+  同一轮还跑**主题矩阵**：每档视口在模拟的系统偏好浅色 / 深色下各来一遍，断言
+  `<html data-theme>` 落到偏好值、`meta[name=theme-color]` 与 `src/theme.ts` 的 `THEME_COLORS`
+  逐字一致、切换主题不引起整体横向溢出，并且两种偏好下的页面底色必须不同
+  （实跑：浅 `rgb(243, 245, 248)` / 深 `rgb(15, 19, 23)`）——「跟随系统」这条路径在 jsdom 单测里
+  用的是假 `matchMedia`，只有真浏览器跑得到。
   口径限制（如实记录）：验的是 **Chromium 里的 WebView 外壳与官方设置弹窗结构**，
   不等于真机 WebView（系统 WebView 版本、输入法、字体缩放、真机安全区都不在内）；
   Python 版因为缺依赖**这一轮没有跑过**，所以两套脚本的「结果一致」目前只有源码口径契约，
-  没有实测比对。
+  没有实测比对；长文本与系统字体放大这两档**还没有**基线。
 - `scripts/mobile-file-publication.selfcheck.py` 需要真实 Linux 文件系统，本机 Windows 上跑不了，
   也不在 CI 里（CI 里覆盖同一逻辑的是 `scripts/mobile-session-publish.py` 相关的脚本测试）。
 - gitleaks 的全历史与目录模式：如上一节所述会把已修掉的历史诱饵和未跟踪产物算成命中，

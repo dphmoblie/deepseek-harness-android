@@ -1,6 +1,9 @@
 // 无 Playwright 的浏览器布局回归：直接驱动系统自带的 Edge/Chrome（headless）走
 // Chrome DevTools Protocol，跑与 scripts/check-mobile-layout.py 相同的三档视口
 // （363×800 / 800×363 / 1280×900），断言与截图落盘到 output/mobile-layout/。
+// 每档视口另跑一遍主题矩阵（系统偏好在浅色 / 深色下各来一次），确认外壳真的跟随系统
+// 主题、状态栏色与 src/theme.ts 的常量一致——这条路径在 jsdom 单测里是假的 matchMedia，
+// 只有真浏览器能验。
 //
 // 为什么另写一个：本机没有（也暂时装不上）Python playwright —— PyPI 与 npm registry
 // 都不可达，ms-playwright 浏览器缓存也不存在。系统 Edge/Chrome 本来就在，CDP 是它自带
@@ -32,6 +35,11 @@ const BROWSER_CANDIDATES = [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
 ]
+// 主题矩阵：外壳默认「跟随系统」（src/theme.ts 的 DEFAULT_THEME_MODE），所以系统偏好
+// 一变，`<html data-theme>` 与状态栏色都必须跟着变。这两个色值必须与 src/theme.ts 的
+// THEME_COLORS 一致，scripts/mobile-layout-contract.test.mjs 会比对两处字面量。
+const THEMES = ['light', 'dark']
+const THEME_COLORS = { light: '#f3f5f8', dark: '#111315' }
 
 class LayoutFailure extends Error {}
 
@@ -239,31 +247,34 @@ async function officialFixture() {
 
 // ---------------------------------------------------------------- 三档视口各自的检查
 
-async function checkShell(page, url, width, height) {
-  await page.send('Page.navigate', { url })
-  await page.waitFor('document.readyState === "complete"', '外壳页面没有加载完')
+// 引导只在全新存储里出现；每个视口 / 每种主题都用独立浏览器上下文，所以正常情况下每档都会走一遍。
+// 文案随版本变过（旧版是「继续 / Continue」+「跳过引导」，当前构建是「继续 / Continue」+ 多步
+// 「下一步」），所以按一组已知文案逐步推进到引导结束，不写死步数；点不动了就停。
+const ONBOARDING_TEXTS = ['继续 / Continue', '下一步', '跳过引导', '开始使用', '完成', '开始对话']
+
+async function advanceOnboarding(page, navSelector) {
   const buttonTexts = () => page.evaluate(`[...document.querySelectorAll("button")].flatMap(${BUTTON_NAMES})`)
   const hasButton = text => `[...document.querySelectorAll("button")].some(node => (${BUTTON_NAMES})(node).includes(${JSON.stringify(text)}))`
-  // 引导流程的按钮文案随版本变过（旧版是「继续 / Continue」+「跳过引导」，当前构建是
-  // 「继续 / Continue」+ 多步「下一步」），所以这里按一组已知文案逐步推进到引导结束，
-  // 不写死步数；点不动了就停，剩余断言照常跑。
-  const onboardingTexts = ['继续 / Continue', '下一步', '跳过引导', '开始使用', '完成', '开始对话']
-  const navSelector = width < 900 ? '.bottom-navigation' : '.sidebar-nav'
   const hasNav = `document.querySelector(${JSON.stringify(navSelector)}) !== null`
   try {
-    await page.waitFor(`(${hasButton('继续 / Continue')}) || ${hasNav}`, '首屏既没有引导页也没有主导航')
+    await page.waitFor(`(${hasButton(ONBOARDING_TEXTS[0])}) || ${hasNav}`, '首屏既没有引导页也没有主导航')
   } catch (error) {
     throw new LayoutFailure(`${error.message}；当前按钮：${JSON.stringify(await buttonTexts())}`)
   }
-  // 引导只在全新存储里出现；每个视口都用独立的浏览器上下文，所以正常情况下每档都会走一遍。
-  if (await page.evaluate(hasButton('继续 / Continue'))) {
-    for (let step = 0; step < 10; step += 1) {
-      if (!await page.clickText(onboardingTexts)) break
-      await sleep(400)
-    }
-    const onboardingLeft = await page.evaluate(`(${JSON.stringify(onboardingTexts)}).some(text => [...document.querySelectorAll("button")].some(node => (${BUTTON_NAMES})(node).includes(text)))`)
-    if (onboardingLeft) throw new LayoutFailure(`引导流程没有走完；当前按钮：${JSON.stringify(await buttonTexts())}`)
+  if (!await page.evaluate(hasButton(ONBOARDING_TEXTS[0]))) return
+  for (let step = 0; step < 10; step += 1) {
+    if (!await page.clickText(ONBOARDING_TEXTS)) break
+    await sleep(400)
   }
+  const onboardingLeft = await page.evaluate(`(${JSON.stringify(ONBOARDING_TEXTS)}).some(text => [...document.querySelectorAll("button")].some(node => (${BUTTON_NAMES})(node).includes(text)))`)
+  if (onboardingLeft) throw new LayoutFailure(`引导流程没有走完；当前按钮：${JSON.stringify(await buttonTexts())}`)
+}
+
+async function checkShell(page, url, width, height) {
+  await page.send('Page.navigate', { url })
+  await page.waitFor('document.readyState === "complete"', '外壳页面没有加载完')
+  const navSelector = width < 900 ? '.bottom-navigation' : '.sidebar-nav'
+  await advanceOnboarding(page, navSelector)
 
   const mobile = width < 900
   await page.waitFor(`document.querySelector(${JSON.stringify(navSelector)}) !== null`, '预期导航没有显示')
@@ -283,6 +294,23 @@ async function checkShell(page, url, width, height) {
   await page.waitFor('[...document.querySelectorAll("h1,h2,h3,[role=heading]")].some(node => (node.textContent ?? "").trim() === "插件管理")', '没有出现「插件管理」标题')
   check(await page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1'), '插件页出现整体横向溢出')
   await page.screenshot(`shell-plugins-${width}x${height}.png`)
+}
+
+// 主题跟随：只有在真浏览器的媒体查询下才跑得到这条路径（单测里 matchMedia 是假的）。
+// 断言三件事——`<html data-theme>` 落到偏好值、状态栏色与 src/theme.ts 的常量一致、
+// 切换主题不引起整体横向溢出；返回值是该主题下的页面底色，供调用方比对明暗确实不同。
+async function checkTheme(page, url, width, height, theme) {
+  await page.send('Page.navigate', { url })
+  await page.waitFor('document.readyState === "complete"', '外壳页面没有加载完')
+  const navSelector = width < 900 ? '.bottom-navigation' : '.sidebar-nav'
+  await advanceOnboarding(page, navSelector)
+  const applied = await page.evaluate('document.documentElement.dataset.theme')
+  check(applied === theme, `系统偏好为 ${theme} 时 <html data-theme> 应为 ${theme}，实际 ${applied}`)
+  const meta = await page.evaluate('document.querySelector("meta[name=\'theme-color\']")?.getAttribute("content") ?? ""')
+  check(meta.toLowerCase() === THEME_COLORS[theme], `状态栏色应为 ${THEME_COLORS[theme]}，实际 ${meta || '（没有 meta）'}`)
+  check(await page.evaluate('document.documentElement.scrollWidth <= innerWidth + 1'), `${theme} 主题下出现整体横向溢出`)
+  await page.screenshot(`theme-${theme}-${width}x${height}.png`)
+  return page.evaluate('getComputedStyle(document.body).backgroundColor')
 }
 
 async function checkSettingsDialog(page, width, height) {
@@ -323,6 +351,43 @@ async function checkSettingsDialog(page, width, height) {
 }
 
 // ---------------------------------------------------------------- 主流程
+
+// 开一个隔离页面跑一段检查：每档视口 / 每种系统主题各用一个独立浏览器上下文，
+// localStorage 与引导状态不会互相漏档（Playwright 版用的是 new_context，语义一致）。
+async function withPage(cdp, { width, height, mobile, theme }, run) {
+  const { browserContextId } = await cdp.send('Target.createBrowserContext')
+  const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank', browserContextId })
+  const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true })
+  const page = new Page(cdp, sessionId)
+  cdp.onEvent(message => {
+    if (message.sessionId !== sessionId) return
+    if (message.method === 'Runtime.exceptionThrown') {
+      const details = message.params.exceptionDetails
+      page.failures.push(details.exception?.description ?? details.text)
+    } else if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') {
+      page.failures.push(message.params.args.map(argument => argument.value ?? argument.description ?? '').join(' '))
+    } else if (message.method === 'Log.entryAdded' && message.params.entry.level === 'error') {
+      page.failures.push(message.params.entry.text)
+    }
+  })
+  await page.send('Page.enable')
+  await page.send('Runtime.enable')
+  await page.send('Log.enable')
+  await page.send('Emulation.setDeviceMetricsOverride', {
+    width, height, deviceScaleFactor: 1, mobile,
+    screenOrientation: mobile ? { type: 'portraitPrimary', angle: 0 } : { type: 'landscapePrimary', angle: 90 },
+  })
+  // maxTouchPoints 下限是 1：桌面档用 enabled=false 关掉触摸即可，别传 0（CDP 会拒绝）。
+  await page.send('Emulation.setTouchEmulationEnabled', { enabled: mobile, maxTouchPoints: 5 })
+  // 系统深浅偏好只能这样模拟：写 localStorage 等于绕开「跟随系统」这条路径，测不到它。
+  if (theme) await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }] })
+  try {
+    return await run(page)
+  } finally {
+    await cdp.send('Target.closeTarget', { targetId }).catch(() => {})
+    await cdp.send('Target.disposeBrowserContext', { browserContextId }).catch(() => {})
+  }
+}
 
 async function main() {
   const options = parseArgs(process.argv.slice(2))
@@ -365,38 +430,32 @@ async function main() {
     }
     for (const { width, height } of VIEWPORTS) {
       const mobile = width < 900
-      // 每档视口一个独立浏览器上下文：localStorage / IndexedDB 隔离开，引导流程与
-      // 用户设置不会从上一档漏过来（Playwright 版用的是 new_context，语义一致）。
-      const { browserContextId } = await cdp.send('Target.createBrowserContext')
-      const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank', browserContextId })
-      const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true })
-      const page = new Page(cdp, sessionId)
-      cdp.onEvent(message => {
-        if (message.sessionId !== sessionId) return
-        if (message.method === 'Runtime.exceptionThrown') {
-          const details = message.params.exceptionDetails
-          page.failures.push(details.exception?.description ?? details.text)
-        } else if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') {
-          page.failures.push(message.params.args.map(argument => argument.value ?? argument.description ?? '').join(' '))
-        } else if (message.method === 'Log.entryAdded' && message.params.entry.level === 'error') {
-          page.failures.push(message.params.entry.text)
-        }
+      const dialog = await withPage(cdp, { width, height, mobile }, async page => {
+        await checkShell(page, options.url, width, height)
+        const result = await checkSettingsDialog(page, width, height)
+        check(page.failures.length === 0, `页面出现运行错误：${JSON.stringify(page.failures.slice(0, 3))}`)
+        return result
       })
-      await page.send('Page.enable')
-      await page.send('Runtime.enable')
-      await page.send('Log.enable')
-      await page.send('Emulation.setDeviceMetricsOverride', {
-        width, height, deviceScaleFactor: 1, mobile,
-        screenOrientation: mobile ? { type: 'portraitPrimary', angle: 0 } : { type: 'landscapePrimary', angle: 90 },
+      // 主题矩阵：系统偏好浅 / 深各跑一遍，断言主题真的跟着走（而不是只有一套配色）。
+      const backgrounds = {}
+      for (const theme of THEMES) {
+        backgrounds[theme] = await withPage(cdp, { width, height, mobile, theme }, async page => {
+          const background = await checkTheme(page, options.url, width, height, theme)
+          check(page.failures.length === 0, `${theme} 主题下页面出现运行错误：${JSON.stringify(page.failures.slice(0, 3))}`)
+          return background
+        })
+      }
+      check(
+        backgrounds.light !== backgrounds.dark,
+        `系统偏好浅色与深色时的页面底色相同（都是 ${backgrounds.light}），说明外壳没有跟随系统主题`,
+      )
+      report.push({
+        width,
+        height,
+        外壳: '通过',
+        官方设置结构夹具: dialog,
+        主题跟随: `通过（浅色 ${backgrounds.light} / 深色 ${backgrounds.dark}）`,
       })
-      // maxTouchPoints 下限是 1：桌面档用 enabled=false 关掉触摸即可，别传 0（CDP 会拒绝）。
-      await page.send('Emulation.setTouchEmulationEnabled', { enabled: mobile, maxTouchPoints: 5 })
-      await checkShell(page, options.url, width, height)
-      const dialog = await checkSettingsDialog(page, width, height)
-      check(page.failures.length === 0, `页面出现运行错误：${JSON.stringify(page.failures.slice(0, 3))}`)
-      report.push({ width, height, 外壳: '通过', 官方设置结构夹具: dialog })
-      await cdp.send('Target.closeTarget', { targetId })
-      await cdp.send('Target.disposeBrowserContext', { browserContextId })
     }
     await writeFile(join(OUT, 'report.json'), `${JSON.stringify(report, null, 2)}\n`, 'utf8')
     console.log(JSON.stringify(report, null, 2))

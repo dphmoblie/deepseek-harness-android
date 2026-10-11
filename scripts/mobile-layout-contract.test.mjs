@@ -75,3 +75,31 @@ test('CDP 版本的成功与失败标记、退出码是分开的', async () => {
   // 防恒真：两个标记都必须真的出现在打印语句里，而不是只出现在注释里。
   assert.ok(!/^\s*\/\/.*LAYOUT_OK/u.test(source))
 })
+
+test('主题矩阵用的状态栏色与 src/theme.ts 的常量逐字一致', async () => {
+  const theme = await read('src/theme.ts')
+  const source = await read(CDP)
+  // 从 src/theme.ts 抓 THEME_COLORS 块，再从脚本抓 THEME_COLORS 字面量，两边必须同值。
+  const block = /const THEME_COLORS: Readonly<Record<ResolvedTheme, string>> = \{([\s\S]*?)\n\}/u.exec(theme)
+  assert.ok(block, 'src/theme.ts 里找不到 THEME_COLORS 常量')
+  const expected = Object.fromEntries([...block[1].matchAll(/(light|dark): '(#[0-9a-f]{6})'/gu)].map(match => [match[1], match[2]]))
+  assert.deepEqual(Object.keys(expected).sort(), ['dark', 'light'], 'src/theme.ts 的 THEME_COLORS 解析失败')
+  const actual = Object.fromEntries([...source.matchAll(/(light|dark): '(#[0-9a-f]{6})'/gu)].map(match => [match[1], match[2]]))
+  assert.deepEqual(actual, expected, 'CDP 脚本里的状态栏色与 src/theme.ts 不一致')
+  // 防恒真：两边都必须真的抓到两个色值，而不是都空。
+  assert.equal(Object.keys(actual).length, 2)
+})
+
+test('主题矩阵用 CDP 模拟系统偏好，并且明暗底色必须不同', async () => {
+  const source = await read(CDP)
+  // 系统偏好只能用媒体特性模拟；写 localStorage 会绕开「跟随系统」这条路径。
+  assert.match(source, /Emulation\.setEmulatedMedia/u)
+  assert.match(source, /name: 'prefers-color-scheme'/u)
+  assert.match(source, /const THEMES = \['light', 'dark'\]/u)
+  // 两种偏好下的页面底色相同 = 外壳没有跟随系统主题，必须判失败。
+  assert.match(source, /backgrounds\.light !== backgrounds\.dark/u)
+  assert.match(source, /document\.documentElement\.dataset\.theme/u)
+  // 每档视口 / 每种主题一个独立上下文（否则引导状态与主题会互相漏档）。
+  assert.match(source, /async function withPage\(/u)
+  assert.equal([...source.matchAll(/Target\.createBrowserContext/gu)].length, 1, '建上下文只应有一处（withPage）')
+})
