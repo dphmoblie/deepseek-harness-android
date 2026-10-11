@@ -1,4 +1,4 @@
-import type { PluginCatalog, PluginRequest } from './types'
+import type { PluginCatalog, PluginRecoveryState, PluginRequest } from './types'
 
 const packageId = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/
 const entryId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
@@ -21,6 +21,22 @@ function text(value: unknown, pattern: RegExp, max: number): string {
   return value
 }
 function bool(value: unknown): boolean { if (typeof value !== 'boolean') invalid(); return value }
+function count(value: unknown): number {
+  if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 1024) invalid()
+  return value as number
+}
+function recovery(value: unknown): PluginRecoveryState {
+  const state = record(value)
+  if (!['none', 'restored', 'partial', 'failed'].includes(state.status as string)) invalid()
+  return {
+    status: state.status as PluginRecoveryState['status'],
+    restored: count(state.restored),
+    relinked: count(state.relinked),
+    missing: count(state.missing),
+    failed: count(state.failed),
+    refused: count(state.refused),
+  }
+}
 /**
  * 导入来源：npm 包名（含作用域名）或 `https://` / `git+https://` 地址。
  *
@@ -72,7 +88,7 @@ export function validatePluginCatalog(value: unknown): PluginCatalog {
   if (!Array.isArray(payload.plugins) || payload.plugins.length > 32) invalid()
   let childrenCount = 0
   const ids = new Set<string>()
-  return { plugins: payload.plugins.map((raw: unknown) => {
+  const plugins = payload.plugins.map((raw: unknown) => {
     const group = record(raw)
     const id = text(group.id, packageId, 214)
     if (id.includes('..') || ids.has(id)) invalid()
@@ -96,5 +112,6 @@ export function validatePluginCatalog(value: unknown): PluginCatalog {
         return { id: childId, name: text(child.name, /^[A-Za-z0-9@_./:-]+$/, 214), enabled: bool(child.enabled), effectiveEnabled: bool(child.effectiveEnabled), protected: bool(child.protected) }
       }),
     }
-  }) }
+  })
+  return payload.recovery === undefined ? { plugins } : { plugins, recovery: recovery(payload.recovery) }
 }

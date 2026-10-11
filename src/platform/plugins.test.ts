@@ -59,4 +59,13 @@ describe('插件桥接校验', () => {
     expect(validatePluginCatalog(group({})).plugins[0].rollback).toBeNull()
     expect(() => validatePluginCatalog(group({ rollback: '../../etc' }))).toThrow()
   })
+  it('接受受控的插件迁移结果，并拒绝越界计数', () => {
+    const value = validatePluginCatalog({
+      ...group({}),
+      recovery: { status: 'partial', restored: 2, relinked: 1, missing: 1, failed: 0, refused: 0 },
+    })
+    expect(value.recovery).toEqual({ status: 'partial', restored: 2, relinked: 1, missing: 1, failed: 0, refused: 0 })
+    expect(() => validatePluginCatalog({ ...group({}), recovery: { status: 'restored', restored: 1025, relinked: 0, missing: 0, failed: 0, refused: 0 } })).toThrow()
+    expect(() => validatePluginCatalog({ ...group({}), recovery: { status: 'unknown', restored: 0, relinked: 0, missing: 0, failed: 0, refused: 0 } })).toThrow()
+  })
 })

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ChevronDown, Package, RefreshCw } from 'lucide-react'
 import { t, useLanguage } from '../i18n'
-import type { PluginCatalog, PluginRequest, RuntimeBridge, RuntimeState } from '../platform/types'
+import type { PluginCatalog, PluginRecoveryState, PluginRequest, RuntimeBridge, RuntimeState } from '../platform/types'
 import './PluginSettings.css'
 
 /** 原生侧在无法给出更精确信息时使用的通用文案：与它相同时不重复展示。 */
@@ -34,6 +34,27 @@ const successNotices: Record<string, string> = {
   update: '插件包已更新，下次启动生效',
   import: '插件已导入，下次启动生效',
   rollback: '已回滚到上一版本，下次启动生效',
+}
+
+function RecoveryNotice({ recovery }: { recovery: PluginRecoveryState }) {
+  if (recovery.status === 'none') return null
+  const changed = recovery.restored + recovery.relinked
+  const issueCount = recovery.missing + recovery.failed + recovery.refused
+  const title = recovery.status === 'restored'
+    ? '插件已恢复'
+    : recovery.status === 'partial'
+      ? '插件已部分恢复'
+      : '插件恢复失败'
+  const detail = changed > 0
+    ? t('已恢复 {0} 个配置、重新链接 {1} 个插件。', recovery.restored, recovery.relinked)
+    : t('没有可直接恢复的插件链接。')
+  const issues = issueCount > 0
+    ? t('缺失 {0} 个，失败 {1} 个，拒绝 {2} 个。', recovery.missing, recovery.failed, recovery.refused)
+    : ''
+  return <section className={`plugin-recovery plugin-recovery-${recovery.status}`} aria-live="polite" role={recovery.status === 'failed' ? 'alert' : 'status'}>
+    <div className="plugin-recovery-mark" aria-hidden="true">{recovery.status === 'restored' ? '✓' : recovery.status === 'partial' ? '!' : '×'}</div>
+    <div><strong>{t(title)}</strong><p>{detail} {issues}</p></div>
+  </section>
 }
 
 export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBridge; runtime: RuntimeState; onBack: () => void }) {
@@ -116,6 +137,7 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
       <p className="plugin-hint">{t('通过链接导入时，可填写预期包名，以核对安装结果；如果链接中有多个插件包，可用它指定要安装的包。')}</p>
     </section>
     {notice && <p className="plugin-notice" role={failed ? 'alert' : 'status'}>{t(notice)}{noticeDetail !== '' && `（${noticeDetail}）`}</p>}
+    {catalog?.recovery && <RecoveryNotice recovery={catalog.recovery} />}
     {busy && <p role="status">{t('正在处理插件，请稍候')}</p>}
     {catalog?.plugins.length === 0 && <p>{t('暂无插件。安装运行环境后点击「刷新」。')}</p>}
     {[true, false].map(official => <section key={String(official)} className="plugin-category" aria-label={t(official ? '官方插件' : '第三方插件')}>

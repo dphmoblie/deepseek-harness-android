@@ -1283,7 +1283,25 @@ export interface PluginGroup {
   readable: boolean
   children: PluginChild[]
 }
-export interface PluginCatalog { plugins: PluginGroup[] }
+/**
+ * 运行时更新后插件迁移的结果。
+ *
+ * 只回传受控状态与计数，不包含路径、错误原文或插件数据；旧版运行时没有该字段时，
+ * 前端按「没有迁移结果」处理，保持向后兼容。
+ */
+export type PluginRecoveryStatus = 'none' | 'restored' | 'partial' | 'failed'
+export interface PluginRecoveryState {
+  status: PluginRecoveryStatus
+  restored: number
+  relinked: number
+  missing: number
+  failed: number
+  refused: number
+}
+export interface PluginCatalog {
+  plugins: PluginGroup[]
+  recovery?: PluginRecoveryState
+}
 export interface PluginRequest {
   /**
    * `import`：受控导入（npm 包名 / `https://` 直链 / `git+https://` 地址），需要 `source`；

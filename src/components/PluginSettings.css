@@ -21,6 +21,14 @@
 .plugin-children strong { font-size: 0.875rem; }
 .plugin-hint { padding: 0 18px; font-size: 0.75rem; }
 .plugin-notice { margin: 14px 0 0; padding: 12px 14px; border-left: 3px solid var(--blue); border-radius: var(--radius-inner); background: var(--blue-soft); font-size: 0.8125rem; }
+.plugin-recovery { display: flex; align-items: flex-start; gap: 12px; margin: 14px 0 0; padding: 13px 15px; border: 1px solid var(--line); border-left: 3px solid var(--blue); border-radius: var(--radius-card); background: var(--surface); box-shadow: var(--shadow-card); }
+.plugin-recovery-mark { display: grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; border-radius: 50%; background: var(--blue-soft); color: var(--blue); font-weight: 700; }
+.plugin-recovery strong { display: block; font-size: 0.875rem; }
+.plugin-recovery p { margin: 4px 0 0; color: var(--muted); font-size: 0.75rem; line-height: 1.55; }
+.plugin-recovery-partial { border-left-color: var(--warning, #c17b19); }
+.plugin-recovery-partial .plugin-recovery-mark { background: color-mix(in srgb, var(--warning, #c17b19) 16%, transparent); color: var(--warning, #c17b19); }
+.plugin-recovery-failed { border-left-color: var(--danger, #c64b55); }
+.plugin-recovery-failed .plugin-recovery-mark { background: color-mix(in srgb, var(--danger, #c64b55) 16%, transparent); color: var(--danger, #c64b55); }
 /* 导入入口：与「停止运行环境」条分开成块，避免"要装东西"和"要先停机"两件事混在一起。 */
 .plugin-import { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--surface); }
 .plugin-import h2 { margin: 0 0 6px; font-size: 1rem; }

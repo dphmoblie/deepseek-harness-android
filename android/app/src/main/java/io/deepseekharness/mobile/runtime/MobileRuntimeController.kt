@@ -220,7 +220,10 @@ class MobileRuntimeController(
             }
             supervisor.preparePluginManagement()
         }
-        plugins.run(operation, id, enabled, childId, source)
+        return@withLock plugins.run(operation, id, enabled, childId, source).apply {
+            // 插件页面只需要受控迁移状态；计数由原生侧生成，避免把路径或访客日志回传到 WebView。
+            put("recovery", plugins.recoverySnapshot())
+        }
     }
 
     fun requestStartCancellation(): Boolean = supervisor.requestStartCancellation()

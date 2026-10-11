@@ -28,6 +28,29 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
     @Volatile
     private var repairFailureAtMillis: Long = 0L
 
+    /** 最近一次运行时升级后的插件迁移结果；只保存受控计数，供插件页面展示。 */
+    @Volatile
+    private var recoveryStatus: String = "none"
+    @Volatile
+    private var recoveryRestored: Int = 0
+    @Volatile
+    private var recoveryRelinked: Int = 0
+    @Volatile
+    private var recoveryMissing: Int = 0
+    @Volatile
+    private var recoveryFailed: Int = 0
+    @Volatile
+    private var recoveryRefused: Int = 0
+
+    /** 返回插件迁移结果快照，不包含路径、日志或插件内容。 */
+    fun recoverySnapshot(): JSObject = JSObject()
+        .put("status", recoveryStatus)
+        .put("restored", recoveryRestored)
+        .put("relinked", recoveryRelinked)
+        .put("missing", recoveryMissing)
+        .put("failed", recoveryFailed)
+        .put("refused", recoveryRefused)
+
     fun recoverIfNeeded() {
         // 运行时升级通常不会留下 transaction.json：它会重建 profiles 清单，但保留
         // plugin-manager/state-snapshot.json。只检查事务文件会跳过正常升级后的状态回填，
@@ -35,7 +58,23 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         // 两个文件都不存在时不启动 Node，避免首次安装每次启动都做无意义的恢复探测。
         val transaction = File(directory, "transaction.json").exists()
         val snapshot = File(directory, "state-snapshot.json").exists()
-        if (transaction || snapshot) run("recover", null, null, null)
+        if (transaction || snapshot) {
+            try {
+                val result = run("recover", null, null, null)
+                val state = result.optJSONObject("state")
+                if (state?.optBoolean("restored", false) == true) {
+                    recoveryRestored = state.optInt("plugins", 0).coerceAtLeast(0)
+                    if (recoveryRestored > 0) recoveryStatus = "restored"
+                } else if (state?.optString("reason") == "failed") {
+                    recoveryStatus = "failed"
+                    recoveryFailed = 1
+                }
+            } catch (error: Exception) {
+                recoveryStatus = "failed"
+                recoveryFailed = 1
+                throw error
+            }
+        }
     }
 
     /**
@@ -73,6 +112,21 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             //  - result = denied 表示有包没能修复（拒绝或失败），需要人工介入。
             val linked = summary.optInt("linked", 0)
             val unfixed = summary.optInt("failed", 0) + summary.optInt("refused", 0)
+            val restored = recoveryRestored
+            val relinked = summary.optInt("relinked", 0)
+            val missing = summary.optInt("missing", 0)
+            val failed = summary.optInt("failed", 0)
+            val refused = summary.optInt("refused", 0)
+            recoveryRelinked = relinked
+            recoveryMissing = maxOf(recoveryMissing, missing)
+            recoveryFailed = maxOf(recoveryFailed, failed)
+            recoveryRefused = maxOf(recoveryRefused, refused)
+            recoveryStatus = when {
+                recoveryFailed > 0 || recoveryRefused > 0 -> if (restored + relinked > 0) "partial" else "failed"
+                recoveryMissing > 0 -> if (restored + relinked > 0) "partial" else "failed"
+                restored + relinked > 0 -> "restored"
+                else -> "none"
+            }
             store.diagnostics.record(
                 DiagnosticLevel.INFO,
                 DiagnosticEvent.REPAIR,
@@ -94,6 +148,8 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
                 DiagnosticEvent.REPAIR,
                 mapOf("result" to "failed", "count" to "0"),
             )
+            recoveryStatus = "failed"
+            recoveryFailed = 1
             repairFailureGeneration = generation
             repairFailureAtMillis = now
         }
