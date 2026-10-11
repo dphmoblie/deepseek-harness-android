@@ -6,6 +6,7 @@ import { resolve } from 'node:path'
 test('runtime rebuild repairs native tools and verification rejects unusable executables', () => {
   const probe = String.raw`
 import importlib.util
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -105,11 +106,15 @@ with tempfile.TemporaryDirectory(prefix='dsh-tool-modes-') as directory:
         raise AssertionError('symlink accepted as executable payload')
     # The full CLI must reject missing tools even if the remaining ELF is valid.
     manifest = root / 'manifest.json'
-    manifest.write_text(json.dumps({'rootfs': {'extractedBytes': 64}}))
     for present, missing in (('usr/bin/bash', 'landlock-run, ripgrep'), (rg, 'bash, landlock-run'), (landlock, 'bash, ripgrep')):
         incomplete = root / 'incomplete.bundle'
         with tarfile.open(incomplete, 'w:gz') as archive:
             add(archive, present, elf, 0o755)
+        manifest.write_text(json.dumps({'rootfs': {
+            'extractedBytes': 64,
+            'compressedBytes': incomplete.stat().st_size,
+            'sha256': hashlib.sha256(incomplete.read_bytes()).hexdigest(),
+        }}))
         result = subprocess.run([sys.executable, 'scripts/verify-bundle.py', '--bundle', str(incomplete), '--manifest', str(manifest)], capture_output=True, text=True, timeout=5)
         assert result.returncode != 0
         assert 'required runtime executables missing: ' + missing in result.stderr, result.stderr

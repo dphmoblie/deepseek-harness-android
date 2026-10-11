@@ -922,7 +922,24 @@ class RuntimeStore(context: Context) {
 
     fun openBundledManifest(): InputStream = openBundledAsset(BUNDLED_MANIFEST_ASSET)
 
-    fun openBundledRootfs(): InputStream = openBundledAsset(BUNDLED_ROOTFS_ASSET)
+    fun openBundledRootfs(): InputStream {
+        // bundle 按 noCompress 打包；有界文件流保留 APK 条目偏移和长度，避免大资产映射读取。
+        val asset = try {
+            appContext.assets.openFd(BUNDLED_ROOTFS_ASSET)
+        } catch (error: Exception) {
+            throw RuntimeFailure("BUNDLED_RUNTIME_MISSING", "APK 未包含可直接读取的初始化运行时", error)
+        }
+        return try {
+            asset.createInputStream()
+        } catch (error: Exception) {
+            try {
+                asset.close()
+            } catch (closeError: Exception) {
+                error.addSuppressed(closeError)
+            }
+            throw error
+        }
+    }
 
     /**
      * APK assets are immutable for the lifetime of this process. A missing or malformed bundled
