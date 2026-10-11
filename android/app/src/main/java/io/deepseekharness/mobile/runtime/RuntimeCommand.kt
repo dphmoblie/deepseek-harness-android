@@ -198,7 +198,7 @@ object RuntimeCommand {
         if (!store.runnerAvailable()) {
             throw RuntimeFailure("RUNNER_UNAVAILABLE", "APK 未包含当前架构的受信任运行器")
         }
-        val temporary = File(context.cacheDir, "proot-tmp")
+        val temporary = File(context.cacheDir, RuntimeCacheEntries.PROOT_TMP)
         if (!temporary.exists() && !temporary.mkdirs()) {
             throw RuntimeFailure("FILESYSTEM_ERROR", "无法创建运行器临时目录")
         }

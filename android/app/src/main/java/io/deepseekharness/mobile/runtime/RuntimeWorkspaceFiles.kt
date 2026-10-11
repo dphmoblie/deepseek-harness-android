@@ -100,7 +100,7 @@ class RuntimeWorkspaceFiles internal constructor(
     }
 
     fun copyForSharing(relative: String): File = withFile(relative) { parent, name ->
-        val directory = File(cacheDir, "share")
+        val directory = File(cacheDir, RuntimeCacheEntries.WORKSPACE_SHARE)
         if ((!directory.isDirectory && !directory.mkdirs()) || Files.isSymbolicLink(directory.toPath())) {
             throw RuntimeFailure("WORKSPACE_EXPORT_FAILED", "无法准备文件分享目录")
         }

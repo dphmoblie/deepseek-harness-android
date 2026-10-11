@@ -241,6 +241,46 @@ class MobileRuntimeController(
     private fun withRecovery(payload: com.getcapacitor.JSObject): com.getcapacitor.JSObject =
         payload.apply { put("recovery", plugins.recoverySnapshot()) }
 
+    /**
+     * 插件数据档清理的只读读数（账本可用性与涉及包数），不触碰任何文件。
+     *
+     * 与 [managePlugins] 不同，这里**不要求运行时已停止**：读数只读账本与目录属性，用户开着
+     * Harness 时打开设置页也应该能看到这一档占了多少、能不能清；真正删除才需要停机。
+     */
+    fun pluginCleanupState(): com.getcapacitor.JSObject = plugins.cleanupState()
+
+    /**
+     * 缓存档清理（破坏性，只由用户显式触发）。
+     *
+     * 要求运行时已停止：[RuntimeCacheEntries.PROOT_TMP] 是运行中沙箱的 `TMPDIR`、`WORKSPACE_SHARE`
+     * 是投递暂存，运行中删掉会把一次正在进行的会话打断。生命周期锁同时排除与安装、重置、插件
+     * 写入并发——清理不是「顺便删一下」，它必须与其它文件系统操作互斥。
+     */
+    internal fun clearRuntimeCache(cacheDir: File): RuntimeCleanupOutcome = lifecycleLock.withLock {
+        ensureOpen()
+        requireRuntimeStoppedForCleanup()
+        RuntimeCacheCleanup(cacheDir).clear()
+    }
+
+    /**
+     * 插件数据档清理（破坏性，只由用户显式触发）。
+     *
+     * 与缓存档同一道停机要求：插件进程正在写自己的存储时删目录，会得到「损坏一半」的状态，
+     * 比清不掉更糟。返回 `null` 表示版本账本不可用，此时一个字节都没动。
+     */
+    internal fun purgePluginData(): RuntimeCleanupOutcome? = lifecycleLock.withLock {
+        ensureOpen()
+        requireRuntimeStoppedForCleanup()
+        plugins.purgePluginData()
+    }
+
+    /** 清理的前置条件：运行时与终端都停下，否则删目录会打断正在跑的会话。 */
+    private fun requireRuntimeStoppedForCleanup() {
+        if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
+            throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
+        }
+    }
+
     fun requestStartCancellation(): Boolean = supervisor.requestStartCancellation()
 
     /**

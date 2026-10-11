@@ -34,6 +34,9 @@ import type {
   RuntimeProgress,
   RuntimeReleaseEntry,
   RuntimeReleaseList,
+  RuntimeCleanupOutcome,
+  RuntimeCleanupState,
+  PluginCleanupLedger,
   RuntimeSessionListReason,
   RuntimeSessionListResult,
   RuntimeSessionSummary,
@@ -595,6 +598,82 @@ export function validateRuntimeResidueCleanup(value: unknown): RuntimeResidueCle
     failed: byteCount(state.failed, '运行时残留失败份数'),
     reclaimedBytes: byteCount(state.reclaimedBytes, '运行时残留回收体积'),
     message,
+  }
+}
+
+/** 缓存条目的名字：原生侧白名单里的小写 token（`diagnostics`/`share`/`proot-tmp`）。 */
+const CACHE_ENTRY_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,31}$/u
+
+/** 白名单条目数上限：多出来的条目说明原生侧改变了形状，这里宁可拒绝也不显示一半。 */
+const MAX_CACHE_ENTRIES = 8
+
+const CLEANUP_LEDGERS = new Set<PluginCleanupLedger>(['ok', 'missing', 'invalid', 'unwritable'])
+
+function cleanupEntryName(value: unknown): string {
+  if (typeof value !== 'string' || !CACHE_ENTRY_NAME_PATTERN.test(value)) throw new Error('缓存条目名称格式无效')
+  return value
+}
+
+function cleanupLedger(value: unknown): PluginCleanupLedger {
+  if (typeof value !== 'string' || !CLEANUP_LEDGERS.has(value as PluginCleanupLedger)) {
+    throw new Error('插件账本状态格式无效')
+  }
+  return value as PluginCleanupLedger
+}
+
+/**
+ * 数据清理面板状态：缓存档逐条现状 + 插件数据档的账本状态。
+ *
+ * 载荷里没有路径、没有包名：这里也就没有它们的位置。条目数超过白名单规模时整体拒绝，
+ * 而不是只显示前面几条 —— 半份盘点比读不到更容易让人误判「已经清干净了」。
+ */
+export function validateRuntimeCleanupState(value: unknown): RuntimeCleanupState {
+  const state = asRecord(value, '数据清理状态')
+  const cache = asRecord(state.cache, '缓存档状态')
+  const items = cache.entries
+  if (!Array.isArray(items) || items.length > MAX_CACHE_ENTRIES) throw new Error('缓存条目列表格式无效')
+  const plugin = asRecord(state.plugin, '插件数据档状态')
+  return {
+    runtimeRunning: requiredBoolean(state.runtimeRunning, '运行时运行标记'),
+    cache: {
+      entries: items.map((item, index) => {
+        const entry = asRecord(item, `缓存条目 ${index + 1}`)
+        return {
+          name: cleanupEntryName(entry.name),
+          present: requiredBoolean(entry.present, '缓存条目存在标记'),
+          files: byteCount(entry.files, '缓存条目文件数'),
+          bytes: byteCount(entry.bytes, '缓存条目体积'),
+        }
+      }),
+      files: byteCount(cache.files, '缓存档文件数'),
+      bytes: byteCount(cache.bytes, '缓存档体积'),
+    },
+    plugin: {
+      ledger: cleanupLedger(plugin.ledger),
+      checked: byteCount(plugin.checked, '插件账本条目数'),
+    },
+  }
+}
+
+/**
+ * 一次分级清理的结果：只描述**这一次尝试**，界面必须重新盘点而不是自己相减。
+ *
+ * `ok` 不从载荷里读，而是由 `failed === 0` 推出：界面用它决定显示「已清理」还是「有失败」，
+ * 两个字段互相矛盾时（载荷里 `ok: true` 却带着失败数）必须是更保守的那一侧赢。
+ */
+export function validateRuntimeCleanupOutcome(value: unknown): RuntimeCleanupOutcome {
+  const state = asRecord(value, '清理结果')
+  const failed = byteCount(state.failed, '清理失败数')
+  return {
+    scope: byteCount(state.scope, '清理覆盖范围'),
+    targets: byteCount(state.targets, '清理目标数'),
+    removed: byteCount(state.removed, '清理成功数'),
+    fallback: byteCount(state.fallback, '清理兜底数'),
+    failed,
+    files: byteCount(state.files, '清理文件数'),
+    bytes: byteCount(state.bytes, '清理体积'),
+    skipped: byteCount(state.skipped, '清理跳过数'),
+    ok: failed === 0,
   }
 }
 

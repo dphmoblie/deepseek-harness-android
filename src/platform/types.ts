@@ -136,6 +136,72 @@ export interface RuntimeResidueCleanupState {
 }
 
 /**
+ * 缓存档里的一条可清理条目。
+ *
+ * 只回传名字、是否存在、文件数与字节数，**不含路径**；名字来自原生侧的白名单
+ * （`RuntimeCacheEntries.CLEARABLE`），界面不自己拼名字，也不据此推导目录位置。
+ */
+export interface RuntimeCleanupEntry {
+  name: string
+  present: boolean
+  files: number
+  bytes: number
+}
+
+/** 缓存档盘点：白名单条目的现状与合计。只读，不需要停止运行时。 */
+export interface RuntimeCacheCleanupState {
+  entries: RuntimeCleanupEntry[]
+  files: number
+  bytes: number
+}
+
+/**
+ * 插件数据档的账本状态（`RuntimePluginManager.verifyInstallLock` 的结论）。
+ *
+ * 只有 `ok` 能清理：`missing`（还没有账本）、`invalid`（账本损坏）、`unwritable`（写不进去）
+ * 都意味着「我们核不准哪些目录是插件数据」，这时清理一律拒绝，而不是猜着删。
+ */
+export type PluginCleanupLedger = 'ok' | 'missing' | 'invalid' | 'unwritable'
+
+/** 插件数据档盘点：账本状态与账本条目数。只读。 */
+export interface PluginCleanupState {
+  ledger: PluginCleanupLedger
+  checked: number
+}
+
+/**
+ * 数据清理面板的只读状态。
+ *
+ * [runtimeRunning] 为真时两档清理都会被原生侧以 `RUNTIME_BUSY` 拒绝：`proot-tmp` 是运行中沙箱的
+ * `TMPDIR`、插件进程也在写自己的数据目录。界面据此**先禁用按钮并说明原因**，而不是让用户点下去
+ * 再收一句失败。
+ */
+export interface RuntimeCleanupState {
+  runtimeRunning: boolean
+  cache: RuntimeCacheCleanupState
+  plugin: PluginCleanupState
+}
+
+/**
+ * 一次分级清理的结果。
+ *
+ * 与残留清理同口径：这些数字只描述**这一次尝试**，不是清理之后的当前状态 —— 界面要知道现在还剩
+ * 多少，必须重新调 [RuntimeBridge.getRuntimeCleanupState]。[ok] 是「一条都没失败」；[fallback]
+ * 是 [removed] 里走过兜底删除器的子集（真机上仍算清掉了，但值得如实说出来）。
+ */
+export interface RuntimeCleanupOutcome {
+  scope: number
+  targets: number
+  removed: number
+  fallback: number
+  failed: number
+  files: number
+  bytes: number
+  skipped: number
+  ok: boolean
+}
+
+/**
  * 一份运行时会话快照。
  *
  * 快照只装访客里的**可变数据**（会话、设置、凭据、工作区），存在应用私有目录
@@ -1328,6 +1394,29 @@ export interface RuntimeBridge {
    * 幂等：没有残留时回全 0 且不报错。清理后界面应重新调 [RuntimeBridge.getRuntimeResidue]。
    */
   cleanRuntimeResidue: () => Promise<RuntimeResidueCleanupState>
+  /**
+   * 数据清理面板的只读状态：缓存档（白名单条目的现状）与插件数据档（账本状态与条目数）。
+   *
+   * 只读，不需要停止运行时；载荷里没有路径、没有包名、没有插件标识。
+   */
+  getRuntimeCleanupState: () => Promise<RuntimeCleanupState>
+  /**
+   * 清掉缓存档白名单里的目录（诊断导出、工作区分享暂存、PRoot 临时目录），
+   * 返回**这一次尝试**的结果。
+   *
+   * 不删待安装的更新包（那是产物，不是缓存），也不碰运行时数据（那是「重置运行环境」那一档）；
+   * 运行时在跑时原生侧抛 `RUNTIME_BUSY`。幂等：没有可清的回全 0 且不报错。
+   * 清理后界面应重新调 [RuntimeBridge.getRuntimeCleanupState]。
+   */
+  clearRuntimeCache: () => Promise<RuntimeCleanupOutcome>
+  /**
+   * 清掉已登记插件包内部的四个数据目录（`data`/`config`/`storage`/`.config`），
+   * 返回**这一次尝试**的结果。
+   *
+   * **不动包本体**：插件仍然装着，只是自己的数据被清空。由版本账本驱动，账本不可用时原生侧抛
+   * `CLEANUP_LEDGER_UNAVAILABLE` 且一个字节都不动；运行时在跑时抛 `RUNTIME_BUSY`。
+   */
+  purgePluginData: () => Promise<RuntimeCleanupOutcome>
   /**
    * 会话工作区的会话元数据（无参数，只读）。
    *

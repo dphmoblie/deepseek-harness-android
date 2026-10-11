@@ -137,3 +137,32 @@ test('两侧都解析出插件操作，避免解析失效后契约恒真', async
   assert.ok(webview.size > 5, `前端只解析出 ${webview.size} 个插件操作，解析规则可能已失效`)
   assert.ok(native.has('list') && webview.has('list'), '两侧都必须包含 list')
 })
+
+// 插件数据目录是另一处跨语言接缝：访客脚本更新插件时靠 `DATA_DIRECTORIES` 决定「保留哪些目录」，
+// 宿主侧清理插件数据时靠 `PluginDataDirectories.NAMES` 决定「删哪些目录」。两侧一旦漂移，
+// 「更新保数据」与「清理删数据」就不再指向同一批目录 —— 而这两件事都不会报错，只会悄悄错位。
+const CLEANUP = 'android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeDataCleanup.kt'
+const MANAGER = 'android/app/src/main/assets/support/plugin-manager.cjs'
+
+/** Kotlin `PluginDataDirectories.NAMES` 的字面量清单。 */
+function kotlinPluginDataDirectories(text) {
+  const block = /internal object PluginDataDirectories \{([\s\S]*?)\n\}/u.exec(text)?.[1]
+  assert.ok(block, `${CLEANUP} 里找不到 PluginDataDirectories`)
+  const list = /val NAMES = listOf\(([^)]*)\)/u.exec(block)?.[1]
+  assert.ok(list, `${CLEANUP} 的 PluginDataDirectories 里找不到 NAMES 清单`)
+  return [...list.matchAll(/"([^"]*)"/gu)].map(match => match[1])
+}
+
+/** 访客脚本 `DATA_DIRECTORIES` 的字面量清单。 */
+function guestDataDirectories(text) {
+  const list = /const DATA_DIRECTORIES = \[([^\]]*)\]/u.exec(text)?.[1]
+  assert.ok(list, `${MANAGER} 里找不到 DATA_DIRECTORIES`)
+  return [...list.matchAll(/'([^']*)'/gu)].map(match => match[1])
+}
+
+test('插件数据目录清单在宿主与访客脚本两侧一致', async () => {
+  const host = kotlinPluginDataDirectories(await source(CLEANUP))
+  const guest = guestDataDirectories(await source(MANAGER))
+  assert.ok(host.length >= 4, `宿主侧只解析出 ${host.length} 个数据目录，解析规则可能已失效`)
+  assert.deepEqual(host, guest, `宿主 ${host.join('、')} 与访客 ${guest.join('、')} 不一致`)
+})

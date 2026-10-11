@@ -38,6 +38,17 @@ enum class AuditEvent {
     RUNTIME_STOP,
     RUNTIME_RESET,
 
+    /**
+     * 分级清理：缓存档（诊断导出、工作区分享暂存、PRoot 临时目录）与插件数据档
+     * （插件自己的 `data`/`config`/`storage`/`.config`）。
+     *
+     * 与 [RUNTIME_RESET] 分开记：重置动的是运行时本体，清理只是删缓存与插件数据，两件事的
+     * 破坏面不同，混在一个事件里以后没人能分清「到底是被重置了还是被清了」。只记动作与受控
+     * 结果码（如 `CLEANUP_LEDGER_UNAVAILABLE`、`RUNTIME_BUSY`）；删了哪些目录、涉及哪些包
+     * 一律不落审计——包名能反推用户装了什么，目录名能反推本机路径。
+     */
+    DATA_CLEANUP,
+
     /** 运行时版本：切换到保留下来的上一版本。 */
     RUNTIME_VERSION_SWITCH,
 

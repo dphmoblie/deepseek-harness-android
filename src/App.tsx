@@ -61,6 +61,7 @@ import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import { hasConfiguredModelCredential, MODEL_PROVIDERS } from './modelProviders'
 import { CustomProviders } from './components/CustomProviders'
 import { RuntimeResidueCard } from './components/RuntimeResidueCard'
+import { RuntimeCleanupCard } from './components/RuntimeCleanupCard'
 import { runtimeBridge } from './platform/native'
 import { readLogInsights } from './logInsights'
 import { validateHarnessPermissionMode } from './harnessPermissionMode'
@@ -2120,6 +2121,9 @@ function RuntimeVersionsPanel({
       )}
 
       <RuntimeResidueCard />
+
+      {/* 数据清理分两档（缓存 / 插件数据），运行环境那一档仍是上面的「重置运行环境」。 */}
+      <RuntimeCleanupCard />
 
       {!loading && !failed && (
         <>

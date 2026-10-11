@@ -126,6 +126,27 @@ object PluginInstallLock {
         return File(File(File(home, "versions"), transaction), "node_modules/${entry.id}")
     }
 
+    /** 一条账本事实对应的包目录；[id] 是包名，用来生成诊断与界面文案（**不进日志的路径字段**）。 */
+    data class PackageDirectory(val id: String, val directory: File)
+
+    /**
+     * 账本里「包目录确实还在保留区内」的那些目录（**只读**：只 stat、只求真实路径）。
+     *
+     * 判据与 [verify] 完全同一套（复用 [present]）：没有事务目录、目录不在、不是目录、或真实路径
+     * 越出保留区（畸形链接）的一律**不返回** —— 清理路径上不能删一个我们核不准的目标。
+     *
+     * 存在的意义：插件数据清理（`PluginDataPurge`）必须由账本驱动。遍历 `versions/` 去找
+     * 「看起来像插件目录」的东西会删到不该删的数据，而这条路径只认账本登记过的事实。
+     */
+    fun directories(home: File, snapshot: Snapshot): List<PackageDirectory> {
+        val root = canonical(home) ?: return emptyList()
+        return snapshot.entries.mapNotNull { entry ->
+            if (!present(root, home, entry)) return@mapNotNull null
+            val directory = directoryOf(home, entry) ?: return@mapNotNull null
+            PackageDirectory(entry.id, directory)
+        }
+    }
+
     private fun present(root: File, home: File, entry: Entry): Boolean {
         if (entry.version == null) return false
         val directory = directoryOf(home, entry) ?: return true

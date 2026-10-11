@@ -55,7 +55,11 @@ import io.deepseekharness.mobile.runtime.MailboxImportOutcome
 import io.deepseekharness.mobile.runtime.MailboxState
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
 import io.deepseekharness.mobile.runtime.RuntimeEventSink
+import io.deepseekharness.mobile.runtime.RuntimeCacheCleanup
+import io.deepseekharness.mobile.runtime.RuntimeCacheEntries
+import io.deepseekharness.mobile.runtime.RuntimeCleanupOutcome
 import io.deepseekharness.mobile.runtime.RuntimeFailure
+import io.deepseekharness.mobile.runtime.RuntimeFiles
 import io.deepseekharness.mobile.runtime.RuntimeHost
 import io.deepseekharness.mobile.runtime.RuntimeHttp
 import io.deepseekharness.mobile.runtime.RuntimeIntent
@@ -66,6 +70,7 @@ import io.deepseekharness.mobile.runtime.RuntimeAutoSnapshotOutcome
 import io.deepseekharness.mobile.runtime.RuntimeAutoSnapshotStatus
 import io.deepseekharness.mobile.runtime.RuntimeReleaseCatalog
 import io.deepseekharness.mobile.runtime.RuntimeResidueInventory
+import io.deepseekharness.mobile.runtime.RuntimeResidueSizing
 import io.deepseekharness.mobile.runtime.RuntimeSelfCheckPolicy
 import io.deepseekharness.mobile.runtime.RuntimeSessionSnapshotCodes
 import io.deepseekharness.mobile.runtime.RuntimeSettings
@@ -75,6 +80,7 @@ import io.deepseekharness.mobile.runtime.RuntimeValidation
 import io.deepseekharness.mobile.runtime.RuntimeVersionInfo
 import io.deepseekharness.mobile.runtime.RuntimeVersionPolicy
 import io.deepseekharness.mobile.runtime.RuntimeWorkspaceFiles
+import io.deepseekharness.mobile.runtime.residueBytesToken
 import io.deepseekharness.mobile.runtime.StorageDirCodes
 import io.deepseekharness.mobile.runtime.StorageDirectoryState
 import io.deepseekharness.mobile.runtime.StorageDirStatus
@@ -915,6 +921,146 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 权限：应用内桥接。
+     * 分级清理的现状读数：缓存档（登记条目的占用）与插件数据档（账本可用性 + 涉及包数）。
+     *
+     * 只读：跑着 Harness 时也允许看 —— 用户要能先看到「哪一档占了多少、现在能不能清」再决定
+     * 停机。只回条目名、计数与受控状态，**不回绝对路径、目录内容或包名**。
+     */
+    @PluginMethod
+    fun getRuntimeCleanupState(call: PluginCall) {
+        resolveWhileActive(call) {
+            JSObject()
+                .put("runtimeRunning", controller.state().phase == RuntimePhase.RUNNING)
+                .put("cache", cacheCleanupState())
+                .put("plugin", controller.pluginCleanupState())
+        }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 缓存档清理：只删登记过的三个目录（诊断导出、工作区分享暂存、PRoot 临时目录）。
+     *
+     * 运行时运行中直接拒绝（`RUNTIME_BUSY`）：这些目录里有正在跑的沙箱的临时文件与投递暂存，
+     * 边跑边删等于把一次会话打断。待安装的更新包**不在**这一档 —— 那是用户已经下载好的更新，
+     * 清掉只会让他重新下载一遍；运行时数据也不在（那是「重置运行环境」，破坏面完全不同）。
+     */
+    @PluginMethod
+    fun clearRuntimeCache(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.DATA_CLEANUP) {
+                try {
+                    val outcome = controller.clearRuntimeCache(context.cacheDir)
+                    recordCleanup("cache", outcome)
+                    outcome.toJs()
+                } catch (failure: RuntimeFailure) {
+                    recordCleanupDenied("cache", failure.code)
+                    throw failure
+                }
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 插件数据档清理：删掉每个已登记插件包内部的四个数据目录，**包本体一律不动**。
+     *
+     * 清哪些包完全由版本账本决定：账本读不出来时一个字节都不动，按受控错误码拒绝
+     * （`CLEANUP_LEDGER_UNAVAILABLE`），让界面如实说「清不了」——猜着删的代价远大于清不掉。
+     */
+    @PluginMethod
+    fun purgePluginData(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.DATA_CLEANUP) {
+                try {
+                    val outcome = controller.purgePluginData()
+                        ?: throw RuntimeFailure("CLEANUP_LEDGER_UNAVAILABLE", "插件版本账本不可用，未清理任何数据")
+                    recordCleanup("plugin_data", outcome)
+                    outcome.toJs()
+                } catch (failure: RuntimeFailure) {
+                    recordCleanupDenied("plugin_data", failure.code)
+                    throw failure
+                }
+            }
+        }
+    }
+
+    /**
+     * 缓存档现状：只对登记过的条目做 lstat 与尺寸统计，不读内容、不回绝对路径。
+     *
+     * `present` 与尺寸分开回：空目录也是「存在」的，界面要能同时说清「有这个目录」与「它现在
+     * 占多少」；两者都由同一份白名单驱动，缓存目录里没登记的条目一律不出现。
+     */
+    private fun cacheCleanupState(): JSObject {
+        val entries = org.json.JSONArray()
+        var files = 0
+        var bytes = 0L
+        for (name in RuntimeCacheEntries.CLEARABLE) {
+            val target = File(context.cacheDir, name)
+            val present = try {
+                RuntimeFiles.existsNoFollow(target)
+            } catch (_: Throwable) {
+                // 读不出来时按存在处理：让界面显示「有这个目录但读不到」，而不是显示成不存在。
+                true
+            }
+            val size = RuntimeResidueSizing.of(target)
+            entries.put(
+                JSObject()
+                    .put("name", name)
+                    .put("present", present)
+                    .put("files", size.entries)
+                    .put("bytes", size.bytes),
+            )
+            files += size.entries
+            bytes += size.bytes
+        }
+        return JSObject().put("entries", entries).put("files", files).put("bytes", bytes)
+    }
+
+    /**
+     * 清理结果落诊断：只记受控码与计数，不记目录名与包名（诊断日志可以导出分享）。
+     *
+     * `result` 的三种取值对应三件事：`ok` 全都删掉了、`failed` 删了但有条目失败、`denied` 根本没
+     * 开始（运行时在跑或账本不可用）。界面不会把失败说成成功，日志里也必须能分清。
+     */
+    private fun recordCleanup(reason: String, outcome: RuntimeCleanupOutcome) {
+        val fields = mutableMapOf(
+            "reason" to reason,
+            "result" to if (outcome.ok) "ok" else "failed",
+            "files" to outcome.files.toString(),
+            "bytes" to residueBytesToken(outcome.bytes),
+            "count" to outcome.scope.toString(),
+        )
+        if (outcome.failed > 0) fields["code"] = "CLEANUP_PARTIAL_FAILED"
+        diagnostics()?.record(
+            if (outcome.ok) DiagnosticLevel.INFO else DiagnosticLevel.WARN,
+            DiagnosticEvent.CLEANUP,
+            fields,
+        )
+    }
+
+    /** 清理被前置条件挡住（没开始就结束）：同样留一行，否则日志里「点过但什么都没发生」无从解释。 */
+    private fun recordCleanupDenied(reason: String, code: String) {
+        diagnostics()?.record(
+            DiagnosticLevel.WARN,
+            DiagnosticEvent.CLEANUP,
+            mapOf("reason" to reason, "result" to "denied", "code" to code),
+        )
+    }
+
+    /** 清理账的对外形状：只有计数与是否存在，与界面一一对应。 */
+    private fun RuntimeCleanupOutcome.toJs(): JSObject = JSObject()
+        .put("scope", scope)
+        .put("targets", targets)
+        .put("removed", removed)
+        .put("fallback", fallback)
+        .put("failed", failed)
+        .put("files", files)
+        .put("bytes", bytes)
+        .put("skipped", skipped)
+        .put("ok", ok)
+
+    /**
      * 取得进程级设备桥。
      *
      * 构建与配置只在 RuntimeHost 首次创建时执行一次：保活生效时 Harness 进程仍在运行，
@@ -1624,7 +1770,7 @@ class MobileRuntimePlugin : Plugin() {
             if (!workspace.isDirectory || Files.isSymbolicLink(workspace.toPath())) {
                 throw RuntimeFailure("WORKSPACE_EXPORT_UNAVAILABLE", "运行时工作区尚未准备好")
             }
-            val exportDir = File(context.cacheDir, "share")
+            val exportDir = File(context.cacheDir, RuntimeCacheEntries.WORKSPACE_SHARE)
             if ((!exportDir.isDirectory && !exportDir.mkdirs()) || Files.isSymbolicLink(exportDir.toPath())) {
                 throw RuntimeFailure("WORKSPACE_EXPORT_FAILED", "无法准备工作区分享目录")
             }

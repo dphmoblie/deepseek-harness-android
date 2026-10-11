@@ -140,6 +140,11 @@ export const bridge = {
   // 同上一条注释里的坑。
   getRuntimeResidue: vi.fn(),
   cleanRuntimeResidue: vi.fn(),
+  // 「数据清理」卡片与「运行时占用」卡片挨着渲染，进版本管理页会读一次数据占用；
+  // 两条清理入口只在用户点击后才调，同样必须有桩。
+  getRuntimeCleanupState: vi.fn(),
+  clearRuntimeCache: vi.fn(),
+  purgePluginData: vi.fn(),
   // 会话快照：界面进「运行环境」页会读一次总览，缺桩同样会让 effect 抛错并卸载整棵树。
   getRuntimeSessionSnapshotState: vi.fn(),
   createRuntimeSessionSnapshot: vi.fn(),
@@ -442,6 +447,15 @@ export function beforeEachAppTest(): void {
   // 关心这张卡片的用例自己覆盖这两条桩。
   bridge.getRuntimeResidue.mockResolvedValue({ count: 0, bytes: 0, truncated: false })
   bridge.cleanRuntimeResidue.mockResolvedValue({ cleaned: 0, failed: 0, reclaimedBytes: 0, message: '没有可回收的残留，无需清理' })
+  // 默认「缓存是空的、插件账本可用」：多数用例只关心别的页面，不该被一张写着占用的卡片影响；
+  // 关心这张卡片的用例自己覆盖这三条桩。
+  bridge.getRuntimeCleanupState.mockResolvedValue({
+    runtimeRunning: false,
+    cache: { entries: [], files: 0, bytes: 0 },
+    plugin: { ledger: 'ok', checked: 0 },
+  })
+  bridge.clearRuntimeCache.mockResolvedValue({ scope: 0, targets: 0, removed: 0, fallback: 0, failed: 0, files: 0, bytes: 0, skipped: 0, ok: true })
+  bridge.purgePluginData.mockResolvedValue({ scope: 0, targets: 0, removed: 0, fallback: 0, failed: 0, files: 0, bytes: 0, skipped: 0, ok: true })
   // 默认「没有任何快照」：多数用例只关心别的页面，不该被一份假快照影响；
   // 关心快照的用例自己覆盖这四条桩。上限取值与原生侧一致（3 份 / 512 MiB）。
   const emptySnapshotState = () => ({ maxSnapshots: 3, maxBytes: 512 * 1024 * 1024, totalBytes: 0, snapshots: [] })

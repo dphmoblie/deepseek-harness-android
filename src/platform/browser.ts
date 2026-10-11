@@ -21,6 +21,8 @@ import type {
   RuntimeInstallResult,
   RuntimeProgress,
   RuntimeReleaseList,
+  RuntimeCleanupOutcome,
+  RuntimeCleanupState,
   RuntimeResidueCleanupState,
   RuntimeResidueState,
   RuntimeSessionListResult,
@@ -562,6 +564,14 @@ export function createBrowserBridge(): RuntimeBridge {
     // 那会被界面显示成「没有可回收的残留」，等于把「做不到」说成「确认干净」。
     getRuntimeResidue: (): Promise<RuntimeResidueState> => Promise.reject(new Error('浏览器预览不支持运行时占用盘点')),
     cleanRuntimeResidue: (): Promise<RuntimeResidueCleanupState> => Promise.reject(new Error('浏览器预览不支持运行时残留清理')),
+    // 分级清理同理：预览里没有 `cacheDir`，也没有插件账本（`installed-lock.json` 在应用私有目录里）。
+    // 三条一律如实拒绝，**不要**回「0 项、0 字节」——那会被显示成「已经干净了」，等于把做不到说成确认干净。
+    getRuntimeCleanupState: (): Promise<RuntimeCleanupState> =>
+      Promise.reject(new Error('浏览器预览不支持数据占用盘点')),
+    clearRuntimeCache: (): Promise<RuntimeCleanupOutcome> =>
+      Promise.reject(new Error('浏览器预览不支持缓存清理')),
+    purgePluginData: (): Promise<RuntimeCleanupOutcome> =>
+      Promise.reject(new Error('浏览器预览不支持插件数据清理')),
     // 会话工作区在预览里没有原生侧那条只读通道：如实拒绝，让界面显示「读不到会话列表」+
     // 一句诚实说明。**不要**返回 `{ status: 'ready', sessions: [] }`——那会显示成「暂无会话」，
     // 等于把「读不到」编造成「确认没有」。

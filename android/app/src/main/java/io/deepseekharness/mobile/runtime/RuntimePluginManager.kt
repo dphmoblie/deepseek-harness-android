@@ -81,6 +81,30 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         .put("lock", lockStatus)
         .put("checked", lockChecked)
 
+    /**
+     * 插件数据清理（「插件数据」这一档）的只读读数：账本可用性 + 已核对到的插件条目数。
+     *
+     * 与 [recoverySnapshot] 的分工：那个回答「上次升级后自愈成什么样」，这个回答「现在能不能清、
+     * 大概涉及几个包」，所以会**顺手重核一次账本**（用户打开清理面板时要看到的是此刻的结论，
+     * 而不是上次迁移时的旧值）。重核只读一份小 JSON 加逐条 stat，不改动任何插件目录；「缺失」
+     * 的计数并入 [recoverySnapshot] 时取较大值，两次观测都不抹平对方。
+     *
+     * 不回包名与路径：界面只需要知道账本能不能用、涉及几个包，包名属于用户装了什么的隐私。
+     */
+    fun cleanupState(): JSObject {
+        val ledger = verifyInstallLock()
+        return JSObject().put("ledger", ledger).put("checked", lockChecked)
+    }
+
+    /**
+     * 清空已安装插件**自己的数据目录**（`data`/`config`/`storage`/`.config`），包本体一律不动。
+     *
+     * 破坏性且不可撤销，只由用户显式触发，绝不进启动自愈路径。清哪些包完全由版本账本决定
+     * （见 [PluginDataPurge]）：账本读不出来时返回 `null` 且一个字节都不动，让界面如实说明
+     * 「清不了、为什么」，而不是猜着删。
+     */
+    internal fun purgePluginData(): RuntimeCleanupOutcome? = PluginDataPurge(home).purge()
+
     fun recoverIfNeeded() {
         // 运行时升级通常不会留下 transaction.json：它会重建 profiles 清单，但保留
         // plugin-manager/state-snapshot.json。只检查事务文件会跳过正常升级后的状态回填，
