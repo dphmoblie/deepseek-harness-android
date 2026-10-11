@@ -15,6 +15,9 @@ const source = name => readFile(new URL(`../android/app/src/main/java/io/deepsee
 
 const policy = await source('VirtualScreenPolicy.kt')
 const service = await source('VirtualScreenService.kt')
+// 悬浮小窗的生命周期（含置前节流）已随第 4 步抽取搬进 VirtualScreenOverlayMachine：
+// 常量仍留在服务里、构造机器时传进去，判定本身在机器里。断言的意思不变 —— 1200 毫秒内必须提前返回。
+const machine = await source('VirtualScreenOverlayMachine.kt')
 
 test('frame cadence stays inside the documented budget table and never busy-polls', () => {
   const table = policy.slice(policy.indexOf('val FRAME_MODES'), policy.indexOf('虚拟显示器请求的合成刷新率'))
@@ -88,5 +91,7 @@ test('at most one displayed and one in-flight hardware buffer are held at a time
 
 test('bringing the preview overlay to the front is throttled instead of rebuilt on every tap', () => {
   assert.match(service, /private const val FRONT_THROTTLE_MILLIS = 1200L/u)
-  assert.match(service, /if \(now - lastFrontAtMs < FRONT_THROTTLE_MILLIS\) return/u)
+  // 常量的唯一来源仍是服务；机器从构造函数拿到它，判定在同一处提前返回。
+  assert.match(service, /frontThrottleMillis = FRONT_THROTTLE_MILLIS/u, '置前节流常量必须传给状态机')
+  assert.match(machine, /if \(now - lastFrontAtMs < frontThrottleMillis\) return/u, '节流窗口内必须直接返回，不重建窗口')
 })
