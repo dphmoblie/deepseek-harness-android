@@ -5,6 +5,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import io.deepseekharness.mobile.BuildConfig
+import io.deepseekharness.mobile.runtime.diagnostics.TransferFields
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -132,12 +133,22 @@ class RuntimeHttp {
             throw RuntimeFailure("DOWNLOAD_RANGE_INVALID", "下载服务返回了无效的断点响应", error)
         }
 
+        // 下载失败同样留下字节证据：下载路径与内置资产路径的失败码相同，
+        // 只有数字能把「还差多少没下完」和「下完了但摘要不对」分开。
         if (result.bytes != expectedBytes) {
-            throw RuntimeFailure("DOWNLOAD_INCOMPLETE", "运行时归档下载尚未完成，可再次安装继续下载")
+            throw RuntimeFailure(
+                "DOWNLOAD_INCOMPLETE",
+                "运行时归档下载尚未完成，可再次安装继续下载",
+                details = TransferFields.of(expectedBytes, result.bytes),
+            )
         }
         if (!constantTimeDigestEquals(result.sha256, expectedSha256)) {
             discardPartial(destination)
-            throw RuntimeFailure("ROOTFS_DIGEST_MISMATCH", "运行时归档摘要校验失败")
+            throw RuntimeFailure(
+                "ROOTFS_DIGEST_MISMATCH",
+                "运行时归档摘要校验失败",
+                details = TransferFields.of(expectedBytes, result.bytes, digestOk = false),
+            )
         }
         return result
     }

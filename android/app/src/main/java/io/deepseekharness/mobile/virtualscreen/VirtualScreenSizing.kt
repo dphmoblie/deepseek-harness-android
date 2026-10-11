@@ -313,6 +313,30 @@ object VirtualScreenWindow {
     const val MAX_SCREEN_WIDTH_RATIO = 0.94
     const val MAX_SCREEN_HEIGHT_RATIO = 0.84
 
+    /** 用户可调到的最小小窗宽度（dp）：再窄就看不清画面，也点不准。 */
+    const val MIN_OVERLAY_WIDTH_DP = 160f
+
+    /**
+     * 桥与偏好层收宽度时用的像素边界。
+     *
+     * 比 [MIN_OVERLAY_WIDTH_DP] 松是有意的：真正的下限要按设备密度与屏幕算，偏好层只挡明显不合理的值，
+     * 免得把「换到小屏手机后需要重夹」这种事变成写不进去。
+     */
+    const val MIN_OVERLAY_WIDTH_PX = 120
+    const val MAX_OVERLAY_WIDTH_PX = 4096
+
+    /**
+     * 右下角缩放手柄的触摸区边长（dp）。
+     *
+     * 与悬浮球对话小窗的手柄同值（`OverlayConversationSizePolicy.HANDLE_TOUCH_SIZE_DP`）：
+     * 44dp 是系统建议的最小触摸目标，低于它在真机上会明显「点不中」，而点不中的代价是
+     * 用户以为缩放功能坏了。
+     */
+    const val RESIZE_HANDLE_DP = 44f
+
+    /** 手柄距画面右下角的视觉留白（dp）：手柄贴着角放但内缩一点，免得与系统手势条重叠。 */
+    const val RESIZE_HANDLE_INSET_DP = 4f
+
     /**
      * 在 `maxWidth × maxHeight` 的矩形内求一个宽高比等于 [aspectRatio] 的最大内容尺寸。
      *
@@ -333,10 +357,54 @@ object VirtualScreenWindow {
     }
 
     /** 画面即窗口，无工具栏预算，也不裁切应用内容。 */
-    fun overlaySize(spec: VirtualScreenSpec, screenWidthPx: Int, screenHeightPx: Int, density: Float): OverlaySize {
-        val content = fitToAspect((screenWidthPx * MAX_SCREEN_WIDTH_RATIO).toInt(),
-            (screenHeightPx * MAX_SCREEN_HEIGHT_RATIO).toInt(), spec.aspectRatio)
+    fun overlaySize(spec: VirtualScreenSpec, screenWidthPx: Int, screenHeightPx: Int, density: Float): OverlaySize =
+        overlaySize(spec, screenWidthPx, screenHeightPx, density, null)
+
+    /**
+     * 同上，但可以带一个**用户指定的宽度**（像素）：`0` 或负数表示跟随屏幕最大。
+     *
+     * 为什么单独重载而不是给原函数加默认参数：改前那条签名被 20 个既有断言按位置调用，
+     * 保留它可以让「没给宽度」这条路径与改造前逐字一致，缩放这条路走新函数。
+     *
+     * 指定的宽度仍要夹回 94% 屏宽：横竖屏切换后，上一次存的宽度可能已经超出新屏幕。
+     * 夹完再走 [fitToAspect]，所以高度永远不超过 84% 屏高，比例也永远是画面比例（不产生黑边）。
+     */
+    fun overlaySize(spec: VirtualScreenSpec, screenWidthPx: Int, screenHeightPx: Int, density: Float, requestedWidthPx: Int?): OverlaySize {
+        val maxWidth = (screenWidthPx * MAX_SCREEN_WIDTH_RATIO).toInt().coerceAtLeast(1)
+        val maxHeight = (screenHeightPx * MAX_SCREEN_HEIGHT_RATIO).toInt().coerceAtLeast(1)
+        val target = requestedWidthPx?.takeIf { it > 0 }?.coerceAtMost(maxWidth)
+        val content = if (target != null) fitToAspect(target, maxHeight, spec.aspectRatio)
+        else fitToAspect(maxWidth, maxHeight, spec.aspectRatio)
         return OverlaySize(content.first, content.second, content.first, content.second)
+    }
+
+    /**
+     * 拖动右下角手柄之后的画面宽度：只算宽度，高度由 [fitToAspect] 按画面比例反算，
+     * 因此**缩放永远等比** —— 比例一变，`FIT_CENTER` 就会在画面四周补出黑边，触摸坐标也会跟着失真。
+     *
+     * 基准是**按下那一刻的宽度**而不是当前宽度：用当前宽度逐帧累加会把夹取结果也当成用户意图，
+     * 手指拖回原处时窗口却回不到原大小（与悬浮球对话小窗的 `resized` 同一条理由）。
+     *
+     * 上限取三者最小值：94% 屏宽、按 84% 屏高反算出的宽度、[MAX_OVERLAY_WIDTH_PX]；
+     * 下限 [minWidthPx] 与上限冲突时（超小屏、分屏里只剩几十像素）**上限优先** ——
+     * 宁可窗口比 160dp 更窄，也不能让它有一半在屏幕外（那样连手柄都摸不到），
+     * 但结果至少 1 像素，永远不会产生 0 尺寸窗口。
+     */
+    fun resizedOverlayWidth(
+        startWidthPx: Int,
+        deltaXPx: Int,
+        screenWidthPx: Int,
+        screenHeightPx: Int,
+        minWidthPx: Int,
+        aspectRatio: Double,
+    ): Int {
+        val ratio = if (aspectRatio.isFinite() && aspectRatio > 0.0) aspectRatio else 1.0
+        val widthCap = (screenWidthPx * MAX_SCREEN_WIDTH_RATIO).toInt().coerceAtLeast(1)
+        val heightCap = (screenHeightPx * MAX_SCREEN_HEIGHT_RATIO).toInt().coerceAtLeast(1)
+        val widthFromHeight = Math.round(heightCap * ratio).toInt().coerceAtLeast(1)
+        val upper = minOf(widthCap, widthFromHeight, MAX_OVERLAY_WIDTH_PX).coerceAtLeast(1)
+        val lower = minWidthPx.coerceIn(1, upper)
+        return (startWidthPx + deltaXPx).coerceIn(lower, upper)
     }
 
     /**

@@ -1286,6 +1286,9 @@ class MobileRuntimePlugin : Plugin() {
         resolveWhileActive(call) {
             val update: VirtualScreenSettingsUpdate = VirtualScreenPreferences.parseUpdate(JSONObject(data.toString()))
             VirtualScreenPreferences.apply(context, update)
+            // 宽度改了要让正在跑的悬浮小窗立刻跟着变，不必重开副屏。
+            // applyOverlayWidth 自己会 hop 到主线程，所以这里可以在桥线程直接调；没有小窗时是空操作。
+            update.overlayWidthPx?.let { width -> VirtualScreenService.current?.applyOverlayWidth(width) }
             virtualScreenSettingsPayload()
         }
     }
@@ -1367,6 +1370,9 @@ class MobileRuntimePlugin : Plugin() {
             .put("widthPx", settings.widthPx)
             .put("heightPx", settings.heightPx)
             .put("densityDpi", settings.densityDpi)
+            // 悬浮小窗的宽度（0 = 跟随屏幕最大）。页面里的预览与小窗共用这一项，
+            // 因此设置页显示的数值就是两处真正在用的数值。
+            .put("overlayWidthPx", settings.overlayWidthPx)
             .put(
                 "effective",
                 JSObject().put("widthPx", effective.widthPx).put("heightPx", effective.heightPx).put("densityDpi", effective.densityDpi),

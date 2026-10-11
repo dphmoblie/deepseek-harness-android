@@ -57,6 +57,17 @@ type DeviceLoadState =
   | { status: 'ready'; state: VirtualScreenState }
   | { status: 'unavailable'; reason: string }
 
+/**
+ * 悬浮窗宽度的可编辑范围与步进。
+ *
+ * 这一对数字与原生侧夹取用的区间同源（原生夹完 120..4096 还会再按屏幕尺寸夹一次）；
+ * 前端只把它们用在输入框的 min/max 与就地夹取上——**校验层不设上限**：
+ * 别的调用方给一个更大的值照样放过去，由原生兜底，界面不替原生拒绝。
+ */
+const OVERLAY_WIDTH_MIN = 120
+const OVERLAY_WIDTH_MAX = 4096
+const OVERLAY_WIDTH_STEP = 20
+
 /** 桥抛出来的原因文本；拿不到就返回空串，由调用处补一句通用文案。 */
 function failureReason(error: unknown): string {
   return error instanceof Error ? error.message.trim() : ''
@@ -89,6 +100,36 @@ function clampSpecField(field: SpecField, raw: string): number {
   if (!Number.isFinite(parsed)) return 0
   const { minimum, maximum } = specBounds(field)
   return Math.min(maximum, Math.max(minimum, Math.round(parsed)))
+}
+
+/**
+ * 草稿或基线里的悬浮窗宽度：**缺失与 0 同义**（都是「跟随屏幕最大」），一律按 0 归一化。
+ *
+ * 旧壳不发这个字段，界面要是直接拿 `undefined` 去比，用户一进页面就会被算成
+ * 「有未保存的改动」，什么都没碰却要按一次保存。
+ */
+function overlayWidthOf(value: VirtualScreenSettingsSnapshot): number {
+  return value.overlayWidthPx ?? 0
+}
+
+/** 原生侧用 0 表示「没有自定义宽度」，界面把 0 显示成空格子，旁边写「跟随屏幕」。 */
+function overlayWidthText(value: number): string {
+  return value === 0 ? '' : String(value)
+}
+
+/**
+ * 把宽度输入夹成合法值：空串、非数字、**0 与负数** → 0（跟随屏幕最大）；越界 → 就近的边界值。
+ *
+ * 与 `clampSpecField` 有一处刻意不同：负数在这里**不**夹到下限，而是回到 0——
+ * 原生侧 0 与负数同义，都是「清掉自定义宽度、恢复跟随屏幕最大」，界面照同一口径收敛，
+ * 用户看到的才和原生真正存下的一致。
+ */
+function clampOverlayWidth(raw: string): number {
+  const trimmed = raw.trim()
+  if (trimmed === '') return 0
+  const parsed = Number(trimmed)
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0
+  return Math.min(OVERLAY_WIDTH_MAX, Math.max(OVERLAY_WIDTH_MIN, Math.round(parsed)))
 }
 
 /** 三项都落在允许区间内才算一份能生效的自定义规格。 */
@@ -150,6 +191,9 @@ function specCleared(value: SpecValues): boolean {
  * 宽高与 DPI 三项**必须一起发**：原生侧是全有或全无（三项都合法才当作自定义尺寸，
  * 否则整组作废、改用预设规格）。只发其中一两项等于什么都没改，索性一项都不发，
  * 由界面在旁边说明原因；三项都清空则照发 0，那是「清掉自定义尺寸」的完整意图。
+ *
+ * 悬浮窗宽度是**独立一项**：它不参与那组「全有或全无」，只在真的变了才发
+ * （缺失与 0 同义，所以两边都先按 0 归一化再比）。
  */
 function settingsDiff(
   baseline: VirtualScreenSettingsSnapshot,
@@ -168,6 +212,7 @@ function settingsDiff(
     update.heightPx = draft.heightPx
     update.densityDpi = draft.densityDpi
   }
+  if (overlayWidthOf(draft) !== overlayWidthOf(baseline)) update.overlayWidthPx = overlayWidthOf(draft)
   return update
 }
 
@@ -217,6 +262,9 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
   const [target, setTarget] = useState('')
   const [specText, setSpecText] = useState<Record<SpecField, string>>({ widthPx: '', heightPx: '', densityDpi: '' })
   const [specHint, setSpecHint] = useState('')
+  // 悬浮窗宽度只有一个维度，用一条独立的输入串（0 显示成空格子，旁边写「跟随屏幕」）。
+  const [overlayText, setOverlayText] = useState('')
+  const [overlayHint, setOverlayHint] = useState('')
   const [busy, setBusy] = useState<'' | 'save' | 'start' | 'stop' | 'restart' | 'native'>('')
   const [saveFailure, setSaveFailure] = useState('')
   const [saveNotice, setSaveNotice] = useState('')
@@ -237,6 +285,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
     setDraft(next)
     setBaseline(next)
     setSpecText(specValues(next))
+    setOverlayText(overlayWidthText(overlayWidthOf(next)))
   }, [])
 
   const readSettings = useCallback(async (): Promise<void> => {
@@ -310,6 +359,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
     setActionFailure('')
     setActionNotice('')
     setSpecHint('')
+    setOverlayHint('')
     void readSettings()
     void readState()
   }
@@ -344,6 +394,51 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
     }
     setSpecText(current => ({ ...current, [field]: clamped === 0 ? '' : String(clamped) }))
     if (draft[field] !== clamped) setDraft(withSpec(draft, field, clamped))
+  }
+
+  /**
+   * 悬浮窗宽度一边打字一边只在「明显超过上限」时就地夹取，理由同 changeSpec：
+   * 低于下限的值可能只是 1200 打到一半的「1」，这时夹取会让人根本没法把数字打完。
+   */
+  function changeOverlayWidth(raw: string): void {
+    const trimmed = raw.trim()
+    const parsed = Number(trimmed)
+    if (trimmed !== '' && Number.isFinite(parsed) && parsed > OVERLAY_WIDTH_MAX) {
+      setOverlayText(String(OVERLAY_WIDTH_MAX))
+      setDraft(current => (current === null ? current : { ...current, overlayWidthPx: OVERLAY_WIDTH_MAX }))
+      setOverlayHint(t('悬浮窗宽度超出范围，已夹取到 {0}。', OVERLAY_WIDTH_MAX))
+      return
+    }
+    setOverlayText(raw)
+    setOverlayHint('')
+  }
+
+  /** 失焦时把宽度收敛成合法值：0、负数与非数字都回到「跟随屏幕最大」。 */
+  function commitOverlayWidth(): void {
+    if (draft === null) return
+    const raw = overlayText.trim()
+    const parsed = raw === '' ? 0 : Number(raw)
+    const width = clampOverlayWidth(raw)
+    if (raw !== '' && width !== parsed) {
+      setOverlayHint(width === 0
+        ? t('悬浮窗宽度只看正数，已改回跟随屏幕。')
+        : t('悬浮窗宽度超出范围，已夹取到 {0}。', width))
+    }
+    setOverlayText(overlayWidthText(width))
+    if (overlayWidthOf(draft) !== width) setDraft({ ...draft, overlayWidthPx: width })
+  }
+
+  /**
+   * 「恢复跟随屏幕」：把宽度写回 0。
+   *
+   * 输入框是受控的，所以除了草稿，输入串也要一起清空——不然框里还留着 820，
+   * 用户看到的「当前宽度」与框里的数字会对不上。
+   */
+  function followOverlayWidth(): void {
+    if (draft === null) return
+    setOverlayText('')
+    setOverlayHint('')
+    setDraft({ ...draft, overlayWidthPx: 0 })
   }
 
   async function save(): Promise<void> {
@@ -456,6 +551,8 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
 
   const locked = busy !== '' || draft === null
   const specReady = draft !== null && specComplete(draft)
+  // 0 是「跟随屏幕最大」：读设置失败（draft 为 null）时这一段本来就不会渲染，这里只做兜底。
+  const overlayWidth = draft === null ? 0 : overlayWidthOf(draft)
 
   return (
     <div className="screen virtual-screen-screen">
@@ -684,6 +781,51 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
                 {t('原生启动时还会做一次二次收敛（只缩不放），所以实际生效的规格以状态区读数为准。')}
               </p>
             )}
+          </section>
+
+          <section className="settings-subsection" aria-labelledby="virtual-screen-overlay-title">
+            <div className="section-title">
+              <span className="section-icon"><Monitor size={19} /></span>
+              <div>
+                <h3 id="virtual-screen-overlay-title">{t('悬浮窗大小')}</h3>
+                <p>{t('只设宽度：高度按副屏画面比例等比算出，不单独设置。')}</p>
+              </div>
+            </div>
+            <p className="settings-note" role="status" aria-label={t('当前悬浮窗宽度')}>
+              {overlayWidth === 0 ? t('跟随屏幕') : t('{0} 像素', overlayWidth)}
+            </p>
+            <div className="virtual-screen-spec">
+              <label className="field">
+                <span>{t('悬浮窗宽度')}</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  step={OVERLAY_WIDTH_STEP}
+                  min={OVERLAY_WIDTH_MIN}
+                  max={OVERLAY_WIDTH_MAX}
+                  aria-label={t('悬浮窗宽度')}
+                  value={overlayText}
+                  disabled={locked}
+                  onChange={event => changeOverlayWidth(event.target.value)}
+                  onBlur={commitOverlayWidth}
+                />
+              </label>
+              <button
+                className="button button-secondary compact-button"
+                type="button"
+                disabled={locked || overlayWidth === 0}
+                onClick={followOverlayWidth}
+              >
+                {t('恢复跟随屏幕')}
+              </button>
+            </div>
+            {overlayHint !== '' && <p className="virtual-screen-notice" role="status">{overlayHint}</p>}
+            <p className="settings-note">
+              {t('原生会把宽度夹在 {0}..{1} 像素之间，再按屏幕尺寸夹一次；高度跟着画面比例等比缩放。', OVERLAY_WIDTH_MIN, OVERLAY_WIDTH_MAX)}
+            </p>
+            <p className="settings-note">
+              {t('也可以直接拖动悬浮窗右下角的手柄调整大小，拖完点右上角「刷新」就能读回来。')}
+            </p>
           </section>
 
           <section className="settings-subsection" aria-labelledby="virtual-screen-preview-title">

@@ -295,6 +295,100 @@ describe('目标应用副屏设置页', () => {
     await waitFor(() => expect(save).toHaveBeenCalledWith({ widthPx: 0, heightPx: 0, densityDpi: 0 }))
   })
 
+  it('悬浮窗宽度按契约显示：自定义时是像素数，只给宽度一个维度', async () => {
+    const bridge = bridgeWith({
+      getVirtualScreenSettings: vi.fn().mockResolvedValue(settings({ overlayWidthPx: 820 })),
+      getVirtualScreenState: vi.fn().mockResolvedValue(state()),
+    })
+    render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
+    const width = await screen.findByRole('spinbutton', { name: '悬浮窗宽度' })
+    expect(width).toHaveValue(820)
+    expect(screen.getByText('820 像素')).toBeInTheDocument()
+    // 0 不在这里：当前值是 820，就该显示 820，不能同时说「跟随屏幕」。
+    expect(screen.queryByText('跟随屏幕')).toBeNull()
+    expect(screen.getByRole('button', { name: '恢复跟随屏幕' })).toBeEnabled()
+    // 高度由画面比例等比算出，界面不给第二个输入框。
+    expect(screen.queryByRole('spinbutton', { name: '悬浮窗高度' })).toBeNull()
+  })
+
+  it('旧壳不发 overlayWidthPx 时当作 0：显示「跟随屏幕」，也不算未保存的改动', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    const bridge = bridgeWith({
+      getVirtualScreenSettings: vi.fn().mockResolvedValue(settings()),
+      getVirtualScreenState: vi.fn().mockResolvedValue(state()),
+      setVirtualScreenSettings: save,
+    })
+    render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
+    expect(await screen.findByText('跟随屏幕')).toBeInTheDocument()
+    // 数字输入框清空后 value 是空串，jest-dom 对 type=number 统一按 null 断言。
+    expect(screen.getByRole('spinbutton', { name: '悬浮窗宽度' })).toHaveValue(null)
+    expect(screen.getByRole('button', { name: '恢复跟随屏幕' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    expect(await screen.findByText('没有需要保存的改动')).toBeInTheDocument()
+    expect(save).not.toHaveBeenCalled()
+  })
+
+  it('改悬浮窗宽度后保存只发 overlayWidthPx，不把别的字段一起带上', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    const bridge = bridgeWith({
+      getVirtualScreenSettings: vi.fn().mockResolvedValue(settings({ widthPx: 720, heightPx: 1600, densityDpi: 320 })),
+      getVirtualScreenState: vi.fn().mockResolvedValue(state()),
+      setVirtualScreenSettings: save,
+    })
+    render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
+    const width = await screen.findByRole('spinbutton', { name: '悬浮窗宽度' })
+    fireEvent.change(width, { target: { value: '820' } })
+    fireEvent.blur(width)
+    expect(await screen.findByText('820 像素')).toBeInTheDocument()
+    expect(screen.getByRole('spinbutton', { name: '副屏宽度' })).toHaveValue(720)
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ overlayWidthPx: 820 }))
+    expect(save).toHaveBeenCalledOnce()
+    expect(await screen.findByText('副屏设置已保存')).toBeInTheDocument()
+  })
+
+  it('「恢复跟随屏幕」把宽度写回 0，保存时照发 0', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    const bridge = bridgeWith({
+      getVirtualScreenSettings: vi.fn().mockResolvedValue(settings({ overlayWidthPx: 820 })),
+      getVirtualScreenState: vi.fn().mockResolvedValue(state()),
+      setVirtualScreenSettings: save,
+    })
+    render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
+    const reset = await screen.findByRole('button', { name: '恢复跟随屏幕' })
+    fireEvent.click(reset)
+    expect(await screen.findByText('跟随屏幕')).toBeInTheDocument()
+    // 输入框也要一起清空：否则「当前值说跟随屏幕、框里还留着 820」自相矛盾。
+    expect(screen.getByRole('spinbutton', { name: '悬浮窗宽度' })).toHaveValue(null)
+    expect(reset).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ overlayWidthPx: 0 }))
+  })
+
+  it('悬浮窗宽度越界就地夹取，负数回到「跟随屏幕」', async () => {
+    const bridge = bridgeWith({
+      getVirtualScreenSettings: vi.fn().mockResolvedValue(settings()),
+      getVirtualScreenState: vi.fn().mockResolvedValue(state()),
+    })
+    render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
+    const width = await screen.findByRole('spinbutton', { name: '悬浮窗宽度' })
+    fireEvent.change(width, { target: { value: '99999' } })
+    expect(width).toHaveValue(4096)
+    expect(screen.getByText('悬浮窗宽度超出范围，已夹取到 4096。')).toBeInTheDocument()
+    // 低于下限不立刻夹：否则 1200 打到「1」就被改成 120，数字根本没法打完。
+    fireEvent.change(width, { target: { value: '10' } })
+    expect(width).toHaveValue(10)
+    fireEvent.blur(width)
+    expect(width).toHaveValue(120)
+    expect(screen.getByText('悬浮窗宽度超出范围，已夹取到 120。')).toBeInTheDocument()
+    // 负数按原生口径收敛成 0（清掉自定义宽度），不是夹到下限 120。
+    fireEvent.change(width, { target: { value: '-20' } })
+    fireEvent.blur(width)
+    expect((width as HTMLInputElement).value).toBe('')
+    expect(screen.getByText('悬浮窗宽度只看正数，已改回跟随屏幕。')).toBeInTheDocument()
+    expect(screen.getByText('跟随屏幕')).toBeInTheDocument()
+  })
+
   it('设置读不到时也能停止副屏', async () => {
     const stop = vi.fn().mockResolvedValue(undefined)
     const bridge = bridgeWith({

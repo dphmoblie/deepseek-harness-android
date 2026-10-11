@@ -33,7 +33,11 @@ class VirtualScreenActivity : Activity() {
     private lateinit var stop: Button
     private lateinit var modes: LinearLayout
     private val modeButtons = mutableMapOf<String, Button>()
-    private var preview: VirtualScreenPreview? = null
+    /**
+     * 页面里的预览：与悬浮小窗同样是一个 [VirtualScreenFrame]（画面 + 右下角缩放手柄），
+     * 尺寸也走同一条规则与同一条偏好键，于是「预览页看到的」与「小窗里的」永远是同一个东西。
+     */
+    private var preview: VirtualScreenFrame? = null
     private var selecting = true
     private var resumed = false
     private var launchPendingUntil = 0L
@@ -80,6 +84,10 @@ class VirtualScreenActivity : Activity() {
         root.addView(status)
         content = FrameLayout(this)
         root.addView(content, LinearLayout.LayoutParams(-1, 0, 1f))
+        // 容器尺寸变了（旋转、分屏）就按新容器重算一次画面尺寸：宽度偏好不变，
+        // 但「能放下的最大画面」变了，不重算就会有一个方向上被裁掉。
+        // applyPagePreviewSize 内部只在尺寸真的变了时改布局参数，因此不会被这次布局再触发一次。
+        content.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyPagePreviewSize() }
         picker = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(picker, FrameLayout.LayoutParams(-1, -1))
         val query = EditText(this).apply {
@@ -225,16 +233,19 @@ class VirtualScreenActivity : Activity() {
                 picker.visibility = if (picking) View.VISIBLE else View.GONE
                 if (!running) { preview?.let { content.removeView(it) }; preview = null }
                 else if (preview == null) {
-                    preview = VirtualScreenPreview(this@VirtualScreenActivity).also {
-                        it.report = { text -> status.text = text }
+                    val frame = VirtualScreenFrame(this@VirtualScreenActivity).also {
+                        it.preview.report = { text -> status.text = text }
+                        it.installResize(pageResizeGesture)
                         // 预览第一个加进 content：它是最底层，档位行与底部按钮都画在它上面
                         // （规则见 VirtualScreenPolicy.foregroundOnTop）。
-                        // 这里与小窗用的是同一个控件类，取帧判定与状态行文案也共用
-                        // VirtualScreenPolicy.previewOutcome / previewLine，页面不会再单独走一套判定。
-                        content.addView(it, FrameLayout.LayoutParams(-1, -1))
+                        // 这里与小窗用的是同一个外壳：画面控件、缩放手柄、取帧判定与状态行文案全部共用，
+                        // 页面不会再单独走一套判定，两处看到的画面尺寸也就是同一个。
+                        it.layoutParams = pagePreviewParams(pageWidthPreferencePx())
+                        content.addView(it)
                         // 显式再抬一次档位行：预览刚加进来时子控件顺序变了，抬一次比假设顺序可靠。
                         modes.bringToFront()
                     }
+                    preview = frame
                 }
             }
             back.isEnabled = running; floating.isEnabled = running; stop.isEnabled = service != null
@@ -253,6 +264,50 @@ class VirtualScreenActivity : Activity() {
             main.postDelayed(this, 700)
         }
     }
+
+    /**
+     * 当前会话的画面比例。状态里读不到宽高时 [VirtualScreenSpec.decodeState] 会回退竖屏预设，
+     * 因此这里不会出现除零或 0 尺寸。
+     */
+    private fun pageSpec(): VirtualScreenSpec = VirtualScreenSpec.decodeState(VirtualScreenService.current?.state())
+
+    /** 页面预览与小窗共用同一条宽度偏好（`0` = 跟随可用区域最大）。 */
+    private fun pageWidthPreferencePx(): Int = VirtualScreenPreferences.read(this).overlayWidthPx
+
+    /**
+     * 页面预览的布局参数：用与小窗同一套 [VirtualScreenWindow.overlaySize]（同一比例、同一 94%/84% 上限），
+     * 只把「屏幕」换成页面里的 content 容器。于是「能放下的最大画面」在页面里就是容器的 94% × 84%，
+     * 用户拖出来的宽度两处一致，切换页面 / 小窗不会看到两种尺寸。
+     */
+    private fun pagePreviewParams(widthPx: Int): FrameLayout.LayoutParams {
+        val metrics = resources.displayMetrics
+        val containerWidth = content.width.takeIf { it > 0 } ?: metrics.widthPixels
+        val containerHeight = content.height.takeIf { it > 0 } ?: metrics.heightPixels
+        val size = VirtualScreenWindow.overlaySize(pageSpec(), containerWidth, containerHeight, metrics.density, widthPx)
+        return FrameLayout.LayoutParams(size.widthPx, size.heightPx, android.view.Gravity.CENTER)
+    }
+
+    /** 按当前偏好重算页面画面尺寸；只在真的变了时改布局参数，避免与布局回调互相触发。 */
+    private fun applyPagePreviewSize(widthPx: Int = pageWidthPreferencePx()) {
+        val frame = preview ?: return
+        val params = pagePreviewParams(widthPx)
+        if (frame.width == params.width && frame.height == params.height) return
+        frame.layoutParams = params
+    }
+
+    /**
+     * 页面里的缩放手柄：与悬浮小窗共用同一份手势逻辑，区别只在「改什么」——
+     * 页面里的画面不占独立窗口，改的是布局参数；落盘走同一条偏好键。
+     */
+    private val pageResizeGesture = VirtualScreenResizeGesture(
+        displayWidthPx = { content.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels },
+        displayHeightPx = { content.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels },
+        minWidthPx = { maxOf((VirtualScreenWindow.MIN_OVERLAY_WIDTH_DP * resources.displayMetrics.density).toInt(), VirtualScreenWindow.MIN_OVERLAY_WIDTH_PX) },
+        aspectRatio = { pageSpec().aspectRatio },
+        currentWidthPx = { preview?.width ?: 0 },
+        applyWidth = { applyPagePreviewSize(it) },
+        persistWidth = { VirtualScreenPreferences.saveOverlayWidth(this, it) },
+    )
 
     override fun onResume() { super.onResume(); resumed = true; VirtualScreenService.current?.hideOverlay(); main.post(refresh) }
     override fun onPause() {

@@ -549,6 +549,15 @@ export interface VirtualScreenSettings {
   widthPx: number
   heightPx: number
   densityDpi: number
+  /**
+   * 悬浮小窗的宽度（整数像素）。**0 表示没有自定义过**，跟随屏幕默认最大
+   * （94% 宽、84% 高，等比）。
+   *
+   * 按可选处理：旧版原生桥不发这个字段，缺失与 0 同义，界面读它时一律写成
+   * `overlayWidthPx ?? 0`——这样既有夹具与旧壳都不用跟着改。
+   * 只给宽度一个维度：高度由原生按副屏画面比例等比算出，界面不提供独立的高度输入。
+   */
+  overlayWidthPx?: number
 }
 
 /** 设置更新的局部载荷：只带要改的字段，其余保持原生侧现值。 */
@@ -560,6 +569,11 @@ export interface VirtualScreenSettingsUpdate {
   widthPx?: number
   heightPx?: number
   densityDpi?: number
+  /**
+   * 悬浮小窗宽度（整数像素）：**0 与负数表示清掉自定义宽度**（回到跟随屏幕最大），
+   * 正数由原生夹到 120..4096 再按屏幕夹取，前端不设上限。
+   */
+  overlayWidthPx?: number
 }
 
 /** 启动副屏的入参；`packageName` 是唯一必填项，其余缺省时由原生按已存设置补齐。 */
