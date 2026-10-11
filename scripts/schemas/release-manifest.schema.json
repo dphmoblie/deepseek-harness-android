@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "发布清单 release-manifest.json",
+  "description": "发布清单。生成侧：scripts/release-manifest.py 的 build_manifest()（第 62-82 行），在 publish-release 作业里于 checksums.txt 之前生成、随后随 Release 一起上传。消费侧：用户与排查者（以及 scripts/verify-release-assets.py 的复核清单）用它把线上包对应回源码提交，不依赖解压 300MB 的 APK。这里校验的是「脚本产出的形状」，样本由 scripts/validate-manifests.test.mjs 真跑该脚本生成（脚本本身既有行为不改）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "appVersion", "releaseTag", "releaseType", "commit", "assets"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "清单格式版本，对应 scripts/release-manifest.py:29 的 SCHEMA_VERSION。"
+    },
+    "appVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$",
+      "description": "应用版本号，必须与 android/app/build.gradle 的 versionName 一致。"
+    },
+    "releaseTag": {
+      "type": "string",
+      "pattern": "^v[0-9A-Za-z][0-9A-Za-z.+-]*$",
+      "description": "发布标签，例如 v0.2.13-mobile-306。必须以 v 开头，否则发布标签与清单里的其他字段会对不上。"
+    },
+    "releaseType": {
+      "enum": ["preview", "stable"],
+      "description": "发布类型，来自 workflow_dispatch 的 release_type 输入；只有这两个取值。"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{7,40}$",
+      "description": "发布对应的提交号（小写十六进制，7..40 位）。生成侧会把输入转成小写，写错大小写或长度都在这里失败。"
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "description": "随发布上传的三个资产：APK、rootfs.bundle、runtime-manifest.json。多一个少一个都说明发布脚本或上传清单被改过。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "sha256", "bytes"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "description": "资产文件名（用 basename 登记，不含路径）。"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "资产内容的 SHA-256（小写十六进制）。"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "资产字节数。与 checksums.txt、实际下载回来的文件三方对照。"
+          }
+        }
+      }
+    }
+  }
+}

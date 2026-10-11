@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "移动端 profile 清单（--mobile-profile 输入）",
+  "description": "构建期输入的移动端 profile：scripts/mobile-profile.example.json（CI 的 build-rootfs 作业用 --mobile-profile 把它交给 scripts/build-embedded-runtime.py）。生成侧：手写；消费侧（构建期 Python）：scripts/build-embedded-runtime.py:209-257 的 validate_mobile_profile() 会验收一遍，再把 dsh.profile.bundles 写进 rootfs 内的 root/.dsh/profiles/web/package.json，并把整份 profile 原样回填进 runtime-manifest.json 的 mobile 字段。也就是说这份文件同时决定「容器内 Node 装哪些 bundle」与「原生侧看到什么」。schema 与 validate_mobile_profile 的取值范围保持一致（1..64 个 bundle、idleStopMinutes 1..1440）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["dsh"],
+  "properties": {
+    "dsh": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile"],
+      "description": "dsh 自身的 profile 配置段。",
+      "properties": {
+        "profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["bundles"],
+          "properties": {
+            "bundles": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 64,
+              "uniqueItems": true,
+              "description": "要装载的 bundle 列表：dsh-base 提供核心、dsh-web-app 提供官方前端、dsh-mobile-shizuku 是本仓库的 Android 设备工具插件。少一个都会让运行时起不来或功能缺失。",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 214,
+                "pattern": "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$",
+                "description": "npm 包标识符，例如 @deepseek-ai/dsh-base。"
+              }
+            }
+          }
+        }
+      }
+    },
+    "mobile": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "可选的移动端适配参数。整段缺省时运行时按默认值走。",
+      "properties": {
+        "layout": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "description": "移动端布局标识符。"
+        },
+        "disabledOnMobile": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 214,
+            "pattern": "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$"
+          },
+          "description": "在移动端要禁用的包标识符列表。"
+        },
+        "idleStopMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1440,
+          "description": "空闲多久后停掉运行时（分钟）。取值上限 1440 与 validate_mobile_profile 一致。"
+        },
+        "embedRootfs": {
+          "type": "boolean",
+          "description": "是否把 rootfs 内嵌进包体（离线安装用）。"
+        }
+      }
+    }
+  }
+}

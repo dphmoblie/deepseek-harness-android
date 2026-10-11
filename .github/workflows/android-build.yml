@@ -481,6 +481,16 @@ jobs:
           # 这里刻意不做成 advisory：重复副本必须拦住上传，不能只打日志。
           node scripts/check-runtime-dedupe.mjs --list /tmp/dsh-root
 
+      # 校验刚构建出来的更新清单符合 schema。这份 JSON 会写进 APK 资产，又由原生侧
+      # （RuntimeModels/RuntimeStore）解析来决定装哪个运行时：字段改名却只改了一侧，
+      # 以前要等真机启动失败才发现，现在构建阶段就拦住。
+      # 与 gates 作业里那条校验的分工：这里校验「刚构建出来的这一份」，那边校验仓库内受管清单。
+      - name: Validate generated runtime manifest
+        run: |
+          node scripts/validate-manifests.mjs \
+            --file runtime-artifacts/runtime-manifest.json \
+            --schema scripts/schemas/runtime-manifest.schema.json
+
       - name: Upload runtime
         uses: actions/upload-artifact@v4
         with:
@@ -677,3 +687,71 @@ jobs:
             -d '{"draft":true}' \
             "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}" >/dev/null
           echo "已把 ${RELEASE_TAG} 转为草稿：确认误报改回正式，确属坏版本则删除该 Release 与标签后升 APP_VERSION 重发"
+
+  # 与构建无关、但必须挡在合并前的检查集中放这里。刻意不写进 publish-release 的 needs：
+  # 发布链路的依赖关系与时长保持原样，本作业失败会让这次 run 变红，但不会阻断或拖慢已有发布流程。
+  gates:
+    name: Quality gates (whitespace / Android resources / manifest schema / secrets)
+    runs-on: ubuntu-24.04
+    steps:
+      # 比区间和扫区间都要按提交历史取基线，浅克隆会让基线取不到。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js 24.14.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+
+      # 最轻的检查放最前面：行尾空白、冲突标记、文件末尾多出的空白行。
+      # 只比本次推送区间——仓库历史文件本来就带着既有的空白问题（比如和空树比会立刻误报几十行）。
+      - name: Check whitespace in the pushed range
+        run: |
+          set -euo pipefail
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          HEAD_SHA="${{ github.sha }}"
+          if [ -z "${BASE}" ] || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "取不到本次推送的基线提交（新建分支 / 强推 / 手工触发），退回只比 HEAD 上一提交"
+            BASE="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          fi
+          if [ -z "${BASE}" ]; then
+            echo "::notice::仓库只有 HEAD 一个提交，没有可比区间，跳过 git diff --check"
+            exit 0
+          fi
+          echo "比较区间：${BASE}..${HEAD_SHA}"
+          git diff --check "${BASE}" "${HEAD_SHA}"
+          echo "git diff --check 通过：区间内没有行尾空白 / 冲突标记 / 多余空行"
+
+      # 资源检查不需要 Android SDK：查 strings.xml 各语言翻译是否齐全、@string/@drawable 之类引用是否都能解析。
+      # 这类问题以前只有 ./gradlew lintRelease（build 作业，跑到这里通常已经十几分钟）才会暴露。
+      - name: Check Android resources
+        run: python3 scripts/check-android-resources.py
+
+      # 插件清单 / 更新清单 / 移动端 profile 清单的 JSON Schema 校验（校验器是本仓库自带的，无第三方依赖）。
+      # 这些清单字段是原生侧与容器内 Node 的共同契约：改了一侧漏改另一侧，以前要等真机或发布后才炸。
+      - name: Validate manifests against schemas
+        run: node scripts/validate-manifests.mjs
+
+      # 凭据扫描。必须只扫本次推送区间：全历史扫描会把仓库早期已经修掉的诱饵值再报一遍，
+      # 门禁一上线就是红的；区间扫描同样是真扫描，区间里真出现凭据时以 1 退出。
+      - name: Scan the pushed range for credentials (gitleaks)
+        env:
+          GITLEAKS_VERSION: '8.30.1'
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSfL \
+            -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          # 摘要取自该 Release 的资产 digest（GitHub API 公布值），不是下载后现算的，
+          # 所以能挡下被替换或截断的产物。
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks version
+
+          # 区间回退、扫到 0 个提交就算失败、发现凭据就算失败，都在这个脚本里：
+          # 本机可以拿同一份脚本和同一个扫描器复现（见 docs/RELEASE_CHECKLIST.md 的门禁清单）。
+          bash scripts/ci-gitleaks-range-scan.sh \
+            --gitleaks /tmp/gitleaks \
+            --base "${{ github.event.pull_request.base.sha || github.event.before }}" \
+            --head "${{ github.sha }}"

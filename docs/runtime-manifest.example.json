@@ -15,5 +15,6 @@
     "shell": ["/bin/bash", "--login"],
     "harness": ["/usr/local/bin/dsh", "web", "--host", "127.0.0.1", "--port", "3080"]
   },
-  "harnessUrl": "http://127.0.0.1:3080/"
+  "harnessUrl": "http://127.0.0.1:3080/",
+  "profileLinks": 485
 }

@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "插件清单（插件包 package.json）",
+  "description": "仓库内的插件包清单：scripts/runtime-profile/plugins/<插件名>/package.json（当前为 dsh-mobile-shizuku）。生成侧：没有生成器，是手写并被 pnpm workspace 安装进 rootfs 的源文件。消费侧（容器内 Node）：rootfs 里的 android/app/src/main/assets/support/plugin-manager.cjs 读三处——① pkg.name 必须等于插件目录 id；② pkg.version 用于版本比较（≤64 字符）；③ pkg.dsh.bundle.patch 指向要插入的补丁文件（第 1212 行起，正则 ^(?:\\./)?[A-Za-z0-9_./-]+\\.(?:json|ya?ml)$ 且 ≤160 字符）。这里把这三条运行时约束写进 schema，让「改了字段名/路径但运行时读不到」在 CI 就暴露。",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["name", "version", "private", "type", "main", "exports", "files", "dsh"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 214,
+      "pattern": "^@[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$",
+      "description": "包名。必须是 @scope/name 形式的 scoped 包：plugin-manager.cjs 按目录 id 与它比对，写成裸名会让插件在运行时「找不到自己的清单」。"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$",
+      "description": "插件版本。升级判断直接用它，长度上限 64 来自 plugin-manager.cjs。"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "description": "插件用途说明（会出现在插件列表里）。"
+    },
+    "private": {
+      "const": true,
+      "description": "插件随 rootfs 一起打包、不单独发 npm，必须为 true，避免误发布。"
+    },
+    "type": {
+      "enum": ["module", "commonjs"],
+      "description": "模块制式。插件的 lib/*.js 用 ESM 写，所以是 module。"
+    },
+    "main": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9_][A-Za-z0-9_./-]*\\.(?:js|mjs|cjs)$",
+      "description": "入口文件（相对包根目录），必须指到真实存在的 .js 文件。"
+    },
+    "exports": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+        "pattern": "^\\./[A-Za-z0-9_][A-Za-z0-9_./-]*$"
+      },
+      "description": "对外导出表。cordis 装载插件时按 \"@deepseek-harness/dsh-mobile-shizuku\" 与 \"./cordis.patch.yml\" 两个键取值，键少一个插件就装不上。"
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 160,
+        "pattern": "^(?:\\./)?[A-Za-z0-9_][A-Za-z0-9_./-]*$"
+      },
+      "description": "打进包的文件清单。漏列 lib/*.js 或 cordis.patch.yml 会在 rootfs 里装出一个残缺插件。"
+    },
+    "dsh": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bundle"],
+      "description": "dsh 插件专用字段。plugin-manager.cjs 只认 dsh.bundle.patch 这一个路径，多写别的键说明清单与运行时已经脱节。",
+      "properties": {
+        "bundle": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["patch"],
+          "properties": {
+            "patch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160,
+              "pattern": "^(?:\\./)?[A-Za-z0-9_./-]+\\.(?:json|ya?ml)$",
+              "description": "插件补丁文件路径（相对包根目录）。正则与 plugin-manager.cjs:1212 的运行时校验一致。"
+            }
+          }
+        }
+      }
+    },
+    "peerDependencies": {
+      "type": "object",
+      "minProperties": 0,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "description": "宿主必须提供的包（cordis 与 dsh-* 系列）。写错版本范围会让插件在运行时加载失败。"
+    }
+  }
+}
