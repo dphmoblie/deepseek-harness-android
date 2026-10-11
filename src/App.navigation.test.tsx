@@ -43,6 +43,8 @@ const bridge = vi.hoisted(() => ({
   getAccessibilityAutomationRuns: vi.fn(),
   getAccessibilityAutomationRules: vi.fn(),
   setAccessibilityAutomationRuleEnabled: vi.fn(),
+  saveAccessibilityAutomationRule: vi.fn(),
+  deleteAccessibilityAutomationRule: vi.fn(),
   openAccessibilitySettings: vi.fn(),
   getKeepAliveState: vi.fn(),
   getOverlayBallState: vi.fn(),
@@ -199,6 +201,13 @@ beforeEach(() => {
     packageName: 'com.example.target', allowed: false, corrupt: null, rules: [],
   })
   bridge.setAccessibilityAutomationRuleEnabled.mockResolvedValue({
+    packageName: 'com.example.target', allowed: true, corrupt: null, rules: [],
+  })
+  // 新建 / 改写 / 删除都回「写完之后整包读数」；导航用例不关心内容，给一份空列表即可。
+  bridge.saveAccessibilityAutomationRule.mockResolvedValue({
+    packageName: 'com.example.target', allowed: true, corrupt: null, rules: [],
+  })
+  bridge.deleteAccessibilityAutomationRule.mockResolvedValue({
     packageName: 'com.example.target', allowed: true, corrupt: null, rules: [],
   })
   bridge.openAccessibilitySettings.mockResolvedValue(undefined)

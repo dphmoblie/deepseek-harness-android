@@ -5,6 +5,8 @@ import type {
   AccessibilityAutomationAction,
   AccessibilityAutomationRuntime,
   AccessibilityAutomationRules,
+  AccessibilityAutomationRuleInput,
+  AccessibilityAutomationRuleWriteMode,
   AccessibilityAutomationRuns,
   AccessibilityAutomationState,
   DiagnosticLogText,
@@ -41,7 +43,7 @@ import type {
 } from './types'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityPackageName, assertAccessibilityRuleId, assertBooleanFlag, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
+import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
@@ -425,6 +427,32 @@ export function createBrowserBridge(): RuntimeBridge {
         assertAccessibilityPackageName(options.packageName)
         assertAccessibilityRuleId(options.ruleId)
         assertBooleanFlag(options.enabled, '规则启用状态')
+        throw new Error('浏览器预览不能修改无障碍规则')
+      })
+    },
+    /*
+     * 新建 / 改写与删除同样没有对应物，也**不假装成功**：预览里「保存成功」而真机上没有这条规则，
+     * 是最容易让人以为已经配好的假象。入参自检照旧走被拒绝的 Promise（同步抛出会绕过失败分支）。
+     */
+    saveAccessibilityAutomationRule: (options: {
+      packageName: string
+      mode: AccessibilityAutomationRuleWriteMode
+      rule: AccessibilityAutomationRuleInput
+    }): Promise<AccessibilityAutomationRules> => {
+      return Promise.resolve().then(() => {
+        const owner = assertAccessibilityPackageName(options.packageName)
+        assertAccessibilityRuleWriteMode(options.mode)
+        assertAccessibilityAutomationRuleInput(options.rule, owner)
+        throw new Error('浏览器预览不能修改无障碍规则')
+      })
+    },
+    deleteAccessibilityAutomationRule: (options: {
+      packageName: string
+      ruleId: string
+    }): Promise<AccessibilityAutomationRules> => {
+      return Promise.resolve().then(() => {
+        assertAccessibilityPackageName(options.packageName)
+        assertAccessibilityRuleId(options.ruleId)
         throw new Error('浏览器预览不能修改无障碍规则')
       })
     },

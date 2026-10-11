@@ -675,6 +675,145 @@ export interface AccessibilityAutomationRules {
   rules: AccessibilityAutomationRule[]
 }
 
+/** 自动化动作类型；与原生 `AutomationAction.TYPES` 逐字一致。 */
+export type AccessibilityAutomationActionKind =
+  | 'click' | 'clickCenter' | 'longClick' | 'back'
+  | 'swipe' | 'key' | 'wait' | 'launch'
+
+/** 动作类型全集；顺序即界面下拉的顺序。 */
+export const ACCESSIBILITY_AUTOMATION_ACTION_KINDS: AccessibilityAutomationActionKind[] = [
+  'click', 'clickCenter', 'longClick', 'back', 'swipe', 'key', 'wait', 'launch',
+]
+
+/** 滑动方向；与原生 `AutomationAction.DIRECTIONS` 一致。 */
+export type AccessibilityAutomationSwipeDirection = 'up' | 'down' | 'left' | 'right'
+
+/** 滑动方向全集；顺序即界面下拉的顺序。 */
+export const ACCESSIBILITY_AUTOMATION_SWIPE_DIRECTIONS: AccessibilityAutomationSwipeDirection[] = [
+  'up', 'down', 'left', 'right',
+]
+
+/** 计数器重置时机；与原生 `AutomationRule` 的 `activity` / `screen` 一致（默认 `activity`）。 */
+export type AccessibilityAutomationResetOn = 'activity' | 'screen'
+
+/** 重置时机全集；顺序即界面下拉的顺序。 */
+export const ACCESSIBILITY_AUTOMATION_RESET_ON_VALUES: AccessibilityAutomationResetOn[] = ['activity', 'screen']
+
+/**
+ * `key` 动作允许的按键：键名 → 键值。
+ *
+ * 与原生 `AutomationKeyCodes.BY_NAME` 是**同一张表、同一顺序**：原生刻意不放开整段 `KeyEvent`
+ * （里面含电源、恢复出厂这类按键），所以界面只能从这张表里选。界面用键名做下拉、发送数值 `keyCode`。
+ * 顺序由 `scripts/native-bridge-parity.test.mjs` 与 Kotlin 那张表逐项比对守着，改一处就得改两处。
+ */
+export const AUTOMATION_KEY_CODES: ReadonlyArray<readonly [string, number]> = [
+  ['BACK', 4],
+  ['DPAD_UP', 19],
+  ['DPAD_DOWN', 20],
+  ['DPAD_LEFT', 21],
+  ['DPAD_RIGHT', 22],
+  ['DPAD_CENTER', 23],
+  ['TAB', 61],
+  ['SPACE', 62],
+  ['ENTER', 66],
+  ['DEL', 67],
+  ['ESC', 111],
+]
+
+/**
+ * 规则与存储的上限；**数值与原生 `AutomationRuleLimits` 同源**。
+ *
+ * 前端只用它做一次本地预检（输入框的 min/max、选择器条数），判定权始终在原生：
+ * 这里另立一套阈值，只会让「界面允许、写盘被拒」这种事发生在用户眼皮底下。
+ */
+export const AUTOMATION_RULE_LIMITS = {
+  maxRulesPerPackage: 40,
+  maxPackageJsonBytes: 64 * 1024,
+  maxTotalJsonBytes: 256 * 1024,
+  maxSelectors: 16,
+  maxStringChars: 200,
+  matchDelayMs: { min: 0, max: 5000 },
+  maxActions: { min: 1, max: 99 },
+  actionCoolDownMs: { min: 0, max: 600000 },
+  swipeDurationMs: { min: 100, max: 2000 },
+  waitDelayMs: { min: 1, max: 10000 },
+} as const
+
+/**
+ * 一个选择器；多个选择器之间是 AND。
+ *
+ * 字段都可选，但**整项至少要有一个非空条件**，否则原生拒收。三个布尔字段表达的是
+ * 「不填即不限制」，而不是 `false`：`clickable: false` 是「只匹配不可点击的节点」这个
+ * 真实约束，与「不关心是否可点击」不是一回事，因此界面给的是「不限 / 是 / 否」三态。
+ */
+export interface AccessibilityAutomationSelectorInput {
+  text?: string
+  textContains?: string
+  textStartsWith?: string
+  textEndsWith?: string
+  /** `包名:id/名称` 或短写 `:id/名称`。 */
+  id?: string
+  desc?: string
+  descContains?: string
+  className?: string
+  clickable?: boolean
+  enabled?: boolean
+  editable?: boolean
+  minWidth?: number
+  minHeight?: number
+}
+
+/**
+ * 动作；字段随 [type] 收窄。
+ *
+ * `swipe` 认 `durationMs` + `direction`，`key` 认 `keyCode`，`wait` 认 `delayMs`，
+ * `launch` 认 `component` / `uri`（至少一个），其余类型只认 `type`。原生对「这个类型里出现了
+ * 不该有的字段」是**整体拒绝**，所以这里也不留多余字段。
+ */
+export interface AccessibilityAutomationActionInput {
+  type: AccessibilityAutomationActionKind
+  durationMs?: number
+  direction?: AccessibilityAutomationSwipeDirection
+  keyCode?: number
+  delayMs?: number
+  /** `包名/类名`。 */
+  component?: string
+  /** 只允许 `http://`、`https://`、`market://` 开头。 */
+  uri?: string
+}
+
+/**
+ * 一条规则的完整内容（写盘用）。
+ *
+ * 与界面读数分开：读数是给界面判断用的（不带选择器正文），这里是**整条替换**的内容。
+ * 字段名与原生 `AutomationRule.fromJson` 一一对应——它遇到未知字段是整体拒绝，
+ * 所以多写一个它不认识的名字不是「被忽略」，而是「整条写不进去」。
+ *
+ * 注意 `update` 也是整条替换：没给全的字段**不会**保持原样，而是按原生默认值写下去。
+ * 界面因此必须先把整条填完整，再提交。
+ */
+export interface AccessibilityAutomationRuleInput {
+  /** `^[A-Za-z0-9._-]{1,64}$`；编辑时界面里只读（改 id 等于换一条规则）。 */
+  id: string
+  /** 必须与请求里的 `packageName` 一致，否则原生拒收。 */
+  packageName: string
+  enabled: boolean
+  /** Activity 白名单正则；空数组表示不限制。 */
+  allowActivities: string[]
+  /** Activity 黑名单正则；空数组表示不限制。 */
+  denyActivities: string[]
+  matchDelayMs: number
+  maxActions: number
+  actionCoolDownMs: number
+  resetOn: AccessibilityAutomationResetOn
+  /** 1..[AUTOMATION_RULE_LIMITS.maxSelectors] 项，每项至少一个条件。 */
+  selectors: AccessibilityAutomationSelectorInput[]
+  action: AccessibilityAutomationActionInput
+}
+
+/** 规则的写入方式：`create` 要求 id 不存在，`update` 要求 id 已存在；不做隐式搬迁。 */
+export type AccessibilityAutomationRuleWriteMode = 'create' | 'update'
+
 /**
  * 目标应用副屏的取帧档位。
  *
@@ -1239,6 +1378,29 @@ export interface RuntimeBridge {
     packageName: string
     ruleId: string
     enabled: boolean
+  }) => Promise<AccessibilityAutomationRules>
+  /**
+   * 新建或整条改写一条规则，返回**写完之后**该包的整包读数。
+   *
+   * 返回整包读数（而不是被写的那一条、也不是 void）是为了让界面直接拿它刷新列表：
+   * 写完再读一次会多一次往返，两次调用之间还可能出现「读回来的比写进去的旧」。
+   * 同理，`mode` 不做隐式推断——`create` 撞 id 与 `update` 找不到 id 都必须报出来，
+   * 而不是悄悄改掉或新建一条（改 id 等于换一条规则，迁移是用户的决定）。
+   */
+  saveAccessibilityAutomationRule: (options: {
+    packageName: string
+    mode: AccessibilityAutomationRuleWriteMode
+    rule: AccessibilityAutomationRuleInput
+  }) => Promise<AccessibilityAutomationRules>
+  /**
+   * 删除一条规则，返回**删完之后**该包的整包读数。
+   *
+   * 只按 id 删，找不到就报错：静默成功会让用户以为删掉了，而列表刷新后又出现（或更糟，
+   * 以为删干净了其实索引错位删掉了别人）。
+   */
+  deleteAccessibilityAutomationRule: (options: {
+    packageName: string
+    ruleId: string
   }) => Promise<AccessibilityAutomationRules>
   /**
    * 用系统生物识别 / 锁屏密码重置验证密码——「忘记密码」的唯一出路。

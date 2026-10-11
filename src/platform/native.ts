@@ -31,6 +31,8 @@ import type {
 import {
   ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES,
   type AccessibilityAutomationAction,
+  type AccessibilityAutomationRuleInput,
+  type AccessibilityAutomationRuleWriteMode,
 } from './types'
 import {
   assertBase64Input,
@@ -46,8 +48,10 @@ import {
   validateAllFilesAccessResult,
   validateAppUpdateState,
   assertAccessibilityAutomationAction,
+  assertAccessibilityAutomationRuleInput,
   assertAccessibilityPackageName,
   assertAccessibilityRuleId,
+  assertAccessibilityRuleWriteMode,
   assertBooleanFlag,
   validateAccessibilityAutomationRules,
   validateAccessibilityAutomationRuns,
@@ -160,6 +164,14 @@ interface NativeRuntimePlugin {
     ruleId: string
     enabled: boolean
   }): Promise<unknown>
+  /** 新建或整条改写一条规则；`mode` 不隐式推断（撞 id / 找不到都必须报出来）。 */
+  saveAccessibilityAutomationRule(options: {
+    packageName: string
+    mode: AccessibilityAutomationRuleWriteMode
+    rule: AccessibilityAutomationRuleInput
+  }): Promise<unknown>
+  /** 删除一条规则；找不到就报错，不做静默成功。 */
+  deleteAccessibilityAutomationRule(options: { packageName: string; ruleId: string }): Promise<unknown>
   openAccessibilitySettings(): Promise<void>
   getKeepAliveState(): Promise<KeepAliveState>
   requestNotificationPermission(): Promise<NotificationPermissionResult>
@@ -361,6 +373,27 @@ function createNativeBridge(): RuntimeBridge {
         enabled: assertBooleanFlag(enabled, '规则启用状态'),
       }))
       .then(options => NativeRuntime.setAccessibilityAutomationRuleEnabled(options))
+      .then(validateAccessibilityAutomationRules),
+    // 新建 / 改写：白名单与内容规则都在原生侧判定，这边只保证「结构明显不合法」的东西不过桥。
+    // 写法与上一条一致——入参校验折进 Promise 链，失败同样落在调用方的 catch 分支里。
+    saveAccessibilityAutomationRule: ({ packageName, mode, rule }) => Promise.resolve()
+      .then(() => {
+        const owner = assertAccessibilityPackageName(packageName)
+        return {
+          packageName: owner,
+          mode: assertAccessibilityRuleWriteMode(mode),
+          rule: assertAccessibilityAutomationRuleInput(rule, owner),
+        }
+      })
+      .then(options => NativeRuntime.saveAccessibilityAutomationRule(options))
+      .then(validateAccessibilityAutomationRules),
+    // 删除：只按 id 删；返回的仍是写完之后整包读数，界面据此刷新，不再发一次读请求。
+    deleteAccessibilityAutomationRule: ({ packageName, ruleId }) => Promise.resolve()
+      .then(() => ({
+        packageName: assertAccessibilityPackageName(packageName),
+        ruleId: assertAccessibilityRuleId(ruleId),
+      }))
+      .then(options => NativeRuntime.deleteAccessibilityAutomationRule(options))
       .then(validateAccessibilityAutomationRules),
     openAccessibilitySettings: () => NativeRuntime.openAccessibilitySettings(),
     getKeepAliveState: () => NativeRuntime.getKeepAliveState().then(validateKeepAliveState),

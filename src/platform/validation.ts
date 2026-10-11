@@ -1,9 +1,14 @@
 import type {
   AccessibilityAutomationAction,
+  AccessibilityAutomationActionInput,
+  AccessibilityAutomationActionKind,
   AccessibilityAutomationBlocked,
   AccessibilityAutomationRule,
+  AccessibilityAutomationRuleInput,
   AccessibilityAutomationRules,
   AccessibilityAutomationRulesCorrupt,
+  AccessibilityAutomationRuleWriteMode,
+  AccessibilityAutomationSelectorInput,
   AccessibilityAutomationRun,
   AccessibilityAutomationRuns,
   AccessibilityAutomationState,
@@ -69,9 +74,14 @@ import type {
   VirtualScreenState,
 } from './types'
 import {
+  ACCESSIBILITY_AUTOMATION_ACTION_KINDS,
   ACCESSIBILITY_AUTOMATION_ACTIONS,
+  ACCESSIBILITY_AUTOMATION_RESET_ON_VALUES,
   ACCESSIBILITY_AUTOMATION_RUNTIMES,
+  ACCESSIBILITY_AUTOMATION_SWIPE_DIRECTIONS,
   ACCESSIBILITY_SERVICE_STATUSES,
+  AUTOMATION_KEY_CODES,
+  AUTOMATION_RULE_LIMITS,
   DIAGNOSTIC_LOG_MAX_CHARS,
   DIAGNOSTIC_LOG_WINDOW_OPTIONS,
   DIAGNOSTIC_RETENTION_MAX,
@@ -1053,6 +1063,167 @@ export function assertAccessibilityRuleId(value: unknown): string {
 /** 校验一个布尔入参：桥接的布尔字段只能是真的布尔，`"true"` 这种字符串一律拒收。 */
 export function assertBooleanFlag(value: unknown, label: string): boolean {
   return requiredBoolean(value, label)
+}
+
+/**
+ * 规则的写入方式：只接受 `create` / `update`。
+ *
+ * 不做「省略即 create」这种兜底：模式写错时最坏的结果是**悄悄覆盖**一条已有规则，
+ * 而这件事在界面看起来只是「列表里多了一条」，用户没有任何机会发现。
+ */
+export function assertAccessibilityRuleWriteMode(value: unknown): AccessibilityAutomationRuleWriteMode {
+  if (value !== 'create' && value !== 'update') throw new Error('规则的写入方式必须是 create 或 update')
+  return value
+}
+
+/**
+ * 校验待写入的规则内容——只做**结构**校验，不复刻原生的内容规则。
+ *
+ * 判定权在原生（`AutomationRule.fromJson` 逐字段校验、遇未知字段整体拒绝）。前端这层管的是
+ * 「明显不合法的东西不过桥」：整条规则漏掉、id 格式不对、数字越界、动作缺必填参数……
+ * 这些原样递过去，用户只会看到一句没有下一步的「规则内容不合法」。
+ *
+ * 刻意**不在这里**校验的东西：选择器 id 是不是合法的视图 id 写法、正则能不能编译、
+ * 动作类型里有没有多余字段。这些一旦在这边重写一遍，就会和 Kotlin 那套慢慢走偏，
+ * 而它们才是真正的判定标准。
+ */
+export function assertAccessibilityAutomationRuleInput(
+  value: unknown,
+  packageName: string,
+): AccessibilityAutomationRuleInput {
+  const rule = asRecord(value, '自动化规则内容')
+  const id = assertAccessibilityRuleId(rule.id)
+  const owner = assertAccessibilityPackageName(rule.packageName)
+  // 包名不一致时若照写不误，就会发生「在 A 的界面上写坏 B 的规则」——这条必须过桥前拦住。
+  if (owner !== packageName) throw new Error('规则里的包名与请求的包名不一致')
+  if (!Array.isArray(rule.selectors) || rule.selectors.length === 0) throw new Error('自动化规则至少要有一个选择器')
+  if (rule.selectors.length > AUTOMATION_RULE_LIMITS.maxSelectors) {
+    throw new Error(`自动化规则最多 ${AUTOMATION_RULE_LIMITS.maxSelectors} 个选择器`)
+  }
+  const action = asRecord(rule.action, '自动化规则动作')
+  const type = accessibilityEnumeration(action.type, '自动化动作类型', ACCESSIBILITY_AUTOMATION_ACTION_KINDS)
+  return {
+    id,
+    packageName: owner,
+    enabled: requiredBoolean(rule.enabled, '自动化规则启用状态'),
+    allowActivities: accessibilityPatterns(rule.allowActivities, '自动化规则 Activity 白名单'),
+    denyActivities: accessibilityPatterns(rule.denyActivities, '自动化规则 Activity 黑名单'),
+    matchDelayMs: accessibilityBound(rule.matchDelayMs, '自动化规则匹配延迟', AUTOMATION_RULE_LIMITS.matchDelayMs),
+    maxActions: accessibilityBound(rule.maxActions, '自动化规则动作上限', AUTOMATION_RULE_LIMITS.maxActions),
+    actionCoolDownMs: accessibilityBound(
+      rule.actionCoolDownMs,
+      '自动化规则冷却时间',
+      AUTOMATION_RULE_LIMITS.actionCoolDownMs,
+    ),
+    resetOn: accessibilityEnumeration(rule.resetOn, '自动化规则重置时机', ACCESSIBILITY_AUTOMATION_RESET_ON_VALUES),
+    selectors: rule.selectors.map((item, index) => accessibilitySelectorInput(item, index)),
+    action: { type, ...accessibilityActionParams(type, action) },
+  }
+}
+
+/** 动作里随类型变化的那些参数：缺必填、越界都在这里挡住，多余字段不带上桥（原生会整体拒收）。 */
+function accessibilityActionParams(
+  type: AccessibilityAutomationActionKind,
+  action: Record<string, unknown>,
+): Omit<AccessibilityAutomationActionInput, 'type'> {
+  switch (type) {
+    case 'swipe':
+      return {
+        durationMs: accessibilityBound(action.durationMs, '滑动时长', AUTOMATION_RULE_LIMITS.swipeDurationMs),
+        direction: accessibilityEnumeration(action.direction, '滑动方向', ACCESSIBILITY_AUTOMATION_SWIPE_DIRECTIONS),
+      }
+    case 'key': {
+      const keyCode = requiredIntegerValue(action.keyCode, '按键键值')
+      // 只认原生那张允许表：放开整段 KeyEvent 会连电源键一起放进来。
+      if (!AUTOMATION_KEY_CODES.some(([, code]) => code === keyCode)) throw new Error('按键键值不在允许的按键表内')
+      return { keyCode }
+    }
+    case 'wait':
+      return { delayMs: accessibilityBound(action.delayMs, '等待时长', AUTOMATION_RULE_LIMITS.waitDelayMs) }
+    case 'launch': {
+      const component = accessibilityOptionalText(action.component, '启动组件')
+      const uri = accessibilityOptionalText(action.uri, '启动链接')
+      if (component === undefined && uri === undefined) throw new Error('启动动作至少要给组件或链接其中之一')
+      if (uri !== undefined && !/^(https?:\/\/|market:\/\/)/.test(uri)) {
+        throw new Error('启动链接只支持 http://、https://、market:// 开头')
+      }
+      return { component, uri }
+    }
+    default:
+      // click / clickCenter / longClick / back 只带类型，多余参数一律不捎上。
+      return {}
+  }
+}
+
+/**
+ * 一个选择器：只保留原生认识的键，空串按「没填」收敛掉。
+ *
+ * 空串必须收敛：原生把空串与「未提供」都当作不限制，但「这项有没有条件」是按有没有值判定的，
+ * 递一个 `text: ''` 过去会让这项看起来有条件、实际什么也没匹配。
+ */
+function accessibilitySelectorInput(value: unknown, index: number): AccessibilityAutomationSelectorInput {
+  const label = `自动化规则第 ${index + 1} 个选择器`
+  const record = asRecord(value, label)
+  const text = (key: string): string | undefined => {
+    const raw = record[key]
+    if (raw === undefined || raw === null) return undefined
+    if (typeof raw !== 'string') throw new Error(`${label}的 ${key} 必须是文本`)
+    if (raw === '') return undefined
+    if (raw.length > AUTOMATION_RULE_LIMITS.maxStringChars) throw new Error(`${label}的 ${key} 过长`)
+    return raw
+  }
+  const flag = (key: string): boolean | undefined => {
+    const raw = record[key]
+    if (raw === undefined || raw === null) return undefined
+    return requiredBoolean(raw, `${label}的 ${key}`)
+  }
+  const size = (key: string): number | undefined => {
+    const raw = record[key]
+    if (raw === undefined || raw === null) return undefined
+    return requiredNonNegativeInteger(raw, `${label}的 ${key}`)
+  }
+  const selector: AccessibilityAutomationSelectorInput = {
+    text: text('text'),
+    textContains: text('textContains'),
+    textStartsWith: text('textStartsWith'),
+    textEndsWith: text('textEndsWith'),
+    id: text('id'),
+    desc: text('desc'),
+    descContains: text('descContains'),
+    className: text('className'),
+    clickable: flag('clickable'),
+    enabled: flag('enabled'),
+    editable: flag('editable'),
+    minWidth: size('minWidth'),
+    minHeight: size('minHeight'),
+  }
+  if (Object.values(selector).every(item => item === undefined)) throw new Error(`${label}至少要有一个条件`)
+  return selector
+}
+
+/** Activity 白/黑名单：一组正则文本；能不能编译交给原生（两边的正则方言不完全一样）。 */
+function accessibilityPatterns(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`${label}必须是数组`)
+  return value.map((item, index) => {
+    if (typeof item !== 'string' || item.length === 0) throw new Error(`${label}第 ${index + 1} 项必须是正则文本`)
+    if (item.length > AUTOMATION_RULE_LIMITS.maxStringChars) throw new Error(`${label}第 ${index + 1} 项过长`)
+    return item
+  })
+}
+
+/** 可缺省的短文本：缺失、`null`、空串都收敛成「没填」。 */
+function accessibilityOptionalText(value: unknown, label: string): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined
+  if (typeof value !== 'string') throw new Error(`${label}必须是文本`)
+  if (value.length > AUTOMATION_RULE_LIMITS.maxStringChars) throw new Error(`${label}过长`)
+  return value
+}
+
+/** 有区间的整数入参：区间与原生 `AutomationRuleLimits` 同源，越界在这里就报出来。 */
+function accessibilityBound(value: unknown, label: string, range: { readonly min: number; readonly max: number }): number {
+  const parsed = requiredIntegerValue(value, label)
+  if (parsed < range.min || parsed > range.max) throw new Error(`${label}必须在 ${range.min} 到 ${range.max} 之间`)
+  return parsed
 }
 
 /**

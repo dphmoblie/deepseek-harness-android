@@ -104,6 +104,8 @@ export const bridge = {
   // 无障碍控制台第三批（规则读写）：名单里少一条，用到它的界面同样会在 effect 阶段抛错。
   getAccessibilityAutomationRules: vi.fn(),
   setAccessibilityAutomationRuleEnabled: vi.fn(),
+  saveAccessibilityAutomationRule: vi.fn(),
+  deleteAccessibilityAutomationRule: vi.fn(),
   openAccessibilitySettings: vi.fn(),
   getKeepAliveState: vi.fn(),
   getOverlayBallState: vi.fn(),
@@ -379,6 +381,28 @@ export function beforeEachAppTest(): void {
   }))
   bridge.openAccessibilitySettings.mockResolvedValue(undefined)
   bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive })
+  // 新建 / 改写规则：按原生契约回「写完之后整包读数」，默认把这条规则原样放进列表。
+  bridge.saveAccessibilityAutomationRule.mockImplementation((options: {
+    packageName: string
+    mode: 'create' | 'update'
+    rule: { id: string; action: { type: string }; selectors: unknown[] }
+  }) => Promise.resolve({
+    packageName: options.packageName,
+    allowed: true,
+    corrupt: null,
+    rules: [{
+      id: options.rule.id,
+      enabled: true,
+      actionKind: options.rule.action.type,
+      selectorCount: options.rule.selectors.length,
+      maxActions: 1,
+      actionCoolDownMs: 3000,
+    }],
+  }))
+  // 删除规则：默认删完就没这条了（同样回整包读数，而不是 void）。
+  bridge.deleteAccessibilityAutomationRule.mockImplementation((options: { packageName: string }) => Promise.resolve({
+    packageName: options.packageName, allowed: true, corrupt: null, rules: [],
+  }))
   // 默认已授予「显示在其他应用上层」权限：与用例无关的测试不该被一个禁用开关影响。
   bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
   bridge.openOverlaySettings.mockResolvedValue(undefined)
