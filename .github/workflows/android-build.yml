@@ -205,6 +205,9 @@ jobs:
       - name: 校验 APK 团队签名（证书指纹与团队密钥库一致）
         run: python3 scripts/verify-apk-signature.py --apk android/app/build/outputs/apk/release/app-release.apk
 
+      - name: Verify the final APK bundled runtime integrity
+        run: python3 scripts/verify-bundle.py --apk android/app/build/outputs/apk/release/app-release.apk
+
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:

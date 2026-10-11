@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """Self-check for build-embedded-runtime.py (no rootfs inputs required).
 
-覆盖三块**本机可测**的逻辑，完整 rootfs 仍需 CI 的 arm64 runner：
+覆盖以下**本机可测**的逻辑，完整 rootfs 仍需 CI 的 arm64 runner：
 
 1. mobile profile 校验与 rootfs 路径/权限规范化（原有内容）；
 2. 网络工具组件组：内建子命令的 0755 口径、git-core 硬链接去重、
    强制常规文件的入口、CA 条目下限与预置树体积兜底；
 3. sourcemap 裁剪：只删 `*.map`，构建与重建两侧的计数与「应写入清单」一致；
 4. verify-bundle.py 的新校验：git/curl/git-remote-https 的存在 + 0755 + ARM64 ELF、
-   git-core 全目录 0755、/etc/ssl/certs 的 CA 数量下限（含正例与反例）。
+   git-core 全目录 0755、/etc/ssl/certs 的 CA 数量下限（含正例与反例）；
+5. 压缩归档与 APK 内置运行时的 SHA-256、长度、截断和重复资产校验。
 """
 from __future__ import annotations
 
 import contextlib
+import gzip
+import hashlib
 import importlib.util
 import io
 import json
@@ -22,6 +25,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import warnings
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -335,10 +340,81 @@ def build_verify_fixture(
             archive.addfile(link)
     manifest = root / "fixture-manifest.json"
     manifest.write_text(
-        json.dumps({"rootfs": {"extractedBytes": extracted}}),
+        json.dumps({"rootfs": {
+            "extractedBytes": extracted,
+            "compressedBytes": bundle.stat().st_size,
+            "sha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),
+        }}),
         encoding="utf-8",
     )
     return bundle, manifest
+
+
+def check_archive_integrity() -> None:
+    verify = load_sibling("verify_bundle_integrity", "verify-bundle.py")
+    payload = gzip.compress(b"runtime integrity fixture", mtime=0)
+    rootfs = {"compressedBytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+    manifest = json.dumps({"rootfs": rootfs}).encode()
+
+    def rejected(action, message: str) -> None:
+        try:
+            action()
+        except SystemExit as error:
+            assert message in str(error), str(error)
+        else:
+            raise AssertionError(f"expected rejection: {message}")
+
+    assert verify.read_manifest(io.BytesIO(manifest))["rootfs"] == rootfs
+    verify.verify_archive(io.BytesIO(payload), rootfs)
+    for data, metadata, message in (
+        (payload, {**rootfs, "sha256": "0" * 64}, "SHA-256 mismatch"),
+        (payload, {**rootfs, "compressedBytes": len(payload) + 1}, "compressedBytes mismatch"),
+        (payload[:-1], rootfs, "compressedBytes mismatch"),
+        (payload + b"extra", rootfs, "compressedBytes mismatch"),
+    ):
+        rejected(lambda: verify.verify_archive(io.BytesIO(data), metadata), message)
+    for field, value, message in (
+        ("compressedBytes", 0, "compressedBytes"),
+        ("compressedBytes", True, "compressedBytes"),
+        ("compressedBytes", verify.MAX_COMPRESSED_BYTES + 1, "compressedBytes"),
+        ("sha256", "invalid", "SHA-256"),
+    ):
+        content = json.dumps({"rootfs": {**rootfs, field: value}}).encode()
+        rejected(lambda: verify.read_manifest(io.BytesIO(content)), message)
+
+    with tempfile.TemporaryDirectory(prefix="dsh-apk-integrity-") as directory:
+        apk_path = Path(directory) / "fixture.apk"
+
+        def write_apk(data=payload, metadata=manifest, *, duplicate=None, missing=False,
+                      bundle_compression=zipfile.ZIP_STORED):
+            with zipfile.ZipFile(apk_path, "w", compression=zipfile.ZIP_DEFLATED) as apk:
+                apk.writestr("assets/runtime/runtime-manifest.json", metadata)
+                if not missing:
+                    apk.writestr("assets/runtime/rootfs.bundle", data, compress_type=bundle_compression)
+                if duplicate:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", UserWarning)
+                        apk.writestr(duplicate, metadata)
+
+        write_apk()
+        verify.verify_apk(apk_path)
+        result = subprocess.run(
+            [sys.executable, str(SCRIPTS / "verify-bundle.py"), "--apk", str(apk_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "APK_RUNTIME_VERIFY_OK" in result.stdout
+        for options, message in (
+            ({"data": bytes([payload[0] ^ 1]) + payload[1:]}, "SHA-256 mismatch"),
+            ({"data": payload[:-1]}, "compressedBytes mismatch"),
+            ({"bundle_compression": zipfile.ZIP_DEFLATED}, "must be ZIP_STORED"),
+            ({"missing": True}, "missing its bundled runtime"),
+            ({"duplicate": "assets/runtime/runtime-manifest.json"}, "duplicate APK entry"),
+            ({"duplicate": "assets/runtime/rootfs.bundle"}, "duplicate APK entry"),
+            ({"metadata": b" " * (verify.MAX_MANIFEST_BYTES + 1)}, "manifest size"),
+        ):
+            write_apk(**options)
+            rejected(lambda: verify.verify_apk(apk_path), message)
 
 
 def check_verify_bundle_network_rules(module: object) -> None:
@@ -752,6 +828,7 @@ def main() -> int:
     check_sourcemap_trimming(module, load_sibling("rebuild_rootfs_frontend", "rebuild-rootfs-frontend.py"))
 
     # --- verify-bundle.py 的新校验（正例 + 反例）--------------------------------
+    check_archive_integrity()
     check_verify_bundle_network_rules(module)
 
     # --- 法律材料收集/校验（夹具；真实 /usr/share/doc 只在 CI 上）----------------
@@ -759,7 +836,7 @@ def main() -> int:
 
     print(
         "selfcheck OK: mobile profile + rootfs path normalization + "
-        "network tools component + sourcemap trimming + bundle verification rules + "
+        "network tools component + sourcemap trimming + bundle/APK integrity + bundle verification rules + "
         "legal notices collection"
     )
 

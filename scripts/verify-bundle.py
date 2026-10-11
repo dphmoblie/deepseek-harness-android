@@ -3,18 +3,26 @@
 
 Runs against a freshly built bundle + manifest and fails with the exact
 offending entry, so packaging never ships an archive the app would reject.
+The --apk mode checks only the final embedded archive's size and digest.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import posixpath
 import re
 import sys
+import zipfile
 from pathlib import Path
 from pathlib import PurePosixPath
+from typing import BinaryIO
 
 MAX_ENTRIES = 250_000
+# Keep these bounds aligned with RuntimeLimits on Android.
+MAX_MANIFEST_BYTES = 256 * 1024
+MAX_COMPRESSED_BYTES = 1_610_612_736
+BUFFER_SIZE = 1024 * 1024
 MAX_PATH_CHARS = 4_096
 MAX_COMPONENT_CHARS = 255
 PROFILE_BUNDLE_NAMES = (
@@ -238,10 +246,77 @@ def normalized(raw: str) -> str:
     return raw.removesuffix("/")
 
 
+def fail(message: str) -> None:
+    raise SystemExit(f"BUNDLE_VERIFY_FAILED: {message}")
+
+
+def read_manifest(source: BinaryIO) -> dict:
+    content = source.read(MAX_MANIFEST_BYTES + 1)
+    if not content or len(content) > MAX_MANIFEST_BYTES:
+        fail("manifest size exceeds the app limit or is empty")
+    manifest = json.loads(content)
+    rootfs = manifest.get("rootfs") if isinstance(manifest, dict) else None
+    if not isinstance(rootfs, dict):
+        fail("manifest rootfs is missing or invalid")
+    size = rootfs.get("compressedBytes")
+    if type(size) is not int or not 1 <= size <= MAX_COMPRESSED_BYTES:
+        fail("manifest compressedBytes is outside the app limit")
+    digest = rootfs.get("sha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+        fail("manifest rootfs SHA-256 is invalid")
+    return manifest
+
+
+def verify_archive(source: BinaryIO, rootfs: dict) -> None:
+    expected = rootfs["compressedBytes"]
+    digest = hashlib.sha256()
+    total = 0
+    # Bound reads even when ZIP metadata or an input file reports an incorrect size.
+    while chunk := source.read(min(BUFFER_SIZE, expected - total + 1)):
+        total += len(chunk)
+        if total > expected:
+            fail("compressedBytes mismatch: archive exceeds manifest size")
+        digest.update(chunk)
+    if total != expected:
+        fail(f"compressedBytes mismatch: archive={total} manifest={expected}")
+    if digest.hexdigest() != rootfs["sha256"]:
+        fail("compressed archive SHA-256 mismatch")
+
+
+def verify_apk(path: Path) -> None:
+    with zipfile.ZipFile(path) as apk:
+        entries = apk.infolist()
+        if len(entries) > MAX_ENTRIES:
+            fail("APK entry count exceeds the limit")
+        names: set[str] = set()
+        for entry in entries:
+            if entry.filename in names:
+                fail(f"duplicate APK entry: {entry.filename!r}")
+            names.add(entry.filename)
+        manifest_name = "assets/runtime/runtime-manifest.json"
+        bundle_name = "assets/runtime/rootfs.bundle"
+        if not {manifest_name, bundle_name} <= names:
+            fail("APK is missing its bundled runtime or manifest")
+        # AssetManager.openFd requires the noCompress bundle to remain ZIP_STORED.
+        if apk.getinfo(bundle_name).compress_type != zipfile.ZIP_STORED:
+            fail("APK rootfs.bundle must be ZIP_STORED for direct asset reads")
+        if not 1 <= apk.getinfo(manifest_name).file_size <= MAX_MANIFEST_BYTES:
+            fail("APK manifest size exceeds the app limit or is empty")
+        with apk.open(manifest_name) as source:
+            manifest = read_manifest(source)
+        if apk.getinfo(bundle_name).file_size != manifest["rootfs"]["compressedBytes"]:
+            fail("APK compressedBytes mismatch")
+        with apk.open(bundle_name) as source:
+            verify_archive(source, manifest["rootfs"])
+    print("APK_RUNTIME_VERIFY_OK: bundled archive size and SHA-256 match its manifest")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--bundle", required=True)
-    parser.add_argument("--manifest", required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--bundle", type=Path)
+    source.add_argument("--apk", type=Path, help="verify the final APK's embedded archive and manifest")
+    parser.add_argument("--manifest", type=Path)
     parser.add_argument(
         "--without-network-tools",
         action="store_true",
@@ -251,7 +326,17 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    manifest = json.loads(open(args.manifest, encoding="utf-8").read())
+    if args.apk:
+        if args.manifest or args.without_network_tools:
+            parser.error("--apk cannot be combined with --manifest or --without-network-tools")
+        verify_apk(args.apk)
+        return 0
+    if not args.manifest:
+        parser.error("--bundle requires --manifest")
+    with args.manifest.open("rb") as source:
+        manifest = read_manifest(source)
+    with args.bundle.open("rb") as source:
+        verify_archive(source, manifest["rootfs"])
     expected_extracted = manifest["rootfs"]["extractedBytes"]
 
     seen: set[str] = set()
@@ -271,8 +356,6 @@ def main() -> int:
     ca_certificate_files = 0
     sourcemap_entries = 0
     sourcemap_bytes = 0
-    fail = lambda msg: (_ for _ in ()).throw(SystemExit(f"BUNDLE_VERIFY_FAILED: {msg}"))
-
     import tarfile
     with tarfile.open(args.bundle, "r:gz") as t:
         for m in t:
@@ -619,4 +702,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, zipfile.BadZipFile) as error:
+        fail(str(error))
