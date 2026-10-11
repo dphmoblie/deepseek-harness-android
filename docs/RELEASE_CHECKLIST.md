@@ -277,6 +277,17 @@ or otherwise distributing them.
 - `scripts/check-mobile-layout.py` 是浏览器布局回归，需要 Python playwright 与
   `pnpm run preview -- --port 4173` 起的预览服务器（要联网装浏览器），不适合放进 CI；
   本机需要时手动跑。
+- `scripts/check-mobile-layout-cdp.mjs` 是同一组视口的**无第三方依赖**版本：直接用系统
+  Edge/Chrome 的 headless 与 CDP 驱动（只需要 Node 内置模块与
+  `pnpm run preview -- --port 4173 --strictPort`），本机没有 playwright、也装不上时就用它。
+  两台脚本写同一个产物目录 `output/mobile-layout/`（PNG + `report.json`），契约测试
+  `scripts/mobile-layout-contract.test.mjs` 保证视口档位、报告字段与产物目录两边一致。
+  2026-10-11 本机实跑读数：三档（363×800 / 800×363 / 1280×900）外壳与官方设置结构夹具**全部通过**，
+  末行 `LAYOUT_OK: 3 视口全过（Edg/155.0.4283.45 …）`。
+  口径限制（如实记录）：验的是 **Chromium 里的 WebView 外壳与官方设置弹窗结构**，
+  不等于真机 WebView（系统 WebView 版本、输入法、字体缩放、真机安全区都不在内）；
+  Python 版因为缺依赖**这一轮没有跑过**，所以两套脚本的「结果一致」目前只有源码口径契约，
+  没有实测比对。
 - `scripts/mobile-file-publication.selfcheck.py` 需要真实 Linux 文件系统，本机 Windows 上跑不了，
   也不在 CI 里（CI 里覆盖同一逻辑的是 `scripts/mobile-session-publish.py` 相关的脚本测试）。
 - gitleaks 的全历史与目录模式：如上一节所述会把已修掉的历史诱饵和未跟踪产物算成命中，
