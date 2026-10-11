@@ -867,6 +867,21 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     private var automationEnabled = false
 
     /**
+     * 用户在设置页按下的总开关（[AutomationRuntime.OFF]/[RUNNING]/[PAUSED]）。
+     *
+     * 真源是偏好文件 `accessibility_automation_control`（见 [AutomationControlStore]），这里只缓存一份：
+     * 每次窗口变化都去读一次 SharedPreferences 没必要，而缓存是进程内的，服务重启后会重新读盘——
+     * 也就是说用户在设置页按下的状态跨进程重启继续有效，与上面那个会话级布尔不是一回事。
+     *
+     * 写入点只有 [applyAutomationRuntime]（桥接命令与设置页都走它）。
+     */
+    @Volatile
+    private var automationRuntimeCache: AutomationRuntime? = null
+
+    /** 运行记录的进程内环形缓冲：给界面回答「刚才发生了什么」。刻意不落盘，见 [AutomationRunHistory]。 */
+    private val automationHistory = AutomationRunHistory()
+
+    /**
      * 屏幕周期序号：`resetOn = "screen"` 的配额窗口靠它区分（见 [AutomationRuleExecutor.quotaWindowKey]）。
      *
      * 只在 `TYPE_WINDOW_STATE_CHANGED` 上递增：那是「窗口更新」这个信号本身（对话框弹出、同一 Activity
@@ -902,8 +917,9 @@ class DeepSeekAccessibilityService : AccessibilityService() {
      * 每一次事件都是「同步评估一次」，没有队列、没有重试：事件太密时前面的层会把它丢掉。
      */
     private fun handleAutomationEvent(event: AccessibilityEvent, nowMs: Long) {
-        // enabled 标志只由 `automationRules` 命令改写；事件回调只读它。
-        if (!automationEnabled) return
+        // 两道开关都要开：`automationEnabled` 由 `automationRules` 命令点亮，运行态是用户在设置页按下的。
+        // 总开关默认 OFF，所以进程起来后第一次事件会读一次盘（缓存住），读不到就是关闭：fail-closed。
+        if (!automationEnabled || !AutomationControlPolicy.admits(automationRuntime())) return
         val eventPackage = event.packageName?.toString().orEmpty()
         if (!AccessibilityAutomationPolicy.validPackage(eventPackage)) return
         // 系统界面的窗口变化太频繁，也不该成为自动化的输入：它们只是"屏幕上多了个东西"。
@@ -978,7 +994,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
      * 不缓存事件里的树：`wait` 与 `matchDelayMs` 的语义就是等界面变化，用旧树判定等于没等。
      */
     private fun reevaluateAutomation() {
-        if (!automationEnabled) return
+        if (!automationEnabled || !AutomationControlPolicy.admits(automationRuntime())) return
         val root = rootInActiveWindow ?: return
         val nowMs = SystemClock.elapsedRealtime()
         val allowed = AccessibilityAutomationStore.allowedPackages(this)
@@ -1040,8 +1056,11 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         handleAutomationReport(report, snapshot.packageName)
     }
 
-    /** 回报：审计 → 落盘自动停用 → 提示用户 → 需要的重新判定排期。 */
+    /** 回报：记运行历史 → 审计 → 落盘自动停用 → 提示用户 → 需要的重新判定排期。 */
     private fun handleAutomationReport(report: AutomationExecutionReport, packageName: String) {
+        // 记录**必须早于下面的早退**：被闸门全部拦下时 `performed` 是空的，而那正是
+        // 「刚才为什么没动作」的唯一数据来源（拦截原因聚合在 `report.skipped` 里）。
+        automationHistory.record(packageName, report, SystemClock.elapsedRealtime())
         if (report.performed.isEmpty() && report.autoDisabledRuleIds.isEmpty() && report.notices.isEmpty()) {
             // 只挂了一个排期也要处理（wait / matchDelayMs）。
             report.nextEvaluationDelayMs?.let(::scheduleAutomationReevaluation)
@@ -1096,8 +1115,21 @@ class DeepSeekAccessibilityService : AccessibilityService() {
      *
      * 参数留空时用当前前台包（由 [executeChecked] 解析后传入）。它**只读**规则文件，不改规则内容：
      * 改规则要走 AI 生成 + 用户在设置页确认的那条链路，不在本命令的范围里。
+     *
+     * **设备桥没有开启自动化的路径**：总开关不是 [AutomationRuntime.RUNNING] 时这条命令一律拒绝，
+     * 且不点亮 `automationEnabled`（「AI 只能关不能开」，见 `docs/AI自动化参数设计.md`）。
+     * 开启只能由用户在设置页按下「开始」（桥接命令 `setAccessibilityAutomationRuntime`）。
      */
     private fun automationRules(rootPackage: String, param: String?): DeviceCommandResult {
+        val runtime = automationRuntime()
+        if (!AutomationControlPolicy.admits(runtime)) {
+            automationEnabled = false
+            return failure(
+                "AUTOMATION_ENABLE_FORBIDDEN",
+                "自动化总开关未开启（当前：${AutomationControlPolicy.name(runtime)}）" +
+                    "：请先在设置页的「无障碍应用自动化」里点「开始」",
+            )
+        }
         val requested = param?.trim().orEmpty().ifEmpty { rootPackage }
         if (!AccessibilityAutomationPolicy.validPackage(requested)) {
             return failure("AUTOMATION_RULES_PACKAGE_INVALID", "包名不合法：$requested")
@@ -1120,6 +1152,49 @@ class DeepSeekAccessibilityService : AccessibilityService() {
                 failure(read.code, "读取规则失败：${read.message}")
         }
     }
+
+    /**
+     * 改总开关：设置页（经桥接命令 `setAccessibilityAutomationRuntime`）的唯一入口。
+     *
+     * 状态真源在偏好文件里，这里读**落盘后**的结果再刷新缓存，避免出现「内存说开着、盘上还关着」。
+     * 暂停与紧急停止**都不调 `disableSelf()`**：那会把用户在系统设置里开的无障碍服务一起关掉，
+     * 连带停掉副屏节点树与悬浮球菜单项——关服务是另一件事，界面必须分开表达。
+     * 关到不放行时顺手清掉设备桥那一道会话开关：否则暂停之后旧事件还会走完整个评估链才被拦。
+     */
+    internal fun applyAutomationRuntime(action: AutomationControlAction): AutomationRuntime {
+        val next = AutomationControlStore.apply(this, action)
+        automationRuntimeCache = next
+        if (!AutomationControlPolicy.admits(next)) {
+            automationEnabled = false
+        }
+        return next
+    }
+
+    /**
+     * 读缓存，没有就第一次读盘。
+     *
+     * 事件回调上直接读 SharedPreferences 会在每次窗口变化时各来一次，所以缓存；
+     * 缓存只由 [applyAutomationRuntime] 刷新，读到什么就是什么，不做任何推断。
+     */
+    private fun automationRuntime(): AutomationRuntime =
+        automationRuntimeCache ?: AutomationControlStore.runtime(this).also { automationRuntimeCache = it }
+
+    /** 当前运行态：读缓存，首次（或服务刚起来）读一次盘。 */
+    internal fun currentAutomationRuntime(): AutomationRuntime = automationRuntime()
+
+    /** 运行记录的只读快照：最新在前，`packageName` 为 null 表示所有包按时间合并。 */
+    internal fun automationRunSnapshot(packageName: String?, limit: Int): List<AutomationRunRecord> =
+        automationHistory.runs(packageName, limit)
+
+    /** 拦截原因聚合的只读快照（计数降序）。 */
+    internal fun automationBlockedSnapshot(packageName: String?, limit: Int): List<AutomationBlockedReason> =
+        automationHistory.blocked(packageName, limit)
+
+    /** 被容量丢弃的记录条数：界面据它如实说明「只保留最近 N 条」。 */
+    internal fun automationDroppedCount(): Int = automationHistory.droppedCount
+
+    /** 单个包名的记录条数上限（桥接回报给界面，不写死在前端）。 */
+    internal fun automationRunLimit(): Int = automationHistory.limit
 
     /** 打开自动化评估这件事本身要留痕；detail 只带受控码，不带包名。 */
     private fun auditAutomationEnabled() {

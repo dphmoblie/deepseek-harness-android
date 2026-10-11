@@ -2,9 +2,12 @@ package io.deepseekharness.mobile.runtime
 
 import android.content.Context
 import android.os.StatFs
+import android.provider.Settings
 import android.system.Os
+import android.webkit.WebView
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
+import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import org.json.JSONObject
@@ -21,15 +24,23 @@ import java.nio.file.StandardOpenOption
  * 探测沙箱，探测通过不代表真实执行能成 —— 所以三种可能必须各测一次，而不是靠推断。
  *
  * 分工：访客侧脚本（[SCRIPT_PATH]）负责一切需要访客环境的事（探针、真实 exec、两组 PTY 冒烟、
- * 目录可写性、rg 执行位），宿主侧只补两件访客回答不了的事（可用空间、dsh 版本），
- * 并把脚本的一行 JSON 再做一遍白名单校验。
+ * 目录可写性、rg 执行位、编译环境能力），宿主侧补两件访客回答不了的事（可用空间、dsh 版本）与
+ * 四项设备事实（插件链接、无障碍服务、副屏悬浮窗权限、系统 WebView），并把脚本的一行 JSON 再做一遍白名单校验。
+ *
+ * 检查项共 18 项 = 访客脚本 14 项（前 11 项链路是冻结契约 + 3 项编译环境能力）+ 宿主追加 4 项；
+ * 宿主那 4 项**只读不改**，判定在 [SelfCheckHostFacts]（纯逻辑，可 JVM 单测）。
  *
  * 安全边界：
  *  - 解析器**绝不含凭据**（`includeCredentials = false`）：自检只跑 node 脚本与探针；
  *  - 回传给 WebView 的只有封闭枚举与计数，**路径、文件内容与原始报错文本一律不外传**；
- *  - `dshVersion` 只回传通过 semver 形态校验的版本号，读不到就是 null。
+ *  - `dshVersion` 与 `webViewVersion` 只回传通过形态校验的版本号，读不到或形态不符就是 null。
  */
-class RuntimeSelfCheck(context: Context, private val store: RuntimeStore) {
+class RuntimeSelfCheck(
+    context: Context,
+    private val store: RuntimeStore,
+    /** 插件事实的唯一来源：必须是应用内那一个实例 —— 它的计数是实例内的 @Volatile 状态，另建一个只会读到 0。 */
+    private val plugins: RuntimePluginManager,
+) {
     private val appContext = context.applicationContext
 
     /** 绝不含凭据：自检进程不需要模型 API Key，最小权限。 */
@@ -40,8 +51,8 @@ class RuntimeSelfCheck(context: Context, private val store: RuntimeStore) {
     /**
      * 执行一次自检并返回可直接回传 WebView 的载荷。
      *
-     * `check` 只读；`repair` 只补可执行位与创建附件目录。运行时未安装时直接报
-     * `RUNTIME_NOT_INSTALLED`，不去猜一份不存在的根目录。
+     * `check` 只读；`repair` 只补可执行位与创建附件目录（**不动插件链接、无障碍与权限**）。
+     * 运行时未安装时直接报 `RUNTIME_NOT_INSTALLED`，不去猜一份不存在的根目录。
      */
     fun run(operation: String): JSObject {
         val selected = RuntimeSelfCheckPolicy.operation(operation)
@@ -89,11 +100,21 @@ class RuntimeSelfCheck(context: Context, private val store: RuntimeStore) {
         return payload
     }
 
-    /** 自检载荷：`checks` 逐条过白名单，宿主侧再补可用空间与 dsh 版本。 */
+    /**
+     * 自检载荷：访客 14 项 + 宿主 4 项一起过同一张码表，宿主侧再补可用空间、dsh 版本与 WebView 版本。
+     *
+     * 顺序固定：访客那一段先，宿主四项追加在末尾（与 `CHECK_IDS` 一致）。
+     */
     private fun checkPayload(payload: JSObject): JSObject {
-        val checks = RuntimeSelfCheckPolicy.sanitize(rawChecks(payload))
+        val guest = rawChecks(payload)
         // 一条合法条目都没有说明载荷整体不可信：宁可报一次可重试的失败，也不回一张空表。
-        if (checks.isEmpty()) throw RuntimeFailure(DENIED_CODE, "运行时自检失败，请稍后重试")
+        // 这条闸门只看**访客那一段** —— 宿主四项是自己读出来的事实，不能让它们把「访客载荷坏了」这件事掩盖掉。
+        if (RuntimeSelfCheckPolicy.sanitize(guest).isEmpty()) {
+            throw RuntimeFailure(DENIED_CODE, "运行时自检失败，请稍后重试")
+        }
+        val facts = hostFacts()
+        // 宿主四项与访客条目走同一个 sanitize：码表、状态一致性、丢弃规则只有一份。
+        val checks = RuntimeSelfCheckPolicy.sanitize(guest + SelfCheckHostFacts.rawChecks(facts))
         val summary = RuntimeSelfCheckPolicy.summarize(checks)
         val fields = mutableMapOf(
             "result" to if (summary.failedCount > 0) "failed" else "ok",
@@ -122,6 +143,9 @@ class RuntimeSelfCheck(context: Context, private val store: RuntimeStore) {
             .put("availableBytes", availableBytes())
             // 显式回 null（而不是省略键）：界面据此区分「读不到版本」与「字段缺失」。
             .put("dshVersion", dshVersion() ?: JSONObject.NULL)
+            // WebView 版本与 dshVersion 同层：纯信息，不是检查项（ok 项按契约不能带码）。
+            // 与宿主四项取自同一次探测，读不到或形态不符都是 null。
+            .put("webViewVersion", SelfCheckHostFacts.versionText(facts.webViewVersion) ?: JSONObject.NULL)
             .put("checks", array)
     }
 
@@ -177,6 +201,61 @@ class RuntimeSelfCheck(context: Context, private val store: RuntimeStore) {
      * 读取规则与运行时版本列表共用 [RuntimeDshVersion]，两处对「什么算读到了版本」必须完全一致。
      */
     private fun dshVersion(): String? = RuntimeDshVersion.read(store.currentRoot)
+
+    /**
+     * 宿主四项事实的取值：**每一项各自兜底**。任何一项探测抛错都只让该项变「未知」，
+     * 绝不让整次自检失败 —— 自检本身失效比某一项读不到更糟，而且这四项里有三项本来就允许不可用。
+     *
+     * 这里只读事实，判定在 [SelfCheckHostFacts]（纯逻辑，可 JVM 单测）。返回的 `null` 一律表示
+     * 「没读到」，不是 `false`：调用方绝不允许把它当成「确实没有」。
+     */
+    private fun hostFacts(): SelfCheckHostFacts.Facts {
+        val plugins = pluginFacts()
+        val webView = webViewFacts()
+        return SelfCheckHostFacts.Facts(
+            pluginLinksMissing = plugins?.first,
+            pluginRepairFailed = plugins?.second,
+            accessibilityConnected = probeUnknownOnFailure { DeepSeekAccessibilityService.current() != null },
+            overlayPermissionGranted = probeUnknownOnFailure { Settings.canDrawOverlays(appContext) },
+            webViewAvailable = webView?.first,
+            webViewVersion = webView?.second,
+        )
+    }
+
+    /**
+     * 插件事实：读插件管理器的迁移/修复快照。整份快照读不到就是两个事实都未知（返回 null），
+     * 不去猜「大概是 0」—— 计数为 0 与读不到是两件事。
+     *
+     * `first` 是「清单里登记但保留区已无副本、只能重装的插件数 > 0」，
+     * `second` 是「最近一次修复有包失败/被拒」。
+     */
+    private fun pluginFacts(): Pair<Boolean, Boolean>? = try {
+        val snapshot = plugins.recoverySnapshot()
+        val missing = snapshot.optInt("missing", -1)
+        val failed = snapshot.optInt("failed", -1)
+        if (missing < 0 || failed < 0) null else (missing > 0) to (failed > 0)
+    } catch (_: Throwable) {
+        null
+    }
+
+    /**
+     * WebView 事实：`null` 包名即系统判定不可用（这是检查项要报的结论，不是「未知」）；
+     * 非 null 时取 `versionName` 作为纯信息，形态校验交给 [SelfCheckHostFacts.versionText]。
+     * 探测本身抛错（`Throwable`，不只是 `Exception`）时两个值都是 null = 未知。
+     */
+    private fun webViewFacts(): Pair<Boolean?, String?>? = try {
+        val packageInfo = WebView.getCurrentWebViewPackage()
+        (packageInfo != null) to packageInfo?.versionName
+    } catch (_: Throwable) {
+        null
+    }
+
+    /** 单项探测的兜底：抛错即「未知」。 */
+    private inline fun <T> probeUnknownOnFailure(block: () -> T): T? = try {
+        block()
+    } catch (_: Throwable) {
+        null
+    }
 
     /**
      * 把 APK 资产里的自检脚本安全地放到访客根下（`root/.dsh-mobile/runtime-self-check.cjs`），

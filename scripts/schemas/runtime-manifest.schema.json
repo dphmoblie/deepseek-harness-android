@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "更新清单 runtime-manifest.json",
+  "description": "运行时更新清单。生成侧：scripts/build-embedded-runtime.py（第 1149-1170 行构造并写盘，ASCII 编码、两空格缩进的 JSON）。消费侧（原生 Android）：android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeModels.kt 与 RuntimeStore.kt 解析 schemaVersion / harnessUrl 等字段决定「装哪个运行时、怎么拉起」；scripts/verify-bundle.py 只另外校验 rootfs 子树，不做整体 schema 校验，两者互补。校验的是「原生侧读得到的最小契约」：字段名、类型、枚举、取值形状；不校验摘要是否与真实 bundle 一致（那是 verify-bundle.py 的事）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runtimeId",
+    "version",
+    "dshVersion",
+    "architecture",
+    "rootfs",
+    "entrypoints",
+    "harnessUrl",
+    "profileLinks"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1,
+      "description": "清单格式版本。原生侧按它决定怎么解析；改形状必须同时升这个数字。"
+    },
+    "runtimeId": {
+      "const": "ubuntu-24.04-arm64-deepseek-harness",
+      "description": "运行时标识。同一台设备上的多个运行时槽位靠它区分，写错会让原生侧认不出这套 rootfs。"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[0-9A-Za-z][0-9A-Za-z.+_-]*$",
+      "description": "运行时版本。CI 里正式版等于 APP_VERSION，预览版等于 APP_VERSION + -mobile-<构建号>。"
+    },
+    "dshVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$",
+      "description": "这份 rootfs 里内置的 dsh 版本。scripts/verify-bundle.py 会把它与构建元数据、包内 @deepseek-ai/dsh/package.json.version 三重对齐。"
+    },
+    "architecture": {
+      "enum": ["arm64-v8a"],
+      "description": "目标 ABI。本仓库只发布 arm64-v8a，出现别的值说明打包参数被改错了。"
+    },
+    "rootfs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "sha256", "compressedBytes", "extractedBytes", "compression"],
+      "description": "rootfs 包体信息。原生侧与 scripts/verify-bundle.py 都按这里的字节数与摘要判断「下载完整了没有」。",
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^https://",
+          "description": "bundle 下载地址。必须是 https，明文 http 会在设备上被 Android 网络安全策略拦下。"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "bundle 的 SHA-256（小写十六进制）。与 scripts/verify-bundle.py 的 [0-9a-f]{64} 约束一致。"
+        },
+        "compressedBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "bundle 压缩后字节数。用来判断下载是否被截断。"
+        },
+        "extractedBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "解压后字节数。用来判断设备上剩的存储够不够、解压是否完整。"
+        },
+        "compression": {
+          "enum": ["gzip"],
+          "description": "压缩算法。scripts/build-embedded-runtime.py 的 COMPRESSION_OUTPUT_SUFFIXES 当前只实现 gzip（输出后缀 .bundle）。"
+        }
+      }
+    },
+    "entrypoints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["shell", "harness"],
+      "description": "进 runtime 要执行的两条命令行。原生侧直接按数组 exec，不接受字符串拼接。",
+      "properties": {
+        "shell": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "description": "交互 shell 入口，实际为 [\"/bin/bash\", \"--login\"]。"
+        },
+        "harness": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "description": "Harness 服务入口，实际为 [\"/usr/local/bin/dsh\", \"web\", \"--host\", \"127.0.0.1\", \"--port\", \"3080\"]。"
+        }
+      }
+    },
+    "harnessUrl": {
+      "type": "string",
+      "pattern": "^http://127\\.0\\.0\\.1:[0-9]{2,5}/$",
+      "description": "WebView 要打开的地址。只允许环回地址：写成 0.0.0.0 或局域网地址会把 Harness 直接暴露到网络上。生成侧当前固定写 http://127.0.0.1:3080/。"
+    },
+    "profileLinks": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "构建期在 profile 里建立的包链接数量（真实构建为 485 / 515 这类三位数）。scripts/verify-bundle.py 第 691 行会拿它对照包内链接数，防止回归成「只链接了部分包」。手写示例缺这个字段就说明示例与生成器脱节。"
+    },
+    "mobile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dsh"],
+      "description": "仅在构建时传了 --mobile-profile 才出现；内容是那个 profile 文件的完整解析结果（形状同 mobile-profile.schema.json），原生侧据此知道该加载哪些 bundle。",
+      "properties": {
+        "dsh": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profile"],
+          "properties": {
+            "profile": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["bundles"],
+              "properties": {
+                "bundles": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 64,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$",
+                    "description": "包标识符，例如 @deepseek-ai/dsh-base。"
+                  },
+                  "description": "profile 要装载的 bundle 列表（1..64 项）。"
+                }
+              }
+            }
+          }
+        },
+        "mobile": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "可选的移动端适配参数，与 scripts/mobile-profile.example.json 的 mobile 子树同形状。",
+          "properties": {
+            "layout": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "maxLength": 64,
+              "description": "移动端布局标识符。"
+            },
+            "disabledOnMobile": {
+              "type": "array",
+              "maxItems": 64,
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+              "description": "在移动端要禁用的包标识符列表。"
+            },
+            "idleStopMinutes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1440,
+              "description": "空闲多久后停掉运行时（分钟），1..1440。"
+            },
+            "embedRootfs": {
+              "type": "boolean",
+              "description": "是否把 rootfs 内嵌进包体（离线安装用）。"
+            }
+          }
+        }
+      }
+    }
+  }
+}

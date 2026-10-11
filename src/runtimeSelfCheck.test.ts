@@ -10,6 +10,7 @@ import {
   validateSelfCheckOperation,
   validateSelfCheckReport,
   type SelfCheckCode,
+  type SelfCheckId,
   type SelfCheckItem,
 } from './runtimeSelfCheck'
 
@@ -124,14 +125,24 @@ describe('运行时自检载荷校验', () => {
   })
 
   it('hardlink 的合法与非法组合：ok 不带码，失败只认受控码 HARDLINK_DENIED', () => {
-    // 三处契约（访客脚本 / Kotlin 白名单 / 前端）的 id 顺序逐字一致：hardlink 紧跟 attachments、在 rg 之前。
-    // 后三项编译环境能力项是**追加**的：既有 11 项的 id 与相对顺序（含 hardlink 在索引 9）不得变动。
+    // 四处契约（访客脚本 / Kotlin 白名单 / 前端 / scripts/runtime-self-check.test.mjs）的 id 顺序逐字一致：
+    // hardlink 紧跟 attachments、在 rg 之前。后面的编译能力项与宿主四项都是**追加**的：
+    // 既有 11 项的 id 与相对顺序（含 hardlink 在索引 9）不得变动。
     expect(SELF_CHECK_IDS).toEqual([
       'shell', 'node', 'sandbox_launcher', 'sandbox_probe', 'sandbox_exec',
       'pty', 'pty_sandbox', 'dsh_home', 'attachments', 'hardlink', 'rg',
       'c_compiler', 'make', 'python3',
+      // 访客脚本只产出上面 14 项（脚本一行未改）；下面四项由宿主追加，顺序与 Kotlin 侧一致。
+      'plugins', 'accessibility', 'virtualscreen', 'webview',
     ])
     expect(SELF_CHECK_IDS.indexOf('hardlink')).toBe(9)
+    // 访客 14 项在本数组里仍是前 14 个（追加而不是插入）。
+    expect(SELF_CHECK_IDS.slice(0, 14)).toEqual([
+      'shell', 'node', 'sandbox_launcher', 'sandbox_probe', 'sandbox_exec',
+      'pty', 'pty_sandbox', 'dsh_home', 'attachments', 'hardlink', 'rg',
+      'c_compiler', 'make', 'python3',
+    ])
+    expect(SELF_CHECK_IDS.slice(14)).toEqual(['plugins', 'accessibility', 'virtualscreen', 'webview'])
     expect(SELF_CHECK_CODES).toContain('HARDLINK_DENIED')
 
     const report = validateSelfCheckReport(checkPayload({
@@ -165,6 +176,82 @@ describe('运行时自检载荷校验', () => {
     expect(() => validateSelfCheckReport(checkPayload({
       checks: [{ id: 'hardlink', status: 'fail', code: 'HARDLINK_OK' }],
     }))).toThrow('自检项结论码无效')
+  })
+
+  it('接受宿主四项的合法载荷，并把结论码与状态一起交给界面', () => {
+    const report = validateSelfCheckReport(checkPayload({
+      checks: [
+        // 宿主侧追加的四项：三项可选功能只 warn，WebView 不可用是 fail。
+        { id: 'webview', status: 'fail', code: 'WEBVIEW_UNAVAILABLE' },
+        { id: 'plugins', status: 'warn', code: 'PLUGIN_LINK_MISSING' },
+        { id: 'accessibility', status: 'warn', code: 'ACCESSIBILITY_NOT_CONNECTED' },
+        { id: 'virtualscreen', status: 'warn', code: 'OVERLAY_PERMISSION_MISSING' },
+      ],
+    }))
+    if (report.operation !== 'check') throw new Error('载荷类型判定错误')
+    // 展示顺序仍是契约顺序：宿主四项排在访客 14 项之后。
+    expect(report.checks.map(item => item.id)).toEqual(['plugins', 'accessibility', 'virtualscreen', 'webview'])
+    expect(report.checks.map(item => item.status)).toEqual(['warn', 'warn', 'warn', 'fail'])
+    // 三项可选功能的告警不应该让整次自检变红：界面据此只显示徽章，不显示「修复运行时权限」。
+    expect(selfCheckNeedsRepair(report.checks)).toBe(false)
+    for (const item of report.checks) {
+      const advice = selfCheckAdvice(item)
+      expect(advice.label.length).toBeGreaterThan(0)
+      expect(advice.meaning.length).toBeGreaterThan(0)
+      expect(advice.nextStep.length).toBeGreaterThan(0)
+    }
+
+    // 「没读到事实」用各自的 `*_PROBE_UNKNOWN` 呈现，且都是 warn —— 既不是 ok，也不是 fail。
+    const unknown = validateSelfCheckReport(checkPayload({
+      checks: [
+        { id: 'plugins', status: 'warn', code: 'PLUGIN_PROBE_UNKNOWN' },
+        { id: 'accessibility', status: 'warn', code: 'ACCESSIBILITY_PROBE_UNKNOWN' },
+        { id: 'virtualscreen', status: 'warn', code: 'OVERLAY_PROBE_UNKNOWN' },
+        { id: 'webview', status: 'warn', code: 'WEBVIEW_PROBE_UNKNOWN' },
+      ],
+    }))
+    if (unknown.operation !== 'check') throw new Error('载荷类型判定错误')
+    expect(unknown.checks.every(item => item.status === 'warn')).toBe(true)
+    expect(unknown.checks.every(item => item.code?.endsWith('_PROBE_UNKNOWN') === true)).toBe(true)
+  })
+
+  it('宿主四项的非法组合被拒：ok 带码、非 ok 缺码、码不在白名单里', () => {
+    // 状态与结论码自相矛盾时整份拒收（与访客 14 项同一套规则，没有免检通道）。
+    expect(() => validateSelfCheckReport(checkPayload({
+      checks: [{ id: 'webview', status: 'ok', code: 'WEBVIEW_UNAVAILABLE' }],
+    }))).toThrow('自检项状态与结论码不一致')
+    expect(() => validateSelfCheckReport(checkPayload({
+      checks: [{ id: 'plugins', status: 'warn' }],
+    }))).toThrow('自检项结论码无效')
+    expect(() => validateSelfCheckReport(checkPayload({
+      checks: [{ id: 'plugins', status: 'warn', code: 'PLUGIN_LINK_MISSING_FIXED' }],
+    }))).toThrow('自检项结论码无效')
+    expect(() => validateSelfCheckReport(checkPayload({
+      checks: [{ id: 'plugins', status: 'broken', code: 'PLUGIN_LINK_MISSING' }],
+    }))).toThrow('自检项状态无效')
+
+    // 前端只查全局码表与状态规则：「码是否属于这一项」由原生侧白名单负责（与 hardlink 那条同口径）。
+    const crossId = validateSelfCheckReport(checkPayload({
+      checks: [{ id: 'webview', status: 'warn', code: 'ACCESSIBILITY_NOT_CONNECTED' }],
+    }))
+    if (crossId.operation !== 'check') throw new Error('载荷类型判定错误')
+    expect(crossId.checks).toEqual([{ id: 'webview', status: 'warn', code: 'ACCESSIBILITY_NOT_CONNECTED' }])
+  })
+
+  it('校验宿主追加的 WebView 版本字段，缺省按读不到处理', () => {
+    const withVersion = validateSelfCheckReport(checkPayload({ webViewVersion: '120.0.6099.230' }))
+    if (withVersion.operation !== 'check') throw new Error('载荷类型判定错误')
+    expect(withVersion.webViewVersion).toBe('120.0.6099.230')
+    // 缺省（旧桥接）与显式 null 都记「读不到」，不影响 checks。
+    for (const webViewVersion of [undefined, null]) {
+      const report = validateSelfCheckReport(checkPayload(webViewVersion === undefined ? {} : { webViewVersion }))
+      if (report.operation !== 'check') throw new Error('载荷类型判定错误')
+      expect(report.webViewVersion).toBeNull()
+    }
+    // 与 dsh 版本号同一条白名单：形态不符即整份拒收，不做「悄悄忽略」。
+    for (const webViewVersion of ['', ' 120.0', '<img src=x>', 'v'.repeat(65), '120.0\n6099']) {
+      expect(() => validateSelfCheckReport(checkPayload({ webViewVersion }))).toThrow('WebView 版本格式无效')
+    }
   })
 
   it('接受合法的 repair 载荷', () => {
@@ -295,6 +382,53 @@ describe('运行时自检文案', () => {
       expect(selfCheckAdvice({ id, status: 'warn', code: unknown }).meaning).toContain('无法确认')
       // 安装提示只讲前提，不讲结果：本应用不内置编译器，也不代为安装。
       expect(selfCheckAdvice({ id, status: 'warn', code: missing }).nextStep).toContain('不内置编译器')
+    }
+  })
+
+  it('宿主四项的口径：三项可选功能只提醒、WebView 报故障，都不进「修复运行时权限」', () => {
+    // 插件链接：指回插件设置页的人工修复入口 —— 自检里的「修复运行时权限」修不了它。
+    const pluginMissing = selfCheckAdvice({ id: 'plugins', status: 'warn', code: 'PLUGIN_LINK_MISSING' })
+    expect(pluginMissing.meaning).toContain('缺少链接')
+    expect(pluginMissing.nextStep).toContain('插件设置')
+    expect(pluginMissing.nextStep).toContain('立即修复插件')
+
+    // 无障碍与悬浮窗是可选功能：文案必须写清「不需要就不用处理」，不能写成故障通知。
+    const accessibility = selfCheckAdvice({ id: 'accessibility', status: 'warn', code: 'ACCESSIBILITY_NOT_CONNECTED' })
+    expect(accessibility.meaning).toContain('可选功能')
+    expect(accessibility.nextStep).toContain('不需要')
+    const overlay = selfCheckAdvice({ id: 'virtualscreen', status: 'warn', code: 'OVERLAY_PERMISSION_MISSING' })
+    expect(overlay.meaning).toContain('副屏')
+    expect(overlay.nextStep).toContain('系统设置')
+
+    // WebView 是四个新项里唯一报 fail 的：文案要说明它是系统组件、应用侧修不了。
+    const webview = selfCheckAdvice({ id: 'webview', status: 'fail', code: 'WEBVIEW_UNAVAILABLE' })
+    expect(webview.meaning).toContain('系统 WebView 不可用')
+    expect(webview.nextStep).toContain('系统组件')
+
+    // 四个 `*_PROBE_UNKNOWN` 一律按「没读到」呈现：不许写成已确认的故障，也不许写成正常。
+    const probeUnknown: [SelfCheckId, SelfCheckCode][] = [
+      ['plugins', 'PLUGIN_PROBE_UNKNOWN'],
+      ['accessibility', 'ACCESSIBILITY_PROBE_UNKNOWN'],
+      ['virtualscreen', 'OVERLAY_PROBE_UNKNOWN'],
+      ['webview', 'WEBVIEW_PROBE_UNKNOWN'],
+    ]
+    for (const [id, code] of probeUnknown) {
+      const advice = selfCheckAdvice({ id, status: 'warn', code })
+      expect(advice.meaning).toContain('没读到')
+      expect(advice.label.length).toBeGreaterThan(0)
+    }
+
+    // 宿主四项的九个码都不给「修复运行时权限」入口。
+    const hostCodes: SelfCheckCode[] = [
+      'PLUGIN_LINK_MISSING', 'PLUGIN_LINK_FAILED', 'PLUGIN_PROBE_UNKNOWN',
+      'ACCESSIBILITY_NOT_CONNECTED', 'ACCESSIBILITY_PROBE_UNKNOWN',
+      'OVERLAY_PERMISSION_MISSING', 'OVERLAY_PROBE_UNKNOWN',
+      'WEBVIEW_UNAVAILABLE', 'WEBVIEW_PROBE_UNKNOWN',
+    ]
+    for (const code of hostCodes) {
+      expect(SELF_CHECK_CODES).toContain(code)
+      expect(SELF_CHECK_REPAIRABLE_CODES).not.toContain(code)
+      expect(selfCheckNeedsRepair([{ id: 'plugins', status: 'warn', code }])).toBe(false)
     }
   })
 })

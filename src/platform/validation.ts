@@ -1,4 +1,11 @@
 import type {
+  AccessibilityAutomationAction,
+  AccessibilityAutomationBlocked,
+  AccessibilityAutomationRule,
+  AccessibilityAutomationRules,
+  AccessibilityAutomationRulesCorrupt,
+  AccessibilityAutomationRun,
+  AccessibilityAutomationRuns,
   AccessibilityAutomationState,
   AllFilesAccessResult,
   AppUpdateState,
@@ -59,6 +66,9 @@ import type {
   VirtualScreenState,
 } from './types'
 import {
+  ACCESSIBILITY_AUTOMATION_ACTIONS,
+  ACCESSIBILITY_AUTOMATION_RUNTIMES,
+  ACCESSIBILITY_SERVICE_STATUSES,
   DIAGNOSTIC_LOG_MAX_CHARS,
   DIAGNOSTIC_LOG_WINDOW_OPTIONS,
   DIAGNOSTIC_RETENTION_MAX,
@@ -897,9 +907,13 @@ function accessibilityPackages(value: unknown, label: string): string[] {
 /**
  * 校验无障碍服务状态。
  *
- * 四个字段都必须存在：`alwaysAllowedPackages` 或 `passwordConfigured` 缺失时若补成默认值，
+ * 四个必填字段都必须存在：`alwaysAllowedPackages` 或 `passwordConfigured` 缺失时若补成默认值，
  * 界面会把「读不到状态」显示成「没有自动项 / 没设密码」，用户照着点下去只会不断失败。
  * `passwordConfigured` 只是布尔——**本函数不接触、也不返回任何密码内容**。
+ *
+ * `automationRuntime` / `serviceStatus` 是两个**后加**的字段，旧版壳不送：缺省分别取 `off` 与 `off`
+ * （fail-closed：读不到就显示「总开关关着、服务没连上」，绝不显示成一个可能正在跑的状态），
+ * 但一旦送了就必须是枚举内的取值，别的字符串一律拒绝——界面文案是照着枚举写的。
  */
 export function validateAccessibilityAutomationState(value: unknown): AccessibilityAutomationState {
   const state = asRecord(value, '无障碍自动化状态')
@@ -911,7 +925,173 @@ export function validateAccessibilityAutomationState(value: unknown): Accessibil
     whitelistEnabled: state.whitelistEnabled === undefined ? true : requiredBoolean(state.whitelistEnabled, '无障碍白名单开关'),
     alwaysAllowedPackages: accessibilityPackages(state.alwaysAllowedPackages, '无障碍自动白名单'),
     passwordConfigured: requiredBoolean(state.passwordConfigured, '无障碍验证密码状态'),
+    automationRuntime: state.automationRuntime === undefined
+      ? 'off'
+      : accessibilityEnumeration(state.automationRuntime, '自动化总开关', ACCESSIBILITY_AUTOMATION_RUNTIMES),
+    serviceStatus: state.serviceStatus === undefined
+      ? 'off'
+      : accessibilityEnumeration(state.serviceStatus, '无障碍服务状态', ACCESSIBILITY_SERVICE_STATUSES),
   }
+}
+
+/** 取值必须落在给定枚举里；用于三态/四态这类界面文案写死的受控取值。 */
+function accessibilityEnumeration<T extends string>(value: unknown, label: string, allowed: readonly T[]): T {
+  if (typeof value !== 'string' || !(allowed as readonly string[]).includes(value)) {
+    throw new Error(`${label}取值无效`)
+  }
+  return value as T
+}
+
+/**
+ * 校验总开关的动作名：只接受四个受控动作，其余一律拒绝。
+ *
+ * **不认识就必须拒绝**：这里若退化成「认不出来就当成 start」，一个拼错的参数就能把自动化打开，
+ * 与「AI 只能关不能开」的口径也自相矛盾（设备桥没有开启路径，这条是应用内界面专用的）。
+ */
+export function assertAccessibilityAutomationAction(value: unknown): AccessibilityAutomationAction {
+  return accessibilityEnumeration(value, '自动化操作', ACCESSIBILITY_AUTOMATION_ACTIONS)
+}
+
+/** 校验一个包名；用与白名单完全相同的格式，避免出现只在这一条路径上生效的第二套规则。 */
+export function assertAccessibilityPackageName(value: unknown): string {
+  const [name] = accessibilityPackages([value], '无障碍运行记录包名')
+  return name
+}
+
+/**
+ * 校验规则标识：与原生 `MobileRuntimePlugin` 的 `AUTOMATION_RULE_ID` 和
+ * `AutomationRule.validated()` 同一套格式（1~64 位字母、数字、点、下划线、连字符）。
+ *
+ * 这里先卡一道不是为了省一次桥调用，而是**不让任意字符串过桥**：规则标识会被原生回显在错误文案里。
+ */
+export function assertAccessibilityRuleId(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(value)) {
+    throw new Error('自动化规则标识无效')
+  }
+  return value
+}
+
+/** 校验一个布尔入参：桥接的布尔字段只能是真的布尔，`"true"` 这种字符串一律拒收。 */
+export function assertBooleanFlag(value: unknown, label: string): boolean {
+  return requiredBoolean(value, label)
+}
+
+/**
+ * 校验运行记录的读取结果。
+ *
+ * `runs`/`blocked` 里的每一项都要完整：`performed` 或 `count` 缺失时若补默认值，界面会把
+ * 「这条记录读不懂」显示成「没做动作 / 拦了 0 次」，而这个卡片存在的意义就是如实说明原因。
+ * `message` 允许为 null（未登记的受控码），此时界面显示原始 `code`。
+ */
+export function validateAccessibilityAutomationRuns(value: unknown): AccessibilityAutomationRuns {
+  const state = asRecord(value, '自动化运行记录')
+  if (typeof state.connected !== 'boolean') throw new Error('自动化运行记录格式无效')
+  if (!Array.isArray(state.runs) || !Array.isArray(state.blocked)) throw new Error('自动化运行记录格式无效')
+  if (!Number.isSafeInteger(state.limit) || (state.limit as number) < 0) throw new Error('自动化运行记录上限无效')
+  if (!Number.isSafeInteger(state.dropped) || (state.dropped as number) < 0) throw new Error('自动化运行记录丢弃计数无效')
+  return {
+    connected: state.connected,
+    limit: state.limit as number,
+    dropped: state.dropped as number,
+    runs: state.runs.map((item, index) => accessibilityRun(item, index)),
+    blocked: state.blocked.map((item, index) => accessibilityBlocked(item, index)),
+  }
+}
+
+/** 一条运行记录：`atMs` 是相对开机的毫秒数（负数说明这份读数来路不明）。 */
+function accessibilityRun(value: unknown, index: number): AccessibilityAutomationRun {
+  const record = asRecord(value, `自动化运行记录第 ${index + 1} 项`)
+  if (!Number.isSafeInteger(record.atMs) || (record.atMs as number) < 0) {
+    throw new Error(`自动化运行记录第 ${index + 1} 项时间无效`)
+  }
+  return {
+    atMs: record.atMs as number,
+    ruleId: accessibilityCodeText(record.ruleId, `自动化运行记录第 ${index + 1} 项规则`),
+    action: accessibilityCodeText(record.action, `自动化运行记录第 ${index + 1} 项动作`),
+    code: accessibilityCodeText(record.code, `自动化运行记录第 ${index + 1} 项受控码`),
+    message: record.message === null || record.message === undefined
+      ? null
+      : accessibilityCodeText(record.message, `自动化运行记录第 ${index + 1} 项说明`),
+    ok: requiredBoolean(record.ok, `自动化运行记录第 ${index + 1} 项结果`),
+    performed: requiredBoolean(record.performed, `自动化运行记录第 ${index + 1} 项执行状态`),
+    degraded: requiredBoolean(record.degraded, `自动化运行记录第 ${index + 1} 项降级状态`),
+  }
+}
+
+/** 一条拦截原因：次数必须是正整数（0 次的条目没有展示价值，出现即说明原生侧写错了）。 */
+function accessibilityBlocked(value: unknown, index: number): AccessibilityAutomationBlocked {
+  const record = asRecord(value, `自动化拦截原因第 ${index + 1} 项`)
+  if (!Number.isSafeInteger(record.count) || (record.count as number) < 1) {
+    throw new Error(`自动化拦截原因第 ${index + 1} 项次数无效`)
+  }
+  return {
+    code: accessibilityCodeText(record.code, `自动化拦截原因第 ${index + 1} 项受控码`),
+    count: record.count as number,
+    message: record.message === null || record.message === undefined
+      ? null
+      : accessibilityCodeText(record.message, `自动化拦截原因第 ${index + 1} 项说明`),
+  }
+}
+
+/** 记录里的短文本：不接受空串、控制字符或超长内容（界面是卡片列表，容不下自由文本）。 */
+function accessibilityCodeText(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 200 || containsControlCharacter(value)) {
+    throw new Error(`${label}无效`)
+  }
+  return value
+}
+
+/**
+ * 校验某个包的规则读数。
+ *
+ * `corrupt` 非空表示原生侧读不出这份数据**且已经把它清掉**——这是「数据坏了」，不是「没有规则」；
+ * 界面按 `corrupt` 与空数组分别显示，因此这里必须逐字段校验、不许用空数组把它抹平。
+ * 规则条目只带界面要用的字段：这里刻意**不要求**选择器正文（原生侧也不回），免得界面把界面内容搬进 DOM。
+ */
+export function validateAccessibilityAutomationRules(value: unknown): AccessibilityAutomationRules {
+  const state = asRecord(value, '自动化规则')
+  const packageName = accessibilityPackages([state.packageName], '自动化规则包名')[0]
+  if (typeof state.allowed !== 'boolean') throw new Error('自动化规则白名单状态无效')
+  if (!Array.isArray(state.rules)) throw new Error('自动化规则列表无效')
+  const corrupt = state.corrupt === null || state.corrupt === undefined
+    ? null
+    : accessibilityRulesCorrupt(state.corrupt)
+  return {
+    packageName,
+    allowed: state.allowed,
+    corrupt,
+    rules: state.rules.map((item, index) => accessibilityRule(item, index)),
+  }
+}
+
+/** 规则数据损坏的受控说明：码与文案都要有，界面直接显示它们。 */
+function accessibilityRulesCorrupt(value: unknown): AccessibilityAutomationRulesCorrupt {
+  const record = asRecord(value, '自动化规则损坏说明')
+  return {
+    code: accessibilityCodeText(record.code, '自动化规则损坏码'),
+    message: accessibilityCodeText(record.message, '自动化规则损坏说明'),
+  }
+}
+
+/** 一条规则：`id` 必须落在与原生同一套格式里，计数与抑制参数都必须是正整数或零。 */
+function accessibilityRule(value: unknown, index: number): AccessibilityAutomationRule {
+  const record = asRecord(value, `自动化规则第 ${index + 1} 项`)
+  const id = accessibilityCodeText(record.id, `自动化规则第 ${index + 1} 项标识`)
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(id)) throw new Error(`自动化规则第 ${index + 1} 项标识无效`)
+  return {
+    id,
+    enabled: requiredBoolean(record.enabled, `自动化规则第 ${index + 1} 项启用状态`),
+    actionKind: accessibilityCodeText(record.actionKind, `自动化规则第 ${index + 1} 项动作类型`),
+    selectorCount: accessibilityNonNegative(record.selectorCount, `自动化规则第 ${index + 1} 项选择器数量`),
+    maxActions: accessibilityNonNegative(record.maxActions, `自动化规则第 ${index + 1} 项动作上限`),
+    actionCoolDownMs: accessibilityNonNegative(record.actionCoolDownMs, `自动化规则第 ${index + 1} 项冷却时间`),
+  }
+}
+
+/** 计数类字段：非负安全整数（小数或负数都说明这份读数来路不明）。 */
+function accessibilityNonNegative(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label}无效`)
+  return value as number
 }
 
 /**

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  assertAccessibilityAutomationAction,
+  assertAccessibilityPackageName,
+  assertAccessibilityRuleId,
   assertBase64Input,
+  assertBooleanFlag,
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
   assertRuntimeVersionTarget,
@@ -11,6 +15,8 @@ import {
   assertVirtualScreenSettingsUpdate,
   validateAllFilesAccessResult,
   validateAppUpdateState,
+  validateAccessibilityAutomationRuns,
+  validateAccessibilityAutomationRules,
   validateAccessibilityAutomationState,
   validateAccessibilityPasswordInput,
   validateDiagnosticLogExport,
@@ -948,7 +954,153 @@ describe('无障碍自动化状态与验证密码校验', () => {
     // 已设密码的设备：只有这个布尔为 true，返回体里没有任何密码字段。
     expect(validateAccessibilityAutomationState(state({ passwordConfigured: true })).passwordConfigured).toBe(true)
     expect(Object.keys(validateAccessibilityAutomationState(state({ passwordConfigured: true }))).sort())
-      .toEqual(['allowedPackages', 'alwaysAllowedPackages', 'enabled', 'passwordConfigured', 'whitelistEnabled'])
+      .toEqual(['allowedPackages', 'alwaysAllowedPackages', 'automationRuntime', 'enabled', 'passwordConfigured', 'serviceStatus', 'whitelistEnabled'])
+  })
+
+  it('总开关与服务状态缺省时按最保守的一侧取值，别的一律拒绝', () => {
+    // 旧版壳不送这两个字段：界面必须显示「总开关关着、服务没连上」，
+    // 绝不能因为读不到就显示成一个可能正在跑的状态。
+    const legacy = validateAccessibilityAutomationState(state())
+    expect(legacy.automationRuntime).toBe('off')
+    expect(legacy.serviceStatus).toBe('off')
+
+    for (const automationRuntime of ['running', 'paused', 'off'] as const) {
+      expect(validateAccessibilityAutomationState(state({ automationRuntime })).automationRuntime).toBe(automationRuntime)
+    }
+    for (const serviceStatus of ['connected', 'enabled_disconnected', 'off'] as const) {
+      expect(validateAccessibilityAutomationState(state({ serviceStatus })).serviceStatus).toBe(serviceStatus)
+    }
+    // 枚举外的取值一律拒绝：界面文案是照着枚举写死的，放过去只会渲染出一个说不清的状态。
+    for (const automationRuntime of ['', 'RUNNING', 'on', 'idle', 0, null, true]) {
+      expect(() => validateAccessibilityAutomationState(state({ automationRuntime }))).toThrow('自动化总开关取值无效')
+    }
+    for (const serviceStatus of ['', 'CONNECTED', 'unknown', 1, null]) {
+      expect(() => validateAccessibilityAutomationState(state({ serviceStatus }))).toThrow('无障碍服务状态取值无效')
+    }
+  })
+
+  it('总开关动作名只认四个受控取值', () => {
+    for (const action of ['start', 'pause', 'resume', 'emergency_stop'] as const) {
+      expect(assertAccessibilityAutomationAction(action)).toBe(action)
+    }
+    // 「认不出来就当成开始」是这里最危险的兜底：一个拼错的参数就能把自动化打开。
+    for (const action of ['', 'START', 'Start', 'start ', 'stop', 'on', 'true', 1, null, undefined, {}, ['start']]) {
+      expect(() => assertAccessibilityAutomationAction(action)).toThrow('自动化操作取值无效')
+    }
+  })
+
+  it('包名过滤与白名单同一套格式', () => {
+    expect(assertAccessibilityPackageName('com.example.reader')).toBe('com.example.reader')
+    for (const value of ['', 'com', 'com.example.', ' com.example.app', 'com.example.app ', 'com/example', 1, null, undefined]) {
+      expect(() => assertAccessibilityPackageName(value)).toThrow()
+    }
+  })
+
+  it('运行记录逐项校验，缺字段不补默认值', () => {
+    const valid = {
+      connected: true,
+      limit: 50,
+      dropped: 0,
+      runs: [{
+        atMs: 1000,
+        ruleId: 'rule-1',
+        action: 'click',
+        code: 'AUTOMATION_ACTION_PERFORMED',
+        message: '已执行点击',
+        ok: true,
+        performed: true,
+        degraded: false,
+      }],
+      blocked: [{ code: 'AUTOMATION_SENSITIVE_WINDOW', count: 2, message: null }],
+    }
+    const result = validateAccessibilityAutomationRuns(valid)
+    expect(result.runs).toHaveLength(1)
+    expect(result.runs[0].message).toBe('已执行点击')
+    // 未登记的码允许 message 为 null：界面显示原始码，而不是被编一句「已跳过」。
+    expect(result.blocked[0].message).toBeNull()
+
+    expect(() => validateAccessibilityAutomationRuns({ ...valid, connected: 'true' })).toThrow('自动化运行记录格式无效')
+    expect(() => validateAccessibilityAutomationRuns({ ...valid, runs: null })).toThrow('自动化运行记录格式无效')
+    expect(() => validateAccessibilityAutomationRuns({ ...valid, limit: -1 })).toThrow('自动化运行记录上限无效')
+    expect(() => validateAccessibilityAutomationRuns({ ...valid, dropped: 1.5 })).toThrow('自动化运行记录丢弃计数无效')
+    // `atMs` 是相对开机的毫秒数，负数说明这份读数来路不明。
+    expect(() => validateAccessibilityAutomationRuns({ ...valid, runs: [{ ...valid.runs[0], atMs: -1 }] }))
+      .toThrow('自动化运行记录第 1 项时间无效')
+    for (const key of ['ok', 'performed', 'degraded'] as const) {
+      expect(() => validateAccessibilityAutomationRuns({ ...valid, runs: [{ ...valid.runs[0], [key]: undefined }] }))
+        .toThrow('自动化运行记录第 1 项')
+    }
+    expect(() => validateAccessibilityAutomationRuns({ ...valid, runs: [{ ...valid.runs[0], code: '' }] }))
+      .toThrow('自动化运行记录第 1 项受控码无效')
+    expect(() => validateAccessibilityAutomationRuns({ ...valid, runs: [{ ...valid.runs[0], code: 'x'.repeat(201) }] }))
+      .toThrow('自动化运行记录第 1 项受控码无效')
+    // 0 次的拦截条目没有展示价值，出现即说明原生侧写错了。
+    expect(() => validateAccessibilityAutomationRuns({ ...valid, blocked: [{ code: 'X', count: 0, message: null }] }))
+      .toThrow('自动化拦截原因第 1 项次数无效')
+  })
+
+  it('规则读数逐项校验：只带界面要判断的字段，选择器正文进不来', () => {
+    const valid = {
+      packageName: 'com.example.target',
+      allowed: true,
+      corrupt: null,
+      rules: [{
+        id: 'rule-1',
+        enabled: false,
+        actionKind: 'click',
+        selectorCount: 2,
+        maxActions: 3,
+        actionCoolDownMs: 3000,
+      }],
+    }
+    const result = validateAccessibilityAutomationRules(valid)
+    expect(result.rules[0].id).toBe('rule-1')
+    expect(result.rules[0].enabled).toBe(false)
+    // 白名单外的应用：规则读得出来，但界面必须说明它们不会被用到。
+    expect(validateAccessibilityAutomationRules({ ...valid, allowed: false }).allowed).toBe(false)
+    expect(validateAccessibilityAutomationRules({
+      ...valid,
+      corrupt: { code: 'AUTOMATION_RULE_CORRUPT', message: '规则文件损坏' },
+    }).corrupt).not.toBeNull()
+
+    expect(() => validateAccessibilityAutomationRules({ ...valid, packageName: 'not a package' }))
+      .toThrow('无障碍白名单第 1 项无效')
+    expect(() => validateAccessibilityAutomationRules({ ...valid, allowed: 'true' }))
+      .toThrow('自动化规则白名单状态无效')
+    expect(() => validateAccessibilityAutomationRules({ ...valid, rules: null }))
+      .toThrow('自动化规则列表无效')
+    // 规则 id 与原生 `AUTOMATION_RULE_ID` 同一套格式，别的写法一律拒收。
+    for (const id of ['', ' ', 'rule 1', '规则', 'a'.repeat(65)]) {
+      expect(() => validateAccessibilityAutomationRules({ ...valid, rules: [{ ...valid.rules[0], id }] }))
+        .toThrow('自动化规则第 1 项标识无效')
+    }
+    expect(() => validateAccessibilityAutomationRules({ ...valid, rules: [{ ...valid.rules[0], enabled: 'yes' }] }))
+      .toThrow('自动化规则第 1 项启用状态格式无效')
+    expect(() => validateAccessibilityAutomationRules({ ...valid, rules: [{ ...valid.rules[0], actionKind: '' }] }))
+      .toThrow('自动化规则第 1 项动作类型无效')
+    const numericLabels = {
+      selectorCount: '选择器数量',
+      maxActions: '动作上限',
+      actionCoolDownMs: '冷却时间',
+    } as const
+    for (const [key, label] of Object.entries(numericLabels)) {
+      for (const bad of [-1, 1.5, '3', null]) {
+        expect(() => validateAccessibilityAutomationRules({ ...valid, rules: [{ ...valid.rules[0], [key]: bad }] }))
+          .toThrow(`自动化规则第 1 项${label}无效`)
+      }
+    }
+  })
+
+  it('规则标识与布尔开关的断言：只认受控取值，不做静默转换', () => {
+    expect(assertAccessibilityRuleId('rule_1.a-b')).toBe('rule_1.a-b')
+    for (const bad of ['', 'rule 1', '规则', 'a'.repeat(65), 7, null, undefined]) {
+      expect(() => assertAccessibilityRuleId(bad)).toThrow('自动化规则标识无效')
+    }
+    expect(assertBooleanFlag(true, '启用状态')).toBe(true)
+    expect(assertBooleanFlag(false, '启用状态')).toBe(false)
+    for (const bad of ['true', 0, 1, null, undefined, {}]) {
+      expect(() => assertBooleanFlag(bad, '启用状态')).toThrow('启用状态格式无效')
+    }
   })
 
   it('旧版缺省开关保持开启；仅接受明确的布尔状态', () => {

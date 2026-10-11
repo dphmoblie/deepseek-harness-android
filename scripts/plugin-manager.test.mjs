@@ -477,7 +477,7 @@ test('修复动作：已安装插件里的真实副本与悬空链接重新指�
   stagedPackage(path.join(modules, 'demo-plugin/node_modules'), '@deepseek-ai/dsh-tools', '0.1.4')
 
   const runtimeTools = fs.realpathSync(path.join(root, 'opt/dsh/node_modules/@deepseek-ai/dsh-tools'))
-  assert.deepEqual(manager.repair(), { versions: 1, scanned: 4, linked: 3, unchanged: 1, versionMismatch: 2, failed: 0, refused: 0, plugins: 1, relinked: 0, missing: 0 })
+  assert.deepEqual(manager.repair(), { versions: 1, scanned: 4, linked: 3, unchanged: 1, versionMismatch: 2, failed: 0, refused: 0, plugins: 1, relinked: 0, missing: 0, lock: 'written' })
   for (const relative of ['@deepseek-ai/dsh-tools', 'demo-plugin/node_modules/@deepseek-ai/dsh-tools']) {
     assert.equal(fs.lstatSync(path.join(modules, relative)).isSymbolicLink(), true, relative)
     assert.equal(fs.realpathSync(path.join(modules, relative)), runtimeTools, relative)
@@ -488,7 +488,7 @@ test('修复动作：已安装插件里的真实副本与悬空链接重新指�
   assert.equal(fs.lstatSync(path.join(modules, 'demo-plugin')).isSymbolicLink(), false)
 
   // 幂等：再跑一次不改动任何东西，全部计入 unchanged。
-  assert.deepEqual(manager.repair(), { versions: 1, scanned: 4, linked: 0, unchanged: 4, versionMismatch: 0, failed: 0, refused: 0, plugins: 1, relinked: 0, missing: 0 })
+  assert.deepEqual(manager.repair(), { versions: 1, scanned: 4, linked: 0, unchanged: 4, versionMismatch: 0, failed: 0, refused: 0, plugins: 1, relinked: 0, missing: 0, lock: 'written' })
 })
 
 test('修复动作拒绝越界路径：链接指向处理范围之外时一处都不动', t => {
@@ -513,7 +513,7 @@ test('修复动作拒绝越界路径：链接指向处理范围之外时一处�
   fs.symlinkSync(path.join(outside, 'nested'), path.join(nestedLink, 'demo-plugin'), 'junction')
 
   // 形态一被整体拒绝（不计入处理数），形态二、三的链接一律不进入：没有任何包被处理。
-  assert.deepEqual(manager.repair(), { versions: 2, scanned: 0, linked: 0, unchanged: 0, versionMismatch: 0, failed: 0, refused: 0, plugins: 1, relinked: 0, missing: 0 })
+  assert.deepEqual(manager.repair(), { versions: 2, scanned: 0, linked: 0, unchanged: 0, versionMismatch: 0, failed: 0, refused: 0, plugins: 1, relinked: 0, missing: 0, lock: 'written' })
   for (const relative of ['modules/@deepseek-ai/dsh-tools', 'scope/@deepseek-ai/dsh-tools', 'nested/node_modules/@deepseek-ai/dsh-tools']) {
     const copy = path.join(outside, relative)
     assert.equal(fs.lstatSync(copy).isSymbolicLink(), false, relative)
@@ -1022,7 +1022,7 @@ test('运行时升级后幂等回填启停状态：包级与子插件级都恢�
   assert.equal(plugin.children.find(row => row.id === 'child').enabled, false)
   // 幂等：清单里已经有我们的 token，第二次恢复什么都不写，也不产生重复条目。
   const before = fs.readFileSync(profile, 'utf8')
-  assert.deepEqual(restarted.recover(), { restored: false, reason: 'current' })
+  assert.deepEqual(restarted.recover(), { restored: false, reason: 'current', lock: 'written' })
   assert.equal(fs.readFileSync(profile, 'utf8'), before)
   const value = JSON.parse(before)
   assert.deepEqual(value.dsh.profile.bundles, ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'])
@@ -1070,14 +1070,14 @@ test('快照损坏或清单损坏时受控处理：不崩、不清空用户数�
     fs.mkdirSync(path.dirname(stateFileOf(root)), { recursive: true })
     fs.writeFileSync(stateFileOf(root), content)
     const before = fs.readFileSync(profile, 'utf8')
-    assert.deepEqual(createManager(root, undefined, JSON.parse).recover(), { restored: false, reason: 'missing' })
+    assert.deepEqual(createManager(root, undefined, JSON.parse).recover(), { restored: false, reason: 'missing', lock: 'written' })
     assert.equal(fs.readFileSync(profile, 'utf8'), before)
     assert.equal(manager.list().plugins.length, 2)
   }
   // 快照可用但清单损坏：只报"没回填"，不覆盖、不清空那份损坏的清单。
   fs.writeFileSync(stateFileOf(root), JSON.stringify({ version: 1, token: '12345678-1234-1234-1234-123456789abc', bundles: ['test-plugin'], bundleOrder: ['test-plugin'], disabledBundles: [], children: [] }))
   fs.writeFileSync(profile, '{broken')
-  assert.deepEqual(manager.recover(), { restored: false, reason: 'invalid' })
+  assert.deepEqual(manager.recover(), { restored: false, reason: 'invalid', lock: 'skipped' })
   assert.equal(fs.readFileSync(profile, 'utf8'), '{broken')
 })
 
@@ -1088,7 +1088,7 @@ test('list 保持只读：既不写快照也不回填清单', t => {
   assert.equal(fs.existsSync(stateFileOf(root)), false)
   assert.equal(fs.readFileSync(profile, 'utf8'), before)
   // 没有快照时 recover 只做事务恢复，不写清单。
-  assert.deepEqual(manager.recover(), { restored: false, reason: 'missing' })
+  assert.deepEqual(manager.recover(), { restored: false, reason: 'missing', lock: 'written' })
   assert.equal(fs.readFileSync(profile, 'utf8'), before)
 })
 
@@ -1195,4 +1195,113 @@ test('导入与回滚都会刷新状态快照，供下次运行时升级回填',
   assert.equal(typeof saved.token, 'string')
   manager.rollback('test-plugin')
   assert.deepEqual(JSON.parse(fs.readFileSync(stateFileOf(root), 'utf8')).bundles, ['@deepseek-ai/dsh-base', 'test-plugin'])
+})
+
+// ---------------------------------------------------------------------------
+// 已安装插件版本账本（installed-lock.json）
+//
+// 与 state-snapshot.json 的分工是硬边界，两边各钉一次：
+//  - 状态快照记**启停状态**（用户的选择），回填清单时只补缺失项；
+//  - 版本账本记**版本事实**（解析到的版本、包本体所在的事务目录、来源），只被原生侧的
+//    APK 升级迁移读取，用来回答「包目录还在不在」。
+// 账本写失败不能影响主流程，但必须以受控结果回到原生侧（`written` / `failed` / `skipped`）。
+// ---------------------------------------------------------------------------
+
+const lockFileOf = root => path.join(root, 'root/.dsh-mobile/plugin-manager/installed-lock.json')
+const lockOf = root => JSON.parse(fs.readFileSync(lockFileOf(root), 'utf8'))
+const lockEntryOf = (root, id) => lockOf(root).plugins.find(row => row.id === id)
+
+test('版本账本如实登记包名、解析到的版本、事务目录与来源，且不含路径', t => {
+  const { manager, root } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
+  assert.equal(manager.update('test-plugin').lock, 'written')
+  const saved = lockOf(root)
+  assert.equal(saved.schemaVersion, 1)
+  assert.match(saved.updatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+  // 官方包落在运行时自己的目录里：版本读得到，但没有事务目录，来源是 bundle。
+  assert.deepEqual(lockEntryOf(root, '@deepseek-ai/dsh-base'), {
+    id: '@deepseek-ai/dsh-base', version: '1.0.0', transaction: null, source: 'bundle', updatedAt: lockEntryOf(root, '@deepseek-ai/dsh-base').updatedAt,
+  })
+  // 第三方包：事务目录名必须与盘上那个 versions/<事务> 逐字一致（原生侧据此核对包目录还在不在）。
+  const transaction = fs.readdirSync(path.join(root, 'root/.dsh-mobile/plugin-manager/versions'))[0]
+  const entry = lockEntryOf(root, 'test-plugin')
+  assert.deepEqual(entry, {
+    id: 'test-plugin', version: '2.0.0', transaction, source: 'npm', updatedAt: entry.updatedAt,
+  })
+  assert.match(entry.updatedAt, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+  // 键集合是跨语言契约：Kotlin 侧 `PluginInstallLock.parseEntry` 要求这五个键都在。
+  assert.deepEqual(Object.keys(entry).sort(), ['id', 'source', 'transaction', 'updatedAt', 'version'])
+  // 账本会长期留在设备上，不能成为把沙箱路径带出去的通道。
+  assert.equal(JSON.stringify(saved).includes(root), false)
+})
+
+test('版本账本与启停快照各记各的：文件分开、键不重叠', t => {
+  const { manager, root } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
+  manager.importPackage('test-plugin')
+  const snapshot = JSON.parse(fs.readFileSync(stateFileOf(root), 'utf8'))
+  const lock = lockOf(root)
+  assert.equal(lockFileOf(root) === stateFileOf(root), false)
+  // 快照只认启停：包级与子插件级的选择、打包顺序。
+  assert.deepEqual(Object.keys(snapshot).sort(), ['bundleOrder', 'bundles', 'children', 'disabledBundles', 'token', 'version'])
+  // 账本只认事实：连 `enabled` 这样的启停字段都不该出现（混进来就会变成第二个真相）。
+  assert.deepEqual(Object.keys(lock).sort(), ['plugins', 'schemaVersion', 'updatedAt'])
+  assert.deepEqual(Object.keys(lockEntryOf(root, 'test-plugin')).sort(), ['id', 'source', 'transaction', 'updatedAt', 'version'])
+})
+
+test('启停操作刷新账本但不改动版本事实：条目时间戳只在事实真变化时更新', t => {
+  const { manager, root } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
+  const imported = manager.importPackage('test-plugin')
+  assert.equal(imported.lock, 'written')
+  const before = lockEntryOf(root, 'test-plugin')
+  const toggled = manager.setEnabled('test-plugin', false)
+  assert.equal(toggled.lock, 'written')
+  // 启停返回值沿用 list() 投影：插件条目与计数都在，只是多了一个受控的账本结果。
+  assert.equal(toggled.plugins.find(row => row.id === 'test-plugin').enabled, false)
+  const after = lockEntryOf(root, 'test-plugin')
+  assert.deepEqual(after, before)
+  assert.equal(JSON.parse(fs.readFileSync(stateFileOf(root), 'utf8')).disabledBundles.includes('test-plugin'), true)
+})
+
+test('list 不写账本：版本事实只在改完盘的路径上刷新', t => {
+  const { manager, root } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
+  manager.list()
+  assert.equal(fs.existsSync(lockFileOf(root)), false)
+  manager.setChildEnabled('test-plugin', 'child', false)
+  assert.equal(fs.existsSync(lockFileOf(root)), true)
+})
+
+test('账本损坏或超限时按"还没有账本"处理：不删包，按盘上事实重写', t => {
+  for (const content of ['{not json', JSON.stringify({ schemaVersion: 99, plugins: [] }), JSON.stringify({ schemaVersion: 1, plugins: Array.from({ length: 257 }, (_, index) => ({ id: `plugin-${index}`, version: '1.0.0', transaction: null, source: 'npm', updatedAt: '2025-01-02T03:04:05.678Z' })) })]) {
+    const { manager, root } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
+    manager.update('test-plugin')
+    const transaction = fs.readdirSync(path.join(root, 'root/.dsh-mobile/plugin-manager/versions'))[0]
+    fs.writeFileSync(lockFileOf(root), content)
+    assert.equal(manager.repair().lock, 'written')
+    const rewritten = lockOf(root)
+    assert.equal(rewritten.schemaVersion, 1)
+    assert.equal(rewritten.plugins.length, 2)
+    assert.equal(lockEntryOf(root, 'test-plugin').transaction, transaction)
+    // 包本体一个都不能少：账本读不出来只等于"没有账本"，绝不能因此删目录。
+    assert.equal(fs.existsSync(path.join(root, 'root/.dsh-mobile/plugin-manager/versions', transaction, 'node_modules/test-plugin/package.json')), true)
+  }
+})
+
+test('清单读不出来时账本按 skipped 处理，且不覆盖升级前留下的那一份', t => {
+  const { manager, root, profile } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
+  manager.importPackage('test-plugin')
+  const before = fs.readFileSync(lockFileOf(root), 'utf8')
+  fs.writeFileSync(profile, '{not json')
+  assert.deepEqual(manager.recover(), { restored: false, reason: 'invalid', lock: 'skipped' })
+  assert.equal(fs.readFileSync(lockFileOf(root), 'utf8'), before)
+})
+
+test('插件从清单里消失后账本不再保留它，免得被迁移误算成"需要重新安装"', t => {
+  const { manager, root, profile } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
+  manager.importPackage('test-plugin')
+  assert.equal(lockEntryOf(root, 'test-plugin').version, '2.0.0')
+  // 管理器没有单独的"卸载"操作：清单（`dsh.profile.bundles`）就是"已装插件"的唯一真相。
+  const manifest = JSON.parse(fs.readFileSync(profile, 'utf8'))
+  manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(id => id !== 'test-plugin')
+  fs.writeFileSync(profile, JSON.stringify(manifest))
+  assert.equal(manager.repair().lock, 'written')
+  assert.deepEqual(lockOf(root).plugins.map(row => row.id), ['@deepseek-ai/dsh-base'])
 })

@@ -82,6 +82,36 @@ class AppReleaseCatalogTest {
     }
 
     @Test
+    fun offersTheFinalBuildOfTheSameVersionToAnInstalledPreviewBuild() {
+        // 预览先出、正式版后发，序号反而更小（0）：没有这条收敛路径，装了
+        // 0.2.13-mobile-5 的设备永远收不到 0.2.13，只能手动装包。
+        val preview = InstalledAppInfo(versionName = "0.2.13-mobile-5", versionCode = 35L)
+        assertEquals("0.2.13", catalog(release("v0.2.13")).availableRelease(preview)?.version)
+        assertTrue(
+            catalog(release("v0.2.13")).state(preview, installAllowed = true).has(AppReleaseCatalog.UPDATE_KEY),
+        )
+    }
+
+    @Test
+    fun keepsRefusingOlderVersionsAndOlderBuildsOfTheSameVersion() {
+        val preview = InstalledAppInfo(versionName = "0.2.13-mobile-5", versionCode = 35L)
+        assertNull(catalog(release("v0.2.12")).availableRelease(preview))
+        assertNull(catalog(release("v0.2.13-mobile-4"), release("v0.2.12-mobile-77")).availableRelease(preview))
+        // 同版本正式版在场时仍挑序号更大的预览构建：预览通道继续跟随预览。
+        val both = catalog(release("v0.2.13"), release("v0.2.13-mobile-9"))
+        assertEquals("0.2.13-mobile-9", both.availableRelease(preview)?.version)
+    }
+
+    @Test
+    fun keepsTheExistingOrderingForAStableInstall() {
+        // 收敛路径只补「预览 → 同版本正式版」，不改变其它判据：装了正式版时同版本正式版
+        // 不算更新，同版本预览构建仍按序号算更新。
+        val stable = InstalledAppInfo(versionName = "0.2.13", versionCode = 35L)
+        assertNull(catalog(release("v0.2.13")).availableRelease(stable))
+        assertEquals("0.2.13-mobile-9", catalog(release("v0.2.13-mobile-9")).availableRelease(stable)?.version)
+    }
+
+    @Test
     fun refusesToOfferAnUpdateWhenTheInstalledVersionCannotBeParsed() {
         // 读不出本机版本就证明不了「严格更新」，宁可什么都不提示。
         assertNull(catalog(release("v0.2.1-mobile-2")).availableRelease(InstalledAppInfo(AppReleaseCatalog.UNKNOWN_VERSION, 22L)))

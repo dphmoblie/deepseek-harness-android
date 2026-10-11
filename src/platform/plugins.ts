@@ -1,4 +1,4 @@
-import type { PluginCatalog, PluginRequest } from './types'
+import type { PluginCatalog, PluginRecoveryState, PluginRequest } from './types'
 
 const packageId = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/
 const entryId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
@@ -21,6 +21,36 @@ function text(value: unknown, pattern: RegExp, max: number): string {
   return value
 }
 function bool(value: unknown): boolean { if (typeof value !== 'boolean') invalid(); return value }
+function count(value: unknown): number {
+  if (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 1024) invalid()
+  return value as number
+}
+function recovery(value: unknown): PluginRecoveryState {
+  const state = record(value)
+  if (!['none', 'restored', 'partial', 'failed'].includes(state.status as string)) invalid()
+  const result: PluginRecoveryState = {
+    status: state.status as PluginRecoveryState['status'],
+    restored: count(state.restored),
+    relinked: count(state.relinked),
+    missing: count(state.missing),
+    failed: count(state.failed),
+    refused: count(state.refused),
+  }
+  /*
+   * 应用升级迁移的三项是后加的：旧版原生侧不带这些键，此时保持 undefined（界面按「没有迁移信息」
+   * 处理，向后兼容）；但只要带了就必须落在受控取值内 —— 放宽会让一个没人认识的状态悄悄漏到界面上。
+   */
+  if (state.migration !== undefined) {
+    if (!['none', 'done', 'partial', 'failed'].includes(state.migration as string)) invalid()
+    result.migration = state.migration as PluginRecoveryState['migration']
+  }
+  if (state.lock !== undefined) {
+    if (!['ok', 'missing', 'invalid', 'unwritable'].includes(state.lock as string)) invalid()
+    result.lock = state.lock as PluginRecoveryState['lock']
+  }
+  if (state.checked !== undefined) result.checked = count(state.checked)
+  return result
+}
 /**
  * 导入来源：npm 包名（含作用域名）或 `https://` / `git+https://` 地址。
  *
@@ -47,8 +77,10 @@ function importSource(value: unknown): string {
 
 /** 原生接口和浏览器预览共用输入校验，防止任意路径或命令进入设备。 */
 export function validatePluginRequest(request: PluginRequest): PluginRequest {
-  if (!['list', 'enable', 'child', 'update', 'import', 'rollback'].includes(request.operation)) invalid()
+  if (!['list', 'enable', 'child', 'update', 'import', 'rollback', 'repair'].includes(request.operation)) invalid()
   if (request.operation === 'list') return { operation: 'list' }
+  // 修复不带任何参数：原生侧只认操作名，插件目录、包名与事务都由它自己按运行时状态决定。
+  if (request.operation === 'repair') return { operation: 'repair' }
   if (request.operation === 'import') {
     const source = importSource(request.source)
     // `id` 只是「期望的包名」，用于地址形态装完后消歧；不填则由访客脚本按补丁声明推导。
@@ -72,7 +104,7 @@ export function validatePluginCatalog(value: unknown): PluginCatalog {
   if (!Array.isArray(payload.plugins) || payload.plugins.length > 32) invalid()
   let childrenCount = 0
   const ids = new Set<string>()
-  return { plugins: payload.plugins.map((raw: unknown) => {
+  const plugins = payload.plugins.map((raw: unknown) => {
     const group = record(raw)
     const id = text(group.id, packageId, 214)
     if (id.includes('..') || ids.has(id)) invalid()
@@ -96,5 +128,6 @@ export function validatePluginCatalog(value: unknown): PluginCatalog {
         return { id: childId, name: text(child.name, /^[A-Za-z0-9@_./:-]+$/, 214), enabled: bool(child.enabled), effectiveEnabled: bool(child.effectiveEnabled), protected: bool(child.protected) }
       }),
     }
-  }) }
+  })
+  return payload.recovery === undefined ? { plugins } : { plugins, recovery: recovery(payload.recovery) }
 }

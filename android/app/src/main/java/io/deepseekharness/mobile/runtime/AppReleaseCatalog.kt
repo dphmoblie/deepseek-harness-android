@@ -14,6 +14,10 @@ internal data class InstalledAppInfo(val versionName: String, val versionCode: L
  * 形态是 `0.2.0` 或 `0.2.0-mobile-308`：后缀是**同一版本内的构建序号**，不是预发布标记。
  * 所以 `0.2.0` 视为序号 0，排序为 `0.2.0` < `0.2.0-mobile-308` < `0.2.1-mobile-2`。
  *
+ * 光靠这个比较还不够：同版本正式版（`0.2.13`，序号 0）通常是预览版验证之后才发的，
+ * 序号反而最小。 [AppReleaseCatalog.availableRelease] 因此额外把「同版本正式版」算作
+ * 已安装预览构建的更新（见那里的收敛路径说明）。
+ *
  * 注意：运行时镜像的排序规则（[RuntimeUpdatePolicy.compareVersions]）把「无后缀」排在
  * 「有后缀」之前，与这里相反——两者不能互相复用。
  */
@@ -103,7 +107,7 @@ internal class AppReleaseCatalog(
         var bestVersion: AppUpdateVersion.Version? = null
         for (release in GitHubReleases.parse(catalogBytes())) {
             val version = AppUpdateVersion.parse(release.tag) ?: continue
-            if (version <= installedVersion) continue
+            if (!isUpdateOf(installedVersion, version)) continue
             if (bestVersion != null && version <= bestVersion) continue
             val asset = GitHubReleases.asset(release, APK_ASSET) ?: continue
             // 下载层只接受 1..MAX_COMPRESSED_BYTES：超出范围的包不拿出来当「可用更新」，
@@ -119,6 +123,26 @@ internal class AppReleaseCatalog(
             )
         }
         return best
+    }
+
+    /**
+     * 这个发布算不算已安装版本的更新。
+     *
+     * 常规判据是「严格更大」。这里额外交一条**收敛路径**：装了同版本预览构建
+     * （如 `0.2.13-mobile-5`）的设备，也要能收到同版本正式版（`0.2.13`）。发布流程里
+     * 预览版先出、验证通过后才发正式版，而序号只记 CI 运行号，正式版的序号反而是 0；
+     * 少了这条，正式版会被判成「更旧」，这些设备永远收不到它，只能手动装包。
+     *
+     * 反向不受影响：装了正式版仍会收到同版本的后续预览构建（沿用「后缀是同一版本内的
+     * 构建序号」的既有语义，预览通道的用户继续跟随预览）。
+     */
+    private fun isUpdateOf(installed: AppUpdateVersion.Version, candidate: AppUpdateVersion.Version): Boolean {
+        if (candidate > installed) return true
+        return installed.suffix != 0L &&
+            candidate.suffix == 0L &&
+            candidate.major == installed.major &&
+            candidate.minor == installed.minor &&
+            candidate.patch == installed.patch
     }
 
     /** 更新说明：去掉首尾空白并截断到 [MAX_NOTES_CHARS]（前端超限直接报错，不会替我们截断）。 */

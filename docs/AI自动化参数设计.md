@@ -1,4 +1,4 @@
-﻿# AI 自动化参数设计
+# AI 自动化参数设计
 
 > **状态**：设计稿（本文只描述参数模型、工具面、执行模型与边界，**不含实现代码**）。
 > **范围**：让 AI 通过工具把「自动化参数」写进应用，应用按参数自动操作**前台应用**；参数模型、抑制机制与匹配口径均由本项目自定（见 §2、§3）。
@@ -731,3 +731,82 @@ param   = {"op":"status"|"set"|"enable"|"trial", ...}
 - 复跑命令（`android` 目录下，`ANDROID_HOME` 指向 SDK）：
   - 编译：`gradle.bat --no-daemon "-Pkotlin.compiler.execution.strategy=in-process" --max-workers=1 "-Dorg.gradle.jvmargs=-Xmx1536m -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=96m -XX:MaxMetaspaceSize=640m -XX:+UseSerialGC" --console=plain :app:compileDebugKotlin`
   - 单测：同上参数，任务换成 `:app:testDebugUnitTest --tests io.deepseekharness.mobile.accessibility.AutomationRuleGateTest --tests io.deepseekharness.mobile.accessibility.AutomationRuleExecutorTest`（用**全限定名**，不要用通配）；结果 XML 在 `android/app/build/test-results/testDebugUnitTest/`。
+
+---
+
+## 总开关与运行记录（2026-10-07 追加）
+
+> 承接上一节：执行器有了，但**没有一个「人在应用里能按的开关」，也看不到它到底做了什么**。这一节记录本轮补上的这两件事，以及一条**与拍板结论冲突、需要用户再拍一次**的口径。
+
+### 落地的东西
+
+| 位置 | 内容 |
+| --- | --- |
+| `android/app/src/main/java/io/deepseekharness/mobile/accessibility/AutomationControl.kt` | 总开关的三态 `AutomationRuntime`（`off`/`running`/`paused`）、纯函数 `AutomationControlPolicy`（`admits` / `next` / `actionFromName` / `actionName` / `NAME_OFF`）、落盘 `AutomationControlStore`（`apply` / `runtime`） |
+| `android/app/src/main/java/io/deepseekharness/mobile/accessibility/AutomationRunLog.kt` | 本次会话的运行记录环形缓冲 `AutomationRunHistory`（`record` / `runs` / `blocked` / `dropped`）+ `AutomationRunLogPolicy`（`MAX_RECORDS_PER_PACKAGE`、`MAX_REASON_KINDS`） |
+| `android/app/src/main/java/io/deepseekharness/mobile/accessibility/DeepSeekAccessibilityService.kt` | `handleAutomationEvent` / `reevaluateAutomation` 的首行闸门（总开关不是 `running` 直接返回）；`handleAutomationReport` **在早退之前**记录运行记录（否则「没执行」的那些原因全丢了）；`applyAutomationRuntime` / `automationRuntime()` / `currentAutomationRuntime()` / `automationRunSnapshot` / `automationBlockedSnapshot` / `automationDroppedCount` / `automationRunLimit` |
+| `android/app/src/main/java/io/deepseekharness/mobile/MobileRuntimePlugin.kt` | 两个新桥方法 `setAccessibilityAutomationRuntime(call)`、`getAccessibilityAutomationRuns(call)`；`accessibilityStateToJs` 追加 `automationRuntime` / `serviceStatus` |
+| `src/App.tsx` + `src/platform/{types,validation,native,browser}.ts` | 设置页「无障碍应用自动化」下的两个 `settings-subsection`：**自动化总开关**（开始/暂停/继续/紧急停止 + 服务状态三态）与**本次会话的运行记录**（最近 20 条 + 拦截原因聚合 + 丢弃计数）；浏览器预览里总开关可跑通状态机、运行记录如实回「未连接 + 空」 |
+
+### 口径：总开关是**落盘的**，`automationEnabled` 是**会话级的**
+
+- 总开关（`automationRuntime`）由**人在设置页**改，落盘、跨重启保留；`paused` 与 `off` 都**不放行**任何规则动作（暂停只是保留「刚才开着」这个事实，方便一键继续）。
+- `automationEnabled`（上一节那个）仍是**会话级**、不落盘，只由 `automationRules` 命令打开；本轮给它加了一道前置闸门：**总开关不是 `running` 时，命令直接失败**（`AUTOMATION_ENABLE_FORBIDDEN`，文案引导用户去设置页点「开始」），且**不置 `automationEnabled = true`**。
+- 服务掉线（`serviceStatus = enabled_disconnected`）时**不谎报已连接**：界面明确说「系统里已开启，但服务没连上」，并给「打开系统无障碍设置」入口——应用内无法代劳。
+
+### ⚠️ 与拍板结论第 1 条的冲突（**需要用户再拍一次**）
+
+拍板结论（2026-10-05，`:654`）第 1 条写的是「**AI 可以开、也可以关自动化总开关**」，落地要求是：白名单为空时拒绝开启、开/关都写审计、开启后设置页与悬浮球显示「自动化已开启（由 AI 设置）」并提供一键关闭。
+
+**本轮代码采取的是相反的安全侧**（`docs/AI自动化参数设计.md:442` 的「AI 不能自己开启自动化」）：总开关不是 `running` 时，`automationRules` 命令一律拒绝。理由：
+
+1. 上述落地要求里，**除「白名单为空即拒」与「写审计」外都还没实装**——没有「由 AI 设置」标签、没有对应的一键关闭入口，也还没有区分「谁开的」的持久字段；
+2. 该命令**目前还不是设备桥的命令**（`DeviceBridgeServer.kt` 的内建命令只有 `automationPolicy` 与 `notify-turn-complete`），也就是说**今天没有任何 AI 路径能走到这里**，这道闸门只是把将来的语义先钉在安全侧；
+3. 半成品放行比拦住更危险：AI 打开自动化却没有任何界面痕迹，用户会以为是自己开的。
+
+**待用户确认**：是保持本轮的「AI 只能关不能开」（改文档口径），还是按 `:654` 落地完整要求（补「由 AI 设置」标签 + 一键关闭 + 白名单前置校验的用例）。在拍板之前**不静默放行**。
+
+### 本轮没做 / 没验的
+
+1. **没有真机验证**：总开关、运行记录、服务掉线提示都只有 JVM 单测 + 前端用例 + 编译证据。
+2. **运行记录是「本次会话」的**：服务进程一重建就清空；`dropped > 0` 只说明「更早的记录被容量挤掉了」，界面照实显示这个数字，不假装记录完整。
+3. **敏感页面拦截原因卡片**里显示的是受控码 + 已登记文案；**未登记的码**只显示原始码（`message` 为 `null` 时不编文案）。
+4. **每应用独立配置**（按包名读运行记录的前端入口）本轮只做了桥与校验（`getAccessibilityAutomationRuns(packageName)`），设置页暂时只显示跨包汇总。
+5. **规则启用/暂停/禁用**的逐条开关：执行器与存储早已支持（`enabled`），但**设置页还没有规则列表界面**——这一项在交付清单里仍然没做完。（已在下一节补齐。）
+
+## 规则读写界面（2026-10-11 追加）
+
+> 上一节把「开没开 / 为什么没动作 / 服务还在不在」接出来了，但**规则本身在界面上不存在**：AI 写的规则只能靠重新生成来改，用户看不到某个应用有几条规则，也没法把一条老是误触的规则单独停掉。这一节记录补上的「按应用查看、逐条启用/停用」，以及**它刻意不做的那几件事**。
+
+### 两个新桥方法（`android/app/src/main/java/io/deepseekharness/mobile/MobileRuntimePlugin.kt`）
+
+| 方法 | 参数 | 返回 | 拒收条件 |
+| --- | --- | --- | --- |
+| `getAccessibilityAutomationRules` | `packageName`（**必填**） | `{packageName, allowed, corrupt\|null, rules:[…]}` | 缺参数 / 格式非法 → `ACCESSIBILITY_CONFIG_INVALID` |
+| `setAccessibilityAutomationRuleEnabled` | `packageName`、`ruleId`、`enabled` | 同上的整包读数 | 规则 id 非法 / `enabled` 不是布尔 → `ACCESSIBILITY_CONFIG_INVALID`；**包不在白名单** → `ACCESSIBILITY_CONFIG_DENIED`；规则不存在 → `ACCESSIBILITY_CONFIG_NOT_FOUND`；写盘失败 → `ACCESSIBILITY_CONFIG_SAVE_FAILED`；数据损坏 → `ACCESSIBILITY_CONFIG_CORRUPT` |
+
+- **包名必填，不提供「省略即前台包」的兜底**：省略会让人以为查的是自己正在看的那个应用，而实际查的是别的包。
+- **只改 `enabled` 一个字段**：规则内容、白名单、总开关都不动；停用一条规则**不会删掉它**。
+- **写规则不需要验证密码**，但**必须过白名单**：白名单是「这台设备允许自动化哪些应用」的边界，改白名单要密码，按规则开关不需要——但白名单外的包一律拒写（`ACCESSIBILITY_CONFIG_DENIED`），这样即使校验被绕过，也不会写出一个永远不会被执行的规则。
+- 审计写 `AUTOMATION_RULE_ENABLED` / `AUTOMATION_RULE_DISABLED`（`AuditEvent.ACCESSIBILITY_CONFIG`）。
+
+### 回显刻意只带界面要判断的字段
+
+`rules[]` 每项只有 `id`、`enabled`、`actionKind`（`action.type`）、`selectorCount`、`maxActions`、`actionCoolDownMs`——**不带选择器正文**（文本与 `viewId` 足以反推界面内容），也不带允许/拒绝的 Activity 名单。界面只需要回答「这条规则是什么动作、几个选择器、最多点几次、现在启没启用」。
+
+### 前端（`src/platform/*` + `src/App.tsx`）
+
+- `src/platform/types.ts` 新增 `AccessibilityAutomationRule` / `AccessibilityAutomationRulesCorrupt` / `AccessibilityAutomationRules`；`src/platform/validation.ts` 新增 `validateAccessibilityAutomationRules`（规则 id 与原生 `AUTOMATION_RULE_ID` 同一套 `^[A-Za-z0-9._-]{1,64}$`，三个计数必须是非负安全整数）、`assertAccessibilityRuleId`、`assertBooleanFlag`。
+- `src/platform/native.ts` 两条实现都折进 Promise 链：**同步抛出会绕过调用方的失败分支**（界面拿不到 `failed` 状态，只看到一个没反应的按钮），这是上一批踩过的坑。
+- `src/platform/browser.ts` 如实拒绝「浏览器预览没有无障碍规则存储」——**不回空列表，也不放内存规则**：「0 条规则」会被界面显示成「你还没有规则」，而真相是这里读不到；预览里能开关的规则到真机上并不存在，那是最容易误导人的假成功。
+- `src/App.tsx` 的「自动化规则」区块：白名单里的应用一排按钮（`aria-pressed` 标当前查看的应用，进页面自动读第一个），每行一条规则 + 「启用」/「停用」；**不做乐观更新**（写失败时开关保持原位，只弹错误），写完重新读取整包读数。三种空态**分开说**：
+  - 这个应用还没有规则；
+  - 白名单外的应用：这些规则不会被任何事件用到（按钮禁用）；
+  - 规则数据不可用，已被清除：`{码}`（`{说明}`），需要重新生成规则。
+
+### 本轮没做 / 没验的
+
+1. **没有真机验证**：写盘后规则是否立刻生效、损坏态在真机上长什么样，都只有前端用例 + 编译证据。
+2. **两个新桥方法本身没有 JVM 单测**：`@PluginMethod` 的入参与拒收分支（白名单拒写、规则 id 非法、损坏）依赖 `PluginCall`，JVM 单测里构造不出来；这一层目前由 `scripts/native-bridge-parity.test.mjs` 的同名比对、`src/platform/validation.test.ts` 与 `src/App.accessibility.test.tsx` 间接覆盖，原生侧的拒收分支只能等真机/仪器化测试。
+3. **没有「新建 / 编辑 / 删除规则」的界面**：这一批只做「看 + 开关」。规则内容仍由 AI 生成、人在写盘前确认；删除规则只能靠重新生成覆盖整包。
+4. **没有「每应用独立配置」的表单**：白名单、`maxActions`、冷却时间这些参数的编辑入口仍只有桥与存储，没有界面。

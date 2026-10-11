@@ -891,3 +891,182 @@ test('bundle verification keeps the official profile baseline without a mobile m
   assert.match(verifier, /official frontend index missing #root/)
   assert.match(verifier, /duplicate frontend entry/)
 })
+
+test('app version has a single source across package.json, build.gradle and the workflow', async () => {
+  const packageJson = JSON.parse(await readFile(resolve(appRoot, 'package.json'), 'utf8'))
+  const gradle = await readFile(resolve(appRoot, 'android/app/build.gradle'), 'utf8')
+  const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
+
+  // 三处都是人工维护点，以前只靠发布前肉眼核对。任一处漏改就会产出「APK 自称
+  // 0.2.12、Release 标成 0.2.13」这种装不上、也退不回去的错版。
+  const versionName = gradle.match(/versionName\s+'([^']+)'/u)?.[1]
+  const appVersion = workflow.match(/^\s*APP_VERSION:\s*'([^']+)'\s*$/mu)?.[1]
+  assert.ok(versionName, 'android/app/build.gradle 必须写明 versionName')
+  assert.ok(appVersion, '.github/workflows/android-build.yml 必须写明 APP_VERSION')
+  assert.deepEqual(
+    new Set([packageJson.version, versionName, appVersion]),
+    new Set([packageJson.version]),
+    `版本号必须三处一致：package.json=${packageJson.version} build.gradle=${versionName} APP_VERSION=${appVersion}`,
+  )
+  assert.match(packageJson.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u)
+
+  const versionCode = gradle.match(/versionCode\s+(\d+)/u)?.[1]
+  assert.ok(versionCode, 'android/app/build.gradle 必须写明 versionCode')
+  assert.ok(
+    Number.isInteger(Number(versionCode)) && Number(versionCode) > 0,
+    `versionCode 必须是正整数：${versionCode}`,
+  )
+})
+
+test('CI toolchain versions are pinned and runners carry no floating label', async () => {
+  const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
+
+  // 浮动版本会让「同一份提交」在几个月后编出不同的镜像。这里要求每个工具链都写成
+  // 带补丁号的确定版本，运行器也必须落在具体镜像上（-latest 随 GitHub 迁移漂移）。
+  const nodeVersions = [...workflow.matchAll(/node-version:\s*'([^']+)'/gu)].map(match => match[1])
+  assert.ok(nodeVersions.length >= 2, '每个需要 Node 的作业都要显式钉版本')
+  for (const value of nodeVersions) {
+    assert.match(value, /^\d+\.\d+\.\d+$/u, `Node 版本必须写全补丁号：${value}`)
+  }
+
+  const javaVersions = [...workflow.matchAll(/java-version:\s*'([^']+)'/gu)].map(match => match[1])
+  assert.ok(javaVersions.length >= 1, 'JDK 版本必须显式钉住')
+  for (const value of javaVersions) {
+    assert.match(value, /^\d+\.\d+\.\d+$/u, `JDK 版本必须写全补丁号：${value}`)
+  }
+
+  const gradleVersions = [...workflow.matchAll(/gradle-version:\s*([^\s']+)/gu)].map(match => match[1])
+  assert.deepEqual(gradleVersions, ['8.11.1'], 'Gradle 版本只允许以精确值出现一次（wrapper jar 由它现场生成）')
+
+  for (const component of ['platforms;android-35', 'build-tools;35.0.0', 'cmake;3.22.1', 'ndk;27.1.12297006']) {
+    assert.ok(workflow.includes(`"${component}"`), `Android SDK 组件必须显式安装：${component}`)
+  }
+  assert.doesNotMatch(workflow, /sdkmanager[^\n]*latest/u, 'Android SDK 组件不允许用 latest')
+
+  const runners = [...workflow.matchAll(/runs-on:\s*(\S+)/gu)].map(match => match[1])
+  assert.ok(runners.length >= 4, '每个作业都要写明运行器')
+  assert.doesNotMatch(workflow, /runs-on:\s*\S*-latest/u, '运行器不能使用 ubuntu-latest 这类浮动标签')
+  for (const runner of runners) {
+    assert.match(runner, /^[a-z0-9]+-\d[\w.-]*$/u, `运行器必须写具体镜像：${runner}`)
+  }
+})
+
+test('harness-web frozen pointer matches the index and the committed gitlink', async t => {
+  const lines = (await readFile(resolve(appRoot, 'harness-web.pin'), 'utf8'))
+    .split(/\r?\n/u)
+    .map(line => line.trim())
+    .filter(line => line.length > 0 && !line.startsWith('#'))
+  assert.equal(lines.length, 1, 'harness-web.pin 只允许写一条冻结指纹')
+  const pin = lines[0]
+  assert.match(pin, /^[0-9a-f]{40}$/u, `冻结指纹必须是完整的 40 位 sha1：${pin}`)
+
+  const git = args => spawnSync('git', args, { cwd: appRoot, encoding: 'utf8' })
+
+  const staged = git(['ls-files', '-s', 'harness-web'])
+  assert.equal(staged.status, 0, staged.stderr)
+  assert.match(
+    staged.stdout,
+    new RegExp(`^160000 ${pin} 0\\tharness-web$`, 'mu'),
+    '索引里的子模块指针必须等于冻结指纹',
+  )
+
+  const committed = git(['ls-tree', 'HEAD', 'harness-web'])
+  assert.equal(committed.status, 0, committed.stderr)
+  assert.match(
+    committed.stdout,
+    new RegExp(`^160000 commit ${pin}\\tharness-web$`, 'mu'),
+    'HEAD 里已提交的子模块指针必须等于冻结指纹',
+  )
+
+  // 工作区的子模块目录允许落后（CI 按 gitlink 重新检出，本地不必同步），
+  // 所以这里只提示、不判失败——但提交时绝不能把这个漂移带上。
+  const worktree = git(['-C', 'harness-web', 'rev-parse', 'HEAD'])
+  if (worktree.status === 0) {
+    const head = worktree.stdout.trim()
+    if (head !== pin) {
+      t.diagnostic(`本地 harness-web 工作区在 ${head}，与冻结指针 ${pin} 不同：提交前确认它不是要一起提交的换版`)
+    }
+  }
+})
+
+test('published assets are re-downloaded and re-verified, and a failed check only drafts the release', async () => {
+  const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
+
+  // 复核必须排在上传之后：上传前的任何校验都证明不了「用户拿到的字节」。
+  const uploadIndex = workflow.indexOf('UPLOAD_BASE=')
+  const verifyIndex = workflow.indexOf('verify-release-assets.py')
+  assert.ok(uploadIndex > 0, '发布作业必须上传资产')
+  assert.ok(verifyIndex > uploadIndex, '发布后必须重新下载并复核资产')
+
+  // 复核要显式限定资产集合：清单悄悄多一项或少一项时门禁不能形同虚设。
+  assert.match(
+    workflow,
+    /verify-release-assets\.py[\s\S]{0,200}--expect app-release\.apk,rootfs\.bundle,runtime-manifest\.json,release-manifest\.json/u,
+  )
+  // 下载走带 token 的 gh，私有仓库也不会把 404 误判成坏发布。
+  assert.match(workflow, /gh release download "\$\{RELEASE_TAG\}"/u)
+
+  // 撤回挂在 failure() 上，并且只转草稿（可恢复），不删资产、不删标签。
+  assert.match(workflow, /if: failure\(\)[\s\S]{0,1500}"draft":true/u)
+  assert.doesNotMatch(workflow, /-X DELETE[\s\S]{0,200}\/releases\/\$\{RELEASE_ID\}/u)
+
+  // 两个值必须由创建步骤导出，否则复核与撤回都找不到目标。
+  assert.match(workflow, /echo "RELEASE_TAG=\$\{TAG\}"[\s\S]{0,120}>> "\$GITHUB_ENV"/u)
+  assert.match(workflow, /echo "RELEASE_ID=\$\{RELEASE_ID\}"[\s\S]{0,120}>> "\$GITHUB_ENV"/u)
+
+  const verifier = await readFile(resolve(appRoot, 'scripts/verify-release-assets.py'), 'utf8')
+  assert.match(verifier, /RELEASE_ASSETS_OK/u, '复核脚本必须打印可检索的成功标记')
+  assert.match(verifier, /RELEASE_VERIFY_FAILED/u, '复核脚本必须打印可检索的失败前缀')
+})
+
+test('the published version manifest is written before the checksums and shipped with them', async () => {
+  const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
+  const generator = await readFile(resolve(appRoot, 'scripts/release-manifest.py'), 'utf8')
+  // 断言参数与字段时先压掉所有空白：缩进与对象内空格变动不该让契约失效，
+  // 但参数名、取值来源和先后顺序必须钉住。
+  const compact = workflow.replace(/\s+/gu, '')
+
+  const manifestIndex = workflow.indexOf('/tmp/release-manifest.json')
+  const checksumsIndex = workflow.indexOf('> /tmp/checksums.txt')
+  assert.ok(manifestIndex > 0, '发布作业必须生成版本清单 release-manifest.json')
+  assert.ok(checksumsIndex > manifestIndex, '版本清单必须先于 checksums.txt 生成，否则它不会被登记进校验清单')
+
+  // 清单要进 checksums.txt（发布前复核要求目录与清单完全一致），并随其它资产一起上传。
+  assert.ok(
+    compact.includes('forfin"$APK"/tmp/runtime/rootfs.bundle/tmp/runtime/runtime-manifest.json/tmp/release-manifest.json/tmp/checksums.txt;do'),
+    '版本清单必须与其它资产一起登记进 checksums.txt',
+  )
+  assert.ok(
+    compact.includes('--expectapp-release.apk,rootfs.bundle,runtime-manifest.json,release-manifest.json'),
+    '发布后复核的资产集合必须包含 release-manifest.json',
+  )
+
+  // 生成逻辑必须来自受测脚本（本地夹具测试真跑它），而不是写得只此一处的 jq 模板。
+  for (const fragment of [
+    'scripts/release-manifest.py\\',
+    '--version"${APP_VERSION}"',
+    '--tag"$TAG"',
+    '--release-type"$RELEASE_TYPE"',
+    '--commit"$GITHUB_SHA"',
+    '--apk"$APK"',
+    '--bundle/tmp/runtime/rootfs.bundle',
+    '--runtime-manifest/tmp/runtime/runtime-manifest.json',
+    '--out/tmp/release-manifest.json',
+  ]) {
+    assert.ok(compact.includes(fragment), `发布作业没有按约定调用版本清单生成器：${fragment}`)
+  }
+
+  // 清单本身要机器可读：schemaVersion + 版本 + 标签 + 完成类型的提交号 + 每个资产的 sha256/字节数。
+  for (const fragment of [
+    'SCHEMA_VERSION = 1',
+    '"appVersion": version',
+    '"releaseTag": tag',
+    '"releaseType": release_type',
+    '"commit": commit',
+    '"name": path.name',
+    '"sha256": sha256_of(path)',
+    '"bytes": path.stat().st_size',
+  ]) {
+    assert.ok(generator.includes(fragment), `版本清单生成器缺少字段：${fragment}`)
+  }
+})

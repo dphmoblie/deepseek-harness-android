@@ -725,6 +725,109 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
   }
 
   // -------------------------------------------------------------------------
+  // 已安装插件版本账本（installed-lock.json）
+  //
+  // 与 state-snapshot.json 的分工必须先说清楚，否则两份都放在保留区里的文件会被混用：
+  //  - `state-snapshot.json` 记的是**启停状态**（用户的选择：哪些包启用、哪些子插件关掉），
+  //    运行时升级后由 `restoreState()` 回填进清单，只补缺失项、绝不覆盖用户当前选择；
+  //  - `installed-lock.json` 记的是**版本事实**（盘上装了什么：解析到的版本号、包本体所在的
+  //    事务目录、来源、这条事实最后变化的时间），供原生侧做 APK 升级迁移时逐条核对
+  //    「包目录还在不在」。它**不**参与启停回填，回填逻辑也**不**读它。
+  //
+  // 写入时机是"改完盘之后"：安装/导入、回滚、启停、`recover`、`repair` 五条路径各刷一次；
+  // `list()` 保持纯读，不写账本（与它不写状态快照同理）。
+  // 账本只是辅助：**写失败绝不能让主流程失败**，但会以受控结果（`written` / `failed` /
+  // `skipped`）随操作结果回传，由原生侧并入插件设置页的恢复提示。
+  // -------------------------------------------------------------------------
+
+  const lockFile = path.join(home, 'installed-lock.json')
+  const LOCK_SCHEMA = 1
+  const LOCK_LIMIT = 256
+  /** 来源取值与安装入口一一对应；`unknown` 是"首次登记时无从判定"的如实取值，不是失败。 */
+  const LOCK_SOURCES = ['bundle', 'npm', 'url', 'git', 'unknown']
+  const LOCK_TIME = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/
+  /**
+   * 读取账本。缺失、超限或**任何一条**不合法都返回 []：账本读不了只等于"还没有账本"，
+   * 绝不能因此删除、移动或改写任何插件目录（与 `previousEntries()` 同一口径）。
+   */
+  function lockEntries() {
+    if (!exists(lockFile)) return []
+    try {
+      safe(lockFile)
+      if (!fs.lstatSync(lockFile).isFile() || fs.statSync(lockFile).size > SNAPSHOT_FILE_LIMIT) return []
+      const value = JSON.parse(fs.readFileSync(lockFile, 'utf8'))
+      if (!value || typeof value !== 'object' || value.schemaVersion !== LOCK_SCHEMA) return []
+      if (!Array.isArray(value.plugins) || value.plugins.length > LOCK_LIMIT) return []
+      const rows = new Map()
+      for (const row of value.plugins) {
+        if (!row || typeof row !== 'object') return []
+        if (typeof row.id !== 'string' || row.id.length > 214 || !NAME.test(row.id) || row.id.includes('..')) return []
+        if (row.version !== null && (typeof row.version !== 'string' || !VERSION.test(row.version))) return []
+        if (row.transaction !== null && (typeof row.transaction !== 'string' || !TRANSACTION_ID.test(row.transaction))) return []
+        if (typeof row.source !== 'string' || !LOCK_SOURCES.includes(row.source)) return []
+        if (typeof row.updatedAt !== 'string' || !LOCK_TIME.test(row.updatedAt)) return []
+        rows.set(row.id, { id: row.id, version: row.version, transaction: row.transaction, source: row.source, updatedAt: row.updatedAt })
+      }
+      return [...rows.values()]
+    } catch { return [] }
+  }
+  /** 该插件当前解析到的包目录（真实路径）；解析不到或落点异常时返回 null。 */
+  function lockLocation(id) {
+    try { return resolvePackage(id) } catch { return null }
+  }
+  /**
+   * 按当前盘上的事实重建账本。
+   *
+   * 逐条判定：
+   *  - 能解析到包目录：记下解析到的版本号；落点形如 `versions/<事务>/node_modules/<名>` 时
+   *    一并记下事务目录名，其他落点（例如官方包的 `opt/dsh/node_modules`）如实记为 `null`；
+   *  - 解析不到：**保留**上一次登记的事实不动 —— 正是"账本里有、包目录却不在"这种形态要被
+   *    APK 升级迁移核对出来，删掉这条等于把缺口抹平；从未登记过时才如实写 `version: null`；
+   *  - 来源：本次操作明确知道的（安装/导入传入）写本次的，否则保留已登记的；都没有时官方包
+   *    记 `bundle`、其余记 `unknown` —— 不猜它当初是 npm 装的还是直链装的；
+   *  - 条目 `updatedAt` 只在该条的版本或事务目录真的变了、或该条首次写入时刷新：否则每次启停
+   *    都会把整表时间戳推一遍，反而看不出哪一条是新装的（文件级 `updatedAt` 是每次写入时间）。
+   */
+  function refreshLock(hint) {
+    // 清单还不存在时没有"已装插件"可言：不写空账本（那会覆盖掉升级前留下的那一份）。
+    if (!exists(profile)) return 'skipped'
+    // 清单读不出来同样是"本次没有可登记的事实"，与"写失败"是两回事：
+    // 前者如实记 `skipped`，后者才是 `failed`（界面只把 `failed` 当问题提示）。
+    let config
+    try { config = manifest() } catch { return 'skipped' }
+    const known = new Map(lockEntries().map(row => [row.id, row]))
+    const now = new Date().toISOString()
+    const rows = []
+    for (const id of config.names) {
+      const before = known.get(id) ?? null
+      const directory = lockLocation(id)
+      const version = directory === null ? null : versionOf(directory)
+      const located = directory === null ? null : versionDirectory(id, directory)
+      const source = hint && hint.id === id && typeof hint.source === 'string' && LOCK_SOURCES.includes(hint.source)
+        ? hint.source
+        : (before?.source ?? (officialPackage(id) ? 'bundle' : 'unknown'))
+      const transaction = located?.transaction ?? (directory === null ? before?.transaction ?? null : null)
+      const changed = version !== null && (before === null || before.version !== version || before.transaction !== transaction)
+      rows.push({
+        id,
+        version: version ?? before?.version ?? null,
+        transaction,
+        source,
+        updatedAt: changed || before === null ? now : before.updatedAt,
+      })
+    }
+    // 清单里已经没有的条目不再保留：账本记的是"已装插件"的版本事实，卸载过的插件留着，下次
+    // APK 升级迁移就会把它的包目录算成"不在设备上"，界面跟着误报"需要重新安装"。
+    // （清单读不出来时上面已经按 skipped 返回，那种情况下升级前留下的旧账本原样不动。）
+    atomic(lockFile, { schemaVersion: LOCK_SCHEMA, updatedAt: now, plugins: rows })
+    return 'written'
+  }
+  /** 刷新账本并把结果收敛成受控取值；**失败只回传、不抛出**（不能把成功报成失败）。 */
+  function lockQuiet(hint) {
+    try { return refreshLock(hint) } catch { return 'failed' }
+  }
+
+  // -------------------------------------------------------------------------
   // 启停状态快照（跨运行时升级）
   //
   // 插件启停写在 `profiles/web/package.json`（`dsh.profile.bundles` / `dshMobile.*`）与
@@ -886,6 +989,9 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     summary.missing = relink.missing
     summary.failed += relink.failed
     summary.refused += relink.refused
+    // 接回之后必须重建账本：被接回的那几个插件刚刚才重新"解析得到"，
+    // 上一条记录里它们还停在"解析不到"的形态。写失败只回传，不影响本次修复结果。
+    summary.lock = lockQuiet()
     return summary
   }
   /**
@@ -1274,7 +1380,9 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     rows.push({ id: childId, disabled: !enabled })
     atomic(overrideFile, rows)
     snapshotQuiet()
-    return list()
+    // 启停不改版本，但同样要刷一次版本账本：让 `updatedAt` 与当前盘上的事实对齐，
+    // 并把"账本写不进去"这类问题在用户做过的操作上如实回传。
+    return { ...list(), lock: lockQuiet() }
   }
   function requireEditable(id) {
     validName(id)
@@ -1297,7 +1405,7 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     config.value.dshMobile = { ...config.value.dshMobile, bundleOrder: order, disabledBundles: config.names.filter(name => !bundles.includes(name)) }
     atomic(profile, config.value)
     snapshotQuiet()
-    return list()
+    return { ...list(), lock: lockQuiet() }
   }
   /**
    * 恢复入口：先回滚未提交的安装事务，再尝试回填被重建掉的启停状态。
@@ -1308,7 +1416,10 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
    */
   function recover() {
     recoverJournal()
-    try { return restoreState() } catch { return { restored: false, reason: 'failed' } }
+    let state
+    try { state = restoreState() } catch { state = { restored: false, reason: 'failed' } }
+    // 账本在恢复之后重建：事务回放与状态回填都可能改变"盘上到底装了什么"。
+    return { ...state, lock: lockQuiet() }
   }
   /** 回滚未提交的安装事务：按恢复记录把备份换回原位，然后删掉记录（=事务结束）。 */
   function recoverJournal() {
@@ -1589,7 +1700,9 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     snapshotQuiet()
     try { fs.rmSync(path.join(home, 'backups', transactionId), { recursive: true, force: true }) } catch {}
     // 消重计数与数据搬运统计随结果一起回传：只含计数，不含任何路径。
-    return { ...result, runtimeDedupe, data }
+    // 版本账本同样在提交点之后写：记下这次装成的版本、落点事务目录与来源
+    // （`spec.kind` 的 `npm` / `url` / `git` 与访客侧来源校验的三种形态一一对应）。
+    return { ...result, runtimeDedupe, data, lock: lockQuiet({ id, source: spec.kind }) }
   }
   /** git 地址的前置探测：三种结论（可用 / 确实没有 / 探测不了）必须区分开。 */
   function requireGit() {
@@ -1703,7 +1816,8 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     // 提交点之后：登记"刚被换下的那一版"与清理备份都只是收尾。
     try { recordPrevious(id, replaced) } catch { /* 登记失败只是失去再回滚一次的能力。 */ }
     try { fs.rmSync(path.join(home, 'backups', transactionId), { recursive: true, force: true }) } catch {}
-    return list()
+    // 账本按事实重建：回滚后解析到的版本与事务目录都变了；来源沿用上一条（回滚不改变"当初从哪来"）。
+    return { ...list(), lock: lockQuiet({ id, source: null }) }
   }
   return { list, setEnabled, setChildEnabled, update, importPackage, rollback, recover, repair, scanRuntimeGraph }
 }
@@ -1740,7 +1854,9 @@ if (require.main === module) {
     let result
     if (operation === 'list') result = manager.list()
     // 状态回填只发生在 recover 里（list 保持纯读）；回填结果随恢复结果一起回传。
-    else if (operation === 'recover') result = { recovered: true, state: manager.recover() }
+    // `lock` 同时出现在顶层与 `state` 里：顶层供原生侧统一读取（与其它操作的 `lock` 字段同形），
+    // `state` 让恢复结果自己能说清"启停状态回填了没有、版本账本写成了没有"。
+    else if (operation === 'recover') { const state = manager.recover(); result = { recovered: true, lock: state.lock, state } }
     else if (operation === 'repair') { manager.recover(); result = manager.repair() }
     // 模块图探测是只读的：不走 recover()，也不参与 repair 的代次指纹，可随时独立触发。
     else if (operation === 'graph') result = manager.scanRuntimeGraph()

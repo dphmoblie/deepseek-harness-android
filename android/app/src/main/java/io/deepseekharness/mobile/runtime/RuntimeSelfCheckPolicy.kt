@@ -14,7 +14,10 @@ internal object RuntimeSelfCheckPolicy {
     const val CHECK = "check"
     const val REPAIR = "repair"
 
-    /** 单次载荷的条目上限；自检固定只有十四项（十一项链路 + 三项编译环境能力），多出来的一律不可信。 */
+    /**
+     * 单次载荷的条目上限；自检固定只有十八项：访客脚本产出十一项链路 + 三项编译环境能力（共 14 项），
+     * 宿主再追加四项设备事实（插件链接 / 无障碍 / 副屏悬浮窗 / 系统 WebView），多出来的一律不可信。
+     */
     const val MAX_CHECKS = 32
 
     /** 计数上限：修复只有三个可改目标，超过这个数就说明载荷不可信。 */
@@ -23,7 +26,11 @@ internal object RuntimeSelfCheckPolicy {
     /** 操作名白名单：其它值一律拒绝（返回 null，由调用方转成受控错误）。 */
     fun operation(value: String?): String? = value?.takeIf { it == CHECK || it == REPAIR }
 
-    /** 检查项 id：契约冻结，**这个顺序就是回传顺序**（与访客脚本、界面一致）。 */
+    /**
+     * 检查项 id：契约冻结，**这个顺序就是回传顺序**（与访客脚本、界面一致）。
+     *
+     * 前 11 项链路是访客脚本的第一版契约，顺序不得改动（`hardlink` 仍是索引 9）。
+     */
     val CHECK_IDS = listOf(
         "shell",
         "node",
@@ -40,6 +47,12 @@ internal object RuntimeSelfCheckPolicy {
         "c_compiler",
         "make",
         "python3",
+        // 追加的宿主事实项：访客脚本**不产出**这四项，由 Android 侧读取设备事实后并入（见 SelfCheckHostFacts）。
+        // 同样只能追加在末尾：既有 14 项（访客 11 链路 + 3 编译能力）的 id 与相对顺序不得改动。
+        "plugins",
+        "accessibility",
+        "virtualscreen",
+        "webview",
     )
 
     /** 状态白名单。`ok` 不带 `code`，其余状态必须带 `code`。 */
@@ -123,6 +136,32 @@ internal object RuntimeSelfCheckPolicy {
             "PYTHON3_UNUSABLE" to "warn",
             "PYTHON3_PROBE_UNKNOWN" to "warn",
         ),
+        // 宿主追加的四项设备事实。事实由 Android 侧读取（SelfCheckHostFacts 只做判定），
+        // 校验收敛到同一张表，避免两条契约并行演化。
+        //
+        // 状态语义：插件链接缺失 / 无障碍未连接 / 未授予悬浮窗权限都是 `warn` —— 它们是**可选功能
+        // 没打开或可人工修**，不是运行时链路故障；只有 WebView 不可用是 `fail`：界面本身就由 WebView
+        // 渲染，它不可用时应用根本起不来。
+        //
+        // 每项都带一个 `*_PROBE_UNKNOWN`（warn）：探测本身失败（取不到事实）时如实报「没读到」，
+        // 既不用 `ok` 掩盖没测到的事实，也不把没读到的结论说成故障。
+        "plugins" to mapOf(
+            "PLUGIN_LINK_MISSING" to "warn",
+            "PLUGIN_LINK_FAILED" to "warn",
+            "PLUGIN_PROBE_UNKNOWN" to "warn",
+        ),
+        "accessibility" to mapOf(
+            "ACCESSIBILITY_NOT_CONNECTED" to "warn",
+            "ACCESSIBILITY_PROBE_UNKNOWN" to "warn",
+        ),
+        "virtualscreen" to mapOf(
+            "OVERLAY_PERMISSION_MISSING" to "warn",
+            "OVERLAY_PROBE_UNKNOWN" to "warn",
+        ),
+        "webview" to mapOf(
+            "WEBVIEW_UNAVAILABLE" to "fail",
+            "WEBVIEW_PROBE_UNKNOWN" to "warn",
+        ),
     )
 
     /** 访客脚本回传的原始条目：字段都还没校验过。 */
@@ -131,7 +170,7 @@ internal object RuntimeSelfCheckPolicy {
     /** 校验后的条目：`code` 只在该检查项非 `ok` 时存在。 */
     internal data class Check(val id: String, val status: String, val code: String?)
 
-    /** 十四项检查的汇总：诊断日志只写这两个值。 */
+    /** 十八项检查（访客 14 项 + 宿主 4 项）的汇总：诊断日志只写这两个值。 */
     internal data class Summary(val firstFailureCode: String?, val failedCount: Int)
 
     /** 修复计数：`candidates` 是本次涉及的目标数，`repaired` 是实际改动的数量。 */

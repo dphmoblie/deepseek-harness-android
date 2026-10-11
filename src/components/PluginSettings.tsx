@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ChevronDown, Package, RefreshCw } from 'lucide-react'
 import { t, useLanguage } from '../i18n'
-import type { PluginCatalog, PluginRequest, RuntimeBridge, RuntimeState } from '../platform/types'
+import type { PluginCatalog, PluginRecoveryState, PluginRequest, RuntimeBridge, RuntimeState } from '../platform/types'
 import './PluginSettings.css'
 
 /** 原生侧在无法给出更精确信息时使用的通用文案：与它相同时不重复展示。 */
@@ -34,6 +34,97 @@ const successNotices: Record<string, string> = {
   update: '插件包已更新，下次启动生效',
   import: '插件已导入，下次启动生效',
   rollback: '已回滚到上一版本，下次启动生效',
+  repair: '插件修复已执行，列表已刷新',
+}
+
+/**
+ * 运行时升级后的插件恢复结果，以及人工重试入口。
+ *
+ * 提示出现有两种来源：原生侧最近一次自愈的受控计数（`recovery`），以及当前列表里
+ * 「已启用却解析不到」的插件数（`unresolved`）。后者覆盖「自愈还没跑过」的空档 ——
+ * 运行时或应用刚升级完、还没启动过 Harness 时，升级抹掉的插件链接就只表现为列表里
+ * 的「未安装」，此时也必须能看到修复入口。
+ *
+ * 「立即修复插件」是显式重试：原生侧会绕过「同一代次只修一次」的自愈闸门与失败冷却，
+ * 修完立刻回读一次列表，所以点完按钮界面上的版本号会跟着变。
+ */
+function RecoveryNotice({ recovery, unresolved, locked, onRepair }: {
+  recovery?: PluginRecoveryState
+  unresolved: number
+  locked: boolean
+  onRepair: () => void
+}) {
+  const reported = recovery !== undefined && recovery.status !== 'none'
+  const restored = recovery?.restored ?? 0
+  const relinked = recovery?.relinked ?? 0
+  const missing = recovery?.missing ?? 0
+  const failed = recovery?.failed ?? 0
+  const refused = recovery?.refused ?? 0
+  const migration = recovery?.migration ?? 'none'
+  const lock = recovery?.lock ?? 'missing'
+  const checked = recovery?.checked ?? 0
+  const changed = restored + relinked
+  const issueCount = reported ? missing + failed + refused : unresolved
+  /*
+   * 应用升级迁移（`migration`）与版本记录可用性（`lock`）是后加的状态，提示出现的规则有意收窄：
+   * 只有「迁移只完成一部分 / 迁移没成功 / 版本记录损坏或写不进去」这四种要单独提示；迁移正常完成
+   * 时并入下面已有文案，免得每次应用升级都在设置页留一条用户读完也不知道要做什么的提示。
+   */
+  const attention = migration === 'partial' || migration === 'failed' || lock === 'invalid' || lock === 'unwritable'
+  if (!reported && !attention && unresolved === 0) return null
+  const tone = recovery !== undefined && recovery.status !== 'none'
+    ? recovery.status
+    : migration === 'failed'
+      ? 'failed'
+      : 'partial'
+  const mark = tone === 'restored' ? '✓' : tone === 'partial' ? '!' : '×'
+  const title = reported
+    ? tone === 'restored'
+      ? '插件已恢复'
+      : tone === 'partial'
+        ? '插件已部分恢复'
+        : '插件恢复失败'
+    : migration === 'failed'
+      ? '插件迁移没有完成'
+      : unresolved > 0
+        ? '有插件未接回运行时'
+        : migration === 'partial'
+          ? '有插件需要重新安装'
+          : '插件版本记录有问题'
+  const detail = reported
+    ? changed > 0
+      ? t('已恢复 {0} 个配置、重新链接 {1} 个插件。', restored, relinked)
+      : t('没有可直接恢复的插件链接。')
+    : unresolved > 0
+      ? t('有 {0} 个已启用插件在当前运行时里解析不到，通常发生在运行时或应用升级之后。', unresolved)
+      : ''
+  const issues = reported && issueCount > 0
+    ? t('缺失 {0} 个，失败 {1} 个，拒绝 {2} 个。', missing, failed, refused)
+    : ''
+  // 迁移结果只用用户看得懂的说法：说"版本记录"与"包还在不在设备上"，不出现内部文件名与字段名。
+  const migrationNote = migration === 'done'
+    ? checked > 0
+      ? t('应用升级迁移已完成，已按版本记录核对 {0} 个插件，包都在设备上。', checked)
+      : t('应用升级迁移已完成。')
+    : migration === 'partial'
+      ? t('应用升级迁移只完成了一部分，有插件的包已不在设备上，需要重新安装。')
+      : migration === 'failed'
+        ? t('应用升级迁移没有成功，下次启动 Harness 时会自动重试。')
+        : ''
+  const lockNote = lock === 'invalid'
+    ? t('已装插件的版本记录已损坏，无法据此核对插件是否还在设备上。')
+    : lock === 'unwritable'
+      ? t('已装插件的版本记录写不进去（磁盘空间或权限问题），下次启动会再试一次。')
+      : ''
+  return <section className={`plugin-recovery plugin-recovery-${tone}`} aria-live="polite" role={tone === 'failed' ? 'alert' : 'status'}>
+    <div className="plugin-recovery-mark" aria-hidden="true">{mark}</div>
+    <div><strong>{t(title)}</strong><p>{detail} {issues} {migrationNote} {lockNote}</p>
+      <div className="plugin-recovery-actions">
+        <button className="button button-secondary compact-button" type="button" disabled={locked} onClick={onRepair}>{t('立即修复插件')}</button>
+        <span className="plugin-hint">{t('按保留的插件包重新接回运行时链接，不重新下载；包本体已被清除的插件修不回来，需要重新安装。')}</span>
+      </div>
+    </div>
+  </section>
 }
 
 export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBridge; runtime: RuntimeState; onBack: () => void }) {
@@ -68,8 +159,10 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
         // 原生侧会在能定位问题时把受控详情（包名与版本差异）放进 message；
         // 与通用文案相同时不重复展示。
         const raw = error && typeof error === 'object' && 'message' in error && typeof error.message === 'string' ? error.message : ''
-        const detail = raw !== '' && raw !== GENERIC_PLUGIN_FAILURE ? raw : ''
-        setNotice(errorMessages[code] ?? GENERIC_PLUGIN_FAILURE)
+        const notice = errorMessages[code] ?? GENERIC_PLUGIN_FAILURE
+        // 受控码的文案常常与原生消息逐字相同（例如 RUNTIME_BUSY）：同一句话只显示一次。
+        const detail = raw !== '' && raw !== GENERIC_PLUGIN_FAILURE && raw !== notice ? raw : ''
+        setNotice(notice)
         setNoticeDetail(detail)
         setFailed(true)
       }
@@ -91,6 +184,10 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
     finally { pending.current = false; if (active.current) setBusy(false) }
   }
   const locked = busy || (!stopped && ['running', 'stopping', 'preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase))
+  /** 显式重试一次修复：与自愈共用同一个原生入口，但不受它的代次闸门与冷却窗口约束。 */
+  const repair = useCallback(() => { void run({ operation: 'repair' }) }, [run])
+  /** 已启用却在当前运行时里解析不到的插件包：升级抹掉链接后，列表就是这个样子。 */
+  const unresolved = catalog?.plugins.filter(group => group.enabled && !group.installed && !group.official).length ?? 0
   return <div className="screen plugin-screen">
     <div className="screen-heading management-heading">
       <div><p className="eyebrow">{t('应用管理')}</p><h1>{t('插件管理')}</h1></div>
@@ -116,6 +213,7 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
       <p className="plugin-hint">{t('通过链接导入时，可填写预期包名，以核对安装结果；如果链接中有多个插件包，可用它指定要安装的包。')}</p>
     </section>
     {notice && <p className="plugin-notice" role={failed ? 'alert' : 'status'}>{t(notice)}{noticeDetail !== '' && `（${noticeDetail}）`}</p>}
+    {catalog && <RecoveryNotice recovery={catalog.recovery} unresolved={unresolved} locked={locked} onRepair={repair} />}
     {busy && <p role="status">{t('正在处理插件，请稍候')}</p>}
     {catalog?.plugins.length === 0 && <p>{t('暂无插件。安装运行环境后点击「刷新」。')}</p>}
     {[true, false].map(official => <section key={String(official)} className="plugin-category" aria-label={t(official ? '官方插件' : '第三方插件')}>

@@ -54,6 +54,7 @@ import {
   Wrench,
   X,
   Blocks,
+  ListChecks,
   MessageSquare,
 } from 'lucide-react'
 import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
@@ -77,7 +78,13 @@ import {
 import type {
   DiagnosticLogState,
   DiagnosticLogText,
+  AccessibilityAutomationAction,
+  AccessibilityAutomationRun,
+  AccessibilityAutomationRules,
+  AccessibilityAutomationRuns,
+  AccessibilityAutomationRuntime,
   AccessibilityAutomationState,
+  AccessibilityServiceStatus,
   AppUpdateState,
   HarnessLog,
   KeepAliveState,
@@ -833,12 +840,50 @@ function Brand() {
 
 // 读取之前的占位状态：什么都还没读到，因此列表空、密码标记为未设置。
 // 真实取值由 getAccessibilityAutomationState 回填，这里不预置任何包名。
+// 总开关与服务状态取**最保守**的一侧（关着、未连上）：占位值出现在界面上时不能说成「正在跑」。
 const EMPTY_ACCESSIBILITY: AccessibilityAutomationState = {
   enabled: false,
   whitelistEnabled: true,
   allowedPackages: [],
   alwaysAllowedPackages: [],
   passwordConfigured: false,
+  automationRuntime: 'off',
+  serviceStatus: 'off',
+}
+
+/** 总开关三态 → 界面标签。未知取值不猜，按「关闭」显示（与原生 fail-closed 口径一致）。 */
+function automationRuntimeLabel(runtime: AccessibilityAutomationRuntime): string {
+  if (runtime === 'running') return t("自动化运行中")
+  if (runtime === 'paused') return t("自动化已暂停")
+  return t("自动化已关闭")
+}
+
+/** 系统侧无障碍服务三态 → 界面标签。 */
+function accessibilityServiceLabel(status: AccessibilityServiceStatus): string {
+  if (status === 'connected') return t("无障碍服务已连接")
+  if (status === 'enabled_disconnected') return t("系统里已开启，但服务没连上")
+  return t("系统里未开启")
+}
+
+/**
+ * 把「相对开机时刻的毫秒数」显示成人能读的时长。
+ *
+ * 运行记录里的时间是原生侧的 `SystemClock.elapsedRealtime()`，**不是**墙上时钟，
+ * 所以这里绝不把它渲染成一个日期时间——那会显示成一个 1970 年附近的假时间点。
+ */
+function formatElapsedSinceBoot(atMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(atMs / 1000))
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return t("{0} 小时 {1} 分前", hours, minutes)
+  if (minutes > 0) return t("{0} 分 {1} 秒前", minutes, seconds)
+  return t("{0} 秒前", seconds)
+}
+
+/** 一条运行记录的结果标签：受控码的中文说明优先，读不懂就显示原始码（绝不改写成「已跳过」）。 */
+function automationRunLabel(run: AccessibilityAutomationRun): string {
+  return run.message ?? run.code
 }
 
 interface AppSidebarProps {
@@ -3294,7 +3339,7 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
         <span className="section-icon"><ShieldCheck size={19} /></span>
         <div>
           <h2 id="runtime-self-check-title">{t("运行时自检")}</h2>
-          <p>{t("不需要 bash 也能判断运行时哪一环断了：逐项检查 Shell、Node、沙箱启动器、内核 Landlock、PTY、访客数据目录、附件目录、硬链接、ripgrep 与 C 编译环境（cc/gcc/clang、make、python3），并给出结论与下一步。")}</p>
+          <p>{t("不需要 bash 也能判断运行时哪一环断了：逐项检查 Shell、Node、沙箱启动器、内核 Landlock、PTY、访客数据目录、附件目录、硬链接、ripgrep 与 C 编译环境（cc/gcc/clang、make、python3），再由宿主补上插件链接、无障碍服务、副屏所需的悬浮窗权限与系统 WebView 四项设备事实，并给出结论与下一步。")}</p>
         </div>
       </div>
 
@@ -3308,6 +3353,11 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
           <span>{t("dsh 版本")}</span>
           {/* dsh 版本只有真正进过访客才读得到：自检结果之外不猜、也不为它单独发起重量级调用。 */}
           <strong>{report?.dshVersion ?? t("运行自检后显示")}</strong>
+        </div>
+        <div className="settings-status-row">
+          <span>{t("系统 WebView 版本")}</span>
+          {/* 宿主在自检时顺带读到的版本号（纯信息）；读不到或旧版本桥接时显示占位，不影响检查项。 */}
+          <strong>{report?.webViewVersion ?? t("运行自检后显示")}</strong>
         </div>
       </div>
 
@@ -3514,6 +3564,19 @@ interface SettingsScreenProps {
    * 原生侧会拒绝不带密码的修改，这里也先在前端拦一道，省掉一次必然失败的桥调用。
    */
   onSaveAccessibilityPackages: (packages: string[], password?: string, whitelistEnabled?: boolean) => void
+  /**
+   * 改「自动化总开关」：开始 / 暂停 / 继续 / 紧急停止。
+   *
+   * 这是**应用内独有**的开启路径：设备桥（AI 侧）没有开启自动化的能力。
+   * 返回的 Promise 用于让界面保持在途标记，直到桥真的给了结果。
+   */
+  onSetAccessibilityRuntime: (action: AccessibilityAutomationAction) => Promise<void>
+  /** 启用 / 停用一条规则；成功后重新读取整包读数（不做乐观更新，失败时开关保持原位）。 */
+  onSetAutomationRuleEnabled: (options: {
+    packageName: string
+    ruleId: string
+    enabled: boolean
+  }) => Promise<void>
   /** 设置（省略 currentPassword）或修改（必须带 currentPassword）白名单验证密码。 */
   onSaveAccessibilityPassword: (password: string, currentPassword?: string) => void
   /** 清除验证密码；必须带上当前密码。 */
@@ -3526,9 +3589,26 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenVirtualScreen, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenVirtualScreen, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
+  /** 总开关的一次操作还在路上：按钮在这期间全部禁用，避免连点出两次动作。 */
+  const [automationPending, setAutomationPending] = useState(false)
+  /**
+   * 本次会话的运行记录。
+   *
+   * `null` 表示**还没读到**（与「读到了但是空的」必须分开显示）；`failed` 表示这次读取失败。
+   * 记录来自无障碍服务进程，服务被回收后从空开始，所以这里同时保留 `connected` 给界面说明。
+   */
+  const [automationRuns, setAutomationRuns] = useState<AccessibilityAutomationRuns | null>(null)
+  const [automationRunsStatus, setAutomationRunsStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
+  /** 当前正在查看规则的应用；空串表示还没选。 */
+  const [rulesPackage, setRulesPackage] = useState('')
+  /** 规则读数；`null` 同样是「还没读到」，与「读到了但一条规则都没有」分开显示。 */
+  const [automationRules, setAutomationRules] = useState<AccessibilityAutomationRules | null>(null)
+  const [automationRulesStatus, setAutomationRulesStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
+  /** 正在开关的那条规则；在途时只禁用这一条。 */
+  const [automationRulePending, setAutomationRulePending] = useState<string | null>(null)
   /**
    * 保存白名单时要输入的验证密码。
    *
@@ -3578,6 +3658,72 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     setWhitelistPassword('')
     setPasswordDraft({ current: '', next: '', confirm: '' })
   }, [accessibility.allowedPackages, accessibility.whitelistEnabled, page])
+
+  /**
+   * 读取运行记录。
+   *
+   * 只在「无障碍」这一页读，并且**读取失败要如实显示**：返回 `connected=false` 时列表必然为空，
+   * 那个空列表不能当「什么都没发生」渲染（服务被回收后记录会从空开始，这是刻意的设计）。
+   */
+  const loadAutomationRuns = useCallback((packageName?: string) => {
+    setAutomationRunsStatus('loading')
+    void runtimeBridge.getAccessibilityAutomationRuns(packageName)
+      .then(result => {
+        setAutomationRuns(result)
+        setAutomationRunsStatus('idle')
+      })
+      .catch(() => setAutomationRunsStatus('failed'))
+  }, [])
+  useEffect(() => {
+    if (page !== 'shizuku') return
+    // 总开关一变就重读：刚按下「开始」时最该看到的就是它是否真的连上了服务。
+    loadAutomationRuns()
+  }, [accessibility.automationRuntime, accessibility.serviceStatus, loadAutomationRuns, page])
+
+  /** 按一次总开关按钮：在途期间所有按钮禁用；失败提示由 App 的统一 notify 负责。 */
+  const changeAutomationRuntime = (action: AccessibilityAutomationAction): void => {
+    setAutomationPending(true)
+    void onSetAccessibilityRuntime(action).finally(() => setAutomationPending(false))
+  }
+
+  /**
+   * 读取某个包的规则。
+   *
+   * 与运行记录分开：规则是落盘的、跨进程重启还在，所以这里读不到的原因只有三种——
+   * 没选包、桥调用失败、数据损坏（`corrupt` 非空，原生已把它清掉）。三种都要如实显示。
+   */
+  const loadAutomationRules = useCallback((packageName: string) => {
+    if (packageName === '') return
+    setRulesPackage(packageName)
+    setAutomationRulesStatus('loading')
+    void runtimeBridge.getAccessibilityAutomationRules(packageName)
+      .then(result => {
+        setAutomationRules(result)
+        setAutomationRulesStatus('idle')
+      })
+      .catch(() => {
+        setAutomationRules(null)
+        setAutomationRulesStatus('failed')
+      })
+  }, [])
+  useEffect(() => {
+    // 刚进这一页且白名单里已有目标应用时，先把第一个包的规则读出来，省掉一次点击。
+    if (page !== 'shizuku' || rulesPackage !== '') return
+    const first = accessibility.allowedPackages.find(name => !accessibility.alwaysAllowedPackages.includes(name))
+    if (first !== undefined) loadAutomationRules(first)
+  }, [accessibility.alwaysAllowedPackages, accessibility.allowedPackages, loadAutomationRules, page, rulesPackage])
+
+  /** 开/关一条规则：在途只禁用这一条，其余仍可操作；写完重读整包读数（不做乐观更新）。 */
+  const toggleAutomationRule = (ruleId: string, enabled: boolean): void => {
+    if (rulesPackage === '') return
+    setAutomationRulePending(ruleId)
+    void onSetAutomationRuleEnabled({ packageName: rulesPackage, ruleId, enabled })
+      .finally(() => {
+        setAutomationRulePending(null)
+        loadAutomationRules(rulesPackage)
+      })
+  }
+
   if (settingsReadStatus === 'failed') {
     return <div className="screen loading-screen">
       <p role="alert">{t("无法读取最新设置，请重试")}</p>
@@ -4025,6 +4171,173 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             <p className="settings-note">
               {t("开启白名单限制时仅允许列表内的应用；关闭后可操作未加入名单的普通应用。锁屏、系统设置及涉及权限、支付、验证码和密码的页面仍受保护；服务必须由你在系统无障碍设置中手动开启。")}
             </p>
+            <div className="settings-subsection" aria-labelledby="accessibility-automation-console">
+              <div className="section-title section-title-action">
+                <span className="section-icon"><Play size={19} /></span>
+                <div><h3 id="accessibility-automation-console">{t("自动化总开关")}</h3><p>{t("停到你再明确打开为止")}</p></div>
+                <span className={`status-chip ${accessibility.automationRuntime === 'running' ? 'success' : ''}`} data-testid="automation-runtime-chip">
+                  {automationRuntimeLabel(accessibility.automationRuntime)}
+                </span>
+              </div>
+              <p className="settings-note">
+                {t("总开关只在这里改：AI 侧没有开启自动化的路径，总开关不是「运行中」时写规则的命令会被拒绝。暂停与紧急停止都不会关掉系统里的无障碍服务，也不清空白名单与规则。")}
+              </p>
+              <div className="button-row">
+                <button className="button button-primary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime === 'running'}
+                  onClick={() => changeAutomationRuntime('start')}>
+                  {automationPending ? <Loader2 className="spin" size={18} /> : <Play size={18} />}{t("开始")}</button>
+                <button className="button button-secondary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime !== 'running'}
+                  onClick={() => changeAutomationRuntime('pause')}>
+                  <Square size={18} />{t("暂停")}</button>
+                <button className="button button-secondary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime !== 'paused'}
+                  onClick={() => changeAutomationRuntime('resume')}>
+                  <Play size={18} />{t("继续")}</button>
+                <button className="button button-secondary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime === 'off'}
+                  onClick={() => changeAutomationRuntime('emergency_stop')}>
+                  <AlertTriangle size={18} />{t("紧急停止")}</button>
+              </div>
+              {/*
+                服务状态与总开关是两件事，必须分开说：`enabled_disconnected` 是「系统里开着、
+                服务实例不在」，这时候只能请用户去系统设置里重新开关一次，界面不能假装已连接。
+              */}
+              <p className="settings-note" role="status" data-testid="automation-service-status">
+                {accessibilityServiceLabel(accessibility.serviceStatus)}
+                {accessibility.serviceStatus === 'connected'
+                  ? t("：服务在跑，总开关「运行中」时才会执行规则里的动作。")
+                  : t("：需要你在系统无障碍设置里手动开启（或重新开关一次），应用内无法代劳。")}
+              </p>
+              {accessibility.serviceStatus !== 'connected' && (
+                <button className="button button-secondary" type="button" onClick={onOpenAccessibilitySettings} disabled={busy !== null}>
+                  <ExternalLink size={18} />{t("打开系统无障碍设置")}
+                </button>
+              )}
+            </div>
+            <div className="settings-subsection" aria-labelledby="accessibility-automation-runs">
+              <div className="section-title section-title-action">
+                <span className="section-icon"><ScrollText size={19} /></span>
+                <div><h3 id="accessibility-automation-runs">{t("本次会话的运行记录")}</h3><p>{t("只保留无障碍服务本次运行期间的数据")}</p></div>
+                <button className="button button-secondary" type="button" onClick={() => loadAutomationRuns()} disabled={automationRunsStatus === 'loading'}>
+                  {automationRunsStatus === 'loading' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("刷新")}</button>
+              </div>
+              <p className="settings-note">
+                {t("记录只在无障碍服务本次运行期间存在，服务被系统回收后会从空开始——这里为空不代表没有发生过动作。记录里只有受控码与规则标识，不含界面文字、不含截图。")}
+              </p>
+              {automationRunsStatus === 'failed' && <p className="settings-note" role="alert">{t("运行记录读取失败，请稍后重试")}</p>}
+              {automationRunsStatus === 'loading' && automationRuns === null && <p className="settings-note" role="status">{t("正在读取运行记录")}</p>}
+              {automationRuns !== null && !automationRuns.connected && (
+                <p className="settings-note" role="status" data-testid="automation-runs-disconnected">
+                  {t("无障碍服务当前没连上，因此读不到运行记录。")}
+                </p>
+              )}
+              {automationRuns !== null && automationRuns.connected && automationRuns.runs.length === 0 && (
+                <p className="settings-note" role="status">{t("服务已连接，还没有运行记录。")}</p>
+              )}
+              {automationRuns !== null && automationRuns.dropped > 0 && (
+                <p className="settings-note">{t("更早的 {0} 条记录已超出容量被丢弃。", automationRuns.dropped)}</p>
+              )}
+              {automationRuns !== null && automationRuns.blocked.length > 0 && (
+                <div className="settings-note" data-testid="automation-blocked-reasons">
+                  <strong>{t("拦截原因（本次会话累计）")}</strong>
+                  <ul>
+                    {automationRuns.blocked.map(reason => (
+                      <li key={reason.code}>
+                        {reason.message ?? reason.code}
+                        <span>{t("（{0}）", reason.code)}</span>
+                        <span>{t("× {0} 次", reason.count)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {automationRuns !== null && automationRuns.runs.length > 0 && (
+                <ul className="settings-note" data-testid="automation-run-list">
+                  {automationRuns.runs.slice(0, 20).map((run, index) => (
+                    <li key={`${run.atMs}-${run.ruleId}-${run.code}-${index}`}>
+                      <span>{formatElapsedSinceBoot(run.atMs)}</span>
+                      <span>{run.ruleId}</span>
+                      <span>{automationRunLabel(run)}</span>
+                      <span>{run.performed ? t("已执行") : t("未执行")}</span>
+                      {run.degraded && <span>{t("降级路径")}</span>}
+                      {!run.ok && <span>{t("失败")}</span>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {automationRuns !== null && automationRuns.runs.length > 20 && (
+                <p className="settings-note">{t("只显示最近 20 条，共 {0} 条。", automationRuns.runs.length)}</p>
+              )}
+            </div>
+            <div className="settings-subsection" aria-labelledby="accessibility-automation-rules">
+              <div className="section-title section-title-action">
+                <span className="section-icon"><ListChecks size={19} /></span>
+                <div><h3 id="accessibility-automation-rules">{t("自动化规则")}</h3><p>{t("按应用查看，逐条启用或停用")}</p></div>
+                {rulesPackage !== '' && (
+                  <button className="button button-secondary" type="button"
+                    onClick={() => loadAutomationRules(rulesPackage)} disabled={automationRulesStatus === 'loading'}>
+                    {automationRulesStatus === 'loading' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("刷新")}
+                  </button>
+                )}
+              </div>
+              <p className="settings-note">
+                {t("规则由 AI 生成、你在写盘前确认；这里只改「启不启用」，不改规则内容。停用一条规则不会删掉它。")}
+              </p>
+              {accessibility.allowedPackages.filter(name => !accessibility.alwaysAllowedPackages.includes(name)).length === 0 ? (
+                <p className="settings-note" role="status" data-testid="automation-rules-no-packages">
+                  {t("白名单里还没有其他应用：先在上面加入目标应用，规则才有归属。")}
+                </p>
+              ) : (
+                <div className="settings-note" data-testid="automation-rule-packages">
+                  {accessibility.allowedPackages
+                    .filter(name => !accessibility.alwaysAllowedPackages.includes(name))
+                    .map(name => (
+                      <button key={name} className="button button-secondary" type="button"
+                        onClick={() => loadAutomationRules(name)} disabled={busy !== null}
+                        aria-pressed={rulesPackage === name}>
+                        {name}
+                      </button>
+                    ))}
+                </div>
+              )}
+              {automationRulesStatus === 'failed' && <p className="settings-note" role="alert">{t("规则读取失败，请稍后重试")}</p>}
+              {automationRulesStatus === 'loading' && automationRules === null && (
+                <p className="settings-note" role="status">{t("正在读取规则")}</p>
+              )}
+              {automationRules !== null && automationRules.corrupt !== null && (
+                <p className="settings-note" role="alert" data-testid="automation-rules-corrupt">
+                  {t("这个应用的规则数据不可用，已被清除：{0}（{1}）。需要重新生成规则。",
+                    automationRules.corrupt.message, automationRules.corrupt.code)}
+                </p>
+              )}
+              {automationRules !== null && automationRules.corrupt === null && !automationRules.allowed && (
+                <p className="settings-note" role="status" data-testid="automation-rules-not-allowed">
+                  {t("{0} 不在白名单里：这些规则不会被任何事件用到。", automationRules.packageName)}
+                </p>
+              )}
+              {automationRules !== null && automationRules.corrupt === null && automationRules.allowed
+                && automationRules.rules.length === 0 && (
+                <p className="settings-note" role="status">{t("这个应用还没有规则。")}</p>
+              )}
+              {automationRules !== null && automationRules.rules.length > 0 && (
+                <ul className="settings-note" data-testid="automation-rule-list">
+                  {automationRules.rules.map(rule => (
+                    <li key={rule.id}>
+                      <span>{rule.id}</span>
+                      <span>{rule.actionKind}</span>
+                      <span>{t("{0} 个选择器", rule.selectorCount)}</span>
+                      <span>{t("最多 {0} 次", rule.maxActions)}</span>
+                      <span>{rule.enabled ? t("已启用") : t("已停用")}</span>
+                      <button className="button button-secondary" type="button"
+                        onClick={() => toggleAutomationRule(rule.id, !rule.enabled)}
+                        disabled={busy !== null || automationRulePending !== null || !automationRules.allowed}>
+                        {automationRulePending === rule.id
+                          ? <Loader2 className="spin" size={18} />
+                          : rule.enabled ? t("停用") : t("启用")}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
             <label className="toggle-row">
               <span><strong>{t("启用无障碍白名单限制")}</strong><small>{t("关闭不会清空名单；修改后点击「保存白名单」生效，已设密码时仍需验证。")}</small></span>
               <input type="checkbox" role="switch" aria-label={t("启用无障碍白名单限制")}
@@ -5457,6 +5770,21 @@ export function App() {
     void run('open-accessibility-settings', () => runtimeBridge.openAccessibilitySettings())
   }, [run])
 
+  /**
+   * 启用 / 停用一条自动化规则。
+   *
+   * 只改「启不启用」：规则内容、白名单、总开关都不动。白名单校验在原生侧（写规则必须过白名单），
+   * 这里只把参数原样递过去，成功提示与失败提示都交给统一的 [run]。
+   * 界面**不做乐观更新**：失败时不会留下一个「看起来已经关掉」的开关。
+   */
+  const setAccessibilityRuleEnabled = useCallback((options: {
+    packageName: string
+    ruleId: string
+    enabled: boolean
+  }) => run('set-accessibility-rule', async () => {
+    await runtimeBridge.setAccessibilityAutomationRuleEnabled(options)
+  }, options.enabled ? t("规则已启用") : t("规则已停用")), [run])
+
   const saveAccessibilityPackages = useCallback((packages: string[], password?: string, whitelistEnabled?: boolean) => {
     // 已设置验证密码却没交密码：在本地就挡下来，不白发一次必然失败的桥调用。
     // 错误文案里不出现用户输入的任何内容。
@@ -5469,6 +5797,20 @@ export function App() {
       setAccessibility(next)
     }, t("无障碍应用白名单已保存"))
   }, [accessibility.passwordConfigured, notify, run])
+
+  /**
+   * 改自动化总开关：开始 / 暂停 / 继续 / 紧急停止。
+   *
+   * 这是**应用内独有的开启路径**——设备桥（AI 侧）没有开启自动化的能力，总开关不是「运行中」时
+   * 写规则的命令会被原生侧拒绝。动作名在前端就是受控枚举，原生侧还会再拒收一次未知取值。
+   * 失败提示由 [run] 统一负责；这里把 Promise 交回界面，让按钮能显示在途状态。
+   */
+  const setAccessibilityRuntime = useCallback(async (action: AccessibilityAutomationAction) => {
+    await run('set-accessibility-runtime', async () => {
+      const next = await runtimeBridge.setAccessibilityAutomationRuntime(action)
+      setAccessibility(next)
+    }, action === 'emergency_stop' ? t("已紧急停止自动化") : t("自动化总开关已更新"))
+  }, [run])
 
   /** 设置（首次）或修改（已设置时）白名单验证密码；成功后原生返回最新状态。 */
   const saveAccessibilityPassword = useCallback((password: string, currentPassword?: string) => {
@@ -5742,7 +6084,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenVirtualScreen={() => setActiveView('settings-virtual-screen')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenVirtualScreen={() => setActiveView('settings-virtual-screen')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

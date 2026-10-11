@@ -18,6 +18,16 @@
  * 退出码（`_UNUSABLE`）、**没拿到退出码**（`_PROBE_UNKNOWN`，进程没起来 / 超时 / 没有可写临时目录）。
  * 后两者都按不可用呈现：绝不把不可用的编译器说成已支持，也不承诺装完就能编译。
  *
+ * 再往后四项（`plugins` / `accessibility` / `virtualscreen` / `webview`）来自**宿主**而不是访客脚本：
+ * 访客脚本（`android/app/src/main/assets/support/runtime-self-check.cjs`）一行未改，它仍然只产出前
+ * 14 项；这四项由 Android 侧读设备事实后追加，走同一套 id / 码白名单与状态规则。语义上有三点不同：
+ *
+ *  - 前三项是**可选功能**的状态（插件链接、无障碍服务、副屏所需的悬浮窗权限），没有它们不影响
+ *    改用例与 bash，因此只报 `warn`；
+ *  - `webview` 是唯一会报 `fail` 的新项：系统 WebView 不可用时应用界面本身就渲染不出来；
+ *  - 这四项的 `*_PROBE_UNKNOWN` 表示「宿主这次没读到事实」，一律按 `warn` 呈现 —— 既不写成 `ok`
+ *    （会掩盖没测到），也不写成 `fail`（会凭空造出一个故障）。
+ *
  * 措辞边界：沙箱与内核相关的结论只复述已确认的现象，不把可能的来源写成单一断言
  * （例如「沙箱探测判定为不可用」同时列出「内核不支持」与「启动器无法完成探测」两种可能），
  * 也不写「一定能修好」这类绝对承诺。
@@ -44,6 +54,11 @@ export const SELF_CHECK_IDS = [
   'c_compiler',
   'make',
   'python3',
+  // 以下四项由**宿主**追加（访客脚本仍只产出上面 14 项），顺序与原生侧 `RuntimeSelfCheckPolicy.CHECK_IDS` 一致。
+  'plugins',
+  'accessibility',
+  'virtualscreen',
+  'webview',
 ] as const
 
 export type SelfCheckId = typeof SELF_CHECK_IDS[number]
@@ -89,6 +104,17 @@ export const SELF_CHECK_CODES = [
   'PYTHON3_MISSING',
   'PYTHON3_UNUSABLE',
   'PYTHON3_PROBE_UNKNOWN',
+  // 宿主追加的四项设备事实：前三项只 warn（可选功能没开 / 插件链接可人工修），webview 是唯一 fail。
+  // 每项各带一个 `_PROBE_UNKNOWN`：宿主没能读到事实时用它，而不是用 ok 掩盖「没测到」。
+  'PLUGIN_LINK_MISSING',
+  'PLUGIN_LINK_FAILED',
+  'PLUGIN_PROBE_UNKNOWN',
+  'ACCESSIBILITY_NOT_CONNECTED',
+  'ACCESSIBILITY_PROBE_UNKNOWN',
+  'OVERLAY_PERMISSION_MISSING',
+  'OVERLAY_PROBE_UNKNOWN',
+  'WEBVIEW_UNAVAILABLE',
+  'WEBVIEW_PROBE_UNKNOWN',
 ] as const
 
 export type SelfCheckCode = typeof SELF_CHECK_CODES[number]
@@ -113,6 +139,8 @@ export interface SelfCheckCheckReport {
   availableBytes: number
   /** 访客里 dsh 的版本号；读不到时为 null。 */
   dshVersion: string | null
+  /** 系统 WebView 的版本号（宿主追加的纯信息，不是检查项）；读不到或旧桥接时为 null。 */
+  webViewVersion: string | null
   checks: SelfCheckItem[]
 }
 
@@ -143,6 +171,10 @@ const SELF_CHECK_LABELS: Readonly<Record<SelfCheckId, string>> = {
   c_compiler: 'C 编译器（cc / gcc / clang）',
   make: 'make 构建工具',
   python3: 'Python 3（node-gyp 的前提）',
+  plugins: '插件链接（已启用的插件）',
+  accessibility: '无障碍服务',
+  virtualscreen: '副屏所需的悬浮窗权限',
+  webview: '系统 WebView',
 }
 
 export interface SelfCheckAdvice {
@@ -288,11 +320,54 @@ const SELF_CHECK_CODE_ADVICE: Readonly<Record<SelfCheckCode, { meaning: string; 
     meaning: 'python3 文件在，但探测没有拿到它的退出码（进程没起来或超时），因此无法确认它能用',
     nextStep: '按不可用处理；可在运行时自带的 Ubuntu 终端里手动跑一次 python3 --version 确认。',
   },
+  PLUGIN_LINK_MISSING: {
+    // 与运行时断链分开：插件是应用自己管的东西，修复入口在插件设置页，
+    // 自检里的「修复运行时权限」只修权限位与附件目录，不管插件链接。
+    meaning: '有已启用的插件在运行时里缺少链接文件，该插件的工具这次加载不上',
+    nextStep: '到「插件设置」页点「立即修复插件」重新链接；仍失败就重新安装该插件。「修复运行时权限」不管这一项。',
+  },
+  PLUGIN_LINK_FAILED: {
+    meaning: '上一次插件修复没有成功——插件文件仍然不可用（多见于保留区已无副本，只能重装）',
+    nextStep: '到「插件设置」页点「立即修复插件」重试；反复失败请重新安装该插件，或导出运行日志反馈。',
+  },
+  PLUGIN_PROBE_UNKNOWN: {
+    meaning: '这次没读到插件状态（插件管理器还没就绪，或运行时尚未安装完成）',
+    nextStep: '稍后重新运行自检即可确认；插件列表本身以「插件设置」页显示的为准。',
+  },
+  ACCESSIBILITY_NOT_CONNECTED: {
+    // 可选功能：只有「应用自动化能力」需要它，没开不代表应用有问题。
+    meaning: '无障碍服务未连接。它只被「应用自动化能力」用到，属于可选功能，不影响 bash 与插件',
+    nextStep: '需要该功能时，在系统设置 → 无障碍里打开本应用的无障碍服务；不需要就不用处理。',
+  },
+  ACCESSIBILITY_PROBE_UNKNOWN: {
+    meaning: '这次没读到无障碍服务的连接状态',
+    nextStep: '需要该功能时，到系统设置 → 无障碍里确认本应用的服务是开启状态；不影响其余功能。',
+  },
+  OVERLAY_PERMISSION_MISSING: {
+    meaning: '没有「显示在其他应用上层」权限，副屏用不了（属于可选功能）',
+    nextStep: '需要副屏时，在系统设置 → 应用 → 本应用里授予悬浮窗权限；不需要就不用处理。',
+  },
+  OVERLAY_PROBE_UNKNOWN: {
+    meaning: '这次没读到悬浮窗权限的状态',
+    nextStep: '需要副屏时，到系统设置里确认本应用已获得「显示在其他应用上层」权限；不影响其余功能。',
+  },
+  WEBVIEW_UNAVAILABLE: {
+    // 这一项是四个新项里唯一会 fail 的：界面本身依赖系统 WebView 渲染。
+    meaning: '系统 WebView 不可用——应用界面本身就是用它渲染的，此时界面通常已经打不开',
+    nextStep: '在系统应用商店更新或重新启用 Android System WebView（或 Chrome）；它是系统组件，应用侧无法代装或替换。',
+  },
+  WEBVIEW_PROBE_UNKNOWN: {
+    meaning: '这次没读到系统 WebView 的信息（查询被系统拒绝或还没初始化），无法确认它的版本',
+    nextStep: '界面能正常打开时通常只是查询失败，不用处理；界面显示异常时再更新系统 WebView 后重试。',
+  },
 }
 
 /**
  * 出现这些码时，「修复运行时权限」才有意义：都是权限位或缺失目录，
  * 修复动作只做补权限与补建目录，不会去动运行时里的其它文件。
+ *
+ * 宿主追加的四项都不在这里：`PLUGIN_LINK_*` 的修复入口在「插件设置」页（按钮「立即修复插件」），
+ * 无障碍与悬浮窗权限只能去系统设置里授予，而 `WEBVIEW_*` 是系统组件、应用侧修不了。
  */
 export const SELF_CHECK_REPAIRABLE_CODES: readonly SelfCheckCode[] = [
   'LAUNCHER_NOT_EXECUTABLE',
@@ -363,7 +438,8 @@ function selfCheckItem(value: unknown): SelfCheckItem {
  * 按冻结契约校验自检结果载荷，形态不符即抛错。
  *
  * 拒绝的情形（除字段类型外）：未知的 id 或 code、重复的检查项、`ok` 带 code、
- * 非 `ok` 不带 code、`repair` 的已修复项数大于可修复项数，以及格式非法的版本号。
+ * 非 `ok` 不带 code、`repair` 的已修复项数大于可修复项数，以及格式非法的版本号
+ * （`dshVersion` 必填可为 null，`webViewVersion` 可缺省、可为 null）。
  * 未知字段一律忽略：界面只读已知字段，多出来的内容既不显示也不保存。
  */
 export function validateSelfCheckReport(value: unknown): SelfCheckReport {
@@ -385,6 +461,17 @@ export function validateSelfCheckReport(value: unknown): SelfCheckReport {
     dshVersion = record.dshVersion
   }
 
+  // WebView 版本是宿主追加的字段：旧桥接不带它，此时按「读不到」记 null。
+  // 带了就必须与 dshVersion 走同一条白名单 —— 形态不符即认为载荷与契约不一致，整份拒收：
+  // 同一个界面上的两个版本号如果一条严一条松，显示出来的数字可信度就说不清了。
+  let webViewVersion: string | null = null
+  if (record.webViewVersion !== undefined && record.webViewVersion !== null) {
+    if (typeof record.webViewVersion !== 'string' || !VERSION_TEXT_PATTERN.test(record.webViewVersion)) {
+      throw new Error('WebView 版本格式无效')
+    }
+    webViewVersion = record.webViewVersion
+  }
+
   const rawChecks: unknown = record.checks
   if (!Array.isArray(rawChecks) || rawChecks.length > SELF_CHECK_IDS.length) throw new Error('自检项列表格式无效')
   const checks: SelfCheckItem[] = []
@@ -398,7 +485,7 @@ export function validateSelfCheckReport(value: unknown): SelfCheckReport {
   // 无论载荷里是什么顺序，界面都按固定顺序展示：同一环路的先后关系不能随载荷变化。
   checks.sort((left, right) => (SELF_CHECK_ID_ORDER.get(left.id) ?? 0) - (SELF_CHECK_ID_ORDER.get(right.id) ?? 0))
   return {
-    operation: 'check', availableBytes, dshVersion, checks,
+    operation: 'check', availableBytes, dshVersion, webViewVersion, checks,
     ...(record.harnessPermissionMode === undefined ? {} : { harnessPermissionMode: validateHarnessPermissionMode(record.harnessPermissionMode) }),
   }
 }

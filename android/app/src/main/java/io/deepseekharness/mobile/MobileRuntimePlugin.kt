@@ -28,10 +28,18 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import io.deepseekharness.mobile.overlay.OverlayBallPolicy
+import io.deepseekharness.mobile.accessibility.AccessibilityAutomationPolicy
 import io.deepseekharness.mobile.accessibility.AccessibilityAutomationStore
 import io.deepseekharness.mobile.accessibility.AccessibilityBiometricCodes
 import io.deepseekharness.mobile.accessibility.AccessibilityGuardException
 import io.deepseekharness.mobile.accessibility.AccessibilityPasswordStore
+import io.deepseekharness.mobile.accessibility.AutomationControlPolicy
+import io.deepseekharness.mobile.accessibility.AutomationControlStore
+import io.deepseekharness.mobile.accessibility.AutomationRulePreferences
+import io.deepseekharness.mobile.accessibility.AutomationRuleStore
+import io.deepseekharness.mobile.accessibility.AutomationRunLogPolicy
+import io.deepseekharness.mobile.accessibility.AutomationSkipMessages
+import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
 import io.deepseekharness.mobile.runtime.AppReleaseCatalog
 import io.deepseekharness.mobile.runtime.AppUpdateInstallPolicy
 import io.deepseekharness.mobile.runtime.AppUpdateStorage
@@ -301,6 +309,9 @@ class MobileRuntimePlugin : Plugin() {
 
         /** 受控错误码：大写字母、数字与下划线，与审计日志的策略一致。 */
         private val CONTROLLED_CODE = Regex("^[A-Z][A-Z0-9_]{0,63}$")
+
+        /** 规则标识的格式，与 `AutomationRule.validated()` 同一套口径（1~64 位字母、数字、点、下划线、连字符）。 */
+        private val AUTOMATION_RULE_ID = Regex("^[A-Za-z0-9._-]{1,64}$")
     }
 
     /** 权限：应用内桥接；校验语言白名单；仅返回保存结果，不返回私有配置。 */
@@ -486,7 +497,12 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
-    /** 权限：应用私有桥接；白名单操作、包名与条目标识校验；只返回插件元数据。 */
+    /**
+     * 权限：应用私有桥接；白名单操作、包名与条目标识校验；只返回插件元数据。
+     *
+     * `repair` 是唯一会改动运行时链接的只读形态操作（受控重试），因此单列一个审计事件：
+     * 自愈触发不经过桥接、也不进审计，审计日志里出现 `PLUGIN_REPAIR` 就代表**用户手动点过修复**。
+     */
     @PluginMethod
     fun managePlugins(call: PluginCall) {
         execute(call) {
@@ -497,6 +513,7 @@ class MobileRuntimePlugin : Plugin() {
                 "update" -> AuditEvent.PLUGIN_UPDATE
                 "import" -> AuditEvent.PLUGIN_IMPORT
                 "rollback" -> AuditEvent.PLUGIN_ROLLBACK
+                "repair" -> AuditEvent.PLUGIN_REPAIR
                 else -> throw RuntimeFailure("PLUGIN_INPUT_INVALID", "插件操作无效")
             }
             audited(event) {
@@ -514,9 +531,10 @@ class MobileRuntimePlugin : Plugin() {
 
     /**
      * 权限：应用内桥接。
-     * 运行时自检：`check` 只读（可用空间、dsh 版本与十四项检查 —— 前 11 项是冻结契约，
-     * 后 3 项 `c_compiler`/`make`/`python3` 是编译环境能力项，只报 warn、不进失败判定），
-     * `repair` 只补可执行位并创建附件目录。
+     * 运行时自检：`check` 只读（可用空间、dsh 版本、WebView 版本与十八项检查 —— 访客脚本产出 14 项：
+     * 前 11 项是冻结契约，后 3 项 `c_compiler`/`make`/`python3` 是编译环境能力项，只报 warn、不进失败判定；
+     * 宿主再追加 4 项设备事实：`plugins`/`accessibility`/`virtualscreen`/`webview`，同样只读），
+     * `repair` 只补可执行位并创建附件目录 —— **不新增任何副作用**，不动插件链接、无障碍与权限。
      * 只回传受控枚举与计数，不含路径、文件内容或原始报错文本。
      */
     @PluginMethod
@@ -1760,6 +1778,210 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /**
+     * 权限：应用内桥接；改「自动化总开关」——开始 / 暂停 / 继续 / 紧急停止。
+     *
+     * **设备桥（AI 侧）没有开启路径**：`automationRules` 命令在总开关不是 `running` 时一律回
+     * `AUTOMATION_ENABLE_FORBIDDEN`（`docs/AI自动化参数设计.md` 的「AI 只能关不能开」）。
+     * 这里只接受四个受控动作名，未知一律拒收——不能把认不出来的参数猜成「开始」。
+     *
+     * 暂停与紧急停止都**不关**系统里的无障碍服务（不调 `disableSelf()`），也不动白名单与规则：
+     * 用户按下「停」想停的是动作，不是把服务授权一起撤掉。
+     */
+    @PluginMethod
+    fun setAccessibilityAutomationRuntime(call: PluginCall) {
+        execute(call) {
+            val raw = call.data.opt("action")
+            if (raw !is String) {
+                throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "自动化操作必须是字符串")
+            }
+            val action = AutomationControlPolicy.actionFromName(raw)
+                ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "未知的自动化操作：$raw")
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                // 服务连着就让服务改（它还要同步会话开关与内存缓存）；没连上就直接落盘——同一份偏好文件。
+                DeepSeekAccessibilityService.current()?.applyAutomationRuntime(action)
+                    ?: AutomationControlStore.apply(context, action)
+                // 审计只记「哪个动作被按下」这个受控码，不带包名、不带界面内容。
+                recordAudit(
+                    AuditEvent.ACCESSIBILITY_CONFIG,
+                    AuditResult.SUCCEEDED,
+                    AutomationControlPolicy.auditDetail(action),
+                )
+                accessibilityStateToJs(AccessibilityAutomationStore.state(context))
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；读**本次服务会话**里的自动化运行记录与拦截原因。
+     *
+     * 记录刻意不落盘（见 `AutomationRunLog`），因此服务被系统回收后这里会从空开始：
+     * `connected` 与 `dropped` 就是给界面如实说明用的，**不能**把「读不到」显示成「什么都没发生」。
+     * `message` 是原生受控码的中文说明（`AutomationSkipMessages`），未登记的码回 null，界面显示原始码。
+     */
+    @PluginMethod
+    fun getAccessibilityAutomationRuns(call: PluginCall) {
+        resolveWhileActive(call) {
+            val packageName = optionalAutomationPackage(call)
+            val service = DeepSeekAccessibilityService.current()
+            val runs = JSArray()
+            for (record in service?.automationRunSnapshot(packageName, AutomationRunLogPolicy.MAX_RECORDS_PER_PACKAGE).orEmpty()) {
+                runs.put(
+                    JSObject()
+                        .put("atMs", record.atMs)
+                        .put("ruleId", record.ruleId)
+                        .put("action", record.action)
+                        .put("code", record.code)
+                        .put("message", AutomationSkipMessages.messageOrNull(record.code) ?: org.json.JSONObject.NULL)
+                        .put("ok", record.ok)
+                        .put("performed", record.performed)
+                        .put("degraded", record.degraded),
+                )
+            }
+            val blocked = JSArray()
+            for (entry in service?.automationBlockedSnapshot(packageName, AutomationRunLogPolicy.MAX_BLOCKED_CODES).orEmpty()) {
+                blocked.put(
+                    JSObject()
+                        .put("code", entry.code)
+                        .put("count", entry.count)
+                        .put("message", AutomationSkipMessages.messageOrNull(entry.code) ?: org.json.JSONObject.NULL),
+                )
+            }
+            JSObject()
+                .put("connected", service != null)
+                .put("limit", service?.automationRunLimit() ?: AutomationRunLogPolicy.MAX_RECORDS_PER_PACKAGE)
+                .put("dropped", service?.automationDroppedCount() ?: 0)
+                .put("runs", runs)
+                .put("blocked", blocked)
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；读某个包已保存的自动化规则（**只读**，不改内容）。
+     *
+     * 与设备桥的 `automationRules` 命令分开：那条命令还会点亮会话开关，这里只读，**不打开任何东西**。
+     * 规则内容（选择器、动作、抑制参数）只回给界面，**不进诊断日志**——诊断走受控码白名单
+     * （`DiagnosticPolicy`），选择器里的文本能反推界面内容。
+     * 返回里带 `allowed`：不在白名单里的包，规则照样读得出来（它是用户/AI 写下的数据），
+     * 但界面必须说明「规则在，不会被任何事件用到」，不能显示成正常工作。
+     */
+    @PluginMethod
+    fun getAccessibilityAutomationRules(call: PluginCall) {
+        resolveWhileActive(call) {
+            accessibilityRulesToJs(requiredAutomationPackage(call))
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；单条规则的启用 / 停用（只改 `enabled` 一个字段）。
+     *
+     * 写之前**必须过白名单**（拍板结论第 5 条：白名单校验放在桥接层）：白名单外的包一律拒写，
+     * 否则「AI 不能绕过白名单」这条硬约束会在应用内这条路径上被绕开。
+     * 其余字段逐字原样写回（整包替换是存储层的既有口径），因此这里不会顺手改动规则内容。
+     */
+    @PluginMethod
+    fun setAccessibilityAutomationRuleEnabled(call: PluginCall) {
+        execute(call) {
+            val packageName = requiredAutomationPackage(call)
+            val rawId = call.data.opt("ruleId")
+            val ruleId = rawId as? String ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "规则标识必须是字符串")
+            if (!AUTOMATION_RULE_ID.matches(ruleId)) {
+                throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "规则标识格式不合法")
+            }
+            val rawEnabled = call.data.opt("enabled")
+            val enabled = rawEnabled as? Boolean
+                ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "规则的启用状态必须是布尔值")
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                if (!AccessibilityAutomationStore.packageAllowed(context, packageName)) {
+                    throw RuntimeFailure(
+                        "ACCESSIBILITY_CONFIG_DENIED",
+                        "应用 $packageName 不在无障碍自动化白名单内，规则写入被拒绝",
+                    )
+                }
+                val store = AutomationRulePreferences.from(context)
+                when (val read = AutomationRuleStore.readPackage(store, packageName)) {
+                    is AutomationRuleStore.PackageRead.Ok -> {
+                        if (read.rules.none { it.id == ruleId }) {
+                            throw RuntimeFailure("ACCESSIBILITY_CONFIG_NOT_FOUND", "找不到这条规则：$ruleId")
+                        }
+                        val updated = read.rules.map { if (it.id == ruleId) it.copy(enabled = enabled) else it }
+                        runCatching { AutomationRuleStore.savePackage(store, packageName, updated) }
+                            .onFailure { throw RuntimeFailure("ACCESSIBILITY_CONFIG_SAVE_FAILED", "规则写入失败") }
+                    }
+                    is AutomationRuleStore.PackageRead.Corrupt ->
+                        throw RuntimeFailure("ACCESSIBILITY_CONFIG_CORRUPT", "读取规则失败：${read.message}")
+                }
+                // 审计只记「哪条规则被开/关」这个受控码，不带规则内容、不带选择器。
+                recordAudit(
+                    AuditEvent.ACCESSIBILITY_CONFIG,
+                    AuditResult.SUCCEEDED,
+                    if (enabled) "AUTOMATION_RULE_ENABLED" else "AUTOMATION_RULE_DISABLED",
+                )
+                accessibilityRulesToJs(packageName)
+            }
+        }
+    }
+
+    /** 把某个包的规则渲染成界面读数；`corrupt` 非空表示这份数据不可用且已被清掉。 */
+    private fun accessibilityRulesToJs(packageName: String): JSObject {
+        val rules = JSArray()
+        val read = AutomationRuleStore.readPackage(AutomationRulePreferences.from(context), packageName)
+        if (read is AutomationRuleStore.PackageRead.Ok) {
+            for (rule in read.rules.sortedBy { it.id }) {
+                rules.put(
+                    JSObject()
+                        .put("id", rule.id)
+                        .put("enabled", rule.enabled)
+                        .put("actionKind", rule.action.type)
+                        .put("selectorCount", rule.selectors.size)
+                        .put("maxActions", rule.maxActions)
+                        .put("actionCoolDownMs", rule.actionCoolDownMs),
+                )
+            }
+        }
+        val corrupt = (read as? AutomationRuleStore.PackageRead.Corrupt)?.let {
+            JSObject().put("code", it.code).put("message", it.message)
+        }
+        return JSObject()
+            .put("packageName", packageName)
+            .put("allowed", AccessibilityAutomationStore.packageAllowed(context, packageName))
+            .put("corrupt", corrupt ?: org.json.JSONObject.NULL)
+            .put("rules", rules)
+    }
+
+    /**
+     * 必填的包名参数（读 / 写规则都要）。
+     *
+     * 与可选的那个分开：这里缺参数就是调用方的问题，直接拒收，**不**回落到前台包——
+     * 写规则的路径上「你以为写的是 A，其实写到 B」是最不该发生的错。
+     */
+    private fun requiredAutomationPackage(call: PluginCall): String {
+        val raw = call.data.opt("packageName")
+            ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "缺少包名")
+        val value = raw as? String
+            ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "自动化规则的包名必须是字符串")
+        if (!AccessibilityAutomationPolicy.validPackage(value)) {
+            throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "自动化规则的包名不合法")
+        }
+        return value
+    }
+
+    /**
+     * 可选的包名过滤：给了就必须是合法包名。
+     *
+     * 拿它去查记录之前先按 `AccessibilityAutomationPolicy.validPackage` 卡一道，是因为这个值会被
+     * 回显在界面上——不合法即拒收，不把任意字符串原样带回前端。
+     */
+    private fun optionalAutomationPackage(call: PluginCall): String? {
+        val raw = call.data.opt("packageName") ?: return null
+        val value = raw as? String
+            ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "自动化运行记录的包名必须是字符串")
+        if (!AccessibilityAutomationPolicy.validPackage(value)) {
+            throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "自动化运行记录的包名不合法")
+        }
+        return value
+    }
+
     /** 权限：仅壳内桥接；查询参数有界，按页返回应用名称与包名，不返回应用数据。 */
     @PluginMethod
     fun listInstalledApplications(call: PluginCall) {
@@ -2790,7 +3012,10 @@ class MobileRuntimePlugin : Plugin() {
         .put("allowedPackages", state.optJSONArray("allowedPackages") ?: org.json.JSONArray())
         .put("alwaysAllowedPackages", state.optJSONArray("alwaysAllowedPackages") ?: org.json.JSONArray())
         .put("passwordConfigured", state.optBoolean("passwordConfigured", false))
-        .put("whitelistEnabled", state.optBoolean("whitelistEnabled", true))
+        // 总开关与「服务登记过 / 服务实例还在」必须分开表达：一个布尔既说不清用户按没按过「开始」，
+        // 也说不清「系统开着但服务被回收了」。缺省值取最保守的一侧（关、未连上）。
+        .put("automationRuntime", state.optString("automationRuntime", AutomationControlPolicy.NAME_OFF))
+        .put("serviceStatus", state.optString("serviceStatus", "off"))
 
     /** 诊断日志状态：只有布尔值、计数与时间戳，不含任何日志内容。 */
     private fun DiagnosticState.toJs(): JSObject = JSObject()

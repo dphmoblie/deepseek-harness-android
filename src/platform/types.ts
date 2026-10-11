@@ -502,6 +502,111 @@ export interface AccessibilityAutomationState {
   alwaysAllowedPackages: string[]
   /** 是否已设置「白名单验证密码」；不返回任何密码信息。 */
   passwordConfigured: boolean
+  /** 自动化总开关：关闭 / 运行中 / 已暂停。缺省按 `off`。 */
+  automationRuntime: AccessibilityAutomationRuntime
+  /** 系统侧无障碍服务状态：已连上 / 系统开着但服务实例不在 / 未开启。 */
+  serviceStatus: AccessibilityServiceStatus
+}
+
+/**
+ * 自动化总开关的三态；与原生 `AutomationControlPolicy` 的名字逐字一致。
+ *
+ * 它和 `enabled`（白名单生效与否）、`serviceStatus`（系统开关）是**三件不同的事**，界面必须分开显示。
+ */
+export type AccessibilityAutomationRuntime = 'off' | 'running' | 'paused'
+
+/** 总开关的受控动作名；与原生 `AutomationControlPolicy.ACTION_*` 逐字一致，未知取值必须被原生拒收。 */
+export type AccessibilityAutomationAction = 'start' | 'pause' | 'resume' | 'emergency_stop'
+
+/** `AutomationControlPolicy.NAME_*` 的取值全集，供校验器与界面标签使用。 */
+export const ACCESSIBILITY_AUTOMATION_RUNTIMES: AccessibilityAutomationRuntime[] = ['off', 'running', 'paused']
+
+/** 总开关可下发的动作全集；界面上的按钮必须落在这里面。 */
+export const ACCESSIBILITY_AUTOMATION_ACTIONS: AccessibilityAutomationAction[] = [
+  'start', 'pause', 'resume', 'emergency_stop',
+]
+
+/** 系统侧无障碍服务的三态；与原生 `AccessibilityAutomationStore.serviceStatus` 逐字一致。 */
+export type AccessibilityServiceStatus = 'connected' | 'enabled_disconnected' | 'off'
+
+/** `serviceStatus` 的取值全集。 */
+export const ACCESSIBILITY_SERVICE_STATUSES: AccessibilityServiceStatus[] = ['connected', 'enabled_disconnected', 'off']
+
+/**
+ * 一条自动化运行记录（**只在本次服务会话内**，服务被回收后从空开始）。
+ *
+ * `code` 是原生受控码（`AutomationGateCodes`），`message` 是它的中文说明；未登记的码 `message` 为 null，
+ * 界面显示原始码——**不能**把说不清的码渲染成「已跳过」，那里既有成功也有失败。
+ */
+export interface AccessibilityAutomationRun {
+  /** 相对开机时刻的毫秒数（`SystemClock.elapsedRealtime()`），只用于排序与「多久以前」。 */
+  atMs: number
+  ruleId: string
+  action: string
+  code: string
+  /** 受控码的中文说明；未登记为 null。 */
+  message: string | null
+  ok: boolean
+  /** 是否真的对界面做了动作；被闸门拦下时为 false。 */
+  performed: boolean
+  /** 是否走了降级路径（例如点击落到祖先节点）。 */
+  degraded: boolean
+}
+
+/** 一条拦截原因：受控码 + 本会话内累计次数。 */
+export interface AccessibilityAutomationBlocked {
+  code: string
+  count: number
+  /** 受控码的中文说明；未登记为 null。 */
+  message: string | null
+}
+
+/**
+ * 运行记录的读取结果。
+ *
+ * `connected=false` 表示读的时候无障碍服务没连上（此刻列表必然为空，**不代表什么都没发生**）；
+ * `dropped` 是本会话内因超出容量被丢弃的记录数。
+ */
+export interface AccessibilityAutomationRuns {
+  connected: boolean
+  limit: number
+  dropped: number
+  runs: AccessibilityAutomationRun[]
+  blocked: AccessibilityAutomationBlocked[]
+}
+
+/**
+ * 一条自动化规则的界面读数。
+ *
+ * 只带界面需要判断的字段：**不带选择器正文**（文本、viewId 能反推界面内容，界面不需要就不搬），
+ * `actionKind` 是动作类型（`click` / `swipe` / `key` / `launch` / `wait` 这些受控取值）。
+ */
+export interface AccessibilityAutomationRule {
+  id: string
+  enabled: boolean
+  actionKind: string
+  selectorCount: number
+  maxActions: number
+  actionCoolDownMs: number
+}
+
+/** 规则读取失败时的受控说明：数据不可用**且已被原生清掉**（不是「没有规则」）。 */
+export interface AccessibilityAutomationRulesCorrupt {
+  code: string
+  message: string
+}
+
+/**
+ * 某个包的规则读数。
+ *
+ * `allowed=false` 表示这个包不在白名单里：规则还在（能看到、能改），但**不会被执行**——
+ * 界面必须把这件事说出来，不能显示成正常工作。
+ */
+export interface AccessibilityAutomationRules {
+  packageName: string
+  allowed: boolean
+  corrupt: AccessibilityAutomationRulesCorrupt | null
+  rules: AccessibilityAutomationRule[]
 }
 
 /**
@@ -1035,6 +1140,41 @@ export interface RuntimeBridge {
   /** 清除「白名单验证密码」，必须带当前密码；**白名单本身不受影响**。 */
   clearAccessibilityPassword: (currentPassword: string) => Promise<AccessibilityAutomationState>
   /**
+   * 改「自动化总开关」：开始 / 暂停 / 继续 / 紧急停止。
+   *
+   * **只接受 [ACCESSIBILITY_AUTOMATION_ACTIONS] 里的四个动作名**，其余取值原生侧一律拒收
+   * （认不出来就必须拒绝，不能猜成 `start`）。这条路径**只存在于应用内界面**：设备桥（AI 侧）
+   * 没有开启自动化的能力，总开关不是 `running` 时 `automationRules` 命令会回 `AUTOMATION_ENABLE_FORBIDDEN`。
+   * 暂停与紧急停止都不关系统里的无障碍服务，也不动白名单与规则。
+   */
+  setAccessibilityAutomationRuntime: (action: AccessibilityAutomationAction) => Promise<AccessibilityAutomationState>
+  /**
+   * 读自动化运行记录与拦截原因（**仅本次服务会话**）。
+   *
+   * 记录不落盘：无障碍服务被系统回收后这里会从空开始，[AccessibilityAutomationRuns.connected]
+   * 就是给界面如实说明这一点的，**不能**把「读不到」显示成「什么都没发生」。
+   */
+  getAccessibilityAutomationRuns: (packageName?: string) => Promise<AccessibilityAutomationRuns>
+  /**
+   * 读某个包已保存的自动化规则（**只读**）。
+   *
+   * 与设备桥的 `automationRules` 命令分开：那条命令还会点亮会话开关，这一条只读、不打开任何东西。
+   * 包名必填，且必须是合法包名——写规则的路径上「你以为写的是 A，其实写到 B」是最不该发生的错，
+   * 因此这里不提供「省略即前台包」的兜底。
+   */
+  getAccessibilityAutomationRules: (packageName: string) => Promise<AccessibilityAutomationRules>
+  /**
+   * 单条规则的启用 / 停用（只改 `enabled` 一个字段，其余内容原样写回）。
+   *
+   * 白名单外的包一律拒写（拍板结论第 5 条：白名单校验放在桥接层），且**不需要验证密码**——
+   * 白名单本身才是授权门槛，改白名单才需要密码。
+   */
+  setAccessibilityAutomationRuleEnabled: (options: {
+    packageName: string
+    ruleId: string
+    enabled: boolean
+  }) => Promise<AccessibilityAutomationRules>
+  /**
    * 用系统生物识别 / 锁屏密码重置验证密码——「忘记密码」的唯一出路。
    *
    * 重置**只清掉密码、保留白名单**：用户丢的是那串数字，不是自己配好的目标应用清单。
@@ -1286,13 +1426,55 @@ export interface PluginGroup {
   readable: boolean
   children: PluginChild[]
 }
-export interface PluginCatalog { plugins: PluginGroup[] }
+/**
+ * 运行时更新后插件迁移的结果。
+ *
+ * 只回传受控状态与计数，不包含路径、错误原文或插件数据；旧版运行时没有该字段时，
+ * 前端按「没有迁移结果」处理，保持向后兼容。
+ */
+export type PluginRecoveryStatus = 'none' | 'restored' | 'partial' | 'failed'
+/**
+ * 应用（APK）升级后的插件迁移结果。
+ *
+ * `none`：本次进程还没跑（首次安装、或版本号与上次迁移一致）；
+ * `done`：跑完且没有缺口；`partial`：跑完但版本记录不可用、或仍有插件缺失/失败；
+ * `failed`：这一步没做成（下次启动会自动重试）—— 迁移本身失败时启动会照旧中断并报错，
+ * 界面能看到这个状态的是「跑完了但记账没写成」这一种。
+ */
+export type PluginMigrationStatus = 'none' | 'done' | 'partial' | 'failed'
+/**
+ * 已装插件的「版本事实」记录（由访客侧维护、原生侧只读）在设备上的可用性：
+ * `ok` 可用、`missing` 还没有（新设备或从未装过插件）、`invalid` 已损坏、`unwritable` 写不进去。
+ */
+export type PluginLockStatus = 'ok' | 'missing' | 'invalid' | 'unwritable'
+export interface PluginRecoveryState {
+  status: PluginRecoveryStatus
+  restored: number
+  relinked: number
+  missing: number
+  failed: number
+  refused: number
+  /**
+   * 下面三项是后加的：旧版原生侧不带这些键，此时保持 `undefined`，界面按「没有迁移信息」处理。
+   * 只要带了就必须落在受控取值里，否则整份目录数据视为无效。
+   */
+  migration?: PluginMigrationStatus
+  lock?: PluginLockStatus
+  /** 迁移时按版本记录逐条核对过的已装插件数；没有版本记录时为 0。 */
+  checked?: number
+}
+export interface PluginCatalog {
+  plugins: PluginGroup[]
+  recovery?: PluginRecoveryState
+}
 export interface PluginRequest {
   /**
    * `import`：受控导入（npm 包名 / `https://` 直链 / `git+https://` 地址），需要 `source`；
-   * `rollback`：回滚到该插件的上一版，需要 `id`。
+   * `rollback`：回滚到该插件的上一版，需要 `id`；
+   * `repair`：不带参数，由用户主动触发一次插件链接接回（绕过原生侧「同一代次只修一次」的自愈闸门），
+   * 返回形状与 `list` 相同，并附带本次修复后的受控计数。
    */
-  operation: 'list' | 'enable' | 'child' | 'update' | 'import' | 'rollback'
+  operation: 'list' | 'enable' | 'child' | 'update' | 'import' | 'rollback' | 'repair'
   id?: string
   enabled?: boolean
   childId?: string

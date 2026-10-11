@@ -16,6 +16,14 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
     private val resolver = RuntimeLaunchResolver(context, store, includeCredentials = false)
     private val directory get() = File(store.currentRoot, "root/.dsh-mobile")
 
+    /**
+     * 插件管理区（`root/.dsh-mobile/plugin-manager`）：访客脚本的 `home`，也是
+     * `RuntimePreservePolicy` 里跨运行时升级**唯一**保留的那一项。
+     * `versions/<事务>/node_modules/<包名>`、`state-snapshot.json`、`previous.json`、
+     * `installed-lock.json` 与 `installed-migration.json` 都在这里。
+     */
+    private val home get() = File(directory, "plugin-manager")
+
     /** 最近一次**成功**修复所对应的运行时代次指纹；见 [repairInstalledIfNeeded]。 */
     @Volatile
     private var repairedGeneration: String? = null
@@ -28,6 +36,51 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
     @Volatile
     private var repairFailureAtMillis: Long = 0L
 
+    /** 最近一次运行时升级后的插件迁移结果；只保存受控计数，供插件页面展示。 */
+    @Volatile
+    private var recoveryStatus: String = "none"
+    @Volatile
+    private var recoveryRestored: Int = 0
+    @Volatile
+    private var recoveryRelinked: Int = 0
+    @Volatile
+    private var recoveryMissing: Int = 0
+    @Volatile
+    private var recoveryFailed: Int = 0
+    @Volatile
+    private var recoveryRefused: Int = 0
+
+    /** 应用升级迁移的结果：`none`（本次进程没跑）/ `done` / `partial` / `failed`。 */
+    @Volatile
+    private var migrationStatus: String = "none"
+
+    /**
+     * 版本账本（`installed-lock.json`）的可用性：
+     * `ok`（已按账本核对）/ `missing`（还没有账本）/ `invalid`（账本损坏）/ `unwritable`（访客报告写入失败）。
+     */
+    @Volatile
+    private var lockStatus: String = "missing"
+
+    /** 上次核对账本时逐条检查过的插件条目数；还没有账本时为 0。 */
+    @Volatile
+    private var lockChecked: Int = 0
+
+    /** 访客最近一次操作是否报告「账本写不进去」；由 [run] 从受控字段读出，下一次成功写入即清掉。 */
+    @Volatile
+    private var lockWriteFailed: Boolean = false
+
+    /** 返回插件迁移结果快照，不包含路径、日志或插件内容。 */
+    fun recoverySnapshot(): JSObject = JSObject()
+        .put("status", recoveryStatus)
+        .put("restored", recoveryRestored)
+        .put("relinked", recoveryRelinked)
+        .put("missing", recoveryMissing)
+        .put("failed", recoveryFailed)
+        .put("refused", recoveryRefused)
+        .put("migration", migrationStatus)
+        .put("lock", lockStatus)
+        .put("checked", lockChecked)
+
     fun recoverIfNeeded() {
         // 运行时升级通常不会留下 transaction.json：它会重建 profiles 清单，但保留
         // plugin-manager/state-snapshot.json。只检查事务文件会跳过正常升级后的状态回填，
@@ -35,7 +88,23 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         // 两个文件都不存在时不启动 Node，避免首次安装每次启动都做无意义的恢复探测。
         val transaction = File(directory, "transaction.json").exists()
         val snapshot = File(directory, "state-snapshot.json").exists()
-        if (transaction || snapshot) run("recover", null, null, null)
+        if (transaction || snapshot) {
+            try {
+                val result = run("recover", null, null, null)
+                val state = result.optJSONObject("state")
+                if (state?.optBoolean("restored", false) == true) {
+                    recoveryRestored = state.optInt("plugins", 0).coerceAtLeast(0)
+                    if (recoveryRestored > 0) recoveryStatus = "restored"
+                } else if (state?.optString("reason") == "failed") {
+                    recoveryStatus = "failed"
+                    recoveryFailed = 1
+                }
+            } catch (error: Exception) {
+                recoveryStatus = "failed"
+                recoveryFailed = 1
+                throw error
+            }
+        }
     }
 
     /**
@@ -49,21 +118,30 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
      * 同一运行时代次只做一次（指纹为 runtimeId + 版本 + rootfs 摘要）：没有换运行时就不会
      * 产生新的坏形态。失败不抛给调用方，并进入冷却窗口（判定见 [PluginRepairPolicy]）——
      * 插件列表与 Harness 启动不应因为一次自愈失败而反复中断。
+     *
+     * @param explicit 是否由用户主动触发（设置页的「立即修复插件」）。true 时不受上面那道自愈
+     *   闸门约束：用户点了按钮就是要现在重试一次，同一代次、冷却窗口内都照做；计数按本次结果
+     *   覆盖而不再取历史最大值（否则重装好插件后再修一次，界面还会停在上一轮的「缺失 N 个」）；
+     *   失败也会**抛出**而不是吞掉，让界面能如实回显失败原因。
      */
-    fun repairInstalledIfNeeded() {
-        val generation = store.installedManifest()?.let { "${it.runtimeId}|${it.version}|${it.rootfs.sha256}" } ?: return
+    fun repairInstalledIfNeeded(explicit: Boolean = false) {
+        val generation = installedGeneration()
+        // 自愈路径读不到清单就直接放弃；用户主动修复继续往下走，由 run() 抛出受控错误码
+        // （例如 RUNTIME_NOT_INSTALLED），而不是按钮点下去毫无反应。
+        if (generation == null && !explicit) return
         val now = System.currentTimeMillis()
         val attempt = PluginRepairPolicy.shouldAttempt(
-            generation = generation,
+            generation = generation.orEmpty(),
             repairedGeneration = repairedGeneration,
             lastFailureGeneration = repairFailureGeneration,
             lastFailureAtMillis = repairFailureAtMillis,
             nowMillis = now,
+            explicit = explicit,
         )
         if (!attempt) return
         try {
             val summary = run("repair", null, null, null)
-            repairedGeneration = generation
+            if (generation != null) repairedGeneration = generation
             // 只记计数，让下次导出的诊断日志能直接回答两个问题：
             //  一、设备上到底有没有重复的运行时包：files = 扫到多少个包条目，count = 其中多少个
             //      被重新指向运行时实例（**count > 0 即确实存在重复副本**）；
@@ -73,6 +151,23 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             //  - result = denied 表示有包没能修复（拒绝或失败），需要人工介入。
             val linked = summary.optInt("linked", 0)
             val unfixed = summary.optInt("failed", 0) + summary.optInt("refused", 0)
+            val restored = recoveryRestored
+            val relinked = summary.optInt("relinked", 0)
+            val missing = summary.optInt("missing", 0)
+            val failed = summary.optInt("failed", 0)
+            val refused = summary.optInt("refused", 0)
+            // 用户主动修复时按本次结果覆盖历史计数：上一轮缺失的插件可能已经重装好了，
+            // 继续取历史最大值会让界面永远停在「缺失 N 个」，反而看不出这次修复到底有没有用。
+            recoveryRelinked = relinked
+            recoveryMissing = if (explicit) missing else maxOf(recoveryMissing, missing)
+            recoveryFailed = if (explicit) failed else maxOf(recoveryFailed, failed)
+            recoveryRefused = if (explicit) refused else maxOf(recoveryRefused, refused)
+            recoveryStatus = when {
+                recoveryFailed > 0 || recoveryRefused > 0 -> if (restored + relinked > 0) "partial" else "failed"
+                recoveryMissing > 0 -> if (restored + relinked > 0) "partial" else "failed"
+                restored + relinked > 0 -> "restored"
+                else -> "none"
+            }
             store.diagnostics.record(
                 DiagnosticLevel.INFO,
                 DiagnosticEvent.REPAIR,
@@ -85,7 +180,10 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
                     "missing" to summary.optInt("missing", 0).toString(),
                 ),
             )
-        } catch (_: Exception) {
+            // 修复刚改过盘：顺手按版本账本核对一遍（只读，代价是一次小文件读取 + 逐条 stat），
+            // 这样用户点一次「立即修复插件」之后，界面上的「核对数 / 缺失数」都是本次的新结果。
+            verifyInstallLock()
+        } catch (failure: Exception) {
             // run() 已把失败转成受控错误码；自愈是尽力而为，因此不抛出。
             // 记录失败时刻并进入冷却：失败通常是确定性的，立刻重试只会让下一次
             // 读取插件列表再白等一次完整超时。
@@ -94,9 +192,138 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
                 DiagnosticEvent.REPAIR,
                 mapOf("result" to "failed", "count" to "0"),
             )
-            repairFailureGeneration = generation
-            repairFailureAtMillis = now
+            recoveryStatus = "failed"
+            recoveryFailed = 1
+            if (generation != null) {
+                repairFailureGeneration = generation
+                repairFailureAtMillis = now
+            }
+            // 用户主动点的修复必须如实回显失败：把受控错误码交给调用方（自愈路径照旧吞掉）。
+            if (explicit) throw failure
         }
+    }
+
+    /** 当前已安装运行时的代次指纹（runtimeId + 版本 + rootfs 摘要）；未安装时为 null。 */
+    private fun installedGeneration(): String? =
+        store.installedManifest()?.let { "${it.runtimeId}|${it.version}|${it.rootfs.sha256}" }
+
+    /**
+     * 应用（APK）升级后的插件迁移。
+     *
+     * 判定在 [PluginMigrationPolicy]（纯逻辑，可单测）；动作**串行复用**已有的两步 ——
+     * 先 [recoverIfNeeded]（回放未提交事务、按状态快照回填启停状态），再
+     * [repairInstalledIfNeeded]（按运行时代次自愈插件链接）—— 最后按版本账本核对每个已装插件的
+     * 包目录是否还在。**不另写一套接链接逻辑**：`plugin-manager.cjs` 的 repair 分支已经处理了
+     * 「保留区里没有副本只记 missing」「已经能解析就不动」这些边界，重写一遍只会多出第二个真相。
+     *
+     * 三条硬约束：
+     *  - **绝不覆盖或删除用户数据**：整个过程只有 recover 与 repair 两类动作，而数据目录
+     *    （`data`/`config`/`storage`/`.config`）的复制只发生在更新与导入的提交路径上，
+     *    原样受既有的 `PLUGIN_DATA_UNSAFE` / `PLUGIN_DATA_TOO_LARGE` 约束；
+     *  - **失败不许静默**：结果写进 [recoverySnapshot] 的 `migration` / `lock` / `checked`，
+     *    失败与部分完成另写一条 `REPAIR` 诊断记录（受控 `code`，见下）；
+     *  - **记账失败不能让启动失败**：只有 recover 自己的异常照旧往上抛（与改动前逐字一致），
+     *    记账与核对失败一律只记录状态。
+     *
+     * @param currentVersionCode 当前 `BuildConfig.VERSION_CODE`（由调用方传入，本类不依赖 BuildConfig，
+     *   这样策略与判定都能在纯 JVM 单测里覆盖）。
+     * @return true 表示本次判定需要迁移并已执行；调用方不必再单独调用上面那两步。
+     */
+    fun migrateIfNeeded(currentVersionCode: Int): Boolean {
+        val stateFile = File(home, PluginMigrationState.FILE_NAME)
+        val recorded = PluginMigrationState.read(stateFile)
+        val generation = installedGeneration()
+        val decision = PluginMigrationPolicy.decide(
+            lastMigratedVersionCode = recorded?.appVersionCode,
+            currentVersionCode = currentVersionCode,
+            generationChanged = recorded != null && recorded.runtimeGeneration != generation,
+        )
+        if (!decision.migrate) return false
+        try {
+            recoverIfNeeded()
+            repairInstalledIfNeeded()
+        } catch (failure: Exception) {
+            // recover 的失败在本次改动前就会中断启动（recoverIfNeeded 直接向上抛）：保持同一语义，
+            // 但先留下「迁移没跑成」的状态与一条受控诊断，免得只看到一句运行时错误。
+            migrationStatus = "failed"
+            recordMigration(DiagnosticLevel.WARN, "failed", PLUGIN_MIGRATION_RECOVER_FAILED, decision.reason)
+            throw failure
+        }
+        val lock = verifyInstallLock()
+        // 迁移成功与否的记账：写不进去就等于"这一步没做成"，下次启动照旧重试一次
+        // （recover 幂等、repair 受代次闸门约束，重试的代价是一次访客进程，不是重复改动）。
+        val recordedNow = try {
+            PluginMigrationState.write(
+                stateFile,
+                PluginMigrationState.Record(currentVersionCode, generation, System.currentTimeMillis(), decision.reason),
+            )
+            true
+        } catch (_: Exception) {
+            false
+        }
+        val settled = recoveryMissing == 0 && recoveryFailed == 0 && recoveryRefused == 0
+        migrationStatus = when {
+            !recordedNow -> "failed"
+            lock == "ok" && settled -> "done"
+            else -> "partial"
+        }
+        // 失败与部分完成各带一个受控错误码：`code` 是诊断记录里唯一能区分「卡在哪一步」的字段。
+        // 成功不写 code（成功由 `result=ok` 与 `installed-migration.json` 自证）。
+        val code = when {
+            !recordedNow -> PLUGIN_MIGRATION_RECORD_FAILED
+            migrationStatus == "partial" -> PLUGIN_MIGRATION_PARTIAL
+            else -> null
+        }
+        val level = if (migrationStatus == "failed") DiagnosticLevel.WARN else DiagnosticLevel.INFO
+        val result = when (migrationStatus) {
+            "done" -> "ok"
+            "partial" -> "denied"
+            else -> "failed"
+        }
+        recordMigration(level, result, code, decision.reason)
+        return true
+    }
+
+    /**
+     * 按版本账本核对每个已装插件的包目录是否还在（**只读**：读一份小 JSON + 逐条 stat 目录）。
+     *
+     * 账本由访客脚本维护，原生侧只读。结论写进 [lockStatus] / [lockChecked]；其中「缺失」的条数
+     * 并入 [recoveryMissing]（取较大值：repair 的 missing 与账本的缺失是同一件事的两次观测，
+     * 谁都不该把对方的缺口抹平）。访客报告过写入失败时状态是 `unwritable` —— 那比"文件损坏"
+     * 更接近根因（磁盘或权限），界面文案也不同。
+     */
+    private fun verifyInstallLock(): String {
+        val file = File(home, PluginInstallLock.FILE_NAME)
+        val snapshot = PluginInstallLock.read(file)
+        if (snapshot == null) {
+            lockChecked = 0
+            // 文件在却读不出来 = 账本损坏；文件不在 = 还没有账本（新设备或从未装过插件）。
+            lockStatus = when {
+                lockWriteFailed -> "unwritable"
+                file.exists() -> "invalid"
+                else -> "missing"
+            }
+            return lockStatus
+        }
+        val verification = PluginInstallLock.verify(home, snapshot)
+        lockChecked = verification.checked
+        if (verification.missing > 0) recoveryMissing = maxOf(recoveryMissing, verification.missing)
+        lockStatus = if (lockWriteFailed) "unwritable" else "ok"
+        return lockStatus
+    }
+
+    /** 迁移的诊断记录：受控取值只有 `result` / `code` / `reason` / `count`，**不含路径与文件名**。 */
+    private fun recordMigration(level: DiagnosticLevel, result: String, code: String?, reason: String) {
+        store.diagnostics.record(
+            level,
+            DiagnosticEvent.REPAIR,
+            buildMap {
+                put("result", result)
+                put("reason", reason)
+                put("count", recoveryMissing.toString())
+                if (code != null) put("code", code)
+            },
+        )
     }
 
     /**
@@ -215,6 +442,11 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         if (operation == "graph" && payload.optInt("distinctRealpaths", -1) < 0) {
             throw RuntimeFailure("PLUGIN_OPERATION_FAILED", "插件返回数据无效")
         }
+        // 版本账本（`installed-lock.json`）的写入结果由访客脚本随操作结果回传：只有 `failed`
+        // 才算问题（`written` 是正常写入，`skipped` 表示本次没有可登记的事实 —— 例如清单都还不
+        // 存在），且下一次成功写入会清掉这个标志。这里是**唯一**的读取点：所有操作都走本方法。
+        val lockWrite = payload.optString("lock")
+        if (lockWrite.isNotEmpty()) lockWriteFailed = lockWrite == "failed"
         return payload
     }
 
@@ -248,6 +480,15 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         /** 受控详情：包名、版本号与 semver 范围字符集；拒绝引号、反斜杠、冒号与控制字符。 */
         val DETAIL = Regex("^[A-Za-z0-9@/._+, =!<>~^|()\\-]{1,300}$")
         val ERROR_CODES = setOf("PLUGIN_INPUT_INVALID", "PLUGIN_PATH_INVALID", "PLUGIN_CONFIG_INVALID", "PLUGIN_NOT_FOUND", "PLUGIN_PROTECTED", "PLUGIN_RECOVERY_FAILED", "PLUGIN_UPDATER_MISSING", "PLUGIN_UPDATE_FAILED", "PLUGIN_LINK_UNSUPPORTED", "PLUGIN_DEPENDENCY_UNSUPPORTED", "PLUGIN_ENGINE_UNSUPPORTED", "PLUGIN_GROUP_DISABLED", "PLUGIN_OPERATION_FAILED", "PLUGIN_SOURCE_INVALID", "PLUGIN_IMPORT_UNRESOLVED", "PLUGIN_GIT_MISSING", "PLUGIN_GIT_UNVERIFIED", "PLUGIN_DATA_TOO_LARGE", "PLUGIN_DATA_UNSAFE", "PLUGIN_ROLLBACK_UNAVAILABLE", "PLUGIN_ROLLBACK_FAILED")
+
+        /** 迁移在 recover 这一步就失败：异常已向上抛出，启动照旧中断。 */
+        const val PLUGIN_MIGRATION_RECOVER_FAILED = "PLUGIN_MIGRATION_RECOVER_FAILED"
+
+        /** 迁移跑完了，但「上次迁移成功」的记账没写成：下次启动会再跑一次。 */
+        const val PLUGIN_MIGRATION_RECORD_FAILED = "PLUGIN_MIGRATION_RECORD_FAILED"
+
+        /** 迁移跑完了，但账本不可用或仍有缺失/失败/拒绝的缺口。 */
+        const val PLUGIN_MIGRATION_PARTIAL = "PLUGIN_MIGRATION_PARTIAL"
     }
 }
 

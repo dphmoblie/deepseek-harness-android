@@ -448,7 +448,8 @@ describe('运行时自检', () => {
     // 版本一行不依赖自检：进页面就能看到已安装的运行时版本。
     expect(await screen.findByText('运行时版本')).toBeVisible()
     expect(screen.getByText('2026.08.17')).toBeVisible()
-    expect(screen.getByText('运行自检后显示')).toBeVisible()
+    // dsh 版本与系统 WebView 版本都只有跑过自检才有值：未跑时两行都显示同一个占位。
+    expect(screen.getAllByText('运行自检后显示')).toHaveLength(2)
     expect(screen.getByText('已安装插件列表见「插件管理」')).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: '运行自检' }))

@@ -53,6 +53,14 @@ describe('应用外层插件管理', () => {
     expect(screen.getByRole('heading', { name: 'Official plugins' })).toBeInTheDocument()
     expect(screen.getByRole('checkbox', { name: 'Enable plugin optional' })).toBeInTheDocument()
   })
+  it('显示运行时更新后的插件迁移结果', async () => {
+    setup(runtime, {
+      ...catalog,
+      recovery: { status: 'partial', restored: 1, relinked: 2, missing: 1, failed: 0, refused: 0 },
+    })
+    expect(await screen.findByText('插件已部分恢复')).toBeInTheDocument()
+    expect(screen.getByText('已恢复 1 个配置、重新链接 2 个插件。 缺失 1 个，失败 0 个，拒绝 0 个。')).toBeInTheDocument()
+  })
 })
 describe('插件导入与回滚', () => {
   it('按包名导入：来源为空时按钮禁用，成功后提示并清空输入', async () => {
