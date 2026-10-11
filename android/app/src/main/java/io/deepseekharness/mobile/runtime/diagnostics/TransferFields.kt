@@ -69,7 +69,9 @@ object TransferFields {
         put("code", code)
         put("reason", reason)
         put("result", "failed")
-        putAll(freeBytes(availableBytes))
+        // A transfer may already have sampled space before discarding its invalid archive.
+        val capturedSpace = if (FREE_BYTES in details) details[FREE_BYTES]?.toLongOrNull() else availableBytes
+        putAll(freeBytes(capturedSpace))
         details.forEach { (key, value) -> if (key in detailKeys) put(key, value) }
     }
 

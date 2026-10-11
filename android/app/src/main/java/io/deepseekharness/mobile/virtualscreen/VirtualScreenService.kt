@@ -571,10 +571,17 @@ class VirtualScreenService : Service() {
         if (now - lastFrontAtMs < FRONT_THROTTLE_MILLIS) return
         lastFrontAtMs = now
         val wm = getSystemService(WindowManager::class.java)
-        runCatching {
-            preview?.retainFrameLoopOnDetach = true
+        val image = preview ?: return
+        image.retainFrameLoopOnDetach = true
+        try {
             wm.removeViewImmediate(view)
             wm.addView(view, params)
+        } catch (_: Exception) {
+            hideOverlay()
+            // addView 失败时视图可能已摘下，不会再收到 detach 回调。
+            image.releaseOnDetach(retain = false)
+        } finally {
+            image.retainFrameLoopOnDetach = false
         }
     }
 
@@ -756,7 +763,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private var executor: java.util.concurrent.ExecutorService? = null
     private var touchExecutor: java.util.concurrent.ExecutorService? = null
     private val main = Handler(Looper.getMainLooper())
-    @Volatile private var generation = 0
+    private val lifecycle = VirtualScreenPreviewLifecycle()
     private var displayed: android.graphics.Bitmap? = null
     private var observedSession = ""
     private var observedAt = 0L
@@ -799,8 +806,6 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     }
     /** 息屏接收器是否已注册：重挂时不能重复注册（否则息屏会收到两次）。 */
     private var screenOffRegistered = false
-    /** 取帧循环是否已经在跑：重挂时不能重复 post，否则同一拍跑两遍、帧率翻倍。 */
-    private var loopRunning = false
     var report: (String) -> Unit = {}
     init {
         scaleType = ScaleType.FIT_CENTER
@@ -889,10 +894,10 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                         val request = JSONObject().put("sessionId", observedSession).put("action", if (swipe) "swipe" else "tap")
                             .put("x", start[0].toInt()).put("y", start[1].toInt())
                         if (swipe) request.put("endX", at[0].toInt()).put("endY", at[1].toInt()).put("durationMs", (e.eventTime - downAt).coerceIn(100, 2000).toInt())
-                        val version = generation
+                        val version = lifecycle.generation
                         worker.execute {
                             try {
-                                if (version == generation) service.action(request)
+                                if (version == lifecycle.generation) service.action(request)
                             } catch (_: Exception) { main.post { report("操作未执行，请确认副屏中的目标应用状态") } }
                             finally { inputBusy.set(false) }
                         }
@@ -916,13 +921,13 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     /** 逐事件触摸直传；设备端对 touch 不占用单次动作信号量，串行由宿主侧保证。 */
     private fun sendTouch(worker: java.util.concurrent.ExecutorService?, service: VirtualScreenService?, phase: String, at: FloatArray) {
         if (worker == null || service == null) return
-        val version = generation
+        val version = lifecycle.generation
         val session = downSession.ifEmpty { observedSession }
         val request = JSONObject().put("sessionId", session).put("action", "touch").put("phase", phase)
             .put("x", at[0].toInt()).put("y", at[1].toInt())
         worker.execute {
             try {
-                if (version == generation || phase == "cancel") service.action(request)
+                if (version == lifecycle.generation || phase == "cancel") service.action(request)
             } catch (_: Exception) {
                 if (phase == "down") main.post { report("触摸直传未生效，可改用点击或滑动操作") }
             }
@@ -968,7 +973,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private val tick = object : Runnable {
         override fun run() {
             val worker = executor ?: return
-            val version = generation
+            val version = lifecycle.generation
             worker.execute {
                 var bitmap: android.graphics.Bitmap? = null
                 var id = ""
@@ -1007,7 +1012,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                     bitmap = null
                 }
                 main.post {
-                    if (version != generation || executor == null) {
+                    if (version != lifecycle.generation || executor == null) {
                         fetchedHardware?.close()
                         return@post
                     }
@@ -1089,25 +1094,23 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
             androidx.core.content.ContextCompat.registerReceiver(context, screenOff, android.content.IntentFilter(Intent.ACTION_SCREEN_OFF), androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
             screenOffRegistered = true
         }
-        generation++
-        // 只有第一次挂载要启动取帧循环；重挂时旧的 tick 仍在队列里（generation 已变，
-        // 在途的那一拍会自行作废），再 post 一次会让同一拍跑两遍。
-        if (!loopRunning) {
-            loopRunning = true
+        // 临时重挂保持同代号：在途帧负责续排下一拍，排队中的 UP 也必须执行。
+        if (lifecycle.attach()) {
             main.post(tick)
         }
     }
 
     override fun onDetachedFromWindow() {
+        releaseOnDetach(retainFrameLoopOnDetach)
+        super.onDetachedFromWindow()
+    }
+
+    internal fun releaseOnDetach(retain: Boolean) {
+        if (!lifecycle.detach(retain)) return
         // 先把未完成的触摸取消排到输入队列尾部，避免离开页面后目标仍处于按下状态。
         if (streaming) sendTouch(touchExecutor, VirtualScreenService.current, "cancel", queuedMove ?: down ?: floatArrayOf(0f, 0f))
-        if (retainFrameLoopOnDetach) {
-            // 「重新挂到最前」的中间态：只让在途的一拍作废，线程、调度、接收器与画面全部留着。
-            generation++
-            super.onDetachedFromWindow()
-            return
-        }
-        generation++; main.removeCallbacks(tick); loopRunning = false
+        streaming = false
+        main.removeCallbacks(tick)
         executor?.shutdown(); executor = null
         touchExecutor?.shutdown(); touchExecutor = null
         if (screenOffRegistered) {
@@ -1115,6 +1118,5 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
             screenOffRegistered = false
         }
         clearFrame()
-        super.onDetachedFromWindow()
     }
 }

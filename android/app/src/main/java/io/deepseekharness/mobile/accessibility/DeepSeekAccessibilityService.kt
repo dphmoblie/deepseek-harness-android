@@ -75,7 +75,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         serviceRef.set(this)
         // 新连接 = 新的事件时间基准。上一次连接的动作时间戳/配额/指纹留着会让刚连上的服务被"冷却中"挡住。
         automationGate.reset()
-        automationScreenSequence.reset()
+        automationWindows.reset()
         automationReevalToken.set(null)
         serviceInfo = serviceInfo.apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
@@ -867,17 +867,6 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     private var automationEnabled = false
 
     /**
-     * 最近一次 `TYPE_WINDOW_STATE_CHANGED` 报上来的 Activity 名（也是配额窗口的一部分）。
-     *
-     * 只在这个事件类型上更新：`TYPE_WINDOW_CONTENT_CHANGED` 的 `className` 是**视图**类名
-     * （`android.widget.FrameLayout` 之类），拿它当 Activity 会让配额窗口每个事件都变一次，
-     * 等于把 `actionMaximum` 这道唯一的闸门废掉。缓存住之后窗口就是稳定的「包名/Activity」，
-     * 规则的 `allowActivities` / `denyActivities` 也才有意义。
-     */
-    private var automationActivityName: String? = null
-    private var automationActivityPackage: String? = null
-
-    /**
      * 屏幕周期序号：`resetOn = "screen"` 的配额窗口靠它区分（见 [AutomationRuleExecutor.quotaWindowKey]）。
      *
      * 只在 `TYPE_WINDOW_STATE_CHANGED` 上递增：那是「窗口更新」这个信号本身（对话框弹出、同一 Activity
@@ -887,8 +876,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
      * 它只重开**次数配额**，不动指纹（[AutomationGateState.syncIdentityWindow] 只认包名/Activity），
      * 所以「窗口更新 → 又点同一个按钮」仍然被指纹挡住，`screen` 不会变成自触发循环。
      */
-    /** 每个目标应用独立的窗口序号，避免其他允许应用的事件重开当前应用配额。 */
-    private val automationScreenSequence = AutomationScreenSequence()
+    private val automationWindows = AutomationWindowState()
 
     /** 「稍后重新判定」的令牌：只用来标识一次排期（见 [reevaluateAutomation] 的身份比对）。 */
     private class AutomationReevalToken(val dueAtMs: Long)
@@ -897,6 +885,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     private class AutomationTreeSnapshot(
         val tree: AutomationNode?,
         val packageName: String,
+        val windowId: Int,
     )
 
     private class AutomationEvaluation(
@@ -908,7 +897,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     )
 
     /**
-     * 事件入口的主体：白名单/系统界面早筛 → 第 1 层事件节流 → 读树 → 读规则 → 判定与执行。
+     * 事件入口的主体：白名单/锁屏早筛 → 可靠窗口状态更新 → 动作评估节流 → 读树与规则 → 执行。
      *
      * 每一次事件都是「同步评估一次」，没有队列、没有重试：事件太密时前面的层会把它丢掉。
      */
@@ -924,21 +913,25 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         // 执行前的第一道白名单：事件包名必须被允许。应用自身包名也在白名单里（策略如此），
         // 但闸门默认额外拒绝对自身执行动作（防自触发），所以这里不需要特殊处理。
         if (!AccessibilityAutomationPolicy.packageAllowed(eventPackage, allowed, whitelistEnabled)) return
-        // 第 1 层：事件准入。被节流的事件直接丢弃，不排队、不补做。
-        if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) return
-        val root = rootInActiveWindow ?: return
-        val snapshot = buildAutomationTree(root)
-        val deviceLocked = isLockedOrScreenOff()
         // 锁屏时不读树、不读规则：拍板口径是"锁屏一律跳过"，连评估都不做。
-        if (deviceLocked) return
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && snapshot.packageName == eventPackage) {
-            automationActivityPackage = eventPackage
-            automationActivityName = event.className?.toString()
-            automationScreenSequence.advance(eventPackage)
+        if (isLockedOrScreenOff()) return
+        val root = rootInActiveWindow ?: return
+        val rootPackage = root.packageName?.toString().orEmpty()
+        val windowStateChanged = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        // 窗口身份必须先更新；100ms 内切屏可以不执行动作，但不能继续沿用旧 Activity。
+        if (!automationWindows.observe(
+                eventPackage, event.windowId, rootPackage, root.windowId,
+                event.className?.toString(), windowStateChanged,
+            )
+        ) return
+        if (windowStateChanged) {
             automationGate.beginMatchWindow(AutomationRuleExecutor.baseWindowKey(
-                AutomationScreenInfo(eventPackage, event.className?.toString()),
+                automationWindows.screen(rootPackage, root.windowId),
             ))
         }
+        // 第 1 层只丢弃动作评估，不丢弃上面的可靠窗口状态。
+        if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) return
+        val snapshot = buildAutomationTree(root)
         val sensitiveWindow = containsSensitiveWindow(root)
         val rules = loadAutomationRules(snapshot.packageName)
         if (rules.isEmpty()) return
@@ -953,7 +946,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             rules,
             nowMs,
             apply = true,
-            eventSequence = automationScreenSequence.current(snapshot.packageName),
+            eventSequence = automationWindows.current(snapshot.packageName),
         )
     }
 
@@ -1012,7 +1005,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             apply = true,
             // 重判定没有新事件，沿用最近一次窗口更新的周期：`resetOn="screen"` 的配额
             // 不会因为「等待到期」被白白重开一次（那会让 matchDelayMs 变成绕过 maxActions 的口子）。
-            eventSequence = automationScreenSequence.current(snapshot.packageName),
+            eventSequence = automationWindows.current(snapshot.packageName),
         )
     }
 
@@ -1031,12 +1024,9 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         val snapshot = evaluation.tree
         val root = snapshot.tree ?: return
         val report = AutomationRuleExecutor.execute(
-            backend = AndroidAutomationNodeBackend(),
+            backend = AndroidAutomationNodeBackend(snapshot.packageName, snapshot.windowId),
             root = root,
-            screen = AutomationScreenInfo(
-                packageName = snapshot.packageName,
-                activityName = automationActivityName.takeIf { automationActivityPackage == snapshot.packageName },
-            ),
+            screen = automationWindows.screen(snapshot.packageName, snapshot.windowId),
             rules = rules,
             gate = automationGate,
             nowMs = nowMs,
@@ -1159,7 +1149,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         val packageName = root.packageName?.toString().orEmpty()
         val budget = intArrayOf(MAX_AUTOMATION_NODES)
         val tree = copyAutomationNode(root, 0, budget)
-        return AutomationTreeSnapshot(tree = tree, packageName = packageName)
+        return AutomationTreeSnapshot(tree = tree, packageName = packageName, windowId = root.windowId)
     }
 
     /**
@@ -1198,10 +1188,18 @@ class DeepSeekAccessibilityService : AccessibilityService() {
      * 所有回调都在主线程（事件回调与排期回调都在主线程），所以这里不需要切线程；
      * 也正因为同线程，执行器那次 `resolveNode` 读到的节点几乎总是与判定时的同一个。
      */
-    private inner class AndroidAutomationNodeBackend : AutomationNodeBackend {
+    private inner class AndroidAutomationNodeBackend(
+        private val packageName: String,
+        private val windowId: Int,
+    ) : AutomationNodeBackend {
 
         override fun resolveNode(path: List<Int>, bounds: AutomationBounds): AutomationNodeHandle? {
-            var node: AccessibilityNodeInfo? = rootInActiveWindow ?: return null
+            val activeRoot = rootInActiveWindow ?: return null
+            if (!AutomationWindowState.sameWindow(
+                    packageName, windowId, activeRoot.packageName?.toString().orEmpty(), activeRoot.windowId,
+                )
+            ) return null
+            var node: AccessibilityNodeInfo? = activeRoot
             for (index in path) {
                 val current = node ?: return null
                 node = current.getChild(index) ?: return null

@@ -269,19 +269,40 @@ internal class AutomationGateState {
     }
 }
 
-/** `screen` 配额按应用保存窗口序号，避免其他应用事件重开当前应用的配额。 */
-internal class AutomationScreenSequence {
-    private val sequenceByPackage = mutableMapOf<String, Long>()
+/** 窗口状态独立于动作节流；Activity 绑定 windowId，`screen` 配额序号按应用隔离。 */
+internal class AutomationWindowState {
+    private data class Window(val id: Int, val activityName: String?, val sequence: Long)
+    private val windowsByPackage = mutableMapOf<String, Window>()
 
-    fun advance(packageName: String): Long {
-        val next = (sequenceByPackage[packageName] ?: 0L) + 1L
-        sequenceByPackage[packageName] = next
-        return next
+    fun observe(
+        eventPackage: String,
+        eventWindowId: Int,
+        rootPackage: String,
+        rootWindowId: Int,
+        activityName: String?,
+        windowStateChanged: Boolean,
+    ): Boolean {
+        // 安全校验：旧窗口、其他显示屏及无窗口标识的事件不能污染当前窗口元数据。
+        if (!sameWindow(eventPackage, eventWindowId, rootPackage, rootWindowId)) return false
+        if (windowStateChanged) {
+            windowsByPackage[rootPackage] = Window(rootWindowId, activityName, current(rootPackage) + 1L)
+        }
+        return true
     }
 
-    fun current(packageName: String): Long = sequenceByPackage[packageName] ?: 0L
+    fun screen(packageName: String, windowId: Int): AutomationScreenInfo = AutomationScreenInfo(
+        packageName,
+        windowsByPackage[packageName]?.takeIf { windowId >= 0 && it.id == windowId }?.activityName,
+    )
 
-    fun reset() = sequenceByPackage.clear()
+    fun current(packageName: String): Long = windowsByPackage[packageName]?.sequence ?: 0L
+
+    fun reset() = windowsByPackage.clear()
+
+    companion object {
+        fun sameWindow(firstPackage: String, firstId: Int, secondPackage: String, secondId: Int): Boolean =
+            firstId >= 0 && firstId == secondId && firstPackage == secondPackage
+    }
 }
 
 /** 一次规则判定的全部输入。不含任何可变状态，方便表驱动测试逐条构造。 */
