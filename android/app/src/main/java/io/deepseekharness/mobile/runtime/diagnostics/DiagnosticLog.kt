@@ -56,6 +56,15 @@ data class DiagnosticText(
 )
 
 /**
+ * 诊断日志的目录名：写入用 `noBackupFilesDir/<它>`、导出用 `cacheDir/<它>`，两处必须是同一个名字。
+ *
+ * 提到顶层而不是留在类的私有伴生对象里，是为了让「分级清理」那一档能直接引用它
+ * （`RuntimeCacheEntries.DIAGNOSTIC_EXPORTS`）——改名时清理白名单跟着一起改，而不是某天
+ * 悄悄清到一个已经不存在的旧目录上、把新的导出目录留在那里。
+ */
+internal const val DIAGNOSTIC_DIRECTORY_NAME = "diagnostics"
+
+/**
  * 应用自诊断日志。
  *
  * 与审计日志（[io.deepseekharness.mobile.runtime.audit.PrivateAuditLog]）的区别：
@@ -70,8 +79,8 @@ data class DiagnosticText(
  */
 class DiagnosticLog(context: Context) {
     private val appContext = context.applicationContext
-    private val directory: Path = appContext.noBackupFilesDir.toPath().resolve(DIRECTORY_NAME)
-    private val exportDirectory: Path = appContext.cacheDir.toPath().resolve(DIRECTORY_NAME)
+    private val directory: Path = appContext.noBackupFilesDir.toPath().resolve(DIAGNOSTIC_DIRECTORY_NAME)
+    private val exportDirectory: Path = appContext.cacheDir.toPath().resolve(DIAGNOSTIC_DIRECTORY_NAME)
     private val preferences: SharedPreferences =
         appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
@@ -159,7 +168,8 @@ class DiagnosticLog(context: Context) {
      *
      * 文件头包含应用版本、机型与 ROM 构建串、Android SDK 级别与 ABI：这些都是排障必需、
      * 且不构成用户数据。**不含**序列号、IMEI/MEID、Android ID、账号、URL、路径或凭据；
-     * 机型与 ROM 的取值范围见 [DiagnosticDevice]。返回 null 表示没有可导出的内容。
+     * 机型与 ROM 的取值范围见 [DiagnosticDevice]。正文在写盘前还会再过一遍
+     * [DiagnosticPolicy.scrubExport] 作为兜底。返回 null 表示没有可导出的内容。
      */
     @Synchronized
     fun export(instant: Instant = Instant.now()): DiagnosticExport? {
@@ -180,7 +190,9 @@ class DiagnosticLog(context: Context) {
             )
             entries.forEach { (name, _, _) ->
                 append("\n===== ").append(name).append(" =====\n")
-                append(readBounded(directory.resolve(name)))
+                // 正文过一遍脱敏（见 DiagnosticPolicy.scrubExport）：白名单已经在写入时把好了关，
+                // 这里是产物离开私有目录前的兜底。文件头不复核——它是常量文本，不含任何取值。
+                append(DiagnosticPolicy.scrubExport(readBounded(directory.resolve(name))))
             }
         }
         val fileName = DiagnosticPolicy.exportFileName(instant)
@@ -364,7 +376,6 @@ class DiagnosticLog(context: Context) {
     fun fileProviderAuthority(): String = "${appContext.packageName}$AUTHORITY_SUFFIX"
 
     private companion object {
-        const val DIRECTORY_NAME = "diagnostics"
         const val PREFERENCES = "diagnostic_log_settings"
         const val KEY_ENABLED = "diagnostic_log_enabled"
         const val KEY_RETENTION_DAYS = "diagnostic_log_retention_days"

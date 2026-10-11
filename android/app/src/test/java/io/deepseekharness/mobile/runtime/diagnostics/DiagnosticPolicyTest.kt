@@ -185,6 +185,65 @@ class DiagnosticPolicyTest {
     }
 
     @Test
+    fun keepsPluginRepairCountersAndRejectsNonNumbers() {
+        // RuntimePluginManager 的修复记录：plugins / relinked / missing 三个计数。
+        // 它们此前不在白名单里，被静默丢弃 —— 于是「这次升级有没有抹掉插件链接」在导出里看不到。
+        assertEquals(
+            "2026-09-12T10:20:30Z|INFO|REPAIR|result=ok|count=3|files=12|plugins=3|relinked=1|missing=1\n",
+            DiagnosticPolicy.recordLine(
+                instant,
+                DiagnosticLevel.INFO,
+                DiagnosticEvent.REPAIR,
+                mapOf(
+                    "result" to "ok",
+                    "count" to "3",
+                    "files" to "12",
+                    "plugins" to "3",
+                    "relinked" to "1",
+                    "missing" to "1",
+                ),
+            ),
+        )
+        // 六个字段正好在上限（MAX_FIELDS = 8）之内，三个新计数不会被挤掉。
+        assertTrue(DiagnosticPolicy.isAllowedKey("plugins"))
+        assertTrue(DiagnosticPolicy.isAllowedKey("relinked"))
+        assertTrue(DiagnosticPolicy.isAllowedKey("missing"))
+        // 与既有计数字段同一套形态：只接受 1–12 位数字。
+        assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE\n", line(fields = mapOf("missing" to "-1")))
+        assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE\n", line(fields = mapOf("relinked" to "1 ")))
+        assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE\n", line(fields = mapOf("plugins" to "3个")))
+    }
+
+    @Test
+    fun scrubsCredentialShapesOnExportButKeepsTheFieldName() {
+        // 兜底规则针对的是「导出的产物要离开应用私有目录」：正常路径写不出这些形态，
+        // 但产物一旦被分享出去就不再受控，因此在写盘前再替换一次。
+        assertEquals("api_key=<redacted>", DiagnosticPolicy.scrubExport("api_key=sk-abcdefghijklmnop"))
+        assertEquals("password=<redacted>", DiagnosticPolicy.scrubExport("password: hunter2"))
+        assertEquals("token=<redacted>", DiagnosticPolicy.scrubExport("token = abc123"))
+        // `Authorization` 是两段式（scheme + 令牌），因此它单独一条规则吃到行尾：
+        // 只 redact 第一段会把令牌本体留在导出文件里。
+        assertEquals("Authorization=<redacted>", DiagnosticPolicy.scrubExport("Authorization: Bearer ZHNOLW1vYmlsZTpzZWNyZXQ="))
+        // 大小写按原样保留（替换只动取值），因此小写写法回小写字段名。
+        assertEquals("authorization=<redacted>", DiagnosticPolicy.scrubExport("authorization:Basic ZHNOLW1vYmlsZTpzZWNyZXQ="))
+        assertEquals("Basic <redacted>", DiagnosticPolicy.scrubExport("Basic ZHNOLW1vYmlsZTpzZWNyZXQ="))
+        assertEquals("https://<redacted>@example.invalid/x", DiagnosticPolicy.scrubExport("https://user:pass@example.invalid/x"))
+        // 字段名保留：排障时仍要看出「这里原本有一个凭据字段」。
+        assertTrue(DiagnosticPolicy.scrubExport("secret=abc").startsWith("secret="))
+
+        // 合法取值不得被误伤：`token` 后面不是 `:` 或 `=` 时不是赋值形态。
+        assertEquals(
+            "2026-09-12T10:20:30Z|WARN|RECOVERY|reason=token_missing\n",
+            DiagnosticPolicy.scrubExport(line(level = DiagnosticLevel.WARN, event = DiagnosticEvent.RECOVERY, fields = mapOf("reason" to "token_missing"))),
+        )
+        assertEquals("phase=running", DiagnosticPolicy.scrubExport("phase=running"))
+
+        // 边界说清楚：这条规则只认「赋值」与「scheme + 值」两种形态。把整段自由文本里的凭据
+        // 认出来做不到，那由白名单保证（日志里根本不写自由文本）。
+        assertEquals("我的密钥是 abcdef", DiagnosticPolicy.scrubExport("我的密钥是 abcdef"))
+    }
+
+    @Test
     fun clampsRetentionIntoSupportedRange() {
         assertEquals(DiagnosticPolicy.MIN_RETENTION_DAYS, DiagnosticPolicy.clampRetentionDays(0))
         assertEquals(DiagnosticPolicy.MIN_RETENTION_DAYS, DiagnosticPolicy.clampRetentionDays(-5))

@@ -131,6 +131,21 @@ enum class DiagnosticEvent {
      * `count` 是当前保留的快照份数。**不记录任何路径与快照标识**。
      */
     RUNTIME_SNAPSHOT,
+
+    /**
+     * 分级清理（缓存档 / 插件数据档）。
+     *
+     * 为什么要单独记：清理是**破坏性且不可撤销**的操作，用户点完只会看到「已清理」。日志里留下
+     * 一行才能回答「到底删掉了多少、有没有删失败」——尤其是失败时界面不会把删除失败说成成功。
+     *
+     * 只记录受控取值：`reason` 是 `cache` / `plugin_data`，`result` 是 `ok` / `failed` / `denied`，
+     * `files` 是删除的文件数、`bytes` 是回收的字节数、`count` 是这一档覆盖的条目数
+     * （缓存档是白名单条目数、插件数据档是账本里核对到的包数），`code` 是受控错误码
+     * （如 `CLEANUP_LEDGER_UNAVAILABLE`）。
+     *
+     * **不记录任何路径、目录名与包名**：插件包名能反推用户装了什么，而诊断日志可以导出。
+     */
+    CLEANUP,
 }
 
 /**
@@ -210,6 +225,13 @@ object DiagnosticPolicy {
         "actual_bytes",
         "free_bytes",
         "digest_ok",
+        // 插件修复时的三个计数（见 `RuntimePluginManager.repairInstalledIfNeeded`）：
+        // plugins = 清单里登记的插件数、relinked = 被接回 profile 模块根的数量、
+        // missing = 保留区里已无副本、只能重装的数量。三个都是整数，回答的是「这次
+        // 运行时升级有没有抹掉插件链接」，因此必须在导出里看得到。
+        "plugins",
+        "relinked",
+        "missing",
     )
 
     // 按字段类型校验取值。单纯用字符集是不够的：`sk-` 开头的 API Key 也能匹配
@@ -217,7 +239,19 @@ object DiagnosticPolicy {
     private val booleanKeys =
         setOf("enabled", "active", "installed", "running", "connected", "residual", "digest_ok")
     private val countKeys =
-        setOf("days", "files", "bytes", "count", "sdk", "expected_bytes", "actual_bytes", "free_bytes")
+        setOf(
+            "days",
+            "files",
+            "bytes",
+            "count",
+            "sdk",
+            "expected_bytes",
+            "actual_bytes",
+            "free_bytes",
+            "plugins",
+            "relinked",
+            "missing",
+        )
     private val countPattern = Regex("^[0-9]{1,12}$")
     private val codePattern = Regex("^[A-Z][A-Z0-9_]{0,47}$")
     private val permittedResults =
@@ -271,6 +305,38 @@ object DiagnosticPolicy {
     }
 
     fun isAllowedKey(key: String): Boolean = keyPattern.matches(key) && key in allowedKeys
+
+    // 凭据形态：`key=value` / `Authorization: xxx` 与 `Bearer xxx` / `Basic xxx` 两种写法。
+    // 词边界保证 `reason=token_missing` 这类合法取值不会被误伤（`token` 后面不是 `:` 或 `=`）。
+    //
+    // `Authorization` 单独一条且**吃到行尾**（`|` 是字段分隔符，遇到就停）：它的取值通常不是
+    // 单个 token，而是 `Bearer xxx` 这种两段式，只redact 第一段会把令牌本体留在导出文件里。
+    private val credentialHeader = Regex(
+        "(?i)\\b(authorization|proxy-authorization)\\b\\s*[:=]\\s*[^\\n|]*",
+    )
+    private val credentialAssignment = Regex(
+        "(?i)\\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|passwd|secret)"
+            + "\\b\\s*[:=]\\s*([^\\s|]+)",
+    )
+    private val credentialScheme = Regex("(?i)\\b(bearer|basic)\\s+[A-Za-z0-9._~+/=-]{4,}")
+    private val credentialInUrl = Regex("(?i)\\b(https?://)[^\\s/@]+@")
+
+    /**
+     * 导出前的最后一道脱敏——纵深防御，不是主要把关点。
+     *
+     * 主要把关点始终是 [recordLine] 的白名单：字段名必须在册、取值必须是受控形态，正常路径下
+     * 一个字都写不出去。但导出是**产物交接**：文件会离开应用私有目录、进到系统分享面板与聊天工具，
+     * 所以这里再做一次与调用点无关的兜底——把凭据形态替换成 `<redacted>`，保留字段名以便排障时
+     * 仍能看出「这里原本有一个凭据字段」。
+     *
+     * 它挡不住的东西要说清楚：自由文本里的凭据（例如把整段配置贴进日志）没有可识别的形态，
+     * 这条规则对此无能为力；白名单才是保证不出现自由文本的那一层。
+     */
+    fun scrubExport(text: String): String = text
+        .replace(credentialHeader) { "${it.groupValues[1]}=<redacted>" }
+        .replace(credentialAssignment) { "${it.groupValues[1]}=<redacted>" }
+        .replace(credentialScheme) { "${it.groupValues[1]} <redacted>" }
+        .replace(credentialInUrl) { "${it.groupValues[1]}<redacted>@" }
 
     /**
      * 字段是否可写入：字段名必须在白名单内，且取值必须符合该字段的形态。
