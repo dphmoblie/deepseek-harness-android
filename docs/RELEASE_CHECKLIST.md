@@ -8,10 +8,12 @@ or otherwise distributing them.
 
 ## Runtime artifacts
 
-- Build the release image from Ubuntu 24.04 ARM64, Node.js 24.14.0, and
+- Build the release image from Ubuntu 24.04 ARM64, Node.js 24.19.0, and
   `@deepseek-ai/dsh` 0.2.0-rc.2. Record and independently verify the SHA-256
   of every source archive and package used by
   `scripts/build-embedded-runtime.py`.
+  （`scripts/build-embedded-runtime.py:947-948` 的 `--node-version` 默认值是 rootfs 内的
+  Node 版本；它与 CI 里跑构建/测试的 action Node 24.14.0 是两个不同的东西，不要混用。）
 - Verify `/usr/local/bin/dsh`, the ARM64 native Node modules, the runtime
   metadata, and the guest file permissions in the finished rootfs.
 - Verify the network tool component group in the finished rootfs: `git`, `curl`,
@@ -148,7 +150,7 @@ or otherwise distributing them.
 
 ## 发布工程自动门禁（CI 强制执行，2026-10-11 起）
 
-以下四条由 `scripts/mobile-compat-contract.test.mjs` 断言，跑在 CI 的
+以下五条由 `scripts/mobile-compat-contract.test.mjs` 断言，跑在 CI 的
 `pnpm run test:scripts`（`node --test scripts/*.test.mjs`）里，本地同样可以复跑：
 
 - **版本号只有一个来源**：根 `package.json` 的 `version`、`android/app/build.gradle`
@@ -164,9 +166,14 @@ or otherwise distributing them.
   （`ubuntu-24.04`、`ubuntu-24.04-arm`），不允许 `ubuntu-latest` 这类浮动标签。
 - **发布后复核已发布资产**：`publish-release` 上传完成后会把资产重新下载回来，
   由 `scripts/verify-release-assets.py` 按 `checksums.txt` 逐项核对 SHA-256 与文件
-  集合（`--expect app-release.apk,rootfs.bundle,runtime-manifest.json` 保证既不缺件
-  也不多件）。上传被截断、多传一份 bundle、漏传清单都会在这里失败；该脚本自己的
+  集合（`--expect app-release.apk,rootfs.bundle,runtime-manifest.json,release-manifest.json`
+  保证既不缺件也不多件）。上传被截断、多传一份 bundle、漏传清单都会在这里失败；该脚本自己的
   夹具测试在 `scripts/verify-release-assets.test.mjs`。
+- **版本清单随包发布**：`scripts/release-manifest.py` 在 checksums 之前生成
+  `/tmp/release-manifest.json`（`schemaVersion`、应用版本、发布标签与类型、提交号，
+  以及 APK / rootfs.bundle / runtime-manifest.json 三者的 SHA-256 与字节数）。
+  它自己也要被 `checksums.txt` 登记并一起上传，这样用户和排查者不解压 300MB 的 APK
+  就能把线上包对应到源码提交。夹具测试真跑这个脚本：`scripts/release-manifest.test.mjs`。
 
 发布作业的失败处置（2026-10-11 起）：创建 Release 或上传资产失败仍是 `exit 1`；
 **复核失败**时额外执行「把本次 Release 转为草稿」（`if: failure()` 里 PATCH

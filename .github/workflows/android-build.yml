@@ -563,7 +563,20 @@ jobs:
             else
               CHANGES_HEADER="（未找到上一个发布标签）"
             fi
-            for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json; do
+            # 版本清单：把「这次发布的到底是什么」写成一份机器可读文件，用户与后续排查
+            # 不必解压 300MB 的 APK 就能核对版本、提交与资产摘要。必须先于 checksums 生成，
+            # 这样 checksums.txt 能把它一起登记进去（发布前复核要求清单与目录完全一致）。
+            # 生成逻辑在脚本里（scripts/release-manifest.py），本地夹具测试会真跑它。
+            python3 scripts/release-manifest.py \
+              --version "${APP_VERSION}" \
+              --tag "$TAG" \
+              --release-type "$RELEASE_TYPE" \
+              --commit "$GITHUB_SHA" \
+              --apk "$APK" \
+              --bundle /tmp/runtime/rootfs.bundle \
+              --runtime-manifest /tmp/runtime/runtime-manifest.json \
+              --out /tmp/release-manifest.json
+            for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json /tmp/release-manifest.json; do
               printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")"
             done > /tmp/checksums.txt
             cat > /tmp/notes.md <<EOF
@@ -586,7 +599,8 @@ jobs:
           - $(basename "$APK")（APK，含 PRoot 运行器）
           - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.2.0-rc.2 + 官方 Harness 前端 Android 适配）
           - runtime-manifest.json
-          - checksums.txt（以上三项资产的 SHA-256）
+          - release-manifest.json（版本、标签、提交与各资产摘要/字节数的机器可读清单）
+          - checksums.txt（以上四项资产的 SHA-256）
 
           runtime-manifest.json SHA-256：${MANIFEST_SHA}
           EOF
@@ -604,7 +618,7 @@ jobs:
             RELEASE_ID="$(echo "$RESP" | jq -r .id)"
             test -n "$RELEASE_ID" && test "$RELEASE_ID" != "null"
             UPLOAD_BASE="https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets"
-            for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json /tmp/checksums.txt; do
+            for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json /tmp/release-manifest.json /tmp/checksums.txt; do
               name="$(basename "$f")"
               curl -sS -f -X POST \
                 -H "Authorization: Bearer $GH_TOKEN" \
@@ -641,7 +655,7 @@ jobs:
           ls -la "${VERIFY_DIR}"
           python3 scripts/verify-release-assets.py \
             --dir "${VERIFY_DIR}" \
-            --expect app-release.apk,rootfs.bundle,runtime-manifest.json
+            --expect app-release.apk,rootfs.bundle,runtime-manifest.json,release-manifest.json
 
       - name: 复核失败即把本次发布转为草稿
         # 处置口径见 docs/RELEASE_CHECKLIST.md：坏版本不原地覆盖 tag。转为草稿后用户

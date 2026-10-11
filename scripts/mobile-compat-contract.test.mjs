@@ -1000,7 +1000,7 @@ test('published assets are re-downloaded and re-verified, and a failed check onl
   // 复核要显式限定资产集合：清单悄悄多一项或少一项时门禁不能形同虚设。
   assert.match(
     workflow,
-    /verify-release-assets\.py[\s\S]{0,200}--expect app-release\.apk,rootfs\.bundle,runtime-manifest\.json/u,
+    /verify-release-assets\.py[\s\S]{0,200}--expect app-release\.apk,rootfs\.bundle,runtime-manifest\.json,release-manifest\.json/u,
   )
   // 下载走带 token 的 gh，私有仓库也不会把 404 误判成坏发布。
   assert.match(workflow, /gh release download "\$\{RELEASE_TAG\}"/u)
@@ -1016,4 +1016,56 @@ test('published assets are re-downloaded and re-verified, and a failed check onl
   const verifier = await readFile(resolve(appRoot, 'scripts/verify-release-assets.py'), 'utf8')
   assert.match(verifier, /RELEASE_ASSETS_OK/u, '复核脚本必须打印可检索的成功标记')
   assert.match(verifier, /RELEASE_VERIFY_FAILED/u, '复核脚本必须打印可检索的失败前缀')
+})
+
+test('the published version manifest is written before the checksums and shipped with them', async () => {
+  const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
+  const generator = await readFile(resolve(appRoot, 'scripts/release-manifest.py'), 'utf8')
+  // 断言参数与字段时先压掉所有空白：缩进与对象内空格变动不该让契约失效，
+  // 但参数名、取值来源和先后顺序必须钉住。
+  const compact = workflow.replace(/\s+/gu, '')
+
+  const manifestIndex = workflow.indexOf('/tmp/release-manifest.json')
+  const checksumsIndex = workflow.indexOf('> /tmp/checksums.txt')
+  assert.ok(manifestIndex > 0, '发布作业必须生成版本清单 release-manifest.json')
+  assert.ok(checksumsIndex > manifestIndex, '版本清单必须先于 checksums.txt 生成，否则它不会被登记进校验清单')
+
+  // 清单要进 checksums.txt（发布前复核要求目录与清单完全一致），并随其它资产一起上传。
+  assert.ok(
+    compact.includes('forfin"$APK"/tmp/runtime/rootfs.bundle/tmp/runtime/runtime-manifest.json/tmp/release-manifest.json/tmp/checksums.txt;do'),
+    '版本清单必须与其它资产一起登记进 checksums.txt',
+  )
+  assert.ok(
+    compact.includes('--expectapp-release.apk,rootfs.bundle,runtime-manifest.json,release-manifest.json'),
+    '发布后复核的资产集合必须包含 release-manifest.json',
+  )
+
+  // 生成逻辑必须来自受测脚本（本地夹具测试真跑它），而不是写得只此一处的 jq 模板。
+  for (const fragment of [
+    'scripts/release-manifest.py\\',
+    '--version"${APP_VERSION}"',
+    '--tag"$TAG"',
+    '--release-type"$RELEASE_TYPE"',
+    '--commit"$GITHUB_SHA"',
+    '--apk"$APK"',
+    '--bundle/tmp/runtime/rootfs.bundle',
+    '--runtime-manifest/tmp/runtime/runtime-manifest.json',
+    '--out/tmp/release-manifest.json',
+  ]) {
+    assert.ok(compact.includes(fragment), `发布作业没有按约定调用版本清单生成器：${fragment}`)
+  }
+
+  // 清单本身要机器可读：schemaVersion + 版本 + 标签 + 完成类型的提交号 + 每个资产的 sha256/字节数。
+  for (const fragment of [
+    'SCHEMA_VERSION = 1',
+    '"appVersion": version',
+    '"releaseTag": tag',
+    '"releaseType": release_type',
+    '"commit": commit',
+    '"name": path.name',
+    '"sha256": sha256_of(path)',
+    '"bytes": path.stat().st_size',
+  ]) {
+    assert.ok(generator.includes(fragment), `版本清单生成器缺少字段：${fragment}`)
+  }
 })
