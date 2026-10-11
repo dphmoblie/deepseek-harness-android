@@ -38,6 +38,9 @@ const bridge = vi.hoisted(() => ({
   openShizuku: vi.fn(),
   getAccessibilityAutomationState: vi.fn(),
   setAccessibilityAutomationPackages: vi.fn(),
+  // 无障碍控制台的总开关与运行记录：导航用例只关心页面切换，形状照实补齐即可。
+  setAccessibilityAutomationRuntime: vi.fn(),
+  getAccessibilityAutomationRuns: vi.fn(),
   openAccessibilitySettings: vi.fn(),
   getKeepAliveState: vi.fn(),
   getOverlayBallState: vi.fn(),
@@ -188,6 +191,8 @@ beforeEach(() => {
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
   bridge.getAccessibilityAutomationState.mockResolvedValue({ enabled: false, allowedPackages: [] })
   bridge.setAccessibilityAutomationPackages.mockResolvedValue({ enabled: false, allowedPackages: [] })
+  bridge.setAccessibilityAutomationRuntime.mockResolvedValue({ enabled: false, allowedPackages: [] })
+  bridge.getAccessibilityAutomationRuns.mockResolvedValue({ connected: false, limit: 50, dropped: 0, runs: [], blocked: [] })
   bridge.openAccessibilitySettings.mockResolvedValue(undefined)
   bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive })
   // 导航用例不关心悬浮球：给一个已授权、已关闭的稳定初值即可。

@@ -97,6 +97,10 @@ export const bridge = {
   setAccessibilityPassword: vi.fn(),
   clearAccessibilityPassword: vi.fn(),
   resetAccessibilityPasswordWithBiometric: vi.fn(),
+  // 无障碍控制台第二批（总开关 + 运行记录）：与上面同一道理，夹具缺一条桥方法，
+  // 用到它的界面会在 effect 阶段抛错并整棵树卸载，表现成「找不到任何元素」。
+  setAccessibilityAutomationRuntime: vi.fn(),
+  getAccessibilityAutomationRuns: vi.fn(),
   openAccessibilitySettings: vi.fn(),
   getKeepAliveState: vi.fn(),
   getOverlayBallState: vi.fn(),
@@ -294,6 +298,9 @@ export function beforeEachAppTest(): void {
     allowedPackages: [],
     alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
     passwordConfigured: false,
+    // 默认与真机「装完没点过任何按钮」一致：总开关关闭、服务未连上。
+    automationRuntime: 'off',
+    serviceStatus: 'off',
   })
   bridge.listInstalledApplications.mockResolvedValue({ apps: [], total: 0, nextOffset: null })
   bridge.getDeviceShellAccess.mockResolvedValue({ enabled: false })
@@ -311,6 +318,8 @@ export function beforeEachAppTest(): void {
       allowedPackages: [...new Set([...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, ...packages])],
       alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
       passwordConfigured: false,
+      automationRuntime: 'off',
+      serviceStatus: 'off',
     })
   })
   // 三条密码桩的默认返回：形状必须过得了 validateAccessibilityAutomationState，
@@ -322,10 +331,22 @@ export function beforeEachAppTest(): void {
     allowedPackages: [] as string[],
     alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
     passwordConfigured,
+    automationRuntime: 'off' as const,
+    serviceStatus: 'off' as const,
   })
   bridge.setAccessibilityPassword.mockResolvedValue(accessibilityState(true))
   bridge.clearAccessibilityPassword.mockResolvedValue(accessibilityState(false))
   bridge.resetAccessibilityPasswordWithBiometric.mockResolvedValue(accessibilityState(false))
+  // 总开关：夹具按与原生同一套转移规则回状态（关闭态上按暂停仍是关闭、紧急停止回关闭），
+  // 这样界面上的按钮文案与禁用条件能在不使用真机的情况下被断言。
+  bridge.setAccessibilityAutomationRuntime.mockImplementation((action: string) => Promise.resolve({
+    ...accessibilityState(false),
+    automationRuntime: action === 'start' || action === 'resume'
+      ? 'running'
+      : action === 'pause' ? 'paused' : 'off',
+  }))
+  // 运行记录默认「服务没连上、什么都没读到」：界面必须能在这个状态下如实说明，而不是显示成空列表。
+  bridge.getAccessibilityAutomationRuns.mockResolvedValue({ connected: false, limit: 50, dropped: 0, runs: [], blocked: [] })
   bridge.openAccessibilitySettings.mockResolvedValue(undefined)
   bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive })
   // 默认已授予「显示在其他应用上层」权限：与用例无关的测试不该被一个禁用开关影响。

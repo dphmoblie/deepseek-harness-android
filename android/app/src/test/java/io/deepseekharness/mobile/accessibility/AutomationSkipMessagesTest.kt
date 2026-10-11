@@ -64,6 +64,19 @@ class AutomationSkipMessagesTest {
     }
 
     @Test
+    fun `运行记录用的查询不兜底只回已登记的码`() {
+        // 拦截卡片走 message()（必须有一句话可说），运行记录走 messageOrNull()：那里既有成功也有失败，
+        // 认不出来的码必须留空让界面显示原始码，否则一次成功的点击会被写成「未知原因，已跳过」。
+        for (code in declaredCodes()) {
+            assertEquals(AutomationSkipMessages.message(code), AutomationSkipMessages.messageOrNull(code))
+        }
+        assertEquals(null, AutomationSkipMessages.messageOrNull("NOT_A_CODE"))
+        assertEquals(null, AutomationSkipMessages.messageOrNull(""))
+        // 与回落版的分工：同一个未知码，一个给通用说明，一个给 null。
+        assertEquals(AutomationSkipMessages.UNKNOWN, AutomationSkipMessages.message("NOT_A_CODE"))
+    }
+
+    @Test
     fun `拦截关键场景的说明能让人看懂原因`() {
         // 这三条是任务书里点名要「说明原因」的场景：敏感页面拦截、锁屏、白名单外。
         assertTrue(AutomationSkipMessages.message(AutomationGateCodes.SENSITIVE_WINDOW).contains("密码"))

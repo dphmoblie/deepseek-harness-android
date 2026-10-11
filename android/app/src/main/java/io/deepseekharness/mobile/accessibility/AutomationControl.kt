@@ -51,9 +51,45 @@ internal object AutomationControlPolicy {
         AutomationRuntime.OFF -> NAME_OFF
     }
 
+    /**
+     * 桥接传来的动作名 → 动作。
+     *
+     * **未知、缺失、大小写不符一律回 null**：调用方必须拒收。这里绝不能有「认不出来就当开始」的兜底，
+     * 否则一个拼错的参数就能把自动化打开。
+     */
+    fun actionFromName(value: String?): AutomationControlAction? = when (value) {
+        ACTION_START -> AutomationControlAction.START
+        ACTION_PAUSE -> AutomationControlAction.PAUSE
+        ACTION_RESUME -> AutomationControlAction.RESUME
+        ACTION_EMERGENCY_STOP -> AutomationControlAction.EMERGENCY_STOP
+        else -> null
+    }
+
+    /**
+     * 动作的稳定名字 = **桥接侧用的那一个**（`start` / `pause` / `resume` / `emergency_stop`）。
+     *
+     * 这里刻意回小写常量而不是 `action.name`：`action.name` 是 `START` 这种枚举名，与
+     * [actionFromName] 收的取值不是同一套写法，回读一次就解析不回来（`actionFromName(actionName(a))` 会变 null），
+     * 审计码与桥接协议也会各写一套大小写。要审计码请用 [auditDetail]。
+     */
+    fun actionName(action: AutomationControlAction): String = when (action) {
+        AutomationControlAction.START -> ACTION_START
+        AutomationControlAction.PAUSE -> ACTION_PAUSE
+        AutomationControlAction.RESUME -> ACTION_RESUME
+        AutomationControlAction.EMERGENCY_STOP -> ACTION_EMERGENCY_STOP
+    }
+
+    /** 审计 detail 用的受控码（`AUTOMATION_START` 这种全大写形式，与既有审计码同风格）。 */
+    fun auditDetail(action: AutomationControlAction): String = "AUTOMATION_" + actionName(action).uppercase()
+
     const val NAME_OFF = "off"
     const val NAME_RUNNING = "running"
     const val NAME_PAUSED = "paused"
+
+    const val ACTION_START = "start"
+    const val ACTION_PAUSE = "pause"
+    const val ACTION_RESUME = "resume"
+    const val ACTION_EMERGENCY_STOP = "emergency_stop"
 }
 
 /**

@@ -502,6 +502,77 @@ export interface AccessibilityAutomationState {
   alwaysAllowedPackages: string[]
   /** 是否已设置「白名单验证密码」；不返回任何密码信息。 */
   passwordConfigured: boolean
+  /** 自动化总开关：关闭 / 运行中 / 已暂停。缺省按 `off`。 */
+  automationRuntime: AccessibilityAutomationRuntime
+  /** 系统侧无障碍服务状态：已连上 / 系统开着但服务实例不在 / 未开启。 */
+  serviceStatus: AccessibilityServiceStatus
+}
+
+/**
+ * 自动化总开关的三态；与原生 `AutomationControlPolicy` 的名字逐字一致。
+ *
+ * 它和 `enabled`（白名单生效与否）、`serviceStatus`（系统开关）是**三件不同的事**，界面必须分开显示。
+ */
+export type AccessibilityAutomationRuntime = 'off' | 'running' | 'paused'
+
+/** 总开关的受控动作名；与原生 `AutomationControlPolicy.ACTION_*` 逐字一致，未知取值必须被原生拒收。 */
+export type AccessibilityAutomationAction = 'start' | 'pause' | 'resume' | 'emergency_stop'
+
+/** `AutomationControlPolicy.NAME_*` 的取值全集，供校验器与界面标签使用。 */
+export const ACCESSIBILITY_AUTOMATION_RUNTIMES: AccessibilityAutomationRuntime[] = ['off', 'running', 'paused']
+
+/** 总开关可下发的动作全集；界面上的按钮必须落在这里面。 */
+export const ACCESSIBILITY_AUTOMATION_ACTIONS: AccessibilityAutomationAction[] = [
+  'start', 'pause', 'resume', 'emergency_stop',
+]
+
+/** 系统侧无障碍服务的三态；与原生 `AccessibilityAutomationStore.serviceStatus` 逐字一致。 */
+export type AccessibilityServiceStatus = 'connected' | 'enabled_disconnected' | 'off'
+
+/** `serviceStatus` 的取值全集。 */
+export const ACCESSIBILITY_SERVICE_STATUSES: AccessibilityServiceStatus[] = ['connected', 'enabled_disconnected', 'off']
+
+/**
+ * 一条自动化运行记录（**只在本次服务会话内**，服务被回收后从空开始）。
+ *
+ * `code` 是原生受控码（`AutomationGateCodes`），`message` 是它的中文说明；未登记的码 `message` 为 null，
+ * 界面显示原始码——**不能**把说不清的码渲染成「已跳过」，那里既有成功也有失败。
+ */
+export interface AccessibilityAutomationRun {
+  /** 相对开机时刻的毫秒数（`SystemClock.elapsedRealtime()`），只用于排序与「多久以前」。 */
+  atMs: number
+  ruleId: string
+  action: string
+  code: string
+  /** 受控码的中文说明；未登记为 null。 */
+  message: string | null
+  ok: boolean
+  /** 是否真的对界面做了动作；被闸门拦下时为 false。 */
+  performed: boolean
+  /** 是否走了降级路径（例如点击落到祖先节点）。 */
+  degraded: boolean
+}
+
+/** 一条拦截原因：受控码 + 本会话内累计次数。 */
+export interface AccessibilityAutomationBlocked {
+  code: string
+  count: number
+  /** 受控码的中文说明；未登记为 null。 */
+  message: string | null
+}
+
+/**
+ * 运行记录的读取结果。
+ *
+ * `connected=false` 表示读的时候无障碍服务没连上（此刻列表必然为空，**不代表什么都没发生**）；
+ * `dropped` 是本会话内因超出容量被丢弃的记录数。
+ */
+export interface AccessibilityAutomationRuns {
+  connected: boolean
+  limit: number
+  dropped: number
+  runs: AccessibilityAutomationRun[]
+  blocked: AccessibilityAutomationBlocked[]
 }
 
 /**
@@ -1031,6 +1102,22 @@ export interface RuntimeBridge {
   setAccessibilityPassword: (password: string, currentPassword?: string) => Promise<AccessibilityAutomationState>
   /** 清除「白名单验证密码」，必须带当前密码；**白名单本身不受影响**。 */
   clearAccessibilityPassword: (currentPassword: string) => Promise<AccessibilityAutomationState>
+  /**
+   * 改「自动化总开关」：开始 / 暂停 / 继续 / 紧急停止。
+   *
+   * **只接受 [ACCESSIBILITY_AUTOMATION_ACTIONS] 里的四个动作名**，其余取值原生侧一律拒收
+   * （认不出来就必须拒绝，不能猜成 `start`）。这条路径**只存在于应用内界面**：设备桥（AI 侧）
+   * 没有开启自动化的能力，总开关不是 `running` 时 `automationRules` 命令会回 `AUTOMATION_ENABLE_FORBIDDEN`。
+   * 暂停与紧急停止都不关系统里的无障碍服务，也不动白名单与规则。
+   */
+  setAccessibilityAutomationRuntime: (action: AccessibilityAutomationAction) => Promise<AccessibilityAutomationState>
+  /**
+   * 读自动化运行记录与拦截原因（**仅本次服务会话**）。
+   *
+   * 记录不落盘：无障碍服务被系统回收后这里会从空开始，[AccessibilityAutomationRuns.connected]
+   * 就是给界面如实说明这一点的，**不能**把「读不到」显示成「什么都没发生」。
+   */
+  getAccessibilityAutomationRuns: (packageName?: string) => Promise<AccessibilityAutomationRuns>
   /**
    * 用系统生物识别 / 锁屏密码重置验证密码——「忘记密码」的唯一出路。
    *

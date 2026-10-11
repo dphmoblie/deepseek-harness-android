@@ -84,6 +84,38 @@ class AutomationControlTest {
     }
 
     @Test
+    fun `桥接动作名认不出来一律拒收而不是当成开启`() {
+        assertEquals(AutomationControlAction.START, AutomationControlPolicy.actionFromName("start"))
+        assertEquals(AutomationControlAction.PAUSE, AutomationControlPolicy.actionFromName("pause"))
+        assertEquals(AutomationControlAction.RESUME, AutomationControlPolicy.actionFromName("resume"))
+        assertEquals(AutomationControlAction.EMERGENCY_STOP, AutomationControlPolicy.actionFromName("emergency_stop"))
+
+        // 桥接侧的兜底必须是不认：一个拼错的参数若能落到 START，就等于 AI 能自己打开自动化，
+        // 那与「AI 只能关不能开」冲突（docs/AI自动化参数设计.md）。
+        for (value in listOf(null, "", " ", "START", "Start", "start ", "resume\t", "on", "true", "1", "紧急停止", "emergency-stop")) {
+            assertEquals("取值 ${value?.let { "「$it」" } ?: "null"} 必须被拒收", null, AutomationControlPolicy.actionFromName(value))
+        }
+    }
+
+    @Test
+    fun `动作名是稳定的审计受控码`() {
+        assertEquals("start", AutomationControlPolicy.actionName(AutomationControlAction.START))
+        assertEquals("pause", AutomationControlPolicy.actionName(AutomationControlAction.PAUSE))
+        assertEquals("resume", AutomationControlPolicy.actionName(AutomationControlAction.RESUME))
+        assertEquals("emergency_stop", AutomationControlPolicy.actionName(AutomationControlAction.EMERGENCY_STOP))
+        // 动作名必须能被 actionFromName 原样读回来：桥接协议与审计码共用同一个名字，不许出现两套写法。
+        for (action in AutomationControlAction.values()) {
+            assertEquals(action, AutomationControlPolicy.actionFromName(AutomationControlPolicy.actionName(action)))
+        }
+        // 四个动作名互不重复（重名会让审计分不清是谁按的）。
+        val names = AutomationControlAction.values().map { AutomationControlPolicy.actionName(it) }
+        assertEquals(names.size, names.toSet().size)
+        // 审计码是全大写形式 `AUTOMATION_<ACTION>`：拼错这里就是审计格式变更。
+        assertEquals("AUTOMATION_START", AutomationControlPolicy.auditDetail(AutomationControlAction.START))
+        assertEquals("AUTOMATION_EMERGENCY_STOP", AutomationControlPolicy.auditDetail(AutomationControlAction.EMERGENCY_STOP))
+    }
+
+    @Test
     fun `偏好默认关闭且写入后能原样读回`() {
         val storage = FakeStorage()
         val preferences = AutomationControlPreferences(storage)

@@ -28,7 +28,10 @@ import type {
   VirtualScreenSettingsUpdate,
   VirtualScreenStartRequest,
 } from './types'
-import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES } from './types'
+import {
+  ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES,
+  type AccessibilityAutomationAction,
+} from './types'
 import {
   assertBase64Input,
   assertDiagnosticRetentionDays,
@@ -42,6 +45,9 @@ import {
   assertVirtualScreenStartRequest,
   validateAllFilesAccessResult,
   validateAppUpdateState,
+  assertAccessibilityAutomationAction,
+  assertAccessibilityPackageName,
+  validateAccessibilityAutomationRuns,
   validateAccessibilityAutomationState,
   validateAccessibilityPasswordInput,
   validateDeviceShellAccess,
@@ -137,6 +143,10 @@ interface NativeRuntimePlugin {
   clearAccessibilityPassword(options: { currentPassword: string }): Promise<unknown>
   /** 用系统生物识别 / 锁屏密码重置验证密码；只清密码、保留白名单。 */
   resetAccessibilityPasswordWithBiometric(): Promise<unknown>
+  /** 改自动化总开关；只接受四个受控动作名，未知取值原生侧拒收。 */
+  setAccessibilityAutomationRuntime(options: { action: AccessibilityAutomationAction }): Promise<unknown>
+  /** 读自动化运行记录与拦截原因；仅在本次无障碍服务会话内有效。 */
+  getAccessibilityAutomationRuns(options: { packageName?: string }): Promise<unknown>
   openAccessibilitySettings(): Promise<void>
   getKeepAliveState(): Promise<KeepAliveState>
   requestNotificationPermission(): Promise<NotificationPermissionResult>
@@ -311,6 +321,17 @@ function createNativeBridge(): RuntimeBridge {
     resetAccessibilityPasswordWithBiometric: () => NativeRuntime
       .resetAccessibilityPasswordWithBiometric()
       .then(validateAccessibilityAutomationState),
+    // 总开关：动作名在这里先按白名单卡一道（原生侧也会拒收未知取值），读回的状态仍过同一套校验。
+    // 未知动作名要走**被拒绝的 Promise**（同步抛出会绕过调用方的失败分支），所以先折进 `Promise.resolve()`。
+    setAccessibilityAutomationRuntime: action => Promise.resolve()
+      .then(() => assertAccessibilityAutomationAction(action))
+      .then(validated => NativeRuntime.setAccessibilityAutomationRuntime({ action: validated }))
+      .then(validateAccessibilityAutomationState),
+    // 运行记录：包名留空即跨包读；给了包名先按同一套规则自检，避免把任意字符串递给原生。
+    getAccessibilityAutomationRuns: packageName => Promise.resolve()
+      .then(() => (packageName === undefined ? {} : { packageName: assertAccessibilityPackageName(packageName) }))
+      .then(options => NativeRuntime.getAccessibilityAutomationRuns(options))
+      .then(validateAccessibilityAutomationRuns),
     openAccessibilitySettings: () => NativeRuntime.openAccessibilitySettings(),
     getKeepAliveState: () => NativeRuntime.getKeepAliveState().then(validateKeepAliveState),
     requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),

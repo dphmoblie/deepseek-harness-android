@@ -213,3 +213,125 @@ describe('无障碍白名单与验证密码', () => {
     expect(await screen.findByText('验证密码已重置')).toBeInTheDocument()
   })
 })
+
+/**
+ * 自动化控制台：总开关、服务三态、本次会话的运行记录。
+ *
+ * 这一组守三条用户可见的契约：
+ *  1. 总开关只能在这里改（AI 侧没有开启路径），按钮的可用性必须与当前状态一致；
+ *  2. 「总开关」与「系统里的无障碍服务」是两件事，界面必须分开说；
+ *  3. 运行记录读不到时要如实说明——**空列表不能被渲染成「什么都没发生」**。
+ */
+describe('无障碍自动化控制台', () => {
+  beforeEach(beforeEachAppTest)
+  afterEach(() => vi.restoreAllMocks())
+
+  type ConsoleState = {
+    automationRuntime: 'off' | 'running' | 'paused'
+    serviceStatus: 'connected' | 'enabled_disconnected' | 'off'
+  }
+
+  const BASE_STATE = {
+    enabled: false,
+    whitelistEnabled: true,
+    allowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
+    alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
+    passwordConfigured: false,
+  }
+
+  /** 进入控制台：`automationRuntime`/`serviceStatus` 是这一组唯一要摆布的两个读数。 */
+  async function openConsole(target: ConsoleState): Promise<void> {
+    bridge.getAccessibilityAutomationState.mockResolvedValue({ ...BASE_STATE, ...target })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('Shizuku 与设备 Shell')
+  }
+
+  it('默认关闭时只放行「开始」，并如实说明系统里的服务没开', async () => {
+    await openConsole({ automationRuntime: 'off', serviceStatus: 'off' })
+
+    expect(await screen.findByTestId('automation-runtime-chip')).toHaveTextContent('自动化已关闭')
+    expect(screen.getByRole('button', { name: '开始' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '暂停' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '继续' })).toBeDisabled()
+    // 关着的时候「紧急停止」没有对象可停：让它可点只会制造「我按了但什么都没变」。
+    expect(screen.getByRole('button', { name: '紧急停止' })).toBeDisabled()
+    expect(await screen.findByTestId('automation-service-status')).toHaveTextContent('系统里未开启')
+  })
+
+  it('服务在系统里开着但没连上时，明确说清这是两件事', async () => {
+    await openConsole({ automationRuntime: 'running', serviceStatus: 'enabled_disconnected' })
+
+    // 总开关开着、系统里也开着，但服务实例不在：这时动作不会发生，必须说清楚。
+    expect(await screen.findByTestId('automation-runtime-chip')).toHaveTextContent('自动化运行中')
+    expect(screen.getByTestId('automation-service-status')).toHaveTextContent('系统里已开启，但服务没连上')
+    expect(screen.getByRole('button', { name: '暂停' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '开始' })).toBeDisabled()
+  })
+
+  it('按「开始」把动作交给桥，并按返回的运行态放行暂停', async () => {
+    await openConsole({ automationRuntime: 'off', serviceStatus: 'connected' })
+
+    fireEvent.click(await screen.findByRole('button', { name: '开始' }))
+
+    // 桥只收四个受控动作名之一：这里钉住「开始」就是 `start`，不是别的拼法。
+    await waitFor(() => expect(bridge.setAccessibilityAutomationRuntime).toHaveBeenCalledWith('start'))
+    expect(await screen.findByText('自动化总开关已更新')).toBeInTheDocument()
+    // 夹具按原生同一套规则回 `running`，界面必须据此换按钮状态（而不是乐观点亮）。
+    await waitFor(() => expect(screen.getByTestId('automation-runtime-chip')).toHaveTextContent('自动化运行中'))
+    expect(screen.getByRole('button', { name: '暂停' })).toBeEnabled()
+  })
+
+  it('紧急停止发的是受控动作名，并提醒用户这是「停到你再开」', async () => {
+    await openConsole({ automationRuntime: 'running', serviceStatus: 'connected' })
+
+    fireEvent.click(await screen.findByRole('button', { name: '紧急停止' }))
+
+    await waitFor(() => expect(bridge.setAccessibilityAutomationRuntime).toHaveBeenCalledWith('emergency_stop'))
+    expect(await screen.findByText('已紧急停止自动化')).toBeInTheDocument()
+    // 紧急停止回落到关闭（不是暂停）：要再开就得显式点一次「开始」。
+    await waitFor(() => expect(screen.getByTestId('automation-runtime-chip')).toHaveTextContent('自动化已关闭'))
+    expect(screen.getByRole('button', { name: '开始' })).toBeEnabled()
+  })
+
+  it('读不到运行记录时说明原因，不把空列表说成什么都没发生', async () => {
+    await openConsole({ automationRuntime: 'off', serviceStatus: 'off' })
+
+    expect(await screen.findByTestId('automation-runs-disconnected')).toHaveTextContent('无障碍服务当前没连上，因此读不到运行记录。')
+  })
+
+  it('有记录时列出动作与拦截原因，未登记的码显示原始码', async () => {
+    bridge.getAccessibilityAutomationRuns.mockResolvedValue({
+      connected: true,
+      limit: 50,
+      dropped: 3,
+      runs: [
+        { atMs: 65_000, ruleId: 'rule-1', action: 'click', code: 'AUTOMATION_ACTION_PERFORMED', message: '已执行点击', ok: true, performed: true, degraded: false },
+        { atMs: 5_000, ruleId: 'rule-2', action: 'click', code: 'NOT_A_CODE', message: null, ok: false, performed: false, degraded: false },
+      ],
+      blocked: [
+        { code: 'AUTOMATION_SENSITIVE_WINDOW', count: 2, message: '页面涉及密码、支付或验证码，已跳过' },
+        { code: 'NOT_A_CODE', count: 1, message: null },
+      ],
+    })
+    await openConsole({ automationRuntime: 'running', serviceStatus: 'connected' })
+
+    const runs = await screen.findByTestId('automation-run-list')
+    expect(runs).toHaveTextContent('已执行点击')
+    expect(runs).toHaveTextContent('已执行')
+    expect(runs).toHaveTextContent('未执行')
+    // `atMs` 是相对开机的毫秒数：渲染成日期时间会是彻头彻尾的假信息。
+    expect(runs).toHaveTextContent('1 分 5 秒前')
+    expect(runs).toHaveTextContent('5 秒前')
+    // 未登记的码没有说明，界面显示原始码而不是编一句「已跳过」。
+    expect(runs).toHaveTextContent('NOT_A_CODE')
+
+    const blocked = await screen.findByTestId('automation-blocked-reasons')
+    expect(blocked).toHaveTextContent('页面涉及密码、支付或验证码，已跳过')
+    expect(blocked).toHaveTextContent('× 2 次')
+    expect(blocked).toHaveTextContent('NOT_A_CODE')
+
+    // 超出容量被丢弃的条数必须报出来：否则用户会以为这就是全部。
+    expect(screen.getByText('更早的 3 条记录已超出容量被丢弃。')).toBeInTheDocument()
+  })
+})

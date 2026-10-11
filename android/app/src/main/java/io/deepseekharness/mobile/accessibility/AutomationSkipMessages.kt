@@ -70,6 +70,15 @@ internal object AutomationSkipMessages {
     /** 未登记的码返回 [UNKNOWN]，不抛异常：运行记录少一句说明，也不能因此中断自动化链路。 */
     fun message(code: String): String = MESSAGES[code] ?: UNKNOWN
 
+    /**
+     * 只给**已登记**的码文案，未登记回 null。
+     *
+     * 与 [message] 的分工：拦截原因卡片用的是「为什么跳过」，回退成 [UNKNOWN] 是对的；
+     * 运行记录里的码既有成功也有失败（`AUTOMATION_ACTION_PERFORMED` 这类），
+     * 认不出来时不能显示「未知原因，已跳过」——那会把一次成功的点击说成跳过，界面应改显示原始码。
+     */
+    fun messageOrNull(code: String): String? = MESSAGES[code]
+
     /** 已登记文案的码集合，供用例核对「码集合与文案表完全一致」。 */
     fun codes(): Set<String> = MESSAGES.keys
 }

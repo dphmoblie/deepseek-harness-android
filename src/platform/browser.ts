@@ -2,6 +2,9 @@ import { validatePluginRequest } from './plugins'
 import type {
   AppUpdateState,
   DiagnosticLogState,
+  AccessibilityAutomationAction,
+  AccessibilityAutomationRuntime,
+  AccessibilityAutomationRuns,
   AccessibilityAutomationState,
   DiagnosticLogText,
   HarnessLog,
@@ -35,7 +38,7 @@ import type {
 } from './types'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
+import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
@@ -94,6 +97,7 @@ export function createBrowserBridge(): RuntimeBridge {
     allowedPackages: [] as string[],
     alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
     passwordConfigured: false,
+    automationRuntime: 'off' as AccessibilityAutomationRuntime,
   }
   let accessibilityPassword: string | undefined
   let diagnosticState: DiagnosticLogState = {
@@ -122,6 +126,10 @@ export function createBrowserBridge(): RuntimeBridge {
    *
    * 快照里**只有那一个布尔** `passwordConfigured`，没有任何密码字段——
    * 预览环境也不给「顺手把密码读出来」留口子。
+   *
+   * `serviceStatus` 恒为 `off`：浏览器里**没有**无障碍服务这个进程，谎报 `connected`
+   * 会让界面显示一个不存在的「已连接」。[总开关] 仍然可以按——它是本进程内的三态，
+   * 按下去会改状态，但不会有任何动作发生，因为服务那一侧的判定在原生进程里。
    */
   const accessibilitySnapshot = (): AccessibilityAutomationState => ({
     enabled: accessibility.enabled,
@@ -129,7 +137,30 @@ export function createBrowserBridge(): RuntimeBridge {
     allowedPackages: [...accessibility.allowedPackages],
     alwaysAllowedPackages: [...accessibility.alwaysAllowedPackages],
     passwordConfigured: accessibility.passwordConfigured,
+    automationRuntime: accessibility.automationRuntime,
+    serviceStatus: 'off',
   })
+
+  /**
+   * 总开关的转移规则，与原生 `AutomationControlPolicy.next` 逐字对齐。
+   *
+   * 刻意在预览里重写一遍而不是放宽：关闭态上按暂停仍是关闭、紧急停止一律回关闭——
+   * 这两条是用户可见的语义，预览里的行为与设备上不一致会让界面问题藏到装机之后。
+   */
+  const nextAutomationRuntime = (
+    current: AccessibilityAutomationRuntime,
+    action: AccessibilityAutomationAction,
+  ): AccessibilityAutomationRuntime => {
+    switch (action) {
+      case 'start':
+      case 'resume':
+        return 'running'
+      case 'pause':
+        return current === 'off' ? 'off' : 'paused'
+      case 'emergency_stop':
+        return 'off'
+    }
+  }
 
   return {
     listInstalledApplications: () => Promise.reject(new Error('应用列表仅在安卓设备上可用')),
@@ -344,6 +375,31 @@ export function createBrowserBridge(): RuntimeBridge {
     // 浏览器预览没有系统生物识别 / 锁屏：如实拒绝，不谎报「重置成功」。
     resetAccessibilityPasswordWithBiometric: (): Promise<AccessibilityAutomationState> =>
       Promise.reject(new Error('浏览器预览不支持系统生物识别验证')),
+    // 总开关在预览里可以按：它只是本进程内的三态，用来把界面状态机跑通。
+    // 但**不会**有任何动作发生，也不会把 serviceStatus 改成 connected（见 accessibilitySnapshot 注释）。
+    setAccessibilityAutomationRuntime: (action: AccessibilityAutomationAction): Promise<AccessibilityAutomationState> => {
+      // 未知动作名必须以**被拒绝的 Promise** 回去：桥的契约是 Promise，同步抛出会绕过调用方的失败分支。
+      let validated: AccessibilityAutomationAction
+      try {
+        validated = assertAccessibilityAutomationAction(action)
+      } catch (error) {
+        return Promise.reject(error instanceof Error ? error : new Error(String(error)))
+      }
+      accessibility = {
+        ...accessibility,
+        automationRuntime: nextAutomationRuntime(accessibility.automationRuntime, validated),
+      }
+      return Promise.resolve(accessibilitySnapshot())
+    },
+    /*
+     * 运行记录来自无障碍服务进程，浏览器里没有这个进程：如实回「没连上 + 空列表」，而不是
+     * 造几条假记录（那会让界面看上去验证过了，装机后却是空的）。
+     * `limit` 回与原生相同的上限，`dropped` 为 0——预览里没丢过任何东西，因为压根没收过。
+     */
+    getAccessibilityAutomationRuns: (packageName?: string): Promise<AccessibilityAutomationRuns> => {
+      if (packageName !== undefined) return Promise.reject(new Error('浏览器预览不支持按应用查询自动化运行记录'))
+      return Promise.resolve({ connected: false, limit: 50, dropped: 0, runs: [], blocked: [] })
+    },
     openAccessibilitySettings: () => Promise.reject(new Error('浏览器预览不支持打开系统无障碍设置')),
     openVirtualScreen: () => Promise.reject(new Error('目标应用副屏需要 Android 10 以上设备与 Shizuku')),
     /*

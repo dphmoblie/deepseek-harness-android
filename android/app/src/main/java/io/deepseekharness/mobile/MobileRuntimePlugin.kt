@@ -28,10 +28,16 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import io.deepseekharness.mobile.overlay.OverlayBallPolicy
+import io.deepseekharness.mobile.accessibility.AccessibilityAutomationPolicy
 import io.deepseekharness.mobile.accessibility.AccessibilityAutomationStore
 import io.deepseekharness.mobile.accessibility.AccessibilityBiometricCodes
 import io.deepseekharness.mobile.accessibility.AccessibilityGuardException
 import io.deepseekharness.mobile.accessibility.AccessibilityPasswordStore
+import io.deepseekharness.mobile.accessibility.AutomationControlPolicy
+import io.deepseekharness.mobile.accessibility.AutomationControlStore
+import io.deepseekharness.mobile.accessibility.AutomationRunLogPolicy
+import io.deepseekharness.mobile.accessibility.AutomationSkipMessages
+import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
 import io.deepseekharness.mobile.runtime.AppReleaseCatalog
 import io.deepseekharness.mobile.runtime.AppUpdateInstallPolicy
 import io.deepseekharness.mobile.runtime.AppUpdateStorage
@@ -1767,6 +1773,100 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /**
+     * 权限：应用内桥接；改「自动化总开关」——开始 / 暂停 / 继续 / 紧急停止。
+     *
+     * **设备桥（AI 侧）没有开启路径**：`automationRules` 命令在总开关不是 `running` 时一律回
+     * `AUTOMATION_ENABLE_FORBIDDEN`（`docs/AI自动化参数设计.md` 的「AI 只能关不能开」）。
+     * 这里只接受四个受控动作名，未知一律拒收——不能把认不出来的参数猜成「开始」。
+     *
+     * 暂停与紧急停止都**不关**系统里的无障碍服务（不调 `disableSelf()`），也不动白名单与规则：
+     * 用户按下「停」想停的是动作，不是把服务授权一起撤掉。
+     */
+    @PluginMethod
+    fun setAccessibilityAutomationRuntime(call: PluginCall) {
+        execute(call) {
+            val raw = call.data.opt("action")
+            if (raw !is String) {
+                throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "自动化操作必须是字符串")
+            }
+            val action = AutomationControlPolicy.actionFromName(raw)
+                ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "未知的自动化操作：$raw")
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                // 服务连着就让服务改（它还要同步会话开关与内存缓存）；没连上就直接落盘——同一份偏好文件。
+                DeepSeekAccessibilityService.current()?.applyAutomationRuntime(action)
+                    ?: AutomationControlStore.apply(context, action)
+                // 审计只记「哪个动作被按下」这个受控码，不带包名、不带界面内容。
+                recordAudit(
+                    AuditEvent.ACCESSIBILITY_CONFIG,
+                    AuditResult.SUCCEEDED,
+                    AutomationControlPolicy.auditDetail(action),
+                )
+                accessibilityStateToJs(AccessibilityAutomationStore.state(context))
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；读**本次服务会话**里的自动化运行记录与拦截原因。
+     *
+     * 记录刻意不落盘（见 `AutomationRunLog`），因此服务被系统回收后这里会从空开始：
+     * `connected` 与 `dropped` 就是给界面如实说明用的，**不能**把「读不到」显示成「什么都没发生」。
+     * `message` 是原生受控码的中文说明（`AutomationSkipMessages`），未登记的码回 null，界面显示原始码。
+     */
+    @PluginMethod
+    fun getAccessibilityAutomationRuns(call: PluginCall) {
+        resolveWhileActive(call) {
+            val packageName = optionalAutomationPackage(call)
+            val service = DeepSeekAccessibilityService.current()
+            val runs = JSArray()
+            for (record in service?.automationRunSnapshot(packageName, AutomationRunLogPolicy.MAX_RECORDS_PER_PACKAGE).orEmpty()) {
+                runs.put(
+                    JSObject()
+                        .put("atMs", record.atMs)
+                        .put("ruleId", record.ruleId)
+                        .put("action", record.action)
+                        .put("code", record.code)
+                        .put("message", AutomationSkipMessages.messageOrNull(record.code) ?: org.json.JSONObject.NULL)
+                        .put("ok", record.ok)
+                        .put("performed", record.performed)
+                        .put("degraded", record.degraded),
+                )
+            }
+            val blocked = JSArray()
+            for (entry in service?.automationBlockedSnapshot(packageName, AutomationRunLogPolicy.MAX_BLOCKED_CODES).orEmpty()) {
+                blocked.put(
+                    JSObject()
+                        .put("code", entry.code)
+                        .put("count", entry.count)
+                        .put("message", AutomationSkipMessages.messageOrNull(entry.code) ?: org.json.JSONObject.NULL),
+                )
+            }
+            JSObject()
+                .put("connected", service != null)
+                .put("limit", service?.automationRunLimit() ?: AutomationRunLogPolicy.MAX_RECORDS_PER_PACKAGE)
+                .put("dropped", service?.automationDroppedCount() ?: 0)
+                .put("runs", runs)
+                .put("blocked", blocked)
+        }
+    }
+
+    /**
+     * 可选的包名过滤：给了就必须是合法包名。
+     *
+     * 拿它去查记录之前先按 `AccessibilityAutomationPolicy.validPackage` 卡一道，是因为这个值会被
+     * 回显在界面上——不合法即拒收，不把任意字符串原样带回前端。
+     */
+    private fun optionalAutomationPackage(call: PluginCall): String? {
+        val raw = call.data.opt("packageName") ?: return null
+        val value = raw as? String
+            ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "自动化运行记录的包名必须是字符串")
+        if (!AccessibilityAutomationPolicy.validPackage(value)) {
+            throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "自动化运行记录的包名不合法")
+        }
+        return value
+    }
+
     /** 权限：仅壳内桥接；查询参数有界，按页返回应用名称与包名，不返回应用数据。 */
     @PluginMethod
     fun listInstalledApplications(call: PluginCall) {
@@ -2792,7 +2892,10 @@ class MobileRuntimePlugin : Plugin() {
         .put("allowedPackages", state.optJSONArray("allowedPackages") ?: org.json.JSONArray())
         .put("alwaysAllowedPackages", state.optJSONArray("alwaysAllowedPackages") ?: org.json.JSONArray())
         .put("passwordConfigured", state.optBoolean("passwordConfigured", false))
-        .put("whitelistEnabled", state.optBoolean("whitelistEnabled", true))
+        // 总开关与「服务登记过 / 服务实例还在」必须分开表达：一个布尔既说不清用户按没按过「开始」，
+        // 也说不清「系统开着但服务被回收了」。缺省值取最保守的一侧（关、未连上）。
+        .put("automationRuntime", state.optString("automationRuntime", AutomationControlPolicy.NAME_OFF))
+        .put("serviceStatus", state.optString("serviceStatus", "off"))
 
     /** 诊断日志状态：只有布尔值、计数与时间戳，不含任何日志内容。 */
     private fun DiagnosticState.toJs(): JSObject = JSObject()

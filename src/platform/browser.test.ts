@@ -225,6 +225,45 @@ describe('浏览器桥的无障碍白名单与验证密码', () => {
   })
 })
 
+describe('浏览器桥的自动化总开关与运行记录', () => {
+  it('总开关按与原生同一套规则转移，且浏览器里服务状态恒为未开启', async () => {
+    const bridge = createBrowserBridge()
+    const initial = await bridge.getAccessibilityAutomationState()
+    expect(initial.automationRuntime).toBe('off')
+    // 浏览器里没有无障碍服务进程：谎报 connected 会让界面显示一个不存在的「已连接」。
+    expect(initial.serviceStatus).toBe('off')
+
+    expect((await bridge.setAccessibilityAutomationRuntime('start')).automationRuntime).toBe('running')
+    expect((await bridge.setAccessibilityAutomationRuntime('pause')).automationRuntime).toBe('paused')
+    expect((await bridge.setAccessibilityAutomationRuntime('resume')).automationRuntime).toBe('running')
+    // 紧急停止回落到关闭，而不是暂停：要再开就得显式点一次「开始」。
+    expect((await bridge.setAccessibilityAutomationRuntime('emergency_stop')).automationRuntime).toBe('off')
+    // 关着的时候按暂停仍是关闭（与原生 `AutomationControlPolicy.next` 逐字一致）。
+    expect((await bridge.setAccessibilityAutomationRuntime('pause')).automationRuntime).toBe('off')
+  })
+
+  it('动作名认不出来直接拒绝，不改动任何状态', async () => {
+    const bridge = createBrowserBridge()
+    await bridge.setAccessibilityAutomationRuntime('start')
+
+    // 拼错的参数若能落到 `start`，就等于浏览器预览里也能把自动化打开。
+    await expect((bridge.setAccessibilityAutomationRuntime as (action: string) => Promise<unknown>)('START'))
+      .rejects.toThrow('自动化操作取值无效')
+    expect((await bridge.getAccessibilityAutomationState()).automationRuntime).toBe('running')
+  })
+
+  it('没有无障碍服务进程：运行记录如实回「未连接 + 空」，但按应用查询直接拒绝', async () => {
+    const bridge = createBrowserBridge()
+
+    // 这里回空不是编造：`connected: false` 已经说清「读不到」，界面据此显示原因而不是「什么都没发生」。
+    expect(await bridge.getAccessibilityAutomationRuns()).toEqual({
+      connected: false, limit: 50, dropped: 0, runs: [], blocked: [],
+    })
+    await expect(bridge.getAccessibilityAutomationRuns('com.example.reader'))
+      .rejects.toThrow('浏览器预览不支持按应用查询自动化运行记录')
+  })
+})
+
 describe('浏览器桥的更新渠道与应用自更新', () => {
   it('没有更新渠道：可用版本列表与应用更新状态都如实拒绝，不编造版本', async () => {
     const bridge = createBrowserBridge()
