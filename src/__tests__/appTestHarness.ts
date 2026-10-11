@@ -101,6 +101,9 @@ export const bridge = {
   // 用到它的界面会在 effect 阶段抛错并整棵树卸载，表现成「找不到任何元素」。
   setAccessibilityAutomationRuntime: vi.fn(),
   getAccessibilityAutomationRuns: vi.fn(),
+  // 无障碍控制台第三批（规则读写）：名单里少一条，用到它的界面同样会在 effect 阶段抛错。
+  getAccessibilityAutomationRules: vi.fn(),
+  setAccessibilityAutomationRuleEnabled: vi.fn(),
   openAccessibilitySettings: vi.fn(),
   getKeepAliveState: vi.fn(),
   getOverlayBallState: vi.fn(),
@@ -347,6 +350,28 @@ export function beforeEachAppTest(): void {
   }))
   // 运行记录默认「服务没连上、什么都没读到」：界面必须能在这个状态下如实说明，而不是显示成空列表。
   bridge.getAccessibilityAutomationRuns.mockResolvedValue({ connected: false, limit: 50, dropped: 0, runs: [], blocked: [] })
+  // 规则默认「这个包不在白名单、还没有规则」：界面要能在这个状态下说明「规则不会被执行」。
+  bridge.getAccessibilityAutomationRules.mockResolvedValue({
+    packageName: 'com.example.target', allowed: false, corrupt: null, rules: [],
+  })
+  // 开关一条规则：按传入的 enabled 回一份更新后的读数（原生成交后也是回整包读数）。
+  bridge.setAccessibilityAutomationRuleEnabled.mockImplementation((options: {
+    packageName: string
+    ruleId: string
+    enabled: boolean
+  }) => Promise.resolve({
+    packageName: options.packageName,
+    allowed: true,
+    corrupt: null,
+    rules: [{
+      id: options.ruleId,
+      enabled: options.enabled,
+      actionKind: 'click',
+      selectorCount: 1,
+      maxActions: 1,
+      actionCoolDownMs: 3000,
+    }],
+  }))
   bridge.openAccessibilitySettings.mockResolvedValue(undefined)
   bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive })
   // 默认已授予「显示在其他应用上层」权限：与用例无关的测试不该被一个禁用开关影响。

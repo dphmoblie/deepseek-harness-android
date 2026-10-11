@@ -262,6 +262,37 @@ describe('浏览器桥的自动化总开关与运行记录', () => {
     await expect(bridge.getAccessibilityAutomationRuns('com.example.reader'))
       .rejects.toThrow('浏览器预览不支持按应用查询自动化运行记录')
   })
+
+  it('没有规则存储：读取与写入都如实拒绝，不回空列表也不放内存规则', async () => {
+    const bridge = createBrowserBridge()
+
+    // 回一份空列表会被界面显示成「你还没有规则」，而真相是这里根本读不到——
+    // 所以这里宁可失败，让卡片显示「规则读取失败」，也不编一份 0 条规则。
+    await expect(bridge.getAccessibilityAutomationRules('com.example.reader'))
+      .rejects.toThrow('浏览器预览没有无障碍规则存储')
+    await expect(bridge.setAccessibilityAutomationRuleEnabled({
+      packageName: 'com.example.reader',
+      ruleId: 'rule-1',
+      enabled: false,
+    })).rejects.toThrow('浏览器预览不能修改无障碍规则')
+  })
+
+  it('写规则前的入参自检照常生效：包名、规则标识与布尔值都在过桥前拦下', async () => {
+    const bridge = createBrowserBridge()
+
+    await expect(bridge.getAccessibilityAutomationRules('not a package'))
+      .rejects.toThrow('无障碍白名单第 1 项无效')
+    await expect(bridge.setAccessibilityAutomationRuleEnabled({
+      packageName: 'com.example.reader',
+      ruleId: 'rule 1',
+      enabled: true,
+    })).rejects.toThrow('自动化规则标识无效')
+    await expect((bridge.setAccessibilityAutomationRuleEnabled as (options: unknown) => Promise<unknown>)({
+      packageName: 'com.example.reader',
+      ruleId: 'rule-1',
+      enabled: 'yes',
+    })).rejects.toThrow('规则启用状态格式无效')
+  })
 })
 
 describe('浏览器桥的更新渠道与应用自更新', () => {

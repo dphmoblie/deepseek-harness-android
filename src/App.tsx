@@ -54,6 +54,7 @@ import {
   Wrench,
   X,
   Blocks,
+  ListChecks,
   MessageSquare,
 } from 'lucide-react'
 import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
@@ -79,6 +80,7 @@ import type {
   DiagnosticLogText,
   AccessibilityAutomationAction,
   AccessibilityAutomationRun,
+  AccessibilityAutomationRules,
   AccessibilityAutomationRuns,
   AccessibilityAutomationRuntime,
   AccessibilityAutomationState,
@@ -3566,6 +3568,12 @@ interface SettingsScreenProps {
    * 返回的 Promise 用于让界面保持在途标记，直到桥真的给了结果。
    */
   onSetAccessibilityRuntime: (action: AccessibilityAutomationAction) => Promise<void>
+  /** 启用 / 停用一条规则；成功后重新读取整包读数（不做乐观更新，失败时开关保持原位）。 */
+  onSetAutomationRuleEnabled: (options: {
+    packageName: string
+    ruleId: string
+    enabled: boolean
+  }) => Promise<void>
   /** 设置（省略 currentPassword）或修改（必须带 currentPassword）白名单验证密码。 */
   onSaveAccessibilityPassword: (password: string, currentPassword?: string) => void
   /** 清除验证密码；必须带上当前密码。 */
@@ -3578,7 +3586,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenVirtualScreen, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenVirtualScreen, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
   /** 总开关的一次操作还在路上：按钮在这期间全部禁用，避免连点出两次动作。 */
@@ -3591,6 +3599,13 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    */
   const [automationRuns, setAutomationRuns] = useState<AccessibilityAutomationRuns | null>(null)
   const [automationRunsStatus, setAutomationRunsStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
+  /** 当前正在查看规则的应用；空串表示还没选。 */
+  const [rulesPackage, setRulesPackage] = useState('')
+  /** 规则读数；`null` 同样是「还没读到」，与「读到了但一条规则都没有」分开显示。 */
+  const [automationRules, setAutomationRules] = useState<AccessibilityAutomationRules | null>(null)
+  const [automationRulesStatus, setAutomationRulesStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
+  /** 正在开关的那条规则；在途时只禁用这一条。 */
+  const [automationRulePending, setAutomationRulePending] = useState<string | null>(null)
   /**
    * 保存白名单时要输入的验证密码。
    *
@@ -3666,6 +3681,44 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   const changeAutomationRuntime = (action: AccessibilityAutomationAction): void => {
     setAutomationPending(true)
     void onSetAccessibilityRuntime(action).finally(() => setAutomationPending(false))
+  }
+
+  /**
+   * 读取某个包的规则。
+   *
+   * 与运行记录分开：规则是落盘的、跨进程重启还在，所以这里读不到的原因只有三种——
+   * 没选包、桥调用失败、数据损坏（`corrupt` 非空，原生已把它清掉）。三种都要如实显示。
+   */
+  const loadAutomationRules = useCallback((packageName: string) => {
+    if (packageName === '') return
+    setRulesPackage(packageName)
+    setAutomationRulesStatus('loading')
+    void runtimeBridge.getAccessibilityAutomationRules(packageName)
+      .then(result => {
+        setAutomationRules(result)
+        setAutomationRulesStatus('idle')
+      })
+      .catch(() => {
+        setAutomationRules(null)
+        setAutomationRulesStatus('failed')
+      })
+  }, [])
+  useEffect(() => {
+    // 刚进这一页且白名单里已有目标应用时，先把第一个包的规则读出来，省掉一次点击。
+    if (page !== 'shizuku' || rulesPackage !== '') return
+    const first = accessibility.allowedPackages.find(name => !accessibility.alwaysAllowedPackages.includes(name))
+    if (first !== undefined) loadAutomationRules(first)
+  }, [accessibility.alwaysAllowedPackages, accessibility.allowedPackages, loadAutomationRules, page, rulesPackage])
+
+  /** 开/关一条规则：在途只禁用这一条，其余仍可操作；写完重读整包读数（不做乐观更新）。 */
+  const toggleAutomationRule = (ruleId: string, enabled: boolean): void => {
+    if (rulesPackage === '') return
+    setAutomationRulePending(ruleId)
+    void onSetAutomationRuleEnabled({ packageName: rulesPackage, ruleId, enabled })
+      .finally(() => {
+        setAutomationRulePending(null)
+        loadAutomationRules(rulesPackage)
+      })
   }
 
   if (settingsReadStatus === 'failed') {
@@ -4209,6 +4262,77 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               )}
               {automationRuns !== null && automationRuns.runs.length > 20 && (
                 <p className="settings-note">{t("只显示最近 20 条，共 {0} 条。", automationRuns.runs.length)}</p>
+              )}
+            </div>
+            <div className="settings-subsection" aria-labelledby="accessibility-automation-rules">
+              <div className="section-title section-title-action">
+                <span className="section-icon"><ListChecks size={19} /></span>
+                <div><h3 id="accessibility-automation-rules">{t("自动化规则")}</h3><p>{t("按应用查看，逐条启用或停用")}</p></div>
+                {rulesPackage !== '' && (
+                  <button className="button button-secondary" type="button"
+                    onClick={() => loadAutomationRules(rulesPackage)} disabled={automationRulesStatus === 'loading'}>
+                    {automationRulesStatus === 'loading' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("刷新")}
+                  </button>
+                )}
+              </div>
+              <p className="settings-note">
+                {t("规则由 AI 生成、你在写盘前确认；这里只改「启不启用」，不改规则内容。停用一条规则不会删掉它。")}
+              </p>
+              {accessibility.allowedPackages.filter(name => !accessibility.alwaysAllowedPackages.includes(name)).length === 0 ? (
+                <p className="settings-note" role="status" data-testid="automation-rules-no-packages">
+                  {t("白名单里还没有其他应用：先在上面加入目标应用，规则才有归属。")}
+                </p>
+              ) : (
+                <div className="settings-note" data-testid="automation-rule-packages">
+                  {accessibility.allowedPackages
+                    .filter(name => !accessibility.alwaysAllowedPackages.includes(name))
+                    .map(name => (
+                      <button key={name} className="button button-secondary" type="button"
+                        onClick={() => loadAutomationRules(name)} disabled={busy !== null}
+                        aria-pressed={rulesPackage === name}>
+                        {name}
+                      </button>
+                    ))}
+                </div>
+              )}
+              {automationRulesStatus === 'failed' && <p className="settings-note" role="alert">{t("规则读取失败，请稍后重试")}</p>}
+              {automationRulesStatus === 'loading' && automationRules === null && (
+                <p className="settings-note" role="status">{t("正在读取规则")}</p>
+              )}
+              {automationRules !== null && automationRules.corrupt !== null && (
+                <p className="settings-note" role="alert" data-testid="automation-rules-corrupt">
+                  {t("这个应用的规则数据不可用，已被清除：{0}（{1}）。需要重新生成规则。",
+                    automationRules.corrupt.message, automationRules.corrupt.code)}
+                </p>
+              )}
+              {automationRules !== null && automationRules.corrupt === null && !automationRules.allowed && (
+                <p className="settings-note" role="status" data-testid="automation-rules-not-allowed">
+                  {t("{0} 不在白名单里：这些规则不会被任何事件用到。", automationRules.packageName)}
+                </p>
+              )}
+              {automationRules !== null && automationRules.corrupt === null && automationRules.allowed
+                && automationRules.rules.length === 0 && (
+                <p className="settings-note" role="status">{t("这个应用还没有规则。")}</p>
+              )}
+              {automationRules !== null && automationRules.rules.length > 0 && (
+                <ul className="settings-note" data-testid="automation-rule-list">
+                  {automationRules.rules.map(rule => (
+                    <li key={rule.id}>
+                      <span>{rule.id}</span>
+                      <span>{rule.actionKind}</span>
+                      <span>{t("{0} 个选择器", rule.selectorCount)}</span>
+                      <span>{t("最多 {0} 次", rule.maxActions)}</span>
+                      <span>{rule.enabled ? t("已启用") : t("已停用")}</span>
+                      <button className="button button-secondary" type="button"
+                        onClick={() => toggleAutomationRule(rule.id, !rule.enabled)}
+                        disabled={busy !== null || automationRulePending !== null || !automationRules.allowed}>
+                        {automationRulePending === rule.id
+                          ? <Loader2 className="spin" size={18} />
+                          : rule.enabled ? t("停用") : t("启用")}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
             <label className="toggle-row">
@@ -5620,6 +5744,21 @@ export function App() {
     void run('open-accessibility-settings', () => runtimeBridge.openAccessibilitySettings())
   }, [run])
 
+  /**
+   * 启用 / 停用一条自动化规则。
+   *
+   * 只改「启不启用」：规则内容、白名单、总开关都不动。白名单校验在原生侧（写规则必须过白名单），
+   * 这里只把参数原样递过去，成功提示与失败提示都交给统一的 [run]。
+   * 界面**不做乐观更新**：失败时不会留下一个「看起来已经关掉」的开关。
+   */
+  const setAccessibilityRuleEnabled = useCallback((options: {
+    packageName: string
+    ruleId: string
+    enabled: boolean
+  }) => run('set-accessibility-rule', async () => {
+    await runtimeBridge.setAccessibilityAutomationRuleEnabled(options)
+  }, options.enabled ? t("规则已启用") : t("规则已停用")), [run])
+
   const saveAccessibilityPackages = useCallback((packages: string[], password?: string, whitelistEnabled?: boolean) => {
     // 已设置验证密码却没交密码：在本地就挡下来，不白发一次必然失败的桥调用。
     // 错误文案里不出现用户输入的任何内容。
@@ -5894,7 +6033,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenVirtualScreen={() => setActiveView('settings-virtual-screen')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenVirtualScreen={() => setActiveView('settings-virtual-screen')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

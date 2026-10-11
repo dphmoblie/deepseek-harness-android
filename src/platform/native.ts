@@ -47,6 +47,9 @@ import {
   validateAppUpdateState,
   assertAccessibilityAutomationAction,
   assertAccessibilityPackageName,
+  assertAccessibilityRuleId,
+  assertBooleanFlag,
+  validateAccessibilityAutomationRules,
   validateAccessibilityAutomationRuns,
   validateAccessibilityAutomationState,
   validateAccessibilityPasswordInput,
@@ -147,6 +150,14 @@ interface NativeRuntimePlugin {
   setAccessibilityAutomationRuntime(options: { action: AccessibilityAutomationAction }): Promise<unknown>
   /** 读自动化运行记录与拦截原因；仅在本次无障碍服务会话内有效。 */
   getAccessibilityAutomationRuns(options: { packageName?: string }): Promise<unknown>
+  /** 读某个包已保存的自动化规则（只读，不打开任何东西）；包名必填。 */
+  getAccessibilityAutomationRules(options: { packageName: string }): Promise<unknown>
+  /** 启用 / 停用一条规则；白名单外的包原生侧拒写。 */
+  setAccessibilityAutomationRuleEnabled(options: {
+    packageName: string
+    ruleId: string
+    enabled: boolean
+  }): Promise<unknown>
   openAccessibilitySettings(): Promise<void>
   getKeepAliveState(): Promise<KeepAliveState>
   requestNotificationPermission(): Promise<NotificationPermissionResult>
@@ -332,6 +343,20 @@ function createNativeBridge(): RuntimeBridge {
       .then(() => (packageName === undefined ? {} : { packageName: assertAccessibilityPackageName(packageName) }))
       .then(options => NativeRuntime.getAccessibilityAutomationRuns(options))
       .then(validateAccessibilityAutomationRuns),
+    // 规则：只读某个包已保存的规则；包名必填且先按同一套格式自检（不提供「省略即前台包」的兜底）。
+    getAccessibilityAutomationRules: packageName => Promise.resolve()
+      .then(() => ({ packageName: assertAccessibilityPackageName(packageName) }))
+      .then(options => NativeRuntime.getAccessibilityAutomationRules(options))
+      .then(validateAccessibilityAutomationRules),
+    // 单条规则的启用 / 停用：白名单校验在原生侧（写规则必须过白名单），这里只保证参数形态正确。
+    setAccessibilityAutomationRuleEnabled: ({ packageName, ruleId, enabled }) => Promise.resolve()
+      .then(() => ({
+        packageName: assertAccessibilityPackageName(packageName),
+        ruleId: assertAccessibilityRuleId(ruleId),
+        enabled: assertBooleanFlag(enabled, '规则启用状态'),
+      }))
+      .then(options => NativeRuntime.setAccessibilityAutomationRuleEnabled(options))
+      .then(validateAccessibilityAutomationRules),
     openAccessibilitySettings: () => NativeRuntime.openAccessibilitySettings(),
     getKeepAliveState: () => NativeRuntime.getKeepAliveState().then(validateKeepAliveState),
     requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),

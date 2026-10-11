@@ -35,6 +35,8 @@ import io.deepseekharness.mobile.accessibility.AccessibilityGuardException
 import io.deepseekharness.mobile.accessibility.AccessibilityPasswordStore
 import io.deepseekharness.mobile.accessibility.AutomationControlPolicy
 import io.deepseekharness.mobile.accessibility.AutomationControlStore
+import io.deepseekharness.mobile.accessibility.AutomationRulePreferences
+import io.deepseekharness.mobile.accessibility.AutomationRuleStore
 import io.deepseekharness.mobile.accessibility.AutomationRunLogPolicy
 import io.deepseekharness.mobile.accessibility.AutomationSkipMessages
 import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
@@ -307,6 +309,9 @@ class MobileRuntimePlugin : Plugin() {
 
         /** 受控错误码：大写字母、数字与下划线，与审计日志的策略一致。 */
         private val CONTROLLED_CODE = Regex("^[A-Z][A-Z0-9_]{0,63}$")
+
+        /** 规则标识的格式，与 `AutomationRule.validated()` 同一套口径（1~64 位字母、数字、点、下划线、连字符）。 */
+        private val AUTOMATION_RULE_ID = Regex("^[A-Za-z0-9._-]{1,64}$")
     }
 
     /** 权限：应用内桥接；校验语言白名单；仅返回保存结果，不返回私有配置。 */
@@ -1849,6 +1854,116 @@ class MobileRuntimePlugin : Plugin() {
                 .put("runs", runs)
                 .put("blocked", blocked)
         }
+    }
+
+    /**
+     * 权限：应用内桥接；读某个包已保存的自动化规则（**只读**，不改内容）。
+     *
+     * 与设备桥的 `automationRules` 命令分开：那条命令还会点亮会话开关，这里只读，**不打开任何东西**。
+     * 规则内容（选择器、动作、抑制参数）只回给界面，**不进诊断日志**——诊断走受控码白名单
+     * （`DiagnosticPolicy`），选择器里的文本能反推界面内容。
+     * 返回里带 `allowed`：不在白名单里的包，规则照样读得出来（它是用户/AI 写下的数据），
+     * 但界面必须说明「规则在，不会被任何事件用到」，不能显示成正常工作。
+     */
+    @PluginMethod
+    fun getAccessibilityAutomationRules(call: PluginCall) {
+        resolveWhileActive(call) {
+            accessibilityRulesToJs(requiredAutomationPackage(call))
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；单条规则的启用 / 停用（只改 `enabled` 一个字段）。
+     *
+     * 写之前**必须过白名单**（拍板结论第 5 条：白名单校验放在桥接层）：白名单外的包一律拒写，
+     * 否则「AI 不能绕过白名单」这条硬约束会在应用内这条路径上被绕开。
+     * 其余字段逐字原样写回（整包替换是存储层的既有口径），因此这里不会顺手改动规则内容。
+     */
+    @PluginMethod
+    fun setAccessibilityAutomationRuleEnabled(call: PluginCall) {
+        execute(call) {
+            val packageName = requiredAutomationPackage(call)
+            val rawId = call.data.opt("ruleId")
+            val ruleId = rawId as? String ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "规则标识必须是字符串")
+            if (!AUTOMATION_RULE_ID.matches(ruleId)) {
+                throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "规则标识格式不合法")
+            }
+            val rawEnabled = call.data.opt("enabled")
+            val enabled = rawEnabled as? Boolean
+                ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "规则的启用状态必须是布尔值")
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                if (!AccessibilityAutomationStore.packageAllowed(context, packageName)) {
+                    throw RuntimeFailure(
+                        "ACCESSIBILITY_CONFIG_DENIED",
+                        "应用 $packageName 不在无障碍自动化白名单内，规则写入被拒绝",
+                    )
+                }
+                val store = AutomationRulePreferences.from(context)
+                when (val read = AutomationRuleStore.readPackage(store, packageName)) {
+                    is AutomationRuleStore.PackageRead.Ok -> {
+                        if (read.rules.none { it.id == ruleId }) {
+                            throw RuntimeFailure("ACCESSIBILITY_CONFIG_NOT_FOUND", "找不到这条规则：$ruleId")
+                        }
+                        val updated = read.rules.map { if (it.id == ruleId) it.copy(enabled = enabled) else it }
+                        runCatching { AutomationRuleStore.savePackage(store, packageName, updated) }
+                            .onFailure { throw RuntimeFailure("ACCESSIBILITY_CONFIG_SAVE_FAILED", "规则写入失败") }
+                    }
+                    is AutomationRuleStore.PackageRead.Corrupt ->
+                        throw RuntimeFailure("ACCESSIBILITY_CONFIG_CORRUPT", "读取规则失败：${read.message}")
+                }
+                // 审计只记「哪条规则被开/关」这个受控码，不带规则内容、不带选择器。
+                recordAudit(
+                    AuditEvent.ACCESSIBILITY_CONFIG,
+                    AuditResult.SUCCEEDED,
+                    if (enabled) "AUTOMATION_RULE_ENABLED" else "AUTOMATION_RULE_DISABLED",
+                )
+                accessibilityRulesToJs(packageName)
+            }
+        }
+    }
+
+    /** 把某个包的规则渲染成界面读数；`corrupt` 非空表示这份数据不可用且已被清掉。 */
+    private fun accessibilityRulesToJs(packageName: String): JSObject {
+        val rules = JSArray()
+        val read = AutomationRuleStore.readPackage(AutomationRulePreferences.from(context), packageName)
+        if (read is AutomationRuleStore.PackageRead.Ok) {
+            for (rule in read.rules.sortedBy { it.id }) {
+                rules.put(
+                    JSObject()
+                        .put("id", rule.id)
+                        .put("enabled", rule.enabled)
+                        .put("actionKind", rule.action.type)
+                        .put("selectorCount", rule.selectors.size)
+                        .put("maxActions", rule.maxActions)
+                        .put("actionCoolDownMs", rule.actionCoolDownMs),
+                )
+            }
+        }
+        val corrupt = (read as? AutomationRuleStore.PackageRead.Corrupt)?.let {
+            JSObject().put("code", it.code).put("message", it.message)
+        }
+        return JSObject()
+            .put("packageName", packageName)
+            .put("allowed", AccessibilityAutomationStore.packageAllowed(context, packageName))
+            .put("corrupt", corrupt ?: org.json.JSONObject.NULL)
+            .put("rules", rules)
+    }
+
+    /**
+     * 必填的包名参数（读 / 写规则都要）。
+     *
+     * 与可选的那个分开：这里缺参数就是调用方的问题，直接拒收，**不**回落到前台包——
+     * 写规则的路径上「你以为写的是 A，其实写到 B」是最不该发生的错。
+     */
+    private fun requiredAutomationPackage(call: PluginCall): String {
+        val raw = call.data.opt("packageName")
+            ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "缺少包名")
+        val value = raw as? String
+            ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "自动化规则的包名必须是字符串")
+        if (!AccessibilityAutomationPolicy.validPackage(value)) {
+            throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "自动化规则的包名不合法")
+        }
+        return value
     }
 
     /**

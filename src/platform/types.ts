@@ -576,6 +576,40 @@ export interface AccessibilityAutomationRuns {
 }
 
 /**
+ * 一条自动化规则的界面读数。
+ *
+ * 只带界面需要判断的字段：**不带选择器正文**（文本、viewId 能反推界面内容，界面不需要就不搬），
+ * `actionKind` 是动作类型（`click` / `swipe` / `key` / `launch` / `wait` 这些受控取值）。
+ */
+export interface AccessibilityAutomationRule {
+  id: string
+  enabled: boolean
+  actionKind: string
+  selectorCount: number
+  maxActions: number
+  actionCoolDownMs: number
+}
+
+/** 规则读取失败时的受控说明：数据不可用**且已被原生清掉**（不是「没有规则」）。 */
+export interface AccessibilityAutomationRulesCorrupt {
+  code: string
+  message: string
+}
+
+/**
+ * 某个包的规则读数。
+ *
+ * `allowed=false` 表示这个包不在白名单里：规则还在（能看到、能改），但**不会被执行**——
+ * 界面必须把这件事说出来，不能显示成正常工作。
+ */
+export interface AccessibilityAutomationRules {
+  packageName: string
+  allowed: boolean
+  corrupt: AccessibilityAutomationRulesCorrupt | null
+  rules: AccessibilityAutomationRule[]
+}
+
+/**
  * 目标应用副屏的取帧档位。
  *
  * 这 10 个值**不是显示器刷新率档位**：它们决定预览多久从虚拟屏取一帧
@@ -1118,6 +1152,25 @@ export interface RuntimeBridge {
    * 就是给界面如实说明这一点的，**不能**把「读不到」显示成「什么都没发生」。
    */
   getAccessibilityAutomationRuns: (packageName?: string) => Promise<AccessibilityAutomationRuns>
+  /**
+   * 读某个包已保存的自动化规则（**只读**）。
+   *
+   * 与设备桥的 `automationRules` 命令分开：那条命令还会点亮会话开关，这一条只读、不打开任何东西。
+   * 包名必填，且必须是合法包名——写规则的路径上「你以为写的是 A，其实写到 B」是最不该发生的错，
+   * 因此这里不提供「省略即前台包」的兜底。
+   */
+  getAccessibilityAutomationRules: (packageName: string) => Promise<AccessibilityAutomationRules>
+  /**
+   * 单条规则的启用 / 停用（只改 `enabled` 一个字段，其余内容原样写回）。
+   *
+   * 白名单外的包一律拒写（拍板结论第 5 条：白名单校验放在桥接层），且**不需要验证密码**——
+   * 白名单本身才是授权门槛，改白名单才需要密码。
+   */
+  setAccessibilityAutomationRuleEnabled: (options: {
+    packageName: string
+    ruleId: string
+    enabled: boolean
+  }) => Promise<AccessibilityAutomationRules>
   /**
    * 用系统生物识别 / 锁屏密码重置验证密码——「忘记密码」的唯一出路。
    *

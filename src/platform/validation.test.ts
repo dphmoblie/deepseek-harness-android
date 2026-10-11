@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   assertAccessibilityAutomationAction,
   assertAccessibilityPackageName,
+  assertAccessibilityRuleId,
   assertBase64Input,
+  assertBooleanFlag,
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
   assertRuntimeVersionTarget,
@@ -14,6 +16,7 @@ import {
   validateAllFilesAccessResult,
   validateAppUpdateState,
   validateAccessibilityAutomationRuns,
+  validateAccessibilityAutomationRules,
   validateAccessibilityAutomationState,
   validateAccessibilityPasswordInput,
   validateDiagnosticLogExport,
@@ -1027,6 +1030,70 @@ describe('无障碍自动化状态与验证密码校验', () => {
     // 0 次的拦截条目没有展示价值，出现即说明原生侧写错了。
     expect(() => validateAccessibilityAutomationRuns({ ...valid, blocked: [{ code: 'X', count: 0, message: null }] }))
       .toThrow('自动化拦截原因第 1 项次数无效')
+  })
+
+  it('规则读数逐项校验：只带界面要判断的字段，选择器正文进不来', () => {
+    const valid = {
+      packageName: 'com.example.target',
+      allowed: true,
+      corrupt: null,
+      rules: [{
+        id: 'rule-1',
+        enabled: false,
+        actionKind: 'click',
+        selectorCount: 2,
+        maxActions: 3,
+        actionCoolDownMs: 3000,
+      }],
+    }
+    const result = validateAccessibilityAutomationRules(valid)
+    expect(result.rules[0].id).toBe('rule-1')
+    expect(result.rules[0].enabled).toBe(false)
+    // 白名单外的应用：规则读得出来，但界面必须说明它们不会被用到。
+    expect(validateAccessibilityAutomationRules({ ...valid, allowed: false }).allowed).toBe(false)
+    expect(validateAccessibilityAutomationRules({
+      ...valid,
+      corrupt: { code: 'AUTOMATION_RULE_CORRUPT', message: '规则文件损坏' },
+    }).corrupt).not.toBeNull()
+
+    expect(() => validateAccessibilityAutomationRules({ ...valid, packageName: 'not a package' }))
+      .toThrow('无障碍白名单第 1 项无效')
+    expect(() => validateAccessibilityAutomationRules({ ...valid, allowed: 'true' }))
+      .toThrow('自动化规则白名单状态无效')
+    expect(() => validateAccessibilityAutomationRules({ ...valid, rules: null }))
+      .toThrow('自动化规则列表无效')
+    // 规则 id 与原生 `AUTOMATION_RULE_ID` 同一套格式，别的写法一律拒收。
+    for (const id of ['', ' ', 'rule 1', '规则', 'a'.repeat(65)]) {
+      expect(() => validateAccessibilityAutomationRules({ ...valid, rules: [{ ...valid.rules[0], id }] }))
+        .toThrow('自动化规则第 1 项标识无效')
+    }
+    expect(() => validateAccessibilityAutomationRules({ ...valid, rules: [{ ...valid.rules[0], enabled: 'yes' }] }))
+      .toThrow('自动化规则第 1 项启用状态格式无效')
+    expect(() => validateAccessibilityAutomationRules({ ...valid, rules: [{ ...valid.rules[0], actionKind: '' }] }))
+      .toThrow('自动化规则第 1 项动作类型无效')
+    const numericLabels = {
+      selectorCount: '选择器数量',
+      maxActions: '动作上限',
+      actionCoolDownMs: '冷却时间',
+    } as const
+    for (const [key, label] of Object.entries(numericLabels)) {
+      for (const bad of [-1, 1.5, '3', null]) {
+        expect(() => validateAccessibilityAutomationRules({ ...valid, rules: [{ ...valid.rules[0], [key]: bad }] }))
+          .toThrow(`自动化规则第 1 项${label}无效`)
+      }
+    }
+  })
+
+  it('规则标识与布尔开关的断言：只认受控取值，不做静默转换', () => {
+    expect(assertAccessibilityRuleId('rule_1.a-b')).toBe('rule_1.a-b')
+    for (const bad of ['', 'rule 1', '规则', 'a'.repeat(65), 7, null, undefined]) {
+      expect(() => assertAccessibilityRuleId(bad)).toThrow('自动化规则标识无效')
+    }
+    expect(assertBooleanFlag(true, '启用状态')).toBe(true)
+    expect(assertBooleanFlag(false, '启用状态')).toBe(false)
+    for (const bad of ['true', 0, 1, null, undefined, {}]) {
+      expect(() => assertBooleanFlag(bad, '启用状态')).toThrow('启用状态格式无效')
+    }
   })
 
   it('旧版缺省开关保持开启；仅接受明确的布尔状态', () => {

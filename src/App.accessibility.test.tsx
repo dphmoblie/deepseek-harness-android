@@ -335,3 +335,154 @@ describe('无障碍自动化控制台', () => {
     expect(screen.getByText('更早的 3 条记录已超出容量被丢弃。')).toBeInTheDocument()
   })
 })
+
+describe('无障碍自动化规则卡片', () => {
+  beforeEach(beforeEachAppTest)
+  afterEach(() => vi.restoreAllMocks())
+
+  const TARGETS = ['com.example.reader', 'com.example.writer']
+
+  const RULES_STATE = {
+    enabled: false,
+    whitelistEnabled: true,
+    allowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, ...TARGETS],
+    alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
+    passwordConfigured: false,
+    automationRuntime: 'off' as const,
+    serviceStatus: 'connected' as const,
+  }
+
+  function rulesFor(packageName: string, overrides: Record<string, unknown> = {}) {
+    return {
+      packageName,
+      allowed: true,
+      corrupt: null,
+      rules: [{
+        id: 'rule-1',
+        enabled: true,
+        actionKind: 'click',
+        selectorCount: 2,
+        maxActions: 3,
+        actionCoolDownMs: 3000,
+      }],
+      ...overrides,
+    }
+  }
+
+  /** 进入规则卡片：白名单里放两个目标应用，进页面时会自动读第一个。 */
+  async function openRules(): Promise<void> {
+    bridge.getAccessibilityAutomationState.mockResolvedValue(RULES_STATE)
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('Shizuku 与设备 Shell')
+  }
+
+  it('进页面自动读白名单里第一个应用的规则，切换应用时按包名重读', async () => {
+    bridge.getAccessibilityAutomationRules.mockImplementation(
+      (packageName: string) => Promise.resolve(rulesFor(packageName)),
+    )
+    await openRules()
+
+    // 不提供「省略即前台包」的兜底：查询必须带明确包名。
+    await waitFor(() => expect(bridge.getAccessibilityAutomationRules).toHaveBeenCalledWith('com.example.reader'))
+    expect(await screen.findByTestId('automation-rule-list')).toHaveTextContent('rule-1')
+    // 界面只显示动作类型与选择器条数，选择器的正文（文本 / viewId）不进前端。
+    expect(screen.getByTestId('automation-rule-list')).toHaveTextContent('click')
+    expect(screen.getByTestId('automation-rule-list')).toHaveTextContent('2 个选择器')
+
+    fireEvent.click(screen.getByRole('button', { name: 'com.example.writer' }))
+    await waitFor(() => expect(bridge.getAccessibilityAutomationRules).toHaveBeenCalledWith('com.example.writer'))
+  })
+
+  it('停用一条规则：只改「启不启用」，写成功后按重读结果更新，不做乐观更新', async () => {
+    let enabled = true
+    bridge.getAccessibilityAutomationRules.mockImplementation((packageName: string) => Promise.resolve(
+      rulesFor(packageName, {
+        rules: [{
+          id: 'rule-1',
+          enabled,
+          actionKind: 'click',
+          selectorCount: 2,
+          maxActions: 3,
+          actionCoolDownMs: 3000,
+        }],
+      }),
+    ))
+    bridge.setAccessibilityAutomationRuleEnabled.mockImplementation(() => {
+      enabled = false
+      return Promise.resolve(rulesFor('com.example.reader'))
+    })
+    await openRules()
+
+    fireEvent.click(await screen.findByRole('button', { name: '停用' }))
+
+    // 白名单校验在原生侧，前端只把三个参数原样递过去；规则内容（选择器、动作）一个字段都不送。
+    await waitFor(() => expect(bridge.setAccessibilityAutomationRuleEnabled).toHaveBeenCalledWith({
+      packageName: 'com.example.reader',
+      ruleId: 'rule-1',
+      enabled: false,
+    }))
+    expect(await screen.findByText('规则已停用')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByTestId('automation-rule-list')).toHaveTextContent('已停用'))
+  })
+
+  it('写失败时只说失败，界面不把开关先拨过去', async () => {
+    bridge.getAccessibilityAutomationRules.mockImplementation((packageName: string) => Promise.resolve(
+      rulesFor(packageName, {
+        rules: [{
+          id: 'rule-1',
+          enabled: false,
+          actionKind: 'click',
+          selectorCount: 2,
+          maxActions: 3,
+          actionCoolDownMs: 3000,
+        }],
+      }),
+    ))
+    bridge.setAccessibilityAutomationRuleEnabled.mockRejectedValue(
+      new Error('应用 com.example.reader 不在无障碍自动化白名单内，规则写入被拒绝'),
+    )
+    await openRules()
+
+    fireEvent.click(await screen.findByRole('button', { name: '启用' }))
+
+    expect(await screen.findByText('应用 com.example.reader 不在无障碍自动化白名单内，规则写入被拒绝')).toBeInTheDocument()
+    // 原生拒绝了写入，界面就必须还是「已停用」：乐观更新会留下一个假的「已启用」。
+    expect(screen.getByTestId('automation-rule-list')).toHaveTextContent('已停用')
+    expect(screen.queryByText('规则已启用')).not.toBeInTheDocument()
+  })
+
+  it('读不到规则时显示失败而不是「还没有规则」', async () => {
+    bridge.getAccessibilityAutomationRules.mockRejectedValue(new Error('读取失败'))
+    await openRules()
+
+    expect(await screen.findByText('规则读取失败，请稍后重试')).toBeInTheDocument()
+    expect(screen.queryByText('这个应用还没有规则。')).not.toBeInTheDocument()
+  })
+
+  it('白名单外的应用与损坏的规则数据都如实说明，并禁掉开关按钮', async () => {
+    bridge.getAccessibilityAutomationRules.mockImplementation((packageName: string) => Promise.resolve(
+      rulesFor(packageName, { allowed: false }),
+    ))
+    await openRules()
+
+    expect(await screen.findByTestId('automation-rules-not-allowed'))
+      .toHaveTextContent('不在白名单里：这些规则不会被任何事件用到。')
+    expect(screen.getByRole('button', { name: '停用' })).toBeDisabled()
+  })
+
+  it('规则数据损坏时给出受控码与说明，而不是当成空列表', async () => {
+    bridge.getAccessibilityAutomationRules.mockResolvedValue({
+      packageName: 'com.example.reader',
+      allowed: true,
+      corrupt: { code: 'AUTOMATION_RULE_CORRUPT', message: '规则文件读不出来，已清除' },
+      rules: [],
+    })
+    await openRules()
+
+    const corrupt = await screen.findByTestId('automation-rules-corrupt')
+    expect(corrupt).toHaveTextContent('AUTOMATION_RULE_CORRUPT')
+    expect(corrupt).toHaveTextContent('规则文件读不出来，已清除')
+    expect(screen.queryByText('这个应用还没有规则。')).not.toBeInTheDocument()
+  })
+})

@@ -4,6 +4,7 @@ import type {
   DiagnosticLogState,
   AccessibilityAutomationAction,
   AccessibilityAutomationRuntime,
+  AccessibilityAutomationRules,
   AccessibilityAutomationRuns,
   AccessibilityAutomationState,
   DiagnosticLogText,
@@ -38,7 +39,7 @@ import type {
 } from './types'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
+import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityPackageName, assertAccessibilityRuleId, assertBooleanFlag, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
@@ -399,6 +400,31 @@ export function createBrowserBridge(): RuntimeBridge {
     getAccessibilityAutomationRuns: (packageName?: string): Promise<AccessibilityAutomationRuns> => {
       if (packageName !== undefined) return Promise.reject(new Error('浏览器预览不支持按应用查询自动化运行记录'))
       return Promise.resolve({ connected: false, limit: 50, dropped: 0, runs: [], blocked: [] })
+    },
+    /*
+     * 规则存储在 Android 侧的偏好文件里，浏览器预览没有对应物：如实拒绝，**不**回一份空列表——
+     * 「0 条规则」会被界面显示成「你还没有规则」，而真相是「这里读不到任何规则」。
+     * 也不在这里放一份内存规则：预览里能开关的规则到真机上并不存在，那是最容易误导人的假成功。
+     */
+    getAccessibilityAutomationRules: (packageName: string): Promise<AccessibilityAutomationRules> => {
+      // 入参自检与「没有存储」都必须走被拒绝的 Promise：同步抛出会绕过调用方的失败分支
+      // （界面拿不到 `failed` 状态，只会看到一个没反应的按钮）。
+      return Promise.resolve().then(() => {
+        assertAccessibilityPackageName(packageName)
+        throw new Error('浏览器预览没有无障碍规则存储')
+      })
+    },
+    setAccessibilityAutomationRuleEnabled: (options: {
+      packageName: string
+      ruleId: string
+      enabled: boolean
+    }): Promise<AccessibilityAutomationRules> => {
+      return Promise.resolve().then(() => {
+        assertAccessibilityPackageName(options.packageName)
+        assertAccessibilityRuleId(options.ruleId)
+        assertBooleanFlag(options.enabled, '规则启用状态')
+        throw new Error('浏览器预览不能修改无障碍规则')
+      })
     },
     openAccessibilitySettings: () => Promise.reject(new Error('浏览器预览不支持打开系统无障碍设置')),
     openVirtualScreen: () => Promise.reject(new Error('目标应用副屏需要 Android 10 以上设备与 Shizuku')),

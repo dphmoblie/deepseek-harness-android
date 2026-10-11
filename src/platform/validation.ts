@@ -1,6 +1,9 @@
 import type {
   AccessibilityAutomationAction,
   AccessibilityAutomationBlocked,
+  AccessibilityAutomationRule,
+  AccessibilityAutomationRules,
+  AccessibilityAutomationRulesCorrupt,
   AccessibilityAutomationRun,
   AccessibilityAutomationRuns,
   AccessibilityAutomationState,
@@ -954,6 +957,24 @@ export function assertAccessibilityPackageName(value: unknown): string {
 }
 
 /**
+ * 校验规则标识：与原生 `MobileRuntimePlugin` 的 `AUTOMATION_RULE_ID` 和
+ * `AutomationRule.validated()` 同一套格式（1~64 位字母、数字、点、下划线、连字符）。
+ *
+ * 这里先卡一道不是为了省一次桥调用，而是**不让任意字符串过桥**：规则标识会被原生回显在错误文案里。
+ */
+export function assertAccessibilityRuleId(value: unknown): string {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(value)) {
+    throw new Error('自动化规则标识无效')
+  }
+  return value
+}
+
+/** 校验一个布尔入参：桥接的布尔字段只能是真的布尔，`"true"` 这种字符串一律拒收。 */
+export function assertBooleanFlag(value: unknown, label: string): boolean {
+  return requiredBoolean(value, label)
+}
+
+/**
  * 校验运行记录的读取结果。
  *
  * `runs`/`blocked` 里的每一项都要完整：`performed` 或 `count` 缺失时若补默认值，界面会把
@@ -1016,6 +1037,59 @@ function accessibilityCodeText(value: unknown, label: string): string {
     throw new Error(`${label}无效`)
   }
   return value
+}
+
+/**
+ * 校验某个包的规则读数。
+ *
+ * `corrupt` 非空表示原生侧读不出这份数据**且已经把它清掉**——这是「数据坏了」，不是「没有规则」；
+ * 界面按 `corrupt` 与空数组分别显示，因此这里必须逐字段校验、不许用空数组把它抹平。
+ * 规则条目只带界面要用的字段：这里刻意**不要求**选择器正文（原生侧也不回），免得界面把界面内容搬进 DOM。
+ */
+export function validateAccessibilityAutomationRules(value: unknown): AccessibilityAutomationRules {
+  const state = asRecord(value, '自动化规则')
+  const packageName = accessibilityPackages([state.packageName], '自动化规则包名')[0]
+  if (typeof state.allowed !== 'boolean') throw new Error('自动化规则白名单状态无效')
+  if (!Array.isArray(state.rules)) throw new Error('自动化规则列表无效')
+  const corrupt = state.corrupt === null || state.corrupt === undefined
+    ? null
+    : accessibilityRulesCorrupt(state.corrupt)
+  return {
+    packageName,
+    allowed: state.allowed,
+    corrupt,
+    rules: state.rules.map((item, index) => accessibilityRule(item, index)),
+  }
+}
+
+/** 规则数据损坏的受控说明：码与文案都要有，界面直接显示它们。 */
+function accessibilityRulesCorrupt(value: unknown): AccessibilityAutomationRulesCorrupt {
+  const record = asRecord(value, '自动化规则损坏说明')
+  return {
+    code: accessibilityCodeText(record.code, '自动化规则损坏码'),
+    message: accessibilityCodeText(record.message, '自动化规则损坏说明'),
+  }
+}
+
+/** 一条规则：`id` 必须落在与原生同一套格式里，计数与抑制参数都必须是正整数或零。 */
+function accessibilityRule(value: unknown, index: number): AccessibilityAutomationRule {
+  const record = asRecord(value, `自动化规则第 ${index + 1} 项`)
+  const id = accessibilityCodeText(record.id, `自动化规则第 ${index + 1} 项标识`)
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(id)) throw new Error(`自动化规则第 ${index + 1} 项标识无效`)
+  return {
+    id,
+    enabled: requiredBoolean(record.enabled, `自动化规则第 ${index + 1} 项启用状态`),
+    actionKind: accessibilityCodeText(record.actionKind, `自动化规则第 ${index + 1} 项动作类型`),
+    selectorCount: accessibilityNonNegative(record.selectorCount, `自动化规则第 ${index + 1} 项选择器数量`),
+    maxActions: accessibilityNonNegative(record.maxActions, `自动化规则第 ${index + 1} 项动作上限`),
+    actionCoolDownMs: accessibilityNonNegative(record.actionCoolDownMs, `自动化规则第 ${index + 1} 项冷却时间`),
+  }
+}
+
+/** 计数类字段：非负安全整数（小数或负数都说明这份读数来路不明）。 */
+function accessibilityNonNegative(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label}无效`)
+  return value as number
 }
 
 /**
