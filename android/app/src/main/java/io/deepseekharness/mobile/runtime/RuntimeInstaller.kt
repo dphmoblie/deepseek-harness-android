@@ -156,6 +156,8 @@ class RuntimeInstaller(
             )
             finishRuntimeMaintenance()
         } catch (error: Throwable) {
+            // Sample before cleanup releases the space needed to explain this failure.
+            val failureAvailableBytes = availableBytes(store.runtimeParent)
             val cleanupFailure = workspace?.let {
                 try {
                     cleanupWorkspace(it, preserveArchive = it.preserveArchiveOnFailure)
@@ -185,7 +187,7 @@ class RuntimeInstaller(
                     TransferFields.failureFields(
                         code = failure.code,
                         reason = currentStep,
-                        availableBytes = availableBytes(store.runtimeParent),
+                        availableBytes = failureAvailableBytes,
                         details = failure.details,
                     ),
                 )
@@ -365,7 +367,7 @@ class RuntimeInstaller(
                 }
             }
         } catch (error: Throwable) {
-            if (RuntimeFiles.existsNoFollow(destination)) cleanupIfPresent(destination)
+            // install() samples free space and owns cleanup of this private workspace.
             if (error is RuntimeFailure) {
                 if (error.code == "BUNDLED_RUNTIME_MISSING") {
                     throw RuntimeFailure(
@@ -386,7 +388,6 @@ class RuntimeInstaller(
         }
         val digestOk = digest.digest().toLowerHex() == artifact.sha256
         if (written != artifact.compressedBytes || !digestOk) {
-            cleanupIfPresent(destination)
             throw RuntimeFailure(
                 "ARCHIVE_DIGEST_MISMATCH",
                 "APK 内置运行时完整性校验失败",

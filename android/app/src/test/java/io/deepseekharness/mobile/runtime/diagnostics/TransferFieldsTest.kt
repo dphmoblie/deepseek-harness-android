@@ -78,6 +78,27 @@ class TransferFieldsTest {
     }
 
     @Test
+    fun preservesSpaceCapturedBeforeAnArchiveWasDiscarded() {
+        val fields = TransferFields.failureFields(
+            "ROOTFS_DIGEST_MISMATCH", "transfer", availableBytes = 1000,
+            details = TransferFields.of(100, 100, false) + TransferFields.freeBytes(0),
+        )
+        assertEquals("0", fields[TransferFields.FREE_BYTES])
+        assertEquals(8, fields.size)
+    }
+
+    @Test
+    fun invalidCapturedSpaceCannotReachTheLogOrBecomeAPostCleanupReading() {
+        for (value in listOf("not a number", "-1", "/private/path")) {
+            val fields = TransferFields.failureFields(
+                "ROOTFS_DIGEST_MISMATCH", "transfer", availableBytes = 1000,
+                details = mapOf(TransferFields.FREE_BYTES to value),
+            )
+            assertFalse(fields.containsKey(TransferFields.FREE_BYTES))
+        }
+    }
+
+    @Test
     fun rendersTheWholeFailureLineWithoutDroppingAnyField() {
         val line = DiagnosticPolicy.recordLine(
             instant,

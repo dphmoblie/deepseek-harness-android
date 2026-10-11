@@ -17,11 +17,63 @@ import org.junit.Test
 class AutomationRuleExecutorTest {
     @Test
     fun `screen 序号按应用隔离，其他应用事件不重开当前应用配额`() {
-        val sequence = AutomationScreenSequence()
-        assertEquals(1L, sequence.advance("com.example.first"))
-        assertEquals(1L, sequence.advance("com.example.other"))
-        assertEquals(1L, sequence.current("com.example.first"))
-        assertEquals(2L, sequence.advance("com.example.first"))
+        val windows = AutomationWindowState()
+        val other = "com.example.other"
+        assertTrue(windows.observe(APP, 1, APP, 1, "First", true))
+        assertTrue(windows.observe(other, 2, other, 2, "Other", true))
+        assertEquals(1L, windows.current(APP))
+        assertEquals(1L, windows.current(other))
+        assertTrue(windows.observe(APP, 1, APP, 1, "First", true))
+        assertEquals(2L, windows.current(APP))
+        assertTrue(windows.observe(APP, 1, APP, 1, "android.widget.FrameLayout", false))
+        assertEquals(2L, windows.current(APP))
+        assertEquals("First", windows.screen(APP, 1).activityName)
+    }
+
+    @Test
+    fun `100ms 内切屏仍更新 Activity，旧页限定规则不能操作新页`() {
+        val windows = AutomationWindowState()
+        val state = AutomationGateState()
+        assertTrue(windows.observe(APP, 1, APP, 1, "$APP.FirstActivity", true))
+        assertTrue(AutomationRuleGate.admitEvent(state, 900).allowed)
+        assertTrue(AutomationRuleGate.admitEvent(state, 1000).allowed)
+        assertTrue(windows.observe(APP, 2, APP, 2, "$APP.SecondActivity", true))
+        assertFalse(AutomationRuleGate.admitEvent(state, 1050).allowed)
+        assertEquals(2L, windows.current(APP))
+
+        val tree = container(text("确定"))
+        val backend = FakeBackend(tree)
+        val firstPageRule = rule(Selector(text = "确定")).copy(allowActivities = listOf("FirstActivity$"))
+        assertTrue(AutomationRuleGate.admitEvent(state, 1400).allowed)
+        val report = execute(backend, tree, firstPageRule, state, 1400, screen = windows.screen(APP, 2))
+        assertEquals(AutomationSkipCodes.ACTIVITY_NOT_ALLOWED, report.skipped.single().code)
+        assertTrue(backend.calls.isEmpty())
+    }
+
+    @Test
+    fun `同包旧窗口事件与其他显示屏事件不能污染当前窗口`() {
+        val windows = AutomationWindowState()
+        assertTrue(windows.observe(APP, 2, APP, 2, "$APP.SecondActivity", true))
+        assertFalse(windows.observe(APP, 1, APP, 2, "$APP.FirstActivity", true))
+        assertFalse(windows.observe(APP, -1, APP, 2, "$APP.FirstActivity", true))
+        assertFalse(windows.observe("com.other.app", 2, APP, 2, "Other", true))
+        assertEquals("$APP.SecondActivity", windows.screen(APP, 2).activityName)
+        assertEquals(1L, windows.current(APP))
+    }
+
+    @Test
+    fun `延迟重判定遇到未记录的新窗口时不复用旧 Activity`() {
+        val windows = AutomationWindowState()
+        assertTrue(windows.observe(APP, 1, APP, 1, "$APP.FirstActivity", true))
+        val tree = container(text("确定"))
+        val backend = FakeBackend(tree)
+        val rule = rule(Selector(text = "确定")).copy(denyActivities = listOf("SecondActivity$"))
+        val report = execute(backend, tree, rule, AutomationGateState(), 1400, screen = windows.screen(APP, 2))
+        assertEquals(AutomationSkipCodes.ACTIVITY_UNKNOWN, report.skipped.single().code)
+        assertTrue(backend.calls.isEmpty())
+        windows.reset()
+        assertNull(windows.screen(APP, 1).activityName)
+        assertEquals(0L, windows.current(APP))
     }
 
 

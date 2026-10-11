@@ -23,20 +23,21 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLException
 
-class RuntimeHttp {
-    data class DownloadResult(val finalUri: URI, val bytes: Long, val sha256: String)
-
-    private data class PartialDownload(val bytes: Long)
-    private class RangeNotSupported : Exception()
-    private class InvalidRangeResponse(message: String) : Exception(message)
-
-    private val client = OkHttpClient.Builder()
+class RuntimeHttp internal constructor(
+    private val client: OkHttpClient = OkHttpClient.Builder()
         .dns(PublicOnlyDns)
         .followRedirects(false)
         .followSslRedirects(false)
         .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        .build()
+        .build(),
+    private val availableBytes: (File) -> Long? = RuntimeStorageSpace::availableBytes,
+) {
+    data class DownloadResult(val finalUri: URI, val bytes: Long, val sha256: String)
+
+    private data class PartialDownload(val bytes: Long)
+    private class RangeNotSupported : Exception()
+    private class InvalidRangeResponse(message: String, val actualBytes: Long = -1) : Exception(message)
 
     fun cancelAll() {
         client.dispatcher.cancelAll()
@@ -129,8 +130,10 @@ class RuntimeHttp {
                 downloadFileResponse(source, destination, expectedBytes, emptyPartial(), progress)
             }
         } catch (error: InvalidRangeResponse) {
+            val details = TransferFields.of(expectedBytes, error.actualBytes) +
+                TransferFields.freeBytes(destination.absoluteFile.parentFile?.let(availableBytes))
             discardPartial(destination)
-            throw RuntimeFailure("DOWNLOAD_RANGE_INVALID", "下载服务返回了无效的断点响应", error)
+            throw RuntimeFailure("DOWNLOAD_RANGE_INVALID", "下载服务返回了无效的断点响应", error, details)
         }
 
         // 下载失败同样留下字节证据：下载路径与内置资产路径的失败码相同，
@@ -143,11 +146,13 @@ class RuntimeHttp {
             )
         }
         if (!constantTimeDigestEquals(result.sha256, expectedSha256)) {
+            val details = TransferFields.of(expectedBytes, result.bytes, digestOk = false) +
+                TransferFields.freeBytes(destination.absoluteFile.parentFile?.let(availableBytes))
             discardPartial(destination)
             throw RuntimeFailure(
                 "ROOTFS_DIGEST_MISMATCH",
                 "运行时归档摘要校验失败",
-                details = TransferFields.of(expectedBytes, result.bytes, digestOk = false),
+                details = details,
             )
         }
         return result
@@ -175,16 +180,16 @@ class RuntimeHttp {
                 LinkOption.NOFOLLOW_LINKS,
             )
         }
+        var count = -1L
         return try {
             FileChannel.open(destination.toPath(), *options).use { channel ->
                 if (channel.size() != offset) {
                     throw RuntimeFailure("DOWNLOAD_PART_CHANGED", "断点文件在下载期间发生变化")
                 }
                 channel.position(offset)
+                count = offset
                 withResponse(source, if (offset == 0L) null else offset) { response, input ->
                     val declaredSegmentBytes = validateDownloadResponse(response, offset, expectedBytes)
-                    var count = offset
-                    var segmentBytes = 0L
                     val buffer = ByteArray(64 * 1024)
                     while (true) {
                         val read = input.read(buffer)
@@ -195,12 +200,11 @@ class RuntimeHttp {
                         }
                         val bytes = ByteBuffer.wrap(buffer, 0, read)
                         try {
-                            while (bytes.hasRemaining()) channel.write(bytes)
+                            // Count confirmed writes, including a partial write before a disk error.
+                            while (bytes.hasRemaining()) count += channel.write(bytes).toLong()
                         } catch (error: IOException) {
                             throw RuntimeFailure("FILESYSTEM_ERROR", "无法写入断点文件", error)
                         }
-                        count += read.toLong()
-                        segmentBytes += read.toLong()
                         progress(count, expectedBytes)
                     }
                     try {
@@ -208,7 +212,7 @@ class RuntimeHttp {
                     } catch (error: IOException) {
                         throw RuntimeFailure("FILESYSTEM_ERROR", "无法同步断点文件", error)
                     }
-                    if (declaredSegmentBytes != null && segmentBytes != declaredSegmentBytes) {
+                    if (declaredSegmentBytes != null && count - offset != declaredSegmentBytes) {
                         throw RuntimeFailure("DOWNLOAD_INCOMPLETE", "下载连接提前结束，可再次安装继续下载")
                     }
                     val finalDigest = digestChannel(channel, count)
@@ -216,13 +220,20 @@ class RuntimeHttp {
                 }
             }
         } catch (error: RuntimeFailure) {
-            throw error
+            // Keep the mapped error code; evidence contains only bounded numeric fields.
+            throw RuntimeFailure(
+                error.code, error.message ?: "运行时归档下载失败", error,
+                error.details + TransferFields.of(expectedBytes, count),
+            )
         } catch (error: RangeNotSupported) {
             throw error
         } catch (error: InvalidRangeResponse) {
-            throw error
+            throw InvalidRangeResponse(error.message ?: "invalid range response", count)
         } catch (error: IOException) {
-            throw RuntimeFailure("FILESYSTEM_ERROR", "无法打开断点文件", error)
+            throw RuntimeFailure(
+                "FILESYSTEM_ERROR", "无法打开断点文件", error,
+                TransferFields.of(expectedBytes, count),
+            )
         }
     }
 

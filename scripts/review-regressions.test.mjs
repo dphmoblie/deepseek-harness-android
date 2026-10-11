@@ -59,16 +59,20 @@ test('accessibility launch checks resolved recipient and pins that component bef
   assert.ok(launch.indexOf('intent.component = resolved') < launch.indexOf('service.startActivity(intent)'))
 })
 
-test('screen quota sequence advances only for an admitted target window event', () => {
+test('window identity updates before action throttling and stays bound to the actual window', () => {
   const start = accessibility.indexOf('private fun handleAutomationEvent(')
   const event = accessibility.slice(start, accessibility.indexOf('/** 「稍后重新判定」', start))
   const admitted = event.indexOf('AutomationRuleGate.admitEvent')
-  const sequence = event.indexOf('automationScreenSequence.advance(eventPackage)')
+  const observed = event.indexOf('automationWindows.observe(')
   const snapshot = event.indexOf('val snapshot = buildAutomationTree(root)')
-  assert.ok(admitted >= 0 && snapshot >= 0 && sequence >= 0)
-  assert.ok(admitted < snapshot && snapshot < sequence)
-  assert.match(event, /snapshot\.packageName == eventPackage/)
-  assert.match(event, /automationScreenSequence\.current\(snapshot\.packageName\)/)
+  assert.ok(admitted >= 0 && snapshot >= 0 && observed >= 0)
+  assert.ok(observed < admitted && admitted < snapshot)
+  assert.match(event, /eventPackage, event\.windowId, rootPackage, root\.windowId/)
+  assert.match(event, /automationWindows\.current\(snapshot\.packageName\)/)
+  assert.match(accessibility, /screen = automationWindows\.screen\(snapshot\.packageName, snapshot\.windowId\)/)
+  const backend = accessibility.slice(accessibility.indexOf('override fun resolveNode('), accessibility.indexOf('override fun clickNode('))
+  assert.match(backend, /AutomationWindowState\.sameWindow/)
+  assert.match(backend, /activeRoot\.windowId/)
 })
 
 test('gesture capability is declared and long click prefers the node action', async () => {
