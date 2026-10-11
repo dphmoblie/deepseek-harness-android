@@ -530,7 +530,7 @@ function recheckForegroundServiceAfterSettle<T>(read: () => Promise<T>, onSettle
   }, FOREGROUND_SERVICE_SETTLE_MS)
 }
 
-const UNKNOWN_RUNTIME_ERROR_MESSAGE = '运行时操作失败，请稍后重试；如问题持续，请重置环境。'
+const UNKNOWN_RUNTIME_ERROR_MESSAGE = '运行环境操作失败，请重试；若仍然失败，请查看「诊断与日志」。'
 const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   SOURCE_INCOMPLETE: '请同时配置运行时清单地址和 SHA-256，或同时留空。',
   URL_INVALID: '运行时下载地址格式无效。',
@@ -558,10 +558,10 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   HARNESS_URL_INVALID: '运行时清单中的 Harness 地址无效。',
   ARCHIVE_COMPRESSION_UNSUPPORTED: '当前应用不支持此运行时归档格式。',
   ROOTFS_DIGEST_MISMATCH: '运行时归档完整性校验失败。',
-  ARCHIVE_DIGEST_MISMATCH: '内置运行时归档完整性校验失败。',
+  ARCHIVE_DIGEST_MISMATCH: '运行环境安装包未通过完整性校验，文件可能不完整或与清单不匹配。',
   ARCHIVE_SOURCE_DIGEST_MISMATCH: '解压时读取的运行时归档未通过完整性复核。',
   ARCHIVE_SOURCE_SIZE_MISMATCH: '解压时读取的运行时归档大小与清单不一致。',
-  ARCHIVE_SIZE_MISMATCH: '运行时归档的实际解压大小与清单不一致。',
+  ARCHIVE_SIZE_MISMATCH: '运行环境安装包的大小与清单不一致。',
   ARCHIVE_EXPANSION_LIMIT: '运行时归档解压后超过允许大小。',
   ARCHIVE_ENTRY_LIMIT: '运行时归档包含过多文件。',
   ARCHIVE_FEATURE_UNSUPPORTED: '运行时归档包含不支持的文件特性。',
@@ -1084,7 +1084,7 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onO
           <AlertTriangle size={19} />
           <div>
             <strong>{t("需要重新连接")}</strong>
-            <span>{t("应用进程已被系统回收，旧的 Harness 会话与临时凭据无法恢复；请重新连接以启动新的本机会话。")}</span>
+            <span>{t("应用进程已被系统结束，当前连接已失效。请重新连接以启动 Harness。")}</span>
           </div>
           <button className="button button-primary compact-button" type="button" onClick={onLaunch} disabled={busy !== null || !installed}>
             {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("重新连接")}
@@ -2301,8 +2301,8 @@ function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restoreSnapsho
         setState(result.state)
         notify(
           result.skippedFileCount > 0
-            ? t("会话已恢复：回填 {0} 个文件，跳过 {1} 个已存在的文件。", String(result.restoredFileCount), String(result.skippedFileCount))
-            : t("会话已恢复：回填 {0} 个文件。", String(result.restoredFileCount)),
+            ? t("会话恢复完成：恢复 {0} 个文件，跳过 {1} 个已存在的文件。", String(result.restoredFileCount), String(result.skippedFileCount))
+            : t("会话恢复完成：恢复 {0} 个文件。", String(result.restoredFileCount)),
           'success',
         )
       } catch (error) {
@@ -2337,7 +2337,7 @@ function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restoreSnapsho
         <span className="section-icon"><Database size={19} /></span>
         <div>
           <h2 id="runtime-snapshots-title">{t("会话备份")}</h2>
-          <p>{t("备份是当前会话目录的一份字节副本，放在应用私有目录里：不进系统云备份，也不进运行时镜像。安装或更新运行环境前会自动拍一份。")}</p>
+          <p>{t("会话备份保存在应用私有目录中，不会进入系统云备份或运行环境安装包。安装或更新运行环境前，应用会自动创建备份。")}</p>
         </div>
       </div>
 
@@ -2357,7 +2357,7 @@ function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restoreSnapsho
       {!loading && !failed && state !== null && (
         <>
           {snapshots.length === 0
-            ? <p className="harness-log-state">{t("还没有会话备份。可以现在拍一份，也可以在安装运行时前由应用自动拍。")}</p>
+            ? <p className="harness-log-state">{t("暂无会话备份。你可以手动创建，也可以等应用在安装运行环境前自动备份。")}</p>
             : (
               <div className="release-list">
                 {snapshots.map(snapshot => (
@@ -2410,7 +2410,7 @@ function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restoreSnapsho
             )}
 
           <p className="settings-note">
-            {t("最多保留 {0} 份、合计 {1}：超出后从最旧的备份开始淘汰。恢复只做合并回填，同名文件不会被覆盖。", String(state.maxSnapshots), formatBytes(state.maxBytes))}
+            {t("最多保留 {0} 份备份，总大小不超过 {1}；超出限制时会删除最旧的备份。恢复时只添加缺失的文件，不覆盖同名文件。", String(state.maxSnapshots), formatBytes(state.maxBytes))}
           </p>
 
           <div className="settings-inline-actions">
@@ -3683,7 +3683,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <section className="settings-section" aria-labelledby="model-settings">
           <div className="section-title">
             <span className="section-icon"><Bot size={19} /></span>
-            <div><h2 id="model-settings">{t("模型供应商")}</h2><p>{t("密钥在本机加密保存，只在本机启动 Harness 时使用，页面不会回显")}</p></div>
+            <div><h2 id="model-settings">{t("模型供应商")}</h2><p>{t("密钥在本机加密保存，供 Harness 连接模型服务使用；保存后不再显示密钥内容。")}</p></div>
           </div>
           {!hasConfiguredModelCredential(settings) && (
             /*
@@ -3933,7 +3933,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             </div>
           </div>
           <p className="settings-note">
-            {t("前台服务只提升本应用进程的优先级：Android 与厂商的电池、内存和后台策略仍可能结束进程，无法保证绝对不被停止；进程被系统强制停止后，旧的 Harness 会话与临时凭据不可恢复。")}
+            {t("后台保持可以降低应用被系统结束的概率，但无法阻止所有电池优化或内存清理。进程停止后，需要重新连接 Harness。")}
           </p>
           <div className="settings-inline-actions">
             {keepAlive.notificationPermission === 'prompt' && (
@@ -3950,7 +3950,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               <AlertTriangle size={19} />
               <div>
                 <strong>{t("需要重新连接")}</strong>
-                <span>{t("应用进程已被系统回收，旧的 Harness 会话与临时凭据无法恢复；请重新连接以启动新的本机会话。")}</span>
+                <span>{t("应用进程已被系统结束，当前连接已失效。请重新连接以启动 Harness。")}</span>
               </div>
             </div>
           )}
@@ -5017,7 +5017,7 @@ export function App() {
       if (outcome === undefined) return
       if (outcome.status === 'created') {
         if (outcome.evictedIds !== undefined && outcome.evictedIds.length > 0) {
-          notify(t("安装前已自动备份会话（{0}）；因超出保留上限，淘汰了 {1} 份最旧的备份。", outcome.snapshotId ?? '', String(outcome.evictedIds.length)), 'success')
+          notify(t("安装前已自动备份会话（{0}）；为满足保留限制，已删除 {1} 份最旧的备份。", outcome.snapshotId ?? '', String(outcome.evictedIds.length)), 'success')
           return
         }
         notify(t("安装前已自动备份会话（{0}）", outcome.snapshotId ?? ''), 'success')

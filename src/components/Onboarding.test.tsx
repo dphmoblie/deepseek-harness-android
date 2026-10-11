@@ -122,7 +122,7 @@ describe('Onboarding', () => {
   it('blocks opening Harness until a model key is configured', () => {
     const props = renderOnboarding({ runtime: { ...runtime, phase: 'running' } })
     for (let i = 0; i < 5; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
-    expect(screen.getByText(/还没配置模型 API Key/)).toBeDefined()
+    expect(screen.getByText(/尚未检测到模型 API Key/)).toBeDefined()
     expect(screen.queryByRole('button', { name: /打开 Harness/ })).toBeNull()
 
     // 「去配置 API Key」把用户送回密钥步骤；保存后回到本步骤才会出现打开按钮。

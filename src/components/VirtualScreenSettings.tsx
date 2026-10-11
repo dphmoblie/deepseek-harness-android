@@ -376,7 +376,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
     if (raw.trim() !== '' && Number.isFinite(parsed) && parsed > maximum) {
       setSpecText(current => ({ ...current, [field]: String(maximum) }))
       setDraft(current => (current === null ? current : withSpec(current, field, maximum)))
-      setSpecHint(t('{0} 超出范围，已夹取到 {1}。', t(specFieldLabel(field)), maximum))
+      setSpecHint(t('{0}超出允许范围，已自动调整为 {1}。', t(specFieldLabel(field)), maximum))
       return
     }
     setSpecText(current => ({ ...current, [field]: raw }))
@@ -390,7 +390,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
     const parsed = raw === '' ? 0 : Number(raw)
     const clamped = clampSpecField(field, raw)
     if (raw !== '' && clamped !== parsed) {
-      setSpecHint(t('{0} 超出范围，已夹取到 {1}。', t(specFieldLabel(field)), clamped))
+      setSpecHint(t('{0}超出允许范围，已自动调整为 {1}。', t(specFieldLabel(field)), clamped))
     }
     setSpecText(current => ({ ...current, [field]: clamped === 0 ? '' : String(clamped) }))
     if (draft[field] !== clamped) setDraft(withSpec(draft, field, clamped))
@@ -406,7 +406,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
     if (trimmed !== '' && Number.isFinite(parsed) && parsed > OVERLAY_WIDTH_MAX) {
       setOverlayText(String(OVERLAY_WIDTH_MAX))
       setDraft(current => (current === null ? current : { ...current, overlayWidthPx: OVERLAY_WIDTH_MAX }))
-      setOverlayHint(t('悬浮窗宽度超出范围，已夹取到 {0}。', OVERLAY_WIDTH_MAX))
+      setOverlayHint(t('悬浮窗宽度超出允许范围，已自动调整为 {0}。', OVERLAY_WIDTH_MAX))
       return
     }
     setOverlayText(raw)
@@ -421,8 +421,8 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
     const width = clampOverlayWidth(raw)
     if (raw !== '' && width !== parsed) {
       setOverlayHint(width === 0
-        ? t('悬浮窗宽度只看正数，已改回跟随屏幕。')
-        : t('悬浮窗宽度超出范围，已夹取到 {0}。', width))
+        ? t('悬浮窗宽度须大于 0，已恢复为跟随屏幕大小。')
+        : t('悬浮窗宽度超出允许范围，已自动调整为 {0}。', width))
     }
     setOverlayText(overlayWidthText(width))
     if (overlayWidthOf(draft) !== width) setDraft({ ...draft, overlayWidthPx: width })
@@ -543,7 +543,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
       await bridge.openVirtualScreen()
     } catch {
       if (!active.current) return
-      setActionFailure(t('无法打开副屏页面，请确认当前使用安卓壳且系统为 Android 10 或更高版本'))
+      setActionFailure(t('无法打开副屏预览，请在 Android 10 或更高版本的设备上使用本应用'))
     } finally {
       if (active.current) setBusy('')
     }
@@ -585,7 +585,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
       </div>
 
       <p className="virtual-screen-description">
-        {t('把目标应用放到独立副屏上运行：页面预览与悬浮窗只显示它的画面，取帧档位与方向在这里单独设置。需要 Shizuku 与 Android 10 或更高版本。')}
+        {t('在独立副屏中运行应用，通过预览页面或悬浮窗查看画面。可在此设置屏幕方向、分辨率和预览帧率。需要 Shizuku 和 Android 10 或更高版本。')}
       </p>
 
       <section className="settings-subsection virtual-screen-status" aria-labelledby="virtual-screen-status-title">
@@ -593,7 +593,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
           <span className="section-icon"><Monitor size={19} /></span>
           <div>
             <h3 id="virtual-screen-status-title">{t('副屏状态')}</h3>
-            <p>{t('读数来自原生侧；取不到时显示「未知」，不补 0。')}</p>
+            <p>{t('以下显示副屏的实际运行状态；无法获取的数据将显示为「未知」。')}</p>
           </div>
         </div>
         {deviceState.status === 'loading' && <p role="status">{t('正在读取副屏状态…')}</p>}
@@ -601,8 +601,8 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
           <div className="virtual-screen-failure" role="alert">
             <TriangleAlert size={18} />
             <div>
-              <strong>{t('读不到副屏状态')}</strong>
-              <p>{t('这不代表副屏没有在运行：{0}', deviceState.reason || t('原生桥没有给出原因'))}</p>
+              <strong>{t('无法读取副屏状态')}</strong>
+              <p>{t('暂时无法确认副屏是否正在运行：{0}', deviceState.reason || t('未提供具体原因'))}</p>
               <button className="button button-secondary compact-button" type="button" onClick={() => { void readState() }}>
                 {t('重试')}
               </button>
@@ -617,11 +617,11 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
                 <dd>{deviceState.state.active ? t('运行中') : t('未运行')}</dd>
               </div>
               <div>
-                <dt>{t('会话 id')}</dt>
+                <dt>{t('会话 ID')}</dt>
                 <dd>{t(textOrUnknown(deviceState.state.sessionId))}</dd>
               </div>
               <div>
-                <dt>{t('displayId')}</dt>
+                <dt>{t('显示屏 ID')}</dt>
                 <dd>{t(formatReading(deviceState.state.displayId, ''))}</dd>
               </div>
               <div>
@@ -629,7 +629,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
                 <dd>{t(textOrUnknown(deviceState.state.targetPackage))}</dd>
               </div>
               <div>
-                <dt>{t('实际生效规格')}</dt>
+                <dt>{t('当前分辨率与 DPI')}</dt>
                 <dd>{t(specReading(deviceState.state))}</dd>
               </div>
               <div>
@@ -650,7 +650,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
               </div>
             </dl>
             <p className="settings-note">
-              {t('取不到读数时显示「未知」，不会补 0 或留空白；副屏前台应用也不拿主屏顶替。')}
+              {t('前台应用信息来自副屏，无法获取时显示「未知」。')}
             </p>
           </>
         )}
@@ -661,8 +661,8 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
         <div className="virtual-screen-failure" role="alert">
           <TriangleAlert size={18} />
           <div>
-            <strong>{t('读不到副屏设置')}</strong>
-            <p>{t('这里读不到设置时，界面不会假装它是默认值：{0}', settingsState.reason || t('原生桥没有给出原因'))}</p>
+            <strong>{t('无法读取副屏设置')}</strong>
+            <p>{t('无法读取已保存的副屏设置：{0}', settingsState.reason || t('未提供具体原因'))}</p>
             <button className="button button-secondary compact-button" type="button" onClick={() => { void readSettings() }}>
               {t('重试')}
             </button>
@@ -677,13 +677,13 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
               <span className="section-icon"><SlidersHorizontal size={19} /></span>
               <div>
                 <h3 id="virtual-screen-target-title">{t('目标应用')}</h3>
-                <p>{t('副屏只显示这一个应用的画面。')}</p>
+                <p>{t('选择要在副屏中启动的应用。')}</p>
               </div>
             </div>
             <p className="settings-note">
               {target === ''
-                ? t('还没有选择目标应用：副屏只会显示这个应用的画面，先选一个再启动。')
-                : t('将把 {0} 放到副屏运行。', target)}
+                ? t('请先选择目标应用，再启动副屏。')
+                : t('将在副屏中运行 {0}。', target)}
             </p>
             <ApplicationPicker
               bridge={bridge}
@@ -698,7 +698,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
               <span className="section-icon"><Monitor size={19} /></span>
               <div>
                 <h3 id="virtual-screen-orientation-title">{t('屏幕方向')}</h3>
-                <p>{t('「自动」按屏幕当前的物理方向决定。')}</p>
+                <p>{t('「自动」使用手机屏幕当前的方向。')}</p>
               </div>
             </div>
             <fieldset className="virtual-screen-fieldset" disabled={locked}>
@@ -726,13 +726,13 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
               <span className="section-icon"><Monitor size={19} /></span>
               <div>
                 <h3 id="virtual-screen-resolution-title">{t('分辨率')}</h3>
-                <p>{t('自适应时宽高与 DPI 由原生按屏幕与方向计算。')}</p>
+                <p>{t('根据手机屏幕的尺寸和方向，自动设置副屏宽高与 DPI。')}</p>
               </div>
             </div>
             <label className="toggle-row">
               <span>
                 <strong>{t('自适应（按屏幕与方向计算）')}</strong>
-                <small>{t('关掉后可以手填宽、高与 DPI。')}</small>
+                <small>{t('关闭后可手动输入宽度、高度和 DPI。')}</small>
               </span>
               <input
                 type="checkbox"
@@ -744,7 +744,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
               />
             </label>
             <p className="settings-note">
-              {t('关掉自适应后手填宽、高与 DPI：越界的值会就地夹到 {0}..{1}（宽高）或 {2}..{3}（DPI）。', VIRTUAL_SCREEN_MIN_EDGE, VIRTUAL_SCREEN_MAX_EDGE, VIRTUAL_SCREEN_MIN_DPI, VIRTUAL_SCREEN_MAX_DPI)}
+              {t('宽度和高度的允许范围为 {0}–{1} 像素，DPI 为 {2}–{3}；超出范围时会自动调整。', VIRTUAL_SCREEN_MIN_EDGE, VIRTUAL_SCREEN_MAX_EDGE, VIRTUAL_SCREEN_MIN_DPI, VIRTUAL_SCREEN_MAX_DPI)}
             </p>
             <div className="virtual-screen-spec">
               {SPEC_FIELDS.map(field => (
@@ -768,17 +768,17 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
             {specHint !== '' && <p className="virtual-screen-notice" role="status">{specHint}</p>}
             {!draft.adaptive && !specReady && !specCleared(draft) && (
               <p className="settings-note" role="status">
-                {t('宽、高、DPI 三项要一起填才会生效：只填其中一两项时，原生侧会当作没有自定义尺寸，改用预设规格。')}
+                {t('请完整填写宽度、高度和 DPI；只填写其中一两项时，本次尺寸修改不会保存。')}
               </p>
             )}
             {!draft.adaptive && specCleared(draft) && baseline !== null && !specCleared(baseline) && (
               <p className="settings-note" role="status">
-                {t('三项都会写回 0：保存后清掉自定义尺寸，改用按屏幕与方向算出的预设规格。')}
+                {t('保存后将清除自定义尺寸，下次启动时使用对应屏幕方向的预设尺寸。')}
               </p>
             )}
             {!draft.adaptive && specReady && (
               <p className="settings-note">
-                {t('原生启动时还会做一次二次收敛（只缩不放），所以实际生效的规格以状态区读数为准。')}
+                {t('启动时会根据设备限制缩小过大的尺寸，实际分辨率请查看上方的副屏状态。')}
               </p>
             )}
           </section>
@@ -788,7 +788,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
               <span className="section-icon"><Monitor size={19} /></span>
               <div>
                 <h3 id="virtual-screen-overlay-title">{t('悬浮窗大小')}</h3>
-                <p>{t('只设宽度：高度按副屏画面比例等比算出，不单独设置。')}</p>
+                <p>{t('设置宽度后，高度会按副屏画面的比例自动调整。')}</p>
               </div>
             </div>
             <p className="settings-note" role="status" aria-label={t('当前悬浮窗宽度')}>
@@ -821,10 +821,10 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
             </div>
             {overlayHint !== '' && <p className="virtual-screen-notice" role="status">{overlayHint}</p>}
             <p className="settings-note">
-              {t('原生会把宽度夹在 {0}..{1} 像素之间，再按屏幕尺寸夹一次；高度跟着画面比例等比缩放。', OVERLAY_WIDTH_MIN, OVERLAY_WIDTH_MAX)}
+              {t('宽度可设为 {0}–{1} 像素，实际大小受屏幕尺寸限制；高度会按画面比例自动调整。', OVERLAY_WIDTH_MIN, OVERLAY_WIDTH_MAX)}
             </p>
             <p className="settings-note">
-              {t('也可以直接拖动悬浮窗右下角的手柄调整大小，拖完点右上角「刷新」就能读回来。')}
+              {t('也可拖动悬浮窗右下角调整大小，再点击本页右上角的「刷新」查看新尺寸。')}
             </p>
           </section>
 
@@ -832,14 +832,14 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
             <div className="section-title">
               <span className="section-icon"><SlidersHorizontal size={19} /></span>
               <div>
-                <h3 id="virtual-screen-preview-title">{t('取帧档位')}</h3>
-                <p>{t('档位越高取帧越密、越耗电。')}</p>
+                <h3 id="virtual-screen-preview-title">{t('预览帧率')}</h3>
+                <p>{t('帧率越高，预览越流畅，耗电也越多。')}</p>
               </div>
             </div>
             <label className="field">
-              <span>{t('取帧档位')}</span>
+              <span>{t('预览帧率')}</span>
               <select
-                aria-label={t('取帧档位')}
+                aria-label={t('预览帧率')}
                 value={draft.previewMode}
                 disabled={locked}
                 onChange={event => {
@@ -852,7 +852,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
                 ))}
               </select>
             </label>
-            <p className="settings-note">{t('档位决定预览取帧节奏；虚拟屏实际刷新率以状态区的读数为准。')}</p>
+            <p className="settings-note">{t('此设置控制预览画面的采集频率。副屏实际刷新率请查看上方状态。')}</p>
           </section>
 
           <section className="settings-subsection" aria-labelledby="virtual-screen-follow-title">
@@ -860,7 +860,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
               <span className="section-icon"><SlidersHorizontal size={19} /></span>
               <div>
                 <h3 id="virtual-screen-follow-title">{t('自动跟随')}</h3>
-                <p>{t('主屏与副屏之间怎么联动。')}</p>
+                <p>{t('设置目标应用的自动切换方式。')}</p>
               </div>
             </div>
             <fieldset className="virtual-screen-fieldset" disabled={locked}>
@@ -894,7 +894,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
               {busy === 'save' ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
               {t('保存设置')}
             </button>
-            <span className="settings-note">{t('保存只写入偏好：实际生效的值以状态区读数为准。')}</span>
+            <span className="settings-note">{t('设置保存后，实际运行参数请查看上方的副屏状态。')}</span>
           </div>
           {saveFailure !== '' && <p className="virtual-screen-failure" role="alert">{saveFailure}</p>}
           {saveNotice !== '' && <p className="virtual-screen-notice" role="status">{t(saveNotice)}</p>}
@@ -944,14 +944,14 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
             onClick={() => { void openNativePage() }}
           >
             {busy === 'native' ? <Loader2 className="spin" size={18} /> : <Monitor size={18} />}
-            {t('打开系统副屏页面')}
+            {t('打开副屏预览')}
           </button>
         </div>
         <p className="settings-note">
-          {t('停止不需要设置读取成功：副屏在跑、页面读不到设置时也能停掉它。')}
+          {t('即使无法读取设置，也可尝试停止正在运行的副屏。')}
         </p>
         <p className="settings-note">
-          {t('「打开系统副屏页面」是预览与悬浮小窗用的那个原生页面；设置项都在本页，不用再回那里改。')}
+          {t('打开副屏预览可查看画面并使用悬浮窗；副屏设置可在本页调整。')}
         </p>
         {actionFailure !== '' && <p className="virtual-screen-failure" role="alert">{actionFailure}</p>}
         {actionNotice !== '' && <p className="virtual-screen-notice" role="status">{t(actionNotice)}</p>}
@@ -969,16 +969,16 @@ function orientationLabel(value: (typeof VIRTUAL_SCREEN_ORIENTATION_VALUES)[numb
 
 /** 自动跟随的中文标签。 */
 function autoFollowLabel(value: (typeof VIRTUAL_SCREEN_AUTO_FOLLOW_VALUES)[number]): string {
-  if (value === 'pull_back') return '拉回目标'
-  if (value === 'promote') return '提升副屏前台应用'
+  if (value === 'pull_back') return '移回副屏'
+  if (value === 'promote') return '跟随副屏当前应用'
   return '关闭'
 }
 
 /** 自动跟随的一句话解释；三种策略各自「做什么」与「不做什么」都写清楚。 */
 function autoFollowHint(value: (typeof VIRTUAL_SCREEN_AUTO_FOLLOW_VALUES)[number]): string {
-  if (value === 'pull_back') return '目标应用跑到主屏最前台时，把它拉回副屏继续显示。'
-  if (value === 'promote') return '副屏里切到别的应用时，把它提升为主屏前台；副屏停在桌面这类情况不做判断。'
-  return '不跟随：副屏一直显示你选的目标应用，不与主屏联动。'
+  if (value === 'pull_back') return '在主屏打开目标应用时，自动将它移回副屏。'
+  if (value === 'promote') return '在副屏切换到其他应用时，将其设为新的目标应用；本应用、桌面、输入法和系统界面除外。'
+  return '不自动切换目标应用，也不在主屏与副屏之间移动应用。'
 }
 
 /** 三格规格输入的中文标签（与无障碍名称同源）。 */

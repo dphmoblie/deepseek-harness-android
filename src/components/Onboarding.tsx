@@ -84,12 +84,12 @@ export function Onboarding({
               <h2 id="onboarding-title" className="onboarding-title"><Icon size={22} />{t(STEPS[step].title)}</h2>
               {step === 0 && (
                 <div className="onboarding-body">
-                  <p>{t("这是一个运行在")}<strong>{t("本机")}</strong> {t("的 Harness 控制台（DSH 移动版）：")}</p>
+                  <p>{t("DeepSeek Harness 移动版在本机运行 Ubuntu 环境，提供对话、终端和应用管理功能。")}</p>
                   <ul>
-                    <li>{t("Ubuntu 运行时与 Harness 只监听")}<code>127.0.0.1</code>{t("，不出设备；")}</li>
-                    <li>{t("模型密钥只保存在本机，不会回传到管理界面；")}</li>
-                    <li>{t("数据与审计都在应用私有目录，可随时重置；")}</li>
-                    <li>{t("容器内是")}<strong>{t("受限 root")}</strong>：<code>/system</code>、<code>/data</code> {t("等系统路径受 Android 保护，无法越权修改；访客内的改动只存在于应用私有目录，重置运行环境即清除。")}</li>
+                    <li>{t("Harness 的本地服务仅供本机访问；模型请求会发送给你配置的模型服务。")}</li>
+                    <li>{t("在此保存的模型密钥会在本机加密存储，供 Harness 连接模型服务使用；")}</li>
+                    <li>{t("运行环境和审计日志保存在应用私有目录中；")}</li>
+                    <li>{t("Ubuntu 内的 root 身份不等于手机 Root 权限，不能绕过 Android 限制修改系统文件。重置运行环境会清除其中的改动。")}</li>
                     <li>{t("已内置 Node.js、Python 3 与常用工具（busybox、jq、unzip）；gcc 等编译工具不在包内；")}</li>
                     <li>{t("如需访问手机文件或系统操作，请配合 Shizuku 设备 Shell。")}</li>
                   </ul>
@@ -97,14 +97,14 @@ export function Onboarding({
               )}
               {step === 1 && (
                 <div className="onboarding-body">
-                  <p>{t("首次使用需要安装 Ubuntu 运行环境（数百 MB）：内置包直接读取，远程来源可经 Wi-Fi 下载。")}</p>
+                  <p>{t("首次使用需要安装 Ubuntu 运行环境（数百 MB）。应用内置的安装包可离线安装；使用在线来源时，建议通过 Wi-Fi 下载。")}</p>
                   {!manifestConfigured(settings) && (
                     <p className="onboarding-warn">{t("尚未配置运行时下载地址：请先在「设置 → 运行与后台」填写清单地址与 SHA-256（两者必须成对）。")}</p>
                   )}
                   <p className="onboarding-status">
                     {t("当前状态：")}{installed ? t("已安装") + (runtime.phase === 'running' ? t(" · 运行中") : '') : runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting' ? t("正在安装…") : t("未安装")}
                   </p>
-                  <p className="onboarding-status">{t("运行时包里不带 C 编译器：装好后在「设置 → 版本管理」页的「运行时自检」里会如实报告 cc / gcc / clang、make、python3 是否可用，缺失只作为能力提示、不算故障。需要编译的项目请自行在运行时里准备工具链（apt 在包内，能否联网取包未经验证）。")}</p>
+                  <p className="onboarding-status">{t("运行环境未预装 C 编译器。安装后可在「设置 → 版本管理 → 运行时自检」查看可用工具；缺少可选工具不影响基本使用。如需编译代码，请自行安装所需工具链。")}</p>
                   <button className="button button-primary" type="button" disabled={busy !== null || installed} onClick={onInstall}>
                     {busy === 'install' ? <Loader2 className="spin" size={18} /> : <Blocks size={18} />}
                     {t("安装运行时")}</button>
@@ -130,7 +130,7 @@ export function Onboarding({
                   })
                   setApiKeyDraft('')
                 }}>
-                  <p>{t("选择模型供应商并保存 API Key。密钥在设备上加密保存，页面不会回显明文。")}</p>
+                  <p>{t("选择模型供应商并保存 API Key。密钥在本机加密保存，保存后不再显示。")}</p>
                   {!modelConfigured && (
                     <p className="onboarding-warn">{t("首次配置至少要保存一份模型 API Key：没有密钥时「打开 Harness」不可用。")}</p>
                   )}
@@ -184,9 +184,9 @@ export function Onboarding({
                 <div className="onboarding-body">
                   <p>{t("Shizuku 让「设备 Shell」终端以 shell 权限执行系统命令（可选，不影响 Ubuntu 终端）。")}</p>
                   <ul>
-                    <li>{t("需要安装 Shizuku 应用并完成一次性引导；")}</li>
+                    <li>{t("请先安装并启动 Shizuku，再为本应用授权；")}</li>
                     <li>{t("授权可随时在「设置」页撤销；")}</li>
-                    <li>{t("未授权时设备 Shell 相关功能自动禁用（fail-closed）。")}</li>
+                    <li>{t("获得授权后才能使用设备 Shell。")}</li>
                   </ul>
                   <div className="onboarding-actions-row">
                     {!shizuku.installed || !shizuku.running ? (
@@ -202,7 +202,7 @@ export function Onboarding({
               )}
               {step === 4 && (
                 <div className="onboarding-body">
-                  <p>{t("对话与设置界面都使用官方 Harness 前端：只补充了安全区与触控尺寸适配，页面结构、主题与交互保持上游原样；模型、推理强度与插件入口不会被移动端改写。")}</p>
+                  <p>{t("Harness 对话界面基于官方前端，已适配手机屏幕和触控操作。模型、推理强度等选项仍在 Harness 中设置。")}</p>
                   <p>{t("插件统一在设置页的「插件管理」中管理，应用不会静默关闭任何插件；需要更多插件时，可在 Harness 内的市场页面按需安装。")}</p>
                 </div>
               )}
@@ -210,7 +210,7 @@ export function Onboarding({
                 <div className="onboarding-body">
                   {modelConfigured ? (
                     <>
-                      <p>{t("一切就绪。打开 Harness 开始对话；随时返回本界面管理运行环境和终端。")}</p>
+                      <p>{t("已检测到模型配置。Harness 启动后即可开始对话，也可随时返回这里管理运行环境和终端。")}</p>
                       <div className="onboarding-actions-row">
                         <button className="button button-primary" type="button" disabled={busy !== null || runtime.phase !== 'running'} onClick={onOpenHarness}>
                           <Rocket size={18} />
@@ -219,11 +219,11 @@ export function Onboarding({
                     </>
                   ) : (
                     <>
-                      <p className="onboarding-warn">{t("还没配置模型 API Key，因此暂不打开 Harness：没有密钥时每一轮对话都会因缺少凭据失败。")}</p>
+                      <p className="onboarding-warn">{t("尚未检测到模型 API Key。请先配置密钥；如果已在 Harness 中配置，也可以直接打开。")}</p>
                       <ul>
-                        <li>{t("密钥加密保存在本机，页面不会回显明文，也不会回传到管理界面；")}</li>
+                        <li>{t("密钥在本机加密保存，保存后不再显示；")}</li>
                         <li>{t("配置成功后本步骤会出现「打开 Harness」按钮；")}</li>
-                        <li>{t("管理端只读取 Harness 凭据文件中的配置状态，不读取密钥内容；若凭据来自其他来源，也可以直接打开，但应用不会代你确认它是否可用。")}</li>
+                        <li>{t("应用只读取 Harness 中的密钥配置状态，无法确认密钥是否有效，也可能无法识别其他来源的凭据。")}</li>
                       </ul>
                       <div className="onboarding-actions-row">
                         <button className="button button-primary" type="button" disabled={busy !== null} onClick={() => setStep(2)}>

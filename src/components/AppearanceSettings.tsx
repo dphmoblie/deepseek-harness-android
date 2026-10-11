@@ -99,7 +99,7 @@ export function AppearanceSettings() {
       </div>
       {failed !== null && <p role="alert">{t(failed === 'accent' ? '无法保存强调色，请重试。' : '无法保存主题，请重试。')}</p>}
       <div className="appearance-customization">
-        <div className="appearance-accent-heading"><strong>{t('壳子背景与卡片')}</strong><span>{t('背景文件只保存在本机，不会上传。')}</span></div>
+        <div className="appearance-accent-heading"><strong>{t('应用背景与卡片')}</strong><span>{t('背景文件只保存在本机，不会上传。')}</span></div>
         <label className="field"><span>{t('背景图片或视频')}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm" onChange={event => {
           const file = event.target.files?.[0]
           if (!file) return
@@ -107,10 +107,10 @@ export function AppearanceSettings() {
           // React 异步回调不保留输入节点；下一次选择由系统选择器处理。
         }} /><small>{t('支持 PNG、JPG、WebP、GIF、MP4、WebM，最大 50 MB')}</small></label>
         <div className="appearance-range-grid">
-          <label className="range-field"><span><strong>{t('卡片通透度')}</strong><small>{card.opacity}%</small></span><input type="range" min="30" max="100" step="1" value={card.opacity} onChange={event => { const next = { ...card, opacity: Number(event.target.value) }; updateCard(next) }} /></label>
-          <label className="range-field"><span><strong>{t('卡片模糊')}</strong><small>{card.blur}px</small></span><input type="range" min="0" max="24" step="1" value={card.blur} onChange={event => { const next = { ...card, blur: Number(event.target.value) }; updateCard(next) }} /></label>
+          <label className="range-field"><span><strong>{t('卡片不透明度')}</strong><small>{card.opacity}%</small></span><input type="range" min="30" max="100" step="1" value={card.opacity} onChange={event => { const next = { ...card, opacity: Number(event.target.value) }; updateCard(next) }} /></label>
+          <label className="range-field"><span><strong>{t('卡片背景模糊')}</strong><small>{card.blur}px</small></span><input type="range" min="0" max="24" step="1" value={card.blur} onChange={event => { const next = { ...card, blur: Number(event.target.value) }; updateCard(next) }} /></label>
         </div>
-        <label className="field"><span>{t('卡片主体颜色')}</span><input type="color" value={card.color || (resolved === 'dark' ? '#171d24' : '#ffffff')} onChange={event => { const next = { ...card, color: event.target.value }; updateCard(next) }} /><button type="button" className="compact-button" onClick={() => { updateCard({ ...DEFAULT_CARD }); void clearBackground().catch(() => setBackgroundError(t('无法清除背景，请重试'))) }}><RotateCcw size={16} />{t('恢复默认')}</button></label>
+        <label className="field"><span>{t('卡片背景色')}</span><input type="color" value={card.color || (resolved === 'dark' ? '#171d24' : '#ffffff')} onChange={event => { const next = { ...card, color: event.target.value }; updateCard(next) }} /><button type="button" className="compact-button" onClick={() => { updateCard({ ...DEFAULT_CARD }); void clearBackground().catch(() => setBackgroundError(t('无法清除背景，请重试'))) }}><RotateCcw size={16} />{t('恢复默认')}</button></label>
         {backgroundError && <p role="alert">{t(backgroundError)}</p>}
       </div>
     </section>

@@ -18,7 +18,7 @@ const errorMessages: Record<string, string> = {  RUNTIME_BUSY: '请先停止 Har
   PLUGIN_GROUP_DISABLED: '请先启用所属配置文件',
   // 导入与回滚的受控失败：这些码由原生与访客侧共同定义，文案只讲"下一步做什么"。
   PLUGIN_SOURCE_INVALID: '这个来源地址不可用，请填 npm 包名或 https 地址',
-  PLUGIN_IMPORT_UNRESOLVED: '无法确定导入的是哪个插件，请填上期望的包名或改用包名再试一次',
+  PLUGIN_IMPORT_UNRESOLVED: '无法确定导入的是哪个插件，请填上预期包名或改用包名再试一次',
   PLUGIN_GIT_MISSING: '当前运行时没有 git，请改用 npm 包名或 https 直链',
   PLUGIN_GIT_UNVERIFIED: '暂时无法确认运行环境是否支持 git，请稍后重试或改用 https 直链',
   PLUGIN_DATA_TOO_LARGE: '插件数据超过 16 MiB，请清理插件数据后重试（原版本保持不变）',
@@ -103,17 +103,17 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
     <div className="plugin-stop"><span>{t('修改插件前请先停止 Harness 和 Ubuntu 终端；改动在下次启动时生效。')}</span><button className="button button-danger-quiet compact-button" type="button" disabled={busy} onClick={() => { void stop() }}>{t('停止运行环境')}</button></div>
     {/* 受控导入：来源形态在原生与访客两侧各校验一次，这里只负责收集与提示，不做任何解析。 */}
     <section className="plugin-import" aria-labelledby="plugin-import-title">
-      <h2 id="plugin-import-title">{t('从 npm 包名或连接地址导入')}</h2>
-      <p className="plugin-description">{t('支持三种来源：npm 包名、https 直链 tarball、git+https 仓库地址。安装脚本一律不执行；来源不合格会在本机被拒绝，不会下载或回显你填的内容。')}</p>
+      <h2 id="plugin-import-title">{t('通过 npm 包名或链接导入')}</h2>
+      <p className="plugin-description">{t('支持 npm 包名、HTTPS 压缩包直链和 git+https 仓库地址。导入时不执行包内的安装脚本；来源校验不通过时不会下载。')}</p>
       <div className="plugin-import-row">
         <input type="text" aria-label={t('插件来源')} placeholder={t('例如插件包名，或 https://…/plugin.tgz')} value={source} disabled={busy} onChange={event => setSource(event.target.value)} />
         <button className="button compact-button" type="button" disabled={busy || locked || source.trim() === ''} onClick={() => { void run({ operation: 'import', source: source.trim(), ...(expected.trim() === '' ? {} : { id: expected.trim() }) }) }}>{t('导入')}</button>
       </div>
       <label className="plugin-import-expected">
-        <span>{t('期望的包名（可选）')}</span>
-        <input type="text" aria-label={t('期望的包名')} value={expected} disabled={busy} onChange={event => setExpected(event.target.value)} />
+        <span>{t('预期包名（可选）')}</span>
+        <input type="text" aria-label={t('预期包名')} value={expected} disabled={busy} onChange={event => setExpected(event.target.value)} />
       </label>
-      <p className="plugin-hint">{t('只有地址形态需要「期望的包名」：装完后用它核对装的是不是这个包，出现多个候选时也靠它消歧。')}</p>
+      <p className="plugin-hint">{t('通过链接导入时，可填写预期包名，以核对安装结果；如果链接中有多个插件包，可用它指定要安装的包。')}</p>
     </section>
     {notice && <p className="plugin-notice" role={failed ? 'alert' : 'status'}>{t(notice)}{noticeDetail !== '' && `（${noticeDetail}）`}</p>}
     {busy && <p role="status">{t('正在处理插件，请稍候')}</p>}

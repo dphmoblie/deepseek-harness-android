@@ -71,7 +71,7 @@ describe('插件导入与回滚', () => {
     const bridge = setup()
     await screen.findByRole('button', { name: '导入' })
     fireEvent.change(screen.getByRole('textbox', { name: '插件来源' }), { target: { value: 'https://example.com/plugin.tgz' } })
-    fireEvent.change(screen.getByRole('textbox', { name: '期望的包名' }), { target: { value: 'dsh-plugin-example' } })
+    fireEvent.change(screen.getByRole('textbox', { name: '预期包名' }), { target: { value: 'dsh-plugin-example' } })
     fireEvent.click(screen.getByRole('button', { name: '导入' }))
     await waitFor(() => expect(bridge.managePlugins).toHaveBeenCalledWith({ operation: 'import', source: 'https://example.com/plugin.tgz', id: 'dsh-plugin-example' }))
   })

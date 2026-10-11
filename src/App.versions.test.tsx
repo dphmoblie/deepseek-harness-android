@@ -193,7 +193,7 @@ describe('版本管理：安装前的自动备份结论', () => {
   it('淘汰了旧备份要说清淘汰了几份', async () => {
     await confirmInstall({ status: 'created', snapshotId, evictedIds: ['snap-a', 'snap-b'] })
 
-    expect(await screen.findByText(`安装前已自动备份会话（${snapshotId}）；因超出保留上限，淘汰了 2 份最旧的备份。`)).toBeVisible()
+    expect(await screen.findByText(`安装前已自动备份会话（${snapshotId}）；为满足保留限制，已删除 2 份最旧的备份。`)).toBeVisible()
   })
 
   it('没有会话可备份时用原生给的原因，不报成失败', async () => {
@@ -230,9 +230,9 @@ describe('版本管理：会话备份', () => {
     bridge.getState.mockResolvedValue({ ...readyState })
     await openVersionsPage()
 
-    expect(await screen.findByText('还没有会话备份。可以现在拍一份，也可以在安装运行时前由应用自动拍。')).toBeVisible()
+    expect(await screen.findByText('暂无会话备份。你可以手动创建，也可以等应用在安装运行环境前自动备份。')).toBeVisible()
     expect(bridge.getRuntimeSessionSnapshotState).toHaveBeenCalledTimes(1)
-    expect(screen.getByText(/最多保留 3 份、合计 512 MB/)).toBeVisible()
+    expect(screen.getByText(/最多保留 3 份备份，总大小不超过 512 MB/)).toBeVisible()
   })
 
   it('可以现在备份一次，备份完成后列表出现那一份', async () => {
@@ -259,7 +259,7 @@ describe('版本管理：会话备份', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '恢复' }))
 
-    expect(await screen.findByText('会话已恢复：回填 3 个文件，跳过 2 个已存在的文件。')).toBeVisible()
+    expect(await screen.findByText('会话恢复完成：恢复 3 个文件，跳过 2 个已存在的文件。')).toBeVisible()
     expect(bridge.restoreRuntimeSessionSnapshot).toHaveBeenCalledWith(snapshotId)
   })
 

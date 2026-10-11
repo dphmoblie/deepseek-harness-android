@@ -44,7 +44,7 @@ describe('运行时占用卡片', () => {
     card({ getRuntimeResidue: get })
 
     await screen.findByText(/可回收的残留：5 份，共 5\.0 GB/)
-    await screen.findByText('体积统计因条目上限提前停止，上面的数字只是下界。')
+    await screen.findByText('文件较多，未能统计全部大小；实际占用可能更大。')
   })
 
   it('点清理先要二次确认，确认后才调用桥，并在清理后重新查一次剩余量', async () => {
@@ -99,7 +99,7 @@ describe('运行时占用卡片', () => {
     await clickThroughConfirmation()
     await screen.findByText(/仍有 1 份未清理，详见诊断与日志。/)
     // 原生侧那句话是**连在标签后面**渲染的（同一个 <p> 里的两个文本节点），所以按正则找整句。
-    expect(screen.getByText(/原生侧说明：已回收 2 份，1 份未能删除，详见诊断与日志/)).toBeTruthy()
+    expect(screen.getByText(/清理详情：已回收 2 份，1 份未能删除，详见诊断与日志/)).toBeTruthy()
     // 还剩 1 份，所以按钮仍然可用——这一次清理没有被说成「已清干净」。
     expect(screen.getByRole('button', { name: '清理残留' })).toBeEnabled()
   })

@@ -95,10 +95,10 @@ describe('目标应用副屏设置页', () => {
       getVirtualScreenState: vi.fn().mockResolvedValue(state()),
     })
     render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
-    const mode = await screen.findByRole('combobox', { name: '取帧档位' })
+    const mode = await screen.findByRole('combobox', { name: '预览帧率' })
     expect(mode).toHaveValue('165fps')
     expect(screen.getByRole('radio', { name: '横屏' })).toBeChecked()
-    expect(screen.getByRole('radio', { name: '拉回目标' })).toBeChecked()
+    expect(screen.getByRole('radio', { name: '移回副屏' })).toBeChecked()
     expect(screen.getByRole('switch', { name: '自适应（按屏幕与方向计算）' })).toBeChecked()
     expect(screen.getByRole('button', { name: '从已安装应用选择' })).toBeEnabled()
     // 还没选目标应用：启动与重启都不可点，停止不受影响（副屏可能在别处已经跑起来了）。
@@ -113,11 +113,11 @@ describe('目标应用副屏设置页', () => {
       getVirtualScreenState: vi.fn().mockRejectedValue(new Error('副屏状态读取被拒绝')),
     })
     render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
-    expect(await screen.findByText('读不到副屏设置')).toBeInTheDocument()
-    expect(screen.getByText('这里读不到设置时，界面不会假装它是默认值：副屏设置读取被拒绝')).toBeInTheDocument()
-    expect(screen.getByText('读不到副屏状态')).toBeInTheDocument()
+    expect(await screen.findByText('无法读取副屏设置')).toBeInTheDocument()
+    expect(screen.getByText('无法读取已保存的副屏设置：副屏设置读取被拒绝')).toBeInTheDocument()
+    expect(screen.getByText('无法读取副屏状态')).toBeInTheDocument()
     // 「读不到」与「没在运行」是两回事，文案必须说清。
-    expect(screen.getByText('这不代表副屏没有在运行：副屏状态读取被拒绝')).toBeInTheDocument()
+    expect(screen.getByText('暂时无法确认副屏是否正在运行：副屏状态读取被拒绝')).toBeInTheDocument()
     expect(screen.queryByRole('combobox')).toBeNull()
     expect(screen.queryByText('未运行')).toBeNull()
   })
@@ -130,7 +130,7 @@ describe('目标应用副屏设置页', () => {
       setVirtualScreenSettings: save,
     })
     render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
-    const mode = await screen.findByRole('combobox', { name: '取帧档位' })
+    const mode = await screen.findByRole('combobox', { name: '预览帧率' })
     fireEvent.change(mode, { target: { value: '30fps' } })
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     // 只发改过的那一项：没动过的字段重发等于用界面值覆盖别处刚改的设置。
@@ -171,16 +171,16 @@ describe('目标应用副屏设置页', () => {
     })
     render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
     expect(await screen.findByText('运行中')).toBeInTheDocument()
-    expect(reading('会话 id')).toBe('virtual-7')
-    expect(reading('displayId')).toBe('42')
+    expect(reading('会话 ID')).toBe('virtual-7')
+    expect(reading('显示屏 ID')).toBe('42')
     expect(reading('目标应用')).toBe('com.example.target')
-    expect(reading('实际生效规格')).toBe('726×1600 @ 320 DPI')
+    expect(reading('当前分辨率与 DPI')).toBe('726×1600 @ 320 DPI')
     expect(reading('采集帧率')).toBe('60 FPS')
     expect(reading('虚拟屏实际刷新率')).toBe('60 Hz')
     expect(reading('副屏当前前台应用')).toBe('com.example.target')
     expect(reading('副屏当前前台 Activity')).toBe('com.example.target/.MainActivity')
     // 运行中的目标应用会预填到目标选择里，用户不用再选一遍。
-    expect(screen.getByText('将把 com.example.target 放到副屏运行。')).toBeInTheDocument()
+    expect(screen.getByText('将在副屏中运行 com.example.target。')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '启动副屏' })).toBeEnabled()
   })
 
@@ -192,7 +192,7 @@ describe('目标应用副屏设置页', () => {
     render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
     await screen.findByText('运行中')
     // 会话 id、displayId、目标应用、实际规格、帧率、刷新率、前台应用与 Activity 全是「取不到」。
-    const unknownRows = ['会话 id', 'displayId', '目标应用', '实际生效规格', '采集帧率', '虚拟屏实际刷新率', '副屏当前前台应用', '副屏当前前台 Activity']
+    const unknownRows = ['会话 ID', '显示屏 ID', '目标应用', '当前分辨率与 DPI', '采集帧率', '虚拟屏实际刷新率', '副屏当前前台应用', '副屏当前前台 Activity']
     for (const label of unknownRows) {
       expect(reading(label), label).toBe('未知')
     }
@@ -247,13 +247,13 @@ describe('目标应用副屏设置页', () => {
     const width = await screen.findByRole('spinbutton', { name: '副屏宽度' })
     fireEvent.change(width, { target: { value: '99999' } })
     expect(width).toHaveValue(4096)
-    expect(screen.getByText('宽 超出范围，已夹取到 4096。')).toBeInTheDocument()
+    expect(screen.getByText('宽超出允许范围，已自动调整为 4096。')).toBeInTheDocument()
     // 低于下限不立刻夹：否则打到「3」就被改成 200，数字根本没法打完。
     fireEvent.change(width, { target: { value: '10' } })
     expect(width).toHaveValue(10)
     fireEvent.blur(width)
     expect(width).toHaveValue(200)
-    expect(screen.getByText('宽 超出范围，已夹取到 200。')).toBeInTheDocument()
+    expect(screen.getByText('宽超出允许范围，已自动调整为 200。')).toBeInTheDocument()
   })
 
   it('规格只填一两项时保存不发尺寸，并在旁边说明为什么不生效', async () => {
@@ -268,8 +268,8 @@ describe('目标应用副屏设置页', () => {
     fireEvent.change(width, { target: { value: '3000' } })
     fireEvent.blur(width)
     // 只填了宽这一项：这时才该说明「三项要一起填」。
-    expect(screen.getByText('宽、高、DPI 三项要一起填才会生效：只填其中一两项时，原生侧会当作没有自定义尺寸，改用预设规格。')).toBeInTheDocument()
-    fireEvent.change(screen.getByRole('combobox', { name: '取帧档位' }), { target: { value: '144fps' } })
+    expect(screen.getByText('请完整填写宽度、高度和 DPI；只填写其中一两项时，本次尺寸修改不会保存。')).toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox', { name: '预览帧率' }), { target: { value: '144fps' } })
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     await waitFor(() => expect(save).toHaveBeenCalledWith({ previewMode: '144fps' }))
   })
@@ -290,7 +290,7 @@ describe('目标应用副屏设置页', () => {
       fireEvent.blur(input)
       expect((input as HTMLInputElement).value).toBe('')
     }
-    expect(await screen.findByText('三项都会写回 0：保存后清掉自定义尺寸，改用按屏幕与方向算出的预设规格。')).toBeInTheDocument()
+    expect(await screen.findByText('保存后将清除自定义尺寸，下次启动时使用对应屏幕方向的预设尺寸。')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     await waitFor(() => expect(save).toHaveBeenCalledWith({ widthPx: 0, heightPx: 0, densityDpi: 0 }))
   })
@@ -374,18 +374,18 @@ describe('目标应用副屏设置页', () => {
     const width = await screen.findByRole('spinbutton', { name: '悬浮窗宽度' })
     fireEvent.change(width, { target: { value: '99999' } })
     expect(width).toHaveValue(4096)
-    expect(screen.getByText('悬浮窗宽度超出范围，已夹取到 4096。')).toBeInTheDocument()
+    expect(screen.getByText('悬浮窗宽度超出允许范围，已自动调整为 4096。')).toBeInTheDocument()
     // 低于下限不立刻夹：否则 1200 打到「1」就被改成 120，数字根本没法打完。
     fireEvent.change(width, { target: { value: '10' } })
     expect(width).toHaveValue(10)
     fireEvent.blur(width)
     expect(width).toHaveValue(120)
-    expect(screen.getByText('悬浮窗宽度超出范围，已夹取到 120。')).toBeInTheDocument()
+    expect(screen.getByText('悬浮窗宽度超出允许范围，已自动调整为 120。')).toBeInTheDocument()
     // 负数按原生口径收敛成 0（清掉自定义宽度），不是夹到下限 120。
     fireEvent.change(width, { target: { value: '-20' } })
     fireEvent.blur(width)
     expect((width as HTMLInputElement).value).toBe('')
-    expect(screen.getByText('悬浮窗宽度只看正数，已改回跟随屏幕。')).toBeInTheDocument()
+    expect(screen.getByText('悬浮窗宽度须大于 0，已恢复为跟随屏幕大小。')).toBeInTheDocument()
     expect(screen.getByText('跟随屏幕')).toBeInTheDocument()
   })
 
@@ -451,8 +451,8 @@ describe('目标应用副屏设置页', () => {
       openVirtualScreen: vi.fn().mockRejectedValue(new Error('目标应用副屏需要 Android 10 以上设备与 Shizuku')),
     })
     render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
-    fireEvent.click(await screen.findByRole('button', { name: '打开系统副屏页面' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('无法打开副屏页面，请确认当前使用安卓壳且系统为 Android 10 或更高版本')
+    fireEvent.click(await screen.findByRole('button', { name: '打开副屏预览' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('无法打开副屏预览，请在 Android 10 或更高版本的设备上使用本应用')
   })
 })
 

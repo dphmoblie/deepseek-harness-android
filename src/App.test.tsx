@@ -256,7 +256,7 @@ describe('App conversation gate', () => {
     for (let index = 0; index < 5; index += 1) {
       fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
     }
-    expect(screen.getByText(/还没配置模型 API Key/)).toBeVisible()
+    expect(screen.getByText(/尚未检测到模型 API Key/)).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: /我已在 Harness 内配置过/ }))
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
@@ -265,7 +265,7 @@ describe('App conversation gate', () => {
     await waitFor(() => expect(bridge.getSettings).toHaveBeenCalledTimes(2))
     const onboarding = screen.getByRole('dialog', { name: '开始使用' })
     expect(within(onboarding).getByRole('button', { name: /^打开 Harness$/ })).toBeVisible()
-    expect(within(onboarding).queryByText(/还没配置模型 API Key/)).toBeNull()
+    expect(within(onboarding).queryByText(/尚未检测到模型 API Key/)).toBeNull()
   })
 
   it('keeps Shizuku disconnected until the user explicitly reconnects it', async () => {
