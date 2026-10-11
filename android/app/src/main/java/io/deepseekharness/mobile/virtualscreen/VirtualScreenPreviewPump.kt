@@ -28,11 +28,19 @@ internal class VirtualScreenPreviewPump(
     /** 本拍开始时刻（由 [fetchStarted] 记下）：续排延迟要用它扣掉本拍耗时。 */
     private var startedAtMillis = 0L
 
+    /**
+     * 本拍是否已经开始。`startedAtMillis` 的 0 是「还没开始」的哨兵，而真机时钟是
+     * `SystemClock.elapsedRealtime`（开机至今的毫秒数，通常很大），只靠它区分不出「还没开始」
+     * 与「本拍刚开始」——不加这个标志，`start` 之后到 [fetchStarted] 之间会把设备开机至今算成一拍。
+     */
+    private var beatStarted = false
+
     /** 开始取帧：投递首拍，只有首次返回 true —— 重挂或重复调用不会复制出第二条拍子。 */
     fun start(): Boolean {
         if (running) return false
         running = true
         startedAtMillis = 0L
+        beatStarted = false
         // 首拍等价于原来的 `Handler.post(tick)`：Handler 里 post(r) 就是 postDelayed(r, 0)。
         postDelayed(0L, beat)
         return true
@@ -47,8 +55,18 @@ internal class VirtualScreenPreviewPump(
     /** 本拍开始：记下起始时刻并返回它（本拍的取帧与上屏耗时随后从这里扣）。 */
     fun fetchStarted(): Long {
         startedAtMillis = now()
+        beatStarted = true
         return startedAtMillis
     }
+
+    /**
+     * 从本拍开始到此刻的耗时（毫秒）；还没开始过任何一拍时返回 0。
+     *
+     * 与 [fetchLanded] 内部算延迟用的是同一起点，所以「预算记账」与「续排延迟」量的是同一件事：
+     * 把这行读数拿去和档位间隔比，就是 [VirtualScreenPreviewBudget] 判超预算的依据。
+     */
+    fun elapsedMillis(): Long =
+        if (!beatStarted) 0L else (now() - startedAtMillis).coerceAtLeast(0L)
 
     /**
      * 本拍落地：按档位续排下一拍并返回延迟毫秒数。

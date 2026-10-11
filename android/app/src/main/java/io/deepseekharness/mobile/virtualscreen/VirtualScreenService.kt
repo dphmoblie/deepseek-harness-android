@@ -812,6 +812,12 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     )
     private val inputBusy = AtomicBoolean(false)
     /**
+     * 副屏预览的性能预算记账（纯 Kotlin，见 [VirtualScreenPreviewBudget]）：每一拍记一次实际耗时与
+     * 当刻档位允许的预算，偏慢时把说明并到画面状态行上——档位写着 60fps、实测只有一半帧率时，
+     * 用户需要看到的是「跟不上档位」，而不是自己去把两个数字对一遍。
+     */
+    private val budget = VirtualScreenPreviewBudget()
+    /**
      * 拖动端口：悬浮小窗会装上它，原生预览页不装 —— 于是预览页里的手势语义与改造前完全一致。
      */
     var dragHost: VirtualScreenDragHost? = null
@@ -879,6 +885,15 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         setBackgroundColor(android.graphics.Color.BLACK)
         contentDescription = "目标应用副屏画面，支持点击和滑动"
         setOnTouchListener(touchListener)
+    }
+
+    /**
+     * 画面状态行 + 预算说明（读得出来时才加）：偏慢这件事必须和画面读数同一行，
+     * 否则用户得自己去把帧率与档位对一遍才知道跟不上。
+     */
+    private fun reportFrame(line: String, beat: PreviewBudgetSnapshot) {
+        val note = previewBudgetNote(beat)
+        report(if (note == null) line else line + note)
     }
 
     /**
@@ -1032,6 +1047,8 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                         ),
                         SystemClock.elapsedRealtime(),
                     )
+                    // 本拍从开始取帧到画面回到主线程花了多久：与续排延迟同一起点（见 pump.elapsedMillis）。
+                    val beat = budget.record(mode, pump.elapsedMillis())
                     when (result.action) {
                         VirtualScreenPolicy.PreviewFrameAction.SHOW -> {
                             bitmap?.let {
@@ -1041,13 +1058,13 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                                 setImageBitmap(it); displayed = it
                                 oldHardware?.close()
                             }
-                            report(result.line)
+                            reportFrame(result.line, beat)
                         }
                         VirtualScreenPolicy.PreviewFrameAction.KEEP -> {
                             // 接近纯色的新帧或这一拍读不到帧：保留最近一张非空白画面（绝不清屏），也不动画面时刻。
                             fetchedHardware?.close()
                             fetchedHardware = null
-                            report(result.line)
+                            reportFrame(result.line, beat)
                         }
                         VirtualScreenPolicy.PreviewFrameAction.CLEAR -> {
                             fetchedHardware?.close()
@@ -1096,6 +1113,8 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         }
         // 临时重挂保持同代号：在途帧负责续排下一拍，排队中的 UP 也必须执行。
         if (lifecycle.attach()) {
+            // 重新挂回意味着取帧线程池可能刚建、首帧要现解码：旧窗口的读数不能代表现在。
+            budget.reset()
             pump.start()
         }
     }

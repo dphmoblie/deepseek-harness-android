@@ -112,4 +112,42 @@ class VirtualScreenPreviewPumpTest {
         }
         assertEquals(listOf(0L, 4L, 3L, 1L, 1L, 1L), main.delays)
     }
+
+    @Test fun `尚未开始取帧时本拍耗时读数为零`() {
+        val main = FakeMain()
+        assertEquals("新建的拍子还没开始过任何一拍", 0L, main.pump.elapsedMillis())
+
+        // 真机时钟是开机至今的毫秒数：start 之后到首拍真正开始取帧之间不能把开机时长算成一拍。
+        main.nowMillis = 987_654L
+        main.pump.start()
+        assertEquals("start 只投递拍子，还没取帧", 0L, main.pump.elapsedMillis())
+
+        main.pump.stop()
+        assertEquals("停了之后上一拍的读数也不该续用", 0L, main.pump.elapsedMillis())
+    }
+
+    @Test fun `本拍耗时与续排用的扣减值同源`() {
+        val main = FakeMain()
+        main.pump.start()
+        main.nowMillis = 1_000L
+        main.pump.fetchStarted()
+        assertEquals("刚取帧时耗时为 0", 0L, main.pump.elapsedMillis())
+
+        main.nowMillis += 7L
+        assertEquals(7L, main.pump.elapsedMillis())
+        // 30fps 档间隔 33 毫秒：续排延迟必须正好是「间隔 − 同一行耗时」，否则预算记账与调度会各说各话。
+        assertEquals(VirtualScreenPolicy.previewPullDelay("30fps", 7L), main.pump.fetchLanded("30fps"))
+        assertEquals(26L, main.delays.last())
+    }
+
+    @Test fun `时钟倒退时本拍耗时夹到零`() {
+        val main = FakeMain()
+        main.pump.start()
+        main.nowMillis = 5_000L
+        main.pump.fetchStarted()
+
+        // 假时钟被人为拨回去（真机上对应计时器异常）：耗时不能变成负数，否则会记进「超预算」的黑账。
+        main.nowMillis = 4_000L
+        assertEquals(0L, main.pump.elapsedMillis())
+    }
 }
