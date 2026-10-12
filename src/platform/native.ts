@@ -48,11 +48,13 @@ import {
   validateAllFilesAccessResult,
   validateAppUpdateState,
   assertAccessibilityAutomationAction,
+  assertAccessibilityAutomationAppConfigInput,
   assertAccessibilityAutomationRuleInput,
   assertAccessibilityPackageName,
   assertAccessibilityRuleId,
   assertAccessibilityRuleWriteMode,
   assertBooleanFlag,
+  validateAccessibilityAutomationAppConfigDetail,
   validateAccessibilityAutomationRuleDetail,
   validateAccessibilityAutomationRules,
   validateAccessibilityAutomationRuns,
@@ -175,6 +177,20 @@ interface NativeRuntimePlugin {
   }): Promise<unknown>
   /** 删除一条规则；找不到就报错，不做静默成功。 */
   deleteAccessibilityAutomationRule(options: { packageName: string; ruleId: string }): Promise<unknown>
+  /**
+   * 读某个应用的自动化参数（按应用暂停开关 + 默认值）；只读，白名单外的包也读得出。
+   *
+   * 坏数据不抛错：原生把它按「已暂停」返回并带上 `corrupt`，由界面说明。
+   */
+  getAccessibilityAutomationAppConfig(options: { packageName: string }): Promise<unknown>
+  /** 整条覆盖某个应用的自动化参数（四个字段全给，不合并）；白名单外的包原生侧拒写。 */
+  setAccessibilityAutomationAppConfig(options: {
+    packageName: string
+    paused: boolean
+    defaultMaxActions: number
+    defaultActionCoolDownMs: number
+    defaultMatchDelayMs: number
+  }): Promise<unknown>
   openAccessibilitySettings(): Promise<void>
   getKeepAliveState(): Promise<KeepAliveState>
   requestNotificationPermission(): Promise<NotificationPermissionResult>
@@ -409,6 +425,43 @@ function createNativeBridge(): RuntimeBridge {
       }))
       .then(options => NativeRuntime.deleteAccessibilityAutomationRule(options))
       .then(validateAccessibilityAutomationRules),
+    // 每应用参数：读是只读（坏数据也不抛错，原生按「已暂停」返回并带 corrupt），写是整条替换。
+    // 两边都先自检包名——写参数的路径上「包名写错」与写规则一样代价很大。
+    getAccessibilityAutomationAppConfig: packageName => Promise.resolve()
+      .then(() => ({ owner: assertAccessibilityPackageName(packageName) }))
+      .then(({ owner }) =>
+        NativeRuntime.getAccessibilityAutomationAppConfig({ packageName: owner }).then(value =>
+          validateAccessibilityAutomationAppConfigDetail(value, owner),
+        ),
+      ),
+    // 四个字段全给：这里不做「缺省补默认值」，缺了就在上桥前报错（原生也会拒收）。
+    setAccessibilityAutomationAppConfig: ({
+      packageName,
+      paused,
+      defaultMaxActions,
+      defaultActionCoolDownMs,
+      defaultMatchDelayMs,
+    }) => Promise.resolve()
+      .then(() => {
+        const owner = assertAccessibilityPackageName(packageName)
+        return {
+          owner,
+          options: {
+            packageName: owner,
+            ...assertAccessibilityAutomationAppConfigInput({
+              paused,
+              defaultMaxActions,
+              defaultActionCoolDownMs,
+              defaultMatchDelayMs,
+            }),
+          },
+        }
+      })
+      .then(({ owner, options }) =>
+        NativeRuntime.setAccessibilityAutomationAppConfig(options).then(value =>
+          validateAccessibilityAutomationAppConfigDetail(value, owner),
+        ),
+      ),
     openAccessibilitySettings: () => NativeRuntime.openAccessibilitySettings(),
     getKeepAliveState: () => NativeRuntime.getKeepAliveState().then(validateKeepAliveState),
     requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),

@@ -278,6 +278,17 @@ describe('浏览器桥的自动化总开关与运行记录', () => {
       ruleId: 'rule-1',
       enabled: false,
     })).rejects.toThrow('浏览器预览不能修改无障碍规则')
+    // 每应用参数同样不编：回一份默认值（没暂停、上限 1）看起来像真读了，
+    // 而用户在这里点保存就是拿预览里的假数字覆盖真机。
+    await expect(bridge.getAccessibilityAutomationAppConfig({ packageName: 'com.example.reader' }))
+      .rejects.toThrow('浏览器预览没有每应用自动化参数')
+    await expect(bridge.setAccessibilityAutomationAppConfig({
+      packageName: 'com.example.reader',
+      paused: true,
+      defaultMaxActions: 2,
+      defaultActionCoolDownMs: 1000,
+      defaultMatchDelayMs: 200,
+    })).rejects.toThrow('浏览器预览不能修改每应用自动化参数')
   })
 
   it('写规则前的入参自检照常生效：包名、规则标识与布尔值都在过桥前拦下', async () => {
@@ -297,6 +308,16 @@ describe('浏览器桥的自动化总开关与运行记录', () => {
       ruleId: 'rule-1',
       enabled: 'yes',
     })).rejects.toThrow('规则启用状态格式无效')
+    // 写参数的自检也照走：包名与四个字段都在过桥前拦下（预览里同样不该把明显越界的数字当合法）。
+    await expect(bridge.getAccessibilityAutomationAppConfig({ packageName: 'not a package' }))
+      .rejects.toThrow('无障碍白名单第 1 项无效')
+    await expect(bridge.setAccessibilityAutomationAppConfig({
+      packageName: 'com.example.reader',
+      paused: true,
+      defaultMaxActions: 100,
+      defaultActionCoolDownMs: 1000,
+      defaultMatchDelayMs: 200,
+    })).rejects.toThrow('默认动作上限必须在 1 到 99 之间')
   })
 })
 

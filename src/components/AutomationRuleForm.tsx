@@ -77,12 +77,28 @@ interface RuleDraft {
   action: ActionDraft
 }
 
+/**
+ * 新建规则表单的三个数字初值。
+ *
+ * 形状与「每应用参数」读数里的三个 `default*` 一致，由 App 从读数里取出来传进来；
+ * 调用方没读到参数时**不传**，由表单回落到原生默认值（1 / 3000 / 0）。
+ * 这份回落只是**表单初值**：它不会把任何「没读到的读数」当成真相显示给用户看——
+ * 用户看到的始终是自己填进输入框的数字。
+ */
+export interface AutomationRuleDefaults {
+  maxActions: number
+  actionCoolDownMs: number
+  matchDelayMs: number
+}
+
 export interface AutomationRuleFormProps {
   /** 当前查看的包名。写入请求必须与它一致，表单里不允许改（改了等于写到别的应用上）。 */
   packageName: string
   /** 编辑时要预填的整条规则；新建时为 `null`。 */
   rule: AccessibilityAutomationRuleInput | null
   mode: AccessibilityAutomationRuleWriteMode
+  /** 新建时的三个数字初值；省略即用原生默认值。**编辑模式一律忽略它**（用读回的规则值）。 */
+  defaults?: AutomationRuleDefaults
   /** 一次写操作还在路上：输入与按钮全部禁用。 */
   busy: boolean
   /** 上一次写入（或读回）失败的原因；原样展示，不吞掉也不改写。 */
@@ -320,16 +336,29 @@ function ruleToDraft(rule: AccessibilityAutomationRuleInput): RuleDraft {
   }
 }
 
-/** 新建的默认值：填完标识就能直接保存，不需要用户先去猜哪些字段是必填。 */
-function createRuleDraft(): RuleDraft {
+/** 没读到「每应用参数」时新建规则的三个数字：与原生 `AccessibilityAppConfig` 的默认值同源。 */
+const CREATE_RULE_NUMBER_DEFAULTS: AutomationRuleDefaults = {
+  matchDelayMs: 0,
+  maxActions: 1,
+  actionCoolDownMs: 3000,
+}
+
+/**
+ * 新建的默认值：填完标识就能直接保存，不需要用户先去猜哪些字段是必填。
+ *
+ * 三个数字优先用「每应用参数」读到的初值（`defaults`）；调用方没读到参数时省略它，
+ * 这里回落到原生默认值——那是表单初值的回落，不是「把没读到的读数当真相显示」。
+ */
+function createRuleDraft(defaults?: AutomationRuleDefaults): RuleDraft {
+  const numbers = defaults ?? CREATE_RULE_NUMBER_DEFAULTS
   return {
     id: '',
     enabled: true,
     allowActivities: '',
     denyActivities: '',
-    matchDelayMs: '0',
-    maxActions: '1',
-    actionCoolDownMs: '3000',
+    matchDelayMs: String(numbers.matchDelayMs),
+    maxActions: String(numbers.maxActions),
+    actionCoolDownMs: String(numbers.actionCoolDownMs),
     resetOn: 'activity',
     selectors: [emptySelectorDraft()],
     action: defaultActionDraft('click'),
@@ -646,15 +675,17 @@ function ActionFields({ draft, disabled, onChange }: {
   }
 }
 
-export function AutomationRuleForm({ packageName, rule, mode, busy, error, onSubmit, onCancel }: AutomationRuleFormProps) {
+export function AutomationRuleForm({ packageName, rule, mode, defaults, busy, error, onSubmit, onCancel }: AutomationRuleFormProps) {
   /**
-   * 草稿只在挂载时建立一次：新建一律从默认值起手，编辑一律从读回的整条规则起手。
+   * 草稿只在挂载时建立一次：新建从「每应用参数」读到的初值（没读到就是原生默认值）起手，
+   * 编辑一律从读回的整条规则起手——**编辑忽略 `defaults`**：参数读数与这条已经存在的规则
+   * 之间没有任何关系，拿它覆盖编辑中的规则就是改错东西。
    *
    * 不跟着 props 走是刻意的——父组件每次重渲染都会传一个新对象，跟着走就会把用户
    * 刚敲进去的内容冲掉。换一条规则编辑时父组件会换 key 重新挂载，那时才该重建。
    */
   const [draft, setDraft] = useState<RuleDraft>(() => (
-    mode === 'update' && rule !== null ? ruleToDraft(rule) : createRuleDraft()
+    mode === 'update' && rule !== null ? ruleToDraft(rule) : createRuleDraft(defaults)
   ))
   /** 表单自己的预检结果；与 [error]（桥回来的原因）分开显示，互不覆盖。 */
   const [localError, setLocalError] = useState<string | null>(null)

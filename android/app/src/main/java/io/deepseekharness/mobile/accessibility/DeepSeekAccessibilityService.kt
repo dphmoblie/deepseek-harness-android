@@ -929,6 +929,9 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         // 执行前的第一道白名单：事件包名必须被允许。应用自身包名也在白名单里（策略如此），
         // 但闸门默认额外拒绝对自身执行动作（防自触发），所以这里不需要特殊处理。
         if (!AccessibilityAutomationPolicy.packageAllowed(eventPackage, allowed, whitelistEnabled)) return
+        // 按应用暂停：放在白名单之后、读树之前，与白名单早退同级——不读树、不读规则、不写运行记录。
+        // 这是用户主动按下的状态（不是异常），每次事件都记一条反而是刷屏；状态在设置页里看得到。
+        if (AccessibilityAppConfigStore.isPaused(this, eventPackage)) return
         // 锁屏时不读树、不读规则：拍板口径是"锁屏一律跳过"，连评估都不做。
         if (isLockedOrScreenOff()) return
         val root = rootInActiveWindow ?: return
@@ -1005,6 +1008,9 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         }
         val snapshot = buildAutomationTree(root)
         if (!AccessibilityAutomationPolicy.packageAllowed(snapshot.packageName, allowed, whitelistEnabled)) return
+        // 延迟重判定也必须过按应用暂停，否则「暂停前排队的那次 wait/matchDelayMs」会绕过它按下去的那一下。
+        // 顺序与上面那道白名单一致（这里已经读了树），所以只省掉规则评估与动作。
+        if (AccessibilityAppConfigStore.isPaused(this, snapshot.packageName)) return
         if (isLockedOrScreenOff()) return
         val rules = loadAutomationRules(snapshot.packageName)
         if (rules.isEmpty()) return

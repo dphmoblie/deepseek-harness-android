@@ -759,6 +759,36 @@ export const english: Readonly<Record<string, string>> = {
   "Activity 黑名单（每行一个正则）": "Activity denylist (one regex per line)",
   "留空表示不限制；匹配到的页面一律不执行。":
     "Leave empty for no restriction; matching screens never run the rule.",
+  "每应用参数": "Per-app parameters",
+  "暂停与新建规则的默认值": "Pausing and the defaults for new rules",
+  "先在上面选一个应用": "Choose an app above first",
+  "正在读取这个应用的参数": "Reading this app's parameters",
+  "参数读取失败，请稍后重试": "Failed to read the parameters; try again later",
+  "读数没回来之前这里不会显示任何输入框，也不会拿默认值顶上：那会是一份界面编出来的数字，点一次保存就写进真机了。":
+    "Until the reading comes back this section shows no input fields and does not fall back to defaults: those numbers would be invented by the UI, and one save would write them to the device.",
+  "参数内容不合法": "The parameters are not valid",
+  "这份参数已经读不出来：{0}（受控码 {1}）。原生按「已暂停」处理，也不会自动删掉它；保存一次就会覆盖掉它。":
+    "These parameters can no longer be read: {0} (code {1}). The native side treats the app as paused and does not delete the bad data on its own; one save overwrites it.",
+  "{0} 不在白名单里：保存参数会被原生拒绝。":
+    "{0} is not on the allowlist: saving the parameters will be rejected by the native side.",
+  "当前生效：{0} · 默认动作上限 {1} · 默认冷却时间 {2} 毫秒 · 默认匹配延迟 {3} 毫秒":
+    "Currently in effect: {0} · default max actions {1} · default cooldown {2} ms · default match delay {3} ms",
+  "该应用已暂停": "This app is paused",
+  "该应用未暂停": "This app is not paused",
+  "这三个默认值只用于新建规则表单的初值，不会改动任何一条已有规则。":
+    "These three defaults only pre-fill the new-rule form; they never change a rule that already exists.",
+  "暂停这个应用的自动化": "Pause automation for this app",
+  "只挡规则自动求值：设备桥的单次动作（AI 明确要求的那一下）照旧走白名单与敏感窗口判定。":
+    "Blocks automatic rule evaluation only: a single action from the device bridge (the one the AI explicitly asked for) still goes through the allowlist and sensitive-window checks.",
+  "默认动作上限": "Default max actions",
+  "默认冷却时间": "Default cooldown",
+  "默认冷却时间（毫秒）": "Default cooldown (ms)",
+  "默认匹配延迟": "Default match delay",
+  "默认匹配延迟（毫秒）": "Default match delay (ms)",
+  "保存参数": "Save parameters",
+  "恢复默认值": "Restore defaults",
+  "「恢复默认值」只把表单填成原生默认值，不会写盘：要生效还得再点一次「保存参数」。":
+    "Restore defaults only fills the form with the native defaults; nothing is written until you press Save parameters.",
   "范围 {0} 到 {1}": "Range {0} to {1}",
   "选择器": "Selector",
   "选择器 {0}": "Selector {0}",

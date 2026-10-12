@@ -3,6 +3,7 @@ import type {
   AppUpdateState,
   DiagnosticLogState,
   AccessibilityAutomationAction,
+  AccessibilityAutomationAppConfigDetail,
   AccessibilityAutomationRuntime,
   AccessibilityAutomationRules,
   AccessibilityAutomationRuleDetail,
@@ -44,7 +45,7 @@ import type {
 } from './types'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
+import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
@@ -469,6 +470,36 @@ export function createBrowserBridge(): RuntimeBridge {
         assertAccessibilityPackageName(options.packageName)
         assertAccessibilityRuleId(options.ruleId)
         throw new Error('浏览器预览不能修改无障碍规则')
+      })
+    },
+    /*
+     * 每应用参数（暂停开关 + 默认值）同样存在 Android 侧的偏好文件里。读**不**回一份默认值：
+     * 「已暂停：关、上限 1」看起来像真读了，用户在这里点保存就是拿预览里的假数字覆盖真机。
+     */
+    getAccessibilityAutomationAppConfig: (options: {
+      packageName: string
+    }): Promise<AccessibilityAutomationAppConfigDetail> => {
+      return Promise.resolve().then(() => {
+        assertAccessibilityPackageName(options.packageName)
+        throw new Error('浏览器预览没有每应用自动化参数')
+      })
+    },
+    setAccessibilityAutomationAppConfig: (options: {
+      packageName: string
+      paused: boolean
+      defaultMaxActions: number
+      defaultActionCoolDownMs: number
+      defaultMatchDelayMs: number
+    }): Promise<AccessibilityAutomationAppConfigDetail> => {
+      return Promise.resolve().then(() => {
+        assertAccessibilityPackageName(options.packageName)
+        assertAccessibilityAutomationAppConfigInput({
+          paused: options.paused,
+          defaultMaxActions: options.defaultMaxActions,
+          defaultActionCoolDownMs: options.defaultActionCoolDownMs,
+          defaultMatchDelayMs: options.defaultMatchDelayMs,
+        })
+        throw new Error('浏览器预览不能修改每应用自动化参数')
       })
     },
     openAccessibilitySettings: () => Promise.reject(new Error('浏览器预览不支持打开系统无障碍设置')),

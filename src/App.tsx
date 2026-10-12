@@ -5,6 +5,8 @@ import { ApplicationPicker } from './components/ApplicationPicker'
 import { DeviceShellSettings } from './components/DeviceShellSettings'
 import { VirtualScreenSettings } from './components/VirtualScreenSettings'
 import { AutomationRuleForm } from './components/AutomationRuleForm'
+import type { AutomationRuleDefaults } from './components/AutomationRuleForm'
+import { AutomationAppConfigForm } from './components/AutomationAppConfigForm'
 import { AutomationDisclaimer } from './components/AutomationDisclaimer'
 import { AppBackground } from './components/AppBackground'
 import { LanguageSettings } from './components/LanguageSettings'
@@ -50,6 +52,7 @@ import {
   Settings2,
   Share2,
   ShieldCheck,
+  SlidersHorizontal,
   Smartphone,
   Square,
   SquareTerminal,
@@ -85,6 +88,8 @@ import type {
   DiagnosticLogState,
   DiagnosticLogText,
   AccessibilityAutomationAction,
+  AccessibilityAutomationAppConfig,
+  AccessibilityAutomationAppConfigDetail,
   AccessibilityAutomationRuleInput,
   AccessibilityAutomationRuleWriteMode,
   AccessibilityAutomationRun,
@@ -3538,6 +3543,14 @@ function draftFromSettings(settings: RuntimeSettings, previous: SettingsDraft | 
 interface AutomationRuleDraftState {
   mode: AccessibilityAutomationRuleWriteMode
   rule: AccessibilityAutomationRuleInput | null
+  /**
+   * 新建时的三个数字初值，取自「每应用参数」读数。
+   *
+   * 只对 `create` 有意义：`update` 一律用读回的整条规则。没读到参数时留空，
+   * 由表单回落到原生默认值——那是**表单初值**的回落，与「把一份没读到的读数当真相显示」
+   * 是两回事：这里没有向用户展示任何数字，用户填表时也会看到自己填的是什么。
+   */
+  defaults?: AutomationRuleDefaults
 }
 
 interface SettingsScreenProps {
@@ -3654,6 +3667,18 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    * `update` 时**必须**带着读回的整条规则——没有它就绝不打开表单（见 startEditRule）。
    */
   const [automationRuleDraft, setAutomationRuleDraft] = useState<AutomationRuleDraftState | null>(null)
+  /**
+   * 当前应用的自动化参数读数（按应用暂停开关 + 新建规则的默认值）。
+   *
+   * `null` 同样是「还没读到」，与「读到了」分开显示：读不到就一个输入框都不给，
+   * 否则用户点一次保存就是用界面里的假数字覆盖盘上的真数据（写入是整条替换）。
+   */
+  const [automationAppConfig, setAutomationAppConfig] = useState<AccessibilityAutomationAppConfigDetail | null>(null)
+  const [automationAppConfigStatus, setAutomationAppConfigStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
+  /** 参数写入是否在途；在途时表单禁用，避免两次整条写入叠在一起。 */
+  const [automationAppConfigWriting, setAutomationAppConfigWriting] = useState(false)
+  /** 参数读取 / 写入失败的原因；桥回来的文案原样展示，不吞也不改写。 */
+  const [automationAppConfigError, setAutomationAppConfigError] = useState<string | null>(null)
   /**
    * 保存白名单时要输入的验证密码。
    *
@@ -3780,12 +3805,46 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         setAutomationRulesStatus('failed')
       })
   }, [])
+  /**
+   * 读取某个应用的自动化参数。
+   *
+   * 与 [loadAutomationRules] 同构，但**不设 rulesPackage**（由调用方设）：这份读数是「当前查看的
+   * 应用」的附属读数，换包必须跟着规则一起换。开读前先清掉上一份读数——参数表单在换包时会按 `key`
+   * 重建，留着上一份读数就等于拿上一个应用的数字给新表单当初始值，那正是这里最不能犯的错。
+   */
+  const loadAutomationAppConfig = useCallback((packageName: string) => {
+    if (packageName === '') return
+    setAutomationAppConfig(null)
+    setAutomationAppConfigStatus('loading')
+    setAutomationAppConfigError(null)
+    void runtimeBridge.getAccessibilityAutomationAppConfig({ packageName })
+      .then(result => {
+        setAutomationAppConfig(result)
+        setAutomationAppConfigStatus('idle')
+      })
+      .catch(error => {
+        setAutomationAppConfig(null)
+        setAutomationAppConfigStatus('failed')
+        setAutomationAppConfigError(errorMessage(error))
+      })
+  }, [])
+  /**
+   * 选一个应用：规则与参数两份读数一起换。
+   *
+   * 合成一个入口是刻意的：两份读数都属于「当前查看的应用」，分开调就会出现「规则已经是新包、
+   * 参数还写着旧包」的一瞬间，而那一瞬间刚好是用户会照着填默认值的时候。
+   */
+  const selectRulesPackage = useCallback((packageName: string): void => {
+    if (packageName === '') return
+    loadAutomationRules(packageName)
+    loadAutomationAppConfig(packageName)
+  }, [loadAutomationAppConfig, loadAutomationRules])
   useEffect(() => {
-    // 刚进这一页且白名单里已有目标应用时，先把第一个包的规则读出来，省掉一次点击。
+    // 刚进这一页且白名单里已有目标应用时，先把第一个包的两份读数读出来，省掉一次点击。
     if (page !== 'shizuku' || rulesPackage !== '') return
     const first = accessibility.allowedPackages.find(name => !accessibility.alwaysAllowedPackages.includes(name))
-    if (first !== undefined) loadAutomationRules(first)
-  }, [accessibility.alwaysAllowedPackages, accessibility.allowedPackages, loadAutomationRules, page, rulesPackage])
+    if (first !== undefined) selectRulesPackage(first)
+  }, [accessibility.alwaysAllowedPackages, accessibility.allowedPackages, page, rulesPackage, selectRulesPackage])
 
   /** 开/关一条规则：在途只禁用这一条，其余仍可操作；写完重读整包读数（不做乐观更新）。 */
   const toggleAutomationRule = (ruleId: string, enabled: boolean): void => {
@@ -3807,11 +3866,25 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   const automationRuleLocked = busy !== null || automationRuleWriting !== null || automationRuleDraft !== null
     || automationRulePending !== null || automationRuleConfirmDelete !== null
 
-  /** 打开「新建规则」表单；默认值由表单自己填，这里不读任何东西。 */
+  /**
+   * 打开「新建规则」表单。
+   *
+   * 三个数字初值用当前读到的「每应用参数」；没读到就不传，由表单回落到原生默认值（1 / 3000 / 0）。
+   * 那是**表单初值**的回落，与「把一份没读到的读数当真相显示给用户看」不是一回事：
+   * 这里没有展示任何读数，用户看到的始终是自己填进输入框的数字。
+   */
   const startCreateRule = (): void => {
     if (rulesPackage === '') return
     setAutomationRuleError(null)
-    setAutomationRuleDraft({ mode: 'create', rule: null })
+    setAutomationRuleDraft({
+      mode: 'create',
+      rule: null,
+      defaults: automationAppConfig === null ? undefined : {
+        maxActions: automationAppConfig.config.defaultMaxActions,
+        actionCoolDownMs: automationAppConfig.config.defaultActionCoolDownMs,
+        matchDelayMs: automationAppConfig.config.defaultMatchDelayMs,
+      },
+    })
   }
 
   /**
@@ -3877,6 +3950,26 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
       })
       .catch(error => setAutomationRuleError(errorMessage(error)))
       .finally(() => setAutomationRuleWriting(null))
+  }
+
+  /**
+   * 保存这个应用的自动化参数。
+   *
+   * 整条四个字段一起交给原生（写入是整条替换，缺字段会被拒收），且**不做乐观更新**：
+   * 界面显示的是「写完之后」返回的那份读数。界面自己拼一份「应该是什么」，只会在写入被拒时
+   * 留下一屏假数字；失败时只留下原因，表单里的草稿一个字都不动。
+   */
+  const saveAutomationAppConfig = (config: AccessibilityAutomationAppConfig): void => {
+    if (rulesPackage === '') return
+    setAutomationAppConfigWriting(true)
+    setAutomationAppConfigError(null)
+    void runtimeBridge.setAccessibilityAutomationAppConfig({ packageName: rulesPackage, ...config })
+      .then(result => {
+        setAutomationAppConfig(result)
+        setAutomationAppConfigStatus('idle')
+      })
+      .catch(error => setAutomationAppConfigError(errorMessage(error)))
+      .finally(() => setAutomationAppConfigWriting(false))
   }
 
   if (settingsReadStatus === 'failed') {
@@ -4447,7 +4540,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 <div><h3 id="accessibility-automation-rules">{t("自动化规则")}</h3><p>{t("按应用查看，逐条启用或停用")}</p></div>
                 {rulesPackage !== '' && (
                   <button className="button button-secondary" type="button"
-                    onClick={() => loadAutomationRules(rulesPackage)} disabled={automationRulesStatus === 'loading'}>
+                    onClick={() => selectRulesPackage(rulesPackage)} disabled={automationRulesStatus === 'loading'}>
                     {automationRulesStatus === 'loading' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("刷新")}
                   </button>
                 )}
@@ -4472,7 +4565,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                     .filter(name => !accessibility.alwaysAllowedPackages.includes(name))
                     .map(name => (
                       <button key={name} className="button button-secondary" type="button"
-                        onClick={() => loadAutomationRules(name)} disabled={automationRuleLocked}
+                        onClick={() => selectRulesPackage(name)} disabled={automationRuleLocked}
                         aria-pressed={rulesPackage === name}>
                         {name}
                       </button>
@@ -4570,10 +4663,43 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                   packageName={rulesPackage}
                   rule={automationRuleDraft.rule}
                   mode={automationRuleDraft.mode}
+                  defaults={automationRuleDraft.defaults}
                   busy={automationRuleWriting !== null}
                   error={automationRuleError}
                   onSubmit={saveAutomationRule}
                   onCancel={closeAutomationRuleForm}
+                />
+              )}
+            </div>
+            {/*
+              「每应用参数」：按应用的暂停开关 + 新建规则的三个默认值。
+              单独一块是刻意的——它改的是「这个应用的行为边界」，与规则正文无关，
+              放同一张卡里会让人以为保存参数会连规则一起动。
+            */}
+            <div className="settings-subsection" aria-labelledby="accessibility-automation-app-config">
+              <div className="section-title">
+                <span className="section-icon"><SlidersHorizontal size={19} /></span>
+                <div>
+                  <h3 id="accessibility-automation-app-config">{t("每应用参数")}</h3>
+                  <p>{t("暂停与新建规则的默认值")}</p>
+                </div>
+              </div>
+              {rulesPackage === '' ? (
+                <p className="settings-note" role="status" data-testid="automation-app-config-no-package">
+                  {t("先在上面选一个应用")}
+                </p>
+              ) : (
+                // key 带上包名：换应用即重建表单，草稿不会带着上一个应用的数字。
+                <AutomationAppConfigForm
+                  key={`automation-app-config-${rulesPackage}`}
+                  packageName={rulesPackage}
+                  detail={automationAppConfig}
+                  status={automationAppConfigStatus}
+                  busy={automationAppConfigWriting}
+                  locked={automationRuleLocked}
+                  error={automationAppConfigError}
+                  onSave={saveAutomationAppConfig}
+                  onReload={() => loadAutomationAppConfig(rulesPackage)}
                 />
               )}
             </div>

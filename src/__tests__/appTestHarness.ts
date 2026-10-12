@@ -107,6 +107,9 @@ export const bridge = {
   saveAccessibilityAutomationRule: vi.fn(),
   deleteAccessibilityAutomationRule: vi.fn(),
   getAccessibilityAutomationRule: vi.fn(),
+  // 每应用参数（按应用暂停开关 + 默认值）：与规则读写同一批，缺一条同样会整棵树卸载。
+  getAccessibilityAutomationAppConfig: vi.fn(),
+  setAccessibilityAutomationAppConfig: vi.fn(),
   openAccessibilitySettings: vi.fn(),
   getKeepAliveState: vi.fn(),
   getOverlayBallState: vi.fn(),
@@ -425,6 +428,34 @@ export function beforeEachAppTest(): void {
         action: { type: 'click' },
       },
     }))
+  // 每应用参数：默认给一份「读得出来、没暂停、数字都在范围内」的读数。上限的最小值是 1，
+  // 所以不能图省事给 0（会被 validateAccessibilityAutomationAppConfigDetail 拒收，
+  // 表现成「界面的载荷校验抛错」，与「读回来是坏的」分不出来）。
+  bridge.getAccessibilityAutomationAppConfig.mockImplementation((options: { packageName: string }) =>
+    Promise.resolve({
+      packageName: options.packageName,
+      allowed: true,
+      corrupt: null,
+      config: { paused: false, defaultMaxActions: 1, defaultActionCoolDownMs: 3000, defaultMatchDelayMs: 0 },
+    }))
+  // 写参数：回「写完之后」的那份读数（界面拿它刷新区块，不再额外读一次）。
+  bridge.setAccessibilityAutomationAppConfig.mockImplementation((options: {
+    packageName: string
+    paused: boolean
+    defaultMaxActions: number
+    defaultActionCoolDownMs: number
+    defaultMatchDelayMs: number
+  }) => Promise.resolve({
+    packageName: options.packageName,
+    allowed: true,
+    corrupt: null,
+    config: {
+      paused: options.paused,
+      defaultMaxActions: options.defaultMaxActions,
+      defaultActionCoolDownMs: options.defaultActionCoolDownMs,
+      defaultMatchDelayMs: options.defaultMatchDelayMs,
+    },
+  }))
   // 默认已授予「显示在其他应用上层」权限：与用例无关的测试不该被一个禁用开关影响。
   bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
   bridge.openOverlaySettings.mockResolvedValue(undefined)

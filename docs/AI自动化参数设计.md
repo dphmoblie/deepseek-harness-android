@@ -896,3 +896,85 @@ param   = {"op":"status"|"set"|"enable"|"trial", ...}
 3. ~~**没有条款版本号**：这六条要点将来被改写时，已确认过的用户**不会**被重新问一遍。~~ **（2026-10-12 已补：确认记录的键名带上 `AUTOMATION_DISCLAIMER_VERSION`，弹窗里也印着这个版本号——改这六条要点就必须把版本号加一，旧确认随即失效、所有人被重新问一遍；`src/accessibilityDisclaimer.test.ts` 有专门用例守住这条约定。仍未做的是「条款正文留档」：旧版本的原话没有按版本存成不可变资源，改的是「同一段文字换了个说法」。）**
 4. **弹窗根元素不是 `<form>`**，在弹窗里按回车不会提交（同上一节第 4 条：设置页本身是 `<form>`，套表单会冒泡）。
 5. 与那条仍未拍板的问题无关：**AI 能否开启自动化总开关**仍未定（§4.3 的 `AUTOMATION_ENABLE_FORBIDDEN` 与 `:654` 的拍板结论相反），本批没有碰它。
+
+## 每应用参数：按应用暂停与新建规则的默认值（2026-10-12 追加）
+
+前面几节把「规则」这条线打通了：写入面（新建 / 编辑 / 删除）、编辑前先读全文、免责闸门都在。这一节补的是**规则之外的、按应用生效的参数**——用户按下暂停之后，这个应用的事件不再进入规则求值；以及新建规则时那几个数字的初值。
+
+### 为什么要与规则正文分开
+
+规则是**按包名分片**存的（`AutomationRuleStore` 每个应用占一个 slot，包内最多 40 条、包 JSON 最多 64 KiB），而参数是「这个应用的行为边界」。把默认值塞进规则 JSON 会带来三件坏事：改一个默认值要重写整包数据、受规则限额约束、还会经过规则校验（一条规则的字节问题会连带让参数也写不进去）。
+
+所以参数单开一份偏好文件，一个应用一个键，**单键单写、整条替换**。
+
+### 四个字段与语义
+
+| 字段 | 语义 | 范围（与 `AutomationRuleLimits` 同源） |
+| --- | --- | --- |
+| `paused` | 这个应用的事件是否进入规则求值 | 布尔 |
+| `defaultMaxActions` | 新建规则表单的初值 | 1..99 |
+| `defaultActionCoolDownMs` | 同上 | 0..600000 |
+| `defaultMatchDelayMs` | 同上 | 0..5000 |
+
+两条必须写清楚的语义：
+
+- 三个 `default*` **只给新建规则表单当初值**：它们不改已有规则、也不在运行时做上限强制。每条规则落地后自带自己的数字，与这里的默认值再无关系。做成「改默认值即批量改写已有规则」是另一种产品，本批刻意没做——那等于静默改写用户已经确认过的内容。
+- `paused` 是**运行时开关，且只挡规则求值**：设备桥的单次动作（AI 明确要求的那一下）照旧走白名单与敏感窗口判定。暂停的含义是「别自动动」，不是「谁都不许动」。
+
+### 落盘与 fail closed
+
+`android/app/src/main/java/io/deepseekharness/mobile/accessibility/AccessibilityAppConfigStore.kt`：
+
+- `FILE_NAME = "accessibility_automation_app_config"`（`:63`），键 `app:<包名>`（`:65`）。写入前三条 `require`（包名合法 + 三类范围），文案里的数字直接从 `AutomationRuleLimits` 拼出来（`:155-163`），改限额时文案跟着变。
+- 存储抽象 `AccessibilityAppConfigStorage { read / write / remove }`（`:171-177`）与 `AccessibilityAppConfigPreferences.from(context)`（`:180-198`）：落盘用 `commit()` 而不是 `apply()`——与 `AutomationRuleStore.kt:460/464` 同一口径，这条开关按下之后要立刻落到盘上（lint 里因此多两条 `ApplySharedPref` 警告，与既有那几处同类，是刻意留的）。
+- **读不出来就当已暂停**：坏 JSON、字段类型不对、存量数字越界，一律返回 `Corrupt`，`config.paused` 按 `true`（`:146-147`）。
+- **坏数据不自动删除**：规则那边遇到坏数据会删掉自愈（丢的是规则正文），这边丢的是「用户按过暂停」，所以只报告、由用户决定要不要覆盖。
+- 热路径 `isPaused` 走**同一个解析器**，不是只 `opt` 一下 `paused` 字段。这一条是被失败的测试逼出来的：最初写成只读 `paused`，于是「盘上 `paused=false` 但数字越界」时，`read` 判整份不可信、热路径却认为没暂停——两条判定分叉，「读不出来就当已暂停」在真正生效的路径上被绕过。现在 `isPaused` 复用 `read` 的结论，多解析四个字段的代价远小于留下一次静默失效。
+
+### 服务侧两道闸
+
+`android/app/src/main/java/io/deepseekharness/mobile/accessibility/DeepSeekAccessibilityService.kt`：
+
+- `:934`（事件路径）：白名单判定之后、锁屏判定之前。放在这里的理由：事件包名已知、白名单已过，此时早退就不必读控件树、不必读规则、也不写运行记录——用户自己按下的暂停不该刷屏。
+- `:1013`（延迟重判定路径）：`packageAllowed` 之后同样一道。少了这一道，暂停之前排队的那次 `matchDelayMs` / wait 重判定会绕过暂停。
+
+### 桥方法
+
+`android/app/src/main/java/io/deepseekharness/mobile/MobileRuntimePlugin.kt`：
+
+- `getAccessibilityAutomationAppConfig`（`:2374`）：只读、不需验证密码、白名单外的应用照样读得出来。
+- `setAccessibilityAutomationAppConfig`（`:2393`）：过 `requireAutomationWriteAllowed`（白名单，与写规则同一个闸），**不要求验证密码**（密码是改白名单的闸，白名单才是写规则的闸，这里沿用后者）；`paused` 必须是布尔，三个整数**全必填**——缺一个就拒收，不拿默认值补：补出来的数字会以「用户没改过」的样子落盘，而盘上原本的坏数据也永远覆盖不掉。
+- 返回体由 `accessibilityAppConfigToJs`（`:2418`）拼：`{packageName, allowed, corrupt, config}`，**损坏不抛错**。参数是「按应用开关」：抛错会让用户既看不到坏数据、也无法用一次保存覆盖它。
+
+### 前端平台层（`src/platform/*`）
+
+- `src/platform/types.ts:839-868`：`AccessibilityAutomationAppConfig` / `AccessibilityAutomationConfigCorrupt` / `AccessibilityAutomationAppConfigDetail`，注释里写明「三个 `default*` 只做表单初值」「`corrupt` 非空时 `paused` 按真返回且原生不自动删坏数据」。
+- `src/platform/validation.ts`：`validateAccessibilityAutomationAppConfigDetail` 四个字段一个不能少（缺了若补默认值，界面显示的就不是真机上跑着的那套参数）、包名必须与请求一致、`corrupt` 照收（有码没文案也算读不懂）；`assertAccessibilityAutomationAppConfigInput` 是写入侧同一套区间预检。
+- `src/platform/native.ts`：两个桥方法，入参自检折进 Promise 链（同步抛出会绕过调用方的 `.rejects` 分支）。
+- `src/platform/browser.ts`：两个方法都直接失败——「浏览器预览没有每应用自动化参数」/「浏览器预览不能修改每应用自动化参数」。**不回一份默认值**：回「没暂停、上限 1」看起来像真读到了，用户点一次保存就是拿预览里的假数字覆盖真机。
+
+### 界面（`src/components/AutomationAppConfigForm.tsx` + `src/App.tsx`）
+
+- **两份读数一起换**：`selectRulesPackage`（`src/App.tsx:3837`）同时调 `loadAutomationRules` 与 `loadAutomationAppConfig`（`src/App.tsx:3815`）。分开调会出现「规则已经是新选的包、参数还写着上一个包」的一瞬间，而那一瞬间正好是用户会照着填默认值的时候。读参数**开读前先清掉上一份读数**，免得拿上一个应用的数字给新表单当初始值。
+- **换包即重建表单**：表单挂载时带 `key`（`automation-app-config-<包名>`，`src/App.tsx:4694`）。表单草稿只在挂载时按读数建立一次、之后不跟 props 走（父组件每次重渲染都会传一个新对象，跟着走会冲掉用户刚敲进去的内容）；换包靠 `key` 重建草稿，这是唯一该重建的时机。
+- **读不到就不给输入框**：`detail === null && status === 'failed'` 只渲染原因 + 「重试」，一个输入框、一个开关都不出现（`src/components/AutomationAppConfigForm.tsx:153-174`）。原生写入是整条替换，界面只要在没读到参数时拿一份「没暂停、上限 1」顶上，用户点一次「保存参数」就是用界面编的数字覆盖真机数据。这条是防抹除的核心，App 层用例断言 `automation-app-config-save` 与 `role="switch"` 都不存在（`src/App.accessibility.test.tsx:836-855`）。`idle` / `loading` 同样按「还没读到」渲染。
+- **损坏读数照说**：`corrupt` 非空时用 `role="alert"` 把受控码与原文一起说出来，并写明「原生按『已暂停』处理、不会自动删掉它、保存一次就会覆盖掉它」（`src/components/AutomationAppConfigForm.tsx:242-250`）；输入框照常显示（值取自读数，此时暂停为真）。
+- **不在白名单**：字段仍可编辑，只禁用保存（`saveDisabled = busy || locked || !detail.allowed`，`src/components/AutomationAppConfigForm.tsx:193`），旁边说明「保存参数会被原生拒绝」——让原生那句拒写原因原样露出来，而不是界面先替它拦住。
+- **整条写回**：提交时四个字段一起给（`src/components/AutomationAppConfigForm.tsx:195-222`），本地预检只挡「明显不合法」一档（空、非整数、越界，区间取自 `AUTOMATION_RULE_LIMITS` 并写成输入框的 `min`/`max`）。「只发改动的那一个字段」在这里不是优化，是把用户配好的另外三个数字顺手冲掉。
+- **不做乐观更新**：`saveAutomationAppConfig`（`src/App.tsx:3962`）成功后用**桥返回的那份读数**刷新，界面不自己拼一份「应该是什么」；失败时草稿一个字都不动，只留下原因。App 层用例刻意让返回读数与提交值不同（`paused: true`、冷却 60000），断言输入框仍是提交值、而「当前生效」那行显示的是返回读数（`src/App.accessibility.test.tsx:857-891`）。
+- **「当前生效」一行始终直接来自读数**（`data-testid="automation-app-config-effective"`），不经过草稿：草稿不跟 props 走，所以写入后输入框里仍是用户提交的数字，盘上真正生效的数字由这一行负责显示。
+- **暂停开关只挡规则求值**，界面上写明它拦不住设备桥的单次动作——否则用户会以为拨过去就什么都点不动了。
+- **「恢复默认值」只填表单、不写盘**（`src/components/AutomationAppConfigForm.tsx:230-233`）：一键写盘等于把「盘上现在读不出来」这件事顺手抹掉，要生效必须再点一次「保存参数」。
+- **新建规则表单的初值**：`startCreateRule`（`src/App.tsx:3876`）把读到的三个 `default*` 传给 `AutomationRuleForm` 的新可选 `defaults`（`src/components/AutomationRuleForm.tsx:80-105`）；**编辑模式一律忽略它**（用读回的整条规则）。没读到参数时不传，表单回落到原生默认值 1 / 3000 / 0 —— 那是**表单初值**的回落，与「把一份没读到的读数当真相显示」是两回事。
+
+### 本轮没做 / 没验的
+
+1. **没有真机验证**：暂停开关的手感、以及厂商 ROM 下的行为都没上真机。
+2. 服务侧两道闸本身**没有单测**：`AccessibilityAppConfigStoreTest` 覆盖的是存储层的 11 种情形；事件路径需要真实的 `AccessibilityNodeInfo`，本项目没有这个接缝，只能靠代码位置复核。
+3. **没有「为什么没执行」的记录**：暂停不写运行记录，所以从运行记录里看不出「因为暂停而跳过」。将来若要排查，得靠用户自己记得按过暂停。
+4. **设备桥不感知暂停**：单次动作不受影响是刻意的，但 AI 也不会因为用户按了暂停而收到任何回执。
+5. AI 能否开启自动化总开关仍未拍板，本批没有碰它（同上一节第 5 条）。
+6. **写入返回读数与提交值不一致时，输入框仍显示提交的数字**：草稿「挂载时建立一次、之后不跟 props 走」是刻意的（跟着走会在任何一次重读时冲掉用户正在敲的内容），所以这份差异由「当前生效」那一行负责显示。要让输入框也跟返回读数走，需要一个「这份读数是本次写入的结果」的信号——现有 props 无法把它与普通重渲染区分开，误判会在保存失败时清掉用户的草稿，因此保持现状并在 App 层用例里显式钉住该行为。
+7. **界面没有视觉验证**：没起本地服务、没截图，样式只按既有主题变量书写；`AutomationAppConfigForm.css` 不在 eslint 作用域内（flat config 不覆盖 CSS），只经 tsc 与用例间接验证。
+8. **仓库没有「所有 `t()` 中文串必须有英文词条」的守卫测试**：本批用一次性脚本核对过改动文件里的 712 条中文串（missing 0），但没有把它留成正式用例——`src/i18n.ts:44-47` 查不到词条就静默回退中文，缺词条不会报错。
+9. **真机上「原生返回损坏读数时点保存」这条链路没走过**：界面的四态渲染由夹具驱动，桥侧行为按 `src/platform/types.ts` 的注释与夹具断言。

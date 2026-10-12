@@ -28,6 +28,9 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import com.getcapacitor.annotation.Permission
 import com.getcapacitor.annotation.PermissionCallback
 import io.deepseekharness.mobile.overlay.OverlayBallPolicy
+import io.deepseekharness.mobile.accessibility.AccessibilityAppConfig
+import io.deepseekharness.mobile.accessibility.AccessibilityAppConfigRead
+import io.deepseekharness.mobile.accessibility.AccessibilityAppConfigStore
 import io.deepseekharness.mobile.accessibility.AccessibilityAutomationPolicy
 import io.deepseekharness.mobile.accessibility.AccessibilityAutomationStore
 import io.deepseekharness.mobile.accessibility.AccessibilityBiometricCodes
@@ -2354,6 +2357,94 @@ class MobileRuntimePlugin : Plugin() {
                 }
             }
         }
+    }
+
+    /**
+     * 读某个应用的自动化参数（按应用暂停开关 + 新建规则时的默认值）。
+     *
+     * 权限：应用内桥接；**只读**——不写盘、不打开任何开关、不需要验证密码。白名单外的包照样读得出来，
+     * `allowed` 只是回给界面做提示（与 `getAccessibilityAutomationRules` 同一口径）。
+     *
+     * 损坏**不抛错**：返回里的 `corrupt` 非空，且 `config.paused` 为 true（fail closed，见
+     * `AccessibilityAppConfigStore` 的类注释）。这一条与规则读取不同是刻意的——规则读不出来就没有
+     * 正文可编辑，界面禁用入口即可；参数是「按应用开关」，抛错会让用户既看不到也覆盖不掉坏数据，
+     * 只能去清应用数据。
+     */
+    @PluginMethod
+    fun getAccessibilityAutomationAppConfig(call: PluginCall) {
+        execute(call) {
+            val packageName = requiredAutomationPackage(call)
+            accessibilityAppConfigToJs(packageName, AccessibilityAppConfigStore.read(context, packageName))
+        }
+    }
+
+    /**
+     * 覆盖某个应用的自动化参数（整条替换，不合并）。
+     *
+     * 权限：应用内桥接；**不需要验证密码，但必须过白名单**——与写规则同一条口径
+     * （[requireAutomationWriteAllowed]）：白名单是「这台设备允许自动化哪些应用」的边界，
+     * 改白名单要密码；改某个应用自己的暂停开关与默认值不需要，但白名单外的包一律拒写，
+     * 免得写出一个永远不会被执行的配置。
+     *
+     * 四个字段全给：缺一个就拒收，**不拿默认值补**。「我只想改暂停」的调用方应该先读一次再整条写回，
+     * 静默补默认值会把用户配好的数字顺手冲掉。
+     */
+    @PluginMethod
+    fun setAccessibilityAutomationAppConfig(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                val packageName = requiredAutomationPackage(call)
+                requireAutomationWriteAllowed(packageName)
+                val paused = call.data.opt("paused") as? Boolean
+                    ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "按应用暂停开关必须是布尔值")
+                val config = AccessibilityAppConfig(
+                    paused = paused,
+                    defaultMaxActions = requiredAutomationInt(call, "defaultMaxActions", "每应用默认动作上限"),
+                    defaultActionCoolDownMs = requiredAutomationInt(call, "defaultActionCoolDownMs", "每应用默认冷却时间"),
+                    defaultMatchDelayMs = requiredAutomationInt(call, "defaultMatchDelayMs", "每应用默认匹配延迟"),
+                )
+                try {
+                    AccessibilityAppConfigStore.write(context, packageName, config)
+                } catch (failure: IllegalArgumentException) {
+                    // 越界文案由存储层给出（数字取自 AutomationRuleLimits），这里只换受控码。
+                    throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", failure.message ?: "每应用参数无效")
+                }
+                accessibilityAppConfigToJs(packageName, AccessibilityAppConfigStore.read(context, packageName))
+            }
+        }
+    }
+
+    /** 把每应用参数渲染成界面读数；`corrupt` 非空表示读不出来（此时 `config.paused` 恒为 true）。 */
+    private fun accessibilityAppConfigToJs(packageName: String, read: AccessibilityAppConfigRead): JSObject {
+        val config = when (read) {
+            is AccessibilityAppConfigRead.Ok -> read.config
+            is AccessibilityAppConfigRead.Corrupt -> read.config
+        }
+        val corrupt = (read as? AccessibilityAppConfigRead.Corrupt)?.let {
+            JSObject().put("code", "ACCESSIBILITY_CONFIG_CORRUPT").put("message", it.message)
+        }
+        return JSObject()
+            .put("packageName", packageName)
+            .put("allowed", AccessibilityAutomationStore.packageAllowed(context, packageName))
+            .put("corrupt", corrupt ?: org.json.JSONObject.NULL)
+            .put(
+                "config",
+                JSObject()
+                    .put(AccessibilityAppConfig.KEY_PAUSED, config.paused)
+                    .put(AccessibilityAppConfig.KEY_MAX_ACTIONS, config.defaultMaxActions)
+                    .put(AccessibilityAppConfig.KEY_COOLDOWN_MS, config.defaultActionCoolDownMs)
+                    .put(AccessibilityAppConfig.KEY_MATCH_DELAY_MS, config.defaultMatchDelayMs),
+            )
+    }
+
+    /** 必填的整数参数：小数、字符串、超范围一律拒收，绝不静默取整或夹到边界值。 */
+    private fun requiredAutomationInt(call: PluginCall, name: String, label: String): Int {
+        val value = call.data.opt(name)
+            ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "缺少$label")
+        if (value !is Number || value.toDouble() != value.toInt().toDouble()) {
+            throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "$label 必须是整数")
+        }
+        return value.toInt()
     }
 
     /**

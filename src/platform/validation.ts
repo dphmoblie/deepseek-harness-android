@@ -2,7 +2,10 @@ import type {
   AccessibilityAutomationAction,
   AccessibilityAutomationActionInput,
   AccessibilityAutomationActionKind,
+  AccessibilityAutomationAppConfig,
+  AccessibilityAutomationAppConfigDetail,
   AccessibilityAutomationBlocked,
+  AccessibilityAutomationConfigCorrupt,
   AccessibilityAutomationRule,
   AccessibilityAutomationRuleDetail,
   AccessibilityAutomationRuleInput,
@@ -1145,6 +1148,58 @@ export function validateAccessibilityAutomationRuleDetail(
     allowed: requiredBoolean(detail.allowed, '规则所属应用是否在自动化白名单内'),
     rule: assertAccessibilityAutomationRuleInput(detail.rule, packageName),
   }
+}
+
+/**
+ * 校验「写某个应用的自动化参数」这份入参，返回可直接上桥的载荷。
+ *
+ * 四个字段全给：缺一个就报错，**不拿默认值补**。「我只想改暂停」的调用方应该先读一次再整条写回，
+ * 静默补默认值会把用户配好的数字顺手冲掉。区间与原生 `AutomationRuleLimits` 同源。
+ */
+export function assertAccessibilityAutomationAppConfigInput(value: unknown): AccessibilityAutomationAppConfig {
+  const record = asRecord(value, '每应用自动化参数')
+  return {
+    paused: requiredBoolean(record.paused, '按应用暂停开关'),
+    defaultMaxActions: accessibilityBound(record.defaultMaxActions, '默认动作上限', AUTOMATION_RULE_LIMITS.maxActions),
+    defaultActionCoolDownMs: accessibilityBound(
+      record.defaultActionCoolDownMs,
+      '默认冷却时间',
+      AUTOMATION_RULE_LIMITS.actionCoolDownMs,
+    ),
+    defaultMatchDelayMs: accessibilityBound(record.defaultMatchDelayMs, '默认匹配延迟', AUTOMATION_RULE_LIMITS.matchDelayMs),
+  }
+}
+
+/**
+ * 校验「某个应用的自动化参数」这条读回路径的返回值。
+ *
+ * `corrupt` 是这份读数的**正常形态之一**，不是错误：原生遇到坏数据不抛错、把 `paused` 按 `true`
+ * 返回（fail closed）。这里照收，只把受控码与文案摘出来。刻意**不**回头校验
+ * 「`corrupt` 非空就要求 `paused === true`」：以已暂停返回是原生的判定，前端再套一遍，
+ * 只会在原生改口径时误报一份其实合法的读数。
+ */
+export function validateAccessibilityAutomationAppConfigDetail(
+  value: unknown,
+  packageName: string,
+): AccessibilityAutomationAppConfigDetail {
+  const detail = asRecord(value, '每应用自动化参数')
+  const owner = assertAccessibilityPackageName(detail.packageName)
+  if (owner !== packageName) throw new Error('每应用参数里的包名与请求的包名不一致')
+  return {
+    packageName: owner,
+    allowed: requiredBoolean(detail.allowed, '参数所属应用是否在自动化白名单内'),
+    corrupt: accessibilityConfigCorrupt(detail.corrupt),
+    config: assertAccessibilityAutomationAppConfigInput(detail.config),
+  }
+}
+
+/** 损坏说明：`null`（或缺席）表示这份参数读得出来；给了就必须带受控码与非空文案。 */
+function accessibilityConfigCorrupt(value: unknown): AccessibilityAutomationConfigCorrupt | null {
+  if (value === undefined || value === null) return null
+  const record = asRecord(value, '每应用参数损坏说明')
+  if (typeof record.code !== 'string' || record.code === '') throw new Error('每应用参数损坏码必须是文本')
+  if (typeof record.message !== 'string' || record.message === '') throw new Error('每应用参数损坏说明必须是文本')
+  return { code: record.code, message: record.message }
 }
 
 /** 动作里随类型变化的那些参数：缺必填、越界都在这里挡住，多余字段不带上桥（原生会整体拒收）。 */

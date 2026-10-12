@@ -1,0 +1,55 @@
+/* 「每应用自动化参数」表单的样式，类名前缀 automation-app-config。
+   只用主题变量取色，避免在深色/浅色主题里各写一套。 */
+
+.automation-app-config {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--line-faint);
+  border-radius: var(--radius-card);
+  background: var(--surface-sunken);
+  padding: 14px;
+}
+
+.automation-app-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.automation-app-config-field {
+  min-width: 0;
+}
+
+.automation-app-config-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.automation-app-config-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 读不出参数与「参数已损坏」都是要用户当场做决定的提示，用失败态配色。 */
+.automation-app-config-failure {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 0;
+  color: var(--red-text);
+  background: var(--red-soft);
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-control);
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.automation-app-config-failure > svg {
+  flex: none;
+  margin-top: 1px;
+}

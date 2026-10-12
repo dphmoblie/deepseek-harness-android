@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   assertAccessibilityAutomationAction,
+  assertAccessibilityAutomationAppConfigInput,
   assertAccessibilityPackageName,
   assertAccessibilityRuleId,
   assertBase64Input,
@@ -16,6 +17,7 @@ import {
   validateAllFilesAccessResult,
   validateAppUpdateState,
   validateAccessibilityAutomationRuns,
+  validateAccessibilityAutomationAppConfigDetail,
   validateAccessibilityAutomationRuleDetail,
   validateAccessibilityAutomationRules,
   validateAccessibilityAutomationState,
@@ -1139,6 +1141,52 @@ describe('无障碍自动化状态与验证密码校验', () => {
       'com.example.target',
       'rule-1',
     )).toThrow('规则里的包名与请求的包名不一致')
+  })
+
+  it('每应用参数：读回的损坏说明照收，写入侧四个字段一个都不能少', () => {
+    const detail = {
+      packageName: 'com.example.target',
+      allowed: true,
+      corrupt: null,
+      config: { paused: true, defaultMaxActions: 3, defaultActionCoolDownMs: 1500, defaultMatchDelayMs: 200 },
+    }
+    const read = validateAccessibilityAutomationAppConfigDetail(detail, 'com.example.target')
+    expect(read.config).toEqual(detail.config)
+    expect(read.corrupt).toBeNull()
+    expect(validateAccessibilityAutomationAppConfigDetail({ ...detail, allowed: false }, 'com.example.target').allowed)
+      .toBe(false)
+    // 损坏是这份读数的正常形态之一：以「已暂停」返回是原生的判定，前端不回头套一遍一致性。
+    const corrupt = { code: 'ACCESSIBILITY_CONFIG_CORRUPT', message: '每应用参数不是合法 JSON；已按「已暂停」处理' }
+    expect(validateAccessibilityAutomationAppConfigDetail({
+      ...detail,
+      corrupt,
+      config: { ...detail.config, paused: false },
+    }, 'com.example.target').corrupt).toEqual(corrupt)
+    // 桥回错包：拿它当读数会让用户对着 A 的界面改 B 的参数。
+    expect(() => validateAccessibilityAutomationAppConfigDetail(
+      { ...detail, packageName: 'com.example.other' },
+      'com.example.target',
+    )).toThrow('每应用参数里的包名与请求的包名不一致')
+    // 残缺的损坏说明（有码没文案）也算读不懂：只显示一个受控码对用户没有任何用。
+    expect(() => validateAccessibilityAutomationAppConfigDetail({ ...detail, corrupt: { code: 'X' } }, 'com.example.target'))
+      .toThrow('每应用参数损坏说明必须是文本')
+    // 四个字段一个不能少：缺了若补默认值，界面显示的就不是真机上跑着的那套参数。
+    for (const key of ['paused', 'defaultMaxActions', 'defaultActionCoolDownMs', 'defaultMatchDelayMs']) {
+      const broken: Record<string, unknown> = { ...detail.config }
+      delete broken[key]
+      expect(() => validateAccessibilityAutomationAppConfigDetail({ ...detail, config: broken }, 'com.example.target'))
+        .toThrow()
+    }
+    // 写入侧走的是同一套校验：区间与原生 AutomationRuleLimits 同源。
+    expect(assertAccessibilityAutomationAppConfigInput(detail.config)).toEqual(detail.config)
+    expect(() => assertAccessibilityAutomationAppConfigInput({ ...detail.config, defaultMaxActions: 100 }))
+      .toThrow('默认动作上限必须在 1 到 99 之间')
+    expect(() => assertAccessibilityAutomationAppConfigInput({ ...detail.config, defaultActionCoolDownMs: 600001 }))
+      .toThrow('默认冷却时间必须在 0 到 600000 之间')
+    expect(() => assertAccessibilityAutomationAppConfigInput({ ...detail.config, defaultMatchDelayMs: -1 }))
+      .toThrow('默认匹配延迟必须在 0 到 5000 之间')
+    expect(() => assertAccessibilityAutomationAppConfigInput({ ...detail.config, paused: 'true' }))
+      .toThrow('按应用暂停开关格式无效')
   })
 
   it('规则标识与布尔开关的断言：只认受控取值，不做静默转换', () => {

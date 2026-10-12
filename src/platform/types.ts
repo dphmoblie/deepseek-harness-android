@@ -830,6 +830,45 @@ export interface AccessibilityAutomationRuleDetail {
 }
 
 /**
+ * 一个应用的自动化参数（按应用暂停开关 + 新建规则的默认值）。
+ *
+ * 与规则正文分开存：这些是「这个应用的行为边界」，改它们不该动任何一条规则的字节。
+ * 三个 `default*` **只用于新建规则表单的预填**，落地后每条规则仍自带自己的数字；
+ * `paused` 才是运行时开关，且只挡规则求值——设备桥的单次动作不受它影响。
+ */
+export interface AccessibilityAutomationAppConfig {
+  /** 为真时这个应用的事件不再进入规则求值（界面仍可读可改）。 */
+  paused: boolean
+  /** 新建规则表单的预填值；范围同 [AUTOMATION_RULE_LIMITS.maxActions]。 */
+  defaultMaxActions: number
+  /** 新建规则表单的预填值；范围同 [AUTOMATION_RULE_LIMITS.actionCoolDownMs]。 */
+  defaultActionCoolDownMs: number
+  /** 新建规则表单的预填值；范围同 [AUTOMATION_RULE_LIMITS.matchDelayMs]。 */
+  defaultMatchDelayMs: number
+}
+
+/**
+ * 某个应用的参数读数。
+ *
+ * `corrupt` 非空表示盘上这份参数已经读不出来：此时原生把 `config.paused` 按 `true` 返回
+ * （fail closed，读不出来就当已暂停），并且**不会**自动删掉坏数据。界面必须把这件事说出来，
+ * 而不是安静地显示一份默认值——用户点一次保存就是用默认值覆盖掉坏数据，那是他要知道的决定。
+ */
+export interface AccessibilityAutomationAppConfigDetail {
+  packageName: string
+  /** `false` 表示该应用不在白名单内：能看能改，但规则本来就不会被任何事件用到。 */
+  allowed: boolean
+  corrupt: AccessibilityAutomationConfigCorrupt | null
+  config: AccessibilityAutomationAppConfig
+}
+
+/** 参数读数损坏时带的受控码与文案（不做成 `Error`：这是一份读数，界面要连读数一起显示）。 */
+export interface AccessibilityAutomationConfigCorrupt {
+  code: string
+  message: string
+}
+
+/**
  * 目标应用副屏的取帧档位。
  *
  * 这 10 个值**不是显示器刷新率档位**：它们决定预览多久从虚拟屏取一帧
@@ -1428,6 +1467,29 @@ export interface RuntimeBridge {
     packageName: string
     ruleId: string
   }) => Promise<AccessibilityAutomationRuleDetail>
+  /**
+   * 读某个应用的自动化参数（**只读**，不写盘、不打开任何开关、不需要验证密码）。
+   *
+   * 与规则读取的一处不同：盘上的参数读不出来时这条**不抛错**，而是返回带 `corrupt` 的读数
+   * （`config.paused` 被原生按 `true` 返回）。抛错会让用户既看不到也覆盖不掉坏数据，
+   * 只能去清应用数据；参数是「按应用开关」，看得见才改得动。
+   */
+  getAccessibilityAutomationAppConfig: (options: {
+    packageName: string
+  }) => Promise<AccessibilityAutomationAppConfigDetail>
+  /**
+   * 整条覆盖某个应用的自动化参数（不合并），返回**写完之后**的读数。
+   *
+   * 四个字段全给：缺一个原生就拒收，不拿默认值补。只想改暂停的调用方应该先读一次再整条写回——
+   * 静默补默认值会把用户配好的数字顺手冲掉。
+   */
+  setAccessibilityAutomationAppConfig: (options: {
+    packageName: string
+    paused: boolean
+    defaultMaxActions: number
+    defaultActionCoolDownMs: number
+    defaultMatchDelayMs: number
+  }) => Promise<AccessibilityAutomationAppConfigDetail>
   /**
    * 用系统生物识别 / 锁屏密码重置验证密码——「忘记密码」的唯一出路。
    *

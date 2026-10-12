@@ -1,6 +1,11 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES } from './platform/types'
+import type {
+  AccessibilityAutomationAppConfig,
+  AccessibilityAutomationAppConfigDetail,
+  AccessibilityAutomationConfigCorrupt,
+} from './platform/types'
 import { AUTOMATION_DISCLAIMER_STORAGE_KEY } from './accessibilityDisclaimer'
 import { beforeEachAppTest, bridge, openSettingsPage } from './__tests__/appTestHarness'
 
@@ -716,5 +721,217 @@ describe('无障碍自动化规则卡片', () => {
     // 整条没了：返回的空读数直接决定列表，旧规则连名字都不留。
     expect(await screen.findByText('这个应用还没有规则。')).toBeInTheDocument()
     expect(screen.queryByText('rule-1')).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * 「每应用自动化参数」：按应用的暂停开关 + 新建规则的三个默认值。
+ *
+ * 这一组守两条契约：
+ *  1. **读数没回来之前界面不给任何输入框**。拿一份「没暂停、上限 1」的默认值顶上去，
+ *     用户点一次「保存参数」就是用界面编出来的数字覆盖盘上的真参数；
+ *  2. **界面显示的是原生返回的那份读数**，不是界面自己提交的那份。写入返回的是「写完之后」
+ *     的整份读数，界面拿它刷新；做乐观更新只会在写入被拒时留下一屏假数字。
+ */
+describe(`每应用自动化参数`, () => {
+  beforeEach(beforeEachAppTest)
+  afterEach(() => vi.restoreAllMocks())
+
+  const TARGETS = ['com.example.reader', 'com.example.writer']
+
+  const CONFIG_STATE = {
+    enabled: false,
+    whitelistEnabled: true,
+    allowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, ...TARGETS],
+    alwaysAllowedPackages: [...ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES],
+    passwordConfigured: false,
+    automationRuntime: 'off' as const,
+    serviceStatus: 'connected' as const,
+  }
+
+  /** 规则读数：这一组只关心参数，规则给一份空的就够。 */
+  function emptyRules(packageName: string) {
+    return { packageName, allowed: true, corrupt: null, rules: [] }
+  }
+
+  /**
+   * 参数读数：四个字段**都不是原生默认值**（1 / 3000 / 0 / 未暂停），
+   * 「到底读没读到」与「是不是被默认值顶上了」因此一眼分得开。
+   */
+  function appConfigFor(options: {
+    packageName: string
+    allowed?: boolean
+    corrupt?: AccessibilityAutomationConfigCorrupt | null
+    config?: Partial<AccessibilityAutomationAppConfig>
+  }): AccessibilityAutomationAppConfigDetail {
+    return {
+      packageName: options.packageName,
+      allowed: options.allowed ?? true,
+      corrupt: options.corrupt ?? null,
+      config: {
+        paused: false,
+        defaultMaxActions: 4,
+        defaultActionCoolDownMs: 12000,
+        defaultMatchDelayMs: 800,
+        ...options.config,
+      },
+    }
+  }
+
+  /** 让读取按包名回一份可读读数。不调用它就落回夹具的默认读数（1 / 3000 / 0）。 */
+  function readAppConfig(config: Partial<AccessibilityAutomationAppConfig> = {}): void {
+    bridge.getAccessibilityAutomationAppConfig.mockImplementation((request: { packageName: string }) =>
+      Promise.resolve(appConfigFor({ packageName: request.packageName, config })))
+  }
+
+  /** 进无障碍控制台：白名单里两个目标应用，进页面自动读第一个的规则与参数。 */
+  async function openConsole(): Promise<void> {
+    bridge.getAccessibilityAutomationRules.mockImplementation((packageName: string) =>
+      Promise.resolve(emptyRules(packageName)))
+    bridge.getAccessibilityAutomationState.mockResolvedValue(CONFIG_STATE)
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('Shizuku 与设备 Shell')
+  }
+
+  it(`选包后显示读回的参数，并预填进参数表单`, async () => {
+    readAppConfig()
+    await openConsole()
+
+    // 进页面自动选第一个包：查询必须带明确包名，没有「省略即前台包」的兜底。
+    await waitFor(() => expect(bridge.getAccessibilityAutomationAppConfig).toHaveBeenCalledWith({
+      packageName: 'com.example.reader',
+    }))
+    expect(await screen.findByTestId('automation-app-config-effective')).toHaveTextContent(
+      '当前生效：该应用未暂停 · 默认动作上限 4 · 默认冷却时间 12000 毫秒 · 默认匹配延迟 800 毫秒',
+    )
+    expect(screen.getByLabelText('默认动作上限')).toHaveValue(4)
+    expect(screen.getByLabelText('默认冷却时间（毫秒）')).toHaveValue(12000)
+    expect(screen.getByLabelText('默认匹配延迟（毫秒）')).toHaveValue(800)
+    expect(screen.getByLabelText('暂停这个应用的自动化')).not.toBeChecked()
+
+    // 换应用时两份读数一起换：只重读规则会让参数停留在上一个应用的数字上。
+    fireEvent.click(screen.getByRole('button', { name: 'com.example.writer' }))
+    await waitFor(() => expect(bridge.getAccessibilityAutomationAppConfig).toHaveBeenCalledWith({
+      packageName: 'com.example.writer',
+    }))
+  })
+
+  it(`点「刷新」把规则与参数两份读数一起重读`, async () => {
+    readAppConfig()
+    await openConsole()
+    await screen.findByTestId('automation-app-config-effective')
+
+    const readsBefore = bridge.getAccessibilityAutomationAppConfig.mock.calls.length
+    const rulesBefore = bridge.getAccessibilityAutomationRules.mock.calls.length
+    // 「运行记录」那一块也有一个同名的「刷新」：必须在规则这张卡片里找。
+    const rulesCard = screen.getByRole('heading', { name: '自动化规则' }).closest('div.settings-subsection')
+    expect(rulesCard).not.toBeNull()
+    fireEvent.click(within(rulesCard as HTMLElement).getByRole('button', { name: '刷新' }))
+
+    await waitFor(() => expect(bridge.getAccessibilityAutomationRules.mock.calls.length).toBe(rulesBefore + 1))
+    expect(bridge.getAccessibilityAutomationAppConfig.mock.calls.length).toBe(readsBefore + 1)
+  })
+
+  it(`读取失败时只有原因，一个输入框都没有`, async () => {
+    bridge.getAccessibilityAutomationAppConfig.mockRejectedValue(new Error('参数读取失败：桥超时'))
+    await openConsole()
+
+    expect(await screen.findByTestId('automation-app-config-read-failed'))
+      .toHaveTextContent('参数读取失败，请稍后重试')
+    expect(screen.getByTestId('automation-app-config-read-error')).toHaveTextContent('参数读取失败：桥超时')
+    // 防抹除的核心断言：不拿默认值顶上去。给出输入框，用户就能凭界面编的数字覆盖真机参数。
+    expect(screen.queryByTestId('automation-app-config-save')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('默认动作上限')).not.toBeInTheDocument()
+    const section = screen.getByTestId('automation-app-config')
+    expect(within(section).queryByRole('switch')).not.toBeInTheDocument()
+
+    // 重试读回来之后输入框才出现，且值是重试读到的那份。
+    bridge.getAccessibilityAutomationAppConfig.mockResolvedValueOnce(
+      appConfigFor({ packageName: 'com.example.reader' }),
+    )
+    fireEvent.click(screen.getByTestId('automation-app-config-retry'))
+    expect(await screen.findByLabelText('默认动作上限')).toHaveValue(4)
+  })
+
+  it(`保存成功后显示的是桥返回的那份读数，不是界面提交的那份`, async () => {
+    readAppConfig()
+    await openConsole()
+    await screen.findByLabelText('默认动作上限')
+    const readsBefore = bridge.getAccessibilityAutomationAppConfig.mock.calls.length
+
+    fireEvent.change(screen.getByLabelText('默认动作上限'), { target: { value: '9' } })
+    // 写入返回的读数刻意与提交值不同（暂停被原生按坏了处理、冷却时间被归一）：
+    // 界面若做乐观更新，显示的就是提交的那份，而不是盘上真正生效的这份。
+    bridge.setAccessibilityAutomationAppConfig.mockResolvedValueOnce(appConfigFor({
+      packageName: 'com.example.reader',
+      config: { paused: true, defaultMaxActions: 9, defaultActionCoolDownMs: 60000, defaultMatchDelayMs: 2500 },
+    }))
+    fireEvent.click(screen.getByTestId('automation-app-config-save'))
+
+    // 提交的是**整条四个字段**：原生写入是整条替换，少发一个就等于把它写回默认值。
+    await waitFor(() => expect(bridge.setAccessibilityAutomationAppConfig).toHaveBeenCalledWith({
+      packageName: 'com.example.reader',
+      paused: false,
+      defaultMaxActions: 9,
+      defaultActionCoolDownMs: 12000,
+      defaultMatchDelayMs: 800,
+    }))
+    expect(await screen.findByTestId('automation-app-config-effective')).toHaveTextContent(
+      '当前生效：该应用已暂停 · 默认动作上限 9 · 默认冷却时间 60000 毫秒 · 默认匹配延迟 2500 毫秒',
+    )
+    /*
+      输入框里仍是用户提交的数字：草稿是「挂载时建立一次、之后不跟 props 走」的，
+      为的是任何一次重读都不会冲掉用户正在敲的内容（见 AutomationAppConfigForm 文件头）。
+      盘上真正生效的数字由上面那行「当前生效」负责显示；写入返回的读数从这里看得到。
+    */
+    expect(screen.getByLabelText('默认冷却时间（毫秒）')).toHaveValue(12000)
+    // 写完不再补读一次：界面手里的就是这次写入返回的读数。
+    expect(bridge.getAccessibilityAutomationAppConfig.mock.calls.length).toBe(readsBefore)
+  })
+
+  it(`保存失败时原样显示桥的文案，草稿一个字都不丢`, async () => {
+    readAppConfig()
+    await openConsole()
+    await screen.findByLabelText('默认动作上限')
+
+    bridge.setAccessibilityAutomationAppConfig.mockRejectedValueOnce(new Error('原生拒绝：参数写入失败'))
+    fireEvent.change(screen.getByLabelText('默认匹配延迟（毫秒）'), { target: { value: '900' } })
+    fireEvent.click(screen.getByTestId('automation-app-config-save'))
+
+    const alert = await screen.findByTestId('automation-app-config-write-error')
+    expect(alert).toHaveAttribute('role', 'alert')
+    expect(alert).toHaveTextContent('原生拒绝：参数写入失败')
+    // 草稿还在：用户要能改一处再点保存，而不是从头填一遍。
+    expect(screen.getByLabelText('默认匹配延迟（毫秒）')).toHaveValue(900)
+    expect(screen.getByLabelText('默认动作上限')).toHaveValue(4)
+    // 失败不做乐观更新，读数行仍是原来那份。
+    expect(screen.getByTestId('automation-app-config-effective')).toHaveTextContent('默认匹配延迟 800 毫秒')
+  })
+
+  it(`新建规则表单用读到的参数当初始值`, async () => {
+    readAppConfig()
+    await openConsole()
+    await screen.findByLabelText('默认动作上限')
+
+    fireEvent.click(await screen.findByTestId('automation-rule-create'))
+
+    expect(await screen.findByLabelText('动作上限')).toHaveValue(4)
+    expect(screen.getByLabelText('动作冷却（毫秒）')).toHaveValue(12000)
+    expect(screen.getByLabelText('匹配延迟（毫秒）')).toHaveValue(800)
+  })
+
+  it(`没读到参数时新建规则回落到原生默认值`, async () => {
+    // 读取一直不回来。这时不能把「没读到」当成「盘上就是默认值」来展示，但新建表单的**初值**
+    // 可以回落到原生默认值：那是表单初值，不是任何一份读数的展示。
+    bridge.getAccessibilityAutomationAppConfig.mockRejectedValue(new Error('读参数失败'))
+    await openConsole()
+    await screen.findByTestId('automation-app-config-read-failed')
+
+    fireEvent.click(await screen.findByTestId('automation-rule-create'))
+
+    expect(await screen.findByLabelText('动作上限')).toHaveValue(1)
+    expect(screen.getByLabelText('动作冷却（毫秒）')).toHaveValue(3000)
+    expect(screen.getByLabelText('匹配延迟（毫秒）')).toHaveValue(0)
   })
 })
