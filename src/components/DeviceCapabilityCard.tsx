@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Cpu } from 'lucide-react'
 import { t } from '../i18n'
 import { runtimeBridge } from '../platform/native'
@@ -73,13 +73,41 @@ export function DeviceCapabilityCard({ bridge = runtimeBridge }: { bridge?: Runt
   const [report, setReport] = useState<DeviceCapabilityReport | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
+  const requestId = useRef(0)
+  const invalidate = useCallback(() => { requestId.current += 1 }, [])
 
   const refresh = useCallback(async () => {
-    setLoaded(false); setFailed(false)
-    try { setReport(await bridge.getDeviceCapabilities()); setLoaded(true) }
-    catch { setFailed(true) }
+    const currentRequest = ++requestId.current
+    setFailed(false)
+    try {
+      const next = await bridge.getDeviceCapabilities()
+      if (currentRequest !== requestId.current) return
+      setReport(next)
+      setLoaded(true)
+    } catch {
+      if (currentRequest !== requestId.current) return
+      setFailed(true)
+      setLoaded(true)
+    }
   }, [bridge])
-  useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => {
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refresh()
+      else invalidate()
+    }
+    refreshWhenVisible()
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refresh()
+    }, 5_000)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    window.addEventListener('focus', refreshWhenVisible)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      window.removeEventListener('focus', refreshWhenVisible)
+      invalidate()
+    }
+  }, [invalidate, refresh])
 
   const ready = loaded && !failed && report !== null
 
@@ -97,7 +125,7 @@ export function DeviceCapabilityCard({ bridge = runtimeBridge }: { bridge?: Runt
       {entry.action !== null && ` · ${t('下一步：{0}', t(ACTION_NOTES[entry.action] ?? entry.action))}`}
       {entry.alternative !== null && ` · ${t('替代方式：{0}', t(ALTERNATIVE_NOTES[entry.alternative] ?? entry.alternative))}`}
     </p>)}
-    {ready && <p className="settings-note">{t('能力会随连接状态变化，需要时重新检测一次。')}</p>}
+    {ready && <p className="settings-note">{t('取样时间：{0}', new Date(report.atMs).toLocaleTimeString())} · {t('连接状态变化后会自动重新检测。')}</p>}
     {ready && <button type="button" onClick={() => { void refresh() }}>{t('重新检测')}</button>}
     {failed && <p role="alert">{t('无法读取设备能力清单')} <button type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
   </div>

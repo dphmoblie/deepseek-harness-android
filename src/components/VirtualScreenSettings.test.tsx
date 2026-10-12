@@ -41,6 +41,11 @@ function state(overrides: Record<string, unknown> = {}): VirtualScreenState {
     targetPackage: null,
     frameFps: 0,
     displayRefreshRate: 0,
+    targetFps: 0,
+    frameAgeMs: 0,
+    inputFrameDelayLastMs: 0,
+    inputFrameDelayAverageMs: 0,
+    inputFrameDelaySamples: 0,
     virtualForegroundPackage: null,
     virtualForegroundActivity: null,
     ...overrides,
@@ -165,6 +170,11 @@ describe('目标应用副屏设置页', () => {
         targetPackage: 'com.example.target',
         frameFps: 60,
         displayRefreshRate: 60,
+        targetFps: 60,
+        frameAgeMs: 40,
+        inputFrameDelayLastMs: 120,
+        inputFrameDelayAverageMs: 110,
+        inputFrameDelaySamples: 3,
         virtualForegroundPackage: 'com.example.target',
         virtualForegroundActivity: 'com.example.target/.MainActivity',
       })),
@@ -177,6 +187,9 @@ describe('目标应用副屏设置页', () => {
     expect(reading('当前分辨率与 DPI')).toBe('726×1600 @ 320 DPI')
     expect(reading('采集帧率')).toBe('60 FPS')
     expect(reading('虚拟屏实际刷新率')).toBe('60 Hz')
+    expect(reading('目标帧率')).toBe('60 FPS')
+    expect(reading('画面年龄')).toBe('40 毫秒')
+    expect(reading('输入后首帧间隔估计')).toBe('120 毫秒（最近 3 次平均 110 毫秒）')
     expect(reading('副屏当前前台应用')).toBe('com.example.target')
     expect(reading('副屏当前前台 Activity')).toBe('com.example.target/.MainActivity')
     // 运行中的目标应用会预填到目标选择里，用户不用再选一遍。
@@ -496,6 +509,7 @@ describe('副屏桥的入参校验', () => {
       active: false, sessionId: null, displayId: -1, previewMode: 'realtime-60fps', autoFollow: 'off',
       orientation: 'auto', adaptive: false, widthPx: 0, heightPx: 0, densityDpi: 0, targetPackage: null,
       frameFps: 0, displayRefreshRate: 0, virtualForegroundPackage: null, virtualForegroundActivity: null,
+      targetFps: 0, frameAgeMs: 0, inputFrameDelayLastMs: 0, inputFrameDelayAverageMs: 0, inputFrameDelaySamples: 0,
     })
     expect(parsed.previewMode).toBe('60fps')
     expect(parsed.sessionId).toBe('')

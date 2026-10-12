@@ -253,6 +253,18 @@ function specReading(state: VirtualScreenState): string {
   return `${state.widthPx}×${state.heightPx} @ ${state.densityDpi} DPI`
 }
 
+/**
+ * 画面年龄：null 表示读不到，界面说「未知」。
+ *
+ * `frameAgeMs` 的 0 有歧义——「刚刚采到一帧」与「一帧都还没采到」都是 0。
+ * 判据借用实测帧率：没有画面时它必然是 0，所以这里宁可说「未知」，也不显示「0 毫秒」
+ * （那看起来像「画面是刚刚的」，正好把「还没有画面」说反了）。
+ */
+function frameAgeMillis(state: VirtualScreenState): number | null {
+  if (!state.active || state.frameFps <= 0) return null
+  return state.frameAgeMs
+}
+
 export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridge; onBack: () => void }) {
   const [settingsState, setSettingsState] = useState<SettingsLoadState>({ status: 'loading' })
   const [deviceState, setDeviceState] = useState<DeviceLoadState>({ status: 'loading' })
@@ -639,6 +651,31 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
               <div>
                 <dt>{t('虚拟屏实际刷新率')}</dt>
                 <dd>{t(formatReading(deviceState.state.displayRefreshRate, 'Hz'))}</dd>
+              </div>
+              <div>
+                <dt>{t('目标帧率')}</dt>
+                <dd>{t(formatReading(deviceState.state.targetFps, 'FPS'))}</dd>
+              </div>
+              <div>
+                <dt>{t('画面年龄')}</dt>
+                <dd>
+                  {frameAgeMillis(deviceState.state) === null
+                    ? t('未知')
+                    : t('{0} 毫秒', String(frameAgeMillis(deviceState.state)))}
+                </dd>
+              </div>
+              <div>
+                <dt>{t('输入后首帧间隔估计')}</dt>
+                <dd>
+                  {deviceState.state.inputFrameDelaySamples <= 0
+                    ? t('尚未测到')
+                    : t(
+                        '{0} 毫秒（最近 {1} 次平均 {2} 毫秒）',
+                        String(deviceState.state.inputFrameDelayLastMs),
+                        String(deviceState.state.inputFrameDelaySamples),
+                        String(deviceState.state.inputFrameDelayAverageMs),
+                      )}
+                </dd>
               </div>
               <div>
                 <dt>{t('副屏当前前台应用')}</dt>

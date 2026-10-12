@@ -30,6 +30,19 @@ function fixture(t, answer, extras = {}) {
 const ok = text => ({ ok: true, exitCode: 0, text, truncated: false, errorCode: null })
 const virtualSession = '00000000-1111-2222-3333-444444444444'
 
+test('统一设备能力工具只读当前快照并透传受控桥命令', async t => {
+  const payload = JSON.stringify({ atMs: 1700000000000, sdkInt: 34, capabilities: [] })
+  const f = fixture(t, request => {
+    assert.equal(request.command, 'deviceCapabilities')
+    assert.equal(request.param, '')
+    return ok(payload)
+  })
+  const tool = f.tools.get('mobile_device_capabilities')
+  assert.ok(tool)
+  const result = await tool.execute({}, {})
+  assert.equal(result.output, payload)
+})
+
 test('副屏动作只发送会话与受控动作参数，不接受任意显示编号或主屏回退', async t => {
   const f = fixture(t, () => ok('{"active":true}'))
   const tool = f.tools.get('mobile_virtual_screen_action')

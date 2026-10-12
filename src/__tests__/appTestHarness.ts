@@ -89,6 +89,7 @@ export const bridge = {
     active: false, sessionId: '', displayId: -1, previewMode: '60fps', autoFollow: 'off',
     orientation: 'auto', adaptive: false, widthPx: 0, heightPx: 0, densityDpi: 0,
     targetPackage: '', frameFps: 0, displayRefreshRate: 0,
+    targetFps: 0, frameAgeMs: 0, inputFrameDelayLastMs: 0, inputFrameDelayAverageMs: 0, inputFrameDelaySamples: 0,
     virtualForegroundPackage: '', virtualForegroundActivity: '',
   }),
   setAccessibilityAutomationPackages: vi.fn(),

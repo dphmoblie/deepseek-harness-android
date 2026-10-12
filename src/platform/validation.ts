@@ -2384,13 +2384,13 @@ export function validateVirtualScreenSettings(value: unknown): VirtualScreenSett
 /**
  * 校验原生返回的副屏状态。
  *
- * 十五个字段都必须存在（`active` 为假时其余字段照样要在，只是取值为空/0/-1）：
+ * 二十个字段都必须存在（`active` 为假时其余字段照样要在，只是取值为空/0/-1）：
  * 与悬浮球、存储访问那两条同一理由——字段缺失时抛错，而不是补成「未运行」，
  * 否则「读不到状态」会被界面显示成「副屏没在跑」，用户以为停掉了、其实还在跑。
  */
 export function validateVirtualScreenState(value: unknown): VirtualScreenState {
   const source = asRecord(value, '副屏状态')
-  return {
+  const state: VirtualScreenState = {
     active: requiredBoolean(source.active, '副屏运行状态'),
     sessionId: optionalStateText(source.sessionId, '副屏会话标识', 160),
     displayId: requiredIntegerValue(source.displayId, '副屏显示标识'),
@@ -2406,7 +2406,20 @@ export function validateVirtualScreenState(value: unknown): VirtualScreenState {
     displayRefreshRate: requiredNonNegativeNumber(source.displayRefreshRate, '副屏实际刷新率'),
     virtualForegroundPackage: optionalStateText(source.virtualForegroundPackage, '副屏前台应用', 160),
     virtualForegroundActivity: optionalStateText(source.virtualForegroundActivity, '副屏前台页面', 200),
+    // 性能读数放在最后校验：缺字段时先报身份字段（displayId、尺寸这些「到底跑没跑」的判断依据），
+    // 再报诊断读数。顺序不能反——`状态缺必填字段时抛错，而不是补成未运行` 那条用例钉着先报 displayId。
+    targetFps: requiredNonNegativeNumber(source.targetFps, '副屏目标帧率'),
+    frameAgeMs: requiredNonNegativeInteger(source.frameAgeMs, '副屏画面年龄'),
+    inputFrameDelayLastMs: requiredNonNegativeInteger(source.inputFrameDelayLastMs, '副屏响应耗时'),
+    inputFrameDelayAverageMs: requiredNonNegativeInteger(source.inputFrameDelayAverageMs, '副屏平均响应耗时'),
+    inputFrameDelaySamples: requiredNonNegativeInteger(source.inputFrameDelaySamples, '副屏响应耗时样本数'),
   }
+  // 没有样本却带着耗时：这份读数自相矛盾。宁可整体拒绝，也不要在界面上显示一个来路不明的毫秒数——
+  // 「0 毫秒」与「尚未测到」必须分得开，而区分它们的唯一依据就是这个样本数。
+  if (state.inputFrameDelaySamples === 0 && (state.inputFrameDelayLastMs !== 0 || state.inputFrameDelayAverageMs !== 0)) {
+    throw new Error('副屏响应耗时读数自相矛盾：没有样本却带着耗时')
+  }
+  return state
 }
 
 /**

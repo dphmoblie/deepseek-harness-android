@@ -403,6 +403,7 @@ test('the mobile profile ships model-facing Shizuku tools without exposing bridg
   assert.deepEqual(
     registeredTools.map(tool => tool.name),
     [
+      'mobile_device_capabilities',
       'mobile_virtual_screen_state',
       'mobile_virtual_screen_screenshot',
       'mobile_virtual_screen_action',

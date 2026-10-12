@@ -7,12 +7,16 @@ import io.deepseekharness.mobile.shizuku.DeviceFilePolicy
 import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
 import io.deepseekharness.mobile.shizuku.ShizukuRuntime
 import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
+import io.deepseekharness.mobile.accessibility.AccessibilityAutomationStore
+import io.deepseekharness.mobile.capability.DeviceCapabilityFacts
+import io.deepseekharness.mobile.capability.DeviceCapabilityPolicy
 import io.deepseekharness.mobile.virtualscreen.VirtualScreenService
 import io.deepseekharness.mobile.virtualscreen.VirtualScreenShellPolicy
 import io.deepseekharness.mobile.runtime.TaskNotification
 import io.deepseekharness.mobile.runtime.TurnCompletionPolicy
 import org.json.JSONObject
 import android.content.Context
+import android.os.Build
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
@@ -37,7 +41,7 @@ import java.security.MessageDigest
  * 桥按白名单命令执行：自动创建一次性设备 Shell 会话 -> DeviceCommandRunner -> 关闭。
  * 认证：Bearer token（App 生成并注入容器环境 DSH_DEVICE_BRIDGE_TOKEN）。
  *
- * 两个不经过 Shell 的内建命令：`automationPolicy`（能力查询）与 `notify-turn-complete`
+ * 不经过 Shell 的内建命令：`automationPolicy`（自动化授权闸门）、`deviceCapabilities`（统一能力清单）与 `notify-turn-complete`
  * （访客侧「一轮任务已完成」的收单点，只触发固定文案的通知，见
  * `TurnCompletionPolicy`）。后者受严格参数校验与限流约束，限流命中静默忽略。
  *
@@ -199,7 +203,7 @@ class DeviceBridgeServer(
                     if (commandName.length > 32 || param.length > DeviceFilePolicy.MAX_PARAM_CHARS) {
                         throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备参数过长")
                     }
-                    // 无障碍命令不经过 Shell：由用户手动开启的服务在原生侧再次校验
+                    // 自动化授权与设备能力都不经过 Shell；能力判定复用原生统一策略，不在 AI 插件里另算一套。
                     if (commandName == "automationPolicy") {
                         if (param.isNotEmpty()) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "能力查询不接受参数")
                         respondResult(output, io.deepseekharness.mobile.shizuku.DeviceCommandResult(
@@ -210,6 +214,39 @@ class DeviceBridgeServer(
                         ))
                         return
                     }
+                    if (commandName == "deviceCapabilities") {
+                        if (param.isNotEmpty()) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备能力查询不接受参数")
+                        val context = applicationContextOrNull()
+                            ?: throw RuntimeFailure("DEVICE_CAPABILITIES_UNAVAILABLE", "暂时无法读取设备能力")
+                        val shizukuState = shizuku.state()
+                        val facts = DeviceCapabilityFacts(
+                            sdkInt = Build.VERSION.SDK_INT,
+                            shizukuInstalled = shizukuState.installed,
+                            shizukuRunning = shizukuState.running,
+                            shizukuPermission = shizukuState.permission,
+                            shizukuConnected = shizukuState.connected,
+                            accessibilityStatus = AccessibilityAutomationStore.serviceStatus(context),
+                        )
+                        val entries = org.json.JSONArray().also { array ->
+                            DeviceCapabilityPolicy.report(facts).forEach { capability ->
+                                array.put(JSONObject()
+                                    .put("id", capability.id)
+                                    .put("state", capability.state)
+                                    .put("reason", capability.reason)
+                                    .put("action", capability.action ?: JSONObject.NULL)
+                                    .put("alternative", capability.alternative ?: JSONObject.NULL))
+                            }
+                        }
+                        respondResult(output, io.deepseekharness.mobile.shizuku.DeviceCommandResult(
+                            true, 0,
+                            JSONObject().put("atMs", System.currentTimeMillis())
+                                .put("sdkInt", Build.VERSION.SDK_INT)
+                                .put("capabilities", entries).toString(),
+                            false, null,
+                        ))
+                        return
+                    }
+                    // 无障碍命令不经过 Shell：由用户手动开启的服务在原生侧再次校验
                     // 白名单、前台包名、锁屏状态、敏感窗口和动作频率。
                     // automationTask 与 accessibilityTree 同一条闸门：它只做计划式执行的闸门与记账，不执行动作。
                     if (commandName in setOf(

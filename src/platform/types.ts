@@ -1089,6 +1089,22 @@ export interface VirtualScreenState {
   targetPackage: string
   frameFps: number
   displayRefreshRate: number
+  /**
+   * 目标帧率：预览档位的采集间隔与面板刷新率里较小的那个。
+   * 两个都读不到时是 0——那是「读不到」，不是「目标是 0 帧」。
+   */
+  targetFps: number
+  /**
+   * 画面年龄（毫秒）：读状态的这一刻距最近一帧多久。
+   * 还没有帧或时钟回退时是 0；副屏静止时它会一直变大，那是正常的（静止页面本来就不再出新帧）。
+   */
+  frameAgeMs: number
+  /** 输入后首帧间隔估计（毫秒）：最近一次「注入有落地事件 → 收到下一帧」；不证明应用已处理输入。 */
+  inputFrameDelayLastMs: number
+  /** 同一批样本的平均；没有样本时是 0。 */
+  inputFrameDelayAverageMs: number
+  /** 已记录的响应耗时样本数；0 表示本次会话还没测到过，界面必须说「尚未测到」而不是「0 毫秒」。 */
+  inputFrameDelaySamples: number
   virtualForegroundPackage: string
   virtualForegroundActivity: string
 }
