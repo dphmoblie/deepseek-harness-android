@@ -405,3 +405,10 @@ describe('浏览器桥的插件数据清理', () => {
     await expect(bridge.purgePluginData({ packageName: 'Left-Pad' })).rejects.toThrow('插件标识格式无效')
   })
 })
+
+describe('浏览器桥的设备能力查询', () => {
+  it('浏览器预览不支持设备能力查询，如实拒绝而不是回一份假清单', async () => {
+    const bridge = createBrowserBridge()
+    await expect(bridge.getDeviceCapabilities()).rejects.toThrow('浏览器预览不支持设备能力查询')
+  })
+})

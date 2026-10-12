@@ -81,6 +81,7 @@ import {
   validateRuntimeReleaseList,
   validateRuntimeCleanupOutcome,
   validateRuntimeCleanupState,
+  validateDeviceCapabilityReport,
   validatePluginCleanupRequest,
   validateRuntimeResidue,
   validateRuntimeResidueCleanup,
@@ -218,6 +219,7 @@ interface NativeRuntimePlugin {
   getRuntimeResidue(): Promise<unknown>
   cleanRuntimeResidue(): Promise<unknown>
   getRuntimeCleanupState(): Promise<unknown>
+  getDeviceCapabilities(): Promise<unknown>
   clearRuntimeCache(): Promise<unknown>
   purgePluginData(options?: { packageName?: string }): Promise<unknown>
   /** 列出原生侧已知的运行时可用版本；结果由 TS 侧校验后再交给界面。 */
@@ -524,6 +526,7 @@ function createNativeBridge(): RuntimeBridge {
     // 分级清理：读数是「白名单条目的现状 + 账本的结论 + 逐包现状」，写操作只有两档，都要求运行时
     // 已停止（在跑时原生侧抛 `RUNTIME_BUSY`）；`ok` 由 `failed === 0` 推出，载荷里的同名字段不采信。
     getRuntimeCleanupState: () => NativeRuntime.getRuntimeCleanupState().then(validateRuntimeCleanupState),
+    getDeviceCapabilities: () => NativeRuntime.getDeviceCapabilities().then(validateDeviceCapabilityReport),
     clearRuntimeCache: () => NativeRuntime.clearRuntimeCache().then(validateRuntimeCleanupOutcome),
     // 逐包清理：入参先在这里自检（折进 Promise 链，见下面的注释），只把合法的包名送到原生侧 ——
     // 原生侧还会再判一次，两处都必须过；省略包名表示整档清空。

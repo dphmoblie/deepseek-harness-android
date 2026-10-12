@@ -16,6 +16,7 @@ import {
   assertVirtualScreenSettingsUpdate,
   validateAllFilesAccessResult,
   validateAppUpdateState,
+  validateDeviceCapabilityReport,
   validateAccessibilityAutomationRuns,
   validateAccessibilityAutomationAppConfigDetail,
   validateAccessibilityAutomationRuleDetail,
@@ -2126,5 +2127,113 @@ describe('副屏设置的悬浮窗宽度校验', () => {
     expect(assertVirtualScreenSettingsUpdate({ previewMode: '60fps' })).toEqual({ previewMode: '60fps' })
     expect(assertVirtualScreenSettingsUpdate({ widthPx: 0, heightPx: 0, densityDpi: 0 }))
       .toEqual({ widthPx: 0, heightPx: 0, densityDpi: 0 })
+  })
+})
+
+describe('设备能力清单校验', () => {
+  const ids = ['shizuku', 'accessibility', 'virtual_screen', 'screenshot', 'chinese_input']
+
+  /** 一项「已就绪」的能力条目，按需覆盖字段 —— 形状与原生 `DeviceCapabilityPolicy` 一致。 */
+  function entry(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return { id, state: 'ready', reason: 'READY', action: null, alternative: null, ...overrides }
+  }
+
+  function report(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      atMs: 1_700_000_000_123,
+      sdkInt: 34,
+      capabilities: ids.map(id => entry(id)),
+      ...overrides,
+    }
+  }
+
+  /** 只把第 index 项换掉，其余保持就绪：每个用例只改一个事实。 */
+  function withEntry(index: number, overrides: Record<string, unknown>): Record<string, unknown> {
+    return report({ capabilities: ids.map((id, at) => (at === index ? entry(id, overrides) : entry(id))) })
+  }
+
+  it('五项按固定顺序原样返回', () => {
+    const value = validateDeviceCapabilityReport(report())
+    expect(value.atMs).toBe(1_700_000_000_123)
+    expect(value.sdkInt).toBe(34)
+    expect(value.capabilities.map(item => item.id)).toEqual(ids)
+    expect(value.capabilities[0]).toEqual({ id: 'shizuku', state: 'ready', reason: 'READY', action: null, alternative: null })
+  })
+
+  it('没就绪的那一项带着原因、动作与替代方式一起返回', () => {
+    const value = validateDeviceCapabilityReport(
+      withEntry(1, {
+        state: 'needs_action',
+        reason: 'ACCESSIBILITY_OFF',
+        action: 'open_accessibility_settings',
+        alternative: 'SHELL_ASCII_ONLY',
+      }),
+    )
+    expect(value.capabilities[1]).toEqual({
+      id: 'accessibility',
+      state: 'needs_action',
+      reason: 'ACCESSIBILITY_OFF',
+      action: 'open_accessibility_settings',
+      alternative: 'SHELL_ASCII_ONLY',
+    })
+  })
+
+  it('顺序错位整份拒绝，而不是把副屏那一行画成截图', () => {
+    const swapped = ['accessibility', 'shizuku', 'virtual_screen', 'screenshot', 'chinese_input'].map(id => entry(id))
+    expect(() => validateDeviceCapabilityReport(report({ capabilities: swapped }))).toThrow('设备能力 1 的标识格式无效')
+  })
+
+  it('少一项或多一项都整份拒绝', () => {
+    expect(() => validateDeviceCapabilityReport(report({ capabilities: ids.slice(0, 4).map(id => entry(id)) })))
+      .toThrow('设备能力列表格式无效')
+    expect(() => validateDeviceCapabilityReport(report({ capabilities: [...ids.map(id => entry(id)), entry('extra')] })))
+      .toThrow('设备能力列表格式无效')
+  })
+
+  it('状态取值不在四种里就拒绝', () => {
+    expect(() => validateDeviceCapabilityReport(withEntry(0, { state: 'available' })))
+      .toThrow('设备能力 shizuku 的状态格式无效')
+  })
+
+  it('原因码必须是原生那套大写枚举', () => {
+    expect(() => validateDeviceCapabilityReport(withEntry(0, { state: 'needs_action', reason: 'shizuku_not_running' })))
+      .toThrow('设备能力 shizuku 的原因格式无效')
+  })
+
+  it('动作码小写、替代码大写，各按自己的形状校验', () => {
+    expect(() => validateDeviceCapabilityReport(withEntry(0, { state: 'needs_action', reason: 'SHIZUKU_NOT_RUNNING', action: 'Open-Shizuku' })))
+      .toThrow('设备能力 shizuku 的动作格式无效')
+    expect(() => validateDeviceCapabilityReport(withEntry(0, { state: 'needs_action', reason: 'ACCESSIBILITY_OFF', alternative: 'ascii_only' })))
+      .toThrow('设备能力 shizuku 的替代方式格式无效')
+  })
+
+  it('已就绪却带着待办动作是自相矛盾，整份拒绝', () => {
+    expect(() => validateDeviceCapabilityReport(withEntry(0, { action: 'connect_shizuku' })))
+      .toThrow('设备能力 shizuku 已就绪却带着待办动作')
+  })
+
+  it('没就绪却报了就绪原因同样是自相矛盾', () => {
+    expect(() => validateDeviceCapabilityReport(withEntry(0, { state: 'blocked' })))
+      .toThrow('设备能力 shizuku 没就绪却报了就绪原因')
+  })
+
+  it('动作与替代方式缺字段按「没有」处理，不编造一个值', () => {
+    const list = ids.map((id, at) => (at === 0 ? { id, state: 'needs_action', reason: 'SHIZUKU_NOT_RUNNING' } : entry(id)))
+    const value = validateDeviceCapabilityReport(report({ capabilities: list }))
+    expect(value.capabilities[0]).toEqual({
+      id: 'shizuku',
+      state: 'needs_action',
+      reason: 'SHIZUKU_NOT_RUNNING',
+      action: null,
+      alternative: null,
+    })
+  })
+
+  it('取样时刻与 API 级别不合法都拒绝', () => {
+    expect(() => validateDeviceCapabilityReport(report({ atMs: 0 }))).toThrow('设备能力取样时刻格式无效')
+    expect(() => validateDeviceCapabilityReport(report({ atMs: 1.5 }))).toThrow('设备能力取样时刻格式无效')
+    expect(() => validateDeviceCapabilityReport(report({ atMs: '1700000000000' }))).toThrow('设备能力取样时刻格式无效')
+    expect(() => validateDeviceCapabilityReport(report({ sdkInt: 0 }))).toThrow('设备 API 级别格式无效')
+    expect(() => validateDeviceCapabilityReport(report({ sdkInt: '34' }))).toThrow('设备 API 级别格式无效')
   })
 })

@@ -1,6 +1,7 @@
 import { validatePluginRequest } from './plugins'
 import type {
   AppUpdateState,
+  DeviceCapabilityReport,
   DiagnosticLogState,
   AccessibilityAutomationAction,
   AccessibilityAutomationAppConfigDetail,
@@ -652,6 +653,11 @@ export function createBrowserBridge(): RuntimeBridge {
         .then(() => {
           throw new Error('浏览器预览不支持插件数据清理')
         }),
+    // 能力清单在预览里同样是「查不到」，**不要**回一份全 ready 的假清单：那会让界面与 AI
+    // 以为这台机器上 Shizuku、无障碍、副屏全都可用，然后照着这个前提去点。
+    // 如实拒绝 ⇒ 界面显示「读不到能力清单」，不编造任何一项的现状。
+    getDeviceCapabilities: (): Promise<DeviceCapabilityReport> =>
+      Promise.reject(new Error('浏览器预览不支持设备能力查询')),
     // 会话工作区在预览里没有原生侧那条只读通道：如实拒绝，让界面显示「读不到会话列表」+
     // 一句诚实说明。**不要**返回 `{ status: 'ready', sessions: [] }`——那会显示成「暂无会话」，
     // 等于把「读不到」编造成「确认没有」。

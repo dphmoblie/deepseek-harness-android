@@ -18,6 +18,9 @@ import type {
   AccessibilityAutomationState,
   AllFilesAccessResult,
   AppUpdateState,
+  DeviceCapabilityId,
+  DeviceCapabilityReport,
+  DeviceCapabilityState,
   DeviceCommand,
   DeviceCommandResult,
   DiagnosticLogExport,
@@ -2439,4 +2442,79 @@ export function assertVirtualScreenStartRequest(value: unknown): VirtualScreenSt
   if (present(source.heightPx)) request.heightPx = virtualScreenEdge(source.heightPx)
   if (present(source.densityDpi)) request.densityDpi = virtualScreenDensity(source.densityDpi)
   return request
+}
+
+/**
+ * 设备能力的五项标识与四种状态：与原生 `DeviceCapabilityPolicy` 逐字一致（**含顺序**）。
+ *
+ * 顺序固定是有意的：原生按这个顺序过桥，这里按同一个顺序核对 —— 谁改了顺序都会当场失败，
+ * 而不是让界面把「副屏」那一行画成「截图」，或者让 AI 拿到一份错位的能力表。
+ */
+const DEVICE_CAPABILITY_IDS: DeviceCapabilityId[] = [
+  'shizuku',
+  'accessibility',
+  'virtual_screen',
+  'screenshot',
+  'chinese_input',
+]
+
+const DEVICE_CAPABILITY_STATES = new Set<DeviceCapabilityState>(['ready', 'needs_action', 'blocked', 'unsupported'])
+
+/** 原因码：原生侧定的大写枚举（`SHIZUKU_NOT_RUNNING`），与审计闸门码同一个形状。 */
+const DEVICE_CAPABILITY_REASON_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/u
+
+/** 动作码：小写 snake（`connect_shizuku`）。替代码复用上面的大写形状（`NO_DEVICE_SHELL`）。 */
+const DEVICE_CAPABILITY_ACTION_PATTERN = /^[a-z][a-z0-9_]{0,63}$/u
+
+/** 可空的码：`null` 与缺字段都算「没有」，有值就必须合形状。 */
+function deviceCapabilityCode(value: unknown, pattern: RegExp, label: string): string | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'string' || !pattern.test(value)) throw new Error(`${label}格式无效`)
+  return value
+}
+
+/**
+ * 能力清单：五项、固定顺序、逐项四件套（状态 / 原因 / 动作 / 替代方式）。
+ *
+ * 两处交叉校验是刻意的：`ready` 却带着待办动作、或没就绪却报 `READY`，都说明原生侧的语义变了；
+ * 这时整份拒掉，而不是让界面按字段渲染出两句互相矛盾的话（「现在就能用」+「去安装 Shizuku」）。
+ * 缺一项、多一项、顺序不对同样整份拒掉：半份能力清单会让 AI 基于错误的现状下判断，
+ * 而它接下来要照着这份清单**动手**。
+ */
+export function validateDeviceCapabilityReport(value: unknown): DeviceCapabilityReport {
+  const report = asRecord(value, '设备能力清单')
+  const atMs = report.atMs
+  if (typeof atMs !== 'number' || !Number.isSafeInteger(atMs) || atMs <= 0) {
+    throw new Error('设备能力取样时刻格式无效')
+  }
+  const sdkInt = report.sdkInt
+  if (typeof sdkInt !== 'number' || !Number.isSafeInteger(sdkInt) || sdkInt < 1 || sdkInt > 999) {
+    throw new Error('设备 API 级别格式无效')
+  }
+  const list = report.capabilities
+  if (!Array.isArray(list) || list.length !== DEVICE_CAPABILITY_IDS.length) {
+    throw new Error('设备能力列表格式无效')
+  }
+  const capabilities = list.map((raw, index) => {
+    const entry = asRecord(raw, `设备能力 ${index + 1}`)
+    const id = DEVICE_CAPABILITY_IDS[index]
+    if (entry.id !== id) throw new Error(`设备能力 ${index + 1} 的标识格式无效`)
+    const state = entry.state
+    if (typeof state !== 'string' || !DEVICE_CAPABILITY_STATES.has(state as DeviceCapabilityState)) {
+      throw new Error(`设备能力 ${id} 的状态格式无效`)
+    }
+    const reason = entry.reason
+    if (typeof reason !== 'string' || !DEVICE_CAPABILITY_REASON_PATTERN.test(reason)) {
+      throw new Error(`设备能力 ${id} 的原因格式无效`)
+    }
+    const action = deviceCapabilityCode(entry.action, DEVICE_CAPABILITY_ACTION_PATTERN, `设备能力 ${id} 的动作`)
+    const alternative = deviceCapabilityCode(entry.alternative, DEVICE_CAPABILITY_REASON_PATTERN, `设备能力 ${id} 的替代方式`)
+    if (state === 'ready') {
+      if (action !== null || alternative !== null) throw new Error(`设备能力 ${id} 已就绪却带着待办动作`)
+    } else if (reason === 'READY') {
+      throw new Error(`设备能力 ${id} 没就绪却报了就绪原因`)
+    }
+    return { id, state: state as DeviceCapabilityState, reason, action, alternative }
+  })
+  return { atMs, sdkInt, capabilities }
 }

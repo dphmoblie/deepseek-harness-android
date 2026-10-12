@@ -202,6 +202,53 @@ export interface RuntimeCleanupState {
 }
 
 /**
+ * 一项设备能力的四种状态（与原生 `DeviceCapabilityPolicy` 同一套取值）。
+ *
+ * `ready` 现在就能做；`needs_action` 用户点一步（装 / 开 / 授权 / 连接）就能做；
+ * `blocked` 缺的是**别的**能力（例如 Shizuku 没就绪时的副屏与截图）——补那一环才会好，
+ * 重复点这一项没用；`unsupported` 是这台设备或这个版本做不到（Android 9 上的副屏、
+ * 没装 Shizuku 时的设备 Shell）。
+ */
+export type DeviceCapabilityState = 'ready' | 'needs_action' | 'blocked' | 'unsupported'
+
+/**
+ * 能力标识：与原生 `DeviceCapabilityPolicy` 的五项一一对应，**顺序也一致**。
+ *
+ * 顺序是有意义的（清单按固定顺序过桥、前端按同一顺序校验），但它不表示优先级。
+ */
+export type DeviceCapabilityId = 'shizuku' | 'accessibility' | 'virtual_screen' | 'screenshot' | 'chinese_input'
+
+/**
+ * 一项能力的现状：能不能做、不能做是因为什么、下一步点哪里、还有什么替代方式。
+ *
+ * [reason] / [action] / [alternative] 都是原生侧发过来的**码**（不是句子）：界面按码翻词条，
+ * AI 按码决定下一步，两边看到的是同一份判断。没有动作或替代时是 `null`（键一定在，
+ * 不是缺字段）。
+ */
+export interface DeviceCapabilityEntry {
+  id: DeviceCapabilityId
+  state: DeviceCapabilityState
+  reason: string
+  action: string | null
+  alternative: string | null
+}
+
+/**
+ * 能力清单快照：一次读回五项能力的现状。
+ *
+ * [atMs] 是取样时刻。能力会随连接状态变（Shizuku 被系统回收、无障碍服务掉线、旋转屏幕），
+ * 拿旧清单下判断就是按错误前提做事，所以时间戳跟数据一起走 —— 调用方要能说出「这份是什么
+ * 时候的」。[sdkInt] 是设备 API 级别，用于解释 `unsupported`。
+ *
+ * 这份清单只读，不含包名、路径、设备标识或任何用户数据。
+ */
+export interface DeviceCapabilityReport {
+  atMs: number
+  sdkInt: number
+  capabilities: DeviceCapabilityEntry[]
+}
+
+/**
  * 一次分级清理的结果。
  *
  * 与残留清理同口径：这些数字只描述**这一次尝试**，不是清理之后的当前状态 —— 界面要知道现在还剩
@@ -1363,6 +1410,17 @@ export interface RuntimeBridge {
   closeTerminal: (sessionId: string) => Promise<void>
   execDeviceCommand: (sessionId: string, command: DeviceCommand, param?: string) => Promise<DeviceCommandResult>
   getShizukuState: () => Promise<ShizukuState>
+  /**
+   * 统一能力清单：五项能力（Shizuku / 无障碍 / 副屏 / 截图 / 中文输入）的现状一次读回。
+   *
+   * 与逐项状态查询（[getShizukuState] 等）不同，这里给的是**判断结论**：能不能做、
+   * 不能做是因为什么、下一步点哪里、还有什么替代方式。判定在原生 `DeviceCapabilityPolicy`
+   * 里做一次，界面与 AI 都读这一份 —— 两处各判一次迟早会说出不一样的话。
+   *
+   * 读不到时**必须**如实拒绝（浏览器预览就是这样），不要回一份「全部就绪」的空清单：
+   * 那会让调用方以为这台机器什么都能做，然后照着这个前提去做。
+   */
+  getDeviceCapabilities: () => Promise<DeviceCapabilityReport>
   requestShizukuPermission: () => Promise<ShizukuState>
   connectShizuku: () => Promise<ShizukuState>
   openShizuku: () => Promise<void>

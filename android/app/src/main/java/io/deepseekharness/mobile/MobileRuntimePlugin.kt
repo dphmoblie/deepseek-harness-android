@@ -33,6 +33,9 @@ import io.deepseekharness.mobile.accessibility.AccessibilityAppConfigRead
 import io.deepseekharness.mobile.accessibility.AccessibilityAppConfigStore
 import io.deepseekharness.mobile.accessibility.AccessibilityAutomationPolicy
 import io.deepseekharness.mobile.accessibility.AccessibilityAutomationStore
+import io.deepseekharness.mobile.capability.DeviceCapability
+import io.deepseekharness.mobile.capability.DeviceCapabilityFacts
+import io.deepseekharness.mobile.capability.DeviceCapabilityPolicy
 import io.deepseekharness.mobile.accessibility.AccessibilityBiometricCodes
 import io.deepseekharness.mobile.accessibility.AccessibilityGuardException
 import io.deepseekharness.mobile.accessibility.AccessibilityPasswordStore
@@ -1410,6 +1413,33 @@ class MobileRuntimePlugin : Plugin() {
                 .put("displayId", plan.displayId)
                 .also { if (result.errorCode != null) it.put("errorCode", result.errorCode) }
         }
+    }
+
+    /**
+     * 统一能力清单：一次回答「现在能做什么、不能做是因为什么、下一步点哪里」。
+     *
+     * 五项能力（Shizuku / 无障碍 / 副屏 / 截图 / 中文输入）的判定全在
+     * [DeviceCapabilityPolicy] 里，这里只把事实凑齐再原样过桥——判定散到桥上就会有两套口径，
+     * 界面与 AI 迟早看到不一样的说法。
+     *
+     * 与 [getShizukuState] 同理，读取要碰 binder，必须走 [execute]，不能同步跑在 JS 桥线程上。
+     */
+    @PluginMethod
+    fun getDeviceCapabilities(call: PluginCall) {
+        execute(call) { deviceCapabilityFacts().toJs() }
+    }
+
+    /** 凑齐判定所需的事实：只读状态，不做任何动作。 */
+    private fun deviceCapabilityFacts(): DeviceCapabilityFacts {
+        val shizuku = controller.shizukuState()
+        return DeviceCapabilityFacts(
+            sdkInt = Build.VERSION.SDK_INT,
+            shizukuInstalled = shizuku.installed,
+            shizukuRunning = shizuku.running,
+            shizukuPermission = shizuku.permission,
+            shizukuConnected = shizuku.connected,
+            accessibilityStatus = AccessibilityAutomationStore.serviceStatus(context),
+        )
     }
 
     /**
@@ -3429,6 +3459,29 @@ class MobileRuntimePlugin : Plugin() {
         .put("connected", connected)
         .put("version", version)
         .put("appVersion", appVersion)
+
+    /**
+     * 能力清单过桥。
+     *
+     * `atMs` 是这份清单的取样时刻：能力随连接状态变，拿旧清单下判断就是按错误前提做事，
+     * 所以时间戳必须跟数据一起给。
+     * `action` / `alternative` 没值时给 JSON null，**不要让键消失**——前端校验按固定字段走，
+     * 少一个键整份就被判「格式无效」，界面会把「没有替代方式」显示成「读不到」。
+     */
+    private fun DeviceCapabilityFacts.toJs(): JSObject = JSObject()
+        .put("atMs", System.currentTimeMillis())
+        .put("sdkInt", sdkInt)
+        .put(
+            "capabilities",
+            JSArray().also { array -> DeviceCapabilityPolicy.report(this).forEach { array.put(it.toJs()) } },
+        )
+
+    private fun DeviceCapability.toJs(): JSObject = JSObject()
+        .put("id", id)
+        .put("state", state)
+        .put("reason", reason)
+        .put("action", action ?: JSONObject.NULL)
+        .put("alternative", alternative ?: JSONObject.NULL)
 
     /**
      * 无障碍状态过桥。

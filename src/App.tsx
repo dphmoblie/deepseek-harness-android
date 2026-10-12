@@ -68,6 +68,7 @@ import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import { hasConfiguredModelCredential, MODEL_PROVIDERS } from './modelProviders'
 import { CustomProviders } from './components/CustomProviders'
 import { RuntimeResidueCard } from './components/RuntimeResidueCard'
+import { DeviceCapabilityCard } from './components/DeviceCapabilityCard'
 import { RuntimeCleanupCard } from './components/RuntimeCleanupCard'
 import { runtimeBridge } from './platform/native'
 import { readLogInsights } from './logInsights'
@@ -2131,6 +2132,9 @@ function RuntimeVersionsPanel({
           })}
         </div>
       )}
+
+      {/* 能力清单放在占用盘点的前面：先回答「这台机器现在能做什么」，再谈磁盘上的东西。 */}
+      <DeviceCapabilityCard />
 
       <RuntimeResidueCard />
 
