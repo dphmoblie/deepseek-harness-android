@@ -55,6 +55,11 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     private val pendingConfirmation = AtomicReference<PendingConfirmation?>(null)
 
     /**
+     * 任务台账（`automationTask` 命令）。单槽位、只记状态、**不执行动作**——见 [AutomationTaskLedger]。
+     */
+    private val automationTaskLedger = AutomationTaskLedger()
+
+    /**
      * 事件驱动自动化的闸门状态（四层节流 + 配额 + 节点指纹 + 连续失败计数）。
      *
      * 只在主线程访问：所有读写都发生在 [onAccessibilityEvent] 与它派生的排期回调里（两者都跑在主线程），
@@ -148,6 +153,8 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             "tap", "inputText" -> observedAction(root, packageName, command, param).also { if (it.ok) lastActionAt = now }
             // 事件驱动自动化的入口：报告规则统计并打开本进程的事件评估（详见 [automationRules]）。
             "automationRules" -> automationRules(packageName, param)
+            // 计划式执行的入口：只做闸门与记账，动作仍各走各的命令（详见 [automationTask]）。
+            "automationTask" -> automationTask(root, packageName, param)
             else -> failure("DEVICE_COMMAND_INVALID", "无障碍命令不受支持")
         }
     }
@@ -1165,6 +1172,106 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             }
             is AutomationRuleStore.PackageRead.Corrupt ->
                 failure(read.code, "读取规则失败：${read.message}")
+        }
+    }
+
+    /**
+     * `automationTask` 命令：计划式执行的闸门与记账。
+     *
+     * 它**不执行动作**：`gate` 只回答「现在能不能发这一步」，动作照旧各走各的命令
+     * （`accessibilityAction` / `tap` / `inputText`），所以每个动作前的确认一步不少。
+     *
+     * 前置闸门沿用 [executeChecked]：整条命令都在锁屏 / 白名单 / 敏感窗口 / 可读窗口检查**之后**才到这里，
+     * 所以台账拿到的 `locked` / `packageAllowed` / `sensitiveWindow` 一律是「已满足」的值，
+     * 场景类拒绝仍由服务侧直接回答（`ACCESSIBILITY_DEVICE_LOCKED` 等，重发没有意义）。
+     * 真正会变的只有前台包名与窗口指纹——那正是「目标走了」与「界面变了」两个判定的来源。
+     *
+     * 参数与回执形状见 [AutomationTaskWire]；这里只做「取事实 → 问台账 → 拼回执」。
+     */
+    private fun automationTask(root: AccessibilityNodeInfo, packageName: String, param: String): DeviceCommandResult {
+        val ledger = automationTaskLedger
+        val digest = windowDigest(root)
+        val facts = AutomationTaskFacts(foregroundPackage = packageName, windowDigest = digest)
+        return when (val request = AutomationTaskWire.parse(param)) {
+            is AutomationTaskRequest.Invalid ->
+                taskFailure(request.code, request.message, null, false)
+            is AutomationTaskRequest.Plan ->
+                when (val gate = ledger.plan(request.taskId, request.packageName, digest, request.steps)) {
+                    is AutomationTaskGate.Proceed -> taskAccepted(gate, ledger.snapshot())
+                    is AutomationTaskGate.Refused ->
+                        taskFailure(gate.code, gate.message, ledger.snapshot(), gate.retryable)
+                }
+            is AutomationTaskRequest.Gate ->
+                when (val gate = ledger.gate(request.stepId, facts, SystemClock.elapsedRealtime())) {
+                    is AutomationTaskGate.Proceed -> taskAccepted(gate, ledger.snapshot())
+                    is AutomationTaskGate.Refused ->
+                        taskFailure(gate.code, gate.message, ledger.snapshot(), gate.retryable)
+                }
+            is AutomationTaskRequest.Record ->
+                DeviceCommandResult(
+                    true,
+                    0,
+                    AutomationTaskWire.done(ledger.record(request.stepId, request.outcome, SystemClock.elapsedRealtime())),
+                    false,
+                    null,
+                )
+            is AutomationTaskRequest.Resume ->
+                when (val gate = ledger.resume(request.stepIds, digest)) {
+                    is AutomationTaskGate.Proceed -> taskAccepted(gate, ledger.snapshot())
+                    is AutomationTaskGate.Refused ->
+                        taskFailure(gate.code, gate.message, ledger.snapshot(), gate.retryable)
+                }
+            AutomationTaskRequest.Cancel ->
+                DeviceCommandResult(true, 0, AutomationTaskWire.done(ledger.cancel()), false, null)
+            AutomationTaskRequest.Status ->
+                DeviceCommandResult(true, 0, AutomationTaskWire.done(ledger.snapshot()), false, null)
+        }
+    }
+
+    private fun taskAccepted(gate: AutomationTaskGate.Proceed, snapshot: AutomationTaskSnapshot): DeviceCommandResult =
+        DeviceCommandResult(true, 0, AutomationTaskWire.accepted(gate, snapshot), false, null)
+
+    private fun taskFailure(
+        code: String,
+        message: String,
+        snapshot: AutomationTaskSnapshot?,
+        retryable: Boolean,
+    ): DeviceCommandResult = DeviceCommandResult(
+        false,
+        1,
+        AutomationTaskWire.refused(code, message, retryable, snapshot),
+        false,
+        code,
+    )
+
+    /** 窗口指纹的结构材料：只有类名 / viewId / 边界，**不读文本**（见 [AutomationWindowDigest]）。 */
+    private fun windowDigest(root: AccessibilityNodeInfo): String {
+        val structure = ArrayList<String>()
+        collectStructure(root, 0, intArrayOf(MAX_AUTOMATION_NODES), structure)
+        return AutomationWindowDigest.of(root.packageName?.toString().orEmpty(), root.windowId, structure)
+    }
+
+    private fun collectStructure(
+        node: AccessibilityNodeInfo,
+        depth: Int,
+        budget: IntArray,
+        structure: MutableList<String>,
+    ) {
+        if (depth > MAX_AUTOMATION_DEPTH || budget[0] <= 0) return
+        budget[0]--
+        val rect = Rect().also(node::getBoundsInScreen)
+        structure += AutomationWindowDigest.entry(
+            className = node.className?.toString(),
+            viewId = node.viewIdResourceName,
+            left = rect.left,
+            top = rect.top,
+            right = rect.right,
+            bottom = rect.bottom,
+        )
+        for (index in 0 until node.childCount) {
+            if (budget[0] <= 0) return
+            val child = node.getChild(index) ?: continue
+            collectStructure(child, depth + 1, budget, structure)
         }
     }
 

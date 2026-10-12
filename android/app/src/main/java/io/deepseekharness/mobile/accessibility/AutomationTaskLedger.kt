@@ -34,6 +34,10 @@ internal object AutomationTaskCodes {
     const val PLAN_INVALID = "AUTOMATION_TASK_PLAN_INVALID"
     const val TOO_MANY_STEPS = "AUTOMATION_TASK_TOO_MANY_STEPS"
 
+    // 线上形状（参数根本不是那份形状，与台账状态无关，见 `AutomationTaskWire`）
+    const val PARAM_INVALID = "AUTOMATION_TASK_PARAM_INVALID"
+    const val RECORD_INVALID = "AUTOMATION_TASK_RECORD_INVALID"
+
     // 台账闸门
     const val NOT_PLANNED = "AUTOMATION_TASK_NOT_PLANNED"
     const val SERVICE_DISCONNECTED = "AUTOMATION_TASK_SERVICE_DISCONNECTED"

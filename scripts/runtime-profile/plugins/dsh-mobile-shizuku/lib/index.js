@@ -840,6 +840,57 @@ export function apply(ctx) {
   }))
 
   ctx.tools.register(defineTool({
+    name: 'mobile_device_task',
+    description: '把一次多步操作记成有状态的任务台账：先 plan 交计划，之后每一步都先 gate 取放行、做完再用 record 交结果。它**不执行任何动作**——每步仍要用 mobile_accessibility_action 等工具单独执行、单独审批。拿到 AUTOMATION_TASK_NOT_VERIFIED 或 AUTOMATION_TASK_TIMEOUT 表示「不确定」：不要重发，先观察界面再用 record 说明；前台换了应用或界面已变会得 AUTOMATION_TASK_TARGET_LEFT / AUTOMATION_TASK_TARGET_STALE，先重新读控件树，再用 resume 带全部步骤标识续跑。',
+    parameters: {
+      op: { type: 'string', required: true, enum: ['plan', 'gate', 'record', 'resume', 'cancel', 'status'], description: 'plan 建计划、gate 取下一步能不能发、record 交这一步的结果、resume 现场变了之后续跑、cancel 取消、status 读现状。' },
+      taskId: { type: 'string', description: 'plan 必填：本次任务标识（小写字母数字与 - _，最多 64 位）。' },
+      packageName: { type: 'string', description: 'plan 必填：目标应用完整包名，须与当前前台及白名单一致。' },
+      steps: {
+        type: 'array',
+        description: 'plan 必填：按执行顺序的步骤数组，最多 20 步、id 唯一。',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string', required: true, description: '步骤标识，同一计划内唯一，最多 64 位。' },
+            action: { type: 'string', required: true, enum: ['click', 'setText', 'scroll', 'back', 'wait'], description: '这一步的动作类型（台账只记账，动作由别的工具执行）。' },
+            target: { type: 'string', description: '动作目标：click / scroll / setText 用最近一次控件树里的完整 viewId；back 可省略；wait 不需要目标。最多 200 字符。' },
+            verify: { type: 'string', enum: ['none', 'windowChanged', 'textApplied', 'packageChanged'], description: '校验模式，缺省按动作给：click→windowChanged、setText→textApplied、back→packageChanged、scroll / wait→none。' },
+            timeoutMs: { type: 'integer', description: '这一步的超时毫秒数，100～30000，缺省 5000。' },
+            maxAttempts: { type: 'integer', description: '这一步最多尝试几次，1～3，缺省 1；只有设备侧明确说这次没动成的失败才允许再试。' },
+          },
+        },
+      },
+      resumeSteps: {
+        type: 'array',
+        description: 'resume 必填：按原计划顺序列出全部步骤标识，必须与 plan 时一致。',
+        items: { type: 'string' },
+      },
+      step: { type: 'string', description: 'gate 与 record 必填：要放行或交结果的那一步的 id。' },
+      status: { type: 'string', enum: ['ok', 'failed', 'unknown'], description: 'record 必填：ok 表示动作成功且观察到了预期变化；设备侧明确报失败给 failed（带 code）；不确定给 unknown——台账按「不确定」处理，不会自动重试。' },
+      code: { type: 'string', description: 'record 选填：设备侧结果或错误码，如 AUTOMATION_ACTION_PERFORMED、ACCESSIBILITY_NODE_NOT_FOUND。' },
+      verified: { type: 'boolean', description: 'record 选填：是否真的观察到预期变化。省略时按「报成功即通过校验、报失败即未通过」处理。' },
+      timedOut: { type: 'boolean', description: 'record 选填：这一步是否超时。超时一律记不确定，即使动作已经发出去了。' },
+    },
+    output: output(),
+    execute: (args, exec) => {
+      const param = { op: args.op }
+      if (args.taskId !== undefined) param.taskId = args.taskId
+      if (args.packageName !== undefined) param.packageName = args.packageName
+      if (args.steps !== undefined) param.steps = args.steps
+      if (args.resumeSteps !== undefined) param.steps = args.resumeSteps
+      if (args.step !== undefined) param.step = args.step
+      if (args.status !== undefined) param.status = args.status
+      if (args.code !== undefined) param.code = args.code
+      if (args.verified !== undefined) param.verified = args.verified
+      if (args.timedOut !== undefined) param.timedOut = args.timedOut
+      return callBridge('automationTask', JSON.stringify(param), exec.signal)
+    },
+    presentCall: args => present('自动化任务台账', `${args.op ?? ''}${args.step ? ` ${args.step}` : ''}`),
+  }))
+
+  ctx.tools.register(defineTool({
     name: 'mobile_device_tap',
     description: 'Tap one Android screen coordinate from the latest screenshot or UI observation. Coordinates are integer pixels from the device screen.',
     parameters: {

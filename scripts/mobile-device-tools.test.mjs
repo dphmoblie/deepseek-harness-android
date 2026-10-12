@@ -406,6 +406,29 @@ test('后台任务只接受完整包名与固定查询类型', async t => {
   assert.deepEqual(f.requests, [{ command: 'backgroundTasks', param: JSON.stringify({ packageName: 'com.example', kind: 'processes' }) }])
 })
 
+test('任务台账工具按 op 拼参数，resume 把步骤标识映射成 steps', async t => {
+  const f = fixture(t, () => ok('{"ok":true}'))
+  const tool = f.tools.get('mobile_device_task')
+  // 这个工具只记账、不动手：它不该多问一次审批，动作仍由各自的工具单独走闸门。
+  assert.deepEqual(await f.hook({ name: 'mobile_device_task' }, () => ({ kind: 'allow' })), { kind: 'allow' })
+
+  const steps = [{ id: 's1', action: 'click', target: 'com.example:id/ok' }]
+  await tool.execute({ op: 'plan', taskId: 't1', packageName: 'com.example', steps }, {})
+  await tool.execute({ op: 'gate', step: 's1' }, {})
+  await tool.execute({ op: 'record', step: 's1', status: 'ok', code: 'AUTOMATION_ACTION_PERFORMED', verified: true }, {})
+  await tool.execute({ op: 'resume', resumeSteps: ['s1', 's2'] }, {})
+  await tool.execute({ op: 'status' }, {})
+
+  assert.deepEqual(f.requests.map(request => [request.command, JSON.parse(request.param)]), [
+    ['automationTask', { op: 'plan', taskId: 't1', packageName: 'com.example', steps }],
+    ['automationTask', { op: 'gate', step: 's1' }],
+    ['automationTask', { op: 'record', step: 's1', status: 'ok', code: 'AUTOMATION_ACTION_PERFORMED', verified: true }],
+    ['automationTask', { op: 'resume', steps: ['s1', 's2'] }],
+    ['automationTask', { op: 'status' }],
+  ])
+  assert.match(tool.description, /不执行任何动作/u)
+})
+
 test('副屏直通 Shell 默认沿用会话副屏并原样传送脚本', async t => {
   const f = fixture(t, () => ok('已点击副屏'))
   const tool = f.tools.get('mobile_virtual_screen_shell')

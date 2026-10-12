@@ -211,7 +211,15 @@ class DeviceBridgeServer(
                         return
                     }
                     // 白名单、前台包名、锁屏状态、敏感窗口和动作频率。
-                    if (commandName in setOf("accessibilityTree", "accessibilityAction", "tap", "inputText")) {
+                    // automationTask 与 accessibilityTree 同一条闸门：它只做计划式执行的闸门与记账，不执行动作。
+                    if (commandName in setOf(
+                            "accessibilityTree",
+                            "accessibilityAction",
+                            "tap",
+                            "inputText",
+                            "automationTask",
+                        )
+                    ) {
                         val service = DeepSeekAccessibilityService.current()
                         val result = service?.execute(commandName, param)
                             ?: io.deepseekharness.mobile.shizuku.DeviceCommandResult(
