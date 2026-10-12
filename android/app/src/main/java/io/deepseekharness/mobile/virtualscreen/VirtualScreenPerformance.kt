@@ -3,7 +3,7 @@ package io.deepseekharness.mobile.virtualscreen
 /**
  * 副屏性能读数里**能纯算**的那部分。
  *
- * 这一层刻意不碰 `android.*`：目标帧率、画面年龄、响应耗时的口径都要能在 JVM 单测里精确构造
+ * 这一层刻意不碰 `android.*`：目标帧率、画面年龄、输入后首帧间隔估计的口径都要能在 JVM 单测里精确构造
  * （尤其是「时钟回退」「还没有帧」「一次都还没测过」这三种边界），否则界面上的数字只是看起来像读数。
  *
  * 三个口径的共同约定：**拿不到就给 0，且 0 不等于「没问题」**。界面必须结合 `active` 与
@@ -43,15 +43,15 @@ internal object VirtualScreenPerformance {
 }
 
 /**
- * 输入到画面的响应耗时：最近若干次「注入落地 → 等到下一帧」的样本。
+ * 输入后首帧间隔估计：最近若干次「注入有落地事件 → 收到下一帧」的样本。
  *
- * 只保留最近 [capacity] 次：这个数字要回答的是「现在这一下点了多久才看见反应」，
+ * 只保留最近 [capacity] 次：这个数字描述输入后多久收到下一帧，不能证明应用已经处理输入。
  * 把几分钟前的样本一起平均会把当前的卡顿抹平。容量固定、无分配，注入路径上可以直接调用。
  */
 internal class VirtualScreenLatency(private val capacity: Int = DEFAULT_CAPACITY) {
 
     init {
-        require(capacity >= 1) { "响应耗时样本容量至少为 1" }
+        require(capacity >= 1) { "输入后首帧间隔样本容量至少为 1" }
     }
 
     private val samples = LongArray(capacity)
@@ -69,7 +69,7 @@ internal class VirtualScreenLatency(private val capacity: Int = DEFAULT_CAPACITY
     /** 已记录的样本数；为 0 表示本次会话还没有测到过一次（界面必须说「尚未测到」）。 */
     val sampleCount: Int get() = count
 
-    /** 最近一次的响应耗时；没有样本时为 0。 */
+    /** 最近一次输入后首帧间隔估计；没有样本时为 0。 */
     val lastMillis: Long get() = if (count == 0) 0L else samples[(next - 1 + capacity) % capacity]
 
     /** 最近 [sampleCount] 次的平均；没有样本时为 0。 */
@@ -81,7 +81,7 @@ internal class VirtualScreenLatency(private val capacity: Int = DEFAULT_CAPACITY
             return sum / count
         }
 
-    /** 会话结束或换目标时清空：上一段会话的响应耗时不代表这一段。 */
+    /** 会话结束或换目标时清空：上一段会话的首帧间隔不代表这一段。 */
     fun clear() {
         next = 0
         count = 0

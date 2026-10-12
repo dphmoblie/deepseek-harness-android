@@ -247,7 +247,13 @@ internal object VirtualScreenPreferences {
         val refreshRate = readback?.finiteDouble("refreshRate")?.takeIf { it > 0.0 }
             ?: session?.finiteDouble("displayRefreshRate")?.takeIf { it > 0.0 }
             ?: 0.0
-        val frameFps = session?.finiteDouble("frameFps")?.takeIf { it.isFinite() } ?: 0.0
+        val frameFps = if (active) session?.finiteDouble("frameFps")?.takeIf { it.isFinite() } ?: 0.0 else 0.0
+        val frameAtElapsedMs = if (active) session?.optLong("frameAtElapsedMs", 0L)?.takeIf { it > 0L } ?: 0L else 0L
+        val targetFps = if (active) session?.finiteDouble("targetFps")?.takeIf { it >= 0.0 } ?: 0.0 else 0.0
+        val frameAgeMs = if (active) session?.optLong("frameAgeMs", 0L)?.takeIf { it >= 0L } ?: 0L else 0L
+        val inputFrameDelayLastMs = if (active) session?.optLong("inputFrameDelayLastMs", 0L)?.takeIf { it >= 0L } ?: 0L else 0L
+        val inputFrameDelayAverageMs = if (active) session?.optLong("inputFrameDelayAverageMs", 0L)?.takeIf { it >= 0L } ?: 0L else 0L
+        val inputFrameDelaySamples = if (active) session?.optInt("inputFrameDelaySamples", 0)?.takeIf { it >= 0 } ?: 0 else 0
         return JSONObject()
             .put("active", active)
             .put("sessionId", sessionId)
@@ -262,6 +268,12 @@ internal object VirtualScreenPreferences {
             .put("densityDpi", densityDpi)
             .put("targetPackage", session.optionalPackage("packageName"))
             .put("frameFps", frameFps)
+            .put("frameAtElapsedMs", frameAtElapsedMs)
+            .put("targetFps", targetFps)
+            .put("frameAgeMs", frameAgeMs)
+            .put("inputFrameDelayLastMs", inputFrameDelayLastMs)
+            .put("inputFrameDelayAverageMs", inputFrameDelayAverageMs)
+            .put("inputFrameDelaySamples", inputFrameDelaySamples)
             // 刷新率读不到时回 0（未知），不去猜屏幕标称值。
             .put("displayRefreshRate", refreshRate)
             .put("virtualForegroundPackage", session.nullableText("virtualForegroundPackage"))

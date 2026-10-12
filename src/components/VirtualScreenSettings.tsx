@@ -257,11 +257,10 @@ function specReading(state: VirtualScreenState): string {
  * 画面年龄：null 表示读不到，界面说「未知」。
  *
  * `frameAgeMs` 的 0 有歧义——「刚刚采到一帧」与「一帧都还没采到」都是 0。
- * 判据借用实测帧率：没有画面时它必然是 0，所以这里宁可说「未知」，也不显示「0 毫秒」
- * （那看起来像「画面是刚刚的」，正好把「还没有画面」说反了）。
+ * 用原生的最近帧采集时刻区分两者；静止画面可能没有新帧但仍有可显示的年龄。
  */
 function frameAgeMillis(state: VirtualScreenState): number | null {
-  if (!state.active || state.frameFps <= 0) return null
+  if (!state.active || state.frameAtElapsedMs <= 0) return null
   return state.frameAgeMs
 }
 

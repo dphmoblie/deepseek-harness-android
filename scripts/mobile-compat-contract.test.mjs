@@ -8,6 +8,20 @@ import { pathToFileURL } from 'node:url'
 const appRoot = resolve(import.meta.dirname, '..')
 const harnessVersion = '0.2.0-rc.2'
 
+test('副屏输入后首帧间隔字段在原生、平台与 AI 描述中一致', async () => {
+  const native = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/ShellVirtualScreen.kt'), 'utf8')
+  const platform = await readFile(resolve(appRoot, 'src/platform/types.ts'), 'utf8')
+  const plugin = await readFile(resolve(appRoot, 'scripts/runtime-profile/plugins/dsh-mobile-shizuku/lib/index.js'), 'utf8')
+  for (const field of ['inputFrameDelayLastMs', 'inputFrameDelayAverageMs', 'inputFrameDelaySamples']) {
+    assert.match(native, new RegExp(`put\\("${field}"`))
+    assert.match(platform, new RegExp(`\\b${field}: number`))
+    assert.match(plugin, new RegExp(`\\b${field}\\b`))
+  }
+  for (const source of [native, platform, plugin]) {
+    assert.doesNotMatch(source, /\bresponse(?:Last|Average|Samples)Ms?\b/u)
+  }
+})
+
 test('Android rootfs workflow packages the adapted official frontend at the root', async () => {
   const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
   assert.match(workflow, /Build Android-adapted official Harness frontend/)

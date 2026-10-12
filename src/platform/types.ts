@@ -1089,6 +1089,8 @@ export interface VirtualScreenState {
   targetPackage: string
   frameFps: number
   displayRefreshRate: number
+  /** 最近一帧采集时刻（elapsedRealtime 毫秒）；0 表示本次会话尚未采到画面。 */
+  frameAtElapsedMs: number
   /**
    * 目标帧率：预览档位的采集间隔与面板刷新率里较小的那个。
    * 两个都读不到时是 0——那是「读不到」，不是「目标是 0 帧」。

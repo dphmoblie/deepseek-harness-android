@@ -2404,6 +2404,7 @@ export function validateVirtualScreenState(value: unknown): VirtualScreenState {
     targetPackage: optionalStateText(source.targetPackage, '副屏目标应用', 160),
     frameFps: requiredNonNegativeNumber(source.frameFps, '副屏采集帧率'),
     displayRefreshRate: requiredNonNegativeNumber(source.displayRefreshRate, '副屏实际刷新率'),
+    frameAtElapsedMs: requiredNonNegativeInteger(source.frameAtElapsedMs, '副屏最近帧时刻'),
     virtualForegroundPackage: optionalStateText(source.virtualForegroundPackage, '副屏前台应用', 160),
     virtualForegroundActivity: optionalStateText(source.virtualForegroundActivity, '副屏前台页面', 200),
     // 性能读数放在最后校验：缺字段时先报身份字段（displayId、尺寸这些「到底跑没跑」的判断依据），

@@ -42,6 +42,7 @@ function state(overrides: Record<string, unknown> = {}): VirtualScreenState {
     frameFps: 0,
     displayRefreshRate: 0,
     targetFps: 0,
+    frameAtElapsedMs: 0,
     frameAgeMs: 0,
     inputFrameDelayLastMs: 0,
     inputFrameDelayAverageMs: 0,
@@ -171,6 +172,7 @@ describe('目标应用副屏设置页', () => {
         frameFps: 60,
         displayRefreshRate: 60,
         targetFps: 60,
+        frameAtElapsedMs: 5000,
         frameAgeMs: 40,
         inputFrameDelayLastMs: 120,
         inputFrameDelayAverageMs: 110,
@@ -195,6 +197,32 @@ describe('目标应用副屏设置页', () => {
     // 运行中的目标应用会预填到目标选择里，用户不用再选一遍。
     expect(screen.getByText('将在副屏中运行 com.example.target。')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '启动副屏' })).toBeEnabled()
+  })
+
+  it('静止画面没有近期新帧时仍按采集时刻显示年龄', async () => {
+    const bridge = bridgeWith({
+      getVirtualScreenSettings: vi.fn().mockResolvedValue(settings()),
+      getVirtualScreenState: vi.fn().mockResolvedValue(state({
+        active: true,
+        frameFps: 0,
+        frameAtElapsedMs: 8_000,
+        frameAgeMs: 2_500,
+      })),
+    })
+    render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
+    expect(await screen.findByText('运行中')).toBeInTheDocument()
+    expect(reading('采集帧率')).toBe('未知')
+    expect(reading('画面年龄')).toBe('2500 毫秒')
+  })
+
+  it('本次会话从未采到帧时画面年龄显示未知', async () => {
+    const bridge = bridgeWith({
+      getVirtualScreenSettings: vi.fn().mockResolvedValue(settings()),
+      getVirtualScreenState: vi.fn().mockResolvedValue(state({ active: true, frameFps: 0, frameAtElapsedMs: 0, frameAgeMs: 0 })),
+    })
+    render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
+    expect(await screen.findByText('运行中')).toBeInTheDocument()
+    expect(reading('画面年龄')).toBe('未知')
   })
 
   it('取不到的读数显示未知，不补 0 也不留空白', async () => {
@@ -509,7 +537,7 @@ describe('副屏桥的入参校验', () => {
       active: false, sessionId: null, displayId: -1, previewMode: 'realtime-60fps', autoFollow: 'off',
       orientation: 'auto', adaptive: false, widthPx: 0, heightPx: 0, densityDpi: 0, targetPackage: null,
       frameFps: 0, displayRefreshRate: 0, virtualForegroundPackage: null, virtualForegroundActivity: null,
-      targetFps: 0, frameAgeMs: 0, inputFrameDelayLastMs: 0, inputFrameDelayAverageMs: 0, inputFrameDelaySamples: 0,
+      targetFps: 0, frameAtElapsedMs: 0, frameAgeMs: 0, inputFrameDelayLastMs: 0, inputFrameDelayAverageMs: 0, inputFrameDelaySamples: 0,
     })
     expect(parsed.previewMode).toBe('60fps')
     expect(parsed.sessionId).toBe('')
