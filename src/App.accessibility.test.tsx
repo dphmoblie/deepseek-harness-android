@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES } from './platform/types'
 import { beforeEachAppTest, bridge, openSettingsPage } from './__tests__/appTestHarness'
@@ -484,5 +484,148 @@ describe('无障碍自动化规则卡片', () => {
     expect(corrupt).toHaveTextContent('AUTOMATION_RULE_CORRUPT')
     expect(corrupt).toHaveTextContent('规则文件读不出来，已清除')
     expect(screen.queryByText('这个应用还没有规则。')).not.toBeInTheDocument()
+  })
+
+  it('点「编辑」先读回规则全文，成功后才打开表单并预填读回的选择器', async () => {
+    bridge.getAccessibilityAutomationRules.mockImplementation(
+      (packageName: string) => Promise.resolve(rulesFor(packageName)),
+    )
+    bridge.getAccessibilityAutomationRule.mockResolvedValue({
+      packageName: 'com.example.reader',
+      ruleId: 'rule-1',
+      allowed: true,
+      rule: {
+        id: 'rule-1',
+        packageName: 'com.example.reader',
+        enabled: true,
+        allowActivities: [],
+        denyActivities: [],
+        matchDelayMs: 0,
+        maxActions: 1,
+        actionCoolDownMs: 3000,
+        resetOn: 'activity',
+        selectors: [{ text: '开始', descContains: '冷门描述', minWidth: 320 }],
+        action: { type: 'click' },
+      },
+    })
+    await openRules()
+
+    fireEvent.click(await screen.findByRole('button', { name: '编辑规则 rule-1' }))
+
+    // 列表摘要是没有选择器正文的：编辑必须先单独读回全文，拿摘要预填就等于开一张空表。
+    await waitFor(() => expect(bridge.getAccessibilityAutomationRule).toHaveBeenCalledWith({
+      packageName: 'com.example.reader',
+      ruleId: 'rule-1',
+    }))
+    expect(await screen.findByLabelText('选择器 1 · 文本')).toHaveValue('开始')
+    expect(screen.getByLabelText('选择器 1 · 描述包含')).toHaveValue('冷门描述')
+    expect(screen.getByLabelText('选择器 1 · 最小宽度')).toHaveValue(320)
+    expect(screen.getByLabelText('规则标识')).toHaveValue('rule-1')
+    // 表单打开期间同一条规则的其它写操作全部锁住：不允许两个写操作叠在一起。
+    expect(screen.getByRole('button', { name: '停用' })).toBeDisabled()
+  })
+
+  it('读回规则失败时只显示原因，绝不打开一张空表单', async () => {
+    bridge.getAccessibilityAutomationRules.mockImplementation(
+      (packageName: string) => Promise.resolve(rulesFor(packageName)),
+    )
+    bridge.getAccessibilityAutomationRule.mockRejectedValue(
+      new Error('规则全文读取失败，请稍后重试'),
+    )
+    await openRules()
+
+    fireEvent.click(await screen.findByRole('button', { name: '编辑规则 rule-1' }))
+
+    expect(await screen.findByTestId('automation-rule-write-error'))
+      .toHaveTextContent('规则全文读取失败，请稍后重试')
+    // 防抹除的核心断言：读不回来就不该有表单，连一个输入框都不能出现。
+    expect(screen.queryByTestId('automation-rule-form')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('规则标识')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('选择器 1 · 文本')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '保存规则' })).not.toBeInTheDocument()
+    // 原规则原地不动：这次失败没有改到列表。
+    expect(screen.getByTestId('automation-rule-list')).toHaveTextContent('rule-1')
+  })
+
+  it('新建并保存：以 create 模式提交，列表按返回的整包读数刷新', async () => {
+    bridge.getAccessibilityAutomationRules.mockImplementation(
+      (packageName: string) => Promise.resolve(rulesFor(packageName, { rules: [] })),
+    )
+    bridge.saveAccessibilityAutomationRule.mockResolvedValue(rulesFor('com.example.reader', {
+      rules: [{
+        id: 'rule-new',
+        enabled: true,
+        actionKind: 'click',
+        selectorCount: 1,
+        maxActions: 1,
+        actionCoolDownMs: 3000,
+      }],
+    }))
+    await openRules()
+
+    // 一条规则都没有时，「新建规则」照样在。
+    fireEvent.click(await screen.findByTestId('automation-rule-create'))
+    expect(await screen.findByTestId('automation-rule-form')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('规则标识'), { target: { value: 'rule-new' } })
+    fireEvent.change(screen.getByLabelText('选择器 1 · 文本'), { target: { value: '开始' } })
+    const readsBefore = bridge.getAccessibilityAutomationRules.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: '保存规则' }))
+
+    await waitFor(() => expect(bridge.saveAccessibilityAutomationRule).toHaveBeenCalledTimes(1))
+    expect(bridge.saveAccessibilityAutomationRule).toHaveBeenCalledWith({
+      packageName: 'com.example.reader',
+      mode: 'create',
+      rule: {
+        id: 'rule-new',
+        packageName: 'com.example.reader',
+        enabled: true,
+        allowActivities: [],
+        denyActivities: [],
+        matchDelayMs: 0,
+        maxActions: 1,
+        actionCoolDownMs: 3000,
+        resetOn: 'activity',
+        selectors: [{ text: '开始' }],
+        action: { type: 'click' },
+      },
+    })
+    // 列表直接吃写完后返回的整包读数，写完不再补读一次。
+    expect(await screen.findByTestId('automation-rule-list')).toHaveTextContent('rule-new')
+    expect(screen.queryByTestId('automation-rule-form')).not.toBeInTheDocument()
+    expect(bridge.getAccessibilityAutomationRules.mock.calls.length).toBe(readsBefore)
+  })
+
+  it('删除要先二次确认，确认后才真删，返回的整包读数决定列表', async () => {
+    bridge.getAccessibilityAutomationRules.mockImplementation(
+      (packageName: string) => Promise.resolve(rulesFor(packageName)),
+    )
+    await openRules()
+
+    fireEvent.click(await screen.findByRole('button', { name: '删除规则 rule-1' }))
+
+    // 第一下只问一句，说清是整条删除；这时桥一次都没调。
+    const confirm = await screen.findByTestId('automation-rule-delete-confirm')
+    expect(confirm).toHaveTextContent(
+      '删除「rule-1」是整条删除：规则本身、它的全部选择器和动作都不会留下，删了就没了。',
+    )
+    expect(bridge.deleteAccessibilityAutomationRule).not.toHaveBeenCalled()
+
+    // 取消能反悔，规则与桥都不动。
+    fireEvent.click(within(confirm).getByRole('button', { name: '取消' }))
+    expect(screen.queryByTestId('automation-rule-delete-confirm')).not.toBeInTheDocument()
+    expect(bridge.deleteAccessibilityAutomationRule).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '删除规则 rule-1' }))
+    const confirmed = await screen.findByTestId('automation-rule-delete-confirm')
+    fireEvent.click(within(confirmed).getByRole('button', { name: '确认删除' }))
+
+    await waitFor(() => expect(bridge.deleteAccessibilityAutomationRule).toHaveBeenCalledWith({
+      packageName: 'com.example.reader',
+      ruleId: 'rule-1',
+    }))
+    // 整条没了：返回的空读数直接决定列表，旧规则连名字都不留。
+    expect(await screen.findByText('这个应用还没有规则。')).toBeInTheDocument()
+    expect(screen.queryByText('rule-1')).not.toBeInTheDocument()
   })
 })

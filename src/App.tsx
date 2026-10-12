@@ -4,6 +4,7 @@ import { PluginSettings } from './components/PluginSettings'
 import { ApplicationPicker } from './components/ApplicationPicker'
 import { DeviceShellSettings } from './components/DeviceShellSettings'
 import { VirtualScreenSettings } from './components/VirtualScreenSettings'
+import { AutomationRuleForm } from './components/AutomationRuleForm'
 import { AppBackground } from './components/AppBackground'
 import { LanguageSettings } from './components/LanguageSettings'
 import { AppearanceSettings } from './components/AppearanceSettings'
@@ -35,7 +36,9 @@ import {
   KeyRound,
   Loader2,
   LockKeyhole,
+  Pencil,
   Play,
+  Plus,
   Power,
   RefreshCw,
   RotateCcw,
@@ -80,6 +83,8 @@ import type {
   DiagnosticLogState,
   DiagnosticLogText,
   AccessibilityAutomationAction,
+  AccessibilityAutomationRuleInput,
+  AccessibilityAutomationRuleWriteMode,
   AccessibilityAutomationRun,
   AccessibilityAutomationRules,
   AccessibilityAutomationRuns,
@@ -3522,6 +3527,17 @@ function draftFromSettings(settings: RuntimeSettings, previous: SettingsDraft | 
   }
 }
 
+/**
+ * 规则写入表单的打开状态。
+ *
+ * `rule` 为 `null` 只允许出现在 `create`：编辑必须先读回整条规则，
+ * 因为原生侧的 `update` 是整条替换，缺字段不会保持原样。
+ */
+interface AutomationRuleDraftState {
+  mode: AccessibilityAutomationRuleWriteMode
+  rule: AccessibilityAutomationRuleInput | null
+}
+
 interface SettingsScreenProps {
   busy: string | null
   settingsReadStatus: 'idle' | 'loading' | 'failed'
@@ -3611,8 +3627,21 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   /** 规则读数；`null` 同样是「还没读到」，与「读到了但一条规则都没有」分开显示。 */
   const [automationRules, setAutomationRules] = useState<AccessibilityAutomationRules | null>(null)
   const [automationRulesStatus, setAutomationRulesStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
-  /** 正在开关的那条规则；在途时只禁用这一条。 */
+  /** 正在对哪条规则做单条操作（开关 / 读回全文）；在途时只禁用这一条。 */
   const [automationRulePending, setAutomationRulePending] = useState<string | null>(null)
+  /** 正在写入（保存 / 删除）；非空时表单与其它写入口一律禁用。 */
+  const [automationRuleWriting, setAutomationRuleWriting] = useState<'save' | 'delete' | null>(null)
+  /** 待确认删除的规则 id：删除是整条删除、删掉就没了，所以先问一次再动手。 */
+  const [automationRuleConfirmDelete, setAutomationRuleConfirmDelete] = useState<string | null>(null)
+  /** 规则写入 / 读回失败的原因；桥回来的文案原样展示，不吞也不改写。 */
+  const [automationRuleError, setAutomationRuleError] = useState<string | null>(null)
+  /**
+   * 打开中的规则表单草稿。
+   *
+   * `create` 时 [rule] 为 `null`：新建的合法默认值由表单自己给。
+   * `update` 时**必须**带着读回的整条规则——没有它就绝不打开表单（见 startEditRule）。
+   */
+  const [automationRuleDraft, setAutomationRuleDraft] = useState<AutomationRuleDraftState | null>(null)
   /**
    * 保存白名单时要输入的验证密码。
    *
@@ -3726,6 +3755,87 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         setAutomationRulePending(null)
         loadAutomationRules(rulesPackage)
       })
+  }
+
+  /**
+   * 「规则」这一块的其它写入口是否要禁用。
+   *
+   * 表单开着、一次写入还在路上、有规则正在读回或开关、有待确认的删除——任一成立就锁住，
+   * 免得两个写操作同时在途：它们返回的都是整包读数，后回来的那份说了算，先回来的写入看起来就像没发生。
+   */
+  const automationRuleLocked = busy !== null || automationRuleWriting !== null || automationRuleDraft !== null
+    || automationRulePending !== null || automationRuleConfirmDelete !== null
+
+  /** 打开「新建规则」表单；默认值由表单自己填，这里不读任何东西。 */
+  const startCreateRule = (): void => {
+    if (rulesPackage === '') return
+    setAutomationRuleError(null)
+    setAutomationRuleDraft({ mode: 'create', rule: null })
+  }
+
+  /**
+   * 打开「编辑规则」表单。
+   *
+   * **必须先把整条规则读回来**：原生侧的 `update` 是整条替换，没提交的字段不会保持原样，
+   * 所以读不回来就绝不打开表单——尤其不能打开一张空的，那等于用户点一次保存就把原来的选择器整片抹掉。
+   * 失败时只把桥回来的原因写在卡片里（`role="alert"`），没有任何输入框出现。
+   */
+  const startEditRule = (ruleId: string): void => {
+    if (rulesPackage === '') return
+    setAutomationRuleError(null)
+    setAutomationRulePending(ruleId)
+    void runtimeBridge.getAccessibilityAutomationRule({ packageName: rulesPackage, ruleId })
+      .then(detail => setAutomationRuleDraft({ mode: 'update', rule: detail.rule }))
+      .catch(error => setAutomationRuleError(errorMessage(error)))
+      .finally(() => setAutomationRulePending(null))
+  }
+
+  /** 关闭表单：连失败提示一起清掉，免得下次打开还挂着上一次的原因。 */
+  const closeAutomationRuleForm = (): void => {
+    setAutomationRuleDraft(null)
+    setAutomationRuleError(null)
+  }
+
+  /**
+   * 保存规则（新建或编辑）。
+   *
+   * 用桥回来的**整包读数**直接刷新列表，不再补一次读取：那一次读可能读到的又是旧的，
+   * 界面就会短暂显示一份和刚写进去的内容不一致的列表。
+   */
+  const saveAutomationRule = (rule: AccessibilityAutomationRuleInput): void => {
+    if (automationRuleDraft === null || rulesPackage === '') return
+    setAutomationRuleWriting('save')
+    setAutomationRuleError(null)
+    void runtimeBridge.saveAccessibilityAutomationRule({
+      packageName: rulesPackage,
+      mode: automationRuleDraft.mode,
+      rule,
+    })
+      .then(result => {
+        setAutomationRules(result)
+        setAutomationRuleDraft(null)
+      })
+      .catch(error => setAutomationRuleError(errorMessage(error)))
+      .finally(() => setAutomationRuleWriting(null))
+  }
+
+  /**
+   * 删除一条规则；调用方保证已经二次确认过。
+   *
+   * 失败只留下原因，列表保持原样：本地先删掉再回滚会让「到底删没删」变得看不清，
+   * 而这里唯一可信的答案就是桥回来的那份读数。
+   */
+  const deleteAutomationRule = (ruleId: string): void => {
+    if (rulesPackage === '') return
+    setAutomationRuleWriting('delete')
+    setAutomationRuleError(null)
+    void runtimeBridge.deleteAccessibilityAutomationRule({ packageName: rulesPackage, ruleId })
+      .then(result => {
+        setAutomationRules(result)
+        setAutomationRuleConfirmDelete(null)
+      })
+      .catch(error => setAutomationRuleError(errorMessage(error)))
+      .finally(() => setAutomationRuleWriting(null))
   }
 
   if (settingsReadStatus === 'failed') {
@@ -4281,6 +4391,13 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                     {automationRulesStatus === 'loading' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("刷新")}
                   </button>
                 )}
+                {/* 新建入口不依赖「已经有没有规则」：一条规则都没有时它才是最该看到的按钮。 */}
+                {rulesPackage !== '' && (
+                  <button className="button button-secondary" type="button" data-testid="automation-rule-create"
+                    onClick={startCreateRule} disabled={automationRuleLocked}>
+                    <Plus size={18} />{t("新建规则")}
+                  </button>
+                )}
               </div>
               <p className="settings-note">
                 {t("规则由 AI 生成、你在写盘前确认；这里只改「启不启用」，不改规则内容。停用一条规则不会删掉它。")}
@@ -4295,7 +4412,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                     .filter(name => !accessibility.alwaysAllowedPackages.includes(name))
                     .map(name => (
                       <button key={name} className="button button-secondary" type="button"
-                        onClick={() => loadAutomationRules(name)} disabled={busy !== null}
+                        onClick={() => loadAutomationRules(name)} disabled={automationRuleLocked}
                         aria-pressed={rulesPackage === name}>
                         {name}
                       </button>
@@ -4332,14 +4449,72 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                       <span>{rule.enabled ? t("已启用") : t("已停用")}</span>
                       <button className="button button-secondary" type="button"
                         onClick={() => toggleAutomationRule(rule.id, !rule.enabled)}
-                        disabled={busy !== null || automationRulePending !== null || !automationRules.allowed}>
+                        disabled={automationRuleLocked || !automationRules.allowed}>
                         {automationRulePending === rule.id
                           ? <Loader2 className="spin" size={18} />
                           : rule.enabled ? t("停用") : t("启用")}
                       </button>
+                      {/*
+                        「编辑」只发起一次读回（startEditRule）：原生 update 是整条替换，
+                        读不回全文就打不开表单——打开一张空的，用户一保存就把选择器整片抹掉了。
+                      */}
+                      <button className="button button-secondary" type="button"
+                        aria-label={t("编辑规则 {0}", rule.id)}
+                        onClick={() => startEditRule(rule.id)}
+                        disabled={automationRuleLocked}>
+                        {automationRulePending === rule.id
+                          ? <Loader2 className="spin" size={18} />
+                          : <Pencil size={18} />}{t("编辑")}
+                      </button>
+                      <button className="button button-secondary" type="button"
+                        aria-label={t("删除规则 {0}", rule.id)}
+                        onClick={() => setAutomationRuleConfirmDelete(rule.id)}
+                        disabled={automationRuleLocked}>
+                        <Trash2 size={18} />{t("删除")}
+                      </button>
+                      {automationRuleConfirmDelete === rule.id && (
+                        <div className="automation-rule-delete-confirm" data-testid="automation-rule-delete-confirm">
+                          <p role="alert">
+                            {t("删除「{0}」是整条删除：规则本身、它的全部选择器和动作都不会留下，删了就没了。", rule.id)}
+                          </p>
+                          <button className="button button-secondary compact-button" type="button"
+                            onClick={() => deleteAutomationRule(rule.id)} disabled={automationRuleWriting !== null}>
+                            {automationRuleWriting === 'delete'
+                              ? <Loader2 className="spin" size={18} />
+                              : <Trash2 size={18} />}{t("确认删除")}
+                          </button>
+                          <button className="button button-secondary compact-button" type="button"
+                            onClick={() => setAutomationRuleConfirmDelete(null)} disabled={automationRuleWriting !== null}>
+                            {t("取消")}
+                          </button>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
+              )}
+              {/*
+                读回 / 写入失败的原因：原样展示桥回来的文案，不改写也不吞掉。
+                表单没打开时提示显示在卡片里——「编辑」读回失败正是这种情况：
+                这里**只会出现这段原因，不会出现任何输入框**。
+              */}
+              {automationRuleError !== null && automationRuleDraft === null && (
+                <p className="settings-note" role="alert" data-testid="automation-rule-write-error">
+                  {automationRuleError}
+                </p>
+              )}
+              {automationRuleDraft !== null && (
+                // key 带上方式与标识：换一条规则编辑时表单重建，草稿不会带着上一条的内容。
+                <AutomationRuleForm
+                  key={`automation-rule-${automationRuleDraft.mode}-${automationRuleDraft.rule?.id ?? 'new'}`}
+                  packageName={rulesPackage}
+                  rule={automationRuleDraft.rule}
+                  mode={automationRuleDraft.mode}
+                  busy={automationRuleWriting !== null}
+                  error={automationRuleError}
+                  onSubmit={saveAutomationRule}
+                  onCancel={closeAutomationRuleForm}
+                />
               )}
             </div>
             <label className="toggle-row">

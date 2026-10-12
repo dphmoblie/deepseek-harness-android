@@ -53,6 +53,7 @@ import {
   assertAccessibilityRuleId,
   assertAccessibilityRuleWriteMode,
   assertBooleanFlag,
+  validateAccessibilityAutomationRuleDetail,
   validateAccessibilityAutomationRules,
   validateAccessibilityAutomationRuns,
   validateAccessibilityAutomationState,
@@ -158,6 +159,8 @@ interface NativeRuntimePlugin {
   getAccessibilityAutomationRuns(options: { packageName?: string }): Promise<unknown>
   /** 读某个包已保存的自动化规则（只读，不打开任何东西）；包名必填。 */
   getAccessibilityAutomationRules(options: { packageName: string }): Promise<unknown>
+  /** 读一条规则的全文（选择器与动作参数），给编辑表单预填；只读，白名单外的包也读得出。 */
+  getAccessibilityAutomationRule(options: { packageName: string; ruleId: string }): Promise<unknown>
   /** 启用 / 停用一条规则；白名单外的包原生侧拒写。 */
   setAccessibilityAutomationRuleEnabled(options: {
     packageName: string
@@ -365,6 +368,17 @@ function createNativeBridge(): RuntimeBridge {
       .then(() => ({ packageName: assertAccessibilityPackageName(packageName) }))
       .then(options => NativeRuntime.getAccessibilityAutomationRules(options))
       .then(validateAccessibilityAutomationRules),
+    // 一条规则的全文：给编辑表单预填用。只读、不写盘；判断「能不能改」是界面的事（看返回里的 allowed）。
+    getAccessibilityAutomationRule: ({ packageName, ruleId }) => Promise.resolve()
+      .then(() => ({
+        owner: assertAccessibilityPackageName(packageName),
+        id: assertAccessibilityRuleId(ruleId),
+      }))
+      .then(({ owner, id }) =>
+        NativeRuntime.getAccessibilityAutomationRule({ packageName: owner, ruleId: id }).then(value =>
+          validateAccessibilityAutomationRuleDetail(value, owner, id),
+        ),
+      ),
     // 单条规则的启用 / 停用：白名单校验在原生侧（写规则必须过白名单），这里只保证参数形态正确。
     setAccessibilityAutomationRuleEnabled: ({ packageName, ruleId, enabled }) => Promise.resolve()
       .then(() => ({

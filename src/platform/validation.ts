@@ -4,6 +4,7 @@ import type {
   AccessibilityAutomationActionKind,
   AccessibilityAutomationBlocked,
   AccessibilityAutomationRule,
+  AccessibilityAutomationRuleDetail,
   AccessibilityAutomationRuleInput,
   AccessibilityAutomationRules,
   AccessibilityAutomationRulesCorrupt,
@@ -1118,6 +1119,31 @@ export function assertAccessibilityAutomationRuleInput(
     resetOn: accessibilityEnumeration(rule.resetOn, '自动化规则重置时机', ACCESSIBILITY_AUTOMATION_RESET_ON_VALUES),
     selectors: rule.selectors.map((item, index) => accessibilitySelectorInput(item, index)),
     action: { type, ...accessibilityActionParams(type, action) },
+  }
+}
+
+/**
+ * 校验「一条规则的全文」这条读回路径的返回值。
+ *
+ * 复用写入侧的 `assertAccessibilityAutomationRuleInput` 是刻意的：读回来的 JSON 与要写进去的
+ * JSON 在原生侧是同一套键（`AutomationRule.toRuleJson()`），两边形状一致，才不会出现
+ * 「读回来的东西填不进表单」。包名与规则标识都要和请求对上——对不上说明桥回错了包，
+ * 拿它预填等于把 B 的内容写进 A。
+ */
+export function validateAccessibilityAutomationRuleDetail(
+  value: unknown,
+  packageName: string,
+  ruleId: string,
+): AccessibilityAutomationRuleDetail {
+  const detail = asRecord(value, '自动化规则全文')
+  const owner = assertAccessibilityPackageName(detail.packageName)
+  if (owner !== packageName) throw new Error('规则全文里的包名与请求的包名不一致')
+  if (assertAccessibilityRuleId(detail.ruleId) !== ruleId) throw new Error('规则全文里的规则标识与请求的不一致')
+  return {
+    packageName: owner,
+    ruleId,
+    allowed: requiredBoolean(detail.allowed, '规则所属应用是否在自动化白名单内'),
+    rule: assertAccessibilityAutomationRuleInput(detail.rule, packageName),
   }
 }
 

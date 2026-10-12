@@ -815,6 +815,21 @@ export interface AccessibilityAutomationRuleInput {
 export type AccessibilityAutomationRuleWriteMode = 'create' | 'update'
 
 /**
+ * 一条规则的**全文**（选择器与动作参数），给编辑表单预填。
+ *
+ * 为什么不能拿列表摘要凑：写入侧的 `update` 是**整条替换**，而列表刻意只带摘要
+ * （选择器里的文本、viewId 能反推界面内容）。表单预填不出原来的选择器，用户点一次
+ * 「保存」就等于把它们整片抹掉——所以编辑必须先读全文，读不到就不许预填。
+ */
+export interface AccessibilityAutomationRuleDetail {
+  packageName: string
+  ruleId: string
+  /** 该应用当前是否在无障碍自动化白名单内：`false` 时能看能改，但规则不会被任何事件用到。 */
+  allowed: boolean
+  rule: AccessibilityAutomationRuleInput
+}
+
+/**
  * 目标应用副屏的取帧档位。
  *
  * 这 10 个值**不是显示器刷新率档位**：它们决定预览多久从虚拟屏取一帧
@@ -1402,6 +1417,17 @@ export interface RuntimeBridge {
     packageName: string
     ruleId: string
   }) => Promise<AccessibilityAutomationRules>
+  /**
+   * 读**一条**规则的全文（选择器与动作参数），给编辑表单预填。
+   *
+   * 与列表读取分开是刻意的：列表只带摘要，而写入侧的 `update` 是整条替换——预填不出来的编辑
+   * 等于把用户原有的选择器整片抹掉。这条同样是只读：不写盘、不打开任何开关；白名单外的包
+   * 照样读得出来（规则是用户/AI 写下的数据），要不要禁用保存由返回里的 `allowed` 决定。
+   */
+  getAccessibilityAutomationRule: (options: {
+    packageName: string
+    ruleId: string
+  }) => Promise<AccessibilityAutomationRuleDetail>
   /**
    * 用系统生物识别 / 锁屏密码重置验证密码——「忘记密码」的唯一出路。
    *

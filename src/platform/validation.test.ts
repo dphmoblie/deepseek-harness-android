@@ -16,6 +16,7 @@ import {
   validateAllFilesAccessResult,
   validateAppUpdateState,
   validateAccessibilityAutomationRuns,
+  validateAccessibilityAutomationRuleDetail,
   validateAccessibilityAutomationRules,
   validateAccessibilityAutomationState,
   validateAccessibilityPasswordInput,
@@ -1089,6 +1090,55 @@ describe('无障碍自动化状态与验证密码校验', () => {
           .toThrow(`自动化规则第 1 项${label}无效`)
       }
     }
+  })
+
+  it('规则全文读数：包名与标识必须和请求对得上，里层规则走写入侧那套逐项校验', () => {
+    const full = {
+      packageName: 'com.example.target',
+      ruleId: 'rule-1',
+      allowed: true,
+      rule: {
+        id: 'rule-1',
+        packageName: 'com.example.target',
+        enabled: true,
+        allowActivities: [],
+        denyActivities: [],
+        matchDelayMs: 0,
+        maxActions: 3,
+        actionCoolDownMs: 3000,
+        resetOn: 'activity',
+        selectors: [{ id: ':id/target', text: '确定' }],
+        action: { type: 'click' },
+      },
+    }
+    const result = validateAccessibilityAutomationRuleDetail(full, 'com.example.target', 'rule-1')
+    // 选择器正文必须原样读得回来——这正是列表摘要给不了、而编辑表单必须拿到的东西。
+    expect(result.rule.selectors[0]).toEqual({ id: ':id/target', text: '确定' })
+    expect(result.rule.action).toEqual({ type: 'click' })
+    expect(result.allowed).toBe(true)
+    expect(validateAccessibilityAutomationRuleDetail({ ...full, allowed: false }, 'com.example.target', 'rule-1').allowed)
+      .toBe(false)
+    // 桥回错包 / 错规则：拿它预填等于把 B 的内容写进 A，必须拦住。
+    expect(() => validateAccessibilityAutomationRuleDetail(
+      { ...full, packageName: 'com.example.other' },
+      'com.example.target',
+      'rule-1',
+    )).toThrow('规则全文里的包名与请求的包名不一致')
+    expect(() => validateAccessibilityAutomationRuleDetail({ ...full, ruleId: 'rule-2' }, 'com.example.target', 'rule-1'))
+      .toThrow('规则全文里的规则标识与请求的不一致')
+    expect(() => validateAccessibilityAutomationRuleDetail({ ...full, allowed: 'true' }, 'com.example.target', 'rule-1'))
+      .toThrow('规则所属应用是否在自动化白名单内格式无效')
+    // 里层用的是写入侧那套校验：读回来的东西填不进表单，等于预填就是坏的。
+    expect(() => validateAccessibilityAutomationRuleDetail(
+      { ...full, rule: { ...full.rule, selectors: [] } },
+      'com.example.target',
+      'rule-1',
+    )).toThrow('自动化规则至少要有一个选择器')
+    expect(() => validateAccessibilityAutomationRuleDetail(
+      { ...full, rule: { ...full.rule, packageName: 'com.example.other' } },
+      'com.example.target',
+      'rule-1',
+    )).toThrow('规则里的包名与请求的包名不一致')
   })
 
   it('规则标识与布尔开关的断言：只认受控取值，不做静默转换', () => {

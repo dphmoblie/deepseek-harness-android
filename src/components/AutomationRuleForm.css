@@ -1,0 +1,130 @@
+/* 「无障碍自动化规则」写入表单的样式，类名前缀 automation-rule。
+   只用主题变量取色，避免在深色/浅色主题里各写一套。 */
+
+.automation-rule-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--line-faint);
+  border-radius: var(--radius-card);
+  background: var(--surface-sunken);
+  padding: 14px;
+}
+
+.automation-rule-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  border: 1px solid var(--line-faint);
+  border-radius: var(--radius-card);
+  padding: 12px 14px;
+}
+
+.automation-rule-group:disabled {
+  opacity: var(--card-opacity);
+}
+
+.automation-rule-group > legend {
+  padding: 0 6px;
+  color: var(--field-label);
+  font-size: 12px;
+  font-weight: var(--weight-semibold);
+}
+
+.automation-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.automation-rule-field {
+  min-width: 0;
+}
+
+.automation-rule-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* 选择器：每个选择器一张卡，序号在 legend 上，删掉中间一项时不会跟别的选择器混淆。 */
+.automation-rule-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-muted);
+  padding: 10px 12px;
+}
+
+.automation-rule-selector > legend {
+  padding: 0 6px;
+  color: var(--field-label);
+  font-size: 12px;
+}
+
+.automation-rule-selector-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 冷门条件折叠区。收起只影响视觉：里面的输入框与取值一直参与提交。 */
+.automation-rule-more > summary {
+  cursor: pointer;
+  color: var(--blue);
+  font-size: 13px;
+  padding: 2px 0;
+}
+
+.automation-rule-more[open] > summary {
+  margin-bottom: 10px;
+}
+
+.automation-rule-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.automation-rule-failure {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--red-text);
+  background: var(--red-soft);
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-control);
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.automation-rule-failure > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+/* 删除的二次确认：说清「整条删除、删掉就没了」再动手。 */
+.automation-rule-delete-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-control);
+  background: var(--red-soft);
+  padding: 10px 12px;
+}
+
+.automation-rule-delete-confirm > p {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--red-text);
+  font-size: 13px;
+  line-height: 1.5;
+}

@@ -270,6 +270,9 @@ describe('浏览器桥的自动化总开关与运行记录', () => {
     // 所以这里宁可失败，让卡片显示「规则读取失败」，也不编一份 0 条规则。
     await expect(bridge.getAccessibilityAutomationRules('com.example.reader'))
       .rejects.toThrow('浏览器预览没有无障碍规则存储')
+    // 读全文同样如实拒绝：回一份空规则会被表单预填进去，点一次保存就把真机上那条规则整条清掉。
+    await expect(bridge.getAccessibilityAutomationRule({ packageName: 'com.example.reader', ruleId: 'rule-1' }))
+      .rejects.toThrow('浏览器预览没有无障碍规则存储')
     await expect(bridge.setAccessibilityAutomationRuleEnabled({
       packageName: 'com.example.reader',
       ruleId: 'rule-1',
@@ -282,6 +285,8 @@ describe('浏览器桥的自动化总开关与运行记录', () => {
 
     await expect(bridge.getAccessibilityAutomationRules('not a package'))
       .rejects.toThrow('无障碍白名单第 1 项无效')
+    await expect(bridge.getAccessibilityAutomationRule({ packageName: 'com.example.reader', ruleId: 'rule 1' }))
+      .rejects.toThrow('自动化规则标识无效')
     await expect(bridge.setAccessibilityAutomationRuleEnabled({
       packageName: 'com.example.reader',
       ruleId: 'rule 1',

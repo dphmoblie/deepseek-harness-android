@@ -808,5 +808,57 @@ param   = {"op":"status"|"set"|"enable"|"trial", ...}
 
 1. **没有真机验证**：写盘后规则是否立刻生效、损坏态在真机上长什么样，都只有前端用例 + 编译证据。
 2. **两个新桥方法本身没有 JVM 单测**：`@PluginMethod` 的入参与拒收分支（白名单拒写、规则 id 非法、损坏）依赖 `PluginCall`，JVM 单测里构造不出来；这一层目前由 `scripts/native-bridge-parity.test.mjs` 的同名比对、`src/platform/validation.test.ts` 与 `src/App.accessibility.test.tsx` 间接覆盖，原生侧的拒收分支只能等真机/仪器化测试。
-3. **没有「新建 / 编辑 / 删除规则」的界面**：这一批只做「看 + 开关」。规则内容仍由 AI 生成、人在写盘前确认；删除规则只能靠重新生成覆盖整包。
+3. **没有「新建 / 编辑 / 删除规则」的界面**：这一批只做「看 + 开关」。规则内容仍由 AI 生成、人在写盘前确认；删除规则只能靠重新生成覆盖整包。**（2026-10-12 已补：见下一节。）**
 4. **没有「每应用独立配置」的表单**：白名单、`maxActions`、冷却时间这些参数的编辑入口仍只有桥与存储，没有界面。
+
+## 规则的写入面：编辑必须先读全文（2026-10-12 追加）
+
+> 上一节留了一条明确的缺口：「新建 / 编辑 / 删除规则」的界面不存在（原生写入口与前端平台层先落了地，界面还没接）。补这个缺口时先撞上一个**会毁数据**的问题，这一节先记它，再记怎么绕开。
+
+### 为什么不能拿列表摘要预填
+
+原生 `update` 是**整条替换**（`AutomationRuleStore.savePackage` 整包一次原子写，`AutomationRule.fromJson` 没给的字段按原生默认值写下去），而列表回显**刻意只带摘要、不带选择器正文**（上一节：文本与 `viewId` 足以反推界面内容）。
+
+两件事凑在一起就是一条数据毁伤路径：**表单预填不出原来的选择器，用户点一次「保存」就等于把它们整片抹掉**——界面上看不出任何异常，规则还在、只是不再命中。
+
+三条出路里选第三条：
+
+1. 列表多回正文 —— 直接违背上一节的脱敏口径；
+2. 让原生支持「只改某几个字段」的补丁式写入 —— 等于重做写入语义，且 `update` 的原子性与「整条替换」的既有测试都要推翻；
+3. **没有正文就不许编辑**：新增一个只读的「读一条规则全文」桥方法，编辑先读、读到了才让改。
+
+### 第三个桥方法：`getAccessibilityAutomationRule`
+
+| 方法 | 参数 | 返回 | 拒收条件 |
+| --- | --- | --- | --- |
+| `getAccessibilityAutomationRule` | `packageName`（必填）、`ruleId`（必填） | `{packageName, ruleId, allowed, rule}`，`rule` 是**与写入口同一套键**的完整规则（`AutomationRule.toRuleJson()`） | 缺参数 / 格式非法 / 包名不符 → `ACCESSIBILITY_CONFIG_INVALID`；规则不存在 → `ACCESSIBILITY_CONFIG_NOT_FOUND`；数据损坏 → `ACCESSIBILITY_CONFIG_CORRUPT` |
+
+- **它是只读的**：不写盘、不打开任何开关、不需要验证密码、**白名单外的包照样读得出来**——规则是用户/AI 写下的数据，能不能改由返回里的 `allowed` 在界面上决定，而不是让读操作本身失败。
+- **读回来与写进去是同一套键**：`AutomationRuleEditor.ReadOutcome` 只有 `Found(rule)` 与 `Rejected(code, message)` 两种结果，`Found` 里的规则直接来自存储解析，再走 `toRuleJson()` 原样出去。前后端因此可以**复用写入侧那套逐项校验**（`assertAccessibilityAutomationRuleInput`）来校验读回值——两边形状不一致时才需要两套，那正是「读回来的东西填不进表单」的来源。
+- 前端多校验两件事：返回里的 `packageName` 与 `ruleId` 必须**与请求对得上**（对不上说明桥回错了包，拿它预填等于把 B 的内容写进 A）。
+
+### 前端平台层（`src/platform/*`）
+
+- `src/platform/types.ts` 新增 `AccessibilityAutomationRuleDetail`，接口 `NativeRuntimePlugin` 新增 `getAccessibilityAutomationRule`（`scripts/native-bridge-parity.test.mjs` 会与新桥方法同名比对，漏一侧即失败）。
+- `src/platform/validation.ts` 新增 `validateAccessibilityAutomationRuleDetail(value, packageName, ruleId)`：包名与规则标识先对齐请求，里层规则直接复用 `assertAccessibilityAutomationRuleInput`。
+- `src/platform/native.ts` 的入参自检**折进 Promise 链**（同步抛出会绕过调用方的失败分支）；校验读回值时把 `owner` / `id` 留在闭包里，不与原生返回的值混用。
+- `src/platform/browser.ts` 如实拒绝「浏览器预览没有无障碍规则存储」：**不回一份空规则**——空规则预填进表单，点一次保存就等于把真机上那条规则整条清掉，这与「回空列表会被显示成『你还没有规则』」是同一类假象。
+
+### 界面（`src/components/AutomationRuleForm.tsx` + `src/App.tsx`）
+
+- **两道闸都在「读不回全文就不开表单」上**：`startEditRule`（`src/App.tsx:3783`）先 `setAutomationRulePending(ruleId)`，读回成功才 `setAutomationRuleDraft({mode:'update', rule: detail.rule})`；失败分支**只写提示文案**，`automationRuleDraft` 保持 `null`，而表单的挂载条件就是 `automationRuleDraft !== null`（`src/App.tsx:4506`）。组件内再加一道 `mode === 'update' && rule === null` 的守卫（`src/components/AutomationRuleForm.tsx:707-719`）：只显示原因与「关闭」，**一个输入框都不渲染**——两道闸任意一道失效，另一道仍挡得住「空表单 + 保存」。
+- **字段一个都不丢是类型保证的**：草稿类型是 `StringDraft<Required<AccessibilityAutomationSelectorInput>>`（13 个选择器字段全为必填字符串），`selectorToDraft` / `draftToSelector` / `SELECTOR_FIELD_LABELS` 三处少一个键就过不了 `tsc`。折叠只影响视觉：冷门字段（`textStartsWith` / `textEndsWith` / `descContains` / `clickable` / `enabled` / `editable` / `minWidth` / `minHeight`）收在 `<details>` 里，输入框始终在 DOM 中，`<summary>` 上写「更多条件（已填 N 项）」，收起来也看得出填了几项。
+- **三态与数字的坑各有一个名字**：三个布尔字段是 `不限 / 是 / 否` 三态（`''` 与 `'false'` 不是一回事，`false` 是「只匹配不可点击的节点」这个真实约束）；`launch` 的 uri 只认 `http://` / `https://` / `market://`；`key` 读回表外键值时用 `#<值>` 占位原样带回，让原生按「不在允许的按键表内」拒收，而不是界面悄悄换一个键。
+- **切换动作类型是整组重建**，不是把用不上的字段藏起来（藏起来的话切回来旧值会复活，而提交时它确实会被带上）；`create` 的默认值填完标识就能直接保存。
+- **保存与删除都用桥回来的整包读数刷新列表**，不本地改再回滚、也不补一次读（补读可能读到旧的，界面会短暂显示与刚写进去的内容不一致的列表）；删除有二次确认并写明「整条删除」。
+- **写入失败不改列表**：错误原样显示（表单开着就显示在表单里，没开就显示在卡片里），表单里用户刚敲的内容不丢（草稿只挂载时建立一次，父组件重渲染不冲掉它；换一条规则编辑由 `key` 触发重建）。
+
+### 本轮没做 / 没验的
+
+1. **没有真机验证**：新桥方法在真机上能否读回一条由 AI 写入的规则、`toRuleJson()` 的键是否与写入侧逐字一致（本机只有 JVM 单测与前端用例）。
+2. **`@PluginMethod` 的拒收分支仍无 JVM 单测**：依赖 `PluginCall`，JVM 里构造不出来；由编译、前端用例与桥接契约间接覆盖。
+3. 读全文这条路**只给编辑用**，不改变列表口径：列表仍然是摘要，界面上不展示选择器正文。
+4. **表单根元素是 `div` 而不是 `form`**：设置页本身是一个 `<form>`，表单不能套表单（套起来时「保存规则」的提交事件会冒泡到设置页那个表单上，顺手把别的设置也存了）。代价是**在输入框里按回车不会提交规则**，只能点「保存规则」；要支持回车得先在设置页那层加事件来源守卫。
+5. **白名单外的应用仍可新建 / 编辑 / 删除**（只禁用「启用/停用」）：门槛在原生，写失败会把原因（`ACCESSIBILITY_CONFIG_DENIED` 的中文说明）原样显示出来。这是刻意留的——读得出规则、写不进盘，比把入口全禁掉更容易让人看懂发生了什么；若改成直接禁用，一处开关即可。
+6. **预检只做「明显不合法」一档**（空标识、0 选择器、数字越界、`launch` 既无组件也无链接、uri 协议不符）：标识字符集、选择器上限、动作参数收窄仍由 `src/platform/validation.ts` 与原生判定，界面原样展示 rejected 的文案。所以「填了中文标识」这类只会在提交后由桥回来的文案提示。
+7. **需真机确认**：大规则（16 选择器 × 13 字段）打开编辑表单的首屏渲染是否卡（表单是全量受控渲染，无虚拟化）、窄屏 + 软键盘弹出时底部按钮是否被遮挡、`<details>` 折叠区的展开手感、以及原生失败文案在真机上是否与界面预期一致。

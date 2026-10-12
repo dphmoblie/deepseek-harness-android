@@ -106,6 +106,7 @@ export const bridge = {
   setAccessibilityAutomationRuleEnabled: vi.fn(),
   saveAccessibilityAutomationRule: vi.fn(),
   deleteAccessibilityAutomationRule: vi.fn(),
+  getAccessibilityAutomationRule: vi.fn(),
   openAccessibilitySettings: vi.fn(),
   getKeepAliveState: vi.fn(),
   getOverlayBallState: vi.fn(),
@@ -403,6 +404,27 @@ export function beforeEachAppTest(): void {
   bridge.deleteAccessibilityAutomationRule.mockImplementation((options: { packageName: string }) => Promise.resolve({
     packageName: options.packageName, allowed: true, corrupt: null, rules: [],
   }))
+  // 读一条规则的全文：默认给一条「能过校验的完整规则」——返回 undefined 会让界面的载荷校验抛错，
+  // 那和「读回来是坏的」看起来一样，用例就分不出是桩没配还是代码写错了。
+  bridge.getAccessibilityAutomationRule.mockImplementation((options: { packageName: string; ruleId: string }) =>
+    Promise.resolve({
+      packageName: options.packageName,
+      ruleId: options.ruleId,
+      allowed: true,
+      rule: {
+        id: options.ruleId,
+        packageName: options.packageName,
+        enabled: true,
+        allowActivities: [],
+        denyActivities: [],
+        matchDelayMs: 0,
+        maxActions: 1,
+        actionCoolDownMs: 3000,
+        resetOn: 'activity',
+        selectors: [{ id: ':id/target' }],
+        action: { type: 'click' },
+      },
+    }))
   // 默认已授予「显示在其他应用上层」权限：与用例无关的测试不该被一个禁用开关影响。
   bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
   bridge.openOverlaySettings.mockResolvedValue(undefined)

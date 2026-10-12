@@ -5,6 +5,7 @@ import type {
   AccessibilityAutomationAction,
   AccessibilityAutomationRuntime,
   AccessibilityAutomationRules,
+  AccessibilityAutomationRuleDetail,
   AccessibilityAutomationRuleInput,
   AccessibilityAutomationRuleWriteMode,
   AccessibilityAutomationRuns,
@@ -415,6 +416,20 @@ export function createBrowserBridge(): RuntimeBridge {
       // （界面拿不到 `failed` 状态，只会看到一个没反应的按钮）。
       return Promise.resolve().then(() => {
         assertAccessibilityPackageName(packageName)
+        throw new Error('浏览器预览没有无障碍规则存储')
+      })
+    },
+    /*
+     * 读一条规则的全文：预览里同样没有存储，如实拒绝。**不回一份空规则**——
+     * 空规则预填进表单，用户点一次保存就等于把真机上那条规则的正文整条清掉。
+     */
+    getAccessibilityAutomationRule: (options: {
+      packageName: string
+      ruleId: string
+    }): Promise<AccessibilityAutomationRuleDetail> => {
+      return Promise.resolve().then(() => {
+        assertAccessibilityPackageName(options.packageName)
+        assertAccessibilityRuleId(options.ruleId)
         throw new Error('浏览器预览没有无障碍规则存储')
       })
     },
