@@ -46,6 +46,16 @@ internal object AutomationRuleEditor {
     }
 
     /**
+     * 单条规则的读取结果（编辑表单预填用）。
+     *
+     * 与 [Outcome] 分开：读没有「写成功」的语义，免得被误当成写路径的返回值。
+     */
+    internal sealed interface ReadOutcome {
+        data class Found(val rule: AutomationRule) : ReadOutcome
+        data class Rejected(val code: String, val message: String) : ReadOutcome
+    }
+
+    /**
      * 新建或整条替换一条规则。
      *
      * @param draft 完整规则 JSON（与 `AutomationRule.fromJson` 同一套字段）
@@ -101,6 +111,29 @@ internal object AutomationRuleEditor {
             return reject(Codes.NOT_FOUND, "找不到这条规则：$ruleId")
         }
         return write(store, packageName, current.filterNot { it.id == ruleId })
+    }
+
+    /**
+     * 读一条**完整**规则（含选择器正文与动作参数）。
+     *
+     * 为什么编辑必须先读到全文：存储层的写入口是整包替换、[MODE_UPDATE] 又是**整条替换**，
+     * 表单如果预填不出原来的选择器，用户点一次「保存」就等于把它们整片抹掉。列表读数
+     * （`MobileRuntimePlugin.accessibilityRulesToJs`）刻意只带摘要，所以编辑走这一条。
+     */
+    fun find(
+        store: AutomationRulePackageStorage,
+        packageName: String,
+        ruleId: String,
+    ): ReadOutcome {
+        val current = when (val read = AutomationRuleStore.readPackage(store, packageName)) {
+            is AutomationRuleStore.PackageRead.Corrupt ->
+                return ReadOutcome.Rejected(Codes.CORRUPT, read.message)
+
+            is AutomationRuleStore.PackageRead.Ok -> read.rules
+        }
+        val rule = current.firstOrNull { it.id == ruleId }
+            ?: return ReadOutcome.Rejected(Codes.NOT_FOUND, "找不到这条规则：$ruleId")
+        return ReadOutcome.Found(rule)
     }
 
     /**

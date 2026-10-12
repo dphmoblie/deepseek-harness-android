@@ -60,6 +60,16 @@ class AutomationRuleEditorTest {
         return (outcome as AutomationRuleEditor.Outcome.Applied).rules
     }
 
+    private fun readRejected(outcome: AutomationRuleEditor.ReadOutcome): AutomationRuleEditor.ReadOutcome.Rejected {
+        assertTrue("期望读取被拒绝，实际是 $outcome", outcome is AutomationRuleEditor.ReadOutcome.Rejected)
+        return outcome as AutomationRuleEditor.ReadOutcome.Rejected
+    }
+
+    private fun found(outcome: AutomationRuleEditor.ReadOutcome): AutomationRule {
+        assertTrue("期望读到规则，实际是 $outcome", outcome is AutomationRuleEditor.ReadOutcome.Found)
+        return (outcome as AutomationRuleEditor.ReadOutcome.Found).rule
+    }
+
     @Test
     fun `新建的一条规则写进存储并如实回读`() {
         val store = MemoryStorage()
@@ -235,5 +245,72 @@ class AutomationRuleEditorTest {
             "损坏之后不该多出任何规则",
             rules(store).none { it.id == "tap-new" },
         )
+    }
+
+    @Test
+    fun `读一条规则要带回选择器正文与动作参数_缺一项编辑就等于把它抹掉`() {
+        val store = MemoryStorage()
+        val rich = JSONObject()
+            .put("id", "swipe-on-card")
+            .put("packageName", packageName)
+            .put("enabled", false)
+            .put("allowActivities", JSONArray().put("com.example.target.MainActivity"))
+            .put("denyActivities", JSONArray().put(".*Dialog.*"))
+            .put("matchDelayMs", 1_200)
+            .put("maxActions", 4)
+            .put("actionCoolDownMs", 8_000)
+            .put("resetOn", AutomationRule.RESET_SCREEN)
+            .put(
+                "selectors",
+                JSONArray()
+                    .put(JSONObject().put("text", "确认").put("id", ":id/confirm").put("clickable", true))
+                    .put(JSONObject().put("descContains", "卡片")),
+            )
+            .put(
+                "action",
+                JSONObject().put("type", "swipe").put("durationMs", 400).put("direction", "left"),
+            )
+        assertEquals(1, applied(AutomationRuleEditor.save(store, packageName, rich, AutomationRuleEditor.MODE_CREATE)).size)
+
+        val rule = found(AutomationRuleEditor.find(store, packageName, "swipe-on-card"))
+        // 选择器正文：少一个字，界面预填出来就是另一条规则。
+        assertEquals(2, rule.selectors.size)
+        assertEquals("确认", rule.selectors[0].text)
+        assertEquals(":id/confirm", rule.selectors[0].id)
+        assertEquals(true, rule.selectors[0].clickable)
+        assertEquals("卡片", rule.selectors[1].descContains)
+        // 动作参数：type 之外的字段同样是内容的一部分（swipe 丢了方向就变成乱划）。
+        assertEquals("swipe", rule.action.type)
+        assertEquals(400, rule.action.durationMs)
+        assertEquals("left", rule.action.direction)
+        // 抑制参数与 allow/deny 名单也一并带回，避免「保存一次把设定退回默认」。
+        assertEquals(false, rule.enabled)
+        assertEquals(1_200, rule.matchDelayMs)
+        assertEquals(4, rule.maxActions)
+        assertEquals(8_000, rule.actionCoolDownMs)
+        assertEquals(AutomationRule.RESET_SCREEN, rule.resetOn)
+        assertEquals(listOf("com.example.target.MainActivity"), rule.allowActivities)
+        assertEquals(listOf(".*Dialog.*"), rule.denyActivities)
+    }
+
+    @Test
+    fun `读一条不存在的规则被拒绝`() {
+        val store = MemoryStorage()
+        AutomationRuleEditor.save(store, packageName, draft("tap-ok"), AutomationRuleEditor.MODE_CREATE)
+        val rejected = readRejected(AutomationRuleEditor.find(store, packageName, "tap-missing"))
+        assertEquals(AutomationRuleEditor.Codes.NOT_FOUND, rejected.code)
+    }
+
+    @Test
+    fun `包数据损坏时读取被拒绝_而不是回一条空规则`() {
+        val store = MemoryStorage()
+        AutomationRuleEditor.save(store, packageName, draft("tap-ok"), AutomationRuleEditor.MODE_CREATE)
+        val raw = store.values.getValue(AutomationRuleStore.KEY_INDEX)
+        store.values[AutomationRuleStore.KEY_INDEX] =
+            raw.substring(0, raw.lastIndexOf('\t') + 1) + "{坏掉的正文"
+
+        val rejected = readRejected(AutomationRuleEditor.find(store, packageName, "tap-ok"))
+        // 关键：不能把「读不出来」变成「读到一条空的」——那会让界面拿一份空表单去覆盖存储。
+        assertEquals(AutomationRuleEditor.Codes.CORRUPT, rejected.code)
     }
 }

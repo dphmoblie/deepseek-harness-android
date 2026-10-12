@@ -41,6 +41,7 @@ import io.deepseekharness.mobile.accessibility.AutomationRuleStore
 import io.deepseekharness.mobile.accessibility.AutomationRunLogPolicy
 import io.deepseekharness.mobile.accessibility.AutomationSkipMessages
 import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
+import io.deepseekharness.mobile.accessibility.toRuleJson
 import io.deepseekharness.mobile.runtime.AppReleaseCatalog
 import io.deepseekharness.mobile.runtime.AppUpdateInstallPolicy
 import io.deepseekharness.mobile.runtime.AppUpdateStorage
@@ -2020,6 +2021,42 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 权限：应用内桥接；读**一条**规则的全文（选择器与动作参数），给编辑表单预填。
+     *
+     * 为什么另开一条、而不是把列表读宽：列表刻意只带摘要（选择器里的文本能反推界面内容），
+     * 而编辑在存储层是**整条替换**——表单预填不出原来的内容，用户点一次「保存」就等于把原有
+     * 选择器整片抹掉。这条同样只读：不写盘、不进审计、不打开任何开关（与设备桥的
+     * `automationRules` 命令不同）。白名单外的包照样读得出来（规则是用户/AI 写下的数据），
+     * 界面按 `allowed` 决定是否允许保存，并说明「规则在，但不会被任何事件用到」。
+     */
+    @PluginMethod
+    fun getAccessibilityAutomationRule(call: PluginCall) {
+        resolveWhileActive(call) {
+            val packageName = requiredAutomationPackage(call)
+            val ruleId = call.data.opt("ruleId") as? String
+                ?: throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "规则标识必须是字符串")
+            if (!AUTOMATION_RULE_ID.matches(ruleId)) {
+                throw RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", "规则标识格式不合法")
+            }
+            val read = AutomationRuleEditor.find(
+                AutomationRulePreferences.from(context),
+                packageName,
+                ruleId,
+            )
+            when (read) {
+                is AutomationRuleEditor.ReadOutcome.Found -> JSObject()
+                    .put("packageName", packageName)
+                    .put("ruleId", ruleId)
+                    .put("allowed", AccessibilityAutomationStore.packageAllowed(context, packageName))
+                    .put("rule", read.rule.toRuleJson())
+
+                is AutomationRuleEditor.ReadOutcome.Rejected ->
+                    throw configFailure(read.code, read.message)
+            }
+        }
+    }
+
+    /**
      * 权限：应用内桥接；单条规则的启用 / 停用（只改 `enabled` 一个字段）。
      *
      * 写之前**必须过白名单**（拍板结论第 5 条：白名单校验放在桥接层）：白名单外的包一律拒写，
@@ -2171,23 +2208,33 @@ class MobileRuntimePlugin : Plugin() {
      * 编辑侧的内部码不外泄——否则前端要同时认识两套词汇表。
      */
     private fun automationRuleFailure(rejected: AutomationRuleEditor.Outcome.Rejected): RuntimeFailure =
-        when (rejected.code) {
+        configFailure(rejected.code, rejected.message)
+
+    /**
+     * 编辑侧的受控码翻成界面认识的那一组 `ACCESSIBILITY_CONFIG_*`。
+     *
+     * 界面的文案按这一组码分流（冲突 / 找不到 / 超限 / 数据损坏 / 写失败 / 参数问题），
+     * 编辑侧的内部码不外泄——否则前端要同时认识两套词汇表。读路径（`getAccessibilityAutomationRule`）
+     * 与写路径共用这一份映射，免得同一个「找不到」在两条路上是两个码。
+     */
+    private fun configFailure(code: String, message: String): RuntimeFailure =
+        when (code) {
             AutomationRuleEditor.Codes.ID_CONFLICT ->
-                RuntimeFailure("ACCESSIBILITY_CONFIG_CONFLICT", rejected.message)
+                RuntimeFailure("ACCESSIBILITY_CONFIG_CONFLICT", message)
 
             AutomationRuleEditor.Codes.NOT_FOUND ->
-                RuntimeFailure("ACCESSIBILITY_CONFIG_NOT_FOUND", rejected.message)
+                RuntimeFailure("ACCESSIBILITY_CONFIG_NOT_FOUND", message)
 
             AutomationRuleEditor.Codes.LIMIT_REACHED ->
-                RuntimeFailure("ACCESSIBILITY_CONFIG_LIMIT", rejected.message)
+                RuntimeFailure("ACCESSIBILITY_CONFIG_LIMIT", message)
 
             AutomationRuleEditor.Codes.CORRUPT ->
-                RuntimeFailure("ACCESSIBILITY_CONFIG_CORRUPT", rejected.message)
+                RuntimeFailure("ACCESSIBILITY_CONFIG_CORRUPT", message)
 
             AutomationRuleEditor.Codes.STORAGE_FAILED ->
-                RuntimeFailure("ACCESSIBILITY_CONFIG_SAVE_FAILED", rejected.message)
+                RuntimeFailure("ACCESSIBILITY_CONFIG_SAVE_FAILED", message)
 
-            else -> RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", rejected.message)
+            else -> RuntimeFailure("ACCESSIBILITY_CONFIG_INVALID", message)
         }
 
     /** 把某个包的规则渲染成界面读数；`corrupt` 非空表示这份数据不可用且已被清掉。 */
