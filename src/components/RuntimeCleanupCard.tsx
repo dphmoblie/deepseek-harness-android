@@ -47,6 +47,9 @@ const LEDGER_NOTES: Record<PluginCleanupLedger, string> = {
 const FAILURE_NOTES: Record<string, string> = {
   RUNTIME_BUSY: '请先停止 Harness 和 Ubuntu 终端',
   CLEANUP_LEDGER_UNAVAILABLE: '插件版本账本不可用，未清理任何数据',
+  // 逐包清理独有的两个码要分开讲：一个是「串的形状不对」，一个是「形状对但账本里没这个插件」。
+  CLEANUP_SCOPE_INVALID: '插件标识不合法：重新打开这一页取一次列表再试',
+  CLEANUP_PLUGIN_UNKNOWN: '账本里没有这个插件：刷新列表后再试',
 }
 
 function failureNote(error: unknown): string | null {
@@ -54,29 +57,51 @@ function failureNote(error: unknown): string | null {
   return typeof code === 'string' ? FAILURE_NOTES[code] ?? null : null
 }
 
-type Tier = 'cache' | 'plugin'
+/**
+ * 一次清理的目标。
+ *
+ * `packageName` 只在插件档有意义，而且**必须是 `RuntimeCleanupPackage.id` 原样读回来的串**
+ * （npm 包名形状，如 `left-pad`、`@scope/tool`）：界面不拼接、不规范化、不让用户手输。
+ * 省略它 = 清空全部已登记插件的数据；带上它 = 只清这一个。
+ */
+type CleanupTarget =
+  | { tier: 'cache' }
+  | { tier: 'plugin'; packageName?: string }
+
+/** 结果回显要点名清的是哪一档/哪个包，但不许夸大：这里只描述**这一次尝试**的范围。 */
+function targetLabel(target: CleanupTarget): string {
+  if (target.tier === 'cache') return t('缓存')
+  return target.packageName === undefined
+    ? t('全部已登记插件的数据')
+    : t('插件 {0} 的数据', target.packageName)
+}
 
 /**
  * 「数据清理」卡片：分两档清理——缓存（诊断导出、工作区分享暂存、PRoot 临时目录）与插件自己的
  * 数据目录，并把「运行环境的数据」明确指到「重置运行环境」那一档，不混在一个按钮里。
+ * 插件数据档还能**按包只清一个**：整档按钮清全部已登记插件，每一行的「只清这个插件」只清那一个。
  *
- * 四条边界：
+ * 五条边界：
  *  - **运行时在跑就不给点**：`proot-tmp` 是运行中沙箱的 `TMPDIR`、插件进程也在写自己的数据目录，
  *    此时清理会把「清理」变成「打断会话」与「损坏一半的状态」。原生侧另有 `RUNTIME_BUSY` 兜底。
  *  - **账本不可用就不给点**：插件数据档由版本账本驱动，账本缺失/损坏/不可写时我们核不准哪些目录
- *    是插件数据，界面据此禁用并说明原因，而不是让用户点了再看一句「未清理任何数据」。
+ *    是插件数据，界面据此禁用并说明原因，而不是让用户点了再看一句「未清理任何数据」。此时
+ *    `packages` 是空数组，逐包列表**根本不渲染**——不给任何按包清理的入口。
+ *  - **包名只能原样回传**：`packageName` 就是 `packages[].id` 读回来的那个串，界面不加工也不手输；
+ *    账本里核对不到的包会被原生侧以 `CLEANUP_PLUGIN_UNKNOWN` 拒掉且零改动。
  *  - **清理后的现状一律重新查一次**：`removed`/`failed` 是这一次尝试的结果，不是当前状态，
- *    拿它们加减会和磁盘上的真实情况脱节。
+ *    拿它们加减会和磁盘上的真实情况脱节。结果回显点名清的是哪一档/哪个包，绝不把「清了一个」
+ *    说成「所有插件都清了」。
  *  - 失败如实显示，不吞也不美化。卡片本身**不写入任何浏览器存储**。
  */
 export function RuntimeCleanupCard({ bridge = runtimeBridge }: { bridge?: RuntimeBridge }) {
   const [state, setState] = useState<RuntimeCleanupState | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [failed, setFailed] = useState(false)
-  const [pending, setPending] = useState<Tier | null>(null)
+  const [pending, setPending] = useState<CleanupTarget | null>(null)
   const [busy, setBusy] = useState(false)
   const [actionFailed, setActionFailed] = useState<string | null>(null)
-  const [result, setResult] = useState<{ tier: Tier; outcome: RuntimeCleanupOutcome } | null>(null)
+  const [result, setResult] = useState<{ target: CleanupTarget; outcome: RuntimeCleanupOutcome } | null>(null)
 
   const refresh = useCallback(async () => {
     setLoaded(false); setFailed(false)
@@ -85,12 +110,19 @@ export function RuntimeCleanupCard({ bridge = runtimeBridge }: { bridge?: Runtim
   }, [bridge])
   useEffect(() => { void refresh() }, [refresh])
 
-  async function clean(tier: Tier) {
+  async function clean(target: CleanupTarget) {
     setBusy(true); setPending(null); setActionFailed(null); setResult(null)
     try {
-      const outcome = tier === 'cache' ? await bridge.clearRuntimeCache() : await bridge.purgePluginData()
-      setResult({ tier, outcome })
-      // 现状必须重新问一次原生侧：outcome 只描述「这一次尝试」。
+      // 整档清理**不带任何参数**：`purgePluginData()` 是「清全部已登记插件」，
+      // `purgePluginData({ packageName })` 才是「只清这一个」——两者不能混着传，
+      // 也不能用 `{ packageName: undefined }` 代替「不传」（那是拿实现细节赌语义）。
+      const outcome = target.tier === 'cache'
+        ? await bridge.clearRuntimeCache()
+        : target.packageName === undefined
+          ? await bridge.purgePluginData()
+          : await bridge.purgePluginData({ packageName: target.packageName })
+      setResult({ target, outcome })
+      // 现状必须重新问一次原生侧：outcome 只描述「这一次尝试」，逐包清理也一样。
       setState(await bridge.getRuntimeCleanupState())
       setLoaded(true)
     } catch (error) {
@@ -126,26 +158,43 @@ export function RuntimeCleanupCard({ bridge = runtimeBridge }: { bridge?: Runtim
     </p>}
     {ready && <p className="settings-note">{t('插件数据：已登记 {0} 个包', String(state.plugin.checked))}</p>}
     {ready && ledger !== null && ledger !== 'ok' && <p className="settings-note">{t(LEDGER_NOTES[ledger])}</p>}
+    {ready && ledger === 'ok' && state.plugin.packages.map(pkg => <p className="settings-note" key={pkg.id}>
+      {pkg.present
+        ? t('{0}：{1} 个文件，共 {2}', pkg.id, String(pkg.files), formatBytes(pkg.bytes))
+        : t('{0}：还没有数据', pkg.id)}
+      {' '}
+      {/* 包名不进 testid（可能含 `@` 与 `/`），但**要进无障碍名**：几行按钮同名时，读屏用户分不清清的是哪一个。 */}
+      <button type="button" disabled={!pluginReady || busy || !pkg.present}
+        aria-label={t('只清插件 {0} 的数据', pkg.id)}
+        onClick={() => setPending({ tier: 'plugin', packageName: pkg.id })}>{t('只清这个插件')}</button>
+    </p>)}
     <p className="settings-note">{t('插件数据清理只清空插件自己的数据目录，插件本身仍然保留。')}</p>
 
-    {pending !== 'cache' && <button type="button" disabled={!cacheReady || busy} onClick={() => setPending('cache')}>{t('清理缓存')}</button>}
-    {pending === 'cache' && <div role="alertdialog" aria-labelledby="runtime-cleanup-cache-confirm">
+    {pending?.tier !== 'cache' && <button type="button" disabled={!cacheReady || busy} onClick={() => setPending({ tier: 'cache' })}>{t('清理缓存')}</button>}
+    {pending?.tier === 'cache' && <div role="alertdialog" aria-labelledby="runtime-cleanup-cache-confirm">
       <p className="settings-note" id="runtime-cleanup-cache-confirm"><strong>{t('确认清理缓存？')}</strong> {t('只删除诊断导出、工作区分享暂存与 PRoot 临时目录；不删待安装的更新包，也不碰运行环境的数据。')}</p>
-      <button type="button" disabled={busy} onClick={() => { void clean('cache') }}>{busy ? t('正在清理…') : t('确认清理')}</button>
+      <button type="button" disabled={busy} onClick={() => { void clean({ tier: 'cache' }) }}>{busy ? t('正在清理…') : t('确认清理')}</button>
       <button type="button" disabled={busy} onClick={() => setPending(null)}>{t('取消')}</button>
     </div>}
 
-    {pending !== 'plugin' && <button type="button" disabled={!pluginReady || busy} onClick={() => setPending('plugin')}>{t('清理插件数据')}</button>}
-    {pending === 'plugin' && <div role="alertdialog" aria-labelledby="runtime-cleanup-plugin-confirm">
+    {pending?.tier !== 'plugin' && <button type="button" disabled={!pluginReady || busy} onClick={() => setPending({ tier: 'plugin' })}>{t('清理插件数据')}</button>}
+    {pending?.tier === 'plugin' && pending.packageName === undefined && <div role="alertdialog" aria-labelledby="runtime-cleanup-plugin-confirm">
       <p className="settings-note" id="runtime-cleanup-plugin-confirm"><strong>{t('确认清理插件数据？')}</strong> {t('清空每个已安装插件自己的数据目录（data/config/storage/.config）；插件本身仍然保留，下次使用会重新生成数据。')}</p>
-      <button type="button" disabled={busy} onClick={() => { void clean('plugin') }}>{busy ? t('正在清理…') : t('确认清理')}</button>
+      <button type="button" disabled={busy} onClick={() => { void clean({ tier: 'plugin' }) }}>{busy ? t('正在清理…') : t('确认清理')}</button>
+      <button type="button" disabled={busy} onClick={() => setPending(null)}>{t('取消')}</button>
+    </div>}
+    {/* 逐包的确认与整档的分开：这个块只在点名了包时出现，**文案必须点出是哪一个包**，
+        而且要讲清「只清这一个、插件本体与其它插件的数据都不动」——否则与整档按钮长得一样，点错就清了全部。 */}
+    {pending?.tier === 'plugin' && pending.packageName !== undefined && <div role="alertdialog" aria-labelledby="runtime-cleanup-package-confirm">
+      <p className="settings-note" id="runtime-cleanup-package-confirm"><strong>{t('确认只清理插件 {0} 的数据？', pending.packageName)}</strong> {t('只清空这一个插件的数据目录（data/config/storage/.config）；插件本身仍然保留，其它插件的数据不动。')}</p>
+      <button type="button" disabled={busy} onClick={() => { void clean(pending) }}>{busy ? t('正在清理…') : t('确认清理')}</button>
       <button type="button" disabled={busy} onClick={() => setPending(null)}>{t('取消')}</button>
     </div>}
 
     {result !== null && <p className="settings-note" role="status">
       {result.outcome.ok
-        ? t('本次已清理 {0} 项，共 {1}。', String(result.outcome.removed), formatBytes(result.outcome.bytes))
-        : t('本次有 {0} 项未能清理，详见诊断与日志。', String(result.outcome.failed))}
+        ? t('{0}：本次已清理 {1} 项，共 {2}。', targetLabel(result.target), String(result.outcome.removed), formatBytes(result.outcome.bytes))
+        : t('{0}：本次有 {1} 项未能清理，详见诊断与日志。', targetLabel(result.target), String(result.outcome.failed))}
     </p>}
     {result !== null && result.outcome.fallback > 0 && <p className="settings-note">
       {t('其中 {0} 项走了兜底删除路径。', String(result.outcome.fallback))}

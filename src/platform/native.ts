@@ -81,6 +81,7 @@ import {
   validateRuntimeReleaseList,
   validateRuntimeCleanupOutcome,
   validateRuntimeCleanupState,
+  validatePluginCleanupRequest,
   validateRuntimeResidue,
   validateRuntimeResidueCleanup,
   validateRuntimeSessionListResult,
@@ -218,7 +219,7 @@ interface NativeRuntimePlugin {
   cleanRuntimeResidue(): Promise<unknown>
   getRuntimeCleanupState(): Promise<unknown>
   clearRuntimeCache(): Promise<unknown>
-  purgePluginData(): Promise<unknown>
+  purgePluginData(options?: { packageName?: string }): Promise<unknown>
   /** 列出原生侧已知的运行时可用版本；结果由 TS 侧校验后再交给界面。 */
   listRuntimeReleases(): Promise<unknown>
   getAppUpdateState(): Promise<unknown>
@@ -520,11 +521,17 @@ function createNativeBridge(): RuntimeBridge {
     // 清理幂等且不抛，失败（含单份删不掉）由 failed 与 message 如实体现。
     getRuntimeResidue: () => NativeRuntime.getRuntimeResidue().then(validateRuntimeResidue),
     cleanRuntimeResidue: () => NativeRuntime.cleanRuntimeResidue().then(validateRuntimeResidueCleanup),
-    // 分级清理：读数是「白名单条目的现状 + 账本的结论」，写操作只有两档，都要求运行时已停止
-    // （在跑时原生侧抛 `RUNTIME_BUSY`）；`ok` 由 `failed === 0` 推出，载荷里的同名字段不采信。
+    // 分级清理：读数是「白名单条目的现状 + 账本的结论 + 逐包现状」，写操作只有两档，都要求运行时
+    // 已停止（在跑时原生侧抛 `RUNTIME_BUSY`）；`ok` 由 `failed === 0` 推出，载荷里的同名字段不采信。
     getRuntimeCleanupState: () => NativeRuntime.getRuntimeCleanupState().then(validateRuntimeCleanupState),
     clearRuntimeCache: () => NativeRuntime.clearRuntimeCache().then(validateRuntimeCleanupOutcome),
-    purgePluginData: () => NativeRuntime.purgePluginData().then(validateRuntimeCleanupOutcome),
+    // 逐包清理：入参先在这里自检（折进 Promise 链，见下面的注释），只把合法的包名送到原生侧 ——
+    // 原生侧还会再判一次，两处都必须过；省略包名表示整档清空。
+    purgePluginData: (options?: { packageName?: string }) =>
+      Promise.resolve()
+        .then(() => validatePluginCleanupRequest(options))
+        .then(request => NativeRuntime.purgePluginData(request))
+        .then(validateRuntimeCleanupOutcome),
     // 会话工作区：只取元数据（标识/标题/更新时间），读不到时原生侧回受控错误字段而不是空列表，
     // 这里也不把「读不到」改写成空列表——校验器只认这两种形状。
     listSessions: () => NativeRuntime.sessionList().then(validateRuntimeSessionListResult),

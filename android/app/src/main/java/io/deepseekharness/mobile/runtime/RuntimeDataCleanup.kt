@@ -179,7 +179,7 @@ internal class RuntimeCacheCleanup(
 }
 
 /**
- * 插件数据档清理：删掉每个已登记插件包内部的四个数据目录，**包本体一律不动**。
+ * 插件数据档清理：删掉已登记插件包内部的四个数据目录，**包本体一律不动**。
  *
  * 由**版本账本**驱动（[PluginInstallLock]）：只有账本里登记、且包目录确实还在保留区内的包才参与。
  * 账本读不出来（缺失、损坏、任何一条不合法）时返回 `null` —— 不猜哪些目录是插件数据，也绝不遍历
@@ -187,15 +187,24 @@ internal class RuntimeCacheCleanup(
  *
  * 调用方同样必须在运行时停止时才调用它：插件进程正在写自己的存储时删目录，会把「清理」变成
  * 「损坏一半的状态」。
+ *
+ * @param packageName 只清这一个包（界面上的「清这个插件的数据」）；`null` 表示清全部已登记的包。
+ *   给了包名时，**绝不拿请求里的字符串去拼路径** —— 只用它与账本核对出来的条目做相等比较，
+ *   删的是账本条目的目录。核对不到（账本里没这个包、或它的目录已经不在保留区）就抛
+ *   `CLEANUP_PLUGIN_UNKNOWN` 且一个字节都不动：这时候「什么都不做」比「猜一个目录删掉」正确。
  */
 internal class PluginDataPurge(
     private val home: File,
     private val lockFile: File = File(home, PluginInstallLock.FILE_NAME),
     private val runner: RuntimeCleanupRunner = RuntimeCleanupRunner(),
 ) {
-    fun purge(): RuntimeCleanupOutcome? {
+    fun purge(packageName: String? = null): RuntimeCleanupOutcome? {
         val snapshot = PluginInstallLock.read(lockFile) ?: return null
-        val packages = PluginInstallLock.directories(home, snapshot)
+        val known = PluginInstallLock.directories(home, snapshot)
+        val packages = if (packageName == null) known else known.filter { it.id == packageName }
+        if (packageName != null && packages.isEmpty()) {
+            throw RuntimeFailure("CLEANUP_PLUGIN_UNKNOWN", "账本里核对不到这个插件的包目录，未清理任何数据")
+        }
         val tally = RuntimeCleanupTally()
         for (packageDirectory in packages) {
             for (name in PluginDataDirectories.NAMES) {
@@ -203,5 +212,54 @@ internal class PluginDataPurge(
             }
         }
         return tally.outcome(scope = packages.size)
+    }
+}
+
+/**
+ * 插件数据档的**逐条现状**：账本里核对到的每个包，各自四个数据目录合计占了多少。
+ *
+ * 与 [PluginDataPurge] 共用同一套「哪些目录算插件数据」的判据（[PluginInstallLock.directories] 加上
+ * [PluginDataDirectories.NAMES]），否则会出现「界面说这个插件占了 3 MB，点清理却删不动」这种自相
+ * 矛盾的读数 —— 界面上的数字与按钮背后的动作必须同源。
+ *
+ * 账本不可用时返回 `null`（与 `purge` 同一口径：不猜）。[existsNoFollow] 与 [sizeOf] 是接缝：
+ * JVM 单测里 Android 的 `Os.lstat` 会抛「not mocked」，没有接缝就走不到「这个插件没有数据目录」
+ * 那条分支 —— 而那正是「显示 0 但列出来」与「列都不列」的分界。
+ */
+internal class PluginDataInventory(
+    private val home: File,
+    private val lockFile: File = File(home, PluginInstallLock.FILE_NAME),
+    private val sizeOf: (File) -> RuntimeResidueSizing.Size = { RuntimeResidueSizing.of(it) },
+    private val existsNoFollow: (File) -> Boolean = { RuntimeFiles.existsNoFollow(it) },
+) {
+    /** @param present 四个数据目录里**至少有一个存在**（空目录也算存在）；一个都不存在时占用为 0。 */
+    data class Entry(val id: String, val present: Boolean, val files: Int, val bytes: Long)
+
+    fun snapshot(): List<Entry>? {
+        val lock = PluginInstallLock.read(lockFile) ?: return null
+        return PluginInstallLock.directories(home, lock).map { packageDirectory ->
+            var present = false
+            var files = 0
+            var bytes = 0L
+            for (name in PluginDataDirectories.NAMES) {
+                val target = File(packageDirectory.directory, name)
+                // 存在性读不出来时按存在处理：让界面显示「有这个目录但读不到」，与缓存档同一口径。
+                val exists = try {
+                    existsNoFollow(target)
+                } catch (_: Throwable) {
+                    true
+                }
+                if (!exists) continue
+                present = true
+                val size = try {
+                    sizeOf(target)
+                } catch (_: Throwable) {
+                    null
+                } ?: continue
+                files += size.entries
+                bytes += size.bytes
+            }
+            Entry(packageDirectory.id, present, files, bytes)
+        }
     }
 }

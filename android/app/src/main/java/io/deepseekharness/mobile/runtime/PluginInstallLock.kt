@@ -86,10 +86,19 @@ object PluginInstallLock {
         null
     }
 
+    /**
+     * 包名是否合法：长度、`..` 与字符集三条判据，与账本条目用的是同一套。
+     *
+     * 抽出来是因为清理侧也要用同一把尺子：按单个插件清理时，请求里的包名先过这里，再去账本核对
+     * 目录（判据不是「像不像包名」，而是「账本里有没有这一条」）。两处各写一份正则会慢慢分叉，
+     * 而分叉的两侧必然有一边是错的 —— 要么放进不该放的字符串，要么把合法包名判成非法。
+     */
+    fun isPackageName(value: String): Boolean = value.length in 1..214 && ".." !in value && PACKAGE.matches(value)
+
     private fun parseEntry(row: JSONObject): Entry? {
         if (!row.has("id") || !row.has("version") || !row.has("transaction") || !row.has("source") || !row.has("updatedAt")) return null
         val id = row.optString("id", "")
-        if (id.length !in 1..214 || ".." in id || !PACKAGE.matches(id)) return null
+        if (!isPackageName(id)) return null
         val version = if (row.isNull("version")) null else row.optString("version", "")
         if (version != null && !VERSION.matches(version)) return null
         val transaction = if (row.isNull("transaction")) null else row.optString("transaction", "")

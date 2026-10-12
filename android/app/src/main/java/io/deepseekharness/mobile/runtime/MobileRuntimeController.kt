@@ -242,7 +242,7 @@ class MobileRuntimeController(
         payload.apply { put("recovery", plugins.recoverySnapshot()) }
 
     /**
-     * 插件数据档清理的只读读数（账本可用性与涉及包数），不触碰任何文件。
+     * 插件数据档清理的只读读数（账本可用性、涉及包数、逐包占用），不触碰任何文件。
      *
      * 与 [managePlugins] 不同，这里**不要求运行时已停止**：读数只读账本与目录属性，用户开着
      * Harness 时打开设置页也应该能看到这一档占了多少、能不能清；真正删除才需要停机。
@@ -267,12 +267,15 @@ class MobileRuntimeController(
      *
      * 与缓存档同一道停机要求：插件进程正在写自己的存储时删目录，会得到「损坏一半」的状态，
      * 比清不掉更糟。返回 `null` 表示版本账本不可用，此时一个字节都没动。
+     *
+     * [packageName] 非空时只清这一个包（界面上的「只清这个插件」），为空时清全部已登记插件。
      */
-    internal fun purgePluginData(): RuntimeCleanupOutcome? = lifecycleLock.withLock {
-        ensureOpen()
-        requireRuntimeStoppedForCleanup()
-        plugins.purgePluginData()
-    }
+    internal fun purgePluginData(packageName: String? = null): RuntimeCleanupOutcome? =
+        lifecycleLock.withLock {
+            ensureOpen()
+            requireRuntimeStoppedForCleanup()
+            plugins.purgePluginData(packageName)
+        }
 
     /** 清理的前置条件：运行时与终端都停下，否则删目录会打断正在跑的会话。 */
     private fun requireRuntimeStoppedForCleanup() {

@@ -3,6 +3,7 @@ package io.deepseekharness.mobile.runtime
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -243,5 +244,19 @@ class PluginInstallLockTest {
         val snapshot = PluginInstallLock.read(lockFile(lock(listOf(entry(id = "demo-plugin", transaction = name)))))!!
         assertTrue(link.isDirectory)
         assertEquals(1, PluginInstallLock.verify(home, snapshot).missing)
+    }
+
+    @Test
+    fun `包名判定与账本读取共用同一把尺子`() {
+        // 逐包清理的入口直接调这个判定（桥接层用它挡下不合形状的串），所以它必须**就是**
+        // 账本读取那套口径。两处一旦分叉，桥接层放过的串会在读取侧被判非法，
+        // 于是「清这个插件」变成「账本读不出来，未清理任何数据」——一个查不出来的空转。
+        val legal = listOf("left-pad", "a", "@scope/tool", "a.b-c_d", "x".repeat(214))
+        val illegal = listOf(
+            "", "..", "../evil", "a/../b", "a/b", "UPPER", "@scope/", "a b", "a\\b",
+            "-leading", "x".repeat(215),
+        )
+        legal.forEach { assertTrue(it, PluginInstallLock.isPackageName(it)) }
+        illegal.forEach { assertFalse(it, PluginInstallLock.isPackageName(it)) }
     }
 }

@@ -388,3 +388,20 @@ describe('浏览器桥的会话工作区元数据', () => {
     expect(outcome.message).toBe('浏览器模式下没有运行时会话列表')
   })
 })
+
+describe('浏览器桥的插件数据清理', () => {
+  it('浏览器预览不支持插件数据清理（无参数）', async () => {
+    const bridge = createBrowserBridge()
+    await expect(bridge.purgePluginData()).rejects.toThrow('浏览器预览不支持插件数据清理')
+  })
+
+  it('浏览器预览不支持插件数据清理（有合法参数）', async () => {
+    const bridge = createBrowserBridge()
+    await expect(bridge.purgePluginData({ packageName: 'left-pad' })).rejects.toThrow('浏览器预览不支持插件数据清理')
+  })
+
+  it('插件标识格式无效在过桥前被拒绝', async () => {
+    const bridge = createBrowserBridge()
+    await expect(bridge.purgePluginData({ packageName: 'Left-Pad' })).rejects.toThrow('插件标识格式无效')
+  })
+})

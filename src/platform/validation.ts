@@ -621,10 +621,42 @@ const CACHE_ENTRY_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]{0,31}$/u
 /** 白名单条目数上限：多出来的条目说明原生侧改变了形状，这里宁可拒绝也不显示一半。 */
 const MAX_CACHE_ENTRIES = 8
 
+/**
+ * 插件档逐包列表的上限：与原生账本的 `PluginInstallLock.MAX_ENTRIES`（256）同值。
+ *
+ * 这里**不做截断**：超过上限说明原生侧换了形状（或账本被人塞成了别的东西），
+ * 显示前 256 条会让人以为「就这些插件」—— 半份盘点比读不到更容易误判。
+ */
+const MAX_CLEANUP_PACKAGES = 256
+
+/**
+ * npm 包名（含作用域名）：与原生 `PluginInstallLock.isPackageName`（长度 1..214、不含 `..`、
+ * 同一正则）和 [src/platform/plugins.ts] 的 `packageId` **必须逐字一致**。
+ *
+ * 这里是逐包清理唯一的入参形状判定：这里放松，串会在原生侧被 `CLEANUP_SCOPE_INVALID` 拒掉
+ * （界面明明放过了，用户看到的是「格式不合法」）；这里收紧，合法的包名根本发不出去，
+ * 用户就没有任何办法清它的数据。
+ */
+const PLUGIN_PACKAGE_ID_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u
+const MAX_PLUGIN_PACKAGE_ID_LENGTH = 214
+
 const CLEANUP_LEDGERS = new Set<PluginCleanupLedger>(['ok', 'missing', 'invalid', 'unwritable'])
 
 function cleanupEntryName(value: unknown): string {
   if (typeof value !== 'string' || !CACHE_ENTRY_NAME_PATTERN.test(value)) throw new Error('缓存条目名称格式无效')
+  return value
+}
+
+function cleanupPackageId(value: unknown, label: string): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > MAX_PLUGIN_PACKAGE_ID_LENGTH ||
+    value.includes('..') ||
+    !PLUGIN_PACKAGE_ID_PATTERN.test(value)
+  ) {
+    throw new Error(`${label}格式无效`)
+  }
   return value
 }
 
@@ -636,10 +668,24 @@ function cleanupLedger(value: unknown): PluginCleanupLedger {
 }
 
 /**
- * 数据清理面板状态：缓存档逐条现状 + 插件数据档的账本状态。
+ * 逐包清理的请求参数：不传、传 `null`，或 `packageName` 为 `undefined` ⇒ 整档清空。
  *
- * 载荷里没有路径、没有包名：这里也就没有它们的位置。条目数超过白名单规模时整体拒绝，
- * 而不是只显示前面几条 —— 半份盘点比读不到更容易让人误判「已经清干净了」。
+ * 只有这一种「省略」是允许的：传了就必须是合法包名（空串也算不合法 —— 原生侧同样会拒，
+ * 两边对同一份输入给出同一个结论，才不会有「界面放过了但一定失败」的按钮）。
+ */
+export function validatePluginCleanupRequest(options?: { packageName?: string } | null): { packageName?: string } {
+  if (options === undefined || options === null) return {}
+  const request = asRecord(options, '插件数据清理请求')
+  if (request.packageName === undefined) return {}
+  return { packageName: cleanupPackageId(request.packageName, '插件标识') }
+}
+
+/**
+ * 数据清理面板状态：缓存档逐条现状 + 插件数据档的账本状态与逐包现状。
+ *
+ * 载荷里没有路径、没有目录内容；插件档的逐包列表**带包名**（界面按包选择清哪一个），
+ * 它不进诊断也不进审计。条目数超过各自上限时整体拒绝，而不是只显示前面几条 ——
+ * 半份盘点比读不到更容易让人误判「已经清干净了」。
  */
 export function validateRuntimeCleanupState(value: unknown): RuntimeCleanupState {
   const state = asRecord(value, '数据清理状态')
@@ -647,6 +693,10 @@ export function validateRuntimeCleanupState(value: unknown): RuntimeCleanupState
   const items = cache.entries
   if (!Array.isArray(items) || items.length > MAX_CACHE_ENTRIES) throw new Error('缓存条目列表格式无效')
   const plugin = asRecord(state.plugin, '插件数据档状态')
+  const packages = plugin.packages
+  if (!Array.isArray(packages) || packages.length > MAX_CLEANUP_PACKAGES) {
+    throw new Error('插件数据档包列表格式无效')
+  }
   return {
     runtimeRunning: requiredBoolean(state.runtimeRunning, '运行时运行标记'),
     cache: {
@@ -665,6 +715,15 @@ export function validateRuntimeCleanupState(value: unknown): RuntimeCleanupState
     plugin: {
       ledger: cleanupLedger(plugin.ledger),
       checked: byteCount(plugin.checked, '插件账本条目数'),
+      packages: packages.map((item, index) => {
+        const entry = asRecord(item, `插件条目 ${index + 1}`)
+        return {
+          id: cleanupPackageId(entry.id, `插件条目 ${index + 1} 的标识`),
+          present: requiredBoolean(entry.present, '插件条目存在标记'),
+          files: byteCount(entry.files, '插件条目文件数'),
+          bytes: byteCount(entry.bytes, '插件条目体积'),
+        }
+      }),
     },
   }
 }

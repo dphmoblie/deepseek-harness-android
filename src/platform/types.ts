@@ -163,10 +163,29 @@ export interface RuntimeCacheCleanupState {
  */
 export type PluginCleanupLedger = 'ok' | 'missing' | 'invalid' | 'unwritable'
 
-/** 插件数据档盘点：账本状态与账本条目数。只读。 */
+/**
+ * 插件数据档里的一个可清理插件（按包粒度）。
+ *
+ * [id] 是包名，只用来显示与「清这一个」的请求；[present] 为假表示四个数据目录一个都不存在
+ * （占用为 0）。**仍然列出来**：不列的话用户会以为这个插件没装上，而它只是还没有数据。
+ */
+export interface RuntimeCleanupPackage {
+  id: string
+  present: boolean
+  files: number
+  bytes: number
+}
+
+/**
+ * 插件数据档盘点：账本状态、账本条目数、逐包现状。
+ *
+ * [packages] 是**唯一**把包名回给界面的地方：它不落诊断、不落审计（诊断日志可以导出分享，
+ * 里面不该出现「用户装了什么」）。账本读不出来时它是空数组，而不是缺字段。
+ */
 export interface PluginCleanupState {
   ledger: PluginCleanupLedger
   checked: number
+  packages: RuntimeCleanupPackage[]
 }
 
 /**
@@ -1645,9 +1664,10 @@ export interface RuntimeBridge {
    */
   cleanRuntimeResidue: () => Promise<RuntimeResidueCleanupState>
   /**
-   * 数据清理面板的只读状态：缓存档（白名单条目的现状）与插件数据档（账本状态与条目数）。
+   * 数据清理面板的只读状态：缓存档（白名单条目的现状）与插件数据档（账本状态、条目数、逐包现状）。
    *
-   * 只读，不需要停止运行时；载荷里没有路径、没有包名、没有插件标识。
+   * 只读，不需要停止运行时；载荷里没有路径、没有目录内容。插件档的逐包列表带包名（界面要按包
+   * 选择清哪一个），它不进诊断也不进审计。
    */
   getRuntimeCleanupState: () => Promise<RuntimeCleanupState>
   /**
@@ -1665,8 +1685,13 @@ export interface RuntimeBridge {
    *
    * **不动包本体**：插件仍然装着，只是自己的数据被清空。由版本账本驱动，账本不可用时原生侧抛
    * `CLEANUP_LEDGER_UNAVAILABLE` 且一个字节都不动；运行时在跑时抛 `RUNTIME_BUSY`。
+   *
+   * [options.packageName] 非空时**只清这一个包**（`packageName` 必须是
+   * [RuntimeCleanupPackage.id] 原样读回来的值）。形状不合法的串被原生侧以
+   * `CLEANUP_SCOPE_INVALID` 拒绝，账本里核对不到的包以 `CLEANUP_PLUGIN_UNKNOWN` 拒绝且零改动 ——
+   * 两个码分开，界面才能说清「输入不对」还是「这个插件不在账本里」。
    */
-  purgePluginData: () => Promise<RuntimeCleanupOutcome>
+  purgePluginData: (options?: { packageName?: string }) => Promise<RuntimeCleanupOutcome>
   /**
    * 会话工作区的会话元数据（无参数，只读）。
    *

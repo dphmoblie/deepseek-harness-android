@@ -45,7 +45,7 @@ import type {
 } from './types'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource } from './validation'
+import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource, validatePluginCleanupRequest } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
@@ -644,8 +644,14 @@ export function createBrowserBridge(): RuntimeBridge {
       Promise.reject(new Error('浏览器预览不支持数据占用盘点')),
     clearRuntimeCache: (): Promise<RuntimeCleanupOutcome> =>
       Promise.reject(new Error('浏览器预览不支持缓存清理')),
-    purgePluginData: (): Promise<RuntimeCleanupOutcome> =>
-      Promise.reject(new Error('浏览器预览不支持插件数据清理')),
+    // 逐包清理同样先自检入参（与原生版同一把尺子），再如实拒绝：形状不合法的串不该在这里
+    // 被说成「预览不支持」，那是两件不同的事——一个是用户输入错了，一个是这里做不到。
+    purgePluginData: (options?: { packageName?: string }): Promise<RuntimeCleanupOutcome> =>
+      Promise.resolve()
+        .then(() => validatePluginCleanupRequest(options))
+        .then(() => {
+          throw new Error('浏览器预览不支持插件数据清理')
+        }),
     // 会话工作区在预览里没有原生侧那条只读通道：如实拒绝，让界面显示「读不到会话列表」+
     // 一句诚实说明。**不要**返回 `{ status: 'ready', sessions: [] }`——那会显示成「暂无会话」，
     // 等于把「读不到」编造成「确认没有」。

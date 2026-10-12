@@ -8,6 +8,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -17,7 +18,8 @@ import org.junit.rules.TemporaryFolder
  * 分级清理（缓存档 / 插件数据档）的行为契约。
  *
  * 覆盖三件真机上必须成立的事：**没登记的东西一律不动**（缓存档只认白名单、插件数据档只认账本）、
- * 单条目失败绝不静默也绝不中断其余条目、以及越界路径仍被拒绝。
+ * 单条目失败绝不静默也绝不中断其余条目、以及越界路径仍被拒绝。逐包清理另有一条契约：
+ * 给了包名就**只动那一个包**，核对不到就拒绝且零改动（绝不拿请求里的字符串去拼路径）。
  *
  * 删除器与存在性判定都是注入的：真机上的严格删除器走 `SecureDirectoryStream`、存在性判定走
  * `Os.lstat`，两者在 JVM 单测里都不可用（Android 桩件会抛「not mocked」）；注入之后「不存在就跳过」
@@ -265,6 +267,104 @@ class RuntimeDataCleanupTest {
         assertFalse(missing.exists())
         unresolvedData.forEach { assertTrue(it.isDirectory) }
         unregisteredData.forEach { assertTrue(it.isDirectory) }
+    }
+
+    @Test
+    fun `按包清理只动指定的那一个包`() {
+        val home = temporaryFolder.newFolder("plugin-manager")
+        val transaction = transaction("a")
+        val target = packageDirectory(home, transaction, "left-pad")
+        val targetData = dataDirectories(target)
+        val other = packageDirectory(home, transaction, "right-pad")
+        val otherData = dataDirectories(other)
+        writeLedger(
+            home,
+            ledgerEntry("left-pad", "1.2.3", transaction),
+            ledgerEntry("right-pad", "4.5.6", transaction),
+        )
+
+        val outcome = PluginDataPurge(home, runner = deletingRunner()).purge("left-pad")
+
+        assertNotNull(outcome)
+        // scope 是「这次涉及几个包」：按包清理时报 1，界面才能说清「只清了这一个」。
+        assertEquals(1, outcome!!.scope)
+        assertEquals(4, outcome.targets)
+        assertEquals(4, outcome.removed)
+        assertEquals(0, outcome.failed)
+        assertTrue(outcome.ok)
+        targetData.forEach { assertFalse(it.exists()) }
+        // 另一个插件的数据目录必须原样留着 —— 按包清理的全部意义就在这里，
+        // 少了这条断言，「传了包名但代码里漏了过滤」会安静地变成「清了所有插件」。
+        otherData.forEach { assertTrue(it.isDirectory) }
+        assertTrue(File(other, "package.json").isFile)
+    }
+
+    @Test
+    fun `账本里核对不到的包名被拒绝且磁盘零改动`() {
+        val home = temporaryFolder.newFolder("plugin-manager")
+        val transaction = transaction("a")
+        val registered = packageDirectory(home, transaction, "left-pad")
+        val data = dataDirectories(registered)
+        writeLedger(home, ledgerEntry("left-pad", "1.2.3", transaction))
+
+        val failure = assertThrows(RuntimeFailure::class.java) {
+            PluginDataPurge(home, runner = deletingRunner()).purge("ghost-pkg")
+        }
+
+        // 「账本里没这个包」与「请求的串格式不对」是两个受控码（后者在桥接层挡下）：
+        // 合成一个码，用户就分不清该改输入还是该刷新列表。
+        assertEquals("CLEANUP_PLUGIN_UNKNOWN", failure.code)
+        // 核对不到就一个字节都不动：绝不拿请求里的字符串去拼一个目录试试看。
+        data.forEach { assertTrue(it.isDirectory) }
+        assertTrue(File(registered, "package.json").isFile)
+    }
+
+    @Test
+    fun `逐包现状按账本列出，占用取自四个数据目录`() {
+        val home = temporaryFolder.newFolder("plugin-manager")
+        val transaction = transaction("a")
+        val registered = packageDirectory(home, transaction, "left-pad")
+        File(registered, "data").apply {
+            mkdirs()
+            File(this, "a.bin").writeBytes(ByteArray(16))
+        }
+        File(registered, "config").apply {
+            mkdirs()
+            File(this, "b.bin").writeBytes(ByteArray(4))
+        }
+        // 装了但一个数据目录都没有的插件：仍然要出现（present=false、占用 0），
+        // 列都不列的话用户会以为这个插件没装上。
+        val empty = packageDirectory(home, transaction, "empty-pkg")
+        // 账本没登记、但磁盘上有的包：绝不因为「它在 versions/ 里」就列出来。
+        val unregistered = packageDirectory(home, transaction, "unregistered-pkg")
+        dataDirectories(unregistered)
+        writeLedger(
+            home,
+            ledgerEntry("left-pad", "1.2.3", transaction),
+            ledgerEntry("empty-pkg", "1.0.0", transaction),
+        )
+
+        val entries = PluginDataInventory(home, existsNoFollow = { it.exists() }).snapshot()
+
+        assertNotNull(entries)
+        assertEquals(listOf("left-pad", "empty-pkg"), entries!!.map { it.id })
+        assertTrue(entries[0].present)
+        assertEquals(2, entries[0].files)
+        assertEquals(20L, entries[0].bytes)
+        assertFalse(entries[1].present)
+        assertEquals(0, entries[1].files)
+        assertEquals(0L, entries[1].bytes)
+        assertTrue(File(registered, "package.json").isFile)
+    }
+
+    @Test
+    fun `逐包现状在账本不可用时返回 null 而不是空列表`() {
+        val home = temporaryFolder.newFolder("plugin-manager")
+        packageDirectory(home, transaction("a"), "left-pad")
+
+        // null 与「空列表」在界面上是两句话：前者是「账本读不出来，我不知道有什么」，
+        // 后者是「读出来了，一个可清理的插件都没有」。混成一个，用户会以为插件都没装。
+        assertNull(PluginDataInventory(home, existsNoFollow = { it.exists() }).snapshot())
     }
 
     /** 真机删除器走 `SecureDirectoryStream`、lstat 走 `Os.lstat`，两者在 JVM 单测里都不可用。 */

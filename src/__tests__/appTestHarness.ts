@@ -524,12 +524,12 @@ export function beforeEachAppTest(): void {
   // 关心这张卡片的用例自己覆盖这两条桩。
   bridge.getRuntimeResidue.mockResolvedValue({ count: 0, bytes: 0, truncated: false })
   bridge.cleanRuntimeResidue.mockResolvedValue({ cleaned: 0, failed: 0, reclaimedBytes: 0, message: '没有可回收的残留，无需清理' })
-  // 默认「缓存是空的、插件账本可用」：多数用例只关心别的页面，不该被一张写着占用的卡片影响；
-  // 关心这张卡片的用例自己覆盖这三条桩。
+  // 默认「缓存是空的、插件账本可用、一个可清理的插件都没有」：多数用例只关心别的页面，
+  // 不该被一张写着占用的卡片影响；关心这张卡片的用例自己覆盖这三条桩。
   bridge.getRuntimeCleanupState.mockResolvedValue({
     runtimeRunning: false,
     cache: { entries: [], files: 0, bytes: 0 },
-    plugin: { ledger: 'ok', checked: 0 },
+    plugin: { ledger: 'ok', checked: 0, packages: [] },
   })
   bridge.clearRuntimeCache.mockResolvedValue({ scope: 0, targets: 0, removed: 0, fallback: 0, failed: 0, files: 0, bytes: 0, skipped: 0, ok: true })
   bridge.purgePluginData.mockResolvedValue({ scope: 0, targets: 0, removed: 0, fallback: 0, failed: 0, files: 0, bytes: 0, skipped: 0, ok: true })

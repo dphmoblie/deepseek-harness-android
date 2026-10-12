@@ -2,6 +2,7 @@ package io.deepseekharness.mobile.runtime
 
 import android.content.Context
 import android.system.Os
+import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
@@ -82,18 +83,32 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         .put("checked", lockChecked)
 
     /**
-     * 插件数据清理（「插件数据」这一档）的只读读数：账本可用性 + 已核对到的插件条目数。
+     * 插件数据清理（「插件数据」这一档）的只读读数：账本可用性 + 已核对到的插件条目数 +
+     * **逐包的占用现状**。
      *
      * 与 [recoverySnapshot] 的分工：那个回答「上次升级后自愈成什么样」，这个回答「现在能不能清、
-     * 大概涉及几个包」，所以会**顺手重核一次账本**（用户打开清理面板时要看到的是此刻的结论，
+     * 每个包占多少」，所以会**顺手重核一次账本**（用户打开清理面板时要看到的是此刻的结论，
      * 而不是上次迁移时的旧值）。重核只读一份小 JSON 加逐条 stat，不改动任何插件目录；「缺失」
      * 的计数并入 [recoverySnapshot] 时取较大值，两次观测都不抹平对方。
      *
-     * 不回包名与路径：界面只需要知道账本能不能用、涉及几个包，包名属于用户装了什么的隐私。
+     * `packages` 里带包名，因为界面要按包勾选「清哪一个」——**这是唯一一处把包名回给界面**：
+     * 审计与诊断仍然只记计数（见 [AuditPolicy] 对 `DATA_CLEANUP` 的要求），包名既不进诊断导出
+     * 也不进运行记录。账本读不出来时为**空数组**（不是错误），界面据此显示「没有可清理的插件」。
      */
     fun cleanupState(): JSObject {
         val ledger = verifyInstallLock()
-        return JSObject().put("ledger", ledger).put("checked", lockChecked)
+        val packages = PluginDataInventory(home).snapshot() ?: emptyList()
+        val list = JSArray()
+        for (entry in packages) {
+            list.put(
+                JSObject()
+                    .put("id", entry.id)
+                    .put("present", entry.present)
+                    .put("files", entry.files)
+                    .put("bytes", entry.bytes)
+            )
+        }
+        return JSObject().put("ledger", ledger).put("checked", lockChecked).put("packages", list)
     }
 
     /**
@@ -102,8 +117,12 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
      * 破坏性且不可撤销，只由用户显式触发，绝不进启动自愈路径。清哪些包完全由版本账本决定
      * （见 [PluginDataPurge]）：账本读不出来时返回 `null` 且一个字节都不动，让界面如实说明
      * 「清不了、为什么」，而不是猜着删。
+     *
+     * [packageName] 非空时只清这一个包。它**只用来和账本条目做相等比较**，绝不会被拼进路径；
+     * 账本里核对不到这个包时抛 `CLEANUP_PLUGIN_UNKNOWN`，而不是「悄悄地什么都没清」。
      */
-    internal fun purgePluginData(): RuntimeCleanupOutcome? = PluginDataPurge(home).purge()
+    internal fun purgePluginData(packageName: String? = null): RuntimeCleanupOutcome? =
+        PluginDataPurge(home).purge(packageName)
 
     fun recoverIfNeeded() {
         // 运行时升级通常不会留下 transaction.json：它会重建 profiles 清单，但保留

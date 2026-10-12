@@ -24,7 +24,10 @@ function state(overrides: Partial<RuntimeCleanupState> = {}): RuntimeCleanupStat
       files: 4,
       bytes: SIZE,
     },
-    plugin: { ledger: 'ok', checked: 2 },
+    plugin: { ledger: 'ok', checked: 2, packages: [
+      { id: 'left-pad', present: true, files: 10, bytes: 1024 * 1024 },
+      { id: '@scope/tool', present: false, files: 0, bytes: 0 },
+    ] },
     ...overrides,
   }
 }
@@ -41,7 +44,8 @@ function card(bridge: Partial<RuntimeBridge>): void {
 }
 
 async function confirm(buttonName: string): Promise<void> {
-  const button = screen.getByRole('button', { name: buttonName })
+  // 用 findByRole：状态是异步读回来的，逐包那些行要等一次 getRuntimeCleanupState 才有。
+  const button = await screen.findByRole('button', { name: buttonName })
   await waitFor(() => expect(button).toBeEnabled())
   fireEvent.click(button)
   const dialog = await screen.findByRole('alertdialog')
@@ -72,7 +76,7 @@ describe('数据清理卡片', () => {
   })
 
   it('账本损坏时只禁用插件数据档并讲清原因，缓存档照常可用', async () => {
-    card({ getRuntimeCleanupState: vi.fn().mockResolvedValue(state({ plugin: { ledger: 'invalid', checked: 0 } })) })
+    card({ getRuntimeCleanupState: vi.fn().mockResolvedValue(state({ plugin: { ledger: 'invalid', checked: 0, packages: [] } })) })
 
     await screen.findByText('插件版本账本已损坏，暂时无法确定哪些目录是插件数据。')
     expect(screen.getByRole('button', { name: '清理插件数据' })).toBeDisabled()
@@ -107,14 +111,14 @@ describe('数据清理卡片', () => {
   it('清理成功后显示本次结果，并重新查一次占用而不是拿结果自己加减', async () => {
     const get = vi.fn()
       .mockResolvedValueOnce(state())
-      .mockResolvedValueOnce({ runtimeRunning: false, cache: { entries: [], files: 0, bytes: 0 }, plugin: { ledger: 'ok', checked: 2 } })
+      .mockResolvedValueOnce({ runtimeRunning: false, cache: { entries: [], files: 0, bytes: 0 }, plugin: { ledger: 'ok', checked: 2, packages: [] } })
     const clean = vi.fn().mockResolvedValue(outcome())
     card({ getRuntimeCleanupState: get, clearRuntimeCache: clean })
 
     await confirm('清理缓存')
     await waitFor(() => expect(clean).toHaveBeenCalledOnce())
     await waitFor(() => expect(get).toHaveBeenCalledTimes(2))
-    await screen.findByText('本次已清理 3 项，共 3.5 MB。')
+    await screen.findByText('缓存：本次已清理 3 项，共 3.5 MB。')
     await screen.findByText('另有 1 项本来就不存在，已跳过。')
     await screen.findByText('没有可清理的缓存')
     expect(screen.queryByRole('alert')).toBeNull()
@@ -126,7 +130,7 @@ describe('数据清理卡片', () => {
     card({ getRuntimeCleanupState: get, clearRuntimeCache: clean })
 
     await confirm('清理缓存')
-    await screen.findByText('本次有 1 项未能清理，详见诊断与日志。')
+    await screen.findByText('缓存：本次有 1 项未能清理，详见诊断与日志。')
     expect(screen.getByText('其中 1 项走了兜底删除路径。')).toBeTruthy()
     expect(screen.queryByText(/本次已清理/)).toBeNull()
   })
@@ -163,5 +167,69 @@ describe('数据清理卡片', () => {
     get.mockResolvedValueOnce(state())
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
     await screen.findByText('缓存合计：4 个文件，共 3.5 MB')
+  })
+
+  it('逐包列出账本里的每个插件，没有数据的也列出来并说清', async () => {
+    card({ getRuntimeCleanupState: vi.fn().mockResolvedValue(state()) })
+
+    await screen.findByText('left-pad：10 个文件，共 1.0 MB')
+    // 一个数据目录都没有的包也要列出来（不列会让人以为插件没装上），但没有可清的东西就不给点。
+    expect(screen.getByText('@scope/tool：还没有数据')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '只清插件 left-pad 的数据' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '只清插件 @scope/tool 的数据' })).toBeDisabled()
+  })
+
+  it('逐行「只清这个插件」把那个包的 id 原样传下去，确认文案点名那个包', async () => {
+    const get = vi.fn().mockResolvedValue(state())
+    const purge = vi.fn().mockResolvedValue(outcome({ scope: 1, targets: 4, removed: 4, skipped: 0 }))
+    card({ getRuntimeCleanupState: get, purgePluginData: purge })
+
+    const button = await screen.findByRole('button', { name: '只清插件 left-pad 的数据' })
+    await waitFor(() => expect(button).toBeEnabled())
+    fireEvent.click(button)
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog.textContent).toContain('确认只清理插件 left-pad 的数据？')
+    expect(dialog.textContent).toContain('其它插件的数据不动')
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认清理' }))
+
+    await waitFor(() => expect(purge).toHaveBeenCalledOnce())
+    expect(purge).toHaveBeenCalledWith({ packageName: 'left-pad' })
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2))
+    await screen.findByText('插件 left-pad 的数据：本次已清理 4 项，共 3.5 MB。')
+  })
+
+  it('整档「清理插件数据」不带任何参数，不拿 undefined 冒充省略', async () => {
+    const purge = vi.fn().mockResolvedValue(outcome())
+    card({ getRuntimeCleanupState: vi.fn().mockResolvedValue(state()), purgePluginData: purge })
+
+    await confirm('清理插件数据')
+    await waitFor(() => expect(purge).toHaveBeenCalledOnce())
+    expect(purge).toHaveBeenCalledWith()
+    await screen.findByText('全部已登记插件的数据：本次已清理 3 项，共 3.5 MB。')
+  })
+
+  it('运行时在跑时逐行按钮也禁用，不让人把正在用的数据删一半', async () => {
+    card({ getRuntimeCleanupState: vi.fn().mockResolvedValue(state({ runtimeRunning: true })) })
+
+    await screen.findByText(/运行时正在运行/)
+    expect(screen.getByRole('button', { name: '只清插件 left-pad 的数据' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '清理插件数据' })).toBeDisabled()
+  })
+
+  it('账本不可用时不渲染逐包列表，一个按包清理的入口都不给', async () => {
+    card({ getRuntimeCleanupState: vi.fn().mockResolvedValue(state({ plugin: { ledger: 'invalid', checked: 0, packages: [] } })) })
+
+    await screen.findByText('插件版本账本已损坏，暂时无法确定哪些目录是插件数据。')
+    expect(screen.queryByRole('button', { name: /只清插件/ })).toBeNull()
+  })
+
+  it('账本里核对不到的包被拒后翻成下一步文案，失败照样重读一次占用', async () => {
+    const get = vi.fn().mockResolvedValue(state())
+    const purge = vi.fn().mockRejectedValue({ code: 'CLEANUP_PLUGIN_UNKNOWN', message: '账本里核对不到这个插件的包目录，未清理任何数据' })
+    card({ getRuntimeCleanupState: get, purgePluginData: purge })
+
+    await confirm('只清插件 left-pad 的数据')
+    await screen.findByText('清理没能完成：账本里没有这个插件：刷新列表后再试')
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2))
   })
 })

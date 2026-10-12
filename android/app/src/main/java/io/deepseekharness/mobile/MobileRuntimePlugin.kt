@@ -59,6 +59,7 @@ import io.deepseekharness.mobile.runtime.TaskNotification
 import io.deepseekharness.mobile.runtime.MailboxImportOutcome
 import io.deepseekharness.mobile.runtime.MailboxState
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
+import io.deepseekharness.mobile.runtime.PluginInstallLock
 import io.deepseekharness.mobile.runtime.RuntimeEventSink
 import io.deepseekharness.mobile.runtime.RuntimeCacheCleanup
 import io.deepseekharness.mobile.runtime.RuntimeCacheEntries
@@ -927,10 +928,11 @@ class MobileRuntimePlugin : Plugin() {
 
     /**
      * 权限：应用内桥接。
-     * 分级清理的现状读数：缓存档（登记条目的占用）与插件数据档（账本可用性 + 涉及包数）。
+     * 分级清理的现状读数：缓存档（登记条目的占用）与插件数据档（账本可用性 + 涉及包数 + 逐包占用）。
      *
      * 只读：跑着 Harness 时也允许看 —— 用户要能先看到「哪一档占了多少、现在能不能清」再决定
-     * 停机。只回条目名、计数与受控状态，**不回绝对路径、目录内容或包名**。
+     * 停机。只回条目名、计数与受控状态，**不回绝对路径、目录内容**；包名只出现在插件档的逐包
+     * 列表里（界面要按包选择清哪一个），它不落诊断也不落审计。
      */
     @PluginMethod
     fun getRuntimeCleanupState(call: PluginCall) {
@@ -972,13 +974,18 @@ class MobileRuntimePlugin : Plugin() {
      *
      * 清哪些包完全由版本账本决定：账本读不出来时一个字节都不动，按受控错误码拒绝
      * （`CLEANUP_LEDGER_UNAVAILABLE`），让界面如实说「清不了」——猜着删的代价远大于清不掉。
+     *
+     * 可选参数 `packageName`：只清这一个包（设置页里逐个插件的「清空数据」）。缺省或传 `null`
+     * 表示整档清空。这个串**只用来和账本条目做相等比较**，绝不参与拼路径——真正的目录永远来自
+     * 账本核对过的 `PackageDirectory.directory`（见 [PluginDataPurge.purge]）。
      */
     @PluginMethod
     fun purgePluginData(call: PluginCall) {
         execute(call) {
             audited(AuditEvent.DATA_CLEANUP) {
                 try {
-                    val outcome = controller.purgePluginData()
+                    val packageName = cleanupPackageName(call)
+                    val outcome = controller.purgePluginData(packageName)
                         ?: throw RuntimeFailure("CLEANUP_LEDGER_UNAVAILABLE", "插件版本账本不可用，未清理任何数据")
                     recordCleanup("plugin_data", outcome)
                     outcome.toJs()
@@ -988,6 +995,25 @@ class MobileRuntimePlugin : Plugin() {
                 }
             }
         }
+    }
+
+    /**
+     * 逐包清理的入参：缺省或 `null` = 整档清空，否则必须是形状合法的包名。
+     *
+     * 校验放在桥接层（与无障碍白名单校验同一处惯例）：包名是**用户可控字符串**，形状不合法的
+     * 串必须在碰到文件系统之前就挡下。两个拒收码刻意分开——`CLEANUP_SCOPE_INVALID` 是「这个串
+     * 本身不合法」（用户手滑），`CLEANUP_PLUGIN_UNKNOWN` 是「账本里没有这个包」（插件卸了或换了
+     * 事务）；合成一个码，用户就分不清该改输入还是该刷新列表。
+     */
+    private fun cleanupPackageName(call: PluginCall): String? {
+        val value = call.data.opt("packageName") ?: return null
+        if (value == JSONObject.NULL) return null
+        val packageName = value as? String
+            ?: throw RuntimeFailure("CLEANUP_SCOPE_INVALID", "插件标识必须是字符串")
+        if (!PluginInstallLock.isPackageName(packageName)) {
+            throw RuntimeFailure("CLEANUP_SCOPE_INVALID", "插件标识格式不合法")
+        }
+        return packageName
     }
 
     /**

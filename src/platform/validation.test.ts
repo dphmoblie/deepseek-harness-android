@@ -34,6 +34,8 @@ import {
   validateMediaPermissionResult,
   validateNotificationPermissionResult,
   validateOverlayBallState,
+  validatePluginCleanupRequest,
+  validateRuntimeCleanupState,
   validateRuntimeInstallResult,
   validateRuntimeProgress,
   validateRuntimeReleaseList,
@@ -935,6 +937,208 @@ describe('存储目录白名单校验', () => {
     for (const path of ['', 'Download', '/sdcard/Download', '/storage/emulated/0/', '/storage/emulated/0/a/../b']) {
       expect(() => assertStorageDirPath(path), path).toThrow('存储目录路径格式无效')
     }
+  })
+})
+
+describe('数据清理载荷校验', () => {
+  describe('validatePluginCleanupRequest', () => {
+    it('undefined 和 null 返回空对象', () => {
+      expect(validatePluginCleanupRequest(undefined)).toEqual({})
+      expect(validatePluginCleanupRequest(null)).toEqual({})
+    })
+
+    it('空对象和省略 packageName 都返回空对象', () => {
+      expect(validatePluginCleanupRequest({})).toEqual({})
+      expect(validatePluginCleanupRequest({ packageName: undefined })).toEqual({})
+    })
+
+    it('合法包名原样返回', () => {
+      expect(validatePluginCleanupRequest({ packageName: 'left-pad' })).toEqual({ packageName: 'left-pad' })
+      expect(validatePluginCleanupRequest({ packageName: '@scope/tool' })).toEqual({ packageName: '@scope/tool' })
+      expect(validatePluginCleanupRequest({ packageName: 'a.b-c_d' })).toEqual({ packageName: 'a.b-c_d' })
+    })
+
+    it('非法包名抛出插件标识格式无效', () => {
+      expect(() => validatePluginCleanupRequest({ packageName: '' })).toThrow('插件标识格式无效')
+      expect(() => validatePluginCleanupRequest({ packageName: 'Left-Pad' })).toThrow('插件标识格式无效')
+      expect(() => validatePluginCleanupRequest({ packageName: '..' })).toThrow('插件标识格式无效')
+      expect(() => validatePluginCleanupRequest({ packageName: 'a/../b' })).toThrow('插件标识格式无效')
+      expect(() => validatePluginCleanupRequest({ packageName: 'a/b' })).toThrow('插件标识格式无效')
+      expect(() => validatePluginCleanupRequest({ packageName: 'a b' })).toThrow('插件标识格式无效')
+      expect(() => validatePluginCleanupRequest({ packageName: '-leading' })).toThrow('插件标识格式无效')
+      expect(() => validatePluginCleanupRequest({ packageName: 'x'.repeat(215) })).toThrow('插件标识格式无效')
+    })
+
+    it('非字符串值抛出插件标识格式无效', () => {
+      expect(() => validatePluginCleanupRequest({ packageName: 42 as unknown as string })).toThrow('插件标识格式无效')
+    })
+  })
+
+  describe('validateRuntimeCleanupState', () => {
+    it('合法载荷通过校验且返回值逐字段相等', () => {
+      const input = {
+        runtimeRunning: true,
+        cache: {
+          entries: [
+            { name: 'cache-1', present: true, files: 100, bytes: 1024 },
+            { name: 'cache-2', present: false, files: 0, bytes: 0 },
+          ],
+          files: 200,
+          bytes: 2048,
+        },
+        plugin: {
+          ledger: 'ok',
+          checked: 2,
+          packages: [
+            { id: 'left-pad', present: true, files: 50, bytes: 512 },
+            { id: '@scope/tool', present: true, files: 100, bytes: 1024 },
+          ],
+        },
+      }
+      const result = validateRuntimeCleanupState(input)
+      expect(result.runtimeRunning).toBe(true)
+      expect(result.cache).toEqual(input.cache)
+      expect(result.plugin.ledger).toBe('ok')
+      expect(result.plugin.checked).toBe(2)
+      expect(result.plugin.packages).toHaveLength(2)
+      expect(result.plugin.packages[0]).toEqual({ id: 'left-pad', present: true, files: 50, bytes: 512 })
+      expect(result.plugin.packages[1]).toEqual({ id: '@scope/tool', present: true, files: 100, bytes: 1024 })
+    })
+
+    it('缺 packages 抛出插件数据档包列表格式无效', () => {
+      const input = {
+        runtimeRunning: true,
+        cache: {
+          entries: [],
+          files: 0,
+          bytes: 0,
+        },
+        plugin: {
+          ledger: 'ok',
+          checked: 0,
+        },
+      }
+      expect(() => validateRuntimeCleanupState(input)).toThrow('插件数据档包列表格式无效')
+    })
+
+    it('packages 超过 256 抛出插件数据档包列表格式无效', () => {
+      const input = {
+        runtimeRunning: true,
+        cache: {
+          entries: [],
+          files: 0,
+          bytes: 0,
+        },
+        plugin: {
+          ledger: 'ok',
+          checked: 0,
+          packages: Array.from({ length: 257 }, (_, i) => ({
+            id: `pkg-${i}`,
+            present: true,
+            files: 0,
+            bytes: 0,
+          })),
+        },
+      }
+      expect(() => validateRuntimeCleanupState(input)).toThrow('插件数据档包列表格式无效')
+    })
+
+    it('packages[0].id 为非法值抛出插件条目 1 的标识格式无效', () => {
+      const input = {
+        runtimeRunning: true,
+        cache: {
+          entries: [],
+          files: 0,
+          bytes: 0,
+        },
+        plugin: {
+          ledger: 'ok',
+          checked: 0,
+          packages: [
+            { id: '..', present: true, files: 0, bytes: 0 },
+          ],
+        },
+      }
+      expect(() => validateRuntimeCleanupState(input)).toThrow('插件条目 1 的标识格式无效')
+    })
+
+    it('packages[2].id 为非法值抛出插件条目 3 的标识格式无效', () => {
+      const input = {
+        runtimeRunning: true,
+        cache: {
+          entries: [],
+          files: 0,
+          bytes: 0,
+        },
+        plugin: {
+          ledger: 'ok',
+          checked: 0,
+          packages: [
+            { id: 'pkg-1', present: true, files: 0, bytes: 0 },
+            { id: 'pkg-2', present: true, files: 0, bytes: 0 },
+            { id: '..', present: true, files: 0, bytes: 0 },
+          ],
+        },
+      }
+      expect(() => validateRuntimeCleanupState(input)).toThrow('插件条目 3 的标识格式无效')
+    })
+
+    it('packages[0].present 为非布尔值抛出插件条目存在标记格式无效', () => {
+      const input = {
+        runtimeRunning: true,
+        cache: {
+          entries: [],
+          files: 0,
+          bytes: 0,
+        },
+        plugin: {
+          ledger: 'ok',
+          checked: 0,
+          packages: [
+            { id: 'pkg-1', present: 'true' as unknown as boolean, files: 0, bytes: 0 },
+          ],
+        },
+      }
+      expect(() => validateRuntimeCleanupState(input)).toThrow('插件条目存在标记格式无效')
+    })
+
+    it('packages[0].files 为非整数或负数抛出插件条目文件数格式无效', () => {
+      const input = {
+        runtimeRunning: true,
+        cache: {
+          entries: [],
+          files: 0,
+          bytes: 0,
+        },
+        plugin: {
+          ledger: 'ok',
+          checked: 0,
+          packages: [
+            { id: 'pkg-1', present: true, files: -1, bytes: 0 },
+          ],
+        },
+      }
+      expect(() => validateRuntimeCleanupState(input)).toThrow('插件条目文件数格式无效')
+    })
+
+    it('packages[0].bytes 为非整数或负数抛出插件条目体积格式无效', () => {
+      const input = {
+        runtimeRunning: true,
+        cache: {
+          entries: [],
+          files: 0,
+          bytes: 0,
+        },
+        plugin: {
+          ledger: 'ok',
+          checked: 0,
+          packages: [
+            { id: 'pkg-1', present: true, files: 0, bytes: -1 },
+          ],
+        },
+      }
+      expect(() => validateRuntimeCleanupState(input)).toThrow('插件条目体积格式无效')
+    })
   })
 })
 
