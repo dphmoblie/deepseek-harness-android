@@ -109,6 +109,8 @@ test('任务台账的错误给固定恢复建议，不转发设备原文也不�
     ['AUTOMATION_TASK_ATTEMPTS_EXHAUSTED', /不要再加重试/],
     ['AUTOMATION_TASK_NEEDS_CHECK', /判定不了/],
     ['AUTOMATION_TASK_BUSY', /不要同时开第二个任务/],
+    ['AUTOMATION_TASK_RESUME_REQUIRED', /不要重复 resume/],
+    ['AUTOMATION_TASK_MANUAL_PREEMPTED', /手动抢占/],
     ['AUTOMATION_TASK_SERVICE_DISCONNECTED', /请用户到系统设置里开启/],
     ['AUTOMATION_TASK_PARAM_INVALID', /按工具参数表重写/],
   ]) {

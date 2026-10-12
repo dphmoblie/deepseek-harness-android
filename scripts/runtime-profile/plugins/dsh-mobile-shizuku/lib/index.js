@@ -77,6 +77,8 @@ const AUTOMATION_TASK_HINTS = {
   AUTOMATION_TASK_TOO_MANY_STEPS: '步骤数超过上限；把计划拆小，分几次任务做。',
   AUTOMATION_TASK_PARAM_INVALID: '参数形状不对；按工具参数表重写一次，不要反复重试同样的参数。',
   AUTOMATION_TASK_RECORD_INVALID: '回执参数形状不对；按工具参数表重写一次。',
+  AUTOMATION_TASK_RESUME_REQUIRED: '任务当前没有暂停，不要重复 resume；先读任务状态并按 nextStep 继续。',
+  AUTOMATION_TASK_MANUAL_PREEMPTED: '检测到手动抢占或外部事件改变了现场；重新读取控件树并确认当前界面后，再用 resume 继续。',
 }
 
 /** 受控码 → 固定恢复建议。只有登记过表的命令才有建议，其余命令仍旧只回码。 */
@@ -882,7 +884,7 @@ export function apply(ctx) {
 
   ctx.tools.register(defineTool({
     name: 'mobile_device_task',
-    description: '把一次多步操作记成有状态的任务台账：先 plan 交计划，之后每一步都先 gate 取放行、做完再用 record 交结果。它**不执行任何动作**——每步仍要用 mobile_accessibility_action 等工具单独执行、单独审批。拿到 AUTOMATION_TASK_NOT_VERIFIED 或 AUTOMATION_TASK_TIMEOUT 表示「不确定」：不要重发，先观察界面再用 record 说明；前台换了应用或界面已变会得 AUTOMATION_TASK_TARGET_LEFT / AUTOMATION_TASK_TARGET_STALE，先重新读控件树，再用 resume 带全部步骤标识续跑。',
+    description: '把一次多步操作记成有状态的任务台账：先 plan 交计划，之后每一步都先 gate 取放行、做完再用 gate 回执里的 attempt 调用 record 交结果。它**不执行任何动作**——每步仍要用 mobile_accessibility_action 等工具单独执行、单独审批。拿到 AUTOMATION_TASK_NOT_VERIFIED 或 AUTOMATION_TASK_TIMEOUT 表示「不确定」：不要重发，先观察界面再用 record 说明；前台换了应用或界面已变会得 AUTOMATION_TASK_TARGET_LEFT / AUTOMATION_TASK_TARGET_STALE，先重新读控件树，再用 resume 带全部步骤标识续跑。',
     parameters: {
       op: { type: 'string', required: true, enum: ['plan', 'gate', 'record', 'resume', 'cancel', 'status'], description: 'plan 建计划、gate 取下一步能不能发、record 交这一步的结果、resume 现场变了之后续跑、cancel 取消、status 读现状。' },
       taskId: { type: 'string', description: 'plan 必填：本次任务标识（小写字母数字与 - _，最多 64 位）。' },
@@ -909,6 +911,7 @@ export function apply(ctx) {
         items: { type: 'string' },
       },
       step: { type: 'string', description: 'gate 与 record 必填：要放行或交结果的那一步的 id。' },
+      attempt: { type: 'integer', description: 'record 必填：gate 回执中的尝试代次，从 1 开始；不能复用旧代次。' },
       status: { type: 'string', enum: ['ok', 'failed', 'unknown'], description: 'record 必填：ok 表示动作成功且观察到了预期变化；设备侧明确报失败给 failed（带 code）；不确定给 unknown——台账按「不确定」处理，不会自动重试。' },
       code: { type: 'string', description: 'record 选填：设备侧结果或错误码，如 AUTOMATION_ACTION_PERFORMED、ACCESSIBILITY_NODE_NOT_FOUND。' },
       verified: { type: 'boolean', description: 'record 选填：是否真的观察到预期变化。省略时按「报成功即通过校验、报失败即未通过」处理。' },
@@ -922,6 +925,7 @@ export function apply(ctx) {
       if (args.steps !== undefined) param.steps = args.steps
       if (args.resumeSteps !== undefined) param.steps = args.resumeSteps
       if (args.step !== undefined) param.step = args.step
+      if (args.attempt !== undefined) param.attempt = args.attempt
       if (args.status !== undefined) param.status = args.status
       if (args.code !== undefined) param.code = args.code
       if (args.verified !== undefined) param.verified = args.verified

@@ -31,7 +31,8 @@ class AutomationTaskLedgerTest {
         sensitive: Boolean = false,
         allowed: Boolean = true,
         connected: Boolean = true,
-    ) = AutomationTaskFacts(packageName, digest, locked, sensitive, allowed, connected)
+        manualPreempted: Boolean = false,
+    ) = AutomationTaskFacts(packageName, digest, locked, sensitive, allowed, connected, manualPreempted)
 
     private fun ledger(vararg steps: AutomationTaskStepSpec, digest: String? = "d1"): AutomationTaskLedger {
         val ledger = AutomationTaskLedger()
@@ -90,7 +91,7 @@ class AutomationTaskLedgerTest {
     fun `已经成功的步骤再提交不会执行第二次`() {
         val ledger = ledger(spec("s1", maxAttempts = 3))
         ledger.gate("s1", facts(), 1_000L)
-        ledger.record("s1", AutomationTaskStepOutcome(ok = true), 1_100L)
+        ledger.record("s1", 1, AutomationTaskStepOutcome(ok = true), 1_100L)
         assertEquals(AutomationTaskCodes.STEP_ALREADY_SETTLED, ledger.gate("s1", facts(), 1_200L).refusedCode())
         // 幂等：重复提交不消耗重试次数，也不把状态改回去。
         val snapshot = ledger.snapshot()
@@ -105,7 +106,7 @@ class AutomationTaskLedgerTest {
         assertEquals(AutomationTaskCodes.TARGET_LEFT, gate.refusedCode())
         assertEquals(AutomationTaskStatus.BLOCKED, ledger.snapshot().status)
         // 回到目标应用之后，必须用新的指纹走一次 resume 才能继续（不是默默放行）。
-        assertTrue(ledger.resume(listOf("s1", "s2"), "d2") is AutomationTaskGate.Proceed)
+        assertTrue(ledger.resume(listOf("s1", "s2"), facts(digest = "d2")) is AutomationTaskGate.Proceed)
         assertEquals(AutomationTaskStatus.RUNNING, ledger.snapshot().status)
         assertTrue(ledger.gate("s1", facts(digest = "d2"), 2_000L) is AutomationTaskGate.Proceed)
     }
@@ -114,15 +115,58 @@ class AutomationTaskLedgerTest {
     fun `计划之后界面就变了时第一步不发出`() {
         val ledger = ledger(spec("s1"))
         assertEquals(AutomationTaskCodes.TARGET_STALE, ledger.gate("s1", facts(digest = "d9"), 1_000L).refusedCode())
-        assertTrue(ledger.resume(listOf("s1"), "d9") is AutomationTaskGate.Proceed)
+        assertTrue(ledger.resume(listOf("s1"), facts(digest = "d9")) is AutomationTaskGate.Proceed)
         assertTrue(ledger.gate("s1", facts(digest = "d9"), 2_000L) is AutomationTaskGate.Proceed)
     }
 
     @Test
     fun `恢复时的步骤列表必须与原计划一致`() {
         val ledger = ledger(spec("s1"), spec("s2"))
-        val gate = ledger.resume(listOf("s2", "s1"), "d2")
+        ledger.gate("s1", facts(packageName = "com.other.app"), 1_000L)
+        val gate = ledger.resume(listOf("s2", "s1"), facts(digest = "d2"))
         assertEquals(AutomationTaskCodes.PLAN_INVALID, gate.refusedCode())
+    }
+
+    @Test
+    fun `旧尝试的回执不能覆盖新尝试`() {
+        val ledger = ledger(spec("s1", maxAttempts = 2))
+        ledger.gate("s1", facts(), 1_000L)
+        ledger.record("s1", 1, AutomationTaskStepOutcome(ok = false, code = "AUTOMATION_CLICK_FAILED"), 1_100L)
+        ledger.gate("s1", facts(), 1_200L)
+        val stale = ledger.record("s1", 1, AutomationTaskStepOutcome(ok = true), 1_300L)
+        assertEquals(AutomationTaskCodes.RECORD_INVALID, stale.lastCode)
+        assertEquals(AutomationTaskStepStatus.PENDING, stale.steps.single().status)
+        val current = ledger.record("s1", 2, AutomationTaskStepOutcome(ok = true), 1_400L)
+        assertEquals(AutomationTaskStepStatus.OK, current.steps.single().status)
+    }
+
+    @Test
+    fun `用户抢占后恢复必须重新确认现场`() {
+        val ledger = ledger(spec("s1"), spec("s2"))
+        ledger.gate("s1", facts(packageName = "com.other.app"), 1_000L)
+        val blocked = ledger.resume(listOf("s1", "s2"), facts(digest = "d2", manualPreempted = true))
+        assertEquals(AutomationTaskCodes.MANUAL_PREEMPTED, blocked.refusedCode())
+        assertEquals(AutomationTaskStatus.BLOCKED, ledger.snapshot().status)
+        assertTrue(ledger.resume(listOf("s1", "s2"), facts(digest = "d2")) is AutomationTaskGate.Proceed)
+    }
+
+    @Test
+    fun `任务运行期间的外部界面事件会阻塞任务`() {
+        val ledger = ledger(spec("s1"))
+        ledger.gate("s1", facts(), 1_000L)
+        val blocked = ledger.markExternalChange()
+        assertEquals(AutomationTaskStatus.BLOCKED, blocked.status)
+        assertEquals(AutomationTaskCodes.MANUAL_PREEMPTED, blocked.lastCode)
+        assertTrue(ledger.resume(listOf("s1"), facts(digest = "d1")) is AutomationTaskGate.Proceed)
+    }
+
+    @Test
+    fun `未阻塞的任务不接受重复恢复`() {
+        val ledger = ledger(spec("s1"))
+        assertEquals(
+            AutomationTaskCodes.RESUME_REQUIRED,
+            ledger.resume(listOf("s1"), facts()).refusedCode(),
+        )
     }
 
     @Test
