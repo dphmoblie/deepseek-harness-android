@@ -54,6 +54,37 @@ const VIRTUAL_ERROR_HINTS = {
   VIRTUAL_SCREEN_SESSION_DEAD: '会话已失效；读取 mobile_virtual_screen_state，必要时请用户从原生入口重新开始。',
   VIRTUAL_SCREEN_TEXT_UNSUPPORTED: '本次文字输入未能完成，可能已有部分写入；先观察输入框，不要重复整段输入，可请用户手动输入。',
 }
+// 任务台账的固定恢复建议：与副屏那张表同形——只讲「下一步做什么」，不含任何设备文本，
+// 也不允许自动重放。拒绝与参数错误都会走到这里，所以模型看到的是码加上这句，而不是光秃秃一个码。
+const AUTOMATION_TASK_HINTS = {
+  AUTOMATION_TASK_TARGET_LEFT: '前台已不是计划里的应用；重新读控件树确认现场，再用 resume 带全部步骤标识续跑，不要重发这一步。',
+  AUTOMATION_TASK_TARGET_STALE: '界面在计划之后变了；重新读控件树取得新指纹，再用 resume 带全部步骤标识续跑，不要重发这一步。',
+  AUTOMATION_TASK_NOT_VERIFIED: '这一步发出去了但没观察到预期变化；先确认现场（读控件树或问用户），不要重发，涉及发送、提交的动作尤其不能猜。',
+  AUTOMATION_TASK_TIMEOUT: '这一步有没有生效不确定；先确认现场再决定，不要直接重发。',
+  AUTOMATION_TASK_ATTEMPTS_EXHAUSTED: '重试次数已用尽；不要再加重试，把这一步的状态与现场报告给用户。',
+  AUTOMATION_TASK_NEEDS_CHECK: '这个失败原因判定不了动作有没有生效；先确认现场，不要重发。',
+  AUTOMATION_TASK_BUSY: '已经有一个任务没有收口；先读任务状态或取消它，不要同时开第二个任务。',
+  AUTOMATION_TASK_STEP_OUT_OF_ORDER: '步骤必须按计划顺序提交；先读任务状态拿到 nextStep，再提交那一步。',
+  AUTOMATION_TASK_STEP_ALREADY_SETTLED: '这一步已经有结论了；读任务状态看下一步，不要重复提交同一步。',
+  AUTOMATION_TASK_STEP_UNKNOWN: '这个步骤标识不在计划里；先读任务状态拿到真实的步骤标识。',
+  AUTOMATION_TASK_CANCELLED: '任务已经取消（可能是用户按了停止）；不要继续发这一步。',
+  AUTOMATION_TASK_NOT_PLANNED: '现在没有任务；先用 plan 建一份计划再提交步骤。',
+  AUTOMATION_TASK_SERVICE_DISCONNECTED: '无障碍服务没有连上；请用户到系统设置里开启本应用的辅助服务后再继续。',
+  AUTOMATION_TASK_DEVICE_LOCKED: '设备锁屏了；请用户解锁后再继续。',
+  AUTOMATION_TASK_SENSITIVE_WINDOW: '当前是敏感窗口（密码、支付一类）；这里不执行动作，请用户手动完成。',
+  AUTOMATION_TASK_PACKAGE_NOT_ALLOWED: '这个应用不在自动化白名单里；请用户添加后再继续，不要绕过。',
+  AUTOMATION_TASK_PLAN_INVALID: '计划不合法（步数、超时、重试上限或标识）；按工具描述里的限额改写后重新 plan。',
+  AUTOMATION_TASK_TOO_MANY_STEPS: '步骤数超过上限；把计划拆小，分几次任务做。',
+  AUTOMATION_TASK_PARAM_INVALID: '参数形状不对；按工具参数表重写一次，不要反复重试同样的参数。',
+  AUTOMATION_TASK_RECORD_INVALID: '回执参数形状不对；按工具参数表重写一次。',
+}
+
+/** 受控码 → 固定恢复建议。只有登记过表的命令才有建议，其余命令仍旧只回码。 */
+function hintFor(command, code) {
+  if (command.startsWith('virtualScreen')) return VIRTUAL_ERROR_HINTS[code]
+  if (command === 'automationTask') return AUTOMATION_TASK_HINTS[code]
+  return undefined
+}
 
 const PROMPT = [
   '用户在安卓壳设置 → AI Shell → 目标应用副屏选择应用。mobile_virtual_screen_state 返回 active、sessionId、尺寸、预览帧率与 touchChannel；mobile_virtual_screen_tree 或 screenshot 观察副屏，action 执行单步操作，config 调整预览帧率，target 切换应用而不重启会话。轨迹操作优先 gesture 一次给出完整路径；touch 分步控制时 down 之后必须用 up 或 cancel 收尾。VIRTUAL_SCREEN_INJECTION_FAILED 只说明该笔注入未完成，先观察，不能直接重放。launch 在副屏打开 component/package/uri（三选一）；follow 把跳出的目标拉回副屏，VIRTUAL_SCREEN_FOLLOW_NONE 表示无可跟随应用。这些工具只针对正在运行的副屏，不用 mobile_device_tap 或主屏无障碍工具替代。需要 AI Shell、已授权连接的 Shizuku 与兼容设备；锁屏暂停读写，未启动时请用户从原生入口启动，不回退主屏。',
@@ -135,7 +166,7 @@ async function callBridge(command, param, signal, maxChars = MAX_RESULT_CHARS, a
     const code = typeof result.errorCode === 'string' && /^[A-Z0-9_]{1,64}$/u.test(result.errorCode)
       ? result.errorCode
       : 'DEVICE_COMMAND_FAILED'
-    const hint = command.startsWith('virtualScreen') ? VIRTUAL_ERROR_HINTS[code] : undefined
+    const hint = hintFor(command, code)
     throw new Error(hint ? `${code}: ${hint}` : code)
   }
   return {

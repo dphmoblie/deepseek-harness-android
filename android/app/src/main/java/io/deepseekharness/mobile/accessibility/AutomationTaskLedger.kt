@@ -242,6 +242,9 @@ internal data class AutomationTaskSnapshot(
  * 单槽位是**真机的诚实反映**：无障碍动作之间有 `ACTION_INTERVAL_MS = 350L` 的全局间隔，
  * 而且每一步都可能弹出用户确认浮层（`pendingConfirmation` 也是单槽位）。允许多任务排队只会
  * 制造「排队中的任务在几分钟后突然开始点屏幕」这种用户无法预期的行为。
+ *
+ * 对外方法都带 `@Synchronized`：台账会被两条线程碰——设备桥的 `automationTask` 命令在改它，
+ * 设置页那块只读快照在读它。单槽位台账的临界区很短，不值得再引一把自己的锁。
  */
 internal class AutomationTaskLedger {
     private var taskId: String? = null
@@ -253,6 +256,7 @@ internal class AutomationTaskLedger {
     private var lastMessage: String? = null
 
     /** 计划：校验 + 落台账。同 id 的旧任务（已收口）允许被新计划覆盖，未收口的直接 [AutomationTaskCodes.BUSY]。 */
+    @Synchronized
     fun plan(
         taskId: String,
         packageName: String,
@@ -292,6 +296,7 @@ internal class AutomationTaskLedger {
     }
 
     /** 闸门：能不能发这一步。 */
+    @Synchronized
     fun gate(stepId: String, facts: AutomationTaskFacts, nowMs: Long): AutomationTaskGate {
         val current = taskId ?: return refuse(AutomationTaskCodes.NOT_PLANNED, "还没有任务：先提交计划", false)
         if (status == AutomationTaskStatus.CANCELLED) return refuse(AutomationTaskCodes.CANCELLED, "任务已取消", false)
@@ -361,6 +366,7 @@ internal class AutomationTaskLedger {
      * | 成功但没通过校验 | `unknown` + [AutomationTaskCodes.NOT_VERIFIED] |
      * | 成功且通过校验 | `ok` |
      */
+    @Synchronized
     fun record(stepId: String, outcome: AutomationTaskStepOutcome, nowMs: Long): AutomationTaskSnapshot {
         val index = steps.indexOfFirst { it.id == stepId }
         if (index < 0) return snapshot()
@@ -381,6 +387,7 @@ internal class AutomationTaskLedger {
     }
 
     /** 取消：未收口的步骤记 `skipped` + [AutomationTaskCodes.CANCELLED]。 */
+    @Synchronized
     fun cancel(): AutomationTaskSnapshot {
         steps = steps.map { step ->
             if (AutomationTaskStepStatus.settled(step.status)) step
@@ -398,6 +405,7 @@ internal class AutomationTaskLedger {
      * 只接受与当前计划**完全相同的步骤 id 列表**：换目标的重新规划是调用方的事（它得重新读节点树），
      * 台账不做「帮你把剩下的步骤改一改」这种事——那等于替调用方猜目标。
      */
+    @Synchronized
     fun resume(stepIds: List<String>, windowDigest: String): AutomationTaskGate {
         if (taskId == null) return refuse(AutomationTaskCodes.NOT_PLANNED, "还没有任务：先提交计划", false)
         if (steps.map { it.id } != stepIds) return invalid("恢复时的步骤列表与原计划不一致")
@@ -408,6 +416,7 @@ internal class AutomationTaskLedger {
         return AutomationTaskGate.Proceed(steps.firstOrNull { it.status == AutomationTaskStepStatus.PENDING }?.id ?: stepIds.last(), 0)
     }
 
+    @Synchronized
     fun snapshot(): AutomationTaskSnapshot = AutomationTaskSnapshot(
         taskId = taskId.orEmpty(),
         status = status,
@@ -468,14 +477,22 @@ internal object AutomationTaskPlan {
     const val MAX_ATTEMPTS = 3
     const val MAX_TARGET_CHARS = 200
     const val MAX_TASK_ID_CHARS = 64
-    const val MAX_PACKAGE_CHARS = 192
+    const val MAX_PACKAGE_CHARS = 160
 
     private val TASK_ID = Regex("^[a-z0-9][a-z0-9_-]{0,63}$")
-    private val PACKAGE = Regex("^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
+
+    /**
+     * Android 包名的**形状**口径：与 `AccessibilityAutomationPolicy.validPackage` 逐字一致
+     * （2..13 段、每段字母开头、总长 ≤160，因此 `com.android.Settings` 这类大写段是合法的）。
+     *
+     * 刻意**不含**保留包名（`com.android.settings` 这类）那一层：能不能动这个包由白名单闸门回答
+     * （服务侧 `packageAllowed`），在计划这里回「包名不合法」会把「不允许」说成「你写错了」。
+     */
+    private val PACKAGE = Regex("^[A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z][A-Za-z0-9_]*){1,12}$")
 
     fun isTaskId(value: String): Boolean = value.length in 1..MAX_TASK_ID_CHARS && TASK_ID.matches(value)
 
-    /** 与 `PluginInstallLock.isPackageName` 同一把尺子的子集：这里只认完整包名，不需要 `..` 那几道。 */
+    /** 与 `AccessibilityAutomationPolicy.validPackage` 同一套形状口径；保留包名不在这里拦。 */
     fun isPackageName(value: String): Boolean = value.length in 1..MAX_PACKAGE_CHARS && PACKAGE.matches(value)
 
     /** 返回 null 表示这条计划合法；否则是一句给调用方看的拒绝原因。 */

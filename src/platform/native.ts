@@ -82,6 +82,7 @@ import {
   validateRuntimeCleanupOutcome,
   validateRuntimeCleanupState,
   validateDeviceCapabilityReport,
+  validateAutomationTaskState,
   validatePluginCleanupRequest,
   validateRuntimeResidue,
   validateRuntimeResidueCleanup,
@@ -220,6 +221,8 @@ interface NativeRuntimePlugin {
   cleanRuntimeResidue(): Promise<unknown>
   getRuntimeCleanupState(): Promise<unknown>
   getDeviceCapabilities(): Promise<unknown>
+  getAutomationTaskState(): Promise<unknown>
+  cancelAutomationTask(): Promise<unknown>
   clearRuntimeCache(): Promise<unknown>
   purgePluginData(options?: { packageName?: string }): Promise<unknown>
   /** 列出原生侧已知的运行时可用版本；结果由 TS 侧校验后再交给界面。 */
@@ -527,6 +530,12 @@ function createNativeBridge(): RuntimeBridge {
     // 已停止（在跑时原生侧抛 `RUNTIME_BUSY`）；`ok` 由 `failed === 0` 推出，载荷里的同名字段不采信。
     getRuntimeCleanupState: () => NativeRuntime.getRuntimeCleanupState().then(validateRuntimeCleanupState),
     getDeviceCapabilities: () => NativeRuntime.getDeviceCapabilities().then(validateDeviceCapabilityReport),
+    // 任务台账：`connected=false` 表示无障碍服务没连上（此时 `task` 一定是 null）——界面必须把
+    // 「读不到」与「现在没有任务」分开说；校验器也按这个前提拒收自相矛盾的载荷。
+    getAutomationTaskState: () => NativeRuntime.getAutomationTaskState().then(validateAutomationTaskState),
+    // 取消是**人**的刹车（设置页按钮）：只把未收口的步骤记成 skipped，
+    // 已经发出去的那一次动作不会被假装没发生。AI 侧没有这条路。
+    cancelAutomationTask: () => NativeRuntime.cancelAutomationTask().then(validateAutomationTaskState),
     clearRuntimeCache: () => NativeRuntime.clearRuntimeCache().then(validateRuntimeCleanupOutcome),
     // 逐包清理：入参先在这里自检（折进 Promise 链，见下面的注释），只把合法的包名送到原生侧 ——
     // 原生侧还会再判一次，两处都必须过；省略包名表示整档清空。

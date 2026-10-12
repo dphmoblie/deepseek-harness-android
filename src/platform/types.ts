@@ -708,6 +708,56 @@ export interface AccessibilityAutomationRuns {
 }
 
 /**
+ * 任务台账里一步的状态（与原生 `AutomationTaskStepStatus` 逐字一致）。
+ *
+ * `unknown` 是**结论**，不是「还不知道」：动作发出去了但没观察到预期变化、或者超时，
+ * 都记 `unknown`，并且**永不自动重试**——对发送、提交这类动作，重发就是重复下单。
+ */
+export type AutomationTaskStepStatus = 'pending' | 'ok' | 'failed' | 'unknown' | 'skipped'
+
+/**
+ * 整个任务的状态。
+ *
+ * `blocked` 是「目标变了」：换了前台应用、或者界面在计划之后变了——必须重新读页面，
+ * 再用 `resume` 带新指纹继续；直接重发这一步会打到别的界面上。
+ */
+export type AutomationTaskStatus = 'planned' | 'running' | 'done' | 'failed' | 'blocked' | 'cancelled'
+
+/** 台账里的一步：只有标识、动作、状态、已试次数与受控码，**没有界面文字**。 */
+export interface AutomationTaskStep {
+  id: string
+  action: string
+  status: AutomationTaskStepStatus
+  attempts: number
+  code: string | null
+}
+
+/** 当前任务的只读快照。收口与未收口的步数由原生算好回传，界面不自己数。 */
+export interface AutomationTask {
+  taskId: string
+  status: AutomationTaskStatus
+  packageName: string
+  nextStep: string | null
+  settledSteps: number
+  pendingSteps: number
+  lastCode: string | null
+  lastMessage: string | null
+  steps: AutomationTaskStep[]
+}
+
+/**
+ * 任务台账读数。
+ *
+ * [connected] 为假时 [task] 一定是 `null`；但反过来不成立——**连着却 `task === null`
+ * 表示现在没有任务**。界面必须把这两种情况分开说：把「读不到」显示成「没有任务」，
+ * 用户会以为刚才那串动作已经收口了。
+ */
+export interface AutomationTaskState {
+  connected: boolean
+  task: AutomationTask | null
+}
+
+/**
  * 一条自动化规则的界面读数。
  *
  * 只带界面需要判断的字段：**不带选择器正文**（文本、viewId 能反推界面内容，界面不需要就不搬），
@@ -1491,6 +1541,19 @@ export interface RuntimeBridge {
    * 就是给界面如实说明这一点的，**不能**把「读不到」显示成「什么都没发生」。
    */
   getAccessibilityAutomationRuns: (packageName?: string) => Promise<AccessibilityAutomationRuns>
+  /**
+   * 读当前任务台账（只读）。
+   *
+   * 台账只活在无障碍服务进程里、刻意不落盘：`connected` 为假时 `task` 是 `null`——界面要说成
+   * 「读不到」，而不是「现在没有任务」。
+   */
+  getAutomationTaskState: () => Promise<AutomationTaskState>
+  /**
+   * 取消当前任务：未收口的步骤记 `skipped`，**已经发出去的那一次动作不会被假装没发生**。
+   *
+   * 这是**人**的刹车（设置页按钮），AI 侧没有这条路；没有任务时按受控码拒收，不做空操作。
+   */
+  cancelAutomationTask: () => Promise<AutomationTaskState>
   /**
    * 读某个包已保存的自动化规则（**只读**）。
    *

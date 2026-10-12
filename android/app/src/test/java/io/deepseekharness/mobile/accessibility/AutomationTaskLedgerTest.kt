@@ -249,9 +249,26 @@ class AutomationTaskLedgerTest {
             AutomationTaskCodes.PLAN_INVALID,
             ledger.plan("task-1", "com.example.app", "d1", emptyList()).refusedCode(),
         )
+        // 包名形状跟着白名单那把尺子走（`AccessibilityAutomationPolicy.validPackage`）：至少两段、
+        // 每段以字母开头，所以单段名与空段都算「写错了」。
         assertEquals(
             AutomationTaskCodes.PLAN_INVALID,
-            ledger.plan("task-1", "Com.Example.App", "d1", listOf(spec("s1"))).refusedCode(),
+            ledger.plan("task-1", "settings", "d1", listOf(spec("s1"))).refusedCode(),
         )
+        assertEquals(
+            AutomationTaskCodes.PLAN_INVALID,
+            ledger.plan("task-1", "com..example", "d1", listOf(spec("s1"))).refusedCode(),
+        )
+    }
+
+    @Test
+    fun `大写段与保留包名都不在计划期拦：能不能动由白名单回答`() {
+        // 旧正则只认小写，于是「白名单里存得下的包名，计划里却报不合法」。
+        val upper = AutomationTaskLedger().plan("task-1", "Com.Example.App", "d1", listOf(spec("s1")))
+        assertTrue("大写段应当被接受：$upper", upper is AutomationTaskGate.Proceed)
+        // 保留包名（`com.android.settings` 这类）也放过去：能不能动是服务侧 `packageAllowed` 的结论，
+        // 在计划期回一句「包名不合法」会把「不允许」说成「你写错了」。
+        val reserved = AutomationTaskLedger().plan("task-1", "com.android.settings", "d1", listOf(spec("s1")))
+        assertTrue("保留包名在计划期不拦：$reserved", reserved is AutomationTaskGate.Proceed)
     }
 }

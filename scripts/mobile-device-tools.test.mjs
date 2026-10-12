@@ -84,6 +84,36 @@ test('副屏错误给固定恢复建议，不转发设备原文或自动重放�
   await assert.rejects(tool.execute({ sessionId: virtualSession, action: 'back' }, {}), { message: code })
 })
 
+test('任务台账的错误给固定恢复建议，不转发设备原文也不自动重放', async t => {
+  let code = 'AUTOMATION_TASK_TARGET_LEFT'
+  const f = fixture(t, () => ({ ...ok('DEVICE_PRIVATE_TEXT_DO_NOT_FORWARD'), ok: false, exitCode: 1, errorCode: code }))
+  const tool = f.tools.get('mobile_device_task')
+  for (const [errorCode, advice] of [
+    ['AUTOMATION_TASK_TARGET_LEFT', /重新读控件树/],
+    ['AUTOMATION_TASK_TARGET_STALE', /新指纹/],
+    ['AUTOMATION_TASK_NOT_VERIFIED', /不要重发/],
+    ['AUTOMATION_TASK_TIMEOUT', /先确认现场/],
+    ['AUTOMATION_TASK_ATTEMPTS_EXHAUSTED', /不要再加重试/],
+    ['AUTOMATION_TASK_NEEDS_CHECK', /判定不了/],
+    ['AUTOMATION_TASK_BUSY', /不要同时开第二个任务/],
+    ['AUTOMATION_TASK_SERVICE_DISCONNECTED', /请用户到系统设置里开启/],
+    ['AUTOMATION_TASK_PARAM_INVALID', /按工具参数表重写/],
+  ]) {
+    code = errorCode
+    const before = f.requests.length
+    await assert.rejects(tool.execute({ op: 'gate', step: 's1' }, {}), error => {
+      assert.ok(error.message.startsWith(`${errorCode}:`))
+      assert.match(error.message, advice)
+      assert.doesNotMatch(error.message, /DEVICE_PRIVATE_TEXT_DO_NOT_FORWARD/)
+      return true
+    })
+    assert.equal(f.requests.length, before + 1)
+  }
+  assert.ok(f.requests.every(request => request.command === 'automationTask'))
+  code = 'AUTOMATION_TASK_UNKNOWN'
+  await assert.rejects(tool.execute({ op: 'status' }, {}), { message: code })
+})
+
 test('副屏流程按需选择树或截图，但保留同屏观察与动作后验证', t => {
   const f = fixture(t, () => ok('{}'))
   const prompt = f.prompts[0].text

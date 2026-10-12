@@ -1,6 +1,7 @@
 import { validatePluginRequest } from './plugins'
 import type {
   AppUpdateState,
+  AutomationTaskState,
   DeviceCapabilityReport,
   DiagnosticLogState,
   AccessibilityAutomationAction,
@@ -658,6 +659,13 @@ export function createBrowserBridge(): RuntimeBridge {
     // 如实拒绝 ⇒ 界面显示「读不到能力清单」，不编造任何一项的现状。
     getDeviceCapabilities: (): Promise<DeviceCapabilityReport> =>
       Promise.reject(new Error('浏览器预览不支持设备能力查询')),
+    // 任务台账活在无障碍服务进程里，预览里没有那个进程，也没有可取消的任务：两条都如实拒绝。
+    // **不要**回 `{ connected: false, task: null }`——界面得能区分「预览做不到」与「服务没连上」，
+    // 后者在真机上是有意义的状态（提示去开服务），前者提示了也没用。
+    getAutomationTaskState: (): Promise<AutomationTaskState> =>
+      Promise.reject(new Error('浏览器预览不支持任务台账')),
+    cancelAutomationTask: (): Promise<AutomationTaskState> =>
+      Promise.reject(new Error('浏览器预览不支持取消任务')),
     // 会话工作区在预览里没有原生侧那条只读通道：如实拒绝，让界面显示「读不到会话列表」+
     // 一句诚实说明。**不要**返回 `{ status: 'ready', sessions: [] }`——那会显示成「暂无会话」，
     // 等于把「读不到」编造成「确认没有」。

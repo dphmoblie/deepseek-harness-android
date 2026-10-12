@@ -150,6 +150,10 @@ export const bridge = {
   // 两条清理入口只在用户点击后才调，同样必须有桩。
   getRuntimeCleanupState: vi.fn(),
   getDeviceCapabilities: vi.fn(),
+  // 任务台账：界面进「无障碍应用自动化」页会读一次当前任务，取消是用户点击后才调；
+  // 缺桩同样会让 effect 抛错并卸载整棵树。
+  getAutomationTaskState: vi.fn(),
+  cancelAutomationTask: vi.fn(),
   clearRuntimeCache: vi.fn(),
   purgePluginData: vi.fn(),
   // 会话快照：界面进「运行环境」页会读一次总览，缺桩同样会让 effect 抛错并卸载整棵树。
@@ -547,6 +551,10 @@ export function beforeEachAppTest(): void {
       { id: 'chinese_input', state: 'ready', reason: 'READY', action: null, alternative: null },
     ],
   })
+  // 任务台账默认「服务连着、当前没有任务」：多数用例只关心别的页面，不该被一块写着「有任务在跑」
+  // 的读数影响；需要「读不到」（connected=false）或「有任务」的用例自己覆盖这两条桩。
+  bridge.getAutomationTaskState.mockResolvedValue({ connected: true, task: null })
+  bridge.cancelAutomationTask.mockResolvedValue({ connected: true, task: null })
   // 默认「没有任何快照」：多数用例只关心别的页面，不该被一份假快照影响；
   // 关心快照的用例自己覆盖这四条桩。上限取值与原生侧一致（3 份 / 512 MiB）。
   const emptySnapshotState = () => ({ maxSnapshots: 3, maxBytes: 512 * 1024 * 1024, totalBytes: 0, snapshots: [] })

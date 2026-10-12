@@ -8,6 +8,7 @@ import { AutomationRuleForm } from './components/AutomationRuleForm'
 import type { AutomationRuleDefaults } from './components/AutomationRuleForm'
 import { AutomationAppConfigForm } from './components/AutomationAppConfigForm'
 import { AutomationDisclaimer } from './components/AutomationDisclaimer'
+import { AutomationTaskCard } from './components/AutomationTaskCard'
 import { AppBackground } from './components/AppBackground'
 import { LanguageSettings } from './components/LanguageSettings'
 import { AppearanceSettings } from './components/AppearanceSettings'
@@ -4483,6 +4484,11 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 onCancel={() => setAutomationDisclaimer(null)}
               />
             )}
+            {/*
+              任务台账的可见面：AI 按步骤执行时的当前任务，以及人叫停它的那一下。
+              位置就是阅读顺序：现在能不能动（总开关）→ 正在动什么（本卡）→ 刚才动过什么（运行记录）。
+            */}
+            <AutomationTaskCard />
             <div className="settings-subsection" aria-labelledby="accessibility-automation-runs">
               <div className="section-title section-title-action">
                 <span className="section-icon"><ScrollText size={19} /></span>

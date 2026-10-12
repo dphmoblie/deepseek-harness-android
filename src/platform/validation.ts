@@ -18,6 +18,9 @@ import type {
   AccessibilityAutomationState,
   AllFilesAccessResult,
   AppUpdateState,
+  AutomationTaskState,
+  AutomationTaskStatus,
+  AutomationTaskStepStatus,
   DeviceCapabilityId,
   DeviceCapabilityReport,
   DeviceCapabilityState,
@@ -2517,4 +2520,106 @@ export function validateDeviceCapabilityReport(value: unknown): DeviceCapability
     return { id, state: state as DeviceCapabilityState, reason, action, alternative }
   })
   return { atMs, sdkInt, capabilities }
+}
+
+/** 任务标识与步骤标识同一把尺子（与原生 `AutomationTaskPlan.isTaskId` 一致）。 */
+const AUTOMATION_TASK_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/u
+
+/** 与原生 `AutomationTaskStepStatus` 逐字一致。 */
+const AUTOMATION_TASK_STEP_STATUSES = new Set<AutomationTaskStepStatus>(['pending', 'ok', 'failed', 'unknown', 'skipped'])
+
+/** 与原生 `AutomationTaskStatus` 逐字一致。 */
+const AUTOMATION_TASK_STATUSES = new Set<AutomationTaskStatus>(['planned', 'running', 'done', 'failed', 'blocked', 'cancelled'])
+
+/** 台账只认这五个动作（与原生 `AutomationTaskActions` 一致）。 */
+const AUTOMATION_TASK_ACTIONS = new Set(['click', 'setText', 'scroll', 'back', 'wait'])
+
+/** 可空的受控码：`null` 与缺字段都算「没有」，有值就必须是受控大写形状。 */
+function automationTaskCode(value: unknown, label: string): string | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'string' || !ERROR_CODE_PATTERN.test(value)) throw new Error(`${label}格式无效`)
+  return value
+}
+
+function automationTaskCount(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error(`${label}格式无效`)
+  return value
+}
+
+/**
+ * 任务台账读数：`connected` + 当前任务（没有任务是 `null`）。
+ *
+ * 三条交叉校验是刻意的。①`connected === false` 时 `task` 必须是 `null`：服务没连上就不可能读到台账，
+ * 原生侧也是这么拼的，两者不一致说明语义变了，整份拒掉而不是渲染一份自相矛盾的读数。
+ * ②`settledSteps + pendingSteps` 必须等于 `steps.length`——这两个计数是原生按同一份步骤算出来的，
+ * 对不上说明这是一份半截快照，而界面正要用它回答「AI 现在做到哪一步了」。
+ * ③动作与状态必须是受控取值：界面只翻词条、不认识的值会渲染成空白行，等于把「不知道」画成「没有」。
+ */
+export function validateAutomationTaskState(value: unknown): AutomationTaskState {
+  const record = asRecord(value, '任务台账读数')
+  const connected = record.connected
+  if (typeof connected !== 'boolean') throw new Error('任务台账连接状态格式无效')
+  const raw = record.task
+  if (raw === null || raw === undefined) return { connected, task: null }
+  if (!connected) throw new Error('任务台账读数自相矛盾：没连上却带着任务')
+  const task = asRecord(raw, '任务台账')
+  const taskId = task.taskId
+  if (typeof taskId !== 'string' || !AUTOMATION_TASK_ID_PATTERN.test(taskId)) throw new Error('任务标识格式无效')
+  const status = task.status
+  if (typeof status !== 'string' || !AUTOMATION_TASK_STATUSES.has(status as AutomationTaskStatus)) {
+    throw new Error('任务状态格式无效')
+  }
+  const packageName = task.packageName
+  if (typeof packageName !== 'string' || !PACKAGE_NAME_PATTERN.test(packageName)) throw new Error('任务目标包名格式无效')
+  const nextStep = task.nextStep
+  if (nextStep !== null && nextStep !== undefined
+    && (typeof nextStep !== 'string' || !AUTOMATION_TASK_ID_PATTERN.test(nextStep))) {
+    throw new Error('任务下一步标识格式无效')
+  }
+  const settledSteps = automationTaskCount(task.settledSteps, '任务已收口步数')
+  const pendingSteps = automationTaskCount(task.pendingSteps, '任务待执行步数')
+  const lastCode = automationTaskCode(task.lastCode, '任务受控码')
+  const lastMessage = task.lastMessage
+  if (lastMessage !== null && lastMessage !== undefined && typeof lastMessage !== 'string') {
+    throw new Error('任务说明格式无效')
+  }
+  const list = task.steps
+  if (!Array.isArray(list)) throw new Error('任务步骤列表格式无效')
+  const steps = list.map((item, index) => {
+    const step = asRecord(item, `任务第 ${index + 1} 步`)
+    const id = step.id
+    if (typeof id !== 'string' || !AUTOMATION_TASK_ID_PATTERN.test(id)) {
+      throw new Error(`任务第 ${index + 1} 步的标识格式无效`)
+    }
+    const action = step.action
+    if (typeof action !== 'string' || !AUTOMATION_TASK_ACTIONS.has(action)) {
+      throw new Error(`任务第 ${index + 1} 步的动作不是受控取值`)
+    }
+    const stepStatus = step.status
+    if (typeof stepStatus !== 'string' || !AUTOMATION_TASK_STEP_STATUSES.has(stepStatus as AutomationTaskStepStatus)) {
+      throw new Error(`任务第 ${index + 1} 步的状态格式无效`)
+    }
+    return {
+      id,
+      action,
+      status: stepStatus as AutomationTaskStepStatus,
+      attempts: automationTaskCount(step.attempts, `任务第 ${index + 1} 步的已试次数`),
+      code: automationTaskCode(step.code, `任务第 ${index + 1} 步的受控码`),
+    }
+  })
+  if (settledSteps + pendingSteps !== steps.length) throw new Error('任务台账的步数与状态对不上')
+  return {
+    connected,
+    task: {
+      taskId,
+      status: status as AutomationTaskStatus,
+      packageName,
+      nextStep: nextStep ?? null,
+      settledSteps,
+      pendingSteps,
+      lastCode,
+      lastMessage: lastMessage ?? null,
+      steps,
+    },
+  }
 }

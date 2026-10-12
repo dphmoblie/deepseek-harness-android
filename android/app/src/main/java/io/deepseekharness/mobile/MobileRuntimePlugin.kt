@@ -46,6 +46,7 @@ import io.deepseekharness.mobile.accessibility.AutomationRulePreferences
 import io.deepseekharness.mobile.accessibility.AutomationRuleStore
 import io.deepseekharness.mobile.accessibility.AutomationRunLogPolicy
 import io.deepseekharness.mobile.accessibility.AutomationSkipMessages
+import io.deepseekharness.mobile.accessibility.AutomationTaskSnapshot
 import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
 import io.deepseekharness.mobile.accessibility.toRuleJson
 import io.deepseekharness.mobile.runtime.AppReleaseCatalog
@@ -2061,6 +2062,78 @@ class MobileRuntimePlugin : Plugin() {
                 .put("runs", runs)
                 .put("blocked", blocked)
         }
+    }
+
+    /**
+     * 权限：应用内桥接；读**当前任务台账**的只读快照（设置页那块「当前任务」用它）。
+     *
+     * 台账只活在无障碍服务进程里（刻意不落盘）：服务没连上时 `task` 一律是 `null`，
+     * 界面必须把「读不到」与「现在没有任务」分开显示——这正是 `connected` 的用途。
+     * 快照里没有任何界面文字：包名、步骤标识与受控码只到这一层，**不进诊断日志**。
+     */
+    @PluginMethod
+    fun getAutomationTaskState(call: PluginCall) {
+        resolveWhileActive(call) {
+            val service = DeepSeekAccessibilityService.current()
+            JSObject()
+                .put("connected", service != null)
+                .put(
+                    "task",
+                    service?.currentAutomationTask()?.takeIf { it.taskId.isNotEmpty() }?.toJs()
+                        ?: JSONObject.NULL,
+                )
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；取消当前任务（设置页的「取消任务」）。**AI 侧没有这条路。**
+     *
+     * 取消只把未收口的步骤记成 `skipped` + `AUTOMATION_TASK_CANCELLED`：已经发出去的那一次动作
+     * 不会被假装没发生——它留在台账里，调用方自己回去确认现场。没有任务时按受控码拒收，
+     * 不做「悄悄什么也没发生」的空操作。
+     */
+    @PluginMethod
+    fun cancelAutomationTask(call: PluginCall) {
+        execute(call) {
+            val service = DeepSeekAccessibilityService.current()
+                ?: throw RuntimeFailure("ACCESSIBILITY_SERVICE_DISABLED", "无障碍服务没有连上，没有可取消的任务")
+            audited(AuditEvent.ACCESSIBILITY_CONFIG) {
+                if (service.currentAutomationTask().taskId.isEmpty()) {
+                    throw RuntimeFailure("AUTOMATION_TASK_NOT_PLANNED", "现在没有任务可取消")
+                }
+                val snapshot = service.cancelAutomationTask()
+                // 审计只记「取消被按下」这个受控码，不带包名、不带步骤标识。
+                recordAudit(AuditEvent.ACCESSIBILITY_CONFIG, AuditResult.SUCCEEDED, "AUTOMATION_TASK_CANCEL")
+                JSObject()
+                    .put("connected", true)
+                    .put("task", snapshot.toJs())
+            }
+        }
+    }
+
+    /** 任务快照过桥：步骤只带标识 / 动作 / 状态 / 已试次数 / 受控码，不带任何界面文字。 */
+    private fun AutomationTaskSnapshot.toJs(): JSObject {
+        val array = JSArray()
+        for (step in steps) {
+            array.put(
+                JSObject()
+                    .put("id", step.id)
+                    .put("action", step.action)
+                    .put("status", step.status)
+                    .put("attempts", step.attemptsUsed)
+                    .put("code", step.code ?: JSONObject.NULL),
+            )
+        }
+        return JSObject()
+            .put("taskId", taskId)
+            .put("status", status)
+            .put("packageName", packageName)
+            .put("nextStep", nextStepId ?: JSONObject.NULL)
+            .put("settledSteps", settledSteps)
+            .put("pendingSteps", pendingSteps)
+            .put("lastCode", lastCode ?: JSONObject.NULL)
+            .put("lastMessage", lastMessage ?: JSONObject.NULL)
+            .put("steps", array)
     }
 
     /**

@@ -1304,6 +1304,17 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     /** 当前运行态：读缓存，首次（或服务刚起来）读一次盘。 */
     internal fun currentAutomationRuntime(): AutomationRuntime = automationRuntime()
 
+    /**
+     * 当前任务台账的只读快照。
+     *
+     * 没有任务时 `taskId` 是空串（台账没有「空任务」这种对象），由桥接侧翻成 `null`；
+     * 界面必须把「读不到」与「现在没有任务」分开显示。
+     */
+    internal fun currentAutomationTask(): AutomationTaskSnapshot = automationTaskLedger.snapshot()
+
+    /** 取消当前任务：未收口的步骤记 `skipped` + `AUTOMATION_TASK_CANCELLED`，动作本身不再发出。 */
+    internal fun cancelAutomationTask(): AutomationTaskSnapshot = automationTaskLedger.cancel()
+
     /** 运行记录的只读快照：最新在前，`packageName` 为 null 表示所有包按时间合并。 */
     internal fun automationRunSnapshot(packageName: String?, limit: Int): List<AutomationRunRecord> =
         automationHistory.runs(packageName, limit)
