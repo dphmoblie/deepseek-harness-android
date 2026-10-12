@@ -327,6 +327,16 @@ describe('浏览器桥的更新渠道与应用自更新', () => {
 
     await expect(bridge.listRuntimeReleases()).rejects.toThrow('浏览器模式下没有更新渠道')
     await expect(bridge.getAppUpdateState()).rejects.toThrow('浏览器模式下没有应用更新')
+    await expect(bridge.getAppUpdateState(false)).rejects.toThrow('浏览器模式下没有应用更新')
+    await expect(bridge.getAppUpdateState(true)).rejects.toThrow('浏览器模式下没有应用更新')
+  })
+
+  it('应用更新刷新标记只接受布尔，非法参数通过 rejected Promise 返回', async () => {
+    const bridge = createBrowserBridge()
+    const getState = bridge.getAppUpdateState as (forceRefresh: unknown) => Promise<unknown>
+    for (const value of [null, 'true', 'false', 0, 1, {}, []]) {
+      await expect(getState(value)).rejects.toThrow('应用更新刷新参数无效')
+    }
   })
 
   it('没有可下载安装的 APK：下载、安装与授权页都如实拒绝，不假装成功', async () => {

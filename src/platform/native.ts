@@ -227,7 +227,7 @@ interface NativeRuntimePlugin {
   purgePluginData(options?: { packageName?: string }): Promise<unknown>
   /** 列出原生侧已知的运行时可用版本；结果由 TS 侧校验后再交给界面。 */
   listRuntimeReleases(): Promise<unknown>
-  getAppUpdateState(): Promise<unknown>
+  getAppUpdateState(options?: { forceRefresh: boolean }): Promise<unknown>
   downloadAppUpdate(): Promise<void>
   installAppUpdate(): Promise<void>
   openAppUpdateInstallSettings(): Promise<void>
@@ -563,7 +563,10 @@ function createNativeBridge(): RuntimeBridge {
       .then(validateRuntimeSessionSnapshotState),
     // 可用版本列表由原生侧给出：缺清单的条目只可展示，校验侧不允许它混成「可安装」。
     listRuntimeReleases: () => NativeRuntime.listRuntimeReleases().then(validateRuntimeReleaseList),
-    getAppUpdateState: () => NativeRuntime.getAppUpdateState().then(validateAppUpdateState),
+    getAppUpdateState: (forceRefresh = false) => {
+      if (typeof forceRefresh !== 'boolean') return Promise.reject(new Error('应用更新刷新参数无效'))
+      return NativeRuntime.getAppUpdateState({ forceRefresh }).then(validateAppUpdateState)
+    },
     // 下载与安装都不接收 URL：地址由原生侧自己决定，前端不能让它去取任意地址。
     downloadAppUpdate: () => NativeRuntime.downloadAppUpdate(),
     installAppUpdate: () => NativeRuntime.installAppUpdate(),

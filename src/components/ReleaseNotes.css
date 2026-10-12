@@ -1,0 +1,7 @@
+.release-notes { min-width: 0; margin: 12px 0; color: var(--muted); font-size: 0.8125rem; line-height: 1.6; }
+.release-notes-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+.release-notes-content.is-collapsed { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; max-height: 9.6em; overflow: hidden; }
+/* 限高只约束展开区；收起按钮留在滚动内容外，长公告始终能就近收起。 */
+.release-notes-content.is-expanded { max-height: min(24rem, 50vh); overflow-y: auto; overscroll-behavior: contain; }
+.release-notes-content:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.release-notes-toggle { min-height: 44px; margin-top: 8px; }

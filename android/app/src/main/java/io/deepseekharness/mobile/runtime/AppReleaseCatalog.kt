@@ -79,8 +79,11 @@ internal class AppReleaseCatalog(
      * 没有可用更新时**不出现** [UPDATE_KEY] 键：前端按「键缺失＝没有更新」判读，
      * 回一个 `available: null` 会被当成半截载荷拒绝。
      */
-    fun state(installed: InstalledAppInfo, installAllowed: Boolean): JSONObject {
-        val available = availableRelease(installed)
+    fun state(
+        installed: InstalledAppInfo,
+        installAllowed: Boolean,
+        available: Release? = availableRelease(installed),
+    ): JSONObject {
         val state = JSONObject()
             .put("installedVersion", installed.versionName)
             .put("installedVersionCode", installed.versionCode)
@@ -123,6 +126,12 @@ internal class AppReleaseCatalog(
             )
         }
         return best
+    }
+
+    fun isUpdateOf(installed: InstalledAppInfo, release: Release): Boolean {
+        val current = AppUpdateVersion.parse(installed.versionName) ?: return false
+        val candidate = AppUpdateVersion.parse(release.version) ?: return false
+        return isUpdateOf(current, candidate)
     }
 
     /**

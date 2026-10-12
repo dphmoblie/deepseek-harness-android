@@ -47,6 +47,7 @@ class RuntimeReleaseCatalog(private val http: RuntimeHttp = RuntimeHttp()) {
             }
             if (!seen.add(version)) continue
             val entry = JSONObject().put("version", version)
+                .put("notes", release.notes.trim().take(AppReleaseCatalog.MAX_NOTES_CHARS))
             manifest.dshVersion?.let { entry.put("dshVersion", it) }
             // 清单地址与摘要必须成对出现；缺一个，界面就会把这条当成「只能看、不能装」。
             entry.put("manifestUrl", asset.url).put("manifestSha256", asset.sha256)

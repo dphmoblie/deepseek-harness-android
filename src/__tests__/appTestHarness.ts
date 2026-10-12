@@ -305,6 +305,8 @@ export function beforeEachAppTest(): void {
   window.localStorage.clear()
   window.localStorage.setItem('dsh-mobile-language-v1', 'zh-CN')
   window.localStorage.setItem('dsh-mobile-onboarding-v1', '1')
+  // 普通页面测试关闭自动提示；更新集成测试显式开启，避免启动弹窗掩盖被测页面。
+  window.localStorage.setItem('dsh-app-update-reminder-enabled-v1', 'false')
   vi.clearAllMocks()
   bridge.setAppLanguage.mockResolvedValue(undefined)
   bridge.setAppTheme.mockResolvedValue(undefined)
