@@ -13,7 +13,11 @@ or otherwise distributing them.
   of every source archive and package used by
   `scripts/build-embedded-runtime.py`.
   （`scripts/build-embedded-runtime.py:947-948` 的 `--node-version` 默认值是 rootfs 内的
-  Node 版本；它与 CI 里跑构建/测试的 action Node 24.14.0 是两个不同的东西，不要混用。）
+  Node 版本；它与 CI 里跑构建/测试的 action Node 24.14.0 是两个不同的东西，不要混用。
+  三个版本各有用途——`.nvmrc` 的 `22.19.0` 是本地开发的下界、CI 的 `24.14.0` 跑构建脚本、
+  rootfs 内的 `24.19.0` 装机运行——但都必须落在 `package.json` 的 `engines.node` 内，
+  改任何一个数字前先看 `scripts/mobile-compat-contract.test.mjs` 的
+  「Node versions stay inside engines.node, with .nvmrc pinned to the supported floor」。）
 - Verify `/usr/local/bin/dsh`, the ARM64 native Node modules, the runtime
   metadata, and the guest file permissions in the finished rootfs.
 - Verify the network tool component group in the finished rootfs: `git`, `curl`,

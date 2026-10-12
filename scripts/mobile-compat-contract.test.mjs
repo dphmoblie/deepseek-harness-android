@@ -951,6 +951,84 @@ test('CI toolchain versions are pinned and runners carry no floating label', asy
   }
 })
 
+/**
+ * 把 `engines.node` 里 `^x.y.z || >=x.y.z` 这种写法拆成若干区间。
+ * 只认本项目实际在用的两种运算符：出现 `~`、`x` 通配或 `-` 区间时直接判失败，
+ * 免得范围写得含糊、测试却假装看懂了。
+ */
+function parseNodeRange(range) {
+  return range.split('||').map(part => {
+    const text = part.trim()
+    const match = /^(\^|>=)(\d+)\.(\d+)\.(\d+)$/u.exec(text)
+    assert.ok(match, `engines.node 只允许写 ^x.y.z 或 >=x.y.z：${text}`)
+    return {
+      operator: match[1],
+      text: `${match[2]}.${match[3]}.${match[4]}`,
+      major: Number(match[2]),
+      minor: Number(match[3]),
+      patch: Number(match[4]),
+    }
+  })
+}
+
+function compareNodeVersions(left, right) {
+  return left.major - right.major || left.minor - right.minor || left.patch - right.patch
+}
+
+/** `^x.y.z` 只对同一个主版本开放（0 开头的范围本项目不用，真要用时再补规则）。 */
+function satisfiesNodeRange(range, version) {
+  const parsed = /^(\d+)\.(\d+)\.(\d+)$/u.exec(version)
+  assert.ok(parsed, `Node 版本必须写成 x.y.z：${version}`)
+  const target = { major: Number(parsed[1]), minor: Number(parsed[2]), patch: Number(parsed[3]) }
+  return parseNodeRange(range).some(branch => {
+    if (compareNodeVersions(target, branch) < 0) {
+      return false
+    }
+    return branch.operator === '>=' || target.major === branch.major
+  })
+}
+
+test('Node versions stay inside engines.node, with .nvmrc pinned to the supported floor', async () => {
+  const packageJson = JSON.parse(await readFile(resolve(appRoot, 'package.json'), 'utf8'))
+  const range = packageJson.engines?.node
+  assert.equal(typeof range, 'string', 'package.json 必须写明 engines.node')
+
+  // `.nvmrc` 是本地开发用的版本，钉在支持范围的下界：本地不会跑在用户装不到的新版本上。
+  // 这跟 CI 的 node-version（构建脚本）和内嵌运行时的 Node（手机上跑 Harness）是三种用途，
+  // 三处数字本来就可以不同——但都必须落在 engines.node 里，这里就是把这条关系钉死。
+  const nvmrc = (await readFile(resolve(appRoot, '.nvmrc'), 'utf8')).trim()
+  assert.match(nvmrc, /^\d+\.\d+\.\d+$/u, `.nvmrc 只允许写一个完整的版本号：${nvmrc}`)
+  assert.ok(satisfiesNodeRange(range, nvmrc), `.nvmrc 的 ${nvmrc} 必须落在 engines.node（${range}）内`)
+
+  const floor = parseNodeRange(range).sort(compareNodeVersions)[0]
+  assert.equal(
+    nvmrc,
+    floor.text,
+    `.nvmrc 必须等于 engines.node 的下界 ${floor.text}：改了下界就要一起改 .nvmrc`,
+  )
+
+  const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
+  const ciVersions = [...workflow.matchAll(/node-version:\s*'([^']+)'/gu)].map(match => match[1])
+  assert.ok(ciVersions.length >= 2, '每个需要 Node 的作业都要显式钉版本')
+  for (const version of ciVersions) {
+    assert.ok(
+      satisfiesNodeRange(range, version),
+      `CI 使用的 Node ${version} 必须落在 engines.node（${range}）内`,
+    )
+  }
+
+  const runtimeVersions = [...workflow.matchAll(/nodejs\.org\/dist\/v(\d+\.\d+\.\d+)\//gu)].map(
+    match => match[1],
+  )
+  assert.ok(runtimeVersions.length >= 1, '内嵌运行时用的 Node 必须写明具体发行版地址')
+  for (const version of runtimeVersions) {
+    assert.ok(
+      satisfiesNodeRange(range, version),
+      `内嵌运行时的 Node ${version} 必须落在 engines.node（${range}）内`,
+    )
+  }
+})
+
 test('harness-web frozen pointer matches the index and the committed gitlink', async t => {
   const lines = (await readFile(resolve(appRoot, 'harness-web.pin'), 'utf8'))
     .split(/\r?\n/u)
