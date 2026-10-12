@@ -1,4 +1,4 @@
-﻿import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { AutomationAppConfigForm } from './AutomationAppConfigForm'
 import type {
@@ -81,6 +81,9 @@ describe('AutomationAppConfigForm', () => {
     expect(screen.getByLabelText('默认匹配延迟（毫秒）')).toHaveAttribute('max', '5000')
     // 「当前生效」那行只报读数，不报草稿。
     expect(screen.getByTestId('automation-app-config-effective')).toHaveTextContent('该应用已暂停')
+    // 说明里要指出去哪里确认它真的在生效：暂停拦掉的事件会计入「拦截原因」那张卡片。
+    // 少了这句，用户拨完开关在运行记录里什么都看不到，会以为自动化坏了。
+    expect(screen.getByText(/暂停期间被丢掉的事件/)).toBeInTheDocument()
   })
 
   it(`越界或非整数在本地就被挡下，连桥都到不了`, () => {

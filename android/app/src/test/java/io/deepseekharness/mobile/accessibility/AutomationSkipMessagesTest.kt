@@ -82,5 +82,8 @@ class AutomationSkipMessagesTest {
         assertTrue(AutomationSkipMessages.message(AutomationGateCodes.SENSITIVE_WINDOW).contains("密码"))
         assertTrue(AutomationSkipMessages.message(AutomationGateCodes.DEVICE_LOCKED).contains("锁屏"))
         assertTrue(AutomationSkipMessages.message(AutomationGateCodes.PACKAGE_NOT_ALLOWED).contains("白名单"))
+        // 按应用暂停同样要让人看懂：说明里必须点出「暂停」。写成「已拒绝」的话，用户看不到原因，
+        // 第一反应是「自动化坏了」——而这是他上一步自己按下的那个开关。
+        assertTrue(AutomationSkipMessages.message(AutomationGateCodes.APP_PAUSED).contains("暂停"))
     }
 }

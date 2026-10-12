@@ -778,8 +778,8 @@ export const english: Readonly<Record<string, string>> = {
   "这三个默认值只用于新建规则表单的初值，不会改动任何一条已有规则。":
     "These three defaults only pre-fill the new-rule form; they never change a rule that already exists.",
   "暂停这个应用的自动化": "Pause automation for this app",
-  "只挡规则自动求值：设备桥的单次动作（AI 明确要求的那一下）照旧走白名单与敏感窗口判定。":
-    "Blocks automatic rule evaluation only: a single action from the device bridge (the one the AI explicitly asked for) still goes through the allowlist and sensitive-window checks.",
+  "只挡规则自动求值：设备桥的单次动作（AI 明确要求的那一下）照旧走白名单与敏感窗口判定；暂停期间被丢掉的事件会计入运行记录里的「拦截原因」。":
+    "Blocks automatic rule evaluation only: a single action from the device bridge (the one the AI explicitly asked for) still goes through the allowlist and sensitive-window checks. Events dropped while paused are counted under \"Blocked reasons\" in the run log.",
   "默认动作上限": "Default max actions",
   "默认冷却时间": "Default cooldown",
   "默认冷却时间（毫秒）": "Default cooldown (ms)",

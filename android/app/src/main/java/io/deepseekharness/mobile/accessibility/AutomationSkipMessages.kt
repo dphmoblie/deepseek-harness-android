@@ -25,6 +25,9 @@ internal object AutomationSkipMessages {
         AutomationGateCodes.SELF_PACKAGE_BLOCKED to "不允许自动化本应用自身",
         AutomationGateCodes.DEVICE_LOCKED to "设备已锁屏或熄屏，暂不动作",
         AutomationGateCodes.SENSITIVE_WINDOW to "检测到密码、验证码、支付或权限窗口，已拒绝",
+        // 「× N 次」在这里是**被丢掉的界面事件数**（一个界面变化算一次），不是动作次数：
+        // 这条原因拦在规则求值之前，所以它连一条执行记录都不会有。
+        AutomationGateCodes.APP_PAUSED to "这个应用已被暂停，事件没有进入规则求值",
         // 闸门（节流与指纹）。
         AutomationGateCodes.EVENT_THROTTLED to "界面变化过于频繁，本次评估已节流",
         AutomationGateCodes.ACTION_INTERVAL_THROTTLED to "距上次动作太近，本次动作已节流",

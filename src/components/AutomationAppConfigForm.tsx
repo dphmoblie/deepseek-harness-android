@@ -275,7 +275,7 @@ export function AutomationAppConfigForm({
       <label className="toggle-row">
         <span>
           <strong>{t('暂停这个应用的自动化')}</strong>
-          <small>{t('只挡规则自动求值：设备桥的单次动作（AI 明确要求的那一下）照旧走白名单与敏感窗口判定。')}</small>
+          <small>{t('只挡规则自动求值：设备桥的单次动作（AI 明确要求的那一下）照旧走白名单与敏感窗口判定；暂停期间被丢掉的事件会计入运行记录里的「拦截原因」。')}</small>
         </span>
         <input type="checkbox" role="switch" aria-label={t('暂停这个应用的自动化')}
           checked={draft.paused} disabled={busy}

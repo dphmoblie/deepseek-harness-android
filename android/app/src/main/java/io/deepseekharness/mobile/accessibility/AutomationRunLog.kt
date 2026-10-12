@@ -121,6 +121,21 @@ internal class AutomationRunHistory(
         }
     }
 
+    /**
+     * 只累计一条拦截原因，不写执行记录。
+     *
+     * 给「连规则求值都没进」的早退路径用（按应用暂停）：那条路径上每个事件写一行执行记录的话，
+     * 同一个包的暂停事件会把 [capacity] 条环形缓冲刷满，真正的执行历史被挤掉、`dropped` 一路涨——
+     * 而界面要回答的是「为什么它没动」，那是一个计数问题，不是流水账。
+     *
+     * `count` 只接受正数：0 或负数是调用方的记账错误，在这里悄悄吞掉比在卡片上显示一个负数好。
+     */
+    fun noteBlocked(packageName: String, code: String, count: Int = 1) {
+        if (packageName.isEmpty() || count <= 0) return
+        val bucket = buckets.getOrPut(packageName) { Bucket() }
+        bucket.blocked[code] = (bucket.blocked[code] ?: 0) + count
+    }
+
     /** 最新在前。`packageName` 为空表示「所有包名按时间合并」。 */
     fun runs(packageName: String? = null, limit: Int = this.limit): List<AutomationRunRecord> {
         val bounded = limit.coerceAtLeast(0)

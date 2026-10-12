@@ -45,6 +45,15 @@ internal object AutomationGateCodes {
     const val DEVICE_LOCKED = "AUTOMATION_DEVICE_LOCKED"
     const val SENSITIVE_WINDOW = "AUTOMATION_SENSITIVE_WINDOW"
 
+    /**
+     * 服务侧的「按应用暂停」（不是执行器判的，见 `DeepSeekAccessibilityService.handleAutomationEvent`）。
+     *
+     * 它拦在规则求值之前，所以这个码**不会**出现在任何一次执行结果里，只用于「拦截原因」的聚合计数：
+     * 用户按下暂停之后，那一页必须能回答「它到底拦掉了什么」，否则看起来像什么都没发生——
+     * 而「什么都没发生」正是用户会误判成「自动化坏了」的那种显示。
+     */
+    const val APP_PAUSED = "AUTOMATION_APP_PAUSED"
+
     // 第 1–4 层节流与指纹。
     const val EVENT_THROTTLED = "AUTOMATION_EVENT_THROTTLED"
     const val ACTION_INTERVAL_THROTTLED = "AUTOMATION_ACTION_INTERVAL_THROTTLED"

@@ -189,4 +189,55 @@ class AutomationRunLogTest {
         assertTrue(history.runs().isEmpty())
         assertEquals(0, history.droppedCount)
     }
+
+    @Test
+    fun `只累计原因不写执行记录`() {
+        val history = AutomationRunHistory()
+        repeat(3) { history.noteBlocked("com.example.a", AutomationGateCodes.APP_PAUSED) }
+
+        // 按应用暂停拦在规则求值之前：一次执行记录都不该有，也不该因为刷屏把环形缓冲挤满。
+        // 这两种错法的表现完全不同——前者会让「最近执行」里冒出没有规则的空行，
+        // 后者会把真正的执行历史冲掉、`dropped` 一路涨，而用户会以为是自己看漏了。
+        assertTrue(history.runs().isEmpty())
+        assertTrue(history.runs("com.example.a").isEmpty())
+        assertEquals(0, history.droppedCount)
+        assertEquals(
+            listOf(AutomationBlockedReason(AutomationGateCodes.APP_PAUSED, 3)),
+            history.blocked("com.example.a"),
+        )
+        // 包名要留下来：界面按当前查看的应用过滤拦截原因，没有桶就等于「这个应用什么都没发生」。
+        assertEquals(listOf("com.example.a"), history.packages())
+    }
+
+    @Test
+    fun `只累计原因的计数与执行记录里的原因合并`() {
+        val history = AutomationRunHistory()
+        history.record(
+            "com.example.a",
+            AutomationExecutionReport(skipped = listOf(skip("r1", AutomationGateCodes.SENSITIVE_WINDOW))),
+            nowMs = 1L,
+        )
+        history.noteBlocked("com.example.a", AutomationGateCodes.APP_PAUSED, count = 2)
+
+        // 两条路径写进同一个桶：计数降序（暂停 2 次在前），同数才按码升序。
+        assertEquals(
+            listOf(
+                AutomationBlockedReason(AutomationGateCodes.APP_PAUSED, 2),
+                AutomationBlockedReason(AutomationGateCodes.SENSITIVE_WINDOW, 1),
+            ),
+            history.blocked("com.example.a"),
+        )
+    }
+
+    @Test
+    fun `空包名与非正计数都不记账`() {
+        val history = AutomationRunHistory()
+        history.noteBlocked("", AutomationGateCodes.APP_PAUSED)
+        history.noteBlocked("com.example.a", AutomationGateCodes.APP_PAUSED, count = 0)
+        history.noteBlocked("com.example.b", AutomationGateCodes.APP_PAUSED, count = -1)
+
+        // 空包名会造出一条无主记录（服务侧拿不到前台包时不该记）；0 与负数会让卡片显示负次数。
+        assertTrue(history.packages().isEmpty())
+        assertTrue(history.blocked().isEmpty())
+    }
 }
