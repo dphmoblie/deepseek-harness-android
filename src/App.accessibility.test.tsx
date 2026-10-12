@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES } from './platform/types'
+import { AUTOMATION_DISCLAIMER_STORAGE_KEY } from './accessibilityDisclaimer'
 import { beforeEachAppTest, bridge, openSettingsPage } from './__tests__/appTestHarness'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
@@ -271,6 +272,8 @@ describe('无障碍自动化控制台', () => {
 
   it('按「开始」把动作交给桥，并按返回的运行态放行暂停', async () => {
     await openConsole({ automationRuntime: 'off', serviceStatus: 'connected' })
+    // 免责说明已经确认过：这一例盯的是「按了之后桥收到什么」，闸门本身另有专门用例。
+    window.localStorage.setItem(AUTOMATION_DISCLAIMER_STORAGE_KEY, '1')
 
     fireEvent.click(await screen.findByRole('button', { name: '开始' }))
 
@@ -280,6 +283,92 @@ describe('无障碍自动化控制台', () => {
     // 夹具按原生同一套规则回 `running`，界面必须据此换按钮状态（而不是乐观点亮）。
     await waitFor(() => expect(screen.getByTestId('automation-runtime-chip')).toHaveTextContent('自动化运行中'))
     expect(screen.getByRole('button', { name: '暂停' })).toBeEnabled()
+  })
+
+  it('第一次按「开始」先摆免责说明：没勾选开不了，勾选确认后才发 start', async () => {
+    await openConsole({ automationRuntime: 'off', serviceStatus: 'connected' })
+
+    fireEvent.click(await screen.findByRole('button', { name: '开始' }))
+
+    // 闸门没放行之前，桥是一次都不能调的：这里钉的是「问过人才动手」。
+    const dialog = await screen.findByTestId('automation-disclaimer')
+    expect(bridge.setAccessibilityAutomationRuntime).not.toHaveBeenCalled()
+    expect(dialog).toHaveTextContent('关于自动化（无障碍）功能')
+    // 六条要点逐条在：少一条都等于换了条款内容。
+    for (const point of [
+      '自动化操作可能误点',
+      '一律会被跳过，且这一限制没有开关',
+      '由使用者自行承担',
+      '默认关闭',
+      '不上传你的界面内容',
+      '请勿将本功能用于违反应用服务条款',
+    ]) {
+      expect(within(dialog).getByText(new RegExp(point))).toBeInTheDocument()
+    }
+
+    const confirm = within(dialog).getByRole('button', { name: '我已了解，开启自动化' })
+    expect(confirm).toBeDisabled()
+    fireEvent.click(within(dialog).getByRole('checkbox'))
+    expect(confirm).toBeEnabled()
+    fireEvent.click(confirm)
+
+    await waitFor(() => expect(bridge.setAccessibilityAutomationRuntime).toHaveBeenCalledWith('start'))
+    await waitFor(() => expect(screen.queryByTestId('automation-disclaimer')).not.toBeInTheDocument())
+    // 确认要落盘：否则每次冷启动都要再问一遍，等于闸门失效。
+    expect(window.localStorage.getItem(AUTOMATION_DISCLAIMER_STORAGE_KEY)).toBe('1')
+  })
+
+  it('在说明里选「暂不开启」就什么都不做：不开总开关、也不写确认', async () => {
+    await openConsole({ automationRuntime: 'off', serviceStatus: 'connected' })
+
+    fireEvent.click(await screen.findByRole('button', { name: '开始' }))
+    fireEvent.click(await within(await screen.findByTestId('automation-disclaimer')).findByRole('button', { name: '暂不开启' }))
+
+    await waitFor(() => expect(screen.queryByTestId('automation-disclaimer')).not.toBeInTheDocument())
+    expect(bridge.setAccessibilityAutomationRuntime).not.toHaveBeenCalled()
+    // 没确认就下次还要问：这里必须仍然是空的。
+    expect(window.localStorage.getItem(AUTOMATION_DISCLAIMER_STORAGE_KEY)).toBeNull()
+  })
+
+  it('确认过之后「继续」直接生效，不再重复弹说明', async () => {
+    await openConsole({ automationRuntime: 'paused', serviceStatus: 'connected' })
+    window.localStorage.setItem(AUTOMATION_DISCLAIMER_STORAGE_KEY, '1')
+
+    fireEvent.click(await screen.findByRole('button', { name: '继续' }))
+
+    await waitFor(() => expect(bridge.setAccessibilityAutomationRuntime).toHaveBeenCalledWith('resume'))
+    expect(screen.queryByTestId('automation-disclaimer')).not.toBeInTheDocument()
+  })
+
+  it('说明只拦「开始 / 继续」：暂停与紧急停止直接发出去', async () => {
+    await openConsole({ automationRuntime: 'running', serviceStatus: 'connected' })
+
+    fireEvent.click(await screen.findByRole('button', { name: '暂停' }))
+    await waitFor(() => expect(bridge.setAccessibilityAutomationRuntime).toHaveBeenCalledWith('pause'))
+    // 等界面真的落到「已暂停」再点下一个：在途期间按钮是禁用的，抢着点会什么都没发生。
+    await waitFor(() => expect(screen.getByTestId('automation-runtime-chip')).toHaveTextContent('自动化已暂停'))
+    fireEvent.click(await screen.findByRole('button', { name: '紧急停止' }))
+
+    await waitFor(() => expect(bridge.setAccessibilityAutomationRuntime).toHaveBeenCalledWith('emergency_stop'))
+    // 收敛动作不能被一段文字挡住：急停尤其要一键生效。
+    expect(screen.queryByTestId('automation-disclaimer')).not.toBeInTheDocument()
+  })
+
+  it('回看入口常驻：只打开同一段说明，不改总开关也不写确认', async () => {
+    await openConsole({ automationRuntime: 'off', serviceStatus: 'off' })
+
+    fireEvent.click(await screen.findByRole('button', { name: '查看完整免责说明' }))
+
+    const dialog = await screen.findByTestId('automation-disclaimer')
+    expect(within(dialog).getByText(/规则由你确认后长期生效/)).toBeInTheDocument()
+    // 回看模式没有勾选、没有开启按钮，只有一个「知道了」（不叫「关闭」：右上角叉的 aria-label 是「关闭」）。
+    expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: '我已了解，开启自动化' })).not.toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: '知道了' }))
+
+    await waitFor(() => expect(screen.queryByTestId('automation-disclaimer')).not.toBeInTheDocument())
+    expect(bridge.setAccessibilityAutomationRuntime).not.toHaveBeenCalled()
+    expect(window.localStorage.getItem(AUTOMATION_DISCLAIMER_STORAGE_KEY)).toBeNull()
   })
 
   it('紧急停止发的是受控动作名，并提醒用户这是「停到你再开」', async () => {

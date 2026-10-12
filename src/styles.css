@@ -1723,6 +1723,21 @@ button:disabled {
   background: var(--red-soft);
 }
 
+/*
+ * 免责说明的图标底色：与 `.dialog-danger-icon` 同尺寸，但用中性色——
+ * 这里要说的是「请你判断、责任在你」，不是「马上要发生破坏性操作」。
+ */
+.dialog-info-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-inner);
+  color: var(--ink);
+  background: var(--surface-muted);
+}
+
 .dialog h2 {
   margin: 14px 0 7px;
   font-size: 1.1875rem;
@@ -1751,6 +1766,38 @@ button:disabled {
   justify-content: flex-end;
   gap: 9px;
   margin-top: 20px;
+}
+
+/*
+ * 免责说明弹窗：六条要点比普通弹窗长，编号条目与正文用同一套字号；
+ * 勾选行单独一块，且它是「开启」的前提，所以不能和按钮行挤在一起。
+ */
+.automation-disclaimer ol {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+
+.automation-disclaimer .disclaimer-confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 16px;
+  color: var(--ink);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.automation-disclaimer .disclaimer-confirm input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin: 1px 0 0;
 }
 
 .toast {

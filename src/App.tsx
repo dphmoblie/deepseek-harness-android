@@ -5,6 +5,7 @@ import { ApplicationPicker } from './components/ApplicationPicker'
 import { DeviceShellSettings } from './components/DeviceShellSettings'
 import { VirtualScreenSettings } from './components/VirtualScreenSettings'
 import { AutomationRuleForm } from './components/AutomationRuleForm'
+import { AutomationDisclaimer } from './components/AutomationDisclaimer'
 import { AppBackground } from './components/AppBackground'
 import { LanguageSettings } from './components/LanguageSettings'
 import { AppearanceSettings } from './components/AppearanceSettings'
@@ -68,6 +69,7 @@ import { RuntimeCleanupCard } from './components/RuntimeCleanupCard'
 import { runtimeBridge } from './platform/native'
 import { readLogInsights } from './logInsights'
 import { validateHarnessPermissionMode } from './harnessPermissionMode'
+import { acknowledgeAutomationDisclaimer, isAutomationDisclaimerAcknowledged } from './accessibilityDisclaimer'
 import { assertMailboxSubdirectory, validateAccessibilityPasswordInput } from './platform/validation'
 import {
   selfCheckAdvice,
@@ -3615,6 +3617,16 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   /** 总开关的一次操作还在路上：按钮在这期间全部禁用，避免连点出两次动作。 */
   const [automationPending, setAutomationPending] = useState(false)
   /**
+   * 免责说明的展示状态。
+   *
+   * `confirm` 带着触发它的那个动作：从「继续」进来的确认要把 `resume` 发回去，
+   * 不能一律当成 `start`（总开关在「已暂停」时重新开与从未开过不是同一个动作）。
+   * `read` 只是回看，不写任何状态、也不改总开关。
+   */
+  const [automationDisclaimer, setAutomationDisclaimer] = useState<
+    { mode: 'confirm'; action: AccessibilityAutomationAction } | { mode: 'read' } | null
+  >(null)
+  /**
    * 本次会话的运行记录。
    *
    * `null` 表示**还没读到**（与「读到了但是空的」必须分开显示）；`failed` 表示这次读取失败。
@@ -3713,10 +3725,39 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     loadAutomationRuns()
   }, [accessibility.automationRuntime, accessibility.serviceStatus, loadAutomationRuns, page])
 
-  /** 按一次总开关按钮：在途期间所有按钮禁用；失败提示由 App 的统一 notify 负责。 */
-  const changeAutomationRuntime = (action: AccessibilityAutomationAction): void => {
+  /** 真的把动作交给桥：在途期间按钮禁用，失败提示由 App 的统一 notify 负责。 */
+  const applyAutomationRuntime = (action: AccessibilityAutomationAction): void => {
     setAutomationPending(true)
     void onSetAccessibilityRuntime(action).finally(() => setAutomationPending(false))
+  }
+
+  /**
+   * 按一次总开关按钮。
+   *
+   * 「开始」与「继续」都是**让自动化重新跑起来**的动作，所以第一次按要先把免责说明摆出来，
+   * 看过并勾选之后才真的去开（见 [confirmAutomationDisclaimer]）。暂停与紧急停止不拦：
+   * 它们是收敛动作，不能让一段说明挡住急停——尤其是紧急停止，它要能一键生效。
+   */
+  const changeAutomationRuntime = (action: AccessibilityAutomationAction): void => {
+    if ((action === 'start' || action === 'resume') && !isAutomationDisclaimerAcknowledged()) {
+      setAutomationDisclaimer({ mode: 'confirm', action })
+      return
+    }
+    applyAutomationRuntime(action)
+  }
+
+  /**
+   * 确认免责说明后接着把刚才那个动作发出去。
+   *
+   * 确认本身先落盘；写不进去（无痕模式等）也照常往下走——只是下次点「开始」还会再弹一遍，
+   * 这里不假装用户已确认。**不再过一遍 [changeAutomationRuntime]**：用户刚刚就在眼前确认过，
+   * 而且写盘失败时再过闸门会把弹窗反复弹出来。
+   */
+  const confirmAutomationDisclaimer = (): void => {
+    const action = automationDisclaimer?.mode === 'confirm' ? automationDisclaimer.action : 'start'
+    acknowledgeAutomationDisclaimer()
+    setAutomationDisclaimer(null)
+    applyAutomationRuntime(action)
   }
 
   /**
@@ -4325,7 +4366,26 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                   <ExternalLink size={18} />{t("打开系统无障碍设置")}
                 </button>
               )}
+              {/*
+                回看入口常驻：确认过之后不再弹说明，但「我当初到底同意了什么」随时要能查。
+                它只打开同一段文字，不改总开关、不写任何状态。
+              */}
+              <button className="button button-secondary" type="button" disabled={busy !== null}
+                onClick={() => setAutomationDisclaimer({ mode: 'read' })}>
+                <ShieldCheck size={18} />{t("查看完整免责说明")}
+              </button>
             </div>
+            {/*
+              免责说明弹窗：确认模式由「开始 / 继续」触发，回看模式由上面的入口触发。
+              放在控制台这一块里，读代码时「谁把它弹出来的」一目了然。
+            */}
+            {automationDisclaimer !== null && (
+              <AutomationDisclaimer
+                mode={automationDisclaimer.mode}
+                onConfirm={confirmAutomationDisclaimer}
+                onCancel={() => setAutomationDisclaimer(null)}
+              />
+            )}
             <div className="settings-subsection" aria-labelledby="accessibility-automation-runs">
               <div className="section-title section-title-action">
                 <span className="section-icon"><ScrollText size={19} /></span>
