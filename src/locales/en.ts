@@ -1243,6 +1243,7 @@ export const english: Readonly<Record<string, string>> = {
   "暂不开启": "Not now",
   "我已了解，开启自动化": "I understand, turn automation on",
   "知道了": "Got it",
+  "说明版本：{0}（这六条要点改写后会重新请你确认）": "Disclaimer version {0} (you will be asked again if these points change)",
   // 运行时占用（版本管理页的残留卡片）。
   "运行时占用": "Runtime storage",
   "运行时目录里由本应用生成的残留可以在这里回收。": "Leftover runtime folders created by this app can be reclaimed here.",

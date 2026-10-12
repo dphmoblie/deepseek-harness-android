@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AutomationDisclaimer } from './AutomationDisclaimer'
+import { AUTOMATION_DISCLAIMER_VERSION } from '../accessibilityDisclaimer'
 
 /**
  * 免责说明弹窗。
@@ -83,5 +84,16 @@ describe('免责说明弹窗', () => {
     fireEvent.click(screen.getByRole('button', { name: '知道了' }))
     expect(onCancel).toHaveBeenCalledTimes(1)
     expect(onConfirm).not.toHaveBeenCalled()
+  })
+
+  /**
+   * 版本号要印在弹窗里，而且必须与写进确认记录的那个版本号是同一个常量：
+   * 两处各写一份数字的话，改了要点却忘了升版本号，用户看到的是新版文字、
+   * 手里拿着的是旧版同意。
+   */
+  it('弹窗里印着确认记录用的版本号', () => {
+    render(<AutomationDisclaimer mode="read" onCancel={vi.fn()} />)
+    expect(screen.getByTestId('automation-disclaimer-version'))
+      .toHaveTextContent(`说明版本：${AUTOMATION_DISCLAIMER_VERSION}（这六条要点改写后会重新请你确认）`)
   })
 })

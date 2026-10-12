@@ -1,16 +1,20 @@
 import { useState } from 'react'
 import { ShieldCheck, X } from 'lucide-react'
 import { t } from '../i18n'
+import { AUTOMATION_DISCLAIMER_VERSION } from '../accessibilityDisclaimer'
 
 /**
  * 免责说明的两处入口共用同一段文字，原文在 `docs/AI自动化参数设计.md` §7.1（英文见 §7.2），
  * 逐条对应、不增删要点：
  *
  *  - `confirm`：第一次按「开始 / 继续」时的闸门。**勾选是开启的前提**，确认之后才真的去开总开关。
- *  - `read`：随时回看，只有一个「关闭」——看不看都不影响总开关，也不写任何状态。
+ *  - `read`：随时回看，只有一个「知道了」——看不看都不影响总开关，也不写任何状态。
  *
  * 这段话刻意不给任何安全承诺：要说清的是「可能误点」「跳过敏感页面不等于界面安全」
  * 「责任由使用者承担」，而不是让人以为开了这个功能就有人替他兜着。
+ *
+ * **改了这六条要点，就要把 `AUTOMATION_DISCLAIMER_VERSION` 加一**：确认记录带版本号，
+ * 加一之后所有人会被重新问一遍，而不是拿旧确认当新条款的同意（弹窗末尾也印着版本号）。
  */
 const DISCLAIMER_POINTS = [
   '自动化操作可能误点：界面、文案与控件标识会随应用更新而变化，规则可能在你没有预期的地方生效，也可能在你预期的地方失效。',
@@ -46,6 +50,13 @@ export function AutomationDisclaimer({ mode, onConfirm, onCancel }: AutomationDi
         <ol>
           {DISCLAIMER_POINTS.map(point => <li key={point}>{t(point)}</li>)}
         </ol>
+        {/*
+          印版本号是为了让「怎么又被问了一遍」有答案：确认记录按版本号存，
+          这六条要点一改，版本号加一，之前确认过的用户会被重新问一次。
+        */}
+        <p className="automation-disclaimer-version" data-testid="automation-disclaimer-version">
+          {t('说明版本：{0}（这六条要点改写后会重新请你确认）', AUTOMATION_DISCLAIMER_VERSION)}
+        </p>
         {confirming ? (
           <>
             <label className="disclaimer-confirm">

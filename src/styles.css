@@ -1800,6 +1800,16 @@ button:disabled {
   margin: 1px 0 0;
 }
 
+/*
+ * 版本号那一行比正文更弱一层：它是解释「为什么又弹了一次」，不是要点本身。
+ * 用等宽数字，将来版本号变成两位数时行高不抖。
+ */
+.automation-disclaimer .automation-disclaimer-version {
+  margin-top: 12px;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .toast {
   position: fixed;
   right: 14px;
