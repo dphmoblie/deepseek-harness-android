@@ -713,6 +713,9 @@ export function createBrowserBridge(): RuntimeBridge {
       diagnosticState = { ...diagnosticState, fileCount: 0, totalBytes: 0, lastEntryAtMillis: 0 }
       return Promise.resolve({ ...diagnosticState })
     },
+    // 浏览器预览里 downloadAppUpdate 直接拒绝（不能下载安装包），所以这条通道永远不会有事件；
+    // 仍然返回一个可注销的句柄，让调用方的订阅/清理逻辑与真机保持一致。
+    addAppUpdateProgressListener: () => Promise.resolve(listenerHandle(() => undefined)),
     addRuntimeProgressListener: listener => {
       progressListeners.add(listener)
       return Promise.resolve(listenerHandle(() => progressListeners.delete(listener)))

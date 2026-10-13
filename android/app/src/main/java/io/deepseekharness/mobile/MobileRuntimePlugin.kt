@@ -52,6 +52,7 @@ import io.deepseekharness.mobile.accessibility.toRuleJson
 import io.deepseekharness.mobile.runtime.AppReleaseCatalog
 import io.deepseekharness.mobile.runtime.AppUpdateCache
 import io.deepseekharness.mobile.runtime.AppUpdateInstallPolicy
+import io.deepseekharness.mobile.runtime.AppUpdateProgressThrottle
 import io.deepseekharness.mobile.runtime.AppUpdateStorage
 import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
@@ -639,7 +640,8 @@ class MobileRuntimePlugin : Plugin() {
      * 下载应用更新包到应用私有目录；频道与地址由原生自己决定，前端**不能**传任意 URL。
      *
      * 先落到 `.part`，摘要核对通过后才改名成正式安装包，所以目录里存在的 `.apk` 一定是完整的包。
-     * 这个方法没有进度事件通道（前端只等一个完成或失败），因此只有开始与结束两态。
+     * 下载过程中从 `appUpdateProgress` 推送字节数（按 [AppUpdateProgressThrottle] 节流），
+     * 界面据此画进度条；下载结束（成功或失败）不再补发事件，界面以这次调用的结果为准。
      */
     @PluginMethod
     fun downloadAppUpdate(call: PluginCall) {
@@ -647,13 +649,21 @@ class MobileRuntimePlugin : Plugin() {
             audited(AuditEvent.APP_UPDATE) {
                 val release = requireAppUpdate()
                 val target = AppUpdateStorage.partialFile(context.cacheDir, release.version)
+                val throttle = AppUpdateProgressThrottle(release.bytes)
                 try {
                     RuntimeHttp().downloadFile(
                         RuntimeValidation.requireHttpsUri(release.url, rejectPrivateHost = true),
                         target,
                         release.bytes,
                         release.sha256,
-                    ) { _, _ -> }
+                    ) { downloaded, total ->
+                        if (throttle.shouldReport(downloaded) && !destroying.get()) {
+                            notifyListeners(
+                                "appUpdateProgress",
+                                JSObject().put("downloadedBytes", downloaded).put("totalBytes", total),
+                            )
+                        }
+                    }
                 } catch (failure: RuntimeFailure) {
                     throw appUpdateDownloadFailure(failure)
                 }

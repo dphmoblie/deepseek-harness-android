@@ -75,6 +75,7 @@ import { AppUpdateReminderDialog } from './components/AppUpdateReminderDialog'
 import { useAppUpdateReminder } from './appUpdateReminder'
 import { runtimeBridge } from './platform/native'
 import { readLogInsights } from './logInsights'
+import { observeKeyboardInset } from './keyboardInset'
 import { acknowledgeAutomationDisclaimer, isAutomationDisclaimerAcknowledged } from './accessibilityDisclaimer'
 import { assertMailboxSubdirectory, validateAccessibilityPasswordInput } from './platform/validation'
 import {
@@ -101,9 +102,11 @@ import type {
   AccessibilityAutomationRuntime,
   AccessibilityAutomationState,
   AccessibilityServiceStatus,
+  AppUpdateProgress,
   AppUpdateState,
   HarnessLog,
   KeepAliveState,
+  ListenerHandle,
   MailboxDirectoryState,
   MailboxExportResult,
   MailboxImportResult,
@@ -2338,6 +2341,8 @@ interface AppUpdateSectionProps {
   loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
+  /** 订阅应用更新包的下载进度；原生侧只在真的下载时推送（见 [AppUpdateProgress]）。 */
+  subscribeProgress: (listener: (event: AppUpdateProgress) => void) => Promise<ListenerHandle>
   /** 去系统设置里为本应用打开「安装未知应用」；返回后重新读一次状态。 */
   openInstallSettings: () => Promise<void>
   notify: (message: string, tone: NoticeTone) => void
@@ -2353,12 +2358,35 @@ interface AppUpdateSectionProps {
  * 上面几块换的是运行时镜像。安装必须由系统安装器完成，应用只能把包递过去，
  * 所以这里会如实说明「会跳到系统安装界面」以及「需要允许安装未知来源」。
  */
-function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInstallSettings, notify, reminderEnabled, onReminderEnabledChange, reminderStorageAvailable }: AppUpdateSectionProps) {
+function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInstallSettings, notify, subscribeProgress, reminderEnabled, onReminderEnabledChange, reminderStorageAvailable }: AppUpdateSectionProps) {
   const [state, setState] = useState<AppUpdateState | null>(null)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
   const [busy, setBusy] = useState<'download' | 'install' | null>(null)
+  const [progress, setProgress] = useState<AppUpdateProgress | null>(null)
   const readRevision = useRef(0)
+
+  /**
+   * 订阅下载进度：挂载时订阅、卸载时注销，而不是点「下载更新」时才订阅。
+   *
+   * 原因：原生侧可能从断点续传的第一个字节就开始推送，点击到订阅之间的空档会吞掉
+   * 第一个读数，进度条会先停一次 0%。订阅失败不弹提示——没有进度条仍然能下载，
+   * 这一屏的其它功能也不该被它拖住。
+   */
+  useEffect(() => {
+    let cancelled = false
+    let remove: (() => Promise<void>) | undefined
+    const handlePromise = subscribeProgress(next => {
+      if (!cancelled) setProgress(next)
+    }).then(handle => {
+      if (cancelled) return handle.remove()
+      remove = handle.remove
+    }).catch(() => undefined)
+    return () => {
+      cancelled = true
+      void handlePromise.then(() => remove?.())
+    }
+  }, [subscribeProgress])
 
   const load = useCallback((forceRefresh = false) => {
     const revision = ++readRevision.current
@@ -2384,6 +2412,8 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
   const runStep = (step: 'download' | 'install', action: () => Promise<void>, success: string): void => {
     if (busy !== null) return
     setBusy(step)
+    // 进度只描述「这一次下载」：开始前清掉上一轮读数，结束后无论成败都不再显示进度条。
+    if (step === 'download') setProgress(null)
     void (async () => {
       try {
         await action()
@@ -2392,11 +2422,16 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
         notify(errorMessage(error), 'error')
       } finally {
         setBusy(null)
+        if (step === 'download') setProgress(null)
       }
     })()
   }
 
   const available = state?.available
+  // 百分比只在拿到原生进度、且总量为正时才有意义；否则显示「处理中」的不确定进度条。
+  const downloadPercent = progress === null || progress.totalBytes <= 0
+    ? null
+    : Math.min(100, Math.round((progress.downloadedBytes / progress.totalBytes) * 100))
 
   return (
     <section className="settings-section" aria-labelledby="app-update-title">
@@ -2498,6 +2533,31 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
             </button>
           </div>
 
+          {busy === 'download' && (
+            <div className="download-progress" aria-live="polite">
+              <div className="progress-copy">
+                <span>{t("正在下载更新包…")}</span>
+                <strong>{downloadPercent === null ? t("处理中") : `${downloadPercent}%`}</strong>
+              </div>
+              <div
+                className="progress-track"
+                role="progressbar"
+                aria-label={t("更新包下载进度")}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={downloadPercent ?? 0}
+              >
+                <span style={{ width: `${downloadPercent ?? 100}%` }} className={downloadPercent === null ? 'indeterminate' : ''} />
+              </div>
+              {progress !== null && (
+                <div className="progress-detail">
+                  <span>{formatBytes(progress.downloadedBytes)}</span>
+                  <span>{formatBytes(progress.totalBytes)}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           <p className="settings-note">{t("安装更新需要先下载一次：没下载就点安装，会提示先下载。下载只走 GitHub 发布页，校验不过不会安装。")}</p>
         </>
       )}
@@ -2515,6 +2575,8 @@ interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
   loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
+  /** 应用更新包的下载进度订阅，只透传给 [AppUpdateSection]。 */
+  subscribeUpdateProgress: (listener: (event: AppUpdateProgress) => void) => Promise<ListenerHandle>
   openInstallSettings: () => Promise<void>
   reminderEnabled: boolean
   onReminderEnabledChange: (enabled: boolean) => void
@@ -2547,6 +2609,7 @@ function RuntimeVersionsScreen({
   loadUpdate,
   downloadUpdate,
   installUpdate,
+  subscribeUpdateProgress,
   openInstallSettings,
   reminderEnabled,
   onReminderEnabledChange,
@@ -2587,6 +2650,7 @@ function RuntimeVersionsScreen({
         loadUpdate={loadUpdate}
         downloadUpdate={downloadUpdate}
         installUpdate={installUpdate}
+        subscribeProgress={subscribeUpdateProgress}
         openInstallSettings={openInstallSettings}
         notify={notify}
         reminderEnabled={reminderEnabled}
@@ -4905,6 +4969,17 @@ function UpdateDialog({ busy, version, onCancel, onConfirm }: UpdateDialogProps)
 export function App() {
   const language = useLanguage()
   useEffect(() => { document.documentElement.lang = language ?? 'zh-CN' }, [language])
+  /**
+   * 输入法弹起时把界面整体让出被遮挡的高度（见 [observeKeyboardInset]）。
+   *
+   * 让位写成一个 CSS 变量而不是量某个输入框：终端页、设置页、对话框里的输入框都靠
+   * `.app-shell` 的这条下内边距一起抬起来，输入区最下端就贴在输入法框上沿。
+   */
+  useEffect(() => observeKeyboardInset(
+    window.visualViewport ?? undefined,
+    inset => { document.documentElement.style.setProperty('--keyboard-inset', `${inset}px`) },
+    () => window.innerHeight,
+  ), [])
   const [activeView, setActiveViewState] = useState<AppView>(ROOT_VIEW)
   /**
    * 当前视图的同步真值：导航与历史回退都先改它再改状态。
@@ -6339,6 +6414,7 @@ export function App() {
           loadUpdate={loadAppUpdate}
           downloadUpdate={downloadAppUpdate}
           installUpdate={installAppUpdate}
+          subscribeUpdateProgress={runtimeBridge.addAppUpdateProgressListener}
           openInstallSettings={openAppUpdateInstallSettings}
           reminderEnabled={appUpdateReminder.enabled}
           onReminderEnabledChange={appUpdateReminder.setEnabled}

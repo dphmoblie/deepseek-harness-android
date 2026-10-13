@@ -1014,6 +1014,8 @@ export const english: Readonly<Record<string, string>> = {
   "下载更新": "Download update",
   "已交给系统安装器": "Handed to the system installer.",
   "安装更新": "Install update",
+  "正在下载更新包…": "Downloading the update package…",
+  "更新包下载进度": "Update package download progress",
   "安装更新需要先下载一次：没下载就点安装，会提示先下载。下载只走 GitHub 发布页，校验不过不会安装。": "Installing requires a download first: tapping install without one reports that you must download first. Downloads only come from the GitHub releases page, and a package that fails verification is never installed.",
   "每日更新提醒": "Daily update reminders",
   "每天首次打开应用时提示一次；关闭后仍可手动检查更新。": "Show once on the first app opening each day; manual checks remain available when disabled.",

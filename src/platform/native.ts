@@ -16,6 +16,7 @@ import type {
   MailboxRoot,
   NotificationPermissionResult,
   RuntimeBridge,
+  AppUpdateProgress,
   RuntimeProgress,
   RuntimeSettings,
   RuntimeSettingsUpdate,
@@ -77,6 +78,7 @@ import {
   validateNotificationPermissionResult,
   validateOverlayBallState,
   validateRuntimeProgress,
+  validateAppUpdateProgress,
   validateRuntimeInstallResult,
   validateRuntimeReleaseList,
   validateRuntimeCleanupOutcome,
@@ -242,6 +244,7 @@ interface NativeRuntimePlugin {
   deleteRuntimeWorkspaceFile(options: { path: string }): Promise<void>
   clearDiagnosticLog(): Promise<DiagnosticLogState>
   addListener(eventName: 'runtimeProgress', listener: (event: RuntimeProgress) => void): Promise<PluginListenerHandle>
+  addListener(eventName: 'appUpdateProgress', listener: (event: AppUpdateProgress) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'terminalOutput', listener: (event: TerminalChunk) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'terminalExit', listener: (event: TerminalExit) => void): Promise<PluginListenerHandle>
 }
@@ -585,6 +588,7 @@ function createNativeBridge(): RuntimeBridge {
     deleteRuntimeWorkspaceFile: path => NativeRuntime.deleteRuntimeWorkspaceFile({ path: validateRuntimeWorkspaceFilePath(path) }),
     clearDiagnosticLog: () => NativeRuntime.clearDiagnosticLog().then(validateDiagnosticLogState),
     addRuntimeProgressListener: listener => NativeRuntime.addListener('runtimeProgress', validatedListener(validateRuntimeProgress, listener)),
+    addAppUpdateProgressListener: listener => NativeRuntime.addListener('appUpdateProgress', validatedListener(validateAppUpdateProgress, listener)),
     addTerminalOutputListener: listener => NativeRuntime.addListener('terminalOutput', validatedListener(validateTerminalChunk, listener)),
     addTerminalExitListener: listener => NativeRuntime.addListener('terminalExit', validatedListener(validateTerminalExit, listener)),
   }

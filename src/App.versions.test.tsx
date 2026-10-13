@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge, readyState } from './__tests__/appTestHarness'
 import type { RuntimeSessionSnapshotState } from './platform/types'
@@ -238,5 +238,41 @@ describe('版本管理：应用自身更新', () => {
 
     expect(await screen.findByText('校验不通过')).toBeVisible()
     expect(screen.queryByText('更新包已下载并通过校验')).toBeNull()
+  })
+
+  it('下载时按原生进度画百分比，下载结束就把进度条收起来', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getAppUpdateState.mockResolvedValue({
+      installedVersion: '0.2.0',
+      installedVersionCode: 22,
+      installAllowed: true,
+      available: { version: '0.2.1-mobile-400', bytes: 12 * 1024 * 1024, sha256: 'b'.repeat(64), notes: '' },
+    })
+    let emit: ((event: { downloadedBytes: number; totalBytes: number }) => void) | undefined
+    bridge.addAppUpdateProgressListener.mockImplementation((listener: (event: { downloadedBytes: number; totalBytes: number }) => void) => {
+      emit = listener
+      return Promise.resolve({ remove: vi.fn().mockResolvedValue(undefined) })
+    })
+    // 下载挂住不返回：这样才能在「正在下载」这段时间里看进度条。
+    let finishDownload: (() => void) | undefined
+    bridge.downloadAppUpdate.mockImplementation(() => new Promise<void>(resolve => { finishDownload = resolve }))
+    await openVersionsPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: '下载更新' }))
+
+    // 原生还没推第一个读数：进度条已经在，但显示「处理中」，不编一个百分比出来。
+    expect(await screen.findByRole('progressbar', { name: '更新包下载进度' })).toHaveAttribute('aria-valuenow', '0')
+    expect(screen.getByText('正在下载更新包…')).toBeVisible()
+
+    act(() => { emit?.({ downloadedBytes: 5 * 1024 * 1024, totalBytes: 12 * 1024 * 1024 }) })
+
+    // 5 / 12 = 41.7%，界面按四舍五入显示 42%。
+    await waitFor(() => expect(screen.getByRole('progressbar', { name: '更新包下载进度' })).toHaveAttribute('aria-valuenow', '42'))
+    expect(screen.getByText('42%')).toBeVisible()
+
+    act(() => { finishDownload?.() })
+
+    expect(await screen.findByText('更新包已下载并通过校验')).toBeVisible()
+    expect(screen.queryByRole('progressbar', { name: '更新包下载进度' })).toBeNull()
   })
 })

@@ -80,6 +80,17 @@ export interface RuntimeState {
   errorCode?: string
 }
 
+/**
+ * 应用更新包（APK）的下载进度：原生侧按节流推送，`totalBytes` 是发布页声明的包体大小。
+ *
+ * 与 [RuntimeProgress] 分开：两者描述的是不同的下载（应用自身 vs 运行时镜像），
+ * 混用一个类型会让界面在两条进度之间串台。
+ */
+export interface AppUpdateProgress {
+  downloadedBytes: number
+  totalBytes: number
+}
+
 /** 运行时版本槽：当前使用的版本、保留下来的上一版本、APK 内置版本。 */
 export type RuntimeVersionSlot = 'current' | 'previous' | 'bundled'
 
@@ -1906,6 +1917,13 @@ export interface RuntimeBridge {
    */
   openAppUpdateInstallSettings: () => Promise<void>
   addRuntimeProgressListener: (listener: (event: RuntimeProgress) => void) => Promise<ListenerHandle>
+  /**
+   * 应用更新包下载进度：只在 [RuntimeBridge.downloadAppUpdate] 进行中推送。
+   *
+   * 下载结束（成功或失败）不再补发事件：界面以那次调用的结果为准，
+   * 不能靠最后一条进度把「下载完了」当成事实（失败时也会停在最后一个字节数上）。
+   */
+  addAppUpdateProgressListener: (listener: (event: AppUpdateProgress) => void) => Promise<ListenerHandle>
   addTerminalOutputListener: (listener: (event: TerminalChunk) => void) => Promise<ListenerHandle>
   addTerminalExitListener: (listener: (event: TerminalExit) => void) => Promise<ListenerHandle>
 }

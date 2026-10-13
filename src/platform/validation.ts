@@ -46,6 +46,7 @@ import type {
   RuntimeInstallResult,
   RuntimeIntent,
   RuntimePhase,
+  AppUpdateProgress,
   RuntimeProgress,
   RuntimeReleaseEntry,
   RuntimeReleaseList,
@@ -753,12 +754,27 @@ export function validateRuntimeCleanupOutcome(value: unknown): RuntimeCleanupOut
   }
 }
 
-export function validateRuntimeProgress(value: unknown): RuntimeProgress {  const progress = asRecord(value, '运行时进度')
+export function validateRuntimeProgress(value: unknown): RuntimeProgress {
+  const progress = asRecord(value, '运行时进度')
   const downloadedBytes = byteCount(progress.downloadedBytes, '已处理字节数')
   const totalBytes = byteCount(progress.totalBytes, '总字节数')
   if (totalBytes > 0 && downloadedBytes > totalBytes) throw new Error('运行时进度无效')
   const errorCode = optionalIdentifier(progress.errorCode, '运行时错误码', ERROR_CODE_PATTERN, MAX_ERROR_CODE_LENGTH)
   return { phase: runtimePhase(progress.phase), downloadedBytes, totalBytes, ...(errorCode === undefined ? {} : { errorCode }) }
+}
+
+/**
+ * 应用更新包下载进度：只接受两个字节数。
+ *
+ * 与运行时进度不同，这里没有阶段，`totalBytes` 必须为正（发布页声明的包体大小）：
+ * 进度条要算百分比，总量未知时画不出有意义的读数，宁可判为无效也不显示假的 0%。
+ */
+export function validateAppUpdateProgress(value: unknown): AppUpdateProgress {
+  const progress = asRecord(value, '应用更新进度')
+  const downloadedBytes = byteCount(progress.downloadedBytes, '已下载字节数')
+  const totalBytes = byteCount(progress.totalBytes, '总字节数')
+  if (totalBytes <= 0 || downloadedBytes > totalBytes) throw new Error('应用更新进度无效')
+  return { downloadedBytes, totalBytes }
 }
 
 export function validateShizukuState(value: unknown): ShizukuState {

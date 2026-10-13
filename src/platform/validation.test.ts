@@ -38,6 +38,7 @@ import {
   validatePluginCleanupRequest,
   validateRuntimeCleanupState,
   validateRuntimeInstallResult,
+  validateAppUpdateProgress,
   validateRuntimeProgress,
   validateRuntimeReleaseList,
   validateRuntimeSessionListResult,
@@ -420,6 +421,13 @@ describe('native bridge output validation', () => {
       totalBytes: 100,
       errorCode: 'DOWNLOAD_INCOMPLETE',
     }).errorCode).toBe('DOWNLOAD_INCOMPLETE')
+  })
+
+  it('accepts app update progress and rejects one that cannot be drawn as a percentage', () => {
+    expect(validateAppUpdateProgress({ downloadedBytes: 50, totalBytes: 100 })).toEqual({ downloadedBytes: 50, totalBytes: 100 })
+    // 总量为 0 或负、超过总量的读数都不算进度：界面宁可没有进度条，也不显示假的 0%。
+    expect(() => validateAppUpdateProgress({ downloadedBytes: 0, totalBytes: 0 })).toThrow('应用更新进度无效')
+    expect(() => validateAppUpdateProgress({ downloadedBytes: 101, totalBytes: 100 })).toThrow('应用更新进度无效')
   })
 })
 
