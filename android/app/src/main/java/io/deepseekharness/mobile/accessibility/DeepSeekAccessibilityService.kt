@@ -548,6 +548,52 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * 按显示编号取**输入法窗口**的根节点；没有输入法窗口返回 null。
+     *
+     * 存在的理由：读路径 [displayWindowRoot] 在同一显示编号上只返回一个根节点，且把输入法窗口排在最后
+     * （见它的优先级注释）。于是「用户用输入法打进去、但没落到应用窗口节点上」的那段字，在节点树里
+     * 完全没有痕迹——`VirtualScreenTree.dump` 只能看到一个空输入框。这里单独把输入法窗口取出来补这个洞。
+     *
+     * 闸门与 [displayRootFor] 同样严格（系统版本、显示编号、锁定/熄屏）。**刻意不做**整窗敏感拒绝：
+     * 输入法窗口里就是用户自己正在打的字，而密码类候选由节点上的 `isPassword` 逐条剔除
+     * （见 `VirtualScreenTree.collectImeCandidates`）——整窗拒绝会把正常输入一并挡掉。
+     *
+     * 同一显示编号上可能有多个输入法窗口（例如分屏），取 `isActive` 的那个。返回的根节点由调用方持有，
+     * 读完必须 `recycle()`。
+     */
+    internal fun displayImeRootFor(displayId: Int): AccessibilityNodeInfo? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        if (displayId <= 0) return null
+        if (isLockedOrScreenOff()) return null
+        val windows = try {
+            getWindows()
+        } catch (_: Throwable) {
+            null
+        } ?: return null
+        var best: AccessibilityNodeInfo? = null
+        var bestRank = Int.MAX_VALUE
+        for (window in windows) {
+            val root = if (window.displayId == displayId && window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) window.root else null
+            val rank = when {
+                root == null -> Int.MAX_VALUE
+                window.isActive -> 0
+                else -> 1
+            }
+            window.recycle()
+            if (root == null) continue
+            if (rank < bestRank) {
+                val previous = best
+                best = root
+                bestRank = rank
+                if (previous != null && previous !== root) previous.recycle()
+            } else {
+                root.recycle()
+            }
+        }
+        return best
+    }
+
+    /**
      * 副屏（虚拟显示器）写路径：把文本注入 [displayId] 上窗口里当前聚焦的可编辑节点。
      *
      * 顺序固定且不放松：锁定/熄屏 → 频率限制（[ACTION_INTERVAL_MS]，只有成功才记账）→ 按显示编号取窗口 →
