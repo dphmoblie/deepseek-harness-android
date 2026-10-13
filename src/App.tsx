@@ -4080,6 +4080,31 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               <option value="custom">{t('自定义')}</option>
             </select>
           </label>
+          {/* 供应商状态一览（需求 3/4）：哪个供应商配没配摊在明面上，
+              不必展开下拉框去猜；「配置」把该供应商设为当前编辑项。
+              Harness 网页里的凭据只读展示——管理端清不掉它。 */}
+          <div className="provider-status" role="list" aria-label={t("供应商状态")}>
+            {MODEL_PROVIDERS.map(provider => {
+              const inHarness = settings.harnessConfiguredModelProviders?.includes(provider.id) === true
+              const draft = credentialDrafts[provider.id] !== undefined
+              const inApp = (settings.configuredModelProviders.includes(provider.id) || draft)
+                && !clearedProviders.includes(provider.id)
+              const clearing = clearedProviders.includes(provider.id)
+              const status = inApp
+                ? (draft ? t("待保存") : t("已配置"))
+                : clearing ? t("保存后清除")
+                  : inHarness ? t("已在 Harness 中配置") : t("未配置")
+              return (
+                <div className="provider-status-row" role="listitem" key={provider.id}>
+                  <span className="provider-status-name">{provider.label}</span>
+                  <span className={`provider-status-badge${inApp || inHarness ? ' is-configured' : ''}`}>{status}</span>
+                  <button className="button button-secondary compact-button" type="button"
+                    aria-label={`${t("配置")} ${provider.label}`}
+                    onClick={() => setSelectedProvider(provider.id)}>{t("配置")}</button>
+                </div>
+              )
+            })}
+          </div>
           {selectedProvider !== 'custom' && <><label className="field">
             <span>{selectedProviderOption.label} API Key · {selectedProviderOption.environmentVariable}</span>
             <input

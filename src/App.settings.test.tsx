@@ -303,6 +303,28 @@ describe('设置草稿与未保存的输入', () => {
     expect(screen.queryByRole('button', { name: '清除密钥' })).toBeNull()
   })
 
+  it('供应商状态一览分清应用凭据、Harness 网页凭据与未配置，并能一键切到该供应商', async () => {
+    bridge.getSettings.mockResolvedValue({
+      ...settings,
+      configuredModelProviders: ['deepseek'],
+      harnessConfiguredModelProviders: ['openai'],
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('模型与密钥')
+
+    const list = screen.getByRole('list', { name: '供应商状态' })
+    const row = (name: string): HTMLElement => within(list).getByText(name).closest('.provider-status-row') as HTMLElement
+    expect(row('DeepSeek')).toHaveTextContent('已配置')
+    expect(row('OpenAI')).toHaveTextContent('已在 Harness 中配置')
+    expect(row('Anthropic')).toHaveTextContent('未配置')
+
+    // 「配置」把该供应商设为当前编辑项：下拉框与密钥输入框都跟过去。
+    fireEvent.click(within(list).getByRole('button', { name: '配置 Anthropic' }))
+    expect(screen.getByRole('combobox', { name: '供应商' })).toHaveValue('anthropic')
+    expect(screen.getByLabelText(/Anthropic API Key/)).toBeVisible()
+  })
+
   it('前台刷新会更新 Harness 网页凭据状态，同时保留未保存的密钥草稿', async () => {
     bridge.getSettings.mockResolvedValue({
       ...settings,
