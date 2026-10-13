@@ -115,9 +115,10 @@ class AutomationTaskWireTest {
     @Test
     fun `record 只接受三种结果 skipped 不许调用方自己报`() {
         val ok = AutomationTaskWire.parse(
-            """{"op":"record","step":"s1","status":"ok","code":"AUTOMATION_ACTION_PERFORMED"}""",
+            """{"op":"record","step":"s1","attempt":1,"status":"ok","code":"AUTOMATION_ACTION_PERFORMED"}""",
         ) as AutomationTaskRequest.Record
         assertEquals("s1", ok.stepId)
+        assertEquals(1, ok.attempt)
         assertTrue(ok.outcome.ok)
         assertEquals("AUTOMATION_ACTION_PERFORMED", ok.outcome.code)
         // 没写 verified 时：报成功按「通过校验」算，报失败按「没通过」算——宁可保守。
@@ -125,19 +126,20 @@ class AutomationTaskWireTest {
         assertFalse(ok.outcome.timedOut)
 
         val failed = AutomationTaskWire.parse(
-            """{"op":"record","step":"s1","status":"failed","code":"AUTOMATION_CLICK_FAILED"}""",
+            """{"op":"record","step":"s1","attempt":2,"status":"failed","code":"AUTOMATION_CLICK_FAILED"}""",
         ) as AutomationTaskRequest.Record
         assertFalse(failed.outcome.ok)
         assertFalse(failed.outcome.verified)
 
         val unknown = AutomationTaskWire.parse(
-            """{"op":"record","step":"s1","status":"unknown","verified":false,"timedOut":true}""",
+            """{"op":"record","step":"s1","attempt":1,"status":"unknown","verified":false,"timedOut":true}""",
         ) as AutomationTaskRequest.Record
         assertFalse(unknown.outcome.ok)
         assertTrue(unknown.outcome.timedOut)
 
         listOf(
             """{"op":"record","step":"s1"}""",
+            """{"op":"record","step":"s1","status":"ok"}""",
             """{"op":"record","step":"s1","status":"skipped"}""",
         ).forEach { param ->
             val invalid = AutomationTaskWire.parse(param) as AutomationTaskRequest.Invalid

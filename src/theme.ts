@@ -15,7 +15,7 @@ import { runtimeBridge } from './platform/native'
 /** 用户可选的三态：system 跟随系统，light/dark 为显式选择。 */
 export type ThemeMode = 'system' | 'light' | 'dark'
 /** 真正写到 DOM 上的只有两种取值，CSS 侧据此覆盖变量。 */
-export type ResolvedTheme = 'light' | 'dark'
+type ResolvedTheme = 'light' | 'dark'
 
 /**
  * 强调色是外壳主题的一部分：只允许预置色板，避免把存储值直接写进选择器。
@@ -25,12 +25,12 @@ export type AccentMode = 'ocean' | 'mint' | 'amber' | 'rose'
 
 export const THEME_STORAGE_KEY = 'dsh-mobile-theme-v1'
 export const ACCENT_STORAGE_KEY = 'dsh-mobile-accent-v1'
-export const CUSTOM_ACCENT_STORAGE_KEY = 'dsh-mobile-custom-accent-v1'
+const CUSTOM_ACCENT_STORAGE_KEY = 'dsh-mobile-custom-accent-v1'
 /** 默认跟随系统：用户没表过态时，尊重系统的深色偏好比替他做决定更合理。 */
 export const DEFAULT_THEME_MODE: ThemeMode = 'system'
-export const THEME_MODES: readonly ThemeMode[] = ['system', 'light', 'dark']
+const THEME_MODES: readonly ThemeMode[] = ['system', 'light', 'dark']
 export const DEFAULT_ACCENT_MODE: AccentMode = 'ocean'
-export const ACCENT_MODES: readonly AccentMode[] = ['ocean', 'mint', 'amber', 'rose']
+const ACCENT_MODES: readonly AccentMode[] = ['ocean', 'mint', 'amber', 'rose']
 
 /**
  * theme-color 与各自主题的页面背景取同一个值，否则 Android 状态栏会和页面顶部
@@ -104,7 +104,7 @@ function syncThemeColorMeta(theme: ResolvedTheme): void {
 }
 
 /** 将已校验的强调色写入 DOM 数据属性，由 CSS 统一切换整套语义色。 */
-export function applyAccent(mode: AccentMode): void {
+function applyAccent(mode: AccentMode): void {
   const root = document.documentElement
   root.dataset.accent = mode
   const custom = readCustomAccentColor()

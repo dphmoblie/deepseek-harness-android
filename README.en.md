@@ -107,9 +107,9 @@ When Shizuku is unavailable, unauthorized or disconnected, device tools report a
 
 Under **Settings → AI Shell → Target-app virtual screen (experimental)** you can pick a target app, try running it on a separate virtual display, and view and interact with it through the native preview page or a draggable mini window. What you see there is the target app's screen; the AI chat mini window is a separate feature.
 
-The entry point requires Android 10 or later, an authorized and connected Shizuku, and AI Shell enabled by the user. Reading and input pause while the screen is locked or off. AI tools for virtual-screen state, PNG screenshots, tap, swipe, back and ending the session are already wired in; **there is no virtual-screen-specific accessibility node tree, Chinese text input or high-frame-rate video stream yet.**
+The entry point requires Android 10 or later, an authorized and connected Shizuku, and AI Shell enabled by the user. Reading and input pause while the screen is locked or off. AI tools already cover virtual-screen state and performance readings (target frame rate, frame age, input-to-first-frame delay estimate), PNG screenshots, a virtual-screen-specific accessibility node tree, tap, swipe, back, Chinese text writing (focused accessibility write, falling back to a system clipboard paste), 15/30/60 fps tiers and ending the session; the picture is still grabbed frame by frame as PNG, **not a video-encoded stream**.
 
-As of 2026-10-02, portrait and landscape screenshots, targeted taps and session teardown for a test app were verified under MuMu Android 15 with ordinary shell privileges, along with native picker layouts at `363×800 dp` and `800×363 dp`. **The full Shizuku authorization and binding path, real third-party apps, mini-window switching, long-lived background operation and lock-screen recovery remain unverified**; emulator probe results are not a compatibility guarantee for every phone or every app.
+As of 2026-10-02, portrait and landscape screenshots, targeted taps and session teardown for a test app were verified under MuMu Android 15 with ordinary shell privileges, along with native picker layouts at `363×800 dp` and `800×363 dp`; later versions added HONOR AAP-AN00 device receipts, listed one by one in the [virtual screen guide](docs/目标应用副屏.md) and not repeated here. **The full Shizuku authorization and binding path, real third-party apps, mini-window switching, long-lived background operation and lock-screen recovery remain unverified**; most of the capabilities added above also have unit tests and compile checks only, and emulator probe results are not a compatibility guarantee for every phone or every app.
 
 An existing runtime also needs its `dsh-mobile-shizuku` plugin updated or repackaged before the new AI tools appear; installing a new APK alone does not rewrite existing plugin data. See the [virtual screen guide and verification record](docs/目标应用副屏.md) for the mechanism, tool interfaces and full verification scope.
 
@@ -192,6 +192,7 @@ Component sources, exact upstream versions, artifact hashes and the correspondin
 - [Inbox and storage permissions](docs/存储权限与导入落点.md)
 - [Architecture and security boundaries](docs/ARCHITECTURE.md)
 - [Mobile plugin compatibility design](docs/mobile-plugin-compat.md)
+- [Project status register (done, open, on-device readings)](docs/项目状态.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
 - [Android build guide](android/README.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)

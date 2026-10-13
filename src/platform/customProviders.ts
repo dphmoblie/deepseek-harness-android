@@ -24,7 +24,7 @@ function name(value: unknown, maximum: number, label: string): string {
   return normalized
 }
 
-export function validateCustomProviderId(value: unknown): string {
+function validateCustomProviderId(value: unknown): string {
   if (typeof value !== 'string' || value.length > 48 || !PROVIDER_ID.test(value) || RESERVED_IDS.has(value)) {
     throw new Error('自定义供应商标识须为 1 到 48 位小写字母、数字或连字符，且不能与内置供应商重复')
   }
@@ -38,7 +38,7 @@ function tokenCount(value: unknown, label: string): number {
   return value as number
 }
 
-export function validateCustomProviderUrl(value: unknown): string {
+function validateCustomProviderUrl(value: unknown): string {
   // Security boundary: credentials belong in encrypted key storage, never URL components.
   if (typeof value !== 'string' || value.length > 2048 || [...value.trim()].some(character => {
     const code = character.charCodeAt(0)

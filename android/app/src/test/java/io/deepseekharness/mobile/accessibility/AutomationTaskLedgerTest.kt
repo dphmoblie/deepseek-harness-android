@@ -31,7 +31,8 @@ class AutomationTaskLedgerTest {
         sensitive: Boolean = false,
         allowed: Boolean = true,
         connected: Boolean = true,
-    ) = AutomationTaskFacts(packageName, digest, locked, sensitive, allowed, connected)
+        manualPreempted: Boolean = false,
+    ) = AutomationTaskFacts(packageName, digest, locked, sensitive, allowed, connected, manualPreempted)
 
     private fun ledger(vararg steps: AutomationTaskStepSpec, digest: String? = "d1"): AutomationTaskLedger {
         val ledger = AutomationTaskLedger()
@@ -70,7 +71,7 @@ class AutomationTaskLedgerTest {
         assertEquals(1, ledger.gate("s1", facts(), 1_000L).attempt())
         ledger.record("s1", AutomationTaskStepOutcome(ok = true, verified = true), 1_200L)
         assertTrue(ledger.gate("s2", facts(), 1_300L) is AutomationTaskGate.Proceed)
-        val snapshot = ledger.record("s2", AutomationTaskStepOutcome(ok = true), 1_500L).snapshot
+        val snapshot = ledger.record("s2", AutomationTaskStepOutcome(ok = true), 1_500L)
         assertEquals(AutomationTaskStatus.DONE, snapshot.status)
         assertEquals(listOf(AutomationTaskStepStatus.OK, AutomationTaskStepStatus.OK), snapshot.steps.map { it.status })
         assertNull(snapshot.nextStepId)
@@ -99,7 +100,7 @@ class AutomationTaskLedgerTest {
     fun `已经成功的步骤再提交不会执行第二次`() {
         val ledger = ledger(spec("s1", maxAttempts = 3))
         ledger.gate("s1", facts(), 1_000L)
-        ledger.record("s1", AutomationTaskStepOutcome(ok = true), 1_100L)
+        ledger.record("s1", 1, AutomationTaskStepOutcome(ok = true), 1_100L)
         assertEquals(AutomationTaskCodes.STEP_ALREADY_SETTLED, ledger.gate("s1", facts(), 1_200L).refusedCode())
         // 幂等：重复提交不消耗重试次数，也不把状态改回去。
         val snapshot = ledger.snapshot()
@@ -114,7 +115,7 @@ class AutomationTaskLedgerTest {
         assertEquals(AutomationTaskCodes.TARGET_LEFT, gate.refusedCode())
         assertEquals(AutomationTaskStatus.BLOCKED, ledger.snapshot().status)
         // 回到目标应用之后，必须用新的指纹走一次 resume 才能继续（不是默默放行）。
-        assertTrue(ledger.resume(listOf("s1", "s2"), "d2") is AutomationTaskGate.Proceed)
+        assertTrue(ledger.resume(listOf("s1", "s2"), facts(digest = "d2")) is AutomationTaskGate.Proceed)
         assertEquals(AutomationTaskStatus.RUNNING, ledger.snapshot().status)
         assertTrue(ledger.gate("s1", facts(digest = "d2"), 2_000L) is AutomationTaskGate.Proceed)
     }
@@ -123,15 +124,58 @@ class AutomationTaskLedgerTest {
     fun `计划之后界面就变了时第一步不发出`() {
         val ledger = ledger(spec("s1"))
         assertEquals(AutomationTaskCodes.TARGET_STALE, ledger.gate("s1", facts(digest = "d9"), 1_000L).refusedCode())
-        assertTrue(ledger.resume(listOf("s1"), "d9") is AutomationTaskGate.Proceed)
+        assertTrue(ledger.resume(listOf("s1"), facts(digest = "d9")) is AutomationTaskGate.Proceed)
         assertTrue(ledger.gate("s1", facts(digest = "d9"), 2_000L) is AutomationTaskGate.Proceed)
     }
 
     @Test
     fun `恢复时的步骤列表必须与原计划一致`() {
         val ledger = ledger(spec("s1"), spec("s2"))
-        val gate = ledger.resume(listOf("s2", "s1"), "d2")
+        ledger.gate("s1", facts(packageName = "com.other.app"), 1_000L)
+        val gate = ledger.resume(listOf("s2", "s1"), facts(digest = "d2"))
         assertEquals(AutomationTaskCodes.PLAN_INVALID, gate.refusedCode())
+    }
+
+    @Test
+    fun `旧尝试的回执不能覆盖新尝试`() {
+        val ledger = ledger(spec("s1", maxAttempts = 2))
+        ledger.gate("s1", facts(), 1_000L)
+        ledger.record("s1", 1, AutomationTaskStepOutcome(ok = false, code = "AUTOMATION_CLICK_FAILED"), 1_100L)
+        ledger.gate("s1", facts(), 1_200L)
+        val stale = ledger.record("s1", 1, AutomationTaskStepOutcome(ok = true), 1_300L)
+        assertEquals(AutomationTaskCodes.RECORD_INVALID, stale.lastCode)
+        assertEquals(AutomationTaskStepStatus.PENDING, stale.steps.single().status)
+        val current = ledger.record("s1", 2, AutomationTaskStepOutcome(ok = true), 1_400L)
+        assertEquals(AutomationTaskStepStatus.OK, current.steps.single().status)
+    }
+
+    @Test
+    fun `用户抢占后恢复必须重新确认现场`() {
+        val ledger = ledger(spec("s1"), spec("s2"))
+        ledger.gate("s1", facts(packageName = "com.other.app"), 1_000L)
+        val blocked = ledger.resume(listOf("s1", "s2"), facts(digest = "d2", manualPreempted = true))
+        assertEquals(AutomationTaskCodes.MANUAL_PREEMPTED, blocked.refusedCode())
+        assertEquals(AutomationTaskStatus.BLOCKED, ledger.snapshot().status)
+        assertTrue(ledger.resume(listOf("s1", "s2"), facts(digest = "d2")) is AutomationTaskGate.Proceed)
+    }
+
+    @Test
+    fun `任务运行期间的外部界面事件会阻塞任务`() {
+        val ledger = ledger(spec("s1"))
+        ledger.gate("s1", facts(), 1_000L)
+        val blocked = ledger.markExternalChange()
+        assertEquals(AutomationTaskStatus.BLOCKED, blocked.status)
+        assertEquals(AutomationTaskCodes.MANUAL_PREEMPTED, blocked.lastCode)
+        assertTrue(ledger.resume(listOf("s1"), facts(digest = "d1")) is AutomationTaskGate.Proceed)
+    }
+
+    @Test
+    fun `未阻塞的任务不接受重复恢复`() {
+        val ledger = ledger(spec("s1"))
+        assertEquals(
+            AutomationTaskCodes.RESUME_REQUIRED,
+            ledger.resume(listOf("s1"), facts()).refusedCode(),
+        )
     }
 
     @Test
@@ -163,7 +207,7 @@ class AutomationTaskLedgerTest {
     fun `认不出的失败码按不安全处理且不许重试`() {
         val ledger = ledger(spec("s1", maxAttempts = 3))
         ledger.gate("s1", facts(), 1_000L)
-        val snapshot = ledger.record("s1", AutomationTaskStepOutcome(ok = false, code = "AUTOMATION_SOMETHING_NEW"), 1_100L).snapshot
+        val snapshot = ledger.record("s1", AutomationTaskStepOutcome(ok = false, code = "AUTOMATION_SOMETHING_NEW"), 1_100L)
         val step = snapshot.steps.single()
         assertEquals(AutomationTaskStepStatus.UNKNOWN, step.status)
         assertEquals("AUTOMATION_SOMETHING_NEW", step.code)
@@ -174,7 +218,7 @@ class AutomationTaskLedgerTest {
     fun `超时记成不确定并且永不自动重试`() {
         val ledger = ledger(spec("s1", maxAttempts = 3))
         ledger.gate("s1", facts(), 1_000L)
-        val snapshot = ledger.record("s1", AutomationTaskStepOutcome(ok = false, timedOut = true), 6_500L).snapshot
+        val snapshot = ledger.record("s1", AutomationTaskStepOutcome(ok = false, timedOut = true), 6_500L)
         val step = snapshot.steps.single()
         assertEquals(AutomationTaskStepStatus.UNKNOWN, step.status)
         assertEquals(AutomationTaskCodes.TIMEOUT, step.code)
@@ -187,7 +231,7 @@ class AutomationTaskLedgerTest {
     fun `发出去了但没有观察到变化时记成不确定`() {
         val ledger = ledger(spec("s1"))
         ledger.gate("s1", facts(), 1_000L)
-        val snapshot = ledger.record("s1", AutomationTaskStepOutcome(ok = true, verified = false), 1_400L).snapshot
+        val snapshot = ledger.record("s1", AutomationTaskStepOutcome(ok = true, verified = false), 1_400L)
         val step = snapshot.steps.single()
         assertEquals(AutomationTaskStepStatus.UNKNOWN, step.status)
         assertEquals(AutomationTaskCodes.NOT_VERIFIED, step.code)
@@ -198,7 +242,7 @@ class AutomationTaskLedgerTest {
     fun `不需要校验的等待步骤成功即算完成`() {
         val ledger = ledger(spec("s1", action = AutomationTaskActions.WAIT, target = "", maxAttempts = 1))
         ledger.gate("s1", facts(), 1_000L)
-        val snapshot = ledger.record("s1", AutomationTaskStepOutcome(ok = true, verified = false), 1_100L).snapshot
+        val snapshot = ledger.record("s1", AutomationTaskStepOutcome(ok = true, verified = false), 1_100L)
         assertEquals(AutomationTaskStepStatus.OK, snapshot.steps.single().status)
         assertEquals(AutomationTaskStatus.DONE, snapshot.status)
     }
@@ -219,10 +263,10 @@ class AutomationTaskLedgerTest {
     fun `迟到或重复 record 不得改写已收口状态`() {
         val ledger = ledger(spec("s1"))
         ledger.gate("s1", facts(), 1_000L)
-        assertTrue(ledger.record("s1", AutomationTaskStepOutcome(ok = true), 1_100L) is AutomationTaskRecordResult.Accepted)
+        val original = ledger.record("s1", AutomationTaskStepOutcome(ok = true), 1_100L)
         val late = ledger.record("s1", AutomationTaskStepOutcome(ok = false, code = "AUTOMATION_CLICK_FAILED"), 1_200L)
-        assertTrue(late is AutomationTaskRecordResult.Refused)
-        assertEquals(AutomationTaskCodes.RECORD_INVALID, (late as AutomationTaskRecordResult.Refused).code)
+        assertEquals(AutomationTaskCodes.RECORD_INVALID, late.lastCode)
+        assertEquals(original, ledger.snapshot())
         assertEquals(AutomationTaskStatus.DONE, ledger.snapshot().status)
         assertEquals(AutomationTaskStepStatus.OK, ledger.snapshot().steps.single().status)
     }
@@ -233,8 +277,8 @@ class AutomationTaskLedgerTest {
         ledger.gate("s1", facts(), 1_000L)
         ledger.cancel()
         val result = ledger.record("s1", AutomationTaskStepOutcome(ok = true), 1_100L)
-        assertTrue(result is AutomationTaskRecordResult.Refused)
-        assertEquals(AutomationTaskCodes.RECORD_INVALID, (result as AutomationTaskRecordResult.Refused).code)
+        assertEquals(AutomationTaskCodes.RECORD_INVALID, result.lastCode)
+        assertEquals(AutomationTaskCodes.CANCELLED, ledger.snapshot().lastCode)
         assertEquals(AutomationTaskStatus.CANCELLED, ledger.snapshot().status)
         assertEquals(AutomationTaskStepStatus.SKIPPED, ledger.snapshot().steps.single().status)
     }
@@ -244,12 +288,12 @@ class AutomationTaskLedgerTest {
         val done = ledger(spec("s1"))
         done.gate("s1", facts(), 1_000L)
         done.record("s1", AutomationTaskStepOutcome(ok = true), 1_100L)
-        assertEquals(AutomationTaskCodes.TASK_NOT_BLOCKED, done.resume(listOf("s1"), "d2").refusedCode())
+        assertEquals(AutomationTaskCodes.RESUME_REQUIRED, done.resume(listOf("s1"), "d2").refusedCode())
         assertEquals(AutomationTaskStatus.DONE, done.snapshot().status)
 
         val cancelled = ledger(spec("s1"))
         cancelled.cancel()
-        assertEquals(AutomationTaskCodes.TASK_NOT_BLOCKED, cancelled.resume(listOf("s1"), "d2").refusedCode())
+        assertEquals(AutomationTaskCodes.RESUME_REQUIRED, cancelled.resume(listOf("s1"), "d2").refusedCode())
         assertEquals(AutomationTaskStatus.CANCELLED, cancelled.snapshot().status)
     }
 

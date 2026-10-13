@@ -19,7 +19,7 @@ internal sealed interface AutomationTaskRequest {
 
     data class Gate(val stepId: String) : AutomationTaskRequest
 
-    data class Record(val stepId: String, val outcome: AutomationTaskStepOutcome) : AutomationTaskRequest
+    data class Record(val stepId: String, val attempt: Int, val outcome: AutomationTaskStepOutcome) : AutomationTaskRequest
 
     data class Resume(val stepIds: List<String>) : AutomationTaskRequest
 
@@ -36,7 +36,7 @@ internal sealed interface AutomationTaskRequest {
  * 入参一律是一个 JSON 对象，`op` 决定其余字段（与既有的 `automationRules` 同风格，不用位置参数）：
  * - `{"op":"plan","taskId":"t1","packageName":"com.example.app","steps":[{"id":"s1","action":"click","target":"...","verify":"windowChanged","timeoutMs":5000,"maxAttempts":1}]}`
  * - `{"op":"gate","step":"s1"}`
- * - `{"op":"record","step":"s1","status":"ok","code":"AUTOMATION_ACTION_PERFORMED","verified":true,"timedOut":false}`
+ * - `{"op":"record","step":"s1","attempt":1,"status":"ok","code":"AUTOMATION_ACTION_PERFORMED","verified":true,"timedOut":false}`
  * - `{"op":"resume","steps":["s1","s2"]}` / `{"op":"cancel"}` / `{"op":"status"}`（空参数按 status 处理）
  *
  * 可省略的字段：`verify`（按动作取 [AutomationTaskActions.defaultVerify]）、`timeoutMs`（默认 5000）、
@@ -188,6 +188,9 @@ internal object AutomationTaskWire {
 
     private fun record(json: JSONObject): AutomationTaskRequest {
         val stepId = stepId(json, "record") ?: return missingStep("record")
+        val attempt = intOrNull(json, "attempt")
+            ?: return reject(AutomationTaskCodes.RECORD_INVALID, "record 缺少合法的 attempt（正整数）")
+        if (attempt <= 0) return reject(AutomationTaskCodes.RECORD_INVALID, "record 的 attempt 必须是正整数")
         val status = stringOrNull(json, "status")
             ?: return reject(AutomationTaskCodes.RECORD_INVALID, "record 缺少 status")
         if (status !in RECORD_STATUSES) {
@@ -198,6 +201,7 @@ internal object AutomationTaskWire {
         }
         return AutomationTaskRequest.Record(
             stepId = stepId,
+            attempt = attempt,
             outcome = AutomationTaskStepOutcome(
                 ok = status == AutomationTaskStepStatus.OK,
                 code = stringOrNull(json, "code"),
@@ -265,6 +269,9 @@ internal object AutomationTaskWire {
             is Number -> runCatching { BigDecimal(value.toString()).longValueExact() }.getOrNull()
             else -> null
         }
+
+    private fun intOrNull(json: JSONObject, key: String): Int? =
+        longOrNull(json, key)?.takeIf { it in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong() }?.toInt()
 
     private fun boolOrNull(json: JSONObject, key: String): Boolean? =
         when (val value = json.opt(key)) {

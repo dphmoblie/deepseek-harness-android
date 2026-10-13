@@ -25,7 +25,7 @@ const DISCLAIMER_POINTS = [
   '请勿将本功能用于违反应用服务条款、绕过付费或验证、刷量、抢购等用途。',
 ]
 
-export interface AutomationDisclaimerProps {
+interface AutomationDisclaimerProps {
   mode: 'confirm' | 'read'
   /** 只有 `confirm` 用得到：勾选后按「我已了解，开启自动化」时回调。 */
   onConfirm?: () => void

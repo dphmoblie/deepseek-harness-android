@@ -45,8 +45,9 @@ internal object AutomationTaskCodes {
     const val STEP_UNKNOWN = "AUTOMATION_TASK_STEP_UNKNOWN"
     const val STEP_OUT_OF_ORDER = "AUTOMATION_TASK_STEP_OUT_OF_ORDER"
     const val STEP_ALREADY_SETTLED = "AUTOMATION_TASK_STEP_ALREADY_SETTLED"
-    const val TASK_NOT_BLOCKED = "AUTOMATION_TASK_NOT_BLOCKED"
     const val CANCELLED = "AUTOMATION_TASK_CANCELLED"
+    const val RESUME_REQUIRED = "AUTOMATION_TASK_RESUME_REQUIRED"
+    const val MANUAL_PREEMPTED = "AUTOMATION_TASK_MANUAL_PREEMPTED"
 
     // 场景类拒绝（重发没有意义，换时机/换配置才有）
     const val TARGET_LEFT = "AUTOMATION_TASK_TARGET_LEFT"
@@ -212,6 +213,8 @@ internal data class AutomationTaskFacts(
     val sensitiveWindow: Boolean = false,
     val packageAllowed: Boolean = true,
     val serviceConnected: Boolean = true,
+    /** 任务运行期间检测到外部现场变化（可能来自用户或系统）；必须重新确认后才能继续。 */
+    val manualPreempted: Boolean = false,
 )
 
 /** 闸门结论。 */
@@ -221,18 +224,6 @@ internal sealed interface AutomationTaskGate {
 
     /** 拒发。任务状态可能被置成 `blocked`（场景类）或保持原样（可重试类）。 */
     data class Refused(val code: String, val message: String, val retryable: Boolean) : AutomationTaskGate
-}
-
-/** `record` 的受控结果：迟到、重复或找不到步骤的回执不能伪装成成功。 */
-internal sealed interface AutomationTaskRecordResult {
-    val snapshot: AutomationTaskSnapshot
-
-    data class Accepted(override val snapshot: AutomationTaskSnapshot) : AutomationTaskRecordResult
-    data class Refused(
-        val code: String,
-        val message: String,
-        override val snapshot: AutomationTaskSnapshot,
-    ) : AutomationTaskRecordResult
 }
 
 /** 对外快照（桥接层直接序列化它，不另抄一份字段）。 */
@@ -313,6 +304,9 @@ internal class AutomationTaskLedger {
     fun gate(stepId: String, facts: AutomationTaskFacts, nowMs: Long): AutomationTaskGate {
         val current = taskId ?: return refuse(AutomationTaskCodes.NOT_PLANNED, "还没有任务：先提交计划", false)
         if (status == AutomationTaskStatus.CANCELLED) return refuse(AutomationTaskCodes.CANCELLED, "任务已取消", false)
+        if (status == AutomationTaskStatus.BLOCKED) {
+            return AutomationTaskGate.Refused(AutomationTaskCodes.RESUME_REQUIRED, "任务已暂停，请先重新确认现场并恢复", false)
+        }
         val index = steps.indexOfFirst { it.id == stepId }
         if (index < 0) return refuse(AutomationTaskCodes.STEP_UNKNOWN, "任务里没有这个步骤", false)
         val step = steps[index]
@@ -320,8 +314,7 @@ internal class AutomationTaskLedger {
             // 幂等：同一步重复提交不是错误，而是**明确不加执行**（调用方拿返回的状态自己判断）。
             return refuse(AutomationTaskCodes.STEP_ALREADY_SETTLED, "这一步已经成功，不再执行", false)
         }
-        // `PENDING` 同时表示「尚未开始」和「已经 gate、正在等待动作回执」。
-        // 后一种情况必须挡住，否则两个并发调用会重复发出同一步并覆盖窗口指纹。
+        // 在途步骤必须先收到回执，重复 gate 不能再次发出动作或覆盖尝试代次。
         if (step.status == AutomationTaskStepStatus.PENDING && step.startedAtMs != null) {
             return refuse(AutomationTaskCodes.BUSY, "这一步已经在执行，等待当前回执", false)
         }
@@ -340,6 +333,7 @@ internal class AutomationTaskLedger {
         if (!facts.serviceConnected) return block(AutomationTaskCodes.SERVICE_DISCONNECTED, "无障碍服务未连接")
         if (facts.locked) return block(AutomationTaskCodes.DEVICE_LOCKED, "设备已锁定或熄屏")
         if (facts.sensitiveWindow) return block(AutomationTaskCodes.SENSITIVE_WINDOW, "检测到密码、验证码、支付或权限窗口")
+        if (facts.manualPreempted) return block(AutomationTaskCodes.MANUAL_PREEMPTED, "检测到外部现场变化：先重新确认当前界面，再恢复任务")
         if (facts.foregroundPackage != packageName) {
             return block(AutomationTaskCodes.TARGET_LEFT, "前台已不是 $packageName（现在是 ${facts.foregroundPackage}）")
         }
@@ -385,36 +379,57 @@ internal class AutomationTaskLedger {
      * | 成功且通过校验 | `ok` |
      */
     @Synchronized
-    fun record(stepId: String, outcome: AutomationTaskStepOutcome, nowMs: Long): AutomationTaskRecordResult {
+    fun record(stepId: String, outcome: AutomationTaskStepOutcome, nowMs: Long): AutomationTaskSnapshot {
+        val attempt = steps.firstOrNull { it.id == stepId }?.attemptsUsed ?: 0
+        return record(stepId, attempt, outcome, nowMs)
+    }
+
+    /**
+     * 带尝试代次记结果。代次和「正在运行」标记必须同时匹配，防止旧请求在暂停、恢复或重试后
+     * 把新结果覆盖掉。服务桥必须使用这个重载，省略代次的重载只为兼容旧的本地调用方。
+     */
+    @Synchronized
+    fun record(stepId: String, attempt: Int, outcome: AutomationTaskStepOutcome, nowMs: Long): AutomationTaskSnapshot {
+        if (status == AutomationTaskStatus.BLOCKED || automationTaskSettled(status)) {
+            return snapshot().copy(
+                lastCode = AutomationTaskCodes.RECORD_INVALID,
+                lastMessage = "任务已暂停或收口，拒绝迟到的 record",
+            )
+        }
         val index = steps.indexOfFirst { it.id == stepId }
         if (index < 0) {
-            return AutomationTaskRecordResult.Refused(
-                AutomationTaskCodes.STEP_UNKNOWN,
-                "任务里没有这个步骤，不能记账",
-                snapshot(),
+            return snapshot().copy(
+                lastCode = AutomationTaskCodes.RECORD_INVALID,
+                lastMessage = "这条结果引用了任务中不存在的步骤，已忽略",
             )
         }
         val step = steps[index]
-        if (step.status != AutomationTaskStepStatus.PENDING || step.startedAtMs == null) {
-            return AutomationTaskRecordResult.Refused(
-                AutomationTaskCodes.RECORD_INVALID,
-                "这一步没有在途尝试，拒绝迟到或重复的 record",
-                snapshot(),
+        if (attempt <= 0 || step.status != AutomationTaskStepStatus.PENDING ||
+            step.attemptsUsed != attempt || step.startedAtMs == null
+        ) {
+            // 拒绝只写进本次回执，保留台账原有结论与诊断。
+            return snapshot().copy(
+                lastCode = AutomationTaskCodes.RECORD_INVALID,
+                lastMessage = "这条结果不属于当前正在运行的步骤或尝试，已忽略",
             )
         }
-        val elapsed = (nowMs - step.startedAtMs).coerceAtLeast(0)
-        val settled = classify(step, outcome).copy(elapsedMs = elapsed, startedAtMs = null)
+        val elapsed = step.startedAtMs?.let { (nowMs - it).coerceAtLeast(0) } ?: 0
+        val settled = classify(step, outcome.copy(timedOut = outcome.timedOut || elapsed >= step.timeoutMs))
+            .copy(elapsedMs = elapsed, startedAtMs = null)
         steps[index] = settled
-        lastCode = settled.code
-        lastMessage = message(settled)
+        val blocked = status == AutomationTaskStatus.BLOCKED
+        if (!blocked) {
+            lastCode = settled.code
+            lastMessage = message(settled)
+        }
         if (steps.all { AutomationTaskStepStatus.settled(it.status) }) {
             status = if (steps.any { it.status != AutomationTaskStepStatus.OK }) AutomationTaskStatus.FAILED
             else AutomationTaskStatus.DONE
-        } else {
+        } else if (!blocked) {
             // 还有未收口的步骤：任务继续挂着，调用方可以接着走下一步、重试可重试的那一步，或者取消。
             status = AutomationTaskStatus.RUNNING
         }
-        return AutomationTaskRecordResult.Accepted(snapshot())
+        return snapshot()
     }
 
     /** 取消：未收口的步骤记 `skipped` + [AutomationTaskCodes.CANCELLED]。 */
@@ -431,24 +446,55 @@ internal class AutomationTaskLedger {
     }
 
     /**
+     * 记录任务运行期间出现的外部界面变化。
+     *
+     * 无障碍事件只能证明现场发生了变化，不能可靠判断变化来自用户、系统动画还是目标应用自身；
+     * 因此调用方应把它描述为“外部抢占”，而不是把来源猜成用户。只要任务正在运行，就先阻塞，
+     * 后续必须由调用方重新读取现场并走 [resume] 的完整校验。
+     */
+    @Synchronized
+    fun markExternalChange(): AutomationTaskSnapshot {
+        if (taskId != null && status == AutomationTaskStatus.RUNNING) {
+            status = AutomationTaskStatus.BLOCKED
+            lastCode = AutomationTaskCodes.MANUAL_PREEMPTED
+            lastMessage = "任务运行期间现场被外部事件改变：请重新确认当前界面，再恢复任务"
+        }
+        return snapshot()
+    }
+
+    /**
      * 恢复：目标变了之后，用**新的窗口指纹**把被阻塞的任务重新打开。
      *
      * 只接受与当前计划**完全相同的步骤 id 列表**：换目标的重新规划是调用方的事（它得重新读节点树），
      * 台账不做「帮你把剩下的步骤改一改」这种事——那等于替调用方猜目标。
      */
     @Synchronized
-    fun resume(stepIds: List<String>, windowDigest: String): AutomationTaskGate {
+    fun resume(stepIds: List<String>, facts: AutomationTaskFacts): AutomationTaskGate {
         if (taskId == null) return refuse(AutomationTaskCodes.NOT_PLANNED, "还没有任务：先提交计划", false)
         if (steps.map { it.id } != stepIds) return invalid("恢复时的步骤列表与原计划不一致")
         if (status != AutomationTaskStatus.BLOCKED) {
-            return refuse(AutomationTaskCodes.TASK_NOT_BLOCKED, "只有被阻塞的任务才能恢复", false)
+            return refuse(AutomationTaskCodes.RESUME_REQUIRED, "任务当前没有处于暂停状态，不接受重复恢复", false)
         }
-        digest = windowDigest
+        if (!facts.packageAllowed) return block(AutomationTaskCodes.PACKAGE_NOT_ALLOWED, "当前应用不在无障碍自动化白名单中")
+        if (!facts.serviceConnected) return block(AutomationTaskCodes.SERVICE_DISCONNECTED, "无障碍服务未连接")
+        if (facts.locked) return block(AutomationTaskCodes.DEVICE_LOCKED, "设备已锁定或熄屏")
+        if (facts.sensitiveWindow) return block(AutomationTaskCodes.SENSITIVE_WINDOW, "检测到密码、验证码、支付或权限窗口")
+        if (facts.manualPreempted) return block(AutomationTaskCodes.MANUAL_PREEMPTED, "检测到外部现场变化：先重新确认当前界面，再恢复任务")
+        if (facts.foregroundPackage != packageName) {
+            return block(AutomationTaskCodes.TARGET_LEFT, "前台已不是 $packageName（现在是 ${facts.foregroundPackage}）")
+        }
+        if (facts.windowDigest.isBlank()) return block(AutomationTaskCodes.TARGET_STALE, "当前界面没有可确认的窗口指纹")
+        digest = facts.windowDigest
         status = AutomationTaskStatus.RUNNING
         lastCode = null
         lastMessage = null
         return AutomationTaskGate.Proceed(steps.firstOrNull { it.status == AutomationTaskStepStatus.PENDING }?.id ?: stepIds.last(), 0)
     }
+
+    /** 兼容只传指纹的本地调用方；设备桥必须传完整现场事实。 */
+    @Synchronized
+    fun resume(stepIds: List<String>, windowDigest: String): AutomationTaskGate =
+        resume(stepIds, AutomationTaskFacts(packageName, windowDigest))
 
     @Synchronized
     fun snapshot(): AutomationTaskSnapshot = AutomationTaskSnapshot(

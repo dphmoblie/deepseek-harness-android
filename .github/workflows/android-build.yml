@@ -2,7 +2,7 @@ name: Android CI (build + verify)
 
 on:
   push:
-    branches: [main, 'feature/dsh-plugin-compat']
+    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -21,31 +21,7 @@ permissions:
 env:
   # 应用版本号：与 android/app/build.gradle 的 versionName 保持一致。
   # CI 据此生成运行时版本与 Release 标签：预发布走 v<版本>-mobile-<run_number>，
-  # 正式版（release_type=stable）直接用 v<版本>。0.2.6 修复 0.2.4/0.2.5 引入的副屏回归：
-  # 触摸手势在副屏显示器创建之前就构造，取值得到 -1 被构造函数的「不向主屏发送」校验
-  # 直接拒绝，导致副屏会话必定启动失败；现在手势改为在注入那一刻取显示编号，启动不再
-  # 受构造顺序影响，同时把原生失败原因回显到界面上。0.2.5 的运行环境更新修复仍在。
-  # 0.2.9：悬浮球布局里的 AppCompat 属性在厂商「强制主题」下解析不到，充气失败会终结整个
-  # 应用进程（用户看到「悬浮窗按钮一点就闪退」）；改用平台属性并加主题包装与失败兜底。
-  # 0.2.10：副屏小窗黑屏修复（空白帧判定挪到客户端、空白帧不上屏也不清屏、补状态行、去掉
-  # 小窗的 FLAG_SECURE）、副屏可被 AI 实时操作（手势/点击/滑动、启动与跟随前台、文字输入
-  # 回退链）、无障碍自动化规则引擎（只判定不执行）、壳页会话列表、运行时残留兜底清扫与
-  # 版本管理页残留卡片。
-  # 0.2.11：副屏高刷新率预览通道改造（AIDL 新增 HardwareBuffer 取帧、预览走硬件帧直出，PNG 编解码
-  # 移出热路径，轮询下限降到 5ms、档位扩到六档）、副屏尺寸规格数据化与小窗按副屏比例适配、大预览页
-  # 与小窗共用状态行文案、去掉「实验功能」字样、会话列表与会话快照契约加固、前端原生文件载荷校验。
-  # 0.2.12：副屏独立设置页（目标应用/方向/自适应规格/十档取帧/自动跟随/启动停止重启/九行状态）、
-  # 取帧档位扩到十档并按档位请求显示器刷新率再诚实读回、自动跟随三策略与 autoFollowTick 实现、
-  # 生命周期动作 start/restart/reconnect、错误码细分 TARGET_LEFT/STALE_FRAME/SESSION_DEAD、
-  # 非 ASCII 输入走剪贴板通道并回读核对、状态增补副屏前台应用与 Activity、AI 可直接在副屏里跑
-  # 设备命令（mobile_virtual_screen_shell）、悬浮窗恢复拖动、修「注入被取帧锁拖住」与「报成功
-  # 但画面不动」（逐事件注入、退出码 0 不再当落地）、无障碍规则的事件驱动执行器、
-  # 无障碍白名单 16 项上限按用户要求移除。
-  # 0.2.13：Shizuku 集成修复——状态读取加闸门（同一时刻只读一次，在途复用上一次结果、从未成功
-  # 读取时回不碰 binder 的兜底状态），getShizukuState / openShizuku 移出 WebView 线程，binder
-  # 到达或断开时作废缓存与在途读取；界面把「Shizuku 应用版本」与「服务端 API 版本」分开显示
-  # （getVersion() 读的是服务端 API 版本，权限未授予时返回 -1，不再当成版本显示）；Shizuku 连接
-  # 五条错误码补上可执行中文文案（更新 Shizuku 后需在 Shizuku 中停止服务再重新启动）。
+  # 正式版（release_type=stable）直接用 v<版本>；发布说明取自 docs/发布说明-<版本>.md（各版本改了什么写在那边，这里不重复）。
   APP_VERSION: '0.2.13'
 
 jobs:

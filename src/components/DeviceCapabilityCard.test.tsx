@@ -144,4 +144,34 @@ describe('设备能力卡片', () => {
     await findRow('无障碍服务 需要一步设置 · 无障碍服务没有开启 · 下一步：到系统设置里开启本应用的无障碍服务')
     expect(bridge.getDeviceCapabilities).toHaveBeenCalledTimes(2)
   })
+
+  it('较早的请求迟到时不会覆盖较新的能力快照', async () => {
+    let finishOld!: (value: DeviceCapabilityReport) => void
+    let finishNew!: (value: DeviceCapabilityReport) => void
+    const bridge = {
+      getDeviceCapabilities: vi.fn()
+        .mockImplementationOnce(() => new Promise<DeviceCapabilityReport>(resolve => { finishOld = resolve }))
+        .mockImplementationOnce(() => new Promise<DeviceCapabilityReport>(resolve => { finishNew = resolve })),
+    }
+    card(bridge)
+    fireEvent(window, new Event('focus'))
+    finishNew(report([entry('accessibility', { state: 'needs_action', reason: 'ACCESSIBILITY_OFF', action: 'open_accessibility_settings' })]))
+    await findRow('无障碍服务 需要一步设置 · 无障碍服务没有开启 · 下一步：到系统设置里开启本应用的无障碍服务')
+    finishOld(report())
+    await new Promise(resolve => setTimeout(resolve, 0))
+    row('无障碍服务 需要一步设置 · 无障碍服务没有开启 · 下一步：到系统设置里开启本应用的无障碍服务')
+  })
+
+  it('切回前台时立即重新读取能力', async () => {
+    const bridge = {
+      getDeviceCapabilities: vi.fn()
+        .mockResolvedValueOnce(report())
+        .mockResolvedValueOnce(report([entry('shizuku', { state: 'needs_action', reason: 'SHIZUKU_NOT_RUNNING', action: 'open_shizuku' })])),
+    }
+    card(bridge)
+    await findRow('Shizuku（设备 Shell） 可用')
+    fireEvent(window, new Event('focus'))
+    await findRow('Shizuku（设备 Shell） 需要一步设置 · Shizuku 没有在运行 · 下一步：打开 Shizuku')
+    expect(bridge.getDeviceCapabilities).toHaveBeenCalledTimes(2)
+  })
 })

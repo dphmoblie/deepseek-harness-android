@@ -1532,4 +1532,10 @@ export const english: Readonly<Record<string, string>> = {
   "无障碍服务没有连上，现在叫不停它": "The accessibility service is not connected, so it cannot be stopped right now",
   "现在没有任务可停止": "There is no task to stop",
   "重新读取": "Read again",
+  "目标帧率": "Target frame rate",
+  "画面年龄": "Frame age",
+  "输入后首帧间隔估计": "Estimated input-to-first-frame delay",
+  "尚未测到": "Not measured yet",
+  "{0} 毫秒": "{0} ms",
+  "{0} 毫秒（最近 {1} 次平均 {2} 毫秒）": "{0} ms (average {2} ms over the last {1})",
 }

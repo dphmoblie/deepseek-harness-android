@@ -85,6 +85,14 @@ class ShellVirtualScreen {
     private var injectionDropped = 0
     // 最近一次注入失败的原因标签（形如 discrete:move:IOException）；空串表示这次注入没有失败。
     private var injectionError = ""
+    /**
+     * 输入后首帧间隔的样本，以及「正在等下一帧」的那次注入时刻。
+     *
+     * 由 frameLock 保护：采集线程在 [collectFrame] 里写，[recordInjection] 与 [state] 在实例锁里读写。
+     * 一次输入只认一帧回应，记完就把待等标记清掉。
+     */
+    private val responseLatency = VirtualScreenLatency()
+    private var awaitingFrameAt = 0L
     private val timers = Executors.newSingleThreadScheduledExecutor()
     private val writers = Executors.newFixedThreadPool(2)
     private val transfers = Semaphore(2)
@@ -201,6 +209,13 @@ class ShellVirtualScreen {
                     frameBlank = false
                     frameSampledAt = 0L
                     frameAt = SystemClock.elapsedRealtime()
+                    // 输入后首帧间隔估计：上一次注入有落地事件后收到的第一帧只代表采集到了画面，
+                    // 不代表目标应用已经处理输入或操作成功。
+                    // 记完立刻清掉待等标记——一次输入只认一帧，否则后面每一帧都会被算成它的响应。
+                    if (awaitingFrameAt > 0L) {
+                        responseLatency.record(frameAt - awaitingFrameAt)
+                        awaitingFrameAt = 0L
+                    }
                     // 记录本次采集时刻并按最近若干帧重算实测帧率，不额外起采样线程。
                     frameStamps[frameStampNext] = frameAt
                     frameStampNext = (frameStampNext + 1) % frameStamps.size
@@ -232,8 +247,14 @@ class ShellVirtualScreen {
     }
 
     @Synchronized fun state(): JSONObject {
-        // 画面相关字段在同一个锁内一次读出，避免状态里混用不同帧的快照。
-        val frames = synchronized(frameLock) { FrameState(frameAt, frameBlank, frameSampledAt, frameFps, frameError) }
+        // 画面字段与输入后首帧间隔在同一个锁内一次读出，避免状态里混用两份不同时刻的快照。
+        val now = SystemClock.elapsedRealtime()
+        val frames = synchronized(frameLock) {
+            FrameState(
+                frameAt, frameBlank, frameSampledAt, frameFps, frameError,
+                responseLatency.lastMillis, responseLatency.averageMillis, responseLatency.sampleCount,
+            )
+        }
         // 副屏最前台要起一个 dumpsys 进程，只查一次，供下面两个字段共用。
         val virtualForeground = this.virtualForeground
         return JSONObject().put("active", display != null)
@@ -250,7 +271,22 @@ class ShellVirtualScreen {
             .put("previewMode", VirtualScreenPolicy.frameModeLabel(frameMode))
             .put("frameIntervalMs", VirtualScreenPolicy.frameInterval(frameMode))
             // 一位小数即可，调用方不需要更高精度。
-            .put("frameFps", Math.round(frames.fps * 10.0) / 10.0)
+            // 超过两秒没有新采集帧时，旧窗口里的帧率不再代表当前实际新帧率；静止画面仍可用，
+            // 但不能把旧的 60 FPS 继续说成正在刷新。
+            .put("frameFps", Math.round(if (VirtualScreenPerformance.frameAgeMillis(now, frames.at) > 2_000L) 0.0 else frames.fps * 10.0) / 10.0)
+            // 目标帧率：档位与面板刷新率里较小的那个（见 VirtualScreenPerformance.targetFps），两个都拿不到时是 0。
+            .put(
+                "targetFps",
+                if (display == null) 0.0 else VirtualScreenPerformance.targetFps(
+                    VirtualScreenPolicy.frameInterval(frameMode).toLong(), display?.display?.refreshRate ?: 0f,
+                ),
+            )
+            // 画面年龄：读状态的这一刻距最近一帧多久；还没有帧或时钟回退时是 0。静止页面本来就不再出新帧，它会一直变大。
+            .put("frameAgeMs", VirtualScreenPerformance.frameAgeMillis(now, frames.at))
+            // 输入后首帧间隔估计：只说明注入后收到的第一帧时间，不能证明应用已处理输入或操作成功。
+            .put("inputFrameDelayLastMs", frames.responseLast)
+            .put("inputFrameDelayAverageMs", frames.responseAverage)
+            .put("inputFrameDelaySamples", frames.responseSamples)
             // 触摸通道：stream 为进程内逐事件直传，discrete 为逐事件走 input motionevent（合并采样点、丢弃过期移动）。
             .put("touchChannel", VirtualScreenInjector.channel())
             // 注入诊断：通道、上次注入的时刻/耗时/落地事件数/合并与丢弃数，以及失败原因标签（空串=没失败）。
@@ -664,6 +700,9 @@ class ShellVirtualScreen {
         injectionMerged = result.optInt("merged", 0)
         injectionDropped = result.optInt("dropped", 0)
         val failure = result.optString("failure")
+        // 只有真的落地了才算一次输入：没有落地事件的调用等不到「输入后首帧」，
+        // 把它算进去会让下一次正常输入等到的帧被记成这次失败注入的响应。
+        if (failure.isEmpty() && result.optInt("events", 0) > 0) synchronized(frameLock) { awaitingFrameAt = at }
         injectionError = if (failure.isEmpty()) "" else {
             val phase = result.optString("failedAt").ifEmpty { result.optString("phase", "unknown") }
             val kind = result.optString("failureKind").ifEmpty { "Failed" }
@@ -1199,6 +1238,8 @@ class ShellVirtualScreen {
             frameBlank = true; frameSampledAt = 0; frameError = ""
             // 采集时刻与实测帧率同属本次会话，一并清空，下一次会话重新采样。
             frameStampCount = 0; frameStampNext = 0; frameFps = 0.0
+            // 输入后首帧间隔与「正在等回应」的那次注入同属本次会话：换会话后重新测，别把上一段的数字带过来。
+            responseLatency.clear(); awaitingFrameAt = 0L
             @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
             (frameLock as java.lang.Object).notifyAll()
         }
@@ -1215,6 +1256,10 @@ class ShellVirtualScreen {
     }
 
     private fun assignTargetPackage(value: String) = synchronized(frameLock) {
+        if (targetPackage != value) {
+            responseLatency.clear()
+            awaitingFrameAt = 0L
+        }
         targetPackage = value
     }
 
@@ -1239,5 +1284,14 @@ class ShellVirtualScreen {
     }
 
     /** 状态里画面相关字段的一次性快照，保证同一份状态描述同一帧。 */
-    private class FrameState(val at: Long, val blank: Boolean, val sampledAt: Long, val fps: Double, val error: String)
+    private class FrameState(
+        val at: Long,
+        val blank: Boolean,
+        val sampledAt: Long,
+        val fps: Double,
+        val error: String,
+        val responseLast: Long,
+        val responseAverage: Long,
+        val responseSamples: Int,
+    )
 }

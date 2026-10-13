@@ -51,6 +51,8 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class DeepSeekAccessibilityService : AccessibilityService() {
     private var lastActionAt = 0L
+    /** 只记录任务台账动作的成功时间，避免把无关动作误当成任务现场的稳定期。 */
+    @Volatile private var automationTaskActionAt = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val pendingConfirmation = AtomicReference<PendingConfirmation?>(null)
 
@@ -82,10 +84,12 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         automationGate.reset()
         automationWindows.reset()
         automationReevalToken.set(null)
+        automationTaskActionAt = 0L
         serviceInfo = serviceInfo.apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                 AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                AccessibilityEvent.TYPE_VIEW_SCROLLED
+                AccessibilityEvent.TYPE_VIEW_SCROLLED or
+                AccessibilityEvent.TYPE_VIEW_CLICKED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
@@ -105,7 +109,9 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         try {
-            handleAutomationEvent(event, SystemClock.elapsedRealtime())
+            val nowMs = SystemClock.elapsedRealtime()
+            observeAutomationTaskEvent(event, nowMs)
+            handleAutomationEvent(event, nowMs)
         } catch (_: Throwable) {
             // 任何异常都当作"这次不动作"。
         }
@@ -117,6 +123,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         cancelPendingConfirmation()
         // 与 [AutomationReevalToken] 的身份比对配对：置空之后，已排期的重新判定会发现"令牌不是自己"而放弃。
         automationReevalToken.set(null)
+        automationTaskActionAt = 0L
         serviceRef.compareAndSet(this, null)
         super.onDestroy()
     }
@@ -149,8 +156,18 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         return when (command) {
             "accessibilityTree" -> if (param.isBlank()) tree(root, packageName)
             else failure("ACCESSIBILITY_ACTION_INVALID", "无障碍层级读取不接受参数")
-            "accessibilityAction" -> action(root, packageName, param).also { if (it.ok) lastActionAt = now }
-            "tap", "inputText" -> observedAction(root, packageName, command, param).also { if (it.ok) lastActionAt = now }
+            "accessibilityAction" -> action(root, packageName, param).also {
+                if (it.ok) {
+                    lastActionAt = now
+                    noteAutomationTaskAction(now)
+                }
+            }
+            "tap", "inputText" -> observedAction(root, packageName, command, param).also {
+                if (it.ok) {
+                    lastActionAt = now
+                    noteAutomationTaskAction(now)
+                }
+            }
             // 事件驱动自动化的入口：报告规则统计并打开本进程的事件评估（详见 [automationRules]）。
             "automationRules" -> automationRules(packageName, param)
             // 计划式执行的入口：只做闸门与记账，动作仍各走各的命令（详见 [automationTask]）。
@@ -393,8 +410,18 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         }
         return if (success) {
             lastActionAt = now
+            noteAutomationTaskAction(now)
             DeviceCommandResult(true, 0, "操作已执行", false, null)
         } else failure("ACCESSIBILITY_ACTION_REJECTED", "目标节点不允许此操作")
+    }
+
+    /**
+     * 任务动作成功后的短暂稳定期。动作触发的窗口事件会在这个时间窗内到达，不能把它们误判成抢占。
+     */
+    private fun noteAutomationTaskAction(nowMs: Long) {
+        if (automationTaskLedger.snapshot().status == AutomationTaskStatus.RUNNING) {
+            automationTaskActionAt = nowMs
+        }
     }
 
     private fun findByViewId(root: AccessibilityNodeInfo?, viewId: String): AccessibilityNodeInfo? {
@@ -919,6 +946,33 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     )
 
     /**
+     * 观察任务运行期间的界面事件。
+     *
+     * AccessibilityEvent 没有可靠的“这是人点的”标记，所以这里只把超出动作稳定期的目标界面变化
+     * 记为“外部抢占”。这能阻止旧现场继续执行，同时避免把来源武断地说成用户；恢复时仍由调用方
+     * 重新读取目标应用和窗口指纹，确认后才会重新放行。
+     */
+    private fun observeAutomationTaskEvent(event: AccessibilityEvent, nowMs: Long) {
+        val snapshot = automationTaskLedger.snapshot()
+        if (snapshot.status != AutomationTaskStatus.RUNNING) return
+        val eventType = event.eventType
+        if (eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            eventType != AccessibilityEvent.TYPE_VIEW_CLICKED &&
+            eventType != AccessibilityEvent.TYPE_VIEW_SCROLLED &&
+            eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+        ) return
+        val actionAt = automationTaskActionAt
+        if (actionAt > 0L && nowMs >= actionAt && nowMs - actionAt <= TASK_ACTION_EVENT_GRACE_MS) return
+        val eventPackage = event.packageName?.toString().orEmpty()
+        if (eventPackage.isBlank()) return
+        if (eventPackage != snapshot.packageName || eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            eventType == AccessibilityEvent.TYPE_VIEW_CLICKED || eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED
+        ) {
+            automationTaskLedger.markExternalChange()
+        }
+    }
+
+    /**
      * 事件入口的主体：白名单/锁屏早筛 → 可靠窗口状态更新 → 动作评估节流 → 读树与规则 → 执行。
      *
      * 每一次事件都是「同步评估一次」，没有队列、没有重试：事件太密时前面的层会把它丢掉。
@@ -1196,7 +1250,9 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             is AutomationTaskRequest.Invalid ->
                 taskFailure(request.code, request.message, null, false)
             is AutomationTaskRequest.Plan ->
-                when (val gate = ledger.plan(request.taskId, request.packageName, digest, request.steps)) {
+                when (val gate = ledger.plan(request.taskId, request.packageName, digest, request.steps).also {
+                    if (it is AutomationTaskGate.Proceed) automationTaskActionAt = 0L
+                }) {
                     is AutomationTaskGate.Proceed -> taskAccepted(gate, ledger.snapshot())
                     is AutomationTaskGate.Refused ->
                         taskFailure(gate.code, gate.message, ledger.snapshot(), gate.retryable)
@@ -1208,15 +1264,24 @@ class DeepSeekAccessibilityService : AccessibilityService() {
                         taskFailure(gate.code, gate.message, ledger.snapshot(), gate.retryable)
                 }
             is AutomationTaskRequest.Record ->
-                when (val result = ledger.record(request.stepId, request.outcome, SystemClock.elapsedRealtime())) {
-                    is AutomationTaskRecordResult.Accepted ->
-                        DeviceCommandResult(true, 0, AutomationTaskWire.done(result.snapshot), false, null)
-                    is AutomationTaskRecordResult.Refused ->
-                        taskFailure(result.code, result.message, result.snapshot, false)
+                ledger.record(request.stepId, request.attempt, request.outcome, SystemClock.elapsedRealtime()).let { snapshot ->
+                    if (snapshot.lastCode == AutomationTaskCodes.RECORD_INVALID) {
+                        taskFailure(
+                            AutomationTaskCodes.RECORD_INVALID,
+                            snapshot.lastMessage ?: "结果未匹配当前尝试，已忽略",
+                            snapshot,
+                            false,
+                        )
+                    } else {
+                        DeviceCommandResult(true, 0, AutomationTaskWire.done(snapshot), false, null)
+                    }
                 }
             is AutomationTaskRequest.Resume ->
-                when (val gate = ledger.resume(request.stepIds, digest)) {
-                    is AutomationTaskGate.Proceed -> taskAccepted(gate, ledger.snapshot())
+                when (val gate = ledger.resume(request.stepIds, facts)) {
+                    is AutomationTaskGate.Proceed -> {
+                        automationTaskActionAt = 0L
+                        taskAccepted(gate, ledger.snapshot())
+                    }
                     is AutomationTaskGate.Refused ->
                         taskFailure(gate.code, gate.message, ledger.snapshot(), gate.retryable)
                 }
@@ -1630,6 +1695,8 @@ class DeepSeekAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val ACTION_INTERVAL_MS = 350L
+        /** 动作触发的事件在此时间内视为目标应用的正常回执，不判作外部抢占。 */
+        private const val TASK_ACTION_EVENT_GRACE_MS = 5_000L
         private const val MAX_TREE_NODES = 120
         private const val MAX_TREE_DEPTH = 24
         private const val MAX_SENSITIVE_SCAN_NODES = 320
