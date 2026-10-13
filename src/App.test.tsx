@@ -166,7 +166,7 @@ describe('App conversation gate', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    fireEvent.click(screen.getByRole('button', { name: /^设备 Shell/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^设备 Shell 设备上的 Shell/ }))
     expect(await screen.findByRole('heading', { name: '终端' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('tab', { name: '设备 Shell' }))
     fireEvent.click(screen.getByRole('button', { name: '请求授权' }))

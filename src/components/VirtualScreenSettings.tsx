@@ -264,7 +264,7 @@ function frameAgeMillis(state: VirtualScreenState): number | null {
   return state.frameAgeMs
 }
 
-export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridge; onBack: () => void }) {
+export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridge; onBack?: () => void }) {
   const [settingsState, setSettingsState] = useState<SettingsLoadState>({ status: 'loading' })
   const [deviceState, setDeviceState] = useState<DeviceLoadState>({ status: 'loading' })
   // draft 是界面上正在编辑的那一份，baseline 是最后一次认为已经落盘的那一份。
@@ -582,6 +582,11 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
             <RefreshCw size={18} />
             {t('刷新')}
           </button>
+          {/*
+            独立路由已并进「自动化设置」页，这一页不再自带返回键；
+            只有外面显式给了 onBack（例如测试或未来的独立入口）才画。
+          */}
+          {onBack !== undefined && (
           <button
             className="icon-button"
             type="button"
@@ -592,6 +597,7 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
           >
             <ArrowLeft size={19} />
           </button>
+          )}
         </div>
       </div>
 

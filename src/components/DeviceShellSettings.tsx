@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ShieldCheck, TerminalSquare } from 'lucide-react'
+import { TerminalSquare } from 'lucide-react'
 import { t } from '../i18n'
 import type { RuntimeBridge } from '../platform/types'
 
-export function DeviceShellSettings({ bridge, disabled, onOpenVirtualScreen }: { bridge: RuntimeBridge; disabled: boolean; onOpenVirtualScreen: () => void }) {
+export function DeviceShellSettings({ bridge, disabled }: { bridge: RuntimeBridge; disabled: boolean }) {
   const [enabled, setEnabled] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -29,19 +29,6 @@ export function DeviceShellSettings({ bridge, disabled, onOpenVirtualScreen }: {
     </label>
     <p className="settings-note">{t('Shell 使用 Shizuku 的实际权限，不受无障碍应用白名单限制。命令和输出不写入诊断日志；需要返回给 AI 的内容会进入当前会话及所选模型服务。')}</p>
     <p className="settings-note"><strong>{t('写入、覆盖、删除会修改真实设备数据，请让 AI 只处理本次任务需要的文件。')}</strong></p>
-    {/* 入口改成跳到应用内的独立副屏设置页：原来这里会打开系统原生页面，
-        现在设置项（取帧档位、方向、分辨率、自动跟随）都在那个页面里，这里只负责跳转。 */}
-    <button type="button" disabled={disabled || !loaded || !enabled || saving} onClick={onOpenVirtualScreen}>{t('目标应用副屏设置')}</button>
-    <p className="settings-note">{t('在独立页面选择目标应用、屏幕方向、帧率和自动切换策略。启动后，页面预览与悬浮窗只显示目标应用画面。需要 Shizuku 和 Android 10 或更高版本。')}</p>
     {failed && <p role="alert">{t('无法读取或保存 AI Shell 授权状态')} <button type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
-    {/* 免责说明：只追加一小块，不动这个子区块的既有结构与文案。 */}
-    <div className="settings-subsection" aria-labelledby="accessibility-disclaimer">
-      <div className="section-title"><span className="section-icon"><ShieldCheck size={19} /></span>
-        <div><h3 id="accessibility-disclaimer">{t('免责说明')}</h3></div>
-      </div>
-      <p className="settings-note">{t('无障碍自动化是你自行开启、自行选择目标应用的能力；请只对自己有权操作的应用启用。')}</p>
-      <p className="settings-note">{t('自动化可能误点或误读界面，涉及支付、验证码与隐私信息的页面请自行确认，由此产生的后果由使用者承担。')}</p>
-      <p className="settings-note">{t('该能力只在本机生效：服务不做后台监听，也不批量上传界面；只有你让 AI 执行操作时，读取到的界面节点才会按需进入当前会话与所选模型服务。')}</p>
-    </div>
   </div>
 }

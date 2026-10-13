@@ -373,7 +373,7 @@ describe('§5.6-B 渲染测量', () => {
     await openSettingsPage('模型与密钥')
     profile.reset()
 
-    for (const name of ['后台', '主题', 'Shizuku 与设备 Shell', '诊断与日志']) {
+    for (const name of ['后台', '主题', '设备 Shell 设置', '诊断与日志']) {
       fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
       await screen.findByRole('heading', { name: '设置' })
       await openSettingsPage(name)

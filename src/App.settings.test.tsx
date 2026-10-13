@@ -433,7 +433,7 @@ describe('设置草稿与未保存的输入', () => {
 
     // 终端不属于设置区：离开即丢弃草稿，未保存的输入与内存里的密钥都不再保留。
     await backToSettingsHome()
-    fireEvent.click(screen.getByRole('button', { name: /^设备 Shell/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^设备 Shell 设备上的 Shell/ }))
     await screen.findByRole('heading', { name: '终端' })
     await backToSettingsHome()
 

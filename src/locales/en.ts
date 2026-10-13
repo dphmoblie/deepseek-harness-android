@@ -1269,6 +1269,11 @@ export const english: Readonly<Record<string, string>> = {
   "当前显示 {0} / {1}（已加载）": "Showing {0} / {1} (loaded)",
   // 无障碍自动化免责说明（与中文文案一一对应）。
   "免责说明": "Disclaimer",
+  "设备 Shell 设置": "Device Shell settings",
+  "Shizuku 授权与 AI Shell": "Shizuku permission and AI Shell",
+  "自动化设置": "Automation settings",
+  "无障碍应用自动化与副屏": "Accessibility automation and virtual display",
+  "自动化可能误点或误读界面，请只对自己有权操作的应用启用。": "Automation may tap or read the screen incorrectly; enable it only for apps you are entitled to operate.",
   "无障碍自动化是你自行开启、自行选择目标应用的能力；请只对自己有权操作的应用启用。": "Accessibility automation is a capability you enable yourself and point at apps you choose; enable it only for apps you are entitled to operate.",
   "自动化可能误点或误读界面，涉及支付、验证码与隐私信息的页面请自行确认，由此产生的后果由使用者承担。": "Automation may tap or read the screen incorrectly; verify pages that involve payment, verification codes or private information yourself. You bear the consequences of using it.",
   "该能力只在本机生效：服务不做后台监听，也不批量上传界面；只有你让 AI 执行操作时，读取到的界面节点才会按需进入当前会话与所选模型服务。": "This capability runs on your device only: the service does not listen in the background or bulk-upload screen content. Only when you have the AI act does the screen content it reads go to the current session and the model service you selected.",

@@ -153,9 +153,9 @@ type AppView =
   | 'settings-models'
   | 'settings-runtime'
   | 'settings-terminal'
-  | 'settings-shizuku'
+  | 'settings-device-shell'
   | 'settings-diagnostics'
-  | 'settings-virtual-screen'
+  | 'settings-automation'
   | 'terminal'
   | 'environment'
   | 'plugins'
@@ -163,17 +163,18 @@ type AppView =
   | 'files'
 
 /** 设置二级页：把原先的单页设置按功能分类，避免所有选项挤在一屏里。 */
-type SettingsPage = 'models' | 'runtime' | 'terminal' | 'shizuku' | 'diagnostics'
+type SettingsPage = 'models' | 'runtime' | 'terminal' | 'device-shell' | 'automation' | 'diagnostics'
 
 const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView }> = {
   models: { title: '模型与密钥', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
   runtime: { title: '后台', hint: '运行时来源、后台保持、悬浮球与前台服务', view: 'settings-runtime' },
   terminal: { title: '主题', hint: '字号、卡片颜色与透明度、图片与视频背景', view: 'settings-terminal' },
-  shizuku: { title: 'Shizuku 与设备 Shell', hint: 'Shizuku 授权、AI Shell、无障碍白名单与副屏', view: 'settings-shizuku' },
+  'device-shell': { title: '设备 Shell 设置', hint: 'Shizuku 授权与 AI Shell', view: 'settings-device-shell' },
+  automation: { title: '自动化设置', hint: '无障碍应用自动化与副屏', view: 'settings-automation' },
   diagnostics: { title: '诊断与日志', hint: '采集开关、保留天数、运行日志与导出', view: 'settings-diagnostics' },
 }
 
-const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'shizuku', 'diagnostics']
+const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'device-shell', 'automation', 'diagnostics']
 
 function settingsPageOf(view: AppView): SettingsPage | null {
   const entry = SETTINGS_PAGES.find(page => SETTINGS_PAGE_META[page].view === view)
@@ -181,14 +182,13 @@ function settingsPageOf(view: AppView): SettingsPage | null {
 }
 
 /**
- * 是否属于「设置区」（设置首页、五个二级页与副屏独立页）。
+ * 是否属于「设置区」（设置首页与五个二级页）。
  *
  * 设置草稿的作用范围就是它：区内切页共享同一份未保存内容，离开设置区即丢弃。
- * 副屏页有自己的读写生命周期，但它也是从设置里进去的，所以留在区内，
- * 免得从 Shizuku 页跳过去时把用户还没保存的设置草稿丢掉。
+ * 副屏设置并进「自动化设置」页之后，设置区内不再有自带读写生命周期的独立页。
  */
 function isSettingsView(view: AppView): boolean {
-  return view === 'settings' || view === 'settings-virtual-screen' || settingsPageOf(view) !== null
+  return view === 'settings' || settingsPageOf(view) !== null
 }
 
 /** 按用户用途分类；分类只影响入口展示，不改动设置草稿。 */
@@ -302,12 +302,20 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     icon: <SquareTerminal size={20} />,
   },
   {
-    id: 'shizuku',
+    id: 'device-shell',
     group: 'device',
-    title: 'Shizuku 与设备 Shell',
-    hint: 'Shizuku 授权、AI Shell、无障碍白名单与副屏',
-    target: { kind: 'page', page: 'shizuku' },
+    title: '设备 Shell 设置',
+    hint: 'Shizuku 授权与 AI Shell',
+    target: { kind: 'page', page: 'device-shell' },
     icon: <Smartphone size={20} />,
+  },
+  {
+    id: 'automation',
+    group: 'device',
+    title: '自动化设置',
+    hint: '无障碍应用自动化与副屏',
+    target: { kind: 'page', page: 'automation' },
+    icon: <Bot size={20} />,
   },
   {
     id: 'diagnostics',
@@ -327,9 +335,9 @@ const APP_VIEWS: AppView[] = [
   'settings-models',
   'settings-runtime',
   'settings-terminal',
-  'settings-shizuku',
+  'settings-device-shell',
   'settings-diagnostics',
-  'settings-virtual-screen',
+  'settings-automation',
   'terminal',
   'environment',
   'plugins',
@@ -3559,8 +3567,6 @@ interface SettingsScreenProps {
   /** 跳转到系统「显示在其他应用上层」设置页；权限只能由用户手动开启。 */
   onOpenOverlaySettings: () => void
   onOpenShizuku: () => void
-  /** 跳转到副屏的独立设置页；副屏的读写有自己的生命周期，不走设置草稿那套。 */
-  onOpenVirtualScreen: () => void
   onOpenAccessibilitySettings: () => void
   /**
    * 保存白名单。已设置验证密码时**必须**带上 `password`：
@@ -3592,7 +3598,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenVirtualScreen, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
   /** 总开关的一次操作还在路上：按钮在这期间全部禁用，避免连点出两次动作。 */
@@ -3689,7 +3695,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     setWhitelistPassword('')
   }
   useEffect(() => {
-    if (page !== 'shizuku') return
+    if (page !== 'automation') return
     setAccessibilityDraft(accessibility.allowedPackages.join('\n'))
     setWhitelistEnabledDraft(accessibility.whitelistEnabled ?? true)
     // 每次回到这一页都从空白开始：密码是临时输入，不回填、不残留。
@@ -3713,7 +3719,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
       .catch(() => setAutomationRunsStatus('failed'))
   }, [])
   useEffect(() => {
-    if (page !== 'shizuku') return
+    if (page !== 'automation') return
     // 总开关一变就重读：刚按下「开始」时最该看到的就是它是否真的连上了服务。
     loadAutomationRuns()
   }, [accessibility.automationRuntime, accessibility.serviceStatus, loadAutomationRuns, page])
@@ -3809,7 +3815,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   }, [loadAutomationAppConfig, loadAutomationRules])
   useEffect(() => {
     // 刚进这一页且白名单里已有目标应用时，先把第一个包的两份读数读出来，省掉一次点击。
-    if (page !== 'shizuku' || rulesPackage !== '') return
+    if (page !== 'automation' || rulesPackage !== '') return
     const first = accessibility.allowedPackages.find(name => !accessibility.alwaysAllowedPackages.includes(name))
     if (first !== undefined) selectRulesPackage(first)
   }, [accessibility.alwaysAllowedPackages, accessibility.allowedPackages, page, rulesPackage, selectRulesPackage])
@@ -4375,7 +4381,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
         )}
 
-        {page === 'shizuku' && (
+        {page === 'device-shell' && (
         <section className="settings-section" aria-labelledby="shizuku-settings">
           <div className="section-title section-title-action">
             <span className="section-icon"><Smartphone size={19} /></span>
@@ -4402,7 +4408,16 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           <p className="settings-note">
             {t("Shizuku 提供设备命令和文件操作能力，权限取决于其启动模式。未安装、未授权或断开时，设备工具不可用，不影响 Ubuntu 终端与 Harness。")}
           </p>
-          <DeviceShellSettings bridge={runtimeBridge} disabled={busy !== null} onOpenVirtualScreen={onOpenVirtualScreen} />
+          <DeviceShellSettings bridge={runtimeBridge} disabled={busy !== null} />
+        </section>
+        )}
+
+        {/*
+          自动化设置：无障碍与副屏是同一条能力的两条腿（谁去读界面、画面从哪来），
+          所以合并进同一页，不再各占一个入口。
+        */}
+        {page === 'automation' && (
+        <>
           <div className="settings-subsection" aria-labelledby="accessibility-automation-settings">
             <div className="section-title section-title-action">
               <span className="section-icon"><Bot size={19} /></span>
@@ -4453,13 +4468,9 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 </button>
               )}
               {/*
-                回看入口常驻：确认过之后不再弹说明，但「我当初到底同意了什么」随时要能查。
-                它只打开同一段文字，不改总开关、不写任何状态。
+                回看入口不在这里：免责说明在这一页末尾只占一条（见页面底部），
+                免得同一条说明有两个入口。
               */}
-              <button className="button button-secondary" type="button" disabled={busy !== null}
-                onClick={() => setAutomationDisclaimer({ mode: 'read' })}>
-                <ShieldCheck size={18} />{t("查看完整免责说明")}
-              </button>
             </div>
             {/*
               免责说明弹窗：确认模式由「开始 / 继续」触发，回看模式由上面的入口触发。
@@ -4836,7 +4847,26 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               {passwordMessage !== null && <p className="settings-note" role="alert">{passwordMessage}</p>}
             </div>
           </div>
-        </section>
+          {/*
+            副屏是自动化的第二条腿：取帧档位、方向、分辨率与跟随策略都在这一页里，
+            不再另开独立路由，免得「自动化设置」还要再跳一次才看得到画面相关参数。
+          */}
+          <VirtualScreenSettings bridge={runtimeBridge} />
+          {/*
+            免责说明只占一条：标题 + 一句话，详情在弹窗里（同一段文字，不改任何状态）。
+            确认过之后不再自动弹，但「我当初到底同意了什么」随时要能查。
+          */}
+          <div className="settings-subsection" aria-labelledby="automation-disclaimer">
+            <div className="section-title section-title-action">
+              <span className="section-icon"><ShieldCheck size={19} /></span>
+              <div><h3 id="automation-disclaimer">{t("免责说明")}</h3><p>{t("自动化可能误点或误读界面，请只对自己有权操作的应用启用。")}</p></div>
+              <button className="button button-secondary" type="button" disabled={busy !== null}
+                onClick={() => setAutomationDisclaimer({ mode: 'read' })}>
+                <ShieldCheck size={18} />{t("查看完整免责说明")}
+              </button>
+            </div>
+          </div>
+        </>
         )}
 
         {page === 'diagnostics' && (
@@ -6412,10 +6442,6 @@ export function App() {
         return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
       case 'plugins':
         return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
-      /* 副屏的独立设置页：不放进 SETTINGS_PAGES，也不吃 settingsReadStatus 与设置草稿那两道门，
-         它自己读原生设置与运行状态，返回时回到刚才那一页（入口通常在 Shizuku 页）。 */
-      case 'settings-virtual-screen':
-        return <VirtualScreenSettings bridge={runtimeBridge} onBack={() => backToView('settings-shizuku')} />
       case 'environment':
         return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} onShareWorkspace={shareWorkspace} onListFiles={listWorkspaceFiles} workspaceFiles={workspaceFiles} onShareFile={shareWorkspaceFile} onOpenFile={openWorkspaceFile} onDeleteFile={deleteWorkspaceFile} />
       case 'versions':
@@ -6451,7 +6477,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenVirtualScreen={() => setActiveView('settings-virtual-screen')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()
