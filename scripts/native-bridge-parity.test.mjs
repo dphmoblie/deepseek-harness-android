@@ -100,6 +100,15 @@ test('浏览器模拟桥与原生桥受同一个 RuntimeBridge 类型约束', as
   assert.match(await source(NATIVE), /export const runtimeBridge: RuntimeBridge =/u)
 })
 
+test('每应用参数原生桥按对象契约读取 packageName', async () => {
+  const native = await source(NATIVE)
+  assert.match(
+    native,
+    /getAccessibilityAutomationAppConfig:\s*\(\{\s*packageName\s*\}\)\s*=>/u,
+    '原生桥必须解构 { packageName }，不能把整个 options 对象当成包名校验',
+  )
+})
+
 // 插件操作名是另一处「一边改名、另一边不报错」的接缝：TS 白名单放行的操作，原生必须有对应分支，
 // 否则用户点下去只会拿到 PLUGIN_INPUT_INVALID；反过来原生支持了某操作却忘了放行，功能就永远用不上
 // （`repair` 就属于这一类：原生侧先有自愈入口，后来才接到界面上）。

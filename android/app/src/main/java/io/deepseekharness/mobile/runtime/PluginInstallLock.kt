@@ -164,5 +164,8 @@ object PluginInstallLock {
         return resolved == root || resolved.path.startsWith(root.path + File.separator)
     }
 
-    private fun canonical(file: File): File? = try { file.canonicalFile } catch (_: Exception) { null }
+    // canonicalFile 在部分 Windows/JVM 组合下不会解析目录符号链接；toRealPath 才能
+    // 可靠地把越界链接解析到真实目标。核对路径只接受已存在的目录，因此失败时返回 null
+    // 正好落到「不做断言」或「计缺失」的保守分支。
+    private fun canonical(file: File): File? = try { file.toPath().toRealPath().toFile() } catch (_: Exception) { null }
 }

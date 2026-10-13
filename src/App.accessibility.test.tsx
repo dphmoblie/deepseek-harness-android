@@ -4,6 +4,7 @@ import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES } from './platform/types'
 import type {
   AccessibilityAutomationAppConfig,
   AccessibilityAutomationAppConfigDetail,
+  AccessibilityAutomationRules,
   AccessibilityAutomationConfigCorrupt,
 } from './platform/types'
 import { AUTOMATION_DISCLAIMER_STORAGE_KEY } from './accessibilityDisclaimer'
@@ -750,7 +751,7 @@ describe(`每应用自动化参数`, () => {
   }
 
   /** 规则读数：这一组只关心参数，规则给一份空的就够。 */
-  function emptyRules(packageName: string) {
+  function emptyRules(packageName: string): AccessibilityAutomationRules {
     return { packageName, allowed: true, corrupt: null, rules: [] }
   }
 
@@ -785,14 +786,69 @@ describe(`每应用自动化参数`, () => {
   }
 
   /** 进无障碍控制台：白名单里两个目标应用，进页面自动读第一个的规则与参数。 */
-  async function openConsole(): Promise<void> {
-    bridge.getAccessibilityAutomationRules.mockImplementation((packageName: string) =>
-      Promise.resolve(emptyRules(packageName)))
+  async function openConsole(useDefaultRuleReader = true): Promise<void> {
+    if (useDefaultRuleReader) {
+      bridge.getAccessibilityAutomationRules.mockImplementation((packageName: string) =>
+        Promise.resolve(emptyRules(packageName)))
+    }
     bridge.getAccessibilityAutomationState.mockResolvedValue(CONFIG_STATE)
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
     await openSettingsPage('Shizuku 与设备 Shell')
   }
+
+  it('快速换应用时迟到的旧规则与参数读数不会覆盖当前应用', async () => {
+    const deferred = <T,>() => {
+      let resolve!: (value: T) => void
+      const promise = new Promise<T>(resolver => { resolve = resolver })
+      return { promise, resolve }
+    }
+    const ruleRequests: Record<string, Array<ReturnType<typeof deferred<AccessibilityAutomationRules>>>> = {}
+    const configRequests: Record<string, Array<ReturnType<typeof deferred<AccessibilityAutomationAppConfigDetail>>>> = {}
+    bridge.getAccessibilityAutomationRules.mockImplementation((packageName: string) => {
+      const request = deferred<AccessibilityAutomationRules>()
+      ;(ruleRequests[packageName] ??= []).push(request)
+      return request.promise
+    })
+    bridge.getAccessibilityAutomationAppConfig.mockImplementation((request: { packageName: string }) => {
+      const pending = deferred<AccessibilityAutomationAppConfigDetail>()
+      ;(configRequests[request.packageName] ??= []).push(pending)
+      return pending.promise
+    })
+    await openConsole(false)
+    await waitFor(() => expect(ruleRequests['com.example.reader']?.length ?? 0).toBeGreaterThan(0))
+    const readerRuleRequests = ruleRequests['com.example.reader']
+    const readerConfigRequests = configRequests['com.example.reader']
+
+    fireEvent.click(screen.getByRole('button', { name: 'com.example.writer' }))
+    await waitFor(() => expect(ruleRequests['com.example.writer']?.length ?? 0).toBeGreaterThan(0))
+    ruleRequests['com.example.writer'].forEach(request => request.resolve(emptyRules('com.example.writer')))
+    configRequests['com.example.writer'].forEach(request => request.resolve(appConfigFor({
+      packageName: 'com.example.writer',
+      config: { defaultMaxActions: 7 },
+    })))
+    expect(await screen.findByTestId('automation-app-config-effective')).toHaveTextContent('默认动作上限 7')
+
+    // A 的两个慢响应最后才回来：它们不得把 B 的表单或规则卡片改回去。
+    readerConfigRequests.forEach(request => request.resolve(appConfigFor({
+      packageName: 'com.example.reader',
+      config: { defaultMaxActions: 99 },
+    })))
+    readerRuleRequests.forEach(request => request.resolve({
+      ...emptyRules('com.example.reader'),
+      rules: [{
+        id: 'stale-reader-rule',
+        enabled: true,
+        actionKind: 'click',
+        selectorCount: 1,
+        maxActions: 1,
+        actionCoolDownMs: 0,
+      }],
+    }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(screen.getByTestId('automation-app-config-effective')).toHaveTextContent('默认动作上限 7')
+    expect(screen.queryByText('stale-reader-rule')).not.toBeInTheDocument()
+  })
 
   it(`选包后显示读回的参数，并预填进参数表单`, async () => {
     readAppConfig()

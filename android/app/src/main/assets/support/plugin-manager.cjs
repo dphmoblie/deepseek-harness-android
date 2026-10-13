@@ -692,7 +692,13 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
   function versionDirectory(id, directory) {
     if (typeof directory !== 'string' || directory.length === 0) return null
     const parts = path.relative(home, directory).split(path.sep)
-    if (parts.length !== 4 || parts[0] !== 'versions' || parts[2] !== 'node_modules' || parts[3] !== id) return null
+    // 作用域包会多一段：`node_modules/@scope/tool`。按包名拆段比较，
+    // 不能用固定的四段形状，否则账本会把 transaction 静默记成 null。
+    const packageParts = id.split('/')
+    if (parts.length !== 3 + packageParts.length
+      || parts[0] !== 'versions'
+      || parts[2] !== 'node_modules'
+      || parts.slice(3).join('/') !== packageParts.join('/')) return null
     if (!TRANSACTION_ID.test(parts[1])) return null
     const version = versionOf(directory)
     return version === null ? null : { version, transaction: parts[1] }

@@ -3722,6 +3722,12 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   /** 参数读取 / 写入失败的原因；桥回来的文案原样展示，不吞也不改写。 */
   const [automationAppConfigError, setAutomationAppConfigError] = useState<string | null>(null)
   /**
+   * 规则与每应用参数的读取属于同一次「选包」操作。代次和包名都放进 ref，
+   * 这样换包后旧请求即使晚回来，也不能把旧应用的载荷写进当前表单。
+   */
+  const automationReadGeneration = useRef(0)
+  const automationReadPackage = useRef('')
+  /**
    * 保存白名单时要输入的验证密码。
    *
    * 它**只活在这个组件里**：验证密码是原生侧的事，前端既不持久化、也不放进设置草稿，
@@ -3833,16 +3839,19 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    * 与运行记录分开：规则是落盘的、跨进程重启还在，所以这里读不到的原因只有三种——
    * 没选包、桥调用失败、数据损坏（`corrupt` 非空，原生已把它清掉）。三种都要如实显示。
    */
-  const loadAutomationRules = useCallback((packageName: string) => {
+  const loadAutomationRules = useCallback((packageName: string, generation: number) => {
     if (packageName === '') return
-    setRulesPackage(packageName)
     setAutomationRulesStatus('loading')
     void runtimeBridge.getAccessibilityAutomationRules(packageName)
       .then(result => {
+        if (automationReadGeneration.current !== generation
+          || automationReadPackage.current !== packageName) return
+        if (result.packageName !== packageName) throw new Error('规则返回的应用与请求不一致')
         setAutomationRules(result)
         setAutomationRulesStatus('idle')
       })
       .catch(() => {
+        if (automationReadGeneration.current !== generation || automationReadPackage.current !== packageName) return
         setAutomationRules(null)
         setAutomationRulesStatus('failed')
       })
@@ -3854,17 +3863,19 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    * 应用」的附属读数，换包必须跟着规则一起换。开读前先清掉上一份读数——参数表单在换包时会按 `key`
    * 重建，留着上一份读数就等于拿上一个应用的数字给新表单当初始值，那正是这里最不能犯的错。
    */
-  const loadAutomationAppConfig = useCallback((packageName: string) => {
+  const loadAutomationAppConfig = useCallback((packageName: string, generation: number) => {
     if (packageName === '') return
-    setAutomationAppConfig(null)
     setAutomationAppConfigStatus('loading')
-    setAutomationAppConfigError(null)
     void runtimeBridge.getAccessibilityAutomationAppConfig({ packageName })
       .then(result => {
+        if (automationReadGeneration.current !== generation
+          || automationReadPackage.current !== packageName) return
+        if (result.packageName !== packageName) throw new Error('参数返回的应用与请求不一致')
         setAutomationAppConfig(result)
         setAutomationAppConfigStatus('idle')
       })
       .catch(error => {
+        if (automationReadGeneration.current !== generation || automationReadPackage.current !== packageName) return
         setAutomationAppConfig(null)
         setAutomationAppConfigStatus('failed')
         setAutomationAppConfigError(errorMessage(error))
@@ -3878,12 +3889,21 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    */
   const selectRulesPackage = useCallback((packageName: string): void => {
     if (packageName === '') return
-    loadAutomationRules(packageName)
-    loadAutomationAppConfig(packageName)
+    const generation = automationReadGeneration.current + 1
+    automationReadGeneration.current = generation
+    automationReadPackage.current = packageName
+    setRulesPackage(packageName)
+    setAutomationRules(null)
+    setAutomationRulesStatus('loading')
+    setAutomationAppConfig(null)
+    setAutomationAppConfigStatus('loading')
+    setAutomationAppConfigError(null)
+    loadAutomationRules(packageName, generation)
+    loadAutomationAppConfig(packageName, generation)
   }, [loadAutomationAppConfig, loadAutomationRules])
   useEffect(() => {
     // 刚进这一页且白名单里已有目标应用时，先把第一个包的两份读数读出来，省掉一次点击。
-    if (page !== 'shizuku' || rulesPackage !== '') return
+    if (page !== 'shizuku' || rulesPackage !== '' || automationReadPackage.current !== '') return
     const first = accessibility.allowedPackages.find(name => !accessibility.alwaysAllowedPackages.includes(name))
     if (first !== undefined) selectRulesPackage(first)
   }, [accessibility.alwaysAllowedPackages, accessibility.allowedPackages, page, rulesPackage, selectRulesPackage])
@@ -3895,7 +3915,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     void onSetAutomationRuleEnabled({ packageName: rulesPackage, ruleId, enabled })
       .finally(() => {
         setAutomationRulePending(null)
-        loadAutomationRules(rulesPackage)
+        selectRulesPackage(rulesPackage)
       })
   }
 
@@ -3906,7 +3926,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    * 免得两个写操作同时在途：它们返回的都是整包读数，后回来的那份说了算，先回来的写入看起来就像没发生。
    */
   const automationRuleLocked = busy !== null || automationRuleWriting !== null || automationRuleDraft !== null
-    || automationRulePending !== null || automationRuleConfirmDelete !== null
+    || automationRulePending !== null || automationRuleConfirmDelete !== null || automationAppConfigWriting
 
   /**
    * 打开「新建规则」表单。
@@ -3968,6 +3988,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
       rule,
     })
       .then(result => {
+        if (automationReadPackage.current !== rulesPackage) return
+        if (result.packageName !== rulesPackage) throw new Error('规则返回的应用与请求不一致')
         setAutomationRules(result)
         setAutomationRuleDraft(null)
       })
@@ -3987,6 +4009,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     setAutomationRuleError(null)
     void runtimeBridge.deleteAccessibilityAutomationRule({ packageName: rulesPackage, ruleId })
       .then(result => {
+        if (automationReadPackage.current !== rulesPackage) return
+        if (result.packageName !== rulesPackage) throw new Error('规则返回的应用与请求不一致')
         setAutomationRules(result)
         setAutomationRuleConfirmDelete(null)
       })
@@ -4007,6 +4031,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     setAutomationAppConfigError(null)
     void runtimeBridge.setAccessibilityAutomationAppConfig({ packageName: rulesPackage, ...config })
       .then(result => {
+        if (automationReadPackage.current !== rulesPackage) return
+        if (result.packageName !== rulesPackage) throw new Error('参数返回的应用与请求不一致')
         setAutomationAppConfig(result)
         setAutomationAppConfigStatus('idle')
       })
@@ -4587,14 +4613,14 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 <div><h3 id="accessibility-automation-rules">{t("自动化规则")}</h3><p>{t("按应用查看，逐条启用或停用")}</p></div>
                 {rulesPackage !== '' && (
                   <button className="button button-secondary" type="button"
-                    onClick={() => selectRulesPackage(rulesPackage)} disabled={automationRulesStatus === 'loading'}>
+                    onClick={() => selectRulesPackage(rulesPackage)} disabled={automationRuleLocked || automationRulesStatus === 'loading'}>
                     {automationRulesStatus === 'loading' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("刷新")}
                   </button>
                 )}
                 {/* 新建入口不依赖「已经有没有规则」：一条规则都没有时它才是最该看到的按钮。 */}
                 {rulesPackage !== '' && (
                   <button className="button button-secondary" type="button" data-testid="automation-rule-create"
-                    onClick={startCreateRule} disabled={automationRuleLocked}>
+                    onClick={startCreateRule} disabled={automationRuleLocked || automationRulesStatus === 'loading'}>
                     <Plus size={18} />{t("新建规则")}
                   </button>
                 )}
@@ -4746,7 +4772,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                   locked={automationRuleLocked}
                   error={automationAppConfigError}
                   onSave={saveAutomationAppConfig}
-                  onReload={() => loadAutomationAppConfig(rulesPackage)}
+                  onReload={() => selectRulesPackage(rulesPackage)}
                 />
               )}
             </div>

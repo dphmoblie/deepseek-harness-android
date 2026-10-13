@@ -2,6 +2,7 @@ package io.deepseekharness.mobile.accessibility
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.math.BigDecimal
 
 /**
  * `automationTask` 设备桥命令的入参形状。
@@ -160,15 +161,26 @@ internal object AutomationTaskWire {
                 ?: return reject(AutomationTaskCodes.PARAM_INVALID, "第 ${index + 1} 个步骤缺少 id")
             val action = stringOrNull(raw, "action")
                 ?: return reject(AutomationTaskCodes.PARAM_INVALID, "步骤 $id 缺少 action")
-            val timeout = longOrNull(raw, "timeoutMs") ?: DEFAULT_TIMEOUT_MS
-            val attempts = longOrNull(raw, "maxAttempts")?.toInt() ?: DEFAULT_MAX_ATTEMPTS
+            val timeout = when {
+                !raw.has("timeoutMs") -> DEFAULT_TIMEOUT_MS
+                else -> longOrNull(raw, "timeoutMs")
+                    ?: return reject(AutomationTaskCodes.PARAM_INVALID, "步骤 $id 的 timeoutMs 必须是整数")
+            }
+            val attemptsLong = when {
+                !raw.has("maxAttempts") -> DEFAULT_MAX_ATTEMPTS.toLong()
+                else -> longOrNull(raw, "maxAttempts")
+                    ?: return reject(AutomationTaskCodes.PARAM_INVALID, "步骤 $id 的 maxAttempts 必须是整数")
+            }
+            if (attemptsLong !in Int.MIN_VALUE.toLong()..Int.MAX_VALUE.toLong()) {
+                return reject(AutomationTaskCodes.PARAM_INVALID, "步骤 $id 的 maxAttempts 超出整数范围")
+            }
             steps += AutomationTaskStepSpec(
                 id = id,
                 action = action,
                 target = stringOrNull(raw, "target").orEmpty(),
                 verify = stringOrNull(raw, "verify") ?: AutomationTaskActions.defaultVerify(action),
                 timeoutMs = timeout,
-                maxAttempts = attempts,
+                maxAttempts = attemptsLong.toInt(),
             )
         }
         return AutomationTaskRequest.Plan(taskId, packageName, steps)
@@ -248,7 +260,9 @@ internal object AutomationTaskWire {
 
     private fun longOrNull(json: JSONObject, key: String): Long? =
         when (val value = json.opt(key)) {
-            is Number -> value.toLong()
+            // JSON schema 的 integer 不是「把小数截断后的 long」：5000.9 与 1.9 都必须拒绝。
+            // 精确转换既支持 5000.0 这样的整数值，也拒绝小数、溢出与非有限数。
+            is Number -> runCatching { BigDecimal(value.toString()).longValueExact() }.getOrNull()
             else -> null
         }
 

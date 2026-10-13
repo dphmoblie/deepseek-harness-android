@@ -433,7 +433,7 @@ function createNativeBridge(): RuntimeBridge {
       .then(validateAccessibilityAutomationRules),
     // 每应用参数：读是只读（坏数据也不抛错，原生按「已暂停」返回并带 corrupt），写是整条替换。
     // 两边都先自检包名——写参数的路径上「包名写错」与写规则一样代价很大。
-    getAccessibilityAutomationAppConfig: packageName => Promise.resolve()
+    getAccessibilityAutomationAppConfig: ({ packageName }) => Promise.resolve()
       .then(() => ({ owner: assertAccessibilityPackageName(packageName) }))
       .then(({ owner }) =>
         NativeRuntime.getAccessibilityAutomationAppConfig({ packageName: owner }).then(value =>

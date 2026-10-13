@@ -45,6 +45,7 @@ internal object AutomationTaskCodes {
     const val STEP_UNKNOWN = "AUTOMATION_TASK_STEP_UNKNOWN"
     const val STEP_OUT_OF_ORDER = "AUTOMATION_TASK_STEP_OUT_OF_ORDER"
     const val STEP_ALREADY_SETTLED = "AUTOMATION_TASK_STEP_ALREADY_SETTLED"
+    const val TASK_NOT_BLOCKED = "AUTOMATION_TASK_NOT_BLOCKED"
     const val CANCELLED = "AUTOMATION_TASK_CANCELLED"
 
     // 场景类拒绝（重发没有意义，换时机/换配置才有）
@@ -222,6 +223,18 @@ internal sealed interface AutomationTaskGate {
     data class Refused(val code: String, val message: String, val retryable: Boolean) : AutomationTaskGate
 }
 
+/** `record` 的受控结果：迟到、重复或找不到步骤的回执不能伪装成成功。 */
+internal sealed interface AutomationTaskRecordResult {
+    val snapshot: AutomationTaskSnapshot
+
+    data class Accepted(override val snapshot: AutomationTaskSnapshot) : AutomationTaskRecordResult
+    data class Refused(
+        val code: String,
+        val message: String,
+        override val snapshot: AutomationTaskSnapshot,
+    ) : AutomationTaskRecordResult
+}
+
 /** 对外快照（桥接层直接序列化它，不另抄一份字段）。 */
 internal data class AutomationTaskSnapshot(
     val taskId: String,
@@ -307,6 +320,11 @@ internal class AutomationTaskLedger {
             // 幂等：同一步重复提交不是错误，而是**明确不加执行**（调用方拿返回的状态自己判断）。
             return refuse(AutomationTaskCodes.STEP_ALREADY_SETTLED, "这一步已经成功，不再执行", false)
         }
+        // `PENDING` 同时表示「尚未开始」和「已经 gate、正在等待动作回执」。
+        // 后一种情况必须挡住，否则两个并发调用会重复发出同一步并覆盖窗口指纹。
+        if (step.status == AutomationTaskStepStatus.PENDING && step.startedAtMs != null) {
+            return refuse(AutomationTaskCodes.BUSY, "这一步已经在执行，等待当前回执", false)
+        }
         val firstPending = steps.indexOfFirst { it.status == AutomationTaskStepStatus.PENDING }
         if (step.status == AutomationTaskStepStatus.UNKNOWN) {
             // 结果不确定的一步：**不重发**，也**不算完成**。调用方要么确认现场后收口，要么重新规划。
@@ -367,11 +385,24 @@ internal class AutomationTaskLedger {
      * | 成功且通过校验 | `ok` |
      */
     @Synchronized
-    fun record(stepId: String, outcome: AutomationTaskStepOutcome, nowMs: Long): AutomationTaskSnapshot {
+    fun record(stepId: String, outcome: AutomationTaskStepOutcome, nowMs: Long): AutomationTaskRecordResult {
         val index = steps.indexOfFirst { it.id == stepId }
-        if (index < 0) return snapshot()
+        if (index < 0) {
+            return AutomationTaskRecordResult.Refused(
+                AutomationTaskCodes.STEP_UNKNOWN,
+                "任务里没有这个步骤，不能记账",
+                snapshot(),
+            )
+        }
         val step = steps[index]
-        val elapsed = step.startedAtMs?.let { (nowMs - it).coerceAtLeast(0) } ?: 0
+        if (step.status != AutomationTaskStepStatus.PENDING || step.startedAtMs == null) {
+            return AutomationTaskRecordResult.Refused(
+                AutomationTaskCodes.RECORD_INVALID,
+                "这一步没有在途尝试，拒绝迟到或重复的 record",
+                snapshot(),
+            )
+        }
+        val elapsed = (nowMs - step.startedAtMs).coerceAtLeast(0)
         val settled = classify(step, outcome).copy(elapsedMs = elapsed, startedAtMs = null)
         steps[index] = settled
         lastCode = settled.code
@@ -383,7 +414,7 @@ internal class AutomationTaskLedger {
             // 还有未收口的步骤：任务继续挂着，调用方可以接着走下一步、重试可重试的那一步，或者取消。
             status = AutomationTaskStatus.RUNNING
         }
-        return snapshot()
+        return AutomationTaskRecordResult.Accepted(snapshot())
     }
 
     /** 取消：未收口的步骤记 `skipped` + [AutomationTaskCodes.CANCELLED]。 */
@@ -409,6 +440,9 @@ internal class AutomationTaskLedger {
     fun resume(stepIds: List<String>, windowDigest: String): AutomationTaskGate {
         if (taskId == null) return refuse(AutomationTaskCodes.NOT_PLANNED, "还没有任务：先提交计划", false)
         if (steps.map { it.id } != stepIds) return invalid("恢复时的步骤列表与原计划不一致")
+        if (status != AutomationTaskStatus.BLOCKED) {
+            return refuse(AutomationTaskCodes.TASK_NOT_BLOCKED, "只有被阻塞的任务才能恢复", false)
+        }
         digest = windowDigest
         status = AutomationTaskStatus.RUNNING
         lastCode = null

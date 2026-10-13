@@ -1234,6 +1234,30 @@ test('版本账本如实登记包名、解析到的版本、事务目录与来�
   assert.equal(JSON.stringify(saved).includes(root), false)
 })
 
+test('作用域插件的版本账本保留 transaction，目录丢失时不会静默变成无事务包', t => {
+  const { manager, root, profile } = fixture(t, pluginInstaller('@scope/tool', '2.0.0'))
+  const manifest = JSON.parse(fs.readFileSync(profile, 'utf8'))
+  manifest.dsh.profile.bundles.push('@scope/tool')
+  fs.writeFileSync(profile, JSON.stringify(manifest))
+  assert.equal(manager.update('@scope/tool').lock, 'written')
+
+  const entry = lockEntryOf(root, '@scope/tool')
+  assert.equal(entry.version, '2.0.0')
+  assert.match(entry.transaction, /^[a-f0-9-]{36}$/u)
+  const packageDirectory = path.join(
+    root,
+    'root/.dsh-mobile/plugin-manager/versions',
+    entry.transaction,
+    'node_modules/@scope/tool/package.json',
+  )
+  assert.equal(fs.existsSync(packageDirectory), true)
+
+  fs.rmSync(path.dirname(packageDirectory), { recursive: true, force: true })
+  assert.equal(manager.repair().lock, 'written')
+  // 目录解析不到时保留上一条 transaction，供原生迁移核对报告 missing。
+  assert.equal(lockEntryOf(root, '@scope/tool').transaction, entry.transaction)
+})
+
 test('版本账本与启停快照各记各的：文件分开、键不重叠', t => {
   const { manager, root } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
   manager.importPackage('test-plugin')

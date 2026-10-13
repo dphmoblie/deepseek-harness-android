@@ -58,6 +58,19 @@ class AutomationTaskWireTest {
     }
 
     @Test
+    fun `plan 拒绝小数的整数字段而不是静默截断`() {
+        val fractionalTimeout = AutomationTaskWire.parse(
+            """{"op":"plan","taskId":"t1","packageName":"com.example.app","steps":[{"id":"s1","action":"click","target":"x","timeoutMs":5000.9}]}""",
+        ) as AutomationTaskRequest.Invalid
+        assertEquals(AutomationTaskCodes.PARAM_INVALID, fractionalTimeout.code)
+
+        val fractionalAttempts = AutomationTaskWire.parse(
+            """{"op":"plan","taskId":"t1","packageName":"com.example.app","steps":[{"id":"s1","action":"click","target":"x","maxAttempts":1.9}]}""",
+        ) as AutomationTaskRequest.Invalid
+        assertEquals(AutomationTaskCodes.PARAM_INVALID, fractionalAttempts.code)
+    }
+
+    @Test
     fun `plan 缺字段或形状不对时逐条拒绝`() {
         val cases = mapOf(
             """{"op":"plan","packageName":"com.example.app","steps":[{"id":"s1","action":"click","target":"x"}]}""" to "taskId",

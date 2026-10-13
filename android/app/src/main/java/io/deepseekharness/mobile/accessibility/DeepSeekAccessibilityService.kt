@@ -1208,13 +1208,12 @@ class DeepSeekAccessibilityService : AccessibilityService() {
                         taskFailure(gate.code, gate.message, ledger.snapshot(), gate.retryable)
                 }
             is AutomationTaskRequest.Record ->
-                DeviceCommandResult(
-                    true,
-                    0,
-                    AutomationTaskWire.done(ledger.record(request.stepId, request.outcome, SystemClock.elapsedRealtime())),
-                    false,
-                    null,
-                )
+                when (val result = ledger.record(request.stepId, request.outcome, SystemClock.elapsedRealtime())) {
+                    is AutomationTaskRecordResult.Accepted ->
+                        DeviceCommandResult(true, 0, AutomationTaskWire.done(result.snapshot), false, null)
+                    is AutomationTaskRecordResult.Refused ->
+                        taskFailure(result.code, result.message, result.snapshot, false)
+                }
             is AutomationTaskRequest.Resume ->
                 when (val gate = ledger.resume(request.stepIds, digest)) {
                     is AutomationTaskGate.Proceed -> taskAccepted(gate, ledger.snapshot())
