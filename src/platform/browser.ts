@@ -684,7 +684,10 @@ export function createBrowserBridge(): RuntimeBridge {
     // 浏览器预览里没有原生侧的更新渠道，也没有可下载安装的 APK：如实拒绝，
     // 不编造版本列表或更新状态，否则界面会把「预览里的假版本」当成真能装的东西。
     listRuntimeReleases: (): Promise<RuntimeReleaseList> => Promise.reject(new Error('浏览器模式下没有更新渠道')),
-    getAppUpdateState: (): Promise<AppUpdateState> => Promise.reject(new Error('浏览器模式下没有应用更新')),
+    getAppUpdateState: (forceRefresh = false): Promise<AppUpdateState> => {
+      if (typeof forceRefresh !== 'boolean') return Promise.reject(new Error('应用更新刷新参数无效'))
+      return Promise.reject(new Error('浏览器模式下没有应用更新'))
+    },
     downloadAppUpdate: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能下载安装包')),
     installAppUpdate: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能安装应用')),
     openAppUpdateInstallSettings: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能打开安装授权页面')),

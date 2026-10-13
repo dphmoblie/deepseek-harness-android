@@ -50,6 +50,7 @@ import io.deepseekharness.mobile.accessibility.AutomationTaskSnapshot
 import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
 import io.deepseekharness.mobile.accessibility.toRuleJson
 import io.deepseekharness.mobile.runtime.AppReleaseCatalog
+import io.deepseekharness.mobile.runtime.AppUpdateCache
 import io.deepseekharness.mobile.runtime.AppUpdateInstallPolicy
 import io.deepseekharness.mobile.runtime.AppUpdateStorage
 import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
@@ -618,16 +619,21 @@ class MobileRuntimePlugin : Plugin() {
      * 权限：应用内桥接。
      * 应用自身更新状态：本机已安装版本、是否已授权安装未知应用，以及**严格更新**时才出现的 available。
      *
-     * 没有可用更新时 `available` 键不出现（界面按「键缺失＝没有更新」判读）；要读一次远端目录，
-     * 因此放在后台执行器上。只回传版本号、体积、摘要与更新说明，不含下载地址。
+     * 默认缓存优先；forceRefresh 仅接受布尔值。没有更新时 available 键缺失，
+     * cached / checkedAt 说明元数据来源；本机版本和安装权限始终实时读取，不回传下载地址。
      */
     @PluginMethod
     fun getAppUpdateState(call: PluginCall) {
         execute(call) {
             audited(AuditEvent.APP_UPDATE) {
-                appUpdateCatalog().state(
+                val forceRefresh = if (call.data.has("forceRefresh")) {
+                    call.data.opt("forceRefresh") as? Boolean
+                        ?: throw RuntimeFailure("APP_UPDATE_INPUT_INVALID", "更新检查参数无效")
+                } else false
+                AppUpdateCache.from(context).state(
                     AppReleaseCatalog.installed(context),
                     AppReleaseCatalog.installAllowed(context),
+                    forceRefresh,
                 ).toJsObject()
             }
         }
@@ -730,12 +736,9 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
-    /** 应用更新目录：唯一的上游地址写在 GitHubReleases.URL 常量里，桥层不暴露任何 URL 参数。 */
-    private fun appUpdateCatalog(): AppReleaseCatalog = AppReleaseCatalog()
-
-    /** 取远端「严格更新」的那一个包；没有可用更新时明确失败，而不是让下载去猜一个版本。 */
+    /** 与展示复用同一受校验缓存；桥层不暴露 URL，没有更新时明确失败。 */
     private fun requireAppUpdate(): AppReleaseCatalog.Release =
-        appUpdateCatalog().availableRelease(AppReleaseCatalog.installed(context))
+        AppUpdateCache.from(context).availableRelease(AppReleaseCatalog.installed(context))
             ?: throw RuntimeFailure("APP_UPDATE_UNAVAILABLE", "当前没有可用的应用更新")
 
     /**

@@ -2588,16 +2588,6 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   gap: 8px;
 }
 
-/* 应用更新的更新说明：原文换行要保留，长内容也不许撑破卡片。 */
-.update-notes {
-  margin: 10px 0 0;
-  color: var(--muted);
-  font-size: 0.75rem;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 /* 运行日志折叠区块：标题行与 .section-title 对齐，正文等宽、可滚动。 */
 .harness-log-toggle {
   display: grid;

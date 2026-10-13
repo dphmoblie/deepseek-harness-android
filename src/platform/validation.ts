@@ -1934,6 +1934,10 @@ export function validateRuntimeReleaseList(value: unknown): RuntimeReleaseList {
   const entries: RuntimeReleaseEntry[] = source.map(item => {
     const entry = asRecord(item, '运行时可用版本条目')
     const version = requiredIdentifier(entry.version, '运行时可用版本号')
+    if (entry.notes !== undefined && (typeof entry.notes !== 'string' || entry.notes.length > MAX_APP_UPDATE_NOTES_LENGTH)) {
+      throw new Error('运行时更新说明格式无效')
+    }
+    const notes = entry.notes === undefined ? {} : { notes: entry.notes }
     const dshVersion = optionalIdentifier(entry.dshVersion, '运行时内置 dsh 版本')
     const hasManifestUrl = entry.manifestUrl !== undefined
     const hasManifestSha256 = entry.manifestSha256 !== undefined
@@ -1941,7 +1945,7 @@ export function validateRuntimeReleaseList(value: unknown): RuntimeReleaseList {
       throw new Error('运行时版本清单地址与 SHA-256 必须同时出现或同时缺失')
     }
     if (!hasManifestUrl) {
-      return { version, ...(dshVersion === undefined ? {} : { dshVersion }) }
+      return { version, ...notes, ...(dshVersion === undefined ? {} : { dshVersion }) }
     }
 
     const manifestUrl = entry.manifestUrl
@@ -1955,7 +1959,7 @@ export function validateRuntimeReleaseList(value: unknown): RuntimeReleaseList {
     if (typeof manifestSha256 !== 'string' || !SHA256_PATTERN.test(manifestSha256)) {
       throw new Error('运行时版本清单 SHA-256 必须是 64 位小写十六进制')
     }
-    return { version, manifestUrl, manifestSha256, ...(dshVersion === undefined ? {} : { dshVersion }) }
+    return { version, manifestUrl, manifestSha256, ...notes, ...(dshVersion === undefined ? {} : { dshVersion }) }
   })
 
   return { entries }
@@ -1986,9 +1990,18 @@ export function validateAppUpdateState(value: unknown): AppUpdateState {
   const installedVersion = requiredIdentifier(state.installedVersion, '已安装应用版本号')
   const installedVersionCode = appVersionCode(state.installedVersionCode)
   if (typeof state.installAllowed !== 'boolean') throw new Error('应用更新安装权限状态无效')
+  const cache: Pick<AppUpdateState, 'cached' | 'checkedAt'> = {}
+  if (state.cached !== undefined || state.checkedAt !== undefined) {
+    if (typeof state.cached !== 'boolean' || !Number.isSafeInteger(state.checkedAt) ||
+      (state.checkedAt as number) <= 0 || (state.checkedAt as number) > 8_640_000_000_000_000) {
+      throw new Error('应用更新缓存状态无效')
+    }
+    cache.cached = state.cached
+    cache.checkedAt = state.checkedAt as number
+  }
 
   if (state.available === undefined) {
-    return { installedVersion, installedVersionCode, installAllowed: state.installAllowed }
+    return { installedVersion, installedVersionCode, installAllowed: state.installAllowed, ...cache }
   }
 
   const release = asRecord(state.available, '可用应用更新')
@@ -2005,6 +2018,7 @@ export function validateAppUpdateState(value: unknown): AppUpdateState {
     installedVersionCode,
     installAllowed: state.installAllowed,
     available: { version, bytes, sha256: release.sha256, notes: release.notes },
+    ...cache,
   }
 }
 

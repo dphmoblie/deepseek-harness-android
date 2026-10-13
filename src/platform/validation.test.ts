@@ -1556,6 +1556,21 @@ describe('运行时可用版本校验', () => {
       .toThrow('运行时版本清单地址与 SHA-256 必须同时出现或同时缺失')
   })
 
+  it('可选运行时公告原样保留，空文本和 4000 字边界都可接受', () => {
+    for (const notes of ['', '修复说明\n<img src=x>\n第二行', '说'.repeat(4000)]) {
+      const entries = list().entries.map(entry => ({ ...entry, notes }))
+      const parsed = validateRuntimeReleaseList(list({ entries }))
+      expect(parsed.entries.map(entry => entry.notes)).toEqual([notes, notes])
+    }
+  })
+
+  it('拒绝非文本或超过 4000 字的运行时公告，不静默删除或截断', () => {
+    for (const notes of [null, 7, false, [], {}, '说'.repeat(4001)]) {
+      expect(() => validateRuntimeReleaseList(list({ entries: [{ version: '0.2.0', notes }] })))
+        .toThrow('运行时更新说明格式无效')
+    }
+  })
+
   it('清单地址只认 https，长度上限 1024', () => {
     const base = { version: '0.2.0', manifestSha256: sha256 }
     for (const url of ['http://example.com/runtime.json', 'example.com/runtime.json', 'ftp://example.com/runtime.json']) {
@@ -1646,6 +1661,33 @@ describe('应用更新状态校验', () => {
       .toThrow('应用更新包大小格式无效')
     expect(() => validateAppUpdateState(state({ available: release({ bytes: 1.5 }) })))
       .toThrow('应用更新包大小格式无效')
+  })
+
+  it('缓存来源与检查时间原样保留，有无可用更新均适用', () => {
+    for (const cached of [true, false]) {
+      for (const checkedAt of [1, 1_790_000_000_000, 8_640_000_000_000_000]) {
+        for (const available of [undefined, release()]) {
+          expect(validateAppUpdateState(state({ cached, checkedAt, available })))
+            .toEqual(state({ cached, checkedAt, ...(available === undefined ? {} : { available }) }))
+        }
+      }
+    }
+  })
+
+  it('缓存元数据必须成对，且 cached 为布尔、checkedAt 为可表示日期的安全正整数', () => {
+    const invalid = [
+      { cached: true },
+      { checkedAt: 1 },
+      ...[null, 'true', 0, 1, {}, []].map(cached => ({ cached, checkedAt: 1 })),
+      ...[null, '1', 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, 8_640_000_000_000_001]
+        .map(checkedAt => ({ cached: true, checkedAt })),
+    ]
+    for (const fields of invalid) {
+      for (const available of [undefined, release()]) {
+        expect(() => validateAppUpdateState(state({ ...fields, available })))
+          .toThrow('应用更新缓存状态无效')
+      }
+    }
   })
 
   it('安装权限状态缺失或非布尔一律拒绝', () => {

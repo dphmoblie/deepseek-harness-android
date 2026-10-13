@@ -378,6 +378,8 @@ export interface RuntimeInstallResult {
  */
 export interface RuntimeReleaseEntry {
   version: string
+  /** GitHub 公告纯文本，与应用公告相同的长度上限。 */
+  notes?: string
   dshVersion?: string
   manifestUrl?: string
   manifestSha256?: string
@@ -406,6 +408,9 @@ export interface AppUpdateRelease {
 export interface AppUpdateState {
   installedVersion: string
   installedVersionCode: number
+  /** 发布信息是否来自缓存；权限和已安装版本始终为实时值。 */
+  cached?: boolean
+  checkedAt?: number
   /**
    * 本应用是否已被授予「安装未知应用」权限（原生 `canRequestPackageInstalls()`）。
    *
@@ -1876,7 +1881,7 @@ export interface RuntimeBridge {
    */
   listRuntimeReleases: () => Promise<RuntimeReleaseList>
   /** 应用自身的更新状态：已安装版本，以及是否有可用更新。 */
-  getAppUpdateState: () => Promise<AppUpdateState>
+  getAppUpdateState: (forceRefresh?: boolean) => Promise<AppUpdateState>
   /**
    * 下载应用更新包（目标是原生侧当前认定的那个可用更新）。
    *

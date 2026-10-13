@@ -71,6 +71,9 @@ import { CustomProviders } from './components/CustomProviders'
 import { RuntimeResidueCard } from './components/RuntimeResidueCard'
 import { DeviceCapabilityCard } from './components/DeviceCapabilityCard'
 import { RuntimeCleanupCard } from './components/RuntimeCleanupCard'
+import { ReleaseNotes } from './components/ReleaseNotes'
+import { AppUpdateReminderDialog } from './components/AppUpdateReminderDialog'
+import { useAppUpdateReminder } from './appUpdateReminder'
 import { runtimeBridge } from './platform/native'
 import { readLogInsights } from './logInsights'
 import { validateHarnessPermissionMode } from './harnessPermissionMode'
@@ -2275,6 +2278,7 @@ function RuntimeReleasesSection({ installedVersion, onInstall, listReleases }: R
                       ? t("清单里没有 dsh 版本：安装后以运行环境页显示的为准。")
                       : `dsh ${entry.dshVersion}`}
                   </small>
+                  {entry.notes !== undefined && entry.notes.trim() !== '' && <ReleaseNotes notes={entry.notes} />}
                   {!installable && <small>{t("这个版本的清单没通过校验，只能查看、不能安装。")}</small>}
                 </div>
                 <div className="release-actions">
@@ -2494,12 +2498,15 @@ function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restoreSnapsho
 
 interface AppUpdateSectionProps {
   /** 读取应用自身（APK）的更新状态：包含已安装版本、是否允许安装未知来源、有没有新版本。 */
-  loadUpdate: () => Promise<AppUpdateState>
+  loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
   /** 去系统设置里为本应用打开「安装未知应用」；返回后重新读一次状态。 */
   openInstallSettings: () => Promise<void>
   notify: (message: string, tone: NoticeTone) => void
+  reminderEnabled: boolean
+  onReminderEnabledChange: (enabled: boolean) => void
+  reminderStorageAvailable: boolean
 }
 
 /**
@@ -2509,27 +2516,33 @@ interface AppUpdateSectionProps {
  * 上面几块换的是运行时镜像。安装必须由系统安装器完成，应用只能把包递过去，
  * 所以这里会如实说明「会跳到系统安装界面」以及「需要允许安装未知来源」。
  */
-function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInstallSettings, notify }: AppUpdateSectionProps) {
+function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInstallSettings, notify, reminderEnabled, onReminderEnabledChange, reminderStorageAvailable }: AppUpdateSectionProps) {
   const [state, setState] = useState<AppUpdateState | null>(null)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
   const [busy, setBusy] = useState<'download' | 'install' | null>(null)
+  const readRevision = useRef(0)
 
-  const load = useCallback(() => {
+  const load = useCallback((forceRefresh = false) => {
+    const revision = ++readRevision.current
     setLoading(true)
     setFailed(false)
     void (async () => {
       try {
-        setState(await loadUpdate())
+        const next = await loadUpdate(forceRefresh)
+        if (revision === readRevision.current) setState(next)
       } catch {
-        setFailed(true)
+        if (revision === readRevision.current) setFailed(true)
       } finally {
-        setLoading(false)
+        if (revision === readRevision.current) setLoading(false)
       }
     })()
   }, [loadUpdate])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+    return () => { readRevision.current += 1 }
+  }, [load])
 
   const runStep = (step: 'download' | 'install', action: () => Promise<void>, success: string): void => {
     if (busy !== null) return
@@ -2560,19 +2573,29 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
 
       {loading && <p className="harness-log-state">{t("正在读取应用版本…")}</p>}
 
-      {!loading && failed && (
+      <label className="toggle-row">
+        <span>
+          <strong>{t("每日更新提醒")}</strong>
+          <small>{t("每天首次打开应用时提示一次；关闭后仍可手动检查更新。")}</small>
+          {!reminderStorageAvailable && <small role="status">{t("提醒偏好或日期未能持久保存，重启后可能再次提醒。")}</small>}
+        </span>
+        <input type="checkbox" role="switch" aria-label={t("每日更新提醒")} checked={reminderEnabled} onChange={event => onReminderEnabledChange(event.target.checked)} />
+      </label>
+
+      {!loading && failed && state === null && (
         <>
           <p className="harness-log-state" role="alert">{t("暂时读不到应用更新状态：请检查网络后重试。")}</p>
           <div className="settings-inline-actions">
-            <button className="button button-secondary" type="button" onClick={load}>
+            <button className="button button-secondary" type="button" onClick={() => load(true)}>
               <RefreshCw size={18} />{t("重试")}
             </button>
           </div>
         </>
       )}
 
-      {!loading && !failed && state !== null && (
+      {state !== null && (
         <>
+          {failed && <p className="settings-note" role="alert">{t("重新检查失败，仍显示上次缓存的更新信息。")}</p>}
           <div className="settings-status-list">
             <div className="settings-status-row">
               <span className="status-chip">{t("当前应用")}</span>
@@ -2585,10 +2608,12 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
               <strong>{available === undefined ? t("发布页上没有更新的正式版本") : `${available.version} · ${formatBytes(available.bytes)}`}</strong>
             </div>
           </div>
+          {state.checkedAt !== undefined && <p className="settings-note">
+            {state.cached ? t("正在显示缓存的发布信息，点击“重新检查”可获取最新信息。") : t("发布信息已从网络检查。")}
+            {state.checkedAt !== undefined ? ` ${t("上次检查：{0}", new Date(state.checkedAt).toLocaleString())}` : ''}
+          </p>}
 
-          {available !== undefined && available.notes.trim() !== '' && (
-            <p className="update-notes">{available.notes}</p>
-          )}
+          {available !== undefined && available.notes.trim() !== '' && <ReleaseNotes notes={available.notes} />}
 
           {state.installAllowed
             ? (
@@ -2601,7 +2626,10 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
                   <button
                     className="button button-secondary"
                     type="button"
-                    onClick={() => { void (async () => { await openInstallSettings(); load() })() }}
+                    onClick={() => {
+                      void openInstallSettings().then(() => load()).catch(error => notify(errorMessage(error), 'error'))
+                    }}
+                    disabled={loading || busy !== null}
                   >
                     <ExternalLink size={18} />{t("去系统设置允许安装")}
                   </button>
@@ -2614,7 +2642,7 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
               className="button button-secondary"
               type="button"
               onClick={() => runStep('download', downloadUpdate, t("更新包已下载并通过校验"))}
-              disabled={available === undefined || busy !== null}
+              disabled={available === undefined || loading || busy !== null}
             >
               {busy === 'download' ? <Loader2 className="spin" size={18} /> : <Download size={18} />}
               {t("下载更新")}
@@ -2623,12 +2651,12 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
               className="button button-secondary"
               type="button"
               onClick={() => runStep('install', installUpdate, t("已交给系统安装器"))}
-              disabled={available === undefined || busy !== null}
+              disabled={available === undefined || loading || busy !== null}
             >
               {busy === 'install' ? <Loader2 className="spin" size={18} /> : <Rocket size={18} />}
               {t("安装更新")}
             </button>
-            <button className="button button-secondary" type="button" onClick={load} disabled={busy !== null}>
+            <button className="button button-secondary" type="button" onClick={() => load(true)} disabled={loading || busy !== null}>
               <RefreshCw size={18} />{t("重新检查")}
             </button>
           </div>
@@ -2651,10 +2679,13 @@ interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
   createSnapshot: () => Promise<RuntimeSessionSnapshotState>
   restoreSnapshot: (id: string) => Promise<RuntimeSessionSnapshotRestoreResult>
   deleteSnapshot: (id: string) => Promise<RuntimeSessionSnapshotState>
-  loadUpdate: () => Promise<AppUpdateState>
+  loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
   openInstallSettings: () => Promise<void>
+  reminderEnabled: boolean
+  onReminderEnabledChange: (enabled: boolean) => void
+  reminderStorageAvailable: boolean
 }
 
 /**
@@ -2687,6 +2718,9 @@ function RuntimeVersionsScreen({
   downloadUpdate,
   installUpdate,
   openInstallSettings,
+  reminderEnabled,
+  onReminderEnabledChange,
+  reminderStorageAvailable,
 }: RuntimeVersionsScreenProps) {
   return (
     <div className="screen versions-screen">
@@ -2731,6 +2765,9 @@ function RuntimeVersionsScreen({
         installUpdate={installUpdate}
         openInstallSettings={openInstallSettings}
         notify={notify}
+        reminderEnabled={reminderEnabled}
+        onReminderEnabledChange={onReminderEnabledChange}
+        reminderStorageAvailable={reminderStorageAvailable}
       />
     </div>
   )
@@ -5787,7 +5824,8 @@ export function App() {
   const createSessionSnapshot = useCallback(() => runtimeBridge.createRuntimeSessionSnapshot(), [])
   const restoreSessionSnapshot = useCallback((id: string) => runtimeBridge.restoreRuntimeSessionSnapshot(id), [])
   const deleteSessionSnapshot = useCallback((id: string) => runtimeBridge.deleteRuntimeSessionSnapshot(id), [])
-  const loadAppUpdate = useCallback(() => runtimeBridge.getAppUpdateState(), [])
+  const loadAppUpdate = useCallback((forceRefresh = false) => runtimeBridge.getAppUpdateState(forceRefresh), [])
+  const appUpdateReminder = useAppUpdateReminder(language !== null && !booting && !onboardingOpen, loadAppUpdate)
   const downloadAppUpdate = useCallback(() => runtimeBridge.downloadAppUpdate(), [])
   const installAppUpdate = useCallback(() => runtimeBridge.installAppUpdate(), [])
   const openAppUpdateInstallSettings = useCallback(() => runtimeBridge.openAppUpdateInstallSettings(), [])
@@ -5896,13 +5934,13 @@ export function App() {
   const launchHarnessConfirmed = useCallback(() => openHarness(true), [openHarness])
 
   useEffect(() => {
-    if (language === null || onboardingOpen || booting || activeView !== 'conversation' || busy !== null || autoLaunchAttempted.current) return
+    if (language === null || onboardingOpen || booting || appUpdateReminder.checking || appUpdateReminder.available !== null || activeView !== 'conversation' || busy !== null || autoLaunchAttempted.current) return
     if (settings !== null && settings.autoLaunch === false) return
     if (runtime.updateAvailable) return
     if (runtime.phase === 'running' || (runtimeInstalled(runtime) && runtime.phase !== 'stopping')) {
       launchHarness()
     }
-  }, [activeView, booting, busy, language, launchHarness, onboardingOpen, runtime, settings])
+  }, [activeView, appUpdateReminder.available, appUpdateReminder.checking, booting, busy, language, launchHarness, onboardingOpen, runtime, settings])
 
   const openSettings = useCallback((page: SettingsPage) => {
     // 最新设置读完之前不展示可编辑的旧草稿，避免迟到响应清空刚输入的内容。
@@ -6450,6 +6488,9 @@ export function App() {
           downloadUpdate={downloadAppUpdate}
           installUpdate={installAppUpdate}
           openInstallSettings={openAppUpdateInstallSettings}
+          reminderEnabled={appUpdateReminder.enabled}
+          onReminderEnabledChange={appUpdateReminder.setEnabled}
+          reminderStorageAvailable={appUpdateReminder.storageAvailable}
         />
       )
       case 'files':
@@ -6502,6 +6543,16 @@ export function App() {
 
       {resetOpen && <ResetDialog busy={busy === 'reset'} onCancel={() => setResetOpen(false)} onConfirm={confirmReset} />}
       {pendingInstall !== null && <UpdateDialog busy={busy === 'install'} version={pendingInstall.version} onCancel={() => setPendingInstall(null)} onConfirm={confirmPendingInstall} />}
+      {appUpdateReminder.available !== null && (
+        <AppUpdateReminderDialog
+          version={appUpdateReminder.available.version}
+          onDismiss={appUpdateReminder.dismiss}
+          onUpdate={() => {
+            appUpdateReminder.dismiss()
+            setActiveView('versions')
+          }}
+        />
+      )}
 
       {onboardingOpen && (
         <Onboarding
