@@ -2425,14 +2425,14 @@ export function validateVirtualScreenState(value: unknown): VirtualScreenState {
     // 再报诊断读数。顺序不能反——`状态缺必填字段时抛错，而不是补成未运行` 那条用例钉着先报 displayId。
     targetFps: requiredNonNegativeNumber(source.targetFps, '副屏目标帧率'),
     frameAgeMs: requiredNonNegativeInteger(source.frameAgeMs, '副屏画面年龄'),
-    inputFrameDelayLastMs: requiredNonNegativeInteger(source.inputFrameDelayLastMs, '副屏响应耗时'),
-    inputFrameDelayAverageMs: requiredNonNegativeInteger(source.inputFrameDelayAverageMs, '副屏平均响应耗时'),
-    inputFrameDelaySamples: requiredNonNegativeInteger(source.inputFrameDelaySamples, '副屏响应耗时样本数'),
+    inputFrameDelayLastMs: requiredNonNegativeInteger(source.inputFrameDelayLastMs, '副屏输入后首帧间隔'),
+    inputFrameDelayAverageMs: requiredNonNegativeInteger(source.inputFrameDelayAverageMs, '副屏平均输入后首帧间隔'),
+    inputFrameDelaySamples: requiredNonNegativeInteger(source.inputFrameDelaySamples, '副屏输入后首帧间隔样本数'),
   }
   // 没有样本却带着耗时：这份读数自相矛盾。宁可整体拒绝，也不要在界面上显示一个来路不明的毫秒数——
   // 「0 毫秒」与「尚未测到」必须分得开，而区分它们的唯一依据就是这个样本数。
   if (state.inputFrameDelaySamples === 0 && (state.inputFrameDelayLastMs !== 0 || state.inputFrameDelayAverageMs !== 0)) {
-    throw new Error('副屏响应耗时读数自相矛盾：没有样本却带着耗时')
+    throw new Error('副屏输入后首帧间隔读数自相矛盾：没有样本却带着间隔')
   }
   return state
 }

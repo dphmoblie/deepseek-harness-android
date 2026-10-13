@@ -86,7 +86,7 @@ class ShellVirtualScreen {
     // 最近一次注入失败的原因标签（形如 discrete:move:IOException）；空串表示这次注入没有失败。
     private var injectionError = ""
     /**
-     * 输入到画面的响应耗时样本，以及「正在等回应」的那次注入时刻。
+     * 输入后首帧间隔的样本，以及「正在等下一帧」的那次注入时刻。
      *
      * 由 frameLock 保护：采集线程在 [collectFrame] 里写，[recordInjection] 与 [state] 在实例锁里读写。
      * 一次输入只认一帧回应，记完就把待等标记清掉。
@@ -247,9 +247,8 @@ class ShellVirtualScreen {
     }
 
     @Synchronized fun state(): JSONObject {
-        // 画面相关字段在同一个锁内一次读出，避免状态里混用不同帧的快照。
+        // 画面字段与输入后首帧间隔在同一个锁内一次读出，避免状态里混用两份不同时刻的快照。
         val now = SystemClock.elapsedRealtime()
-        // 帧字段与响应耗时在同一个锁里一次读出，避免状态里混用两份不同时刻的快照。
         val frames = synchronized(frameLock) {
             FrameState(
                 frameAt, frameBlank, frameSampledAt, frameFps, frameError,
@@ -1239,7 +1238,7 @@ class ShellVirtualScreen {
             frameBlank = true; frameSampledAt = 0; frameError = ""
             // 采集时刻与实测帧率同属本次会话，一并清空，下一次会话重新采样。
             frameStampCount = 0; frameStampNext = 0; frameFps = 0.0
-            // 响应耗时与「正在等回应」的那次注入同属本次会话：换会话后重新测，别把上一段的数字带过来。
+            // 输入后首帧间隔与「正在等回应」的那次注入同属本次会话：换会话后重新测，别把上一段的数字带过来。
             responseLatency.clear(); awaitingFrameAt = 0L
             @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
             (frameLock as java.lang.Object).notifyAll()

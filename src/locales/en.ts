@@ -1534,7 +1534,6 @@ export const english: Readonly<Record<string, string>> = {
   "重新读取": "Read again",
   "目标帧率": "Target frame rate",
   "画面年龄": "Frame age",
-  "输入到画面的响应": "Input-to-frame response",
   "输入后首帧间隔估计": "Estimated input-to-first-frame delay",
   "尚未测到": "Not measured yet",
   "{0} 毫秒": "{0} ms",

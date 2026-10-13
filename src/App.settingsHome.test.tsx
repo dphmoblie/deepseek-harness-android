@@ -21,7 +21,7 @@ import { App } from './App'
 /**
  * 设置首页出现的等待上限。
  *
- * 与 `src/__tests__/appTestHarness.ts:346` 的 `SETTINGS_NAV_TIMEOUT_MS` 同一个理由：
+ * 与 `src/__tests__/appTestHarness.ts:626` 的 `SETTINGS_NAV_TIMEOUT_MS` 同一个理由：
  * `findBy*` 默认只等 1 s，而启动链把视图推到设置首页要将近 1 s（并行跑更慢），
  * 于是失败信息看起来像「首页没渲染」，实际只是等待上限太短。放宽的是等待，不是断言。
  */

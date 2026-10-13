@@ -101,7 +101,7 @@ function ConfigNumberField({ label, value, range, disabled, onChange }: {
   )
 }
 
-export interface AutomationAppConfigFormProps {
+interface AutomationAppConfigFormProps {
   /** 当前查看的（也就是写入目标）包名；表单里不允许改，改了等于写到别的应用上。 */
   packageName: string
   /** 参数读数；`null` 一律表示「还没读到」，与「读到了」必须分开渲染。 */

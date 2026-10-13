@@ -51,7 +51,7 @@ class VirtualScreenPerformanceTest {
     }
 
     @Test
-    fun `一次都没测过时响应耗时全为零`() {
+    fun `一次都没测过时首帧间隔全为零`() {
         val latency = VirtualScreenLatency()
         assertEquals(0, latency.sampleCount)
         assertEquals(0L, latency.lastMillis)
@@ -59,7 +59,7 @@ class VirtualScreenPerformanceTest {
     }
 
     @Test
-    fun `响应耗时给出最近一次与平均`() {
+    fun `首帧间隔给出最近一次与平均`() {
         val latency = VirtualScreenLatency()
         latency.record(120L)
         latency.record(80L)

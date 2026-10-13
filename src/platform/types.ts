@@ -54,7 +54,7 @@ export type ProviderApiKeys = Partial<Record<ModelProviderId, string>>
 export const CUSTOM_PROVIDER_APIS = ['openai-completions', 'openai-responses', 'anthropic-messages'] as const
 export type CustomProviderApi = typeof CUSTOM_PROVIDER_APIS[number]
 
-export interface CustomProviderModel {
+interface CustomProviderModel {
   id: string
   name: string
   contextWindow: number
@@ -141,7 +141,7 @@ export interface RuntimeResidueCleanupState {
  * 只回传名字、是否存在、文件数与字节数，**不含路径**；名字来自原生侧的白名单
  * （`RuntimeCacheEntries.CLEARABLE`），界面不自己拼名字，也不据此推导目录位置。
  */
-export interface RuntimeCleanupEntry {
+interface RuntimeCleanupEntry {
   name: string
   present: boolean
   files: number
@@ -149,7 +149,7 @@ export interface RuntimeCleanupEntry {
 }
 
 /** 缓存档盘点：白名单条目的现状与合计。只读，不需要停止运行时。 */
-export interface RuntimeCacheCleanupState {
+interface RuntimeCacheCleanupState {
   entries: RuntimeCleanupEntry[]
   files: number
   bytes: number
@@ -169,7 +169,7 @@ export type PluginCleanupLedger = 'ok' | 'missing' | 'invalid' | 'unwritable'
  * [id] 是包名，只用来显示与「清这一个」的请求；[present] 为假表示四个数据目录一个都不存在
  * （占用为 0）。**仍然列出来**：不列的话用户会以为这个插件没装上，而它只是还没有数据。
  */
-export interface RuntimeCleanupPackage {
+interface RuntimeCleanupPackage {
   id: string
   present: boolean
   files: number
@@ -182,7 +182,7 @@ export interface RuntimeCleanupPackage {
  * [packages] 是**唯一**把包名回给界面的地方：它不落诊断、不落审计（诊断日志可以导出分享，
  * 里面不该出现「用户装了什么」）。账本读不出来时它是空数组，而不是缺字段。
  */
-export interface PluginCleanupState {
+interface PluginCleanupState {
   ledger: PluginCleanupLedger
   checked: number
   packages: RuntimeCleanupPackage[]
@@ -352,7 +352,7 @@ export type RuntimeSessionListResult =
  * 把真正的失败混进 `skipped` 又会让用户以为已经有了备份。
  * [evictedIds] 是契约之外的附加字段（这次淘汰了哪些旧快照）：允许存在，界面可以忽略。
  */
-export interface RuntimeAutoSnapshotOutcome {
+interface RuntimeAutoSnapshotOutcome {
   status: 'created' | 'skipped' | 'failed'
   /** 仅 `created`：新建快照的标识。 */
   snapshotId?: string
@@ -563,7 +563,7 @@ export interface NotificationPermissionResult {
 export type MailboxAvailability = 'available' | 'needsPermission' | 'unsupported' | 'unwritable'
 
 /** inbox 里的一个 tar 候选（界面用来显示「将导入哪一个」）。 */
-export interface MailboxTarCandidate {
+interface MailboxTarCandidate {
   name: string
   bytes: number
 }
@@ -612,7 +612,7 @@ export interface InstalledApplicationsPage {
   total: number
   nextOffset: number | null
 }
-export interface DeviceShellAccessState { enabled: boolean }
+interface DeviceShellAccessState { enabled: boolean }
 
 /**
  * 无障碍自动化永远自动包含、界面上不可移除的包名。
@@ -1110,7 +1110,7 @@ export interface VirtualScreenState {
   inputFrameDelayLastMs: number
   /** 同一批样本的平均；没有样本时是 0。 */
   inputFrameDelayAverageMs: number
-  /** 已记录的响应耗时样本数；0 表示本次会话还没测到过，界面必须说「尚未测到」而不是「0 毫秒」。 */
+  /** 已记录的输入后首帧间隔样本数；0 表示本次会话还没测到过，界面必须说「尚未测到」而不是「0 毫秒」。 */
   inputFrameDelaySamples: number
   virtualForegroundPackage: string
   virtualForegroundActivity: string
@@ -1162,7 +1162,7 @@ export function clampVirtualScreenSpec(widthPx: number, heightPx: number, densit
 export type MailboxRoot = 'inbox' | 'outbox'
 
 /** 投递区当前目录中的一项；符号链接和特殊文件不会出现在此列表中。 */
-export interface MailboxDirectoryEntry {
+interface MailboxDirectoryEntry {
   name: string
   kind: 'file' | 'directory'
   bytes: number
@@ -1184,7 +1184,7 @@ export interface MailboxDirectoryState {
  * 字段逐字为 `name` / `kind` / `bytes`，没有 `type`。共享目录里的符号链接、硬链接与特殊文件
  * 不会被列出。
  */
-export type StorageDirectoryEntry = MailboxDirectoryEntry
+type StorageDirectoryEntry = MailboxDirectoryEntry
 
 /**
  * 共享目录浏览快照；与 [MailboxDirectoryState] 只差根字段（`root` → `guestPath`）。
@@ -1909,7 +1909,7 @@ export interface RuntimeBridge {
 }
 
 /** 插件管理只传递受控元数据，不返回配置值、绝对路径或凭据。 */
-export interface PluginChild {
+interface PluginChild {
   id: string
   name: string
   enabled: boolean
@@ -1940,7 +1940,7 @@ export interface PluginGroup {
  * 只回传受控状态与计数，不包含路径、错误原文或插件数据；旧版运行时没有该字段时，
  * 前端按「没有迁移结果」处理，保持向后兼容。
  */
-export type PluginRecoveryStatus = 'none' | 'restored' | 'partial' | 'failed'
+type PluginRecoveryStatus = 'none' | 'restored' | 'partial' | 'failed'
 /**
  * 应用（APK）升级后的插件迁移结果。
  *
@@ -1949,12 +1949,12 @@ export type PluginRecoveryStatus = 'none' | 'restored' | 'partial' | 'failed'
  * `failed`：这一步没做成（下次启动会自动重试）—— 迁移本身失败时启动会照旧中断并报错，
  * 界面能看到这个状态的是「跑完了但记账没写成」这一种。
  */
-export type PluginMigrationStatus = 'none' | 'done' | 'partial' | 'failed'
+type PluginMigrationStatus = 'none' | 'done' | 'partial' | 'failed'
 /**
  * 已装插件的「版本事实」记录（由访客侧维护、原生侧只读）在设备上的可用性：
  * `ok` 可用、`missing` 还没有（新设备或从未装过插件）、`invalid` 已损坏、`unwritable` 写不进去。
  */
-export type PluginLockStatus = 'ok' | 'missing' | 'invalid' | 'unwritable'
+type PluginLockStatus = 'ok' | 'missing' | 'invalid' | 'unwritable'
 export interface PluginRecoveryState {
   status: PluginRecoveryStatus
   restored: number

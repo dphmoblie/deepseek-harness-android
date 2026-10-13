@@ -91,7 +91,7 @@ export interface AutomationRuleDefaults {
   matchDelayMs: number
 }
 
-export interface AutomationRuleFormProps {
+interface AutomationRuleFormProps {
   /** 当前查看的包名。写入请求必须与它一致，表单里不允许改（改了等于写到别的应用上）。 */
   packageName: string
   /** 编辑时要预填的整条规则；新建时为 `null`。 */

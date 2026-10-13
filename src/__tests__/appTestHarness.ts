@@ -239,7 +239,7 @@ export const keepAlive: KeepAliveState = {
   lastIntent: 'stopped',
 }
 
-export const diagnostic: DiagnosticLogState = {
+const diagnostic: DiagnosticLogState = {
   enabled: false,
   retentionDays: 3,
   fileCount: 0,

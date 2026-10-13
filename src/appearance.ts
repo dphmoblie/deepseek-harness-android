@@ -1,12 +1,12 @@
 /** 用户选择的背景只存本机；媒体加密存入 IndexedDB，不上传到服务端。 */
 export interface CardAppearance { opacity: number; blur: number; color: string }
-export const APPEARANCE_KEY = 'dsh-card-appearance-v1'
-export const APPEARANCE_EVENT = 'dsh-appearance-change'
+const APPEARANCE_KEY = 'dsh-card-appearance-v1'
+const APPEARANCE_EVENT = 'dsh-appearance-change'
 export const BACKGROUND_EVENT = 'dsh-background-change'
 export const DEFAULT_CARD: CardAppearance = { opacity: 100, blur: 0, color: '' }
-export const MAX_BACKGROUND_BYTES = 50 * 1024 * 1024
+const MAX_BACKGROUND_BYTES = 50 * 1024 * 1024
 
-export function validateCard(value: unknown): CardAppearance {
+function validateCard(value: unknown): CardAppearance {
   if (!value || typeof value !== 'object') throw new Error('卡片参数无效')
   const data = value as Record<string, unknown>
   if (typeof data.opacity !== 'number' || !Number.isInteger(data.opacity) || data.opacity < 30 || data.opacity > 100 ||
@@ -40,7 +40,7 @@ export function saveCard(value: CardAppearance): void {
 }
 
 /** 同时检查大小、MIME 和文件签名，拒绝 HTML、SVG 及伪装的脚本文件。 */
-export async function backgroundType(file: Blob): Promise<string> {
+async function backgroundType(file: Blob): Promise<string> {
   if (file.size < 12 || file.size > MAX_BACKGROUND_BYTES) throw new Error('背景文件须在 12 字节至 50 MB 之间')
   const bytes = new Uint8Array(await file.slice(0, 32).arrayBuffer())
   const ascii = (start: number, end: number) => String.fromCharCode(...bytes.slice(start, end))

@@ -1,6 +1,6 @@
 import type { ModelProviderId, RuntimeSettings } from './platform/types'
 
-export interface ModelProviderOption {
+interface ModelProviderOption {
   id: ModelProviderId
   label: string
   environmentVariable: string
@@ -17,10 +17,6 @@ export const MODEL_PROVIDERS: readonly ModelProviderOption[] = [
   { id: 'xai', label: 'xAI', environmentVariable: 'XAI_API_KEY' },
   { id: 'mistral', label: 'Mistral', environmentVariable: 'MISTRAL_API_KEY' },
 ]
-
-export function modelProviderLabel(providerId: ModelProviderId): string {
-  return MODEL_PROVIDERS.find(provider => provider.id === providerId)?.label ?? providerId
-}
 
 /**
  * 本机是否已保存过至少一份模型凭据。

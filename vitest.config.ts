@@ -30,7 +30,7 @@ export default defineConfig({
       threads: {
         execArgv: Number(process.versions.node.split('.')[0]) >= 25 ? ['--no-experimental-webstorage'] : [],
         /*
-         * 限制 worker 数：本仓库有 25 个 jsdom 用例文件，默认按 CPU 核数铺满，
+         * 限制 worker 数：本仓库有 52 个 jsdom 用例文件，默认按 CPU 核数铺满，
          * 在 20 核开发机上就会互相饿死，CI 的 2 核 runner 只会更糟。
          * 上限 4 是「够并行、又不至于每条用例都在抢 CPU」的折中；代价是墙钟变长，
          * 换来的是**结论可信**——宁可慢一点，也不要红的绿的都不可信。

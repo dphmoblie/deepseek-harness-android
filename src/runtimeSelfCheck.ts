@@ -120,9 +120,7 @@ export const SELF_CHECK_CODES = [
 export type SelfCheckCode = typeof SELF_CHECK_CODES[number]
 
 /** 自检操作：`check` 只检查，`repair` 修复权限位与缺失目录。 */
-export const SELF_CHECK_OPERATIONS = ['check', 'repair'] as const
-
-export type SelfCheckOperation = typeof SELF_CHECK_OPERATIONS[number]
+export type SelfCheckOperation = 'check' | 'repair'
 
 export interface SelfCheckItem {
   id: SelfCheckId
@@ -177,7 +175,7 @@ const SELF_CHECK_LABELS: Readonly<Record<SelfCheckId, string>> = {
   webview: '系统 WebView',
 }
 
-export interface SelfCheckAdvice {
+interface SelfCheckAdvice {
   /** 检查项的中文标签。 */
   label: string
   /** 结论：这个结果通常意味着什么；`ok` 项为空串。 */

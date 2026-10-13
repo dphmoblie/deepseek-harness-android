@@ -12,7 +12,7 @@
  * 本模块是纯函数、不依赖 React 与桥接，便于单测。
  */
 
-export interface LogInsight {
+interface LogInsight {
   /** 稳定标识：用于 React key 与用例断言。 */
   id: string
   /** 短标签：一眼看出「看到的是什么」。 */
