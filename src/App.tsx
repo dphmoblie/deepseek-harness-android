@@ -167,8 +167,8 @@ type SettingsPage = 'models' | 'runtime' | 'terminal' | 'shizuku' | 'diagnostics
 
 const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView }> = {
   models: { title: '模型与密钥', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
-  runtime: { title: '运行与后台', hint: '运行时来源、后台保持、悬浮球与前台服务', view: 'settings-runtime' },
-  terminal: { title: '终端与外观', hint: '主题、图片与视频背景、卡片颜色与透明度、字号', view: 'settings-terminal' },
+  runtime: { title: '后台', hint: '运行时来源、后台保持、悬浮球与前台服务', view: 'settings-runtime' },
+  terminal: { title: '主题', hint: '字号、卡片颜色与透明度、图片与视频背景', view: 'settings-terminal' },
   shizuku: { title: 'Shizuku 与设备 Shell', hint: 'Shizuku 授权、AI Shell、无障碍白名单与副屏', view: 'settings-shizuku' },
   diagnostics: { title: '诊断与日志', hint: '采集开关、保留天数、运行日志与导出', view: 'settings-diagnostics' },
 }
@@ -191,15 +191,14 @@ function isSettingsView(view: AppView): boolean {
   return view === 'settings' || view === 'settings-virtual-screen' || settingsPageOf(view) !== null
 }
 
-/** 按用户用途分类；分类和搜索只影响入口展示，不改动设置草稿。 */
-type SettingsHomeGroup = 'runtime' | 'files' | 'versions' | 'models' | 'appearance' | 'device' | 'plugins' | 'diagnostics'
+/** 按用户用途分类；分类只影响入口展示，不改动设置草稿。 */
+type SettingsHomeGroup = 'runtime' | 'files' | 'versions' | 'models' | 'appearance' | 'device' | 'diagnostics'
 
 const SETTINGS_HOME_GROUPS: { id: SettingsHomeGroup; label: string }[] = [
   { id: 'models', label: '模型连接' },
   { id: 'appearance', label: '外观与显示' },
   { id: 'device', label: '设备与自动化' },
-  { id: 'runtime', label: '运行与后台' },
-  { id: 'plugins', label: '插件扩展' },
+  { id: 'runtime', label: '后台' },
   { id: 'files', label: '文件管理' },
   { id: 'versions', label: '版本管理' },
   { id: 'diagnostics', label: '日志与排查' },
@@ -229,7 +228,7 @@ interface SettingsHomeEntry {
  * 兜底的是 `src/App.settingsHome.test.tsx` 里「切成英文后整屏入口都是英文」那条用例。
  */
 const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
-  // —— 运行与后台：把运行环境跑起来、留在后台、跑不动时排查。
+  // —— 后台：把运行环境跑起来、留在后台、跑不动时排查。
   {
     id: 'service',
     group: 'runtime',
@@ -237,14 +236,6 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     hint: '启动、停止与当前状态',
     target: { kind: 'service' },
     icon: <Bot size={20} />,
-  },
-  {
-    id: 'plugins',
-    group: 'plugins',
-    title: '插件管理',
-    hint: '官方与第三方插件，按插件包管理启停与更新',
-    target: { kind: 'view', view: 'plugins' },
-    icon: <Settings2 size={20} />,
   },
   {
     id: 'environment',
@@ -257,7 +248,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
   {
     id: 'runtime-page',
     group: 'runtime',
-    title: '运行与后台',
+    title: '后台',
     hint: '运行时来源、后台保持、悬浮球与前台服务',
     target: { kind: 'page', page: 'runtime' },
     icon: <Power size={20} />,
@@ -265,8 +256,8 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
   {
     id: 'terminal-view',
     group: 'device',
-    title: '终端与设备 Shell',
-    hint: 'Ubuntu 终端与设备 Shell（需 Shizuku）',
+    title: '设备 Shell',
+    hint: '设备上的 Shell（需 Shizuku）',
     target: { kind: 'view', view: 'terminal' },
     icon: <SquareTerminal size={20} />,
   },
@@ -277,7 +268,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'files',
     title: '文件管理',
     hint: '投递区与共享目录：一处浏览、建文件夹与搬运',
-    // 这组功能词从「运行与后台」搬过来：投递区与共享目录不再挂在那页上，
+    // 这组功能原属「后台」页：投递区与共享目录不再挂在那页上，
     // 搜「导入」「投递区」的人要找的是这一页。
     target: { kind: 'view', view: 'files' },
     icon: <FolderInput size={20} />,
@@ -305,8 +296,8 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
   {
     id: 'terminal-settings',
     group: 'appearance',
-    title: '终端与外观',
-    hint: '主题、图片与视频背景、卡片颜色与透明度、字号',
+    title: '主题',
+    hint: '字号、卡片颜色与透明度、图片与视频背景',
     target: { kind: 'page', page: 'terminal' },
     icon: <SquareTerminal size={20} />,
   },
@@ -1019,12 +1010,13 @@ interface ConversationScreenProps {
   runtime: RuntimeState
   onInstall: () => void
   onLaunch: () => void
-  onOpenSettings: () => void
+  /** 启动卡片上那一格按需求从「应用设置」换成「停止」：只管停 Harness 服务。 */
+  onStop: () => void
   onOpenTerminal: () => void
   onUpdate: () => void
 }
 
-function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onOpenSettings, onOpenTerminal, onUpdate }: ConversationScreenProps) {
+function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onStop, onOpenTerminal, onUpdate }: ConversationScreenProps) {
   const installed = runtimeInstalled(runtime)
   const transitioning = runtimeTransitioning(runtime)
   const updateRequired = installed && runtime.updateAvailable && !transitioning
@@ -1101,8 +1093,12 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onO
             <button className="button button-secondary" type="button" onClick={onOpenTerminal} disabled={busy !== null}>
               <SquareTerminal size={18} />{t("打开终端排查")}</button>
           )}
-          <button className="button button-secondary" type="button" onClick={onOpenSettings} disabled={busy === 'install'}>
-            <Settings2 size={18} />{t("应用设置")}</button>
+          {/* 这一格是「停止 Harness 服务」：应用设置入口在顶部图标与底部导航里都有，
+              不必占着启动卡片的重心；没在跑的时候不摆一个按不动的停止键。 */}
+          {runtime.phase === 'running' && (
+            <button className="button button-secondary" type="button" onClick={onStop} disabled={busy !== null}>
+              <Square size={18} />{t("停止")}</button>
+          )}
         </div>
       </section>
 
@@ -2599,7 +2595,7 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
 }
 
 interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
-  /** 返回设置首页：版本管理是一级页，返回键回设置首页，而不是回「运行与后台」。 */
+  /** 返回设置首页：版本管理是一级页，返回键回设置首页，而不是回「后台」。 */
   onBack: () => void
   /** 已安装运行时的版本号：给「可从 GitHub 安装的版本」列表标记「已安装」。 */
   installedVersion?: string
@@ -2619,7 +2615,7 @@ interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
 }
 
 /**
- * 版本管理（一级页）：把运行时版本从「运行与后台」页里拆出来，单独占一屏。
+ * 版本管理（一级页）：把运行时版本从「后台」页里拆出来，单独占一屏。
  *
  * 为什么要拆：这一屏管的是「磁盘上有哪几份运行时、现在用哪一份」，和「保活、悬浮球、
  * 前台服务、投递区」这些运行期开关不是一类事。混在一页里时，用户得在很长的运行页里
@@ -4217,7 +4213,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         </section>
         )}
 
-        {/* 外观（登记册 5.4）：落在「终端与外观」页——登记册指定的现成落点。
+        {/* 外观（登记册 5.4）：落在「主题」页——登记册指定的现成落点。
             组件无 props，主题的存储与 DOM 落地全在 src/theme.ts，这里只负责挂载。 */}
         {page === 'terminal' && <AppearanceSettings />}
 
@@ -6384,7 +6380,7 @@ export function App() {
   const screen = (() => {
     switch (activeView) {
       case 'conversation':
-        return <ConversationScreen busy={busy} keepAlive={keepAlive} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} onOpenTerminal={() => setActiveView('terminal')} onUpdate={requestRuntimeUpdate} />
+        return <ConversationScreen busy={busy} keepAlive={keepAlive} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onStop={stopRuntime} onOpenTerminal={() => setActiveView('terminal')} onUpdate={requestRuntimeUpdate} />
       case 'sessions':
         return <SessionManager onBack={() => backToView('conversation')} onOpenHarness={launchHarness} />
       case 'terminal':

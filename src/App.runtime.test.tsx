@@ -28,7 +28,7 @@ describe('后台保持与恢复', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     const toggle = await screen.findByRole('switch', { name: /后台保持 Harness/ })
     expect(toggle).not.toBeChecked()
     expect(bridge.requestNotificationPermission).not.toHaveBeenCalled()
@@ -49,7 +49,7 @@ describe('后台保持与恢复', () => {
     render(<App />)
 
     fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
 
     const toggle = await screen.findByRole('switch', { name: /后台保持 Harness/ })
     fireEvent.click(toggle)
@@ -83,7 +83,7 @@ describe('后台保持与恢复', () => {
       render(<App />)
 
       fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
-      await openSettingsPage('运行与后台')
+      await openSettingsPage('后台')
 
       const saveButton = await screen.findByRole('button', { name: '保存设置' })
       await waitFor(() => expect(saveButton).toBeEnabled())
@@ -119,7 +119,7 @@ describe('后台保持与恢复', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     expect(await screen.findByText('前台服务运行中')).toBeVisible()
     expect(screen.getByText('未授予')).toBeVisible()
     // 设备 Shell 辅助只反映 Shizuku 授权状态，不代表保活能力。
@@ -158,7 +158,7 @@ describe('运行时自检', () => {
   it('兼容模式只在用户选择并保存后发送，明确提示旧会话和隔离变化', async () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     const select = screen.getByRole('combobox', { name: '启动默认权限' })
     expect(select).toHaveValue('workspace-write')
     fireEvent.change(select, { target: { value: 'danger-full-access' } })
@@ -177,7 +177,7 @@ describe('运行时自检', () => {
     })
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
     expect(await screen.findByText('自检时的启动默认权限：danger-full-access（会话权限可能不同）')).toBeVisible()
     expect(screen.getByRole('group', { name: '自检结果' })).toHaveTextContent('失败')
@@ -194,7 +194,7 @@ describe('运行时自检', () => {
     })
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
     await screen.findByRole('group', { name: '自检结果' })
     expect(screen.queryByText('本机 Landlock 沙箱不可用')).toBeNull()
@@ -208,7 +208,7 @@ describe('运行时自检', () => {
       .mockRejectedValueOnce(new Error('SELF_CHECK_FAILED'))
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
     fireEvent.click(await screen.findByRole('button', { name: '修复运行时权限' }))
     expect(await screen.findByText('自检未完成，请稍后重试')).toBeVisible()
@@ -221,7 +221,7 @@ describe('运行时自检', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     expect(await screen.findByRole('heading', { name: '运行时自检' })).toBeVisible()
     // 这句说明必须在界面上讲清「为什么不用 bash 也能查」。
     expect(screen.getByText(/不需要 bash 也能判断运行时哪一环断了/)).toBeVisible()
@@ -248,7 +248,7 @@ describe('运行时自检', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
 
     const results = await screen.findByRole('group', { name: '自检结果' })
@@ -279,7 +279,7 @@ describe('运行时自检', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
     await screen.findByRole('group', { name: '自检结果' })
 
@@ -304,7 +304,7 @@ describe('运行时自检', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
     await screen.findByRole('group', { name: '自检结果' })
 
@@ -338,7 +338,7 @@ describe('运行时自检', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
 
     expect(await screen.findByText('全部 4 项检查通过')).toBeVisible()
@@ -360,7 +360,7 @@ describe('运行时自检', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
     await screen.findByRole('group', { name: '自检结果' })
 
@@ -386,7 +386,7 @@ describe('运行时自检', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
 
     const results = await screen.findByRole('group', { name: '自检结果' })
@@ -419,7 +419,7 @@ describe('运行时自检', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
     await screen.findByText('附件目录不存在，截图等附件无法落盘')
 
@@ -444,7 +444,7 @@ describe('运行时自检', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     // 版本一行不依赖自检：进页面就能看到已安装的运行时版本。
     expect(await screen.findByText('运行时版本')).toBeVisible()
     expect(screen.getByText('2026.08.17')).toBeVisible()
@@ -475,7 +475,7 @@ describe('运行时自检', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
     expect(await screen.findByText('全部 1 项检查通过')).toBeVisible()
 
@@ -521,7 +521,7 @@ describe('空闲自行停止', () => {
 
     // 事后也能查到这次停止是谁发起的，而不是只看到「已就绪」。
     fireEvent.click(screen.getByRole('button', { name: '打开应用设置' }))
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     expect(await screen.findByText('自行停止（可能空闲自动停止）')).toBeVisible()
   })
 
@@ -543,7 +543,7 @@ describe('空闲自行停止', () => {
     })
 
     expect(screen.queryByText(/已自行停止/)).toBeNull()
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     expect(await screen.findByText('用户停止')).toBeVisible()
   })
 
@@ -650,7 +650,7 @@ describe('运行时版本管理', () => {
     // 重读的效果要看得见：回设置首页再进「运行与后台」，已安装版本那一行已经换成新版本。
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
     await screen.findByRole('heading', { name: '设置' }, { timeout: 5_000 })
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     expect(await screen.findByText('2026.09.01')).toBeVisible()
   })
 

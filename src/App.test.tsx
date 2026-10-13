@@ -166,7 +166,7 @@ describe('App conversation gate', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    fireEvent.click(screen.getByRole('button', { name: /终端与设备 Shell/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^设备 Shell/ }))
     expect(await screen.findByRole('heading', { name: '终端' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('tab', { name: '设备 Shell' }))
     fireEvent.click(screen.getByRole('button', { name: '请求授权' }))
@@ -180,14 +180,14 @@ describe('App conversation gate', () => {
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
     // 运行时来源在「运行与后台」页。
-    await openSettingsPage('运行与后台')
+    await openSettingsPage('后台')
     expect(screen.getByText('两项留空表示使用 APK 内置的运行时（官方构建即内置，可离线安装）；填写清单地址与 SHA-256 则改为从该来源下载，两项必须成对。')).toBeInTheDocument()
     // 屏幕内返回按钮走的是历史回退，视图切换在 popstate 之后生效。
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
     expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()
 
     // 字号在「终端与外观」页。
-    await openSettingsPage('终端与外观')
+    await openSettingsPage('主题')
     const fontSlider = await screen.findByRole('slider', { name: /字号/ })
     fireEvent.change(fontSlider, { target: { value: '17' } })
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
@@ -332,8 +332,8 @@ describe('应用语言', () => {
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeVisible()
     expect(screen.getByText('Running', { selector: '.phase-badge' })).toBeVisible()
     // 设置首页现在只保留分类入口，保存按钮在可编辑的二级页里。
-    fireEvent.click(screen.getByRole('button', { name: /Terminal and appearance/ }))
-    expect(await screen.findByRole('heading', { name: 'Terminal and appearance' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: /^Theme/ }))
+    expect(await screen.findByRole('heading', { name: 'Theme' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Save settings' })).toBeVisible()
     view.unmount()
     render(<App />)

@@ -113,7 +113,7 @@ const RULES: readonly LogInsightRule[] = [
     pattern: /enospc|no space left/,
     title: '存储空间不足',
     meaning: '写入被系统拒绝，安装、解压或会话保存都可能因此失败。',
-    nextStep: '清理设备空间后重试；运行时占用可在「运行与后台」里查看。',
+    nextStep: '清理设备空间后重试；运行时占用可在「后台」里查看。',
   },
   {
     id: 'network-failed',

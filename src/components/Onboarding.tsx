@@ -99,7 +99,7 @@ export function Onboarding({
                 <div className="onboarding-body">
                   <p>{t("首次使用需要安装 Ubuntu 运行环境（数百 MB）。应用内置的安装包可离线安装；使用在线来源时，建议通过 Wi-Fi 下载。")}</p>
                   {!manifestConfigured(settings) && (
-                    <p className="onboarding-warn">{t("尚未配置运行时下载地址：请先在「设置 → 运行与后台」填写清单地址与 SHA-256（两者必须成对）。")}</p>
+                    <p className="onboarding-warn">{t("尚未配置运行时下载地址：请先在「设置 → 后台」填写清单地址与 SHA-256（两者必须成对）。")}</p>
                   )}
                   <p className="onboarding-status">
                     {t("当前状态：")}{installed ? t("已安装") + (runtime.phase === 'running' ? t(" · 运行中") : '') : runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting' ? t("正在安装…") : t("未安装")}

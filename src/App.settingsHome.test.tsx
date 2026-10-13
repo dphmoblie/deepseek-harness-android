@@ -48,24 +48,27 @@ describe('设置首页：分组与分类筛选', () => {
   it('按用途分组列出入口', async () => {
     await openSettingsHome()
 
-    const runtimeGroup = screen.getByRole('region', { name: '运行与后台' })
-    expect(within(screen.getByRole('region', { name: '插件扩展' })).getByRole('button', { name: /插件管理/ })).toBeVisible()
+    const runtimeGroup = screen.getByRole('region', { name: '后台' })
     expect(within(runtimeGroup).getByRole('button', { name: /Ubuntu 运行时/ })).toBeVisible()
-    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByRole('button', { name: /终端与设备 Shell/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByRole('button', { name: /^设备 Shell/ })).toBeVisible()
     // 服务行的说明跟着运行状态走，三种真实状态之一，不写死其中一种。
     expect(within(runtimeGroup).getByText('Harness 服务')).toBeVisible()
     expect(within(runtimeGroup).getByText(/正在本机运行|已停止，可随时启动|等待安装运行环境/)).toBeVisible()
 
     const settingsGroup = screen.getByRole('region', { name: '模型连接' })
     expect(within(settingsGroup).getByRole('button', { name: /模型与密钥/ })).toBeVisible()
-    expect(within(screen.getByRole('region', { name: '外观与显示' })).getByRole('button', { name: /终端与外观/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '外观与显示' })).getByRole('button', { name: /主题/ })).toBeVisible()
     expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByRole('button', { name: /Shizuku 与设备 Shell/ })).toBeVisible()
     expect(within(screen.getByRole('region', { name: '日志与排查' })).getByRole('button', { name: /诊断与日志/ })).toBeVisible()
 
-    // 「运行与后台」既是分组名也是二级页入口，两种身份不能混成两行入口。
-    expect(within(settingsGroup).queryByRole('button', { name: /运行与后台/ })).toBeNull()
-    expect(within(settingsGroup).queryByRole('button', { name: /插件管理/ })).toBeNull()
-    expect(screen.getByRole('region', { name: '运行与后台' })).toBeVisible()
+    // 「后台」既是分组名也是二级页入口，两种身份不能混成两行入口。
+    expect(within(settingsGroup).queryByRole('button', { name: /后台/ })).toBeNull()
+    // 插件管理只在底部导航里，设置首页不再有它的入口与分组。
+    const directory = screen.getByRole('region', { name: '后台' }).closest('.settings-directory')
+    expect(directory).not.toBeNull()
+    expect(screen.queryByRole('region', { name: '插件扩展' })).toBeNull()
+    expect(within(directory as HTMLElement).queryByRole('button', { name: /插件管理/ })).toBeNull()
+    expect(screen.getByRole('region', { name: '后台' })).toBeVisible()
   })
 
   it('分类筛选只留这一类，并且点进去到对应设置', async () => {
@@ -74,7 +77,7 @@ describe('设置首页：分组与分类筛选', () => {
     fireEvent.click(screen.getByRole('option', { name: /筛选分类： 设备与自动化/ }))
     expect(screen.queryByRole('button', { name: /模型与密钥/ })).toBeNull()
     expect(screen.queryByRole('region', { name: '模型连接' })).toBeNull()
-    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByRole('button', { name: /终端与设备 Shell/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByRole('button', { name: /^设备 Shell/ })).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: /Shizuku 与设备 Shell/ }))
     expect(await screen.findByRole('heading', { name: '无障碍应用自动化' })).toBeVisible()
@@ -124,10 +127,15 @@ describe('设置首页：分组与分类筛选', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    const runtimeGroup = await screen.findByRole('region', { name: 'Runtime and background' }, { timeout: SETTINGS_HOME_TIMEOUT_MS })
-    expect(within(screen.getByRole('region', { name: 'Plugin extensions' })).getByRole('button', { name: /Plugins/ })).toBeVisible()
+    const runtimeGroup = await screen.findByRole('region', { name: 'Background' }, { timeout: SETTINGS_HOME_TIMEOUT_MS })
     expect(within(runtimeGroup).getByRole('button', { name: /Ubuntu runtime/ })).toBeVisible()
     expect(within(runtimeGroup).getByText('Harness service')).toBeVisible()
+    // 插件管理只在底部导航里：设置首页既没有「插件扩展」分组，也没有入口。
+    const directory = runtimeGroup.closest('.settings-directory') as HTMLElement
+    expect(screen.queryByRole('region', { name: 'Plugin extensions' })).toBeNull()
+    expect(within(directory).queryByRole('button', { name: /Plugins/ })).toBeNull()
+    expect(within(screen.getByRole('region', { name: 'Appearance and display' })).getByRole('button', { name: /^Theme/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: 'Device and automation' })).getByRole('button', { name: /^Device Shell/ })).toBeVisible()
 
     const settingsGroup = screen.getByRole('region', { name: 'Model connections' })
     expect(within(settingsGroup).getByRole('button', { name: /Models and keys/ })).toBeVisible()
