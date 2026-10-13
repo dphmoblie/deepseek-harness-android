@@ -8,7 +8,7 @@ vi.mock('./components/TerminalPanel', () => ({ TerminalPanel: () => <div data-te
 import { App } from './App'
 
 /**
- * 「运行时占用」卡片在版本管理页里的接线。
+ * 「运行时占用与残留」段在版本管理页里的接线。
  *
  * 卡片自己渲染什么、按钮怎么确认，由 `components/RuntimeResidueCard.test.tsx` 管；这一层只钉两件事：
  * 卡片**确实被渲染进版本管理页**，而且真的调了桥。这条链路的接头（import 与渲染点）都在 `App.tsx` 里，
@@ -31,11 +31,11 @@ describe('版本管理：运行时占用卡片接线', () => {
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
     // 卡片只属于版本管理页：还在设置首页时就不该出现。
-    expect(screen.queryByRole('heading', { name: '运行时占用' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: '运行时占用与残留' })).toBeNull()
 
     await openVersionsPage()
 
-    expect(await screen.findByRole('heading', { name: '运行时占用' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '运行时占用与残留' })).toBeVisible()
     expect(screen.getByText('可回收的残留：3 份，共 2.5 GB')).toBeVisible()
     expect(bridge.getRuntimeResidue).toHaveBeenCalledTimes(1)
   })

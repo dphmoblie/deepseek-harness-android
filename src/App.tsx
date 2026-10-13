@@ -116,8 +116,6 @@ import type {
   RuntimeInstallResult,
   RuntimePhase,
   RuntimeProgress,
-  RuntimeReleaseEntry,
-  RuntimeReleaseList,
   RuntimeSessionSnapshotRestoreResult,
   RuntimeSessionSnapshotState,
   RuntimeSource,
@@ -2071,13 +2069,19 @@ function RuntimeVersionsPanel({
         </div>
       )}
 
-      {/* 能力清单放在占用盘点的前面：先回答「这台机器现在能做什么」，再谈磁盘上的东西。 */}
-      <DeviceCapabilityCard />
+      {/* 数据清理与运行时占用合成一张卡：上面是缓存与插件数据，下面才是运行时残留。 */}
+      <div className="settings-subsection" aria-labelledby="runtime-cleanup-group">
+        <div className="section-title">
+          <div>
+            <h3 id="runtime-cleanup-group">{t('清理')}</h3>
+            <p>{t('缓存、插件数据与运行时残留都在这里回收；运行环境本身在「重置运行环境」里处理。')}</p>
+          </div>
+        </div>
 
-      <RuntimeResidueCard />
+        <RuntimeCleanupCard />
 
-      {/* 数据清理分两档（缓存 / 插件数据），运行环境那一档仍是上面的「重置运行环境」。 */}
-      <RuntimeCleanupCard />
+        <RuntimeResidueCard />
+      </div>
 
       {!loading && !failed && (
         <>
@@ -2133,106 +2137,6 @@ function RuntimeVersionsPanel({
           )}
         </>
       )}
-    </section>
-  )
-}
-
-interface RuntimeReleasesSectionProps {
-  /** 当前已安装的运行时版本：列表里同版本那一行标成「已安装」，不必再装一遍。 */
-  installedVersion?: string
-  /** 发起安装：确认弹窗、忙碌状态与安装后的提示都由 App 统一负责。 */
-  onInstall: (entry: RuntimeReleaseEntry) => void
-  listReleases: () => Promise<RuntimeReleaseList>
-}
-
-/**
- * 可从 GitHub 发布页安装的运行时版本。
- *
- * 列表里的条目都由原生侧先验证过（清单能解析、摘要格式正确、下载地址确实在发布页域名下）；
- * 缺 `manifestUrl` 或 `manifestSha256` 的条目只能看不能装——按钮禁用并在行内说明原因，
- * 而不是让用户点下去再吃一个报错。
- *
- * 不自动查询：查一次要打 GitHub API（未登录时限流很低），进页面就打属于浪费，
- * 所以只由用户点「检查可用版本」触发。
- */
-function RuntimeReleasesSection({ installedVersion, onInstall, listReleases }: RuntimeReleasesSectionProps) {
-  const [entries, setEntries] = useState<RuntimeReleaseEntry[] | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [failed, setFailed] = useState(false)
-
-  const check = useCallback(() => {
-    setLoading(true)
-    setFailed(false)
-    void (async () => {
-      try {
-        setEntries((await listReleases()).entries)
-      } catch {
-        setFailed(true)
-        setEntries(null)
-      } finally {
-        setLoading(false)
-      }
-    })()
-  }, [listReleases])
-
-  return (
-    <section className="settings-section" aria-labelledby="runtime-releases-title">
-      <div className="section-title">
-        <span className="section-icon"><CloudDownload size={19} /></span>
-        <div>
-          <h2 id="runtime-releases-title">{t("可从 GitHub 安装的版本")}</h2>
-          <p>{t("从本项目的 GitHub 发布页读取带运行时清单的版本。安装要下载并校验整份 rootfs，所以不会自动查询。")}</p>
-        </div>
-      </div>
-
-      <div className="settings-inline-actions">
-        <button className="button button-secondary" type="button" onClick={check} disabled={loading}>
-          {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-          {loading ? t("正在查询") : t("检查可用版本")}
-        </button>
-      </div>
-
-      {failed && <p className="harness-log-state" role="alert">{t("查不到可用版本：请检查网络后重试。")}</p>}
-
-      {!failed && entries !== null && entries.length === 0 && (
-        <p className="harness-log-state">{t("发布页上还没有带运行时清单的版本。")}</p>
-      )}
-
-      {!failed && entries !== null && entries.length > 0 && (
-        <div className="release-list">
-          {entries.map(entry => {
-            const installable = entry.manifestUrl !== undefined && entry.manifestSha256 !== undefined
-            const installed = installedVersion !== undefined && installedVersion === entry.version
-            return (
-              <div className="release-row" key={entry.version}>
-                <div className="release-copy">
-                  <strong>{installed ? `${entry.version} · ${t("已安装")}` : entry.version}</strong>
-                  <small>
-                    {entry.dshVersion === undefined
-                      ? t("清单里没有 dsh 版本：安装后以运行环境页显示的为准。")
-                      : `dsh ${entry.dshVersion}`}
-                  </small>
-                  {entry.notes !== undefined && entry.notes.trim() !== '' && <ReleaseNotes notes={entry.notes} />}
-                  {!installable && <small>{t("这个版本的清单没通过校验，只能查看、不能安装。")}</small>}
-                </div>
-                <div className="release-actions">
-                  <button
-                    className="button button-secondary"
-                    type="button"
-                    onClick={() => onInstall(entry)}
-                    disabled={!installable || installed}
-                  >
-                    <Download size={18} />
-                    {installed ? t("已安装") : t("安装这个版本")}
-                  </button>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      <p className="settings-note">{t("安装会先自动备份会话，再下载、校验并切换新运行时；这一步失败不影响当前正在使用的版本。")}</p>
     </section>
   )
 }
@@ -2605,10 +2509,6 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
 interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
   /** 返回设置首页：版本管理是一级页，返回键回设置首页，而不是回「后台」。 */
   onBack: () => void
-  /** 已安装运行时的版本号：给「可从 GitHub 安装的版本」列表标记「已安装」。 */
-  installedVersion?: string
-  listReleases: () => Promise<RuntimeReleaseList>
-  installRelease: (entry: RuntimeReleaseEntry) => void
   loadSnapshots: () => Promise<RuntimeSessionSnapshotState>
   createSnapshot: () => Promise<RuntimeSessionSnapshotState>
   restoreSnapshot: (id: string) => Promise<RuntimeSessionSnapshotRestoreResult>
@@ -2641,9 +2541,6 @@ function RuntimeVersionsScreen({
   refreshRuntime,
   notify,
   onBack,
-  installedVersion,
-  listReleases,
-  installRelease,
   loadSnapshots,
   createSnapshot,
   restoreSnapshot,
@@ -2678,13 +2575,7 @@ function RuntimeVersionsScreen({
         notify={notify}
       />
 
-      {/* 顺序即用户关心顺序：磁盘上有哪几份 → 能装哪一版 → 会话备份 → 应用自身。 */}
-      <RuntimeReleasesSection
-        installedVersion={installedVersion}
-        onInstall={installRelease}
-        listReleases={listReleases}
-      />
-
+      {/* 顺序即用户关心顺序：磁盘上有哪几份 → 会话备份 → 应用自身。 */}
       <RuntimeSnapshotsSection
         loadSnapshots={loadSnapshots}
         createSnapshot={createSnapshot}
@@ -4935,6 +4826,9 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             <ExternalLink size={18} />{t('在 GitHub 反馈问题')}
           </a>
         </section>
+
+        {/* 设备能力清单：从版本管理页挪过来，回答「这台机器现在能做什么」。 */}
+        <DeviceCapabilityCard />
         </>
         )}
 
@@ -5788,19 +5682,12 @@ export function App() {
     requestRuntimeInstall({ manifestUrl: '', manifestSha256: '' }, null, true)
   }, [requestRuntimeInstall])
 
-  /** 从「可从 GitHub 安装的版本」列表里选定的版本：清单地址与摘要都已由原生验证过。 */
-  const installRuntimeRelease = useCallback((entry: RuntimeReleaseEntry) => {
-    if (entry.manifestUrl === undefined || entry.manifestSha256 === undefined) return
-    requestRuntimeInstall({ manifestUrl: entry.manifestUrl, manifestSha256: entry.manifestSha256 }, entry.version, false)
-  }, [requestRuntimeInstall])
-
   const confirmPendingInstall = useCallback(() => {
     if (pendingInstall === null) return
     performRuntimeInstall(pendingInstall.source, pendingInstall.bundled ? t("运行环境已更新") : t("运行环境已安装"))
   }, [pendingInstall, performRuntimeInstall])
 
   /** 版本管理页读的三块数据：都只是读，失败由各自的区块自己显示。 */
-  const listRuntimeReleases = useCallback(() => runtimeBridge.listRuntimeReleases(), [])
   const loadSessionSnapshots = useCallback(() => runtimeBridge.getRuntimeSessionSnapshotState(), [])
   const createSessionSnapshot = useCallback(() => runtimeBridge.createRuntimeSessionSnapshot(), [])
   const restoreSessionSnapshot = useCallback((id: string) => runtimeBridge.restoreRuntimeSessionSnapshot(id), [])
@@ -6454,9 +6341,6 @@ export function App() {
           refreshRuntime={refreshRuntimeState}
           notify={notify}
           onBack={() => backToView('settings')}
-          installedVersion={runtime.installedVersion}
-          listReleases={listRuntimeReleases}
-          installRelease={installRuntimeRelease}
           loadSnapshots={loadSessionSnapshots}
           createSnapshot={createSessionSnapshot}
           restoreSnapshot={restoreSessionSnapshot}

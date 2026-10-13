@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { beforeEachAppTest, bridge, notInstalledState, openSettingsPage, readyState } from './__tests__/appTestHarness'
-import type { RuntimeReleaseEntry, RuntimeSessionSnapshotState } from './platform/types'
+import { beforeEachAppTest, bridge, readyState } from './__tests__/appTestHarness'
+import type { RuntimeSessionSnapshotState } from './platform/types'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
 vi.mock('./components/TerminalPanel', () => ({
@@ -11,26 +11,11 @@ vi.mock('./components/TerminalPanel', () => ({
 import { App } from './App'
 
 /**
- * 版本管理页在「双槽切换」之外新增的三块：远端可用版本、会话备份、应用自身更新。
+ * 版本管理页在「双槽切换」之外的会话备份部分。
  *
- * 三块各自回答一个「用户会问的问题」：
- *  1. 除了 APK 内置的那份，还能从发布页装到哪些版本？（列表要手动触发，查一次要打 GitHub）
- *  2. 换掉运行时以后，旧 dsh 写的会话读不出来怎么办？（先备份、能恢复，恢复是合并回填）
- *  3. 应用本身（APK）怎么更新？（下载校验后交给系统安装器，未授权时如实引导去系统设置）
- *
- * 与「运行时版本管理」同住一条导航链，所以按 view 单独成文件（登记册 5.6-J）。
+ * 换掉运行时以后，旧 dsh 写的会话读不出来怎么办：先自动备份、能恢复，恢复是合并回填。
+ * 与「运行时版本管理」「应用更新公告」同住一条导航链，所以按 view 单独成文件（登记册 5.6-J）。
  */
-
-/** 一份可安装的远端版本：清单地址与摘要成对出现。 */
-const installableRelease: RuntimeReleaseEntry = {
-  version: '0.2.1-mobile-400',
-  dshVersion: '0.2.0-rc.2',
-  manifestUrl: 'https://github.com/dphmoblie/deepseek-harness-android/releases/download/v0.2.1-mobile-400/runtime-manifest.json',
-  manifestSha256: 'a'.repeat(64),
-}
-
-/** 出现过、但清单没通过校验的版本：只能列出来，不能安装。 */
-const unverifiedRelease: RuntimeReleaseEntry = { version: '0.2.1-mobile-399' }
 
 const snapshotId = 'snap-1700000001000-00000002'
 
@@ -62,125 +47,16 @@ async function openVersionsPage(): Promise<void> {
   await screen.findByRole('heading', { name: '版本管理' }, { timeout: 5_000 })
 }
 
-/** 打开远端版本列表：可用版本是手动触发的，所以每个相关用例都要先点一次。 */
-async function checkReleases(): Promise<void> {
-  fireEvent.click(await screen.findByRole('button', { name: '检查可用版本' }))
-}
-
-describe('版本管理：远端可用版本', () => {
-  beforeEach(beforeEachAppTest)
-
-  it('可用版本不会自动查询：不进发布页，列表也不假装是空的', async () => {
-    bridge.getState.mockResolvedValue({ ...readyState })
-    await openVersionsPage()
-
-    expect(bridge.listRuntimeReleases).not.toHaveBeenCalled()
-    // 没查过 ≠ 没有版本：这时连「还没有」都不该说，更不能给出安装按钮。
-    expect(screen.queryByText('发布页上还没有带运行时清单的版本。')).toBeNull()
-    expect(screen.queryByRole('button', { name: '安装这个版本' })).toBeNull()
-  })
-
-  it('点了才查一次，并把带清单的与没过校验的分开呈现', async () => {
-    bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.listRuntimeReleases.mockResolvedValue({ entries: [installableRelease, unverifiedRelease] })
-    await openVersionsPage()
-
-    await checkReleases()
-
-    expect(await screen.findByText(installableRelease.version)).toBeVisible()
-    expect(screen.getByText('dsh 0.2.0-rc.2')).toBeVisible()
-    expect(screen.getByText('这个版本的清单没通过校验，只能查看、不能安装。')).toBeVisible()
-    const buttons = screen.getAllByRole('button', { name: '安装这个版本' })
-    expect(buttons).toHaveLength(2)
-    expect(buttons[0]).toBeEnabled()
-    expect(buttons[1]).toBeDisabled()
-    expect(bridge.listRuntimeReleases).toHaveBeenCalledTimes(1)
-  })
-
-  it('发布页上一个带清单的版本都没有时，如实说没有', async () => {
-    bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.listRuntimeReleases.mockResolvedValue({ entries: [] })
-    await openVersionsPage()
-
-    await checkReleases()
-
-    expect(await screen.findByText('发布页上还没有带运行时清单的版本。')).toBeVisible()
-  })
-
-  it('查不到版本时报错，不把网络失败显示成「没有版本」', async () => {
-    bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.listRuntimeReleases.mockRejectedValue(new Error('offline'))
-    await openVersionsPage()
-
-    await checkReleases()
-
-    expect(await screen.findByText('查不到可用版本：请检查网络后重试。')).toBeVisible()
-    expect(screen.queryByText('发布页上还没有带运行时清单的版本。')).toBeNull()
-  })
-
-  it('装远端版本前先提醒会丢什么，并说明会先自动备份会话', async () => {
-    bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.listRuntimeReleases.mockResolvedValue({ entries: [installableRelease] })
-    await openVersionsPage()
-    await checkReleases()
-
-    fireEvent.click(await screen.findByRole('button', { name: '安装这个版本' }))
-
-    expect(await screen.findByRole('heading', { name: '更新 Ubuntu 运行环境' })).toBeVisible()
-    expect(screen.getByText(/即将安装运行时 0\.2\.1-mobile-400。/)).toBeVisible()
-    expect(screen.getByText(/开始前会先把当前会话自动备份一份/)).toBeVisible()
-    expect(bridge.install).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByRole('button', { name: '确认更新' }))
-    await waitFor(() => expect(bridge.install).toHaveBeenCalledWith({
-      manifestUrl: installableRelease.manifestUrl,
-      manifestSha256: installableRelease.manifestSha256,
-    }))
-  })
-
-  it('提醒里点「暂不更新」就什么都不装', async () => {
-    bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.listRuntimeReleases.mockResolvedValue({ entries: [installableRelease] })
-    await openVersionsPage()
-    await checkReleases()
-    fireEvent.click(await screen.findByRole('button', { name: '安装这个版本' }))
-    await screen.findByRole('heading', { name: '更新 Ubuntu 运行环境' })
-
-    fireEvent.click(screen.getByRole('button', { name: '暂不更新' }))
-
-    await waitFor(() => expect(screen.queryByRole('heading', { name: '更新 Ubuntu 运行环境' })).toBeNull())
-    expect(bridge.install).not.toHaveBeenCalled()
-  })
-
-  it('还没装过运行时就直接装：首次安装没有会话可丢，不弹提醒', async () => {
-    bridge.getState.mockResolvedValue({ ...notInstalledState })
-    render(<App />)
-    await waitFor(() => expect(bridge.getState).toHaveBeenCalled())
-    // 还没装运行时的时候设置首页不是启动页：手机宽度下先走底部导航的「设置」。
-    fireEvent.click(await screen.findByRole('button', { name: '设置' }, { timeout: 5_000 }))
-    await screen.findByRole('heading', { name: '设置' }, { timeout: 5_000 })
-    // 安装按钮在「Ubuntu 运行时」页（不是「运行与后台」）。
-    await openSettingsPage('Ubuntu 运行时')
-
-    // 标签取决于是不是配了远端来源，这里只关心「点了就装、不拦一道」。
-    fireEvent.click(await screen.findByRole('button', { name: /安装内置环境|下载并安装/ }))
-
-    await waitFor(() => expect(bridge.install).toHaveBeenCalled())
-    expect(screen.queryByRole('heading', { name: '更新 Ubuntu 运行环境' })).toBeNull()
-  })
-})
-
 describe('版本管理：安装前的自动备份结论', () => {
   beforeEach(beforeEachAppTest)
 
   /** 走到「点确认更新」那一步：后面的断言都只关心备份结论怎么显示。 */
   async function confirmInstall(autoSnapshot: unknown): Promise<void> {
-    bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.listRuntimeReleases.mockResolvedValue({ entries: [installableRelease] })
+    // 有可用更新时启动链不会自动进对话（`App.tsx:5807`），启动页上直接有「更新运行环境」。
+    bridge.getState.mockResolvedValue({ ...readyState, updateAvailable: true })
     bridge.install.mockResolvedValue({ autoSnapshot })
-    await openVersionsPage()
-    await checkReleases()
-    fireEvent.click(await screen.findByRole('button', { name: '安装这个版本' }))
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '更新运行环境' }))
     fireEvent.click(await screen.findByRole('button', { name: '确认更新' }))
   }
 
@@ -210,12 +86,10 @@ describe('版本管理：安装前的自动备份结论', () => {
   })
 
   it('旧版原生桥不回 autoSnapshot 时不多说一句', async () => {
-    bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.listRuntimeReleases.mockResolvedValue({ entries: [installableRelease] })
+    bridge.getState.mockResolvedValue({ ...readyState, updateAvailable: true })
     bridge.install.mockResolvedValue({})
-    await openVersionsPage()
-    await checkReleases()
-    fireEvent.click(await screen.findByRole('button', { name: '安装这个版本' }))
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '更新运行环境' }))
     fireEvent.click(await screen.findByRole('button', { name: '确认更新' }))
 
     await waitFor(() => expect(bridge.install).toHaveBeenCalled())

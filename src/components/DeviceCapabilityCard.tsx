@@ -59,6 +59,34 @@ const ALTERNATIVE_NOTES: Record<string, string> = {
 }
 
 /**
+ * 一次检测的状态。
+ *
+ * 三态放在**同一个** state 里是有意的：先前拆成 `report` / `loaded` / `failed` 三个 state 时，
+ * 一次检测会派发两次更新、提交两遍，而其中一遍的 DOM 与上一遍完全一样——
+ * 那正是 `renderProfile` 的「纯导航每次提交都必须改 DOM」要挡的白做提交。一次检测只该有一次状态变化。
+ */
+type CapabilityLoad =
+  | { status: 'loading' }
+  | { status: 'ready'; report: DeviceCapabilityReport }
+  | { status: 'failed' }
+
+/**
+ * 两份读数是否完全一样（含取样时刻）。
+ *
+ * 这张卡每 5 秒轮询一次，而能力大多时候不变：一样的读数再 `setState` 只会白渲染一次。
+ * 取样时刻不同就得更新，因为界面上写着「取样时间」——那是给用户判断数据新旧用的，不能瞒着不刷新。
+ */
+function sameReport(previous: DeviceCapabilityReport, next: DeviceCapabilityReport): boolean {
+  if (previous.atMs !== next.atMs || previous.sdkInt !== next.sdkInt) return false
+  if (previous.capabilities.length !== next.capabilities.length) return false
+  return previous.capabilities.every((entry, index) => {
+    const other = next.capabilities[index]
+    return entry.id === other.id && entry.state === other.state && entry.reason === other.reason
+      && entry.action === other.action && entry.alternative === other.alternative
+  })
+}
+
+/**
  * 「设备能力」卡片：一次列清五项能力现在能不能用、不能用是因为什么、下一步点哪里。
  *
  * 四条边界：
@@ -70,24 +98,21 @@ const ALTERNATIVE_NOTES: Record<string, string> = {
  *  - 卡片本身**不写入任何浏览器存储**，也不触发任何动作。
  */
 export function DeviceCapabilityCard({ bridge = runtimeBridge }: { bridge?: RuntimeBridge }) {
-  const [report, setReport] = useState<DeviceCapabilityReport | null>(null)
-  const [loaded, setLoaded] = useState(false)
-  const [failed, setFailed] = useState(false)
+  const [load, setLoad] = useState<CapabilityLoad>({ status: 'loading' })
   const requestId = useRef(0)
   const invalidate = useCallback(() => { requestId.current += 1 }, [])
 
   const refresh = useCallback(async () => {
     const currentRequest = ++requestId.current
-    setFailed(false)
     try {
       const next = await bridge.getDeviceCapabilities()
       if (currentRequest !== requestId.current) return
-      setReport(next)
-      setLoaded(true)
+      setLoad(previous => (previous.status === 'ready' && sameReport(previous.report, next)
+        ? previous
+        : { status: 'ready', report: next }))
     } catch {
       if (currentRequest !== requestId.current) return
-      setFailed(true)
-      setLoaded(true)
+      setLoad(previous => (previous.status === 'failed' ? previous : { status: 'failed' }))
     }
   }, [bridge])
   useEffect(() => {
@@ -109,15 +134,16 @@ export function DeviceCapabilityCard({ bridge = runtimeBridge }: { bridge?: Runt
     }
   }, [invalidate, refresh])
 
-  const ready = loaded && !failed && report !== null
+  const report = load.status === 'ready' ? load.report : null
+  const failed = load.status === 'failed'
 
   return <div className="settings-subsection" aria-labelledby="device-capabilities">
     <div className="section-title"><span className="section-icon"><Cpu size={19} /></span>
       <div><h3 id="device-capabilities">{t('设备能力')}</h3>
         <p>{t('一次看清 Shizuku、无障碍、副屏、截图与中文输入现在能不能用，以及不能用的原因。')}</p></div>
     </div>
-    {!loaded && !failed && <p className="settings-note">{t('正在检测设备能力…')}</p>}
-    {ready && report.capabilities.map(entry => <p className="settings-note" key={entry.id}>
+    {load.status === 'loading' && <p className="settings-note">{t('正在检测设备能力…')}</p>}
+    {report !== null && report.capabilities.map(entry => <p className="settings-note" key={entry.id}>
       <strong>{t(CAPABILITY_LABELS[entry.id] ?? entry.id)}</strong>
       {' '}
       {t(STATE_LABELS[entry.state])}
@@ -125,8 +151,8 @@ export function DeviceCapabilityCard({ bridge = runtimeBridge }: { bridge?: Runt
       {entry.action !== null && ` · ${t('下一步：{0}', t(ACTION_NOTES[entry.action] ?? entry.action))}`}
       {entry.alternative !== null && ` · ${t('替代方式：{0}', t(ALTERNATIVE_NOTES[entry.alternative] ?? entry.alternative))}`}
     </p>)}
-    {ready && <p className="settings-note">{t('取样时间：{0}', new Date(report.atMs).toLocaleTimeString())} · {t('连接状态变化后会自动重新检测。')}</p>}
-    {ready && <button type="button" onClick={() => { void refresh() }}>{t('重新检测')}</button>}
+    {report !== null && <p className="settings-note">{t('取样时间：{0}', new Date(report.atMs).toLocaleTimeString())} · {t('连接状态变化后会自动重新检测。')}</p>}
+    {report !== null && <button type="button" onClick={() => { void refresh() }}>{t('重新检测')}</button>}
     {failed && <p role="alert">{t('无法读取设备能力清单')} <button type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
   </div>
 }
