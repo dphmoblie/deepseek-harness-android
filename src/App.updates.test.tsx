@@ -59,22 +59,6 @@ describe('应用更新入口与缓存交互', () => {
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
   })
 
-  it('两处公告独立折叠，长公告不掩盖更新按钮', async () => {
-    bridge.listRuntimeReleases.mockResolvedValue({ entries: [{
-      version: '0.3.0-runtime', notes: '历史公告'.repeat(100),
-    }] })
-    render(<App />)
-    await openVersions()
-    fireEvent.click(await screen.findByRole('button', { name: '检查可用版本' }))
-    await waitFor(() => expect(screen.getAllByRole('button', { name: '展开完整更新公告' })).toHaveLength(2))
-    const toggles = screen.getAllByRole('button', { name: '展开完整更新公告' })
-    expect(toggles[0]).toHaveAttribute('aria-expanded', 'false')
-    fireEvent.click(toggles[0])
-    expect(screen.getByRole('region', { name: '完整更新公告' })).toHaveTextContent('历史公告'.repeat(100))
-    expect(toggles[1]).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.getByRole('button', { name: '下载更新' })).toBeEnabled()
-  })
-
   it('重入使用缓存读取，只有手动重新检查强刷，失败保留信息', async () => {
     render(<App />)
     await openVersions()

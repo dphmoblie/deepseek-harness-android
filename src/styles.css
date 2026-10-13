@@ -1263,62 +1263,6 @@ button:disabled {
   margin-bottom: 0;
 }
 
-/*
- * 设置首页的功能词搜索。
- *
- * 输入框自己不自带边框（这一块整体就是输入框），焦点态因此必须画在容器上：
- * 不做 focus-within 高亮，键盘用户看不出焦点在哪一格。
- */
-.settings-search {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 12px;
-  padding: 12px 14px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--surface);
-}
-
-.settings-search:focus-within {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent);
-}
-
-.settings-search > svg {
-  color: var(--muted);
-}
-
-.settings-search input {
-  padding: 0;
-  border: 0;
-  color: var(--ink);
-  background: transparent;
-  font: inherit;
-}
-
-.settings-search input:focus {
-  outline: none;
-}
-
-.settings-search-clear {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  border: 0;
-  border-radius: 50%;
-  color: var(--muted);
-  background: var(--surface-muted);
-  cursor: pointer;
-}
-
-.settings-search-clear:hover {
-  color: var(--ink);
-}
-
 /* 分组标题：只是列表内的分组说明，不做成标题元素（页头已经有一个同名「设置」）。 */
 .management-group-title {
   margin: 0;
@@ -1513,6 +1457,16 @@ button:disabled {
   justify-content: flex-end;
   margin-top: 9px;
 }
+
+/* 供应商状态一览：一行一个供应商，右边一枚状态徽标与「配置」入口。 */
+.provider-status { display: grid; gap: 6px; margin: 4px 0 14px; }
+.provider-status-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.provider-status-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.provider-status-badge {
+  flex: 0 0 auto; font-size: 0.75rem; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid var(--line-alt); color: var(--text-dim);
+}
+.provider-status-badge.is-configured { border-color: var(--accent); color: var(--accent); }
 
 .custom-providers, .custom-provider { display: grid; gap: 16px; min-width: 0; }
 .custom-provider { border-bottom: 1px solid var(--line-alt); padding-bottom: 20px; }
@@ -2888,10 +2842,8 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 @media (pointer: coarse), (max-width: 560px) {
   .compact-button, .custom-providers .icon-button, .terminal-copy { min-height: 44px; }
   .custom-providers .icon-button { width: 44px; flex-basis: 44px; }
-  .field input, .field select, .mono-input, .settings-search input, .session-search input { font-size: 1rem !important; }
+  .field input, .field select, .mono-input, .session-search input { font-size: 1rem !important; }
   .field input, .field select { min-height: 48px; }
-  .settings-search { min-height: 48px; padding-top: 2px; padding-bottom: 2px; }
-  .settings-search input { min-height: 44px; }
   .launch-actions > .button { flex: 1 1 auto; }
   .save-button { width: 100%; min-height: 48px; }
   .section-title p, .settings-note { line-height: 1.65; }
@@ -2919,7 +2871,6 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 .settings-screen .screen-heading > div, .settings-screen .section-title > div { min-width: 0; }
 .settings-screen :is(h1, h2, h3, .button, .status-chip) { overflow-wrap: anywhere; }
 .settings-screen .button { white-space: normal; }
-.settings-search input { min-width: 0; }
 @media (max-width: 560px) {
   .settings-screen .section-title-action { grid-template-columns: 40px minmax(0, 1fr); }
   .settings-screen .section-title-action > .status-chip { grid-column: 2; justify-self: start; white-space: normal; }

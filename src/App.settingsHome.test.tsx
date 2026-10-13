@@ -10,13 +10,10 @@ vi.mock('./components/TerminalPanel', () => ({
 import { App } from './App'
 
 /**
- * 设置首页：分组入口 + 按功能词本地过滤。
+ * 设置首页：按用途分组的入口，以及分类芯片的筛选。
  *
- * 为什么要有这一组：改动前入口是一张平列表，用户想找「保活」「日志」「导入」这类功能时
- * 只能逐行读标题 —— 而界面上根本没有这几个词。这里钉住三件事：
- *  1. 按用途细分模型、外观、设备、运行、插件、文件、版本和诊断；
- *  2. 过滤是本地的：只影响显示哪些入口，不重读设置、不改任何状态；
- *  3. 搜不到就如实说搜不到，不装作「本来就没有这个功能」。
+ * 为什么要有这一组：入口按用途细分模型、外观、设备、运行、插件、文件、版本和诊断，
+ * 芯片只决定这一屏显示哪些入口（不重读设置、不改任何状态），点下去走的还是同一条路。
  */
 /**
  * 设置首页出现的等待上限。
@@ -27,9 +24,8 @@ import { App } from './App'
  */
 const SETTINGS_HOME_TIMEOUT_MS = 5_000
 
-describe('设置首页：分组与功能词过滤', () => {
+describe('设置首页：分组与分类筛选', () => {
   beforeEach(beforeEachAppTest)
-
 
   afterEach(() => {
     vi.restoreAllMocks()
@@ -49,133 +45,54 @@ describe('设置首页：分组与功能词过滤', () => {
     await screen.findByRole('heading', { name: '设置' }, { timeout: SETTINGS_HOME_TIMEOUT_MS })
   }
 
-  /** 搜索框：`type="search"` 的可及名就是占位文案。 */
-  function searchBox(): HTMLElement {
-    return screen.getByRole('searchbox', { name: '按功能词查找入口' })
-  }
-
   it('按用途分组列出入口', async () => {
     await openSettingsHome()
 
-    const runtimeGroup = screen.getByRole('region', { name: '运行与后台' })
-    expect(within(screen.getByRole('region', { name: '插件扩展' })).getByRole('button', { name: /插件管理/ })).toBeVisible()
+    const runtimeGroup = screen.getByRole('region', { name: '后台' })
     expect(within(runtimeGroup).getByRole('button', { name: /Ubuntu 运行时/ })).toBeVisible()
-    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByRole('button', { name: /终端与设备 Shell/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByText('设备 Shell')).toBeVisible()
     // 服务行的说明跟着运行状态走，三种真实状态之一，不写死其中一种。
     expect(within(runtimeGroup).getByText('Harness 服务')).toBeVisible()
     expect(within(runtimeGroup).getByText(/正在本机运行|已停止，可随时启动|等待安装运行环境/)).toBeVisible()
 
     const settingsGroup = screen.getByRole('region', { name: '模型连接' })
     expect(within(settingsGroup).getByRole('button', { name: /模型与密钥/ })).toBeVisible()
-    expect(within(screen.getByRole('region', { name: '外观与显示' })).getByRole('button', { name: /终端与外观/ })).toBeVisible()
-    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByRole('button', { name: /Shizuku 与设备 Shell/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '外观与显示' })).getByRole('button', { name: /主题/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByRole('button', { name: /设备 Shell 设置/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByRole('button', { name: /自动化设置/ })).toBeVisible()
     expect(within(screen.getByRole('region', { name: '日志与排查' })).getByRole('button', { name: /诊断与日志/ })).toBeVisible()
 
-    // 「运行与后台」既是分组名也是二级页入口，两种身份不能混成两行入口。
-    expect(within(settingsGroup).queryByRole('button', { name: /运行与后台/ })).toBeNull()
-    expect(within(settingsGroup).queryByRole('button', { name: /插件管理/ })).toBeNull()
-    expect(screen.getByRole('region', { name: '运行与后台' })).toBeVisible()
+    // 「后台」既是分组名也是二级页入口，两种身份不能混成两行入口。
+    expect(within(settingsGroup).queryByRole('button', { name: /后台/ })).toBeNull()
+    // 插件管理只在底部导航里，设置首页不再有它的入口与分组。
+    const directory = screen.getByRole('region', { name: '后台' }).closest('.settings-directory')
+    expect(directory).not.toBeNull()
+    expect(screen.queryByRole('region', { name: '插件扩展' })).toBeNull()
+    expect(within(directory as HTMLElement).queryByRole('button', { name: /插件管理/ })).toBeNull()
+    expect(screen.getByRole('region', { name: '后台' })).toBeVisible()
   })
 
-  it('按功能词过滤：界面上没有的词也能定位到入口', async () => {
+  it('分类筛选只留这一类，并且点进去到对应设置', async () => {
     await openSettingsHome()
 
-    // 「保活」只出现在关键词里（界面上写的是「后台保持」），这正是这次改造要解决的场景。
-    fireEvent.change(searchBox(), { target: { value: '保活' } })
-
-    expect(within(screen.getByRole('region', { name: '运行与后台' })).getByRole('button', { name: /运行与后台/ })).toBeVisible()
+    fireEvent.click(screen.getByRole('option', { name: /筛选分类： 设备与自动化/ }))
     expect(screen.queryByRole('button', { name: /模型与密钥/ })).toBeNull()
-    // 命中的分组才留下：设置分组整组消失，不留一个空标题。
     expect(screen.queryByRole('region', { name: '模型连接' })).toBeNull()
-    expect(screen.getByText('找到 1 个匹配的入口')).toBeVisible()
-  })
+    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByText('设备 Shell')).toBeVisible()
 
-  it('分类筛选后搜索仍覆盖所有分类，并能直接进入对应设置', async () => {
-    await openSettingsHome()
-    fireEvent.click(screen.getByRole('option', { name: /筛选分类： 外观与显示/ }))
-    expect(screen.queryByRole('button', { name: /模型与密钥/ })).toBeNull()
-    expect(screen.getByRole('button', { name: /终端与外观/ })).toBeVisible()
-    fireEvent.change(searchBox(), { target: { value: '无障碍 白名单' } })
-    fireEvent.click(screen.getByRole('button', { name: /Shizuku 与设备 Shell/ }))
+    fireEvent.click(screen.getByRole('button', { name: /自动化设置/ }))
     expect(await screen.findByRole('heading', { name: '无障碍应用自动化' })).toBeVisible()
   })
 
-  it('背景视频和卡片透明度均可检索到外观入口', async () => {
-    await openSettingsHome()
-    for (const value of ['视频', '卡片 透明', 'mp4']) {
-      fireEvent.change(searchBox(), { target: { value } })
-      expect(screen.getByRole('button', { name: /终端与外观/ })).toBeVisible()
-      expect(screen.getByText('找到 1 个匹配的入口')).toBeVisible()
-    }
-  })
-
-  it('英文功能词同样命中，且大小写不敏感', async () => {
-    await openSettingsHome()
-
-    fireEvent.change(searchBox(), { target: { value: 'LOG' } })
-
-    expect(screen.getByRole('button', { name: /诊断与日志/ })).toBeVisible()
-    expect(screen.queryByRole('button', { name: /Ubuntu 运行时/ })).toBeNull()
-    expect(screen.getByText('找到 1 个匹配的入口')).toBeVisible()
-  })
-
-  it('多个词一起输入时必须全部命中', async () => {
-    await openSettingsHome()
-
-    // 「终端」两个入口都沾边，「终端 外观」只剩一个：多词等于缩小范围，而不是并集。
-    fireEvent.change(searchBox(), { target: { value: '终端 外观' } })
-    expect(screen.getByRole('button', { name: /终端与外观/ })).toBeVisible()
-    expect(screen.queryByRole('button', { name: /终端与设备 Shell/ })).toBeNull()
-
-    fireEvent.change(searchBox(), { target: { value: '终端 不存在的外观词' } })
-    expect(screen.queryByRole('button', { name: /终端与外观/ })).toBeNull()
-    expect(screen.getByText(/没有匹配的入口/)).toBeVisible()
-  })
-
-  it('搜不到时如实说没有匹配，并且不显示任何入口', async () => {
-    await openSettingsHome()
-
-    fireEvent.change(searchBox(), { target: { value: '量子纠缠' } })
-
-    expect(screen.getByText('没有匹配的入口：试试「导入」「日志」「保活」这类功能词')).toBeVisible()
-    expect(screen.queryByRole('region', { name: '运行与后台' })).toBeNull()
-    expect(screen.queryByRole('region', { name: '模型连接' })).toBeNull()
-    expect(screen.queryByRole('button', { name: /模型与密钥/ })).toBeNull()
-  })
-
-  it('过滤只是显示层：不重读设置，也不写任何设置', async () => {
+  it('筛选只是显示层：不重读设置，也不写任何设置', async () => {
     await openSettingsHome()
     const readsBefore = bridge.getSettings.mock.calls.length
 
-    fireEvent.change(searchBox(), { target: { value: '日志' } })
-    fireEvent.change(searchBox(), { target: { value: '导入' } })
-    fireEvent.change(searchBox(), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('option', { name: /筛选分类： 日志与排查/ }))
+    fireEvent.click(screen.getByRole('option', { name: /筛选分类：全部分类/ }))
 
     expect(bridge.getSettings.mock.calls.length).toBe(readsBefore)
     expect(bridge.saveSettings).not.toHaveBeenCalled()
-  })
-
-  it('清空查找词后恢复全部入口', async () => {
-    await openSettingsHome()
-
-    fireEvent.change(searchBox(), { target: { value: '保活' } })
-    expect(screen.queryByRole('region', { name: '模型连接' })).toBeNull()
-
-    fireEvent.click(screen.getByRole('button', { name: '清空查找词' }))
-
-    expect(screen.getByRole('region', { name: '模型连接' })).toBeVisible()
-    expect(screen.getByRole('button', { name: /模型与密钥/ })).toBeVisible()
-    // 结果条也一起收掉：没有过滤词时不该还挂着「找到几个」。
-    expect(screen.queryByText(/找到 \d+ 个匹配的入口/)).toBeNull()
-  })
-
-  it('过滤后点入口仍然进得去对应页面', async () => {
-    await openSettingsHome()
-
-    fireEvent.change(searchBox(), { target: { value: '保活' } })
-    fireEvent.click(screen.getByRole('button', { name: /运行与后台/ }))
-
-    expect(await screen.findByRole('heading', { name: '运行与后台' })).toBeVisible()
   })
 
   it('「版本管理」是一级页：入口进得去，返回键回设置首页', async () => {
@@ -192,32 +109,11 @@ describe('设置首页：分组与功能词过滤', () => {
     expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()
   })
 
-  it('输入「回退」也能定位到版本管理入口', async () => {
-    await openSettingsHome()
-
-    // 「回退」「切回」都不是界面上的字（界面上写的是「切换到上一版本」），只能靠关键词命中。
-    fireEvent.change(searchBox(), { target: { value: '回退' } })
-
-    expect(screen.getByRole('button', { name: /版本管理/ })).toBeVisible()
-    expect(screen.queryByRole('button', { name: /模型与密钥/ })).toBeNull()
-    expect(screen.getByText('找到 1 个匹配的入口')).toBeVisible()
-  })
-
-  it('「文件管理」是一级页：投递区与共享目录的功能词都能定位到它', async () => {
+  it('「文件管理」是一级页：投递区与共享目录在同一个浏览器里', async () => {
     await openSettingsHome()
 
     const filesGroup = screen.getByRole('region', { name: '文件管理' })
-    expect(within(filesGroup).getByRole('button', { name: /文件管理/ })).toBeVisible()
-
-    // 「导入」「搬运」是搬运语义的词，改造后跟着入口一起从「运行与后台」搬了过来：
-    // 只剩一个入口命中，说明旧入口的关键词确实删干净了（没留下两份）。
-    fireEvent.change(searchBox(), { target: { value: '导入' } })
-    expect(within(screen.getByRole('region', { name: '文件管理' })).getByRole('button', { name: /文件管理/ })).toBeVisible()
-    expect(screen.queryByRole('button', { name: /运行与后台/ })).toBeNull()
-    expect(screen.getByText('找到 1 个匹配的入口')).toBeVisible()
-
-    fireEvent.change(searchBox(), { target: { value: '搬运' } })
-    fireEvent.click(within(screen.getByRole('region', { name: '文件管理' })).getByRole('button', { name: /文件管理/ }))
+    fireEvent.click(within(filesGroup).getByRole('button', { name: /文件管理/ }))
 
     // 进得去，而且是一个浏览器：标题是这一页自己的，投递区与共享目录都在里面。
     expect(await screen.findByRole('heading', { level: 1, name: '文件管理' })).toBeVisible()
@@ -232,10 +128,17 @@ describe('设置首页：分组与功能词过滤', () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
-    const runtimeGroup = await screen.findByRole('region', { name: 'Runtime and background' }, { timeout: SETTINGS_HOME_TIMEOUT_MS })
-    expect(within(screen.getByRole('region', { name: 'Plugin extensions' })).getByRole('button', { name: /Plugins/ })).toBeVisible()
+    const runtimeGroup = await screen.findByRole('region', { name: 'Background' }, { timeout: SETTINGS_HOME_TIMEOUT_MS })
     expect(within(runtimeGroup).getByRole('button', { name: /Ubuntu runtime/ })).toBeVisible()
     expect(within(runtimeGroup).getByText('Harness service')).toBeVisible()
+    // 插件管理只在底部导航里：设置首页既没有「插件扩展」分组，也没有入口。
+    const directory = runtimeGroup.closest('.settings-directory') as HTMLElement
+    expect(screen.queryByRole('region', { name: 'Plugin extensions' })).toBeNull()
+    expect(within(directory).queryByRole('button', { name: /Plugins/ })).toBeNull()
+    expect(within(screen.getByRole('region', { name: 'Appearance and display' })).getByRole('button', { name: /^Theme/ })).toBeVisible()
+    expect(within(screen.getByRole('region', { name: 'Device and automation' })).getByText('Device Shell')).toBeVisible()
+    expect(within(screen.getByRole('region', { name: 'Device and automation' })).getByText('Device Shell settings')).toBeVisible()
+    expect(within(screen.getByRole('region', { name: 'Device and automation' })).getByText('Automation settings')).toBeVisible()
 
     const settingsGroup = screen.getByRole('region', { name: 'Model connections' })
     expect(within(settingsGroup).getByRole('button', { name: /Models and keys/ })).toBeVisible()
@@ -252,9 +155,5 @@ describe('设置首页：分组与功能词过滤', () => {
     const filesEntry = within(filesGroup).getByRole('button', { name: /File management/ })
     expect(filesEntry).toBeVisible()
     expect(filesEntry.textContent ?? '').not.toMatch(/[\u4e00-\u9fff]/)
-
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Search entries by keyword' }), { target: { value: 'log' } })
-    expect(screen.getByText('Matching entries: 1')).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Clear search' })).toBeVisible()
   })
 })

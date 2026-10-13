@@ -49,7 +49,6 @@ import {
   Rocket,
   Save,
   ScrollText,
-  Search,
   Settings2,
   Share2,
   ShieldCheck,
@@ -117,8 +116,6 @@ import type {
   RuntimeInstallResult,
   RuntimePhase,
   RuntimeProgress,
-  RuntimeReleaseEntry,
-  RuntimeReleaseList,
   RuntimeSessionSnapshotRestoreResult,
   RuntimeSessionSnapshotState,
   RuntimeSource,
@@ -154,9 +151,9 @@ type AppView =
   | 'settings-models'
   | 'settings-runtime'
   | 'settings-terminal'
-  | 'settings-shizuku'
+  | 'settings-device-shell'
   | 'settings-diagnostics'
-  | 'settings-virtual-screen'
+  | 'settings-automation'
   | 'terminal'
   | 'environment'
   | 'plugins'
@@ -164,17 +161,18 @@ type AppView =
   | 'files'
 
 /** 设置二级页：把原先的单页设置按功能分类，避免所有选项挤在一屏里。 */
-type SettingsPage = 'models' | 'runtime' | 'terminal' | 'shizuku' | 'diagnostics'
+type SettingsPage = 'models' | 'runtime' | 'terminal' | 'device-shell' | 'automation' | 'diagnostics'
 
 const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView }> = {
   models: { title: '模型与密钥', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
-  runtime: { title: '运行与后台', hint: '运行时来源、后台保持、悬浮球与前台服务', view: 'settings-runtime' },
-  terminal: { title: '终端与外观', hint: '主题、图片与视频背景、卡片颜色与透明度、字号', view: 'settings-terminal' },
-  shizuku: { title: 'Shizuku 与设备 Shell', hint: 'Shizuku 授权、AI Shell、无障碍白名单与副屏', view: 'settings-shizuku' },
+  runtime: { title: '后台', hint: '运行时来源、后台保持、悬浮球与前台服务', view: 'settings-runtime' },
+  terminal: { title: '主题', hint: '字号、卡片颜色与透明度、图片与视频背景', view: 'settings-terminal' },
+  'device-shell': { title: '设备 Shell 设置', hint: 'Shizuku 授权与 AI Shell', view: 'settings-device-shell' },
+  automation: { title: '自动化设置', hint: '无障碍应用自动化与副屏', view: 'settings-automation' },
   diagnostics: { title: '诊断与日志', hint: '采集开关、保留天数、运行日志与导出', view: 'settings-diagnostics' },
 }
 
-const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'shizuku', 'diagnostics']
+const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'device-shell', 'automation', 'diagnostics']
 
 function settingsPageOf(view: AppView): SettingsPage | null {
   const entry = SETTINGS_PAGES.find(page => SETTINGS_PAGE_META[page].view === view)
@@ -182,25 +180,23 @@ function settingsPageOf(view: AppView): SettingsPage | null {
 }
 
 /**
- * 是否属于「设置区」（设置首页、五个二级页与副屏独立页）。
+ * 是否属于「设置区」（设置首页与五个二级页）。
  *
  * 设置草稿的作用范围就是它：区内切页共享同一份未保存内容，离开设置区即丢弃。
- * 副屏页有自己的读写生命周期，但它也是从设置里进去的，所以留在区内，
- * 免得从 Shizuku 页跳过去时把用户还没保存的设置草稿丢掉。
+ * 副屏设置并进「自动化设置」页之后，设置区内不再有自带读写生命周期的独立页。
  */
 function isSettingsView(view: AppView): boolean {
-  return view === 'settings' || view === 'settings-virtual-screen' || settingsPageOf(view) !== null
+  return view === 'settings' || settingsPageOf(view) !== null
 }
 
-/** 按用户用途分类；分类和搜索只影响入口展示，不改动设置草稿。 */
-type SettingsHomeGroup = 'runtime' | 'files' | 'versions' | 'models' | 'appearance' | 'device' | 'plugins' | 'diagnostics'
+/** 按用户用途分类；分类只影响入口展示，不改动设置草稿。 */
+type SettingsHomeGroup = 'runtime' | 'files' | 'versions' | 'models' | 'appearance' | 'device' | 'diagnostics'
 
 const SETTINGS_HOME_GROUPS: { id: SettingsHomeGroup; label: string }[] = [
   { id: 'models', label: '模型连接' },
   { id: 'appearance', label: '外观与显示' },
   { id: 'device', label: '设备与自动化' },
-  { id: 'runtime', label: '运行与后台' },
-  { id: 'plugins', label: '插件扩展' },
+  { id: 'runtime', label: '后台' },
   { id: 'files', label: '文件管理' },
   { id: 'versions', label: '版本管理' },
   { id: 'diagnostics', label: '日志与排查' },
@@ -216,13 +212,6 @@ interface SettingsHomeEntry {
   /** 标题与说明就是入口按钮上显示的文字（与二级页标题逐字一致，匹配时也算进去）。 */
   title: string
   hint: string
-  /**
-   * 同义关键词：写「用户会说的词」，不是界面上出现过的词。
-   *
-   * 界面上只有「后台保持」「诊断与日志」，而用户输入的是「保活」「省电」「日志」「log」「key」——
-   * 不补这些词，按功能词搜就是一个都搜不到。全部小写；英文补常见形态（plugin/plugins）。
-   */
-  keywords: string[]
   target: SettingsHomeTarget
   icon: ReactNode
 }
@@ -230,56 +219,43 @@ interface SettingsHomeEntry {
 /**
  * 设置首页的全部入口。
  *
- * 每个入口归属一个用途分类，关键词覆盖二级页内的功能。
+ * 每个入口归属一个用途分类。
  *
  * 这里的标题与说明是**裸字符串**，渲染时才交给 `t()`；仓库外的 `locales-check.cjs`
  * 只认字面量 `t("…")` 调用，看不见这张表。补英文词条时必须手工同步 `src/locales/en.ts`，
  * 兜底的是 `src/App.settingsHome.test.tsx` 里「切成英文后整屏入口都是英文」那条用例。
  */
 const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
-  // —— 运行与后台：把运行环境跑起来、留在后台、跑不动时排查。
+  // —— 后台：把运行环境跑起来、留在后台、跑不动时排查。
   {
     id: 'service',
     group: 'runtime',
     title: 'Harness 服务',
     hint: '启动、停止与当前状态',
-    keywords: ['harness', '服务', '进程', '停止', '启动', '运行中', '本机', '端口', 'service', 'stop', 'start'],
     target: { kind: 'service' },
     icon: <Bot size={20} />,
-  },
-  {
-    id: 'plugins',
-    group: 'plugins',
-    title: '插件管理',
-    hint: '官方与第三方插件，按插件包管理启停与更新',
-    keywords: ['插件', 'plugin', 'plugins', '扩展', '启停', '启用', '禁用', '市场', '更新', '修复', '重装'],
-    target: { kind: 'view', view: 'plugins' },
-    icon: <Settings2 size={20} />,
   },
   {
     id: 'environment',
     group: 'runtime',
     title: 'Ubuntu 运行时',
     hint: '安装进度、版本、来源与重置',
-    keywords: ['ubuntu', '运行时', '运行环境', '安装', '更新', '重置', '镜像', 'rootfs', '磁盘', '空间', '存储', '占用', '下载', 'runtime', 'install', 'image', 'reset', 'disk'],
     target: { kind: 'view', view: 'environment' },
     icon: <HardDrive size={20} />,
   },
   {
     id: 'runtime-page',
     group: 'runtime',
-    title: '运行与后台',
+    title: '后台',
     hint: '运行时来源、后台保持、悬浮球与前台服务',
-    keywords: ['后台', '保活', '后台保持', '前台服务', '通知', '悬浮球', '省电', '电池', '自启', '开机', '唤醒', 'background', 'keepalive', 'notification', 'battery', 'float'],
     target: { kind: 'page', page: 'runtime' },
     icon: <Power size={20} />,
   },
   {
     id: 'terminal-view',
     group: 'device',
-    title: '终端与设备 Shell',
-    hint: 'Ubuntu 终端与设备 Shell（需 Shizuku）',
-    keywords: ['终端', 'terminal', 'shell', '命令行', 'bash', '脚本', '设备', 'shizuku', 'adb', '命令'],
+    title: '设备 Shell',
+    hint: '设备上的 Shell（需 Shizuku）',
     target: { kind: 'view', view: 'terminal' },
     icon: <SquareTerminal size={20} />,
   },
@@ -290,9 +266,8 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'files',
     title: '文件管理',
     hint: '投递区与共享目录：一处浏览、建文件夹与搬运',
-    // 这组功能词从「运行与后台」搬过来：投递区与共享目录不再挂在那页上，
+    // 这组功能原属「后台」页：投递区与共享目录不再挂在那页上，
     // 搜「导入」「投递区」的人要找的是这一页。
-    keywords: ['文件', '文件夹', '目录', '投递区', '共享目录', '导入', '导出', '搬运', '浏览', '新建文件夹', 'mailbox', 'storage', 'file', 'files', 'folder', 'directory'],
     target: { kind: 'view', view: 'files' },
     icon: <FolderInput size={20} />,
   },
@@ -303,7 +278,6 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'versions',
     title: '版本管理',
     hint: '保留上一版本，可一键切回；装新版本仍在运行环境页',
-    keywords: ['版本', 'version', '运行时版本', '上一版本', '回退', '切回', '切换', '回滚', '降级', '升级', '更新', 'dsh', 'previous', 'rollback', 'switch', 'retained'],
     target: { kind: 'view', view: 'versions' },
     icon: <RotateCcw size={20} />,
   },
@@ -314,56 +288,42 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'models',
     title: '模型与密钥',
     hint: '供应商、API Key 与自定义模型',
-    keywords: ['模型', '密钥', 'key', 'api', 'apikey', 'api key', '供应商', 'provider', 'token', '凭据', '自定义模型'],
     target: { kind: 'page', page: 'models' },
     icon: <KeyRound size={20} />,
   },
   {
     id: 'terminal-settings',
     group: 'appearance',
-    title: '终端与外观',
-    hint: '主题、图片与视频背景、卡片颜色与透明度、字号',
-    keywords: ['终端', '外观', '字号', '字体', '常亮', '屏幕', '显示', '主题', '深色', '浅色', 'appearance', 'font', 'theme', '背景', '壁纸', '视频', '图片', 'mp4', '模糊', '透明', '卡片', '颜色', '强调色', 'background', 'opacity'],
+    title: '主题',
+    hint: '字号、卡片颜色与透明度、图片与视频背景',
     target: { kind: 'page', page: 'terminal' },
     icon: <SquareTerminal size={20} />,
   },
   {
-    id: 'shizuku',
+    id: 'device-shell',
     group: 'device',
-    title: 'Shizuku 与设备 Shell',
-    hint: 'Shizuku 授权、AI Shell、无障碍白名单与副屏',
-    keywords: ['shizuku', '授权', '权限', '连接', '设备', 'shell', 'adb', '服务', '无障碍', '自动化', '白名单', '应用列表', '副屏', '虚拟屏幕', '小窗', '截图', '点击', 'accessibility', 'automation', 'display'],
-    target: { kind: 'page', page: 'shizuku' },
+    title: '设备 Shell 设置',
+    hint: 'Shizuku 授权与 AI Shell',
+    target: { kind: 'page', page: 'device-shell' },
     icon: <Smartphone size={20} />,
+  },
+  {
+    id: 'automation',
+    group: 'device',
+    title: '自动化设置',
+    hint: '无障碍应用自动化与副屏',
+    target: { kind: 'page', page: 'automation' },
+    icon: <Bot size={20} />,
   },
   {
     id: 'diagnostics',
     group: 'diagnostics',
     title: '诊断与日志',
     hint: '采集开关、保留天数、运行日志与导出',
-    keywords: ['诊断', '日志', 'log', 'logs', '采集', '保留', '导出', '排查', '报错', '错误', '崩溃', '重启'],
     target: { kind: 'page', page: 'diagnostics' },
     icon: <ScrollText size={20} />,
   },
 ]
-
-/**
- * 按功能词本地匹配入口：不发请求、不写存储、不改运行状态。
- *
- * 规则刻意保持简单，让用户能预期、不用猜：
- *  - 大小写不敏感；
- *  - 查询按空白拆成多个词，**全部命中**才算匹配（多词顺序无关，可当「缩小范围」用）；
- *  - 匹配范围 = 标题 + 说明 + 同义关键词。
- *
- * 断网、运行时没装好时一样可用——「找不到入口」恰恰是用户最需要搜的时候。
- */
-function matchesSettingsHomeQuery(entry: SettingsHomeEntry, query: string): boolean {
-  const tokens = query.toLowerCase().split(/\s+/).filter(token => token !== '')
-  if (tokens.length === 0) return true
-  const group = SETTINGS_HOME_GROUPS.find(item => item.id === entry.group)
-  const haystack = `${entry.title} ${t(entry.title)} ${entry.hint} ${t(entry.hint)} ${group?.label} ${t(group?.label ?? '')} ${entry.keywords.join(' ')}`.toLowerCase()
-  return tokens.every(token => haystack.includes(token))
-}
 
 /** 外壳视图的全部取值：历史状态与地址片段只接受这里的值，其余一律回落到主视图。 */
 const APP_VIEWS: AppView[] = [
@@ -373,9 +333,9 @@ const APP_VIEWS: AppView[] = [
   'settings-models',
   'settings-runtime',
   'settings-terminal',
-  'settings-shizuku',
+  'settings-device-shell',
   'settings-diagnostics',
-  'settings-virtual-screen',
+  'settings-automation',
   'terminal',
   'environment',
   'plugins',
@@ -1056,12 +1016,13 @@ interface ConversationScreenProps {
   runtime: RuntimeState
   onInstall: () => void
   onLaunch: () => void
-  onOpenSettings: () => void
+  /** 启动卡片上那一格按需求从「应用设置」换成「停止」：只管停 Harness 服务。 */
+  onStop: () => void
   onOpenTerminal: () => void
   onUpdate: () => void
 }
 
-function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onOpenSettings, onOpenTerminal, onUpdate }: ConversationScreenProps) {
+function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onStop, onOpenTerminal, onUpdate }: ConversationScreenProps) {
   const installed = runtimeInstalled(runtime)
   const transitioning = runtimeTransitioning(runtime)
   const updateRequired = installed && runtime.updateAvailable && !transitioning
@@ -1138,8 +1099,12 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onO
             <button className="button button-secondary" type="button" onClick={onOpenTerminal} disabled={busy !== null}>
               <SquareTerminal size={18} />{t("打开终端排查")}</button>
           )}
-          <button className="button button-secondary" type="button" onClick={onOpenSettings} disabled={busy === 'install'}>
-            <Settings2 size={18} />{t("应用设置")}</button>
+          {/* 这一格是「停止 Harness 服务」：应用设置入口在顶部图标与底部导航里都有，
+              不必占着启动卡片的重心；没在跑的时候不摆一个按不动的停止键。 */}
+          {runtime.phase === 'running' && (
+            <button className="button button-secondary" type="button" onClick={onStop} disabled={busy !== null}>
+              <Square size={18} />{t("停止")}</button>
+          )}
         </div>
       </section>
 
@@ -1514,22 +1479,17 @@ interface SettingsHomeScreenProps {
 }
 
 /**
- * 设置首页：按分组列出全部入口，并支持按功能词本地过滤。
+ * 设置首页：按分组列出全部入口，分组可以筛选。
  *
- * 过滤只决定这一屏显示哪些入口，不改变任何行为：命中后点下去走的是同一条路，
- * 所以「搜出来的按钮能点、点了到对地方」可以用测试钉住。
+ * 筛选只决定这一屏显示哪些入口，不改变任何行为：点下去走的是同一条路。
  */
 function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenPage, onOpenView, onStop }: SettingsHomeScreenProps) {
-  /** 过滤词只活在组件里：离开设置首页即清空，下次进来不该被上次的搜索框卡住。 */
-  const [query, setQuery] = useState('')
   const [category, setCategory] = useState<SettingsHomeGroup | 'all'>('all')
-  /** 每个分组只留命中的入口；整组都没命中就连标题一起不渲染，避免空标题刷屏。 */
+  /** 每个分组只留属于它的入口；整组都没有就连标题一起不渲染，避免空标题刷屏。 */
   const groups = SETTINGS_HOME_GROUPS
     .filter(group => category === 'all' || category === group.id)
-    .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id && matchesSettingsHomeQuery(entry, query)) }))
+    .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id) }))
     .filter(item => item.entries.length > 0)
-  const matched = groups.reduce((total, item) => total + item.entries.length, 0)
-  const searching = query.trim() !== ''
 
   /** 服务行没有跳转，说明文字跟着运行状态走，所以按 id 现算；其余入口用固定说明。 */
   const hintOf = (entry: SettingsHomeEntry): string => entry.id === 'service'
@@ -1566,41 +1526,13 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
 
       <LanguageSettings />
 
-      {/* 搜索框固定在入口列表上方：入口一多，用户第一反应是找框，而不是往下翻。 */}
-      <div className="settings-search">
-        <Search size={18} aria-hidden="true" />
-        <input
-          type="search"
-          value={query}
-          onChange={event => { setQuery(event.target.value); setCategory('all') }}
-          maxLength={120}
-          placeholder={t("按功能词查找入口")}
-          aria-label={t("按功能词查找入口")}
-          autoComplete="off"
-        />
-        {query !== '' && (
-          <button className="settings-search-clear" type="button" onClick={() => setQuery('')} aria-label={t("清空查找词")}>
-            <X size={16} />
-          </button>
-        )}
-      </div>
-
       <div className="settings-categories" role="listbox" aria-label={t("筛选功能分类")}>
         <button type="button" role="option" aria-label={t("筛选分类：全部分类")} aria-selected={category === 'all'} onClick={() => setCategory('all')}>{t("全部分类")}</button>
         {SETTINGS_HOME_GROUPS.map(group => (
           <button key={group.id} type="button" role="option" aria-label={`${t("筛选分类：")} ${t(group.label)}`} aria-selected={category === group.id}
-            onClick={() => { setCategory(group.id); setQuery('') }}>{t(group.label)}</button>
+            onClick={() => setCategory(group.id)}>{t(group.label)}</button>
         ))}
       </div>
-
-      {/* 结果条用 role="status"：输入时读屏能听到「找到几个」，而不是列表安静地变了一下。 */}
-      {searching && (
-        <p className="settings-note" role="status">
-          {matched === 0
-            ? t("没有匹配的入口：试试「导入」「日志」「保活」这类功能词")
-            : t("找到 {0} 个匹配的入口", matched)}
-        </p>
-      )}
 
       <div className="settings-directory">
       {groups.map(({ group, entries }) => (
@@ -2137,13 +2069,19 @@ function RuntimeVersionsPanel({
         </div>
       )}
 
-      {/* 能力清单放在占用盘点的前面：先回答「这台机器现在能做什么」，再谈磁盘上的东西。 */}
-      <DeviceCapabilityCard />
+      {/* 数据清理与运行时占用合成一张卡：上面是缓存与插件数据，下面才是运行时残留。 */}
+      <div className="settings-subsection" aria-labelledby="runtime-cleanup-group">
+        <div className="section-title">
+          <div>
+            <h3 id="runtime-cleanup-group">{t('清理')}</h3>
+            <p>{t('缓存、插件数据与运行时残留都在这里回收；运行环境本身在「重置运行环境」里处理。')}</p>
+          </div>
+        </div>
 
-      <RuntimeResidueCard />
+        <RuntimeCleanupCard />
 
-      {/* 数据清理分两档（缓存 / 插件数据），运行环境那一档仍是上面的「重置运行环境」。 */}
-      <RuntimeCleanupCard />
+        <RuntimeResidueCard />
+      </div>
 
       {!loading && !failed && (
         <>
@@ -2199,106 +2137,6 @@ function RuntimeVersionsPanel({
           )}
         </>
       )}
-    </section>
-  )
-}
-
-interface RuntimeReleasesSectionProps {
-  /** 当前已安装的运行时版本：列表里同版本那一行标成「已安装」，不必再装一遍。 */
-  installedVersion?: string
-  /** 发起安装：确认弹窗、忙碌状态与安装后的提示都由 App 统一负责。 */
-  onInstall: (entry: RuntimeReleaseEntry) => void
-  listReleases: () => Promise<RuntimeReleaseList>
-}
-
-/**
- * 可从 GitHub 发布页安装的运行时版本。
- *
- * 列表里的条目都由原生侧先验证过（清单能解析、摘要格式正确、下载地址确实在发布页域名下）；
- * 缺 `manifestUrl` 或 `manifestSha256` 的条目只能看不能装——按钮禁用并在行内说明原因，
- * 而不是让用户点下去再吃一个报错。
- *
- * 不自动查询：查一次要打 GitHub API（未登录时限流很低），进页面就打属于浪费，
- * 所以只由用户点「检查可用版本」触发。
- */
-function RuntimeReleasesSection({ installedVersion, onInstall, listReleases }: RuntimeReleasesSectionProps) {
-  const [entries, setEntries] = useState<RuntimeReleaseEntry[] | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [failed, setFailed] = useState(false)
-
-  const check = useCallback(() => {
-    setLoading(true)
-    setFailed(false)
-    void (async () => {
-      try {
-        setEntries((await listReleases()).entries)
-      } catch {
-        setFailed(true)
-        setEntries(null)
-      } finally {
-        setLoading(false)
-      }
-    })()
-  }, [listReleases])
-
-  return (
-    <section className="settings-section" aria-labelledby="runtime-releases-title">
-      <div className="section-title">
-        <span className="section-icon"><CloudDownload size={19} /></span>
-        <div>
-          <h2 id="runtime-releases-title">{t("可从 GitHub 安装的版本")}</h2>
-          <p>{t("从本项目的 GitHub 发布页读取带运行时清单的版本。安装要下载并校验整份 rootfs，所以不会自动查询。")}</p>
-        </div>
-      </div>
-
-      <div className="settings-inline-actions">
-        <button className="button button-secondary" type="button" onClick={check} disabled={loading}>
-          {loading ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-          {loading ? t("正在查询") : t("检查可用版本")}
-        </button>
-      </div>
-
-      {failed && <p className="harness-log-state" role="alert">{t("查不到可用版本：请检查网络后重试。")}</p>}
-
-      {!failed && entries !== null && entries.length === 0 && (
-        <p className="harness-log-state">{t("发布页上还没有带运行时清单的版本。")}</p>
-      )}
-
-      {!failed && entries !== null && entries.length > 0 && (
-        <div className="release-list">
-          {entries.map(entry => {
-            const installable = entry.manifestUrl !== undefined && entry.manifestSha256 !== undefined
-            const installed = installedVersion !== undefined && installedVersion === entry.version
-            return (
-              <div className="release-row" key={entry.version}>
-                <div className="release-copy">
-                  <strong>{installed ? `${entry.version} · ${t("已安装")}` : entry.version}</strong>
-                  <small>
-                    {entry.dshVersion === undefined
-                      ? t("清单里没有 dsh 版本：安装后以运行环境页显示的为准。")
-                      : `dsh ${entry.dshVersion}`}
-                  </small>
-                  {entry.notes !== undefined && entry.notes.trim() !== '' && <ReleaseNotes notes={entry.notes} />}
-                  {!installable && <small>{t("这个版本的清单没通过校验，只能查看、不能安装。")}</small>}
-                </div>
-                <div className="release-actions">
-                  <button
-                    className="button button-secondary"
-                    type="button"
-                    onClick={() => onInstall(entry)}
-                    disabled={!installable || installed}
-                  >
-                    <Download size={18} />
-                    {installed ? t("已安装") : t("安装这个版本")}
-                  </button>
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
-      <p className="settings-note">{t("安装会先自动备份会话，再下载、校验并切换新运行时；这一步失败不影响当前正在使用的版本。")}</p>
     </section>
   )
 }
@@ -2669,12 +2507,8 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
 }
 
 interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
-  /** 返回设置首页：版本管理是一级页，返回键回设置首页，而不是回「运行与后台」。 */
+  /** 返回设置首页：版本管理是一级页，返回键回设置首页，而不是回「后台」。 */
   onBack: () => void
-  /** 已安装运行时的版本号：给「可从 GitHub 安装的版本」列表标记「已安装」。 */
-  installedVersion?: string
-  listReleases: () => Promise<RuntimeReleaseList>
-  installRelease: (entry: RuntimeReleaseEntry) => void
   loadSnapshots: () => Promise<RuntimeSessionSnapshotState>
   createSnapshot: () => Promise<RuntimeSessionSnapshotState>
   restoreSnapshot: (id: string) => Promise<RuntimeSessionSnapshotRestoreResult>
@@ -2689,7 +2523,7 @@ interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
 }
 
 /**
- * 版本管理（一级页）：把运行时版本从「运行与后台」页里拆出来，单独占一屏。
+ * 版本管理（一级页）：把运行时版本从「后台」页里拆出来，单独占一屏。
  *
  * 为什么要拆：这一屏管的是「磁盘上有哪几份运行时、现在用哪一份」，和「保活、悬浮球、
  * 前台服务、投递区」这些运行期开关不是一类事。混在一页里时，用户得在很长的运行页里
@@ -2707,9 +2541,6 @@ function RuntimeVersionsScreen({
   refreshRuntime,
   notify,
   onBack,
-  installedVersion,
-  listReleases,
-  installRelease,
   loadSnapshots,
   createSnapshot,
   restoreSnapshot,
@@ -2744,13 +2575,7 @@ function RuntimeVersionsScreen({
         notify={notify}
       />
 
-      {/* 顺序即用户关心顺序：磁盘上有哪几份 → 能装哪一版 → 会话备份 → 应用自身。 */}
-      <RuntimeReleasesSection
-        installedVersion={installedVersion}
-        onInstall={installRelease}
-        listReleases={listReleases}
-      />
-
+      {/* 顺序即用户关心顺序：磁盘上有哪几份 → 会话备份 → 应用自身。 */}
       <RuntimeSnapshotsSection
         loadSnapshots={loadSnapshots}
         createSnapshot={createSnapshot}
@@ -3633,8 +3458,6 @@ interface SettingsScreenProps {
   /** 跳转到系统「显示在其他应用上层」设置页；权限只能由用户手动开启。 */
   onOpenOverlaySettings: () => void
   onOpenShizuku: () => void
-  /** 跳转到副屏的独立设置页；副屏的读写有自己的生命周期，不走设置草稿那套。 */
-  onOpenVirtualScreen: () => void
   onOpenAccessibilitySettings: () => void
   /**
    * 保存白名单。已设置验证密码时**必须**带上 `password`：
@@ -3666,7 +3489,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenVirtualScreen, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
   /** 总开关的一次操作还在路上：按钮在这期间全部禁用，避免连点出两次动作。 */
@@ -3769,7 +3592,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     setWhitelistPassword('')
   }
   useEffect(() => {
-    if (page !== 'shizuku') return
+    if (page !== 'automation') return
     setAccessibilityDraft(accessibility.allowedPackages.join('\n'))
     setWhitelistEnabledDraft(accessibility.whitelistEnabled ?? true)
     // 每次回到这一页都从空白开始：密码是临时输入，不回填、不残留。
@@ -3793,7 +3616,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
       .catch(() => setAutomationRunsStatus('failed'))
   }, [])
   useEffect(() => {
-    if (page !== 'shizuku') return
+    if (page !== 'automation') return
     // 总开关一变就重读：刚按下「开始」时最该看到的就是它是否真的连上了服务。
     loadAutomationRuns()
   }, [accessibility.automationRuntime, accessibility.serviceStatus, loadAutomationRuns, page])
@@ -3903,7 +3726,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   }, [loadAutomationAppConfig, loadAutomationRules])
   useEffect(() => {
     // 刚进这一页且白名单里已有目标应用时，先把第一个包的两份读数读出来，省掉一次点击。
-    if (page !== 'shizuku' || rulesPackage !== '' || automationReadPackage.current !== '') return
+    if (page !== 'automation' || rulesPackage !== '' || automationReadPackage.current !== '') return
     const first = accessibility.allowedPackages.find(name => !accessibility.alwaysAllowedPackages.includes(name))
     if (first !== undefined) selectRulesPackage(first)
   }, [accessibility.alwaysAllowedPackages, accessibility.allowedPackages, page, rulesPackage, selectRulesPackage])
@@ -4180,6 +4003,31 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               <option value="custom">{t('自定义')}</option>
             </select>
           </label>
+          {/* 供应商状态一览（需求 3/4）：哪个供应商配没配摊在明面上，
+              不必展开下拉框去猜；「配置」把该供应商设为当前编辑项。
+              Harness 网页里的凭据只读展示——管理端清不掉它。 */}
+          <div className="provider-status" role="list" aria-label={t("供应商状态")}>
+            {MODEL_PROVIDERS.map(provider => {
+              const inHarness = settings.harnessConfiguredModelProviders?.includes(provider.id) === true
+              const draft = credentialDrafts[provider.id] !== undefined
+              const inApp = (settings.configuredModelProviders.includes(provider.id) || draft)
+                && !clearedProviders.includes(provider.id)
+              const clearing = clearedProviders.includes(provider.id)
+              const status = inApp
+                ? (draft ? t("待保存") : t("已配置"))
+                : clearing ? t("保存后清除")
+                  : inHarness ? t("已在 Harness 中配置") : t("未配置")
+              return (
+                <div className="provider-status-row" role="listitem" key={provider.id}>
+                  <span className="provider-status-name">{provider.label}</span>
+                  <span className={`provider-status-badge${inApp || inHarness ? ' is-configured' : ''}`}>{status}</span>
+                  <button className="button button-secondary compact-button" type="button"
+                    aria-label={`${t("配置")} ${provider.label}`}
+                    onClick={() => setSelectedProvider(provider.id)}>{t("配置")}</button>
+                </div>
+              )
+            })}
+          </div>
           {selectedProvider !== 'custom' && <><label className="field">
             <span>{selectedProviderOption.label} API Key · {selectedProviderOption.environmentVariable}</span>
             <input
@@ -4313,7 +4161,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         </section>
         )}
 
-        {/* 外观（登记册 5.4）：落在「终端与外观」页——登记册指定的现成落点。
+        {/* 外观（登记册 5.4）：落在「主题」页——登记册指定的现成落点。
             组件无 props，主题的存储与 DOM 落地全在 src/theme.ts，这里只负责挂载。 */}
         {page === 'terminal' && <AppearanceSettings />}
 
@@ -4450,7 +4298,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
         )}
 
-        {page === 'shizuku' && (
+        {page === 'device-shell' && (
         <section className="settings-section" aria-labelledby="shizuku-settings">
           <div className="section-title section-title-action">
             <span className="section-icon"><Smartphone size={19} /></span>
@@ -4477,7 +4325,16 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           <p className="settings-note">
             {t("Shizuku 提供设备命令和文件操作能力，权限取决于其启动模式。未安装、未授权或断开时，设备工具不可用，不影响 Ubuntu 终端与 Harness。")}
           </p>
-          <DeviceShellSettings bridge={runtimeBridge} disabled={busy !== null} onOpenVirtualScreen={onOpenVirtualScreen} />
+          <DeviceShellSettings bridge={runtimeBridge} disabled={busy !== null} />
+        </section>
+        )}
+
+        {/*
+          自动化设置：无障碍与副屏是同一条能力的两条腿（谁去读界面、画面从哪来），
+          所以合并进同一页，不再各占一个入口。
+        */}
+        {page === 'automation' && (
+        <>
           <div className="settings-subsection" aria-labelledby="accessibility-automation-settings">
             <div className="section-title section-title-action">
               <span className="section-icon"><Bot size={19} /></span>
@@ -4528,13 +4385,9 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 </button>
               )}
               {/*
-                回看入口常驻：确认过之后不再弹说明，但「我当初到底同意了什么」随时要能查。
-                它只打开同一段文字，不改总开关、不写任何状态。
+                回看入口不在这里：免责说明在这一页末尾只占一条（见页面底部），
+                免得同一条说明有两个入口。
               */}
-              <button className="button button-secondary" type="button" disabled={busy !== null}
-                onClick={() => setAutomationDisclaimer({ mode: 'read' })}>
-                <ShieldCheck size={18} />{t("查看完整免责说明")}
-              </button>
             </div>
             {/*
               免责说明弹窗：确认模式由「开始 / 继续」触发，回看模式由上面的入口触发。
@@ -4911,7 +4764,26 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               {passwordMessage !== null && <p className="settings-note" role="alert">{passwordMessage}</p>}
             </div>
           </div>
-        </section>
+          {/*
+            副屏是自动化的第二条腿：取帧档位、方向、分辨率与跟随策略都在这一页里，
+            不再另开独立路由，免得「自动化设置」还要再跳一次才看得到画面相关参数。
+          */}
+          <VirtualScreenSettings bridge={runtimeBridge} />
+          {/*
+            免责说明只占一条：标题 + 一句话，详情在弹窗里（同一段文字，不改任何状态）。
+            确认过之后不再自动弹，但「我当初到底同意了什么」随时要能查。
+          */}
+          <div className="settings-subsection" aria-labelledby="automation-disclaimer">
+            <div className="section-title section-title-action">
+              <span className="section-icon"><ShieldCheck size={19} /></span>
+              <div><h3 id="automation-disclaimer">{t("免责说明")}</h3><p>{t("自动化可能误点或误读界面，请只对自己有权操作的应用启用。")}</p></div>
+              <button className="button button-secondary" type="button" disabled={busy !== null}
+                onClick={() => setAutomationDisclaimer({ mode: 'read' })}>
+                <ShieldCheck size={18} />{t("查看完整免责说明")}
+              </button>
+            </div>
+          </div>
+        </>
         )}
 
         {page === 'diagnostics' && (
@@ -4980,6 +4852,9 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             <ExternalLink size={18} />{t('在 GitHub 反馈问题')}
           </a>
         </section>
+
+        {/* 设备能力清单：从版本管理页挪过来，回答「这台机器现在能做什么」。 */}
+        <DeviceCapabilityCard />
         </>
         )}
 
@@ -5833,19 +5708,12 @@ export function App() {
     requestRuntimeInstall({ manifestUrl: '', manifestSha256: '' }, null, true)
   }, [requestRuntimeInstall])
 
-  /** 从「可从 GitHub 安装的版本」列表里选定的版本：清单地址与摘要都已由原生验证过。 */
-  const installRuntimeRelease = useCallback((entry: RuntimeReleaseEntry) => {
-    if (entry.manifestUrl === undefined || entry.manifestSha256 === undefined) return
-    requestRuntimeInstall({ manifestUrl: entry.manifestUrl, manifestSha256: entry.manifestSha256 }, entry.version, false)
-  }, [requestRuntimeInstall])
-
   const confirmPendingInstall = useCallback(() => {
     if (pendingInstall === null) return
     performRuntimeInstall(pendingInstall.source, pendingInstall.bundled ? t("运行环境已更新") : t("运行环境已安装"))
   }, [pendingInstall, performRuntimeInstall])
 
   /** 版本管理页读的三块数据：都只是读，失败由各自的区块自己显示。 */
-  const listRuntimeReleases = useCallback(() => runtimeBridge.listRuntimeReleases(), [])
   const loadSessionSnapshots = useCallback(() => runtimeBridge.getRuntimeSessionSnapshotState(), [])
   const createSessionSnapshot = useCallback(() => runtimeBridge.createRuntimeSessionSnapshot(), [])
   const restoreSessionSnapshot = useCallback((id: string) => runtimeBridge.restoreRuntimeSessionSnapshot(id), [])
@@ -5960,8 +5828,16 @@ export function App() {
   const launchHarnessConfirmed = useCallback(() => openHarness(true), [openHarness])
 
   useEffect(() => {
+    /*
+     * 自动启动必须**等设置读完**再判断。
+     *
+     * 旧写法是「设置非空且关着才返回」，于是设置还没回来（`settings === null`）时这一条形同放行：
+     * 启动时运行时状态往往比设置先到，运行时装好的用户明明关掉了自动启动，仍会被拉起来。
+     * 现在只在明确读到 `autoLaunch === true` 时才启动；读不到或读失败一律不启动——
+     * 「没读到设置」不是「用户要我启动」，宁可让用户自己点一下。
+     */
+    if (settings === null || settings.autoLaunch !== true) return
     if (language === null || onboardingOpen || booting || appUpdateReminder.checking || appUpdateReminder.available !== null || activeView !== 'conversation' || busy !== null || autoLaunchAttempted.current) return
-    if (settings !== null && settings.autoLaunch === false) return
     if (runtime.updateAvailable) return
     if (runtime.phase === 'running' || (runtimeInstalled(runtime) && runtime.phase !== 'stopping')) {
       launchHarness()
@@ -6480,17 +6356,13 @@ export function App() {
   const screen = (() => {
     switch (activeView) {
       case 'conversation':
-        return <ConversationScreen busy={busy} keepAlive={keepAlive} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onOpenSettings={() => setActiveView('settings')} onOpenTerminal={() => setActiveView('terminal')} onUpdate={requestRuntimeUpdate} />
+        return <ConversationScreen busy={busy} keepAlive={keepAlive} runtime={runtime} onInstall={installRuntime} onLaunch={launchHarness} onStop={stopRuntime} onOpenTerminal={() => setActiveView('terminal')} onUpdate={requestRuntimeUpdate} />
       case 'sessions':
         return <SessionManager onBack={() => backToView('conversation')} onOpenHarness={launchHarness} />
       case 'terminal':
         return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
       case 'plugins':
         return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
-      /* 副屏的独立设置页：不放进 SETTINGS_PAGES，也不吃 settingsReadStatus 与设置草稿那两道门，
-         它自己读原生设置与运行状态，返回时回到刚才那一页（入口通常在 Shizuku 页）。 */
-      case 'settings-virtual-screen':
-        return <VirtualScreenSettings bridge={runtimeBridge} onBack={() => backToView('settings-shizuku')} />
       case 'environment':
         return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} onShareWorkspace={shareWorkspace} onListFiles={listWorkspaceFiles} workspaceFiles={workspaceFiles} onShareFile={shareWorkspaceFile} onOpenFile={openWorkspaceFile} onDeleteFile={deleteWorkspaceFile} />
       case 'versions':
@@ -6503,9 +6375,6 @@ export function App() {
           refreshRuntime={refreshRuntimeState}
           notify={notify}
           onBack={() => backToView('settings')}
-          installedVersion={runtime.installedVersion}
-          listReleases={listRuntimeReleases}
-          installRelease={installRuntimeRelease}
           loadSnapshots={loadSessionSnapshots}
           createSnapshot={createSessionSnapshot}
           restoreSnapshot={restoreSessionSnapshot}
@@ -6526,7 +6395,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenVirtualScreen={() => setActiveView('settings-virtual-screen')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

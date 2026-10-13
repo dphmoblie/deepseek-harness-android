@@ -30,7 +30,7 @@ function bridgeError(message: string, code?: string): Error {
 describe('Shizuku 版本显示', () => {
   beforeEach(beforeEachAppTest)
 
-  /** 进入「Shizuku 与设备 Shell」二级页——Shizuku 区块就在这一页。 */
+  /** 进入「设备 Shell 设置」二级页——Shizuku 区块就在这一页。 */
   async function openShizukuPage(state: Partial<ShizukuState>): Promise<HTMLElement> {
     bridge.getShizukuState.mockResolvedValue({
       installed: true,
@@ -42,7 +42,7 @@ describe('Shizuku 版本显示', () => {
     })
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    await openSettingsPage('Shizuku 与设备 Shell')
+    await openSettingsPage('设备 Shell 设置')
     return screen.findByRole('region', { name: 'Shizuku' })
   }
 

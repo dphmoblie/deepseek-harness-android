@@ -218,6 +218,9 @@ export const settings: RuntimeSettings = {
   manifestSha256: 'a'.repeat(64),
   keepScreenAwake: true,
   terminalFontSize: 14,
+  // 默认开着自动启动，与引导页首次写入的值一致（`Onboarding.tsx`）。
+  // 老存储缺这一项时原生侧按关闭处理，所以用例里要显式给值，不能靠缺省。
+  autoLaunch: true,
   // 默认视为「本机已保存过一次模型密钥」：没有密钥时应用会拦住「打开 Harness」，
   // 而这里多数用例关心的是设置与启动流程本身，门禁行为有专门用例覆盖。
   configuredModelProviders: ['deepseek'],

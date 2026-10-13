@@ -62,7 +62,7 @@ export function RuntimeResidueCard({ bridge = runtimeBridge }: { bridge?: Runtim
   const receivable = loaded && !failed && state !== null && state.count > 0
   return <div className="settings-subsection" aria-labelledby="runtime-residue">
     <div className="section-title"><span className="section-icon"><Database size={19} /></span>
-      <div><h3 id="runtime-residue">{t('运行时占用')}</h3><p>{t('运行时目录里由本应用生成的残留可以在这里回收。')}</p></div>
+      <div><h3 id="runtime-residue">{t('运行时占用与残留')}</h3><p>{t('运行时目录里由本应用生成的残留可以在这里回收。')}</p></div>
     </div>
     {!loaded && !failed && <p className="settings-note">{t('正在统计运行时占用…')}</p>}
     {loaded && state !== null && state.count === 0 && <p className="settings-note">{t('没有可回收的残留')}</p>}

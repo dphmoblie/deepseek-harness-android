@@ -42,12 +42,12 @@ describe('无障碍白名单与验证密码', () => {
     }
   }
 
-  /** 进入「Shizuku 与设备 Shell」二级页——无障碍区块就在这一页。 */
+  /** 进入「自动化设置」二级页——无障碍区块就在这一页。 */
   async function openAccessibilityPage(passwordConfigured: boolean, allowed: string[] = []): Promise<void> {
     bridge.getAccessibilityAutomationState.mockResolvedValue(accessibilityState(passwordConfigured, allowed))
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    await openSettingsPage('Shizuku 与设备 Shell')
+    await openSettingsPage('自动化设置')
   }
 
   it('本应用始终在白名单里，并如实显示当前白名单', async () => {
@@ -144,7 +144,7 @@ describe('无障碍白名单与验证密码', () => {
     bridge.getAccessibilityAutomationState.mockResolvedValue(accessibilityState(false, ['com.example.reader'], false))
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    await openSettingsPage('Shizuku 与设备 Shell')
+    await openSettingsPage('自动化设置')
     expect(screen.getByRole('switch', { name: '启用无障碍白名单限制' })).not.toBeChecked()
     expect(screen.getByText('当前生效：白名单限制已关闭')).toBeInTheDocument()
     expect(screen.getByLabelText('目标应用包名')).toHaveValue('io.deepseekharness.mobile\ncom.example.reader')
@@ -251,7 +251,7 @@ describe('无障碍自动化控制台', () => {
     bridge.getAccessibilityAutomationState.mockResolvedValue({ ...BASE_STATE, ...target })
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    await openSettingsPage('Shizuku 与设备 Shell')
+    await openSettingsPage('自动化设置')
   }
 
   it('默认关闭时只放行「开始」，并如实说明系统里的服务没开', async () => {
@@ -469,7 +469,7 @@ describe('无障碍自动化规则卡片', () => {
     bridge.getAccessibilityAutomationState.mockResolvedValue(RULES_STATE)
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    await openSettingsPage('Shizuku 与设备 Shell')
+    await openSettingsPage('自动化设置')
   }
 
   it('进页面自动读白名单里第一个应用的规则，切换应用时按包名重读', async () => {
@@ -794,7 +794,7 @@ describe(`每应用自动化参数`, () => {
     bridge.getAccessibilityAutomationState.mockResolvedValue(CONFIG_STATE)
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    await openSettingsPage('Shizuku 与设备 Shell')
+    await openSettingsPage('自动化设置')
   }
 
   it('快速换应用时迟到的旧规则与参数读数不会覆盖当前应用', async () => {

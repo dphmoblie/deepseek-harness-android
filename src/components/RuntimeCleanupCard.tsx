@@ -144,7 +144,7 @@ export function RuntimeCleanupCard({ bridge = runtimeBridge }: { bridge?: Runtim
 
   return <div className="settings-subsection" aria-labelledby="runtime-cleanup">
     <div className="section-title"><span className="section-icon"><Trash2 size={19} /></span>
-      <div><h3 id="runtime-cleanup">{t('数据清理')}</h3>
+      <div><h3 id="runtime-cleanup">{t('缓存与插件数据')}</h3>
         <p>{t('清掉缓存与插件自己的数据；运行环境的数据在「重置运行环境」里处理。')}</p></div>
     </div>
     {!loaded && !failed && <p className="settings-note">{t('正在统计数据占用…')}</p>}

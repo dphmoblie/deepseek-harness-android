@@ -75,7 +75,10 @@ class AppReleaseCatalogTest {
     fun offersOnlyStrictlyNewerReleases() {
         assertNull(catalog(release("v0.2.0")).availableRelease(installed))
         assertNull(catalog(release("v0.1.9-mobile-9")).availableRelease(installed))
-        assertEquals("0.2.0-mobile-308", catalog(release("v0.2.0-mobile-308")).availableRelease(installed)?.version)
+        // 稳定版不跟随同版本测试构建，避免更新完成后再次提示同版本。
+        assertNull(catalog(release("v0.2.0-mobile-308")).availableRelease(installed))
+        val preview = InstalledAppInfo(versionName = "0.2.0-mobile-7", versionCode = 23L)
+        assertEquals("0.2.0-mobile-308", catalog(release("v0.2.0-mobile-308")).availableRelease(preview)?.version)
         // 多个可选时取最大的那个，而不是列表里最靠前的。
         val picked = catalog(release("v0.2.0-mobile-308"), release("v0.2.1-mobile-2"), release("v0.3.0"))
         assertEquals("0.3.0", picked.availableRelease(installed)?.version)
@@ -97,18 +100,18 @@ class AppReleaseCatalogTest {
         val preview = InstalledAppInfo(versionName = "0.2.13-mobile-5", versionCode = 35L)
         assertNull(catalog(release("v0.2.12")).availableRelease(preview))
         assertNull(catalog(release("v0.2.13-mobile-4"), release("v0.2.12-mobile-77")).availableRelease(preview))
-        // 同版本正式版在场时仍挑序号更大的预览构建：预览通道继续跟随预览。
+        // 测试版在场时仍挑序号更大的预览构建：预览通道继续跟随预览。
         val both = catalog(release("v0.2.13"), release("v0.2.13-mobile-9"))
         assertEquals("0.2.13-mobile-9", both.availableRelease(preview)?.version)
     }
 
     @Test
     fun keepsTheExistingOrderingForAStableInstall() {
-        // 收敛路径只补「预览 → 同版本正式版」，不改变其它判据：装了正式版时同版本正式版
-        // 不算更新，同版本预览构建仍按序号算更新。
+        // 稳定版安装完成后，同版本正式版与测试版都不再算更新；只有更高版本才提示。
         val stable = InstalledAppInfo(versionName = "0.2.13", versionCode = 35L)
         assertNull(catalog(release("v0.2.13")).availableRelease(stable))
-        assertEquals("0.2.13-mobile-9", catalog(release("v0.2.13-mobile-9")).availableRelease(stable)?.version)
+        assertNull(catalog(release("v0.2.13-mobile-9")).availableRelease(stable))
+        assertEquals("0.2.14-mobile-1", catalog(release("v0.2.14-mobile-1")).availableRelease(stable)?.version)
     }
 
     @Test
