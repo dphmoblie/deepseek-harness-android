@@ -5802,8 +5802,16 @@ export function App() {
   const launchHarnessConfirmed = useCallback(() => openHarness(true), [openHarness])
 
   useEffect(() => {
+    /*
+     * 自动启动必须**等设置读完**再判断。
+     *
+     * 旧写法是「设置非空且关着才返回」，于是设置还没回来（`settings === null`）时这一条形同放行：
+     * 启动时运行时状态往往比设置先到，运行时装好的用户明明关掉了自动启动，仍会被拉起来。
+     * 现在只在明确读到 `autoLaunch === true` 时才启动；读不到或读失败一律不启动——
+     * 「没读到设置」不是「用户要我启动」，宁可让用户自己点一下。
+     */
+    if (settings === null || settings.autoLaunch !== true) return
     if (language === null || onboardingOpen || booting || appUpdateReminder.checking || appUpdateReminder.available !== null || activeView !== 'conversation' || busy !== null || autoLaunchAttempted.current) return
-    if (settings !== null && settings.autoLaunch === false) return
     if (runtime.updateAvailable) return
     if (runtime.phase === 'running' || (runtimeInstalled(runtime) && runtime.phase !== 'stopping')) {
       launchHarness()

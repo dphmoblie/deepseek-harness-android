@@ -41,6 +41,29 @@ describe('后台保持与恢复', () => {
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, keepRuntimeInBackground: true }))
   })
 
+  it('关掉自动启动后，设置晚于运行时就绪回来也不会启动 Harness', async () => {
+    /*
+     * 线上那条「关掉了仍然自动启动」：启动时运行时的状态往往比设置先到，
+     * 旧判据写成「设置非空且关着才返回」，于是 `settings === null` 时形同放行。
+     * 这里把设置读取挂起，先让运行时就绪、把待处理的微任务跑干净，再放设置回来，
+     * 断言全程没有一次启动。
+     */
+    let releaseSettings: (value: typeof settings) => void = () => { /* 用例结束前必定被赋值 */ }
+    bridge.getSettings.mockImplementation(() => new Promise(resolve => { releaseSettings = resolve }))
+    bridge.getState.mockResolvedValue({ ...readyState })
+    render(<App />)
+
+    // 运行环境已就绪（读数到位、启动链路可以跑了），但设置还没回来。
+    await waitFor(() => expect(bridge.getState).toHaveBeenCalled())
+    await act(async () => { await Promise.resolve() })
+    expect(bridge.openHarness).not.toHaveBeenCalled()
+
+    act(() => { releaseSettings({ ...settings, autoLaunch: false }) })
+    await act(async () => { await Promise.resolve() })
+    expect(bridge.openHarness).not.toHaveBeenCalled()
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+  })
+
   it('通知权限被拒时提示后台保持不会生效，不谎称前台服务仍在运行', async () => {
     // 不自动启动：停在主视图手动进设置，避免与启动流程抢忙碌状态。
     bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false })

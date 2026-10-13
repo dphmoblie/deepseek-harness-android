@@ -441,7 +441,12 @@ export interface RuntimeSettings extends RuntimeSource {
   harnessConfiguredCustomModelProviders?: string[]
   /** 旧版原生桥接兼容字段；校验后只迁移为 DeepSeek 的已配置状态。 */
   apiKey?: string
-  /** 打开应用时自动启动 Harness（默认 true）；旧存储/测试可能缺省。 */
+  /**
+   * 打开应用时自动启动 Harness。
+   *
+   * 引导页首次配置时写入 `true`；旧存储缺这一项时**原生侧与校验层都按 false 处理**
+   * （不能写「默认 true」——那是引导页的写入值，不是缺省值），所以读不到时不启动。
+   */
   autoLaunch?: boolean
   /**
    * 后台保持 Harness（默认 false，旧存储/旧桥接缺省时按 false 处理）。
