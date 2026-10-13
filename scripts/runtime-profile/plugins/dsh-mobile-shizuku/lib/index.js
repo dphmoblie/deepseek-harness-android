@@ -869,7 +869,7 @@ export function apply(ctx) {
 
   ctx.tools.register(defineTool({
     name: 'mobile_accessibility_action',
-    description: '在当前前台白名单应用中按唯一完整 viewId 执行单步点击、普通文本输入或滚动。每次均需用户审批和原生确认。',
+    description: '在当前前台白名单应用中按唯一完整 viewId 执行单步点击、普通文本输入或滚动。用户需先开启系统无障碍服务并保存目标白名单；宿主授权能力与原生侧仍会检查目标应用、锁屏、敏感窗口和动作频率。',
     parameters: {
       packageName: { type: 'string', required: true, description: '目标应用标准包名，须与当前前台及白名单一致。' },
       action: { type: 'string', required: true, enum: ['click', 'setText', 'scroll'] },
@@ -884,7 +884,7 @@ export function apply(ctx) {
 
   ctx.tools.register(defineTool({
     name: 'mobile_device_task',
-    description: '把一次多步操作记成有状态的任务台账：先 plan 交计划，之后每一步都先 gate 取放行、做完再用 gate 回执里的 attempt 调用 record 交结果。它**不执行任何动作**——每步仍要用 mobile_accessibility_action 等工具单独执行、单独审批。拿到 AUTOMATION_TASK_NOT_VERIFIED 或 AUTOMATION_TASK_TIMEOUT 表示「不确定」：不要重发，先观察界面再用 record 说明；前台换了应用或界面已变会得 AUTOMATION_TASK_TARGET_LEFT / AUTOMATION_TASK_TARGET_STALE，先重新读控件树，再用 resume 带全部步骤标识续跑。',
+    description: '把一次多步操作记成有状态的任务台账：先 plan 交计划，之后每一步都先 gate 取放行、做完再用 gate 回执里的 attempt 调用 record 交结果。它**不执行任何动作**，动作仍由 mobile_accessibility_action 等工具逐步执行。拿到 AUTOMATION_TASK_NOT_VERIFIED 或 AUTOMATION_TASK_TIMEOUT 表示「不确定」：不要重发，先观察界面再用 record 说明；前台换了应用、界面变化或现场被外部事件改变时会阻塞任务，先重新读控件树，再用 resume 带全部步骤标识续跑。',
     parameters: {
       op: { type: 'string', required: true, enum: ['plan', 'gate', 'record', 'resume', 'cancel', 'status'], description: 'plan 建计划、gate 取下一步能不能发、record 交这一步的结果、resume 现场变了之后续跑、cancel 取消、status 读现状。' },
       taskId: { type: 'string', description: 'plan 必填：本次任务标识（小写字母数字与 - _，最多 64 位）。' },

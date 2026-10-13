@@ -142,10 +142,17 @@ internal class AppReleaseCatalog(
      * 预览版先出、验证通过后才发正式版，而序号只记 CI 运行号，正式版的序号反而是 0；
      * 少了这条，正式版会被判成「更旧」，这些设备永远收不到它，只能手动装包。
      *
-     * 反向不受影响：装了正式版仍会收到同版本的后续预览构建（沿用「后缀是同一版本内的
-     * 构建序号」的既有语义，预览通道的用户继续跟随预览）。
+     * 稳定版不跟随同版本测试构建：正式版用户安装完成后，不应再次看到同一版本的测试包。
+     * 测试版用户仍会收到同版本正式版，以及同版本更高测试构建。
      */
     private fun isUpdateOf(installed: AppUpdateVersion.Version, candidate: AppUpdateVersion.Version): Boolean {
+        // 稳定版（无 mobile 后缀）不接受同版本测试包；否则正式版安装完成后会再次提示
+        // 同一版本的最新测试构建。更高主版本的测试包仍属于可用更新。
+        if (installed.suffix == 0L &&
+            candidate.major == installed.major &&
+            candidate.minor == installed.minor &&
+            candidate.patch == installed.patch
+        ) return false
         if (candidate > installed) return true
         return installed.suffix != 0L &&
             candidate.suffix == 0L &&
