@@ -1369,6 +1369,21 @@ button:disabled {
   box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 5%, transparent);
 }
 
+/*
+ * 一张卡片最多占两屏（`vh` 就是手机上看得见的那块）。
+ *
+ * 单独成页的设置里最长的那几张卡（自动化总开关、每应用参数、版本管理）能把整页拉成很长一条：
+ * 想回到卡片顶上的开关得先滑很久，滑动手势还会和页面滚动抢。
+ * 超过两屏的卡片改为**卡片内部自己滚动**，页面不再被一张卡片撑长；
+ * `overscroll-behavior: contain` 是让卡片滑到底时不要把惯性传给整页。
+ */
+.settings-section,
+.settings-form > .settings-subsection {
+  max-height: 200vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .section-title {
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr);
@@ -2351,6 +2366,16 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 .mailbox-create-button {
   flex: none;
   white-space: nowrap;
+}
+
+/*
+ * 「文件管理」页现在是一张卡（「外部工作区」）里分两块：目录浏览与搬运、目录清单。
+ * 两块之间只画一条分隔线，不再各占一张卡 —— 用户要的是一个口径，不是两个功能。
+ */
+.files-screen .settings-subsection {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
 }
 
 .mailbox-root-tabs {

@@ -1,5 +1,4 @@
 import type { SelfCheckOperation, SelfCheckReport } from '../runtimeSelfCheck'
-import type { HarnessPermissionMode } from '../harnessPermissionMode'
 
 export type RuntimePhase =
   | 'not-installed'
@@ -426,8 +425,6 @@ export interface RuntimeSource {
   manifestSha256: string
 }
 export interface RuntimeSettings extends RuntimeSource {
-  /** dsh 启动默认值；省略更新时保留原值，默认要求工作区沙箱。 */
-  harnessPermissionMode?: HarnessPermissionMode
   keepScreenAwake: boolean
   terminalFontSize: number
   /** 已配置凭据的供应商；只返回状态，不向 WebView 回传凭据明文。 */

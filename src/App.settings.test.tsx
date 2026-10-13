@@ -508,3 +508,37 @@ describe('外观设置接线', () => {
     expect(window.localStorage.getItem('dsh-mobile-theme-v1')).toBe('dark')
   })
 })
+
+/**
+ * 后台页只管「运行时从哪来」，装/启停/重置与设备命令各在自己的独立页；
+ * 入口放在这里，才不会让人为了找运行时页翻遍设置首页。
+ */
+describe('后台页的运行时与设备 Shell 入口', () => {
+  beforeEach(beforeEachAppTest)
+
+  it('给出两个入口，并说明独立页各自管什么', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('后台')
+    expect(await screen.findByRole('heading', { name: '运行时与设备 Shell' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Ubuntu 运行时' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '设备 Shell 设置' })).toBeEnabled()
+    // 清单字段还在这一页：入口只搬导航，不改下载来源这条能力。
+    expect(screen.getByText('运行时清单地址')).toBeVisible()
+  })
+
+  it('两个入口分别进入运行时页与设备 Shell 页', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('后台')
+    fireEvent.click(screen.getByRole('button', { name: 'Ubuntu 运行时' }))
+    expect(await screen.findByRole('heading', { name: 'Ubuntu 运行时' })).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
+    await openSettingsPage('后台')
+    fireEvent.click(screen.getByRole('button', { name: '设备 Shell 设置' }))
+    expect(await screen.findByRole('heading', { name: '设备 Shell 设置' })).toBeVisible()
+  })
+})

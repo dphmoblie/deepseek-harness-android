@@ -104,7 +104,6 @@ data class RuntimeSettings(
      * 不想保持运行时，也可能反过来，因此不合并成一个开关。
      */
     val overlayBallEnabled: Boolean = false,
-    val harnessPermissionMode: HarnessPermissionMode = HarnessPermissionMode.WORKSPACE_WRITE,
 )
 
 data class RootfsArtifact(
@@ -341,7 +340,6 @@ object RuntimeValidation {
         autoLaunch: Boolean = true,
         keepRuntimeInBackground: Boolean = false,
         overlayBallEnabled: Boolean = false,
-        harnessPermissionMode: HarnessPermissionMode = HarnessPermissionMode.WORKSPACE_WRITE,
     ): RuntimeSettings {
         val source = source(url, digest)
         if (terminalFontSize !in 11..24) {
@@ -355,7 +353,6 @@ object RuntimeValidation {
             autoLaunch = autoLaunch,
             keepRuntimeInBackground = keepRuntimeInBackground,
             overlayBallEnabled = overlayBallEnabled,
-            harnessPermissionMode = harnessPermissionMode,
         )
     }
 

@@ -75,7 +75,6 @@ import { AppUpdateReminderDialog } from './components/AppUpdateReminderDialog'
 import { useAppUpdateReminder } from './appUpdateReminder'
 import { runtimeBridge } from './platform/native'
 import { readLogInsights } from './logInsights'
-import { validateHarnessPermissionMode } from './harnessPermissionMode'
 import { acknowledgeAutomationDisclaimer, isAutomationDisclaimerAcknowledged } from './accessibilityDisclaimer'
 import { assertMailboxSubdirectory, validateAccessibilityPasswordInput } from './platform/validation'
 import {
@@ -165,7 +164,7 @@ type SettingsPage = 'models' | 'runtime' | 'terminal' | 'device-shell' | 'automa
 
 const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView }> = {
   models: { title: '模型与密钥', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
-  runtime: { title: '后台', hint: '运行时来源、后台保持、悬浮球与前台服务', view: 'settings-runtime' },
+  runtime: { title: '后台', hint: '运行时来源与两个入口、后台保持、悬浮球与前台服务', view: 'settings-runtime' },
   terminal: { title: '主题', hint: '字号、卡片颜色与透明度、图片与视频背景', view: 'settings-terminal' },
   'device-shell': { title: '设备 Shell 设置', hint: 'Shizuku 授权与 AI Shell', view: 'settings-device-shell' },
   automation: { title: '自动化设置', hint: '无障碍应用自动化与副屏', view: 'settings-automation' },
@@ -247,7 +246,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'runtime-page',
     group: 'runtime',
     title: '后台',
-    hint: '运行时来源、后台保持、悬浮球与前台服务',
+    hint: '运行时来源与两个入口、后台保持、悬浮球与前台服务',
     target: { kind: 'page', page: 'runtime' },
     icon: <Power size={20} />,
   },
@@ -265,8 +264,8 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'files',
     group: 'files',
     title: '文件管理',
-    hint: '投递区与共享目录：一处浏览、建文件夹与搬运',
-    // 这组功能原属「后台」页：投递区与共享目录不再挂在那页上，
+    hint: '外部工作区：一处浏览、建文件夹与搬运',
+    // 这组功能原属「后台」页：访客的外部工作区不再挂在那页上，
     // 搜「导入」「投递区」的人要找的是这一页。
     target: { kind: 'view', view: 'files' },
     icon: <FolderInput size={20} />,
@@ -2783,18 +2782,18 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
 
       {/*
         这一段是这一页的存在理由，必须写在最前面：用户最容易搞混的正是
-        「哪些目录是搬进来的、哪些是本来就挂着的」，以及为什么只有投递区有搬运按钮。
+        「哪些目录是搬进来的、哪些是本来就挂着的」，以及为什么只有 inbox / outbox 有搬运按钮。
       */}
       <p className="settings-note">
-        {t("这里能看到所有对外目录：投递区（inbox / outbox，靠按钮批量搬运）与共享目录（手机上的文件夹，挂进访客的 /mnt/user/<序号>，可直接读写）。")}
+        {t("这里的目录都是访客能看到的「外部工作区」：手机上的文件夹挂进访客的 /mnt/user/<序号>，可以直接读写；inbox / outbox 是批量搬运通道，只能靠按钮搬运。")}
       </p>
 
       <section className="settings-section" aria-labelledby="files-browser">
         <div className="section-title section-title-action">
           <span className="section-icon"><FolderInput size={19} /></span>
           <div>
-            <h2 id="files-browser">{t("文件夹管理")}</h2>
-            <p>{t("选一个目录浏览它的子目录；导入到工作区与导出工作区只对投递区有效。")}</p>
+            <h2 id="files-browser">{t("外部工作区")}</h2>
+            <p>{t("选一个目录浏览它的子目录；导入到工作区与导出工作区只对 inbox / outbox 有效。")}</p>
           </div>
           <button className="button button-secondary mailbox-create-button" type="button" onClick={onCreateFilesFolder} disabled={createFolderDisabled}>
             {busy === 'mailbox-folder-create' || busy === 'files-storage-folder-create' ? <Loader2 className="spin" size={17} /> : <FolderPlus size={17} />}
@@ -2831,12 +2830,12 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
         </div>
 
         {storageEntries.length === 0 && (
-          <p className="settings-note">{t("还没有共享目录：在下面「共享目录」里添加一个手机上的目录，它会出现在这里。")}</p>
+          <p className="settings-note">{t("还没有挂进来的目录：在下面「目录」里添加一个手机上的目录，它会出现在这里。")}</p>
         )}
 
         {readFailed && (
           <p className="settings-note" role="alert">
-            {browsingMailbox ? t("无法读取当前投递目录，请重试") : t("无法读取当前共享目录，请重试")}
+            {browsingMailbox ? t("无法读取当前搬运目录，请重试") : t("无法读取当前目录，请重试")}
             <button className="button button-secondary compact-button" type="button" onClick={() => onOpenFilesDirectory(currentPath)} disabled={busy !== null}>{t("重试")}</button>
           </p>
         )}
@@ -2881,23 +2880,23 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
       </section>
 
       {/*
-        投递区专属区：状态、搬运按钮与说明。
-        只在浏览投递区根时渲染 —— 协议动作只属于投递区，摆在共享目录下面会让人以为它也能用。
+        搬运块：状态、搬运按钮与说明。
+        只在浏览 inbox / outbox 时渲染 —— 协议动作只属于这两个根，摆在别的目录下面会让人以为它也能用。
       */}
       {browsingMailbox && (
-        <section className="settings-section" aria-labelledby="files-mailbox">
+        <div className="settings-subsection" role="region" aria-labelledby="files-mailbox">
           <div className="section-title section-title-action">
             <span className="section-icon"><FolderInput size={19} /></span>
             <div>
-              <h2 id="files-mailbox">{t("投递区")}</h2>
-              <p>{t("手机侧与访客之间的批量搬运通道；不会自动搬运，必须点下面的按钮。")}</p>
+              <h3 id="files-mailbox">{t("搬运")}</h3>
+              <p>{t("inbox / outbox 与访客之间的批量搬运；不会自动搬运，必须点下面的按钮。")}</p>
             </div>
             <span className={`status-chip ${mailbox?.available === true ? 'success' : 'warn'}`}>{mailboxStatusLabel}</span>
           </div>
 
           {mailbox === null && (
             <p className="settings-note" role={mailboxReadFailed ? 'alert' : undefined}>
-              {mailboxReadFailed ? t("无法读取投递区状态，请重试") : t("正在读取投递区状态")}
+              {mailboxReadFailed ? t("无法读取搬运状态，请重试") : t("正在读取搬运状态")}
             </p>
           )}
 
@@ -2937,7 +2936,7 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
                 <div className="inline-alert warning">
                   <AlertTriangle size={19} />
                   <div>
-                    <strong>{t("投递区不可用")}</strong>
+                    <strong>{t("搬运不可用")}</strong>
                     <span>{mailboxUnavailableReason}</span>
                   </div>
                 </div>
@@ -2973,11 +2972,11 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
               )}
               {storageAccess !== null && (
                 <p className="settings-note">
-                  {t("存储权限：媒体读取（T1）{0} · 所有文件访问（T2）{1}。投递区需要 T2。", storageAccess.mediaGranted ? t("已授予") : t("未授予"), storageAccess.allFilesSupported ? (storageAccess.allFilesGranted ? t("已授予") : t("未授予")) : t("系统不支持"))}
+                  {t("存储权限：媒体读取（T1）{0} · 所有文件访问（T2）{1}。外部工作区需要 T2。", storageAccess.mediaGranted ? t("已授予") : t("未授予"), storageAccess.allFilesSupported ? (storageAccess.allFilesGranted ? t("已授予") : t("未授予")) : t("系统不支持"))}
                 </p>
               )}
               <p className="settings-note">
-                {t("投递区不是工作区：dsh 的 write 工具写 /mnt/inbox、/mnt/outbox 会失败（实测 EACCES），这是预期行为；搬运只能走这里的按钮。")}
+                {t("inbox / outbox 不是工作区：dsh 的 write 工具写 /mnt/inbox、/mnt/outbox 会失败（实测 EACCES），这是预期行为；搬运只能走这里的按钮。")}
               </p>
             </>
           )}
@@ -2992,18 +2991,18 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
               {t("最近一次导出：{0} 个条目 · {1} · manifest {2}", lastMailboxExport.entryCount, formatBytes(lastMailboxExport.bytes), lastMailboxExport.manifestName)}
             </p>
           )}
-        </section>
+        </div>
       )}
 
       {/*
-        共享目录白名单管理：这一页同时是「看有哪些目录」和「决定有哪些目录」的地方 ——
+        目录管理：这一页同时是「看有哪些目录」和「决定有哪些目录」的地方 ——
         用户发现某个目录不在列表里时，下一步就是在这里添加它，不该再跳回另一页。
       */}
-      <section className="settings-section" aria-labelledby="files-storage-dirs">
+      <div className="settings-subsection" role="region" aria-labelledby="files-storage-dirs">
         <div className="section-title section-title-action">
           <span className="section-icon"><HardDrive size={19} /></span>
           <div>
-            <h2 id="files-storage-dirs">{t("共享目录")}</h2>
+            <h3 id="files-storage-dirs">{t("目录")}</h3>
             {/*
               说明里必须写明「访客内不再有 /sdcard」：旧的 /sdcard 整体绑定已被这份白名单取代
               （登记册 §5.1 / §3.1），用户看不到目录时最容易怀疑是权限坏了。
@@ -3017,7 +3016,7 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
 
         {storageDirs === null && (
           <p className="settings-note" role={storageDirsReadFailed ? 'alert' : undefined}>
-            {storageDirsReadFailed ? t("无法读取共享目录状态，请重试") : t("正在读取共享目录状态")}
+            {storageDirsReadFailed ? t("无法读取目录状态，请重试") : t("正在读取目录状态")}
           </p>
         )}
 
@@ -3043,7 +3042,7 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
               <div className="inline-alert warning">
                 <AlertTriangle size={19} />
                 <div>
-                  <strong>{t("目录白名单当前不可用")}</strong>
+                  <strong>{t("目录当前不可用")}</strong>
                   <span>{storageDirsBlockedReason}</span>
                 </div>
               </div>
@@ -3114,14 +3113,14 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
               {t("目录改动在下次启动运行环境时生效：正在运行的访客不会热更新挂载点。")}
             </p>
             <p className="settings-note">
-              {t("共享目录是实时挂载：进去之后可以直接读写，不需要像投递区那样先搬运一次。")}
+              {t("挂进来的目录是实时挂载：进去之后可以直接读写，inbox / outbox 才需要先搬运一次。")}
             </p>
             {storageDirLimitReached && (
               <p className="settings-note">{t("已达上限：最多只能添加 {0} 个目录，请先移除一个再添加。", MAX_STORAGE_DIRECTORIES)}</p>
             )}
           </>
         )}
-      </section>
+      </div>
     </div>
   )
 }
@@ -3246,9 +3245,6 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
 
       <p className="settings-note">{t("已安装插件列表见「插件管理」")}</p>
       <p className="settings-note">{t("自检会单独测试 Landlock 能力，不随会话权限切换。无沙箱会话可继续运行时，沙箱检查仍可能失败。")}</p>
-      {report?.harnessPermissionMode !== undefined && (
-        <p className="settings-note">{t("自检时的启动默认权限：{0}（会话权限可能不同）", report.harnessPermissionMode)}</p>
-      )}
 
       <div className="settings-inline-actions self-check-actions">
         <button className="button button-secondary" type="button" onClick={() => start('check')} disabled={busy !== null}>
@@ -3310,7 +3306,7 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
           <div>
             <strong>{t("本机 Landlock 沙箱不可用")}</strong>
             <span>{t("修复执行权限后仍出现此结果，表示 Landlock 在当前内核或启动环境中不可用。若没有其他可用后端，要求沙箱的会话无法执行命令；反复修复权限或重装运行时不能补齐内核能力。")}</span>
-            <span>{t("下一步：")}{t("在当前 Harness 会话的权限预设中选择 danger-full-access，或输入 /permission danger-full-access，然后重试命令。启动默认值可在本页「Harness 启动权限」中设置。")}</span>
+            <span>{t("下一步：")}{t("在当前 Harness 会话的权限预设中选择 danger-full-access，或输入 /permission danger-full-access，然后重试命令。")}</span>
             <span>{t("danger-full-access 会关闭 dsh 文件系统沙箱和命令审批。Android 应用沙箱仍在；PRoot 不提供额外的内核隔离。")}</span>
           </div>
         </div>
@@ -3458,6 +3454,10 @@ interface SettingsScreenProps {
   /** 跳转到系统「显示在其他应用上层」设置页；权限只能由用户手动开启。 */
   onOpenOverlaySettings: () => void
   onOpenShizuku: () => void
+  /** 跳到「Ubuntu 运行时」独立页；后台页只留入口。 */
+  onOpenEnvironment: () => void
+  /** 跳到「设备 Shell」独立页；后台页只留入口。 */
+  onOpenDeviceShell: () => void
   onOpenAccessibilitySettings: () => void
   /**
    * 保存白名单。已设置验证密码时**必须**带上 `password`：
@@ -3489,7 +3489,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
   /** 总开关的一次操作还在路上：按钮在这期间全部禁用，避免连点出两次动作。 */
@@ -4073,8 +4073,17 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
-            <div><h2 id="download-settings">{t("运行时来源")}</h2><p>{t("两项留空表示使用 APK 内置的运行时（官方构建即内置，可离线安装）；填写清单地址与 SHA-256 则改为从该来源下载，两项必须成对。")}</p></div>
+            <div><h2 id="download-settings">{t("运行时与设备 Shell")}</h2><p>{t("装、启停、重置在「Ubuntu 运行时」；Shizuku 授权与 AI Shell 在「设备 Shell 设置」。这一页只管它们从哪来。")}</p></div>
           </div>
+          <div className="settings-inline-actions">
+            <button className="button button-secondary" type="button" onClick={onOpenEnvironment} disabled={busy !== null}>
+              <CloudDownload size={18} />{t("Ubuntu 运行时")}
+            </button>
+            <button className="button button-secondary" type="button" onClick={onOpenDeviceShell} disabled={busy !== null}>
+              <SquareTerminal size={18} />{t("设备 Shell 设置")}
+            </button>
+          </div>
+          <p className="settings-note">{t("清单两项留空表示使用 APK 内置的运行时（官方构建即内置，可离线安装）；填写清单地址与 SHA-256 则改为从该来源下载，两项必须成对。")}</p>
           <label className="field">
             <span>{t("运行时清单地址")}</span>
             <input
@@ -4242,34 +4251,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             </div>
           )}
         </section>
-        )}
-
-        {page === 'runtime' && (
-        <section className="settings-section" aria-labelledby="harness-permission-settings">
-          <div className="section-title">
-            <span className="section-icon"><ShieldCheck size={19} /></span>
-            <div><h2 id="harness-permission-settings">{t("Harness 启动权限")}</h2><p>{t("更改后保存设置；正在运行的 Harness 会自动重启，进行中的任务会中断。")}</p></div>
-          </div>
-          <label className="field">
-            <span>{t("启动默认权限")}</span>
-            <select value={settings.harnessPermissionMode ?? 'workspace-write'} disabled={busy !== null}
-              onChange={event => setDraft({ ...settings, harnessPermissionMode: validateHarnessPermissionMode(event.target.value) })}>
-              <option value="workspace-write">{t("工作区沙箱（workspace-write）")}</option>
-              <option value="danger-full-access">{t("兼容模式，无沙箱（danger-full-access）")}</option>
-            </select>
-          </label>
-          <p className="settings-note">{t("此项设置启动默认值；Harness 内保存的默认权限和已有会话权限优先。旧会话仍报错时，在该会话输入 /permission danger-full-access。")}</p>
-          {settings.harnessPermissionMode === 'danger-full-access' && (
-            <div className="inline-alert warning" role="alert"><AlertTriangle size={19} /><div>
-              <strong>{t("兼容模式会降低隔离能力")}</strong>
-              <span>{t("danger-full-access 会关闭 dsh 文件系统沙箱和命令审批。Android 应用沙箱仍在；PRoot 不提供额外的内核隔离。")}</span>
-            </div></div>
-          )}
-        </section>
-        )}
-
-        {page === 'runtime' && (
-        <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
         )}
 
         {page === 'device-shell' && (
@@ -4826,6 +4807,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             <ExternalLink size={18} />{t('在 GitHub 反馈问题')}
           </a>
         </section>
+
+        <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
 
         {/* 设备能力清单：从版本管理页挪过来，回答「这台机器现在能做什么」。 */}
         <DeviceCapabilityCard />
@@ -6369,7 +6352,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

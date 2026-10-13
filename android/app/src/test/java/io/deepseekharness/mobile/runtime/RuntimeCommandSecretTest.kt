@@ -38,7 +38,6 @@ class RuntimeCommandSecretTest {
     ): ProotArgvInput = ProotArgvInput(
         runnerPath = "/data/app/io.deepseekharness.mobile/lib/arm64/libdsh_proot.so",
         rootPath = "/data/user/0/io.deepseekharness.mobile/no_backup/dsh-runtime/current",
-        permissionMode = HarnessPermissionMode.WORKSPACE_WRITE.wireValue,
         entrypoint = entrypoint,
         bindMounts = listOf(ProotBindMount("/dev"), ProotBindMount("/etc/resolv.conf", "/etc/resolv.conf")),
         harnessPidFilePath = "/data/user/0/io.deepseekharness.mobile/no_backup/dsh-harness.pid"
@@ -90,7 +89,6 @@ class RuntimeCommandSecretTest {
                 "LOGNAME",
                 "LANG",
                 "TERM",
-                "DSH_PERMISSION_MODE",
                 "PATH",
                 "DSH_DEVICE_BRIDGE_PORT",
                 "DSH_PIDFILE",

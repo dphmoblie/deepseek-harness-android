@@ -17,14 +17,14 @@ import { App } from './App'
  * 共同前提是**「什么叫失败」**——用户取消不是失败、条目不可用不是失败、读取失败也不是
  * 「没有目录」。混在投递区用例里改一处档位很容易漏测另一处。
  *
- * 所有断言都限定在区块内（`getByRole('region', { name: '共享目录' })`）：这一页上
+ * 所有断言都限定在区块内（`getByRole('region', { name: '目录' })`）：这一页上
  * 「可用」「不可用」「需要授权」这些词在设备 Shell、投递区各有一份，全局查询会指错元素。
  */
 
 /** 区块容器：`<section aria-labelledby>` 有可访问名，因此按 region 查是稳定的。 */
 async function openStorageSection(): Promise<HTMLElement> {
   await openFilesPage()
-  return screen.findByRole('region', { name: '共享目录' })
+  return screen.findByRole('region', { name: '目录' })
 }
 
 /**
@@ -85,7 +85,7 @@ describe('共享目录（目录白名单）', () => {
     expect(within(section).getByText('0/8')).toBeVisible()
     expect(within(section).getByText('需要授权')).toBeVisible()
     expect(within(section).getByText('T0 · 未授予「所有文件访问」')).toBeVisible()
-    expect(within(section).getByText('目录白名单当前不可用')).toBeVisible()
+    expect(within(section).getByText('目录当前不可用')).toBeVisible()
     expect(within(section).getByText(/还没有「所有文件访问」权限/)).toBeVisible()
 
     // 没有权限时不能选目录；入口必须可点，否则用户被锁死在原地。
@@ -296,7 +296,7 @@ describe('共享目录（目录白名单）', () => {
 
     // 三路（投递区 / 权限档 / 白名单）是同一批读取：读取失败时不留半个屏幕的旧值，
     // 也不能把「不知道」显示成「0 条目录」。
-    expect(within(section).getByText('无法读取共享目录状态，请重试')).toBeVisible()
+    expect(within(section).getByText('无法读取目录状态，请重试')).toBeVisible()
     expect(within(section).queryByText('0/8')).toBeNull()
     expect(within(section).getByRole('button', { name: /添加目录/ })).toBeDisabled()
   })
@@ -328,7 +328,7 @@ describe('共享目录（目录白名单）', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /重新检查/ }))
     await waitFor(() => expect(bridge.getStorageDirs).toHaveBeenCalledTimes(2))
-    const section = await screen.findByRole('region', { name: '共享目录' })
+    const section = await screen.findByRole('region', { name: '目录' })
     expect(within(section).getByText('0/8')).toBeVisible()
     expect(within(section).getByText('已授权')).toBeVisible()
   })

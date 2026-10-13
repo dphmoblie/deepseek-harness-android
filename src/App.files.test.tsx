@@ -63,7 +63,7 @@ describe('文件管理（投递区与共享目录同一个浏览器）', () => {
 
     // 标题与页首说明：这一页的存在理由要写在最前面。
     expect(screen.getByRole('heading', { level: 1, name: '文件管理' })).toBeVisible()
-    expect(screen.getByText(/这里能看到所有对外目录/)).toBeVisible()
+    expect(screen.getByText(/这里的目录都是访客能看到的/)).toBeVisible()
 
     // 只有一个浏览器：投递区两个根 + 每条共享目录一个根，全在同一组标签页里。
     const tablists = screen.getAllByRole('tablist')
@@ -72,8 +72,8 @@ describe('文件管理（投递区与共享目录同一个浏览器）', () => {
     expect(tabs).toEqual(['inbox · 用户放入', 'outbox · 产物取出', 'DSH-1'])
 
     // 两类根各自的专属区块都在：浏览层合并了，语义没有合并。
-    expect(screen.getByRole('region', { name: '投递区' })).toBeVisible()
-    expect(screen.getByRole('region', { name: '共享目录' })).toBeVisible()
+    expect(screen.getByRole('region', { name: '搬运' })).toBeVisible()
+    expect(screen.getByRole('region', { name: '目录' })).toBeVisible()
 
     // 返回键回到设置首页（它是一级页，不是设置里的二级页）。
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
@@ -101,9 +101,9 @@ describe('文件管理（投递区与共享目录同一个浏览器）', () => {
     expect(screen.queryByRole('button', { name: /导入到工作区/ })).toBeNull()
     expect(screen.queryByRole('button', { name: /导出工作区/ })).toBeNull()
     expect(screen.queryByRole('button', { name: /导出到当前目录/ })).toBeNull()
-    expect(screen.queryByRole('region', { name: '投递区' })).toBeNull()
+    expect(screen.queryByRole('region', { name: '搬运' })).toBeNull()
     // 但白名单管理仍然在这一页：发现目录不在列表里时不用跳回另一页。
-    expect(screen.getByRole('region', { name: '共享目录' })).toBeVisible()
+    expect(screen.getByRole('region', { name: '目录' })).toBeVisible()
     expect(screen.getByRole('button', { name: /添加目录/ })).toBeVisible()
 
     // 切回投递区，按钮回来。
@@ -195,14 +195,14 @@ describe('文件管理（投递区与共享目录同一个浏览器）', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'DSH-1' }))
     const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent('无法读取当前共享目录，请重试')
+    expect(alert).toHaveTextContent('无法读取当前目录，请重试')
     // 读失败不能说成「目录是空的」：空目录与读不到是两件事。
     expect(screen.queryByText('当前目录为空')).toBeNull()
 
     fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
     await waitFor(() => expect(bridge.getStorageDirectory).toHaveBeenCalledTimes(2))
     expect(await screen.findByText('照片')).toBeVisible()
-    expect(screen.queryByText('无法读取当前共享目录，请重试')).toBeNull()
+    expect(screen.queryByText('无法读取当前目录，请重试')).toBeNull()
   })
 })
 
