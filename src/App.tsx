@@ -76,6 +76,7 @@ import { useAppUpdateReminder } from './appUpdateReminder'
 import { runtimeBridge } from './platform/native'
 import { readLogInsights } from './logInsights'
 import { observeKeyboardInset } from './keyboardInset'
+import { applyShellFontScale, SHELL_FONT_BASELINE_PX } from './shellFont'
 import { acknowledgeAutomationDisclaimer, isAutomationDisclaimerAcknowledged } from './accessibilityDisclaimer'
 import { assertMailboxSubdirectory, validateAccessibilityPasswordInput } from './platform/validation'
 import {
@@ -4183,7 +4184,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <section className="settings-section" aria-labelledby="terminal-settings">
           <div className="section-title">
             <span className="section-icon"><SquareTerminal size={19} /></span>
-            <div><h2 id="terminal-settings">{t("终端")}</h2><p>{t("应用内终端的显示方式")}</p></div>
+            <div><h2 id="terminal-settings">{t("界面")}</h2><p>{t("整个应用壳子的字号与显示方式")}</p></div>
           </div>
           <label className="range-field">
             <span><strong>{t("字号")}</strong><small>{settings.terminalFontSize}px</small></span>
@@ -4993,6 +4994,13 @@ export function App() {
   const previousViewRef = useRef<AppView | null>(null)
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME)
   const [settings, setSettings] = useState<RuntimeSettings | null>(null)
+  /**
+   * 主题页的「字号」管整个应用壳子：设置页、对话页与应用内终端一起缩放。
+   * dsh 自己界面的字号仍由 dsh 自己设置，这里不碰它。
+   */
+  useEffect(() => {
+    applyShellFontScale(settings?.terminalFontSize ?? SHELL_FONT_BASELINE_PX)
+  }, [settings?.terminalFontSize])
   const [settingsReadStatus, setSettingsReadStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
   const settingsReadRevision = useRef(0)
   /**

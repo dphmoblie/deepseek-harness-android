@@ -259,6 +259,21 @@ describe('悬浮球设置', () => {
     expect(screen.getByRole('slider', { name: /字号/ })).toHaveValue('20')
   })
 
+  it('主题页的字号落到整个壳子的根字号上', async () => {
+    document.documentElement.style.removeProperty('--app-font-scale')
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('主题')
+    // 夹具默认字号就是基准值，挂载后应写回中性系数 1：不设置的人看到的是原来的界面。
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue('--app-font-scale')).toBe('1'))
+
+    fireEvent.change(screen.getByRole('slider', { name: /字号/ }), { target: { value: '21' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+
+    // 21 / 14 = 1.5：字号一动，壳子里以 rem 写的字号整体跟着变。
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue('--app-font-scale')).toBe('1.5'))
+  })
+
   it('悬浮球保存成功但状态复核失败时仍显示已保存的开关值', async () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))

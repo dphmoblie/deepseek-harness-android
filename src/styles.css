@@ -240,7 +240,9 @@
  * 整个外壳才会跟着放大。
  */
 html {
-  font-size: 100%;
+  /* 壳字号（主题页的「字号」）只改这一个数：全站字号用 rem 写，根字号一动就整体缩放。
+     默认 16px × 1 = 16px，与改动前逐像素一致（见 src/shellFont.ts）。 */
+  font-size: calc(16px * var(--app-font-scale, 1));
 }
 
 * {
@@ -1058,8 +1060,8 @@ button:disabled {
 
 .workspace-dialog { display: flex; flex-direction: column; width: min(100%, 680px); min-height: min(420px, calc(100dvh - 32px)); padding: 0; overflow: hidden; }
 .workspace-dialog-header { display: grid; grid-template-columns: 42px minmax(0, 1fr) 44px 44px; align-items: center; gap: 8px; min-height: 70px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-.workspace-dialog-header h2 { margin: 0; font-size: 17px; }
-.workspace-dialog-header p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.workspace-dialog-header h2 { margin: 0; font-size: 1.0625rem; }
+.workspace-dialog-header p { margin: 3px 0 0; color: var(--muted); font-size: 0.75rem; }
 .workspace-dialog-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--radius-inner); color: var(--blue); background: var(--blue-soft); }
 .workspace-dialog-body { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
 .workspace-file-list { display: grid; }
@@ -1069,14 +1071,14 @@ button:disabled {
 .workspace-file-copy { display: grid; min-width: 0; gap: 3px; }
 .workspace-file-copy strong,
 .workspace-file-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-file-copy strong { font-size: 13px; font-weight: var(--weight-semibold); }
-.workspace-file-copy small { color: var(--muted); font-size: 11px; }
+.workspace-file-copy strong { font-size: 0.8125rem; font-weight: var(--weight-semibold); }
+.workspace-file-copy small { color: var(--muted); font-size: 0.6875rem; }
 .workspace-file-actions { display: flex; flex: none; gap: 4px; }
 .workspace-file-actions .icon-button { width: 44px; height: 44px; }
 .workspace-file-actions .workspace-delete { color: var(--red); }
 .workspace-empty { display: grid; place-items: center; align-content: center; gap: 8px; min-height: 300px; padding: 32px; color: var(--muted); text-align: center; }
-.workspace-empty strong { color: var(--ink); font-size: 14px; }
-.workspace-empty span { font-size: 12px; }
+.workspace-empty strong { color: var(--ink); font-size: 0.875rem; }
+.workspace-empty span { font-size: 0.75rem; }
 
 .terminal-screen {
   display: flex;
@@ -1273,7 +1275,7 @@ button:disabled {
   margin: 0;
   padding: 13px 16px 5px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   letter-spacing: 0.03em;
 }
