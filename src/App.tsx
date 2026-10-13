@@ -49,7 +49,6 @@ import {
   Rocket,
   Save,
   ScrollText,
-  Search,
   Settings2,
   Share2,
   ShieldCheck,
@@ -216,13 +215,6 @@ interface SettingsHomeEntry {
   /** 标题与说明就是入口按钮上显示的文字（与二级页标题逐字一致，匹配时也算进去）。 */
   title: string
   hint: string
-  /**
-   * 同义关键词：写「用户会说的词」，不是界面上出现过的词。
-   *
-   * 界面上只有「后台保持」「诊断与日志」，而用户输入的是「保活」「省电」「日志」「log」「key」——
-   * 不补这些词，按功能词搜就是一个都搜不到。全部小写；英文补常见形态（plugin/plugins）。
-   */
-  keywords: string[]
   target: SettingsHomeTarget
   icon: ReactNode
 }
@@ -230,7 +222,7 @@ interface SettingsHomeEntry {
 /**
  * 设置首页的全部入口。
  *
- * 每个入口归属一个用途分类，关键词覆盖二级页内的功能。
+ * 每个入口归属一个用途分类。
  *
  * 这里的标题与说明是**裸字符串**，渲染时才交给 `t()`；仓库外的 `locales-check.cjs`
  * 只认字面量 `t("…")` 调用，看不见这张表。补英文词条时必须手工同步 `src/locales/en.ts`，
@@ -243,7 +235,6 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'runtime',
     title: 'Harness 服务',
     hint: '启动、停止与当前状态',
-    keywords: ['harness', '服务', '进程', '停止', '启动', '运行中', '本机', '端口', 'service', 'stop', 'start'],
     target: { kind: 'service' },
     icon: <Bot size={20} />,
   },
@@ -252,7 +243,6 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'plugins',
     title: '插件管理',
     hint: '官方与第三方插件，按插件包管理启停与更新',
-    keywords: ['插件', 'plugin', 'plugins', '扩展', '启停', '启用', '禁用', '市场', '更新', '修复', '重装'],
     target: { kind: 'view', view: 'plugins' },
     icon: <Settings2 size={20} />,
   },
@@ -261,7 +251,6 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'runtime',
     title: 'Ubuntu 运行时',
     hint: '安装进度、版本、来源与重置',
-    keywords: ['ubuntu', '运行时', '运行环境', '安装', '更新', '重置', '镜像', 'rootfs', '磁盘', '空间', '存储', '占用', '下载', 'runtime', 'install', 'image', 'reset', 'disk'],
     target: { kind: 'view', view: 'environment' },
     icon: <HardDrive size={20} />,
   },
@@ -270,7 +259,6 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'runtime',
     title: '运行与后台',
     hint: '运行时来源、后台保持、悬浮球与前台服务',
-    keywords: ['后台', '保活', '后台保持', '前台服务', '通知', '悬浮球', '省电', '电池', '自启', '开机', '唤醒', 'background', 'keepalive', 'notification', 'battery', 'float'],
     target: { kind: 'page', page: 'runtime' },
     icon: <Power size={20} />,
   },
@@ -279,7 +267,6 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'device',
     title: '终端与设备 Shell',
     hint: 'Ubuntu 终端与设备 Shell（需 Shizuku）',
-    keywords: ['终端', 'terminal', 'shell', '命令行', 'bash', '脚本', '设备', 'shizuku', 'adb', '命令'],
     target: { kind: 'view', view: 'terminal' },
     icon: <SquareTerminal size={20} />,
   },
@@ -292,7 +279,6 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     hint: '投递区与共享目录：一处浏览、建文件夹与搬运',
     // 这组功能词从「运行与后台」搬过来：投递区与共享目录不再挂在那页上，
     // 搜「导入」「投递区」的人要找的是这一页。
-    keywords: ['文件', '文件夹', '目录', '投递区', '共享目录', '导入', '导出', '搬运', '浏览', '新建文件夹', 'mailbox', 'storage', 'file', 'files', 'folder', 'directory'],
     target: { kind: 'view', view: 'files' },
     icon: <FolderInput size={20} />,
   },
@@ -303,7 +289,6 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'versions',
     title: '版本管理',
     hint: '保留上一版本，可一键切回；装新版本仍在运行环境页',
-    keywords: ['版本', 'version', '运行时版本', '上一版本', '回退', '切回', '切换', '回滚', '降级', '升级', '更新', 'dsh', 'previous', 'rollback', 'switch', 'retained'],
     target: { kind: 'view', view: 'versions' },
     icon: <RotateCcw size={20} />,
   },
@@ -314,7 +299,6 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'models',
     title: '模型与密钥',
     hint: '供应商、API Key 与自定义模型',
-    keywords: ['模型', '密钥', 'key', 'api', 'apikey', 'api key', '供应商', 'provider', 'token', '凭据', '自定义模型'],
     target: { kind: 'page', page: 'models' },
     icon: <KeyRound size={20} />,
   },
@@ -323,7 +307,6 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'appearance',
     title: '终端与外观',
     hint: '主题、图片与视频背景、卡片颜色与透明度、字号',
-    keywords: ['终端', '外观', '字号', '字体', '常亮', '屏幕', '显示', '主题', '深色', '浅色', 'appearance', 'font', 'theme', '背景', '壁纸', '视频', '图片', 'mp4', '模糊', '透明', '卡片', '颜色', '强调色', 'background', 'opacity'],
     target: { kind: 'page', page: 'terminal' },
     icon: <SquareTerminal size={20} />,
   },
@@ -332,7 +315,6 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'device',
     title: 'Shizuku 与设备 Shell',
     hint: 'Shizuku 授权、AI Shell、无障碍白名单与副屏',
-    keywords: ['shizuku', '授权', '权限', '连接', '设备', 'shell', 'adb', '服务', '无障碍', '自动化', '白名单', '应用列表', '副屏', '虚拟屏幕', '小窗', '截图', '点击', 'accessibility', 'automation', 'display'],
     target: { kind: 'page', page: 'shizuku' },
     icon: <Smartphone size={20} />,
   },
@@ -341,29 +323,10 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'diagnostics',
     title: '诊断与日志',
     hint: '采集开关、保留天数、运行日志与导出',
-    keywords: ['诊断', '日志', 'log', 'logs', '采集', '保留', '导出', '排查', '报错', '错误', '崩溃', '重启'],
     target: { kind: 'page', page: 'diagnostics' },
     icon: <ScrollText size={20} />,
   },
 ]
-
-/**
- * 按功能词本地匹配入口：不发请求、不写存储、不改运行状态。
- *
- * 规则刻意保持简单，让用户能预期、不用猜：
- *  - 大小写不敏感；
- *  - 查询按空白拆成多个词，**全部命中**才算匹配（多词顺序无关，可当「缩小范围」用）；
- *  - 匹配范围 = 标题 + 说明 + 同义关键词。
- *
- * 断网、运行时没装好时一样可用——「找不到入口」恰恰是用户最需要搜的时候。
- */
-function matchesSettingsHomeQuery(entry: SettingsHomeEntry, query: string): boolean {
-  const tokens = query.toLowerCase().split(/\s+/).filter(token => token !== '')
-  if (tokens.length === 0) return true
-  const group = SETTINGS_HOME_GROUPS.find(item => item.id === entry.group)
-  const haystack = `${entry.title} ${t(entry.title)} ${entry.hint} ${t(entry.hint)} ${group?.label} ${t(group?.label ?? '')} ${entry.keywords.join(' ')}`.toLowerCase()
-  return tokens.every(token => haystack.includes(token))
-}
 
 /** 外壳视图的全部取值：历史状态与地址片段只接受这里的值，其余一律回落到主视图。 */
 const APP_VIEWS: AppView[] = [
@@ -1514,22 +1477,17 @@ interface SettingsHomeScreenProps {
 }
 
 /**
- * 设置首页：按分组列出全部入口，并支持按功能词本地过滤。
+ * 设置首页：按分组列出全部入口，分组可以筛选。
  *
- * 过滤只决定这一屏显示哪些入口，不改变任何行为：命中后点下去走的是同一条路，
- * 所以「搜出来的按钮能点、点了到对地方」可以用测试钉住。
+ * 筛选只决定这一屏显示哪些入口，不改变任何行为：点下去走的是同一条路。
  */
 function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenPage, onOpenView, onStop }: SettingsHomeScreenProps) {
-  /** 过滤词只活在组件里：离开设置首页即清空，下次进来不该被上次的搜索框卡住。 */
-  const [query, setQuery] = useState('')
   const [category, setCategory] = useState<SettingsHomeGroup | 'all'>('all')
-  /** 每个分组只留命中的入口；整组都没命中就连标题一起不渲染，避免空标题刷屏。 */
+  /** 每个分组只留属于它的入口；整组都没有就连标题一起不渲染，避免空标题刷屏。 */
   const groups = SETTINGS_HOME_GROUPS
     .filter(group => category === 'all' || category === group.id)
-    .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id && matchesSettingsHomeQuery(entry, query)) }))
+    .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id) }))
     .filter(item => item.entries.length > 0)
-  const matched = groups.reduce((total, item) => total + item.entries.length, 0)
-  const searching = query.trim() !== ''
 
   /** 服务行没有跳转，说明文字跟着运行状态走，所以按 id 现算；其余入口用固定说明。 */
   const hintOf = (entry: SettingsHomeEntry): string => entry.id === 'service'
@@ -1566,41 +1524,13 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
 
       <LanguageSettings />
 
-      {/* 搜索框固定在入口列表上方：入口一多，用户第一反应是找框，而不是往下翻。 */}
-      <div className="settings-search">
-        <Search size={18} aria-hidden="true" />
-        <input
-          type="search"
-          value={query}
-          onChange={event => { setQuery(event.target.value); setCategory('all') }}
-          maxLength={120}
-          placeholder={t("按功能词查找入口")}
-          aria-label={t("按功能词查找入口")}
-          autoComplete="off"
-        />
-        {query !== '' && (
-          <button className="settings-search-clear" type="button" onClick={() => setQuery('')} aria-label={t("清空查找词")}>
-            <X size={16} />
-          </button>
-        )}
-      </div>
-
       <div className="settings-categories" role="listbox" aria-label={t("筛选功能分类")}>
         <button type="button" role="option" aria-label={t("筛选分类：全部分类")} aria-selected={category === 'all'} onClick={() => setCategory('all')}>{t("全部分类")}</button>
         {SETTINGS_HOME_GROUPS.map(group => (
           <button key={group.id} type="button" role="option" aria-label={`${t("筛选分类：")} ${t(group.label)}`} aria-selected={category === group.id}
-            onClick={() => { setCategory(group.id); setQuery('') }}>{t(group.label)}</button>
+            onClick={() => setCategory(group.id)}>{t(group.label)}</button>
         ))}
       </div>
-
-      {/* 结果条用 role="status"：输入时读屏能听到「找到几个」，而不是列表安静地变了一下。 */}
-      {searching && (
-        <p className="settings-note" role="status">
-          {matched === 0
-            ? t("没有匹配的入口：试试「导入」「日志」「保活」这类功能词")
-            : t("找到 {0} 个匹配的入口", matched)}
-        </p>
-      )}
 
       <div className="settings-directory">
       {groups.map(({ group, entries }) => (
