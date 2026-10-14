@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Search, Smartphone } from 'lucide-react'
+import { Search, Smartphone, X } from 'lucide-react'
 import type { InstalledApplication, RuntimeBridge } from '../platform/types'
 import { t } from '../i18n'
 import { isVisible, normalizeSearchQuery, orderForDisplay, type VisibilityFilters } from './applicationSearchQuery'
@@ -12,6 +12,7 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
 }) {
   const [opened, setOpened] = useState(false)
   const [query, setQuery] = useState('')
+  const [isComposing, setIsComposing] = useState(false)
   const [apps, setApps] = useState<InstalledApplication[]>([])
   const [nextOffset, setNextOffset] = useState<number | null>(null)
   const [total, setTotal] = useState(0)
@@ -38,7 +39,7 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
   /** 上一次 effect 见过的词：只在「用户改了输入」时防抖，打开面板与重试都立刻请求。 */
   const lastQuery = useRef<string | null>(null)
   useEffect(() => {
-    if (!opened) return
+    if (!opened || isComposing) return
     setLoading(true)
     setFailed(false)
     const ticket = ++generation.current
@@ -55,7 +56,7 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
       }).finally(() => { if (ticket === generation.current) setLoading(false) })
     }, changed ? SEARCH_DEBOUNCE_MS : 0)
     return () => { window.clearTimeout(timer); generation.current = ticket + 1 }
-  }, [opened, query, attempt])
+  }, [opened, query, attempt, isComposing])
   async function more() {
     if (nextOffset === null || loading) return
     const ticket = ++generation.current
@@ -87,8 +88,38 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
     </button>
     {opened && <div className="application-picker-panel">
       <label className="field"><span><Search size={16} />{t('搜索应用名称或包名')}</span>
-        <input value={query} maxLength={160} onChange={event => setQuery(event.target.value)} placeholder={t('输入应用名称或包名')}
-          aria-label={t('搜索应用名称或包名')} />
+        <div className="application-picker-input-wrap">
+          <input
+            type="search"
+            value={query}
+            maxLength={160}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            onCompositionStart={() => setIsComposing(true)}
+            onCompositionEnd={event => {
+              setIsComposing(false)
+              setQuery(event.currentTarget.value)
+            }}
+            onChange={event => setQuery(event.target.value)}
+            placeholder={t('输入应用名称或包名')}
+            aria-label={t('搜索应用名称或包名')}
+          />
+          {query !== '' && (
+            <button
+              type="button"
+              className="application-picker-clear-btn"
+              onClick={() => {
+                setQuery('')
+                setIsComposing(false)
+              }}
+              aria-label={t('清空查找词')}
+            >
+              <X size={15} />
+            </button>
+          )}
+        </div>
       </label>
       <p className="settings-note">{t('支持拼音与首字母：微信可搜 wx、weixin；多个词用空格分开，顺序随意。')}</p>
       <div className="application-picker-filters" role="group" aria-label={t('列表筛选')}>

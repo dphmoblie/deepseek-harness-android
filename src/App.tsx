@@ -50,6 +50,7 @@ import {
   RotateCcw,
   Rocket,
   Save,
+  Search,
   ScrollText,
   Settings2,
   Share2,
@@ -217,6 +218,7 @@ interface SettingsHomeEntry {
   /** 标题与说明就是入口按钮上显示的文字（与二级页标题逐字一致，匹配时也算进去）。 */
   title: string
   hint: string
+  keywords: readonly string[]
   target: SettingsHomeTarget
   icon: ReactNode
 }
@@ -237,6 +239,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'runtime',
     title: 'Harness 服务',
     hint: '启动、停止与当前状态',
+    keywords: ['服务', '启动', '停止', '运行', 'harness', 'service', 'start', 'stop', 'run', '状态'],
     target: { kind: 'service' },
     icon: <Bot size={20} />,
   },
@@ -245,6 +248,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'runtime',
     title: 'Ubuntu 运行时',
     hint: '安装进度、版本、来源与重置',
+    keywords: ['ubuntu', '运行时', '环境', '安装', '重置', '更新', '来源', 'proot', 'linux', 'runtime', 'reset', 'install'],
     target: { kind: 'view', view: 'environment' },
     icon: <HardDrive size={20} />,
   },
@@ -253,6 +257,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'runtime',
     title: '后台',
     hint: '运行时来源与两个入口、后台保持、悬浮球与前台服务',
+    keywords: ['后台', '保活', '保持', '悬浮球', '前台服务', '通知', '电池', 'keepalive', 'background', 'overlay', 'foreground'],
     target: { kind: 'page', page: 'runtime' },
     icon: <Power size={20} />,
   },
@@ -261,6 +266,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'device',
     title: '设备 Shell',
     hint: '设备上的 Shell（需 Shizuku）',
+    keywords: ['设备shell', 'shell', 'terminal', '终端', 'shizuku', 'adb', '命令行', '控制台'],
     target: { kind: 'view', view: 'terminal' },
     icon: <SquareTerminal size={20} />,
   },
@@ -271,6 +277,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'files',
     title: '文件管理',
     hint: '外部工作区：一处浏览、建文件夹与搬运',
+    keywords: ['文件', '文件夹', '目录', '外部工作区', '投递区', '共享目录', '导入', '导出', '搬运', '浏览', '新建文件夹', 'mailbox', 'storage', 'file', 'files', 'folder', 'directory'],
     // 这组功能原属「后台」页：访客的外部工作区不再挂在那页上，
     // 搜「导入」「投递区」的人要找的是这一页。
     target: { kind: 'view', view: 'files' },
@@ -283,6 +290,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'versions',
     title: '版本管理',
     hint: '保留上一版本，可一键切回；装新版本仍在运行环境页',
+    keywords: ['版本', 'version', '运行时版本', '上一版本', '回退', '切回', '切换', '回滚', '降级', '升级', '更新', 'dsh', 'previous', 'rollback', 'switch', 'retained'],
     target: { kind: 'view', view: 'versions' },
     icon: <RotateCcw size={20} />,
   },
@@ -293,6 +301,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'models',
     title: '模型与密钥',
     hint: '供应商、API Key 与自定义模型',
+    keywords: ['模型', '密钥', 'key', 'api', 'apikey', 'api key', '供应商', 'provider', 'token', '凭据', '自定义模型', 'deepseek', 'openai', 'anthropic'],
     target: { kind: 'page', page: 'models' },
     icon: <KeyRound size={20} />,
   },
@@ -301,6 +310,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'appearance',
     title: '主题',
     hint: '字号、卡片颜色与透明度、图片与视频背景',
+    keywords: ['主题', '外观', '字号', '字体', '深色', '浅色', '背景', '壁纸', '视频', '图片', '透明度', '卡片', '颜色', '强调色', 'theme', 'font', 'appearance', 'background', 'color'],
     target: { kind: 'page', page: 'terminal' },
     icon: <SquareTerminal size={20} />,
   },
@@ -309,6 +319,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'device',
     title: '设备 Shell 设置',
     hint: 'Shizuku 授权与 AI Shell',
+    keywords: ['shizuku', '授权', '权限', '连接', '设备shell', 'ai shell', 'device shell'],
     target: { kind: 'page', page: 'device-shell' },
     icon: <Smartphone size={20} />,
   },
@@ -317,6 +328,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'device',
     title: '自动化设置',
     hint: '无障碍应用自动化与副屏',
+    keywords: ['无障碍', '自动化', '白名单', '应用列表', '副屏', '虚拟屏幕', '小窗', '截图', '点击', 'accessibility', 'automation', 'virtual screen', 'display'],
     target: { kind: 'page', page: 'automation' },
     icon: <Bot size={20} />,
   },
@@ -325,10 +337,29 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'diagnostics',
     title: '诊断与日志',
     hint: '采集开关、保留天数、运行日志与导出',
+    keywords: ['诊断', '日志', 'log', 'logs', '采集', '保留', '导出', '排查', '报错', '错误', '崩溃', '重启', '自检', 'self check'],
     target: { kind: 'page', page: 'diagnostics' },
     icon: <ScrollText size={20} />,
   },
 ]
+
+/**
+ * 按功能词本地匹配入口：不发请求、不写存储、不改运行状态。
+ *
+ * 规则刻意保持简单，让用户能预期、不用猜：
+ *  - 大小写不敏感；
+ *  - 查询按空白拆成多个词，**全部命中**才算匹配（多词顺序无关，可当「缩小范围」用）；
+ *  - 匹配范围 = 标题 + 说明 + 同义关键词。
+ *
+ * 断网、运行时没装好时一样可用——「找不到入口」恰恰是用户最需要搜的时候。
+ */
+function matchesSettingsHomeQuery(entry: SettingsHomeEntry, query: string): boolean {
+  const tokens = query.toLowerCase().split(/\s+/).filter(token => token !== '')
+  if (tokens.length === 0) return true
+  const group = SETTINGS_HOME_GROUPS.find(item => item.id === entry.group)
+  const haystack = `${entry.title} ${t(entry.title)} ${entry.hint} ${t(entry.hint)} ${group?.label} ${t(group?.label ?? '')} ${entry.keywords.join(' ')}`.toLowerCase()
+  return tokens.every(token => haystack.includes(token))
+}
 
 /** 外壳视图的全部取值：历史状态与地址片段只接受这里的值，其余一律回落到主视图。 */
 const APP_VIEWS: AppView[] = [
@@ -1489,12 +1520,16 @@ interface SettingsHomeScreenProps {
  * 筛选只决定这一屏显示哪些入口，不改变任何行为：点下去走的是同一条路。
  */
 function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenPage, onOpenView, onStop }: SettingsHomeScreenProps) {
+  /** 过滤词只活在组件里：离开设置首页即清空，下次进来不该被上次的搜索框卡住。 */
+  const [query, setQuery] = useState('')
   const [category, setCategory] = useState<SettingsHomeGroup | 'all'>('all')
-  /** 每个分组只留属于它的入口；整组都没有就连标题一起不渲染，避免空标题刷屏。 */
+  /** 每个分组只留命中的入口；整组都没命中就连标题一起不渲染，避免空标题刷屏。 */
   const groups = SETTINGS_HOME_GROUPS
     .filter(group => category === 'all' || category === group.id)
-    .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id) }))
+    .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id && matchesSettingsHomeQuery(entry, query)) }))
     .filter(item => item.entries.length > 0)
+  const matched = groups.reduce((total, item) => total + item.entries.length, 0)
+  const searching = query.trim() !== ''
 
   /** 服务行没有跳转，说明文字跟着运行状态走，所以按 id 现算；其余入口用固定说明。 */
   const hintOf = (entry: SettingsHomeEntry): string => entry.id === 'service'
@@ -1531,13 +1566,42 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
 
       <LanguageSettings />
 
+      {/* 搜索框固定在入口列表上方：入口一多，用户第一反应是找框，而不是往下翻。 */}
+      <div className="settings-search">
+        <Search size={18} aria-hidden="true" />
+        <input
+          type="search"
+          value={query}
+          onChange={event => { setQuery(event.target.value); setCategory('all') }}
+          onCompositionEnd={event => { setQuery(event.currentTarget.value); setCategory('all') }}
+          maxLength={120}
+          placeholder={t("按功能词查找入口")}
+          aria-label={t("按功能词查找入口")}
+          autoComplete="off"
+        />
+        {query !== '' && (
+          <button className="settings-search-clear" type="button" onClick={() => setQuery('')} aria-label={t("清空查找词")}>
+            <X size={16} />
+          </button>
+        )}
+      </div>
+
       <div className="settings-categories" role="listbox" aria-label={t("筛选功能分类")}>
         <button type="button" role="option" aria-label={t("筛选分类：全部分类")} aria-selected={category === 'all'} onClick={() => setCategory('all')}>{t("全部分类")}</button>
         {SETTINGS_HOME_GROUPS.map(group => (
           <button key={group.id} type="button" role="option" aria-label={`${t("筛选分类：")} ${t(group.label)}`} aria-selected={category === group.id}
-            onClick={() => setCategory(group.id)}>{t(group.label)}</button>
+            onClick={() => { setCategory(group.id); setQuery('') }}>{t(group.label)}</button>
         ))}
       </div>
+
+      {/* 结果条用 role="status"：输入时读屏能听到「找到几个」，而不是列表安静地变了一下。 */}
+      {searching && (
+        <p className="settings-note" role="status">
+          {matched === 0
+            ? t("没有匹配的入口：试试「导入」「日志」「保活」这类功能词")
+            : t("找到 {0} 个匹配的入口", matched)}
+        </p>
+      )}
 
       <div className="settings-directory">
       {groups.map(({ group, entries }) => (

@@ -1260,6 +1260,62 @@ button:disabled {
   box-shadow: var(--shadow-card);
 }
 
+/*
+ * 设置首页的功能词搜索。
+ *
+ * 输入框自己不自带边框（这一块整体就是输入框），焦点态因此必须画在容器上：
+ * 不做 focus-within 高亮，键盘用户看不出焦点在哪一格。
+ */
+.settings-search {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.settings-search:focus-within {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent);
+}
+
+.settings-search > svg {
+  color: var(--muted);
+}
+
+.settings-search input {
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+}
+
+.settings-search input:focus {
+  outline: none;
+}
+
+.settings-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--surface-muted);
+  cursor: pointer;
+}
+
+.settings-search-clear:hover {
+  color: var(--ink);
+}
+
 .settings-directory {
   display: grid;
   gap: 14px;
@@ -1703,9 +1759,9 @@ button:disabled {
 }
 
 .auto-save-pill.success {
-  background: color-mix(in srgb, var(--green, #2ea043) 15%, transparent);
-  color: var(--green, #2ea043);
-  border: 1px solid color-mix(in srgb, var(--green, #2ea043) 40%, transparent);
+  background: var(--green-soft);
+  color: var(--green);
+  border: 1px solid var(--green-line);
 }
 
 .auto-save-pill.saving {
@@ -2928,8 +2984,10 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 @media (pointer: coarse), (max-width: 560px) {
   .compact-button, .custom-providers .icon-button, .terminal-copy { min-height: 44px; }
   .custom-providers .icon-button { width: 44px; flex-basis: 44px; }
-  .field input, .field select, .mono-input, .session-search input { font-size: 1rem !important; }
+  .field input, .field select, .mono-input, .session-search input, .settings-search input { font-size: 1rem !important; }
   .field input, .field select { min-height: 48px; }
+  .settings-search { min-height: 48px; padding-top: 2px; padding-bottom: 2px; }
+  .settings-search input { min-height: 44px; min-width: 0; }
   .launch-actions > .button { flex: 1 1 auto; }
   .save-button { width: 100%; min-height: 48px; }
   .section-title p, .settings-note { line-height: 1.65; }
