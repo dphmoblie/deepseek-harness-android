@@ -90,7 +90,8 @@ data class RuntimeSettings(
     val customModelProviders: List<CustomModelProvider> = emptyList(),
     val configuredCustomModelProviders: Set<String> = emptySet(),
     val harnessConfiguredCustomModelProviders: Set<String> = emptySet(),
-    val autoLaunch: Boolean = false,
+    /** 自动启动已固定为应用入口行为；字段仅保留给旧版桥接兼容。 */
+    val autoLaunch: Boolean = true,
     /**
      * 后台保持 Harness：运行时启动后启用前台服务，提升本应用进程的存活优先级。
      * 默认 false，旧版本配置没有该键时同样按 false 处理。

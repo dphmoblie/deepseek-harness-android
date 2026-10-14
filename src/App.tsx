@@ -4122,15 +4122,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             onCredentials={setCustomCredentials}
             onClear={setClearedCustomProviders}
           />}
-          <label className="toggle-row">
-            <span><strong>{t("打开应用时自动启动 Harness")}</strong><small>{t("关闭后需手动点「打开 Harness」启动")}</small></span>
-            <input
-              type="checkbox"
-              role="switch"
-              checked={settings.autoLaunch}
-              onChange={event => setDraft({ ...settings, autoLaunch: event.target.checked })}
-            />
-          </label>
         </section>
         )}
 
@@ -5869,13 +5860,12 @@ export function App() {
 
   useEffect(() => {
     /*
-     * 自动启动必须**等设置读完**再判断。
-     *
-     * 旧写法是「设置非空且关着才返回」，于是设置还没回来（`settings === null`）时这一条形同放行：
-     * 启动时运行时状态往往比设置先到，运行时装好的用户明明关掉了自动启动，仍会被拉起来。
-     * 现在只在明确读到 `autoLaunch === true` 时才启动；读不到或读失败一律不启动——
-     * 「没读到设置」不是「用户要我启动」，宁可让用户自己点一下。
+     * 自动启动必须等基础设置读完再判断。旧版本曾提供「自动启动 Harness」开关，
+     * 但它会让应用打开后的入口分裂成两套，现已移除；保留旧字段只为兼容已安装版本，
+     * 不再影响启动行为。设置读取失败时仍不启动，避免把未知状态当成用户意图。
      */
+    // Android 原生存储层已把该字段固定为 true；保留读取条件是为了兼容浏览器预览和旧版桥接，
+    // 防止它们在没有真实运行时的情况下误触发启动流程。
     if (settings === null || settings.autoLaunch !== true) return
     if (language === null || onboardingOpen || booting || appUpdateReminder.checking || appUpdateReminder.available !== null || activeView !== 'conversation' || busy !== null || autoLaunchAttempted.current) return
     if (runtime.updateAvailable) return

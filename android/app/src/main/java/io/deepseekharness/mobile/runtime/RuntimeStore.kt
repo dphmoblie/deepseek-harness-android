@@ -306,7 +306,8 @@ class RuntimeStore(context: Context) {
                 provider.id.takeIf(customProviderApiKeys::containsKey)
             },
             harnessConfiguredCustomModelProviders = harnessCredentials.customProviderIds,
-            autoLaunch = preferences.getBoolean(KEY_AUTO_LAUNCH, false),
+            // 自动启动已成为固定入口；保留旧键只为兼容旧版本数据，不再读取用户曾保存的关闭值。
+            autoLaunch = true,
         )
     }
 
@@ -345,7 +346,8 @@ class RuntimeStore(context: Context) {
             .putInt(KEY_FONT_SIZE, settings.terminalFontSize)
             // Retired frontend choices must not redirect the single official entrypoint.
             .remove(KEY_LEGACY_DEFAULT_FRONTEND)
-            .putBoolean(KEY_AUTO_LAUNCH, settings.autoLaunch)
+            // 旧版曾允许关闭自动启动，当前版本固定从应用入口启动 Harness。
+            .putBoolean(KEY_AUTO_LAUNCH, true)
             .putString(KEY_CUSTOM_PROVIDERS, customProvidersToJson(customProviders).toString())
             .remove(KEY_API_KEY)
             .remove("device_bridge_token")
@@ -358,6 +360,8 @@ class RuntimeStore(context: Context) {
         if (!committed) throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法保存运行时设置")
         val harnessCredentials = harnessCredentialStatus(customProviders)
         return settings.copy(
+            // 旧版桥接可能仍会传入 false，但保存后的快照必须反映当前固定入口规则。
+            autoLaunch = true,
             // Omitted updates are read after commit so a concurrent native-menu hide is preserved.
             overlayBallEnabled = overlayBallEnabledUpdate ?: overlayBallEnabled(),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },

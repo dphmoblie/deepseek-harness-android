@@ -794,7 +794,8 @@ class MobileRuntimePlugin : Plugin() {
                 call.getString("manifestSha256"),
                 call.getBoolean("keepScreenAwake", false) ?: false,
                 fontSize,
-                call.getBoolean("autoLaunch", true) ?: true,
+                // 旧版 WebView 可能仍携带 autoLaunch=false；当前入口固定自动启动，不再接受该选择。
+                true,
                 call.getBoolean("keepRuntimeInBackground", false) ?: false,
                 // 省略值只作为构造设置对象时的占位；是否写入由下面的可空更新参数决定。
                 overlayBallEnabledUpdate ?: false,
