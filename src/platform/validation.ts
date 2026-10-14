@@ -116,6 +116,7 @@ import { validateSelfCheckReport, type SelfCheckReport } from '../runtimeSelfChe
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const SESSION_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9._-]+$/
+const SHIZUKU_VERSION_PATTERN = /^[A-Za-z0-9._+-]+$/
 const ERROR_CODE_PATTERN = /^[A-Z0-9_]+$/
 const MAX_URL_LENGTH = 2048
 const MAX_IDENTIFIER_LENGTH = 96
@@ -786,14 +787,18 @@ export function validateShizukuState(value: unknown): ShizukuState {
     throw new Error('Shizuku 权限状态格式无效')
   }
   if (state.connected && (!state.running || state.permission !== 'granted')) throw new Error('Shizuku 连接状态无效')
-  const version = state.version === undefined
+  const rawVersion = typeof state.version === 'number' ? String(state.version) : state.version
+  const normalizedVersion = rawVersion === '' || rawVersion === null ? undefined : rawVersion
+  const version = normalizedVersion === undefined
     ? undefined
-    : optionalIdentifier(state.version, 'Shizuku 版本', IDENTIFIER_PATTERN, 32)
+    : optionalIdentifier(normalizedVersion, 'Shizuku 版本', SHIZUKU_VERSION_PATTERN, 32)
   // 应用版本名（13.6.0 这种）与服务端 API 版本是两件事，走同一条标识符校验；
-  // 原生侧已先按同一字符集过滤过，这里只做兜底。
-  const appVersion = state.appVersion === undefined
+  // 原生侧已先按同一字符集过滤过，这里只做兜底；未运行或读不到时原生回传空串，此处归一为 undefined。
+  const rawAppVersion = typeof state.appVersion === 'number' ? String(state.appVersion) : state.appVersion
+  const normalizedAppVersion = rawAppVersion === '' || rawAppVersion === null ? undefined : rawAppVersion
+  const appVersion = normalizedAppVersion === undefined
     ? undefined
-    : optionalIdentifier(state.appVersion, 'Shizuku 应用版本', IDENTIFIER_PATTERN, 32)
+    : optionalIdentifier(normalizedAppVersion, 'Shizuku 应用版本', SHIZUKU_VERSION_PATTERN, 32)
   return {
     installed: state.installed,
     running: state.running,
