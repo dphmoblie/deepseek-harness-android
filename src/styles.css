@@ -1379,16 +1379,14 @@ button:disabled {
 /*
  * 一张卡片最多占两屏（`vh` 就是手机上看得见的那块）。
  *
- * 单独成页的设置里最长的那几张卡（自动化总开关、每应用参数、版本管理）能把整页拉成很长一条：
- * 想回到卡片顶上的开关得先滑很久，滑动手势还会和页面滚动抢。
- * 超过两屏的卡片改为**卡片内部自己滚动**，页面不再被一张卡片撑长；
- * `overscroll-behavior: contain` 是让卡片滑到底时不要把惯性传给整页。
+ * 独立设置页里最长的几张卡会占很多屏幕空间，因此将卡片高度限制为两屏并在卡片内滚动。
+ * 滚动到卡片边界时必须允许浏览器把后续手势交给外层页面，否则用户会觉得页面无法下拉。
  */
 .settings-section,
 .settings-form > .settings-subsection {
   max-height: 200vh;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior-y: auto;
 }
 
 .section-title {
