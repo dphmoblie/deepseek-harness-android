@@ -40,10 +40,21 @@ describe('会话管理页', () => {
     expect(onOpenHarness).toHaveBeenCalledTimes(1)
     expect(screen.getByText('新会话 1')).toBeInTheDocument()
 
-    fireEvent.change(screen.getByRole('textbox', { name: '搜索会话' }), { target: { value: '不存在' } })
+    const searchBox = screen.getByRole('textbox', { name: '搜索会话' })
+    fireEvent.change(searchBox, { target: { value: '不存在' } })
     expect(screen.getByText('没有匹配的会话')).toBeInTheDocument()
 
-    fireEvent.change(screen.getByRole('textbox', { name: '搜索会话' }), { target: { value: '' } })
+    // 测试点击一键清空按钮
+    fireEvent.click(screen.getByRole('button', { name: '清空查找词' }))
+    expect(searchBox).toHaveValue('')
+    expect(screen.getByText('新会话 1')).toBeInTheDocument()
+
+    // 测试输入法组字完成（compositionEnd）
+    fireEvent.compositionEnd(searchBox, { currentTarget: { value: '新会话' }, target: { value: '新会话' } })
+    expect(searchBox).toHaveValue('新会话')
+    expect(screen.getByText('新会话 1')).toBeInTheDocument()
+
+    fireEvent.change(searchBox, { target: { value: '' } })
     fireEvent.click(screen.getByRole('button', { name: '删除会话 新会话 1' }))
     expect(screen.getByText('暂无会话')).toBeInTheDocument()
   })
