@@ -1651,6 +1651,23 @@ button:disabled {
   padding: 16px 16px calc(16px + env(safe-area-inset-bottom) + var(--keyboard-inset, 0px));
   background: var(--scrim);
   overscroll-behavior: contain;
+  animation: dialogBackdropFade 0.18s ease-out;
+}
+
+@keyframes dialogBackdropFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes dialogSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .dialog {
@@ -1663,6 +1680,45 @@ button:disabled {
   border-radius: var(--radius-card);
   background: var(--surface);
   box-shadow: var(--shadow-dialog);
+  animation: dialogSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog-backdrop,
+  .dialog {
+    animation: none;
+  }
+}
+
+.auto-save-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  transition: all 0.2s ease;
+}
+
+.auto-save-pill.success {
+  background: color-mix(in srgb, var(--green, #2ea043) 15%, transparent);
+  color: var(--green, #2ea043);
+  border: 1px solid color-mix(in srgb, var(--green, #2ea043) 40%, transparent);
+}
+
+.auto-save-pill.saving {
+  background: var(--surface-muted);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.heading-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .dialog-close {

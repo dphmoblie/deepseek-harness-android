@@ -14,11 +14,13 @@ import { LanguageSettings } from './components/LanguageSettings'
 import { AppearanceSettings } from './components/AppearanceSettings'
 import { SessionManager } from './components/SessionManager'
 import { lazy, Suspense, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { triggerHaptic } from './platform/haptics'
 import {
   AlertTriangle,
   ArrowLeft,
   BellRing,
   Bot,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -3557,6 +3559,47 @@ interface SettingsScreenProps {
 function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
+  const [autoSaved, setAutoSaved] = useState(false)
+  const autoSaveTimerRef = useRef<number | null>(null)
+  const autoSavedTimerRef = useRef<number | null>(null)
+  const latestDraftRef = useRef(draft)
+  latestDraftRef.current = draft
+
+  const triggerAutoSave = useCallback((delay = 500) => {
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current)
+    }
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null
+      const currentDraft = latestDraftRef.current
+      if (currentDraft === null) return
+      const currentSettings = { ...currentDraft.settings }
+      delete currentSettings.overlayBallEnabled
+      const currentOverlayBall = currentDraft.overlayBallEnabled
+        ?? (overlayBallReadFailed ? currentDraft.settings.overlayBallEnabled : overlayBall?.enabled)
+        ?? currentDraft.settings.overlayBallEnabled
+        ?? false
+      onSave({
+        ...currentSettings,
+        ...(currentDraft.overlayBallEnabled === null ? {} : { overlayBallEnabled: currentOverlayBall }),
+        ...(Object.keys(currentDraft.credentials).length === 0 ? {} : { providerApiKeys: currentDraft.credentials }),
+        ...(currentDraft.clearedProviders.length === 0 ? {} : { clearProviderApiKeys: currentDraft.clearedProviders }),
+        ...(Object.keys(currentDraft.customCredentials).length === 0 ? {} : { customProviderApiKeys: currentDraft.customCredentials }),
+        ...(currentDraft.clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: currentDraft.clearedCustomProviders }),
+      })
+      triggerHaptic('light')
+      setAutoSaved(true)
+      if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
+      autoSavedTimerRef.current = window.setTimeout(() => setAutoSaved(false), 2000)
+    }, delay)
+  }, [onSave, overlayBall?.enabled, overlayBallReadFailed])
+
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimerRef.current !== null) window.clearTimeout(autoSaveTimerRef.current)
+      if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
+    }
+  }, [])
   /** 总开关的一次操作还在路上：按钮在这期间全部禁用，避免连点出两次动作。 */
   const [automationPending, setAutomationPending] = useState(false)
   /**
@@ -3924,21 +3967,38 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
 
   /**
    * 草稿的写入入口：所有字段改动都经过 [onDraftChange]，由 App 统一标记「未保存」。
-   * 命名与原来的 useState setter 保持一致，调用点无需关心草稿存在哪里。
+   * 同时触发轻量防抖自动保存，并在移动端触发触觉反馈。
    */
-  const setDraft = (next: RuntimeSettings): void => onDraftChange(current => ({ ...current, settings: next }))
-  const setOverlayBallDraft = (next: boolean): void => onDraftChange(current => ({ ...current, overlayBallEnabled: next }))
+  const setDraft = (next: RuntimeSettings): void => {
+    onDraftChange(current => ({ ...current, settings: next }))
+    triggerAutoSave(500)
+  }
+  const setOverlayBallDraft = (next: boolean): void => {
+    triggerHaptic('medium')
+    onDraftChange(current => ({ ...current, overlayBallEnabled: next }))
+    triggerAutoSave(300)
+  }
   const setSelectedProvider = (next: ModelProviderId | 'custom'): void =>
     // 只是切换正在查看的供应商，没有改动任何字段值：不算「未保存的输入」。
     onDraftChange(current => ({ ...current, selectedProvider: next }), false)
-  const setCredentialDrafts = (update: (current: ProviderApiKeys) => ProviderApiKeys): void =>
+  const setCredentialDrafts = (update: (current: ProviderApiKeys) => ProviderApiKeys): void => {
     onDraftChange(current => ({ ...current, credentials: update(current.credentials) }))
-  const setClearedProviders = (update: (current: ModelProviderId[]) => ModelProviderId[]): void =>
+    triggerAutoSave(800)
+  }
+  const setClearedProviders = (update: (current: ModelProviderId[]) => ModelProviderId[]): void => {
+    triggerHaptic('medium')
     onDraftChange(current => ({ ...current, clearedProviders: update(current.clearedProviders) }))
-  const setCustomCredentials = (next: Record<string, string>): void =>
+    triggerAutoSave(300)
+  }
+  const setCustomCredentials = (next: Record<string, string>): void => {
     onDraftChange(current => ({ ...current, customCredentials: next }))
-  const setClearedCustomProviders = (next: string[]): void =>
+    triggerAutoSave(800)
+  }
+  const setClearedCustomProviders = (next: string[]): void => {
+    triggerHaptic('medium')
     onDraftChange(current => ({ ...current, clearedCustomProviders: next }))
+    triggerAutoSave(300)
+  }
 
   // 只为用户主动修改的开关保留草稿；原生菜单关闭悬浮球时，不影响页内其他未保存内容。
   const overlayBallEnabled = overlayBallDraft
@@ -3979,6 +4039,10 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     )
   )
   const saveDraft = (): void => {
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current)
+      autoSaveTimerRef.current = null
+    }
     // 悬浮球是原生侧可被菜单直接修改的独立偏好。只有用户在本页实际拨动开关时，
     // 才把它作为更新字段发送；否则省略该字段，让原生侧保留菜单刚写入的值。
     const settingsWithoutOverlayBall = { ...settings }
@@ -3991,6 +4055,10 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
       ...(Object.keys(customCredentials).length === 0 ? {} : { customProviderApiKeys: customCredentials }),
       ...(clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: clearedCustomProviders }),
     })
+    triggerHaptic('success')
+    setAutoSaved(true)
+    if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
+    autoSavedTimerRef.current = window.setTimeout(() => setAutoSaved(false), 2000)
   }
 
   return (
@@ -3998,7 +4066,19 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
       <div className="screen-heading management-heading">
         <div>
           <p className="eyebrow">{t("应用管理")}</p>
-          <h1>{t(SETTINGS_PAGE_META[page].title)}</h1>
+          <div className="heading-title-row">
+            <h1>{t(SETTINGS_PAGE_META[page].title)}</h1>
+            {autoSaved && (
+              <span className="auto-save-pill success" role="status">
+                <Check size={13} /> {t("已自动保存")}
+              </span>
+            )}
+            {busy === 'save-settings' && (
+              <span className="auto-save-pill saving" role="status">
+                <Loader2 size={13} className="spin" /> {t("保存中...")}
+              </span>
+            )}
+          </div>
         </div>
         <button className="icon-button" type="button" aria-label={t("返回设置")} title={t("返回设置")} onClick={onBack}>
           <ArrowLeft size={19} />
@@ -4872,9 +4952,9 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         )}
 
         {(page === 'models' || page === 'runtime' || page === 'terminal') && (
-        <button className="button button-primary save-button" type="submit" disabled={busy !== null}>
-          {busy === 'save-settings' ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
-          {t("保存设置")}</button>
+        <button className="button button-primary save-button" type="submit" disabled={busy !== null} aria-label={t("保存设置")}>
+          {busy === 'save-settings' ? <Loader2 className="spin" size={18} /> : autoSaved ? <Check size={18} /> : <Save size={18} />}
+          {autoSaved ? t("已自动保存") : t("保存设置")}</button>
         )}
       </form>
     </div>
@@ -6017,6 +6097,7 @@ export function App() {
   const confirmReset = useCallback(() => {
     // 重置同样会停掉正在运行的运行时：这也是用户在本应用里主动发起的停止。
     stopRequested.current = true
+    triggerHaptic('warning')
     void run('reset', async () => {
       const next = await runtimeBridge.reset('RESET_RUNTIME')
       setRuntime(next)
@@ -6034,6 +6115,7 @@ export function App() {
       // 保存成功：草稿以后端落盘值为准重建（含清空 API Key 输入框）并解除「未保存」标记。
       // 不做这一步的话，旧草稿会在下一次后台刷新时把刚保存的值反向覆盖回去。
       resyncSettingsDraft(saved)
+      triggerHaptic('success')
       // 落盘成功后，状态查询失败不能被当成保存失败；三项查询互不阻塞。
       const [runtimeResult, keepAliveResult, overlayResult] = await Promise.allSettled([
         runtimeBridge.getState(), runtimeBridge.getKeepAliveState(), readOverlayBall(),

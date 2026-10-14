@@ -556,4 +556,26 @@ describe('后台页的运行时与设备 Shell 入口', () => {
     fireEvent.click(screen.getByRole('button', { name: '设备 Shell 设置' }))
     expect(await screen.findByRole('heading', { name: '设备 Shell 设置' })).toBeVisible()
   })
+
+  it('更改设置后无需点击保存按钮，经过防抖自动保存并展示已自动保存徽标', async () => {
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('后台')
+    const toggle = await screen.findByRole('switch', { name: /悬浮球/ })
+    expect(toggle).not.toBeChecked()
+
+    fireEvent.click(toggle)
+    expect(toggle).toBeChecked()
+
+    // 无需手动点击「保存设置」按钮，等待防抖自动落盘
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ overlayBallEnabled: true }),
+    ), { timeout: 2000 })
+
+    // 界面显示自动保存状态（顶部徽标与操作态均呈现已保存）
+    const badges = await screen.findAllByText('已自动保存')
+    expect(badges.length).toBeGreaterThanOrEqual(1)
+  })
 })

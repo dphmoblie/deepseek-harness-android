@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Loader2, Plus, Trash2, TriangleAlert } from 'lucide-react'
 import { t } from '../i18n'
+import { triggerHaptic } from '../platform/haptics'
 import {
   ACCESSIBILITY_AUTOMATION_ACTION_KINDS,
   ACCESSIBILITY_AUTOMATION_RESET_ON_VALUES,
@@ -724,10 +725,20 @@ export function AutomationRuleForm({ packageName, rule, mode, defaults, busy, er
     setDraft(current => ({ ...current, action: defaultActionDraft(type) }))
   }
 
+  const errorRef = useRef<HTMLParagraphElement | null>(null)
+
+  useEffect(() => {
+    if (localError !== null || error !== null) {
+      triggerHaptic('error')
+      errorRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+    }
+  }, [localError, error])
+
   const submit = (): void => {
     try {
       const next = draftToRule(draft, packageName)
       setLocalError(null)
+      triggerHaptic('success')
       onSubmit(next)
     } catch (failure) {
       setLocalError(failure instanceof Error ? failure.message : t('规则内容不合法'))
@@ -935,7 +946,7 @@ export function AutomationRuleForm({ packageName, rule, mode, defaults, busy, er
       </fieldset>
 
       {(localError !== null || error !== null) && (
-        <p className="automation-rule-failure" role="alert" data-testid="automation-rule-form-error">
+        <p className="automation-rule-failure" role="alert" data-testid="automation-rule-form-error" ref={errorRef}>
           <TriangleAlert size={18} />
           <span>{localError ?? error}</span>
         </p>
