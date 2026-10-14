@@ -511,6 +511,11 @@ export interface KeepAliveState {
   notificationPermission: NotificationPermission
   /** Shizuku 设备 Shell 是否已授权可用；仅用于辅助连接恢复，未授权时降级为 false。 */
   deviceShellReady: boolean
+  /**
+   * 前台服务最近一次被系统拒绝启动的受控原因令牌（如 foreground_declined / start_disallowed）。
+   * 仅在前台服务未运行时可能出现；服务运行中或缺省时为 null/undefined。不含任何用户数据。
+   */
+  foregroundStartError?: string | null
   /** 进程被系统回收后存在无法复用的旧会话，需要重新连接。 */
   reconnectRequired: boolean
   /** 持久化的最后一次运行意图。 */
@@ -546,6 +551,11 @@ export interface OverlayBallState {
   canDrawOverlays: boolean
   /** 悬浮球服务当前是否在运行。 */
   serviceActive: boolean
+  /**
+   * 最近一次启动失败的受控原因令牌（foreground_declined / overlay_denied /
+   * inflate_failed / attach_failed / start_disallowed）。服务运行中或从未失败时为 null/缺省。
+   */
+  startError?: string | null
 }
 
 /** 通知权限申请结果；supported 为 false 表示系统版本低于 Android 13。 */
@@ -1672,6 +1682,10 @@ export interface RuntimeBridge {
   getKeepAliveState: () => Promise<KeepAliveState>
   /** 申请前台服务通知权限；Android 13 以下直接返回已授予。 */
   requestNotificationPermission: () => Promise<NotificationPermissionResult>
+  /** 跳转到本应用的系统通知设置页；通知权限被拒后由用户手动开启。 */
+  openNotificationSettings: () => Promise<void>
+  /** 跳转到本应用的系统详情页；厂商 ROM 的省电策略 / 自启动指引从这里进入。 */
+  openApplicationSettings: () => Promise<void>
   /** 悬浮球状态；不含任何用户数据。 */
   getOverlayBallState: () => Promise<OverlayBallState>
   /** 跳转到系统「显示在其他应用上层」设置页。该权限只能由用户手动开启。 */

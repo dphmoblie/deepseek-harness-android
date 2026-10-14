@@ -1692,6 +1692,34 @@ button:disabled {
   background: var(--surface-muted);
 }
 
+/*
+ * 权限 / 前台服务指引弹窗的图标：说的是「需要你去系统设置解一道限制」，
+ * 用琥珀色警告而不是红色破坏色——这里没有任何数据要被删除。
+ */
+.dialog-warning-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-inner);
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+/* 厂商后台限制的排查步骤：比正文稍强、保留序号语义，交给 <ul> 的默认标记。 */
+.dialog-guide-list {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  display: grid;
+  gap: 4px;
+}
+
+.dialog-guide-list strong { color: var(--ink); }
+
 .dialog h2 {
   margin: 14px 0 7px;
   font-size: 1.1875rem;

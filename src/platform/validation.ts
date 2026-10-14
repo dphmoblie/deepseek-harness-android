@@ -838,6 +838,8 @@ export function validateKeepAliveState(value: unknown): KeepAliveState {
     }
     turnCompletionSequence = state.turnCompletionSequence as number
   }
+  // 受控失败令牌：缺省/null 表示无失败；异常形态按无令牌丢弃，不让一条提示拖垮整份状态。
+  const foregroundStartError = optionalFailureToken(state.foregroundStartError)
   return {
     keepRuntimeInBackground: state.keepRuntimeInBackground,
     foregroundServiceActive: state.foregroundServiceActive,
@@ -845,11 +847,26 @@ export function validateKeepAliveState(value: unknown): KeepAliveState {
     deviceShellReady: state.deviceShellReady,
     reconnectRequired: state.reconnectRequired,
     lastIntent: state.lastIntent as RuntimeIntent,
+    ...(foregroundStartError === null ? {} : { foregroundStartError }),
     ...(lastPhase === undefined ? {} : { lastPhase }),
     ...(lastUpdatedAtMillis === undefined ? {} : { lastUpdatedAtMillis }),
     ...(lastTurnCompletedAtMillis === undefined ? {} : { lastTurnCompletedAtMillis }),
     ...(turnCompletionSequence === undefined ? {} : { turnCompletionSequence }),
   }
+}
+
+/**
+ * 前台服务启动失败令牌的可选校验。
+ *
+ * 原生侧只可能给 null/缺省或一小组受控枚举（全小写字母、数字、下划线，最长 64）；
+ * 任何其他形态都按「没有失败令牌」丢弃，而不是让整份状态校验失败——
+ * 状态查询的健壮性优先级高于展示一条错误提示。
+ */
+function optionalFailureToken(value: unknown): string | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== 'string') return null
+  if (value.length === 0 || value.length > 64) return null
+  return /^[a-z][a-z0-9_]*$/.test(value) ? value : null
 }
 
 export function validateNotificationPermissionResult(value: unknown): NotificationPermissionResult {
@@ -1523,10 +1540,13 @@ export function validateDeviceShellAccess(value: unknown): { enabled: boolean } 
  */
 export function validateOverlayBallState(value: unknown): OverlayBallState {
   const source = asRecord(value, '悬浮球状态')
+  // 失败令牌可选：老版本原生不下发时按无失败处理，不影响界面其余部分。
+  const startError = optionalFailureToken(source.startError)
   return {
     enabled: requiredBoolean(source.enabled, '悬浮球开关'),
     canDrawOverlays: requiredBoolean(source.canDrawOverlays, '悬浮球权限'),
     serviceActive: requiredBoolean(source.serviceActive, '悬浮球服务状态'),
+    ...(startError === null ? {} : { startError }),
   }
 }
 

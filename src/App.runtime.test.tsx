@@ -64,7 +64,7 @@ describe('后台保持与恢复', () => {
     expect(bridge.startHarness).not.toHaveBeenCalled()
   })
 
-  it('通知权限被拒时提示后台保持不会生效，不谎称前台服务仍在运行', async () => {
+  it('通知权限被拒时弹窗指引开启通知，不谎称前台服务仍在运行', async () => {
     // 不自动启动：停在主视图手动进设置，避免与启动流程抢忙碌状态。
     bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false })
     bridge.requestNotificationPermission.mockResolvedValue({ granted: false, supported: true })
@@ -78,15 +78,19 @@ describe('后台保持与恢复', () => {
     fireEvent.click(toggle)
     await waitFor(() => expect(bridge.requestNotificationPermission).toHaveBeenCalledTimes(1))
 
-    const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent('后台保持不会生效')
+    // 被拒后必须弹出可操作的指引（标题 + 一键跳转通知设置），而不是只闪一条会消失的 toast。
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('后台保持需要通知权限')
+    expect(dialog).toHaveTextContent('后台保持无法启动')
     // 旧文案声称「前台服务仍会运行」：缺少通知权限时服务根本起不来（部分 ROM 还会终结进程）。
-    expect(alert).not.toHaveTextContent('仍会运行')
+    expect(dialog).not.toHaveTextContent('仍会运行')
+    fireEvent.click(screen.getByRole('button', { name: /前往开启通知/ }))
+    await waitFor(() => expect(bridge.openNotificationSettings).toHaveBeenCalledTimes(1))
     // 状态行仍按原生回传如实显示未授予。
     expect(screen.getByText('未授予')).toBeVisible()
   })
 
-  it('开启后台保持但前台服务没起来时提示未生效', async () => {
+  it('开启后台保持但前台服务没起来时弹窗给出后台限制指引', async () => {
     // 本用例要等应用侧 1.5 秒的「前台服务宽限期复核」（App.tsx 的 recheckForegroundServiceAfterSettle）：
     // 保存后立刻读原生状态只会看到「尚未生效」，必须等宽限期过去再复核一次。
     // 原先用真实计时器等它，单条用例实测 1.77 秒，占满 5 秒默认超时的三分之一还多——
@@ -97,11 +101,13 @@ describe('后台保持与恢复', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
       bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false, keepRuntimeInBackground: true })
-      // 权限已授予、开关已是开启状态，但前台服务没有进入前台：以原生状态为准。
+      // 通知权限已授予、开关已是开启状态，但前台服务没有进入前台：以原生状态为准。
+      // 通知不是这一档的原因——界面必须把它识别为厂商后台拦截，而不是再让用户去开通知。
       bridge.getKeepAliveState.mockResolvedValue({
         ...keepAlive,
         keepRuntimeInBackground: true,
         foregroundServiceActive: false,
+        notificationPermission: 'granted',
       })
       render(<App />)
 
@@ -119,10 +125,13 @@ describe('后台保持与恢复', () => {
       }))
       // 前台服务是异步拉起的：把假时钟推过宽限期，让应用按原生状态复核。
       await act(async () => { await vi.advanceTimersByTimeAsync(FOREGROUND_SERVICE_SETTLE_MS + 100) })
-      const alert = await screen.findByRole('alert')
-      expect(alert).toHaveTextContent('设置已保存，但后台保持未生效')
-      // 「已保存」不等于「已生效」：只留一句「设置已保存」是不够的。
-      expect(screen.queryByText('设置已保存')).toBeNull()
+      // 复核仍为未运行：弹出「被系统拦截」指引，给出自启动 / 省电策略排查步骤与应用详情页入口。
+      const dialog = await screen.findByRole('dialog')
+      expect(dialog).toHaveTextContent('前台服务被系统拦截')
+      expect(dialog).toHaveTextContent('后台保持')
+      expect(dialog).toHaveTextContent('自启动')
+      fireEvent.click(screen.getByRole('button', { name: /打开应用详情页/ }))
+      await waitFor(() => expect(bridge.openApplicationSettings).toHaveBeenCalledTimes(1))
     } finally {
       vi.useRealTimers()
     }

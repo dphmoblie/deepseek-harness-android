@@ -107,7 +107,7 @@ describe('悬浮球设置', () => {
     await waitFor(() => expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked())
   })
 
-  it('开启悬浮球但前台服务没起来时提示未生效', async () => {
+  it('开启悬浮球但前台服务没起来时弹窗给出系统限制指引', async () => {
     // 本用例要等应用侧 1.5 秒的「前台服务宽限期复核」（App.tsx 的 recheckForegroundServiceAfterSettle）。
     // 真实等待会吃掉单条用例 5 秒预算里的一大半，登记册 5.6-J 记下的那次超时 flake 正是这一档；
     // 改成假时钟后由用例自己把时间推过宽限期，断言点不再随机器负载漂移。
@@ -132,12 +132,15 @@ describe('悬浮球设置', () => {
         ...settings,
         autoLaunch: false,
       }))
-      // 悬浮球前台服务同样是异步拉起的：等宽限期后按原生状态复核，确认仍未运行才提示未生效。
+      // 悬浮球前台服务同样是异步拉起的：等宽限期后按原生状态复核，确认仍未运行才弹窗。
       await act(async () => { await vi.advanceTimersByTimeAsync(FOREGROUND_SERVICE_SETTLE_MS + 100) })
-      const alert = await screen.findByRole('alert')
-      expect(alert).toHaveTextContent('设置已保存，但悬浮球未生效')
-      // 「已保存」不等于「已生效」：只留一句「设置已保存」是不够的。
-      expect(screen.queryByText('设置已保存')).toBeNull()
+      // 不是权限缺失（canDrawOverlays 为真）：按厂商后台拦截给出自启动 / 省电策略指引与跳转入口。
+      const dialog = await screen.findByRole('dialog')
+      expect(dialog).toHaveTextContent('前台服务被系统拦截')
+      expect(dialog).toHaveTextContent('悬浮球')
+      expect(dialog).toHaveTextContent('自启动')
+      fireEvent.click(screen.getByRole('button', { name: /打开应用详情页/ }))
+      await waitFor(() => expect(bridge.openApplicationSettings).toHaveBeenCalledTimes(1))
     } finally {
       vi.useRealTimers()
     }

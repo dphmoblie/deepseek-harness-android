@@ -197,6 +197,8 @@ interface NativeRuntimePlugin {
   openAccessibilitySettings(): Promise<void>
   getKeepAliveState(): Promise<KeepAliveState>
   requestNotificationPermission(): Promise<NotificationPermissionResult>
+  openNotificationSettings(): Promise<void>
+  openApplicationSettings(): Promise<void>
   overlayBallState(): Promise<unknown>
   openOverlaySettings(): Promise<void>
   mailboxState(): Promise<unknown>
@@ -471,6 +473,8 @@ function createNativeBridge(): RuntimeBridge {
     openAccessibilitySettings: () => NativeRuntime.openAccessibilitySettings(),
     getKeepAliveState: () => NativeRuntime.getKeepAliveState().then(validateKeepAliveState),
     requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),
+    openNotificationSettings: () => NativeRuntime.openNotificationSettings(),
+    openApplicationSettings: () => NativeRuntime.openApplicationSettings(),
     getOverlayBallState: () => NativeRuntime.overlayBallState().then(validateOverlayBallState),
     openOverlaySettings: () => NativeRuntime.openOverlaySettings(),
     getMailboxState: () => NativeRuntime.mailboxState().then(validateMailboxState),

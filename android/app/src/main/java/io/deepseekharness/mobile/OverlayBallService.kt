@@ -130,20 +130,26 @@ class OverlayBallService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 必须最先进入前台状态：Android 12+ 对 startForegroundService() 启动的服务有
+        // 5 秒硬性要求，超时（或一次都没调用 startForeground 就 stopSelf）都会抛
+        // ForegroundServiceDidNotStartInTimeException 并终结整个进程。
+        // 注意：POST_NOTIFICATIONS 未授予不影响前台身份（Android 13+ 只是不显示通知），
+        // 因此开关与权限检查都必须排在进入前台之后，否则就是「缺权限 → 不进前台 → 闪退」。
+        if (!startForegroundCompat()) {
+            // 进入前台失败时立即收尾：既没有通知也没有前台身份，继续运行只会留下
+            // 一个无法自解释的进程。球不显示，应用其余部分照常工作。
+            lastStartFailure = FAILURE_FOREGROUND_DECLINED
+            stopForegroundCompat()
+            stopSelf()
+            return START_NOT_STICKY
+        }
         // START_STICKY 可能收到系统重启产生的空 Intent；每次启动都重新读取持久化开关，
         // 避免用户已关闭悬浮球后服务仍被系统拉起并重新显示。
         val enabled = runCatching { RuntimeStore(applicationContext).overlayBallEnabled() }
             .getOrDefault(false)
         if (!enabled) {
-            stopForegroundCompat()
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        // 必须最先进入前台状态：Android 12+ 对 startForegroundService() 启动的服务有
-        // 5 秒硬性要求，超时未调用 startForeground() 会终结整个进程。
-        if (!startForegroundCompat()) {
-            // 进入前台失败时立即收尾：既没有通知也没有前台身份，继续运行只会留下
-            // 一个无法自解释的进程。球不显示，应用其余部分照常工作。
+            // 用户正常关闭：历史失败令牌不应残留，否则关闭后状态查询仍会带出上一次的错误。
+            lastStartFailure = null
             stopForegroundCompat()
             stopSelf()
             return START_NOT_STICKY
@@ -154,6 +160,7 @@ class OverlayBallService : Service() {
                 canDrawOverlays = Settings.canDrawOverlays(this),
             )
         ) {
+            lastStartFailure = FAILURE_OVERLAY_DENIED
             diagnostics.record(
                 DiagnosticLevel.WARN,
                 DiagnosticEvent.KEEP_ALIVE,
@@ -168,6 +175,8 @@ class OverlayBallService : Service() {
             // 否则下面那条「active=true」会把失败覆盖成成功，排障时看到自相矛盾的时间线。
             return START_NOT_STICKY
         }
+        // 球已挂上窗口：清掉历史失败令牌，界面状态只反映「这一次」启动结果。
+        lastStartFailure = null
         diagnostics.record(
             DiagnosticLevel.INFO,
             DiagnosticEvent.KEEP_ALIVE,
@@ -297,6 +306,7 @@ class OverlayBallService : Service() {
         val themed = ContextThemeWrapper(this, R.style.AppTheme)
         val view = runCatching { LayoutInflater.from(themed).inflate(R.layout.view_overlay_ball, null) }
             .getOrElse { error ->
+                lastStartFailure = FAILURE_INFLATE_FAILED
                 diagnostics.record(
                     DiagnosticLevel.WARN,
                     DiagnosticEvent.KEEP_ALIVE,
@@ -373,6 +383,7 @@ class OverlayBallService : Service() {
         // 而不是让异常从 onStartCommand 逃出去终结整个进程（用户看到的是「闪退」）。
         val attached = runCatching { windowManager.addView(view, params) }
         if (attached.isFailure) {
+            lastStartFailure = FAILURE_ATTACH_FAILED
             diagnostics.record(
                 DiagnosticLevel.WARN,
                 DiagnosticEvent.KEEP_ALIVE,
@@ -1343,32 +1354,30 @@ class OverlayBallService : Service() {
     // ── 前台通知 ────────────────────────────────────────────────────────────
 
     private fun startForegroundCompat(): Boolean {
+        // POST_NOTIFICATIONS 未授予时**不**阻止进入前台：Android 13+ 缺这个权限只会让
+        // 常驻通知不可见，前台服务身份与悬浮球本身都照常工作。先前在这里直接返回 false
+        // 会让「startForegroundService 之后一次 startForeground 都没调」的服务被系统
+        // 以 ForegroundServiceDidNotStartInTimeException 终结整个进程（真机闪退根因）。
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             diagnostics.record(DiagnosticLevel.INFO, DiagnosticEvent.KEEP_ALIVE,
-                mapOf("reason" to "overlay_notification_permission_missing", "active" to "false"))
-            return false
+                mapOf("reason" to "overlay_notification_permission_missing", "active" to "true"))
         }
-        val notification = buildNotification()
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                ServiceCompat.startForeground(
-                    this, NOTIFICATION_ID, notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+        return ForegroundServices.start(
+            service = this,
+            notificationId = NOTIFICATION_ID,
+            notification = buildNotification(),
+            logTag = "dsh-runtime",
+            label = "overlay ball",
+        ).also { started ->
+            if (!started) {
+                diagnostics.record(
+                    DiagnosticLevel.WARN,
+                    DiagnosticEvent.KEEP_ALIVE,
+                    mapOf("reason" to "overlay_foreground_failed", "active" to "false"),
                 )
-            } else {
-                ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, 0)
             }
-            true
-        } catch (error: Throwable) {
-            diagnostics.record(
-                DiagnosticLevel.WARN,
-                DiagnosticEvent.KEEP_ALIVE,
-                mapOf("reason" to "overlay_foreground_failed", "active" to "false"),
-            )
-            android.util.Log.w("dsh-runtime", "overlay ball foreground failed: ${error.javaClass.simpleName}")
-            false
         }
     }
 
@@ -1482,6 +1491,31 @@ class OverlayBallService : Service() {
             private set
 
         /**
+         * 最近一次启动失败的原因令牌（null 表示没有失败或上次启动已成功）。
+         *
+         * 仅取下方受控常量，界面据此给出针对性指引；服务不直接弹任何 UI。
+         * 与 [isRunning] 一样只表示状态，不参与服务自身决策。
+         */
+        @Volatile
+        var lastStartFailure: String? = null
+            private set
+
+        /** 前台身份被系统拒绝（厂商后台策略 / 后台启动限制 / specialUse 不被受理）。 */
+        const val FAILURE_FOREGROUND_DECLINED = "foreground_declined"
+
+        /** 悬浮窗权限在启动时已被撤销。 */
+        const val FAILURE_OVERLAY_DENIED = "overlay_denied"
+
+        /** 悬浮球布局充气失败（厂商主题劫持等）。 */
+        const val FAILURE_INFLATE_FAILED = "inflate_failed"
+
+        /** 球窗口挂载失败（权限竞态 / BadTokenException / 厂商禁止后台弹出界面）。 */
+        const val FAILURE_ATTACH_FAILED = "attach_failed"
+
+        /** 系统连 startForegroundService 都拒绝（后台启动限制）；与进入前台后失败区分开。 */
+        const val FAILURE_START_DISALLOWED = "start_disallowed"
+
+        /**
          * 启动前台服务。
          *
          * 系统可能因后台启动限制或厂商策略拒绝启动；此时静默降级，
@@ -1492,8 +1526,13 @@ class OverlayBallService : Service() {
             val intent = Intent(context, OverlayBallService::class.java)
             try {
                 ContextCompat.startForegroundService(context.applicationContext, intent)
-            } catch (_: Throwable) {
+            } catch (error: Throwable) {
                 isRunning = false
+                lastStartFailure = FAILURE_START_DISALLOWED
+                android.util.Log.w(
+                    "dsh-runtime",
+                    "overlay ball start disallowed: ${error.javaClass.simpleName}",
+                )
             }
         }
 

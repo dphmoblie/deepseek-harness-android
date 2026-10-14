@@ -4909,6 +4909,113 @@ function ResetDialog({ busy, onCancel, onConfirm }: ResetDialogProps) {
   )
 }
 
+/**
+ * 悬浮球 / 后台保持「开了但没起来」的四类可操作原因。
+ *
+ * - overlay-permission：悬浮窗权限被关，只能去系统页手动开；
+ * - notification-permission：Android 13+ 通知权限被关，前台服务无法驻留；
+ * - background-blocked：被厂商 ROM 的自启动 / 省电策略拦截（小米 HyperOS 最常见）；
+ * - overlay-internal：悬浮球界面创建失败，没有系统页可去，只能重启应用 / 反馈日志。
+ * 这层映射只消费原生侧下发的受控令牌，不接收任何自由文本。
+ */
+type PermissionGuide =
+  | { kind: 'overlay-permission' }
+  | { kind: 'notification-permission' }
+  | { kind: 'background-blocked'; feature: 'keepAlive' | 'overlayBall' }
+  | { kind: 'overlay-internal' }
+
+/**
+ * 把悬浮球服务的失败令牌映射成指引；未知 / 缺省一律按「厂商后台拦截」处理——
+ * 这是该设备上最常见、且指引步骤最可操作的一类。
+ */
+function overlayFailureGuide(token: string | null | undefined): PermissionGuide {
+  if (token === 'overlay_denied') return { kind: 'overlay-permission' }
+  if (token === 'inflate_failed' || token === 'attach_failed') return { kind: 'overlay-internal' }
+  return { kind: 'background-blocked', feature: 'overlayBall' }
+}
+
+interface PermissionGuideDialogProps {
+  guide: PermissionGuide
+  busy: boolean
+  onClose: () => void
+  onOpenOverlaySettings: () => void
+  onOpenNotificationSettings: () => void
+  onOpenApplicationSettings: () => void
+}
+
+function PermissionGuideDialog({
+  guide,
+  busy,
+  onClose,
+  onOpenOverlaySettings,
+  onOpenNotificationSettings,
+  onOpenApplicationSettings,
+}: PermissionGuideDialogProps) {
+  const title = guide.kind === 'overlay-permission'
+    ? t("悬浮球需要悬浮窗权限")
+    : guide.kind === 'notification-permission'
+      ? t("后台保持需要通知权限")
+      : guide.kind === 'background-blocked'
+        ? t("前台服务被系统拦截")
+        : t("悬浮球启动失败")
+  return (
+    <div className="dialog-backdrop" role="presentation" onPointerDown={event => { if (event.target === event.currentTarget && !busy) onClose() }}>
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="permission-guide-title">
+        <button className="dialog-close" type="button" aria-label={t("关闭")} onClick={onClose} disabled={busy}><X size={19} /></button>
+        <span className="dialog-warning-icon"><AlertTriangle size={23} /></span>
+        <h2 id="permission-guide-title">{title}</h2>
+        {guide.kind === 'overlay-permission' && (
+          <p>{t("悬浮球要获得「显示在其他应用上层」权限，才能浮现在其他应用之上。请在系统设置中开启该权限，返回应用后重新打开悬浮球开关。")}</p>
+        )}
+        {guide.kind === 'notification-permission' && (
+          <p>{t("Android 13 及以上，前台服务运行时必须显示一条常驻通知；通知权限被关闭时后台保持无法启动。请在系统设置中允许本应用发送通知，返回后重新打开开关。")}</p>
+        )}
+        {guide.kind === 'background-blocked' && (
+          <>
+            <p>
+              {guide.feature === 'keepAlive'
+                ? t("系统没有允许「后台保持」的前台服务启动。小米 HyperOS 上通常是自启动或省电策略拦截，请按下面的步骤逐项检查：")
+                : t("系统没有允许悬浮球的前台服务启动。小米 HyperOS 上通常是自启动或省电策略拦截，请按下面的步骤逐项检查：")}
+            </p>
+            <ul className="dialog-guide-list">
+              <li>{t("设置 → 应用设置 → 授权管理 → 自启动管理，允许本应用自启动")}</li>
+              <li>{t("应用信息 → 省电策略，选择「无限制」")}</li>
+              <li>{t("在最近任务列表里给本应用加锁，避免被一键清理")}</li>
+            </ul>
+          </>
+        )}
+        {guide.kind === 'overlay-internal' && (
+          <p>{t("悬浮球界面在当前系统上创建失败。请尝试重启应用后再开启；如果反复出现，请在「诊断与日志」中导出记录后反馈。")}</p>
+        )}
+        <div className="dialog-actions">
+          {guide.kind === 'overlay-internal' ? (
+            <button className="button button-primary" type="button" onClick={onClose} disabled={busy}>{t("我知道了")}</button>
+          ) : (
+            <>
+              <button className="button button-secondary" type="button" onClick={onClose} disabled={busy}>{t("取消")}</button>
+              {guide.kind === 'overlay-permission' && (
+                <button className="button button-primary" type="button" onClick={onOpenOverlaySettings} disabled={busy}>
+                  <ExternalLink size={18} />{t("前往开启悬浮窗权限")}
+                </button>
+              )}
+              {guide.kind === 'notification-permission' && (
+                <button className="button button-primary" type="button" onClick={onOpenNotificationSettings} disabled={busy}>
+                  <ExternalLink size={18} />{t("前往开启通知")}
+                </button>
+              )}
+              {guide.kind === 'background-blocked' && (
+                <button className="button button-primary" type="button" onClick={onOpenApplicationSettings} disabled={busy}>
+                  <ExternalLink size={18} />{t("打开应用详情页")}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 interface UpdateDialogProps {
   busy: boolean
   /**
@@ -5048,6 +5155,13 @@ export function App() {
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [resetOpen, setResetOpen] = useState(false)
+  /**
+   * 悬浮球 / 后台保持启动受阻时的权限指引弹窗。
+   *
+   * 由「保存后延迟复核」与「通知权限被拒」两个路径置位；服务确认运行或用户关闭后清空。
+   * 不放具体错误字符串，只放 [PermissionGuide] 的受控判别值。
+   */
+  const [permissionGuide, setPermissionGuide] = useState<PermissionGuide | null>(null)
   /**
    * 待用户确认的运行时安装；`null` 表示没有待确认的安装。
    *
@@ -6017,25 +6131,34 @@ export function App() {
       }
       if (saved.keepRuntimeInBackground === true && keepAliveResult.status === 'fulfilled' && !keepAliveResult.value.foregroundServiceActive) {
         // 服务可能只是还在启动中，等宽限期过后用原生状态复核：
-        // 仍为「未运行」才提示未生效（缺少通知权限、后台启动被系统拒绝或厂商策略限制都会停在这里）。
+        // 仍为「未运行」时，按通知权限 / 厂商后台限制分流，弹窗给出可操作的跳转，
+        // 而不是只弹一条没有入口的 toast（缺通知权限、自启动被禁、省电策略都会停在这里）。
         recheckForegroundServiceAfterSettle(
           () => runtimeBridge.getKeepAliveState(),
           latest => {
             setKeepAlive(latest)
             if (latest.keepRuntimeInBackground === true && !latest.foregroundServiceActive) {
-              notify(t("设置已保存，但后台保持未生效：前台服务未运行。Android 13 及以上需要通知权限，并可能受系统后台限制；请在系统设置中为本应用开启通知权限后重试。"), 'error')
+              setPermissionGuide(
+                latest.notificationPermission === 'prompt'
+                  ? { kind: 'notification-permission' }
+                  : { kind: 'background-blocked', feature: 'keepAlive' },
+              )
             }
           },
         )
       }
       if (saved.overlayBallEnabled === true && overlayResult.status === 'fulfilled' && !overlayResult.value.serviceActive) {
-        // 悬浮球走同一套节奏：原生侧启动前台服务失败时是静默吞异常的，
-        // 只有等宽限期过后复核原生状态，才能把「开关开着但球没起来」的原因告诉用户。
+        // 悬浮球走同一套节奏：原生侧把启动失败原因写进受控令牌（startError），
+        // 宽限期过后复核状态，按「悬浮窗权限 / ROM 拦截 / 界面创建失败」分流到对应指引弹窗。
         recheckForegroundServiceAfterSettle(
           readOverlayBall,
           latest => {
             if (latest.enabled === true && !latest.serviceActive) {
-              notify(t("设置已保存，但悬浮球未生效：前台服务未运行。系统可能拒绝了前台服务启动，或权限不足；请在系统设置中检查「显示在其他应用上层」与通知权限后重试。"), 'error')
+              setPermissionGuide(
+                latest.canDrawOverlays
+                  ? overlayFailureGuide(latest.startError)
+                  : { kind: 'overlay-permission' },
+              )
             }
           },
         )
@@ -6047,8 +6170,8 @@ export function App() {
    * 申请前台服务通知权限。
    *
    * 权限被拒绝（或调用超时）时前台服务根本起不来，「后台保持」不会生效：
-   * 部分厂商 ROM 甚至会因此终结应用进程，所以这里如实说明后果并指引到系统设置，
-   * 不再声称「前台服务仍会运行」。
+   * 部分厂商 ROM 甚至会因此终结应用进程，所以这里弹出可跳转的指引弹窗，
+   * 用户可一键到系统通知设置页手动开启，而不是只看到一条会消失的提示。
    */
   const requestNotificationPermission = useCallback(() => {
     void run('notification-permission', async () => {
@@ -6058,10 +6181,10 @@ export function App() {
       )
       setKeepAlive(await runtimeBridge.getKeepAliveState())
       if (result === null || (!result.granted && result.supported)) {
-        notify(t("未获得通知权限：Android 13 及以上需要通知权限才能运行前台服务，后台保持不会生效。请在系统设置中为本应用开启通知权限后重试。"), 'error')
+        setPermissionGuide({ kind: 'notification-permission' })
       }
     })
-  }, [notify, run])
+  }, [run])
 
   const requestShizukuPermission = useCallback(() => {
     void run('shizuku-permission', async () => {
@@ -6163,6 +6286,21 @@ export function App() {
    */
   const openOverlaySettings = useCallback(() => {
     void run('open-overlay-settings', () => runtimeBridge.openOverlaySettings())
+  }, [run])
+
+  /** 跳到本应用的系统通知设置页：通知权限被拒后只能由用户手动开启。 */
+  const openNotificationSettings = useCallback(() => {
+    void run('open-notification-settings', () => runtimeBridge.openNotificationSettings())
+  }, [run])
+
+  /**
+   * 跳到应用详情页。
+   *
+   * HyperOS 的「省电策略 / 自启动」没有可稳定直达的公开 Intent，先把用户送到应用详情页，
+   * 弹窗文案里写清点哪一项；用户返回应用后由可见性刷新重新复核服务状态。
+   */
+  const openApplicationSettings = useCallback(() => {
+    void run('open-application-settings', () => runtimeBridge.openApplicationSettings())
   }, [run])
 
   /**
@@ -6437,6 +6575,16 @@ export function App() {
       <BottomNavigation activeView={activeView} onNavigate={setActiveView} />
 
       {resetOpen && <ResetDialog busy={busy === 'reset'} onCancel={() => setResetOpen(false)} onConfirm={confirmReset} />}
+      {permissionGuide !== null && (
+        <PermissionGuideDialog
+          guide={permissionGuide}
+          busy={busy !== null}
+          onClose={() => setPermissionGuide(null)}
+          onOpenOverlaySettings={() => { setPermissionGuide(null); openOverlaySettings() }}
+          onOpenNotificationSettings={() => { setPermissionGuide(null); openNotificationSettings() }}
+          onOpenApplicationSettings={() => { setPermissionGuide(null); openApplicationSettings() }}
+        />
+      )}
       {pendingInstall !== null && <UpdateDialog busy={busy === 'install'} version={pendingInstall.version} onCancel={() => setPendingInstall(null)} onConfirm={confirmPendingInstall} />}
       {appUpdateReminder.available !== null && (
         <AppUpdateReminderDialog

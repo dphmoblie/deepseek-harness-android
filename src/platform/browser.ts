@@ -529,6 +529,9 @@ export function createBrowserBridge(): RuntimeBridge {
       lastIntent: state.phase === 'running' ? 'running' : 'stopped',
     }),
     requestNotificationPermission: () => Promise.resolve({ granted: false, supported: false }),
+    // 浏览器里没有可跳转的系统设置页；静默无操作，不抛错以免打断预览。
+    openNotificationSettings: (): Promise<void> => Promise.resolve(),
+    openApplicationSettings: (): Promise<void> => Promise.resolve(),
     // 浏览器预览没有系统悬浮窗：始终报告未开启且无权限，界面据此隐藏入口。
     getOverlayBallState: (): Promise<OverlayBallState> => Promise.resolve({
       enabled: false,

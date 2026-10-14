@@ -96,13 +96,11 @@ class VirtualScreenService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            androidx.core.content.ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            lastError = "未授予通知权限，副屏已安全停止；请在设置中允许通知后重试"
-            stopSelf()
-            return START_NOT_STICKY
-        }
+        // 必须先进入前台再谈别的：本服务一律由 startForegroundService 启动，
+        // 一次 startForeground 都不调用就 stopSelf 会触发
+        // ForegroundServiceDidNotStartInTimeException 并终结整个进程。
+        // POST_NOTIFICATIONS 未授予不阻止前台身份（Android 13+ 只是隐藏通知），
+        // 旧实现「缺通知权限 → stopSelf」正是悬浮球入口打开副屏时的闪退根因之一。
         val manager = getSystemService(NotificationManager::class.java)
         runCatching { manager.createNotificationChannel(NotificationChannel(CHANNEL, "目标应用副屏", NotificationManager.IMPORTANCE_LOW)) }
         val open = PendingIntent.getActivity(this, 0, Intent(this, VirtualScreenActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
@@ -110,8 +108,15 @@ class VirtualScreenService : Service() {
         val notification = NotificationCompat.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.ic_menu_view)
             .setContentTitle("目标应用副屏运行中").setContentText("点此查看画面；可随时结束副屏")
             .setContentIntent(open).setOngoing(true).addAction(0, "结束副屏", stop).build()
-        try { ServiceCompat.startForeground(this, 7321, notification, if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE else 0) }
-        catch (_: Exception) { lastError = "无法启动副屏前台服务"; stopSelf(); return START_NOT_STICKY }
+        if (!io.deepseekharness.mobile.ForegroundServices.start(
+                this, 7321, notification, "dsh-runtime", "virtual screen",
+            )
+        ) {
+            // 两次尝试都被系统拒绝：受控收尾，绝不把异常留给 onStartCommand。
+            lastError = "无法启动副屏前台服务：请在系统设置中允许本应用自启动与后台运行后重试"
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (intent == null || intent.action == "stop") { stopSelf(); return START_NOT_STICKY }
         if (current != null) return START_NOT_STICKY
         current = this

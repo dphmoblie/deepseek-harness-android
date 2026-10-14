@@ -59,17 +59,22 @@ class HarnessKeepAliveService : Service() {
         // 必须最先进入前台状态。
         //
         // Android 12+ 对 startForegroundService() 启动的服务有 5 秒硬性要求：超时未调用
-        // startForeground() 会抛 ForegroundServiceDidNotStartInTimeException 并终结整个进程。
+        // startForeground()（或一次都没调用就 stopSelf）会抛
+        // ForegroundServiceDidNotStartInTimeException 并终结整个进程。
         // 先前「没有 controller 就直接 stopSelf()」的写法全程没有进入前台状态，只是运气好
         // 没触发；这里改成先无条件进入前台，再决定是否立即结束。
+        // POST_NOTIFICATIONS 未授予不影响前台身份（Android 13+ 仅隐藏通知），因此不再
+        // 因通知权限缺失而跳过 startForeground —— 那正是小米真机上的进程级闪退根因。
         if (!startForegroundCompat()) {
             // 进入前台失败时必须在此收尾：服务既没有通知，也没有被系统认定的前台身份，
             // 继续运行只会留下一个无法自解释的进程。立即结束，Harness 本身照常以普通
             // 后台进程运行，只是失去存活优先级提升。
+            lastStartFailure = FAILURE_FOREGROUND_DECLINED
             stopForegroundCompat()
             stopSelf()
             return START_NOT_STICKY
         }
+        lastStartFailure = null
         // START_STICKY 重启时系统可能传入 null Intent；只有持久化条件仍满足时才恢复，
         // 否则立即移除通知并结束，避免留下空转前台服务。
         val recoveryRequested = intent?.action == ACTION_RECOVER_AFTER_BOOT ||
@@ -174,40 +179,36 @@ class HarnessKeepAliveService : Service() {
      * 进入前台状态，返回是否成功。
      *
      * 刻意不让异常逃出这里：`onStartCommand` 抛出的异常会终结**整个应用进程**，
-     * 也就是用户看到的「闪退」。实测在未授予通知权限（或厂商 ROM 拒绝该前台服务
-     * 类型）时 `startForeground` 会抛异常，因此这里降级处理：
-     * 记录受控诊断后返回 false，由调用方结束服务，Harness 继续以普通后台进程运行。
+     * 也就是用户看到的「闪退」。实测部分厂商 ROM 会拒绝该前台服务类型（specialUse），
+     * 因此这里降级处理：先经 [ForegroundServices] 做带类型 + 不带类型两次尽力尝试，
+     * 仍失败时记录受控诊断后返回 false，由调用方结束服务，Harness 继续以普通后台进程运行。
+     *
+     * 不再因 POST_NOTIFICATIONS 缺失而拒绝进入前台：Android 13+ 上通知权限只决定常驻
+     * 通知是否可见，缺它时前台服务身份仍然有效；旧写法在缺权限时一次 startForeground
+     * 都不调用，会被系统以 ForegroundServiceDidNotStartInTimeException 终结整个进程。
      */
     private fun startForegroundCompat(): Boolean {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
             diagnostics.record(DiagnosticLevel.INFO, DiagnosticEvent.KEEP_ALIVE,
-                mapOf("reason" to "notification_permission_missing", "active" to "false"))
-            return false
+                mapOf("reason" to "notification_permission_missing", "active" to "true"))
         }
-        val notification = buildNotification()
-        return try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                ServiceCompat.startForeground(
-                    this,
-                    NOTIFICATION_ID,
-                    notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
-                )
-            } else {
-                ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, 0)
-            }
-            true
-        } catch (error: Throwable) {
+        val started = ForegroundServices.start(
+            service = this,
+            notificationId = NOTIFICATION_ID,
+            notification = buildNotification(),
+            logTag = "dsh-runtime",
+            label = "keep-alive",
+        )
+        if (!started) {
             diagnostics.record(
                 DiagnosticLevel.WARN,
                 DiagnosticEvent.KEEP_ALIVE,
                 mapOf("reason" to "foreground_failed", "active" to "false"),
             )
-            android.util.Log.w("dsh-runtime", "keep-alive foreground failed: ${error.javaClass.simpleName}")
-            false
         }
+        return started
     }
 
     private fun stopForegroundCompat() {
@@ -259,23 +260,43 @@ class HarnessKeepAliveService : Service() {
     }
 
     companion object {
-        /** 系统解锁后恢复运行时的内部动作，不对外导出。 */
+        /** 系统重启后恢复运行时的内部动作，不对外导出。 */
         const val ACTION_RECOVER_AFTER_BOOT = "io.deepseekharness.mobile.action.RECOVER_AFTER_BOOT"
         private const val CHANNEL_ID = "harness_keep_alive"
         private const val NOTIFICATION_ID = 0x44534801
 
         /**
+         * 最近一次启动失败的原因令牌（null 表示没有失败或上次已成功进入前台）。
+         * 仅取受控常量，供界面给出针对性指引；不参与服务自身决策。
+         */
+        @Volatile
+        var lastStartFailure: String? = null
+            private set
+
+        /** 前台身份被系统拒绝（厂商后台策略 / 后台启动限制 / specialUse 不被受理）。 */
+        const val FAILURE_FOREGROUND_DECLINED = "foreground_declined"
+
+        /** 系统连 startForegroundService 都拒绝（后台启动限制）。 */
+        const val FAILURE_START_DISALLOWED = "start_disallowed"
+
+        /**
          * 启动前台服务。
          *
          * 系统可能因后台启动限制或厂商策略拒绝启动前台服务；此时静默降级，
-         * Harness 继续按原有方式运行，只是失去优先级提升。
+         * Harness 继续按原有方式运行，只是失去优先级提升。失败令牌留在
+         * [lastStartFailure]，由界面状态查询读取后提示用户检查厂商后台设置。
          */
         fun start(context: Context) {
             val intent = Intent(context, HarnessKeepAliveService::class.java)
             try {
                 ContextCompat.startForegroundService(context.applicationContext, intent)
-            } catch (_: Throwable) {
+            } catch (error: Throwable) {
                 // 降级：不提升优先级，也不影响已启动的 Harness。
+                lastStartFailure = FAILURE_START_DISALLOWED
+                android.util.Log.w(
+                    "dsh-runtime",
+                    "keep-alive start disallowed: ${error.javaClass.simpleName}",
+                )
             }
         }
 

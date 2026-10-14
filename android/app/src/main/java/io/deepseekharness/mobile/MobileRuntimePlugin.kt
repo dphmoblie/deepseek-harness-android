@@ -1706,7 +1706,40 @@ class MobileRuntimePlugin : Plugin() {
         }
         // Capacitor 的插件方法运行在桥接线程上，而权限申请必须从主线程发起。
         currentActivity.runOnUiThread {
-            requestPermissionForAlias(NOTIFICATION_PERMISSION_ALIAS, call, "notificationPermissionCallback")
+            // Activity 未到 STARTED（页面切换 / 重建竞态）时 launcher.launch 不可用，
+            // 直接按当前真实授权状态结清，由界面在回到前台后重试或引导去系统设置。
+            val lifecycleReady = runCatching {
+                currentActivity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+            }.getOrDefault(false)
+            if (!lifecycleReady) {
+                runCatching {
+                    call.resolve(
+                        JSObject()
+                            .put("granted", notificationPermissionGranted())
+                            .put("supported", true),
+                    )
+                }
+                return@runOnUiThread
+            }
+            // 真机（小米 HyperOS / Android 16）实测 requestPermissionForAliases 内部会抛
+            // NullPointerException：Capacitor 的 ActivityResultLauncher 在 Activity 重建竞态
+            // 或 ROM 改造的 ActivityResultRegistry 上可能未就绪。该异常逃出主线程会直接闪退，
+            // 这里兜住：系统对话框没弹出来时按当前真实授权状态结清调用，界面随后引导去设置页。
+            try {
+                requestPermissionForAlias(NOTIFICATION_PERMISSION_ALIAS, call, "notificationPermissionCallback")
+            } catch (error: Throwable) {
+                android.util.Log.w(
+                    "dsh-runtime",
+                    "notification permission request failed: ${error.javaClass.simpleName}",
+                )
+                runCatching {
+                    call.resolve(
+                        JSObject()
+                            .put("granted", notificationPermissionGranted())
+                            .put("supported", true),
+                    )
+                }
+            }
         }
     }
 
@@ -3012,7 +3045,17 @@ class MobileRuntimePlugin : Plugin() {
         }
         // Capacitor 的插件方法运行在桥接线程上，而权限申请必须从主线程发起。
         currentActivity.runOnUiThread {
-            requestPermissionForAliases(aliases, call, "mediaPermissionCallback")
+            // 与通知权限同一道防线：ROM 改造 / Activity 重建竞态下 launcher 路径可能抛
+            // NullPointerException，逃到主线程会直接闪退；失败时按真实授权状态结清。
+            try {
+                requestPermissionForAliases(aliases, call, "mediaPermissionCallback")
+            } catch (error: Throwable) {
+                android.util.Log.w(
+                    "dsh-runtime",
+                    "media permission request failed: ${error.javaClass.simpleName}",
+                )
+                runCatching { call.resolve(JSObject().put("granted", mediaPermissionGranted())) }
+            }
         }
     }
 
@@ -3024,16 +3067,83 @@ class MobileRuntimePlugin : Plugin() {
     /**
      * 悬浮球开关、系统悬浮窗权限与服务运行状态的当前快照。
      *
-     * 返回值只有布尔量，不含任何用户数据。`canDrawOverlays` 必须每次实时读取：
+     * 返回值只有布尔量与受控错误令牌，不含任何用户数据。`canDrawOverlays` 必须每次实时读取：
      * 用户可能在系统设置里随时撤销，缓存下来会让界面显示错误状态。
+     * `startError` 是最近一次启动失败的原因令牌：服务已在运行或从未失败时为 null，
+     * 界面据此区分「缺权限」与「被厂商后台策略拒绝」并给出对应的指引。
      */
     @PluginMethod
     fun overlayBallState(call: PluginCall) {
         execute(call) {
+            val serviceActive = OverlayBallService.isRunning
             JSObject()
                 .put("enabled", controller.store.overlayBallEnabled())
                 .put("canDrawOverlays", android.provider.Settings.canDrawOverlays(context))
-                .put("serviceActive", OverlayBallService.isRunning)
+                .put("serviceActive", serviceActive)
+                .put(
+                    "startError",
+                    OverlayBallService.lastStartFailure?.takeUnless { serviceActive },
+                )
+        }
+    }
+
+    /**
+     * 引导用户到本应用的系统通知设置页（Android 13+ 通知权限只能由用户手动授予）。
+     *
+     * 部分 ROM 没有通知渠道设置页时逐级回退：应用详情页 → 抛出受控失败码，
+     * 由界面提示用户手动进入「设置 → 通知」。
+     */
+    @PluginMethod
+    fun openNotificationSettings(call: PluginCall) {
+        execute(call) {
+            val intents = buildList {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    add(
+                        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName),
+                    )
+                }
+                add(
+                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                        .setData(android.net.Uri.parse("package:${context.packageName}")),
+                )
+            }.map { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            val opened = intents.any { candidate ->
+                runCatching {
+                    context.startActivity(candidate)
+                }.isSuccess
+            }
+            if (!opened) {
+                throw RuntimeFailure(
+                    "NOTIFICATION_SETTINGS_UNAVAILABLE",
+                    "无法打开系统通知设置页",
+                )
+            }
+            null
+        }
+    }
+
+    /**
+     * 引导用户到本应用的系统详情页（应用信息）。
+     *
+     * 厂商 ROM 的「省电策略 / 后台运行 / 自启动」入口都挂在应用详情页下，
+     * 但没有稳定的公开 Intent 可以直达具体 ROM 页面；先把用户送到详情页，
+     * 由界面文案告诉他点哪一项。打不开时返回受控失败码而不是让调用悬空。
+     */
+    @PluginMethod
+    fun openApplicationSettings(call: PluginCall) {
+        execute(call) {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(Uri.parse("package:${context.packageName}"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val opened = runCatching { context.startActivity(intent) }.isSuccess
+            if (!opened) {
+                throw RuntimeFailure(
+                    "APPLICATION_SETTINGS_UNAVAILABLE",
+                    "无法打开应用详情设置页",
+                )
+            }
+            null
         }
     }
 
@@ -3464,6 +3574,12 @@ class MobileRuntimePlugin : Plugin() {
         .put("keepRuntimeInBackground", keepRuntimeInBackground)
         .put("foregroundServiceActive", foregroundServiceActive)
         .put("notificationPermission", notificationPermissionState())
+        // 前台服务未运行时，最近一次被系统拒绝启动的原因令牌（受控枚举，null=无失败或正在运行）。
+        // 界面据此区分「缺通知权限」与「厂商后台策略拒绝」，给出可操作的指引而不是一句泛化的「未生效」。
+        .put(
+            "foregroundStartError",
+            HarnessKeepAliveService.lastStartFailure?.takeUnless { foregroundServiceActive },
+        )
         .put("deviceShellReady", deviceShellReady)
         .put("reconnectRequired", reconnectRequired)
         .put("lastIntent", lastIntent.wireValue)
