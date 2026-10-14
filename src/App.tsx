@@ -1714,11 +1714,13 @@ function LogText({ text, outputClassName }: LogTextProps) {
     void (async () => {
       try {
         await navigator.clipboard.writeText(text)
+        triggerHaptic('success')
         setCopied(true)
         setCopyFailed(false)
         window.clearTimeout(copyResetTimer.current)
         copyResetTimer.current = window.setTimeout(() => setCopied(false), 1500)
       } catch {
+        triggerHaptic('error')
         setCopyFailed(true)
       }
     })()
@@ -5246,6 +5248,13 @@ export function App() {
   const notify = useCallback((message: string, tone: NoticeTone = 'info') => {
     noticeId.current += 1
     setNotice({ id: noticeId.current, message, tone })
+    if (tone === 'success') {
+      triggerHaptic('success')
+    } else if (tone === 'error') {
+      triggerHaptic('error')
+    } else {
+      triggerHaptic('light')
+    }
   }, [])
 
   const terminalError = useCallback((message: string) => notify(message, 'error'), [notify])
@@ -5459,6 +5468,61 @@ export function App() {
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
+
+  /**
+   * 移动端屏幕左边缘右滑返回手势（Edge Swipe Back）：
+   * 在非根视图（非 conversation）时，若触点从屏幕最左边缘（<= 30px）起手，
+   * 且向右滑动超过 75px 且纵向偏差较小时，触发返回上一级并伴随轻微触感振动。
+   */
+  useEffect(() => {
+    if (activeView === ROOT_VIEW || resetOpen || pendingInstall !== null || onboardingOpen) return
+
+    let startX = 0
+    let startY = 0
+    let tracking = false
+
+    const handleTouchStart = (event: TouchEvent) => {
+      if (event.touches.length !== 1) return
+      const touch = event.touches[0]
+      if (touch.clientX <= 30) {
+        startX = touch.clientX
+        startY = touch.clientY
+        tracking = true
+      }
+    }
+
+    const handleTouchEnd = (event: TouchEvent) => {
+      if (!tracking) return
+      tracking = false
+      if (event.changedTouches.length === 0) return
+      const touch = event.changedTouches[0]
+      const deltaX = touch.clientX - startX
+      const deltaY = Math.abs(touch.clientY - startY)
+
+      if (deltaX > 75 && deltaY < deltaX * 0.75) {
+        triggerHaptic('light')
+        if (activeView === 'settings') {
+          backToView('conversation')
+        } else {
+          backToView('settings')
+        }
+      }
+    }
+
+    const handleTouchCancel = () => {
+      tracking = false
+    }
+
+    window.addEventListener('touchstart', handleTouchStart, { passive: true })
+    window.addEventListener('touchend', handleTouchEnd, { passive: true })
+    window.addEventListener('touchcancel', handleTouchCancel, { passive: true })
+
+    return () => {
+      window.removeEventListener('touchstart', handleTouchStart)
+      window.removeEventListener('touchend', handleTouchEnd)
+      window.removeEventListener('touchcancel', handleTouchCancel)
+    }
+  }, [activeView, backToView, resetOpen, pendingInstall, onboardingOpen])
 
   /**
    * 设置草稿的作用范围就是「设置区」（设置首页与五个二级页）。

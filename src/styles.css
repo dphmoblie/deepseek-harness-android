@@ -1350,6 +1350,8 @@ button:disabled {
   color: var(--ink);
   background: transparent;
   text-align: left;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 68px;
 }
 
 .management-row:last-child {
@@ -1914,6 +1916,24 @@ button:disabled {
   background: var(--toast-bg);
   box-shadow: var(--shadow-toast);
   font-size: 0.8125rem;
+  animation: toastSlideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
 }
 
 .toast-success > svg {
@@ -2914,6 +2934,8 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   border: 1px solid var(--line);
   border-radius: var(--radius-inner);
   background: var(--surface-hover);
+  content-visibility: auto;
+  contain-intrinsic-size: 0 76px;
 }
 
 .storage-dir-head {
