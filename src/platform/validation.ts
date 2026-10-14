@@ -46,6 +46,7 @@ import type {
   RuntimeInstallResult,
   RuntimeIntent,
   RuntimePhase,
+  AppUpdateProgress,
   RuntimeProgress,
   RuntimeReleaseEntry,
   RuntimeReleaseList,
@@ -111,11 +112,11 @@ import {
 } from './types'
 import { validateCustomCredentialIds, validateCustomCredentialUpdates, validateCustomModelProviders } from './customProviders'
 import { validateSelfCheckReport, type SelfCheckReport } from '../runtimeSelfCheck'
-import { validateHarnessPermissionMode } from '../harnessPermissionMode'
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const SESSION_ID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9._-]+$/
+const SHIZUKU_VERSION_PATTERN = /^[A-Za-z0-9._+-]+$/
 const ERROR_CODE_PATTERN = /^[A-Z0-9_]+$/
 const MAX_URL_LENGTH = 2048
 const MAX_IDENTIFIER_LENGTH = 96
@@ -376,7 +377,6 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
   if (typeof overlayBallEnabled !== 'boolean') throw new Error('悬浮球设置格式无效')
   return {
     ...source,
-    ...(settings.harnessPermissionMode === undefined ? {} : { harnessPermissionMode: validateHarnessPermissionMode(settings.harnessPermissionMode) }),
     keepScreenAwake: settings.keepScreenAwake,
     terminalFontSize: settings.terminalFontSize,
     configuredModelProviders: configuredModelProviders(settings.configuredModelProviders, settings.apiKey),
@@ -439,7 +439,6 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
   if (typeof overlayBallEnabled !== 'boolean') throw new Error('悬浮球设置格式无效')
   const configuredProviders = configuredModelProviders(settings.configuredModelProviders, settings.apiKey)
   const customSettings = {
-    ...(settings.harnessPermissionMode === undefined ? {} : { harnessPermissionMode: validateHarnessPermissionMode(settings.harnessPermissionMode) }),
     ...(settings.harnessConfiguredModelProviders === undefined ? {} : {
       harnessConfiguredModelProviders: configuredModelProviders(settings.harnessConfiguredModelProviders, undefined),
     }),
@@ -756,12 +755,27 @@ export function validateRuntimeCleanupOutcome(value: unknown): RuntimeCleanupOut
   }
 }
 
-export function validateRuntimeProgress(value: unknown): RuntimeProgress {  const progress = asRecord(value, '运行时进度')
+export function validateRuntimeProgress(value: unknown): RuntimeProgress {
+  const progress = asRecord(value, '运行时进度')
   const downloadedBytes = byteCount(progress.downloadedBytes, '已处理字节数')
   const totalBytes = byteCount(progress.totalBytes, '总字节数')
   if (totalBytes > 0 && downloadedBytes > totalBytes) throw new Error('运行时进度无效')
   const errorCode = optionalIdentifier(progress.errorCode, '运行时错误码', ERROR_CODE_PATTERN, MAX_ERROR_CODE_LENGTH)
   return { phase: runtimePhase(progress.phase), downloadedBytes, totalBytes, ...(errorCode === undefined ? {} : { errorCode }) }
+}
+
+/**
+ * 应用更新包下载进度：只接受两个字节数。
+ *
+ * 与运行时进度不同，这里没有阶段，`totalBytes` 必须为正（发布页声明的包体大小）：
+ * 进度条要算百分比，总量未知时画不出有意义的读数，宁可判为无效也不显示假的 0%。
+ */
+export function validateAppUpdateProgress(value: unknown): AppUpdateProgress {
+  const progress = asRecord(value, '应用更新进度')
+  const downloadedBytes = byteCount(progress.downloadedBytes, '已下载字节数')
+  const totalBytes = byteCount(progress.totalBytes, '总字节数')
+  if (totalBytes <= 0 || downloadedBytes > totalBytes) throw new Error('应用更新进度无效')
+  return { downloadedBytes, totalBytes }
 }
 
 export function validateShizukuState(value: unknown): ShizukuState {
@@ -773,14 +787,18 @@ export function validateShizukuState(value: unknown): ShizukuState {
     throw new Error('Shizuku 权限状态格式无效')
   }
   if (state.connected && (!state.running || state.permission !== 'granted')) throw new Error('Shizuku 连接状态无效')
-  const version = state.version === undefined
+  const rawVersion = typeof state.version === 'number' ? String(state.version) : state.version
+  const normalizedVersion = rawVersion === '' || rawVersion === null ? undefined : rawVersion
+  const version = normalizedVersion === undefined
     ? undefined
-    : optionalIdentifier(state.version, 'Shizuku 版本', IDENTIFIER_PATTERN, 32)
+    : optionalIdentifier(normalizedVersion, 'Shizuku 版本', SHIZUKU_VERSION_PATTERN, 32)
   // 应用版本名（13.6.0 这种）与服务端 API 版本是两件事，走同一条标识符校验；
-  // 原生侧已先按同一字符集过滤过，这里只做兜底。
-  const appVersion = state.appVersion === undefined
+  // 原生侧已先按同一字符集过滤过，这里只做兜底；未运行或读不到时原生回传空串，此处归一为 undefined。
+  const rawAppVersion = typeof state.appVersion === 'number' ? String(state.appVersion) : state.appVersion
+  const normalizedAppVersion = rawAppVersion === '' || rawAppVersion === null ? undefined : rawAppVersion
+  const appVersion = normalizedAppVersion === undefined
     ? undefined
-    : optionalIdentifier(state.appVersion, 'Shizuku 应用版本', IDENTIFIER_PATTERN, 32)
+    : optionalIdentifier(normalizedAppVersion, 'Shizuku 应用版本', SHIZUKU_VERSION_PATTERN, 32)
   return {
     installed: state.installed,
     running: state.running,

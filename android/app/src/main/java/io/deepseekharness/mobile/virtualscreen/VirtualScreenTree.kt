@@ -92,9 +92,12 @@ object VirtualScreenTree {
      * 取副屏（[displayId]）窗口的节点树。
      *
      * 返回的 JSON 字段固定为 `displayId`、`available`、`nodeCount`、`truncated`、`nodes`；
-     * `packageName` 与 `reason` 只在有值时出现（空字段不输出，省 token）。[available] 为 false 时
+     * `packageName`、`reason` 与 `imeText` 只在有值时出现（空字段不输出，省 token）。[available] 为 false 时
      * `nodes` 恒为空数组、`reason` 说明具体原因（服务未启用 / 显示编号无效 / 没有窗口 / 敏感窗口 / 设备锁定 /
      * 系统版本过低）。
+     *
+     * `imeText` 是**输入法窗口里正在编辑的文字**（组合中/候选区，见 [VirtualScreenImeText]）：用户用输入法
+     * 打的字若没有落到应用窗口的节点上，只靠 `nodes` 看就是一个空输入框。密码类候选不输出。
      *
      * `nodes` 是窗口根节点数组（通常只有一个元素），节点总数看 `nodeCount`，树形结构在节点自己的
      * `children` 里（见 [summarize]）。
@@ -118,7 +121,7 @@ object VirtualScreenTree {
         } catch (_: Throwable) {
             null
         }
-        return tree?.let { success(displayId, packageName, state.count, state.truncated, it) }
+        return tree?.let { success(displayId, packageName, state.count, state.truncated, it, imeText(service, displayId)) }
             ?: failure(displayId, "副屏节点树读取失败：窗口在读取过程中失效，请重新读取")
     }
 
@@ -476,13 +479,14 @@ object VirtualScreenTree {
         .put("nodes", JSONArray())
         .put("reason", reason)
 
-    /** 成功信封：`packageName` 为空时省略（没有名字的窗口不值得占一个字段）。 */
+    /** 成功信封：`packageName` 与 `imeText` 为空时省略（没有名字/没读到输入法的字不值得占一个字段）。 */
     private fun success(
         displayId: Int,
         packageName: String,
         nodeCount: Int,
         truncated: Boolean,
         nodes: JSONArray,
+        imeText: String = "",
     ): JSONObject {
         val result = JSONObject()
             .put("displayId", displayId)
@@ -491,7 +495,60 @@ object VirtualScreenTree {
             .put("truncated", truncated)
             .put("nodes", nodes)
         if (packageName.isNotEmpty()) result.put("packageName", packageName)
+        if (imeText.isNotEmpty()) result.put("imeText", imeText)
         return result
+    }
+
+    /**
+     * 读副屏上输入法窗口里正在编辑的文字（见 [VirtualScreenImeText]）。
+     *
+     * 全程不抛异常：这一项是**附加信息**，输入法窗口取不到（没有输入法、系统版本低、节点已失效）时
+     * 返回空串，绝不让一次节点树读取因为「顺带读一眼输入法」而整体失败。
+     */
+    private fun imeText(service: DeepSeekAccessibilityService, displayId: Int): String {
+        val root = runCatching { service.displayImeRootFor(displayId) }.getOrNull() ?: return ""
+        return try {
+            val candidates = ArrayList<VirtualScreenImeText.Candidate>()
+            collectImeCandidates(root, 0, candidates)
+            VirtualScreenImeText.pick(candidates)
+        } catch (_: Throwable) {
+            ""
+        } finally {
+            runCatching { root.recycle() }
+        }
+    }
+
+    /** 深度与节点数都按 [VirtualScreenImeText] 的上限收敛；拿到的子节点读完立即回收。 */
+    private fun collectImeCandidates(
+        node: AccessibilityNodeInfo,
+        depth: Int,
+        out: MutableList<VirtualScreenImeText.Candidate>,
+    ) {
+        if (out.size >= VirtualScreenImeText.MAX_NODES) return
+        val text = runCatching { node.text?.toString().orEmpty() }.getOrDefault("")
+        // 密码类候选不输出：输入法里也可能出现密码框的候选，那不该进 AI 的上下文。
+        val password = runCatching { node.isPassword }.getOrDefault(false)
+        if (!password) {
+            out.add(
+                VirtualScreenImeText.Candidate(
+                    text = text,
+                    editable = runCatching { node.isEditable }.getOrDefault(false),
+                    focused = runCatching { node.isFocused }.getOrDefault(false),
+                    depth = depth,
+                ),
+            )
+        }
+        if (depth >= VirtualScreenImeText.MAX_DEPTH) return
+        val childCount = runCatching { node.childCount }.getOrDefault(0)
+        for (index in 0 until childCount) {
+            if (out.size >= VirtualScreenImeText.MAX_NODES) return
+            val child = runCatching { node.getChild(index) }.getOrNull() ?: continue
+            try {
+                collectImeCandidates(child, depth + 1, out)
+            } finally {
+                runCatching { child.recycle() }
+            }
+        }
     }
 
     /** 文本类字段统一走这里：折叠空白 → 截断 → 空串不输出。 */

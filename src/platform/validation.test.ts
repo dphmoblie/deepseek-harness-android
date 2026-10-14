@@ -38,6 +38,7 @@ import {
   validatePluginCleanupRequest,
   validateRuntimeCleanupState,
   validateRuntimeInstallResult,
+  validateAppUpdateProgress,
   validateRuntimeProgress,
   validateRuntimeReleaseList,
   validateRuntimeSessionListResult,
@@ -401,8 +402,18 @@ describe('native bridge output validation', () => {
     expect(versions.appVersion).toBe('13.6.0')
     expect(versions.version).toBe('13')
     expect(() => validateShizukuState({ installed: true, running: true, permission: 'granted', connected: true, appVersion: '<script>' })).toThrow('应用版本')
-    // 缺省不算非法：老版本原生桥不返回该字段，界面就不显示应用版本。
+    // 缺省或原生未运行时回传的空串均归一为 undefined，不抛错阻断
     expect(validateShizukuState({ installed: true, running: true, permission: 'granted', connected: true }).appVersion).toBeUndefined()
+    expect(validateShizukuState({ installed: false, running: false, permission: 'undetermined', connected: false, version: '', appVersion: '' })).toEqual({
+      installed: false,
+      running: false,
+      permission: 'undetermined',
+      connected: false,
+    })
+    // 支持数字形式的服务端版本与带构建元数据的版本
+    const buildVersions = validateShizukuState({ installed: true, running: true, permission: 'granted', connected: true, version: 13, appVersion: '13.6.0+1034' })
+    expect(buildVersions.version).toBe('13')
+    expect(buildVersions.appVersion).toBe('13.6.0+1034')
     expect(() => assertSessionId('------------------------------------')).toThrow('会话')
     expect(() => validateTerminalChunk({ sessionId, dataBase64: '***=' })).toThrow('编码')
     expect(() => validateTerminalExit({ sessionId, exitCode: 999 })).toThrow('退出码')
@@ -420,6 +431,13 @@ describe('native bridge output validation', () => {
       totalBytes: 100,
       errorCode: 'DOWNLOAD_INCOMPLETE',
     }).errorCode).toBe('DOWNLOAD_INCOMPLETE')
+  })
+
+  it('accepts app update progress and rejects one that cannot be drawn as a percentage', () => {
+    expect(validateAppUpdateProgress({ downloadedBytes: 50, totalBytes: 100 })).toEqual({ downloadedBytes: 50, totalBytes: 100 })
+    // 总量为 0 或负、超过总量的读数都不算进度：界面宁可没有进度条，也不显示假的 0%。
+    expect(() => validateAppUpdateProgress({ downloadedBytes: 0, totalBytes: 0 })).toThrow('应用更新进度无效')
+    expect(() => validateAppUpdateProgress({ downloadedBytes: 101, totalBytes: 100 })).toThrow('应用更新进度无效')
   })
 })
 

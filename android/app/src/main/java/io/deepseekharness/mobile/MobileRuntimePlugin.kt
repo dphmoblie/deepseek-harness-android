@@ -52,9 +52,9 @@ import io.deepseekharness.mobile.accessibility.toRuleJson
 import io.deepseekharness.mobile.runtime.AppReleaseCatalog
 import io.deepseekharness.mobile.runtime.AppUpdateCache
 import io.deepseekharness.mobile.runtime.AppUpdateInstallPolicy
+import io.deepseekharness.mobile.runtime.AppUpdateProgressThrottle
 import io.deepseekharness.mobile.runtime.AppUpdateStorage
 import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
-import io.deepseekharness.mobile.runtime.HarnessPermissionMode
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
 import io.deepseekharness.mobile.runtime.clampHarnessTailBytes
 import io.deepseekharness.mobile.runtime.MailboxExportOutcome
@@ -145,10 +145,6 @@ internal fun optionalOverlayBallEnabled(data: JSONObject): Boolean? {
     if (value !is Boolean) throw RuntimeFailure("SETTINGS_INVALID", "悬浮球开关格式无效")
     return value
 }
-
-/** 权限：应用私有桥接；省略保留原值，null、非法类型及未知模式一律拒绝。 */
-internal fun optionalHarnessPermissionMode(data: JSONObject): HarnessPermissionMode? =
-    if (data.has("harnessPermissionMode")) HarnessPermissionMode.parse(data.opt("harnessPermissionMode")) else null
 
 /**
  * 投递区导出的「指定子目录」参数。
@@ -644,7 +640,8 @@ class MobileRuntimePlugin : Plugin() {
      * 下载应用更新包到应用私有目录；频道与地址由原生自己决定，前端**不能**传任意 URL。
      *
      * 先落到 `.part`，摘要核对通过后才改名成正式安装包，所以目录里存在的 `.apk` 一定是完整的包。
-     * 这个方法没有进度事件通道（前端只等一个完成或失败），因此只有开始与结束两态。
+     * 下载过程中从 `appUpdateProgress` 推送字节数（按 [AppUpdateProgressThrottle] 节流），
+     * 界面据此画进度条；下载结束（成功或失败）不再补发事件，界面以这次调用的结果为准。
      */
     @PluginMethod
     fun downloadAppUpdate(call: PluginCall) {
@@ -652,13 +649,21 @@ class MobileRuntimePlugin : Plugin() {
             audited(AuditEvent.APP_UPDATE) {
                 val release = requireAppUpdate()
                 val target = AppUpdateStorage.partialFile(context.cacheDir, release.version)
+                val throttle = AppUpdateProgressThrottle(release.bytes)
                 try {
                     RuntimeHttp().downloadFile(
                         RuntimeValidation.requireHttpsUri(release.url, rejectPrivateHost = true),
                         target,
                         release.bytes,
                         release.sha256,
-                    ) { _, _ -> }
+                    ) { downloaded, total ->
+                        if (throttle.shouldReport(downloaded) && !destroying.get()) {
+                            notifyListeners(
+                                "appUpdateProgress",
+                                JSObject().put("downloadedBytes", downloaded).put("totalBytes", total),
+                            )
+                        }
+                    }
                 } catch (failure: RuntimeFailure) {
                     throw appUpdateDownloadFailure(failure)
                 }
@@ -784,17 +789,16 @@ class MobileRuntimePlugin : Plugin() {
                 allowedCustomIds,
             )
             val overlayBallEnabledUpdate = optionalOverlayBallEnabled(call.data)
-            val harnessPermissionModeUpdate = optionalHarnessPermissionMode(call.data)
             val settings = RuntimeValidation.settings(
                 call.getString("manifestUrl"),
                 call.getString("manifestSha256"),
                 call.getBoolean("keepScreenAwake", false) ?: false,
                 fontSize,
-                call.getBoolean("autoLaunch", true) ?: true,
+                // 旧版 WebView 可能仍携带 autoLaunch=false；当前入口固定自动启动，不再接受该选择。
+                true,
                 call.getBoolean("keepRuntimeInBackground", false) ?: false,
                 // 省略值只作为构造设置对象时的占位；是否写入由下面的可空更新参数决定。
                 overlayBallEnabledUpdate ?: false,
-                harnessPermissionModeUpdate ?: HarnessPermissionMode.WORKSPACE_WRITE,
             )
             val saved = controller.saveSettings(
                 settings,
@@ -804,7 +808,6 @@ class MobileRuntimePlugin : Plugin() {
                 customProviderApiKeyUpdates,
                 clearedCustomProviderApiKeys,
                 overlayBallEnabledUpdate = overlayBallEnabledUpdate,
-                harnessPermissionModeUpdate = harnessPermissionModeUpdate,
             )
             applyKeepScreenAwake(saved.keepScreenAwake)
             syncKeepAliveService(saved.keepRuntimeInBackground)
@@ -3568,7 +3571,6 @@ class MobileRuntimePlugin : Plugin() {
         .put("autoLaunch", autoLaunch)
         .put("keepRuntimeInBackground", keepRuntimeInBackground)
         .put("overlayBallEnabled", overlayBallEnabled)
-        .put("harnessPermissionMode", harnessPermissionMode.wireValue)
 
     private fun RuntimeKeepAliveSnapshot.toJs(): JSObject = JSObject()
         .put("keepRuntimeInBackground", keepRuntimeInBackground)

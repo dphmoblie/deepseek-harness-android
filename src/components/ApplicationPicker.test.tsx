@@ -211,4 +211,29 @@ describe('已安装应用选择器', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(list).toHaveBeenCalledTimes(2)
   })
+
+  it('支持输入法组合输入并在完成或选词时正确更新检索，且支持一键清空', async () => {
+    const list = vi.fn()
+      .mockResolvedValueOnce({ apps: [app('reader', 'com.example.reader')], nextOffset: null, total: 1 })
+      .mockResolvedValue({ apps: [app('微信', 'com.tencent.mm')], nextOffset: null, total: 1 })
+    const { container } = open({ listInstalledApplications: list } as unknown as RuntimeBridge)
+    await screen.findByText('reader')
+
+    const input = container.querySelector<HTMLInputElement>('.field input')!
+    // 模拟输入法开始拼音组字（输入 wei）
+    fireEvent.compositionStart(input)
+    fireEvent.change(input, { target: { value: 'wei' } })
+    // 组合输入中不直接向桥发半截拼音
+    expect(list).not.toHaveBeenCalledWith('wei', 0)
+
+    // 模拟选词「微信」完成组字并更新
+    fireEvent.compositionEnd(input, { currentTarget: { value: '微信' }, target: { value: '微信' } })
+    await screen.findByText('微信')
+    expect(list).toHaveBeenCalledWith('微信', 0)
+
+    // 点击一键清空按钮
+    const clearBtn = screen.getByRole('button', { name: '清空查找词' })
+    fireEvent.click(clearBtn)
+    expect(input.value).toBe('')
+  })
 })

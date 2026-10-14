@@ -112,7 +112,7 @@ android {
         minSdk 26
         targetSdk 35
         versionCode 37
-        versionName '0.2.13'
+        versionName '0.2.14'
 
         buildConfigField 'String', 'DEFAULT_MANIFEST_URL', envBuildValue('DSH_RUNTIME_MANIFEST_URL')
         buildConfigField 'String', 'DEFAULT_MANIFEST_SHA256', envBuildValue('DSH_RUNTIME_MANIFEST_SHA256')
@@ -196,9 +196,6 @@ dependencies {
     implementation 'androidx.activity:activity-ktx:1.10.1'
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'androidx.core:core-ktx:1.15.0'
-    // WebView 内核异步预热（WebViewCompat.startUpWebView）。Capacitor 已以相同版本
-    // 传递引入该库，这里显式声明只是让编译类路径可见，最终 APK 不会多出依赖。
-    implementation 'androidx.webkit:webkit:1.12.1'
     // 忘记验证密码时的系统身份确认（生物识别 / 锁屏密码）。用 androidx 封装而不是平台的
     // android.hardware.biometrics.BiometricPrompt：后者的 API 30 常量需要 Build.VERSION.SDK_INT
     // 守卫写在**调用点**，而回调在匿名类里，Lint 的 NewApi 看不到外层的 if（本仓库在

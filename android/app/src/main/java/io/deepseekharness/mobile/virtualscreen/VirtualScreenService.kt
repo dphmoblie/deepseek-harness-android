@@ -515,13 +515,17 @@ class VirtualScreenService : Service() {
         // 所以「已经显示过」时连一次屏幕读数都不会发生（与改造前逐字同序）。
         val layout = overlayMachine.show { overlayWindowLayout() }
             .filterIsInstance<OverlayEffect.AddView>().firstOrNull()?.layout ?: return
-        // 小窗只有应用画面：位置靠直接拖小窗本身（拖动之外的手势照旧透传给副屏），
-        // 收起与结束仍在独立设置页或通知里操作。
-        // 画面与缩放手柄收在同一个 VirtualScreenFrame 里：手柄是它的子视图而不是另一个窗口，
-        // 于是预览页与小窗能共用同一份「多大、怎么调」的行为。
+        // 小窗只有应用画面：位置靠直接拖小窗本身（拖动之外的手势照旧透传给副屏）。
+        // 画面、缩放手柄与出口收在同一个 VirtualScreenFrame 里：手柄与芯片都是它的子视图而不是
+        // 另一个窗口，于是预览页与小窗能共用同一份「多大、怎么调、怎么退」的行为。
         val frame = VirtualScreenFrame(this).also { preview = it.preview }
         frame.preview.dragHost = overlayDragHost
         frame.installResize(overlayResizeGesture)
+        // 「收起」保留会话（目标应用继续跑，只是把画面收掉），「结束」走与通知同一个 stopSelf 路径：
+        // 会话在 onDestroy 里统一释放，不在这里另做一套收尾。
+        frame.installControls(
+            VirtualScreenChrome.overlay(onCollapse = { hideOverlay() }, onStop = { stopSelf() }),
+        )
         val params = WindowManager.LayoutParams(layout.widthPx, layout.heightPx, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             android.graphics.PixelFormat.TRANSLUCENT).apply {

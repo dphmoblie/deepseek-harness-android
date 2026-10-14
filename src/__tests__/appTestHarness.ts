@@ -186,6 +186,7 @@ export const bridge = {
   deleteRuntimeWorkspaceFile: vi.fn(),
   clearDiagnosticLog: vi.fn(),
   addRuntimeProgressListener: vi.fn(),
+  addAppUpdateProgressListener: vi.fn(),
   addTerminalOutputListener: vi.fn(),
   addTerminalExitListener: vi.fn(),
 }
@@ -604,6 +605,9 @@ export function beforeEachAppTest(): void {
   bridge.clearDiagnosticLog.mockResolvedValue({ ...diagnostic })
   bridge.shareDiagnosticLog.mockResolvedValue({ ...diagnostic, fileName: 'dsh-diagnostic-20260912-102030.txt', exportedBytes: 512 })
   bridge.addRuntimeProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })
+  // 应用更新进度：订阅在挂载时就发生，所以这里必须给一个可用的默认取消句柄，
+  // 否则界面一挂载就会在 `subscribeProgress(...).then` 上炸掉。
+  bridge.addAppUpdateProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })
   bridge.saveSettings.mockImplementation((value: RuntimeSettingsUpdate) => Promise.resolve(value))
   // 安装结果默认**不带** autoSnapshot：界面就不会多显示一条快照结论，
   // 用例若自己设成 undefined，桥的校验也会把它归一化成 {}。

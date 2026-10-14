@@ -1,7 +1,16 @@
 .application-picker { margin: 12px 0; min-width: 0; }
 .application-picker-panel { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-inner); }
 .application-picker-list { max-height: min(360px, 48dvh); overflow-y: auto; overscroll-behavior: contain; }
-.application-picker-row { display: flex; align-items: center; gap: 12px; padding: 10px 4px; min-height: 48px; border-bottom: 1px solid var(--line); }
+.application-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  min-height: 48px;
+  border-bottom: 1px solid var(--line);
+  content-visibility: auto;
+  contain-intrinsic-size: 0 48px;
+}
 .application-picker-row input { width: 20px; height: 20px; flex: none; }
 .application-picker-row span { min-width: 0; }
 .application-picker-row strong, .application-picker-row small { display: block; overflow-wrap: anywhere; }
@@ -12,3 +21,31 @@
 .application-picker-filters label { display: flex; align-items: center; gap: 8px; min-height: 32px; }
 .application-picker-filters input { width: 18px; height: 18px; flex: none; }
 .application-picker-panel > p { margin: 8px 0; }
+.application-picker-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.application-picker-input-wrap input {
+  width: 100%;
+  padding-right: 36px;
+}
+.application-picker-clear-btn {
+  position: absolute;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--surface-muted);
+  cursor: pointer;
+}
+.application-picker-clear-btn:hover {
+  color: var(--ink);
+}

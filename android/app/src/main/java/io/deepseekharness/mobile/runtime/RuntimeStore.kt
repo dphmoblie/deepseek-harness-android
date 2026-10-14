@@ -147,15 +147,6 @@ class RuntimeStore(context: Context) {
     /** 悬浮球开关。缺键时按 false 处理：老版本升级上来的用户不会突然多出一个球。 */
     fun overlayBallEnabled(): Boolean = preferences.getBoolean(KEY_OVERLAY_BALL, false)
 
-    /** 不读取凭据；缺键或损坏的偏好回落到要求沙箱的默认值。 */
-    fun harnessPermissionMode(): HarnessPermissionMode = try {
-        HarnessPermissionMode.parse(preferences.getString(KEY_HARNESS_PERMISSION_MODE, "workspace-write"))
-    } catch (_: RuntimeFailure) {
-        HarnessPermissionMode.WORKSPACE_WRITE
-    } catch (_: ClassCastException) {
-        HarnessPermissionMode.WORKSPACE_WRITE
-    }
-
     /**
      * 由悬浮球菜单在原生侧直接关闭开关。
      *
@@ -307,7 +298,6 @@ class RuntimeStore(context: Context) {
             keepScreenAwake = keepScreenAwake(),
             keepRuntimeInBackground = keepRuntimeInBackground(),
             overlayBallEnabled = overlayBallEnabled(),
-            harnessPermissionMode = harnessPermissionMode(),
             terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             harnessConfiguredModelProviders = harnessCredentials.modelProviders,
@@ -316,7 +306,8 @@ class RuntimeStore(context: Context) {
                 provider.id.takeIf(customProviderApiKeys::containsKey)
             },
             harnessConfiguredCustomModelProviders = harnessCredentials.customProviderIds,
-            autoLaunch = preferences.getBoolean(KEY_AUTO_LAUNCH, false),
+            // 自动启动已成为固定入口；保留旧键只为兼容旧版本数据，不再读取用户曾保存的关闭值。
+            autoLaunch = true,
         )
     }
 
@@ -329,7 +320,6 @@ class RuntimeStore(context: Context) {
         customProviderApiKeyUpdates: Map<String, String> = emptyMap(),
         clearedCustomProviderApiKeys: Set<String> = emptySet(),
         overlayBallEnabledUpdate: Boolean? = settings.overlayBallEnabled,
-        harnessPermissionModeUpdate: HarnessPermissionMode? = settings.harnessPermissionMode,
     ): RuntimeSettings {
         if (providerApiKeyUpdates.keys.any(clearedProviderApiKeys::contains)) {
             throw RuntimeFailure("SETTINGS_INVALID", "同一模型凭据不能同时更新和清除")
@@ -356,12 +346,12 @@ class RuntimeStore(context: Context) {
             .putInt(KEY_FONT_SIZE, settings.terminalFontSize)
             // Retired frontend choices must not redirect the single official entrypoint.
             .remove(KEY_LEGACY_DEFAULT_FRONTEND)
-            .putBoolean(KEY_AUTO_LAUNCH, settings.autoLaunch)
+            // 旧版曾允许关闭自动启动，当前版本固定从应用入口启动 Harness。
+            .putBoolean(KEY_AUTO_LAUNCH, true)
             .putString(KEY_CUSTOM_PROVIDERS, customProvidersToJson(customProviders).toString())
             .remove(KEY_API_KEY)
             .remove("device_bridge_token")
         overlayBallEnabledUpdate?.let { editor.putBoolean(KEY_OVERLAY_BALL, it) }
-        harnessPermissionModeUpdate?.let { editor.putString(KEY_HARNESS_PERMISSION_MODE, it.wireValue) }
         if (encryptedCredentials == null) editor.remove(KEY_PROVIDER_CREDENTIALS)
         else editor.putString(KEY_PROVIDER_CREDENTIALS, encryptedCredentials)
         if (encryptedCustomCredentials == null) editor.remove(KEY_CUSTOM_PROVIDER_CREDENTIALS)
@@ -370,9 +360,10 @@ class RuntimeStore(context: Context) {
         if (!committed) throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法保存运行时设置")
         val harnessCredentials = harnessCredentialStatus(customProviders)
         return settings.copy(
+            // 旧版桥接可能仍会传入 false，但保存后的快照必须反映当前固定入口规则。
+            autoLaunch = true,
             // Omitted updates are read after commit so a concurrent native-menu hide is preserved.
             overlayBallEnabled = overlayBallEnabledUpdate ?: overlayBallEnabled(),
-            harnessPermissionMode = harnessPermissionModeUpdate ?: harnessPermissionMode(),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             harnessConfiguredModelProviders = harnessCredentials.modelProviders,
             customModelProviders = customProviders,
@@ -1513,8 +1504,7 @@ class RuntimeStore(context: Context) {
         private const val KEY_KEEP_AWAKE = "keep_screen_awake"
         private const val KEY_KEEP_BACKGROUND = "keep_runtime_in_background"
         private const val KEY_OVERLAY_BALL = "overlay_ball_enabled"
-        private const val KEY_HARNESS_PERMISSION_MODE = "harness_permission_mode"
-        // 运行时恢复记录：只保存运行意图、最近阶段与时间，绝不保存凭据。
+            // 运行时恢复记录：只保存运行意图、最近阶段与时间，绝不保存凭据。
         private const val KEY_RUNTIME_INTENT = "runtime_intent"
         private const val KEY_RUNTIME_PHASE = "runtime_last_phase"
         private const val KEY_RUNTIME_UPDATED_AT = "runtime_last_updated_at"

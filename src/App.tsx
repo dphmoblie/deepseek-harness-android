@@ -14,11 +14,13 @@ import { LanguageSettings } from './components/LanguageSettings'
 import { AppearanceSettings } from './components/AppearanceSettings'
 import { SessionManager } from './components/SessionManager'
 import { lazy, Suspense, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { triggerHaptic } from './platform/haptics'
 import {
   AlertTriangle,
   ArrowLeft,
   BellRing,
   Bot,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -48,6 +50,7 @@ import {
   RotateCcw,
   Rocket,
   Save,
+  Search,
   ScrollText,
   Settings2,
   Share2,
@@ -75,7 +78,8 @@ import { AppUpdateReminderDialog } from './components/AppUpdateReminderDialog'
 import { useAppUpdateReminder } from './appUpdateReminder'
 import { runtimeBridge } from './platform/native'
 import { readLogInsights } from './logInsights'
-import { validateHarnessPermissionMode } from './harnessPermissionMode'
+import { observeKeyboardInset } from './keyboardInset'
+import { applyShellFontScale, SHELL_FONT_BASELINE_PX } from './shellFont'
 import { acknowledgeAutomationDisclaimer, isAutomationDisclaimerAcknowledged } from './accessibilityDisclaimer'
 import { assertMailboxSubdirectory, validateAccessibilityPasswordInput } from './platform/validation'
 import {
@@ -102,9 +106,11 @@ import type {
   AccessibilityAutomationRuntime,
   AccessibilityAutomationState,
   AccessibilityServiceStatus,
+  AppUpdateProgress,
   AppUpdateState,
   HarnessLog,
   KeepAliveState,
+  ListenerHandle,
   MailboxDirectoryState,
   MailboxExportResult,
   MailboxImportResult,
@@ -165,7 +171,7 @@ type SettingsPage = 'models' | 'runtime' | 'terminal' | 'device-shell' | 'automa
 
 const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView }> = {
   models: { title: '模型与密钥', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
-  runtime: { title: '后台', hint: '运行时来源、后台保持、悬浮球与前台服务', view: 'settings-runtime' },
+  runtime: { title: '后台', hint: '运行时来源与两个入口、后台保持、悬浮球与前台服务', view: 'settings-runtime' },
   terminal: { title: '主题', hint: '字号、卡片颜色与透明度、图片与视频背景', view: 'settings-terminal' },
   'device-shell': { title: '设备 Shell 设置', hint: 'Shizuku 授权与 AI Shell', view: 'settings-device-shell' },
   automation: { title: '自动化设置', hint: '无障碍应用自动化与副屏', view: 'settings-automation' },
@@ -212,6 +218,7 @@ interface SettingsHomeEntry {
   /** 标题与说明就是入口按钮上显示的文字（与二级页标题逐字一致，匹配时也算进去）。 */
   title: string
   hint: string
+  keywords: readonly string[]
   target: SettingsHomeTarget
   icon: ReactNode
 }
@@ -232,6 +239,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'runtime',
     title: 'Harness 服务',
     hint: '启动、停止与当前状态',
+    keywords: ['服务', '启动', '停止', '运行', 'harness', 'service', 'start', 'stop', 'run', '状态'],
     target: { kind: 'service' },
     icon: <Bot size={20} />,
   },
@@ -240,6 +248,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'runtime',
     title: 'Ubuntu 运行时',
     hint: '安装进度、版本、来源与重置',
+    keywords: ['ubuntu', '运行时', '环境', '安装', '重置', '更新', '来源', 'proot', 'linux', 'runtime', 'reset', 'install'],
     target: { kind: 'view', view: 'environment' },
     icon: <HardDrive size={20} />,
   },
@@ -247,7 +256,8 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'runtime-page',
     group: 'runtime',
     title: '后台',
-    hint: '运行时来源、后台保持、悬浮球与前台服务',
+    hint: '运行时来源与两个入口、后台保持、悬浮球与前台服务',
+    keywords: ['后台', '保活', '保持', '悬浮球', '前台服务', '通知', '电池', 'keepalive', 'background', 'overlay', 'foreground'],
     target: { kind: 'page', page: 'runtime' },
     icon: <Power size={20} />,
   },
@@ -256,6 +266,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'device',
     title: '设备 Shell',
     hint: '设备上的 Shell（需 Shizuku）',
+    keywords: ['设备shell', 'shell', 'terminal', '终端', 'shizuku', 'adb', '命令行', '控制台'],
     target: { kind: 'view', view: 'terminal' },
     icon: <SquareTerminal size={20} />,
   },
@@ -265,8 +276,9 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'files',
     group: 'files',
     title: '文件管理',
-    hint: '投递区与共享目录：一处浏览、建文件夹与搬运',
-    // 这组功能原属「后台」页：投递区与共享目录不再挂在那页上，
+    hint: '外部工作区：一处浏览、建文件夹与搬运',
+    keywords: ['文件', '文件夹', '目录', '外部工作区', '投递区', '共享目录', '导入', '导出', '搬运', '浏览', '新建文件夹', 'mailbox', 'storage', 'file', 'files', 'folder', 'directory'],
+    // 这组功能原属「后台」页：访客的外部工作区不再挂在那页上，
     // 搜「导入」「投递区」的人要找的是这一页。
     target: { kind: 'view', view: 'files' },
     icon: <FolderInput size={20} />,
@@ -278,6 +290,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'versions',
     title: '版本管理',
     hint: '保留上一版本，可一键切回；装新版本仍在运行环境页',
+    keywords: ['版本', 'version', '运行时版本', '上一版本', '回退', '切回', '切换', '回滚', '降级', '升级', '更新', 'dsh', 'previous', 'rollback', 'switch', 'retained'],
     target: { kind: 'view', view: 'versions' },
     icon: <RotateCcw size={20} />,
   },
@@ -288,6 +301,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'models',
     title: '模型与密钥',
     hint: '供应商、API Key 与自定义模型',
+    keywords: ['模型', '密钥', 'key', 'api', 'apikey', 'api key', '供应商', 'provider', 'token', '凭据', '自定义模型', 'deepseek', 'openai', 'anthropic'],
     target: { kind: 'page', page: 'models' },
     icon: <KeyRound size={20} />,
   },
@@ -296,6 +310,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'appearance',
     title: '主题',
     hint: '字号、卡片颜色与透明度、图片与视频背景',
+    keywords: ['主题', '外观', '字号', '字体', '深色', '浅色', '背景', '壁纸', '视频', '图片', '透明度', '卡片', '颜色', '强调色', 'theme', 'font', 'appearance', 'background', 'color'],
     target: { kind: 'page', page: 'terminal' },
     icon: <SquareTerminal size={20} />,
   },
@@ -304,6 +319,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'device',
     title: '设备 Shell 设置',
     hint: 'Shizuku 授权与 AI Shell',
+    keywords: ['shizuku', '授权', '权限', '连接', '设备shell', 'ai shell', 'device shell'],
     target: { kind: 'page', page: 'device-shell' },
     icon: <Smartphone size={20} />,
   },
@@ -312,6 +328,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'device',
     title: '自动化设置',
     hint: '无障碍应用自动化与副屏',
+    keywords: ['无障碍', '自动化', '白名单', '应用列表', '副屏', '虚拟屏幕', '小窗', '截图', '点击', 'accessibility', 'automation', 'virtual screen', 'display'],
     target: { kind: 'page', page: 'automation' },
     icon: <Bot size={20} />,
   },
@@ -320,10 +337,29 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'diagnostics',
     title: '诊断与日志',
     hint: '采集开关、保留天数、运行日志与导出',
+    keywords: ['诊断', '日志', 'log', 'logs', '采集', '保留', '导出', '排查', '报错', '错误', '崩溃', '重启', '自检', 'self check'],
     target: { kind: 'page', page: 'diagnostics' },
     icon: <ScrollText size={20} />,
   },
 ]
+
+/**
+ * 按功能词本地匹配入口：不发请求、不写存储、不改运行状态。
+ *
+ * 规则刻意保持简单，让用户能预期、不用猜：
+ *  - 大小写不敏感；
+ *  - 查询按空白拆成多个词，**全部命中**才算匹配（多词顺序无关，可当「缩小范围」用）；
+ *  - 匹配范围 = 标题 + 说明 + 同义关键词。
+ *
+ * 断网、运行时没装好时一样可用——「找不到入口」恰恰是用户最需要搜的时候。
+ */
+function matchesSettingsHomeQuery(entry: SettingsHomeEntry, query: string): boolean {
+  const tokens = query.toLowerCase().split(/\s+/).filter(token => token !== '')
+  if (tokens.length === 0) return true
+  const group = SETTINGS_HOME_GROUPS.find(item => item.id === entry.group)
+  const haystack = `${entry.title} ${t(entry.title)} ${entry.hint} ${t(entry.hint)} ${group?.label} ${t(group?.label ?? '')} ${entry.keywords.join(' ')}`.toLowerCase()
+  return tokens.every(token => haystack.includes(token))
+}
 
 /** 外壳视图的全部取值：历史状态与地址片段只接受这里的值，其余一律回落到主视图。 */
 const APP_VIEWS: AppView[] = [
@@ -1484,12 +1520,16 @@ interface SettingsHomeScreenProps {
  * 筛选只决定这一屏显示哪些入口，不改变任何行为：点下去走的是同一条路。
  */
 function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenPage, onOpenView, onStop }: SettingsHomeScreenProps) {
+  /** 过滤词只活在组件里：离开设置首页即清空，下次进来不该被上次的搜索框卡住。 */
+  const [query, setQuery] = useState('')
   const [category, setCategory] = useState<SettingsHomeGroup | 'all'>('all')
-  /** 每个分组只留属于它的入口；整组都没有就连标题一起不渲染，避免空标题刷屏。 */
+  /** 每个分组只留命中的入口；整组都没命中就连标题一起不渲染，避免空标题刷屏。 */
   const groups = SETTINGS_HOME_GROUPS
     .filter(group => category === 'all' || category === group.id)
-    .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id) }))
+    .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id && matchesSettingsHomeQuery(entry, query)) }))
     .filter(item => item.entries.length > 0)
+  const matched = groups.reduce((total, item) => total + item.entries.length, 0)
+  const searching = query.trim() !== ''
 
   /** 服务行没有跳转，说明文字跟着运行状态走，所以按 id 现算；其余入口用固定说明。 */
   const hintOf = (entry: SettingsHomeEntry): string => entry.id === 'service'
@@ -1526,13 +1566,42 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
 
       <LanguageSettings />
 
+      {/* 搜索框固定在入口列表上方：入口一多，用户第一反应是找框，而不是往下翻。 */}
+      <div className="settings-search">
+        <Search size={18} aria-hidden="true" />
+        <input
+          type="search"
+          value={query}
+          onChange={event => { setQuery(event.target.value); setCategory('all') }}
+          onCompositionEnd={event => { setQuery(event.currentTarget.value); setCategory('all') }}
+          maxLength={120}
+          placeholder={t("按功能词查找入口")}
+          aria-label={t("按功能词查找入口")}
+          autoComplete="off"
+        />
+        {query !== '' && (
+          <button className="settings-search-clear" type="button" onClick={() => setQuery('')} aria-label={t("清空查找词")}>
+            <X size={16} />
+          </button>
+        )}
+      </div>
+
       <div className="settings-categories" role="listbox" aria-label={t("筛选功能分类")}>
         <button type="button" role="option" aria-label={t("筛选分类：全部分类")} aria-selected={category === 'all'} onClick={() => setCategory('all')}>{t("全部分类")}</button>
         {SETTINGS_HOME_GROUPS.map(group => (
           <button key={group.id} type="button" role="option" aria-label={`${t("筛选分类：")} ${t(group.label)}`} aria-selected={category === group.id}
-            onClick={() => setCategory(group.id)}>{t(group.label)}</button>
+            onClick={() => { setCategory(group.id); setQuery('') }}>{t(group.label)}</button>
         ))}
       </div>
+
+      {/* 结果条用 role="status"：输入时读屏能听到「找到几个」，而不是列表安静地变了一下。 */}
+      {searching && (
+        <p className="settings-note" role="status">
+          {matched === 0
+            ? t("没有匹配的入口：试试「导入」「日志」「保活」这类功能词")
+            : t("找到 {0} 个匹配的入口", matched)}
+        </p>
+      )}
 
       <div className="settings-directory">
       {groups.map(({ group, entries }) => (
@@ -1645,11 +1714,13 @@ function LogText({ text, outputClassName }: LogTextProps) {
     void (async () => {
       try {
         await navigator.clipboard.writeText(text)
+        triggerHaptic('success')
         setCopied(true)
         setCopyFailed(false)
         window.clearTimeout(copyResetTimer.current)
         copyResetTimer.current = window.setTimeout(() => setCopied(false), 1500)
       } catch {
+        triggerHaptic('error')
         setCopyFailed(true)
       }
     })()
@@ -2339,6 +2410,8 @@ interface AppUpdateSectionProps {
   loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
+  /** 订阅应用更新包的下载进度；原生侧只在真的下载时推送（见 [AppUpdateProgress]）。 */
+  subscribeProgress: (listener: (event: AppUpdateProgress) => void) => Promise<ListenerHandle>
   /** 去系统设置里为本应用打开「安装未知应用」；返回后重新读一次状态。 */
   openInstallSettings: () => Promise<void>
   notify: (message: string, tone: NoticeTone) => void
@@ -2354,12 +2427,35 @@ interface AppUpdateSectionProps {
  * 上面几块换的是运行时镜像。安装必须由系统安装器完成，应用只能把包递过去，
  * 所以这里会如实说明「会跳到系统安装界面」以及「需要允许安装未知来源」。
  */
-function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInstallSettings, notify, reminderEnabled, onReminderEnabledChange, reminderStorageAvailable }: AppUpdateSectionProps) {
+function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInstallSettings, notify, subscribeProgress, reminderEnabled, onReminderEnabledChange, reminderStorageAvailable }: AppUpdateSectionProps) {
   const [state, setState] = useState<AppUpdateState | null>(null)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
   const [busy, setBusy] = useState<'download' | 'install' | null>(null)
+  const [progress, setProgress] = useState<AppUpdateProgress | null>(null)
   const readRevision = useRef(0)
+
+  /**
+   * 订阅下载进度：挂载时订阅、卸载时注销，而不是点「下载更新」时才订阅。
+   *
+   * 原因：原生侧可能从断点续传的第一个字节就开始推送，点击到订阅之间的空档会吞掉
+   * 第一个读数，进度条会先停一次 0%。订阅失败不弹提示——没有进度条仍然能下载，
+   * 这一屏的其它功能也不该被它拖住。
+   */
+  useEffect(() => {
+    let cancelled = false
+    let remove: (() => Promise<void>) | undefined
+    const handlePromise = subscribeProgress(next => {
+      if (!cancelled) setProgress(next)
+    }).then(handle => {
+      if (cancelled) return handle.remove()
+      remove = handle.remove
+    }).catch(() => undefined)
+    return () => {
+      cancelled = true
+      void handlePromise.then(() => remove?.())
+    }
+  }, [subscribeProgress])
 
   const load = useCallback((forceRefresh = false) => {
     const revision = ++readRevision.current
@@ -2385,6 +2481,8 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
   const runStep = (step: 'download' | 'install', action: () => Promise<void>, success: string): void => {
     if (busy !== null) return
     setBusy(step)
+    // 进度只描述「这一次下载」：开始前清掉上一轮读数，结束后无论成败都不再显示进度条。
+    if (step === 'download') setProgress(null)
     void (async () => {
       try {
         await action()
@@ -2393,11 +2491,16 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
         notify(errorMessage(error), 'error')
       } finally {
         setBusy(null)
+        if (step === 'download') setProgress(null)
       }
     })()
   }
 
   const available = state?.available
+  // 百分比只在拿到原生进度、且总量为正时才有意义；否则显示「处理中」的不确定进度条。
+  const downloadPercent = progress === null || progress.totalBytes <= 0
+    ? null
+    : Math.min(100, Math.round((progress.downloadedBytes / progress.totalBytes) * 100))
 
   return (
     <section className="settings-section" aria-labelledby="app-update-title">
@@ -2499,6 +2602,31 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
             </button>
           </div>
 
+          {busy === 'download' && (
+            <div className="download-progress" aria-live="polite">
+              <div className="progress-copy">
+                <span>{t("正在下载更新包…")}</span>
+                <strong>{downloadPercent === null ? t("处理中") : `${downloadPercent}%`}</strong>
+              </div>
+              <div
+                className="progress-track"
+                role="progressbar"
+                aria-label={t("更新包下载进度")}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={downloadPercent ?? 0}
+              >
+                <span style={{ width: `${downloadPercent ?? 100}%` }} className={downloadPercent === null ? 'indeterminate' : ''} />
+              </div>
+              {progress !== null && (
+                <div className="progress-detail">
+                  <span>{formatBytes(progress.downloadedBytes)}</span>
+                  <span>{formatBytes(progress.totalBytes)}</span>
+                </div>
+              )}
+            </div>
+          )}
+
           <p className="settings-note">{t("安装更新需要先下载一次：没下载就点安装，会提示先下载。下载只走 GitHub 发布页，校验不过不会安装。")}</p>
         </>
       )}
@@ -2516,6 +2644,8 @@ interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
   loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
+  /** 应用更新包的下载进度订阅，只透传给 [AppUpdateSection]。 */
+  subscribeUpdateProgress: (listener: (event: AppUpdateProgress) => void) => Promise<ListenerHandle>
   openInstallSettings: () => Promise<void>
   reminderEnabled: boolean
   onReminderEnabledChange: (enabled: boolean) => void
@@ -2548,6 +2678,7 @@ function RuntimeVersionsScreen({
   loadUpdate,
   downloadUpdate,
   installUpdate,
+  subscribeUpdateProgress,
   openInstallSettings,
   reminderEnabled,
   onReminderEnabledChange,
@@ -2588,6 +2719,7 @@ function RuntimeVersionsScreen({
         loadUpdate={loadUpdate}
         downloadUpdate={downloadUpdate}
         installUpdate={installUpdate}
+        subscribeProgress={subscribeUpdateProgress}
         openInstallSettings={openInstallSettings}
         notify={notify}
         reminderEnabled={reminderEnabled}
@@ -2783,18 +2915,18 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
 
       {/*
         这一段是这一页的存在理由，必须写在最前面：用户最容易搞混的正是
-        「哪些目录是搬进来的、哪些是本来就挂着的」，以及为什么只有投递区有搬运按钮。
+        「哪些目录是搬进来的、哪些是本来就挂着的」，以及为什么只有 inbox / outbox 有搬运按钮。
       */}
       <p className="settings-note">
-        {t("这里能看到所有对外目录：投递区（inbox / outbox，靠按钮批量搬运）与共享目录（手机上的文件夹，挂进访客的 /mnt/user/<序号>，可直接读写）。")}
+        {t("这里的目录都是访客能看到的「外部工作区」：手机上的文件夹挂进访客的 /mnt/user/<序号>，可以直接读写；inbox / outbox 是批量搬运通道，只能靠按钮搬运。")}
       </p>
 
       <section className="settings-section" aria-labelledby="files-browser">
         <div className="section-title section-title-action">
           <span className="section-icon"><FolderInput size={19} /></span>
           <div>
-            <h2 id="files-browser">{t("文件夹管理")}</h2>
-            <p>{t("选一个目录浏览它的子目录；导入到工作区与导出工作区只对投递区有效。")}</p>
+            <h2 id="files-browser">{t("外部工作区")}</h2>
+            <p>{t("选一个目录浏览它的子目录；导入到工作区与导出工作区只对 inbox / outbox 有效。")}</p>
           </div>
           <button className="button button-secondary mailbox-create-button" type="button" onClick={onCreateFilesFolder} disabled={createFolderDisabled}>
             {busy === 'mailbox-folder-create' || busy === 'files-storage-folder-create' ? <Loader2 className="spin" size={17} /> : <FolderPlus size={17} />}
@@ -2831,12 +2963,12 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
         </div>
 
         {storageEntries.length === 0 && (
-          <p className="settings-note">{t("还没有共享目录：在下面「共享目录」里添加一个手机上的目录，它会出现在这里。")}</p>
+          <p className="settings-note">{t("还没有挂进来的目录：在下面「目录」里添加一个手机上的目录，它会出现在这里。")}</p>
         )}
 
         {readFailed && (
           <p className="settings-note" role="alert">
-            {browsingMailbox ? t("无法读取当前投递目录，请重试") : t("无法读取当前共享目录，请重试")}
+            {browsingMailbox ? t("无法读取当前搬运目录，请重试") : t("无法读取当前目录，请重试")}
             <button className="button button-secondary compact-button" type="button" onClick={() => onOpenFilesDirectory(currentPath)} disabled={busy !== null}>{t("重试")}</button>
           </p>
         )}
@@ -2881,23 +3013,23 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
       </section>
 
       {/*
-        投递区专属区：状态、搬运按钮与说明。
-        只在浏览投递区根时渲染 —— 协议动作只属于投递区，摆在共享目录下面会让人以为它也能用。
+        搬运块：状态、搬运按钮与说明。
+        只在浏览 inbox / outbox 时渲染 —— 协议动作只属于这两个根，摆在别的目录下面会让人以为它也能用。
       */}
       {browsingMailbox && (
-        <section className="settings-section" aria-labelledby="files-mailbox">
+        <div className="settings-subsection" role="region" aria-labelledby="files-mailbox">
           <div className="section-title section-title-action">
             <span className="section-icon"><FolderInput size={19} /></span>
             <div>
-              <h2 id="files-mailbox">{t("投递区")}</h2>
-              <p>{t("手机侧与访客之间的批量搬运通道；不会自动搬运，必须点下面的按钮。")}</p>
+              <h3 id="files-mailbox">{t("搬运")}</h3>
+              <p>{t("inbox / outbox 与访客之间的批量搬运；不会自动搬运，必须点下面的按钮。")}</p>
             </div>
             <span className={`status-chip ${mailbox?.available === true ? 'success' : 'warn'}`}>{mailboxStatusLabel}</span>
           </div>
 
           {mailbox === null && (
             <p className="settings-note" role={mailboxReadFailed ? 'alert' : undefined}>
-              {mailboxReadFailed ? t("无法读取投递区状态，请重试") : t("正在读取投递区状态")}
+              {mailboxReadFailed ? t("无法读取搬运状态，请重试") : t("正在读取搬运状态")}
             </p>
           )}
 
@@ -2937,7 +3069,7 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
                 <div className="inline-alert warning">
                   <AlertTriangle size={19} />
                   <div>
-                    <strong>{t("投递区不可用")}</strong>
+                    <strong>{t("搬运不可用")}</strong>
                     <span>{mailboxUnavailableReason}</span>
                   </div>
                 </div>
@@ -2973,11 +3105,11 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
               )}
               {storageAccess !== null && (
                 <p className="settings-note">
-                  {t("存储权限：媒体读取（T1）{0} · 所有文件访问（T2）{1}。投递区需要 T2。", storageAccess.mediaGranted ? t("已授予") : t("未授予"), storageAccess.allFilesSupported ? (storageAccess.allFilesGranted ? t("已授予") : t("未授予")) : t("系统不支持"))}
+                  {t("存储权限：媒体读取（T1）{0} · 所有文件访问（T2）{1}。外部工作区需要 T2。", storageAccess.mediaGranted ? t("已授予") : t("未授予"), storageAccess.allFilesSupported ? (storageAccess.allFilesGranted ? t("已授予") : t("未授予")) : t("系统不支持"))}
                 </p>
               )}
               <p className="settings-note">
-                {t("投递区不是工作区：dsh 的 write 工具写 /mnt/inbox、/mnt/outbox 会失败（实测 EACCES），这是预期行为；搬运只能走这里的按钮。")}
+                {t("inbox / outbox 不是工作区：dsh 的 write 工具写 /mnt/inbox、/mnt/outbox 会失败（实测 EACCES），这是预期行为；搬运只能走这里的按钮。")}
               </p>
             </>
           )}
@@ -2992,18 +3124,18 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
               {t("最近一次导出：{0} 个条目 · {1} · manifest {2}", lastMailboxExport.entryCount, formatBytes(lastMailboxExport.bytes), lastMailboxExport.manifestName)}
             </p>
           )}
-        </section>
+        </div>
       )}
 
       {/*
-        共享目录白名单管理：这一页同时是「看有哪些目录」和「决定有哪些目录」的地方 ——
+        目录管理：这一页同时是「看有哪些目录」和「决定有哪些目录」的地方 ——
         用户发现某个目录不在列表里时，下一步就是在这里添加它，不该再跳回另一页。
       */}
-      <section className="settings-section" aria-labelledby="files-storage-dirs">
+      <div className="settings-subsection" role="region" aria-labelledby="files-storage-dirs">
         <div className="section-title section-title-action">
           <span className="section-icon"><HardDrive size={19} /></span>
           <div>
-            <h2 id="files-storage-dirs">{t("共享目录")}</h2>
+            <h3 id="files-storage-dirs">{t("目录")}</h3>
             {/*
               说明里必须写明「访客内不再有 /sdcard」：旧的 /sdcard 整体绑定已被这份白名单取代
               （登记册 §5.1 / §3.1），用户看不到目录时最容易怀疑是权限坏了。
@@ -3017,7 +3149,7 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
 
         {storageDirs === null && (
           <p className="settings-note" role={storageDirsReadFailed ? 'alert' : undefined}>
-            {storageDirsReadFailed ? t("无法读取共享目录状态，请重试") : t("正在读取共享目录状态")}
+            {storageDirsReadFailed ? t("无法读取目录状态，请重试") : t("正在读取目录状态")}
           </p>
         )}
 
@@ -3043,7 +3175,7 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
               <div className="inline-alert warning">
                 <AlertTriangle size={19} />
                 <div>
-                  <strong>{t("目录白名单当前不可用")}</strong>
+                  <strong>{t("目录当前不可用")}</strong>
                   <span>{storageDirsBlockedReason}</span>
                 </div>
               </div>
@@ -3114,14 +3246,14 @@ function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailb
               {t("目录改动在下次启动运行环境时生效：正在运行的访客不会热更新挂载点。")}
             </p>
             <p className="settings-note">
-              {t("共享目录是实时挂载：进去之后可以直接读写，不需要像投递区那样先搬运一次。")}
+              {t("挂进来的目录是实时挂载：进去之后可以直接读写，inbox / outbox 才需要先搬运一次。")}
             </p>
             {storageDirLimitReached && (
               <p className="settings-note">{t("已达上限：最多只能添加 {0} 个目录，请先移除一个再添加。", MAX_STORAGE_DIRECTORIES)}</p>
             )}
           </>
         )}
-      </section>
+      </div>
     </div>
   )
 }
@@ -3246,9 +3378,6 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
 
       <p className="settings-note">{t("已安装插件列表见「插件管理」")}</p>
       <p className="settings-note">{t("自检会单独测试 Landlock 能力，不随会话权限切换。无沙箱会话可继续运行时，沙箱检查仍可能失败。")}</p>
-      {report?.harnessPermissionMode !== undefined && (
-        <p className="settings-note">{t("自检时的启动默认权限：{0}（会话权限可能不同）", report.harnessPermissionMode)}</p>
-      )}
 
       <div className="settings-inline-actions self-check-actions">
         <button className="button button-secondary" type="button" onClick={() => start('check')} disabled={busy !== null}>
@@ -3310,7 +3439,7 @@ function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfCheckPanelP
           <div>
             <strong>{t("本机 Landlock 沙箱不可用")}</strong>
             <span>{t("修复执行权限后仍出现此结果，表示 Landlock 在当前内核或启动环境中不可用。若没有其他可用后端，要求沙箱的会话无法执行命令；反复修复权限或重装运行时不能补齐内核能力。")}</span>
-            <span>{t("下一步：")}{t("在当前 Harness 会话的权限预设中选择 danger-full-access，或输入 /permission danger-full-access，然后重试命令。启动默认值可在本页「Harness 启动权限」中设置。")}</span>
+            <span>{t("下一步：")}{t("在当前 Harness 会话的权限预设中选择 danger-full-access，或输入 /permission danger-full-access，然后重试命令。")}</span>
             <span>{t("danger-full-access 会关闭 dsh 文件系统沙箱和命令审批。Android 应用沙箱仍在；PRoot 不提供额外的内核隔离。")}</span>
           </div>
         </div>
@@ -3458,6 +3587,10 @@ interface SettingsScreenProps {
   /** 跳转到系统「显示在其他应用上层」设置页；权限只能由用户手动开启。 */
   onOpenOverlaySettings: () => void
   onOpenShizuku: () => void
+  /** 跳到「Ubuntu 运行时」独立页；后台页只留入口。 */
+  onOpenEnvironment: () => void
+  /** 跳到「设备 Shell」独立页；后台页只留入口。 */
+  onOpenDeviceShell: () => void
   onOpenAccessibilitySettings: () => void
   /**
    * 保存白名单。已设置验证密码时**必须**带上 `password`：
@@ -3489,9 +3622,50 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
+  const [autoSaved, setAutoSaved] = useState(false)
+  const autoSaveTimerRef = useRef<number | null>(null)
+  const autoSavedTimerRef = useRef<number | null>(null)
+  const latestDraftRef = useRef(draft)
+  latestDraftRef.current = draft
+
+  const triggerAutoSave = useCallback((delay = 500) => {
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current)
+    }
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null
+      const currentDraft = latestDraftRef.current
+      if (currentDraft === null) return
+      const currentSettings = { ...currentDraft.settings }
+      delete currentSettings.overlayBallEnabled
+      const currentOverlayBall = currentDraft.overlayBallEnabled
+        ?? (overlayBallReadFailed ? currentDraft.settings.overlayBallEnabled : overlayBall?.enabled)
+        ?? currentDraft.settings.overlayBallEnabled
+        ?? false
+      onSave({
+        ...currentSettings,
+        ...(currentDraft.overlayBallEnabled === null ? {} : { overlayBallEnabled: currentOverlayBall }),
+        ...(Object.keys(currentDraft.credentials).length === 0 ? {} : { providerApiKeys: currentDraft.credentials }),
+        ...(currentDraft.clearedProviders.length === 0 ? {} : { clearProviderApiKeys: currentDraft.clearedProviders }),
+        ...(Object.keys(currentDraft.customCredentials).length === 0 ? {} : { customProviderApiKeys: currentDraft.customCredentials }),
+        ...(currentDraft.clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: currentDraft.clearedCustomProviders }),
+      })
+      triggerHaptic('light')
+      setAutoSaved(true)
+      if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
+      autoSavedTimerRef.current = window.setTimeout(() => setAutoSaved(false), 2000)
+    }, delay)
+  }, [onSave, overlayBall?.enabled, overlayBallReadFailed])
+
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimerRef.current !== null) window.clearTimeout(autoSaveTimerRef.current)
+      if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
+    }
+  }, [])
   /** 总开关的一次操作还在路上：按钮在这期间全部禁用，避免连点出两次动作。 */
   const [automationPending, setAutomationPending] = useState(false)
   /**
@@ -3885,21 +4059,38 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
 
   /**
    * 草稿的写入入口：所有字段改动都经过 [onDraftChange]，由 App 统一标记「未保存」。
-   * 命名与原来的 useState setter 保持一致，调用点无需关心草稿存在哪里。
+   * 同时触发轻量防抖自动保存，并在移动端触发触觉反馈。
    */
-  const setDraft = (next: RuntimeSettings): void => onDraftChange(current => ({ ...current, settings: next }))
-  const setOverlayBallDraft = (next: boolean): void => onDraftChange(current => ({ ...current, overlayBallEnabled: next }))
+  const setDraft = (next: RuntimeSettings): void => {
+    onDraftChange(current => ({ ...current, settings: next }))
+    triggerAutoSave(500)
+  }
+  const setOverlayBallDraft = (next: boolean): void => {
+    triggerHaptic('medium')
+    onDraftChange(current => ({ ...current, overlayBallEnabled: next }))
+    triggerAutoSave(300)
+  }
   const setSelectedProvider = (next: ModelProviderId | 'custom'): void =>
     // 只是切换正在查看的供应商，没有改动任何字段值：不算「未保存的输入」。
     onDraftChange(current => ({ ...current, selectedProvider: next }), false)
-  const setCredentialDrafts = (update: (current: ProviderApiKeys) => ProviderApiKeys): void =>
+  const setCredentialDrafts = (update: (current: ProviderApiKeys) => ProviderApiKeys): void => {
     onDraftChange(current => ({ ...current, credentials: update(current.credentials) }))
-  const setClearedProviders = (update: (current: ModelProviderId[]) => ModelProviderId[]): void =>
+    triggerAutoSave(800)
+  }
+  const setClearedProviders = (update: (current: ModelProviderId[]) => ModelProviderId[]): void => {
+    triggerHaptic('medium')
     onDraftChange(current => ({ ...current, clearedProviders: update(current.clearedProviders) }))
-  const setCustomCredentials = (next: Record<string, string>): void =>
+    triggerAutoSave(300)
+  }
+  const setCustomCredentials = (next: Record<string, string>): void => {
     onDraftChange(current => ({ ...current, customCredentials: next }))
-  const setClearedCustomProviders = (next: string[]): void =>
+    triggerAutoSave(800)
+  }
+  const setClearedCustomProviders = (next: string[]): void => {
+    triggerHaptic('medium')
     onDraftChange(current => ({ ...current, clearedCustomProviders: next }))
+    triggerAutoSave(300)
+  }
 
   // 只为用户主动修改的开关保留草稿；原生菜单关闭悬浮球时，不影响页内其他未保存内容。
   const overlayBallEnabled = overlayBallDraft
@@ -3940,6 +4131,10 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     )
   )
   const saveDraft = (): void => {
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current)
+      autoSaveTimerRef.current = null
+    }
     // 悬浮球是原生侧可被菜单直接修改的独立偏好。只有用户在本页实际拨动开关时，
     // 才把它作为更新字段发送；否则省略该字段，让原生侧保留菜单刚写入的值。
     const settingsWithoutOverlayBall = { ...settings }
@@ -3952,6 +4147,10 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
       ...(Object.keys(customCredentials).length === 0 ? {} : { customProviderApiKeys: customCredentials }),
       ...(clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: clearedCustomProviders }),
     })
+    triggerHaptic('success')
+    setAutoSaved(true)
+    if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
+    autoSavedTimerRef.current = window.setTimeout(() => setAutoSaved(false), 2000)
   }
 
   return (
@@ -3959,7 +4158,19 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
       <div className="screen-heading management-heading">
         <div>
           <p className="eyebrow">{t("应用管理")}</p>
-          <h1>{t(SETTINGS_PAGE_META[page].title)}</h1>
+          <div className="heading-title-row">
+            <h1>{t(SETTINGS_PAGE_META[page].title)}</h1>
+            {autoSaved && (
+              <span className="auto-save-pill success" role="status">
+                <Check size={13} /> {t("已自动保存")}
+              </span>
+            )}
+            {busy === 'save-settings' && (
+              <span className="auto-save-pill saving" role="status">
+                <Loader2 size={13} className="spin" /> {t("保存中...")}
+              </span>
+            )}
+          </div>
         </div>
         <button className="icon-button" type="button" aria-label={t("返回设置")} title={t("返回设置")} onClick={onBack}>
           <ArrowLeft size={19} />
@@ -4083,15 +4294,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             onCredentials={setCustomCredentials}
             onClear={setClearedCustomProviders}
           />}
-          <label className="toggle-row">
-            <span><strong>{t("打开应用时自动启动 Harness")}</strong><small>{t("关闭后需手动点「打开 Harness」启动")}</small></span>
-            <input
-              type="checkbox"
-              role="switch"
-              checked={settings.autoLaunch}
-              onChange={event => setDraft({ ...settings, autoLaunch: event.target.checked })}
-            />
-          </label>
         </section>
         )}
 
@@ -4099,8 +4301,17 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
-            <div><h2 id="download-settings">{t("运行时来源")}</h2><p>{t("两项留空表示使用 APK 内置的运行时（官方构建即内置，可离线安装）；填写清单地址与 SHA-256 则改为从该来源下载，两项必须成对。")}</p></div>
+            <div><h2 id="download-settings">{t("运行时与设备 Shell")}</h2><p>{t("装、启停、重置在「Ubuntu 运行时」；Shizuku 授权与 AI Shell 在「设备 Shell 设置」。这一页只管它们从哪来。")}</p></div>
           </div>
+          <div className="settings-inline-actions">
+            <button className="button button-secondary" type="button" onClick={onOpenEnvironment} disabled={busy !== null}>
+              <CloudDownload size={18} />{t("Ubuntu 运行时")}
+            </button>
+            <button className="button button-secondary" type="button" onClick={onOpenDeviceShell} disabled={busy !== null}>
+              <SquareTerminal size={18} />{t("设备 Shell 设置")}
+            </button>
+          </div>
+          <p className="settings-note">{t("清单两项留空表示使用 APK 内置的运行时（官方构建即内置，可离线安装）；填写清单地址与 SHA-256 则改为从该来源下载，两项必须成对。")}</p>
           <label className="field">
             <span>{t("运行时清单地址")}</span>
             <input
@@ -4136,7 +4347,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <section className="settings-section" aria-labelledby="terminal-settings">
           <div className="section-title">
             <span className="section-icon"><SquareTerminal size={19} /></span>
-            <div><h2 id="terminal-settings">{t("终端")}</h2><p>{t("应用内终端的显示方式")}</p></div>
+            <div><h2 id="terminal-settings">{t("界面")}</h2><p>{t("整个应用壳子的字号与显示方式")}</p></div>
           </div>
           <label className="range-field">
             <span><strong>{t("字号")}</strong><small>{settings.terminalFontSize}px</small></span>
@@ -4268,34 +4479,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             </div>
           )}
         </section>
-        )}
-
-        {page === 'runtime' && (
-        <section className="settings-section" aria-labelledby="harness-permission-settings">
-          <div className="section-title">
-            <span className="section-icon"><ShieldCheck size={19} /></span>
-            <div><h2 id="harness-permission-settings">{t("Harness 启动权限")}</h2><p>{t("更改后保存设置；正在运行的 Harness 会自动重启，进行中的任务会中断。")}</p></div>
-          </div>
-          <label className="field">
-            <span>{t("启动默认权限")}</span>
-            <select value={settings.harnessPermissionMode ?? 'workspace-write'} disabled={busy !== null}
-              onChange={event => setDraft({ ...settings, harnessPermissionMode: validateHarnessPermissionMode(event.target.value) })}>
-              <option value="workspace-write">{t("工作区沙箱（workspace-write）")}</option>
-              <option value="danger-full-access">{t("兼容模式，无沙箱（danger-full-access）")}</option>
-            </select>
-          </label>
-          <p className="settings-note">{t("此项设置启动默认值；Harness 内保存的默认权限和已有会话权限优先。旧会话仍报错时，在该会话输入 /permission danger-full-access。")}</p>
-          {settings.harnessPermissionMode === 'danger-full-access' && (
-            <div className="inline-alert warning" role="alert"><AlertTriangle size={19} /><div>
-              <strong>{t("兼容模式会降低隔离能力")}</strong>
-              <span>{t("danger-full-access 会关闭 dsh 文件系统沙箱和命令审批。Android 应用沙箱仍在；PRoot 不提供额外的内核隔离。")}</span>
-            </div></div>
-          )}
-        </section>
-        )}
-
-        {page === 'runtime' && (
-        <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
         )}
 
         {page === 'device-shell' && (
@@ -4853,15 +5036,17 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           </a>
         </section>
 
+        <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
+
         {/* 设备能力清单：从版本管理页挪过来，回答「这台机器现在能做什么」。 */}
         <DeviceCapabilityCard />
         </>
         )}
 
         {(page === 'models' || page === 'runtime' || page === 'terminal') && (
-        <button className="button button-primary save-button" type="submit" disabled={busy !== null}>
-          {busy === 'save-settings' ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
-          {t("保存设置")}</button>
+        <button className="button button-primary save-button" type="submit" disabled={busy !== null} aria-label={t("保存设置")}>
+          {busy === 'save-settings' ? <Loader2 className="spin" size={18} /> : autoSaved ? <Check size={18} /> : <Save size={18} />}
+          {autoSaved ? t("已自动保存") : t("保存设置")}</button>
         )}
       </form>
     </div>
@@ -5055,6 +5240,17 @@ function UpdateDialog({ busy, version, onCancel, onConfirm }: UpdateDialogProps)
 export function App() {
   const language = useLanguage()
   useEffect(() => { document.documentElement.lang = language ?? 'zh-CN' }, [language])
+  /**
+   * 输入法弹起时把界面整体让出被遮挡的高度（见 [observeKeyboardInset]）。
+   *
+   * 让位写成一个 CSS 变量而不是量某个输入框：终端页、设置页、对话框里的输入框都靠
+   * `.app-shell` 的这条下内边距一起抬起来，输入区最下端就贴在输入法框上沿。
+   */
+  useEffect(() => observeKeyboardInset(
+    window.visualViewport ?? undefined,
+    inset => { document.documentElement.style.setProperty('--keyboard-inset', `${inset}px`) },
+    () => window.innerHeight,
+  ), [])
   const [activeView, setActiveViewState] = useState<AppView>(ROOT_VIEW)
   /**
    * 当前视图的同步真值：导航与历史回退都先改它再改状态。
@@ -5068,6 +5264,13 @@ export function App() {
   const previousViewRef = useRef<AppView | null>(null)
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME)
   const [settings, setSettings] = useState<RuntimeSettings | null>(null)
+  /**
+   * 主题页的「字号」管整个应用壳子：设置页、对话页与应用内终端一起缩放。
+   * dsh 自己界面的字号仍由 dsh 自己设置，这里不碰它。
+   */
+  useEffect(() => {
+    applyShellFontScale(settings?.terminalFontSize ?? SHELL_FONT_BASELINE_PX)
+  }, [settings?.terminalFontSize])
   const [settingsReadStatus, setSettingsReadStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
   const settingsReadRevision = useRef(0)
   /**
@@ -5185,6 +5388,13 @@ export function App() {
   const notify = useCallback((message: string, tone: NoticeTone = 'info') => {
     noticeId.current += 1
     setNotice({ id: noticeId.current, message, tone })
+    if (tone === 'success') {
+      triggerHaptic('success')
+    } else if (tone === 'error') {
+      triggerHaptic('error')
+    } else {
+      triggerHaptic('light')
+    }
   }, [])
 
   const terminalError = useCallback((message: string) => notify(message, 'error'), [notify])
@@ -5398,6 +5608,61 @@ export function App() {
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
+
+  /**
+   * 移动端屏幕左边缘右滑返回手势（Edge Swipe Back）：
+   * 在非根视图（非 conversation）时，若触点从屏幕最左边缘（<= 30px）起手，
+   * 且向右滑动超过 75px 且纵向偏差较小时，触发返回上一级并伴随轻微触感振动。
+   */
+  useEffect(() => {
+    if (activeView === ROOT_VIEW || resetOpen || pendingInstall !== null || onboardingOpen) return
+
+    let startX = 0
+    let startY = 0
+    let tracking = false
+
+    const handleTouchStart = (event: TouchEvent) => {
+      if (event.touches.length !== 1) return
+      const touch = event.touches[0]
+      if (touch.clientX <= 30) {
+        startX = touch.clientX
+        startY = touch.clientY
+        tracking = true
+      }
+    }
+
+    const handleTouchEnd = (event: TouchEvent) => {
+      if (!tracking) return
+      tracking = false
+      if (event.changedTouches.length === 0) return
+      const touch = event.changedTouches[0]
+      const deltaX = touch.clientX - startX
+      const deltaY = Math.abs(touch.clientY - startY)
+
+      if (deltaX > 75 && deltaY < deltaX * 0.75) {
+        triggerHaptic('light')
+        if (activeView === 'settings') {
+          backToView('conversation')
+        } else {
+          backToView('settings')
+        }
+      }
+    }
+
+    const handleTouchCancel = () => {
+      tracking = false
+    }
+
+    window.addEventListener('touchstart', handleTouchStart, { passive: true })
+    window.addEventListener('touchend', handleTouchEnd, { passive: true })
+    window.addEventListener('touchcancel', handleTouchCancel, { passive: true })
+
+    return () => {
+      window.removeEventListener('touchstart', handleTouchStart)
+      window.removeEventListener('touchend', handleTouchEnd)
+      window.removeEventListener('touchcancel', handleTouchCancel)
+    }
+  }, [activeView, backToView, resetOpen, pendingInstall, onboardingOpen])
 
   /**
    * 设置草稿的作用范围就是「设置区」（设置首页与五个二级页）。
@@ -5943,13 +6208,12 @@ export function App() {
 
   useEffect(() => {
     /*
-     * 自动启动必须**等设置读完**再判断。
-     *
-     * 旧写法是「设置非空且关着才返回」，于是设置还没回来（`settings === null`）时这一条形同放行：
-     * 启动时运行时状态往往比设置先到，运行时装好的用户明明关掉了自动启动，仍会被拉起来。
-     * 现在只在明确读到 `autoLaunch === true` 时才启动；读不到或读失败一律不启动——
-     * 「没读到设置」不是「用户要我启动」，宁可让用户自己点一下。
+     * 自动启动必须等基础设置读完再判断。旧版本曾提供「自动启动 Harness」开关，
+     * 但它会让应用打开后的入口分裂成两套，现已移除；保留旧字段只为兼容已安装版本，
+     * 不再影响启动行为。设置读取失败时仍不启动，避免把未知状态当成用户意图。
      */
+    // Android 原生存储层已把该字段固定为 true；保留读取条件是为了兼容浏览器预览和旧版桥接，
+    // 防止它们在没有真实运行时的情况下误触发启动流程。
     if (settings === null || settings.autoLaunch !== true) return
     if (language === null || onboardingOpen || booting || appUpdateReminder.checking || appUpdateReminder.available !== null || activeView !== 'conversation' || busy !== null || autoLaunchAttempted.current) return
     if (runtime.updateAvailable) return
@@ -6101,6 +6365,7 @@ export function App() {
   const confirmReset = useCallback(() => {
     // 重置同样会停掉正在运行的运行时：这也是用户在本应用里主动发起的停止。
     stopRequested.current = true
+    triggerHaptic('warning')
     void run('reset', async () => {
       const next = await runtimeBridge.reset('RESET_RUNTIME')
       setRuntime(next)
@@ -6118,6 +6383,7 @@ export function App() {
       // 保存成功：草稿以后端落盘值为准重建（含清空 API Key 输入框）并解除「未保存」标记。
       // 不做这一步的话，旧草稿会在下一次后台刷新时把刚保存的值反向覆盖回去。
       resyncSettingsDraft(saved)
+      triggerHaptic('success')
       // 落盘成功后，状态查询失败不能被当成保存失败；三项查询互不阻塞。
       const [runtimeResult, keepAliveResult, overlayResult] = await Promise.allSettled([
         runtimeBridge.getState(), runtimeBridge.getKeepAliveState(), readOverlayBall(),
@@ -6520,6 +6786,7 @@ export function App() {
           loadUpdate={loadAppUpdate}
           downloadUpdate={downloadAppUpdate}
           installUpdate={installAppUpdate}
+          subscribeUpdateProgress={runtimeBridge.addAppUpdateProgressListener}
           openInstallSettings={openAppUpdateInstallSettings}
           reminderEnabled={appUpdateReminder.enabled}
           onReminderEnabledChange={appUpdateReminder.setEnabled}
@@ -6533,7 +6800,7 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={launchHarness} onLaunchConfirmed={launchHarnessConfirmed} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

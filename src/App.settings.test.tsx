@@ -262,6 +262,21 @@ describe('悬浮球设置', () => {
     expect(screen.getByRole('slider', { name: /字号/ })).toHaveValue('20')
   })
 
+  it('主题页的字号落到整个壳子的根字号上', async () => {
+    document.documentElement.style.removeProperty('--app-font-scale')
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('主题')
+    // 夹具默认字号就是基准值，挂载后应写回中性系数 1：不设置的人看到的是原来的界面。
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue('--app-font-scale')).toBe('1'))
+
+    fireEvent.change(screen.getByRole('slider', { name: /字号/ }), { target: { value: '21' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
+
+    // 21 / 14 = 1.5：字号一动，壳子里以 rem 写的字号整体跟着变。
+    await waitFor(() => expect(document.documentElement.style.getPropertyValue('--app-font-scale')).toBe('1.5'))
+  })
+
   it('悬浮球保存成功但状态复核失败时仍显示已保存的开关值', async () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
@@ -509,5 +524,61 @@ describe('外观设置接线', () => {
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe('dark'))
     // 持久化也要落：否则下次打开又回到默认。
     expect(window.localStorage.getItem('dsh-mobile-theme-v1')).toBe('dark')
+  })
+})
+
+/**
+ * 后台页只管「运行时从哪来」，装/启停/重置与设备命令各在自己的独立页；
+ * 入口放在这里，才不会让人为了找运行时页翻遍设置首页。
+ */
+describe('后台页的运行时与设备 Shell 入口', () => {
+  beforeEach(beforeEachAppTest)
+
+  it('给出两个入口，并说明独立页各自管什么', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('后台')
+    expect(await screen.findByRole('heading', { name: '运行时与设备 Shell' })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Ubuntu 运行时' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '设备 Shell 设置' })).toBeEnabled()
+    // 清单字段还在这一页：入口只搬导航，不改下载来源这条能力。
+    expect(screen.getByText('运行时清单地址')).toBeVisible()
+  })
+
+  it('两个入口分别进入运行时页与设备 Shell 页', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('后台')
+    fireEvent.click(screen.getByRole('button', { name: 'Ubuntu 运行时' }))
+    expect(await screen.findByRole('heading', { name: 'Ubuntu 运行时' })).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
+    await openSettingsPage('后台')
+    fireEvent.click(screen.getByRole('button', { name: '设备 Shell 设置' }))
+    expect(await screen.findByRole('heading', { name: '设备 Shell 设置' })).toBeVisible()
+  })
+
+  it('更改设置后无需点击保存按钮，经过防抖自动保存并展示已自动保存徽标', async () => {
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+
+    await openSettingsPage('后台')
+    const toggle = await screen.findByRole('switch', { name: /悬浮球/ })
+    expect(toggle).not.toBeChecked()
+
+    fireEvent.click(toggle)
+    expect(toggle).toBeChecked()
+
+    // 无需手动点击「保存设置」按钮，等待防抖自动落盘
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ overlayBallEnabled: true }),
+    ), { timeout: 2000 })
+
+    // 界面显示自动保存状态（顶部徽标与操作态均呈现已保存）
+    const badges = await screen.findAllByText('已自动保存')
+    expect(badges.length).toBeGreaterThanOrEqual(1)
   })
 })

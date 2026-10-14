@@ -240,7 +240,9 @@
  * 整个外壳才会跟着放大。
  */
 html {
-  font-size: 100%;
+  /* 壳字号（主题页的「字号」）只改这一个数：全站字号用 rem 写，根字号一动就整体缩放。
+     默认 16px × 1 = 16px，与改动前逐像素一致（见 src/shellFont.ts）。 */
+  font-size: calc(16px * var(--app-font-scale, 1));
 }
 
 * {
@@ -332,6 +334,9 @@ button:disabled {
   grid-template-rows: minmax(0, 1fr);
   width: 100%;
   height: 100dvh;
+  /* 输入法弹起时由 src/keyboardInset.ts 写入真实高度；没有读到就当作 0，界面不动。
+     让位写在壳子上而不是某个输入框：终端、设置页、对话框都一起抬起来。 */
+  padding-bottom: var(--keyboard-inset, 0px);
   overflow: hidden;
 }
 .app-background { position: fixed; inset: 0; z-index: -1; overflow: hidden; background: var(--bg); }
@@ -1055,8 +1060,8 @@ button:disabled {
 
 .workspace-dialog { display: flex; flex-direction: column; width: min(100%, 680px); min-height: min(420px, calc(100dvh - 32px)); padding: 0; overflow: hidden; }
 .workspace-dialog-header { display: grid; grid-template-columns: 42px minmax(0, 1fr) 44px 44px; align-items: center; gap: 8px; min-height: 70px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
-.workspace-dialog-header h2 { margin: 0; font-size: 17px; }
-.workspace-dialog-header p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+.workspace-dialog-header h2 { margin: 0; font-size: 1.0625rem; }
+.workspace-dialog-header p { margin: 3px 0 0; color: var(--muted); font-size: 0.75rem; }
 .workspace-dialog-icon { display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--radius-inner); color: var(--blue); background: var(--blue-soft); }
 .workspace-dialog-body { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
 .workspace-file-list { display: grid; }
@@ -1066,14 +1071,14 @@ button:disabled {
 .workspace-file-copy { display: grid; min-width: 0; gap: 3px; }
 .workspace-file-copy strong,
 .workspace-file-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-file-copy strong { font-size: 13px; font-weight: var(--weight-semibold); }
-.workspace-file-copy small { color: var(--muted); font-size: 11px; }
+.workspace-file-copy strong { font-size: 0.8125rem; font-weight: var(--weight-semibold); }
+.workspace-file-copy small { color: var(--muted); font-size: 0.6875rem; }
 .workspace-file-actions { display: flex; flex: none; gap: 4px; }
 .workspace-file-actions .icon-button { width: 44px; height: 44px; }
 .workspace-file-actions .workspace-delete { color: var(--red); }
 .workspace-empty { display: grid; place-items: center; align-content: center; gap: 8px; min-height: 300px; padding: 32px; color: var(--muted); text-align: center; }
-.workspace-empty strong { color: var(--ink); font-size: 14px; }
-.workspace-empty span { font-size: 12px; }
+.workspace-empty strong { color: var(--ink); font-size: 0.875rem; }
+.workspace-empty span { font-size: 0.75rem; }
 
 .terminal-screen {
   display: flex;
@@ -1126,8 +1131,10 @@ button:disabled {
   position: relative;
   flex: 1;
   /* 刻意保留 px：终端容器是外部尺寸，行数由 xterm 自己的字号（设置项
-     terminalFontSize）决定，跟着根字号涨只会让可视行数忽多忽少。 */
-  min-height: 410px;
+     terminalFontSize）决定，跟着根字号涨只会让可视行数忽多忽少。
+     键盘弹起时按遮挡高度放宽下限：可视区本来就不到 410px，死守它只会把最后
+     几行（正在输入的那一行）顶到键盘下面。 */
+  min-height: max(160px, calc(410px - var(--keyboard-inset, 0px)));
   overflow: hidden;
   border: 1px solid var(--terminal-line);
   border-radius: var(--radius-card);
@@ -1253,6 +1260,62 @@ button:disabled {
   box-shadow: var(--shadow-card);
 }
 
+/*
+ * 设置首页的功能词搜索。
+ *
+ * 输入框自己不自带边框（这一块整体就是输入框），焦点态因此必须画在容器上：
+ * 不做 focus-within 高亮，键盘用户看不出焦点在哪一格。
+ */
+.settings-search {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.settings-search:focus-within {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent);
+}
+
+.settings-search > svg {
+  color: var(--muted);
+}
+
+.settings-search input {
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+}
+
+.settings-search input:focus {
+  outline: none;
+}
+
+.settings-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--surface-muted);
+  cursor: pointer;
+}
+
+.settings-search-clear:hover {
+  color: var(--ink);
+}
+
 .settings-directory {
   display: grid;
   gap: 14px;
@@ -1268,7 +1331,7 @@ button:disabled {
   margin: 0;
   padding: 13px 16px 5px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
   letter-spacing: 0.03em;
 }
@@ -1287,6 +1350,8 @@ button:disabled {
   color: var(--ink);
   background: transparent;
   text-align: left;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 68px;
 }
 
 .management-row:last-child {
@@ -1367,6 +1432,19 @@ button:disabled {
   border-radius: var(--radius-card);
   background: var(--surface);
   box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 5%, transparent);
+}
+
+/*
+ * 一张卡片最多占两屏（`vh` 就是手机上看得见的那块）。
+ *
+ * 独立设置页里最长的几张卡会占很多屏幕空间，因此将卡片高度限制为两屏并在卡片内滚动。
+ * 滚动到卡片边界时必须允许浏览器把后续手势交给外层页面，否则用户会觉得页面无法下拉。
+ */
+.settings-section,
+.settings-form > .settings-subsection {
+  max-height: 200vh;
+  overflow-y: auto;
+  overscroll-behavior-y: auto;
 }
 
 .section-title {
@@ -1628,9 +1706,26 @@ button:disabled {
   align-items: flex-end;
   justify-content: center;
   overflow-y: auto;
-  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom) + var(--keyboard-inset, 0px));
   background: var(--scrim);
   overscroll-behavior: contain;
+  animation: dialogBackdropFade 0.18s ease-out;
+}
+
+@keyframes dialogBackdropFade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes dialogSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .dialog {
@@ -1643,6 +1738,45 @@ button:disabled {
   border-radius: var(--radius-card);
   background: var(--surface);
   box-shadow: var(--shadow-dialog);
+  animation: dialogSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog-backdrop,
+  .dialog {
+    animation: none;
+  }
+}
+
+.auto-save-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  transition: all 0.2s ease;
+}
+
+.auto-save-pill.success {
+  background: var(--green-soft);
+  color: var(--green);
+  border: 1px solid var(--green-line);
+}
+
+.auto-save-pill.saving {
+  background: var(--surface-muted);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.heading-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .dialog-close {
@@ -1810,6 +1944,24 @@ button:disabled {
   background: var(--toast-bg);
   box-shadow: var(--shadow-toast);
   font-size: 0.8125rem;
+  animation: toastSlideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
 }
 
 .toast-success > svg {
@@ -2381,6 +2533,16 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   white-space: nowrap;
 }
 
+/*
+ * 「文件管理」页现在是一张卡（「外部工作区」）里分两块：目录浏览与搬运、目录清单。
+ * 两块之间只画一条分隔线，不再各占一张卡 —— 用户要的是一个口径，不是两个功能。
+ */
+.files-screen .settings-subsection {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
 .mailbox-root-tabs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2800,6 +2962,8 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   border: 1px solid var(--line);
   border-radius: var(--radius-inner);
   background: var(--surface-hover);
+  content-visibility: auto;
+  contain-intrinsic-size: 0 76px;
 }
 
 .storage-dir-head {
@@ -2870,8 +3034,10 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 @media (pointer: coarse), (max-width: 560px) {
   .compact-button, .custom-providers .icon-button, .terminal-copy { min-height: 44px; }
   .custom-providers .icon-button { width: 44px; flex-basis: 44px; }
-  .field input, .field select, .mono-input, .session-search input { font-size: 1rem !important; }
+  .field input, .field select, .mono-input, .session-search input, .settings-search input { font-size: 1rem !important; }
   .field input, .field select { min-height: 48px; }
+  .settings-search { min-height: 48px; padding-top: 2px; padding-bottom: 2px; }
+  .settings-search input { min-height: 44px; min-width: 0; }
   .launch-actions > .button { flex: 1 1 auto; }
   .save-button { width: 100%; min-height: 48px; }
   .section-title p, .settings-note { line-height: 1.65; }

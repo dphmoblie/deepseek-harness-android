@@ -262,6 +262,8 @@ class VirtualScreenActivity : Activity() {
                     val frame = VirtualScreenFrame(this@VirtualScreenActivity).also {
                         it.preview.report = { text -> status.text = text }
                         it.installResize(pageResizeGesture)
+                        // 与小窗同一排芯片：画面上的出口位置与样式两处一致（本页的其余控制仍在页面上）。
+                        it.installControls(VirtualScreenChrome.page(onBack = { finish() }))
                         // 控制栏在 content 外；此处仅放画面，保留与小窗共用的缩放与坐标换算。
                         it.layoutParams = pagePreviewParams(pageWidthPreferencePx())
                         content.addView(it)

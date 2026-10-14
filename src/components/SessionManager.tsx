@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, MessageCircle, Plus, Search, Trash2 } from 'lucide-react'
+import { ArrowLeft, MessageCircle, Plus, Search, Trash2, X } from 'lucide-react'
+import { triggerHaptic } from '../platform/haptics'
 import { t, useLanguage } from '../i18n'
 import { runtimeBridge } from '../platform/native'
 import type { RuntimeSessionListReason, RuntimeSessionSummary } from '../platform/types'
@@ -122,6 +123,7 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
   }, [query, sessions])
 
   const createSession = (): void => {
+    triggerHaptic('medium')
     const id = `local-${Date.now().toString(36)}`
     const number = sessions.length + 1
     setLocalSessions(current => [{ id, title: t('新会话 {0}', number), local: true }, ...current])
@@ -129,6 +131,7 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
   }
 
   const removeSession = (id: string): void => {
+    triggerHaptic('warning')
     // 只从**本地占位条目**里移除：真实会话不在这条通道的删除范围内，界面也不会假装删掉了。
     setLocalSessions(current => current.filter(session => session.id !== id))
   }
@@ -161,7 +164,24 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
         <label className="session-search">
           <Search size={17} aria-hidden="true" />
           <span className="sr-only">{t('搜索会话')}</span>
-          <input value={query} onChange={event => setQuery(event.target.value.slice(0, 80))} placeholder={t('搜索会话')} maxLength={80} />
+          <input
+            value={query}
+            onChange={event => setQuery(event.target.value.slice(0, 80))}
+            onCompositionEnd={event => setQuery(event.currentTarget.value.slice(0, 80))}
+            placeholder={t('搜索会话')}
+            maxLength={80}
+            autoComplete="off"
+          />
+          {query !== '' && (
+            <button
+              type="button"
+              className="session-clear-btn"
+              onClick={() => setQuery('')}
+              aria-label={t('清空查找词')}
+            >
+              <X size={15} />
+            </button>
+          )}
         </label>
         <span className="session-count">{t('{0} 个会话', sessions.length)}</span>
       </div>

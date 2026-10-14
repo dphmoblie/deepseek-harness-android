@@ -36,8 +36,6 @@ data class DeviceBridgeAccess(val port: Int, val token: String)
 internal data class ProotArgvInput(
     val runnerPath: String,
     val rootPath: String,
-    /** `DSH_PERMISSION_MODE` 的受控取值（[HarnessPermissionMode.wireValue]）。 */
-    val permissionMode: String,
     val entrypoint: List<String>,
     val bindMounts: List<ProotBindMount> = emptyList(),
     /** 非空的 Harness 会话会额外注入 pid 文件路径与 Node 预载，用于识别 PRoot 退出后的残留子进程。 */
@@ -127,7 +125,6 @@ object RuntimeCommand {
             ProotArgvInput(
                 runnerPath = store.launchRunnerFile.absolutePath,
                 rootPath = store.currentRoot.absolutePath,
-                permissionMode = store.harnessPermissionMode().wireValue,
                 entrypoint = entrypoint,
                 bindMounts = bindMounts,
                 harnessPidFilePath = store.harnessPidFile.absolutePath.takeIf { harnessSession },
@@ -141,7 +138,7 @@ object RuntimeCommand {
      * 组装 argv 的**纯函数**本体。
      *
      * 安全校验点：`env -i` 之后注入的每一项要么是固定常量，要么是**路径**或受控枚举
-     * （端口、权限模式）。秘密取值一律经由 [RuntimeSecretDelivery] 描述的访客文件传入，
+     * （端口）。秘密取值一律经由 [RuntimeSecretDelivery] 描述的访客文件传入，
      * 本函数只输出该文件的路径；回归单测用哨兵取值固定这一点。
      *
      * 包装脚本只在**确实有秘密要投递**时加入：没有秘密的启动（探测、自检、
@@ -166,8 +163,6 @@ object RuntimeCommand {
         add("LOGNAME=root")
         add("LANG=C.UTF-8")
         add("TERM=xterm-256color")
-        // 安全校验点：来源是持久化枚举；env -i 后显式注入，父进程环境不能改变此选择。
-        add("DSH_PERMISSION_MODE=${input.permissionMode}")
         add("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
         // 端口不是秘密：同 uid 的访客本来就能从 /proc/net/tcp 看到它。
         input.deviceBridgePort?.let { add("DSH_DEVICE_BRIDGE_PORT=$it") }

@@ -27,7 +27,7 @@ describe('投递区', () => {
 
     // 档位与原因都如实显示：不把「需要授权」写成「故障」。
     expect(await screen.findByText('需要授权')).toBeVisible()
-    expect(screen.getByText('投递区不可用')).toBeVisible()
+    expect(screen.getByText('搬运不可用')).toBeVisible()
     expect(screen.getByText(/尚未授予「所有文件访问」/)).toBeVisible()
 
     // 两个路径固定写在界面里，用户照着往 inbox 放文件。
@@ -189,7 +189,7 @@ describe('投递区', () => {
     await waitFor(() => expect(bridge.getMailboxState).toHaveBeenCalledTimes(1))
     await openFilesPage()
 
-    expect(await screen.findByText('无法读取投递区状态，请重试')).toBeVisible()
+    expect(await screen.findByText('无法读取搬运状态，请重试')).toBeVisible()
     expect(screen.getByText('未读取')).toBeVisible()
     // 状态未知时搬运按钮保持禁用：宁可让用户先重试，也不要出现「按钮可点但状态未知」。
     expect(screen.getByRole('button', { name: /导入到工作区/ })).toBeDisabled()

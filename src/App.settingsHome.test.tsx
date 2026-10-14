@@ -118,7 +118,7 @@ describe('设置首页：分组与分类筛选', () => {
     // 进得去，而且是一个浏览器：标题是这一页自己的，投递区与共享目录都在里面。
     expect(await screen.findByRole('heading', { level: 1, name: '文件管理' })).toBeVisible()
     expect(screen.getByRole('tablist')).toBeVisible()
-    expect(screen.getByRole('region', { name: '共享目录' })).toBeVisible()
+    expect(screen.getByRole('region', { name: '目录' })).toBeVisible()
   })
 
   it('切到英文后整屏入口都是英文', async () => {
@@ -155,5 +155,31 @@ describe('设置首页：分组与分类筛选', () => {
     const filesEntry = within(filesGroup).getByRole('button', { name: /File management/ })
     expect(filesEntry).toBeVisible()
     expect(filesEntry.textContent ?? '').not.toMatch(/[\u4e00-\u9fff]/)
+  })
+
+  it('按功能词搜索过滤入口，支持清空及空结果提示', async () => {
+    await openSettingsHome()
+
+    const searchInput = screen.getByRole('searchbox', { name: '按功能词查找入口' })
+    expect(searchInput).toBeVisible()
+
+    // 搜索「主题」：应只保留外观与显示分组，隐藏其他分组如模型连接
+    fireEvent.change(searchInput, { target: { value: '主题' } })
+    expect(screen.getByRole('status')).toHaveTextContent('找到 1 个匹配的入口')
+    expect(screen.getByRole('region', { name: '外观与显示' })).toBeVisible()
+    expect(screen.getByRole('button', { name: /主题/ })).toBeVisible()
+    expect(screen.queryByRole('region', { name: '模型连接' })).toBeNull()
+
+    // 点击清空按钮：恢复全部入口
+    const clearButton = screen.getByRole('button', { name: '清空查找词' })
+    fireEvent.click(clearButton)
+    expect(searchInput).toHaveValue('')
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByRole('region', { name: '模型连接' })).toBeVisible()
+
+    // 输入无匹配词：显示空提示
+    fireEvent.change(searchInput, { target: { value: '不存在的设置项xyz' } })
+    expect(screen.getByRole('status')).toHaveTextContent('没有匹配的入口')
+    expect(screen.queryByRole('region', { name: '外观与显示' })).toBeNull()
   })
 })

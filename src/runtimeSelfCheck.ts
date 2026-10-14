@@ -35,7 +35,6 @@
  * 本模块是纯函数、不依赖 React 与桥接，便于单测。
  */
 
-import { validateHarnessPermissionMode, type HarnessPermissionMode } from './harnessPermissionMode'
 
 /** 检查项顺序：与原生侧固定一致，界面按这个顺序展示。 */
 export const SELF_CHECK_IDS = [
@@ -131,8 +130,6 @@ export interface SelfCheckItem {
 
 export interface SelfCheckCheckReport {
   operation: 'check'
-  /** 自检时的启动默认值，不代表任何已有会话的实际权限；旧桥接可省略。 */
-  harnessPermissionMode?: HarnessPermissionMode
   /** 运行时所在设备的可用空间（字节）；界面用 [formatBytes] 显示。 */
   availableBytes: number
   /** 访客里 dsh 的版本号；读不到时为 null。 */
@@ -484,7 +481,6 @@ export function validateSelfCheckReport(value: unknown): SelfCheckReport {
   checks.sort((left, right) => (SELF_CHECK_ID_ORDER.get(left.id) ?? 0) - (SELF_CHECK_ID_ORDER.get(right.id) ?? 0))
   return {
     operation: 'check', availableBytes, dshVersion, webViewVersion, checks,
-    ...(record.harnessPermissionMode === undefined ? {} : { harnessPermissionMode: validateHarnessPermissionMode(record.harnessPermissionMode) }),
   }
 }
 

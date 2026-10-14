@@ -7,6 +7,7 @@ import { Terminal } from '@xterm/xterm'
 // （Vite 会为入口的静态依赖生成 modulepreload），首屏会白下 ~290 KB 的终端代码。
 import '@xterm/xterm/css/xterm.css'
 import { CheckCircle2, Copy, Loader2 } from 'lucide-react'
+import { triggerHaptic } from '../platform/haptics'
 import type { RuntimeBridge, TerminalChunk, TerminalExit, TerminalKind } from '../platform/types'
 
 interface TerminalPanelProps {
@@ -117,9 +118,11 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
     if (text === '') return
     try {
       await navigator.clipboard.writeText(text)
+      triggerHaptic('success')
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     } catch {
+      triggerHaptic('error')
       onError(t("复制失败，请长按选择文本后复制"))
     }
   }, [onError])
