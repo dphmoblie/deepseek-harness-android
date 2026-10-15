@@ -175,3 +175,29 @@ test('插件数据目录清单在宿主与访客脚本两侧一致', async () =>
   assert.ok(host.length >= 4, `宿主侧只解析出 ${host.length} 个数据目录，解析规则可能已失效`)
   assert.deepEqual(host, guest, `宿主 ${host.join('、')} 与访客 ${guest.join('、')} 不一致`)
 })
+
+const ACCESSIBILITY_POLICY = 'android/app/src/main/java/io/deepseekharness/mobile/accessibility/AccessibilityAutomationPolicy.kt'
+const VALIDATION = 'src/platform/validation.ts'
+const AUTOMATION_RULE = 'android/app/src/main/java/io/deepseekharness/mobile/accessibility/AutomationRule.kt'
+
+test('无障碍应用包名校验正则在原生与前端两侧一致', async () => {
+  const policyText = await source(ACCESSIBILITY_POLICY)
+  const validationText = await source(VALIDATION)
+  const kotlinPattern = /val packagePattern = Regex\("([^"]+)"\)/u.exec(policyText)?.[1]
+  const tsPattern = /const PACKAGE_NAME_PATTERN = \/\^([^/]+)\$\/u/u.exec(validationText)?.[1]
+  assert.ok(kotlinPattern, `${ACCESSIBILITY_POLICY} 里找不到 packagePattern`)
+  assert.ok(tsPattern, `${VALIDATION} 里找不到 PACKAGE_NAME_PATTERN`)
+  const normalizedKotlin = kotlinPattern.replace(/\\\\/gu, '\\')
+  assert.equal(normalizedKotlin, `^${tsPattern}$`, '原生与前端包名正则模式必须严格一致')
+})
+
+test('自动化规则标识正则在原生与前端两侧一致', async () => {
+  const ruleText = await source(AUTOMATION_RULE)
+  const validationText = await source(VALIDATION)
+  const kotlinRuleId = /val RULE_ID_PATTERN = Regex\("([^"]+)"\)/u.exec(ruleText)?.[1]
+  const tsMatch = /assertAccessibilityRuleId[\s\S]*?!(\/\^[^/]+\$\/)\.test\(value\)/u.exec(validationText)?.[1]
+  assert.ok(kotlinRuleId, `${AUTOMATION_RULE} 里找不到 RULE_ID_PATTERN`)
+  assert.ok(tsMatch, `${VALIDATION} 里找不到规则 ID 校验正则`)
+  assert.equal(kotlinRuleId, '^[A-Za-z0-9._-]{1,64}$', '原生规则 ID 必须是 1~64 位标识符')
+  assert.equal(tsMatch, '/^[A-Za-z0-9._-]{1,64}$/', '前端规则 ID 必须与原生 1~64 位标识符完全一致')
+})
