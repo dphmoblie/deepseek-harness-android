@@ -5108,6 +5108,7 @@ type PermissionGuide =
   | { kind: 'notification-permission' }
   | { kind: 'background-blocked'; feature: 'keepAlive' | 'overlayBall' }
   | { kind: 'overlay-internal' }
+  | { kind: 'shizuku-permission' }
 
 /**
  * 把悬浮球服务的失败令牌映射成指引；未知 / 缺省一律按「厂商后台拦截」处理——
@@ -5126,6 +5127,7 @@ interface PermissionGuideDialogProps {
   onOpenOverlaySettings: () => void
   onOpenNotificationSettings: () => void
   onOpenApplicationSettings: () => void
+  onOpenShizuku: () => void
 }
 
 function PermissionGuideDialog({
@@ -5135,14 +5137,17 @@ function PermissionGuideDialog({
   onOpenOverlaySettings,
   onOpenNotificationSettings,
   onOpenApplicationSettings,
+  onOpenShizuku,
 }: PermissionGuideDialogProps) {
   const title = guide.kind === 'overlay-permission'
     ? t("悬浮球需要悬浮窗权限")
     : guide.kind === 'notification-permission'
       ? t("后台保持需要通知权限")
-      : guide.kind === 'background-blocked'
-        ? t("前台服务被系统拦截")
-        : t("悬浮球启动失败")
+      : guide.kind === 'shizuku-permission'
+        ? t("Shizuku 尚未授权")
+        : guide.kind === 'background-blocked'
+          ? t("前台服务被系统拦截")
+          : t("悬浮球启动失败")
   return (
     <div className="dialog-backdrop" role="presentation" onPointerDown={event => { if (event.target === event.currentTarget && !busy) onClose() }}>
       <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="permission-guide-title">
@@ -5154,6 +5159,9 @@ function PermissionGuideDialog({
         )}
         {guide.kind === 'notification-permission' && (
           <p>{t("Android 13 及以上，前台服务运行时必须显示一条常驻通知；通知权限被关闭时后台保持无法启动。请在系统设置中允许本应用发送通知，返回后重新打开开关。")}</p>
+        )}
+        {guide.kind === 'shizuku-permission' && (
+          <p>{t("需要先授权 Shizuku，AI 才能通过它执行设备操作。请点击下方按钮打开 Shizuku 应用完成授权，返回后重新点击授权。")}</p>
         )}
         {guide.kind === 'background-blocked' && (
           <>
@@ -5191,6 +5199,11 @@ function PermissionGuideDialog({
               {guide.kind === 'background-blocked' && (
                 <button className="button button-primary" type="button" onClick={onOpenApplicationSettings} disabled={busy}>
                   <ExternalLink size={18} />{t("打开应用详情页")}
+                </button>
+              )}
+              {guide.kind === 'shizuku-permission' && (
+                <button className="button button-primary" type="button" onClick={onOpenShizuku} disabled={busy}>
+                  <ExternalLink size={18} />{t("前往授权 Shizuku")}
                 </button>
               )}
             </>
@@ -6005,7 +6018,7 @@ export function App() {
     }
   }, [applyRefreshedSettings, notify, readMailbox, readOverlayBall, setActiveView])
 
-  const run = useCallback(async (id: string, operation: () => Promise<void>, success?: string) => {
+  const run = useCallback(async (id: string, operation: () => Promise<void>, success?: string, guide?: PermissionGuide) => {
     if (busyRef.current !== null) return
     busyRef.current = id
     setBusy(id)
@@ -6014,6 +6027,9 @@ export function App() {
       if (success !== undefined) notify(success, 'success')
     } catch (error) {
       notify(errorMessage(error), 'error')
+      // 权限类操作失败只弹一条会消失的 toast 不足以让用户自助修好：
+      // 由调用方给出对应指引时，同时打开可跳转系统设置/Shizuku 的指引弹窗。
+      if (guide !== undefined) setPermissionGuide(guide)
     } finally {
       busyRef.current = null
       setBusy(null)
@@ -6404,8 +6420,12 @@ export function App() {
           latest => {
             setKeepAlive(latest)
             if (latest.keepRuntimeInBackground === true && !latest.foregroundServiceActive) {
+              // 原生侧把前台启动失败原因写进受控令牌（foregroundStartError）：通知权限提示
+              // 与通知类令牌都走通知指引；其余（foreground_declined / start_disallowed /
+              // foreground_failed）按厂商后台拦截处理。
               setPermissionGuide(
-                latest.notificationPermission === 'prompt'
+                latest.notificationPermission === 'prompt' ||
+                latest.foregroundStartError === 'notification_permission_missing'
                   ? { kind: 'notification-permission' }
                   : { kind: 'background-blocked', feature: 'keepAlive' },
               )
@@ -6456,7 +6476,7 @@ export function App() {
     void run('shizuku-permission', async () => {
       const next = await runtimeBridge.requestShizukuPermission()
       setShizuku(next)
-    }, t("Shizuku 已授权"))
+    }, t("Shizuku 已授权"), { kind: 'shizuku-permission' })
   }, [run])
 
   const connectShizuku = useCallback(() => {
@@ -6850,6 +6870,7 @@ export function App() {
           onOpenOverlaySettings={() => { setPermissionGuide(null); openOverlaySettings() }}
           onOpenNotificationSettings={() => { setPermissionGuide(null); openNotificationSettings() }}
           onOpenApplicationSettings={() => { setPermissionGuide(null); openApplicationSettings() }}
+          onOpenShizuku={() => { setPermissionGuide(null); openShizuku() }}
         />
       )}
       {pendingInstall !== null && <UpdateDialog busy={busy === 'install'} version={pendingInstall.version} onCancel={() => setPendingInstall(null)} onConfirm={confirmPendingInstall} />}

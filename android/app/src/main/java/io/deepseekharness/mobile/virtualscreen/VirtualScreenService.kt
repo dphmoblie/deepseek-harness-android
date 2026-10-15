@@ -146,7 +146,7 @@ class VirtualScreenService : Service() {
                 snapshot = value
                 action(VirtualScreenPreferences.configuration(this).put("sessionId", session).put("action", "config"))
                 audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, AuditResult.SUCCEEDED)
-            } catch (error: Exception) {
+            } catch (error: Throwable) {
                 audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, AuditResult.FAILED)
                 // 原生失败原因（调用方的 check/require 文案）直接带给界面：否则只剩一句泛化提示，真机排查无从下手。
                 val reason = error.cause?.message ?: error.message
@@ -173,7 +173,7 @@ class VirtualScreenService : Service() {
                         check(live.optString("sessionId") == session && live.optBoolean("active"))
                         snapshot = live
                     }
-                } catch (_: Exception) { lastError = "副屏已停止：授权、Shizuku 连接或副屏会话失效"; main.post { stopSelf() } }
+                } catch (_: Throwable) { lastError = "副屏已停止：授权、Shizuku 连接或副屏会话失效"; main.post { stopSelf() } }
                 if (!ending.get()) main.postDelayed(this, 800)
             }
         }
