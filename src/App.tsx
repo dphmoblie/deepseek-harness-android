@@ -1554,14 +1554,23 @@ interface SettingsHomeScreenProps {
 function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenPage, onOpenView, onStop }: SettingsHomeScreenProps) {
   /** 过滤词只活在组件里：离开设置首页即清空，下次进来不该被上次的搜索框卡住。 */
   const [query, setQuery] = useState('')
+  /** 已确认的查找词：只有点搜索图标或按回车才落地。输入过程本身不筛选——
+      移动端输入法组合中途触发筛选，列表刷新会把候选词条顶掉，搜索看起来就是「不能用」。 */
+  const [appliedQuery, setAppliedQuery] = useState('')
   const [category, setCategory] = useState<SettingsHomeGroup | 'all'>('all')
   /** 每个分组只留命中的入口；整组都没命中就连标题一起不渲染，避免空标题刷屏。 */
   const groups = SETTINGS_HOME_GROUPS
     .filter(group => category === 'all' || category === group.id)
-    .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id && matchesSettingsHomeQuery(entry, query)) }))
+    .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id && matchesSettingsHomeQuery(entry, appliedQuery)) }))
     .filter(item => item.entries.length > 0)
   const matched = groups.reduce((total, item) => total + item.entries.length, 0)
-  const searching = query.trim() !== ''
+  const searching = appliedQuery.trim() !== ''
+
+  /** 确认查找：只有这一步才动列表；查找跨分类进行，所以分类芯片同时复位。 */
+  const applySearch = (value: string): void => {
+    setAppliedQuery(value.trim())
+    setCategory('all')
+  }
 
   /** 服务行没有跳转，说明文字跟着运行状态走，所以按 id 现算；其余入口用固定说明。 */
   const hintOf = (entry: SettingsHomeEntry): string => entry.id === 'service'
@@ -1598,17 +1607,22 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
 
       <LanguageSettings />
 
-      {/* 搜索框固定在入口列表上方：入口一多，用户第一反应是找框，而不是往下翻。 */}
+      {/* 搜索框固定在入口列表上方：入口一多，用户第一反应是找框，而不是往下翻。
+          刻意不做边输边筛：输入法组合中途触发筛选会把候选词顶掉，改为点搜索图标或回车确认。 */}
       <div className="settings-search">
-        <Search size={18} aria-hidden="true" />
         <input
           type="search"
           value={query}
-          onChange={event => { setQuery(event.target.value); setCategory('all') }}
+          onChange={event => setQuery(event.target.value)}
           onCompositionEnd={event => {
             const val = event.currentTarget?.value ?? (event.target as HTMLInputElement)?.value ?? ''
             setQuery(val)
-            setCategory('all')
+          }}
+          onKeyDown={event => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              applySearch(event.currentTarget.value)
+            }
           }}
           maxLength={120}
           placeholder={t("按功能词查找入口")}
@@ -1616,17 +1630,20 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
           autoComplete="off"
         />
         {query !== '' && (
-          <button className="settings-search-clear" type="button" onClick={() => setQuery('')} aria-label={t("清空查找词")}>
+          <button className="settings-search-clear" type="button" onClick={() => { setQuery(''); setAppliedQuery('') }} aria-label={t("清空查找词")}>
             <X size={16} />
           </button>
         )}
+        <button className="settings-search-go" type="button" onClick={() => applySearch(query)} aria-label={t("搜索入口")}>
+          <Search size={18} />
+        </button>
       </div>
 
       <div className="settings-categories" role="listbox" aria-label={t("筛选功能分类")}>
         <button type="button" role="option" aria-label={t("筛选分类：全部分类")} aria-selected={category === 'all'} onClick={() => setCategory('all')}>{t("全部分类")}</button>
         {SETTINGS_HOME_GROUPS.map(group => (
           <button key={group.id} type="button" role="option" aria-label={`${t("筛选分类：")} ${t(group.label)}`} aria-selected={category === group.id}
-            onClick={() => { setCategory(group.id); setQuery('') }}>{t(group.label)}</button>
+            onClick={() => { setCategory(group.id); setQuery(''); setAppliedQuery('') }}>{t(group.label)}</button>
         ))}
       </div>
 
@@ -2091,6 +2108,12 @@ function RuntimeVersionsPanel({
   const [catalogFailed, setCatalogFailed] = useState(false)
   const [downloadingVersion, setDownloadingVersion] = useState<string | null>(null)
 
+  // release 列表折叠：超过 3 条时默认只显示最新的 3 条，底部放「显示全部」按钮。
+  // 每个列表独立控制；展开后保持到页面卸载。
+  const [libraryExpanded, setLibraryExpanded] = useState(false)
+  const [catalogExpanded, setCatalogExpanded] = useState(false)
+  const COLLAPSE_AFTER = 3
+
   const load = useCallback(() => {
     setLoading(true)
     setFailed(false)
@@ -2382,8 +2405,9 @@ function RuntimeVersionsPanel({
           {library.length === 0 ? (
             <p className="harness-log-state">{t("本地版本库暂无额外版本包。可从下方「在线可用版本」中下载。")}</p>
           ) : (
+            <>
             <div className="release-list">
-              {library.map(entry => {
+              {(libraryExpanded ? library : library.slice(0, COLLAPSE_AFTER)).map(entry => {
                 const isEntryActive = entry.active
                 const isDeleting = busy === `delete:${entry.id}`
                 const isSwitching = busy === `switch:${entry.id}`
@@ -2469,6 +2493,18 @@ function RuntimeVersionsPanel({
                 )
               })}
             </div>
+            {library.length > COLLAPSE_AFTER && (
+                <div className="settings-inline-actions">
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => setLibraryExpanded(v => !v)}
+                  >
+                    {libraryExpanded ? t("收起") : t("显示全部 {0} 条", String(library.length))}
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -2504,8 +2540,9 @@ function RuntimeVersionsPanel({
           )}
 
           {!catalogLoading && !catalogFailed && catalog.length > 0 && (
+            <>
             <div className="release-list">
-              {catalog.map(item => {
+              {(catalogExpanded ? catalog : catalog.slice(0, COLLAPSE_AFTER)).map(item => {
                 const inLibrary = library.some(lib => lib.version === item.version)
                 const isCurrentActive = list.some(l => l.active && l.version === item.version)
                 const isDownloading = downloadingVersion === item.version
@@ -2547,6 +2584,18 @@ function RuntimeVersionsPanel({
                 )
               })}
             </div>
+            {catalog.length > COLLAPSE_AFTER && (
+                <div className="settings-inline-actions">
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => setCatalogExpanded(v => !v)}
+                  >
+                    {catalogExpanded ? t("收起") : t("显示全部 {0} 条", String(catalog.length))}
+                  </button>
+                </div>
+              )}
+            </>
           )}
           {library.length >= libraryCapacity && (
             <p className="settings-note">
@@ -2603,6 +2652,8 @@ function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restoreSnapsho
   const [failed, setFailed] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [snapshotsExpanded, setSnapshotsExpanded] = useState(false)
+  const COLLAPSE_AFTER = 3
 
   const load = useCallback(() => {
     setLoading(true)
@@ -2702,8 +2753,9 @@ function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restoreSnapsho
           {snapshots.length === 0
             ? <p className="harness-log-state">{t("暂无会话备份。你可以手动创建，也可以等应用在安装运行环境前自动备份。")}</p>
             : (
+              <>
               <div className="release-list">
-                {snapshots.map(snapshot => (
+                {(snapshotsExpanded ? snapshots : snapshots.slice(0, COLLAPSE_AFTER)).map(snapshot => (
                   <div className="release-row" key={snapshot.id}>
                     <div className="release-copy">
                       <strong>{formatSnapshotTime(snapshot.createdAt)}</strong>
@@ -2750,6 +2802,18 @@ function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restoreSnapsho
                   </div>
                 ))}
               </div>
+              {snapshots.length > COLLAPSE_AFTER && (
+                <div className="settings-inline-actions">
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => setSnapshotsExpanded(v => !v)}
+                  >
+                    {snapshotsExpanded ? t("收起") : t("显示全部 {0} 条", String(snapshots.length))}
+                  </button>
+                </div>
+              )}
+              </>
             )}
 
           <p className="settings-note">
