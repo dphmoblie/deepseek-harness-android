@@ -226,4 +226,45 @@ class VirtualScreenPolicyTest {
             assertEquals("副屏预览模式不在允许列表", error.message)
         }
     }
+
+    @Test fun `刷新失败后降频重试而不是一次就停摆`() {
+        // 正常节奏 700ms；失败后拉长到 2s，避免「一直在抛异常」把主线程刷成失败循环。
+        assertEquals(700L, VirtualScreenPolicy.PREVIEW_REFRESH_INTERVAL_MILLIS)
+        assertEquals(700L, VirtualScreenPolicy.previewRefreshDelayMillis(0))
+        for (failures in 1 until VirtualScreenPolicy.PREVIEW_REFRESH_MAX_FAILURES) {
+            assertEquals(2_000L, VirtualScreenPolicy.PREVIEW_REFRESH_RETRY_MILLIS)
+            assertEquals(2_000L, VirtualScreenPolicy.previewRefreshDelayMillis(failures))
+        }
+    }
+
+    @Test fun `预览轮询只在连续失败到上限时才停止续期`() {
+        // 上限之前都必须继续（原来一次异常就 return，控制条与帧率芯片永久停在那一刻）。
+        for (failures in 0 until VirtualScreenPolicy.PREVIEW_REFRESH_MAX_FAILURES) {
+            assertFalse(VirtualScreenPolicy.previewRefreshShouldStop(failures))
+        }
+        assertTrue(VirtualScreenPolicy.previewRefreshShouldStop(VirtualScreenPolicy.PREVIEW_REFRESH_MAX_FAILURES))
+        assertTrue(VirtualScreenPolicy.previewRefreshShouldStop(VirtualScreenPolicy.PREVIEW_REFRESH_MAX_FAILURES + 1))
+    }
+
+    @Test fun `刷新提示只在首次失败与放弃时各发一次`() {
+        assertEquals(VirtualScreenPolicy.PreviewRefreshNotice.RETRYING, VirtualScreenPolicy.previewRefreshNotice(1))
+        // 中间几次失败保持静默：700ms 一次的循环不能刷成一串提示。
+        for (failures in 2 until VirtualScreenPolicy.PREVIEW_REFRESH_MAX_FAILURES) {
+            assertNull(VirtualScreenPolicy.previewRefreshNotice(failures))
+        }
+        assertEquals(
+            VirtualScreenPolicy.PreviewRefreshNotice.GAVE_UP,
+            VirtualScreenPolicy.previewRefreshNotice(VirtualScreenPolicy.PREVIEW_REFRESH_MAX_FAILURES),
+        )
+        // 成功（0 次失败）时没有任何提示。
+        assertNull(VirtualScreenPolicy.previewRefreshNotice(0))
+        assertEquals(
+            "副屏状态刷新遇到问题，正在重试…",
+            VirtualScreenPolicy.previewRefreshMessage(VirtualScreenPolicy.PreviewRefreshNotice.RETRYING),
+        )
+        assertEquals(
+            "副屏状态刷新失败，请退出重进本页",
+            VirtualScreenPolicy.previewRefreshMessage(VirtualScreenPolicy.PreviewRefreshNotice.GAVE_UP),
+        )
+    }
 }
