@@ -550,7 +550,7 @@ class OverlayBallService : Service() {
             conversationOpening = true
             val request = ++conversationRequest
             Thread({
-                // Startup may hold the runtime lock for several seconds; never wait on the overlay UI thread.
+                // 启动阶段运行时可能占着锁好几秒；绝不能在悬浮球 UI 线程上等待。
                 val access = RuntimeHost.controllerOrNull()?.let {
                     runCatching { it.openHarnessAccess() }.getOrNull()
                 }
@@ -744,7 +744,7 @@ class OverlayBallService : Service() {
         }
         CookieManager.getInstance().setCookie(HarnessSessionCookie.origin(origin.port), cookie) { accepted ->
             if (conversationWebView !== web) return@setCookie
-            // This window can be opened before the full-page Activity creates its own auth state.
+            // 悬浮球窗口可能早于整页 Activity 创建；Cookie 还没写好就加载入口页一定会失败。
             if (!accepted || conversationAccess !== access) {
                 conversationError?.visibility = View.VISIBLE
                 return@setCookie
@@ -1452,7 +1452,7 @@ class OverlayBallService : Service() {
             activeService?.detachConversation()
         }
 
-        /** Result from the non-exported SAF trampoline; stale picker results are ignored. */
+        /** 非导出的 SAF 跳板 Activity 回传结果；过期的 picker 结果一律忽略。 */
         internal fun deliverFileChooserResult(request: String, uris: List<Uri>) {
             activeService?.deliverFileChooserResult(request, uris)
         }
