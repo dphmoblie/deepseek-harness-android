@@ -134,10 +134,6 @@ class RuntimeSupervisor(
             return synchronized(lock) {
         val existing = harnessProcess
         if (existing?.isAlive == true && harnessAccess != null) return@synchronized status.snapshot()
-        // 冷却期：仅在成功启动后生效，失败可立即重试
-        if (System.currentTimeMillis() - lastStartAttemptAt < START_COOLDOWN_MS) {
-            return@synchronized status.snapshot()
-        }
         // 先回收上次启动残留的 Harness 进程树（应用被回收时子进程不会随退），
         // 再清理状态，否则 clearHarnessState 会先删掉用于识别残留的 pid 文件
         reapStaleHarness()
@@ -248,7 +244,6 @@ class RuntimeSupervisor(
         throwIfStartCancelled()
         // Credentials remain native/in-memory; status snapshots retain the public manifest URL.
         harnessAccess = HarnessAccess(launchUrl, HarnessAccess.USERNAME, password)
-        lastStartAttemptAt = System.currentTimeMillis()
         status.update(
             RuntimePhase.RUNNING,
             downloaded = manifest.rootfs.compressedBytes,
@@ -319,7 +314,6 @@ class RuntimeSupervisor(
     fun isStarting(): Boolean = startCancellation.isStarting()
 
     fun stop(): RuntimeStateSnapshot = synchronized(lock) {
-        lastStartAttemptAt = 0
         status.update(RuntimePhase.STOPPING, nextHarnessUrl = null)
         try {
             val process = harnessProcess
@@ -448,14 +442,13 @@ class RuntimeSupervisor(
      * 自行退出的收尾：与 [stop] 串行（同一个锁），因此**用户主动停止不会被记成自行退出** ——
      * stop 会先把进程引用清空，观察者拿到锁时已经认不出它是当前进程，直接返回。
      */
-    private fun onHarnessExited(process: Process, manifest: RuntimeManifest) {
+    private fun onHarnessExited(process: Process, manifest: RuntimeManifest) = synchronized(lock) {
+        if (harnessProcess !== process) return@synchronized
         // 退出前所处的阶段要在 update 之前取：它决定通知文案是「已停止」还是「未能启动」
         // （见 TaskNotificationPolicy.forHarnessExit）。
         val previousPhase = status.snapshot().phase
-        synchronized(lock) {
-            if (harnessProcess !== process) return
-            clearHarnessState()
-        }
+        // 清理、阶段事件和通知必须与新启动/停止串行，旧观察者不能覆盖新一代状态。
+        clearHarnessState()
         store.diagnostics.record(
             DiagnosticLevel.WARN,
             DiagnosticEvent.RECOVERY,
@@ -876,12 +869,10 @@ class RuntimeSupervisor(
 
     companion object {
         private val HARNESS_PROBE_ENTRYPOINT = listOf("/usr/local/bin/dsh", "--version")
-        private const val START_COOLDOWN_MS = 90_000L
         private const val REAP_WAIT_TIMEOUT_MS = 5_000L
         private const val REAP_POLL_INTERVAL_MS = 100L
         private val WHITESPACE = Regex("\\s+")
         private const val PID_FILE_ENV = "DSH_PIDFILE"
-        @Volatile private var lastStartAttemptAt = 0L
         internal const val START_CANCELLED_CODE = "HARNESS_START_CANCELLED"
         private const val START_TIMEOUT_SECONDS = 120L
         private const val GRACEFUL_STOP_TIMEOUT_MS = 2_000L

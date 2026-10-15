@@ -10,6 +10,7 @@ vi.mock('./components/TerminalPanel', () => ({
 }))
 
 import { App } from './App'
+import { applyCard, DEFAULT_CARD } from './appearance'
 
 /**
  * 设置分类卡片的取色必须跟着用户选的配色走。
@@ -29,7 +30,7 @@ import { App } from './App'
  * 而且不会因为 jsdom 能力缺失而变成永远为真的假绿。
  */
 
-const STYLESHEET = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8')
+const STYLESHEET = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8').replace(/\r\n?/g, '\n')
 const CHIP_SELECTOR = '.settings-categories button'
 const LIGHT_BLOCK = ':root'
 const DARK_BLOCK = ":root[data-theme='dark']"
@@ -176,6 +177,23 @@ describe('设置分类卡片：取色跟着主题令牌走', () => {
       const ink = chipValue('color', tokens)
       expect(contrastRatio(ink, background)).toBeGreaterThanOrEqual(4.5)
     }
+  })
+
+  it('自定义黑白卡片的表单标签与外观标题跟着卡片取色，输入框仍独立取色', () => {
+    const cardSelector = '.management-shell :is(.settings-section, .runtime-overview, .management-list, .detail-section, .launch-panel)'
+    for (const [base, color] of [[LIGHT, '#000000'], [DARK, '#ffffff']] as const) {
+      applyCard({ ...DEFAULT_CARD, color })
+      const tokens = new Map(base)
+      for (const name of ['--card-ink', '--card-muted']) tokens.set(name, document.documentElement.style.getPropertyValue(name))
+      tokens.set('--content-label', declarations(ruleBody(cardSelector)).get('--content-label')!)
+      for (const selector of ['.field > span', '.appearance-accent-heading', '.appearance-accent-heading span']) {
+        const foreground = resolveValue(declarations(ruleBody(selector)).get('color')!, tokens)
+        expect(contrastRatio(foreground, color)).toBeGreaterThanOrEqual(4.5)
+      }
+      expect(ruleBody('.field input,\n.field select')).toContain('color: var(--ink)')
+      expect(ruleBody('.field input,\n.field select')).toContain('background: var(--surface-sunken)')
+    }
+    applyCard(DEFAULT_CARD)
   })
 
   it('令牌块之外的阴影与遮罩也只有主题令牌', () => {

@@ -34,6 +34,7 @@ internal data class DeviceCapabilityFacts(
     val shizukuConnected: Boolean,
     /** 无障碍服务的三态：`connected` / `enabled_disconnected` / `off`。 */
     val accessibilityStatus: String,
+    val shellEnabled: Boolean = false,
     /** 用户是否在设置里打开了根通道（默认关闭）。 */
     val rootEngineEnabled: Boolean = false,
     /** KernelSU 的探测结论（调 `KernelSuProbe.probeLocal` 得到）；未启用时保持 null。 */
@@ -83,6 +84,7 @@ internal object DeviceCapabilityPolicy {
     const val REASON_ACCESSIBILITY_ENABLED_DISCONNECTED = "ACCESSIBILITY_ENABLED_DISCONNECTED"
     const val REASON_ANDROID_TOO_OLD = "ANDROID_TOO_OLD"
     const val REASON_TEXT_INPUT_NEEDS_ACCESSIBILITY = "TEXT_INPUT_NEEDS_ACCESSIBILITY"
+    const val REASON_DEVICE_SHELL_DISABLED = "DEVICE_SHELL_DISABLED"
 
     /** 根通道没开（默认），或开了但 KernelSU 侧不满足。 */
     const val REASON_ROOT_ENGINE_DISABLED = "ROOT_ENGINE_DISABLED"
@@ -98,6 +100,7 @@ internal object DeviceCapabilityPolicy {
     const val ACTION_GRANT_SHIZUKU_PERMISSION = "grant_shizuku_permission"
     const val ACTION_CONNECT_SHIZUKU = "connect_shizuku"
     const val ACTION_OPEN_ACCESSIBILITY_SETTINGS = "open_accessibility_settings"
+    const val ACTION_ENABLE_DEVICE_SHELL = "enable_device_shell"
 
     /** 到设置里打开本应用的根通道开关。 */
     const val ACTION_ENABLE_ROOT_ENGINE = "enable_root_engine"
@@ -172,7 +175,7 @@ internal object DeviceCapabilityPolicy {
 
     /** 根通道不可用时的退路：Shizuku 的普通 Shell（没有 UID 0，但能跑白名单命令）。 */
     private fun shizukuAlternative(facts: DeviceCapabilityFacts): String? =
-        if (shizukuBlocker(facts) == null) ALTERNATIVE_SHIZUKU_SHELL else null
+        if (facts.shellEnabled && shizukuBlocker(facts) == null) ALTERNATIVE_SHIZUKU_SHELL else null
 
     private fun shizuku(facts: DeviceCapabilityFacts): DeviceCapability {
         val blocker = shizukuBlocker(facts) ?: return ready(SHIZUKU)
@@ -232,7 +235,11 @@ internal object DeviceCapabilityPolicy {
         if (facts.sdkInt < MIN_SDK_FOR_DISPLAY) {
             return DeviceCapability(VIRTUAL_SCREEN, UNSUPPORTED, REASON_ANDROID_TOO_OLD, null, null)
         }
-        return blockedByShizuku(VIRTUAL_SCREEN, facts) ?: ready(VIRTUAL_SCREEN)
+        blockedByShizuku(VIRTUAL_SCREEN, facts)?.let { return it }
+        if (!facts.shellEnabled) {
+            return DeviceCapability(VIRTUAL_SCREEN, NEEDS_ACTION, REASON_DEVICE_SHELL_DISABLED, ACTION_ENABLE_DEVICE_SHELL, null)
+        }
+        return ready(VIRTUAL_SCREEN)
     }
 
     private fun screenshot(facts: DeviceCapabilityFacts): DeviceCapability {
@@ -263,7 +270,7 @@ internal object DeviceCapabilityPolicy {
 
     /** 无障碍不在时，设备 Shell 仍是一条路（仅可打印 ASCII）。 */
     private fun shellAlternative(facts: DeviceCapabilityFacts): String? =
-        if (facts.shizukuConnected) ALTERNATIVE_SHELL_ASCII_ONLY else null
+        if (facts.shellEnabled && shizukuBlocker(facts) == null) ALTERNATIVE_SHELL_ASCII_ONLY else null
 
     private fun ready(id: String) = DeviceCapability(id, READY, REASON_READY, null, null)
 }

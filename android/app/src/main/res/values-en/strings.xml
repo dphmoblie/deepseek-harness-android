@@ -64,6 +64,45 @@
 
     <!-- Target-app virtual screen: picker title and orientation labels. Both dp values come from VirtualScreenSpec. -->
     <string name="virtual_screen_title">Target-app virtual screen</string>
+    <string name="virtual_screen_back">Back</string>
+    <string name="virtual_screen_search">Search app name or package</string>
+    <string name="virtual_screen_shell_required">Enable AI Shell in settings and connect Shizuku first</string>
+    <string name="virtual_screen_android_required">The virtual screen requires Android 10 or later</string>
+    <string name="virtual_screen_creating">Creating the target-app virtual screen. Please wait…</string>
+    <string name="virtual_screen_start_failed">Unable to start the virtual screen. Return to the app and retry.</string>
+    <string name="virtual_screen_app_back">App back</string>
+    <string name="virtual_screen_floating">Float</string>
+    <string name="virtual_screen_stop">End screen</string>
+    <string name="virtual_screen_overlay_required">Start the virtual screen and grant overlay permission in settings first</string>
+    <string name="virtual_screen_back_failed">Unable to go back. Check that the target app is still on the virtual screen.</string>
+    <string name="virtual_screen_mode_failed">The frame rate did not change. Check that the virtual screen is still running.</string>
+    <string name="virtual_screen_select_hint">Choose the app for AI to operate. Device compatibility needs testing.</string>
+    <string name="virtual_screen_collapse">Collapse</string>
+    <string name="virtual_screen_end">End</string>
+    <string name="virtual_screen_resize">Drag to resize the virtual screen picture</string>
+    <string name="virtual_screen_control_description">%1$s virtual screen preview</string>
+    <string name="virtual_screen_notification_title">Target-app virtual screen is running</string>
+    <string name="virtual_screen_notification_text">Tap to return to the virtual screen</string>
+    <string name="virtual_screen_foreground_failed">Unable to start the foreground service. Return to the app and retry.</string>
+    <string name="virtual_screen_start_error">Unable to start the virtual screen. Check AI Shell and Shizuku.</string>
+    <string name="virtual_screen_session_lost">The virtual screen session ended. Start it again.</string>
+    <string name="virtual_screen_refresh_retry">Unable to refresh the virtual screen status. Retrying.</string>
+    <string name="virtual_screen_refresh_failed">The virtual screen status could not be refreshed. Reopen this page.</string>
+    <string name="virtual_screen_preview_gone">Waiting for the virtual screen picture; display pauses when the device locks, disconnects, or the app leaves the virtual screen.</string>
+    <string name="virtual_screen_budget_saturated"> · Preview cannot keep up: %2$d of the last %1$d frames exceeded the budget (slowest: %3$d ms)</string>
+    <string name="virtual_screen_budget_degraded"> · Preview cannot keep up: %2$d of the last %1$d frames exceeded the budget</string>
+    <string name="virtual_screen_touch_failed">Touch was not delivered. Check that the virtual screen is still running.</string>
+    <string name="virtual_screen_action_failed">Action was not delivered. Check that the virtual screen is still running.</string>
+    <string name="virtual_screen_waiting_unreadable">Waiting for the virtual screen picture (no new frame)</string>
+    <string name="virtual_screen_waiting_blank">Waiting for the virtual screen picture (the current frame is nearly solid)</string>
+    <string name="virtual_screen_rate_unknown">Frame rate pending</string>
+    <string name="virtual_screen_frame_unchanged">%1$s · Picture unchanged</string>
+    <string name="virtual_screen_frame_blank">%1$s · Current frame is nearly solid</string>
+    <string name="virtual_screen_frame_unreadable">No new frame</string>
+    <string name="virtual_screen_touch_stream">Direct touch</string>
+    <string name="virtual_screen_touch_discrete">Tap or swipe</string>
+    <string name="virtual_screen_preview_status">Virtual screen preview · %1$s · %2$s · Mode %3$s</string>
+    <string name="virtual_screen_picture_description">Target-app virtual screen picture; supports tapping and swiping</string>
     <string name="virtual_screen_orientation_landscape">Use a landscape virtual screen (%1$d × %2$d dp)</string>
     <string name="virtual_screen_orientation_hint">Portrait is the default: %1$d × %2$d dp. Once started you can operate it on this page or in the floating window; the AI uses virtual-screen tools. Pictures are sent to the current model service on demand, so avoid opening pages that show private information.</string>
 

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { AppearanceSettings } from './AppearanceSettings'
 import { saveLanguage } from '../i18n'
-import { ACCENT_STORAGE_KEY, THEME_COLORS, THEME_STORAGE_KEY } from '../theme'
+import { ACCENT_STORAGE_KEY, readCustomAccentColor, THEME_COLORS, THEME_STORAGE_KEY } from '../theme'
 
 type MediaListener = (event: { matches: boolean }) => void
 
@@ -75,6 +75,24 @@ describe('外观设置', () => {
     expect(window.localStorage.getItem(ACCENT_STORAGE_KEY)).toBe('mint')
     expect(document.documentElement.dataset.accent).toBe('mint')
     expect(screen.getByRole('radio', { name: '薄荷绿' })).toBeChecked()
+  })
+
+  it('自定义色之后可直接选择任何预置色，包括此前的默认色', () => {
+    render(<AppearanceSettings />)
+    const color = screen.getByLabelText('自定义强调色')
+    fireEvent.change(color, { target: { value: '#ffffff' } })
+    expect(screen.getByRole('radio', { name: '海洋蓝' })).not.toBeChecked()
+    expect(document.documentElement.style.getPropertyValue('--blue')).toBe('#ffffff')
+    pick('海洋蓝')
+    expect(readCustomAccentColor()).toBe('')
+    expect(document.documentElement.style.getPropertyValue('--blue')).toBe('')
+    expect(document.documentElement.style.getPropertyValue('--on-blue')).toBe('')
+    expect(screen.getByRole('radio', { name: '海洋蓝' })).toBeChecked()
+    expect(color).toHaveValue('#315fcf')
+    fireEvent.change(color, { target: { value: '#000000' } })
+    pick('薄荷绿')
+    expect(readCustomAccentColor()).toBe('')
+    expect(document.documentElement.dataset.accent).toBe('mint')
   })
 
   it('选择浅色时不跟随系统深色偏好', () => {

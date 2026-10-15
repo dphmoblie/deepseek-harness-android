@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import io.deepseekharness.mobile.AppThemePreference
+import io.deepseekharness.mobile.AppLanguage
 import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.shizuku.DeviceShellAccess
 import org.json.JSONObject
@@ -42,6 +43,8 @@ class VirtualScreenActivity : Activity() {
     private var resumed = false
     private var actionPending = false
     private var launchPendingUntil = 0L
+    private var createdLanguage = ""
+    private var createdTheme = ""
 
     /** 连续刷新失败次数；一次成功即清零（重试节奏与提示见 [VirtualScreenPolicy]）。 */
     private var consecutiveRefreshFailures = 0
@@ -58,11 +61,13 @@ class VirtualScreenActivity : Activity() {
      * 与控件默认样式就统一到同一套主题上了。
      */
     override fun attachBaseContext(base: Context) {
-        super.attachBaseContext(AppThemePreference.palette(base))
+        super.attachBaseContext(AppThemePreference.palette(AppLanguage.localizedContext(base)))
     }
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        createdLanguage = AppLanguage.current(this)
+        createdTheme = AppThemePreference.current(this)
         // 这一页**不再加 FLAG_SECURE**：加了以后用户自己截不了图、远端也取不了证，
         // 排查「预览页读到白帧」这类问题时就只能靠猜。悬浮小窗（0.2.9 起）同样没加，两边行为一致。
         // 隐私提醒仍写在页面上与 docs/目标应用副屏.md 里：画面按需发送至当前模型服务，不要打开含隐私信息的页面。
@@ -81,7 +86,7 @@ class VirtualScreenActivity : Activity() {
             insets
         }
         val header = LinearLayout(this)
-        header.addView(Button(this).apply { text = "返回"; setOnClickListener { finish() } })
+        header.addView(Button(this).apply { setText(R.string.virtual_screen_back); setOnClickListener { finish() } })
         header.addView(TextView(this).apply { text = getString(R.string.virtual_screen_title); textSize = 17f; setTextColor(ink) }, LinearLayout.LayoutParams(0, -2, 1f))
         root.addView(header)
         status = TextView(this).apply { setTextColor(ink); textSize = 12f; maxLines = if (shortScreen) 1 else 3 }
@@ -95,7 +100,7 @@ class VirtualScreenActivity : Activity() {
         picker = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(picker, FrameLayout.LayoutParams(-1, -1))
         val query = EditText(this).apply {
-            hint = "搜索应用名称或包名"; setSingleLine(); setTextColor(ink)
+            hint = getString(R.string.virtual_screen_search); setSingleLine(); setTextColor(ink)
             filters = arrayOf(android.text.InputFilter.LengthFilter(160))
         }
         picker.addView(query)
@@ -142,8 +147,8 @@ class VirtualScreenActivity : Activity() {
         list.setOnItemClickListener { _, _, position, _ ->
             if (VirtualScreenService.current != null || android.os.SystemClock.elapsedRealtime() < launchPendingUntil) return@setOnItemClickListener
             val selected = shown.getOrNull(position) ?: return@setOnItemClickListener
-            if (!DeviceShellAccess.enabled(this)) { toast("请先在设置中开启 AI Shell 并连接 Shizuku"); return@setOnItemClickListener }
-            if (Build.VERSION.SDK_INT < 29) { toast("副屏操作需要 Android 10 或更高版本"); return@setOnItemClickListener }
+            if (!DeviceShellAccess.enabled(this)) { toast(getString(R.string.virtual_screen_shell_required)); return@setOnItemClickListener }
+            if (Build.VERSION.SDK_INT < 29) { toast(getString(R.string.virtual_screen_android_required)); return@setOnItemClickListener }
             try {
                 launchPendingUntil = android.os.SystemClock.elapsedRealtime() + 2000
                 ContextCompat.startForegroundService(this, Intent(this, VirtualScreenService::class.java)
@@ -157,19 +162,19 @@ class VirtualScreenActivity : Activity() {
                         VirtualScreenPreferences.read(this).adaptive,
                         if (landscape.isChecked) "landscape" else "portrait"
                     ))
-                status.text = "正在创建目标应用副屏…"
-            } catch (_: Exception) { launchPendingUntil = 0; toast("无法启动副屏服务，请回到前台重试") }
+                status.setText(R.string.virtual_screen_creating)
+            } catch (_: Exception) { launchPendingUntil = 0; toast(getString(R.string.virtual_screen_start_failed)) }
         }
         val controls = LinearLayout(this)
-        back = Button(this).apply { text = "应用返回"; setOnClickListener { sendBack() } }
+        back = Button(this).apply { setText(R.string.virtual_screen_app_back); setOnClickListener { sendBack() } }
         floating = Button(this).apply {
-            text = "小窗"
+            setText(R.string.virtual_screen_floating)
             setOnClickListener {
                 try { checkNotNull(VirtualScreenService.current).showOverlay(); finish() }
-                catch (_: Exception) { toast("请先启动副屏，并在设置中授予悬浮窗权限") }
+                catch (_: Exception) { toast(getString(R.string.virtual_screen_overlay_required)) }
             }
         }
-        stop = Button(this).apply { text = "结束副屏"; setOnClickListener { stopService(Intent(this@VirtualScreenActivity, VirtualScreenService::class.java)) } }
+        stop = Button(this).apply { setText(R.string.virtual_screen_stop); setOnClickListener { stopService(Intent(this@VirtualScreenActivity, VirtualScreenService::class.java)) } }
         listOf(back, floating, stop).forEach { controls.addView(it, LinearLayout.LayoutParams(0, -2, 1f)) }
         // 预览帧率切换：与 AI 侧的 mobile_virtual_screen_config 走同一条 config 动作，
         // 会话不重启；实际帧率受目标渲染与设备负载限制，状态行里的 fps 才是实测值。
@@ -179,7 +184,7 @@ class VirtualScreenActivity : Activity() {
             isHorizontalScrollBarEnabled = true
             addView(modeRow)
         }
-        listOf("limited" to "省电", "15fps" to "15fps", "30fps" to "30fps", "60fps" to "60fps", "120fps" to "120fps", "185fps" to "185fps").forEach { (mode, label) ->
+        listOf("limited" to getString(R.string.virtual_screen_mode_limited), "15fps" to "15fps", "30fps" to "30fps", "60fps" to "60fps", "120fps" to "120fps", "185fps" to "185fps").forEach { (mode, label) ->
             modeButtons[mode] = Button(this).apply {
                 text = label; textSize = 12f
                 setOnClickListener { selectMode(mode) }
@@ -209,12 +214,12 @@ class VirtualScreenActivity : Activity() {
     }
 
     private fun sendBack() {
-        sendAction("back", "无法返回，请确认目标应用仍在副屏")
+        sendAction("back", getString(R.string.virtual_screen_back_failed))
     }
 
     /** 与 AI 侧的 mobile_virtual_screen_config 走同一条 config 动作，不重启会话。 */
     private fun selectMode(mode: String) {
-        sendAction("config", "帧率未生效，请确认副屏仍在运行", mode)
+        sendAction("config", getString(R.string.virtual_screen_mode_failed), mode)
     }
 
     private fun sendAction(action: String, failureMessage: String, mode: String? = null) {
@@ -267,7 +272,7 @@ class VirtualScreenActivity : Activity() {
                             it.preview.report = { text -> status.text = text }
                             it.installResize(pageResizeGesture)
                             // 与小窗同一排芯片：画面上的出口位置与样式两处一致（本页的其余控制仍在页面上）。
-                            it.installControls(VirtualScreenChrome.page(onBack = { finish() }))
+                            it.installControls(VirtualScreenChrome.page(onBack = { finish() }, backLabel = getString(R.string.virtual_screen_back)))
                             // 控制栏在 content 外；此处仅放画面，保留与小窗共用的缩放与坐标换算。
                             it.layoutParams = pagePreviewParams(pageWidthPreferencePx())
                             content.addView(it)
@@ -277,9 +282,9 @@ class VirtualScreenActivity : Activity() {
                 }
                 updateControls(snapshot)
                 if (!running) status.text = when {
-                    service != null || android.os.SystemClock.elapsedRealtime() < launchPendingUntil -> "正在创建副屏，请稍候…"
+                    service != null || android.os.SystemClock.elapsedRealtime() < launchPendingUntil -> getString(R.string.virtual_screen_creating)
                     VirtualScreenService.lastError.isNotEmpty() -> VirtualScreenService.lastError
-                    else -> "选择要交给 AI 操作的目标应用。设备兼容性需要实测。"
+                    else -> getString(R.string.virtual_screen_select_hint)
                 }
             } catch (_: Throwable) {
                 /*
@@ -292,7 +297,7 @@ class VirtualScreenActivity : Activity() {
                  */
                 consecutiveRefreshFailures += 1
                 VirtualScreenPolicy.previewRefreshNotice(consecutiveRefreshFailures)?.let { notice ->
-                    runCatching { toast(VirtualScreenPolicy.previewRefreshMessage(notice)) }
+                    runCatching { toast(getString(if (notice == VirtualScreenPolicy.PreviewRefreshNotice.RETRYING) R.string.virtual_screen_refresh_retry else R.string.virtual_screen_refresh_failed)) }
                 }
                 if (VirtualScreenPolicy.previewRefreshShouldStop(consecutiveRefreshFailures)) return
                 main.postDelayed(this, VirtualScreenPolicy.previewRefreshDelayMillis(consecutiveRefreshFailures))
@@ -347,7 +352,16 @@ class VirtualScreenActivity : Activity() {
         persistWidth = { VirtualScreenPreferences.saveOverlayWidth(this, it) },
     )
 
-    override fun onResume() { super.onResume(); resumed = true; VirtualScreenService.current?.hideOverlay(); main.post(refresh) }
+    override fun onResume() {
+        super.onResume()
+        if (createdLanguage != AppLanguage.current(this) || createdTheme != AppThemePreference.current(this)) {
+            recreate()
+            return
+        }
+        resumed = true
+        VirtualScreenService.current?.hideOverlay()
+        main.post(refresh)
+    }
     override fun onPause() {
         resumed = false; main.removeCallbacks(refresh)
         if (isFinishing) {

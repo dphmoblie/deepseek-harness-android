@@ -5,6 +5,7 @@ import android.os.IBinder
 import android.os.RemoteException
 import io.deepseekharness.mobile.runtime.NativePty
 import io.deepseekharness.mobile.runtime.RuntimeLimits
+import io.deepseekharness.mobile.runtime.TerminalInputWriter
 import io.deepseekharness.mobile.runtime.UbuntuTerminalManager
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -120,13 +121,7 @@ class DeviceShellUserService() : IDeviceShellService.Stub() {
         requireNotNull(data) { "Terminal data is required" }
         require(data.isNotEmpty() && data.size <= RuntimeLimits.MAX_TERMINAL_INPUT_BYTES) { "Terminal data length is invalid" }
         synchronized(session.writeLock) {
-            var offset = 0
-            while (offset < data.size) {
-                val chunk = if (offset == 0) data else data.copyOfRange(offset, data.size)
-                val written = NativePty.write(session.fileDescriptor, chunk)
-                check(written in 1..chunk.size) { "Unable to write terminal" }
-                offset += written
-            }
+            TerminalInputWriter.writeAll(data) { NativePty.write(session.fileDescriptor, it) }
         }
     }
 

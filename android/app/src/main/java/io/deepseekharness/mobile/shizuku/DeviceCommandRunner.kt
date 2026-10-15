@@ -64,6 +64,15 @@ enum class DeviceCommand {
     BACKGROUND_TASKS;
 
     companion object {
+        /** Root 不可用时只能回到用户明确开启的 Shizuku 通道，不能把开关当成 Root 授权。 */
+        internal fun requireShellRoute(command: DeviceCommand, rootUsable: Boolean, shellEnabled: Boolean): Boolean {
+            val root = command == DeviceCommand.SHELL && rootUsable
+            if (!root && command in setOf(DeviceCommand.SHELL, DeviceCommand.BACKGROUND_TASKS) && !shellEnabled) {
+                throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请先开启 AI Shell，或授权可用的根通道")
+            }
+            return root
+        }
+
         fun fromName(name: String): DeviceCommand? = when (name) {
             "screenshot" -> SCREENSHOT
             "uiDump" -> UI_DUMP

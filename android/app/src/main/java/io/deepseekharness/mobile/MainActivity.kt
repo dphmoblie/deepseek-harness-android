@@ -11,7 +11,7 @@ import android.webkit.WebViewDatabase
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import com.getcapacitor.BridgeActivity
-import io.deepseekharness.mobile.runtime.RuntimeFiles
+import io.deepseekharness.mobile.runtime.RuntimeSharedInbox
 import io.deepseekharness.mobile.runtime.RuntimeStore
 import java.io.File
 import java.io.FileNotFoundException
@@ -19,6 +19,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.util.UUID
 import java.util.concurrent.Executors
@@ -193,6 +194,7 @@ class MainActivity : BridgeActivity() {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     when (result) {
                         ImportResult.SUCCESS -> showImportToast("文件已导入应用收件箱")
+                        ImportResult.STAGED -> showImportToast("文件已安全暂存，运行时准备完成后可在工作区 inbox 中使用")
                         ImportResult.TOO_LARGE -> showImportToast("文件超过 64 MB，无法导入")
                         ImportResult.PERMISSION_DENIED -> {
                             if (allowPermissionFallback) launchPermissionFallback()
@@ -210,7 +212,12 @@ class MainActivity : BridgeActivity() {
 
     private fun importFiles(uris: List<Uri>): ImportResult {
         val store = RuntimeStore(applicationContext)
-        val inbox = prepareInbox(store) ?: return ImportResult.DESTINATION_UNAVAILABLE
+        val sharedInbox = RuntimeSharedInbox(store)
+        val inbox = try {
+            sharedInbox.stagingDirectory()
+        } catch (_: Exception) {
+            return ImportResult.DESTINATION_UNAVAILABLE
+        }
 
         uris.forEachIndexed { index, uri ->
             if (Thread.currentThread().isInterrupted) return ImportResult.SOURCE_UNREADABLE
@@ -220,31 +227,19 @@ class MainActivity : BridgeActivity() {
                 .take(MAX_FILE_NAME_LENGTH)
                 .ifEmpty { "shared-file-$index" }
             val target = File(inbox, "${UUID.randomUUID()}-$safeName")
-            val result = copySharedFile(uri, target)
+            val pending = File(inbox, ".pending-${UUID.randomUUID()}")
+            val result = copySharedFile(uri, pending)
             if (result != ImportResult.SUCCESS) return result
+            try {
+                RuntimeSharedInbox.withLock {
+                    Files.move(pending.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                }
+            } catch (_: Exception) {
+                pending.delete()
+                return ImportResult.DESTINATION_UNAVAILABLE
+            }
         }
-        return ImportResult.SUCCESS
-    }
-
-    /** Fixed path segments are checked without following links before accepting provider data. */
-    private fun prepareInbox(store: RuntimeStore): File? = try {
-        if (RuntimeFiles.isDirectoryNoFollow(store.currentRoot)) {
-            val rootHome = requireDirectory(File(store.currentRoot, "root")) ?: return null
-            val workspace = requireDirectory(File(rootHome, "1"), create = true) ?: return null
-            requireDirectory(File(workspace, "inbox"), create = true)
-        } else {
-            requireDirectory(File(filesDir, "inbox"), create = true)
-        }
-    } catch (_: Exception) {
-        null
-    }
-
-    private fun requireDirectory(directory: File, create: Boolean = false): File? {
-        if (RuntimeFiles.existsNoFollow(directory)) {
-            return directory.takeIf(RuntimeFiles::isDirectoryNoFollow)
-        }
-        if (!create || !directory.mkdir() || !RuntimeFiles.isDirectoryNoFollow(directory)) return null
-        return directory
+        return if (sharedInbox.deliver()) ImportResult.SUCCESS else ImportResult.STAGED
     }
 
     private fun copySharedFile(uri: Uri, target: File): ImportResult {
@@ -392,6 +387,7 @@ class MainActivity : BridgeActivity() {
 
     private enum class ImportResult {
         SUCCESS,
+        STAGED,
         TOO_LARGE,
         PERMISSION_DENIED,
         SOURCE_UNREADABLE,

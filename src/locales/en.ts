@@ -1,5 +1,8 @@
 // 应用界面英文词典；不翻译用户输入、凭据或终端输出。
 export const english: Readonly<Record<string, string>> = {
+  "AI Shell 开关没有打开": "AI Shell is turned off",
+  "到「设备 Shell 设置」开启 AI Shell": "Enable AI Shell in Device Shell settings",
+  "未能保存配置，输入已保留，请重试。": "Could not save the settings. Your input has been kept; please try again.",
   "模型连接": "Model connections",
   "外观与显示": "Appearance and display",
   "设备与自动化": "Device and automation",

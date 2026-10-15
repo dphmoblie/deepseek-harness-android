@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import { act, renderHook } from '@testing-library/react'
 import {
   DEFAULT_THEME_MODE,
@@ -16,6 +17,7 @@ import {
   readThemeMode,
   resolveTheme,
   saveAccentMode,
+  saveCustomAccentColor,
   saveThemeMode,
   systemPrefersDark,
   useResolvedTheme,
@@ -56,6 +58,7 @@ describe('主题解析', () => {
     window.localStorage.clear()
     document.documentElement.removeAttribute('data-theme')
     document.documentElement.removeAttribute('data-accent')
+    document.documentElement.removeAttribute('style')
     document.head.innerHTML = '<meta name="theme-color" content="#111315" />'
     media = installMatchMedia(false)
   })
@@ -95,6 +98,18 @@ describe('主题解析', () => {
     applyTheme('dark')
     expect(document.documentElement.dataset.accent).toBe('mint')
     expect(saveAccentMode('../mint')).toBe(false)
+  })
+
+  it.each(['light', 'dark'] as const)('自定义极值色在 %s 下独立选择可读前景，预置恢复后清除覆盖', mode => {
+    applyTheme(mode)
+    for (const [color, foreground] of [['#ffffff', '#000000'], ['#000000', '#ffffff'], ['#ffff00', '#000000'], ['#0000ff', '#ffffff']]) {
+      expect(saveCustomAccentColor(color)).toBe(true)
+      expect(document.documentElement.style.getPropertyValue('--on-blue')).toBe(foreground)
+      expect(document.documentElement.style.getPropertyValue('--on-accent')).toBe('')
+    }
+    expect(saveAccentMode('mint')).toBe(true)
+    expect(document.documentElement.style.getPropertyValue('--on-blue')).toBe('')
+    expect(document.documentElement.style.getPropertyValue('--blue')).toBe('')
   })
 
   it('存储非法值或为空时回退到默认值且不抛错', () => {
@@ -200,6 +215,21 @@ describe('index.html 首帧脚本与主题模块一致', () => {
   // vitest 的 cwd 就是仓库根目录（vitest.config.ts 所在处），index.html 与它同级；
   // 这里不用 import.meta.url：jsdom 环境下它是 http URL，转不成文件路径。
   const html = readFileSync(resolve(process.cwd(), 'index.html'), 'utf8')
+  const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].find(x => x[1].includes('dataset.theme'))![1]
+
+  it.each(['#ffffff', '#000000', '#ffff00', '#0000ff'])('首帧恢复自定义色 %s 与模块的颜色/前景一致', custom => {
+    window.localStorage.clear()
+    saveThemeMode('light')
+    saveCustomAccentColor(custom)
+    const properties = ['--blue', '--blue-hover', '--on-blue', '--blue-soft', '--blue-line', '--ring']
+    const expected = properties.map(name => document.documentElement.style.getPropertyValue(name))
+    document.documentElement.removeAttribute('style')
+    runInNewContext(script, { window, document })
+    expect(properties.map(name => document.documentElement.style.getPropertyValue(name))).toEqual(expected)
+    saveAccentMode('mint')
+    runInNewContext(script, { window, document })
+    expect(properties.map(name => document.documentElement.style.getPropertyValue(name))).toEqual(properties.map(() => ''))
+  })
 
   it('CSP 里的 sha256 与首帧脚本正文一致', () => {
     // 注释里可能出现脚本标签字样，因此按内容（dataset.theme）挑出真正的脚本。

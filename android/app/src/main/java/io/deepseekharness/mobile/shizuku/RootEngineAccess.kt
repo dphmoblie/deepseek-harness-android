@@ -22,6 +22,9 @@ object RootEngineAccess {
 
     fun enabled(context: Context): Boolean = preferences(context).getBoolean(KEY_ENABLED, false)
 
+    /** 开关只是允许尝试；两条命令入口都必须确认 KernelSU 真正可用后才选根通道。 */
+    fun usable(context: Context): Boolean = status(context, packageChecker(context)).usable
+
     fun save(context: Context, enabled: Boolean) {
         check(preferences(context).edit().putBoolean(KEY_ENABLED, enabled).commit()) { "根通道开关保存失败" }
     }

@@ -8,6 +8,8 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import io.deepseekharness.mobile.AppLanguage
+import io.deepseekharness.mobile.R
 
 /**
  * 画面上的一个控制芯片：标签 + 点一下做什么。外壳不解释动作，只负责画与转发点击，
@@ -24,10 +26,10 @@ internal data class VirtualScreenControl(val label: String, val onTap: () -> Uni
  * 再重复一遍反而更难找。两处**共用**的是画面、缩放手柄与这排芯片的样式与位置。
  */
 internal object VirtualScreenChrome {
-    fun overlay(onCollapse: () -> Unit, onStop: () -> Unit): List<VirtualScreenControl> =
-        listOf(VirtualScreenControl("收起", onCollapse), VirtualScreenControl("结束", onStop))
+    fun overlay(onCollapse: () -> Unit, onStop: () -> Unit, collapseLabel: String = "收起", endLabel: String = "结束"): List<VirtualScreenControl> =
+        listOf(VirtualScreenControl(collapseLabel, onCollapse), VirtualScreenControl(endLabel, onStop))
 
-    fun page(onBack: () -> Unit): List<VirtualScreenControl> = listOf(VirtualScreenControl("返回", onBack))
+    fun page(onBack: () -> Unit, backLabel: String = "返回"): List<VirtualScreenControl> = listOf(VirtualScreenControl(backLabel, onBack))
 }
 
 /**
@@ -60,7 +62,7 @@ internal class VirtualScreenFrame(context: Context) : FrameLayout(context) {
             setColor(HANDLE_COLOR)
             cornerRadius = handleSizePx / 3f
         }
-        contentDescription = "拖动调整副屏画面大小"
+        contentDescription = AppLanguage.localizedContext(context).getString(R.string.virtual_screen_resize)
     }
 
     private val controlRow = LinearLayout(context).apply {
@@ -86,6 +88,11 @@ internal class VirtualScreenFrame(context: Context) : FrameLayout(context) {
         handle.setOnTouchListener { _, event -> gesture.onTouch(event) }
     }
 
+    fun refreshLanguage() {
+        handle.contentDescription = AppLanguage.localizedContext(context).getString(R.string.virtual_screen_resize)
+        preview.contentDescription = AppLanguage.localizedContext(context).getString(R.string.virtual_screen_picture_description)
+    }
+
     /**
      * 装载画面上的控制芯片；每个宿主只调一次。传空清单 = 这处画面不给出口（芯片整排收起）。
      *
@@ -105,7 +112,7 @@ internal class VirtualScreenFrame(context: Context) : FrameLayout(context) {
                     cornerRadius = dp(14).toFloat()
                 }
                 isClickable = true
-                contentDescription = "${control.label}副屏预览"
+                contentDescription = AppLanguage.localizedContext(context).getString(R.string.virtual_screen_control_description, control.label)
                 setOnClickListener { control.onTap() }
             }, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
                 rightMargin = dp(8)

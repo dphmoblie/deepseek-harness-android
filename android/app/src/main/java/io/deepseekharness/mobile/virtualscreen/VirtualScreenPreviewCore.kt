@@ -63,6 +63,8 @@ internal class PreviewResult(
 internal class VirtualScreenPreviewCore(
     private val sessionAlive: (String) -> Boolean,
     private val modeTitle: (String) -> String,
+    private val statusLine: (String, VirtualScreenPolicy.PreviewPause, Double, String, Boolean) -> String = VirtualScreenPolicy::previewLine,
+    private val goneMessage: () -> String = { VirtualScreenPolicy.PREVIEW_GONE_MESSAGE },
 ) {
     /** 是否已经显示过画面：决定状态行说「等待副屏画面」还是报帧率。 */
     var displayed = false
@@ -129,11 +131,10 @@ internal class VirtualScreenPreviewCore(
         }
         if (clear) clear()
         if (sample.channel.isNotEmpty() && !clear) observedChannel = sample.channel
-        // 状态行按「状态已经落地」的那一刻读数。文案统一由 VirtualScreenPolicy 生成：
-        // 页面大预览与悬浮小窗共用同一份规则，两侧不会各自拼串后漂移。
+        // 状态行按状态落地后的读数生成；页面和小窗注入同一个本地化入口。
         val showWaiting = !displayed
-        val line = if (clear) VirtualScreenPolicy.PREVIEW_GONE_MESSAGE
-        else VirtualScreenPolicy.previewLine(sample.channel, outcome.pause, sample.fps, modeTitle(sample.mode), showWaiting)
+        val line = if (clear) goneMessage()
+        else statusLine(sample.channel, outcome.pause, sample.fps, modeTitle(sample.mode), showWaiting)
         return PreviewResult(outcome.action, line, show, sample.channel.isNotEmpty() && !clear, showWaiting)
     }
 }

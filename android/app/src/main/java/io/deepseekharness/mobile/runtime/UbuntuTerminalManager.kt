@@ -62,15 +62,7 @@ class UbuntuTerminalManager(
         }
         val session = requireSession(sessionId)
         synchronized(session.writeLock) {
-            var offset = 0
-            while (offset < data.size) {
-                val chunk = if (offset == 0) data else data.copyOfRange(offset, data.size)
-                val written = NativePty.write(session.fileDescriptor, chunk)
-                if (written <= 0 || written > chunk.size) {
-                    throw RuntimeFailure("TERMINAL_WRITE_FAILED", "无法写入终端会话")
-                }
-                offset += written
-            }
+            TerminalInputWriter.writeAll(data) { NativePty.write(session.fileDescriptor, it) }
         }
     }
 

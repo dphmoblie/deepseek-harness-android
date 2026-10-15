@@ -89,8 +89,8 @@ class DeviceBridgeServer(
      * 读不到 Context 时按**关**处理：这与 [DeviceCapabilityFacts] 的默认值同一方向，
      * 也意味着「读不到设置」永远不会被当成「用户开着根通道」。
      */
-    private fun rootEngineEnabled(): Boolean = applicationContextOrNull()
-        ?.let { io.deepseekharness.mobile.shizuku.RootEngineAccess.enabled(it) }
+    private fun rootEngineUsable(): Boolean = applicationContextOrNull()
+        ?.let { io.deepseekharness.mobile.shizuku.RootEngineAccess.usable(it) }
         ?: false
 
     private fun applicationContextOrNull(): Context? = try {
@@ -239,6 +239,7 @@ class DeviceBridgeServer(
                             shizukuRunning = shizukuState.running,
                             shizukuPermission = shizukuState.permission,
                             shizukuConnected = shizukuState.connected,
+                            shellEnabled = shellEnabled(),
                             accessibilityStatus = AccessibilityAutomationStore.serviceStatus(context),
                             rootEngineEnabled = root.enabled,
                             rootEngineStatus = if (root.enabled) root.kernelSuStatus else null,
@@ -348,13 +349,9 @@ class DeviceBridgeServer(
                     // 根通道（用户在设置里显式打开）时，SHELL 命令由应用进程自己起 `su -c`，
                     // 既不建 Shizuku 会话，也不受「AI Shell」这个 Shizuku 通道开关约束——
                     // 那条会话的父进程是 UID 2000 的 shell，根命令的归属会变得不确定。
-                    val rootEngine = command == DeviceCommand.SHELL && rootEngineEnabled()
-                    if (command == DeviceCommand.SHELL && !rootEngine && !shellEnabled()) {
-                        throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请在 Shizuku 设置中开启 AI Shell，或在应用设置里打开根通道")
-                    }
-                    if (command == DeviceCommand.BACKGROUND_TASKS && !shellEnabled()) {
-                        throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请在 Shizuku 设置中开启 AI Shell")
-                    }
+                    val rootEngine = DeviceCommand.requireShellRoute(
+                        command, command == DeviceCommand.SHELL && rootEngineUsable(), shellEnabled(),
+                    )
                     respondResult(output, runOneShot(command, param, rootEngine))
                 } catch (error: Throwable) {
                     val code = (error as? RuntimeFailure)?.code ?: "BRIDGE_FAILED"

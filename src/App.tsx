@@ -4130,7 +4130,7 @@ interface SettingsScreenProps {
   onResetAccessibilityPassword: () => void
   onRequestNotificationPermission: () => void
   onReloadSettings: () => void
-  onSave: (settings: RuntimeSettingsUpdate) => void
+  onSave: (settings: RuntimeSettingsUpdate) => Promise<boolean>
   onShareDiagnostic: () => void
 }
 
@@ -4159,7 +4159,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         ?? (overlayBallReadFailed ? currentDraft.settings.overlayBallEnabled : overlayBall?.enabled)
         ?? currentDraft.settings.overlayBallEnabled
         ?? false
-      onSave({
+      void onSave({
         ...currentSettings,
         ...(currentDraft.overlayBallEnabled === null ? {} : { overlayBallEnabled: currentOverlayBall }),
         ...(Object.keys(currentDraft.credentials).length === 0 ? {} : { providerApiKeys: currentDraft.credentials }),
@@ -4695,7 +4695,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     // 才把它作为更新字段发送；否则省略该字段，让原生侧保留菜单刚写入的值。
     const settingsWithoutOverlayBall = { ...settings }
     delete settingsWithoutOverlayBall.overlayBallEnabled
-    onSave({
+    void onSave({
       ...settingsWithoutOverlayBall,
       ...(overlayBallDraft === null ? {} : { overlayBallEnabled }),
       ...(Object.keys(credentialDrafts).length === 0 ? {} : { providerApiKeys: credentialDrafts }),
@@ -5610,7 +5610,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
 
         {/* 设备能力清单：从版本管理页挪过来，回答「这台机器现在能做什么」。 */}
-        <DeviceCapabilityCard />
+        <DeviceCapabilityCard onOpenDeviceShell={onOpenDeviceShell} />
         {/* 根通道单独立卡：它是**写**操作（开关），不能和能力清单那份 5 秒轮询共用状态。 */}
         <RootEngineCard />
         </>
@@ -7022,9 +7022,11 @@ export function App() {
     }, t("运行环境已重置"))
   }, [run, setActiveView])
 
-  const saveSettings = useCallback((nextSettings: RuntimeSettingsUpdate) => {
-    void run('save-settings', async () => {
+  const saveSettings = useCallback(async (nextSettings: RuntimeSettingsUpdate): Promise<boolean> => {
+    let savedSuccessfully = false
+    await run('save-settings', async () => {
       const saved = await runtimeBridge.saveSettings(nextSettings)
+      savedSuccessfully = true
       setSettings(saved)
       // 保存成功：草稿以后端落盘值为准重建（含清空 API Key 输入框）并解除「未保存」标记。
       // 不做这一步的话，旧草稿会在下一次后台刷新时把刚保存的值反向覆盖回去。
@@ -7081,6 +7083,7 @@ export function App() {
         )
       }
     })
+    return savedSuccessfully
   }, [notify, readOverlayBall, resyncSettingsDraft, run])
 
   /**

@@ -327,6 +327,26 @@ class RootSecurityTest {
     }
 
     @Test
+    fun `KernelSuProbe 明确非 KernelSU 不受管理器覆盖且保留未知版本兼容`() {
+        data class Case(val signature: Boolean?, val granted: Boolean, val state: String, val reason: String)
+        listOf(
+            Case(false, true, KernelSuProbe.STATUS_UNSUPPORTED, KernelSuProbe.REASON_ROOT_IMPL_NOT_KERNELSU),
+            Case(false, false, KernelSuProbe.STATUS_UNSUPPORTED, KernelSuProbe.REASON_ROOT_IMPL_NOT_KERNELSU),
+            Case(null, true, KernelSuProbe.STATUS_READY, KernelSuProbe.REASON_READY),
+            Case(null, false, KernelSuProbe.STATUS_NEEDS_ACTION, KernelSuProbe.REASON_PERMISSION_REQUIRED),
+        ).forEach { case ->
+            val result = KernelSuProbe.evaluate(
+                isGkiSupported = true, hasKernelSuManager = true, hasSuBinary = true,
+                isRootGranted = case.granted, suIsKernelSu = case.signature,
+                suVersion = if (case.signature == false) "MAGISKSU 27.0" else null,
+            )
+            assertEquals(case.toString(), case.state, result.status)
+            assertEquals(case.toString(), case.reason, result.reason)
+            assertEquals(case.signature != false, result.isKernelSuDetected)
+        }
+    }
+
+    @Test
     fun `KernelSuProbe 管理器包名覆盖官方及主要衍生版`() {
         assertTrue(KernelSuProbe.KERNELSU_MANAGER_PACKAGES.contains("me.weishu.kernelsu"))
         assertTrue(KernelSuProbe.KERNELSU_MANAGER_PACKAGES.contains("me.tiann.kernelsu"))
@@ -432,6 +452,52 @@ class RootSecurityTest {
     }
 
     // ---------------------------------------------------------------- DeviceCommandRunner 接线
+
+    @Test
+    fun `根通道不可用时回退 Shizuku 且不能绕过 AI Shell 开关`() {
+        listOf(KernelSuProbe.STATUS_UNSUPPORTED, KernelSuProbe.STATUS_NEEDS_ACTION).forEach { status ->
+            val root = RootEngineAccess.Status(true, status, "NOT_READY", false, emptyList(), null)
+            assertFalse(root.usable)
+            assertFalse(DeviceCommand.requireShellRoute(DeviceCommand.SHELL, root.usable, shellEnabled = true))
+            try {
+                DeviceCommand.requireShellRoute(DeviceCommand.SHELL, root.usable, shellEnabled = false)
+                fail("不可用的根通道不应绕过 AI Shell 权限")
+            } catch (failure: RuntimeFailure) {
+                assertEquals("DEVICE_SHELL_DISABLED", failure.code)
+            }
+        }
+        assertTrue(DeviceCommand.requireShellRoute(DeviceCommand.SHELL, rootUsable = true, shellEnabled = false))
+        assertFalse(DeviceCommand.requireShellRoute(DeviceCommand.BACKGROUND_TASKS, rootUsable = true, shellEnabled = true))
+    }
+
+    @Test
+    fun `Root 输出超限只截断保留内容且仍排空整个管道`() {
+        val previous = RootCommandRunner.processLauncher
+        val source = object : ByteArrayInputStream("x".repeat(RootCommandRunner.MAX_OUTPUT_CHARS + 16384).toByteArray()) {
+            var exhausted = false
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int = super.read(buffer, offset, length).also {
+                if (it == -1) exhausted = true
+            }
+        }
+        RootCommandRunner.processLauncher = { object : Process() {
+            override fun getInputStream(): InputStream = source
+            override fun getErrorStream(): InputStream = ByteArrayInputStream(ByteArray(0))
+            override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
+            override fun waitFor(): Int = 0
+            override fun waitFor(timeout: Long, unit: TimeUnit): Boolean = true
+            override fun exitValue(): Int = 0
+            override fun destroy() = Unit
+        } }
+        try {
+            val result = RootCommandRunner.run("echo diagnostic")
+            assertTrue(result.ok)
+            assertTrue(result.truncated)
+            assertEquals(RootCommandRunner.MAX_OUTPUT_CHARS, result.output.length)
+            assertTrue("保留上限之后仍必须排空至 EOF", source.exhausted)
+        } finally {
+            RootCommandRunner.processLauncher = previous
+        }
+    }
 
     @Test
     fun `DeviceCommandRunner 根通道在应用进程内起 su 而不经 Shizuku 会话`() {
