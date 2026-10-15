@@ -1,5 +1,7 @@
 package io.deepseekharness.mobile.accessibility
 
+import java.security.MessageDigest
+
 /**
  * 事件驱动的自动化**闸门**与**执行器**：把 [AutomationRuleMatcher] 的判定真正落到节点上，
  * 并在执行前后补齐四层节流、节点指纹去重与「连续失败自动停用」。
@@ -613,8 +615,11 @@ internal object AutomationRuleExecutor {
     /** `launch` 之外的节点身份文本参与比较时的最长字符数（两端一致，见 [nodeIdentity]）。 */
     const val MAX_IDENTITY_TEXT_CHARS = 160
 
+    /** 单条十六进制哈希指纹长度（64 位摘要，与 AutomationWindowDigest.HEX_CHARS 同长）。 */
+    const val HEX_FINGERPRINT_CHARS = 16
+
     /** 单条指纹的最长字符数（落盘/日志里不该出现超长串）。 */
-    const val MAX_FINGERPRINT_CHARS = 200
+    const val MAX_FINGERPRINT_CHARS = HEX_FINGERPRINT_CHARS
 
     /** `swipe` 动作在模型里必须带 `durationMs`；这里是兜底默认值，只在不合法输入下才会用到。 */
     const val DEFAULT_SWIPE_DURATION_MS = 300
@@ -656,9 +661,23 @@ internal object AutomationRuleExecutor {
         append(bounds.toString())
     }
 
-    /** 去重指纹 = 窗口 + 规则 + 节点身份：同一条规则在同一界面上对同一个节点只执行一次。 */
-    fun fingerprintOf(identityWindowKey: String, ruleId: String, identity: String): String =
-        "$identityWindowKey$SEPARATOR$ruleId$SEPARATOR$identity".take(MAX_FINGERPRINT_CHARS)
+    /**
+     * 去重指纹 = 窗口 + 规则 + 节点身份的稳定 SHA-256 截断哈希。
+     *
+     * 为什么用 SHA-256 哈希而不是前缀截断（.take）：
+     * 1. 深度路径、类名、长包名与长 Activity 名容易超过字符上限；前缀截断会砍掉尾部的
+     *    `viewId` 与 `bounds` 坐标，导致两个不同按钮撞出同一个指纹（假阳性 `DUPLICATE_FINGERPRINT`）；
+     * 2. 哈希阻断了节点文本、视图标识在内存去重表与日志中的明文留存，符合安全设计规范。
+     */
+    fun fingerprintOf(identityWindowKey: String, ruleId: String, identity: String): String {
+        val canonical = "$identityWindowKey$SEPARATOR$ruleId$SEPARATOR$identity"
+        val digest = MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray(Charsets.UTF_8))
+        return buildString(HEX_FINGERPRINT_CHARS) {
+            for (index in 0 until HEX_FINGERPRINT_CHARS / 2) {
+                append("%02x".format(digest[index]))
+            }
+        }
+    }
 
     fun execute(
         backend: AutomationNodeBackend?,

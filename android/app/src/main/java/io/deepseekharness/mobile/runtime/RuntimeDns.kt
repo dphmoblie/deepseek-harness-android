@@ -14,7 +14,7 @@ import java.util.UUID
 
 object RuntimeDns {
     private val safeAddress = Regex("^[0-9A-Fa-f:.%A-Za-z_-]{1,96}$")
-    private val fallbackAddresses = listOf("1.1.1.1", "8.8.8.8")
+    private val fallbackAddresses = listOf("223.5.5.5", "119.29.29.29", "1.1.1.1", "8.8.8.8")
 
     fun refresh(context: Context, destination: File) {
         val manager = context.getSystemService(ConnectivityManager::class.java)

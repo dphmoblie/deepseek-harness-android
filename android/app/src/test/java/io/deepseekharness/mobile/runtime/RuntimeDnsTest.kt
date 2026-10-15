@@ -29,7 +29,7 @@ class RuntimeDnsTest {
             listOf(InetAddress.getByName("127.0.0.1"), InetAddress.getByName("::1")),
         )
         assertEquals(
-            "nameserver 1.1.1.1\nnameserver 8.8.8.8\noptions timeout:2 attempts:3\n",
+            "nameserver 223.5.5.5\nnameserver 119.29.29.29\nnameserver 1.1.1.1\nnameserver 8.8.8.8\noptions timeout:2 attempts:3\n",
             config,
         )
         assertFalse(config.contains("127.0.0.1"))
