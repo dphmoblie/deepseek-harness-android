@@ -10,6 +10,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.security.MessageDigest
 
 /** 应用自更新的纯 JVM 断言：注入固定 JSON，不联网、不碰 android.*。 */
 class AppReleaseCatalogTest {
@@ -266,7 +267,8 @@ class AppReleaseCatalogTest {
             assertEquals(3, apk.readBytes().size)
             assertFalse(partial.exists())
             assertFalse(older.exists())
-            assertEquals(apk.name, AppUpdateStorage.downloaded(cacheDir)?.name)
+            assertEquals(apk.name, AppUpdateStorage.downloaded(cacheDir, "0.2.1-mobile-2")?.name)
+            assertNull(AppUpdateStorage.downloaded(cacheDir, "0.2.2"))
         }
     }
 
@@ -274,8 +276,8 @@ class AppReleaseCatalogTest {
     fun neverTreatsAHalfDownloadedFileAsAnInstallableUpdate() {
         withCacheDir { cacheDir ->
             AppUpdateStorage.partialFile(cacheDir, "0.2.1").writeBytes(byteArrayOf(1))
-            assertNull(AppUpdateStorage.downloaded(cacheDir))
-            assertNull(AppUpdateStorage.downloaded(File(cacheDir, "not-created-yet")))
+            assertNull(AppUpdateStorage.downloaded(cacheDir, "0.2.1"))
+            assertNull(AppUpdateStorage.downloaded(File(cacheDir, "not-created-yet"), "0.2.1"))
         }
     }
 
@@ -303,11 +305,11 @@ class AppReleaseCatalogTest {
             AppUpdateStorage.partialFile(cacheDir, "0.2.1").writeBytes(byteArrayOf(1))
             val apk = AppUpdateStorage.commit(cacheDir, "0.2.1")
             val failure = assertThrows(RuntimeFailure::class.java) {
-                AppUpdateInstallPolicy.requireInstallable(installAllowed = false, apk = apk)
+                AppUpdateInstallPolicy.requireInstallable(installAllowed = false, apk = apk, release = downloadedRelease())
             }
             assertEquals("APP_UPDATE_INSTALL_PERMISSION", failure.code)
             // 授权后同一个文件就能交给系统安装器：被拦下的是权限，不是文件。
-            assertEquals(apk, AppUpdateInstallPolicy.requireInstallable(installAllowed = true, apk = apk))
+            assertEquals(apk, AppUpdateInstallPolicy.requireInstallable(installAllowed = true, apk = apk, release = downloadedRelease()))
         }
     }
 
@@ -315,15 +317,55 @@ class AppReleaseCatalogTest {
     fun refusesInstallWhenTheApkIsMissing() {
         withCacheDir { cacheDir ->
             val failure = assertThrows(RuntimeFailure::class.java) {
-                AppUpdateInstallPolicy.requireInstallable(installAllowed = true, apk = null)
+                AppUpdateInstallPolicy.requireInstallable(installAllowed = true, apk = null, release = downloadedRelease())
             }
             assertEquals("APP_UPDATE_FILE_MISSING", failure.code)
             val gone = File(cacheDir, "app-release-0.2.1.apk")
             assertThrows(RuntimeFailure::class.java) {
-                AppUpdateInstallPolicy.requireInstallable(installAllowed = true, apk = gone)
+                AppUpdateInstallPolicy.requireInstallable(installAllowed = true, apk = gone, release = downloadedRelease())
             }
         }
     }
+
+    @Test
+    fun neverSubstitutesAnOldOrOtherChannelApkForTheCurrentRelease() {
+        withCacheDir { cacheDir ->
+            AppUpdateStorage.partialFile(cacheDir, "0.2.3-mobile-1").writeBytes(byteArrayOf(1))
+            AppUpdateStorage.commit(cacheDir, "0.2.3-mobile-1")
+            for (version in listOf("0.2.2", "0.2.4")) {
+                val failure = assertThrows(RuntimeFailure::class.java) {
+                    AppUpdateInstallPolicy.requireInstallable(
+                        true, AppUpdateStorage.downloaded(cacheDir, version), downloadedRelease(version = version),
+                    )
+                }
+                assertEquals("APP_UPDATE_FILE_MISSING", failure.code)
+            }
+        }
+    }
+
+    @Test
+    fun revalidatesTheDownloadedApkSizeAndDigestBeforeInstalling() {
+        withCacheDir { cacheDir ->
+            AppUpdateStorage.partialFile(cacheDir, "0.2.1").writeBytes(byteArrayOf(1))
+            val apk = AppUpdateStorage.commit(cacheDir, "0.2.1")
+            val release = downloadedRelease()
+            apk.writeBytes(byteArrayOf(1, 2))
+            assertEquals("APP_UPDATE_SIZE_INVALID", assertThrows(RuntimeFailure::class.java) {
+                AppUpdateInstallPolicy.requireInstallable(true, apk, release)
+            }.code)
+            apk.writeBytes(byteArrayOf(2))
+            assertEquals("APP_UPDATE_DIGEST_MISMATCH", assertThrows(RuntimeFailure::class.java) {
+                AppUpdateInstallPolicy.requireInstallable(true, apk, release)
+            }.code)
+            apk.writeBytes(byteArrayOf(1))
+            assertEquals(apk, AppUpdateInstallPolicy.requireInstallable(true, apk, release))
+        }
+    }
+
+    private fun downloadedRelease(version: String = "0.2.1") = AppReleaseCatalog.Release(
+        version, apkUrl("v$version"), 1L,
+        MailboxDigest.hex(MessageDigest.getInstance("SHA-256").digest(byteArrayOf(1))), "",
+    )
 
     /** 建一个临时 cacheDir，用完删掉；单测不落任何持久状态。 */
     private fun withCacheDir(block: (File) -> Unit) {

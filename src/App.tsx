@@ -628,7 +628,7 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   RUNTIME_CLOSED: '运行时已关闭，旧连接已失效；已尝试重新连接，请再试一次。',
   RUNTIME_CORRUPTED: '运行时文件已损坏，请重置运行时后重新安装。',
   ROOTFS_LINKS_CORRUPTED: '运行时归档的关键符号链接缺失或损坏，请更换运行时来源后重新安装。',
-  RUNNER_UNAVAILABLE: '此安装包不包含本机所需的运行组件，无法启动运行时。',
+  RUNNER_UNAVAILABLE: '此安装包不包含本机所需的运行组件。内置 PRoot 只提供 ARM64（arm64-v8a）版本，无法在 x86_64 模拟器或 32 位设备上运行，请换用 ARM64 真机；若本机就是 ARM64，请确认安装的是新版应用。',
   PROOT_RUNNER_START_FAILED: 'Android 无法执行内置 PRoot，请确认安装的是新版 ARM64 应用。',
   PROOT_RUNNER_TIMEOUT: 'PRoot 自检超时，请停止其他会话后重试。',
   PROOT_RUNNER_REJECTED: '内置 PRoot 未通过启动自检。',
@@ -1557,6 +1557,9 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
   /** 已确认的查找词：只有点搜索图标或按回车才落地。输入过程本身不筛选——
       移动端输入法组合中途触发筛选，列表刷新会把候选词条顶掉，搜索看起来就是「不能用」。 */
   const [appliedQuery, setAppliedQuery] = useState('')
+  /** 输入法是否正在组合（中文/日文等）。组合中途的 Enter 是「确认候选词」，不是「提交搜索」——
+      照抄 `ApplicationPicker` 的既有范式：不放行会被吞掉候选词，正好破坏本组件想保护的输入。 */
+  const [isComposing, setIsComposing] = useState(false)
   const [category, setCategory] = useState<SettingsHomeGroup | 'all'>('all')
   /** 每个分组只留命中的入口；整组都没命中就连标题一起不渲染，避免空标题刷屏。 */
   const groups = SETTINGS_HOME_GROUPS
@@ -1614,12 +1617,18 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
           type="search"
           value={query}
           onChange={event => setQuery(event.target.value)}
+          onCompositionStart={() => setIsComposing(true)}
           onCompositionEnd={event => {
+            setIsComposing(false)
             const val = event.currentTarget?.value ?? (event.target as HTMLInputElement)?.value ?? ''
             setQuery(val)
           }}
+          /* 失焦兜底：移动端软键盘选词或直接收起键盘时偶尔丢失 compositionend，
+             不补这一条会让 `isComposing` 卡在 true，回车再也提交不了。 */
+          onBlur={() => setIsComposing(false)}
           onKeyDown={event => {
-            if (event.key === 'Enter') {
+            // 组合中的 Enter 交给输入法确认候选词，不当作提交。
+            if (event.key === 'Enter' && !isComposing) {
               event.preventDefault()
               applySearch(event.currentTarget.value)
             }
@@ -2556,12 +2565,8 @@ function RuntimeVersionsPanel({
                         {isCurrentActive && <span className="status-chip success" style={{ marginLeft: 6 }}>{t("使用中")}</span>}
                         {!isCurrentActive && inLibrary && <span className="status-chip" style={{ marginLeft: 6 }}>{t("已保存")}</span>}
                       </strong>
-                      <small>
-                        {[
-                          item.dshVersion ? `dsh ${item.dshVersion}` : t("dsh 版本未读到"),
-                          item.notes ? item.notes : '',
-                        ].filter(Boolean).join(' · ')}
-                      </small>
+                      <small>{item.dshVersion ? `dsh ${item.dshVersion}` : t("dsh 版本未读到")}</small>
+                      {item.notes !== undefined && item.notes.trim() !== '' && <ReleaseNotes notes={item.notes} />}
                     </div>
                     <div className="release-actions">
                       {isCurrentActive ? (
@@ -2835,7 +2840,7 @@ function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restoreSnapsho
 interface AppUpdateSectionProps {
   /** 读取应用自身（APK）的更新状态：包含已安装版本、是否允许安装未知来源、有没有新版本。 */
   loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>
-  /** 切换更新频道；一次往返返回最新状态，失败时开关回弹（不做乐观态）。 */
+  /** 切换更新频道；一次往返返回最新状态，失败时回读实际频道（不做乐观态）。 */
   setUpdateChannel: (channel: AppUpdateChannel) => Promise<AppUpdateState>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
@@ -2909,7 +2914,7 @@ function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, instal
   }, [load])
 
   const runStep = (step: 'download' | 'install', action: () => Promise<void>, success: string): void => {
-    if (busy !== null) return
+    if (busy !== null || switchingChannel || loading || state?.available === undefined) return
     setBusy(step)
     // 进度只描述「这一次下载」：开始前清掉上一轮读数，结束后无论成败都不再显示进度条。
     if (step === 'download') setProgress(null)
@@ -2929,9 +2934,9 @@ function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, instal
   const available = state?.available
 
   /**
-   * 切换更新频道：原生侧写入后以 forceRefresh 重查，一次往返带回最新状态。
+   * 切换更新频道：一次往返带回最新状态，开关始终以原生回读的 state.channel 为准。
    *
-   * 开关不做乐观态——checked 始终以原生回读的 state.channel 为准，失败自然回弹。
+   * 失败后重新确认实际频道；无法确认时清除旧候选，避免按不明频道下载。
    * 复用 readRevision 守卫：切换进行中禁用所有会触发 load 的按钮，所以这个序号
    * 只会被卸载清理打断，不会被本组件的其它读取覆盖。
    */
@@ -2939,12 +2944,23 @@ function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, instal
     if (state === null || loading || busy !== null || switchingChannel) return
     const revision = ++readRevision.current
     setSwitchingChannel(true)
+    setFailed(false)
     void (async () => {
       try {
         const fresh = await setUpdateChannel(next)
         if (revision === readRevision.current) setState(fresh)
       } catch (error) {
-        if (revision === readRevision.current) notify(errorMessage(error), 'error')
+        if (revision !== readRevision.current) return
+        notify(errorMessage(error), 'error')
+        try {
+          const fresh = await loadUpdate(false)
+          if (revision === readRevision.current) setState(fresh)
+        } catch {
+          if (revision === readRevision.current) {
+            setState(null)
+            setFailed(true)
+          }
+        }
       } finally {
         if (revision === readRevision.current) setSwitchingChannel(false)
       }
@@ -3057,7 +3073,7 @@ function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, instal
               className="button button-secondary"
               type="button"
               onClick={() => runStep('download', downloadUpdate, t("更新包已下载并通过校验"))}
-              disabled={available === undefined || loading || busy !== null}
+              disabled={available === undefined || loading || busy !== null || switchingChannel}
             >
               {busy === 'download' ? <Loader2 className="spin" size={18} /> : <Download size={18} />}
               {t("下载更新")}
@@ -3066,7 +3082,7 @@ function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, instal
               className="button button-secondary"
               type="button"
               onClick={() => runStep('install', installUpdate, t("已交给系统安装器"))}
-              disabled={available === undefined || loading || busy !== null}
+              disabled={available === undefined || loading || busy !== null || switchingChannel}
             >
               {busy === 'install' ? <Loader2 className="spin" size={18} /> : <Rocket size={18} />}
               {t("安装更新")}
