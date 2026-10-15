@@ -2430,9 +2430,6 @@ button:disabled {
 .language-card h2 { font-size: 1.4375rem; line-height: 1.4; }
 .language-card p, .language-settings p { color: var(--muted); line-height: 1.6; }
 .language-card label, .language-settings label { display: block; margin: 16px 0 8px; font-size: 0.8125rem; font-weight: var(--weight-semibold); }
-.language-settings .language-copy h2 { margin: 8px 0; font-size: 1.125rem; }
-.language-settings .language-control { grid-column: 1 / -1; }
-.language-settings .language-control label { margin-top: 12px; }
 .language-card select, .language-settings select {
   width: 100%;
   min-height: 46px;
@@ -2444,10 +2441,17 @@ button:disabled {
   font: inherit;
 }
 .language-card .button { margin-top: 22px; width: 100%; }
-.language-settings { padding: 20px; margin-bottom: 14px; }
-.language-settings h2 { font-size: 1.125rem; margin: 8px 0; }
-.language-settings { display: grid; grid-template-columns: 32px minmax(0, 1fr); align-items: center; column-gap: 12px; row-gap: 10px; }
-.language-settings > svg { color: var(--blue); }
+/* 设置页语言卡压成一行（图标 | 说明 | 下拉框），把首屏留给功能入口；超大字体下下拉框自动换到第二行。 */
+.language-settings {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center;
+  column-gap: 12px; row-gap: 10px; padding: 14px 16px; margin-bottom: 14px;
+}
+.language-settings > svg { color: var(--blue); width: 24px; height: 24px; }
+.language-settings select { width: auto; min-width: 112px; min-height: 44px; }
+@media (max-width: 340px) {
+  .language-settings .language-control { grid-column: 1 / -1; }
+  .language-settings select { width: 100%; }
+}
 .language-settings .language-copy h2 { margin: 0; font-size: 0.9375rem; }
 .language-settings .language-copy p { margin: 3px 0 0; font-size: 0.75rem; }
 .language-settings > [role='alert'] { grid-column: 1 / -1; margin: 0; }
@@ -3189,13 +3193,14 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 }
 
 /* 分类完整换行，窄屏和放大字体时不隐藏入口，也不依赖横向滑动发现分类。 */
-.settings-categories { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+.settings-categories { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
 /* 分类芯片与同页的卡片共用同一套卡片令牌（`--card-*` 由 src/appearance.ts 写在根元素上）：
    用户改「卡片颜色/不透明度/模糊」时芯片跟着一起变，不会再出现「卡片换了色、芯片还是老底色」。
    令牌没设过时回落到主题基础色（--surface/--ink），所以没自定义卡片配色的环境下外观与从前一致。 */
 .settings-categories button {
-  max-width: 100%; min-height: 44px; padding: 8px 12px;
-  border: 1px solid var(--line); border-radius: var(--radius-control);
+  /* 胶囊形 + 收紧左右内边距：保持 44px 触控高度，同一行能放下更多分类。 */
+  max-width: 100%; min-height: 44px; padding: 6px 10px;
+  border: 1px solid var(--line); border-radius: 999px;
   background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
   backdrop-filter: blur(var(--card-blur, 0px));
   color: var(--card-ink, var(--ink)); font: inherit;
