@@ -21,6 +21,14 @@ class RuntimeLibrary(private val store: RuntimeStore) {
         const val MAX_CAPACITY = RuntimeVersionPolicy.LIBRARY_CAPACITY
 
         /**
+         * [list] 单次最多返回的条目数。
+         *
+         * 版本库容量只有 [MAX_CAPACITY]，这个上限纯粹是防御损坏/被塞满的目录 ——
+         * 原先它是写在循环里的字面量 100，提出来是为了让「收集」与「排序」两段共用同一个界。
+         */
+        private const val MAX_LIST_ENTRIES = 100
+
+        /**
          * 条目元数据（锁定状态与归档时间）的后缀。
          *
          * 刻意不用 `.json`：版本库里的 `*.json` 一律被当成清单扫描，元数据混进去会被当成坏条目清掉。
@@ -230,31 +238,46 @@ class RuntimeLibrary(private val store: RuntimeStore) {
     }
     fun list(): JSONArray {
         prepare()
-        val entries = JSONArray()
+        // 先收集再排序：`newDirectoryStream` 的枚举顺序由文件系统决定，跟下载时间无关。
+        // 排序规则本身是纯函数（[RuntimeVersionPolicy.listOrder]），好穷举也免得与界面契约漂移。
+        val collected = mutableListOf<Pair<RuntimeVersionPolicy.LibraryEntry, JSONObject>>()
         Files.newDirectoryStream(directory.toPath(), "*.json").use { stream ->
             for (file in stream) {
-                if (entries.length() >= 100) break
+                if (collected.size >= MAX_LIST_ENTRIES) break
                 val id = file.fileName.toString().removeSuffix(".json")
                 try {
                     val manifest = manifest(id)
                     val archive = path(id, ".bundle")
                     if (!Files.isRegularFile(archive, LinkOption.NOFOLLOW_LINKS) || Files.size(archive) != manifest.rootfs.compressedBytes) continue
                     val meta = readMeta(id)
-                    entries.put(JSONObject().put("id", id).put("version", manifest.version)
+                    val active = store.installedManifest()?.rootfs?.sha256 == id
+                    val entry = JSONObject().put("id", id).put("version", manifest.version)
                         .put("dshVersion", manifest.dshVersion ?: "未声明")
                         .put("bytes", manifest.rootfs.compressedBytes)
                         .put("pinned", meta.pinned)
-                        .put("active", store.installedManifest()?.rootfs?.sha256 == id)
+                        .put("active", active)
                         // 时间读不到（0）时宁可不给这个键，也不回一个 1970 年的时间戳去骗界面。
                         .also { json ->
                             if (meta.downloadedAt > 0L) {
                                 json.put("downloadedAt", DateTimeFormatter.ISO_INSTANT.format(Instant.ofEpochMilli(meta.downloadedAt)))
                             }
-                        })
+                        }
+                    val sortKey = RuntimeVersionPolicy.LibraryEntry(
+                        id = id,
+                        downloadedAt = meta.downloadedAt,
+                        pinned = meta.pinned,
+                        active = active,
+                    )
+                    collected += sortKey to entry
                 } catch (_: RuntimeFailure) { /* 损坏条目不冒充已下载版本。 */ }
             }
         }
-        return entries
+        return JSONArray().apply {
+            RuntimeVersionPolicy.listOrder(collected.map { it.first })
+                .forEach { ordered ->
+                    collected.firstOrNull { it.first.id == ordered.id }?.second?.let { put(it) }
+                }
+        }
     }
     fun retain(manifest: RuntimeManifest, archive: File) {
         prepare()

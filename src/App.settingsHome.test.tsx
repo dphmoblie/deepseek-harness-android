@@ -188,4 +188,37 @@ describe('设置首页：分组与分类筛选', () => {
     expect(screen.getByRole('status')).toHaveTextContent('没有匹配的入口')
     expect(screen.queryByRole('region', { name: '外观与显示' })).toBeNull()
   })
+
+  it('输入法组合中的回车只确认候选词，不提交搜索', async () => {
+    await openSettingsHome()
+
+    const searchInput = screen.getByRole('searchbox', { name: '按功能词查找入口' })
+
+    // 组合开始 → 输入半成品 → 回车。中文输入法里这个回车是「选中候选词」，
+    // 不是「提交搜索」：吞掉它会让候选词无法确认，正好破坏本组件想保护的输入。
+    fireEvent.compositionStart(searchInput)
+    fireEvent.change(searchInput, { target: { value: '主' } })
+    fireEvent.keyDown(searchInput, { key: 'Enter' })
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByRole('region', { name: '模型连接' })).toBeVisible()
+
+    // 组合结束（候选词落定）后再回车，这才该提交。
+    fireEvent.compositionEnd(searchInput, { target: { value: '主题' } })
+    fireEvent.keyDown(searchInput, { key: 'Enter' })
+    expect(screen.getByRole('status')).toHaveTextContent('找到 1 个匹配的入口')
+  })
+
+  it('组合中失焦也能恢复提交能力', async () => {
+    await openSettingsHome()
+
+    const searchInput = screen.getByRole('searchbox', { name: '按功能词查找入口' })
+
+    // 移动端软键盘选词或直接收起键盘时会丢 compositionend：不靠失焦兜底，
+    // `isComposing` 会永久卡在 true，搜索框从此再也提交不了（静默失效）。
+    fireEvent.compositionStart(searchInput)
+    fireEvent.change(searchInput, { target: { value: '主题' } })
+    fireEvent.blur(searchInput)
+    fireEvent.keyDown(searchInput, { key: 'Enter' })
+    expect(screen.getByRole('status')).toHaveTextContent('找到 1 个匹配的入口')
+  })
 })

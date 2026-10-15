@@ -109,4 +109,47 @@ class RuntimeLibraryPolicyTest {
         assertEquals(expected, RuntimeVersionPolicy.evictionCandidate(listOf(first, second), incomingId = null))
         assertEquals(expected, RuntimeVersionPolicy.evictionCandidate(listOf(second, first), incomingId = null))
     }
+
+    @Test
+    fun listOrderPutsTheNewestFirst() {
+        // 界面按「最新的在前」折叠，默认只露前几条。顺序错了，被藏起来的就不是旧版本。
+        val oldest = entry("a".repeat(64), downloadedAt = 10)
+        val newest = entry("c".repeat(64), downloadedAt = 30)
+        val middle = entry("b".repeat(64), downloadedAt = 20)
+        // 入参顺序故意打乱：目录枚举顺序与时间无关，结果必须与入参顺序无关。
+        val ordered = RuntimeVersionPolicy.listOrder(listOf(middle, oldest, newest))
+        assertEquals(listOf("c".repeat(64), "b".repeat(64), "a".repeat(64)), ordered.map { it.id })
+        assertEquals(ordered.map { it.id }, RuntimeVersionPolicy.listOrder(listOf(newest, middle, oldest)).map { it.id })
+    }
+
+    @Test
+    fun listOrderIsTheReverseOfEvictionPreference() {
+        // 两条规则方向相反：淘汰挑最旧，展示挑最新。写成同向就会「一进版本管理页
+        // 看不到刚下载的那个」，而且因为库里通常只有 1 个包，很久都发现不了。
+        val entries = listOf(
+            entry("a".repeat(64), downloadedAt = 10),
+            entry("b".repeat(64), downloadedAt = 20),
+            entry("c".repeat(64), downloadedAt = 30),
+        )
+        assertEquals("a".repeat(64), RuntimeVersionPolicy.evictionCandidate(entries, incomingId = null))
+        assertEquals("c".repeat(64), RuntimeVersionPolicy.listOrder(entries).first().id)
+    }
+
+    @Test
+    fun listOrderBreaksTiesByIdDescendingForReproducibility() {
+        val first = entry("a".repeat(64), downloadedAt = 42)
+        val second = entry("b".repeat(64), downloadedAt = 42)
+        val expected = listOf("b".repeat(64), "a".repeat(64))
+        assertEquals(expected, RuntimeVersionPolicy.listOrder(listOf(first, second)).map { it.id })
+        assertEquals(expected, RuntimeVersionPolicy.listOrder(listOf(second, first)).map { it.id })
+    }
+
+    @Test
+    fun listOrderKeepsEntriesWithUnknownTimestampLast() {
+        // `downloadedAt = 0` 是「时间读不到」（旧版本库没有 sidecar），不是「1970 年下载的」。
+        // 它必须排在所有已知时间之后，否则损坏的元数据会把真实版本挤下折叠线。
+        val unknown = entry("a".repeat(64), downloadedAt = 0)
+        val known = entry("b".repeat(64), downloadedAt = 1)
+        assertEquals(listOf("b".repeat(64), "a".repeat(64)), RuntimeVersionPolicy.listOrder(listOf(unknown, known)).map { it.id })
+    }
 }

@@ -2,6 +2,7 @@ package io.deepseekharness.mobile.runtime
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Build
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
@@ -859,6 +860,20 @@ class RuntimeStore(context: Context) {
     }
 
     fun runnerAvailable(): Boolean {
+        // 先看设备能不能**原生**执行这个运行器：内置运行器只有 arm64-v8a，而
+        // `SUPPORTED_ABIS` 会把转译出来的架构也算进去（x86_64 模拟器的 abilist 是
+        // `x86_64,arm64-v8a,x86`），所以判据必须是**首选 ABI**（`cpuAbi`），不是列表包含。
+        // 用列表包含判会让模拟器通过检查、却在实际 execve 时 SIGSEGV（真机取证见
+        // `docs/模拟器实测-运行时启动与前端问题清单.md` 的 M-1：loader/gate 两处都崩）。
+        // 这一条只拦「设备原生架构就不是 arm64」，不改变任何 arm64 真机的行为。
+        if (Build.SUPPORTED_ABIS.firstOrNull() != RUNNER_ABI) {
+            android.util.Log.w(
+                "dsh-runtime",
+                "runner check failed: device abi=" + (Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown") +
+                    "，内置运行器需要 " + RUNNER_ABI,
+            )
+            return false
+        }
         // 信任来自 APK 打包与签名，不依赖提取库的 x 位：部分机型（如荣耀）
         // 上 nativeLibraryDir 提取文件的 canExecute() 恒为 false，但硬链接后
         // 经系统加载路径执行不受 x 位影响。
@@ -1527,6 +1542,14 @@ class RuntimeStore(context: Context) {
         private const val KEY_AUTO_LAUNCH = "auto_launch"
         private const val RUNNER_NAME = "libdsh_proot.so"
         private const val LOADER_NAME = "libdsh_proot_loader.so"
+
+        /**
+         * 内置运行器的目标架构。
+         *
+         * 与 `build.gradle` 的 `abiFilters 'arm64-v8a'` 和 [RuntimeManifest] 的
+         * `architecture` 校验是同一个值，三处必须一致。
+         */
+        private const val RUNNER_ABI = "arm64-v8a"
         private const val EXEC_XATTR_NAME = "security.android.exec"
         private val EXEC_XATTR_VALUE: ByteArray = byteArrayOf('1'.code.toByte())
         // 执行位一次性修复的标记：跟着运行时根走，重装（重写 loader）时清掉。

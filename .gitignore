@@ -70,9 +70,11 @@ runtime-cache/
 .DS_Store
 Thumbs.db
 # 真机调试临时产物：截图与 UI 层级 dump（用 `adb exec-out screencap` / `uiautomator dump` 生成）。
+# 不锚定根目录：`docs/模拟器实测-…` 约定的产物落在 `_logs/shots/` 等子目录，锚定会让那些漏网。
 # 需要留档的截图请放 output/（见上），那里同样不提交。
-/screen*.png
-/ui.xml
+screen*.png
+ui.xml
+_logs/
 # 供应链安全 bootstrap：wrapper jar 二进制不提交，仅保留生成源码；
 # CI/本地用可信 Gradle 8.11.1 在该目录执行 `gradle wrapper` 生成 jar
 .wrapper-bootstrap/*

@@ -98,6 +98,19 @@ object RuntimeVersionPolicy {
             .sortedWith(compareBy({ it.downloadedAt }, { it.id }))
             .firstOrNull()
             ?.id
+
+    /**
+     * 版本库给界面展示的顺序：**最新的在前**。
+     *
+     * 这是契约，不是装饰：界面按「最新的在前」折叠（默认只露前几条），
+     * 所以顺序不能碰运气 —— `RuntimeLibrary.list()` 原先直接返回
+     * `newDirectoryStream` 的枚举顺序，而那个顺序由文件系统决定，跟下载时间无关。
+     *
+     * 与 [evictionCandidate] 方向相反：那边要淘汰最旧的，这边要展示最新的。
+     * 时间并列时按 id **降序**，同样是为了「同一份磁盘状态永远给出同一个顺序」。
+     */
+    fun listOrder(entries: List<LibraryEntry>): List<LibraryEntry> =
+        entries.sortedWith(compareByDescending<LibraryEntry> { it.downloadedAt }.thenByDescending { it.id })
 }
 
 /**
