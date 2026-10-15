@@ -58,6 +58,7 @@ import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
 import io.deepseekharness.mobile.runtime.clampHarnessTailBytes
 import io.deepseekharness.mobile.runtime.MailboxExportOutcome
+import io.deepseekharness.mobile.runtime.ModelConnectivityProbe
 import io.deepseekharness.mobile.runtime.MailboxDirectoryEntry
 import io.deepseekharness.mobile.runtime.MailboxDirectoryState
 import io.deepseekharness.mobile.runtime.TaskNotification
@@ -527,6 +528,7 @@ class MobileRuntimePlugin : Plugin() {
                 "import" -> AuditEvent.PLUGIN_IMPORT
                 "rollback" -> AuditEvent.PLUGIN_ROLLBACK
                 "repair" -> AuditEvent.PLUGIN_REPAIR
+                "prune" -> AuditEvent.PLUGIN_PRUNE
                 else -> throw RuntimeFailure("PLUGIN_INPUT_INVALID", "插件操作无效")
             }
             audited(event) {
@@ -583,6 +585,23 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun listRuntimeReleases(call: PluginCall) {
         execute(call) { JSObject().put("entries", RuntimeReleaseCatalog().list()) }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 下载远端运行时包到本地版本库（不立即激活）。
+     */
+    @PluginMethod
+    fun downloadRuntimeRelease(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.RUNTIME_INSTALL) {
+                val url = call.getString("manifestUrl")
+                val sha = call.getString("manifestSha256")
+                val source = RuntimeValidation.source(url, sha)
+                controller.downloadToLibrary(source)
+                JSObject().put("success", true)
+            }
+        }
     }
 
     /**
@@ -822,10 +841,15 @@ class MobileRuntimePlugin : Plugin() {
         execute(call) {
             audited(AuditEvent.RUNTIME_INSTALL) {
                 val settings = controller.store.settings()
-                val source = RuntimeValidation.source(
-                    call.getString("manifestUrl") ?: settings.manifestUrl,
-                    call.getString("manifestSha256") ?: settings.manifestSha256,
-                )
+                val libraryId = call.getString("libraryId")
+                val source = if (!libraryId.isNullOrBlank()) {
+                    RuntimeSource(null, null, libraryId = RuntimeLibrary.requireId(libraryId.trim()))
+                } else {
+                    RuntimeValidation.source(
+                        call.getString("manifestUrl") ?: settings.manifestUrl,
+                        call.getString("manifestSha256") ?: settings.manifestSha256,
+                    )
+                }
                 // 安装前已自动拍下会话快照（controller.install 内，与手动快照同一套实现）。
                 // 快照结论单独记一条审计与诊断：安装本身照旧成功，但用户必须能看出这次有没有备份。
                 val autoSnapshot = controller.install(source)
@@ -880,10 +904,14 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun openHarness(call: PluginCall) {
         resolveWhileActive(call) {
+            val sessionId = call.getString("sessionId")?.trim()?.takeIf { it.isNotEmpty() }
             val access = controller.openHarnessAccess()
             AppAuthenticationState.authorizeHarnessLaunch(access)
             val intent = Intent(context, HarnessActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (sessionId != null) {
+                intent.putExtra(HarnessActivity.EXTRA_SESSION_ID, sessionId)
+            }
             try {
                 context.startActivity(intent)
             } catch (error: Throwable) {
@@ -891,6 +919,33 @@ class MobileRuntimePlugin : Plugin() {
                 throw error
             }
             null
+        }
+    }
+
+    @PluginMethod
+    fun testModelConnectivity(call: PluginCall) {
+        val providerId = call.getString("providerId")?.trim() ?: run {
+            call.reject("供应商标识缺失")
+            return
+        }
+        val baseUrl = call.getString("baseUrl")?.trim()
+        val apiKey = call.getString("apiKey")?.trim()
+        val api = call.getString("api")?.trim()
+        execute(call) {
+            val savedKey = controller.store.readModelCredential(providerId)
+            val result = ModelConnectivityProbe.probe(
+                providerId = providerId,
+                baseUrl = baseUrl,
+                apiKey = apiKey,
+                api = api,
+                savedApiKey = savedKey,
+            )
+            JSObject().apply {
+                put("ok", result.ok)
+                put("status", result.status)
+                put("latencyMs", result.latencyMs)
+                put("message", result.message)
+            }
         }
     }
 
@@ -3633,8 +3688,12 @@ class MobileRuntimePlugin : Plugin() {
         }
         val hasCurrent = any { it.slot == RuntimeVersionPolicy.SLOT_CURRENT }
         val hasPrevious = any { it.slot == RuntimeVersionPolicy.SLOT_PREVIOUS }
+        val libraryArray = RuntimeLibrary(controller.store).list()
+        val libraryCapacity = RuntimeLibrary.MAX_CAPACITY
         return JSObject()
             .put("versions", array)
+            .put("library", libraryArray)
+            .put("libraryCapacity", libraryCapacity)
             .put("canSwitch", RuntimeVersionPolicy.canSwitch(hasCurrent, hasPrevious))
             .put("canDelete", RuntimeVersionPolicy.canDelete(hasPrevious))
     }

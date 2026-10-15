@@ -106,6 +106,14 @@ export interface RuntimeVersionInfo {
   active: boolean
 }
 
+export interface RuntimeLibraryEntry {
+  id: string
+  version: string
+  dshVersion?: string
+  bytes: number
+  active: boolean
+}
+
 /**
  * 运行时版本列表与可执行操作。
  *
@@ -115,6 +123,8 @@ export interface RuntimeVersionInfo {
  */
 export interface RuntimeVersionsState {
   versions: RuntimeVersionInfo[]
+  library?: RuntimeLibraryEntry[]
+  libraryCapacity?: number
   canSwitch: boolean
   canDelete: boolean
 }
@@ -1497,7 +1507,7 @@ export interface RuntimeBridge {
    */
   install: (source?: RuntimeSource) => Promise<RuntimeInstallResult>
   startHarness: () => Promise<RuntimeState>
-  openHarness: () => Promise<void>
+  openHarness: (sessionId?: string) => Promise<void>
   stopRuntime: () => Promise<RuntimeState>
   reset: (confirmation: 'RESET_RUNTIME') => Promise<RuntimeState>
   createTerminal: (kind: TerminalKind, columns: number, rows: number) => Promise<{ sessionId: string }>
@@ -1812,14 +1822,16 @@ export interface RuntimeBridge {
    */
   getRuntimeVersions: () => Promise<RuntimeVersionsState>
   /**
-   * 切换到上一版本（目前只支持 `target = 'previous'`）。
+   * 切换运行时版本（支持 'previous'、'bundled' 或版本库条目 ID）。
    *
    * 会改名运行时根目录并搬迁访客数据（会话、设置、凭据、工作区），
    * 所以运行中会被拒绝：界面应在运行时按 phase 禁用按钮，原生侧另有兜底。
    */
-  switchRuntimeVersion: (target: 'previous') => Promise<RuntimeVersionsState>
-  /** 删除保留下来的上一版本以释放磁盘空间；只影响上一版本，不需要停止运行时。 */
-  deleteRuntimeVersion: (target: 'previous') => Promise<RuntimeVersionsState>
+  switchRuntimeVersion: (target: string) => Promise<RuntimeVersionsState>
+  /** 删除保留下来的上一版本或版本库中的历史版本以释放磁盘空间；不影响当前运行环境。 */
+  deleteRuntimeVersion: (target: string) => Promise<RuntimeVersionsState>
+  /** 下载远端运行时发布到本地版本库（不立即激活）。 */
+  downloadRuntimeRelease: (manifestUrl: string, manifestSha256: string) => Promise<void>
   /**
    * 运行时占用的可回收残留（份数与字节数，只读）。
    *
@@ -1940,6 +1952,32 @@ export interface RuntimeBridge {
   addAppUpdateProgressListener: (listener: (event: AppUpdateProgress) => void) => Promise<ListenerHandle>
   addTerminalOutputListener: (listener: (event: TerminalChunk) => void) => Promise<ListenerHandle>
   addTerminalExitListener: (listener: (event: TerminalExit) => void) => Promise<ListenerHandle>
+  /**
+   * 测试指定模型供应商的端点连通性与鉴权有效性。
+   *
+   * 若提供 apiKey（草稿密钥），使用该草稿测试；若未提供，优先使用本机已安全保存的凭据测试。
+   * 结果仅返回 HTTP 状态码、往返延迟与中文提示，绝不回显密钥内容。
+   */
+  testModelConnectivity: (options: {
+    providerId: string
+    baseUrl?: string
+    apiKey?: string
+    api?: CustomProviderApi
+  }) => Promise<ModelConnectivityResult>
+}
+
+export interface ModelConnectivityResult {
+  ok: boolean
+  status: number
+  latencyMs: number
+  message: string
+}
+
+export interface PluginPreservedInfo {
+  exists: boolean
+  version: string | null
+  transaction?: string | null
+  isLinked?: boolean
 }
 
 /** 插件管理只传递受控元数据，不返回配置值、绝对路径或凭据。 */
@@ -1961,6 +1999,8 @@ export interface PluginGroup {
    * `group.rollback ?? null` 读取即可）。
    */
   rollback?: string | null
+  /** 手机保留区（versions/ 目录）中的副本与链接状态。 */
+  preserved?: PluginPreservedInfo | null
   enabled: boolean
   protected: boolean
   official: boolean
@@ -2014,9 +2054,10 @@ export interface PluginRequest {
    * `import`：受控导入（npm 包名 / `https://` 直链 / `git+https://` 地址），需要 `source`；
    * `rollback`：回滚到该插件的上一版，需要 `id`；
    * `repair`：不带参数，由用户主动触发一次插件链接接回（绕过原生侧「同一代次只修一次」的自愈闸门），
-   * 返回形状与 `list` 相同，并附带本次修复后的受控计数。
+   * 返回形状与 `list` 相同，并附带本次修复后的受控计数；
+   * `prune`：清理保留区中未被当前清单、回滚及锁文件引用的孤立 versions 历史副本。
    */
-  operation: 'list' | 'enable' | 'child' | 'update' | 'import' | 'rollback' | 'repair'
+  operation: 'list' | 'enable' | 'child' | 'update' | 'import' | 'rollback' | 'repair' | 'prune'
   id?: string
   enabled?: boolean
   childId?: string

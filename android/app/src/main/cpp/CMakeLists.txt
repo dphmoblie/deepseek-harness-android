@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(dsh_pty LANGUAGES C CXX)
 
+# 检测并启用 ccache 编译启动器加速本地重复构建
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+endif()
+
 add_library(dsh_pty SHARED pty_bridge.c)
 target_compile_features(dsh_pty PRIVATE c_std_17)
 set_target_properties(dsh_pty PROPERTIES

@@ -108,6 +108,7 @@ import type {
   AccessibilityServiceStatus,
   AppUpdateProgress,
   AppUpdateState,
+  CustomModelProvider,
   HarnessLog,
   KeepAliveState,
   ListenerHandle,
@@ -116,12 +117,16 @@ import type {
   MailboxImportResult,
   MailboxRoot,
   MailboxState,
+  ModelConnectivityResult,
   ModelProviderId,
   OverlayBallState,
   ProviderApiKeys,
   RuntimeInstallResult,
+  RuntimeLibraryEntry,
   RuntimePhase,
   RuntimeProgress,
+  RuntimeReleaseEntry,
+  RuntimeReleaseList,
   RuntimeSessionSnapshotRestoreResult,
   RuntimeSessionSnapshotState,
   RuntimeSource,
@@ -1051,7 +1056,7 @@ interface ConversationScreenProps {
   keepAlive: KeepAliveState
   runtime: RuntimeState
   onInstall: () => void
-  onLaunch: () => void
+  onLaunch: (sessionId?: string) => void
   /** 启动卡片上那一格按需求从「应用设置」换成「停止」：只管停 Harness 服务。 */
   onStop: () => void
   onOpenTerminal: () => void
@@ -1128,7 +1133,7 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
               <RefreshCw size={18} />{t("更新运行环境")}</button>
           )}
           {installed && !transitioning && !updateRequired && busy !== 'launch' && (
-            <button className="button button-primary" type="button" onClick={onLaunch} disabled={busy !== null}>
+            <button className="button button-primary" type="button" onClick={() => onLaunch()} disabled={busy !== null}>
               <Play size={18} fill="currentColor" />{t("打开对话")}</button>
           )}
           {runtime.phase === 'error' && installed && !updateRequired && (
@@ -1151,7 +1156,7 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
             <strong>{t("需要重新连接")}</strong>
             <span>{t("应用进程已被系统结束，当前连接已失效。请重新连接以启动 Harness。")}</span>
           </div>
-          <button className="button button-primary compact-button" type="button" onClick={onLaunch} disabled={busy !== null || !installed}>
+          <button className="button button-primary compact-button" type="button" onClick={() => onLaunch()} disabled={busy !== null || !installed}>
             {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("重新连接")}
           </button>
         </div>
@@ -2012,38 +2017,44 @@ interface RuntimeVersionsPanelProps {
   runtime: RuntimeState
   /** 版本列表与两个操作；由 App 里引用稳定的回调提供。 */
   loadVersions: () => Promise<RuntimeVersionsState>
-  switchVersion: (target: 'previous') => Promise<RuntimeVersionsState>
-  deleteVersion: (target: 'previous') => Promise<RuntimeVersionsState>
+  switchVersion: (target: string) => Promise<RuntimeVersionsState>
+  deleteVersion: (target: string) => Promise<RuntimeVersionsState>
+  downloadRelease?: (manifestUrl: string, manifestSha256: string) => Promise<void>
+  listReleases?: () => Promise<RuntimeReleaseList>
   /** 切换成功后重新读取运行时状态：已安装版本与阶段都会变。 */
   refreshRuntime: () => Promise<void>
   notify: (message: string, tone: NoticeTone) => void
 }
 
 /**
- * 运行时版本管理：当前使用的版本、保留下来的上一版本与随安装包内置的版本。
+ * 运行时版本管理：当前使用的版本、保留下来的上一版本、随安装包内置版本以及本地多版本库。
  *
- * 这里只做原生侧真正支持的两件事：切回上一版本、删除上一版本。
- * 「装到新版本」仍然走运行环境页原有的安装入口（内置，或 manifest 地址 + SHA-256），
- * 所以本区块不提供下载、也不能选任意版本——磁盘上只有两个解压后的槽位，
- * 多留一份的代价约等于再解压一份完整的运行时。
- *
- * 列表是只读的轻量查询（读清单与小体积包描述），进页面即读，不需要先跑自检；
- * 删除只影响上一版本，运行中的当前版本不受影响；切换会改名根目录并搬迁访客数据，
- * 所以运行中禁用按钮，原生侧另有 `RUNTIME_BUSY` 兜底。
+ * 移动端多版本采用单活解压（Cold/Hot Tiering）模式：
+ * 磁盘上始终只保留一份解压运行态（约 960MB），其余版本以压缩包（.bundle，约 300MB）
+ * 保存在本地私有版本库中（最多 5 个），切换时本地原子解压并搬迁访客数据，不耗流量。
+ * 随 APK 内置的出厂版本（Slot 0）物理只读永久保留，不占版本库配额。
  */
 function RuntimeVersionsPanel({
   runtime,
   loadVersions,
   switchVersion,
   deleteVersion,
+  downloadRelease,
+  listReleases,
   refreshRuntime,
   notify,
 }: RuntimeVersionsPanelProps) {
   const [versions, setVersions] = useState<RuntimeVersionsState | null>(null)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
-  const [busy, setBusy] = useState<'switch' | 'delete' | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmDeleteLibraryId, setConfirmDeleteLibraryId] = useState<string | null>(null)
+
+  const [catalog, setCatalog] = useState<RuntimeReleaseEntry[]>([])
+  const [catalogLoading, setCatalogLoading] = useState(false)
+  const [catalogFailed, setCatalogFailed] = useState(false)
+  const [downloadingVersion, setDownloadingVersion] = useState<string | null>(null)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -2061,9 +2072,27 @@ function RuntimeVersionsPanel({
 
   useEffect(() => { load() }, [load])
 
+  const loadCatalog = useCallback(() => {
+    setCatalogLoading(true)
+    setCatalogFailed(false)
+    void (async () => {
+      try {
+        const fetcher = listReleases ?? (() => runtimeBridge.listRuntimeReleases())
+        const res = await fetcher()
+        setCatalog(res.entries ?? [])
+      } catch {
+        setCatalogFailed(true)
+      } finally {
+        setCatalogLoading(false)
+      }
+    })()
+  }, [listReleases])
+
+  useEffect(() => { loadCatalog() }, [loadCatalog])
+
   const switchToPrevious = (): void => {
     if (busy !== null) return
-    setBusy('switch')
+    setBusy('switch:previous')
     void (async () => {
       try {
         setVersions(await switchVersion('previous'))
@@ -2080,7 +2109,7 @@ function RuntimeVersionsPanel({
 
   const removePrevious = (): void => {
     if (busy !== null) return
-    setBusy('delete')
+    setBusy('delete:previous')
     void (async () => {
       try {
         setVersions(await deleteVersion('previous'))
@@ -2094,10 +2123,81 @@ function RuntimeVersionsPanel({
     })()
   }
 
+  const switchToBundled = (): void => {
+    if (busy !== null) return
+    setBusy('switch:bundled')
+    void (async () => {
+      try {
+        setVersions(await switchVersion('bundled'))
+        await refreshRuntime()
+        notify(t("已切换到随包内置版本"), 'success')
+      } catch (error) {
+        notify(errorMessage(error), 'error')
+      } finally {
+        setBusy(null)
+      }
+    })()
+  }
+
+  const switchToLibrary = (id: string): void => {
+    if (busy !== null) return
+    setBusy(`switch:${id}`)
+    void (async () => {
+      try {
+        setVersions(await switchVersion(id))
+        await refreshRuntime()
+        notify(t("已切换到指定版本"), 'success')
+      } catch (error) {
+        notify(errorMessage(error), 'error')
+      } finally {
+        setBusy(null)
+      }
+    })()
+  }
+
+  const removeLibrary = (id: string): void => {
+    if (busy !== null) return
+    setBusy(`delete:${id}`)
+    void (async () => {
+      try {
+        setVersions(await deleteVersion(id))
+        setConfirmDeleteLibraryId(null)
+        notify(t("已从版本库删除"), 'success')
+      } catch (error) {
+        notify(errorMessage(error), 'error')
+      } finally {
+        setBusy(null)
+      }
+    })()
+  }
+
+  const downloadToLibrary = (item: RuntimeReleaseEntry): void => {
+    if (!item.manifestUrl || !item.manifestSha256 || busy !== null) return
+    setDownloadingVersion(item.version)
+    void (async () => {
+      try {
+        const downloader = downloadRelease ?? ((url, sha) => runtimeBridge.downloadRuntimeRelease(url, sha))
+        await downloader(item.manifestUrl!, item.manifestSha256!)
+        notify(t("已成功下载到版本库"), 'success')
+        await load()
+      } catch (error) {
+        notify(errorMessage(error), 'error')
+      } finally {
+        setDownloadingVersion(null)
+      }
+    })()
+  }
+
   const phaseBlocked = RUNTIME_VERSION_SWITCH_BLOCKED_PHASES.includes(runtime.phase)
   const canSwitch = versions?.canSwitch === true && !phaseBlocked
   const canDelete = versions?.canDelete === true
   const list = versions?.versions ?? []
+  const library = versions?.library ?? []
+  const libraryCapacity = versions?.libraryCapacity ?? 5
+
+  const currentSlot = list.find(v => v.active)?.slot
+  const isCurrentBundled = currentSlot === 'bundled'
+  const hasBundled = list.some(v => v.slot === 'bundled')
 
   return (
     <section className="settings-section" aria-labelledby="runtime-versions-title">
@@ -2144,20 +2244,6 @@ function RuntimeVersionsPanel({
         </div>
       )}
 
-      {/* 数据清理与运行时占用合成一张卡：上面是缓存与插件数据，下面才是运行时残留。 */}
-      <div className="settings-subsection" aria-labelledby="runtime-cleanup-group">
-        <div className="section-title">
-          <div>
-            <h3 id="runtime-cleanup-group">{t('清理')}</h3>
-            <p>{t('缓存、插件数据与运行时残留都在这里回收；运行环境本身在「重置运行环境」里处理。')}</p>
-          </div>
-        </div>
-
-        <RuntimeCleanupCard />
-
-        <RuntimeResidueCard />
-      </div>
-
       {!loading && !failed && (
         <>
           <p className="settings-note">
@@ -2174,9 +2260,20 @@ function RuntimeVersionsPanel({
               onClick={switchToPrevious}
               disabled={!canSwitch || busy !== null}
             >
-              {busy === 'switch' ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
+              {busy === 'switch:previous' ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
               {t("切换到上一版本")}
             </button>
+            {hasBundled && !isCurrentBundled && (
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={switchToBundled}
+                disabled={phaseBlocked || busy !== null}
+              >
+                {busy === 'switch:bundled' ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
+                {t("切换到随包内置版本")}
+              </button>
+            )}
             {!confirmDelete && (
               <button
                 className="button button-secondary"
@@ -2190,7 +2287,7 @@ function RuntimeVersionsPanel({
             {confirmDelete && (
               <>
                 <button className="button button-danger" type="button" onClick={removePrevious} disabled={busy !== null}>
-                  {busy === 'delete' ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}{t("确认删除")}
+                  {busy === 'delete:previous' ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}{t("确认删除")}
                 </button>
                 <button
                   className="button button-secondary"
@@ -2212,6 +2309,195 @@ function RuntimeVersionsPanel({
           )}
         </>
       )}
+
+      {/* 本地多版本库 */}
+      {!loading && !failed && (
+        <div className="settings-subsection" aria-labelledby="runtime-library-group">
+          <div className="section-title">
+            <div>
+              <h3 id="runtime-library-group">{t("本地版本库")}</h3>
+              <p>
+                {t(
+                  "离线保存的 dsh 运行时包（最多保留 {0} 个）。切换由本地原子解压并搬迁访客数据，不耗流量。",
+                  String(libraryCapacity),
+                )}
+              </p>
+            </div>
+            <span className="status-chip">
+              {t("已保存 {0} / {1}", String(library.length), String(libraryCapacity))}
+            </span>
+          </div>
+
+          {library.length === 0 ? (
+            <p className="harness-log-state">{t("本地版本库暂无额外版本包。可从下方「在线可用版本」中下载。")}</p>
+          ) : (
+            <div className="release-list">
+              {library.map(entry => {
+                const isEntryActive = entry.active
+                const isDeleting = busy === `delete:${entry.id}`
+                const isSwitching = busy === `switch:${entry.id}`
+                return (
+                  <div className="release-row" key={entry.id}>
+                    <div className="release-copy">
+                      <strong>
+                        {entry.version}
+                        {isEntryActive && <span className="status-chip success" style={{ marginLeft: 6 }}>{t("使用中")}</span>}
+                      </strong>
+                      <small>
+                        {[
+                          entry.dshVersion ? `dsh ${entry.dshVersion}` : t("dsh 版本未读到"),
+                          formatBytes(entry.bytes),
+                        ].join(' · ')}
+                      </small>
+                    </div>
+                    <div className="release-actions">
+                      {!isEntryActive && (
+                        <>
+                          <button
+                            className="button button-secondary"
+                            type="button"
+                            onClick={() => switchToLibrary(entry.id)}
+                            disabled={phaseBlocked || busy !== null}
+                          >
+                            {isSwitching ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
+                            {t("切换至此版本")}
+                          </button>
+                          {confirmDeleteLibraryId === entry.id ? (
+                            <>
+                              <button
+                                className="button button-danger"
+                                type="button"
+                                onClick={() => removeLibrary(entry.id)}
+                                disabled={busy !== null}
+                              >
+                                {isDeleting ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
+                                {t("确认删除")}
+                              </button>
+                              <button
+                                className="button button-secondary"
+                                type="button"
+                                onClick={() => setConfirmDeleteLibraryId(null)}
+                                disabled={busy !== null}
+                              >
+                                {t("取消")}
+                              </button>
+                            </>
+                          ) : (
+                            <button
+                              className="button button-secondary"
+                              type="button"
+                              onClick={() => setConfirmDeleteLibraryId(entry.id)}
+                              disabled={busy !== null}
+                            >
+                              <Trash2 size={18} />
+                              {t("删除")}
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 在线可下载发布列表 */}
+      {!loading && !failed && (
+        <div className="settings-subsection" aria-labelledby="runtime-catalog-group">
+          <div className="section-title">
+            <div>
+              <h3 id="runtime-catalog-group">{t("在线可用版本")}</h3>
+              <p>{t("从官方源拉取经过适配校验的 dsh 运行时镜像。下载后存入本地版本库，可随时无网切换。")}</p>
+            </div>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label={t("刷新可用版本")}
+              title={t("刷新可用版本")}
+              onClick={loadCatalog}
+              disabled={catalogLoading}
+            >
+              <RefreshCw className={catalogLoading ? "spin" : ""} size={16} />
+            </button>
+          </div>
+
+          {catalogLoading && <p className="harness-log-state">{t("正在检查可用版本…")}</p>}
+
+          {!catalogLoading && catalogFailed && (
+            <p className="harness-log-state" role="alert">{t("暂时无法连接版本目录，离线时仅可使用已下载和内置版本。")}</p>
+          )}
+
+          {!catalogLoading && !catalogFailed && catalog.length === 0 && (
+            <p className="harness-log-state">{t("当前无可用更新版本。")}</p>
+          )}
+
+          {!catalogLoading && !catalogFailed && catalog.length > 0 && (
+            <div className="release-list">
+              {catalog.map(item => {
+                const inLibrary = library.some(lib => lib.version === item.version)
+                const isCurrentActive = list.some(l => l.active && l.version === item.version)
+                const isDownloading = downloadingVersion === item.version
+                const canDownload = Boolean(item.manifestUrl && item.manifestSha256)
+
+                return (
+                  <div className="release-row" key={item.version}>
+                    <div className="release-copy">
+                      <strong>
+                        {item.version}
+                        {isCurrentActive && <span className="status-chip success" style={{ marginLeft: 6 }}>{t("使用中")}</span>}
+                        {!isCurrentActive && inLibrary && <span className="status-chip" style={{ marginLeft: 6 }}>{t("已保存")}</span>}
+                      </strong>
+                      <small>
+                        {[
+                          item.dshVersion ? `dsh ${item.dshVersion}` : t("dsh 版本未读到"),
+                          item.notes ? item.notes : '',
+                        ].filter(Boolean).join(' · ')}
+                      </small>
+                    </div>
+                    <div className="release-actions">
+                      {isCurrentActive ? (
+                        <span className="settings-note" style={{ margin: 0 }}>{t("正在运行")}</span>
+                      ) : inLibrary ? (
+                        <span className="settings-note" style={{ margin: 0 }}>{t("已在版本库")}</span>
+                      ) : (
+                        <button
+                          className="button button-secondary"
+                          type="button"
+                          onClick={() => downloadToLibrary(item)}
+                          disabled={!canDownload || isDownloading || busy !== null}
+                        >
+                          {isDownloading ? <Loader2 className="spin" size={18} /> : <Download size={18} />}
+                          {t("下载到版本库")}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+          {library.length >= libraryCapacity && (
+            <p className="settings-note">{t("版本库已满（{0} 个）：下载新版本将自动替换未使用的最旧版本。", String(libraryCapacity))}</p>
+          )}
+        </div>
+      )}
+
+      {/* 数据清理与运行时占用合成一张卡：上面是缓存与插件数据，下面才是运行时残留。 */}
+      <div className="settings-subsection" aria-labelledby="runtime-cleanup-group">
+        <div className="section-title">
+          <div>
+            <h3 id="runtime-cleanup-group">{t('清理')}</h3>
+            <p>{t('缓存、插件数据与运行时残留都在这里回收；运行环境本身在「重置运行环境」里处理。')}</p>
+          </div>
+        </div>
+
+        <RuntimeCleanupCard />
+
+        <RuntimeResidueCard />
+      </div>
     </section>
   )
 }
@@ -2672,6 +2958,8 @@ function RuntimeVersionsScreen({
   loadVersions,
   switchVersion,
   deleteVersion,
+  downloadRelease,
+  listReleases,
   refreshRuntime,
   notify,
   onBack,
@@ -2706,6 +2994,8 @@ function RuntimeVersionsScreen({
         loadVersions={loadVersions}
         switchVersion={switchVersion}
         deleteVersion={deleteVersion}
+        downloadRelease={downloadRelease}
+        listReleases={listReleases}
         refreshRuntime={refreshRuntime}
         notify={notify}
       />
@@ -3630,6 +3920,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
   const [autoSaved, setAutoSaved] = useState(false)
+  const [testingProvider, setTestingProvider] = useState<string | null>(null)
+  const [connectivityResults, setConnectivityResults] = useState<Record<string, ModelConnectivityResult>>({})
   const autoSaveTimerRef = useRef<number | null>(null)
   const autoSavedTimerRef = useRef<number | null>(null)
   const latestDraftRef = useRef(draft)
@@ -4134,6 +4426,48 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
       && !clearedProviders.includes(selectedProvider)
     )
   )
+
+
+  const handleTestConnectivity = async (providerId: string) => {
+    triggerHaptic('light')
+    setTestingProvider(providerId)
+    try {
+      const result = await runtimeBridge.testModelConnectivity({
+        providerId,
+        apiKey: credentialDrafts[providerId as ModelProviderId],
+      })
+      setConnectivityResults(current => ({ ...current, [providerId]: result }))
+      if (result.ok) triggerHaptic('success')
+      else triggerHaptic('warning')
+    } catch (error) {
+      setConnectivityResults(current => ({
+        ...current,
+        [providerId]: { ok: false, status: 0, latencyMs: 0, message: errorMessage(error) },
+      }))
+      triggerHaptic('error')
+    } finally {
+      setTestingProvider(null)
+    }
+  }
+
+  const handleTestCustomConnectivity = async (provider: CustomModelProvider, draftKey?: string): Promise<ModelConnectivityResult> => {
+    triggerHaptic('light')
+    try {
+      const result = await runtimeBridge.testModelConnectivity({
+        providerId: provider.id,
+        baseUrl: provider.baseUrl,
+        apiKey: draftKey,
+        api: provider.api,
+      })
+      if (result.ok) triggerHaptic('success')
+      else triggerHaptic('warning')
+      return result
+    } catch (error) {
+      triggerHaptic('error')
+      return { ok: false, status: 0, latencyMs: 0, message: errorMessage(error) }
+    }
+  }
+
   const saveDraft = (): void => {
     if (autoSaveTimerRef.current !== null) {
       window.clearTimeout(autoSaveTimerRef.current)
@@ -4267,8 +4601,17 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               }}
             />
           </label>
-          {(settings.configuredModelProviders.includes(selectedProvider) || clearedProviders.includes(selectedProvider)) && (
-            <div className="credential-actions">
+          <div className="credential-actions">
+            <button
+              className="button button-secondary compact-button"
+              type="button"
+              disabled={testingProvider === selectedProvider}
+              onClick={() => void handleTestConnectivity(selectedProvider)}
+            >
+              {testingProvider === selectedProvider ? <Loader2 className="spin" size={16} /> : <Wifi size={16} />}
+              {testingProvider === selectedProvider ? t("正在测试…") : t("测试连接")}
+            </button>
+            {(settings.configuredModelProviders.includes(selectedProvider) || clearedProviders.includes(selectedProvider)) && (
               <button
                 className="button button-danger-quiet compact-button"
                 type="button"
@@ -4286,6 +4629,11 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 {clearedProviders.includes(selectedProvider) ? <RotateCcw size={16} /> : <Trash2 size={16} />}
                 {clearedProviders.includes(selectedProvider) ? t("撤销清除") : t("清除密钥")}
               </button>
+            )}
+          </div>
+          {connectivityResults[selectedProvider] && (
+            <div className={`connectivity-result ${connectivityResults[selectedProvider].ok ? 'success' : 'error'}`}>
+              {connectivityResults[selectedProvider].message}
             </div>
           )}</>}
           {selectedProvider === 'custom' && <CustomProviders
@@ -4297,6 +4645,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             onChange={providers => setDraft({ ...settings, customModelProviders: providers })}
             onCredentials={setCustomCredentials}
             onClear={setClearedCustomProviders}
+            onTestConnectivity={handleTestCustomConnectivity}
           />}
         </section>
         )}
@@ -6169,7 +6518,7 @@ export function App() {
    * （引导页与「模型与密钥」页的「我已在 Harness 内配置过」按钮）：
    * **绝不要把事件对象或其它真值直接传进来**，否则等于默认绕过门禁。
    */
-  const openHarness = useCallback((skipCredentialGate: boolean) => {
+  const openHarness = useCallback((skipCredentialGate: boolean, sessionId?: string) => {
     if (busyRef.current !== null) return
     /*
      * 首次配置未完成时不打开 Harness：没有模型密钥时每轮对话都会因缺少凭据失败，
@@ -6211,7 +6560,7 @@ export function App() {
         // HarnessActivity overlays MainActivity. Keeping settings underneath makes
         // its native management button return to the intended management surface.
         setActiveView('settings')
-        await runtimeBridge.openHarness()
+        await runtimeBridge.openHarness(sessionId)
       }
 
       /** 陈旧句柄的恢复代价：刷新一次状态，成功才让用户看得见。失败保持原样，不打断启动失败的主线。 */
@@ -6262,10 +6611,10 @@ export function App() {
   }, [notify, requestRuntimeUpdate, runtime, setActiveView, settings])
 
   /** 常规打开入口：没有本机模型凭据时会被拦下并跳转到「模型与密钥」。 */
-  const launchHarness = useCallback(() => openHarness(false), [openHarness])
+  const launchHarness = useCallback((sessionId?: string) => openHarness(false, sessionId), [openHarness])
 
   /** 用户已确认「密钥在 Harness 里配置过」时的放行入口，只在显式按钮上使用。 */
-  const launchHarnessConfirmed = useCallback(() => openHarness(true), [openHarness])
+  const launchHarnessConfirmed = useCallback((sessionId?: string) => openHarness(true, sessionId), [openHarness])
 
   useEffect(() => {
     /*
@@ -6392,17 +6741,26 @@ export function App() {
    */
   const loadRuntimeVersions = useCallback(() => runtimeBridge.getRuntimeVersions(), [])
 
-  /** 切回上一版本：改名根目录并搬迁访客数据，运行中会被原生侧以 RUNTIME_BUSY 拒绝。 */
+  /** 切换运行时版本（支持 previous、bundled 或版本库条目 ID）。 */
   const switchRuntimeVersion = useCallback(
-    (target: 'previous') => runtimeBridge.switchRuntimeVersion(target),
+    (target: string) => runtimeBridge.switchRuntimeVersion(target),
     [],
   )
 
-  /** 删除上一版本：只动保留下来的副本，当前运行时不受影响。 */
+  /** 删除上一版本或版本库中的历史版本。 */
   const deleteRuntimeVersion = useCallback(
-    (target: 'previous') => runtimeBridge.deleteRuntimeVersion(target),
+    (target: string) => runtimeBridge.deleteRuntimeVersion(target),
     [],
   )
+
+  /** 下载远端运行时发布到本地版本库（不立即激活）。 */
+  const downloadRuntimeRelease = useCallback(
+    (manifestUrl: string, manifestSha256: string) => runtimeBridge.downloadRuntimeRelease(manifestUrl, manifestSha256),
+    [],
+  )
+
+  /** 查询可用版本发布列表。 */
+  const listRuntimeReleases = useCallback(() => runtimeBridge.listRuntimeReleases(), [])
 
   /** 切换成功后重新读运行时状态：已安装版本与阶段都变了，不能沿用旧值。 */
   const refreshRuntimeState = useCallback(async () => {
@@ -6842,6 +7200,8 @@ export function App() {
           loadVersions={loadRuntimeVersions}
           switchVersion={switchRuntimeVersion}
           deleteVersion={deleteRuntimeVersion}
+          downloadRelease={downloadRuntimeRelease}
+          listReleases={listRuntimeReleases}
           refreshRuntime={refreshRuntimeState}
           notify={notify}
           onBack={() => backToView('settings')}

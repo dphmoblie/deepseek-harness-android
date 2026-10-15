@@ -26,7 +26,15 @@ import java.util.concurrent.TimeoutException
 enum class DeviceCommand {
     SCREENSHOT,
     UI_DUMP,
+    /**
+     * @deprecated 交互点击已统一由无障碍服务（[io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService]）接管。
+     */
+    @Deprecated("交互点击已统一由 DeepSeekAccessibilityService 接管")
     TAP,
+    /**
+     * @deprecated 交互输入已统一由无障碍服务（[io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService]）接管。
+     */
+    @Deprecated("交互输入已统一由 DeepSeekAccessibilityService 接管")
     INPUT_TEXT,
     DEVICE_INFO,
     LIST_PACKAGES,
@@ -366,25 +374,14 @@ class DeviceCommandRunner(
         DeviceCommand.SCREENSHOT -> Body("screencap -p | toybox base64", "\$?")
         // uiDump 的失败分级由脚本内的状态变量携带（3/4/5），而不是 `$?` 的 0/1。
         DeviceCommand.UI_DUMP -> Body(uiDumpScript(requestId), "\$$UI_DUMP_STATUS_VARIABLE")
-        DeviceCommand.TAP -> {
-            val parts = param.split(",", limit = 2)
-            val x = parts.getOrNull(0)?.trim()?.toIntOrNull()
-                ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
-            val y = parts.getOrNull(1)?.trim()?.toIntOrNull()
-                ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
-            if (x !in 0..65535 || y !in 0..65535) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
-            Body("input tap $x $y", "\$?")
-        }
-        DeviceCommand.INPUT_TEXT -> {
-            if (param.isEmpty() || param.length > MAX_TEXT_CHARS) {
-                throw RuntimeFailure("DEVICE_COMMAND_INVALID", "输入文本无效")
-            }
-            if (param.any { it.code !in 0x20..0x7e || it == '\'' || it == '"' || it == '\\' || it == ';' || it == '$' || it == '\u0060' }) {
-                throw RuntimeFailure("DEVICE_COMMAND_INVALID", "输入文本仅支持 ASCII 且不含引号/分号/反斜杠等字符")
-            }
-            // 双引号包裹（参数已排除 `"`、`$`、反引号、反斜杠），内层脚本因此完全不含单引号，
-            // 与外层的单引号包裹不冲突。
-            Body("input text \"$param\"", "\$?")
+        DeviceCommand.TAP, DeviceCommand.INPUT_TEXT -> {
+            // 点击与文本输入已统一收口至无障碍服务（DeepSeekAccessibilityService），
+            // 由前台包名、敏感窗口与动作频率实施安全闸门。
+            // 生产环境下 DeviceBridgeServer 已在顶层拦截并分派至无障碍通道，此处直接拒绝，消除 Shell 级死代码误导。
+            throw RuntimeFailure(
+                "DEVICE_COMMAND_UNSUPPORTED",
+                "交互指令（点击/文本输入）必须经由无障碍服务通道（DeepSeekAccessibilityService）执行，不再支持 Shell 级模拟",
+            )
         }
         // 只读设备信息：限定字段，避免把完整 getprop（可能含厂商私有信息）回传到 WebView。
         DeviceCommand.DEVICE_INFO -> Body(
@@ -480,9 +477,17 @@ class DeviceCommandRunner(
                 throw RuntimeFailure("DEVICE_COMMAND_INVALID", "Shell 脚本为空、过长或包含非法控制字符")
             }
             if (useRootEngine) {
+                // 静态安检照旧先跑：危险脚本要在这一层就给出「安全护栏拦截」的准确原因。
                 RootCommandGuard.verifySafe(param)
-                val safeCommand = RootSecurityWrapper.wrapWithProtection(param)
-                Body("su -c ${singleQuote(safeCommand)}", "\$?")
+                // 但**故意**不再提供「拼进 Shizuku PTY 会话里跑 su」的路径。
+                // 那条路径的父进程是 UID 2000 的 shell：命名空间生命周期、/dev/block 遮蔽的归属、
+                // KernelSU 的 App Profile 判定全都失去确定归属，等于绕开了设计规范的分区边界
+                // （见 docs/KernelSU高级通道与安全分区防护.md §5.2 阶段二）。
+                // 根命令请走 RootCommandRunner.run()：它在应用进程内起 `su -c`，单参数传递、失败即停。
+                throw RuntimeFailure(
+                    "ROOT_ENGINE_NOT_WIRED",
+                    "根通道未接线：该入口不再经由 Shizuku 会话执行 su，请改用 RootCommandRunner",
+                )
             } else {
                 // 脚本作为编码后的标准输入送入独立解释器，不能破坏外层结果协议。
                 // 不使用关键字黑名单；命令的实际能力由用户授予的 Shizuku 身份决定。

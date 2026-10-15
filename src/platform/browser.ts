@@ -263,9 +263,10 @@ export function createBrowserBridge(): RuntimeBridge {
       state = { ...state, phase: 'running', harnessUrl: 'http://127.0.0.1:3080/' }
       return Promise.resolve({ ...state })
     },
-    openHarness: () => {
+    openHarness: (sessionId?: string) => {
       if (state.phase !== 'running' || state.harnessUrl === undefined) throw new Error('Harness 尚未运行')
       const url = new URL(state.harnessUrl)
+      if (sessionId) url.searchParams.set('sessionId', sessionId)
       window.open(url.toString(), '_blank', 'noopener,noreferrer')
       return Promise.resolve()
     },
@@ -686,6 +687,7 @@ export function createBrowserBridge(): RuntimeBridge {
     // 浏览器预览里没有原生侧的更新渠道，也没有可下载安装的 APK：如实拒绝，
     // 不编造版本列表或更新状态，否则界面会把「预览里的假版本」当成真能装的东西。
     listRuntimeReleases: (): Promise<RuntimeReleaseList> => Promise.reject(new Error('浏览器模式下没有更新渠道')),
+    downloadRuntimeRelease: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能下载运行时')),
     getAppUpdateState: (forceRefresh = false): Promise<AppUpdateState> => {
       if (typeof forceRefresh !== 'boolean') return Promise.reject(new Error('应用更新刷新参数无效'))
       return Promise.reject(new Error('浏览器模式下没有应用更新'))
@@ -730,6 +732,24 @@ export function createBrowserBridge(): RuntimeBridge {
     addTerminalExitListener: listener => {
       exitListeners.add(listener)
       return Promise.resolve(listenerHandle(() => exitListeners.delete(listener)))
+    },
+    testModelConnectivity: options => {
+      const draftKey = options.apiKey?.trim()
+      const isSaved = configuredProviders.has(options.providerId as ModelProviderId) || configuredCustomProviders.has(options.providerId)
+      if (!draftKey && !isSaved) {
+        return Promise.resolve({
+          ok: false,
+          status: 0,
+          latencyMs: 0,
+          message: '未提供 API Key 且本机未保存该供应商凭据',
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        latencyMs: 95,
+        message: '✓ 连接成功 (95ms)',
+      })
     },
   }
 }

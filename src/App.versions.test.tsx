@@ -276,3 +276,163 @@ describe('版本管理：应用自身更新', () => {
     expect(screen.queryByRole('progressbar', { name: '更新包下载进度' })).toBeNull()
   })
 })
+
+describe('版本管理：本地多版本库与在线版本下载', () => {
+  beforeEach(beforeEachAppTest)
+
+  it('进页展示本地多版本库与配额容量（X/5）', async () => {
+    const libId = 'a'.repeat(64)
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getRuntimeVersions.mockResolvedValue({
+      versions: [
+        { slot: 'current', version: '2026.09.15', dshVersion: '0.1.7-rc.2', runtimeId: 'rt-1', extractedBytes: 960 * 1024 * 1024, active: true },
+        { slot: 'bundled', version: '2026.08.01', dshVersion: '0.1.0', runtimeId: 'rt-0', extractedBytes: 0, active: false },
+      ],
+      library: [
+        { id: libId, version: '2026.09.10', dshVersion: '0.1.6', bytes: 310 * 1024 * 1024, active: false },
+      ],
+      libraryCapacity: 5,
+      canSwitch: true,
+      canDelete: true,
+    })
+
+    await openVersionsPage()
+
+    expect(await screen.findByText('本地版本库')).toBeVisible()
+    expect(screen.getByText('已保存 1 / 5')).toBeVisible()
+    expect(screen.getByText(/2026\.09\.10/)).toBeVisible()
+    expect(screen.getByText(/dsh 0\.1\.6 · 310 MB/)).toBeVisible()
+    expect(screen.getByRole('button', { name: '切换到随包内置版本' })).toBeVisible()
+  })
+
+  it('可以切换到随包内置版本（Slot 0）', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getRuntimeVersions.mockResolvedValue({
+      versions: [
+        { slot: 'current', version: '2026.09.15', dshVersion: '0.1.7-rc.2', runtimeId: 'rt-1', extractedBytes: 960 * 1024 * 1024, active: true },
+        { slot: 'bundled', version: '2026.08.01', dshVersion: '0.1.0', runtimeId: 'rt-0', extractedBytes: 0, active: false },
+      ],
+      canSwitch: true,
+      canDelete: false,
+    })
+    bridge.switchRuntimeVersion.mockResolvedValue({
+      versions: [
+        { slot: 'current', version: '2026.08.01', dshVersion: '0.1.0', runtimeId: 'rt-0', extractedBytes: 960 * 1024 * 1024, active: true },
+        { slot: 'bundled', version: '2026.08.01', dshVersion: '0.1.0', runtimeId: 'rt-0', extractedBytes: 0, active: true },
+      ],
+      canSwitch: false,
+      canDelete: false,
+    })
+
+    await openVersionsPage()
+    fireEvent.click(await screen.findByRole('button', { name: '切换到随包内置版本' }))
+
+    expect(await screen.findByText('已切换到随包内置版本')).toBeVisible()
+    expect(bridge.switchRuntimeVersion).toHaveBeenCalledWith('bundled')
+  })
+
+  it('可以切换和删除本地版本库中的版本', async () => {
+    const libId = 'c'.repeat(64)
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getRuntimeVersions.mockResolvedValue({
+      versions: [
+        { slot: 'current', version: '2026.09.15', dshVersion: '0.1.7-rc.2', runtimeId: 'rt-1', extractedBytes: 960 * 1024 * 1024, active: true },
+      ],
+      library: [
+        { id: libId, version: '2026.08.20', dshVersion: '0.1.5', bytes: 290 * 1024 * 1024, active: false },
+      ],
+      libraryCapacity: 5,
+      canSwitch: false,
+      canDelete: false,
+    })
+    bridge.switchRuntimeVersion.mockResolvedValue({
+      versions: [
+        { slot: 'current', version: '2026.08.20', dshVersion: '0.1.5', runtimeId: 'rt-lib', extractedBytes: 960 * 1024 * 1024, active: true },
+      ],
+      library: [
+        { id: libId, version: '2026.08.20', dshVersion: '0.1.5', bytes: 290 * 1024 * 1024, active: true },
+      ],
+      libraryCapacity: 5,
+      canSwitch: false,
+      canDelete: false,
+    })
+
+    await openVersionsPage()
+    fireEvent.click(await screen.findByRole('button', { name: '切换至此版本' }))
+
+    expect(await screen.findByText('已切换到指定版本')).toBeVisible()
+    expect(bridge.switchRuntimeVersion).toHaveBeenCalledWith(libId)
+  })
+
+  it('删除版本库条目需要二次确认', async () => {
+    const libId = 'd'.repeat(64)
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getRuntimeVersions.mockResolvedValue({
+      versions: [
+        { slot: 'current', version: '2026.09.15', dshVersion: '0.1.7-rc.2', runtimeId: 'rt-1', extractedBytes: 960 * 1024 * 1024, active: true },
+      ],
+      library: [
+        { id: libId, version: '2026.08.20', dshVersion: '0.1.5', bytes: 290 * 1024 * 1024, active: false },
+      ],
+      libraryCapacity: 5,
+      canSwitch: false,
+      canDelete: false,
+    })
+    bridge.deleteRuntimeVersion.mockResolvedValue({
+      versions: [
+        { slot: 'current', version: '2026.09.15', dshVersion: '0.1.7-rc.2', runtimeId: 'rt-1', extractedBytes: 960 * 1024 * 1024, active: true },
+      ],
+      library: [],
+      libraryCapacity: 5,
+      canSwitch: false,
+      canDelete: false,
+    })
+
+    await openVersionsPage()
+    fireEvent.click(await screen.findByRole('button', { name: '删除' }))
+
+    expect(bridge.deleteRuntimeVersion).not.toHaveBeenCalled()
+    fireEvent.click(await screen.findByRole('button', { name: '确认删除' }))
+
+    expect(await screen.findByText('已从版本库删除')).toBeVisible()
+    expect(bridge.deleteRuntimeVersion).toHaveBeenCalledWith(libId)
+  })
+
+  it('可以从在线列表下载运行时发布到本地版本库', async () => {
+    const manifestSha = 'e'.repeat(64)
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getRuntimeVersions.mockResolvedValue({
+      versions: [
+        { slot: 'current', version: '2026.09.15', dshVersion: '0.1.7-rc.2', runtimeId: 'rt-1', extractedBytes: 960 * 1024 * 1024, active: true },
+      ],
+      library: [],
+      libraryCapacity: 5,
+      canSwitch: false,
+      canDelete: false,
+    })
+    bridge.listRuntimeReleases.mockResolvedValue({
+      entries: [
+        {
+          version: '2026.09.20',
+          dshVersion: '0.1.8',
+          notes: '优化了 PRoot 启动速度',
+          manifestUrl: 'https://example.com/manifest.json',
+          manifestSha256: manifestSha,
+        },
+      ],
+    })
+    bridge.downloadRuntimeRelease.mockResolvedValue(undefined)
+
+    await openVersionsPage()
+
+    expect(await screen.findByText('在线可用版本')).toBeVisible()
+    expect(screen.getByText('2026.09.20')).toBeVisible()
+    expect(screen.getByText(/dsh 0\.1\.8/)).toBeVisible()
+    expect(screen.getByText('优化了 PRoot 启动速度')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: '下载到版本库' }))
+
+    expect(await screen.findByText('已成功下载到版本库')).toBeVisible()
+    expect(bridge.downloadRuntimeRelease).toHaveBeenCalledWith('https://example.com/manifest.json', manifestSha)
+  })
+})

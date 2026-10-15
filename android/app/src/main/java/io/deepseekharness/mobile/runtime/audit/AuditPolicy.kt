@@ -31,6 +31,9 @@ enum class AuditEvent {
      * 不经过桥接、不产生本事件，因此审计里出现它就等于「用户手动重试过一次」。
      */
     PLUGIN_REPAIR,
+
+    /** 插件历史副本清理：清除未被活动清单、回滚或锁引用的孤立 versions 目录。 */
+    PLUGIN_PRUNE,
     PLUGIN_LOAD,
     PLUGIN_DESTROY,
     RUNTIME_INSTALL,

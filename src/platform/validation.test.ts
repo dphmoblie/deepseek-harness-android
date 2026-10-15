@@ -33,6 +33,7 @@ import {
   validateMailboxImportResult,
   validateMailboxState,
   validateMediaPermissionResult,
+  validateModelConnectivityResult,
   validateNotificationPermissionResult,
   validateOverlayBallState,
   validatePluginCleanupRequest,
@@ -2295,5 +2296,46 @@ describe('设备能力清单校验', () => {
     expect(() => validateDeviceCapabilityReport(report({ atMs: '1700000000000' }))).toThrow('设备能力取样时刻格式无效')
     expect(() => validateDeviceCapabilityReport(report({ sdkInt: 0 }))).toThrow('设备 API 级别格式无效')
     expect(() => validateDeviceCapabilityReport(report({ sdkInt: '34' }))).toThrow('设备 API 级别格式无效')
+  })
+})
+
+describe('validateModelConnectivityResult', () => {
+  it('正确解析合法的检测成功结果', () => {
+    const raw = {
+      ok: true,
+      status: 200,
+      latencyMs: 142.5,
+      message: '✓ 连接成功 (142ms)',
+    }
+    expect(validateModelConnectivityResult(raw)).toEqual({
+      ok: true,
+      status: 200,
+      latencyMs: 142,
+      message: '✓ 连接成功 (142ms)',
+    })
+  })
+
+  it('正确解析合法的检测失败结果（如 401 鉴权失败）', () => {
+    const raw = {
+      ok: false,
+      status: 401,
+      latencyMs: 80,
+      message: '401 密钥无效或未授权 (80ms)',
+    }
+    expect(validateModelConnectivityResult(raw)).toEqual({
+      ok: false,
+      status: 401,
+      latencyMs: 80,
+      message: '401 密钥无效或未授权 (80ms)',
+    })
+  })
+
+  it('拒绝非对象或字段缺失的非法结果', () => {
+    expect(() => validateModelConnectivityResult(null)).toThrow('模型连通性检测结果')
+    expect(() => validateModelConnectivityResult('string')).toThrow('模型连通性检测结果')
+    expect(() => validateModelConnectivityResult({ ok: 'true' })).toThrow('模型连通性状态')
+    expect(() => validateModelConnectivityResult({ ok: true, status: '200' })).toThrow('模型连通性状态码无效')
+    expect(() => validateModelConnectivityResult({ ok: true, status: 200, latencyMs: -5 })).toThrow('模型连通性延迟无效')
+    expect(() => validateModelConnectivityResult({ ok: true, status: 200, latencyMs: 50, message: 123 })).toThrow('模型连通性提示无效')
   })
 })

@@ -68,6 +68,7 @@ class HarnessActivity : AppCompatActivity() {
         }
 
         const val AUTH_TOKEN_COOKIE = "dsh_mobile_token"
+        const val EXTRA_SESSION_ID = "io.deepseekharness.mobile.extra.SESSION_ID"
 
         /**
          * 任意 MIME 类型。
@@ -100,6 +101,22 @@ class HarnessActivity : AppCompatActivity() {
     override fun onStop() {
         AppForeground.onActivityStopped()
         super.onStop()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val nextSessionId = intent.getStringExtra(EXTRA_SESSION_ID)
+        if (!nextSessionId.isNullOrBlank() && ::webView.isInitialized && ::allowedOrigin.isInitialized) {
+            val nextUrl = HarnessPageUrl.withVersions(
+                allowedOrigin.initialUrl,
+                BuildConfig.VERSION_NAME,
+                RuntimeStore(this).installedManifest()?.version,
+                nextSessionId,
+            )
+            entryUrlForRetry = nextUrl
+            webView.loadUrl(nextUrl)
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -135,10 +152,12 @@ class HarnessActivity : AppCompatActivity() {
         // 运行时未安装 / 清单不可读时由 withVersions 落到固定占位值，不会让 URL 抖动。
         // 纯字符串计算（清单在运行时启动链路中已完成缓存预热），放在布局加载前完成，
         // 以便紧接着提前发起 cookie 写入。
+        val requestedSessionId = intent.getStringExtra(EXTRA_SESSION_ID)
         val entryUrl = HarnessPageUrl.withVersions(
             allowedOrigin.initialUrl,
             BuildConfig.VERSION_NAME,
             runtimeStore.installedManifest()?.version,
+            requestedSessionId,
         )
         entryUrlForRetry = entryUrl
 

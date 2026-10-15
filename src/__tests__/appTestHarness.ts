@@ -170,11 +170,13 @@ export const bridge = {
   // 更新：可用版本列表与应用自更新同样有默认桩——界面一进相关页面就会读一次，
   // 缺桩会让 effect 抛错并卸载整棵树（同上一条注释里的坑）。
   listRuntimeReleases: vi.fn(),
+  downloadRuntimeRelease: vi.fn(),
   getAppUpdateState: vi.fn(),
   downloadAppUpdate: vi.fn(),
   installAppUpdate: vi.fn(),
   openAppUpdateInstallSettings: vi.fn(),
   managePlugins: vi.fn(),
+  testModelConnectivity: vi.fn(),
   getDiagnosticLogState: vi.fn(),
   readDiagnosticLog: vi.fn(),
   setDiagnosticLogSettings: vi.fn(),
@@ -584,6 +586,7 @@ export function beforeEachAppTest(): void {
   // 默认空版本列表（没有可用版本可装）+ 未授权安装权限：多数用例只关心别的页面，
   // 真正关心更新的用例自己覆盖这几条桩。
   bridge.listRuntimeReleases.mockResolvedValue({ entries: [] })
+  bridge.downloadRuntimeRelease.mockResolvedValue(undefined)
   bridge.getAppUpdateState.mockResolvedValue({
     installedVersion: '0.2.0',
     installedVersionCode: 22,
@@ -619,6 +622,7 @@ export function beforeEachAppTest(): void {
   bridge.requestShizukuPermission.mockResolvedValue({ ...shizuku, permission: 'granted', connected: true })
   bridge.connectShizuku.mockResolvedValue({ ...shizuku, permission: 'granted', connected: true })
   bridge.openShizuku.mockResolvedValue(undefined)
+  bridge.testModelConnectivity.mockResolvedValue({ ok: true, status: 200, latencyMs: 120, message: '✓ 连接成功 (120ms)' })
 }
 
 /**

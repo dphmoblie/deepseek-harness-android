@@ -75,6 +75,7 @@ import {
   validateMailboxDirectoryState,
   validateMailboxState,
   validateMediaPermissionResult,
+  validateModelConnectivityResult,
   validateNotificationPermissionResult,
   validateOverlayBallState,
   validateRuntimeProgress,
@@ -127,7 +128,8 @@ interface NativeRuntimePlugin {
   restoreRuntimeSessionSnapshot(options: { id: string }): Promise<unknown>
   deleteRuntimeSessionSnapshot(options: { id: string }): Promise<unknown>
   startHarness(): Promise<RuntimeState>
-  openHarness(): Promise<void>
+  openHarness(options?: { sessionId?: string }): Promise<void>
+  testModelConnectivity(options: { providerId: string; baseUrl?: string; apiKey?: string; api?: string }): Promise<unknown>
   stopRuntime(): Promise<RuntimeState>
   reset(options: { confirmation: string }): Promise<RuntimeState>
   createTerminal(options: { kind: TerminalKind; columns: number; rows: number }): Promise<{ sessionId: string }>
@@ -231,6 +233,7 @@ interface NativeRuntimePlugin {
   purgePluginData(options?: { packageName?: string }): Promise<unknown>
   /** 列出原生侧已知的运行时可用版本；结果由 TS 侧校验后再交给界面。 */
   listRuntimeReleases(): Promise<unknown>
+  downloadRuntimeRelease(options: { manifestUrl: string; manifestSha256: string }): Promise<unknown>
   getAppUpdateState(options?: { forceRefresh: boolean }): Promise<unknown>
   downloadAppUpdate(): Promise<void>
   installAppUpdate(): Promise<void>
@@ -285,7 +288,7 @@ function createNativeBridge(): RuntimeBridge {
       .install(source === undefined ? undefined : validateRuntimeSource(source))
       .then(validateRuntimeInstallResult),
     startHarness: () => NativeRuntime.startHarness().then(validateRuntimeState),
-    openHarness: () => NativeRuntime.openHarness(),
+    openHarness: (sessionId?: string) => NativeRuntime.openHarness(sessionId ? { sessionId } : undefined),
     stopRuntime: () => NativeRuntime.stopRuntime().then(validateRuntimeState),
     reset: confirmation => {
       if (confirmation !== 'RESET_RUNTIME') return Promise.reject(new Error('重置确认无效'))
@@ -570,6 +573,8 @@ function createNativeBridge(): RuntimeBridge {
       .then(validateRuntimeSessionSnapshotState),
     // 可用版本列表由原生侧给出：缺清单的条目只可展示，校验侧不允许它混成「可安装」。
     listRuntimeReleases: () => NativeRuntime.listRuntimeReleases().then(validateRuntimeReleaseList),
+    downloadRuntimeRelease: (manifestUrl, manifestSha256) =>
+      NativeRuntime.downloadRuntimeRelease({ manifestUrl, manifestSha256 }).then(() => undefined),
     getAppUpdateState: (forceRefresh = false) => {
       if (typeof forceRefresh !== 'boolean') return Promise.reject(new Error('应用更新刷新参数无效'))
       return NativeRuntime.getAppUpdateState({ forceRefresh }).then(validateAppUpdateState)
@@ -595,6 +600,7 @@ function createNativeBridge(): RuntimeBridge {
     addAppUpdateProgressListener: listener => NativeRuntime.addListener('appUpdateProgress', validatedListener(validateAppUpdateProgress, listener)),
     addTerminalOutputListener: listener => NativeRuntime.addListener('terminalOutput', validatedListener(validateTerminalChunk, listener)),
     addTerminalExitListener: listener => NativeRuntime.addListener('terminalExit', validatedListener(validateTerminalExit, listener)),
+    testModelConnectivity: options => NativeRuntime.testModelConnectivity(options).then(validateModelConnectivityResult),
   }
 }
 

@@ -22,7 +22,7 @@ interface SessionEntry {
 
 interface SessionManagerProps {
   onBack: () => void
-  onOpenHarness: () => void
+  onOpenHarness: (sessionId?: string) => void
   embedded?: boolean
   disabled?: boolean
 }
@@ -210,7 +210,7 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
           </div>
         ) : filtered.map(session => (
           <article className="session-card" key={session.id}>
-            <button className="session-open" type="button" onClick={onOpenHarness} disabled={disabled}>
+            <button className="session-open" type="button" onClick={() => onOpenHarness(session.local ? undefined : session.id)} disabled={disabled}>
               <span className="session-icon"><MessageCircle size={18} /></span>
               <span className="session-copy">
                 {/* 读不到标题的会话保留在列表里，但显示「未命名会话」——不拿 id 或时间冒充标题。 */}

@@ -1599,7 +1599,34 @@ button:disabled {
 .credential-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
+  align-items: center;
   margin-top: 9px;
+  flex-wrap: wrap;
+}
+
+.connectivity-result {
+  font-size: 0.8125rem;
+  padding: 5px 10px;
+  border-radius: 6px;
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.connectivity-result.success {
+  background: var(--green-soft);
+  color: var(--green);
+  border: 1px solid var(--green-line);
+}
+
+.connectivity-result.error {
+  background: var(--red-soft);
+  color: var(--red);
+  border: 1px solid var(--red-line);
 }
 
 /* 供应商状态一览：一行一个供应商，右边一枚状态徽标与「配置」入口。 */

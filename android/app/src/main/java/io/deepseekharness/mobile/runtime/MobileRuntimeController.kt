@@ -101,6 +101,13 @@ class MobileRuntimeController(
         // 它内部永不抛异常：这里不需要 try/catch，也不允许它挡住 installer.install。
         val autoSnapshot = snapshots.createBeforeUpdate()
         installer.install(source)
+        try {
+            supervisor.preparePluginManagement()
+            plugins.recoverIfNeeded()
+            plugins.repairInstalledIfNeeded(explicit = true)
+        } catch (_: Exception) {
+            // 运行时更新后的自愈属于防御性动作，失败不阻断安装流程
+        }
         // 安装要下载并解压整个 rootfs（数百 MB），用户几乎必然切走：
         // 装完只在界面上更新状态的话，他切回来之前什么都不知道。
         TaskNotification.postInstallCompleted(
@@ -129,25 +136,52 @@ class MobileRuntimeController(
      */
     fun switchRuntimeVersion(target: String): List<RuntimeVersionInfo> = lifecycleLock.withLock {
         ensureOpen()
-        RuntimeVersionPolicy.requireTarget(target)
+        val normalizedTarget = RuntimeVersionPolicy.requireTarget(target)
         if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
             throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
         }
-        installer.switchToRetained()
+        when (normalizedTarget) {
+            RuntimeVersionPolicy.TARGET_PREVIOUS -> installer.switchToRetained()
+            RuntimeVersionPolicy.TARGET_BUNDLED -> installer.install(RuntimeSource(null, null))
+            else -> installer.install(RuntimeSource(null, null, libraryId = normalizedTarget))
+        }
+        try {
+            supervisor.preparePluginManagement()
+            plugins.recoverIfNeeded()
+            plugins.repairInstalledIfNeeded(explicit = true)
+        } catch (_: Exception) {
+            // 版本切换后的自愈属于防御性动作，失败不阻断切换流程
+        }
         versions.list()
     }
 
     /**
-     * 删除保留下来的上一版本。
+     * 删除保留下来的上一版本或版本库中的历史版本。
      *
-     * 这里**不**要求运行时已停止：删除只动 `retained*`，与正在运行的当前运行时无关，
+     * 这里**不**要求运行时已停止：删除只动 `retained*` 或 `library/*`，与正在运行的当前运行时无关，
      * 用户清理磁盘空间不该被迫先停服务。
      */
     fun deleteRuntimeVersion(target: String): List<RuntimeVersionInfo> = lifecycleLock.withLock {
         ensureOpen()
-        RuntimeVersionPolicy.requireTarget(target)
-        installer.deleteRetained()
+        val normalizedTarget = RuntimeVersionPolicy.requireTarget(target)
+        if (normalizedTarget == RuntimeVersionPolicy.TARGET_BUNDLED) {
+            throw RuntimeFailure("RUNTIME_VERSION_DELETE_FORBIDDEN", "出厂内置版本不可删除")
+        }
+        if (normalizedTarget == RuntimeVersionPolicy.TARGET_PREVIOUS) {
+            installer.deleteRetained()
+        } else {
+            val currentSha = store.installedManifest()?.rootfs?.sha256
+            if (normalizedTarget == currentSha) {
+                throw RuntimeFailure("RUNTIME_VERSION_BUSY", "不能删除正在使用的版本")
+            }
+            RuntimeLibrary(store).delete(normalizedTarget)
+        }
         versions.list()
+    }
+
+    fun downloadToLibrary(source: RuntimeSource) = lifecycleLock.withLock {
+        ensureOpen()
+        RuntimeLibrary(store).download(source)
     }
 
     fun startHarness(expectedStartEpoch: Long? = null): RuntimeStateSnapshot = lifecycleLock.withLock {
@@ -226,6 +260,13 @@ class MobileRuntimeController(
                 if (supervisor.isRunning() || terminals.hasRuntimeSessions()) throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
                 autoSnapshot = snapshots.createBeforeUpdate()
                 installer.install(RuntimeSource(null, null, RuntimeLibrary.requireId(id.orEmpty())))
+                try {
+                    supervisor.preparePluginManagement()
+                    plugins.recoverIfNeeded()
+                    plugins.repairInstalledIfNeeded(explicit = true)
+                } catch (_: Exception) {
+                    // 版本切换后的自愈属于防御性动作，失败不阻断切换流程
+                }
             }
             else -> throw RuntimeFailure("RUNTIME_VERSION_INVALID", "版本管理操作无效")
         }
@@ -277,12 +318,28 @@ class MobileRuntimeController(
                 throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
             }
             supervisor.preparePluginManagement()
+        } else {
+            // 用户可能刚更新了 APK 或运行时，还没有点击启动 Harness 就直接进入了插件设置页。
+            // 若当前运行时未在运行，防御性执行一次 migrateIfNeeded，自动接回保留区的插件软链接，
+            // 避免用户打开插件列表时看到全部插件呈现“未安装”假象。
+            if (!supervisor.isRunning() && !terminals.hasRuntimeSessions()) {
+                try {
+                    supervisor.preparePluginManagement()
+                    plugins.migrateIfNeeded(BuildConfig.VERSION_CODE)
+                } catch (_: Exception) {
+                    // 防御性迁移失败不阻断只读列表读取
+                }
+            }
         }
         // `repair` 是用户主动触发的显式修复：绕过「同一代次只修一次」的自愈闸门，也不进冷却
         // 窗口退避。它不另造返回形状，而是紧接着回读一次 `list` —— 刚接回的插件直接出现在列表里，
         // 修复失败则按受控错误码 reject（不吞异常，否则按钮点下去界面上什么都不会变）。
         if (operation == "repair") {
             plugins.repairInstalledIfNeeded(explicit = true)
+            return@withLock withRecovery(plugins.run("list", null, null, null, null))
+        }
+        if (operation == "prune") {
+            plugins.run("prune", null, null, null, null)
             return@withLock withRecovery(plugins.run("list", null, null, null, null))
         }
         return@withLock withRecovery(plugins.run(operation, id, enabled, childId, source))

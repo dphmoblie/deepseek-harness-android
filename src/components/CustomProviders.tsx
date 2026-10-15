@@ -1,6 +1,7 @@
-import { Plus, Trash2, RotateCcw } from 'lucide-react'
+import { useState } from 'react'
+import { Loader2, Plus, RotateCcw, Trash2, Wifi } from 'lucide-react'
 import { t } from '../i18n'
-import type { CustomModelProvider, CustomProviderApi } from '../platform/types'
+import type { CustomModelProvider, CustomProviderApi, ModelConnectivityResult } from '../platform/types'
 import { MAX_CUSTOM_MODELS, MAX_CUSTOM_PROVIDERS } from '../platform/customProviders'
 
 interface Props {
@@ -14,9 +15,34 @@ interface Props {
   onChange: (providers: CustomModelProvider[]) => void
   onCredentials: (credentials: Record<string, string>) => void
   onClear: (ids: string[]) => void
+  onTestConnectivity?: (provider: CustomModelProvider, draftKey?: string) => Promise<ModelConnectivityResult>
 }
 
-export function CustomProviders({ providers, configured, harnessConfigured = [], credentials, cleared, onChange, onCredentials, onClear }: Props) {
+export function CustomProviders({
+  providers,
+  configured,
+  harnessConfigured = [],
+  credentials,
+  cleared,
+  onChange,
+  onCredentials,
+  onClear,
+  onTestConnectivity,
+}: Props) {
+  const [testingId, setTestingId] = useState<string | null>(null)
+  const [testResults, setTestResults] = useState<Record<string, ModelConnectivityResult>>({})
+
+  const handleTest = async (provider: CustomModelProvider) => {
+    if (!onTestConnectivity) return
+    setTestingId(provider.id)
+    try {
+      const res = await onTestConnectivity(provider, credentials[provider.id])
+      setTestResults(current => ({ ...current, [provider.id]: res }))
+    } finally {
+      setTestingId(null)
+    }
+  }
+
   const update = (index: number, changes: Partial<CustomModelProvider>): void => {
     onChange(providers.map((provider, i) => i === index ? { ...provider, ...changes } : provider))
   }
@@ -61,10 +87,28 @@ export function CustomProviders({ providers, configured, harnessConfigured = [],
           onCredentials(next)
           onClear(cleared.filter(id => id !== provider.id))
         }} /></label>
-      {configured.includes(provider.id) && <button type="button" className="button button-danger-quiet compact-button" onClick={() => {
-        onCredentials(Object.fromEntries(Object.entries(credentials).filter(([id]) => id !== provider.id)))
-        onClear(cleared.includes(provider.id) ? cleared.filter(id => id !== provider.id) : [...cleared, provider.id])
-      }}>{cleared.includes(provider.id) ? <RotateCcw size={16} /> : <Trash2 size={16} />}{cleared.includes(provider.id) ? t('撤销清除密钥') : t('清除密钥')}</button>}
+      <div className="credential-actions">
+        {onTestConnectivity && (
+          <button
+            type="button"
+            className="button button-secondary compact-button"
+            disabled={testingId === provider.id}
+            onClick={() => { void handleTest(provider) }}
+          >
+            {testingId === provider.id ? <Loader2 className="spin" size={16} /> : <Wifi size={16} />}
+            {testingId === provider.id ? t('正在测试…') : t('测试连接')}
+          </button>
+        )}
+        {configured.includes(provider.id) && <button type="button" className="button button-danger-quiet compact-button" onClick={() => {
+          onCredentials(Object.fromEntries(Object.entries(credentials).filter(([id]) => id !== provider.id)))
+          onClear(cleared.includes(provider.id) ? cleared.filter(id => id !== provider.id) : [...cleared, provider.id])
+        }}>{cleared.includes(provider.id) ? <RotateCcw size={16} /> : <Trash2 size={16} />}{cleared.includes(provider.id) ? t('撤销清除密钥') : t('清除密钥')}</button>}
+      </div>
+      {testResults[provider.id] && (
+        <div className={`connectivity-result ${testResults[provider.id].ok ? 'success' : 'error'}`}>
+          {testResults[provider.id].message}
+        </div>
+      )}
       {provider.models.map((model, modelIndex) => <fieldset className="custom-model" key={modelIndex}>
         <legend>{t('模型 {0}', modelIndex + 1)}</legend>
         <div className="custom-provider-fields">

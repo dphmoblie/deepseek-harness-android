@@ -42,8 +42,8 @@ class DeviceCommandRunnerTest {
         val parameters = mapOf(
             DeviceCommand.SCREENSHOT to "",
             DeviceCommand.UI_DUMP to "",
-            DeviceCommand.TAP to "10,20",
-            DeviceCommand.INPUT_TEXT to "hello world",
+            DeviceCommand.DEVICE_INFO to "",
+            DeviceCommand.BATTERY to "",
         )
         for ((command, param) in parameters) {
             val input = runner.buildInput(requestId, command, param)
@@ -67,12 +67,8 @@ class DeviceCommandRunnerTest {
         val screenshot = runner.buildInput(requestId, DeviceCommand.SCREENSHOT, "")
         assertTrue(screenshot.contains("screencap -p | toybox base64; echo \"__DSH_E_${requestId}_\${dsh_nonce}__:\$?\""))
 
-        val tap = runner.buildInput(requestId, DeviceCommand.TAP, "12,34")
-        assertTrue(tap.contains("input tap 12 34; echo \"__DSH_E_${requestId}_\${dsh_nonce}__:\$?\""))
-
-        // 双引号包裹（参数校验已排除 $、"、反引号、反斜杠），内层脚本因此完全不含单引号。
-        val inputText = runner.buildInput(requestId, DeviceCommand.INPUT_TEXT, "hello world")
-        assertTrue(inputText.contains("input text \"hello world\""))
+        val battery = runner.buildInput(requestId, DeviceCommand.BATTERY, "")
+        assertTrue(battery.contains("dumpsys battery; echo \"__DSH_E_${requestId}_\${dsh_nonce}__:\$?\""))
     }
 
     @Test
@@ -108,14 +104,20 @@ class DeviceCommandRunnerTest {
         runner.buildInput("../../shared", DeviceCommand.UI_DUMP, "")
     }
 
-    @Test(expected = RuntimeFailure::class)
-    fun tapRejectsOutOfRangeCoordinates() {
-        runner.buildInput(requestId, DeviceCommand.TAP, "70000,1")
-    }
-
-    @Test(expected = RuntimeFailure::class)
-    fun inputTextRejectsShellMetacharacters() {
-        runner.buildInput(requestId, DeviceCommand.INPUT_TEXT, "a;reboot")
+    @Test
+    fun tapAndInputTextAreRejectedAsUnsupportedInShellRunner() {
+        try {
+            runner.buildInput(requestId, DeviceCommand.TAP, "10,20")
+            fail("TAP 应被 Shell 执行器拒绝，由无障碍通道接管")
+        } catch (error: RuntimeFailure) {
+            assertEquals("DEVICE_COMMAND_UNSUPPORTED", error.code)
+        }
+        try {
+            runner.buildInput(requestId, DeviceCommand.INPUT_TEXT, "hello")
+            fail("INPUT_TEXT 应被 Shell 执行器拒绝，由无障碍通道接管")
+        } catch (error: RuntimeFailure) {
+            assertEquals("DEVICE_COMMAND_UNSUPPORTED", error.code)
+        }
     }
 
     @Test
@@ -205,7 +207,7 @@ class DeviceCommandRunnerTest {
             injected.complete(String(Base64.getDecoder().decode(data), Charsets.UTF_8))
         }
         val result = CompletableFuture.supplyAsync {
-            polling.execute(sessionId, DeviceCommand.INPUT_TEXT, "a", TimeUnit.SECONDS.toMillis(5))
+            polling.execute(sessionId, DeviceCommand.DEVICE_INFO, "", TimeUnit.SECONDS.toMillis(5))
         }
         val input = injected.get(5, TimeUnit.SECONDS)
         val generated = Regex("__DSH_B_([0-9a-f-]{36})_").find(input)?.groupValues?.get(1)
@@ -257,7 +259,7 @@ class DeviceCommandRunnerTest {
             assertEquals(errorCode, runWithExitCode(DeviceCommand.UI_DUMP, exitCode).errorCode)
         }
         // 其它命令的非零退出码仍是通用失败码。
-        assertEquals("DEVICE_COMMAND_FAILED", runWithExitCode(DeviceCommand.TAP, 3).errorCode)
+        assertEquals("DEVICE_COMMAND_FAILED", runWithExitCode(DeviceCommand.DEVICE_INFO, 3).errorCode)
         assertEquals(0, runWithExitCode(DeviceCommand.UI_DUMP, 0).exitCode)
     }
 
@@ -325,7 +327,7 @@ class DeviceCommandRunnerTest {
     @Test
     fun timeoutKeepsItsCodeAndExplainsWhatHappened() {
         val result = DeviceCommandRunner { _, _ -> }
-            .execute("session-timeout-guidance", DeviceCommand.TAP, "1,1", 1)
+            .execute("session-timeout-guidance", DeviceCommand.DEVICE_INFO, "", 1)
         assertEquals("DEVICE_COMMAND_TIMEOUT", result.errorCode)
         assertTrue(result.text.contains("超时"))
         assertTrue(result.text.contains("下一步："))
@@ -397,7 +399,7 @@ class DeviceCommandRunnerTest {
             injected.complete(String(Base64.getDecoder().decode(data), Charsets.UTF_8))
         }
         val result = CompletableFuture.supplyAsync {
-            polling.execute(sessionId, command, if (command == DeviceCommand.TAP) "1,1" else "", TimeUnit.SECONDS.toMillis(5))
+            polling.execute(sessionId, command, "", TimeUnit.SECONDS.toMillis(5))
         }
         val input = injected.get(5, TimeUnit.SECONDS)
         val generated = Regex("__DSH_B_([0-9a-f-]{36})_").find(input)?.groupValues?.get(1)

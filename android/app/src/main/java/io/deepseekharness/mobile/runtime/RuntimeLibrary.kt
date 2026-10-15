@@ -15,6 +15,8 @@ import org.json.JSONObject
 class RuntimeLibrary(private val store: RuntimeStore) {
     private val directory = File(store.runtimeParent, "library")
     companion object {
+        const val MAX_CAPACITY = 5
+
         fun requireId(value: String): String {
             if (!Regex("^[a-f0-9]{64}$").matches(value)) throw RuntimeFailure("RUNTIME_VERSION_INVALID", "版本标识无效")
             return value
@@ -28,15 +30,73 @@ class RuntimeLibrary(private val store: RuntimeStore) {
         }
     }
     private fun path(id: String, suffix: String) = File(directory, requireId(id) + suffix).toPath()
-    fun download(source: RuntimeSource) {
+
+    fun count(): Int {
+        prepare()
+        var count = 0
+        Files.newDirectoryStream(directory.toPath(), "*.json").use { stream ->
+            for (file in stream) {
+                val id = file.fileName.toString().removeSuffix(".json")
+                if (Regex("^[a-f0-9]{64}$").matches(id) && Files.isRegularFile(path(id, ".bundle"), LinkOption.NOFOLLOW_LINKS)) {
+                    count++
+                }
+            }
+        }
+        return count
+    }
+
+    fun canAdd(id: String): Boolean {
+        prepare()
+        if (Files.isRegularFile(path(id, ".json"), LinkOption.NOFOLLOW_LINKS) &&
+            Files.isRegularFile(path(id, ".bundle"), LinkOption.NOFOLLOW_LINKS)
+        ) {
+            return true
+        }
+        return count() < MAX_CAPACITY
+    }
+
+    fun delete(id: String): Boolean {
+        prepare()
+        val validId = requireId(id)
+        val jsonFile = path(validId, ".json")
+        val bundleFile = path(validId, ".bundle")
+        var deleted = false
+        if (Files.deleteIfExists(jsonFile)) deleted = true
+        if (Files.deleteIfExists(bundleFile)) deleted = true
+        return deleted
+    }
+
+    private fun autoEvictIfNeeded(incomingId: String) {
+        if (canAdd(incomingId)) return
+        val currentActiveSha = store.installedManifest()?.rootfs?.sha256
+        var oldestId: String? = null
+        var oldestTime = Long.MAX_VALUE
+        Files.newDirectoryStream(directory.toPath(), "*.json").use { stream ->
+            for (file in stream) {
+                val id = file.fileName.toString().removeSuffix(".json")
+                if (id == currentActiveSha || id == incomingId) continue
+                val lastModified = Files.getLastModifiedTime(file).toMillis()
+                if (lastModified < oldestTime) {
+                    oldestTime = lastModified
+                    oldestId = id
+                }
+            }
+        }
+        oldestId?.let { delete(it) }
+    }
+
+    fun download(source: RuntimeSource, onProgress: ((Long, Long) -> Unit)? = null) {
         prepare()
         val uri = source.manifestUrl ?: throw RuntimeFailure("SOURCE_INCOMPLETE", "请先选择安卓运行时包")
         val digest = source.manifestSha256 ?: throw RuntimeFailure("SOURCE_INCOMPLETE", "缺少运行时清单摘要")
         val http = RuntimeHttp()
         val manifest = RuntimeManifest.parse(http.downloadBytes(uri, digest, RuntimeLimits.MAX_MANIFEST_BYTES), uri.host)
+        autoEvictIfNeeded(manifest.rootfs.sha256)
         val target = path(manifest.rootfs.sha256, ".part").toFile()
         try {
-            http.downloadFile(manifest.rootfs.url, target, manifest.rootfs.compressedBytes, manifest.rootfs.sha256) { _, _ -> }
+            http.downloadFile(manifest.rootfs.url, target, manifest.rootfs.compressedBytes, manifest.rootfs.sha256) { downloaded, total ->
+                onProgress?.invoke(downloaded, total)
+            }
             retain(manifest, target)
         } finally { Files.deleteIfExists(target.toPath()) }
     }
@@ -73,6 +133,7 @@ class RuntimeLibrary(private val store: RuntimeStore) {
     fun retain(manifest: RuntimeManifest, archive: File) {
         prepare()
         val id = manifest.rootfs.sha256
+        autoEvictIfNeeded(id)
         val destination = path(id, ".bundle")
         if (!Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) {
             val temporary = Files.createTempFile(directory.toPath(), "download-", ".part")

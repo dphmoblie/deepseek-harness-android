@@ -1231,6 +1231,112 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     summary.distinctRealpaths = realpaths.size
     return summary
   }
+  function getPreservedInfo(id, activeDirectory) {
+    const versionsDir = path.join(home, 'versions')
+    if (!exists(versionsDir)) return { exists: false, version: null, transaction: null, isLinked: false }
+    let items
+    try { items = fs.readdirSync(versionsDir, { withFileTypes: true }) } catch {
+      return { exists: false, version: null, transaction: null, isLinked: false }
+    }
+    const candidates = []
+    for (const item of items) {
+      if (!TRANSACTION_ID.test(item.name)) continue
+      const candidate = path.join(versionsDir, item.name, 'node_modules', id)
+      try {
+        if (!exists(candidate)) continue
+        const resolved = fs.realpathSync(candidate)
+        if (!within(home, resolved) || !fs.statSync(resolved).isDirectory()) continue
+        const stats = fs.statSync(resolved)
+        const pkgPath = path.join(resolved, 'package.json')
+        if (!exists(pkgPath)) continue
+        const pkg = read(pkgPath)
+        if (pkg.name === id && typeof pkg.version === 'string' && VERSION.test(pkg.version)) {
+          candidates.push({ version: pkg.version, transaction: item.name, directory: resolved, modified: stats.mtimeMs })
+        }
+      } catch {}
+    }
+    if (candidates.length === 0) return { exists: false, version: null, transaction: null, isLinked: false }
+    candidates.sort((a, b) => b.modified - a.modified)
+    const best = candidates[0]
+    let isLinked = false
+    try {
+      if (activeDirectory) {
+        isLinked = fs.realpathSync(activeDirectory) === best.directory
+      }
+    } catch {}
+    return {
+      exists: true,
+      version: best.version,
+      transaction: best.transaction,
+      isLinked,
+    }
+  }
+  function pruneVersions() {
+    const summary = { scanned: 0, pruned: 0, kept: 0, bytesFreed: 0 }
+    const versionsDir = path.join(home, 'versions')
+    if (!exists(versionsDir)) return summary
+    let items
+    try { items = fs.readdirSync(versionsDir, { withFileTypes: true }) } catch { return summary }
+
+    const keepTransactions = new Set()
+    try {
+      for (const name of manifest().names) {
+        const resolved = resolvePackage(name)
+        if (resolved) {
+          const info = versionDirectory(name, resolved)
+          if (info?.transaction) keepTransactions.add(info.transaction)
+        }
+      }
+    } catch {}
+
+    try {
+      for (const entry of previousEntries()) {
+        if (entry.transaction) keepTransactions.add(entry.transaction)
+      }
+    } catch {}
+
+    try {
+      for (const entry of lockEntries()) {
+        if (entry.transaction) keepTransactions.add(entry.transaction)
+      }
+    } catch {}
+
+    for (const item of items) {
+      if (!item.isDirectory() || !TRANSACTION_ID.test(item.name)) continue
+      summary.scanned += 1
+      const txDir = path.join(versionsDir, item.name)
+      if (keepTransactions.has(item.name)) {
+        summary.kept += 1
+        continue
+      }
+      try {
+        if (!within(home, fs.realpathSync(txDir))) {
+          summary.kept += 1
+          continue
+        }
+        let bytes = 0
+        const calcSize = dir => {
+          let entries
+          try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+          for (const entry of entries) {
+            const full = path.join(dir, entry.name)
+            try {
+              const stats = fs.lstatSync(full)
+              if (stats.isDirectory() && !stats.isSymbolicLink()) calcSize(full)
+              else if (stats.isFile()) bytes += stats.size
+            } catch {}
+          }
+        }
+        calcSize(txDir)
+        fs.rmSync(txDir, { recursive: true, force: true })
+        summary.pruned += 1
+        summary.bytesFreed += bytes
+      } catch {
+        summary.kept += 1
+      }
+    }
+    return summary
+  }
   function basicList() {
     const config = manifest()
     return { plugins: config.names.map(id => {
@@ -1242,7 +1348,8 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
           if (pkg.name === id && typeof pkg.version === 'string' && pkg.version.length <= 64 && VERSION.test(pkg.version)) version = pkg.version
         } catch { /* 损坏插件仍保留禁用入口。 */ }
       }
-      return { id, version, rollback: previousFor(id)?.version ?? null, enabled: config.enabled.includes(id), protected: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'].includes(id), official: officialPackage(id), installed: version !== null }
+      const preserved = getPreservedInfo(id, directory)
+      return { id, version, rollback: previousFor(id)?.version ?? null, enabled: config.enabled.includes(id), protected: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'].includes(id), official: officialPackage(id), installed: version !== null, preserved }
     }) }
   }
   const overrideFile = path.join(root, 'root/.dsh-mobile/launcher-plugins.patch.json')
@@ -1622,7 +1729,30 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     const id = spec.kind === 'npm'
       ? (stagedNames.includes(spec.name) ? spec.name : fail('PLUGIN_UPDATE_FAILED'))
       : deriveImportedName(stageModules, stagedNames, spec.hint)
-    if (protectedPackage(id) || ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'].includes(id)) fail('PLUGIN_PROTECTED')
+    function checkNativeAddons(pkgDir) {
+      try {
+        const pkg = read(path.join(pkgDir, 'package.json'))
+        if (pkg.gypfile === true) return true
+        if (pkg.binary && typeof pkg.binary === 'object') return true
+      } catch {}
+      let found = false
+      const scan = (dir, depth = 0) => {
+        if (found || depth > 3) return
+        let items
+        try { items = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+        for (const item of items) {
+          if (item.name === 'node_modules' || item.name.startsWith('.')) continue
+          if (item.isFile() && (item.name.endsWith('.node') || item.name === 'binding.gyp')) {
+            found = true
+            return
+          }
+          if (item.isDirectory()) scan(path.join(dir, item.name), depth + 1)
+        }
+      }
+      scan(pkgDir)
+      return found
+    }
+    if (checkNativeAddons(path.join(stageModules, id))) fail('PLUGIN_NATIVE_UNSUPPORTED', id)
     const selected = read(path.join(stageModules, id, 'package.json'))
     if (selected.name !== id || !VERSION.test(selected.version ?? '') || typeof selected.dsh?.bundle?.patch !== 'string') fail('PLUGIN_UPDATE_FAILED')
     const patch = path.resolve(stageModules, id, selected.dsh.bundle.patch)
@@ -1762,7 +1892,11 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     const transactionId = crypto.randomUUID()
     const directory = safe(path.join(home, 'versions', transactionId))
     let committed = false
-    try { return installInternal(spec, directory, transactionId, () => { committed = true }) }
+    try {
+      const result = installInternal(spec, directory, transactionId, () => { committed = true })
+      try { pruneVersions() } catch {}
+      return result
+    }
     catch (error) {
       // 恢复记录仍在时保留暂存目录，供下次启动恢复；提交之后绝不再删（链接已指向它）。
       if (!committed && !exists(journal) && exists(directory)) fs.rmSync(directory, { recursive: true, force: true })
@@ -1825,7 +1959,7 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     // 账本按事实重建：回滚后解析到的版本与事务目录都变了；来源沿用上一条（回滚不改变"当初从哪来"）。
     return { ...list(), lock: lockQuiet({ id, source: null }) }
   }
-  return { list, setEnabled, setChildEnabled, update, importPackage, rollback, recover, repair, scanRuntimeGraph }
+  return { list, setEnabled, setChildEnabled, update, importPackage, rollback, recover, repair, scanRuntimeGraph, pruneVersions }
 }
 
 module.exports = {
@@ -1864,6 +1998,7 @@ if (require.main === module) {
     // `state` 让恢复结果自己能说清"启停状态回填了没有、版本账本写成了没有"。
     else if (operation === 'recover') { const state = manager.recover(); result = { recovered: true, lock: state.lock, state } }
     else if (operation === 'repair') { manager.recover(); result = manager.repair() }
+    else if (operation === 'prune') { manager.recover(); result = manager.pruneVersions() }
     // 模块图探测是只读的：不走 recover()，也不参与 repair 的代次指纹，可随时独立触发。
     else if (operation === 'graph') result = manager.scanRuntimeGraph()
     else if (operation === 'enable' && (second === 'true' || second === 'false')) { manager.recover(); result = manager.setEnabled(first, second === 'true') }

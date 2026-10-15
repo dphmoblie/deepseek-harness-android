@@ -84,6 +84,7 @@ describe('会话管理页', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /真实会话标题/ }))
     expect(onOpenHarness).toHaveBeenCalledTimes(1)
+    expect(onOpenHarness).toHaveBeenCalledWith('session-aaa')
   })
 
   it('真实会话不提供删除按钮：只读通道不承诺删得掉', async () => {

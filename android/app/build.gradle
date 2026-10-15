@@ -191,6 +191,10 @@ android {
     }
 }
 
+kotlin {
+    jvmToolchain(21)
+}
+
 tasks.named('preBuild').configure {
     dependsOn(generateLegalAssets)
 }

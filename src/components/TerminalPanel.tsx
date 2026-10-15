@@ -108,6 +108,12 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
   const [ctrlActive, setCtrlActive] = useState(false)
   const ctrlActiveRef = useRef(false)
   ctrlActiveRef.current = ctrlActive
+  /**
+   * 会话是否还能写入。辅助按键栏是常驻 UI，但可写窗口只有「握手完成 → 收到终态」这一段：
+   * 会话结束后按键必须不再触发触感与焦点抢夺 —— 否则用户会得到「按了、有震动、什么都没发生」的假反馈。
+   */
+  const writableRef = useRef(false)
+  const [keyBarDisabled, setKeyBarDisabled] = useState(true)
 
   const activeSessionRef = useRef<{
     sessionId?: string
@@ -116,7 +122,13 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
     send: () => {},
   })
 
+  const setWritable = useCallback((writable: boolean) => {
+    writableRef.current = writable
+    setKeyBarDisabled(!writable)
+  }, [])
+
   const sendVirtualKey = useCallback((data: string) => {
+    if (!writableRef.current) return
     triggerHaptic('light')
     activeSessionRef.current.send(data)
     terminalRef.current?.focus()
@@ -125,7 +137,7 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
   const toggleCtrl = useCallback(() => {
     triggerHaptic('light')
     setCtrlActive(active => !active)
-    terminalRef.current?.focus()
+    if (writableRef.current) terminalRef.current?.focus()
   }, [])
 
   const preventFocusLoss = (event: React.PointerEvent<HTMLButtonElement> | React.MouseEvent<HTMLButtonElement>) => {
@@ -277,6 +289,8 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
 
     const writeExit = (exitCode: number): void => {
       sessionEnded = true
+      writableRef.current = false
+      setKeyBarDisabled(true)
       disposeInput?.()
       disposeInput = undefined
       terminal.writeln(t("\r\n[会话已结束，退出码 {0}]", exitCode))
@@ -380,6 +394,8 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
           return Promise.resolve()
         })
         setConnecting(false)
+        writableRef.current = true
+        setKeyBarDisabled(false)
         fit()
         terminal.focus()
       } catch (error) {
@@ -387,6 +403,8 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
         // 这些字节没有交付对象，留着只会一直占内存（不做没有意义的重放）。
         handshakeFailed = true
         pending.clear()
+        writableRef.current = false
+        setKeyBarDisabled(true)
         setConnecting(false)
         reportError(error)
       }
@@ -394,6 +412,8 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
 
     return () => {
       cancelled = true
+      writableRef.current = false
+      setKeyBarDisabled(true)
       activeSessionRef.current = { send: () => {} }
       pending.clear()
       resizeObserver.disconnect()

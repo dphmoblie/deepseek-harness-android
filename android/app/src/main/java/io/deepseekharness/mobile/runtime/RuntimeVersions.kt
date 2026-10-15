@@ -33,8 +33,11 @@ object RuntimeVersionPolicy {
     const val SLOT_PREVIOUS = "previous"
     const val SLOT_BUNDLED = "bundled"
 
-    /** 目前唯一支持的切换目标：保留下来的上一版本。 */
+    /** 支持的切换目标：保留下来的上一版本、出厂内置版本，或版本库中的 64 位 SHA-256 ID。 */
     const val TARGET_PREVIOUS = "previous"
+    const val TARGET_BUNDLED = "bundled"
+
+    val SHA256_PATTERN = Regex("^[a-f0-9]{64}$")
 
     /**
      * 「什么算一个可以展示的 dsh 版本号」的唯一规则。
@@ -48,7 +51,7 @@ object RuntimeVersionPolicy {
     /** 解析并校验切换/删除目标；未知目标一律以受控错误码拒绝。 */
     fun requireTarget(raw: String?): String {
         val target = raw?.trim().orEmpty()
-        if (target != TARGET_PREVIOUS) {
+        if (target != TARGET_PREVIOUS && target != TARGET_BUNDLED && !SHA256_PATTERN.matches(target)) {
             throw RuntimeFailure("RUNTIME_VERSION_TARGET_INVALID", "运行时版本操作目标无效")
         }
         return target
