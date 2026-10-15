@@ -2,6 +2,7 @@ package io.deepseekharness.mobile
 
 import android.annotation.SuppressLint
 import android.content.ContentResolver
+import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.drawable.ColorDrawable
 import android.net.Uri

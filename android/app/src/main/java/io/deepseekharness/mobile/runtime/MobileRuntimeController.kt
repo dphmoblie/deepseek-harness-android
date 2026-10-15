@@ -158,7 +158,7 @@ class MobileRuntimeController(
     /**
      * 删除保留下来的上一版本或版本库中的历史版本。
      *
-     * 这里**不**要求运行时已停止：删除只动 `retained*` 或 `library/*`，与正在运行的当前运行时无关，
+     * 这里**不**要求运行时已停止：删除只动 `retained*` 或 `library/` 目录，与正在运行的当前运行时无关，
      * 用户清理磁盘空间不该被迫先停服务。
      */
     fun deleteRuntimeVersion(target: String): List<RuntimeVersionInfo> = lifecycleLock.withLock {

@@ -385,10 +385,11 @@ class DeviceCommandRunner(
         }
         // 只读设备信息：限定字段，避免把完整 getprop（可能含厂商私有信息）回传到 WebView。
         DeviceCommand.DEVICE_INFO -> Body(
-            "printf 'manufacturer='; getprop ro.product.manufacturer; " +
-                "printf 'model='; getprop ro.product.model; " +
-                "printf 'androidRelease='; getprop ro.build.version.release; " +
-                "printf 'sdk='; getprop ro.build.version.sdk",
+            // 内层脚本必须不含单引号：外层用单引号整段包裹，这里若再出现单引号就要靠转义兜底。
+            "printf \"manufacturer=\"; getprop ro.product.manufacturer; " +
+                "printf \"model=\"; getprop ro.product.model; " +
+                "printf \"androidRelease=\"; getprop ro.build.version.release; " +
+                "printf \"sdk=\"; getprop ro.build.version.sdk",
             "\$?",
         )
         // 仅列出已安装包名；查询字符串严格限制为包名字符，不能拼出 Shell 语法。
@@ -420,7 +421,9 @@ class DeviceCommandRunner(
         // 电池状态是只读诊断信息，输出由上层的固定缓冲窗口限制大小。
         DeviceCommand.BATTERY -> {
             if (param.isNotBlank()) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "电池诊断不接受参数")
-            Body("dumpsys battery | head -n 64", "\$?")
+            // 不能接 `| head`：管道的退出码属于 head，会让 dumpsys 失败也报成成功；
+            // 输出上界由读取侧的固定缓冲窗口负责。
+            Body("dumpsys battery", "\$?")
         }
         // 只允许标准 Android 包名，并通过 monkey 启动其默认入口；不接受 Activity、Intent 或 Shell 参数。
         DeviceCommand.LAUNCH_APP -> {
