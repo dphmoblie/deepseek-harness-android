@@ -250,32 +250,39 @@ class VirtualScreenActivity : Activity() {
     private val refresh = object : Runnable {
         override fun run() {
             if (!resumed) return
-            val service = VirtualScreenService.current
-            val snapshot = service?.state()
-            val running = snapshot?.optBoolean("active") == true
-            val picking = service == null
-            if (picking != selecting || (running && preview == null)) {
-                selecting = picking
-                picker.visibility = if (picking) View.VISIBLE else View.GONE
-                if (!running) { preview?.let { content.removeView(it) }; preview = null }
-                else if (preview == null) {
-                    val frame = VirtualScreenFrame(this@VirtualScreenActivity).also {
-                        it.preview.report = { text -> status.text = text }
-                        it.installResize(pageResizeGesture)
-                        // 与小窗同一排芯片：画面上的出口位置与样式两处一致（本页的其余控制仍在页面上）。
-                        it.installControls(VirtualScreenChrome.page(onBack = { finish() }))
-                        // 控制栏在 content 外；此处仅放画面，保留与小窗共用的缩放与坐标换算。
-                        it.layoutParams = pagePreviewParams(pageWidthPreferencePx())
-                        content.addView(it)
+            try {
+                val service = VirtualScreenService.current
+                val snapshot = service?.state()
+                val running = snapshot?.optBoolean("active") == true
+                val picking = service == null
+                if (picking != selecting || (running && preview == null)) {
+                    selecting = picking
+                    picker.visibility = if (picking) View.VISIBLE else View.GONE
+                    if (!running) { preview?.let { content.removeView(it) }; preview = null }
+                    else if (preview == null) {
+                        val frame = VirtualScreenFrame(this@VirtualScreenActivity).also {
+                            it.preview.report = { text -> status.text = text }
+                            it.installResize(pageResizeGesture)
+                            // 与小窗同一排芯片：画面上的出口位置与样式两处一致（本页的其余控制仍在页面上）。
+                            it.installControls(VirtualScreenChrome.page(onBack = { finish() }))
+                            // 控制栏在 content 外；此处仅放画面，保留与小窗共用的缩放与坐标换算。
+                            it.layoutParams = pagePreviewParams(pageWidthPreferencePx())
+                            content.addView(it)
+                        }
+                        preview = frame
                     }
-                    preview = frame
                 }
-            }
-            updateControls(snapshot)
-            if (!running) status.text = when {
-                service != null || android.os.SystemClock.elapsedRealtime() < launchPendingUntil -> "正在创建副屏，请稍候…"
-                VirtualScreenService.lastError.isNotEmpty() -> VirtualScreenService.lastError
-                else -> "选择要交给 AI 操作的目标应用。设备兼容性需要实测。"
+                updateControls(snapshot)
+                if (!running) status.text = when {
+                    service != null || android.os.SystemClock.elapsedRealtime() < launchPendingUntil -> "正在创建副屏，请稍候…"
+                    VirtualScreenService.lastError.isNotEmpty() -> VirtualScreenService.lastError
+                    else -> "选择要交给 AI 操作的目标应用。设备兼容性需要实测。"
+                }
+            } catch (_: Throwable) {
+                // 轮询跑在主线程：异常逃出去会直接终结进程。这里停在原地并提示用户重进，
+                // 不再续期（状态不会再更新），把「刷新失败」当成一次可见的故障而非闪退。
+                toast("副屏状态刷新失败，请退出重进本页")
+                return
             }
             main.postDelayed(this, 700)
         }

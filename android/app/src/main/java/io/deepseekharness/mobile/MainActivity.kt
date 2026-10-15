@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.widget.Toast
+import android.webkit.WebViewDatabase
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import com.getcapacitor.BridgeActivity
@@ -46,6 +47,8 @@ class MainActivity : BridgeActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 尽早在后台线程预热 WebView 提供方，与下面的桥接初始化、布局 inflate 并行。
+        warmUpWebView()
         registerPlugin(MobileRuntimePlugin::class.java)
         super.onCreate(savedInstanceState)
         AppWindowInsets.apply(this)
@@ -116,6 +119,21 @@ class MainActivity : BridgeActivity() {
     private fun applySystemFontScale() {
         val settings = bridge?.webView?.settings ?: return
         settings.textZoom = AppTextScale.percentOf(resources.configuration.fontScale)
+    }
+
+    /**
+     * 在后台线程预热 WebView 提供方。
+     *
+     * 冷启动时第一个 WebView 实例化会触发系统 WebView APK 加载与 native 库初始化，
+     * 这是主线程上的固定大头。[WebViewDatabase.getInstance] 内部同样会加载 WebView
+     * provider，而该 API 官方允许在后台线程调用；在 onCreate 最早期发起后，它与
+     * Capacitor 的桥接初始化并行，provider 初始化全局只发生一次，随后管理界面与
+     * Harness 会话页创建 WebView 时直接复用。异常静默回退到系统默认的懒加载路径。
+     */
+    private fun warmUpWebView() {
+        webViewWarmupExecutor.execute {
+            runCatching { WebViewDatabase.getInstance(applicationContext) }
+        }
     }
 
     /** Accept a user-selected content URI from another app and copy it into private inbox storage. */
@@ -355,6 +373,13 @@ class MainActivity : BridgeActivity() {
     }
 
     companion object {
+        /**
+         * WebView 提供方预热专用线程：进程级单线程、守护线程，不随 Activity 销毁关闭。
+         */
+        private val webViewWarmupExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "dsh-webview-warmup").apply { isDaemon = true }
+        }
+
         private const val ANY_MIME_TYPE = "*/*"
         private const val COPY_BUFFER_BYTES = 16 * 1024
         private const val MAX_IMPORT_BYTES = 64L * 1024 * 1024

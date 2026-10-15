@@ -19,17 +19,19 @@ class BootRecoveryReceiver : BroadcastReceiver() {
         val action = intent?.action ?: return
         if (action != Intent.ACTION_BOOT_COMPLETED && action != Intent.ACTION_USER_UNLOCKED) return
 
-        val appContext = context.applicationContext
+        // 广播运行在主线程：这里逃出的任何异常都会终结整个进程（用户看到的「闪退」）。
+        // 恢复流程本身允许失败（服务会自行校验权限并降级），因此整体兜底，只记录诊断不抛出。
+        runCatching { restoreAfterBoot(context.applicationContext) }
+            .onFailure { android.util.Log.w(TAG, "boot recovery failed: ${it.javaClass.simpleName}") }
+    }
+
+    private fun restoreAfterBoot(appContext: Context) {
         val userManager = appContext.getSystemService(UserManager::class.java)
         // BOOT_COMPLETED 在部分 ROM 上可能早于用户解锁；延后到 USER_UNLOCKED，
         // 避免在凭据加密存储不可用时误读为默认关闭。
         if (userManager != null && !userManager.isUserUnlocked) return
 
-        val store = try {
-            RuntimeStore(appContext)
-        } catch (_: Throwable) {
-            return
-        }
+        val store = RuntimeStore(appContext)
 
         // 悬浮球只依赖用户开关与系统授权，服务自身会再次校验权限并处理竞态。
         if (store.overlayBallEnabled() && Settings.canDrawOverlays(appContext)) {
@@ -41,5 +43,9 @@ class BootRecoveryReceiver : BroadcastReceiver() {
         if (store.keepRuntimeInBackground()) {
             HarnessKeepAliveService.startAfterBoot(appContext)
         }
+    }
+
+    private companion object {
+        private const val TAG = "dsh-runtime"
     }
 }
