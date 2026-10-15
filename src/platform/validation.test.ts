@@ -18,6 +18,7 @@ import {
   validateAllFilesAccessResult,
   validateAppUpdateState,
   validateDeviceCapabilityReport,
+  validateRootEngineStatus,
   validateAccessibilityAutomationRuns,
   validateAccessibilityAutomationAppConfigDetail,
   validateAccessibilityAutomationRuleDetail,
@@ -2230,7 +2231,7 @@ describe('副屏设置的悬浮窗宽度校验', () => {
 })
 
 describe('设备能力清单校验', () => {
-  const ids = ['shizuku', 'accessibility', 'virtual_screen', 'screenshot', 'chinese_input']
+  const ids = ['shizuku', 'kernelsu_root', 'accessibility', 'virtual_screen', 'screenshot', 'chinese_input']
 
   /** 一项「已就绪」的能力条目，按需覆盖字段 —— 形状与原生 `DeviceCapabilityPolicy` 一致。 */
   function entry(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -2251,7 +2252,7 @@ describe('设备能力清单校验', () => {
     return report({ capabilities: ids.map((id, at) => (at === index ? entry(id, overrides) : entry(id))) })
   }
 
-  it('五项按固定顺序原样返回', () => {
+  it('六项按固定顺序原样返回', () => {
     const value = validateDeviceCapabilityReport(report())
     expect(value.atMs).toBe(1_700_000_000_123)
     expect(value.sdkInt).toBe(34)
@@ -2261,14 +2262,14 @@ describe('设备能力清单校验', () => {
 
   it('没就绪的那一项带着原因、动作与替代方式一起返回', () => {
     const value = validateDeviceCapabilityReport(
-      withEntry(1, {
+      withEntry(2, {
         state: 'needs_action',
         reason: 'ACCESSIBILITY_OFF',
         action: 'open_accessibility_settings',
         alternative: 'SHELL_ASCII_ONLY',
       }),
     )
-    expect(value.capabilities[1]).toEqual({
+    expect(value.capabilities[2]).toEqual({
       id: 'accessibility',
       state: 'needs_action',
       reason: 'ACCESSIBILITY_OFF',
@@ -2278,7 +2279,7 @@ describe('设备能力清单校验', () => {
   })
 
   it('顺序错位整份拒绝，而不是把副屏那一行画成截图', () => {
-    const swapped = ['accessibility', 'shizuku', 'virtual_screen', 'screenshot', 'chinese_input'].map(id => entry(id))
+    const swapped = ['kernelsu_root', 'shizuku', 'accessibility', 'virtual_screen', 'screenshot', 'chinese_input'].map(id => entry(id))
     expect(() => validateDeviceCapabilityReport(report({ capabilities: swapped }))).toThrow('设备能力 1 的标识格式无效')
   })
 
@@ -2289,9 +2290,29 @@ describe('设备能力清单校验', () => {
       .toThrow('设备能力列表格式无效')
   })
 
-  it('状态取值不在四种里就拒绝', () => {
+  it('状态取值不在五种里就拒绝', () => {
     expect(() => validateDeviceCapabilityReport(withEntry(0, { state: 'available' })))
       .toThrow('设备能力 shizuku 的状态格式无效')
+  })
+
+  it('降级带原因但**不带**待办动作，界面照实说少了哪层保护', () => {
+    const value = validateDeviceCapabilityReport(
+      withEntry(1, { state: 'degraded', reason: 'ROOT_SANDBOX_DEGRADED' }),
+    )
+    expect(value.capabilities[1]).toEqual({
+      id: 'kernelsu_root',
+      state: 'degraded',
+      reason: 'ROOT_SANDBOX_DEGRADED',
+      action: null,
+      alternative: null,
+    })
+  })
+
+  it('降级却带着待办动作、或报了就绪原因，都自相矛盾', () => {
+    expect(() => validateDeviceCapabilityReport(withEntry(1, { state: 'degraded', reason: 'ROOT_SANDBOX_DEGRADED', action: 'enable_root_engine' })))
+      .toThrow('设备能力 kernelsu_root 降级却带着待办动作')
+    expect(() => validateDeviceCapabilityReport(withEntry(1, { state: 'degraded' })))
+      .toThrow('设备能力 kernelsu_root 降级却报了就绪原因')
   })
 
   it('原因码必须是原生那套大写枚举', () => {
@@ -2334,6 +2355,87 @@ describe('设备能力清单校验', () => {
     expect(() => validateDeviceCapabilityReport(report({ atMs: '1700000000000' }))).toThrow('设备能力取样时刻格式无效')
     expect(() => validateDeviceCapabilityReport(report({ sdkInt: 0 }))).toThrow('设备 API 级别格式无效')
     expect(() => validateDeviceCapabilityReport(report({ sdkInt: '34' }))).toThrow('设备 API 级别格式无效')
+  })
+})
+
+describe('根通道状态校验', () => {
+  function status(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      enabled: false,
+      usable: false,
+      kernelSuStatus: 'unsupported',
+      reason: 'ROOT_ENGINE_DISABLED',
+      degraded: false,
+      degradations: [],
+      suVersion: null,
+      ...overrides,
+    }
+  }
+
+  it('关着的时候照样给出完整状态：开关、三态、原因、降级与 su 版本', () => {
+    expect(validateRootEngineStatus(status())).toEqual({
+      enabled: false,
+      usable: false,
+      kernelSuStatus: 'unsupported',
+      reason: 'ROOT_ENGINE_DISABLED',
+      degraded: false,
+      degradations: [],
+      suVersion: null,
+    })
+  })
+
+  it('开着且 KernelSU 就绪才算可用，并带上 su 版本', () => {
+    const value = validateRootEngineStatus(status({
+      enabled: true,
+      usable: true,
+      kernelSuStatus: 'ready',
+      reason: 'READY',
+      suVersion: '3.1.0:KernelSU',
+    }))
+    expect(value.usable).toBe(true)
+    expect(value.suVersion).toBe('3.1.0:KernelSU')
+  })
+
+  it('降级状态带着原因码一起返回', () => {
+    const value = validateRootEngineStatus(status({
+      enabled: true,
+      usable: true,
+      kernelSuStatus: 'ready',
+      reason: 'READY',
+      degraded: true,
+      degradations: ['NAMESPACE_UNAVAILABLE', 'BLOCK_MASK_SKIPPED'],
+    }))
+    expect(value.degraded).toBe(true)
+    expect(value.degradations).toEqual(['NAMESPACE_UNAVAILABLE', 'BLOCK_MASK_SKIPPED'])
+  })
+
+  it('可用性与开关/三态不一致就整份拒绝，不让界面画出自相矛盾的两行', () => {
+    expect(() => validateRootEngineStatus(status({ enabled: true, usable: true })))
+      .toThrow('根通道的可用性与开关状态不一致')
+    expect(() => validateRootEngineStatus(status({ enabled: false, usable: true, kernelSuStatus: 'ready', reason: 'READY' })))
+      .toThrow('根通道的可用性与开关状态不一致')
+  })
+
+  it('未开启却报降级、降级标记与原因不一致，都拒绝', () => {
+    expect(() => validateRootEngineStatus(status({ degraded: true, degradations: ['BLOCK_MASK_FAILED'] })))
+      .toThrow('根通道未开启却报了降级')
+    expect(() => validateRootEngineStatus(status({ enabled: true, kernelSuStatus: 'ready', reason: 'READY', usable: true, degraded: true })))
+      .toThrow('根通道的降级标记与降级原因不一致')
+    expect(() => validateRootEngineStatus(status({ enabled: true, kernelSuStatus: 'ready', reason: 'READY', usable: true, degradations: ['BLOCK_MASK_FAILED'] })))
+      .toThrow('根通道的降级标记与降级原因不一致')
+  })
+
+  it('三态、原因码与降级码各按自己的形状校验', () => {
+    expect(() => validateRootEngineStatus(status({ kernelSuStatus: 'ok' })))
+      .toThrow('根通道的 KernelSU 状态格式无效')
+    expect(() => validateRootEngineStatus(status({ reason: 'root_engine_disabled' })))
+      .toThrow('根通道的原因格式无效')
+    expect(() => validateRootEngineStatus(status({ enabled: true, kernelSuStatus: 'ready', reason: 'READY', usable: true, degraded: true, degradations: ['block_mask_failed'] })))
+      .toThrow('根通道的降级原因格式无效')
+    expect(() => validateRootEngineStatus(status({ degradations: null })))
+      .toThrow('根通道的降级原因格式无效')
+    expect(() => validateRootEngineStatus(status({ suVersion: 3 })))
+      .toThrow('根通道的 su 版本格式无效')
   })
 })
 

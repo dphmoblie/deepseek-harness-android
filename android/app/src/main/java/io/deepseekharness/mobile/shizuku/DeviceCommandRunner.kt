@@ -129,14 +129,19 @@ class DeviceCommandRunner(
     /**
      * Run one allowlisted command in [sessionId] and wait for its end marker.
      * Blocks the calling thread (a plugin executor worker) up to [timeoutMs].
+     *
+     * [useRootEngine] 为真且命令是 [DeviceCommand.SHELL] 时，**不走 Shizuku 会话**：
+     * `su -c` 由应用进程自己起（见 [RootCommandRunner] 的类注释），因为「谁执行 su」决定了
+     * 命名空间生命周期、`/dev/block` 遮蔽与 KernelSU App Profile 判定的归属。
      */
     fun execute(sessionId: String, command: DeviceCommand, param: String, timeoutMs: Long, useRootEngine: Boolean = false): DeviceCommandResult {
+        if (useRootEngine && command == DeviceCommand.SHELL) return executeOnRootEngine(param, timeoutMs)
         val pending = Pending(UUID.randomUUID().toString(), command)
         if (inflight.putIfAbsent(sessionId, pending) != null) {
             throw RuntimeFailure("DEVICE_COMMAND_BUSY", "设备 Shell 会话正忙")
         }
         try {
-            val input = buildInput(pending.requestId, command, param, useRootEngine)
+            val input = buildInput(pending.requestId, command, param)
             // 不再有 stty -echo / 固定 sleep / 清空缓冲的时序：那套做法既关不掉 mksh 行编辑器的
             // 自带回显，又引入竞态（sleep 结束前到达的输出会被误清）。现在解析只认 shell 内部
             // 展开的双哨兵，回显既不能伪造标记，也不会落进两个标记之间的 payload。
@@ -160,6 +165,44 @@ class DeviceCommandRunner(
         } finally {
             inflight.remove(sessionId, pending)
         }
+    }
+
+    /**
+     * 根通道执行：在应用进程内起 `su -c <包装脚本>`，不经 Shizuku 会话。
+     *
+     * 只有 [DeviceCommand.SHELL]（用户或模型给的短脚本）够格走这里：其它命令本身不需要 UID 0，
+     * 多给一份 root 能力只是扩大暴露面。
+     *
+     * 闸门按顺序：参数长度与控制字符 → [RootSandboxProbe] 探测出的能力档位决定静态审查档位
+     * （没有挂载命名空间时按严格档跑）→ [RootCommandRunner] 里的命名空间包装。
+     * 沙箱降级**不**算失败，但会写进正文：调用方与用户都该看到「这次是降级执行」。
+     */
+    private fun executeOnRootEngine(param: String, timeoutMs: Long): DeviceCommandResult {
+        if (param.isBlank() || param.toByteArray(Charsets.UTF_8).size > MAX_SHELL_SCRIPT_CHARS ||
+            param.any { it == '\u0000' || it == '\r' }
+        ) {
+            throw RuntimeFailure("DEVICE_COMMAND_INVALID", "Shell 脚本为空、过长或包含非法控制字符")
+        }
+        val capabilities = RootSandboxProbe.detect()
+        val result = RootCommandRunner.run(param, timeoutMs, strictGuard = !capabilities.namespaceIsolation)
+        val degradations = result.diagnostics.filter { it.substringBefore(':') in RootSecurityWrapper.DEGRADATION_CODES }
+        val body = buildString {
+            append(result.output)
+            if (degradations.isNotEmpty()) {
+                if (isNotEmpty()) append('\n')
+                append("[根通道降级执行] 沙箱没能提供完整隔离：")
+                append(degradations.joinToString("、"))
+                append("。本次命令在没有挂载命名空间的前提下执行，静态护栏已按严格档收紧。")
+            }
+        }
+        val errorCode = result.errorCode ?: if (result.ok) null else "DEVICE_COMMAND_FAILED"
+        return DeviceCommandResult(
+            ok = result.ok,
+            exitCode = result.exitCode,
+            text = if (result.ok) body else explain(errorCode, body),
+            truncated = result.truncated,
+            errorCode = errorCode,
+        )
     }
 
     /** Terminal output tap: aggregate until the shell-expanded end marker closes the request. */
@@ -353,11 +396,11 @@ class DeviceCommandRunner(
         else -> null
     }
 
-    internal fun buildInput(requestId: String, command: DeviceCommand, param: String, useRootEngine: Boolean = false): String {
+    internal fun buildInput(requestId: String, command: DeviceCommand, param: String): String {
         if (!REQUEST_ID_PATTERN.matches(requestId)) {
             throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令请求标识无效")
         }
-        val body = buildBody(requestId, command, param, useRootEngine)
+        val body = buildBody(requestId, command, param)
         // 标记里的 ${dsh_nonce} 保持**未展开的字面量**：回显看到的永远是它，
         // 只有内层 shell 展开后才会出现 `__DSH_B_<请求标识>_<pid>-<随机数>__` 这样的真实标记。
         val inner = "dsh_nonce=\$\$-\$RANDOM; " +
@@ -367,10 +410,17 @@ class DeviceCommandRunner(
         return "$INNER_SHELL -c ${singleQuote(inner)}\n"
     }
 
-    /** 命令正文，以及 END 标记应当读取的退出码表达式。 */
+    /** 命令正文与 END 标记要读的退出码表达式。 */
     private class Body(val script: String, val status: String)
 
-    private fun buildBody(requestId: String, command: DeviceCommand, param: String, useRootEngine: Boolean = false): Body = when (command) {
+    /**
+     * 命令正文，以及 END 标记应当读取的退出码表达式。
+     *
+     * 这里**没有**「根通道分支」：需要 UID 0 的脚本走 [executeOnRootEngine]，
+     * 由应用进程自己起 `su -c`。把 `su` 拼进 Shizuku 会话字符串会绕开设计规范的分区边界
+     * （那条会话的父进程是 UID 2000 的 shell），所以这条路被刻意删掉了。
+     */
+    private fun buildBody(requestId: String, command: DeviceCommand, param: String): Body = when (command) {
         DeviceCommand.SCREENSHOT -> Body("screencap -p | toybox base64", "\$?")
         // uiDump 的失败分级由脚本内的状态变量携带（3/4/5），而不是 `$?` 的 0/1。
         DeviceCommand.UI_DUMP -> Body(uiDumpScript(requestId), "\$$UI_DUMP_STATUS_VARIABLE")
@@ -479,24 +529,11 @@ class DeviceCommandRunner(
             if (param.isBlank() || param.toByteArray(Charsets.UTF_8).size > MAX_SHELL_SCRIPT_CHARS || param.any { it == '\u0000' || it == '\r' }) {
                 throw RuntimeFailure("DEVICE_COMMAND_INVALID", "Shell 脚本为空、过长或包含非法控制字符")
             }
-            if (useRootEngine) {
-                // 静态安检照旧先跑：危险脚本要在这一层就给出「安全护栏拦截」的准确原因。
-                RootCommandGuard.verifySafe(param)
-                // 但**故意**不再提供「拼进 Shizuku PTY 会话里跑 su」的路径。
-                // 那条路径的父进程是 UID 2000 的 shell：命名空间生命周期、/dev/block 遮蔽的归属、
-                // KernelSU 的 App Profile 判定全都失去确定归属，等于绕开了设计规范的分区边界
-                // （见 docs/KernelSU高级通道与安全分区防护.md §5.2 阶段二）。
-                // 根命令请走 RootCommandRunner.run()：它在应用进程内起 `su -c`，单参数传递、失败即停。
-                throw RuntimeFailure(
-                    "ROOT_ENGINE_NOT_WIRED",
-                    "根通道未接线：该入口不再经由 Shizuku 会话执行 su，请改用 RootCommandRunner",
-                )
-            } else {
-                // 脚本作为编码后的标准输入送入独立解释器，不能破坏外层结果协议。
-                // 不使用关键字黑名单；命令的实际能力由用户授予的 Shizuku 身份决定。
-                val encoded = Base64.getEncoder().encodeToString(param.toByteArray(Charsets.UTF_8))
-                Body("printf '%s' '$encoded' | toybox base64 -d | /system/bin/sh -s", "\$?")
-            }
+            // 脚本作为编码后的标准输入送入独立解释器，不能破坏外层结果协议。
+            // 不使用关键字黑名单；命令的实际能力由用户授予的 Shizuku 身份决定。
+            // 需要 UID 0 的脚本不在这里——见 [executeOnRootEngine]。
+            val encoded = Base64.getEncoder().encodeToString(param.toByteArray(Charsets.UTF_8))
+            Body("printf '%s' '$encoded' | toybox base64 -d | /system/bin/sh -s", "\$?")
         }
     }
 

@@ -107,6 +107,39 @@ class RootSecurityTest {
         }
     }
 
+    @Test
+    fun `RootCommandGuard 降级档补上命名空间本该承担的那一段`() {
+        // 常规档：`mount -o remount,rw /data` 是正常运维，不该拦。
+        RootCommandGuard.verifySafe("mount -o remount,rw /data")
+        assertTrue(RootCommandGuard.violations("mount -o remount,rw /data").isEmpty())
+
+        val degradedOnly = listOf(
+            "mount -o remount,rw /data",
+            "mount -t tmpfs tmpfs /mnt/scratch",
+            "umount /dev/block/bootdevice/by-name/userdata",
+            "dd if=/data/local/tmp/x.img of=/data/local/tmp/y.img",
+            "echo x > /dev/null",
+            "chmod 666 /dev/block/sda",
+            "insmod /data/local/tmp/module.ko",
+            "echo 1 > /proc/sys/kernel/perf_event_paranoid",
+            "cat /dev/mem",
+        )
+        for (cmd in degradedOnly) {
+            assertTrue("降级档应命中: $cmd", RootCommandGuard.violations(cmd, strict = true).isNotEmpty())
+            try {
+                RootCommandGuard.verifySafe(cmd, strict = true)
+                fail("降级档应拦下: $cmd")
+            } catch (e: RuntimeFailure) {
+                assertEquals("ROOT_SECURITY_VIOLATION", e.code)
+            }
+        }
+
+        // 降级档不是「全都不许」：只读观察类命令照旧放行。
+        for (cmd in listOf("ls -la /data/data", "cat /proc/version", "echo hello", "ps -ef | grep node")) {
+            RootCommandGuard.verifySafe(cmd, strict = true)
+        }
+    }
+
     // ---------------------------------------------------------------- 沙箱包装
 
     @Test
@@ -118,9 +151,11 @@ class RootSecurityTest {
         assertTrue("必须有降级路径", wrapped.contains("unshare -m true"))
         assertTrue("探测后才交给 sh -s", wrapped.contains("unshare \$dsh_ns /system/bin/sh -s"))
 
-        // 失败即停：缺 unshare 直接退出，不再静默降级成「无隔离的 UID 0」。
+        // 拿不到命名空间**不**中止：打一行诊断后按「无隔离」执行（TC-11 的降级口径）。
         assertTrue(wrapped.contains("command -v unshare >/dev/null 2>&1"))
-        assertTrue(wrapped.contains("exit ${RootSecurityWrapper.EXIT_NAMESPACE_UNAVAILABLE}"))
+        assertTrue(wrapped.contains("echo \"${RootSecurityWrapper.DIAG_PREFIX}${RootSecurityWrapper.DIAG_NAMESPACE_UNAVAILABLE}\" >&2"))
+        assertTrue("降级时也要真的跑载荷", wrapped.contains("| dsh_isolated=0 /system/bin/sh -s"))
+        assertFalse("命名空间缺失不该是受控退出码", wrapped.contains("exit 125"))
 
         // 外层不再自己拼单引号包脚本，也不再调用 sh -c。
         assertFalse("不应再有 sh -c 嵌套", wrapped.contains("sh -c"))
@@ -133,16 +168,22 @@ class RootSecurityTest {
         val wrapped = RootSecurityWrapper.wrapWithProtection(raw)
         val inner = decodeInner(wrapped)
 
-        // 内层才是干活的：私有化挂载传播（rslave 回退）、只读重挂、物理切断、私有 procfs。
+        // 内层只在**真的进了私有命名空间**时才碰 mount：没有命名空间时遮蔽会落到宿主上。
+        assertTrue(inner.contains("if [ \"\$dsh_isolated\" = \"1\" ]; then"))
         assertTrue(inner.contains("mount --make-rprivate /"))
         assertTrue(inner.contains("mount --make-rslave /"))
-        assertTrue(inner.contains("exit ${RootSecurityWrapper.EXIT_PROPAGATION_FAILED}"))
         assertTrue(inner.contains("mount -o remount,ro"))
         assertTrue(inner.contains("/system /vendor /product /system_ext /odm /apex"))
         assertTrue(inner.contains("mountpoint -q"))
         assertTrue(inner.contains("mount -t tmpfs -o mode=0000,nosuid,nodev,ro tmpfs /dev/block"))
-        assertTrue(inner.contains("exit ${RootSecurityWrapper.EXIT_BLOCK_MASK_FAILED}"))
         assertTrue(inner.contains("mount -t proc proc /proc"))
+
+        // 传播私有化失败 / 遮蔽失败 / 无命名空间：都只报诊断，不中止执行。
+        assertTrue(inner.contains(RootSecurityWrapper.DIAG_PROPAGATION_FAILED))
+        assertTrue(inner.contains(RootSecurityWrapper.DIAG_BLOCK_MASK_FAILED))
+        assertTrue(inner.contains(RootSecurityWrapper.DIAG_BLOCK_MASK_SKIPPED))
+        assertFalse(inner.contains("exit 126"))
+        assertFalse(inner.contains("exit 127"))
 
         // 载荷以 Base64 二次编码进内层，参数逃逸不成立。
         val payloadB64 = Base64.getEncoder().encodeToString(raw.toByteArray(Charsets.UTF_8))
@@ -322,38 +363,48 @@ class RootSecurityTest {
             val result = RootCommandRunner.run("id -u")
             assertEquals(listOf("su", "-c"), argv.take(2))
             assertEquals(3, argv.size)
-            assertTrue("第三个参数是整段包装脚本", argv[2].startsWith("if ! command -v unshare"))
+            assertTrue("第三个参数是整段包装脚本", argv[2].startsWith("dsh_ns=\"\""))
             assertTrue(result.ok)
             assertEquals(0, result.exitCode)
             assertEquals("uid=0(root)", result.output)
             assertEquals(listOf("PID_ISOLATION_UNAVAILABLE"), result.diagnostics)
+            assertTrue("降级诊断要能被调用方看见", result.degraded)
         } finally {
             RootCommandRunner.processLauncher = previous
         }
     }
 
     @Test
-    fun `RootCommandRunner 只用诊断行认领沙箱退出码`() {
+    fun `RootCommandRunner 只用诊断行认领沙箱故障`() {
         val previous = RootCommandRunner.processLauncher
         try {
-            val cases = mapOf(
-                RootSecurityWrapper.DIAG_NAMESPACE_UNAVAILABLE to RootCommandRunner.ERROR_SANDBOX_UNAVAILABLE,
-                RootSecurityWrapper.DIAG_PROPAGATION_FAILED to RootCommandRunner.ERROR_SANDBOX_PROPAGATION,
-                RootSecurityWrapper.DIAG_BLOCK_MASK_FAILED to RootCommandRunner.ERROR_BLOCK_MASK_FAILED,
-                RootSecurityWrapper.DIAG_DECODE_FAILED to RootCommandRunner.ERROR_SANDBOX_DECODE_FAILED,
-            )
-            for ((diag, expected) in cases) {
-                // 沙箱报障时既打诊断行、也返回受控退出码。
-                RootCommandRunner.processLauncher = { FakeProcess("DSH_ROOT_SANDBOX:$diag\n", 126) }
-                val result = RootCommandRunner.run("id -u")
-                assertFalse(result.ok)
-                assertEquals(expected, result.errorCode)
-                assertEquals(listOf(diag), result.diagnostics)
+            // 解码失败是调用侧的 bug：受控错误码 + 已中止（这条诊断行之外没有别的输出）。
+            RootCommandRunner.processLauncher = { FakeProcess("DSH_ROOT_SANDBOX:DECODE_FAILED\n", 124) }
+            val decodeFailed = RootCommandRunner.run("id -u")
+            assertFalse(decodeFailed.ok)
+            assertEquals(RootCommandRunner.ERROR_SANDBOX_DECODE_FAILED, decodeFailed.errorCode)
+            assertFalse("解码失败不属于降级执行", decodeFailed.degraded)
+
+            // 降级诊断 ≠ 失败：命令照跑，退出码与输出都是载荷自己的。
+            for (diag in listOf(
+                RootSecurityWrapper.DIAG_NAMESPACE_UNAVAILABLE,
+                RootSecurityWrapper.DIAG_PROPAGATION_FAILED,
+                RootSecurityWrapper.DIAG_BLOCK_MASK_SKIPPED,
+                RootSecurityWrapper.DIAG_HARDENING_UNAVAILABLE,
+            )) {
+                RootCommandRunner.processLauncher = { FakeProcess("DSH_ROOT_SANDBOX:$diag\nuid=0(root)\n", 0) }
+                val degraded = RootCommandRunner.run("id -u")
+                assertTrue("降级不等于失败: $diag", degraded.ok)
+                assertNull(degraded.errorCode)
+                assertEquals("uid=0(root)", degraded.output)
+                assertTrue(degraded.degraded)
             }
 
-            // 载荷自己的 127（command not found）不能冒充「块设备遮蔽失败」。
+            // 载荷自己的 127（command not found）不能冒充沙箱故障。
             RootCommandRunner.processLauncher = { FakeProcess("sh: no-such-tool: not found\n", 127) }
-            assertEquals(RootCommandRunner.ERROR_COMMAND_FAILED, RootCommandRunner.run("no-such-tool").errorCode)
+            val notFound = RootCommandRunner.run("no-such-tool")
+            assertEquals(RootCommandRunner.ERROR_COMMAND_FAILED, notFound.errorCode)
+            assertFalse(notFound.degraded)
 
             RootCommandRunner.processLauncher = { FakeProcess("sh: id: not allowed to run\n", 1) }
             assertEquals(RootCommandRunner.ERROR_PERMISSION_DENIED, RootCommandRunner.run("id -u").errorCode)
@@ -383,36 +434,146 @@ class RootSecurityTest {
     // ---------------------------------------------------------------- DeviceCommandRunner 接线
 
     @Test
-    fun `DeviceCommandRunner 不再经由 Shizuku 会话执行 su`() {
+    fun `DeviceCommandRunner 根通道在应用进程内起 su 而不经 Shizuku 会话`() {
+        val previousLauncher = RootCommandRunner.processLauncher
+        val previousProbe = RootSandboxProbe.runner
+        val launches = mutableListOf<List<String>>()
+        var wroteToShizuku = false
+        val rootRunner = DeviceCommandRunner { _, _ -> wroteToShizuku = true }
+        RootSandboxProbe.runner = {
+            RootCommandRunner.RootCommandResult(
+                true,
+                0,
+                "dsh_cap_ns=1\ndsh_cap_pid=1\ndsh_cap_harden=1",
+                false,
+                null,
+            )
+        }
+        RootSandboxProbe.clearCache()
+        RootCommandRunner.processLauncher = { argv -> launches += argv; FakeProcess("uid=0(root)\n", 0) }
         try {
-            runner.buildInput(requestId, DeviceCommand.SHELL, "echo 'reading protected data'", useRootEngine = true)
-            fail("根通道未接线时不应静默回落到 Shizuku PTY 里跑 su")
-        } catch (e: RuntimeFailure) {
-            assertEquals("ROOT_ENGINE_NOT_WIRED", e.code)
+            val result = rootRunner.execute("session-1", DeviceCommand.SHELL, "id -u", 5_000, useRootEngine = true)
+            assertTrue(result.ok)
+            assertEquals("uid=0(root)", result.text)
+            assertFalse("根通道不得把命令写进 Shizuku 会话", wroteToShizuku)
+            assertEquals(1, launches.size)
+            assertEquals(listOf("su", "-c"), launches[0].take(2))
+            assertEquals(3, launches[0].size)
+        } finally {
+            RootCommandRunner.processLauncher = previousLauncher
+            RootSandboxProbe.runner = previousProbe
+            RootSandboxProbe.clearCache()
         }
     }
 
     @Test
-    fun `DeviceCommandRunner 在 useRootEngine 为 true 时拦截高危指令`() {
+    fun `DeviceCommandRunner 沙箱降级时按严格档拦截挂载类脚本`() {
+        val previousLauncher = RootCommandRunner.processLauncher
+        val previousProbe = RootSandboxProbe.runner
+        var launched = false
+        val rootRunner = DeviceCommandRunner { _, _ -> }
+        // 探测说这台设备没有挂载命名空间。
+        RootSandboxProbe.runner = {
+            RootCommandRunner.RootCommandResult(true, 0, "dsh_cap_ns=0\ndsh_cap_pid=0\ndsh_cap_harden=1", false, null)
+        }
+        RootSandboxProbe.clearCache()
+        RootCommandRunner.processLauncher = { launched = true; FakeProcess("", 0) }
         try {
-            runner.buildInput(
-                requestId,
-                DeviceCommand.SHELL,
-                "dd if=/dev/zero of=/dev/block/bootdevice/by-name/boot",
-                useRootEngine = true,
-            )
-            fail("变砖指令应在 buildInput 阶段即刻被拦截")
+            rootRunner.execute("session-1", DeviceCommand.SHELL, "mount -o remount,rw /data", 5_000, useRootEngine = true)
+            fail("降级档应拦下挂载类脚本")
         } catch (e: RuntimeFailure) {
             assertEquals("ROOT_SECURITY_VIOLATION", e.code)
+        } finally {
+            RootCommandRunner.processLauncher = previousLauncher
+            RootSandboxProbe.runner = previousProbe
+            RootSandboxProbe.clearCache()
+        }
+        assertFalse("被护栏拦下就不该起 su", launched)
+    }
+
+    @Test
+    fun `DeviceCommandRunner 把沙箱降级如实写进正文`() {
+        val previousLauncher = RootCommandRunner.processLauncher
+        val previousProbe = RootSandboxProbe.runner
+        val rootRunner = DeviceCommandRunner { _, _ -> }
+        RootSandboxProbe.runner = {
+            RootCommandRunner.RootCommandResult(true, 0, "dsh_cap_ns=0\ndsh_cap_pid=0\ndsh_cap_harden=1", false, null)
+        }
+        RootSandboxProbe.clearCache()
+        RootCommandRunner.processLauncher = {
+            FakeProcess("DSH_ROOT_SANDBOX:NAMESPACE_UNAVAILABLE\nhello\n", 0)
+        }
+        try {
+            val result = rootRunner.execute("session-1", DeviceCommand.SHELL, "echo hello", 5_000, useRootEngine = true)
+            assertTrue(result.ok)
+            assertTrue("保留载荷输出", result.text.contains("hello"))
+            assertTrue("如实说明降级", result.text.contains("根通道降级执行"))
+            assertTrue(result.text.contains(RootSecurityWrapper.DIAG_NAMESPACE_UNAVAILABLE))
+        } finally {
+            RootCommandRunner.processLauncher = previousLauncher
+            RootSandboxProbe.runner = previousProbe
+            RootSandboxProbe.clearCache()
         }
     }
 
     @Test
-    fun `DeviceCommandRunner 默认 useRootEngine 为 false 时走 Shizuku 管道`() {
-        val input = runner.buildInput(requestId, DeviceCommand.SHELL, "echo 'normal shell'", useRootEngine = false)
+    fun `DeviceCommandRunner 未开根引擎时仍走 Shizuku 管道`() {
+        val input = runner.buildInput(requestId, DeviceCommand.SHELL, "echo 'normal shell'")
 
         assertFalse("默认模式不得包含 su -c", input.contains("su -c"))
         assertTrue("默认模式必须走 toybox base64 管道", input.contains("toybox base64 -d | /system/bin/sh -s"))
+    }
+
+    // ---------------------------------------------------------------- 沙箱能力探测
+
+    @Test
+    fun `RootSandboxProbe 解析探测输出并在缓存期内复用`() {
+        val previous = RootSandboxProbe.runner
+        var calls = 0
+        RootSandboxProbe.runner = {
+            calls += 1
+            RootCommandRunner.RootCommandResult(true, 0, "dsh_cap_ns=1\ndsh_cap_pid=0\ndsh_cap_harden=1", false, null)
+        }
+        RootSandboxProbe.clearCache()
+        try {
+            val first = RootSandboxProbe.detect(nowMs = 1_000)
+            assertTrue(first.namespaceIsolation)
+            assertFalse("探测说没有 PID 命名空间", first.pidIsolation)
+            assertTrue(first.hardening)
+            assertTrue(first.degraded)
+            assertEquals(
+                listOf(RootSecurityWrapper.DIAG_PID_ISOLATION_UNAVAILABLE),
+                first.degradationCodes,
+            )
+
+            RootSandboxProbe.detect(nowMs = 2_000)
+            assertEquals("缓存期内不该再探", 1, calls)
+
+            RootSandboxProbe.detect(nowMs = 1_000 + RootSandboxProbe.CACHE_TTL_MS + 1)
+            assertEquals("过期后必须重探", 2, calls)
+        } finally {
+            RootSandboxProbe.runner = previous
+            RootSandboxProbe.clearCache()
+        }
+    }
+
+    @Test
+    fun `RootSandboxProbe 探测失败时按最保守一档处理`() {
+        val previous = RootSandboxProbe.runner
+        RootSandboxProbe.runner = { RootCommandRunner.RootCommandResult(false, -1, "", false, RootCommandRunner.ERROR_SU_UNAVAILABLE) }
+        RootSandboxProbe.clearCache()
+        try {
+            val caps = RootSandboxProbe.detect(nowMs = 5_000)
+            assertFalse("测不出来就不能假设有隔离", caps.namespaceIsolation)
+            assertTrue(caps.degraded)
+            assertEquals(
+                listOf(RootSecurityWrapper.DIAG_NAMESPACE_UNAVAILABLE, RootSecurityWrapper.DIAG_HARDENING_UNAVAILABLE),
+                caps.degradationCodes,
+            )
+        } finally {
+            RootSandboxProbe.runner = previous
+            RootSandboxProbe.clearCache()
+        }
     }
 
     // ---------------------------------------------------------------- 辅助

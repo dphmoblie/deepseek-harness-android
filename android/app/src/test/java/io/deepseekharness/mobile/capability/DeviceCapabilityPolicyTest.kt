@@ -18,6 +18,10 @@ class DeviceCapabilityPolicyTest {
         permission: String = "granted",
         connected: Boolean = true,
         accessibility: String = "connected",
+        rootEnabled: Boolean = false,
+        rootStatus: String? = null,
+        rootReason: String? = null,
+        rootDegraded: Boolean = false,
     ) = DeviceCapabilityPolicy.report(
         DeviceCapabilityFacts(
             sdkInt = sdkInt,
@@ -26,17 +30,22 @@ class DeviceCapabilityPolicyTest {
             shizukuPermission = permission,
             shizukuConnected = connected,
             accessibilityStatus = accessibility,
+            rootEngineEnabled = rootEnabled,
+            rootEngineStatus = rootStatus,
+            rootEngineReason = rootReason,
+            rootSandboxDegraded = rootDegraded,
         ),
     )
 
     private fun List<DeviceCapability>.entry(id: String): DeviceCapability = first { it.id == id }
 
     @Test
-    fun `五项能力的顺序固定，全套就绪时没有任何待办`() {
+    fun `六项能力的顺序固定，根通道默认关闭只差用户点一下`() {
         val list = report()
         assertEquals(
             listOf(
                 DeviceCapabilityPolicy.SHIZUKU,
+                DeviceCapabilityPolicy.KERNELSU_ROOT,
                 DeviceCapabilityPolicy.ACCESSIBILITY,
                 DeviceCapabilityPolicy.VIRTUAL_SCREEN,
                 DeviceCapabilityPolicy.SCREENSHOT,
@@ -44,12 +53,57 @@ class DeviceCapabilityPolicyTest {
             ),
             list.map { it.id },
         )
-        list.forEach { entry ->
+        // 除根通道外，五项就绪时不该有任何待办。
+        list.filterNot { it.id == DeviceCapabilityPolicy.KERNELSU_ROOT }.forEach { entry ->
             assertEquals(entry.id, DeviceCapabilityPolicy.READY, entry.state)
             assertEquals(entry.id, DeviceCapabilityPolicy.REASON_READY, entry.reason)
             assertNull(entry.id, entry.action)
             assertNull(entry.id, entry.alternative)
         }
+        val root = list.entry(DeviceCapabilityPolicy.KERNELSU_ROOT)
+        assertEquals(DeviceCapabilityPolicy.NEEDS_ACTION, root.state)
+        assertEquals(DeviceCapabilityPolicy.REASON_ROOT_ENGINE_DISABLED, root.reason)
+        assertEquals(DeviceCapabilityPolicy.ACTION_ENABLE_ROOT_ENGINE, root.action)
+        assertEquals(DeviceCapabilityPolicy.ALTERNATIVE_SHIZUKU_SHELL, root.alternative)
+    }
+
+    @Test
+    fun `根通道开着但 KernelSU 侧不满足时照实说缺什么`() {
+        val needsGrant = report(rootEnabled = true, rootStatus = "needs_action", rootReason = DeviceCapabilityPolicy.REASON_ROOT_ENGINE_PERMISSION_REQUIRED)
+            .entry(DeviceCapabilityPolicy.KERNELSU_ROOT)
+        assertEquals(DeviceCapabilityPolicy.NEEDS_ACTION, needsGrant.state)
+        assertEquals(DeviceCapabilityPolicy.REASON_ROOT_ENGINE_PERMISSION_REQUIRED, needsGrant.reason)
+        assertEquals(DeviceCapabilityPolicy.ACTION_GRANT_ROOT_PERMISSION, needsGrant.action)
+
+        val notKernelSu = report(rootEnabled = true, rootStatus = "unsupported", rootReason = DeviceCapabilityPolicy.REASON_ROOT_ENGINE_NOT_KERNELSU)
+            .entry(DeviceCapabilityPolicy.KERNELSU_ROOT)
+        assertEquals(DeviceCapabilityPolicy.UNSUPPORTED, notKernelSu.state)
+        assertEquals(DeviceCapabilityPolicy.REASON_ROOT_ENGINE_NOT_KERNELSU, notKernelSu.reason)
+        // 不是 KernelSU 也不是「去做一步就能好」：没有可点的动作，只给退路。
+        assertNull(notKernelSu.action)
+        assertEquals(DeviceCapabilityPolicy.ALTERNATIVE_SHIZUKU_SHELL, notKernelSu.alternative)
+    }
+
+    @Test
+    fun `根通道可用但沙箱降级时单独立一档`() {
+        val ready = report(rootEnabled = true, rootStatus = "ready").entry(DeviceCapabilityPolicy.KERNELSU_ROOT)
+        assertEquals(DeviceCapabilityPolicy.READY, ready.state)
+        assertEquals(DeviceCapabilityPolicy.REASON_READY, ready.reason)
+
+        val degraded = report(rootEnabled = true, rootStatus = "ready", rootDegraded = true)
+            .entry(DeviceCapabilityPolicy.KERNELSU_ROOT)
+        assertEquals(DeviceCapabilityPolicy.DEGRADED, degraded.state)
+        assertEquals(DeviceCapabilityPolicy.REASON_ROOT_SANDBOX_DEGRADED, degraded.reason)
+        // 降级不是用户能点好的一步：不给动作，也不给替代方式（命令照跑）。
+        assertNull(degraded.action)
+        assertNull(degraded.alternative)
+    }
+
+    @Test
+    fun `Shizuku 也不可用时根通道不给替代方式`() {
+        val root = report(installed = false, running = false, permission = "undetermined", connected = false)
+            .entry(DeviceCapabilityPolicy.KERNELSU_ROOT)
+        assertNull(root.alternative)
     }
 
     @Test

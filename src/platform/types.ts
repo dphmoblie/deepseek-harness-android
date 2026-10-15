@@ -243,15 +243,25 @@ export interface RuntimeCleanupState {
  * `blocked` 缺的是**别的**能力（例如 Shizuku 没就绪时的副屏与截图）——补那一环才会好，
  * 重复点这一项没用；`unsupported` 是这台设备或这个版本做不到（Android 9 上的副屏、
  * 没装 Shizuku 时的设备 Shell）。
+ *
+ * `degraded` 是「能用，但少了一层保护」：目前只有根通道会进这一档——设备 ROM 缺挂载命名空间时
+ * 命令仍会执行（降级口径），但 `/dev` 下的设备节点遮蔽没有生效、静态护栏按严格档收紧。
+ * 它既不是 `ready`（说 ready 是瞒着用户），也不是 `needs_action`（用户没有可点的一步）。
  */
-export type DeviceCapabilityState = 'ready' | 'needs_action' | 'blocked' | 'unsupported'
+export type DeviceCapabilityState = 'ready' | 'needs_action' | 'blocked' | 'unsupported' | 'degraded'
 
 /**
- * 能力标识：与原生 `DeviceCapabilityPolicy` 的五项一一对应，**顺序也一致**。
+ * 能力标识：与原生 `DeviceCapabilityPolicy` 的六项一一对应，**顺序也一致**。
  *
  * 顺序是有意义的（清单按固定顺序过桥、前端按同一顺序校验），但它不表示优先级。
  */
-export type DeviceCapabilityId = 'shizuku' | 'accessibility' | 'virtual_screen' | 'screenshot' | 'chinese_input'
+export type DeviceCapabilityId =
+  | 'shizuku'
+  | 'kernelsu_root'
+  | 'accessibility'
+  | 'virtual_screen'
+  | 'screenshot'
+  | 'chinese_input'
 
 /**
  * 一项能力的现状：能不能做、不能做是因为什么、下一步点哪里、还有什么替代方式。
@@ -526,6 +536,30 @@ export interface ShizukuState {
 /** Android 13+ 前台服务通知权限；unsupported 表示系统版本低于 Android 13。 */
 export type NotificationPermission = 'granted' | 'prompt' | 'unsupported'
 
+/**
+ * 根通道（KernelSU + 命名空间沙箱）状态。
+ *
+ * 三件事必须分开表达，否则界面只能猜：
+ * - [enabled]：用户在设置里打开的总开关（**默认关闭**）。关着时原生不去拉 `su`，
+ *   因此不会在用户没开的时候弹出 KernelSU 的授权窗；
+ * - [usable]：由 [enabled] 与 [kernelSuStatus] **合成**的结论——现在真能执行根命令吗；
+ * - [degraded]：能用，但沙箱只拿到部分隔离（设备 ROM 缺挂载命名空间等）。[degradations]
+ *   是降级原因码，词表见原生 `RootSecurityWrapper.DEGRADATION_CODES`。
+ *
+ * 不含任何设备标识或命令内容。
+ */
+export interface RootEngineStatus {
+  enabled: boolean
+  usable: boolean
+  /** 与 [ShizukuState] 无关的独立探测结论：`ready` / `needs_action` / `unsupported`。 */
+  kernelSuStatus: 'ready' | 'needs_action' | 'unsupported'
+  /** 原生侧的原因码（`ROOT_ENGINE_DISABLED`、`KERNELSU_PERMISSION_REQUIRED` 等）。 */
+  reason: string
+  degraded: boolean
+  degradations: string[]
+  /** `su -v` 的原始输出（诊断用）；读不到时为 null。 */
+  suVersion: string | null
+}
 /** 持久化的运行意图；unknown 表示从未记录。 */
 export type RuntimeIntent = 'running' | 'stopped' | 'unknown'
 
@@ -1542,6 +1576,21 @@ export interface RuntimeBridge {
    * 那会让调用方以为这台机器什么都能做，然后照着这个前提去做。
    */
   getDeviceCapabilities: () => Promise<DeviceCapabilityReport>
+  /**
+   * 读取根通道状态（KernelSU + 命名空间沙箱）。
+   *
+   * 开关关着时这是**纯读设置**：原生不会去拉 `su`，所以 5 秒轮询不会弹出 KernelSU 授权窗。
+   * [refresh] 为真时丢弃两个探测器的 60 秒缓存重测一次——用在「用户刚在管理器里改过授权」
+   * 或界面上的「重新检测」按钮。
+   */
+  getRootEngineStatus: (refresh?: boolean) => Promise<RootEngineStatus>
+  /**
+   * 打开/关闭根通道。
+   *
+   * 打开只是**允许**：真正的授权仍在 KernelSU 管理器里由用户点，应用不会也无法代点；
+   * 返回值是切换之后的状态（原生切换时会清掉探测器缓存，所以拿得到的是重测结果）。
+   */
+  setRootEngineEnabled: (enabled: boolean) => Promise<RootEngineStatus>
   requestShizukuPermission: () => Promise<ShizukuState>
   connectShizuku: () => Promise<ShizukuState>
   openShizuku: () => Promise<void>

@@ -34,6 +34,14 @@ internal data class DeviceCapabilityFacts(
     val shizukuConnected: Boolean,
     /** 无障碍服务的三态：`connected` / `enabled_disconnected` / `off`。 */
     val accessibilityStatus: String,
+    /** 用户是否在设置里打开了根通道（默认关闭）。 */
+    val rootEngineEnabled: Boolean = false,
+    /** KernelSU 的探测结论（调 `KernelSuProbe.probeLocal` 得到）；未启用时保持 null。 */
+    val rootEngineStatus: String? = null,
+    /** KernelSU 探测的原因码；未启用时为 null。 */
+    val rootEngineReason: String? = null,
+    /** 沙箱降级（能跑，但少了一层隔离）；由 `RootSandboxProbe` 探测得到。 */
+    val rootSandboxDegraded: Boolean = false,
 )
 
 internal object DeviceCapabilityPolicy {
@@ -49,7 +57,17 @@ internal object DeviceCapabilityPolicy {
     /** 这台设备或这个 Android 版本做不到，做什么都没用。 */
     const val UNSUPPORTED = "unsupported"
 
+    /**
+     * 能用，但少了一层保护。
+     *
+     * 单独立一档是因为「能用」与「能用且完整」对用户的意义不同：根通道在缺少挂载命名空间的
+     * ROM 上仍会执行（降级口径），但静态审查会按严格档收紧、`/dev/block` 遮蔽不会生效。
+     * 把它说成 `ready` 是在瞒着用户，说成 `needs_action` 又不对——用户没有可做的一步。
+     */
+    const val DEGRADED = "degraded"
+
     const val SHIZUKU = "shizuku"
+    const val KERNELSU_ROOT = "kernelsu_root"
     const val ACCESSIBILITY = "accessibility"
     const val VIRTUAL_SCREEN = "virtual_screen"
     const val SCREENSHOT = "screenshot"
@@ -66,31 +84,95 @@ internal object DeviceCapabilityPolicy {
     const val REASON_ANDROID_TOO_OLD = "ANDROID_TOO_OLD"
     const val REASON_TEXT_INPUT_NEEDS_ACCESSIBILITY = "TEXT_INPUT_NEEDS_ACCESSIBILITY"
 
+    /** 根通道没开（默认），或开了但 KernelSU 侧不满足。 */
+    const val REASON_ROOT_ENGINE_DISABLED = "ROOT_ENGINE_DISABLED"
+    const val REASON_ROOT_ENGINE_NOT_INSTALLED = "KERNELSU_NOT_INSTALLED"
+    const val REASON_ROOT_ENGINE_PERMISSION_REQUIRED = "KERNELSU_PERMISSION_REQUIRED"
+    const val REASON_ROOT_ENGINE_NOT_KERNELSU = "ROOT_IMPL_NOT_KERNELSU"
+
+    /** 根通道可用，但沙箱只拿到部分隔离（详见 `RootSecurityWrapper.DEGRADATION_CODES`）。 */
+    const val REASON_ROOT_SANDBOX_DEGRADED = "ROOT_SANDBOX_DEGRADED"
+
     const val ACTION_INSTALL_SHIZUKU = "install_shizuku"
     const val ACTION_OPEN_SHIZUKU = "open_shizuku"
     const val ACTION_GRANT_SHIZUKU_PERMISSION = "grant_shizuku_permission"
     const val ACTION_CONNECT_SHIZUKU = "connect_shizuku"
     const val ACTION_OPEN_ACCESSIBILITY_SETTINGS = "open_accessibility_settings"
 
+    /** 到设置里打开本应用的根通道开关。 */
+    const val ACTION_ENABLE_ROOT_ENGINE = "enable_root_engine"
+
+    /** 去 KernelSU 管理器里给本应用授权。 */
+    const val ACTION_GRANT_ROOT_PERMISSION = "grant_root_permission"
+
     const val ALTERNATIVE_NO_DEVICE_SHELL = "NO_DEVICE_SHELL"
     const val ALTERNATIVE_SHELL_ASCII_ONLY = "SHELL_ASCII_ONLY"
+
+    /** 没有根通道时，Shizuku 的设备 Shell 仍是可用的一档（只是没有 UID 0）。 */
+    const val ALTERNATIVE_SHIZUKU_SHELL = "SHIZUKU_SHELL"
 
     /** 副屏 / 截图 / 设备 Shell 都需要的最低版本（`createVirtualDisplay` 与 `screencap` 的公共下限）。 */
     const val MIN_SDK_FOR_DISPLAY = 29
 
     /**
-     * 五项能力的当前清单。
+     * 六项能力的当前清单。
      *
-     * 顺序固定为「前置 → 依赖它的能力」：Shizuku、无障碍、副屏、截图、中文输入。
+     * 顺序固定为「前置 → 依赖它的能力」：Shizuku、根通道（KernelSU）、无障碍、副屏、截图、中文输入。
      * 界面按这个顺序显示，AI 侧也按这个顺序决定先补哪一环。
      */
     fun report(facts: DeviceCapabilityFacts): List<DeviceCapability> = listOf(
         shizuku(facts),
+        kernelSuRoot(facts),
         accessibility(facts),
         virtualScreen(facts),
         screenshot(facts),
         chineseInput(facts),
     )
+
+    /**
+     * 根通道（KernelSU + 命名空间沙箱）。
+     *
+     * 四档：没开开关 → 开一步就好；开了但 KernelSU 侧不满足 → 照实说缺什么；
+     * 能跑但沙箱降级 → [DEGRADED]（用户没有可做的一步，但界面必须说清少了一层保护）；
+     * 全齐 → [READY]。
+     */
+    private fun kernelSuRoot(facts: DeviceCapabilityFacts): DeviceCapability {
+        if (!facts.rootEngineEnabled) {
+            return DeviceCapability(
+                KERNELSU_ROOT,
+                NEEDS_ACTION,
+                REASON_ROOT_ENGINE_DISABLED,
+                ACTION_ENABLE_ROOT_ENGINE,
+                shizukuAlternative(facts),
+            )
+        }
+        when (facts.rootEngineStatus) {
+            "ready" -> Unit
+            "needs_action" -> return DeviceCapability(
+                KERNELSU_ROOT,
+                NEEDS_ACTION,
+                facts.rootEngineReason ?: REASON_ROOT_ENGINE_PERMISSION_REQUIRED,
+                ACTION_GRANT_ROOT_PERMISSION,
+                shizukuAlternative(facts),
+            )
+
+            else -> return DeviceCapability(
+                KERNELSU_ROOT,
+                UNSUPPORTED,
+                facts.rootEngineReason ?: REASON_ROOT_ENGINE_NOT_INSTALLED,
+                null,
+                shizukuAlternative(facts),
+            )
+        }
+        if (facts.rootSandboxDegraded) {
+            return DeviceCapability(KERNELSU_ROOT, DEGRADED, REASON_ROOT_SANDBOX_DEGRADED, null, null)
+        }
+        return ready(KERNELSU_ROOT)
+    }
+
+    /** 根通道不可用时的退路：Shizuku 的普通 Shell（没有 UID 0，但能跑白名单命令）。 */
+    private fun shizukuAlternative(facts: DeviceCapabilityFacts): String? =
+        if (shizukuBlocker(facts) == null) ALTERNATIVE_SHIZUKU_SHELL else null
 
     private fun shizuku(facts: DeviceCapabilityFacts): DeviceCapability {
         val blocker = shizukuBlocker(facts) ?: return ready(SHIZUKU)

@@ -37,16 +37,32 @@ object RootCommandRunner {
         val errorCode: String?,
         /** 沙箱降级说明，例如 `PID_ISOLATION_UNAVAILABLE`。 */
         val diagnostics: List<String> = emptyList(),
-    )
+    ) {
+        /**
+         * 这次执行是否用上了完整的沙箱。
+         *
+         * 与 [ok] 正交：命令可以成功而沙箱是降级的（ROM 没有 `unshare`），也可以失败而沙箱完好
+         * （载荷自己报错）。调用方要展示「降级执行」时看这个字段，别拿 [ok] 去猜。
+         */
+        val degraded: Boolean
+            get() = diagnostics.any { it.substringBefore(':') in RootSecurityWrapper.DEGRADATION_CODES }
+    }
 
     /**
      * 执行一段根脚本。
      *
      * @param hardened 裁减 `CAP_SYS_ADMIN`/`CAP_MKNOD`；需要挂载类操作（OverlayFS 等）时传 `false`，
      *                 此时硬约束只剩 KernelSU 管理器的 App Profile。
+     * @param strictGuard 沙箱已确定降级（无挂载命名空间）时传 `true`：静态审查按降级档跑，
+     *                    补上本该由命名空间承担的那一段。见 [RootCommandGuard.verifySafe]。
      */
-    fun run(script: String, timeoutMs: Long = DEFAULT_TIMEOUT_MS, hardened: Boolean = true): RootCommandResult {
-        RootCommandGuard.verifySafe(script)
+    fun run(
+        script: String,
+        timeoutMs: Long = DEFAULT_TIMEOUT_MS,
+        hardened: Boolean = true,
+        strictGuard: Boolean = false,
+    ): RootCommandResult {
+        RootCommandGuard.verifySafe(script, strict = strictGuard)
         val wrapped = RootSecurityWrapper.wrapWithProtection(script, hardened)
 
         val process = try {
@@ -76,14 +92,10 @@ object RootCommandRunner {
             .joinToString("\n")
             .trim()
 
-        // 退出码不能单独当作沙箱诊断：125/126/127 同样是常见的载荷退出码（127 = command not found，
-        // 126 = not executable），只看数字会把「命令没找到」报成「沙箱遮蔽失败」。
-        // 沙箱只在**同时打印了对应诊断行**时才认领这个退出码，否则一律按载荷自己的结果归类。
+        // 退出码不能单独当作沙箱诊断：沙箱只在**自己打印了诊断行**时才算数。
+        // 反过来说，退出码 124 也可能是载荷自己的选择，所以这里同样先看诊断行。
         val errorCode = when {
             exitCode == 0 -> null
-            diagnostics.contains(RootSecurityWrapper.DIAG_NAMESPACE_UNAVAILABLE) -> ERROR_SANDBOX_UNAVAILABLE
-            diagnostics.contains(RootSecurityWrapper.DIAG_PROPAGATION_FAILED) -> ERROR_SANDBOX_PROPAGATION
-            diagnostics.contains(RootSecurityWrapper.DIAG_BLOCK_MASK_FAILED) -> ERROR_BLOCK_MASK_FAILED
             diagnostics.contains(RootSecurityWrapper.DIAG_DECODE_FAILED) -> ERROR_SANDBOX_DECODE_FAILED
             DENIED_MARKERS.any { output.contains(it, ignoreCase = true) } -> ERROR_PERMISSION_DENIED
             else -> ERROR_COMMAND_FAILED
@@ -99,8 +111,42 @@ object RootCommandRunner {
         )
     }
 
-    /** 读流与超时等待：读在独立线程，避免输出撑满管道把子进程卡住。 */
-    private fun readWithTimeout(
+    /**
+     * 探测专用：直接执行一段**内部常量**脚本，不包沙箱、不过护栏。
+     *
+     * 只有 [RootSandboxProbe] 用它——它测量的正是「沙箱能不能用」，所以不能再过一遍沙箱；
+     * 脚本是编译期常量，不含任何外部输入，也没有可被注入的拼接点。
+     */
+    internal fun runProbe(script: String, timeoutMs: Long): RootCommandResult {
+        val process = try {
+            processLauncher(listOf("su", "-c", script))
+        } catch (_: Exception) {
+            return RootCommandResult(false, -1, "", false, ERROR_SU_UNAVAILABLE)
+        }
+        val (text, truncated, completed) = readWithTimeout(process, timeoutMs)
+        if (!completed) {
+            process.destroyForcibly()
+            return RootCommandResult(false, -1, text, truncated, ERROR_TIMEOUT)
+        }
+        val exitCode = try {
+            process.exitValue()
+        } catch (_: Exception) {
+            -1
+        }
+        val output = text.lineSequence()
+            .filterNot { it.contains(RootSecurityWrapper.DIAG_PREFIX) }
+            .joinToString("\n")
+            .trim()
+        return RootCommandResult(
+            ok = exitCode == 0,
+            exitCode = exitCode,
+            output = output,
+            truncated = truncated,
+            errorCode = if (exitCode == 0) null else ERROR_COMMAND_FAILED,
+        )
+    }
+
+    /** 读流与超时等待：读在独立线程，避免输出撑满管道把子进程卡住。 */    private fun readWithTimeout(
         process: Process,
         timeoutMs: Long,
     ): Triple<String, Boolean, Boolean> {
@@ -140,9 +186,6 @@ object RootCommandRunner {
 
     const val ERROR_SU_UNAVAILABLE = "ROOT_SU_UNAVAILABLE"
     const val ERROR_TIMEOUT = "ROOT_COMMAND_TIMEOUT"
-    const val ERROR_SANDBOX_UNAVAILABLE = "ROOT_SANDBOX_UNAVAILABLE"
-    const val ERROR_SANDBOX_PROPAGATION = "ROOT_SANDBOX_PROPAGATION_FAILED"
-    const val ERROR_BLOCK_MASK_FAILED = "ROOT_BLOCK_MASK_FAILED"
     const val ERROR_SANDBOX_DECODE_FAILED = "ROOT_SANDBOX_DECODE_FAILED"
     const val ERROR_PERMISSION_DENIED = "ROOT_PERMISSION_DENIED"
     const val ERROR_COMMAND_FAILED = "ROOT_COMMAND_FAILED"

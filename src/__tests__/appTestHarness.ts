@@ -154,6 +154,10 @@ export const bridge = {
   // 两条清理入口只在用户点击后才调，同样必须有桩。
   getRuntimeCleanupState: vi.fn(),
   getDeviceCapabilities: vi.fn(),
+  // 根通道卡片紧跟设备能力清单渲染，进设置页就会读一次状态；缺桩会让 effect 抛错并卸载整棵树
+  // （同上一条注释里的坑）。开关是用户点击后才调，但同样留桩。
+  getRootEngineStatus: vi.fn(),
+  setRootEngineEnabled: vi.fn(),
   // 任务台账：界面进「无障碍应用自动化」页会读一次当前任务，取消是用户点击后才调；
   // 缺桩同样会让 effect 抛错并卸载整棵树。
   getAutomationTaskState: vi.fn(),
@@ -555,18 +559,39 @@ export function beforeEachAppTest(): void {
   })
   bridge.clearRuntimeCache.mockResolvedValue({ scope: 0, targets: 0, removed: 0, fallback: 0, failed: 0, files: 0, bytes: 0, skipped: 0, ok: true })
   bridge.purgePluginData.mockResolvedValue({ scope: 0, targets: 0, removed: 0, fallback: 0, failed: 0, files: 0, bytes: 0, skipped: 0, ok: true })
-  // 默认「五项能力全部就绪、取样时刻是固定值」：多数用例只关心别的页面，不该被一张写着
+  // 默认「六项能力全部就绪、取样时刻是固定值」：多数用例只关心别的页面，不该被一张写着
   // 「Shizuku 没装」的卡片影响；关心能力清单的用例自己覆盖这一条桩。
   bridge.getDeviceCapabilities.mockResolvedValue({
     atMs: 1_700_000_000_000,
     sdkInt: 34,
     capabilities: [
       { id: 'shizuku', state: 'ready', reason: 'READY', action: null, alternative: null },
+      { id: 'kernelsu_root', state: 'ready', reason: 'READY', action: null, alternative: null },
       { id: 'accessibility', state: 'ready', reason: 'READY', action: null, alternative: null },
       { id: 'virtual_screen', state: 'ready', reason: 'READY', action: null, alternative: null },
       { id: 'screenshot', state: 'ready', reason: 'READY', action: null, alternative: null },
       { id: 'chinese_input', state: 'ready', reason: 'READY', action: null, alternative: null },
     ],
+  })
+  // 根通道默认「关着、不能用」：这是出厂状态，也是唯一不该在测试里假装成别的值的状态——
+  // 假装「开着且可用」会让默认桩反而在教界面显示一个真机上不存在的组合。
+  bridge.getRootEngineStatus.mockResolvedValue({
+    enabled: false,
+    usable: false,
+    kernelSuStatus: 'unsupported',
+    reason: 'ROOT_ENGINE_DISABLED',
+    degraded: false,
+    degradations: [],
+    suVersion: null,
+  })
+  bridge.setRootEngineEnabled.mockResolvedValue({
+    enabled: true,
+    usable: false,
+    kernelSuStatus: 'needs_action',
+    reason: 'KERNELSU_PERMISSION_REQUIRED',
+    degraded: false,
+    degradations: [],
+    suVersion: '3.1.0:KernelSU',
   })
   // 任务台账默认「服务连着、当前没有任务」：多数用例只关心别的页面，不该被一块写着「有任务在跑」
   // 的读数影响；需要「读不到」（connected=false）或「有任务」的用例自己覆盖这两条桩。
