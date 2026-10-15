@@ -306,6 +306,7 @@ describe('版本管理：本地多版本库与在线版本下载', () => {
   })
 
   it('可以切换到随包内置版本（Slot 0）', async () => {
+    bridge.startHarness.mockResolvedValue({ ...readyState })
     bridge.getState.mockResolvedValue({ ...readyState })
     bridge.getRuntimeVersions.mockResolvedValue({
       versions: [
@@ -333,6 +334,7 @@ describe('版本管理：本地多版本库与在线版本下载', () => {
 
   it('可以切换和删除本地版本库中的版本', async () => {
     const libId = 'c'.repeat(64)
+    bridge.startHarness.mockResolvedValue({ ...readyState })
     bridge.getState.mockResolvedValue({ ...readyState })
     bridge.getRuntimeVersions.mockResolvedValue({
       versions: [
@@ -428,7 +430,7 @@ describe('版本管理：本地多版本库与在线版本下载', () => {
     expect(await screen.findByText('在线可用版本')).toBeVisible()
     expect(screen.getByText('2026.09.20')).toBeVisible()
     expect(screen.getByText(/dsh 0\.1\.8/)).toBeVisible()
-    expect(screen.getByText('优化了 PRoot 启动速度')).toBeVisible()
+    expect(screen.getByText(/优化了 PRoot 启动速度/)).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: '下载到版本库' }))
 
