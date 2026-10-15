@@ -34,6 +34,7 @@ import type {
   RuntimeResidueState,
   RuntimeSessionListResult,
   RuntimeSessionSnapshotRestoreResult,
+  RootEngineStatus,
   RuntimeSessionSnapshotState,
   RuntimeSettings,
   RuntimeState,
@@ -670,6 +671,13 @@ export function createBrowserBridge(): RuntimeBridge {
     // 如实拒绝 ⇒ 界面显示「读不到能力清单」，不编造任何一项的现状。
     getDeviceCapabilities: (): Promise<DeviceCapabilityReport> =>
       Promise.reject(new Error('浏览器预览不支持设备能力查询')),
+    // 根通道是内核级能力：预览里没有 `su`、没有 KernelSU、也没有命名空间可隔离。
+    // 两条都如实拒绝，**不要**回 `{ enabled: false, usable: false, ... }`——那会被显示成
+    // 「用户没开这个开关」，而真实情况是「这里根本做不到」，两者对用户的下一步完全不同。
+    getRootEngineStatus: (): Promise<RootEngineStatus> =>
+      Promise.reject(new Error('浏览器预览不支持根通道状态查询')),
+    setRootEngineEnabled: (): Promise<RootEngineStatus> =>
+      Promise.reject(new Error('浏览器预览不支持根通道开关')),
     // 任务台账活在无障碍服务进程里，预览里没有那个进程，也没有可取消的任务：两条都如实拒绝。
     // **不要**回 `{ connected: false, task: null }`——界面得能区分「预览做不到」与「服务没连上」，
     // 后者在真机上是有意义的状态（提示去开服务），前者提示了也没用。

@@ -20,9 +20,9 @@ function entry(id: string, overrides: Partial<DeviceCapabilityEntry> = {}): Devi
   }
 }
 
-/** 五项全就绪：多数用例只改其中一项。 */
+/** 六项全就绪：多数用例只改其中一项。 */
 function report(overrides: DeviceCapabilityEntry[] = []): DeviceCapabilityReport {
-  const base = ['shizuku', 'accessibility', 'virtual_screen', 'screenshot', 'chinese_input'].map(id => entry(id))
+  const base = ['shizuku', 'kernelsu_root', 'accessibility', 'virtual_screen', 'screenshot', 'chinese_input'].map(id => entry(id))
   return { atMs: 1_700_000_000_000, sdkInt: 34, capabilities: overrides.length > 0 ? overrides : base }
 }
 
@@ -49,14 +49,27 @@ async function findRow(text: string): Promise<HTMLElement> {
 }
 
 describe('设备能力卡片', () => {
-  it('五项按原生给的顺序列全，名称与技术标识分开显示', async () => {
+  it('六项按原生给的顺序列全，名称与技术标识分开显示', async () => {
     card({ getDeviceCapabilities: vi.fn().mockResolvedValue(report()) })
 
     await findRow('Shizuku（设备 Shell） 可用')
+    row('根通道（KernelSU） 可用')
     row('无障碍服务 可用')
     row('副屏 可用')
     row('整屏截图 可用')
     row('中文输入 可用')
+  })
+
+  it('降级的那一项说「能用但保护降了一档」，并讲清少了什么', async () => {
+    card({
+      getDeviceCapabilities: vi.fn().mockResolvedValue(report([
+        entry('kernelsu_root', { state: 'degraded', reason: 'ROOT_SANDBOX_DEGRADED' }),
+      ])),
+    })
+
+    const root = await findRow('根通道（KernelSU） 可用，但保护降了一档 · 命令照常执行，但这台设备给不了完整的隔离：静态审查已按严格档收紧，对 /dev 的遮蔽没有生效')
+    /* 降级**不许**出现「下一步」：用户没有可点的一步，指路反而会让人以为再设一步就能补回来。 */
+    expect(root.textContent).not.toContain('下一步')
   })
 
   it('就绪的行不教用户去设置：不说原因、不说下一步、不说替代方式', async () => {

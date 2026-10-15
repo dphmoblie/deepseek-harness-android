@@ -270,6 +270,8 @@ object RootSecurityWrapper {
 }
 ```
 
+> **上面这段是第一版设计草案，不等于落地形态。** 它有两处后来被判为缺陷：`|| true` 把遮蔽失败吞成静默放行（D3），外层用 `sh -c '<...>'` 嵌套转义（引号一旦算错，脚本会半路断掉）。当前实现是 `android/app/src/main/java/io/deepseekharness/mobile/shizuku/RootSecurityWrapper.kt`（包名 `...mobile.shizuku`，不是草案里的 `...mobile.root`）：外层只做「能力探测 + Base64 传输」，内层只在真的拿到挂载命名空间时才碰 `mount`；拿不到就带诊断降级执行。降级口径与理由见 §9.5。
+
 ### 5.2 Root 通道分流与执行（不侵入 `DeviceCommandRunner.kt`）
 
 调度入口（插件执行层）在收到 `shell` 命令时按以下逻辑分流：
@@ -385,7 +387,7 @@ Root 会话创建/修改的文件默认属主为 root。若写入本应用私有
 | :--- | :--- | :--- | :--- |
 | D1 | 根通道根本未接线 | `DeviceCommandRunner.execute(..., useRootEngine)` 默认 `false`，全仓库无调用点传 `true`；`KernelSuProbe.probeLocal()` 无调用点；能力闭集里没有 `kernelsu_root`；前端无对应设置 | 登记为遗留（见下） |
 | D2 | 授权主体违背原则 4 | 原 `useRootEngine` 分支 `Body("su -c <包装脚本>", "$?")` 把根命令交给 Shizuku 用户服务的 PTY 会话，父进程是 UID 2000 的 shell | 改为受控拒绝 `ROOT_ENGINE_NOT_WIRED`；新增 `RootCommandRunner`（应用进程内 `su -c`，单参数传递） |
-| D3 | 沙箱失败被静默吞掉 | 原包装器 `mount --make-rprivate ... \|\| true`，遮蔽失败照样往下跑 | 失败即停：`EXIT_NAMESPACE_UNAVAILABLE=125`、`EXIT_PROPAGATION_FAILED=126`、`EXIT_BLOCK_MASK_FAILED=127`；诊断走 `DSH_ROOT_SANDBOX:` 前缀 |
+| D3 | 沙箱失败被静默吞掉 | 原包装器 `mount --make-rprivate ... \|\| true`，遮蔽失败照样往下跑 | 第三轮先改成「失败即停」（`EXIT_NAMESPACE_UNAVAILABLE=125`、`EXIT_PROPAGATION_FAILED=126`、`EXIT_BLOCK_MASK_FAILED=127`）；**第五轮按用户拍板改回「带诊断的优雅降级」**（见 §9.5），只有 Base64 解码失败仍中止（`EXIT_DECODE_FAILED=124`）。诊断一律走 `DSH_ROOT_SANDBOX:` 前缀 |
 | D4 | 命名空间没有降级路径 | 原实现只认 `unshare -m -p -f`，内核未开 PID namespace 的设备直接不可用 | 改为 `-m -p -f` → `-m -p` → `-m -f` → `-m` 逐级探测（用 `true` 试探，不重跑载荷），PID 隔离缺失时输出诊断 |
 | D5 | 探测把 LKM 设备判死 | 原 `evaluate` 在 `!isGkiSupported` 时直接返回 `UNSUPPORTED`，而 KernelSU 的 LKM 路线支持 4.9/5.4 | 内核版本降为诊断信息（`ProbeResult.warning()`），可用性判定改看「管理器存在」或「`su -v` 自报 KernelSU 变体」 |
 | D6 | 官方管理器包名缺失 | 原列表只有 `me.tiann.kernelsu`、`com.rifsxd.ksunext` | 补 `me.weishu.kernelsu`（官方）与 `com.sukisu.ultra` |
@@ -394,7 +396,7 @@ Root 会话创建/修改的文件默认属主为 root。若写入本应用私有
 
 #### 本轮改动的文件
 
-- `android/app/src/main/java/io/deepseekharness/mobile/shizuku/RootSecurityWrapper.kt`：整段重写——分层失败即停、Base64 管道替代 `sh -c '<...>'` 嵌套引号、`mountpoint -q` 判定真实挂载点、`setpriv` 加固档缺失时给 `HARDENING_UNAVAILABLE` 诊断而不谎称已加固。
+- `android/app/src/main/java/io/deepseekharness/mobile/shizuku/RootSecurityWrapper.kt`：整段重写——分层失败即停（第五轮改为降级口径，见 §9.5）、Base64 管道替代 `sh -c '<...>'` 嵌套引号、`mountpoint -q` 判定真实挂载点、`setpriv` 加固档缺失时给 `HARDENING_UNAVAILABLE` 诊断而不谎称已加固。
 - `.../RootCommandGuard.kt`：整段重写——归一化 + 12 条成对规则 + `violations()` 诊断口（`wipe` 收窄成 `wipe data/cache/system`）。
 - `.../KernelSuProbe.kt`：判定语义重写（D5–D7），新增 `CACHE_TTL_MS`、`clearCache()`、`ProbeResult.suVersion` / `warning()`。
 - `.../RootCommandRunner.kt`：**新增**。应用进程内执行 `su -c <单参数>`；剥离诊断行；把沙箱退出码与 su 故障翻译成受控错误码（`ROOT_SU_UNAVAILABLE`、`ROOT_COMMAND_TIMEOUT`、`ROOT_SANDBOX_UNAVAILABLE`、`ROOT_SANDBOX_PROPAGATION_FAILED`、`ROOT_BLOCK_MASK_FAILED`、`ROOT_PERMISSION_DENIED`、`ROOT_COMMAND_FAILED`）。
@@ -403,9 +405,9 @@ Root 会话创建/修改的文件默认属主为 root。若写入本应用私有
 
 #### 仍然遗留
 
-1. **接线**：把 `RootCommandRunner` 接进命令通道（`DeviceCommandRunner` 现在返回 Shizuku 会话脚本，需要为根通道换一条返回路径），并把 `kernelsu_root` 加进 `DeviceCapabilityPolicy` 闭集与前端文案——属于 §9.2.4 的第二期。
-2. **诊断消费**：`RootCommandResult.diagnostics` 目前只回传，尚未渲染到能力看板。
-3. **失败即停的代价**：ROM 如果连 `mount --make-rprivate /` 都不支持，根通道会直接拒绝服务而不是降级运行。这是有意选择——宁可不可用，也不要「看起来隔离了」。真机适配器验证后如确认普遍缺失，再讨论是否把它降级为「带告警的放行」。
+1. **接线**：把 `RootCommandRunner` 接进命令通道（`DeviceCommandRunner` 现在返回 Shizuku 会话脚本，需要为根通道换一条返回路径），并把 `kernelsu_root` 加进 `DeviceCapabilityPolicy` 闭集与前端文案——属于 §9.2.4 的第二期。**（第五轮已完成，见 §9.5）**
+2. **诊断消费**：`RootCommandResult.diagnostics` 目前只回传，尚未渲染到能力看板。**（第五轮已消费：降级诊断进能力看板与命令回执，见 §9.5）**
+3. **失败即停的代价**：ROM 如果连 `mount --make-rprivate /` 都不支持，根通道会直接拒绝服务而不是降级运行。这是有意选择——宁可不可用，也不要「看起来隔离了」。真机适配器验证后如确认普遍缺失，再讨论是否把它降级为「带告警的放行」。**（用户 2026-10-15 拍板：改优雅降级，见 §9.5）**
 4. **§9.2 的四条待决策**（App Profile 引导流程、能力档白名单、变体矩阵真机验证、分期边界）原样保留。
 5. **TC-01 ~ TC-11 需要真机**：本轮只覆盖静态与单元层；`unshare` 能力探测、`mount --make-rprivate` 是否被适配器允许、遮蔽是否真的生效，都必须真机跑过才能冻结。
 
@@ -427,3 +429,26 @@ Root 会话创建/修改的文件默认属主为 root。若写入本应用私有
 1. **根通道仍然没有调用方**（§9.3 D1 未变）：`KernelSuProbe.probeLocal()` 无调用点，能力闭集里没有 `kernelsu_root`，前端无开关。当前状态是「通道修好了但门没开」——不会误用，也不会可用。
 2. **工作区正被另一条改造进行中**：`MobileRuntimePlugin.kt` / `MobileRuntimeController.kt` / `RuntimeHost.kt` 处于半成品状态（`Syntax error: Missing '}'`、大量 `Unresolved reference`），`android/settings-review-temp.gradle` 为遗留临时文件。本轮 shizuku 改动因此改在 HEAD 的纯净副本里验证（见 §9.5）。
 3. **`scripts/gate-check.mjs` 与 CI 无关**：它没有被任何 workflow 引用，且第 3 步「子模块缺失即 PASS」会给假绿灯；CI 里另有更强的实现。要么接进 CI，要么删掉。
+
+### 9.5 第五轮：按用户拍板改成降级口径并接线（2026-10-15 深夜）
+
+用户对 §9.3/§9.4 遗留的四项一次性给了答复：「1.加 2.优雅降级 3.接 4.改」——①`publish-release` 的 `needs` 加 `gates`；②沙箱走**优雅降级**而不是失败即停；③把根通道**接**上调用方（设置开关）；④版本库面板「满额即失败」的**文案要改**（另见 `docs/运行时更新与数据保留.md`）。
+
+| 编号 | 问题 | 证据 | 处理 |
+| :--- | :--- | :--- | :--- |
+| D13 | 包好沙箱、功能却常年不可用 | 原实现拿不到挂载命名空间或 `mount --make-rprivate` 失败就 `exit 125/126/127`，连 `ls` 都跑不了；而 §7 的 TC-11 本来就要求「降级执行并在能力看板如实展示」 | 外层只剩**解码失败**是硬停（`EXIT_DECODE_FAILED=124`）；`NAMESPACE_UNAVAILABLE` / `PID_ISOLATION_UNAVAILABLE` 只打诊断行。内层 `if [ "$dsh_isolated" = "1" ]` 才碰 `mount`，否则只打 `BLOCK_MASK_SKIPPED` |
+| D14 | 降级档第一道网被抽掉 | 静态护栏原来放行 `mount -o remount,rw /data`（有命名空间时正确），但降级执行时那行会**直接落到宿主分区** | `RootCommandGuard.verifySafe(script, strict)`：`strict = true` 时追加 7 条「降级档」规则——`mount`/`umount`、`dd`/`losetup`/`dmsetup`/`of=`、写 `/dev/`、`chmod`/`chown` 系统目录、`insmod`/`rmmod`/`modprobe`、写 `/proc/sys` 与 sysfs 关键子树、`/dev/mem`/`/dev/kmem`/`/proc/kcore`。是否启用由真实能力决定 |
+| D15 | 「降级了」没人知道 | 诊断行只回传，不参与判定 | `RootSandboxProbe`（只读试探：`unshare -m true`、`setpriv … true`；15 秒超时、60 秒缓存、探不到按最保守档）决定 `strict`；`RootCommandResult.degraded` 由诊断码集合判定；命令回执追加「[根通道降级执行] 沙箱没能提供完整隔离：…」 |
+| D16 | 通道修好了但没门 | 能力闭集只有五项，没有 `kernelsu_root`；前端无开关 | 能力清单扩到六项并新增状态 `degraded`；原因码 `ROOT_ENGINE_DISABLED` / `KERNELSU_NOT_INSTALLED` / `KERNELSU_PERMISSION_REQUIRED` / `ROOT_IMPL_NOT_KERNELSU` / `ROOT_SANDBOX_DEGRADED`；动作码 `enable_root_engine` / `grant_root_permission`；替代项 `SHIZUKU_SHELL`（只在 Shizuku 就绪时给） |
+| D17 | 开关本身要能审计 | 打开它等于把执行身份从 UID 2000 提到 UID 0 | `RootEngineAccess`（SharedPreferences `root_engine_access`，默认关）；**关着时绝不拉 `su`**（KernelSU 首次调用会弹授权窗，探测不该有副作用）；开关变化记 `AuditEvent.ROOT_ENGINE_SETTING` |
+| D18 | 正则里 `\b` 贴在 `/` 前等于永不匹配 | 降级档的「直接读写物理内存」写成 `\b(/dev/mem\|…)\b`：`cat /dev/mem` 里 `/` 前是空格，两侧都不是单词字符，`\b` 不成立 → 该条规则**静默失效** | 去掉前导 `\b`；由单测抓出（`RootSecurityTest`「降级档补上命名空间本该承担的那一段」直接红） |
+
+#### 验证（2026-10-15）
+
+- Android 全量单测：**135 suites / 1376 tests / 0 failures / 0 errors / 27 skipped**。新增覆盖：降级档拦截集与只读放行、包装器降级路径（含 `assertFalse(contains("exit 125"))`）、`runProbe`、`RootSandboxProbe` 解析与缓存、能力清单六项与 `degraded` 分档、执行器根通道分流（根通道不写 Shizuku、降级档拦截挂载类脚本、降级写进正文）。
+- 前端：全量 vitest 绿；新增 `src/components/RootEngineCard.test.tsx`；`DeviceCapabilityCard.test.tsx` 与 `src/platform/validation.test.ts` 扩到六项 + `degraded`。
+- 一条硬约束（踩过）：`RootEngineCard` 是 10 秒轮询，读数没变化时**不能**再 `setState`——`src/__tests__/renderProfile.test.tsx`「设置页空转零提交」会直接红。
+
+#### 仍待真机 / 未决
+
+`unshare` 与 `setpriv` 的探测结果、`mount --make-rprivate` 是否被适配器允许、遮蔽是否真的生效，都必须真机跑过才能冻结（TC-01 ~ TC-11）；§9.2 的 App Profile 引导流程与「挂载能力档白名单」两条仍未决。

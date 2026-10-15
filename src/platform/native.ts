@@ -86,6 +86,7 @@ import {
   validateRuntimeCleanupOutcome,
   validateRuntimeCleanupState,
   validateDeviceCapabilityReport,
+  validateRootEngineStatus,
   validateAutomationTaskState,
   validatePluginCleanupRequest,
   validateRuntimeResidue,
@@ -229,6 +230,9 @@ interface NativeRuntimePlugin {
   cleanRuntimeResidue(): Promise<unknown>
   getRuntimeCleanupState(): Promise<unknown>
   getDeviceCapabilities(): Promise<unknown>
+  /** 根通道状态：`refresh` 为真时让原生丢弃 60 秒探测器缓存重测。 */
+  rootEngineState(options?: { refresh?: boolean }): Promise<unknown>
+  setRootEngineEnabled(options: { enabled: boolean }): Promise<unknown>
   getAutomationTaskState(): Promise<unknown>
   cancelAutomationTask(): Promise<unknown>
   clearRuntimeCache(): Promise<unknown>
@@ -552,6 +556,10 @@ function createNativeBridge(): RuntimeBridge {
     // 已停止（在跑时原生侧抛 `RUNTIME_BUSY`）；`ok` 由 `failed === 0` 推出，载荷里的同名字段不采信。
     getRuntimeCleanupState: () => NativeRuntime.getRuntimeCleanupState().then(validateRuntimeCleanupState),
     getDeviceCapabilities: () => NativeRuntime.getDeviceCapabilities().then(validateDeviceCapabilityReport),
+    // 根通道：关着时原生只读设置（不会拉 `su`），所以轮询它是便宜的；切换开关时原生会顺手清缓存，
+    // 因此这里的返回值就是重测结果，界面不必再补一次 refresh。
+    getRootEngineStatus: refresh => NativeRuntime.rootEngineState({ refresh: refresh === true }).then(validateRootEngineStatus),
+    setRootEngineEnabled: enabled => NativeRuntime.setRootEngineEnabled({ enabled }).then(validateRootEngineStatus),
     // 任务台账：`connected=false` 表示无障碍服务没连上（此时 `task` 一定是 null）——界面必须把
     // 「读不到」与「现在没有任务」分开说；校验器也按这个前提拒收自相矛盾的载荷。
     getAutomationTaskState: () => NativeRuntime.getAutomationTaskState().then(validateAutomationTaskState),

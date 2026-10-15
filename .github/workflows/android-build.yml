@@ -478,7 +478,11 @@ jobs:
 
   publish-release:
     name: Publish release (APK + rootfs bundle + manifest)
-    needs: [build, build-rootfs]
+    # gates（空白 / Android 资源 / 清单 schema / gitleaks）必须挡在发布之前：
+    # 一个把密钥提交进去的 run，构建会照样成功，release 也会照样发出去 —— 那种失败
+    # 事后无法用「撤回资产」补救（密钥已经进过公开仓库的历史）。所以这里是硬依赖，
+    # 不是「让 run 变红但不拦发布」。代价是发布链路多等一次 gates（它是纯静态检查，很快）。
+    needs: [build, build-rootfs, gates]
     permissions:
       contents: write
     # 推送分支只做构建与验证；发布必须手动 workflow_dispatch 并选择 release_type
@@ -664,8 +668,9 @@ jobs:
             "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}" >/dev/null
           echo "已把 ${RELEASE_TAG} 转为草稿：确认误报改回正式，确属坏版本则删除该 Release 与标签后升 APP_VERSION 重发"
 
-  # 与构建无关、但必须挡在合并前的检查集中放这里。刻意不写进 publish-release 的 needs：
-  # 发布链路的依赖关系与时长保持原样，本作业失败会让这次 run 变红，但不会阻断或拖慢已有发布流程。
+  # 与构建无关、但必须挡在合并前的检查集中放这里。它同时是 publish-release 的硬依赖
+  # （见那边的 needs 注释）：gitleaks 命中就是密钥已经在仓库历史里，这种失败必须在
+  # 产物上传之前发生，不能只把 run 变红。
   gates:
     name: Quality gates (whitespace / Android resources / manifest schema / secrets)
     runs-on: ubuntu-24.04

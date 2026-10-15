@@ -74,6 +74,7 @@ import { hasConfiguredModelCredential, MODEL_PROVIDERS } from './modelProviders'
 import { CustomProviders } from './components/CustomProviders'
 import { RuntimeResidueCard } from './components/RuntimeResidueCard'
 import { DeviceCapabilityCard } from './components/DeviceCapabilityCard'
+import { RootEngineCard } from './components/RootEngineCard'
 import { RuntimeCleanupCard } from './components/RuntimeCleanupCard'
 import { ReleaseNotes } from './components/ReleaseNotes'
 import { AppUpdateReminderDialog } from './components/AppUpdateReminderDialog'
@@ -5489,6 +5490,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
 
         {/* 设备能力清单：从版本管理页挪过来，回答「这台机器现在能做什么」。 */}
         <DeviceCapabilityCard />
+        {/* 根通道单独立卡：它是**写**操作（开关），不能和能力清单那份 5 秒轮询共用状态。 */}
+        <RootEngineCard />
         </>
         )}
 

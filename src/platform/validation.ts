@@ -45,6 +45,7 @@ import type {
   NotificationPermissionResult,
   OverlayBallState,
   ProviderApiKeys,
+  RootEngineStatus,
   RuntimeInstallResult,
   RuntimeIntent,
   RuntimePhase,
@@ -2580,13 +2581,20 @@ export function assertVirtualScreenStartRequest(value: unknown): VirtualScreenSt
  */
 const DEVICE_CAPABILITY_IDS: DeviceCapabilityId[] = [
   'shizuku',
+  'kernelsu_root',
   'accessibility',
   'virtual_screen',
   'screenshot',
   'chinese_input',
 ]
 
-const DEVICE_CAPABILITY_STATES = new Set<DeviceCapabilityState>(['ready', 'needs_action', 'blocked', 'unsupported'])
+const DEVICE_CAPABILITY_STATES = new Set<DeviceCapabilityState>([
+  'ready',
+  'needs_action',
+  'blocked',
+  'unsupported',
+  'degraded',
+])
 
 /** 原因码：原生侧定的大写枚举（`SHIZUKU_NOT_RUNNING`），与审计闸门码同一个形状。 */
 const DEVICE_CAPABILITY_REASON_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/u
@@ -2639,6 +2647,11 @@ export function validateDeviceCapabilityReport(value: unknown): DeviceCapability
     const alternative = deviceCapabilityCode(entry.alternative, DEVICE_CAPABILITY_REASON_PATTERN, `设备能力 ${id} 的替代方式`)
     if (state === 'ready') {
       if (action !== null || alternative !== null) throw new Error(`设备能力 ${id} 已就绪却带着待办动作`)
+    } else if (state === 'degraded') {
+      // 「降级」是能用但少一层保护：用户没有可点的一步，所以不许带动作；
+      // 也不许报就绪原因。替代方式可有可无（降级本身仍在干活，谈不上替换）。
+      if (action !== null) throw new Error(`设备能力 ${id} 降级却带着待办动作`)
+      if (reason === 'READY') throw new Error(`设备能力 ${id} 降级却报了就绪原因`)
     } else if (reason === 'READY') {
       throw new Error(`设备能力 ${id} 没就绪却报了就绪原因`)
     }
@@ -2647,8 +2660,62 @@ export function validateDeviceCapabilityReport(value: unknown): DeviceCapability
   return { atMs, sdkInt, capabilities }
 }
 
-/** 任务标识与步骤标识同一把尺子（与原生 `AutomationTaskPlan.isTaskId` 一致）。 */
-const AUTOMATION_TASK_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/u
+/** 与原生 `KernelSuProbe` 的三态逐字一致。 */
+const ROOT_ENGINE_KERNEL_SU_STATUSES = new Set<RootEngineStatus['kernelSuStatus']>(['ready', 'needs_action', 'unsupported'])
+
+/** 降级原因码：与原生 `RootSecurityWrapper.DEGRADATION_CODES` 同一形状（大写下划线）。 */
+const ROOT_ENGINE_DEGRADATION_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/u
+
+/**
+ * 根通道状态。
+ *
+ * `usable` 不是独立事实，而是合成结论（`enabled && kernelSuStatus === 'ready'`），因此这里
+ * **交叉校验**它：原生侧若给出互相矛盾的组合，整份拒掉。界面会照着 `enabled` 画开关、
+ * 照着 `usable` 决定「能不能用」的说明，两者打架时用户看到的是「开关开着却说不能用」而没有解释。
+ * 同理，`degraded` 与 `degradations` 必须一致：降级一定有原因码，有原因码就是降级。
+ */
+export function validateRootEngineStatus(value: unknown): RootEngineStatus {
+  const record = asRecord(value, '根通道状态')
+  const enabled = assertBooleanFlag(record.enabled, '根通道开关')
+  const usable = assertBooleanFlag(record.usable, '根通道可用性')
+  const kernelSuStatus = record.kernelSuStatus
+  if (typeof kernelSuStatus !== 'string' || !ROOT_ENGINE_KERNEL_SU_STATUSES.has(kernelSuStatus as RootEngineStatus['kernelSuStatus'])) {
+    throw new Error('根通道的 KernelSU 状态格式无效')
+  }
+  const reason = record.reason
+  if (typeof reason !== 'string' || !DEVICE_CAPABILITY_REASON_PATTERN.test(reason)) {
+    throw new Error('根通道的原因格式无效')
+  }
+  const degraded = assertBooleanFlag(record.degraded, '根通道降级标记')
+  const rawDegradations = record.degradations
+  if (!Array.isArray(rawDegradations)) throw new Error('根通道的降级原因格式无效')
+  const degradations = rawDegradations.map((item) => {
+    if (typeof item !== 'string' || !ROOT_ENGINE_DEGRADATION_PATTERN.test(item)) {
+      throw new Error('根通道的降级原因格式无效')
+    }
+    return item
+  })
+  const suVersion = record.suVersion
+  if (suVersion !== null && suVersion !== undefined && typeof suVersion !== 'string') {
+    throw new Error('根通道的 su 版本格式无效')
+  }
+  if (usable !== (enabled && kernelSuStatus === 'ready')) {
+    throw new Error('根通道的可用性与开关状态不一致')
+  }
+  if (!enabled && degraded) throw new Error('根通道未开启却报了降级')
+  if (degraded !== (degradations.length > 0)) throw new Error('根通道的降级标记与降级原因不一致')
+  return {
+    enabled,
+    usable,
+    kernelSuStatus: kernelSuStatus as RootEngineStatus['kernelSuStatus'],
+    reason,
+    degraded,
+    degradations,
+    suVersion: suVersion ?? null,
+  }
+}
+
+/** 任务标识与步骤标识同一把尺子（与原生 `AutomationTaskPlan.isTaskId` 一致）。 */const AUTOMATION_TASK_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/u
 
 /** 与原生 `AutomationTaskStepStatus` 逐字一致。 */
 const AUTOMATION_TASK_STEP_STATUSES = new Set<AutomationTaskStepStatus>(['pending', 'ok', 'failed', 'unknown', 'skipped'])

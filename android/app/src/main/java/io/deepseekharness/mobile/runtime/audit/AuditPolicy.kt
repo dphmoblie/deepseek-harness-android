@@ -78,6 +78,15 @@ enum class AuditEvent {
     TERMINAL_CLOSE,
     SHIZUKU_PERMISSION,
 
+    /**
+     * 根通道（KernelSU + 命名空间沙箱）开关变更。
+     *
+     * 这条开关会把设备命令的执行身份从 Shizuku 的 UID 2000 提升到 UID 0，是权限面上最重的一次
+     * 状态变化，因此单独记一条：只记开关目标值与受控结果，不记命令内容。
+     * 沙箱降级（`ROOT_SANDBOX_DEGRADED`）也走这条事件——它是同一件事的另一半。
+     */
+    ROOT_ENGINE_SETTING,
+
     /** 无障碍应用白名单与系统设置入口。 */
     ACCESSIBILITY_CONFIG,
 

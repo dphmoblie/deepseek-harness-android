@@ -1468,20 +1468,68 @@ class MobileRuntimePlugin : Plugin() {
             val sessionId = call.getString("sessionId") ?: throw RuntimeFailure("SESSION_ID_INVALID", "终端会话标识缺失")
             val commandName = call.getString("command") ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令缺失")
             val command = DeviceCommand.fromName(commandName) ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令不支持")
-            if (command in setOf(DeviceCommand.SHELL, DeviceCommand.BACKGROUND_TASKS) && !io.deepseekharness.mobile.shizuku.DeviceShellAccess.enabled(context)) {
+            // 根通道打开时，SHELL 命令由应用进程自己起 `su -c`：那条路径不经过 Shizuku，
+            // 因此既不需要 AI Shell 开关（那是 Shizuku 通道的开关），也不需要 Shizuku 设备会话。
+            val rootEngine = command == DeviceCommand.SHELL &&
+                io.deepseekharness.mobile.shizuku.RootEngineAccess.enabled(context)
+            if (!rootEngine && command in setOf(DeviceCommand.SHELL, DeviceCommand.BACKGROUND_TASKS) &&
+                !io.deepseekharness.mobile.shizuku.DeviceShellAccess.enabled(context)
+            ) {
                 throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请先开启 AI Shell")
             }
-            if (!controller.hasDeviceSession(sessionId)) {
+            if (!rootEngine && !controller.hasDeviceSession(sessionId)) {
                 throw RuntimeFailure("SESSION_NOT_FOUND", "设备 Shell 会话不存在或已结束")
             }
             val result = RuntimeHost.deviceCommands()
-                .execute(sessionId, command, call.getString("param") ?: "", DEVICE_COMMAND_TIMEOUT_MS)
+                .execute(sessionId, command, call.getString("param") ?: "", DEVICE_COMMAND_TIMEOUT_MS, useRootEngine = rootEngine)
             JSObject()
                 .put("ok", result.ok)
                 .put("exitCode", result.exitCode)
                 .put("text", result.text)
                 .put("truncated", result.truncated)
                 .also { if (result.errorCode != null) it.put("errorCode", result.errorCode) }
+        }
+    }
+
+    /**
+     * 根通道状态：总开关、KernelSU 侧结论、沙箱档位。
+     *
+     * 开关关着时不会去拉 `su`（KernelSU 首次调用会弹授权窗，一个默认关着的功能不该先把弹窗怼上来），
+     * 所以默认状态下这是纯读设置。`refresh = true` 用于用户刚在管理器里改过授权、或刚点「重新检测」：
+     * 丢弃两个探测器的 60 秒缓存重测一次。
+     */
+    @PluginMethod
+    fun rootEngineState(call: PluginCall) {
+        execute(call) {
+            val refresh = call.getBoolean("refresh") ?: false
+            io.deepseekharness.mobile.shizuku.RootEngineAccess.status(
+                context,
+                packageChecker = io.deepseekharness.mobile.shizuku.RootEngineAccess.packageChecker(context),
+                refresh = refresh,
+            ).toJs()
+        }
+    }
+
+    /**
+     * 打开/关闭根通道。
+     *
+     * 打开只是**允许**：真正的授权仍在 KernelSU 管理器里由用户点，本应用不会、也无法代点。
+     * 关掉时把两个探测器的缓存一并丢弃，避免界面继续显示上一次的档位。
+     */
+    @PluginMethod
+    fun setRootEngineEnabled(call: PluginCall) {
+        execute(call) {
+            val enabled = call.getBoolean("enabled")
+                ?: throw RuntimeFailure("ROOT_ENGINE_INPUT_INVALID", "根通道开关取值无效")
+            audited(AuditEvent.ROOT_ENGINE_SETTING) {
+                io.deepseekharness.mobile.shizuku.RootEngineAccess.save(context, enabled)
+                io.deepseekharness.mobile.shizuku.KernelSuProbe.clearCache()
+                io.deepseekharness.mobile.shizuku.RootSandboxProbe.clearCache()
+                io.deepseekharness.mobile.shizuku.RootEngineAccess.status(
+                    context,
+                    packageChecker = io.deepseekharness.mobile.shizuku.RootEngineAccess.packageChecker(context),
+                ).toJs()
+            }
         }
     }
 
@@ -1547,6 +1595,11 @@ class MobileRuntimePlugin : Plugin() {
     /** 凑齐判定所需的事实：只读状态，不做任何动作。 */
     private fun deviceCapabilityFacts(): DeviceCapabilityFacts {
         val shizuku = controller.shizukuState()
+        // 根通道关着时 status() 不拉 su（默认状态是纯读设置），所以这张清单每 5 秒轮询仍然便宜。
+        val root = io.deepseekharness.mobile.shizuku.RootEngineAccess.status(
+            context,
+            packageChecker = io.deepseekharness.mobile.shizuku.RootEngineAccess.packageChecker(context),
+        )
         return DeviceCapabilityFacts(
             sdkInt = Build.VERSION.SDK_INT,
             shizukuInstalled = shizuku.installed,
@@ -1554,6 +1607,10 @@ class MobileRuntimePlugin : Plugin() {
             shizukuPermission = shizuku.permission,
             shizukuConnected = shizuku.connected,
             accessibilityStatus = AccessibilityAutomationStore.serviceStatus(context),
+            rootEngineEnabled = root.enabled,
+            rootEngineStatus = if (root.enabled) root.kernelSuStatus else null,
+            rootEngineReason = if (root.enabled) root.reason else null,
+            rootSandboxDegraded = root.degraded,
         )
     }
 
@@ -3807,6 +3864,23 @@ class MobileRuntimePlugin : Plugin() {
         // 也说不清「系统开着但服务被回收了」。缺省值取最保守的一侧（关、未连上）。
         .put("automationRuntime", state.optString("automationRuntime", AutomationControlPolicy.NAME_OFF))
         .put("serviceStatus", state.optString("serviceStatus", "off"))
+
+    /**
+     * 根通道状态过桥。
+     *
+     * 键固定给全（没有 `su -v` 输出时给 JSON null，**不要让键消失**——前端校验按固定键走，
+     * 少一个键整份就被判「格式无效」）。`usable` 是「现在真能执行根命令」的合成结论：
+     * 开关开着 **且** KernelSU 侧就绪；界面用它决定说明文案与按钮可用性。
+     * `degraded` 单独给：能用但少了一层隔离，需要照实显示，不能被 `usable` 掩盖。
+     */
+    private fun io.deepseekharness.mobile.shizuku.RootEngineAccess.Status.toJs(): JSObject = JSObject()
+        .put("enabled", enabled)
+        .put("usable", usable)
+        .put("kernelSuStatus", kernelSuStatus)
+        .put("reason", reason)
+        .put("degraded", degraded)
+        .put("degradations", JSArray().also { array -> degradations.forEach { array.put(it) } })
+        .put("suVersion", suVersion ?: JSONObject.NULL)
 
     /** 诊断日志状态：只有布尔值、计数与时间戳，不含任何日志内容。 */
     private fun DiagnosticState.toJs(): JSObject = JSObject()

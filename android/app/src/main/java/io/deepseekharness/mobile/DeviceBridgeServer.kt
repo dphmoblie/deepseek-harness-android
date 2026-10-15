@@ -83,6 +83,16 @@ class DeviceBridgeServer(
      * 绝不影响任何别的命令。若后续要接更正规的注入，把本方法换成构造参数即可，
      * 调用点只有下面那一处。
      */
+    /**
+     * 根通道开关（用户在应用设置里显式打开）。
+     *
+     * 读不到 Context 时按**关**处理：这与 [DeviceCapabilityFacts] 的默认值同一方向，
+     * 也意味着「读不到设置」永远不会被当成「用户开着根通道」。
+     */
+    private fun rootEngineEnabled(): Boolean = applicationContextOrNull()
+        ?.let { io.deepseekharness.mobile.shizuku.RootEngineAccess.enabled(it) }
+        ?: false
+
     private fun applicationContextOrNull(): Context? = try {
         val current = Class.forName("android.app.ActivityThread")
             .getMethod("currentApplication")
@@ -219,6 +229,10 @@ class DeviceBridgeServer(
                         val context = applicationContextOrNull()
                             ?: throw RuntimeFailure("DEVICE_CAPABILITIES_UNAVAILABLE", "暂时无法读取设备能力")
                         val shizukuState = shizuku.state()
+                        val root = io.deepseekharness.mobile.shizuku.RootEngineAccess.status(
+                            context,
+                            packageChecker = io.deepseekharness.mobile.shizuku.RootEngineAccess.packageChecker(context),
+                        )
                         val facts = DeviceCapabilityFacts(
                             sdkInt = Build.VERSION.SDK_INT,
                             shizukuInstalled = shizukuState.installed,
@@ -226,6 +240,10 @@ class DeviceBridgeServer(
                             shizukuPermission = shizukuState.permission,
                             shizukuConnected = shizukuState.connected,
                             accessibilityStatus = AccessibilityAutomationStore.serviceStatus(context),
+                            rootEngineEnabled = root.enabled,
+                            rootEngineStatus = if (root.enabled) root.kernelSuStatus else null,
+                            rootEngineReason = if (root.enabled) root.reason else null,
+                            rootSandboxDegraded = root.degraded,
                         )
                         val entries = org.json.JSONArray().also { array ->
                             DeviceCapabilityPolicy.report(facts).forEach { capability ->
@@ -327,10 +345,17 @@ class DeviceBridgeServer(
                     }
                     val command = DeviceCommand.fromName(commandName)
                         ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令不支持")
-                    if (command in setOf(DeviceCommand.SHELL, DeviceCommand.BACKGROUND_TASKS) && !shellEnabled()) {
+                    // 根通道（用户在设置里显式打开）时，SHELL 命令由应用进程自己起 `su -c`，
+                    // 既不建 Shizuku 会话，也不受「AI Shell」这个 Shizuku 通道开关约束——
+                    // 那条会话的父进程是 UID 2000 的 shell，根命令的归属会变得不确定。
+                    val rootEngine = command == DeviceCommand.SHELL && rootEngineEnabled()
+                    if (command == DeviceCommand.SHELL && !rootEngine && !shellEnabled()) {
+                        throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请在 Shizuku 设置中开启 AI Shell，或在应用设置里打开根通道")
+                    }
+                    if (command == DeviceCommand.BACKGROUND_TASKS && !shellEnabled()) {
                         throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请在 Shizuku 设置中开启 AI Shell")
                     }
-                    respondResult(output, runOneShot(command, param))
+                    respondResult(output, runOneShot(command, param, rootEngine))
                 } catch (error: Throwable) {
                     val code = (error as? RuntimeFailure)?.code ?: "BRIDGE_FAILED"
                     respond(
@@ -352,7 +377,13 @@ class DeviceBridgeServer(
      * 会话退出（Shell 死亡 / Shizuku 断开）后不会再有输出：在途的设备命令立刻按协议错误收口，
      * 不必空等到 60 秒超时。通用命令与副屏直通命令共用这一条路径，只有命令与脚本文本不同。
      */
-    private fun runOneShot(command: DeviceCommand, param: String): io.deepseekharness.mobile.shizuku.DeviceCommandResult {
+    private fun runOneShot(
+        command: DeviceCommand,
+        param: String,
+        rootEngine: Boolean = false,
+    ): io.deepseekharness.mobile.shizuku.DeviceCommandResult {
+        // 根通道不建 Shizuku 会话：会话 ID 对这个分支没有意义（`execute` 会先于任何会话操作返回）。
+        if (rootEngine) return runner.execute(ROOT_ENGINE_SESSION_ID, command, param, COMMAND_TIMEOUT_MS, useRootEngine = true)
         val sessionId = shizuku.create(
             DEFAULT_COLUMNS,
             DEFAULT_ROWS,
@@ -431,6 +462,9 @@ class DeviceBridgeServer(
 
     companion object {
         private const val COMMAND_TIMEOUT_MS = 60_000L
+
+        /** 根通道分支的占位会话标识：该分支不建 Shizuku 会话，这个值不会与任何真实会话重名。 */
+        private const val ROOT_ENGINE_SESSION_ID = "root-engine"
         private const val STOP_WAIT_MILLIS = 500L
         private const val DEFAULT_COLUMNS = 80
         private const val DEFAULT_ROWS = 24
