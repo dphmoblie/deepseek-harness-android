@@ -2795,11 +2795,16 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 }
 
 /*
- * 版本管理里的「一行一条 + 右侧动作」列表（可安装版本、会话备份）。
+ * 版本管理里的「一行一条 + 右侧动作」列表（本地版本库、在线可用版本、会话备份）。
  *
  * 不复用 .settings-status-row：那是「标签 + 右对齐文本」的两栏结构，塞进按钮后
- * 文本会跟按钮抢宽度，窄屏上会挤成一层压一层。这里显式给文本列 min-width: 0，
- * 让长版本号能换行而不是把按钮顶出卡片。
+ * 文本会跟按钮抢宽度，窄屏上会挤成一层压一层。
+ *
+ * 只给文本列 min-width: 0 是不够的：动作列原本是 flex: none，宽度恒等于按钮的
+ * max-content，既不收缩也不换行。360px 手机上「锁定 / 切换至此版本 / 删除」合计
+ * ≈316px，而行宽只剩 ≈296px，于是文本列被压到 0、版本号逐字换行（实测「一行只有
+ * 两个字」）。现在改为容器驱动的换行：文本列保留 160px 可读下限，空间不足时动作
+ * 列整列落到下一行；空间够时仍是一行、space-between，与修复前逐像素一致。
  */
 .release-list {
   display: flex;
@@ -2809,6 +2814,7 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 
 .release-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -2823,6 +2829,7 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 
 .release-copy {
   display: flex;
+  flex: 1 1 160px;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
@@ -2843,7 +2850,8 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 
 .release-actions {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
