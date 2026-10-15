@@ -195,6 +195,7 @@ describe('版本管理：应用自身更新', () => {
     bridge.getAppUpdateState.mockResolvedValue({
       installedVersion: '0.2.0',
       installedVersionCode: 22,
+      channel: 'stable',
       installAllowed: true,
       available: {
         version: '0.2.1-mobile-400',
@@ -228,6 +229,7 @@ describe('版本管理：应用自身更新', () => {
     bridge.getAppUpdateState.mockResolvedValue({
       installedVersion: '0.2.0',
       installedVersionCode: 22,
+      channel: 'stable',
       installAllowed: true,
       available: { version: '0.2.1-mobile-400', bytes: 12 * 1024 * 1024, sha256: 'b'.repeat(64), notes: '' },
     })
@@ -245,6 +247,7 @@ describe('版本管理：应用自身更新', () => {
     bridge.getAppUpdateState.mockResolvedValue({
       installedVersion: '0.2.0',
       installedVersionCode: 22,
+      channel: 'stable',
       installAllowed: true,
       available: { version: '0.2.1-mobile-400', bytes: 12 * 1024 * 1024, sha256: 'b'.repeat(64), notes: '' },
     })
@@ -274,5 +277,91 @@ describe('版本管理：应用自身更新', () => {
 
     expect(await screen.findByText('更新包已下载并通过校验')).toBeVisible()
     expect(screen.queryByRole('progressbar', { name: '更新包下载进度' })).toBeNull()
+  })
+
+  it('频道开关回显原生当前频道', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getAppUpdateState.mockResolvedValue({
+      installedVersion: '0.2.0',
+      installedVersionCode: 22,
+      channel: 'beta',
+      installAllowed: false,
+    })
+    await openVersionsPage()
+
+    await waitFor(() => expect(screen.getByRole('switch', { name: '接收测试版本' })).toBeChecked())
+  })
+
+  it('开启测试频道后一次往返采用返回的新状态，不再二次请求', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.setAppUpdateChannel.mockResolvedValue({
+      installedVersion: '0.2.0',
+      installedVersionCode: 22,
+      channel: 'beta',
+      installAllowed: false,
+      available: { version: '0.2.1-mobile-400', bytes: 12 * 1024 * 1024, sha256: 'b'.repeat(64), notes: '' },
+    })
+    await openVersionsPage()
+    expect(await screen.findByText('已是最新')).toBeVisible()
+    const callsBefore = bridge.getAppUpdateState.mock.calls.length
+
+    fireEvent.click(screen.getByRole('switch', { name: '接收测试版本' }))
+
+    await waitFor(() => expect(bridge.setAppUpdateChannel).toHaveBeenCalledTimes(1))
+    expect(bridge.setAppUpdateChannel).toHaveBeenCalledWith('beta')
+    expect(await screen.findByText('可更新')).toBeVisible()
+    expect(screen.getByText('0.2.1-mobile-400 · 12 MB')).toBeVisible()
+    expect(screen.getByRole('switch', { name: '接收测试版本' })).toBeChecked()
+    // 一次往返：原生在写频道时已强制重查，界面直接用返回的 state，不再补发读取。
+    expect(bridge.getAppUpdateState.mock.calls.length).toBe(callsBefore)
+  })
+
+  it('关闭测试频道后对称地采用返回的正式版状态', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getAppUpdateState.mockResolvedValue({
+      installedVersion: '0.2.0',
+      installedVersionCode: 22,
+      channel: 'beta',
+      installAllowed: true,
+      available: { version: '0.2.1-mobile-400', bytes: 12 * 1024 * 1024, sha256: 'b'.repeat(64), notes: '' },
+    })
+    bridge.setAppUpdateChannel.mockResolvedValue({
+      installedVersion: '0.2.0',
+      installedVersionCode: 22,
+      channel: 'stable',
+      installAllowed: true,
+    })
+    await openVersionsPage()
+    expect(await screen.findByText('可更新')).toBeVisible()
+    await waitFor(() => expect(screen.getByRole('switch', { name: '接收测试版本' })).toBeChecked())
+
+    fireEvent.click(screen.getByRole('switch', { name: '接收测试版本' }))
+
+    await waitFor(() => expect(bridge.setAppUpdateChannel).toHaveBeenCalledWith('stable'))
+    expect(await screen.findByText('已是最新')).toBeVisible()
+    expect(screen.queryByText('可更新')).toBeNull()
+    expect(screen.getByRole('switch', { name: '接收测试版本' })).not.toBeChecked()
+  })
+
+  it('切换频道失败时报出原因，开关回弹到原频道', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.setAppUpdateChannel.mockRejectedValue(new Error('网络不可达'))
+    await openVersionsPage()
+    expect(await screen.findByText('已是最新')).toBeVisible()
+
+    fireEvent.click(screen.getByRole('switch', { name: '接收测试版本' }))
+
+    expect(await screen.findByText('网络不可达')).toBeVisible()
+    expect(bridge.setAppUpdateChannel).toHaveBeenCalledWith('beta')
+    expect(screen.getByRole('switch', { name: '接收测试版本' })).not.toBeChecked()
+  })
+
+  it('读不到更新状态时频道开关保持禁用', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getAppUpdateState.mockRejectedValue(new Error('boom'))
+    await openVersionsPage()
+
+    expect(await screen.findByText('暂时读不到应用更新状态：请检查网络后重试。')).toBeVisible()
+    expect(screen.getByRole('switch', { name: '接收测试版本' })).toBeDisabled()
   })
 })

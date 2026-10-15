@@ -73,15 +73,15 @@ class AppReleaseCatalogTest {
 
     @Test
     fun offersOnlyStrictlyNewerReleases() {
-        assertNull(catalog(release("v0.2.0")).availableRelease(installed))
-        assertNull(catalog(release("v0.1.9-mobile-9")).availableRelease(installed))
+        assertNull(catalog(release("v0.2.0")).availableRelease(installed, AppUpdateChannel.BETA))
+        assertNull(catalog(release("v0.1.9-mobile-9")).availableRelease(installed, AppUpdateChannel.BETA))
         // 稳定版不跟随同版本测试构建，避免更新完成后再次提示同版本。
-        assertNull(catalog(release("v0.2.0-mobile-308")).availableRelease(installed))
+        assertNull(catalog(release("v0.2.0-mobile-308")).availableRelease(installed, AppUpdateChannel.BETA))
         val preview = InstalledAppInfo(versionName = "0.2.0-mobile-7", versionCode = 23L)
-        assertEquals("0.2.0-mobile-308", catalog(release("v0.2.0-mobile-308")).availableRelease(preview)?.version)
+        assertEquals("0.2.0-mobile-308", catalog(release("v0.2.0-mobile-308")).availableRelease(preview, AppUpdateChannel.BETA)?.version)
         // 多个可选时取最大的那个，而不是列表里最靠前的。
         val picked = catalog(release("v0.2.0-mobile-308"), release("v0.2.1-mobile-2"), release("v0.3.0"))
-        assertEquals("0.3.0", picked.availableRelease(installed)?.version)
+        assertEquals("0.3.0", picked.availableRelease(installed, AppUpdateChannel.BETA)?.version)
     }
 
     @Test
@@ -89,41 +89,51 @@ class AppReleaseCatalogTest {
         // 预览先出、正式版后发，序号反而更小（0）：没有这条收敛路径，装了
         // 0.2.13-mobile-5 的设备永远收不到 0.2.13，只能手动装包。
         val preview = InstalledAppInfo(versionName = "0.2.13-mobile-5", versionCode = 35L)
-        assertEquals("0.2.13", catalog(release("v0.2.13")).availableRelease(preview)?.version)
+        val catalog = catalog(release("v0.2.13"))
+        assertEquals("0.2.13", catalog.availableRelease(preview, AppUpdateChannel.STABLE)?.version)
         assertTrue(
-            catalog(release("v0.2.13")).state(preview, installAllowed = true).has(AppReleaseCatalog.UPDATE_KEY),
+            catalog.state(
+                preview,
+                installAllowed = true,
+                available = catalog.availableRelease(preview, AppUpdateChannel.STABLE),
+            ).has(AppReleaseCatalog.UPDATE_KEY),
         )
     }
 
     @Test
     fun keepsRefusingOlderVersionsAndOlderBuildsOfTheSameVersion() {
         val preview = InstalledAppInfo(versionName = "0.2.13-mobile-5", versionCode = 35L)
-        assertNull(catalog(release("v0.2.12")).availableRelease(preview))
-        assertNull(catalog(release("v0.2.13-mobile-4"), release("v0.2.12-mobile-77")).availableRelease(preview))
+        assertNull(catalog(release("v0.2.12")).availableRelease(preview, AppUpdateChannel.BETA))
+        assertNull(catalog(release("v0.2.13-mobile-4"), release("v0.2.12-mobile-77")).availableRelease(preview, AppUpdateChannel.BETA))
         // 测试版在场时仍挑序号更大的预览构建：预览通道继续跟随预览。
         val both = catalog(release("v0.2.13"), release("v0.2.13-mobile-9"))
-        assertEquals("0.2.13-mobile-9", both.availableRelease(preview)?.version)
+        assertEquals("0.2.13-mobile-9", both.availableRelease(preview, AppUpdateChannel.BETA)?.version)
     }
 
     @Test
     fun keepsTheExistingOrderingForAStableInstall() {
         // 稳定版安装完成后，同版本正式版与测试版都不再算更新；只有更高版本才提示。
         val stable = InstalledAppInfo(versionName = "0.2.13", versionCode = 35L)
-        assertNull(catalog(release("v0.2.13")).availableRelease(stable))
-        assertNull(catalog(release("v0.2.13-mobile-9")).availableRelease(stable))
-        assertEquals("0.2.14-mobile-1", catalog(release("v0.2.14-mobile-1")).availableRelease(stable)?.version)
+        assertNull(catalog(release("v0.2.13")).availableRelease(stable, AppUpdateChannel.BETA))
+        assertNull(catalog(release("v0.2.13-mobile-9")).availableRelease(stable, AppUpdateChannel.BETA))
+        assertEquals("0.2.14-mobile-1", catalog(release("v0.2.14-mobile-1")).availableRelease(stable, AppUpdateChannel.BETA)?.version)
     }
 
     @Test
     fun refusesToOfferAnUpdateWhenTheInstalledVersionCannotBeParsed() {
         // 读不出本机版本就证明不了「严格更新」，宁可什么都不提示。
-        assertNull(catalog(release("v0.2.1-mobile-2")).availableRelease(InstalledAppInfo(AppReleaseCatalog.UNKNOWN_VERSION, 22L)))
-        assertNull(catalog(release("v0.2.1-mobile-2")).availableRelease(InstalledAppInfo("0.2.0-custom", 22L)))
+        assertNull(catalog(release("v0.2.1-mobile-2")).availableRelease(InstalledAppInfo(AppReleaseCatalog.UNKNOWN_VERSION, 22L), AppUpdateChannel.BETA))
+        assertNull(catalog(release("v0.2.1-mobile-2")).availableRelease(InstalledAppInfo("0.2.0-custom", 22L), AppUpdateChannel.BETA))
     }
 
     @Test
     fun keepsTheAvailableKeyOutOfThePayloadWhenThereIsNoUpdate() {
-        val state = catalog(release("v0.2.0")).state(installed, installAllowed = true)
+        val catalog = catalog(release("v0.2.0"))
+        val state = catalog.state(
+            installed,
+            installAllowed = true,
+            available = catalog.availableRelease(installed, AppUpdateChannel.STABLE),
+        )
         assertFalse(state.has(AppReleaseCatalog.UPDATE_KEY))
         assertEquals("0.2.0", state.getString("installedVersion"))
         assertEquals(22L, state.getLong("installedVersionCode"))
@@ -132,7 +142,12 @@ class AppReleaseCatalogTest {
 
     @Test
     fun reportsTheAvailableUpdateWithBytesDigestAndNotes() {
-        val state = catalog(release("v0.2.1-mobile-2")).state(installed, installAllowed = false)
+        val catalog = catalog(release("v0.2.1-mobile-2"))
+        val state = catalog.state(
+            installed,
+            installAllowed = false,
+            available = catalog.availableRelease(installed, AppUpdateChannel.BETA),
+        )
         val available = state.getJSONObject(AppReleaseCatalog.UPDATE_KEY)
         assertEquals("0.2.1-mobile-2", available.getString("version"))
         assertEquals(4096L, available.getLong("bytes"))
@@ -143,19 +158,63 @@ class AppReleaseCatalogTest {
         assertFalse(available.has("url"))
     }
 
+    // ---- 更新频道 ----
+
+    @Test
+    fun stableChannelNeverOffersBetaBuildsToAStableInstall() {
+        // 同一份目录：stable 看不到任何测试构建，beta 照常选中。
+        val catalog = catalog(release("v0.2.1-mobile-2"))
+        assertNull(catalog.availableRelease(installed, AppUpdateChannel.STABLE))
+        assertEquals("0.2.1-mobile-2", catalog.availableRelease(installed, AppUpdateChannel.BETA)?.version)
+    }
+
+    @Test
+    fun stableChannelPicksTheNewestStableNotTheNewestBuild() {
+        val catalog = catalog(release("v0.2.1"), release("v0.2.2-mobile-3"))
+        assertEquals("0.2.1", catalog.availableRelease(installed, AppUpdateChannel.STABLE)?.version)
+        assertEquals("0.2.2-mobile-3", catalog.availableRelease(installed, AppUpdateChannel.BETA)?.version)
+    }
+
+    @Test
+    fun stableChannelStillConvergesAPreviewInstallToTheSameVersionStable() {
+        // 收敛路径与频道正交：切回正式版频道后仍能收到同版本正式版与更高正式版。
+        val preview = InstalledAppInfo(versionName = "0.2.13-mobile-5", versionCode = 35L)
+        assertEquals("0.2.13", catalog(release("v0.2.13")).availableRelease(preview, AppUpdateChannel.STABLE)?.version)
+        assertEquals("0.2.14", catalog(release("v0.2.14")).availableRelease(preview, AppUpdateChannel.STABLE)?.version)
+    }
+
+    @Test
+    fun stableChannelIgnoresNewerBetaBuildsForAPreviewInstall() {
+        // 预览安装在 stable 频道下不收任何测试构建，哪怕它更新。
+        val preview = InstalledAppInfo(versionName = "0.2.13-mobile-5", versionCode = 35L)
+        val catalog = catalog(release("v0.2.13-mobile-9"), release("v0.2.14-mobile-1"))
+        assertNull(catalog.availableRelease(preview, AppUpdateChannel.STABLE))
+    }
+
+    @Test
+    fun unknownChannelIdentifiersFallBackToStable() {
+        // fromId 只认两个合法值；load 把 null 映射成 DEFAULT（需要 Context，不在纯 JVM 覆盖）。
+        assertNull(AppUpdateChannel.fromId(null))
+        assertNull(AppUpdateChannel.fromId(""))
+        assertNull(AppUpdateChannel.fromId("nightly"))
+        assertEquals(AppUpdateChannel.STABLE, AppUpdateChannel.DEFAULT)
+        assertEquals(AppUpdateChannel.STABLE, AppUpdateChannel.fromId("stable"))
+        assertEquals(AppUpdateChannel.BETA, AppUpdateChannel.fromId("beta"))
+    }
+
     // ---- 更新说明 ----
 
     @Test
     fun truncatesNotesToTheFrontendLimitAndTrimsTheEdges() {
         assertEquals(4000, AppReleaseCatalog.MAX_NOTES_CHARS)
         val long = "更".repeat(AppReleaseCatalog.MAX_NOTES_CHARS + 120)
-        val available = catalog(release("v0.2.1", body = "\n  $long  \n")).availableRelease(installed)!!
+        val available = catalog(release("v0.2.1", body = "\n  $long  \n")).availableRelease(installed, AppUpdateChannel.STABLE)!!
         assertEquals(AppReleaseCatalog.MAX_NOTES_CHARS, available.notes.length)
         assertTrue(available.notes.startsWith("更"))
-        assertEquals("没有正文", catalog(release("v0.2.1", body = "  没有正文  ")).availableRelease(installed)!!.notes)
+        assertEquals("没有正文", catalog(release("v0.2.1", body = "  没有正文  ")).availableRelease(installed, AppUpdateChannel.STABLE)!!.notes)
         // 恰好等于上限时不能少一个字。
         val exact = "更".repeat(AppReleaseCatalog.MAX_NOTES_CHARS)
-        assertEquals(AppReleaseCatalog.MAX_NOTES_CHARS, catalog(release("v0.2.1", body = exact)).availableRelease(installed)!!.notes.length)
+        assertEquals(AppReleaseCatalog.MAX_NOTES_CHARS, catalog(release("v0.2.1", body = exact)).availableRelease(installed, AppUpdateChannel.STABLE)!!.notes.length)
     }
 
     // ---- 资产校验 ----
@@ -163,7 +222,7 @@ class AppReleaseCatalogTest {
     @Test
     fun requiresAWellFormedSha256DigestOnTheApkAsset() {
         for (bad in listOf("c".repeat(63), "C".repeat(64), "c".repeat(65), "z".repeat(64), "", null)) {
-            assertNull("digest=$bad 的包不该被当成可用更新", catalog(release("v0.2.1", digest = bad)).availableRelease(installed))
+            assertNull("digest=$bad 的包不该被当成可用更新", catalog(release("v0.2.1", digest = bad)).availableRelease(installed, AppUpdateChannel.STABLE))
         }
     }
 
@@ -171,24 +230,24 @@ class AppReleaseCatalogTest {
     fun requiresAnApkAssetWithAUsableSize() {
         val tooBig = RuntimeLimits.MAX_COMPRESSED_BYTES + 1
         for (bad in listOf<Long?>(0L, -1L, tooBig, null)) {
-            assertNull("size=$bad 的包不该被当成可用更新", catalog(release("v0.2.1", size = bad)).availableRelease(installed))
+            assertNull("size=$bad 的包不该被当成可用更新", catalog(release("v0.2.1", size = bad)).availableRelease(installed, AppUpdateChannel.STABLE))
         }
-        assertEquals(1L, catalog(release("v0.2.1", size = 1L)).availableRelease(installed)?.bytes)
-        assertNull(catalog(release("v0.2.1", assetName = "app-debug.apk")).availableRelease(installed))
+        assertEquals(1L, catalog(release("v0.2.1", size = 1L)).availableRelease(installed, AppUpdateChannel.STABLE)?.bytes)
+        assertNull(catalog(release("v0.2.1", assetName = "app-debug.apk")).availableRelease(installed, AppUpdateChannel.STABLE))
     }
 
     @Test
     fun dropsApkAssetsWhoseDownloadUrlIsNotThisRepository() {
         val foreign = catalog(release("v0.2.1", url = "https://example.com/app-release.apk"))
-        assertNull(foreign.availableRelease(installed))
+        assertNull(foreign.availableRelease(installed, AppUpdateChannel.STABLE))
         val plainHttp = catalog(release("v0.2.1", url = "http://github.com/dphmoblie/deepseek-harness-android/releases/download/v0.2.1/app-release.apk"))
-        assertNull(plainHttp.availableRelease(installed))
+        assertNull(plainHttp.availableRelease(installed, AppUpdateChannel.STABLE))
     }
 
     @Test
     fun ignoresReleasesWhoseTagIsNotAnAppVersion() {
-        assertNull(catalog(release("nightly")).availableRelease(installed))
-        assertNull(catalog(release("v0.2.1-rc.1")).availableRelease(installed))
+        assertNull(catalog(release("nightly")).availableRelease(installed, AppUpdateChannel.STABLE))
+        assertNull(catalog(release("v0.2.1-rc.1")).availableRelease(installed, AppUpdateChannel.STABLE))
     }
 
     // ---- 落地目录 ----

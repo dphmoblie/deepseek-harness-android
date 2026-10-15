@@ -51,6 +51,7 @@ import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
 import io.deepseekharness.mobile.accessibility.toRuleJson
 import io.deepseekharness.mobile.runtime.AppReleaseCatalog
 import io.deepseekharness.mobile.runtime.AppUpdateCache
+import io.deepseekharness.mobile.runtime.AppUpdateChannel
 import io.deepseekharness.mobile.runtime.AppUpdateInstallPolicy
 import io.deepseekharness.mobile.runtime.AppUpdateProgressThrottle
 import io.deepseekharness.mobile.runtime.AppUpdateStorage
@@ -616,7 +617,8 @@ class MobileRuntimePlugin : Plugin() {
      * 应用自身更新状态：本机已安装版本、是否已授权安装未知应用，以及**严格更新**时才出现的 available。
      *
      * 默认缓存优先；forceRefresh 仅接受布尔值。没有更新时 available 键缺失，
-     * cached / checkedAt 说明元数据来源；本机版本和安装权限始终实时读取，不回传下载地址。
+     * cached / checkedAt 说明元数据来源；channel 是当前生效的更新频道（stable / beta），
+     * 界面据此渲染「接收测试版本」开关；本机版本和安装权限始终实时读取，不回传下载地址。
      */
     @PluginMethod
     fun getAppUpdateState(call: PluginCall) {
@@ -629,7 +631,33 @@ class MobileRuntimePlugin : Plugin() {
                 AppUpdateCache.from(context).state(
                     AppReleaseCatalog.installed(context),
                     AppReleaseCatalog.installAllowed(context),
+                    AppUpdateChannel.load(context),
                     forceRefresh,
+                ).toJsObject()
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 切换应用更新频道（stable / beta）：频道持久化在原生 SharedPreferences，前端不存、不传参。
+     *
+     * 频道决定下载哪个 APK，与「目录与地址由原生自己决定」是同一条安全边界。写入后立刻以
+     * forceRefresh 重查并返回完整最新 state（一次往返），缓存本身按频道失效；失败时频道
+     * 可能已在原生生效，界面以这次返回的 state 为准（开关不做乐观态）。
+     */
+    @PluginMethod
+    fun setAppUpdateChannel(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.APP_UPDATE) {
+                val channel = AppUpdateChannel.fromId(call.data.opt("channel") as? String)
+                    ?: throw RuntimeFailure("APP_UPDATE_INPUT_INVALID", "更新频道参数无效")
+                AppUpdateChannel.save(context, channel)
+                AppUpdateCache.from(context).state(
+                    AppReleaseCatalog.installed(context),
+                    AppReleaseCatalog.installAllowed(context),
+                    channel,
+                    forceRefresh = true,
                 ).toJsObject()
             }
         }
@@ -743,8 +771,10 @@ class MobileRuntimePlugin : Plugin() {
 
     /** 与展示复用同一受校验缓存；桥层不暴露 URL，没有更新时明确失败。 */
     private fun requireAppUpdate(): AppReleaseCatalog.Release =
-        AppUpdateCache.from(context).availableRelease(AppReleaseCatalog.installed(context))
-            ?: throw RuntimeFailure("APP_UPDATE_UNAVAILABLE", "当前没有可用的应用更新")
+        AppUpdateCache.from(context).availableRelease(
+            AppReleaseCatalog.installed(context),
+            AppUpdateChannel.load(context),
+        ) ?: throw RuntimeFailure("APP_UPDATE_UNAVAILABLE", "当前没有可用的应用更新")
 
     /**
      * 下载层用的是运行时归档的失败码与文案，这里翻译成应用更新的说法。

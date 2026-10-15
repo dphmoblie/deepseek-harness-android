@@ -1,5 +1,6 @@
 import { validatePluginRequest } from './plugins'
 import type {
+  AppUpdateChannel,
   AppUpdateState,
   AutomationTaskState,
   DeviceCapabilityReport,
@@ -688,6 +689,10 @@ export function createBrowserBridge(): RuntimeBridge {
     listRuntimeReleases: (): Promise<RuntimeReleaseList> => Promise.reject(new Error('浏览器模式下没有更新渠道')),
     getAppUpdateState: (forceRefresh = false): Promise<AppUpdateState> => {
       if (typeof forceRefresh !== 'boolean') return Promise.reject(new Error('应用更新刷新参数无效'))
+      return Promise.reject(new Error('浏览器模式下没有应用更新'))
+    },
+    setAppUpdateChannel: (channel: AppUpdateChannel): Promise<AppUpdateState> => {
+      if (channel !== 'stable' && channel !== 'beta') return Promise.reject(new Error('应用更新频道参数无效'))
       return Promise.reject(new Error('浏览器模式下没有应用更新'))
     },
     downloadAppUpdate: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能下载安装包')),

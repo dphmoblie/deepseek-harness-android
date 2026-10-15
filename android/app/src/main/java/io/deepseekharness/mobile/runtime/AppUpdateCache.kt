@@ -18,32 +18,42 @@ internal class AppUpdateCache(
 
     private data class Snapshot(
         val installed: InstalledAppInfo,
+        val channel: AppUpdateChannel,
         val checkedAt: Long,
         val available: AppReleaseCatalog.Release?,
     )
     private data class Result(val snapshot: Snapshot, val cached: Boolean)
-    private val inFlight = mutableMapOf<InstalledAppInfo, CompletableFuture<Snapshot>>()
+    /** 同一台设备两个频道各自排队：并发检查互不共享请求，也不互相覆盖缓存。 */
+    private data class LookupKey(val installed: InstalledAppInfo, val channel: AppUpdateChannel)
+    private val inFlight = mutableMapOf<LookupKey, CompletableFuture<Snapshot>>()
 
-    fun state(installed: InstalledAppInfo, installAllowed: Boolean, forceRefresh: Boolean = false): JSONObject {
-        val result = lookup(installed, forceRefresh)
+    fun state(
+        installed: InstalledAppInfo,
+        installAllowed: Boolean,
+        channel: AppUpdateChannel,
+        forceRefresh: Boolean = false,
+    ): JSONObject {
+        val result = lookup(installed, channel, forceRefresh)
         return catalog.state(installed, installAllowed, result.snapshot.available)
             .put("cached", result.cached)
             .put("checkedAt", result.snapshot.checkedAt)
+            .put("channel", channel.id)
     }
 
-    fun availableRelease(installed: InstalledAppInfo): AppReleaseCatalog.Release? =
-        lookup(installed, forceRefresh = false).snapshot.available
+    fun availableRelease(installed: InstalledAppInfo, channel: AppUpdateChannel): AppReleaseCatalog.Release? =
+        lookup(installed, channel, forceRefresh = false).snapshot.available
 
-    private fun lookup(installed: InstalledAppInfo, forceRefresh: Boolean): Result {
+    private fun lookup(installed: InstalledAppInfo, channel: AppUpdateChannel, forceRefresh: Boolean): Result {
+        val key = LookupKey(installed, channel)
         val pending: CompletableFuture<Snapshot>
         val refresh: Boolean
         synchronized(this) {
             val stored = read()
-            if (!forceRefresh && stored != null && usable(stored, installed)) return Result(stored, cached = true)
-            val existing = inFlight[installed]
+            if (!forceRefresh && stored != null && usable(stored, installed, channel)) return Result(stored, cached = true)
+            val existing = inFlight[key]
             if (existing == null) {
                 refresh = true
-                pending = CompletableFuture<Snapshot>().also { inFlight[installed] = it }
+                pending = CompletableFuture<Snapshot>().also { inFlight[key] = it }
             } else {
                 refresh = false
                 pending = existing
@@ -51,15 +61,15 @@ internal class AppUpdateCache(
         }
         if (refresh) {
             try {
-                val available = catalog.availableRelease(installed)
-                val snapshot = Snapshot(installed, now(), available)
+                val available = catalog.availableRelease(installed, channel)
+                val snapshot = Snapshot(installed, channel, now(), available)
                 synchronized(this) { storage.write(encode(snapshot)) }
                 pending.complete(snapshot)
             } catch (error: Throwable) {
                 // A failed forced check must not replace a previously verified release.
                 pending.completeExceptionally(error)
             } finally {
-                synchronized(this) { inFlight.remove(installed) }
+                synchronized(this) { inFlight.remove(key) }
             }
         }
         return try {
@@ -72,7 +82,8 @@ internal class AppUpdateCache(
         }
     }
 
-    private fun usable(snapshot: Snapshot, installed: InstalledAppInfo): Boolean {
+    private fun usable(snapshot: Snapshot, installed: InstalledAppInfo, channel: AppUpdateChannel): Boolean {
+        if (snapshot.channel != channel) return false
         if (snapshot.installed != installed || snapshot.checkedAt > now()) return false
         return snapshot.available?.let { catalog.isUpdateOf(installed, it) }
             ?: (now() - snapshot.checkedAt < NO_UPDATE_TTL_MILLIS)
@@ -86,7 +97,8 @@ internal class AppUpdateCache(
     }
 
     private fun decode(json: JSONObject): Snapshot? {
-        if (json.opt("schema") != 1) return null
+        if (json.opt("schema") != 2) return null
+        val channel = AppUpdateChannel.fromId(json.opt("channel") as? String) ?: return null
         val name = json.opt("installedVersion") as? String ?: return null
         if (!GitHubReleases.isIdentifier(name)) return null
         val code = integer(json.opt("installedVersionCode")) ?: return null
@@ -108,11 +120,12 @@ internal class AppUpdateCache(
                 if (!catalog.isUpdateOf(installed, it)) return null
             }
         } else null
-        return Snapshot(installed, checkedAt, release)
+        return Snapshot(installed, channel, checkedAt, release)
     }
 
     private fun encode(snapshot: Snapshot): String {
-        val json = JSONObject().put("schema", 1)
+        val json = JSONObject().put("schema", 2)
+            .put("channel", snapshot.channel.id)
             .put("installedVersion", snapshot.installed.versionName)
             .put("installedVersionCode", snapshot.installed.versionCode)
             .put("checkedAt", snapshot.checkedAt)

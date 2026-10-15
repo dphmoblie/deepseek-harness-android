@@ -54,6 +54,50 @@ internal object AppUpdateVersion {
 }
 
 /**
+ * 应用自身更新的发布频道。
+ *
+ * 持久化在原生 SharedPreferences（前端不存、不传参）：频道决定下载哪个 APK，与
+ * 「目录与地址由原生自己决定」是同一条安全边界。 [STABLE] 只收正式版（无 `-mobile-N`
+ * 后缀），[BETA] 额外把测试构建纳入候选；已装测试构建的设备在任何频道下都能收到
+ * 同版本正式版（收敛路径在 [AppReleaseCatalog] 内，与频道正交）。
+ */
+internal enum class AppUpdateChannel(val id: String) {
+    STABLE("stable"),
+    BETA("beta");
+
+    companion object {
+        /** 未设置或读不到时的频道：正式版。 */
+        val DEFAULT = STABLE
+
+        private const val PREFS_NAME = "dsh-app-update-channel"
+        private const val KEY_CHANNEL = "channel"
+
+        /** 桥入参/持久化值 → 频道；非法值返回 null，由调用方决定报错还是回默认。 */
+        fun fromId(value: String?): AppUpdateChannel? = entries.firstOrNull { it.id == value }
+
+        /** 读取用户选择的频道；读不到或值被改坏时按 [DEFAULT] 处理。 */
+        fun load(context: Context): AppUpdateChannel = try {
+            fromId(
+                context.applicationContext
+                    .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getString(KEY_CHANNEL, null),
+            ) ?: DEFAULT
+        } catch (_: Throwable) {
+            DEFAULT
+        }
+
+        /** 持久化频道选择；apply 异步落盘，失败时本次进程内仍以新值为准（后续读取回默认）。 */
+        fun save(context: Context, channel: AppUpdateChannel) {
+            context.applicationContext
+                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putString(KEY_CHANNEL, channel.id)
+                .apply()
+        }
+    }
+}
+
+/**
  * 应用自身（APK）的更新目录。
  *
  * 与运行时镜像分开：运行时更新换的是 rootfs，这里换的是 APK，版本号体系也不同。
@@ -82,7 +126,7 @@ internal class AppReleaseCatalog(
     fun state(
         installed: InstalledAppInfo,
         installAllowed: Boolean,
-        available: Release? = availableRelease(installed),
+        available: Release?,
     ): JSONObject {
         val state = JSONObject()
             .put("installedVersion", installed.versionName)
@@ -101,8 +145,13 @@ internal class AppReleaseCatalog(
         return state
     }
 
-    /** 严格大于已安装版本的最新发布；没有可用更新时返回 null。 */
-    fun availableRelease(installed: InstalledAppInfo): Release? {
+    /**
+     * 严格大于已安装版本的最新发布；没有可用更新时返回 null。
+     *
+     * [channel] 为 [AppUpdateChannel.STABLE] 时跳过一切 `-mobile-N` 测试构建，候选只剩正式版；
+     * [AppUpdateChannel.BETA] 不做这层过滤（行为与引入频道前一致）。
+     */
+    fun availableRelease(installed: InstalledAppInfo, channel: AppUpdateChannel): Release? {
         // 读不出已安装版本就无法证明「严格更新」：宁可回「没有更新」，
         // 也不要怂恿用户去装一个可能比本机更旧的包。
         val installedVersion = AppUpdateVersion.parse(installed.versionName) ?: return null
@@ -110,6 +159,7 @@ internal class AppReleaseCatalog(
         var bestVersion: AppUpdateVersion.Version? = null
         for (release in GitHubReleases.parse(catalogBytes())) {
             val version = AppUpdateVersion.parse(release.tag) ?: continue
+            if (channel == AppUpdateChannel.STABLE && version.suffix != 0L) continue
             if (!isUpdateOf(installedVersion, version)) continue
             if (bestVersion != null && version <= bestVersion) continue
             val asset = GitHubReleases.asset(release, APK_ASSET) ?: continue
@@ -142,8 +192,10 @@ internal class AppReleaseCatalog(
      * 预览版先出、验证通过后才发正式版，而序号只记 CI 运行号，正式版的序号反而是 0；
      * 少了这条，正式版会被判成「更旧」，这些设备永远收不到它，只能手动装包。
      *
-     * 稳定版不跟随同版本测试构建：正式版用户安装完成后，不应再次看到同一版本的测试包。
-     * 测试版用户仍会收到同版本正式版，以及同版本更高测试构建。
+     * 与频道的关系：正式版频道对测试构建的整体过滤在 [availableRelease] 里做，本函数不感知
+     * 频道；「正式版安装不跟随同版本测试包」这条既有规则留在本函数内，两个频道下都生效——
+     * 否则测试版频道的用户装完正式版后，会再次看到同一版本的最新测试构建。收敛路径也因此
+     * 在两个频道下都可用：测试版用户切回正式版频道后，仍能收到同版本正式版。
      */
     private fun isUpdateOf(installed: AppUpdateVersion.Version, candidate: AppUpdateVersion.Version): Boolean {
         // 稳定版（无 mobile 后缀）不接受同版本测试包；否则正式版安装完成后会再次提示

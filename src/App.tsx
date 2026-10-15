@@ -107,6 +107,7 @@ import type {
   AccessibilityAutomationState,
   AccessibilityServiceStatus,
   AppUpdateProgress,
+  AppUpdateChannel,
   AppUpdateState,
   HarnessLog,
   KeepAliveState,
@@ -2412,6 +2413,8 @@ function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restoreSnapsho
 interface AppUpdateSectionProps {
   /** 读取应用自身（APK）的更新状态：包含已安装版本、是否允许安装未知来源、有没有新版本。 */
   loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>
+  /** 切换更新频道；一次往返返回最新状态，失败时开关回弹（不做乐观态）。 */
+  setUpdateChannel: (channel: AppUpdateChannel) => Promise<AppUpdateState>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
   /** 订阅应用更新包的下载进度；原生侧只在真的下载时推送（见 [AppUpdateProgress]）。 */
@@ -2431,11 +2434,12 @@ interface AppUpdateSectionProps {
  * 上面几块换的是运行时镜像。安装必须由系统安装器完成，应用只能把包递过去，
  * 所以这里会如实说明「会跳到系统安装界面」以及「需要允许安装未知来源」。
  */
-function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInstallSettings, notify, subscribeProgress, reminderEnabled, onReminderEnabledChange, reminderStorageAvailable }: AppUpdateSectionProps) {
+function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, installUpdate, openInstallSettings, notify, subscribeProgress, reminderEnabled, onReminderEnabledChange, reminderStorageAvailable }: AppUpdateSectionProps) {
   const [state, setState] = useState<AppUpdateState | null>(null)
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
   const [busy, setBusy] = useState<'download' | 'install' | null>(null)
+  const [switchingChannel, setSwitchingChannel] = useState(false)
   const [progress, setProgress] = useState<AppUpdateProgress | null>(null)
   const readRevision = useRef(0)
 
@@ -2501,6 +2505,29 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
   }
 
   const available = state?.available
+
+  /**
+   * 切换更新频道：原生侧写入后以 forceRefresh 重查，一次往返带回最新状态。
+   *
+   * 开关不做乐观态——checked 始终以原生回读的 state.channel 为准，失败自然回弹。
+   * 复用 readRevision 守卫：切换进行中禁用所有会触发 load 的按钮，所以这个序号
+   * 只会被卸载清理打断，不会被本组件的其它读取覆盖。
+   */
+  const switchChannel = (next: AppUpdateChannel): void => {
+    if (state === null || loading || busy !== null || switchingChannel) return
+    const revision = ++readRevision.current
+    setSwitchingChannel(true)
+    void (async () => {
+      try {
+        const fresh = await setUpdateChannel(next)
+        if (revision === readRevision.current) setState(fresh)
+      } catch (error) {
+        if (revision === readRevision.current) notify(errorMessage(error), 'error')
+      } finally {
+        if (revision === readRevision.current) setSwitchingChannel(false)
+      }
+    })()
+  }
   // 百分比只在拿到原生进度、且总量为正时才有意义；否则显示「处理中」的不确定进度条。
   const downloadPercent = progress === null || progress.totalBytes <= 0
     ? null
@@ -2517,6 +2544,21 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
       </div>
 
       {loading && <p className="harness-log-state">{t("正在读取应用版本…")}</p>}
+
+      <label className="toggle-row">
+        <span>
+          <strong>{t("接收测试版本")}</strong>
+          <small>{t("开启后，更新检查会包含 -mobile 后缀的测试构建；关闭后只接收正式版更新。")}</small>
+        </span>
+        <input
+          type="checkbox"
+          role="switch"
+          aria-label={t("接收测试版本")}
+          checked={state?.channel === 'beta'}
+          disabled={state === null || loading || busy !== null || switchingChannel}
+          onChange={event => switchChannel(event.target.checked ? 'beta' : 'stable')}
+        />
+      </label>
 
       <label className="toggle-row">
         <span>
@@ -2574,7 +2616,7 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
                     onClick={() => {
                       void openInstallSettings().then(() => load()).catch(error => notify(errorMessage(error), 'error'))
                     }}
-                    disabled={loading || busy !== null}
+                    disabled={loading || busy !== null || switchingChannel}
                   >
                     <ExternalLink size={18} />{t("去系统设置允许安装")}
                   </button>
@@ -2601,7 +2643,7 @@ function AppUpdateSection({ loadUpdate, downloadUpdate, installUpdate, openInsta
               {busy === 'install' ? <Loader2 className="spin" size={18} /> : <Rocket size={18} />}
               {t("安装更新")}
             </button>
-            <button className="button button-secondary" type="button" onClick={() => load(true)} disabled={loading || busy !== null}>
+            <button className="button button-secondary" type="button" onClick={() => load(true)} disabled={loading || busy !== null || switchingChannel}>
               <RefreshCw size={18} />{t("重新检查")}
             </button>
           </div>
@@ -2646,6 +2688,8 @@ interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
   restoreSnapshot: (id: string) => Promise<RuntimeSessionSnapshotRestoreResult>
   deleteSnapshot: (id: string) => Promise<RuntimeSessionSnapshotState>
   loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>
+  /** 应用更新频道切换，只透传给 [AppUpdateSection]。 */
+  setUpdateChannel: (channel: AppUpdateChannel) => Promise<AppUpdateState>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
   /** 应用更新包的下载进度订阅，只透传给 [AppUpdateSection]。 */
@@ -2680,6 +2724,7 @@ function RuntimeVersionsScreen({
   restoreSnapshot,
   deleteSnapshot,
   loadUpdate,
+  setUpdateChannel,
   downloadUpdate,
   installUpdate,
   subscribeUpdateProgress,
@@ -2721,6 +2766,7 @@ function RuntimeVersionsScreen({
 
       <AppUpdateSection
         loadUpdate={loadUpdate}
+        setUpdateChannel={setUpdateChannel}
         downloadUpdate={downloadUpdate}
         installUpdate={installUpdate}
         subscribeProgress={subscribeUpdateProgress}
@@ -6159,6 +6205,7 @@ export function App() {
   const restoreSessionSnapshot = useCallback((id: string) => runtimeBridge.restoreRuntimeSessionSnapshot(id), [])
   const deleteSessionSnapshot = useCallback((id: string) => runtimeBridge.deleteRuntimeSessionSnapshot(id), [])
   const loadAppUpdate = useCallback((forceRefresh = false) => runtimeBridge.getAppUpdateState(forceRefresh), [])
+  const setAppUpdateChannel = useCallback((channel: AppUpdateChannel) => runtimeBridge.setAppUpdateChannel(channel), [])
   const appUpdateReminder = useAppUpdateReminder(language !== null && !booting && !onboardingOpen, loadAppUpdate)
   const downloadAppUpdate = useCallback(() => runtimeBridge.downloadAppUpdate(), [])
   const installAppUpdate = useCallback(() => runtimeBridge.installAppUpdate(), [])
@@ -6850,6 +6897,7 @@ export function App() {
           restoreSnapshot={restoreSessionSnapshot}
           deleteSnapshot={deleteSessionSnapshot}
           loadUpdate={loadAppUpdate}
+          setUpdateChannel={setAppUpdateChannel}
           downloadUpdate={downloadAppUpdate}
           installUpdate={installAppUpdate}
           subscribeUpdateProgress={runtimeBridge.addAppUpdateProgressListener}

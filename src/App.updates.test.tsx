@@ -9,7 +9,7 @@ vi.mock('./components/TerminalPanel', () => ({ TerminalPanel: () => <div /> }))
 import { App } from './App'
 
 const cachedUpdate: AppUpdateState = {
-  installedVersion: '0.2.0', installedVersionCode: 22, installAllowed: false,
+  installedVersion: '0.2.0', installedVersionCode: 22, channel: 'stable', installAllowed: false,
   cached: true, checkedAt: 1_700_000_000_000,
   available: { version: '0.3.0', bytes: 4096, sha256: 'a'.repeat(64), notes: '公告正文'.repeat(100) },
 }

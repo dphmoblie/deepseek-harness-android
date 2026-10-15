@@ -171,6 +171,7 @@ export const bridge = {
   // 缺桩会让 effect 抛错并卸载整棵树（同上一条注释里的坑）。
   listRuntimeReleases: vi.fn(),
   getAppUpdateState: vi.fn(),
+  setAppUpdateChannel: vi.fn(),
   downloadAppUpdate: vi.fn(),
   installAppUpdate: vi.fn(),
   openAppUpdateInstallSettings: vi.fn(),
@@ -587,8 +588,16 @@ export function beforeEachAppTest(): void {
   bridge.getAppUpdateState.mockResolvedValue({
     installedVersion: '0.2.0',
     installedVersionCode: 22,
+    channel: 'stable',
     installAllowed: false,
   })
+  // 默认回显入参频道的最小状态（与 getAppUpdateState 默认桩同源）：关心频道语义的用例自己覆盖。
+  bridge.setAppUpdateChannel.mockImplementation((channel: 'stable' | 'beta') => Promise.resolve({
+    installedVersion: '0.2.0',
+    installedVersionCode: 22,
+    channel,
+    installAllowed: false,
+  }))
   bridge.downloadAppUpdate.mockResolvedValue(undefined)
   bridge.installAppUpdate.mockResolvedValue(undefined)
   bridge.openAppUpdateInstallSettings.mockResolvedValue(undefined)

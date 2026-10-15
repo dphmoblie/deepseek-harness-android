@@ -5,7 +5,7 @@ import type { AppUpdateState } from './platform/types'
 import type * as ReminderModule from './appUpdateReminder'
 
 const release = { version: '0.3.0', bytes: 1024, sha256: 'a'.repeat(64), notes: '更新说明' }
-const noUpdate: AppUpdateState = { installedVersion: '0.2.13', installedVersionCode: 23, installAllowed: false }
+const noUpdate: AppUpdateState = { installedVersion: '0.2.13', installedVersionCode: 23, channel: 'stable', installAllowed: false }
 const update: AppUpdateState = { ...noUpdate, available: release }
 let reminder: typeof ReminderModule
 let visibility: DocumentVisibilityState = 'visible'

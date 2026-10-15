@@ -409,6 +409,14 @@ export interface AppUpdateRelease {
 }
 
 /**
+ * 应用自身（APK）的更新频道。
+ *
+ * `stable` 只接收正式版更新（默认）；`beta` 额外把 `-mobile-N` 测试构建纳入候选并自动取最新。
+ * 频道持久化在原生 SharedPreferences，前端不存、不传参——这里只是原生事实的回显。
+ */
+export type AppUpdateChannel = 'stable' | 'beta'
+
+/**
  * 应用自身的更新状态。
  *
  * `installedVersionCode` 是 Android 的 versionCode（单调递增，用来判断新旧），
@@ -421,6 +429,8 @@ export interface AppUpdateState {
   /** 发布信息是否来自缓存；权限和已安装版本始终为实时值。 */
   cached?: boolean
   checkedAt?: number
+  /** 当前生效的更新频道；available 已按它过滤。 */
+  channel: AppUpdateChannel
   /**
    * 本应用是否已被授予「安装未知应用」权限（原生 `canRequestPackageInstalls()`）。
    *
@@ -1907,8 +1917,15 @@ export interface RuntimeBridge {
    * 界面要按「能不能装」分开渲染，而不是把列表里的每一项都当成可安装。
    */
   listRuntimeReleases: () => Promise<RuntimeReleaseList>
-  /** 应用自身的更新状态：已安装版本，以及是否有可用更新。 */
+  /** 应用自身的更新状态：已安装版本、当前频道，以及按频道过滤后是否有可用更新。 */
   getAppUpdateState: (forceRefresh?: boolean) => Promise<AppUpdateState>
+  /**
+   * 切换应用更新频道并返回最新状态（一次往返：原生写入后强制重查）。
+   *
+   * 失败时频道可能已在原生生效：以重查的 [RuntimeBridge.getAppUpdateState] 为准，
+   * 界面不要把开关做成乐观态。
+   */
+  setAppUpdateChannel: (channel: AppUpdateChannel) => Promise<AppUpdateState>
   /**
    * 下载应用更新包（目标是原生侧当前认定的那个可用更新）。
    *

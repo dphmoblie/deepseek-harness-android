@@ -1023,6 +1023,8 @@ export const english: Readonly<Record<string, string>> = {
   "更新包下载进度": "Update package download progress",
   "安装更新需要先下载一次：没下载就点安装，会提示先下载。下载只走 GitHub 发布页，校验不过不会安装。": "Installing requires a download first: tapping install without one reports that you must download first. Downloads only come from the GitHub releases page, and a package that fails verification is never installed.",
   "每日更新提醒": "Daily update reminders",
+  "接收测试版本": "Receive beta versions",
+  "开启后，更新检查会包含 -mobile 后缀的测试构建；关闭后只接收正式版更新。": "When enabled, update checks include test builds with the -mobile suffix; when disabled, only stable releases are offered.",
   "每天首次打开应用时提示一次；关闭后仍可手动检查更新。": "Show once on the first app opening each day; manual checks remain available when disabled.",
   "提醒偏好或日期未能持久保存，重启后可能再次提醒。": "Reminder preferences or dates could not be saved. Reminders may appear again after restart.",
   "发现应用新版本": "New app version available",

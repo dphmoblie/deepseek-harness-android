@@ -1644,6 +1644,7 @@ describe('应用更新状态校验', () => {
   const state = (overrides: Record<string, unknown> = {}) => ({
     installedVersion: '0.2.0',
     installedVersionCode: 22,
+    channel: 'stable',
     installAllowed: false,
     ...overrides,
   })
@@ -1659,6 +1660,7 @@ describe('应用更新状态校验', () => {
     expect(validateAppUpdateState(state())).toEqual({
       installedVersion: '0.2.0',
       installedVersionCode: 22,
+      channel: 'stable',
       installAllowed: false,
     })
     expect(validateAppUpdateState(state({ installAllowed: true })).installAllowed).toBe(true)
@@ -1713,6 +1715,16 @@ describe('应用更新状态校验', () => {
       expect(() => validateAppUpdateState(state({ installAllowed: value })), String(value))
         .toThrow('应用更新安装权限状态无效')
     }
+  })
+
+  it('频道缺失或非法一律拒绝，合法值在有无可用更新两个分支都原样保留', () => {
+    for (const value of [undefined, null, '', 'nightly', 'STABLE', 1, true]) {
+      expect(() => validateAppUpdateState(state({ channel: value })), String(value))
+        .toThrow('应用更新频道状态无效')
+    }
+    expect(validateAppUpdateState(state({ channel: 'stable' })).channel).toBe('stable')
+    expect(validateAppUpdateState(state({ channel: 'beta' })).channel).toBe('beta')
+    expect(validateAppUpdateState(state({ channel: 'beta', available: release() })).channel).toBe('beta')
   })
 
   it('已安装版本与版本代码走同一套规则', () => {
