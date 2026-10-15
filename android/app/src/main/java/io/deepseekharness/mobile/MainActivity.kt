@@ -136,7 +136,7 @@ class MainActivity : BridgeActivity() {
         }
     }
 
-    /** Accept a user-selected content URI from another app and copy it into private inbox storage. */
+    /** 从外部 Intent 拿到用户选中的 content URI，复制进私有 inbox 目录。 */
     private fun handleExternalFileIntent(intent: Intent) {
         // 普通桌面启动使用 ACTION_MAIN（或没有 action），不属于外部文件导入。
         // 只有系统明确发起的查看/分享 Intent 才进入 URI 校验，否则每次打开应用都会
@@ -226,7 +226,7 @@ class MainActivity : BridgeActivity() {
         return ImportResult.SUCCESS
     }
 
-    /** Fixed path segments are checked without following links before accepting provider data. */
+    /** 准备 inbox 目录；固定路径段在接受 provider 数据前先检查是否存在且非软链接。 */
     private fun prepareInbox(store: RuntimeStore): File? = try {
         if (RuntimeFiles.isDirectoryNoFollow(store.currentRoot)) {
             val rootHome = requireDirectory(File(store.currentRoot, "root")) ?: return null
@@ -305,13 +305,13 @@ class MainActivity : BridgeActivity() {
         }
     }
 
-    /** Some cloud providers expose virtual documents only through typed asset access. */
+    /** 部分云文档服务只通过 typed asset 暴露虚拟文件，openInputStream 拿不到。 */
     @Throws(IOException::class, SecurityException::class)
     private fun openSharedInputStream(uri: Uri): InputStream {
         try {
             contentResolver.openInputStream(uri)?.let { return it }
         } catch (_: FileNotFoundException) {
-            // Fall through to the typed API used by virtual documents.
+            // 普通 openInputStream 失败后回退到 openTypedAssetFileDescriptor（云文档虚拟文件走这里）。
         }
         val mimeType = try {
             contentResolver.getType(uri)

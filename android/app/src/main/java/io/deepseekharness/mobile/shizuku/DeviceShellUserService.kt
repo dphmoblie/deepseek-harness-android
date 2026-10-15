@@ -59,9 +59,8 @@ class DeviceShellUserService() : IDeviceShellService.Stub() {
                 arrayOf(DEVICE_SHELL),
                 arrayOf(
                     "HOME=/data/local/tmp",
-                    // Android framework tools read these variables during bootstrap. The PTY
-                    // intentionally starts with a small environment, so provide the platform
-                    // roots explicitly instead of relying on the parent Shizuku process.
+                    // Android 框架工具启动时读取这些变量；PTY 刻意用小环境启动，
+                    // 所以显式给出平台根，而不是继承父 Shizuku 进程的环境。
                     "ANDROID_DATA=/data",
                     "ANDROID_ROOT=/system",
                     "ANDROID_STORAGE=/storage",
@@ -185,17 +184,17 @@ class DeviceShellUserService() : IDeviceShellService.Stub() {
             try {
                 session.callback.asBinder().unlinkToDeath(session.deathRecipient, 0)
             } catch (_: Throwable) {
-                // The callback binder may already be dead.
+                // 回调的 binder 可能已经死了（客户端进程先关）。
             }
             try {
                 NativePty.close(session.fileDescriptor)
             } catch (_: Throwable) {
-                // Descriptor ownership ends with this session.
+                // 描述符所有权随本会话结束，这里吞掉也不影响外部状态。
             }
             try {
                 session.callback.onExit(session.id, exitCode)
             } catch (_: RemoteException) {
-                // The client may have closed with the terminal.
+                // 客户端可能已经把终端关掉了，回调失败正常。
             }
             sessionSlots.release()
         }
@@ -213,7 +212,7 @@ class DeviceShellUserService() : IDeviceShellService.Stub() {
                 try {
                     NativePty.signal(session.processId, SIGNAL_KILL)
                 } catch (_: Throwable) {
-                    // Process may already be gone.
+                    // 进程可能已经自己退出了，signal 打不到。
                 }
             }
         }, 2, TimeUnit.SECONDS)

@@ -6390,7 +6390,7 @@ export function App() {
     void runtimeBridge.getShizukuState()
       .then(next => { if (!cancelled) setShizuku(next) })
       .catch(() => {
-        // Shizuku is optional and must never block the Harness conversation.
+        // Shizuku 是可选能力，查不到状态绝不能阻塞 Harness 对话启动。
       })
 
     void runtimeBridge.getAccessibilityAutomationState()
@@ -6665,7 +6665,7 @@ export function App() {
         try {
           setRuntime(await runtimeBridge.getState())
         } catch {
-          // Preserve the install failure; state refresh is best effort.
+          // 安装失败要保留；刷新运行时状态只是尽力而为，不要再覆盖这个错误。
         }
         throw error
       }
@@ -6778,8 +6778,8 @@ export function App() {
         void runtimeBridge.getKeepAliveState()
           .then(setKeepAlive)
           .catch(() => { /* 保留上一次已知状态。 */ })
-        // HarnessActivity overlays MainActivity. Keeping settings underneath makes
-        // its native management button return to the intended management surface.
+        // HarnessActivity 覆盖在 MainActivity 之上；把设置留在底页，原生"管理"按钮
+        // 就能回到正确的管理界面，而不是覆盖 HarnessActivity。
         setActiveView('settings')
         await runtimeBridge.openHarness(sessionId)
       }
@@ -6821,7 +6821,7 @@ export function App() {
         try {
           setRuntime(await runtimeBridge.getState())
         } catch {
-          // The launch error is the actionable failure; refresh is best effort.
+          // 打开会话的错误才是主故障；刷新状态只是尽力而为，不要覆盖主错误。
         }
         notify(errorMessage(error), 'error')
       } finally {
@@ -7491,7 +7491,7 @@ export function App() {
           </div>
         </header>
 
-        {/* A new page starts at its heading, not the previous page's scroll offset. */}
+        {/* 切换页面后从顶部重新渲染，不保留上一页的滚动位置。 */}
         <main className="app-main" key={activeView}>{screen}</main>
       </div>
       <BottomNavigation activeView={activeView} onNavigate={setActiveView} />
@@ -7535,7 +7535,7 @@ export function App() {
             try {
               window.localStorage.setItem(ONBOARDING_STORAGE_KEY, '1')
             } catch {
-              // Storage can be unavailable in restricted WebViews; closing remains in-memory.
+              // 受限 WebView 里 localStorage 可能不可用；首次引导关闭的状态仍在内存中即可。
             }
             setOnboardingOpen(false)
           }}

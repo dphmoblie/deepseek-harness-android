@@ -12,7 +12,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import java.util.UUID
 
-/** Receives the system document picker's result for the Service-owned overlay WebView. */
+/** 为 Service 持有的悬浮球 WebView 接收系统文档选择器的结果。 */
 class OverlayFileChooserActivity : AppCompatActivity() {
     private var request: String? = null
     private var completed = false
@@ -92,7 +92,7 @@ class OverlayFileChooserActivity : AppCompatActivity() {
     }
 }
 
-/** Accept only short, standard MIME values from the page before passing them to Android. */
+/** 只放行短而标准的 MIME 值，再交给 Android 处理。 */
 internal object OverlayFileChooserPolicy {
     private val MIME_TYPE = Regex("[A-Za-z0-9!#$&^_.+-]{1,64}/(?:[A-Za-z0-9!#$&^_.+-]{1,64}|\\*)")
 

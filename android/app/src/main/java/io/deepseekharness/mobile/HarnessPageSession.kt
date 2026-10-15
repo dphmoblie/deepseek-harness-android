@@ -9,7 +9,7 @@ internal enum class CookieLoadDecision {
     IGNORE,
 }
 
-/** Ensures an asynchronous CookieManager callback can trigger at most one live page load. */
+/** 让异步 CookieManager 回调在一次会话里最多只触发一次页面加载。 */
 internal class HarnessPageLoadGate {
     private var active = true
     private var handled = false
@@ -66,7 +66,7 @@ internal object HarnessPageUrl {
     fun parseEntryUrl(raw: String?): URI? {
         if (raw.isNullOrEmpty() || raw.length > 128) return null
         HarnessWebAuth.parseLaunchUrl(raw)?.let { return it }
-        // Security: legacy entries accept only the canonical loopback root without a query.
+        // 安全校验：遗留入口只接受不带查询串的标准 loopback 根 URL。
         val port = ROOT_URL.matchEntire(raw)?.groupValues?.get(1)?.toIntOrNull() ?: return null
         if (port !in 1024..65535) return null
         return URI(raw)
@@ -101,8 +101,8 @@ internal object HarnessPageUrl {
             runtimeVersion
         }
         val validSession = requireValidSessionId(sessionId)
-        // Hashed assets may use WebView's HTTP cache. These version keys invalidate the HTML entry
-        // whenever either the APK shell or independently updated runtime frontend changes.
+        // 带哈希的前端资源可以靠 WebView HTTP 缓存复用；这里补上 APK 版本和运行时版本两条键，
+        // 任一维变化都会让入口 URL 失效，避免把旧前端当成同一份入口页继续复用。
         val query = listOfNotNull(
             entry.rawQuery,
             "$APP_VERSION_PARAM=$appVersion",
