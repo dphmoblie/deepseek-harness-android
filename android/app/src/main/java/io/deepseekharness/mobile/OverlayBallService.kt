@@ -157,7 +157,7 @@ class OverlayBallService : Service() {
         // 权限可能在服务运行期间被系统或用户在设置里撤销，每次启动都重新确认。
         if (!OverlayBallPolicy.shouldShowBall(
                 enabled = enabled,
-                canDrawOverlays = Settings.canDrawOverlays(this),
+                canDrawOverlays = runCatching { Settings.canDrawOverlays(this) }.getOrDefault(false),
             )
         ) {
             lastStartFailure = FAILURE_OVERLAY_DENIED
@@ -268,7 +268,7 @@ class OverlayBallService : Service() {
      * 记录字段与 onStartCommand 的驳回路径保持一致，便于按同一组条件排查。
      */
     private fun stopIfOverlayPermissionRevoked(): Boolean {
-        if (Settings.canDrawOverlays(this)) return false
+        if (runCatching { Settings.canDrawOverlays(this) }.getOrDefault(false)) return false
         diagnostics.record(
             DiagnosticLevel.WARN,
             DiagnosticEvent.KEEP_ALIVE,

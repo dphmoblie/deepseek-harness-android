@@ -1747,8 +1747,8 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     @PermissionCallback
-    private fun notificationPermissionCallback(call: PluginCall) {
-        call.resolve(
+    private fun notificationPermissionCallback(call: PluginCall?) {
+        call?.resolve(
             JSObject()
                 .put("granted", notificationPermissionGranted())
                 .put("supported", true),
@@ -3063,8 +3063,8 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     @PermissionCallback
-    private fun mediaPermissionCallback(call: PluginCall) {
-        call.resolve(JSObject().put("granted", mediaPermissionGranted()))
+    private fun mediaPermissionCallback(call: PluginCall?) {
+        call?.resolve(JSObject().put("granted", mediaPermissionGranted()))
     }
 
     /**
