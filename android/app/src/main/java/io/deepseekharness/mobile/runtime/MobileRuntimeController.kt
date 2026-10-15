@@ -184,16 +184,27 @@ class MobileRuntimeController(
      * 把模块图探测提交到 [postStartDiagnosticsExecutor]。
      *
      * 不持有 [lifecycleLock]：探测只读且超时受控（30s），不应阻塞随后的停止/重置/插件管理。
+     * 但不能对「运行时已被停掉/替换」视而不见：任务真正开始前先确认控制器仍开着且 Harness
+     * 仍在运行，否则直接放弃探测——那时它只会与 rootfs 的拆除/替换并发，结论也没有判读价值。
      * 若停止/重置与探测并发，访客侧读到变动中的目录只会让探测失败，按既有约定记一条
      * result=denied 的 MODULE_GRAPH，绝不抛出；[shutdown] 会中断等待并回收探测进程。
      */
     private fun schedulePostStartModuleGraph() {
-        postStartDiagnosticsExecutor.execute {
-            try {
-                plugins.recordModuleGraph()
-            } catch (_: Throwable) {
-                // recordModuleGraph 自身已吞掉所有 Exception 并记 denied；
-                // 这里再兜一层，防止任何意外终止后台诊断线程。
+        // 控制器已关闭时执行器已被 shutdownNow：此时 execute 会抛 RejectedExecutionException，
+        // 那会从启动路径逃出去、把一次成功的启动报成失败。前置判断 + 兜底都做上。
+        if (postStartDiagnosticsExecutor.isShutdown) return
+        runCatching {
+            postStartDiagnosticsExecutor.execute {
+                // 探测只对「仍在运行的冷启动」有判读价值：控制器已关闭、或运行时已被 stop 掉，
+                // 再拉起访客探测只会与 rootfs 的拆除/替换并发，且结论已无意义。这里只读两个
+                // 线程安全的状态（AtomicBoolean / synchronized），不碰 lifecycleLock。
+                if (closed.get() || !supervisor.isRunning()) return@execute
+                try {
+                    plugins.recordModuleGraph()
+                } catch (_: Throwable) {
+                    // recordModuleGraph 自身已吞掉所有 Exception 并记 denied；
+                    // 这里再兜一层，防止任何意外终止后台诊断线程。
+                }
             }
         }
     }

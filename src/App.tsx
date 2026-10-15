@@ -6463,10 +6463,12 @@ export function App() {
             setKeepAlive(latest)
             if (latest.keepRuntimeInBackground === true && !latest.foregroundServiceActive) {
               // 原生侧只在真正失败时下发受控令牌（foreground_declined / start_disallowed），
-              // 它们都属于厂商后台策略拦截。通知权限缺失已不再阻止前台服务启动，
-              // 因此只有「尚未申请过通知权限」（prompt）这一档才走通知指引。
+              // 它们都属于厂商后台策略拦截：令牌在，就必须走后台拦截指引，不能因为
+              // 「还没申请过通知权限」（prompt）把用户误导去通知设置页 —— 缺通知权限
+              // 已不再阻止前台服务启动，此时「prompt + 服务没起来」几乎必然是系统拒绝。
+              const rejected = latest.foregroundStartError !== undefined && latest.foregroundStartError !== null
               setPermissionGuide(
-                latest.notificationPermission === 'prompt'
+                !rejected && latest.notificationPermission === 'prompt'
                   ? { kind: 'notification-permission' }
                   : { kind: 'background-blocked', feature: 'keepAlive' },
               )

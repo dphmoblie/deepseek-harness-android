@@ -154,9 +154,18 @@ class HarnessActivity : AppCompatActivity() {
                 CookieLoadDecision.LOAD -> {
                     // 写入回调晚到、页面已在销毁时不得再触碰 WebView（gate.cancel 后通常走 IGNORE，
                     // 这道检查覆盖 gate 尚未取消但 Activity 已结束的窗口）。
-                    if (isFinishing || isDestroyed || !::webView.isInitialized) return@setCookie
-                    cookieManager.flush()
-                    webView.loadUrl(entryUrl)
+                    if (isFinishing || isDestroyed) return@setCookie
+                    // 「回调一定在主线程、且一定晚于 onCreate」只是常见实现的事实，并不是
+                    // CookieManager#setCookie 的 API 契约。而上面的 gate 已经把这次写入消费掉，
+                    // 若因为 webView 还没初始化就把加载丢掉，页面将永远不加载、也没有任何提示。
+                    // 因此这里改为主线程重投递：等 onCreate 建好 WebView 后再发起首个请求。
+                    val load = Runnable {
+                        if (!isFinishing && !isDestroyed && ::webView.isInitialized) {
+                            cookieManager.flush()
+                            webView.loadUrl(entryUrl)
+                        }
+                    }
+                    if (::webView.isInitialized) load.run() else Handler(Looper.getMainLooper()).post(load)
                 }
                 CookieLoadDecision.REJECT -> {
                     Toast.makeText(this, R.string.harness_session_failed, Toast.LENGTH_SHORT).show()
