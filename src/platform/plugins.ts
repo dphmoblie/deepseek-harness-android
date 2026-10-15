@@ -77,10 +77,12 @@ function importSource(value: unknown): string {
 
 /** 原生接口和浏览器预览共用输入校验，防止任意路径或命令进入设备。 */
 export function validatePluginRequest(request: PluginRequest): PluginRequest {
-  if (!['list', 'enable', 'child', 'update', 'import', 'rollback', 'repair'].includes(request.operation)) invalid()
+  if (!['list', 'enable', 'child', 'update', 'import', 'rollback', 'repair', 'prune'].includes(request.operation)) invalid()
   if (request.operation === 'list') return { operation: 'list' }
   // 修复不带任何参数：原生侧只认操作名，插件目录、包名与事务都由它自己按运行时状态决定。
   if (request.operation === 'repair') return { operation: 'repair' }
+  // 清理孤立版本副本同样不带参数：由访客按已登记事实、回滚与锁文件安全修剪。
+  if (request.operation === 'prune') return { operation: 'prune' }
   if (request.operation === 'import') {
     const source = importSource(request.source)
     // `id` 只是「期望的包名」，用于地址形态装完后消歧；不填则由访客脚本按补丁声明推导。
@@ -113,11 +115,23 @@ export function validatePluginCatalog(value: unknown): PluginCatalog {
     if (file.startsWith('/') || file.split('/').some(part => part === '..')) invalid()
     if (!Array.isArray(group.children) || (childrenCount += group.children.length) > 1024) invalid()
     const childIds = new Set<string>()
+    const preserved = group.preserved === undefined || group.preserved === null
+      ? undefined
+      : (() => {
+          const p = record(group.preserved)
+          return {
+            exists: bool(p.exists),
+            version: p.version === null ? null : text(p.version, semver, 64),
+            transaction: p.transaction === undefined || p.transaction === null ? null : text(p.transaction, /^[A-Za-z0-9_.-]+$/, 128),
+            isLinked: p.isLinked === undefined ? undefined : bool(p.isLinked),
+          }
+        })()
     return {
       id, file,
       version: group.version === null ? null : text(group.version, semver, 64),
       // 缺键与 `null` 同义：没有上一版、上一版已被安全清理或该包受保护。
       rollback: group.rollback === undefined || group.rollback === null ? null : text(group.rollback, semver, 64),
+      preserved,
       enabled: bool(group.enabled), protected: bool(group.protected), official: bool(group.official),
       installed: bool(group.installed), readable: bool(group.readable),
       children: group.children.map((rawChild: unknown) => {

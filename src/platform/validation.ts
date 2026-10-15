@@ -39,6 +39,7 @@ import type {
   MailboxRoot,
   MailboxState,
   MediaPermissionResult,
+  ModelConnectivityResult,
   ModelProviderId,
   NotificationPermission,
   NotificationPermissionResult,
@@ -66,6 +67,7 @@ import type {
   RuntimeSettingsUpdate,
   RuntimeSource,
   RuntimeState,
+  RuntimeLibraryEntry,
   RuntimeVersionInfo,
   RuntimeVersionsState,
   RuntimeWorkspaceFileList,
@@ -188,10 +190,16 @@ function optionalIdentifier(value: unknown, label: string, pattern = IDENTIFIER_
   return value
 }
 
-function byteCount(value: unknown, label: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label}格式无效`)
+/**
+ * 非负安全整数标量校验器：要求是安全整数且 >= 0，否则抛出受控格式异常。
+ * 作为基础原语收拢平台层所有计数类校验逻辑（byteCount、diagnosticCount、accessibilityNonNegative 等）。
+ */
+export function assertNonNegativeInteger(value: unknown, label: string, suffix = '格式无效'): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label}${suffix}`)
   return value as number
 }
+
+const byteCount = assertNonNegativeInteger
 
 function runtimePhase(value: unknown): RuntimePhase {
   if (typeof value !== 'string' || !RUNTIME_PHASES.has(value as RuntimePhase)) throw new Error('运行时阶段格式无效')
@@ -555,6 +563,17 @@ export function assertRuntimeVersionTarget(value: unknown): 'previous' {
   return value
 }
 
+/**
+ * 版本库条目标识：64 位小写十六进制，与原生侧归档目录名同一格式。
+ *
+ * 锁定的目标只可能是「本地下载好的某个归档」，即版本库里的一条记录；
+ * `previous` / `bundled` 是槽位而不是归档，传进来这里就拦死，不让原生侧去猜。
+ */
+export function assertRuntimeVersionPinTarget(value: unknown): string {
+  if (typeof value !== 'string' || !SHA256_PATTERN.test(value.trim())) throw new Error('版本库条目标识格式无效')
+  return value.trim()
+}
+
 export function validateRuntimeVersions(value: unknown): RuntimeVersionsState {
   const state = asRecord(value, '运行时版本状态')
   const source = state.versions
@@ -582,7 +601,51 @@ export function validateRuntimeVersions(value: unknown): RuntimeVersionsState {
     }
   })
 
-  return { versions, canSwitch: state.canSwitch, canDelete: state.canDelete }
+  let library: RuntimeLibraryEntry[] | undefined
+  if (Array.isArray(state.library)) {
+    library = state.library.map(entry => {
+      const item = asRecord(entry, '版本库条目')
+      const id = typeof item.id === 'string' && SHA256_PATTERN.test(item.id.trim())
+        ? item.id.trim()
+        : (() => { throw new Error('版本库条目标识格式无效') })()
+      const version = requiredIdentifier(item.version, '版本库条目版本号')
+      const dshVersion = optionalIdentifier(item.dshVersion, 'dsh 版本')
+      const bytes = byteCount(item.bytes, '版本库条目大小')
+      const active = typeof item.active === 'boolean' ? item.active : false
+      // 锁定状态是「谁会被自动淘汰」的判据，缺了就必须报错：默认成 false 等于悄悄解锁。
+      if (typeof item.pinned !== 'boolean') throw new Error('版本库条目锁定状态格式无效')
+      // 落地时间可以缺（老版本库的归档没有这条记录），但给了就必须是个读得懂的 ISO 时间。
+      const downloadedAtRaw = item.downloadedAt
+      let downloadedAt: string | undefined
+      if (downloadedAtRaw !== undefined && downloadedAtRaw !== null) {
+        if (typeof downloadedAtRaw !== 'string' || !Number.isFinite(Date.parse(downloadedAtRaw))) {
+          throw new Error('版本库条目落地时间格式无效')
+        }
+        downloadedAt = downloadedAtRaw
+      }
+      return {
+        id,
+        version,
+        bytes,
+        active,
+        pinned: item.pinned,
+        ...(dshVersion === undefined ? {} : { dshVersion }),
+        ...(downloadedAt === undefined ? {} : { downloadedAt }),
+      }
+    })
+  }
+
+  const libraryCapacity = typeof state.libraryCapacity === 'number' && Number.isInteger(state.libraryCapacity) && state.libraryCapacity >= 0
+    ? state.libraryCapacity
+    : undefined
+
+  return {
+    versions,
+    canSwitch: state.canSwitch,
+    canDelete: state.canDelete,
+    ...(library === undefined ? {} : { library }),
+    ...(libraryCapacity === undefined ? {} : { libraryCapacity }),
+  }
 }
 
 /**
@@ -896,10 +959,7 @@ export function validateNotificationPermissionResult(value: unknown): Notificati
   return { granted: result.granted, supported: result.supported }
 }
 
-function diagnosticCount(value: unknown, label: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label}格式无效`)
-  return value as number
-}
+const diagnosticCount = assertNonNegativeInteger
 
 /** 诊断日志保留天数：必须是 1–30 的整数，与原生侧夹取范围一致。 */
 export function assertDiagnosticRetentionDays(value: number): number {
@@ -1521,10 +1581,8 @@ function accessibilityRule(value: unknown, index: number): AccessibilityAutomati
 }
 
 /** 计数类字段：非负安全整数（小数或负数都说明这份读数来路不明）。 */
-function accessibilityNonNegative(value: unknown, label: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label}无效`)
-  return value as number
-}
+const accessibilityNonNegative = (value: unknown, label: string): number =>
+  assertNonNegativeInteger(value, label, '无效')
 
 /**
  * 校验「白名单验证密码」入参：只在前端拦明显不合法的取值，真正的比对在原生侧。
@@ -2320,10 +2378,7 @@ function requiredNonNegativeNumber(value: unknown, label: string): number {
 }
 
 /** 非负安全整数：宽高与 DPI 未就绪时是 0（界面显示「未知」），负数一律拒绝。 */
-function requiredNonNegativeInteger(value: unknown, label: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label}格式无效`)
-  return value as number
-}
+const requiredNonNegativeInteger = assertNonNegativeInteger
 
 /**
  * 可负的安全整数：`displayId` 未就绪时原生给的是 -1。
@@ -2611,10 +2666,7 @@ function automationTaskCode(value: unknown, label: string): string | null {
   return value
 }
 
-function automationTaskCount(value: unknown, label: string): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error(`${label}格式无效`)
-  return value
-}
+const automationTaskCount = assertNonNegativeInteger
 
 /**
  * 任务台账读数：`connected` + 当前任务（没有任务是 `null`）。
@@ -2692,4 +2744,24 @@ export function validateAutomationTaskState(value: unknown): AutomationTaskState
       steps,
     },
   }
+}
+
+/**
+ * 校验模型连通性检测结果。
+ *
+ * 保证 ok、status（0..599）、latencyMs（非负）与 message（非空有界串）都符合受控结构。
+ */
+export function validateModelConnectivityResult(value: unknown): ModelConnectivityResult {
+  const result = asRecord(value, '模型连通性检测结果')
+  const ok = requiredBoolean(result.ok, '模型连通性状态')
+  const status = typeof result.status === 'number' && Number.isFinite(result.status) && result.status >= 0 && result.status <= 599
+    ? Math.floor(result.status)
+    : (() => { throw new Error('模型连通性状态码无效') })()
+  const latencyMs = typeof result.latencyMs === 'number' && Number.isFinite(result.latencyMs) && result.latencyMs >= 0
+    ? Math.floor(result.latencyMs)
+    : (() => { throw new Error('模型连通性延迟无效') })()
+  const message = typeof result.message === 'string' && result.message.length <= 200
+    ? result.message
+    : (() => { throw new Error('模型连通性提示无效') })()
+  return { ok, status, latencyMs, message }
 }

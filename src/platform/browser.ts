@@ -48,7 +48,7 @@ import type {
 } from './types'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource, validatePluginCleanupRequest } from './validation'
+import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionPinTarget, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource, validatePluginCleanupRequest } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
@@ -264,9 +264,10 @@ export function createBrowserBridge(): RuntimeBridge {
       state = { ...state, phase: 'running', harnessUrl: 'http://127.0.0.1:3080/' }
       return Promise.resolve({ ...state })
     },
-    openHarness: () => {
+    openHarness: (sessionId?: string) => {
       if (state.phase !== 'running' || state.harnessUrl === undefined) throw new Error('Harness 尚未运行')
       const url = new URL(state.harnessUrl)
+      if (sessionId) url.searchParams.set('sessionId', sessionId)
       window.open(url.toString(), '_blank', 'noopener,noreferrer')
       return Promise.resolve()
     },
@@ -639,6 +640,13 @@ export function createBrowserBridge(): RuntimeBridge {
       assertRuntimeVersionTarget(target)
       return Promise.reject(new Error('浏览器预览不支持运行时版本管理'))
     },
+    // 预览里没有版本库，也就没有「锁一个归档」这回事：先校验取值（和原生侧同一套判据），
+    // 再如实拒绝，而不是回一个空的版本列表假装已经锁上。
+    setRuntimeVersionPinned: (target, pinned): Promise<RuntimeVersionsState> => {
+      assertRuntimeVersionPinTarget(target)
+      assertBooleanFlag(pinned, '版本库锁定状态')
+      return Promise.reject(new Error('浏览器预览不支持运行时版本管理'))
+    },
     // 预览里既没有运行时目录，也谈不上「残留」：如实拒绝，不编造「0 份 0 字节」——
     // 那会被界面显示成「没有可回收的残留」，等于把「做不到」说成「确认干净」。
     getRuntimeResidue: (): Promise<RuntimeResidueState> => Promise.reject(new Error('浏览器预览不支持运行时占用盘点')),
@@ -687,6 +695,7 @@ export function createBrowserBridge(): RuntimeBridge {
     // 浏览器预览里没有原生侧的更新渠道，也没有可下载安装的 APK：如实拒绝，
     // 不编造版本列表或更新状态，否则界面会把「预览里的假版本」当成真能装的东西。
     listRuntimeReleases: (): Promise<RuntimeReleaseList> => Promise.reject(new Error('浏览器模式下没有更新渠道')),
+    downloadRuntimeRelease: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能下载运行时')),
     getAppUpdateState: (forceRefresh = false): Promise<AppUpdateState> => {
       if (typeof forceRefresh !== 'boolean') return Promise.reject(new Error('应用更新刷新参数无效'))
       return Promise.reject(new Error('浏览器模式下没有应用更新'))
@@ -735,6 +744,24 @@ export function createBrowserBridge(): RuntimeBridge {
     addTerminalExitListener: listener => {
       exitListeners.add(listener)
       return Promise.resolve(listenerHandle(() => exitListeners.delete(listener)))
+    },
+    testModelConnectivity: options => {
+      const draftKey = options.apiKey?.trim()
+      const isSaved = configuredProviders.has(options.providerId as ModelProviderId) || configuredCustomProviders.has(options.providerId)
+      if (!draftKey && !isSaved) {
+        return Promise.resolve({
+          ok: false,
+          status: 0,
+          latencyMs: 0,
+          message: '未提供 API Key 且本机未保存该供应商凭据',
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        latencyMs: 95,
+        message: '✓ 连接成功 (95ms)',
+      })
     },
   }
 }

@@ -31,6 +31,9 @@ enum class AuditEvent {
      * 不经过桥接、不产生本事件，因此审计里出现它就等于「用户手动重试过一次」。
      */
     PLUGIN_REPAIR,
+
+    /** 插件历史副本清理：清除未被活动清单、回滚或锁引用的孤立 versions 目录。 */
+    PLUGIN_PRUNE,
     PLUGIN_LOAD,
     PLUGIN_DESTROY,
     RUNTIME_INSTALL,
@@ -54,6 +57,15 @@ enum class AuditEvent {
 
     /** 运行时版本：删除保留下来的上一版本。 */
     RUNTIME_VERSION_DELETE,
+
+    /**
+     * 运行时版本：锁定/解锁版本库里的一个已下载版本。
+     *
+     * 单独记而不是并进删除：锁定决定「满额时谁可以被自动淘汰」，用户事后追问「为什么我的版本
+     * 被删了」，这条记录就是唯一能分清「他自己锁过」还是「他从没锁过」的证据。
+     * 只记动作与受控码；版本 ID 与版本号不落审计。
+     */
+    RUNTIME_VERSION_PIN,
 
     /**
      * 运行时会话快照：创建、恢复、删除，以及安装/更新前的自动快照。

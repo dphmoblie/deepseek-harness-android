@@ -80,4 +80,16 @@ describe('插件桥接校验', () => {
       expect(() => validatePluginCatalog({ ...group({}), recovery: { ...base, ...bad } })).toThrow()
     }
   })
+  it('支持 prune 清理操作', () => {
+    expect(validatePluginRequest({ operation: 'prune' })).toEqual({ operation: 'prune' })
+  })
+  it('目录条目如实转出保留区信息，缺键按 undefined 处理', () => {
+    expect(validatePluginCatalog(group({})).plugins[0].preserved).toBeUndefined()
+    expect(validatePluginCatalog(group({
+      preserved: { exists: true, version: '1.2.3', transaction: 'tx_123', isLinked: true },
+    })).plugins[0].preserved).toEqual({ exists: true, version: '1.2.3', transaction: 'tx_123', isLinked: true })
+    expect(validatePluginCatalog(group({
+      preserved: { exists: false, version: null, transaction: null, isLinked: false },
+    })).plugins[0].preserved).toEqual({ exists: false, version: null, transaction: null, isLinked: false })
+  })
 })

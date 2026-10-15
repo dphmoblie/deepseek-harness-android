@@ -8,6 +8,7 @@ import {
   assertBooleanFlag,
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
+  assertRuntimeVersionPinTarget,
   assertRuntimeVersionTarget,
   assertSessionId,
   assertStorageDirPath,
@@ -33,6 +34,7 @@ import {
   validateMailboxImportResult,
   validateMailboxState,
   validateMediaPermissionResult,
+  validateModelConnectivityResult,
   validateNotificationPermissionResult,
   validateOverlayBallState,
   validatePluginCleanupRequest,
@@ -1540,6 +1542,43 @@ describe('运行时版本校验', () => {
       expect(() => assertRuntimeVersionTarget(target), String(target)).toThrow('运行时版本操作目标无效')
     }
   })
+
+  it('版本库条目接受锁定状态与归档时间，并原样透出', () => {
+    const entry = {
+      id: 'b'.repeat(64),
+      version: '2026.09.10',
+      dshVersion: '0.1.6',
+      bytes: 310 * 1024 * 1024,
+      active: false,
+      pinned: true,
+      downloadedAt: '2026-09-10T03:04:05Z',
+    }
+    const parsed = validateRuntimeVersions(state({ library: [entry], libraryCapacity: 5 }))
+
+    expect(parsed.library).toEqual([entry])
+    expect(parsed.libraryCapacity).toBe(5)
+  })
+
+  it('版本库条目的锁定状态缺了就是错，不能默认成未锁定', () => {
+    const base = { id: 'c'.repeat(64), version: '2026.09.11', bytes: 1, active: false }
+    // 缺字段与类型不符都要拦：默认成 false 等于把用户锁好的版本悄悄解锁。
+    expect(() => validateRuntimeVersions(state({ library: [base] }))).toThrow('版本库条目锁定状态格式无效')
+    expect(() => validateRuntimeVersions(state({ library: [{ ...base, pinned: 'true' }] })))
+      .toThrow('版本库条目锁定状态格式无效')
+    // 归档时间可以缺（老版本库没有这条记录），但给了就必须是读得懂的时间。
+    expect(validateRuntimeVersions(state({ library: [{ ...base, pinned: false }] })).library?.[0].downloadedAt)
+      .toBeUndefined()
+    expect(() => validateRuntimeVersions(state({ library: [{ ...base, pinned: false, downloadedAt: '前天' }] })))
+      .toThrow('版本库条目落地时间格式无效')
+  })
+
+  it('锁定目标只认版本库归档 ID：槽位不是归档', () => {
+    const id = 'd'.repeat(64)
+    expect(assertRuntimeVersionPinTarget(id)).toBe(id)
+    for (const target of ['previous', 'bundled', 'current', 'D'.repeat(64), 'd'.repeat(63), '', null, 7]) {
+      expect(() => assertRuntimeVersionPinTarget(target), String(target)).toThrow('版本库条目标识格式无效')
+    }
+  })
 })
 
 describe('运行时可用版本校验', () => {
@@ -2307,5 +2346,46 @@ describe('设备能力清单校验', () => {
     expect(() => validateDeviceCapabilityReport(report({ atMs: '1700000000000' }))).toThrow('设备能力取样时刻格式无效')
     expect(() => validateDeviceCapabilityReport(report({ sdkInt: 0 }))).toThrow('设备 API 级别格式无效')
     expect(() => validateDeviceCapabilityReport(report({ sdkInt: '34' }))).toThrow('设备 API 级别格式无效')
+  })
+})
+
+describe('validateModelConnectivityResult', () => {
+  it('正确解析合法的检测成功结果', () => {
+    const raw = {
+      ok: true,
+      status: 200,
+      latencyMs: 142.5,
+      message: '✓ 连接成功 (142ms)',
+    }
+    expect(validateModelConnectivityResult(raw)).toEqual({
+      ok: true,
+      status: 200,
+      latencyMs: 142,
+      message: '✓ 连接成功 (142ms)',
+    })
+  })
+
+  it('正确解析合法的检测失败结果（如 401 鉴权失败）', () => {
+    const raw = {
+      ok: false,
+      status: 401,
+      latencyMs: 80,
+      message: '401 密钥无效或未授权 (80ms)',
+    }
+    expect(validateModelConnectivityResult(raw)).toEqual({
+      ok: false,
+      status: 401,
+      latencyMs: 80,
+      message: '401 密钥无效或未授权 (80ms)',
+    })
+  })
+
+  it('拒绝非对象或字段缺失的非法结果', () => {
+    expect(() => validateModelConnectivityResult(null)).toThrow('模型连通性检测结果')
+    expect(() => validateModelConnectivityResult('string')).toThrow('模型连通性检测结果')
+    expect(() => validateModelConnectivityResult({ ok: 'true' })).toThrow('模型连通性状态')
+    expect(() => validateModelConnectivityResult({ ok: true, status: '200' })).toThrow('模型连通性状态码无效')
+    expect(() => validateModelConnectivityResult({ ok: true, status: 200, latencyMs: -5 })).toThrow('模型连通性延迟无效')
+    expect(() => validateModelConnectivityResult({ ok: true, status: 200, latencyMs: 50, message: 123 })).toThrow('模型连通性提示无效')
   })
 })

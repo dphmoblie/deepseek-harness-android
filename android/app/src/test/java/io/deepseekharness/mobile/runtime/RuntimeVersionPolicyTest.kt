@@ -20,11 +20,17 @@ import java.nio.file.Files
  */
 class RuntimeVersionPolicyTest {
     @Test
-    fun acceptsOnlyPreviousAsOperationTarget() {
+    fun acceptsValidOperationTargets() {
         assertEquals("previous", RuntimeVersionPolicy.requireTarget("previous"))
         // 前后空白容错：Native 侧回传的值会经过 JS，`trim` 后才能比较。
         assertEquals("previous", RuntimeVersionPolicy.requireTarget(" previous "))
-        for (target in listOf("current", "bundled", "retained", "PREVIOUS", "", "  ", null)) {
+        assertEquals("bundled", RuntimeVersionPolicy.requireTarget("bundled"))
+        assertEquals("bundled", RuntimeVersionPolicy.requireTarget(" bundled "))
+        val validId = "a".repeat(64)
+        assertEquals(validId, RuntimeVersionPolicy.requireTarget(validId))
+        assertEquals(validId, RuntimeVersionPolicy.requireTarget(" $validId "))
+
+        for (target in listOf("current", "retained", "PREVIOUS", "BUNDLED", "a".repeat(63), "g".repeat(64), "", "  ", null)) {
             val failure = assertThrows(RuntimeFailure::class.java) {
                 RuntimeVersionPolicy.requireTarget(target)
             }

@@ -40,6 +40,7 @@ import {
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
   assertRuntimeVersionTarget,
+  assertRuntimeVersionPinTarget,
   assertSessionId,
   assertStorageDirPath,
   assertTerminalKind,
@@ -75,6 +76,7 @@ import {
   validateMailboxDirectoryState,
   validateMailboxState,
   validateMediaPermissionResult,
+  validateModelConnectivityResult,
   validateNotificationPermissionResult,
   validateOverlayBallState,
   validateRuntimeProgress,
@@ -127,7 +129,8 @@ interface NativeRuntimePlugin {
   restoreRuntimeSessionSnapshot(options: { id: string }): Promise<unknown>
   deleteRuntimeSessionSnapshot(options: { id: string }): Promise<unknown>
   startHarness(): Promise<RuntimeState>
-  openHarness(): Promise<void>
+  openHarness(options?: { sessionId?: string }): Promise<void>
+  testModelConnectivity(options: { providerId: string; baseUrl?: string; apiKey?: string; api?: string }): Promise<unknown>
   stopRuntime(): Promise<RuntimeState>
   reset(options: { confirmation: string }): Promise<RuntimeState>
   createTerminal(options: { kind: TerminalKind; columns: number; rows: number }): Promise<{ sessionId: string }>
@@ -221,6 +224,7 @@ interface NativeRuntimePlugin {
   runtimeVersions(): Promise<unknown>
   switchRuntimeVersion(options: { target: string }): Promise<unknown>
   deleteRuntimeVersion(options: { target: string }): Promise<unknown>
+  setRuntimeVersionPinned(options: { target: string; pinned: boolean }): Promise<unknown>
   getRuntimeResidue(): Promise<unknown>
   cleanRuntimeResidue(): Promise<unknown>
   getRuntimeCleanupState(): Promise<unknown>
@@ -231,6 +235,7 @@ interface NativeRuntimePlugin {
   purgePluginData(options?: { packageName?: string }): Promise<unknown>
   /** 列出原生侧已知的运行时可用版本；结果由 TS 侧校验后再交给界面。 */
   listRuntimeReleases(): Promise<unknown>
+  downloadRuntimeRelease(options: { manifestUrl: string; manifestSha256: string }): Promise<unknown>
   getAppUpdateState(options?: { forceRefresh: boolean }): Promise<unknown>
   setAppUpdateChannel(options: { channel: string }): Promise<unknown>
   downloadAppUpdate(): Promise<void>
@@ -286,7 +291,7 @@ function createNativeBridge(): RuntimeBridge {
       .install(source === undefined ? undefined : validateRuntimeSource(source))
       .then(validateRuntimeInstallResult),
     startHarness: () => NativeRuntime.startHarness().then(validateRuntimeState),
-    openHarness: () => NativeRuntime.openHarness(),
+    openHarness: (sessionId?: string) => NativeRuntime.openHarness(sessionId ? { sessionId } : undefined),
     stopRuntime: () => NativeRuntime.stopRuntime().then(validateRuntimeState),
     reset: confirmation => {
       if (confirmation !== 'RESET_RUNTIME') return Promise.reject(new Error('重置确认无效'))
@@ -530,6 +535,15 @@ function createNativeBridge(): RuntimeBridge {
     deleteRuntimeVersion: target => NativeRuntime
       .deleteRuntimeVersion({ target: assertRuntimeVersionTarget(target) })
       .then(validateRuntimeVersions),
+    // 锁定/解锁只改「满额时谁可以被自动淘汰」，不影响当前运行环境，所以随时可调。
+    // 目标必须是版本库里的归档 ID（`previous` / `bundled` 是槽位、不是归档）；
+    // 布尔值走 assertBooleanFlag，不让 `'false'` 这类真值字符串把版本悄悄锁上。
+    setRuntimeVersionPinned: (target, pinned) => NativeRuntime
+      .setRuntimeVersionPinned({
+        target: assertRuntimeVersionPinTarget(target),
+        pinned: assertBooleanFlag(pinned, '版本库锁定状态'),
+      })
+      .then(validateRuntimeVersions),
     // 残留载荷只有份数/字节数/截断标记与一句说明：原生侧连目录名都不回传，这里也就无从泄漏；
     // 清理幂等且不抛，失败（含单份删不掉）由 failed 与 message 如实体现。
     getRuntimeResidue: () => NativeRuntime.getRuntimeResidue().then(validateRuntimeResidue),
@@ -571,6 +585,8 @@ function createNativeBridge(): RuntimeBridge {
       .then(validateRuntimeSessionSnapshotState),
     // 可用版本列表由原生侧给出：缺清单的条目只可展示，校验侧不允许它混成「可安装」。
     listRuntimeReleases: () => NativeRuntime.listRuntimeReleases().then(validateRuntimeReleaseList),
+    downloadRuntimeRelease: (manifestUrl, manifestSha256) =>
+      NativeRuntime.downloadRuntimeRelease({ manifestUrl, manifestSha256 }).then(() => undefined),
     getAppUpdateState: (forceRefresh = false) => {
       if (typeof forceRefresh !== 'boolean') return Promise.reject(new Error('应用更新刷新参数无效'))
       return NativeRuntime.getAppUpdateState({ forceRefresh }).then(validateAppUpdateState)
@@ -600,6 +616,7 @@ function createNativeBridge(): RuntimeBridge {
     addAppUpdateProgressListener: listener => NativeRuntime.addListener('appUpdateProgress', validatedListener(validateAppUpdateProgress, listener)),
     addTerminalOutputListener: listener => NativeRuntime.addListener('terminalOutput', validatedListener(validateTerminalChunk, listener)),
     addTerminalExitListener: listener => NativeRuntime.addListener('terminalExit', validatedListener(validateTerminalExit, listener)),
+    testModelConnectivity: options => NativeRuntime.testModelConnectivity(options).then(validateModelConnectivityResult),
   }
 }
 

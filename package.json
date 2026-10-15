@@ -19,8 +19,11 @@
     "lint": "eslint . --max-warnings 0",
     "android:sync": "pnpm run build && cap sync android",
     "android:open": "cap open android",
-    "android:check": "pnpm run build && cap sync android && cd android && gradlew.bat lint testDebugUnitTest",
-    "prepare:runner": "node scripts/prepare-runner.mjs"
+    "android:check": "pnpm run build && cap sync android && node scripts/run-gradle.mjs lint testDebugUnitTest",
+    "prepare:runner": "node scripts/prepare-runner.mjs",
+    "bootstrap:wrapper": "node scripts/bootstrap-wrapper.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "gate:check": "node scripts/gate-check.mjs"
   },
   "dependencies": {
     "@capacitor/android": "7.4.3",

@@ -147,4 +147,37 @@ class HarnessPageSessionTest {
             assertTrue(failure.message?.contains(token) != true)
         }
     }
+
+    @Test
+    fun harnessEntryUrlIncludesValidatedSessionId() {
+        assertEquals(
+            "http://127.0.0.1:3080/?appVersion=0.1.21&runtimeVersion=0.1.12&sessionId=session-xyz_123.4",
+            HarnessPageUrl.withVersions(
+                "http://127.0.0.1:3080/",
+                "0.1.21",
+                "0.1.12",
+                sessionId = "session-xyz_123.4",
+            ),
+        )
+        // Null or blank sessionId does not append the parameter
+        assertEquals(
+            "http://127.0.0.1:3080/?appVersion=0.1.21&runtimeVersion=0.1.12",
+            HarnessPageUrl.withVersions(
+                "http://127.0.0.1:3080/",
+                "0.1.21",
+                "0.1.12",
+                sessionId = null,
+            ),
+        )
+        // Invalid sessionIds with spaces, metacharacters, or excessive length are rejected
+        assertThrows(IllegalArgumentException::class.java) {
+            HarnessPageUrl.withVersions("http://127.0.0.1:3080/", "0.1.21", "0.1.12", sessionId = "bad session id")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            HarnessPageUrl.withVersions("http://127.0.0.1:3080/", "0.1.21", "0.1.12", sessionId = "id&evil=true")
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            HarnessPageUrl.withVersions("http://127.0.0.1:3080/", "0.1.21", "0.1.12", sessionId = "s".repeat(201))
+        }
+    }
 }

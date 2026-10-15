@@ -105,6 +105,39 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
   const terminalRef = useRef<Terminal | null>(null)
   const [connecting, setConnecting] = useState(true)
   const [copied, setCopied] = useState(false)
+  const [ctrlActive, setCtrlActive] = useState(false)
+  const ctrlActiveRef = useRef(false)
+  ctrlActiveRef.current = ctrlActive
+  /**
+   * 会话是否还能写入。辅助按键栏是常驻 UI，但可写窗口只有「握手完成 → 收到终态」这一段：
+   * 会话结束后按键必须不再触发触感与焦点抢夺 —— 否则用户会得到「按了、有震动、什么都没发生」的假反馈。
+   */
+  const writableRef = useRef(false)
+  const [keyBarDisabled, setKeyBarDisabled] = useState(true)
+
+  const activeSessionRef = useRef<{
+    sessionId?: string
+    send: (data: string) => void
+  }>({
+    send: () => {},
+  })
+
+  const sendVirtualKey = useCallback((data: string) => {
+    if (!writableRef.current) return
+    triggerHaptic('light')
+    activeSessionRef.current.send(data)
+    terminalRef.current?.focus()
+  }, [])
+
+  const toggleCtrl = useCallback(() => {
+    triggerHaptic('light')
+    setCtrlActive(active => !active)
+    if (writableRef.current) terminalRef.current?.focus()
+  }, [])
+
+  const preventFocusLoss = (event: React.PointerEvent<HTMLButtonElement> | React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+  }
 
   const copyOutput = useCallback(async () => {
     const terminal = terminalRef.current
@@ -198,6 +231,30 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
       if (!cancelled) onError(error instanceof Error ? error.message : t("终端操作失败"))
     }
 
+    const send = (data: string): void => {
+      if (sessionId === undefined || cancelled || sessionEnded) return
+      const activeSessionId = sessionId
+      inputQueue = inputQueue
+        .then(() => bridge.writeTerminal(activeSessionId, bytesToBase64(data)))
+        .catch(reportError)
+    }
+    activeSessionRef.current = { sessionId, send }
+
+    terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+      if (ctrlActiveRef.current && event.type === 'keydown') {
+        // 无论这一次按键能不能转成控制字节，CTRL 态都要落回来：
+        // 软键盘常给 `Unidentified` 或长度不为 1 的 key，只在上面的分支复位会让 CTRL 永久卡住。
+        setCtrlActive(false)
+        const key = event.key.toLowerCase()
+        if (key.length === 1 && key >= 'a' && key <= 'z') {
+          const code = String.fromCharCode(key.charCodeAt(0) - 96)
+          activeSessionRef.current.send(code)
+          return false
+        }
+      }
+      return true
+    })
+
     const writeBytes = (bytes: Uint8Array): void => {
       try {
         terminal.write(bytes)
@@ -229,6 +286,8 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
 
     const writeExit = (exitCode: number): void => {
       sessionEnded = true
+      writableRef.current = false
+      setKeyBarDisabled(true)
       disposeInput?.()
       disposeInput = undefined
       terminal.writeln(t("\r\n[会话已结束，退出码 {0}]", exitCode))
@@ -318,14 +377,11 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
         }
 
         sessionId = session.sessionId
+        activeSessionRef.current = { sessionId, send }
         flushPending(sessionId)
         if (!sessionEnded) {
           const inputDisposable = terminal.onData(data => {
-            if (sessionId === undefined || cancelled) return
-            const activeSessionId = sessionId
-            inputQueue = inputQueue
-              .then(() => bridge.writeTerminal(activeSessionId, bytesToBase64(data)))
-              .catch(reportError)
+            send(data)
           })
           disposeInput = () => inputDisposable.dispose()
         }
@@ -335,6 +391,8 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
           return Promise.resolve()
         })
         setConnecting(false)
+        writableRef.current = true
+        setKeyBarDisabled(false)
         fit()
         terminal.focus()
       } catch (error) {
@@ -342,6 +400,8 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
         // 这些字节没有交付对象，留着只会一直占内存（不做没有意义的重放）。
         handshakeFailed = true
         pending.clear()
+        writableRef.current = false
+        setKeyBarDisabled(true)
         setConnecting(false)
         reportError(error)
       }
@@ -349,6 +409,9 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
 
     return () => {
       cancelled = true
+      writableRef.current = false
+      setKeyBarDisabled(true)
+      activeSessionRef.current = { send: () => {} }
       pending.clear()
       resizeObserver.disconnect()
       window.cancelAnimationFrame(resizeFrame)
@@ -375,9 +438,144 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
       {connecting && (
         <div className="terminal-connecting" role="status">
           <Loader2 size={18} className="spin" />
-          {t("正在连接")}</div>
+          {t("正在连接")}
+        </div>
       )}
       <div ref={containerRef} className="terminal-canvas" />
+      <div
+        className={`terminal-accessory-bar${keyBarDisabled ? ' is-disabled' : ''}`}
+        role="toolbar"
+        aria-label={t("终端辅助按键")}
+        aria-disabled={keyBarDisabled}
+      >
+        <button
+          type="button"
+          className="terminal-key-btn"
+          onPointerDown={preventFocusLoss}
+          onClick={() => sendVirtualKey('\x1b')}
+          title={t("ESC 退出")}
+        >
+          ESC
+        </button>
+        <button
+          type="button"
+          className="terminal-key-btn"
+          onPointerDown={preventFocusLoss}
+          onClick={() => sendVirtualKey('\t')}
+          title={t("TAB 自动补全")}
+        >
+          TAB
+        </button>
+        <button
+          type="button"
+          className={`terminal-key-btn ${ctrlActive ? 'is-active' : ''}`}
+          onPointerDown={preventFocusLoss}
+          onClick={toggleCtrl}
+          aria-pressed={ctrlActive}
+          title={t("CTRL 组合键")}
+        >
+          CTRL
+        </button>
+        <button
+          type="button"
+          className="terminal-key-btn terminal-key-accent"
+          onPointerDown={preventFocusLoss}
+          onClick={() => sendVirtualKey('\x03')}
+          title={t("中断正在运行的命令 (SIGINT)")}
+        >
+          Ctrl+C
+        </button>
+        <button
+          type="button"
+          className="terminal-key-btn"
+          onPointerDown={preventFocusLoss}
+          onClick={() => sendVirtualKey('\x04')}
+          title={t("退出会话 / EOF")}
+        >
+          Ctrl+D
+        </button>
+        <button
+          type="button"
+          className="terminal-key-btn"
+          onPointerDown={preventFocusLoss}
+          onClick={() => sendVirtualKey('\x1b[A')}
+          title={t("上一条历史命令")}
+        >
+          ↑
+        </button>
+        <button
+          type="button"
+          className="terminal-key-btn"
+          onPointerDown={preventFocusLoss}
+          onClick={() => sendVirtualKey('\x1b[B')}
+          title={t("下一条历史命令")}
+        >
+          ↓
+        </button>
+        <button
+          type="button"
+          className="terminal-key-btn"
+          onPointerDown={preventFocusLoss}
+          onClick={() => sendVirtualKey('\x1b[D')}
+          title={t("光标向左移动")}
+        >
+          ←
+        </button>
+        <button
+          type="button"
+          className="terminal-key-btn"
+          onPointerDown={preventFocusLoss}
+          onClick={() => sendVirtualKey('\x1b[C')}
+          title={t("光标向右移动")}
+        >
+          →
+        </button>
+        <button
+          type="button"
+          className="terminal-key-btn"
+          onPointerDown={preventFocusLoss}
+          onClick={() => sendVirtualKey('|')}
+          title={t("管道符")}
+        >
+          |
+        </button>
+        <button
+          type="button"
+          className="terminal-key-btn"
+          onPointerDown={preventFocusLoss}
+          onClick={() => sendVirtualKey('~')}
+          title={t("家目录")}
+        >
+          ~
+        </button>
+        <button
+          type="button"
+          className="terminal-key-btn"
+          onPointerDown={preventFocusLoss}
+          onClick={() => sendVirtualKey('/')}
+          title={t("斜杠")}
+        >
+          /
+        </button>
+        <button
+          type="button"
+          className="terminal-key-btn"
+          onPointerDown={preventFocusLoss}
+          onClick={() => sendVirtualKey('-')}
+          title={t("连字符")}
+        >
+          -
+        </button>
+        <button
+          type="button"
+          className="terminal-key-btn"
+          onPointerDown={preventFocusLoss}
+          onClick={() => sendVirtualKey('\x0c')}
+          title={t("清屏 (Ctrl+L)")}
+        >
+          {t("清屏")}
+        </button>
+      </div>
     </div>
   )
 }

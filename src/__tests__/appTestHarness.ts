@@ -145,6 +145,7 @@ export const bridge = {
   getRuntimeVersions: vi.fn(),
   switchRuntimeVersion: vi.fn(),
   deleteRuntimeVersion: vi.fn(),
+  setRuntimeVersionPinned: vi.fn(),
   // 「运行时占用」卡片进版本管理页就会读一次残留（清理按钮另有一条）；缺桩会让那次 effect 抛错，
   // 同上一条注释里的坑。
   getRuntimeResidue: vi.fn(),
@@ -170,12 +171,14 @@ export const bridge = {
   // 更新：可用版本列表与应用自更新同样有默认桩——界面一进相关页面就会读一次，
   // 缺桩会让 effect 抛错并卸载整棵树（同上一条注释里的坑）。
   listRuntimeReleases: vi.fn(),
+  downloadRuntimeRelease: vi.fn(),
   getAppUpdateState: vi.fn(),
   setAppUpdateChannel: vi.fn(),
   downloadAppUpdate: vi.fn(),
   installAppUpdate: vi.fn(),
   openAppUpdateInstallSettings: vi.fn(),
   managePlugins: vi.fn(),
+  testModelConnectivity: vi.fn(),
   getDiagnosticLogState: vi.fn(),
   readDiagnosticLog: vi.fn(),
   setDiagnosticLogSettings: vi.fn(),
@@ -537,6 +540,9 @@ export function beforeEachAppTest(): void {
   })
   bridge.switchRuntimeVersion.mockResolvedValue({ versions: [], canSwitch: false, canDelete: false })
   bridge.deleteRuntimeVersion.mockResolvedValue({ versions: [], canSwitch: false, canDelete: false })
+  // 锁定桩的默认回执同样是空状态：它只在「版本管理」页里被调用，且真要检验锁定效果时
+  // 用例自己覆盖。方法与其它版本操作并列放在这里，缺了会被 appTestHarness 的自检用例抓住。
+  bridge.setRuntimeVersionPinned.mockResolvedValue({ versions: [], canSwitch: false, canDelete: false })
   // 默认「没有可回收的残留」：多数用例只关心别的页面，不该被一张写着残留的卡片影响；
   // 关心这张卡片的用例自己覆盖这两条桩。
   bridge.getRuntimeResidue.mockResolvedValue({ count: 0, bytes: 0, truncated: false })
@@ -585,6 +591,7 @@ export function beforeEachAppTest(): void {
   // 默认空版本列表（没有可用版本可装）+ 未授权安装权限：多数用例只关心别的页面，
   // 真正关心更新的用例自己覆盖这几条桩。
   bridge.listRuntimeReleases.mockResolvedValue({ entries: [] })
+  bridge.downloadRuntimeRelease.mockResolvedValue(undefined)
   bridge.getAppUpdateState.mockResolvedValue({
     installedVersion: '0.2.0',
     installedVersionCode: 22,
@@ -628,6 +635,7 @@ export function beforeEachAppTest(): void {
   bridge.requestShizukuPermission.mockResolvedValue({ ...shizuku, permission: 'granted', connected: true })
   bridge.connectShizuku.mockResolvedValue({ ...shizuku, permission: 'granted', connected: true })
   bridge.openShizuku.mockResolvedValue(undefined)
+  bridge.testModelConnectivity.mockResolvedValue({ ok: true, status: 200, latencyMs: 120, message: '✓ 连接成功 (120ms)' })
 }
 
 /**

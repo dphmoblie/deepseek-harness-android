@@ -129,3 +129,75 @@ describe('插件导入与回滚', () => {
     expect(bridge.managePlugins).toHaveBeenCalledWith({ operation: 'list' })
   })
 })
+describe('插件双状态呈现与补充链接', () => {
+  it('显示当前环境与手机保留区双层状态，并提供立即补充链接入口', async () => {
+    const customCatalog: PluginCatalog = {
+      plugins: [
+        {
+          id: 'unlinked-plugin',
+          file: 'config/unlinked.yml',
+          version: null,
+          enabled: true,
+          protected: false,
+          official: false,
+          installed: false,
+          readable: true,
+          preserved: { exists: true, version: '2.1.0', transaction: 'tx_99', isLinked: false },
+          children: [],
+        },
+      ],
+    }
+    const bridge = setup(runtime, customCatalog)
+    // catalog 由 managePlugins 异步返回，卡片要等第一轮 effect 落盘后才能查询。
+    const card = within((await screen.findByText('unlinked-plugin')).closest('details')!)
+    expect(card.getByText('当前环境：未链接', { exact: false })).toBeInTheDocument()
+    expect(card.getByText('手机保留区：v2.1.0', { exact: false })).toBeInTheDocument()
+    expect(card.getByText('待补充链接', { exact: false })).toBeInTheDocument()
+
+    // 展开卡片并点击立即补充链接
+    fireEvent.click(screen.getByText('unlinked-plugin'))
+    const relinkButton = screen.getByRole('button', { name: '立即补充链接' })
+    fireEvent.click(relinkButton)
+    await waitFor(() => expect(bridge.managePlugins).toHaveBeenCalledWith({ operation: 'repair' }))
+  })
+  it('原生扩展拦截回显 PLUGIN_NATIVE_UNSUPPORTED 受控说明', async () => {
+    const bridge = setup()
+    fireEvent.click(await screen.findByText('example-plugin'))
+    bridge.managePlugins.mockRejectedValueOnce({ code: 'PLUGIN_NATIVE_UNSUPPORTED', message: '' })
+    const update = screen.getAllByRole('button', { name: '更新所属插件包' }).find(button => !(button as HTMLButtonElement).disabled)!
+    fireEvent.click(update)
+    expect(await screen.findByRole('alert')).toHaveTextContent('原生编译扩展（.node）')
+  })
+  it('搜索与标签页过滤正确筛选条目', async () => {
+    const customCatalog: PluginCatalog = {
+      plugins: [
+        { id: '@deepseek-ai/dsh-base', file: 'cordis.patch.yml', version: '1.0.0', enabled: true, protected: true, official: true, installed: true, readable: true, children: [] },
+        { id: 'plugin-alpha', file: 'config/alpha.yml', version: '1.0.0', enabled: true, protected: false, official: false, installed: true, readable: true, children: [{ id: 'child-one', name: 'Alpha Feature', enabled: true, effectiveEnabled: true, protected: false }] },
+        { id: 'plugin-beta', file: 'config/beta.yml', version: null, enabled: false, protected: false, official: false, installed: false, readable: true, preserved: { exists: true, version: '1.5.0', transaction: 'tx_beta', isLinked: false }, children: [] },
+      ],
+    }
+    setup(runtime, customCatalog)
+    await screen.findByText('plugin-alpha')
+    // 搜索关键字
+    const searchInput = screen.getByRole('searchbox', { name: '搜索插件' })
+    fireEvent.change(searchInput, { target: { value: 'Alpha Feature' } })
+    expect(screen.getByText('plugin-alpha')).toBeInTheDocument()
+    expect(screen.queryByText('plugin-beta')).not.toBeInTheDocument()
+
+    // 清空搜索并切换到「待补充链接」Tab
+    fireEvent.change(searchInput, { target: { value: '' } })
+    fireEvent.click(screen.getByRole('tab', { name: '待补充链接' }))
+    expect(screen.queryByText('plugin-alpha')).not.toBeInTheDocument()
+    expect(screen.getByText('plugin-beta')).toBeInTheDocument()
+  })
+  it('清理历史孤立副本：RecoveryNotice 触发 prune 请求', async () => {
+    const bridge = setup(runtime, {
+      plugins: catalog.plugins,
+      recovery: { status: 'partial', restored: 0, relinked: 1, missing: 1, failed: 0, refused: 0 },
+    })
+    const pruneButton = await screen.findByRole('button', { name: '清理历史孤立副本' })
+    fireEvent.click(pruneButton)
+    await waitFor(() => expect(bridge.managePlugins).toHaveBeenCalledWith({ operation: 'prune' }))
+    expect(await screen.findByText('已清理历史孤立副本，释放了存储空间')).toBeInTheDocument()
+  })
+})

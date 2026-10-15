@@ -380,6 +380,13 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
     fun scanModuleGraph(): JSObject = run("graph", null, null, null)
 
     /**
+     * 清理保留区中未被当前清单、回滚及锁文件引用的孤立 versions 历史副本。
+     *
+     * 返回 `{ scanned, pruned, kept, bytesFreed }`。
+     */
+    fun pruneVersions(): JSObject = run("prune", null, null, null)
+
+    /**
      * 探测并把结果写进诊断日志（只记计数，见 [DiagnosticEvent.MODULE_GRAPH]）。
      *
      * 判据是 `distinctRealpaths`（不同真实路径数），不是出现次数：同一个真实目录被多个链接
@@ -417,7 +424,7 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
     }
 
     fun run(operation: String, id: String?, enabled: Boolean?, childId: String?, source: String? = null): JSObject {
-        if (operation !in setOf("list", "enable", "child", "update", "import", "rollback", "recover", "repair", "graph")) invalid()
+        if (operation !in setOf("list", "enable", "child", "update", "import", "rollback", "recover", "repair", "graph", "prune")) invalid()
         if (operation == "import") {
             // 来源必填，且与访客脚本 `validateImportSource`、前端 `src/platform/plugins.ts` 是
             // **同一套规则**（逐条对应见 `PluginSourcePolicy`）：三处任意一处放松，
@@ -425,7 +432,7 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             if (PluginSourcePolicy.classify(source) == null) invalid()
             // 包名只是"期望的名字"，用于装完后消歧；给了就必须合法。
             if (id != null && (id.length !in 1..214 || !PACKAGE.matches(id) || ".." in id)) invalid()
-        } else if (operation !in setOf("list", "recover", "repair", "graph")) {
+        } else if (operation !in setOf("list", "recover", "repair", "graph", "prune")) {
             if (id == null || id.length !in 1..214 || !PACKAGE.matches(id) || ".." in id) invalid()
             if (operation in setOf("enable", "child") && enabled == null) invalid()
             if (operation == "child" && (childId == null || !ENTRY.matches(childId))) invalid()
@@ -448,6 +455,8 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             "import" -> 250L
             // 修复要遍历已安装的插件目录，给足时间但仍是有限等待。
             "repair" -> 90L
+            // 清理孤立版本副本遍历 versions 目录，时间与修复同一量级。
+            "prune" -> 90L
             // 模块图探测是只读遍历（有深度与条目上限），不需要修复那么长的等待。
             "graph" -> 30L
             else -> 30L
@@ -476,8 +485,8 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         if (operation in setOf("list", "enable", "child", "update", "import", "rollback") && payload.optJSONArray("plugins") == null) {
             throw RuntimeFailure("PLUGIN_OPERATION_FAILED", "插件返回数据无效")
         }
-        // 修复只回传计数（处理了多少个包、失败多少个），没有插件清单。
-        if (operation == "repair" && payload.optInt("scanned", -1) < 0) {
+        // 修复与孤立版本清理只回传计数，没有插件清单。
+        if (operation in setOf("repair", "prune") && payload.optInt("scanned", -1) < 0) {
             throw RuntimeFailure("PLUGIN_OPERATION_FAILED", "插件返回数据无效")
         }
         // 模块图探测同样只回传计数。判据字段是「不同真实路径数」：缺失或为负说明载荷不可信，
@@ -522,7 +531,7 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         val ENTRY = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
         /** 受控详情：包名、版本号与 semver 范围字符集；拒绝引号、反斜杠、冒号与控制字符。 */
         val DETAIL = Regex("^[A-Za-z0-9@/._+, =!<>~^|()\\-]{1,300}$")
-        val ERROR_CODES = setOf("PLUGIN_INPUT_INVALID", "PLUGIN_PATH_INVALID", "PLUGIN_CONFIG_INVALID", "PLUGIN_NOT_FOUND", "PLUGIN_PROTECTED", "PLUGIN_RECOVERY_FAILED", "PLUGIN_UPDATER_MISSING", "PLUGIN_UPDATE_FAILED", "PLUGIN_LINK_UNSUPPORTED", "PLUGIN_DEPENDENCY_UNSUPPORTED", "PLUGIN_ENGINE_UNSUPPORTED", "PLUGIN_GROUP_DISABLED", "PLUGIN_OPERATION_FAILED", "PLUGIN_SOURCE_INVALID", "PLUGIN_IMPORT_UNRESOLVED", "PLUGIN_GIT_MISSING", "PLUGIN_GIT_UNVERIFIED", "PLUGIN_DATA_TOO_LARGE", "PLUGIN_DATA_UNSAFE", "PLUGIN_ROLLBACK_UNAVAILABLE", "PLUGIN_ROLLBACK_FAILED")
+        val ERROR_CODES = setOf("PLUGIN_INPUT_INVALID", "PLUGIN_PATH_INVALID", "PLUGIN_CONFIG_INVALID", "PLUGIN_NOT_FOUND", "PLUGIN_PROTECTED", "PLUGIN_RECOVERY_FAILED", "PLUGIN_UPDATER_MISSING", "PLUGIN_UPDATE_FAILED", "PLUGIN_LINK_UNSUPPORTED", "PLUGIN_DEPENDENCY_UNSUPPORTED", "PLUGIN_ENGINE_UNSUPPORTED", "PLUGIN_NATIVE_UNSUPPORTED", "PLUGIN_GROUP_DISABLED", "PLUGIN_OPERATION_FAILED", "PLUGIN_SOURCE_INVALID", "PLUGIN_IMPORT_UNRESOLVED", "PLUGIN_GIT_MISSING", "PLUGIN_GIT_UNVERIFIED", "PLUGIN_DATA_TOO_LARGE", "PLUGIN_DATA_UNSAFE", "PLUGIN_ROLLBACK_UNAVAILABLE", "PLUGIN_ROLLBACK_FAILED")
 
         /** 迁移在 recover 这一步就失败：异常已向上抛出，启动照旧中断。 */
         const val PLUGIN_MIGRATION_RECOVER_FAILED = "PLUGIN_MIGRATION_RECOVER_FAILED"

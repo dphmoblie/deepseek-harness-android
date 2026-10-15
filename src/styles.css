@@ -1151,12 +1151,87 @@ button:disabled {
 
 .terminal-canvas {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 38px;
   padding: 12px 8px 8px 12px;
 }
 
 .terminal-canvas .xterm {
   height: 100%;
+}
+
+.terminal-accessory-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: var(--terminal-bg);
+  border-top: 1px solid var(--terminal-line);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  z-index: 5;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.terminal-accessory-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.terminal-key-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--terminal-chip-line);
+  border-radius: var(--radius-inner);
+  background: var(--terminal-chip-bg);
+  color: var(--terminal-chip-text);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+  touch-action: pan-x;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.terminal-key-btn:active,
+.terminal-key-btn.is-active {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: var(--on-accent);
+}
+
+/*
+ * 可写窗口之外（握手前 / 会话已结束）：辅助栏整体压暗并停止接收指针事件，
+ * 与同屏的 `.terminal-copy` 的 `disabled` 语义保持一致，避免「有触感但没写入」的假反馈。
+ */
+.terminal-accessory-bar.is-disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.terminal-key-btn.terminal-key-accent {
+  color: var(--blue);
+  border-color: var(--blue);
+}
+
+.terminal-key-btn.terminal-key-accent:active {
+  background: var(--blue);
+  color: var(--on-accent);
 }
 
 .terminal-connecting {
@@ -1533,7 +1608,34 @@ button:disabled {
 .credential-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
+  align-items: center;
   margin-top: 9px;
+  flex-wrap: wrap;
+}
+
+.connectivity-result {
+  font-size: 0.8125rem;
+  padding: 5px 10px;
+  border-radius: 6px;
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.connectivity-result.success {
+  background: var(--green-soft);
+  color: var(--green);
+  border: 1px solid var(--green-line);
+}
+
+.connectivity-result.error {
+  background: var(--red-soft);
+  color: var(--red);
+  border: 1px solid var(--red-line);
 }
 
 /* 供应商状态一览：一行一个供应商，右边一枚状态徽标与「配置」入口。 */

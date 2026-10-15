@@ -26,7 +26,15 @@ import java.util.concurrent.TimeoutException
 enum class DeviceCommand {
     SCREENSHOT,
     UI_DUMP,
+    /**
+     * @deprecated 交互点击已统一由无障碍服务（[io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService]）接管。
+     */
+    @Deprecated("交互点击已统一由 DeepSeekAccessibilityService 接管")
     TAP,
+    /**
+     * @deprecated 交互输入已统一由无障碍服务（[io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService]）接管。
+     */
+    @Deprecated("交互输入已统一由 DeepSeekAccessibilityService 接管")
     INPUT_TEXT,
     DEVICE_INFO,
     LIST_PACKAGES,
@@ -122,13 +130,13 @@ class DeviceCommandRunner(
      * Run one allowlisted command in [sessionId] and wait for its end marker.
      * Blocks the calling thread (a plugin executor worker) up to [timeoutMs].
      */
-    fun execute(sessionId: String, command: DeviceCommand, param: String, timeoutMs: Long): DeviceCommandResult {
+    fun execute(sessionId: String, command: DeviceCommand, param: String, timeoutMs: Long, useRootEngine: Boolean = false): DeviceCommandResult {
         val pending = Pending(UUID.randomUUID().toString(), command)
         if (inflight.putIfAbsent(sessionId, pending) != null) {
             throw RuntimeFailure("DEVICE_COMMAND_BUSY", "设备 Shell 会话正忙")
         }
         try {
-            val input = buildInput(pending.requestId, command, param)
+            val input = buildInput(pending.requestId, command, param, useRootEngine)
             // 不再有 stty -echo / 固定 sleep / 清空缓冲的时序：那套做法既关不掉 mksh 行编辑器的
             // 自带回显，又引入竞态（sleep 结束前到达的输出会被误清）。现在解析只认 shell 内部
             // 展开的双哨兵，回显既不能伪造标记，也不会落进两个标记之间的 payload。
@@ -345,11 +353,11 @@ class DeviceCommandRunner(
         else -> null
     }
 
-    internal fun buildInput(requestId: String, command: DeviceCommand, param: String): String {
+    internal fun buildInput(requestId: String, command: DeviceCommand, param: String, useRootEngine: Boolean = false): String {
         if (!REQUEST_ID_PATTERN.matches(requestId)) {
             throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令请求标识无效")
         }
-        val body = buildBody(requestId, command, param)
+        val body = buildBody(requestId, command, param, useRootEngine)
         // 标记里的 ${dsh_nonce} 保持**未展开的字面量**：回显看到的永远是它，
         // 只有内层 shell 展开后才会出现 `__DSH_B_<请求标识>_<pid>-<随机数>__` 这样的真实标记。
         val inner = "dsh_nonce=\$\$-\$RANDOM; " +
@@ -362,36 +370,26 @@ class DeviceCommandRunner(
     /** 命令正文，以及 END 标记应当读取的退出码表达式。 */
     private class Body(val script: String, val status: String)
 
-    private fun buildBody(requestId: String, command: DeviceCommand, param: String): Body = when (command) {
+    private fun buildBody(requestId: String, command: DeviceCommand, param: String, useRootEngine: Boolean = false): Body = when (command) {
         DeviceCommand.SCREENSHOT -> Body("screencap -p | toybox base64", "\$?")
         // uiDump 的失败分级由脚本内的状态变量携带（3/4/5），而不是 `$?` 的 0/1。
         DeviceCommand.UI_DUMP -> Body(uiDumpScript(requestId), "\$$UI_DUMP_STATUS_VARIABLE")
-        DeviceCommand.TAP -> {
-            val parts = param.split(",", limit = 2)
-            val x = parts.getOrNull(0)?.trim()?.toIntOrNull()
-                ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
-            val y = parts.getOrNull(1)?.trim()?.toIntOrNull()
-                ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
-            if (x !in 0..65535 || y !in 0..65535) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "点击坐标无效")
-            Body("input tap $x $y", "\$?")
-        }
-        DeviceCommand.INPUT_TEXT -> {
-            if (param.isEmpty() || param.length > MAX_TEXT_CHARS) {
-                throw RuntimeFailure("DEVICE_COMMAND_INVALID", "输入文本无效")
-            }
-            if (param.any { it.code !in 0x20..0x7e || it == '\'' || it == '"' || it == '\\' || it == ';' || it == '$' || it == '\u0060' }) {
-                throw RuntimeFailure("DEVICE_COMMAND_INVALID", "输入文本仅支持 ASCII 且不含引号/分号/反斜杠等字符")
-            }
-            // 双引号包裹（参数已排除 `"`、`$`、反引号、反斜杠），内层脚本因此完全不含单引号，
-            // 与外层的单引号包裹不冲突。
-            Body("input text \"$param\"", "\$?")
+        DeviceCommand.TAP, DeviceCommand.INPUT_TEXT -> {
+            // 点击与文本输入已统一收口至无障碍服务（DeepSeekAccessibilityService），
+            // 由前台包名、敏感窗口与动作频率实施安全闸门。
+            // 生产环境下 DeviceBridgeServer 已在顶层拦截并分派至无障碍通道，此处直接拒绝，消除 Shell 级死代码误导。
+            throw RuntimeFailure(
+                "DEVICE_COMMAND_UNSUPPORTED",
+                "交互指令（点击/文本输入）必须经由无障碍服务通道（DeepSeekAccessibilityService）执行，不再支持 Shell 级模拟",
+            )
         }
         // 只读设备信息：限定字段，避免把完整 getprop（可能含厂商私有信息）回传到 WebView。
         DeviceCommand.DEVICE_INFO -> Body(
-            "printf 'manufacturer='; getprop ro.product.manufacturer; " +
-                "printf 'model='; getprop ro.product.model; " +
-                "printf 'androidRelease='; getprop ro.build.version.release; " +
-                "printf 'sdk='; getprop ro.build.version.sdk",
+            // 内层脚本必须不含单引号：外层用单引号整段包裹，这里若再出现单引号就要靠转义兜底。
+            "printf \"manufacturer=\"; getprop ro.product.manufacturer; " +
+                "printf \"model=\"; getprop ro.product.model; " +
+                "printf \"androidRelease=\"; getprop ro.build.version.release; " +
+                "printf \"sdk=\"; getprop ro.build.version.sdk",
             "\$?",
         )
         // 仅列出已安装包名；查询字符串严格限制为包名字符，不能拼出 Shell 语法。
@@ -423,7 +421,9 @@ class DeviceCommandRunner(
         // 电池状态是只读诊断信息，输出由上层的固定缓冲窗口限制大小。
         DeviceCommand.BATTERY -> {
             if (param.isNotBlank()) throw RuntimeFailure("DEVICE_COMMAND_INVALID", "电池诊断不接受参数")
-            Body("dumpsys battery | head -n 64", "\$?")
+            // 不能接 `| head`：管道的退出码属于 head，会让 dumpsys 失败也报成成功；
+            // 输出上界由读取侧的固定缓冲窗口负责。
+            Body("dumpsys battery", "\$?")
         }
         // 只允许标准 Android 包名，并通过 monkey 启动其默认入口；不接受 Activity、Intent 或 Shell 参数。
         DeviceCommand.LAUNCH_APP -> {
@@ -479,10 +479,24 @@ class DeviceCommandRunner(
             if (param.isBlank() || param.toByteArray(Charsets.UTF_8).size > MAX_SHELL_SCRIPT_CHARS || param.any { it == '\u0000' || it == '\r' }) {
                 throw RuntimeFailure("DEVICE_COMMAND_INVALID", "Shell 脚本为空、过长或包含非法控制字符")
             }
-            // 脚本作为编码后的标准输入送入独立解释器，不能破坏外层结果协议。
-            // 不使用关键字黑名单；命令的实际能力由用户授予的 Shizuku 身份决定。
-            val encoded = Base64.getEncoder().encodeToString(param.toByteArray(Charsets.UTF_8))
-            Body("printf '%s' '$encoded' | toybox base64 -d | /system/bin/sh -s", "\$?")
+            if (useRootEngine) {
+                // 静态安检照旧先跑：危险脚本要在这一层就给出「安全护栏拦截」的准确原因。
+                RootCommandGuard.verifySafe(param)
+                // 但**故意**不再提供「拼进 Shizuku PTY 会话里跑 su」的路径。
+                // 那条路径的父进程是 UID 2000 的 shell：命名空间生命周期、/dev/block 遮蔽的归属、
+                // KernelSU 的 App Profile 判定全都失去确定归属，等于绕开了设计规范的分区边界
+                // （见 docs/KernelSU高级通道与安全分区防护.md §5.2 阶段二）。
+                // 根命令请走 RootCommandRunner.run()：它在应用进程内起 `su -c`，单参数传递、失败即停。
+                throw RuntimeFailure(
+                    "ROOT_ENGINE_NOT_WIRED",
+                    "根通道未接线：该入口不再经由 Shizuku 会话执行 su，请改用 RootCommandRunner",
+                )
+            } else {
+                // 脚本作为编码后的标准输入送入独立解释器，不能破坏外层结果协议。
+                // 不使用关键字黑名单；命令的实际能力由用户授予的 Shizuku 身份决定。
+                val encoded = Base64.getEncoder().encodeToString(param.toByteArray(Charsets.UTF_8))
+                Body("printf '%s' '$encoded' | toybox base64 -d | /system/bin/sh -s", "\$?")
+            }
         }
     }
 

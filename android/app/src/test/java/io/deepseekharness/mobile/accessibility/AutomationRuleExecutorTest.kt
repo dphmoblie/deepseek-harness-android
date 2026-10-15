@@ -2,6 +2,7 @@ package io.deepseekharness.mobile.accessibility
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -166,6 +167,37 @@ class AutomationRuleExecutorTest {
         assertTrue("第二轮不该再产出动作", second.results.isEmpty())
         assertEquals(AutomationGateCodes.DUPLICATE_FINGERPRINT, second.skipped.single().code)
         assertEquals(listOf("click"), backend.calls)
+    }
+
+    @Test
+    fun `超长前缀的相异节点通过完整哈希区分，不会因截断导致指纹假碰撞`() {
+        val longPrefixPath = "0/".repeat(60)
+        val longClass = "com.example.app.ui.widget.VeryLongCustomNestedButtonClass"
+        val window = "com.example.app/com.example.app.ui.main.VeryLongActivityName"
+        val ruleId = "test-rule-id"
+
+        val identityA = AutomationRuleExecutor.nodeIdentity(
+            pathText = longPrefixPath,
+            className = longClass,
+            text = "ButtonA",
+            viewId = "com.example.app:id/btn_a",
+            bounds = AutomationBounds(0, 0, 100, 100),
+        )
+        val identityB = AutomationRuleExecutor.nodeIdentity(
+            pathText = longPrefixPath,
+            className = longClass,
+            text = "ButtonA",
+            viewId = "com.example.app:id/btn_b",
+            bounds = AutomationBounds(100, 0, 200, 100),
+        )
+
+        val fpA = AutomationRuleExecutor.fingerprintOf(window, ruleId, identityA)
+        val fpB = AutomationRuleExecutor.fingerprintOf(window, ruleId, identityB)
+
+        assertEquals(AutomationRuleExecutor.HEX_FINGERPRINT_CHARS, fpA.length)
+        assertEquals(AutomationRuleExecutor.HEX_FINGERPRINT_CHARS, fpB.length)
+        assertTrue("指纹必须是十六进制串", fpA.matches(Regex("^[0-9a-f]+$")))
+        assertNotEquals("相异节点即使前缀超长也不应撞指纹", fpA, fpB)
     }
 
     @Test

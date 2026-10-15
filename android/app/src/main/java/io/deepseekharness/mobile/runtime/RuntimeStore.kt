@@ -631,6 +631,16 @@ class RuntimeStore(context: Context) {
         return customProviderApiKeysLocked(allowedIds).toMap()
     }
 
+    @Synchronized
+    fun readModelCredential(providerId: String): String? {
+        val builtIn = ModelProvider.entries.firstOrNull { it.wireValue == providerId }
+        if (builtIn != null) {
+            return providerApiKeysLocked()[builtIn]
+        }
+        val allowedIds = customModelProvidersLocked().mapTo(linkedSetOf()) { it.id }
+        return customProviderApiKeysLocked(allowedIds)[providerId]
+    }
+
     /**
      * 写出固定的、无密钥的 Cordis 覆盖：**沙箱运行器条目始终存在**，模型供应商条目按配置可选。
      *

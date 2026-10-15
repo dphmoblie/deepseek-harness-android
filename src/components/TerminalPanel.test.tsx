@@ -15,6 +15,7 @@ import { TerminalPanel } from './TerminalPanel'
 const xtermSpy = vi.hoisted(() => ({
   events: [] as Array<{ kind: 'write'; bytes: Uint8Array } | { kind: 'exit'; text: string }>,
   dataHandlers: new Set<(data: string) => void>(),
+  keyEventHandler: null as null | ((event: KeyboardEvent) => boolean),
 }))
 
 vi.mock('@xterm/xterm', () => ({
@@ -28,6 +29,9 @@ vi.mock('@xterm/xterm', () => ({
     clearSelection(): void {}
     selectAll(): void {}
     getSelection(): string { return '' }
+    attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean): void {
+      xtermSpy.keyEventHandler = handler
+    }
     write(data: Uint8Array | string): void {
       xtermSpy.events.push({
         kind: 'write',
@@ -201,6 +205,7 @@ beforeEach(() => {
   saveLanguage('zh-CN')
   xtermSpy.events.length = 0
   xtermSpy.dataHandlers.clear()
+  xtermSpy.keyEventHandler = null
   vi.stubGlobal('ResizeObserver', ResizeObserverStub)
 })
 
@@ -304,5 +309,125 @@ describe('终端面板的握手窗口缓冲', () => {
     for (let index = 0; index < 200; index += 1) handshake.emitOutput('session-a', chunkText(index, 1024))
     expect(writtenBytes().length).toBe(0)
     expect(exitLines()).toEqual([])
+  })
+})
+
+describe('终端移动端虚拟辅助按键栏', () => {
+  it('点击虚拟按键（TAB / ESC / Ctrl+C / 方向键）向当前会话写入对应控制字节', async () => {
+    const handshake = createHandshake()
+    await renderPanel(handshake)
+    await handshake.settle('session-a')
+
+    const tabBtn = document.querySelector('button[title="TAB 自动补全"]') as HTMLButtonElement
+    expect(tabBtn).not.toBeNull()
+    tabBtn.click()
+
+    await waitFor(() => { expect(handshake.writeTerminal).toHaveBeenCalledWith('session-a', toBase64('\t')) })
+
+    const escBtn = document.querySelector('button[title="ESC 退出"]') as HTMLButtonElement
+    expect(escBtn).not.toBeNull()
+    escBtn.click()
+
+    await waitFor(() => { expect(handshake.writeTerminal).toHaveBeenCalledWith('session-a', toBase64('\x1b')) })
+
+    const ctrlCBtn = document.querySelector('button[title="中断正在运行的命令 (SIGINT)"]') as HTMLButtonElement
+    expect(ctrlCBtn).not.toBeNull()
+    ctrlCBtn.click()
+
+    await waitFor(() => { expect(handshake.writeTerminal).toHaveBeenCalledWith('session-a', toBase64('\x03')) })
+
+    const upBtn = document.querySelector('button[title="上一条历史命令"]') as HTMLButtonElement
+    expect(upBtn).not.toBeNull()
+    upBtn.click()
+
+    await waitFor(() => { expect(handshake.writeTerminal).toHaveBeenCalledWith('session-a', toBase64('\x1b[A')) })
+  })
+
+  it('激活 CTRL 组合键后键盘输入被转义为控制字符并自动重置 CTRL 状态', async () => {
+    const handshake = createHandshake()
+    await renderPanel(handshake)
+    await handshake.settle('session-a')
+
+    const ctrlBtn = document.querySelector('button[title="CTRL 组合键"]') as HTMLButtonElement
+    expect(ctrlBtn).not.toBeNull()
+    expect(ctrlBtn.getAttribute('aria-pressed')).toBe('false')
+
+    act(() => {
+      ctrlBtn.click()
+    })
+    expect(ctrlBtn.getAttribute('aria-pressed')).toBe('true')
+
+    expect(xtermSpy.keyEventHandler).not.toBeNull()
+    let handled: boolean | undefined
+    act(() => {
+      handled = xtermSpy.keyEventHandler!(new KeyboardEvent('keydown', { key: 'c' }))
+    })
+    expect(handled).toBe(false)
+
+    await waitFor(() => { expect(handshake.writeTerminal).toHaveBeenCalledWith('session-a', toBase64('\x03')) })
+    expect(ctrlBtn.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('CTRL 状态下按下转不成控制字符的键（软键盘常见 Unidentified）也会复位 CTRL', async () => {
+    const handshake = createHandshake()
+    await renderPanel(handshake)
+    await handshake.settle('session-a')
+
+    const ctrlBtn = document.querySelector('button[title="CTRL 组合键"]') as HTMLButtonElement
+    act(() => {
+      ctrlBtn.click()
+    })
+    expect(ctrlBtn.getAttribute('aria-pressed')).toBe('true')
+
+    let handled: boolean | undefined
+    act(() => {
+      handled = xtermSpy.keyEventHandler!(new KeyboardEvent('keydown', { key: 'Unidentified' }))
+    })
+    expect(handled).toBe(true)
+    expect(ctrlBtn.getAttribute('aria-pressed')).toBe('false')
+    expect(handshake.writeTerminal).not.toHaveBeenCalled()
+  })
+
+  it('握手完成前辅助栏标记为禁用，点击不写入', async () => {
+    const handshake = createHandshake()
+    await renderPanel(handshake)
+
+    const bar = document.querySelector('.terminal-accessory-bar') as HTMLElement
+    expect(bar.classList.contains('is-disabled')).toBe(true)
+    expect(bar.getAttribute('aria-disabled')).toBe('true')
+
+    const tabBtn = document.querySelector('button[title="TAB 自动补全"]') as HTMLButtonElement
+    act(() => {
+      tabBtn.click()
+    })
+    expect(handshake.writeTerminal).not.toHaveBeenCalled()
+  })
+
+  it('会话结束后辅助栏立刻禁用，点击不再写入（不产生假反馈）', async () => {
+    const handshake = createHandshake()
+    await renderPanel(handshake)
+    await handshake.settle('session-a')
+
+    const bar = document.querySelector('.terminal-accessory-bar') as HTMLElement
+    expect(bar.classList.contains('is-disabled')).toBe(false)
+
+    const tabBtn = document.querySelector('button[title="TAB 自动补全"]') as HTMLButtonElement
+    act(() => {
+      tabBtn.click()
+    })
+    await waitFor(() => { expect(handshake.writeTerminal).toHaveBeenCalledWith('session-a', toBase64('\t')) })
+    vi.mocked(handshake.writeTerminal).mockClear()
+
+    handshake.emitExit('session-a', 0)
+    await waitFor(() => { expect(exitLines().length).toBe(1) })
+
+    const disabledBar = document.querySelector('.terminal-accessory-bar') as HTMLElement
+    expect(disabledBar.classList.contains('is-disabled')).toBe(true)
+    expect(disabledBar.getAttribute('aria-disabled')).toBe('true')
+
+    act(() => {
+      tabBtn.click()
+    })
+    expect(handshake.writeTerminal).not.toHaveBeenCalled()
   })
 })

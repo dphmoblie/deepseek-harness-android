@@ -1329,3 +1329,30 @@ test('插件从清单里消失后账本不再保留它，免得被迁移误算�
   assert.equal(manager.repair().lock, 'written')
   assert.deepEqual(lockOf(root).plugins.map(row => row.id), ['@deepseek-ai/dsh-base'])
 })
+
+test('列表包含手机保留区状态与现有生效区分', t => {
+  const { manager } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
+  manager.importPackage('test-plugin')
+  const item = manager.list().plugins.find(p => p.id === 'test-plugin')
+  assert.equal(item.installed, true)
+  assert.equal(item.version, '2.0.0')
+  assert.equal(item.preserved.exists, true)
+  assert.equal(item.preserved.version, '2.0.0')
+  assert.equal(item.preserved.isLinked, true)
+})
+
+test('pruneVersions 安全回收未被引用的孤立事务版本', t => {
+  const { manager, root } = fixture(t, pluginInstaller('test-plugin', '2.0.0'))
+  manager.importPackage('test-plugin')
+  const versionsDir = path.join(root, 'root/.dsh-mobile/plugin-manager/versions')
+  const fakeOrphan = path.join(versionsDir, '00000000-0000-4000-8000-000000000099')
+  fs.mkdirSync(path.join(fakeOrphan, 'node_modules/orphan'), { recursive: true })
+  fs.writeFileSync(path.join(fakeOrphan, 'node_modules/orphan/package.json'), JSON.stringify({ name: 'orphan', version: '1.0.0' }))
+
+  const result = manager.pruneVersions()
+  assert.equal(result.pruned >= 1, true)
+  assert.equal(fs.existsSync(fakeOrphan), false)
+  // 当前已链接的插件目录完好无损
+  const activeTx = lockEntryOf(root, 'test-plugin').transaction
+  assert.equal(fs.existsSync(path.join(versionsDir, activeTx)), true)
+})

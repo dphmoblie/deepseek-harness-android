@@ -33,8 +33,11 @@ object RuntimeVersionPolicy {
     const val SLOT_PREVIOUS = "previous"
     const val SLOT_BUNDLED = "bundled"
 
-    /** 目前唯一支持的切换目标：保留下来的上一版本。 */
+    /** 支持的切换目标：保留下来的上一版本、出厂内置版本，或版本库中的 64 位 SHA-256 ID。 */
     const val TARGET_PREVIOUS = "previous"
+    const val TARGET_BUNDLED = "bundled"
+
+    val SHA256_PATTERN = Regex("^[a-f0-9]{64}$")
 
     /**
      * 「什么算一个可以展示的 dsh 版本号」的唯一规则。
@@ -48,7 +51,7 @@ object RuntimeVersionPolicy {
     /** 解析并校验切换/删除目标；未知目标一律以受控错误码拒绝。 */
     fun requireTarget(raw: String?): String {
         val target = raw?.trim().orEmpty()
-        if (target != TARGET_PREVIOUS) {
+        if (target != TARGET_PREVIOUS && target != TARGET_BUNDLED && !SHA256_PATTERN.matches(target)) {
             throw RuntimeFailure("RUNTIME_VERSION_TARGET_INVALID", "运行时版本操作目标无效")
         }
         return target
@@ -64,6 +67,37 @@ object RuntimeVersionPolicy {
 
     /** 能否删除上一版本。 */
     fun canDelete(previousPresent: Boolean): Boolean = previousPresent
+
+    /**
+     * 版本库容量：只有已下载的归档占配额。
+     *
+     * 出厂内置版本（APK 资产）与「上一版本」槽位不算配额——它们是回退路径，不是可下载的历史版本。
+     */
+    const val LIBRARY_CAPACITY = 5
+
+    /** 版本库条目的淘汰事实。纯数据，不碰磁盘。 */
+    data class LibraryEntry(
+        val id: String,
+        val downloadedAt: Long,
+        val pinned: Boolean,
+        val active: Boolean,
+    )
+
+    /** 能不能再放一个：同一版本重下是覆盖，不占新配额。 */
+    fun canAddToLibrary(existing: Boolean, count: Int): Boolean = existing || count < LIBRARY_CAPACITY
+
+    /**
+     * 满额时该淘汰哪一条：最旧的「未锁定、非当前、且不是本次要写入的那条」。
+     *
+     * 没有可淘汰的对象时返回 null，由调用方明确失败——**绝不**悄悄删掉用户锁定的版本。
+     * 时间并列时按 id 排序，保证同一份磁盘状态永远给出同一个结果（可测试、可复现）。
+     */
+    fun evictionCandidate(entries: List<LibraryEntry>, incomingId: String?): String? =
+        entries.asSequence()
+            .filterNot { it.pinned || it.active || it.id == incomingId }
+            .sortedWith(compareBy({ it.downloadedAt }, { it.id }))
+            .firstOrNull()
+            ?.id
 }
 
 /**

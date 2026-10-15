@@ -44,6 +44,31 @@
 .plugin-import-expected { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; font-size: 0.8125rem; color: var(--muted); }
 /* 一个包的两个动作（更新、回滚）成组，窄屏时整组竖排。 */
 .plugin-file-buttons { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* 搜索与过滤栏 */
+.plugin-filter-bar { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.plugin-search-input { width: 100%; box-sizing: border-box; padding: 9px 14px; border: 1px solid var(--line); border-radius: var(--radius-inner); background: var(--surface-muted); color: var(--ink); font: inherit; }
+.plugin-search-input:focus { outline: 2px solid var(--blue); outline-offset: 1px; }
+.plugin-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.plugin-tab { padding: 6px 12px; font-size: 0.8125rem; font-weight: 500; border: 1px solid var(--line); border-radius: var(--radius-inner); background: var(--surface); color: var(--muted); cursor: pointer; transition: all 0.15s ease; }
+.plugin-tab:hover { color: var(--ink); background: var(--surface-hover); }
+.plugin-tab-active { background: var(--blue-soft); color: var(--blue); border-color: var(--blue); font-weight: 600; }
+
+/* 插件卡片分层状态与错误高亮 */
+.plugin-dual-status { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.plugin-status-badge { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 4px; font-size: 0.6875rem; font-weight: 500; line-height: 1.4; }
+.status-active { background: color-mix(in srgb, #2e7d32 12%, transparent); color: #2e7d32; }
+.status-unlinked { background: var(--surface-muted); color: var(--muted); border: 1px solid var(--line); }
+.status-preserved { background: var(--blue-soft); color: var(--blue); }
+.status-empty { background: var(--surface-muted); color: var(--muted); border: 1px dashed var(--line); }
+.status-error { background: color-mix(in srgb, var(--danger, #c64b55) 15%, transparent); color: var(--danger, #c64b55); font-weight: 600; }
+.status-relinkable { background: color-mix(in srgb, var(--warning, #c17b19) 16%, transparent); color: var(--warning, #c17b19); font-weight: 600; }
+
+/* 展开卡片内的立即补充链接条 */
+.plugin-relink-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; margin: 10px 18px; background: color-mix(in srgb, var(--warning, #c17b19) 10%, transparent); border: 1px solid color-mix(in srgb, var(--warning, #c17b19) 30%, transparent); border-radius: var(--radius-inner); font-size: 0.8125rem; color: var(--ink); }
+.plugin-relink-banner span { flex: 1; min-width: 0; }
+.plugin-relink-banner .button { flex-shrink: 0; }
+
 @media (max-width: 620px) {
   .plugin-screen { padding-right: 10px; padding-left: 10px; }
   .plugin-stop, .plugin-file-actions { align-items: stretch; flex-direction: column; }
@@ -59,4 +84,6 @@
   .plugin-children li { gap: 8px; align-items: flex-start; }
   .plugin-children li label { max-width: 40%; text-align: right; }
   .plugin-hint { padding-right: 12px; padding-left: 12px; }
+  .plugin-relink-banner { flex-direction: column; align-items: stretch; margin: 10px 12px; }
+  .plugin-relink-banner .button { width: 100%; }
 }

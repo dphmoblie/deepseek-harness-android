@@ -91,16 +91,17 @@ flowchart TD
                                  │ 审查通过
                                  ▼
  ┌───────────────────────────────────────────────────────────────┐
- │ 【第 2 道防线: 内核命名空间隔离 (Mount Namespace)】             │
- │  - 注入 unshare -m，随后 mount --make-rprivate /               │
- │  - 隔离进程树内的所有挂载与文件操作，不泄露至宿主全局             │
+ │ 【第 2 道防线: 内核命名空间隔离 (Mount & PID Namespace)】       │
+ │  - 注入 unshare -m -p -f，随后 mount --make-rprivate /        │
+ │  - 隔离进程树内的所有挂载与文件操作，且阻断 /proc/<pid>/root 逃逸   │
  └───────────────────────────────┬───────────────────────────────┘
                                  │
                                  ▼
  ┌───────────────────────────────────────────────────────────────┐
  │ 【第 3 道防线: 物理块设备与系统硬锁定】                         │
  │  - 按挂载点判定后 mount -o remount,ro 系统分区 (尽力而为)      │
- │  - mount -t tmpfs -o mode=0000 tmpfs /dev/block (屏蔽裸设备)  │
+ │  - mount -t tmpfs -o mode=0000,nosuid,nodev,ro tmpfs /dev/block│
+ │  - mount -t proc proc /proc (挂载独立私有 procfs)              │
  │  - 可选加固档: setpriv 裁减 CAP_SYS_ADMIN / CAP_MKNOD 上限     │
  └───────────────────────────────┬───────────────────────────────┘
                                  │
@@ -112,15 +113,15 @@ flowchart TD
 ```
 
 #### 防线 1：静态指令审查（`RootCommandGuard`）
-在命令进入底层前，原生侧解析其调用指令，严格拒绝高危工具：
-- 致命命令阻断列表：`reboot (bootloader|recovery|edl)`, `fastboot`, `flash_erase`, `blockdev`, `wipe`, `setenforce 0`, `su -c "(裸su嵌套)"`。
+在命令进入底层前，原生侧解析其调用指令，快速阻断高危工具（协作防误触）：
+- 致命命令阻断列表：`reboot (bootloader|recovery|edl|fastboot)`, `fastboot`, `flash_erase`, `blockdev`, `mkfs.*`, `wipe`, `setenforce 0`, `umount /dev/block`, `mount ... remount,rw /system` 等。
 
 > **与既有原则的关系（有意收窄，需明说）**：本项目 Shizuku 通道在 `DeviceCommandRunner.kt` 中刻意**不使用关键字黑名单**（「命令的实际能力由用户授予的身份决定」）。Root 通道引入黑名单是对该原则的有意收窄——UID 0 的破坏半径与 uid 2000 完全不同。但黑名单永远不完整（可编码混淆、可间接调用），它只是纵深防御的第一层，硬性保证只能来自防线 2~4 与 KernelSU App Profile。该审查**只作用于 Root 通道**，Shizuku 通道行为保持不变。
 
-#### 防线 2：内核命名空间隔离（`unshare -m`）
-执行前强制新建挂载命名空间，挂载传播属性设置为 `private`：
+#### 防线 2：内核命名空间隔离（`unshare -m -p -f`）
+执行前强制新建挂载与 PID 命名空间，挂载传播属性设置为 `private`：
 ```sh
-unshare -m /system/bin/sh -c '
+unshare -m -p -f /system/bin/sh -c '
     # 设置本命名空间所有挂载私有化，不向 Android 全局传播
     mount --make-rprivate /
     ...
@@ -128,7 +129,7 @@ unshare -m /system/bin/sh -c '
 ```
 **可用性兜底**：少数 ROM 的 toybox 构建不含 `unshare`。封装器先以 `command -v unshare` 探测；缺失时不硬失败——降级为「无命名空间隔离 + 强化防线 1 审查 + 依赖 App Profile 硬约束」并记录诊断，由能力看板如实展示降级状态。
 
-#### 防线 3：系统核心分区只读锁定与块设备遮蔽
+#### 防线 3：系统核心分区只读锁定、块设备遮蔽与独立 procfs
 在隔离命名空间内，执行安全前置模板（`Security Prelude`）：
 1. **只读强制锁定（尽力而为，非硬保证）**：
    ```sh
@@ -139,11 +140,16 @@ unshare -m /system/bin/sh -c '
    注意：System-as-Root 设备上 `/system` 通常不是独立挂载点，`/apex` 由若干独立挂载组成，因此必须按挂载点判定并容忍单点失败。这些分区本就受 dm-verity 保护，此步是补强而非根基。
 2. **块设备物理切断（Block Device Masking）**：
    ```sh
-   # 将 /dev/block 挂载为不可读写的空 tmpfs，断绝物理扇区直写链路
-   mount -t tmpfs -o mode=0000,nosuid,nodev tmpfs /dev/block
+   # 将 /dev/block 挂载为不可读写的空 tmpfs (含 ro)，彻底断绝物理扇区直写链路
+   mount -t tmpfs -o mode=0000,nosuid,nodev,ro tmpfs /dev/block
    ```
-   **效果**：模型执行 `dd if=/dev/zero of=/dev/block/...` 时会在该路径上直接收到 `EACCES` / `ENOENT`。
-3. **能力上限裁减（可选加固档，默认开启；挂载类任务显式关闭）**：
+   **效果**：即使模型执行 `dd if=/dev/zero of=/dev/block/...`，在操作系统层必然直接收到 `EACCES (Permission denied)` 或 `ENOENT`，物理分区不受任何伤害。
+3. **独立私有 procfs（防止 `/proc/1/root` 绕过）**：
+   ```sh
+   # 配合 PID 命名空间挂载当前空间私有 procfs，切断宿主全局 PID 1 根路径穿透
+   mount -t proc proc /proc
+   ```
+4. **能力上限裁减（可选加固档，默认开启；挂载类任务显式关闭）**：
    ```sh
    # 挂载前置完成后、执行 payload 前，裁掉可撤销上述防护的能力
    command -v setpriv >/dev/null 2>&1 && \
@@ -238,10 +244,13 @@ object RootSecurityWrapper {
                 mountpoint -q "${'$'}p" && mount -o remount,ro "${'$'}p" 2>/dev/null || true
             done
 
-            # 3. 阻断物理块设备直写链路
-            mount -t tmpfs -o mode=0000,nosuid,nodev tmpfs /dev/block 2>/dev/null || true
+            # 3. 彻底阻断物理块设备，防止格式化与刷盘
+            mount -t tmpfs -o mode=0000,nosuid,nodev,ro tmpfs /dev/block 2>/dev/null || true
 
-            # 4. 执行原始 Payload (作为独立子 shell，结果状态透传)
+            # 4. 挂载私有 procfs，阻断 /proc/<pid>/root 穿透
+            mount -t proc proc /proc 2>/dev/null || true
+
+            # 5. 执行原始 Payload (作为独立子 shell，结果状态透传)
             printf '%s' '$encodedPayload' | toybox base64 -d | { $execLine; }
             exit_code=${'$'}?
 
@@ -251,7 +260,7 @@ object RootSecurityWrapper {
         // unshare 缺失的 ROM 降级为无命名空间执行（探测见防线 2 兜底说明）
         val escapedSandbox = singleQuote(sandboxScript)
         return "if command -v unshare >/dev/null 2>&1; then " +
-            "unshare -m /system/bin/sh -c $escapedSandbox; " +
+            "unshare -m -p -f /system/bin/sh -c $escapedSandbox; " +
             "else /system/bin/sh -c $escapedSandbox; fi"
     }
 
@@ -367,3 +376,54 @@ Root 会话创建/修改的文件默认属主为 root。若写入本应用私有
 2. **加固档能力边界白名单**：裁减 `CAP_SYS_ADMIN` 后读取 `/data/data` 不受影响，但 OverlayFS 任务需显式切到挂载能力档。实现时应把「哪些工具/命令允许走挂载能力档」列成白名单集中管理，而非由调用方自由切换。
 3. **KSU 变体兼容矩阵**：KSU Next / SukiSU / MKSU 的 `su -v` 输出与管理器包名各不相同，探测标识列表需真机验证后再冻结，并在能力看板对「未知 su」如实展示。
 4. **分期落地建议**：第一期先落地 `KernelSuProbe` + 能力看板项（只读探测，无执行面）完成灰度验证；`RootSessionShell` 会话管理与 `RootSecurityWrapper` 作为第二期单独评审后实施。
+
+### 9.3 实现与规范的落差（第三轮核对，2026-10-15）
+
+这一轮不再只看文档，而是拿规范逐条对代码。结论：**三份实现都还没有被任何地方调用**，而唯一有调用点的根执行路径恰好违背了本文第一原则。
+
+| 编号 | 落差 | 证据 | 处理 |
+| :--- | :--- | :--- | :--- |
+| D1 | 根通道根本未接线 | `DeviceCommandRunner.execute(..., useRootEngine)` 默认 `false`，全仓库无调用点传 `true`；`KernelSuProbe.probeLocal()` 无调用点；能力闭集里没有 `kernelsu_root`；前端无对应设置 | 登记为遗留（见下） |
+| D2 | 授权主体违背原则 4 | 原 `useRootEngine` 分支 `Body("su -c <包装脚本>", "$?")` 把根命令交给 Shizuku 用户服务的 PTY 会话，父进程是 UID 2000 的 shell | 改为受控拒绝 `ROOT_ENGINE_NOT_WIRED`；新增 `RootCommandRunner`（应用进程内 `su -c`，单参数传递） |
+| D3 | 沙箱失败被静默吞掉 | 原包装器 `mount --make-rprivate ... \|\| true`，遮蔽失败照样往下跑 | 失败即停：`EXIT_NAMESPACE_UNAVAILABLE=125`、`EXIT_PROPAGATION_FAILED=126`、`EXIT_BLOCK_MASK_FAILED=127`；诊断走 `DSH_ROOT_SANDBOX:` 前缀 |
+| D4 | 命名空间没有降级路径 | 原实现只认 `unshare -m -p -f`，内核未开 PID namespace 的设备直接不可用 | 改为 `-m -p -f` → `-m -p` → `-m -f` → `-m` 逐级探测（用 `true` 试探，不重跑载荷），PID 隔离缺失时输出诊断 |
+| D5 | 探测把 LKM 设备判死 | 原 `evaluate` 在 `!isGkiSupported` 时直接返回 `UNSUPPORTED`，而 KernelSU 的 LKM 路线支持 4.9/5.4 | 内核版本降为诊断信息（`ProbeResult.warning()`），可用性判定改看「管理器存在」或「`su -v` 自报 KernelSU 变体」 |
+| D6 | 官方管理器包名缺失 | 原列表只有 `me.tiann.kernelsu`、`com.rifsxd.ksunext` | 补 `me.weishu.kernelsu`（官方）与 `com.sukisu.ultra` |
+| D7 | 授权判定只看 `su -v` | 原实现把 `exitValue()==0 \|\| output.contains("KernelSU")` 当作「已授权」 | 改为 `su -c id -u` 输出含 `0` 才算授权；`su -v` 只用于识别变体；探测结果带 60 秒缓存 |
+| D8 | 护栏可被字面变形绕过 | 原 7 条正则匹配原文：`re\boot`、`'reboot'`、`REBOOT`、`/dev//block`、`mknod`、`parted`、`sgdisk`、`setenforce permissive`、`> /sys/fs/selinux/enforce` 全部漏过；`\bwipe\b` 反而误杀 `--wipe-cache` | 改为先归一化（丢反斜杠、去引号、折叠空白、转小写）再匹配；规则按「不可逆动作 + 目标」成对描述，共 12 条 |
+
+#### 本轮改动的文件
+
+- `android/app/src/main/java/io/deepseekharness/mobile/shizuku/RootSecurityWrapper.kt`：整段重写——分层失败即停、Base64 管道替代 `sh -c '<...>'` 嵌套引号、`mountpoint -q` 判定真实挂载点、`setpriv` 加固档缺失时给 `HARDENING_UNAVAILABLE` 诊断而不谎称已加固。
+- `.../RootCommandGuard.kt`：整段重写——归一化 + 12 条成对规则 + `violations()` 诊断口（`wipe` 收窄成 `wipe data/cache/system`）。
+- `.../KernelSuProbe.kt`：判定语义重写（D5–D7），新增 `CACHE_TTL_MS`、`clearCache()`、`ProbeResult.suVersion` / `warning()`。
+- `.../RootCommandRunner.kt`：**新增**。应用进程内执行 `su -c <单参数>`；剥离诊断行；把沙箱退出码与 su 故障翻译成受控错误码（`ROOT_SU_UNAVAILABLE`、`ROOT_COMMAND_TIMEOUT`、`ROOT_SANDBOX_UNAVAILABLE`、`ROOT_SANDBOX_PROPAGATION_FAILED`、`ROOT_BLOCK_MASK_FAILED`、`ROOT_PERMISSION_DENIED`、`ROOT_COMMAND_FAILED`）。
+- `.../DeviceCommandRunner.kt`：`useRootEngine` 分支先跑静态安检，再抛 `ROOT_ENGINE_NOT_WIRED`。
+- `android/app/src/test/java/io/deepseekharness/mobile/shizuku/RootSecurityTest.kt`：重写为 18 条用例，新增归一化绕过集、内层 Base64 往返、退出码翻译、以及用假进程驱动的执行器测试。
+
+#### 仍然遗留
+
+1. **接线**：把 `RootCommandRunner` 接进命令通道（`DeviceCommandRunner` 现在返回 Shizuku 会话脚本，需要为根通道换一条返回路径），并把 `kernelsu_root` 加进 `DeviceCapabilityPolicy` 闭集与前端文案——属于 §9.2.4 的第二期。
+2. **诊断消费**：`RootCommandResult.diagnostics` 目前只回传，尚未渲染到能力看板。
+3. **失败即停的代价**：ROM 如果连 `mount --make-rprivate /` 都不支持，根通道会直接拒绝服务而不是降级运行。这是有意选择——宁可不可用，也不要「看起来隔离了」。真机适配器验证后如确认普遍缺失，再讨论是否把它降级为「带告警的放行」。
+4. **§9.2 的四条待决策**（App Profile 引导流程、能力档白名单、变体矩阵真机验证、分期边界）原样保留。
+5. **TC-01 ~ TC-11 需要真机**：本轮只覆盖静态与单元层；`unshare` 能力探测、`mount --make-rprivate` 是否被适配器允许、遮蔽是否真的生效，都必须真机跑过才能冻结。
+
+### 9.4 第四轮（自查补漏）：堵住「假成功」并修掉构建阻断项（2026-10-15 晚）
+
+第三轮的改动本身也被拿去做了一次反向审查——问的是同一个问题：「什么情况下它会**看起来成功了、其实什么都没做**？」
+
+| 编号 | 问题 | 证据 | 处理 |
+| :--- | :--- | :--- | :--- |
+| D9 | 解码失败 = 空脚本「成功」 | 外层与内层都是 `printf '%s' '<b64>' \| $dsh_dec \| /system/bin/sh -s`。Base64 解码一旦失败，`sh -s` 读到的是空输入，**退出码 0**——调用方会把「一行都没执行」当成执行成功 | 两层都改成「先解到变量、再校验非空」，失败即停 `EXIT_DECODE_FAILED = 124`，并打 `DECODE_FAILED` 诊断行 |
+| D10 | 沙箱退出码与载荷退出码撞车 | `125/126/127` 同时也是极常见的载荷退出码（`127` = command not found，`126` = not executable）。只按数字归类，会把「命令没找到」报成「块设备遮蔽失败」 | 错误码改为**只认领同时打印了对应诊断行**的退出码（按 `diagnostics` 内容判定），没有诊断行就按载荷自己的结果归类 |
+| D11 | `setpriv` 存在 ≠ 参数被接受 | 旧写法只判断 `command -v setpriv`。参数不被接受时 setpriv 直接失败，载荷根本不会执行，而报错形态像「命令自己失败」 | 先用 `setpriv ... /system/bin/sh -c true` 试探，不接受则输出 `HARDENING_UNAVAILABLE` 诊断并降级执行 |
+| D12 | **仓库构建被一行声明阻断** | `android/settings.gradle` 第 1 行 `def useMavenMirror = ...` 排在 `pluginManagement {}` 之前。Gradle 8.11.1 直接拒绝：`The pluginManagement {} block must appear before any other statements in the script`。CI run `38677287848`（提交 `c0cf3154`）的 build 作业失败原因就是这一条，`publish-release` 因此 skipped | 变量定义分别移进两个 `repositories {}` 闭包，`ENABLE_MAVEN_MIRROR` 开关行为不变 |
+
+**教训（D9 与 D10 是同一类错）**：只描述「成功路径」的协议一定会漏掉「空执行」。凡是把结果交给下游判断的地方，都要同时定义「没跑成」和「跑成了但什么都没有」的区别。
+
+#### 同一轮里确认、但不在本次修改范围的问题
+
+1. **根通道仍然没有调用方**（§9.3 D1 未变）：`KernelSuProbe.probeLocal()` 无调用点，能力闭集里没有 `kernelsu_root`，前端无开关。当前状态是「通道修好了但门没开」——不会误用，也不会可用。
+2. **工作区正被另一条改造进行中**：`MobileRuntimePlugin.kt` / `MobileRuntimeController.kt` / `RuntimeHost.kt` 处于半成品状态（`Syntax error: Missing '}'`、大量 `Unresolved reference`），`android/settings-review-temp.gradle` 为遗留临时文件。本轮 shizuku 改动因此改在 HEAD 的纯净副本里验证（见 §9.5）。
+3. **`scripts/gate-check.mjs` 与 CI 无关**：它没有被任何 workflow 引用，且第 3 步「子模块缺失即 PASS」会给假绿灯；CI 里另有更强的实现。要么接进 CI，要么删掉。
