@@ -79,8 +79,11 @@ object RuntimeCommand {
      * 无秘密投递时的等价包装：同样在 exec 前显式设置 HOME/USER/LOGNAME/SHELL。
      * env -i HOME=/root ... 是第一道防线，但访客内 `/usr/bin/env` 在某些 rootfs 上
      * 可能行为异常（busybox 兼容差异、路径差异），这层 sh 包装作为第二道防线。
+     *
+     * **`exec "$@"` 不是 `exec "$0" "$@"`**：`$0` 由调用方作为独立 argv 元素传入且不进入 `$@`，
+     * 因此 [GUEST_ENTRYPOINT_ARGV0] 只能当占位，真正的入口必须整份走 `$@`。
      */
-    private val GUEST_ENV_FALLBACK_SCRIPT = "export HOME=/root USER=root LOGNAME=root SHELL=/bin/bash; exec \"\$@\""
+    internal val GUEST_ENV_FALLBACK_SCRIPT = "export HOME=/root USER=root LOGNAME=root SHELL=/bin/bash; exec \"\$@\""
 
     /** `sh -c '脚本' <$0> <argv...>` 里的 `$0`：只用于占位，dsh 看到的是真正的入口。 */
     private const val GUEST_ENTRYPOINT_ARGV0 = "dsh-mobile"
@@ -184,8 +187,8 @@ object RuntimeCommand {
             add("/bin/sh")
             add("-c")
             add(GUEST_ENV_FALLBACK_SCRIPT)
-            add(input.entrypoint.first())
-            addAll(input.entrypoint.drop(1))
+            add(GUEST_ENTRYPOINT_ARGV0)
+            addAll(input.entrypoint)
         } else {
             // argv 里与秘密相关的全部内容就是这一个路径；取值在别处、在这个列表之外。
             add("/bin/sh")

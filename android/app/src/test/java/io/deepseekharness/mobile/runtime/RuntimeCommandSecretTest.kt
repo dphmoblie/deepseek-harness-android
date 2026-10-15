@@ -89,6 +89,7 @@ class RuntimeCommandSecretTest {
                 "LOGNAME",
                 "LANG",
                 "TERM",
+                "SHELL",
                 "PATH",
                 "DSH_DEVICE_BRIDGE_PORT",
                 "DSH_PIDFILE",
@@ -105,11 +106,34 @@ class RuntimeCommandSecretTest {
         // 路径必须作为独立元素出现（写在包装脚本里也一样能跑，但独立元素更可审计）。
         assertTrue(argv.contains(RuntimeCommand.GUEST_SECRET_ENV_PATH))
         assertEquals(1, argv.count { it == RuntimeCommand.GUEST_SECRET_ENV_PATH })
-        // 包装脚本本身必须既无取值、也无路径、也无赋值形态。
+        // 包装脚本本身必须是常量：无路径、无任何凭据取值。
+        // （它对固定字面量做赋值是预期行为 —— `HOME=/root` 正是这层兜底的内容。）
         val script = RuntimeCommand.GUEST_SECRET_SOURCE_SCRIPT
-        assertFalse(script.contains('='))
         assertFalse(script.contains(RuntimeCommand.GUEST_SECRET_ENV_PATH))
         sentinelSecrets.forEach { (_, value) -> assertFalse(script.contains(value)) }
+    }
+
+    @Test
+    fun `the secret-free wrapper keeps the real entrypoint as the exec arguments`() {
+        val argv = RuntimeCommand.prootArgv(
+            input(secrets = RuntimeSecretDelivery.NONE, harnessSession = false, deviceBridgePort = null),
+        )
+
+        val index = argv.indexOf("/bin/sh")
+        assertTrue("无秘密投递时也必须加入 sh 包装（HOME 兜底）", index >= 0)
+        assertEquals("-c", argv[index + 1])
+        assertEquals(RuntimeCommand.GUEST_ENV_FALLBACK_SCRIPT, argv[index + 2])
+        // sh -c '脚本' <$0> <argv...>：脚本用的是 `exec "$@"` 而不是 `exec "$0" "$@"`，
+        // 因此 $0 只能当占位，入口必须**整份**落在 $@ 里。
+        // 曾经的写法是 `entrypoint.first()` 当 $0、`drop(1)` 当 $@ —— 那样 entrypoint[0]
+        // 会被静默吞掉，`["/bin/bash","--login"]` 退化成 exec("--login")，
+        // 终端与探测全部以 exit code 2 失败。
+        assertEquals("dsh-mobile", argv[index + 3])
+        assertEquals(entrypoint, argv.drop(index + 4))
+        // 兜底脚本同样只许含固定字面量，不许出现任何凭据取值。
+        sentinelSecrets.forEach { (_, value) ->
+            assertFalse(RuntimeCommand.GUEST_ENV_FALLBACK_SCRIPT.contains(value))
+        }
     }
 
     @Test
@@ -128,15 +152,14 @@ class RuntimeCommandSecretTest {
     }
 
     @Test
-    fun `credential-free launches keep the unwrapped entrypoint`() {
+    fun `credential-free launches stay wrapped and inject no secret variables`() {
         val argv = RuntimeCommand.prootArgv(
             input(secrets = RuntimeSecretDelivery.NONE, harnessSession = false, deviceBridgePort = null),
         )
 
-        // 探测、自检、无凭据终端走的还是修复前那一套形态：不引入任何新变量。
-        assertFalse(argv.contains("/bin/sh"))
+        // 无凭据启动现在同样走 sh 包装（HOME 兜底），但秘密相关的东西一个都不许出现：
+        // 不投递秘密文件路径、不注入 pid 文件与设备桥端口。
         assertFalse(argv.contains(RuntimeCommand.GUEST_SECRET_ENV_PATH))
-        assertEquals(entrypoint, argv.takeLast(entrypoint.size))
         assertFalse(argv.any { it.contains("DSH_PIDFILE") })
         assertFalse(argv.any { it.contains("DSH_DEVICE_BRIDGE_PORT") })
     }
