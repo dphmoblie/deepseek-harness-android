@@ -157,28 +157,34 @@ describe('设置首页：分组与分类筛选', () => {
     expect(filesEntry.textContent ?? '').not.toMatch(/[\u4e00-\u9fff]/)
   })
 
-  it('按功能词搜索过滤入口，支持清空及空结果提示', async () => {
+  it('按功能词搜索过滤入口，点搜索图标或回车才生效，支持清空及空结果提示', async () => {
     await openSettingsHome()
 
     const searchInput = screen.getByRole('searchbox', { name: '按功能词查找入口' })
     expect(searchInput).toBeVisible()
 
-    // 搜索「主题」：应只保留外观与显示分组，隐藏其他分组如模型连接
+    // 只输入不确认：列表不筛选——输入法组合中途不能被列表刷新打断。
     fireEvent.change(searchInput, { target: { value: '主题' } })
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByRole('region', { name: '模型连接' })).toBeVisible()
+
+    // 点搜索图标确认：应只保留外观与显示分组，隐藏其他分组如模型连接
+    fireEvent.click(screen.getByRole('button', { name: '搜索入口' }))
     expect(screen.getByRole('status')).toHaveTextContent('找到 1 个匹配的入口')
     expect(screen.getByRole('region', { name: '外观与显示' })).toBeVisible()
     expect(screen.getByRole('button', { name: /主题/ })).toBeVisible()
     expect(screen.queryByRole('region', { name: '模型连接' })).toBeNull()
 
-    // 点击清空按钮：恢复全部入口
+    // 点击清空按钮：草稿与已确认词一起清掉，恢复全部入口
     const clearButton = screen.getByRole('button', { name: '清空查找词' })
     fireEvent.click(clearButton)
     expect(searchInput).toHaveValue('')
     expect(screen.queryByRole('status')).toBeNull()
     expect(screen.getByRole('region', { name: '模型连接' })).toBeVisible()
 
-    // 输入无匹配词：显示空提示
+    // 回车确认无匹配词：显示空提示
     fireEvent.change(searchInput, { target: { value: '不存在的设置项xyz' } })
+    fireEvent.keyDown(searchInput, { key: 'Enter' })
     expect(screen.getByRole('status')).toHaveTextContent('没有匹配的入口')
     expect(screen.queryByRole('region', { name: '外观与显示' })).toBeNull()
   })

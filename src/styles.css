@@ -1357,7 +1357,7 @@ button:disabled {
  */
 .settings-search {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
@@ -1370,10 +1370,6 @@ button:disabled {
 .settings-search:focus-within {
   border-color: var(--blue);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent);
-}
-
-.settings-search > svg {
-  color: var(--muted);
 }
 
 .settings-search input {
@@ -1403,6 +1399,24 @@ button:disabled {
 
 .settings-search-clear:hover {
   color: var(--ink);
+}
+
+/* 搜索是唯一的主动作，用实色圆钮与「清空」的弱按钮拉开层级。 */
+.settings-search-go {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--on-accent);
+  background: var(--blue);
+  cursor: pointer;
+}
+
+.settings-search-go:hover {
+  background: var(--blue-hover);
 }
 
 .settings-directory {
