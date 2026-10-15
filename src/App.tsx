@@ -2556,12 +2556,8 @@ function RuntimeVersionsPanel({
                         {isCurrentActive && <span className="status-chip success" style={{ marginLeft: 6 }}>{t("使用中")}</span>}
                         {!isCurrentActive && inLibrary && <span className="status-chip" style={{ marginLeft: 6 }}>{t("已保存")}</span>}
                       </strong>
-                      <small>
-                        {[
-                          item.dshVersion ? `dsh ${item.dshVersion}` : t("dsh 版本未读到"),
-                          item.notes ? item.notes : '',
-                        ].filter(Boolean).join(' · ')}
-                      </small>
+                      <small>{item.dshVersion ? `dsh ${item.dshVersion}` : t("dsh 版本未读到")}</small>
+                      {item.notes !== undefined && item.notes.trim() !== '' && <ReleaseNotes notes={item.notes} />}
                     </div>
                     <div className="release-actions">
                       {isCurrentActive ? (
@@ -2835,7 +2831,7 @@ function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restoreSnapsho
 interface AppUpdateSectionProps {
   /** 读取应用自身（APK）的更新状态：包含已安装版本、是否允许安装未知来源、有没有新版本。 */
   loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>
-  /** 切换更新频道；一次往返返回最新状态，失败时开关回弹（不做乐观态）。 */
+  /** 切换更新频道；一次往返返回最新状态，失败时回读实际频道（不做乐观态）。 */
   setUpdateChannel: (channel: AppUpdateChannel) => Promise<AppUpdateState>
   downloadUpdate: () => Promise<void>
   installUpdate: () => Promise<void>
@@ -2909,7 +2905,7 @@ function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, instal
   }, [load])
 
   const runStep = (step: 'download' | 'install', action: () => Promise<void>, success: string): void => {
-    if (busy !== null) return
+    if (busy !== null || switchingChannel || loading || state?.available === undefined) return
     setBusy(step)
     // 进度只描述「这一次下载」：开始前清掉上一轮读数，结束后无论成败都不再显示进度条。
     if (step === 'download') setProgress(null)
@@ -2929,9 +2925,9 @@ function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, instal
   const available = state?.available
 
   /**
-   * 切换更新频道：原生侧写入后以 forceRefresh 重查，一次往返带回最新状态。
+   * 切换更新频道：一次往返带回最新状态，开关始终以原生回读的 state.channel 为准。
    *
-   * 开关不做乐观态——checked 始终以原生回读的 state.channel 为准，失败自然回弹。
+   * 失败后重新确认实际频道；无法确认时清除旧候选，避免按不明频道下载。
    * 复用 readRevision 守卫：切换进行中禁用所有会触发 load 的按钮，所以这个序号
    * 只会被卸载清理打断，不会被本组件的其它读取覆盖。
    */
@@ -2939,12 +2935,23 @@ function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, instal
     if (state === null || loading || busy !== null || switchingChannel) return
     const revision = ++readRevision.current
     setSwitchingChannel(true)
+    setFailed(false)
     void (async () => {
       try {
         const fresh = await setUpdateChannel(next)
         if (revision === readRevision.current) setState(fresh)
       } catch (error) {
-        if (revision === readRevision.current) notify(errorMessage(error), 'error')
+        if (revision !== readRevision.current) return
+        notify(errorMessage(error), 'error')
+        try {
+          const fresh = await loadUpdate(false)
+          if (revision === readRevision.current) setState(fresh)
+        } catch {
+          if (revision === readRevision.current) {
+            setState(null)
+            setFailed(true)
+          }
+        }
       } finally {
         if (revision === readRevision.current) setSwitchingChannel(false)
       }
@@ -3057,7 +3064,7 @@ function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, instal
               className="button button-secondary"
               type="button"
               onClick={() => runStep('download', downloadUpdate, t("更新包已下载并通过校验"))}
-              disabled={available === undefined || loading || busy !== null}
+              disabled={available === undefined || loading || busy !== null || switchingChannel}
             >
               {busy === 'download' ? <Loader2 className="spin" size={18} /> : <Download size={18} />}
               {t("下载更新")}
@@ -3066,7 +3073,7 @@ function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, instal
               className="button button-secondary"
               type="button"
               onClick={() => runStep('install', installUpdate, t("已交给系统安装器"))}
-              disabled={available === undefined || loading || busy !== null}
+              disabled={available === undefined || loading || busy !== null || switchingChannel}
             >
               {busy === 'install' ? <Loader2 className="spin" size={18} /> : <Rocket size={18} />}
               {t("安装更新")}

@@ -3,7 +3,9 @@ package io.deepseekharness.mobile.runtime
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 
 /**
  * 已下载更新包的落地位置。
@@ -48,13 +50,12 @@ internal object AppUpdateStorage {
         return target
     }
 
-    /** 已下载好的安装包；多个时取最新的一个，没有就是 null。 */
-    fun downloaded(cacheDir: File): File? {
+    /** 只查当前发布版本的完整包，不能用另一个频道或旧检查留下的包代替。 */
+    fun downloaded(cacheDir: File, version: String): File? {
         val directory = File(cacheDir, DIRECTORY_NAME)
-        if (!directory.isDirectory) return null
-        return directory.listFiles()
-            ?.filter { it.isFile && it.name.startsWith(FILE_PREFIX) && it.name.endsWith(FILE_SUFFIX) }
-            ?.maxByOrNull { it.lastModified() }
+        val target = File(directory, "$FILE_PREFIX${requireVersion(version)}$FILE_SUFFIX")
+        if (!directory.isDirectory || Files.isSymbolicLink(directory.toPath())) return null
+        return target.takeIf { Files.isRegularFile(it.toPath(), LinkOption.NOFOLLOW_LINKS) }
     }
 
     /** 只保留刚下好的那一份；同目录里别的更新包（含半截的 `.part`）都清掉。删除失败不报错——缓存目录随时可清。 */
@@ -82,12 +83,26 @@ internal object AppUpdateStorage {
  */
 internal object AppUpdateInstallPolicy {
     /** 返回可以交给系统安装器的文件；任何前置条件不满足都抛 [RuntimeFailure]。 */
-    fun requireInstallable(installAllowed: Boolean, apk: File?): File {
+    fun requireInstallable(installAllowed: Boolean, apk: File?, release: AppReleaseCatalog.Release): File {
         if (!installAllowed) {
             throw RuntimeFailure("APP_UPDATE_INSTALL_PERMISSION", "尚未允许安装未知应用，请先在系统设置里授权")
         }
-        if (apk == null || !apk.isFile) {
+        if (apk == null || !Files.isRegularFile(apk.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             throw RuntimeFailure("APP_UPDATE_FILE_MISSING", "更新安装包不存在，请先下载")
+        }
+        try {
+            // 安全校验：频道切换、目录刷新或缓存文件变化后，旧包不能冒充当前发布。
+            if (release.bytes !in 1..RuntimeLimits.MAX_COMPRESSED_BYTES || Files.size(apk.toPath()) != release.bytes) {
+                throw RuntimeFailure("APP_UPDATE_SIZE_INVALID", "更新安装包大小已变化，请重新下载")
+            }
+            val (bytes, sha256) = MailboxDigest.bytesAndSha256(apk)
+            if (bytes != release.bytes || !MessageDigest.isEqual(
+                    sha256.toByteArray(Charsets.US_ASCII), release.sha256.toByteArray(Charsets.US_ASCII),
+                )) {
+                throw RuntimeFailure("APP_UPDATE_DIGEST_MISMATCH", "更新安装包与当前版本不符，请重新下载")
+            }
+        } catch (error: IOException) {
+            throw RuntimeFailure("APP_UPDATE_STORAGE_FAILED", "无法校验更新安装包，请重新下载", error)
         }
         return apk
     }
