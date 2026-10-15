@@ -75,7 +75,13 @@ describe('设置首页：分组与分类筛选', () => {
   it('分类筛选只留这一类，并且点进去到对应设置', async () => {
     await openSettingsHome()
 
+    // 分类芯片默认收起，先展开；展开前它们不在页面上，不会挤占首屏。
+    expect(screen.queryByRole('listbox', { name: '筛选功能分类' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '按分类筛选' }))
     fireEvent.click(screen.getByRole('option', { name: /筛选分类： 设备与自动化/ }))
+    // 收起后筛选钮仍提示「列表正被筛选」。
+    fireEvent.click(screen.getByRole('button', { name: '按分类筛选' }))
+    expect(screen.getByRole('button', { name: '按分类筛选' })).toHaveClass('is-filtered')
     expect(screen.queryByRole('button', { name: /模型与密钥/ })).toBeNull()
     expect(screen.queryByRole('region', { name: '模型连接' })).toBeNull()
     expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByText('设备 Shell')).toBeVisible()
@@ -88,6 +94,7 @@ describe('设置首页：分组与分类筛选', () => {
     await openSettingsHome()
     const readsBefore = bridge.getSettings.mock.calls.length
 
+    fireEvent.click(screen.getByRole('button', { name: '按分类筛选' }))
     fireEvent.click(screen.getByRole('option', { name: /筛选分类： 日志与排查/ }))
     fireEvent.click(screen.getByRole('option', { name: /筛选分类：全部分类/ }))
 

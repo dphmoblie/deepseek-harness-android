@@ -1357,9 +1357,9 @@ button:disabled {
  */
 .settings-search {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   margin-bottom: 12px;
   padding: 12px 14px;
   border: 1px solid var(--line);
@@ -1400,6 +1400,23 @@ button:disabled {
 .settings-search-clear:hover {
   color: var(--ink);
 }
+
+/* 筛选钮与「清空」同属弱按钮；选中具体分类后换成主色浅底，提示列表正被筛选。 */
+.settings-search-filter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--surface-muted);
+  cursor: pointer;
+}
+
+.settings-search-filter:hover, .settings-search-filter[aria-expanded="true"] { color: var(--ink); }
+.settings-search-filter.is-filtered { color: var(--blue); background: var(--blue-soft); border-color: var(--blue-line); }
 
 /* 搜索是唯一的主动作，用实色圆钮与「清空」的弱按钮拉开层级。 */
 .settings-search-go {

@@ -8,6 +8,7 @@ export const english: Readonly<Record<string, string>> = {
   "设备与自动化": "Device and automation",
   "日志与排查": "Logs and troubleshooting",
   "筛选功能分类": "Filter settings categories",
+  "按分类筛选": "Filter by category",
   "全部分类": "All categories",
   "筛选分类：全部分类": "Filter category: all",
   "筛选分类：": "Filter category:",

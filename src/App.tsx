@@ -57,6 +57,7 @@ import {
   Share2,
   ShieldCheck,
   SlidersHorizontal,
+  ListFilter,
   Smartphone,
   Square,
   SquareTerminal,
@@ -1561,6 +1562,8 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
       照抄 `ApplicationPicker` 的既有范式：不放行会被吞掉候选词，正好破坏本组件想保护的输入。 */
   const [isComposing, setIsComposing] = useState(false)
   const [category, setCategory] = useState<SettingsHomeGroup | 'all'>('all')
+  /** 分类芯片默认收起：换行后占 4 行，会把功能入口挤出首屏；由搜索框旁的筛选钮展开。 */
+  const [filterOpen, setFilterOpen] = useState(false)
   /** 每个分组只留命中的入口；整组都没命中就连标题一起不渲染，避免空标题刷屏。 */
   const groups = SETTINGS_HOME_GROUPS
     .filter(group => category === 'all' || category === group.id)
@@ -1643,18 +1646,24 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
             <X size={16} />
           </button>
         )}
+        {/* 已选了具体分类时筛选钮高亮，收起芯片后用户仍能看出列表正被筛选。 */}
+        <button className={`settings-search-filter ${category !== 'all' ? 'is-filtered' : ''}`} type="button"
+          onClick={() => setFilterOpen(open => !open)} aria-label={t("按分类筛选")}
+          aria-expanded={filterOpen} aria-controls="settings-categories">
+          <ListFilter size={18} />
+        </button>
         <button className="settings-search-go" type="button" onClick={() => applySearch(query)} aria-label={t("搜索入口")}>
           <Search size={18} />
         </button>
       </div>
 
-      <div className="settings-categories" role="listbox" aria-label={t("筛选功能分类")}>
+      {filterOpen && <div id="settings-categories" className="settings-categories" role="listbox" aria-label={t("筛选功能分类")}>
         <button type="button" role="option" aria-label={t("筛选分类：全部分类")} aria-selected={category === 'all'} onClick={() => setCategory('all')}>{t("全部分类")}</button>
         {SETTINGS_HOME_GROUPS.map(group => (
           <button key={group.id} type="button" role="option" aria-label={`${t("筛选分类：")} ${t(group.label)}`} aria-selected={category === group.id}
             onClick={() => { setCategory(group.id); setQuery(''); setAppliedQuery('') }}>{t(group.label)}</button>
         ))}
-      </div>
+      </div>}
 
       {/* 结果条用 role="status"：输入时读屏能听到「找到几个」，而不是列表安静地变了一下。 */}
       {searching && (
