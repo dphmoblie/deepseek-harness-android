@@ -159,7 +159,7 @@ class HarnessPageSessionTest {
                 sessionId = "session-xyz_123.4",
             ),
         )
-        // Null or blank sessionId does not append the parameter
+        // null 或空串的 sessionId 不拼接参数
         assertEquals(
             "http://127.0.0.1:3080/?appVersion=0.1.21&runtimeVersion=0.1.12",
             HarnessPageUrl.withVersions(
@@ -169,7 +169,7 @@ class HarnessPageSessionTest {
                 sessionId = null,
             ),
         )
-        // Invalid sessionIds with spaces, metacharacters, or excessive length are rejected
+        // 带空格、元字符或超长的非法 sessionId 一律抛 IllegalArgumentException
         assertThrows(IllegalArgumentException::class.java) {
             HarnessPageUrl.withVersions("http://127.0.0.1:3080/", "0.1.21", "0.1.12", sessionId = "bad session id")
         }

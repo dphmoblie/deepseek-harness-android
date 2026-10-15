@@ -110,8 +110,8 @@ class DeviceBridgeServer(
         }
         activeSockets.forEach(::closeQuietly)
         executor.shutdownNow()
-        // Close a socket accepted concurrently with server.close(), then briefly wait
-        // so no late device request can reconnect Shizuku after runtime cleanup.
+        // 关掉与 server.close() 同时接受的 socket，再等一小段时间，确保运行时清理后
+        // 不会有迟到的设备请求重新连上 Shizuku。
         activeSockets.forEach(::closeQuietly)
         try {
             executor.awaitTermination(STOP_WAIT_MILLIS, TimeUnit.MILLISECONDS)

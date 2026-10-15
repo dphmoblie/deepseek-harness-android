@@ -214,7 +214,7 @@ class DeviceCommandRunner(
         )
     }
 
-    /** Terminal output tap: aggregate until the shell-expanded end marker closes the request. */
+    /** 终端输出汇聚：攒到 shell 展开的结束标记才算这一轮请求完成。 */
     fun onOutput(sessionId: String, dataBase64: String) {
         val pending = inflight[sessionId] ?: return
         if (pending.done.isDone) return
@@ -271,7 +271,7 @@ class DeviceCommandRunner(
         }
     }
 
-    /** Complete all pending requests (plugin teardown). */
+    /** 插件销毁时把所有挂起请求一并结清。 */
     fun cancelAll() {
         inflight.values.forEach { pending ->
             if (!pending.done.isDone) {
@@ -638,7 +638,7 @@ class DeviceCommandRunner(
             "if command -v uiautomator >/dev/null 2>&1; then " +
             "dsh_first=0; uiautomator dump --compressed \$dsh_tmp 2>&1 || dsh_first=\$?; " +
             "if [ -s \$dsh_tmp ]; then cat \$dsh_tmp; " +
-            // Older Android releases accept the legacy form but reject --compressed.
+            // 旧版 Android 的 uiautomator 接受 legacy 形态但拒绝 --compressed，需要回退。
             "else dsh_second=0; uiautomator dump \$dsh_fallback 2>&1 || dsh_second=\$?; " +
             "if [ -s \$dsh_fallback ]; then cat \$dsh_fallback; " +
             "elif [ \$dsh_first -ne 0 ] || [ \$dsh_second -ne 0 ]; then echo \"UI_DUMP_FAILED: uiautomator dump failed\" >&2; " +

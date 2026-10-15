@@ -97,7 +97,7 @@ internal object AppThemePreference {
         applySafely(activity)
     }
 
-    /** Native screens may supply their surface color so safe areas match their own toolbar. */
+    /** 原生页面可传入自己的背景色，让状态栏与它们的 toolbar 同色。 */
     fun applySafely(activity: Activity, backgroundColor: Int? = null) {
         if (activity.isFinishing || activity.isDestroyed) return
         runCatching {

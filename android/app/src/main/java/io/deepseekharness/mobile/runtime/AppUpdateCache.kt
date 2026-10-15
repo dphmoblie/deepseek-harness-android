@@ -5,7 +5,7 @@ import org.json.JSONObject
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
 
-/** Only public release metadata is persisted; installed-package facts and permissions stay live. */
+/** 只持久化公开发布元数据；已安装包事实与权限态保持实时查询。 */
 internal class AppUpdateCache(
     private val storage: Storage,
     private val catalog: AppReleaseCatalog = AppReleaseCatalog(),
