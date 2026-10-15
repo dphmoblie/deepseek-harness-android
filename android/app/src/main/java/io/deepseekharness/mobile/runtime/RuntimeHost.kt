@@ -5,6 +5,7 @@ import io.deepseekharness.mobile.DeviceBridgeServer
 import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
 import java.security.SecureRandom
 import java.util.Base64
+import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -50,17 +51,17 @@ object RuntimeHost {
     private var applicationContext: Context? = null
     private var controller: MobileRuntimeController? = null
     private var foregroundServiceActive = false
-    private val sinks = linkedSetOf<RuntimeEventSink>()
+    private val sinks = CopyOnWriteArraySet<RuntimeEventSink>()
 
     /**
      * 设备桥实例。桥由 app 包构造并配置，本对象只负责「整个进程只创建一次」
      * 与「运行时释放时一并拆除」这两件事。
      */
     private var deviceBridge: RuntimeScopedResource? = null
-    private var deviceCommands: DeviceCommandRunner? = null
+    @Volatile private var deviceCommands: DeviceCommandRunner? = null
 
     /**
-     * 事件分发器：先复制订阅者列表再在锁外回调。
+     * 订阅变更仍由生命周期锁串行；事件只读写时复制的快照，不能反向等待关停持有的锁。
      * 单个订阅者抛错不得影响运行时或其他订阅者。
      */
     private val fanOut = object : RuntimeEventSink {
@@ -78,8 +79,7 @@ object RuntimeHost {
     }
 
     private fun dispatch(action: (RuntimeEventSink) -> Unit) {
-        val current = lock.withLock { sinks.toList() }
-        current.forEach { sink ->
+        sinks.forEach { sink ->
             try {
                 action(sink)
             } catch (_: Throwable) {
@@ -216,8 +216,8 @@ object RuntimeHost {
         }.also { deviceCommands = it }
     }
 
-    /** 设备命令执行器；未创建时为 null。事件分发等热路径用它避免顺手创建执行器。 */
-    fun deviceCommandsOrNull(): DeviceCommandRunner? = lock.withLock { deviceCommands }
+    /** 事件回调只读已发布的执行器，不能为读取句柄反向申请生命周期锁。 */
+    fun deviceCommandsOrNull(): DeviceCommandRunner? = deviceCommands
 
     /** 结束本插件实例发起中的设备命令（插件销毁时调用；不拆除进程级资源）。 */
     fun cancelDeviceCommands() {

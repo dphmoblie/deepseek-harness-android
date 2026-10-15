@@ -10,6 +10,7 @@ import java.nio.file.Path
 import java.nio.file.SecureDirectoryStream
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributeView
+import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.util.UUID
@@ -25,7 +26,35 @@ internal class RuntimeSharedInbox(
     fun stagingDirectory(): File = withLock {
         val inbox = File(filesDir, "inbox")
         ensureDirectory(inbox)
+        cleanupOrphanedPending(inbox)
         inbox
+    }
+
+    /**
+     * 为一次导入登记临时文件的所有权。登记和清理必须在同一把锁下完成，
+     * 这样 Activity 重建时不会误删仍在复制中的文件。
+     */
+    fun <T> withPendingFile(action: (File) -> T): T {
+        val pending = withLock {
+            val inbox = File(filesDir, "inbox")
+            ensureDirectory(inbox)
+            cleanupOrphanedPending(inbox)
+            val file = File(inbox, ".pending-${UUID.randomUUID()}")
+            val permissions = if (file.toPath().fileSystem.supportedFileAttributeViews().contains("posix")) {
+                arrayOf(PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
+            } else emptyArray()
+            Files.newByteChannel(file.toPath(), setOf(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS), *permissions).use { }
+            activePending.add(file.toPath().toAbsolutePath().normalize())
+            file
+        }
+        return try {
+            action(pending)
+        } finally {
+            withLock {
+                activePending.remove(pending.toPath().toAbsolutePath().normalize())
+                runCatching { Files.deleteIfExists(pending.toPath()) }
+            }
+        }
     }
 
     /** 只能在访客已停止时调用；运行中投递不创建任何访客可修改的目录。 */
@@ -47,6 +76,8 @@ internal class RuntimeSharedInbox(
         val staged = File(filesDir, "inbox")
         if (!Files.exists(staged.toPath(), LinkOption.NOFOLLOW_LINKS)) return@withLock true
         try {
+            ensureDirectory(staged)
+            cleanupOrphanedPending(staged)
             withDirectory(filesDir, listOf("inbox")) { source ->
                 // 应用被杀时可能留下半个文件；只有原子发布后的完整暂存文件可以迁移。
                 val entries = source.map { it.fileName }.filterNot { it.toString().startsWith(".pending-") }.toList()
@@ -152,6 +183,27 @@ internal class RuntimeSharedInbox(
         }
     }
 
+    /** 只清理本应用生成的、直接位于私有 inbox 下的普通文件。 */
+    private fun cleanupOrphanedPending(inbox: File) {
+        val entries = try {
+            Files.newDirectoryStream(inbox.toPath()).use { it.toList() }
+        } catch (_: Exception) {
+            return
+        }
+        entries.forEach { path ->
+            val name = path.fileName?.toString() ?: return@forEach
+            if (!PENDING_NAME.matches(name) || activePending.contains(path.toAbsolutePath().normalize())) return@forEach
+            try {
+                val attributes = Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+                if (attributes.isRegularFile && !attributes.isSymbolicLink) {
+                    Files.deleteIfExists(path)
+                }
+            } catch (_: Exception) {
+                // 清理失败不影响后续分享；原件留给下一次尝试。
+            }
+        }
+    }
+
     private fun <T> withDirectory(anchor: File, names: List<String>, action: (SecureDirectoryStream<Path>) -> T): T {
         fun visit(parent: SecureDirectoryStream<Path>, index: Int): T =
             if (index == names.size) action(parent)
@@ -166,6 +218,8 @@ internal class RuntimeSharedInbox(
 
     companion object {
         private val lock = Any()
+        private val activePending = mutableSetOf<Path>()
+        private val PENDING_NAME = Regex("^\\.pending-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
         private const val MAX_FILE_BYTES = 64L * 1024 * 1024
 
         fun <T> withLock(action: () -> T): T = synchronized(lock, action)

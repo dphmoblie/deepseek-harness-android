@@ -13,6 +13,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import com.getcapacitor.BridgeActivity
 import io.deepseekharness.mobile.runtime.RuntimeSharedInbox
 import io.deepseekharness.mobile.runtime.RuntimeStore
+import io.deepseekharness.mobile.runtime.SharedFileImportBatch
+import io.deepseekharness.mobile.runtime.SharedFileImportBatch.Status as ImportResult
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -188,11 +190,24 @@ class MainActivity : BridgeActivity() {
                 val result = try {
                     importFiles(uris)
                 } catch (_: Throwable) {
-                    ImportResult.SOURCE_UNREADABLE
+                    SharedFileImportBatch.Result(ImportResult.SOURCE_UNREADABLE)
                 }
                 runOnUiThread {
                     if (isFinishing || isDestroyed) return@runOnUiThread
-                    when (result) {
+                    val partial = result.acceptedCount > 0 && result.status != ImportResult.SUCCESS && result.status != ImportResult.STAGED
+                    if (partial) {
+                        val received = if (result.deliveryComplete) "已导入收件箱" else "已接收，未投递的文件已安全暂存"
+                        val failure = when (result.status) {
+                            ImportResult.TOO_LARGE -> "后续文件超过 64 MB"
+                            ImportResult.PERMISSION_DENIED -> "后续文件没有读取权限"
+                            ImportResult.DESTINATION_UNAVAILABLE -> "后续文件无法保存"
+                            else -> "后续文件来源不可读"
+                        }
+                        // 已接收的文件不再用选择器整批重试，避免用户误以为全部失败而重复导入。
+                        showImportToast("${result.acceptedCount} 个文件$received；$failure，未导入")
+                        return@runOnUiThread
+                    }
+                    when (result.status) {
                         ImportResult.SUCCESS -> showImportToast("文件已导入应用收件箱")
                         ImportResult.STAGED -> showImportToast("文件已安全暂存，运行时准备完成后可在工作区 inbox 中使用")
                         ImportResult.TOO_LARGE -> showImportToast("文件超过 64 MB，无法导入")
@@ -210,36 +225,37 @@ class MainActivity : BridgeActivity() {
         }
     }
 
-    private fun importFiles(uris: List<Uri>): ImportResult {
+    private fun importFiles(uris: List<Uri>): SharedFileImportBatch.Result {
         val store = RuntimeStore(applicationContext)
         val sharedInbox = RuntimeSharedInbox(store)
         val inbox = try {
             sharedInbox.stagingDirectory()
         } catch (_: Exception) {
-            return ImportResult.DESTINATION_UNAVAILABLE
+            return SharedFileImportBatch.Result(ImportResult.DESTINATION_UNAVAILABLE)
         }
 
-        uris.forEachIndexed { index, uri ->
-            if (Thread.currentThread().isInterrupted) return ImportResult.SOURCE_UNREADABLE
+        return SharedFileImportBatch.run(uris.take(MAX_IMPORT_FILES), importOne = { index, uri ->
             val name = queryDisplayName(uri) ?: "shared-file-$index"
             val safeName = name.take(MAX_SOURCE_NAME_LENGTH)
                 .replace(Regex("[^A-Za-z0-9._-]"), "_")
                 .take(MAX_FILE_NAME_LENGTH)
                 .ifEmpty { "shared-file-$index" }
             val target = File(inbox, "${UUID.randomUUID()}-$safeName")
-            val pending = File(inbox, ".pending-${UUID.randomUUID()}")
-            val result = copySharedFile(uri, pending)
-            if (result != ImportResult.SUCCESS) return result
             try {
-                RuntimeSharedInbox.withLock {
-                    Files.move(pending.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                sharedInbox.withPendingFile { pending ->
+                    val result = copySharedFile(uri, pending)
+                    if (result != ImportResult.SUCCESS) result
+                    else {
+                        RuntimeSharedInbox.withLock {
+                            Files.move(pending.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                        }
+                        ImportResult.SUCCESS
+                    }
                 }
             } catch (_: Exception) {
-                pending.delete()
-                return ImportResult.DESTINATION_UNAVAILABLE
+                ImportResult.DESTINATION_UNAVAILABLE
             }
-        }
-        return if (sharedInbox.deliver()) ImportResult.SUCCESS else ImportResult.STAGED
+        }, deliver = sharedInbox::deliver)
     }
 
     private fun copySharedFile(uri: Uri, target: File): ImportResult {
@@ -251,19 +267,19 @@ class MainActivity : BridgeActivity() {
             return ImportResult.SOURCE_UNREADABLE
         }
 
-        var completed = false
         return try {
             input.use { source ->
                 try {
                     Files.newOutputStream(
                         target.toPath(),
-                        StandardOpenOption.CREATE_NEW,
+                        StandardOpenOption.TRUNCATE_EXISTING,
                         StandardOpenOption.WRITE,
                         LinkOption.NOFOLLOW_LINKS,
                     ).use { output ->
                         val buffer = ByteArray(COPY_BUFFER_BYTES)
                         var total = 0L
                         while (true) {
+                            if (Thread.currentThread().isInterrupted) return ImportResult.SOURCE_UNREADABLE
                             val read = try {
                                 source.read(buffer)
                             } catch (_: SecurityException) {
@@ -289,14 +305,11 @@ class MainActivity : BridgeActivity() {
                     return ImportResult.DESTINATION_UNAVAILABLE
                 }
             }
-            completed = true
             ImportResult.SUCCESS
         } catch (_: SecurityException) {
             ImportResult.PERMISSION_DENIED
         } catch (_: IOException) {
             ImportResult.SOURCE_UNREADABLE
-        } finally {
-            if (!completed) target.delete()
         }
     }
 
@@ -385,12 +398,4 @@ class MainActivity : BridgeActivity() {
         private const val MAX_MIME_TYPE_LENGTH = 127
     }
 
-    private enum class ImportResult {
-        SUCCESS,
-        STAGED,
-        TOO_LARGE,
-        PERMISSION_DENIED,
-        SOURCE_UNREADABLE,
-        DESTINATION_UNAVAILABLE,
-    }
 }
