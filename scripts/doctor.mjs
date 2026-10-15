@@ -25,9 +25,12 @@ function fail(message, remedy = '') {
 }
 
 // 1. Node.js
+// 口径必须和 package.json 的 engines（^22.19.0 || >=24.0.0）一致：只看大版本会让 22.0–22.18
+// 也打印 [OK]，而真正跑 `pnpm install` 时又会被 EBADENGINE 拦下——诊断工具不能给这种假绿灯。
 const nodeVersion = process.version
-const major = parseInt(nodeVersion.replace(/^v/, '').split('.')[0], 10)
-if (major >= 22) {
+const [nodeMajor, nodeMinor] = nodeVersion.replace(/^v/, '').split('.').map(part => parseInt(part, 10))
+const nodeOk = nodeMajor > 24 || nodeMajor === 24 || (nodeMajor === 22 && nodeMinor >= 19)
+if (nodeOk) {
   ok(`Node.js version: ${nodeVersion}`)
 } else {
   fail(`Node.js version ${nodeVersion} is below required ^22.19.0 || >=24.0.0`, '请升级 Node.js')
