@@ -104,12 +104,22 @@ object ModelConnectivityProbe {
             }
         }
 
+        /*
+         * 不跟随重定向（`instanceFollowRedirects = false`）。
+         *
+         * `HttpURLConnection` 跟随重定向时会把本次请求头**原样重放**到新地址，而这里带着
+         * `Authorization: Bearer <key>` / `x-api-key`：一个第三方或配置错的网关只要回一次
+         * 302，就能把用户的密钥收到自己那儿去。探测请求的功能只是「问一句通不通」，
+         * 因此宁可把重定向当成结果说明白，也不替用户把凭据送到第二个主机。
+         * 真需要那个地址的用户，按返回的提示把 Base URL 直接写成重定向后的地址即可。
+         */
+        var connection: HttpURLConnection? = null
         return try {
             val url = URL(requestUrl)
-            val connection = (url.openConnection() as HttpURLConnection).apply {
+            connection = (url.openConnection() as HttpURLConnection).apply {
                 connectTimeout = CONNECT_TIMEOUT_MS
                 readTimeout = READ_TIMEOUT_MS
-                instanceFollowRedirects = true
+                instanceFollowRedirects = false
                 requestMethod = "GET"
                 headers.forEach { (header, value) -> setRequestProperty(header, value) }
             }
@@ -149,6 +159,12 @@ object ModelConnectivityProbe {
                     status = 429,
                     latencyMs = latency,
                     message = "429 请求频率超限或配额耗尽 (${latency}ms)",
+                )
+                in 300..399 -> ModelConnectivityProbeResult(
+                    ok = false,
+                    status = code,
+                    latencyMs = latency,
+                    message = redirectMessage(code, connection?.getHeaderField("Location"), latency),
                 )
                 else -> ModelConnectivityProbeResult(
                     ok = false,
@@ -192,6 +208,23 @@ object ModelConnectivityProbe {
                 latencyMs = 0L,
                 message = "检测失败: ${e.message ?: "未知异常"}",
             )
+        } finally {
+            /*
+             * 探测是「问一次就完事」的短请求：不读响应体，也就不会有人替我们关连接。
+             * 不 disconnect 的话未关闭的流会挂在连接池里（Android 上表现为连接与句柄缓慢累积），
+             * 在「反复点检测」这种最正常的用法下最容易堆起来。
+             */
+            runCatching { connection?.disconnect() }
         }
+    }
+
+    /** 3xx 只解释、不跟随：把「为什么没自动跳」说清楚，并给出用户能自己走的路。 */
+    private fun redirectMessage(code: Int, location: String?, latencyMs: Long): String {
+        val host = location
+            ?.let { runCatching { URL(it).host }.getOrNull() }
+            ?.takeIf { it.isNotEmpty() }
+        val where = if (host != null) "重定向到 $host" else "响应重定向"
+        return "$code $where：不会自动跟随（避免把 API Key 送到别的主机），" +
+            "需要就走这个地址，请直接把 Base URL 填成它 (${latencyMs}ms)"
     }
 }
