@@ -319,6 +319,8 @@ class MobileRuntimePlugin : Plugin() {
     companion object {
         private const val DEVICE_COMMAND_TIMEOUT_MS = 60_000L
         private const val DESTROY_WAIT_SECONDS = 10L
+        // 更新跨插件实例保序，但慢网检查不能占用运行时启停的审计锁。
+        private val appUpdateOperationLock = ReentrantLock()
 
         /** 副屏直通 Shell 的一次性设备会话尺寸；与设备桥的默认列宽/行数保持一致。 */
         private const val VIRTUAL_SCREEN_COLUMNS = 80
@@ -661,7 +663,7 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun getAppUpdateState(call: PluginCall) {
         execute(call) {
-            audited(AuditEvent.APP_UPDATE) {
+            audited(AuditEvent.APP_UPDATE, appUpdateOperationLock) {
                 val forceRefresh = if (call.data.has("forceRefresh")) {
                     call.data.opt("forceRefresh") as? Boolean
                         ?: throw RuntimeFailure("APP_UPDATE_INPUT_INVALID", "更新检查参数无效")
@@ -680,23 +682,23 @@ class MobileRuntimePlugin : Plugin() {
      * 权限：应用内桥接。
      * 切换应用更新频道（stable / beta）：频道持久化在原生 SharedPreferences，前端不存、不传参。
      *
-     * 频道决定下载哪个 APK，与「目录与地址由原生自己决定」是同一条安全边界。写入后立刻以
-     * forceRefresh 重查并返回完整最新 state（一次往返），缓存本身按频道失效；失败时频道
-     * 可能已在原生生效，界面以这次返回的 state 为准（开关不做乐观态）。
+     * 频道决定下载哪个 APK，与「目录与地址由原生自己决定」是同一条安全边界。先以
+     * forceRefresh 检查目标频道，成功后才保存并返回完整 state；检查失败保持原频道。
      */
     @PluginMethod
     fun setAppUpdateChannel(call: PluginCall) {
         execute(call) {
-            audited(AuditEvent.APP_UPDATE) {
+            audited(AuditEvent.APP_UPDATE, appUpdateOperationLock) {
                 val channel = AppUpdateChannel.fromId(call.data.opt("channel") as? String)
                     ?: throw RuntimeFailure("APP_UPDATE_INPUT_INVALID", "更新频道参数无效")
-                AppUpdateChannel.save(context, channel)
-                AppUpdateCache.from(context).state(
+                val state = AppUpdateCache.from(context).state(
                     AppReleaseCatalog.installed(context),
                     AppReleaseCatalog.installAllowed(context),
                     channel,
                     forceRefresh = true,
                 ).toJsObject()
+                AppUpdateChannel.save(context, channel)
+                state
             }
         }
     }
@@ -712,7 +714,7 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun downloadAppUpdate(call: PluginCall) {
         execute(call) {
-            audited(AuditEvent.APP_UPDATE) {
+            audited(AuditEvent.APP_UPDATE, appUpdateOperationLock) {
                 val release = requireAppUpdate()
                 val target = AppUpdateStorage.partialFile(context.cacheDir, release.version)
                 val throttle = AppUpdateProgressThrottle(release.bytes)
@@ -741,7 +743,7 @@ class MobileRuntimePlugin : Plugin() {
 
     /**
      * 权限：应用内桥接。
-     * 调起系统安装器安装已下载的更新包。
+     * 调起系统安装器安装当前频道的更新包；版本、长度和摘要必须匹配当前发布信息。
      *
      * Android **不允许**应用静默安装：这里只把文件交给系统安装器，是否安装、装的是哪个包，
      * 都要用户在系统界面上确认一次。未授权安装未知应用时抛 `APP_UPDATE_INSTALL_PERMISSION`，
@@ -750,10 +752,12 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun installAppUpdate(call: PluginCall) {
         execute(call) {
-            audited(AuditEvent.APP_UPDATE) {
+            audited(AuditEvent.APP_UPDATE, appUpdateOperationLock) {
+                val release = requireAppUpdate()
                 val apk = AppUpdateInstallPolicy.requireInstallable(
                     AppReleaseCatalog.installAllowed(context),
-                    AppUpdateStorage.downloaded(context.cacheDir),
+                    AppUpdateStorage.downloaded(context.cacheDir, release.version),
+                    release,
                 )
                 val uri = try {
                     // authority 与 AndroidManifest 里的 ${applicationId}.appupdates 一致，
@@ -784,7 +788,7 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun openAppUpdateInstallSettings(call: PluginCall) {
         execute(call) {
-            audited(AuditEvent.APP_UPDATE) {
+            audited(AuditEvent.APP_UPDATE, appUpdateOperationLock) {
                 val packageUri = Uri.parse("package:${context.packageName}")
                 try {
                     context.startActivity(
@@ -3583,8 +3587,8 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
-    private fun <T> audited(event: AuditEvent, operation: () -> T): T {
-        return auditedOperationLock.withLock {
+    private fun <T> audited(event: AuditEvent, lock: ReentrantLock = auditedOperationLock, operation: () -> T): T {
+        return lock.withLock {
             ensurePluginActive()
             recordAudit(event, AuditResult.STARTED)
             try {

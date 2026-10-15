@@ -319,7 +319,7 @@ describe('版本管理：应用自身更新', () => {
     expect(await screen.findByText('可更新')).toBeVisible()
     expect(screen.getByText('0.2.1-mobile-400 · 12 MB')).toBeVisible()
     expect(screen.getByRole('switch', { name: '接收测试版本' })).toBeChecked()
-    // 一次往返：原生在写频道时已强制重查，界面直接用返回的 state，不再补发读取。
+    // 一次往返：原生已完成检查并保存频道，界面直接用返回的 state，不再补发读取。
     expect(bridge.getAppUpdateState.mock.calls.length).toBe(callsBefore)
   })
 
@@ -350,7 +350,7 @@ describe('版本管理：应用自身更新', () => {
     expect(screen.getByRole('switch', { name: '接收测试版本' })).not.toBeChecked()
   })
 
-  it('切换频道失败时报出原因，开关回弹到原频道', async () => {
+  it('切换频道失败时报出原因，并回读原频道', async () => {
     bridge.getState.mockResolvedValue({ ...readyState })
     bridge.setAppUpdateChannel.mockRejectedValue(new Error('网络不可达'))
     await openVersionsPage()

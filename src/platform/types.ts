@@ -2003,10 +2003,10 @@ export interface RuntimeBridge {
   /** 应用自身的更新状态：已安装版本、当前频道，以及按频道过滤后是否有可用更新。 */
   getAppUpdateState: (forceRefresh?: boolean) => Promise<AppUpdateState>
   /**
-   * 切换应用更新频道并返回最新状态（一次往返：原生写入后强制重查）。
+   * 切换应用更新频道并返回最新状态（一次往返：联网检查成功后保存频道）。
    *
-   * 失败时频道可能已在原生生效：以重查的 [RuntimeBridge.getAppUpdateState] 为准，
-   * 界面不要把开关做成乐观态。
+   * 检查失败保持原频道；界面仍回读 [RuntimeBridge.getAppUpdateState] 确认实际状态，
+   * 兼容旧版桥接及检查完成后的响应失败，不把开关做成乐观态。
    */
   setAppUpdateChannel: (channel: AppUpdateChannel) => Promise<AppUpdateState>
   /**
@@ -2017,7 +2017,7 @@ export interface RuntimeBridge {
    */
   downloadAppUpdate: () => Promise<void>
   /**
-   * 安装已下载的应用更新包，交给系统安装器接管。
+   * 安装当前频道的更新包，版本、长度与摘要必须匹配当前发布信息，再交给系统安装器。
    *
    * 未授予「安装未知应用」权限时原生侧会拒绝（错误码 `APP_UPDATE_INSTALL_PERMISSION`）：
    * 界面如实显示中文错误并引导授权即可，不要重试或绕过。
