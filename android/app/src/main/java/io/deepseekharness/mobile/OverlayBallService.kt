@@ -155,17 +155,23 @@ class OverlayBallService : Service() {
             return START_NOT_STICKY
         }
         // 权限可能在服务运行期间被系统或用户在设置里撤销，每次启动都重新确认。
-        if (!OverlayBallPolicy.shouldShowBall(
-                enabled = enabled,
-                canDrawOverlays = runCatching { Settings.canDrawOverlays(this) }.getOrDefault(false),
-            )
-        ) {
-            lastStartFailure = FAILURE_OVERLAY_DENIED
+        // 读不到权限（binder 偶发失败）不算撤销：记一条**不同 reason** 的告警后照常尝试挂球，
+        // 真加不上时由 attachBall 按「挂载失败」收尾，不把一次读失败说成「权限被撤销」。
+        val permission = OverlayBallPolicy.overlayPermissionState(
+            runCatching { Settings.canDrawOverlays(this) }.getOrNull(),
+        )
+        OverlayBallPolicy.permissionWarningReason(permission)?.let { reason ->
             diagnostics.record(
                 DiagnosticLevel.WARN,
                 DiagnosticEvent.KEEP_ALIVE,
-                mapOf("reason" to "overlay_denied", "active" to "false"),
+                mapOf(
+                    "reason" to reason,
+                    "active" to if (OverlayBallPolicy.permissionRevoked(permission)) "false" else "true",
+                ),
             )
+        }
+        if (!OverlayBallPolicy.shouldAttemptBall(enabled = enabled, state = permission)) {
+            lastStartFailure = FAILURE_OVERLAY_DENIED
             stopForegroundCompat()
             stopSelf()
             return START_NOT_STICKY
@@ -268,12 +274,26 @@ class OverlayBallService : Service() {
      * 记录字段与 onStartCommand 的驳回路径保持一致，便于按同一组条件排查。
      */
     private fun stopIfOverlayPermissionRevoked(): Boolean {
-        if (runCatching { Settings.canDrawOverlays(this) }.getOrDefault(false)) return false
-        diagnostics.record(
-            DiagnosticLevel.WARN,
-            DiagnosticEvent.KEEP_ALIVE,
-            mapOf("reason" to "overlay_denied", "active" to "false"),
+        /*
+         * 「读不到权限」不等于「权限被撤销」。判定与文案都在 OverlayBallPolicy 里（可单测），
+         * 这里只负责把结论落成诊断与收尾：读到 true 继续；读到 false 才按撤销停服务；
+         * 读不到记一条**不同 reason** 的告警并继续，等下一次触摸或配置变化再判
+         * （本函数的两个调用时机都够频繁）。
+         */
+        val permission = OverlayBallPolicy.overlayPermissionState(
+            runCatching { Settings.canDrawOverlays(this) }.getOrNull(),
         )
+        OverlayBallPolicy.permissionWarningReason(permission)?.let { reason ->
+            diagnostics.record(
+                DiagnosticLevel.WARN,
+                DiagnosticEvent.KEEP_ALIVE,
+                mapOf(
+                    "reason" to reason,
+                    "active" to if (OverlayBallPolicy.permissionRevoked(permission)) "false" else "true",
+                ),
+            )
+        }
+        if (!OverlayBallPolicy.permissionRevoked(permission)) return false
         stopForegroundCompat()
         stopSelf()
         return true

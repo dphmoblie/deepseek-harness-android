@@ -2,6 +2,7 @@ package io.deepseekharness.mobile.overlay
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -152,5 +153,50 @@ class OverlayBallPolicyTest {
     fun clampsDefaultPositionWhenScreenIsSmall() {
         // 屏幕比球还小时仍返回 0，不能出现负坐标（负的 LayoutParams 会被 WindowManager 拒绝）。
         assertEquals(0 to 0, OverlayBallPolicy.defaultPosition(100, 100, 144, 30))
+    }
+
+    @Test
+    fun mapsPermissionReadToThreeStates() {
+        assertEquals(OverlayBallPolicy.OverlayPermissionState.GRANTED, OverlayBallPolicy.overlayPermissionState(true))
+        assertEquals(OverlayBallPolicy.OverlayPermissionState.REVOKED, OverlayBallPolicy.overlayPermissionState(false))
+        // null ＝ 这次没读出来（binder 抛错），必须与「明确未授予」分开。
+        assertEquals(OverlayBallPolicy.OverlayPermissionState.UNREADABLE, OverlayBallPolicy.overlayPermissionState(null))
+    }
+
+    @Test
+    fun onlyExplicitDenialCountsAsRevoked() {
+        assertTrue(OverlayBallPolicy.permissionRevoked(OverlayBallPolicy.OverlayPermissionState.REVOKED))
+        // 读不到不算撤销：否则一次偶发失败就会让服务 stopSelf()，用户看到「球自己没了」。
+        assertFalse(OverlayBallPolicy.permissionRevoked(OverlayBallPolicy.OverlayPermissionState.UNREADABLE))
+        assertFalse(OverlayBallPolicy.permissionRevoked(OverlayBallPolicy.OverlayPermissionState.GRANTED))
+    }
+
+    @Test
+    fun attemptsBallUnlessPermissionIsExplicitlyRevoked() {
+        assertTrue(OverlayBallPolicy.shouldAttemptBall(true, OverlayBallPolicy.OverlayPermissionState.GRANTED))
+        // 读不到权限时照常尝试挂球：真没权限时 addView 会抛错并走挂载失败路径。
+        assertTrue(OverlayBallPolicy.shouldAttemptBall(true, OverlayBallPolicy.OverlayPermissionState.UNREADABLE))
+        assertFalse(OverlayBallPolicy.shouldAttemptBall(true, OverlayBallPolicy.OverlayPermissionState.REVOKED))
+        // 用户关闭开关时一律不挂球，与权限无关。
+        assertFalse(OverlayBallPolicy.shouldAttemptBall(false, OverlayBallPolicy.OverlayPermissionState.GRANTED))
+        assertFalse(OverlayBallPolicy.shouldAttemptBall(false, OverlayBallPolicy.OverlayPermissionState.UNREADABLE))
+    }
+
+    @Test
+    fun separatesRevokedReasonFromUnreadableReason() {
+        // 排障要能分辨「用户关了权限」与「这一次没读到」——两条 reason 必须不同，且只在异常态才记录。
+        assertEquals(null, OverlayBallPolicy.permissionWarningReason(OverlayBallPolicy.OverlayPermissionState.GRANTED))
+        assertEquals(
+            "overlay_denied",
+            OverlayBallPolicy.permissionWarningReason(OverlayBallPolicy.OverlayPermissionState.REVOKED),
+        )
+        assertEquals(
+            "overlay_permission_unreadable",
+            OverlayBallPolicy.permissionWarningReason(OverlayBallPolicy.OverlayPermissionState.UNREADABLE),
+        )
+        assertNotEquals(
+            OverlayBallPolicy.REASON_OVERLAY_DENIED,
+            OverlayBallPolicy.REASON_OVERLAY_UNREADABLE,
+        )
     }
 }
