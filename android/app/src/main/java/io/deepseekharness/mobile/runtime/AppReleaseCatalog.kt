@@ -86,13 +86,15 @@ internal enum class AppUpdateChannel(val id: String) {
             DEFAULT
         }
 
-        /** 持久化频道选择；apply 异步落盘，失败时本次进程内仍以新值为准（后续读取回默认）。 */
+        /**
+         * 同步持久化频道选择。用 commit() 而非 apply()——频道切换必须让落盘结果立即可靠，
+         * 否则可能出现「前端以为切换成功，下次启动仍用旧频道」的状态分叉。
+         * 失败时抛 [RuntimeFailure]，由调用方走已有的错误回退路径。
+         */
         fun save(context: Context, channel: AppUpdateChannel) {
-            context.applicationContext
-                .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .edit()
-                .putString(KEY_CHANNEL, channel.id)
-                .apply()
+            val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val ok = prefs.edit().putString(KEY_CHANNEL, channel.id).commit()
+            if (!ok) throw RuntimeFailure("APP_UPDATE_CHANNEL_SAVE_FAILED", "频道保存失败，请重试")
         }
     }
 }

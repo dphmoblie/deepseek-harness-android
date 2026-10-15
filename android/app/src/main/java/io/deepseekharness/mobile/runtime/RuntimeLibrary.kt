@@ -268,15 +268,17 @@ class RuntimeLibrary(private val store: RuntimeStore) {
                         pinned = meta.pinned,
                         active = active,
                     )
+                    // 先把 key→entry 关系固定下来；排序后用引用匹配，避免 O(n²) 线性查找。
                     collected += sortKey to entry
                 } catch (_: RuntimeFailure) { /* 损坏条目不冒充已下载版本。 */ }
             }
         }
         return JSONArray().apply {
-            RuntimeVersionPolicy.listOrder(collected.map { it.first })
-                .forEach { ordered ->
-                    collected.firstOrNull { it.first.id == ordered.id }?.second?.let { put(it) }
-                }
+            // listOrder 只对 key 排序；结果里的 key 还是原来的引用，所以用 === 就能找到对应 entry。
+            val byKey = collected.toMap()
+            RuntimeVersionPolicy.listOrder(byKey.keys.toList()).forEach { ordered ->
+                byKey[ordered]?.let { put(it) }
+            }
         }
     }
     fun retain(manifest: RuntimeManifest, archive: File) {

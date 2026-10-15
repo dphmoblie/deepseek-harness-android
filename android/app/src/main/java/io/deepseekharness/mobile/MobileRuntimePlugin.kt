@@ -319,7 +319,9 @@ class MobileRuntimePlugin : Plugin() {
     companion object {
         private const val DEVICE_COMMAND_TIMEOUT_MS = 60_000L
         private const val DESTROY_WAIT_SECONDS = 10L
-        // 更新跨插件实例保序，但慢网检查不能占用运行时启停的审计锁。
+        // 更新链路的保序锁：频道切换、版本检查、下载、安装之间必须串行；
+        // 但慢网检查/下载是长操作，不能占用运行时启停的 auditedOperationLock——
+        // 否则用户在更新中途想重启运行时会被锁住。两把锁分离互不影响。
         private val appUpdateOperationLock = ReentrantLock()
 
         /** 副屏直通 Shell 的一次性设备会话尺寸；与设备桥的默认列宽/行数保持一致。 */

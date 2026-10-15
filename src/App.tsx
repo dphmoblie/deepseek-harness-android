@@ -628,7 +628,7 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   RUNTIME_CLOSED: '运行时已关闭，旧连接已失效；已尝试重新连接，请再试一次。',
   RUNTIME_CORRUPTED: '运行时文件已损坏，请重置运行时后重新安装。',
   ROOTFS_LINKS_CORRUPTED: '运行时归档的关键符号链接缺失或损坏，请更换运行时来源后重新安装。',
-  RUNNER_UNAVAILABLE: '此安装包不包含本机所需的运行组件。内置 PRoot 只提供 ARM64（arm64-v8a）版本，无法在 x86_64 模拟器或 32 位设备上运行，请换用 ARM64 真机；若本机就是 ARM64，请确认安装的是新版应用。',
+  RUNNER_UNAVAILABLE: '本机不是 ARM64（arm64-v8a）架构，内置 PRoot 无法运行。请换用 ARM64 真机或确认安装的是新版应用。',
   PROOT_RUNNER_START_FAILED: 'Android 无法执行内置 PRoot，请确认安装的是新版 ARM64 应用。',
   PROOT_RUNNER_TIMEOUT: 'PRoot 自检超时，请停止其他会话后重试。',
   PROOT_RUNNER_REJECTED: '内置 PRoot 未通过启动自检。',
