@@ -75,7 +75,7 @@ describe('设置首页：分组与分类筛选', () => {
   it('分类筛选只留这一类，并且点进去到对应设置', async () => {
     await openSettingsHome()
 
-    // 分类芯片默认收起，先展开；展开前它们不在页面上，不会挤占首屏。
+    // 分类芯片默认收起，先展开；收起时容器 hidden（aria-controls 约定），读屏树中不存在，不会挤占首屏。
     expect(screen.queryByRole('listbox', { name: '筛选功能分类' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '按分类筛选' }))
     fireEvent.click(screen.getByRole('option', { name: /筛选分类： 设备与自动化/ }))

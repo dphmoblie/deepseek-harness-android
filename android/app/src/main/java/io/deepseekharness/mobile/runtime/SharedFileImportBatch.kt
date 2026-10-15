@@ -18,14 +18,15 @@ internal object SharedFileImportBatch {
         var complete = true
         items.forEachIndexed { index, item ->
             if (Thread.currentThread().isInterrupted) return Result(Status.SOURCE_UNREADABLE, accepted, complete)
+            // 连 Error 也在此截住：逃出循环会丢掉已成功计数，用户会误以为全部失败而重复导入。
             val status = try {
                 importOne(index, item)
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 Status.SOURCE_UNREADABLE
             }
             if (status != Status.SUCCESS) return Result(status, accepted, complete)
             accepted++
-            complete = try { deliver() } catch (_: Exception) { false }
+            complete = try { deliver() } catch (_: Throwable) { false }
         }
         return Result(if (complete) Status.SUCCESS else Status.STAGED, accepted, complete)
     }

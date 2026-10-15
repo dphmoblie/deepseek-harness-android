@@ -196,15 +196,15 @@ class MainActivity : BridgeActivity() {
                     if (isFinishing || isDestroyed) return@runOnUiThread
                     val partial = result.acceptedCount > 0 && result.status != ImportResult.SUCCESS && result.status != ImportResult.STAGED
                     if (partial) {
-                        val received = if (result.deliveryComplete) "已导入收件箱" else "已接收，未投递的文件已安全暂存"
+                        val received = if (result.deliveryComplete) "已导入" else "已暂存"
                         val failure = when (result.status) {
-                            ImportResult.TOO_LARGE -> "后续文件超过 64 MB"
-                            ImportResult.PERMISSION_DENIED -> "后续文件没有读取权限"
-                            ImportResult.DESTINATION_UNAVAILABLE -> "后续文件无法保存"
-                            else -> "后续文件来源不可读"
+                            ImportResult.TOO_LARGE -> "其余超过 64 MB"
+                            ImportResult.PERMISSION_DENIED -> "其余无读取权限"
+                            ImportResult.DESTINATION_UNAVAILABLE -> "其余无法保存"
+                            else -> "其余来源不可读"
                         }
                         // 已接收的文件不再用选择器整批重试，避免用户误以为全部失败而重复导入。
-                        showImportToast("${result.acceptedCount} 个文件$received；$failure，未导入")
+                        showImportToast("$received ${result.acceptedCount} 个；$failure")
                         return@runOnUiThread
                     }
                     when (result.status) {

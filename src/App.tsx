@@ -1657,13 +1657,14 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
         </button>
       </div>
 
-      {filterOpen && <div id="settings-categories" className="settings-categories" role="listbox" aria-label={t("筛选功能分类")}>
+      {/* 收起时保留隐藏容器：aria-controls 指向的元素始终存在（与 harness-log-body 同一约定）。 */}
+      <div id="settings-categories" className="settings-categories" role="listbox" aria-label={t("筛选功能分类")} hidden={!filterOpen}>
         <button type="button" role="option" aria-label={t("筛选分类：全部分类")} aria-selected={category === 'all'} onClick={() => setCategory('all')}>{t("全部分类")}</button>
         {SETTINGS_HOME_GROUPS.map(group => (
           <button key={group.id} type="button" role="option" aria-label={`${t("筛选分类：")} ${t(group.label)}`} aria-selected={category === group.id}
             onClick={() => { setCategory(group.id); setQuery(''); setAppliedQuery('') }}>{t(group.label)}</button>
         ))}
-      </div>}
+      </div>
 
       {/* 结果条用 role="status"：输入时读屏能听到「找到几个」，而不是列表安静地变了一下。 */}
       {searching && (

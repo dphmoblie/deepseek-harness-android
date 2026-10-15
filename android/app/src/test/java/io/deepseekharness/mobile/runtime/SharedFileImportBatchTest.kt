@@ -60,4 +60,14 @@ class SharedFileImportBatchTest {
         assertEquals(1, result.acceptedCount)
         assertFalse(result.deliveryComplete)
     }
+
+    @Test
+    fun errorFailureStillKeepsTheAcceptedCount() {
+        val result = SharedFileImportBatch.run(listOf("first", "broken"), importOne = { _, name ->
+            if (name == "first") SharedFileImportBatch.Status.SUCCESS else throw OutOfMemoryError("simulated")
+        }, deliver = { true })
+        assertEquals(SharedFileImportBatch.Status.SOURCE_UNREADABLE, result.status)
+        assertEquals(1, result.acceptedCount)
+        assertTrue(result.deliveryComplete)
+    }
 }
