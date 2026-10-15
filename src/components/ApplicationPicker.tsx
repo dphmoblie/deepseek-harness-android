@@ -38,6 +38,14 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
   const generation = useRef(0)
   /** 上一次 effect 见过的词：只在「用户改了输入」时防抖，打开面板与重试都立刻请求。 */
   const lastQuery = useRef<string | null>(null)
+  /** 输入法组合输入的安全重置定时器：移动端软键盘选词或失焦时偶尔丢失 compositionend，避免检索被永久阻断。 */
+  useEffect(() => {
+    if (!isComposing) return
+    const timer = window.setTimeout(() => {
+      setIsComposing(false)
+    }, 800)
+    return () => window.clearTimeout(timer)
+  }, [isComposing, query])
   useEffect(() => {
     if (!opened || isComposing) return
     setLoading(true)
@@ -100,7 +108,16 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
             onCompositionStart={() => setIsComposing(true)}
             onCompositionEnd={event => {
               setIsComposing(false)
-              setQuery(event.currentTarget.value)
+              const committed = event.currentTarget?.value ?? (event.target as HTMLInputElement)?.value
+              if (typeof committed === 'string') {
+                setQuery(committed)
+              }
+            }}
+            onBlur={() => setIsComposing(false)}
+            onKeyDown={event => {
+              if (event.key === 'Enter') {
+                setIsComposing(false)
+              }
             }}
             onChange={event => setQuery(event.target.value)}
             placeholder={t('输入应用名称或包名')}

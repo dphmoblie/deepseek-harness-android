@@ -744,6 +744,7 @@ class VirtualScreenService : Service() {
     override fun onDestroy() {
         ending.set(true)
         main.removeCallbacks(health)
+        runCatching { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
         // 销毁与「收起」是同一套 effect，只是状态记到 DEAD：之后不再接受显示请求。
         releaseOverlayWindow(overlayMachine.destroy())
         executor.execute {

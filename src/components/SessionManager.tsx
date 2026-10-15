@@ -167,7 +167,10 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
           <input
             value={query}
             onChange={event => setQuery(event.target.value.slice(0, 80))}
-            onCompositionEnd={event => setQuery(event.currentTarget.value.slice(0, 80))}
+            onCompositionEnd={event => {
+              const val = event.currentTarget?.value ?? (event.target as HTMLInputElement)?.value ?? ''
+              setQuery(val.slice(0, 80))
+            }}
             placeholder={t('搜索会话')}
             maxLength={80}
             autoComplete="off"

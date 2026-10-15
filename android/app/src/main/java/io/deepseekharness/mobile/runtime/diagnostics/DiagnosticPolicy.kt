@@ -259,7 +259,7 @@ object DiagnosticPolicy {
     private val permittedPermissions = setOf("granted", "denied", "undetermined", "unsupported")
     /** 阶段名、原因码、版本号与 ABI：小写字母开头，只含 `[a-z0-9._-]`。 */
     private val tokenKeys = setOf("phase", "reason", "version", "abi", "permission")
-    private val tokenPattern = Regex("^[a-z0-9][a-z0-9._-]{0,31}$")
+    private val tokenPattern = Regex("^[a-z0-9][a-z0-9._-]{0,47}$")
 
     fun fileName(date: LocalDate): String = "diagnostic-$date.log"
 

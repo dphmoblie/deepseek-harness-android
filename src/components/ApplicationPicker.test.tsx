@@ -236,4 +236,52 @@ describe('已安装应用选择器', () => {
     fireEvent.click(clearBtn)
     expect(input.value).toBe('')
   })
+
+  it('移动端软键盘失焦或按回车时重置组字状态并恢复搜索', async () => {
+    const list = vi.fn().mockImplementation((query: string) => Promise.resolve({
+      apps: [app(query || 'reader')],
+      nextOffset: null,
+      total: 1,
+    }))
+    const { container } = open({ listInstalledApplications: list } as unknown as RuntimeBridge)
+    await screen.findByText('reader')
+
+    const input = container.querySelector<HTMLInputElement>('.field input')!
+    // 模拟输入法组字并直接失焦（如用户点击了其他区域或输入法收起）
+    fireEvent.compositionStart(input)
+    fireEvent.change(input, { target: { value: '支付宝' } })
+    expect(list).not.toHaveBeenCalledWith('支付宝', 0)
+
+    fireEvent.blur(input)
+    await screen.findByText('支付宝')
+    expect(list).toHaveBeenCalledWith('支付宝', 0)
+
+    // 模拟按回车键退出组字并检索
+    fireEvent.compositionStart(input)
+    fireEvent.change(input, { target: { value: 'reader' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await screen.findByText('reader')
+    expect(list).toHaveBeenCalledWith('reader', 0)
+  })
+
+  it('当移动端输入法未触发 compositionEnd 时通过安全定时器自动恢复检索', async () => {
+    const list = vi.fn().mockImplementation((query: string) => Promise.resolve({
+      apps: [app(query || 'reader')],
+      nextOffset: null,
+      total: 1,
+    }))
+    const { container } = open({ listInstalledApplications: list } as unknown as RuntimeBridge)
+    await screen.findByText('reader')
+
+    const input = container.querySelector<HTMLInputElement>('.field input')!
+    // 模拟异常输入法：只有 compositionStart，没有 compositionEnd 也未失焦
+    fireEvent.compositionStart(input)
+    fireEvent.change(input, { target: { value: 'weixin' } })
+    expect(list).not.toHaveBeenCalledWith('weixin', 0)
+
+    // 超过 800ms 安全重置窗口后，自动恢复并发出请求
+    await waitFor(() => {
+      expect(list).toHaveBeenCalledWith('weixin', 0)
+    }, { timeout: 2000 })
+  })
 })

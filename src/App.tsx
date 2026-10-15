@@ -1573,7 +1573,11 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
           type="search"
           value={query}
           onChange={event => { setQuery(event.target.value); setCategory('all') }}
-          onCompositionEnd={event => { setQuery(event.currentTarget.value); setCategory('all') }}
+          onCompositionEnd={event => {
+            const val = event.currentTarget?.value ?? (event.target as HTMLInputElement)?.value ?? ''
+            setQuery(val)
+            setCategory('all')
+          }}
           maxLength={120}
           placeholder={t("按功能词查找入口")}
           aria-label={t("按功能词查找入口")}
