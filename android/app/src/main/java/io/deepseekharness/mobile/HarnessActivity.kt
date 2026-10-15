@@ -30,6 +30,7 @@ import androidx.appcompat.app.AppCompatActivity
 import io.deepseekharness.mobile.runtime.HarnessAccess
 import io.deepseekharness.mobile.runtime.RuntimeStore
 import java.io.ByteArrayInputStream
+import java.util.concurrent.Executors
 
 class HarnessActivity : AppCompatActivity() {
     private lateinit var webView: WebView
@@ -58,6 +59,14 @@ class HarnessActivity : AppCompatActivity() {
     ) { uris -> deliverFileChooserResult(uris) }
 
     companion object {
+        /**
+         * HTTP Auth 数据库清理专用线程：进程级单线程、守护线程。
+         * 单次调用只做一次毫秒级 SQLite 删除，串行即可，无需随 Activity 关闭。
+         */
+        private val authDatabaseExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "dsh-webview-auth-db").apply { isDaemon = true }
+        }
+
         const val AUTH_TOKEN_COOKIE = "dsh_mobile_token"
 
         /**
@@ -121,20 +130,46 @@ class HarnessActivity : AppCompatActivity() {
             return
         }
 
-        setContentView(R.layout.activity_harness)
-        AppWindowInsets.apply(this)
-        // 会话页让出整条工具栏空间，返回交给系统手势与返回键。
-        applyNativeChrome()
-
         // 入口 URL：index.html 是唯一没有内容哈希的产物，它的缓存键必须同时带上 APK 版本与
         // 已安装运行时版本，否则在线更新运行之后 WebView 会继续复用旧前端。
         // 运行时未安装 / 清单不可读时由 withVersions 落到固定占位值，不会让 URL 抖动。
+        // 纯字符串计算（清单在运行时启动链路中已完成缓存预热），放在布局加载前完成，
+        // 以便紧接着提前发起 cookie 写入。
         val entryUrl = HarnessPageUrl.withVersions(
             allowedOrigin.initialUrl,
             BuildConfig.VERSION_NAME,
             runtimeStore.installedManifest()?.version,
         )
         entryUrlForRetry = entryUrl
+
+        // Cookie 写入是异步的（写入内存存储后即回调，flush 才落盘）。提前到 WebView 创建之前
+        // 发起，让它与下面的布局 inflate、WebView 初始化并行，缩短「进入页面 → 发起首个请求」
+        // 的等待。回调 post 到主线程，最早也要等 onCreate 返回后才执行，届时 webView 必已初始化。
+        // pageLoadGate 仍保证「确认写入成功后才发起首个页面请求」这一安全语义不变。
+        val cookieManager = CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+        }
+        cookieManager.setCookie(cookieOrigin, authenticationCookie) { accepted ->
+            when (pageLoadGate.onCookieStored(accepted)) {
+                CookieLoadDecision.LOAD -> {
+                    // 写入回调晚到、页面已在销毁时不得再触碰 WebView（gate.cancel 后通常走 IGNORE，
+                    // 这道检查覆盖 gate 尚未取消但 Activity 已结束的窗口）。
+                    if (isFinishing || isDestroyed || !::webView.isInitialized) return@setCookie
+                    cookieManager.flush()
+                    webView.loadUrl(entryUrl)
+                }
+                CookieLoadDecision.REJECT -> {
+                    Toast.makeText(this, R.string.harness_session_failed, Toast.LENGTH_SHORT).show()
+                    returnToMainActivity()
+                }
+                CookieLoadDecision.IGNORE -> Unit
+            }
+        }
+
+        setContentView(R.layout.activity_harness)
+        AppWindowInsets.apply(this)
+        // 会话页让出整条工具栏空间，返回交给系统手势与返回键。
+        applyNativeChrome()
 
         webView = findViewById(R.id.harness_web_view)
         webView.settings.apply {
@@ -166,11 +201,11 @@ class HarnessActivity : AppCompatActivity() {
             // fontScale 不在 configChanges 里，系统改字号会重建本 Activity，因此读一次即可。
             textZoom = AppTextScale.percentOf(resources.configuration.fontScale)
         }
-        val cookieManager = CookieManager.getInstance().apply {
-            setAcceptCookie(true)
-            setAcceptThirdPartyCookies(webView, false)
-        }
-        WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword()
+        cookieManager.setAcceptThirdPartyCookies(webView, false)
+        // 清理可能残留的 HTTP Auth 缓存（每次启动的临时凭据都不同）。该调用触发 WebView
+        // 数据库磁盘 I/O，放后台线程执行；本页所有 401 都由 RestrictedWebViewClient 显式
+        // proceed，从不依赖数据库里的缓存应答，因此清理在何时完成都不改变鉴权行为。
+        clearHttpAuthCredentialsAsync()
         webView.webViewClient = RestrictedWebViewClient(
             allowedOrigin,
             access.username,
@@ -182,22 +217,6 @@ class HarnessActivity : AppCompatActivity() {
         webView.webChromeClient = HarnessWebChromeClient()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             WebView.startSafeBrowsing(applicationContext, null)
-        }
-
-        // WebSocket 的 Basic challenge 不会触发 onReceivedHttpAuthRequest，因此使用
-        // JS 不可读的同源 Cookie。必须等异步写入确认并落盘后再发起首个页面请求。
-        cookieManager.setCookie(cookieOrigin, authenticationCookie) { accepted ->
-            when (pageLoadGate.onCookieStored(accepted)) {
-                CookieLoadDecision.LOAD -> {
-                    cookieManager.flush()
-                    webView.loadUrl(entryUrl)
-                }
-                CookieLoadDecision.REJECT -> {
-                    Toast.makeText(this, R.string.harness_session_failed, Toast.LENGTH_SHORT).show()
-                    returnToMainActivity()
-                }
-                CookieLoadDecision.IGNORE -> Unit
-            }
         }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -231,12 +250,27 @@ class HarnessActivity : AppCompatActivity() {
                 HarnessSessionCookie.expired(),
             ) { cookieManager.flush() }
         }
-        WebViewDatabase.getInstance(this).clearHttpAuthUsernamePassword()
+        // 与 onCreate 相同：磁盘清理放后台，不占用销毁链路的主线程时间。
+        clearHttpAuthCredentialsAsync()
         super.onDestroy()
     }
 
     private fun returnToMainActivity() {
         if (!isFinishing) finish()
+    }
+
+    /**
+     * 在后台线程清空 WebView 的 HTTP Auth 凭据缓存。
+     *
+     * WebViewDatabase 的获取与清理都是磁盘操作，官方同样建议在后台线程调用；
+     * 失败静默：清理只是跨会话的卫生兜底，绝不允许它影响会话页生命周期。
+     */
+    private fun clearHttpAuthCredentialsAsync() {
+        authDatabaseExecutor.execute {
+            runCatching {
+                WebViewDatabase.getInstance(applicationContext).clearHttpAuthUsernamePassword()
+            }
+        }
     }
 
     /** 系统栏和网页背景跟随应用主题，不额外占用会话高度。 */

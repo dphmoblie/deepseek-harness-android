@@ -4,6 +4,8 @@ import android.content.Context
 import io.deepseekharness.mobile.BuildConfig
 import io.deepseekharness.mobile.shizuku.ShizukuState
 import java.io.File
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.withLock
@@ -45,6 +47,18 @@ class MobileRuntimeController(
     private val selfCheck = RuntimeSelfCheck(context, store, plugins)
     /** 版本列表只读清单与小文件；切换、删除仍由 installer 在安装锁内完成。 */
     private val versions = RuntimeVersionCatalog(store)
+
+    /**
+     * Harness 启动成功后的非关键诊断任务专用单线程。
+     *
+     * 模块图探测（[RuntimePluginManager.recordModuleGraph]）是纯只读诊断：只遍历固定候选目录、
+     * 只写一条计数日志。它原先在启动关键路径上串行执行，每次冷启动都要多拉起一次完整的
+     * PRoot+Node 访客进程；放到 Harness 就绪之后在这里后台执行，关键路径少一次访客进程往返，
+     * 诊断结论仍在本次启动时间线内落盘。守护线程：即使探测仍在运行，进程也可以正常退出。
+     */
+    private val postStartDiagnosticsExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "dsh-poststart-diagnostics").apply { isDaemon = true }
+    }
     val terminals = TerminalCoordinator(context, store, events::onTerminalOutput, events::onTerminalExit)
 
     /**
@@ -136,8 +150,10 @@ class MobileRuntimeController(
         versions.list()
     }
 
-    fun startHarness(expectedStartEpoch: Long? = null): RuntimeStateSnapshot = lifecycleLock.withLock {        ensureOpen()
-        if (!supervisor.isRunning()) {
+    fun startHarness(expectedStartEpoch: Long? = null): RuntimeStateSnapshot = lifecycleLock.withLock {
+        ensureOpen()
+        val coldStart = !supervisor.isRunning()
+        if (coldStart) {
             supervisor.preparePluginManagement()
             // 应用（APK）升级迁移：判定是「上次迁移成功的 versionCode + 当前 versionCode +
             // 运行时代次是否变化」（[PluginMigrationPolicy]，纯逻辑）。需要迁移时由它**串行复用**
@@ -148,14 +164,38 @@ class MobileRuntimeController(
                 // 启动前自愈：运行时升级后插件目录里的链接可能已悬空，修复必须在插件被加载前完成。
                 plugins.repairInstalledIfNeeded()
             }
-            // 启动前取证：自愈按代次指纹只跑一次，探测则每次都跑 —— 它只读、只遍历固定候选根，
-            // 而「装了新插件」不换代次，缓存会漏掉那个时机。
-            // 结果只写计数（MODULE_GRAPH）。判读要分清方向：**count=1 是很强的否定结论**
-            // （该故障与模块重复无关）；count>1 只说明「存在」两份物理副本 —— 可能只是 pnpm
-            // store 里已无引用的陈旧目录，**不等于**运行中的进程确实加载了两份。
-            plugins.recordModuleGraph()
         }
-        supervisor.startHarness(expectedStartEpoch)
+        val snapshot = supervisor.startHarness(expectedStartEpoch)
+        // 启动前取证：自愈按代次指纹只跑一次，探测则每次冷启动都跑 —— 它只读、只遍历固定候选根，
+        // 而「装了新插件」不换代次，缓存会漏掉那个时机。
+        // 结果只写计数（MODULE_GRAPH）。判读要分清方向：**count=1 是很强的否定结论**
+        // （该故障与模块重复无关）；count>1 只说明「存在」两份物理副本 —— 可能只是 pnpm
+        // store 里已无引用的陈旧目录，**不等于**运行中的进程确实加载了两份。
+        //
+        // 时序：探测纯粹服务诊断、结果不参与任何启动判定，因此放在 Harness 就绪**之后**后台执行，
+        // 不再串行在启动关键路径上（那会多阻塞一次完整的 PRoot+Node 访客进程往返）。
+        // 只读遍历与正在运行的 Harness 并发是安全的；启动失败时不调度——失败本身已有
+        // HARNESS_START 诊断记录，模块图在该场景下没有判读价值。
+        if (coldStart) schedulePostStartModuleGraph()
+        snapshot
+    }
+
+    /**
+     * 把模块图探测提交到 [postStartDiagnosticsExecutor]。
+     *
+     * 不持有 [lifecycleLock]：探测只读且超时受控（30s），不应阻塞随后的停止/重置/插件管理。
+     * 若停止/重置与探测并发，访客侧读到变动中的目录只会让探测失败，按既有约定记一条
+     * result=denied 的 MODULE_GRAPH，绝不抛出；[shutdown] 会中断等待并回收探测进程。
+     */
+    private fun schedulePostStartModuleGraph() {
+        postStartDiagnosticsExecutor.execute {
+            try {
+                plugins.recordModuleGraph()
+            } catch (_: Throwable) {
+                // recordModuleGraph 自身已吞掉所有 Exception 并记 denied；
+                // 这里再兜一层，防止任何意外终止后台诊断线程。
+            }
+        }
     }
 
     /** 仅应用内版本管理调用；切换后的 current 持久化为下次启动的默认版本。 */
@@ -495,6 +535,9 @@ class MobileRuntimeController(
         if (!closed.compareAndSet(false, true)) return
         installer.cancelInstall()
         supervisor.requestStartCancellation()
+        // 不再接受启动后诊断任务；shutdownNow 中断探测等待，ProcessProbe 会随即终止
+        // 它拉起的访客进程，避免把只读探测残留在拆除后的运行时上。
+        postStartDiagnosticsExecutor.shutdownNow()
         lifecycleLock.withLock {
             BestEffortCleanup.runAll(
                 { supervisor.stop() },
