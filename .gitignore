@@ -85,5 +85,5 @@ _logs/
 legal/.operit-license-import/
 legal/operit-license.tar
 
-# 介绍视频为生成产物，可由 video/make_video.py 重新生成
-video/*.mp4
+# 介绍视频及其生成脚本、配乐均为本地素材，不纳入版本管理
+video/
