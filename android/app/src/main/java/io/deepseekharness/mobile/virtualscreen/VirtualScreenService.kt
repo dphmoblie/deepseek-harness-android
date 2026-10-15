@@ -770,7 +770,6 @@ class VirtualScreenService : Service() {
     }
 
     companion object {
-        private const val TAG = "dsh-virtual-screen"
         private const val CHANNEL = "target-virtual-screen"
         @Volatile var current: VirtualScreenService? = null; private set
         @Volatile var lastError = ""; private set
@@ -784,6 +783,9 @@ class VirtualScreenService : Service() {
  * 又不至于在一次连续操作里反复闪。节流判定本身在 [VirtualScreenOverlayMachine] 里。
  */
 private const val FRONT_THROTTLE_MILLIS = 1200L
+
+/** 预览控件所在文件的日志标签（与 BootRecoveryReceiver 的 dsh-* 命名一致）。 */
+private const val PREVIEW_LOG_TAG = "dsh-virtual-screen"
 
 /**
  * 悬浮小窗的拖动端口：预览控件只判定「这次手势是拖动」，位置换算与窗口更新都由服务负责。
@@ -867,7 +869,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private val screenOff = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: Intent?) {
             runCatching { clearFrame() }
-                .onFailure { android.util.Log.w(TAG, "screen off clear frame failed: ${it.javaClass.simpleName}") }
+                .onFailure { android.util.Log.w(PREVIEW_LOG_TAG, "screen off clear frame failed: ${it.javaClass.simpleName}") }
         }
     }
     /** 息屏接收器是否已注册：重挂时不能重复注册（否则息屏会收到两次）。 */
