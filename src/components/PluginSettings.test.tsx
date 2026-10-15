@@ -148,7 +148,8 @@ describe('插件双状态呈现与补充链接', () => {
       ],
     }
     const bridge = setup(runtime, customCatalog)
-    const card = within(screen.getByText('unlinked-plugin').closest('details')!)
+    // catalog 由 managePlugins 异步返回，卡片要等第一轮 effect 落盘后才能查询。
+    const card = within((await screen.findByText('unlinked-plugin')).closest('details')!)
     expect(card.getByText('当前环境：未链接', { exact: false })).toBeInTheDocument()
     expect(card.getByText('手机保留区：v2.1.0', { exact: false })).toBeInTheDocument()
     expect(card.getByText('待补充链接', { exact: false })).toBeInTheDocument()

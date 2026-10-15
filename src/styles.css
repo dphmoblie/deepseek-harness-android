@@ -1215,6 +1215,15 @@ button:disabled {
   color: var(--on-accent);
 }
 
+/*
+ * 可写窗口之外（握手前 / 会话已结束）：辅助栏整体压暗并停止接收指针事件，
+ * 与同屏的 `.terminal-copy` 的 `disabled` 语义保持一致，避免「有触感但没写入」的假反馈。
+ */
+.terminal-accessory-bar.is-disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 .terminal-key-btn.terminal-key-accent {
   color: var(--blue);
   border-color: var(--blue);

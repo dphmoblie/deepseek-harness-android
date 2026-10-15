@@ -367,4 +367,67 @@ describe('终端移动端虚拟辅助按键栏', () => {
     await waitFor(() => { expect(handshake.writeTerminal).toHaveBeenCalledWith('session-a', toBase64('\x03')) })
     expect(ctrlBtn.getAttribute('aria-pressed')).toBe('false')
   })
+
+  it('CTRL 状态下按下转不成控制字符的键（软键盘常见 Unidentified）也会复位 CTRL', async () => {
+    const handshake = createHandshake()
+    await renderPanel(handshake)
+    await handshake.settle('session-a')
+
+    const ctrlBtn = document.querySelector('button[title="CTRL 组合键"]') as HTMLButtonElement
+    act(() => {
+      ctrlBtn.click()
+    })
+    expect(ctrlBtn.getAttribute('aria-pressed')).toBe('true')
+
+    let handled: boolean | undefined
+    act(() => {
+      handled = xtermSpy.keyEventHandler!(new KeyboardEvent('keydown', { key: 'Unidentified' }))
+    })
+    expect(handled).toBe(true)
+    expect(ctrlBtn.getAttribute('aria-pressed')).toBe('false')
+    expect(handshake.writeTerminal).not.toHaveBeenCalled()
+  })
+
+  it('握手完成前辅助栏标记为禁用，点击不写入', async () => {
+    const handshake = createHandshake()
+    await renderPanel(handshake)
+
+    const bar = document.querySelector('.terminal-accessory-bar') as HTMLElement
+    expect(bar.classList.contains('is-disabled')).toBe(true)
+    expect(bar.getAttribute('aria-disabled')).toBe('true')
+
+    const tabBtn = document.querySelector('button[title="TAB 自动补全"]') as HTMLButtonElement
+    act(() => {
+      tabBtn.click()
+    })
+    expect(handshake.writeTerminal).not.toHaveBeenCalled()
+  })
+
+  it('会话结束后辅助栏立刻禁用，点击不再写入（不产生假反馈）', async () => {
+    const handshake = createHandshake()
+    await renderPanel(handshake)
+    await handshake.settle('session-a')
+
+    const bar = document.querySelector('.terminal-accessory-bar') as HTMLElement
+    expect(bar.classList.contains('is-disabled')).toBe(false)
+
+    const tabBtn = document.querySelector('button[title="TAB 自动补全"]') as HTMLButtonElement
+    act(() => {
+      tabBtn.click()
+    })
+    await waitFor(() => { expect(handshake.writeTerminal).toHaveBeenCalledWith('session-a', toBase64('\t')) })
+    vi.mocked(handshake.writeTerminal).mockClear()
+
+    handshake.emitExit('session-a', 0)
+    await waitFor(() => { expect(exitLines().length).toBe(1) })
+
+    const disabledBar = document.querySelector('.terminal-accessory-bar') as HTMLElement
+    expect(disabledBar.classList.contains('is-disabled')).toBe(true)
+    expect(disabledBar.getAttribute('aria-disabled')).toBe('true')
+
+    act(() => {
+      tabBtn.click()
+    })
+    expect(handshake.writeTerminal).not.toHaveBeenCalled()
+  })
 })

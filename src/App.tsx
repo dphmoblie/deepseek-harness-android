@@ -122,7 +122,6 @@ import type {
   OverlayBallState,
   ProviderApiKeys,
   RuntimeInstallResult,
-  RuntimeLibraryEntry,
   RuntimePhase,
   RuntimeProgress,
   RuntimeReleaseEntry,
@@ -2179,7 +2178,7 @@ function RuntimeVersionsPanel({
         const downloader = downloadRelease ?? ((url, sha) => runtimeBridge.downloadRuntimeRelease(url, sha))
         await downloader(item.manifestUrl!, item.manifestSha256!)
         notify(t("已成功下载到版本库"), 'success')
-        await load()
+        load()
       } catch (error) {
         notify(errorMessage(error), 'error')
       } finally {

@@ -122,11 +122,6 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
     send: () => {},
   })
 
-  const setWritable = useCallback((writable: boolean) => {
-    writableRef.current = writable
-    setKeyBarDisabled(!writable)
-  }, [])
-
   const sendVirtualKey = useCallback((data: string) => {
     if (!writableRef.current) return
     triggerHaptic('light')
@@ -247,11 +242,13 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
 
     terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
       if (ctrlActiveRef.current && event.type === 'keydown') {
+        // 无论这一次按键能不能转成控制字节，CTRL 态都要落回来：
+        // 软键盘常给 `Unidentified` 或长度不为 1 的 key，只在上面的分支复位会让 CTRL 永久卡住。
+        setCtrlActive(false)
         const key = event.key.toLowerCase()
         if (key.length === 1 && key >= 'a' && key <= 'z') {
           const code = String.fromCharCode(key.charCodeAt(0) - 96)
           activeSessionRef.current.send(code)
-          setCtrlActive(false)
           return false
         }
       }
@@ -445,7 +442,12 @@ export function TerminalPanel({ bridge, fontSize, kind, onError }: TerminalPanel
         </div>
       )}
       <div ref={containerRef} className="terminal-canvas" />
-      <div className="terminal-accessory-bar" role="toolbar" aria-label={t("终端辅助按键")}>
+      <div
+        className={`terminal-accessory-bar${keyBarDisabled ? ' is-disabled' : ''}`}
+        role="toolbar"
+        aria-label={t("终端辅助按键")}
+        aria-disabled={keyBarDisabled}
+      >
         <button
           type="button"
           className="terminal-key-btn"
