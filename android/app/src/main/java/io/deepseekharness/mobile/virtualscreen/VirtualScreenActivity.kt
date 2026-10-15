@@ -42,6 +42,9 @@ class VirtualScreenActivity : Activity() {
     private var resumed = false
     private var actionPending = false
     private var launchPendingUntil = 0L
+
+    /** 连续刷新失败次数；一次成功即清零（重试节奏与提示见 [VirtualScreenPolicy]）。 */
+    private var consecutiveRefreshFailures = 0
     private data class Entry(val label: String, val component: String)
 
     /**
@@ -279,12 +282,24 @@ class VirtualScreenActivity : Activity() {
                     else -> "选择要交给 AI 操作的目标应用。设备兼容性需要实测。"
                 }
             } catch (_: Throwable) {
-                // 轮询跑在主线程：异常逃出去会直接终结进程。这里停在原地并提示用户重进，
-                // 不再续期（状态不会再更新），把「刷新失败」当成一次可见的故障而非闪退。
-                toast("副屏状态刷新失败，请退出重进本页")
+                /*
+                 * 轮询跑在主线程，异常逃出去会直接终结进程，所以必须在这里接住；但「接住」不等于
+                 * 「就此停摆」——原来的写法在续期之前 return，一次偶发异常（服务正在重建、快照刚好
+                 * 读到半张状态）就让控制条与帧率芯片永久停在那一下，只有离开再回到本页才会恢复，
+                 * 而这期间画面其实还在变。这里改成降频重试：提示只发一次（免得 700ms 一次的循环
+                 * 刷成一串 toast），连续失败到上限才停止续期。判定与文案在 VirtualScreenPolicy 里，
+                 * 可脱离设备单测。
+                 */
+                consecutiveRefreshFailures += 1
+                VirtualScreenPolicy.previewRefreshNotice(consecutiveRefreshFailures)?.let { notice ->
+                    runCatching { toast(VirtualScreenPolicy.previewRefreshMessage(notice)) }
+                }
+                if (VirtualScreenPolicy.previewRefreshShouldStop(consecutiveRefreshFailures)) return
+                main.postDelayed(this, VirtualScreenPolicy.previewRefreshDelayMillis(consecutiveRefreshFailures))
                 return
             }
-            main.postDelayed(this, 700)
+            consecutiveRefreshFailures = 0
+            main.postDelayed(this, VirtualScreenPolicy.previewRefreshDelayMillis(consecutiveRefreshFailures))
         }
     }
 

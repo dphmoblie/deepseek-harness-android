@@ -213,8 +213,10 @@ K15 若失败，请一并抓取 `adb logcat -b crash -d | tail -n 80`：插件�
 用户看不到也点不到、无法自救；失败时记录旋转前后的屏幕像素尺寸与球的坐标。O14/O15 请
 确认撤销权限后应用进程是否被系统重建（pid 是否变化），并记录设置页显示的原因文案。球
 未出现时抓取 `adb shell dumpsys activity services io.deepseekharness.mobile` 与诊断日志中
-`reason` 以 `overlay_` 开头的记录（`overlay_denied` 表示权限被拒、`overlay_attach_failed`
-表示加窗竞态、`overlay_sync` 表示设置同步时的实际判定）。
+`reason` 以 `overlay_` 开头的记录（`overlay_denied` 表示权限被拒；
+`overlay_permission_unreadable` 表示这一次没读到权限——**不等于**被撤销，此时服务会继续尝试
+挂球，真加不上会再记一条 `overlay_attach_failed`；`overlay_attach_failed` 表示加窗竞态；
+`overlay_sync` 表示设置同步时的实际判定）。
 
 ## 6. 体积与兼容性记录
 

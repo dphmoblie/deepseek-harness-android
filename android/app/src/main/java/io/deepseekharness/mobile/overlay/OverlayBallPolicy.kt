@@ -40,6 +40,50 @@ object OverlayBallPolicy {
     fun shouldShowBall(enabled: Boolean, canDrawOverlays: Boolean): Boolean =
         enabled && canDrawOverlays
 
+    /** 诊断里的 `reason`：权限明确被撤销。 */
+    const val REASON_OVERLAY_DENIED = "overlay_denied"
+
+    /** 诊断里的 `reason`：这一次没读到权限（不是撤销）。 */
+    const val REASON_OVERLAY_UNREADABLE = "overlay_permission_unreadable"
+
+    /**
+     * 悬浮窗权限的**三态**。
+     *
+     * `Settings.canDrawOverlays` 要跨进程查系统，个别 ROM 上会直接抛
+     * `SecurityException` / `DeadObjectException`。读不到权限既不能当成「有」，也不能当成「没有」：
+     * 按「没有」处理，一次 binder 抖动就会让服务按「权限被撤销」收尾，
+     * 用户看到的是「悬浮球自己没了」，而真实原因只是这一次没读到。
+     */
+    enum class OverlayPermissionState { GRANTED, REVOKED, UNREADABLE }
+
+    /** 把「读到的值」映射成三态：`null` 表示这次没读出来。 */
+    fun overlayPermissionState(grantsOverlay: Boolean?): OverlayPermissionState = when (grantsOverlay) {
+        true -> OverlayPermissionState.GRANTED
+        false -> OverlayPermissionState.REVOKED
+        null -> OverlayPermissionState.UNREADABLE
+    }
+
+    /** 只有明确读到「未授予」才算被撤销；读不到不算。 */
+    fun permissionRevoked(state: OverlayPermissionState): Boolean =
+        state == OverlayPermissionState.REVOKED
+
+    /**
+     * 是否应当尝试挂球。
+     *
+     * 与 [shouldShowBall] 的差别只在「读不到权限」这一态：布尔形式要求拿到 `true` 才显示，
+     * 而这里把读不到当成「暂时还不知道」并继续尝试——真没权限时 `addView` 会自己抛错，
+     * 由挂载失败路径按实际情况收尾，比先替系统下结论更诚实。
+     */
+    fun shouldAttemptBall(enabled: Boolean, state: OverlayPermissionState): Boolean =
+        enabled && !permissionRevoked(state)
+
+    /** 需要记进诊断的 `reason`；`null` 表示这次权限正常，不必记告警。 */
+    fun permissionWarningReason(state: OverlayPermissionState): String? = when (state) {
+        OverlayPermissionState.GRANTED -> null
+        OverlayPermissionState.REVOKED -> REASON_OVERLAY_DENIED
+        OverlayPermissionState.UNREADABLE -> REASON_OVERLAY_UNREADABLE
+    }
+
     /**
      * 已存在的球视图能否直接复用。
      *

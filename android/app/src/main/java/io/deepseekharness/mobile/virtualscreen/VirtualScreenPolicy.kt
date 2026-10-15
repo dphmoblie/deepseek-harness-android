@@ -108,6 +108,46 @@ object VirtualScreenPolicy {
     fun previewPullDelay(mode: String, elapsedMillis: Long): Long =
         (previewPullInterval(mode).toLong() - elapsedMillis.coerceAtLeast(0L)).coerceAtLeast(1L)
 
+    // ── 预览页状态轮询的失败重试 ──────────────────────────────────────────────
+    // 轮询跑在主线程，异常必须在循环里接住，否则会终结进程；但接住不等于停摆：
+    // 一次偶发异常（服务重建、快照读到半张状态）不该让控制条与帧率芯片永久停在那一刻。
+    // 下面是这条循环的纯决策：几次失败后拉长间隔、提示什么、第几次失败才放弃。
+
+    /** 预览页状态轮询间隔（正常路径）。 */
+    const val PREVIEW_REFRESH_INTERVAL_MILLIS = 700L
+
+    /** 刷新连续失败后的重试间隔：降频，但不放弃。 */
+    const val PREVIEW_REFRESH_RETRY_MILLIS = 2_000L
+
+    /** 连续失败到这个次数才停止续期，并请用户退出重进。 */
+    const val PREVIEW_REFRESH_MAX_FAILURES = 5
+
+    const val PREVIEW_REFRESH_RETRY_MESSAGE = "副屏状态刷新遇到问题，正在重试…"
+    const val PREVIEW_REFRESH_GAVE_UP_MESSAGE = "副屏状态刷新失败，请退出重进本页"
+
+    /** 失败到第几次该提示什么。[RETRYING] 只发一次，避免 700ms 一次的循环刷成一串提示。 */
+    enum class PreviewRefreshNotice { RETRYING, GAVE_UP }
+
+    fun previewRefreshNotice(consecutiveFailures: Int): PreviewRefreshNotice? = when {
+        consecutiveFailures <= 0 -> null
+        consecutiveFailures >= PREVIEW_REFRESH_MAX_FAILURES -> PreviewRefreshNotice.GAVE_UP
+        consecutiveFailures == 1 -> PreviewRefreshNotice.RETRYING
+        else -> null
+    }
+
+    fun previewRefreshMessage(notice: PreviewRefreshNotice): String = when (notice) {
+        PreviewRefreshNotice.RETRYING -> PREVIEW_REFRESH_RETRY_MESSAGE
+        PreviewRefreshNotice.GAVE_UP -> PREVIEW_REFRESH_GAVE_UP_MESSAGE
+    }
+
+    /** 下一次轮询的间隔：成功为 700ms，失败后拉长到 2s，避免主线程被失败循环刷满。 */
+    fun previewRefreshDelayMillis(consecutiveFailures: Int): Long =
+        if (consecutiveFailures <= 0) PREVIEW_REFRESH_INTERVAL_MILLIS else PREVIEW_REFRESH_RETRY_MILLIS
+
+    /** 是否应当停止续期（连续失败到上限）。 */
+    fun previewRefreshShouldStop(consecutiveFailures: Int): Boolean =
+        consecutiveFailures >= PREVIEW_REFRESH_MAX_FAILURES
+
     /** 从请求里取出并校验目标应用入口（字段名 [TARGET_FIELD]），复用 [component] 的规则。 */
     fun targetRequest(p: JSONObject): String = component(p.getString(TARGET_FIELD))
 
