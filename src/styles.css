@@ -1151,12 +1151,78 @@ button:disabled {
 
 .terminal-canvas {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 38px;
   padding: 12px 8px 8px 12px;
 }
 
 .terminal-canvas .xterm {
   height: 100%;
+}
+
+.terminal-accessory-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: var(--terminal-bg);
+  border-top: 1px solid var(--terminal-line);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  z-index: 5;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.terminal-accessory-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.terminal-key-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--terminal-chip-line);
+  border-radius: var(--radius-inner);
+  background: var(--terminal-chip-bg);
+  color: var(--terminal-chip-text);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+  touch-action: pan-x;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.terminal-key-btn:active,
+.terminal-key-btn.is-active {
+  background: var(--blue);
+  border-color: var(--blue);
+  color: var(--on-accent);
+}
+
+.terminal-key-btn.terminal-key-accent {
+  color: var(--blue);
+  border-color: var(--blue);
+}
+
+.terminal-key-btn.terminal-key-accent:active {
+  background: var(--blue);
+  color: var(--on-accent);
 }
 
 .terminal-connecting {
