@@ -5124,6 +5124,35 @@ function overlayFailureGuide(token: string | null | undefined): PermissionGuide 
   return { kind: 'background-blocked', feature: 'overlayBall' }
 }
 
+/**
+ * 后台保持类指引是否已被最新原生状态解除。
+ *
+ * 用户在系统设置里补齐通知权限或后台策略后返回，可见性刷新读到「服务已运行」或
+ * 「权限已授予」时应当关闭滞留的弹窗；尚未解除时返回 false，保持原样。
+ */
+function keepAliveGuideResolved(guide: PermissionGuide | null, state: KeepAliveState): boolean {
+  if (guide === null) return false
+  if (guide.kind === 'notification-permission') return state.notificationPermission === 'granted'
+  if (guide.kind === 'background-blocked' && guide.feature === 'keepAlive') {
+    return state.keepRuntimeInBackground !== true || state.foregroundServiceActive
+  }
+  return false
+}
+
+/**
+ * 悬浮球类指引是否已被最新原生状态解除（服务已运行，或用户已把开关关掉）。
+ */
+function overlayGuideResolved(guide: PermissionGuide | null, state: OverlayBallState): boolean {
+  if (guide === null) return false
+  if (guide.kind === 'overlay-permission' || guide.kind === 'overlay-internal') {
+    return state.enabled !== true || state.serviceActive
+  }
+  if (guide.kind === 'background-blocked' && guide.feature === 'overlayBall') {
+    return state.enabled !== true || state.serviceActive
+  }
+  return false
+}
+
 interface PermissionGuideDialogProps {
   guide: PermissionGuide
   busy: boolean
@@ -5812,12 +5841,21 @@ export function App() {
       })
 
     void runtimeBridge.getKeepAliveState()
-      .then(next => { if (!cancelled) setKeepAlive(next) })
+      .then(next => {
+        if (cancelled) return
+        setKeepAlive(next)
+        // 用户已在系统设置里补齐权限/后台策略后返回时，关闭滞留的指引弹窗。
+        setPermissionGuide(previous => (keepAliveGuideResolved(previous, next) ? null : previous))
+      })
       .catch(() => {
         // 后台保持状态读取失败不阻塞界面：保持上一次的已知状态。
       })
 
     void readOverlayBall()
+      .then(next => {
+        if (cancelled) return
+        setPermissionGuide(previous => (overlayGuideResolved(previous, next) ? null : previous))
+      })
       .catch(() => {
         // 悬浮球属于可选能力，错误由设置页单独显示。
       })
@@ -6424,12 +6462,11 @@ export function App() {
           latest => {
             setKeepAlive(latest)
             if (latest.keepRuntimeInBackground === true && !latest.foregroundServiceActive) {
-              // 原生侧把前台启动失败原因写进受控令牌（foregroundStartError）：通知权限提示
-              // 与通知类令牌都走通知指引；其余（foreground_declined / start_disallowed /
-              // foreground_failed）按厂商后台拦截处理。
+              // 原生侧只在真正失败时下发受控令牌（foreground_declined / start_disallowed），
+              // 它们都属于厂商后台策略拦截。通知权限缺失已不再阻止前台服务启动，
+              // 因此只有「尚未申请过通知权限」（prompt）这一档才走通知指引。
               setPermissionGuide(
-                latest.notificationPermission === 'prompt' ||
-                latest.foregroundStartError === 'notification_permission_missing'
+                latest.notificationPermission === 'prompt'
                   ? { kind: 'notification-permission' }
                   : { kind: 'background-blocked', feature: 'keepAlive' },
               )
