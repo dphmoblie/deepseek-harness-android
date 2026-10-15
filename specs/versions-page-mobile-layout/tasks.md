@@ -45,7 +45,7 @@
   故本地不重写这两份产物；子模块换版后，下一次 CI 构建出的离线包即含本次样式。
 - 验证：`pnpm run test:scripts`（含 `mobile-compat-contract.test.mjs`，pin = 索引 gitlink = HEAD gitlink 三处一致）
 
-## [ ] T6 [必做] 提交并推送 main
+## [x] T6 [必做] 提交并推送 main
 
 - 提交信息沿用仓库风格：`fix(版本管理): 窄屏行内动作换行，避免版本号被压成逐字换行`
 - `git push origin main`（历史多次网络超时失败，失败则提示检查网络/代理后重试）
