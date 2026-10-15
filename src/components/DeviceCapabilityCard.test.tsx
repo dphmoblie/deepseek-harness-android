@@ -49,6 +49,19 @@ async function findRow(text: string): Promise<HTMLElement> {
 }
 
 describe('设备能力卡片', () => {
+  it('AI Shell 关闭时说明副屏阻断原因并跳转设备 Shell 设置，不直接开启权限', async () => {
+    const onOpenDeviceShell = vi.fn()
+    const bridge = { getDeviceCapabilities: vi.fn().mockResolvedValue(report([
+      entry('virtual_screen', { state: 'needs_action', reason: 'DEVICE_SHELL_DISABLED', action: 'enable_device_shell' }),
+    ])) } as unknown as RuntimeBridge
+    render(<DeviceCapabilityCard bridge={bridge} onOpenDeviceShell={onOpenDeviceShell} />)
+    const button = await screen.findByRole('button', { name: '设备 Shell 设置' })
+    expect(button.closest('p')?.textContent).toContain('AI Shell 开关没有打开')
+    expect(button.closest('p')?.textContent).toContain('到「设备 Shell 设置」开启 AI Shell')
+    fireEvent.click(button)
+    expect(onOpenDeviceShell).toHaveBeenCalledTimes(1)
+  })
+
   it('六项按原生给的顺序列全，名称与技术标识分开显示', async () => {
     card({ getDeviceCapabilities: vi.fn().mockResolvedValue(report()) })
 

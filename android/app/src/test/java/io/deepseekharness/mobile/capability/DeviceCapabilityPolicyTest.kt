@@ -18,6 +18,7 @@ class DeviceCapabilityPolicyTest {
         permission: String = "granted",
         connected: Boolean = true,
         accessibility: String = "connected",
+        shellEnabled: Boolean = true,
         rootEnabled: Boolean = false,
         rootStatus: String? = null,
         rootReason: String? = null,
@@ -30,6 +31,7 @@ class DeviceCapabilityPolicyTest {
             shizukuPermission = permission,
             shizukuConnected = connected,
             accessibilityStatus = accessibility,
+            shellEnabled = shellEnabled,
             rootEngineEnabled = rootEnabled,
             rootEngineStatus = rootStatus,
             rootEngineReason = rootReason,
@@ -38,6 +40,19 @@ class DeviceCapabilityPolicyTest {
     )
 
     private fun List<DeviceCapability>.entry(id: String): DeviceCapability = first { it.id == id }
+
+    @Test
+    fun `AI Shell 关闭时副屏要求开启开关且不提供 Shell 替代方式`() {
+        val list = report(shellEnabled = false, accessibility = "off")
+        val screen = list.entry(DeviceCapabilityPolicy.VIRTUAL_SCREEN)
+        assertEquals(DeviceCapabilityPolicy.NEEDS_ACTION, screen.state)
+        assertEquals(DeviceCapabilityPolicy.REASON_DEVICE_SHELL_DISABLED, screen.reason)
+        assertEquals(DeviceCapabilityPolicy.ACTION_ENABLE_DEVICE_SHELL, screen.action)
+        assertNull(list.entry(DeviceCapabilityPolicy.KERNELSU_ROOT).alternative)
+        assertNull(list.entry(DeviceCapabilityPolicy.ACCESSIBILITY).alternative)
+        assertNull(list.entry(DeviceCapabilityPolicy.CHINESE_INPUT).alternative)
+        assertEquals(DeviceCapabilityPolicy.READY, list.entry(DeviceCapabilityPolicy.SCREENSHOT).state)
+    }
 
     @Test
     fun `六项能力的顺序固定，根通道默认关闭只差用户点一下`() {

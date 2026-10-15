@@ -46,6 +46,7 @@ const REASON_NOTES: Record<string, string> = {
   ACCESSIBILITY_ENABLED_DISCONNECTED: '无障碍服务在系统里开着，但本应用还没连上',
   ANDROID_TOO_OLD: '需要 Android 10 或更高版本',
   TEXT_INPUT_NEEDS_ACCESSIBILITY: '中文等非 ASCII 文字只能由无障碍服务写入',
+  DEVICE_SHELL_DISABLED: 'AI Shell 开关没有打开',
   ROOT_ENGINE_DISABLED: '根通道开关没有打开',
   KERNELSU_NOT_INSTALLED: '这台设备没有可用的 KernelSU',
   KERNELSU_PERMISSION_REQUIRED: 'KernelSU 还没有给本应用授权',
@@ -63,6 +64,7 @@ const ACTION_NOTES: Record<string, string> = {
   open_accessibility_settings: '到系统设置里开启本应用的无障碍服务',
   enable_root_engine: '到「根通道」设置里打开开关',
   grant_root_permission: '到 KernelSU 管理器里给本应用授权',
+  enable_device_shell: '到「设备 Shell 设置」开启 AI Shell',
 }
 
 /** 替代码 → 退一步还能怎么做。没有替代方式时原生侧给 `null`，这一行就不显示。 */
@@ -112,7 +114,7 @@ function sameReport(previous: DeviceCapabilityReport, next: DeviceCapabilityRepo
  *    但 `degraded` 的行**要**说原因——那正是「能用但不完整」里最该知道的那一半。
  *  - 卡片本身**不写入任何浏览器存储**，也不触发任何动作。
  */
-export function DeviceCapabilityCard({ bridge = runtimeBridge }: { bridge?: RuntimeBridge }) {
+export function DeviceCapabilityCard({ bridge = runtimeBridge, onOpenDeviceShell }: { bridge?: RuntimeBridge; onOpenDeviceShell?: () => void }) {
   const [load, setLoad] = useState<CapabilityLoad>({ status: 'loading' })
   const requestId = useRef(0)
   const invalidate = useCallback(() => { requestId.current += 1 }, [])
@@ -164,6 +166,7 @@ export function DeviceCapabilityCard({ bridge = runtimeBridge }: { bridge?: Runt
       {t(STATE_LABELS[entry.state])}
       {entry.state !== 'ready' && ` · ${t(REASON_NOTES[entry.reason] ?? '暂时说不上来具体原因')}`}
       {entry.action !== null && ` · ${t('下一步：{0}', t(ACTION_NOTES[entry.action] ?? entry.action))}`}
+      {entry.action === 'enable_device_shell' && onOpenDeviceShell !== undefined && <> · <button type="button" onClick={onOpenDeviceShell}>{t('设备 Shell 设置')}</button></>}
       {entry.alternative !== null && ` · ${t('替代方式：{0}', t(ALTERNATIVE_NOTES[entry.alternative] ?? entry.alternative))}`}
     </p>)}
     {report !== null && <p className="settings-note">{t('取样时间：{0}', new Date(report.atMs).toLocaleTimeString())} · {t('连接状态变化后会自动重新检测。')}</p>}

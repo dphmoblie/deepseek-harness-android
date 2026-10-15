@@ -35,6 +35,22 @@ class VirtualScreenPreviewCoreTest {
         hardwareFrame: Boolean = false,
     ) = PreviewSample(sessionId, channel, mode, fps, decoded, samples, hardwareFrame)
 
+    @Test fun `状态和失效文案每拍使用注入的当前语言`() {
+        var language = "en"
+        val core = VirtualScreenPreviewCore(
+            sessionAlive = { alive },
+            modeTitle = { "$language:Battery saver" },
+            statusLine = { channel, pause, fps, title, waiting -> "$language:$channel:$pause:$fps:$title:$waiting" },
+            goneMessage = { "$language:Waiting for the virtual screen picture" },
+        )
+        val first = core.accept(sample(decoded = false), 10)
+        assertEquals("en:stream:UNREADABLE:12.0:en:Battery saver:true", first.line)
+        language = "zh-CN"
+        assertEquals("zh-CN:stream:NONE:12.0:zh-CN:Battery saver:false", core.accept(sample(samples = content), 20).line)
+        alive = false
+        assertEquals("zh-CN:Waiting for the virtual screen picture", core.accept(sample(decoded = false), 30).line)
+    }
+
     @Test fun `固定帧序列的动作与观测状态逐拍可预期`() {
         val core = core()
 

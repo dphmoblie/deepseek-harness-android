@@ -74,6 +74,45 @@
       不再把「800 × 363 dp」这类值写死在文案里，避免与真正建会话用的像素尺寸各写一份、互相漂移。
     -->
     <string name="virtual_screen_title">目标应用副屏</string>
+    <string name="virtual_screen_back">返回</string>
+    <string name="virtual_screen_search">搜索应用名称或包名</string>
+    <string name="virtual_screen_shell_required">请先在设置中开启 AI Shell 并连接 Shizuku</string>
+    <string name="virtual_screen_android_required">副屏操作需要 Android 10 或更高版本</string>
+    <string name="virtual_screen_creating">正在创建目标应用副屏，请稍候…</string>
+    <string name="virtual_screen_start_failed">无法启动副屏服务，请回到前台重试</string>
+    <string name="virtual_screen_app_back">应用返回</string>
+    <string name="virtual_screen_floating">小窗</string>
+    <string name="virtual_screen_stop">结束副屏</string>
+    <string name="virtual_screen_overlay_required">请先启动副屏，并在设置中授予悬浮窗权限</string>
+    <string name="virtual_screen_back_failed">无法返回，请确认目标应用仍在副屏</string>
+    <string name="virtual_screen_mode_failed">帧率未生效，请确认副屏仍在运行</string>
+    <string name="virtual_screen_select_hint">选择要交给 AI 操作的目标应用。设备兼容性需要实测。</string>
+    <string name="virtual_screen_collapse">收起</string>
+    <string name="virtual_screen_end">结束</string>
+    <string name="virtual_screen_resize">拖动调整副屏画面大小</string>
+    <string name="virtual_screen_control_description">%1$s副屏预览</string>
+    <string name="virtual_screen_notification_title">目标应用副屏运行中</string>
+    <string name="virtual_screen_notification_text">点按回到副屏页面</string>
+    <string name="virtual_screen_foreground_failed">无法启动副屏前台服务，请回到应用重试</string>
+    <string name="virtual_screen_start_error">副屏启动失败，请检查 AI Shell 和 Shizuku 状态</string>
+    <string name="virtual_screen_session_lost">副屏会话已失效，请重新启动</string>
+    <string name="virtual_screen_refresh_retry">副屏状态刷新失败，正在重试</string>
+    <string name="virtual_screen_refresh_failed">副屏状态持续刷新失败，请重新打开此页面</string>
+    <string name="virtual_screen_preview_gone">等待副屏画面；锁屏、断连或应用离开副屏时暂停显示</string>
+    <string name="virtual_screen_budget_saturated"> · 预览跟不上档位：最近 %1$d 拍里 %2$d 拍超预算（最慢 %3$d 毫秒）</string>
+    <string name="virtual_screen_budget_degraded"> · 预览跟不上档位：最近 %1$d 拍里 %2$d 拍超预算</string>
+    <string name="virtual_screen_touch_failed">触摸未执行，请确认副屏仍在运行</string>
+    <string name="virtual_screen_action_failed">操作未执行，请确认副屏仍在运行</string>
+    <string name="virtual_screen_waiting_unreadable">等待副屏画面（未读到新帧）</string>
+    <string name="virtual_screen_waiting_blank">等待副屏画面（当前帧接近纯色）</string>
+    <string name="virtual_screen_rate_unknown">帧率待测</string>
+    <string name="virtual_screen_frame_unchanged">%1$s · 画面暂无变化</string>
+    <string name="virtual_screen_frame_blank">%1$s · 当前帧接近纯色</string>
+    <string name="virtual_screen_frame_unreadable">未读到新帧</string>
+    <string name="virtual_screen_touch_stream">触摸直传</string>
+    <string name="virtual_screen_touch_discrete">点击或滑动操作</string>
+    <string name="virtual_screen_preview_status">副屏预览 · %1$s · %2$s · 档位 %3$s</string>
+    <string name="virtual_screen_picture_description">目标应用副屏画面，支持点击和滑动</string>
     <string name="virtual_screen_orientation_landscape">使用横屏副屏（%1$d × %2$d dp）</string>
     <string name="virtual_screen_orientation_hint">默认竖屏 %1$d × %2$d dp。启动后可在页面或小窗操作，AI 使用副屏专用工具。画面按需发送至当前模型服务；请勿打开包含隐私信息的页面。</string>
 

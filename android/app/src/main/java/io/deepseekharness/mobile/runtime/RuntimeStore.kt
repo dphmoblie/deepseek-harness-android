@@ -31,6 +31,7 @@ class RuntimeStore(context: Context) {
     val runtimeParent = File(appContext.noBackupFilesDir, "dsh-runtime")
     val currentRoot = File(runtimeParent, "current")
     val currentManifest = File(runtimeParent, "current-manifest.json")
+    internal val sharedFilesDirectory: File get() = appContext.filesDir
 
     /**
      * 安装期间的瞬时槽：提升新运行时前，旧运行时先改名到这里。

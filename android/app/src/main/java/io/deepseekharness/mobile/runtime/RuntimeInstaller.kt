@@ -203,7 +203,7 @@ class RuntimeInstaller(
         http.cancelAll()
     }
 
-    fun resetWorkspace() {
+    fun resetWorkspace() = RuntimeSharedInbox.withLock {
         if (!installLock.tryLock()) throw RuntimeFailure("INSTALL_IN_PROGRESS", "安装期间不能重置运行时")
         try {
             cleanTransientWorkspaces()
@@ -426,7 +426,7 @@ class RuntimeInstaller(
         return result.concatToString()
     }
 
-    private fun prepareRuntimeParent() {
+    private fun prepareRuntimeParent() = RuntimeSharedInbox.withLock {
         currentStep = "parent_check"
         if (!RuntimeFiles.existsNoFollow(store.runtimeParent)) {
             Files.createDirectory(store.runtimeParent.toPath())
@@ -435,6 +435,7 @@ class RuntimeInstaller(
         }
         currentStep = "recovery"
         recoverInterruptedPromotion()
+        prepareSharedInbox()
         currentStep = "transient_cleanup"
         cleanTransientWorkspaces()
         currentStep = "parent_ready"
@@ -558,7 +559,7 @@ class RuntimeInstaller(
      * 3. 把用户数据回填到新根目录的同一相对路径；**只有全部回填成功**才把被换下来的旧版本
      *    旋转到 `retained*`（见 [retainPreviousRoot]）。
      */
-    private fun promoteRuntime(sourceRoot: File, sourceManifest: File) {
+    private fun promoteRuntime(sourceRoot: File, sourceManifest: File) = RuntimeSharedInbox.withLock {
         val preservedRoot = File(
             store.runtimeParent,
             RuntimePreservePolicy.preserveDirectoryName(UUID.randomUUID().toString()),
@@ -612,6 +613,14 @@ class RuntimeInstaller(
             throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", unpreservedMessage(unplaced))
         }
         retainPreviousRoot()
+        prepareSharedInbox()
+    }
+
+    private fun prepareSharedInbox() {
+        val sharedInbox = RuntimeSharedInbox(store)
+        // 收件箱不可用时保留暂存原件，不把已完成的运行时安装错误标成失败。
+        runCatching { sharedInbox.prepareWorkspace() }
+        sharedInbox.deliver()
     }
 
     /**

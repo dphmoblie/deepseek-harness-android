@@ -293,7 +293,7 @@ body {
   border: 0;
   border-radius: var(--radius-control);
   background: var(--blue);
-  color: var(--on-accent);
+  color: var(--on-blue, var(--on-accent));
   font-weight: var(--weight-semibold);
   cursor: pointer;
 }
@@ -398,7 +398,7 @@ button:disabled {
   flex-direction: column;
   gap: 2px;
   min-height: 54px;
-  color: var(--on-accent);
+  color: var(--on-blue, var(--on-accent));
   background: linear-gradient(150deg, var(--blue), color-mix(in srgb, var(--blue) 50%, var(--brand-bg)));
   box-shadow: 0 8px 18px color-mix(in srgb, var(--blue) 20%, transparent);
 }
@@ -648,7 +648,7 @@ button:disabled {
 }
 
 .button-primary {
-  color: var(--on-accent);
+  color: var(--on-blue, var(--on-accent));
   background: var(--blue);
   box-shadow: 0 7px 18px color-mix(in srgb, var(--blue) 22%, transparent);
 }
@@ -980,7 +980,7 @@ button:disabled {
 }
 
 .install-step.active > span {
-  color: var(--on-accent);
+  color: var(--on-blue, var(--on-accent));
   border-color: var(--blue);
   background: var(--blue);
 }
@@ -1226,7 +1226,7 @@ button:disabled {
 .terminal-key-btn.is-active {
   background: var(--blue);
   border-color: var(--blue);
-  color: var(--on-accent);
+  color: var(--on-blue, var(--on-accent));
 }
 
 /*
@@ -1245,7 +1245,7 @@ button:disabled {
 
 .terminal-key-btn.terminal-key-accent:active {
   background: var(--blue);
-  color: var(--on-accent);
+  color: var(--on-blue, var(--on-accent));
 }
 
 .terminal-connecting {
@@ -1410,7 +1410,7 @@ button:disabled {
   height: 44px;
   border: 0;
   border-radius: 50%;
-  color: var(--on-accent);
+  color: var(--on-blue, var(--on-accent));
   background: var(--blue);
   cursor: pointer;
 }
@@ -1599,7 +1599,7 @@ button:disabled {
 
 .field > span {
   overflow-wrap: anywhere;
-  color: var(--field-label);
+  color: var(--content-label, var(--field-label));
   font-size: 0.75rem;
   font-weight: 650;
 }
@@ -2403,6 +2403,7 @@ button:disabled {
 .onboarding-step-dots > span.done { background: var(--green); }
 .onboarding-title { display: flex; align-items: center; gap: 9px; margin: 0 0 10px; }
 .onboarding-body { display: flex; flex-direction: column; gap: 10px; color: var(--muted); }
+.onboarding-fields { display: flex; min-width: 0; flex-direction: column; gap: 10px; margin: 0; padding: 0; border: 0; }
 .onboarding-body ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
 .onboarding-body code { font-size: .9em; }
 .onboarding-warn { color: var(--amber); }
@@ -2512,12 +2513,12 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  color: var(--ink);
+  color: var(--card-ink, var(--ink));
   font-size: 0.8125rem;
 }
 
 .appearance-accent-heading span {
-  color: var(--muted);
+  color: var(--card-muted, var(--muted));
   font-size: 0.6875rem;
 }
 
@@ -3145,6 +3146,7 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 /* 用户自定义卡片仅影响内容表面，弹窗和输入控件保留可读底色。 */
 .management-shell { position: relative; isolation: isolate; }
 .management-shell :is(.settings-section, .runtime-overview, .management-list, .detail-section, .launch-panel) {
+  --content-label: var(--card-ink, var(--field-label));
   background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
   backdrop-filter: blur(var(--card-blur, 0px));
   color: var(--card-ink, var(--ink));

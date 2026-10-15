@@ -15,6 +15,7 @@ import android.widget.*
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import io.deepseekharness.mobile.AppThemePreference
+import io.deepseekharness.mobile.AppLanguage
 import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.runtime.*
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
@@ -39,6 +40,28 @@ private fun modeTitleRes(mode: String): Int = when (mode) {
     "240fps" -> R.string.virtual_screen_mode_240fps
     "185fps" -> R.string.virtual_screen_mode_185fps
     else -> R.string.virtual_screen_mode_limited
+}
+
+/** 页面与小窗逐帧取当前应用语言，不重建正在运行的副屏会话。 */
+internal fun previewStatusLine(context: Context, channel: String, pause: VirtualScreenPolicy.PreviewPause, fps: Double, title: String, waiting: Boolean): String {
+    val localized = AppLanguage.localizedContext(context)
+    val frame = if (waiting) {
+        localized.getString(when (pause) {
+            VirtualScreenPolicy.PreviewPause.UNREADABLE -> R.string.virtual_screen_waiting_unreadable
+            VirtualScreenPolicy.PreviewPause.BLANK -> R.string.virtual_screen_waiting_blank
+            else -> R.string.virtual_screen_overlay_status_waiting
+        })
+    } else {
+        val rate = if (fps > 0.0) String.format(java.util.Locale.US, "%.1f fps", fps) else localized.getString(R.string.virtual_screen_rate_unknown)
+        when (pause) {
+            VirtualScreenPolicy.PreviewPause.NONE -> rate
+            VirtualScreenPolicy.PreviewPause.UNCHANGED -> localized.getString(R.string.virtual_screen_frame_unchanged, rate)
+            VirtualScreenPolicy.PreviewPause.BLANK -> localized.getString(R.string.virtual_screen_frame_blank, rate)
+            VirtualScreenPolicy.PreviewPause.UNREADABLE -> localized.getString(R.string.virtual_screen_frame_unreadable)
+        }
+    }
+    val touch = localized.getString(if (channel == "stream") R.string.virtual_screen_touch_stream else R.string.virtual_screen_touch_discrete)
+    return localized.getString(R.string.virtual_screen_preview_status, touch, frame, title)
 }
 
 class VirtualScreenService : Service() {
@@ -101,26 +124,23 @@ class VirtualScreenService : Service() {
         // ForegroundServiceDidNotStartInTimeException 并终结整个进程。
         // POST_NOTIFICATIONS 未授予不阻止前台身份（Android 13+ 只是隐藏通知），
         // 旧实现「缺通知权限 → stopSelf」正是悬浮球入口打开副屏时的闪退根因之一。
-        val manager = getSystemService(NotificationManager::class.java)
-        runCatching { manager.createNotificationChannel(NotificationChannel(CHANNEL, "目标应用副屏", NotificationManager.IMPORTANCE_LOW)) }
-        val open = PendingIntent.getActivity(this, 0, Intent(this, VirtualScreenActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val stop = PendingIntent.getService(this, 1, Intent(this, javaClass).setAction("stop"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val notification = NotificationCompat.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.ic_menu_view)
-            .setContentTitle("目标应用副屏运行中").setContentText("点此查看画面；可随时结束副屏")
-            .setContentIntent(open).setOngoing(true).addAction(0, "结束副屏", stop).build()
+        errorContext = applicationContext
+        val notification = buildNotification()
         if (!io.deepseekharness.mobile.ForegroundServices.start(
                 this, 7321, notification, "dsh-runtime", "virtual screen",
             )
         ) {
             // 两次尝试都被系统拒绝：受控收尾，绝不把异常留给 onStartCommand。
-            lastError = "无法启动副屏前台服务：请在系统设置中允许本应用自启动与后台运行后重试"
+            lastErrorResource = R.string.virtual_screen_foreground_failed
+            lastErrorCode = "VIRTUAL_SCREEN_FOREGROUND_FAILED"
             stopSelf()
             return START_NOT_STICKY
         }
         if (intent == null || intent.action == "stop") { stopSelf(); return START_NOT_STICKY }
         if (current != null) return START_NOT_STICKY
         current = this
-        lastError = ""
+        lastErrorResource = 0
+        lastErrorCode = ""
         val component = intent.getStringExtra("component") ?: ""
         // 尺寸来源收敛到规格层，且**只在这里换算一次**：页面与桥只投递「意图」（三项尺寸 / 自适应开关 /
         // 方向），真正的宽高与 dpi 由这里结合真实屏幕和偏好算出来。
@@ -148,9 +168,8 @@ class VirtualScreenService : Service() {
                 audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, AuditResult.SUCCEEDED)
             } catch (error: Throwable) {
                 audit.record(AuditEvent.VIRTUAL_SCREEN_SESSION, AuditResult.FAILED)
-                // 原生失败原因（调用方的 check/require 文案）直接带给界面：否则只剩一句泛化提示，真机排查无从下手。
-                val reason = error.cause?.message ?: error.message
-                lastError = if (reason.isNullOrBlank()) "副屏启动失败：请检查 Shizuku 授权、目标应用和设备副屏支持" else "副屏启动失败：$reason"
+                lastErrorResource = R.string.virtual_screen_start_error
+                lastErrorCode = VirtualScreenPolicy.errorCode(error)
                 main.post { stopSelf() }
             }
         }
@@ -173,7 +192,11 @@ class VirtualScreenService : Service() {
                         check(live.optString("sessionId") == session && live.optBoolean("active"))
                         snapshot = live
                     }
-                } catch (_: Throwable) { lastError = "副屏已停止：授权、Shizuku 连接或副屏会话失效"; main.post { stopSelf() } }
+                } catch (_: Throwable) {
+                    lastErrorResource = R.string.virtual_screen_session_lost
+                    lastErrorCode = "VIRTUAL_SCREEN_STOPPED"
+                    main.post { stopSelf() }
+                }
                 if (!ending.get()) main.postDelayed(this, 800)
             }
         }
@@ -524,7 +547,11 @@ class VirtualScreenService : Service() {
         // 「收起」保留会话（目标应用继续跑，只是把画面收掉），「结束」走与通知同一个 stopSelf 路径：
         // 会话在 onDestroy 里统一释放，不在这里另做一套收尾。
         frame.installControls(
-            VirtualScreenChrome.overlay(onCollapse = { hideOverlay() }, onStop = { stopSelf() }),
+            VirtualScreenChrome.overlay(
+                onCollapse = { hideOverlay() }, onStop = { stopSelf() },
+                collapseLabel = AppLanguage.localizedContext(this).getString(R.string.virtual_screen_collapse),
+                endLabel = AppLanguage.localizedContext(this).getString(R.string.virtual_screen_end),
+            ),
         )
         val params = WindowManager.LayoutParams(layout.widthPx, layout.heightPx, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
@@ -545,6 +572,30 @@ class VirtualScreenService : Service() {
             overlayMachine.viewAddFailed()
             throw e
         }
+    }
+
+    private fun refreshOverlayLanguage() {
+        (overlay as? VirtualScreenFrame)?.let { frame ->
+            val localized = AppLanguage.localizedContext(this)
+            frame.installControls(VirtualScreenChrome.overlay(
+                onCollapse = { hideOverlay() }, onStop = { stopSelf() },
+                collapseLabel = localized.getString(R.string.virtual_screen_collapse),
+                endLabel = localized.getString(R.string.virtual_screen_end),
+            ))
+            frame.refreshLanguage()
+        }
+        runCatching { if (!ending.get()) getSystemService(NotificationManager::class.java).notify(7321, buildNotification()) }
+    }
+
+    private fun localString(id: Int): String = AppLanguage.localizedContext(this).getString(id)
+
+    private fun buildNotification(): Notification {
+        runCatching { getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel(CHANNEL, localString(R.string.virtual_screen_title), NotificationManager.IMPORTANCE_LOW)) }
+        val open = PendingIntent.getActivity(this, 0, Intent(this, VirtualScreenActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val stop = PendingIntent.getService(this, 1, Intent(this, javaClass).setAction("stop"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        return NotificationCompat.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.ic_menu_view)
+            .setContentTitle(localString(R.string.virtual_screen_notification_title)).setContentText(localString(R.string.virtual_screen_notification_text))
+            .setContentIntent(open).setOngoing(true).addAction(0, localString(R.string.virtual_screen_stop), stop).build()
     }
 
     /**
@@ -770,9 +821,22 @@ class VirtualScreenService : Service() {
     }
 
     companion object {
+        internal fun refreshAppearance() {
+            Handler(Looper.getMainLooper()).post { current?.refreshOverlayLanguage() }
+        }
+
         private const val CHANNEL = "target-virtual-screen"
         @Volatile var current: VirtualScreenService? = null; private set
-        @Volatile var lastError = ""; private set
+        @Volatile private var errorContext: Context? = null
+        @Volatile private var lastErrorResource = 0
+        @Volatile private var lastErrorCode = ""
+        val lastError: String get() {
+            val context = errorContext ?: return ""
+            val resource = lastErrorResource
+            if (resource == 0) return ""
+            val message = AppLanguage.localizedContext(context).getString(resource)
+            return if (lastErrorCode.isEmpty()) message else "$message ($lastErrorCode)"
+        }
     }
 }
 
@@ -821,7 +885,9 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
             // 会话不可观察（已切换、已释放）才是唯一允许清屏的情形。
             current?.canObserve() == true && current.state().optString("sessionId") == id
         },
-        modeTitle = { mode -> context.getString(modeTitleRes(mode)) },
+        modeTitle = { mode -> AppLanguage.localizedContext(context).getString(modeTitleRes(mode)) },
+        statusLine = { channel, pause, fps, title, waiting -> previewStatusLine(context, channel, pause, fps, title, waiting) },
+        goneMessage = { AppLanguage.localizedContext(context).getString(R.string.virtual_screen_preview_gone) },
     )
     private val inputBusy = AtomicBoolean(false)
     /**
@@ -899,7 +965,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     init {
         scaleType = ScaleType.FIT_CENTER
         setBackgroundColor(android.graphics.Color.BLACK)
-        contentDescription = "目标应用副屏画面，支持点击和滑动"
+        contentDescription = AppLanguage.localizedContext(context).getString(R.string.virtual_screen_picture_description)
         setOnTouchListener(touchListener)
     }
 
@@ -908,7 +974,13 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
      * 否则用户得自己去把帧率与档位对一遍才知道跟不上。
      */
     private fun reportFrame(line: String, beat: PreviewBudgetSnapshot) {
-        val note = previewBudgetNote(beat)
+        val localized = AppLanguage.localizedContext(context)
+        val note = when {
+            beat.beats < VirtualScreenBudgetPolicy.MIN_SAMPLE_BEATS -> null
+            beat.verdict == VirtualScreenBudgetPolicy.SATURATED -> localized.getString(R.string.virtual_screen_budget_saturated, beat.beats, beat.overBudget, beat.worstMillis)
+            beat.verdict == VirtualScreenBudgetPolicy.DEGRADED -> localized.getString(R.string.virtual_screen_budget_degraded, beat.beats, beat.overBudget)
+            else -> null
+        }
         report(if (note == null) line else line + note)
     }
 
@@ -944,7 +1016,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
             try {
                 if (previewTouchDeliveryAllowed(effect.phase, effect.version, lifecycle.generation)) service.action(request)
             } catch (_: Exception) {
-                if (effect.phase == "down") main.post { report("触摸直传未生效，可改用点击或滑动操作") }
+                if (effect.phase == "down") main.post { report(AppLanguage.localizedContext(context).getString(R.string.virtual_screen_touch_failed)) }
             }
         }
     }
@@ -957,7 +1029,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         worker.execute {
             try {
                 if (previewDiscreteDeliveryAllowed(effect.version, lifecycle.generation)) service.action(request)
-            } catch (_: Exception) { main.post { report("操作未执行，请确认副屏中的目标应用状态") } }
+            } catch (_: Exception) { main.post { report(AppLanguage.localizedContext(context).getString(R.string.virtual_screen_action_failed)) } }
             finally { inputBusy.set(false) }
         }
     }
@@ -1086,7 +1158,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                             fetchedHardware?.close()
                             fetchedHardware = null
                             clearFrame()
-                            report(VirtualScreenPolicy.PREVIEW_GONE_MESSAGE)
+                            report(AppLanguage.localizedContext(context).getString(R.string.virtual_screen_preview_gone))
                         }
                     }
                     // 拉取间隔跟随档位（下限见 VirtualScreenPolicy.previewPullInterval）：

@@ -161,11 +161,9 @@ object RootCommandRunner {
                         val read = source.read(chunk)
                         if (read <= 0) break
                         val remain = MAX_OUTPUT_CHARS - buffer.length
-                        if (remain <= 0) {
-                            truncated = true
-                            break
-                        }
-                        buffer.appendRange(chunk, 0, minOf(read, remain))
+                        // 只截断保留内容，继续排空管道，避免长输出使合法脚本收到写入错误。
+                        if (read > remain) truncated = true
+                        if (remain > 0) buffer.appendRange(chunk, 0, minOf(read, remain))
                     }
                 }
             } catch (_: Exception) {

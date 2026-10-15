@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Onboarding } from './Onboarding'
 import { saveLanguage } from '../i18n'
@@ -35,10 +35,11 @@ function renderOnboarding(overrides: Partial<Parameters<typeof Onboarding>[0]> =
     onOpenHarness: vi.fn(),
     onOpenHarnessConfirmed: vi.fn(),
     onDone: vi.fn(),
+    onSaveSettings: vi.fn().mockResolvedValue(true),
     ...overrides,
   }
-  render(<Onboarding {...props} />)
-  return props
+  const view = render(<Onboarding {...props} />)
+  return { ...props, rerender: view.rerender }
 }
 
 describe('Onboarding', () => {
@@ -65,11 +66,79 @@ describe('Onboarding', () => {
   })
 
   it.each([
+    { name: '内置离线来源', settings: { ...settings, manifestUrl: '', manifestSha256: '' }, runtime },
+    { name: '已安装运行时', settings, runtime: { ...runtime, phase: 'ready' as const } },
+    { name: '有效在线来源', settings: { ...settings, manifestUrl: 'https://example.com/runtime.json' }, runtime },
+  ])('$name 不显示缺少在线来源警告', value => {
+    renderOnboarding(value)
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    expect(screen.queryByText(/尚未配置运行时下载地址/)).toBeNull()
+  })
+
+  it('安装忙碌时不会调用保存或清空密钥', () => {
+    const props = renderOnboarding({ busy: 'install' })
+    for (let i = 0; i < 2; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    const input = screen.getByLabelText('DeepSeek API Key')
+    fireEvent.change(input, { target: { value: 'test-placeholder-key' } })
+    expect(screen.getByRole('button', { name: '保存 API Key' })).toBeDisabled()
+    fireEvent.submit(input.closest('form')!)
+    expect(props.onSaveSettings).not.toHaveBeenCalled()
+    expect(input).toHaveValue('test-placeholder-key')
+  })
+
+  it.each([false, new Error('SAVE_FAILED')])('保存未成功时保留密钥并允许重试：%s', async failure => {
+    const onSaveSettings = failure instanceof Error ? vi.fn().mockRejectedValue(failure) : vi.fn().mockResolvedValue(failure)
+    renderOnboarding({ onSaveSettings })
+    for (let i = 0; i < 2; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    const input = screen.getByLabelText('DeepSeek API Key')
+    fireEvent.change(input, { target: { value: 'test-placeholder-key' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存 API Key' }))
+    await screen.findByRole('alert')
+    expect(input).toHaveValue('test-placeholder-key')
+    expect(screen.getByRole('button', { name: '保存 API Key' })).toBeEnabled()
+  })
+
+  it('保存完成之前不清空密钥或重复提交，成功后清空', async () => {
+    let finish!: (saved: boolean) => void
+    const onSaveSettings = vi.fn(() => new Promise<boolean>(resolve => { finish = resolve }))
+    renderOnboarding({ onSaveSettings })
+    for (let i = 0; i < 2; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    const input = screen.getByLabelText('DeepSeek API Key')
+    fireEvent.change(input, { target: { value: 'test-placeholder-key' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存 API Key' }))
+    fireEvent.submit(input.closest('form')!)
+    expect(onSaveSettings).toHaveBeenCalledTimes(1)
+    expect(input).toHaveValue('test-placeholder-key')
+    expect(input).toBeDisabled()
+    expect(screen.getByRole('button', { name: /下一步/ })).toBeDisabled()
+    finish(true)
+    await waitFor(() => expect(input).toHaveValue(''))
+  })
+
+  it('后台刷新设置保留内置与自定义供应商草稿及凭据', () => {
+    const props = renderOnboarding()
+    for (let i = 0; i < 2; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    fireEvent.change(screen.getByLabelText('DeepSeek API Key'), { target: { value: 'builtin-placeholder' } })
+    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'custom' } })
+    fireEvent.click(screen.getByRole('button', { name: '添加自定义供应商' }))
+    fireEvent.change(screen.getByRole('textbox', { name: '供应商名称' }), { target: { value: 'Draft provider' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Base URL' }), { target: { value: 'https://example.com/v1' } })
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'custom-placeholder' } })
+    // 原实例接收全新设置引用，模拟恢复前台时的后台刷新。
+    props.rerender(<Onboarding {...props} settings={{ ...settings }} />)
+    expect(screen.getByRole('textbox', { name: '供应商名称' })).toHaveValue('Draft provider')
+    expect(screen.getByLabelText('API Key')).toHaveValue('custom-placeholder')
+    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'deepseek' } })
+    expect(screen.getByLabelText('DeepSeek API Key')).toHaveValue('builtin-placeholder')
+    expect(props.onSaveSettings).not.toHaveBeenCalled()
+  })
+
+  it.each([
     { language: 'zh-CN', next: '下一步', provider: '供应商', add: '添加自定义供应商', providerName: '供应商名称', modelId: '模型 ID', modelName: '模型名称', save: '保存自定义供应商' },
     { language: 'en', next: 'Next', provider: 'Provider', add: 'Add custom provider', providerName: 'Provider name', modelId: 'Model ID', modelName: 'Model name', save: 'Save custom provider' },
-  ])('saves a custom provider from the model step in $language', labels => {
+  ])('saves a custom provider from the model step in $language', async labels => {
     saveLanguage(labels.language)
-    const onSaveSettings = vi.fn()
+    const onSaveSettings = vi.fn().mockResolvedValue(true)
     renderOnboarding({ onSaveSettings })
     fireEvent.click(screen.getByRole('button', { name: labels.next }))
     fireEvent.click(screen.getByRole('button', { name: labels.next }))
@@ -91,6 +160,27 @@ describe('Onboarding', () => {
       })],
       customProviderApiKeys: { 'custom-1': 'test-placeholder-key' },
     }))
+    await waitFor(() => expect(screen.getByLabelText('API Key')).toHaveValue(''))
+    expect(screen.getByRole('textbox', { name: labels.providerName })).toHaveValue('Gateway')
+  })
+
+  it.each([false, new Error('SAVE_FAILED')])('自定义供应商保存失败保留草稿和凭据：%s', async failure => {
+    const onSaveSettings = failure instanceof Error ? vi.fn().mockRejectedValue(failure) : vi.fn().mockResolvedValue(failure)
+    renderOnboarding({
+      onSaveSettings,
+      settings: { ...settings, customModelProviders: [{
+        id: 'gateway', name: 'Draft gateway', api: 'openai-completions', baseUrl: 'https://example.com/v1',
+        models: [{ id: 'example/model', name: 'Example model', contextWindow: 131072, maxTokens: 8192 }],
+      }] },
+    })
+    for (let i = 0; i < 2; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'custom' } })
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'custom-placeholder' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存自定义供应商' }))
+    await screen.findByRole('alert')
+    expect(screen.getByLabelText('API Key')).toHaveValue('custom-placeholder')
+    expect(screen.getByRole('textbox', { name: '供应商名称' })).toHaveValue('Draft gateway')
+    expect(screen.getByRole('button', { name: '保存自定义供应商' })).toBeEnabled()
   })
 
   it('calls onAuthorize when Shizuku is available and not granted', () => {

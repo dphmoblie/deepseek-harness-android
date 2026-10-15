@@ -111,11 +111,15 @@ function applyAccent(mode: AccentMode): void {
   if (custom) {
     root.style.setProperty('--blue', custom)
     root.style.setProperty('--blue-hover', custom)
+    // WCAG 相对亮度：黑白前景取对比度较高者，不改变危险按钮的独立前景。
+    const [r, g, b] = [1, 3, 5].map(offset => parseInt(custom.slice(offset, offset + 2), 16) / 255)
+      .map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+    root.style.setProperty('--on-blue', 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.179 ? '#000000' : '#ffffff')
     root.style.setProperty('--blue-soft', 'color-mix(in srgb, ' + custom + ' 14%, transparent)')
     root.style.setProperty('--blue-line', 'color-mix(in srgb, ' + custom + ' 38%, transparent)')
     root.style.setProperty('--ring', '3px solid color-mix(in srgb, ' + custom + ' 35%, transparent)')
   } else {
-    for (const name of ['--blue', '--blue-hover', '--blue-soft', '--blue-line', '--ring']) root.style.removeProperty(name)
+    for (const name of ['--blue', '--blue-hover', '--on-blue', '--blue-soft', '--blue-line', '--ring']) root.style.removeProperty(name)
   }
 }
 
@@ -179,6 +183,7 @@ export function saveAccentMode(value: string): boolean {
   if (!isAccentMode(value)) return false
   try {
     window.localStorage.setItem(ACCENT_STORAGE_KEY, value)
+    window.localStorage.removeItem(CUSTOM_ACCENT_STORAGE_KEY)
   } catch {
     return false
   }

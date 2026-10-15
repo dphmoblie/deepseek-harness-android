@@ -94,6 +94,7 @@ class MobileRuntimeController(
         if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
             throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
         }
+        supervisor.preparePluginManagement()
         // 判定必须在安装**之前**取：装完之后「本来有没有运行时」就无从分辨，
         // 而它决定通知说「已安装」还是「已更新」（见 TaskNotificationPolicy.forInstallCompleted）。
         val hadRuntimeBefore = store.installedManifest() != null
@@ -140,6 +141,7 @@ class MobileRuntimeController(
         if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
             throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
         }
+        supervisor.preparePluginManagement()
         when (normalizedTarget) {
             RuntimeVersionPolicy.TARGET_PREVIOUS -> installer.switchToRetained()
             RuntimeVersionPolicy.TARGET_BUNDLED -> installer.install(RuntimeSource(null, null))
@@ -206,6 +208,14 @@ class MobileRuntimeController(
         val coldStart = !supervisor.isRunning()
         if (coldStart) {
             supervisor.preparePluginManagement()
+            if (!terminals.hasRuntimeSessions()) {
+                RuntimeSharedInbox.withLock {
+                    val sharedInbox = RuntimeSharedInbox(store)
+                    // 访客已停止才创建目录；异常时保留暂存原件，不能阻断 Harness 启动。
+                    runCatching { sharedInbox.prepareWorkspace() }
+                    sharedInbox.deliver()
+                }
+            }
             // 应用（APK）升级迁移：判定是「上次迁移成功的 versionCode + 当前 versionCode +
             // 运行时代次是否变化」（[PluginMigrationPolicy]，纯逻辑）。需要迁移时由它**串行复用**
             // 下面两步（先回放未提交事务，再按代次自愈链接）并按版本账本核对包目录，因此这时不再
@@ -275,6 +285,7 @@ class MobileRuntimeController(
             "download" -> library.download(source ?: throw RuntimeFailure("SOURCE_INCOMPLETE", "缺少版本来源"))
             "select" -> {
                 if (supervisor.isRunning() || terminals.hasRuntimeSessions()) throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
+                supervisor.preparePluginManagement()
                 autoSnapshot = snapshots.createBeforeUpdate()
                 installer.install(RuntimeSource(null, null, RuntimeLibrary.requireId(id.orEmpty())))
                 try {
@@ -515,6 +526,15 @@ class MobileRuntimeController(
 
     fun createTerminal(kind: String, columns: Int, rows: Int): String = lifecycleLock.withLock {
         ensureOpen()
+        if (kind == "ubuntu" && !supervisor.isRunning() && !terminals.hasRuntimeSessions()) {
+            supervisor.preparePluginManagement()
+            RuntimeSharedInbox.withLock {
+                val sharedInbox = RuntimeSharedInbox(store)
+                // 与 Harness 冷启动一致：先确认访客已停止，迁移失败不能阻断终端。
+                runCatching { sharedInbox.prepareWorkspace() }
+                sharedInbox.deliver()
+            }
+        }
         terminals.create(kind, columns, rows)
     }
 

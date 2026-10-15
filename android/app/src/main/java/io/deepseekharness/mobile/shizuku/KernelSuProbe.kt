@@ -121,8 +121,8 @@ object KernelSuProbe {
             )
         }
 
-        // 有 su 但没有 KernelSU 特征（管理器缺失 + 变体自报是别的实现）：别把它当成待授权。
-        val kernelSuSignature = hasKernelSuManager || suIsKernelSu == true
+        // 明确识别为其他实现时不能被残留管理器覆盖；仅缺少版本读数时以管理器兜底。
+        val kernelSuSignature = suIsKernelSu == true || (suIsKernelSu == null && hasKernelSuManager)
         if (!kernelSuSignature) {
             return ProbeResult(
                 status = STATUS_UNSUPPORTED,

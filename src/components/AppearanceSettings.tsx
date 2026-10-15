@@ -48,7 +48,9 @@ export function AppearanceSettings() {
   }
 
   const changeAccent = (value: AccentMode) => {
-    setFailed(saveAccentMode(value) ? null : 'accent')
+    const saved = saveAccentMode(value)
+    if (saved) setCustomAccent('')
+    setFailed(saved ? null : 'accent')
   }
 
   return (
@@ -79,12 +81,12 @@ export function AppearanceSettings() {
         </div>
         <div className="appearance-accent-options" role="radiogroup" aria-label={t('强调色')}>
           {ACCENT_OPTIONS.map(({ value, label, color }) => (
-            <label key={value} className={accent === value ? 'appearance-accent-option active' : 'appearance-accent-option'}>
+            <label key={value} className={!customAccent && accent === value ? 'appearance-accent-option active' : 'appearance-accent-option'}>
               <input
                 type="radio"
                 name="app-accent"
                 value={value}
-                checked={accent === value}
+                checked={!customAccent && accent === value}
                 onChange={() => changeAccent(value)}
               />
               <span className="accent-swatch" style={{ backgroundColor: color }} aria-hidden="true" />

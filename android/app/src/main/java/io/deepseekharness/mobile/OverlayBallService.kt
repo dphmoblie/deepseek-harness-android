@@ -207,6 +207,7 @@ class OverlayBallService : Service() {
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        refreshVisibleAppearance()
         // 服务能收到的最稳定的系统回调：顺带复查一次权限。撤销后就不要再动
         // 一个可能已经失效的窗口，由 onDestroy 统一摘除。
         if (stopIfOverlayPermissionRevoked()) return
@@ -323,7 +324,7 @@ class OverlayBallService : Service() {
         // 换成平台主题，此时布局里的 AppCompat 属性解析不到，inflate 抛
         // UnsupportedOperationException，异常从这里逃出去会终结整个进程 ——
         // 真机表现为「一打开悬浮球开关，App 启动就闪退」。
-        val themed = ContextThemeWrapper(this, R.style.AppTheme)
+        val themed = ContextThemeWrapper(overlayPalette(), R.style.AppTheme)
         val view = runCatching { LayoutInflater.from(themed).inflate(R.layout.view_overlay_ball, null) }
             .getOrElse { error ->
                 lastStartFailure = FAILURE_INFLATE_FAILED
@@ -616,7 +617,8 @@ class OverlayBallService : Service() {
             })
         }
         header.addView(TextView(this).apply {
-            text = getString(R.string.overlay_conversation_title)
+            tag = R.string.overlay_conversation_title
+            text = overlayString(R.string.overlay_conversation_title)
             setTextColor(overlayColor(R.color.overlay_panel_foreground))
             textSize = 16f
             gravity = Gravity.CENTER_VERTICAL
@@ -638,7 +640,8 @@ class OverlayBallService : Service() {
         val cookie = access?.password?.let { runCatching { HarnessSessionCookie.authenticated(it) }.getOrNull() }
         if (access == null || origin == null || cookie == null) {
             body.addView(TextView(this).apply {
-                text = getString(R.string.overlay_conversation_unavailable)
+                tag = R.string.overlay_conversation_unavailable
+                text = overlayString(R.string.overlay_conversation_unavailable)
                 setTextColor(overlayColor(R.color.overlay_panel_foreground))
                 gravity = Gravity.CENTER
                 setPadding(dp(24), dp(16), dp(24), dp(16))
@@ -667,7 +670,8 @@ class OverlayBallService : Service() {
                 setAcceptThirdPartyCookies(web, false)
             }
             val error = TextView(this).apply {
-                text = getString(R.string.harness_page_failed)
+                tag = R.string.harness_page_failed
+                text = overlayString(R.string.harness_page_failed)
                 setTextColor(overlayColor(R.color.overlay_panel_foreground))
                 gravity = Gravity.CENTER
                 setBackgroundColor(overlayColor(R.color.overlay_panel_background))
@@ -772,7 +776,7 @@ class OverlayBallService : Service() {
         val params = conversationParams ?: return
         val size = dp(OverlayConversationSizePolicy.HANDLE_TOUCH_SIZE_DP)
         val handle = FrameLayout(this).apply {
-            contentDescription = getString(R.string.overlay_conversation_resize_description)
+            contentDescription = overlayString(R.string.overlay_conversation_resize_description)
             isClickable = true
             addView(TextView(this@OverlayBallService).apply {
                 text = RESIZE_GLYPH
@@ -933,7 +937,8 @@ class OverlayBallService : Service() {
     }
 
     private fun conversationAction(label: Int, action: () -> Unit): TextView = TextView(this).apply {
-        text = getString(label)
+        tag = label
+        text = overlayString(label)
         contentDescription = text
         setTextColor(overlayColor(R.color.overlay_panel_foreground))
         gravity = Gravity.CENTER
@@ -953,7 +958,52 @@ class OverlayBallService : Service() {
      * 只有按**已保存的应用主题**覆写过 `uiMode`，`R.color.*` 才会解析成用户选的那一套；
      * 否则「应用选了浅色、系统停在深色」时悬浮球菜单会拿到系统主题的颜色，看起来就是没跟主题走。
      */
-    private fun overlayPalette(): Context = AppThemePreference.palette(this)
+    private fun overlayPalette(): Context = AppThemePreference.palette(AppLanguage.localizedContext(this))
+
+    private fun overlayString(id: Int): String = AppLanguage.localizedContext(this).getString(id)
+
+    /** 在原视图上刷新，不销毁 WebView、认证会话或尚未提交的对话输入。 */
+    private fun refreshVisibleAppearance() {
+        ballView?.apply {
+            background = overlayPalette().getDrawable(R.drawable.bg_overlay_ball)
+            contentDescription = overlayString(R.string.overlay_ball_content_description)
+        }
+        (conversationView?.background as? GradientDrawable)?.setColor(overlayColor(R.color.overlay_panel_background))
+        fun refresh(view: View) {
+            if (view is TextView) {
+                (view.tag as? Int)?.let { view.text = overlayString(it) }
+                setTextAppearance(view)
+                if (view.background != null && view !== conversationError) {
+                    view.background = overlayPalette().getDrawable(R.drawable.bg_overlay_action)
+                }
+            }
+            if (view is android.view.ViewGroup && view !is WebView) {
+                for (index in 0 until view.childCount) refresh(view.getChildAt(index))
+            }
+        }
+        conversationView?.let(::refresh)
+        conversationError?.setBackgroundColor(overlayColor(R.color.overlay_panel_background))
+        conversationResizeHandle?.let { handle ->
+            handle.contentDescription = overlayString(R.string.overlay_conversation_resize_description)
+            if (handle is android.view.ViewGroup) {
+                for (index in 0 until handle.childCount) {
+                    val child = handle.getChildAt(index)
+                    if (child is TextView) setTextAppearance(child)
+                    (child.background as? GradientDrawable)?.setColor(overlayColor(R.color.overlay_resize_background))
+                }
+            }
+        }
+        if (secondaryViews.isNotEmpty()) showSecondaryChoices()
+        runCatching {
+            ensureNotificationChannel()
+            if (isRunning) getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
+        }
+    }
+
+    private fun setTextAppearance(view: TextView) {
+        view.setTextColor(overlayColor(R.color.overlay_panel_foreground))
+        if (view.isClickable) view.contentDescription = view.text
+    }
 
     /** 取一个随应用主题变化的颜色令牌（`res/values{,-night}/colors.xml`）。 */
     private fun overlayColor(resId: Int): Int = AppThemePreference.color(this, resId)
@@ -1142,7 +1192,7 @@ class OverlayBallService : Service() {
         return FrameLayout(this).apply {
             // 命中区就是这个视图本身，尺寸由布局参数钉死不小于 40dp；里面那个圆点更小，
             // 但按下判定的边界仍是这里，因此不需要额外的 touch delegate。
-            contentDescription = getString(labelRes)
+            contentDescription = overlayString(labelRes)
             isClickable = true
             isFocusable = true
             background = overlayPalette().getDrawable(R.drawable.bg_overlay_secondary_action)
@@ -1219,7 +1269,7 @@ class OverlayBallService : Service() {
         val screen = VirtualScreenService.current
         val shown = runCatching { screen?.showOverlay() }
         if (screen == null || shown.isFailure) {
-            toastCurrentThread(getString(R.string.overlay_ball_secondary_virtual_screen_unavailable_toast))
+            toastCurrentThread(overlayString(R.string.overlay_ball_secondary_virtual_screen_unavailable_toast))
         }
     }
 
@@ -1242,10 +1292,10 @@ class OverlayBallService : Service() {
         when (OverlayBallSecondaryPolicy.accessibilityState(serviceConnected = service != null)) {
             OverlayBallSecondaryPolicy.AccessibilityAction.DISABLE_SELF -> {
                 runCatching { service?.disableSelf() }
-                toastCurrentThread(getString(R.string.overlay_ball_secondary_accessibility_closed_toast))
+                toastCurrentThread(overlayString(R.string.overlay_ball_secondary_accessibility_closed_toast))
             }
             OverlayBallSecondaryPolicy.AccessibilityAction.ALREADY_OFF ->
-                toastCurrentThread(getString(R.string.overlay_ball_secondary_accessibility_disabled_toast))
+                toastCurrentThread(overlayString(R.string.overlay_ball_secondary_accessibility_disabled_toast))
         }
     }
 
@@ -1417,8 +1467,8 @@ class OverlayBallService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_overlay_ball)
-            .setContentTitle(getString(R.string.overlay_ball_notification_title))
-            .setContentText(getString(R.string.overlay_ball_notification_text))
+            .setContentTitle(overlayString(R.string.overlay_ball_notification_title))
+            .setContentText(overlayString(R.string.overlay_ball_notification_text))
             .setContentIntent(openApp)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -1433,10 +1483,10 @@ class OverlayBallService : Service() {
         val manager = getSystemService(NotificationManager::class.java) ?: return
         val channel = NotificationChannel(
             CHANNEL_ID,
-            getString(R.string.overlay_ball_channel_name),
+            overlayString(R.string.overlay_ball_channel_name),
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = getString(R.string.overlay_ball_channel_description)
+            description = overlayString(R.string.overlay_ball_channel_description)
             setShowBadge(false)
             enableVibration(false)
             setSound(null, null)
@@ -1446,6 +1496,10 @@ class OverlayBallService : Service() {
 
     companion object {
         @Volatile private var activeService: OverlayBallService? = null
+
+        internal fun refreshAppearance() {
+            Handler(Looper.getMainLooper()).post { activeService?.refreshVisibleAppearance() }
+        }
 
         /** A full-page logout invalidates the shared one-time session immediately. */
         fun closeConversation() {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
 import { ArrowLeft, ArrowRight, Blocks, Check, KeyRound, Loader2, Rocket, ShieldCheck, Sparkles, X } from 'lucide-react'
 import { CustomProviders } from './CustomProviders'
@@ -19,7 +19,7 @@ interface OnboardingProps {
   /** 用户确认「密钥已在 Harness 内配置过」时的放行入口。 */
   onOpenHarnessConfirmed: () => void
   onDone: () => void
-  onSaveSettings?: (settings: RuntimeSettingsUpdate) => void
+  onSaveSettings?: (settings: RuntimeSettingsUpdate) => Promise<boolean>
 }
 
 const STEPS = [
@@ -31,9 +31,13 @@ const STEPS = [
   { id: 'ready', title: '开始使用', icon: Rocket },
 ] as const
 
-function manifestConfigured(settings: RuntimeSettings | null): boolean {
+function needsManifestConfiguration(settings: RuntimeSettings | null): boolean {
   if (settings === null) return false
-  return !settings.manifestUrl.includes('example.invalid') && settings.manifestSha256.length === 64
+  const url = settings.manifestUrl.trim()
+  const digest = settings.manifestSha256.trim()
+  // 空来源对代表 APK 内置安装包，不应要求离线用户填写在线地址。
+  if (url === '' && digest === '') return false
+  return url === '' || url.includes('example.invalid') || !/^[0-9a-f]{64}$/i.test(digest)
 }
 
 export function Onboarding({
@@ -46,6 +50,10 @@ export function Onboarding({
   const [customProviders, setCustomProviders] = useState<CustomModelProvider[]>(settings?.customModelProviders ?? [])
   const [customCredentials, setCustomCredentials] = useState<Record<string, string>>({})
   const [clearedCustomProviders, setClearedCustomProviders] = useState<string[]>([])
+  const [saving, setSaving] = useState(false)
+  const [saveFailed, setSaveFailed] = useState(false)
+  const savePending = useRef(false)
+  const customDraftDirty = useRef(false)
   const last = step === STEPS.length - 1
 
   const installed = ['ready', 'running'].includes(runtime.phase)
@@ -54,6 +62,7 @@ export function Onboarding({
   const modelConfigured = hasConfiguredModelCredential(settings)
 
   useEffect(() => {
+    if (customDraftDirty.current) return
     setCustomProviders(settings?.customModelProviders ?? [])
     setCustomCredentials({})
     setClearedCustomProviders([])
@@ -67,11 +76,38 @@ export function Onboarding({
     configuredModelProviders: [],
     autoLaunch: true,
   }
+  const saveModelSettings = async (): Promise<void> => {
+    if (busy !== null || savePending.current || settings === null || onSaveSettings === undefined) return
+    savePending.current = true
+    setSaving(true)
+    setSaveFailed(false)
+    try {
+      const saved = await onSaveSettings(selectedProvider === 'custom' ? {
+        ...baseSettings,
+        customModelProviders: customProviders,
+        ...(Object.keys(customCredentials).length === 0 ? {} : { customProviderApiKeys: customCredentials }),
+        ...(clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: clearedCustomProviders }),
+      } : { ...baseSettings, providerApiKeys: { [selectedProvider]: apiKeyDraft.trim() } })
+      // 凭据只在落盘成功后清除；忙碌或保存失败时保留用户输入以便重试。
+      if (saved) {
+        if (selectedProvider === 'custom') {
+          customDraftDirty.current = false
+          setCustomCredentials({})
+          setClearedCustomProviders([])
+        } else setApiKeyDraft('')
+      } else setSaveFailed(true)
+    } catch {
+      setSaveFailed(true)
+    } finally {
+      savePending.current = false
+      setSaving(false)
+    }
+  }
 
   return (
     <div className="dialog-backdrop" role="presentation">
       <div className="dialog onboarding-dialog" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
-        <button className="dialog-close" type="button" aria-label={t("跳过引导")} onClick={onDone}><X size={19} /></button>
+        <button className="dialog-close" type="button" aria-label={t("跳过引导")} onClick={onDone} disabled={saving}><X size={19} /></button>
         <span className="onboarding-step-dots" aria-label={t("步骤 ") + (step + 1) + ' / ' + STEPS.length}>
           {STEPS.map((s, index) => (
             <span key={s.id} className={index === step ? 'active' : index < step ? 'done' : ''} />
@@ -98,7 +134,7 @@ export function Onboarding({
               {step === 1 && (
                 <div className="onboarding-body">
                   <p>{t("首次使用需要安装 Ubuntu 运行环境（数百 MB）。应用内置的安装包可离线安装；使用在线来源时，建议通过 Wi-Fi 下载。")}</p>
-                  {!manifestConfigured(settings) && (
+                  {!installed && needsManifestConfiguration(settings) && (
                     <p className="onboarding-warn">{t("尚未配置运行时下载地址：请先在「设置 → 后台」填写清单地址与 SHA-256（两者必须成对）。")}</p>
                   )}
                   <p className="onboarding-status">
@@ -113,23 +149,9 @@ export function Onboarding({
               {step === 2 && (
                 <form className="onboarding-body" onSubmit={event => {
                   event.preventDefault()
-                  if (selectedProvider === 'custom') {
-                    onSaveSettings?.({
-                      ...baseSettings,
-                      customModelProviders: customProviders,
-                      ...(Object.keys(customCredentials).length === 0 ? {} : { customProviderApiKeys: customCredentials }),
-                      ...(clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: clearedCustomProviders }),
-                    })
-                    setCustomCredentials({})
-                    setClearedCustomProviders([])
-                    return
-                  }
-                  onSaveSettings?.({
-                    ...baseSettings,
-                    providerApiKeys: { [selectedProvider]: apiKeyDraft.trim() },
-                  })
-                  setApiKeyDraft('')
+                  void saveModelSettings()
                 }}>
+                  <fieldset className="onboarding-fields" disabled={saving}>
                   <p>{t("选择模型供应商并保存 API Key。密钥在本机加密保存，保存后不再显示。")}</p>
                   {!modelConfigured && (
                     <p className="onboarding-warn">{t("首次配置至少要保存一份模型 API Key：没有密钥时「打开 Harness」不可用。")}</p>
@@ -161,11 +183,11 @@ export function Onboarding({
                     harnessConfigured={settings?.harnessConfiguredCustomModelProviders ?? []}
                     credentials={customCredentials}
                     cleared={clearedCustomProviders}
-                    onChange={setCustomProviders}
-                    onCredentials={setCustomCredentials}
-                    onClear={setClearedCustomProviders}
+                    onChange={value => { customDraftDirty.current = true; setCustomProviders(value) }}
+                    onCredentials={value => { customDraftDirty.current = true; setCustomCredentials(value) }}
+                    onClear={value => { customDraftDirty.current = true; setClearedCustomProviders(value) }}
                   />}
-                  <button className="button button-primary" type="submit" disabled={selectedProvider === 'custom' ? customProviders.length === 0 : apiKeyDraft.trim() === ''}>
+                  <button className="button button-primary" type="submit" disabled={busy !== null || saving || settings === null || onSaveSettings === undefined || (selectedProvider === 'custom' ? customProviders.length === 0 : apiKeyDraft.trim() === '')}>
                     <KeyRound size={18} />{selectedProvider === 'custom' ? t('保存自定义供应商') : t('保存 API Key')}
                   </button>
                   <p className="onboarding-status">{selectedProvider === 'custom'
@@ -178,6 +200,8 @@ export function Onboarding({
                       : settings?.harnessConfiguredModelProviders?.includes(selectedProvider)
                         ? t('已在 Harness 中配置')
                         : t('未配置')}</p>
+                  {saveFailed && <p role="alert">{t('未能保存配置，输入已保留，请重试。')}</p>}
+                  </fieldset>
                 </form>
               )}
               {step === 3 && (
@@ -239,13 +263,13 @@ export function Onboarding({
               )}
               <div className="dialog-actions onboarding-nav">
                 {step > 0 && (
-                  <button className="button button-secondary" type="button" onClick={() => setStep(step - 1)}><ArrowLeft size={18} />{t("上一步")}</button>
+                  <button className="button button-secondary" type="button" onClick={() => setStep(step - 1)} disabled={saving}><ArrowLeft size={18} />{t("上一步")}</button>
                 )}
                 <span className="onboarding-spacer" />
                 {last ? (
                   <button className="button button-primary" type="button" onClick={onDone}><Check size={18} />{t("完成")}</button>
                 ) : (
-                  <button className="button button-primary" type="button" onClick={() => setStep(step + 1)}>{t("下一步")}<ArrowRight size={18} /></button>
+                  <button className="button button-primary" type="button" onClick={() => setStep(step + 1)} disabled={saving}>{t("下一步")}<ArrowRight size={18} /></button>
                 )}
               </div>
             </>

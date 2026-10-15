@@ -346,7 +346,11 @@ class MobileRuntimePlugin : Plugin() {
             // 先持久化应用语言，再尽力同步到已安装运行时；运行时未安装时该调用为空操作。
             val saved = AppLanguage.save(context, language) &&
                 io.deepseekharness.mobile.runtime.RuntimeStore(context).syncHarnessLocale(language)
-            if (saved) call.resolve()
+            if (saved) {
+                OverlayBallService.refreshAppearance()
+                io.deepseekharness.mobile.virtualscreen.VirtualScreenService.refreshAppearance()
+                call.resolve()
+            }
             else call.reject("无法保存应用语言", "LANGUAGE_SAVE_FAILED")
         } catch (failure: RuntimeFailure) {
             // 受控错误码（如 LANGUAGE_INVALID / LANGUAGE_SYNC_FAILED）直接回传，便于前端区分提示。
@@ -387,6 +391,7 @@ class MobileRuntimePlugin : Plugin() {
         }
         // 落盘成功后再改窗口；没有可用的 Activity（例如后台调用）不算失败，下次 onResume 会补上。
         (activity as? android.app.Activity)?.let { AppThemePreference.applySafely(it) }
+        OverlayBallService.refreshAppearance()
         call.resolve()
     }
 
@@ -1476,13 +1481,10 @@ class MobileRuntimePlugin : Plugin() {
             val command = DeviceCommand.fromName(commandName) ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令不支持")
             // 根通道打开时，SHELL 命令由应用进程自己起 `su -c`：那条路径不经过 Shizuku，
             // 因此既不需要 AI Shell 开关（那是 Shizuku 通道的开关），也不需要 Shizuku 设备会话。
-            val rootEngine = command == DeviceCommand.SHELL &&
-                io.deepseekharness.mobile.shizuku.RootEngineAccess.enabled(context)
-            if (!rootEngine && command in setOf(DeviceCommand.SHELL, DeviceCommand.BACKGROUND_TASKS) &&
-                !io.deepseekharness.mobile.shizuku.DeviceShellAccess.enabled(context)
-            ) {
-                throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请先开启 AI Shell")
-            }
+            val rootEngine = DeviceCommand.requireShellRoute(
+                command, command == DeviceCommand.SHELL && io.deepseekharness.mobile.shizuku.RootEngineAccess.usable(context),
+                io.deepseekharness.mobile.shizuku.DeviceShellAccess.enabled(context),
+            )
             if (!rootEngine && !controller.hasDeviceSession(sessionId)) {
                 throw RuntimeFailure("SESSION_NOT_FOUND", "设备 Shell 会话不存在或已结束")
             }
@@ -1612,6 +1614,7 @@ class MobileRuntimePlugin : Plugin() {
             shizukuRunning = shizuku.running,
             shizukuPermission = shizuku.permission,
             shizukuConnected = shizuku.connected,
+            shellEnabled = io.deepseekharness.mobile.shizuku.DeviceShellAccess.enabled(context),
             accessibilityStatus = AccessibilityAutomationStore.serviceStatus(context),
             rootEngineEnabled = root.enabled,
             rootEngineStatus = if (root.enabled) root.kernelSuStatus else null,
