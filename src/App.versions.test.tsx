@@ -266,12 +266,19 @@ describe('版本管理：应用自身更新', () => {
     // 原生还没推第一个读数：进度条已经在，但显示「处理中」，不编一个百分比出来。
     expect(await screen.findByRole('progressbar', { name: '更新包下载进度' })).toHaveAttribute('aria-valuenow', '0')
     expect(screen.getByText('正在下载更新包…')).toBeVisible()
+    // 遥测行即时出现：已用时间从 0 秒开始走字，慢网下用户也能确认「没有卡住」。
+    expect(screen.getByText(/已用 \d+ 秒/)).toBeVisible()
 
+    // 停 1 秒再推读数，给速度计算一个真实的时间窗。
+    await new Promise(resolve => setTimeout(resolve, 1100))
     act(() => { emit?.({ downloadedBytes: 5 * 1024 * 1024, totalBytes: 12 * 1024 * 1024 }) })
 
     // 5 / 12 = 41.7%，界面按四舍五入显示 42%。
     await waitFor(() => expect(screen.getByRole('progressbar', { name: '更新包下载进度' })).toHaveAttribute('aria-valuenow', '42'))
     expect(screen.getByText('42%')).toBeVisible()
+    // 收到真实字节后给出速度与剩余时间估算。
+    expect(screen.getByText(/^速度 .*\/秒$/)).toBeVisible()
+    expect(screen.getByText(/^剩余约 /)).toBeVisible()
 
     act(() => { finishDownload?.() })
 

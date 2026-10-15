@@ -1,5 +1,6 @@
 import appMark from './assets/app-mark.png'
 import { t, useLanguage } from './i18n'
+import { formatByteCount as formatBytes, formatDuration, useDownloadTelemetry } from './downloadTelemetry'
 import { PluginSettings } from './components/PluginSettings'
 import { ApplicationPicker } from './components/ApplicationPicker'
 import { DeviceShellSettings } from './components/DeviceShellSettings'
@@ -812,14 +813,6 @@ function sameSnapshot<T extends object>(previous: T, next: T): boolean {
   return true
 }
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  const value = bytes / (1024 ** index)
-  return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`
-}
-
 function errorMessage(error: unknown): string {
   if (error instanceof Error && 'code' in error && typeof error.code === 'string' && Object.hasOwn(RUNTIME_ERROR_MESSAGES, error.code)) {
     return runtimeErrorMessage(error.code)
@@ -1074,6 +1067,8 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
   const progress = runtime.totalBytes > 0
     ? Math.min(100, Math.round((runtime.downloadedBytes / runtime.totalBytes) * 100))
     : 0
+  // 门屏是「用户最容易怀疑卡死」的地方：阶段切换会重置字节口径，以 phase 作为分段键。
+  const downloadTelemetry = useDownloadTelemetry(runtime.downloadedBytes, runtime.totalBytes, transitioning, runtime.phase)
 
   return (
     <div className="screen conversation-gate">
@@ -1122,6 +1117,18 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
             <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}>
               <span style={{ width: `${runtime.totalBytes > 0 ? progress : 100}%` }} className={runtime.totalBytes > 0 ? '' : 'indeterminate'} />
             </div>
+            <div className="progress-detail progress-telemetry">
+              <span>{t("已用 {0}", formatDuration(downloadTelemetry.elapsedMs))}</span>
+              {downloadTelemetry.speedBytesPerSec > 0 && (
+                <span>{t("速度 {0}/秒", formatBytes(downloadTelemetry.speedBytesPerSec))}</span>
+              )}
+              {downloadTelemetry.etaMs !== null && (
+                <span>{t("剩余约 {0}", formatDuration(downloadTelemetry.etaMs))}</span>
+              )}
+            </div>
+            {runtime.phase === 'downloading' && downloadTelemetry.stalled && (
+              <div className="progress-note">{t("网络较慢，正在等待数据…")}</div>
+            )}
           </div>
         )}
 
@@ -1206,6 +1213,10 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
     : 0
 
   const measurableProgress = ['preparing', 'downloading', 'extracting'].includes(runtime.phase) && runtime.totalBytes > 0
+  // 阶段切换（下载→校验→安装）会更换字节口径，按 phase 分段计时计速。
+  const downloadTelemetry = useDownloadTelemetry(runtime.downloadedBytes, runtime.totalBytes, inProgress, runtime.phase)
+  // 速度/ETA 只在真有字节流的两段展示；preparing 读本地、verifying 算哈希，给速度反而误导。
+  const showTransferRate = runtime.phase === 'downloading' || runtime.phase === 'extracting'
   const steps: Array<{ id: string; label: string }> = [
     { id: 'acquire', label: bundledSource ? t("读取") : t("下载") },
     { id: 'verify', label: t("校验") },
@@ -1257,6 +1268,18 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
               <span>{formatBytes(runtime.downloadedBytes)}</span>
               <span>{formatBytes(runtime.totalBytes)}</span>
             </div>
+            <div className="progress-detail progress-telemetry">
+              <span>{t("已用 {0}", formatDuration(downloadTelemetry.elapsedMs))}</span>
+              {showTransferRate && downloadTelemetry.speedBytesPerSec > 0 && (
+                <span>{t("速度 {0}/秒", formatBytes(downloadTelemetry.speedBytesPerSec))}</span>
+              )}
+              {showTransferRate && downloadTelemetry.etaMs !== null && (
+                <span>{t("剩余约 {0}", formatDuration(downloadTelemetry.etaMs))}</span>
+              )}
+            </div>
+            {runtime.phase === 'downloading' && downloadTelemetry.stalled && (
+              <div className="progress-note">{t("网络较慢，正在等待数据…")}</div>
+            )}
           </div>
         )}
 
@@ -2867,6 +2890,12 @@ function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, instal
   const downloadPercent = progress === null || progress.totalBytes <= 0
     ? null
     : Math.min(100, Math.round((progress.downloadedBytes / progress.totalBytes) * 100))
+  // GitHub 慢网下百分比可能几分钟一跳：速度、已用时间和停滞提示让用户确认「还在下」。
+  const downloadTelemetry = useDownloadTelemetry(
+    progress?.downloadedBytes ?? 0,
+    progress?.totalBytes ?? 0,
+    busy === 'download',
+  )
 
   return (
     <section className="settings-section" aria-labelledby="app-update-title">
@@ -3004,6 +3033,18 @@ function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate, instal
                   <span>{formatBytes(progress.downloadedBytes)}</span>
                   <span>{formatBytes(progress.totalBytes)}</span>
                 </div>
+              )}
+              <div className="progress-detail progress-telemetry">
+                <span>{t("已用 {0}", formatDuration(downloadTelemetry.elapsedMs))}</span>
+                {downloadTelemetry.speedBytesPerSec > 0 && (
+                  <span>{t("速度 {0}/秒", formatBytes(downloadTelemetry.speedBytesPerSec))}</span>
+                )}
+                {downloadTelemetry.etaMs !== null && (
+                  <span>{t("剩余约 {0}", formatDuration(downloadTelemetry.etaMs))}</span>
+                )}
+              </div>
+              {downloadTelemetry.stalled && (
+                <div className="progress-note">{t("网络较慢，正在等待数据…")}</div>
               )}
             </div>
           )}

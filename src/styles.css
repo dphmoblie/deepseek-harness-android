@@ -907,6 +907,20 @@ button:disabled {
   font-size: 0.6875rem;
 }
 
+/* 遥测行可能只有 1~3 项（已用必有，速度/ETA 有值才出），左对齐带间距，不用两端对齐。 */
+.progress-telemetry {
+  gap: 12px;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+/* 停滞提示：明确告诉用户「在等数据」，避免把慢网误判成卡死；用琥珀色而非报错红。 */
+.progress-note {
+  margin-top: 7px;
+  color: var(--amber-text);
+  font-size: 0.6875rem;
+}
+
 .install-steps {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

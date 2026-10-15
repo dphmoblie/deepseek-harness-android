@@ -119,6 +119,8 @@ describe('App conversation gate', () => {
 
     render(<App />)
     expect((await screen.findAllByText('下载中')).length).toBeGreaterThan(0)
+    // 门屏进度条旁即时展示已用时间，下载进行中也能确认界面没有卡死。
+    expect(screen.getByText(/已用 \d+ 秒/)).toBeVisible()
     expect(bridge.startHarness).not.toHaveBeenCalled()
 
     act(() => {
