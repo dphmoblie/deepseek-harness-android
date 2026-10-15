@@ -5954,6 +5954,7 @@ export function App() {
           if (cancelled) return
           setKeepAlive(previous => (sameSnapshot(previous, next) ? previous : next))
           handleTurnCompletion(next.turnCompletionSequence)
+          setPermissionGuide(previous => (keepAliveGuideResolved(previous, next) ? null : previous))
         })
         .catch(() => {
           // 轮询失败时保留上一次状态，不重复提示同一条错误。
@@ -5967,7 +5968,9 @@ export function App() {
     const refreshOverlayBall = (): Promise<void> => {
       if (document.visibilityState === 'hidden') return Promise.resolve()
       return readOverlayBall()
-        .then(() => undefined)
+        .then(next => {
+          setPermissionGuide(previous => (overlayGuideResolved(previous, next) ? null : previous))
+        })
         .catch(() => {
           // 设置页保留查询失败提示，不在轮询中重复弹通知。
         })
