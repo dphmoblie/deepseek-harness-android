@@ -770,6 +770,7 @@ class VirtualScreenService : Service() {
     }
 
     companion object {
+        private const val TAG = "dsh-virtual-screen"
         private const val CHANNEL = "target-virtual-screen"
         @Volatile var current: VirtualScreenService? = null; private set
         @Volatile var lastError = ""; private set
@@ -864,7 +865,10 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private var rowPixels = IntArray(0)
     private var displayedHardware: android.hardware.HardwareBuffer? = null
     private val screenOff = object : android.content.BroadcastReceiver() {
-        override fun onReceive(context: android.content.Context?, intent: Intent?) { clearFrame() }
+        override fun onReceive(context: android.content.Context?, intent: Intent?) {
+            runCatching { clearFrame() }
+                .onFailure { android.util.Log.w(TAG, "screen off clear frame failed: ${it.javaClass.simpleName}") }
+        }
     }
     /** 息屏接收器是否已注册：重挂时不能重复注册（否则息屏会收到两次）。 */
     private var screenOffRegistered = false

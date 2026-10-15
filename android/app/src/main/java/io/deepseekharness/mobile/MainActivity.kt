@@ -186,7 +186,7 @@ class MainActivity : BridgeActivity() {
             importExecutor.execute {
                 val result = try {
                     importFiles(uris)
-                } catch (_: Exception) {
+                } catch (_: Throwable) {
                     ImportResult.SOURCE_UNREADABLE
                 }
                 runOnUiThread {
@@ -203,7 +203,7 @@ class MainActivity : BridgeActivity() {
                     }
                 }
             }
-        } catch (_: RuntimeException) {
+        } catch (_: Throwable) {
             showImportToast("导入任务无法启动，请重试")
         }
     }
