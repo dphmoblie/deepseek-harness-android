@@ -1,5 +1,12 @@
+def useMavenMirror = (System.getenv('ENABLE_MAVEN_MIRROR') ?: System.getProperty('enableMavenMirror')) in ['1', 'true']
+
 pluginManagement {
     repositories {
+        if (useMavenMirror) {
+            maven { url 'https://maven.aliyun.com/repository/google' }
+            maven { url 'https://maven.aliyun.com/repository/public' }
+            maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+        }
         google()
         mavenCentral()
         gradlePluginPortal()
@@ -8,6 +15,10 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
     repositories {
+        if (useMavenMirror) {
+            maven { url 'https://maven.aliyun.com/repository/google' }
+            maven { url 'https://maven.aliyun.com/repository/public' }
+        }
         google()
         mavenCentral()
     }

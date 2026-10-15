@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """CI-side faithful simulation of SafeRootfsExtractor's rejection rules.
 
 Runs against a freshly built bundle + manifest and fails with the exact
@@ -12,6 +12,7 @@ import hashlib
 import json
 import posixpath
 import re
+import struct
 import sys
 import zipfile
 from pathlib import Path
@@ -283,6 +284,44 @@ def verify_archive(source: BinaryIO, rootfs: dict) -> None:
         fail("compressed archive SHA-256 mismatch")
 
 
+PAGE_SIZE_16KB = 16384
+
+
+def verify_arm64_elf_page_alignment(data: bytes, filename: str) -> None:
+    """Ensure arm64-v8a ELF shared libraries have 16KB-aligned PT_LOAD segments (Android 15+)."""
+    if len(data) < 64:
+        fail(f"native library {filename} is too short to be an ELF file")
+    if data[:4] != b"\x7fELF":
+        fail(f"native library {filename} does not have ELF magic")
+    # ELFCLASS64 = 2, ELFDATA2LSB = 1 (little endian)
+    if data[4] != 2 or data[5] != 1:
+        fail(f"native library {filename} is not 64-bit little-endian ELF")
+    # e_machine at offset 18 (2 bytes): EM_AARCH64 = 183 (0xb7)
+    machine = struct.unpack_from("<H", data, 18)[0]
+    if machine != 183:
+        fail(f"native library {filename} machine is not AArch64 (machine={machine})")
+    phoff = struct.unpack_from("<Q", data, 32)[0]
+    phentsize = struct.unpack_from("<H", data, 54)[0]
+    phnum = struct.unpack_from("<H", data, 56)[0]
+    if phoff + phnum * phentsize > len(data):
+        fail(f"native library {filename} program headers exceed file size")
+    pt_load_count = 0
+    for i in range(phnum):
+        ph = data[phoff + i * phentsize : phoff + (i + 1) * phentsize]
+        p_type = struct.unpack_from("<I", ph, 0)[0]
+        if p_type == 1:  # PT_LOAD
+            pt_load_count += 1
+            p_align = struct.unpack_from("<Q", ph, 48)[0]
+            if p_align < PAGE_SIZE_16KB:
+                fail(
+                    f"native library {filename} PT_LOAD segment {i} alignment "
+                    f"({p_align} bytes) is less than 16KB ({PAGE_SIZE_16KB} bytes); "
+                    "incompatible with Android 15+ 16KB page size devices"
+                )
+    if pt_load_count == 0:
+        fail(f"native library {filename} has no PT_LOAD segments")
+
+
 def verify_apk(path: Path) -> None:
     with zipfile.ZipFile(path) as apk:
         entries = apk.infolist()
@@ -308,6 +347,16 @@ def verify_apk(path: Path) -> None:
             fail("APK compressedBytes mismatch")
         with apk.open(bundle_name) as source:
             verify_archive(source, manifest["rootfs"])
+
+        so_entries = [
+            entry for entry in entries
+            if entry.filename.startswith("lib/arm64-v8a/") and entry.filename.endswith(".so")
+        ]
+        for so_entry in so_entries:
+            with apk.open(so_entry.filename) as so_file:
+                verify_arm64_elf_page_alignment(so_file.read(), so_entry.filename)
+        if so_entries:
+            print(f"APK_ELF_16KB_ALIGN_OK: verified {len(so_entries)} arm64-v8a native libraries are 16KB page-aligned")
     print("APK_RUNTIME_VERIFY_OK: bundled archive size and SHA-256 match its manifest")
 
 

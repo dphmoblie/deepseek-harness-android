@@ -122,13 +122,13 @@ class DeviceCommandRunner(
      * Run one allowlisted command in [sessionId] and wait for its end marker.
      * Blocks the calling thread (a plugin executor worker) up to [timeoutMs].
      */
-    fun execute(sessionId: String, command: DeviceCommand, param: String, timeoutMs: Long): DeviceCommandResult {
+    fun execute(sessionId: String, command: DeviceCommand, param: String, timeoutMs: Long, useRootEngine: Boolean = false): DeviceCommandResult {
         val pending = Pending(UUID.randomUUID().toString(), command)
         if (inflight.putIfAbsent(sessionId, pending) != null) {
             throw RuntimeFailure("DEVICE_COMMAND_BUSY", "设备 Shell 会话正忙")
         }
         try {
-            val input = buildInput(pending.requestId, command, param)
+            val input = buildInput(pending.requestId, command, param, useRootEngine)
             // 不再有 stty -echo / 固定 sleep / 清空缓冲的时序：那套做法既关不掉 mksh 行编辑器的
             // 自带回显，又引入竞态（sleep 结束前到达的输出会被误清）。现在解析只认 shell 内部
             // 展开的双哨兵，回显既不能伪造标记，也不会落进两个标记之间的 payload。
@@ -345,11 +345,11 @@ class DeviceCommandRunner(
         else -> null
     }
 
-    internal fun buildInput(requestId: String, command: DeviceCommand, param: String): String {
+    internal fun buildInput(requestId: String, command: DeviceCommand, param: String, useRootEngine: Boolean = false): String {
         if (!REQUEST_ID_PATTERN.matches(requestId)) {
             throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令请求标识无效")
         }
-        val body = buildBody(requestId, command, param)
+        val body = buildBody(requestId, command, param, useRootEngine)
         // 标记里的 ${dsh_nonce} 保持**未展开的字面量**：回显看到的永远是它，
         // 只有内层 shell 展开后才会出现 `__DSH_B_<请求标识>_<pid>-<随机数>__` 这样的真实标记。
         val inner = "dsh_nonce=\$\$-\$RANDOM; " +
@@ -362,7 +362,7 @@ class DeviceCommandRunner(
     /** 命令正文，以及 END 标记应当读取的退出码表达式。 */
     private class Body(val script: String, val status: String)
 
-    private fun buildBody(requestId: String, command: DeviceCommand, param: String): Body = when (command) {
+    private fun buildBody(requestId: String, command: DeviceCommand, param: String, useRootEngine: Boolean = false): Body = when (command) {
         DeviceCommand.SCREENSHOT -> Body("screencap -p | toybox base64", "\$?")
         // uiDump 的失败分级由脚本内的状态变量携带（3/4/5），而不是 `$?` 的 0/1。
         DeviceCommand.UI_DUMP -> Body(uiDumpScript(requestId), "\$$UI_DUMP_STATUS_VARIABLE")
@@ -479,10 +479,16 @@ class DeviceCommandRunner(
             if (param.isBlank() || param.toByteArray(Charsets.UTF_8).size > MAX_SHELL_SCRIPT_CHARS || param.any { it == '\u0000' || it == '\r' }) {
                 throw RuntimeFailure("DEVICE_COMMAND_INVALID", "Shell 脚本为空、过长或包含非法控制字符")
             }
-            // 脚本作为编码后的标准输入送入独立解释器，不能破坏外层结果协议。
-            // 不使用关键字黑名单；命令的实际能力由用户授予的 Shizuku 身份决定。
-            val encoded = Base64.getEncoder().encodeToString(param.toByteArray(Charsets.UTF_8))
-            Body("printf '%s' '$encoded' | toybox base64 -d | /system/bin/sh -s", "\$?")
+            if (useRootEngine) {
+                RootCommandGuard.verifySafe(param)
+                val safeCommand = RootSecurityWrapper.wrapWithProtection(param)
+                Body("su -c ${singleQuote(safeCommand)}", "\$?")
+            } else {
+                // 脚本作为编码后的标准输入送入独立解释器，不能破坏外层结果协议。
+                // 不使用关键字黑名单；命令的实际能力由用户授予的 Shizuku 身份决定。
+                val encoded = Base64.getEncoder().encodeToString(param.toByteArray(Charsets.UTF_8))
+                Body("printf '%s' '$encoded' | toybox base64 -d | /system/bin/sh -s", "\$?")
+            }
         }
     }
 

@@ -3,6 +3,19 @@
 gradlew text eol=lf
 *.bat text eol=crlf
 
+# 代码与构建配置强制 LF，避免 Windows/Linux 混合作业时哈希比对与补丁校验漂移
+*.py text eol=lf
+*.c text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.cmake text eol=lf
+CMakeLists.txt text eol=lf
+*.json text eol=lf
+*.toml text eol=lf
+*.mjs text eol=lf
+*.ts text eol=lf
+*.gradle text eol=lf
+
 # pnpm 补丁必须保持仓库里的原始字节，禁止任何行尾转换：
 #  - pnpm 按行文本比对应用补丁，CRLF 会让上下文匹配不上，安装直接失败；
 #  - pnpm-lock.yaml 记录的是补丁文件字节的 sha256（patch_hash），行尾一变校验就对不上。

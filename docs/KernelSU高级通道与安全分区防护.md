@@ -79,16 +79,17 @@ flowchart TD
                                  │ 审查通过
                                  ▼
  ┌───────────────────────────────────────────────────────────────┐
- │ 【第 2 道防线: 内核命名空间隔离 (Mount Namespace)】             │
- │  - 注入 unshare -m --propagation private                      │
- │  - 隔离进程树内的所有挂载与文件操作，不泄露至宿主全局             │
+ │ 【第 2 道防线: 内核命名空间隔离 (Mount & PID Namespace)】       │
+ │  - 注入 unshare -m -p -f 隔离 Mount 与 PID 命名空间            │
+ │  - 隔离进程树内的所有挂载与文件操作，且阻断 /proc/<pid>/root 逃逸   │
  └───────────────────────────────┬───────────────────────────────┘
                                  │
                                  ▼
  ┌───────────────────────────────────────────────────────────────┐
  │ 【第 3 道防线: 物理块设备与系统硬锁定】                         │
  │  - mount -o remount,ro /system, /vendor, /product             │
- │  - mount -t tmpfs -o mode=0000 tmpfs /dev/block (屏蔽裸设备)  │
+ │  - mount -t tmpfs -o mode=0000,ro tmpfs /dev/block (屏蔽裸设备)│
+ │  - mount -t proc proc /proc (挂载独立私有 procfs)              │
  └───────────────────────────────┬───────────────────────────────┘
                                  │
                                  ▼
@@ -99,20 +100,20 @@ flowchart TD
 ```
 
 #### 防线 1：静态指令审查（`RootCommandGuard`）
-在命令进入底层前，原生侧解析其调用指令，严格拒绝高危工具：
-- 致命命令阻断列表：`reboot (bootloader|recovery|edl)`, `fastboot`, `flash_erase`, `blockdev`, `wipe`, `setenforce 0`, `su -c "(裸su嵌套)"`。
+在命令进入底层前，原生侧解析其调用指令，快速阻断高危工具（协作防误触）：
+- 致命命令阻断列表：`reboot (bootloader|recovery|edl|fastboot)`, `fastboot`, `flash_erase`, `blockdev`, `mkfs.*`, `wipe`, `setenforce 0`, `umount /dev/block`, `mount ... remount,rw /system` 等。
 
-#### 防线 2：内核命名空间隔离（`unshare -m`）
-执行前强制新建挂载命名空间，挂载传播属性设置为 `private`：
+#### 防线 2：内核命名空间隔离（`unshare -m -p -f`）
+执行前强制新建挂载与 PID 命名空间，挂载传播属性设置为 `private`：
 ```sh
-unshare -m /system/bin/sh -c '
+unshare -m -p -f /system/bin/sh -c '
     # 设置本命名空间所有挂载私有化，不向 Android 全局传播
     mount --make-rprivate /
     ...
 '
 ```
 
-#### 防线 3：系统核心分区只读锁定与块设备遮蔽
+#### 防线 3：系统核心分区只读锁定、块设备遮蔽与独立 procfs
 在隔离命名空间内，执行安全前置模板（`Security Prelude`）：
 1. **只读强制锁定**：
    ```sh
@@ -122,10 +123,15 @@ unshare -m /system/bin/sh -c '
    ```
 2. **块设备物理切断（Block Device Masking）**：
    ```sh
-   # 将 /dev/block 挂载为不可读写的空 tmpfs，彻底断绝物理扇区直写链路
-   mount -t tmpfs -o mode=0000,nosuid,nodev tmpfs /dev/block
+   # 将 /dev/block 挂载为不可读写的空 tmpfs (含 ro)，彻底断绝物理扇区直写链路
+   mount -t tmpfs -o mode=0000,nosuid,nodev,ro tmpfs /dev/block
    ```
    **效果**：即使模型执行 `dd if=/dev/zero of=/dev/block/...`，在操作系统层必然直接收到 `EACCES (Permission denied)` 或 `ENOENT`，物理分区不受任何伤害。
+3. **独立私有 procfs（防止 `/proc/1/root` 绕过）**：
+   ```sh
+   # 配合 PID 命名空间挂载当前空间私有 procfs，切断宿主全局 PID 1 根路径穿透
+   mount -t proc proc /proc
+   ```
 
 #### 防线 4：OverlayFS 内存态无痕修改
 若 AI 需要写入系统级证书或 hosts，改动只允许写入基于 RAM 的 OverlayFS 临时层：
@@ -192,18 +198,21 @@ object RootSecurityWrapper {
             done
 
             # 3. 彻底阻断物理块设备，防止格式化与刷盘
-            mount -t tmpfs -o mode=0000,nosuid,nodev tmpfs /dev/block 2>/dev/null || true
+            mount -t tmpfs -o mode=0000,nosuid,nodev,ro tmpfs /dev/block 2>/dev/null || true
 
-            # 4. 执行原始 Payload (作为独立子 shell，结果状态透传)
+            # 4. 挂载私有 procfs，阻断 /proc/<pid>/root 穿透
+            mount -t proc proc /proc 2>/dev/null || true
+
+            # 5. 执行原始 Payload (作为独立子 shell，结果状态透传)
             printf '%s' '$encodedPayload' | toybox base64 -d | /system/bin/sh -s
             exit_code=${'$'}?
 
             exit ${'$'}exit_code
         """.trimIndent()
 
-        // 启动 unshare 隔离执行
+        // 启动 unshare 隔离执行 (Mount + PID Namespace)
         val escapedSandbox = singleQuote(sandboxScript)
-        return "unshare -m /system/bin/sh -c $escapedSandbox"
+        return "unshare -m -p -f /system/bin/sh -c $escapedSandbox"
     }
 
     private fun singleQuote(text: String): String {

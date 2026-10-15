@@ -12,7 +12,7 @@ def envBuildValue = { String name ->
 // 导致设备覆盖安装时报「应用签名与已安装版本不一致」。密钥库与密码均不入库：
 //   - 本地开发：android/keystore.properties（由团队负责人分发，模板见 keystore.properties.example）
 //   - CI 构建：环境变量 DSH_KEYSTORE_BASE64 + DSH_KEYSTORE_PASSWORD（由 GitHub Secrets 注入）
-// 两者都缺失时终止配置（fail-closed），杜绝无团队密钥的构建产物流入设备。
+// Release 构建与分发要求团队签名（fail-closed）；本地未配置时允许 debug 构建使用本地签名以便纯开发测试。
 def loadTeamSigning() {
     def propertiesFile = rootProject.file('keystore.properties')
     if (propertiesFile.isFile()) {
@@ -42,10 +42,7 @@ def loadTeamSigning() {
             keyPassword  : password,
         ]
     }
-    throw new GradleException(
-        '缺少团队签名配置：请配置 android/keystore.properties（参照 keystore.properties.example），' +
-            '或提供 DSH_KEYSTORE_BASE64/DSH_KEYSTORE_PASSWORD 环境变量。禁止以个人密钥签名分发 APK。'
-    )
+    return null
 }
 def teamSigning = loadTeamSigning()
 
@@ -97,13 +94,16 @@ def generateLegalAssets = tasks.register('generateLegalAssets', Sync) {
 android {
     namespace 'io.deepseekharness.mobile'
     compileSdk 35
+    ndkVersion '27.1.12297006'
 
     signingConfigs {
-        team {
-            storeFile teamSigning.storeFile
-            storePassword teamSigning.storePassword
-            keyAlias teamSigning.keyAlias
-            keyPassword teamSigning.keyPassword
+        if (teamSigning != null) {
+            team {
+                storeFile teamSigning.storeFile
+                storePassword teamSigning.storePassword
+                keyAlias teamSigning.keyAlias
+                keyPassword teamSigning.keyPassword
+            }
         }
     }
 
@@ -123,8 +123,8 @@ android {
 
         externalNativeBuild {
             cmake {
-                cppFlags ''
-                cFlags '-Wall -Wextra -Werror -Wconversion -Wshadow -fstack-protector-strong'
+                cppFlags '-Wall -Wextra -Werror -Wconversion -Wshadow -fstack-protector-strong -fvisibility=hidden -D_FORTIFY_SOURCE=2'
+                cFlags '-Wall -Wextra -Werror -Wconversion -Wshadow -fstack-protector-strong -fvisibility=hidden -D_FORTIFY_SOURCE=2'
             }
         }
 
@@ -151,10 +151,14 @@ android {
 
     buildTypes {
         debug {
-            signingConfig signingConfigs.team
+            if (teamSigning != null) {
+                signingConfig signingConfigs.team
+            }
         }
         release {
-            signingConfig signingConfigs.team
+            if (teamSigning != null) {
+                signingConfig signingConfigs.team
+            }
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -189,6 +193,17 @@ android {
 
 tasks.named('preBuild').configure {
     dependsOn(generateLegalAssets)
+}
+
+tasks.configureEach { task ->
+    if (teamSigning == null && (task.name.startsWith("assembleRelease") || task.name.startsWith("bundleRelease") || task.name.startsWith("packageRelease"))) {
+        task.doFirst {
+            throw new GradleException(
+                '缺少团队签名配置：请配置 android/keystore.properties（参照 keystore.properties.example），' +
+                    '或提供 DSH_KEYSTORE_BASE64/DSH_KEYSTORE_PASSWORD 环境变量。禁止以个人密钥签名分发 Release APK。'
+            )
+        }
+    }
 }
 
 dependencies {
