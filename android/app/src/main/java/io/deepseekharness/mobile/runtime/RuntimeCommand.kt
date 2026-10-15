@@ -60,23 +60,27 @@ object RuntimeCommand {
     private const val MOBILE_AUTH_PRELOAD_GUEST_PATH = "/usr/local/lib/dsh-mobile-auth.cjs"
 
     /**
-     * 访客入口包装脚本：先 `source` 那个 0600 环境文件，再 `exec` 真正的入口。
+     * 访客入口包装脚本（有秘密投递时使用）。
      *
-     * **常量、不含任何取值、也不含路径** —— 取值只存在于文件里，路径作为独立的 argv 元素
-     * 通过 `"$1"` 传进来（`$1` 被 `shift` 掉之后 `"$@"` 正好是真正的入口）。
-     * 这样做的两个好处：argv 里与秘密相关的字符串只有一个可读的路径；
-     * 这段脚本里连一个 `=` 都不出现（验收脚本会按赋值形态扫描 `ps` 输出）。
-     *
-     * `exec "$@"` 会原地替换本进程，因此不会多出一层常驻进程，也不会改变 dsh 看到的 argv[0]。
-     * 文件不可读时**直接失败**而不是继续：继续会让 dsh 在缺临时令牌的情况下起来，
-     * 用户看到的是「认证不可用」这类下游报错，把投递故障伪装成运行故障。
+     * 先 source 0600 环境文件注入临时令牌与凭据，再**显式重写 HOME/USER/LOGNAME/SHELL** ——
+     * secrets 文件里如果有 unset HOME（或用户误写）会让 Node.js 的 os.homedir() 走 fallback
+     * 到 uv_os_get_passwd，在无 /etc/passwd 的 rootfs 上报 ENOENT。这里在 exec 之前强制兜底，
+     * 不依赖 env -i 的传递或 secrets 文件的内容。
      */
     internal val GUEST_SECRET_SOURCE_SCRIPT = listOf(
         "if [ -r \"\$1\" ]; then set -a; . \"\$1\"; set +a",
         "else echo dsh-runtime-secret-file-unavailable >&2; exit 1; fi",
         "shift",
+        "export HOME=/root USER=root LOGNAME=root SHELL=/bin/bash",
         "exec \"\$@\"",
     ).joinToString("; ")
+
+    /**
+     * 无秘密投递时的等价包装：同样在 exec 前显式设置 HOME/USER/LOGNAME/SHELL。
+     * env -i HOME=/root ... 是第一道防线，但访客内 `/usr/bin/env` 在某些 rootfs 上
+     * 可能行为异常（busybox 兼容差异、路径差异），这层 sh 包装作为第二道防线。
+     */
+    private val GUEST_ENV_FALLBACK_SCRIPT = "export HOME=/root USER=root LOGNAME=root SHELL=/bin/bash; exec \"\$@\""
 
     /** `sh -c '脚本' <$0> <argv...>` 里的 `$0`：只用于占位，dsh 看到的是真正的入口。 */
     private const val GUEST_ENTRYPOINT_ARGV0 = "dsh-mobile"
@@ -141,8 +145,10 @@ object RuntimeCommand {
      * （端口）。秘密取值一律经由 [RuntimeSecretDelivery] 描述的访客文件传入，
      * 本函数只输出该文件的路径；回归单测用哨兵取值固定这一点。
      *
-     * 包装脚本只在**确实有秘密要投递**时加入：没有秘密的启动（探测、自检、
-     * 无凭据终端）保持与修复前完全相同的 argv 形态，不引入任何新变量。
+     * 两层防护确保 HOME 在最终 exec 前一定被正确设置：
+     *  - 第一层：`env -i HOME=/root ...` 清空宿主 env 再注入受控变量；
+     *  - 第二层：`/bin/sh -c 'export HOME=/root ...; exec "$@"'` 在 exec 前显式重写，
+     *    即便 env 二进制或 secrets 文件有问题也能兜底。
      */
     internal fun prootArgv(input: ProotArgvInput): List<String> = buildList {
         val secretsPath = input.secrets.guestEnvironmentFile
@@ -163,6 +169,7 @@ object RuntimeCommand {
         add("LOGNAME=root")
         add("LANG=C.UTF-8")
         add("TERM=xterm-256color")
+        add("SHELL=/bin/bash")
         add("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
         // 端口不是秘密：同 uid 的访客本来就能从 /proc/net/tcp 看到它。
         input.deviceBridgePort?.let { add("DSH_DEVICE_BRIDGE_PORT=$it") }
@@ -173,7 +180,12 @@ object RuntimeCommand {
             add("NODE_OPTIONS=--require=$MOBILE_AUTH_PRELOAD_GUEST_PATH")
         }
         if (input.secrets.isEmpty || secretsPath == null) {
-            addAll(input.entrypoint)
+            // 同样用 sh 包装：env -i HOME=/root 是第一道防线，这里显式 export 是第二道。
+            add("/bin/sh")
+            add("-c")
+            add(GUEST_ENV_FALLBACK_SCRIPT)
+            add(input.entrypoint.first())
+            addAll(input.entrypoint.drop(1))
         } else {
             // argv 里与秘密相关的全部内容就是这一个路径；取值在别处、在这个列表之外。
             add("/bin/sh")
