@@ -40,6 +40,7 @@ import {
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
   assertRuntimeVersionTarget,
+  assertRuntimeVersionPinTarget,
   assertSessionId,
   assertStorageDirPath,
   assertTerminalKind,
@@ -223,6 +224,7 @@ interface NativeRuntimePlugin {
   runtimeVersions(): Promise<unknown>
   switchRuntimeVersion(options: { target: string }): Promise<unknown>
   deleteRuntimeVersion(options: { target: string }): Promise<unknown>
+  setRuntimeVersionPinned(options: { target: string; pinned: boolean }): Promise<unknown>
   getRuntimeResidue(): Promise<unknown>
   cleanRuntimeResidue(): Promise<unknown>
   getRuntimeCleanupState(): Promise<unknown>
@@ -531,6 +533,15 @@ function createNativeBridge(): RuntimeBridge {
       .then(validateRuntimeVersions),
     deleteRuntimeVersion: target => NativeRuntime
       .deleteRuntimeVersion({ target: assertRuntimeVersionTarget(target) })
+      .then(validateRuntimeVersions),
+    // 锁定/解锁只改「满额时谁可以被自动淘汰」，不影响当前运行环境，所以随时可调。
+    // 目标必须是版本库里的归档 ID（`previous` / `bundled` 是槽位、不是归档）；
+    // 布尔值走 assertBooleanFlag，不让 `'false'` 这类真值字符串把版本悄悄锁上。
+    setRuntimeVersionPinned: (target, pinned) => NativeRuntime
+      .setRuntimeVersionPinned({
+        target: assertRuntimeVersionPinTarget(target),
+        pinned: assertBooleanFlag(pinned, '版本库锁定状态'),
+      })
       .then(validateRuntimeVersions),
     // 残留载荷只有份数/字节数/截断标记与一句说明：原生侧连目录名都不回传，这里也就无从泄漏；
     // 清理幂等且不抛，失败（含单份删不掉）由 failed 与 message 如实体现。

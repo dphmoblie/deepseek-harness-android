@@ -75,11 +75,18 @@ describe('browser settings bridge', () => {
     await expect(bridge.getRuntimeVersions()).rejects.toThrow('浏览器预览不支持运行时版本管理')
     await expect(bridge.switchRuntimeVersion('previous')).rejects.toThrow('浏览器预览不支持运行时版本管理')
     await expect(bridge.deleteRuntimeVersion('previous')).rejects.toThrow('浏览器预览不支持运行时版本管理')
+    await expect(bridge.setRuntimeVersionPinned('a'.repeat(64), true)).rejects.toThrow('浏览器预览不支持运行时版本管理')
 
     // 目标校验先于「不支持」：参数写错时要说参数错，不能把它说成功能缺失。
     // 校验是同步抛（与原生桥接一致），所以这里断言同步抛出而不是 Promise 拒绝。
     const invalidTarget = 'current' as unknown as 'previous'
     expect(() => bridge.switchRuntimeVersion(invalidTarget)).toThrow('运行时版本操作目标无效')
+    // 锁定只认版本库归档 ID：槽位与半截 ID 都要在打桩之前就被拦下。
+    expect(() => bridge.setRuntimeVersionPinned('previous', true)).toThrow('版本库条目标识格式无效')
+    expect(() => bridge.setRuntimeVersionPinned('a'.repeat(63), true)).toThrow('版本库条目标识格式无效')
+    // 布尔值不采信真值：'false' 这类字符串会把版本悄悄锁上。
+    expect(() => bridge.setRuntimeVersionPinned('a'.repeat(64), 'false' as unknown as boolean))
+      .toThrow('版本库锁定状态格式无效')
   })
 
   it('浏览器预览的投递区始终报「不支持」，不编造可用状态与计数', async () => {

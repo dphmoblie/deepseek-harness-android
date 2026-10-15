@@ -66,6 +66,8 @@ import {
   Blocks,
   ListChecks,
   MessageSquare,
+  Pin,
+  PinOff,
 } from 'lucide-react'
 import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import { hasConfiguredModelCredential, MODEL_PROVIDERS } from './modelProviders'
@@ -124,6 +126,7 @@ import type {
   RuntimeInstallResult,
   RuntimePhase,
   RuntimeProgress,
+  RuntimeLibraryEntry,
   RuntimeReleaseEntry,
   RuntimeReleaseList,
   RuntimeSessionSnapshotRestoreResult,
@@ -2018,6 +2021,13 @@ interface RuntimeVersionsPanelProps {
   loadVersions: () => Promise<RuntimeVersionsState>
   switchVersion: (target: string) => Promise<RuntimeVersionsState>
   deleteVersion: (target: string) => Promise<RuntimeVersionsState>
+  /**
+   * 锁定/解锁版本库里的一个归档（`target` 是版本库条目 ID，不是 `previous`/`bundled` 槽位）。
+   *
+   * 锁定只影响「版本库满额时谁可以被自动淘汰」：锁定的版本不会被挑走；全部锁定时下载会
+   * 明确失败（原生侧抛 `RUNTIME_LIBRARY_FULL`），界面据此提示先删除或解锁一个。
+   */
+  setPinned: (target: string, pinned: boolean) => Promise<RuntimeVersionsState>
   downloadRelease?: (manifestUrl: string, manifestSha256: string) => Promise<void>
   listReleases?: () => Promise<RuntimeReleaseList>
   /** 切换成功后重新读取运行时状态：已安装版本与阶段都会变。 */
@@ -2038,6 +2048,7 @@ function RuntimeVersionsPanel({
   loadVersions,
   switchVersion,
   deleteVersion,
+  setPinned,
   downloadRelease,
   listReleases,
   refreshRuntime,
@@ -2162,6 +2173,22 @@ function RuntimeVersionsPanel({
         setVersions(await deleteVersion(id))
         setConfirmDeleteLibraryId(null)
         notify(t("已从版本库删除"), 'success')
+      } catch (error) {
+        notify(errorMessage(error), 'error')
+      } finally {
+        setBusy(null)
+      }
+    })()
+  }
+
+  const togglePinned = (entry: RuntimeLibraryEntry): void => {
+    if (busy !== null) return
+    const next = !entry.pinned
+    setBusy(`pin:${entry.id}`)
+    void (async () => {
+      try {
+        setVersions(await setPinned(entry.id, next))
+        notify(next ? t("已锁定该版本") : t("已解锁该版本"), 'success')
       } catch (error) {
         notify(errorMessage(error), 'error')
       } finally {
@@ -2341,15 +2368,33 @@ function RuntimeVersionsPanel({
                       <strong>
                         {entry.version}
                         {isEntryActive && <span className="status-chip success" style={{ marginLeft: 6 }}>{t("使用中")}</span>}
+                        {entry.pinned && <span className="status-chip" style={{ marginLeft: 6 }}>{t("已锁定")}</span>}
                       </strong>
                       <small>
                         {[
                           entry.dshVersion ? `dsh ${entry.dshVersion}` : t("dsh 版本未读到"),
                           formatBytes(entry.bytes),
+                          ...(entry.downloadedAt === undefined
+                            ? []
+                            : [t("保存于 {0}", new Date(entry.downloadedAt).toLocaleString())]),
                         ].join(' · ')}
                       </small>
                     </div>
                     <div className="release-actions">
+                      {/* 锁定只改「满额时谁可以被自动淘汰」，和「现在用哪一份」无关：
+                          正在使用的版本也能先锁上，免得切走之后被淘汰。 */}
+                      <button
+                        className="button button-secondary"
+                        type="button"
+                        onClick={() => togglePinned(entry)}
+                        disabled={busy !== null}
+                        title={entry.pinned ? t("解锁后该版本可能在版本库满额时被自动淘汰") : t("锁定的版本在版本库满额时不会被自动淘汰")}
+                      >
+                        {busy === `pin:${entry.id}`
+                          ? <Loader2 className="spin" size={18} />
+                          : entry.pinned ? <PinOff size={18} /> : <Pin size={18} />}
+                        {entry.pinned ? t("解锁") : t("锁定")}
+                      </button>
                       {!isEntryActive && (
                         <>
                           <button
@@ -2479,7 +2524,11 @@ function RuntimeVersionsPanel({
             </div>
           )}
           {library.length >= libraryCapacity && (
-            <p className="settings-note">{t("版本库已满（{0} 个）：下载新版本将自动替换未使用的最旧版本。", String(libraryCapacity))}</p>
+            <p className="settings-note">
+              {library.every(entry => entry.pinned)
+                ? t("版本库已满（{0} 个），且全部已锁定：下载新版本会被明确拒绝，需要先删除或解锁一个版本。", String(libraryCapacity))
+                : t("版本库已满（{0} 个）：下载新版本会给未锁定的最旧版本腾位置；锁定的版本不会被自动淘汰。", String(libraryCapacity))}
+            </p>
           )}
         </div>
       )}
@@ -2957,6 +3006,7 @@ function RuntimeVersionsScreen({
   loadVersions,
   switchVersion,
   deleteVersion,
+  setPinned,
   downloadRelease,
   listReleases,
   refreshRuntime,
@@ -2993,6 +3043,7 @@ function RuntimeVersionsScreen({
         loadVersions={loadVersions}
         switchVersion={switchVersion}
         deleteVersion={deleteVersion}
+        setPinned={setPinned}
         downloadRelease={downloadRelease}
         listReleases={listReleases}
         refreshRuntime={refreshRuntime}
@@ -6752,6 +6803,12 @@ export function App() {
     [],
   )
 
+  /** 锁定/解锁版本库里的归档；目标必须是条目 ID（槽位不是归档），校验在桥接层完成。 */
+  const setRuntimeVersionPinned = useCallback(
+    (target: string, pinned: boolean) => runtimeBridge.setRuntimeVersionPinned(target, pinned),
+    [],
+  )
+
   /** 下载远端运行时发布到本地版本库（不立即激活）。 */
   const downloadRuntimeRelease = useCallback(
     (manifestUrl: string, manifestSha256: string) => runtimeBridge.downloadRuntimeRelease(manifestUrl, manifestSha256),
@@ -7199,6 +7256,7 @@ export function App() {
           loadVersions={loadRuntimeVersions}
           switchVersion={switchRuntimeVersion}
           deleteVersion={deleteRuntimeVersion}
+          setPinned={setRuntimeVersionPinned}
           downloadRelease={downloadRuntimeRelease}
           listReleases={listRuntimeReleases}
           refreshRuntime={refreshRuntimeState}

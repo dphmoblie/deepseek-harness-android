@@ -562,6 +562,17 @@ export function assertRuntimeVersionTarget(value: unknown): 'previous' {
   return value
 }
 
+/**
+ * 版本库条目标识：64 位小写十六进制，与原生侧归档目录名同一格式。
+ *
+ * 锁定的目标只可能是「本地下载好的某个归档」，即版本库里的一条记录；
+ * `previous` / `bundled` 是槽位而不是归档，传进来这里就拦死，不让原生侧去猜。
+ */
+export function assertRuntimeVersionPinTarget(value: unknown): string {
+  if (typeof value !== 'string' || !SHA256_PATTERN.test(value.trim())) throw new Error('版本库条目标识格式无效')
+  return value.trim()
+}
+
 export function validateRuntimeVersions(value: unknown): RuntimeVersionsState {
   const state = asRecord(value, '运行时版本状态')
   const source = state.versions
@@ -600,12 +611,25 @@ export function validateRuntimeVersions(value: unknown): RuntimeVersionsState {
       const dshVersion = optionalIdentifier(item.dshVersion, 'dsh 版本')
       const bytes = byteCount(item.bytes, '版本库条目大小')
       const active = typeof item.active === 'boolean' ? item.active : false
+      // 锁定状态是「谁会被自动淘汰」的判据，缺了就必须报错：默认成 false 等于悄悄解锁。
+      if (typeof item.pinned !== 'boolean') throw new Error('版本库条目锁定状态格式无效')
+      // 落地时间可以缺（老版本库的归档没有这条记录），但给了就必须是个读得懂的 ISO 时间。
+      const downloadedAtRaw = item.downloadedAt
+      let downloadedAt: string | undefined
+      if (downloadedAtRaw !== undefined && downloadedAtRaw !== null) {
+        if (typeof downloadedAtRaw !== 'string' || !Number.isFinite(Date.parse(downloadedAtRaw))) {
+          throw new Error('版本库条目落地时间格式无效')
+        }
+        downloadedAt = downloadedAtRaw
+      }
       return {
         id,
         version,
         bytes,
         active,
+        pinned: item.pinned,
         ...(dshVersion === undefined ? {} : { dshVersion }),
+        ...(downloadedAt === undefined ? {} : { downloadedAt }),
       }
     })
   }

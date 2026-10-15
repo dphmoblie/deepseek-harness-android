@@ -179,6 +179,23 @@ class MobileRuntimeController(
         versions.list()
     }
 
+    /**
+     * 锁定/解锁版本库里的一个已下载版本。
+     *
+     * 与删除一样**不**要求运行时已停止：锁定只写版本库目录里的一个 sidecar 文件，与正在跑的
+     * 当前运行时无关。只有版本库条目能锁定——`previous`/`bundled` 槽位不是可淘汰对象，
+     * 这里以 `RUNTIME_VERSION_TARGET_INVALID` 明确拒绝，免得界面上出现一个「锁了却毫无作用」的按钮。
+     */
+    fun setRuntimeVersionPinned(target: String, pinned: Boolean): List<RuntimeVersionInfo> = lifecycleLock.withLock {
+        ensureOpen()
+        val normalizedTarget = RuntimeVersionPolicy.requireTarget(target)
+        if (normalizedTarget == RuntimeVersionPolicy.TARGET_PREVIOUS || normalizedTarget == RuntimeVersionPolicy.TARGET_BUNDLED) {
+            throw RuntimeFailure("RUNTIME_VERSION_TARGET_INVALID", "只有版本库里的版本可以锁定")
+        }
+        RuntimeLibrary(store).setPinned(normalizedTarget, pinned)
+        versions.list()
+    }
+
     fun downloadToLibrary(source: RuntimeSource) = lifecycleLock.withLock {
         ensureOpen()
         RuntimeLibrary(store).download(source)

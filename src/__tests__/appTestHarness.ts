@@ -145,6 +145,7 @@ export const bridge = {
   getRuntimeVersions: vi.fn(),
   switchRuntimeVersion: vi.fn(),
   deleteRuntimeVersion: vi.fn(),
+  setRuntimeVersionPinned: vi.fn(),
   // 「运行时占用」卡片进版本管理页就会读一次残留（清理按钮另有一条）；缺桩会让那次 effect 抛错，
   // 同上一条注释里的坑。
   getRuntimeResidue: vi.fn(),
@@ -538,6 +539,9 @@ export function beforeEachAppTest(): void {
   })
   bridge.switchRuntimeVersion.mockResolvedValue({ versions: [], canSwitch: false, canDelete: false })
   bridge.deleteRuntimeVersion.mockResolvedValue({ versions: [], canSwitch: false, canDelete: false })
+  // 锁定桩的默认回执同样是空状态：它只在「版本管理」页里被调用，且真要检验锁定效果时
+  // 用例自己覆盖。方法与其它版本操作并列放在这里，缺了会被 appTestHarness 的自检用例抓住。
+  bridge.setRuntimeVersionPinned.mockResolvedValue({ versions: [], canSwitch: false, canDelete: false })
   // 默认「没有可回收的残留」：多数用例只关心别的页面，不该被一张写着残留的卡片影响；
   // 关心这张卡片的用例自己覆盖这两条桩。
   bridge.getRuntimeResidue.mockResolvedValue({ count: 0, bytes: 0, truncated: false })

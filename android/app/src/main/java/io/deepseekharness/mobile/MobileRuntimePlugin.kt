@@ -634,6 +634,23 @@ class MobileRuntimePlugin : Plugin() {
 
     /**
      * 权限：应用内桥接。
+     * 锁定/解锁版本库里的一个已下载版本：被锁定的版本不会被「版本库满额时自动淘汰」挑走。
+     *
+     * 只接受版本库条目 ID：当前/上一/内置槽位不是淘汰对象，锁它们没有任何意义。
+     */
+    @PluginMethod
+    fun setRuntimeVersionPinned(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.RUNTIME_VERSION_PIN) {
+                val target = RuntimeVersionPolicy.requireTarget(call.getString("target"))
+                val pinned = call.getBoolean("pinned") ?: throw RuntimeFailure("RUNTIME_VERSION_INPUT_INVALID", "锁定状态无效")
+                controller.setRuntimeVersionPinned(target, pinned).toJs()
+            }
+        }
+    }
+
+    /**
+     * 权限：应用内桥接。
      * 应用自身更新状态：本机已安装版本、是否已授权安装未知应用，以及**严格更新**时才出现的 available。
      *
      * 默认缓存优先；forceRefresh 仅接受布尔值。没有更新时 available 键缺失，

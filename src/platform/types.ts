@@ -112,6 +112,21 @@ export interface RuntimeLibraryEntry {
   dshVersion?: string
   bytes: number
   active: boolean
+  /**
+   * 用户是否锁定这个版本。
+   *
+   * 锁定的版本不会被「版本库满额时自动淘汰」挑走：满额且全部锁定时，下载以
+   * `RUNTIME_LIBRARY_FULL` 明确失败，界面据此提示「先删除或解锁一个版本」，
+   * 而不是让用户某天发现锁好的版本不见了。
+   */
+  pinned: boolean
+  /**
+   * 归档落地时间（ISO-8601，UTC）。
+   *
+   * 只有本地归档才有：老版本库没有这条记录，或时间读不到时键缺失——界面此时不显示时间，
+   * 而不是显示一个 1970 年的时间戳冒充事实。
+   */
+  downloadedAt?: string
 }
 
 /**
@@ -1830,6 +1845,13 @@ export interface RuntimeBridge {
   switchRuntimeVersion: (target: string) => Promise<RuntimeVersionsState>
   /** 删除保留下来的上一版本或版本库中的历史版本以释放磁盘空间；不影响当前运行环境。 */
   deleteRuntimeVersion: (target: string) => Promise<RuntimeVersionsState>
+  /**
+   * 锁定/解锁版本库里的一个已下载版本（`target` 必须是版本库条目 ID）。
+   *
+   * 锁定只改变「满额时谁可以被自动淘汰」，不需要停止运行时；
+   * `previous` / `bundled` 槽位不是淘汰对象，传它们会被原生侧拒绝。
+   */
+  setRuntimeVersionPinned: (target: string, pinned: boolean) => Promise<RuntimeVersionsState>
   /** 下载远端运行时发布到本地版本库（不立即激活）。 */
   downloadRuntimeRelease: (manifestUrl: string, manifestSha256: string) => Promise<void>
   /**

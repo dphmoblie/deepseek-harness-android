@@ -47,7 +47,7 @@ import type {
 } from './types'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource, validatePluginCleanupRequest } from './validation'
+import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionPinTarget, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource, validatePluginCleanupRequest } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
@@ -637,6 +637,13 @@ export function createBrowserBridge(): RuntimeBridge {
     },
     deleteRuntimeVersion: (target): Promise<RuntimeVersionsState> => {
       assertRuntimeVersionTarget(target)
+      return Promise.reject(new Error('浏览器预览不支持运行时版本管理'))
+    },
+    // 预览里没有版本库，也就没有「锁一个归档」这回事：先校验取值（和原生侧同一套判据），
+    // 再如实拒绝，而不是回一个空的版本列表假装已经锁上。
+    setRuntimeVersionPinned: (target, pinned): Promise<RuntimeVersionsState> => {
+      assertRuntimeVersionPinTarget(target)
+      assertBooleanFlag(pinned, '版本库锁定状态')
       return Promise.reject(new Error('浏览器预览不支持运行时版本管理'))
     },
     // 预览里既没有运行时目录，也谈不上「残留」：如实拒绝，不编造「0 份 0 字节」——
