@@ -107,7 +107,7 @@ class HarnessActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        val nextSessionId = intent.getStringExtra(EXTRA_SESSION_ID)
+        val nextSessionId = sessionIdExtra(intent)
         if (!nextSessionId.isNullOrBlank() && ::webView.isInitialized && ::allowedOrigin.isInitialized) {
             val nextUrl = HarnessPageUrl.withVersions(
                 allowedOrigin.initialUrl,
@@ -118,6 +118,19 @@ class HarnessActivity : AppCompatActivity() {
             entryUrlForRetry = nextUrl
             webView.loadUrl(nextUrl)
         }
+    }
+
+    /**
+     * 读取会话直达的 extra，并把格式不合规的值挡在入口 URL 之外。
+     *
+     * Activity 不导出（`android:exported="false"`），这个 extra 只可能来自本应用的桥接，
+     * 但仍然在边界上收口：非法值按「没有会话」处理——宁可不跳转，也不要让一次畸形参数
+     * 把 HarnessActivity 直接崩掉。真正的契约错误（桥接侧传了非法会话键）由桥接层先拦。
+     */
+    private fun sessionIdExtra(intent: Intent?): String? = try {
+        HarnessPageUrl.requireValidSessionId(intent?.getStringExtra(EXTRA_SESSION_ID))
+    } catch (_: IllegalArgumentException) {
+        null
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -153,7 +166,7 @@ class HarnessActivity : AppCompatActivity() {
         // 运行时未安装 / 清单不可读时由 withVersions 落到固定占位值，不会让 URL 抖动。
         // 纯字符串计算（清单在运行时启动链路中已完成缓存预热），放在布局加载前完成，
         // 以便紧接着提前发起 cookie 写入。
-        val requestedSessionId = intent.getStringExtra(EXTRA_SESSION_ID)
+        val requestedSessionId = sessionIdExtra(intent)
         val entryUrl = HarnessPageUrl.withVersions(
             allowedOrigin.initialUrl,
             BuildConfig.VERSION_NAME,

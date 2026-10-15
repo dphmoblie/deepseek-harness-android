@@ -906,7 +906,11 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun openHarness(call: PluginCall) {
         resolveWhileActive(call) {
-            val sessionId = call.getString("sessionId")?.trim()?.takeIf { it.isNotEmpty() }
+            val sessionId = try {
+                HarnessPageUrl.requireValidSessionId(call.getString("sessionId")?.trim())
+            } catch (_: IllegalArgumentException) {
+                throw RuntimeFailure("SESSION_ID_INVALID", "会话标识格式无效")
+            }
             val access = controller.openHarnessAccess()
             AppAuthenticationState.authorizeHarnessLaunch(access)
             val intent = Intent(context, HarnessActivity::class.java)

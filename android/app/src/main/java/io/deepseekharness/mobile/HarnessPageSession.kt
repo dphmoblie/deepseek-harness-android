@@ -100,7 +100,7 @@ internal object HarnessPageUrl {
             require(RUNTIME_VERSION.matches(runtimeVersion)) { "Runtime version has an invalid format" }
             runtimeVersion
         }
-        val validSession = sessionId?.takeIf { SESSION_ID.matches(it) }
+        val validSession = requireValidSessionId(sessionId)
         // Hashed assets may use WebView's HTTP cache. These version keys invalidate the HTML entry
         // whenever either the APK shell or independently updated runtime frontend changes.
         val query = listOfNotNull(
@@ -110,6 +110,20 @@ internal object HarnessPageUrl {
             validSession?.let { "$SESSION_ID_PARAM=$it" },
         ).joinToString("&")
         return URI(entry.scheme, null, entry.host, entry.port, entry.path, query, null).toASCIIString()
+    }
+
+    /**
+     * 会话键的契约：null / 空白表示「没有会话」，直接省略参数；非空必须是 [SESSION_ID] 允许的
+     * 字符集与长度，否则抛 [IllegalArgumentException]。
+     *
+     * 这里刻意不做「静默丢弃」：会话键由应用自己的桥接与 Intent 传入，属于调用方输入，而不是
+     * 设备状态（对照 [withVersions] 里运行时版本的降级策略）。非法值若被悄悄吞掉，用户拿到的
+     * 是一个看起来正常、实际没带会话的入口页——故障会一直藏到很久以后才被发现。
+     */
+    fun requireValidSessionId(sessionId: String?): String? {
+        val requested = sessionId?.takeIf { it.isNotBlank() } ?: return null
+        require(SESSION_ID.matches(requested)) { "Harness session id has an invalid format" }
+        return requested
     }
 
     /**
