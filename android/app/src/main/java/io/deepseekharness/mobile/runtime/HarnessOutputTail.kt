@@ -68,7 +68,7 @@ internal fun utf8TailWithin(text: String, maxBytes: Int): String {
  * 「工具调用失败只报一句无栈信息」这类问题，唯一线索就是 dsh 自己打在 stdout/stderr
  * 上的完整报错。supervisor 在构造时把只读出口登记到这里，桥接层只读这里。
  *
- * 生命周期：登记项由 [RuntimeHost] 在运行时释放时清空（见 RuntimeHost.takeControllerLocked），
+ * 生命周期：登记项由 [RuntimeHost] 在运行时释放时清空（见 RuntimeHost.teardownController），
  * 因此它只在当前运行时存活期间引用 supervisor；运行时释放后，输出尾部随之不可达、可被回收。
  *
  * 边界：只读、有界（上限由读取方传入）、不落盘、不进诊断日志导出、不新增诊断事件或字段。

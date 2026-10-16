@@ -558,19 +558,19 @@ class MobileRuntimeController(
         terminals.shizuku.contains(sessionId)
     }
 
-    fun requestShizukuPermission(): ShizukuState = lifecycleLock.withLock {
+    fun requestShizukuPermission(): ShizukuState {
         ensureOpen()
-        terminals.shizuku.requestPermission()
+        return terminals.shizuku.requestPermission()
     }
 
-    fun connectShizuku(): ShizukuState = lifecycleLock.withLock {
+    fun connectShizuku(): ShizukuState {
         ensureOpen()
         // 授权已存在时直接绑定 Shizuku UserService；未授权时
         // ShizukuRuntime.connect() 会在 requirePermission() 中拒绝（fail-closed）。
-        terminals.shizuku.connect()
+        return terminals.shizuku.connect()
     }
 
-    fun openShizukuManager() = lifecycleLock.withLock {
+    fun openShizukuManager() {
         ensureOpen()
         terminals.shizuku.openManager()
     }

@@ -7,8 +7,8 @@ import androidx.appcompat.app.AppCompatActivity
 /**
  * 常驻通知的点击入口。
  *
- * 存在的唯一理由：`MainActivity` 是 `launchMode="singleTask"`，直接把通知指向它会在任务栈
- * 为 `[MainActivity, HarnessActivity]` 时触发 clear-top，把正在显示的 `HarnessActivity`
+ * 存在的唯一理由：通知入口需要在已有 HarnessActivity 与管理页之间做安全转发；直接重建
+ * 任一页面会触发旧页面销毁，把正在显示的 `HarnessActivity`
  * 直接销毁；而 `HarnessActivity.onDestroy()` 会撤销一次性会话凭据，用户看到的就是
  * 「对话界面闪一下就没了，还回不去」。
  *
@@ -16,7 +16,7 @@ import androidx.appcompat.app.AppCompatActivity
  *  - 一次性会话凭据仍然有效（`HarnessActivity` 还活着）→ 直接把已有的对话界面带回前台；
  *  - 否则（进程被回收、用户已退出对话）→ 回到管理界面。
  *
- * 刻意不指向 `singleTask` 的 `MainActivity`，因此不会发生 clear-top。
+ * 目标页使用 `REORDER_TO_FRONT`，因此不会发生 clear-top。
  * 本 Activity 不导出，只有本应用的 PendingIntent 能启动它。
  */
 class KeepAliveEntryActivity : AppCompatActivity() {

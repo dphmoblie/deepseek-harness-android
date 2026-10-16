@@ -29,8 +29,8 @@
  *
  * 成功：stdout 一行 `{"sessions":[{id,title,updatedAt}...],"truncated":bool}`；
  * 失败：stdout 一行 `{"error":"<受控码>"}` 且退出码为 1。
- * `truncated` 为真表示「没读全」——会话条数超过上限，或本次时间预算用尽；
- * 它**不**表示「读不到」，读不到一律走 `error`，绝不用空列表冒充「没有会话」。
+ * `truncated` 为真表示「没读全」——会话条数超过上限、本次时间预算用尽，或部分项目目录
+ * 无法读取；若所有项目都无法读取则走 `error`，绝不用空列表冒充「没有会话」。
  */
 
 const fs = require('node:fs')
@@ -349,7 +349,8 @@ async function buildCatalog(limit, root, hooks = null) {
   }
   candidates.sort((left, right) => (right.updatedAt - left.updatedAt) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
   const selected = candidates.slice(0, limit)
-  let truncated = candidates.length > selected.length
+  // 有项目目录无法读取时，返回的候选列表只是可见子集，必须显式告诉调用方存在遗漏。
+  let truncated = candidates.length > selected.length || unreadable > 0
   const sessions = []
   for (const candidate of selected) {
     let title = ''

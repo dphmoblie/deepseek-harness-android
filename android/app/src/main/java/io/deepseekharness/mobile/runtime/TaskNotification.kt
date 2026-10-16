@@ -361,10 +361,8 @@ internal object TaskNotification {
     /**
      * 通知的统一构造：只在这里决定图标、分类、点击落点与锁屏可见性。
      *
-     * 抽出来的直接原因是**落点只有一个正确值**：`MainActivity` 是 `singleTask`，
-     * 指向它会 clear-top 掉正在显示的 `HarnessActivity` 并撤销一次性会话凭据，
-     * 用户看到的是「对话界面闪一下就没了」。`KeepAliveEntryActivity` 是透明的转发入口，
-     * 专门为绕开这一点而存在（保活通知也用它）。
+     * 抽出来的直接原因是**落点只有一个正确值**：`KeepAliveEntryActivity` 是透明的
+     * 转发入口，负责复用已有对话页，避免通知点击创建重复 Activity 或撤销一次性会话凭据。
      */
     private fun build(context: Context, titleRes: Int): NotificationCompat.Builder =
         NotificationCompat.Builder(context, CHANNEL_ID)
