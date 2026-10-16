@@ -27,6 +27,7 @@ internal object RuntimeTerminalPluginBackup {
     private const val SNAPSHOT = "profile.json"
     private const val MAX_PACKAGES = 256
     private const val MAX_PACKAGE_NAME = 214
+    private const val MAX_PROFILE_BYTES = 1L * 1024 * 1024
     private val PACKAGE_NAME = Regex("^(?:@[a-z0-9][a-z0-9._-]*\\/[a-z0-9][a-z0-9._-]*|[a-z0-9][a-z0-9._-]*)$")
     private val UUID_SUFFIX = Regex("^[a-f0-9-]{36}$")
 
@@ -166,7 +167,7 @@ internal object RuntimeTerminalPluginBackup {
     private fun writeSnapshot(directory: File, sourceRoot: File, names: List<String>) {
         val value = JSONObject().put("version", 1).put("bundles", JSONArray(names))
         val profile = File(sourceRoot, PROFILE)
-        if (RuntimeFiles.existsNoFollow(profile) && isRegularFile(profile)) {
+        if (RuntimeFiles.existsNoFollow(profile) && isRegularFile(profile) && profile.length() <= MAX_PROFILE_BYTES) {
             runCatching {
                 val old = JSONObject(profile.readText(Charsets.UTF_8))
                 val dependencies = JSONObject()
@@ -185,6 +186,7 @@ internal object RuntimeTerminalPluginBackup {
         ensureInside(targetRoot, profile)
         val value = if (RuntimeFiles.existsNoFollow(profile)) {
             if (!isRegularFile(profile)) throw failure("运行时插件清单路径无效")
+            if (profile.length() > MAX_PROFILE_BYTES) throw failure("运行时插件清单过大")
             runCatching { JSONObject(profile.readText(Charsets.UTF_8)) }.getOrElse { throw failure("运行时插件清单无效", it) }
         } else JSONObject()
         val bundles = value.optJSONObject("dsh")?.optJSONObject("profile")?.optJSONArray("bundles")

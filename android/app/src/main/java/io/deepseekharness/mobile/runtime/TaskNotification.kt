@@ -45,6 +45,7 @@ internal object TaskNotification {
      *  - `0x44534801` 保活前台服务（`HarnessKeepAliveService`）
      *  - `0x44534802` 悬浮球前台服务（`OverlayBallService`）
      *  - `0x44534803` 本对象
+     *  - `0x44534805` 重启后 Shizuku 自动连接失败提醒
      */
     private const val NOTIFICATION_ID = 0x44534803
 
@@ -61,6 +62,9 @@ internal object TaskNotification {
      * 用 `notify` 更新同一条通知即可（见 [postTurnCompleted]）。
      */
     private const val TURN_COMPLETED_NOTIFICATION_ID = 0x44534804
+
+    /** 重启后 Shizuku 自动连接失败的独立提醒，避免覆盖 Harness 状态通知。 */
+    private const val SHIZUKU_RECONNECT_NOTIFICATION_ID = 0x44534805
 
     /** 合并窗口定时器的 tag（`Handler.postAtTime` 的重排标识，只在本对象内使用）。 */
     private val FLUSH_TOKEN = Any()
@@ -234,6 +238,25 @@ internal object TaskNotification {
             else -> return
         }
         post(context, titleRes, textRes)
+    }
+
+    /**
+     * 重启恢复时已确认 Shizuku 运行且已授权，但 UserService 连接失败。
+     * 文案固定且不携带 Binder 异常、路径或凭据；未准备好的 Shizuku 不调用此方法。
+     */
+    fun postShizukuReconnectFailed(context: Context) {
+        if (!shouldNotify()) return
+        val manager = NotificationManagerCompat.from(context)
+        if (!manager.areNotificationsEnabled()) return
+        ensureChannel(context)
+        val notification = build(context, R.string.shizuku_reconnect_failed_title)
+            .setContentText(context.getString(R.string.shizuku_reconnect_failed_text))
+            .build()
+        try {
+            manager.notify(SHIZUKU_RECONNECT_NOTIFICATION_ID, notification)
+        } catch (_: SecurityException) {
+            // 权限在检查与投递之间被撤销时，提醒丢失不影响运行时恢复。
+        }
     }
 
     /**
@@ -417,6 +440,7 @@ internal object TaskNotification {
         val manager = NotificationManagerCompat.from(context)
         manager.cancel(NOTIFICATION_ID)
         manager.cancel(TURN_COMPLETED_NOTIFICATION_ID)
+        manager.cancel(SHIZUKU_RECONNECT_NOTIFICATION_ID)
     }
 
     /**

@@ -303,6 +303,7 @@ class MobileRuntimePlugin : Plugin() {
         // 自动检测不能持有运行时生命周期锁：异常的 Shizuku Binder 不得卡住 Harness 启动。
         connect = { current ->
             controller.terminals.shizuku.connectIfAuthorized(permitted = { !destroying.get() }, current = current)
+            Unit
         },
     )
     private val shizukuBinderReceivedListener = Shizuku.OnBinderReceivedListener {

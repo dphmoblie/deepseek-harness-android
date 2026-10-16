@@ -20,6 +20,8 @@ import io.deepseekharness.mobile.runtime.RuntimeHost
 import io.deepseekharness.mobile.runtime.RuntimeEventSink
 import io.deepseekharness.mobile.runtime.RuntimeStateSnapshot
 import io.deepseekharness.mobile.runtime.RuntimeStore
+import io.deepseekharness.mobile.runtime.ShizukuReconnectResult
+import io.deepseekharness.mobile.runtime.TaskNotification
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLog
@@ -30,7 +32,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * 职责边界：
  *  - 只把本应用进程标记为前台服务，提升其在锁屏、返回桌面、划掉最近任务后的存活优先级；
- *  - 不执行任何 Shell 命令，不连接 Shizuku，不持有或读取任何凭据；
+ *  - 不执行任何 Shell 命令、不读取任何凭据；系统重启恢复时仅按已授权状态尽力绑定
+ *    Shizuku UserService，失败只发固定提醒，不阻止 Harness 启动；
  *  - 通知内容固定，不含 URL、密码、API Key、终端输出或其他用户数据；
  *  - 明确不承诺绝对保活：Android 与厂商系统的内存回收、强制停止、电池与后台策略
  *    仍然可以随时结束本进程。
@@ -351,6 +354,30 @@ class HarnessKeepAliveService : Service() {
                     DiagnosticEvent.DEVICE_BRIDGE,
                     mapOf("result" to "unavailable"),
                 )
+            }
+            // 重启后 WebView 尚未加载，不能依赖 MobileRuntimePlugin 的前台回调触发
+            // Shizuku 自动连接。仅在已安装、已运行且已授权时尝试绑定；未准备好的
+            // 状态不提醒用户，避免把「Shizuku 尚未启动」误报成连接失败。
+            val shizukuReconnect = runCatching {
+                controller.reconnectShizukuIfAuthorized {
+                    !recoveryCancelled.get() && RuntimeHost.controllerOrNull() === controller
+                }
+            }.getOrDefault(ShizukuReconnectResult.NOT_ELIGIBLE)
+            when (shizukuReconnect) {
+                ShizukuReconnectResult.FAILED -> {
+                    diagnostics.record(
+                        DiagnosticLevel.WARN,
+                        DiagnosticEvent.DEVICE_BRIDGE,
+                        mapOf("result" to "failed", "reason" to "shizuku_reconnect"),
+                    )
+                    runCatching { TaskNotification.postShizukuReconnectFailed(applicationContext) }
+                }
+                ShizukuReconnectResult.CONNECTED -> diagnostics.record(
+                    DiagnosticLevel.INFO,
+                    DiagnosticEvent.DEVICE_BRIDGE,
+                    mapOf("result" to "ok", "reason" to "shizuku_reconnect"),
+                )
+                ShizukuReconnectResult.NOT_ELIGIBLE -> Unit
             }
             check(!recoveryCancelled.get() && RuntimeHost.controllerOrNull() === controller) { "恢复已取消" }
             RuntimeHost.startHarness(controller)
