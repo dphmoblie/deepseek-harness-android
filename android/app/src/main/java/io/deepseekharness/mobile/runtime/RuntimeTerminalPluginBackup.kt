@@ -16,8 +16,8 @@ import java.util.UUID
  * Preserves third-party packages installed through the guest terminal.
  *
  * The regular runtime preserve list deliberately excludes `profiles`: most entries there are
- * links into the old rootfs.  This helper moves only real, non-runtime package directories and
- * records the package names needed to merge the old profile into the new runtime.
+ * links into the old rootfs. This helper moves only non-runtime package directories (and a
+ * symlink's in-root target), then records the package names needed to merge the old profile.
  */
 internal object RuntimeTerminalPluginBackup {
     private const val PREFIX = "terminal-plugin-backup-"
@@ -33,7 +33,7 @@ internal object RuntimeTerminalPluginBackup {
 
     data class Handle internal constructor(val directory: File)
 
-    private data class PackageEntry(val relative: String, val name: String)
+    private data class PackageEntry(val relative: String, val name: String, val targetRelative: String? = null)
 
     fun backup(runtimeParent: File, sourceRoot: File): Handle? {
         if (!RuntimeFiles.isDirectoryNoFollow(sourceRoot)) return null
@@ -45,6 +45,7 @@ internal object RuntimeTerminalPluginBackup {
         val directory = File(runtimeParent, PREFIX + UUID.randomUUID().toString())
         ensureDirectory(directory)
         val moved = mutableListOf<PackageEntry>()
+        val movedTargets = mutableSetOf<String>()
         try {
             for (entry in candidates) {
                 val source = File(sourceRoot, entry.relative)
@@ -52,11 +53,21 @@ internal object RuntimeTerminalPluginBackup {
                 ensureInside(directory, target)
                 ensureDirectory(target.parentFile ?: throw failure("插件备份目录无效"))
                 if (!RuntimeFiles.existsNoFollow(source)) continue
-                if (!RuntimeFiles.isDirectoryNoFollow(source)) throw failure("终端插件路径类型已改变")
+                entry.targetRelative?.let { targetRelative ->
+                    if (movedTargets.add(targetRelative)) {
+                        val targetSource = File(sourceRoot, targetRelative)
+                        val targetBackup = File(directory, targetRelative)
+                        ensureInside(sourceRoot, targetSource)
+                        ensureInside(directory, targetBackup)
+                        if (!RuntimeFiles.isDirectoryNoFollow(targetSource)) throw failure("终端插件目标路径无效")
+                        ensureDirectory(targetBackup.parentFile ?: throw failure("插件备份目录无效"))
+                        Os.rename(targetSource.absolutePath, targetBackup.absolutePath)
+                    }
+                } ?: if (!RuntimeFiles.isDirectoryNoFollow(source)) throw failure("终端插件路径类型已改变")
                 Os.rename(source.absolutePath, target.absolutePath)
                 moved += entry
             }
-            writeSnapshot(directory, sourceRoot, moved.map { it.name }.distinct())
+            writeSnapshot(directory, sourceRoot, moved)
             return Handle(directory)
         } catch (error: Throwable) {
             // A failed backup must not turn into a silent loss.  Best-effort rollback leaves the
@@ -68,6 +79,14 @@ internal object RuntimeTerminalPluginBackup {
                     if (RuntimeFiles.existsNoFollow(source) && !RuntimeFiles.existsNoFollow(target)) {
                         ensureDirectory(target.parentFile ?: return@runCatching)
                         Os.rename(source.absolutePath, target.absolutePath)
+                    }
+                    entry.targetRelative?.let { targetRelative ->
+                        val targetSource = File(directory, targetRelative)
+                        val targetBackup = File(sourceRoot, targetRelative)
+                        if (RuntimeFiles.existsNoFollow(targetSource) && !RuntimeFiles.existsNoFollow(targetBackup)) {
+                            ensureDirectory(targetBackup.parentFile ?: return@runCatching)
+                            Os.rename(targetSource.absolutePath, targetBackup.absolutePath)
+                        }
                     }
                 }
             }
@@ -85,6 +104,7 @@ internal object RuntimeTerminalPluginBackup {
             return 0
         }
         val moved = mutableListOf<PackageEntry>()
+        val movedTargets = mutableSetOf<String>()
         try {
             for (entry in entries) {
                 val source = File(directory, entry.relative)
@@ -93,6 +113,17 @@ internal object RuntimeTerminalPluginBackup {
                 ensureInside(targetRoot, target)
                 if (RuntimeFiles.existsNoFollow(target)) throw failure("终端插件与新运行时冲突：${entry.name}")
                 ensureDirectory(target.parentFile ?: throw failure("插件回填路径无效"))
+                entry.targetRelative?.let { targetRelative ->
+                    if (movedTargets.add(targetRelative)) {
+                        val targetSource = File(directory, targetRelative)
+                        val targetRestore = File(targetRoot, targetRelative)
+                        ensureInside(directory, targetSource)
+                        ensureInside(targetRoot, targetRestore)
+                        if (RuntimeFiles.existsNoFollow(targetRestore)) throw failure("终端插件依赖与新运行时冲突：${entry.name}")
+                        ensureDirectory(targetRestore.parentFile ?: throw failure("插件回填路径无效"))
+                        Os.rename(targetSource.absolutePath, targetRestore.absolutePath)
+                    }
+                }
                 Os.rename(source.absolutePath, target.absolutePath)
                 moved += entry
             }
@@ -107,6 +138,14 @@ internal object RuntimeTerminalPluginBackup {
                     if (RuntimeFiles.existsNoFollow(source) && !RuntimeFiles.existsNoFollow(target)) {
                         ensureDirectory(target.parentFile ?: return@runCatching)
                         Os.rename(source.absolutePath, target.absolutePath)
+                    }
+                    entry.targetRelative?.let { targetRelative ->
+                        val targetSource = File(targetRoot, targetRelative)
+                        val targetBackup = File(directory, targetRelative)
+                        if (RuntimeFiles.existsNoFollow(targetSource) && !RuntimeFiles.existsNoFollow(targetBackup)) {
+                            ensureDirectory(targetBackup.parentFile ?: return@runCatching)
+                            Os.rename(targetSource.absolutePath, targetBackup.absolutePath)
+                        }
                     }
                 }
             }
@@ -142,30 +181,61 @@ internal object RuntimeTerminalPluginBackup {
                 val children = item.listFiles() ?: continue
                 for (child in children.sortedBy { it.name }) {
                     val name = item.name + "/" + child.name
-                    if (isUserPackage(name, child)) output += PackageEntry("$modulesRelative/$name", name)
+                    packageEntry(root, modulesRelative, name, child)?.let(output::add)
                 }
-            } else if (isUserPackage(item.name, item)) {
-                output += PackageEntry("$modulesRelative/${item.name}", item.name)
+            } else {
+                packageEntry(root, modulesRelative, item.name, item)?.let(output::add)
             }
         }
     }
 
-    private fun isUserPackage(name: String, file: File): Boolean =
-        isAllowedUserPackageName(name) && RuntimeFiles.isDirectoryNoFollow(file)
+    private fun packageEntry(root: File, modulesRelative: String, name: String, file: File): PackageEntry? {
+        if (!isAllowedUserPackageName(name)) return null
+        if (RuntimeFiles.isDirectoryNoFollow(file)) return PackageEntry("$modulesRelative/$name", name)
+        if (!Files.isSymbolicLink(file.toPath())) return null
+        val rootCanonical = runCatching { root.canonicalFile }.getOrNull() ?: return null
+        val targetCanonical = runCatching { file.canonicalFile }.getOrNull() ?: return null
+        if (!targetCanonical.toPath().startsWith(rootCanonical.toPath())) return null
+        if (!RuntimeFiles.isDirectoryNoFollow(targetCanonical)) return null
+        val targetRelative = rootCanonical.toPath().relativize(targetCanonical.toPath()).toString().replace(File.separatorChar, '/')
+        if (targetRelative.isEmpty() || targetRelative.startsWith("../") || targetRelative == "..") return null
+        // App-managed plugins already live in the separately preserved plugin-manager area;
+        // moving their links here would create a second physical copy and split module identity.
+        if (targetRelative == "root/.dsh-mobile" || targetRelative.startsWith("root/.dsh-mobile/")) return null
+        return PackageEntry("$modulesRelative/$name", name, targetRelative)
+    }
 
     private fun isOfficial(name: String): Boolean =
         name.startsWith("@deepseek-ai/") || name == "@deepseek-harness/dsh-mobile-shizuku" ||
             name in setOf("react", "react-dom", "cordis")
 
     private fun listBackupPackages(directory: File): List<PackageEntry> {
+        val snapshot = File(directory, SNAPSHOT)
+        if (!RuntimeFiles.existsNoFollow(snapshot) || !isRegularFile(snapshot) || snapshot.length() > MAX_PROFILE_BYTES) return emptyList()
         val result = mutableListOf<PackageEntry>()
-        collectCandidates(directory, WEB_MODULES, result)
-        collectCandidates(directory, FALLBACK_MODULES, result)
+        val entries = runCatching { JSONObject(snapshot.readText(Charsets.UTF_8)).optJSONArray("entries") }.getOrNull() ?: return emptyList()
+        for (index in 0 until entries.length()) {
+            val row = entries.optJSONObject(index) ?: continue
+            val name = row.optString("name")
+            val relative = row.optString("relative")
+            val target = row.optString("targetRelative").takeIf { it.isNotEmpty() }
+            if (!isAllowedUserPackageName(name) || !relative.startsWith("root/.dsh/profiles/") || !safeRelative(relative)) continue
+            if (target != null && !safeRelative(target)) continue
+            result += PackageEntry(relative, name, target)
+            if (result.size >= MAX_PACKAGES) break
+        }
         return result
     }
 
-    private fun writeSnapshot(directory: File, sourceRoot: File, names: List<String>) {
-        val value = JSONObject().put("version", 1).put("bundles", JSONArray(names))
+    private fun writeSnapshot(directory: File, sourceRoot: File, entries: List<PackageEntry>) {
+        val names = entries.map { it.name }.distinct()
+        val savedEntries = JSONArray()
+        entries.forEach { entry ->
+            savedEntries.put(JSONObject().put("name", entry.name).put("relative", entry.relative).apply {
+                entry.targetRelative?.let { put("targetRelative", it) }
+            })
+        }
+        val value = JSONObject().put("version", 1).put("bundles", JSONArray(names)).put("entries", savedEntries)
         val profile = File(sourceRoot, PROFILE)
         if (RuntimeFiles.existsNoFollow(profile) && isRegularFile(profile) && profile.length() <= MAX_PROFILE_BYTES) {
             runCatching {
@@ -262,6 +332,10 @@ internal object RuntimeTerminalPluginBackup {
     private fun isRegularFile(file: File): Boolean = try {
         Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)
     } catch (_: Exception) { false }
+
+    private fun safeRelative(value: String): Boolean =
+        value.isNotEmpty() && !value.startsWith("/") && !value.contains('\\') &&
+            value.split('/').none { it.isEmpty() || it == "." || it == ".." }
 
     private fun removeQuietly(directory: File) {
         runCatching { RuntimeFiles.deleteTreeNoFollowFallback(directory, directory.parentFile ?: return) }
