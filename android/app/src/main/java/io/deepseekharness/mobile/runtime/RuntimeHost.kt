@@ -6,6 +6,8 @@ import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
@@ -39,17 +41,23 @@ interface RuntimeScopedResource {
  *  - 前台服务销毁：仅在没有任何插件订阅者时释放运行时与设备桥。
  *  - 两者都不再持有：调用 [MobileRuntimeController.shutdown]，语义与旧的插件销毁路径一致。
  *
- * 不变量：[controller] 要么指向可用的运行时，要么为 null；[takeControllerLocked] 先摘除
+ * 不变量：[controller] 要么指向可用的运行时，要么为 null；后台收尾开始前先摘除
  * 引用再清理，任何清理步骤抛错都不得留下「已关闭但仍被登记」的控制器——那样的句柄会让
  * 之后每一次启动都只得到 `RUNTIME_CLOSED`，界面无论重试多少次都无法恢复。
  *
- * 线程模型：本对象的状态变更与运行时关停在 [lock] 内串行完成。关停可能持续数秒，
- * 但这样可以阻止新的 acquire 与旧实例并发，避免旧实例收尾时误杀新实例或提前拆桥。
+ * 线程模型：归属变更在 [lock] 内完成；可能阻塞的关停在单线程后台执行。关停开始前会
+ * 先把控制器从可获取状态摘除，并以 [teardownPending] 拒绝同时创建第二个实例，避免
+ * 旧实例收尾时误杀新实例或提前拆桥。
  */
 object RuntimeHost {
     private val lock = ReentrantLock()
+    private val teardownExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "dsh-runtime-teardown").apply { isDaemon = true }
+    }
     private var applicationContext: Context? = null
     private var controller: MobileRuntimeController? = null
+    private var teardownPending = false
+    private var teardownStarted = false
     private var foregroundServiceActive = false
     private val sinks = CopyOnWriteArraySet<RuntimeEventSink>()
 
@@ -93,6 +101,14 @@ object RuntimeHost {
      * 已存在（例如前台服务在插件销毁期间保留下来）时复用同一实例与同一套会话。
      */
     fun acquire(context: Context, sink: RuntimeEventSink): MobileRuntimeController = lock.withLock {
+        if (teardownPending) {
+            // 在后台任务真正开始前，新页面可以取消一次尚未开始的收尾；一旦收尾已开始，
+            // 不能并发创建新控制器，否则旧控制器拆桥会误伤新实例。
+            if (teardownStarted) {
+                throw RuntimeFailure("RUNTIME_CLOSING", "本机运行时正在关闭，请稍后重试")
+            }
+            teardownPending = false
+        }
         sinks.add(sink)
         controller ?: createLocked(context)
     }
@@ -104,7 +120,7 @@ object RuntimeHost {
      * 立刻重进应用）时，旧实例的收尾不得关掉新实例正在使用的控制器。返回值仅用于测试断言。
      */
     fun detachPluginSink(sink: RuntimeEventSink): Boolean {
-        val released = lock.withLock {
+        return lock.withLock {
             sinks.remove(sink)
             if (
                 HarnessKeepAlivePolicy.shouldReleaseRuntimeOnPluginDetach(
@@ -112,12 +128,11 @@ object RuntimeHost {
                     hasOtherSubscribers = sinks.isNotEmpty(),
                 )
             ) {
-                takeControllerLocked()
+                scheduleControllerTeardownLocked()
             } else {
-                null
+                false
             }
         }
-        return released != null
     }
 
     /** 前台服务进入前台：此后插件销毁不再释放运行时。 */
@@ -127,11 +142,10 @@ object RuntimeHost {
 
     /** 前台服务销毁：仅在插件已不再订阅时释放运行时。 */
     fun detachForegroundService(): Boolean {
-        val released = lock.withLock {
+        return lock.withLock {
             foregroundServiceActive = false
-            if (sinks.isEmpty()) takeControllerLocked() else null
+            if (sinks.isEmpty()) scheduleControllerTeardownLocked() else false
         }
-        return released != null
     }
 
     /** 前台服务是否正在负责运行时（供状态快照与插件生命周期判断使用）。 */
@@ -226,10 +240,10 @@ object RuntimeHost {
 
     /** 进程级释放：仅供测试与完整拆除使用。 */
     fun shutdown() {
-        val released = lock.withLock {
+        lock.withLock {
             sinks.clear()
             foregroundServiceActive = false
-            takeControllerLocked()
+            scheduleControllerTeardownLocked()
         }
     }
 
@@ -240,42 +254,63 @@ object RuntimeHost {
     }
 
     /**
-     * 串行关停运行时，并在 Harness 停止后拆除设备桥与设备命令。
-     * 此方法只在 [lock] 内调用，确保关停期间不会创建第二个控制器。
+     * 将关停排入后台；生命周期回调不能在 Host 锁内等待 Binder、进程或 PTY 退出。
      *
      * 先摘除 [controller] 引用再清理：任何清理步骤抛错都不能把「已关闭但仍被登记」的控制器
      * 留给下一次 [acquire]（真机上出现过这种状态：设备桥仍是 `reused`，而随后每一次
      * `startHarness` 都只返回 `RUNTIME_CLOSED`，且保持 24 秒不可恢复）。
      */
-    private fun takeControllerLocked(): MobileRuntimeController? {
-        val current = controller ?: return null
-        controller = null
-        try {
-            // 运行时释放时清空输出尾部登记，避免已结束会话继续驻留内存。
-            HarnessOutputTailSource.clear()
-            // 先取消桥上的等待命令，再停止 Harness；桥要保持到 guest 完全退出后再拆。
-            deviceCommands?.cancelAll()
-            current.shutdown()
-        } finally {
-            // 即使关停失败也要拆除进程级资源，避免残留的桥阻塞下一次运行时创建。
+    private fun scheduleControllerTeardownLocked(): Boolean {
+        if (controller == null || teardownPending) return false
+        teardownPending = true
+        teardownExecutor.execute {
+            // 给 Activity 重建留出一个短暂的接管窗口；若新插件已 acquire，
+            // teardownController 会看到 pending 已取消并保留原控制器。
             try {
-                releaseDeviceResourcesLocked()
+                Thread.sleep(150)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            teardownController()
+        }
+        return true
+    }
+
+    private fun teardownController() {
+        var current: MobileRuntimeController? = null
+        var bridge: RuntimeScopedResource? = null
+        lock.withLock {
+            if (!teardownPending || sinks.isNotEmpty() || foregroundServiceActive) {
+                teardownPending = false
+                return
+            }
+            teardownStarted = true
+            current = controller ?: run {
+                teardownPending = false
+                teardownStarted = false
+                return
+            }
+            controller = null
+            HarnessOutputTailSource.clear()
+            deviceCommands?.cancelAll()
+            bridge = deviceBridge
+            deviceBridge = null
+            deviceCommands = null
+        }
+        try {
+            current?.shutdown()
+        } catch (_: Throwable) {
+            // 关停是尽力而为；仍必须释放桥并允许下次重新 acquire。
+        } finally {
+            try {
+                bridge?.stop()
             } catch (_: Throwable) {
                 // 进程级资源拆除失败不阻断运行时释放。
             }
-        }
-        return current
-    }
-
-    private fun releaseDeviceResourcesLocked() {
-        deviceCommands?.cancelAll()
-        deviceCommands = null
-        val bridge = deviceBridge ?: return
-        deviceBridge = null
-        try {
-            bridge.stop()
-        } catch (_: Throwable) {
-            // 进程级资源拆除失败不阻断运行时释放。
+            lock.withLock {
+                teardownPending = false
+                teardownStarted = false
+            }
         }
     }
 }

@@ -1435,6 +1435,7 @@ button:disabled {
 
 /* 筛选钮与「清空」同属弱按钮；选中具体分类后换成主色浅底，提示列表正被筛选。 */
 .settings-search-filter {
+  grid-column: 3;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1452,6 +1453,8 @@ button:disabled {
 
 /* 搜索是唯一的主动作，用实色圆钮与「清空」的弱按钮拉开层级。 */
 .settings-search-go {
+  /* 清空按钮出现时保持位置，避免输入框失焦到点击完成之间丢失命中。 */
+  grid-column: 4;
   display: inline-flex;
   align-items: center;
   justify-content: center;

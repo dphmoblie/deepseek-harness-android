@@ -55,8 +55,9 @@ internal object SessionCatalogPayload {
     /** 标题里的控制字符：出现即丢掉整条标题（不截断、不转义，宁可显示「未命名会话」）。 */
     private val CONTROL_IN_TITLE = Regex("[\\u0000-\\u001F\\u007F]")
 
-    /** 受控错误字段：只有错误码，没有原始文本，也没有语言相关的文案（文案由壳页决定）。 */
-    fun unavailable(code: String): JSONObject = JSONObject().put("error", code)
+    /** 受控失败字段：仅返回桥接协议约定的状态和错误码，不带原始异常文本。 */
+    fun unavailable(reason: String): JSONObject =
+        JSONObject().put("status", "unavailable").put("reason", reason)
 
     /**
      * 访客进程的结果 → 回传字段。
@@ -102,6 +103,7 @@ internal object SessionCatalogPayload {
         // 有会话却一条都没通过校验 → 载荷与约定不符，按「读不到」处理，不能显示成「没有会话」。
         if (raw.length() > 0 && sessions.length() == 0) return null
         return JSONObject()
+            .put("status", "ready")
             .put("sessions", sessions)
             .put("truncated", payload.optBoolean("truncated", false) || raw.length() > sessions.length())
     }
@@ -163,7 +165,8 @@ class SessionCatalog(context: Context, private val store: RuntimeStore) {
     /**
      * 读取会话清单。
      *
-     * 返回成功载荷 `{sessions:[{id,title,updatedAt}],truncated}` 或受控错误 `{error:"<码>"}`；
+     * 返回成功载荷 `{status:"ready",sessions:[{id,title,updatedAt}],truncated}` 或受控错误
+     * `{status:"unavailable",reason:"<码>"}`；
      * 两种情况都走 `resolve`（不是 `reject`），壳页才能在不依赖异常通道的前提下
      * 把「读不到」与「没有会话」区分开。
      */

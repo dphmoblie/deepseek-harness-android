@@ -220,8 +220,8 @@ class HarnessKeepAliveService : Service() {
      * 因而在锁屏与通知栏都不会泄露用户数据。
      */
     private fun buildNotification(): Notification {
-        // 入口刻意不指向 singleTask 的 MainActivity：那会 clear-top 掉正在显示的
-        // HarnessActivity 并撤销会话凭据。KeepAliveEntryActivity 只做透明转发。
+        // 入口使用透明转发，确保已有 HarnessActivity 通过 REORDER_TO_FRONT 复用，
+        // 不创建重复页面或撤销会话凭据。
         val openApp = PendingIntent.getActivity(
             this,
             0,

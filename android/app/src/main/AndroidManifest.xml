@@ -197,8 +197,7 @@
              noHistory + excludeFromRecents：不留在任务栈与最近任务里。
              保留默认 taskAffinity：任务已存在时它直接叠在 HarnessActivity 之上，
              finish() 后对话界面原样可见，不需要重建任何 Activity。
-             刻意不指向 singleTask 的 MainActivity，避免 clear-top 销毁正在显示的
-             HarnessActivity 并连带撤销一次性会话凭据。 -->
+             使用透明转发，避免通知入口重建管理页并销毁正在显示的 HarnessActivity。 -->
         <activity
             android:name=".KeepAliveEntryActivity"
             android:excludeFromRecents="true"
@@ -210,7 +209,7 @@
             android:name=".MainActivity"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation"
             android:exported="true"
-            android:launchMode="singleTask"
+            android:launchMode="singleTop"
             android:theme="@style/AppTheme.NoActionBar"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

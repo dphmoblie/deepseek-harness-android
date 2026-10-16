@@ -20,6 +20,8 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicLong
@@ -53,6 +55,18 @@ class ShizukuRuntime(
 ) {
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
+    /**
+     * Shizuku.bindUserService() performs a synchronous Binder RPC in the caller.  Keep it
+     * off the main looper; a stuck Shizuku server must not freeze the management WebView.
+     */
+    private val bindExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "dsh-shizuku-bind").apply { isDaemon = true }
+    }
+    private val bindDispatcher = ShizukuBindDispatcher(bindExecutor)
+    /** 远程 closeAll 也可能卡在 Binder；它不能占住运行时生命周期锁。 */
+    private val closeExecutor: ExecutorService = Executors.newCachedThreadPool { runnable ->
+        Thread(runnable, "dsh-shizuku-close").apply { isDaemon = true }
+    }
     private val sessions = ConcurrentHashMap.newKeySet<String>()
     /** 客户端侧预检，配合 UserService 的信号量共同限制 PTY 资源。 */
     private val sessionCreateLock = Any()
@@ -68,8 +82,8 @@ class ShizukuRuntime(
     @Volatile private var virtualScreenOwner: Pair<IDeviceShellService, String>? = null
     @Volatile private var activeServiceGeneration = 0L
     @Volatile private var activeConnection: ServiceConnection? = null
-    @Volatile private var disconnecting = false
     private val closed = AtomicBoolean(false)
+    private val stopGate = ShizukuStopGate { disconnectBlocking() }
 
     private val serviceArgs = Shizuku.UserServiceArgs(
         ComponentName(appContext, DeviceShellUserService::class.java),
@@ -562,15 +576,45 @@ class ShizukuRuntime(
     }
 
     fun closeAllAndWait(timeoutMillis: Long = 4_000) {
-        val current = service
-        if (current != null) {
-            try {
-                current.closeAll()
-            } catch (_: RemoteException) {
-                service = null
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis.coerceAtLeast(1))
+        val current = service ?: run {
+            while (sessions.isNotEmpty() && System.nanoTime() < deadline) {
+                try {
+                    Thread.sleep(20)
+                } catch (error: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw RuntimeFailure("TERMINAL_STOP_INTERRUPTED", "等待设备 Shell 关闭时被中断", error)
+                }
+            }
+            if (sessions.isNotEmpty()) failSessions(255)
+            return
+        }
+        run {
+            val closeTask = try {
+                closeExecutor.submit {
+                    try {
+                        current.closeAll()
+                    } catch (_: RemoteException) {
+                        service = null
+                    }
+                }
+            } catch (_: Throwable) {
+                null
+            }
+            if (closeTask != null) {
+                try {
+                    val remaining = (deadline - System.nanoTime()).coerceAtLeast(1)
+                    closeTask.get(remaining, TimeUnit.NANOSECONDS)
+                } catch (_: TimeoutException) {
+                    // Binder 调用无法可靠中断；放弃等待并让会话回收路径继续。
+                } catch (error: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw RuntimeFailure("TERMINAL_STOP_INTERRUPTED", "等待设备 Shell 关闭时被中断", error)
+                } catch (_: java.util.concurrent.ExecutionException) {
+                    service = null
+                }
             }
         }
-        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
         while (sessions.isNotEmpty() && System.nanoTime() < deadline) {
             try {
                 Thread.sleep(20)
@@ -583,7 +627,10 @@ class ShizukuRuntime(
     }
 
     fun disconnect() {
-        disconnecting = true
+        stopGate.await()
+    }
+
+    private fun disconnectBlocking() {
         var failure: RuntimeFailure? = null
         virtualScreenOwner?.let {
             try {
@@ -616,29 +663,11 @@ class ShizukuRuntime(
         } catch (error: RuntimeFailure) {
             if (failure == null) failure = error
         }
-        val unbound = CountDownLatch(1)
-        val unbind = Runnable {
-            try {
-                if (connection != null) Shizuku.unbindUserService(serviceArgs, connection, true)
-            } catch (_: Throwable) {
-                // Binding may already be gone after service death or permission revocation.
-            } finally {
-                unbound.countDown()
-            }
-        }
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            unbind.run()
-        } else if (!mainHandler.post(unbind)) {
-            unbound.countDown()
-            failure = failure ?: RuntimeFailure("SHIZUKU_UNBIND_FAILED", "无法请求停止 Shizuku 用户服务")
-        }
+        // 此方法只在清理工作线程运行，解绑同样留在该线程，避免远程调用阻塞主线程。
         try {
-            if (!unbound.await(2, TimeUnit.SECONDS) && failure == null) {
-                failure = RuntimeFailure("SHIZUKU_UNBIND_TIMEOUT", "等待 Shizuku 用户服务退出超时")
-            }
-        } catch (error: InterruptedException) {
-            Thread.currentThread().interrupt()
-            if (failure == null) failure = RuntimeFailure("SHIZUKU_UNBIND_INTERRUPTED", "等待 Shizuku 用户服务退出被中断", error)
+            if (connection != null) Shizuku.unbindUserService(serviceArgs, connection, true)
+        } catch (_: Throwable) {
+            // Binding may already be gone after service death or permission revocation.
         }
         service = null
         synchronized(connectionFutureLock) {
@@ -661,7 +690,6 @@ class ShizukuRuntime(
                     // The old UserService binder has already died.
                 }
             }
-            disconnecting = false
         }
         failure?.let { throw it }
     }
@@ -676,42 +704,60 @@ class ShizukuRuntime(
         }
         Shizuku.removeBinderReceivedListener(binderReceivedListener)
         Shizuku.removeBinderDeadListener(binderDeadListener)
+        bindDispatcher.shutdown()
+        bindExecutor.shutdownNow()
+        closeExecutor.shutdownNow()
         failure?.let { throw it }
     }
 
     private fun requireService(permitted: () -> Boolean = { true }, waitForBinder: Boolean = true): IDeviceShellService {
-        if (disconnecting) throw RuntimeFailure("SHIZUKU_DISCONNECTING", "Shizuku 用户服务正在停止")
+        if (stopGate.isStopping()) throw RuntimeFailure("SHIZUKU_DISCONNECTING", "Shizuku 用户服务正在停止")
         if (waitForBinder) awaitBinder()
         else if (!tryPingBinder()) throw RuntimeFailure("SHIZUKU_BINDER_UNAVAILABLE", "Shizuku 服务不可用")
+        var bindingGeneration = 0L
+        var bindingConnection: ServiceConnection? = null
         val future = synchronized(connectionFutureLock) {
             if (!permitted()) throw RuntimeFailure("DEVICE_BRIDGE_STOPPED", "设备桥已停止")
-            if (disconnecting) throw RuntimeFailure("SHIZUKU_DISCONNECTING", "Shizuku 用户服务正在停止")
+            if (stopGate.isStopping()) throw RuntimeFailure("SHIZUKU_DISCONNECTING", "Shizuku 用户服务正在停止")
+            bindingGeneration = activeServiceGeneration
+            bindingConnection = activeConnection
             liveService()?.let { return it }
             connectionFuture?.takeUnless { it.isDone } ?: CompletableFuture<IDeviceShellService>().also { created ->
                 val generation = serviceGeneration.incrementAndGet()
                 val connection = serviceConnection(generation)
+                bindingGeneration = generation
+                bindingConnection = connection
                 activeServiceGeneration = generation
                 activeConnection = connection
                 connectionFuture = created
-                val posted = mainHandler.post {
-                    if (!permitted() || !isActiveConnection(generation, connection)) {
-                        created.completeExceptionally(IllegalStateException("Shizuku binding was cancelled"))
-                        return@post
-                    }
-                    try {
+                val posted = bindDispatcher.submit(
+                    current = { permitted() && isActiveConnection(generation, connection) },
+                    bind = {
+                        // This is a synchronous Binder RPC; never run it on the main looper.
                         Shizuku.bindUserService(serviceArgs, connection)
-                    } catch (error: Throwable) {
-                        created.completeExceptionally(error)
-                    }
-                }
+                    },
+                    fail = created::completeExceptionally,
+                )
                 if (!posted) {
-                    created.completeExceptionally(IllegalStateException("main handler rejected Shizuku binding"))
+                    created.completeExceptionally(IllegalStateException("Shizuku bind executor rejected binding"))
                 }
             }
         }
         return try {
             future.get(SERVICE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
         } catch (error: TimeoutException) {
+            var staleConnection: ServiceConnection? = null
+            synchronized(connectionFutureLock) {
+                if (connectionFuture === future && activeServiceGeneration == bindingGeneration) {
+                    activeServiceGeneration = serviceGeneration.incrementAndGet()
+                    activeConnection = null
+                    connectionFuture = null
+                    staleConnection = bindingConnection
+                }
+            }
+            staleConnection?.let { stale ->
+                runCatching { Shizuku.unbindUserService(serviceArgs, stale, true) }
+            }
             future.completeExceptionally(error)
             throw RuntimeFailure("SHIZUKU_SERVICE_TIMEOUT", "连接 Shizuku 用户服务超时", error)
         } catch (error: InterruptedException) {
@@ -779,7 +825,7 @@ class ShizukuRuntime(
     }
 
     private fun isActiveConnection(generation: Long, connection: ServiceConnection): Boolean =
-        !disconnecting && generation == activeServiceGeneration && activeConnection === connection
+        !stopGate.isStopping() && generation == activeServiceGeneration && activeConnection === connection
 
     private fun failServiceConnection(error: Throwable, generation: Long, connection: ServiceConnection) {
         synchronized(connectionFutureLock) {

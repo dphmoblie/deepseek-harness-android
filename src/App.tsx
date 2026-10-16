@@ -655,7 +655,7 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   HARNESS_STOP_FAILED: '无法停止 Harness 进程，请重试。',
   HARNESS_STOP_TIMEOUT: 'Harness 未在限定时间内停止，请重试。',
   HARNESS_STOP_INTERRUPTED: 'Harness 停止操作被中断，请重试。',
-  SHIZUKU_UNBIND_TIMEOUT: 'Shizuku 设备服务未在限定时间内退出，请重试。',
+  SHIZUKU_UNBIND_TIMEOUT: 'Shizuku 设备服务未在限定时间内退出，请在 Shizuku 中重启服务后重试；仍无响应时请完全退出并重开本应用。',
   SHIZUKU_UNBIND_INTERRUPTED: 'Shizuku 设备服务停止操作被中断，请重试。',
   SHIZUKU_UNBIND_FAILED: '无法停止 Shizuku 设备服务，请重试。',
   SHIZUKU_DISCONNECTING: 'Shizuku 设备服务正在停止，请稍后重试。',
@@ -1562,6 +1562,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
       照抄 `ApplicationPicker` 的既有范式：不放行会被吞掉候选词，正好破坏本组件想保护的输入。 */
   const [isComposing, setIsComposing] = useState(false)
   const [category, setCategory] = useState<SettingsHomeGroup | 'all'>('all')
+  const searchInputRef = useRef<HTMLInputElement>(null)
   /** 分类芯片默认收起：换行后占 4 行，会把功能入口挤出首屏；由搜索框旁的筛选钮展开。 */
   const [filterOpen, setFilterOpen] = useState(false)
   /** 每个分组只留命中的入口；整组都没命中就连标题一起不渲染，避免空标题刷屏。 */
@@ -1572,9 +1573,11 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
   const matched = groups.reduce((total, item) => total + item.entries.length, 0)
   const searching = appliedQuery.trim() !== ''
 
-  /** 确认查找：只有这一步才动列表；查找跨分类进行，所以分类芯片同时复位。 */
+  /** 兼容原生直接写入 DOM 的输入；限制长度并同步草稿，分类同时复位。 */
   const applySearch = (value: string): void => {
-    setAppliedQuery(value.trim())
+    const nextValue = value.slice(0, 120)
+    setQuery(nextValue)
+    setAppliedQuery(nextValue.trim())
     setCategory('all')
   }
 
@@ -1618,6 +1621,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
       <div className="settings-search" role="search" aria-label={t("搜索入口")}>
         <input
           type="search"
+          ref={searchInputRef}
           value={query}
           onChange={event => setQuery(event.target.value)}
           onCompositionStart={() => setIsComposing(true)}
@@ -1628,7 +1632,12 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
           }}
           /* 失焦兜底：移动端软键盘选词或直接收起键盘时偶尔丢失 compositionend，
              不补这一条会让 `isComposing` 卡在 true，回车再也提交不了。 */
-          onBlur={() => setIsComposing(false)}
+          onBlur={event => {
+            setIsComposing(false)
+            // captureInput 可能只改 DOM；先把失焦时仍可见的文字同步回受控状态，
+            // 避免结束输入法组合时 React 重绘把它清掉。
+            setQuery(event.currentTarget.value.slice(0, 120))
+          }}
           onKeyDown={event => {
             // 组合中的 Enter 交给输入法确认候选词，不当作提交。
             if (event.key === 'Enter' && !isComposing) {
@@ -1652,7 +1661,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
           aria-expanded={filterOpen} aria-controls="settings-categories">
           <ListFilter size={18} />
         </button>
-        <button className="settings-search-go" type="button" onClick={() => applySearch(query)} aria-label={t("搜索入口")}>
+        <button className="settings-search-go" type="button" onClick={() => applySearch(searchInputRef.current?.value ?? query)} aria-label={t("搜索入口")}>
           <Search size={18} />
         </button>
       </div>
@@ -7014,8 +7023,10 @@ export function App() {
       setRuntime(next)
       // 即使原生侧没有推送阶段变化，用户主动停止也要在「上次停止」里留下记录。
       setLastStop('user')
-      // 显式停止会同时撤销前台服务。
-      setKeepAlive(await runtimeBridge.getKeepAliveState())
+      // 显式停止已撤销前台服务，辅助状态后台回填，不占用操作按钮。
+      void runtimeBridge.getKeepAliveState()
+        .then(setKeepAlive)
+        .catch(() => { /* 保留上一次已知状态。 */ })
       setActiveView('settings')
     }, t("运行环境已停止"))
   }, [run, setActiveView])
