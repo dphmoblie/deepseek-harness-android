@@ -67,7 +67,7 @@ class ShizukuRuntime(
     @Volatile private var virtualScreenOwner: Pair<IDeviceShellService, String>? = null
     @Volatile private var activeServiceGeneration = 0L
     @Volatile private var activeConnection: ServiceConnection? = null
-    @Volatile private var disconnecting = false
+    private val stopGate = ShizukuStopGate { disconnectBlocking() }
 
     private val serviceArgs = Shizuku.UserServiceArgs(
         ComponentName(appContext, DeviceShellUserService::class.java),
@@ -571,7 +571,10 @@ class ShizukuRuntime(
     }
 
     fun disconnect() {
-        disconnecting = true
+        stopGate.await()
+    }
+
+    private fun disconnectBlocking() {
         var failure: RuntimeFailure? = null
         virtualScreenOwner?.let {
             try {
@@ -604,29 +607,11 @@ class ShizukuRuntime(
         } catch (error: RuntimeFailure) {
             if (failure == null) failure = error
         }
-        val unbound = CountDownLatch(1)
-        val unbind = Runnable {
-            try {
-                if (connection != null) Shizuku.unbindUserService(serviceArgs, connection, true)
-            } catch (_: Throwable) {
-                // Binding may already be gone after service death or permission revocation.
-            } finally {
-                unbound.countDown()
-            }
-        }
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            unbind.run()
-        } else if (!mainHandler.post(unbind)) {
-            unbound.countDown()
-            failure = failure ?: RuntimeFailure("SHIZUKU_UNBIND_FAILED", "无法请求停止 Shizuku 用户服务")
-        }
+        // 此方法只在清理工作线程运行，解绑同样留在该线程，避免远程调用阻塞主线程。
         try {
-            if (!unbound.await(2, TimeUnit.SECONDS) && failure == null) {
-                failure = RuntimeFailure("SHIZUKU_UNBIND_TIMEOUT", "等待 Shizuku 用户服务退出超时")
-            }
-        } catch (error: InterruptedException) {
-            Thread.currentThread().interrupt()
-            if (failure == null) failure = RuntimeFailure("SHIZUKU_UNBIND_INTERRUPTED", "等待 Shizuku 用户服务退出被中断", error)
+            if (connection != null) Shizuku.unbindUserService(serviceArgs, connection, true)
+        } catch (_: Throwable) {
+            // Binding may already be gone after service death or permission revocation.
         }
         service = null
         synchronized(connectionFutureLock) {
@@ -649,7 +634,6 @@ class ShizukuRuntime(
                     // The old UserService binder has already died.
                 }
             }
-            disconnecting = false
         }
         failure?.let { throw it }
     }
@@ -667,11 +651,11 @@ class ShizukuRuntime(
     }
 
     private fun requireService(permitted: () -> Boolean = { true }): IDeviceShellService {
-        if (disconnecting) throw RuntimeFailure("SHIZUKU_DISCONNECTING", "Shizuku 用户服务正在停止")
+        if (stopGate.isStopping()) throw RuntimeFailure("SHIZUKU_DISCONNECTING", "Shizuku 用户服务正在停止")
         awaitBinder()
         val future = synchronized(connectionFutureLock) {
             if (!permitted()) throw RuntimeFailure("DEVICE_BRIDGE_STOPPED", "设备桥已停止")
-            if (disconnecting) throw RuntimeFailure("SHIZUKU_DISCONNECTING", "Shizuku 用户服务正在停止")
+            if (stopGate.isStopping()) throw RuntimeFailure("SHIZUKU_DISCONNECTING", "Shizuku 用户服务正在停止")
             liveService()?.let { return it }
             connectionFuture?.takeUnless { it.isDone } ?: CompletableFuture<IDeviceShellService>().also { created ->
                 val generation = serviceGeneration.incrementAndGet()
@@ -765,7 +749,7 @@ class ShizukuRuntime(
     }
 
     private fun isActiveConnection(generation: Long, connection: ServiceConnection): Boolean =
-        !disconnecting && generation == activeServiceGeneration && activeConnection === connection
+        !stopGate.isStopping() && generation == activeServiceGeneration && activeConnection === connection
 
     private fun failServiceConnection(error: Throwable, generation: Long, connection: ServiceConnection) {
         synchronized(connectionFutureLock) {

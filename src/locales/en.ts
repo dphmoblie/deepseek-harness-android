@@ -932,7 +932,7 @@ export const english: Readonly<Record<string, string>> = {
   "无法停止 Harness 进程，请重试。": "Unable to stop the Harness process. Please retry.",
   "Harness 未在限定时间内停止，请重试。": "Harness did not stop within the time limit. Please retry.",
   "Harness 停止操作被中断，请重试。": "Stopping Harness was interrupted. Please retry.",
-  "Shizuku 设备服务未在限定时间内退出，请重试。": "The Shizuku device service did not stop within the time limit. Please retry.",
+  "Shizuku 设备服务未在限定时间内退出，请在 Shizuku 中重启服务后重试；仍无响应时请完全退出并重开本应用。": "The Shizuku device service did not stop in time. Restart the service in Shizuku and retry. If it still does not respond, fully close and reopen this app.",
   "Shizuku 设备服务停止操作被中断，请重试。": "Stopping the Shizuku device service was interrupted. Please retry.",
   "无法停止 Shizuku 设备服务，请重试。": "Unable to stop the Shizuku device service. Please retry.",
   "Shizuku 设备服务正在停止，请稍后重试。": "The Shizuku device service is stopping. Please try again shortly.",

@@ -1,5 +1,11 @@
 package io.deepseekharness.mobile.shizuku
 
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.FutureTask
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+
 /**
  * Shizuku 状态读取闸门：同一时刻只允许一次读取在途。
  *
@@ -11,6 +17,7 @@ package io.deepseekharness.mobile.shizuku
  * 逐个占满，整个运行时跟着僵住。
  *
  * 这里的取舍：
+ *  - 首次读取也在独立线程执行，调用方最多等待 250ms；超时不会取消仍在途的读取；
  *  - 已有读取在途时**不再发起新的 binder 调用**：直接返回上一次成功读取的结果；
  *  - 连一次成功读取都还没有时返回 [fallback]（只查「Shizuku 是否安装」，完全不碰 binder），
  *    界面此时按「未就绪」显示，用户仍能点「打开 Shizuku」去重启服务；
@@ -24,7 +31,13 @@ package io.deepseekharness.mobile.shizuku
 internal class ShizukuStateCache(
     private val read: () -> ShizukuState,
     private val fallback: () -> ShizukuState,
+    private val readTimeoutMillis: Long = 250,
 ) {
+    companion object {
+        // Binder 不保证响应中断：进程级限额避免服务反复重连时累积挂起的读取线程。
+        private val readerSlots = Semaphore(2)
+    }
+
     private val lock = Any()
     private var reading = false
 
@@ -52,25 +65,49 @@ internal class ShizukuStateCache(
         // 上一次结果与兜底都在锁外算：兜底虽然只查「是否安装」，也仍是一次 PackageManager 调用，
         // 把它放进锁里就等于让后面所有调用一起排队（正是这个类要避免的事）。
         if (!startRead) return previous ?: fallback()
-        return try {
-            val fresh = read()
-            synchronized(lock) {
-                if (generation == startedAt) {
-                    cached = fresh
-                    reading = false
-                }
-            }
-            fresh
-        } catch (error: Throwable) {
-            // 失败也必须放开闸门：否则一次异常会永久堵死后续所有状态读取。
-            // 但同样只在自己这一代里放开——若期间已被 [invalidate] 作废，闸门已由它放开，
-            // 这里再动就会清掉新一代正在进行的读取标记。
+        if (!readerSlots.tryAcquire()) {
             synchronized(lock) {
                 if (generation == startedAt) reading = false
             }
+            return cachedOrFallback()
+        }
+        val task = FutureTask {
+            try {
+                val fresh = read()
+                synchronized(lock) {
+                    if (generation == startedAt) cached = fresh
+                }
+                fresh
+            } finally {
+                synchronized(lock) {
+                    if (generation == startedAt) reading = false
+                }
+                readerSlots.release()
+            }
+        }
+        try {
+            Thread(task, "dsh-shizuku-state").apply { isDaemon = true }.start()
+        } catch (error: Throwable) {
+            synchronized(lock) {
+                if (generation == startedAt) reading = false
+            }
+            readerSlots.release()
             throw error
         }
+        return try {
+            val fresh = task.get(readTimeoutMillis, TimeUnit.MILLISECONDS)
+            if (synchronized(lock) { generation == startedAt }) fresh else cachedOrFallback()
+        } catch (_: TimeoutException) {
+            cachedOrFallback()
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            cachedOrFallback()
+        } catch (error: ExecutionException) {
+            throw error.cause ?: error
+        }
     }
+
+    private fun cachedOrFallback(): ShizukuState = synchronized(lock) { cached } ?: fallback()
 
     /**
      * 作废在途读取与缓存读数。
