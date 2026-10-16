@@ -334,7 +334,6 @@ class MobileRuntimePlugin : Plugin() {
 
     companion object {
         private const val DEVICE_COMMAND_TIMEOUT_MS = 60_000L
-        private const val DESTROY_WAIT_SECONDS = 10L
         // 更新链路的保序锁：频道切换、版本检查、下载、安装之间必须串行；
         // 但慢网检查/下载是长操作，不能占用运行时启停的 auditedOperationLock——
         // 否则用户在更新中途想重启运行时会被锁住。两把锁分离互不影响。
@@ -518,19 +517,13 @@ class MobileRuntimePlugin : Plugin() {
             result = AuditResult.FAILED
         }
         try {
+            // Host 只摘除所有权并把可能阻塞的 Binder/进程清理放到后台；销毁回调不能等待
+            // 终端或 Shizuku 在主线程退出，否则返回管理页会冻结数秒甚至触发 ANR。
             RuntimeHost.detachPluginSink(eventSink)
         } catch (_: Throwable) {
             result = AuditResult.FAILED
             // 销毁流程继续；不记录终端数据或进程细节。
         } finally {
-            try {
-                if (!executor.awaitTermination(DESTROY_WAIT_SECONDS, TimeUnit.SECONDS)) {
-                    result = AuditResult.FAILED
-                }
-            } catch (_: InterruptedException) {
-                Thread.currentThread().interrupt()
-                result = AuditResult.FAILED
-            }
             try {
                 super.handleOnDestroy()
             } catch (error: Throwable) {

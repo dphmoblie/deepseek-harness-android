@@ -37,7 +37,7 @@ class OverlayBallPolicyTest {
     fun opensManagementDirectlyOnlyWhenNoConversationIsAlive() {
         // 对话不在：直接打开管理界面，任务栈里没有会被 clear-top 清掉的受害者。
         assertTrue(OverlayBallPolicy.canOpenManagementDirectly(harnessActivityAlive = false))
-        // 对话存活：启动 singleTask 的 MainActivity 会销毁它并撤销一次性会话凭据，
+        // 对话存活：启动会清栈的 MainActivity 会销毁它并撤销一次性会话凭据，
         // 只能改走转发入口（与悬浮球短按、常驻通知一致）。
         assertFalse(OverlayBallPolicy.canOpenManagementDirectly(harnessActivityAlive = true))
     }

@@ -713,7 +713,10 @@ test('background keep-alive delegates the shared runtime and never claims to def
     runtimeHost,
     /HarnessKeepAlivePolicy\.shouldReleaseRuntimeOnPluginDetach\(\s*foregroundServiceActive = foregroundServiceActive,\s*hasOtherSubscribers = sinks\.isNotEmpty\(\),\s*\)/,
   )
-  assert.match(runtimeHost, /if \(sinks\.isEmpty\(\)\) takeControllerLocked\(\) else null/)
+  assert.match(runtimeHost, /if \(sinks\.isEmpty\(\)\) scheduleControllerTeardownLocked\(\) else false/)
+  assert.match(runtimeHost, /teardownExecutor: ExecutorService/)
+  assert.match(runtimeHost, /current\??\.shutdown\(\)/)
+  assert.doesNotMatch(runtimeHost, /private fun takeControllerLocked\(\)/)
 
   // 划掉最近任务不得结束服务，且服务不执行 Shell 命令、不接触凭据。
   const onTaskRemovedBody = keepAliveService.match(
@@ -785,14 +788,11 @@ test('keep-alive keeps the device bridge process-scoped and the notification ent
 
   // 回归 4：桥必须与运行时同生命周期持有与拆除。
   assert.match(runtimeHost, /interface RuntimeScopedResource/)
-  assert.match(runtimeHost, /private fun releaseDeviceResourcesLocked\(\)/)
-  // 顺序也是契约（2026-10-02 收紧）：先摘引用、再清理，且进程级资源拆除放在 finally 里。
-  // 旧顺序是「清理完再 `controller = null`」，任意一步抛错都会留下「已关闭但仍被登记」的
-  // 控制器——之后每一次 acquire 都拿到死句柄，界面只能一直报 RUNTIME_CLOSED。
-  assert.match(
-    runtimeHost,
-    /val current = controller \?: return null\s*controller = null\s*try \{[\s\S]*?current\.shutdown\(\)[\s\S]*?\} finally \{[\s\S]*?releaseDeviceResourcesLocked\(\)[\s\S]*?return current/,
-  )
+  // 关停必须摘除所有权后在后台执行，避免 Activity 生命周期线程等待 Binder/进程退出。
+  assert.match(runtimeHost, /teardownExecutor: ExecutorService/)
+  assert.match(runtimeHost, /private fun scheduleControllerTeardownLocked\(\)/)
+  assert.match(runtimeHost, /current\??\.shutdown\(\)/)
+  assert.doesNotMatch(runtimeHost, /private fun takeControllerLocked\(\)/)
   assert.match(deviceBridge, /\) : RuntimeScopedResource \{/)
   assert.match(deviceBridge, /override fun stop\(\)/)
 
@@ -814,7 +814,7 @@ test('keep-alive keeps the device bridge process-scoped and the notification ent
   assert.ok(stopSelfAt >= 0, 'onStartCommand must be able to end the service')
   assert.ok(foregroundAt < stopSelfAt, 'startForegroundCompat() must run before stopSelf()')
 
-  // 回归 6：通知入口不得指向 singleTask 的 MainActivity。
+  // 回归 6：通知入口不得直接重建 MainActivity。
   // 否则任务栈 [MainActivity, HarnessActivity] 会触发 clear-top 销毁对话界面，
   // 并连带撤销一次性会话凭据，用户再也回不到对话。
   assert.doesNotMatch(keepAliveService, /Intent\(this, MainActivity::class\.java\)/)
@@ -826,6 +826,8 @@ test('keep-alive keeps the device bridge process-scoped and the notification ent
   assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_REORDER_TO_FRONT/)
   assert.match(entryActivity, /Intent\.FLAG_ACTIVITY_SINGLE_TOP/)
   assert.doesNotMatch(entryActivity, /Intent\.FLAG_ACTIVITY_CLEAR_TOP/)
+  // 返回管理页使用 REORDER_TO_FRONT；MainActivity 不能以清栈模式销毁 HarnessActivity。
+  assert.match(manifest, /android:name="\.MainActivity"[\s\S]*?android:launchMode="singleTop"/)
 
   // 保存其他设置时不得用旧页面快照覆盖悬浮球菜单刚写入的关闭状态。
   assert.match(nativePlugin, /optionalOverlayBallEnabled\(call\.data\)/)

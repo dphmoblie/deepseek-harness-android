@@ -528,7 +528,7 @@ class OverlayBallService : Service() {
      * 短按：经 [PendingIntent] 转到 [KeepAliveEntryActivity]。
      *
      * 不直接 startActivity —— Android 10+ 限制后台启动 Activity，从 overlay 直接起
-     * 会被静默丢弃。也不指向 singleTask 的 MainActivity：那会 clear-top 掉正在显示的
+     * 会被静默丢弃。也不直接重建管理页：那会破坏正在显示的
      * HarnessActivity 并撤销会话凭据。
      */
     private fun openHarness() {
@@ -1387,15 +1387,15 @@ class OverlayBallService : Service() {
     /**
      * 「回到应用」：把应用带回前台。
      *
-     * 之所以要分两种情况，是因为 `MainActivity` 是 `singleTask`：对话界面存活时启动它会
-     * 触发 clear-top，把后台的 `HarnessActivity` 连同一次性会话凭据一起销毁
+     * 之所以要分两种情况，是因为对话界面存活时必须先把已有对话页带回前台，避免
+     * 重建页面并连同一次性会话凭据一起销毁
      * （[KeepAliveEntryActivity] 的 KDoc 记录了同一失败模式）。也没有启动标志能绕开：
-     * `singleTask` 实例只能是任务栈根，无法在不清理栈上活动的前提下被带到
+     * 旧的清栈模式实例只能是任务栈根，无法在不清理栈上活动的前提下被带到
      * `HarnessActivity` 之上。因此对话存活时退回到与短按相同的转发入口 ——
      * [KeepAliveEntryActivity] 正是为绕开这一点而存在的 —— 把应用带回前台，
      * 销毁只由用户在对话界面里主动发起。
      *
-     * 对话不在时，任务栈里没有会被 clear-top 清掉的受害者，所以直接启动管理界面。
+     * 对话不在时，直接启动管理界面。
      */
     private fun returnToApp() {
         if (!OverlayBallPolicy.canOpenManagementDirectly(
@@ -1406,7 +1406,9 @@ class OverlayBallService : Service() {
             return
         }
         val intent = Intent(this, MainActivity::class.java).addFlags(
-            Intent.FLAG_ACTIVITY_NEW_TASK,
+            Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP,
         )
         runCatching { startActivity(intent) }
     }

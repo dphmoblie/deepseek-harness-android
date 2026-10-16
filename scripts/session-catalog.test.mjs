@@ -1,7 +1,7 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import fs, { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -196,6 +196,31 @@ test('会话根目录不存在时回空列表（未写过会话 ≠ 读不到）
   const missing = join(tmpdir(), `session-catalog-missing-${Date.now()}`)
   const report = await buildCatalog(50, missing)
   assert.deepEqual(report, { sessions: [], truncated: false })
+})
+
+test('部分项目目录不可读时标记 truncated，避免静默遗漏会话', async () => {
+  const root = createRoot()
+  addSession(root, { project: '-readable-project', directory: 'session-visible', lines: [title('可见会话')] })
+  const blocked = join(root, '-blocked-project')
+  mkdirSync(blocked)
+
+  // 用可控的 EACCES 模拟访客内的权限失败，避免测试依赖 chmod/运行用户。
+  const originalReaddirSync = fs.readdirSync
+  fs.readdirSync = function patchedReaddirSync(target, ...args) {
+    if (target === blocked) {
+      const error = new Error('permission denied')
+      error.code = 'EACCES'
+      throw error
+    }
+    return originalReaddirSync.call(this, target, ...args)
+  }
+  try {
+    const report = await buildCatalog(50, root)
+    assert.deepEqual(report.sessions.map((session) => session.id), ['session-visible'])
+    assert.equal(report.truncated, true)
+  } finally {
+    fs.readdirSync = originalReaddirSync
+  }
 })
 
 test('目录名可逆解码，异常目录名一律拒绝', async () => {

@@ -95,11 +95,10 @@ object OverlayBallPolicy {
         viewPresent && viewAttached
 
     /**
-     * 「回到应用」能否直接启动管理界面（`singleTask` 的 `MainActivity`）。
+     * 「回到应用」能否直接启动管理界面。
      *
-     * 对话界面（`HarnessActivity`）存活时不能：启动 `MainActivity` 会触发 clear-top，
-     * 把它连同一次性会话凭据一起销毁。对话不在时任务栈里没有可被清掉的受害者，
-     * 可以直接打开管理界面。
+     * 对话界面（`HarnessActivity`）存活时不能：此时应先回到已有对话页。
+     * 对话不在时可以直接打开管理界面。
      */
     fun canOpenManagementDirectly(harnessActivityAlive: Boolean): Boolean = !harnessActivityAlive
 
