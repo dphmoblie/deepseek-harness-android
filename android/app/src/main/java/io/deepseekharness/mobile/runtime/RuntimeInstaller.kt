@@ -210,6 +210,7 @@ class RuntimeInstaller(
             // 用户显式清空运行时：中断更新遗留的用户数据暂存目录一并清理
             // （与下面删除 currentRoot/backupRoot 的语义一致）。
             cleanPreservedWorkspaces()
+            cleanPendingTerminalPluginBackups()
             // 语义同上：删除失败被改名挪到一边的 stale-* 残留也在这里一次性收回。
             // 它们和 current/previous 一样是整份 rootfs（约 960 MB 一份），仅仅删不掉而已，
             // 「重置环境」必须真的把盘上这些空间交还回来。
@@ -457,6 +458,7 @@ class RuntimeInstaller(
         // 绝不能被 cleanTransientWorkspaces 之类清理掉，只能回填或原样保留。
         currentStep = "recovery_scan"
         val preservedRoots = preservedWorkspaces()
+        val pendingTerminalPlugins = RuntimeTerminalPluginBackup.pending(store.runtimeParent)
         val currentRoot = RuntimeFiles.existsNoFollow(store.currentRoot)
         val currentManifest = RuntimeFiles.existsNoFollow(store.currentManifest)
         val backupRoot = RuntimeFiles.existsNoFollow(store.backupRoot)
@@ -466,7 +468,7 @@ class RuntimeInstaller(
                 currentRoot && currentManifest -> {
                     // 存在遗留 preserve-* 时不得删除 backupRoot（实现约定 5）：回填可能尚未完成，
                     // 旧根目录是排查与人工取回用户数据的最后依据。
-                    if (preservedRoots.isEmpty()) {
+                    if (preservedRoots.isEmpty() && pendingTerminalPlugins.isEmpty()) {
                         currentStep = "recovery_drop_backup"
                         retireIfPresent(store.backupManifest, "backup_manifest")
                         retireIfPresent(store.backupRoot, "backup_root")
@@ -503,6 +505,8 @@ class RuntimeInstaller(
         // 回填必须在上面的分支把 backupRoot 恢复成 currentRoot 之后进行。
         currentStep = "restore_preserved"
         restorePreservedWorkspaces(preservedRoots)
+        currentStep = "restore_terminal_plugins"
+        restorePendingTerminalPlugins()
         currentStep = "retained_slot"
         reconcileRetainedSlot()
     }
@@ -566,9 +570,11 @@ class RuntimeInstaller(
         )
         val moved = mutableListOf<String>()
         val progress = RuntimePreservePolicy.PromotionProgress()
+        var terminalBackup: RuntimeTerminalPluginBackup.Handle? = null
 
         // 阶段一：移出用户数据。必须在旧根目录改名之前完成，否则无法再区分用户数据与运行时产物。
         try {
+            terminalBackup = RuntimeTerminalPluginBackup.backup(store.runtimeParent, store.currentRoot)
             movePreservedItems(store.currentRoot, preservedRoot, moved)
         } catch (error: Throwable) {
             // 半途失败：把已移出的数据放回旧根目录；放不回的原样留在 preserve-*，绝不删除。
@@ -577,8 +583,9 @@ class RuntimeInstaller(
             } catch (_: Exception) {
                 // 放回失败时数据仍在 preserve-* 目录里，比让它随失败一起消失安全得多。
             }
+            terminalBackup?.let { runCatching { RuntimeTerminalPluginBackup.restore(it, store.currentRoot, strict = false) } }
             throw error as? RuntimeFailure
-                ?: RuntimeFailure("RUNTIME_PRESERVE_FAILED", "无法移出旧运行时中的用户数据", error)
+                ?: RuntimeFailure("RUNTIME_PLUGIN_BACKUP_FAILED", "无法备份旧运行时中的终端插件", error)
         }
 
         // 阶段二：备份旧运行时，提升新运行时。
@@ -596,7 +603,7 @@ class RuntimeInstaller(
             Os.rename(sourceManifest.absolutePath, store.currentManifest.absolutePath)
             progress.manifestPromoted = true
         } catch (error: Throwable) {
-            rollbackPromotion(progress, preservedRoot, moved)
+            rollbackPromotion(progress, preservedRoot, moved, terminalBackup)
             throw error as? RuntimeFailure
                 ?: RuntimeFailure("RUNTIME_PROMOTION_FAILED", "无法启用新运行时", error)
         }
@@ -604,6 +611,7 @@ class RuntimeInstaller(
         // 阶段三：回填用户数据。真冲突时抛受控错误码，并保留 backupRoot 供排查或人工取回。
         val unplaced = mutableListOf<String>()
         unplaced += restorePreservedDirectory(preservedRoot, store.currentRoot, strict = true)
+        terminalBackup?.let { RuntimeTerminalPluginBackup.restore(it, store.currentRoot, strict = true) }
         // 中断遗留、且恢复流程当时没有可回填根目录的暂存目录，由新根目录一并接手。
         for (leftover in preservedWorkspaces()) {
             if (leftover.absolutePath == preservedRoot.absolutePath) continue
@@ -666,6 +674,7 @@ class RuntimeInstaller(
         progress: RuntimePreservePolicy.PromotionProgress,
         preservedRoot: File,
         moved: List<String>,
+        terminalBackup: RuntimeTerminalPluginBackup.Handle?,
     ) {
         val plan = RuntimePreservePolicy.rollbackPlan(progress, moved.size)
         try {
@@ -684,13 +693,24 @@ class RuntimeInstaller(
         } catch (_: ErrnoException) {
             // Recovery remains confined to the private runtime parent and is retried by reset/install.
         }
-        // 旧根目录恢复成功后，把用户数据放回它们原来的位置。
-        if (!plan.restorePreservedItems) return
+        // 旧根目录恢复成功后，把用户数据和终端插件放回它们原来的位置。
+        if (RuntimeFiles.isDirectoryNoFollow(store.currentRoot)) {
+            if (plan.restorePreservedItems) {
+                try {
+                    restorePreservedDirectory(preservedRoot, store.currentRoot, strict = false)
+                } catch (_: Exception) {
+                    // 回滚已经尽力：暂存目录留在原处，用户数据不会消失，由下次安装或重置处理。
+                }
+            }
+            terminalBackup?.let { runCatching { RuntimeTerminalPluginBackup.restore(it, store.currentRoot, strict = false) } }
+        }
+    }
+
+    /** 回放设备重启/进程中断留下的终端插件备份；冲突时保留备份并让上层显示受控错误。 */
+    private fun restorePendingTerminalPlugins() {
         if (!RuntimeFiles.isDirectoryNoFollow(store.currentRoot)) return
-        try {
-            restorePreservedDirectory(preservedRoot, store.currentRoot, strict = false)
-        } catch (_: Exception) {
-            // 回滚已经尽力：暂存目录留在原处，用户数据不会消失，由下次安装或重置处理。
+        for (backup in RuntimeTerminalPluginBackup.pending(store.runtimeParent)) {
+            RuntimeTerminalPluginBackup.restore(backup, store.currentRoot, strict = true)
         }
     }
 
@@ -727,6 +747,12 @@ class RuntimeInstaller(
      */
     private fun cleanPreservedWorkspaces() {
         for (directory in preservedWorkspaces()) cleanupIfPresent(directory)
+    }
+
+    private fun cleanPendingTerminalPluginBackups() {
+        for (backup in RuntimeTerminalPluginBackup.pending(store.runtimeParent)) {
+            RuntimeTerminalPluginBackup.remove(backup)
+        }
     }
 
     /**
