@@ -8,6 +8,8 @@ import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.DocumentsContract
 import android.provider.Settings
 import android.util.DisplayMetrics
@@ -112,6 +114,7 @@ import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticText
 import io.deepseekharness.mobile.shizuku.DeviceCommand
 import io.deepseekharness.mobile.shizuku.DeviceCommandResult
 import io.deepseekharness.mobile.shizuku.ShizukuState
+import io.deepseekharness.mobile.shizuku.ShizukuAutoConnect
 import io.deepseekharness.mobile.virtualscreen.VirtualScreenPolicy
 import io.deepseekharness.mobile.virtualscreen.VirtualScreenPreferences
 import io.deepseekharness.mobile.virtualscreen.VirtualScreenService
@@ -123,6 +126,7 @@ import io.deepseekharness.mobile.virtualscreen.VirtualScreenStartRequest
 import io.deepseekharness.mobile.virtualscreen.VirtualScreenTargetKind
 import io.deepseekharness.mobile.virtualscreen.putVirtualScreenStart
 import org.json.JSONObject
+import rikka.shizuku.Shizuku
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
@@ -293,6 +297,18 @@ class MobileRuntimePlugin : Plugin() {
     private val harnessStartGeneration = AtomicLong(0)
     private val auditedOperationLock = ReentrantLock()
 
+    private val shizukuAutoConnect = ShizukuAutoConnect(
+        executor = executor,
+        active = { !destroying.get() && ::controller.isInitialized },
+        // 自动检测不能持有运行时生命周期锁：异常的 Shizuku Binder 不得卡住 Harness 启动。
+        connect = { current ->
+            controller.terminals.shizuku.connectIfAuthorized(permitted = { !destroying.get() }, current = current)
+        },
+    )
+    private val shizukuBinderReceivedListener = Shizuku.OnBinderReceivedListener {
+        shizukuAutoConnect.request(binderChanged = true)
+    }
+
     /**
      * 运行时事件出口。运行时由 [RuntimeHost] 跨插件实例持有，因此这里必须是稳定的
      * 订阅者对象：插件销毁后取消订阅，运行时不会继续向已销毁的 WebView 派发事件。
@@ -420,6 +436,13 @@ class MobileRuntimePlugin : Plugin() {
             bridgeReady = false
             android.util.Log.w("dsh-runtime", "device bridge unavailable; device shell disabled")
         }
+        try {
+            // Binder 可能晚于 load 到达；监听只投递后台任务，不在主线程等待连接。
+            Shizuku.addBinderReceivedListenerSticky(shizukuBinderReceivedListener, Handler(Looper.getMainLooper()))
+        } catch (_: Throwable) {
+            // Shizuku 是可选能力；已就绪的 Binder 仍由下面的启动尝试覆盖。
+        }
+        shizukuAutoConnect.request()
         // 悬浮球可以在插件加载时恢复，keep-alive 不能：后者要求运行时确实在跑，
         // 没跑就启动只会留下一个无法解释的通知；悬浮球与运行时无关，只取决于
         // 「用户开关 + 系统权限」（syncOverlayBallService 内部判断），所以重启应用后
@@ -459,6 +482,7 @@ class MobileRuntimePlugin : Plugin() {
     override fun handleOnResume() {
         super.handleOnResume()
         if (destroying.get() || !::controller.isInitialized) return
+        shizukuAutoConnect.request()
         try {
             syncOverlayBallService(controller.store.overlayBallEnabled())
         } catch (_: Throwable) {
@@ -479,6 +503,11 @@ class MobileRuntimePlugin : Plugin() {
         harnessStartGeneration.incrementAndGet()
         recordAudit(AuditEvent.PLUGIN_DESTROY, AuditResult.STARTED)
         var result = AuditResult.SUCCEEDED
+        try {
+            Shizuku.removeBinderReceivedListener(shizukuBinderReceivedListener)
+        } catch (_: Throwable) {
+            // 可选 Binder 库失效不能阻断插件自己的资源回收。
+        }
         try {
             executor.shutdownNow()
                 .filterIsInstance<PluginTask>()

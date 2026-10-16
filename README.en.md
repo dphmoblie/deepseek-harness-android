@@ -94,7 +94,7 @@ Any OpenAI-compatible endpoint can also be configured as a custom provider (base
 Shizuku is entirely optional and is never bundled with the app:
 
 1. Install and start [Shizuku](https://shizuku.rikka.app/) yourself (via wireless debugging or however Shizuku's own documentation directs).
-2. Grant permission inside the app, then tap the explicit **Connect Shizuku** action.
+2. Grant permission inside the app. Starting or returning to the launcher automatically connects when Shizuku is running and permission is still granted; tap **Connect Shizuku** to retry a failed connection.
 3. After connecting under "Settings → Shizuku & device automation", turn on "Allow AI to call the shell". One switch stays in effect until you turn it off; there is no per-command confirmation.
 
 Once enabled, the model can use the device shell to read, write, create directories, upload and download files, and to query the processes, services and activity summaries of a given app. The shell uses Shizuku's actual Android privileges and is not equivalent to root; command bodies and output are never written to diagnostic logs. Do not let the model read or echo secrets, SMS messages, contacts, tokens or similar private data.

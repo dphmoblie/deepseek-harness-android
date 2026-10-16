@@ -23,6 +23,7 @@ import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class ShizukuState(
     val installed: Boolean,
@@ -68,6 +69,7 @@ class ShizukuRuntime(
     @Volatile private var activeServiceGeneration = 0L
     @Volatile private var activeConnection: ServiceConnection? = null
     @Volatile private var disconnecting = false
+    private val closed = AtomicBoolean(false)
 
     private val serviceArgs = Shizuku.UserServiceArgs(
         ComponentName(appContext, DeviceShellUserService::class.java),
@@ -380,6 +382,16 @@ class ShizukuRuntime(
         return readState()
     }
 
+    /** 只恢复已运行、受支持且已授权的连接；不等服务启动、不弹授权、不读取状态缓存。 */
+    fun connectIfAuthorized(permitted: () -> Boolean, current: () -> Boolean) {
+        val allowed = { !closed.get() && !Thread.currentThread().isInterrupted && permitted() }
+        if (!allowed() || !current() || !tryPingBinder()) return
+        if (Shizuku.isPreV11() || Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return
+        if (!allowed() || !current()) return
+        // 一旦开始绑定便由 UserService 的连接代次接管；首次 sticky 回调不能取消其他调用已复用的 future。
+        requireService(allowed, waitForBinder = false)
+    }
+
     fun startVirtualScreen(component: String, width: Int, height: Int, dpi: Int, owner: IBinder): org.json.JSONObject {
         requirePermission()
         io.deepseekharness.mobile.virtualscreen.VirtualScreenPolicy.component(component)
@@ -655,6 +667,7 @@ class ShizukuRuntime(
     }
 
     fun shutdown() {
+        closed.set(true)
         var failure: RuntimeFailure? = null
         try {
             disconnect()
@@ -666,9 +679,10 @@ class ShizukuRuntime(
         failure?.let { throw it }
     }
 
-    private fun requireService(permitted: () -> Boolean = { true }): IDeviceShellService {
+    private fun requireService(permitted: () -> Boolean = { true }, waitForBinder: Boolean = true): IDeviceShellService {
         if (disconnecting) throw RuntimeFailure("SHIZUKU_DISCONNECTING", "Shizuku 用户服务正在停止")
-        awaitBinder()
+        if (waitForBinder) awaitBinder()
+        else if (!tryPingBinder()) throw RuntimeFailure("SHIZUKU_BINDER_UNAVAILABLE", "Shizuku 服务不可用")
         val future = synchronized(connectionFutureLock) {
             if (!permitted()) throw RuntimeFailure("DEVICE_BRIDGE_STOPPED", "设备桥已停止")
             if (disconnecting) throw RuntimeFailure("SHIZUKU_DISCONNECTING", "Shizuku 用户服务正在停止")
@@ -680,7 +694,7 @@ class ShizukuRuntime(
                 activeConnection = connection
                 connectionFuture = created
                 val posted = mainHandler.post {
-                    if (!isActiveConnection(generation, connection)) {
+                    if (!permitted() || !isActiveConnection(generation, connection)) {
                         created.completeExceptionally(IllegalStateException("Shizuku binding was cancelled"))
                         return@post
                     }

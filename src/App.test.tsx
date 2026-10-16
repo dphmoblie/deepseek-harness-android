@@ -270,7 +270,7 @@ describe('App conversation gate', () => {
     expect(within(onboarding).queryByText(/尚未检测到模型 API Key/)).toBeNull()
   })
 
-  it('keeps Shizuku disconnected until the user explicitly reconnects it', async () => {
+  it('leaves automatic Shizuku connection to the native lifecycle', async () => {
     bridge.getShizukuState.mockResolvedValue({ ...shizuku, permission: 'granted', connected: false })
     render(<App />)
 
