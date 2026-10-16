@@ -219,8 +219,8 @@ const SETTINGS_HOME_GROUPS: { id: SettingsHomeGroup; label: string }[] = [
   { id: 'diagnostics', label: '日志与排查' },
 ]
 
-/** 入口点下去要去哪：设置二级页、外壳一级页，或者干脆不跳转（Harness 服务行本身带按钮）。 */
-type SettingsHomeTarget = { kind: 'page'; page: SettingsPage } | { kind: 'view'; view: AppView } | { kind: 'service' }
+/** 入口点下去要去哪：设置二级页，或外壳一级页。 */
+type SettingsHomeTarget = { kind: 'page'; page: SettingsPage } | { kind: 'view'; view: AppView }
 
 interface SettingsHomeEntry {
   /** 稳定标识：只用于 React key、图标与测试定位；改标题不影响它，也不参与匹配。 */
@@ -244,16 +244,7 @@ interface SettingsHomeEntry {
  * 兜底的是 `src/App.settingsHome.test.tsx` 里「切成英文后整屏入口都是英文」那条用例。
  */
 const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
-  // —— 后台：把运行环境跑起来、留在后台、跑不动时排查。
-  {
-    id: 'service',
-    group: 'runtime',
-    title: 'Harness 服务',
-    hint: '启动、停止与当前状态',
-    keywords: ['服务', '启动', '停止', '运行', 'harness', 'service', 'start', 'stop', 'run', '状态'],
-    target: { kind: 'service' },
-    icon: <Bot size={20} />,
-  },
+  // —— 后台：运行环境来源与后台保活配置；Harness 服务的启停统一在首页。
   {
     id: 'environment',
     group: 'runtime',
@@ -1544,7 +1535,6 @@ interface SettingsHomeScreenProps {
   onLaunch: () => void
   onOpenPage: (page: SettingsPage) => void
   onOpenView: (view: AppView) => void
-  onStop: () => void
 }
 
 /**
@@ -1552,7 +1542,7 @@ interface SettingsHomeScreenProps {
  *
  * 筛选只决定这一屏显示哪些入口，不改变任何行为：点下去走的是同一条路。
  */
-function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenPage, onOpenView, onStop }: SettingsHomeScreenProps) {
+function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenPage, onOpenView }: SettingsHomeScreenProps) {
   /** 过滤词只活在组件里：离开设置首页即清空，下次进来不该被上次的搜索框卡住。 */
   const [query, setQuery] = useState('')
   /** 已确认的查找词：只有点搜索图标或按回车才落地。输入过程本身不筛选——
@@ -1581,10 +1571,8 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
     setCategory('all')
   }
 
-  /** 服务行没有跳转，说明文字跟着运行状态走，所以按 id 现算；其余入口用固定说明。 */
-  const hintOf = (entry: SettingsHomeEntry): string => entry.id === 'service'
-    ? (runtime.phase === 'running' ? t("正在本机运行") : runtimeInstalled(runtime) ? t("已停止，可随时启动") : t("等待安装运行环境"))
-    : entry.id === 'environment' && runtime.updateAvailable ? t("发现内置运行环境更新")
+  /** 运行环境更新提示跟随当前状态，其余入口使用固定说明。 */
+  const hintOf = (entry: SettingsHomeEntry): string => entry.id === 'environment' && runtime.updateAvailable ? t("发现内置运行环境更新")
       : t(entry.hint)
 
   /** 右侧状态徽标：与二级页里显示的是同一个事实，不在两处各写一遍。 */
@@ -1690,20 +1678,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
           {/* 分组标题刻意不用 h1/h2：页头已经有一个「设置」，再加一个同名标题会让
               「按标题名找元素」一次命中两个（测试与读屏都受影响），分组名走 section 的 aria-label。 */}
           <p className="management-group-title">{t(group.label)}</p>
-          {entries.map(entry => (entry.target.kind === 'service' ? (
-            <div className="management-service" key={entry.id}>
-              <span className="management-icon dark">{entry.icon}</span>
-              <span className="management-copy">
-                <strong>{t(entry.title)}</strong>
-                <small>{hintOf(entry)}</small>
-              </span>
-              {runtime.phase === 'running' ? (
-                <button className="button button-danger-quiet compact-button" type="button" onClick={onStop} disabled={busy !== null}><Square size={16} />{t("停止")}</button>
-              ) : (
-                <PhaseBadge phase={runtime.phase} />
-              )}
-            </div>
-          ) : (
+          {entries.map(entry => (
             <button className="management-row" key={entry.id} type="button" onClick={() => openEntry(entry)}>
               <span className="management-icon">{entry.icon}</span>
               <span className="management-copy">
@@ -1712,7 +1687,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
               </span>
               <ChevronRight size={18} />
             </button>
-          )))}
+          ))}
         </section>
       ))}
       </div>
@@ -7477,7 +7452,7 @@ export function App() {
       case 'files':
         return <FilesScreen busy={busy} filesRoot={filesRoot} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} mailbox={mailbox} mailboxDirectory={mailboxDirectory} mailboxDirectoryReadFailed={mailboxDirectoryReadFailed} mailboxReadFailed={mailboxReadFailed} storageAccess={storageAccess} storageDirectory={storageDirectory} storageDirectoryReadFailed={storageDirectoryReadFailed} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onBack={() => backToView('settings')} onCreateFilesFolder={createFilesFolder} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onOpenFilesDirectory={openFilesDirectory} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} onSelectFilesRoot={selectFilesRoot} />
       case 'settings':
-        return <SettingsHomeScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={launchHarness} onOpenPage={openSettings} onOpenView={setActiveView} onStop={stopRuntime} />
+        return <SettingsHomeScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={launchHarness} onOpenPage={openSettings} onOpenView={setActiveView} />
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
