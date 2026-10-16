@@ -63,9 +63,12 @@ internal object RuntimeTerminalPluginBackup {
                         ensureDirectory(targetBackup.parentFile ?: throw failure("插件备份目录无效"))
                         Os.rename(targetSource.absolutePath, targetBackup.absolutePath)
                     }
+                    // Record before moving the link itself: if the second rename fails, the
+                    // target directory still needs to be rolled back.
+                    moved += entry
                 } ?: if (!RuntimeFiles.isDirectoryNoFollow(source)) throw failure("终端插件路径类型已改变")
                 Os.rename(source.absolutePath, target.absolutePath)
-                moved += entry
+                if (entry.targetRelative == null) moved += entry
             }
             writeSnapshot(directory, sourceRoot, moved)
             return Handle(directory)
@@ -123,9 +126,10 @@ internal object RuntimeTerminalPluginBackup {
                         ensureDirectory(targetRestore.parentFile ?: throw failure("插件回填路径无效"))
                         Os.rename(targetSource.absolutePath, targetRestore.absolutePath)
                     }
+                    moved += entry
                 }
                 Os.rename(source.absolutePath, target.absolutePath)
-                moved += entry
+                if (entry.targetRelative == null) moved += entry
             }
             mergeProfile(directory, targetRoot, moved.map { it.name }.distinct())
             removeQuietly(directory)
