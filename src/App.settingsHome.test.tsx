@@ -215,6 +215,22 @@ describe('设置首页：分组与分类筛选', () => {
     expect(screen.getByRole('status')).toHaveTextContent('找到 1 个匹配的入口')
   })
 
+  it.each([false, true])('原生直接改 DOM 值后仍能搜索（先失焦：%s）', async blurBeforeSearch => {
+    await openSettingsHome()
+
+    const searchInput = screen.getByRole<HTMLInputElement>('searchbox', { name: '按功能词查找入口' })
+    // Capacitor 的 captureInput 兼容路径可能只写 DOM value，不派发 input/change，
+    // 这正是 React 受控状态与用户眼前文字不同步的情况。
+    if (blurBeforeSearch) fireEvent.compositionStart(searchInput)
+    searchInput.value = '主题'
+    expect(searchInput).toHaveValue('主题')
+    if (blurBeforeSearch) fireEvent.blur(searchInput)
+
+    fireEvent.click(screen.getByRole('button', { name: '搜索入口' }))
+    expect(screen.getByRole('status')).toHaveTextContent('找到 1 个匹配的入口')
+    expect(searchInput).toHaveValue('主题')
+  })
+
   it('组合中失焦也能恢复提交能力', async () => {
     await openSettingsHome()
 

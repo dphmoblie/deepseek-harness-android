@@ -1562,6 +1562,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
       照抄 `ApplicationPicker` 的既有范式：不放行会被吞掉候选词，正好破坏本组件想保护的输入。 */
   const [isComposing, setIsComposing] = useState(false)
   const [category, setCategory] = useState<SettingsHomeGroup | 'all'>('all')
+  const searchInputRef = useRef<HTMLInputElement>(null)
   /** 分类芯片默认收起：换行后占 4 行，会把功能入口挤出首屏；由搜索框旁的筛选钮展开。 */
   const [filterOpen, setFilterOpen] = useState(false)
   /** 每个分组只留命中的入口；整组都没命中就连标题一起不渲染，避免空标题刷屏。 */
@@ -1572,9 +1573,11 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
   const matched = groups.reduce((total, item) => total + item.entries.length, 0)
   const searching = appliedQuery.trim() !== ''
 
-  /** 确认查找：只有这一步才动列表；查找跨分类进行，所以分类芯片同时复位。 */
+  /** 兼容原生直接写入 DOM 的输入；限制长度并同步草稿，分类同时复位。 */
   const applySearch = (value: string): void => {
-    setAppliedQuery(value.trim())
+    const nextValue = value.slice(0, 120)
+    setQuery(nextValue)
+    setAppliedQuery(nextValue.trim())
     setCategory('all')
   }
 
@@ -1618,6 +1621,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
       <div className="settings-search">
         <input
           type="search"
+          ref={searchInputRef}
           value={query}
           onChange={event => setQuery(event.target.value)}
           onCompositionStart={() => setIsComposing(true)}
@@ -1628,7 +1632,12 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
           }}
           /* 失焦兜底：移动端软键盘选词或直接收起键盘时偶尔丢失 compositionend，
              不补这一条会让 `isComposing` 卡在 true，回车再也提交不了。 */
-          onBlur={() => setIsComposing(false)}
+          onBlur={event => {
+            setIsComposing(false)
+            // captureInput 可能只改 DOM；先把失焦时仍可见的文字同步回受控状态，
+            // 避免结束输入法组合时 React 重绘把它清掉。
+            setQuery(event.currentTarget.value.slice(0, 120))
+          }}
           onKeyDown={event => {
             // 组合中的 Enter 交给输入法确认候选词，不当作提交。
             if (event.key === 'Enter' && !isComposing) {
@@ -1652,7 +1661,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
           aria-expanded={filterOpen} aria-controls="settings-categories">
           <ListFilter size={18} />
         </button>
-        <button className="settings-search-go" type="button" onClick={() => applySearch(query)} aria-label={t("搜索入口")}>
+        <button className="settings-search-go" type="button" onClick={() => applySearch(searchInputRef.current?.value ?? query)} aria-label={t("搜索入口")}>
           <Search size={18} />
         </button>
       </div>
