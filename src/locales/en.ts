@@ -663,6 +663,7 @@ export const english: Readonly<Record<string, string>> = {
   "已配置": "Configured",
   "未配置": "Not configured",
   "供应商状态": "Provider status",
+  "正在编辑": "Editing",
   "待保存": "Unsaved",
   "保存后清除": "Cleared on save",
   "配置": "Set up",
