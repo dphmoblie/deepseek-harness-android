@@ -51,9 +51,8 @@ describe('设置首页：分组与分类筛选', () => {
     const runtimeGroup = screen.getByRole('region', { name: '后台' })
     expect(within(runtimeGroup).getByRole('button', { name: /Ubuntu 运行时/ })).toBeVisible()
     expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByText('设备 Shell')).toBeVisible()
-    // 服务行的说明跟着运行状态走，三种真实状态之一，不写死其中一种。
-    expect(within(runtimeGroup).getByText('Harness 服务')).toBeVisible()
-    expect(within(runtimeGroup).getByText(/正在本机运行|已停止，可随时启动|等待安装运行环境/)).toBeVisible()
+    // Harness 服务的启停统一在首页启动卡片，设置首页不再单列服务行。
+    expect(within(runtimeGroup).queryByText('Harness 服务')).toBeNull()
 
     const settingsGroup = screen.getByRole('region', { name: '模型连接' })
     expect(within(settingsGroup).getByRole('button', { name: /模型与密钥/ })).toBeVisible()
@@ -137,7 +136,7 @@ describe('设置首页：分组与分类筛选', () => {
 
     const runtimeGroup = await screen.findByRole('region', { name: 'Background' }, { timeout: SETTINGS_HOME_TIMEOUT_MS })
     expect(within(runtimeGroup).getByRole('button', { name: /Ubuntu runtime/ })).toBeVisible()
-    expect(within(runtimeGroup).getByText('Harness service')).toBeVisible()
+    expect(within(runtimeGroup).queryByText('Harness service')).toBeNull()
     // 插件管理只在底部导航里：设置首页既没有「插件扩展」分组，也没有入口。
     const directory = runtimeGroup.closest('.settings-directory') as HTMLElement
     expect(screen.queryByRole('region', { name: 'Plugin extensions' })).toBeNull()

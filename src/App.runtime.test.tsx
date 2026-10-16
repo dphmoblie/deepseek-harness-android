@@ -549,9 +549,8 @@ describe('空闲自行停止', () => {
     render(<App />)
     await waitFor(() => expect(bridge.getState).toHaveBeenCalled())
 
-    fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
-    await screen.findByRole('heading', { name: '设置' })
-    fireEvent.click(screen.getByRole('button', { name: '停止' }))
+    // 停止键在主屏启动卡片上：设置首页已不再单列 Harness 服务行。
+    fireEvent.click(await screen.findByRole('button', { name: '停止' }))
     await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledTimes(1))
 
     // 原生侧随后也推了一次阶段变化：用户主动停止不该被算成「自行停止」。
@@ -560,6 +559,8 @@ describe('空闲自行停止', () => {
     })
 
     expect(screen.queryByText(/已自行停止/)).toBeNull()
+    // 显式停止成功后视图自动落到设置首页，直接进「后台」页查停止记录。
+    await screen.findByRole('heading', { name: '设置' })
     await openSettingsPage('后台')
     expect(await screen.findByText('用户停止')).toBeVisible()
   })
