@@ -2406,7 +2406,7 @@ function RuntimeVersionsPanel({
       {/* 本地多版本库 */}
       {!loading && !failed && (
         <div className="settings-subsection" aria-labelledby="runtime-library-group">
-          <div className="section-title">
+          <div className="section-title section-title-plain">
             <div>
               <h3 id="runtime-library-group">{t("本地版本库")}</h3>
               <p>
@@ -2531,7 +2531,7 @@ function RuntimeVersionsPanel({
       {/* 在线可下载发布列表 */}
       {!loading && !failed && (
         <div className="settings-subsection" aria-labelledby="runtime-catalog-group">
-          <div className="section-title">
+          <div className="section-title section-title-plain">
             <div>
               <h3 id="runtime-catalog-group">{t("在线可用版本")}</h3>
               <p>{t("从官方源拉取经过适配校验的 dsh 运行时镜像。下载后存入本地版本库，可随时无网切换。")}</p>
@@ -2624,7 +2624,7 @@ function RuntimeVersionsPanel({
 
       {/* 数据清理与运行时占用合成一张卡：上面是缓存与插件数据，下面才是运行时残留。 */}
       <div className="settings-subsection" aria-labelledby="runtime-cleanup-group">
-        <div className="section-title">
+        <div className="section-title section-title-plain">
           <div>
             <h3 id="runtime-cleanup-group">{t('清理')}</h3>
             <p>{t('缓存、插件数据与运行时残留都在这里回收；运行环境本身在「重置运行环境」里处理。')}</p>

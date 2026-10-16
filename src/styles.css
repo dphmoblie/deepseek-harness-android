@@ -1579,6 +1579,27 @@ button:disabled {
   grid-template-columns: 40px minmax(0, 1fr) auto;
 }
 
+/* 无图标的子栏不占 40px 图标列；宽度不足时将右侧操作换行，保留说明的可读宽度。 */
+.section-title-plain {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.section-title-plain > div {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.section-title-plain > .status-chip {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.section-title-plain h3 {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
 .section-icon {
   display: inline-flex;
   align-items: center;
