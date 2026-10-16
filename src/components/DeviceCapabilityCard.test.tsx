@@ -37,7 +37,7 @@ function card(bridge: Partial<RuntimeBridge>): void {
  * 所以整段文字不会落在任何一个元素上；这里改用 `textContent` 全等匹配。
  */
 function row(text: string): HTMLElement {
-  const matches = screen.getAllByText((_, element) => element?.textContent === text)
+  const matches = screen.getAllByText((_, element) => element?.classList.contains('device-capability-row') === true && element.textContent === text)
   expect(matches).toHaveLength(1)
   return matches[0]
 }
@@ -49,6 +49,24 @@ async function findRow(text: string): Promise<HTMLElement> {
 }
 
 describe('设备能力卡片', () => {
+  it('手动重测显示等待状态并禁用重复点击，失败后可重试', async () => {
+    let rejectRefresh!: (error: Error) => void
+    const query = vi.fn().mockResolvedValueOnce(report())
+      .mockImplementationOnce(() => new Promise<DeviceCapabilityReport>((_, reject) => { rejectRefresh = reject }))
+      .mockResolvedValue(report())
+    card({ getDeviceCapabilities: query })
+    const button = await screen.findByRole('button', { name: '重新检测' })
+    expect(screen.getByRole('region', { name: '设备能力' })).toHaveClass('settings-section')
+    expect(button).toHaveClass('button-secondary')
+    fireEvent.click(button)
+    expect(screen.getByRole('button', { name: '正在检测…' })).toBeDisabled()
+    rejectRefresh(new Error('READ_FAILED'))
+    expect(await screen.findByRole('alert')).toHaveTextContent('无法读取设备能力清单')
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    await screen.findByRole('button', { name: '重新检测' })
+    expect(query).toHaveBeenCalledTimes(3)
+  })
+
   it('AI Shell 关闭时说明副屏阻断原因并跳转设备 Shell 设置，不直接开启权限', async () => {
     const onOpenDeviceShell = vi.fn()
     const bridge = { getDeviceCapabilities: vi.fn().mockResolvedValue(report([

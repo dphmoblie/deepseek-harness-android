@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Cpu } from 'lucide-react'
+import { Cpu, Loader2, RefreshCw } from 'lucide-react'
 import { t } from '../i18n'
 import { runtimeBridge } from '../platform/native'
 import type {
@@ -116,11 +116,13 @@ function sameReport(previous: DeviceCapabilityReport, next: DeviceCapabilityRepo
  */
 export function DeviceCapabilityCard({ bridge = runtimeBridge, onOpenDeviceShell }: { bridge?: RuntimeBridge; onOpenDeviceShell?: () => void }) {
   const [load, setLoad] = useState<CapabilityLoad>({ status: 'loading' })
+  const [refreshing, setRefreshing] = useState(false)
   const requestId = useRef(0)
   const invalidate = useCallback(() => { requestId.current += 1 }, [])
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (manual = false) => {
     const currentRequest = ++requestId.current
+    if (manual) setRefreshing(true)
     try {
       const next = await bridge.getDeviceCapabilities()
       if (currentRequest !== requestId.current) return
@@ -130,6 +132,8 @@ export function DeviceCapabilityCard({ bridge = runtimeBridge, onOpenDeviceShell
     } catch {
       if (currentRequest !== requestId.current) return
       setLoad(previous => (previous.status === 'failed' ? previous : { status: 'failed' }))
+    } finally {
+      if (manual) setRefreshing(false)
     }
   }, [bridge])
   useEffect(() => {
@@ -154,23 +158,24 @@ export function DeviceCapabilityCard({ bridge = runtimeBridge, onOpenDeviceShell
   const report = load.status === 'ready' ? load.report : null
   const failed = load.status === 'failed'
 
-  return <div className="settings-subsection" aria-labelledby="device-capabilities">
+  return <section className="settings-section" aria-labelledby="device-capabilities">
     <div className="section-title"><span className="section-icon"><Cpu size={19} /></span>
-      <div><h3 id="device-capabilities">{t('设备能力')}</h3>
+      <div><h2 id="device-capabilities">{t('设备能力')}</h2>
         <p>{t('一次看清 Shizuku、根通道、无障碍、副屏、截图与中文输入现在能不能用，以及不能用的原因。')}</p></div>
     </div>
     {load.status === 'loading' && <p className="settings-note">{t('正在检测设备能力…')}</p>}
-    {report !== null && report.capabilities.map(entry => <p className="settings-note" key={entry.id}>
-      <strong>{t(CAPABILITY_LABELS[entry.id] ?? entry.id)}</strong>
-      {' '}
-      {t(STATE_LABELS[entry.state])}
-      {entry.state !== 'ready' && ` · ${t(REASON_NOTES[entry.reason] ?? '暂时说不上来具体原因')}`}
-      {entry.action !== null && ` · ${t('下一步：{0}', t(ACTION_NOTES[entry.action] ?? entry.action))}`}
-      {entry.action === 'enable_device_shell' && onOpenDeviceShell !== undefined && <> · <button type="button" onClick={onOpenDeviceShell}>{t('设备 Shell 设置')}</button></>}
-      {entry.alternative !== null && ` · ${t('替代方式：{0}', t(ALTERNATIVE_NOTES[entry.alternative] ?? entry.alternative))}`}
-    </p>)}
-    {report !== null && <p className="settings-note">{t('取样时间：{0}', new Date(report.atMs).toLocaleTimeString())} · {t('连接状态变化后会自动重新检测。')}</p>}
-    {report !== null && <button type="button" onClick={() => { void refresh() }}>{t('重新检测')}</button>}
-    {failed && <p role="alert">{t('无法读取设备能力清单')} <button type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
-  </div>
+    {report !== null && <div className="device-capability-list" role="list">
+      {report.capabilities.map(entry => <p className={`device-capability-row is-${entry.state}`} role="listitem" key={entry.id}>
+        <strong>{t(CAPABILITY_LABELS[entry.id] ?? entry.id)}</strong>{' '}{t(STATE_LABELS[entry.state])}
+        {entry.state !== 'ready' && <>
+          {' · '}{t(REASON_NOTES[entry.reason] ?? '暂时说不上来具体原因')}
+          {entry.action !== null && <>{' · '}{t('下一步：{0}', t(ACTION_NOTES[entry.action] ?? entry.action))}</>}
+          {entry.action === 'enable_device_shell' && onOpenDeviceShell !== undefined && <button className="button button-secondary compact-button" type="button" onClick={onOpenDeviceShell}>{t('设备 Shell 设置')}</button>}
+          {entry.alternative !== null && <>{' · '}{t('替代方式：{0}', t(ALTERNATIVE_NOTES[entry.alternative] ?? entry.alternative))}</>}
+        </>}
+      </p>)}
+    </div>}
+    {report !== null && <div className="device-capability-footer"><span className="settings-note">{t('取样时间：{0}', new Date(report.atMs).toLocaleTimeString())} · {t('连接状态变化后会自动重新检测。')}</span><button className="button button-secondary compact-button" type="button" disabled={refreshing} onClick={() => { void refresh(true) }}>{refreshing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}{refreshing ? t('正在检测…') : t('重新检测')}</button></div>}
+    {failed && <p className="device-capability-error" role="alert">{t('无法读取设备能力清单')} <button className="button button-secondary compact-button" type="button" disabled={refreshing} onClick={() => { void refresh(true) }}>{refreshing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}{refreshing ? t('正在检测…') : t('重试')}</button></p>}
+  </section>
 }

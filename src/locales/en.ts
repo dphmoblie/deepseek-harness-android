@@ -1547,6 +1547,7 @@ export const english: Readonly<Record<string, string>> = {
   "插件版本账本写不进去，暂时无法安全地清理插件数据。": "The plugin version ledger cannot be written, so plugin data cannot be cleaned safely right now.",
   "插件版本账本不可用，未清理任何数据": "The plugin version ledger is unavailable, so no data was deleted",
   "设备能力": "Device capabilities",
+  "正在检测…": "Checking…",
   "一次看清 Shizuku、无障碍、副屏、截图与中文输入现在能不能用，以及不能用的原因。": "See at a glance whether Shizuku, the accessibility service, the virtual display, screenshots, and Chinese input work right now — and why not when they do not.",
   "正在检测设备能力…": "Detecting device capabilities…",
   "无法读取设备能力清单": "Cannot read the device capability list",

@@ -1695,6 +1695,13 @@ button:disabled {
 .provider-status-badge.is-configured { border-color: var(--blue); color: var(--blue); }
 .provider-status-current { flex: 0 0 auto; color: var(--blue); font-size: 0.75rem; }
 
+.device-capability-list { display: grid; gap: 8px; }
+.device-capability-row { margin: 0; padding: 10px 12px; border: 1px solid var(--line-alt); border-radius: 10px; font-size: 0.875rem; line-height: 1.6; }
+.device-capability-row > strong { margin-right: 4px; }
+.device-capability-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
+.device-capability-footer .settings-note { margin: 0; }
+.device-capability-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+
 .custom-providers, .custom-provider { display: grid; gap: 16px; min-width: 0; }
 .custom-provider { border-bottom: 1px solid var(--line-alt); padding-bottom: 20px; }
 .custom-provider-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
