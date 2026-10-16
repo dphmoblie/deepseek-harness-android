@@ -66,6 +66,7 @@
     <string name="virtual_screen_title">Target-app virtual screen</string>
     <string name="virtual_screen_back">Back</string>
     <string name="virtual_screen_search">Search app name or package</string>
+    <string name="virtual_screen_clear_search">Clear search</string>
     <string name="virtual_screen_shell_required">Enable AI Shell in settings and connect Shizuku first</string>
     <string name="virtual_screen_android_required">The virtual screen requires Android 10 or later</string>
     <string name="virtual_screen_creating">Creating the target-app virtual screen. Please wait…</string>

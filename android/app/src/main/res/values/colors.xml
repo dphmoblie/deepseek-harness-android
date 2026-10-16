@@ -2,6 +2,11 @@
     <color name="harness_toolbar_background">#F3F5F8</color>
     <color name="harness_toolbar_foreground">#18212A</color>
     <color name="harness_page_background">#FFFFFF</color>
+    <color name="harness_search_surface">#FFFFFF</color>
+    <color name="harness_search_border">#DCE2E9</color>
+    <color name="harness_search_focus">#315FCF</color>
+    <color name="harness_search_muted">#667181</color>
+    <color name="harness_search_action">#EDF1F5</color>
 
     <!--
       窗口装饰（状态栏/导航栏）的默认底色。

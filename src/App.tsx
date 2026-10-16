@@ -1615,7 +1615,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
 
       {/* 搜索框固定在入口列表上方：入口一多，用户第一反应是找框，而不是往下翻。
           刻意不做边输边筛：输入法组合中途触发筛选会把候选词顶掉，改为点搜索图标或回车确认。 */}
-      <div className="settings-search">
+      <div className="settings-search" role="search" aria-label={t("搜索入口")}>
         <input
           type="search"
           value={query}
@@ -1812,17 +1812,23 @@ function LogText({ text, outputClassName }: LogTextProps) {
         </div>
       )}
 
-      <label className="field log-filter">
-        <span>{t("过滤日志")}</span>
+      <div className="search-control log-filter" role="search" aria-label={t("过滤日志")}>
+        <span className="sr-only">{t("过滤日志")}</span>
         <input
           type="search"
           autoComplete="off"
           spellCheck={false}
           placeholder={t("输入关键字，例如 error、plugin、credential")}
+          aria-label={t("过滤日志")}
           value={filter}
           onChange={event => setFilter(event.target.value)}
         />
-      </label>
+        {filter !== '' && (
+          <button className="search-control-clear" type="button" onClick={() => setFilter('')} aria-label={t("清空查找词")}>
+            <X size={16} />
+          </button>
+        )}
+      </div>
 
       <p className="harness-log-state">
         {query === ''

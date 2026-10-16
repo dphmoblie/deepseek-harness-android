@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Search, Smartphone, X } from 'lucide-react'
+import { Smartphone, X } from 'lucide-react'
 import type { InstalledApplication, RuntimeBridge } from '../platform/types'
 import { t } from '../i18n'
 import { isVisible, normalizeSearchQuery, orderForDisplay, type VisibilityFilters } from './applicationSearchQuery'
@@ -95,8 +95,7 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
       <Smartphone size={18} />{t('从已安装应用选择')}
     </button>
     {opened && <div className="application-picker-panel">
-      <label className="field"><span><Search size={16} />{t('搜索应用名称或包名')}</span>
-        <div className="application-picker-input-wrap">
+      <div className="search-control application-picker-search" role="search" aria-label={t('搜索应用名称或包名')}>
           <input
             type="search"
             value={query}
@@ -126,18 +125,17 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
           {query !== '' && (
             <button
               type="button"
-              className="application-picker-clear-btn"
+              className="search-control-clear"
               onClick={() => {
                 setQuery('')
                 setIsComposing(false)
               }}
               aria-label={t('清空查找词')}
             >
-              <X size={15} />
+              <X size={16} />
             </button>
           )}
-        </div>
-      </label>
+      </div>
       <p className="settings-note">{t('支持拼音与首字母：微信可搜 wx、weixin；多个词用空格分开，顺序随意。')}</p>
       <div className="application-picker-filters" role="group" aria-label={t('列表筛选')}>
         <label><input type="checkbox" checked={automationOnly} disabled={disabled}

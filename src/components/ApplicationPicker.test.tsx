@@ -60,7 +60,7 @@ describe('已安装应用选择器', () => {
       .mockResolvedValue({ apps: [app('新结果', 'com.example.newapp')], nextOffset: null, total: 1 })
     const { container } = open({ listInstalledApplications: list } as unknown as RuntimeBridge)
     await waitFor(() => expect(list).toHaveBeenCalledOnce())
-    fireEvent.change(container.querySelector<HTMLInputElement>('.field input')!, { target: { value: '新' } })
+    fireEvent.change(container.querySelector<HTMLInputElement>('.application-picker-search input')!, { target: { value: '新' } })
     await screen.findByText('新结果')
     resolve({ apps: [app('旧结果', 'com.example.oldapp')], nextOffset: null, total: 1 })
     await waitFor(() => expect(screen.queryByText('旧结果')).not.toBeInTheDocument())
@@ -93,7 +93,7 @@ describe('已安装应用选择器', () => {
     const { list, bridge } = bridgeReturning([{ apps: [app('微信支付', 'com.tencent.mm.pay')], nextOffset: null, total: 1 }])
     const { container } = open(bridge)
     await screen.findByText('微信支付')
-    fireEvent.change(container.querySelector<HTMLInputElement>('.field input')!, { target: { value: '  \u200b  wx\u3000支付  ' } })
+    fireEvent.change(container.querySelector<HTMLInputElement>('.application-picker-search input')!, { target: { value: '  \u200b  wx\u3000支付  ' } })
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
     expect(list).toHaveBeenLastCalledWith('wx 支付', 0)
   })
@@ -168,7 +168,7 @@ describe('已安装应用选择器', () => {
       : { apps: [app('Alipay', 'com.eg.android.AlipayGphone')], nextOffset: null, total: 1 }))
     const { container } = open({ listInstalledApplications: list } as unknown as RuntimeBridge)
     await screen.findByText('Alipay')
-    const input = container.querySelector<HTMLInputElement>('.field input')!
+    const input = container.querySelector<HTMLInputElement>('.application-picker-search input')!
 
     fireEvent.change(input, { target: { value: 'wx' } })
     await screen.findByText('没有匹配的应用')
@@ -196,7 +196,7 @@ describe('已安装应用选择器', () => {
     expect(screen.getByText('reader')).toBeInTheDocument()
 
     // 但真正需要请求时用的是**最新**那个桥。
-    fireEvent.change(view.container.querySelector<HTMLInputElement>('.field input')!, { target: { value: 'notes' } })
+    fireEvent.change(view.container.querySelector<HTMLInputElement>('.application-picker-search input')!, { target: { value: 'notes' } })
     await screen.findByText('notes')
     expect(second.list).toHaveBeenCalledWith('notes', 0)
   })
@@ -219,7 +219,7 @@ describe('已安装应用选择器', () => {
     const { container } = open({ listInstalledApplications: list } as unknown as RuntimeBridge)
     await screen.findByText('reader')
 
-    const input = container.querySelector<HTMLInputElement>('.field input')!
+    const input = container.querySelector<HTMLInputElement>('.application-picker-search input')!
     // 模拟输入法开始拼音组字（输入 wei）
     fireEvent.compositionStart(input)
     fireEvent.change(input, { target: { value: 'wei' } })
@@ -246,7 +246,7 @@ describe('已安装应用选择器', () => {
     const { container } = open({ listInstalledApplications: list } as unknown as RuntimeBridge)
     await screen.findByText('reader')
 
-    const input = container.querySelector<HTMLInputElement>('.field input')!
+    const input = container.querySelector<HTMLInputElement>('.application-picker-search input')!
     // 模拟输入法组字并直接失焦（如用户点击了其他区域或输入法收起）
     fireEvent.compositionStart(input)
     fireEvent.change(input, { target: { value: '支付宝' } })
@@ -273,7 +273,7 @@ describe('已安装应用选择器', () => {
     const { container } = open({ listInstalledApplications: list } as unknown as RuntimeBridge)
     await screen.findByText('reader')
 
-    const input = container.querySelector<HTMLInputElement>('.field input')!
+    const input = container.querySelector<HTMLInputElement>('.application-picker-search input')!
     // 模拟异常输入法：只有 compositionStart，没有 compositionEnd 也未失焦
     fireEvent.compositionStart(input)
     fireEvent.change(input, { target: { value: 'weixin' } })

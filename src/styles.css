@@ -1349,30 +1349,34 @@ button:disabled {
   box-shadow: var(--shadow-card);
 }
 
-/*
- * 设置首页的功能词搜索。
- *
- * 输入框自己不自带边框（这一块整体就是输入框），焦点态因此必须画在容器上：
- * 不做 focus-within 高亮，键盘用户看不出焦点在哪一格。
- */
+/* 搜索框共用设置首页的卡片外壳：输入框透明，焦点高亮落在容器上。 */
+.search-control,
 .settings-search {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 12px;
-  padding: 12px 14px;
+  min-width: 0;
+  min-height: 48px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface);
 }
 
+.search-control {
+  display: flex;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.search-control:focus-within,
 .settings-search:focus-within {
   border-color: var(--blue);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent);
 }
 
-.settings-search input {
+.search-control > input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  min-height: 44px;
   padding: 0;
   border: 0;
   color: var(--ink);
@@ -1380,16 +1384,27 @@ button:disabled {
   font: inherit;
 }
 
-.settings-search input:focus {
-  outline: none;
+.search-control > input:focus,
+.settings-search input:focus { outline: none; }
+.search-control > input::placeholder,
+.settings-search input::placeholder { color: var(--muted); }
+/* The custom clear action owns this affordance; suppress the UA cancel icon so
+   Chromium/WebView does not render a second X beside it. */
+.search-control > input::-webkit-search-cancel-button,
+.settings-search input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
+.search-control-clear,
 .settings-search-clear {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 44px;
   height: 44px;
+  flex: none;
+  padding: 0;
   border: 0;
   border-radius: 50%;
   color: var(--muted);
@@ -1397,8 +1412,25 @@ button:disabled {
   cursor: pointer;
 }
 
-.settings-search-clear:hover {
+.search-control-clear:hover,
+.settings-search-clear:hover { color: var(--ink); }
+
+.settings-search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+}
+
+.settings-search input {
+  min-width: 0;
+  padding: 0;
+  border: 0;
   color: var(--ink);
+  background: transparent;
+  font: inherit;
 }
 
 /* 筛选钮与「清空」同属弱按钮；选中具体分类后换成主色浅底，提示列表正被筛选。 */
@@ -3225,9 +3257,9 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 @media (pointer: coarse), (max-width: 560px) {
   .compact-button, .custom-providers .icon-button, .terminal-copy { min-height: 44px; }
   .custom-providers .icon-button { width: 44px; flex-basis: 44px; }
-  .field input, .field select, .mono-input, .session-search input, .settings-search input { font-size: 1rem !important; }
+  .field input, .field select, .mono-input, .search-control > input, .session-search input, .settings-search input { font-size: 1rem !important; }
   .field input, .field select { min-height: 48px; }
-  .settings-search { min-height: 48px; padding-top: 2px; padding-bottom: 2px; }
+  .search-control, .settings-search { min-height: 48px; padding: 2px 14px; }
   .settings-search input { min-height: 44px; min-width: 0; }
   .launch-actions > .button { flex: 1 1 auto; }
   .save-button { width: 100%; min-height: 48px; }

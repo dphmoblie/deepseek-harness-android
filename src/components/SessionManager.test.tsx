@@ -40,7 +40,7 @@ describe('会话管理页', () => {
     expect(onOpenHarness).toHaveBeenCalledTimes(1)
     expect(screen.getByText('新会话 1')).toBeInTheDocument()
 
-    const searchBox = screen.getByRole('textbox', { name: '搜索会话' })
+    const searchBox = screen.getByRole('searchbox', { name: '搜索会话' })
     fireEvent.change(searchBox, { target: { value: '不存在' } })
     expect(screen.getByText('没有匹配的会话')).toBeInTheDocument()
 

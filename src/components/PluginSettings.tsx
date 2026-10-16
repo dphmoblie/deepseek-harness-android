@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ChevronDown, Package, RefreshCw } from 'lucide-react'
+import { ArrowLeft, ChevronDown, Package, RefreshCw, X } from 'lucide-react'
 import { t, useLanguage } from '../i18n'
 import type { PluginCatalog, PluginRecoveryState, PluginRequest, RuntimeBridge, RuntimeState } from '../platform/types'
 import './PluginSettings.css'
@@ -243,15 +243,21 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
 
     {/* 搜索与分类过滤 */}
     <div className="plugin-filter-bar">
+      <div className="search-control plugin-search" role="search" aria-label={t('搜索插件')}>
       <input
         type="search"
-        className="plugin-search-input"
         aria-label={t('搜索插件')}
         placeholder={t('搜索插件包名或子插件…')}
         value={query}
         disabled={busy}
         onChange={event => setQuery(event.target.value)}
       />
+      {query !== '' && (
+        <button className="search-control-clear" type="button" onClick={() => setQuery('')} disabled={busy} aria-label={t('清空查找词')}>
+          <X size={16} />
+        </button>
+      )}
+      </div>
       <div className="plugin-tabs" role="tablist" aria-label={t('插件分类')}>
         {([
           { key: 'all', label: '全部' },

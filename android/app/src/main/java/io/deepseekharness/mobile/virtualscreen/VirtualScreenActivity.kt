@@ -2,6 +2,8 @@ package io.deepseekharness.mobile.virtualscreen
 
 import android.app.Activity
 import android.content.Context
+import android.graphics.PorterDuff
+import android.graphics.drawable.GradientDrawable
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -99,11 +101,51 @@ class VirtualScreenActivity : Activity() {
         content.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyPagePreviewSize() }
         picker = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         content.addView(picker, FrameLayout.LayoutParams(-1, -1))
+        fun searchBackground(focused: Boolean) = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(16).toFloat()
+            setColor(ContextCompat.getColor(this@VirtualScreenActivity, R.color.harness_search_surface))
+            setStroke(dp(1), ContextCompat.getColor(this@VirtualScreenActivity,
+                if (focused) R.color.harness_search_focus else R.color.harness_search_border))
+        }
+        val search = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(2), dp(6), dp(2))
+            background = searchBackground(false)
+        }
         val query = EditText(this).apply {
-            hint = getString(R.string.virtual_screen_search); setSingleLine(); setTextColor(ink)
+            hint = getString(R.string.virtual_screen_search)
+            setSingleLine()
+            setTextColor(ink)
+            setHintTextColor(ContextCompat.getColor(this@VirtualScreenActivity, R.color.harness_search_muted))
+            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setPadding(0, 0, 0, 0)
+            minHeight = dp(44)
             filters = arrayOf(android.text.InputFilter.LengthFilter(160))
         }
-        picker.addView(query)
+        val clear = ImageButton(this).apply {
+            setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
+            setColorFilter(ContextCompat.getColor(this@VirtualScreenActivity, R.color.harness_search_muted), PorterDuff.Mode.SRC_IN)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(ContextCompat.getColor(this@VirtualScreenActivity, R.color.harness_search_action))
+            }
+            contentDescription = getString(R.string.virtual_screen_clear_search)
+            visibility = View.GONE
+            setOnClickListener { query.text.clear(); query.requestFocus() }
+        }
+        search.addView(query, LinearLayout.LayoutParams(0, dp(48), 1f))
+        search.addView(clear, LinearLayout.LayoutParams(dp(44), dp(44)))
+        query.setOnFocusChangeListener { _, focused -> search.background = searchBackground(focused) }
+        query.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                clear.visibility = if (s.isNullOrEmpty()) View.GONE else View.VISIBLE
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        picker.addView(search, LinearLayout.LayoutParams(-1, dp(52)))
         // 两档尺寸都从规格对象读：文案里的数字与真正建会话用的像素值同源，
         // 不会再出现「文案写 800 × 363、代码里却是 1280 × 580」这种两处各写一遍的漂移。
         val density = resources.displayMetrics.density

@@ -76,6 +76,7 @@
     <string name="virtual_screen_title">目标应用副屏</string>
     <string name="virtual_screen_back">返回</string>
     <string name="virtual_screen_search">搜索应用名称或包名</string>
+    <string name="virtual_screen_clear_search">清空查找词</string>
     <string name="virtual_screen_shell_required">请先在设置中开启 AI Shell 并连接 Shizuku</string>
     <string name="virtual_screen_android_required">副屏操作需要 Android 10 或更高版本</string>
     <string name="virtual_screen_creating">正在创建目标应用副屏，请稍候…</string>
