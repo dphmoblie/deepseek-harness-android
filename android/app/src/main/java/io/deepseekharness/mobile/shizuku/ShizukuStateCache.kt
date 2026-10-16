@@ -66,37 +66,29 @@ internal class ShizukuStateCache(
         // 把它放进锁里就等于让后面所有调用一起排队（正是这个类要避免的事）。
         if (!startRead) return previous ?: fallback()
         if (!readerSlots.tryAcquire()) {
-            synchronized(lock) {
-                if (generation == startedAt) reading = false
-            }
+            ifStillCurrent(startedAt) { reading = false }
             return cachedOrFallback()
         }
         val task = FutureTask {
             try {
                 val fresh = read()
-                synchronized(lock) {
-                    if (generation == startedAt) cached = fresh
-                }
+                ifStillCurrent(startedAt) { cached = fresh }
                 fresh
             } finally {
-                synchronized(lock) {
-                    if (generation == startedAt) reading = false
-                }
+                ifStillCurrent(startedAt) { reading = false }
                 readerSlots.release()
             }
         }
         try {
             Thread(task, "dsh-shizuku-state").apply { isDaemon = true }.start()
         } catch (error: Throwable) {
-            synchronized(lock) {
-                if (generation == startedAt) reading = false
-            }
+            ifStillCurrent(startedAt) { reading = false }
             readerSlots.release()
             throw error
         }
         return try {
             val fresh = task.get(readTimeoutMillis, TimeUnit.MILLISECONDS)
-            if (synchronized(lock) { generation == startedAt }) fresh else cachedOrFallback()
+            if (stillCurrent(startedAt)) fresh else cachedOrFallback()
         } catch (_: TimeoutException) {
             cachedOrFallback()
         } catch (_: InterruptedException) {
@@ -105,6 +97,23 @@ internal class ShizukuStateCache(
         } catch (error: ExecutionException) {
             throw error.cause ?: error
         }
+    }
+
+    /**
+     * 本代仍有效吗？（自己取锁）
+     *
+     * 在途读取回来时先对代号：代号变了说明它读的是上一茬服务端，`fresh` 就不该被当成这一代的读数。
+     */
+    private fun stillCurrent(startedAt: Long): Boolean = synchronized(lock) { generation == startedAt }
+
+    /**
+     * 只有本代仍有效时才执行 [block]（取同一把锁）。
+     *
+     * 写缓存与清「在途」标记都必须走这里：判断与写入要在同一把锁里，否则新一代清完标记、
+     * 上一代又把它按自己的读数写回去。
+     */
+    private fun ifStillCurrent(startedAt: Long, block: () -> Unit) {
+        synchronized(lock) { if (generation == startedAt) block() }
     }
 
     private fun cachedOrFallback(): ShizukuState = synchronized(lock) { cached } ?: fallback()

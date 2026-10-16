@@ -311,8 +311,22 @@ textarea {
   letter-spacing: 0;
 }
 
+/*
+ * 裸 `<button>` 的最小基线。
+ *
+ * 设计系统类是 `.button*`（类选择器会覆盖这里），但漏写类名的按钮会掉到 WebView 的默认外观上——
+ * 灰底圆角方块，在深色主题里格外扎眼（诊断页实测就是系统灰按钮）。把「长得像本应用的按钮」
+ * 提到元素层兜底，新写的按钮即使忘了带类也不会破相；尺寸与间距仍归 `.button*` 与布局类管。
+ */
 button {
   -webkit-tap-highlight-color: transparent;
+  padding: 6px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  cursor: pointer;
 }
 
 button:focus-visible,
@@ -679,6 +693,26 @@ button:disabled {
   color: var(--red);
   border-color: var(--danger-line);
   background: var(--red-soft);
+}
+
+/*
+ * 句内动作（告警句尾的「重试」这类）：读起来是一段文字里的链接，不占一块按钮的位置。
+ * 放在 `.button-danger-quiet` 之后、`.icon-button` 之前，靠源码顺序压过 `.button` 的 2.75rem 高。
+ */
+.button-quiet {
+  min-height: 0;
+  padding: 2px 6px;
+  color: var(--blue);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.button-quiet:not(:disabled):hover {
+  color: var(--blue);
+  background: var(--blue-soft);
 }
 
 .icon-button {

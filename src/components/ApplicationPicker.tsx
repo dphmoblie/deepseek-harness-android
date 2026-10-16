@@ -145,7 +145,7 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
       </div>
       {/* 条目数量不设上限（原生侧从不限制条数）：只报已选个数，不再给「会被拒绝」的警告。 */}
       <p className="settings-note">{t('已选择 {0} 个应用；勾选后点击保存白名单。', selected.length)}</p>
-      {failed && <p role="alert">{t('无法读取应用列表，请在安卓设备上重试。')} <button type="button" onClick={retry}>{t('重试')}</button></p>}
+      {failed && <p role="alert">{t('无法读取应用列表，请在安卓设备上重试。')} <button className="button button-quiet" type="button" onClick={retry}>{t('重试')}</button></p>}
       <div className="application-picker-list" aria-busy={loading}>
         {orderForDisplay(visible, selected).map(app => <label className="application-picker-row" key={app.packageName}>
           <input type="checkbox" checked={selected.includes(app.packageName)} disabled={disabled || (!app.selectable && !selected.includes(app.packageName))}

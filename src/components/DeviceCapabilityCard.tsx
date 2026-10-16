@@ -31,8 +31,27 @@ const STATE_LABELS: Record<DeviceCapabilityState, string> = {
   ready: '可用',
   degraded: '可用，但保护降了一档',
   needs_action: '需要一步设置',
-  blocked: '被别的前置挡住',
+  blocked: '依赖未满足',
   unsupported: '这台设备不支持',
+}
+
+/**
+ * 状态 chip 的色调：直接用现成的 `.status-chip` 三档（`success` / `warn` / `danger`），不另造一套颜色。
+ *
+ * `blocked` 走默认灰：它与 `needs_action` 都在「还差一步」，差别是那一步在别处——
+ * 用颜色再区分一次只会把两个琥珀色说成两件事，不如让文字（`依赖未满足` + 具体前置）讲清楚。
+ */
+const CHIP_TONES: Record<DeviceCapabilityState, string> = {
+  ready: 'success',
+  degraded: 'warn',
+  needs_action: 'warn',
+  blocked: '',
+  unsupported: 'danger',
+}
+
+function chipClass(state: DeviceCapabilityState): string {
+  const tone = CHIP_TONES[state]
+  return tone === '' ? 'status-chip' : `status-chip ${tone}`
 }
 
 /** 原因码 → 一句人话。讲不出原因的码一律回落到「暂时说不上来」，不编。 */
@@ -47,7 +66,7 @@ const REASON_NOTES: Record<string, string> = {
   ANDROID_TOO_OLD: '需要 Android 10 或更高版本',
   TEXT_INPUT_NEEDS_ACCESSIBILITY: '中文等非 ASCII 文字只能由无障碍服务写入',
   DEVICE_SHELL_DISABLED: 'AI Shell 开关没有打开',
-  ROOT_ENGINE_DISABLED: '根通道开关没有打开',
+  ROOT_ENGINE_DISABLED: '根通道开关没有打开（打开后才会检测这台设备支不支持）',
   KERNELSU_NOT_INSTALLED: '这台设备没有可用的 KernelSU',
   KERNELSU_PERMISSION_REQUIRED: 'KernelSU 还没有给本应用授权',
   ROOT_IMPL_NOT_KERNELSU: '设备上的 root 不是 KernelSU，本应用只走 KernelSU',
@@ -75,6 +94,14 @@ const ALTERNATIVE_NOTES: Record<string, string> = {
 }
 
 /**
+ * 要额外给一个入口按钮的动作码。
+ *
+ * 单独取名而不是在 JSX 里写字符串字面量：这个码同时存在于原生 `DeviceCapabilityPolicy.ACTION_ENABLE_DEVICE_SHELL`
+ * 与这张卡里，点名一处方便两侧对照（上一版是就地写的 `entry.action === 'enable_device_shell'`）。
+ */
+const ACTION_NEEDS_ENTRY_BUTTON = 'enable_device_shell'
+
+/**
  * 一次检测的状态。
  *
  * 三态放在**同一个** state 里是有意的：先前拆成 `report` / `loaded` / `failed` 三个 state 时，
@@ -100,6 +127,18 @@ function sameReport(previous: DeviceCapabilityReport, next: DeviceCapabilityRepo
     return entry.id === other.id && entry.state === other.state && entry.reason === other.reason
       && entry.action === other.action && entry.alternative === other.alternative
   })
+}
+
+/**
+ * 「重新检测」与失败态「重试」是**同一个动作、同一段 JSX**：抽出来免得两处各改一遍。
+ *
+ * 这段上一版复制成了两份，`disabled` 与忙碌文案差一点就只改到其中一处；忙碌文案在这里统一成
+ * 「正在检测…」，标题由调用方给（`重新检测` / `重试`）。
+ */
+function RefreshAction({ refreshing, label, onClick }: { refreshing: boolean; label: string; onClick: () => void }) {
+  return <button className="button button-secondary compact-button" type="button" disabled={refreshing} onClick={onClick}>
+    {refreshing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}{refreshing ? t('正在检测…') : label}
+  </button>
 }
 
 /**
@@ -165,17 +204,18 @@ export function DeviceCapabilityCard({ bridge = runtimeBridge, onOpenDeviceShell
     </div>
     {load.status === 'loading' && <p className="settings-note">{t('正在检测设备能力…')}</p>}
     {report !== null && <div className="device-capability-list" role="list">
-      {report.capabilities.map(entry => <p className={`device-capability-row is-${entry.state}`} role="listitem" key={entry.id}>
-        <strong>{t(CAPABILITY_LABELS[entry.id] ?? entry.id)}</strong>{' '}{t(STATE_LABELS[entry.state])}
+      {report.capabilities.map(entry => <p className="device-capability-row" role="listitem" key={entry.id}>
+        <strong>{t(CAPABILITY_LABELS[entry.id] ?? entry.id)}</strong>{' '}
+        <span className={chipClass(entry.state)}>{t(STATE_LABELS[entry.state])}</span>
         {entry.state !== 'ready' && <>
           {' · '}{t(REASON_NOTES[entry.reason] ?? '暂时说不上来具体原因')}
           {entry.action !== null && <>{' · '}{t('下一步：{0}', t(ACTION_NOTES[entry.action] ?? entry.action))}</>}
-          {entry.action === 'enable_device_shell' && onOpenDeviceShell !== undefined && <button className="button button-secondary compact-button" type="button" onClick={onOpenDeviceShell}>{t('设备 Shell 设置')}</button>}
+          {entry.action === ACTION_NEEDS_ENTRY_BUTTON && onOpenDeviceShell !== undefined && <button className="button button-secondary compact-button" type="button" onClick={onOpenDeviceShell}>{t('设备 Shell 设置')}</button>}
           {entry.alternative !== null && <>{' · '}{t('替代方式：{0}', t(ALTERNATIVE_NOTES[entry.alternative] ?? entry.alternative))}</>}
         </>}
       </p>)}
     </div>}
-    {report !== null && <div className="device-capability-footer"><span className="settings-note">{t('取样时间：{0}', new Date(report.atMs).toLocaleTimeString())} · {t('连接状态变化后会自动重新检测。')}</span><button className="button button-secondary compact-button" type="button" disabled={refreshing} onClick={() => { void refresh(true) }}>{refreshing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}{refreshing ? t('正在检测…') : t('重新检测')}</button></div>}
-    {failed && <p className="device-capability-error" role="alert">{t('无法读取设备能力清单')} <button className="button button-secondary compact-button" type="button" disabled={refreshing} onClick={() => { void refresh(true) }}>{refreshing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}{refreshing ? t('正在检测…') : t('重试')}</button></p>}
+    {report !== null && <div className="device-capability-footer"><span className="settings-note">{t('取样时间：{0}', new Date(report.atMs).toLocaleTimeString())} · {t('连接状态变化后会自动重新检测。')}</span><RefreshAction refreshing={refreshing} label={t('重新检测')} onClick={() => { void refresh(true) }} /></div>}
+    {failed && <p className="device-capability-error" role="alert">{t('无法读取设备能力清单')} <RefreshAction refreshing={refreshing} label={t('重试')} onClick={() => { void refresh(true) }} /></p>}
   </section>
 }
