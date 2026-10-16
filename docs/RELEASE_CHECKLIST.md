@@ -86,8 +86,8 @@ or otherwise distributing them.
   longer works. Loopback binding alone is not an authentication boundary on
   Android.
 - Verify that runtime configuration files containing credentials are created with owner-only permissions inside the guest.
-- Confirm the manifest contains the official `ShizukuProvider`; Shizuku remains optional, explicitly authorized, explicitly connected, and limited to a user-visible fixed device Shell session.
-- Kill and restart the Shizuku binder and UserService. Verify active sessions close, the UI returns to an authorized-but-disconnected state, Connect Shizuku performs a fresh bind, and `connected` is true only while the authorized UserService binder is live.
+- Confirm the manifest contains the official `ShizukuProvider`; Shizuku remains optional and explicitly authorized. Startup, returning to the launcher, and binder arrival automatically connect only when Shizuku is running and authorized; failures retain the manual reconnect action and do not prevent Harness startup.
+- Kill and restart the Shizuku binder and UserService. Verify active sessions close, binder arrival triggers a fresh automatic connection, Connect Shizuku remains available after a failed attempt, and `connected` is true only while the authorized UserService binder is live.
 - Run Android lint, JVM tests, and an instrumented test on every supported Android API level and an ARM64 physical device.
 - Review the final APK network security configuration, exported components, backup rules, and WebView debugging state.
 - Verify app startup enters the Harness conversation directly when the runtime is ready, the native toolbar returns to Settings, and neither startup nor management operations open an Android device-credential prompt. Verify the owner-only 90-day audit rotation on every supported Android API level.

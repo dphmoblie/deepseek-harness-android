@@ -176,10 +176,11 @@ Shizuku is optional and user-authorized. The app declares the official
 Shizuku APK. The runtime listens for binder availability and death, binds a
 non-daemon UserService after permission is granted, and invalidates terminal
 sessions when either binder layer dies. Authorization and connection are
-separate visible states: after permission, Settings and the device-terminal
-empty state expose an explicit Connect Shizuku action until the UserService is
-live. Automatic reconnect is best effort; a failed attempt never marks the
-terminal ready. The public `connected` state is true only when Shizuku is
+separate visible states. On startup, return to the launcher, or binder arrival,
+the native layer attempts a best-effort UserService connection only when Shizuku
+is running and already authorized. Settings and the device-terminal empty state
+retain an explicit Connect Shizuku action for recovery. A failed attempt never
+marks the terminal ready. The public `connected` state is true only when Shizuku is
 running, permission is granted, and that UserService binder is alive. Device
 sessions then start a fixed `/system/bin/sh`. The Capacitor bridge cannot
 choose another executable, add process arguments, or run a background command
