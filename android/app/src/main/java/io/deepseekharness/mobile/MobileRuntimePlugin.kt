@@ -972,9 +972,11 @@ class MobileRuntimePlugin : Plugin() {
             val access = controller.openHarnessAccess()
             AppAuthenticationState.authorizeHarnessLaunch(access)
             val intent = Intent(context, HarnessActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             if (sessionId != null) {
                 intent.putExtra(HarnessActivity.EXTRA_SESSION_ID, sessionId)
+            } else {
+                intent.putExtra(HarnessActivity.EXTRA_RESET_TO_HOME, true)
             }
             try {
                 context.startActivity(intent)

@@ -70,6 +70,7 @@ class HarnessActivity : AppCompatActivity() {
 
         const val AUTH_TOKEN_COOKIE = "dsh_mobile_token"
         const val EXTRA_SESSION_ID = "io.deepseekharness.mobile.extra.SESSION_ID"
+        const val EXTRA_RESET_TO_HOME = "io.deepseekharness.mobile.extra.RESET_TO_HOME"
 
         /**
          * 任意 MIME 类型。
@@ -107,15 +108,17 @@ class HarnessActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        val resetToHome = intent.getBooleanExtra(EXTRA_RESET_TO_HOME, false)
         val nextSessionId = sessionIdExtra(intent)
-        if (!nextSessionId.isNullOrBlank() && ::webView.isInitialized && ::allowedOrigin.isInitialized) {
+        if ((resetToHome || !nextSessionId.isNullOrBlank()) && ::webView.isInitialized && ::allowedOrigin.isInitialized) {
             val nextUrl = HarnessPageUrl.withVersions(
                 allowedOrigin.initialUrl,
                 BuildConfig.VERSION_NAME,
                 RuntimeStore(this).installedManifest()?.version,
-                nextSessionId,
+                nextSessionId.takeUnless { resetToHome },
             )
             entryUrlForRetry = nextUrl
+            if (resetToHome) webView.clearHistory()
             webView.loadUrl(nextUrl)
         }
     }
@@ -298,7 +301,11 @@ class HarnessActivity : AppCompatActivity() {
     }
 
     private fun returnToMainActivity() {
-        if (!isFinishing) finish()
+        if (isFinishing) return
+        startActivity(
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        )
     }
 
     /**
