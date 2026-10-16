@@ -376,6 +376,25 @@ describe('版本管理：应用自身更新', () => {
 describe('版本管理：本地多版本库与在线版本下载', () => {
   beforeEach(beforeEachAppTest)
 
+  it('无图标子栏使用独立布局，状态与刷新不占用介绍列', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    await openVersionsPage()
+
+    for (const name of ['本地版本库', '在线可用版本', '清理']) {
+      const heading = await screen.findByRole('heading', { name })
+      const title = heading.closest('.section-title')
+      expect(title).toHaveClass('section-title-plain')
+      expect(title?.querySelector('.section-icon')).toBeNull()
+      expect(heading.parentElement?.querySelector('p')).not.toBeNull()
+    }
+    expect(screen.getByRole('button', { name: '刷新可用版本' }).parentElement).toHaveClass('section-title-plain')
+    for (const name of ['运行时版本管理', '会话备份', '应用更新']) {
+      const title = screen.getByRole('heading', { name }).closest('.section-title')
+      expect(title).not.toHaveClass('section-title-plain')
+      expect(title?.querySelector('.section-icon')).not.toBeNull()
+    }
+  })
+
   it('进页展示本地多版本库与配额容量（X/5）', async () => {
     const libId = 'a'.repeat(64)
     bridge.getState.mockResolvedValue({ ...readyState })
