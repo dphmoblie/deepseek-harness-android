@@ -1886,7 +1886,7 @@ class MobileRuntimePlugin : Plugin() {
      */
     @PluginMethod
     fun getKeepAliveState(call: PluginCall) {
-        resolveWhileActive(call) {
+        execute(call) {
             controller.keepAliveSnapshot(RuntimeHost.isForegroundServiceActive()).toJs()
         }
     }

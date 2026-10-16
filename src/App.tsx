@@ -655,7 +655,7 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   HARNESS_STOP_FAILED: '无法停止 Harness 进程，请重试。',
   HARNESS_STOP_TIMEOUT: 'Harness 未在限定时间内停止，请重试。',
   HARNESS_STOP_INTERRUPTED: 'Harness 停止操作被中断，请重试。',
-  SHIZUKU_UNBIND_TIMEOUT: 'Shizuku 设备服务未在限定时间内退出，请重试。',
+  SHIZUKU_UNBIND_TIMEOUT: 'Shizuku 设备服务未在限定时间内退出，请在 Shizuku 中重启服务后重试；仍无响应时请完全退出并重开本应用。',
   SHIZUKU_UNBIND_INTERRUPTED: 'Shizuku 设备服务停止操作被中断，请重试。',
   SHIZUKU_UNBIND_FAILED: '无法停止 Shizuku 设备服务，请重试。',
   SHIZUKU_DISCONNECTING: 'Shizuku 设备服务正在停止，请稍后重试。',
@@ -7008,8 +7008,10 @@ export function App() {
       setRuntime(next)
       // 即使原生侧没有推送阶段变化，用户主动停止也要在「上次停止」里留下记录。
       setLastStop('user')
-      // 显式停止会同时撤销前台服务。
-      setKeepAlive(await runtimeBridge.getKeepAliveState())
+      // 显式停止已撤销前台服务，辅助状态后台回填，不占用操作按钮。
+      void runtimeBridge.getKeepAliveState()
+        .then(setKeepAlive)
+        .catch(() => { /* 保留上一次已知状态。 */ })
       setActiveView('settings')
     }, t("运行环境已停止"))
   }, [run, setActiveView])

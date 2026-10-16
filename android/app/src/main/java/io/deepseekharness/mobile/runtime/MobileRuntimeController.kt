@@ -581,9 +581,10 @@ class MobileRuntimeController(
     }
 
     fun state(): RuntimeStateSnapshot = status.snapshot()
-    fun shizukuState(): ShizukuState = lifecycleLock.withLock {
+    fun shizukuState(): ShizukuState {
+        // 可选的 Shizuku 状态查询不能占住 Harness 启动/停止的生命周期锁。
         ensureOpen()
-        terminals.shizuku.state()
+        return terminals.shizuku.state()
     }
 
     /**
@@ -604,32 +605,37 @@ class MobileRuntimeController(
      * 只读取设置、Shizuku 状态、残留进程标记与持久化意图；不启动进程、不执行 Shell
      * 命令、不返回任何凭据，可安全回传 WebView。
      */
-    fun keepAliveSnapshot(foregroundServiceActive: Boolean): RuntimeKeepAliveSnapshot = lifecycleLock.withLock {
+    fun keepAliveSnapshot(foregroundServiceActive: Boolean): RuntimeKeepAliveSnapshot {
+        // 先在锁外读取可选的 Shizuku 状态；Binder 无响应时不能阻塞运行时生命周期锁。
         ensureOpen()
-        val record = store.runtimeIntentRecord()
-        val ownedRunning = status.snapshot().phase == RuntimePhase.RUNNING
-        RuntimeKeepAliveSnapshot(
-            keepRuntimeInBackground = store.keepRuntimeInBackground(),
-            foregroundServiceActive = foregroundServiceActive,
-            deviceShellReady = deviceShellReadyLocked(),
-            reconnectRequired = HarnessKeepAlivePolicy.requiresReconnect(
-                runtimeOwnedRunning = ownedRunning,
-                residualProcess = hasResidualHarness(),
+        val deviceShellReady = deviceShellReady()
+        return lifecycleLock.withLock {
+            ensureOpen()
+            val record = store.runtimeIntentRecord()
+            val ownedRunning = status.snapshot().phase == RuntimePhase.RUNNING
+            RuntimeKeepAliveSnapshot(
+                keepRuntimeInBackground = store.keepRuntimeInBackground(),
+                foregroundServiceActive = foregroundServiceActive,
+                deviceShellReady = deviceShellReady,
+                reconnectRequired = HarnessKeepAlivePolicy.requiresReconnect(
+                    runtimeOwnedRunning = ownedRunning,
+                    residualProcess = hasResidualHarness(),
+                    lastIntent = record.intent,
+                ),
                 lastIntent = record.intent,
-            ),
-            lastIntent = record.intent,
-            lastPhase = record.phase,
-            lastUpdatedAtMillis = record.updatedAtMillis,
-            lastTurnCompletedAtMillis = TaskNotification.lastTurnCompletedAtMillis,
-            turnCompletionSequence = TaskNotification.turnCompletionSequence,
-        )
+                lastPhase = record.phase,
+                lastUpdatedAtMillis = record.updatedAtMillis,
+                lastTurnCompletedAtMillis = TaskNotification.lastTurnCompletedAtMillis,
+                turnCompletionSequence = TaskNotification.turnCompletionSequence,
+            )
+        }
     }
 
     /**
      * Shizuku 健康检查：只读取 binder、授权与 UserService 状态，不执行任何 Shell 命令
      * 与设备操作。Shizuku 未安装、未授权或断开时返回 false，运行时按无设备 Shell 降级。
      */
-    private fun deviceShellReadyLocked(): Boolean = try {
+    private fun deviceShellReady(): Boolean = try {
         val state = terminals.shizuku.healthCheck()
         state.installed && state.running && state.permission == "granted"
     } catch (_: Throwable) {
