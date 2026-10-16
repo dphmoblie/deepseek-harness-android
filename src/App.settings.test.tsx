@@ -37,7 +37,7 @@ describe('悬浮球设置', () => {
     await waitFor(() => expect(bridge.openOverlaySettings).toHaveBeenCalledTimes(1))
   })
 
-  it('已授权时可切换开关，并随「保存设置」一起提交', async () => {
+  it('已授权时可切换开关并自动提交', async () => {
     bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
@@ -47,11 +47,8 @@ describe('悬浮球设置', () => {
     expect(toggle).not.toBeChecked()
 
     fireEvent.click(toggle)
-    // 与「后台保持 Harness」同一套模型：开关只改草稿，由「保存设置」统一提交。
+    // 开关改动通过防抖自动保存。
     expect(toggle).toBeChecked()
-    expect(bridge.saveSettings).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({ overlayBallEnabled: true }),
     ))
@@ -84,7 +81,6 @@ describe('悬浮球设置', () => {
     fireEvent.click(toggle)
     expect(toggle).not.toBeChecked()
 
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({ overlayBallEnabled: false }),
     ))
@@ -124,13 +120,14 @@ describe('悬浮球设置', () => {
       fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
       await openSettingsPage('后台')
 
-      const saveButton = await screen.findByRole('button', { name: '保存设置' })
-      await waitFor(() => expect(saveButton).toBeEnabled())
-      fireEvent.click(saveButton)
+      const toggle = await screen.findByRole('switch', { name: /悬浮球/ })
+      fireEvent.click(toggle)
+      fireEvent.click(toggle)
 
       await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
         ...settings,
         autoLaunch: false,
+        overlayBallEnabled: true,
       }))
       // 悬浮球前台服务同样是异步拉起的：等宽限期后按原生状态复核，确认仍未运行才弹窗。
       await act(async () => { await vi.advanceTimersByTimeAsync(FOREGROUND_SERVICE_SETTLE_MS + 100) })
@@ -164,7 +161,6 @@ describe('悬浮球设置', () => {
     const slider = await screen.findByRole('slider', { name: /字号/ })
     expect(slider).toHaveValue('16')
     fireEvent.change(slider, { target: { value: '18' } })
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ terminalFontSize: 18 })))
   })
 
@@ -177,7 +173,7 @@ describe('悬浮球设置', () => {
     expect(screen.queryByRole('button', { name: '保存设置' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
     expect(await screen.findByRole('heading', { name: '后台' })).toBeVisible()
-    expect(screen.getByRole('button', { name: '保存设置' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: '保存设置' })).toBeNull()
   })
 
   it('页内用菜单隐藏悬浮球后，保存其他草稿不会重新开启它', async () => {
@@ -195,7 +191,6 @@ describe('悬浮球设置', () => {
       await Promise.resolve()
     })
     expect(slider).toHaveValue('19')
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, terminalFontSize: 19 }))
   })
 
@@ -207,9 +202,8 @@ describe('悬浮球设置', () => {
     await openSettingsPage('后台')
     expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked()
     bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
-    // 原生菜单已关闭球，但不给前端 focus 或轮询事件，立即保存其他设置。
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
-    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(settings))
+    // 没有编辑项时不应为了“保存”而提交旧的悬浮球开关值。
+    expect(bridge.saveSettings).not.toHaveBeenCalled()
   })
 
   it('已修改的悬浮球草稿不被权限状态刷新覆盖', async () => {
@@ -223,7 +217,6 @@ describe('悬浮球设置', () => {
       await Promise.resolve()
     })
     expect(toggle).toBeChecked()
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ overlayBallEnabled: true })))
   })
 
@@ -249,14 +242,12 @@ describe('悬浮球设置', () => {
     expect(screen.getByText('在其他应用上层显示悬浮球，点按展开 AI 对话小窗')).toBeVisible()
   })
 
-  it('设置已落盘后悬浮球查询失败不会误报保存失败', async () => {
+  it('设置自动落盘后悬浮球查询失败不会误报保存失败', async () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
     await openSettingsPage('主题')
     bridge.getOverlayBallState.mockRejectedValue(new Error('overlay read failed'))
     fireEvent.change(screen.getByRole('slider', { name: /字号/ }), { target: { value: '20' } })
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
-
     expect(await screen.findByText('设置已保存，但部分状态暂时无法确认，请稍后重试')).toBeVisible()
     expect(screen.queryByText('overlay read failed')).toBeNull()
     expect(screen.getByRole('slider', { name: /字号/ })).toHaveValue('20')
@@ -271,8 +262,6 @@ describe('悬浮球设置', () => {
     await waitFor(() => expect(document.documentElement.style.getPropertyValue('--app-font-scale')).toBe('1'))
 
     fireEvent.change(screen.getByRole('slider', { name: /字号/ }), { target: { value: '21' } })
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
-
     // 21 / 14 = 1.5：字号一动，壳子里以 rem 写的字号整体跟着变。
     await waitFor(() => expect(document.documentElement.style.getPropertyValue('--app-font-scale')).toBe('1.5'))
   })
@@ -283,8 +272,6 @@ describe('悬浮球设置', () => {
     await openSettingsPage('后台')
     fireEvent.click(screen.getByRole('switch', { name: /悬浮球/ }))
     bridge.getOverlayBallState.mockRejectedValue(new Error('overlay read failed'))
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
-
     expect(await screen.findByText('设置已保存，但部分状态暂时无法确认，请稍后重试')).toBeVisible()
     expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked()
   })
@@ -380,6 +367,7 @@ describe('设置草稿与未保存的输入', () => {
     await openSettingsPage('模型与密钥')
     fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ providerApiKeys: { openai: 'unit-test-openai-key' } })))
 
     // 用户去别的设置页看一眼再回来：刚输入的密钥与正在编辑的供应商都必须还在。
     await backToSettingsHome()
@@ -388,13 +376,14 @@ describe('设置草稿与未保存的输入', () => {
     await openSettingsPage('模型与密钥')
 
     expect(screen.getByRole('combobox', { name: '供应商' })).toHaveValue('openai')
-    expect(screen.getByLabelText(/OpenAI API Key/)).toHaveValue('unit-test-openai-key')
+    // 输入已经通过防抖自动保存；切页回来后密钥不会回显，只显示已配置占位符。
+    expect(screen.getByLabelText(/OpenAI API Key/)).toHaveValue('')
+    expect(screen.getByLabelText(/OpenAI API Key/)).toHaveAttribute('placeholder', '输入 API Key')
 
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
-    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
       ...settings,
       providerApiKeys: { openai: 'unit-test-openai-key' },
-    }))
+    })))
   })
 
   it('后台重读设置不会覆盖未保存的输入', async () => {
@@ -413,7 +402,6 @@ describe('设置草稿与未保存的输入', () => {
 
     // 重读照旧发生，但草稿是「脏」的：用户输到一半的值优先。
     expect(await screen.findByRole('slider', { name: /字号/ })).toHaveValue('18')
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({ terminalFontSize: 18 }),
     ))
@@ -430,7 +418,6 @@ describe('设置草稿与未保存的输入', () => {
     await openSettingsPage('模型与密钥')
     fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     expect(await screen.findByText('设置已保存')).toBeVisible()
 
     // 密钥落盘后不回显：草稿里那份输入随保存一起清掉，「已配置」以落盘值为准。
@@ -438,12 +425,9 @@ describe('设置草稿与未保存的输入', () => {
     expect(keyInput).toHaveValue('')
     expect(keyInput).toHaveAttribute('placeholder', '已配置，留空保持不变')
 
-    // 再保存一次：不会把内存里那份已经保存过的密钥重复提交上去。
-    const saveButton = screen.getByRole('button', { name: '保存设置' })
-    await waitFor(() => expect(saveButton).toBeEnabled())
-    fireEvent.click(saveButton)
-    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledTimes(2))
-    expect(bridge.saveSettings.mock.calls.at(-1)?.[0]).not.toHaveProperty('providerApiKeys')
+    // 自动保存完成后，密钥不会再次提交。
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledTimes(1))
+    expect(bridge.saveSettings.mock.calls.at(-1)?.[0]).toHaveProperty('providerApiKeys')
   })
 
   it('离开设置区后未保存的输入被丢弃，下次进入以落盘值为准', async () => {
@@ -483,11 +467,14 @@ describe('设置草稿与未保存的输入', () => {
     await openSettingsPage('模型与密钥')
 
     expect(screen.getByRole('combobox', { name: '供应商' })).toHaveValue('custom')
+    console.log('DEBUG SAVES', JSON.stringify(bridge.saveSettings.mock.calls))
+    console.log('DEBUG BODY', document.body.textContent?.slice(-2000))
     expect(screen.getByLabelText('供应商名称')).toHaveValue('本地网关')
     expect(screen.getByLabelText('Base URL')).toHaveValue('https://gateway.example.invalid/v1')
+    // 尚未等到防抖保存落地就切页：草稿仍在内存里，密钥输入因此保留。
+    // 保存成功后的清空行为由「保存成功后草稿与落盘值重新同步」那条用例覆盖。
     expect(screen.getByLabelText('API Key')).toHaveValue('sk-custom-gateway')
 
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
       customModelProviders: [
         expect.objectContaining({ id: 'custom-1', name: '本地网关', baseUrl: 'https://gateway.example.invalid/v1' }),
@@ -546,8 +533,7 @@ describe('后台页的运行时与设备 Shell 入口', () => {
     expect(await screen.findByRole('heading', { name: '运行时与设备 Shell' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Ubuntu 运行时' })).toBeEnabled()
     expect(screen.getByRole('button', { name: '设备 Shell 设置' })).toBeEnabled()
-    // 清单字段还在这一页：入口只搬导航，不改下载来源这条能力。
-    expect(screen.getByText('运行时清单地址')).toBeVisible()
+    expect(screen.getByText('运行环境使用 APK 内置的受校验版本；需要其它版本时请在 Ubuntu 运行时的版本管理中下载并切换。')).toBeVisible()
   })
 
   it('两个入口分别进入运行时页与设备 Shell 页', async () => {
