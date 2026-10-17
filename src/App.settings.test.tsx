@@ -302,13 +302,13 @@ describe('设置草稿与未保存的输入', () => {
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
     await openSettingsPage('模型与密钥')
-    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
+    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
 
     expect(screen.getByLabelText(/OpenAI API Key/)).toHaveAttribute('placeholder', '已在 Harness 中配置，留空保持不变')
     expect(screen.queryByRole('button', { name: '清除密钥' })).toBeNull()
   })
 
-  it('供应商选择保留唯一入口，状态一览区分凭据来源并标识当前编辑项', async () => {
+  it('直接点击供应商卡片切换编辑项，不再显示供应商下拉框或触发保存', async () => {
     bridge.getSettings.mockResolvedValue({
       ...settings,
       configuredModelProviders: ['deepseek'],
@@ -324,10 +324,12 @@ describe('设置草稿与未保存的输入', () => {
     expect(row('OpenAI')).toHaveTextContent('已在 Harness 中配置')
     expect(row('Anthropic')).toHaveTextContent('未配置')
 
-    // 状态列表只读；供应商下拉框是唯一的编辑入口。
-    expect(within(list).queryByRole('button')).toBeNull()
-    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'anthropic' } })
-    expect(screen.getByRole('combobox', { name: '供应商' })).toHaveValue('anthropic')
+    expect(screen.queryByRole('combobox', { name: '供应商' })).not.toBeInTheDocument()
+    expect(within(list).getAllByRole('button')).toHaveLength(8)
+    expect(within(list).getByRole('button', { name: /^DeepSeek / })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(within(list).getByRole('button', { name: /^Anthropic / }))
+    expect(within(list).getByRole('button', { name: /^Anthropic / })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(list).getByRole('button', { name: /^DeepSeek / })).toHaveAttribute('aria-pressed', 'false')
     expect(screen.getByLabelText(/Anthropic API Key/)).toBeVisible()
     expect(within(row('Anthropic')).getByText('正在编辑')).toBeVisible()
     expect(within(row('DeepSeek')).queryByText('正在编辑')).toBeNull()
@@ -343,9 +345,9 @@ describe('设置草稿与未保存的输入', () => {
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
     await openSettingsPage('模型与密钥')
 
-    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'anthropic' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Anthropic / }))
     fireEvent.change(screen.getByLabelText(/Anthropic API Key/), { target: { value: 'unit-test-anthropic-key' } })
-    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
+    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
     expect(screen.getByLabelText(/OpenAI API Key/)).toHaveAttribute('placeholder', '输入 API Key')
 
     bridge.getSettings.mockResolvedValue({
@@ -356,7 +358,7 @@ describe('设置草稿与未保存的输入', () => {
 
     await waitFor(() => expect(screen.getByLabelText(/OpenAI API Key/))
       .toHaveAttribute('placeholder', '已在 Harness 中配置，留空保持不变'))
-    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'anthropic' } })
+    fireEvent.click(screen.getByRole('button', { name: /^Anthropic / }))
     expect(screen.getByLabelText(/Anthropic API Key/)).toHaveValue('unit-test-anthropic-key')
   })
 
@@ -365,7 +367,7 @@ describe('设置草稿与未保存的输入', () => {
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
     await openSettingsPage('模型与密钥')
-    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
+    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ providerApiKeys: { openai: 'unit-test-openai-key' } })))
 
@@ -375,7 +377,7 @@ describe('设置草稿与未保存的输入', () => {
     await backToSettingsHome()
     await openSettingsPage('模型与密钥')
 
-    expect(screen.getByRole('combobox', { name: '供应商' })).toHaveValue('openai')
+    expect(screen.getByRole('button', { name: /^OpenAI / })).toHaveAttribute('aria-pressed', 'true')
     // 输入已经通过防抖自动保存；切页回来后密钥不会回显，只显示已配置占位符。
     expect(screen.getByLabelText(/OpenAI API Key/)).toHaveValue('')
     expect(screen.getByLabelText(/OpenAI API Key/)).toHaveAttribute('placeholder', '输入 API Key')
@@ -421,7 +423,7 @@ describe('设置草稿与未保存的输入', () => {
       Promise.resolve({ ...settings, configuredModelProviders: ['openai'] }))
 
     await openSettingsPage('模型与密钥')
-    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
+    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
     expect(await screen.findByText('设置已保存')).toBeVisible()
 
@@ -452,13 +454,17 @@ describe('设置草稿与未保存的输入', () => {
     expect(await screen.findByRole('slider', { name: /字号/ })).toHaveValue('14')
   })
 
-  it('自定义供应商的字段与密钥在切页后同样保留', async () => {
+  it('底部按钮直接添加自定义供应商，字段与密钥在切页后同样保留', async () => {
     render(<App />)
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
     await openSettingsPage('模型与密钥')
-    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'custom' } })
-    fireEvent.click(screen.getByRole('button', { name: '添加自定义供应商' }))
+    const add = screen.getByRole('button', { name: '添加自定义供应商' })
+    const section = screen.getByRole('region', { name: '模型供应商' })
+    expect(section.lastElementChild?.lastElementChild).toBe(add)
+    expect(screen.queryByLabelText('供应商名称')).not.toBeInTheDocument()
+    fireEvent.click(add)
+    expect(section.lastElementChild?.lastElementChild).toBe(add)
     fireEvent.change(screen.getByLabelText('供应商名称'), { target: { value: '本地网关' } })
     fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://gateway.example.invalid/v1' } })
     fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-custom-gateway' } })
@@ -476,9 +482,7 @@ describe('设置草稿与未保存的输入', () => {
     await backToSettingsHome()
     await openSettingsPage('模型与密钥')
 
-    expect(screen.getByRole('combobox', { name: '供应商' })).toHaveValue('custom')
-    console.log('DEBUG SAVES', JSON.stringify(bridge.saveSettings.mock.calls))
-    console.log('DEBUG BODY', document.body.textContent?.slice(-2000))
+    expect(screen.queryByRole('combobox', { name: '供应商' })).not.toBeInTheDocument()
     expect(screen.getByLabelText('供应商名称')).toHaveValue('本地网关')
     expect(screen.getByLabelText('Base URL')).toHaveValue('https://gateway.example.invalid/v1')
     // 尚未等到防抖保存落地就切页：草稿仍在内存里，密钥输入因此保留。
@@ -496,6 +500,28 @@ describe('设置草稿与未保存的输入', () => {
       customModelProviders: [{ id: 'custom-1', name: '本地网关', api: 'openai-completions', baseUrl: 'https://gateway.example.invalid/v1', models: [{ id: 'local-model', name: 'Local Model', contextWindow: 131072, maxTokens: 8192 }] }],
       configuredCustomModelProviders: ['custom-1'],
     }); await Promise.resolve() })
+  })
+
+  it('进入模型页即可编辑已有自定义供应商，切换内置供应商不会隐藏自定义配置', async () => {
+    bridge.getSettings.mockResolvedValue({
+      ...settings,
+      customModelProviders: [{
+        id: 'custom-1', name: '本地网关', api: 'openai-completions', baseUrl: 'https://gateway.example.invalid/v1',
+        models: [{ id: 'local-model', name: 'Local Model', contextWindow: 131072, maxTokens: 8192 }],
+      }],
+      configuredCustomModelProviders: ['custom-1'],
+    })
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await openSettingsPage('模型与密钥')
+
+    expect(screen.getByLabelText('供应商名称')).toHaveValue('本地网关')
+    expect(screen.getByLabelText('API Key')).toHaveValue('')
+    expect(screen.getByLabelText('API Key')).toHaveAttribute('placeholder', '已配置，留空保持不变')
+    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
+    expect(screen.getByLabelText(/OpenAI API Key/)).toBeVisible()
+    expect(screen.getByLabelText('供应商名称')).toHaveValue('本地网关')
+    expect(bridge.saveSettings).not.toHaveBeenCalled()
   })
 })
 

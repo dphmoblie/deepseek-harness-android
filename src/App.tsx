@@ -1398,7 +1398,7 @@ interface SettingsDraft {
   /** 各字段的当前编辑值，初值由落盘设置复制而来。 */
   settings: RuntimeSettings
   /** 正在编辑的供应商；纯界面选择，切走再回来时停在原处。 */
-  selectedProvider: ModelProviderId | 'custom'
+  selectedProvider: ModelProviderId
   /** 用户在本页拨动过悬浮球开关时才有值；null 表示沿用原生侧真值。 */
   overlayBallEnabled: boolean | null
   /** 仅内存的 API Key 输入。 */
@@ -1475,7 +1475,7 @@ interface SettingsScreenProps {
   onConnect: () => void
   onDiagnosticSettings: (enabled: boolean, retentionDays: number) => void
   /**
-   * 改写草稿。[dirty] 为假表示这次只改「正在看什么」（例如切换供应商下拉框），
+   * 改写草稿。[dirty] 为假表示这次只改「正在看什么」（例如点击供应商卡片），
    * 草稿里的值没有变化，不应妨碍后台刷新同步。
    */
   onDraftChange: (update: (current: SettingsDraft) => SettingsDraft, dirty?: boolean) => void
@@ -1971,7 +1971,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     onDraftChange(current => ({ ...current, overlayBallEnabled: next }))
     triggerAutoSave(300)
   }
-  const setSelectedProvider = (next: ModelProviderId | 'custom'): void =>
+  const setSelectedProvider = (next: ModelProviderId): void =>
     // 只是切换正在查看的供应商，没有改动任何字段值：不算「未保存的输入」。
     onDraftChange(current => ({ ...current, selectedProvider: next }), false)
   const setCredentialDrafts = (update: (current: ProviderApiKeys) => ProviderApiKeys): void => {
@@ -2024,7 +2024,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     : keepAliveRecordedAt === ''
       ? t(PHASE_META[keepAlive.lastPhase].label)
       : `${t(PHASE_META[keepAlive.lastPhase].label)} · ${keepAliveRecordedAt}`
-  const selectedProviderConfigured = selectedProvider !== 'custom' && (
+  const selectedProviderConfigured = (
     settings.harnessConfiguredModelProviders?.includes(selectedProvider) === true
     || (
       (settings.configuredModelProviders.includes(selectedProvider) || credentialDrafts[selectedProvider] !== undefined)
@@ -2142,22 +2142,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Rocket size={18} />}{t("我已在 Harness 内配置过，仍要打开")}</button>
             </div>
           )}
-          <label className="field">
-            <span>{t("供应商")}</span>
-            <select
-              value={selectedProvider}
-              onChange={event => setSelectedProvider(event.target.value as ModelProviderId | 'custom')}
-            >
-              {MODEL_PROVIDERS.map(provider => {
-                const configured = settings.harnessConfiguredModelProviders?.includes(provider.id) === true
-                  || ((settings.configuredModelProviders.includes(provider.id) || credentialDrafts[provider.id] !== undefined)
-                    && !clearedProviders.includes(provider.id))
-                return <option key={provider.id} value={provider.id}>{provider.label}{configured ? t("（已配置）") : ''}</option>
-              })}
-              <option value="custom">{t('自定义')}</option>
-            </select>
-          </label>
-          {/* 状态一览只负责反馈配置结果；供应商下拉框是唯一的编辑入口，避免同一动作出现两套入口。 */}
           <div className="provider-status" role="list" aria-label={t("供应商状态")}>
             {MODEL_PROVIDERS.map(provider => {
               const inHarness = settings.harnessConfiguredModelProviders?.includes(provider.id) === true
@@ -2170,15 +2154,22 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 : clearing ? t("保存后清除")
                   : inHarness ? t("已在 Harness 中配置") : t("未配置")
               return (
-                <div className={`provider-status-row${selectedProvider === provider.id ? ' is-selected' : ''}`} role="listitem" key={provider.id}>
-                  <span className="provider-status-name">{provider.label}</span>
-                  <span className={`provider-status-badge${inApp || inHarness ? ' is-configured' : ''}`}>{status}</span>
-                  {selectedProvider === provider.id && <span className="provider-status-current">{t("正在编辑")}</span>}
+                <div role="listitem" key={provider.id}>
+                  <button
+                    className={`provider-status-row${selectedProvider === provider.id ? ' is-selected' : ''}`}
+                    type="button"
+                    aria-pressed={selectedProvider === provider.id}
+                    onClick={() => setSelectedProvider(provider.id)}
+                  >
+                    <span className="provider-status-name">{provider.label}</span>
+                    <span className={`provider-status-badge${inApp || inHarness ? ' is-configured' : ''}`}>{status}</span>
+                    {selectedProvider === provider.id && <span className="provider-status-current">{t("正在编辑")}</span>}
+                  </button>
                 </div>
               )
             })}
           </div>
-          {selectedProvider !== 'custom' && <><label className="field">
+          <label className="field">
             <span>{selectedProviderOption.label} API Key · {selectedProviderOption.environmentVariable}</span>
             <input
               type="password"
@@ -2236,8 +2227,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             <div className={`connectivity-result ${connectivityResults[selectedProvider].ok ? 'success' : 'error'}`}>
               {connectivityResults[selectedProvider].message}
             </div>
-          )}</>}
-          {selectedProvider === 'custom' && <CustomProviders
+          )}
+          <CustomProviders
             providers={settings.customModelProviders ?? []}
             configured={settings.configuredCustomModelProviders ?? []}
             harnessConfigured={settings.harnessConfiguredCustomModelProviders ?? []}
@@ -2247,7 +2238,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             onCredentials={setCustomCredentials}
             onClear={setClearedCustomProviders}
             onTestConnectivity={handleTestCustomConnectivity}
-          />}
+          />
         </section>
         )}
 
@@ -3158,7 +3149,7 @@ export function App() {
   const terminalError = useCallback((message: string) => notify(message, 'error'), [notify])
 
   /**
-   * 写入设置草稿。[dirty] 为假表示这次只改「正在看什么」（例如切换供应商下拉框），
+   * 写入设置草稿。[dirty] 为假表示这次只改「正在看什么」（例如点击供应商卡片），
    * 草稿里的值没有变化，不应妨碍后台刷新同步。
    */
   const updateSettingsDraft = useCallback((update: (current: SettingsDraft) => SettingsDraft, dirty = true) => {

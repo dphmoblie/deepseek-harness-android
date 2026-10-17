@@ -199,7 +199,7 @@ describe('App conversation gate', () => {
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
     await openSettingsPage('模型与密钥')
-    fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
+    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
       ...settings,

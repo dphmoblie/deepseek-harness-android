@@ -1757,9 +1757,10 @@ button:disabled {
   border: 1px solid var(--red-line);
 }
 
-/* 供应商状态一览：只读反馈当前状态，编辑入口统一收敛到上方供应商选择框。 */
+/* 状态卡片同时作为供应商切换入口，沿用卡片文字与主题强调色。 */
 .provider-status { display: grid; gap: 6px; margin: 4px 0 14px; }
-.provider-status-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; }
+.provider-status-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; width: 100%; min-width: 0; min-height: 44px; padding: 8px 10px; border: 1px solid var(--line-alt); border-radius: 8px; background: transparent; color: inherit; text-align: left; }
+.provider-status-row:hover { border-color: var(--blue); }
 .provider-status-row.is-selected { border-color: var(--blue); background: var(--blue-soft); }
 .provider-status-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-status-badge {
