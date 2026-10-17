@@ -113,15 +113,15 @@ export function AutomationTaskCard({ bridge = runtimeBridge }: { bridge?: Runtim
         {step.code !== null ? `（${step.code}）` : ''}
       </p>)}
       <p className="settings-note">{t('停止只把剩下的步骤标成跳过，已经发出去的那一步不会撤回。')}</p>
-      <button type="button" onClick={() => { void stop() }} disabled={busy}>{t('停止这个任务')}</button>
+      <button className="button button-secondary" type="button" onClick={() => { void stop() }} disabled={busy}>{t('停止这个任务')}</button>
       {stopped && <p className="settings-note">{t('已经停止，剩下的步骤都标成了跳过。')}</p>}
     </>}
     {stopFailed !== null && <p role="alert">
       {CANCEL_FAILURE_NOTES[stopFailed] !== undefined ? t(CANCEL_FAILURE_NOTES[stopFailed]) : t('停止失败（{0}）', stopFailed)}
       {' '}
-      <button type="button" onClick={() => { void stop() }}>{t('重试')}</button>
+      <button className="button button-quiet" type="button" onClick={() => { void stop() }}>{t('重试')}</button>
     </p>}
-    {ready && <button type="button" onClick={() => { void refresh() }}>{t('重新读取')}</button>}
-    {failed && <p role="alert">{t('无法读取当前任务')} <button type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
+    {ready && <button className="button button-secondary" type="button" onClick={() => { void refresh() }}>{t('重新读取')}</button>}
+    {failed && <p role="alert">{t('无法读取当前任务')} <button className="button button-quiet" type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
   </div>
 }
