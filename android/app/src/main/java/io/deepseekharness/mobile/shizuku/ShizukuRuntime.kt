@@ -396,14 +396,21 @@ class ShizukuRuntime(
         return readState()
     }
 
-    /** 只恢复已运行、受支持且已授权的连接；不等服务启动、不弹授权、不读取状态缓存。 */
-    fun connectIfAuthorized(permitted: () -> Boolean, current: () -> Boolean) {
+    /**
+     * 只恢复已运行、受支持且已授权的连接；不等服务启动、不弹授权、不读取状态缓存。
+     *
+     * 返回值只表示「已完成一次 UserService 连接（或复用了现有连接）」；false 表示
+     * 前置条件在执行期间不再满足。调用方可据此区分重启后的连接失败与「Shizuku 尚未
+     * 运行/授权」这类无需打扰用户的状态。
+     */
+    fun connectIfAuthorized(permitted: () -> Boolean, current: () -> Boolean): Boolean {
         val allowed = { !closed.get() && !Thread.currentThread().isInterrupted && permitted() }
-        if (!allowed() || !current() || !tryPingBinder()) return
-        if (Shizuku.isPreV11() || Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return
-        if (!allowed() || !current()) return
+        if (!allowed() || !current() || !tryPingBinder()) return false
+        if (Shizuku.isPreV11() || Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return false
+        if (!allowed() || !current()) return false
         // 一旦开始绑定便由 UserService 的连接代次接管；首次 sticky 回调不能取消其他调用已复用的 future。
         requireService(allowed, waitForBinder = false)
+        return true
     }
 
     fun startVirtualScreen(component: String, width: Int, height: Int, dpi: Int, owner: IBinder): org.json.JSONObject {

@@ -10,14 +10,18 @@ import {
   DEFAULT_ACCENT_MODE,
   THEME_COLORS,
   THEME_STORAGE_KEY,
+  TEXT_COLOR_STORAGE_KEY,
   applyTheme,
+  clearCustomTextColor,
   isAccentMode,
   isThemeMode,
   readAccentMode,
+  readCustomTextColor,
   readThemeMode,
   resolveTheme,
   saveAccentMode,
   saveCustomAccentColor,
+  saveCustomTextColor,
   saveThemeMode,
   systemPrefersDark,
   useResolvedTheme,
@@ -135,6 +139,29 @@ describe('主题解析', () => {
     } finally {
       set.mockRestore()
     }
+  })
+
+  it('自定义文字色只接受十六进制色，并同步普通/弱化文字令牌', () => {
+    expect(saveCustomTextColor('#123456')).toBe(true)
+    expect(window.localStorage.getItem(TEXT_COLOR_STORAGE_KEY)).toBe('#123456')
+    expect(readCustomTextColor()).toBe('#123456')
+    expect(document.documentElement.style.getPropertyValue('--ink')).toBe('#123456')
+    expect(document.documentElement.style.getPropertyValue('--muted')).toContain('#123456')
+    expect(document.documentElement.style.getPropertyValue('--card-ink')).toBe('#123456')
+    expect(saveCustomTextColor('red')).toBe(false)
+    clearCustomTextColor()
+    expect(readCustomTextColor()).toBe('')
+    expect(document.documentElement.style.getPropertyValue('--ink')).toBe('')
+  })
+
+  it('清除文字色后仍保留自定义卡片的可读前景', async () => {
+    const { applyCard, DEFAULT_CARD } = await import('./appearance')
+    applyCard({ ...DEFAULT_CARD, color: '#000000' })
+    expect(saveCustomTextColor('#ffffff')).toBe(true)
+    clearCustomTextColor()
+    expect(document.documentElement.style.getPropertyValue('--card-ink')).toBe('#f4f7fb')
+    expect(document.documentElement.style.getPropertyValue('--card-muted')).toBe('#c3cbd5')
+    applyCard(DEFAULT_CARD)
   })
 
   it('saveThemeMode 拒绝白名单以外的值，也不写入存储', () => {

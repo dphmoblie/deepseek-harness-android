@@ -37,7 +37,6 @@ import {
   FolderInput,
   FolderPlus,
   FolderOutput,
-  FolderOpen,
   Gauge,
   HardDrive,
   KeyRound,
@@ -141,7 +140,6 @@ import type {
   RuntimeState,
   RuntimeVersionSlot,
   RuntimeVersionsState,
-  RuntimeWorkspaceFileList,
   ShizukuState,
   StorageAccessState,
   StorageDirEntry,
@@ -1186,18 +1184,9 @@ interface EnvironmentScreenProps {
   onStart: () => void
   onStop: () => void
   onUpdate: () => void
-  onShareWorkspace: () => void
-  onListFiles: () => void
-  workspaceFiles: RuntimeWorkspaceFileList | null
-  onShareFile: (path: string) => void
-  onOpenFile: (path: string) => void
-  onDeleteFile: (path: string) => void
 }
 
-function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop, onUpdate, onShareWorkspace, onListFiles, workspaceFiles, onShareFile, onOpenFile, onDeleteFile }: EnvironmentScreenProps) {
-  const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false)
-  const browseFilesButton = useRef<HTMLButtonElement>(null)
-  const backButton = useRef<HTMLButtonElement>(null)
+function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop, onUpdate }: EnvironmentScreenProps) {
   const inProgress = ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
   const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running'
   const progress = runtime.totalBytes > 0
@@ -1234,7 +1223,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
         </div>
         <div className="heading-actions">
           <PhaseBadge phase={runtime.phase} />
-          <button ref={backButton} className="icon-button" type="button" aria-label={t("返回设置")} title={t("返回设置")} onClick={onBack}><ArrowLeft size={19} /></button>
+          <button className="icon-button" type="button" aria-label={t("返回设置")} title={t("返回设置")} onClick={onBack}><ArrowLeft size={19} /></button>
         </div>
       </div>
 
@@ -1321,7 +1310,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
       {runtime.updateAvailable && installed && (
         <div className="inline-alert warning" role="alert">
           <AlertTriangle size={19} />
-          <div><strong>{t("安装包内置的运行环境有更新")}</strong><span>{t("更新会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及在应用内安装的插件会保留。在终端里用 dsh plugin add 装进运行时的插件不会保留，更新后需要重装。")}</span></div>
+          <div><strong>{t("安装包内置的运行环境有更新")}</strong><span>{t("更新会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及插件（包括终端安装的第三方插件）会自动备份并尝试恢复。若恢复发生冲突，请到插件管理检查。")}</span></div>
         </div>
       )}
 
@@ -1341,109 +1330,8 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
           <div className="detail-row"><span><LockKeyhole size={18} />{t("网络访问")}</span><strong>{t("仅本应用内")}</strong></div>
         </div>
       </section>
-      {installed && <section className="detail-section workspace-export" aria-labelledby="workspace-export-title">
-        <h2 id="workspace-export-title">{t("工作区文件")}</h2>
-        <p>{t("浏览、打开或分享 DSH 在运行时工作区创建的文件")}</p>
-        <div className="workspace-actions">
-          <button className="button button-secondary" type="button" onClick={onShareWorkspace} disabled={busy !== null}>
-            {busy === 'workspace-share' ? <Loader2 className="spin" size={18} /> : <Share2 size={18} />}{t("分享工作区")}
-          </button>
-          <button ref={browseFilesButton} className="button button-secondary" type="button" onClick={() => {
-            setWorkspaceDialogOpen(true)
-            onListFiles()
-          }} disabled={busy !== null}>
-            <FolderOpen size={18} />{t("浏览文件")}
-          </button>
-        </div>
-      </section>}
-      {workspaceDialogOpen && <WorkspaceFilesDialog
-        busy={busy}
-        files={workspaceFiles}
-        onClose={() => {
-          setWorkspaceDialogOpen(false)
-          if (browseFilesButton.current?.disabled) backButton.current?.focus()
-          else browseFilesButton.current?.focus()
-        }}
-        onDelete={onDeleteFile}
-        onOpen={onOpenFile}
-        onRefresh={onListFiles}
-        onShare={onShareFile}
-      />}
     </div>
   )
-}
-
-interface WorkspaceFilesDialogProps {
-  busy: string | null
-  files: RuntimeWorkspaceFileList | null
-  onClose: () => void
-  onDelete: (path: string) => void
-  onOpen: (path: string) => void
-  onRefresh: () => void
-  onShare: (path: string) => void
-}
-
-function WorkspaceFilesDialog({ busy, files, onClose, onDelete, onOpen, onRefresh, onShare }: WorkspaceFilesDialogProps) {
-  const loading = busy === 'workspace-files'
-  const closeButton = useRef<HTMLButtonElement>(null)
-  useEffect(() => {
-    if (busy !== null || !document.activeElement?.closest('.workspace-dialog')) closeButton.current?.focus()
-  }, [busy])
-
-  return <div className="dialog-backdrop workspace-dialog-backdrop" role="presentation" onPointerDown={event => {
-    if (event.target === event.currentTarget) onClose()
-  }}>
-    <section className="dialog workspace-dialog" role="dialog" aria-modal="true" aria-labelledby="workspace-dialog-title" onKeyDown={event => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onClose()
-      } else if (event.key === 'Tab') {
-        const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')]
-        const first = buttons[0]
-        const last = buttons[buttons.length - 1]
-        if (event.shiftKey && document.activeElement === first) {
-          event.preventDefault()
-          last?.focus()
-        } else if (!event.shiftKey && document.activeElement === last) {
-          event.preventDefault()
-          first?.focus()
-        }
-      }
-    }}>
-      <header className="workspace-dialog-header">
-        <span className="workspace-dialog-icon" aria-hidden="true"><FolderOpen size={22} /></span>
-        <div>
-          <h2 id="workspace-dialog-title">{t("工作区文件")}</h2>
-          <p>{loading ? t("正在读取文件") : files === null ? t("读取失败") : t("{0} 个文件", files.files.length)}</p>
-        </div>
-        <button className="icon-button" type="button" aria-label={t("刷新")} title={t("刷新")} onClick={onRefresh} disabled={busy !== null}>
-          {loading ? <Loader2 className="spin" size={19} /> : <RefreshCw size={19} />}
-        </button>
-        <button ref={closeButton} className="icon-button" type="button" aria-label={t("关闭")} title={t("关闭")} onClick={onClose}>
-          <X size={19} />
-        </button>
-      </header>
-      <div className="workspace-dialog-body" aria-live="polite">
-        {loading ? <div className="workspace-empty"><Loader2 className="spin" size={24} /><span>{t("正在读取工作区文件")}</span></div>
-          : files === null ? <div className="workspace-empty" role="alert"><AlertTriangle size={26} /><strong>{t("无法读取工作区文件，请重试")}</strong></div>
-            : files.files.length === 0 ? <div className="workspace-empty"><FileText size={26} /><strong>{t("工作区中暂无文件")}</strong><span>{t("DSH 创建的文件会显示在这里")}</span></div>
-            : <div className="workspace-file-list">{files.files.map(path => {
-                const separator = path.lastIndexOf('/')
-                const name = separator < 0 ? path : path.slice(separator + 1)
-                const directory = separator < 0 ? t("工作区根目录") : path.slice(0, separator)
-                return <div className="workspace-file-row" key={path}>
-                  <span className="workspace-file-icon" aria-hidden="true"><FileText size={18} /></span>
-                  <span className="workspace-file-copy" title={path}><strong>{name}</strong><small>{directory}</small></span>
-                  <span className="workspace-file-actions">
-                    <button className="icon-button" type="button" aria-label={t("打开 {0}", name)} title={t("打开")} onClick={() => onOpen(path)} disabled={busy !== null}><ExternalLink size={17} /></button>
-                    <button className="icon-button" type="button" aria-label={t("分享 {0}", name)} title={t("分享")} onClick={() => onShare(path)} disabled={busy !== null}><Share2 size={17} /></button>
-                    <button className="icon-button workspace-delete" type="button" aria-label={t("删除 {0}", name)} title={t("删除")} onClick={() => onDelete(path)} disabled={busy !== null}><Trash2 size={17} /></button>
-                  </span>
-                </div>
-              })}{files.truncated && <p className="settings-note" role="status">{t("文件过多，仅显示前 100 个；请缩小工作区范围后重试")}</p>}</div>}
-      </div>
-    </section>
-  </div>
 }
 
 interface TerminalScreenProps {
@@ -4176,7 +4064,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
 
   useEffect(() => {
     return () => {
-      if (autoSaveTimerRef.current !== null) window.clearTimeout(autoSaveTimerRef.current)
+      // Keep a pending save alive when the user switches settings pages. The draft is
+      // owned by App, so cancelling here would silently drop a just-edited value.
       if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
     }
   }, [])
@@ -4868,7 +4757,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
-            <div><h2 id="download-settings">{t("运行时与设备 Shell")}</h2><p>{t("装、启停、重置在「Ubuntu 运行时」；Shizuku 授权与 AI Shell 在「设备 Shell 设置」。这一页只管它们从哪来。")}</p></div>
+            <div><h2 id="download-settings">{t("运行时与设备 Shell")}</h2><p>{t("装、启停、重置在「Ubuntu 运行时」；Shizuku 授权与 AI Shell 在「设备 Shell 设置」。")}</p></div>
           </div>
           <div className="settings-inline-actions">
             <button className="button button-secondary" type="button" onClick={onOpenEnvironment} disabled={busy !== null}>
@@ -4878,35 +4767,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               <SquareTerminal size={18} />{t("设备 Shell 设置")}
             </button>
           </div>
-          <p className="settings-note">{t("清单两项留空表示使用 APK 内置的运行时（官方构建即内置，可离线安装）；填写清单地址与 SHA-256 则改为从该来源下载，两项必须成对。")}</p>
-          <label className="field">
-            <span>{t("运行时清单地址")}</span>
-            <input
-              type="url"
-              inputMode="url"
-              autoCapitalize="none"
-              autoComplete="off"
-              maxLength={2048}
-              value={settings.manifestUrl}
-              onChange={event => setDraft({ ...settings, manifestUrl: event.target.value })}
-            />
-          </label>
-          <label className="field">
-            <span>{t("运行时清单 SHA-256")}</span>
-            <input
-              className="mono-input"
-              type="text"
-              inputMode="text"
-              autoCapitalize="none"
-              autoComplete="off"
-              spellCheck={false}
-              minLength={64}
-              maxLength={64}
-              pattern="[A-Fa-f0-9]{64}"
-              value={settings.manifestSha256}
-              onChange={event => setDraft({ ...settings, manifestSha256: event.target.value })}
-            />
-          </label>
+          <p className="settings-note">{t("运行环境使用 APK 内置的受校验版本；需要其它版本时请在 Ubuntu 运行时的版本管理中下载并切换。")}</p>
         </section>
         )}
 
@@ -5612,11 +5473,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         </>
         )}
 
-        {(page === 'models' || page === 'runtime' || page === 'terminal') && (
-        <button className="button button-primary save-button" type="submit" disabled={busy !== null} aria-label={t("保存设置")}>
-          {busy === 'save-settings' ? <Loader2 className="spin" size={18} /> : autoSaved ? <Check size={18} /> : <Save size={18} />}
-          {autoSaved ? t("已自动保存") : t("保存设置")}</button>
-        )}
+        {autoSaved && <p className="settings-note settings-auto-saved" role="status"><Check size={16} />{t("已自动保存")}</p>}
       </form>
     </div>
   )
@@ -5832,8 +5689,8 @@ function UpdateDialog({ busy, version, onCancel, onConfirm }: UpdateDialogProps)
         <h2 id="update-title">{t("更新 Ubuntu 运行环境")}</h2>
         <p>
           {version === null
-            ? t("当前 APK 内置了新版运行环境。继续后会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及在应用内安装的插件会保留，应用设置也不受影响。在终端里用 dsh plugin add 装进运行时的插件不会保留，更新后需要重装。")
-            : t("即将安装运行时 {0}。继续后会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及在应用内安装的插件会保留，应用设置也不受影响。在终端里用 dsh plugin add 装进运行时的插件不会保留，更新后需要重装。", version)}
+            ? t("当前 APK 内置了新版运行环境。继续后会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及插件（包括终端安装的第三方插件）会自动备份并尝试恢复，应用设置也不受影响。若恢复发生冲突，请到插件管理检查。")
+            : t("即将安装运行时 {0}。继续后会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及插件（包括终端安装的第三方插件）会自动备份并尝试恢复，应用设置也不受影响。若恢复发生冲突，请到插件管理检查。", version)}
         </p>
         <p>{t("开始前会先把当前会话自动备份一份（在「版本管理 → 会话备份」里能看到）。新镜像里的 dsh 版本可能与现在不同，读不出旧会话时可以用那份备份恢复。")}</p>
         <div className="dialog-actions">
@@ -6893,24 +6750,6 @@ export function App() {
     })
   }, [notify, run])
 
-  const shareWorkspace = useCallback(() => {
-    void run('workspace-share', () => runtimeBridge.shareRuntimeWorkspace(), t('已打开分享面板'))
-  }, [run])
-  const [workspaceFiles, setWorkspaceFiles] = useState<RuntimeWorkspaceFileList | null>(null)
-  const listWorkspaceFiles = useCallback(() => {
-    setWorkspaceFiles(null)
-    void run('workspace-files', async () => setWorkspaceFiles(await runtimeBridge.listRuntimeWorkspaceFiles()))
-  }, [run])
-  const shareWorkspaceFile = useCallback((path: string) => { void run('workspace-file-share', () => runtimeBridge.shareRuntimeWorkspaceFile(path)) }, [run])
-  const openWorkspaceFile = useCallback((path: string) => { void run('workspace-file-open', () => runtimeBridge.openRuntimeWorkspaceFile(path)) }, [run])
-  const deleteWorkspaceFile = useCallback((path: string) => {
-    if (!window.confirm(t('确定删除“{0}”吗？此操作无法撤销。', path))) return
-    void run('workspace-file-delete', async () => {
-      await runtimeBridge.deleteRuntimeWorkspaceFile(path)
-      setWorkspaceFiles(current => current === null ? null : { ...current, files: current.files.filter(item => item !== path) })
-    }, t('文件已删除'))
-  }, [run])
-
   const clearDiagnostic = useCallback(() => {
     void run('diagnostic-clear', async () => {
       setDiagnostic(await runtimeBridge.clearDiagnosticLog())
@@ -7420,7 +7259,7 @@ export function App() {
       case 'plugins':
         return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
       case 'environment':
-        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} onShareWorkspace={shareWorkspace} onListFiles={listWorkspaceFiles} workspaceFiles={workspaceFiles} onShareFile={shareWorkspaceFile} onOpenFile={openWorkspaceFile} onDeleteFile={deleteWorkspaceFile} />
+        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={launchHarness} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} />
       case 'versions':
         return (
         <RuntimeVersionsScreen

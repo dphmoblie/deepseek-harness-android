@@ -345,7 +345,7 @@ button:disabled {
 /* `--card-*` 由 src/appearance.ts 写在根元素上（用户自定义卡片配色）。这里保留令牌默认值：
    变量未定义时 color-mix() 会让整条声明在计算值阶段失效，卡片底色会直接掉成透明。 */
 .settings-section, .runtime-overview, .management-row, .detail-section, .launch-panel { background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent); backdrop-filter: blur(var(--card-blur, 0px)); color: var(--card-ink, var(--ink)); }
-.settings-section p, .management-copy small, .detail-section p { color: var(--card-muted); }
+.settings-section p, .management-copy small, .detail-section p { color: var(--card-muted, var(--muted)); }
 
 .app-frame {
   display: grid;
@@ -659,14 +659,15 @@ button:disabled {
 }
 
 .button-secondary {
-  color: var(--ink);
+  color: var(--card-ink, var(--ink));
   border-color: var(--line-strong);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  backdrop-filter: blur(var(--card-blur, 0px));
 }
 
 .button-secondary:not(:disabled):hover {
   border-color: var(--line-hover);
-  background: var(--surface-muted);
+  background: color-mix(in srgb, var(--card-color, var(--surface-muted)) var(--card-opacity, 100%), transparent);
 }
 
 .button-danger {
@@ -1357,7 +1358,9 @@ button:disabled {
   min-height: 48px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  color: var(--card-ink, var(--ink));
+  backdrop-filter: blur(var(--card-blur, 0px));
 }
 
 .search-control {
@@ -1379,7 +1382,7 @@ button:disabled {
   min-height: 44px;
   padding: 0;
   border: 0;
-  color: var(--ink);
+  color: var(--card-ink, var(--ink));
   background: transparent;
   font: inherit;
 }
@@ -1407,13 +1410,13 @@ button:disabled {
   padding: 0;
   border: 0;
   border-radius: 50%;
-  color: var(--muted);
-  background: var(--surface-muted);
+  color: var(--card-muted, var(--muted));
+  background: color-mix(in srgb, var(--card-color, var(--surface-muted)) var(--card-opacity, 76%), transparent);
   cursor: pointer;
 }
 
 .search-control-clear:hover,
-.settings-search-clear:hover { color: var(--ink); }
+.settings-search-clear:hover { color: var(--card-ink, var(--ink)); }
 
 .settings-search {
   display: grid;
@@ -1428,7 +1431,7 @@ button:disabled {
   min-width: 0;
   padding: 0;
   border: 0;
-  color: var(--ink);
+  color: var(--card-ink, var(--ink));
   background: transparent;
   font: inherit;
 }
@@ -1443,12 +1446,12 @@ button:disabled {
   height: 44px;
   border: 1px solid transparent;
   border-radius: 50%;
-  color: var(--muted);
-  background: var(--surface-muted);
+  color: var(--card-muted, var(--muted));
+  background: color-mix(in srgb, var(--card-color, var(--surface-muted)) var(--card-opacity, 76%), transparent);
   cursor: pointer;
 }
 
-.settings-search-filter:hover, .settings-search-filter[aria-expanded="true"] { color: var(--ink); }
+.settings-search-filter:hover, .settings-search-filter[aria-expanded="true"] { color: var(--card-ink, var(--ink)); }
 .settings-search-filter.is-filtered { color: var(--blue); background: var(--blue-soft); border-color: var(--blue-line); }
 
 /* 搜索是唯一的主动作，用实色圆钮与「清空」的弱按钮拉开层级。 */
@@ -1587,6 +1590,22 @@ button:disabled {
   background: var(--surface);
   box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 5%, transparent);
 }
+
+/* 自动化、根通道与文件管理的子区块也使用同一张主题卡片。 */
+.settings-subsection {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  backdrop-filter: blur(var(--card-blur, 0px));
+  color: var(--card-ink, var(--ink));
+  box-shadow: var(--shadow-card);
+}
+.settings-subsection :is(p, small) { color: var(--card-muted, var(--muted)); }
+.settings-subsection [role='alert'] { color: var(--red-text, var(--red)); }
 
 /*
  * 一张卡片最多占两屏（`vh` 就是手机上看得见的那块）。
@@ -2769,7 +2788,8 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 .mailbox-entry {
   border: 1px solid var(--line);
   color: var(--muted);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  color: var(--card-ink, var(--ink));
   font: inherit;
   cursor: pointer;
 }

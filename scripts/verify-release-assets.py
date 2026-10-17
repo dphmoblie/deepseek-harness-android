@@ -25,6 +25,12 @@ import re
 import sys
 from pathlib import Path
 
+# 与发布清单生成器保持一致：CI 以 UTF-8 读取受控错误文案，不能依赖 Windows
+# 当前代码页，否则断言和日志都会出现乱码。
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
+
 BUFFER_SIZE = 1024 * 1024
 CHECKSUMS_NAME = "checksums.txt"
 # GNU coreutils 的两种写法：`<摘要>  <文件名>` 与 `<摘要> *<文件名>`（二进制模式）。

@@ -391,6 +391,10 @@ describe('设置草稿与未保存的输入', () => {
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
 
     await openSettingsPage('主题')
+    // Keep the debounced write unresolved so the navigation below exercises the
+    // dirty-draft path instead of racing the 500 ms auto-save to completion.
+    let resolveSave!: (value: RuntimeSettings) => void
+    bridge.saveSettings.mockImplementationOnce(() => new Promise<RuntimeSettings>(resolve => { resolveSave = resolve }))
     fireEvent.change(screen.getByRole('slider', { name: /字号/ }), { target: { value: '18' } })
 
     // 进入每个设置二级页都会重读设置；这里让重读带回一个不同的落盘值（22）。
@@ -405,6 +409,7 @@ describe('设置草稿与未保存的输入', () => {
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({ terminalFontSize: 18 }),
     ))
+    await act(async () => { resolveSave({ ...settings, terminalFontSize: 18 }) })
   })
 
   it('保存成功后草稿与落盘值重新同步：密钥不回显、也不重复提交', async () => {
@@ -461,6 +466,11 @@ describe('设置草稿与未保存的输入', () => {
     fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'local-model' } })
     fireEvent.change(screen.getByLabelText('模型名称'), { target: { value: 'Local Model' } })
 
+    // Keep this first auto-save in flight: the provider fields and key must
+    // survive the settings-page remount while the write is still pending.
+    let resolveSave!: (value: RuntimeSettings) => void
+    bridge.saveSettings.mockImplementationOnce(() => new Promise<RuntimeSettings>(resolve => { resolveSave = resolve }))
+
     await backToSettingsHome()
     await openSettingsPage('后台')
     await backToSettingsHome()
@@ -481,6 +491,11 @@ describe('设置草稿与未保存的输入', () => {
       ],
       customProviderApiKeys: { 'custom-1': 'sk-custom-gateway' },
     })))
+    await act(async () => { resolveSave({
+      ...settings,
+      customModelProviders: [{ id: 'custom-1', name: '本地网关', api: 'openai-completions', baseUrl: 'https://gateway.example.invalid/v1', models: [{ id: 'local-model', name: 'Local Model', contextWindow: 131072, maxTokens: 8192 }] }],
+      configuredCustomModelProviders: ['custom-1'],
+    }) })
   })
 })
 

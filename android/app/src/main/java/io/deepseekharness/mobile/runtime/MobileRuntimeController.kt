@@ -3,6 +3,7 @@ package io.deepseekharness.mobile.runtime
 import android.content.Context
 import io.deepseekharness.mobile.BuildConfig
 import io.deepseekharness.mobile.shizuku.ShizukuState
+import io.deepseekharness.mobile.shizuku.ShizukuAutoReconnectPolicy
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -21,6 +22,9 @@ class RuntimeLibraryResult(
     val payload: org.json.JSONObject,
     val autoSnapshot: RuntimeAutoSnapshotOutcome?,
 )
+
+/** 重启恢复时 Shizuku 自动连接的受控结果，不携带远程异常文本。 */
+enum class ShizukuReconnectResult { NOT_ELIGIBLE, CONNECTED, FAILED }
 
 /**
  * 本机运行时控制器。
@@ -568,6 +572,49 @@ class MobileRuntimeController(
         // 授权已存在时直接绑定 Shizuku UserService；未授权时
         // ShizukuRuntime.connect() 会在 requirePermission() 中拒绝（fail-closed）。
         return terminals.shizuku.connect()
+    }
+
+    /**
+     * 在系统重启恢复线程中尝试复用已有授权连接。
+     *
+     * 这里只接受已安装、已运行、已授权的 Shizuku；不会弹授权对话框，也不会等待服务
+     * 启动。失败只返回受控结果，调用方可投递固定提醒而不会把 Binder 原文写入日志。
+     */
+    fun reconnectShizukuIfAuthorized(permitted: () -> Boolean = { true }): ShizukuReconnectResult {
+        ensureOpen()
+        val state = try {
+            terminals.shizuku.healthCheck()
+        } catch (_: Throwable) {
+            return ShizukuReconnectResult.NOT_ELIGIBLE
+        }
+        if (!ShizukuAutoReconnectPolicy.shouldAttempt(state)) {
+            return ShizukuReconnectResult.NOT_ELIGIBLE
+        }
+        return try {
+            val connected = terminals.shizuku.connectIfAuthorized(permitted, permitted)
+            when {
+                connected -> ShizukuReconnectResult.CONNECTED
+                !permitted() -> ShizukuReconnectResult.NOT_ELIGIBLE
+                // A permission/binder race can make the guarded call return false after the
+                // initial health check. Re-read state before deciding whether to notify.
+                !ShizukuAutoReconnectPolicy.shouldAttempt(terminals.shizuku.healthCheck()) ->
+                    ShizukuReconnectResult.NOT_ELIGIBLE
+                else -> ShizukuReconnectResult.FAILED
+            }
+        } catch (_: Throwable) {
+            if (!permitted()) {
+                ShizukuReconnectResult.NOT_ELIGIBLE
+            } else {
+                // A binder death during bind changes eligibility; avoid an inaccurate alert.
+                runCatching {
+                    if (ShizukuAutoReconnectPolicy.shouldAttempt(terminals.shizuku.healthCheck())) {
+                        ShizukuReconnectResult.FAILED
+                    } else {
+                        ShizukuReconnectResult.NOT_ELIGIBLE
+                    }
+                }.getOrDefault(ShizukuReconnectResult.NOT_ELIGIBLE)
+            }
+        }
     }
 
     fun openShizukuManager() {

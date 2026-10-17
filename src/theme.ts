@@ -26,6 +26,7 @@ export type AccentMode = 'ocean' | 'mint' | 'amber' | 'rose'
 export const THEME_STORAGE_KEY = 'dsh-mobile-theme-v1'
 export const ACCENT_STORAGE_KEY = 'dsh-mobile-accent-v1'
 const CUSTOM_ACCENT_STORAGE_KEY = 'dsh-mobile-custom-accent-v1'
+export const TEXT_COLOR_STORAGE_KEY = 'dsh-mobile-text-color-v1'
 /** 默认跟随系统：用户没表过态时，尊重系统的深色偏好比替他做决定更合理。 */
 export const DEFAULT_THEME_MODE: ThemeMode = 'system'
 const THEME_MODES: readonly ThemeMode[] = ['system', 'light', 'dark']
@@ -130,6 +131,55 @@ export function readCustomAccentColor(): string {
   } catch { return '' }
 }
 
+export function readCustomTextColor(): string {
+  try {
+    const value = window.localStorage.getItem(TEXT_COLOR_STORAGE_KEY) ?? ''
+    return /^#[0-9a-f]{6}$/i.test(value) ? value : ''
+  } catch { return '' }
+}
+
+/** 将用户选择的文字色写入受控 CSS 变量；空值交还给明暗主题。 */
+export function applyTextColor(): void {
+  const root = document.documentElement
+  const custom = readCustomTextColor()
+  const cardColor = root.style.getPropertyValue('--card-color').trim()
+  const hasCustomCard = /^#[0-9a-f]{6}$/i.test(cardColor)
+  if (custom) {
+    root.style.setProperty('--ink', custom)
+    // Secondary labels use the same hue at lower opacity, so custom text color
+    // does not leave descriptions and field labels in the old theme color.
+    const muted = `color-mix(in srgb, ${custom} 68%, transparent)`
+    root.style.setProperty('--muted', muted)
+    root.style.setProperty('--field-label', muted)
+    root.style.setProperty('--card-ink', custom)
+    root.style.setProperty('--card-muted', muted)
+  } else {
+    for (const name of ['--ink', '--muted', '--field-label']) root.style.removeProperty(name)
+    if (hasCustomCard) {
+      const [r, g, b] = [1, 3, 5].map(offset => parseInt(cardColor.slice(offset, offset + 2), 16))
+      const darkCard = (r * 299 + g * 587 + b * 114) / 1000 < 150
+      root.style.setProperty('--card-ink', darkCard ? '#f4f7fb' : '#17202b')
+      root.style.setProperty('--card-muted', darkCard ? '#c3cbd5' : '#475362')
+    } else {
+      for (const name of ['--card-ink', '--card-muted']) root.style.removeProperty(name)
+    }
+  }
+}
+
+export function saveCustomTextColor(value: string): boolean {
+  if (!/^#[0-9a-f]{6}$/i.test(value)) return false
+  try { window.localStorage.setItem(TEXT_COLOR_STORAGE_KEY, value) } catch { return false }
+  applyTextColor()
+  window.dispatchEvent(new Event(THEME_EVENT))
+  return true
+}
+
+export function clearCustomTextColor(): void {
+  try { window.localStorage.removeItem(TEXT_COLOR_STORAGE_KEY) } catch { /* 存储不可用时仅清理当前页面 */ }
+  applyTextColor()
+  window.dispatchEvent(new Event(THEME_EVENT))
+}
+
 export function saveCustomAccentColor(value: string): boolean {
   if (!/^#[0-9a-f]{6}$/i.test(value)) return false
   try {
@@ -159,6 +209,7 @@ export function applyTheme(mode: ThemeMode): ResolvedTheme {
   const root = document.documentElement
   root.dataset.theme = theme
   applyAccent(readAccentMode())
+  applyTextColor()
   root.style.setProperty('color-scheme', theme)
   syncThemeColorMeta(theme)
   // 失败只影响状态栏配色，主题本身已经落地：因此不让它抛出、也不弹错——
