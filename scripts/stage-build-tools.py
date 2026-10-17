@@ -13,7 +13,7 @@ import re
 import shutil
 import subprocess
 import tarfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 PACKAGES = (
@@ -97,15 +97,43 @@ def wanted(path: Path) -> bool:
     )
 
 
+def map_posix(text: str) -> str:
+    """usr-merge 归并：/lib、/bin、/sbin 一律落到 /usr 下。"""
+    for prefix, replacement in (("/lib", "/usr/lib"), ("/bin", "/usr/bin"), ("/sbin", "/usr/sbin")):
+        if text == prefix or text.startswith(prefix + "/"):
+            return replacement + text[len(prefix):]
+    return text
+
+
 def map_path(path: Path) -> Path:
-    # Ubuntu 24.04 使用 usr-merge，/lib 下的库必须以 /usr/lib 形式落盘。
-    if path == Path("/lib") or path.as_posix().startswith("/lib/"):
-        return Path("/usr/lib") / path.relative_to("/lib")
-    if path == Path("/bin") or path.as_posix().startswith("/bin/"):
-        return Path("/usr/bin") / path.relative_to("/bin")
-    if path == Path("/sbin") or path.as_posix().startswith("/sbin/"):
-        return Path("/usr/sbin") / path.relative_to("/sbin")
-    return path
+    return Path(map_posix(path.as_posix()))
+
+
+def normalize_link_posix(parent: str, raw: str) -> str:
+    """把链接文本（可相对）折算成预置树里的绝对路径（已做 usr-merge 归并）。"""
+    joined = PurePosixPath(raw) if raw.startswith("/") else PurePosixPath(parent) / raw
+    parts: list[str] = []
+    for part in joined.parts:
+        if part in ("", ".", "/"):
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return map_posix("/" + "/".join(parts))
+
+
+def link_is_self_contained(source: Path, planned: set[str]) -> bool:
+    """链接的**字面终点**是否也在预置树里。
+
+    /usr/bin/cc -> gcc-13 算（同一目录的兄弟文件会一起落盘）；
+    /usr/bin/ld -> /etc/alternatives/ld 不算——访客里没有 /etc/alternatives，
+    这种链接必须按内容落盘，否则 /usr/bin/ld 在访客里是断链，链接期直接找不到 ld。
+    指向自己的链接（usr-merge 之后 /lib/... 与 /usr/lib/... 折叠成同一路径）同样不算。
+    """
+    target = normalize_link_posix(source.parent.as_posix(), os.readlink(source))
+    return target in planned and target != map_path(source).as_posix()
 
 
 def ldd_paths(binary: Path) -> set[Path]:
@@ -136,7 +164,7 @@ def resolve_link(source: Path) -> Path | None:
         return None
 
 
-def copy_entry(source: Path, destination: Path) -> None:
+def copy_entry(source: Path, destination: Path, planned: set[str] | None = None) -> None:
     if source.is_dir() and not source.is_symlink():
         # 目录由子项自己落盘。目录目标曾被当成文件交给 shutil.copy2，
         # /usr/lib/llvm-16/lib/clang/16/include 这种链接目标一进来就 IsADirectoryError。
@@ -147,6 +175,12 @@ def copy_entry(source: Path, destination: Path) -> None:
     elif destination.is_dir():
         shutil.rmtree(destination)
     if source.is_symlink():
+        if planned is not None and not link_is_self_contained(source, planned):
+            target = resolve_link(source)
+            if target is not None and target.is_file():
+                # 终点不会进访客（/etc/alternatives 之类）：按内容落盘，别留断链。
+                shutil.copy2(target, destination, follow_symlinks=False)
+                return
         destination.symlink_to(os.readlink(source))
     else:
         shutil.copy2(source, destination, follow_symlinks=False)
@@ -190,16 +224,26 @@ def main() -> int:
                     pending.append(dependency)
 
     args.destination.mkdir(parents=True, exist_ok=True)
+    # 预置树里会出现的路径集合：链接只在这些终点上保留链接形态，其余按内容落盘。
+    planned = {map_path(path).as_posix() for path in candidates}
     staged: list[Path] = []
     for source in sorted(candidates):
         mapped = map_path(source)
         if mapped.as_posix() in base:
             continue
         target = args.destination / mapped.relative_to("/")
-        copy_entry(source, target)
+        copy_entry(source, target, planned)
         staged.append(mapped)
 
-    missing = [path for path in ENTRYPOINTS if not (args.destination / map_path(Path(path)).relative_to("/")).exists()]
+    missing = []
+    for path in ENTRYPOINTS:
+        candidate = args.destination / map_path(Path(path)).relative_to("/")
+        if candidate.exists():
+            continue
+        if candidate.is_symlink():
+            missing.append(f"{path}（链接终点 {os.readlink(candidate)} 不在预置树里）")
+        else:
+            missing.append(path)
     if missing:
         raise SystemExit(f"构建工具入口缺失: {', '.join(missing)}")
 
