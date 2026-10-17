@@ -394,6 +394,11 @@ internal object RuntimeDiagnostics {
             return ClassifiedFailure("PROOT_RUNNER_START_FAILED", "Android 无法执行 APK 内的 PRoot 运行器")
         }
         if (result.timedOut) return ClassifiedFailure("PROOT_PROBE_TIMEOUT", "PRoot 启动 Ubuntu 时超时")
+        // 进程已经退出但没有留下可识别文本时，按执行失败处理；不能把一次已完成的崩溃
+        // 误报为超时，超时只由 ProcessProbe 的 timedOut 字段决定。
+        if (result.exitCode != null && result.exitCode != 0 && result.output.isBlank()) {
+            return ClassifiedFailure("PROOT_GUEST_EXEC_FAILED", "PRoot 无法加载 Ubuntu 程序")
+        }
         val output = result.output.lowercase()
         return when {
             "ptrace" in output && ("operation not permitted" in output || "permission denied" in output) ->
@@ -480,11 +485,14 @@ internal object ProcessProbe {
             output.close()
             throw failure
         }
-        if (!completed) terminate(process)
+        // waitForExit 到达截止时间时，进程可能恰好在最后一次轮询后退出。
+        // 先重读存活状态，避免把已经结束的崩溃误标为 timeout；只有仍在运行才执行终止。
+        val timedOut = !completed && process.isAlive
+        if (timedOut) terminate(process)
         output.awaitClosed(OUTPUT_DRAIN_TIMEOUT_MS)
         val result = ProcessProbeResult(
             exitCode = if (process.isAlive) null else process.exitValue(),
-            timedOut = !completed,
+            timedOut = timedOut,
             output = output.snapshot(),
         )
         output.close()
