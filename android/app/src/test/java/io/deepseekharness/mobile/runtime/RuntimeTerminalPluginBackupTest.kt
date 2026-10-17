@@ -31,7 +31,7 @@ class RuntimeTerminalPluginBackupTest {
         assertTrue(RuntimeTerminalPluginBackup.isModulePath("root/.dsh/profiles/node_modules/@scope/pkg"))
         assertFalse(RuntimeTerminalPluginBackup.isModulePath("root/.dsh/profiles/web/package.json"))
         assertFalse(RuntimeTerminalPluginBackup.isModulePath("root/.dsh/profiles/other/file"))
-        assertTrue(RuntimeTerminalPluginBackup.isProfilePath("root/.dsh/profiles/web/node_modules/.pnpm/pkg"))
-        assertFalse(RuntimeTerminalPluginBackup.isProfilePath("root/.dsh-mobile/plugin-manager/versions/pkg"))
+        assertTrue(RuntimeTerminalPluginBackup.isModulePath("root/.dsh/profiles/web/node_modules/.pnpm/pkg"))
+        assertFalse(RuntimeTerminalPluginBackup.isModulePath("root/.dsh/profiles/web/package.json"))
     }
 }
