@@ -409,7 +409,7 @@ describe('设置草稿与未保存的输入', () => {
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
       expect.objectContaining({ terminalFontSize: 18 }),
     ))
-    await act(async () => { resolveSave({ ...settings, terminalFontSize: 18 }) })
+    await act(async () => { resolveSave({ ...settings, terminalFontSize: 18 }); await Promise.resolve() })
   })
 
   it('保存成功后草稿与落盘值重新同步：密钥不回显、也不重复提交', async () => {
@@ -495,7 +495,7 @@ describe('设置草稿与未保存的输入', () => {
       ...settings,
       customModelProviders: [{ id: 'custom-1', name: '本地网关', api: 'openai-completions', baseUrl: 'https://gateway.example.invalid/v1', models: [{ id: 'local-model', name: 'Local Model', contextWindow: 131072, maxTokens: 8192 }] }],
       configuredCustomModelProviders: ['custom-1'],
-    }) })
+    }); await Promise.resolve() })
   })
 })
 
