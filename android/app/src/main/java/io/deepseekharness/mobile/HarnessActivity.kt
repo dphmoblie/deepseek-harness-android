@@ -36,7 +36,9 @@ import java.util.concurrent.Executors
 class HarnessActivity : AppCompatActivity() {
     private lateinit var webView: WebView
     private lateinit var allowedOrigin: Origin
-    private val pageLoadGate = HarnessPageLoadGate()
+    private var pageLoadGate = HarnessPageLoadGate()
+    private val authenticationOwner = Any()
+    private var boundAccess: HarnessAccess? = null
     private var pageFailureHandled = false
     private var pageRetryCount = 0
     private var rendererRecovery = false
@@ -110,16 +112,16 @@ class HarnessActivity : AppCompatActivity() {
         setIntent(intent)
         val resetToHome = intent.getBooleanExtra(EXTRA_RESET_TO_HOME, false)
         val nextSessionId = sessionIdExtra(intent)
-        if ((resetToHome || !nextSessionId.isNullOrBlank()) && ::webView.isInitialized && ::allowedOrigin.isInitialized) {
-            val nextUrl = HarnessPageUrl.withVersions(
-                allowedOrigin.initialUrl,
-                BuildConfig.VERSION_NAME,
-                RuntimeStore(this).installedManifest()?.version,
-                nextSessionId.takeUnless { resetToHome },
-            )
-            entryUrlForRetry = nextUrl
-            if (resetToHome) webView.clearHistory()
-            webView.loadUrl(nextUrl)
+        if (!::webView.isInitialized) return
+        val access = AppAuthenticationState.harnessAccess() ?: run {
+            finish()
+            return
+        }
+        // 通知回到同一运行周期时保留页面；新运行周期即使没有跳转 extra 也必须重绑。
+        if (resetToHome || nextSessionId != null || access != boundAccess ||
+            !AppAuthenticationState.ownsHarnessAccess(authenticationOwner)
+        ) {
+            bindHarnessAccess(access, nextSessionId.takeUnless { resetToHome }, clearHistory = resetToHome)
         }
     }
 
@@ -139,76 +141,13 @@ class HarnessActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (!AppAuthenticationState.isHarnessAuthenticated()) {
-            finish()
-            return
-        }
         val access = AppAuthenticationState.harnessAccess() ?: run {
-            finish()
-            return
-        }
-        allowedOrigin = Origin.parse(access.url) ?: run {
             finish()
             return
         }
         val runtimeStore = RuntimeStore(this)
         if (runtimeStore.keepScreenAwake()) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-
-        val cookieOrigin = HarnessSessionCookie.origin(allowedOrigin.port)
-        val authenticationCookie = try {
-            HarnessSessionCookie.authenticated(access.password)
-        } catch (_: IllegalArgumentException) {
-            finish()
-            return
-        }
-
-        // 入口 URL：index.html 是唯一没有内容哈希的产物，它的缓存键必须同时带上 APK 版本与
-        // 已安装运行时版本，否则在线更新运行之后 WebView 会继续复用旧前端。
-        // 运行时未安装 / 清单不可读时由 withVersions 落到固定占位值，不会让 URL 抖动。
-        // 纯字符串计算（清单在运行时启动链路中已完成缓存预热），放在布局加载前完成，
-        // 以便紧接着提前发起 cookie 写入。
-        val requestedSessionId = sessionIdExtra(intent)
-        val entryUrl = HarnessPageUrl.withVersions(
-            allowedOrigin.initialUrl,
-            BuildConfig.VERSION_NAME,
-            runtimeStore.installedManifest()?.version,
-            requestedSessionId,
-        )
-        entryUrlForRetry = entryUrl
-
-        // Cookie 写入是异步的（写入内存存储后即回调，flush 才落盘）。提前到 WebView 创建之前
-        // 发起，让它与下面的布局 inflate、WebView 初始化并行，缩短「进入页面 → 发起首个请求」
-        // 的等待。回调 post 到主线程，最早也要等 onCreate 返回后才执行，届时 webView 必已初始化。
-        // pageLoadGate 仍保证「确认写入成功后才发起首个页面请求」这一安全语义不变。
-        val cookieManager = CookieManager.getInstance().apply {
-            setAcceptCookie(true)
-        }
-        cookieManager.setCookie(cookieOrigin, authenticationCookie) { accepted ->
-            when (pageLoadGate.onCookieStored(accepted)) {
-                CookieLoadDecision.LOAD -> {
-                    // 写入回调晚到、页面已在销毁时不得再触碰 WebView（gate.cancel 后通常走 IGNORE，
-                    // 这道检查覆盖 gate 尚未取消但 Activity 已结束的窗口）。
-                    if (isFinishing || isDestroyed) return@setCookie
-                    // 「回调一定在主线程、且一定晚于 onCreate」只是常见实现的事实，并不是
-                    // CookieManager#setCookie 的 API 契约。而上面的 gate 已经把这次写入消费掉，
-                    // 若因为 webView 还没初始化就把加载丢掉，页面将永远不加载、也没有任何提示。
-                    // 因此这里改为主线程重投递：等 onCreate 建好 WebView 后再发起首个请求。
-                    val load = Runnable {
-                        if (!isFinishing && !isDestroyed && ::webView.isInitialized) {
-                            cookieManager.flush()
-                            webView.loadUrl(entryUrl)
-                        }
-                    }
-                    if (::webView.isInitialized) load.run() else Handler(Looper.getMainLooper()).post(load)
-                }
-                CookieLoadDecision.REJECT -> {
-                    Toast.makeText(this, R.string.harness_session_failed, Toast.LENGTH_SHORT).show()
-                    returnToMainActivity()
-                }
-                CookieLoadDecision.IGNORE -> Unit
-            }
         }
 
         setContentView(R.layout.activity_harness)
@@ -220,14 +159,6 @@ class HarnessActivity : AppCompatActivity() {
         webView.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            // 入口 index.html 没有内容哈希，只有 URL 带全两维「真实」版本键时才允许走正常缓存；
-            // 缺任一维、或运行时版本读不到（占位值）都退回完全绕开缓存——宁可多下载一次，
-            // 也不能拿旧前端。带哈希的 /assets/* 能否真正长缓存取决于运行时的响应头，
-            // 单靠 Android 侧改不了（见 HarnessPageCache 与本次改动报告）。
-            cacheMode = when (HarnessPageCache.modeFor(entryUrl)) {
-                HarnessCacheMode.NORMAL -> WebSettings.LOAD_DEFAULT
-                HarnessCacheMode.BYPASS -> WebSettings.LOAD_NO_CACHE
-            }
             allowFileAccess = false
             // 必须允许 content:// 访问，否则 <input type="file"> 选择结果（SAF 返回的都是
             // content:// URI）无法被 WebView 读取，系统文件选择器等于白弹。
@@ -246,29 +177,97 @@ class HarnessActivity : AppCompatActivity() {
             // fontScale 不在 configChanges 里，系统改字号会重建本 Activity，因此读一次即可。
             textZoom = AppTextScale.percentOf(resources.configuration.fontScale)
         }
-        cookieManager.setAcceptThirdPartyCookies(webView, false)
-        // 清理可能残留的 HTTP Auth 缓存（每次启动的临时凭据都不同）。该调用触发 WebView
-        // 数据库磁盘 I/O，放后台线程执行；本页所有 401 都由 RestrictedWebViewClient 显式
-        // proceed，从不依赖数据库里的缓存应答，因此清理在何时完成都不改变鉴权行为。
-        clearHttpAuthCredentialsAsync()
-        webView.webViewClient = RestrictedWebViewClient(
-            allowedOrigin,
-            access.username,
-            access.password,
-            ::handleMainFrameFailure,
-        )
         // 没有 WebChromeClient 时 <input type="file"> 点了毫无反应：这是插件"从相册导入"
         // 这类入口在手机上完全不可用的根因（皮肤中心只能靠手填容器路径绕过）。
         webView.webChromeClient = HarnessWebChromeClient()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             WebView.startSafeBrowsing(applicationContext, null)
         }
+        bindHarnessAccess(access, sessionIdExtra(intent))
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 if (webView.canGoBack()) webView.goBack() else returnToMainActivity()
             }
         })
+    }
+
+    private fun bindHarnessAccess(access: HarnessAccess, sessionId: String?, clearHistory: Boolean = false) {
+        val origin = Origin.parse(access.url) ?: run {
+            finish()
+            return
+        }
+        val cookie = try {
+            HarnessSessionCookie.authenticated(access.password)
+        } catch (_: IllegalArgumentException) {
+            finish()
+            return
+        }
+        if (!AppAuthenticationState.claimHarnessAccess(authenticationOwner, access)) {
+            finish()
+            return
+        }
+        var discardHistory = clearHistory || boundAccess != access
+        pageLoadGate.cancel()
+        val gate = HarnessPageLoadGate()
+        pageLoadGate = gate
+        pageRetryHandler.removeCallbacksAndMessages(null)
+        pageFailureHandled = false
+        pageRetryCount = 0
+        deliverFileChooserResult(emptyList())
+        webView.stopLoading()
+        if (discardHistory) webView.clearHistory()
+        boundAccess = access
+        allowedOrigin = origin
+        val entryUrl = HarnessPageUrl.withVersions(
+            origin.initialUrl,
+            BuildConfig.VERSION_NAME,
+            RuntimeStore(this).installedManifest()?.version,
+            sessionId,
+        )
+        entryUrlForRetry = entryUrl
+        webView.settings.cacheMode = when (HarnessPageCache.modeFor(entryUrl)) {
+            HarnessCacheMode.NORMAL -> WebSettings.LOAD_DEFAULT
+            HarnessCacheMode.BYPASS -> WebSettings.LOAD_NO_CACHE
+        }
+        webView.webViewClient = RestrictedWebViewClient(
+            origin, access.username, access.password,
+            onMainFrameFailure = {
+                if (pageLoadGate === gate && AppAuthenticationState.ownsHarnessAccess(authenticationOwner)) {
+                    handleMainFrameFailure()
+                }
+            },
+            onMainFrameLoaded = { view ->
+                if (discardHistory && pageLoadGate === gate && view.url == entryUrl) {
+                    discardHistory = false
+                    view.clearHistory()
+                }
+            },
+        )
+        clearHttpAuthCredentialsAsync()
+        val cookies = CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            setAcceptThirdPartyCookies(webView, false)
+        }
+        // 每轮绑定单独持有 gate；上一轮迟到的 Cookie 回调不能触发新一轮导航。
+        cookies.setCookie(HarnessSessionCookie.origin(origin.port), cookie) { accepted ->
+            pageRetryHandler.post {
+                if (isFinishing || isDestroyed || pageLoadGate !== gate ||
+                    !AppAuthenticationState.ownsHarnessAccess(authenticationOwner)
+                ) return@post
+                when (gate.onCookieStored(accepted)) {
+                    CookieLoadDecision.LOAD -> {
+                        cookies.flush()
+                        webView.loadUrl(entryUrl)
+                    }
+                    CookieLoadDecision.REJECT -> {
+                        Toast.makeText(this, R.string.harness_session_failed, Toast.LENGTH_SHORT).show()
+                        returnToMainActivity()
+                    }
+                    CookieLoadDecision.IGNORE -> Unit
+                }
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -284,10 +283,9 @@ class HarnessActivity : AppCompatActivity() {
             webView.destroy()
         }
         pageRetryHandler.removeCallbacksAndMessages(null)
-        if (!isChangingConfigurations && !rendererRecovery) {
-            AppAuthenticationState.revokeHarness()
-        }
-        if (::allowedOrigin.isInitialized && !isChangingConfigurations) {
+        val revoked = !isChangingConfigurations && !rendererRecovery &&
+            AppAuthenticationState.revokeHarness(authenticationOwner)
+        if (::allowedOrigin.isInitialized && revoked) {
             // 清除注入的鉴权 Cookie：token 每次启动重新生成，旧值无意义。
             val cookieManager = CookieManager.getInstance()
             cookieManager.setCookie(
@@ -437,7 +435,12 @@ class HarnessActivity : AppCompatActivity() {
             view?.destroy()
             (view?.context as? HarnessActivity)?.finish()
         },
+        private val onMainFrameLoaded: (WebView) -> Unit = {},
     ) : WebViewClient() {
+        override fun onPageFinished(view: WebView?, url: String?) {
+            if (view != null) onMainFrameLoaded(view)
+        }
+
         override fun onReceivedHttpAuthRequest(
             view: WebView?,
             handler: HttpAuthHandler?,

@@ -227,4 +227,77 @@ describe('停止后重新打开 Harness', () => {
       vi.useRealTimers()
     }
   })
+
+  it('停止超时后迟到成功不更新运行态、不导航也不提示成功', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      bridge.getState.mockResolvedValue({ ...runningState })
+      let finish!: (state: RuntimeState) => void
+      bridge.stopRuntime.mockImplementationOnce(() => new Promise<RuntimeState>(resolve => { finish = resolve }))
+      render(<App />)
+      await arriveAtSettingsHome()
+      fireEvent.click(await screen.findByRole('button', { name: '首页' }))
+      fireEvent.click(await screen.findByRole('button', { name: '停止' }))
+      await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledTimes(1))
+      await act(async () => { await vi.advanceTimersByTimeAsync(45_000) })
+      await waitFor(() => expect(screen.getByRole('button', { name: '停止' })).toBeEnabled())
+      await act(async () => { finish({ ...readyState }); await Promise.resolve() })
+      expect(screen.queryByText('运行环境已停止')).not.toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: '设置' })).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '停止' })).toBeEnabled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each(['success', 'failure'] as const)('旧停止迟到 %s 不覆盖新一轮停止的忙碌状态', async outcome => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      bridge.getState.mockResolvedValue({ ...runningState })
+      let finishOld!: (state: RuntimeState) => void
+      let rejectOld!: (error: Error) => void
+      let finishNew!: (state: RuntimeState) => void
+      bridge.stopRuntime.mockImplementationOnce(() => new Promise<RuntimeState>((resolve, reject) => { finishOld = resolve; rejectOld = reject }))
+      bridge.stopRuntime.mockImplementationOnce(() => new Promise<RuntimeState>(resolve => { finishNew = resolve }))
+      render(<App />)
+      await arriveAtSettingsHome()
+      fireEvent.click(await screen.findByRole('button', { name: '首页' }))
+      fireEvent.click(await screen.findByRole('button', { name: '停止' }))
+      await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledTimes(1))
+      await act(async () => { await vi.advanceTimersByTimeAsync(45_000) })
+      fireEvent.click(screen.getByRole('button', { name: '停止' }))
+      await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledTimes(2))
+      await act(async () => {
+        if (outcome === 'success') finishOld({ ...readyState })
+        else rejectOld(new Error('旧操作失败'))
+        await Promise.resolve()
+      })
+      expect(screen.queryByText('旧操作失败')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '停止' })).toBeDisabled()
+      await act(async () => { finishNew({ ...readyState }); await Promise.resolve() })
+      await waitFor(() => expect(screen.getByText('运行环境已停止')).toBeVisible())
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('停止超时后迟到失败不覆盖超时提示', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      bridge.getState.mockResolvedValue({ ...runningState })
+      let rejectOld!: (error: Error) => void
+      bridge.stopRuntime.mockImplementationOnce(() => new Promise<RuntimeState>((_, reject) => { rejectOld = reject }))
+      render(<App />)
+      await arriveAtSettingsHome()
+      fireEvent.click(await screen.findByRole('button', { name: '首页' }))
+      fireEvent.click(await screen.findByRole('button', { name: '停止' }))
+      await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledTimes(1))
+      await act(async () => { await vi.advanceTimersByTimeAsync(45_000) })
+      await act(async () => { rejectOld(new Error('旧操作失败')); await Promise.resolve() })
+      expect(screen.queryByText('旧操作失败')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '停止' })).toBeEnabled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
