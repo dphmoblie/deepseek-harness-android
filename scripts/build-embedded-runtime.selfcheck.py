@@ -247,6 +247,49 @@ def check_build_tools(module: object) -> None:
             )
 
 
+def check_stage_build_tools() -> None:
+    """预置脚本的落盘规则：目录目标不许当文件拷，符号链接按链接落盘。
+
+    回归点：/usr/lib/llvm-16/lib/clang/16/include 是「指向目录」的符号链接，旧代码把它
+    解析成目录后又交给 shutil.copy2，构建机直接 IsADirectoryError（run 39042712091）。
+    """
+    module = load_sibling("stage_build_tools", "stage-build-tools.py")
+    with tempfile.TemporaryDirectory(prefix="dsh-stage-build-tools-") as directory:
+        root = Path(directory)
+        source = root / "source"
+        (source / "usr/bin").mkdir(parents=True)
+        (source / "usr/bin/gcc").write_bytes(b"gcc\n")
+        (source / "usr/lib/clang/16/include").mkdir(parents=True)
+        (source / "usr/lib/clang/16/include/stdio.h").write_bytes(b"h\n")
+        link_file = source / "usr/bin/cc"
+        link_dir = source / "usr/lib/llvm-16/lib/clang/16/include"
+        link_dir.parent.mkdir(parents=True)
+        try:
+            link_file.symlink_to("gcc")
+            link_dir.symlink_to("../../../../clang/16/include")
+        except (OSError, NotImplementedError):
+            print("selfcheck: 当前平台不允许创建符号链接，跳过预置脚本落盘用例")
+            return
+
+        destination = root / "staged"
+        # 目录（链接解析后的目标）直接拷：不许抛错，也不该落成空文件。
+        module.copy_entry(link_dir.resolve(), destination / "usr/lib/clang/16/include")
+        assert not (destination / "usr/lib/clang/16/include").exists()
+        # 文件链接按链接落盘，内容不被展开。
+        module.copy_entry(link_file, destination / "usr/bin/cc")
+        assert (destination / "usr/bin/cc").is_symlink()
+        assert os.readlink(destination / "usr/bin/cc") == "gcc"
+        # 普通文件仍按内容拷贝。
+        module.copy_entry(source / "usr/bin/gcc", destination / "usr/bin/gcc")
+        assert (destination / "usr/bin/gcc").read_bytes() == b"gcc\n"
+
+        assert module.resolve_link(link_file) == (source / "usr/bin/gcc").resolve()
+        assert module.resolve_link(link_dir) == (source / "usr/lib/clang/16/include").resolve()
+        broken = source / "usr/bin/broken"
+        broken.symlink_to("/nonexistent/target")
+        assert module.resolve_link(broken) is None
+
+
 def expect_build_error(module: object, action, label: str) -> None:
     try:
         action()
@@ -872,6 +915,7 @@ def main() -> int:
     # --- 网络工具组件组（git / curl / CA 证书）----------------------------------
     check_network_tools(module)
     check_build_tools(module)
+    check_stage_build_tools()
 
     # --- sourcemap 裁剪（构建 + 历史 bundle 重建）-------------------------------
     check_sourcemap_trimming(module, load_sibling("rebuild_rootfs_frontend", "rebuild-rootfs-frontend.py"))
@@ -885,7 +929,8 @@ def main() -> int:
 
     print(
         "selfcheck OK: mobile profile + rootfs path normalization + "
-        "network tools and C build tools components + sourcemap trimming + bundle/APK integrity + bundle verification rules + "
+        "network tools and C build tools components + build tools staging rules + "
+        "sourcemap trimming + bundle/APK integrity + bundle verification rules + "
         "legal notices collection"
     )
 

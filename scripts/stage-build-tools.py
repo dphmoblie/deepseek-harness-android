@@ -123,10 +123,30 @@ def ldd_paths(binary: Path) -> set[Path]:
     return paths
 
 
+def resolve_link(source: Path) -> Path | None:
+    """把符号链接解析成最终目标；断链返回 None。"""
+    target = Path(os.readlink(source))
+    if not target.is_absolute():
+        target = source.parent / target
+    if not (target.exists() or target.is_symlink()):
+        return None
+    try:
+        return target.resolve()
+    except OSError:
+        return None
+
+
 def copy_entry(source: Path, destination: Path) -> None:
+    if source.is_dir() and not source.is_symlink():
+        # 目录由子项自己落盘。目录目标曾被当成文件交给 shutil.copy2，
+        # /usr/lib/llvm-16/lib/clang/16/include 这种链接目标一进来就 IsADirectoryError。
+        return
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.is_symlink() or destination.is_file():
+        destination.unlink()
+    elif destination.is_dir():
+        shutil.rmtree(destination)
     if source.is_symlink():
-        destination.unlink(missing_ok=True)
         destination.symlink_to(os.readlink(source))
     else:
         shutil.copy2(source, destination, follow_symlinks=False)
@@ -151,11 +171,11 @@ def main() -> int:
             continue
         seen.add(source)
         if source.is_symlink():
-            target = Path(os.readlink(source))
-            if not target.is_absolute():
-                target = source.parent / target
-            if target.exists() or target.is_symlink():
-                pending.append(target.resolve())
+            target = resolve_link(source)
+            # 只跟文件目标。目录目标（例如 /usr/lib/llvm-16/lib/clang/16/include）
+            # 编译用不到，把整棵目录拉进来只会撑大预置树；链接本身仍然按链接落盘。
+            if target is not None and target.is_file():
+                pending.append(target)
         mapped = map_path(source)
         if mapped.as_posix() not in base:
             candidates.add(source)
@@ -182,6 +202,23 @@ def main() -> int:
     missing = [path for path in ENTRYPOINTS if not (args.destination / map_path(Path(path)).relative_to("/")).exists()]
     if missing:
         raise SystemExit(f"构建工具入口缺失: {', '.join(missing)}")
+
+    # 入口在树里不等于能编译：头文件、C++ 标准库头与 crt 启动对象也必须有着落
+    # （要么本次预置进来，要么基线镜像里本来就有）。这一步挡在生成 300MB 资产之前。
+    required = (
+        "/usr/include/stdio.h",
+        "/usr/include/c++",
+        "/usr/lib/aarch64-linux-gnu/crt1.o",
+        "/usr/lib/aarch64-linux-gnu/libstdc++.so.6",
+    )
+    absent = [
+        path
+        for path in required
+        if map_path(Path(path)).as_posix() not in base
+        and not (args.destination / map_path(Path(path)).relative_to("/")).exists()
+    ]
+    if absent:
+        raise SystemExit(f"构建工具链不完整，缺少: {', '.join(absent)}")
     args.package_list.parent.mkdir(parents=True, exist_ok=True)
     providers: set[str] = set()
     for path in staged:
