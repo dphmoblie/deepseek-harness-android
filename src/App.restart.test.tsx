@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge } from './__tests__/appTestHarness'
 
@@ -11,6 +11,54 @@ import { App } from './App'
 
 describe('停止后重新打开 Harness', () => {
   beforeEach(beforeEachAppTest)
+
+  it('返回设置后再次打开运行中的 Harness，不重复启动服务', async () => {
+    render(<App />)
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    const starts = bridge.startHarness.mock.calls.length
+    const open = await screen.findByRole('button', { name: '打开 Harness' })
+    await waitFor(() => expect(open).toBeEnabled())
+    bridge.getKeepAliveState.mockImplementation(() => new Promise(() => {}))
+
+    fireEvent.click(open)
+
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(open).toBeEnabled())
+    expect(bridge.startHarness).toHaveBeenCalledTimes(starts)
+  })
+
+  it('再次打开无响应且状态查询卡住时释放按钮，旧回调不解锁新一次打开', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(<App />)
+      await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+      let finishOldOpen!: () => void
+      bridge.openHarness.mockImplementationOnce(() => new Promise<void>(resolve => { finishOldOpen = resolve }))
+      const open = await screen.findByRole('button', { name: '打开 Harness' })
+      await waitFor(() => expect(open).toBeEnabled())
+      fireEvent.click(open)
+      await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(2))
+      bridge.getState.mockImplementation(() => new Promise(() => {}))
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(45_000) })
+      expect(await screen.findByRole('alert')).toHaveTextContent('设备没有在预期时间内响应')
+      fireEvent.click(screen.getByRole('button', { name: '设置' }))
+      const retry = screen.getByRole('button', { name: '打开 Harness' })
+      expect(retry).toBeEnabled()
+
+      let finishRetry!: () => void
+      bridge.openHarness.mockImplementationOnce(() => new Promise<void>(resolve => { finishRetry = resolve }))
+      fireEvent.click(retry)
+      await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(3))
+      await act(async () => { finishOldOpen(); await Promise.resolve() })
+      expect(retry).toBeDisabled()
+      await act(async () => { finishRetry(); await Promise.resolve() })
+      await waitFor(() => expect(retry).toBeEnabled())
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 
   it.each(['pending', 'rejected'] as const)('辅助状态查询 %s 不影响停止完成与再次启动', async outcome => {
     render(<App />)

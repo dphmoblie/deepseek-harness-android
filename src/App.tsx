@@ -3956,31 +3956,34 @@ export function App() {
     busyRef.current = 'launch'
     setBusy('launch')
     void (async () => {
+      let launchRuntime = runtime
       /*
        * 打开序列。抽成函数是为了让「失败后重连一次」走的是**同一条**路径：
        * 抄一遍重试分支，迟早出现「重试时漏掉了 getKeepAliveState，或在重试成功时仍然弹了错误提示」
        * 这类只在罕见路径上才暴露的漂移。
        */
       const launchSequence = async (): Promise<void> => {
-        let nextRuntime = runtime
+        let nextRuntime = launchRuntime
         if (nextRuntime.phase !== 'running') {
-          nextRuntime = await runtimeBridge.startHarness()
+          nextRuntime = await withBridgeTimeout(runtimeBridge.startHarness(), 180_000)
+          launchRuntime = nextRuntime
           setRuntime(nextRuntime)
         }
-        // 后台状态不参与打开页面的关键路径；查询结果稍后回填即可。
-        void runtimeBridge.getKeepAliveState()
-          .then(setKeepAlive)
-          .catch(() => { /* 保留上一次已知状态。 */ })
         // HarnessActivity 覆盖在 MainActivity 之上；把设置留在底页，原生"管理"按钮
         // 就能回到正确的管理界面，而不是覆盖 HarnessActivity。
         setActiveView('settings')
-        await runtimeBridge.openHarness(sessionId)
+        await withBridgeTimeout(runtimeBridge.openHarness(sessionId), ACTION_WATCHDOG_MS)
+        // 先打开页面，再刷新可选状态，避免它抢占原生运行时锁。
+        void runtimeBridge.getKeepAliveState()
+          .then(setKeepAlive)
+          .catch(() => { /* 保留上一次已知状态。 */ })
       }
 
       /** 陈旧句柄的恢复代价：刷新一次状态，成功才让用户看得见。失败保持原样，不打断启动失败的主线。 */
       const recoverFromClosedRuntime = async (): Promise<void> => {
         try {
-          setRuntime(await runtimeBridge.getState())
+          launchRuntime = await withBridgeTimeout(runtimeBridge.getState(), BOOT_STATE_TIMEOUT_MS)
+          setRuntime(launchRuntime)
         } catch {
           // 刷新只是重连前的准备；刷不动就按原样重试，失败原因仍由原来的错误来交代。
         }
@@ -4011,11 +4014,10 @@ export function App() {
         }
       } catch (error) {
         setActiveView('conversation')
-        try {
-          setRuntime(await runtimeBridge.getState())
-        } catch {
-          // 打开会话的错误才是主故障；刷新状态只是尽力而为，不要覆盖主错误。
-        }
+        // 错误后的状态刷新不能阻止释放打开按钮，尤其是桥本身无响应时。
+        void withBridgeTimeout(runtimeBridge.getState(), BOOT_STATE_TIMEOUT_MS)
+          .then(setRuntime)
+          .catch(() => { /* 保留上一次已知状态。 */ })
         notify(errorMessage(error), 'error')
       } finally {
         busyRef.current = null

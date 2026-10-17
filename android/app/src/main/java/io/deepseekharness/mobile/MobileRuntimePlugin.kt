@@ -986,7 +986,8 @@ class MobileRuntimePlugin : Plugin() {
 
     @PluginMethod
     fun openHarness(call: PluginCall) {
-        resolveWhileActive(call) {
+        // 获取运行时访问凭据会等待生命周期锁，不能阻塞 Capacitor 的串行桥接线程。
+        execute(call) {
             val sessionId = try {
                 HarnessPageUrl.requireValidSessionId(call.getString("sessionId")?.trim())
             } catch (_: IllegalArgumentException) {
