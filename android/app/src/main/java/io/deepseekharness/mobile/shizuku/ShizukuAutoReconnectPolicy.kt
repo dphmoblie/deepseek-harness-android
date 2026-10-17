@@ -10,4 +10,3 @@ internal object ShizukuAutoReconnectPolicy {
     fun shouldAttempt(state: ShizukuState): Boolean =
         state.installed && state.running && state.permission == "granted" && !state.connected
 }
-}
