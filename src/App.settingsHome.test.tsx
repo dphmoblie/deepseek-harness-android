@@ -230,6 +230,33 @@ describe('设置首页：分组与分类筛选', () => {
     expect(searchInput).toHaveValue('主题')
   })
 
+  /**
+   * 回归：设置首页的「打开 Harness」必须只把会话标识递给桥。
+   *
+   * 曾经的写法是 `onClick={onLaunch}`：React 把合成事件当成 `sessionId` 传下去，
+   * 事件对象里存着指回 Fiber 的循环引用，Capacitor 过桥序列化时抛
+   * `TypeError: Converting circular structure to JSON`。调用就此断在半路，
+   * `busy` 停在 `'launch'`，界面卡在「正在进入对话」直到看门狗超时——实体机上表现为
+   * 「从 Harness 返回后再点回来一直转圈」。
+   */
+  it('点「打开 Harness」不把点击事件当会话标识递给桥', async () => {
+    await openSettingsHome()
+
+    // 启动链自己已经开过一次，先清空，才能看清这一次点击递了什么。
+    bridge.openHarness.mockClear()
+
+    const launchButton = screen.getByRole('button', { name: /打开 Harness/ })
+    // 忙锁没释放时按钮禁用，点了也只会在 JS 里早退，测不到这条路径。
+    await waitFor(() => expect(launchButton).toBeEnabled())
+
+    fireEvent.click(launchButton)
+
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    expect(bridge.openHarness).toHaveBeenCalledWith(undefined)
+    expect(bridge.openHarness.mock.calls[0]).toHaveLength(1)
+    expect(bridge.openHarness.mock.calls[0][0]).not.toBeInstanceOf(Object)
+  })
+
   it('组合中失焦也能恢复提交能力', async () => {
     await openSettingsHome()
 

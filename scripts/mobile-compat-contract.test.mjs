@@ -586,7 +586,9 @@ test('Shizuku UserService uses the reserved removal transaction and stops with t
   assert.match(runtimeSupervisor, /startCancellationEpoch = AtomicLong\(0\)/)
   assert.match(runtimeSupervisor, /val startEpoch = [^\n]*startCancellationEpoch\.get\(\)/)
   assert.match(runtimeSupervisor, /if \(startCancellationEpoch\.get\(\) != startEpoch\)/)
-  assert.match(nativePlugin, /fun stopRuntime\(call: PluginCall\) \{\s*harnessStartGeneration\.incrementAndGet\(\)\s*requestHarnessStartCancellation\(\)\s*stopKeepAliveService\(\)\s*execute\(call\)/)
+  // 停止前先让在途的「打开 Harness」请求失效：否则请求排到运行时锁后仍会开页面，
+  // 用户刚点停止又被盖上一层 HarnessActivity。
+  assert.match(nativePlugin, /fun stopRuntime\(call: PluginCall\) \{\s*harnessOpenRequests\.invalidate\(\)\s*harnessStartGeneration\.incrementAndGet\(\)\s*requestHarnessStartCancellation\(\)\s*stopKeepAliveService\(\)\s*execute\(call\)/)
   // 停止 Harness 不等于释放运行时：设备桥是进程级资源，必须留着，
   // 否则 supervisor 里保存的端口与令牌会变成指向死端口的陈旧配置。
   assert.match(nativePlugin, /fun stopRuntime[\s\S]*?RuntimeHost\.cancelDeviceCommands\(\)\s*controller\.stopRuntime\(\)/)
