@@ -701,6 +701,8 @@ export function createBrowserBridge(): RuntimeBridge {
       Promise.reject(new Error('浏览器模式下不能删除运行时会话快照')),
     // 浏览器预览里没有原生侧的更新渠道，也没有可下载安装的 APK：如实拒绝，
     // 不编造版本列表或更新状态，否则界面会把「预览里的假版本」当成真能装的东西。
+    listHarnessReleases: () => Promise.reject(new Error('浏览器模式下没有 Harness 版本目录')),
+    manageHarnessVersions: () => Promise.reject(new Error('浏览器模式下不能管理 Harness 版本')),
     listRuntimeReleases: (): Promise<RuntimeReleaseList> => Promise.reject(new Error('浏览器模式下没有更新渠道')),
     downloadRuntimeRelease: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能下载运行时')),
     getAppUpdateState: (forceRefresh = false): Promise<AppUpdateState> => {

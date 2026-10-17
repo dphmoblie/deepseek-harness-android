@@ -49,6 +49,7 @@ class RuntimeLaunchResolver(
     context: Context,
     private val store: RuntimeStore,
     private val includeCredentials: Boolean = true,
+    private val selectHarness: Boolean = true,
 ) {
     private data class CachedProfile(val key: String, val profile: ProotLaunchProfile)
 
@@ -154,6 +155,7 @@ class RuntimeLaunchResolver(
             throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
         }
         store.prepareLaunchFiles()
+        HarnessVersions.prepareDirectories(store)
         // 沙箱运行器脚本随每次启动刷新：脚本必须与当前 APK 的 Kotlin 侧常量同版本
         // （访客路径、绑定点、失败签名都在两边各写了一份）。
         RuntimeSandboxRunner.prepare(appContext, store)
@@ -342,7 +344,7 @@ class RuntimeLaunchResolver(
             argv = RuntimeCommand.prootArgv(
                 store = store,
                 entrypoint = entrypoint,
-                bindMounts = profile.bindMounts,
+                bindMounts = profile.bindMounts + HarnessVersions.mounts(store, selectHarness),
                 secrets = secrets,
                 harnessSession = includeCredentials && harnessAuthToken != null,
                 deviceBridgePort = deviceBridgeAccess?.takeIf { includeCredentials }?.port,

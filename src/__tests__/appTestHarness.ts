@@ -174,6 +174,8 @@ export const bridge = {
   listSessions: vi.fn(),
   // 更新：可用版本列表与应用自更新同样有默认桩——界面一进相关页面就会读一次，
   // 缺桩会让 effect 抛错并卸载整棵树（同上一条注释里的坑）。
+  listHarnessReleases: vi.fn(),
+  manageHarnessVersions: vi.fn(),
   listRuntimeReleases: vi.fn(),
   downloadRuntimeRelease: vi.fn(),
   getAppUpdateState: vi.fn(),
@@ -614,6 +616,8 @@ export function beforeEachAppTest(): void {
   bridge.listSessions.mockResolvedValue({ status: 'ready', sessions: [], truncated: false })
   // 默认空版本列表（没有可用版本可装）+ 未授权安装权限：多数用例只关心别的页面，
   // 真正关心更新的用例自己覆盖这几条桩。
+  bridge.listHarnessReleases.mockResolvedValue({ entries: [] })
+  bridge.manageHarnessVersions.mockResolvedValue({ active: 'bundled', bundledVersion: '0.2.0-rc.2', installed: [] })
   bridge.listRuntimeReleases.mockResolvedValue({ entries: [] })
   bridge.downloadRuntimeRelease.mockResolvedValue(undefined)
   bridge.getAppUpdateState.mockResolvedValue({

@@ -1,0 +1,246 @@
+'use strict'
+
+// 独立 Harness 包事务：固定 npm 来源、参数数组调用、安装脚本默认关闭；绝不删除会话或插件数据。
+const fs = require('node:fs')
+const path = require('node:path')
+const crypto = require('node:crypto')
+const { createRequire } = require('node:module')
+const { spawnSync } = require('node:child_process')
+const VERSION = /^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(?:-[a-zA-Z0-9]+(?:[.-][a-zA-Z0-9]+)*)?$/u
+const CORE = /^@deepseek-ai\/dsh(?:-[a-z0-9-]+)?$/u
+const fail = code => { throw new Error(code) }
+function version(value) {
+  if (typeof value !== 'string' || value.length > 96 || !VERSION.test(value)) fail('HARNESS_VERSION_INVALID')
+  return value
+}
+const within = (base, target) => target === base || target.startsWith(base + path.sep)
+function read(file) {
+  if (!fs.statSync(file).isFile() || fs.statSync(file).size > 8 * 1024 * 1024) fail('HARNESS_PACKAGE_INVALID')
+  return JSON.parse(fs.readFileSync(file, 'utf8'))
+}
+function atomic(file, value) {
+  if (fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()) fail('HARNESS_PATH_INVALID')
+  const temporary = file + '.' + crypto.randomUUID() + '.tmp'
+  const fd = fs.openSync(temporary, 'wx', 0o600)
+  try { fs.writeFileSync(fd, JSON.stringify(value) + '\n'); fs.fsyncSync(fd) } finally { fs.closeSync(fd) }
+  fs.renameSync(temporary, file)
+}
+/** 路径校验逐层拒绝链接，递归删除只能触及本管理器创建的单个版本目录。 */
+function directory(root, relative) {
+  let cursor = root
+  for (const part of relative.split('/')) {
+    if (!part || part === '.' || part === '..') fail('HARNESS_PATH_INVALID')
+    cursor = path.join(cursor, part)
+    if (!fs.existsSync(cursor)) fs.mkdirSync(cursor, { mode: 0o700 })
+    if (!fs.lstatSync(cursor).isDirectory() || fs.lstatSync(cursor).isSymbolicLink()) fail('HARNESS_PATH_INVALID')
+  }
+  return cursor
+}
+function fingerprint(directoryPath, inventory = null) {
+  const hash = crypto.createHash('sha256')
+  let bytes = 0
+  let count = 0
+  const files = []
+  function visit(full) {
+      const relative = path.relative(directoryPath, full)
+      if (relative === 'ready.json' || relative === 'inventory.json') return
+      if (++count > 250000 || !within(directoryPath, full)) fail('HARNESS_PACKAGE_TOO_LARGE')
+      files.push(relative)
+      const stat = fs.lstatSync(full)
+      hash.update(relative + '\0')
+      if (stat.isSymbolicLink()) {
+        const target = fs.readlinkSync(full)
+        if (!within(directoryPath, path.resolve(path.dirname(full), target))) fail('HARNESS_PATH_INVALID')
+        hash.update('link\0' + target)
+      } else if (stat.isDirectory()) { hash.update('dir\0'); if (!inventory) walk(full) }
+      else if (stat.isFile()) {
+        bytes += stat.size
+        if (bytes > 3 * 1024 ** 3 || stat.size > 256 * 1024 ** 2) fail('HARNESS_PACKAGE_TOO_LARGE')
+        hash.update('file\0'); hash.update(fs.readFileSync(full))
+      } else fail('HARNESS_PATH_INVALID')
+  }
+  function walk(folder) {
+    for (const name of fs.readdirSync(folder).sort()) {
+      visit(path.join(folder, name))
+    }
+  }
+  if (inventory) {
+    if (!Array.isArray(inventory) || inventory.length > 250000) fail('HARNESS_PACKAGE_INVALID')
+    for (const relative of inventory) {
+      if (typeof relative !== 'string' || path.isAbsolute(relative) || relative.split(/[\\/]/u).includes('..')) fail('HARNESS_PATH_INVALID')
+      const full = path.join(directoryPath, relative)
+      if (!within(directoryPath, fs.realpathSync(path.dirname(full)))) fail('HARNESS_PATH_INVALID')
+      visit(full)
+    }
+  } else walk(directoryPath)
+  return { sha256: hash.digest('hex'), bytes, files }
+}
+function verifyLock(lock, selected, integrity) {
+  const packages = lock.packages
+  if (!packages || Object.keys(packages).length > 10000) fail('HARNESS_PACKAGE_INVALID')
+  const primary = packages['node_modules/@deepseek-ai/dsh']
+  if (primary?.version !== selected || primary.integrity !== integrity) fail('HARNESS_INTEGRITY_INVALID')
+  for (const [location, item] of Object.entries(packages)) {
+    if (!location) continue
+    if (location.includes('..') || location.startsWith('/') || location.includes('\\') || item.link) fail('HARNESS_PATH_INVALID')
+    if (typeof item.resolved !== 'string') fail('HARNESS_PACKAGE_INVALID')
+    const url = new URL(item.resolved)
+    if (url.protocol !== 'https:' || url.hostname !== 'registry.npmjs.org' || url.port || url.username || url.password) fail('HARNESS_PACKAGE_INVALID')
+    if (!/^sha512-[A-Za-z0-9+/]{86}==$/u.test(item.integrity ?? '')) fail('HARNESS_INTEGRITY_INVALID')
+    const name = location.split('node_modules/').at(-1)
+    if (CORE.test(name) && item.version !== selected) fail('HARNESS_DEPENDENCY_MISMATCH')
+  }
+}
+function createManager(root, execute = spawnSync) {
+  root = fs.realpathSync(root)
+  const home = directory(root, 'root/.dsh-mobile/harness-versions')
+  const versions = directory(home, 'versions')
+  const bundled = path.join(root, 'opt/dsh-bundled')
+  const installed = path.join(root, 'opt/dsh')
+  const npm = path.join(root, 'opt/node/lib/node_modules/npm/bin/npm-cli.js')
+  function run(args, cwd, timeout = 240000) {
+    const result = execute(process.execPath, args, {
+      cwd, timeout, maxBuffer: 1024 * 1024, encoding: 'utf8',
+      env: { HOME: cwd, TMPDIR: cwd, PATH: path.dirname(process.execPath) + ':/usr/bin:/bin', LANG: 'C.UTF-8' },
+    })
+    if (result.status !== 0 || result.error || result.signal) fail('HARNESS_INSTALL_FAILED')
+    return result.stdout
+  }
+  function npmArgs(command, stage) {
+    return [npm, command, '--ignore-scripts', '--legacy-peer-deps', '--no-audit', '--no-fund', '--bin-links=false',
+      '--registry=https://registry.npmjs.org', '--fetch-retries=1', '--fetch-timeout=30000',
+      '--userconfig=' + path.join(stage, 'npmrc'), '--globalconfig=' + path.join(stage, 'global-npmrc'), '--cache=' + path.join(stage, 'cache')]
+  }
+  function verify(selected) {
+    const target = path.join(versions, version(selected))
+    if (!fs.lstatSync(target).isDirectory() || fs.lstatSync(target).isSymbolicLink()) fail('HARNESS_PATH_INVALID')
+    const ready = read(path.join(target, 'ready.json'))
+    if (ready.version !== selected || ready.arch !== process.arch || ready.abi !== process.versions.modules) fail('HARNESS_ABI_MISMATCH')
+    if (fingerprint(target, read(path.join(target, 'inventory.json'))).sha256 !== ready.sha256) fail('HARNESS_INTEGRITY_INVALID')
+    return ready
+  }
+  function install(selected, integrity) {
+    version(selected)
+    if (!/^sha512-[A-Za-z0-9+/]{86}==$/u.test(integrity ?? '')) fail('HARNESS_INTEGRITY_INVALID')
+    const target = path.join(versions, selected)
+    if (fs.existsSync(target)) { verify(selected); return { ok: true } }
+    const stage = fs.mkdtempSync(path.join(versions, '.install-'))
+    try {
+      fs.writeFileSync(path.join(stage, 'npmrc'), '', { mode: 0o600 })
+      fs.writeFileSync(path.join(stage, 'global-npmrc'), '', { mode: 0o600 })
+      const old = read(path.join(bundled, 'package.json'))
+      const dependencies = { '@deepseek-ai/dsh': selected, '@deepseek-ai/dsh-base': selected, '@deepseek-ai/dsh-web-app': selected,
+        pnpm: old.dependencies?.pnpm ?? '11.19.0', react: old.dependencies?.react ?? '18.3.1' }
+      const spec = { name: 'dsh-mobile-harness-version', version: '1.0.0', private: true, dependencies }
+      atomic(path.join(stage, 'package.json'), spec)
+      run([...npmArgs('install', stage), '--package-lock-only'], stage)
+      let lock = read(path.join(stage, 'package-lock.json'))
+      // 固定实际依赖闭包中的整套 dsh 包；不依靠 npm 范围碰巧选到同一版本。
+      spec.overrides = Object.fromEntries(Object.keys(lock.packages ?? {}).map(location => location.split('node_modules/').at(-1))
+        .filter(name => CORE.test(name)).map(name => [name, selected]))
+      atomic(path.join(stage, 'package.json'), spec)
+      fs.unlinkSync(path.join(stage, 'package-lock.json'))
+      run([...npmArgs('install', stage), '--package-lock-only'], stage)
+      lock = read(path.join(stage, 'package-lock.json'))
+      verifyLock(lock, selected, integrity)
+      run(npmArgs('ci', stage), stage, 480000)
+      const modules = path.join(stage, 'node_modules')
+      const req = createRequire(path.join(modules, '@deepseek-ai/dsh/package.json'))
+      const originalReq = createRequire(path.join(bundled, 'node_modules/@deepseek-ai/dsh/package.json'))
+      const bridgeName = '@deepseek-harness/dsh-mobile-shizuku'
+      const bridgeSource = fs.realpathSync(path.join(bundled, 'node_modules', bridgeName))
+      const bridgeTarget = path.join(modules, bridgeName)
+      fs.mkdirSync(bridgeTarget, { recursive: true, mode: 0o700 })
+      for (const file of ['package.json', 'lib', 'cordis.patch.yml']) {
+        fs.cpSync(path.join(bridgeSource, file), path.join(bridgeTarget, file), { recursive: true, dereference: true })
+      }
+      const dshManifest = path.join(modules, '@deepseek-ai/dsh/package.json')
+      const cli = read(dshManifest)
+      cli.dependencies[bridgeName] = read(path.join(bridgeTarget, 'package.json')).version
+      atomic(dshManifest, cli)
+      // 同版本原生模块优先复用随包 ARM64 二进制，否则明确构建 node-pty 后再探测。
+      const ptyManifest = req.resolve('node-pty/package.json')
+      const originalPty = originalReq.resolve('node-pty/package.json')
+      if (read(ptyManifest).version === read(originalPty).version) {
+        fs.cpSync(path.dirname(originalPty), path.dirname(ptyManifest), { recursive: true, dereference: true,
+          filter: source => !path.relative(path.dirname(originalPty), source).split(path.sep).includes('node_modules') })
+      } else {
+        const gyp = originalReq.resolve('node-gyp/bin/node-gyp.js')
+        run([gyp, 'rebuild', '--nodedir=' + path.join(root, 'opt/node')], path.dirname(ptyManifest))
+      }
+      // 真实加载原生模块并创建 PTY；不以目录存在冒充可执行。
+      run(['-e', 'const p=require(process.argv[1]);const t=p.spawn("/bin/true",[],{name:"xterm",cols:80,rows:24});t.onExit(e=>process.exit(e.exitCode));setTimeout(()=>process.exit(1),10000).unref()', path.dirname(ptyManifest)], stage, 20000)
+      run([path.join(modules, '@deepseek-ai/dsh/lib/bin.js'), '--version'], stage, 30000)
+      // 仅移除本次事务内部的 npm 缓存；锁文件与完整依赖树保留供离线核验。
+      fs.rmSync(path.join(stage, 'cache'), { recursive: true, force: true })
+      const digest = fingerprint(stage)
+      atomic(path.join(stage, 'inventory.json'), digest.files)
+      atomic(path.join(stage, 'ready.json'), { version: selected, abi: process.versions.modules, arch: process.arch, sha256: digest.sha256, bytes: digest.bytes })
+      fs.renameSync(stage, target)
+      return { ok: true }
+    } finally {
+      if (fs.existsSync(stage) && path.dirname(stage) === versions && path.basename(stage).startsWith('.install-')) fs.rmSync(stage, { recursive: true })
+    }
+  }
+  function prepare() {
+    const modules = path.join(installed, 'node_modules')
+    const packages = new Map()
+    const queue = [installed]
+    // 遍历真实依赖闭包，兼容 npm 扁平目录和内置 pnpm 隔离目录。
+    while (queue.length) {
+      const anchor = queue.pop()
+      const pkg = read(path.join(anchor, 'package.json'))
+      const req = createRequire(path.join(anchor, 'package.json'))
+      for (const name of Object.keys({ ...pkg.dependencies, ...pkg.peerDependencies, ...pkg.optionalDependencies })) {
+        if (packages.has(name)) continue
+        if (!/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/u.test(name) || name.includes('..')) fail('HARNESS_PACKAGE_INVALID')
+        const directory = req.resolve.paths(name)?.map(base => path.join(base, name)).find(candidate => fs.existsSync(path.join(candidate, 'package.json')))
+        if (!directory) continue
+        const resolved = fs.realpathSync(directory)
+        if (!within(installed, resolved)) fail('HARNESS_PATH_INVALID')
+        if (packages.size > 10000) fail('HARNESS_PACKAGE_TOO_LARGE')
+        packages.set(name, resolved)
+        queue.push(resolved)
+      }
+    }
+    const profiles = directory(root, 'root/.dsh/profiles')
+    for (const relative of ['node_modules', 'web/node_modules']) {
+      const base = directory(profiles, relative)
+      for (const [name, source] of packages) {
+        const target = path.join(base, name)
+        fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 })
+        // 已有插件实体保留；核心包实体拒绝静默替换，避免出现两套核心服务。
+        if (fs.existsSync(target) || fs.lstatSync(target, { throwIfNoEntry: false })) {
+          if (!fs.lstatSync(target).isSymbolicLink()) {
+            if (CORE.test(name)) fail('HARNESS_PROFILE_CONFLICT')
+            continue
+          }
+          fs.unlinkSync(target)
+        }
+        fs.symlinkSync(source, target, 'junction')
+      }
+    }
+    return { ok: true }
+  }
+  function remove(selected) {
+    const target = path.join(versions, version(selected))
+    if (!fs.lstatSync(target).isDirectory() || fs.lstatSync(target).isSymbolicLink()) fail('HARNESS_PATH_INVALID')
+    fs.rmSync(target, { recursive: true })
+    return { ok: true }
+  }
+  return { install, verify, prepare, remove }
+}
+module.exports = { version, verifyLock, fingerprint, createManager }
+if (require.main === module) {
+  try {
+    const [operation, selected, integrity] = process.argv.slice(2)
+    const manager = createManager('/')
+    if (!['install', 'verify', 'prepare', 'remove'].includes(operation)) fail('HARNESS_VERSION_INVALID')
+    const result = manager[operation](selected, integrity)
+    process.stdout.write(JSON.stringify(result) + '\n')
+  } catch (error) {
+    const code = /^HARNESS_[A-Z_]+$/u.test(error.message) ? error.message : 'HARNESS_PACKAGE_FAILED'
+    process.stdout.write(JSON.stringify({ error: code }) + '\n')
+    process.exitCode = 1
+  }
+}

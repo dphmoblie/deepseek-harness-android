@@ -625,6 +625,29 @@ class MobileRuntimePlugin : Plugin() {
         execute(call) { JSObject().put("entries", RuntimeReleaseCatalog().list()) }
     }
 
+    /** 应用内桥权限；目录来自固定 npm registry，只返回版本与受控标签。 */
+    @PluginMethod
+    fun listHarnessReleases(call: PluginCall) {
+        execute(call) {
+            JSObject().put("entries", org.json.JSONArray(io.deepseekharness.mobile.runtime.HarnessPackageCatalog.list().map { it.toJson() }))
+        }
+    }
+
+    /** 应用内桥权限；操作白名单与精确版本号由控制器复核，不回传路径、凭据或 npm 原始输出。 */
+    @PluginMethod
+    fun manageHarnessVersions(call: PluginCall) {
+        execute(call) {
+            val operation = call.getString("operation") ?: ""
+            if (operation == "list") JSObject(controller.manageHarnessVersions(operation, null).toString())
+            else audited(when (operation) {
+                "install" -> AuditEvent.RUNTIME_INSTALL
+                "select" -> AuditEvent.RUNTIME_VERSION_SWITCH
+                "delete" -> AuditEvent.RUNTIME_VERSION_DELETE
+                else -> throw RuntimeFailure("HARNESS_VERSION_INVALID", "Harness 版本操作无效")
+            }) { JSObject(controller.manageHarnessVersions(operation, call.getString("version")).toString()) }
+        }
+    }
+
     /**
      * 权限：应用内桥接。
      * 下载远端运行时包到本地版本库（不立即激活）。
