@@ -40,6 +40,9 @@ ENTRYPOINTS = (
     "/usr/bin/strip",
 )
 SKIP_PARTS = {"doc", "man", "info", "locale"}
+# 只查清单、不进 apt 安装列表：内核头文件（<linux/...>）由 linux-libc-dev 提供，
+# 名字和 libc6-dev 不沾亲，靠前缀匹配抓不到，编译原生扩展时却常用。
+EXTRA_PACKAGES = ("linux-libc-dev",)
 
 
 def run(*args: str, capture: bool = False) -> str:
@@ -65,7 +68,7 @@ def package_paths() -> set[Path]:
             package == wanted_package
             or package.startswith(wanted_package + ":")
             or package.startswith(wanted_package + "-")
-            for wanted_package in PACKAGES
+            for wanted_package in PACKAGES + EXTRA_PACKAGES
         )
     ]
     # 头文件和 GCC 后端可能来自带版本后缀的依赖包（例如 gcc-13、g++-13），
@@ -73,7 +76,9 @@ def package_paths() -> set[Path]:
     for package in selected:
         listing = run("dpkg-query", "-L", package, capture=True)
         result.update(Path(line.strip()) for line in listing.splitlines() if line.startswith("/"))
-    for root in (Path("/usr/bin"), Path("/usr/include"), Path("/usr/lib/gcc"), Path("/usr/libexec/gcc")):
+    # 只扫编译器自己的后端目录。/usr/include 与 /usr/bin 曾经整体 rglob，构建机镜像上
+    # 装了成片的 -dev 包，一进来就是几百兆无关头文件（run 39043573082 预置树 714MB）。
+    for root in (Path("/usr/lib/gcc"), Path("/usr/libexec/gcc")):
         if root.exists():
             result.update(path for path in root.rglob("*") if path.is_file() or path.is_symlink())
     return result
@@ -164,6 +169,62 @@ def resolve_link(source: Path) -> Path | None:
         return None
 
 
+def active_gcc_major() -> str | None:
+    """入口真正指向的 GCC 主版本（13、14 …）。镜像上通常同时装着好几套。"""
+    for entry in ("/usr/bin/cc", "/usr/bin/gcc", "/usr/bin/c++", "/usr/bin/g++", "/usr/bin/cpp"):
+        path = Path(entry)
+        if not (path.exists() or path.is_symlink()):
+            continue
+        resolved = resolve_link(path) if path.is_symlink() else path
+        if resolved is None:
+            continue
+        match = re.search(r"^(?:gcc|g\+\+|cpp|c\+\+|cc)-(\d+)(?:\.\d+)*$", resolved.name)
+        if match:
+            return match.group(1)
+    # 入口是硬链接或真实二进制时，退回问编译器自己版本。
+    try:
+        output = subprocess.run(("cc", "--version"), check=False, text=True, capture_output=True).stdout
+    except OSError:
+        return None
+    match = re.search(r"\b(\d+)\.\d+\.\d+\b", output)
+    return match.group(1) if match else None
+
+
+# 同一套工具链在不同主版本下各有一份：/usr/lib/gcc/<triple>/13、/usr/include/c++/13、
+# /usr/bin/gcc-13 …。只保留入口真正指向的那一版，其余整棵跳过。
+VERSION_SCOPED = (
+    re.compile(r"^/usr/lib/gcc/[^/]+/(\d+)(?:/|$)"),
+    re.compile(r"^/usr/libexec/gcc/[^/]+/(\d+)(?:/|$)"),
+    re.compile(r"^/usr/include/c\+\+/(\d+)(?:\.\d+)*(?:/|$)"),
+    re.compile(r"^/usr/bin/[a-z0-9_-]*?(?:gcc|g\+\+|cpp|c\+\+|cc)-(\d+)(?:\.\d+)*$"),
+)
+
+
+def is_foreign_version(text: str, keep: str | None) -> bool:
+    if keep is None:
+        return False
+    for pattern in VERSION_SCOPED:
+        match = pattern.match(text)
+        if match is not None and match.group(1) != keep:
+            return True
+    return False
+
+
+def directory_sizes(root: Path, depth: int = 3, limit: int = 8) -> list[tuple[str, int]]:
+    """按前几级目录汇总体积，超限时能一眼看出是谁胖。"""
+    totals: dict[str, int] = {}
+    for current, _directories, files in os.walk(root):
+        relative = Path(current).relative_to(root)
+        key = "/".join(relative.parts[:depth]) or "."
+        for name in files:
+            try:
+                size = os.lstat(Path(current) / name).st_size
+            except OSError:
+                continue
+            totals[key] = totals.get(key, 0) + size
+    return sorted(totals.items(), key=lambda item: item[1], reverse=True)[:limit]
+
+
 def copy_entry(source: Path, destination: Path, planned: set[str] | None = None) -> None:
     if source.is_dir() and not source.is_symlink():
         # 目录由子项自己落盘。目录目标曾被当成文件交给 shutil.copy2，
@@ -224,16 +285,29 @@ def main() -> int:
                     pending.append(dependency)
 
     args.destination.mkdir(parents=True, exist_ok=True)
+    # 只留入口真正指向的那一套 GCC：构建机镜像里常同时装着 12/13/14，
+    # 每套后端加 C++ 头都是上百兆，装进来访客也用不上。
+    keep_version = active_gcc_major()
+    selected = [
+        path
+        for path in candidates
+        if map_path(path).as_posix() not in base
+        and not is_foreign_version(map_path(path).as_posix(), keep_version)
+    ]
     # 预置树里会出现的路径集合：链接只在这些终点上保留链接形态，其余按内容落盘。
-    planned = {map_path(path).as_posix() for path in candidates}
+    planned = {map_path(path).as_posix() for path in selected}
     staged: list[Path] = []
-    for source in sorted(candidates):
+    for source in sorted(selected):
         mapped = map_path(source)
-        if mapped.as_posix() in base:
-            continue
         target = args.destination / mapped.relative_to("/")
         copy_entry(source, target, planned)
         staged.append(mapped)
+
+    totals = directory_sizes(args.destination)
+    if totals:
+        print(f"预置树体积: {sum(size for _name, size in totals) / 1048576:.1f} MB（打包上限 320 MB）")
+        for name, size in totals:
+            print(f"  {size / 1048576:8.1f} MB  {name}")
 
     missing = []
     for path in ENTRYPOINTS:
