@@ -6,6 +6,7 @@ import java.io.File
 import java.nio.file.Files
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -26,6 +27,14 @@ class RuntimeTerminalPluginBackupInstrumentedTest {
             val plugin = File(sourceRoot, "root/.dsh/profiles/web/node_modules/third-party")
                 .apply { mkdirs() }
             File(plugin, "package.json").writeText("{}")
+            File(sourceRoot, "root/.dsh/profiles/web/package.json").apply {
+                parentFile?.mkdirs()
+                writeText(
+                    """
+                    {"dependencies":{"third-party":"1.2.3"},"dsh":{"profile":{"bundles":["existing"]}}}
+                    """.trimIndent(),
+                )
+            }
 
             val handle = RuntimeTerminalPluginBackup.backup(runtimeParent, sourceRoot)
 
@@ -36,6 +45,22 @@ class RuntimeTerminalPluginBackupInstrumentedTest {
             val entry = JSONObject(snapshot.readText()).getJSONArray("entries").getJSONObject(0)
             assertEquals("third-party", entry.getString("name"))
             assertTrue(File(backup.directory, entry.getString("relative")).isDirectory)
+            assertFalse("Backup must move the plugin out of the old runtime", plugin.exists())
+
+            val targetRoot = File(root, "target-root").apply { mkdirs() }
+            val targetProfile = File(targetRoot, "root/.dsh/profiles/web/package.json").apply {
+                parentFile?.mkdirs()
+                writeText("{\"dsh\":{\"profile\":{\"bundles\":[\"new-runtime\"]}}}")
+            }
+            assertEquals(1, RuntimeTerminalPluginBackup.restore(backup, targetRoot, strict = true))
+            assertTrue(File(targetRoot, entry.getString("relative")).isDirectory)
+            assertFalse("A completed restore must consume the backup journal", backup.directory.exists())
+
+            val mergedProfile = JSONObject(targetProfile.readText())
+            val bundles = mergedProfile.getJSONObject("dsh").getJSONObject("profile").getJSONArray("bundles")
+            assertEquals("new-runtime", bundles.getString(0))
+            assertEquals("third-party", bundles.getString(1))
+            assertEquals("1.2.3", mergedProfile.getJSONObject("dependencies").getString("third-party"))
         } finally {
             root.deleteRecursively()
         }

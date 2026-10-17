@@ -300,10 +300,11 @@ internal object RuntimeTerminalPluginBackup {
         val temporary = File(parent, ".${file.name}.${UUID.randomUUID()}.tmp")
         try {
             FileChannel.open(temporary.toPath(), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS).use { channel ->
-                Channels.newOutputStream(channel).use { output ->
-                    output.write((value.toString(2) + "\n").toByteArray(Charsets.UTF_8))
-                    output.flush()
-                }
+                // Channels.newOutputStream(channel).close() also closes the channel, so force
+                // the bytes while the channel is still open before the outer use closes it.
+                val output = Channels.newOutputStream(channel)
+                output.write((value.toString(2) + "\n").toByteArray(Charsets.UTF_8))
+                output.flush()
                 channel.force(true)
             }
             Files.move(temporary.toPath(), file.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
