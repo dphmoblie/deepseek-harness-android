@@ -37,6 +37,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const readline = require('node:readline')
 const zlib = require('node:zlib')
+const { Readable } = require('node:stream')
 
 /** 访客内会话根目录：`$DSH_HOME/sessions`，其中 `$DSH_HOME = /root/.dsh`。 */
 const DEFAULT_ROOT = '/root/.dsh/sessions'
@@ -50,6 +51,8 @@ const TIME_BUDGET_MS = 3000
  * 不会为了凑标题继续往下读——读的范围越小，越贴合「外壳不读会话正文」这条线。
  */
 const MAX_SCAN_BYTES = 1024 * 1024
+/** 压缩输入同样有界，给不可压缩 JSON 与帧头/校验和留出余量。 */
+const MAX_COMPRESSED_BYTES = MAX_SCAN_BYTES * 4 + 128 * 1024
 /** 输出上限（字节）：超过即失败——宁可报一次可重试的失败，也不回一份被截断的列表。 */
 const MAX_OUTPUT_BYTES = 64 * 1024
 /** 兜底退出：进程因未知原因卡住时也要给宿主一行 JSON，而不是让宿主等到超时。 */
@@ -61,6 +64,7 @@ const FALLBACK_MAX_BYTES = 40
 /** 首条用户消息只用于折叠标题，拼接前先按字符截断，避免把长正文留在内存里。 */
 const USER_MESSAGE_MAX_CHARS = 4096
 const MAX_ID_CHARS = 200
+const ZSTD_MAGIC = 0xFD2FB528
 
 /** 会话日志文件名：`session.jsonl`（旧 v0）或 `session.v<N>.jsonl`，zstd 编码再加 `.zstd`。 */
 const SESSION_FILE = /^session(?:\.v([0-9]+))?\.jsonl(?:\.zstd)?$/
@@ -256,6 +260,92 @@ function userMessageText(event) {
 }
 
 /**
+ * 返回首个完整 Zstd 帧的结束位置，null 表示还需输入。
+ * Harness 每次追加都独立压缩，Node 的流解码器却只读首帧，因此必须逐帧定位并解压。
+ */
+function zstdFrameEnd(buffer) {
+  if (buffer.length < 5) return null
+  if (buffer.readUInt32LE(0) !== ZSTD_MAGIC) throw controlledError('SESSION_CATALOG_ZSTD_INVALID')
+  let offset = 4
+  const descriptor = buffer[offset++]
+  if ((descriptor & 0x18) !== 0) throw controlledError('SESSION_CATALOG_ZSTD_INVALID')
+  const singleSegment = (descriptor & 0x20) !== 0
+  const checksum = (descriptor & 0x04) !== 0
+  const dictionaryBytes = [0, 1, 2, 4][descriptor & 0x03]
+  const sizeFlag = descriptor >>> 6
+  const contentSizeBytes = sizeFlag === 0 ? (singleSegment ? 1 : 0) : 1 << sizeFlag
+  const headerBytes = (singleSegment ? 0 : 1) + dictionaryBytes + contentSizeBytes
+  if (buffer.length - offset < headerBytes) return null
+  offset += headerBytes
+  for (;;) {
+    if (buffer.length - offset < 3) return null
+    const block = buffer.readUIntLE(offset, 3)
+    offset += 3
+    const last = (block & 1) !== 0
+    const type = (block >>> 1) & 3
+    if (type === 3) throw controlledError('SESSION_CATALOG_ZSTD_INVALID')
+    const payloadBytes = type === 1 ? 1 : block >>> 3
+    if (buffer.length - offset < payloadBytes) return null
+    offset += payloadBytes
+    if (last) break
+  }
+  if (checksum) {
+    if (buffer.length - offset < 4) return null
+    offset += 4
+  }
+  return offset
+}
+
+/** 逐帧流式解压，不依赖 Node 的私有解码接口。 */
+async function* zstdFrames(input, deadline, scan) {
+  let pending = Buffer.alloc(0)
+  for await (const chunk of input) {
+    pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk])
+    for (;;) {
+      if (Date.now() > deadline) { scan.exhausted = true; return }
+      const end = zstdFrameEnd(pending)
+      if (end === null) break
+      const frame = pending.subarray(0, end)
+      const decoder = zlib.createZstdDecompress()
+      const encoded = Readable.from([frame])
+      encoded.pipe(decoder)
+      try {
+        for await (const plain of decoder) yield plain
+      } catch {
+        throw controlledError('SESSION_CATALOG_ZSTD_INVALID')
+      } finally {
+        encoded.destroy()
+        decoder.destroy()
+      }
+      pending = pending.subarray(end)
+    }
+  }
+  if (pending.length !== 0) throw controlledError('SESSION_CATALOG_ZSTD_INVALID')
+}
+
+/** 安全校验点：压缩输入、解压输出和截止时间都在流边界收口，长单行也不能绕过预算。 */
+async function* boundedLog(log, deadline, scan, hooks) {
+  const limit = log.compressed ? MAX_COMPRESSED_BYTES : MAX_SCAN_BYTES
+  const input = fs.createReadStream(log.full, { highWaterMark: 128 * 1024, end: limit - 1 })
+  let produced = 0
+  try {
+    const decoded = log.compressed ? zstdFrames(input, deadline, scan) : input
+    for await (const chunk of decoded) {
+      if (Date.now() > deadline) { scan.exhausted = true; return }
+      const remaining = MAX_SCAN_BYTES - produced
+      const plain = chunk.subarray(0, remaining)
+      produced += plain.length
+      yield plain
+      if (produced >= MAX_SCAN_BYTES) { scan.exhausted = true; return }
+    }
+    if (input.bytesRead >= limit) scan.exhausted = true
+  } finally {
+    input.destroy()
+    if (hooks !== null && typeof hooks.onInputRead === 'function') hooks.onInputRead(input.bytesRead)
+  }
+}
+
+/**
  * 扫描一份会话日志，取出标题。
  *
  * 标题口径与宿主一致：**最后一条 `session/title` 事件**（`foldSessionTitle` 取 `findLast`）。
@@ -269,26 +359,21 @@ function userMessageText(event) {
  *
  * `hooks` 仅供单测观察扫描行为（运行时从不传，默认零开销）：
  * - `onScanned(bytes)`：每读完一行报告一次累计解压字节数；
+ * - `onInputRead(bytes)`：关闭输入时报告实际读取字节数；
+ * - `onInputRead(bytes)`：关闭输入流时报告实际读取字节数（压缩日志按压缩量统计）；
  * - `onContentParsed()`：真正去解析用户消息正文时调用一次（有标题事件时永不调用）。
  */
 async function readTitle(log, deadline, hooks = null) {
-  const raw = fs.createReadStream(log.full, { highWaterMark: 128 * 1024 })
-  let source = raw
-  if (log.compressed) {
-    if (typeof zlib.createZstdDecompress !== 'function') {
-      raw.destroy()
-      throw controlledError('SESSION_CATALOG_ZSTD_UNSUPPORTED')
-    }
-    const decompressor = zlib.createZstdDecompress()
-    raw.on('error', (error) => decompressor.destroy(error))
-    source = raw.pipe(decompressor)
+  if (log.compressed && typeof zlib.createZstdDecompress !== 'function') {
+    throw controlledError('SESSION_CATALOG_ZSTD_UNSUPPORTED')
   }
+  const scan = { exhausted: false }
+  const source = Readable.from(boundedLog(log, deadline, scan, hooks), { objectMode: false })
   const lines = readline.createInterface({ input: source, crlfDelay: Infinity })
   let consumed = 0
   let lastTitle = null
   let fallbackLine = null
   // true 表示撞到扫描上限或时间预算，日志**没**读完：此时不允许再折叠回退标题。
-  let exhausted = false
   try {
     for await (const line of lines) {
       consumed += Buffer.byteLength(line, 'utf8') + 1
@@ -305,19 +390,21 @@ async function readTitle(log, deadline, hooks = null) {
         fallbackLine = line
       }
       if (consumed >= MAX_SCAN_BYTES || Date.now() > deadline) {
-        exhausted = true
+        scan.exhausted = true
         break
       }
     }
+  } catch {
+    // 日志仍在追加或尾帧损坏时保留已读到的标题，但不能把不完整扫描当作无标题来折叠正文。
+    scan.exhausted = true
   } finally {
     lines.close()
-    raw.destroy()
-    if (source !== raw) source.destroy()
+    source.destroy()
   }
   const normalized = lastTitle === null ? '' : normalizeSessionTitle(lastTitle, MAX_TITLE_BYTES)
   if (normalized !== '') return normalized
   // 撞上限（或预算用尽）仍未找到标题事件：如实不返回标题，绝不继续读下去凑一个。
-  if (exhausted || fallbackLine === null) return ''
+  if (scan.exhausted || fallbackLine === null) return ''
   const event = parseEvent(fallbackLine)
   if (event === null || event.type !== 'user/message') return ''
   if (hooks !== null && typeof hooks.onContentParsed === 'function') hooks.onContentParsed()
@@ -412,4 +499,4 @@ if (require.main === module) {
   })
 }
 
-module.exports = { MAX_SCAN_BYTES, buildCatalog, cleanTitleText, decodeSegment, fallbackSessionTitle, normalizeSessionTitle, parseArguments, truncateTitleUtf8 }
+module.exports = { MAX_SCAN_BYTES, MAX_COMPRESSED_BYTES, buildCatalog, cleanTitleText, decodeSegment, fallbackSessionTitle, normalizeSessionTitle, parseArguments, truncateTitleUtf8 }

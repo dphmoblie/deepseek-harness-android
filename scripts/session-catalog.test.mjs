@@ -1,14 +1,15 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import fs, { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import fs, { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import zlib from 'node:zlib'
 import catalog from '../android/app/src/main/assets/support/session-catalog.cjs'
 
-const { MAX_SCAN_BYTES, buildCatalog, decodeSegment, fallbackSessionTitle, normalizeSessionTitle, parseArguments } = catalog
+const { MAX_SCAN_BYTES, MAX_COMPRESSED_BYTES, buildCatalog, decodeSegment, fallbackSessionTitle, normalizeSessionTitle, parseArguments } = catalog
 
 /** 哨兵串：它只出现在会话正文/工具输出/未使用的路径里，任何一次「正文外传」都会让它出现在输出里。 */
 const SENTINEL = 'ZZ-SESSION-BODY-SENTINEL-ZZ'
@@ -16,6 +17,7 @@ const SENTINEL = 'ZZ-SESSION-BODY-SENTINEL-ZZ'
 const SCRIPT_FILE = fileURLToPath(new URL('../android/app/src/main/assets/support/session-catalog.cjs', import.meta.url))
 const BASE_TIME = 1_700_000_000_000
 const ZSTD_AVAILABLE = typeof zlib.zstdCompressSync === 'function' && typeof zlib.createZstdDecompress === 'function'
+const ZSTD_CHECKSUM = { params: { [zlib.constants.ZSTD_c_checksumFlag]: 1 } }
 
 const roots = []
 after(() => {
@@ -44,13 +46,23 @@ function addSession(root, options) {
     lines,
     updatedAt = BASE_TIME,
     compressed = false,
+    compressedFrames = false,
     file = compressed ? 'session.v4.jsonl.zstd' : 'session.v4.jsonl',
   } = options
   const dir = join(root, project, directory)
   mkdirSync(dir, { recursive: true })
   const target = join(dir, file)
   const text = jsonl([{ version: 4, id: directory, createdAt: BASE_TIME, isSeeded: false, delegationDepth: 0, cwd: `/root/secret-project/${SENTINEL}` }, ...lines])
-  writeFileSync(target, compressed ? zlib.zstdCompressSync(Buffer.from(text, 'utf8')) : text)
+  if (compressed && compressedFrames) {
+    const lines = text.split('\n')
+    const header = `${lines.shift()}\n`
+    writeFileSync(target, Buffer.concat([
+      zlib.zstdCompressSync(Buffer.from(header, 'utf8'), ZSTD_CHECKSUM),
+      ...lines.filter(Boolean).map(line => zlib.zstdCompressSync(Buffer.from(`${line}\n`, 'utf8'), ZSTD_CHECKSUM)),
+    ]))
+  } else {
+    writeFileSync(target, compressed ? zlib.zstdCompressSync(Buffer.from(text, 'utf8')) : text)
+  }
   const stamp = new Date(updatedAt)
   utimesSync(target, stamp, stamp)
   return target
@@ -109,6 +121,92 @@ test('只回元数据：标题取最后一条 session/title，正文与路径不
   assert.ok(!serialized.includes('secret-project'), '路径不得出现在输出里')
   assert.ok(!serialized.includes('.dsh'), '访客路径不得出现在输出里')
   assert.ok(!serialized.includes('session.v4.jsonl'), '会话文件名不得出现在输出里')
+})
+
+test('读取 Harness 的多帧 zstd 日志：标题位于 header 后的追加帧', async () => {
+  if (!ZSTD_AVAILABLE) return
+  const root = createRoot()
+  addSession(root, {
+    directory: 'session-multiframe',
+    compressed: true,
+    compressedFrames: true,
+    lines: [title('追加帧中的旧标题'), title('追加帧中的最新标题')],
+  })
+  const report = await buildCatalog(50, root)
+  assert.equal(report.sessions[0]?.title, '追加帧中的最新标题')
+})
+
+test('多帧日志的尾帧损坏时保留已读到的标题，不把进程打死', async () => {
+  if (!ZSTD_AVAILABLE) return
+  const root = createRoot()
+  const file = addSession(root, {
+    directory: 'session-damaged-tail',
+    compressed: true,
+    compressedFrames: true,
+    lines: [title('损坏尾帧之前的标题'), toolResult('尾帧内容')],
+  })
+  truncateSync(file, statSync(file).size - 2)
+  const report = await buildCatalog(50, root)
+  assert.equal(report.sessions[0]?.title, '损坏尾帧之前的标题')
+})
+
+test('多帧边界跨输入 chunk 时仍能找到后续标题', async () => {
+  if (!ZSTD_AVAILABLE) return
+  const root = createRoot()
+  addSession(root, {
+    directory: 'session-cross-chunk',
+    compressed: true,
+    compressedFrames: true,
+    // 随机填充让追加帧超过 128 KiB 的输入 chunk，避免只覆盖「所有帧一次读完」的路径。
+    lines: [toolResult(randomBytes(180 * 1024).toString('base64')), title('跨 chunk 的会话标题')],
+  })
+  const report = await buildCatalog(50, root)
+  assert.equal(report.sessions[0]?.title, '跨 chunk 的会话标题')
+})
+
+test('JSON 记录和 UTF-8 字符可跨 zstd 帧，不能在帧边界切开解码', async () => {
+  if (!ZSTD_AVAILABLE) return
+  const root = createRoot()
+  const file = addSession(root, { directory: 'session-split-record', compressed: true, lines: [] })
+  const record = Buffer.from(jsonl([title('跨帧中文会话标题')]))
+  const split = record.indexOf(Buffer.from('中文')) + 1
+  writeFileSync(file, Buffer.concat([
+    zlib.zstdCompressSync(record.subarray(0, split), ZSTD_CHECKSUM),
+    zlib.zstdCompressSync(record.subarray(split), ZSTD_CHECKSUM),
+  ]))
+  const report = await buildCatalog(50, root)
+  assert.equal(report.sessions[0]?.title, '跨帧中文会话标题')
+})
+
+test('多帧解压输出触及扫描预算时停止，不读取后续标题', async () => {
+  if (!ZSTD_AVAILABLE) return
+  const root = createRoot()
+  addSession(root, {
+    directory: 'session-zstd-budget',
+    compressed: true,
+    compressedFrames: true,
+    lines: [toolResult('x'.repeat(MAX_SCAN_BYTES * 2)), title('不得读到这个标题')],
+  })
+  let scanned = 0
+  const report = await buildCatalog(50, root, { onScanned: bytes => { scanned = bytes } })
+  assert.equal(report.sessions[0]?.title, '')
+  assert.ok(scanned <= MAX_SCAN_BYTES + 1, `解压扫描量必须有界，实际 ${scanned}`)
+})
+
+test('压缩帧的输入同样有界，不完整大帧不能持续积存在内存', async () => {
+  if (!ZSTD_AVAILABLE) return
+  const root = createRoot()
+  const file = addSession(root, { directory: 'session-zstd-input-budget', compressed: true, lines: [] })
+  // 最大合法 block 的头部后跟足量 payload，保持帧未结束直到越过输入预算。
+  const blocks = []
+  for (let index = 0; index < Math.ceil(MAX_COMPRESSED_BYTES / (128 * 1024)); index += 1) {
+    blocks.push(Buffer.from([0, 0, 16]), Buffer.alloc(128 * 1024))
+  }
+  writeFileSync(file, Buffer.concat([Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0, 0x38]), ...blocks]))
+  let inputRead = 0
+  const report = await buildCatalog(50, root, { onInputRead: bytes => { inputRead = bytes } })
+  assert.equal(report.sessions[0]?.title, '')
+  assert.ok(inputRead > 0 && inputRead <= MAX_COMPRESSED_BYTES, `压缩输入必须有界，实际 ${inputRead}`)
 })
 
 test('没有标题事件且日志超过扫描上限时，如实不返回标题（也不超限读取）', async () => {
