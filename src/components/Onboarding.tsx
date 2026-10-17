@@ -31,13 +31,20 @@ const STEPS = [
   { id: 'ready', title: '开始使用', icon: Rocket },
 ] as const
 
-function needsManifestConfiguration(settings: RuntimeSettings | null): boolean {
-  if (settings === null) return false
+/**
+ * 运行时来源分三种，界面要分开说：
+ * - `offline`：两个都空，走 APK 内置镜像。离线包不报配置错误，但要说明「内置镜像缺失时去哪儿补」——
+ *   早先的写法在这条路径上什么都不显示，用户装不上时没有任何线索；
+ * - `incomplete`：只填了一半、留着占位地址或摘要格式不对，这是配置错误，必须点出来；
+ * - `ready`：成对且格式合法，不用提示。
+ */
+function manifestSource(settings: RuntimeSettings | null): 'offline' | 'incomplete' | 'ready' {
+  if (settings === null) return 'ready'
   const url = settings.manifestUrl.trim()
   const digest = settings.manifestSha256.trim()
-  // 空来源对代表 APK 内置安装包，不应要求离线用户填写在线地址。
-  if (url === '' && digest === '') return false
-  return url === '' || url.includes('example.invalid') || !/^[0-9a-f]{64}$/i.test(digest)
+  if (url === '' && digest === '') return 'offline'
+  if (url === '' || digest === '' || url.includes('example.invalid') || !/^[0-9a-f]{64}$/i.test(digest)) return 'incomplete'
+  return 'ready'
 }
 
 export function Onboarding({
@@ -57,6 +64,7 @@ export function Onboarding({
   const last = step === STEPS.length - 1
 
   const installed = ['ready', 'running'].includes(runtime.phase)
+  const source = manifestSource(settings)
   const authorized = shizuku.permission === 'granted'
   // 首次配置必须完成一次模型密钥：没有密钥时 Harness 里的对话必然失败。
   const modelConfigured = hasConfiguredModelCredential(settings)
@@ -133,8 +141,11 @@ export function Onboarding({
               {step === 1 && (
                 <div className="onboarding-body">
                   <p>{t("首次使用需要安装 Ubuntu 运行环境（数百 MB）。应用内置的安装包可离线安装；使用在线来源时，建议通过 Wi-Fi 下载。")}</p>
-                  {!installed && needsManifestConfiguration(settings) && (
-                    <p className="onboarding-warn">{t("尚未配置运行时下载地址：请先在「设置 → 后台」填写清单地址与 SHA-256（两者必须成对）。")}</p>
+                  {!installed && source === 'incomplete' && (
+                    <p className="onboarding-warn">{t("运行时下载地址不完整：请在「设置 → 后台」同时填写清单地址与 SHA-256（两者必须成对）。")}</p>
+                  )}
+                  {!installed && source === 'offline' && (
+                    <p className="onboarding-status">{t("这个安装包没带运行时下载地址：安装会先解压 APK 内置的镜像；内置镜像缺失时需要先到「设置 → 后台」填写清单地址与 SHA-256（两者必须成对）。")}</p>
                   )}
                   <p className="onboarding-status">
                     {t("当前状态：")}{installed ? t("已安装") + (runtime.phase === 'running' ? t(" · 运行中") : '') : runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting' ? t("正在安装…") : t("未安装")}
