@@ -42,6 +42,8 @@ android/keystore/
 android/.gradle/
 android/build/
 android/app/build/
+# Gradle/ktlint 的本地检查产物
+kotlin-check-output/
 android/local.properties
 android/capacitor.settings.gradle
 android/app/capacitor.build.gradle

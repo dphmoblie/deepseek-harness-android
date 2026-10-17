@@ -52,4 +52,40 @@ describe('停止后重新打开 Harness', () => {
     fireEvent.click(screen.getByRole('button', { name: '设置' }))
     await waitFor(() => expect(screen.getByRole('button', { name: '打开 Harness' })).toBeEnabled())
   })
+
+  /**
+   * 桥调用**永不返回**时的自救。
+   *
+   * 这是 `run()` 互斥锁唯一的单点故障：`finally` 不执行，忙碌状态就永远不结束，
+   * 用户面对的是一个全部按钮禁用、也没有任何提示的界面，只能杀进程。
+   * 真机上 provider 掉线、原生线程池打满、WebView 回调丢失都会造成这种形态，
+   * 因此在假时钟上精确复现「promise 永不 settle」，钉死看门狗的两条语义：
+   * 到点前不许提前放行，到点后必须放行**且如实说明「没有响应」**。
+   */
+  it('桥调用卡死时看门狗释放互斥并提示超时，界面不永久停在处理中', async () => {
+    // 45 秒的看门狗只能靠假时钟推进；shouldAdvanceTime 保留 RTL 的 waitFor 可用的真实时间。
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(<App />)
+      await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+      bridge.stopRuntime.mockImplementation(() => new Promise(() => {}))
+
+      fireEvent.click(await screen.findByRole('button', { name: '首页' }))
+      fireEvent.click(screen.getByRole('button', { name: '停止' }))
+      await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledTimes(1))
+
+      // 还没到看门狗时间：必须仍然是忙碌态，不能提前把按钮放出来造成重复提交。
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(screen.getByRole('button', { name: '停止' })).toBeDisabled()
+
+      // 到点：放开互斥，并且只说「没有响应」——底层请求可能仍在原生侧执行，
+      // 绝不能顺手写成「已停止」（那就成了界面在替原生侧撒谎）。
+      await vi.advanceTimersByTimeAsync(15_000)
+      await waitFor(() => expect(screen.getByRole('button', { name: '停止' })).toBeEnabled())
+      expect(screen.queryByText('运行环境已停止')).not.toBeInTheDocument()
+      expect(await screen.findByRole('alert')).toHaveTextContent('设备没有在预期时间内响应')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
