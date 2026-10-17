@@ -135,6 +135,35 @@ describe('后台状态轮询（5.6-C）', () => {
       setVisibility('visible')
     }
   })
+
+  /**
+   * 首帧就处于后台时不装表。
+   *
+   * 后台唤起、切前台的一瞬间、以及从通知进入的冷启动都可能让挂载发生在 hidden 状态。
+   * 修复前 `startPolling()` 无条件执行，定时器照样每 5 秒唤醒一次 JS——每轮都在
+   * `refreshBackgroundState` 首行早退，什么也不做，纯粹的耗电。等回到前台再武装即可。
+   */
+  it('挂载时处于后台不装表，回到前台才武装', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const setSpy = vi.spyOn(window, 'setInterval')
+    const armed = (): number => setSpy.mock.calls.filter(call => call[1] === 5000).length
+    try {
+      stayOnMainView()
+      // 必须在 render 之前把可见性定死：挂载那一刻的判定就是这条用例的全部内容。
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+      render(<App />)
+      await waitFor(() => expect(bridge.getState).toHaveBeenCalled())
+      expect(armed()).toBe(0)
+
+      // 回到前台：必须补装，否则轮询永久不工作（比空转更糟）。
+      setVisibility('visible')
+      expect(armed()).toBe(1)
+    } finally {
+      setSpy.mockRestore()
+      vi.useRealTimers()
+      setVisibility('visible')
+    }
+  })
 })
 
 /**

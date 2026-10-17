@@ -1707,4 +1707,5 @@ export const english: Readonly<Record<string, string>> = {
   "403 访问被拒绝或无权限": "403 Forbidden or no permission",
   "404 目标端点不存在": "404 Endpoint not found",
   "429 请求频率超限或配额耗尽": "429 Rate limit exceeded or quota exhausted",
+  "设备没有在预期时间内响应，已停止等待；请刷新后确认结果，必要时重试。": "The device did not respond in time; stopped waiting. Refresh to confirm the result, and retry if needed.",
 }

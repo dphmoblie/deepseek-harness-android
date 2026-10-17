@@ -538,6 +538,36 @@ const BACKGROUND_POLL_INTERVAL_MS = 5000
 const BACKGROUND_REFRESH_STALE_MS = 30_000
 
 /**
+ * 用户动作的看门狗。
+ *
+ * 桥调用在真机上可能**永不返回**（provider 掉线、原生线程池打满、WebView 与 Service
+ * 之间的回调丢失）。`run()` 用互斥锁挡重复提交，一旦某次调用卡死，锁就不会释放：
+ * 界面从此永久停在「处理中」，用户只能杀进程——这比「操作失败」糟得多。
+ *
+ * 看门狗只做一件事：到点后**释放界面互斥并提示超时**，不取消底层请求
+ * （Capacitor 没有取消语义，强杀会留下半截的原生操作）。晚到的真实结果由下一次
+ * 状态刷新收口，界面不会因为「超时那一刻的乐观判断」而说谎。
+ */
+const ACTION_WATCHDOG_MS = 45_000
+
+/**
+ * 安装/更新的看门狗。
+ *
+ * 这一步包含真实下载（数百 MB）与解压，正常耗时以分钟计，不能用 [ACTION_WATCHDOG_MS]。
+ * 取 15 分钟只为兜住「桥彻底失联」：正常情况下进度事件会持续刷新界面，
+ * 用户不会看到这一条。
+ */
+const INSTALL_WATCHDOG_MS = 15 * 60_000
+
+/**
+ * 启动链状态读取的超时。
+ *
+ * 门屏是否结束只取决于 `getState()` 是否返回。它若卡死，`booting` 永远为真，
+ * 用户面对的是一个没有任何按钮的加载页——连「重试」都点不到。
+ */
+const BOOT_STATE_TIMEOUT_MS = 15_000
+
+/**
  * 保存设置后的前台服务生效复核。
  *
  * 「后台保持」与「悬浮球」各有一个前台服务，都由 Android 异步拉起：保存后紧接着读取原生状态
@@ -616,6 +646,14 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
    * 写清「旧连接已失效 + 已尝试重连 + 请再试一次」，用户才知道下一次点击是有意义的。
    */
   RUNTIME_CLOSED: '运行时已关闭，旧连接已失效；已尝试重新连接，请再试一次。',
+  /*
+   * 桥调用在超时窗口内没有任何回应。
+   *
+   * 这不是「操作失败」而是「不知道成没成」：Capacitor 没有取消语义，底层请求可能仍在
+   * 原生侧执行。文案因此只说「没有响应、已停止等待」，不承诺操作没有生效——
+   * 后续状态刷新会给出真实结论。
+   */
+  BRIDGE_TIMEOUT: '设备没有在预期时间内响应，已停止等待；请刷新后确认结果，必要时重试。',
   RUNTIME_CORRUPTED: '运行时文件已损坏，请重置运行时后重新安装。',
   ROOTFS_LINKS_CORRUPTED: '运行时归档的关键符号链接缺失或损坏，请更换运行时来源后重新安装。',
   RUNNER_UNAVAILABLE: '本机不是 ARM64（arm64-v8a）架构，内置 PRoot 无法运行。请换用 ARM64 真机或确认安装的是新版应用。',
@@ -1033,6 +1071,49 @@ function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T | 
       () => {
         window.clearTimeout(timer)
         resolve(null)
+      },
+    )
+  })
+}
+
+/**
+ * 把桥调用抛出的任意拒绝值规整成 `Error`，并**保留 `code`**。
+ *
+ * 两个约束必须同时满足：`prefer-promise-reject-errors` 要求拒绝值是 Error；但原生侧的
+ * `CapacitorException` 未必是 Error 实例（见 [bridgedRuntimeCode] 的解释），
+ * 而 [errorMessage] 正是靠 `'code' in error` 认出它的。直接 `new Error(reason)` 会把 code
+ * 丢掉，用户看到的就从「运行时已关闭，旧连接已失效；已尝试重新连接，请再试一次」
+ * 退化成一句通用失败文案——比原样透传更糟。
+ */
+function toErrorWithCode(reason: unknown): Error {
+  if (reason instanceof Error) return reason
+  const code = typeof reason === 'object' && reason !== null && 'code' in reason && typeof reason.code === 'string'
+    ? reason.code
+    : undefined
+  return Object.assign(new Error(code ?? 'BRIDGE_CALL_FAILED'), code === undefined ? {} : { code })
+}
+
+/**
+ * 超时即**失败**的桥调用包装。
+ *
+ * [withTimeout] 走的是「超时降级成 null」的路线，只适合调用方本来就把 null 当成正常结果
+ * （权限询问被系统悄悄吞掉时就该按未授予处理）。启动链上的状态读取不能用那个口径：
+ * 「读不到」必须是一条可见的错误，不能伪装成「没有状态」——否则门屏会在没有任何提示的
+ * 情况下停在加载页。超时拒绝的错误带 `code`，由 [errorMessage] 统一翻成文案。
+ */
+function withBridgeTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(Object.assign(new Error('BRIDGE_TIMEOUT'), { code: 'BRIDGE_TIMEOUT' }))
+    }, milliseconds)
+    promise.then(
+      value => {
+        window.clearTimeout(timer)
+        resolve(value)
+      },
+      error => {
+        window.clearTimeout(timer)
+        reject(toErrorWithCode(error))
       },
     )
   })
@@ -5749,6 +5830,14 @@ export function App() {
    */
   const backgroundRefreshInFlight = useRef(false)
   const backgroundRefreshStartedAt = useRef(0)
+  /**
+   * 在途轮次的编号。
+   *
+   * 陈旧逃逸允许「上一轮还没结束就再发一轮」，于是多轮会同时在飞。结算时必须能分辨
+   * 「我是被接管的那一轮，还是当前这一轮」，否则晚到的旧轮次会清掉新一轮的在途标志，
+   * 单飞保护直接失效（真机上表现为请求一层层堆积）。
+   */
+  const backgroundRefreshRound = useRef(0)
   const backgroundPollTimer = useRef<number | null>(null)
   /**
    * 「一轮对话刚结束」的基线序号，来自原生侧 `turnCompletionSequence`。
@@ -5842,6 +5931,15 @@ export function App() {
   const [pendingInstall, setPendingInstall] = useState<{ source?: RuntimeSource; version: string | null; bundled: boolean } | null>(null)
   const noticeId = useRef(0)
   const busyRef = useRef<string | null>(null)
+  /**
+   * 在途操作的令牌序号。
+   *
+   * 只用 `busyRef` 的字符串值判断「这次 `finally` 该不该释放锁」是不够的：同一个操作可以
+   * 被点了两次（第一次被看门狗放行后用户再点一次），两轮的 id 字符串完全一样，
+   * 晚到的第一轮 `finally` 会把第二轮的锁释放掉——界面看起来又能点，实际已有两个请求在飞。
+   * 每次进入 `run()` 取一个新令牌，释放时比对令牌，才是真正的「只释放自己那把锁」。
+   */
+  const busyToken = useRef(0)
   const autoLaunchAttempted = useRef(false)
   /**
    * 运行阶段与「用户是否点过停止」的记录。
@@ -6219,7 +6317,8 @@ export function App() {
     void (async () => {
       const revisionBeforeSnapshot = progressRevision
       try {
-        const nextRuntime = await runtimeBridge.getState()
+        // 门屏的唯一出口就是这一读：卡住就等于把用户锁在一个没有按钮的加载页上。
+        const nextRuntime = await withBridgeTimeout(runtimeBridge.getState(), BOOT_STATE_TIMEOUT_MS)
         if (cancelled) return
         const initialRuntime = progressRevision === revisionBeforeSnapshot || latestProgress === undefined
           ? nextRuntime
@@ -6436,12 +6535,20 @@ export function App() {
       const now = Date.now()
       const stale = now - backgroundRefreshStartedAt.current > BACKGROUND_REFRESH_STALE_MS
       if (backgroundRefreshInFlight.current && !stale) return
+      // 陈旧逃逸会让**两轮同时在飞**：给每轮编号，只有编号仍是最新的那一轮才有权清在途标志。
+      // 否则先发的那轮晚到，会把新一轮的在途状态抹掉，单飞在原地失效——而这正是它唯一的作用。
+      const round = ++backgroundRefreshRound.current
       backgroundRefreshInFlight.current = true
       backgroundRefreshStartedAt.current = now
       void Promise.allSettled([refreshShizuku(false), refreshAccessibility(), refreshKeepAlive(), refreshOverlayBall()])
-        .then(() => { backgroundRefreshInFlight.current = false })
+        .then(() => {
+          if (round === backgroundRefreshRound.current) backgroundRefreshInFlight.current = false
+        })
     }
     const startPolling = (): void => {
+      // 只有可见时才装表。首帧就处于后台（后台唤起、切前台的一瞬）时不必留下一个
+      // 每 5 秒唤醒一次 JS 却每轮都早退的空转定时器；可见性变化或 focus 会把它重新武装。
+      if (document.visibilityState === 'hidden') return
       if (backgroundPollTimer.current !== null) return
       backgroundPollTimer.current = window.setInterval(refreshBackgroundState, BACKGROUND_POLL_INTERVAL_MS)
     }
@@ -6449,7 +6556,9 @@ export function App() {
       if (backgroundPollTimer.current === null) return
       window.clearInterval(backgroundPollTimer.current)
       backgroundPollTimer.current = null
-      // 停表同时清掉单飞标志：否则「后台停表期间发起的那一轮」会把回到前台后的第一轮吃掉。
+      // 停表同时清掉单飞标志并推进轮次：否则「后台停表期间发起的那一轮」会把回到前台后的
+      // 第一轮吃掉；而那一轮晚到的结算也不该再去动新一轮的在途标志。
+      backgroundRefreshRound.current += 1
       backgroundRefreshInFlight.current = false
     }
     const handleVisibilityChange = (): void => {
@@ -6472,6 +6581,9 @@ export function App() {
       void refreshAccessibility()
       void refreshKeepAlive()
       void refreshOverlayBall()
+      // focus 与 visibilitychange 不是同一条路径：部分 ROM 从系统设置返回时只发 focus。
+      // 这里补一次武装，避免「没收到 visibilitychange」导致轮询永久停在停表状态。
+      startPolling()
     }
 
     window.addEventListener('focus', handleFocus)
@@ -6485,21 +6597,61 @@ export function App() {
     }
   }, [applyRefreshedSettings, notify, readMailbox, readOverlayBall, setActiveView])
 
-  const run = useCallback(async (id: string, operation: () => Promise<void>, success?: string, guide?: PermissionGuide) => {
+  /**
+   * 执行一个用户动作：互斥、提示、以及**卡死自救**。
+   *
+   * 互斥的意义是防止用户连点造成重复的原生操作；但它同时是一条单点故障链：
+   * 只要有一次桥调用永不返回，`finally` 就永远不会执行，界面从此停在「处理中」，
+   * 连退出都要靠杀进程。真机上这类卡死不是假设（`RUNTIME_CLOSED` 那组错误码就是
+   * 为它准备的），所以这里加一道看门狗：
+   *
+   * - 到点后释放互斥并提示超时，**不**去取消底层请求（Capacitor 没有取消语义）；
+   * - 底层请求若之后真的返回，它仍会走自己的成功/失败分支，但**不再**改动忙碌状态，
+   *   也不会把一条「成功」提示盖在「已超时」提示之上——令牌比对负责这件事；
+   * - 看门狗时长按操作性质给：普通动作 45 秒，安装/更新单独给 15 分钟（真实下载）。
+   *
+   * @param watchdogMs 看门狗时长；`null` 表示不设看门狗（仅限确实无上界的操作）。
+   */
+  const run = useCallback(async (
+    id: string,
+    operation: () => Promise<void>,
+    success?: string,
+    guide?: PermissionGuide,
+    watchdogMs: number | null = ACTION_WATCHDOG_MS,
+  ) => {
     if (busyRef.current !== null) return
+    const token = ++busyToken.current
     busyRef.current = id
     setBusy(id)
-    try {
-      await operation()
-      if (success !== undefined) notify(success, 'success')
-    } catch (error) {
-      notify(errorMessage(error), 'error')
-      // 权限类操作失败只弹一条会消失的 toast 不足以让用户自助修好：
-      // 由调用方给出对应指引时，同时打开可跳转系统设置/Shizuku 的指引弹窗。
-      if (guide !== undefined) setPermissionGuide(guide)
-    } finally {
+    /** 只有令牌仍是自己时才释放：晚到的旧轮次不许动新一轮的锁。 */
+    const release = (): void => {
+      if (busyToken.current !== token) return
       busyRef.current = null
       setBusy(null)
+    }
+    const watchdog = watchdogMs === null
+      ? null
+      : window.setTimeout(() => {
+        if (busyToken.current !== token) return
+        // 先释放再提示：提示本身会触发一次渲染，若此时 busy 还在，用户会看到
+        // 「已提示超时、按钮却仍然是禁用的」这种自相矛盾的瞬间。
+        release()
+        notify(runtimeErrorMessage('BRIDGE_TIMEOUT'), 'error')
+      }, watchdogMs)
+    try {
+      await operation()
+      if (success !== undefined && busyToken.current === token) notify(success, 'success')
+    } catch (error) {
+      // 超时之后才失败的错误不再重复提示：用户已经看到过那条超时说明。
+      if (busyToken.current === token) {
+        notify(errorMessage(error), 'error')
+        // 权限类操作失败只弹一条会消失的 toast 不足以让用户自助修好：
+        // 由调用方给出对应指引时，同时打开可跳转系统设置/Shizuku 的指引弹窗。
+        if (guide !== undefined) setPermissionGuide(guide)
+      }
+    } finally {
+      if (watchdog !== null) window.clearTimeout(watchdog)
+      release()
     }
   }, [notify])
 
@@ -6542,7 +6694,7 @@ export function App() {
         return
       }
       notify(t("会话自动备份失败：{0}", outcome.message ?? t("原因未提供")), 'error')
-    }, successMessage)
+    }, successMessage, undefined, INSTALL_WATCHDOG_MS)
   }, [notify, run, setActiveView])
 
   /**
