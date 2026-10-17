@@ -477,6 +477,8 @@ describe('设置草稿与未保存的输入', () => {
     await openSettingsPage('模型与密钥')
 
     expect(screen.getByRole('combobox', { name: '供应商' })).toHaveValue('custom')
+    console.log('DEBUG SAVES', JSON.stringify(bridge.saveSettings.mock.calls))
+    console.log('DEBUG BODY', document.body.textContent?.slice(-2000))
     expect(screen.getByLabelText('供应商名称')).toHaveValue('本地网关')
     expect(screen.getByLabelText('Base URL')).toHaveValue('https://gateway.example.invalid/v1')
     // 尚未等到防抖保存落地就切页：草稿仍在内存里，密钥输入因此保留。
