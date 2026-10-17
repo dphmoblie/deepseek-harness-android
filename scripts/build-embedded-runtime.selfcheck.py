@@ -262,6 +262,19 @@ def check_stage_build_tools() -> None:
     assert module.normalize_link_posix("/usr/lib", "/lib/aarch64-linux-gnu/libc.so.6") == (
         "/usr/lib/aarch64-linux-gnu/libc.so.6"
     )
+    # 版本裁剪：只跟随入口真正指向的那套 GCC，别的版本（12/14）整棵跳过。
+    for path, keep, foreign in (
+        ("/usr/lib/gcc/aarch64-linux-gnu/12/cc1", "13", True),
+        ("/usr/lib/gcc/aarch64-linux-gnu/13/cc1", "13", False),
+        ("/usr/include/c++/14/bits/move.h", "13", True),
+        ("/usr/include/c++/13/bits/move.h", "13", False),
+        ("/usr/bin/aarch64-linux-gnu-gcc-12", "13", True),
+        ("/usr/bin/gcc-13", "13", False),
+        ("/usr/bin/as", "13", False),
+        ("/usr/libexec/gcc/aarch64-linux-gnu/12/lto1", "13", True),
+    ):
+        assert module.is_foreign_version(path, keep) is foreign, path
+        assert not module.is_foreign_version(path, None), path
 
     with tempfile.TemporaryDirectory(prefix="dsh-stage-build-tools-") as directory:
         root = Path(directory)
