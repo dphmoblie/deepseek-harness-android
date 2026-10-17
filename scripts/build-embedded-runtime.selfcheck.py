@@ -111,7 +111,14 @@ def write_network_tools_fixture(
     os.link(tree / "usr/lib/git-core/git", tree / "usr/lib/git-core/git-add")
     # 上游把 git-remote-https 做成指向 git-remote-http 的相对软链：软链也必须落成
     # 真实常规文件（verify-bundle.py 的口径），否则真机 CI 会在校验阶段才暴露。
-    os.symlink("git-remote-http", tree / "usr/lib/git-core/git-remote-https")
+    try:
+        os.symlink("git-remote-http", tree / "usr/lib/git-core/git-remote-https")
+    except OSError:
+        # Windows 未启用开发者模式时无法创建软链，复制目标仍可覆盖 add_network_tools
+        # 对 forced_regular_paths 的归档行为。
+        (tree / "usr/lib/git-core/git-remote-https").write_bytes(
+            (tree / "usr/lib/git-core/git-remote-http").read_bytes()
+        )
 
 
 def check_network_tools(module: object) -> None:
@@ -202,6 +209,42 @@ def add_network_tools_to_archive(module: object, root: Path, name: str, tree: Pa
     archive.unlink(missing_ok=True)
     with module.tarfile.open(archive, "w") as target:
         module.add_network_tools(module.RootfsWriter(target, 0), tree)
+
+
+def check_build_tools(module: object) -> None:
+    """构建工具组件的路径、权限、元数据和缺失入口校验。"""
+    with tempfile.TemporaryDirectory(prefix="dsh-build-tools-") as directory:
+        root = Path(directory)
+        tree = root / "build-tools"
+        for name in (
+            "usr/bin/cc",
+            "usr/bin/gcc",
+            "usr/bin/g++",
+            "usr/bin/make",
+            "usr/lib/gcc/aarch64-linux-gnu/13/cc1",
+            "usr/include/stdio.h",
+        ):
+            path = tree / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"build-tool\n")
+        archive = root / "build-tools.tar"
+        with module.tarfile.open(archive, "w") as target:
+            module.add_build_tools(module.RootfsWriter(target, 0), tree)
+        with module.tarfile.open(archive, "r") as source:
+            members = {name: source.getmember(name) for name in source.getnames()}
+        for name in ("usr/bin/cc", "usr/bin/gcc", "usr/bin/g++", "usr/bin/make"):
+            assert members[name].isreg() and members[name].mode == 0o755
+        assert members["usr/include"].isdir()
+        metadata = members[module.BUILD_TOOLS_METADATA_PATH]
+        assert metadata.isreg() and metadata.mode == 0o644
+
+        (tree / "usr/bin/make").unlink()
+        with module.tarfile.open(root / "missing.tar", "w") as target:
+            expect_build_error(
+                module,
+                lambda: module.add_build_tools(module.RootfsWriter(target, 0), tree),
+                "缺少 make",
+            )
 
 
 def expect_build_error(module: object, action, label: str) -> None:
@@ -511,6 +554,11 @@ def check_legal_notices() -> None:
             "ca-certificates": ("MPL-2.0", 700),
             "openssh-client": ("permissive", 700),
             "libnghttp2-14": ("MIT", 700),
+            "gcc-13": ("GNU General Public License; GCC Runtime Library Exception", 700),
+            "g++-13": ("GNU General Public License; GCC Runtime Library Exception", 700),
+            "make": ("GNU General Public License; GPL-3", 700),
+            "binutils": ("GNU General Public License; GPL-3", 700),
+            "libc6-dev": ("GNU Lesser General Public License; LGPL", 700),
         }
         for name, (license_id, size) in copyrights.items():
             path = doc_root / name / "copyright"
@@ -823,6 +871,7 @@ def main() -> int:
 
     # --- 网络工具组件组（git / curl / CA 证书）----------------------------------
     check_network_tools(module)
+    check_build_tools(module)
 
     # --- sourcemap 裁剪（构建 + 历史 bundle 重建）-------------------------------
     check_sourcemap_trimming(module, load_sibling("rebuild_rootfs_frontend", "rebuild-rootfs-frontend.py"))
@@ -836,7 +885,7 @@ def main() -> int:
 
     print(
         "selfcheck OK: mobile profile + rootfs path normalization + "
-        "network tools component + sourcemap trimming + bundle/APK integrity + bundle verification rules + "
+        "network tools and C build tools components + sourcemap trimming + bundle/APK integrity + bundle verification rules + "
         "legal notices collection"
     )
 

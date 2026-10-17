@@ -376,15 +376,32 @@ jobs:
           bash scripts/stage-network-tools.sh /tmp/network-tools /tmp/ubuntu.tar.gz /tmp/network-tools-packages.txt
           head -20 /tmp/network-tools-packages.txt
 
+      - name: 预置 C 编译工具组件（gcc / g++ / make / 头文件）
+        run: |
+          set -euo pipefail
+          python3 scripts/stage-build-tools.py \
+            /tmp/build-tools /tmp/ubuntu.tar.gz /tmp/build-tools-packages.txt
+          cc --version | head -n1
+          make --version | head -n1
+          cat > /tmp/build-tools-smoke.c <<'EOF'
+          #include <stdio.h>
+          int main(void) { puts("dsh-build-tools-ok"); return 0; }
+          EOF
+          cc /tmp/build-tools-smoke.c -o /tmp/build-tools-smoke
+          /tmp/build-tools-smoke
+          head -20 /tmp/build-tools-packages.txt
+
       - name: Collect Ubuntu package copyright notices for the APK legal bundle
         # 新组件的法律材料：由 CI 从 runner 的 /usr/share/doc/<pkg>/copyright 收集，
         # 落到 APK 的 assets/legal/ubuntu-packages/（与既有 legal 机制同一套资产目录）。
         # 必需组件的版权文件缺失时 collect 会直接失败，不会静默发出没有许可证原文的包。
         run: |
           set -euo pipefail
+          cat /tmp/network-tools-packages.txt /tmp/build-tools-packages.txt \
+            | LC_ALL=C sort -u > /tmp/runtime-packages.txt
           python3 scripts/legal-notices.py collect \
             --dest android/app/src/main/assets/legal/ubuntu-packages \
-            --packages /tmp/network-tools-packages.txt
+            --packages /tmp/runtime-packages.txt
           ls -la android/app/src/main/assets/legal/ubuntu-packages/
 
       - name: Upload legal notices (Ubuntu package copyrights)
@@ -412,6 +429,7 @@ jobs:
               --node /tmp/node.tar.xz --node-sha256 01443c1e1a29e531ccad5a46fefa6df490d2189c49f7955904aecdbb0fe86fdc \
               --dsh-root /tmp/dsh-root --toolchain-dir /tmp/toolchain --runtime-version "${RUNTIME_VERSION}" \
               --network-tools-dir /tmp/network-tools \
+              --build-tools-dir /tmp/build-tools \
               --rootfs-url "https://github.com/${{ github.repository }}/releases/download/${RELEASE_TAG}/rootfs.bundle" \
               --mobile-profile scripts/mobile-profile.example.json \
               --output /tmp/rootfs.bundle --manifest /tmp/runtime-manifest.json
