@@ -298,15 +298,18 @@ def check_stage_build_tools() -> None:
             return
 
         destination = root / "staged"
+        # 用例里的源路径带临时目录前缀，planned 也要用同一套绝对路径，
+        # 否则「终点在树里」的判定永远为假——第一次写死 "/usr/bin/gcc" 就是这么挂的。
+        staged_gcc = (source / "usr/bin/gcc").as_posix()
         # 目录（链接解析后的目标）直接拷：不许抛错，也不该落成空文件。
         module.copy_entry(link_dir.resolve(), destination / "usr/lib/clang/16/include")
         assert not (destination / "usr/lib/clang/16/include").exists()
         # 终点也在预置树里的链接：保留链接形态，不展开内容。
-        module.copy_entry(link_file, destination / "usr/bin/cc", {"/usr/bin/gcc"})
+        module.copy_entry(link_file, destination / "usr/bin/cc", {staged_gcc})
         assert (destination / "usr/bin/cc").is_symlink()
         assert os.readlink(destination / "usr/bin/cc") == "gcc"
         # 终点不在预置树里的链接：按内容落盘，别在访客里留断链。
-        module.copy_entry(link_orphan, destination / "usr/bin/ld", {"/usr/bin/gcc"})
+        module.copy_entry(link_orphan, destination / "usr/bin/ld", {staged_gcc})
         assert not (destination / "usr/bin/ld").is_symlink()
         assert (destination / "usr/bin/ld").read_bytes() == b"ld.bfd\n"
         # 普通文件仍按内容拷贝。
