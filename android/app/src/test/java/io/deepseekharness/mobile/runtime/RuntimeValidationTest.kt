@@ -80,7 +80,6 @@ class RuntimeValidationTest {
             "a".repeat(64),
             keepScreenAwake = true,
             terminalFontSize = 14,
-            autoLaunch = true,
             keepRuntimeInBackground = true,
         )
         assertTrue(enabled.keepRuntimeInBackground)
@@ -112,7 +111,6 @@ class RuntimeValidationTest {
             "a".repeat(64),
             keepScreenAwake = true,
             terminalFontSize = 14,
-            autoLaunch = true,
             overlayBallEnabled = true,
         )
         assertTrue(enabled.overlayBallEnabled)
