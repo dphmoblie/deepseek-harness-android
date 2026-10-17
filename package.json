@@ -23,6 +23,7 @@
     "prepare:runner": "node scripts/prepare-runner.mjs",
     "bootstrap:wrapper": "node scripts/bootstrap-wrapper.mjs",
     "doctor": "node scripts/doctor.mjs",
+    "chart:stats": "node scripts/star-download-chart.mjs",
     "gate:check": "node scripts/gate-check.mjs"
   },
   "dependencies": {

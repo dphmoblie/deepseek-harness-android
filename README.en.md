@@ -38,6 +38,7 @@ No root required. The Linux environment runs in userspace through [PRoot](https:
 - [Building from source](#building-from-source)
 - [Security and privacy](#security-and-privacy)
 - [Contributing](#contributing)
+- [Project stats](#project-stats)
 - [License](#license)
 - [Related documents](#related-documents)
 
@@ -172,6 +173,16 @@ More developers are welcome — your name can appear here too.
 ### Community
 
 - **QQ group: 1108895375** — ask questions, send feedback and get release notifications.
+
+## Project stats
+
+![Cumulative stars and downloads](docs/images/star-download-history.svg)
+
+The amber line is GitHub stars accumulated over time (counted by starred time); the
+blue line is total downloads across all release assets — GitHub only exposes the
+current total, so each release's count is pinned to its publish date and
+cumulative-summed into a step line. Regenerate with `pnpm run chart:stats`; the fetch
+date is stamped inside the image.
 
 ## License
 
