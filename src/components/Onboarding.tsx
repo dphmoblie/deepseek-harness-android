@@ -74,7 +74,6 @@ export function Onboarding({
     keepScreenAwake: true,
     terminalFontSize: 14,
     configuredModelProviders: [],
-    autoLaunch: true,
   }
   const saveModelSettings = async (): Promise<void> => {
     if (busy !== null || savePending.current || settings === null || onSaveSettings === undefined) return

@@ -1,7 +1,7 @@
 import React, { Profiler, useState } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { beforeEachAppTest, bridge, keepAlive, openSettingsPage, settings, shizuku } from './appTestHarness'
+import { arriveAtSettingsHome, beforeEachAppTest, bridge, keepAlive, openSettingsPage, settings, shizuku  } from './appTestHarness'
 
 vi.mock('../platform/native', () => ({ runtimeBridge: bridge }))
 vi.mock('../components/TerminalPanel', () => ({
@@ -169,6 +169,8 @@ describe('§5.6-B 渲染测量', () => {
       const { profile } = mountProfiledApp()
       // 先等外壳稳定在设置首页（自动启动会把视图推到这里），再开始计数：
       // 否则启动链的尾巴会被算进来，那属于「测量边界切早了」而不是「可避免的重渲染」。
+      // 开机不再自动进设置首页：先点底栏导航，再等标题。
+      await arriveAtSettingsHome()
       await screen.findByRole('heading', { name: '设置' })
       await tick(6_000)
       profile.reset()
@@ -194,6 +196,8 @@ describe('§5.6-B 渲染测量', () => {
   it('冷启动测量：挂载到外壳稳定在设置首页', async () => {
     await withFakeTimers(async () => {
       const { profile } = mountProfiledApp()
+      // 开机不再自动进设置首页：先点底栏导航，再等标题。
+      await arriveAtSettingsHome()
       await screen.findByRole('heading', { name: '设置' })
       await tick(6_000)
       report('冷启动：挂载 → 设置首页稳定', profile.sinceReset())
@@ -208,6 +212,8 @@ describe('§5.6-B 渲染测量', () => {
   it('主 CTA 测量：在设置首页点「打开 Harness」', async () => {
     await withFakeTimers(async () => {
       const { profile } = mountProfiledApp()
+      // 开机不再自动进设置首页：先点底栏导航，再等标题。
+      await arriveAtSettingsHome()
       await screen.findByRole('heading', { name: '设置' })
       await tick(6_000)
       profile.reset()
@@ -307,6 +313,8 @@ describe('§5.6-B 渲染测量', () => {
       freshButEqualSnapshots()
       const { profile } = mountProfiledApp()
 
+      // 开机不再自动进设置首页：先点底栏导航，再等标题。
+      await arriveAtSettingsHome()
       await screen.findByRole('heading', { name: '设置' })
       await tick(6_000)
       const callsBefore = bridge.getKeepAliveState.mock.calls.length
@@ -328,7 +336,7 @@ describe('§5.6-B 渲染测量', () => {
     await withFakeTimers(async () => {
       freshButEqualSnapshots()
       // 关掉自动启动，外壳才会停在主视图（否则启动链会把视图推到设置首页）。
-      bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false })
+      bridge.getSettings.mockResolvedValue({ ...settings})
       const { profile } = mountProfiledApp()
 
       await screen.findByText('Harness 对话')
@@ -375,6 +383,8 @@ describe('§5.6-B 渲染测量', () => {
 
     for (const name of ['后台', '主题', '设备 Shell 设置', '诊断与日志']) {
       fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
+      // 开机不再自动进设置首页：先点底栏导航，再等标题。
+      await arriveAtSettingsHome()
       await screen.findByRole('heading', { name: '设置' })
       await openSettingsPage(name)
     }

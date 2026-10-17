@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { FOREGROUND_SERVICE_SETTLE_MS, beforeEachAppTest, bridge, keepAlive, notInstalledState, openSettingsPage, readyState, runningState, settings } from './__tests__/appTestHarness'
+import { beforeEachAppTest, bridge, FOREGROUND_SERVICE_SETTLE_MS, keepAlive, notInstalledState, openSettingsPage, readyState, runningState, settings } from './__tests__/appTestHarness'
 import type { RuntimeProgress, RuntimeVersionsState } from './platform/types'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
@@ -26,7 +27,7 @@ describe('后台保持与恢复', () => {
 
   it('默认关闭后台保持，开启时申请通知权限并按当前值保存', async () => {
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('后台')
     const toggle = await screen.findByRole('switch', { name: /后台保持 Harness/ })
@@ -57,7 +58,7 @@ describe('后台保持与恢复', () => {
     await act(async () => { await Promise.resolve() })
     expect(bridge.openHarness).not.toHaveBeenCalled()
 
-    act(() => { releaseSettings({ ...settings, autoLaunch: false }) })
+    act(() => { releaseSettings({ ...settings}) })
     await act(async () => { await Promise.resolve() })
     expect(bridge.openHarness).not.toHaveBeenCalled()
     expect(bridge.startHarness).not.toHaveBeenCalled()
@@ -65,7 +66,7 @@ describe('后台保持与恢复', () => {
 
   it('通知权限被拒时弹窗指引开启通知，不谎称前台服务仍在运行', async () => {
     // 不自动启动：停在主视图手动进设置，避免与启动流程抢忙碌状态。
-    bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false })
+    bridge.getSettings.mockResolvedValue({ ...settings})
     bridge.requestNotificationPermission.mockResolvedValue({ granted: false, supported: true })
     bridge.getKeepAliveState.mockResolvedValue({ ...keepAlive, notificationPermission: 'prompt' })
     render(<App />)
@@ -99,7 +100,7 @@ describe('后台保持与恢复', () => {
     // 假时钟不随真实时间前进会把 waitFor 挂到用例超时。
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
-      bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false, keepRuntimeInBackground: true })
+      bridge.getSettings.mockResolvedValue({ ...settings, keepRuntimeInBackground: true })
       // 通知权限已授予、开关已是开启状态，但前台服务没有进入前台：以原生状态为准。
       // 通知不是这一档的原因——界面必须把它识别为厂商后台拦截，而不是再让用户去开通知。
       bridge.getKeepAliveState.mockResolvedValue({
@@ -120,7 +121,6 @@ describe('后台保持与恢复', () => {
 
       await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
         ...settings,
-        autoLaunch: false,
         keepRuntimeInBackground: true,
       }))
       // 前台服务是异步拉起的：把假时钟推过宽限期，让应用按原生状态复核。
@@ -149,7 +149,7 @@ describe('后台保持与恢复', () => {
       lastUpdatedAtMillis: 1_700_000_000_000,
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('后台')
     expect(await screen.findByText('前台服务运行中')).toBeVisible()
@@ -166,7 +166,7 @@ describe('后台保持与恢复', () => {
       lastIntent: 'running',
       lastPhase: 'running',
     })
-    bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false })
+    bridge.getSettings.mockResolvedValue({ ...settings})
     render(<App />)
 
     expect(await screen.findByText('需要重新连接')).toBeVisible()
@@ -193,7 +193,7 @@ describe('运行时自检', () => {
       checks: [{ id: 'sandbox_probe', status: 'fail', code: 'PROBE_UNUSABLE' }],
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
     await openSettingsPage('诊断与日志')
     fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
     // 自检要等一次桥调用，结果区块是异步出现的。
@@ -210,7 +210,7 @@ describe('运行时自检', () => {
       checks: [{ id: 'sandbox_probe', status: 'ok' }, item],
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
     await openSettingsPage('诊断与日志')
     fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
     await screen.findByRole('group', { name: '自检结果' })
@@ -224,7 +224,7 @@ describe('运行时自检', () => {
       .mockResolvedValueOnce({ operation: 'repair', availableBytes: 1024 ** 3, repaired: 1, candidates: 3 })
       .mockRejectedValueOnce(new Error('SELF_CHECK_FAILED'))
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
     await openSettingsPage('诊断与日志')
     fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
     fireEvent.click(await screen.findByRole('button', { name: '修复运行时权限' }))
@@ -236,7 +236,7 @@ describe('运行时自检', () => {
 
   it('进入页面不自动自检，点「运行自检」才按需调用', async () => {
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     expect(await screen.findByRole('heading', { name: '运行时自检' })).toBeVisible()
@@ -263,7 +263,7 @@ describe('运行时自检', () => {
       ],
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
@@ -294,7 +294,7 @@ describe('运行时自检', () => {
       checks: [{ id: 'sandbox_probe', status: 'fail', code: 'PROBE_UNUSABLE' }],
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
@@ -319,7 +319,7 @@ describe('运行时自检', () => {
       ],
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
@@ -353,7 +353,7 @@ describe('运行时自检', () => {
       ],
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
@@ -375,7 +375,7 @@ describe('运行时自检', () => {
       ],
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
@@ -401,7 +401,7 @@ describe('运行时自检', () => {
       ],
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
@@ -434,7 +434,7 @@ describe('运行时自检', () => {
         candidates: 2,
       })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: '运行自检' }))
@@ -459,7 +459,7 @@ describe('运行时自检', () => {
       checks: [{ id: 'shell', status: 'ok' }],
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     // 版本一行不依赖自检：进页面就能看到已安装的运行时版本。
@@ -490,7 +490,7 @@ describe('运行时自检', () => {
       })
       .mockRejectedValueOnce(new Error('SELF_CHECK_FAILED'))
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(screen.getByRole('button', { name: '运行自检' }))
@@ -525,7 +525,7 @@ describe('空闲自行停止', () => {
     const emitProgress = captureProgressListener()
     bridge.getState.mockResolvedValueOnce({ ...runningState })
     // 停留在主视图：本用例要看的是提示本身，不掺启动流程。
-    bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false })
+    bridge.getSettings.mockResolvedValue({ ...settings})
     render(<App />)
     await waitFor(() => expect(bridge.getState).toHaveBeenCalled())
 
@@ -545,7 +545,7 @@ describe('空闲自行停止', () => {
   it('用户自己点停止时不提示自行停止，只记入「上次停止」', async () => {
     const emitProgress = captureProgressListener()
     bridge.getState.mockResolvedValueOnce({ ...runningState })
-    bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false })
+    bridge.getSettings.mockResolvedValue({ ...settings})
     render(<App />)
     await waitFor(() => expect(bridge.getState).toHaveBeenCalled())
 
@@ -612,7 +612,7 @@ describe('运行时版本管理', () => {
     bridge.getState.mockResolvedValue({ ...readyState })
     bridge.getRuntimeVersions.mockResolvedValue(threeSlots)
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openVersionsPage()
 
@@ -631,7 +631,7 @@ describe('运行时版本管理', () => {
     bridge.getState.mockResolvedValue({ ...runningState })
     bridge.getRuntimeVersions.mockResolvedValue(threeSlots)
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openVersionsPage()
 
@@ -656,7 +656,7 @@ describe('运行时版本管理', () => {
       canDelete: true,
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openVersionsPage()
     fireEvent.click(await screen.findByRole('button', { name: '切换到上一版本' }))
@@ -679,7 +679,7 @@ describe('运行时版本管理', () => {
     bridge.getRuntimeVersions.mockResolvedValue(threeSlots)
     bridge.switchRuntimeVersion.mockRejectedValue(new Error('请先停止 Harness 和 Ubuntu 终端'))
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openVersionsPage()
     fireEvent.click(await screen.findByRole('button', { name: '切换到上一版本' }))
@@ -700,7 +700,7 @@ describe('运行时版本管理', () => {
       canDelete: false,
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openVersionsPage()
     fireEvent.click(await screen.findByRole('button', { name: '删除上一版本' }))
@@ -723,7 +723,7 @@ describe('运行时版本管理', () => {
     bridge.getState.mockResolvedValue({ ...readyState })
     bridge.getRuntimeVersions.mockRejectedValue(new Error('RUNTIME_CLOSED'))
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openVersionsPage()
 

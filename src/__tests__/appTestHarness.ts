@@ -15,8 +15,8 @@
  *  2. `beforeEach(beforeEachAppTest)`；
  *  3. 用例内按需覆盖某个桥方法的返回值，用例结束无需手动还原（beforeEach 会重设）。
  */
-import { fireEvent, screen } from '@testing-library/react'
-import { vi } from 'vitest'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { expect, vi } from 'vitest'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES } from '../platform/types'
 import type {
   DiagnosticLogState,
@@ -231,7 +231,6 @@ export const settings: RuntimeSettings = {
   terminalFontSize: 14,
   // 默认开着自动启动，与引导页首次写入的值一致（`Onboarding.tsx`）。
   // 老存储缺这一项时原生侧按关闭处理，所以用例里要显式给值，不能靠缺省。
-  autoLaunch: true,
   // 默认视为「本机已保存过一次模型密钥」：没有密钥时应用会拦住「打开 Harness」，
   // 而这里多数用例关心的是设置与启动流程本身，门禁行为有专门用例覆盖。
   configuredModelProviders: ['deepseek'],
@@ -678,7 +677,83 @@ export function beforeEachAppTest(): void {
  */
 const SETTINGS_NAV_TIMEOUT_MS = 5_000
 
+/**
+ * 底栏元素。
+ *
+ * 无障碍名跟着界面语言走（中文「底部导航」/ 英文「Bottom navigation」），按名字找会在
+ * 语言用例里直接失败，所以按稳定的 class 定位；等待仍走 `waitFor`，语义与 findByRole 一致。
+ */
+async function bottomNav(): Promise<HTMLElement> {
+  await waitFor(
+    () => expect(document.querySelector('.bottom-navigation')).toBeInstanceOf(HTMLElement),
+    { timeout: SETTINGS_NAV_TIMEOUT_MS },
+  )
+  const nav = document.querySelector('.bottom-navigation')
+  if (!(nav instanceof HTMLElement)) throw new Error('底栏没有渲染出来')
+  return nav
+}
+
+/** 底栏「设置」入口：标签同样随语言变化，两种写法都认。 */
+async function settingsTab(): Promise<HTMLElement> {
+  const nav = await bottomNav()
+  for (const label of ['设置', 'Settings']) {
+    const found = within(nav).queryByRole('button', { name: label })
+    if (found !== null) return found
+  }
+  throw new Error('底栏里没有「设置」入口')
+}
+
+/** 设置首页标题：中英文都要能认出来。 */
+function settingsHeading(): HTMLElement | null {
+  return screen.queryByRole('heading', { name: '设置', level: 1 })
+    ?? screen.queryByRole('heading', { name: 'Settings', level: 1 })
+}
+
+/**
+ * 等外壳启动完成。
+ *
+ * 旧用例拿「启动链已经自动调用过一次 `openHarness`」当哨兵：等得到就说明设置读完、
+ * 视图稳定。自动启动已经移除（打开 Harness 只由用户点击触发），那条哨兵永远不会成立，
+ * 于是换成底栏出现作为同义信号——它同样意味着启动链跑完，可以开始操作界面。
+ */
+export async function arriveAtShell(): Promise<void> {
+  await bottomNav()
+}
+
+/**
+ * 从底栏点「设置」，落到设置首页。
+ *
+ * 自动启动移除后，「开机就在设置首页」这个前提不成立了：用例必须自己导航一次。
+ * 只负责点这一下，不渲染、不等标题——等待口径留给调用方（各文件的上限不同）。
+ */
+export async function clickSettingsTab(): Promise<void> {
+  fireEvent.click(await settingsTab())
+}
+
+/**
+ * 从底栏进入设置首页。
+ *
+ * 已经停在设置首页时是无操作：老用例通过自动启动链路到达这里，路径变了但落点相同。
+ */
+export async function openSettingsHome(): Promise<void> {
+  if (settingsHeading() !== null) return
+  fireEvent.click(await settingsTab())
+  await waitFor(() => expect(settingsHeading()).not.toBeNull(), { timeout: SETTINGS_NAV_TIMEOUT_MS })
+}
+
+/**
+ * 等外壳就绪并进入设置首页。
+ *
+ * 老用例靠「自动启动把视图推到设置首页」到达这里；自动启动移除后必须自己导航。
+ * 设置相关的用例统一用它，语义与当年的落点一致。
+ */
+export async function arriveAtSettingsHome(): Promise<void> {
+  await arriveAtShell()
+  await openSettingsHome()
+}
+
 export async function openSettingsPage(name: string): Promise<void> {
+  await openSettingsHome()
   const entry = await screen.findByRole('button', { name: new RegExp(name) }, {
     timeout: SETTINGS_NAV_TIMEOUT_MS,
   })
@@ -694,6 +769,7 @@ export async function openSettingsPage(name: string): Promise<void> {
  * （入口按钮的 accessible name 里也含「文件管理」，先找标题会命中按钮）。
  */
 export async function openFilesPage(): Promise<void> {
+  await openSettingsHome()
   const entry = await screen.findByRole('button', { name: /文件管理/ }, {
     timeout: SETTINGS_NAV_TIMEOUT_MS,
   })

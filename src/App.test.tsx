@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { beforeEachAppTest, bridge, notInstalledState, openSettingsPage, readyState, runningState, settings, shizuku } from './__tests__/appTestHarness'
+import { arriveAtShell, beforeEachAppTest, bridge, notInstalledState, openSettingsPage, readyState, runningState, settings, shizuku } from './__tests__/appTestHarness'
 import type { RuntimeProgress, RuntimeState } from './platform/types'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
@@ -41,15 +42,18 @@ describe('App conversation gate', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认更新' }))
 
     await waitFor(() => expect(bridge.install).toHaveBeenCalledWith({ manifestUrl: '', manifestSha256: '' }))
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
   })
 
-  it('没有保存过模型密钥时不打开 Harness，而是引导到「模型与密钥」', async () => {
+  it('没有保存过模型密钥时点打开只会给出引导，不会启动运行时', async () => {
     bridge.getSettings.mockResolvedValue({ ...settings, configuredModelProviders: [] })
 
     render(<App />)
+    await arriveAtSettingsHome()
 
-    // 首次配置未完成：连启动都不做，直接落在密钥设置页并说明原因。
+    // 首次配置未完成：点「打开 Harness」既不启动也不开门，而是送到密钥设置页并说明原因。
+    fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
+
     expect(await screen.findByRole('heading', { name: '模型与密钥' })).toBeInTheDocument()
     expect(await screen.findByText('未检测到模型凭据：请先在「模型与密钥」保存一次 API Key 再打开 Harness')).toBeInTheDocument()
     expect(bridge.startHarness).not.toHaveBeenCalled()
@@ -60,29 +64,53 @@ describe('App conversation gate', () => {
     bridge.getSettings.mockResolvedValue({ ...settings, configuredModelProviders: [] })
 
     render(<App />)
+    await arriveAtSettingsHome()
 
     // 门禁先把用户送到「模型与密钥」；只有那里的放行按钮能跳过凭据检查。
+    fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
     await screen.findByRole('heading', { name: '模型与密钥' })
     expect(bridge.openHarness).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: '我已在 Harness 内配置过，仍要打开' }))
+
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
   })
 
-  it('starts a ready runtime and opens Harness automatically in order', async () => {
+  it('开机不自动启动也不自动打开 Harness', async () => {
     render(<App />)
+    await arriveAtShell()
 
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    expect(bridge.startHarness).toHaveBeenCalledTimes(1)
-    expect(bridge.startHarness.mock.invocationCallOrder[0]).toBeLessThan(bridge.openHarness.mock.invocationCallOrder[0] ?? 0)
-    expect(await screen.findByRole('heading', { name: '设置' })).toBeInTheDocument()
+    /*
+     * 旧行为是「打开应用就自动进 Harness」，而且原生侧把 autoLaunch 写死成 true，
+     * 于是没有开关也照进不误；冷启动还会占住忙锁，用户从 Harness 返回后点不回来。
+     * 现在入口只认用户点击：开机既不启动也不开门。
+     */
+    expect(screen.getByRole('button', { name: /打开对话|打开 Harness/ })).toBeInTheDocument()
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+    expect(bridge.openHarness).not.toHaveBeenCalled()
     expect(document.querySelector('iframe')).not.toBeInTheDocument()
   })
 
-  it('opens an already-running Harness without starting it again', async () => {
+  it('点「打开 Harness」时先启动运行时，再打开页面', async () => {
+    render(<App />)
+    await arriveAtSettingsHome()
+
+    fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
+
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    expect(bridge.startHarness.mock.invocationCallOrder[0]).toBeLessThan(bridge.openHarness.mock.invocationCallOrder[0])
+    expect(document.querySelector('iframe')).not.toBeInTheDocument()
+  })
+
+  it('运行时已在运行时就跳过启动，只打开页面', async () => {
     bridge.getState.mockResolvedValueOnce({ ...runningState })
 
     render(<App />)
+    await arriveAtSettingsHome()
+
+    fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
 
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
     expect(bridge.startHarness).not.toHaveBeenCalled()
@@ -103,8 +131,11 @@ describe('App conversation gate', () => {
       manifestUrl: settings.manifestUrl,
       manifestSha256: settings.manifestSha256,
     }))
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    expect(bridge.startHarness).toHaveBeenCalledTimes(1)
+    // 安装完成回到对话门禁页，启动仍要用户点一下：不再有「装完自动开门」。
+    const open = await screen.findByRole('button', { name: /打开对话|打开 Harness/ })
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+    fireEvent.click(open)
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
   })
 
   it('waits for an in-progress install to become ready before launching', async () => {
@@ -129,16 +160,18 @@ describe('App conversation gate', () => {
       })
     })
 
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
   })
 
   it('does not let an optional Shizuku failure block Harness startup', async () => {
     bridge.getShizukuState.mockRejectedValueOnce(new Error('Shizuku unavailable'))
 
     render(<App />)
+    await arriveAtSettingsHome()
 
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    expect(bridge.startHarness).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
+
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
     expect(screen.queryByText('Shizuku unavailable')).not.toBeInTheDocument()
   })
 
@@ -164,7 +197,7 @@ describe('App conversation gate', () => {
 
   it('keeps terminal and Shizuku controls inside settings', async () => {
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     fireEvent.click(screen.getByRole('button', { name: /^设备 Shell 设备上的 Shell/ }))
     expect(await screen.findByRole('heading', { name: '终端' })).toBeInTheDocument()
@@ -177,7 +210,7 @@ describe('App conversation gate', () => {
 
   it('saves source and terminal preferences from settings', async () => {
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     // 运行时来源在「后台」页。
     await openSettingsPage('后台')
@@ -196,7 +229,7 @@ describe('App conversation gate', () => {
 
   it('saves a whitelisted provider credential update', async () => {
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('模型与密钥')
     fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
@@ -209,7 +242,7 @@ describe('App conversation gate', () => {
 
   it('requires a bounded consideration time before resetting Ubuntu', async () => {
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     fireEvent.click(screen.getByRole('button', { name: /Ubuntu 运行时/ }))
     fireEvent.click(await screen.findByRole('button', { name: '重置环境' }))
@@ -229,11 +262,12 @@ describe('App conversation gate', () => {
   it('does not reopen Harness when MainActivity regains focus', async () => {
     bridge.getState.mockResolvedValueOnce({ ...runningState })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await arriveAtSettingsHome()
 
     fireEvent.focus(window)
     await waitFor(() => expect(bridge.getShizukuState).toHaveBeenCalled())
-    expect(bridge.openHarness).toHaveBeenCalledTimes(1)
+    // 回到前台只刷新状态，绝不替用户重开页面：开机不自动开，回前台也不自动开。
+    expect(bridge.openHarness).not.toHaveBeenCalled()
   })
 
   it('refreshes web-configured model credential status when MainActivity regains focus', async () => {
@@ -254,7 +288,7 @@ describe('App conversation gate', () => {
     }
     expect(screen.getByText(/尚未检测到模型 API Key/)).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: /我已在 Harness 内配置过/ }))
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     fireEvent.focus(window)
 
@@ -279,7 +313,7 @@ describe('App conversation gate', () => {
       phase: 'error',
       errorCode: 'HARNESS_AUTH_UNAVAILABLE',
     })
-    bridge.getSettings.mockResolvedValueOnce({ ...settings, autoLaunch: false })
+    bridge.getSettings.mockResolvedValueOnce({ ...settings})
     render(<App />)
 
     expect(await screen.findByText('Harness 未提供有效的网页认证入口，请更新运行环境后重试。')).toBeInTheDocument()
@@ -290,6 +324,10 @@ describe('App conversation gate', () => {
     const unsafePrefix = '<img src=x onerror=alert(1)>'
     bridge.startHarness.mockRejectedValueOnce(new Error(`${unsafePrefix}\n${'x'.repeat(500)}`))
     render(<App />)
+    await arriveAtSettingsHome()
+
+    // 错误只在用户点了「打开 Harness」之后才会出现。
+    fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
 
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(unsafePrefix)
@@ -318,7 +356,9 @@ describe('应用语言', () => {
     expect(document.documentElement.lang).toBe('en')
     expect(bridge.openHarness).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Skip setup' }))
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    // 引导结束后停在对话门禁页，仍然不会自动打开 Harness。
+    expect(await screen.findByRole('button', { name: 'Open chat' })).toBeInTheDocument()
+    expect(bridge.openHarness).not.toHaveBeenCalled()
   })
 
   it('设置切换立即生效且重新挂载后保留语言', async () => {
@@ -326,7 +366,8 @@ describe('应用语言', () => {
     fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
     fireEvent.change(screen.getByLabelText('语言'), { target: { value: 'en' } })
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeVisible()
-    expect(screen.getByText('Running', { selector: '.phase-badge' })).toBeVisible()
+    // 不再有「开机自动启动」，因此徽章停在就绪/未启动，而不是 Running。
+    expect(bridge.startHarness).not.toHaveBeenCalled()
     // 设置首页现在只保留分类入口，编辑项会自动保存。
     fireEvent.click(screen.getByRole('button', { name: /^Theme/ }))
     expect(await screen.findByRole('heading', { name: 'Theme' })).toBeVisible()

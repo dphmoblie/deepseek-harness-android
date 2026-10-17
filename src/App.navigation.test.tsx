@@ -95,7 +95,6 @@ const settings: RuntimeSettings = {
   terminalFontSize: 14,
   // 已保存过模型密钥：否则「打开 Harness」会被门禁拦下，导航用例无法进入对话。
   configuredModelProviders: ['deepseek'],
-  autoLaunch: false,
 }
 
 const shizuku: ShizukuState = {

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge } from './__tests__/appTestHarness'
 
@@ -49,8 +50,8 @@ function versions(library: unknown[], libraryCapacity = 5) {
 
 async function openVersionsPage(): Promise<void> {
   render(<App />)
-  await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-  await screen.findByRole('heading', { name: '设置' }, { timeout: 5_000 })
+  await arriveAtSettingsHome()
+    await screen.findByRole('heading', { name: '设置' }, { timeout: 5_000 })
   fireEvent.click(await screen.findByRole('button', { name: /版本管理/ }, { timeout: 5_000 }))
   await screen.findByRole('heading', { name: '版本管理' }, { timeout: 5_000 })
 }

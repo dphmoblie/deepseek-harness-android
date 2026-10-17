@@ -3123,7 +3123,6 @@ export function App() {
    */
   const busyToken = useRef(0)
   const runtimeStateRevision = useRef(0)
-  const autoLaunchAttempted = useRef(false)
   /**
    * 运行阶段与「用户是否点过停止」的记录。
    *
@@ -3861,7 +3860,6 @@ export function App() {
       const next = await runtimeBridge.getState()
       setRuntime(next)
       setPendingInstall(null)
-      autoLaunchAttempted.current = false
       setActiveView('conversation')
       const outcome = result.autoSnapshot
       if (outcome === undefined) return
@@ -3946,17 +3944,14 @@ export function App() {
      * App 加密存储与 Harness 凭据文件，因此仍为其它凭据来源保留用户显式放行通道。
      */
     if (!skipCredentialGate && settings !== null && !hasConfiguredModelCredential(settings)) {
-      autoLaunchAttempted.current = true
       notify(t("未检测到模型凭据：请先在「模型与密钥」保存一次 API Key 再打开 Harness"), 'error')
       setActiveView(SETTINGS_PAGE_META.models.view)
       return
     }
     if (runtime.updateAvailable) {
-      autoLaunchAttempted.current = true
       requestRuntimeUpdate()
       return
     }
-    autoLaunchAttempted.current = true
     const token = ++busyToken.current
     busyRef.current = 'launch'
     setBusy('launch')
@@ -4043,21 +4038,12 @@ export function App() {
   /** 用户已确认「密钥在 Harness 里配置过」时的放行入口，只在显式按钮上使用。 */
   const launchHarnessConfirmed = useCallback((sessionId?: string) => openHarness(true, sessionId), [openHarness])
 
-  useEffect(() => {
-    /*
-     * 自动启动必须等基础设置读完再判断。旧版本曾提供「自动启动 Harness」开关，
-     * 但它会让应用打开后的入口分裂成两套，现已移除；保留旧字段只为兼容已安装版本，
-     * 不再影响启动行为。设置读取失败时仍不启动，避免把未知状态当成用户意图。
-     */
-    // Android 原生存储层已把该字段固定为 true；保留读取条件是为了兼容浏览器预览和旧版桥接，
-    // 防止它们在没有真实运行时的情况下误触发启动流程。
-    if (settings === null || settings.autoLaunch !== true) return
-    if (language === null || onboardingOpen || booting || appUpdateReminder.checking || appUpdateReminder.available !== null || activeView !== 'conversation' || busy !== null || autoLaunchAttempted.current) return
-    if (runtime.updateAvailable) return
-    if (runtime.phase === 'running' || (runtimeInstalled(runtime) && runtime.phase !== 'stopping')) {
-      launchHarness()
-    }
-  }, [activeView, appUpdateReminder.available, appUpdateReminder.checking, booting, busy, language, launchHarness, onboardingOpen, runtime, settings])
+  /*
+   * 这里原本有一条「打开应用就自动进 Harness」的 effect，靠设置里的 `autoLaunch`
+   * 判断，而原生存储把它写死成 true——于是没有开关也会直接跳进 Harness，冷启动
+   * 还会占住忙锁，用户从 Harness 返回后点不回来。
+   * 入口只留用户显式点击：开机停在对话门禁页，`打开 Harness` 才是唯一开门动作。
+   */
 
   const openSettings = useCallback((page: SettingsPage) => {
     // 最新设置读完之前不展示可编辑的旧草稿，避免迟到响应清空刚输入的内容。
@@ -4208,7 +4194,6 @@ export function App() {
       setRuntime(next)
       setKeepAlive(await runtimeBridge.getKeepAliveState())
       setResetOpen(false)
-      autoLaunchAttempted.current = false
       setActiveView('conversation')
     }, t("运行环境已重置"))
   }, [run, setActiveView])

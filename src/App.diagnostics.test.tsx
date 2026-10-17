@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge, openSettingsPage } from './__tests__/appTestHarness'
 import type { DiagnosticLogState } from './platform/types'
@@ -22,7 +23,7 @@ describe('诊断与日志', () => {
 
   it('默认不收集，开关与保留天数按原生返回值更新', async () => {
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     const toggle = await screen.findByRole('switch', { name: /收集诊断日志/ })
@@ -56,7 +57,7 @@ describe('诊断与日志', () => {
       exportedBytes: 512,
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     expect(await screen.findByText('收集中')).toBeVisible()
@@ -86,7 +87,7 @@ describe('诊断与日志', () => {
     })
     bridge.shareDiagnosticLog.mockRejectedValue(new Error('当前没有可导出的诊断日志'))
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: '导出并分享' }))
@@ -100,7 +101,7 @@ describe('诊断与日志', () => {
     const payload = '<img src=x onerror=alert(1)>\nError: tool call failed'
     bridge.getHarnessLog.mockResolvedValue({ available: true, text: payload })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     const toggle = await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ })
@@ -126,7 +127,7 @@ describe('诊断与日志', () => {
   it('没有可读取的运行日志时给出提示并隐藏复制按钮', async () => {
     bridge.getHarnessLog.mockResolvedValue({ available: false, text: '' })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
@@ -142,7 +143,7 @@ describe('诊断与日志', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
@@ -161,7 +162,7 @@ describe('诊断与日志', () => {
     const payload = 'INFO runtime ready\nError: TOOL_CALL_FAILED\nINFO idle'
     bridge.getHarnessLog.mockResolvedValue({ available: true, text: payload, maxBytes: 8 * 1024 })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
@@ -184,7 +185,7 @@ describe('诊断与日志', () => {
       maxBytes: 8 * 1024,
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
@@ -196,7 +197,7 @@ describe('诊断与日志', () => {
 
   it('运行日志窗口可放大，并把窗口字节数交给原生侧', async () => {
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
@@ -216,7 +217,7 @@ describe('诊断与日志', () => {
       truncated: true,
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     const toggle = await screen.findByRole('button', { name: /诊断日志（最近 64 KB）/ })
@@ -234,7 +235,7 @@ describe('诊断与日志', () => {
   it('没有诊断日志时如实说明并提示开启采集', async () => {
     bridge.readDiagnosticLog.mockResolvedValue({ text: '', maxBytes: 64 * 1024, totalBytes: 0, truncated: false })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志')
     fireEvent.click(await screen.findByRole('button', { name: /诊断日志（最近 64 KB）/ }))

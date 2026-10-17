@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { beforeEachAppTest, bridge, runningState } from './__tests__/appTestHarness'
+import { arriveAtSettingsHome, beforeEachAppTest, bridge, runningState } from './__tests__/appTestHarness'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
 vi.mock('./components/TerminalPanel', () => ({
@@ -54,10 +54,12 @@ describe('运行时已关闭时的至多一次恢复重试', () => {
 
     render(<App />)
 
-    // 自动启动链走到这里说明重试已经成功：只调一次 startHarness 的修复前行为会永远等不到它。
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    // 关键计数：恰好两次，不能是 1（没重试）也不能是 3（循环了）。
-    expect(bridge.startHarness).toHaveBeenCalledTimes(2)
+    // 打开入口只认用户点击：先进设置首页，再点「打开 Harness」触发启动链。
+    await arriveAtSettingsHome()
+    fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
+
+    // 重试链路成功后恰好两次：不能是 1（没重试）也不能是 3（循环了）。
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(2))
     // 重连前恰好刷新一次状态：一次都不刷是拿着旧快照再问一遍同一个失效句柄；刷两次以上则是多余往返。
     expect(bridge.getState.mock.calls.length - readsBeforeFailure).toBe(1)
     // 成功路径上不该出现任何错误提示，尤其是那句「运行时已关闭」——它会让用户以为白重连了一次。
@@ -72,6 +74,9 @@ describe('运行时已关闭时的至多一次恢复重试', () => {
       .mockRejectedValueOnce(bridgedError('RUNTIME_CLOSED'))
 
     render(<App />)
+
+    await arriveAtSettingsHome()
+    fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
 
     const alert = await screen.findByRole('alert')
     // 上限断言：第一次失败 → 重连一次 → 第二次失败即收尾，绝无第三次。
@@ -98,6 +103,9 @@ describe('运行时已关闭时的至多一次恢复重试', () => {
     })
 
     render(<App />)
+
+    await arriveAtSettingsHome()
+    fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
 
     // 文案来自同一张受控码表：证明走的是「有码的错误」这条路，而不是退化成原生 message。
     expect(await screen.findByRole('alert')).toHaveTextContent('请先停止 Harness 和 Ubuntu 终端。')

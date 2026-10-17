@@ -34,7 +34,7 @@ describe('后台状态轮询（5.6-C）', () => {
    * 断言本身一条都没有放宽。
    */
   const stayOnMainView = (): void => {
-    bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false })
+    bridge.getSettings.mockResolvedValue({ ...settings})
   }
 
   const setVisibility = (value: 'visible' | 'hidden'): void => {
@@ -177,7 +177,7 @@ describe('任务完成回到对话界面（5.6-F）', () => {
   beforeEach(beforeEachAppTest)
 
   const stayOnMainView = (): void => {
-    bridge.getSettings.mockResolvedValue({ ...settings, autoLaunch: false })
+    bridge.getSettings.mockResolvedValue({ ...settings})
   }
 
   /** 让下一轮轮询读到指定序号；时间戳与序号同源，界面上不显示。 */

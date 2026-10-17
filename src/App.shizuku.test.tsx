@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { beforeEachAppTest, bridge, openSettingsPage } from './__tests__/appTestHarness'
+import { arriveAtShell, beforeEachAppTest, bridge, openSettingsPage } from './__tests__/appTestHarness'
 import type { ShizukuState } from './platform/types'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
@@ -41,7 +41,7 @@ describe('Shizuku 版本显示', () => {
       ...state,
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtShell()
     await openSettingsPage('设备 Shell 设置')
     return screen.findByRole('region', { name: 'Shizuku' })
   }

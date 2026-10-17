@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge, readyState } from './__tests__/appTestHarness'
 
@@ -28,7 +29,7 @@ describe('版本管理：运行时占用卡片接线', () => {
     bridge.getState.mockResolvedValue({ ...readyState })
     bridge.getRuntimeResidue.mockResolvedValue({ count: 3, bytes: 2.5 * 1024 * 1024 * 1024, truncated: false })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     // 卡片只属于版本管理页：还在设置首页时就不该出现。
     expect(screen.queryByRole('heading', { name: '运行时占用与残留' })).toBeNull()
@@ -44,7 +45,7 @@ describe('版本管理：运行时占用卡片接线', () => {
     bridge.getState.mockResolvedValue({ ...readyState })
     bridge.getRuntimeResidue.mockResolvedValue({ count: 0, bytes: 0, truncated: false })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     await openVersionsPage()
 

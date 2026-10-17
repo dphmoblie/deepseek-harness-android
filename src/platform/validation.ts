@@ -379,8 +379,6 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
   if (!Number.isInteger(settings.terminalFontSize) || settings.terminalFontSize < 11 || settings.terminalFontSize > 24) {
     throw new Error('终端字号必须是 11 到 24 之间的整数')
   }
-  const autoLaunch = settings.autoLaunch === undefined ? false : settings.autoLaunch
-  if (typeof autoLaunch !== 'boolean') throw new Error('自动启动设置格式无效')
   const keepRuntimeInBackground = settings.keepRuntimeInBackground === undefined ? false : settings.keepRuntimeInBackground
   if (typeof keepRuntimeInBackground !== 'boolean') throw new Error('后台保持设置格式无效')
   const overlayBallEnabled = settings.overlayBallEnabled === undefined ? false : settings.overlayBallEnabled
@@ -400,7 +398,6 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
     ...(settings.harnessConfiguredCustomModelProviders === undefined ? {} : {
       harnessConfiguredCustomModelProviders: validateCustomCredentialIds(settings.harnessConfiguredCustomModelProviders, 'Harness 自定义模型凭据状态'),
     }),
-    autoLaunch,
     keepRuntimeInBackground,
     overlayBallEnabled,
   }
@@ -437,8 +434,6 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
   if (!Number.isInteger(settings.terminalFontSize) || (settings.terminalFontSize as number) < 11 || (settings.terminalFontSize as number) > 24) {
     throw new Error('终端字号必须是 11 到 24 之间的整数')
   }
-  const autoLaunch = settings.autoLaunch === undefined ? false : settings.autoLaunch === true
-  if (settings.autoLaunch !== undefined && typeof settings.autoLaunch !== 'boolean') throw new Error('自动启动设置格式无效')
   const keepRuntimeInBackground = settings.keepRuntimeInBackground === undefined
     ? false
     : settings.keepRuntimeInBackground === true
@@ -468,7 +463,6 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
       terminalFontSize: settings.terminalFontSize as number,
       configuredModelProviders: configuredProviders,
       ...customSettings,
-      autoLaunch,
       keepRuntimeInBackground,
       overlayBallEnabled,
     }
@@ -483,7 +477,6 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
     terminalFontSize: settings.terminalFontSize as number,
     configuredModelProviders: configuredProviders,
     ...customSettings,
-    autoLaunch,
     keepRuntimeInBackground,
     overlayBallEnabled,
   }

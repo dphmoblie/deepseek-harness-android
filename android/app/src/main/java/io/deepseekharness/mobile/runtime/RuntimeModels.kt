@@ -90,8 +90,6 @@ data class RuntimeSettings(
     val customModelProviders: List<CustomModelProvider> = emptyList(),
     val configuredCustomModelProviders: Set<String> = emptySet(),
     val harnessConfiguredCustomModelProviders: Set<String> = emptySet(),
-    /** 自动启动已固定为应用入口行为；字段仅保留给旧版桥接兼容。 */
-    val autoLaunch: Boolean = true,
     /**
      * 后台保持 Harness：运行时启动后启用前台服务，提升本应用进程的存活优先级。
      * 默认 false，旧版本配置没有该键时同样按 false 处理。
@@ -338,7 +336,6 @@ object RuntimeValidation {
         digest: String?,
         keepScreenAwake: Boolean,
         terminalFontSize: Int,
-        autoLaunch: Boolean = true,
         keepRuntimeInBackground: Boolean = false,
         overlayBallEnabled: Boolean = false,
     ): RuntimeSettings {
@@ -351,7 +348,6 @@ object RuntimeValidation {
             manifestSha256 = source.manifestSha256.orEmpty(),
             keepScreenAwake = keepScreenAwake,
             terminalFontSize = terminalFontSize,
-            autoLaunch = autoLaunch,
             keepRuntimeInBackground = keepRuntimeInBackground,
             overlayBallEnabled = overlayBallEnabled,
         )

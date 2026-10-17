@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { availableMailbox, beforeEachAppTest, bridge, openFilesPage, storageAccess } from './__tests__/appTestHarness'
 import type { StorageDirEntry, StorageDirsState } from './platform/types'
@@ -211,7 +212,7 @@ describe('Ubuntu 运行时设置', () => {
 
   it('不再在运行时设置页显示工作区文件管理入口', async () => {
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
     fireEvent.click(screen.getByRole('button', { name: /Ubuntu 运行时/ }))
     expect(await screen.findByRole('heading', { name: 'Ubuntu 24.04' })).toBeVisible()
     expect(screen.queryByRole('heading', { name: '工作区文件' })).toBeNull()

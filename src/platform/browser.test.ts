@@ -7,7 +7,6 @@ const baseSettings = {
   keepScreenAwake: true,
   terminalFontSize: 14,
   configuredModelProviders: [],
-  autoLaunch: false,
   keepRuntimeInBackground: false,
 }
 

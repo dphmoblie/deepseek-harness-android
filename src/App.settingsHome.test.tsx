@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge } from './__tests__/appTestHarness'
 
@@ -41,8 +42,8 @@ describe('设置首页：分组与分类筛选', () => {
    */
   async function openSettingsHome(): Promise<void> {
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    await screen.findByRole('heading', { name: '设置' }, { timeout: SETTINGS_HOME_TIMEOUT_MS })
+  await arriveAtSettingsHome()
+      await screen.findByRole('heading', { name: '设置' }, { timeout: SETTINGS_HOME_TIMEOUT_MS })
   }
 
   it('按用途分组列出入口', async () => {
@@ -132,7 +133,7 @@ describe('设置首页：分组与分类筛选', () => {
     // 所以用这条用例兜底：漏了词条这里会直接显示中文，一眼能看出来。
     window.localStorage.setItem('dsh-mobile-language-v1', 'en')
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
 
     const runtimeGroup = await screen.findByRole('region', { name: 'Background' }, { timeout: SETTINGS_HOME_TIMEOUT_MS })
     expect(within(runtimeGroup).getByRole('button', { name: /Ubuntu runtime/ })).toBeVisible()
@@ -251,7 +252,7 @@ describe('设置首页：分组与分类筛选', () => {
 
     fireEvent.click(launchButton)
 
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
     expect(bridge.openHarness).toHaveBeenCalledWith(undefined)
     expect(bridge.openHarness.mock.calls[0]).toHaveLength(1)
     expect(bridge.openHarness.mock.calls[0][0]).not.toBeInstanceOf(Object)

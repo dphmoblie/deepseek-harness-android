@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
+import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -227,8 +228,8 @@ describe('设置分类卡片：DOM 与样式表对得上', () => {
    */
   it('首页的分类芯片正是被 .settings-categories button 命中的元素', async () => {
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
-    await screen.findByRole('heading', { name: '设置' }, { timeout: 5_000 })
+  await arriveAtSettingsHome()
+      await screen.findByRole('heading', { name: '设置' }, { timeout: 5_000 })
 
     fireEvent.click(screen.getByRole('button', { name: '按分类筛选' }))
     const listbox = screen.getByRole('listbox', { name: '筛选功能分类' })

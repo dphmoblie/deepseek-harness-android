@@ -159,7 +159,6 @@ describe('settings validation', () => {
       keepScreenAwake: false,
       terminalFontSize: 14,
       configuredModelProviders: [],
-      autoLaunch: false,
       // 旧存储没有该键：按默认 false 迁移，不改变既有行为。
       keepRuntimeInBackground: false,
       // 同理：旧存储也没有悬浮球键，缺省按关闭处理。
@@ -190,14 +189,12 @@ describe('settings validation', () => {
       keepScreenAwake: true,
       terminalFontSize: 16,
       configuredModelProviders: [],
-      autoLaunch: false,
     })).toEqual({
       manifestUrl: '',
       manifestSha256: '',
       keepScreenAwake: true,
       terminalFontSize: 16,
       configuredModelProviders: [],
-      autoLaunch: false,
       keepRuntimeInBackground: false,
       // 缺省时回落 false：与原生侧「缺键按 false」一致，老用户不会突然多出一个悬浮球。
       overlayBallEnabled: false,
@@ -262,7 +259,6 @@ describe('settings validation', () => {
       configuredModelProviders: ['deepseek'],
       providerApiKeys: { openai: 'unit-test-openai-key', google: 'unit-test-gemini-key' },
       clearProviderApiKeys: ['deepseek'],
-      autoLaunch: true,
       keepRuntimeInBackground: true,
     })).toEqual({
       manifestUrl: '',
@@ -272,7 +268,6 @@ describe('settings validation', () => {
       configuredModelProviders: ['deepseek'],
       providerApiKeys: { openai: 'unit-test-openai-key', google: 'unit-test-gemini-key' },
       clearProviderApiKeys: ['deepseek'],
-      autoLaunch: true,
       keepRuntimeInBackground: true,
     })
   })
@@ -333,7 +328,6 @@ describe('settings validation', () => {
       keepScreenAwake: true,
       terminalFontSize: 14,
       configuredModelProviders: [],
-      autoLaunch: true,
       keepRuntimeInBackground: false,
       overlayBallEnabled: false,
     }
@@ -345,7 +339,6 @@ describe('settings validation', () => {
       providerApiKeys: { openai: 'replacement-key' },
       clearProviderApiKeys: ['openai'],
     })).toThrow('同时更新和清除')
-    expect(() => validateSettings({ ...base, autoLaunch: 'true' } as never)).toThrow('自动启动')
   })
 
   it('enforces terminal dimensions', () => {

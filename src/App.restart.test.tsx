@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { beforeEachAppTest, bridge, readyState, runningState } from './__tests__/appTestHarness'
+import { arriveAtSettingsHome, beforeEachAppTest, bridge, readyState, runningState } from './__tests__/appTestHarness'
 import type { RuntimeProgress, RuntimeState } from './platform/types'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
@@ -14,8 +14,11 @@ describe('停止后重新打开 Harness', () => {
   beforeEach(beforeEachAppTest)
 
   it('返回设置后再次打开运行中的 Harness，不重复启动服务', async () => {
+    // 运行中才有「已启动、不要再启动」这条语义；夹具直接给运行态，不靠开机自动启动凑出来。
+    bridge.getState.mockResolvedValue({ ...runningState })
+
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    await arriveAtSettingsHome()
     const starts = bridge.startHarness.mock.calls.length
     const open = await screen.findByRole('button', { name: '打开 Harness' })
     await waitFor(() => expect(open).toBeEnabled())
@@ -23,7 +26,7 @@ describe('停止后重新打开 Harness', () => {
 
     fireEvent.click(open)
 
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(open).toBeEnabled())
     expect(bridge.startHarness).toHaveBeenCalledTimes(starts)
   })
@@ -32,13 +35,13 @@ describe('停止后重新打开 Harness', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
       render(<App />)
-      await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
       let finishOldOpen!: () => void
       bridge.openHarness.mockImplementationOnce(() => new Promise<void>(resolve => { finishOldOpen = resolve }))
       const open = await screen.findByRole('button', { name: '打开 Harness' })
       await waitFor(() => expect(open).toBeEnabled())
       fireEvent.click(open)
-      await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
       bridge.getState.mockImplementation(() => new Promise(() => {}))
 
       await act(async () => { await vi.advanceTimersByTimeAsync(45_000) })
@@ -50,7 +53,7 @@ describe('停止后重新打开 Harness', () => {
       let finishRetry!: () => void
       bridge.openHarness.mockImplementationOnce(() => new Promise<void>(resolve => { finishRetry = resolve }))
       fireEvent.click(retry)
-      await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(3))
+      await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(2))
       await act(async () => { finishOldOpen(); await Promise.resolve() })
       expect(retry).toBeDisabled()
       await act(async () => { finishRetry(); await Promise.resolve() })
@@ -68,7 +71,7 @@ describe('停止后重新打开 Harness', () => {
       return Promise.resolve({ remove: vi.fn().mockResolvedValue(undefined) })
     })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
     const open = await screen.findByRole('button', { name: '打开 Harness' })
     await waitFor(() => expect(open).toBeEnabled())
     let finishRefresh!: (state: RuntimeState) => void
@@ -81,7 +84,7 @@ describe('停止后重新打开 Harness', () => {
     if (action === 'retry') {
       fireEvent.click(screen.getByRole('button', { name: '设置' }))
       fireEvent.click(screen.getByRole('button', { name: '打开 Harness' }))
-      await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(3))
+      await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(2))
     } else if (action === 'stop') {
       fireEvent.click(screen.getByRole('button', { name: '停止' }))
       await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledTimes(1))
@@ -107,13 +110,16 @@ describe('停止后重新打开 Harness', () => {
       let finishStart!: (state: RuntimeState) => void
       bridge.startHarness.mockImplementationOnce(() => new Promise<RuntimeState>(resolve => { finishStart = resolve }))
       render(<App />)
+      // 冷启动只由用户点击触发：先进设置首页，再点「打开 Harness」。
+      await arriveAtSettingsHome()
+      fireEvent.click(screen.getByRole('button', { name: '打开 Harness' }))
       await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
 
       await act(async () => { await vi.advanceTimersByTimeAsync(270_000) })
       expect(screen.queryByRole('alert')).not.toBeInTheDocument()
       expect(bridge.openHarness).not.toHaveBeenCalled()
       await act(async () => { finishStart(runningState); await Promise.resolve() })
-      await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
       expect(screen.getByRole('button', { name: '打开 Harness' })).toBeEnabled()
     } finally {
       vi.useRealTimers()
@@ -126,6 +132,8 @@ describe('停止后重新打开 Harness', () => {
       let finishStart!: (state: RuntimeState) => void
       bridge.startHarness.mockImplementationOnce(() => new Promise<RuntimeState>(resolve => { finishStart = resolve }))
       render(<App />)
+      await arriveAtSettingsHome()
+      fireEvent.click(screen.getByRole('button', { name: '打开 Harness' }))
       await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
 
       await act(async () => { await vi.advanceTimersByTimeAsync(360_000) })
@@ -140,15 +148,17 @@ describe('停止后重新打开 Harness', () => {
   })
 
   it.each(['pending', 'rejected'] as const)('辅助状态查询 %s 不影响停止完成与再次启动', async outcome => {
+    // 首页只有在运行中才给「停止」键：夹具直接给运行态，避免靠开机自动启动凑状态。
+    bridge.getState.mockResolvedValue({ ...runningState })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
     if (outcome === 'pending') {
       bridge.getKeepAliveState.mockImplementation(() => new Promise(() => {}))
     } else {
       bridge.getKeepAliveState.mockRejectedValue(new Error('SHIZUKU_UNAVAILABLE'))
     }
 
-    // 停止键统一在首页启动卡片：夹具自动启动后落在设置首页，先切回首页。
+    // 停止键统一在首页启动卡片：先切回首页。
     fireEvent.click(await screen.findByRole('button', { name: '首页' }))
     fireEvent.click(await screen.findByRole('button', { name: '停止' }))
     await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledTimes(1))
@@ -159,16 +169,17 @@ describe('停止后重新打开 Harness', () => {
     const previousStarts = bridge.startHarness.mock.calls.length
     fireEvent.click(open)
     await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(previousStarts + 1))
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(screen.getByRole('button', { name: '打开 Harness' })).toBeEnabled())
   })
 
   it('原生停止超时会释放按钮并给出恢复指引，不谎报成功', async () => {
+    bridge.getState.mockResolvedValue({ ...runningState })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
     bridge.stopRuntime.mockRejectedValue(Object.assign(new Error('停止超时'), { code: 'SHIZUKU_UNBIND_TIMEOUT' }))
 
-    // 停止键统一在首页启动卡片：夹具自动启动后落在设置首页，先切回首页。
+    // 停止键统一在首页启动卡片：先切回首页。
     fireEvent.click(await screen.findByRole('button', { name: '首页' }))
     fireEvent.click(screen.getByRole('button', { name: '停止' }))
 
@@ -193,8 +204,9 @@ describe('停止后重新打开 Harness', () => {
     // 45 秒的看门狗只能靠假时钟推进；shouldAdvanceTime 保留 RTL 的 waitFor 可用的真实时间。
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
+      bridge.getState.mockResolvedValue({ ...runningState })
       render(<App />)
-      await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
       bridge.stopRuntime.mockImplementation(() => new Promise(() => {}))
 
       fireEvent.click(await screen.findByRole('button', { name: '首页' }))

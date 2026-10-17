@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge } from './__tests__/appTestHarness'
 import { APP_UPDATE_REMINDER_ENABLED_KEY } from './appUpdateReminder'
@@ -15,7 +16,8 @@ const cachedUpdate: AppUpdateState = {
 }
 
 async function openVersions(): Promise<void> {
-  await screen.findByRole('heading', { name: '设置' })
+  // 开机不再自动进设置首页：先导航，再进「版本管理」。
+  await arriveAtSettingsHome()
   fireEvent.click(screen.getByRole('button', { name: /版本管理/ }))
   await screen.findByRole('heading', { name: '版本管理' })
 }
@@ -42,7 +44,7 @@ describe('应用更新入口与缓存交互', () => {
     mounted.unmount()
     bridge.getAppUpdateState.mockClear()
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
     expect(screen.queryByRole('dialog', { name: '发现应用新版本' })).toBeNull()
     expect(bridge.getAppUpdateState).not.toHaveBeenCalled()
   })
@@ -56,7 +58,7 @@ describe('应用更新入口与缓存交互', () => {
     expect(bridge.openHarness).not.toHaveBeenCalled()
     await act(async () => { finish(cachedUpdate); await Promise.resolve() })
     fireEvent.click(await screen.findByRole('button', { name: '暂不更新' }))
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtSettingsHome()
   })
 
   it('重入使用缓存读取，只有手动重新检查强刷，失败保留信息', async () => {
@@ -101,7 +103,8 @@ describe('应用更新入口与缓存交互', () => {
     await screen.findByText('暂时读不到应用更新状态：请检查网络后重试。')
     fireEvent.click(screen.getByRole('switch', { name: '每日更新提醒' }))
     expect(localStorage.getItem(APP_UPDATE_REMINDER_ENABLED_KEY)).toBe('false')
-    expect(bridge.openHarness).toHaveBeenCalledTimes(1)
+    // 更新检查失败既不拦启动，也不替用户打开 Harness。
+    expect(bridge.openHarness).not.toHaveBeenCalled()
   })
 
   it('打开系统安装设置失败给出错误提示，不产生未处理拒绝', async () => {

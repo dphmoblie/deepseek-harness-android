@@ -8,7 +8,7 @@ import type {
   AccessibilityAutomationConfigCorrupt,
 } from './platform/types'
 import { AUTOMATION_DISCLAIMER_STORAGE_KEY } from './accessibilityDisclaimer'
-import { beforeEachAppTest, bridge, openSettingsPage } from './__tests__/appTestHarness'
+import { arriveAtShell, beforeEachAppTest, bridge, openSettingsPage } from './__tests__/appTestHarness'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
 vi.mock('./components/TerminalPanel', () => ({
@@ -46,7 +46,7 @@ describe('无障碍白名单与验证密码', () => {
   async function openAccessibilityPage(passwordConfigured: boolean, allowed: string[] = []): Promise<void> {
     bridge.getAccessibilityAutomationState.mockResolvedValue(accessibilityState(passwordConfigured, allowed))
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtShell()
     await openSettingsPage('自动化设置')
   }
 
@@ -143,7 +143,7 @@ describe('无障碍白名单与验证密码', () => {
   it('重新读取已关闭的配置时正确回显开关与名单', async () => {
     bridge.getAccessibilityAutomationState.mockResolvedValue(accessibilityState(false, ['com.example.reader'], false))
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtShell()
     await openSettingsPage('自动化设置')
     expect(screen.getByRole('switch', { name: '启用无障碍白名单限制' })).not.toBeChecked()
     expect(screen.getByText('当前生效：白名单限制已关闭')).toBeInTheDocument()
@@ -250,7 +250,7 @@ describe('无障碍自动化控制台', () => {
   async function openConsole(target: ConsoleState): Promise<void> {
     bridge.getAccessibilityAutomationState.mockResolvedValue({ ...BASE_STATE, ...target })
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtShell()
     await openSettingsPage('自动化设置')
   }
 
@@ -468,7 +468,7 @@ describe('无障碍自动化规则卡片', () => {
   async function openRules(): Promise<void> {
     bridge.getAccessibilityAutomationState.mockResolvedValue(RULES_STATE)
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtShell()
     await openSettingsPage('自动化设置')
   }
 
@@ -793,7 +793,7 @@ describe(`每应用自动化参数`, () => {
     }
     bridge.getAccessibilityAutomationState.mockResolvedValue(CONFIG_STATE)
     render(<App />)
-    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  await arriveAtShell()
     await openSettingsPage('自动化设置')
   }
 
