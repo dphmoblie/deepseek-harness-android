@@ -1,4 +1,5 @@
 import { validatePluginCatalog, validatePluginRequest } from './plugins'
+import { harnessVersionRequest, validateHarnessReleases, validateHarnessVersions, type HarnessVersionOperation } from './harnessVersions'
 import { validateInstalledApplications } from './installedApplications'
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import type { PluginListenerHandle } from '@capacitor/core'
@@ -115,6 +116,8 @@ import {
 } from './validation'
 
 interface NativeRuntimePlugin {
+  listHarnessReleases(): Promise<unknown>
+  manageHarnessVersions(options: { operation: HarnessVersionOperation; version?: string }): Promise<unknown>
   managePlugins(options: PluginRequest): Promise<PluginCatalog>
   setAppLanguage(options: { language: 'zh-CN' | 'en' }): Promise<void>
   /** 同步主题模式给原生，由原生把它落到状态栏（登记册 5.4）。 */
@@ -276,6 +279,8 @@ function validatedListener<T>(validator: (value: unknown) => T, listener: (event
 
 function createNativeBridge(): RuntimeBridge {
   return {
+    listHarnessReleases: () => NativeRuntime.listHarnessReleases().then(validateHarnessReleases),
+    manageHarnessVersions: (operation, version) => NativeRuntime.manageHarnessVersions(harnessVersionRequest(operation, version)).then(validateHarnessVersions),
     managePlugins: request => NativeRuntime.managePlugins(validatePluginRequest(request)).then(validatePluginCatalog),
     setAppLanguage: language => {
       if (language !== 'zh-CN' && language !== 'en') return Promise.reject(new Error('不支持的应用语言'))

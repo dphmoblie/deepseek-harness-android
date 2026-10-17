@@ -129,8 +129,8 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         // plugin-manager/state-snapshot.json。只检查事务文件会跳过正常升级后的状态回填，
         // 结果是市场插件本体还在保留区，清单却没有插件名，后续 repair 也无法接回链接。
         // 两个文件都不存在时不启动 Node，避免首次安装每次启动都做无意义的恢复探测。
-        val transaction = File(directory, "transaction.json").exists()
-        val snapshot = File(directory, "state-snapshot.json").exists()
+        val transaction = File(home, "transaction.json").exists()
+        val snapshot = File(home, "state-snapshot.json").exists()
         if (transaction || snapshot) {
             try {
                 val result = run("recover", null, null, null)
@@ -148,6 +148,12 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
                 throw error
             }
         }
+    }
+
+    /** 更新或切换前收拢外部市场安装的插件；失败则保留当前环境，不继续覆盖 rootfs。 */
+    fun checkpointBeforeUpdate() {
+        if (store.installedManifest() == null) return
+        run("checkpoint", null, null, null)
     }
 
     /**
@@ -248,7 +254,7 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
 
     /** 当前已安装运行时的代次指纹（runtimeId + 版本 + rootfs 摘要）；未安装时为 null。 */
     private fun installedGeneration(): String? =
-        store.installedManifest()?.let { "${it.runtimeId}|${it.version}|${it.rootfs.sha256}" }
+        store.installedManifest()?.let { "${it.runtimeId}|${it.version}|${it.rootfs.sha256}|${HarnessVersions.selectedOrBundled(store)}" }
 
     /**
      * 应用（APK）升级后的插件迁移。
@@ -424,7 +430,7 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
     }
 
     fun run(operation: String, id: String?, enabled: Boolean?, childId: String?, source: String? = null): JSObject {
-        if (operation !in setOf("list", "enable", "child", "update", "import", "rollback", "recover", "repair", "graph", "prune")) invalid()
+        if (operation !in setOf("list", "enable", "child", "update", "import", "rollback", "recover", "repair", "graph", "prune", "verify", "checkpoint")) invalid()
         if (operation == "import") {
             // 来源必填，且与访客脚本 `validateImportSource`、前端 `src/platform/plugins.ts` 是
             // **同一套规则**（逐条对应见 `PluginSourcePolicy`）：三处任意一处放松，
@@ -432,7 +438,7 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             if (PluginSourcePolicy.classify(source) == null) invalid()
             // 包名只是"期望的名字"，用于装完后消歧；给了就必须合法。
             if (id != null && (id.length !in 1..214 || !PACKAGE.matches(id) || ".." in id)) invalid()
-        } else if (operation !in setOf("list", "recover", "repair", "graph", "prune")) {
+        } else if (operation !in setOf("list", "recover", "repair", "graph", "prune", "verify", "checkpoint")) {
             if (id == null || id.length !in 1..214 || !PACKAGE.matches(id) || ".." in id) invalid()
             if (operation in setOf("enable", "child") && enabled == null) invalid()
             if (operation == "child" && (childId == null || !ENTRY.matches(childId))) invalid()
@@ -455,6 +461,7 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             "import" -> 250L
             // 修复要遍历已安装的插件目录，给足时间但仍是有限等待。
             "repair" -> 90L
+            "checkpoint" -> 180L
             // 清理孤立版本副本遍历 versions 目录，时间与修复同一量级。
             "prune" -> 90L
             // 模块图探测是只读遍历（有深度与条目上限），不需要修复那么长的等待。
