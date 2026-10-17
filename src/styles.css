@@ -2547,9 +2547,19 @@ button:disabled {
 /*
  * 引导六步的内容长短不一（第 2 步要放下状态、警告与安装按钮）。900px 高的横屏里
  * 光靠 `.dialog` 自己滚动会把「下一步」压在折叠线以下，用户看不到出口。
- * 让动作行贴住滚动容器底部，正文继续在它下面滚。
+ *
+ * 第一版用了 `position: sticky` 贴底，结果动作行是「浮」在正文上的：正文滚到中段时
+ * 被它盖住，第 2 步的「安装运行时」只露出一条蓝边（MuMu 900×1600 实测）。
+ * 改成弹窗自己不再滚动、只有正文那一块滚，标题与动作行都是 flex 流里的固定行，
+ * 谁都不会压住谁。
  */
-.onboarding-dialog .onboarding-nav { position: sticky; bottom: 0; padding-top: 12px; background: var(--surface); }
+.onboarding-dialog {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.onboarding-dialog > .onboarding-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+.onboarding-dialog .onboarding-nav { flex: none; padding-top: 12px; }
 .onboarding-spacer { flex: 1; }
 
 /* 语言页适配窄屏及英文长文案，沿用管理界面的配色与控件风格。 */
