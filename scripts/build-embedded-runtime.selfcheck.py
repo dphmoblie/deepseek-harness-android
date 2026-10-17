@@ -254,6 +254,15 @@ def check_stage_build_tools() -> None:
     解析成目录后又交给 shutil.copy2，构建机直接 IsADirectoryError（run 39042712091）。
     """
     module = load_sibling("stage_build_tools", "stage-build-tools.py")
+    # 链接终点的判定是纯字符串逻辑，不需要建链：/usr/bin/ld -> /etc/alternatives/ld
+    # 不进预置树（访客里没有 /etc/alternatives），/usr/bin/cc -> gcc-13 进。
+    assert module.normalize_link_posix("/usr/bin", "/etc/alternatives/ld") == "/etc/alternatives/ld"
+    assert module.normalize_link_posix("/usr/bin", "gcc-13") == "/usr/bin/gcc-13"
+    assert module.normalize_link_posix("/usr/bin", "../lib/x.so") == "/usr/lib/x.so"
+    assert module.normalize_link_posix("/usr/lib", "/lib/aarch64-linux-gnu/libc.so.6") == (
+        "/usr/lib/aarch64-linux-gnu/libc.so.6"
+    )
+
     with tempfile.TemporaryDirectory(prefix="dsh-stage-build-tools-") as directory:
         root = Path(directory)
         source = root / "source"
@@ -261,12 +270,16 @@ def check_stage_build_tools() -> None:
         (source / "usr/bin/gcc").write_bytes(b"gcc\n")
         (source / "usr/lib/clang/16/include").mkdir(parents=True)
         (source / "usr/lib/clang/16/include/stdio.h").write_bytes(b"h\n")
+        (source / "usr/etc/alternatives").mkdir(parents=True)
+        (source / "usr/etc/alternatives/ld").write_bytes(b"ld.bfd\n")
         link_file = source / "usr/bin/cc"
         link_dir = source / "usr/lib/llvm-16/lib/clang/16/include"
+        link_orphan = source / "usr/bin/ld"
         link_dir.parent.mkdir(parents=True)
         try:
             link_file.symlink_to("gcc")
             link_dir.symlink_to("../../../../clang/16/include")
+            link_orphan.symlink_to("../etc/alternatives/ld")
         except (OSError, NotImplementedError):
             print("selfcheck: 当前平台不允许创建符号链接，跳过预置脚本落盘用例")
             return
@@ -275,10 +288,14 @@ def check_stage_build_tools() -> None:
         # 目录（链接解析后的目标）直接拷：不许抛错，也不该落成空文件。
         module.copy_entry(link_dir.resolve(), destination / "usr/lib/clang/16/include")
         assert not (destination / "usr/lib/clang/16/include").exists()
-        # 文件链接按链接落盘，内容不被展开。
-        module.copy_entry(link_file, destination / "usr/bin/cc")
+        # 终点也在预置树里的链接：保留链接形态，不展开内容。
+        module.copy_entry(link_file, destination / "usr/bin/cc", {"/usr/bin/gcc"})
         assert (destination / "usr/bin/cc").is_symlink()
         assert os.readlink(destination / "usr/bin/cc") == "gcc"
+        # 终点不在预置树里的链接：按内容落盘，别在访客里留断链。
+        module.copy_entry(link_orphan, destination / "usr/bin/ld", {"/usr/bin/gcc"})
+        assert not (destination / "usr/bin/ld").is_symlink()
+        assert (destination / "usr/bin/ld").read_bytes() == b"ld.bfd\n"
         # 普通文件仍按内容拷贝。
         module.copy_entry(source / "usr/bin/gcc", destination / "usr/bin/gcc")
         assert (destination / "usr/bin/gcc").read_bytes() == b"gcc\n"
