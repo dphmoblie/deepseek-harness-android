@@ -141,7 +141,7 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
 
   return <div className="settings-subsection" aria-labelledby="root-engine">
     <div className="section-title"><span className="section-icon"><KeyRound size={19} /></span>
-      <div><h3 id="root-engine">{t('根通道（KernelSU）')}</h3>
+      <div><h3 id="root-engine">{t('根通道设置')}</h3>
         <p>{t('打开后，AI 的设备命令可以以 UID 0 执行：命令先过静态审查，再在私有命名空间里跑，并尽量把核心分区挂成只读。默认关闭。')}</p></div>
     </div>
     {load.status === 'loading' && <p className="settings-note">{t('正在读取根通道状态…')}</p>}

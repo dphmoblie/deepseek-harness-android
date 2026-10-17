@@ -52,10 +52,17 @@ describe('Onboarding', () => {
     expect(screen.getByText('安装 Ubuntu 运行时')).toBeDefined()
   })
 
-  it('warns when the manifest pair is not configured', () => {
-    renderOnboarding()
+  it('说明空来源会使用 APK 内置镜像', () => {
+    renderOnboarding({ settings: { ...settings, manifestUrl: '', manifestSha256: '' } })
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
-    expect(screen.getByText(/尚未配置运行时下载地址/)).toBeDefined()
+    expect(screen.getByText(/安装将先解压 APK 内置镜像/)).toBeDefined()
+  })
+
+  it('warns when the manifest pair is incomplete', () => {
+    const current = { ...settings, manifestSha256: '' }
+    renderOnboarding({ settings: current })
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    expect(screen.getByText(/运行时来源配置不完整/)).toBeDefined()
   })
 
   it('calls onInstall from the runtime step', () => {
@@ -68,11 +75,11 @@ describe('Onboarding', () => {
   it.each([
     { name: '内置离线来源', settings: { ...settings, manifestUrl: '', manifestSha256: '' }, runtime },
     { name: '已安装运行时', settings, runtime: { ...runtime, phase: 'ready' as const } },
-    { name: '有效在线来源', settings: { ...settings, manifestUrl: 'https://example.com/runtime.json' }, runtime },
+    { name: '有效在线来源', settings: { ...settings, manifestUrl: 'https://downloads.deepseek.example/runtime.json' }, runtime },
   ])('$name 不显示缺少在线来源警告', value => {
     renderOnboarding(value)
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
-    expect(screen.queryByText(/尚未配置运行时下载地址/)).toBeNull()
+    expect(screen.queryByText(/运行时来源配置不完整/)).toBeNull()
   })
 
   it('安装忙碌时不会调用保存或清空密钥', () => {

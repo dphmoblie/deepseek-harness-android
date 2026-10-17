@@ -86,6 +86,11 @@ class RuntimeSelfCheck(
             TIMEOUT_SECONDS,
             outputLimit = OUTPUT_LIMIT,
         )
+        if (!result.succeeded) {
+            val failure = RuntimeDiagnostics.prootFailure(result)
+                ?: ClassifiedFailure(DENIED_CODE, "运行时自检进程未正常结束")
+            throw RuntimeFailure(failure.code, failure.message)
+        }
         val payload = try {
             val line = result.output.trimEnd().lineSequence().lastOrNull().orEmpty()
             if (line.length > MAX_PAYLOAD_CHARS) throw IllegalArgumentException()
@@ -94,8 +99,9 @@ class RuntimeSelfCheck(
             throw RuntimeFailure(DENIED_CODE, "运行时自检失败，请稍后重试")
         }
         // 脚本用 `{"error":"<受控码>"}` 表达自己的失败；无论哪种失败，对界面都是同一句可重试的提示。
-        if (!result.succeeded || payload.has("error")) {
-            throw RuntimeFailure(DENIED_CODE, "运行时自检失败，请稍后重试")
+        if (payload.has("error")) {
+            val code = payload.optString("error", "").takeIf { it.matches(CONTROLLED_CODE) }
+            throw RuntimeFailure(code ?: DENIED_CODE, "运行时自检返回了无效结果")
         }
         return payload
     }

@@ -2496,20 +2496,48 @@ button:disabled {
 
 
 /* onboarding */
-.onboarding-dialog { max-width: 520px; }
+.onboarding-dialog {
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .onboarding-step-dots { display: flex; gap: 6px; margin: 2px 0 12px; }
 .onboarding-step-dots > span { width: 22px; height: 4px; border-radius: var(--radius-chip); background: var(--line-strong); }
 .onboarding-step-dots > span.active { background: var(--blue); }
 .onboarding-step-dots > span.done { background: var(--green); }
 .onboarding-title { display: flex; align-items: center; gap: 9px; margin: 0 0 10px; }
-.onboarding-body { display: flex; flex-direction: column; gap: 10px; color: var(--muted); }
+.onboarding-body {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  color: var(--muted);
+}
 .onboarding-fields { display: flex; min-width: 0; flex-direction: column; gap: 10px; margin: 0; padding: 0; border: 0; }
 .onboarding-body ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
 .onboarding-body code { font-size: .9em; }
 .onboarding-warn { color: var(--amber); }
 .onboarding-status { font-size: .92em; }
 .onboarding-actions-row { display: flex; gap: 9px; flex-wrap: wrap; }
-.onboarding-nav { display: flex; align-items: center; width: 100%; }
+.onboarding-nav {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  width: calc(100% + 46px);
+  margin: 12px -23px -23px;
+  padding: 12px 23px calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+}
+.onboarding-note { color: var(--muted); }
 .onboarding-spacer { flex: 1; }
 
 /* 语言页适配窄屏及英文长文案，沿用管理界面的配色与控件风格。 */
