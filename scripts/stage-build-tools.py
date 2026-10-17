@@ -258,6 +258,12 @@ def main() -> int:
     run("sudo", "apt-get", "install", "-y", "-qq", "--no-install-recommends", *PACKAGES)
     base = baseline_paths(args.base_archive)
     candidates = {path for path in package_paths() if wanted(path)}
+    # /usr/bin/cc、/usr/bin/c++、/usr/bin/ld 这些是 update-alternatives 在 postinst
+    # 里创建的链接，不属于任何包的文件清单（dpkg -L 查不到），必须按入口名显式种进来。
+    for entry in ENTRYPOINTS:
+        path = Path(entry)
+        if path.exists() or path.is_symlink():
+            candidates.add(path)
     pending = list(candidates)
     seen: set[Path] = set()
     while pending:
