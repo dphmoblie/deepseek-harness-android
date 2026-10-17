@@ -24,7 +24,7 @@ Root（スーパーユーザー権限）は不要です。Linux 環境は [PRoot
 | 最低システム | Android 8.0（API 26）以上 |
 | ターゲットアプリ副画面 | Android 10（API 29）以上、Shizuku とデバイス側の検証が必要 |
 | 対応アーキテクチャ | `arm64-v8a`（64 ビット ARM）のみ |
-| 内蔵ランタイム | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.0-rc.2 |
+| 内蔵ランタイム | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.1-rc.1 |
 | アプリのライセンス | MIT（ランタイムコンポーネントはそれぞれのライセンスに従います。詳細は[ライセンス](#ライセンス)） |
 
 ## 目次

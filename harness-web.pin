@@ -4,4 +4,4 @@
 # （`git -C harness-web rev-parse HEAD`），再改本文件的那一行指纹，然后一起提交。
 # CI 的 scripts/mobile-compat-contract.test.mjs 会核对「本文件 = 索引里的 gitlink
 # = HEAD 里已提交的 gitlink」，三者不一致就失败，避免指针被夹带在别的改动里。
-28d92f0d5b9f933dbe021cc3171ef0b50bf54453
+5cb43dbcbabddac391afd0f947b771fb899582a1

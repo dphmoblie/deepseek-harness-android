@@ -120,11 +120,17 @@ async function loadRuntime(t) {
     '未能从 scripts/runtime-profile/node_modules 解析会话持久化相关模块：请先运行 pnpm --dir scripts/runtime-profile install',
   )
   const { Context } = await import(pathToFileURL(cordisEntry).href)
-  const { default: JsonlSessionPersistence } = await import(pathToFileURL(persistenceEntry).href)
+  const persistenceModule = await import(pathToFileURL(persistenceEntry).href)
+  // 0.2.0 的 persistence 是默认导出的插件类；0.2.1 改成 Cordis 函数式插件，
+  // 只导出 `apply` / `name` / `Config`。两种形状都要能起后端。
+  const JsonlSessionPersistence = persistenceModule.default ?? persistenceModule
   const { sessionFormatCatalog } = await import(pathToFileURL(catalogEntry).href)
   const { releasedV3SessionFormatCodec } = await import(pathToFileURL(v2to3Entry).href)
   assert.equal(typeof Context, 'function', 'cordis 没有导出 Context')
-  assert.equal(typeof JsonlSessionPersistence, 'function', 'session-persistence-jsonl 没有导出插件类')
+  assert.ok(
+    typeof JsonlSessionPersistence === 'function' || typeof JsonlSessionPersistence?.apply === 'function',
+    'session-persistence-jsonl 既没有默认插件类，也没有 apply 函数',
+  )
   assert.equal(typeof releasedV3SessionFormatCodec?.encodeHeader, 'function', '上游没有导出 v3 编解码器')
   return { Context, JsonlSessionPersistence, sessionFormatCatalog, releasedV3SessionFormatCodec }
 }

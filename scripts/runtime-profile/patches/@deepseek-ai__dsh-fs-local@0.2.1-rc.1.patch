@@ -1,5 +1,5 @@
 diff --git a/lib/index.js b/lib/index.js
-index b77bf6ce9faefdd2deceb945236c4c8234d7f0dc..e462e82209b09cf5369ab36fc09b64ef097180f7 100644
+index b77bf6c..e462e82 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -123,6 +123,14 @@ function errorMessage(error) {

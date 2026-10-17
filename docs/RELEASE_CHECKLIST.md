@@ -9,7 +9,7 @@ or otherwise distributing them.
 ## Runtime artifacts
 
 - Build the release image from Ubuntu 24.04 ARM64, Node.js 24.19.0, and
-  `@deepseek-ai/dsh` 0.2.0-rc.2. Record and independently verify the SHA-256
+  `@deepseek-ai/dsh` 0.2.1-rc.1. Record and independently verify the SHA-256
   of every source archive and package used by
   `scripts/build-embedded-runtime.py`.
   （`scripts/build-embedded-runtime.py:947-948` 的 `--node-version` 默认值是 rootfs 内的

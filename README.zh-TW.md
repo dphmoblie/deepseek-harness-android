@@ -24,7 +24,7 @@
 | 最低系統版本 | Android 8.0（API 26）及以上 |
 | 目標應用程式副螢幕 | Android 10（API 29）及以上，需 Shizuku 與裝置驗證 |
 | 支援架構 | 僅 `arm64-v8a`（64 位元 ARM） |
-| 內建執行環境 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.0-rc.2 |
+| 內建執行環境 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.1-rc.1 |
 | 應用程式授權條款 | MIT（執行環境元件沿用各自授權條款，見[授權條款](#授權條款)） |
 
 ## 目錄

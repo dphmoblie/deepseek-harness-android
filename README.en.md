@@ -24,7 +24,7 @@ No root required. The Linux environment runs in userspace through [PRoot](https:
 | Minimum Android | Android 8.0 (API 26) or later |
 | Target-app virtual screen | Android 10 (API 29) or later; needs Shizuku and per-device verification |
 | Supported architecture | `arm64-v8a` only (64-bit ARM) |
-| Bundled runtime | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.0-rc.2 |
+| Bundled runtime | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.1-rc.1 |
 | App license | MIT (bundled runtime components keep their own licenses — see [License](#license)) |
 
 ## Contents

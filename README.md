@@ -24,7 +24,7 @@
 | 最低系统 | Android 8.0（API 26）及以上 |
 | 目标应用副屏 | Android 10（API 29）及以上，需 Shizuku 与设备验证 |
 | 支持架构 | 仅 `arm64-v8a`（64 位 ARM） |
-| 内置运行时 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.0-rc.2 |
+| 内置运行时 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.1-rc.1 |
 | 应用许可证 | MIT（运行时组件沿用各自许可证，见[许可证](#许可证)） |
 
 ## 目录

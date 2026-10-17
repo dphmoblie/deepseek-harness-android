@@ -24,7 +24,7 @@ Root(최고 관리자 권한)는 필요하지 않습니다. Linux 환경은 [PRo
 | 최소 시스템 | Android 8.0(API 26) 이상 |
 | 대상 앱 보조 화면 | Android 10(API 29) 이상, Shizuku 및 기기 검증 필요 |
 | 지원 아키텍처 | `arm64-v8a`(64비트 ARM) 전용 |
-| 내장 런타임 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.0-rc.2 |
+| 내장 런타임 | Ubuntu 24.04 ARM64 · Node.js 24.19 · `@deepseek-ai/dsh` 0.2.1-rc.1 |
 | 앱 라이선스 | MIT(런타임 구성 요소는 각자의 라이선스를 따르며, [라이선스](#라이선스) 참조) |
 
 ## 목차

@@ -47,13 +47,13 @@ internal object RuntimeSandboxRunner {
     /**
      * Cordis 插件条目 id：**`sandbox`**，不是按包名缩写出来的 `sandbox-local`。
      *
-     * 真机取证（`@deepseek-ai/dsh-base@0.2.0-rc.2` 的 `cordis.patch.yml`）：
+     * 真机取证（`@deepseek-ai/dsh-base@0.2.1-rc.1` 的 `cordis.patch.yml`）：
      * ```
      * - id: sandbox
      *   name: '@deepseek-ai/dsh-sandbox-local'
      * ```
      * id 与包名不同名，而覆盖条目**只按 id 定位**；对不上的条目上游只 warn 一句就跳过
-     * （`dsh-app-boot@0.2.0-rc.2` 的 `patch: entry %C not found`），于是写错 id 时
+     * （`dsh-app-boot@0.2.1-rc.1` 的 `patch: entry %C not found`），于是写错 id 时
      * 运行器永远不会被调用，而沙箱内执行照旧失败——静默失效，最难受的一种错法。
      * 以后升级运行时若发现沙箱又坏了，第一件事是核对这个 id 是否仍然存在。
      */

@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
 const appRoot = resolve(import.meta.dirname, '..')
-const harnessVersion = '0.2.0-rc.2'
+const harnessVersion = '0.2.1-rc.1'
 
 test('副屏输入后首帧间隔字段在原生、平台与 AI 描述中一致', async () => {
   const native = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/ShellVirtualScreen.kt'), 'utf8')
@@ -235,6 +235,21 @@ test('every dsh version pin in the repository declares the same release', async 
     ),
   ]
   assert.deepEqual(strayPrereleases, [], `pnpm-lock.yaml 里残留了非目标版本：${strayPrereleases.join(', ')}`)
+
+  // 同一道理适用于所有 dsh 包：升级时最容易漏掉的是某几个包仍停在上一版。
+  // 从 lockfile 的包键里抽版本（`@deepseek-ai/dsh-*@x.y.z-*`），除目标版本外一律失败。
+  const strayDshVersions = [
+    ...new Set(
+      [...runtimeLock.matchAll(/@deepseek-ai\/dsh(?:-[a-z0-9-]+)*@(\d+\.\d+\.\d+-[0-9A-Za-z.-]+)/gu)]
+        .map(match => match[1])
+        .filter(version => version !== harnessVersion),
+    ),
+  ]
+  assert.deepEqual(
+    strayDshVersions,
+    [],
+    `pnpm-lock.yaml 里残留了非目标 dsh 版本：${strayDshVersions.join(', ')}`,
+  )
 
   // 去重护栏必须挂在 CI 上，而且是致命的（不得用 || true / continue-on-error 吞掉）。
   assert.match(workflow, /node scripts\/check-runtime-dedupe\.mjs --list \/tmp\/dsh-root/)

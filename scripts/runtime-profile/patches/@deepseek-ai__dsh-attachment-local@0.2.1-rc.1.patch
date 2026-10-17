@@ -1,5 +1,5 @@
 diff --git a/lib/index.js b/lib/index.js
-index 882005fc045c07a4d51a47c3783f4e48d5af95d3..2844713cef126aadf60745770fd51c9f986d5075 100644
+index 882005f..2844713 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -4,7 +4,7 @@ import { AttachmentError, AttachmentId, AttachmentStore, ImageVariantId, request
