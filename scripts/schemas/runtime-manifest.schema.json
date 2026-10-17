@@ -106,6 +106,10 @@
       "minimum": 0,
       "description": "构建期在 profile 里建立的包链接数量（真实构建为 485 / 515 这类三位数）。scripts/verify-bundle.py 第 691 行会拿它对照包内链接数，防止回归成「只链接了部分包」。手写示例缺这个字段就说明示例与生成器脱节。"
     },
+    "buildTools": {
+      "type": "boolean",
+      "description": "这份 rootfs 是否内置 C 编译工具链（gcc / g++ / make / 头文件 / binutils）。构建侧 scripts/build-embedded-runtime.py 传了 --build-tools-dir 就写 true；手写示例与不含工具链的构建不写这个字段。"
+    },
     "mobile": {
       "type": "object",
       "additionalProperties": false,
