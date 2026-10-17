@@ -33,5 +33,9 @@ class RuntimeTerminalPluginBackupTest {
         assertFalse(RuntimeTerminalPluginBackup.isModulePath("root/.dsh/profiles/other/file"))
         assertTrue(RuntimeTerminalPluginBackup.isModulePath("root/.dsh/profiles/web/node_modules/.pnpm/pkg"))
         assertFalse(RuntimeTerminalPluginBackup.isModulePath("root/.dsh/profiles/web/package.json"))
+        // 0.2.1 的 profiles/node_modules 大量链接指向 rootfs 内的 opt/dsh 运行时依赖；
+        // 这些是运行时产物，不是用户插件，必须留在原运行时里。
+        assertFalse(RuntimeTerminalPluginBackup.isModulePath("opt/dsh/node_modules/.pnpm/@aws-sdk+core@1/node_modules/@aws-sdk/core"))
+        assertFalse(RuntimeTerminalPluginBackup.isModulePath("root/.dsh-mobile/plugin-manager/versions/x/node_modules/pkg"))
     }
 }

@@ -43,7 +43,7 @@ internal object RuntimeTerminalPluginBackup {
         if (candidates.isEmpty()) return null
 
         val directory = File(runtimeParent, PREFIX + UUID.randomUUID().toString())
-        ensureDirectory(directory)
+        ensureDirectory(directory, runtimeParent)
         val moved = mutableListOf<PackageEntry>()
         val movedTargets = mutableSetOf<String>()
         try {
@@ -51,7 +51,7 @@ internal object RuntimeTerminalPluginBackup {
                 val source = File(sourceRoot, entry.relative)
                 val target = File(directory, entry.relative)
                 ensureInside(directory, target)
-                ensureDirectory(target.parentFile ?: throw failure("插件备份目录无效"))
+                ensureDirectory(target.parentFile ?: throw failure("插件备份目录无效"), directory)
                 if (!RuntimeFiles.existsNoFollow(source)) continue
                 entry.targetRelative?.let { targetRelative ->
                     if (movedTargets.add(targetRelative)) {
@@ -60,7 +60,7 @@ internal object RuntimeTerminalPluginBackup {
                         ensureInside(sourceRoot, targetSource)
                         ensureInside(directory, targetBackup)
                         if (!RuntimeFiles.isDirectoryNoFollow(targetSource)) throw failure("终端插件目标路径无效")
-                        ensureDirectory(targetBackup.parentFile ?: throw failure("插件备份目录无效"))
+                        ensureDirectory(targetBackup.parentFile ?: throw failure("插件备份目录无效"), directory)
                         Os.rename(targetSource.absolutePath, targetBackup.absolutePath)
                     }
                     // Record before moving the link itself: if the second rename fails, the
@@ -84,14 +84,14 @@ internal object RuntimeTerminalPluginBackup {
                     val source = File(directory, entry.relative)
                     val target = File(sourceRoot, entry.relative)
                     if (RuntimeFiles.existsNoFollow(source) && !RuntimeFiles.existsNoFollow(target)) {
-                        ensureDirectory(target.parentFile ?: return@runCatching)
+                        ensureDirectory(target.parentFile ?: return@runCatching, sourceRoot)
                         Os.rename(source.absolutePath, target.absolutePath)
                     }
                     entry.targetRelative?.let { targetRelative ->
                         val targetSource = File(directory, targetRelative)
                         val targetBackup = File(sourceRoot, targetRelative)
                         if (RuntimeFiles.existsNoFollow(targetSource) && !RuntimeFiles.existsNoFollow(targetBackup)) {
-                            ensureDirectory(targetBackup.parentFile ?: return@runCatching)
+                            ensureDirectory(targetBackup.parentFile ?: return@runCatching, sourceRoot)
                             Os.rename(targetSource.absolutePath, targetBackup.absolutePath)
                         }
                     }
@@ -105,6 +105,8 @@ internal object RuntimeTerminalPluginBackup {
     fun restore(handle: Handle, targetRoot: File, strict: Boolean): Int {
         val directory = handle.directory
         if (!isBackupDirectoryName(directory.name) || !RuntimeFiles.isDirectoryNoFollow(directory)) return 0
+        // 新根目录尚未就位时保留备份，交给下一次恢复流程；不要在别处创建回填目录。
+        if (!RuntimeFiles.isDirectoryNoFollow(targetRoot)) return 0
         val entries = listBackupPackages(directory)
         if (entries.isEmpty()) {
             removeQuietly(directory)
@@ -119,7 +121,7 @@ internal object RuntimeTerminalPluginBackup {
                 ensureInside(directory, source)
                 ensureInside(targetRoot, target)
                 if (RuntimeFiles.existsNoFollow(target)) throw failure("终端插件与新运行时冲突：${entry.name}")
-                ensureDirectory(target.parentFile ?: throw failure("插件回填路径无效"))
+                ensureDirectory(target.parentFile ?: throw failure("插件回填路径无效"), targetRoot)
                 entry.targetRelative?.let { targetRelative ->
                     if (movedTargets.add(targetRelative)) {
                         val targetSource = File(directory, targetRelative)
@@ -127,7 +129,7 @@ internal object RuntimeTerminalPluginBackup {
                         ensureInside(directory, targetSource)
                         ensureInside(targetRoot, targetRestore)
                         if (RuntimeFiles.existsNoFollow(targetRestore)) throw failure("终端插件依赖与新运行时冲突：${entry.name}")
-                        ensureDirectory(targetRestore.parentFile ?: throw failure("插件回填路径无效"))
+                        ensureDirectory(targetRestore.parentFile ?: throw failure("插件回填路径无效"), targetRoot)
                         Os.rename(targetSource.absolutePath, targetRestore.absolutePath)
                     }
                     moved += entry
@@ -144,14 +146,14 @@ internal object RuntimeTerminalPluginBackup {
                     val source = File(targetRoot, entry.relative)
                     val target = File(directory, entry.relative)
                     if (RuntimeFiles.existsNoFollow(source) && !RuntimeFiles.existsNoFollow(target)) {
-                        ensureDirectory(target.parentFile ?: return@runCatching)
+                        ensureDirectory(target.parentFile ?: return@runCatching, directory)
                         Os.rename(source.absolutePath, target.absolutePath)
                     }
                     entry.targetRelative?.let { targetRelative ->
                         val targetSource = File(targetRoot, targetRelative)
                         val targetBackup = File(directory, targetRelative)
                         if (RuntimeFiles.existsNoFollow(targetSource) && !RuntimeFiles.existsNoFollow(targetBackup)) {
-                            ensureDirectory(targetBackup.parentFile ?: return@runCatching)
+                            ensureDirectory(targetBackup.parentFile ?: return@runCatching, directory)
                             Os.rename(targetSource.absolutePath, targetBackup.absolutePath)
                         }
                     }
@@ -207,6 +209,10 @@ internal object RuntimeTerminalPluginBackup {
         if (!RuntimeFiles.isDirectoryNoFollow(targetCanonical)) return null
         val targetRelative = rootCanonical.toPath().relativize(targetCanonical.toPath()).toString().replace(File.separatorChar, '/')
         if (targetRelative.isEmpty() || targetRelative.startsWith("../") || targetRelative == "..") return null
+        // 运行时自带的 profile 链接指向 rootfs 内的 opt/dsh（dsh 依赖树），不是用户插件。
+        // 0.2.1 的 profiles/node_modules 有数百个这类链接；把它们当成第三方插件搬走会
+        // 破坏旧运行时，而且恢复端的 isModulePath() 本来也不接受 opt/dsh 目标。
+        if (!isModulePath(targetRelative)) return null
         // App-managed plugins already live in the separately preserved plugin-manager area;
         // moving their links here would create a second physical copy and split module identity.
         if (targetRelative == "root/.dsh-mobile" || targetRelative.startsWith("root/.dsh-mobile/")) return null
@@ -258,7 +264,7 @@ internal object RuntimeTerminalPluginBackup {
                 value.put("dependencies", dependencies)
             }
         }
-        writeJson(File(directory, SNAPSHOT), value)
+        writeJson(File(directory, SNAPSHOT), value, directory)
     }
 
     private fun mergeProfile(directory: File, targetRoot: File, names: List<String>) {
@@ -290,12 +296,12 @@ internal object RuntimeTerminalPluginBackup {
         if (savedDependencies != null) {
             names.forEach { name -> if (!dependencies.has(name) && savedDependencies.has(name)) dependencies.put(name, savedDependencies.opt(name)) }
         }
-        writeJson(profile, value)
+        writeJson(profile, value, targetRoot)
     }
 
-    private fun writeJson(file: File, value: JSONObject) {
+    private fun writeJson(file: File, value: JSONObject, boundary: File? = null) {
         val parent = file.parentFile ?: throw failure("插件清单路径无效")
-        ensureDirectory(parent)
+        ensureDirectory(parent, boundary)
         if (RuntimeFiles.existsNoFollow(file) && !isRegularFile(file)) throw failure("插件清单路径无效")
         val temporary = File(parent, ".${file.name}.${UUID.randomUUID()}.tmp")
         try {
@@ -313,19 +319,34 @@ internal object RuntimeTerminalPluginBackup {
         }
     }
 
-    private fun ensureDirectory(directory: File) {
+    /**
+     * Creates [directory] after proving every existing ancestor below [boundary] is a real
+     * directory.  The boundary itself is app-controlled and already validated by the caller;
+     * checking system ancestors above it adds no security and turns unrelated symlinks in the
+     * app's data path into bogus “插件备份路径无效” failures.
+     */
+    private fun ensureDirectory(directory: File, boundary: File? = null) {
         if (RuntimeFiles.existsNoFollow(directory)) {
-            if (!RuntimeFiles.isDirectoryNoFollow(directory)) throw failure("插件备份路径无效")
-            return
+            if (RuntimeFiles.isDirectoryNoFollow(directory)) return
+            if (boundary != null && isContainedDirectoryLink(directory, boundary)) return
+            throw failure("插件备份路径无效")
         }
         // Files.createDirectories follows existing ancestors.  Validate every one first so a
         // malicious profile cannot redirect a restore outside the guest root through a symlink.
         var ancestor: File? = directory.parentFile
         while (ancestor != null && !RuntimeFiles.existsNoFollow(ancestor)) ancestor = ancestor.parentFile
+        var reachedBoundary = boundary == null
         while (ancestor != null) {
-            if (!RuntimeFiles.isDirectoryNoFollow(ancestor)) throw failure("插件备份路径无效")
+            if (!RuntimeFiles.isDirectoryNoFollow(ancestor) && (boundary == null || !isContainedDirectoryLink(ancestor, boundary))) {
+                throw failure("插件备份路径无效")
+            }
+            if (boundary != null && ancestor.absolutePath == boundary.absolutePath) {
+                reachedBoundary = true
+                break
+            }
             ancestor = ancestor.parentFile
         }
+        if (!reachedBoundary) throw failure("插件备份路径越界")
         try { Files.createDirectories(directory.toPath()) } catch (error: IOException) { throw failure("无法创建插件备份目录", error) }
     }
 
@@ -335,9 +356,23 @@ internal object RuntimeTerminalPluginBackup {
         if (!path.startsWith(base) || path == base) throw failure("插件备份路径越界")
         var cursor = child.parentFile
         while (cursor != null && cursor.absolutePath != parent.absolutePath) {
-            if (RuntimeFiles.existsNoFollow(cursor) && !RuntimeFiles.isDirectoryNoFollow(cursor)) throw failure("插件备份路径无效")
+            if (RuntimeFiles.existsNoFollow(cursor) && !RuntimeFiles.isDirectoryNoFollow(cursor) && !isContainedDirectoryLink(cursor, parent)) {
+                throw failure("插件备份路径无效")
+            }
             cursor = cursor.parentFile
         }
+    }
+
+    /**
+     * dsh 的 profile 可能把 `node_modules` 做成指向同一运行时内其它目录的软链。只放行
+     * canonical 目标仍在 [boundary] 内的目录链接；指向根外或指向文件的一律保持拒绝。
+     */
+    private fun isContainedDirectoryLink(file: File, boundary: File): Boolean {
+        if (!Files.isSymbolicLink(file.toPath())) return false
+        val root = runCatching { boundary.canonicalFile }.getOrNull() ?: return false
+        val resolved = runCatching { file.canonicalFile }.getOrNull() ?: return false
+        if (!resolved.toPath().startsWith(root.toPath())) return false
+        return Files.isDirectory(resolved.toPath())
     }
 
     private fun isRegularFile(file: File): Boolean = try {
