@@ -26,6 +26,12 @@ import re
 import sys
 from pathlib import Path
 
+# 发布校验器的错误信息会被 Node/CI 按 UTF-8 读取；Windows 默认代码页可能是
+# cp936，显式固定编码避免中文错误被解码成乱码。
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")
+
 SCHEMA_VERSION = 1
 BUFFER_SIZE = 1024 * 1024
 COMMIT_PATTERN = re.compile(r"^[0-9a-fA-F]{7,40}$")

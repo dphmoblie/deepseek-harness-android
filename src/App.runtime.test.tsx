@@ -37,7 +37,6 @@ describe('后台保持与恢复', () => {
     expect(toggle).toBeChecked()
     await waitFor(() => expect(bridge.requestNotificationPermission).toHaveBeenCalledTimes(1))
 
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, keepRuntimeInBackground: true }))
   })
 
@@ -114,9 +113,10 @@ describe('后台保持与恢复', () => {
       fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
       await openSettingsPage('后台')
 
-      const saveButton = await screen.findByRole('button', { name: '保存设置' })
-      await waitFor(() => expect(saveButton).toBeEnabled())
-      fireEvent.click(saveButton)
+      // 没有“保存设置”按钮后，用一次实际开关变更触发自动保存与服务复核。
+      const toggle = await screen.findByRole('switch', { name: /后台保持 Harness/ })
+      fireEvent.click(toggle)
+      fireEvent.click(toggle)
 
       await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
         ...settings,

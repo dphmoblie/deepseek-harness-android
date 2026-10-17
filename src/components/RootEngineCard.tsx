@@ -177,7 +177,7 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
       {t('UID 0 的命令能改动系统分区与内核参数。审查放行的命令会在私有命名空间里执行，但它仍然是 UID 0——不确定时请保持关闭。')}
     </p>}
     {writeError !== null && <p role="alert">{t('保存根通道开关失败：{0}', writeError)}</p>}
-    {value !== null && <button type="button" disabled={busy} onClick={() => { void refresh() }}>{t('重新检测')}</button>}
-    {load.status === 'failed' && <p role="alert">{t('无法读取根通道状态')} <button type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
+    {value !== null && <button className="button button-secondary compact-button" type="button" disabled={busy} onClick={() => { void refresh() }}>{t('重新检测')}</button>}
+    {load.status === 'failed' && <p role="alert">{t('无法读取根通道状态')} <button className="button button-secondary compact-button" type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
   </div>
 }

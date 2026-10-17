@@ -15,7 +15,7 @@
       （这里刻意不写「提取脚本正文」的示例命令：注释里一旦出现脚本标签本身，
       任何基于正则的提取都会先匹配到注释，反而更容易算错。）
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-o1HRQp8s+3ts4oDLh9ATXGGAx5vo9rTGpypmvzXWwHU='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-G8MtLRS3pBIe/aPqrvDurqSXVXwzpFeex23qLEUNscg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <!--
       首帧脚本：必须在样式表与模块之前先把 <html data-theme> 与 <html data-accent> 定下来，否则会先按
       默认配色画一帧再切主题。它是 src/theme.ts 里 readThemeMode/resolveTheme/
@@ -27,6 +27,7 @@
   var KEY = 'dsh-mobile-theme-v1';
   var ACCENT_KEY = 'dsh-mobile-accent-v1';
   var CUSTOM_ACCENT_KEY = 'dsh-mobile-custom-accent-v1';
+  var TEXT_COLOR_KEY = 'dsh-mobile-text-color-v1';
   var ACCENTS = { ocean: true, mint: true, amber: true, rose: true };
   var COLORS = { light: '#f3f5f8', dark: '#111315' };
   var query = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
@@ -34,6 +35,7 @@
     var mode = 'system';
     var accent = 'ocean';
     var custom = '';
+    var textColor = '';
     try {
       var stored = window.localStorage.getItem(KEY);
       if (stored === 'system' || stored === 'light' || stored === 'dark') mode = stored;
@@ -41,6 +43,8 @@
       if (Object.prototype.hasOwnProperty.call(ACCENTS, storedAccent)) accent = storedAccent;
       var storedCustom = window.localStorage.getItem(CUSTOM_ACCENT_KEY);
       if (/^#[0-9a-f]{6}$/i.test(storedCustom)) custom = storedCustom;
+      var storedTextColor = window.localStorage.getItem(TEXT_COLOR_KEY);
+      if (/^#[0-9a-f]{6}$/i.test(storedTextColor)) textColor = storedTextColor;
     } catch (error) { /* 无痕模式等场景 localStorage 会抛错：按默认值继续，不能因此白屏。 */ }
     var theme = mode === 'system' ? (query && query.matches ? 'dark' : 'light') : mode;
     var root = document.documentElement;
@@ -57,6 +61,16 @@
       root.style.setProperty('--ring', '3px solid color-mix(in srgb, ' + custom + ' 35%, transparent)');
     } else {
       ['--blue', '--blue-hover', '--on-blue', '--blue-soft', '--blue-line', '--ring'].forEach(function (name) { root.style.removeProperty(name); });
+    }
+    if (textColor) {
+      root.style.setProperty('--ink', textColor);
+      var mutedText = 'color-mix(in srgb, ' + textColor + ' 68%, transparent)';
+      root.style.setProperty('--muted', mutedText);
+      root.style.setProperty('--field-label', mutedText);
+      root.style.setProperty('--card-ink', textColor);
+      root.style.setProperty('--card-muted', mutedText);
+    } else {
+      ['--ink', '--muted', '--field-label', '--card-ink', '--card-muted'].forEach(function (name) { root.style.removeProperty(name); });
     }
     root.style.colorScheme = theme;
     var meta = document.querySelector("meta[name='theme-color']");

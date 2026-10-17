@@ -36,10 +36,8 @@ describe('App conversation gate', () => {
 
     fireEvent.click(updateButton)
     const updateDialog = await screen.findByRole('dialog', { name: '更新 Ubuntu 运行环境' })
-    expect(updateDialog).toHaveTextContent('会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及在应用内安装的插件会保留')
-    // 这句限定必须留着：终端里 `dsh plugin add` 装的插件在会被替换的目录里，保留不了。
-    // 只写「你安装的插件会保留」对那条路径是失实的承诺（登记册 P0-5）。
-    expect(updateDialog).toHaveTextContent('在终端里用 dsh plugin add 装进运行时的插件不会保留')
+    expect(updateDialog).toHaveTextContent('会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及插件（包括终端安装的第三方插件）会自动备份并尝试恢复')
+    expect(updateDialog).toHaveTextContent('若恢复发生冲突，请到插件管理检查')
     fireEvent.click(screen.getByRole('button', { name: '确认更新' }))
 
     await waitFor(() => expect(bridge.install).toHaveBeenCalledWith({ manifestUrl: '', manifestSha256: '' }))
@@ -183,7 +181,7 @@ describe('App conversation gate', () => {
 
     // 运行时来源在「后台」页。
     await openSettingsPage('后台')
-    expect(screen.getByText('清单两项留空表示使用 APK 内置的运行时（官方构建即内置，可离线安装）；填写清单地址与 SHA-256 则改为从该来源下载，两项必须成对。')).toBeInTheDocument()
+    expect(screen.getByText('运行环境使用 APK 内置的受校验版本；需要其它版本时请在 Ubuntu 运行时的版本管理中下载并切换。')).toBeInTheDocument()
     // 屏幕内返回按钮走的是历史回退，视图切换在 popstate 之后生效。
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
     expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()
@@ -192,8 +190,6 @@ describe('App conversation gate', () => {
     await openSettingsPage('主题')
     const fontSlider = await screen.findByRole('slider', { name: /字号/ })
     fireEvent.change(fontSlider, { target: { value: '17' } })
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
-
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, terminalFontSize: 17 }))
     expect(await screen.findByText('设置已保存')).toBeInTheDocument()
   })
@@ -205,8 +201,6 @@ describe('App conversation gate', () => {
     await openSettingsPage('模型与密钥')
     fireEvent.change(screen.getByRole('combobox', { name: '供应商' }), { target: { value: 'openai' } })
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
-    fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
-
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
       ...settings,
       providerApiKeys: { openai: 'unit-test-openai-key' },
@@ -333,10 +327,10 @@ describe('应用语言', () => {
     fireEvent.change(screen.getByLabelText('语言'), { target: { value: 'en' } })
     expect(await screen.findByRole('heading', { name: 'Settings' })).toBeVisible()
     expect(screen.getByText('Running', { selector: '.phase-badge' })).toBeVisible()
-    // 设置首页现在只保留分类入口，保存按钮在可编辑的二级页里。
+    // 设置首页现在只保留分类入口，编辑项会自动保存。
     fireEvent.click(screen.getByRole('button', { name: /^Theme/ }))
     expect(await screen.findByRole('heading', { name: 'Theme' })).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Save settings' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Save settings' })).toBeNull()
     view.unmount()
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: 'Open app settings' }))

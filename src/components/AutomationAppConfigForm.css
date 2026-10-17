@@ -7,7 +7,8 @@
   gap: 12px;
   border: 1px solid var(--line-faint);
   border-radius: var(--radius-card);
-  background: var(--surface-sunken);
+  background: color-mix(in srgb, var(--card-color, var(--surface-sunken)) var(--card-opacity, 86%), transparent);
+  color: var(--card-ink, var(--ink));
   padding: 14px;
 }
 
@@ -22,7 +23,7 @@
 }
 
 .automation-app-config-hint {
-  color: var(--muted);
+  color: var(--card-muted, var(--muted));
   font-size: 12px;
   line-height: 1.5;
 }

@@ -1,3 +1,5 @@
+import { readCustomTextColor } from './theme'
+
 /** 用户选择的背景只存本机；媒体加密存入 IndexedDB，不上传到服务端。 */
 export interface CardAppearance { opacity: number; blur: number; color: string }
 const APPEARANCE_KEY = 'dsh-card-appearance-v1'
@@ -26,8 +28,9 @@ export function applyCard(value: CardAppearance): void {
     root.style.setProperty('--card-color', checked.color)
     const [r, g, b] = [1, 3, 5].map(offset => parseInt(checked.color.slice(offset, offset + 2), 16))
     const dark = (r * 299 + g * 587 + b * 114) / 1000 < 150
-    root.style.setProperty('--card-ink', dark ? '#f4f7fb' : '#17202b')
-    root.style.setProperty('--card-muted', dark ? '#c3cbd5' : '#475362')
+    const customText = readCustomTextColor()
+    root.style.setProperty('--card-ink', customText || (dark ? '#f4f7fb' : '#17202b'))
+    root.style.setProperty('--card-muted', customText ? `color-mix(in srgb, ${customText} 68%, transparent)` : (dark ? '#c3cbd5' : '#475362'))
   } else {
     for (const name of ['--card-color', '--card-ink', '--card-muted']) root.style.removeProperty(name)
   }

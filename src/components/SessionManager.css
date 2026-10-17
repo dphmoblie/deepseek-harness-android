@@ -1,10 +1,10 @@
 .session-screen { max-width: 920px; margin: 0 auto; }
 .session-heading { margin-bottom: 18px; }
 .session-embedded-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-.session-embedded-heading h2 { margin: 0; color: var(--ink); font-size: 1rem; }
+.session-embedded-heading h2 { margin: 0; color: var(--card-ink, var(--ink)); font-size: 1rem; }
 .session-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
-.session-search { flex: 1; color: var(--muted); }
-.session-count { flex: none; color: var(--muted); font-size: .75rem; white-space: nowrap; }
+.session-search { flex: 1; color: var(--card-muted, var(--muted)); }
+.session-count { flex: none; color: var(--card-muted, var(--muted)); font-size: .75rem; white-space: nowrap; }
 .session-list { display: grid; gap: 10px; }
 .session-card {
   display: grid;
@@ -15,28 +15,30 @@
   padding: 8px 10px 8px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  background: var(--surface);
+  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  backdrop-filter: blur(var(--card-blur, 0px));
+  color: var(--card-ink, var(--ink));
   box-shadow: var(--shadow-card);
   content-visibility: auto;
   contain-intrinsic-size: 0 68px;
 }
-.session-open { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 11px; min-width: 0; padding: 6px; border: 0; border-radius: var(--radius-inner); color: var(--ink); background: transparent; text-align: left; cursor: pointer; }
-.session-open:hover { background: var(--surface-hover); }
+.session-open { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 11px; min-width: 0; padding: 6px; border: 0; border-radius: var(--radius-inner); color: var(--card-ink, var(--ink)); background: transparent; text-align: left; cursor: pointer; }
+.session-open:hover { background: color-mix(in srgb, var(--card-color, var(--surface-hover)) var(--card-opacity, 100%), transparent); }
 .session-icon { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: var(--radius-inner); color: var(--blue); background: var(--blue-soft); }
 .session-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .session-copy strong { overflow: hidden; font-size: .875rem; text-overflow: ellipsis; white-space: nowrap; }
-.session-copy small { overflow: hidden; color: var(--muted); font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
-.session-delete { width: 44px; height: 44px; color: var(--muted); border-color: transparent; background: transparent; }
+.session-copy small { overflow: hidden; color: var(--card-muted, var(--muted)); font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
+.session-delete { width: 44px; height: 44px; color: var(--card-muted, var(--muted)); border-color: transparent; background: transparent; }
 .session-delete:hover { color: var(--red); border-color: var(--danger-line); background: var(--red-soft); }
-.session-empty { display: grid; place-items: center; gap: 8px; min-height: 180px; padding: 24px; border: 1px dashed var(--line-strong); border-radius: var(--radius-card); color: var(--muted); text-align: center; background: color-mix(in srgb, var(--surface) 76%, transparent); }
+.session-empty { display: grid; place-items: center; gap: 8px; min-height: 180px; padding: 24px; border: 1px dashed var(--line-strong); border-radius: var(--radius-card); color: var(--card-muted, var(--muted)); text-align: center; background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 76%), transparent); }
 /* 空态图标：占框宽 48%（落在反馈要求的 40%–55% 区间），并用 aspect-ratio 保证缩放不变形。
    原来这里只有一个 24px 的线性图标，框高却有 180px 起，视觉上就是「一片空白」。
    图片本身四角透明（是圆形徽标），所以底衬用 --blue-soft + --radius-card，
    与 .session-icon / .workspace-dialog-icon 的既有配色一致。 */
 .session-empty-mark { width: 48%; max-width: 168px; height: auto; aspect-ratio: 1 / 1; object-fit: contain; padding: 8px; border-radius: var(--radius-card); background: var(--blue-soft); box-shadow: var(--shadow-card); }
-.session-empty strong { color: var(--ink); font-size: .9375rem; }
+.session-empty strong { color: var(--card-ink, var(--ink)); font-size: .9375rem; }
 .session-empty p { margin: 0; font-size: .8125rem; line-height: 1.6; }
-.session-note { margin: 16px 2px 0; color: var(--muted); font-size: .75rem; line-height: 1.6; }
+.session-note { margin: 16px 2px 0; color: var(--card-muted, var(--muted)); font-size: .75rem; line-height: 1.6; }
 @media (max-width: 520px) {
   .session-heading { align-items: flex-start; }
   .session-toolbar { align-items: stretch; flex-direction: column; gap: 8px; }

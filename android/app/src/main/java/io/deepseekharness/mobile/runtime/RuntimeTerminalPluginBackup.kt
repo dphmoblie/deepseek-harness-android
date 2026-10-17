@@ -24,6 +24,7 @@ internal object RuntimeTerminalPluginBackup {
     private const val PROFILE = "root/.dsh/profiles/web/package.json"
     private const val WEB_MODULES = "root/.dsh/profiles/web/node_modules"
     private const val FALLBACK_MODULES = "root/.dsh/profiles/node_modules"
+    private const val PROFILE_ROOT = "root/.dsh/profiles/"
     private const val SNAPSHOT = "profile.json"
     private const val MAX_PACKAGES = 256
     private const val MAX_PACKAGE_NAME = 214
@@ -223,8 +224,11 @@ internal object RuntimeTerminalPluginBackup {
             val name = row.optString("name")
             val relative = row.optString("relative")
             val target = row.optString("targetRelative").takeIf { it.isNotEmpty() }
-            if (!isAllowedUserPackageName(name) || !relative.startsWith("root/.dsh/profiles/") || !safeRelative(relative)) continue
-            if (target != null && !safeRelative(target)) continue
+            // The journal is app-private but remains untrusted after an interrupted update:
+            // accept only the two module roots that backup() can produce.  A broad
+            // `profiles/` check would let a tampered journal move unrelated runtime files.
+            if (!isAllowedUserPackageName(name) || !isModulePath(relative) || !safeRelative(relative)) continue
+            if (target != null && (!isProfilePath(target) || !safeRelative(target))) continue
             result += PackageEntry(relative, name, target)
             if (result.size >= MAX_PACKAGES) break
         }
@@ -340,6 +344,11 @@ internal object RuntimeTerminalPluginBackup {
     private fun safeRelative(value: String): Boolean =
         value.isNotEmpty() && !value.startsWith("/") && !value.contains('\\') &&
             value.split('/').none { it.isEmpty() || it == "." || it == ".." }
+
+    internal fun isProfilePath(value: String): Boolean = value.startsWith(PROFILE_ROOT)
+
+    internal fun isModulePath(value: String): Boolean =
+        value.startsWith("$WEB_MODULES/") || value.startsWith("$FALLBACK_MODULES/")
 
     private fun removeQuietly(directory: File) {
         runCatching { RuntimeFiles.deleteTreeNoFollowFallback(directory, directory.parentFile ?: return) }
