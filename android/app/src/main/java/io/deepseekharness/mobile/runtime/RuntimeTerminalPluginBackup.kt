@@ -66,7 +66,7 @@ internal object RuntimeTerminalPluginBackup {
                     // Record before moving the link itself: if the second rename fails, the
                     // target directory still needs to be rolled back.
                     moved += entry
-                } ?: if (!RuntimeFiles.isDirectoryNoFollow(source)) throw failure("终端插件路径类型已改变")
+                } ?: run { if (!RuntimeFiles.isDirectoryNoFollow(source)) throw failure("终端插件路径类型已改变") }
                 Os.rename(source.absolutePath, target.absolutePath)
                 if (entry.targetRelative == null) moved += entry
             }
