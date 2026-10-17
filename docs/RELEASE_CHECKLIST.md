@@ -168,21 +168,23 @@ or otherwise distributing them.
 - **工具链钉死、运行器不浮动**：Node / JDK / Gradle 必须写全补丁号，
   `sdkmanager` 逐个列出带版本的组件，`runs-on` 必须写具体镜像
   （`ubuntu-24.04`、`ubuntu-24.04-arm`），不允许 `ubuntu-latest` 这类浮动标签。
-- **发布后复核已发布资产**：`publish-release` 上传完成后会把资产重新下载回来，
+- **公开前复核草稿资产**：`publish-release` 先创建草稿并立即记录本次 Release ID，上传完成后把资产重新下载回来，
   由 `scripts/verify-release-assets.py` 按 `checksums.txt` 逐项核对 SHA-256 与文件
   集合（`--expect app-release.apk,rootfs.bundle,runtime-manifest.json,release-manifest.json`
   保证既不缺件也不多件）。上传被截断、多传一份 bundle、漏传清单都会在这里失败；该脚本自己的
-  夹具测试在 `scripts/verify-release-assets.test.mjs`。
+  夹具测试在 `scripts/verify-release-assets.test.mjs`。只有复核成功后才将草稿公开；
+  执行顺序与上传中断等失败路径由 `scripts/release-lifecycle.test.mjs` 执行工作流脚本验证。
 - **版本清单随包发布**：`scripts/release-manifest.py` 在 checksums 之前生成
   `/tmp/release-manifest.json`（`schemaVersion`、应用版本、发布标签与类型、提交号，
   以及 APK / rootfs.bundle / runtime-manifest.json 三者的 SHA-256 与字节数）。
   它自己也要被 `checksums.txt` 登记并一起上传，这样用户和排查者不解压 300MB 的 APK
   就能把线上包对应到源码提交。夹具测试真跑这个脚本：`scripts/release-manifest.test.mjs`。
 
-发布作业的失败处置（2026-10-11 起）：创建 Release 或上传资产失败仍是 `exit 1`；
-**复核失败**时额外执行「把本次 Release 转为草稿」（`if: failure()` 里 PATCH
-`{"draft":true}`）——用户看不到这次发布，但资产与发布说明都还在。确认是误报可以
-改回正式；确属坏版本则删除该 Release 与标签、升 `APP_VERSION` 重发。
+发布作业的失败处置：创建阶段始终使用草稿，成功后立即把 ID 与 tag 写入 `GITHUB_ENV`，
+再逐个上传附件。上传或复核失败时不会执行公开步骤，保留草稿和已有附件；
+失败清理只 PATCH 本次新建 ID 为 `{"draft":true}`，也覆盖公开请求结果不明确的情况。
+创建失败（例如同名 tag 已发布）时没有本次 ID，禁止通过 tag 查找并修改已有 Release。
+确认是误报后仍须完成资产复核才能人工公开；确属坏版本则删除该草稿与标签、升 `APP_VERSION` 重发。
 **不原地覆盖已发布的 tag，也不自动删资产**：网络抖动不该造成不可恢复的删除。
 
 ## CI 门禁清单（每条检查在哪个作业、挡什么问题、本机等价命令）
@@ -196,9 +198,10 @@ or otherwise distributing them.
 
 ### 新增的 `gates` 作业（4 个步骤，按轻到重排序）
 
-`gates` 与 `publish-release` **没有依赖关系**：它并行跑，失败会让这次 run 变红，
-但不会拖慢或阻断已有的发布链路（发布链路仍是 `publish-release needs: [build, build-rootfs]`）。
-如果你希望发布必须以门禁通过为前提，得自己把它加进 `publish-release.needs`。
+`gates` 是 `publish-release` 的硬依赖：发布链路为
+`publish-release needs: [build, build-rootfs, gates]`，任一门禁失败都会阻止创建草稿和上传资产。
+`build` 还会对根项目和 `scripts/runtime-profile` 执行 `pnpm audit --prod --audit-level=high`；
+高危及严重告警、审计服务不可用都会使构建失败，不放行未知状态的生产依赖。
 
 - **`Check whitespace in the pushed range`（`gates`）**：`git diff --check` 比本次推送区间
   （PR 用 `github.event.pull_request.base.sha`，push 用 `github.event.before`；取不到就退回 `HEAD^`）。

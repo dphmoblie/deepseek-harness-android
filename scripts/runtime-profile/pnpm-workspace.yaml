@@ -17,6 +17,8 @@ allowBuilds:
 # 两份不同版本的 dsh-tools，两边的 Symbol 就不相等，工具调用会取到 undefined
 # 并在 '.prepare' 上抛错。overrides 是防止版本范围重新引入第二份副本的兜底。
 overrides:
+  http-cache-semantics: 4.3.0
+  fflate: 0.8.3
   '@deepseek-ai/dsh': 0.2.1-rc.1
   '@deepseek-ai/dsh-*': 0.2.1-rc.1
   # Pin pi-ai to the version upstream's lockfile uses so the exact-version patch key stays live.

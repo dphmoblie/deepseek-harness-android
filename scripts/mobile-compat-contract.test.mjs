@@ -1103,14 +1103,32 @@ test('harness-web frozen pointer matches the index and the committed gitlink', a
   }
 })
 
-test('published assets are re-downloaded and re-verified, and a failed check only drafts the release', async () => {
+test('release builds fail closed on high-severity production dependency audits', async () => {
+  const workflow = (await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')).replaceAll('\r\n', '\n')
+  const build = workflow.split('  build:\n')[1]?.split('  build-runners:\n')[0]
+  assert.ok(build, 'build job is required')
+  const audit = build.match(/- name: Audit shipped production dependencies\n([\s\S]*?)(?=\n      - name:)/u)?.[1]
+  assert.ok(audit, 'the release build must audit both shipped dependency trees')
+  assert.match(audit, /set -euo pipefail/u)
+  assert.match(audit, /^          pnpm audit --prod --audit-level=high$/mu)
+  assert.match(audit, /^          pnpm --dir scripts\/runtime-profile audit --prod --audit-level=high$/mu)
+  assert.doesNotMatch(audit, /continue-on-error|\|\| true/u)
+  assert.ok(build.indexOf('Install Shizuku plugin contract dependencies') < build.indexOf('Audit shipped production dependencies'))
+  assert.ok(build.indexOf('Audit shipped production dependencies') < build.indexOf('Build release APK + lint + unit tests'))
+})
+
+test('release stays a draft until uploaded assets have been downloaded and verified', async () => {
   const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
 
   // 复核必须排在上传之后：上传前的任何校验都证明不了「用户拿到的字节」。
   const uploadIndex = workflow.indexOf('UPLOAD_BASE=')
   const verifyIndex = workflow.indexOf('verify-release-assets.py')
+  const publishIndex = workflow.indexOf('- name: Publish verified release')
   assert.ok(uploadIndex > 0, '发布作业必须上传资产')
   assert.ok(verifyIndex > uploadIndex, '发布后必须重新下载并复核资产')
+  assert.ok(publishIndex > verifyIndex, '复核成功之前禁止公开 Release')
+  assert.match(workflow.slice(0, uploadIndex), /draft:true/u, '创建时必须是草稿')
+  assert.doesNotMatch(workflow.slice(0, verifyIndex), /draft:false|"draft":false/u)
 
   // 复核要显式限定资产集合：清单悄悄多一项或少一项时门禁不能形同虚设。
   assert.match(
@@ -1127,6 +1145,7 @@ test('published assets are re-downloaded and re-verified, and a failed check onl
   // 两个值必须由创建步骤导出，否则复核与撤回都找不到目标。
   assert.match(workflow, /echo "RELEASE_TAG=\$\{TAG\}"[\s\S]{0,120}>> "\$GITHUB_ENV"/u)
   assert.match(workflow, /echo "RELEASE_ID=\$\{RELEASE_ID\}"[\s\S]{0,120}>> "\$GITHUB_ENV"/u)
+  assert.ok(workflow.indexOf('echo "RELEASE_ID=${RELEASE_ID}"') < uploadIndex, '首个附件上传之前必须持久化新建草稿的 ID')
 
   const verifier = await readFile(resolve(appRoot, 'scripts/verify-release-assets.py'), 'utf8')
   assert.match(verifier, /RELEASE_ASSETS_OK/u, '复核脚本必须打印可检索的成功标记')

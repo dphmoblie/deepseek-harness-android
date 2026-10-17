@@ -3187,18 +3187,18 @@ export function App() {
     })
   }, [resyncSettingsDraft])
 
-  const readOverlayBall = useCallback(async () => {
+  const readOverlayBall = useCallback(async (isCurrent?: () => boolean) => {
     const revision = ++overlayBallReadRevision.current
     try {
       const next = await runtimeBridge.getOverlayBallState()
-      if (revision === overlayBallReadRevision.current) {
+      if (revision === overlayBallReadRevision.current && (isCurrent?.() ?? true)) {
         // 值没变就不要写状态：桥调用给的是新引用，写进去 React 只会认为「变了」并重渲染整棵视图。
         setOverlayBall(previous => (previous !== null && sameSnapshot(previous, next) ? previous : next))
         setOverlayBallReadFailed(false)
       }
       return next
     } catch (error) {
-      if (revision === overlayBallReadRevision.current) setOverlayBallReadFailed(true)
+      if (revision === overlayBallReadRevision.current && (isCurrent?.() ?? true)) setOverlayBallReadFailed(true)
       throw error
     }
   }, [])
@@ -3213,7 +3213,7 @@ export function App() {
    * 三路用同一个版本号收口：它们是**一屏状态**，版本不一致就会出现「投递区是新的、
    * 白名单是旧的」这种半个屏幕的组合，比整体用上一批快照更难解释。
    */
-  const readMailbox = useCallback(async () => {
+  const readMailbox = useCallback(async (isCurrent?: () => boolean) => {
     const revision = ++mailboxReadRevision.current
     try {
       const [nextMailbox, nextStorage, nextDirs] = await Promise.all([
@@ -3221,7 +3221,7 @@ export function App() {
         runtimeBridge.getStorageAccessState(),
         runtimeBridge.getStorageDirs(),
       ])
-      if (revision === mailboxReadRevision.current) {
+      if (revision === mailboxReadRevision.current && (isCurrent?.() ?? true)) {
         setMailbox(nextMailbox)
         setStorageAccess(nextStorage)
         setStorageDirs(nextDirs)
@@ -3239,7 +3239,7 @@ export function App() {
       }
       return nextMailbox
     } catch (error) {
-      if (revision === mailboxReadRevision.current) {
+      if (revision === mailboxReadRevision.current && (isCurrent?.() ?? true)) {
         mailboxDirectoryReadRevision.current += 1
         storageDirectoryReadRevision.current += 1
         setMailbox(null)
@@ -3255,19 +3255,19 @@ export function App() {
   }, [])
 
   /** 读取固定投递区根目录下的当前子目录；只接受桥接层返回的受控快照。 */
-  const readMailboxDirectory = useCallback(async (root: MailboxRoot, subdirectory?: string): Promise<MailboxDirectoryState> => {
+  const readMailboxDirectory = useCallback(async (root: MailboxRoot, subdirectory?: string, isCurrent?: () => boolean): Promise<MailboxDirectoryState> => {
     const revision = ++mailboxDirectoryReadRevision.current
     try {
       const next = await runtimeBridge.getMailboxDirectory(root, subdirectory)
       if (next.root !== root || next.path !== subdirectory) throw new Error('投递区目录响应与请求不一致')
       const selected = filesRootRef.current
-      if (revision === mailboxDirectoryReadRevision.current && selected.kind === 'mailbox' && selected.root === root) {
+      if (revision === mailboxDirectoryReadRevision.current && selected.kind === 'mailbox' && selected.root === root && (isCurrent?.() ?? true)) {
         setMailboxDirectory(next)
         setMailboxDirectoryReadFailed(false)
       }
       return next
     } catch (error) {
-      if (revision === mailboxDirectoryReadRevision.current) {
+      if (revision === mailboxDirectoryReadRevision.current && (isCurrent?.() ?? true)) {
         setMailboxDirectory(null)
         setMailboxDirectoryReadFailed(true)
       }
@@ -3281,7 +3281,7 @@ export function App() {
    * 与投递区那条结构相同但**不共用**：两条链路的修订号必须各自独立，否则用户在
    * 投递区里快速点几下就能把共享目录那次读取的结果丢掉（反之亦然）。
    */
-  const readStorageDirectory = useCallback(async (guestPath: string, subdirectory?: string): Promise<StorageDirectoryState> => {
+  const readStorageDirectory = useCallback(async (guestPath: string, subdirectory?: string, isCurrent?: () => boolean): Promise<StorageDirectoryState> => {
     const revision = ++storageDirectoryReadRevision.current
     try {
       const next = await runtimeBridge.getStorageDirectory(guestPath, subdirectory)
@@ -3290,13 +3290,13 @@ export function App() {
       const selectedEntry = selected.kind === 'storage'
         ? storageDirs?.entries.find(entry => entry.guestPath === selected.guestPath && entry.path === selected.path && entry.available)
         : undefined
-      if (revision === storageDirectoryReadRevision.current && selected.kind === 'storage' && selected.guestPath === guestPath && selectedEntry?.path === selected.path) {
+      if (revision === storageDirectoryReadRevision.current && selected.kind === 'storage' && selected.guestPath === guestPath && selectedEntry?.path === selected.path && (isCurrent?.() ?? true)) {
         setStorageDirectory(next)
         setStorageDirectoryReadFailed(false)
       }
       return next
     } catch (error) {
-      if (revision === storageDirectoryReadRevision.current) {
+      if (revision === storageDirectoryReadRevision.current && (isCurrent?.() ?? true)) {
         setStorageDirectory(null)
         setStorageDirectoryReadFailed(true)
       }
@@ -3789,21 +3789,21 @@ export function App() {
    * 为它准备的），所以这里加一道看门狗：
    *
    * - 到点后释放互斥并提示超时，**不**去取消底层请求（Capacitor 没有取消语义）；
-   * - 底层请求若之后真的返回，它仍会走自己的成功/失败分支，但**不再**改动忙碌状态，
-   *   也不会把一条「成功」提示盖在「已超时」提示之上——令牌比对负责这件事；
+   * - 超时使令牌失效；调用方在每次等待后检查令牌，迟到结果不再更新状态、提示或导航；
    * - 看门狗时长按操作性质给：普通动作 45 秒，安装/更新单独给 15 分钟（真实下载）。
    *
    * @param watchdogMs 看门狗时长；`null` 表示不设看门狗（仅限确实无上界的操作）。
    */
   const run = useCallback(async (
     id: string,
-    operation: () => Promise<void>,
+    operation: (isCurrent: () => boolean) => Promise<void>,
     success?: string,
     guide?: PermissionGuide,
     watchdogMs: number | null = ACTION_WATCHDOG_MS,
   ) => {
     if (busyRef.current !== null) return
     const token = ++busyToken.current
+    const isCurrent = (): boolean => busyToken.current === token
     busyRef.current = id
     setBusy(id)
     /** 只有令牌仍是自己时才释放：晚到的旧轮次不许动新一轮的锁。 */
@@ -3812,28 +3812,32 @@ export function App() {
       busyRef.current = null
       setBusy(null)
     }
-    const watchdog = watchdogMs === null
-      ? null
-      : window.setTimeout(() => {
+    let watchdog: number | undefined
+    const timeout = watchdogMs === null ? undefined : new Promise<void>(resolve => {
+      watchdog = window.setTimeout(() => {
         if (busyToken.current !== token) return
         // 先释放再提示：提示本身会触发一次渲染，若此时 busy 还在，用户会看到
         // 「已提示超时、按钮却仍然是禁用的」这种自相矛盾的瞬间。
         release()
+        busyToken.current += 1
         notify(runtimeErrorMessage('BRIDGE_TIMEOUT'), 'error')
+        resolve()
       }, watchdogMs)
+    })
     try {
-      await operation()
-      if (success !== undefined && busyToken.current === token) notify(success, 'success')
+      if (timeout === undefined) await operation(isCurrent)
+      else await Promise.race([operation(isCurrent), timeout])
+      if (success !== undefined && isCurrent()) notify(success, 'success')
     } catch (error) {
       // 超时之后才失败的错误不再重复提示：用户已经看到过那条超时说明。
-      if (busyToken.current === token) {
+      if (isCurrent()) {
         notify(errorMessage(error), 'error')
         // 权限类操作失败只弹一条会消失的 toast 不足以让用户自助修好：
         // 由调用方给出对应指引时，同时打开可跳转系统设置/Shizuku 的指引弹窗。
         if (guide !== undefined) setPermissionGuide(guide)
       }
     } finally {
-      if (watchdog !== null) window.clearTimeout(watchdog)
+      if (watchdog !== undefined) window.clearTimeout(watchdog)
       release()
     }
   }, [notify])
@@ -3845,19 +3849,23 @@ export function App() {
    * 安装本身成功不代表备份成功，反过来备份失败也不该把安装说成失败。
    */
   const performRuntimeInstall = useCallback((source: RuntimeSource | undefined, successMessage: string) => {
-    void run('install', async () => {
+    void run('install', async isCurrent => {
       let result: RuntimeInstallResult
       try {
         result = await runtimeBridge.install(source)
       } catch (error) {
+        if (!isCurrent()) return
         try {
-          setRuntime(await runtimeBridge.getState())
+          const next = await runtimeBridge.getState()
+          if (isCurrent()) setRuntime(next)
         } catch {
           // 安装失败要保留；刷新运行时状态只是尽力而为，不要再覆盖这个错误。
         }
         throw error
       }
+      if (!isCurrent()) return
       const next = await runtimeBridge.getState()
+      if (!isCurrent()) return
       setRuntime(next)
       setPendingInstall(null)
       setActiveView('conversation')
@@ -4067,8 +4075,9 @@ export function App() {
 
   /** 更新诊断日志采集开关与保留天数；原生侧会再次夹取保留范围。 */
   const saveDiagnosticSettings = useCallback((enabled: boolean, retentionDays: number) => {
-    void run('diagnostic-settings', async () => {
-      setDiagnostic(await runtimeBridge.setDiagnosticLogSettings(enabled, retentionDays))
+    void run('diagnostic-settings', async isCurrent => {
+      const next = await runtimeBridge.setDiagnosticLogSettings(enabled, retentionDays)
+      if (isCurrent()) setDiagnostic(next)
     })
   }, [run])
 
@@ -4077,21 +4086,25 @@ export function App() {
    * 用户取消分享不算失败，因此这里吞掉分享相关的拒绝，只在真正导出失败时提示。
    */
   const shareDiagnostic = useCallback(() => {
-    void run('diagnostic-share', async () => {
+    void run('diagnostic-share', async isCurrent => {
       try {
         const result = await runtimeBridge.shareDiagnosticLog()
+        if (!isCurrent()) return
         setDiagnostic(result)
         notify(t("诊断日志已导出：{0}", result.fileName), 'success')
       } catch (error) {
-        setDiagnostic(await runtimeBridge.getDiagnosticLogState())
+        if (!isCurrent()) return
+        const next = await runtimeBridge.getDiagnosticLogState()
+        if (isCurrent()) setDiagnostic(next)
         throw error
       }
     })
   }, [notify, run])
 
   const clearDiagnostic = useCallback(() => {
-    void run('diagnostic-clear', async () => {
-      setDiagnostic(await runtimeBridge.clearDiagnosticLog())
+    void run('diagnostic-clear', async isCurrent => {
+      const next = await runtimeBridge.clearDiagnosticLog()
+      if (isCurrent()) setDiagnostic(next)
     }, t("诊断日志已清空"))
   }, [run])
 
@@ -4172,14 +4185,15 @@ export function App() {
   const stopRuntime = useCallback(() => {
     // 先记下「这次停止由本应用发起」：阶段变化可能早于桥接返回，晚记会把显式停止误报成自行停止。
     stopRequested.current = true
-    void run('stop', async () => {
+    void run('stop', async isCurrent => {
       const next = await runtimeBridge.stopRuntime()
+      if (!isCurrent()) return
       setRuntime(next)
       // 即使原生侧没有推送阶段变化，用户主动停止也要在「上次停止」里留下记录。
       setLastStop('user')
       // 显式停止已撤销前台服务，辅助状态后台回填，不占用操作按钮。
       void runtimeBridge.getKeepAliveState()
-        .then(setKeepAlive)
+        .then(latest => { if (isCurrent()) setKeepAlive(latest) })
         .catch(() => { /* 保留上一次已知状态。 */ })
       setActiveView('settings')
     }, t("运行环境已停止"))
@@ -4189,10 +4203,13 @@ export function App() {
     // 重置同样会停掉正在运行的运行时：这也是用户在本应用里主动发起的停止。
     stopRequested.current = true
     triggerHaptic('warning')
-    void run('reset', async () => {
+    void run('reset', async isCurrent => {
       const next = await runtimeBridge.reset('RESET_RUNTIME')
+      if (!isCurrent()) return
       setRuntime(next)
-      setKeepAlive(await runtimeBridge.getKeepAliveState())
+      const latest = await runtimeBridge.getKeepAliveState()
+      if (!isCurrent()) return
+      setKeepAlive(latest)
       setResetOpen(false)
       setActiveView('conversation')
     }, t("运行环境已重置"))
@@ -4200,8 +4217,9 @@ export function App() {
 
   const saveSettings = useCallback(async (nextSettings: RuntimeSettingsUpdate): Promise<boolean> => {
     let savedSuccessfully = false
-    await run('save-settings', async () => {
+    await run('save-settings', async isCurrent => {
       const saved = await runtimeBridge.saveSettings(nextSettings)
+      if (!isCurrent()) return
       savedSuccessfully = true
       setSettings(saved)
       // 保存成功：草稿以后端落盘值为准重建（含清空 API Key 输入框）并解除「未保存」标记。
@@ -4210,8 +4228,9 @@ export function App() {
       triggerHaptic('success')
       // 落盘成功后，状态查询失败不能被当成保存失败；三项查询互不阻塞。
       const [runtimeResult, keepAliveResult, overlayResult] = await Promise.allSettled([
-        runtimeBridge.getState(), runtimeBridge.getKeepAliveState(), readOverlayBall(),
+        runtimeBridge.getState(), runtimeBridge.getKeepAliveState(), readOverlayBall(isCurrent),
       ])
+      if (!isCurrent()) return
       if (runtimeResult.status === 'fulfilled') setRuntime(runtimeResult.value)
       if (keepAliveResult.status === 'fulfilled') setKeepAlive(keepAliveResult.value)
       if ([runtimeResult, keepAliveResult, overlayResult].some(result => result.status === 'rejected')) {
@@ -4226,6 +4245,7 @@ export function App() {
         recheckForegroundServiceAfterSettle(
           () => runtimeBridge.getKeepAliveState(),
           latest => {
+            if (!isCurrent()) return
             setKeepAlive(latest)
             if (latest.keepRuntimeInBackground === true && !latest.foregroundServiceActive) {
               // 原生侧只在真正失败时下发受控令牌（foreground_declined / start_disallowed），
@@ -4246,8 +4266,9 @@ export function App() {
         // 悬浮球走同一套节奏：原生侧把启动失败原因写进受控令牌（startError），
         // 宽限期过后复核状态，按「悬浮窗权限 / ROM 拦截 / 界面创建失败」分流到对应指引弹窗。
         recheckForegroundServiceAfterSettle(
-          readOverlayBall,
+          () => readOverlayBall(isCurrent),
           latest => {
+            if (!isCurrent()) return
             if (latest.enabled === true && !latest.serviceActive) {
               setPermissionGuide(
                 latest.canDrawOverlays
@@ -4270,12 +4291,15 @@ export function App() {
    * 用户可一键到系统通知设置页手动开启，而不是只看到一条会消失的提示。
    */
   const requestNotificationPermission = useCallback(() => {
-    void run('notification-permission', async () => {
+    void run('notification-permission', async isCurrent => {
       const result = await withTimeout(
         runtimeBridge.requestNotificationPermission(),
         NOTIFICATION_PERMISSION_TIMEOUT_MS,
       )
-      setKeepAlive(await runtimeBridge.getKeepAliveState())
+      if (!isCurrent()) return
+      const next = await runtimeBridge.getKeepAliveState()
+      if (!isCurrent()) return
+      setKeepAlive(next)
       if (result === null || (!result.granted && result.supported)) {
         setPermissionGuide({ kind: 'notification-permission' })
       }
@@ -4283,16 +4307,16 @@ export function App() {
   }, [run])
 
   const requestShizukuPermission = useCallback(() => {
-    void run('shizuku-permission', async () => {
+    void run('shizuku-permission', async isCurrent => {
       const next = await runtimeBridge.requestShizukuPermission()
-      setShizuku(next)
+      if (isCurrent()) setShizuku(next)
     }, t("Shizuku 已授权"), { kind: 'shizuku-permission' })
   }, [run])
 
   const connectShizuku = useCallback(() => {
-    void run('shizuku-connect', async () => {
+    void run('shizuku-connect', async isCurrent => {
       const next = await runtimeBridge.connectShizuku()
-      setShizuku(next)
+      if (isCurrent()) setShizuku(next)
     }, t("Shizuku 已连接"))
   }, [run])
 
@@ -4326,9 +4350,9 @@ export function App() {
       notify(t("修改无障碍白名单需要先输入验证密码"), 'error')
       return
     }
-    void run('save-accessibility-packages', async () => {
+    void run('save-accessibility-packages', async isCurrent => {
       const next = await runtimeBridge.setAccessibilityAutomationPackages(packages, password, whitelistEnabled)
-      setAccessibility(next)
+      if (isCurrent()) setAccessibility(next)
     }, t("无障碍应用白名单已保存"))
   }, [accessibility.passwordConfigured, notify, run])
 
@@ -4340,25 +4364,25 @@ export function App() {
    * 失败提示由 [run] 统一负责；这里把 Promise 交回界面，让按钮能显示在途状态。
    */
   const setAccessibilityRuntime = useCallback(async (action: AccessibilityAutomationAction) => {
-    await run('set-accessibility-runtime', async () => {
+    await run('set-accessibility-runtime', async isCurrent => {
       const next = await runtimeBridge.setAccessibilityAutomationRuntime(action)
-      setAccessibility(next)
+      if (isCurrent()) setAccessibility(next)
     }, action === 'emergency_stop' ? t("已紧急停止自动化") : t("自动化总开关已更新"))
   }, [run])
 
   /** 设置（首次）或修改（已设置时）白名单验证密码；成功后原生返回最新状态。 */
   const saveAccessibilityPassword = useCallback((password: string, currentPassword?: string) => {
-    void run('save-accessibility-password', async () => {
+    void run('save-accessibility-password', async isCurrent => {
       const next = await runtimeBridge.setAccessibilityPassword(password, currentPassword)
-      setAccessibility(next)
+      if (isCurrent()) setAccessibility(next)
     }, t("验证密码已更新"))
   }, [run])
 
   /** 清除验证密码：必须带当前密码，白名单保持不变。 */
   const clearAccessibilityPassword = useCallback((currentPassword: string) => {
-    void run('clear-accessibility-password', async () => {
+    void run('clear-accessibility-password', async isCurrent => {
       const next = await runtimeBridge.clearAccessibilityPassword(currentPassword)
-      setAccessibility(next)
+      if (isCurrent()) setAccessibility(next)
     }, t("验证密码已清除"))
   }, [run])
 
@@ -4368,9 +4392,9 @@ export function App() {
    * 只清密码、保留白名单——这条路是「用户本人证明了身份」，不是绕过保护。
    */
   const resetAccessibilityPassword = useCallback(() => {
-    void run('reset-accessibility-password', async () => {
+    void run('reset-accessibility-password', async isCurrent => {
       const next = await runtimeBridge.resetAccessibilityPasswordWithBiometric()
-      setAccessibility(next)
+      if (isCurrent()) setAccessibility(next)
     }, t("验证密码已重置"))
   }, [run])
 
@@ -4407,9 +4431,10 @@ export function App() {
    * 那时界面仍显示原来的档位。
    */
   const openAllFilesAccessSettings = useCallback(() => {
-    void run('open-all-files-access', async () => {
+    void run('open-all-files-access', async isCurrent => {
       await runtimeBridge.openAllFilesAccessSettings()
-      await readMailbox().catch(() => {
+      if (!isCurrent()) return
+      await readMailbox(isCurrent).catch(() => {
         // 刚跳出去还没授权时会读到「需要授权」，属正常结果，不当作错误提示。
       })
     })
@@ -4422,10 +4447,11 @@ export function App() {
    * 静默执行会让用户在自己的工作区里看到来历不明的目录。
    */
   const importMailbox = useCallback(() => {
-    void run('mailbox-import', async () => {
+    void run('mailbox-import', async isCurrent => {
       const result = await runtimeBridge.importMailbox()
+      if (!isCurrent()) return
       setLastMailboxImport(result)
-      await readMailbox().catch(() => {
+      await readMailbox(isCurrent).catch(() => {
         // 搬运已成功；状态重读失败不影响结果展示。
       })
     }, t("投递区已导入工作区"))
@@ -4436,13 +4462,14 @@ export function App() {
     if (filesRoot.kind !== 'mailbox' || mailbox?.available !== true) return
     const root = filesRoot.root
     const destinationDirectory = root === 'outbox' && mailboxDirectory?.root === root ? mailboxDirectory.path : undefined
-    void run('mailbox-export', async () => {
+    void run('mailbox-export', async isCurrent => {
       const result = await runtimeBridge.exportMailbox(undefined, destinationDirectory)
+      if (!isCurrent()) return
       setLastMailboxExport(result)
-      await readMailbox().catch(() => {
+      await readMailbox(isCurrent).catch(() => {
         // 搬运已成功；状态重读失败不影响结果展示。
       })
-      if (root === 'outbox') await readMailboxDirectory(root, destinationDirectory).catch(() => {
+      if (isCurrent() && root === 'outbox') await readMailboxDirectory(root, destinationDirectory, isCurrent).catch(() => {
         // 产物已导出；列表重读失败可由用户手动刷新。
       })
     }, t("投递区已导出到 outbox"))
@@ -4450,8 +4477,8 @@ export function App() {
 
   /** 重新检查投递区可用性：用户在系统设置里授权后手动触发，避免反复进出页面。 */
   const refreshMailbox = useCallback(() => {
-    void run('mailbox-refresh', async () => {
-      await readMailbox()
+    void run('mailbox-refresh', async isCurrent => {
+      await readMailbox(isCurrent)
     })
   }, [readMailbox, run])
 
@@ -4462,7 +4489,7 @@ export function App() {
    * 共享目录走白名单条目的挂载点（`guestPath` 由白名单提供，界面从不自己拼路径）。
    */
   const selectFilesRoot = useCallback((next: FilesRoot) => {
-    void run('files-root', async () => {
+    void run('files-root', async isCurrent => {
       filesRootRef.current = next
       setFilesRoot(next)
       mailboxDirectoryReadRevision.current += 1
@@ -4471,16 +4498,16 @@ export function App() {
       setStorageDirectory(null)
       setMailboxDirectoryReadFailed(false)
       setStorageDirectoryReadFailed(false)
-      if (next.kind === 'mailbox') await readMailboxDirectory(next.root)
-      else await readStorageDirectory(next.guestPath)
+      if (next.kind === 'mailbox') await readMailboxDirectory(next.root, undefined, isCurrent)
+      else await readStorageDirectory(next.guestPath, undefined, isCurrent)
     })
   }, [readMailboxDirectory, readStorageDirectory, run])
 
   /** 进入当前根下的子目录（不传表示回到该根目录）；路径由桥接层与原生策略再次校验。 */
   const openFilesDirectory = useCallback((path?: string) => {
-    void run(filesRoot.kind === 'mailbox' ? 'mailbox-directory' : FILES_STORAGE_DIRECTORY_BUSY_ID, async () => {
-      if (filesRoot.kind === 'mailbox') await readMailboxDirectory(filesRoot.root, path)
-      else await readStorageDirectory(filesRoot.guestPath, path)
+    void run(filesRoot.kind === 'mailbox' ? 'mailbox-directory' : FILES_STORAGE_DIRECTORY_BUSY_ID, async isCurrent => {
+      if (filesRoot.kind === 'mailbox') await readMailboxDirectory(filesRoot.root, path, isCurrent)
+      else await readStorageDirectory(filesRoot.guestPath, path, isCurrent)
     })
   }, [filesRoot, readMailboxDirectory, readStorageDirectory, run])
 
@@ -4516,8 +4543,9 @@ export function App() {
     }
     if (filesRoot.kind === 'mailbox') {
       const root = filesRoot.root
-      void run('mailbox-folder-create', async () => {
+      void run('mailbox-folder-create', async isCurrent => {
         const next = await runtimeBridge.createMailboxFolder(root, target)
+        if (!isCurrent()) return
         if (next.root !== root) throw new Error('投递区目录响应与请求不一致')
         setMailboxDirectory(next)
         setMailboxDirectoryReadFailed(false)
@@ -4525,8 +4553,9 @@ export function App() {
       return
     }
     const guestPath = filesRoot.guestPath
-    void run(FILES_STORAGE_FOLDER_CREATE_BUSY_ID, async () => {
+    void run(FILES_STORAGE_FOLDER_CREATE_BUSY_ID, async isCurrent => {
       const next = await runtimeBridge.createStorageFolder(guestPath, target)
+      if (!isCurrent()) return
       if (next.guestPath !== guestPath || !storageDirs?.entries.some(entry => entry.guestPath === guestPath && entry.path === filesRoot.path && entry.available)) {
         throw new Error('共享目录响应与请求不一致')
       }

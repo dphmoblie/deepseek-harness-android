@@ -88,6 +88,12 @@ jobs:
         # Native build scripts run in the ARM64 rootfs job.
         run: pnpm --dir scripts/runtime-profile install --frozen-lockfile --ignore-scripts
 
+      - name: Audit shipped production dependencies
+        run: |
+          set -euo pipefail
+          pnpm audit --prod --audit-level=high
+          pnpm --dir scripts/runtime-profile audit --prod --audit-level=high
+
       - name: Script tests (node --test)
         run: pnpm run test:scripts
 
@@ -508,7 +514,7 @@ jobs:
           name: embedded-runtime
           path: /tmp/runtime
 
-      - name: Create release with assets
+      - name: Create draft release with assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -604,9 +610,14 @@ jobs:
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "Accept: application/vnd.github+json" \
               https://api.github.com/repos/${{ github.repository }}/releases \
-              -d "$(jq -n --arg t "$TAG" --arg n "$NAME" --arg pre "$PRE" --arg sha "$GITHUB_SHA" --rawfile b /tmp/notes.md '{tag_name:$t, target_commitish:$sha, name:$n, body:$b, draft:false, prerelease:($pre=="true")}')")"
+              -d "$(jq -n --arg t "$TAG" --arg n "$NAME" --arg pre "$PRE" --arg sha "$GITHUB_SHA" --rawfile b /tmp/notes.md '{tag_name:$t, target_commitish:$sha, name:$n, body:$b, draft:true, prerelease:($pre=="true")}')")"
             RELEASE_ID="$(echo "$RESP" | jq -r .id)"
-            test -n "$RELEASE_ID" && test "$RELEASE_ID" != "null"
+            [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]
+            # 先保存本次新建草稿的身份；即使首个附件上传失败，后续步骤也不必查找或改动旧发布。
+            {
+              echo "RELEASE_TAG=${TAG}"
+              echo "RELEASE_ID=${RELEASE_ID}"
+            } >> "$GITHUB_ENV"
             UPLOAD_BASE="https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets"
             for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json /tmp/release-manifest.json /tmp/checksums.txt; do
               name="$(basename "$f")"
@@ -616,19 +627,12 @@ jobs:
                 --data-binary "@$f" \
                 "${UPLOAD_BASE}?name=${name}" >/dev/null
             done
-            echo "RELEASE_URL=https://github.com/${{ github.repository }}/releases/tag/${TAG}"
-            # 复核与撤回步骤要用到标签（按名重新下载资产）与 id（把复核失败的
-            # Release 转为草稿），因此写进后续步骤可见的 GITHUB_ENV。
-            {
-              echo "RELEASE_TAG=${TAG}"
-              echo "RELEASE_ID=${RELEASE_ID}"
-            } >> "$GITHUB_ENV"
           ) 2>&1 | tee /tmp/release.log
           STATUS="$?"
           set -e
           if [ "$STATUS" != "0" ]; then exit 1; fi
 
-      - name: 复核已发布资产（重新下载并核对摘要）
+      - name: 复核草稿资产（重新下载并核对摘要）
         # 上传之后的字节不再受本仓库控制：只有把资产重新下载回来重算摘要，才能证明
         # 用户拿到的就是本次构建产物。上传被截断、多传一份 bundle、漏传清单都会在这里失败。
         # 走 gh（带 token）而不是匿名下载地址，私有仓库也不会把 404 误判成坏发布。
@@ -647,17 +651,32 @@ jobs:
             --dir "${VERIFY_DIR}" \
             --expect app-release.apk,rootfs.bundle,runtime-manifest.json,release-manifest.json
 
-      - name: 复核失败即把本次发布转为草稿
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +x
+          set -euo pipefail
+          [[ "${RELEASE_ID:-}" =~ ^[0-9]+$ ]]
+          test -n "${RELEASE_TAG:-}"
+          curl -sS -f -X PATCH \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d '{"draft":false}' \
+            "https://api.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}" >/dev/null
+          echo "RELEASE_URL=https://github.com/${{ github.repository }}/releases/tag/${RELEASE_TAG}"
+
+      - name: 失败即保持本次发布为草稿
         # 处置口径见 docs/RELEASE_CHECKLIST.md：坏版本不原地覆盖 tag。转为草稿后用户
         # 看不到这次发布，但资产与说明都还在，确认是误报可以改回正式；确属坏版本就
-        # 删掉该 Release 与标签、升 APP_VERSION 重发。构建产物仍在本次 run 的 artifact 里。
+        # 删掉该 Release 与标签、升 APP_VERSION 重发。公开请求结果不明确时也尝试转回草稿。
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set +x
           set -euo pipefail
-          if [ -z "${RELEASE_ID:-}" ]; then
+          if [[ ! "${RELEASE_ID:-}" =~ ^[0-9]+$ ]]; then
             echo "本次尚未创建 Release，无需撤回"
             exit 0
           fi

@@ -28,6 +28,18 @@ class HarnessPageSessionTest {
     }
 
     @Test
+    fun restartingCreatesANewGateAndCannotLoadFromTheOldCookieCallback() {
+        val previous = HarnessPageLoadGate()
+        previous.cancel()
+        val restarted = HarnessPageLoadGate()
+
+        assertEquals(CookieLoadDecision.IGNORE, previous.onCookieStored(true))
+        assertEquals(CookieLoadDecision.LOAD, restarted.onCookieStored(true))
+        assertEquals(CookieLoadDecision.IGNORE, previous.onCookieStored(false))
+        assertEquals(CookieLoadDecision.IGNORE, restarted.onCookieStored(true))
+    }
+
+    @Test
     fun cookieIsHostOnlyHttpOnlyAndRejectsHeaderInjection() {
         val cookie = HarnessSessionCookie.authenticated("A".repeat(43))
 
