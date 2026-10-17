@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.provider.Settings
 import android.util.DisplayMetrics
@@ -295,6 +296,7 @@ class MobileRuntimePlugin : Plugin() {
     private val destroying = AtomicBoolean(false)
     private val harnessStartScheduled = AtomicBoolean(false)
     private val harnessStartGeneration = AtomicLong(0)
+    private val harnessOpenRequests = HarnessOpenRequests(SystemClock::elapsedRealtime)
     private val auditedOperationLock = ReentrantLock()
 
     private val shizukuAutoConnect = ShizukuAutoConnect(
@@ -500,6 +502,7 @@ class MobileRuntimePlugin : Plugin() {
      */
     override fun handleOnDestroy() {
         if (!destroying.compareAndSet(false, true)) return
+        harnessOpenRequests.invalidate()
         harnessStartGeneration.incrementAndGet()
         recordAudit(AuditEvent.PLUGIN_DESTROY, AuditResult.STARTED)
         var result = AuditResult.SUCCEEDED
@@ -986,6 +989,7 @@ class MobileRuntimePlugin : Plugin() {
 
     @PluginMethod
     fun openHarness(call: PluginCall) {
+        val request = harnessOpenRequests.accept()
         // 获取运行时访问凭据会等待生命周期锁，不能阻塞 Capacitor 的串行桥接线程。
         execute(call) {
             val sessionId = try {
@@ -993,8 +997,6 @@ class MobileRuntimePlugin : Plugin() {
             } catch (_: IllegalArgumentException) {
                 throw RuntimeFailure("SESSION_ID_INVALID", "会话标识格式无效")
             }
-            val access = controller.openHarnessAccess()
-            AppAuthenticationState.authorizeHarnessLaunch(access)
             val intent = Intent(context, HarnessActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             if (sessionId != null) {
@@ -1002,11 +1004,15 @@ class MobileRuntimePlugin : Plugin() {
             } else {
                 intent.putExtra(HarnessActivity.EXTRA_RESET_TO_HOME, true)
             }
-            try {
-                context.startActivity(intent)
-            } catch (error: Throwable) {
-                AppAuthenticationState.revokeHarness()
-                throw error
+            harnessOpenRequests.launch(request, controller::openHarnessAccess) { access ->
+                ensurePluginActive()
+                AppAuthenticationState.authorizeHarnessLaunch(access)
+                try {
+                    context.startActivity(intent)
+                } catch (error: Throwable) {
+                    AppAuthenticationState.revokeHarness()
+                    throw error
+                }
             }
             null
         }
@@ -1041,6 +1047,7 @@ class MobileRuntimePlugin : Plugin() {
 
     @PluginMethod
     fun stopRuntime(call: PluginCall) {
+        harnessOpenRequests.invalidate()
         harnessStartGeneration.incrementAndGet()
         requestHarnessStartCancellation()
         stopKeepAliveService()
@@ -1064,6 +1071,7 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun reset(call: PluginCall) {
         if (call.getString("confirmation") == "RESET_RUNTIME") {
+            harnessOpenRequests.invalidate()
             harnessStartGeneration.incrementAndGet()
             requestHarnessStartCancellation()
             // 重置会清除运行时层，必须先撤掉前台服务，避免服务保留已失效的运行时。

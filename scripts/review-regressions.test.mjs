@@ -11,6 +11,24 @@ const plugin = await read(base + 'MobileRuntimePlugin.kt')
 const controller = await read(base + 'runtime/MobileRuntimeController.kt')
 const accessibility = await read(base + 'accessibility/DeepSeekAccessibilityService.kt')
 
+test('Harness open captures its deadline before queueing and stop/reset/destroy invalidate pending opens', async () => {
+  const open = plugin.slice(plugin.indexOf('fun openHarness('), plugin.indexOf('fun testModelConnectivity('))
+  assert.ok(open.indexOf('harnessOpenRequests.accept()') < open.indexOf('execute(call)'))
+  assert.match(open, /harnessOpenRequests\.launch\(request, controller::openHarnessAccess\) \{ access ->\s*ensurePluginActive\(\)\s*AppAuthenticationState\.authorizeHarnessLaunch\(access\)/)
+  for (const [start, end] of [
+    ['fun stopRuntime(', 'fun reset('],
+    ['fun reset(', 'fun getRuntimeCleanupState('],
+    ['override fun handleOnDestroy()', 'fun getState('],
+  ]) {
+    assert.match(plugin.slice(plugin.indexOf(start), plugin.indexOf(end)), /harnessOpenRequests\.invalidate\(\)/)
+  }
+  const policy = await read(base + 'HarnessOpenRequests.kt')
+  const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8')
+  const nativeTimeout = Number(policy.match(/TIMEOUT_MS = ([\d_]+)L/)[1].replaceAll('_', ''))
+  const frontendTimeout = Number(app.match(/ACTION_WATCHDOG_MS = ([\d_]+)/)[1].replaceAll('_', ''))
+  assert.equal(nativeTimeout, frontendTimeout)
+})
+
 // Native wiring checks complement JVM policy tests; device behavior still needs instrumentation.
 test('frame state reads cached foreground; health reuses one activity dump even with follow off', () => {
   const state = shell.slice(shell.indexOf('@Synchronized fun state()'), shell.indexOf('@Synchronized fun action('))

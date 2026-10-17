@@ -521,6 +521,9 @@ const BACKGROUND_REFRESH_STALE_MS = 30_000
  */
 const ACTION_WATCHDOG_MS = 45_000
 
+// 冷启动串行包含插件恢复（30s）、修复（90s）、预检（30s）与就绪等待（120s），另留清理余量。
+const HARNESS_START_TIMEOUT_MS = 6 * 60_000
+
 /**
  * 安装/更新的看门狗。
  *
@@ -3128,6 +3131,7 @@ export function App() {
    * 每次进入 `run()` 取一个新令牌，释放时比对令牌，才是真正的「只释放自己那把锁」。
    */
   const busyToken = useRef(0)
+  const runtimeStateRevision = useRef(0)
   const autoLaunchAttempted = useRef(false)
   /**
    * 运行阶段与「用户是否点过停止」的记录。
@@ -3489,6 +3493,7 @@ export function App() {
     const progressHandlePromise = runtimeBridge.addRuntimeProgressListener(progress => {
       if (cancelled) return
       progressRevision += 1
+      runtimeStateRevision.current += 1
       latestProgress = progress
       // 先判读这次阶段变化，再用它更新状态：自行停止的判定依赖更新前的「运行中」标记。
       noteLivePhase(progress.phase)
@@ -3953,6 +3958,7 @@ export function App() {
       return
     }
     autoLaunchAttempted.current = true
+    const token = ++busyToken.current
     busyRef.current = 'launch'
     setBusy('launch')
     void (async () => {
@@ -3965,7 +3971,7 @@ export function App() {
       const launchSequence = async (): Promise<void> => {
         let nextRuntime = launchRuntime
         if (nextRuntime.phase !== 'running') {
-          nextRuntime = await withBridgeTimeout(runtimeBridge.startHarness(), 180_000)
+          nextRuntime = await withBridgeTimeout(runtimeBridge.startHarness(), HARNESS_START_TIMEOUT_MS)
           launchRuntime = nextRuntime
           setRuntime(nextRuntime)
         }
@@ -4015,13 +4021,19 @@ export function App() {
       } catch (error) {
         setActiveView('conversation')
         // 错误后的状态刷新不能阻止释放打开按钮，尤其是桥本身无响应时。
+        const revision = runtimeStateRevision.current
         void withBridgeTimeout(runtimeBridge.getState(), BOOT_STATE_TIMEOUT_MS)
-          .then(setRuntime)
+          .then(next => {
+            // 新操作或实时进度一旦到达，旧失败请求的快照就不再具有覆盖权。
+            if (busyToken.current === token && runtimeStateRevision.current === revision) setRuntime(next)
+          })
           .catch(() => { /* 保留上一次已知状态。 */ })
         notify(errorMessage(error), 'error')
       } finally {
-        busyRef.current = null
-        setBusy(null)
+        if (busyToken.current === token) {
+          busyRef.current = null
+          setBusy(null)
+        }
       }
     })()
   }, [notify, requestRuntimeUpdate, runtime, setActiveView, settings])
@@ -4168,6 +4180,7 @@ export function App() {
 
   /** 切换成功后重新读运行时状态：已安装版本与阶段都变了，不能沿用旧值。 */
   const refreshRuntimeState = useCallback(async () => {
+    runtimeStateRevision.current += 1
     setRuntime(await runtimeBridge.getState())
   }, [])
 

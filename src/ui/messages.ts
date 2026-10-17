@@ -83,6 +83,7 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
    * 后续状态刷新会给出真实结论。
    */
   BRIDGE_TIMEOUT: '设备没有在预期时间内响应，已停止等待；请刷新后确认结果，必要时重试。',
+  HARNESS_OPEN_CANCELLED: '打开请求已取消，请重新打开 Harness。',
   RUNTIME_CORRUPTED: '运行时文件已损坏，请重置运行时后重新安装。',
   ROOTFS_LINKS_CORRUPTED: '运行时归档的关键符号链接缺失或损坏，请更换运行时来源后重新安装。',
   RUNNER_UNAVAILABLE: '本机不是 ARM64（arm64-v8a）架构，内置 PRoot 无法运行。请换用 ARM64 真机或确认安装的是新版应用。',
