@@ -1,7 +1,1 @@
-# harness-web 子模块的冻结指针。
-#
-# 子模块换版必须是一次单独、可复核的提交：先在 harness-web 目录里确认目标提交
-# （`git -C harness-web rev-parse HEAD`），再改本文件的那一行指纹，然后一起提交。
-# CI 的 scripts/mobile-compat-contract.test.mjs 会核对「本文件 = 索引里的 gitlink
-# = HEAD 里已提交的 gitlink」，三者不一致就失败，避免指针被夹带在别的改动里。
-5cb43dbcbabddac391afd0f947b771fb899582a1
+9f217f73490859ed9a37e440ec0299248d05437e
