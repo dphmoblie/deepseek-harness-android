@@ -112,6 +112,7 @@ test('enables deb-src in legacy and deb822 sources while requesting the exact in
   assert.doesNotMatch(deb822, /Architectures:/u)
   const aptLog = await readFile(log, 'utf8')
   assert.match(aptLog, /update -qq/u)
+  assert.match(aptLog, /APT::Architecture=amd64/u)
   assert.match(aptLog, /source --download-only git\n/u)
   assert.doesNotMatch(aptLog, /source --download-only git=/u)
   assert.ok((await readFile(archive)).length > 0)

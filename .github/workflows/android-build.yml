@@ -471,7 +471,8 @@ jobs:
           test "$found" = 1
           test -n "$(find "$SOURCEPARTS" -type f -size +0c -print -quit)"
           APT_OPTS=(-o "Dir::Etc::sourcelist=$EMPTY_SOURCES" -o "Dir::Etc::sourceparts=$SOURCEPARTS")
-          sudo apt-get "${APT_OPTS[@]}" update -qq
+          SOURCE_APT_OPTS=("${APT_OPTS[@]}" -o APT::Architecture=amd64)
+          sudo apt-get "${SOURCE_APT_OPTS[@]}" update -qq
           GIT_SOURCE_RECORD="$(dpkg-query -W -f='${source:Package}\t${source:Version}\n' git)"
           IFS=$'\t' read -r GIT_SOURCE_PACKAGE GIT_SOURCE_VERSION <<< "$GIT_SOURCE_RECORD"
           test -n "$GIT_SOURCE_PACKAGE"
@@ -481,7 +482,7 @@ jobs:
           # candidate, then require its .dsc Version to match the installed
           # binary exactly before accepting any archive.
           SOURCE_REQUEST="$GIT_SOURCE_PACKAGE"
-          (cd "$GIT_SOURCE_ROOT/files" && apt-get "${APT_OPTS[@]}" source --download-only "$SOURCE_REQUEST")
+          (cd "$GIT_SOURCE_ROOT/files" && apt-get "${SOURCE_APT_OPTS[@]}" source --download-only "$SOURCE_REQUEST")
           SOURCE_DSC="$(find "$GIT_SOURCE_ROOT/files" -maxdepth 1 -type f -name '*.dsc' -print -quit)"
           test -n "$SOURCE_DSC"
           SOURCE_NAME="$(sed -n 's/^Source: //p' "$SOURCE_DSC" | head -n 1)"
