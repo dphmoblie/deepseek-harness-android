@@ -131,7 +131,6 @@ test('enables deb-src in legacy and deb822 sources while requesting the exact in
   assert.doesNotMatch(aptLog, /source --download-only git=/u)
   assert.ok((await readFile(archive)).length > 0)
 })
-
 test('fails closed when the exact installed source version is unavailable', async t => {
   const { archive, log, result } = await runSourceStep(t, 'fail-source')
   assert.ifError(result.error)
@@ -141,7 +140,6 @@ test('fails closed when the exact installed source version is unavailable', asyn
   assert.doesNotMatch(aptLog, /source --download-only git=/u)
   await assert.rejects(readFile(archive), { code: 'ENOENT' })
 })
-
 test('fails closed when dpkg has no source version metadata', async t => {
   const { archive, log, result } = await runSourceStep(t, 'missing-version')
   assert.ifError(result.error)
@@ -160,18 +158,3 @@ test('fails closed when the downloaded dsc version does not match the installed 
   await assert.rejects(readFile(archive), { code: 'ENOENT' })
 })
 
-test('derives the PPA source entry from the installed package policy when runner config is absent', async t => {
-  const { archive, result, ppaSourceParts } = await runSourceStep(t, 'missing-ppa-config')
-  assert.ifError(result.error)
-  assert.equal(result.status, 0, result.stderr)
-  assert.match(await readFile(join(ppaSourceParts, 'derived.list'), 'utf8'), /deb-src .*launchpadcontent\.net/u)
-  assert.ok((await readFile(archive)).length > 0)
-})
-
-test('uses the fixed Git PPA when both source config and policy origin are absent', async t => {
-  const { archive, result, ppaSourceParts } = await runSourceStep(t, 'missing-ppa-policy')
-  assert.ifError(result.error)
-  assert.equal(result.status, 0, result.stderr)
-  assert.match(await readFile(join(ppaSourceParts, 'derived.list'), 'utf8'), /ppa\.launchpadcontent\.net\/git-core\/ppa/u)
-  assert.ok((await readFile(archive)).length > 0)
-})

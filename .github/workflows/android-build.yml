@@ -487,7 +487,22 @@ jobs:
             # packages; this is the fixed upstream PPA for the installed git.
             PPA_URI="${PPA_URI:-https://ppa.launchpadcontent.net/git-core/ppa/ubuntu}"
             PPA_SUITE="${VERSION_CODENAME:-noble}"
-            printf 'deb-src [arch=amd64] %s %s main\n' "$PPA_URI" "$PPA_SUITE" > "$PPA_SOURCEPARTS/derived.list"
+            PPA_KEYRING="$APT_WORK_ROOT/git-core-ppa.gpg"
+            : > "$PPA_KEYRING"
+            for key in E363C90F8F1B6217 A1715D88E1DF1F24; do
+              key_file="$APT_WORK_ROOT/ppa-${key}.asc"
+              key_bin="$APT_WORK_ROOT/ppa-${key}.gpg"
+              curl -fsSL --retry 3 --connect-timeout 20 \
+                "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${key}&options=mr&exact=on" \
+                -o "$key_file"
+              gpg --batch --dearmor --yes --output "$key_bin" "$key_file"
+              gpg --batch --show-keys --with-colons "$key_bin" \
+                | awk -F: -v expected="$key" \
+                  'toupper($1) == "FPR" && toupper($10) == expected { found=1 } END { exit !found }'
+              cat "$key_bin" >> "$PPA_KEYRING"
+            done
+            printf 'deb-src [arch=amd64 signed-by=%s] %s %s main\n' \
+              "$PPA_KEYRING" "$PPA_URI" "$PPA_SUITE" > "$PPA_SOURCEPARTS/derived.list"
           fi
           test -n "$(find "$PPA_SOURCEPARTS" -type f -size +0c -print -quit)"
           SOURCE_APT_OPTS=(-o "Dir::Etc::sourcelist=$EMPTY_SOURCES" -o "Dir::Etc::sourceparts=$PPA_SOURCEPARTS" -o APT::Architecture=amd64)
