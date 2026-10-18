@@ -480,6 +480,12 @@ jobs:
               cp "$source_file" "$PPA_SOURCEPARTS/"
             fi
           done
+          if ! find "$PPA_SOURCEPARTS" -type f -size +0c -print -quit | grep -q .; then
+            PPA_URI="$(apt-cache policy git | sed -n 's/^[[:space:]]*[0-9][0-9]*[[:space:]]\+\(https\?:\/\/[^[:space:]]*launchpad[^[:space:]]*\) .*/\1/p' | head -n 1)"
+            test -n "$PPA_URI"
+            PPA_SUITE="${VERSION_CODENAME:-noble}"
+            printf 'deb-src [arch=amd64] %s %s main\n' "$PPA_URI" "$PPA_SUITE" > "$PPA_SOURCEPARTS/derived.list"
+          fi
           test -n "$(find "$PPA_SOURCEPARTS" -type f -size +0c -print -quit)"
           SOURCE_APT_OPTS=(-o "Dir::Etc::sourcelist=$EMPTY_SOURCES" -o "Dir::Etc::sourceparts=$PPA_SOURCEPARTS" -o APT::Architecture=amd64)
           sudo apt-get "${SOURCE_APT_OPTS[@]}" update -qq

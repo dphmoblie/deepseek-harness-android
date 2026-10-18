@@ -43,6 +43,9 @@ apt-get() {
   esac
 }
 sudo() { "$@"; }
+apt-cache() {
+  printf '%s\n' '  500 https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble/main arm64 Packages'
+}
 dpkg-query() {
   case "$*" in
     *source:Package*)
@@ -64,10 +67,12 @@ async function runSourceStep(t, scenario = 'success') {
   const sourceParts = join(aptRoot, 'sources.list.d')
   await mkdir(sourceParts, { recursive: true })
   await writeFile(join(aptRoot, 'sources.list'), '# main source\ndeb [arch=arm64] http://archive.ubuntu.com/ubuntu noble main\n')
-  await writeFile(
-    join(sourceParts, 'git-core.list'),
-    'deb [arch=amd64 signed-by=/usr/share/keyrings/git-core.gpg] https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble main\n',
-  )
+  if (scenario !== 'missing-ppa-config') {
+    await writeFile(
+      join(sourceParts, 'git-core.list'),
+      'deb [arch=amd64 signed-by=/usr/share/keyrings/git-core.gpg] https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble main\n',
+    )
+  }
   await writeFile(
     join(sourceParts, 'ubuntu.sources'),
     'Types:   deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble\nComponents: main\nArchitectures: amd64\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n',
@@ -96,7 +101,14 @@ async function runSourceStep(t, scenario = 'success') {
     timeout: 30_000,
     windowsHide: true,
   })
-  return { dir, archive, log, sourceParts: join(dir, 'ubuntu-sourceparts'), result }
+  return {
+    dir,
+    archive,
+    log,
+    sourceParts: join(dir, 'ubuntu-sourceparts'),
+    ppaSourceParts: join(dir, 'ubuntu-git-sourceparts'),
+    result,
+  }
 }
 
 test('enables deb-src in legacy and deb822 sources while requesting the exact installed git source', async t => {
@@ -144,4 +156,12 @@ test('fails closed when the downloaded dsc version does not match the installed 
   assert.notEqual(result.status, 0, `${result.stdout}${result.stderr}`)
   assert.match(await readFile(log, 'utf8'), /source --download-only git\n/u)
   await assert.rejects(readFile(archive), { code: 'ENOENT' })
+})
+
+test('derives the PPA source entry from the installed package policy when runner config is absent', async t => {
+  const { archive, result, ppaSourceParts } = await runSourceStep(t, 'missing-ppa-config')
+  assert.ifError(result.error)
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(await readFile(join(ppaSourceParts, 'derived.list'), 'utf8'), /deb-src .*launchpadcontent\.net/u)
+  assert.ok((await readFile(archive)).length > 0)
 })
