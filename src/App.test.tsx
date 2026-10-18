@@ -259,6 +259,21 @@ describe('App conversation gate', () => {
     expect(await screen.findByRole('button', { name: '安装并进入对话' })).toBeInTheDocument()
   })
 
+  it('closes the reset dialog when reset succeeds even if keep-alive status hangs', async () => {
+    render(<App />)
+    await arriveAtSettingsHome()
+
+    fireEvent.click(screen.getByRole('button', { name: /Ubuntu 运行时/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '重置环境' }))
+    bridge.getKeepAliveState.mockImplementation(() => new Promise(() => {}))
+
+    fireEvent.click(await screen.findByRole('button', { name: '确认重置' }, { timeout: 5_000 }))
+
+    await waitFor(() => expect(bridge.reset).toHaveBeenCalledWith('RESET_RUNTIME'))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(await screen.findByRole('button', { name: '安装并进入对话' })).toBeInTheDocument()
+  })
+
   it('does not reopen Harness when MainActivity regains focus', async () => {
     bridge.getState.mockResolvedValueOnce({ ...runningState })
     render(<App />)

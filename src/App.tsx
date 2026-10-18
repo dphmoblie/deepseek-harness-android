@@ -4207,11 +4207,13 @@ export function App() {
       const next = await runtimeBridge.reset('RESET_RUNTIME')
       if (!isCurrent()) return
       setRuntime(next)
-      const latest = await runtimeBridge.getKeepAliveState()
-      if (!isCurrent()) return
-      setKeepAlive(latest)
       setResetOpen(false)
       setActiveView('conversation')
+      // Reset success is authoritative; an optional keep-alive read must not keep
+      // the confirmation dialog open when the service/Binder is slow or unavailable.
+      void runtimeBridge.getKeepAliveState()
+        .then(latest => { if (isCurrent()) setKeepAlive(latest) })
+        .catch(() => { /* keep the last known auxiliary state */ })
     }, t("运行环境已重置"))
   }, [run, setActiveView])
 

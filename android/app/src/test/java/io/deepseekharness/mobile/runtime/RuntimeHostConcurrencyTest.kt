@@ -7,6 +7,7 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -28,8 +29,11 @@ class RuntimeHostConcurrencyTest {
         try {
             // Controller construction may be unavailable on the pure JVM test runtime; the
             // assertion is about the state transition that happens before that construction.
-            runCatching {
+            try {
                 RuntimeHost.acquire(android.content.ContextWrapper(null), sink)
+            } catch (_: Throwable) {
+                // A real Android Context is unavailable in this JVM test; state cancellation
+                // happens before controller construction and is the behavior under test.
             }
             hostLock.withLock {
                 assertFalse("a not-yet-started teardown must be cancellable", pending.get(RuntimeHost) as Boolean)

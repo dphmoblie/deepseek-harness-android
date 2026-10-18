@@ -135,6 +135,15 @@ class MobileRuntimeController(
     }
 
     /**
+     * 在运行时生命周期锁内执行一个只读或受控的桥接查询。
+     * 会话目录读取需要启动访客探测并更新脚本文件，不能与启动、停止、重置或安装并发。
+     */
+    fun <T> withLifecycleLock(operation: () -> T): T = lifecycleLock.withLock {
+        ensureOpen()
+        operation()
+    }
+
+    /**
      * 切换到上一版本。
      *
      * 与安装同等对待：它会改名 `currentRoot` 并把用户数据搬过去，所以必须先停掉 Harness 与终端，
