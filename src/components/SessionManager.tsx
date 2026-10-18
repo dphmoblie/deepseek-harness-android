@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, MessageCircle, Plus, Trash2, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowLeft, Loader2, MessageCircle, Plus, Trash2, X } from 'lucide-react'
 import { triggerHaptic } from '../platform/haptics'
 import { t, useLanguage } from '../i18n'
 import { runtimeBridge } from '../platform/native'
@@ -88,6 +88,9 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
   const [localSessions, setLocalSessions] = useState<SessionEntry[]>([])
   const [catalog, setCatalog] = useState<SessionCatalogState>({ status: 'loading' })
   const [query, setQuery] = useState('')
+  const [reloadToken, setReloadToken] = useState(0)
+  const [retrying, setRetrying] = useState(false)
+  const loadingRef = useRef(false)
 
   /**
    * 挂载时读一次真实会话元数据。
@@ -97,7 +100,9 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
    */
   useEffect(() => {
     let active = true
-    runtimeBridge.listSessions()
+    loadingRef.current = true
+    Promise.resolve()
+      .then(() => runtimeBridge.listSessions())
       .then(result => {
         if (!active) return
         setCatalog(result.status === 'ready'
@@ -108,8 +113,22 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
         // 桥校验失败（载荷形状不符）也走这里：对用户而言同样是「这次没读到」。
         if (active) setCatalog({ status: 'unavailable', reason: 'SESSION_CATALOG_FAILED' })
       })
+      .finally(() => {
+        if (active) {
+          loadingRef.current = false
+          setRetrying(false)
+        }
+      })
     return () => { active = false }
-  }, [])
+  }, [reloadToken])
+
+  const retrySessions = (): void => {
+    // Ref 立即锁住请求，避免连续点击在下一次渲染前排队多个桥调用。
+    if (disabled || loadingRef.current) return
+    loadingRef.current = true
+    setRetrying(true)
+    setReloadToken(current => current + 1)
+  }
 
   const sessions = useMemo<SessionEntry[]>(() => [
     ...localSessions,
@@ -202,6 +221,9 @@ export function SessionManager({ onBack, onOpenHarness, embedded = false, disabl
             <EmptyMark />
             <strong>{t('读不到会话列表')}</strong>
             <p>{t(unavailableHint(catalog.reason))}</p>
+            <button className="button button-secondary compact-button" type="button" onClick={retrySessions} disabled={disabled || retrying}>
+              {retrying && <Loader2 className="spin" size={16} />}{t(retrying ? '正在读取会话…' : '重试')}
+            </button>
           </div>
         ) : filtered.length === 0 ? (
           <div className="session-empty">

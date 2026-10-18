@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RuntimeSessionListResult } from '../platform/types'
 
@@ -115,6 +115,40 @@ describe('会话管理页', () => {
     expect(await screen.findByText('读不到会话列表')).toBeInTheDocument()
     expect(screen.getByText('暂时读不到会话列表；这不代表没有会话。')).toBeInTheDocument()
     expect(screen.queryByText('暂无会话')).not.toBeInTheDocument()
+  })
+
+  it('首次读取失败后可以重试成功，并且重试期间不能重复请求', async () => {
+    let settleRetry: (value: RuntimeSessionListResult) => void = () => {}
+    listSessions
+      .mockResolvedValueOnce({ status: 'unavailable', reason: 'SESSION_CATALOG_TIMEOUT' })
+      .mockReturnValueOnce(new Promise<RuntimeSessionListResult>(resolve => { settleRetry = resolve }))
+
+    render(<SessionManager onBack={vi.fn()} onOpenHarness={vi.fn()} />)
+
+    expect(await screen.findByText('读取会话列表超时；这不代表没有会话。')).toBeInTheDocument()
+    const retry = screen.getByRole('button', { name: '重试' })
+    fireEvent.click(retry)
+    expect(retry).toBeDisabled()
+    fireEvent.click(retry)
+    await waitFor(() => expect(listSessions).toHaveBeenCalledTimes(2))
+
+    settleRetry({
+      status: 'ready',
+      truncated: false,
+      sessions: [{ id: 'session-retry', title: '重试后的会话', updatedAt: Date.UTC(2026, 0, 2) }],
+    })
+    expect(await screen.findByText('重试后的会话')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重试' })).not.toBeInTheDocument()
+  })
+
+  it('外部 disabled 时不允许重试', async () => {
+    listSessions.mockResolvedValue({ status: 'unavailable', reason: 'SESSION_CATALOG_FAILED' })
+    render(<SessionManager disabled onBack={vi.fn()} onOpenHarness={vi.fn()} />)
+
+    const retry = await screen.findByRole('button', { name: '重试' })
+    expect(retry).toBeDisabled()
+    fireEvent.click(retry)
+    expect(listSessions).toHaveBeenCalledTimes(1)
   })
 
   it('读取中显示加载态：还没读完就显示「暂无会话」等于替用户下结论', async () => {
