@@ -131,6 +131,8 @@ test('enables deb-src in legacy and deb822 sources while requesting the exact in
   assert.doesNotMatch(aptLog, /source --download-only git=/u)
   assert.ok((await readFile(archive)).length > 0)
 })
+
+// Keep the fixture terminated by a single non-empty line for git whitespace checks.
 test('fails closed when the exact installed source version is unavailable', async t => {
   const { archive, log, result } = await runSourceStep(t, 'fail-source')
   assert.ifError(result.error)
@@ -157,4 +159,3 @@ test('fails closed when the downloaded dsc version does not match the installed 
   assert.match(await readFile(log, 'utf8'), /source --download-only git\n/u)
   await assert.rejects(readFile(archive), { code: 'ENOENT' })
 })
-
