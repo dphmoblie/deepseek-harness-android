@@ -3741,6 +3741,12 @@ class MobileRuntimePlugin : Plugin() {
             if (!destroying.get()) notifyListeners("runtimeProgress", snapshot.toProgressJs())
         }
 
+        override fun onHarnessProgress(stage: String, percent: Int) {
+            if (!destroying.get()) {
+                notifyListeners("harnessProgress", JSObject().put("stage", stage).put("percent", percent))
+            }
+        }
+
         override fun onTerminalOutput(sessionId: String, dataBase64: String, suppressPublicOutput: Boolean) {
             dispatchTerminalOutput(
                 sessionId,

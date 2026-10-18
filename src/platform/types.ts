@@ -1,5 +1,5 @@
 import type { SelfCheckOperation, SelfCheckReport } from '../runtimeSelfCheck'
-import type { HarnessReleaseList, HarnessVersionOperation, HarnessVersionsState } from './harnessVersions'
+import type { HarnessProgress, HarnessReleaseList, HarnessVersionOperation, HarnessVersionsState } from './harnessVersions'
 
 export type RuntimePhase =
   | 'not-installed'
@@ -1536,6 +1536,8 @@ export interface RuntimeWorkspaceFileList {
 export interface RuntimeBridge {
   listHarnessReleases: () => Promise<HarnessReleaseList>
   manageHarnessVersions: (operation: HarnessVersionOperation, version?: string) => Promise<HarnessVersionsState>
+  /** Harness 包安装的阶段进度；只有安装会上报，其它操作没有事件。 */
+  addHarnessProgressListener: (listener: (event: HarnessProgress) => void) => Promise<ListenerHandle>
   managePlugins: (request: PluginRequest) => Promise<PluginCatalog>
   /** 保存应用语言，仅接受简体中文和英语。 */
   setAppLanguage: (language: 'zh-CN' | 'en') => Promise<void>

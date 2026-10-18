@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { harnessVersionRequest, validateHarnessVersions, validateHarnessReleases } from './harnessVersions'
+import { harnessVersionRequest, validateHarnessProgress, validateHarnessVersions, validateHarnessReleases } from './harnessVersions'
 describe('Harness 版本桥接校验', () => {
   it('仅选择操作允许内置槽位，拒绝来源与命令参数', () => {
     expect(harnessVersionRequest('select', 'bundled')).toEqual({ operation: 'select', version: 'bundled' })
@@ -18,5 +18,12 @@ describe('Harness 版本桥接校验', () => {
     expect(validateHarnessReleases({ entries: [entry] }).entries).toEqual([entry])
     expect(() => validateHarnessReleases({ entries: [entry, entry] })).toThrow('重复')
     expect(() => validateHarnessReleases({ entries: [{ ...entry, tags: ['<script>'] }] })).toThrow()
+  })
+})
+
+describe('Harness 安装阶段进度', () => {
+  it('只接受脚本会打的阶段名与 0..100 的整数完成度', () => {
+    expect(validateHarnessProgress({ stage: 'fetch', percent: 35 })).toEqual({ stage: 'fetch', percent: 35 })
+    for (const value of [{ stage: 'download', percent: 10 }, { stage: 'fetch', percent: 101 }, { stage: 'fetch', percent: 12.5 }, { stage: 'fetch' }, null]) expect(() => validateHarnessProgress(value)).toThrow()
   })
 })

@@ -3,12 +3,31 @@ import { Download, Loader2, RefreshCw, RotateCcw, Trash2 } from 'lucide-react'
 import { t, useLanguage } from '../i18n'
 import { formatByteCount } from '../downloadTelemetry'
 import type { RuntimeBridge, RuntimeState } from '../platform/types'
-import type { HarnessReleaseList, HarnessVersionOperation, HarnessVersionsState } from '../platform/harnessVersions'
+import type { HarnessInstallStage, HarnessProgress, HarnessReleaseList, HarnessVersionOperation, HarnessVersionsState } from '../platform/harnessVersions'
 
 interface Props {
   bridge: RuntimeBridge
   runtime: RuntimeState
   refreshRuntime: () => Promise<void>
+}
+
+/** 阶段名只用于界面文案；顺序与访客脚本上报顺序一致，进度条按阶段完成度推进。 */
+const STAGE_TEXT: Record<HarnessInstallStage, string> = {
+  prepare: '准备安装目录',
+  resolve: '解析依赖版本',
+  lock: '校验依赖锁定',
+  fetch: '下载并安装依赖',
+  bridge: '复制安卓桥接插件',
+  native: '准备原生模块',
+  smoke: '冒烟测试',
+  record: '校验并记录指纹',
+  verify: '复核已安装版本',
+  done: '完成',
+}
+
+function elapsedText(millis: number): string {
+  const total = Math.max(0, Math.floor(millis / 1000))
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
 /** 上游 npm 目录与本地已安装版本分开加载；断网不影响离线切换。 */
@@ -23,6 +42,9 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime }: Prop
   const [message, setMessage] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [progress, setProgress] = useState<HarnessProgress | null>(null)
+  const [startedAt, setStartedAt] = useState(0)
+  const [now, setNow] = useState(0)
   const alive = useRef(true)
   const actionLock = useRef(false)
   const loadLocal = useCallback(() => {
@@ -43,11 +65,29 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime }: Prop
     loadRemote()
     return () => { alive.current = false }
   }, [loadLocal, loadRemote])
+  // 阶段事件由原生在安装过程中推送；插件销毁时事件直接丢弃，这里只保留最后一次。
+  useEffect(() => {
+    let handle: { remove: () => Promise<void> } | null = null
+    let cancelled = false
+    void bridge.addHarnessProgressListener(event => { if (alive.current) setProgress(event) })
+      .then(value => { if (cancelled) void value.remove().catch(() => undefined); else handle = value })
+      .catch(() => undefined)
+    return () => { cancelled = true; void handle?.remove().catch(() => undefined) }
+  }, [bridge])
+  // 已用时间每秒走一格：npm 安装几分钟不吐可用字节数，时间是最诚实的参照。
+  useEffect(() => {
+    if (busy === null) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [busy])
   const act = async (operation: HarnessVersionOperation, version: string) => {
     if (actionLock.current) return
     actionLock.current = true
     setBusy(`${operation}:${version}`)
     setMessage(null)
+    setProgress(null)
+    setStartedAt(Date.now())
+    setNow(Date.now())
     try {
       const result = await bridge.manageHarnessVersions(operation, version)
       if (alive.current) {
@@ -66,6 +106,9 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime }: Prop
       if (alive.current) setBusy(null)
     }
   }
+  const stageLabel = progress ? t(STAGE_TEXT[progress.stage]) : t('正在处理 Harness 版本…')
+  const percent = progress?.percent ?? 0
+  const elapsed = elapsedText(now - startedAt)
   const blocked = ['preparing', 'downloading', 'verifying', 'extracting', 'stopping'].includes(runtime.phase)
   const stopped = runtime.phase !== 'running'
   const releases = expanded ? remote?.entries : remote?.entries.slice(0, 5)
@@ -77,7 +120,12 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime }: Prop
       </div>
       <p className="settings-note">{t('切换会重启 Harness 并检查插件；启动失败自动恢复旧默认版本。上游原版的 Android 兼容性以实际启动检查为准。')}</p>
       {message && <p className="settings-note" role="status">{message}</p>}
-      {busy && <p className="harness-log-state" role="status"><Loader2 size={16} className="spin" /> {t('正在处理 Harness 版本，首次安装完整依赖可能需要数分钟…')}</p>}
+      {busy && <div className="download-progress" role="status">
+        <p className="progress-copy"><span><Loader2 size={16} className="spin" /> {stageLabel}</span><strong>{progress ? `${percent}%` : t('准备中…')}</strong></p>
+        <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}
+          aria-valuetext={t('安装阶段：{0}', `${stageLabel} ${percent}%`)}><span style={{ width: `${percent}%` }} /></div>
+        <div className="progress-detail"><span>{t('首次安装完整依赖需要数分钟，安装过程中不要离开此页。')}</span><span>{t('已用 {0}', elapsed)}</span></div>
+      </div>}
       {localError && <div role="alert"><p>{t('无法读取本地 Harness 版本。')}</p><button type="button" className="button button-secondary" onClick={loadLocal}>{t('重试')}</button></div>}
       {local && <>
         <div className="release-row"><div className="release-copy"><strong>{t('内置 Harness')}{local.bundledVersion ? ` · ${local.bundledVersion}` : ''}</strong>

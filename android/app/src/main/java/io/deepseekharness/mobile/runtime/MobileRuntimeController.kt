@@ -93,7 +93,11 @@ class MobileRuntimeController(
             }
         } else {
             supervisor.preparePluginManagement()
-            if (operation == "install") harnessVersions.install(target) else harnessVersions.remove(target)
+            if (operation == "install") {
+                harnessVersions.install(target) { stage, percent -> events.onHarnessProgress(stage, percent) }
+            } else {
+                harnessVersions.remove(target)
+            }
         }
         harnessVersions.list()
     }

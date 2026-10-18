@@ -85,3 +85,13 @@ test('profile 重新接链支持 pnpm 隔离布局并保留用户插件和配置
   assert.equal(fs.readFileSync(path.join(root, 'root/.dsh/profiles/web/node_modules/custom-plugin/data.json'), 'utf8'), '用户数据')
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'root/.dsh/profiles/web/package.json'), 'utf8')).dsh.profile.bundles, ['custom-plugin'])
 })
+
+test('安装按阶段上报进度，失败时标出停在哪一步', t => {
+  const { root, write } = fixture(t)
+  write('opt/dsh-bundled/package.json', { dependencies: {} })
+  const events = []
+  const manager = createManager(root, () => ({ status: 1 }), (stage, percent) => events.push([stage, percent]))
+  assert.throws(() => manager.install('0.2.1-rc.2', integrity), error => error.stage === 'resolve' && /HARNESS_INSTALL_FAILED/u.test(error.message))
+  // 阶段只在真正进入时上报：npm 第一步就失败，不应该出现后面的阶段。
+  assert.deepEqual(events, [['prepare', 5], ['resolve', 15]])
+})

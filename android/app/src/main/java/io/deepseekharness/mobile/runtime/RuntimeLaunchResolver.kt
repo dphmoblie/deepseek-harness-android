@@ -467,6 +467,7 @@ internal object ProcessProbe {
         externalCancellation: () -> Boolean = { false },
         processStarter: (RuntimeLaunchSpec, File) -> Process = ::startProcess,
         outputLimit: Int = 16 * 1024,
+        onLine: ((String) -> Unit)? = null,
     ): ProcessProbeResult {
         throwIfStartCancelled(externalCancellation)
         val process = try {
@@ -474,7 +475,7 @@ internal object ProcessProbe {
         } catch (error: Throwable) {
             return ProcessProbeResult(null, false, "", error)
         }
-        val output = ProcessOutputTail.drain(process, "dsh-runtime-probe", outputLimit = outputLimit)
+        val output = ProcessOutputTail.drain(process, "dsh-runtime-probe", outputLimit = outputLimit, onLine = onLine)
         val completed = try {
             waitForExit(process, timeoutSeconds, externalCancellation)
         } catch (error: InterruptedException) {
@@ -558,8 +559,10 @@ internal class ProcessOutputTail private constructor(
     threadName: String,
     harnessPort: Int?,
     outputLimit: Int,
+    private val onLine: ((String) -> Unit)? = null,
 ) {
     private val buffer = TailBuffer(outputLimit.coerceIn(1024, 256 * 1024))
+    private val pendingLine = StringBuilder()
     private val webAuth = harnessPort?.let(::HarnessWebAuthCapture)
     private val input: InputStream = process.inputStream
     private val reader = Thread({
@@ -572,6 +575,7 @@ internal class ProcessOutputTail private constructor(
                     if (count > 0) {
                         webAuth?.append(chunk, count)
                         buffer.append(chunk, count)
+                        if (onLine != null) consumeLines(chunk, count, onLine)
                     }
                 }
             }
@@ -581,6 +585,23 @@ internal class ProcessOutputTail private constructor(
     }, threadName).apply {
         isDaemon = true
         start()
+    }
+
+    /**
+     * 按行回调上层：Harness 包安装用它上报阶段。进度行是纯 ASCII 的 JSON，分片边界不会
+     * 切断字符；其余输出（npm 日志）也照常切行，由调用方按前缀丢弃。长时间不换行的输出
+     * 最多留 [MAX_PENDING_LINE] 个字符，避免没有上限地增长。
+     */
+    private fun consumeLines(chunk: ByteArray, count: Int, onLine: (String) -> Unit) {
+        pendingLine.append(String(chunk, 0, count, Charsets.UTF_8))
+        while (true) {
+            val index = pendingLine.indexOf("\n")
+            if (index < 0) break
+            val line = pendingLine.substring(0, index).trimEnd('\r')
+            pendingLine.delete(0, index + 1)
+            if (line.isNotEmpty()) runCatching { onLine(line) }
+        }
+        if (pendingLine.length > MAX_PENDING_LINE) pendingLine.setLength(0)
     }
 
     fun snapshot(): String = buffer.text()
@@ -607,9 +628,15 @@ internal class ProcessOutputTail private constructor(
     }
 
     companion object {
-        fun drain(process: Process, threadName: String, harnessPort: Int? = null, outputLimit: Int = MAX_OUTPUT_BYTES): ProcessOutputTail =
-            ProcessOutputTail(process, threadName, harnessPort, outputLimit)
+        fun drain(
+            process: Process,
+            threadName: String,
+            harnessPort: Int? = null,
+            outputLimit: Int = MAX_OUTPUT_BYTES,
+            onLine: ((String) -> Unit)? = null,
+        ): ProcessOutputTail = ProcessOutputTail(process, threadName, harnessPort, outputLimit, onLine)
         private const val MAX_OUTPUT_BYTES = 16 * 1024
+        private const val MAX_PENDING_LINE = 8192
         private const val READER_CLOSE_TIMEOUT_MS = 750L
     }
 }

@@ -36,15 +36,23 @@ internal class HarnessVersions(private val context: Context, private val store: 
             .put("bundledVersion", store.installedManifest()?.dshVersion ?: JSONObject.NULL)
     }
 
-    fun install(version: String) {
+    /**
+     * 安装一个上游 npm 版本。
+     *
+     * [onProgress] 收到的是阶段进度（阶段名 + 该阶段完成度），不是字节进度：npm 解析依赖、
+     * 下 tarball 时不吐可用百分比，界面按阶段画条并显示已用时间。
+     */
+    fun install(version: String, onProgress: (String, Int) -> Unit = { _, _ -> }) {
         HarnessPackageCatalog.requireVersion(version)
         if (ready(File(versions, version)) != null) {
+            onProgress("verify", 90)
             verify(version)
+            onProgress("done", 100)
             return
         }
         val entry = HarnessPackageCatalog.list().firstOrNull { it.version == version }
             ?: throw RuntimeFailure("HARNESS_VERSION_UNAVAILABLE", "该版本没有官方 npm 安装包")
-        run("install", version, entry.integrity)
+        run("install", version, entry.integrity, onProgress = onProgress)
         val directory = File(versions, version)
         val metadata = ready(directory) ?: throw RuntimeFailure("HARNESS_PACKAGE_INVALID", "安装结果不完整")
         write(File(directory, "ready.json"), metadata)
@@ -85,7 +93,13 @@ internal class HarnessVersions(private val context: Context, private val store: 
     /** 重建 profile 对当前核心包的链接，用户插件实体和配置保留。 */
     fun prepareProfile() { run("prepare", selected = true) }
 
-    private fun run(operation: String, version: String? = null, integrity: String? = null, selected: Boolean = false) {
+    private fun run(
+        operation: String,
+        version: String? = null,
+        integrity: String? = null,
+        selected: Boolean = false,
+        onProgress: (String, Int) -> Unit = { _, _ -> },
+    ) {
         if (store.installedManifest() == null) throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "请先安装 Ubuntu 运行时")
         prepareDirectories(store)
         val scripts = File(store.currentRoot, "root/.dsh-mobile")
@@ -99,10 +113,16 @@ internal class HarnessVersions(private val context: Context, private val store: 
         } finally { pending.delete() }
         val argv = listOf("/opt/node/bin/node", "/root/.dsh-mobile/harness-packages.cjs", operation) + listOfNotNull(version, integrity)
         val launcher = if (selected) RuntimeLaunchResolver(context, store, includeCredentials = false) else resolver
-        val result = ProcessProbe.run(launcher.launch(argv), store.currentRoot, if (operation == "install") 1200 else 180, outputLimit = 16384)
+        val result = ProcessProbe.run(
+            spec = launcher.launch(argv),
+            workingDirectory = store.currentRoot,
+            timeoutSeconds = if (operation == "install") 1200 else 180,
+            outputLimit = 16384,
+        ) { line -> progressEvent(line)?.let { event -> onProgress(event.first, event.second) } }
         val payload = runCatching { JSONObject(result.output.trimEnd().lineSequence().lastOrNull().orEmpty()) }.getOrNull()
         if (!result.succeeded || payload == null || payload.has("error")) {
             val code = payload?.optString("error").takeIf { it in ERRORS } ?: "HARNESS_PACKAGE_FAILED"
+            val stage = payload?.optString("stage").orEmpty()
             val message = when (code) {
                 "HARNESS_ABI_MISMATCH" -> "该 Harness 版本与当前 Node.js 不兼容"
                 "HARNESS_DEPENDENCY_MISMATCH" -> "上游核心依赖版本不一致，未激活此版本"
@@ -110,7 +130,7 @@ internal class HarnessVersions(private val context: Context, private val store: 
                 "HARNESS_PROFILE_CONFLICT" -> "会话配置目录存在独立核心包，请先修复插件依赖"
                 else -> "Harness 包操作失败，原版本仍保留；请查看运行时诊断后重试"
             }
-            throw RuntimeFailure(if (result.timedOut) "HARNESS_PACKAGE_TIMEOUT" else code, message)
+            throw RuntimeFailure(if (result.timedOut) "HARNESS_PACKAGE_TIMEOUT" else code, STAGE_LABELS[stage]?.let { "停在「$it」阶段：$message" } ?: message)
         }
     }
 
@@ -149,6 +169,30 @@ internal class HarnessVersions(private val context: Context, private val store: 
             write(File(File(store.runtimeParent, "harness-versions"), "selection.json"), JSONObject().put("active", BUNDLED))
         }
 
+
+        private const val PROGRESS_PREFIX = "HARNESS-PROGRESS "
+
+        /** 访客脚本打了哪几个阶段就认哪几个；陌生阶段名一律丢弃，界面不会显示未翻译的键。 */
+        private val STAGE_LABELS = mapOf(
+            "prepare" to "准备安装目录",
+            "resolve" to "解析依赖版本",
+            "lock" to "校验依赖锁定",
+            "fetch" to "下载并安装依赖",
+            "bridge" to "复制安卓桥接插件",
+            "native" to "准备原生模块",
+            "smoke" to "冒烟测试",
+            "record" to "校验并记录指纹",
+            "verify" to "复核已安装版本",
+            "done" to "完成",
+        )
+
+        /** 解析一行阶段输出；其余输出（npm 日志、最终 JSON）返回 null。 */
+        internal fun progressEvent(line: String): Pair<String, Int>? {
+            if (!line.startsWith(PROGRESS_PREFIX)) return null
+            val payload = runCatching { JSONObject(line.removePrefix(PROGRESS_PREFIX)) }.getOrNull() ?: return null
+            val stage = payload.optString("stage").takeIf { it in STAGE_LABELS } ?: return null
+            return stage to payload.optInt("percent", 0).coerceIn(0, 100)
+        }
 
         fun prepareDirectories(store: RuntimeStore) {
             for (base in listOf(File(store.runtimeParent, "harness-versions"), File(store.runtimeParent, "harness-versions/versions"),

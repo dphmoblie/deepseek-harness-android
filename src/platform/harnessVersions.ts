@@ -5,6 +5,19 @@ export interface HarnessVersionsState {
   bundledVersion: string | null
   installed: { version: string; bytes: number; active: boolean; compatible: boolean }[]
 }
+/** 安装阶段，顺序与访客脚本上报的顺序一致。 */
+export const HARNESS_INSTALL_STAGES = ['prepare', 'resolve', 'lock', 'fetch', 'bridge', 'native', 'smoke', 'record', 'verify', 'done'] as const
+export type HarnessInstallStage = (typeof HARNESS_INSTALL_STAGES)[number]
+/**
+ * 安装阶段进度。
+ *
+ * [percent] 是**阶段完成度**而不是字节进度：npm 解析依赖、下 tarball 时不吐稳定百分比，
+ * 界面按阶段画条并显示已用时间，不假装知道剩余字节。
+ */
+export interface HarnessProgress {
+  stage: HarnessInstallStage
+  percent: number
+}
 export interface HarnessReleaseList {
   entries: { version: string; tags: string[] }[]
 }
@@ -36,6 +49,13 @@ export function validateHarnessVersions(value: unknown): HarnessVersionsState {
   if (new Set(installed.map(entry => entry.version)).size !== installed.length) throw new Error('Harness 本地版本重复')
   if (active !== 'bundled' && !installed.some(entry => entry.active)) throw new Error('Harness 默认版本缺失')
   return { active, bundledVersion: data.bundledVersion === null ? null : version(data.bundledVersion), installed }
+}
+export function validateHarnessProgress(value: unknown): HarnessProgress {
+  const data = object(value)
+  const stage = HARNESS_INSTALL_STAGES.find(item => item === data.stage)
+  if (!stage) throw new Error('Harness 安装阶段无效')
+  if (typeof data.percent !== 'number' || !Number.isInteger(data.percent) || data.percent < 0 || data.percent > 100) throw new Error('Harness 安装进度无效')
+  return { stage, percent: data.percent }
 }
 export function validateHarnessReleases(value: unknown): HarnessReleaseList {
   const data = object(value)

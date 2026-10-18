@@ -91,7 +91,7 @@ function verifyLock(lock, selected, integrity) {
     if (CORE.test(name) && item.version !== selected) fail('HARNESS_DEPENDENCY_MISMATCH')
   }
 }
-function createManager(root, execute = spawnSync) {
+function createManager(root, execute = spawnSync, report = () => {}) {
   root = fs.realpathSync(root)
   const home = directory(root, 'root/.dsh-mobile/harness-versions')
   const versions = directory(home, 'versions')
@@ -123,9 +123,13 @@ function createManager(root, execute = spawnSync) {
     version(selected)
     if (!/^sha512-[A-Za-z0-9+/]{86}==$/u.test(integrity ?? '')) fail('HARNESS_INTEGRITY_INVALID')
     const target = path.join(versions, selected)
-    if (fs.existsSync(target)) { verify(selected); return { ok: true } }
+    if (fs.existsSync(target)) { report('verify', 90); verify(selected); report('done', 100); return { ok: true } }
     const stage = fs.mkdtempSync(path.join(versions, '.install-'))
+    // 阶段进度：npm 自己解析依赖、下 tarball 时不吐可用百分比，所以这里只报阶段，
+    // 界面按阶段完成度画条并显示已用时间，不假装知道剩余字节。
+    let phase = 'prepare'
     try {
+      report(phase, 5)
       fs.writeFileSync(path.join(stage, 'npmrc'), '', { mode: 0o600 })
       fs.writeFileSync(path.join(stage, 'global-npmrc'), '', { mode: 0o600 })
       const old = read(path.join(bundled, 'package.json'))
@@ -133,6 +137,8 @@ function createManager(root, execute = spawnSync) {
         pnpm: old.dependencies?.pnpm ?? '11.19.0', react: old.dependencies?.react ?? '18.3.1' }
       const spec = { name: 'dsh-mobile-harness-version', version: '1.0.0', private: true, dependencies }
       atomic(path.join(stage, 'package.json'), spec)
+      phase = 'resolve'
+      report(phase, 15)
       run([...npmArgs('install', stage), '--package-lock-only'], stage)
       let lock = read(path.join(stage, 'package-lock.json'))
       // 固定实际依赖闭包中的整套 dsh 包；不依靠 npm 范围碰巧选到同一版本。
@@ -140,10 +146,15 @@ function createManager(root, execute = spawnSync) {
         .filter(name => CORE.test(name)).map(name => [name, selected]))
       atomic(path.join(stage, 'package.json'), spec)
       fs.unlinkSync(path.join(stage, 'package-lock.json'))
+      phase = 'lock'
+      report(phase, 25)
       run([...npmArgs('install', stage), '--package-lock-only'], stage)
       lock = read(path.join(stage, 'package-lock.json'))
       verifyLock(lock, selected, integrity)
+      phase = 'fetch'
+      report(phase, 35)
       run(npmArgs('ci', stage), stage, 480000)
+      report('bridge', 78)
       const modules = path.join(stage, 'node_modules')
       const req = createRequire(path.join(modules, '@deepseek-ai/dsh/package.json'))
       const originalReq = createRequire(path.join(bundled, 'node_modules/@deepseek-ai/dsh/package.json'))
@@ -158,6 +169,8 @@ function createManager(root, execute = spawnSync) {
       const cli = read(dshManifest)
       cli.dependencies[bridgeName] = read(path.join(bridgeTarget, 'package.json')).version
       atomic(dshManifest, cli)
+      phase = 'native'
+      report(phase, 84)
       // 同版本原生模块优先复用随包 ARM64 二进制，否则明确构建 node-pty 后再探测。
       const ptyManifest = req.resolve('node-pty/package.json')
       const originalPty = originalReq.resolve('node-pty/package.json')
@@ -168,16 +181,24 @@ function createManager(root, execute = spawnSync) {
         const gyp = originalReq.resolve('node-gyp/bin/node-gyp.js')
         run([gyp, 'rebuild', '--nodedir=' + path.join(root, 'opt/node')], path.dirname(ptyManifest))
       }
+      phase = 'smoke'
+      report(phase, 92)
       // 真实加载原生模块并创建 PTY；不以目录存在冒充可执行。
       run(['-e', 'const p=require(process.argv[1]);const t=p.spawn("/bin/true",[],{name:"xterm",cols:80,rows:24});t.onExit(e=>process.exit(e.exitCode));setTimeout(()=>process.exit(1),10000).unref()', path.dirname(ptyManifest)], stage, 20000)
       run([path.join(modules, '@deepseek-ai/dsh/lib/bin.js'), '--version'], stage, 30000)
       // 仅移除本次事务内部的 npm 缓存；锁文件与完整依赖树保留供离线核验。
       fs.rmSync(path.join(stage, 'cache'), { recursive: true, force: true })
+      phase = 'record'
+      report(phase, 96)
       const digest = fingerprint(stage)
       atomic(path.join(stage, 'inventory.json'), digest.files)
       atomic(path.join(stage, 'ready.json'), { version: selected, abi: process.versions.modules, arch: process.arch, sha256: digest.sha256, bytes: digest.bytes })
       fs.renameSync(stage, target)
+      report('done', 100)
       return { ok: true }
+    } catch (error) {
+      if (error && typeof error === 'object' && error.stage === undefined) error.stage = phase
+      throw error
     } finally {
       if (fs.existsSync(stage) && path.dirname(stage) === versions && path.basename(stage).startsWith('.install-')) fs.rmSync(stage, { recursive: true })
     }
@@ -232,15 +253,16 @@ function createManager(root, execute = spawnSync) {
 }
 module.exports = { version, verifyLock, fingerprint, createManager }
 if (require.main === module) {
+  const report = (stage, percent) => process.stdout.write('HARNESS-PROGRESS ' + JSON.stringify({ stage, percent }) + '\n')
   try {
     const [operation, selected, integrity] = process.argv.slice(2)
-    const manager = createManager('/')
+    const manager = createManager('/', spawnSync, report)
     if (!['install', 'verify', 'prepare', 'remove'].includes(operation)) fail('HARNESS_VERSION_INVALID')
     const result = manager[operation](selected, integrity)
     process.stdout.write(JSON.stringify(result) + '\n')
   } catch (error) {
     const code = /^HARNESS_[A-Z_]+$/u.test(error.message) ? error.message : 'HARNESS_PACKAGE_FAILED'
-    process.stdout.write(JSON.stringify({ error: code }) + '\n')
+    process.stdout.write(JSON.stringify(error.stage ? { error: code, stage: error.stage } : { error: code }) + '\n')
     process.exitCode = 1
   }
 }

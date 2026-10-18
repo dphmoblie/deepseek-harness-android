@@ -1,5 +1,5 @@
 import { validatePluginCatalog, validatePluginRequest } from './plugins'
-import { harnessVersionRequest, validateHarnessReleases, validateHarnessVersions, type HarnessVersionOperation } from './harnessVersions'
+import { harnessVersionRequest, validateHarnessProgress, validateHarnessReleases, validateHarnessVersions, type HarnessProgress, type HarnessVersionOperation } from './harnessVersions'
 import { validateInstalledApplications } from './installedApplications'
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import type { PluginListenerHandle } from '@capacitor/core'
@@ -262,6 +262,7 @@ interface NativeRuntimePlugin {
   addListener(eventName: 'appUpdateProgress', listener: (event: AppUpdateProgress) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'terminalOutput', listener: (event: TerminalChunk) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'terminalExit', listener: (event: TerminalExit) => void): Promise<PluginListenerHandle>
+  addListener(eventName: 'harnessProgress', listener: (event: HarnessProgress) => void): Promise<PluginListenerHandle>
 }
 
 const MAX_TERMINAL_INPUT_BYTES = 256 * 1024
@@ -626,6 +627,7 @@ function createNativeBridge(): RuntimeBridge {
     deleteRuntimeWorkspaceFile: path => NativeRuntime.deleteRuntimeWorkspaceFile({ path: validateRuntimeWorkspaceFilePath(path) }),
     clearDiagnosticLog: () => NativeRuntime.clearDiagnosticLog().then(validateDiagnosticLogState),
     addRuntimeProgressListener: listener => NativeRuntime.addListener('runtimeProgress', validatedListener(validateRuntimeProgress, listener)),
+  addHarnessProgressListener: listener => NativeRuntime.addListener('harnessProgress', validatedListener(validateHarnessProgress, listener)),
     addAppUpdateProgressListener: listener => NativeRuntime.addListener('appUpdateProgress', validatedListener(validateAppUpdateProgress, listener)),
     addTerminalOutputListener: listener => NativeRuntime.addListener('terminalOutput', validatedListener(validateTerminalChunk, listener)),
     addTerminalExitListener: listener => NativeRuntime.addListener('terminalExit', validatedListener(validateTerminalExit, listener)),
