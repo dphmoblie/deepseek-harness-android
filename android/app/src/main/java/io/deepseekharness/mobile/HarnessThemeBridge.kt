@@ -193,43 +193,10 @@ internal object HarnessThemeBridge {
     )
 
     /**
-     * 访客页面侧消费这些变量的最小样式。
+     * 生成注入脚本：只写 CSS 变量、`data-dsh-theme`，必要时加一个背景视频层。
      *
-     * 只做两件低风险的事：把背景铺在内容下面、让表单控件跟随明暗与强调色。
-     * 不重写官方调色板——访客页面自己的主题仍然生效，外壳只是叠一层。
-     */
-    internal val STYLE_RULES = """
-        html[data-dsh-theme-source='shell'] body::before {
-          content: '';
-          position: fixed;
-          inset: 0;
-          z-index: -1;
-          pointer-events: none;
-          background-image: var(--dsh-theme-background-image, none);
-          background-position: center;
-          background-size: cover;
-          opacity: var(--dsh-theme-surface-opacity, 1);
-        }
-        html[data-dsh-theme-source='shell'] body {
-          background-color: var(--dsh-theme-background, transparent);
-        }
-        html[data-dsh-theme-source='shell'][data-dsh-theme='dark'] { color-scheme: dark; }
-        html[data-dsh-theme-source='shell'][data-dsh-theme='light'] { color-scheme: light; }
-        html[data-dsh-theme-source='shell'] { accent-color: var(--dsh-theme-accent, auto); }
-        video[data-dsh-shell-background] {
-          position: fixed;
-          inset: 0;
-          z-index: -1;
-          width: 100%;
-          height: 100%;
-          object-fit: cover;
-          pointer-events: none;
-          opacity: var(--dsh-theme-surface-opacity, 1);
-        }
-    """.trimIndent()
-
-    /**
-     * 生成注入脚本：只写 CSS 变量、`data-dsh-theme`、一段固定样式，必要时加一个背景视频层。
+     * 消费这些变量的规则在子模块 `android.css`（`dsh-android.css`）里：访客页面加载它，
+     * 原生这边不再注入样式，免得同一套规则存在两份、改一处漏一处。
      *
      * `system` 原样交给访客页面自己判断——外壳里解析出的深浅是外壳那一刻的结论，
      * 把它固化成 light/dark 会让访客页面在系统切换后不再跟随。
@@ -248,7 +215,6 @@ internal object HarnessThemeBridge {
         if (!accepts(mode, accent, background, surface, opacity)) return null
         val kind = backgroundKind(context)
         val hasBackground = backgroundUri(context) != null
-        val css = JSONObject.quote(STYLE_RULES)
         // 值都已通过白名单校验，不含引号或反斜杠，拼进脚本是安全的。
         return """
             (function () {
@@ -261,13 +227,6 @@ internal object HarnessThemeBridge {
               root.style.setProperty('--dsh-theme-surface', '$surface');
               root.style.setProperty('--dsh-theme-surface-opacity', '${opacity / 100.0}');
               if ('$mode' !== 'system') { root.style.colorScheme = '$mode'; }
-              var style = document.getElementById('dsh-shell-theme');
-              if (!style) {
-                style = document.createElement('style');
-                style.id = 'dsh-shell-theme';
-                (document.head || root).appendChild(style);
-              }
-              style.textContent = $css;
               var path = '${BACKGROUND_PATH}';
               var hasBackground = $hasBackground;
               var kind = '$kind';
