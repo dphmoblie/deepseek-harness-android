@@ -333,7 +333,7 @@ export async function extractAccentFromBackground(
 const SAMPLE_SIZE = 64
 
 async function readPixels(blob: Blob, isVideo: boolean): Promise<Uint8ClampedArray | null> {
-  if (typeof document === 'undefined') return null
+  if (typeof document === 'undefined' || typeof URL.createObjectURL !== 'function') return null
   const url = URL.createObjectURL(blob)
   try {
     const canvas = document.createElement('canvas')

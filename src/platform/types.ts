@@ -1529,7 +1529,9 @@ export type AppThemeMode = 'system' | 'light' | 'dark'
 
 /** 同步给 DSH 页面（访客 WebView）的受控主题：只有固定字段，没有 CSS / JS / URL。 */
 export type { SyncedTheme } from '../adaptiveAccent'
+export type { SyncedBackground } from '../backgroundSync'
 import type { SyncedTheme } from '../adaptiveAccent'
+import type { SyncedBackground } from '../backgroundSync'
 
 export interface RuntimeWorkspaceFileList {
   files: string[]
@@ -1558,6 +1560,14 @@ export interface RuntimeBridge {
   applyHarnessTheme: (theme: SyncedTheme) => Promise<void>
   /** 清除已同步的主题，DSH 页面回到它自己的默认外观。 */
   clearHarnessTheme: () => Promise<void>
+  /**
+   * 第二阶段：把背景一起同步过去。
+   *
+   * 传的是**缩小后的 JPEG base64**，不是文件路径或 `content://` 授权：访客页面是运行时
+   * 起的 HTTP 源，拿不到应用私有目录，开放文件读取的代价也远大于收益。
+   */
+  applyHarnessBackground: (background: SyncedBackground) => Promise<void>
+  clearHarnessBackground: () => Promise<void>
   getState: () => Promise<RuntimeState>
   getSettings: () => Promise<RuntimeSettings>
   saveSettings: (settings: RuntimeSettingsUpdate) => Promise<RuntimeSettings>

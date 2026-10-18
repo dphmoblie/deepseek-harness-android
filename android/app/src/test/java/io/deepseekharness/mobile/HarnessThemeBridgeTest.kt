@@ -42,4 +42,17 @@ class HarnessThemeBridgeTest {
         assertFalse(HarnessThemeBridge.accepts("dark", accent, background, surface, -1))
         assertFalse(HarnessThemeBridge.accepts("dark", accent, background, surface, 101))
     }
+
+    @Test
+    fun `背景只接受受控的 base64`() {
+        assertTrue(HarnessThemeBridge.acceptsBackground("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA=="))
+        assertTrue(HarnessThemeBridge.acceptsBackground("AAAA"))
+        // 这些都会被拼进 url("data:image/jpeg;base64,…")，字符集必须逐字受控。
+        assertFalse(HarnessThemeBridge.acceptsBackground(""))
+        assertFalse(HarnessThemeBridge.acceptsBackground("url(https://example.com/a.png)"))
+        assertFalse(HarnessThemeBridge.acceptsBackground("data:image/png;base64,AAAA"))
+        assertFalse(HarnessThemeBridge.acceptsBackground("AAAA BBBB"))
+        assertFalse(HarnessThemeBridge.acceptsBackground("';alert(1);//"))
+        assertFalse(HarnessThemeBridge.acceptsBackground("A".repeat(2 * 1024 * 1024 + 4)))
+    }
 }

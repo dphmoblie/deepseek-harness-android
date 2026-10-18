@@ -443,6 +443,33 @@ class MobileRuntimePlugin : Plugin() {
         call.resolve()
     }
 
+    /**
+     * 第二阶段：把背景一起同步给 DSH 页面。
+     *
+     * Web 侧已经压到最长边 1280 的 JPEG base64；这里再校验一次字符集与体积，
+     * 解码后按最长边 2048 重新编码落盘——过桥的字符串最终会被拼进 `url("data:…")`。
+     */
+    @PluginMethod
+    fun applyHarnessBackground(call: PluginCall) {
+        val payload = call.getObject("background")
+        val image = payload?.getString("image").orEmpty()
+        val mime = payload?.getString("mime").orEmpty()
+        if (mime != HarnessThemeBridge.SYNC_MIME || !HarnessThemeBridge.saveBackground(context, image)) {
+            call.reject("背景内容无效", "THEME_INVALID")
+            return
+        }
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun clearHarnessBackground(call: PluginCall) {
+        if (!HarnessThemeBridge.clearBackground(context)) {
+            call.reject("无法清除同步背景", "THEME_SAVE_FAILED")
+            return
+        }
+        call.resolve()
+    }
+
     override fun load() {
         auditLog = PrivateAuditLog(context)
         recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.STARTED)

@@ -4,6 +4,7 @@ import { t } from '../i18n'
 import { applyTextColor, applyTheme, clearCustomAccentColor, clearCustomTextColor, effectiveAccentColor, readCustomAccentColor, readCustomTextColor, readThemeMode, saveAccentMode, saveAccentSource, saveCustomAccentColor, saveCustomTextColor, saveThemeMode, useAccentMode, useAccentSource, useResolvedTheme, useThemeMode } from '../theme'
 import { clearAdaptiveAccent, deriveSurface, extractAccentFromBackground, readAccentSync, readAdaptiveAccent, saveAccentSync, saveAdaptiveAccent, clearAccentSync, type AccentSource, type AdaptiveAccent, type SyncedTheme } from '../adaptiveAccent'
 import { runtimeBridge } from '../platform/native'
+import { prepareBackgroundForSync } from '../backgroundSync'
 import type { AccentMode, ThemeMode } from '../theme'
 import { applyCard, clearBackground, DEFAULT_CARD, readBackground, readCard, saveBackground, saveCard, type CardAppearance } from '../appearance'
 
@@ -47,6 +48,8 @@ export function AppearanceSettings() {
   const [syncRecord, setSyncRecord] = useState(() => readAccentSync())
   const [syncing, setSyncing] = useState(false)
   const [syncMessage, setSyncMessage] = useState('')
+  // 背景默认不跟着颜色走：它体积大、还要解码，得用户自己勾。
+  const [withBackground, setWithBackground] = useState(false)
 
   const changeSource = (value: AccentSource) => {
     if (saveAccentSource(value)) { setFailed(null); setAccentError('') } else setFailed('accent')
@@ -76,8 +79,20 @@ export function AppearanceSettings() {
       const surface = adaptive ? { background: adaptive.background, surface: adaptive.surface } : deriveSurface(accentColor, resolved)
       const theme: SyncedTheme = { mode: readThemeMode(), accent: accentColor, background: surface.background, surface: surface.surface, surfaceOpacity: card.opacity }
       await runtimeBridge.applyHarnessTheme(theme)
+      let note = '已让 DSH 使用当前主题'
+      if (withBackground) {
+        const blob = await readBackground()
+        const prepared = blob ? await prepareBackgroundForSync(blob) : null
+        if (prepared) {
+          await runtimeBridge.applyHarnessBackground(prepared)
+          note = '已让 DSH 使用当前主题与背景'
+        } else {
+          // 压不到可同步的体积就只同步颜色，并把原因说清楚，不静默丢内容。
+          note = '背景没能缩小到可同步的大小，已只同步颜色'
+        }
+      }
       setSyncRecord(saveAccentSync(theme))
-      setSyncMessage('已让 DSH 使用当前主题')
+      setSyncMessage(note)
     } catch (error) {
       setSyncMessage(error instanceof Error ? error.message : '同步失败，请重试')
     } finally { setSyncing(false) }
@@ -88,6 +103,7 @@ export function AppearanceSettings() {
     setSyncMessage('')
     try {
       await runtimeBridge.clearHarnessTheme()
+      await runtimeBridge.clearHarnessBackground()
       clearAccentSync()
       setSyncRecord(null)
       setSyncMessage('DSH 已回到默认主题')
@@ -199,6 +215,7 @@ export function AppearanceSettings() {
       </div>
       <div className="appearance-customization appearance-sync">
         <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('外壳与 DSH 是两个独立页面，主题不会自动共享；只同步颜色与明暗模式。')}</span></div>
+        <label className="appearance-sync-background"><input type="checkbox" checked={withBackground} onChange={event => setWithBackground(event.target.checked)} /><span>{t('连背景一起同步')}</span><small>{t('按最长边 1280 缩小后发送，视频只取首帧')}</small></label>
         <button type="button" className="compact-button" onClick={() => void sync()} disabled={syncing}>{t('让 DSH 使用当前主题')}</button>
         <button type="button" className="compact-button" onClick={() => void unsync()} disabled={syncing}>{t('恢复 DSH 默认主题')}</button>
         <p>{syncRecord ? `${t('上次同步')} ${new Date(syncRecord.syncedAt).toLocaleString()}` : t('还没有同步过')}</p>

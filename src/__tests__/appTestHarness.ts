@@ -54,6 +54,8 @@ export const bridge = {
   setAppTheme: vi.fn(),
   applyHarnessTheme: vi.fn(),
   clearHarnessTheme: vi.fn(),
+  applyHarnessBackground: vi.fn(),
+  clearHarnessBackground: vi.fn(),
   getState: vi.fn(),
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
@@ -328,6 +330,8 @@ export function beforeEachAppTest(): void {
   bridge.setAppTheme.mockResolvedValue(undefined)
   bridge.applyHarnessTheme.mockResolvedValue(undefined)
   bridge.clearHarnessTheme.mockResolvedValue(undefined)
+  bridge.applyHarnessBackground.mockResolvedValue(undefined)
+  bridge.clearHarnessBackground.mockResolvedValue(undefined)
   bridge.getState.mockResolvedValue({ ...readyState })
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
