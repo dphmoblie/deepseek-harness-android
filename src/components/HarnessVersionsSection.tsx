@@ -133,10 +133,10 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime }: Prop
           {local.active !== 'bundled' && <button type="button" className="button button-secondary" disabled={busy !== null || blocked} onClick={() => void act('select', 'bundled')}><RotateCcw size={16} />{t('切回内置')}</button>}
         </div>
         <div className="release-list">{local.installed.map(entry => <div className="release-row" key={entry.version}>
-          <div className="release-copy"><strong>{entry.version}</strong><small>{formatByteCount(entry.bytes)} · {entry.active ? t('默认版本') : t('已安装')}</small>
-            {!entry.compatible && <small>{t('Ubuntu 环境已变化，需删除后重装此包。')}</small>}</div>
+          <div className="release-copy"><strong>{entry.version}</strong><small>{entry.invalid ? t('安装不完整') : `${formatByteCount(entry.bytes)} · ${entry.active ? t('默认版本') : t('已安装')}`}</small>
+            {entry.invalid ? <small>{t('此目录缺少完整安装记录，可以删除后重新安装。')}</small> : !entry.compatible && <small>{t('当前运行时的 Node.js ABI 已变化，需删除后重装此包。')}</small>}</div>
           <div className="release-actions">
-            {!entry.active && <button type="button" className="button button-secondary" disabled={busy !== null || blocked || !entry.compatible} onClick={() => void act('select', entry.version)}>{t('使用并设为默认')}</button>}
+            {!entry.active && !entry.invalid && <button type="button" className="button button-secondary" disabled={busy !== null || blocked || !entry.compatible} onClick={() => void act('select', entry.version)}>{t('使用并设为默认')}</button>}
             {!entry.active && (deleting === entry.version ? <>
               <button type="button" className="button button-danger" disabled={busy !== null || !stopped || blocked} onClick={() => void act('delete', entry.version)}>{t('确认删除')}</button>
               <button type="button" className="button button-secondary" disabled={busy !== null} onClick={() => setDeleting(null)}>{t('取消')}</button>

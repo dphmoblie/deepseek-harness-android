@@ -487,7 +487,13 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
                     !candidate.startsWith("/") && !candidate.startsWith("~") && !candidate.startsWith(".") &&
                     !candidate.contains("//")
             }
-            throw RuntimeFailure(code, detail ?: "插件操作失败，请检查运行时状态后重试")
+            val message = when (code) {
+                "PLUGIN_ENGINE_UNSUPPORTED" -> detail?.let { "插件 $it 未声明兼容当前 Harness 版本的 dsh 范围" }
+                "PLUGIN_DEPENDENCY_UNSUPPORTED" -> detail?.let { "插件依赖 $it 与当前 Harness 版本不兼容" }
+                "PLUGIN_NOT_FOUND" -> detail?.let { "已启用插件 $it 在当前运行环境中找不到" }
+                else -> null
+            } ?: detail ?: "插件操作失败，请检查运行时状态后重试"
+            throw RuntimeFailure(code, message)
         }
         if (operation in setOf("list", "enable", "child", "update", "import", "rollback") && payload.optJSONArray("plugins") == null) {
             throw RuntimeFailure("PLUGIN_OPERATION_FAILED", "插件返回数据无效")

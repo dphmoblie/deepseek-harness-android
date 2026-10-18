@@ -21,14 +21,20 @@ internal class HarnessVersions(private val context: Context, private val store: 
     fun list(): JSONObject {
         // 选择文件损坏时也要能把列表显示出来，否则用户没有入口切回内置版本。
         val current = selectedOrBundled(store)
+        val environment = runCatching { run("environment") }.getOrNull()
         val entries = JSONArray()
         versions.listFiles()?.sortedByDescending { it.name }?.forEach { directory ->
             if (HarnessPackageCatalog.VERSION.matches(directory.name) && directory.name.length <= 96) {
-                val ready = ready(directory)
-                if (ready != null) entries.put(JSONObject()
+                val ready = runCatching { ready(directory) }.getOrNull()
+                val valid = ready != null
+                val compatible = valid && environment != null &&
+                    ready!!.optString("abi") == environment.optString("abi") &&
+                    ready.optString("arch") == environment.optString("arch")
+                entries.put(JSONObject()
                     .put("version", directory.name)
-                    .put("bytes", ready.optLong("bytes", 0))
-                    .put("compatible", true)
+                    .put("bytes", ready?.optLong("bytes", 0)?.coerceAtLeast(0) ?: 0)
+                    .put("compatible", compatible)
+                    .put("invalid", !valid)
                     .put("active", current == directory.name))
             }
         }
@@ -86,7 +92,7 @@ internal class HarnessVersions(private val context: Context, private val store: 
 
     fun remove(version: String) {
         HarnessPackageCatalog.requireVersion(version)
-        if (active(store) == version) throw RuntimeFailure("HARNESS_VERSION_BUSY", "不能删除默认 Harness 版本")
+        if (selectedOrBundled(store) == version) throw RuntimeFailure("HARNESS_VERSION_BUSY", "不能删除默认 Harness 版本")
         run("remove", version)
     }
 
@@ -99,7 +105,7 @@ internal class HarnessVersions(private val context: Context, private val store: 
         integrity: String? = null,
         selected: Boolean = false,
         onProgress: (String, Int) -> Unit = { _, _ -> },
-    ) {
+    ): JSONObject {
         if (store.installedManifest() == null) throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "请先安装 Ubuntu 运行时")
         prepareDirectories(store)
         val scripts = File(store.currentRoot, "root/.dsh-mobile")
@@ -132,6 +138,7 @@ internal class HarnessVersions(private val context: Context, private val store: 
             }
             throw RuntimeFailure(if (result.timedOut) "HARNESS_PACKAGE_TIMEOUT" else code, STAGE_LABELS[stage]?.let { "停在「$it」阶段：$message" } ?: message)
         }
+        return payload
     }
 
     companion object {

@@ -95,3 +95,26 @@ test('安装按阶段上报进度，失败时标出停在哪一步', t => {
   // 阶段只在真正进入时上报：npm 第一步就失败，不应该出现后面的阶段。
   assert.deepEqual(events, [['prepare', 5], ['resolve', 15]])
 })
+
+test('环境探测返回 Node ABI，并为 node-gyp 保留 /usr/local/bin', t => {
+  const { root, write } = fixture(t)
+  write('opt/dsh-bundled/package.json', { dependencies: {} })
+  const calls = []
+  const manager = createManager(root, (bin, args, options) => {
+    calls.push({ bin, args, options })
+    return { status: 0, stdout: JSON.stringify({ ok: true, abi: '123', arch: 'arm64', node: 'v24.0.0' }) + '\n' }
+  })
+  const environment = manager.environment()
+  assert.equal(environment.ok, true)
+  assert.equal(environment.abi, process.versions.modules)
+  assert.equal(environment.arch, process.arch)
+  assert.equal(environment.node, process.version)
+  assert.equal(calls.length, 0)
+  // 触发安装前的第一步即可检查 npm 子进程环境，不需要联网或写入完整包。
+  const failing = createManager(root, (bin, args, options) => {
+    calls.push({ bin, args, options })
+    return { status: 1 }
+  })
+  assert.throws(() => failing.install('0.2.1-rc.2', integrity), /HARNESS_INSTALL_FAILED/u)
+  assert.match(calls.at(-1).options.env.PATH, /:\/usr\/local\/bin:/u)
+})

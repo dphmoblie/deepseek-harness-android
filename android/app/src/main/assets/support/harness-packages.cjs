@@ -101,7 +101,9 @@ function createManager(root, execute = spawnSync, report = () => {}) {
   function run(args, cwd, timeout = 240000) {
     const result = execute(process.execPath, args, {
       cwd, timeout, maxBuffer: 1024 * 1024, encoding: 'utf8',
-      env: { HOME: cwd, TMPDIR: cwd, PATH: path.dirname(process.execPath) + ':/usr/bin:/bin', LANG: 'C.UTF-8' },
+      // node-gyp 会从 PATH 查找 python3；Ubuntu 运行时把它放在 /usr/local/bin。
+      // 这里仍然保留 /opt/node/bin 在最前，避免误用宿主或系统 Node。
+      env: { HOME: cwd, TMPDIR: cwd, PATH: path.dirname(process.execPath) + ':/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8' },
     })
     if (result.status !== 0 || result.error || result.signal) fail('HARNESS_INSTALL_FAILED')
     return result.stdout
@@ -118,6 +120,9 @@ function createManager(root, execute = spawnSync, report = () => {}) {
     if (ready.version !== selected || ready.arch !== process.arch || ready.abi !== process.versions.modules) fail('HARNESS_ABI_MISMATCH')
     if (fingerprint(target, read(path.join(target, 'inventory.json'))).sha256 !== ready.sha256) fail('HARNESS_INTEGRITY_INVALID')
     return ready
+  }
+  function environment() {
+    return { ok: true, abi: process.versions.modules, arch: process.arch, node: process.version }
   }
   function install(selected, integrity) {
     version(selected)
@@ -249,7 +254,7 @@ function createManager(root, execute = spawnSync, report = () => {}) {
     fs.rmSync(target, { recursive: true })
     return { ok: true }
   }
-  return { install, verify, prepare, remove }
+  return { install, verify, prepare, remove, environment }
 }
 module.exports = { version, verifyLock, fingerprint, createManager }
 if (require.main === module) {
@@ -257,7 +262,7 @@ if (require.main === module) {
   try {
     const [operation, selected, integrity] = process.argv.slice(2)
     const manager = createManager('/', spawnSync, report)
-    if (!['install', 'verify', 'prepare', 'remove'].includes(operation)) fail('HARNESS_VERSION_INVALID')
+    if (!['install', 'verify', 'prepare', 'remove', 'environment'].includes(operation)) fail('HARNESS_VERSION_INVALID')
     const result = manager[operation](selected, integrity)
     process.stdout.write(JSON.stringify(result) + '\n')
   } catch (error) {

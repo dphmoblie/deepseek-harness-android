@@ -3,7 +3,7 @@ export type HarnessVersionOperation = 'list' | 'install' | 'select' | 'delete'
 export interface HarnessVersionsState {
   active: string
   bundledVersion: string | null
-  installed: { version: string; bytes: number; active: boolean; compatible: boolean }[]
+  installed: { version: string; bytes: number; active: boolean; compatible: boolean; invalid?: boolean }[]
 }
 /** 安装阶段，顺序与访客脚本上报的顺序一致。 */
 export const HARNESS_INSTALL_STAGES = ['prepare', 'resolve', 'lock', 'fetch', 'bridge', 'native', 'smoke', 'record', 'verify', 'done'] as const
@@ -44,7 +44,8 @@ export function validateHarnessVersions(value: unknown): HarnessVersionsState {
     const name = version(entry.version)
     if (typeof entry.active !== 'boolean' || entry.active !== (active === name) || typeof entry.compatible !== 'boolean' ||
       typeof entry.bytes !== 'number' || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0) throw new Error('Harness 本地版本条目无效')
-    return { version: name, bytes: entry.bytes, active: entry.active, compatible: entry.compatible }
+    if (entry.invalid !== undefined && typeof entry.invalid !== 'boolean') throw new Error('Harness 本地版本条目无效')
+    return { version: name, bytes: entry.bytes, active: entry.active, compatible: entry.compatible, ...(entry.invalid === undefined ? {} : { invalid: entry.invalid }) }
   })
   if (new Set(installed.map(entry => entry.version)).size !== installed.length) throw new Error('Harness 本地版本重复')
   if (active !== 'bundled' && !installed.some(entry => entry.active)) throw new Error('Harness 默认版本缺失')

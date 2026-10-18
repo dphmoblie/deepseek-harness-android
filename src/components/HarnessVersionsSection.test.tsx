@@ -16,9 +16,9 @@ function setup(install: () => Promise<never>) {
   const bridge = {
     listHarnessReleases: vi.fn().mockResolvedValue({ entries: [{ version: '0.2.1-rc.2', tags: ['latest'] }] }),
     manageHarnessVersions: vi.fn((operation: string) => operation === 'list' ? Promise.resolve(local) : install()),
-    addHarnessProgressListener: vi.fn(async (callback: (event: HarnessProgress) => void) => {
+    addHarnessProgressListener: vi.fn((callback: (event: HarnessProgress) => void) => {
       listener = callback
-      return { remove: vi.fn().mockResolvedValue(undefined) }
+      return Promise.resolve({ remove: vi.fn().mockResolvedValue(undefined) })
     }),
   } as unknown as RuntimeBridge
   const view = render(<HarnessVersionsSection bridge={bridge} runtime={runtime} refreshRuntime={() => Promise.resolve()} />)
