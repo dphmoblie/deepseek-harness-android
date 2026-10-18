@@ -16,7 +16,9 @@ const CHILD_SOURCE = `
     throw new Error('one-time authentication environment was not cleared')
   }
   const http = require('node:http')
-  const server = http.createServer((_request, response) => response.end('authorized'))
+  const server = http.createServer((_request, response) => {
+    response.end(_request.url === '/' ? 'authorized' : _request.url)
+  })
   server.on('upgrade', (_request, socket) => {
     socket.end('HTTP/1.1 101 Switching Protocols\\r\\nConnection: Upgrade\\r\\nUpgrade: websocket\\r\\n\\r\\n')
   })
@@ -28,10 +30,10 @@ function authorizationHeader() {
   return `Basic ${Buffer.from(`${USERNAME}:${TOKEN}`, 'ascii').toString('base64')}`
 }
 
-function request(port, authorization) {
+function request(port, authorization, requestPath = '/') {
   return new Promise((resolve, reject) => {
     const headers = authorization === undefined ? {} : { Authorization: authorization }
-    const outgoing = http.get({ host: '127.0.0.1', port, path: '/', headers }, response => {
+    const outgoing = http.get({ host: '127.0.0.1', port, path: requestPath, headers }, response => {
       const chunks = []
       response.on('data', chunk => chunks.push(chunk))
       response.on('end', () => resolve({
@@ -110,6 +112,17 @@ describe('mobile Harness authentication preload', () => {
     const accepted = await request(port, authorizationHeader())
     assert.equal(accepted.status, 200)
     assert.equal(accepted.body, 'authorized')
+  })
+
+  it('lets the exact OAuth callback reach Harness without app Basic Auth', async () => {
+    const callback = await request(port, undefined, '/oauth/callback?code=oauth-code&state=oauth-state')
+    assert.equal(callback.status, 200)
+    assert.equal(callback.body, '/oauth/callback?code=oauth-code&state=oauth-state')
+
+    for (const path of ['/oauth/callback/', '/oauth/callbacks?code=oauth-code', '/oauth/callback/extra']) {
+      const lookalike = await request(port, undefined, path)
+      assert.equal(lookalike.status, 401, path)
+    }
   })
 
   it('guards WebSocket upgrades with the same credential', async () => {
