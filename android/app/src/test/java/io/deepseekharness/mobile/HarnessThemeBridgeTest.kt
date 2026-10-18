@@ -55,4 +55,15 @@ class HarnessThemeBridgeTest {
         assertFalse(HarnessThemeBridge.acceptsBackground("';alert(1);//"))
         assertFalse(HarnessThemeBridge.acceptsBackground("A".repeat(2 * 1024 * 1024 + 4)))
     }
+
+    @Test
+    fun `注入样式只作用于已同步的页面，且不能闭合 style 标签`() {
+        val rules = HarnessThemeBridge.STYLE_RULES
+        assertTrue(rules.contains("html[data-dsh-theme-source='shell'] body::before"))
+        assertTrue(rules.contains("--dsh-theme-background-image"))
+        assertTrue(rules.contains("accent-color"))
+        // 这段内容会被塞进 <style>：出现闭合标签就等于给了注入一个出口。
+        assertFalse(rules.contains("</style", ignoreCase = true))
+        assertFalse(rules.contains("<script", ignoreCase = true))
+    }
 }
