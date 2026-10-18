@@ -426,10 +426,11 @@ jobs:
           GIT_SOURCE_ARCHIVE="${DSH_GIT_SOURCE_ARCHIVE:-ubuntu-git-corresponding-source.tar.gz}"
           GIT_SOURCE_ROOT="$APT_WORK_ROOT/git-source"
           SOURCEPARTS="$APT_WORK_ROOT/ubuntu-sourceparts"
+          PPA_SOURCEPARTS="$APT_WORK_ROOT/ubuntu-git-sourceparts"
           EMPTY_SOURCES="$APT_WORK_ROOT/ubuntu-empty-sources.list"
           GIT_SOURCE_TAR="$APT_WORK_ROOT/git-source.tar"
-          rm -rf "$GIT_SOURCE_ROOT" "$SOURCEPARTS" "$EMPTY_SOURCES" "$GIT_SOURCE_TAR"
-          mkdir -p "$GIT_SOURCE_ROOT/files" "$SOURCEPARTS"
+          rm -rf "$GIT_SOURCE_ROOT" "$SOURCEPARTS" "$PPA_SOURCEPARTS" "$EMPTY_SOURCES" "$GIT_SOURCE_TAR"
+          mkdir -p "$GIT_SOURCE_ROOT/files" "$SOURCEPARTS" "$PPA_SOURCEPARTS"
           # Ubuntu runner images may use either legacy .list files or deb822
           # .sources files. Copy every host source into a temporary parts dir;
           # only the copy is changed, so signed-by and all other options survive.
@@ -470,8 +471,17 @@ jobs:
           done
           test "$found" = 1
           test -n "$(find "$SOURCEPARTS" -type f -size +0c -print -quit)"
-          APT_OPTS=(-o "Dir::Etc::sourcelist=$EMPTY_SOURCES" -o "Dir::Etc::sourceparts=$SOURCEPARTS")
-          SOURCE_APT_OPTS=("${APT_OPTS[@]}" -o APT::Architecture=amd64)
+          # The runner's git comes from the Git PPA. Restrict the source-only
+          # APT view to that PPA: Ubuntu ports has no amd64 binary index, while
+          # the PPA publishes the source package and its amd64 metadata.
+          for source_file in "$SOURCEPARTS"/*; do
+            [ -f "$source_file" ] || continue
+            if grep -qi 'git-core/ppa' "$source_file"; then
+              cp "$source_file" "$PPA_SOURCEPARTS/"
+            fi
+          done
+          test -n "$(find "$PPA_SOURCEPARTS" -type f -size +0c -print -quit)"
+          SOURCE_APT_OPTS=(-o "Dir::Etc::sourcelist=$EMPTY_SOURCES" -o "Dir::Etc::sourceparts=$PPA_SOURCEPARTS" -o APT::Architecture=amd64)
           sudo apt-get "${SOURCE_APT_OPTS[@]}" update -qq
           GIT_SOURCE_RECORD="$(dpkg-query -W -f='${source:Package}\t${source:Version}\n' git)"
           IFS=$'\t' read -r GIT_SOURCE_PACKAGE GIT_SOURCE_VERSION <<< "$GIT_SOURCE_RECORD"
