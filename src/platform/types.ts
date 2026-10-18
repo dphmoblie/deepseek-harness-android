@@ -1527,6 +1527,10 @@ export interface ListenerHandle {
  */
 export type AppThemeMode = 'system' | 'light' | 'dark'
 
+/** 同步给 DSH 页面（访客 WebView）的受控主题：只有固定字段，没有 CSS / JS / URL。 */
+export type { SyncedTheme } from '../adaptiveAccent'
+import type { SyncedTheme } from '../adaptiveAccent'
+
 export interface RuntimeWorkspaceFileList {
   files: string[]
   truncated: boolean
@@ -1545,6 +1549,15 @@ export interface RuntimeBridge {
    * 传结论会把某一刻的取值固化成用户的显式选择，之后系统再切就不跟随了。
    */
   setAppTheme: (mode: AppThemeMode) => Promise<void>
+  /**
+   * 把外壳主题同步给 DSH 页面（登记册 5.5）。
+   *
+   * **为什么是显式按钮**：外壳与 DSH 是两个独立 WebView，localStorage 不共享。用户可能
+   * 只想调外壳外观，所以同步必须由用户主动触发，并且只传固定字段的颜色与明暗模式。
+   */
+  applyHarnessTheme: (theme: SyncedTheme) => Promise<void>
+  /** 清除已同步的主题，DSH 页面回到它自己的默认外观。 */
+  clearHarnessTheme: () => Promise<void>
   getState: () => Promise<RuntimeState>
   getSettings: () => Promise<RuntimeSettings>
   saveSettings: (settings: RuntimeSettingsUpdate) => Promise<RuntimeSettings>

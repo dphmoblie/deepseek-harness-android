@@ -1,15 +1,23 @@
 import { useEffect, useState } from 'react'
 import { Moon, Palette, Sun, SunMoon, RotateCcw } from 'lucide-react'
 import { t } from '../i18n'
-import { applyTextColor, applyTheme, clearCustomAccentColor, clearCustomTextColor, readCustomAccentColor, readCustomTextColor, readThemeMode, saveAccentMode, saveCustomAccentColor, saveCustomTextColor, saveThemeMode, useAccentMode, useResolvedTheme, useThemeMode } from '../theme'
+import { applyTextColor, applyTheme, clearCustomAccentColor, clearCustomTextColor, effectiveAccentColor, readCustomAccentColor, readCustomTextColor, readThemeMode, saveAccentMode, saveAccentSource, saveCustomAccentColor, saveCustomTextColor, saveThemeMode, useAccentMode, useAccentSource, useResolvedTheme, useThemeMode } from '../theme'
+import { clearAdaptiveAccent, deriveSurface, extractAccentFromBackground, readAccentSync, readAdaptiveAccent, saveAccentSync, saveAdaptiveAccent, clearAccentSync, type AccentSource, type AdaptiveAccent, type SyncedTheme } from '../adaptiveAccent'
+import { runtimeBridge } from '../platform/native'
 import type { AccentMode, ThemeMode } from '../theme'
-import { applyCard, clearBackground, DEFAULT_CARD, readCard, saveBackground, saveCard, type CardAppearance } from '../appearance'
+import { applyCard, clearBackground, DEFAULT_CARD, readBackground, readCard, saveBackground, saveCard, type CardAppearance } from '../appearance'
 
 // 顺序固定为「跟随系统 / 浅色 / 深色」：默认项排在最前，避免让人以为必须二选一。
 const OPTIONS: readonly { value: ThemeMode; label: string; Icon: typeof Sun }[] = [
   { value: 'system', label: '跟随系统', Icon: SunMoon },
   { value: 'light', label: '浅色', Icon: Sun },
   { value: 'dark', label: '深色', Icon: Moon },
+]
+
+const ACCENT_SOURCES: readonly { value: AccentSource; label: string }[] = [
+  { value: 'default', label: '预置色板' },
+  { value: 'custom', label: '自定义颜色' },
+  { value: 'adaptive', label: '自适应背景色' },
 ]
 
 const ACCENT_OPTIONS: readonly { value: AccentMode; label: string; color: string }[] = [
@@ -32,6 +40,61 @@ export function AppearanceSettings() {
   const [backgroundError, setBackgroundError] = useState('')
   const [customAccent, setCustomAccent] = useState(() => readCustomAccentColor())
   const [customTextColor, setCustomTextColor] = useState(() => readCustomTextColor())
+  const source = useAccentSource()
+  const [adaptive, setAdaptive] = useState<AdaptiveAccent | null>(() => readAdaptiveAccent())
+  const [extracting, setExtracting] = useState(false)
+  const [accentError, setAccentError] = useState('')
+  const [syncRecord, setSyncRecord] = useState(() => readAccentSync())
+  const [syncing, setSyncing] = useState(false)
+  const [syncMessage, setSyncMessage] = useState('')
+
+  const changeSource = (value: AccentSource) => {
+    if (saveAccentSource(value)) { setFailed(null); setAccentError('') } else setFailed('accent')
+  }
+
+  /** 只读背景首帧，提取失败时保留当前强调色，不把界面切到一个空颜色上。 */
+  const extract = async () => {
+    setExtracting(true)
+    setAccentError('')
+    try {
+      const blob = await readBackground()
+      if (!blob) { setAccentError('还没有设置背景，请先选择背景图片或视频'); return }
+      const result = await extractAccentFromBackground(blob, { theme: resolved, surfaceOpacity: card.opacity })
+      if (!result) { setAccentError('没从背景里提取到合适的颜色，已保留当前强调色'); return }
+      if (!saveAdaptiveAccent(result) || !saveAccentSource('adaptive')) { setAccentError('无法保存提取结果，请重试'); return }
+      setAdaptive(result)
+    } catch { setAccentError('读取背景失败，请重试') } finally { setExtracting(false) }
+  }
+
+  /** 同步只传固定字段：明暗模式 + 三个颜色 + 面板透明度。 */
+  const sync = async () => {
+    setSyncing(true)
+    setSyncMessage('')
+    try {
+      const preset = ACCENT_OPTIONS.find(option => option.value === accent)?.color ?? ACCENT_OPTIONS[0].color
+      const accentColor = effectiveAccentColor() || preset
+      const surface = adaptive ? { background: adaptive.background, surface: adaptive.surface } : deriveSurface(accentColor, resolved)
+      const theme: SyncedTheme = { mode: readThemeMode(), accent: accentColor, background: surface.background, surface: surface.surface, surfaceOpacity: card.opacity }
+      await runtimeBridge.applyHarnessTheme(theme)
+      setSyncRecord(saveAccentSync(theme))
+      setSyncMessage('已让 DSH 使用当前主题')
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : '同步失败，请重试')
+    } finally { setSyncing(false) }
+  }
+
+  const unsync = async () => {
+    setSyncing(true)
+    setSyncMessage('')
+    try {
+      await runtimeBridge.clearHarnessTheme()
+      clearAccentSync()
+      setSyncRecord(null)
+      setSyncMessage('DSH 已回到默认主题')
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : '恢复失败，请重试')
+    } finally { setSyncing(false) }
+  }
   const updateCard = (next: CardAppearance) => {
     try { saveCard(next); setCard(next); setBackgroundError('') }
     catch { setBackgroundError(t('无法保存外观，请检查本地存储空间')) }
@@ -116,6 +179,30 @@ export function AppearanceSettings() {
         <label className="field"><span>{t('卡片背景色')}</span><input type="color" value={card.color || (resolved === 'dark' ? '#171d24' : '#ffffff')} onChange={event => { const next = { ...card, color: event.target.value }; updateCard(next) }} /><button type="button" className="compact-button" onClick={() => { updateCard({ ...DEFAULT_CARD }); void clearBackground().catch(() => setBackgroundError(t('无法清除背景，请重试'))) }}><RotateCcw size={16} />{t('恢复默认')}</button></label>
         <label className="field"><span>{t('文字颜色')}</span><input aria-label={t('文字颜色')} type="color" value={customTextColor || (resolved === 'dark' ? '#e8eef5' : '#17202b')} onChange={event => { const value = event.target.value; if (saveCustomTextColor(value)) setCustomTextColor(value) }} /><button type="button" className="compact-button" onClick={() => { clearCustomTextColor(); setCustomTextColor('') }}>{t('使用默认')}</button></label>
         {backgroundError && <p role="alert">{t(backgroundError)}</p>}
+      </div>
+      <div className="appearance-customization appearance-adaptive">
+        <div className="appearance-accent-heading"><strong>{t('自适应主题色')}</strong><span>{t('从背景图片或视频首帧提取，只影响外壳外观。')}</span></div>
+        <div className="appearance-accent-options" role="radiogroup" aria-label={t('强调色来源')}>
+          {ACCENT_SOURCES.map(({ value, label }) => (
+            <label key={value} className={source === value ? 'appearance-accent-option active' : 'appearance-accent-option'}>
+              <input type="radio" name="accent-source" checked={source === value} onChange={() => changeSource(value)} />
+              <span>{t(label)}</span>
+            </label>
+          ))}
+        </div>
+        <p>{adaptive ? `${t('当前提取色')} ${adaptive.accent} · ${new Date(adaptive.extractedAt).toLocaleString()}` : t('还没有从背景提取过主题色')}</p>
+        <button type="button" className="compact-button" onClick={() => void extract()} disabled={extracting}>
+          {extracting ? t('正在提取…') : adaptive ? t('重新提取') : t('从背景提取主题色')}
+        </button>
+        {adaptive && <button type="button" className="compact-button" onClick={() => { clearAdaptiveAccent(); setAdaptive(null); if (source === 'adaptive') changeSource('default') }}>{t('清除提取结果')}</button>}
+        {accentError && <p role="alert">{t(accentError)}</p>}
+      </div>
+      <div className="appearance-customization appearance-sync">
+        <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('外壳与 DSH 是两个独立页面，主题不会自动共享；只同步颜色与明暗模式。')}</span></div>
+        <button type="button" className="compact-button" onClick={() => void sync()} disabled={syncing}>{t('让 DSH 使用当前主题')}</button>
+        <button type="button" className="compact-button" onClick={() => void unsync()} disabled={syncing}>{t('恢复 DSH 默认主题')}</button>
+        <p>{syncRecord ? `${t('上次同步')} ${new Date(syncRecord.syncedAt).toLocaleString()}` : t('还没有同步过')}</p>
+        {syncMessage && <p role="status">{t(syncMessage)}</p>}
       </div>
     </section>
   )

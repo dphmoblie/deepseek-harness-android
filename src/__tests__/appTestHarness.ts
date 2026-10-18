@@ -52,6 +52,8 @@ export const bridge = {
    * 表现成「找不到任何元素」，与真正的界面缺陷几乎无法区分。
    */
   setAppTheme: vi.fn(),
+  applyHarnessTheme: vi.fn(),
+  clearHarnessTheme: vi.fn(),
   getState: vi.fn(),
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
@@ -324,6 +326,8 @@ export function beforeEachAppTest(): void {
   vi.clearAllMocks()
   bridge.setAppLanguage.mockResolvedValue(undefined)
   bridge.setAppTheme.mockResolvedValue(undefined)
+  bridge.applyHarnessTheme.mockResolvedValue(undefined)
+  bridge.clearHarnessTheme.mockResolvedValue(undefined)
   bridge.getState.mockResolvedValue({ ...readyState })
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })

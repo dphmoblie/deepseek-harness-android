@@ -2,6 +2,7 @@ import { validatePluginCatalog, validatePluginRequest } from './plugins'
 import { validateInstalledApplications } from './installedApplications'
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import type { PluginListenerHandle } from '@capacitor/core'
+import { validateSyncedTheme } from '../adaptiveAccent'
 import { createBrowserBridge } from './browser'
 import { validateSelfCheckOperation, type SelfCheckOperation } from '../runtimeSelfCheck'
 import type {
@@ -119,6 +120,9 @@ interface NativeRuntimePlugin {
   setAppLanguage(options: { language: 'zh-CN' | 'en' }): Promise<void>
   /** 同步主题模式给原生，由原生把它落到状态栏（登记册 5.4）。 */
   setAppTheme(options: { mode: AppThemeMode }): Promise<void>
+  /** 同步主题给 DSH 页面；原生侧只接受固定字段。 */
+  applyHarnessTheme(options: { theme: unknown }): Promise<void>
+  clearHarnessTheme(): Promise<void>
   getState(): Promise<RuntimeState>
   getSettings(): Promise<RuntimeSettings>
   saveSettings(settings: RuntimeSettingsUpdate): Promise<RuntimeSettings>
@@ -288,6 +292,12 @@ function createNativeBridge(): RuntimeBridge {
       }
       return NativeRuntime.setAppTheme({ mode })
     },
+    applyHarnessTheme: theme => {
+      // 与原生侧同一套校验：非法配置在过桥之前就拒掉，原生不负责猜测。
+      const checked = validateSyncedTheme(theme)
+      return NativeRuntime.applyHarnessTheme({ theme: checked })
+    },
+    clearHarnessTheme: () => NativeRuntime.clearHarnessTheme(),
     getState: () => NativeRuntime.getState().then(validateRuntimeState),
     getSettings: () => NativeRuntime.getSettings().then(validateStoredSettings),
     saveSettings: settings => NativeRuntime.saveSettings(validateSettingsUpdate(settings)).then(validateSettings),

@@ -413,6 +413,36 @@ class MobileRuntimePlugin : Plugin() {
         call.resolve()
     }
 
+    /**
+     * 把外壳主题同步给 DSH 页面（登记册 5.5）。
+     *
+     * 只接受固定字段：明暗模式、三个颜色、面板透明度。拒绝一切 CSS / JS / URL ——
+     * 这段内容最终会被拼进 `evaluateJavascript`，白名单是这里唯一的防线。
+     */
+    @PluginMethod
+    fun applyHarnessTheme(call: PluginCall) {
+        val theme = call.getObject("theme")
+        if (theme == null) {
+            call.reject("缺少主题配置", "THEME_INVALID")
+            return
+        }
+        if (!HarnessThemeBridge.save(context, theme)) {
+            call.reject("主题配置无效", "THEME_INVALID")
+            return
+        }
+        call.resolve()
+    }
+
+    /** 清除已同步的主题：DSH 页面回到它自己的默认外观。 */
+    @PluginMethod
+    fun clearHarnessTheme(call: PluginCall) {
+        if (!HarnessThemeBridge.clear(context)) {
+            call.reject("无法清除同步主题", "THEME_SAVE_FAILED")
+            return
+        }
+        call.resolve()
+    }
+
     override fun load() {
         auditLog = PrivateAuditLog(context)
         recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.STARTED)

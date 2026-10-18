@@ -99,6 +99,9 @@ class HarnessActivity : AppCompatActivity() {
         // 控制台也是一个窗口：主题在 Web 侧改过、或系统深色模式在后台切换过之后，
         // 回到前台都要按已保存的模式重算状态栏，否则它会与页面配色不一致。
         applyNativeChrome()
+        // 用户可能刚在外壳里点过「让 DSH 使用当前主题」：从后台回来时补一次，
+        // 不要求他手动刷新页面。
+        if (::webView.isInitialized) HarnessThemeBridge.apply(webView)
     }
 
     override fun onStart() {
@@ -248,6 +251,8 @@ class HarnessActivity : AppCompatActivity() {
                     discardHistory = false
                     view.clearHistory()
                 }
+                // 每次主框架加载完都重放一次已同步的主题；没有同步过时它什么都不做。
+                HarnessThemeBridge.apply(view)
             },
         )
         clearHttpAuthCredentialsAsync()

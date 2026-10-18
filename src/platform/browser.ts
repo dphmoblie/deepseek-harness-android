@@ -189,6 +189,9 @@ export function createBrowserBridge(): RuntimeBridge {
     setAppTheme: mode => mode === 'system' || mode === 'light' || mode === 'dark'
       ? Promise.resolve()
       : Promise.reject(new Error('不支持的主题模式')),
+    // 浏览器里没有 DSH 访客页面，也没有能持久化主题的原生层：如实拒绝，不要假装成功。
+    applyHarnessTheme: () => Promise.reject(new Error('浏览器模式下没有可同步的 DSH 页面')),
+    clearHarnessTheme: () => Promise.reject(new Error('浏览器模式下没有可同步的 DSH 页面')),
     getState: () => Promise.resolve({ ...state }),
     getSettings: () => {
       const saved = localStorage.getItem(SETTINGS_KEY)
