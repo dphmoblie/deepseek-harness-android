@@ -438,14 +438,18 @@ jobs:
           source_index=0
           if [ -f "$APT_HOST_ROOT/sources.list" ]; then
             source_index=$((source_index + 1))
-            sed -E 's/^([[:space:]]*)deb([[:space:]]+)/\1deb-src\2/' \
+            sed -E \
+              -e 's/^([[:space:]]*)deb([[:space:]]+)/\1deb-src\2/' \
+              -e 's/arch(\+)?=[^[:space:]]+[[:space:]]*//g' \
               "$APT_HOST_ROOT/sources.list" > "$SOURCEPARTS/ubuntu-${source_index}.list"
             found=1
           fi
           for source_file in "$APT_HOST_ROOT"/sources.list.d/*.list; do
             [ -f "$source_file" ] || continue
             source_index=$((source_index + 1))
-            sed -E 's/^([[:space:]]*)deb([[:space:]]+)/\1deb-src\2/' \
+            sed -E \
+              -e 's/^([[:space:]]*)deb([[:space:]]+)/\1deb-src\2/' \
+              -e 's/arch(\+)?=[^[:space:]]+[[:space:]]*//g' \
               "$source_file" > "$SOURCEPARTS/ubuntu-${source_index}.list"
             found=1
           done
@@ -453,6 +457,7 @@ jobs:
             [ -f "$source_file" ] || continue
             source_index=$((source_index + 1))
             awk '
+              /^[[:space:]]*Architectures(-Add|-Remove)?:[[:space:]]*/ { next }
               /^[[:space:]]*Types:[[:space:]]*/ {
                 if ($0 !~ /(^|[[:space:]])deb-src([[:space:]]|$)/) {
                   sub(/[[:space:]]*$/, "")

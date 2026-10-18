@@ -66,11 +66,11 @@ async function runSourceStep(t, scenario = 'success') {
   await writeFile(join(aptRoot, 'sources.list'), '# main source\ndeb [arch=arm64] http://archive.ubuntu.com/ubuntu noble main\n')
   await writeFile(
     join(sourceParts, 'git-core.list'),
-    'deb [signed-by=/usr/share/keyrings/git-core.gpg] https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble main\n',
+    'deb [arch=amd64 signed-by=/usr/share/keyrings/git-core.gpg] https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble main\n',
   )
   await writeFile(
     join(sourceParts, 'ubuntu.sources'),
-    'Types:   deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble\nComponents: main\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n',
+    'Types:   deb\nURIs: http://archive.ubuntu.com/ubuntu\nSuites: noble\nComponents: main\nArchitectures: amd64\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n',
   )
   const packages = join(dir, 'network-tools-packages.txt')
   const log = join(dir, 'apt.log')
@@ -106,8 +106,10 @@ test('enables deb-src in legacy and deb822 sources while requesting the exact in
   const legacy = await readFile(join(sourceParts, 'ubuntu-2.list'), 'utf8')
   const deb822 = await readFile(join(sourceParts, 'ubuntu-3.sources'), 'utf8')
   assert.match(legacy, /^deb-src \[signed-by=\/usr\/share\/keyrings\/git-core\.gpg\]/mu)
+  assert.doesNotMatch(legacy, /arch=/u)
   assert.match(deb822, /^Types:\s+deb deb-src$/mu)
   assert.match(deb822, /Signed-By: \/usr\/share\/keyrings\/ubuntu-archive-keyring\.gpg/u)
+  assert.doesNotMatch(deb822, /Architectures:/u)
   const aptLog = await readFile(log, 'utf8')
   assert.match(aptLog, /update -qq/u)
   assert.match(aptLog, /source --download-only git\n/u)
