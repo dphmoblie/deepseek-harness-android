@@ -22,6 +22,12 @@ class RuntimeUpdatePolicyTest {
     }
 
     @Test
+    fun oauthFixPreviewUpgradesThePreviousStableRuntime() {
+        assertTrue(RuntimeUpdatePolicy.isAvailable(runtimeId, "0.3.0", "a".repeat(64), runtimeId, "0.3.1-mobile-1", "b".repeat(64)))
+        assertTrue(RuntimeUpdatePolicy.compareVersions("0.3.1", "0.3.1-mobile-1") > 0)
+    }
+
+    @Test
     fun doesNotDowngradeANewerRemoteRelease() {
         assertFalse(
             RuntimeUpdatePolicy.isAvailable(

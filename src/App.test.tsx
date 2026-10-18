@@ -55,7 +55,7 @@ describe('App conversation gate', () => {
     fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
 
     expect(await screen.findByRole('heading', { name: '模型与密钥' })).toBeInTheDocument()
-    expect(await screen.findByText('未检测到模型凭据：请先在「模型与密钥」保存一次 API Key 再打开 Harness')).toBeInTheDocument()
+    expect(await screen.findByText('未检测到模型凭据：请先在「模型与密钥」登录 DeepSeek 账号或保存一次 API Key 再打开 Harness')).toBeInTheDocument()
     expect(bridge.startHarness).not.toHaveBeenCalled()
     expect(bridge.openHarness).not.toHaveBeenCalled()
   })
@@ -75,6 +75,18 @@ describe('App conversation gate', () => {
 
     await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  })
+
+  it('DeepSeek 账号已登录时，无 API Key 也可直接打开 Harness', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, configuredModelProviders: [], deepSeekAccountConfigured: true })
+    render(<App />)
+    await arriveAtSettingsHome()
+
+    fireEvent.click(screen.getByRole('button', { name: /打开 Harness/ }))
+
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('heading', { name: '模型与密钥' })).not.toBeInTheDocument()
   })
 
   it('开机不自动启动也不自动打开 Harness', async () => {
@@ -301,7 +313,7 @@ describe('App conversation gate', () => {
     for (let index = 0; index < 5; index += 1) {
       fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
     }
-    expect(screen.getByText(/尚未检测到模型 API Key/)).toBeVisible()
+    expect(screen.getByText(/尚未检测到模型凭据/)).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: /我已在 Harness 内配置过/ }))
   await arriveAtSettingsHome()
 
@@ -310,7 +322,7 @@ describe('App conversation gate', () => {
     await waitFor(() => expect(bridge.getSettings).toHaveBeenCalledTimes(2))
     const onboarding = screen.getByRole('dialog', { name: '开始使用' })
     expect(within(onboarding).getByRole('button', { name: /^打开 Harness$/ })).toBeVisible()
-    expect(within(onboarding).queryByText(/尚未检测到模型 API Key/)).toBeNull()
+    expect(within(onboarding).queryByText(/尚未检测到模型凭据/)).toBeNull()
   })
 
   it('leaves automatic Shizuku connection to the native lifecycle', async () => {

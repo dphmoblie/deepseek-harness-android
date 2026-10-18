@@ -1759,6 +1759,10 @@ button:disabled {
 
 /* 状态卡片同时作为供应商切换入口，沿用卡片文字与主题强调色。 */
 .provider-status { display: grid; gap: 6px; margin: 4px 0 14px; }
+.provider-account-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 10px 0 14px; padding: 12px; border: 1px solid var(--line-alt); border-radius: 10px; background: color-mix(in srgb, var(--blue-soft) 55%, transparent); }
+.provider-account-card > div { display: grid; gap: 4px; min-width: 0; }
+.provider-account-card span { color: var(--card-muted, var(--muted)); font-size: 0.82rem; }
+@media (max-width: 560px) { .provider-account-card { align-items: stretch; flex-direction: column; } .provider-account-card .button { align-self: flex-start; } }
 .provider-status-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; width: 100%; min-width: 0; min-height: 44px; padding: 8px 10px; border: 1px solid var(--line-alt); border-radius: 8px; background: transparent; color: inherit; text-align: left; }
 .provider-status-row:hover { border-color: var(--blue); }
 .provider-status-row.is-selected { border-color: var(--blue); background: var(--blue-soft); }

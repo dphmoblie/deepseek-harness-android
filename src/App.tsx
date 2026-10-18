@@ -52,6 +52,7 @@ import {
   Gauge,
   HardDrive,
   KeyRound,
+  LogIn,
   Loader2,
   LockKeyhole,
   Pencil,
@@ -2127,6 +2128,17 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             <span className="section-icon"><Bot size={19} /></span>
             <div><h2 id="model-settings">{t("模型供应商")}</h2><p>{t("密钥在本机加密保存，供 Harness 连接模型服务使用；保存后不再显示密钥内容。")}</p></div>
           </div>
+          <div className="provider-account-card">
+            <div>
+              <strong>{t("DeepSeek 账号")}</strong>
+              <span>{settings.deepSeekAccountConfigured === true ? t("已登录，可使用账号模型") : t("登录 DeepSeek 账号后使用账号模型，无需填写 API Key")}</span>
+            </div>
+            <button className="button button-secondary compact-button" type="button" disabled={busy !== null} onClick={onLaunchConfirmed}>
+              {settings.deepSeekAccountConfigured === true ? <Rocket size={16} /> : <LogIn size={16} />}
+              {settings.deepSeekAccountConfigured === true ? t("打开 Harness 管理账号") : t("登录 DeepSeek 账号")}
+            </button>
+          </div>
+          <p className="field-help">{t("打开 Harness 后，在侧栏「更多」菜单选择登录；登录完成后返回此页可刷新账号状态。")}</p>
           {!hasConfiguredModelCredential(settings) && (
             /*
              * 应用只读取 Harness 凭据文件中的白名单配置状态，不读取密钥内容，也无法识别
@@ -2136,7 +2148,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               <AlertTriangle size={19} />
               <div>
                 <strong>{t("还没有可用的模型凭据")}</strong>
-                <span>{t("没有密钥时每一轮对话都会失败，因此应用不会打开 Harness；保存一次 API Key 即可。若状态尚未同步，或凭据来自 Harness 的其他来源，可以直接打开。")}</span>
+                <span>{t("开始对话前需登录 DeepSeek 账号或保存一份 API Key。若状态尚未同步，或凭据来自 Harness 的其他来源，可以直接打开。")}</span>
               </div>
               <button className="button button-secondary" type="button" disabled={busy !== null} onClick={onLaunchConfirmed}>
                 {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Rocket size={18} />}{t("我已在 Harness 内配置过，仍要打开")}</button>
@@ -3183,6 +3195,7 @@ export function App() {
         ...current.settings,
         harnessConfiguredModelProviders: next.harnessConfiguredModelProviders,
         harnessConfiguredCustomModelProviders: next.harnessConfiguredCustomModelProviders,
+        deepSeekAccountConfigured: next.deepSeekAccountConfigured,
       },
     })
   }, [resyncSettingsDraft])
@@ -3952,7 +3965,7 @@ export function App() {
      * App 加密存储与 Harness 凭据文件，因此仍为其它凭据来源保留用户显式放行通道。
      */
     if (!skipCredentialGate && settings !== null && !hasConfiguredModelCredential(settings)) {
-      notify(t("未检测到模型凭据：请先在「模型与密钥」保存一次 API Key 再打开 Harness"), 'error')
+      notify(t("未检测到模型凭据：请先在「模型与密钥」登录 DeepSeek 账号或保存一次 API Key 再打开 Harness"), 'error')
       setActiveView(SETTINGS_PAGE_META.models.view)
       return
     }

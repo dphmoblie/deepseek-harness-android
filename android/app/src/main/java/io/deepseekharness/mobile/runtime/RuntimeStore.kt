@@ -303,6 +303,7 @@ class RuntimeStore(context: Context) {
             terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             harnessConfiguredModelProviders = harnessCredentials.modelProviders,
+            deepSeekAccountConfigured = harnessCredentials.deepSeekAccountConfigured,
             customModelProviders = customProviders,
             configuredCustomModelProviders = customProviders.mapNotNullTo(linkedSetOf()) { provider ->
                 provider.id.takeIf(customProviderApiKeys::containsKey)
@@ -362,6 +363,7 @@ class RuntimeStore(context: Context) {
             overlayBallEnabled = overlayBallEnabledUpdate ?: overlayBallEnabled(),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             harnessConfiguredModelProviders = harnessCredentials.modelProviders,
+            deepSeekAccountConfigured = harnessCredentials.deepSeekAccountConfigured,
             customModelProviders = customProviders,
             configuredCustomModelProviders = customProviders.mapNotNullTo(linkedSetOf()) { provider ->
                 provider.id.takeIf(customProviderApiKeys::containsKey)

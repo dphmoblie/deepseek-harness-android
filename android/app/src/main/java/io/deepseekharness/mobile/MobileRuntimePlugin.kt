@@ -3765,6 +3765,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("terminalFontSize", terminalFontSize)
         .put("configuredModelProviders", org.json.JSONArray(configuredModelProviders.map { it.wireValue }))
         .put("harnessConfiguredModelProviders", org.json.JSONArray(harnessConfiguredModelProviders.map { it.wireValue }))
+        .put("deepSeekAccountConfigured", deepSeekAccountConfigured)
         .put("customModelProviders", org.json.JSONArray().also { providers ->
             customModelProviders.forEach { provider ->
                 providers.put(JSObject()

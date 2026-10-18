@@ -87,6 +87,8 @@ data class RuntimeSettings(
     val configuredModelProviders: Set<ModelProvider> = emptySet(),
     /** Providers configured in Harness' own credential file; values never leave that file. */
     val harnessConfiguredModelProviders: Set<ModelProvider> = emptySet(),
+    /** Presence-only status for the official DeepSeek account grant. */
+    val deepSeekAccountConfigured: Boolean = false,
     val customModelProviders: List<CustomModelProvider> = emptyList(),
     val configuredCustomModelProviders: Set<String> = emptySet(),
     val harnessConfiguredCustomModelProviders: Set<String> = emptySet(),

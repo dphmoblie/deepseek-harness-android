@@ -30,10 +30,10 @@ function authorizationHeader() {
   return `Basic ${Buffer.from(`${USERNAME}:${TOKEN}`, 'ascii').toString('base64')}`
 }
 
-function request(port, authorization, requestPath = '/') {
+function request(port, authorization, requestPath = '/', method = 'GET') {
   return new Promise((resolve, reject) => {
     const headers = authorization === undefined ? {} : { Authorization: authorization }
-    const outgoing = http.get({ host: '127.0.0.1', port, path: requestPath, headers }, response => {
+    const outgoing = http.request({ host: '127.0.0.1', port, path: requestPath, headers, method }, response => {
       const chunks = []
       response.on('data', chunk => chunks.push(chunk))
       response.on('end', () => resolve({
@@ -43,11 +43,12 @@ function request(port, authorization, requestPath = '/') {
       }))
     })
     outgoing.on('error', reject)
+    outgoing.end()
   })
 }
 
 function upgrade(port, options = {}) {
-  const { authorization, cookie } = options
+  const { authorization, cookie, requestPath = '/events' } = options
   return new Promise((resolve, reject) => {
     const socket = net.createConnection({ host: '127.0.0.1', port })
     let response = ''
@@ -57,7 +58,7 @@ function upgrade(port, options = {}) {
       if (authorization !== undefined) lines.push(`Authorization: ${authorization}`)
       if (cookie !== undefined) lines.push(`Cookie: ${cookie}`)
       socket.write(
-        `GET /events HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n` +
+        `GET ${requestPath} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n` +
         `Connection: Upgrade\r\nUpgrade: websocket\r\n${lines.join('\r\n')}\r\n\r\n`,
       )
     })
@@ -119,10 +120,32 @@ describe('mobile Harness authentication preload', () => {
     assert.equal(callback.status, 200)
     assert.equal(callback.body, '/oauth/callback?code=oauth-code&state=oauth-state')
 
-    for (const path of ['/oauth/callback/', '/oauth/callbacks?code=oauth-code', '/oauth/callback/extra']) {
+    for (const path of [
+      '/oauth/callback/',
+      '/oauth/callbacks?code=oauth-code',
+      '/oauth/callback/extra',
+      '/other/../oauth/callback',
+      '/oauth/./callback',
+      '/oauth\\callback',
+      '/oauth/%63allback',
+      '/oauth%2fcallback',
+      '//attacker.invalid/oauth/callback?code=oauth-code&state=oauth-state',
+      'http://attacker.invalid/oauth/callback?code=oauth-code&state=oauth-state',
+    ]) {
       const lookalike = await request(port, undefined, path)
       assert.equal(lookalike.status, 401, path)
     }
+  })
+
+  it('does not exempt non-GET callbacks or WebSocket upgrades', async () => {
+    for (const method of ['HEAD', 'POST', 'OPTIONS', 'PUT', 'DELETE']) {
+      const callback = await request(port, undefined, '/oauth/callback?code=oauth-code&state=oauth-state', method)
+      assert.equal(callback.status, 401, method)
+    }
+    assert.match(
+      await upgrade(port, { requestPath: '/oauth/callback?code=oauth-code&state=oauth-state' }),
+      /^HTTP\/1\.1 401 Unauthorized/,
+    )
   })
 
   it('guards WebSocket upgrades with the same credential', async () => {

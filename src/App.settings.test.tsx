@@ -308,6 +308,20 @@ describe('设置草稿与未保存的输入', () => {
     expect(screen.queryByRole('button', { name: '清除密钥' })).toBeNull()
   })
 
+  it('模型供应商页提供 DeepSeek 账号登录入口，不要求先填 API Key', async () => {
+    bridge.getSettings.mockResolvedValue({
+      ...settings,
+      configuredModelProviders: [],
+      deepSeekAccountConfigured: false,
+    })
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
+
+    fireEvent.click(screen.getByRole('button', { name: '登录 DeepSeek 账号' }))
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  })
+
   it('直接点击供应商卡片切换编辑项，不再显示供应商下拉框或触发保存', async () => {
     bridge.getSettings.mockResolvedValue({
       ...settings,
@@ -334,6 +348,21 @@ describe('设置草稿与未保存的输入', () => {
     expect(within(row('Anthropic')).getByText('正在编辑')).toBeVisible()
     expect(within(row('DeepSeek')).queryByText('正在编辑')).toBeNull()
     expect(bridge.saveSettings).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('未保存草稿时刷新账号状态（原状态 %s），保留密钥输入', async (signedIn) => {
+    bridge.getSettings.mockResolvedValue({ ...settings, deepSeekAccountConfigured: signedIn })
+    bridge.saveSettings.mockImplementation(() => new Promise<RuntimeSettings>(() => {}))
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
+
+    fireEvent.change(screen.getByLabelText(/DeepSeek API Key/), { target: { value: 'unit-test-unsaved-key' } })
+    bridge.getSettings.mockResolvedValue({ ...settings, deepSeekAccountConfigured: !signedIn })
+    fireEvent.focus(window)
+
+    await screen.findByRole('button', { name: signedIn ? '登录 DeepSeek 账号' : '打开 Harness 管理账号' })
+    expect(screen.getByLabelText(/DeepSeek API Key/)).toHaveValue('unit-test-unsaved-key')
   })
 
   it('前台刷新会更新 Harness 网页凭据状态，同时保留未保存的密钥草稿', async () => {

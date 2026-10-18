@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile.runtime
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -27,6 +28,19 @@ class HarnessCredentialsDocumentTest {
               type: oauth
               access: sentinel-access-token
         """.trimIndent() + "\n"
+
+    private val accountGrantDocument = """
+        version: 1
+        refs:
+          OPENAI_API_KEY: api-key-placeholder
+        records:
+          deepseek-account-platform/default:
+            kind: grant
+            payload:
+              version: 1
+              token: account-token-placeholder
+              issuer: https://platform.deepseek.com
+    """.trimIndent()
 
     @Test
     fun `a missing document becomes a version one refs mapping`() {
@@ -153,5 +167,122 @@ class HarnessCredentialsDocumentTest {
         invalid.forEach { text -> assertNull("本应失败关闭：$text", HarnessCredentialsDocument.refs(text)) }
         assertEquals(emptyMap<String, String>(), HarnessCredentialsDocument.refs(""))
         assertEquals(emptyMap<String, String>(), HarnessCredentialsDocument.refs("version: 1\n"))
+    }
+
+    @Test
+    fun `deepseek account grant presence accepts the platform origin without a trailing slash`() {
+        assertTrue(HarnessCredentialsDocument.hasDeepSeekAccountGrant(accountGrantDocument))
+        assertTrue(HarnessCredentialsDocument.hasDeepSeekAccountGrant(
+            accountGrantDocument.replace("https://platform.deepseek.com", "https://platform.deepseek.com:443/"),
+        ))
+        assertEquals(mapOf("OPENAI_API_KEY" to "api-key-placeholder"), HarnessCredentialsDocument.refs(accountGrantDocument))
+    }
+
+    @Test
+    fun `deepseek account grant presence rejects an untrusted issuer`() {
+        val issuers = listOf(
+            "https://attacker.example.invalid",
+            "https://platform.deepseek.com.attacker.example.invalid",
+            "http://platform.deepseek.com",
+            "https://user@platform.deepseek.com",
+            "https://platform.deepseek.com?source=other",
+            "https://platform.deepseek.com#fragment",
+            "https://platform.deepseek.com:8443",
+            "https://platform.deepseek.com:0",
+            "https://platform.deepseek.com:65536",
+            "https://platform.deepseek.com:-1",
+            "https://platform.deepseek.com/dsh/authorize",
+            "https://platform.deepseek.com/%2F",
+            "https://platform.deepseek.com/has space",
+            "platform.deepseek.com",
+            "''",
+        )
+
+        issuers.forEach { issuer ->
+            assertFalse(
+                "must reject issuer $issuer",
+                HarnessCredentialsDocument.hasDeepSeekAccountGrant(
+                    accountGrantDocument.replace("https://platform.deepseek.com", issuer),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `deepseek account grant presence rejects empty oversized or non printable tokens`() {
+        val tokens = listOf(
+            "empty" to "''",
+            "oversized" to "A".repeat(4097),
+            "space" to "'has space'",
+            "newline" to "\"token\\nvalue\"",
+            "tab" to "\"token\\tvalue\"",
+            "control" to "\"token\\u0001value\"",
+            "delete" to "\"token\\u007fvalue\"",
+            "non ASCII" to "'token-令牌'",
+        )
+
+        tokens.forEach { (label, token) ->
+            assertFalse(
+                "must reject $label token",
+                HarnessCredentialsDocument.hasDeepSeekAccountGrant(
+                    accountGrantDocument.replace("account-token-placeholder", token),
+                ),
+            )
+        }
+        assertTrue(HarnessCredentialsDocument.hasDeepSeekAccountGrant(
+            accountGrantDocument.replace("account-token-placeholder", "A".repeat(4096)),
+        ))
+    }
+
+    @Test
+    fun `deepseek account grant presence rejects unsupported versions keys and record kinds`() {
+        val documents = listOf(
+            "document version" to accountGrantDocument.replaceFirst("version: 1", "version: 2"),
+            "payload version" to accountGrantDocument.replace("      version: 1", "      version: 2"),
+            "record key" to accountGrantDocument.replace("deepseek-account-platform/default:", "deepseek-account-platform/other:"),
+            "record kind" to accountGrantDocument.replace("kind: grant", "kind: api-key"),
+            "missing kind" to accountGrantDocument.replace("    kind: grant\n", ""),
+            "missing token" to accountGrantDocument.replace("      token: account-token-placeholder\n", ""),
+            "non string token" to accountGrantDocument.replace("token: account-token-placeholder", "token: 123"),
+        )
+
+        documents.forEach { (label, document) ->
+            assertFalse(label, HarnessCredentialsDocument.hasDeepSeekAccountGrant(document))
+        }
+    }
+
+    @Test
+    fun `deepseek account grant presence fails closed for empty malformed or oversized documents`() {
+        val documents = listOf(
+            "empty" to "",
+            "blank" to " \n\t",
+            "scalar" to "not a document",
+            "malformed YAML" to "version: 1\nrecords: [",
+            "missing records" to "version: 1",
+            "non mapping records" to "version: 1\nrecords: []",
+            "duplicate version" to ("version: 1\n" + accountGrantDocument),
+            "oversized" to (accountGrantDocument + "\n#" + "A".repeat(HarnessCredentialsDocument.MAX_DOCUMENT_BYTES)),
+        )
+
+        documents.forEach { (label, document) ->
+            assertFalse(label, HarnessCredentialsDocument.hasDeepSeekAccountGrant(document))
+        }
+    }
+
+    @Test
+    fun `deepseek account grant presence fails closed for unsupported document shape`() {
+        val document = """
+            version: 1
+            unexpected: true
+            records:
+              deepseek-account-platform/default:
+                kind: grant
+                payload:
+                  version: 1
+                  token: account-token-placeholder
+                  issuer: https://platform.deepseek.com
+        """.trimIndent()
+
+        assertFalse(HarnessCredentialsDocument.hasDeepSeekAccountGrant(document))
     }
 }

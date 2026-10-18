@@ -12,6 +12,7 @@ import java.io.InputStream
 internal data class HarnessCredentialStatus(
     val modelProviders: Set<ModelProvider> = emptySet(),
     val customProviderIds: Set<String> = emptySet(),
+    val deepSeekAccountConfigured: Boolean = false,
 )
 
 /**
@@ -58,14 +59,19 @@ internal object HarnessCredentialStatusReader {
      */
     internal fun parse(input: InputStream, customProviders: List<CustomModelProvider>): HarnessCredentialStatus {
         val text = readBounded(input) ?: return HarnessCredentialStatus()
-        val configuredRefs = HarnessCredentialsDocument.refs(text) ?: return HarnessCredentialStatus()
+        val configuredRefs = HarnessCredentialsDocument.refs(text)
+            ?: return HarnessCredentialStatus()
         val modelProviders = ModelProvider.entries.filterTo(linkedSetOf()) {
             it.environmentVariable in configuredRefs
         }
         val customProviderIds = customProviders.mapNotNullTo(linkedSetOf()) { provider ->
             provider.id.takeIf { provider.environmentVariable in configuredRefs }
         }
-        return HarnessCredentialStatus(modelProviders, customProviderIds)
+        return HarnessCredentialStatus(
+            modelProviders = modelProviders,
+            customProviderIds = customProviderIds,
+            deepSeekAccountConfigured = HarnessCredentialsDocument.hasDeepSeekAccountGrant(text),
+        )
     }
 
     /**

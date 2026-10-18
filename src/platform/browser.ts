@@ -65,6 +65,7 @@ const DEFAULT_SETTINGS: RuntimeSettings = {
   keepScreenAwake: true,
   terminalFontSize: 14,
   configuredModelProviders: [],
+  deepSeekAccountConfigured: false,
   // 浏览器预览没有前台服务：保持关闭，避免给出错误的保活预期。
   keepRuntimeInBackground: false,
 }

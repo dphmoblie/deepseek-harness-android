@@ -3,6 +3,7 @@ package io.deepseekharness.mobile.runtime
 import org.snakeyaml.engine.v2.api.Load
 import org.snakeyaml.engine.v2.api.LoadSettings
 import java.io.ByteArrayInputStream
+import java.net.URI
 
 /**
  * `$DSH_HOME/.credentials.yaml`（访客内 `/root/.dsh/.credentials.yaml`）的**保序**读取与并写。
@@ -97,6 +98,47 @@ internal object HarnessCredentialsDocument {
             parsed[name] = value
         }
         return parsed
+    }
+
+    /**
+     * Return only the presence of the official DeepSeek account grant.
+     *
+     * The grant token is intentionally never returned to the caller.  This is
+     * kept separate from `refs`: account login is a record credential, not an
+     * API-key environment reference.
+     */
+    fun hasDeepSeekAccountGrant(text: String): Boolean {
+        if (text.isBlank() || text.toByteArray(Charsets.UTF_8).size > MAX_DOCUMENT_BYTES) return false
+        // Keep account presence on the same strict document contract as refs;
+        // otherwise an unknown top-level field could make the UI claim login
+        // for a file that the writer would reject.
+        if (refs(text) == null) return false
+        val root = try {
+            Load(LOAD_SETTINGS).loadFromInputStream(ByteArrayInputStream(text.toByteArray(Charsets.UTF_8)))
+        } catch (_: Exception) {
+            return false
+        }
+        val document = root as? Map<*, *> ?: return false
+        if (document["version"] != 1) return false
+        val records = document["records"] as? Map<*, *> ?: return false
+        val record = records[DEEPSEEK_ACCOUNT_RECORD] as? Map<*, *> ?: return false
+        if (record["kind"] != "grant") return false
+        val payload = record["payload"] as? Map<*, *> ?: return false
+        val token = payload["token"] as? String
+        val issuer = payload["issuer"] as? String
+        if (payload["version"] != 1 || token.isNullOrEmpty() || token.length > 4096 ||
+            !token.all { it.code in 0x21..0x7E } || issuer.isNullOrEmpty()
+        ) return false
+        return try {
+            val uri = URI(issuer)
+            uri.scheme.equals("https", ignoreCase = true) &&
+                uri.host.equals("platform.deepseek.com", ignoreCase = true) &&
+                (uri.port == -1 || uri.port == 443) &&
+                uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null &&
+                (uri.path.isNullOrEmpty() || uri.path == "/")
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**
@@ -268,4 +310,5 @@ internal object HarnessCredentialsDocument {
     )
 
     private const val REFS_SECTION = "refs"
+    private const val DEEPSEEK_ACCOUNT_RECORD = "deepseek-account-platform/default"
 }

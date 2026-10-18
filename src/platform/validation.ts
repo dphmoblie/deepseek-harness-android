@@ -383,6 +383,9 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
   if (typeof keepRuntimeInBackground !== 'boolean') throw new Error('后台保持设置格式无效')
   const overlayBallEnabled = settings.overlayBallEnabled === undefined ? false : settings.overlayBallEnabled
   if (typeof overlayBallEnabled !== 'boolean') throw new Error('悬浮球设置格式无效')
+  if (settings.deepSeekAccountConfigured !== undefined && typeof settings.deepSeekAccountConfigured !== 'boolean') {
+    throw new Error('DeepSeek 账号状态格式无效')
+  }
   return {
     ...source,
     keepScreenAwake: settings.keepScreenAwake,
@@ -390,6 +393,9 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
     configuredModelProviders: configuredModelProviders(settings.configuredModelProviders, settings.apiKey),
     ...(settings.harnessConfiguredModelProviders === undefined ? {} : {
       harnessConfiguredModelProviders: configuredModelProviders(settings.harnessConfiguredModelProviders, undefined),
+    }),
+    ...(settings.deepSeekAccountConfigured === undefined ? {} : {
+      deepSeekAccountConfigured: settings.deepSeekAccountConfigured,
     }),
     ...(settings.customModelProviders === undefined ? {} : { customModelProviders: validateCustomModelProviders(settings.customModelProviders) }),
     ...(settings.configuredCustomModelProviders === undefined ? {} : {
@@ -442,10 +448,16 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
   }
   const overlayBallEnabled = settings.overlayBallEnabled === undefined ? false : settings.overlayBallEnabled
   if (typeof overlayBallEnabled !== 'boolean') throw new Error('悬浮球设置格式无效')
+  if (settings.deepSeekAccountConfigured !== undefined && typeof settings.deepSeekAccountConfigured !== 'boolean') {
+    throw new Error('DeepSeek 账号状态格式无效')
+  }
   const configuredProviders = configuredModelProviders(settings.configuredModelProviders, settings.apiKey)
   const customSettings = {
     ...(settings.harnessConfiguredModelProviders === undefined ? {} : {
       harnessConfiguredModelProviders: configuredModelProviders(settings.harnessConfiguredModelProviders, undefined),
+    }),
+    ...(settings.deepSeekAccountConfigured === undefined ? {} : {
+      deepSeekAccountConfigured: settings.deepSeekAccountConfigured,
     }),
     ...(settings.customModelProviders === undefined ? {} : { customModelProviders: validateCustomModelProviders(settings.customModelProviders) }),
     ...(settings.configuredCustomModelProviders === undefined ? {} : {
