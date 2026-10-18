@@ -76,6 +76,10 @@ test('CLI 契约：单行 JSON、十四项、顺序与受控码不变', () => {
   const payload = JSON.parse(lines[0])
   assert.equal(payload.ok, true)
   assert.deepEqual(payload.checks.map(item => item.id), CONTRACT_IDS)
+  // 访客运行时事实：脚本自己就跑到访客 Node 上，所以版本必须与当前进程一致。
+  assert.equal(payload.runtime.node, process.version)
+  assert.match(payload.runtime.abi, /^\d+$/u)
+  assert.ok(typeof payload.runtime.arch === 'string')
   for (const item of payload.checks) assertShape(item)
   // 三个能力项的码只能落在自己的三态里；这里不假设设备上有没有编译器，只查契约。
   for (const item of payload.checks.slice(11)) {

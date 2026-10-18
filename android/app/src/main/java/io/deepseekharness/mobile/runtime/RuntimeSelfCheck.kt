@@ -122,10 +122,18 @@ class RuntimeSelfCheck(
         // 宿主四项与访客条目走同一个 sanitize：码表、状态一致性、丢弃规则只有一份。
         val checks = RuntimeSelfCheckPolicy.sanitize(guest + SelfCheckHostFacts.rawChecks(facts))
         val summary = RuntimeSelfCheckPolicy.summarize(checks)
+        // 访客运行时事实：插件用到的 API 与原生模块都绑在访客 Node 上。像
+        // `AbortSignal.any is not a function` 这种「运行时缺 API」的故障，只看这一行就能定位，
+        // 不用再从壳、WebView、前端一路做排除法。形态不符就当没有，绝不把自由文本写进日志。
+        val runtime = payload.optJSONObject("runtime")
+        val guestNode = runtime?.optString("node", "")?.takeIf { NODE_VERSION.matches(it) }
+        val guestAbi = runtime?.optString("abi", "")?.takeIf { NODE_ABI.matches(it) }
         val fields = mutableMapOf(
             "result" to if (summary.failedCount > 0) "failed" else "ok",
             "count" to summary.failedCount.toString(),
         )
+        guestNode?.let { version -> fields["node"] = version }
+        guestAbi?.let { abi -> fields["abi"] = abi }
         summary.firstFailureCode?.let { code -> fields["code"] = code }
         store.diagnostics.record(
             if (summary.failedCount > 0) DiagnosticLevel.WARN else DiagnosticLevel.INFO,
@@ -323,6 +331,12 @@ class RuntimeSelfCheck(
 
         /** 单行载荷上限：自检结果只有枚举与计数，超过这个长度就不是我们的脚本。 */
         const val MAX_PAYLOAD_CHARS = 64 * 1024
+
+        /** 访客自报的 Node 版本，只接受 `v<major>.<minor>.<patch>`。 */
+        val NODE_VERSION = Regex("^v\\d{1,2}\\.\\d{1,2}\\.\\d{1,3}$")
+
+        /** 访客自报的模块 ABI（`process.versions.modules`），纯数字。 */
+        val NODE_ABI = Regex("^\\d{1,4}$")
 
         const val DENIED_CODE = "SELF_CHECK_FAILED"
 

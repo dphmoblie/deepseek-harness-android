@@ -220,6 +220,8 @@ object DiagnosticPolicy {
         "version",
         "sdk",
         "abi",
+        // 访客 Node 的版本号（vX.Y.Z）与模块 ABI（纯数字）：排障时定位「运行时缺 API」用。
+        "node",
         // transfer 阶段的字节证据（见 [TransferFields]）：全是数字与布尔，没有路径与文本。
         "expected_bytes",
         "actual_bytes",
