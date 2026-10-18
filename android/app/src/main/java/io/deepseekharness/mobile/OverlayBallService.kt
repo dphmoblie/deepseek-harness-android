@@ -631,12 +631,14 @@ class OverlayBallService : Service() {
             // 捕获的旧 access，否则通知或悬浮球会把已失效的 Basic Auth 重新授权给入口页。
             detachConversation()
             Thread({
-                val currentAccess = RuntimeHost.controllerOrNull()?.let { controller ->
+                val currentAuthorization = RuntimeHost.controllerOrNull()?.let { controller ->
                     runCatching { controller.authorizeHarnessAccess() }.getOrNull()
                 }
                 Handler(Looper.getMainLooper()).post {
-                    if (activeService !== this) return@post
-                    if (currentAccess == null) AppAuthenticationState.revokeHarness()
+                    if (activeService !== this) {
+                        currentAuthorization?.let { AppAuthenticationState.revokeHarness(it) }
+                        return@post
+                    }
                     openHarness()
                 }
             }, "dsh-overlay-expand").start()

@@ -633,10 +633,10 @@ class MobileRuntimeController(
      * must use this for a launch so stop/restart cannot slip between reading the token and
      * authorizing it.
      */
-    fun authorizeHarnessAccess(
+    internal fun authorizeHarnessAccess(
         expected: HarnessAccess? = null,
         stillValid: () -> Boolean = { true },
-    ): HarnessAccess = lifecycleLock.withLock {
+    ): AppAuthenticationState.HarnessAuthorization = lifecycleLock.withLock {
         ensureOpen()
         supervisor.authorizeAccess(expected, stillValid)
     }

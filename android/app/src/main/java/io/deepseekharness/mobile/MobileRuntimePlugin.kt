@@ -1005,15 +1005,16 @@ class MobileRuntimePlugin : Plugin() {
             // access 阶段只读；真正授权放在 HarnessOpenRequests 的最终派发门内，
             // 这样取消/超时不会先把旧凭据发布到 AppAuthenticationState。
             harnessOpenRequests.launch(request, controller::openHarnessAccess) { access ->
+                var authorization: AppAuthenticationState.HarnessAuthorization? = null
                 try {
                     ensurePluginActive()
-                    controller.authorizeHarnessAccess(access) { harnessOpenRequests.commit(request) }
+                    authorization = controller.authorizeHarnessAccess(access) { harnessOpenRequests.commit(request) }
                     if (!harnessOpenRequests.isCurrent(request)) {
                         throw RuntimeFailure("HARNESS_OPEN_CANCELLED", "打开请求已取消")
                     }
                     context.startActivity(intent)
                 } catch (error: Throwable) {
-                    AppAuthenticationState.revokeHarness(access)
+                    authorization?.let { AppAuthenticationState.revokeHarness(it) }
                     throw error
                 }
             }

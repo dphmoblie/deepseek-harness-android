@@ -420,53 +420,68 @@ jobs:
       - name: Package Ubuntu git corresponding source
         run: |
           set -euo pipefail
-          rm -rf /tmp/git-source /tmp/ubuntu-sourceparts /tmp/ubuntu-deb-src.list /tmp/ubuntu-empty-sources.list /tmp/ubuntu-empty-sourceparts /tmp/git-source.tar
-          mkdir -p /tmp/git-source/files
-          # Ubuntu runner images normally use deb822 sources. Enable deb-src only
-          # through a temporary list so the host image is not mutated.
+          APT_HOST_ROOT="${DSH_APT_HOST_ROOT:-/etc/apt}"
+          APT_WORK_ROOT="${DSH_APT_WORK_ROOT:-/tmp}"
+          NETWORK_PACKAGES_FILE="${DSH_NETWORK_PACKAGES_FILE:-/tmp/network-tools-packages.txt}"
+          GIT_SOURCE_ARCHIVE="${DSH_GIT_SOURCE_ARCHIVE:-ubuntu-git-corresponding-source.tar.gz}"
+          GIT_SOURCE_ROOT="$APT_WORK_ROOT/git-source"
+          SOURCEPARTS="$APT_WORK_ROOT/ubuntu-sourceparts"
+          EMPTY_SOURCES="$APT_WORK_ROOT/ubuntu-empty-sources.list"
+          GIT_SOURCE_TAR="$APT_WORK_ROOT/git-source.tar"
+          rm -rf "$GIT_SOURCE_ROOT" "$SOURCEPARTS" "$EMPTY_SOURCES" "$GIT_SOURCE_TAR"
+          mkdir -p "$GIT_SOURCE_ROOT/files" "$SOURCEPARTS"
+          # Ubuntu runner images may use either legacy .list files or deb822
+          # .sources files. Copy every host source into a temporary parts dir;
+          # only the copy is changed, so signed-by and all other options survive.
           found=0
-          mkdir -p /tmp/ubuntu-sourceparts /tmp/ubuntu-empty-sourceparts
-          : > /tmp/ubuntu-empty-sources.list
+          : > "$EMPTY_SOURCES"
           source_index=0
-          for source_file in /etc/apt/sources.list.d/*.sources; do
+          if [ -f "$APT_HOST_ROOT/sources.list" ]; then
+            source_index=$((source_index + 1))
+            sed -E 's/^([[:space:]]*)deb([[:space:]]+)/\1deb-src\2/' \
+              "$APT_HOST_ROOT/sources.list" > "$SOURCEPARTS/ubuntu-${source_index}.list"
+            found=1
+          fi
+          for source_file in "$APT_HOST_ROOT"/sources.list.d/*.list; do
             [ -f "$source_file" ] || continue
             source_index=$((source_index + 1))
-            awk '/^Types: deb$/ { print "Types: deb deb-src"; next } { print }' \
-              "$source_file" > "/tmp/ubuntu-sourceparts/ubuntu-${source_index}.sources"
+            sed -E 's/^([[:space:]]*)deb([[:space:]]+)/\1deb-src\2/' \
+              "$source_file" > "$SOURCEPARTS/ubuntu-${source_index}.list"
             found=1
           done
-          if [ "$found" = 0 ] && [ -f /etc/apt/sources.list ]; then
-            sed -E 's/^deb /deb-src /' /etc/apt/sources.list > /tmp/ubuntu-deb-src.list
-          fi
-          if [ "$found" = 1 ]; then
-            test -n "$(find /tmp/ubuntu-sourceparts -type f -size +0c -print -quit)"
-            APT_OPTS=(-o Dir::Etc::sourcelist=/tmp/ubuntu-empty-sources.list -o Dir::Etc::sourceparts=/tmp/ubuntu-sourceparts)
-          else
-            test -s /tmp/ubuntu-deb-src.list
-            APT_OPTS=(-o Dir::Etc::sourcelist=/tmp/ubuntu-deb-src.list -o Dir::Etc::sourceparts=/tmp/ubuntu-empty-sourceparts)
-          fi
+          for source_file in "$APT_HOST_ROOT"/sources.list.d/*.sources; do
+            [ -f "$source_file" ] || continue
+            source_index=$((source_index + 1))
+            awk '
+              /^[[:space:]]*Types:[[:space:]]*/ {
+                if ($0 !~ /(^|[[:space:]])deb-src([[:space:]]|$)/) {
+                  sub(/[[:space:]]*$/, "")
+                  $0 = $0 " deb-src"
+                }
+              }
+              { print }
+            ' "$source_file" > "$SOURCEPARTS/ubuntu-${source_index}.sources"
+            found=1
+          done
+          test "$found" = 1
+          test -n "$(find "$SOURCEPARTS" -type f -size +0c -print -quit)"
+          APT_OPTS=(-o "Dir::Etc::sourcelist=$EMPTY_SOURCES" -o "Dir::Etc::sourceparts=$SOURCEPARTS")
           sudo apt-get "${APT_OPTS[@]}" update -qq
-          GIT_VERSION="$(dpkg-query -W -f='${Version}' git)"
-          test -n "$GIT_VERSION"
-          # PPA 构建的 git 版本有时没有同步到 Ubuntu 的 deb-src 索引；优先取
-          # 精确版本，缺失时退回同发行版候选源码，并把实际请求写入说明，
-          # 避免源码归档步骤因 runner 的二进制来源差异而阻塞整个发布。
-          if ! (cd /tmp/git-source/files && apt-get "${APT_OPTS[@]}" source --download-only "git=${GIT_VERSION}"); then
-            rm -f /tmp/git-source/files/*
-            (cd /tmp/git-source/files && apt-get "${APT_OPTS[@]}" source --download-only git)
-            SOURCE_REQUEST='git (repository source version; exact installed PPA version unavailable)'
-          else
-            SOURCE_REQUEST="git=${GIT_VERSION}"
-          fi
-          test -n "$(find /tmp/git-source/files -maxdepth 1 -type f -name '*.dsc' -print -quit)"
-          test -n "$(find /tmp/git-source/files -maxdepth 1 -type f \( -name '*.orig.tar.*' -o -name '*.debian.tar.*' \) -print -quit)"
+          GIT_SOURCE_RECORD="$(dpkg-query -W -f='${source:Package}\t${source:Version}\n' git)"
+          IFS=$'\t' read -r GIT_SOURCE_PACKAGE GIT_SOURCE_VERSION <<< "$GIT_SOURCE_RECORD"
+          test -n "$GIT_SOURCE_PACKAGE"
+          test -n "$GIT_SOURCE_VERSION"
+          SOURCE_REQUEST="${GIT_SOURCE_PACKAGE}=${GIT_SOURCE_VERSION}"
+          (cd "$GIT_SOURCE_ROOT/files" && apt-get "${APT_OPTS[@]}" source --download-only "$SOURCE_REQUEST")
+          test -n "$(find "$GIT_SOURCE_ROOT/files" -maxdepth 1 -type f -name '*.dsc' -print -quit)"
+          test -n "$(find "$GIT_SOURCE_ROOT/files" -maxdepth 1 -type f \( -name '*.orig.tar.*' -o -name '*.debian.tar.*' \) -print -quit)"
           dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' \
-            $(tr '\n' ' ' < /tmp/network-tools-packages.txt) > /tmp/git-source/package-versions.txt
-          printf '%s\n' "installed=${GIT_VERSION}" "source=${SOURCE_REQUEST}" > /tmp/git-source/README.txt
+            $(tr '\n' ' ' < "$NETWORK_PACKAGES_FILE") > "$GIT_SOURCE_ROOT/package-versions.txt"
+          printf '%s\n' "source=${SOURCE_REQUEST}" > "$GIT_SOURCE_ROOT/README.txt"
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
-            -cf /tmp/git-source.tar -C /tmp/git-source files package-versions.txt README.txt
-          gzip -n -c /tmp/git-source.tar > ubuntu-git-corresponding-source.tar.gz
-          test -s ubuntu-git-corresponding-source.tar.gz
+            -cf "$GIT_SOURCE_TAR" -C "$GIT_SOURCE_ROOT" files package-versions.txt README.txt
+          gzip -n -c "$GIT_SOURCE_TAR" > "$GIT_SOURCE_ARCHIVE"
+          test -s "$GIT_SOURCE_ARCHIVE"
 
       - name: Build bundle + manifest (mobile profile)
         run: |

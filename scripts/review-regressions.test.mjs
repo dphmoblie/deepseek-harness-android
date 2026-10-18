@@ -16,7 +16,7 @@ test('Harness open captures its deadline before queueing and stop/reset/destroy 
   assert.ok(open.indexOf('harnessOpenRequests.accept()') < open.indexOf('execute(call)'))
   // Access is read first, then authorization is published by the
   // lifecycle-locked controller only inside the request's final dispatch gate.
-  assert.match(open, /harnessOpenRequests\.launch\(request, controller::openHarnessAccess\) \{ access ->\s*try \{\s*ensurePluginActive\(\)\s*controller\.authorizeHarnessAccess\(access\)/)
+  assert.match(open, /harnessOpenRequests\.launch\(request, controller::openHarnessAccess\) \{ access ->\s*(?:var authorization: AppAuthenticationState\.HarnessAuthorization\? = null\s*)?try \{\s*ensurePluginActive\(\)\s*authorization = controller\.authorizeHarnessAccess\(access\)/)
   for (const [start, end] of [
     ['fun stopRuntime(', 'fun reset('],
     ['fun reset(', 'fun getRuntimeCleanupState('],

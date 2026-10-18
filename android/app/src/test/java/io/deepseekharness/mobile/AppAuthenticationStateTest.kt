@@ -23,9 +23,9 @@ class AppAuthenticationStateTest {
     }
 
     @Test
-    fun harnessAuthorizationIsRevokedWithItsCredentials() {
-        AppAuthenticationState.authorizeHarnessLaunch(access)
-        AppAuthenticationState.revokeHarness()
+    fun harnessAuthorizationIsRevokedWithItsLease() {
+        val authorization = AppAuthenticationState.authorizeHarnessLaunch(access)
+        assertTrue(AppAuthenticationState.revokeHarness(authorization))
         assertFalse(AppAuthenticationState.isHarnessAuthenticated())
         assertTrue(AppAuthenticationState.harnessAccess() == null)
     }
@@ -69,5 +69,17 @@ class AppAuthenticationStateTest {
         assertFalse(AppAuthenticationState.revokeHarness(oldOwner))
         assertEquals(access, AppAuthenticationState.harnessAccess())
         assertTrue(AppAuthenticationState.claimHarnessAccess(oldOwner, access))
+    }
+
+    @Test
+    fun staleAuthorizationLeaseCannotRevokeAReauthorizationWithTheSameAccess() {
+        val oldAuthorization = AppAuthenticationState.authorizeHarnessLaunch(access)
+        val newAuthorization = AppAuthenticationState.authorizeHarnessLaunch(access)
+
+        assertFalse(AppAuthenticationState.revokeHarness(oldAuthorization))
+        assertTrue(AppAuthenticationState.isHarnessAuthenticated())
+        assertEquals(access, AppAuthenticationState.harnessAccess())
+        assertTrue(AppAuthenticationState.revokeHarness(newAuthorization))
+        assertFalse(AppAuthenticationState.isHarnessAuthenticated())
     }
 }

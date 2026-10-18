@@ -405,10 +405,10 @@ class RuntimeSupervisor(
      * 退出观察线程会在这把锁内撤销旧周期的授权；如果先在锁内读取、再在锁外发布，
      * 观察线程就能插入并清理后让旧凭据重新成为全局有效凭据。
      */
-    fun authorizeAccess(
+    internal fun authorizeAccess(
         expected: HarnessAccess? = null,
         stillValid: () -> Boolean = { true },
-    ): HarnessAccess = synchronized(lock) {
+    ): AppAuthenticationState.HarnessAuthorization = synchronized(lock) {
         val current = access()
         if (expected != null && expected != current) {
             throw RuntimeFailure("HARNESS_AUTH_CHANGED", "Harness 运行周期已改变")
@@ -417,7 +417,6 @@ class RuntimeSupervisor(
             throw RuntimeFailure("HARNESS_OPEN_CANCELLED", "打开请求已取消")
         }
         AppAuthenticationState.authorizeHarnessLaunch(current)
-        current
     }
 
     private fun clearHarnessState() {

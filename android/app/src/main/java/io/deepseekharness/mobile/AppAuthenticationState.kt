@@ -4,15 +4,26 @@ import io.deepseekharness.mobile.runtime.HarnessAccess
 import java.util.concurrent.atomic.AtomicBoolean
 
 internal object AppAuthenticationState {
+    /**
+     * A single publication of the Harness credentials.  The access value may be reused while
+     * one Harness process is running, so rollback must identify the publication itself rather
+     * than compare only [HarnessAccess] (otherwise an old request can revoke a newer one).
+     */
+    class HarnessAuthorization internal constructor()
+
     private val harnessAuthenticated = AtomicBoolean(false)
     private var harnessAccess: HarnessAccess? = null
     private var harnessOwner: Any? = null
+    private var harnessAuthorization: HarnessAuthorization? = null
 
     @Synchronized
-    fun authorizeHarnessLaunch(access: HarnessAccess) {
+    fun authorizeHarnessLaunch(access: HarnessAccess): HarnessAuthorization {
+        val authorization = HarnessAuthorization()
         harnessOwner = null
         harnessAccess = access
+        harnessAuthorization = authorization
         harnessAuthenticated.set(true)
+        return authorization
     }
 
     @Synchronized
@@ -20,12 +31,13 @@ internal object AppAuthenticationState {
         harnessAuthenticated.set(false)
         harnessAccess = null
         harnessOwner = null
+        harnessAuthorization = null
     }
 
-    /** 仅撤销仍属于指定运行周期的授权，避免失败的旧打开请求清掉新周期凭据。 */
+    /** 仅撤销仍属于本次发布的授权，避免失败的旧请求清掉新请求的凭据。 */
     @Synchronized
-    fun revokeHarness(access: HarnessAccess): Boolean {
-        if (!harnessAuthenticated.get() || harnessAccess != access) return false
+    fun revokeHarness(authorization: HarnessAuthorization): Boolean {
+        if (!harnessAuthenticated.get() || harnessAuthorization !== authorization) return false
         revokeHarness()
         return true
     }
