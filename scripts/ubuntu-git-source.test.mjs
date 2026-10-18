@@ -28,11 +28,15 @@ const mocks = String.raw`
 apt-get() {
   printf '%s\n' "$*" >> "$DSH_APT_LOG"
   case "$*" in
-    *' source --download-only git='*)
+    *' source --download-only git')
       if test "x$DSH_APT_SCENARIO" = xfail-source; then
         return 42
       fi
-      printf 'Source: git\n' > "$DSH_SOURCE_OUTPUT/git_2.55.0-0ppa1.dsc"
+      if test "x$DSH_APT_SCENARIO" = xmismatch; then
+        printf 'Source: git\nVersion: 2.54.0-1\n' > "$DSH_SOURCE_OUTPUT/git_2.55.0-0ppa1.dsc"
+      else
+        printf 'Source: git\nVersion: 1:2.55.0-0ppa1~ubuntu24.04.2\n' > "$DSH_SOURCE_OUTPUT/git_2.55.0-0ppa1.dsc"
+      fi
       printf 'source archive\n' > "$DSH_SOURCE_OUTPUT/git_2.55.0.orig.tar.xz"
       printf 'debian archive\n' > "$DSH_SOURCE_OUTPUT/git_2.55.0.debian.tar.xz"
       ;;
@@ -106,8 +110,8 @@ test('enables deb-src in legacy and deb822 sources while requesting the exact in
   assert.match(deb822, /Signed-By: \/usr\/share\/keyrings\/ubuntu-archive-keyring\.gpg/u)
   const aptLog = await readFile(log, 'utf8')
   assert.match(aptLog, /update -qq/u)
-  assert.match(aptLog, /source --download-only git=2\.55\.0-0ppa1~ubuntu24\.04\.2/u)
-  assert.doesNotMatch(aptLog, /source --download-only git\n/u)
+  assert.match(aptLog, /source --download-only git\n/u)
+  assert.doesNotMatch(aptLog, /source --download-only git=/u)
   assert.ok((await readFile(archive)).length > 0)
 })
 
@@ -116,8 +120,8 @@ test('fails closed when the exact installed source version is unavailable', asyn
   assert.ifError(result.error)
   const aptLog = await readFile(log, 'utf8')
   assert.notEqual(result.status, 0, `${result.stdout}${result.stderr}\n${aptLog}`)
-  assert.match(aptLog, /source --download-only git=2\.55\.0-0ppa1~ubuntu24\.04\.2/u)
-  assert.doesNotMatch(aptLog, /source --download-only git\n/u)
+  assert.match(aptLog, /source --download-only git\n/u)
+  assert.doesNotMatch(aptLog, /source --download-only git=/u)
   await assert.rejects(readFile(archive), { code: 'ENOENT' })
 })
 
@@ -128,5 +132,13 @@ test('fails closed when dpkg has no source version metadata', async t => {
   assert.notEqual(result.status, 0, `${result.stdout}${result.stderr}\n${aptLog}`)
   assert.match(aptLog, /update -qq/u)
   assert.doesNotMatch(aptLog, /source --download-only/u)
+  await assert.rejects(readFile(archive), { code: 'ENOENT' })
+})
+
+test('fails closed when the downloaded dsc version does not match the installed binary', async t => {
+  const { archive, log, result } = await runSourceStep(t, 'mismatch')
+  assert.ifError(result.error)
+  assert.notEqual(result.status, 0, `${result.stdout}${result.stderr}`)
+  assert.match(await readFile(log, 'utf8'), /source --download-only git\n/u)
   await assert.rejects(readFile(archive), { code: 'ENOENT' })
 })
