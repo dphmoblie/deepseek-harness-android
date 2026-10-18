@@ -39,6 +39,40 @@ class HarnessOpenRequestsTest {
     }
 
     @Test
+    fun expiredRequestNeverRunsFinalizerAfterReadCompletes() {
+        val now = AtomicLong(0)
+        val requests = HarnessOpenRequests(now::get)
+        val request = requests.accept()
+        var finalized = false
+        val failure = assertThrows(RuntimeFailure::class.java) {
+            requests.launch(request, {
+                now.set(HarnessOpenRequests.TIMEOUT_MS)
+                "read-only-access"
+            }) {
+                finalized = true
+            }
+        }
+        assertEquals("BRIDGE_TIMEOUT", failure.code)
+        assertFalse(finalized)
+    }
+
+    @Test
+    fun cancelledRequestNeverRunsFinalizerAfterReadCompletes() {
+        val requests = HarnessOpenRequests { 0L }
+        val request = requests.accept()
+        var finalized = false
+        requests.invalidate()
+        assertFalse(requests.commit(request))
+        val failure = assertThrows(RuntimeFailure::class.java) {
+            requests.launch(request, { "read-only-access" }) {
+                finalized = true
+            }
+        }
+        assertEquals("HARNESS_OPEN_CANCELLED", failure.code)
+        assertFalse(finalized)
+    }
+
+    @Test
     fun newerSessionWinsEvenWhenOlderAccessReadFinishesLast() {
         checkBlockedAccess(supersede = true)
     }
@@ -82,7 +116,7 @@ class HarnessOpenRequestsTest {
     }
 
     @Test
-    fun finalDispatchIsSerializedWithInvalidation() {
+    fun finalDispatchDoesNotHoldRequestLockAcrossLifecycleWork() {
         val requests = HarnessOpenRequests { 0L }
         val request = requests.accept()
         val dispatching = CountDownLatch(1)
@@ -102,10 +136,9 @@ class HarnessOpenRequestsTest {
                 requests.invalidate()
             }
             assertTrue(invalidating.await(5, TimeUnit.SECONDS))
-            assertFalse(cancellation.isDone)
+            cancellation.get(5, TimeUnit.SECONDS)
             release.countDown()
             launch.get(5, TimeUnit.SECONDS)
-            cancellation.get(5, TimeUnit.SECONDS)
             assertThrows(RuntimeFailure::class.java) {
                 requests.launch(request, { "access" }) { error("cancelled request dispatched") }
             }

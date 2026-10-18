@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile.runtime
 
 import android.content.Context
+import io.deepseekharness.mobile.AppAuthenticationState
 import io.deepseekharness.mobile.BuildConfig
 import io.deepseekharness.mobile.shizuku.ShizukuState
 import io.deepseekharness.mobile.shizuku.ShizukuAutoReconnectPolicy
@@ -625,6 +626,19 @@ class MobileRuntimeController(
     fun openHarnessAccess(): HarnessAccess = lifecycleLock.withLock {
         ensureOpen()
         supervisor.access()
+    }
+
+    /**
+     * Read and publish the current one-cycle access while holding the runtime lock. A caller
+     * must use this for a launch so stop/restart cannot slip between reading the token and
+     * authorizing it.
+     */
+    fun authorizeHarnessAccess(
+        expected: HarnessAccess? = null,
+        stillValid: () -> Boolean = { true },
+    ): HarnessAccess = lifecycleLock.withLock {
+        ensureOpen()
+        supervisor.authorizeAccess(expected, stillValid)
     }
 
     fun state(): RuntimeStateSnapshot = status.snapshot()

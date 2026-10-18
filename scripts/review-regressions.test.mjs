@@ -14,7 +14,9 @@ const accessibility = await read(base + 'accessibility/DeepSeekAccessibilityServ
 test('Harness open captures its deadline before queueing and stop/reset/destroy invalidate pending opens', async () => {
   const open = plugin.slice(plugin.indexOf('fun openHarness('), plugin.indexOf('fun testModelConnectivity('))
   assert.ok(open.indexOf('harnessOpenRequests.accept()') < open.indexOf('execute(call)'))
-  assert.match(open, /harnessOpenRequests\.launch\(request, controller::openHarnessAccess\) \{ access ->\s*ensurePluginActive\(\)\s*AppAuthenticationState\.authorizeHarnessLaunch\(access\)/)
+  // Access is read first, then authorization is published by the
+  // lifecycle-locked controller only inside the request's final dispatch gate.
+  assert.match(open, /harnessOpenRequests\.launch\(request, controller::openHarnessAccess\) \{ access ->\s*try \{\s*ensurePluginActive\(\)\s*controller\.authorizeHarnessAccess\(access\)/)
   for (const [start, end] of [
     ['fun stopRuntime(', 'fun reset('],
     ['fun reset(', 'fun getRuntimeCleanupState('],

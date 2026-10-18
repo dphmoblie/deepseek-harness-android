@@ -1133,7 +1133,7 @@ test('release stays a draft until uploaded assets have been downloaded and verif
   // 复核要显式限定资产集合：清单悄悄多一项或少一项时门禁不能形同虚设。
   assert.match(
     workflow,
-    /verify-release-assets\.py[\s\S]{0,200}--expect app-release\.apk,rootfs\.bundle,runtime-manifest\.json,release-manifest\.json/u,
+    /verify-release-assets\.py[\s\S]{0,200}--expect app-release\.apk,rootfs\.bundle,runtime-manifest\.json,corresponding-source\.tar\.gz,release-manifest\.json/u,
   )
   // 下载走带 token 的 gh，私有仓库也不会把 404 误判成坏发布。
   assert.match(workflow, /gh release download "\$\{RELEASE_TAG\}"/u)
@@ -1166,11 +1166,11 @@ test('the published version manifest is written before the checksums and shipped
 
   // 清单要进 checksums.txt（发布前复核要求目录与清单完全一致），并随其它资产一起上传。
   assert.ok(
-    compact.includes('forfin"$APK"/tmp/runtime/rootfs.bundle/tmp/runtime/runtime-manifest.json/tmp/release-manifest.json/tmp/checksums.txt;do'),
+    compact.includes('forfin"$APK"/tmp/runtime/rootfs.bundle/tmp/runtime/runtime-manifest.json/tmp/corresponding-source.tar.gz/tmp/release-manifest.json/tmp/checksums.txt;do'),
     '版本清单必须与其它资产一起登记进 checksums.txt',
   )
   assert.ok(
-    compact.includes('--expectapp-release.apk,rootfs.bundle,runtime-manifest.json,release-manifest.json'),
+    compact.includes('--expectapp-release.apk,rootfs.bundle,runtime-manifest.json,corresponding-source.tar.gz,release-manifest.json'),
     '发布后复核的资产集合必须包含 release-manifest.json',
   )
 
@@ -1184,6 +1184,7 @@ test('the published version manifest is written before the checksums and shipped
     '--apk"$APK"',
     '--bundle/tmp/runtime/rootfs.bundle',
     '--runtime-manifest/tmp/runtime/runtime-manifest.json',
+    '--corresponding-source/tmp/corresponding-source.tar.gz',
     '--out/tmp/release-manifest.json',
   ]) {
     assert.ok(compact.includes(fragment), `发布作业没有按约定调用版本清单生成器：${fragment}`)

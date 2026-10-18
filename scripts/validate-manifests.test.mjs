@@ -376,6 +376,7 @@ test('发布清单：真跑 release-manifest.py 产出的清单必须通过 sche
   await writeFile(join(dir, 'app-release.apk'), 'apk-bytes')
   await writeFile(join(dir, 'rootfs.bundle'), 'bundle-bytes')
   await writeFile(join(dir, 'runtime-manifest.json'), JSON.stringify(realRuntimeManifest()))
+  await writeFile(join(dir, 'corresponding-source.tar.gz'), 'source-bytes')
   const out = join(dir, 'release-manifest.json')
 
   const result = spawnSync(
@@ -389,6 +390,7 @@ test('发布清单：真跑 release-manifest.py 产出的清单必须通过 sche
       '--apk', join(dir, 'app-release.apk'),
       '--bundle', join(dir, 'rootfs.bundle'),
       '--runtime-manifest', join(dir, 'runtime-manifest.json'),
+      '--corresponding-source', join(dir, 'corresponding-source.tar.gz'),
       '--out', out,
     ],
     { cwd: appRoot, encoding: 'utf8', timeout: 30_000, windowsHide: true },
@@ -405,7 +407,7 @@ test('发布清单：真跑 release-manifest.py 产出的清单必须通过 sche
     'assets',
   ])
   assert.equal(manifest.commit, '1b64abc0d5c2f0d1d0a3b4c5d6e7f8091a2b3c4d', '提交号应被转成小写')
-  assert.equal(manifest.assets.length, 3)
+  assert.equal(manifest.assets.length, 4)
   assert.deepEqual(validateManifest(manifest, releaseManifestSchema()), [], '真实生成器的产物必须通过 schema')
 })
 
@@ -421,6 +423,7 @@ test('发布清单坏样本：发布类型、提交号、资产数量与字段�
       { name: 'app-release.apk', sha256: 'a'.repeat(64), bytes: 1 },
       { name: 'rootfs.bundle', sha256: 'b'.repeat(64), bytes: 2 },
       { name: 'runtime-manifest.json', sha256: 'c'.repeat(64), bytes: 3 },
+      { name: 'corresponding-source.tar.gz', sha256: 'd'.repeat(64), bytes: 4 },
     ],
   }
   assert.deepEqual(validateManifest(good, schema), [])
@@ -445,8 +448,8 @@ test('发布清单坏样本：发布类型、提交号、资产数量与字段�
   twoAssets.assets.pop()
   assertReports(
     validateManifest(twoAssets, schema),
-    /\$\.assets：数组长度 2 小于最小长度 3/,
-    '资产少了 runtime-manifest.json',
+    /\$\.assets：数组长度 3 小于最小长度 4/,
+    '资产少了对应源码归档',
   )
 
   const badAssetField = structuredClone(good)

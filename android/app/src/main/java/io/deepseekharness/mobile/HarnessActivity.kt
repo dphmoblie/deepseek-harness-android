@@ -90,6 +90,12 @@ class HarnessActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // 运行时停止或自动重启会撤销上一周期的授权。此 Activity 可能仍在任务栈里，
+        // 不能让它继续展示或使用旧的 WebView 凭据；管理页重新打开 Harness 时会重新绑定。
+        if (::webView.isInitialized && !AppAuthenticationState.ownsHarnessAccess(authenticationOwner)) {
+            finish()
+            return
+        }
         // 控制台也是一个窗口：主题在 Web 侧改过、或系统深色模式在后台切换过之后，
         // 回到前台都要按已保存的模式重算状态栏，否则它会与页面配色不一致。
         applyNativeChrome()
@@ -285,7 +291,9 @@ class HarnessActivity : AppCompatActivity() {
         pageRetryHandler.removeCallbacksAndMessages(null)
         val revoked = !isChangingConfigurations && !rendererRecovery &&
             AppAuthenticationState.revokeHarness(authenticationOwner)
-        if (::allowedOrigin.isInitialized && revoked) {
+        val authWasInvalidated = !AppAuthenticationState.isHarnessAuthenticated()
+        if (::allowedOrigin.isInitialized && !isChangingConfigurations && !rendererRecovery &&
+            (revoked || authWasInvalidated)) {
             // 清除注入的鉴权 Cookie：token 每次启动重新生成，旧值无意义。
             val cookieManager = CookieManager.getInstance()
             cookieManager.setCookie(

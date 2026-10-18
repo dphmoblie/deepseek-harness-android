@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "发布清单 release-manifest.json",
-  "description": "发布清单。生成侧：scripts/release-manifest.py 的 build_manifest()（第 62-82 行），在 publish-release 作业里于 checksums.txt 之前生成、随后随 Release 一起上传。消费侧：用户与排查者（以及 scripts/verify-release-assets.py 的复核清单）用它把线上包对应回源码提交，不依赖解压 300MB 的 APK。这里校验的是「脚本产出的形状」，样本由 scripts/validate-manifests.test.mjs 真跑该脚本生成（脚本本身既有行为不改）。",
+  "description": "发布清单。生成侧：scripts/release-manifest.py 的 build_manifest()，在 publish-release 作业里于 checksums.txt 之前生成、随后随 Release 一起上传。清单登记 APK、rootfs、runtime manifest 和对应源码归档的摘要与字节数。",
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "appVersion", "releaseTag", "releaseType", "commit", "assets"],
@@ -31,9 +31,9 @@
     },
     "assets": {
       "type": "array",
-      "minItems": 3,
-      "maxItems": 3,
-      "description": "随发布上传的三个资产：APK、rootfs.bundle、runtime-manifest.json。多一个少一个都说明发布脚本或上传清单被改过。",
+      "minItems": 4,
+      "maxItems": 4,
+      "description": "随发布上传的四个构建资产：APK、rootfs.bundle、runtime-manifest.json 和对应源码归档。多一个少一个都说明发布脚本或上传清单被改过。",
       "items": {
         "type": "object",
         "additionalProperties": false,

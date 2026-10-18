@@ -14,14 +14,18 @@ const python = process.platform === 'win32' ? 'python' : 'python3'
 
 const sha256 = content => createHash('sha256').update(content).digest('hex')
 
-// 一份「正常发布」的字节：三个资产 + 清单。
+// 一份「正常发布」的字节：四个构建资产 + 清单。
 const APK = 'apk-bytes'
 const BUNDLE = 'bundle-bytes'
 const MANIFEST = '{"rootfs":{"sha256":"x"}}'
-const EXPECT = 'app-release.apk,rootfs.bundle,runtime-manifest.json'
+const SOURCE = 'corresponding source bytes'
+const EXPECT = 'app-release.apk,rootfs.bundle,runtime-manifest.json,corresponding-source.tar.gz'
 
 function checksumLines(pairs) {
-  return pairs.map(([name, content]) => `${sha256(content)}  ${name}`).join('\n') + '\n'
+  const complete = pairs.some(([name]) => name === 'corresponding-source.tar.gz')
+    ? pairs
+    : [...pairs, ['corresponding-source.tar.gz', SOURCE]]
+  return complete.map(([name, content]) => `${sha256(content)}  ${name}`).join('\n') + '\n'
 }
 
 async function fixture(t, files) {
@@ -47,10 +51,12 @@ const happy = {
   'app-release.apk': APK,
   'rootfs.bundle': BUNDLE,
   'runtime-manifest.json': MANIFEST,
+  'corresponding-source.tar.gz': SOURCE,
   'checksums.txt': checksumLines([
     ['app-release.apk', APK],
     ['rootfs.bundle', BUNDLE],
     ['runtime-manifest.json', MANIFEST],
+    ['corresponding-source.tar.gz', SOURCE],
   ]),
 }
 
@@ -59,7 +65,7 @@ test('accepts a release whose assets match checksums.txt', async t => {
   const result = run(dir, ['--expect', EXPECT])
   assert.ifError(result.error)
   assert.equal(result.status, 0, result.stderr)
-  assert.match(result.stdout, /RELEASE_ASSETS_OK: files=3 bytes=\d+ checksums=checksums\.txt/u)
+  assert.match(result.stdout, /RELEASE_ASSETS_OK: files=4 bytes=\d+ checksums=checksums\.txt/u)
 })
 
 test('rejects a truncated asset whose digest no longer matches the manifest', async t => {
@@ -126,6 +132,7 @@ test('rejects a release whose manifest omits a required asset', async t => {
   const dir = await fixture(t, {
     'app-release.apk': APK,
     'rootfs.bundle': BUNDLE,
+    'corresponding-source.tar.gz': SOURCE,
     'checksums.txt': checksumLines([
       ['app-release.apk', APK],
       ['rootfs.bundle', BUNDLE],

@@ -627,9 +627,19 @@ class OverlayBallService : Service() {
             setPadding(dp(16), 0, 0, 0)
         }, LinearLayout.LayoutParams(0, dp(56), 1f))
         header.addView(conversationAction(R.string.overlay_conversation_expand) {
-            if (access != null) AppAuthenticationState.authorizeHarnessLaunch(access)
+            // 小窗可能跨越 Harness 的停止/自动重启而继续存在；这里不能重放 showConversation
+            // 捕获的旧 access，否则通知或悬浮球会把已失效的 Basic Auth 重新授权给入口页。
             detachConversation()
-            openHarness()
+            Thread({
+                val currentAccess = RuntimeHost.controllerOrNull()?.let { controller ->
+                    runCatching { controller.authorizeHarnessAccess() }.getOrNull()
+                }
+                Handler(Looper.getMainLooper()).post {
+                    if (activeService !== this) return@post
+                    if (currentAccess == null) AppAuthenticationState.revokeHarness()
+                    openHarness()
+                }
+            }, "dsh-overlay-expand").start()
         })
         header.addView(conversationAction(R.string.overlay_conversation_close) { detachConversation() })
         frame.addView(header)
