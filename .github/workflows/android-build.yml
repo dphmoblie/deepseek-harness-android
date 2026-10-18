@@ -277,7 +277,8 @@ jobs:
             -cf /tmp/proot-source.tar -C proot-source upstream
           gzip -n -c /tmp/proot-source.tar > proot-corresponding-source.tar.gz
           test -s proot-corresponding-source.tar.gz
-          tar -tzf proot-corresponding-source.tar.gz | grep -qx 'upstream/operit2-source.tar.gz'
+          # 不用 grep -q：pipefail 下提前关闭管道会让 tar 收到 SIGPIPE。
+          tar -tzf proot-corresponding-source.tar.gz | grep -x 'upstream/operit2-source.tar.gz' >/dev/null
 
       - name: Upload runners
         uses: actions/upload-artifact@v4
@@ -447,12 +448,21 @@ jobs:
           sudo apt-get "${APT_OPTS[@]}" update -qq
           GIT_VERSION="$(dpkg-query -W -f='${Version}' git)"
           test -n "$GIT_VERSION"
-          (cd /tmp/git-source/files && apt-get "${APT_OPTS[@]}" source --download-only "git=${GIT_VERSION}")
+          # PPA 构建的 git 版本有时没有同步到 Ubuntu 的 deb-src 索引；优先取
+          # 精确版本，缺失时退回同发行版候选源码，并把实际请求写入说明，
+          # 避免源码归档步骤因 runner 的二进制来源差异而阻塞整个发布。
+          if ! (cd /tmp/git-source/files && apt-get "${APT_OPTS[@]}" source --download-only "git=${GIT_VERSION}"); then
+            rm -f /tmp/git-source/files/*
+            (cd /tmp/git-source/files && apt-get "${APT_OPTS[@]}" source --download-only git)
+            SOURCE_REQUEST='git (repository source version; exact installed PPA version unavailable)'
+          else
+            SOURCE_REQUEST="git=${GIT_VERSION}"
+          fi
           test -n "$(find /tmp/git-source/files -maxdepth 1 -type f -name '*.dsc' -print -quit)"
           test -n "$(find /tmp/git-source/files -maxdepth 1 -type f \( -name '*.orig.tar.*' -o -name '*.debian.tar.*' \) -print -quit)"
           dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' \
             $(tr '\n' ' ' < /tmp/network-tools-packages.txt) > /tmp/git-source/package-versions.txt
-          printf '%s\n' "git=${GIT_VERSION}" > /tmp/git-source/README.txt
+          printf '%s\n' "installed=${GIT_VERSION}" "source=${SOURCE_REQUEST}" > /tmp/git-source/README.txt
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
             -cf /tmp/git-source.tar -C /tmp/git-source files package-versions.txt README.txt
           gzip -n -c /tmp/git-source.tar > ubuntu-git-corresponding-source.tar.gz
