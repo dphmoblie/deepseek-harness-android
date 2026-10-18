@@ -14,6 +14,7 @@
     --commit <提交号> --apk /tmp/apk/app-release.apk \
     --bundle /tmp/runtime/rootfs.bundle \
     --runtime-manifest /tmp/runtime/runtime-manifest.json \
+    --corresponding-source /tmp/corresponding-source.tar.gz \
     --out /tmp/release-manifest.json
 """
 
@@ -73,6 +74,7 @@ def build_manifest(
     apk: Path,
     bundle: Path,
     runtime_manifest: Path,
+    corresponding_source: Path,
 ) -> dict[str, object]:
     return {
         "schemaVersion": SCHEMA_VERSION,
@@ -84,6 +86,7 @@ def build_manifest(
             asset_entry(apk),
             asset_entry(bundle),
             asset_entry(runtime_manifest),
+            asset_entry(corresponding_source),
         ],
     }
 
@@ -97,6 +100,7 @@ def main() -> int:
     parser.add_argument("--apk", required=True, help="APK 路径")
     parser.add_argument("--bundle", required=True, help="rootfs.bundle 路径")
     parser.add_argument("--runtime-manifest", required=True, help="runtime-manifest.json 路径")
+    parser.add_argument("--corresponding-source", required=True, help="对应源码归档路径")
     parser.add_argument("--out", required=True, help="清单输出路径")
     args = parser.parse_args()
 
@@ -118,6 +122,7 @@ def main() -> int:
         apk=Path(args.apk),
         bundle=Path(args.bundle),
         runtime_manifest=Path(args.runtime_manifest),
+        corresponding_source=Path(args.corresponding_source),
     )
 
     out = Path(args.out)

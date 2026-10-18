@@ -48,7 +48,8 @@ or otherwise distributing them.
   `.bak` file, another rootfs archive, or another generated manifest. Record
   the embedded APK byte size and investigate any unexpected increase.
 - Confirm the published Release contains exactly the intended APK,
-  `rootfs.bundle`, and `runtime-manifest.json`, and that its notes identify the
+  `rootfs.bundle`, `runtime-manifest.json`, and
+  `corresponding-source.tar.gz`, and that its notes identify the
   embedded offline install and optional remote resume behavior without asking
   users to configure a manifest manually.
 - Interrupt a remote rootfs transfer, restart the app, and verify the matching
@@ -170,13 +171,14 @@ or otherwise distributing them.
   （`ubuntu-24.04`、`ubuntu-24.04-arm`），不允许 `ubuntu-latest` 这类浮动标签。
 - **公开前复核草稿资产**：`publish-release` 先创建草稿并立即记录本次 Release ID，上传完成后把资产重新下载回来，
   由 `scripts/verify-release-assets.py` 按 `checksums.txt` 逐项核对 SHA-256 与文件
-  集合（`--expect app-release.apk,rootfs.bundle,runtime-manifest.json,release-manifest.json`
+  集合（`--expect app-release.apk,rootfs.bundle,runtime-manifest.json,corresponding-source.tar.gz,release-manifest.json`
   保证既不缺件也不多件）。上传被截断、多传一份 bundle、漏传清单都会在这里失败；该脚本自己的
   夹具测试在 `scripts/verify-release-assets.test.mjs`。只有复核成功后才将草稿公开；
   执行顺序与上传中断等失败路径由 `scripts/release-lifecycle.test.mjs` 执行工作流脚本验证。
 - **版本清单随包发布**：`scripts/release-manifest.py` 在 checksums 之前生成
   `/tmp/release-manifest.json`（`schemaVersion`、应用版本、发布标签与类型、提交号，
-  以及 APK / rootfs.bundle / runtime-manifest.json 三者的 SHA-256 与字节数）。
+  以及 APK / rootfs.bundle / runtime-manifest.json / corresponding-source.tar.gz
+  四者的 SHA-256 与字节数）。
   它自己也要被 `checksums.txt` 登记并一起上传，这样用户和排查者不解压 300MB 的 APK
   就能把线上包对应到源码提交。夹具测试真跑这个脚本：`scripts/release-manifest.test.mjs`。
 

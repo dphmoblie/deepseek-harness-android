@@ -4,6 +4,7 @@ import android.content.Context
 import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
+import io.deepseekharness.mobile.AppAuthenticationState
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import java.io.File
@@ -398,7 +399,31 @@ class RuntimeSupervisor(
         harnessAccess ?: throw RuntimeFailure("HARNESS_AUTH_UNAVAILABLE", "Harness 临时凭据不可用")
     }
 
+    /**
+     * 读取并发布当前运行周期的访问凭据，发布也必须在同一把锁内完成。
+     *
+     * 退出观察线程会在这把锁内撤销旧周期的授权；如果先在锁内读取、再在锁外发布，
+     * 观察线程就能插入并清理后让旧凭据重新成为全局有效凭据。
+     */
+    fun authorizeAccess(
+        expected: HarnessAccess? = null,
+        stillValid: () -> Boolean = { true },
+    ): HarnessAccess = synchronized(lock) {
+        val current = access()
+        if (expected != null && expected != current) {
+            throw RuntimeFailure("HARNESS_AUTH_CHANGED", "Harness 运行周期已改变")
+        }
+        if (!stillValid()) {
+            throw RuntimeFailure("HARNESS_OPEN_CANCELLED", "打开请求已取消")
+        }
+        AppAuthenticationState.authorizeHarnessLaunch(current)
+        current
+    }
+
     private fun clearHarnessState() {
+        // Harness 临时 Basic Auth 与进程周期绑定。停止、自动重启、异常退出和释放运行时
+        // 都经过这里；先撤销 App 侧入口授权，避免通知或悬浮球继续重放上一周期的 access。
+        AppAuthenticationState.revokeHarness()
         harnessProcess = null
         // 关闭前留存最后一次输出：进程自行退出或启动失败时，错误码之外的唯一线索就在这里，
         // 而 close() 会清空缓冲区，错过这一次就再也读不到了。

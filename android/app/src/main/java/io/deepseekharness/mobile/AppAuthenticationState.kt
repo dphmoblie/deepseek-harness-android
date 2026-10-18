@@ -22,6 +22,14 @@ internal object AppAuthenticationState {
         harnessOwner = null
     }
 
+    /** 仅撤销仍属于指定运行周期的授权，避免失败的旧打开请求清掉新周期凭据。 */
+    @Synchronized
+    fun revokeHarness(access: HarnessAccess): Boolean {
+        if (!harnessAuthenticated.get() || harnessAccess != access) return false
+        revokeHarness()
+        return true
+    }
+
     @Synchronized
     fun claimHarnessAccess(owner: Any, access: HarnessAccess): Boolean {
         if (!harnessAuthenticated.get() || harnessAccess != access) return false

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { beforeEachAppTest, bridge } from './__tests__/appTestHarness'
+import { beforeEachAppTest, bridge, shizuku } from './__tests__/appTestHarness'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
 vi.mock('./components/TerminalPanel', () => ({
@@ -70,6 +70,19 @@ describe('设置首页：分组与分类筛选', () => {
     expect(screen.queryByRole('region', { name: '插件扩展' })).toBeNull()
     expect(within(directory as HTMLElement).queryByRole('button', { name: /插件管理/ })).toBeNull()
     expect(screen.getByRole('region', { name: '后台' })).toBeVisible()
+  })
+
+  it.each([
+    { badge: '未安装', state: { ...shizuku, installed: false, running: false } },
+    { badge: '待授权', state: { ...shizuku } },
+    { badge: '已授权', state: { ...shizuku, permission: 'granted' } },
+    { badge: '已连接', state: { ...shizuku, permission: 'granted', connected: true } },
+  ])('设备 Shell 设置入口显示 Shizuku 状态：$badge', async ({ badge, state }) => {
+    bridge.getShizukuState.mockResolvedValue(state)
+    await openSettingsHome()
+
+    const entry = screen.getByRole('button', { name: /设备 Shell 设置/ })
+    expect(within(entry).getByText(`Shizuku 授权与 AI Shell · ${badge}`)).toBeVisible()
   })
 
   it('分类筛选只留这一类，并且点进去到对应设置', async () => {

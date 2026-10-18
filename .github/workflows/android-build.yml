@@ -22,7 +22,7 @@ env:
   # 应用版本号：与 android/app/build.gradle 的 versionName 保持一致。
   # CI 据此生成运行时版本与 Release 标签：预发布走 v<版本>-mobile-<run_number>，
   # 正式版（release_type=stable）直接用 v<版本>；发布说明取自 docs/发布说明-<版本>.md（各版本改了什么写在那边，这里不重复）。
-  APP_VERSION: '0.2.14'
+  APP_VERSION: '0.3.0'
 
 jobs:
   build:
@@ -264,11 +264,33 @@ jobs:
           cp operit2/apps/flutter/app/android/app/src/main/jniLibs/arm64-v8a/liboperit_loader.so runners/libdsh_proot_loader.so
           sha256sum runners/*
 
+      - name: Package PRoot corresponding source
+        run: |
+          set -euo pipefail
+          rm -rf proot-source /tmp/operit2-source.tar
+          mkdir -p proot-source/upstream
+          git -C operit2 archive --format=tar --prefix=operit2/ \
+            dc4c3a9405dc7ed3ef69b2ac9a6ace65374d77cf \
+            | gzip -n > proot-source/upstream/operit2-source.tar.gz
+          cp operit2/tools/android-runtime/downloads/*.tar.* proot-source/upstream/
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -cf /tmp/proot-source.tar -C proot-source upstream
+          gzip -n -c /tmp/proot-source.tar > proot-corresponding-source.tar.gz
+          test -s proot-corresponding-source.tar.gz
+          tar -tzf proot-corresponding-source.tar.gz | grep -qx 'upstream/operit2-source.tar.gz'
+
       - name: Upload runners
         uses: actions/upload-artifact@v4
         with:
           name: proot-runners-arm64
           path: runners/*.so
+          if-no-files-found: error
+
+      - name: Upload PRoot corresponding source
+        uses: actions/upload-artifact@v4
+        with:
+          name: proot-corresponding-source
+          path: proot-corresponding-source.tar.gz
           if-no-files-found: error
 
   build-rootfs:
@@ -394,6 +416,48 @@ jobs:
           path: android/app/src/main/assets/legal/ubuntu-packages/
           if-no-files-found: error
 
+      - name: Package Ubuntu git corresponding source
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/git-source /tmp/ubuntu-sourceparts /tmp/ubuntu-deb-src.list /tmp/ubuntu-empty-sources.list /tmp/ubuntu-empty-sourceparts /tmp/git-source.tar
+          mkdir -p /tmp/git-source/files
+          # Ubuntu runner images normally use deb822 sources. Enable deb-src only
+          # through a temporary list so the host image is not mutated.
+          found=0
+          mkdir -p /tmp/ubuntu-sourceparts /tmp/ubuntu-empty-sourceparts
+          : > /tmp/ubuntu-empty-sources.list
+          source_index=0
+          for source_file in /etc/apt/sources.list.d/*.sources; do
+            [ -f "$source_file" ] || continue
+            source_index=$((source_index + 1))
+            awk '/^Types: deb$/ { print "Types: deb deb-src"; next } { print }' \
+              "$source_file" > "/tmp/ubuntu-sourceparts/ubuntu-${source_index}.sources"
+            found=1
+          done
+          if [ "$found" = 0 ] && [ -f /etc/apt/sources.list ]; then
+            sed -E 's/^deb /deb-src /' /etc/apt/sources.list > /tmp/ubuntu-deb-src.list
+          fi
+          if [ "$found" = 1 ]; then
+            test -n "$(find /tmp/ubuntu-sourceparts -type f -size +0c -print -quit)"
+            APT_OPTS=(-o Dir::Etc::sourcelist=/tmp/ubuntu-empty-sources.list -o Dir::Etc::sourceparts=/tmp/ubuntu-sourceparts)
+          else
+            test -s /tmp/ubuntu-deb-src.list
+            APT_OPTS=(-o Dir::Etc::sourcelist=/tmp/ubuntu-deb-src.list -o Dir::Etc::sourceparts=/tmp/ubuntu-empty-sourceparts)
+          fi
+          sudo apt-get "${APT_OPTS[@]}" update -qq
+          GIT_VERSION="$(dpkg-query -W -f='${Version}' git)"
+          test -n "$GIT_VERSION"
+          (cd /tmp/git-source/files && apt-get "${APT_OPTS[@]}" source --download-only "git=${GIT_VERSION}")
+          test -n "$(find /tmp/git-source/files -maxdepth 1 -type f -name '*.dsc' -print -quit)"
+          test -n "$(find /tmp/git-source/files -maxdepth 1 -type f \( -name '*.orig.tar.*' -o -name '*.debian.tar.*' \) -print -quit)"
+          dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' \
+            $(tr '\n' ' ' < /tmp/network-tools-packages.txt) > /tmp/git-source/package-versions.txt
+          printf '%s\n' "git=${GIT_VERSION}" > /tmp/git-source/README.txt
+          tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+            -cf /tmp/git-source.tar -C /tmp/git-source files package-versions.txt README.txt
+          gzip -n -c /tmp/git-source.tar > ubuntu-git-corresponding-source.tar.gz
+          test -s ubuntu-git-corresponding-source.tar.gz
+
       - name: Build bundle + manifest (mobile profile)
         run: |
           set -o pipefail
@@ -482,6 +546,13 @@ jobs:
             runtime-artifacts/runtime-manifest.json
           if-no-files-found: error
 
+      - name: Upload Ubuntu git corresponding source
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-git-corresponding-source
+          path: ubuntu-git-corresponding-source.tar.gz
+          if-no-files-found: error
+
   publish-release:
     name: Publish release (APK + rootfs bundle + manifest)
     # gates（空白 / Android 资源 / 清单 schema / gitleaks）必须挡在发布之前：
@@ -514,6 +585,18 @@ jobs:
           name: embedded-runtime
           path: /tmp/runtime
 
+      - name: Download corresponding source materials
+        uses: actions/download-artifact@v4
+        with:
+          name: proot-corresponding-source
+          path: /tmp/proot-source
+
+      - name: Download Ubuntu git source materials
+        uses: actions/download-artifact@v4
+        with:
+          name: ubuntu-git-corresponding-source
+          path: /tmp/git-source
+
       - name: Create draft release with assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -540,6 +623,34 @@ jobs:
             test -n "$APK"
             test -f /tmp/runtime/rootfs.bundle
             test -f /tmp/runtime/runtime-manifest.json
+            test -s /tmp/proot-source/proot-corresponding-source.tar.gz
+            test -s /tmp/git-source/ubuntu-git-corresponding-source.tar.gz
+            SOURCE_DIR="$(mktemp -d)"
+            trap 'rm -rf "$SOURCE_DIR" /tmp/corresponding-source.tar' EXIT
+            cp /tmp/proot-source/proot-corresponding-source.tar.gz "$SOURCE_DIR/"
+            cp /tmp/git-source/ubuntu-git-corresponding-source.tar.gz "$SOURCE_DIR/"
+            git archive --format=tar --prefix=build-and-install-materials/ HEAD \
+              -- scripts .github/workflows/android-build.yml LICENSE THIRD_PARTY_NOTICES.md README.md \
+              | gzip -n > "$SOURCE_DIR/build-and-install-materials.tar.gz"
+            test -s "$SOURCE_DIR/build-and-install-materials.tar.gz"
+            printf '%s\n' \
+              "# Corresponding source for ${TAG}" \
+              '' \
+              'This archive is the complete, no-charge corresponding source and build' \
+              'material for the GPL/AGPL-covered PRoot and Operit runtime files and the' \
+              'Ubuntu git package conveyed by this release. It includes the pinned' \
+              'source archives, Debian source package, patches, and self-contained' \
+              'build/install scripts and CI inputs.' \
+              'Retrieve this file from the assets of the same GitHub Release tag and' \
+              'preserve its SHA-256 from release-manifest.json/checksums.txt.' \
+              > "$SOURCE_DIR/OFFER.md"
+            python3 scripts/create-corresponding-source-manifest.py \
+              --dir "$SOURCE_DIR" --out "$SOURCE_DIR/SOURCE_MANIFEST.json"
+            tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
+              -cf /tmp/corresponding-source.tar -C "$SOURCE_DIR" \
+              SOURCE_MANIFEST.json OFFER.md proot-corresponding-source.tar.gz ubuntu-git-corresponding-source.tar.gz build-and-install-materials.tar.gz
+            gzip -n -c /tmp/corresponding-source.tar > /tmp/corresponding-source.tar.gz
+            python3 scripts/verify-corresponding-source.py --archive /tmp/corresponding-source.tar.gz
             MANIFEST_SHA="$(sha256sum /tmp/runtime/runtime-manifest.json | cut -d' ' -f1)"
             # 变更内容：上一个发布标签到本次提交的合并提交列表。
             # 每次升版本号都必须能说清"这一版更新了什么"，因此这里由 CI 自动生成，
@@ -571,35 +682,26 @@ jobs:
               --apk "$APK" \
               --bundle /tmp/runtime/rootfs.bundle \
               --runtime-manifest /tmp/runtime/runtime-manifest.json \
+              --corresponding-source /tmp/corresponding-source.tar.gz \
               --out /tmp/release-manifest.json
-            for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json /tmp/release-manifest.json; do
+            for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json /tmp/corresponding-source.tar.gz /tmp/release-manifest.json; do
               printf '%s  %s\n' "$(sha256sum "$f" | cut -d' ' -f1)" "$(basename "$f")"
             done > /tmp/checksums.txt
-            cat > /tmp/notes.md <<EOF
-          # ${NAME}
-
-          ## 变更内容
-
-          ${CHANGES_HEADER}
-
-          ${CHANGES}
-
-          ## 安装与配置
-
-          1. 安装 $(basename "$APK")（离线 APK，已内置 PRoot 运行器 + Ubuntu rootfs）。
-          2. 首次打开后点「安装并进入对话」；rootfs 从 APK 内置资产解压，无需联网下载。
-          3. 断网也能安装；若提示「未内置运行时」请确认下载的是本 Release 的 APK。
-
-          ## 资产
-
-          - $(basename "$APK")（APK，含 PRoot 运行器）
-          - rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.2.1-rc.1 + 官方 Harness 前端 Android 适配）
-          - runtime-manifest.json
-          - release-manifest.json（版本、标签、提交与各资产摘要/字节数的机器可读清单）
-          - checksums.txt（以上四项资产的 SHA-256）
-
-          runtime-manifest.json SHA-256：${MANIFEST_SHA}
-          EOF
+            {
+              printf '%s\n' "# ${NAME}" '' '## 变更内容' '' "${CHANGES_HEADER}" ''
+              printf '%s\n' "${CHANGES}"
+              printf '%s\n' '' '## 安装与配置' '' \
+                "1. 安装 $(basename "$APK")（离线 APK，已内置 PRoot 运行器 + Ubuntu rootfs）。" \
+                '2. 首次打开后点「安装并进入对话」；rootfs 从 APK 内置资产解压，无需联网下载。' \
+                '3. 断网也能安装；若提示「未内置运行时」请确认下载的是本 Release 的 APK。' '' '## 资产' \
+                "- $(basename "$APK")（APK，含 PRoot 运行器）" \
+                '- rootfs.bundle（Ubuntu 24.04 ARM64 + Node 24.19 + dsh 0.2.1-rc.1 + 官方 Harness 前端 Android 适配）' \
+                '- runtime-manifest.json' \
+                '- corresponding-source.tar.gz（PRoot/Operit 与 Ubuntu git 的对应源码及构建材料）' \
+                '- release-manifest.json（版本、标签、提交与各资产摘要/字节数的机器可读清单）' \
+                '- checksums.txt（以上五项资产的 SHA-256）' '' \
+                "runtime-manifest.json SHA-256：${MANIFEST_SHA}"
+            } > /tmp/notes.md
             # 将随源码评审的版本说明一起发布，保留实验状态、升级注意与验证范围。
             VERSION_NOTES="docs/发布说明-${APP_VERSION}.md"
             if [ -f "$VERSION_NOTES" ]; then
@@ -619,7 +721,7 @@ jobs:
               echo "RELEASE_ID=${RELEASE_ID}"
             } >> "$GITHUB_ENV"
             UPLOAD_BASE="https://uploads.github.com/repos/${{ github.repository }}/releases/${RELEASE_ID}/assets"
-            for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json /tmp/release-manifest.json /tmp/checksums.txt; do
+            for f in "$APK" /tmp/runtime/rootfs.bundle /tmp/runtime/runtime-manifest.json /tmp/corresponding-source.tar.gz /tmp/release-manifest.json /tmp/checksums.txt; do
               name="$(basename "$f")"
               curl -sS -f -X POST \
                 -H "Authorization: Bearer $GH_TOKEN" \
@@ -649,7 +751,9 @@ jobs:
           ls -la "${VERIFY_DIR}"
           python3 scripts/verify-release-assets.py \
             --dir "${VERIFY_DIR}" \
-            --expect app-release.apk,rootfs.bundle,runtime-manifest.json,release-manifest.json
+            --expect app-release.apk,rootfs.bundle,runtime-manifest.json,corresponding-source.tar.gz,release-manifest.json
+          python3 scripts/verify-corresponding-source.py \
+            --archive "${VERIFY_DIR}/corresponding-source.tar.gz"
 
       - name: Publish verified release
         env:

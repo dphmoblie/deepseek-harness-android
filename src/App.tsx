@@ -1265,7 +1265,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
   /** 右侧状态徽标：与二级页里显示的是同一个事实，不在两处各写一遍。 */
   const badgeOf = (entry: SettingsHomeEntry): string => entry.id === 'runtime-page'
     ? (keepAlive.foregroundServiceActive ? t("后台保持中") : keepAlive.keepRuntimeInBackground ? t("已开启") : t("未开启"))
-    : entry.id === 'shizuku'
+    : entry.id === 'device-shell'
       ? (!shizuku.installed ? t("未安装") : shizuku.connected ? t("已连接") : shizuku.permission === 'granted' ? t("已授权") : t("待授权"))
       : entry.id === 'diagnostics'
         ? (diagnostic.enabled ? t("收集中") : t("未收集"))

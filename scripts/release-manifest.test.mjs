@@ -15,6 +15,7 @@ const python = process.platform === 'win32' ? 'python' : 'python3'
 const APK = 'apk-bytes'
 const BUNDLE = 'bundle-bytes'
 const MANIFEST = '{"rootfs":{"sha256":"x"}}'
+const SOURCE = 'corresponding-source-bytes'
 const COMMIT = '1b64abc0d5c2f0d1d0a3b4c5d6e7f8091a2b3c4d'
 
 const sha256 = content => createHash('sha256').update(content).digest('hex')
@@ -27,6 +28,7 @@ async function fixture(t, files = {}) {
     'app-release.apk': APK,
     'rootfs.bundle': BUNDLE,
     'runtime-manifest.json': MANIFEST,
+    'corresponding-source.tar.gz': SOURCE,
     ...files,
   }
   for (const [name, content] of Object.entries(written)) {
@@ -49,6 +51,7 @@ function run(dir, extra = [], outName = 'release-manifest.json') {
       '--apk', join(dir, 'app-release.apk'),
       '--bundle', join(dir, 'rootfs.bundle'),
       '--runtime-manifest', join(dir, 'runtime-manifest.json'),
+      '--corresponding-source', join(dir, 'corresponding-source.tar.gz'),
       '--out', out,
       ...extra,
     ],
@@ -67,7 +70,7 @@ test('records the version, tag, commit and every asset digest', async t => {
   const dir = await fixture(t)
   const result = run(dir)
   assert.equal(result.status, 0, result.stderr)
-  assert.match(result.stdout, /RELEASE_MANIFEST_OK: assets=3/u)
+  assert.match(result.stdout, /RELEASE_MANIFEST_OK: assets=4/u)
 
   const manifest = JSON.parse(await readFile(result.out, 'utf8'))
   assert.equal(manifest.schemaVersion, 1)
@@ -77,11 +80,12 @@ test('records the version, tag, commit and every asset digest', async t => {
   assert.equal(manifest.commit, COMMIT)
   assert.deepEqual(
     manifest.assets.map(asset => asset.name),
-    ['app-release.apk', 'rootfs.bundle', 'runtime-manifest.json'],
+    ['app-release.apk', 'rootfs.bundle', 'runtime-manifest.json', 'corresponding-source.tar.gz'],
   )
   assert.deepEqual(manifest.assets[0], { name: 'app-release.apk', sha256: sha256(APK), bytes: APK.length })
   assert.deepEqual(manifest.assets[1], { name: 'rootfs.bundle', sha256: sha256(BUNDLE), bytes: BUNDLE.length })
   assert.deepEqual(manifest.assets[2], { name: 'runtime-manifest.json', sha256: sha256(MANIFEST), bytes: MANIFEST.length })
+  assert.deepEqual(manifest.assets[3], { name: 'corresponding-source.tar.gz', sha256: sha256(SOURCE), bytes: SOURCE.length })
   // 文件必须以换行结尾，避免下游工具把「无换行」当成截断。
   assert.ok((await readFile(result.out, 'utf8')).endsWith('\n'))
 })
@@ -137,6 +141,7 @@ test('creates the output directory when it does not exist yet', async t => {
       '--apk', join(dir, 'app-release.apk'),
       '--bundle', join(dir, 'rootfs.bundle'),
       '--runtime-manifest', join(dir, 'runtime-manifest.json'),
+      '--corresponding-source', join(dir, 'corresponding-source.tar.gz'),
       '--out', out,
     ],
     {

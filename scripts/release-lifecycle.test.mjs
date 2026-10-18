@@ -98,6 +98,19 @@ python3() {
     done
     return 94
   fi
+  if [[ "$1" = *create-corresponding-source-manifest.py ]]; then
+    shift
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = --out ]; then
+        shift; printf '{"schemaVersion":1,"assets":[]}' > "$1"; return 0
+      fi
+      shift
+    done
+    return 95
+  fi
+  if [[ "$1" = *verify-corresponding-source.py ]]; then
+    return 0
+  fi
   printf 'verify\n' >> "$DSH_RELEASE_EVENTS"
   if [ "$DSH_RELEASE_SCENARIO" = verify ]; then return 1; fi
 }
@@ -106,8 +119,15 @@ python3() {
 async function runLifecycle(t, scenario) {
   const dir = await mkdtemp(join(tmpdir(), 'dsh-release-lifecycle-'))
   t.after(() => rm(dir, { recursive: true, force: true }))
-  for (const folder of ['apk', 'runtime']) await mkdir(join(dir, folder))
-  for (const file of ['apk/app-release.apk', 'runtime/rootfs.bundle', 'runtime/runtime-manifest.json']) {
+  // Git Bash parses the workflow's POSIX paths. Keep the fixture path in that
+  // form too; a raw Windows `C:\\...` path is read by tar as a remote target.
+  const bashDir = dir.replace(/^([A-Za-z]):[\\/]/u, (_, drive) => `/${drive.toLowerCase()}/`).split('\\').join('/')
+  for (const folder of ['apk', 'runtime', 'proot-source', 'git-source']) await mkdir(join(dir, folder))
+  for (const file of [
+    'apk/app-release.apk', 'runtime/rootfs.bundle', 'runtime/runtime-manifest.json',
+    'proot-source/proot-corresponding-source.tar.gz',
+    'git-source/ubuntu-git-corresponding-source.tar.gz',
+  ]) {
     await writeFile(join(dir, file), 'fixture')
   }
   const eventsPath = join(dir, 'events')
@@ -119,8 +139,8 @@ async function runLifecycle(t, scenario) {
     ...process.env,
     APP_VERSION: '0.0.0', GH_TOKEN: '', GITHUB_SHA: 'a'.repeat(40),
     GITHUB_WORKSPACE: dir.replaceAll('\\', '/'), GITHUB_ENV: envPath.replaceAll('\\', '/'),
-    TMPDIR: dir.replaceAll('\\', '/'),
-    DSH_RELEASE_TEST_TMP: dir.replaceAll('\\', '/'),
+    TMPDIR: bashDir,
+    DSH_RELEASE_TEST_TMP: bashDir,
     DSH_RELEASE_EVENTS: eventsPath.replaceAll('\\', '/'),
     DSH_RELEASE_STATE: statePath.replaceAll('\\', '/'),
     DSH_RELEASE_SCENARIO: scenario,
@@ -132,8 +152,9 @@ async function runLifecycle(t, scenario) {
   const executed = []
   for (const step of steps) {
     if (step.onFailure !== failed) continue
-    const result = spawnSync(bash, ['--noprofile', '--norc', '-c', `${mocks}\n${step.script}`], {
+    const result = spawnSync(bash, ['--noprofile', '--norc'], {
       cwd: appRoot, env, encoding: 'utf8', timeout: 30_000, windowsHide: true,
+      input: `${mocks}\n${step.script}`,
     })
     assert.ifError(result.error)
     executed.push({ name: step.name, status: result.status, output: result.stdout + result.stderr })
@@ -156,6 +177,7 @@ test('release is public only after every draft upload, download and verification
   assert.deepEqual(result.events, [
     'create:{"draft":true}',
     'upload:app-release.apk', 'upload:rootfs.bundle', 'upload:runtime-manifest.json',
+    'upload:corresponding-source.tar.gz',
     'upload:release-manifest.json', 'upload:checksums.txt',
     'download', 'verify', 'patch:{"draft":false}',
   ])
