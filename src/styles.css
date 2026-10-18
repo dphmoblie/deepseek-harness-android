@@ -1608,6 +1608,86 @@ button:disabled {
 .settings-subsection [role='alert'] { color: var(--red-text, var(--red)); }
 
 /*
+ * 自动化设置的三组（副屏 / 参数与规则 / 无障碍）。
+ *
+ * 分组本身不再套一层卡片：组内的每个区块本来就是卡片，再套会把手机一屏挤得只剩边框。
+ * 组与组之间只用一条分隔线加留白区分，标题沿用 `.section-title` 的图标列，
+ * 因此组标题与区块标题在同一根轴线上。
+ */
+.settings-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  align-items: start;
+  gap: 14px;
+  min-width: 0;
+}
+.settings-group + .settings-group {
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+.settings-group > .section-title {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
+}
+/* 副屏那一组只有一个宽区块（取帧/方向/分辨率/跟随），分两栏只会空掉一半。 */
+.settings-group-single { grid-template-columns: minmax(0, 1fr); }
+
+/*
+ * 副屏组件嵌在分组里时不再套页面壳：`.screen` 自带页面内边距与页级标题，
+ * 放进分组会把卡片再缩一圈，并和分组标题抢层级。
+ */
+.virtual-screen-embedded {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.virtual-screen-embedded > .screen-heading {
+  margin-bottom: 0;
+  justify-content: flex-end;
+}
+.settings-group > .section-title h2 {
+  margin: 0;
+  font-size: 1.02rem;
+  letter-spacing: 0.01em;
+}
+
+/*
+ * 自动化设置的整页容器：`.settings-form` 是两列网格（`.settings-form` 的子项会被
+ * 自动排进左右两栏），这一页要的是「副屏 → 参数与规则 → 无障碍」的纵向顺序，
+ * 所以先跨两列占满，再由组自己决定组内怎么分栏。
+ */
+.settings-stack {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* 页内分组跳转：一行三颗，滚动很长时也能直接到组。 */
+.settings-group-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.settings-group-nav a {
+  padding: 6px 13px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+.settings-group-nav a:hover,
+.settings-group-nav a:focus-visible {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+/*
  * 一张卡片最多占两屏（`vh` 就是手机上看得见的那块）。
  *
  * 独立设置页里最长的几张卡会占很多屏幕空间，因此将卡片高度限制为两屏并在卡片内滚动。
