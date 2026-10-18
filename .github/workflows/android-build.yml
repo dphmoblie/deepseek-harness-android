@@ -489,7 +489,9 @@ jobs:
             PPA_SUITE="${VERSION_CODENAME:-noble}"
             PPA_KEYRING="$APT_WORK_ROOT/git-core-ppa.gpg"
             : > "$PPA_KEYRING"
-            for key in E363C90F8F1B6217 A1715D88E1DF1F24; do
+            # keyserver lookups accept the trailing key IDs, but gpg reports the
+            # complete primary-key fingerprints; pin and verify the latter.
+            for key in F911AB184317630C59970973E363C90F8F1B6217 E1DD270288B4E6030699E45FA1715D88E1DF1F24; do
               key_file="$APT_WORK_ROOT/ppa-${key}.asc"
               key_bin="$APT_WORK_ROOT/ppa-${key}.gpg"
               curl -fsSL --retry 3 --connect-timeout 20 \

@@ -85,6 +85,7 @@ async function runSourceStep(t, scenario = 'success') {
   await writeFile(packages, 'git\n')
   await writeFile(log, '')
   const workflow = (await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')).replaceAll('\r\n', '\n')
+  assert.match(workflow, /for key in F911AB184317630C59970973E363C90F8F1B6217 E1DD270288B4E6030699E45FA1715D88E1DF1F24;/u)
   const script = sourceStep(workflow)
   const result = spawnSync(bash, ['--noprofile', '--norc'], {
     cwd: dir,
