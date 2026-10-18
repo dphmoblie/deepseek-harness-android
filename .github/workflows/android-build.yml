@@ -471,13 +471,19 @@ jobs:
           IFS=$'\t' read -r GIT_SOURCE_PACKAGE GIT_SOURCE_VERSION <<< "$GIT_SOURCE_RECORD"
           test -n "$GIT_SOURCE_PACKAGE"
           test -n "$GIT_SOURCE_VERSION"
-          SOURCE_REQUEST="${GIT_SOURCE_PACKAGE}=${GIT_SOURCE_VERSION}"
+          # dpkg carries the Debian epoch on installed binaries (for example
+          # 1:2.55.0-0ppa1~ubuntu24.04.2), while the Sources index and .dsc
+          # identify the same source with the epoch omitted. Keep the exact
+          # source version, normalizing only this transport-level spelling.
+          SOURCE_VERSION="${GIT_SOURCE_VERSION#*:}"
+          test -n "$SOURCE_VERSION"
+          SOURCE_REQUEST="${GIT_SOURCE_PACKAGE}=${SOURCE_VERSION}"
           (cd "$GIT_SOURCE_ROOT/files" && apt-get "${APT_OPTS[@]}" source --download-only "$SOURCE_REQUEST")
           test -n "$(find "$GIT_SOURCE_ROOT/files" -maxdepth 1 -type f -name '*.dsc' -print -quit)"
           test -n "$(find "$GIT_SOURCE_ROOT/files" -maxdepth 1 -type f \( -name '*.orig.tar.*' -o -name '*.debian.tar.*' \) -print -quit)"
           dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' \
             $(tr '\n' ' ' < "$NETWORK_PACKAGES_FILE") > "$GIT_SOURCE_ROOT/package-versions.txt"
-          printf '%s\n' "source=${SOURCE_REQUEST}" > "$GIT_SOURCE_ROOT/README.txt"
+          printf '%s\n' "installed=${GIT_SOURCE_PACKAGE}=${GIT_SOURCE_VERSION}" "source=${SOURCE_REQUEST}" > "$GIT_SOURCE_ROOT/README.txt"
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
             -cf "$GIT_SOURCE_TAR" -C "$GIT_SOURCE_ROOT" files package-versions.txt README.txt
           gzip -n -c "$GIT_SOURCE_TAR" > "$GIT_SOURCE_ARCHIVE"

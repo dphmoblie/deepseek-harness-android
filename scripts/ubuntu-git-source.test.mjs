@@ -45,10 +45,10 @@ dpkg-query() {
       if test "x$DSH_APT_SCENARIO" = xmissing-version; then
         printf 'git\t\n'
       else
-        printf 'git\t2.55.0-0ppa1~ubuntu24.04.2\n'
+        printf 'git\t1:2.55.0-0ppa1~ubuntu24.04.2\n'
       fi
       ;;
-    *) printf 'git\t2.55.0-0ppa1~ubuntu24.04.2\tarm64\n' ;;
+    *) printf 'git\t1:2.55.0-0ppa1~ubuntu24.04.2\tarm64\n' ;;
   esac
 }
 `
