@@ -43,11 +43,13 @@ interface RuntimeScopedResource {
  *
  * 不变量：[controller] 要么指向可用的运行时，要么为 null；后台收尾开始前先摘除
  * 引用再清理，任何清理步骤抛错都不得留下「已关闭但仍被登记」的控制器——那样的句柄会让
- * 之后每一次启动都只得到 `RUNTIME_CLOSED`，界面无论重试多少次都无法恢复。
+ * 之后每一次启动都只得到 `RUNTIME_CLOSED`，界面无论重试多少次都无法恢复。收尾一旦开始，
+ * 在旧控制器完全关闭前禁止创建新实例；否则两个控制器会同时操作同一份 currentRoot、
+ * pid 文件与固定 Harness 端口，旧 shutdown 可能杀掉新进程。
  *
  * 线程模型：归属变更在 [lock] 内完成；可能阻塞的关停在单线程后台执行。关停开始前会
- * 先把控制器从可获取状态摘除，并以 [teardownPending] 拒绝同时创建第二个实例，避免
- * 旧实例收尾时误杀新实例或提前拆桥。
+ * 先把控制器从可获取状态摘除；收尾开始后 acquire 立即以受控错误返回，避免旧实例误杀
+ * 新实例或提前拆桥。调用方可在旧收尾完成后重试，且不会阻塞主线程等待进程退出。
  */
 object RuntimeHost {
     private val lock = ReentrantLock()
@@ -58,6 +60,8 @@ object RuntimeHost {
     private var controller: MobileRuntimeController? = null
     private var teardownPending = false
     private var teardownStarted = false
+    /** Monotonically invalidates a stale, not-yet-started teardown. */
+    private var teardownGeneration = 0L
     private var foregroundServiceActive = false
     private val sinks = CopyOnWriteArraySet<RuntimeEventSink>()
 
@@ -102,12 +106,14 @@ object RuntimeHost {
      */
     fun acquire(context: Context, sink: RuntimeEventSink): MobileRuntimeController = lock.withLock {
         if (teardownPending) {
-            // 在后台任务真正开始前，新页面可以取消一次尚未开始的收尾；一旦收尾已开始，
-            // 不能并发创建新控制器，否则旧控制器拆桥会误伤新实例。
+            // 只有后台任务尚未摘除控制器时才能取消收尾并复用旧实例。收尾一旦开始，
+            // 旧 controller.shutdown() 会操作同一份 currentRoot、pid 文件、端口与全局
+            // Harness 授权；这里必须非阻塞拒绝，不能并行创建新 controller。
             if (teardownStarted) {
                 throw RuntimeFailure("RUNTIME_CLOSING", "本机运行时正在关闭，请稍后重试")
+            } else {
+                teardownPending = false
             }
-            teardownPending = false
         }
         sinks.add(sink)
         controller ?: createLocked(context)
@@ -263,6 +269,7 @@ object RuntimeHost {
     private fun scheduleControllerTeardownLocked(): Boolean {
         if (controller == null || teardownPending) return false
         teardownPending = true
+        val generation = ++teardownGeneration
         teardownExecutor.execute {
             // 给 Activity 重建留出一个短暂的接管窗口；若新插件已 acquire，
             // teardownController 会看到 pending 已取消并保留原控制器。
@@ -271,17 +278,20 @@ object RuntimeHost {
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
             }
-            teardownController()
+            teardownController(generation)
         }
         return true
     }
 
-    private fun teardownController() {
+    private fun teardownController(generation: Long) {
         var current: MobileRuntimeController? = null
         var bridge: RuntimeScopedResource? = null
         lock.withLock {
-            if (!teardownPending || sinks.isNotEmpty() || foregroundServiceActive) {
-                teardownPending = false
+            if (generation != teardownGeneration || !teardownPending || sinks.isNotEmpty() || foregroundServiceActive) {
+                if (generation == teardownGeneration) {
+                    teardownPending = false
+                    teardownStarted = false
+                }
                 return
             }
             teardownStarted = true
@@ -308,8 +318,10 @@ object RuntimeHost {
                 // 进程级资源拆除失败不阻断运行时释放。
             }
             lock.withLock {
-                teardownPending = false
-                teardownStarted = false
+                if (generation == teardownGeneration) {
+                    teardownPending = false
+                    teardownStarted = false
+                }
             }
         }
     }

@@ -5,6 +5,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -12,6 +13,67 @@ import org.junit.Test
 
 /** 使用真实 Host 事件出口与生命周期锁固定交错；等待可中断，回归失败也不会遗留死锁线程。 */
 class RuntimeHostConcurrencyTest {
+    @Test
+    fun acquireCancelsTeardownBeforeWorkerStarts() {
+        val hostLock = field("lock") as ReentrantLock
+        val pending = declaredField("teardownPending")
+        val started = declaredField("teardownStarted")
+        val sink = RecordingSink()
+        val previousPending = pending.get(RuntimeHost)
+        val previousStarted = started.get(RuntimeHost)
+        hostLock.withLock {
+            pending.set(RuntimeHost, true)
+            started.set(RuntimeHost, false)
+        }
+        try {
+            // Controller construction may be unavailable on the pure JVM test runtime; the
+            // assertion is about the state transition that happens before that construction.
+            runCatching {
+                RuntimeHost.acquire(android.content.ContextWrapper(null), sink)
+            }
+            hostLock.withLock {
+                assertFalse("a not-yet-started teardown must be cancellable", pending.get(RuntimeHost) as Boolean)
+            }
+        } finally {
+            hostLock.withLock {
+                pending.set(RuntimeHost, previousPending)
+                started.set(RuntimeHost, previousStarted)
+                (field("sinks") as MutableSet<RuntimeEventSink>).remove(sink)
+            }
+        }
+    }
+
+    @Test
+    fun acquireRejectsWithoutWaitingWhenTeardownAlreadyStarted() {
+        val hostLock = field("lock") as ReentrantLock
+        val pending = declaredField("teardownPending")
+        val started = declaredField("teardownStarted")
+        val previousPending = pending.get(RuntimeHost)
+        val previousStarted = started.get(RuntimeHost)
+        hostLock.withLock {
+            pending.set(RuntimeHost, true)
+            started.set(RuntimeHost, true)
+        }
+        try {
+            val startedAt = System.nanoTime()
+            val failure = assertThrows(RuntimeFailure::class.java) {
+                // The rejection happens before Context or controller access. A bare wrapper keeps
+                // this test on the pure JVM path and proves acquire does not wait for shutdown.
+                RuntimeHost.acquire(android.content.ContextWrapper(null), RecordingSink())
+            }
+            assertEquals("RUNTIME_CLOSING", failure.code)
+            assertTrue(
+                "acquire must reject immediately",
+                System.nanoTime() - startedAt < TimeUnit.SECONDS.toNanos(1),
+            )
+        } finally {
+            hostLock.withLock {
+                pending.set(RuntimeHost, previousPending)
+                started.set(RuntimeHost, previousStarted)
+            }
+        }
+    }
+
     @Test
     fun progressAndShutdownDoNotWaitOnEachOthersLocks() {
         withSubscriber { fanOut, sink ->
@@ -117,9 +179,11 @@ class RuntimeHostConcurrencyTest {
     @Suppress("UNCHECKED_CAST")
     private fun subscribers() = field("sinks") as MutableSet<RuntimeEventSink>
 
-    private fun field(name: String): Any = RuntimeHost::class.java.getDeclaredField(name).apply {
+    private fun declaredField(name: String) = RuntimeHost::class.java.getDeclaredField(name).apply {
         isAccessible = true
-    }.get(RuntimeHost)
+    }
+
+    private fun field(name: String): Any = declaredField(name).get(RuntimeHost)
 
     private class RecordingSink : RuntimeEventSink {
         var progress = 0
