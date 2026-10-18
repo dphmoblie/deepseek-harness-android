@@ -192,7 +192,7 @@ export function createBrowserBridge(): RuntimeBridge {
     // 浏览器里没有 DSH 访客页面，也没有能持久化主题的原生层：如实拒绝，不要假装成功。
     applyHarnessTheme: () => Promise.reject(new Error('浏览器模式下没有可同步的 DSH 页面')),
     clearHarnessTheme: () => Promise.reject(new Error('浏览器模式下没有可同步的 DSH 页面')),
-    uploadHarnessBackground: () => Promise.reject(new Error('浏览器模式下没有可同步的 DSH 页面')),
+    pickHarnessBackground: () => Promise.reject(new Error('浏览器模式下不能选择背景文件')),
     clearHarnessBackground: () => Promise.reject(new Error('浏览器模式下没有可同步的 DSH 页面')),
     getState: () => Promise.resolve({ ...state }),
     getSettings: () => {

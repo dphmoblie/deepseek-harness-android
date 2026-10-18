@@ -54,7 +54,7 @@ export const bridge = {
   setAppTheme: vi.fn(),
   applyHarnessTheme: vi.fn(),
   clearHarnessTheme: vi.fn(),
-  uploadHarnessBackground: vi.fn(),
+  pickHarnessBackground: vi.fn(),
   clearHarnessBackground: vi.fn(),
   getState: vi.fn(),
   getSettings: vi.fn(),
@@ -330,7 +330,7 @@ export function beforeEachAppTest(): void {
   bridge.setAppTheme.mockResolvedValue(undefined)
   bridge.applyHarnessTheme.mockResolvedValue(undefined)
   bridge.clearHarnessTheme.mockResolvedValue(undefined)
-  bridge.uploadHarnessBackground.mockResolvedValue(undefined)
+  bridge.pickHarnessBackground.mockResolvedValue({ uri: 'content://test/background', mime: 'video/mp4', kind: 'video' })
   bridge.clearHarnessBackground.mockResolvedValue(undefined)
   bridge.getState.mockResolvedValue({ ...readyState })
   bridge.getSettings.mockResolvedValue({ ...settings })

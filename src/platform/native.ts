@@ -3,7 +3,7 @@ import { validateInstalledApplications } from './installedApplications'
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import type { PluginListenerHandle } from '@capacitor/core'
 import { validateSyncedTheme } from '../adaptiveAccent'
-import { validateBackgroundUpload } from '../backgroundUpload'
+import { validateBackgroundRef } from '../backgroundRef'
 import { createBrowserBridge } from './browser'
 import { validateSelfCheckOperation, type SelfCheckOperation } from '../runtimeSelfCheck'
 import type {
@@ -124,7 +124,7 @@ interface NativeRuntimePlugin {
   /** 同步主题给 DSH 页面；原生侧只接受固定字段。 */
   applyHarnessTheme(options: { theme: unknown }): Promise<void>
   clearHarnessTheme(): Promise<void>
-  uploadHarnessBackground(options: { mime: string, index: number, data: string, done: boolean }): Promise<void>
+  pickHarnessBackground(): Promise<{ uri: string, mime: string, kind: string }>
   clearHarnessBackground(): Promise<void>
   getState(): Promise<RuntimeState>
   getSettings(): Promise<RuntimeSettings>
@@ -301,10 +301,7 @@ function createNativeBridge(): RuntimeBridge {
       return NativeRuntime.applyHarnessTheme({ theme: checked })
     },
     clearHarnessTheme: () => NativeRuntime.clearHarnessTheme(),
-    uploadHarnessBackground: chunk => {
-      const checked = validateBackgroundUpload(chunk)
-      return NativeRuntime.uploadHarnessBackground(checked)
-    },
+    pickHarnessBackground: async () => validateBackgroundRef(await NativeRuntime.pickHarnessBackground()),
     clearHarnessBackground: () => NativeRuntime.clearHarnessBackground(),
     getState: () => NativeRuntime.getState().then(validateRuntimeState),
     getSettings: () => NativeRuntime.getSettings().then(validateStoredSettings),

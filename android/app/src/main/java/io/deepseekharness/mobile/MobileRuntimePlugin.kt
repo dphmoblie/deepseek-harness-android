@@ -444,32 +444,71 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
-     * 第二阶段：把背景按块同步给 DSH 页面（图片与视频同一套接口）。
+     * 第二阶段：让用户挑一个背景文件，只留地址。
      *
-     * 每块只校验 base64 字符集与长度；真正的落盘发生在 `done` 那一块之后。
-     * 背景本身由 `/__shell/background` 同源供给，所以视频不必变成几十 MB 的 base64。
+     * 复制文件的上限、内存与过桥体积问题因此都不存在：视频多大都由 SAF 那边流式供给。
+     * 走 ACTION_OPEN_DOCUMENT 而不是 GET_CONTENT——只有前者能给可持久化的读授权，
+     * 应用重启后仍然解得开同一个地址。
      */
     @PluginMethod
-    fun uploadHarnessBackground(call: PluginCall) {
-        val mime = call.getString("mime").orEmpty()
-        val index = call.getInt("index") ?: -1
-        val data = call.getString("data").orEmpty()
-        val done = call.getBoolean("done") ?: false
-        if (index == 0 && !HarnessThemeBridge.beginUpload(context, mime)) {
-            call.reject("背景格式无效", "THEME_INVALID")
+    fun pickHarnessBackground(call: PluginCall) {
+        val host = activity as? android.app.Activity
+        if (host == null) {
+            call.reject("当前没有可用的界面，无法打开文件选择器", "THEME_PICKER_UNAVAILABLE")
             return
         }
-        if (!HarnessThemeBridge.appendUpload(context, index, data)) {
-            HarnessThemeBridge.clearBackground(context)
-            call.reject("背景分块无效", "THEME_INVALID")
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("video/mp4", "video/webm", "image/jpeg", "image/png", "image/webp"))
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        host.runOnUiThread {
+            try {
+                startActivityForResult(call, intent, "harnessBackgroundPicked")
+            } catch (_: Throwable) {
+                call.reject("设备上没有可用的文件选择器", "THEME_PICKER_UNAVAILABLE")
+            }
+        }
+    }
+
+    /**
+     * 背景文件选择回调。
+     *
+     * 只保留地址：拿到可持久化授权后立刻写进主题目录，并把 mime / 图片或视频类型一起记下。
+     * 拿不到持久授权就如实拒绝——否则重启后地址还在、权限没了，界面会一直停在黑背景上。
+     */
+    @ActivityCallback
+    private fun harnessBackgroundPicked(call: PluginCall?, result: ActivityResult) {
+        if (call == null) return
+        val uri = result.data?.data
+        if (result.resultCode != android.app.Activity.RESULT_OK || uri == null) {
+            call.reject("已取消选择背景", "THEME_CANCELLED")
             return
         }
-        if (done && !HarnessThemeBridge.commitUpload(context)) {
-            HarnessThemeBridge.clearBackground(context)
-            call.reject("背景保存失败", "THEME_SAVE_FAILED")
+        val resolver = context.contentResolver
+        val mime = resolver.getType(uri).orEmpty()
+        val kind = HarnessThemeBridge.kindOf(mime)
+        if (kind == null) {
+            call.reject("只支持视频或图片作为背景", "THEME_INVALID")
             return
         }
-        call.resolve()
+        val persisted = try {
+            resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            true
+        } catch (_: Exception) {
+            false
+        }
+        if (!persisted) {
+            call.reject("这个文件不支持长期授权，请换一个来源再试", "THEME_PERMISSION_DENIED")
+            return
+        }
+        if (!HarnessThemeBridge.setBackgroundRef(context, uri.toString(), mime)) {
+            call.reject("无法保存背景地址", "THEME_SAVE_FAILED")
+            return
+        }
+        call.resolve(JSObject().put("uri", uri.toString()).put("mime", mime).put("kind", kind))
     }
 
     @PluginMethod

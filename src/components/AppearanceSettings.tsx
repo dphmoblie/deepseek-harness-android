@@ -4,7 +4,7 @@ import { t } from '../i18n'
 import { applyTextColor, applyTheme, clearCustomAccentColor, clearCustomTextColor, effectiveAccentColor, readCustomAccentColor, readCustomTextColor, readThemeMode, saveAccentMode, saveAccentSource, saveCustomAccentColor, saveCustomTextColor, saveThemeMode, useAccentMode, useAccentSource, useResolvedTheme, useThemeMode } from '../theme'
 import { clearAdaptiveAccent, deriveSurface, extractAccentFromBackground, readAccentSync, readAdaptiveAccent, saveAccentSync, saveAdaptiveAccent, clearAccentSync, type AccentSource, type AdaptiveAccent, type SyncedTheme } from '../adaptiveAccent'
 import { runtimeBridge } from '../platform/native'
-import { uploadBackgroundInChunks } from '../backgroundUpload'
+import type { HarnessBackgroundRef } from '../backgroundRef'
 import type { AccentMode, ThemeMode } from '../theme'
 import { applyCard, clearBackground, DEFAULT_CARD, readBackground, readCard, saveBackground, saveCard, type CardAppearance } from '../appearance'
 
@@ -50,6 +50,8 @@ export function AppearanceSettings() {
   const [syncMessage, setSyncMessage] = useState('')
   // 背景默认不跟着颜色走：它体积大、还要解码，得用户自己勾。
   const [withBackground, setWithBackground] = useState(false)
+  // 只记地址（content:// + 持久读授权）：视频多大都不复制、不过桥。
+  const [backgroundRef, setBackgroundRef] = useState<HarnessBackgroundRef | null>(null)
 
   const changeSource = (value: AccentSource) => {
     if (saveAccentSource(value)) { setFailed(null); setAccentError('') } else setFailed('accent')
@@ -69,6 +71,18 @@ export function AppearanceSettings() {
     } catch { setAccentError('读取背景失败，请重试') } finally { setExtracting(false) }
   }
 
+  /** 选背景文件：只把 SAF 地址交给原生，视频不复制、不过桥。 */
+  const pickBackground = async () => {
+    setAccentError('')
+    try {
+      const picked = await runtimeBridge.pickHarnessBackground()
+      setBackgroundRef(picked)
+      setSyncMessage(t('已选择背景：{0}', picked.mime))
+    } catch (error) {
+      setAccentError(error instanceof Error ? error.message : t('选择背景失败'))
+    }
+  }
+
   /** 同步只传固定字段：明暗模式 + 三个颜色 + 面板透明度。 */
   const sync = async () => {
     setSyncing(true)
@@ -81,14 +95,12 @@ export function AppearanceSettings() {
       await runtimeBridge.applyHarnessTheme(theme)
       let note = '已让 DSH 使用当前主题'
       if (withBackground) {
-        const blob = await readBackground()
-        if (blob) {
-          // 视频与图片走同一套分块上传；落盘后由原生按同源路径供给。
-          const uploaded = await uploadBackgroundInChunks(blob, chunk => runtimeBridge.uploadHarnessBackground(chunk))
-          note = uploaded.kind === 'video' ? t('已让 DSH 使用当前主题与背景视频') : t('已让 DSH 使用当前主题与背景')
+        if (backgroundRef) {
+          // 原生只记地址；页面播放时由 /__shell/background 流式取，不经过这里。
+          note = backgroundRef.kind === 'video' ? t('已让 DSH 使用当前主题与背景视频') : t('已让 DSH 使用当前主题与背景')
         } else {
-          // 读不到背景就只同步颜色，并把原因说清楚，不静默丢内容。
-          note = t('读不到当前背景，已只同步颜色')
+          // 没选过背景就只同步颜色，并把原因说清楚，不静默丢内容。
+          note = t('还没有选择背景文件，已只同步颜色')
         }
       }
       setSyncRecord(saveAccentSync(theme))
@@ -215,7 +227,11 @@ export function AppearanceSettings() {
       </div>
       <div className="appearance-customization appearance-sync">
         <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('外壳与 DSH 是两个独立页面，主题不会自动共享；只同步颜色与明暗模式。')}</span></div>
-        <label className="appearance-sync-background"><input type="checkbox" checked={withBackground} onChange={event => setWithBackground(event.target.checked)} /><span>{t('连背景一起同步')}</span><small>{t('按块发送；视频会以同源地址流式播放')}</small></label>
+        <div className="appearance-sync-background">
+          <label><input type="checkbox" checked={withBackground} onChange={event => setWithBackground(event.target.checked)} /><span>{t('连背景一起同步')}</span></label>
+          <button type="button" className="compact-button" onClick={() => void pickBackground()}>{backgroundRef ? t('重新选择背景文件') : t('选择背景文件')}</button>
+          <small>{backgroundRef ? t('已选：{0}', backgroundRef.mime) : t('只记录文件地址，视频不复制、不设大小上限')}</small>
+        </div>
         <button type="button" className="compact-button" onClick={() => void sync()} disabled={syncing}>{t('让 DSH 使用当前主题')}</button>
         <button type="button" className="compact-button" onClick={() => void unsync()} disabled={syncing}>{t('恢复 DSH 默认主题')}</button>
         <p>{syncRecord ? `${t('上次同步')} ${new Date(syncRecord.syncedAt).toLocaleString()}` : t('还没有同步过')}</p>

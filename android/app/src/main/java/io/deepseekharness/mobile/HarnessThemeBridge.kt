@@ -1,15 +1,12 @@
 package io.deepseekharness.mobile
 
 import android.content.Context
+import android.net.Uri
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
-import java.io.File
-import java.io.FileInputStream
-import java.io.FilterInputStream
-import java.io.InputStream
 
 /**
  * 把外壳主题同步给 DSH 页面（访客 WebView）。
@@ -20,13 +17,13 @@ import java.io.InputStream
  * 刻意不接受 CSS / JS / URL：那等于把「主题」变成任意代码执行入口，而这里唯一需要的
  * 只是几个颜色和一个明暗模式。
  *
- * 背景走**同源路径**而不是 data URL：访客页面从 `/__shell/background`（由
- * `RestrictedWebViewClient.shouldInterceptRequest` 映射到应用私有目录）加载图片或视频。
- * 对页面来说它是同源资源，CSP 的 `media-src 'self'` 直接通过，也不用放开文件权限；
- * 视频因此能流式播放，不必先变成几十 MB 的 base64 字符串。
+ * 背景只存**地址**（`content://` 的持久授权），不复制文件：视频多大都不进内存、
+ * 不过桥、不设上限。访客页面从 `/__shell/background` 取，由
+ * `RestrictedWebViewClient.shouldInterceptRequest` 映射到同一个 URI 上——
+ * 对页面来说它是同源资源，CSP 的 `media-src 'self'` 直接通过。
  */
 internal object HarnessThemeBridge {
-    /** 访客页面加载背景的路径；必须与 [HarnessThemeBridge] 的拦截逻辑保持一致。 */
+    /** 访客页面加载背景的路径；必须与拦截逻辑保持一致。 */
     const val BACKGROUND_PATH = "/__shell/background"
 
     private const val PREFS = "harness_theme"
@@ -36,20 +33,16 @@ internal object HarnessThemeBridge {
     private const val KEY_SURFACE = "surface"
     private const val KEY_OPACITY = "surfaceOpacity"
     private const val KEY_SYNCED_AT = "syncedAt"
-    private const val KEY_KIND = "backgroundKind"
-    private const val BACKGROUND_FILE = "harness-background.bin"
-    private const val UPLOAD_FILE = "harness-background.upload"
-
-    /** 视频上限：够 10–20 秒的背景循环，再大只是在手机上烧内存。 */
-    const val MAX_BACKGROUND_BYTES = 32L * 1024 * 1024
-    /** 单块 base64 上限，与 Web 侧 `MAX_CHUNK_BASE64` 保持一致。 */
-    private const val MAX_CHUNK_BASE64 = 512 * 1024
+    private const val KEY_BACKGROUND_URI = "backgroundUri"
+    private const val KEY_BACKGROUND_MIME = "backgroundMime"
+    private const val KEY_BACKGROUND_KIND = "backgroundKind"
 
     private val COLOR = Regex("^#[0-9a-fA-F]{6}$")
     private val MODES = setOf("light", "dark", "system")
-    private val BASE64_CHARS = Regex("^[A-Za-z0-9+/]+={0,2}$")
-    private val KIND_VIDEO = "video"
-    private val KIND_IMAGE = "image"
+    /** 只接受 SAF 的内容地址：不留 `file://`、不留 `http(s)://`，也就不需要额外一道网络策略。 */
+    private val CONTENT_URI = Regex("^content://[A-Za-z0-9._~:/?#@!$&'()*+,;=%\\-]{1,2048}$")
+    private const val KIND_VIDEO = "video"
+    private const val KIND_IMAGE = "image"
 
     /**
      * 白名单校验：明暗模式、三个 #RRGGBB、0..100 的透明度。
@@ -60,9 +53,14 @@ internal object HarnessThemeBridge {
     internal fun accepts(mode: String, accent: String, background: String, surface: String, opacity: Int): Boolean =
         mode in MODES && COLOR.matches(accent) && COLOR.matches(background) && COLOR.matches(surface) && opacity in 0..100
 
-    /** 单块校验：只允许 base64 字符并限长。 */
-    internal fun acceptsUploadChunk(data: String): Boolean =
-        data.isNotEmpty() && data.length <= MAX_CHUNK_BASE64 && BASE64_CHARS.matches(data)
+    /** 背景地址白名单：只认 `content://`，长度受限，不含引号与反斜杠。 */
+    internal fun acceptsBackgroundUri(uri: String): Boolean = CONTENT_URI.matches(uri)
+
+    internal fun kindOf(mime: String): String? = when {
+        mime.startsWith("video/") -> KIND_VIDEO
+        mime.startsWith("image/") -> KIND_IMAGE
+        else -> null
+    }
 
     /** 校验并保存；任何一项不合格都整体拒绝，避免半套主题落盘。 */
     fun save(context: Context, payload: JSONObject): Boolean {
@@ -87,9 +85,7 @@ internal object HarnessThemeBridge {
     }
 
     fun clear(context: Context): Boolean = try {
-        val file = File(context.filesDir, BACKGROUND_FILE)
-        file.delete()
-        File(context.filesDir, UPLOAD_FILE).delete()
+        releaseBackground(context)
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().commit()
     } catch (_: Exception) {
         false
@@ -101,168 +97,106 @@ internal object HarnessThemeBridge {
         0L
     }
 
-    // ── 背景上传：按块追加，最后一次收尾 ────────────────────────────────────────
-
-    @Volatile
-    private var uploadMime: String? = null
-    @Volatile
-    private var uploadIndex = 0
-    @Volatile
-    private var uploadBytes = 0L
-
-    internal fun acceptsUploadMime(mime: String): Boolean = mime == "video/mp4" || mime == "image/jpeg"
-
-    /** 开始一次上传：清掉上一次的临时文件与序号。 */
-    fun beginUpload(context: Context, mime: String): Boolean {
-        if (!acceptsUploadMime(mime)) return false
-        return try {
-            File(context.filesDir, UPLOAD_FILE).outputStream().use { }
-            uploadMime = mime
-            uploadIndex = 0
-            uploadBytes = 0L
-            true
-        } catch (_: Exception) {
-            false
-        }
-    }
-
     /**
-     * 追加一块。
+     * 记下背景地址（同时记 mime 与图片/视频类型）。
      *
-     * 序号必须严格递增——乱序说明桥两侧的状态已经不同步，继续拼下去只会得到坏文件。
+     * 只存地址不复制文件：视频大小因此没有上限，换手机内置相机拍的整段素材也能直接用。
      */
-    fun appendUpload(context: Context, index: Int, data: String): Boolean {
-        if (uploadMime == null || index != uploadIndex || !acceptsUploadChunk(data)) return false
+    fun setBackgroundRef(context: Context, uri: String, mime: String): Boolean {
+        if (!acceptsBackgroundUri(uri)) return false
+        val kind = kindOf(mime) ?: return false
         return try {
-            val bytes = android.util.Base64.decode(data, android.util.Base64.DEFAULT)
-            if (uploadBytes + bytes.size > MAX_BACKGROUND_BYTES) return false
-            File(context.filesDir, UPLOAD_FILE).appendBytes(bytes)
-            uploadIndex += 1
-            uploadBytes += bytes.size
-            true
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString(KEY_BACKGROUND_URI, uri)
+                .putString(KEY_BACKGROUND_MIME, mime)
+                .putString(KEY_BACKGROUND_KIND, kind)
+                .commit()
         } catch (_: Exception) {
             false
         }
     }
 
-    /** 收尾：临时文件转正，按 mime 记下类型，供注入脚本与拦截器使用。 */
-    fun commitUpload(context: Context): Boolean {
-        val mime = uploadMime ?: return false
-        return try {
-            val temporary = File(context.filesDir, UPLOAD_FILE)
-            if (temporary.length() <= 0L) return false
-            val target = File(context.filesDir, BACKGROUND_FILE)
-            if (target.exists() && !target.delete()) return false
-            if (!temporary.renameTo(target)) return false
-            // 先删除再改用视频/图片：旧图片没清掉，注入层会同时挂两个背景。
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .putString(KEY_KIND, if (mime == "video/mp4") KIND_VIDEO else KIND_IMAGE)
-                .commit()
-            uploadMime = null
-            true
-        } catch (_: Exception) {
-            false
-        }
+    fun backgroundUri(context: Context): String? = try {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_BACKGROUND_URI, null)
+    } catch (_: Exception) {
+        null
     }
 
     fun backgroundKind(context: Context): String? = try {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_KIND, null)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_BACKGROUND_KIND, null)
     } catch (_: Exception) {
         null
     }
 
-    /** 供拦截器读：没有同步过背景时返回 null。 */
-    fun backgroundFile(context: Context): File? = try {
-        val file = File(context.filesDir, BACKGROUND_FILE)
-        if (file.isFile && file.length() > 0L) file else null
+    fun backgroundMime(context: Context): String? = try {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_BACKGROUND_MIME, null)
     } catch (_: Exception) {
         null
     }
 
-    /**
-     * 供 `shouldInterceptRequest` 调用：把背景文件当同源资源发给访客页面。
-     *
-     * 支持 Range——`<video>` 会分段请求；不支持 Range 时浏览器仍可能播完，但拖动与
-     * 循环末尾会重新下载整个文件，32 MB 的视频在手机上体感很差。
-     */
-    fun serveBackground(context: Context, request: WebResourceRequest): WebResourceResponse {
-        val file = backgroundFile(context)
-        if (file == null) {
-            return WebResourceResponse(
-                "text/plain", "utf-8", 404, "Not Found",
-                mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(ByteArray(0)),
-            )
-        }
-        val mime = if (backgroundKind(context) == KIND_VIDEO) "video/mp4" else "image/jpeg"
-        val length = file.length()
-        val range = request.requestHeaders["Range"] ?: request.requestHeaders["range"]
-        val match = range?.let { Regex("bytes=(\\d+)-(\\d*)").find(it) }
-        if (match != null) {
-            val start = match.groupValues[1].toLongOrNull() ?: 0L
-            val requestedEnd = match.groupValues[2].toLongOrNull() ?: (length - 1)
-            if (start in 0 until length) {
-                val end = minOf(requestedEnd, length - 1)
-                if (start <= end) {
-                    val count = end - start + 1
-                    val stream = FileInputStream(file).apply { skip(start) }
-                    return WebResourceResponse(
-                        mime, null, 206, "Partial Content",
-                        mapOf(
-                            "Content-Range" to "bytes $start-$end/$length",
-                            "Accept-Ranges" to "bytes",
-                            "Content-Length" to count.toString(),
-                            "Cache-Control" to "no-store",
-                        ),
-                        LimitedInputStream(stream, count),
-                    )
-                }
-            }
-        }
-        return WebResourceResponse(
-            mime, null, 200, "OK",
-            mapOf(
-                "Accept-Ranges" to "bytes",
-                "Content-Length" to length.toString(),
-                "Cache-Control" to "no-store",
-            ),
-            FileInputStream(file),
-        )
-    }
-
-    private class LimitedInputStream(input: InputStream, private var remaining: Long) :
-        FilterInputStream(input) {
-        override fun read(): Int {
-            if (remaining <= 0L) return -1
-            val value = super.read()
-            if (value >= 0) remaining -= 1
-            return value
-        }
-
-        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-            if (remaining <= 0L) return -1
-            val read = super.read(buffer, offset, minOf(length.toLong(), remaining).toInt())
-            if (read > 0) remaining -= read
-            return read
-        }
-    }
-
+    /** 清掉背景地址，并把持久授权一起还回去——否则用户删了背景，授权还挂在应用上。 */
     fun clearBackground(context: Context): Boolean = try {
-        uploadMime = null
-        File(context.filesDir, BACKGROUND_FILE).delete()
-        File(context.filesDir, UPLOAD_FILE).delete()
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(KEY_KIND).commit()
+        releaseBackground(context)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .remove(KEY_BACKGROUND_URI)
+            .remove(KEY_BACKGROUND_MIME)
+            .remove(KEY_BACKGROUND_KIND)
+            .commit()
     } catch (_: Exception) {
         false
     }
+
+    private fun releaseBackground(context: Context) {
+        val uri = backgroundUri(context) ?: return
+        try {
+            context.contentResolver.releasePersistableUriPermission(
+                Uri.parse(uri),
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        } catch (_: Exception) {
+            // 不是可持久化的授权（例如用户从临时入口选的）：没有可释放的东西。
+        }
+    }
+
+    /**
+     * 供 `shouldInterceptRequest` 调用：把背景地址当同源资源发给访客页面。
+     *
+     * 走 `ContentResolver` 流式转发，不缓存、不复制。**不支持 Range**：内容提供者的
+     * 输入流通常不可随机定位，硬做只会读到错位的字节；`<video>` 在无 Range 时会顺序
+     * 读完整个文件再播，循环背景够用，代价是不能拖动。
+     */
+    fun serveBackground(context: Context, request: WebResourceRequest): WebResourceResponse {
+        val uri = backgroundUri(context)?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        val mime = backgroundMime(context) ?: "application/octet-stream"
+        if (uri == null) return notFound()
+        val stream = try {
+            context.contentResolver.openInputStream(uri)
+        } catch (_: Exception) {
+            null
+        } ?: return notFound()
+        val length = try {
+            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }
+        } catch (_: Exception) {
+            null
+        }
+        val headers = mutableMapOf(
+            "Cache-Control" to "no-store",
+            "Accept-Ranges" to "none",
+        )
+        if (length != null && length > 0) headers["Content-Length"] = length.toString()
+        return WebResourceResponse(mime, null, 200, "OK", headers, stream)
+    }
+
+    private fun notFound(): WebResourceResponse = WebResourceResponse(
+        "text/plain", "utf-8", 404, "Not Found",
+        mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(ByteArray(0)),
+    )
 
     /**
      * 访客页面侧消费这些变量的最小样式。
      *
      * 只做两件低风险的事：把背景铺在内容下面、让表单控件跟随明暗与强调色。
      * 不重写官方调色板——访客页面自己的主题仍然生效，外壳只是叠一层。
-     *
-     * 放在原生脚本里而不是子模块 CSS：这样换任何 `dsh-web-frontend` 版本都成立，
-     * 不需要为了一个背景去提升前端指针。
      */
     internal val STYLE_RULES = """
         html[data-dsh-theme-source='shell'] body::before {
@@ -313,7 +247,7 @@ internal object HarnessThemeBridge {
         val opacity = prefs.getInt(KEY_OPACITY, 100)
         if (!accepts(mode, accent, background, surface, opacity)) return null
         val kind = backgroundKind(context)
-        val hasBackground = backgroundFile(context) != null
+        val hasBackground = backgroundUri(context) != null
         val css = JSONObject.quote(STYLE_RULES)
         // 值都已通过白名单校验，不含引号或反斜杠，拼进脚本是安全的。
         return """
@@ -358,7 +292,6 @@ internal object HarnessThemeBridge {
                   video.setAttribute('muted', '');
                   video.setAttribute('playsinline', '');
                   video.setAttribute('preload', 'auto');
-                  video.style.zIndex = '-1';
                   (document.body || root).insertBefore(video, (document.body || root).firstChild);
                 }
                 if (video.getAttribute('src') !== path) { video.setAttribute('src', path); }

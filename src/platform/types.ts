@@ -1529,9 +1529,9 @@ export type AppThemeMode = 'system' | 'light' | 'dark'
 
 /** 同步给 DSH 页面（访客 WebView）的受控主题：只有固定字段，没有 CSS / JS / URL。 */
 export type { SyncedTheme } from '../adaptiveAccent'
-export type { BackgroundUpload } from '../backgroundUpload'
+export type { HarnessBackgroundRef } from '../backgroundRef'
 import type { SyncedTheme } from '../adaptiveAccent'
-import type { BackgroundUpload } from '../backgroundUpload'
+import type { HarnessBackgroundRef } from '../backgroundRef'
 
 export interface RuntimeWorkspaceFileList {
   files: string[]
@@ -1561,12 +1561,12 @@ export interface RuntimeBridge {
   /** 清除已同步的主题，DSH 页面回到它自己的默认外观。 */
   clearHarnessTheme: () => Promise<void>
   /**
-   * 第二阶段：把背景按块同步过去（图片与视频同一套接口）。
+   * 第二阶段：让用户挑一个背景文件，原生只记地址（`content://` + 持久读授权）。
    *
-   * 传的只是分块 base64；落盘后由原生按 `/__shell/background` 同源供给，
-   * 视频因此能流式播放，不需要先变成几十 MB 的字符串。
+   * 不复制文件，所以视频没有大小上限；访客页面从 `/__shell/background` 同源取，
+   * 由原生按需从同一个地址流式转发。
    */
-  uploadHarnessBackground: (chunk: BackgroundUpload) => Promise<void>
+  pickHarnessBackground: () => Promise<HarnessBackgroundRef>
   clearHarnessBackground: () => Promise<void>
   getState: () => Promise<RuntimeState>
   getSettings: () => Promise<RuntimeSettings>

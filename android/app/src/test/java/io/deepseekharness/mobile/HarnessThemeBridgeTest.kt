@@ -1,5 +1,6 @@
 package io.deepseekharness.mobile
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -44,23 +45,26 @@ class HarnessThemeBridgeTest {
     }
 
     @Test
-    fun `背景分块只接受受控的 base64`() {
-        assertTrue(HarnessThemeBridge.acceptsUploadChunk("/9j/4AAQSkZJRgABAQAAAQABAAD/"))
-        assertTrue(HarnessThemeBridge.acceptsUploadChunk("AAAA"))
-        assertFalse(HarnessThemeBridge.acceptsUploadChunk(""))
-        assertFalse(HarnessThemeBridge.acceptsUploadChunk("url(https://example.com/a.mp4)"))
-        assertFalse(HarnessThemeBridge.acceptsUploadChunk("AAAA BBBB"))
-        assertFalse(HarnessThemeBridge.acceptsUploadChunk("';alert(1);//"))
-        assertFalse(HarnessThemeBridge.acceptsUploadChunk("A".repeat(512 * 1024 + 4)))
+    fun `背景只接受内容地址，不接受路径与网络地址`() {
+        assertTrue(HarnessThemeBridge.acceptsBackgroundUri("content://media/external/video/media/42"))
+        assertTrue(HarnessThemeBridge.acceptsBackgroundUri(
+            "content://com.android.providers.media.documents/document/video%3A42",
+        ))
+        // file:// 会把私有路径交给页面，http(s):// 会绕开「背景只来自本机」。
+        assertFalse(HarnessThemeBridge.acceptsBackgroundUri("file:///data/user/0/app/files/a.mp4"))
+        assertFalse(HarnessThemeBridge.acceptsBackgroundUri("https://example.com/a.mp4"))
+        assertFalse(HarnessThemeBridge.acceptsBackgroundUri("content://"))
+        assertFalse(HarnessThemeBridge.acceptsBackgroundUri(""))
+        assertFalse(HarnessThemeBridge.acceptsBackgroundUri("';alert(1);//"))
+        assertFalse(HarnessThemeBridge.acceptsBackgroundUri("content://" + "a".repeat(2100)))
     }
 
     @Test
-    fun `背景格式只认 MP4 与 JPEG`() {
-        assertTrue(HarnessThemeBridge.acceptsUploadMime("video/mp4"))
-        assertTrue(HarnessThemeBridge.acceptsUploadMime("image/jpeg"))
-        assertFalse(HarnessThemeBridge.acceptsUploadMime("video/webm"))
-        assertFalse(HarnessThemeBridge.acceptsUploadMime("text/html"))
-        assertFalse(HarnessThemeBridge.acceptsUploadMime(""))
+    fun `背景类型由 mime 决定，别的一律拒绝`() {
+        assertEquals("video", HarnessThemeBridge.kindOf("video/mp4"))
+        assertEquals("image", HarnessThemeBridge.kindOf("image/webp"))
+        assertEquals(null, HarnessThemeBridge.kindOf("application/pdf"))
+        assertEquals(null, HarnessThemeBridge.kindOf(""))
     }
 
     @Test
