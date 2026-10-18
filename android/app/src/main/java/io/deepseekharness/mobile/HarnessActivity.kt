@@ -474,6 +474,11 @@ class HarnessActivity : AppCompatActivity() {
 
         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
             val uri = request?.url ?: return blockedResponse()
+            // 外壳同步的背景：由原生按同源路径供给，支持 Range，也不放开文件权限。
+            if (uri.path == HarnessThemeBridge.BACKGROUND_PATH) {
+                val context = view?.context ?: return blockedResponse()
+                return HarnessThemeBridge.serveBackground(context, request)
+            }
             // 市场目录和缩略图由插件直接请求 HTTPS 资源站；交给 WebView 执行正常的 TLS/CORS 校验。
             // 不添加本机 Authorization 或 Cookie，也不允许资源站替换会话主页面。
             return if (origin.allows(uri) || HarnessPluginResources.allows(

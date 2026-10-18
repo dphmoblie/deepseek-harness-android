@@ -5,10 +5,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 同步主题的白名单校验。
+ * 同步主题与背景的白名单校验。
  *
- * 这段判断单独抽成纯函数就是为了能在这里驱动：拼进 `evaluateJavascript` 的内容
- * 只经过它一道关，不能只在设备上碰运气。
+ * 这些判断单独抽成纯函数就是为了能在这里驱动：拼进 `evaluateJavascript` 的内容、
+ * 以及按块过桥的 base64，都只经过它们一道关，不能只在设备上碰运气。
  */
 class HarnessThemeBridgeTest {
     private val accent = "#315fcf"
@@ -44,16 +44,23 @@ class HarnessThemeBridgeTest {
     }
 
     @Test
-    fun `背景只接受受控的 base64`() {
-        assertTrue(HarnessThemeBridge.acceptsBackground("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA=="))
-        assertTrue(HarnessThemeBridge.acceptsBackground("AAAA"))
-        // 这些都会被拼进 url("data:image/jpeg;base64,…")，字符集必须逐字受控。
-        assertFalse(HarnessThemeBridge.acceptsBackground(""))
-        assertFalse(HarnessThemeBridge.acceptsBackground("url(https://example.com/a.png)"))
-        assertFalse(HarnessThemeBridge.acceptsBackground("data:image/png;base64,AAAA"))
-        assertFalse(HarnessThemeBridge.acceptsBackground("AAAA BBBB"))
-        assertFalse(HarnessThemeBridge.acceptsBackground("';alert(1);//"))
-        assertFalse(HarnessThemeBridge.acceptsBackground("A".repeat(2 * 1024 * 1024 + 4)))
+    fun `背景分块只接受受控的 base64`() {
+        assertTrue(HarnessThemeBridge.acceptsUploadChunk("/9j/4AAQSkZJRgABAQAAAQABAAD/"))
+        assertTrue(HarnessThemeBridge.acceptsUploadChunk("AAAA"))
+        assertFalse(HarnessThemeBridge.acceptsUploadChunk(""))
+        assertFalse(HarnessThemeBridge.acceptsUploadChunk("url(https://example.com/a.mp4)"))
+        assertFalse(HarnessThemeBridge.acceptsUploadChunk("AAAA BBBB"))
+        assertFalse(HarnessThemeBridge.acceptsUploadChunk("';alert(1);//"))
+        assertFalse(HarnessThemeBridge.acceptsUploadChunk("A".repeat(512 * 1024 + 4)))
+    }
+
+    @Test
+    fun `背景格式只认 MP4 与 JPEG`() {
+        assertTrue(HarnessThemeBridge.acceptsUploadMime("video/mp4"))
+        assertTrue(HarnessThemeBridge.acceptsUploadMime("image/jpeg"))
+        assertFalse(HarnessThemeBridge.acceptsUploadMime("video/webm"))
+        assertFalse(HarnessThemeBridge.acceptsUploadMime("text/html"))
+        assertFalse(HarnessThemeBridge.acceptsUploadMime(""))
     }
 
     @Test
@@ -61,9 +68,16 @@ class HarnessThemeBridgeTest {
         val rules = HarnessThemeBridge.STYLE_RULES
         assertTrue(rules.contains("html[data-dsh-theme-source='shell'] body::before"))
         assertTrue(rules.contains("--dsh-theme-background-image"))
+        assertTrue(rules.contains("video[data-dsh-shell-background]"))
         assertTrue(rules.contains("accent-color"))
         // 这段内容会被塞进 <style>：出现闭合标签就等于给了注入一个出口。
         assertFalse(rules.contains("</style", ignoreCase = true))
         assertFalse(rules.contains("<script", ignoreCase = true))
+    }
+
+    @Test
+    fun `背景路径是固定的同源路径`() {
+        assertTrue(HarnessThemeBridge.BACKGROUND_PATH.startsWith("/__shell/"))
+        assertFalse(HarnessThemeBridge.BACKGROUND_PATH.contains("://"))
     }
 }

@@ -444,18 +444,29 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
-     * 第二阶段：把背景一起同步给 DSH 页面。
+     * 第二阶段：把背景按块同步给 DSH 页面（图片与视频同一套接口）。
      *
-     * Web 侧已经压到最长边 1280 的 JPEG base64；这里再校验一次字符集与体积，
-     * 解码后按最长边 2048 重新编码落盘——过桥的字符串最终会被拼进 `url("data:…")`。
+     * 每块只校验 base64 字符集与长度；真正的落盘发生在 `done` 那一块之后。
+     * 背景本身由 `/__shell/background` 同源供给，所以视频不必变成几十 MB 的 base64。
      */
     @PluginMethod
-    fun applyHarnessBackground(call: PluginCall) {
-        val payload = call.getObject("background")
-        val image = payload?.getString("image").orEmpty()
-        val mime = payload?.getString("mime").orEmpty()
-        if (mime != HarnessThemeBridge.SYNC_MIME || !HarnessThemeBridge.saveBackground(context, image)) {
-            call.reject("背景内容无效", "THEME_INVALID")
+    fun uploadHarnessBackground(call: PluginCall) {
+        val mime = call.getString("mime").orEmpty()
+        val index = call.getInt("index") ?: -1
+        val data = call.getString("data").orEmpty()
+        val done = call.getBoolean("done") ?: false
+        if (index == 0 && !HarnessThemeBridge.beginUpload(context, mime)) {
+            call.reject("背景格式无效", "THEME_INVALID")
+            return
+        }
+        if (!HarnessThemeBridge.appendUpload(context, index, data)) {
+            HarnessThemeBridge.clearBackground(context)
+            call.reject("背景分块无效", "THEME_INVALID")
+            return
+        }
+        if (done && !HarnessThemeBridge.commitUpload(context)) {
+            HarnessThemeBridge.clearBackground(context)
+            call.reject("背景保存失败", "THEME_SAVE_FAILED")
             return
         }
         call.resolve()

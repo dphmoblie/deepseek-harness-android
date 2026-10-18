@@ -1,12 +1,15 @@
 package io.deepseekharness.mobile
 
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.util.Base64
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.FileInputStream
+import java.io.FilterInputStream
+import java.io.InputStream
 
 /**
  * 把外壳主题同步给 DSH 页面（访客 WebView）。
@@ -16,10 +19,15 @@ import java.io.File
  *
  * 刻意不接受 CSS / JS / URL：那等于把「主题」变成任意代码执行入口，而这里唯一需要的
  * 只是几个颜色和一个明暗模式。
+ *
+ * 背景走**同源路径**而不是 data URL：访客页面从 `/__shell/background`（由
+ * `RestrictedWebViewClient.shouldInterceptRequest` 映射到应用私有目录）加载图片或视频。
+ * 对页面来说它是同源资源，CSP 的 `media-src 'self'` 直接通过，也不用放开文件权限；
+ * 视频因此能流式播放，不必先变成几十 MB 的 base64 字符串。
  */
 internal object HarnessThemeBridge {
-    /** 只接受 JPEG：它没有透明通道，老 WebView 也一定解码得了。 */
-    const val SYNC_MIME = "image/jpeg"
+    /** 访客页面加载背景的路径；必须与 [HarnessThemeBridge] 的拦截逻辑保持一致。 */
+    const val BACKGROUND_PATH = "/__shell/background"
 
     private const val PREFS = "harness_theme"
     private const val KEY_MODE = "mode"
@@ -28,20 +36,20 @@ internal object HarnessThemeBridge {
     private const val KEY_SURFACE = "surface"
     private const val KEY_OPACITY = "surfaceOpacity"
     private const val KEY_SYNCED_AT = "syncedAt"
-    private const val KEY_HAS_BACKGROUND = "hasBackground"
-    private const val BACKGROUND_FILE = "harness-background.jpg"
-    /** 同步背景的载荷上限（base64 字符数），与 Web 侧 MAX_SYNC_BASE64 保持一致。 */
-    private const val MAX_BACKGROUND_BASE64 = 2 * 1024 * 1024
-    /** 解码后的像素上限：足够铺满长屏，再大只是白占内存。 */
-    private const val MAX_BACKGROUND_PIXELS = 4096L * 4096L
+    private const val KEY_KIND = "backgroundKind"
+    private const val BACKGROUND_FILE = "harness-background.bin"
+    private const val UPLOAD_FILE = "harness-background.upload"
+
+    /** 视频上限：够 10–20 秒的背景循环，再大只是在手机上烧内存。 */
+    const val MAX_BACKGROUND_BYTES = 32L * 1024 * 1024
+    /** 单块 base64 上限，与 Web 侧 `MAX_CHUNK_BASE64` 保持一致。 */
+    private const val MAX_CHUNK_BASE64 = 512 * 1024
 
     private val COLOR = Regex("^#[0-9a-fA-F]{6}$")
     private val MODES = setOf("light", "dark", "system")
     private val BASE64_CHARS = Regex("^[A-Za-z0-9+/]+={0,2}$")
-
-    /** (文件修改时间, 文件长度, base64)：文件一换就自动失效。 */
-    @Volatile
-    private var cachedBackground: Triple<Long, Long, String>? = null
+    private val KIND_VIDEO = "video"
+    private val KIND_IMAGE = "image"
 
     /**
      * 白名单校验：明暗模式、三个 #RRGGBB、0..100 的透明度。
@@ -51,6 +59,10 @@ internal object HarnessThemeBridge {
      */
     internal fun accepts(mode: String, accent: String, background: String, surface: String, opacity: Int): Boolean =
         mode in MODES && COLOR.matches(accent) && COLOR.matches(background) && COLOR.matches(surface) && opacity in 0..100
+
+    /** 单块校验：只允许 base64 字符并限长。 */
+    internal fun acceptsUploadChunk(data: String): Boolean =
+        data.isNotEmpty() && data.length <= MAX_CHUNK_BASE64 && BASE64_CHARS.matches(data)
 
     /** 校验并保存；任何一项不合格都整体拒绝，避免半套主题落盘。 */
     fun save(context: Context, payload: JSONObject): Boolean {
@@ -74,91 +86,10 @@ internal object HarnessThemeBridge {
         }
     }
 
-    /**
-     * 背景载荷的白名单：只允许 base64 字符并限长。
-     *
-     * 这段字符串会被拼进 `url("data:image/jpeg;base64,…")`，所以字符集必须逐字受控。
-     */
-    internal fun acceptsBackground(base64: String): Boolean =
-        base64.isNotEmpty() && base64.length <= MAX_BACKGROUND_BASE64 && BASE64_CHARS.matches(base64)
-
-    /** 校验、解码、按最长边 2048 重新编码成 JPEG 落盘；任何一步失败都不留半张图。 */
-    fun saveBackground(context: Context, base64: String): Boolean {
-        if (!acceptsBackground(base64)) return false
-        var bitmap: Bitmap? = null
-        var scaled: Bitmap? = null
-        return try {
-            val bytes = Base64.decode(base64, Base64.DEFAULT)
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return false
-            if (bounds.outWidth.toLong() * bounds.outHeight.toLong() > MAX_BACKGROUND_PIXELS) return false
-            bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return false
-            scaled = scaleDown(bitmap, 2048)
-            val temporary = File(context.filesDir, "$BACKGROUND_FILE.tmp")
-            temporary.outputStream().use { stream -> scaled.compress(Bitmap.CompressFormat.JPEG, 82, stream) }
-            if (!temporary.renameTo(File(context.filesDir, BACKGROUND_FILE))) {
-                temporary.delete()
-                return false
-            }
-            cachedBackground = null
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .putBoolean(KEY_HAS_BACKGROUND, true)
-                .commit()
-        } catch (_: Exception) {
-            false
-        } finally {
-            if (scaled != null && scaled !== bitmap) scaled.recycle()
-            bitmap?.recycle()
-        }
-    }
-
-    fun clearBackground(context: Context): Boolean {
-        cachedBackground = null
-        return try {
-            File(context.filesDir, BACKGROUND_FILE).delete()
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .remove(KEY_HAS_BACKGROUND)
-                .commit()
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun scaleDown(bitmap: Bitmap, maxEdge: Int): Bitmap {
-        val longest = maxOf(bitmap.width, bitmap.height)
-        if (longest <= maxEdge) return bitmap
-        val scale = maxEdge.toFloat() / longest
-        return Bitmap.createScaledBitmap(
-            bitmap,
-            maxOf(1, (bitmap.width * scale).toInt()),
-            maxOf(1, (bitmap.height * scale).toInt()),
-            true,
-        )
-    }
-
-    /** 读背景文件并转成 base64；按文件修改时间做一次内存缓存，避免每次加载都重读。 */
-    private fun backgroundData(context: Context): String? = try {
-        val file = File(context.filesDir, BACKGROUND_FILE)
-        if (!file.isFile) {
-            null
-        } else {
-            val cached = cachedBackground
-            if (cached != null && cached.first == file.lastModified() && cached.second == file.length()) {
-                cached.third
-            } else {
-                val encoded = Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
-                cachedBackground = Triple(file.lastModified(), file.length(), encoded)
-                encoded
-            }
-        }
-    } catch (_: Exception) {
-        null
-    }
-
     fun clear(context: Context): Boolean = try {
-        cachedBackground = null
-        File(context.filesDir, BACKGROUND_FILE).delete()
+        val file = File(context.filesDir, BACKGROUND_FILE)
+        file.delete()
+        File(context.filesDir, UPLOAD_FILE).delete()
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().commit()
     } catch (_: Exception) {
         false
@@ -168,6 +99,160 @@ internal object HarnessThemeBridge {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong(KEY_SYNCED_AT, 0L)
     } catch (_: Exception) {
         0L
+    }
+
+    // ── 背景上传：按块追加，最后一次收尾 ────────────────────────────────────────
+
+    @Volatile
+    private var uploadMime: String? = null
+    @Volatile
+    private var uploadIndex = 0
+    @Volatile
+    private var uploadBytes = 0L
+
+    internal fun acceptsUploadMime(mime: String): Boolean = mime == "video/mp4" || mime == "image/jpeg"
+
+    /** 开始一次上传：清掉上一次的临时文件与序号。 */
+    fun beginUpload(context: Context, mime: String): Boolean {
+        if (!acceptsUploadMime(mime)) return false
+        return try {
+            File(context.filesDir, UPLOAD_FILE).outputStream().use { }
+            uploadMime = mime
+            uploadIndex = 0
+            uploadBytes = 0L
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * 追加一块。
+     *
+     * 序号必须严格递增——乱序说明桥两侧的状态已经不同步，继续拼下去只会得到坏文件。
+     */
+    fun appendUpload(context: Context, index: Int, data: String): Boolean {
+        if (uploadMime == null || index != uploadIndex || !acceptsUploadChunk(data)) return false
+        return try {
+            val bytes = android.util.Base64.decode(data, android.util.Base64.DEFAULT)
+            if (uploadBytes + bytes.size > MAX_BACKGROUND_BYTES) return false
+            File(context.filesDir, UPLOAD_FILE).appendBytes(bytes)
+            uploadIndex += 1
+            uploadBytes += bytes.size
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** 收尾：临时文件转正，按 mime 记下类型，供注入脚本与拦截器使用。 */
+    fun commitUpload(context: Context): Boolean {
+        val mime = uploadMime ?: return false
+        return try {
+            val temporary = File(context.filesDir, UPLOAD_FILE)
+            if (temporary.length() <= 0L) return false
+            val target = File(context.filesDir, BACKGROUND_FILE)
+            if (target.exists() && !target.delete()) return false
+            if (!temporary.renameTo(target)) return false
+            // 先删除再改用视频/图片：旧图片没清掉，注入层会同时挂两个背景。
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putString(KEY_KIND, if (mime == "video/mp4") KIND_VIDEO else KIND_IMAGE)
+                .commit()
+            uploadMime = null
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun backgroundKind(context: Context): String? = try {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_KIND, null)
+    } catch (_: Exception) {
+        null
+    }
+
+    /** 供拦截器读：没有同步过背景时返回 null。 */
+    fun backgroundFile(context: Context): File? = try {
+        val file = File(context.filesDir, BACKGROUND_FILE)
+        if (file.isFile && file.length() > 0L) file else null
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * 供 `shouldInterceptRequest` 调用：把背景文件当同源资源发给访客页面。
+     *
+     * 支持 Range——`<video>` 会分段请求；不支持 Range 时浏览器仍可能播完，但拖动与
+     * 循环末尾会重新下载整个文件，32 MB 的视频在手机上体感很差。
+     */
+    fun serveBackground(context: Context, request: WebResourceRequest): WebResourceResponse {
+        val file = backgroundFile(context)
+        if (file == null) {
+            return WebResourceResponse(
+                "text/plain", "utf-8", 404, "Not Found",
+                mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(ByteArray(0)),
+            )
+        }
+        val mime = if (backgroundKind(context) == KIND_VIDEO) "video/mp4" else "image/jpeg"
+        val length = file.length()
+        val range = request.requestHeaders["Range"] ?: request.requestHeaders["range"]
+        val match = range?.let { Regex("bytes=(\\d+)-(\\d*)").find(it) }
+        if (match != null) {
+            val start = match.groupValues[1].toLongOrNull() ?: 0L
+            val requestedEnd = match.groupValues[2].toLongOrNull() ?: (length - 1)
+            if (start in 0 until length) {
+                val end = minOf(requestedEnd, length - 1)
+                if (start <= end) {
+                    val count = end - start + 1
+                    val stream = FileInputStream(file).apply { skip(start) }
+                    return WebResourceResponse(
+                        mime, null, 206, "Partial Content",
+                        mapOf(
+                            "Content-Range" to "bytes $start-$end/$length",
+                            "Accept-Ranges" to "bytes",
+                            "Content-Length" to count.toString(),
+                            "Cache-Control" to "no-store",
+                        ),
+                        LimitedInputStream(stream, count),
+                    )
+                }
+            }
+        }
+        return WebResourceResponse(
+            mime, null, 200, "OK",
+            mapOf(
+                "Accept-Ranges" to "bytes",
+                "Content-Length" to length.toString(),
+                "Cache-Control" to "no-store",
+            ),
+            FileInputStream(file),
+        )
+    }
+
+    private class LimitedInputStream(input: InputStream, private var remaining: Long) :
+        FilterInputStream(input) {
+        override fun read(): Int {
+            if (remaining <= 0L) return -1
+            val value = super.read()
+            if (value >= 0) remaining -= 1
+            return value
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            if (remaining <= 0L) return -1
+            val read = super.read(buffer, offset, minOf(length.toLong(), remaining).toInt())
+            if (read > 0) remaining -= read
+            return read
+        }
+    }
+
+    fun clearBackground(context: Context): Boolean = try {
+        uploadMime = null
+        File(context.filesDir, BACKGROUND_FILE).delete()
+        File(context.filesDir, UPLOAD_FILE).delete()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(KEY_KIND).commit()
+    } catch (_: Exception) {
+        false
     }
 
     /**
@@ -197,10 +282,20 @@ internal object HarnessThemeBridge {
         html[data-dsh-theme-source='shell'][data-dsh-theme='dark'] { color-scheme: dark; }
         html[data-dsh-theme-source='shell'][data-dsh-theme='light'] { color-scheme: light; }
         html[data-dsh-theme-source='shell'] { accent-color: var(--dsh-theme-accent, auto); }
+        video[data-dsh-shell-background] {
+          position: fixed;
+          inset: 0;
+          z-index: -1;
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          pointer-events: none;
+          opacity: var(--dsh-theme-surface-opacity, 1);
+        }
     """.trimIndent()
 
     /**
-     * 生成注入脚本：只写 CSS 变量、`data-dsh-theme` 与一段固定样式，不替换任何页面结构。
+     * 生成注入脚本：只写 CSS 变量、`data-dsh-theme`、一段固定样式，必要时加一个背景视频层。
      *
      * `system` 原样交给访客页面自己判断——外壳里解析出的深浅是外壳那一刻的结论，
      * 把它固化成 light/dark 会让访客页面在系统切换后不再跟随。
@@ -217,9 +312,8 @@ internal object HarnessThemeBridge {
         val surface = prefs.getString(KEY_SURFACE, null) ?: return null
         val opacity = prefs.getInt(KEY_OPACITY, 100)
         if (!accepts(mode, accent, background, surface, opacity)) return null
-        // 背景是一段独立的大字符串：没有同步过就是空，注入时整条语句跳过。
-        val image = backgroundData(context).orEmpty()
-        // 样式表用 JSON 转义后当 JS 字面量传进去：换行与引号都不用手写转义。
+        val kind = backgroundKind(context)
+        val hasBackground = backgroundFile(context) != null
         val css = JSONObject.quote(STYLE_RULES)
         // 值都已通过白名单校验，不含引号或反斜杠，拼进脚本是安全的。
         return """
@@ -233,10 +327,6 @@ internal object HarnessThemeBridge {
               root.style.setProperty('--dsh-theme-surface', '$surface');
               root.style.setProperty('--dsh-theme-surface-opacity', '${opacity / 100.0}');
               if ('$mode' !== 'system') { root.style.colorScheme = '$mode'; }
-              var image = '$image';
-              if (image) {
-                root.style.setProperty('--dsh-theme-background-image', 'url("data:image/jpeg;base64,' + image + '")');
-              }
               var style = document.getElementById('dsh-shell-theme');
               if (!style) {
                 style = document.createElement('style');
@@ -244,6 +334,40 @@ internal object HarnessThemeBridge {
                 (document.head || root).appendChild(style);
               }
               style.textContent = $css;
+              var path = '${BACKGROUND_PATH}';
+              var hasBackground = $hasBackground;
+              var kind = '$kind';
+              var video = document.getElementById('dsh-shell-background');
+              if (!hasBackground) {
+                if (video && video.parentNode) { video.parentNode.removeChild(video); }
+                root.style.removeProperty('--dsh-theme-background-image');
+                delete root.dataset.dshThemeMedia;
+                return true;
+              }
+              root.dataset.dshThemeMedia = kind;
+              if (kind === 'video') {
+                root.style.removeProperty('--dsh-theme-background-image');
+                if (!video) {
+                  video = document.createElement('video');
+                  video.id = 'dsh-shell-background';
+                  video.setAttribute('data-dsh-shell-background', '');
+                  video.muted = true;
+                  video.loop = true;
+                  video.autoplay = true;
+                  video.playsInline = true;
+                  video.setAttribute('muted', '');
+                  video.setAttribute('playsinline', '');
+                  video.setAttribute('preload', 'auto');
+                  video.style.zIndex = '-1';
+                  (document.body || root).insertBefore(video, (document.body || root).firstChild);
+                }
+                if (video.getAttribute('src') !== path) { video.setAttribute('src', path); }
+                var playing = video.play();
+                if (playing && typeof playing.catch === 'function') { playing.catch(function () {}); }
+              } else {
+                if (video && video.parentNode) { video.parentNode.removeChild(video); }
+                root.style.setProperty('--dsh-theme-background-image', 'url("' + path + '")');
+              }
               return true;
             })();
         """.trimIndent()
