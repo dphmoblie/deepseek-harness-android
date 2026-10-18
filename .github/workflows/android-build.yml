@@ -480,9 +480,12 @@ jobs:
               cp "$source_file" "$PPA_SOURCEPARTS/"
             fi
           done
-          if ! find "$PPA_SOURCEPARTS" -type f -size +0c -print -quit | grep -q .; then
-            PPA_URI="$(apt-cache policy git | sed -n 's/^[[:space:]]*[0-9][0-9]*[[:space:]]\+\(https\?:\/\/[^[:space:]]*launchpad[^[:space:]]*\) .*/\1/p' | head -n 1)"
-            test -n "$PPA_URI"
+          PPA_SOURCE_FILE="$(find "$PPA_SOURCEPARTS" -type f -size +0c -print -quit)"
+          if [ -z "$PPA_SOURCE_FILE" ]; then
+            PPA_URI="$(apt-cache policy git | sed -n 's/^[[:space:]]*[0-9][0-9]*[[:space:]]\+\(https\?:\/\/[^[:space:]]*launchpad[^[:space:]]*\) .*/\1/p' | head -n 1 || true)"
+            # The hosted runner may omit the PPA list after installing its
+            # packages; this is the fixed upstream PPA for the installed git.
+            PPA_URI="${PPA_URI:-https://ppa.launchpadcontent.net/git-core/ppa/ubuntu}"
             PPA_SUITE="${VERSION_CODENAME:-noble}"
             printf 'deb-src [arch=amd64] %s %s main\n' "$PPA_URI" "$PPA_SUITE" > "$PPA_SOURCEPARTS/derived.list"
           fi

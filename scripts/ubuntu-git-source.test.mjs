@@ -44,7 +44,9 @@ apt-get() {
 }
 sudo() { "$@"; }
 apt-cache() {
-  printf '%s\n' '  500 https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble/main arm64 Packages'
+  if test "x$DSH_APT_SCENARIO" != xmissing-ppa-policy; then
+    printf '%s\n' '  500 https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble/main arm64 Packages'
+  fi
 }
 dpkg-query() {
   case "$*" in
@@ -67,7 +69,7 @@ async function runSourceStep(t, scenario = 'success') {
   const sourceParts = join(aptRoot, 'sources.list.d')
   await mkdir(sourceParts, { recursive: true })
   await writeFile(join(aptRoot, 'sources.list'), '# main source\ndeb [arch=arm64] http://archive.ubuntu.com/ubuntu noble main\n')
-  if (scenario !== 'missing-ppa-config') {
+  if (scenario !== 'missing-ppa-config' && scenario !== 'missing-ppa-policy') {
     await writeFile(
       join(sourceParts, 'git-core.list'),
       'deb [arch=amd64 signed-by=/usr/share/keyrings/git-core.gpg] https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble main\n',
@@ -163,5 +165,13 @@ test('derives the PPA source entry from the installed package policy when runner
   assert.ifError(result.error)
   assert.equal(result.status, 0, result.stderr)
   assert.match(await readFile(join(ppaSourceParts, 'derived.list'), 'utf8'), /deb-src .*launchpadcontent\.net/u)
+  assert.ok((await readFile(archive)).length > 0)
+})
+
+test('uses the fixed Git PPA when both source config and policy origin are absent', async t => {
+  const { archive, result, ppaSourceParts } = await runSourceStep(t, 'missing-ppa-policy')
+  assert.ifError(result.error)
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(await readFile(join(ppaSourceParts, 'derived.list'), 'utf8'), /ppa\.launchpadcontent\.net\/git-core\/ppa/u)
   assert.ok((await readFile(archive)).length > 0)
 })
