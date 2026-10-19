@@ -183,6 +183,8 @@ describe('settings validation', () => {
       keepRuntimeInBackground: false,
       // 同理：旧存储也没有悬浮球键，缺省按关闭处理。
       overlayBallEnabled: false,
+      // 预启动同样是新增键：老用户不会被静默打开。
+      prewarmHarness: false,
     })
     expect(() => validateStoredSettings({
       manifestUrl: '',
@@ -218,6 +220,8 @@ describe('settings validation', () => {
       keepRuntimeInBackground: false,
       // 缺省时回落 false：与原生侧「缺键按 false」一致，老用户不会突然多出一个悬浮球。
       overlayBallEnabled: false,
+      // 预启动默认关闭：它会常驻占用资源，必须由用户显式选择。
+      prewarmHarness: false,
     })
   })
 
@@ -258,6 +262,38 @@ describe('settings validation', () => {
     expect(() => validateSettings(invalid as never)).toThrow('后台保持')
     expect(() => validateStoredSettings(invalid)).toThrow('后台保持')
     expect(() => validateSettingsUpdate(invalid as never)).toThrow('后台保持')
+  })
+
+  it('预启动默认关闭，显式开启会被保留，非布尔被拒', () => {
+    const base = {
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: false,
+      terminalFontSize: 14,
+      configuredModelProviders: [],
+    }
+    // 默认关闭：预启动会常驻占用资源，老用户升级后不应被静默打开。
+    expect(validateSettings(base).prewarmHarness).toBe(false)
+    expect(validateSettings({ ...base, prewarmHarness: true }).prewarmHarness).toBe(true)
+    expect(validateStoredSettings({ ...base, prewarmHarness: true }).prewarmHarness).toBe(true)
+    expect(() => validateSettings({ ...base, prewarmHarness: 'true' } as never)).toThrow('预启动')
+    expect(() => validateStoredSettings({ ...base, prewarmHarness: 1 })).toThrow('预启动')
+    expect(() => validateSettingsUpdate({ ...base, prewarmHarness: 'true' } as never)).toThrow('预启动')
+  })
+
+  it('更新设置时省略预启动字段表示「不改」，不会被补成关闭', () => {
+    const base = {
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: false,
+      terminalFontSize: 14,
+      configuredModelProviders: [],
+    }
+    // 省略：字段必须真的消失，桥接才看得到「这次没提到它」。
+    expect('prewarmHarness' in validateSettingsUpdate(base)).toBe(false)
+    // 显式 false 才是「关掉」。
+    expect(validateSettingsUpdate({ ...base, prewarmHarness: false }).prewarmHarness).toBe(false)
+    expect(validateSettingsUpdate({ ...base, prewarmHarness: true }).prewarmHarness).toBe(true)
   })
 
   it('rejects non-boolean screen settings instead of silently coercing them', () => {
@@ -350,6 +386,7 @@ describe('settings validation', () => {
       configuredModelProviders: [],
       keepRuntimeInBackground: false,
       overlayBallEnabled: false,
+      prewarmHarness: false,
     }
     expect(validateStoredSettings({ ...base, defaultFrontend: 'workbench' })).toEqual(base)
     expect(() => validateSettingsUpdate({ ...base, providerApiKeys: { custom: 'key' } } as never)).toThrow('供应商')

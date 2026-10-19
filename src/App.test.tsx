@@ -186,6 +186,60 @@ describe('App conversation gate', () => {
     expect(screen.queryByRole('heading', { name: '点击「打开对话」进入对话' })).not.toBeInTheDocument()
   })
 
+  it('开启「打开应用时预启动服务」后：开机只拉起服务，不打开对话页', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, prewarmHarness: true })
+
+    render(<App />)
+    await arriveAtShell()
+
+    // 预启动只调 startHarness：页面绝不由它打开，用户仍要自己点「打开对话」。
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
+    expect(bridge.openHarness).not.toHaveBeenCalled()
+    expect(document.querySelector('iframe')).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: '正在进入对话' })).not.toBeInTheDocument()
+  })
+
+  it('预启动还没回来时点打开对话：等它，不重复启动也不报错', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, prewarmHarness: true })
+    let finishPrewarm!: (state: typeof runningState) => void
+    bridge.startHarness.mockImplementationOnce(() => new Promise(resolve => { finishPrewarm = resolve }))
+
+    render(<App />)
+    await arriveAtShell()
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: '打开对话' }))
+    await act(async () => { await Promise.resolve() })
+
+    // 关键：不能因为「预启动在飞」就再发一次 startHarness——原生会立刻回报未运行，
+    // 紧接着的打开请求就会失败，用户明明点了打开却收到一条错误。
+    expect(bridge.startHarness).toHaveBeenCalledTimes(1)
+
+    await act(async () => { finishPrewarm({ ...runningState }); await Promise.resolve() })
+
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+    expect(bridge.startHarness).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('开机时服务已在运行，用户手动停止后不会被预启动再拉起来', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, prewarmHarness: true })
+    bridge.getState.mockResolvedValue({ ...runningState })
+
+    render(<App />)
+    await arriveAtShell()
+    // 开机那次判定看到「已在运行」，不预启动。
+    await act(async () => { await Promise.resolve() })
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '停止' }))
+    await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledTimes(1))
+
+    // 关键：停完之后相位回到 ready，但预启动已经判定过，绝不能把用户刚停的服务重新拉起。
+    await act(async () => { await Promise.resolve() })
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+  })
+
   it('keeps first run on setup, then installs and enters the conversation', async () => {
     bridge.getState
       .mockResolvedValueOnce({ ...notInstalledState })

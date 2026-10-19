@@ -2374,6 +2374,21 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               }}
             />
           </label>
+          {/* 预启动与「后台保持」是两件事：前者在开机时把服务拉起来（点了就几乎立刻进入），
+              后者只是提高进程存活优先级。因此既不合并成一个开关，也不互相联动：
+              用户完全可以只预启动、不保活（回到桌面后被系统回收了就下次再预启动）。 */}
+          <label className="toggle-row">
+            <span>
+              <strong>{t("打开应用时预启动服务")}</strong>
+              <small>{t("提前启动本机服务，点「打开对话」几乎立即进入；不会自动进入对话页")}</small>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={settings.prewarmHarness ?? false}
+              onChange={event => setDraft({ ...settings, prewarmHarness: event.target.checked })}
+            />
+          </label>
           {/* 悬浮球与「后台保持」是两个互相独立的开关，但各自都会提高本应用进程被系统回收的优先级：
               开悬浮球不会去拉起运行时的保活服务；悬浮球自身由独立的前台服务承载，
               与「后台保持」一样只提高优先级，不保证进程不被系统结束。 */}
@@ -3220,6 +3235,17 @@ export function App() {
   const wasRunning = useRef(false)
   const stopRequested = useRef(false)
   const [lastStop, setLastStop] = useState<LastStopReason>('none')
+  /**
+   * 「打开应用时预启动服务」的执行记录。
+   *
+   * `settingSeen` 记上一次看到的值：只有「由关变开」才预启动，因此用户手动停止后相位回到
+   * ready 不会把它重新拉起（那是「相位在变」，不是「设置刚变」）；用户在本次会话里打开
+   * 开关则立刻生效，不必等下次冷启动。
+   * `inFlight` 留着这次预启动的 promise，是为了让用户中途点开时**等**它，而不是并发再发一次
+   * `startHarness`：原生对重复启动会立刻返回「还没运行」的快照，紧接着的打开就会报错。
+   */
+  const prewarmSettingSeen = useRef(false)
+  const prewarmInFlight = useRef<Promise<RuntimeState | null> | null>(null)
 
   const notify = useCallback((message: string, tone: NoticeTone = 'info') => {
     noticeId.current += 1
@@ -3681,6 +3707,50 @@ export function App() {
     }
   }, [noteLivePhase, notify, readMailbox, readMailboxDirectory, readOverlayBall])
 
+  /*
+   * 预启动本机服务（用户显式开启「打开应用时预启动服务」时才做）。
+   *
+   * 与那次被删掉的自动启动不同：这里**只拉起服务，不打开对话页面**，界面照旧停在启动器首页，
+   * 用户仍要自己点「打开对话」。区别在于点下去时服务已经在跑，几乎立刻进入。
+   *
+   * 刻意不占用 `busy` 锁、不弹任何提示：预启动是后台准备，失败也不该在用户还没操作时弹错。
+   * 失败时静默（原生已写诊断），用户点开时会走正常启动路径并看到真实错误。
+   * 一个进程生命周期只尝试一次：依赖变化导致的反复重试会变成后台风暴。
+   */
+  useEffect(() => {
+    if (booting || onboardingOpen || settings === null) return
+    /*
+     * 触发口径是「这项设置由关变开」（开机首次判定时 previous 为 undefined，同样算一次）。
+     *
+     * 为什么按设置值而不是按相位：若只看「空闲 ready 就预启动」，用户手动点「停止」后相位
+     * 回到 ready，效果会立刻把服务重新拉起来——用户刚关掉的东西自己又开了，比慢启动更糟。
+     * 反过来，用户在本次会话里把开关打开时应该立刻生效，不必等下次冷启动，因此记下上一次
+     * 的取值来区分「设置刚变」与「相位在变」。
+     */
+    const previous = prewarmSettingSeen.current
+    prewarmSettingSeen.current = settings.prewarmHarness === true
+    if (settings.prewarmHarness !== true || previous === true) return
+    /*
+     * 只在「已安装且空闲 ready」时预启动。
+     *
+     * 用相位而不是 `installed` 判断：installed 还包含 running / stopping / 下载解压这些
+     * 正在进行的状态，在那些状态下再发一次启动会与安装或停止竞态（原生会以 RUNTIME_BUSY
+     * 之类的错误收场），而预启动本该是静默的后台准备，不该制造失败。
+     */
+    if (runtime.phase !== 'ready') return
+    if (runtime.updateAvailable) return
+    // 没有可投递的模型凭据时启动没有意义（含用户只在 Harness 内配过密钥的情况）。
+    if (!hasConfiguredModelCredential(settings)) return
+    const attempt = runtimeBridge.startHarness()
+      .then(next => {
+        setRuntime(next)
+        return next
+      })
+      .catch(() => null)
+    prewarmInFlight.current = attempt
+    void attempt
+  }, [booting, onboardingOpen, runtime, settings])
+
   useEffect(() => {
     let cancelled = false
 
@@ -4066,6 +4136,26 @@ export function App() {
        */
       const launchSequence = async (): Promise<void> => {
         let nextRuntime = launchRuntime
+        /*
+         * 预启动还在路上时**等它**，而不是再发一次 startHarness：原生对重复启动会立刻返回
+         * 「还没运行」的快照，紧接着的打开就会报 HARNESS_NOT_RUNNING——用户明明点了打开，
+         * 却收到一条错误，正是预启动最该避免的体验。等到了就用它的结果，等不到（失败/取消）
+         * 就照常自己启动一次。
+         */
+        const warming = prewarmInFlight.current
+        if (warming !== null) {
+          prewarmInFlight.current = null
+          try {
+            // 必须有上限：预启动卡死时不能让「点了打开」跟着无限挂起。
+            const warmed = await withBridgeTimeout(warming, HARNESS_START_TIMEOUT_MS)
+            if (warmed !== null && warmed.phase === 'running') {
+              launchRuntime = warmed
+              nextRuntime = warmed
+            }
+          } catch {
+            // 预启动超时/失败：照常自己启动一次，失败原因由这次启动来交代。
+          }
+        }
         if (nextRuntime.phase !== 'running') {
           nextRuntime = await withBridgeTimeout(runtimeBridge.startHarness(), HARNESS_START_TIMEOUT_MS)
           launchRuntime = nextRuntime

@@ -383,6 +383,8 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
   if (typeof keepRuntimeInBackground !== 'boolean') throw new Error('后台保持设置格式无效')
   const overlayBallEnabled = settings.overlayBallEnabled === undefined ? false : settings.overlayBallEnabled
   if (typeof overlayBallEnabled !== 'boolean') throw new Error('悬浮球设置格式无效')
+  const prewarmHarness = settings.prewarmHarness === undefined ? false : settings.prewarmHarness
+  if (typeof prewarmHarness !== 'boolean') throw new Error('预启动设置格式无效')
   if (settings.deepSeekAccountConfigured !== undefined && typeof settings.deepSeekAccountConfigured !== 'boolean') {
     throw new Error('DeepSeek 账号状态格式无效')
   }
@@ -406,6 +408,7 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
     }),
     keepRuntimeInBackground,
     overlayBallEnabled,
+    prewarmHarness,
   }
 }
 
@@ -428,6 +431,8 @@ export function validateSettingsUpdate(settings: RuntimeSettingsUpdate): Runtime
     ...(clearCustomProviderApiKeys.length === 0 ? {} : { clearCustomProviderApiKeys }),
   }
   if (settings.overlayBallEnabled === undefined) delete result.overlayBallEnabled
+  // 与悬浮球同一语义：省略表示「不改这一项」，不能因为校验层补了默认 false 就把它写成关闭。
+  if (settings.prewarmHarness === undefined) delete result.prewarmHarness
   return result
 }
 
@@ -448,6 +453,8 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
   }
   const overlayBallEnabled = settings.overlayBallEnabled === undefined ? false : settings.overlayBallEnabled
   if (typeof overlayBallEnabled !== 'boolean') throw new Error('悬浮球设置格式无效')
+  const prewarmHarness = settings.prewarmHarness === undefined ? false : settings.prewarmHarness
+  if (typeof prewarmHarness !== 'boolean') throw new Error('预启动设置格式无效')
   if (settings.deepSeekAccountConfigured !== undefined && typeof settings.deepSeekAccountConfigured !== 'boolean') {
     throw new Error('DeepSeek 账号状态格式无效')
   }
@@ -477,6 +484,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
       ...customSettings,
       keepRuntimeInBackground,
       overlayBallEnabled,
+      prewarmHarness,
     }
   }
   const source = validateRuntimeSource({
@@ -491,6 +499,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
     ...customSettings,
     keepRuntimeInBackground,
     overlayBallEnabled,
+    prewarmHarness,
   }
 }
 
