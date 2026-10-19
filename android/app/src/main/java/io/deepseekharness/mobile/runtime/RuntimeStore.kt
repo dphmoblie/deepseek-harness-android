@@ -1000,12 +1000,22 @@ class RuntimeStore(context: Context) {
     fun updateInstalledManifest(manifest: RuntimeManifest?) {
         manifestCache = manifest
         manifestCacheLoaded = true
+        // 安装、更新、版本切换与清空运行时最终都落到这里。
+        //
+        // 为什么要在这里清「自检已验证」缓存：`profileKey` 里已经含清单身份与 rootfs 摘要，
+        // 换版本本来就会失配；但**同版本的重新安装**（用户点「修复」）身份没变，而 rootfs
+        // 文件可能已经被换过一遍。此时继续信任上一次的启动结论属于「拿旧证据给新环境背书」，
+        // 所以宁可让下一次启动多付一次探测。安装失败同样会走到这里再回滚，
+        // 代价只是一次探测，方向始终是安全的。
+        RuntimeGuestVerification.from(appContext).invalidate()
     }
 
     @Synchronized
     fun invalidateInstalledManifest() {
         manifestCache = null
         manifestCacheLoaded = false
+        // 中断恢复会先让清单失效再重新读取：这一路径同样代表「磁盘上的运行时可能被换过」。
+        RuntimeGuestVerification.from(appContext).invalidate()
     }
 
     fun writeInstalledManifest(destination: File, manifest: RuntimeManifest) {

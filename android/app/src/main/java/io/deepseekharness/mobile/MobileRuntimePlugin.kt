@@ -1114,6 +1114,13 @@ class MobileRuntimePlugin : Plugin() {
         }
         val generation = harnessStartGeneration.get()
         val accepted = execute(call) {
+            /*
+             * 启动耗时从「接单」开始算，而不是从 `controller.startHarness()` 开始：
+             * 用户体感的是「点了按钮到能用」，中间还夹着设备桥检查与语言重放，
+             * 只测内核那段会把真实等待算少，优化就会盯着错的地方。
+             */
+            val startWatch = SystemClock.elapsedRealtime()
+            val elapsedMillis = { SystemClock.elapsedRealtime() - startWatch }
             try {
                 audited(AuditEvent.RUNTIME_START) {
                     if (generation != harnessStartGeneration.get()) return@audited controller.state().toJs()
@@ -1128,15 +1135,26 @@ class MobileRuntimePlugin : Plugin() {
                             diagnostics()?.record(
                                 DiagnosticLevel.INFO,
                                 DiagnosticEvent.HARNESS_START,
-                                mapOf("result" to "ok", "phase" to snapshot.optString("phase")),
+                                mapOf(
+                                    "result" to "ok",
+                                    "phase" to snapshot.optString("phase"),
+                                    // 唯一的启动耗时客观口径：0 表示「没走到内核那段」，正常启动不会是 0。
+                                    "elapsed_ms" to elapsedMillis().toString(),
+                                ),
                             )
                         }
                     } catch (failure: Throwable) {
                         // 启动失败码是排障的核心线索：它是受控枚举，不含任何凭据或路径。
+                        // 失败也记耗时：120 秒超时与 200 毫秒就失败是两种完全不同的故障，
+                        // 只看失败码会把它们混成同一类。
                         diagnostics()?.record(
                             DiagnosticLevel.ERROR,
                             DiagnosticEvent.HARNESS_START,
-                            mapOf("result" to "failed", "code" to failureCode(failure)),
+                            mapOf(
+                                "result" to "failed",
+                                "code" to failureCode(failure),
+                                "elapsed_ms" to elapsedMillis().toString(),
+                            ),
                         )
                         throw failure
                     }
