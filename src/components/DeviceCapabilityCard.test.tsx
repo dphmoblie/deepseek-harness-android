@@ -89,6 +89,8 @@ describe('设备能力卡片', () => {
     row('副屏 可用')
     row('整屏截图 可用')
     row('中文输入 可用')
+    /* 状态走 chip（清单 M-7）：就绪走 `success` 档，与「需一步设置」的琥珀色区分开。 */
+    expect(row('Shizuku（设备 Shell） 可用').querySelector('.status-chip')).toHaveClass('success')
   })
 
   it('降级的那一项说「能用但保护降了一档」，并讲清少了什么', async () => {
@@ -101,6 +103,7 @@ describe('设备能力卡片', () => {
     const root = await findRow('根通道（KernelSU） 可用，但保护降了一档 · 命令照常执行，但这台设备给不了完整的隔离：静态审查已按严格档收紧，对 /dev 的遮蔽没有生效')
     /* 降级**不许**出现「下一步」：用户没有可点的一步，指路反而会让人以为再设一步就能补回来。 */
     expect(root.textContent).not.toContain('下一步')
+    expect(root.querySelector('.status-chip')).toHaveClass('warn')
   })
 
   it('就绪的行不教用户去设置：不说原因、不说下一步、不说替代方式', async () => {
@@ -122,7 +125,7 @@ describe('设备能力卡片', () => {
     await findRow('Shizuku（设备 Shell） 需要一步设置 · Shizuku 没有在运行 · 下一步：打开 Shizuku')
   })
 
-  it('被别的前置挡住的行说明缺的是哪一环，并给出替代方式', async () => {
+  it('依赖未满足的行说明缺的是哪一环，并给出替代方式', async () => {
     card({
       getDeviceCapabilities: vi.fn().mockResolvedValue(report([
         entry('shizuku', { state: 'unsupported', reason: 'SHIZUKU_NOT_INSTALLED', action: 'install_shizuku', alternative: 'NO_DEVICE_SHELL' }),
@@ -134,7 +137,7 @@ describe('设备能力卡片', () => {
       'Shizuku（设备 Shell） 这台设备不支持 · 还没有安装 Shizuku · 下一步：安装 Shizuku · 替代方式：没有设备 Shell，需要整屏操作的功能都用不了',
     )
     row(
-      '中文输入 被别的前置挡住 · 无障碍服务没有开启 · 下一步：到系统设置里开启本应用的无障碍服务 · 替代方式：只能通过 Shell 发送可打印的 ASCII 字符',
+      '中文输入 依赖未满足 · 无障碍服务没有开启 · 下一步：到系统设置里开启本应用的无障碍服务 · 替代方式：只能通过 Shell 发送可打印的 ASCII 字符',
     )
   })
 
@@ -158,7 +161,7 @@ describe('设备能力卡片', () => {
       ])),
     })
 
-    await findRow('整屏截图 被别的前置挡住 · 暂时说不上来具体原因 · 下一步：do_something_new')
+    await findRow('整屏截图 依赖未满足 · 暂时说不上来具体原因 · 下一步：do_something_new')
   })
 
   it('读不到清单时说读不到，并给一次重试（不显示成「五项都不可用」）', async () => {

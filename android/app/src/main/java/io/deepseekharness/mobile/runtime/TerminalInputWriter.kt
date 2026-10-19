@@ -1,6 +1,11 @@
 package io.deepseekharness.mobile.runtime
 
-/** 与 pty_bridge.c 的 MAX_IO_BYTES 保持一致，短写后继续投递未写入的字节。 */
+/**
+ * 与 `pty_bridge.c` 的 `MAX_IO_BYTES` 保持一致，短写后继续投递未写入的字节。
+ *
+ * 「一致」不是靠注释维持的：`TerminalInputWriterTest.chunkSizeStaysInSyncWithTheNativeLimit`
+ * 会读 C 源码对值，只改一侧就红。
+ */
 internal object TerminalInputWriter {
     const val MAX_CHUNK_BYTES = 32 * 1024
 

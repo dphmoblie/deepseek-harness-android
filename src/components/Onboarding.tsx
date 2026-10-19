@@ -31,25 +31,28 @@ const STEPS = [
   { id: 'ready', title: '开始使用', icon: Rocket },
 ] as const
 
-type ManifestSource = 'bundled' | 'configured' | 'invalid'
-
 /**
- * 清单来源的三态判定：空对是 APK 内置镜像，合法成对值是在线来源，其余都是需要修正的配置。
+ * 运行时来源分三种，界面要分开说：
+ * - `offline`：两个都空，走 APK 内置镜像。离线包不报配置错误，但要说明「内置镜像缺失时去哪儿补」——
+ *   早先的写法在这条路径上什么都不显示，用户装不上时没有任何线索；
+ * - `incomplete`：只填了一半、留着占位地址或摘要格式不对，这是配置错误，必须点出来；
+ * - `ready`：成对且格式合法，不用提示。
  * 这里仅做引导页的提示判定；真正下载前仍由平台校验函数做完整的 URL、主机和摘要校验。
  */
-function manifestSource(settings: RuntimeSettings | null): ManifestSource {
-  if (settings === null) return 'bundled'
+function manifestSource(settings: RuntimeSettings | null): 'offline' | 'incomplete' | 'ready' {
+  if (settings === null) return 'ready'
   const url = settings.manifestUrl.trim()
   const digest = settings.manifestSha256.trim()
-  if (url === '' && digest === '') return 'bundled'
-  if (url === '' || digest === '' || !/^https:\/\/[^\s/]+(?:\/[^\s]*)?$/i.test(url)) return 'invalid'
+  if (url === '' && digest === '') return 'offline'
+  // 只填一半、或地址根本不是 https，都算配置错误：这类来源装不上，必须当场说清。
+  if (url === '' || digest === '' || !/^https:\/\/[^\s/]+(?:\/[^\s]*)?$/i.test(url)) return 'incomplete'
   try {
-    const parsed = new URL(url)
-    if (parsed.hostname.endsWith('.invalid')) return 'invalid'
+    // 占位域名（*.invalid）是模板里留下的示例值，不能当成可用来源。
+    if (new URL(url).hostname.endsWith('.invalid')) return 'incomplete'
   } catch {
-    return 'invalid'
+    return 'incomplete'
   }
-  return /^[0-9a-f]{64}$/i.test(digest) ? 'configured' : 'invalid'
+  return /^[0-9a-f]{64}$/i.test(digest) ? 'ready' : 'incomplete'
 }
 
 export function Onboarding({
@@ -69,6 +72,7 @@ export function Onboarding({
   const last = step === STEPS.length - 1
 
   const installed = ['ready', 'running'].includes(runtime.phase)
+  const source = manifestSource(settings)
   const authorized = shizuku.permission === 'granted'
   const canOpenHarness = installed && !runtime.updateAvailable && busy === null && !saving
   // 账号登录和 API Key 都是可用的模型凭据，登录必须先允许进入 Harness。
@@ -146,11 +150,11 @@ export function Onboarding({
               {step === 1 && (
                 <div className="onboarding-body">
                   <p>{t("首次使用需要安装 Ubuntu 运行环境（数百 MB）。应用内置的安装包可离线安装；使用在线来源时，建议通过 Wi-Fi 下载。")}</p>
-                  {!installed && settings !== null && manifestSource(settings) === 'bundled' && (
-                    <p className="onboarding-note">{t("安装将先解压 APK 内置镜像；内置镜像缺失时，请到「设置 → 后台」补充清单地址与 SHA-256。")}</p>
+                  {!installed && source === 'incomplete' && (
+                    <p className="onboarding-warn">{t("运行时下载地址不完整：请在「设置 → 后台」同时填写清单地址与 SHA-256（两者必须成对）。")}</p>
                   )}
-                  {!installed && settings !== null && manifestSource(settings) === 'invalid' && (
-                    <p className="onboarding-warn">{t("运行时来源配置不完整或格式无效：请到「设置 → 后台」同时填写有效的清单地址与 SHA-256。")}</p>
+                  {!installed && source === 'offline' && (
+                    <p className="onboarding-status">{t("这个安装包没带运行时下载地址：安装会先解压 APK 内置的镜像；内置镜像缺失时需要先到「设置 → 后台」填写清单地址与 SHA-256（两者必须成对）。")}</p>
                   )}
                   <p className="onboarding-status">
                     {t("当前状态：")}{installed ? t("已安装") + (runtime.phase === 'running' ? t(" · 运行中") : '') : runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting' ? t("正在安装…") : t("未安装")}

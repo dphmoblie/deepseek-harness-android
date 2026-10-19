@@ -52,17 +52,23 @@ describe('Onboarding', () => {
     expect(screen.getByText('安装 Ubuntu 运行时')).toBeDefined()
   })
 
-  it('说明空来源会使用 APK 内置镜像', () => {
-    renderOnboarding({ settings: { ...settings, manifestUrl: '', manifestSha256: '' } })
+  it('配置错误的在线来源要明确点出来', () => {
+    renderOnboarding()
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
-    expect(screen.getByText(/安装将先解压 APK 内置镜像/)).toBeDefined()
+    expect(screen.getByText(/运行时下载地址不完整/)).toBeDefined()
   })
 
-  it('warns when the manifest pair is incomplete', () => {
-    const current = { ...settings, manifestSha256: '' }
-    renderOnboarding({ settings: current })
+  it('只填一半的清单也算配置错误', () => {
+    renderOnboarding({ settings: { ...settings, manifestSha256: '' } })
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
-    expect(screen.getByText(/运行时来源配置不完整/)).toBeDefined()
+    expect(screen.getByText(/运行时下载地址不完整/)).toBeDefined()
+  })
+
+  it('离线安装包说明内置镜像与补充在线来源的位置', () => {
+    renderOnboarding({ settings: { ...settings, manifestUrl: '', manifestSha256: '' } })
+    fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    expect(screen.getByText(/这个安装包没带运行时下载地址/)).toBeDefined()
+    expect(screen.queryByText(/运行时下载地址不完整/)).toBeNull()
   })
 
   it('calls onInstall from the runtime step', () => {
@@ -75,11 +81,11 @@ describe('Onboarding', () => {
   it.each([
     { name: '内置离线来源', settings: { ...settings, manifestUrl: '', manifestSha256: '' }, runtime },
     { name: '已安装运行时', settings, runtime: { ...runtime, phase: 'ready' as const } },
-    { name: '有效在线来源', settings: { ...settings, manifestUrl: 'https://downloads.deepseek.example/runtime.json' }, runtime },
-  ])('$name 不显示缺少在线来源警告', value => {
+    { name: '有效在线来源', settings: { ...settings, manifestUrl: 'https://example.com/runtime.json' }, runtime },
+  ])('$name 不报地址配置错误', value => {
     renderOnboarding(value)
     fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
-    expect(screen.queryByText(/运行时来源配置不完整/)).toBeNull()
+    expect(screen.queryByText(/运行时下载地址不完整/)).toBeNull()
   })
 
   it('安装忙碌时不会调用保存或清空密钥', () => {

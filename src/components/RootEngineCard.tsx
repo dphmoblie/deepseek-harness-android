@@ -9,6 +9,10 @@ import type { RootEngineStatus, RuntimeBridge } from '../platform/types'
  *
  * 与原生 `KernelSuProbe` 的三态逐字对应：`ready`（能跑）、`needs_action`（装好了但还缺一步）、
  * `unsupported`（这台设备没有可用的 KernelSU）。
+ *
+ * 注意 `unsupported` **只在开关开着时**才是「没装」：开关关着时原生不拉 `su`（`RootEngineAccess.status`
+ * 直接回 `unsupported` 且原因是 `ROOT_ENGINE_DISABLED`），那一档的真实含义是「还没查」。
+ * 所以下面渲染时先看 `enabled`——关着就说关着，绝不说成「这台设备没有可用的 KernelSU」。
  */
 const KERNEL_SU_STATE_LABELS: Record<string, string> = {
   ready: '当前可用',
@@ -156,8 +160,14 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
         {' '}{t('启用根通道')}
       </label>
       {' '}
-      {t(KERNEL_SU_STATE_LABELS[value.kernelSuStatus] ?? value.kernelSuStatus)}
-      {value.reason !== 'READY' && ` · ${t(REASON_NOTES[value.reason] ?? '暂时说不上来具体原因')}`}
+      {value.enabled
+        ? t(KERNEL_SU_STATE_LABELS[value.kernelSuStatus] ?? value.kernelSuStatus)
+        : t('开关关着')}
+      {value.enabled && value.reason !== 'READY' && ` · ${t(REASON_NOTES[value.reason] ?? '暂时说不上来具体原因')}`}
+    </p>}
+    {/* 关着时说不成「没有 KernelSU」（原生此刻不拉 su，根本没查过）：如实说「还不知道」，并讲清为什么。 */}
+    {value !== null && !value.enabled && <p className="settings-note">
+      {t('关着的时候本应用不拉 su，所以现在还不知道这台设备支不支持 KernelSU；打开开关后才会检测。')}
     </p>}
     {value !== null && value.suVersion !== null && <p className="settings-note">{t('su 版本：{0}', value.suVersion)}</p>}
     {value !== null && value.enabled && !value.usable && <p className="settings-note">
@@ -178,6 +188,6 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
     </p>}
     {writeError !== null && <p role="alert">{t('保存根通道开关失败：{0}', writeError)}</p>}
     {value !== null && <button className="button button-secondary compact-button" type="button" disabled={busy} onClick={() => { void refresh() }}>{t('重新检测')}</button>}
-    {load.status === 'failed' && <p role="alert">{t('无法读取根通道状态')} <button className="button button-secondary compact-button" type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
+    {load.status === 'failed' && <p role="alert">{t('无法读取根通道状态')} <button className="button button-quiet" type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
   </div>
 }

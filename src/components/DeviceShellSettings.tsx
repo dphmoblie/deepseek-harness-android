@@ -29,6 +29,6 @@ export function DeviceShellSettings({ bridge, disabled }: { bridge: RuntimeBridg
     </label>
     <p className="settings-note">{t('Shell 使用 Shizuku 的实际权限，不受无障碍应用白名单限制。命令和输出不写入诊断日志；需要返回给 AI 的内容会进入当前会话及所选模型服务。')}</p>
     <p className="settings-note"><strong>{t('写入、覆盖、删除会修改真实设备数据，请让 AI 只处理本次任务需要的文件。')}</strong></p>
-    {failed && <p role="alert">{t('无法读取或保存 AI Shell 授权状态')} <button type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
+    {failed && <p role="alert">{t('无法读取或保存 AI Shell 授权状态')} <button className="button button-quiet" type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
   </div>
 }

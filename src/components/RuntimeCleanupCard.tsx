@@ -164,31 +164,31 @@ export function RuntimeCleanupCard({ bridge = runtimeBridge }: { bridge?: Runtim
         : t('{0}：还没有数据', pkg.id)}
       {' '}
       {/* 包名不进 testid（可能含 `@` 与 `/`），但**要进无障碍名**：几行按钮同名时，读屏用户分不清清的是哪一个。 */}
-      <button type="button" disabled={!pluginReady || busy || !pkg.present}
+      <button className="button button-secondary compact-button" type="button" disabled={!pluginReady || busy || !pkg.present}
         aria-label={t('只清插件 {0} 的数据', pkg.id)}
         onClick={() => setPending({ tier: 'plugin', packageName: pkg.id })}>{t('只清这个插件')}</button>
     </p>)}
     <p className="settings-note">{t('插件数据清理只清空插件自己的数据目录，插件本身仍然保留。')}</p>
 
-    {pending?.tier !== 'cache' && <button type="button" disabled={!cacheReady || busy} onClick={() => setPending({ tier: 'cache' })}>{t('清理缓存')}</button>}
+    {pending?.tier !== 'cache' && <button className="button button-secondary" type="button" disabled={!cacheReady || busy} onClick={() => setPending({ tier: 'cache' })}>{t('清理缓存')}</button>}
     {pending?.tier === 'cache' && <div role="alertdialog" aria-labelledby="runtime-cleanup-cache-confirm">
       <p className="settings-note" id="runtime-cleanup-cache-confirm"><strong>{t('确认清理缓存？')}</strong> {t('只删除诊断导出、工作区分享暂存与 PRoot 临时目录；不删待安装的更新包，也不碰运行环境的数据。')}</p>
-      <button type="button" disabled={busy} onClick={() => { void clean({ tier: 'cache' }) }}>{busy ? t('正在清理…') : t('确认清理')}</button>
-      <button type="button" disabled={busy} onClick={() => setPending(null)}>{t('取消')}</button>
+      <button className="button button-danger-quiet" type="button" disabled={busy} onClick={() => { void clean({ tier: 'cache' }) }}>{busy ? t('正在清理…') : t('确认清理')}</button>
+      <button className="button button-secondary" type="button" disabled={busy} onClick={() => setPending(null)}>{t('取消')}</button>
     </div>}
 
-    {pending?.tier !== 'plugin' && <button type="button" disabled={!pluginReady || busy} onClick={() => setPending({ tier: 'plugin' })}>{t('清理插件数据')}</button>}
+    {pending?.tier !== 'plugin' && <button className="button button-secondary" type="button" disabled={!pluginReady || busy} onClick={() => setPending({ tier: 'plugin' })}>{t('清理插件数据')}</button>}
     {pending?.tier === 'plugin' && pending.packageName === undefined && <div role="alertdialog" aria-labelledby="runtime-cleanup-plugin-confirm">
       <p className="settings-note" id="runtime-cleanup-plugin-confirm"><strong>{t('确认清理插件数据？')}</strong> {t('清空每个已安装插件自己的数据目录（data/config/storage/.config）；插件本身仍然保留，下次使用会重新生成数据。')}</p>
-      <button type="button" disabled={busy} onClick={() => { void clean({ tier: 'plugin' }) }}>{busy ? t('正在清理…') : t('确认清理')}</button>
-      <button type="button" disabled={busy} onClick={() => setPending(null)}>{t('取消')}</button>
+      <button className="button button-danger-quiet" type="button" disabled={busy} onClick={() => { void clean({ tier: 'plugin' }) }}>{busy ? t('正在清理…') : t('确认清理')}</button>
+      <button className="button button-secondary" type="button" disabled={busy} onClick={() => setPending(null)}>{t('取消')}</button>
     </div>}
     {/* 逐包的确认与整档的分开：这个块只在点名了包时出现，**文案必须点出是哪一个包**，
         而且要讲清「只清这一个、插件本体与其它插件的数据都不动」——否则与整档按钮长得一样，点错就清了全部。 */}
     {pending?.tier === 'plugin' && pending.packageName !== undefined && <div role="alertdialog" aria-labelledby="runtime-cleanup-package-confirm">
       <p className="settings-note" id="runtime-cleanup-package-confirm"><strong>{t('确认只清理插件 {0} 的数据？', pending.packageName)}</strong> {t('只清空这一个插件的数据目录（data/config/storage/.config）；插件本身仍然保留，其它插件的数据不动。')}</p>
-      <button type="button" disabled={busy} onClick={() => { void clean(pending) }}>{busy ? t('正在清理…') : t('确认清理')}</button>
-      <button type="button" disabled={busy} onClick={() => setPending(null)}>{t('取消')}</button>
+      <button className="button button-danger-quiet" type="button" disabled={busy} onClick={() => { void clean(pending) }}>{busy ? t('正在清理…') : t('确认清理')}</button>
+      <button className="button button-secondary" type="button" disabled={busy} onClick={() => setPending(null)}>{t('取消')}</button>
     </div>}
 
     {result !== null && <p className="settings-note" role="status">
@@ -202,7 +202,7 @@ export function RuntimeCleanupCard({ bridge = runtimeBridge }: { bridge?: Runtim
     {result !== null && result.outcome.skipped > 0 && <p className="settings-note">
       {t('另有 {0} 项本来就不存在，已跳过。', String(result.outcome.skipped))}
     </p>}
-    {failed && <p role="alert">{t('无法读取数据占用')} <button type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
+    {failed && <p role="alert">{t('无法读取数据占用')} <button className="button button-quiet" type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
     {actionFailed !== null && <p role="alert">{actionFailed}</p>}
   </div>
 }

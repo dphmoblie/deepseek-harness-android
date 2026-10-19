@@ -12,21 +12,21 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 同时让 [ShizukuRuntime] 的同步 Binder 调用始终落在后台执行器上。
  */
 internal class ShizukuBindDispatcher(private val executor: Executor) {
-    /** UserServiceArgs are process-wide; never overlap an old stuck bind with a new bind. */
+    /** UserServiceArgs 是进程级的：旧的绑定卡住时，绝不与新的绑定重叠。 */
     private companion object {
         val processBindGate = Semaphore(1, true)
     }
     private val closed = AtomicBoolean(false)
 
     fun submit(
-        current: () -> Boolean,
+        stillCurrent: () -> Boolean,
         bind: () -> Unit,
         fail: (Throwable) -> Unit,
     ): Boolean {
         if (closed.get()) return false
         return try {
             executor.execute {
-                if (closed.get() || !current()) {
+                if (closed.get() || !stillCurrent()) {
                     fail(IllegalStateException("Shizuku binding was cancelled"))
                     return@execute
                 }
@@ -38,7 +38,7 @@ internal class ShizukuBindDispatcher(private val executor: Executor) {
                     return@execute
                 }
                 try {
-                    if (closed.get() || !current()) {
+                    if (closed.get() || !stillCurrent()) {
                         fail(IllegalStateException("Shizuku binding was cancelled"))
                         return@execute
                     }

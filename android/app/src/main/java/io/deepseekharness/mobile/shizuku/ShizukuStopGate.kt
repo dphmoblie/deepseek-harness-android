@@ -9,9 +9,8 @@ import java.util.concurrent.TimeoutException
 /** 远程清理只允许一次在途；调用方超时后，仍等待旧清理完成才允许重新绑定。 */
 internal class ShizukuStopGate(private val stop: () -> Unit) {
     companion object {
-        // The UserServiceArgs are process-wide (same component/tag/version).  Keep the
-        // in-flight stop process-wide too: a timed-out old runtime must not be followed by
-        // a new runtime binding that the old unbind(..., remove=true) could tear down.
+        // UserServiceArgs 是进程级的（组件/tag/版本都相同），在途的停止流程也必须是进程级的：
+        // 超时退场的旧运行时之后若接上新运行时的绑定，旧的 unbind(..., remove=true) 会把它拆掉。
         private val processLock = Any()
         private var processPending: FutureTask<Unit>? = null
     }
@@ -25,8 +24,8 @@ internal class ShizukuStopGate(private val stop: () -> Unit) {
                 try {
                     Thread(created, "dsh-shizuku-stop").apply { isDaemon = true }.start()
                 } catch (error: Throwable) {
-                    // A failed thread start never runs the task/finally block. Do not leave a
-                    // phantom process-wide stop forever preventing every future Shizuku bind.
+                    // 线程没起来就不会执行任务与 finally：别留下一个永不完成的进程级停止，
+                    // 否则之后每一次 Shizuku 绑定都会被它挡住。
                     if (processPending === created) processPending = null
                     throw error
                 }

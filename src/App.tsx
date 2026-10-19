@@ -1226,6 +1226,12 @@ interface SettingsHomeScreenProps {
 }
 
 /**
+ * 设置首页搜索框的长度上限：改一处就够——输入框 `maxLength`、原生直写 DOM 的截断、
+ * 失焦兜底的截断必须同一个值，否则会出现「能打进去但被悄悄截掉」的错觉。
+ */
+const SETTINGS_SEARCH_MAX_LENGTH = 120
+
+/**
  * 设置首页：按分组列出全部入口，分组可以筛选。
  *
  * 筛选只决定这一屏显示哪些入口，不改变任何行为：点下去走的是同一条路。
@@ -1253,7 +1259,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
 
   /** 兼容原生直接写入 DOM 的输入；限制长度并同步草稿，分类同时复位。 */
   const applySearch = (value: string): void => {
-    const nextValue = value.slice(0, 120)
+    const nextValue = value.slice(0, SETTINGS_SEARCH_MAX_LENGTH)
     setQuery(nextValue)
     setAppliedQuery(nextValue.trim())
     setCategory('all')
@@ -1312,7 +1318,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
             setIsComposing(false)
             // captureInput 可能只改 DOM；先把失焦时仍可见的文字同步回受控状态，
             // 避免结束输入法组合时 React 重绘把它清掉。
-            setQuery(event.currentTarget.value.slice(0, 120))
+            setQuery(event.currentTarget.value.slice(0, SETTINGS_SEARCH_MAX_LENGTH))
           }}
           onKeyDown={event => {
             // 组合中的 Enter 交给输入法确认候选词，不当作提交。
@@ -1321,7 +1327,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
               applySearch(event.currentTarget.value)
             }
           }}
-          maxLength={120}
+          maxLength={SETTINGS_SEARCH_MAX_LENGTH}
           placeholder={t("按功能词查找入口")}
           aria-label={t("按功能词查找入口")}
           autoComplete="off"
