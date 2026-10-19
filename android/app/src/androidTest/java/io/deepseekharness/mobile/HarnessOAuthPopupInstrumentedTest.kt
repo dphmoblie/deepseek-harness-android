@@ -3,6 +3,8 @@ package io.deepseekharness.mobile
 import android.app.Instrumentation
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.PatternMatcher
+import android.os.SystemClock
 import android.view.MotionEvent
 import android.webkit.WebView
 import androidx.test.core.app.ActivityScenario
@@ -30,7 +32,14 @@ class HarnessOAuthPopupInstrumentedTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val app = instrumentation.targetContext
         val previousAccess = AppAuthenticationState.harnessAccess()
-        val browser = Instrumentation.ActivityMonitor(IntentFilter(Intent.ACTION_VIEW), null, true)
+        // Match only the exact authorization origin/path. A generic ACTION_VIEW
+        // monitor would also pass if the app opened an unrelated URL.
+        val browserFilter = IntentFilter(Intent.ACTION_VIEW).apply {
+            addDataScheme("https")
+            addDataAuthority("platform.deepseek.com", null)
+            addDataPath("/dsh/authorize", PatternMatcher.PATTERN_LITERAL)
+        }
+        val browser = Instrumentation.ActivityMonitor(browserFilter, null, true)
         instrumentation.addMonitor(browser)
         try {
             PopupPageServer().use { server ->
@@ -44,8 +53,9 @@ class HarnessOAuthPopupInstrumentedTest {
                     waitForPage(scenario)
                     scenario.onActivity { activity ->
                         val view = activity.findViewById<WebView>(R.id.harness_web_view)
-                        val down = MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, 32f, 32f, 0)
-                        val up = MotionEvent.obtain(0, 20, MotionEvent.ACTION_UP, 32f, 32f, 0)
+                        val downTime = SystemClock.uptimeMillis()
+                        val down = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, 32f, 32f, 0)
+                        val up = MotionEvent.obtain(downTime, downTime + 20L, MotionEvent.ACTION_UP, 32f, 32f, 0)
                         try {
                             assertTrue(view.dispatchTouchEvent(down))
                             assertTrue(view.dispatchTouchEvent(up))

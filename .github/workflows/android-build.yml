@@ -180,9 +180,9 @@ jobs:
       - name: Install wrapper jar into android project
         run: cp .wrapper-bootstrap/gradle/wrapper/gradle-wrapper.jar android/gradle/wrapper/gradle-wrapper.jar
 
-      - name: Build release APK + lint + unit tests
+      - name: Build release APK + lint + unit tests + instrumented test APK
         working-directory: android
-        run: ./gradlew assembleRelease lintRelease testDebugUnitTest --no-daemon
+        run: ./gradlew assembleRelease lintRelease testDebugUnitTest assembleDebugAndroidTest --no-daemon
 
       - name: 校验 APK 团队签名（证书指纹与团队密钥库一致）
         run: python3 scripts/verify-apk-signature.py --apk android/app/build/outputs/apk/release/app-release.apk
