@@ -566,7 +566,7 @@ class HarnessActivity : AppCompatActivity() {
             // A page must not be able to launch the external account chooser from a timer,
             // redirect, or injected script.  Popup transport gets its own one-shot allowance
             // from onCreateWindow after WebView has confirmed a real user gesture.
-            if (request.hasGesture &&
+            if (request.hasGesture() &&
                 isDeepSeekAuthorizationNavigation(uri.toString(), request.method, request.isForMainFrame)
             ) {
                 onDeepSeekAuthorization(uri)
