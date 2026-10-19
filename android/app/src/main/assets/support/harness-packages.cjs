@@ -91,6 +91,17 @@ function verifyLock(lock, selected, integrity) {
     if (CORE.test(name) && item.version !== selected) fail('HARNESS_DEPENDENCY_MISMATCH')
   }
 }
+/** 在 npm 扁平布局、pnpm 虚拟存储和常规解析三种布局里定位单个包目录；找不到返回 null。 */
+function locate(modules, anchor, name) {
+  const flat = path.join(modules, name)
+  if (fs.existsSync(path.join(flat, 'package.json'))) return flat
+  try { return path.dirname(createRequire(path.join(anchor, 'package.json')).resolve(name + '/package.json')) } catch {}
+  const store = path.join(modules, '.pnpm')
+  const prefix = name.replace('/', '+') + '@'
+  const entries = fs.existsSync(store) ? fs.readdirSync(store).filter(entry => entry.startsWith(prefix)) : []
+  return entries.sort().reverse().map(entry => path.join(store, entry, 'node_modules', name))
+    .find(candidate => fs.existsSync(path.join(candidate, 'package.json'))) ?? null
+}
 function createManager(root, execute = spawnSync, report = () => {}) {
   root = fs.realpathSync(root)
   const home = directory(root, 'root/.dsh-mobile/harness-versions')
@@ -161,8 +172,6 @@ function createManager(root, execute = spawnSync, report = () => {}) {
       run(npmArgs('ci', stage), stage, 480000)
       report('bridge', 78)
       const modules = path.join(stage, 'node_modules')
-      const req = createRequire(path.join(modules, '@deepseek-ai/dsh/package.json'))
-      const originalReq = createRequire(path.join(bundled, 'node_modules/@deepseek-ai/dsh/package.json'))
       const bridgeName = '@deepseek-harness/dsh-mobile-shizuku'
       const bridgeSource = fs.realpathSync(path.join(bundled, 'node_modules', bridgeName))
       const bridgeTarget = path.join(modules, bridgeName)
@@ -176,20 +185,38 @@ function createManager(root, execute = spawnSync, report = () => {}) {
       atomic(dshManifest, cli)
       phase = 'native'
       report(phase, 84)
-      // 同版本原生模块优先复用随包 ARM64 二进制，否则明确构建 node-pty 后再探测。
-      const ptyManifest = req.resolve('node-pty/package.json')
-      const originalPty = originalReq.resolve('node-pty/package.json')
-      if (read(ptyManifest).version === read(originalPty).version) {
-        fs.cpSync(path.dirname(originalPty), path.dirname(ptyManifest), { recursive: true, dereference: true,
-          filter: source => !path.relative(path.dirname(originalPty), source).split(path.sep).includes('node_modules') })
-      } else {
-        const gyp = originalReq.resolve('node-gyp/bin/node-gyp.js')
-        run([gyp, 'rebuild', '--nodedir=' + path.join(root, 'opt/node')], path.dirname(ptyManifest))
+      // node-pty 是 dsh-subprocess-local 的间接依赖，内置运行时用 pnpm 隔离安装，
+      // 顶层没有它的软链，只有 createRequire 会在这里抛 MODULE_NOT_FOUND 并把安装永久卡住。
+      // 发布包自带各平台 prebuilds/<platform>-<arch>/pty.node（lib/utils.js 优先加载），
+      // 装好的树里已经有可加载的二进制就不再构建、也不再整包覆盖。
+      const bundledModules = path.join(bundled, 'node_modules')
+      const bundledAnchor = path.join(bundledModules, '@deepseek-ai/dsh/package.json')
+      const ptyDirectory = locate(modules, path.join(modules, '@deepseek-ai/dsh/package.json'), 'node-pty')
+      if (!ptyDirectory) fail('HARNESS_PACKAGE_INVALID')
+      const nativeArch = process.platform + '-' + process.arch
+      const nativePath = path.join('prebuilds', nativeArch, 'pty.node')
+      const usable = file => {
+        const stat = fs.lstatSync(file, { throwIfNoEntry: false })
+        return Boolean(stat?.isFile() && stat.size > 0)
+      }
+      if (!usable(path.join(ptyDirectory, nativePath))) {
+        const bundledPty = locate(bundledModules, bundledAnchor, 'node-pty')
+        const reusable = bundledPty && usable(path.join(bundledPty, nativePath)) &&
+          read(path.join(bundledPty, 'package.json')).version === read(path.join(ptyDirectory, 'package.json')).version
+        if (reusable) {
+          // 同版本随包二进制可直接沿用：只补本机架构这一个 prebuilds 子目录。
+          fs.cpSync(path.join(bundledPty, 'prebuilds', nativeArch), path.join(ptyDirectory, 'prebuilds', nativeArch),
+            { recursive: true, dereference: true })
+        } else {
+          const gyp = locate(bundledModules, bundledAnchor, 'node-gyp')
+          if (!gyp) fail('HARNESS_PACKAGE_INVALID')
+          run([path.join(gyp, 'bin/node-gyp.js'), 'rebuild', '--nodedir=' + path.join(root, 'opt/node')], ptyDirectory)
+        }
       }
       phase = 'smoke'
       report(phase, 92)
       // 真实加载原生模块并创建 PTY；不以目录存在冒充可执行。
-      run(['-e', 'const p=require(process.argv[1]);const t=p.spawn("/bin/true",[],{name:"xterm",cols:80,rows:24});t.onExit(e=>process.exit(e.exitCode));setTimeout(()=>process.exit(1),10000).unref()', path.dirname(ptyManifest)], stage, 20000)
+      run(['-e', 'const p=require(process.argv[1]);const t=p.spawn("/bin/true",[],{name:"xterm",cols:80,rows:24});t.onExit(e=>process.exit(e.exitCode));setTimeout(()=>process.exit(1),10000).unref()', ptyDirectory], stage, 20000)
       run([path.join(modules, '@deepseek-ai/dsh/lib/bin.js'), '--version'], stage, 30000)
       // 仅移除本次事务内部的 npm 缓存；锁文件与完整依赖树保留供离线核验。
       fs.rmSync(path.join(stage, 'cache'), { recursive: true, force: true })

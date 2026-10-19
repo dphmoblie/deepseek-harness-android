@@ -118,3 +118,69 @@ test('环境探测返回 Node ABI，并为 node-gyp 保留 /usr/local/bin', t =>
   assert.throws(() => failing.install('0.2.1-rc.2', integrity), /HARNESS_INSTALL_FAILED/u)
   assert.match(calls.at(-1).options.env.PATH, /:\/usr\/local\/bin:/u)
 })
+
+// 安装链路 fixture：两步 npm install 只产出锁文件，npm ci 负责造出扁平依赖树。
+// 内置运行时是 pnpm 隔离布局，所以 bundled 侧要显式造 .pnpm 虚拟存储。
+function emit(directory, relative, value) {
+  const target = path.join(directory, relative)
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.writeFileSync(target, typeof value === 'string' ? value : JSON.stringify(value))
+}
+const nativeArch = process.platform + '-' + process.arch
+const nativeBinary = path.join('prebuilds', nativeArch, 'pty.node')
+function installer(t, populate) {
+  const { root, write } = fixture(t)
+  write('opt/dsh-bundled/package.json', { dependencies: { pnpm: '11.19.0' } })
+  write('opt/dsh-bundled/node_modules/@deepseek-ai/dsh/package.json', { name: '@deepseek-ai/dsh', version: '0.2.1-rc.2', dependencies: {} })
+  const bridge = 'opt/dsh-bundled/node_modules/@deepseek-harness/dsh-mobile-shizuku'
+  write(bridge + '/package.json', { name: '@deepseek-harness/dsh-mobile-shizuku', version: '0.1.0' })
+  write(bridge + '/lib/index.js', 'module.exports = {}')
+  write(bridge + '/cordis.patch.yml', 'patch: []')
+  const calls = []
+  const execute = (bin, args, options) => {
+    calls.push({ args, cwd: options.cwd })
+    if (args[1] === 'install') { emit(options.cwd, 'package-lock.json', lock()); return { status: 0 } }
+    if (args[1] === 'ci') { populate(path.join(options.cwd, 'node_modules')); return { status: 0 } }
+    return { status: 0 }
+  }
+  const events = []
+  const manager = createManager(root, execute, (stage, percent) => events.push([stage, percent]))
+  const installed = path.join(root, 'root/.dsh-mobile/harness-versions/versions/0.2.1-rc.2/node_modules')
+  return { root, write, calls, events, manager, installed }
+}
+const compileCalls = calls => calls.filter(call => call.args.some(value => String(value).includes('node-gyp')))
+test('原生模块阶段：安装树自带同架构二进制时不构建也不同步', t => {
+  const { manager, calls, events, installed } = installer(t, modules => {
+    emit(modules, '@deepseek-ai/dsh/package.json', { name: '@deepseek-ai/dsh', version: '0.2.1-rc.2', dependencies: {} })
+    emit(modules, 'node-pty/package.json', { name: 'node-pty', version: '1.2.0-beta.15' })
+    emit(modules, 'node-pty/' + nativeBinary, 'prebuilt-by-tarball')
+  })
+  assert.deepEqual(manager.install('0.2.1-rc.2', integrity), { ok: true })
+  assert.equal(fs.readFileSync(path.join(installed, 'node-pty', nativeBinary), 'utf8'), 'prebuilt-by-tarball')
+  assert.deepEqual(compileCalls(calls), [])
+  assert.deepEqual(fs.readdirSync(path.join(installed, 'node-pty')).sort(), ['package.json', 'prebuilds'])
+  assert.ok(events.some(([stage]) => stage === 'native'))
+})
+test('原生模块阶段：pnpm 隔离布局的随包二进制能被定位并补进安装树', t => {
+  const { root, write, manager, calls, installed } = installer(t, modules => {
+    emit(modules, '@deepseek-ai/dsh/package.json', { name: '@deepseek-ai/dsh', version: '0.2.1-rc.2', dependencies: {} })
+    // 这份 tarball 没有本机架构的二进制，需要从内置运行时补齐。
+    emit(modules, 'node-pty/package.json', { name: 'node-pty', version: '1.2.0-beta.15' })
+  })
+  // node-pty 是 dsh-subprocess-local 的间接依赖：内置树里只有 .pnpm 虚拟存储有实体，
+  // 顶层没有软链，旧实现的 createRequire 在这里必抛 MODULE_NOT_FOUND。
+  const store = 'opt/dsh-bundled/node_modules/.pnpm/node-pty@1.2.0-beta.15/node_modules/node-pty'
+  write(store + '/package.json', { name: 'node-pty', version: '1.2.0-beta.15' })
+  write(store + '/' + nativeBinary, 'bundled-by-runtime')
+  assert.equal(fs.existsSync(path.join(root, 'opt/dsh-bundled/node_modules/node-pty')), false)
+  assert.deepEqual(manager.install('0.2.1-rc.2', integrity), { ok: true })
+  assert.equal(fs.readFileSync(path.join(installed, 'node-pty', nativeBinary), 'utf8'), 'bundled-by-runtime')
+  assert.deepEqual(compileCalls(calls), [])
+})
+test('原生模块阶段：两棵树都定位不到 node-pty 时报包无效并标出阶段', t => {
+  const { manager } = installer(t, modules => {
+    emit(modules, '@deepseek-ai/dsh/package.json', { name: '@deepseek-ai/dsh', version: '0.2.1-rc.2', dependencies: {} })
+  })
+  assert.throws(() => manager.install('0.2.1-rc.2', integrity),
+    error => error.message === 'HARNESS_PACKAGE_INVALID' && error.stage === 'native')
+})
