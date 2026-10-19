@@ -606,7 +606,7 @@ class HarnessActivity : AppCompatActivity() {
     }
 }
 
-private fun blockedResponse(): WebResourceResponse = WebResourceResponse(
+internal fun blockedResponse(): WebResourceResponse = WebResourceResponse(
     "text/plain", "UTF-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)),
 )
 
