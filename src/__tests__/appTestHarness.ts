@@ -52,6 +52,12 @@ export const bridge = {
    * 表现成「找不到任何元素」，与真正的界面缺陷几乎无法区分。
    */
   setAppTheme: vi.fn(),
+  applyHarnessTheme: vi.fn(),
+  clearHarnessTheme: vi.fn(),
+  pickHarnessBackground: vi.fn(),
+  clearHarnessBackground: vi.fn(),
+  setHarnessSyncBackground: vi.fn(),
+  harnessThemeState: vi.fn(),
   getState: vi.fn(),
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
@@ -327,6 +333,13 @@ export function beforeEachAppTest(): void {
   vi.clearAllMocks()
   bridge.setAppLanguage.mockResolvedValue(undefined)
   bridge.setAppTheme.mockResolvedValue(undefined)
+  bridge.applyHarnessTheme.mockResolvedValue(undefined)
+  bridge.clearHarnessTheme.mockResolvedValue(undefined)
+  bridge.pickHarnessBackground.mockResolvedValue({ uri: 'content://test/background', mime: 'video/mp4', kind: 'video' })
+  bridge.clearHarnessBackground.mockResolvedValue(undefined)
+  bridge.setHarnessSyncBackground.mockResolvedValue(undefined)
+  // 默认「从没同步过」：与刚装好的应用一致；用例自己铺想要的回读结果。
+  bridge.harnessThemeState.mockResolvedValue({ syncBackground: false, syncedAt: 0, background: null })
   bridge.getState.mockResolvedValue({ ...readyState })
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })

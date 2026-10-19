@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { runtimeBridge } from './platform/native'
+import { readAccentSource, readAdaptiveAccent, saveAccentSource as persistAccentSource } from './adaptiveAccent'
+import type { AccentSource } from './adaptiveAccent'
 
 /**
  * 外壳主题：三态选择 + 跟随系统。
@@ -108,7 +110,7 @@ function syncThemeColorMeta(theme: ResolvedTheme): void {
 function applyAccent(mode: AccentMode): void {
   const root = document.documentElement
   root.dataset.accent = mode
-  const custom = readCustomAccentColor()
+  const custom = effectiveAccentColor()
   if (custom) {
     root.style.setProperty('--blue', custom)
     root.style.setProperty('--blue-hover', custom)
@@ -122,6 +124,27 @@ function applyAccent(mode: AccentMode): void {
   } else {
     for (const name of ['--blue', '--blue-hover', '--on-blue', '--blue-soft', '--blue-line', '--ring']) root.style.removeProperty(name)
   }
+}
+
+/**
+ * 当前真正该用的强调色：三个来源互斥，谁在生效由 `dsh-mobile-accent-mode-v2` 决定。
+ *
+ * 自适应与自定义各存一份、互不覆盖：用户从「自适应」切回「自定义」时，之前提出的
+ * 那组颜色仍然在，不需要重新提取。
+ */
+export function effectiveAccentColor(): string {
+  const source = readAccentSource()
+  if (source === 'adaptive') return readAdaptiveAccent()?.accent ?? ''
+  if (source === 'custom') return readCustomAccentColor()
+  return ''
+}
+
+/** 切换强调色来源并立刻重画；写入失败时不改变当前外观。 */
+export function saveAccentSource(value: string): boolean {
+  if (!persistAccentSource(value as AccentSource)) return false
+  applyAccent(readAccentMode())
+  window.dispatchEvent(new Event(THEME_EVENT))
+  return true
 }
 
 export function readCustomAccentColor(): string {
@@ -184,6 +207,7 @@ export function saveCustomAccentColor(value: string): boolean {
   if (!/^#[0-9a-f]{6}$/i.test(value)) return false
   try {
     window.localStorage.setItem(CUSTOM_ACCENT_STORAGE_KEY, value)
+    persistAccentSource('custom')
     applyAccent(readAccentMode())
     window.dispatchEvent(new Event(THEME_EVENT))
     return true
@@ -192,6 +216,8 @@ export function saveCustomAccentColor(value: string): boolean {
 
 export function clearCustomAccentColor(): void {
   try { window.localStorage.removeItem(CUSTOM_ACCENT_STORAGE_KEY) } catch { /* 存储不可用时仅清理当前页面 */ }
+  // 当前就靠自定义色撑着的，清空后必须退回预置色，否则界面会停在一个已删除的颜色上。
+  if (readAccentSource() === 'custom') persistAccentSource('default')
   applyAccent(readAccentMode())
   window.dispatchEvent(new Event(THEME_EVENT))
 }
@@ -235,6 +261,7 @@ export function saveAccentMode(value: string): boolean {
   try {
     window.localStorage.setItem(ACCENT_STORAGE_KEY, value)
     window.localStorage.removeItem(CUSTOM_ACCENT_STORAGE_KEY)
+    persistAccentSource('default')
   } catch {
     return false
   }
@@ -271,6 +298,11 @@ export function useThemeMode(): ThemeMode {
 
 export function useAccentMode(): AccentMode {
   return useSyncExternalStore(subscribe, readAccentMode, () => DEFAULT_ACCENT_MODE)
+}
+
+/** 强调色来源三态：预置 / 用户指定 / 自适应。 */
+export function useAccentSource(): AccentSource {
+  return useSyncExternalStore(subscribe, readAccentSource, () => 'default')
 }
 
 /**

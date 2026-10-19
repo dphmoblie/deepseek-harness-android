@@ -413,6 +413,146 @@ class MobileRuntimePlugin : Plugin() {
         call.resolve()
     }
 
+    /**
+     * 把外壳主题同步给 DSH 页面（登记册 5.5）。
+     *
+     * 只接受固定字段：明暗模式、三个颜色、面板透明度。拒绝一切 CSS / JS / URL ——
+     * 这段内容最终会被拼进 `evaluateJavascript`，白名单是这里唯一的防线。
+     */
+    @PluginMethod
+    fun applyHarnessTheme(call: PluginCall) {
+        val theme = call.getObject("theme")
+        if (theme == null) {
+            call.reject("缺少主题配置", "THEME_INVALID")
+            return
+        }
+        if (!HarnessThemeBridge.save(context, theme)) {
+            call.reject("主题配置无效", "THEME_INVALID")
+            return
+        }
+        // 页面已经打开时不要求用户刷新：开关或背景改了就按新档位重放一次。
+        HarnessThemeBridge.refresh()
+        call.resolve()
+    }
+
+    /** 清除已同步的主题：DSH 页面回到它自己的默认外观。 */
+    @PluginMethod
+    fun clearHarnessTheme(call: PluginCall) {
+        if (!HarnessThemeBridge.clear(context)) {
+            call.reject("无法清除同步主题", "THEME_SAVE_FAILED")
+            return
+        }
+        HarnessThemeBridge.refresh()
+        call.resolve()
+    }
+
+    /**
+     * 「连背景一起同步」开关落盘（登记册 5.5）。
+     *
+     * 开关必须存在原生侧：外壳重启后要能读回上次的选择，只写在页面的内存状态里等于没有。
+     * 关掉时保留地址与持久授权，只停用显示——用户重新勾上不用再选一次文件。
+     */
+    @PluginMethod
+    fun setHarnessSyncBackground(call: PluginCall) {
+        val enabled = call.getBoolean("enabled")
+        if (enabled == null) {
+            call.reject("缺少背景同步开关", "THEME_INVALID")
+            return
+        }
+        if (!HarnessThemeBridge.setSyncBackground(context, enabled)) {
+            call.reject("无法保存背景同步开关", "THEME_SAVE_FAILED")
+            return
+        }
+        // 关掉后当前页面立刻清掉背景层，并收回自动播放权限。
+        HarnessThemeBridge.refresh()
+        call.resolve(JSObject().put("enabled", enabled))
+    }
+
+    /** 读回同步状态：开关、上次同步时间、已选背景（没有就是 null）。外壳启动时用它恢复界面。 */
+    @PluginMethod
+    fun harnessThemeState(call: PluginCall) {
+        call.resolve(JSObject.fromJSONObject(HarnessThemeBridge.state(context)))
+    }
+
+    /**
+     * 第二阶段：让用户挑一个背景文件，只留地址。
+     *
+     * 复制文件的上限、内存与过桥体积问题因此都不存在：视频多大都由 SAF 那边流式供给。
+     * 走 ACTION_OPEN_DOCUMENT 而不是 GET_CONTENT——只有前者能给可持久化的读授权，
+     * 应用重启后仍然解得开同一个地址。
+     */
+    @PluginMethod
+    fun pickHarnessBackground(call: PluginCall) {
+        val host = activity as? android.app.Activity
+        if (host == null) {
+            call.reject("当前没有可用的界面，无法打开文件选择器", "THEME_PICKER_UNAVAILABLE")
+            return
+        }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("video/mp4", "video/webm", "image/jpeg", "image/png", "image/webp"))
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        host.runOnUiThread {
+            try {
+                startActivityForResult(call, intent, "harnessBackgroundPicked")
+            } catch (_: Throwable) {
+                call.reject("设备上没有可用的文件选择器", "THEME_PICKER_UNAVAILABLE")
+            }
+        }
+    }
+
+    /**
+     * 背景文件选择回调。
+     *
+     * 只保留地址：拿到可持久化授权后立刻写进主题目录，并把 mime / 图片或视频类型一起记下。
+     * 拿不到持久授权就如实拒绝——否则重启后地址还在、权限没了，界面会一直停在黑背景上。
+     */
+    @ActivityCallback
+    private fun harnessBackgroundPicked(call: PluginCall?, result: ActivityResult) {
+        if (call == null) return
+        val uri = result.data?.data
+        if (result.resultCode != android.app.Activity.RESULT_OK || uri == null) {
+            call.reject("已取消选择背景", "THEME_CANCELLED")
+            return
+        }
+        val resolver = context.contentResolver
+        val mime = resolver.getType(uri).orEmpty()
+        val kind = HarnessThemeBridge.kindOf(mime)
+        if (kind == null) {
+            call.reject("只支持视频或图片作为背景", "THEME_INVALID")
+            return
+        }
+        val persisted = try {
+            resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            true
+        } catch (_: Exception) {
+            false
+        }
+        if (!persisted) {
+            call.reject("这个文件不支持长期授权，请换一个来源再试", "THEME_PERMISSION_DENIED")
+            return
+        }
+        if (!HarnessThemeBridge.setBackgroundRef(context, uri.toString(), mime)) {
+            call.reject("无法保存背景地址", "THEME_SAVE_FAILED")
+            return
+        }
+        HarnessThemeBridge.refresh()
+        call.resolve(JSObject().put("uri", uri.toString()).put("mime", mime).put("kind", kind))
+    }
+
+    @PluginMethod
+    fun clearHarnessBackground(call: PluginCall) {
+        if (!HarnessThemeBridge.clearBackground(context)) {
+            call.reject("无法清除同步背景", "THEME_SAVE_FAILED")
+            return
+        }
+        HarnessThemeBridge.refresh()
+        call.resolve()
+    }
+
     override fun load() {
         auditLog = PrivateAuditLog(context)
         recordAudit(AuditEvent.PLUGIN_LOAD, AuditResult.STARTED)

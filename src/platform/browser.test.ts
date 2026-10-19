@@ -328,6 +328,20 @@ describe('浏览器桥的更新渠道与应用自更新', () => {
     await expect(bridge.getAppUpdateState(true)).rejects.toThrow('浏览器模式下没有应用更新')
   })
 
+  it('同步背景开关在浏览器里也持久：界面行为与真机一致', async () => {
+    const bridge = createBrowserBridge()
+    await expect(bridge.harnessThemeState()).resolves.toEqual({ syncBackground: false, syncedAt: 0, background: null })
+
+    await bridge.setHarnessSyncBackground(true)
+    await expect(bridge.harnessThemeState()).resolves.toMatchObject({ syncBackground: true })
+    // 同一份 localStorage，重新建桥后仍然是开着的（模拟刷新）。
+    await expect(createBrowserBridge().harnessThemeState()).resolves.toMatchObject({ syncBackground: true })
+    // 非布尔参数不落盘，也不静默当成 false。
+    const setSwitch = bridge.setHarnessSyncBackground as (value: unknown) => Promise<void>
+    await expect(setSwitch('true')).rejects.toThrow('背景同步开关只能是布尔值')
+    await expect(bridge.harnessThemeState()).resolves.toMatchObject({ syncBackground: true })
+  })
+
   it('应用更新刷新标记只接受布尔，非法参数通过 rejected Promise 返回', async () => {
     const bridge = createBrowserBridge()
     const getState = bridge.getAppUpdateState as (forceRefresh: unknown) => Promise<unknown>
