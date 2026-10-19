@@ -43,6 +43,20 @@ class ModelConnectivityProbeTest {
     }
 
     @Test
+    fun probeRejectsControlCharactersInApiKey() {
+        val result = ModelConnectivityProbe.probe(
+            providerId = "openai",
+            baseUrl = null,
+            apiKey = "sk-test\nforged-header",
+            api = null,
+            savedApiKey = null,
+        )
+        assertFalse(result.ok)
+        assertEquals(0, result.status)
+        assertTrue(result.message.contains("非法字符"))
+    }
+
+    @Test
     fun probeRejectsCustomProviderWithoutBaseUrl() {
         val result = ModelConnectivityProbe.probe(
             providerId = "custom-one",
@@ -67,7 +81,27 @@ class ModelConnectivityProbeTest {
         )
         assertFalse(result.ok)
         assertEquals(0, result.status)
-        assertTrue(result.message.contains("协议无效"))
+        assertTrue(result.message.contains("HTTPS"))
+    }
+
+    @Test
+    fun probeRejectsCredentialBearingCustomBaseUrlBeforeNetworkRequest() {
+        val result = ModelConnectivityProbe.probe(
+            providerId = "custom-one",
+            baseUrl = "https://user:secret@example.com/v1",
+            apiKey = "sk-test-key",
+            api = "openai-completions",
+            savedApiKey = null,
+        )
+        assertFalse(result.ok)
+        assertEquals(0, result.status)
+        assertTrue(result.message.contains("不能包含凭据"))
+    }
+
+    @Test
+    fun googleApiKeyIsQueryEncoded() {
+        val url = ModelConnectivityProbe.googleModelsRequestUrl("key#with&reserved")
+        assertTrue(url.endsWith("key=key%23with%26reserved"))
     }
 
     @Test

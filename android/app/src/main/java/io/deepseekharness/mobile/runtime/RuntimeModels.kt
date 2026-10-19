@@ -396,6 +396,16 @@ object RuntimeValidation {
         return normalized
     }
 
+    /** Validates IDs received across the JavaScript/native bridge before they select a credential. */
+    fun requireModelProviderId(value: String): String {
+        val normalized = value.trim()
+        if (ModelProvider.entries.any { it.wireValue == normalized }) return normalized
+        return requireCustomProviderId(normalized)
+    }
+
+    /** Applies the same URL policy to an ad-hoc connectivity probe as to saved settings. */
+    fun requireProviderBaseUrl(value: String): String = requireProviderBaseUrlValue(value)
+
     fun customModelProviders(value: JSONArray?): List<CustomModelProvider> {
         if (value == null) return emptyList()
         if (value.length() > MAX_CUSTOM_PROVIDERS) throw RuntimeFailure("SETTINGS_INVALID", "最多可配置 16 个自定义供应商")
@@ -427,7 +437,7 @@ object RuntimeValidation {
                 id,
                 requireDisplayName(item.opt("name"), 80, "自定义供应商名称"),
                 CustomProviderApi.parse(item.optString("api")),
-                requireProviderBaseUrl(item.opt("baseUrl")),
+                requireProviderBaseUrlValue(item.opt("baseUrl")),
                 models,
             )
         }
@@ -483,7 +493,7 @@ object RuntimeValidation {
         return integer
     }
 
-    private fun requireProviderBaseUrl(value: Any?): String {
+    private fun requireProviderBaseUrlValue(value: Any?): String {
         val raw = (value as? String)?.trim().orEmpty()
         if (raw.isEmpty() || raw.length > RuntimeLimits.MAX_FIELD_CHARS || raw.any { it.isISOControl() || it == '\\' }) {
             throw RuntimeFailure("SETTINGS_INVALID", "自定义供应商 Base URL 包含非法字符或长度无效")

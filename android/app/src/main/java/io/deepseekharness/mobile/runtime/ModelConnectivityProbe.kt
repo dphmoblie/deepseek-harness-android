@@ -5,6 +5,7 @@ import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.UnknownHostException
+import java.net.URLEncoder
 import javax.net.ssl.SSLException
 
 data class ModelConnectivityProbeResult(
@@ -25,16 +26,21 @@ object ModelConnectivityProbe {
         api: String?,
         savedApiKey: String?,
     ): ModelConnectivityProbeResult {
-        val key = apiKey?.trim()?.takeIf { it.isNotEmpty() }
+        val rawKey = apiKey?.trim()?.takeIf { it.isNotEmpty() }
             ?: savedApiKey?.trim()?.takeIf { it.isNotEmpty() }
 
-        if (key.isNullOrEmpty()) {
+        if (rawKey.isNullOrEmpty()) {
             return ModelConnectivityProbeResult(
                 ok = false,
                 status = 0,
                 latencyMs = 0L,
                 message = "未提供 API Key 且本机未保存该供应商凭据",
             )
+        }
+        val key = try {
+            RuntimeValidation.requireProviderApiKey(rawKey)
+        } catch (error: RuntimeFailure) {
+            return invalid(error.message ?: "模型凭据格式无效")
         }
 
         val requestUrl: String
@@ -57,7 +63,7 @@ object ModelConnectivityProbe {
                     headers["anthropic-version"] = "2023-06-01"
                 }
                 ModelProvider.GOOGLE -> {
-                    requestUrl = "https://generativelanguage.googleapis.com/v1beta/models?key=$key"
+                    requestUrl = googleModelsRequestUrl(key)
                 }
                 ModelProvider.OPENROUTER -> {
                     requestUrl = "https://openrouter.ai/api/v1/models"
@@ -77,8 +83,8 @@ object ModelConnectivityProbe {
                 }
             }
         } else {
-            val base = baseUrl?.trim()?.removeSuffix("/")
-            if (base.isNullOrEmpty()) {
+            val rawBase = baseUrl?.trim()
+            if (rawBase.isNullOrEmpty()) {
                 return ModelConnectivityProbeResult(
                     ok = false,
                     status = 0,
@@ -86,21 +92,20 @@ object ModelConnectivityProbe {
                     message = "Base URL 不能为空",
                 )
             }
-            if (!base.startsWith("http://") && !base.startsWith("https://")) {
-                return ModelConnectivityProbeResult(
-                    ok = false,
-                    status = 0,
-                    latencyMs = 0L,
-                    message = "Base URL 协议无效，须以 http:// 或 https:// 开头",
-                )
+            val base = try {
+                RuntimeValidation.requireProviderBaseUrl(rawBase)
+            } catch (error: RuntimeFailure) {
+                return invalid(error.message ?: "Base URL 格式无效")
             }
-            if (api == "anthropic-messages") {
-                requestUrl = "$base/models"
-                headers["x-api-key"] = key
-                headers["anthropic-version"] = "2023-06-01"
-            } else {
-                requestUrl = "$base/models"
-                headers["Authorization"] = "Bearer $key"
+            requestUrl = "$base/models"
+            when (runCatching { CustomProviderApi.parse(api.orEmpty()) }.getOrNull()) {
+                CustomProviderApi.ANTHROPIC_MESSAGES -> {
+                    headers["x-api-key"] = key
+                    headers["anthropic-version"] = "2023-06-01"
+                }
+                CustomProviderApi.OPENAI_COMPLETIONS,
+                CustomProviderApi.OPENAI_RESPONSES -> headers["Authorization"] = "Bearer $key"
+                null -> return invalid("自定义供应商 API 协议不支持")
             }
         }
 
@@ -217,6 +222,16 @@ object ModelConnectivityProbe {
             runCatching { connection?.disconnect() }
         }
     }
+
+    internal fun googleModelsRequestUrl(apiKey: String): String =
+        "https://generativelanguage.googleapis.com/v1beta/models?key=${URLEncoder.encode(apiKey, Charsets.UTF_8.name())}"
+
+    private fun invalid(message: String) = ModelConnectivityProbeResult(
+        ok = false,
+        status = 0,
+        latencyMs = 0L,
+        message = message,
+    )
 
     /** 3xx 只解释、不跟随：把「为什么没自动跳」说清楚，并给出用户能自己走的路。 */
     private fun redirectMessage(code: Int, location: String?, latencyMs: Long): String {

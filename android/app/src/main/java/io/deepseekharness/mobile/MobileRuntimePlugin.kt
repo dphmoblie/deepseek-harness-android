@@ -63,6 +63,7 @@ import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
 import io.deepseekharness.mobile.runtime.clampHarnessTailBytes
 import io.deepseekharness.mobile.runtime.MailboxExportOutcome
 import io.deepseekharness.mobile.runtime.ModelConnectivityProbe
+import io.deepseekharness.mobile.runtime.ModelProvider
 import io.deepseekharness.mobile.runtime.MailboxDirectoryEntry
 import io.deepseekharness.mobile.runtime.MailboxDirectoryState
 import io.deepseekharness.mobile.runtime.TaskNotification
@@ -1028,16 +1029,40 @@ class MobileRuntimePlugin : Plugin() {
             call.reject("供应商标识缺失")
             return
         }
+        try {
+            RuntimeValidation.requireModelProviderId(providerId)
+        } catch (error: RuntimeFailure) {
+            call.reject(error.message ?: "供应商标识格式无效")
+            return
+        }
         val baseUrl = call.getString("baseUrl")?.trim()
         val apiKey = call.getString("apiKey")?.trim()
         val api = call.getString("api")?.trim()
         execute(call) {
+            val draftKey = apiKey?.takeIf { it.isNotEmpty() }
+            val customProvider = controller.store.settings().customModelProviders
+                .firstOrNull { it.id == providerId }
+            if (ModelProvider.entries.none { it.wireValue == providerId } && customProvider == null) {
+                throw RuntimeFailure("SETTINGS_INVALID", "自定义供应商未配置")
+            }
+            // A saved key may only be used with its saved endpoint. Draft credentials are
+            // explicitly supplied by the user and may test the current unsaved draft URL.
             val savedKey = controller.store.readModelCredential(providerId)
+            val effectiveBaseUrl = if (draftKey == null && customProvider != null) {
+                customProvider.baseUrl
+            } else {
+                baseUrl
+            }
+            val effectiveApi = if (draftKey == null && customProvider != null) {
+                customProvider.api.wireValue
+            } else {
+                api
+            }
             val result = ModelConnectivityProbe.probe(
                 providerId = providerId,
-                baseUrl = baseUrl,
+                baseUrl = effectiveBaseUrl,
                 apiKey = apiKey,
-                api = api,
+                api = effectiveApi,
                 savedApiKey = savedKey,
             )
             JSObject().apply {
