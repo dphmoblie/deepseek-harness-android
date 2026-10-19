@@ -492,6 +492,9 @@ class HarnessActivity : AppCompatActivity() {
         ) return false
         return try {
             startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
+            // The system browser now owns the OAuth page; release the detached transport WebView
+            // so it cannot retain renderer state or a stale popup after the hand-off.
+            closeAuthorizationPopup()
             true
         } catch (_: Throwable) {
             false
@@ -560,7 +563,12 @@ class HarnessActivity : AppCompatActivity() {
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
             val uri = request?.url ?: return true
             if (origin.allows(uri)) return false
-            if (isDeepSeekAuthorizationNavigation(uri.toString(), request.method, request.isForMainFrame)) {
+            // A page must not be able to launch the external account chooser from a timer,
+            // redirect, or injected script.  Popup transport gets its own one-shot allowance
+            // from onCreateWindow after WebView has confirmed a real user gesture.
+            if (request.hasGesture &&
+                isDeepSeekAuthorizationNavigation(uri.toString(), request.method, request.isForMainFrame)
+            ) {
                 onDeepSeekAuthorization(uri)
             }
             return true

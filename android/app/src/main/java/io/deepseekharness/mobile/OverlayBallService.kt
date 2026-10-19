@@ -30,8 +30,12 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.webkit.CookieManager
+import android.webkit.HttpAuthHandler
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -88,6 +92,8 @@ class OverlayBallService : Service() {
 
     private var conversationView: View? = null
     private var conversationWebView: WebView? = null
+    /** Detached transport page used only to turn a user-initiated OAuth popup into a browser intent. */
+    private var authorizationPopup: WebView? = null
     private var conversationError: TextView? = null
     private var conversationParams: WindowManager.LayoutParams? = null
     private var conversationAccess: HarnessAccess? = null
@@ -673,7 +679,10 @@ class OverlayBallService : Service() {
                 allowContentAccess = true
                 mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                 javaScriptCanOpenWindowsAutomatically = false
-                setSupportMultipleWindows(false)
+                // DeepSeek account login opens an about:blank popup and assigns its location
+                // asynchronously.  The popup is kept detached and JavaScript-disabled below;
+                // only the exact authorize URL is handed to the system browser.
+                setSupportMultipleWindows(true)
                 safeBrowsingEnabled = true
                 textZoom = AppTextScale.percentOf(resources.configuration.fontScale)
             }
@@ -696,10 +705,51 @@ class OverlayBallService : Service() {
             conversationError = error
             web.webViewClient = HarnessActivity.RestrictedWebViewClient(
                 origin, access.username, access.password,
+                onDeepSeekAuthorization = ::openDeepSeekAuthorization,
                 onMainFrameFailure = { if (conversationWebView === web) error.visibility = View.VISIBLE },
                 onRendererGone = { detachConversation() },
             )
             web.webChromeClient = object : WebChromeClient() {
+                override fun onCreateWindow(
+                    view: WebView?,
+                    isDialog: Boolean,
+                    isUserGesture: Boolean,
+                    resultMsg: android.os.Message?,
+                ): Boolean {
+                    // Only a real click in this live conversation may open the transport page.
+                    if (view !== conversationWebView || !isUserGesture || resultMsg == null ||
+                        conversationView == null || conversationAccess == null
+                    ) return false
+                    val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
+                    closeAuthorizationPopup()
+                    val popup = WebView(this@OverlayBallService).apply {
+                        settings.apply {
+                            javaScriptEnabled = false
+                            domStorageEnabled = false
+                            allowFileAccess = false
+                            allowContentAccess = false
+                            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                            javaScriptCanOpenWindowsAutomatically = false
+                            setSupportMultipleWindows(false)
+                            safeBrowsingEnabled = true
+                        }
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onCloseWindow(window: WebView?) {
+                                if (window === authorizationPopup) closeAuthorizationPopup()
+                            }
+                        }
+                        webViewClient = AuthorizationPopupClient()
+                    }
+                    authorizationPopup = popup
+                    transport.webView = popup
+                    resultMsg.sendToTarget()
+                    return true
+                }
+
+                override fun onCloseWindow(window: WebView?) {
+                    if (window === authorizationPopup) closeAuthorizationPopup()
+                }
+
                 override fun onShowFileChooser(
                     view: WebView?,
                     callback: ValueCallback<Array<Uri>>?,
@@ -1113,6 +1163,7 @@ class OverlayBallService : Service() {
         conversationRequest++
         conversationOpening = false
         cancelFileChooser()
+        closeAuthorizationPopup()
         detachResizeHandle()
         val access = conversationAccess
         conversationAccess = null
@@ -1137,6 +1188,63 @@ class OverlayBallService : Service() {
                     cookies.flush()
                 }
             }
+        }
+    }
+
+    /** Open only the exact DeepSeek account authorization URL in the system browser. */
+    private fun openDeepSeekAuthorization(uri: Uri): Boolean {
+        if (!isDeepSeekAuthorizationUrl(uri.toString()) || conversationWebView == null ||
+            conversationView == null || conversationAccess == null
+        ) return false
+        return try {
+            startActivity(
+                Intent(Intent.ACTION_VIEW, uri)
+                    .addCategory(Intent.CATEGORY_BROWSABLE)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+            // The browser owns the OAuth page now; keeping a detached WebView would only retain
+            // renderer state and cookies until the next popup or service teardown.
+            closeAuthorizationPopup()
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun closeAuthorizationPopup() {
+        val popup = authorizationPopup ?: return
+        authorizationPopup = null
+        runCatching {
+            popup.stopLoading()
+            popup.webChromeClient = null
+            popup.webViewClient = WebViewClient()
+            popup.destroy()
+        }
+    }
+
+    /** Never loads a network resource or carries the local Harness credentials. */
+    private inner class AuthorizationPopupClient : WebViewClient() {
+        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+            val uri = request?.url ?: return true
+            if (uri.toString() == "about:blank") return false
+            if (isDeepSeekAuthorizationNavigation(uri.toString(), request.method, request.isForMainFrame)) {
+                openDeepSeekAuthorization(uri)
+            }
+            return true
+        }
+
+        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? =
+            if (request?.url?.toString() == "about:blank") null else blockedResponse()
+
+        override fun onReceivedHttpAuthRequest(
+            view: WebView?, handler: HttpAuthHandler?, host: String?, realm: String?,
+        ) {
+            handler?.cancel()
+        }
+
+        override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+            if (view === authorizationPopup) closeAuthorizationPopup()
+            return true
         }
     }
 
