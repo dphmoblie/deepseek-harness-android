@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { beforeEachAppTest, bridge, FOREGROUND_SERVICE_SETTLE_MS, openSettingsPage, settings } from './__tests__/appTestHarness'
+import { beforeEachAppTest, bridge, FOREGROUND_SERVICE_SETTLE_MS, notInstalledState, openSettingsPage, readyState, settings } from './__tests__/appTestHarness'
 import type { RuntimeSettings, RuntimeSettingsUpdate } from './platform/types'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
@@ -322,6 +322,57 @@ describe('设置草稿与未保存的输入', () => {
     await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
   })
 
+  it.each([
+    { name: '未安装', runtime: notInstalledState },
+    { name: '待更新', runtime: { ...readyState, updateAvailable: true } },
+    { name: '正在安装', runtime: { ...readyState, phase: 'extracting' as const } },
+    { name: '正在停止', runtime: { ...readyState, phase: 'stopping' as const } },
+  ])('$name 时模型页不允许启动账号登录或绕过凭据入口', async ({ runtime }) => {
+    bridge.getState.mockResolvedValue(runtime)
+    bridge.getSettings.mockResolvedValue({ ...settings, configuredModelProviders: [] })
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
+
+    const login = screen.getByRole('button', { name: '登录 DeepSeek 账号' })
+    const bypass = screen.getByRole('button', { name: '我已在 Harness 内配置过，仍要打开' })
+    expect(login).toBeDisabled()
+    expect(bypass).toBeDisabled()
+    fireEvent.click(login)
+    fireEvent.click(bypass)
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+    expect(bridge.openHarness).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('模型设置保存期间禁用内置和自定义密钥编辑，完成后恢复', async () => {
+    let resolveSave!: (value: RuntimeSettings) => void
+    const custom = {
+      id: 'custom-1', name: 'Gateway', api: 'openai-completions' as const, baseUrl: 'https://gateway.example.invalid/v1',
+      models: [{ id: 'local-model', name: 'Local Model', contextWindow: 131072, maxTokens: 8192 }],
+    }
+    bridge.getSettings.mockResolvedValue({ ...settings, customModelProviders: [custom] })
+    bridge.saveSettings.mockImplementationOnce(() => new Promise<RuntimeSettings>(resolve => { resolveSave = resolve }))
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
+
+    fireEvent.change(screen.getByLabelText(/DeepSeek API Key/), { target: { value: 'unit-test-first-key' } })
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledTimes(1), { timeout: 2000 })
+
+    expect(screen.getByLabelText(/DeepSeek API Key/)).toBeDisabled()
+    expect(screen.getByLabelText('API Key')).toBeDisabled()
+    expect(screen.getByLabelText('供应商名称')).toBeDisabled()
+    expect(screen.getByRole('button', { name: '添加自定义供应商' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '登录 DeepSeek 账号' })).toBeDisabled()
+    expect(screen.queryByText('已自动保存')).not.toBeInTheDocument()
+
+    await act(async () => { resolveSave({ ...settings, customModelProviders: [custom] }); await Promise.resolve() })
+    await waitFor(() => expect(screen.getByLabelText(/DeepSeek API Key/)).toBeEnabled())
+    expect(screen.getByLabelText(/DeepSeek API Key/)).toHaveValue('')
+    expect(screen.getByLabelText('API Key')).toBeEnabled()
+  })
+
   it('直接点击供应商卡片切换编辑项，不再显示供应商下拉框或触发保存', async () => {
     bridge.getSettings.mockResolvedValue({
       ...settings,
@@ -640,5 +691,47 @@ describe('后台页的运行时与设备 Shell 入口', () => {
     // 界面显示自动保存状态（顶部徽标与操作态均呈现已保存）
     const badges = await screen.findAllByText('已自动保存')
     expect(badges.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('自动保存失败或仍在途时不显示已自动保存', async () => {
+    let resolveSave!: (value: RuntimeSettings) => void
+    bridge.saveSettings.mockImplementationOnce(() => new Promise<RuntimeSettings>(resolve => { resolveSave = resolve }))
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('后台')
+
+    fireEvent.click(await screen.findByRole('switch', { name: /悬浮球/ }))
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledTimes(1), { timeout: 2000 })
+    expect(screen.queryByText('已自动保存')).not.toBeInTheDocument()
+
+    await act(async () => {
+      resolveSave({ ...settings, overlayBallEnabled: true })
+      await Promise.resolve()
+    })
+    expect((await screen.findAllByText('已自动保存')).length).toBeGreaterThan(0)
+  })
+
+  it('保存响应迟到时不会覆盖保存期间产生的新草稿', async () => {
+    let resolveSave!: (value: RuntimeSettings) => void
+    bridge.saveSettings.mockImplementationOnce(() => new Promise<RuntimeSettings>(resolve => { resolveSave = resolve }))
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
+
+    const key = screen.getByLabelText(/DeepSeek API Key/)
+    fireEvent.change(key, { target: { value: 'first-key' } })
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledTimes(1), { timeout: 2500 })
+
+    // The active save disables credential editing; a newer draft can still be
+    // created by another settings control while the native response is pending.
+    await openSettingsPage('主题')
+    fireEvent.change(await screen.findByRole('slider', { name: /字号/ }), { target: { value: '18' } })
+    await act(async () => {
+      resolveSave({ ...settings, configuredModelProviders: ['deepseek'] })
+      await Promise.resolve()
+    })
+
+    await openSettingsPage('模型与密钥')
+    expect(screen.getByLabelText(/DeepSeek API Key/)).toHaveValue('first-key')
   })
 })

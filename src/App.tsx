@@ -1532,6 +1532,26 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   const latestDraftRef = useRef(draft)
   latestDraftRef.current = draft
 
+  /** Only show the saved state after the native write has actually succeeded. */
+  const showAutoSaved = useCallback(() => {
+    triggerHaptic('success')
+    setAutoSaved(true)
+    if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
+    autoSavedTimerRef.current = window.setTimeout(() => setAutoSaved(false), 2000)
+  }, [])
+
+  const saveDraftPayload = useCallback(async (payload: RuntimeSettingsUpdate): Promise<boolean> => {
+    try {
+      const saved = await onSave(payload)
+      if (saved) showAutoSaved()
+      return saved
+    } catch {
+      // onSave normally converts bridge failures to false; keep this boundary
+      // defensive so an unexpected rejection cannot claim a successful save.
+      return false
+    }
+  }, [onSave, showAutoSaved])
+
   const triggerAutoSave = useCallback((delay = 500) => {
     if (autoSaveTimerRef.current !== null) {
       window.clearTimeout(autoSaveTimerRef.current)
@@ -1546,7 +1566,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         ?? (overlayBallReadFailed ? currentDraft.settings.overlayBallEnabled : overlayBall?.enabled)
         ?? currentDraft.settings.overlayBallEnabled
         ?? false
-      void onSave({
+      void saveDraftPayload({
         ...currentSettings,
         ...(currentDraft.overlayBallEnabled === null ? {} : { overlayBallEnabled: currentOverlayBall }),
         ...(Object.keys(currentDraft.credentials).length === 0 ? {} : { providerApiKeys: currentDraft.credentials }),
@@ -1554,12 +1574,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         ...(Object.keys(currentDraft.customCredentials).length === 0 ? {} : { customProviderApiKeys: currentDraft.customCredentials }),
         ...(currentDraft.clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: currentDraft.clearedCustomProviders }),
       })
-      triggerHaptic('light')
-      setAutoSaved(true)
-      if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
-      autoSavedTimerRef.current = window.setTimeout(() => setAutoSaved(false), 2000)
     }, delay)
-  }, [onSave, overlayBall?.enabled, overlayBallReadFailed])
+  }, [overlayBall?.enabled, overlayBallReadFailed, saveDraftPayload])
 
   useEffect(() => {
     return () => {
@@ -2018,6 +2034,9 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     shizuku.version ? t("服务端 API {0}", shizuku.version) : '',
   ].filter(value => value !== '').join(' · ')
   const selectedProviderOption = MODEL_PROVIDERS.find(provider => provider.id === selectedProvider) ?? MODEL_PROVIDERS[0]
+  const canOpenHarness = (runtime.phase === 'ready' || runtime.phase === 'running')
+    && !runtime.updateAvailable
+    && busy === null
   const keepAliveRecordedAt = formatRecordedAt(keepAlive.lastUpdatedAtMillis)
   const lastStopLabel = t(LAST_STOP_LABELS[lastStop])
   const lastRunLabel = keepAlive.lastPhase === undefined
@@ -2083,7 +2102,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     // 才把它作为更新字段发送；否则省略该字段，让原生侧保留菜单刚写入的值。
     const settingsWithoutOverlayBall = { ...settings }
     delete settingsWithoutOverlayBall.overlayBallEnabled
-    void onSave({
+    void saveDraftPayload({
       ...settingsWithoutOverlayBall,
       ...(overlayBallDraft === null ? {} : { overlayBallEnabled }),
       ...(Object.keys(credentialDrafts).length === 0 ? {} : { providerApiKeys: credentialDrafts }),
@@ -2091,10 +2110,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
       ...(Object.keys(customCredentials).length === 0 ? {} : { customProviderApiKeys: customCredentials }),
       ...(clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: clearedCustomProviders }),
     })
-    triggerHaptic('success')
-    setAutoSaved(true)
-    if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
-    autoSavedTimerRef.current = window.setTimeout(() => setAutoSaved(false), 2000)
   }
 
   return (
@@ -2123,6 +2138,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
 
       <form className="settings-form" onSubmit={event => { event.preventDefault(); saveDraft() }}>
         {page === 'models' && (
+        <fieldset className="settings-model-fieldset" disabled={busy !== null}>
         <section className="settings-section" aria-labelledby="model-settings">
           <div className="section-title">
             <span className="section-icon"><Bot size={19} /></span>
@@ -2133,7 +2149,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               <strong>{t("DeepSeek 账号")}</strong>
               <span>{settings.deepSeekAccountConfigured === true ? t("已登录，可使用账号模型") : t("登录 DeepSeek 账号后使用账号模型，无需填写 API Key")}</span>
             </div>
-            <button className="button button-secondary compact-button" type="button" disabled={busy !== null} onClick={onLaunchConfirmed}>
+            <button className="button button-secondary compact-button" type="button" disabled={!canOpenHarness} onClick={onLaunchConfirmed}>
               {settings.deepSeekAccountConfigured === true ? <Rocket size={16} /> : <LogIn size={16} />}
               {settings.deepSeekAccountConfigured === true ? t("打开 Harness 管理账号") : t("登录 DeepSeek 账号")}
             </button>
@@ -2150,7 +2166,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 <strong>{t("还没有可用的模型凭据")}</strong>
                 <span>{t("开始对话前需登录 DeepSeek 账号或保存一份 API Key。若状态尚未同步，或凭据来自 Harness 的其他来源，可以直接打开。")}</span>
               </div>
-              <button className="button button-secondary" type="button" disabled={busy !== null} onClick={onLaunchConfirmed}>
+              <button className="button button-secondary" type="button" disabled={!canOpenHarness} onClick={onLaunchConfirmed}>
                 {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Rocket size={18} />}{t("我已在 Harness 内配置过，仍要打开")}</button>
             </div>
           )}
@@ -2252,6 +2268,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             onTestConnectivity={handleTestCustomConnectivity}
           />
         </section>
+        </fieldset>
         )}
 
         {page === 'runtime' && (
@@ -3058,6 +3075,8 @@ export function App() {
    * 只在「保存成功」与「离开设置区」两处复位。
    */
   const settingsDraftDirty = useRef(false)
+  /** Incremented for each local edit so a late save cannot discard newer input. */
+  const settingsDraftRevision = useRef(0)
   const [shizuku, setShizuku] = useState<ShizukuState>(EMPTY_SHIZUKU)
   const [accessibility, setAccessibility] = useState<AccessibilityAutomationState>(EMPTY_ACCESSIBILITY)
   const [keepAlive, setKeepAlive] = useState<KeepAliveState>(EMPTY_KEEP_ALIVE)
@@ -3164,7 +3183,10 @@ export function App() {
    * 草稿里的值没有变化，不应妨碍后台刷新同步。
    */
   const updateSettingsDraft = useCallback((update: (current: SettingsDraft) => SettingsDraft, dirty = true) => {
-    if (dirty) settingsDraftDirty.current = true
+    if (dirty) {
+      settingsDraftDirty.current = true
+      settingsDraftRevision.current += 1
+    }
     setSettingsDraft(current => (current === null ? current : update(current)))
   }, [])
 
@@ -3176,6 +3198,7 @@ export function App() {
    */
   const resyncSettingsDraft = useCallback((next: RuntimeSettings) => {
     settingsDraftDirty.current = false
+    settingsDraftRevision.current += 1
     setSettingsDraft(current => draftFromSettings(next, current))
   }, [])
 
@@ -3438,6 +3461,7 @@ export function App() {
     if (!isSettingsView(activeView)) {
       if (settingsDraft !== null) setSettingsDraft(null)
       settingsDraftDirty.current = false
+      settingsDraftRevision.current += 1
       return
     }
     if (settingsDraft === null && settings !== null) setSettingsDraft(draftFromSettings(settings))
@@ -4231,6 +4255,7 @@ export function App() {
   }, [run, setActiveView])
 
   const saveSettings = useCallback(async (nextSettings: RuntimeSettingsUpdate): Promise<boolean> => {
+    const draftRevisionAtStart = settingsDraftRevision.current
     let savedSuccessfully = false
     await run('save-settings', async isCurrent => {
       const saved = await runtimeBridge.saveSettings(nextSettings)
@@ -4239,7 +4264,13 @@ export function App() {
       setSettings(saved)
       // 保存成功：草稿以后端落盘值为准重建（含清空 API Key 输入框）并解除「未保存」标记。
       // 不做这一步的话，旧草稿会在下一次后台刷新时把刚保存的值反向覆盖回去。
-      resyncSettingsDraft(saved)
+      if (settingsDraftRevision.current === draftRevisionAtStart) {
+        resyncSettingsDraft(saved)
+      } else {
+        // The user edited the form while this request was in flight. Keep those
+        // edits and only refresh the read-only Harness credential status.
+        applyRefreshedSettings(saved)
+      }
       triggerHaptic('success')
       // 落盘成功后，状态查询失败不能被当成保存失败；三项查询互不阻塞。
       const [runtimeResult, keepAliveResult, overlayResult] = await Promise.allSettled([
@@ -4296,7 +4327,7 @@ export function App() {
       }
     })
     return savedSuccessfully
-  }, [notify, readOverlayBall, resyncSettingsDraft, run])
+  }, [applyRefreshedSettings, notify, readOverlayBall, resyncSettingsDraft, run])
 
   /**
    * 申请前台服务通知权限。

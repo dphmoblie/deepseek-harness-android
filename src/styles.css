@@ -1591,6 +1591,13 @@ button:disabled {
   box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 5%, transparent);
 }
 
+.settings-model-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 /* 自动化、根通道与文件管理的子区块也使用同一张主题卡片。 */
 .settings-subsection {
   min-width: 0;
