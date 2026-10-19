@@ -188,7 +188,7 @@ pnpm lint          # ESLint，零警告通过
 
 黄线是 GitHub 星标累计数（按加星时间计入）；蓝线是各 Release 资产的总下载次数——
 GitHub 只提供当前累计值，所以按发布日计入、逐日累加成阶梯线。图由
-`pnpm run chart:stats` 重新生成，抓取日期会写进图内。
+`pnpm run chart:stats` 重新生成，抓取日期会写进图内；仓库里的 `stats-chart` 工作流每天自动跑一次，数据变了就自己提交新图。
 
 ## 许可证
 
