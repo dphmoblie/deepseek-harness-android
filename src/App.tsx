@@ -859,6 +859,15 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
     : 0
   // 门屏是「用户最容易怀疑卡死」的地方：阶段切换会重置字节口径，以 phase 作为分段键。
   const downloadTelemetry = useDownloadTelemetry(runtime.downloadedBytes, runtime.totalBytes, transitioning, runtime.phase)
+  // 自动启动已移除，开机后空闲停在门屏才是常态。若空闲也沿用「正在打开」，
+  // 用户会以为界面卡在启动流程里；只有用户真的点了「打开对话」才该说「正在…」。
+  const launchingHarness = busy === 'launch'
+  // 「已就绪」与「已在运行」要分开说：服务已经跑起来时再讲「打开时才启动」是错的，
+  // 而这句话恰恰是用户判断「点了以后要不要等」的依据。
+  const serviceRunning = runtime.phase === 'running'
+  // 停止要几秒，期间打开按钮是禁用的：此时还写「点击「打开对话」开始」，用户点了没反应，
+  // 与「一直正在打开」是同一类毛病——说的和正在发生的对不上。
+  const stoppingHarness = busy === 'stop'
 
   return (
     <div className="screen conversation-gate">
@@ -866,7 +875,7 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
       <div className="screen-heading">
         <div>
           <p className="eyebrow">{t("Harness 对话")}</p>
-          <h1>{updateRequired ? t("更新运行环境") : runtime.phase === 'error' ? t("运行环境需要处理") : installed ? t("正在进入对话") : t("准备运行环境")}</h1>
+          <h1>{updateRequired ? t("更新运行环境") : runtime.phase === 'error' ? t("运行环境需要处理") : installed ? (launchingHarness ? t("正在进入对话") : stoppingHarness ? t("正在停止运行环境") : t("对话已就绪")) : t("准备运行环境")}</h1>
         </div>
       </div>
 
@@ -885,7 +894,13 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
               : transitioning
               ? t(PHASE_META[runtime.phase].label)
               : installed
-                ? t("正在打开 Harness 对话")
+                ? launchingHarness
+                  ? t("正在打开 Harness 对话")
+                  : stoppingHarness
+                    ? t("正在停止本机服务")
+                    : serviceRunning
+                      ? t("点击「打开对话」进入对话")
+                      : t("点击「打开对话」开始")
                 : t("首次使用需要准备运行环境")}
           </h2>
           <p>
@@ -896,7 +911,13 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
               : transitioning
               ? `${formatBytes(runtime.downloadedBytes)} / ${formatBytes(runtime.totalBytes)}`
               : installed
-                ? t("应用会自动启动本机服务并进入对话。")
+                ? launchingHarness
+                  ? t("正在启动本机服务并进入对话…")
+                  : stoppingHarness
+                    ? t("停止完成后即可重新打开对话。")
+                    : serviceRunning
+                      ? t("本机服务正在运行，打开后即可继续对话。")
+                      : t("打开对话时才会启动本机服务。")
                 : t("安装时会校验运行时完整性；从网络下载的，中断后可以继续。")}
           </p>
         </div>

@@ -128,6 +128,64 @@ describe('App conversation gate', () => {
     expect(bridge.startHarness).not.toHaveBeenCalled()
   })
 
+  it('空闲停在门屏时不说「正在打开」，只给出就绪提示', async () => {
+    render(<App />)
+    await arriveAtShell()
+
+    /*
+     * 用户报的原话是「启动器首页正在打开 harness 的表述不恰当」：自动启动移除后，
+     * 开机停在门屏是常态，但卡片照旧写着「正在进入对话 / 正在打开 Harness 对话」，
+     * 看上去像卡在启动流程里。这条用例把「空闲态不许出现进行时」钉死。
+     */
+    expect(screen.getByRole('heading', { name: '对话已就绪' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '点击「打开对话」开始' })).toBeInTheDocument()
+    expect(screen.getByText('打开对话时才会启动本机服务。')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: '正在进入对话' })).not.toBeInTheDocument()
+    expect(screen.queryByText('正在打开 Harness 对话')).not.toBeInTheDocument()
+  })
+
+  it('服务已在运行时说明「正在运行」，而不是「打开时才启动」', async () => {
+    bridge.getState.mockResolvedValue({ ...runningState })
+
+    render(<App />)
+    await arriveAtShell()
+
+    // 「已在运行」与「已就绪」是两件事：前者打开不用等，后者打开要等启动。
+    expect(screen.getByRole('heading', { name: '点击「打开对话」进入对话' })).toBeInTheDocument()
+    expect(screen.getByText('本机服务正在运行，打开后即可继续对话。')).toBeInTheDocument()
+    expect(screen.queryByText('打开对话时才会启动本机服务。')).not.toBeInTheDocument()
+  })
+
+  it('点开对话后门屏如实显示正在启动，直到桥返回', async () => {
+    // 桥永不 settle：把 busy 固定在 'launch'，观察这段时间的文案。
+    bridge.startHarness.mockImplementation(() => new Promise(() => {}))
+
+    render(<App />)
+    await arriveAtShell()
+
+    fireEvent.click(screen.getByRole('button', { name: '打开对话' }))
+
+    expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '正在打开 Harness 对话' })).toBeInTheDocument()
+    expect(screen.getByText('正在启动本机服务并进入对话…')).toBeInTheDocument()
+  })
+
+  it('停止过程中说明正在停止，而不是提示「点击打开」', async () => {
+    // 停止要几秒，期间打开按钮禁用；此时说「点击「打开对话」开始」等于让用户去点一个点不动的按钮。
+    bridge.getState.mockResolvedValue({ ...runningState })
+    bridge.stopRuntime.mockImplementation(() => new Promise(() => {}))
+
+    render(<App />)
+    await arriveAtShell()
+
+    fireEvent.click(screen.getByRole('button', { name: '停止' }))
+
+    expect(await screen.findByRole('heading', { name: '正在停止运行环境' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '正在停止本机服务' })).toBeInTheDocument()
+    expect(screen.getByText('停止完成后即可重新打开对话。')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: '点击「打开对话」进入对话' })).not.toBeInTheDocument()
+  })
+
   it('keeps first run on setup, then installs and enters the conversation', async () => {
     bridge.getState
       .mockResolvedValueOnce({ ...notInstalledState })
