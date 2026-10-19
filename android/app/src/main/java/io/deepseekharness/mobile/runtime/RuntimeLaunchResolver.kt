@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import io.deepseekharness.mobile.BuildConfig
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import java.io.File
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
@@ -53,6 +54,9 @@ class RuntimeLaunchResolver(
 ) {
     private data class CachedProfile(val key: String, val profile: ProotLaunchProfile)
 
+    /** [resolveProfileForVerification] 的结果：光有 profile 不够，还要知道它是不是来自缓存。 */
+    private data class ProfileLookup(val profile: CachedProfile, val fromCache: Boolean)
+
     private data class ProfileProbeOutcome(
         val profile: ProotLaunchProfile?,
         val failureResults: List<ProcessProbeResult>,
@@ -62,6 +66,19 @@ class RuntimeLaunchResolver(
     private val profilePreferences = appContext.getSharedPreferences(PROFILE_PREFERENCES, Context.MODE_PRIVATE)
     private val lock = Any()
     private var cachedProfile: CachedProfile? = null
+
+    /**
+     * 「上次完整启动成功」的缓存判定。
+     *
+     * 懒初始化：本解析器也用于终端、插件管理、运行时自检这些不涉及启动自检的路径，
+     * 没必要为它们读一次偏好。真正的读写都在本类的锁内（见各调用的 synchronized）。
+     */
+    private val guestVerification: RuntimeGuestVerification by lazy {
+        RuntimeGuestVerification.from(appContext)
+    }
+
+    /** 一次启动内「准备运行时」的去重状态；事务边界由 `RuntimeSupervisor.startHarness` 给出。 */
+    private val preparationReuse = RuntimePreparationReuse()
 
     /**
      * ≤8 目录白名单门面。
@@ -97,9 +114,25 @@ class RuntimeLaunchResolver(
     ) = synchronized(lock) {
         // The real preflight doubles as profile validation. A separate `bash -c exit 0`
         // process here adds a full PRoot startup to every cold launch without increasing safety.
-        val resolved = resolveProfileForVerification(externalCancellation)
+        val lookup = resolveProfileForVerification(externalCancellation)
+        // 缓存命中必须同时满足两件事：
+        //  1. 启动档来自缓存（fromCache）：首选档必须真的是上一次探测成功的那份，
+        //     而不是本次现拼出来的初稿；
+        //  2. 缓存值逐字等于当前 profileKey：运行时清单/rootfs/设备/可选绑定任何一项变化都会失配。
+        // 命中时，`dsh --version` 的结论已经被上一次**完整**启动证明过（见 markGuestVerified），
+        // 这里再跑一次只会把 1~3 秒的 PRoot 冷启动重新付一遍。
+        if (lookup.fromCache && guestVerification.allowsSkip(lookup.profile.key)) {
+            // 把跳过一次记录进诊断时间线：导出日志时能区分「自检跑了并通过」与「按缓存跳过」，
+            // 否则排障时会把「跳过」误读成「自检没跑/没有记录」。字段均在白名单内。
+            store.diagnostics.record(
+                DiagnosticLevel.INFO,
+                DiagnosticEvent.RUNTIME_PHASE,
+                mapOf("phase" to "preflight", "result" to "skipped", "reason" to "guest_verified"),
+            )
+            return@synchronized
+        }
         val outcome = probeProfiles(
-            resolved,
+            lookup.profile,
             entrypoint,
             timeoutSeconds,
             commandCanFail = true,
@@ -107,6 +140,9 @@ class RuntimeLaunchResolver(
         )
         if (outcome.profile != null) return@synchronized
 
+        // 探测失败本身就是「运行时可能已经坏了」的直接证据：先让缓存失效，
+        // 下一次启动必须照旧探测，而不是继续信任上一次的成功。
+        guestVerification.invalidate()
         val failure = RuntimeDiagnostics.guestFailure(
             outcome.failureResults,
             errorCode,
@@ -141,16 +177,60 @@ class RuntimeLaunchResolver(
         return CachedProfile(key, profile)
     }
 
-    private fun resolveProfileForVerification(externalCancellation: () -> Boolean): CachedProfile {
+    private fun resolveProfileForVerification(externalCancellation: () -> Boolean): ProfileLookup {
         throwIfStartCancelled(externalCancellation)
         val manifest = prepareRuntime()
         val key = profileKey(manifest)
-        return existingProfile(key) ?: CachedProfile(key, preferredProfile())
+        val cached = existingProfile(key)
+        return if (cached != null) {
+            ProfileLookup(cached, fromCache = true)
+        } else {
+            ProfileLookup(CachedProfile(key, preferredProfile()), fromCache = false)
+        }
+    }
+
+    /**
+     * 启动事务开始：允许本次启动内复用「运行时准备」的结果。
+     *
+     * 由 `RuntimeSupervisor.startHarness` 在拿到启动权之后调用，`endStart` 在 finally 里成对调用。
+     * 事务之外的 resolver 调用（终端、插件管理、自检）从不经过这里，因此行为与改动前一致。
+     */
+    fun beginStart() = synchronized(lock) {
+        preparationReuse.begin()
+    }
+
+    /** 启动事务结束：清掉本次复用状态，下一次启动重新准备（尤其是 DNS/hosts）。 */
+    fun endStart() = synchronized(lock) {
+        preparationReuse.end()
+    }
+
+    /**
+     * 记录「当前启动档刚完成过一次完整启动」。
+     *
+     * 只由 `RuntimeSupervisor.startHarness` 在拿到鉴权入口、阶段切到 RUNNING 之后调用；
+     * 自检探测通过**不算**（见 [verifyGuest] 与 [RuntimeGuestVerification] 的说明）。
+     *
+     * 刻意不抛异常：缓存是纯优化，写不进去最多让下次多探测一次，绝不能把一次已经成功的启动
+     * 判成失败。
+     */
+    fun markGuestVerified() = synchronized(lock) {
+        val resolved = cachedProfile ?: return@synchronized
+        guestVerification.markVerified(resolved.key)
+    }
+
+    /** 任何一次启动失败后调用：下一次启动必须重新走 PRoot 自检。 */
+    fun invalidateGuestVerification() = synchronized(lock) {
+        guestVerification.invalidate()
     }
 
     private fun prepareRuntime(): RuntimeManifest {
         val manifest = store.installedManifest()
             ?: throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
+        // 一次启动里 verifyGuest 与 launch 会各要一次「准备运行时」。同一份运行时（指纹一致）
+        // 在同一事务内准备两遍没有意义：第二遍只会在几毫秒后重复写 DNS/hosts、重刷沙箱脚本、
+        // 重新实测执行 loader。指纹含运行时根路径 + 清单身份，安装/切换版本会让它失配并照常重做。
+        val fingerprint = runtimeFingerprint(manifest)
+        if (preparationReuse.canReuse(fingerprint)) return manifest
         if (!store.currentRoot.isDirectory) {
             throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
         }
@@ -165,8 +245,23 @@ class RuntimeLaunchResolver(
         profilePreferences.edit().remove(LEGACY_KEY_PROFILE_INCLUDE_SDCARD).apply()
         RuntimeDns.refresh(appContext, store.resolverFile)
         RuntimeDns.refreshHosts(store.hostsFile)
+        preparationReuse.markPrepared(fingerprint)
         return manifest
     }
+
+    /**
+     * 运行时准备指纹：只表达「准备出来的东西会不会变」。
+     *
+     * 运行时根路径、清单身份与 rootfs 摘要一变，落盘的 DNS/脚本/链接都必须重做；
+     * 设备指纹与可选绑定不参与，因为它们不影响这几个文件的内容（可选绑定在每次解析启动档时
+     * 实时重算，见 [preferredProfile]）。
+     */
+    private fun runtimeFingerprint(manifest: RuntimeManifest): String = listOf(
+        store.currentRoot.absolutePath,
+        manifest.runtimeId,
+        manifest.version,
+        manifest.rootfs.sha256,
+    ).joinToString(":")
 
     private fun preferredProfile(): ProotLaunchProfile {
         val required = listOf(

@@ -148,13 +148,13 @@ const storageAccess: StorageAccessState = {
 
 /** 主视图（对话门面）的标题。 */
 function mainViewHeading(): HTMLElement {
-  return screen.getByRole('heading', { name: '正在进入对话' })
+  return screen.getByRole('heading', { name: '对话已就绪' })
 }
 
 /** 等待首屏渲染完成并停在外壳主视图。 */
 async function renderAtMainView(): Promise<void> {
   render(<App />)
-  expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
+  expect(await screen.findByRole('heading', { name: '对话已就绪' })).toBeVisible()
 }
 
 /**
@@ -248,7 +248,7 @@ describe('返回键与视图历史', () => {
 
     // 一级 → 主视图。
     await pressBack()
-    expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '对话已就绪' })).toBeVisible()
     expect(window.location.hash).toBe('')
     expect(window.history.state).toMatchObject({ dshView: 'conversation' })
   })
@@ -259,7 +259,7 @@ describe('返回键与视图历史', () => {
     fireEvent.click(screen.getByRole('button', { name: '打开应用设置' }))
     await screen.findByRole('heading', { name: '设置' })
     await pressBack()
-    expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '对话已就绪' })).toBeVisible()
 
     // 主视图是历史栈底：原生侧此时 canGoBack() 为 false，会把任务退到后台而不是结束应用。
     const pushState = vi.spyOn(window.history, 'pushState')
@@ -287,7 +287,7 @@ describe('返回键与视图历史', () => {
 
     await pressBack()
     await pressBack()
-    expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '对话已就绪' })).toBeVisible()
     expect(window.location.hash).toBe('')
   })
 
@@ -308,7 +308,7 @@ describe('返回键与视图历史', () => {
 
     // 收尾：回到栈底，避免把历史位置留给下一个用例。
     await pressBack()
-    expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '对话已就绪' })).toBeVisible()
   })
 
   it('屏幕内返回按钮回退历史，不留下会被返回键重新进入的二级页记录', async () => {
@@ -326,7 +326,7 @@ describe('返回键与视图历史', () => {
 
     // 因此此时按系统返回必须回主视图，而不是被送回二级页。
     await pressBack()
-    expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '对话已就绪' })).toBeVisible()
     expect(window.location.hash).toBe('')
   })
 
@@ -342,7 +342,7 @@ describe('返回键与视图历史', () => {
       window.dispatchEvent(new PopStateEvent('popstate', { state: null }))
     })
 
-    expect(await screen.findByRole('heading', { name: '正在进入对话' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '对话已就绪' })).toBeVisible()
     expect(window.location.hash).toBe('')
 
     // 收尾：回到栈底。

@@ -108,6 +108,14 @@ class DiagnosticPolicyTest {
         assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE\n", line(fields = mapOf("free_bytes" to "/data/user/0")))
         assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE|digest_ok=false\n", line(fields = mapOf("digest_ok" to "false")))
         assertEquals("2026-09-12T10:20:30Z|INFO|RUNTIME_PHASE\n", line(fields = mapOf("digest_ok" to "0")))
+        // 启动耗时：只接受非负整数毫秒。负数、带单位、小数一律丢弃——它们只可能来自
+        // 记错的调用点，放行反而会让「快了还是慢了」的对比失真。
+        assertEquals("2026-09-12T10:20:30Z|INFO|HARNESS_START|result=ok|elapsed_ms=1834\n",
+            line(event = DiagnosticEvent.HARNESS_START, fields = mapOf("result" to "ok", "elapsed_ms" to "1834")))
+        assertEquals("2026-09-12T10:20:30Z|INFO|HARNESS_START|result=ok\n",
+            line(event = DiagnosticEvent.HARNESS_START, fields = mapOf("result" to "ok", "elapsed_ms" to "-1")))
+        assertEquals("2026-09-12T10:20:30Z|INFO|HARNESS_START|result=ok\n",
+            line(event = DiagnosticEvent.HARNESS_START, fields = mapOf("result" to "ok", "elapsed_ms" to "1.8s")))
     }
 
     @Test
@@ -119,6 +127,9 @@ class DiagnosticPolicyTest {
             mapOf("reason" to "stopped"),
             mapOf("code" to "HARNESS_START_TIMEOUT"),
             mapOf("result" to "ok", "phase" to "running"),
+            // 启动成功与失败的实际行：带 elapsed_ms，失败行同时带上受控错误码。
+            mapOf("result" to "ok", "phase" to "running", "elapsed_ms" to "1834"),
+            mapOf("result" to "failed", "code" to "HARNESS_START_TIMEOUT", "elapsed_ms" to "120001"),
             mapOf("result" to "failed", "code" to "RUNTIME_BUSY"),
             mapOf("result" to "succeeded", "active" to "true"),
             mapOf("result" to "created"),
