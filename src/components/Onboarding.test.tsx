@@ -101,16 +101,18 @@ describe('Onboarding', () => {
   it('保存完成之前不清空密钥或重复提交，成功后清空', async () => {
     let finish!: (saved: boolean) => void
     const onSaveSettings = vi.fn(() => new Promise<boolean>(resolve => { finish = resolve }))
-    renderOnboarding({ onSaveSettings })
+    renderOnboarding({ onSaveSettings, runtime: { ...runtime, phase: 'ready' } })
     for (let i = 0; i < 2; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
     const input = screen.getByLabelText('DeepSeek API Key')
     fireEvent.change(input, { target: { value: 'test-placeholder-key' } })
+    expect(screen.getByRole('button', { name: '登录 DeepSeek 账号' })).toBeEnabled()
     fireEvent.click(screen.getByRole('button', { name: '保存 API Key' }))
     fireEvent.submit(input.closest('form')!)
     expect(onSaveSettings).toHaveBeenCalledTimes(1)
     expect(input).toHaveValue('test-placeholder-key')
     expect(input).toBeDisabled()
     expect(screen.getByRole('button', { name: /下一步/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '登录 DeepSeek 账号' })).toBeDisabled()
     finish(true)
     await waitFor(() => expect(input).toHaveValue(''))
   })
@@ -193,12 +195,13 @@ describe('Onboarding', () => {
     expect(props.onAuthorize).toHaveBeenCalledOnce()
   })
 
-  // 已配置任一来源的密钥时，最后一步才提供「打开 Harness」。
+  // 已配置任一来源的凭据时，最后一步才提供「打开 Harness」。
   const configuredCases: { name: string; settings: RuntimeSettings }[] = [
     { name: '内置供应商密钥', settings: { ...settings, configuredModelProviders: ['deepseek'] } },
     { name: 'Harness 网页密钥', settings: { ...settings, harnessConfiguredModelProviders: ['deepseek'] } },
     { name: '自定义供应商密钥', settings: { ...settings, configuredCustomModelProviders: ['custom-1'] } },
     { name: 'Harness 自定义供应商密钥', settings: { ...settings, harnessConfiguredCustomModelProviders: ['custom-1'] } },
+    { name: 'DeepSeek 账号', settings: { ...settings, deepSeekAccountConfigured: true } },
   ]
 
   it.each(configuredCases)('calls onOpenHarness from the final step with $name', ({ settings: configured }) => {
@@ -209,16 +212,59 @@ describe('Onboarding', () => {
     expect(props.onOpenHarness).toHaveBeenCalledOnce()
   })
 
-  it('blocks opening Harness until a model key is configured', () => {
+  it('keeps the normal Harness button hidden until a model credential is configured', () => {
     const props = renderOnboarding({ runtime: { ...runtime, phase: 'running' } })
     for (let i = 0; i < 5; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
-    expect(screen.getByText(/尚未检测到模型 API Key/)).toBeDefined()
+    expect(screen.getByText(/尚未检测到模型凭据/)).toBeDefined()
     expect(screen.queryByRole('button', { name: /打开 Harness/ })).toBeNull()
 
-    // 「去配置 API Key」把用户送回密钥步骤；保存后回到本步骤才会出现打开按钮。
-    fireEvent.click(screen.getByRole('button', { name: /去配置 API Key/ }))
-    expect(screen.getByText('配置模型 API Key')).toBeDefined()
+    // 「去配置模型账号或 API Key」把用户送回模型步骤。
+    fireEvent.click(screen.getByRole('button', { name: /去配置模型账号或 API Key/ }))
+    expect(screen.getByText('配置模型账号或 API Key')).toBeDefined()
     expect(props.onOpenHarness).not.toHaveBeenCalled()
+  })
+
+  it('未配置凭据时可从最终步骤前往账号登录', () => {
+    const props = renderOnboarding({ runtime: { ...runtime, phase: 'ready' } })
+    for (let i = 0; i < 5; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    const login = screen.getByRole('button', { name: '登录 DeepSeek 账号' })
+    expect(login).toBeEnabled()
+    fireEvent.click(login)
+    expect(props.onOpenHarnessConfirmed).toHaveBeenCalledOnce()
+    expect(props.onOpenHarness).not.toHaveBeenCalled()
+  })
+
+  it.each(['ready', 'running'] as const)('模型步骤在 %s 状态下可登录且不要求 API Key', phase => {
+    const props = renderOnboarding({ runtime: { ...runtime, phase } })
+    for (let i = 0; i < 2; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    const login = screen.getByRole('button', { name: '登录 DeepSeek 账号' })
+    expect(login).toBeEnabled()
+    fireEvent.click(login)
+    expect(props.onOpenHarnessConfirmed).toHaveBeenCalledOnce()
+    expect(props.onOpenHarness).not.toHaveBeenCalled()
+    expect(props.onSaveSettings).not.toHaveBeenCalled()
+  })
+
+  it('模型步骤已登录账号提供管理入口且随设置刷新', () => {
+    const props = renderOnboarding({ runtime: { ...runtime, phase: 'ready' } })
+    for (let i = 0; i < 2; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    props.rerender(<Onboarding {...props} settings={{ ...settings, deepSeekAccountConfigured: true }} />)
+    expect(screen.queryByRole('button', { name: '登录 DeepSeek 账号' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '打开 Harness 管理账号' }))
+    expect(props.onOpenHarnessConfirmed).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    { name: '未安装', currentRuntime: runtime, busy: null },
+    { name: '待更新', currentRuntime: { ...runtime, phase: 'ready' as const, updateAvailable: true }, busy: null },
+    { name: '忙碌', currentRuntime: { ...runtime, phase: 'running' as const }, busy: 'install' },
+  ])('模型与最终步骤在$name时均禁用账号登录', ({ currentRuntime, busy }) => {
+    const props = renderOnboarding({ runtime: currentRuntime, busy })
+    for (let i = 0; i < 2; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    expect(screen.getByRole('button', { name: '登录 DeepSeek 账号' })).toBeDisabled()
+    for (let i = 0; i < 3; i += 1) fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
+    expect(screen.getByRole('button', { name: '登录 DeepSeek 账号' })).toBeDisabled()
+    expect(props.onOpenHarnessConfirmed).not.toHaveBeenCalled()
   })
 
   it('未配置密钥时只能由用户显式确认后放行打开', () => {

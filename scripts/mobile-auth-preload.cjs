@@ -104,6 +104,15 @@ function isAuthorized(request) {
   return actual.length === expected.length && crypto.timingSafeEqual(actual, expected)
 }
 
+// DeepSeek account login completes in the Harness server itself.  The external
+// browser cannot know the per-launch Basic Auth token, so only the provider's
+// exact GET callback is allowed through this app-level gate.  The Harness
+// provider still validates state, code, method, and replay protection.
+function isOAuthCallback(request) {
+  return request.method === 'GET' && typeof request.url === 'string' &&
+    request.url.split('?', 1)[0] === '/oauth/callback'
+}
+
 // Android WebView 的 WS 握手 401 不触发 onReceivedHttpAuthRequest，Basic 挑战
 // 对 WebSocket 无效；因此 upgrade 额外接受 HttpOnly Cookie 承载的同一 token
 //（由 HarnessActivity 在加载前注入，JS 不可读）。遍历全部同名 cookie，任一
@@ -148,7 +157,7 @@ function rejectUpgrade(socket) {
 const originalEmit = http.Server.prototype.emit
 http.Server.prototype.emit = function authenticatedEmit(event, ...args) {
   const request = args[0]
-  if (event === 'request' && !isAuthorized(request)) {
+  if (event === 'request' && !isAuthorized(request) && !isOAuthCallback(request)) {
     rejectRequest(args[1])
     return true
   }

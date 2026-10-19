@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { t } from '../i18n'
-import { ArrowLeft, ArrowRight, Blocks, Check, KeyRound, Loader2, Rocket, ShieldCheck, Sparkles, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Blocks, Check, KeyRound, Loader2, LogIn, Rocket, ShieldCheck, Sparkles, X } from 'lucide-react'
 import { CustomProviders } from './CustomProviders'
 import { hasConfiguredModelCredential, MODEL_PROVIDERS } from '../modelProviders'
 import type { CustomModelProvider, ModelProviderId, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from '../platform/types'
@@ -16,7 +16,7 @@ interface OnboardingProps {
   onAuthorize: () => void
   onOpenShizuku: () => void
   onOpenHarness: () => void
-  /** 用户确认「密钥已在 Harness 内配置过」时的放行入口。 */
+  /** 登录账号或用户确认凭据已在 Harness 内配置时的放行入口。 */
   onOpenHarnessConfirmed: () => void
   onDone: () => void
   onSaveSettings?: (settings: RuntimeSettingsUpdate) => Promise<boolean>
@@ -25,7 +25,7 @@ interface OnboardingProps {
 const STEPS = [
   { id: 'welcome', title: '欢迎使用 DeepSeek Harness Android', icon: Sparkles },
   { id: 'runtime', title: '安装 Ubuntu 运行时', icon: Blocks },
-  { id: 'apikey', title: '配置模型 API Key', icon: KeyRound },
+  { id: 'apikey', title: '配置模型账号或 API Key', icon: KeyRound },
   { id: 'shizuku', title: '设备 Shell（可选）', icon: ShieldCheck },
   { id: 'plugins', title: '界面与插件', icon: Blocks },
   { id: 'ready', title: '开始使用', icon: Rocket },
@@ -58,7 +58,8 @@ export function Onboarding({
 
   const installed = ['ready', 'running'].includes(runtime.phase)
   const authorized = shizuku.permission === 'granted'
-  // 首次配置必须完成一次模型密钥：没有密钥时 Harness 里的对话必然失败。
+  const canOpenHarness = installed && !runtime.updateAvailable && busy === null && !saving
+  // 账号登录和 API Key 都是可用的模型凭据，登录必须先允许进入 Harness。
   const modelConfigured = hasConfiguredModelCredential(settings)
 
   useEffect(() => {
@@ -151,9 +152,20 @@ export function Onboarding({
                   void saveModelSettings()
                 }}>
                   <fieldset className="onboarding-fields" disabled={saving}>
-                  <p>{t("选择模型供应商并保存 API Key。密钥在本机加密保存，保存后不再显示。")}</p>
+                  <p>{t("可登录 DeepSeek 账号，或选择模型供应商并保存 API Key。密钥在本机加密保存，保存后不再显示。")}</p>
+                  <div className="provider-account-card">
+                    <div>
+                      <strong>{t("DeepSeek 账号")}</strong>
+                      <span>{settings?.deepSeekAccountConfigured === true ? t("已登录，可使用账号模型") : t("登录 DeepSeek 账号后使用账号模型，无需填写 API Key")}</span>
+                    </div>
+                    <button className="button button-secondary compact-button" type="button" disabled={!canOpenHarness} onClick={onOpenHarnessConfirmed}>
+                      {settings?.deepSeekAccountConfigured === true ? <Rocket size={16} /> : <LogIn size={16} />}
+                      {settings?.deepSeekAccountConfigured === true ? t("打开 Harness 管理账号") : t("登录 DeepSeek 账号")}
+                    </button>
+                  </div>
+                  <p className="onboarding-status">{t("打开 Harness 后，在侧栏「更多」菜单选择登录；登录完成后返回此页可刷新账号状态。")}</p>
                   {!modelConfigured && (
-                    <p className="onboarding-warn">{t("首次配置至少要保存一份模型 API Key：没有密钥时「打开 Harness」不可用。")}</p>
+                    <p className="onboarding-warn">{t("开始对话前需登录 DeepSeek 账号或保存一份模型 API Key。")}</p>
                   )}
                   <label className="field">
                     <span>{t("供应商")}</span>
@@ -171,7 +183,7 @@ export function Onboarding({
                       autoComplete="new-password"
                       spellCheck={false}
                       maxLength={200}
-                      placeholder={t("粘贴 API Key（必填）")}
+                      placeholder={t("粘贴 API Key")}
                       value={apiKeyDraft}
                       onChange={event => setApiKeyDraft(event.target.value)}
                     />
@@ -235,24 +247,27 @@ export function Onboarding({
                     <>
                       <p>{t("已检测到模型配置。Harness 启动后即可开始对话，也可随时返回这里管理运行环境和终端。")}</p>
                       <div className="onboarding-actions-row">
-                        <button className="button button-primary" type="button" disabled={busy !== null || runtime.phase !== 'running'} onClick={onOpenHarness}>
+                        <button className="button button-primary" type="button" disabled={!canOpenHarness} onClick={onOpenHarness}>
                           <Rocket size={18} />
                           {t("打开 Harness")}</button>
                       </div>
                     </>
                   ) : (
                     <>
-                      <p className="onboarding-warn">{t("尚未检测到模型 API Key。请先配置密钥；如果已在 Harness 中配置，也可以直接打开。")}</p>
+                      <p className="onboarding-warn">{t("尚未检测到模型凭据。可打开 Harness 登录 DeepSeek 账号，或先配置 API Key；如果已配置其他来源的凭据，也可以直接打开。")}</p>
                       <ul>
                         <li>{t("密钥在本机加密保存，保存后不再显示；")}</li>
                         <li>{t("配置成功后本步骤会出现「打开 Harness」按钮；")}</li>
-                        <li>{t("应用只读取 Harness 中的密钥配置状态，无法确认密钥是否有效，也可能无法识别其他来源的凭据。")}</li>
+                        <li>{t("应用只读取 Harness 中的凭据配置状态，无法确认凭据是否有效，也可能无法识别其他来源的凭据。")}</li>
                       </ul>
                       <div className="onboarding-actions-row">
                         <button className="button button-primary" type="button" disabled={busy !== null} onClick={() => setStep(2)}>
-                          <KeyRound size={18} />{t("去配置 API Key")}
+                          <KeyRound size={18} />{t("去配置模型账号或 API Key")}
                         </button>
-                        <button className="button button-secondary" type="button" disabled={busy !== null || runtime.phase !== 'running'} onClick={onOpenHarnessConfirmed}>
+                        <button className="button button-secondary" type="button" disabled={!canOpenHarness} onClick={onOpenHarnessConfirmed}>
+                          <LogIn size={18} />{t("登录 DeepSeek 账号")}
+                        </button>
+                        <button className="button button-secondary" type="button" disabled={!canOpenHarness} onClick={onOpenHarnessConfirmed}>
                           <Rocket size={18} />{t("我已在 Harness 内配置过，仍要打开")}
                         </button>
                       </div>

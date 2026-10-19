@@ -31,6 +31,7 @@ import androidx.appcompat.app.AppCompatActivity
 import io.deepseekharness.mobile.runtime.HarnessAccess
 import io.deepseekharness.mobile.runtime.RuntimeStore
 import java.io.ByteArrayInputStream
+import java.net.URI
 import java.util.concurrent.Executors
 
 class HarnessActivity : AppCompatActivity() {
@@ -43,6 +44,8 @@ class HarnessActivity : AppCompatActivity() {
     private var pageRetryCount = 0
     private var rendererRecovery = false
     private var entryUrlForRetry: String? = null
+    /** The OAuth page is opened by Harness with window.open(); keep its transport WebView detached. */
+    private var authorizationPopup: WebView? = null
     private val pageRetryHandler = Handler(Looper.getMainLooper())
 
     /** 等待用户从系统选择器返回的 WebView 回调；同一时刻只允许一个，页面靠它继续上传。 */
@@ -176,7 +179,10 @@ class HarnessActivity : AppCompatActivity() {
             allowContentAccess = true
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             javaScriptCanOpenWindowsAutomatically = false
-            setSupportMultipleWindows(false)
+            // DeepSeek account login opens an about:blank popup and assigns its location
+            // asynchronously.  Keep multiple-window support on so onCreateWindow can
+            // intercept that navigation without ever loading an external page in this WebView.
+            setSupportMultipleWindows(true)
             // 默认不放行媒体自播；唯一的例外是「同步中的静音背景视频」，
             // 由 HarnessThemeBridge.syncAutoplay 按背景状态逐次对齐，关掉背景就收回。
             mediaPlaybackRequiresUserGesture = true
@@ -228,6 +234,7 @@ class HarnessActivity : AppCompatActivity() {
         pageFailureHandled = false
         pageRetryCount = 0
         deliverFileChooserResult(emptyList())
+        closeAuthorizationPopup()
         webView.stopLoading()
         if (discardHistory) webView.clearHistory()
         boundAccess = access
@@ -245,6 +252,7 @@ class HarnessActivity : AppCompatActivity() {
         }
         webView.webViewClient = RestrictedWebViewClient(
             origin, access.username, access.password,
+            onDeepSeekAuthorization = ::openDeepSeekAuthorization,
             onMainFrameFailure = {
                 if (pageLoadGate === gate && AppAuthenticationState.ownsHarnessAccess(authenticationOwner)) {
                     handleMainFrameFailure()
@@ -298,6 +306,7 @@ class HarnessActivity : AppCompatActivity() {
             webView.removeAllViews()
             webView.destroy()
         }
+        closeAuthorizationPopup()
         pageRetryHandler.removeCallbacksAndMessages(null)
         val revoked = !isChangingConfigurations && !rendererRecovery &&
             AppAuthenticationState.revokeHarness(authenticationOwner)
@@ -379,12 +388,50 @@ class HarnessActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * 只为 `<input type="file">` 服务：没有它，页面上任何"选择文件"入口在手机上都是死按钮。
-     *
-     * 其余 WebChromeClient 能力（JS 弹窗、控制台、地理位置等）一概不重写，保持系统默认行为。
-     */
+    /** Handles user-selected uploads and the provider's authorization popup only. */
     private inner class HarnessWebChromeClient : WebChromeClient() {
+        override fun onCreateWindow(
+            view: WebView?,
+            isDialog: Boolean,
+            isUserGesture: Boolean,
+            resultMsg: android.os.Message?,
+        ): Boolean {
+            // Only a user-initiated popup may start account authorization.  A detached,
+            // JavaScript-disabled transport page prevents an untrusted redirect from
+            // receiving the localhost session cookie or HTTP Basic credentials.
+            if (view !== webView || !isUserGesture || resultMsg == null || isFinishing || isDestroyed ||
+                !AppAuthenticationState.ownsHarnessAccess(authenticationOwner)
+            ) return false
+            val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
+            closeAuthorizationPopup()
+            val popup = WebView(this@HarnessActivity).apply {
+                settings.apply {
+                    javaScriptEnabled = false
+                    domStorageEnabled = false
+                    allowFileAccess = false
+                    allowContentAccess = false
+                    mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                    javaScriptCanOpenWindowsAutomatically = false
+                    setSupportMultipleWindows(false)
+                    safeBrowsingEnabled = true
+                }
+                webChromeClient = object : WebChromeClient() {
+                    override fun onCloseWindow(window: WebView?) {
+                        if (window === authorizationPopup) closeAuthorizationPopup()
+                    }
+                }
+                webViewClient = AuthorizationPopupClient()
+            }
+            authorizationPopup = popup
+            transport.webView = popup
+            resultMsg.sendToTarget()
+            return true
+        }
+
+        override fun onCloseWindow(window: WebView?) {
+            if (window === authorizationPopup) closeAuthorizationPopup()
+        }
+
         override fun onShowFileChooser(
             webView: WebView?,
             filePathCallback: ValueCallback<Array<Uri>>?,
@@ -411,6 +458,56 @@ class HarnessActivity : AppCompatActivity() {
                 deliverFileChooserResult(emptyList())
                 false
             }
+        }
+    }
+
+    private fun closeAuthorizationPopup() {
+        val popup = authorizationPopup ?: return
+        authorizationPopup = null
+        popup.stopLoading()
+        popup.webChromeClient = null
+        popup.webViewClient = WebViewClient()
+        popup.destroy()
+    }
+
+    /** Never loads a network resource: WebView's shared cookie jar must not reach the popup. */
+    private inner class AuthorizationPopupClient : WebViewClient() {
+        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+            val uri = request?.url ?: return true
+            if (uri.toString() == "about:blank") return false
+            if (isDeepSeekAuthorizationNavigation(uri.toString(), request.method, request.isForMainFrame)) {
+                openDeepSeekAuthorization(uri)
+            }
+            return true
+        }
+
+        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? =
+            if (request?.url?.toString() == "about:blank") null else blockedResponse()
+
+        override fun onReceivedHttpAuthRequest(
+            view: WebView?, handler: HttpAuthHandler?, host: String?, realm: String?,
+        ) {
+            handler?.cancel()
+        }
+
+        override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+            if (view === authorizationPopup) closeAuthorizationPopup()
+            return true
+        }
+    }
+
+    private fun openDeepSeekAuthorization(uri: Uri): Boolean {
+        if (!isDeepSeekAuthorizationUrl(uri.toString()) || isFinishing || isDestroyed ||
+            !AppAuthenticationState.ownsHarnessAccess(authenticationOwner)
+        ) return false
+        return try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
+            // The system browser now owns the OAuth page; release the detached transport WebView
+            // so it cannot retain renderer state or a stale popup after the hand-off.
+            closeAuthorizationPopup()
+            true
+        } catch (_: Throwable) {
+            false
         }
     }
 
@@ -448,6 +545,7 @@ class HarnessActivity : AppCompatActivity() {
         private val origin: Origin,
         private val username: String,
         private val password: String,
+        private val onDeepSeekAuthorization: (Uri) -> Boolean = { false },
         private val onMainFrameFailure: () -> Unit,
         private val onRendererGone: (WebView?) -> Unit = { view ->
             view?.destroy()
@@ -474,7 +572,17 @@ class HarnessActivity : AppCompatActivity() {
 
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
             val uri = request?.url ?: return true
-            return !origin.allows(uri)
+            if (origin.allows(uri)) return false
+            // A page must not be able to launch the external account chooser from a timer,
+            // redirect, or injected script.  Popup transport gets its own one-shot allowance
+            // from onCreateWindow after WebView has confirmed a real user gesture.
+            // Kotlin 不为 hasXxx() 生成合成属性（只有 get/is 前缀才生成），这里必须显式调用。
+            if (request.hasGesture() &&
+                isDeepSeekAuthorizationNavigation(uri.toString(), request.method, request.isForMainFrame)
+            ) {
+                onDeepSeekAuthorization(uri)
+            }
+            return true
         }
 
         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
@@ -511,14 +619,29 @@ class HarnessActivity : AppCompatActivity() {
             } else onRendererGone(view)
             return true
         }
+    }
+}
 
-        private fun blockedResponse(): WebResourceResponse = WebResourceResponse(
-            "text/plain",
-            "UTF-8",
-            403,
-            "Forbidden",
-            emptyMap(),
-            ByteArrayInputStream(ByteArray(0)),
-        )
+internal fun blockedResponse(): WebResourceResponse = WebResourceResponse(
+    "text/plain", "UTF-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)),
+)
+
+internal fun isDeepSeekAuthorizationNavigation(raw: String, method: String, isMainFrame: Boolean): Boolean =
+    isMainFrame && method == "GET" && isDeepSeekAuthorizationUrl(raw)
+
+/** JVM-only form kept separate so the allowlist can be tested without Android WebView classes. */
+internal fun isDeepSeekAuthorizationUrl(raw: String): Boolean {
+    if (raw.length > 8192 || raw.any { it.isISOControl() || it == '\\' }) return false
+    return try {
+        val uri = URI(raw)
+        uri.scheme.equals("https", ignoreCase = true) &&
+            uri.host.equals("platform.deepseek.com", ignoreCase = true) &&
+            (uri.port == -1 || uri.port == 443) &&
+            uri.rawUserInfo == null &&
+            uri.rawPath == "/dsh/authorize" &&
+            uri.rawFragment == null &&
+            !uri.rawQuery.isNullOrBlank()
+    } catch (_: Exception) {
+        false
     }
 }

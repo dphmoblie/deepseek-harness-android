@@ -16,7 +16,9 @@ const CHILD_SOURCE = `
     throw new Error('one-time authentication environment was not cleared')
   }
   const http = require('node:http')
-  const server = http.createServer((_request, response) => response.end('authorized'))
+  const server = http.createServer((_request, response) => {
+    response.end(_request.url === '/' ? 'authorized' : _request.url)
+  })
   server.on('upgrade', (_request, socket) => {
     socket.end('HTTP/1.1 101 Switching Protocols\\r\\nConnection: Upgrade\\r\\nUpgrade: websocket\\r\\n\\r\\n')
   })
@@ -28,10 +30,10 @@ function authorizationHeader() {
   return `Basic ${Buffer.from(`${USERNAME}:${TOKEN}`, 'ascii').toString('base64')}`
 }
 
-function request(port, authorization) {
+function request(port, authorization, requestPath = '/', method = 'GET') {
   return new Promise((resolve, reject) => {
     const headers = authorization === undefined ? {} : { Authorization: authorization }
-    const outgoing = http.get({ host: '127.0.0.1', port, path: '/', headers }, response => {
+    const outgoing = http.request({ host: '127.0.0.1', port, path: requestPath, headers, method }, response => {
       const chunks = []
       response.on('data', chunk => chunks.push(chunk))
       response.on('end', () => resolve({
@@ -41,11 +43,12 @@ function request(port, authorization) {
       }))
     })
     outgoing.on('error', reject)
+    outgoing.end()
   })
 }
 
 function upgrade(port, options = {}) {
-  const { authorization, cookie } = options
+  const { authorization, cookie, requestPath = '/events' } = options
   return new Promise((resolve, reject) => {
     const socket = net.createConnection({ host: '127.0.0.1', port })
     let response = ''
@@ -55,7 +58,7 @@ function upgrade(port, options = {}) {
       if (authorization !== undefined) lines.push(`Authorization: ${authorization}`)
       if (cookie !== undefined) lines.push(`Cookie: ${cookie}`)
       socket.write(
-        `GET /events HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n` +
+        `GET ${requestPath} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\n` +
         `Connection: Upgrade\r\nUpgrade: websocket\r\n${lines.join('\r\n')}\r\n\r\n`,
       )
     })
@@ -110,6 +113,39 @@ describe('mobile Harness authentication preload', () => {
     const accepted = await request(port, authorizationHeader())
     assert.equal(accepted.status, 200)
     assert.equal(accepted.body, 'authorized')
+  })
+
+  it('lets the exact OAuth callback reach Harness without app Basic Auth', async () => {
+    const callback = await request(port, undefined, '/oauth/callback?code=oauth-code&state=oauth-state')
+    assert.equal(callback.status, 200)
+    assert.equal(callback.body, '/oauth/callback?code=oauth-code&state=oauth-state')
+
+    for (const path of [
+      '/oauth/callback/',
+      '/oauth/callbacks?code=oauth-code',
+      '/oauth/callback/extra',
+      '/other/../oauth/callback',
+      '/oauth/./callback',
+      '/oauth\\callback',
+      '/oauth/%63allback',
+      '/oauth%2fcallback',
+      '//attacker.invalid/oauth/callback?code=oauth-code&state=oauth-state',
+      'http://attacker.invalid/oauth/callback?code=oauth-code&state=oauth-state',
+    ]) {
+      const lookalike = await request(port, undefined, path)
+      assert.equal(lookalike.status, 401, path)
+    }
+  })
+
+  it('does not exempt non-GET callbacks or WebSocket upgrades', async () => {
+    for (const method of ['HEAD', 'POST', 'OPTIONS', 'PUT', 'DELETE']) {
+      const callback = await request(port, undefined, '/oauth/callback?code=oauth-code&state=oauth-state', method)
+      assert.equal(callback.status, 401, method)
+    }
+    assert.match(
+      await upgrade(port, { requestPath: '/oauth/callback?code=oauth-code&state=oauth-state' }),
+      /^HTTP\/1\.1 401 Unauthorized/,
+    )
   })
 
   it('guards WebSocket upgrades with the same credential', async () => {

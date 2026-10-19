@@ -1168,16 +1168,37 @@ class MobileRuntimePlugin : Plugin() {
             call.reject("供应商标识缺失")
             return
         }
+        try {
+            RuntimeValidation.requireModelProviderId(providerId)
+        } catch (error: RuntimeFailure) {
+            call.reject(error.message ?: "供应商标识格式无效")
+            return
+        }
         val baseUrl = call.getString("baseUrl")?.trim()
         val apiKey = call.getString("apiKey")?.trim()
         val api = call.getString("api")?.trim()
         execute(call) {
+            val draftKey = apiKey?.takeIf { it.isNotEmpty() }
+            val customProvider = controller.store.settings().customModelProviders
+                .firstOrNull { it.id == providerId }
+            // A saved key may only be used with its saved endpoint. Draft credentials are
+            // explicitly supplied by the user and may test the current unsaved draft URL.
             val savedKey = controller.store.readModelCredential(providerId)
+            val effectiveBaseUrl = if (draftKey == null && customProvider != null) {
+                customProvider.baseUrl
+            } else {
+                baseUrl
+            }
+            val effectiveApi = if (draftKey == null && customProvider != null) {
+                customProvider.api.wireValue
+            } else {
+                api
+            }
             val result = ModelConnectivityProbe.probe(
                 providerId = providerId,
-                baseUrl = baseUrl,
+                baseUrl = effectiveBaseUrl,
                 apiKey = apiKey,
-                api = api,
+                api = effectiveApi,
                 savedApiKey = savedKey,
             )
             JSObject().apply {
@@ -3905,6 +3926,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("terminalFontSize", terminalFontSize)
         .put("configuredModelProviders", org.json.JSONArray(configuredModelProviders.map { it.wireValue }))
         .put("harnessConfiguredModelProviders", org.json.JSONArray(harnessConfiguredModelProviders.map { it.wireValue }))
+        .put("deepSeekAccountConfigured", deepSeekAccountConfigured)
         .put("customModelProviders", org.json.JSONArray().also { providers ->
             customModelProviders.forEach { provider ->
                 providers.put(JSObject()

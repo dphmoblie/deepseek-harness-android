@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile.runtime
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 
@@ -56,6 +57,26 @@ class HarnessCredentialStatusTest {
         cases.forEach { yaml ->
             assertEquals(HarnessCredentialStatus(), parse(yaml))
         }
+    }
+
+    @Test
+    fun reportsDeepSeekAccountGrantWithoutExposingItsToken() {
+        val status = parse(
+            """
+            version: 1
+            records:
+              deepseek-account-platform/default:
+                kind: grant
+                payload:
+                  version: 1
+                  token: account-token-placeholder
+                  issuer: https://platform.deepseek.com
+            """.trimIndent(),
+        )
+
+        assertTrue(status.deepSeekAccountConfigured)
+        assertEquals(emptySet<ModelProvider>(), status.modelProviders)
+        assertEquals(emptySet<String>(), status.customProviderIds)
     }
 
     private fun parse(

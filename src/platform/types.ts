@@ -487,6 +487,8 @@ export interface RuntimeSettings extends RuntimeSource {
   configuredModelProviders: ModelProviderId[]
   /** Harness 网页凭据文件中已配置的供应商；只读状态，不可由管理端清除。 */
   harnessConfiguredModelProviders?: ModelProviderId[]
+  /** Official DeepSeek account grant presence; the grant itself never crosses the bridge. */
+  deepSeekAccountConfigured?: boolean
   /** 自定义供应商元数据；旧版桥接可缺省，保存的密钥绝不回传。 */
   customModelProviders?: CustomModelProvider[]
   configuredCustomModelProviders?: string[]

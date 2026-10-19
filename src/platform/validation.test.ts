@@ -147,6 +147,26 @@ describe('runtime source validation', () => {
 })
 
 describe('settings validation', () => {
+  it('keeps the presence-only DeepSeek account status separate from API keys', () => {
+    const settings = validateSettings({
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: false,
+      terminalFontSize: 14,
+      configuredModelProviders: [],
+      deepSeekAccountConfigured: true,
+    })
+    expect(settings.deepSeekAccountConfigured).toBe(true)
+    expect(() => validateSettings({
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: false,
+      terminalFontSize: 14,
+      configuredModelProviders: [],
+      deepSeekAccountConfigured: 'yes' as never,
+    })).toThrow('账号状态')
+  })
+
   it('accepts only the explicit unconfigured stored-source state', () => {
     expect(validateStoredSettings({
       manifestUrl: '',

@@ -28,6 +28,7 @@ export const MODEL_PROVIDERS: readonly ModelProviderOption[] = [
 export function hasConfiguredModelCredential(settings: RuntimeSettings | null): boolean {
   if (settings === null) return false
   return settings.configuredModelProviders.length > 0
+    || settings.deepSeekAccountConfigured === true
     || (settings.harnessConfiguredModelProviders?.length ?? 0) > 0
     || (settings.configuredCustomModelProviders?.length ?? 0) > 0
     || (settings.harnessConfiguredCustomModelProviders?.length ?? 0) > 0
