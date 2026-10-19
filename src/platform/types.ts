@@ -1529,9 +1529,9 @@ export type AppThemeMode = 'system' | 'light' | 'dark'
 
 /** 同步给 DSH 页面（访客 WebView）的受控主题：只有固定字段，没有 CSS / JS / URL。 */
 export type { SyncedTheme } from '../adaptiveAccent'
-export type { HarnessBackgroundRef } from '../backgroundRef'
+export type { HarnessBackgroundRef, HarnessBackgroundState } from '../backgroundRef'
 import type { SyncedTheme } from '../adaptiveAccent'
-import type { HarnessBackgroundRef } from '../backgroundRef'
+import type { HarnessBackgroundRef, HarnessBackgroundState } from '../backgroundRef'
 
 export interface RuntimeWorkspaceFileList {
   files: string[]
@@ -1568,6 +1568,19 @@ export interface RuntimeBridge {
    */
   pickHarnessBackground: () => Promise<HarnessBackgroundRef>
   clearHarnessBackground: () => Promise<void>
+  /**
+   * 落盘「连背景一起同步」开关。
+   *
+   * 这个开关必须活在原生侧：外壳刷新、进程重启之后还要能读回上次的选择；
+   * 只写页面的内存状态，重启就会自己弹回未勾，看起来像背景被丢了。
+   */
+  setHarnessSyncBackground: (enabled: boolean) => Promise<void>
+  /**
+   * 读回同步状态（开关、上次同步时间、已选背景）。
+   *
+   * 外壳启动时用它恢复界面：勾选框、已选文件提示都从这一个返回值来。
+   */
+  harnessThemeState: () => Promise<HarnessBackgroundState>
   getState: () => Promise<RuntimeState>
   getSettings: () => Promise<RuntimeSettings>
   saveSettings: (settings: RuntimeSettingsUpdate) => Promise<RuntimeSettings>

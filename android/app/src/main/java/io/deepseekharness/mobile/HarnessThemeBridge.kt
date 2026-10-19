@@ -7,6 +7,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
+import java.lang.ref.WeakReference
 
 /**
  * 把外壳主题同步给 DSH 页面（访客 WebView）。
@@ -36,6 +37,8 @@ internal object HarnessThemeBridge {
     private const val KEY_BACKGROUND_URI = "backgroundUri"
     private const val KEY_BACKGROUND_MIME = "backgroundMime"
     private const val KEY_BACKGROUND_KIND = "backgroundKind"
+    /** 「连背景一起同步」开关：落在这里而不是外壳的 localStorage，页面重启后才不会自己跑回来。 */
+    private const val KEY_SYNC_BACKGROUND = "syncBackground"
 
     private val COLOR = Regex("^#[0-9a-fA-F]{6}$")
     private val MODES = setOf("light", "dark", "system")
@@ -62,6 +65,27 @@ internal object HarnessThemeBridge {
         else -> null
     }
 
+    /** 「连背景一起同步」只认布尔：字符串 "false" 之类的取值一律当非法，不猜用户的意思。 */
+    internal fun acceptsSyncBackground(value: Any?): Boolean = value is Boolean
+
+    /**
+     * 页面到底该不该显示背景：地址存在**并且**开关打开。
+     *
+     * 拆成纯函数是因为「关掉开关」这条路最容易做成只改界面：地址还在，每次加载又把
+     * 旧背景画出来。这里把判定收在一处，`script()`、`serveBackground()` 共用同一个结论。
+     */
+    internal fun backgroundEnabled(uri: String?, syncBackground: Boolean): Boolean = uri != null && syncBackground
+
+    /**
+     * 自动播放是否放开：只有「同步背景 + 背景是视频」这一种组合。
+     *
+     * WebView 默认 `mediaPlaybackRequiresUserGesture = true`，注入脚本里的 `video.play()`
+     * 会被直接拒掉（静音也不放行）。放开它等于允许访客页面里任何媒体自播，所以必须由
+     * 背景视频这个明确状态来派生，并且在关掉背景后立刻收回。
+     */
+    internal fun allowsBackgroundAutoplay(kind: String?, syncBackground: Boolean): Boolean =
+        syncBackground && kind == KIND_VIDEO
+
     /** 校验并保存；任何一项不合格都整体拒绝，避免半套主题落盘。 */
     fun save(context: Context, payload: JSONObject): Boolean {
         val mode = payload.optString(KEY_MODE, "")
@@ -70,18 +94,72 @@ internal object HarnessThemeBridge {
         val surface = payload.optString(KEY_SURFACE, "")
         val opacity = payload.optInt(KEY_OPACITY, -1)
         if (!accepts(mode, accent, background, surface, opacity)) return false
+        val hasFlag = payload.has(KEY_SYNC_BACKGROUND)
+        val flag = payload.opt(KEY_SYNC_BACKGROUND)
+        if (hasFlag && !acceptsSyncBackground(flag)) return false
         return try {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            val editor = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                 .putString(KEY_MODE, mode)
                 .putString(KEY_ACCENT, accent)
                 .putString(KEY_BACKGROUND, background)
                 .putString(KEY_SURFACE, surface)
                 .putInt(KEY_OPACITY, opacity)
                 .putLong(KEY_SYNCED_AT, System.currentTimeMillis())
-                .commit()
+            // 没带这个字段就保留原值：老版本外壳只同步颜色，不该顺手把背景开关关掉。
+            if (hasFlag) editor.putBoolean(KEY_SYNC_BACKGROUND, flag as Boolean)
+            editor.commit()
         } catch (_: Exception) {
             false
         }
+    }
+
+    /**
+     * 「连背景一起同步」开关落盘。
+     *
+     * 与地址分开存：关掉开关只表示「页面别再显示」，用户选过的文件与持久授权都留着，
+     * 重新打开时不用再选一遍；真正放弃文件才走 [clearBackground]。
+     */
+    fun setSyncBackground(context: Context, enabled: Boolean): Boolean = try {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_SYNC_BACKGROUND, enabled)
+            .commit()
+    } catch (_: Exception) {
+        false
+    }
+
+    fun syncBackground(context: Context): Boolean = try {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_SYNC_BACKGROUND, false)
+    } catch (_: Exception) {
+        false
+    }
+
+    /** 页面是否该显示背景：地址 + 开关，两处判定只在这里合一次。 */
+    fun hasBackgroundForPage(context: Context): Boolean =
+        backgroundEnabled(backgroundUri(context), syncBackground(context))
+
+    /**
+     * 外壳重开时读回同步状态：开关、已选背景、上次同步时间。
+     *
+     * 没有这条，重启后复选框回到未勾、已选文件也显示不出来——看起来就像背景被丢了。
+     */
+    fun state(context: Context): JSONObject {
+        val result = JSONObject()
+        result.put(KEY_SYNC_BACKGROUND, syncBackground(context))
+        result.put(KEY_SYNCED_AT, syncedAt(context))
+        val uri = backgroundUri(context)
+        val mime = backgroundMime(context)
+        val kind = backgroundKind(context)
+        val valid = uri != null && mime != null && kind != null &&
+            acceptsBackgroundUri(uri) && kindOf(mime!!) == kind
+        result.put(
+            "background",
+            if (valid) {
+                JSONObject().put("uri", uri).put("mime", mime).put("kind", kind)
+            } else {
+                JSONObject.NULL
+            },
+        )
+        return result
     }
 
     fun clear(context: Context): Boolean = try {
@@ -141,6 +219,9 @@ internal object HarnessThemeBridge {
             .remove(KEY_BACKGROUND_URI)
             .remove(KEY_BACKGROUND_MIME)
             .remove(KEY_BACKGROUND_KIND)
+            // 背景被清掉后开关也要回到未勾：留着 true 会让下一次选文件立刻显示，
+            // 与界面上的复选框状态不一致。
+            .remove(KEY_SYNC_BACKGROUND)
             .commit()
     } catch (_: Exception) {
         false
@@ -166,6 +247,9 @@ internal object HarnessThemeBridge {
      * 读完整个文件再播，循环背景够用，代价是不能拖动。
      */
     fun serveBackground(context: Context, request: WebResourceRequest): WebResourceResponse {
+        // 开关关掉之后这条同源路径也要立刻失效：页面里残留的 <video> 或 CSS 变量
+        // 不该还能把文件读出去。
+        if (!hasBackgroundForPage(context)) return notFound()
         val uri = backgroundUri(context)?.let { runCatching { Uri.parse(it) }.getOrNull() }
         val mime = backgroundMime(context) ?: "application/octet-stream"
         if (uri == null) return notFound()
@@ -213,8 +297,9 @@ internal object HarnessThemeBridge {
         val surface = prefs.getString(KEY_SURFACE, null) ?: return null
         val opacity = prefs.getInt(KEY_OPACITY, 100)
         if (!accepts(mode, accent, background, surface, opacity)) return null
-        val kind = backgroundKind(context)
-        val hasBackground = backgroundUri(context) != null
+        // 只有「开关打开 + 地址存在」才渲染背景层；kind 也只在真的显示时才带出去。
+        val hasBackground = hasBackgroundForPage(context)
+        val kind = if (hasBackground) backgroundKind(context) else null
         // 值都已通过白名单校验，不含引号或反斜杠，拼进脚本是安全的。
         return """
             (function () {
@@ -265,8 +350,51 @@ internal object HarnessThemeBridge {
         """.trimIndent()
     }
 
+    /** 当前正在显示页面的 WebView；插件线程和 Activity 之间只共享这一个弱引用。 */
+    @Volatile
+    private var attached: WeakReference<WebView>? = null
+
+    /** Activity 挂上自己的 WebView：之后的开关变更才有地方重放。 */
+    fun attach(webView: WebView) {
+        attached = WeakReference(webView)
+    }
+
+    fun detach(webView: WebView) {
+        if (attached?.get() === webView) attached = null
+    }
+
+    /**
+     * 关掉背景时把播放权限收回去。
+     *
+     * 判据只来自 [allowsBackgroundAutoplay]：背景是视频且正在同步。其余任何状态都恢复到
+     * WebView 的默认值，不让「点过一次背景视频」变成页面里所有媒体的永久通行证。
+     */
+    private fun syncAutoplay(webView: WebView) {
+        val context = webView.context
+        val allow = allowsBackgroundAutoplay(backgroundKind(context), hasBackgroundForPage(context))
+        try {
+            val settings = webView.settings ?: return
+            if (settings.mediaPlaybackRequiresUserGesture == allow) {
+                settings.mediaPlaybackRequiresUserGesture = !allow
+            }
+        } catch (_: Exception) {
+            // WebView 正在销毁：下次 attach 或页面加载时会重新对齐。
+        }
+    }
+
     /** 页面加载完成或回到前台时调用；没有同步过就什么都不做。 */
     fun apply(webView: WebView) {
+        // 插件方法可能来自 Bridge 的后台线程，而 evaluateJavascript 只能在 view 的线程执行。
+        webView.post { applyNow(webView) }
+    }
+
+    /** 开关在设置页被改过：把结果重放到当前页面，用户不用等下一次加载。 */
+    fun refresh() {
+        attached?.get()?.let { apply(it) }
+    }
+
+    private fun applyNow(webView: WebView) {
+        syncAutoplay(webView)
         val script = script(webView.context) ?: return
         try {
             webView.evaluateJavascript(script, null)

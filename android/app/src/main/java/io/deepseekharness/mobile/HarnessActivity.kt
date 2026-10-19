@@ -177,6 +177,8 @@ class HarnessActivity : AppCompatActivity() {
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             javaScriptCanOpenWindowsAutomatically = false
             setSupportMultipleWindows(false)
+            // 默认不放行媒体自播；唯一的例外是「同步中的静音背景视频」，
+            // 由 HarnessThemeBridge.syncAutoplay 按背景状态逐次对齐，关掉背景就收回。
             mediaPlaybackRequiresUserGesture = true
             builtInZoomControls = false
             displayZoomControls = false
@@ -189,6 +191,8 @@ class HarnessActivity : AppCompatActivity() {
         // 没有 WebChromeClient 时 <input type="file"> 点了毫无反应：这是插件"从相册导入"
         // 这类入口在手机上完全不可用的根因（皮肤中心只能靠手填容器路径绕过）。
         webView.webChromeClient = HarnessWebChromeClient()
+        // 设置页改「连背景一起同步」时插件在本进程内改档，需要一块还没销毁的 WebView 来重放。
+        HarnessThemeBridge.attach(webView)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             WebView.startSafeBrowsing(applicationContext, null)
         }
@@ -287,6 +291,7 @@ class HarnessActivity : AppCompatActivity() {
         // 页面可能仍在等待选择结果：必须显式回传 null，否则该 input 会永久处于"等待选择文件"。
         deliverFileChooserResult(emptyList())
         if (::webView.isInitialized) {
+            HarnessThemeBridge.detach(webView)
             webView.stopLoading()
             webView.webChromeClient = null
             webView.webViewClient = WebViewClient()

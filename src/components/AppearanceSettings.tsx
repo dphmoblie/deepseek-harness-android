@@ -4,7 +4,7 @@ import { t } from '../i18n'
 import { applyTextColor, applyTheme, clearCustomAccentColor, clearCustomTextColor, effectiveAccentColor, readCustomAccentColor, readCustomTextColor, readThemeMode, saveAccentMode, saveAccentSource, saveCustomAccentColor, saveCustomTextColor, saveThemeMode, useAccentMode, useAccentSource, useResolvedTheme, useThemeMode } from '../theme'
 import { clearAdaptiveAccent, deriveSurface, extractAccentFromBackground, readAccentSync, readAdaptiveAccent, saveAccentSync, saveAdaptiveAccent, clearAccentSync, type AccentSource, type AdaptiveAccent, type SyncedTheme } from '../adaptiveAccent'
 import { runtimeBridge } from '../platform/native'
-import type { HarnessBackgroundRef } from '../backgroundRef'
+import { clearBackgroundState, readBackgroundState, saveBackgroundState, type HarnessBackgroundRef, type HarnessBackgroundState } from '../backgroundRef'
 import type { AccentMode, ThemeMode } from '../theme'
 import { applyCard, clearBackground, DEFAULT_CARD, readBackground, readCard, saveBackground, saveCard, type CardAppearance } from '../appearance'
 
@@ -49,9 +49,38 @@ export function AppearanceSettings() {
   const [syncing, setSyncing] = useState(false)
   const [syncMessage, setSyncMessage] = useState('')
   // 背景默认不跟着颜色走：它体积大、还要解码，得用户自己勾。
-  const [withBackground, setWithBackground] = useState(false)
+  // 初值取本地镜像，重启后首屏就是上次的选择；原生回来后立刻对齐（见下面的 effect）。
+  const [withBackground, setWithBackground] = useState(() => {
+    const saved = readBackgroundState()
+    // 开关为真但没有文件不算「开着」：勾选框不能停在一个画不出背景的状态上。
+    return saved.syncBackground && saved.background !== null
+  })
   // 只记地址（content:// + 持久读授权）：视频多大都不复制、不过桥。
-  const [backgroundRef, setBackgroundRef] = useState<HarnessBackgroundRef | null>(null)
+  const [backgroundRef, setBackgroundRef] = useState<HarnessBackgroundRef | null>(() => readBackgroundState().background)
+
+  // 原生是唯一真相：开关与已选背景都从它回来；浏览器预览没有原生可问，退回本地镜像。
+  useEffect(() => {
+    let active = true
+    const local = readBackgroundState()
+    const restore = (state: HarnessBackgroundState) => {
+      if (!active) return
+      setWithBackground(state.syncBackground && state.background !== null)
+      setBackgroundRef(state.background)
+    }
+    Promise.resolve(runtimeBridge.harnessThemeState())
+      .then((state: HarnessBackgroundState) => {
+        const normalized = { ...state, syncBackground: state.syncBackground && state.background !== null }
+        // 回读结果顺手镜像一份：下次首屏不必等过桥。
+        saveBackgroundState(normalized)
+        restore(normalized)
+      })
+      .catch(() => restore(local))
+    return () => { active = false }
+  }, [])
+
+  /** 记住当前背景选择；同步时间沿用上次的，没有就是 0。 */
+  const persistBackground = (enabled: boolean, background: HarnessBackgroundRef | null) =>
+    saveBackgroundState({ syncBackground: enabled && background !== null, syncedAt: syncRecord?.syncedAt ?? 0, background })
 
   const changeSource = (value: AccentSource) => {
     if (saveAccentSource(value)) { setFailed(null); setAccentError('') } else setFailed('accent')
@@ -77,24 +106,58 @@ export function AppearanceSettings() {
     try {
       const picked = await runtimeBridge.pickHarnessBackground()
       setBackgroundRef(picked)
+      persistBackground(withBackground, picked)
       setSyncMessage(t('已选择背景：{0}', picked.mime))
+      // 开关已经打开时换文件，页面应该立刻换成新背景，不要求用户再点一次同步。
+      if (withBackground && syncRecord) await sync(true)
     } catch (error) {
       setAccentError(error instanceof Error ? error.message : t('选择背景失败'))
     }
   }
 
-  /** 同步只传固定字段：明暗模式 + 三个颜色 + 面板透明度。 */
-  const sync = async () => {
+  /**
+   * 「连背景一起同步」：先落盘，再（同步过的话）重放。
+   *
+   * 只改 useState 是不够的——刷新页面或从后台回来，勾选框会自己弹回未勾，
+   * 而原生那边还认为背景在显示。两条路必须一起改。
+   */
+  const toggleBackground = async (enabled: boolean) => {
+    const effective = enabled && backgroundRef !== null
+    setWithBackground(enabled)
+    setAccentError('')
+    try {
+      await runtimeBridge.setHarnessSyncBackground(effective)
+      persistBackground(effective, backgroundRef)
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : t('无法保存背景同步开关'))
+      return
+    }
+    // 没有任何文件时如实说明只同步了颜色，不把「开着但没内容」当成成功。
+    if (enabled && !effective) {
+      setSyncMessage(t('还没有选择背景文件，已只同步颜色'))
+      return
+    }
+    // 已经同步过：页面立刻按新档位重放，不用等下一次加载。
+    if (syncRecord) await sync(effective)
+  }
+
+  /**
+   * 同步只传固定字段：明暗模式 + 三个颜色 + 面板透明度，外加「要不要带背景」。
+   *
+   * 背景开关作为参数传入而不是读 state：勾选后立刻调用时，state 还没提交到这一帧，
+   * 读到的会是旧值，页面就会少一次重放。
+   */
+  const sync = async (includeBackground = withBackground) => {
     setSyncing(true)
     setSyncMessage('')
     try {
       const preset = ACCENT_OPTIONS.find(option => option.value === accent)?.color ?? ACCENT_OPTIONS[0].color
       const accentColor = effectiveAccentColor() || preset
       const surface = adaptive ? { background: adaptive.background, surface: adaptive.surface } : deriveSurface(accentColor, resolved)
-      const theme: SyncedTheme = { mode: readThemeMode(), accent: accentColor, background: surface.background, surface: surface.surface, surfaceOpacity: card.opacity }
+      const theme: SyncedTheme = { mode: readThemeMode(), accent: accentColor, background: surface.background, surface: surface.surface, surfaceOpacity: card.opacity, syncBackground: includeBackground && backgroundRef !== null }
       await runtimeBridge.applyHarnessTheme(theme)
       let note = '已让 DSH 使用当前主题'
-      if (withBackground) {
+      if (theme.syncBackground) {
         if (backgroundRef) {
           // 原生只记地址；页面播放时由 /__shell/background 流式取，不经过这里。
           note = backgroundRef.kind === 'video' ? t('已让 DSH 使用当前主题与背景视频') : t('已让 DSH 使用当前主题与背景')
@@ -104,6 +167,8 @@ export function AppearanceSettings() {
         }
       }
       setSyncRecord(saveAccentSync(theme))
+      // 本地镜像跟着主题一起更新：下次首屏直接就是这次同步后的状态。
+      persistBackground(theme.syncBackground, backgroundRef)
       setSyncMessage(note)
     } catch (error) {
       setSyncMessage(error instanceof Error ? error.message : '同步失败，请重试')
@@ -118,6 +183,10 @@ export function AppearanceSettings() {
       await runtimeBridge.clearHarnessBackground()
       clearAccentSync()
       setSyncRecord(null)
+      // 主题都清了，开关与已选文件也不该留在这块界面上：否则下次打开会显示上一条遗留。
+      setWithBackground(false)
+      setBackgroundRef(null)
+      clearBackgroundState()
       setSyncMessage('DSH 已回到默认主题')
     } catch (error) {
       setSyncMessage(error instanceof Error ? error.message : '恢复失败，请重试')
@@ -226,11 +295,12 @@ export function AppearanceSettings() {
         {accentError && <p role="alert">{t(accentError)}</p>}
       </div>
       <div className="appearance-customization appearance-sync">
-        <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('外壳与 DSH 是两个独立页面，主题不会自动共享；只同步颜色与明暗模式。')}</span></div>
+        <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('外壳与 DSH 是两个独立页面，主题不会自动共享；颜色与明暗模式默认同步，背景需要单独勾选。')}</span></div>
         <div className="appearance-sync-background">
-          <label><input type="checkbox" checked={withBackground} onChange={event => setWithBackground(event.target.checked)} /><span>{t('连背景一起同步')}</span></label>
+          <label><input type="checkbox" checked={withBackground} onChange={event => void toggleBackground(event.target.checked)} /><span>{t('连背景一起同步')}</span></label>
           <button type="button" className="compact-button" onClick={() => void pickBackground()}>{backgroundRef ? t('重新选择背景文件') : t('选择背景文件')}</button>
           <small>{backgroundRef ? t('已选：{0}', backgroundRef.mime) : t('只记录文件地址，视频不复制、不设大小上限')}</small>
+          <small>{t('开关与所选文件会记住，重启后仍按上次的选择显示。')}</small>
         </div>
         <button type="button" className="compact-button" onClick={() => void sync()} disabled={syncing}>{t('让 DSH 使用当前主题')}</button>
         <button type="button" className="compact-button" onClick={() => void unsync()} disabled={syncing}>{t('恢复 DSH 默认主题')}</button>

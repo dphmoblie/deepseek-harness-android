@@ -430,6 +430,8 @@ class MobileRuntimePlugin : Plugin() {
             call.reject("主题配置无效", "THEME_INVALID")
             return
         }
+        // 页面已经打开时不要求用户刷新：开关或背景改了就按新档位重放一次。
+        HarnessThemeBridge.refresh()
         call.resolve()
     }
 
@@ -440,7 +442,36 @@ class MobileRuntimePlugin : Plugin() {
             call.reject("无法清除同步主题", "THEME_SAVE_FAILED")
             return
         }
+        HarnessThemeBridge.refresh()
         call.resolve()
+    }
+
+    /**
+     * 「连背景一起同步」开关落盘（登记册 5.5）。
+     *
+     * 开关必须存在原生侧：外壳重启后要能读回上次的选择，只写在页面的内存状态里等于没有。
+     * 关掉时保留地址与持久授权，只停用显示——用户重新勾上不用再选一次文件。
+     */
+    @PluginMethod
+    fun setHarnessSyncBackground(call: PluginCall) {
+        val enabled = call.getBoolean("enabled")
+        if (enabled == null) {
+            call.reject("缺少背景同步开关", "THEME_INVALID")
+            return
+        }
+        if (!HarnessThemeBridge.setSyncBackground(context, enabled)) {
+            call.reject("无法保存背景同步开关", "THEME_SAVE_FAILED")
+            return
+        }
+        // 关掉后当前页面立刻清掉背景层，并收回自动播放权限。
+        HarnessThemeBridge.refresh()
+        call.resolve(JSObject().put("enabled", enabled))
+    }
+
+    /** 读回同步状态：开关、上次同步时间、已选背景（没有就是 null）。外壳启动时用它恢复界面。 */
+    @PluginMethod
+    fun harnessThemeState(call: PluginCall) {
+        call.resolve(JSObject.fromJSONObject(HarnessThemeBridge.state(context)))
     }
 
     /**
@@ -508,6 +539,7 @@ class MobileRuntimePlugin : Plugin() {
             call.reject("无法保存背景地址", "THEME_SAVE_FAILED")
             return
         }
+        HarnessThemeBridge.refresh()
         call.resolve(JSObject().put("uri", uri.toString()).put("mime", mime).put("kind", kind))
     }
 
@@ -517,6 +549,7 @@ class MobileRuntimePlugin : Plugin() {
             call.reject("无法清除同步背景", "THEME_SAVE_FAILED")
             return
         }
+        HarnessThemeBridge.refresh()
         call.resolve()
     }
 

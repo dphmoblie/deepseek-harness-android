@@ -28,6 +28,7 @@ import {
   saveAccentSource,
   saveAccentSync,
   saveAdaptiveAccent,
+  validateSyncedTheme,
 } from './adaptiveAccent'
 
 /** 造一块像素：每个 `[r, g, b]` 重复 `repeat` 次，alpha 固定不透明。 */
@@ -189,7 +190,7 @@ describe('存储：三份互不覆盖的配置', () => {
   })
 
   it('同步记录只接受固定字段，非法配置拒绝写入', () => {
-    const theme = { mode: 'dark' as const, accent: '#6fa8dc', background: '#101820', surface: '#18222c', surfaceOpacity: 86 }
+    const theme = { mode: 'dark' as const, accent: '#6fa8dc', background: '#101820', surface: '#18222c', surfaceOpacity: 86, syncBackground: false }
     const record = saveAccentSync(theme, 1700000000000)!
     expect(record.syncedAt).toBe(1700000000000)
     expect(readAccentSync()).toEqual(record)
@@ -203,5 +204,16 @@ describe('存储：三份互不覆盖的配置', () => {
     expect(readAccentSync()).toBeNull()
     clearAccentSync()
     expect(readAccentSync()).toBeNull()
+  })
+
+  it('背景开关随主题一起落盘，老记录按 false 迁移', () => {
+    const base = { mode: 'dark' as const, accent: '#6fa8dc', background: '#101820', surface: '#18222c', surfaceOpacity: 86 }
+    // 老版本记录里没有这个字段：那时同步的一定只有颜色。
+    expect(validateSyncedTheme(base).syncBackground).toBe(false)
+    const withBackground = saveAccentSync({ ...base, syncBackground: true }, 1700000000000)!
+    expect(withBackground.theme.syncBackground).toBe(true)
+    expect(readAccentSync()?.theme.syncBackground).toBe(true)
+    // 非布尔取值来自序列化错误或页面注入，不能替用户猜。
+    expect(saveAccentSync({ ...base, syncBackground: 'true' as never })).toBeNull()
   })
 })

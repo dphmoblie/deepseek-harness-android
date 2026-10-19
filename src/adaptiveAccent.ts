@@ -37,6 +37,13 @@ export interface SyncedTheme {
   background: string
   surface: string
   surfaceOpacity: number
+  /**
+   * 「连背景一起同步」：页面是否连背景层一起画。
+   *
+   * 放进来而不是另开一条通道，是因为它与主题在同一次落盘里：地址、开关、颜色分两次写，
+   * 中间崩溃就会出现「开关说开了、页面却没有地址」这种半截状态。
+   */
+  syncBackground: boolean
 }
 
 export interface AccentSync {
@@ -281,12 +288,16 @@ export function validateSyncedTheme(value: unknown): SyncedTheme {
     typeof data.surfaceOpacity !== 'number' || !Number.isInteger(data.surfaceOpacity) || data.surfaceOpacity < 0 || data.surfaceOpacity > 100) {
     throw new Error('同步主题参数无效')
   }
+  // 老记录里没有这个字段：那时同步的一定只有颜色，按 false 迁移，不再回头看用户。
+  const syncBackground = data.syncBackground
+  if (syncBackground !== undefined && typeof syncBackground !== 'boolean') throw new Error('同步主题参数无效')
   return {
     mode: data.mode,
     accent: data.accent,
     background: data.background,
     surface: data.surface,
     surfaceOpacity: data.surfaceOpacity,
+    syncBackground: syncBackground === true,
   }
 }
 

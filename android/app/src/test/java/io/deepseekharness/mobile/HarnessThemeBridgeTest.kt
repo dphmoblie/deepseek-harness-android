@@ -68,6 +68,36 @@ class HarnessThemeBridgeTest {
     }
 
     @Test
+    fun `同步背景开关只接受真正的布尔值`() {
+        assertTrue(HarnessThemeBridge.acceptsSyncBackground(true))
+        assertTrue(HarnessThemeBridge.acceptsSyncBackground(false))
+        // "true" / 1 这类取值来自序列化错误或页面注入，不能当成用户意图。
+        assertFalse(HarnessThemeBridge.acceptsSyncBackground("true"))
+        assertFalse(HarnessThemeBridge.acceptsSyncBackground(1))
+        assertFalse(HarnessThemeBridge.acceptsSyncBackground(null))
+    }
+
+    @Test
+    fun `关掉开关后页面不再有背景`() {
+        val uri = "content://media/external/video/media/42"
+        assertTrue(HarnessThemeBridge.backgroundEnabled(uri, true))
+        // 地址仍在（用户选过的文件留着），但开关关掉就必须不再显示，这是原来的破口。
+        assertFalse(HarnessThemeBridge.backgroundEnabled(uri, false))
+        assertFalse(HarnessThemeBridge.backgroundEnabled(null, true))
+        assertFalse(HarnessThemeBridge.backgroundEnabled(null, false))
+    }
+
+    @Test
+    fun `只有同步中的背景视频才放开自动播放`() {
+        assertTrue(HarnessThemeBridge.allowsBackgroundAutoplay("video", true))
+        // 静态图没有播放一说，放开只会把权限白送给页面里的其它媒体。
+        assertFalse(HarnessThemeBridge.allowsBackgroundAutoplay("image", true))
+        assertFalse(HarnessThemeBridge.allowsBackgroundAutoplay(null, true))
+        // 关掉开关后立刻收回，不能留在「上次是视频」的状态里。
+        assertFalse(HarnessThemeBridge.allowsBackgroundAutoplay("video", false))
+    }
+
+    @Test
     fun `背景路径是固定的同源路径`() {
         assertTrue(HarnessThemeBridge.BACKGROUND_PATH.startsWith("/__shell/"))
         assertFalse(HarnessThemeBridge.BACKGROUND_PATH.contains("://"))

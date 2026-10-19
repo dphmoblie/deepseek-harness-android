@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { BACKGROUND_PATH, validateBackgroundRef } from './backgroundRef'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { BACKGROUND_PATH, clearBackgroundState, readBackgroundState, saveBackgroundState, validateBackgroundRef, validateBackgroundState } from './backgroundRef'
 
 describe('背景地址校验', () => {
   it('接受内容提供者的视频与图片地址', () => {
@@ -41,5 +41,35 @@ describe('背景地址校验', () => {
 
   it('同源路径与原生保持一致', () => {
     expect(BACKGROUND_PATH).toBe('/__shell/background')
+  })
+})
+
+describe('同步背景状态', () => {
+  const ref = { uri: 'content://media/external/video/media/42', mime: 'video/mp4' }
+
+  beforeEach(() => { window.localStorage.clear() })
+
+  it('开关只认布尔：字符串或数字都算无效，不替用户猜', () => {
+    expect(validateBackgroundState({ syncBackground: true, syncedAt: 1, background: ref }))
+      .toEqual({ syncBackground: true, syncedAt: 1, background: { ...ref, kind: 'video' } })
+    for (const syncBackground of ['true', 1, null, undefined]) {
+      expect(() => validateBackgroundState({ syncBackground, syncedAt: 1, background: null })).toThrow('同步背景状态无效')
+    }
+  })
+
+  it('没有背景时是 null，坏地址不放过桥', () => {
+    expect(validateBackgroundState({ syncBackground: false, syncedAt: 0, background: null }).background).toBeNull()
+    expect(() => validateBackgroundState({ syncBackground: true, syncedAt: 0, background: { uri: 'https://example.com/a.mp4', mime: 'video/mp4' } }))
+      .toThrow('背景地址无效')
+  })
+
+  it('镜像可读写，坏内容回落到未同步过', () => {
+    expect(readBackgroundState()).toEqual({ syncBackground: false, syncedAt: 0, background: null })
+    expect(saveBackgroundState({ syncBackground: true, syncedAt: 1700000000000, background: { ...ref, kind: 'video' } })).toBe(true)
+    expect(readBackgroundState()).toEqual({ syncBackground: true, syncedAt: 1700000000000, background: { ...ref, kind: 'video' } })
+    window.localStorage.setItem('dsh.appearance.background-state', '{"syncBackground":"yes"}')
+    expect(readBackgroundState()).toEqual({ syncBackground: false, syncedAt: 0, background: null })
+    clearBackgroundState()
+    expect(readBackgroundState()).toEqual({ syncBackground: false, syncedAt: 0, background: null })
   })
 })
