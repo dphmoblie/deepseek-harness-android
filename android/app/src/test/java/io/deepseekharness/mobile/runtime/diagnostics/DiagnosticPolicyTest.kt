@@ -165,6 +165,7 @@ class DiagnosticPolicyTest {
         assertFalse(DiagnosticPolicy.isAllowedKey("path"))
         assertTrue(DiagnosticPolicy.isAllowedKey("phase"))
         assertTrue(DiagnosticPolicy.isAllowedKey("expected_bytes"))
+        assertTrue(DiagnosticPolicy.isAllowedKey("node"))
     }
 
     @Test

@@ -2463,16 +2463,28 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           所以合并进同一页，不再各占一个入口。
         */}
         {page === 'automation' && (
-        <>
-          <div className="settings-subsection" aria-labelledby="accessibility-automation-settings">
-            <div className="section-title section-title-action">
-              <span className="section-icon"><Bot size={19} /></span>
-              <div><h3 id="accessibility-automation-settings">{t("无障碍应用自动化")}</h3><p>{t("读取允许的应用界面并执行受控动作")}</p></div>
-              <span className={`status-chip ${accessibility.enabled ? 'success' : ''}`}>{accessibility.enabled ? t("服务已开启") : t("需要手动开启")}</span>
+        <>          <div className="settings-stack">
+          {/*
+            自动化设置按「副屏 / 参数与规则 / 无障碍」三组排：
+            副屏决定画面从哪来，参数与规则决定怎么动，无障碍决定有没有权限去读。
+          */}
+          <nav className="settings-group-nav" aria-label={t("本页分组")}>
+            <a href="#automation-group-display">{t("副屏")}</a>
+            <a href="#automation-group-parameters">{t("参数与规则")}</a>
+            <a href="#automation-group-accessibility">{t("无障碍")}</a>
+          </nav>
+          <section className="settings-group settings-group-single" id="automation-group-display" aria-labelledby="automation-group-display-title">
+            <div className="section-title">
+              <span className="section-icon"><Smartphone size={19} /></span>
+              <div><h2 id="automation-group-display-title">{t("副屏")}</h2><p>{t("取帧档位、屏幕方向、分辨率与跟随策略。")}</p></div>
             </div>
-            <p className="settings-note">
-              {t("开启白名单限制时仅允许列表内的应用；关闭后可操作未加入名单的普通应用。锁屏、系统设置及涉及权限、支付、验证码和密码的页面仍受保护；服务必须由你在系统无障碍设置中手动开启。")}
-            </p>
+            <VirtualScreenSettings bridge={runtimeBridge} embedded />
+          </section>
+          <section className="settings-group" id="automation-group-parameters" aria-labelledby="automation-group-parameters-title">
+            <div className="section-title">
+              <span className="section-icon"><SlidersHorizontal size={19} /></span>
+              <div><h2 id="automation-group-parameters-title">{t("参数与规则")}</h2><p>{t("总开关、按应用规则与每应用参数。")}</p></div>
+            </div>
             <div className="settings-subsection" aria-labelledby="accessibility-automation-console">
               <div className="section-title section-title-action">
                 <span className="section-icon"><Play size={19} /></span>
@@ -2758,6 +2770,27 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 />
               )}
             </div>
+          </section>
+          <section className="settings-group" id="automation-group-accessibility" aria-labelledby="automation-group-accessibility-title">
+            <div className="section-title section-title-action">
+              <span className="section-icon"><Bot size={19} /></span>
+              <div><h2 id="automation-group-accessibility-title">{t("无障碍")}</h2><p>{t("服务状态、白名单与验证密码。")}</p></div>
+              <span className={`status-chip ${accessibility.enabled ? 'success' : ''}`}>{accessibility.enabled ? t("服务已开启") : t("需要手动开启")}</span>
+            </div>
+            <div className="settings-subsection" aria-labelledby="accessibility-automation-settings">
+              <div className="section-title section-title-action">
+                <span className="section-icon"><Bot size={19} /></span>
+                <div><h3 id="accessibility-automation-settings">{t("无障碍应用自动化")}</h3><p>{t("读取允许的应用界面并执行受控动作")}</p></div>
+              </div>
+              <p className="settings-note">
+                {t("开启白名单限制时仅允许列表内的应用；关闭后可操作未加入名单的普通应用。锁屏、系统设置及涉及权限、支付、验证码和密码的页面仍受保护；服务必须由你在系统无障碍设置中手动开启。")}
+              </p>
+            </div>
+            <div className="settings-subsection" aria-labelledby="accessibility-whitelist-settings">
+              <div className="section-title">
+                <span className="section-icon"><ShieldCheck size={19} /></span>
+                <div><h3 id="accessibility-whitelist-settings">{t("无障碍白名单")}</h3><p>{t("名单内的应用才允许读取界面与执行动作。")}</p></div>
+              </div>
             <label className="toggle-row">
               <span><strong>{t("启用无障碍白名单限制")}</strong><small>{t("关闭不会清空名单；修改后点击「保存白名单」生效，已设密码时仍需验证。")}</small></span>
               <input type="checkbox" role="switch" aria-label={t("启用无障碍白名单限制")}
@@ -2807,6 +2840,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               </button>
             </div>
             <p className="settings-note">{t("当前白名单：{0}", accessibility.allowedPackages.length ? accessibility.allowedPackages.join("、") : t("未配置"))}</p>
+            </div>
             <div className="settings-subsection" aria-labelledby="accessibility-password-settings">
               <div className="section-title section-title-action">
                 <span className="section-icon"><KeyRound size={19} /></span>
@@ -2892,12 +2926,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               </div>
               {passwordMessage !== null && <p className="settings-note" role="alert">{passwordMessage}</p>}
             </div>
-          </div>
-          {/*
-            副屏是自动化的第二条腿：取帧档位、方向、分辨率与跟随策略都在这一页里，
-            不再另开独立路由，免得「自动化设置」还要再跳一次才看得到画面相关参数。
-          */}
-          <VirtualScreenSettings bridge={runtimeBridge} />
+          </section>
           {/*
             免责说明只占一条：标题 + 一句话，详情在弹窗里（同一段文字，不改任何状态）。
             确认过之后不再自动弹，但「我当初到底同意了什么」随时要能查。
@@ -2911,6 +2940,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 <ShieldCheck size={18} />{t("查看完整免责说明")}
               </button>
             </div>
+          </div>
           </div>
         </>
         )}

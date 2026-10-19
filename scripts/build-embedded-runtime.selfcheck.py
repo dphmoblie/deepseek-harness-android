@@ -111,7 +111,14 @@ def write_network_tools_fixture(
     os.link(tree / "usr/lib/git-core/git", tree / "usr/lib/git-core/git-add")
     # 上游把 git-remote-https 做成指向 git-remote-http 的相对软链：软链也必须落成
     # 真实常规文件（verify-bundle.py 的口径），否则真机 CI 会在校验阶段才暴露。
-    os.symlink("git-remote-http", tree / "usr/lib/git-core/git-remote-https")
+    try:
+        os.symlink("git-remote-http", tree / "usr/lib/git-core/git-remote-https")
+    except OSError:
+        # Windows 未启用开发者模式时无法创建软链，复制目标仍可覆盖 add_network_tools
+        # 对 forced_regular_paths 的归档行为。
+        (tree / "usr/lib/git-core/git-remote-https").write_bytes(
+            (tree / "usr/lib/git-core/git-remote-http").read_bytes()
+        )
 
 
 def check_network_tools(module: object) -> None:
@@ -202,6 +209,118 @@ def add_network_tools_to_archive(module: object, root: Path, name: str, tree: Pa
     archive.unlink(missing_ok=True)
     with module.tarfile.open(archive, "w") as target:
         module.add_network_tools(module.RootfsWriter(target, 0), tree)
+
+
+def check_build_tools(module: object) -> None:
+    """构建工具组件的路径、权限、元数据和缺失入口校验。"""
+    with tempfile.TemporaryDirectory(prefix="dsh-build-tools-") as directory:
+        root = Path(directory)
+        tree = root / "build-tools"
+        for name in (
+            "usr/bin/cc",
+            "usr/bin/gcc",
+            "usr/bin/g++",
+            "usr/bin/make",
+            "usr/lib/gcc/aarch64-linux-gnu/13/cc1",
+            "usr/include/stdio.h",
+        ):
+            path = tree / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"build-tool\n")
+        archive = root / "build-tools.tar"
+        with module.tarfile.open(archive, "w") as target:
+            module.add_build_tools(module.RootfsWriter(target, 0), tree)
+        with module.tarfile.open(archive, "r") as source:
+            members = {name: source.getmember(name) for name in source.getnames()}
+        for name in ("usr/bin/cc", "usr/bin/gcc", "usr/bin/g++", "usr/bin/make"):
+            assert members[name].isreg() and members[name].mode == 0o755
+        assert members["usr/include"].isdir()
+        metadata = members[module.BUILD_TOOLS_METADATA_PATH]
+        assert metadata.isreg() and metadata.mode == 0o644
+
+        (tree / "usr/bin/make").unlink()
+        with module.tarfile.open(root / "missing.tar", "w") as target:
+            expect_build_error(
+                module,
+                lambda: module.add_build_tools(module.RootfsWriter(target, 0), tree),
+                "缺少 make",
+            )
+
+
+def check_stage_build_tools() -> None:
+    """预置脚本的落盘规则：目录目标不许当文件拷，符号链接按链接落盘。
+
+    回归点：/usr/lib/llvm-16/lib/clang/16/include 是「指向目录」的符号链接，旧代码把它
+    解析成目录后又交给 shutil.copy2，构建机直接 IsADirectoryError（run 39042712091）。
+    """
+    module = load_sibling("stage_build_tools", "stage-build-tools.py")
+    # 链接终点的判定是纯字符串逻辑，不需要建链：/usr/bin/ld -> /etc/alternatives/ld
+    # 不进预置树（访客里没有 /etc/alternatives），/usr/bin/cc -> gcc-13 进。
+    assert module.normalize_link_posix("/usr/bin", "/etc/alternatives/ld") == "/etc/alternatives/ld"
+    assert module.normalize_link_posix("/usr/bin", "gcc-13") == "/usr/bin/gcc-13"
+    assert module.normalize_link_posix("/usr/bin", "../lib/x.so") == "/usr/lib/x.so"
+    assert module.normalize_link_posix("/usr/lib", "/lib/aarch64-linux-gnu/libc.so.6") == (
+        "/usr/lib/aarch64-linux-gnu/libc.so.6"
+    )
+    # 版本裁剪：只跟随入口真正指向的那套 GCC，别的版本（12/14）整棵跳过。
+    for path, keep, foreign in (
+        ("/usr/lib/gcc/aarch64-linux-gnu/12/cc1", "13", True),
+        ("/usr/lib/gcc/aarch64-linux-gnu/13/cc1", "13", False),
+        ("/usr/include/c++/14/bits/move.h", "13", True),
+        ("/usr/include/c++/13/bits/move.h", "13", False),
+        ("/usr/bin/aarch64-linux-gnu-gcc-12", "13", True),
+        ("/usr/bin/gcc-13", "13", False),
+        ("/usr/bin/as", "13", False),
+        ("/usr/libexec/gcc/aarch64-linux-gnu/12/lto1", "13", True),
+    ):
+        assert module.is_foreign_version(path, keep) is foreign, path
+        assert not module.is_foreign_version(path, None), path
+
+    with tempfile.TemporaryDirectory(prefix="dsh-stage-build-tools-") as directory:
+        root = Path(directory)
+        source = root / "source"
+        (source / "usr/bin").mkdir(parents=True)
+        (source / "usr/bin/gcc").write_bytes(b"gcc\n")
+        (source / "usr/lib/clang/16/include").mkdir(parents=True)
+        (source / "usr/lib/clang/16/include/stdio.h").write_bytes(b"h\n")
+        (source / "usr/etc/alternatives").mkdir(parents=True)
+        (source / "usr/etc/alternatives/ld").write_bytes(b"ld.bfd\n")
+        link_file = source / "usr/bin/cc"
+        link_dir = source / "usr/lib/llvm-16/lib/clang/16/include"
+        link_orphan = source / "usr/bin/ld"
+        link_dir.parent.mkdir(parents=True)
+        try:
+            link_file.symlink_to("gcc")
+            link_dir.symlink_to("../../../../clang/16/include")
+            link_orphan.symlink_to("../etc/alternatives/ld")
+        except (OSError, NotImplementedError):
+            print("selfcheck: 当前平台不允许创建符号链接，跳过预置脚本落盘用例")
+            return
+
+        destination = root / "staged"
+        # 用例里的源路径带临时目录前缀，planned 也要用同一套绝对路径，
+        # 否则「终点在树里」的判定永远为假——第一次写死 "/usr/bin/gcc" 就是这么挂的。
+        staged_gcc = (source / "usr/bin/gcc").as_posix()
+        # 目录（链接解析后的目标）直接拷：不许抛错，也不该落成空文件。
+        module.copy_entry(link_dir.resolve(), destination / "usr/lib/clang/16/include")
+        assert not (destination / "usr/lib/clang/16/include").exists()
+        # 终点也在预置树里的链接：保留链接形态，不展开内容。
+        module.copy_entry(link_file, destination / "usr/bin/cc", {staged_gcc})
+        assert (destination / "usr/bin/cc").is_symlink()
+        assert os.readlink(destination / "usr/bin/cc") == "gcc"
+        # 终点不在预置树里的链接：按内容落盘，别在访客里留断链。
+        module.copy_entry(link_orphan, destination / "usr/bin/ld", {staged_gcc})
+        assert not (destination / "usr/bin/ld").is_symlink()
+        assert (destination / "usr/bin/ld").read_bytes() == b"ld.bfd\n"
+        # 普通文件仍按内容拷贝。
+        module.copy_entry(source / "usr/bin/gcc", destination / "usr/bin/gcc")
+        assert (destination / "usr/bin/gcc").read_bytes() == b"gcc\n"
+
+        assert module.resolve_link(link_file) == (source / "usr/bin/gcc").resolve()
+        assert module.resolve_link(link_dir) == (source / "usr/lib/clang/16/include").resolve()
+        broken = source / "usr/bin/broken"
+        broken.symlink_to("/nonexistent/target")
+        assert module.resolve_link(broken) is None
 
 
 def expect_build_error(module: object, action, label: str) -> None:
@@ -511,6 +630,11 @@ def check_legal_notices() -> None:
             "ca-certificates": ("MPL-2.0", 700),
             "openssh-client": ("permissive", 700),
             "libnghttp2-14": ("MIT", 700),
+            "gcc-13": ("GNU General Public License; GCC Runtime Library Exception", 700),
+            "g++-13": ("GNU General Public License; GCC Runtime Library Exception", 700),
+            "make": ("GNU General Public License; GPL-3", 700),
+            "binutils": ("GNU General Public License; GPL-3", 700),
+            "libc6-dev": ("GNU Lesser General Public License; LGPL", 700),
         }
         for name, (license_id, size) in copyrights.items():
             path = doc_root / name / "copyright"
@@ -823,6 +947,8 @@ def main() -> int:
 
     # --- 网络工具组件组（git / curl / CA 证书）----------------------------------
     check_network_tools(module)
+    check_build_tools(module)
+    check_stage_build_tools()
 
     # --- sourcemap 裁剪（构建 + 历史 bundle 重建）-------------------------------
     check_sourcemap_trimming(module, load_sibling("rebuild_rootfs_frontend", "rebuild-rootfs-frontend.py"))
@@ -836,7 +962,8 @@ def main() -> int:
 
     print(
         "selfcheck OK: mobile profile + rootfs path normalization + "
-        "network tools component + sourcemap trimming + bundle/APK integrity + bundle verification rules + "
+        "network tools and C build tools components + build tools staging rules + "
+        "sourcemap trimming + bundle/APK integrity + bundle verification rules + "
         "legal notices collection"
     )
 

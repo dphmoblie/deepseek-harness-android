@@ -70,6 +70,12 @@ REQUIRED_NETWORK_EXECUTABLES = {
     "curl": "usr/bin/curl",
     "git-remote-https": "usr/lib/git-core/git-remote-https",
 }
+REQUIRED_BUILD_EXECUTABLES = {
+    "cc": "usr/bin/cc",
+    "gcc": "usr/bin/gcc",
+    "g++": "usr/bin/g++",
+    "make": "usr/bin/make",
+}
 # openssh-client 是可选项：存在就必须通过同样的检查，缺失不算失败。
 OPTIONAL_NETWORK_EXECUTABLES = {
     "ssh": "usr/bin/ssh",
@@ -135,6 +141,10 @@ DEPENDENCY_CHECKED_BINARIES = (
     "usr/bin/curl",
     "usr/bin/ssh",
     "usr/lib/git-core/git-remote-https",
+    "usr/bin/cc",
+    "usr/bin/gcc",
+    "usr/bin/g++",
+    "usr/bin/make",
 )
 
 
@@ -528,6 +538,21 @@ def main() -> int:
         )
         if invalid_git_subcommands:
             fail(f"git subcommand is not mode 0755: {invalid_git_subcommands[0]!r}")
+    if manifest.get("buildTools") is True:
+        # runtime_executables 仅记录 dsh 专用入口，构建工具使用归档路径精确检查。
+        available_build = {
+            label for label, path in REQUIRED_BUILD_EXECUTABLES.items() if path in seen
+        }
+        missing_build = set(REQUIRED_BUILD_EXECUTABLES) - available_build
+        if missing_build:
+            fail(f"缺少必需的构建工具入口：{', '.join(sorted(missing_build))}")
+        for path in REQUIRED_BUILD_EXECUTABLES.values():
+            if types.get(path) != "file" or file_modes.get(path) != 0o755:
+                fail(f"构建工具入口缺失、为空或权限不是 0755：{path!r}")
+        if not any(name == "usr/include" and kind == "dir" for name, kind in types.items()):
+            fail("构建工具头文件目录缺失：'usr/include'")
+        if not any(name == "usr/lib/gcc" and kind == "dir" for name, kind in types.items()):
+            fail("gcc 后端目录缺失：'usr/lib/gcc'")
     if extracted != expected_extracted:
         fail(f"extracted size mismatch: {extracted} != {expected_extracted}")
     expected_dsh_version = manifest.get("dshVersion")

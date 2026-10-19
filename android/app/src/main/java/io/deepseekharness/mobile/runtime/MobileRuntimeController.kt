@@ -52,6 +52,55 @@ class MobileRuntimeController(
     private val selfCheck = RuntimeSelfCheck(context, store, plugins)
     /** 版本列表只读清单与小文件；切换、删除仍由 installer 在安装锁内完成。 */
     private val versions = RuntimeVersionCatalog(store)
+    private val harnessVersions = HarnessVersions(appContext, store)
+
+    /** 应用内版本操作：精确版本号；安装与切换互斥，不传入模型凭据。 */
+    fun manageHarnessVersions(operation: String, version: String?): org.json.JSONObject = lifecycleLock.withLock {
+        ensureOpen()
+        when (operation) {
+            "list" -> return@withLock harnessVersions.list()
+            "install", "select", "delete" -> Unit
+            else -> throw RuntimeFailure("HARNESS_VERSION_INVALID", "Harness 版本操作无效")
+        }
+        val target = if (operation == "select" && version == HarnessVersions.BUNDLED) version else HarnessPackageCatalog.requireVersion(version)
+        if (terminals.hasRuntimeSessions()) throw RuntimeFailure("RUNTIME_BUSY", "请先关闭 Ubuntu 终端再管理 Harness 版本")
+        if (operation != "select" && supervisor.isRunning()) throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness，再安装或删除版本")
+        if (operation == "select") {
+            // 启动成功才提交默认版本；失败或进程中断均恢复旧选择。
+            val wasRunning = supervisor.isRunning()
+            supervisor.stop()
+            try {
+                plugins.checkpointBeforeUpdate()
+                harnessVersions.beginSwitch(target)
+                harnessVersions.prepareProfile()
+                plugins.recoverIfNeeded()
+                plugins.repairInstalledIfNeeded(explicit = true)
+                plugins.run("verify", null, null, null)
+                supervisor.startHarness()
+                harnessVersions.commitSwitch()
+            } catch (error: Exception) {
+                try {
+                    supervisor.stop()
+                    harnessVersions.rollbackSwitch()
+                    harnessVersions.prepareProfile()
+                    plugins.repairInstalledIfNeeded(explicit = true)
+                    if (wasRunning) supervisor.startHarness()
+                } catch (rollbackError: Exception) {
+                    throw RuntimeFailure("HARNESS_ROLLBACK_FAILED", "切换失败，旧版本仍保留，但自动恢复未完成；请切回内置版本", rollbackError)
+                }
+                val reason = (error as? RuntimeFailure)?.message ?: "启动检查未通过"
+                throw RuntimeFailure("HARNESS_SWITCH_FAILED", "新版本未通过检查，已恢复旧默认版本：$reason", error)
+            }
+        } else {
+            supervisor.preparePluginManagement()
+            if (operation == "install") {
+                harnessVersions.install(target) { stage, percent -> events.onHarnessProgress(stage, percent) }
+            } else {
+                harnessVersions.remove(target)
+            }
+        }
+        harnessVersions.list()
+    }
 
     /**
      * Harness 启动成功后的非关键诊断任务专用单线程。
@@ -106,6 +155,7 @@ class MobileRuntimeController(
         // 自动快照与手动快照走**同一套实现**（RuntimeSessionSnapshots.createBeforeUpdate），
         // 它内部永不抛异常：这里不需要 try/catch，也不允许它挡住 installer.install。
         val autoSnapshot = snapshots.createBeforeUpdate()
+        plugins.checkpointBeforeUpdate()
         installer.install(source)
         try {
             supervisor.preparePluginManagement()
@@ -156,6 +206,7 @@ class MobileRuntimeController(
             throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
         }
         supervisor.preparePluginManagement()
+        plugins.checkpointBeforeUpdate()
         when (normalizedTarget) {
             RuntimeVersionPolicy.TARGET_PREVIOUS -> installer.switchToRetained()
             RuntimeVersionPolicy.TARGET_BUNDLED -> installer.install(RuntimeSource(null, null))
@@ -222,6 +273,14 @@ class MobileRuntimeController(
         val coldStart = !supervisor.isRunning()
         if (coldStart) {
             supervisor.preparePluginManagement()
+            // 选择文件损坏或包已失效时退回内置：一个坏包不能挡住 Harness 启动，
+            // 也不能让设置页失去「切回内置」的入口。
+            val recoveredSwitch = runCatching { harnessVersions.rollbackSwitch() }.getOrDefault(false)
+            val selectedHarness = HarnessVersions.selectedOrBundled(store)
+            val usable = selectedHarness == HarnessVersions.BUNDLED ||
+                runCatching { harnessVersions.verify(selectedHarness) }.isSuccess
+            if (!usable) runCatching { HarnessVersions.fallBackToBundled(store) }
+            if (recoveredSwitch || selectedHarness != HarnessVersions.BUNDLED) harnessVersions.prepareProfile()
             if (!terminals.hasRuntimeSessions()) {
                 RuntimeSharedInbox.withLock {
                     val sharedInbox = RuntimeSharedInbox(store)
@@ -301,6 +360,7 @@ class MobileRuntimeController(
                 if (supervisor.isRunning() || terminals.hasRuntimeSessions()) throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
                 supervisor.preparePluginManagement()
                 autoSnapshot = snapshots.createBeforeUpdate()
+                plugins.checkpointBeforeUpdate()
                 installer.install(RuntimeSource(null, null, RuntimeLibrary.requireId(id.orEmpty())))
                 try {
                     supervisor.preparePluginManagement()

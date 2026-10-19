@@ -49,6 +49,7 @@ class RuntimeLaunchResolver(
     context: Context,
     private val store: RuntimeStore,
     private val includeCredentials: Boolean = true,
+    private val selectHarness: Boolean = true,
 ) {
     private data class CachedProfile(val key: String, val profile: ProotLaunchProfile)
 
@@ -154,6 +155,7 @@ class RuntimeLaunchResolver(
             throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
         }
         store.prepareLaunchFiles()
+        HarnessVersions.prepareDirectories(store)
         // 沙箱运行器脚本随每次启动刷新：脚本必须与当前 APK 的 Kotlin 侧常量同版本
         // （访客路径、绑定点、失败签名都在两边各写了一份）。
         RuntimeSandboxRunner.prepare(appContext, store)
@@ -342,7 +344,7 @@ class RuntimeLaunchResolver(
             argv = RuntimeCommand.prootArgv(
                 store = store,
                 entrypoint = entrypoint,
-                bindMounts = profile.bindMounts,
+                bindMounts = profile.bindMounts + HarnessVersions.mounts(store, selectHarness),
                 secrets = secrets,
                 harnessSession = includeCredentials && harnessAuthToken != null,
                 deviceBridgePort = deviceBridgeAccess?.takeIf { includeCredentials }?.port,
@@ -394,6 +396,11 @@ internal object RuntimeDiagnostics {
             return ClassifiedFailure("PROOT_RUNNER_START_FAILED", "Android 无法执行 APK 内的 PRoot 运行器")
         }
         if (result.timedOut) return ClassifiedFailure("PROOT_PROBE_TIMEOUT", "PRoot 启动 Ubuntu 时超时")
+        // 进程已经退出但没有留下可识别文本时，按执行失败处理；不能把一次已完成的崩溃
+        // 误报为超时，超时只由 ProcessProbe 的 timedOut 字段决定。
+        if (result.exitCode != null && result.exitCode != 0 && result.output.isBlank()) {
+            return ClassifiedFailure("PROOT_GUEST_EXEC_FAILED", "PRoot 无法加载 Ubuntu 程序")
+        }
         val output = result.output.lowercase()
         return when {
             "ptrace" in output && ("operation not permitted" in output || "permission denied" in output) ->
@@ -460,6 +467,7 @@ internal object ProcessProbe {
         externalCancellation: () -> Boolean = { false },
         processStarter: (RuntimeLaunchSpec, File) -> Process = ::startProcess,
         outputLimit: Int = 16 * 1024,
+        onLine: ((String) -> Unit)? = null,
     ): ProcessProbeResult {
         throwIfStartCancelled(externalCancellation)
         val process = try {
@@ -467,7 +475,7 @@ internal object ProcessProbe {
         } catch (error: Throwable) {
             return ProcessProbeResult(null, false, "", error)
         }
-        val output = ProcessOutputTail.drain(process, "dsh-runtime-probe", outputLimit = outputLimit)
+        val output = ProcessOutputTail.drain(process, "dsh-runtime-probe", outputLimit = outputLimit, onLine = onLine)
         val completed = try {
             waitForExit(process, timeoutSeconds, externalCancellation)
         } catch (error: InterruptedException) {
@@ -480,11 +488,14 @@ internal object ProcessProbe {
             output.close()
             throw failure
         }
-        if (!completed) terminate(process)
+        // waitForExit 到达截止时间时，进程可能恰好在最后一次轮询后退出。
+        // 先重读存活状态，避免把已经结束的崩溃误标为 timeout；只有仍在运行才执行终止。
+        val timedOut = !completed && process.isAlive
+        if (timedOut) terminate(process)
         output.awaitClosed(OUTPUT_DRAIN_TIMEOUT_MS)
         val result = ProcessProbeResult(
             exitCode = if (process.isAlive) null else process.exitValue(),
-            timedOut = !completed,
+            timedOut = timedOut,
             output = output.snapshot(),
         )
         output.close()
@@ -548,8 +559,10 @@ internal class ProcessOutputTail private constructor(
     threadName: String,
     harnessPort: Int?,
     outputLimit: Int,
+    private val onLine: ((String) -> Unit)? = null,
 ) {
     private val buffer = TailBuffer(outputLimit.coerceIn(1024, 256 * 1024))
+    private val pendingLine = StringBuilder()
     private val webAuth = harnessPort?.let(::HarnessWebAuthCapture)
     private val input: InputStream = process.inputStream
     private val reader = Thread({
@@ -562,6 +575,7 @@ internal class ProcessOutputTail private constructor(
                     if (count > 0) {
                         webAuth?.append(chunk, count)
                         buffer.append(chunk, count)
+                        if (onLine != null) consumeLines(chunk, count, onLine)
                     }
                 }
             }
@@ -571,6 +585,23 @@ internal class ProcessOutputTail private constructor(
     }, threadName).apply {
         isDaemon = true
         start()
+    }
+
+    /**
+     * 按行回调上层：Harness 包安装用它上报阶段。进度行是纯 ASCII 的 JSON，分片边界不会
+     * 切断字符；其余输出（npm 日志）也照常切行，由调用方按前缀丢弃。长时间不换行的输出
+     * 最多留 [MAX_PENDING_LINE] 个字符，避免没有上限地增长。
+     */
+    private fun consumeLines(chunk: ByteArray, count: Int, onLine: (String) -> Unit) {
+        pendingLine.append(String(chunk, 0, count, Charsets.UTF_8))
+        while (true) {
+            val index = pendingLine.indexOf("\n")
+            if (index < 0) break
+            val line = pendingLine.substring(0, index).trimEnd('\r')
+            pendingLine.delete(0, index + 1)
+            if (line.isNotEmpty()) runCatching { onLine(line) }
+        }
+        if (pendingLine.length > MAX_PENDING_LINE) pendingLine.setLength(0)
     }
 
     fun snapshot(): String = buffer.text()
@@ -597,9 +628,15 @@ internal class ProcessOutputTail private constructor(
     }
 
     companion object {
-        fun drain(process: Process, threadName: String, harnessPort: Int? = null, outputLimit: Int = MAX_OUTPUT_BYTES): ProcessOutputTail =
-            ProcessOutputTail(process, threadName, harnessPort, outputLimit)
+        fun drain(
+            process: Process,
+            threadName: String,
+            harnessPort: Int? = null,
+            outputLimit: Int = MAX_OUTPUT_BYTES,
+            onLine: ((String) -> Unit)? = null,
+        ): ProcessOutputTail = ProcessOutputTail(process, threadName, harnessPort, outputLimit, onLine)
         private const val MAX_OUTPUT_BYTES = 16 * 1024
+        private const val MAX_PENDING_LINE = 8192
         private const val READER_CLOSE_TIMEOUT_MS = 750L
     }
 }

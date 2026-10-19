@@ -28,6 +28,11 @@ function card(bridge: Partial<RuntimeBridge>): void {
 const checkbox = (): HTMLInputElement => screen.getByRole('checkbox')
 
 describe('根通道卡片', () => {
+  it('设置入口标题与设备能力名称分开', async () => {
+    card({ getRootEngineStatus: vi.fn().mockResolvedValue(status()) })
+    await waitFor(() => expect(screen.getByRole('heading', { name: '根通道设置' })).toBeTruthy())
+  })
+
   it('关着的时候说清状态、原因与「没开就没有 UID 0」，开关是关的', async () => {
     card({ getRootEngineStatus: vi.fn().mockResolvedValue(status()) })
 

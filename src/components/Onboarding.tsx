@@ -31,13 +31,25 @@ const STEPS = [
   { id: 'ready', title: '开始使用', icon: Rocket },
 ] as const
 
-function needsManifestConfiguration(settings: RuntimeSettings | null): boolean {
-  if (settings === null) return false
+type ManifestSource = 'bundled' | 'configured' | 'invalid'
+
+/**
+ * 清单来源的三态判定：空对是 APK 内置镜像，合法成对值是在线来源，其余都是需要修正的配置。
+ * 这里仅做引导页的提示判定；真正下载前仍由平台校验函数做完整的 URL、主机和摘要校验。
+ */
+function manifestSource(settings: RuntimeSettings | null): ManifestSource {
+  if (settings === null) return 'bundled'
   const url = settings.manifestUrl.trim()
   const digest = settings.manifestSha256.trim()
-  // 空来源对代表 APK 内置安装包，不应要求离线用户填写在线地址。
-  if (url === '' && digest === '') return false
-  return url === '' || url.includes('example.invalid') || !/^[0-9a-f]{64}$/i.test(digest)
+  if (url === '' && digest === '') return 'bundled'
+  if (url === '' || digest === '' || !/^https:\/\/[^\s/]+(?:\/[^\s]*)?$/i.test(url)) return 'invalid'
+  try {
+    const parsed = new URL(url)
+    if (parsed.hostname.endsWith('.invalid')) return 'invalid'
+  } catch {
+    return 'invalid'
+  }
+  return /^[0-9a-f]{64}$/i.test(digest) ? 'configured' : 'invalid'
 }
 
 export function Onboarding({
@@ -134,8 +146,11 @@ export function Onboarding({
               {step === 1 && (
                 <div className="onboarding-body">
                   <p>{t("首次使用需要安装 Ubuntu 运行环境（数百 MB）。应用内置的安装包可离线安装；使用在线来源时，建议通过 Wi-Fi 下载。")}</p>
-                  {!installed && needsManifestConfiguration(settings) && (
-                    <p className="onboarding-warn">{t("尚未配置运行时下载地址：请先在「设置 → 后台」填写清单地址与 SHA-256（两者必须成对）。")}</p>
+                  {!installed && settings !== null && manifestSource(settings) === 'bundled' && (
+                    <p className="onboarding-note">{t("安装将先解压 APK 内置镜像；内置镜像缺失时，请到「设置 → 后台」补充清单地址与 SHA-256。")}</p>
+                  )}
+                  {!installed && settings !== null && manifestSource(settings) === 'invalid' && (
+                    <p className="onboarding-warn">{t("运行时来源配置不完整或格式无效：请到「设置 → 后台」同时填写有效的清单地址与 SHA-256。")}</p>
                   )}
                   <p className="onboarding-status">
                     {t("当前状态：")}{installed ? t("已安装") + (runtime.phase === 'running' ? t(" · 运行中") : '') : runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting' ? t("正在安装…") : t("未安装")}

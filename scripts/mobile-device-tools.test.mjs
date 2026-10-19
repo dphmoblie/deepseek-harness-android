@@ -525,3 +525,52 @@ test('副屏直通 Shell 不进入逐次确认钩子，提示文案说明通道�
   assert.match(f.prompts[0].text, /DISPLAY_ID/u)
   assert.match(f.prompts[0].text, /VIRTUAL_SCREEN_DISPLAY_INVALID/u)
 })
+
+test('老运行时没有 AbortSignal.any 时设备工具仍然可用', async t => {
+  // 模拟 Node < 20.3 的访客运行时：AbortSignal.any 不存在，但工具调用带着 exec.signal。
+  const original = Object.getOwnPropertyDescriptor(AbortSignal, 'any')
+  delete AbortSignal.any
+  t.after(() => {
+    if (original) Object.defineProperty(AbortSignal, 'any', original)
+  })
+  const payload = JSON.stringify({ atMs: 1700000000000, sdkInt: 34, capabilities: [] })
+  const f = fixture(t, request => {
+    assert.equal(request.command, 'deviceCapabilities')
+    return ok(payload)
+  })
+  const controller = new AbortController()
+  const result = await f.tools.get('mobile_device_capabilities').execute({}, { signal: controller.signal })
+  assert.equal(f.requests.length, 1)
+  assert.equal(JSON.parse(result.output).sdkInt, 34)
+  assert.equal(typeof AbortSignal.any, 'undefined')
+})
+
+test('回退组合信号仍然跟着会话取消中止请求', async t => {
+  const original = Object.getOwnPropertyDescriptor(AbortSignal, 'any')
+  delete AbortSignal.any
+  t.after(() => {
+    if (original) Object.defineProperty(AbortSignal, 'any', original)
+  })
+  const seen = []
+  const previous = { port: process.env.DSH_DEVICE_BRIDGE_PORT, token: process.env.DSH_DEVICE_BRIDGE_TOKEN }
+  process.env.DSH_DEVICE_BRIDGE_PORT = '3081'
+  process.env.DSH_DEVICE_BRIDGE_TOKEN = randomBytes(32).toString('base64url')
+  t.after(() => {
+    for (const [key, value] of [['port', previous.port], ['token', previous.token]].map(([k, v]) => [`DSH_DEVICE_BRIDGE_${k.toUpperCase()}`, v])) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  })
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    seen.push(options.signal)
+    return Response.json({ ok: true, exitCode: 0, text: '{}', truncated: false, errorCode: null })
+  })
+  const tools = new Map()
+  apply({ systemPrompt: { section() {} }, tools: { register(tool) { tools.set(tool.name, tool) } }, on() {} })
+  const controller = new AbortController()
+  await tools.get('mobile_device_capabilities').execute({}, { signal: controller.signal })
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].aborted, false)
+  controller.abort()
+  assert.equal(seen[0].aborted, true)
+})

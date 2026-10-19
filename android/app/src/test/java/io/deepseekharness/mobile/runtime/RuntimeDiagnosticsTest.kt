@@ -25,6 +25,13 @@ class RuntimeDiagnosticsTest {
     }
 
     @Test
+    fun `classifies an exited runner with no output as execution failure rather than timeout`() {
+        val failure = RuntimeDiagnostics.prootFailure(ProcessProbeResult(139, false, ""))
+
+        assertEquals("PROOT_GUEST_EXEC_FAILED", failure?.code)
+    }
+
+    @Test
     fun `retries without seccomp only for an explicit incompatibility`() {
         val explicitSeccompFailure = ProcessProbeResult(
             exitCode = 1,

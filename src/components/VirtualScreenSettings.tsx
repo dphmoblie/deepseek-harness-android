@@ -264,7 +264,22 @@ function frameAgeMillis(state: VirtualScreenState): number | null {
   return state.frameAgeMs
 }
 
-export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridge; onBack?: () => void }) {
+export function VirtualScreenSettings({
+  bridge,
+  onBack,
+  embedded = false,
+}: {
+  bridge: RuntimeBridge
+  onBack?: () => void
+  /**
+   * 嵌在别的页面里用（现在的「自动化设置 → 副屏」分组）。
+   *
+   * 默认行为是独立页面：自己带一层 screen 页面壳、应用管理眉标与 h1 标题。
+   * 嵌进分组时这些让位给外面的分组标题，否则一页里出现两个 h1，卡片还会被
+   * 页面内边距再缩一圈。
+   */
+  embedded?: boolean
+}) {
   const [settingsState, setSettingsState] = useState<SettingsLoadState>({ status: 'loading' })
   const [deviceState, setDeviceState] = useState<DeviceLoadState>({ status: 'loading' })
   // draft 是界面上正在编辑的那一份，baseline 是最后一次认为已经落盘的那一份。
@@ -566,12 +581,14 @@ export function VirtualScreenSettings({ bridge, onBack }: { bridge: RuntimeBridg
   const overlayWidth = draft === null ? 0 : overlayWidthOf(draft)
 
   return (
-    <div className="screen virtual-screen-screen">
+    <div className={embedded ? 'virtual-screen-embedded' : 'screen virtual-screen-screen'}>
       <div className="screen-heading management-heading">
-        <div>
-          <p className="eyebrow">{t('应用管理')}</p>
-          <h1>{t('目标应用副屏')}</h1>
-        </div>
+        {!embedded && (
+          <div>
+            <p className="eyebrow">{t('应用管理')}</p>
+            <h1>{t('目标应用副屏')}</h1>
+          </div>
+        )}
         <div className="heading-actions">
           <button
             className="button button-secondary compact-button"
