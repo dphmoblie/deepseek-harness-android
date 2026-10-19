@@ -1,0 +1,59 @@
+name: Stats chart (stars + downloads)
+
+# README「项目数据」那张折线图的自动刷新：每天抓一次 GitHub 的星标与 Release 下载量，
+# 有变化就提交一张新图。数据口径与画图逻辑都在 scripts/star-download-chart.mjs，
+# 这里只负责按日程跑它、把结果推回去。
+
+on:
+  schedule:
+    # 03:17 UTC = 北京 11:17。故意避开整点：GitHub 的定时任务在整点最容易排队延迟。
+    - cron: '17 3 * * *'
+  # 发版后立刻补一次：新 Release 一挂上就有下载计数，等不到第二天的定时任务。
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  # 读星标/Release 需要 contents:read，把图提交回 main 需要 write。
+  contents: write
+
+concurrency:
+  # 手动触发撞上定时触发时只保留后一次，避免两个 job 抢同一条提交。
+  group: stats-chart
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    name: Regenerate docs/images/star-download-history.svg
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 三个触发源里 release 落的是标签（detached HEAD），直接 push 会把提交丢在无分支状态；
+          # 统一钉到默认分支，图永远长在 main 上。
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+
+      - name: Set up Node.js 24.14.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+
+      - name: Regenerate the chart
+        # 脚本优先读 GITHUB_TOKEN，读不到才回落到本机的 gh CLI；workflow 里没有 gh 登录态。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/star-download-chart.mjs
+
+      - name: Commit when the data moved
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- docs/images/star-download-history.svg; then
+            echo "同一天里重复跑，图没变，不产生提交"
+            exit 0
+          fi
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/images/star-download-history.svg
+          # [skip ci]：这张图每天都带着新的抓取日期，不值得为它跑一次完整的 Android 构建。
+          git commit -m 'docs: 刷新星标与下载量折线图 [skip ci]'
+          git push
