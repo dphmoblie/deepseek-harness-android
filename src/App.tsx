@@ -3748,7 +3748,14 @@ export function App() {
       })
       .catch(() => null)
     prewarmInFlight.current = attempt
-    void attempt
+    /*
+     * 落定后必须清空：它只是「还在飞的这次预启动」。留着已完成的 promise 会让之后
+     * 「先停止、再打开」拿到**过期的 running 快照**，于是跳过 startHarness 直接打开，
+     * 用户看到一条 NOT_RUNNING 错误——一次成功过的预启动反而把后来的打开搞坏了。
+     */
+    void attempt.finally(() => {
+      if (prewarmInFlight.current === attempt) prewarmInFlight.current = null
+    })
   }, [booting, onboardingOpen, runtime, settings])
 
   useEffect(() => {

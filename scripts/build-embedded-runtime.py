@@ -631,6 +631,13 @@ def add_windows_tree(
     for current_raw, directory_names, file_names in os.walk(source_root, topdown=True, followlinks=False):
         current = Path(current_raw)
         relative = current.relative_to(source_root)
+        # 遍历顺序必须确定：`scandir` 的顺序由文件系统决定（ext4 是哈希序），而同一 inode 的
+        # 多个硬链接里「谁先被看到」决定了谁落成实体条目、谁写成硬链接。CI 上确实因此翻车过：
+        # 同一提交两次运行，一次 git-core/git 是实体、一次变成把 git-add 当实体的硬链接，
+        # 打包自检的断言随之随机失败。排序把「谁先被看到」固定下来，顺带让同一份输入的
+        # bundle 字节序保持稳定（便于比对 sha256）。
+        directory_names.sort()
+        file_names.sort()
 
         for name in list(directory_names):
             path = current / name

@@ -240,6 +240,26 @@ describe('App conversation gate', () => {
     expect(bridge.startHarness).not.toHaveBeenCalled()
   })
 
+  it('预启动成功后停止再打开：会重新启动，不会拿过期快照直接打开', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, prewarmHarness: true })
+
+    render(<App />)
+    await arriveAtShell()
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
+
+    // 让预启动落定（默认夹具解析为 running），再手动停止：相位回到 ready。
+    await act(async () => { await Promise.resolve() })
+    fireEvent.click(screen.getByRole('button', { name: '停止' }))
+    await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(screen.getByRole('button', { name: /打开对话|打开 Harness/ }))
+
+    // 关键：必须重新启动一次。若预启动留下的已完成 promise 没被清空，这里会误判为
+    // 「已在运行」而跳过启动，直接打开就会以 NOT_RUNNING 失败。
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(bridge.openHarness).toHaveBeenCalledTimes(1))
+  })
+
   it('keeps first run on setup, then installs and enters the conversation', async () => {
     bridge.getState
       .mockResolvedValueOnce({ ...notInstalledState })
