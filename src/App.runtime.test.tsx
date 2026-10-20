@@ -41,6 +41,26 @@ describe('后台保持与恢复', () => {
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, keepRuntimeInBackground: true }))
   })
 
+  it('「打开应用时预启动服务」默认关闭；开启后保存并在当次会话就预启动', async () => {
+    render(<App />)
+  await arriveAtSettingsHome()
+
+    await openSettingsPage('后台')
+    const toggle = await screen.findByRole('switch', { name: /打开应用时预启动服务/ })
+    expect(toggle).not.toBeChecked()
+    // 默认关闭时开机不会预启动：与「不自动打开对话」是同一条底线。
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+
+    fireEvent.click(toggle)
+    expect(toggle).toBeChecked()
+
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, prewarmHarness: true }))
+    // 开启的当次会话也立即生效：设置回来之后才允许预启动。
+    await waitFor(() => expect(bridge.startHarness).toHaveBeenCalledTimes(1))
+    // 预启动只拉起服务，绝不替用户打开对话页。
+    expect(bridge.openHarness).not.toHaveBeenCalled()
+  })
+
   it('关掉自动启动后，设置晚于运行时就绪回来也不会启动 Harness', async () => {
     /*
      * 线上那条「关掉了仍然自动启动」：启动时运行时的状态往往比设置先到，

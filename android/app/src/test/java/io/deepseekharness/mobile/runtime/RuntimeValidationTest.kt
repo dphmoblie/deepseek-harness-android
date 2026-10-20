@@ -126,6 +126,40 @@ class RuntimeValidationTest {
     }
 
     @Test
+    fun defaultsPrewarmHarnessToDisabled() {
+        // 旧配置与旧前端都不传该字段：默认关闭，升级不会替用户打开一个常驻占用资源的预启动。
+        val legacy = RuntimeValidation.settings(
+            "https://downloads.example.invalid/runtime.json",
+            "a".repeat(64),
+            keepScreenAwake = true,
+            terminalFontSize = 14,
+        )
+        assertEquals(false, legacy.prewarmHarness)
+        assertFalse(legacy.prewarmHarness)
+
+        val enabled = RuntimeValidation.settings(
+            "https://downloads.example.invalid/runtime.json",
+            "a".repeat(64),
+            keepScreenAwake = true,
+            terminalFontSize = 14,
+            prewarmHarness = true,
+        )
+        assertTrue(enabled.prewarmHarness)
+        // 预启动是独立开关：只开它不应顺带打开另外两个同类布尔设置。
+        assertFalse(enabled.keepRuntimeInBackground)
+        assertFalse(enabled.overlayBallEnabled)
+        // 数据类默认值同样为 false，避免漏传时被当成开启。
+        assertFalse(
+            RuntimeSettings(
+                manifestUrl = "",
+                manifestSha256 = "",
+                keepScreenAwake = false,
+                terminalFontSize = 14,
+            ).prewarmHarness,
+        )
+    }
+
+    @Test
     fun acceptsKnownArchiveCompressionFormats() {
         assertEquals(RootfsCompression.GZIP, RootfsCompression.parse("gzip"))
         assertThrows(RuntimeFailure::class.java) {

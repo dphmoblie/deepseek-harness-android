@@ -534,6 +534,7 @@ class MobileRuntimeController(
         customProviderApiKeyUpdates: Map<String, String>,
         clearedCustomProviderApiKeys: Set<String>,
         overlayBallEnabledUpdate: Boolean? = settings.overlayBallEnabled,
+        prewarmHarnessUpdate: Boolean? = settings.prewarmHarness,
     ): RuntimeSettings = lifecycleLock.withLock {
         ensureOpen()
         val modelConfigurationChanged = providerApiKeyUpdates.isNotEmpty() || clearedProviderApiKeys.isNotEmpty() ||
@@ -550,6 +551,7 @@ class MobileRuntimeController(
             customProviderApiKeyUpdates,
             clearedCustomProviderApiKeys,
             overlayBallEnabledUpdate = overlayBallEnabledUpdate,
+            prewarmHarnessUpdate = prewarmHarnessUpdate,
         )
         if (restartHarness) supervisor.startHarness()
         saved

@@ -156,6 +156,19 @@ internal fun optionalOverlayBallEnabled(data: JSONObject): Boolean? {
 }
 
 /**
+ * 「打开应用时预启动服务」参数：省略 `null`，显式布尔才算修改。
+ *
+ * 与悬浮球同一条约定，理由也一样：这个开关是一次显式选择，不能让一次「只带了部分字段」
+ * 的保存把它悄悄改成关闭。非布尔直接拒绝，不猜、不转字符串。
+ */
+internal fun optionalPrewarmHarness(data: JSONObject): Boolean? {
+    if (!data.has("prewarmHarness")) return null
+    val value = data.opt("prewarmHarness")
+    if (value !is Boolean) throw RuntimeFailure("SETTINGS_INVALID", "预启动设置格式无效")
+    return value
+}
+
+/**
  * 投递区导出的「指定子目录」参数。
  *
  * 省略、`null` 或空白一律等价于「整个工作区」；**非字符串直接拒绝**（不猜、不转字符串）。
@@ -1057,6 +1070,7 @@ class MobileRuntimePlugin : Plugin() {
                 allowedCustomIds,
             )
             val overlayBallEnabledUpdate = optionalOverlayBallEnabled(call.data)
+            val prewarmHarnessUpdate = optionalPrewarmHarness(call.data)
             val settings = RuntimeValidation.settings(
                 call.getString("manifestUrl"),
                 call.getString("manifestSha256"),
@@ -1065,6 +1079,8 @@ class MobileRuntimePlugin : Plugin() {
                 call.getBoolean("keepRuntimeInBackground", false) ?: false,
                 // 省略值只作为构造设置对象时的占位；是否写入由下面的可空更新参数决定。
                 overlayBallEnabledUpdate ?: false,
+                // 同上：占位值不参与写入，省略时保留原生侧已有选择。
+                prewarmHarnessUpdate ?: false,
             )
             val saved = controller.saveSettings(
                 settings,
@@ -1074,6 +1090,7 @@ class MobileRuntimePlugin : Plugin() {
                 customProviderApiKeyUpdates,
                 clearedCustomProviderApiKeys,
                 overlayBallEnabledUpdate = overlayBallEnabledUpdate,
+                prewarmHarnessUpdate = prewarmHarnessUpdate,
             )
             applyKeepScreenAwake(saved.keepScreenAwake)
             syncKeepAliveService(saved.keepRuntimeInBackground)
@@ -3993,6 +4010,8 @@ class MobileRuntimePlugin : Plugin() {
         .put("harnessConfiguredCustomModelProviders", org.json.JSONArray(harnessConfiguredCustomModelProviders))
         .put("keepRuntimeInBackground", keepRuntimeInBackground)
         .put("overlayBallEnabled", overlayBallEnabled)
+        // 前端据此决定应用启动后是否静默调用 startHarness；缺失时前端按 false 处理。
+        .put("prewarmHarness", prewarmHarness)
 
     private fun RuntimeKeepAliveSnapshot.toJs(): JSObject = JSObject()
         .put("keepRuntimeInBackground", keepRuntimeInBackground)

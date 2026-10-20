@@ -69,6 +69,8 @@ const DEFAULT_SETTINGS: RuntimeSettings = {
   deepSeekAccountConfigured: false,
   // 浏览器预览没有前台服务：保持关闭，避免给出错误的保活预期。
   keepRuntimeInBackground: false,
+  // 浏览器预览里没有真正的运行时可预启动，保持关闭。
+  prewarmHarness: false,
 }
 function listenerHandle(remove: () => void): ListenerHandle {
   return {
@@ -246,6 +248,10 @@ export function createBrowserBridge(): RuntimeBridge {
         overlayBallEnabled: settings.overlayBallEnabled === undefined
           ? currentSettings.overlayBallEnabled ?? false
           : validated.overlayBallEnabled,
+        // 预启动同理：与「后台保持」「悬浮球」互不相关的保存不该把它顺手关掉。
+        prewarmHarness: settings.prewarmHarness === undefined
+          ? currentSettings.prewarmHarness ?? false
+          : validated.prewarmHarness,
         configuredModelProviders: MODEL_PROVIDER_IDS.filter(provider => configuredProviders.has(provider)),
         configuredCustomModelProviders: [...configuredCustomProviders],
       })
