@@ -2505,7 +2505,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           所以合并进同一页，不再各占一个入口。
         */}
         {page === 'automation' && (
-        <>          <div className="settings-stack">
+        <>
+          <div className="settings-stack">
           {/*
             自动化设置按「副屏 / 参数与规则 / 无障碍」三组排：
             副屏决定画面从哪来，参数与规则决定怎么动，无障碍决定有没有权限去读。
@@ -3726,21 +3727,46 @@ export function App() {
      * 回到 ready，效果会立刻把服务重新拉起来——用户刚关掉的东西自己又开了，比慢启动更糟。
      * 反过来，用户在本次会话里把开关打开时应该立刻生效，不必等下次冷启动，因此记下上一次
      * 的取值来区分「设置刚变」与「相位在变」。
+     *
+     * 「已触发」的记账时机在下面的资格判断**之后**：开关是在条件尚不成熟时被打开的（运行时还在
+     * 下载解压、有待更新的运行时、还没配模型凭据）时，若先消费掉这次变更，等条件成熟也补不回来，
+     * 用户开了开关却要等到下次冷启动才生效，而且全程没有任何提示。
+     *
+     * 例外是「服务已经在跑」：这时本来就没有要预启动的东西，而它恰恰是用户手动点「停止」之前的
+     * 那次判定 —— 在此当场消费，之后相位回到 ready 时才不会把用户刚停的服务重新拉起。
      */
     const previous = prewarmSettingSeen.current
-    prewarmSettingSeen.current = settings.prewarmHarness === true
-    if (settings.prewarmHarness !== true || previous === true) return
+    // 关掉开关要当场复位：否则「关掉再打开」会被当成已经触发过，静默跳过。
+    if (settings.prewarmHarness !== true) {
+      prewarmSettingSeen.current = false
+      return
+    }
+    if (previous === true) return
     /*
-     * 只在「已安装且空闲 ready」时预启动。
+     * 服务已在运行：本次变更到此为止，当场记账。
      *
-     * 用相位而不是 `installed` 判断：installed 还包含 running / stopping / 下载解压这些
-     * 正在进行的状态，在那些状态下再发一次启动会与安装或停止竞态（原生会以 RUNTIME_BUSY
-     * 之类的错误收场），而预启动本该是静默的后台准备，不该制造失败。
+     * 这是「用户手动停止后不被重新拉起」的守卫：开机那次判定看到的相位是 running，若这里不消费，
+     * 用户点「停止」把相位带回 ready 时，这次由关变开会被当成「条件尚未成熟、留着待触发」，
+     * 于是刚被用户关掉的服务立刻又被预启动拉起。
+     */
+    if (runtime.phase === 'running') {
+      prewarmSettingSeen.current = true
+      return
+    }
+    /*
+     * 其余未就绪条件（运行时下载解压、停止中、有待更新、还没配置模型凭据）都保留这次由关变开，
+     * 等条件成熟的那次渲染再补做，用户不必等下次冷启动。
+     *
+     * 只在「已安装且空闲 ready」时预启动。用相位而不是 `installed` 判断：installed 还包含
+     * running / stopping / 下载解压这些正在进行的状态，在那些状态下再发一次启动会与安装或停止
+     * 竞态（原生会以 RUNTIME_BUSY 之类的错误收场），而预启动本该是静默的后台准备，不该制造失败。
      */
     if (runtime.phase !== 'ready') return
     if (runtime.updateAvailable) return
     // 没有可投递的模型凭据时启动没有意义（含用户只在 Harness 内配过密钥的情况）。
     if (!hasConfiguredModelCredential(settings)) return
+    // 资格齐了才记「已触发」：条件不满足的那几次渲染不消费这次变更。
+    prewarmSettingSeen.current = true
     const attempt = runtimeBridge.startHarness()
       .then(next => {
         setRuntime(next)

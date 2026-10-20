@@ -63,6 +63,21 @@ class RuntimeGuestVerificationTest {
         assertEquals(RuntimeGuestVerification.tokenFor(profileKey), storage.token)
     }
 
+    /**
+     * 失效标记必须跨实例生效：安装/更新走的是「现造一个实例再 [RuntimeGuestVerification.invalidate]」，
+     * 而真正决定跳不跳过自检的是解析器持有的**另一个**实例。标记若只是实例字段，那次失效
+     * 写盘失败就没人兜底，磁盘上的旧令牌会让下一次启动继续跳过自检。
+     */
+    @Test
+    fun `an invalidation from another instance also stops trust`() {
+        val storage = FakeStorage(failOnRemove = true)
+        storage.token = RuntimeGuestVerification.tokenFor(profileKey)
+        RuntimeGuestVerification(storage).invalidate()
+
+        // 删除失败，磁盘上令牌还在；同一个进程里的另一个实例也必须停止信任它。
+        assertFalse(RuntimeGuestVerification(storage).allowsSkip(profileKey))
+    }
+
     @Test
     fun `invalidation removes the token from storage`() {
         val storage = FakeStorage()
