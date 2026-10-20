@@ -381,6 +381,13 @@ internal class RuntimeMailbox(private val store: RuntimeStore) : OptionalBindPro
         return listDirectory(rootName, parent.ifEmpty { null })
     }
 
+    /** Copy one browsed mailbox file into the app cache for a FileProvider URI. */
+    fun copyFileForSharing(rootName: String, relative: String, cacheDir: File): File {
+        val directories = requireDirectories()
+        val root = directoryFor(directories, rootName)
+        return RuntimeDirectoryBrowser.copyFileForSharing(root, relative, RuntimeDirectoryBrowser.MAILBOX, cacheDir)
+    }
+
     /**
      * 追加到 PRoot 启动档的投递区绑定。
      *

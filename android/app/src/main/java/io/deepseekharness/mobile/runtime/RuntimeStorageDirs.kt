@@ -626,6 +626,17 @@ internal class RuntimeStorageDirs(
         return directory(guestPath, parent.ifEmpty { null })
     }
 
+    /** Copy one browsed shared-storage file into the app cache for a FileProvider URI. */
+    fun copyFileForSharing(guestPath: String, relative: String, cacheDir: File): File {
+        val status = requireGuestDirectory(guestPath)
+        return RuntimeDirectoryBrowser.copyFileForSharing(
+            File(status.entry.path),
+            relative,
+            RuntimeDirectoryBrowser.SHARED_STORAGE,
+            cacheDir,
+        )
+    }
+
     /**
      * 把一个访客路径（`/mnt/user/<序号>`）解析成**当前可用**的白名单条目。
      *

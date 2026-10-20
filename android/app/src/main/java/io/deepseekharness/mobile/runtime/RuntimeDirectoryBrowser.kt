@@ -4,6 +4,11 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
+import java.nio.file.SecureDirectoryStream
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributeView
 
 /**
  * 目录浏览的**受控错误码族**。
@@ -72,6 +77,7 @@ internal data class DirectorySnapshot(
  * `RuntimeMailboxPolicy.normalizeSubdirectory` 一份，调用方先规范化再把结果交给本对象。
  */
 internal object RuntimeDirectoryBrowser {
+    private const val MAX_SHARE_BYTES = 64L * 1024 * 1024
     /** 投递区：错误码与文案保持 `MailboxCodes` 原文，可见性过滤沿用投递区自己的口径。 */
     val MAILBOX = DirectoryBrowseTexts(
         codes = DirectoryBrowseCodes(
@@ -179,6 +185,101 @@ internal object RuntimeDirectoryBrowser {
             throw RuntimeFailure(texts.codes.directoryFailed, texts.createFailed, error)
         }
     }
+
+    /**
+     * Copy one listed regular file into the app cache for FileProvider delivery.
+     *
+     * The complete path is opened through a `SecureDirectoryStream`; this keeps
+     * guest-controlled parent directories pinned and rejects symlink replacement
+     * races instead of handing an arbitrary host file to another app.
+     */
+    fun copyFileForSharing(root: File, relative: String, texts: DirectoryBrowseTexts, cacheDir: File): File {
+        val normalized = try {
+            RuntimeMailboxPolicy.normalizeEntryName(relative, texts.codes.pathInvalid, "文件路径无效")
+        } catch (failure: RuntimeFailure) {
+            throw failure
+        }
+        val names = normalized.split('/')
+        val shareDirectory = File(cacheDir, RuntimeCacheEntries.WORKSPACE_SHARE)
+        if ((!shareDirectory.isDirectory && !shareDirectory.mkdirs()) || Files.isSymbolicLink(shareDirectory.toPath())) {
+            throw RuntimeFailure(texts.codes.directoryFailed, "无法准备文件分享目录")
+        }
+        val safeName = names.last().replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(80).ifEmpty { "file" }
+        val target = try {
+            File.createTempFile("dsh-", "-$safeName", shareDirectory)
+        } catch (error: IOException) {
+            throw RuntimeFailure(texts.codes.directoryFailed, "无法准备文件分享目录", error)
+        }
+        return try {
+            val rootPath = root.toPath().toAbsolutePath().normalize()
+            if (!MailboxTree.isRealDirectory(rootPath)) {
+                throw RuntimeFailure(texts.codes.directoryNotFound, texts.rootUnavailable)
+            }
+            Files.newDirectoryStream(rootPath).use { stream ->
+                if (stream !is SecureDirectoryStream<*>) {
+                    throw RuntimeFailure(texts.codes.directoryFailed, "系统不支持安全访问文件")
+                }
+                @Suppress("UNCHECKED_CAST")
+                copyFromSecureDirectory(stream as SecureDirectoryStream<Path>, names, 0, target, texts)
+            }
+            target
+        } catch (error: RuntimeFailure) {
+            target.delete()
+            throw error
+        } catch (error: IOException) {
+            target.delete()
+            throw RuntimeFailure(texts.codes.directoryNotFound, "文件不存在或不可用", error)
+        } catch (error: Throwable) {
+            target.delete()
+            throw RuntimeFailure(texts.codes.directoryFailed, "无法准备文件分享", error)
+        }
+    }
+
+    private fun copyFromSecureDirectory(
+        parent: SecureDirectoryStream<Path>,
+        names: List<String>,
+        index: Int,
+        target: File,
+        texts: DirectoryBrowseTexts,
+    ) {
+        val name = parentPath(names[index])
+        if (index < names.lastIndex) {
+            parent.newDirectoryStream(name, LinkOption.NOFOLLOW_LINKS).use { child ->
+                copyFromSecureDirectory(child, names, index + 1, target, texts)
+            }
+            return
+        }
+        val attributes = parent.getFileAttributeView(name, BasicFileAttributeView::class.java, LinkOption.NOFOLLOW_LINKS)
+            ?.readAttributes()
+        if (attributes == null || !attributes.isRegularFile || attributes.isSymbolicLink) {
+            throw RuntimeFailure(texts.codes.directoryNotFound, "文件不存在或不可用")
+        }
+        if (attributes.size() > MAX_SHARE_BYTES) {
+            throw RuntimeFailure(texts.codes.directoryFailed, "文件超过分享大小限制")
+        }
+        java.nio.channels.Channels.newInputStream(
+            parent.newByteChannel(name, setOf(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)),
+        ).use { input ->
+            Files.newOutputStream(
+                target.toPath(),
+                StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING,
+                LinkOption.NOFOLLOW_LINKS,
+            ).use { output ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var total = 0L
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > MAX_SHARE_BYTES) throw RuntimeFailure(texts.codes.directoryFailed, "文件超过分享大小限制")
+                    output.write(buffer, 0, read)
+                }
+            }
+        }
+    }
+
+    private fun parentPath(value: String): Path = java.nio.file.FileSystems.getDefault().getPath(value)
 
     /**
      * 逐级确认相对路径中的每一段都是真实目录，拒绝中间符号链接，返回宿主的绝对路径。

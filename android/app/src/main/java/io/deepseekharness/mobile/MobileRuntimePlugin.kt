@@ -16,6 +16,7 @@ import android.provider.Settings
 import android.util.DisplayMetrics
 import android.view.Display
 import android.view.WindowManager
+import android.webkit.MimeTypeMap
 import androidx.activity.result.ActivityResult
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
@@ -3459,6 +3460,61 @@ class MobileRuntimePlugin : Plugin() {
             val subdirectory = optionalStorageSubdirectory(call.data)
                 ?: throw RuntimeFailure(StorageDirCodes.PATH_INVALID, "存储目录新目录路径不能为空")
             storageDirs().createFolder(guestPath, subdirectory).toJs()
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；把文件管理页当前目录中的一个普通文件交给系统。
+     *
+     * 宿主路径永远不从 JS 传入：mailbox 只接受固定 root，storage 只接受白名单 guestPath；
+     * 相对文件路径由同一套 NoFollow 目录浏览策略解析后复制到 cache，再通过 FileProvider 暴露。
+     */
+    @PluginMethod
+    fun externalFileAction(call: PluginCall) {
+        execute(call) {
+            val source = call.data.opt("source") as? String
+                ?: throw RuntimeFailure("EXTERNAL_FILE_INVALID", "外部文件来源缺失")
+            val action = call.data.opt("action") as? String
+                ?: throw RuntimeFailure("EXTERNAL_FILE_INVALID", "外部文件动作缺失")
+            if (source != "mailbox" && source != "storage") {
+                throw RuntimeFailure("EXTERNAL_FILE_INVALID", "外部文件来源无效")
+            }
+            if (action != "share" && action != "open") {
+                throw RuntimeFailure("EXTERNAL_FILE_INVALID", "外部文件动作无效")
+            }
+            val relative = call.data.opt("path") as? String
+                ?: throw RuntimeFailure("EXTERNAL_FILE_INVALID", "外部文件路径缺失")
+            val target = if (source == "mailbox") {
+                val root = call.data.opt("root") as? String
+                    ?: throw RuntimeFailure("MAILBOX_ROOT_INVALID", "投递区根目录缺失")
+                RuntimeMailbox(controller.store).copyFileForSharing(root, relative, context.cacheDir)
+            } else {
+                val guestPath = call.data.opt("guestPath") as? String
+                    ?: throw RuntimeFailure(StorageDirCodes.PATH_INVALID, "共享目录访客路径缺失")
+                storageDirs().copyFileForSharing(guestPath, relative, context.cacheDir)
+            }
+            val mime = MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(relative.substringAfterLast('.', "").lowercase())
+                ?: "application/octet-stream"
+            val uri = FileProvider.getUriForFile(context, "${context.packageName}.diagnostics", target)
+            val intent = Intent(if (action == "open") Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
+                if (action == "open") setDataAndType(uri, mime) else {
+                    type = mime
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                }
+                clipData = ClipData.newRawUri(target.name, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            try {
+                context.startActivity(
+                    Intent.createChooser(intent, if (action == "open") "打开 DSH 文件" else "分享 DSH 文件")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            } catch (error: Throwable) {
+                target.delete()
+                throw RuntimeFailure("EXTERNAL_FILE_ACTION_FAILED", "无法打开系统文件操作面板", error)
+            }
+            null
         }
     }
 
