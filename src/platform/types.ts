@@ -53,7 +53,7 @@ export type ProviderApiKeys = Partial<Record<ModelProviderId, string>>
 export const CUSTOM_PROVIDER_APIS = ['openai-completions', 'openai-responses', 'anthropic-messages'] as const
 export type CustomProviderApi = typeof CUSTOM_PROVIDER_APIS[number]
 
-interface CustomProviderModel {
+export interface CustomProviderModel {
   id: string
   name: string
   contextWindow: number
@@ -494,6 +494,14 @@ export interface RuntimeSettings extends RuntimeSource {
   configuredCustomModelProviders?: string[]
   /** Harness 网页凭据文件中已配置的自定义供应商；只读状态。 */
   harnessConfiguredCustomModelProviders?: string[]
+  /**
+   * 内置供应商的「默认模型」id，每家有值时才出现。
+   *
+   * 这是**本机记录**，不写进 Harness：应用投递给 Harness 的只有凭据文件，
+   * 没有「默认模型」这条通道。它记录用户从上游模型列表里自动选中（或自己改过）的那一个，
+   * Harness 内实际使用的模型仍以它自己的模型页为准。
+   */
+  defaultModels?: Partial<Record<ModelProviderId, string>>
   /** 旧版原生桥接兼容字段；校验后只迁移为 DeepSeek 的已配置状态。 */
   apiKey?: string
   /**
@@ -2083,6 +2091,18 @@ export interface RuntimeBridge {
     apiKey?: string
     api?: CustomProviderApi
   }) => Promise<ModelConnectivityResult>
+  /**
+   * 读取上游供应商的模型列表（GET {base}/models）。
+   *
+   * 与 [testModelConnectivity] 共用同一套端点与鉴权解析：草稿密钥优先，未提供时回落到
+   * 本机已保存的凭据。返回的只是模型 id 与显示名，不含任何凭据，也不代表用户已经选定。
+   */
+  listModelCatalog: (options: {
+    providerId: string
+    baseUrl?: string
+    apiKey?: string
+    api?: CustomProviderApi
+  }) => Promise<ModelCatalogResult>
 }
 
 export interface ModelConnectivityResult {
@@ -2090,6 +2110,21 @@ export interface ModelConnectivityResult {
   status: number
   latencyMs: number
   message: string
+}
+
+export interface ModelCatalogEntry {
+  /** 上游模型 id（原样，不裁剪也不改名）。 */
+  id: string
+  /** 上游给的显示名；没有时与 id 相同。 */
+  name: string
+}
+
+export interface ModelCatalogResult {
+  ok: boolean
+  status: number
+  latencyMs: number
+  message: string
+  models: ModelCatalogEntry[]
 }
 
 export interface PluginPreservedInfo {

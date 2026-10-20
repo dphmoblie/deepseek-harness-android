@@ -11,8 +11,11 @@ import type { KeepAliveState, OverlayBallState } from '../platform/types'
  * 权限指引的判别值。
  *
  * - overlay-permission：悬浮窗权限没给，去系统页开启；
- * - notification-permission：Android 13+ 通知权限被关，前台服务无法驻留；
- * - background-blocked：被厂商 ROM 的自启动 / 省电策略拦截（小米 HyperOS 最常见）；
+ * - notification-permission：Android 13+ 通知权限未授予。该权限只影响常驻通知是否可见，
+ *   不影响前台服务身份，所以这里只给建议，不当作「服务起不来」的原因；
+ * - background-blocked：被厂商 ROM 的自启动 / 后台运行 / 省电策略拦截。四类限制
+ *   （自启动、后台运行、电池优化、任务清理）在所有 ROM 上都存在，只是菜名不同：小米
+ *   HyperOS、OPPO ColorOS、vivo OriginOS 三步各自点名，荣耀 / 华为 / 三星合并成一步；
  * - overlay-internal：悬浮球界面创建失败，没有系统页可去，只能重启应用 / 反馈日志。
  * 这层映射只消费原生侧下发的受控令牌，不接收任何自由文本。
  */

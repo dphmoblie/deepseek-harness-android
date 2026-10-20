@@ -28,11 +28,19 @@ const ACCENT_OPTIONS: readonly { value: AccentMode; label: string; color: string
   { value: 'rose', label: '玫瑰红', color: '#b33a61' },
 ]
 
+/** 一个页面里只显示其中一段：字号与配色、或背景。默认全显示（组件单独测试时用）。 */
+export type AppearanceScope = 'all' | 'appearance' | 'background'
+
 /**
- * 外观设置：无 props 的自包含区块，接进设置页的方式与 LanguageSettings 一致。
+ * 外观设置：自包含区块，接进设置页的方式与 LanguageSettings 一致。
+ *
+ * `scope` 让「字号与配色」和「背景」分成两个设置页：两段各自是独立的卡片组，
+ * 默认 'all' 保持整块渲染，组件自身的规则测试可以直接挂载。
  * 组件只负责展示与转发，主题的解析与落地全在 src/theme.ts 里（可单独测试）。
  */
-export function AppearanceSettings() {
+export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope }) {
+  const showAppearance = scope !== 'background'
+  const showBackground = scope !== 'appearance'
   const mode = useThemeMode()
   const accent = useAccentMode()
   const resolved = useResolvedTheme()
@@ -215,98 +223,110 @@ export function AppearanceSettings() {
   }
 
   return (
-    <section className="settings-section appearance-settings" aria-labelledby="appearance-title">
-      <Palette size={28} aria-hidden="true" />
-      <h2 id="appearance-title">{t('界面主题')}</h2>
-      <p>{t('立即生效，下次打开仍使用此主题。')}</p>
-      <div className="appearance-options" role="radiogroup" aria-labelledby="appearance-title">
-        {OPTIONS.map(({ value, label, Icon }) => (
-          <label key={value} className={mode === value ? 'appearance-option active' : 'appearance-option'}>
-            <input
-              type="radio"
-              name="app-theme"
-              value={value}
-              checked={mode === value}
-              onChange={() => change(value)}
-            />
-            <Icon size={16} aria-hidden="true" />
-            <span>{t(label)}</span>
-          </label>
-        ))}
-      </div>
-      {mode === 'system' && <p className="appearance-hint">{t('当前显示：{0}', t(resolved === 'dark' ? '深色' : '浅色'))}</p>}
-      <div className="appearance-accent-block">
-        <div className="appearance-accent-heading">
-          <strong>{t('强调色')}</strong>
-          <span>{t('用于按钮、进度条和状态提示')}</span>
-        </div>
-        <div className="appearance-accent-options" role="radiogroup" aria-label={t('强调色')}>
-          {ACCENT_OPTIONS.map(({ value, label, color }) => (
-            <label key={value} className={!customAccent && accent === value ? 'appearance-accent-option active' : 'appearance-accent-option'}>
-              <input
-                type="radio"
-                name="app-accent"
-                value={value}
-                checked={!customAccent && accent === value}
-                onChange={() => changeAccent(value)}
-              />
-              <span className="accent-swatch" style={{ backgroundColor: color }} aria-hidden="true" />
-              <span>{t(label)}</span>
-            </label>
-          ))}
-        </div>
-        <label className="appearance-custom-accent"><span>{t('自定义强调色')}</span><input type="color" value={customAccent || '#315fcf'} onChange={event => {
-          const value = event.target.value
-          if (saveCustomAccentColor(value)) setCustomAccent(value)
-        }} /><button type="button" className="compact-button" onClick={() => { clearCustomAccentColor(); setCustomAccent('') }}>{t('使用默认')}</button></label>
-      </div>
-      {failed !== null && <p role="alert">{t(failed === 'accent' ? '无法保存强调色，请重试。' : '无法保存主题，请重试。')}</p>}
-      <div className="appearance-customization">
-        <div className="appearance-accent-heading"><strong>{t('应用背景与卡片')}</strong><span>{t('背景文件只保存在本机，不会上传。')}</span></div>
-        <label className="field"><span>{t('背景图片或视频')}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm" onChange={event => {
-          const file = event.target.files?.[0]
-          if (!file) return
-          void saveBackground(file).then(() => setBackgroundError('')).catch(() => setBackgroundError(t('无法保存背景，请检查文件格式和存储空间')))
-          // React 异步回调不保留输入节点；下一次选择由系统选择器处理。
-        }} /><small>{t('支持 PNG、JPG、WebP、GIF、MP4、WebM，最大 50 MB')}</small></label>
-        <div className="appearance-range-grid">
-          <label className="range-field"><span><strong>{t('卡片不透明度')}</strong><small>{card.opacity}%</small></span><input type="range" min="30" max="100" step="1" value={card.opacity} onChange={event => { const next = { ...card, opacity: Number(event.target.value) }; updateCard(next) }} /></label>
-          <label className="range-field"><span><strong>{t('卡片背景模糊')}</strong><small>{card.blur}px</small></span><input type="range" min="0" max="24" step="1" value={card.blur} onChange={event => { const next = { ...card, blur: Number(event.target.value) }; updateCard(next) }} /></label>
-        </div>
-        <label className="field"><span>{t('卡片背景色')}</span><input type="color" value={card.color || (resolved === 'dark' ? '#171d24' : '#ffffff')} onChange={event => { const next = { ...card, color: event.target.value }; updateCard(next) }} /><button type="button" className="compact-button" onClick={() => { updateCard({ ...DEFAULT_CARD }); void clearBackground().catch(() => setBackgroundError(t('无法清除背景，请重试'))) }}><RotateCcw size={16} />{t('恢复默认')}</button></label>
-        <label className="field"><span>{t('文字颜色')}</span><input aria-label={t('文字颜色')} type="color" value={customTextColor || (resolved === 'dark' ? '#e8eef5' : '#17202b')} onChange={event => { const value = event.target.value; if (saveCustomTextColor(value)) setCustomTextColor(value) }} /><button type="button" className="compact-button" onClick={() => { clearCustomTextColor(); setCustomTextColor('') }}>{t('使用默认')}</button></label>
-        {backgroundError && <p role="alert">{t(backgroundError)}</p>}
-      </div>
-      <div className="appearance-customization appearance-adaptive">
-        <div className="appearance-accent-heading"><strong>{t('自适应主题色')}</strong><span>{t('从背景图片或视频首帧提取，只影响外壳外观。')}</span></div>
-        <div className="appearance-accent-options" role="radiogroup" aria-label={t('强调色来源')}>
-          {ACCENT_SOURCES.map(({ value, label }) => (
-            <label key={value} className={source === value ? 'appearance-accent-option active' : 'appearance-accent-option'}>
-              <input type="radio" name="accent-source" checked={source === value} onChange={() => changeSource(value)} />
-              <span>{t(label)}</span>
-            </label>
-          ))}
-        </div>
-        <p>{adaptive ? `${t('当前提取色')} ${adaptive.accent} · ${new Date(adaptive.extractedAt).toLocaleString()}` : t('还没有从背景提取过主题色')}</p>
-        <button type="button" className="compact-button" onClick={() => void extract()} disabled={extracting}>
-          {extracting ? t('正在提取…') : adaptive ? t('重新提取') : t('从背景提取主题色')}
-        </button>
-        {adaptive && <button type="button" className="compact-button" onClick={() => { clearAdaptiveAccent(); setAdaptive(null); if (source === 'adaptive') changeSource('default') }}>{t('清除提取结果')}</button>}
-        {accentError && <p role="alert">{t(accentError)}</p>}
-      </div>
-      <div className="appearance-customization appearance-sync">
-        <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('外壳与 DSH 是两个独立页面，主题不会自动共享；颜色与明暗模式默认同步，背景需要单独勾选。')}</span></div>
-        <div className="appearance-sync-background">
-          <label><input type="checkbox" checked={withBackground} onChange={event => void toggleBackground(event.target.checked)} /><span>{t('连背景一起同步')}</span></label>
-          <button type="button" className="compact-button" onClick={() => void pickBackground()}>{backgroundRef ? t('重新选择背景文件') : t('选择背景文件')}</button>
-          <small>{backgroundRef ? t('已选：{0}', backgroundRef.mime) : t('只记录文件地址，视频不复制、不设大小上限')}</small>
-          <small>{t('开关与所选文件会记住，重启后仍按上次的选择显示。')}</small>
-        </div>
-        <button type="button" className="compact-button" onClick={() => void sync()} disabled={syncing}>{t('让 DSH 使用当前主题')}</button>
-        <button type="button" className="compact-button" onClick={() => void unsync()} disabled={syncing}>{t('恢复 DSH 默认主题')}</button>
-        <p>{syncRecord ? `${t('上次同步')} ${new Date(syncRecord.syncedAt).toLocaleString()}` : t('还没有同步过')}</p>
-        {syncMessage && <p role="status">{t(syncMessage)}</p>}
-      </div>
+    <section
+      className="settings-section appearance-settings"
+      aria-labelledby={showAppearance ? 'appearance-title' : undefined}
+      aria-label={showAppearance ? undefined : t('背景与卡片')}
+    >
+      {showAppearance && (
+        <>
+          <Palette size={28} aria-hidden="true" />
+          <h2 id="appearance-title">{t('界面主题')}</h2>
+          <p>{t('立即生效，下次打开仍使用此主题。')}</p>
+          <div className="appearance-options" role="radiogroup" aria-labelledby="appearance-title">
+            {OPTIONS.map(({ value, label, Icon }) => (
+              <label key={value} className={mode === value ? 'appearance-option active' : 'appearance-option'}>
+                <input
+                  type="radio"
+                  name="app-theme"
+                  value={value}
+                  checked={mode === value}
+                  onChange={() => change(value)}
+                />
+                <Icon size={16} aria-hidden="true" />
+                <span>{t(label)}</span>
+              </label>
+            ))}
+          </div>
+          {mode === 'system' && <p className="appearance-hint">{t('当前显示：{0}', t(resolved === 'dark' ? '深色' : '浅色'))}</p>}
+          <div className="appearance-accent-block">
+            <div className="appearance-accent-heading">
+              <strong>{t('强调色')}</strong>
+              <span>{t('用于按钮、进度条和状态提示')}</span>
+            </div>
+            <div className="appearance-accent-options" role="radiogroup" aria-label={t('强调色')}>
+              {ACCENT_OPTIONS.map(({ value, label, color }) => (
+                <label key={value} className={!customAccent && accent === value ? 'appearance-accent-option active' : 'appearance-accent-option'}>
+                  <input
+                    type="radio"
+                    name="app-accent"
+                    value={value}
+                    checked={!customAccent && accent === value}
+                    onChange={() => changeAccent(value)}
+                  />
+                  <span className="accent-swatch" style={{ backgroundColor: color }} aria-hidden="true" />
+                  <span>{t(label)}</span>
+                </label>
+              ))}
+            </div>
+            <label className="appearance-custom-accent"><span>{t('自定义强调色')}</span><input type="color" value={customAccent || '#315fcf'} onChange={event => {
+              const value = event.target.value
+              if (saveCustomAccentColor(value)) setCustomAccent(value)
+            }} /><button type="button" className="compact-button" onClick={() => { clearCustomAccentColor(); setCustomAccent('') }}>{t('使用默认')}</button></label>
+          </div>
+          {failed !== null && <p role="alert">{t(failed === 'accent' ? '无法保存强调色，请重试。' : '无法保存主题，请重试。')}</p>}
+        </>
+      )}
+      {showBackground && (
+        <>
+          <div className="appearance-customization">
+            <div className="appearance-accent-heading"><strong>{t('应用背景与卡片')}</strong><span>{t('背景文件只保存在本机，不会上传。')}</span></div>
+            <label className="field"><span>{t('背景图片或视频')}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm" onChange={event => {
+              const file = event.target.files?.[0]
+              if (!file) return
+              void saveBackground(file).then(() => setBackgroundError('')).catch(() => setBackgroundError(t('无法保存背景，请检查文件格式和存储空间')))
+              // React 异步回调不保留输入节点；下一次选择由系统选择器处理。
+            }} /><small>{t('支持 PNG、JPG、WebP、GIF、MP4、WebM，最大 50 MB')}</small></label>
+            <div className="appearance-range-grid">
+              <label className="range-field"><span><strong>{t('卡片不透明度')}</strong><small>{card.opacity}%</small></span><input type="range" min="30" max="100" step="1" value={card.opacity} onChange={event => { const next = { ...card, opacity: Number(event.target.value) }; updateCard(next) }} /></label>
+              <label className="range-field"><span><strong>{t('卡片背景模糊')}</strong><small>{card.blur}px</small></span><input type="range" min="0" max="24" step="1" value={card.blur} onChange={event => { const next = { ...card, blur: Number(event.target.value) }; updateCard(next) }} /></label>
+            </div>
+            <label className="field"><span>{t('卡片背景色')}</span><input type="color" value={card.color || (resolved === 'dark' ? '#171d24' : '#ffffff')} onChange={event => { const next = { ...card, color: event.target.value }; updateCard(next) }} /><button type="button" className="compact-button" onClick={() => { updateCard({ ...DEFAULT_CARD }); void clearBackground().catch(() => setBackgroundError(t('无法清除背景，请重试'))) }}><RotateCcw size={16} />{t('恢复默认')}</button></label>
+            <label className="field"><span>{t('文字颜色')}</span><input aria-label={t('文字颜色')} type="color" value={customTextColor || (resolved === 'dark' ? '#e8eef5' : '#17202b')} onChange={event => { const value = event.target.value; if (saveCustomTextColor(value)) setCustomTextColor(value) }} /><button type="button" className="compact-button" onClick={() => { clearCustomTextColor(); setCustomTextColor('') }}>{t('使用默认')}</button></label>
+            {backgroundError && <p role="alert">{t(backgroundError)}</p>}
+          </div>
+          <div className="appearance-customization appearance-adaptive">
+            <div className="appearance-accent-heading"><strong>{t('自适应主题色')}</strong><span>{t('从背景图片或视频首帧提取，只影响外壳外观。')}</span></div>
+            <div className="appearance-accent-options" role="radiogroup" aria-label={t('强调色来源')}>
+              {ACCENT_SOURCES.map(({ value, label }) => (
+                <label key={value} className={source === value ? 'appearance-accent-option active' : 'appearance-accent-option'}>
+                  <input type="radio" name="accent-source" checked={source === value} onChange={() => changeSource(value)} />
+                  <span>{t(label)}</span>
+                </label>
+              ))}
+            </div>
+            <p>{adaptive ? `${t('当前提取色')} ${adaptive.accent} · ${new Date(adaptive.extractedAt).toLocaleString()}` : t('还没有从背景提取过主题色')}</p>
+            <button type="button" className="compact-button" onClick={() => void extract()} disabled={extracting}>
+              {extracting ? t('正在提取…') : adaptive ? t('重新提取') : t('从背景提取主题色')}
+            </button>
+            {adaptive && <button type="button" className="compact-button" onClick={() => { clearAdaptiveAccent(); setAdaptive(null); if (source === 'adaptive') changeSource('default') }}>{t('清除提取结果')}</button>}
+            {accentError && <p role="alert">{t(accentError)}</p>}
+          </div>
+          <div className="appearance-customization appearance-sync">
+            <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('外壳与 DSH 是两个独立页面，主题不会自动共享；颜色与明暗模式默认同步，背景需要单独勾选。')}</span></div>
+            <div className="appearance-sync-background">
+              <label><input type="checkbox" checked={withBackground} onChange={event => void toggleBackground(event.target.checked)} /><span>{t('连背景一起同步')}</span></label>
+              <button type="button" className="compact-button" onClick={() => void pickBackground()}>{backgroundRef ? t('重新选择背景文件') : t('选择背景文件')}</button>
+              <small>{backgroundRef ? t('已选：{0}', backgroundRef.mime) : t('只记录文件地址，视频不复制、不设大小上限')}</small>
+              <small>{t('开关与所选文件会记住，重启后仍按上次的选择显示。')}</small>
+            </div>
+            <button type="button" className="compact-button" onClick={() => void sync()} disabled={syncing}>{t('让 DSH 使用当前主题')}</button>
+            <button type="button" className="compact-button" onClick={() => void unsync()} disabled={syncing}>{t('恢复 DSH 默认主题')}</button>
+            <p>{syncRecord ? `${t('上次同步')} ${new Date(syncRecord.syncedAt).toLocaleString()}` : t('还没有同步过')}</p>
+            {syncMessage && <p role="status">{t(syncMessage)}</p>}
+          </div>
+        </>
+      )}
     </section>
   )
 }

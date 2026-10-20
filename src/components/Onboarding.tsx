@@ -1,73 +1,79 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { t } from '../i18n'
-import { ArrowLeft, ArrowRight, Blocks, Check, KeyRound, Loader2, LogIn, Rocket, ShieldCheck, Sparkles, X } from 'lucide-react'
-import { CustomProviders } from './CustomProviders'
-import { hasConfiguredModelCredential, MODEL_PROVIDERS } from '../modelProviders'
-import type { CustomModelProvider, ModelProviderId, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState } from '../platform/types'
+import { ArrowLeft, ArrowRight, Blocks, Check, KeyRound, Loader2, X } from 'lucide-react'
+import type { RuntimeSettings, RuntimeSettingsUpdate, RuntimeState } from '../platform/types'
 
 export const ONBOARDING_STORAGE_KEY = 'dsh-mobile-onboarding-v1'
 
 interface OnboardingProps {
   busy: string | null
   runtime: RuntimeState
-  shizuku: ShizukuState
   settings: RuntimeSettings | null
   onInstall: () => void
-  onAuthorize: () => void
-  onOpenShizuku: () => void
-  onOpenHarness: () => void
-  /** 登录账号或用户确认凭据已在 Harness 内配置时的放行入口。 */
-  onOpenHarnessConfirmed: () => void
+  /**
+   * 在线安装入口：APK 没内置镜像时，安装按钮会失败，用户需要去版本管理里下载一个带摘要校验的版本。
+   * 缺省时不显示这个按钮（测试与嵌入式用法不需要它）。
+   */
+  onOpenVersions?: () => void
   onDone: () => void
   onSaveSettings?: (settings: RuntimeSettingsUpdate) => Promise<boolean>
 }
 
+/**
+ * 首次配置只留两步：配模型 → 装运行环境。
+ *
+ * 顺序是刻意的：模型凭据不依赖运行环境，先配上，用户就不会卡在「镜像没内置 → 装不上 →
+ * 连密钥页都到不了」的死路上；运行环境排在后面，装不上也不影响保存凭据。
+ *
+ * 这里只放 DeepSeek 的 API Key。账号登录、自定义供应商都属于「运行环境里的事」：
+ * 它们要开着 Harness 才有意义，塞进首次配置只会让一个本来能跳过的小窗口变成账号页。
+ */
 const STEPS = [
-  { id: 'welcome', title: '欢迎使用 DeepSeek Harness Android', icon: Sparkles },
-  { id: 'runtime', title: '安装 Ubuntu 运行时', icon: Blocks },
-  { id: 'apikey', title: '配置模型账号或 API Key', icon: KeyRound },
-  { id: 'shizuku', title: '设备 Shell（可选）', icon: ShieldCheck },
-  { id: 'plugins', title: '界面与插件', icon: Blocks },
-  { id: 'ready', title: '开始使用', icon: Rocket },
+  { id: 'model', title: '配置模型', icon: KeyRound },
+  { id: 'runtime', title: '安装运行环境', icon: Blocks },
 ] as const
 
-function needsManifestConfiguration(settings: RuntimeSettings | null): boolean {
-  if (settings === null) return false
-  const url = settings.manifestUrl.trim()
-  const digest = settings.manifestSha256.trim()
-  // 空来源对代表 APK 内置安装包，不应要求离线用户填写在线地址。
-  if (url === '' && digest === '') return false
-  return url === '' || url.includes('example.invalid') || !/^[0-9a-f]{64}$/i.test(digest)
+/**
+ * 从聊天软件粘贴的密钥常带折行、空格、外层引号与零宽字符，原样保存会得到一份
+ * 「看着对、用起来 401」的凭据。这里统一收窄成一行，并在界面上如实提示做过清理。
+ */
+function normalizeApiKey(raw: string): string {
+  return raw
+    .replace(/[\u200b-\u200d\ufeff]/gi, '')
+    .replace(/\s+/g, '')
+    .replace(/^bearer/i, '')
+    .replace(/^["'`]+|["'`]+$/g, '')
+}
+
+/** 空来源代表 APK 内置镜像；有来源才是从在线地址下载。 */
+function usesBundledSource(settings: RuntimeSettings | null): boolean {
+  return settings === null || settings.manifestUrl.trim() === ''
 }
 
 export function Onboarding({
-  busy, runtime, shizuku, settings,
-  onInstall, onAuthorize, onOpenShizuku, onOpenHarness, onOpenHarnessConfirmed, onDone, onSaveSettings,
+  busy, runtime, settings, onInstall, onOpenVersions, onDone, onSaveSettings,
 }: OnboardingProps) {
   const [step, setStep] = useState(0)
-  const [apiKeyDraft, setApiKeyDraft] = useState('')
-  const [selectedProvider, setSelectedProvider] = useState<ModelProviderId | 'custom'>('deepseek')
-  const [customProviders, setCustomProviders] = useState<CustomModelProvider[]>(settings?.customModelProviders ?? [])
-  const [customCredentials, setCustomCredentials] = useState<Record<string, string>>({})
-  const [clearedCustomProviders, setClearedCustomProviders] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [saveFailed, setSaveFailed] = useState(false)
+  /**
+   * 密钥输入是**非受控**的：值只留在 DOM 里，React 不回写。
+   * 受控输入在 Android 输入法组合态（拼音/联想）下每敲一个字都要回写 value，
+   * 组合被打断就会出现「输入法截断后内容凭空消失」。这里只用 state 记长度给按钮用。
+   */
+  const [keyLength, setKeyLength] = useState(0)
+  const [keyCleaned, setKeyCleaned] = useState(false)
+  const keyInput = useRef<HTMLInputElement | null>(null)
+  /** 切步骤会把输入框卸载再挂回来；用 ref 记住原文，挂回时用 defaultValue 还原。 */
+  const keyMirror = useRef('')
   const savePending = useRef(false)
-  const customDraftDirty = useRef(false)
   const last = step === STEPS.length - 1
 
   const installed = ['ready', 'running'].includes(runtime.phase)
-  const authorized = shizuku.permission === 'granted'
-  const canOpenHarness = installed && !runtime.updateAvailable && busy === null && !saving
-  // 账号登录和 API Key 都是可用的模型凭据，登录必须先允许进入 Harness。
-  const modelConfigured = hasConfiguredModelCredential(settings)
-
-  useEffect(() => {
-    if (customDraftDirty.current) return
-    setCustomProviders(settings?.customModelProviders ?? [])
-    setCustomCredentials({})
-    setClearedCustomProviders([])
-  }, [settings])
+  const installing = runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting'
+  /** 凭据可能在 Harness 里配过，两条路都算「已配置」，界面上分别说明。 */
+  const keyConfiguredHere = settings?.configuredModelProviders.includes('deepseek') === true
+  const keyConfiguredInHarness = settings?.harnessConfiguredModelProviders?.includes('deepseek') === true
 
   const baseSettings = settings ?? {
     manifestUrl: '',
@@ -76,25 +82,33 @@ export function Onboarding({
     terminalFontSize: 14,
     configuredModelProviders: [],
   }
+
+  /** 从 DOM 读当前密钥，顺手完成清理；不依赖 React state，组合输入丢事件也不会丢内容。 */
+  const readApiKey = (): string => normalizeApiKey(keyInput.current?.value ?? '')
+
+  /** 组合输入结束时补一次同步：部分输入法只发 compositionend，不发 change。 */
+  const syncApiKey = (input: HTMLInputElement): void => {
+    const normalized = normalizeApiKey(input.value)
+    keyMirror.current = input.value
+    setKeyLength(normalized.length)
+    setKeyCleaned(normalized !== input.value)
+  }
+
   const saveModelSettings = async (): Promise<void> => {
     if (busy !== null || savePending.current || settings === null || onSaveSettings === undefined) return
+    const apiKey = readApiKey()
+    if (apiKey === '') return
     savePending.current = true
     setSaving(true)
     setSaveFailed(false)
     try {
-      const saved = await onSaveSettings(selectedProvider === 'custom' ? {
-        ...baseSettings,
-        customModelProviders: customProviders,
-        ...(Object.keys(customCredentials).length === 0 ? {} : { customProviderApiKeys: customCredentials }),
-        ...(clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: clearedCustomProviders }),
-      } : { ...baseSettings, providerApiKeys: { [selectedProvider]: apiKeyDraft.trim() } })
+      const saved = await onSaveSettings({ ...baseSettings, providerApiKeys: { deepseek: apiKey } })
       // 凭据只在落盘成功后清除；忙碌或保存失败时保留用户输入以便重试。
       if (saved) {
-        if (selectedProvider === 'custom') {
-          customDraftDirty.current = false
-          setCustomCredentials({})
-          setClearedCustomProviders([])
-        } else setApiKeyDraft('')
+        if (keyInput.current !== null) keyInput.current.value = ''
+        keyMirror.current = ''
+        setKeyLength(0)
+        setKeyCleaned(false)
       } else setSaveFailed(true)
     } catch {
       setSaveFailed(true)
@@ -119,160 +133,72 @@ export function Onboarding({
             <>
               <h2 id="onboarding-title" className="onboarding-title"><Icon size={22} />{t(STEPS[step].title)}</h2>
               {step === 0 && (
-                <div className="onboarding-body">
-                  <p>{t("DeepSeek Harness 移动版在本机运行 Ubuntu 环境，提供对话、终端和应用管理功能。")}</p>
-                  <ul>
-                    <li>{t("Harness 的本地服务仅供本机访问；模型请求会发送给你配置的模型服务。")}</li>
-                    <li>{t("在此保存的模型密钥会在本机加密存储，供 Harness 连接模型服务使用；")}</li>
-                    <li>{t("运行环境和审计日志保存在应用私有目录中；")}</li>
-                    <li>{t("Ubuntu 内的 root 身份不等于手机 Root 权限，不能绕过 Android 限制修改系统文件。重置运行环境会清除其中的改动。")}</li>
-                    <li>{t("已内置 Node.js、Python 3 与常用工具（busybox、jq、unzip）；gcc 等编译工具不在包内；")}</li>
-                    <li>{t("如需访问手机文件或系统操作，请配合 Shizuku 设备 Shell。")}</li>
-                  </ul>
-                </div>
-              )}
-              {step === 1 && (
-                <div className="onboarding-body">
-                  <p>{t("首次使用需要安装 Ubuntu 运行环境（数百 MB）。应用内置的安装包可离线安装；使用在线来源时，建议通过 Wi-Fi 下载。")}</p>
-                  {!installed && needsManifestConfiguration(settings) && (
-                    <p className="onboarding-warn">{t("尚未配置运行时下载地址：请先在「设置 → 后台」填写清单地址与 SHA-256（两者必须成对）。")}</p>
-                  )}
-                  <p className="onboarding-status">
-                    {t("当前状态：")}{installed ? t("已安装") + (runtime.phase === 'running' ? t(" · 运行中") : '') : runtime.phase === 'downloading' || runtime.phase === 'verifying' || runtime.phase === 'extracting' ? t("正在安装…") : t("未安装")}
-                  </p>
-                  <p className="onboarding-status">{t("运行环境未预装 C 编译器。安装后可在「设置 → 版本管理 → 运行时自检」查看可用工具；缺少可选工具不影响基本使用。如需编译代码，请自行安装所需工具链。")}</p>
-                  <button className="button button-primary" type="button" disabled={busy !== null || installed} onClick={onInstall}>
-                    {busy === 'install' ? <Loader2 className="spin" size={18} /> : <Blocks size={18} />}
-                    {t("安装运行时")}</button>
-                </div>
-              )}
-              {step === 2 && (
                 <form className="onboarding-body" onSubmit={event => {
                   event.preventDefault()
                   void saveModelSettings()
                 }}>
                   <fieldset className="onboarding-fields" disabled={saving}>
-                  <p>{t("可登录 DeepSeek 账号，或选择模型供应商并保存 API Key。密钥在本机加密保存，保存后不再显示。")}</p>
-                  <div className="provider-account-card">
-                    <div>
-                      <strong>{t("DeepSeek 账号")}</strong>
-                      <span>{settings?.deepSeekAccountConfigured === true ? t("已登录，可使用账号模型") : t("登录 DeepSeek 账号后使用账号模型，无需填写 API Key")}</span>
-                    </div>
-                    <button className="button button-secondary compact-button" type="button" disabled={!canOpenHarness} onClick={onOpenHarnessConfirmed}>
-                      {settings?.deepSeekAccountConfigured === true ? <Rocket size={16} /> : <LogIn size={16} />}
-                      {settings?.deepSeekAccountConfigured === true ? t("打开 Harness 管理账号") : t("登录 DeepSeek 账号")}
-                    </button>
-                  </div>
-                  <p className="onboarding-status">{t("打开 Harness 后，在侧栏「更多」菜单选择登录；登录完成后返回此页可刷新账号状态。")}</p>
-                  {!modelConfigured && (
-                    <p className="onboarding-warn">{t("开始对话前需登录 DeepSeek 账号或保存一份模型 API Key。")}</p>
-                  )}
+                  <p>{t("粘贴一份模型 API Key 就能开始用。密钥保存在本机，保存后不再显示。")}</p>
                   <label className="field">
-                    <span>{t("供应商")}</span>
-                    <select value={selectedProvider} onChange={event => setSelectedProvider(event.target.value as ModelProviderId | 'custom')}>
-                      {MODEL_PROVIDERS.map(provider => (
-                        <option key={provider.id} value={provider.id}>{provider.label}</option>
-                      ))}
-                      <option value="custom">{t('自定义')}</option>
-                    </select>
-                  </label>
-                  {selectedProvider !== 'custom' && <label className="field">
-                    <span>{MODEL_PROVIDERS.find(provider => provider.id === selectedProvider)?.label ?? selectedProvider} API Key</span>
+                    <span>DeepSeek API Key</span>
                     <input
-                      type="password"
-                      autoComplete="new-password"
+                      ref={keyInput}
+                      type="text"
+                      inputMode="text"
+                      autoComplete="off"
+                      autoCapitalize="none"
+                      autoCorrect="off"
                       spellCheck={false}
-                      maxLength={200}
+                      enterKeyHint="done"
+                      maxLength={512}
+                      defaultValue={keyMirror.current}
                       placeholder={t("粘贴 API Key")}
-                      value={apiKeyDraft}
-                      onChange={event => setApiKeyDraft(event.target.value)}
+                      onChange={event => syncApiKey(event.currentTarget)}
+                      onCompositionEnd={event => syncApiKey(event.currentTarget)}
+                      onBlur={event => syncApiKey(event.currentTarget)}
                     />
-                  </label>}
-                  {selectedProvider === 'custom' && <CustomProviders
-                    providers={customProviders}
-                    configured={settings?.configuredCustomModelProviders ?? []}
-                    harnessConfigured={settings?.harnessConfiguredCustomModelProviders ?? []}
-                    credentials={customCredentials}
-                    cleared={clearedCustomProviders}
-                    onChange={value => { customDraftDirty.current = true; setCustomProviders(value) }}
-                    onCredentials={value => { customDraftDirty.current = true; setCustomCredentials(value) }}
-                    onClear={value => { customDraftDirty.current = true; setClearedCustomProviders(value) }}
-                  />}
-                  <button className="button button-primary" type="submit" disabled={busy !== null || saving || settings === null || onSaveSettings === undefined || (selectedProvider === 'custom' ? customProviders.length === 0 : apiKeyDraft.trim() === '')}>
-                    <KeyRound size={18} />{selectedProvider === 'custom' ? t('保存自定义供应商') : t('保存 API Key')}
+                  </label>
+                  <p className="onboarding-status">
+                    {keyLength > 0 ? t("已输入 {0} 个字符", String(keyLength)) : t("首次配置不遮罩密钥，方便你确认粘贴完整。")}
+                    {keyCleaned && ' ' + t("已自动去掉空格、换行与引号。")}
+                  </p>
+                  <button className="button button-primary" type="submit" disabled={busy !== null || saving || settings === null || onSaveSettings === undefined || keyLength === 0}>
+                    <KeyRound size={18} />{t('保存 API Key')}
                   </button>
-                  <p className="onboarding-status">{selectedProvider === 'custom'
-                    ? t('已配置 {0} 个自定义供应商密钥', new Set([
-                        ...(settings?.configuredCustomModelProviders ?? []),
-                        ...(settings?.harnessConfiguredCustomModelProviders ?? []),
-                      ]).size)
-                    : settings?.configuredModelProviders.includes(selectedProvider)
-                      ? t('已配置')
-                      : settings?.harnessConfiguredModelProviders?.includes(selectedProvider)
-                        ? t('已在 Harness 中配置')
-                        : t('未配置')}</p>
+                  <p className="onboarding-status">{keyConfiguredHere
+                    ? t('已配置')
+                    : keyConfiguredInHarness
+                      ? t('已在 Harness 中配置')
+                      : t('未配置')}</p>
                   {saveFailed && <p role="alert">{t('未能保存配置，输入已保留，请重试。')}</p>}
+                  {/* 窗口里只做两件事：配 API Key、装运行环境。其余设置留给 Harness 与设置页。 */}
+                  <p className="onboarding-status">{t("这一页只配置 API Key，其它设置装好后按需调整。")}</p>
+                  {/* 用第三方接口的人不该在这一步卡住：告诉他们去哪儿配。 */}
+                  <p className="onboarding-status">{t("用第三方接口？这步可以跳过，装好环境后在「设置 → 模型供应商 → 自定义供应商」里填 Base URL 与密钥。")}</p>
                   </fieldset>
                 </form>
               )}
-              {step === 3 && (
+              {step === 1 && (
                 <div className="onboarding-body">
-                  <p>{t("Shizuku 让「设备 Shell」终端以 shell 权限执行系统命令（可选，不影响 Ubuntu 终端）。")}</p>
-                  <ul>
-                    <li>{t("请先安装并启动 Shizuku，再为本应用授权；")}</li>
-                    <li>{t("授权可随时在「设置」页撤销；")}</li>
-                    <li>{t("获得授权后才能使用设备 Shell。")}</li>
-                  </ul>
-                  <div className="onboarding-actions-row">
-                    {!shizuku.installed || !shizuku.running ? (
-                      <button className="button button-primary" type="button" onClick={onOpenShizuku}>{t("安装 / 打开 Shizuku")}</button>
-                    ) : (
-                      <button className="button button-primary" type="button" disabled={busy !== null || authorized} onClick={onAuthorize}>
-                        {busy === 'shizuku-permission' ? <Loader2 className="spin" size={18} /> : <ShieldCheck size={18} />}
-                        {authorized ? t("已授权") : t("授权设备 Shell")}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-              {step === 4 && (
-                <div className="onboarding-body">
-                  <p>{t("Harness 对话界面基于官方前端，已适配手机屏幕和触控操作。模型、推理强度等选项仍在 Harness 中设置。")}</p>
-                  <p>{t("插件统一在设置页的「插件管理」中管理，应用不会静默关闭任何插件；需要更多插件时，可在 Harness 内的市场页面按需安装。")}</p>
-                </div>
-              )}
-              {step === 5 && (
-                <div className="onboarding-body">
-                  {modelConfigured ? (
+                  <p>{t("应用需要一份 Ubuntu 运行环境，装一次就够，之后可离线使用。")}</p>
+                  <p className="onboarding-status">
+                    {t("当前状态：")}{installed ? t("已安装") + (runtime.phase === 'running' ? t(" · 运行中") : '') : installing ? t("正在安装…") : t("未安装")}
+                  </p>
+                  <p className="onboarding-status">{usesBundledSource(settings)
+                    ? t("这次使用 APK 内置镜像，不联网也能装完。")
+                    : t("这次从你设置的在线地址下载，建议连 Wi-Fi。")}</p>
+                  <button className="button button-primary" type="button" disabled={busy !== null || installed || installing} onClick={onInstall}>
+                    {busy === 'install' ? <Loader2 className="spin" size={18} /> : <Blocks size={18} />}
+                    {installed ? t("已安装") : t("安装运行时")}
+                  </button>
+                  {!installed && onOpenVersions !== undefined && (
                     <>
-                      <p>{t("已检测到模型配置。Harness 启动后即可开始对话，也可随时返回这里管理运行环境和终端。")}</p>
-                      <div className="onboarding-actions-row">
-                        <button className="button button-primary" type="button" disabled={!canOpenHarness} onClick={onOpenHarness}>
-                          <Rocket size={18} />
-                          {t("打开 Harness")}</button>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <p className="onboarding-warn">{t("尚未检测到模型凭据。可打开 Harness 登录 DeepSeek 账号，或先配置 API Key；如果已配置其他来源的凭据，也可以直接打开。")}</p>
-                      <ul>
-                        <li>{t("密钥在本机加密保存，保存后不再显示；")}</li>
-                        <li>{t("配置成功后本步骤会出现「打开 Harness」按钮；")}</li>
-                        <li>{t("应用只读取 Harness 中的凭据配置状态，无法确认凭据是否有效，也可能无法识别其他来源的凭据。")}</li>
-                      </ul>
-                      <div className="onboarding-actions-row">
-                        <button className="button button-primary" type="button" disabled={busy !== null} onClick={() => setStep(2)}>
-                          <KeyRound size={18} />{t("去配置模型账号或 API Key")}
-                        </button>
-                        <button className="button button-secondary" type="button" disabled={!canOpenHarness} onClick={onOpenHarnessConfirmed}>
-                          <LogIn size={18} />{t("登录 DeepSeek 账号")}
-                        </button>
-                        <button className="button button-secondary" type="button" disabled={!canOpenHarness} onClick={onOpenHarnessConfirmed}>
-                          <Rocket size={18} />{t("我已在 Harness 内配置过，仍要打开")}
-                        </button>
-                      </div>
+                      <button className="button button-secondary" type="button" onClick={onOpenVersions}>{t("安装失败？去在线下载其它版本")}</button>
+                      <p className="onboarding-status">{t("自行构建的 APK 里可能没有内置镜像；这时到「版本管理 → 在线可用版本」下载一个带校验的版本即可。")}</p>
                     </>
                   )}
+                  <p className="onboarding-status">{t("内置工具已含 Node.js、Python 3、busybox、jq 与 unzip；不含 C 编译器，需要时自行安装。")}</p>
+                  <p className="onboarding-status">{t("装好运行环境后打开 Harness 就能直接对话。")}</p>
                 </div>
               )}
               <div className="dialog-actions onboarding-nav">

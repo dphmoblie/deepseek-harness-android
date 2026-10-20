@@ -189,6 +189,7 @@ export const bridge = {
   openAppUpdateInstallSettings: vi.fn(),
   managePlugins: vi.fn(),
   testModelConnectivity: vi.fn(),
+  listModelCatalog: vi.fn(),
   getDiagnosticLogState: vi.fn(),
   readDiagnosticLog: vi.fn(),
   setDiagnosticLogSettings: vi.fn(),
@@ -673,6 +674,11 @@ export function beforeEachAppTest(): void {
   bridge.connectShizuku.mockResolvedValue({ ...shizuku, permission: 'granted', connected: true })
   bridge.openShizuku.mockResolvedValue(undefined)
   bridge.testModelConnectivity.mockResolvedValue({ ok: true, status: 200, latencyMs: 120, message: '✓ 连接成功 (120ms)' })
+  // 获取上游模型：默认回一组 OpenAI 风格条目，用例要别的结果就自己覆盖。
+  bridge.listModelCatalog.mockResolvedValue({
+    ok: true, status: 200, latencyMs: 120, message: '✓ 获取到 2 个模型 (120ms)',
+    models: [{ id: 'upstream-first', name: 'Upstream First' }, { id: 'upstream-second', name: 'Upstream Second' }],
+  })
 }
 
 /**
@@ -765,13 +771,25 @@ export async function arriveAtSettingsHome(): Promise<void> {
   await openSettingsHome()
 }
 
-export async function openSettingsPage(name: string): Promise<void> {
+/**
+ * 打开一个设置二级页；给了 [sub] 就再点进它里面的三级页。
+ *
+ * 三级页（自动化设置里的无障碍 / 副屏 / 自动参数）与二级页是同一条路由，
+ * 所以这里点的是二级页上那一行入口按钮，等待口径与二级页一致：先等按钮、再等标题。
+ */
+export async function openSettingsPage(name: string, sub?: string): Promise<void> {
   await openSettingsHome()
   const entry = await screen.findByRole('button', { name: new RegExp(name) }, {
     timeout: SETTINGS_NAV_TIMEOUT_MS,
   })
   fireEvent.click(entry)
   await screen.findByRole('heading', { name }, { timeout: SETTINGS_NAV_TIMEOUT_MS })
+  if (sub === undefined) return
+  const subEntry = await screen.findByRole('button', { name: new RegExp(sub) }, {
+    timeout: SETTINGS_NAV_TIMEOUT_MS,
+  })
+  fireEvent.click(subEntry)
+  await screen.findByRole('heading', { name: sub, level: 1 }, { timeout: SETTINGS_NAV_TIMEOUT_MS })
 }
 
 /**

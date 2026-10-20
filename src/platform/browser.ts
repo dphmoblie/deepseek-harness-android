@@ -787,5 +787,30 @@ export function createBrowserBridge(): RuntimeBridge {
         message: '✓ 连接成功 (95ms)',
       })
     },
+    // 浏览器预览没有原生桥，也不该真的去请求各家上游（跨域、且会把密钥交给网页环境）。
+    // 返回固定示例并明说「示例」，让设置页的交互可以走通而不会被误认为真实模型清单。
+    listModelCatalog: options => {
+      const draftKey = options.apiKey?.trim()
+      const isSaved = configuredProviders.has(options.providerId as ModelProviderId) || configuredCustomProviders.has(options.providerId)
+      if (!draftKey && !isSaved) {
+        return Promise.resolve({
+          ok: false,
+          status: 0,
+          latencyMs: 0,
+          message: '未提供 API Key 且本机未保存该供应商凭据',
+          models: [],
+        })
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        latencyMs: 95,
+        message: '浏览器预览：示例模型列表（未访问上游）',
+        models: [
+          { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+          { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+        ],
+      })
+    },
   }
 }

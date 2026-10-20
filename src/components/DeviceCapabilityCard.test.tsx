@@ -74,8 +74,8 @@ describe('设备能力卡片', () => {
     ])) } as unknown as RuntimeBridge
     render(<DeviceCapabilityCard bridge={bridge} onOpenDeviceShell={onOpenDeviceShell} />)
     const button = await screen.findByRole('button', { name: '设备 Shell 设置' })
-    expect(button.closest('p')?.textContent).toContain('AI Shell 开关没有打开')
-    expect(button.closest('p')?.textContent).toContain('到「设备 Shell 设置」开启 AI Shell')
+    expect(button.closest('p')?.textContent).toContain('设备命令通道没有就绪')
+    expect(button.closest('p')?.textContent).toContain('到「设备 Shell 设置」检查 Shizuku 授权')
     fireEvent.click(button)
     expect(onOpenDeviceShell).toHaveBeenCalledTimes(1)
   })

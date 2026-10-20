@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import { Loader2, Plus, RotateCcw, Trash2, Wifi } from 'lucide-react'
+import { Loader2, Plus, RefreshCw, RotateCcw, Trash2, Wifi } from 'lucide-react'
 import { t } from '../i18n'
-import type { CustomModelProvider, CustomProviderApi, ModelConnectivityResult } from '../platform/types'
+import type { CustomModelProvider, CustomProviderApi, CustomProviderModel, ModelCatalogResult, ModelConnectivityResult } from '../platform/types'
 import { MAX_CUSTOM_MODELS, MAX_CUSTOM_PROVIDERS } from '../platform/customProviders'
+import { mergeCatalogModels } from '../platform/modelCatalog'
+import { ApiKeyInput } from './ApiKeyInput'
 
 interface Props {
   providers: CustomModelProvider[]
@@ -16,6 +18,8 @@ interface Props {
   onCredentials: (credentials: Record<string, string>) => void
   onClear: (ids: string[]) => void
   onTestConnectivity?: (provider: CustomModelProvider, draftKey?: string) => Promise<ModelConnectivityResult>
+  /** 拉取上游模型列表；结果由本组件决定怎么并进模型表。 */
+  onFetchModels?: (provider: CustomModelProvider, draftKey?: string) => Promise<ModelCatalogResult>
 }
 
 export function CustomProviders({
@@ -28,9 +32,12 @@ export function CustomProviders({
   onCredentials,
   onClear,
   onTestConnectivity,
+  onFetchModels,
 }: Props) {
   const [testingId, setTestingId] = useState<string | null>(null)
   const [testResults, setTestResults] = useState<Record<string, ModelConnectivityResult>>({})
+  const [fetchingId, setFetchingId] = useState<string | null>(null)
+  const [catalogResults, setCatalogResults] = useState<Record<string, ModelCatalogResult>>({})
 
   const handleTest = async (provider: CustomModelProvider) => {
     if (!onTestConnectivity) return
@@ -43,9 +50,52 @@ export function CustomProviders({
     }
   }
 
+  /**
+   * 取回上游模型并并进模型表。
+   *
+   * 不经过 [update]：那个函数会顺手丢掉「测试连接」的结果，而获取模型不改变端点与密钥，
+   * 上一次连接成功的结论依然成立。
+   */
+  const handleFetch = async (index: number, provider: CustomModelProvider) => {
+    if (!onFetchModels) return
+    setFetchingId(provider.id)
+    try {
+      const result = await onFetchModels(provider, credentials[provider.id])
+      setCatalogResults(current => ({ ...current, [provider.id]: result }))
+      if (result.ok && result.models.length > 0) {
+        const models = mergeCatalogModels(provider.models, result.models)
+        onChange(providers.map((item, i) => i === index ? { ...item, models } : item))
+      }
+    } finally {
+      setFetchingId(null)
+    }
+  }
+
+  /**
+   * 丢掉某家供应商的测试结果。
+   *
+   * 结果只对「当时那一份 Base URL + 密钥」成立：用户改完字段继续往上打字时，
+   * 上一次的 401 还红在下面，看起来就像新填的内容也报错了。
+   */
+  const forgetResult = (id: string): void => {
+    setTestResults(current => {
+      if (current[id] === undefined) return current
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+  }
+
   const update = (index: number, changes: Partial<CustomModelProvider>): void => {
     onChange(providers.map((provider, i) => i === index ? { ...provider, ...changes } : provider))
+    forgetResult(providers[index].id)
   }
+
+  /** 只改模型表：不动「测试连接」的结论（端点与密钥都没变）。 */
+  const updateModels = (index: number, models: CustomProviderModel[]): void => {
+    onChange(providers.map((provider, i) => i === index ? { ...provider, models } : provider))
+  }
+
   return <div className="custom-providers">
     {providers.map((provider, index) => <div className="custom-provider" key={index}>
       <div className="custom-provider-heading">
@@ -74,18 +124,20 @@ export function CustomProviders({
         <option value="anthropic-messages">Anthropic Messages</option>
       </select></label>
       <label className="field"><span>Base URL</span><input required type="url" maxLength={2048} placeholder="https://api.example.com/v1" value={provider.baseUrl} onChange={event => update(index, { baseUrl: event.target.value })} /></label>
-      <label className="field"><span>API Key</span><input type="password" autoComplete="new-password" spellCheck={false} maxLength={200} value={credentials[provider.id] ?? ''}
+      <label className="field"><span>API Key</span><ApiKeyInput
+        value={credentials[provider.id] ?? ''}
         placeholder={harnessConfigured.includes(provider.id) && (!configured.includes(provider.id) || cleared.includes(provider.id))
           ? t('已在 Harness 中配置，留空保持不变')
           : configured.includes(provider.id) && !cleared.includes(provider.id)
             ? t('已配置，留空保持不变')
             : t('输入 API Key')}
-        onChange={event => {
+        onValueChange={value => {
           const next = { ...credentials }
-          if (event.target.value) next[provider.id] = event.target.value
+          if (value) next[provider.id] = value
           else delete next[provider.id]
           onCredentials(next)
           onClear(cleared.filter(id => id !== provider.id))
+          forgetResult(provider.id)
         }} /></label>
       <div className="credential-actions">
         {onTestConnectivity && (
@@ -99,14 +151,50 @@ export function CustomProviders({
             {testingId === provider.id ? t('正在测试…') : t('测试连接')}
           </button>
         )}
+        {onFetchModels && (
+          <button
+            type="button"
+            className="button button-secondary compact-button"
+            disabled={fetchingId === provider.id}
+            onClick={() => { void handleFetch(index, provider) }}
+          >
+            {fetchingId === provider.id ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+            {fetchingId === provider.id ? t('正在获取…') : t('获取模型')}
+          </button>
+        )}
         {configured.includes(provider.id) && <button type="button" className="button button-danger-quiet compact-button" onClick={() => {
           onCredentials(Object.fromEntries(Object.entries(credentials).filter(([id]) => id !== provider.id)))
           onClear(cleared.includes(provider.id) ? cleared.filter(id => id !== provider.id) : [...cleared, provider.id])
+          forgetResult(provider.id)
         }}>{cleared.includes(provider.id) ? <RotateCcw size={16} /> : <Trash2 size={16} />}{cleared.includes(provider.id) ? t('撤销清除密钥') : t('清除密钥')}</button>}
       </div>
       {testResults[provider.id] && (
         <div className={`connectivity-result ${testResults[provider.id].ok ? 'success' : 'error'}`}>
           {testResults[provider.id].message}
+        </div>
+      )}
+      {catalogResults[provider.id] && (
+        <div className={`connectivity-result ${catalogResults[provider.id].ok ? 'success' : 'error'}`}>
+          {catalogResults[provider.id].message}
+        </div>
+      )}
+      {catalogResults[provider.id]?.ok && catalogResults[provider.id].models.length > 1 && (
+        <div className="model-catalog-list" role="list" aria-label={t('上游模型')}>
+          {catalogResults[provider.id].models.map(entry => <button
+            key={entry.id}
+            type="button"
+            role="listitem"
+            className={`model-catalog-item${provider.models[0]?.id === entry.id ? ' is-selected' : ''}`}
+            aria-pressed={provider.models[0]?.id === entry.id}
+            title={t('设为第一个模型')}
+            onClick={() => {
+              // 点哪一条，哪一条就排到最前面：与「自动选第一个」是同一套规则，只是由用户指定。
+              updateModels(index, mergeCatalogModels(provider.models, [entry]))
+            }}
+          >
+            <span className="model-catalog-name">{entry.name}</span>
+            {entry.name !== entry.id && <span className="model-catalog-id">{entry.id}</span>}
+          </button>)}
         </div>
       )}
       {provider.models.map((model, modelIndex) => <fieldset className="custom-model" key={modelIndex}>

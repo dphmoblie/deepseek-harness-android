@@ -51,7 +51,8 @@ describe('设置首页：分组与分类筛选', () => {
 
     const runtimeGroup = screen.getByRole('region', { name: '后台' })
     expect(within(runtimeGroup).getByRole('button', { name: /Ubuntu 运行时/ })).toBeVisible()
-    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByText('设备 Shell')).toBeVisible()
+    // 设备 Shell 不再单独占一行：入口并进了「设备 Shell 设置」页里的「打开设备 Shell」按钮。
+    expect(within(screen.getByRole('region', { name: '设备与自动化' })).queryByText('设备 Shell')).toBeNull()
     // Harness 服务的启停统一在首页启动卡片，设置首页不再单列服务行。
     expect(within(runtimeGroup).queryByText('Harness 服务')).toBeNull()
 
@@ -82,7 +83,7 @@ describe('设置首页：分组与分类筛选', () => {
     await openSettingsHome()
 
     const entry = screen.getByRole('button', { name: /设备 Shell 设置/ })
-    expect(within(entry).getByText(`Shizuku 授权与 AI Shell · ${badge}`)).toBeVisible()
+    expect(within(entry).getByText(`Shizuku 授权与设备命令 · ${badge}`)).toBeVisible()
   })
 
   it('分类筛选只留这一类，并且点进去到对应设置', async () => {
@@ -97,10 +98,14 @@ describe('设置首页：分组与分类筛选', () => {
     expect(screen.getByRole('button', { name: '按分类筛选' })).toHaveClass('is-filtered')
     expect(screen.queryByRole('button', { name: /模型与密钥/ })).toBeNull()
     expect(screen.queryByRole('region', { name: '模型连接' })).toBeNull()
-    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByText('设备 Shell')).toBeVisible()
+    expect(within(screen.getByRole('region', { name: '设备与自动化' })).getByRole('button', { name: /设备 Shell 设置/ })).toBeVisible()
 
     fireEvent.click(screen.getByRole('button', { name: /自动化设置/ }))
-    expect(await screen.findByRole('heading', { name: '无障碍应用自动化' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '自动化能力' })).toBeVisible()
+    // 三级页入口在这一页：无障碍、副屏、自动参数
+    for (const name of ['无障碍', '副屏', '自动参数']) {
+      expect(screen.getByRole('button', { name: new RegExp(name) })).toBeVisible()
+    }
   })
 
   it('筛选只是显示层：不重读设置，也不写任何设置', async () => {
@@ -156,7 +161,6 @@ describe('设置首页：分组与分类筛选', () => {
     expect(screen.queryByRole('region', { name: 'Plugin extensions' })).toBeNull()
     expect(within(directory).queryByRole('button', { name: /Plugins/ })).toBeNull()
     expect(within(screen.getByRole('region', { name: 'Appearance and display' })).getByRole('button', { name: /^Theme/ })).toBeVisible()
-    expect(within(screen.getByRole('region', { name: 'Device and automation' })).getByText('Device Shell')).toBeVisible()
     expect(within(screen.getByRole('region', { name: 'Device and automation' })).getByText('Device Shell settings')).toBeVisible()
     expect(within(screen.getByRole('region', { name: 'Device and automation' })).getByText('Automation settings')).toBeVisible()
 

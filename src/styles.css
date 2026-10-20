@@ -2522,6 +2522,12 @@ button:disabled {
 .onboarding-actions-row { display: flex; gap: 9px; flex-wrap: wrap; }
 .onboarding-nav { display: flex; align-items: center; width: 100%; }
 .onboarding-spacer { flex: 1; }
+/* 折叠的高级项：默认收起，展开后与正文保持同一套间距。 */
+.onboarding-advanced { border-top: 1px solid var(--line-strong); padding-top: 9px; }
+.onboarding-advanced > summary { cursor: pointer; font-size: .94em; color: var(--muted); }
+.onboarding-advanced > summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.onboarding-advanced[open] > summary { margin-bottom: 9px; }
+.onboarding-advanced > *:not(summary) { margin: 0 0 9px; }
 
 /* 语言页适配窄屏及英文长文案，沿用管理界面的配色与控件风格。 */
 .language-screen {
@@ -3329,4 +3335,81 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   .settings-screen .section-title-action > .status-chip { grid-column: 2; justify-self: start; white-space: normal; }
   .settings-screen .range-field { flex-wrap: wrap; gap: 12px; }
   .settings-screen .range-field input[type="range"] { width: 100%; }
+}
+
+/* 设置页底部常驻保存条：二级与三级页都只有一个保存动作，固定在内容末尾而不是
+   跟着滚动消失 —— 用户在表单中部改完字段时也能一眼看到「还没保存」。
+   自动保存仍在离开这一页时执行，这里的按钮是主动保存的入口，两者共用同一份载荷。 */
+.settings-save-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 10px 0 calc(10px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--line);
+  background: var(--bg);
+}
+.settings-save-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted);
+  min-width: 0;
+}
+.settings-save-bar .button { flex: none; }
+
+/* 内置供应商的「默认模型」输入框 + 获取按钮 */
+.provider-model-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+/* 上游模型列表：点哪一条就把哪一条排到第一位，与自动选第一个是同一套规则。 */
+.model-catalog-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 176px;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+.model-catalog-item {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-chip);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.model-catalog-item.is-selected {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+.model-catalog-name { font-weight: 500; }
+.model-catalog-id { font-size: 0.6875rem; color: var(--muted); }
+.model-catalog-item.is-selected .model-catalog-id { color: var(--blue); }
+@media (max-width: 560px) {
+  .provider-model-field { grid-template-columns: minmax(0, 1fr); }
+  .settings-save-bar { flex-wrap: wrap; }
+  .settings-save-bar .button { width: 100%; }
 }
