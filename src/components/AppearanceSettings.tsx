@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Moon, Palette, Sun, SunMoon, RotateCcw } from 'lucide-react'
 import { t } from '../i18n'
 import { applyTextColor, applyTheme, clearCustomAccentColor, clearCustomTextColor, effectiveAccentColor, readCustomAccentColor, readCustomTextColor, readThemeMode, saveAccentMode, saveAccentSource, saveCustomAccentColor, saveCustomTextColor, saveThemeMode, useAccentMode, useAccentSource, useResolvedTheme, useThemeMode } from '../theme'

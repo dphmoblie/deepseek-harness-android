@@ -1,4 +1,4 @@
-﻿import appMark from './assets/app-mark.png'
+import appMark from './assets/app-mark.png'
 import { t, useLanguage } from './i18n'
 import { formatByteCount as formatBytes, formatDuration, useDownloadTelemetry } from './downloadTelemetry'
 import { PluginSettings } from './components/PluginSettings'

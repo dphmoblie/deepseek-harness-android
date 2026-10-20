@@ -1,4 +1,4 @@
-﻿package io.deepseekharness.mobile.runtime
+package io.deepseekharness.mobile.runtime
 
 import android.content.Context
 import io.deepseekharness.mobile.AppAuthenticationState

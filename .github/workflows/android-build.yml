@@ -1,4 +1,4 @@
-﻿name: Android CI (build + verify)
+name: Android CI (build + verify)
 
 on:
   push:

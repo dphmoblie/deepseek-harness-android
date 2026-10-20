@@ -1,4 +1,4 @@
-﻿import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge, FOREGROUND_SERVICE_SETTLE_MS, keepAlive, notInstalledState, openSettingsPage, readyState, runningState, settings } from './__tests__/appTestHarness'

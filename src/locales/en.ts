@@ -1,4 +1,4 @@
-﻿// 应用界面英文词典；不翻译用户输入、凭据或终端输出。
+// 应用界面英文词典；不翻译用户输入、凭据或终端输出。
 export const english: Readonly<Record<string, string>> = {
   "Harness 上游版本": "Upstream Harness versions",
   "直接安装官方 @deepseek-ai/dsh npm 包；Ubuntu 环境、会话与插件独立保留。": "Install the official @deepseek-ai/dsh npm package. Ubuntu, sessions, and plugins are kept separately.",
