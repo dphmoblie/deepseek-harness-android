@@ -91,6 +91,32 @@ function verifyLock(lock, selected, integrity) {
     if (CORE.test(name) && item.version !== selected) fail('HARNESS_DEPENDENCY_MISMATCH')
   }
 }
+/** `.pnpm` 目录名 → 版本串：`node-pty@1.2.0-beta.15(react@18.2.0)` 取 `1.2.0-beta.15`。 */
+const storedVersion = (entry, prefix) => entry.slice(prefix.length).split('(')[0]
+/** 版本串 → [数字段, 预发布段或 null]；非数字段按 0 处理，只用于排序，不用于校验。 */
+const versionParts = value => {
+  const [core, ...rest] = String(value).split('-')
+  return [core.split('.').map(part => Number(part)), rest.length === 0 ? null : rest.join('-')]
+}
+/**
+ * 比较两个版本串，供 `.pnpm` 兜底挑版本用。
+ *
+ * 不能用字符串排序代替：字典序会认为 `1.10.0` 小于 `1.9.0`，同一个包的多版本共存时就会挑到旧的
+ * 那个，随后复用分支上的版本相等校验失配，装好的 prebuilds 被弃用、退化成 node-gyp 现编译。
+ * 正式版大于同号预发布版（`1.2.0` > `1.2.0-beta.15`）。
+ */
+function compareVersion(left, right) {
+  const [coreLeft, preLeft] = versionParts(left)
+  const [coreRight, preRight] = versionParts(right)
+  for (let index = 0; index < Math.max(coreLeft.length, coreRight.length); index += 1) {
+    const diff = (coreLeft[index] ?? 0) - (coreRight[index] ?? 0)
+    if (Number.isFinite(diff) && diff !== 0) return diff > 0 ? 1 : -1
+  }
+  if (preLeft === preRight) return 0
+  if (preLeft === null) return 1
+  if (preRight === null) return -1
+  return preLeft > preRight ? 1 : -1
+}
 /** 在 npm 扁平布局、pnpm 虚拟存储和常规解析三种布局里定位单个包目录；找不到返回 null。 */
 function locate(modules, anchor, name) {
   const flat = path.join(modules, name)
@@ -99,7 +125,10 @@ function locate(modules, anchor, name) {
   const store = path.join(modules, '.pnpm')
   const prefix = name.replace('/', '+') + '@'
   const entries = fs.existsSync(store) ? fs.readdirSync(store).filter(entry => entry.startsWith(prefix)) : []
-  return entries.sort().reverse().map(entry => path.join(store, entry, 'node_modules', name))
+  // 多版本共存时取版本最高的那个，而不是名字排最后的那个。
+  return entries
+    .sort((left, right) => compareVersion(storedVersion(right, prefix), storedVersion(left, prefix)))
+    .map(entry => path.join(store, entry, 'node_modules', name))
     .find(candidate => fs.existsSync(path.join(candidate, 'package.json'))) ?? null
 }
 function createManager(root, execute = spawnSync, report = () => {}) {
