@@ -1,4 +1,4 @@
-// 应用界面英文词典；不翻译用户输入、凭据或终端输出。
+﻿// 应用界面英文词典；不翻译用户输入、凭据或终端输出。
 export const english: Readonly<Record<string, string>> = {
   "Harness 上游版本": "Upstream Harness versions",
   "直接安装官方 @deepseek-ai/dsh npm 包；Ubuntu 环境、会话与插件独立保留。": "Install the official @deepseek-ai/dsh npm package. Ubuntu, sessions, and plugins are kept separately.",
@@ -424,6 +424,10 @@ export const english: Readonly<Record<string, string>> = {
   "DSH 背景": "DSH background",
   "把外壳主题与背景同步到 DSH 页面": "Sync the shell theme and background to the DSH page",
   "DSH 背景与主题同步": "DSH background and theme sync",
+  "DSH 主题": "DSH theme",
+  "DSH 主题与同步": "DSH theme and sync",
+  "外壳与 DSH 是两个独立页面，主题不会自动共享。": "The shell and DSH are separate pages; the theme is not shared automatically.",
+  "按钮与输入框透明度、主题同步与恢复": "Button and input opacity, theme sync, and reset",
   "背景与卡片": "Background and cards",
   "后台运行": "Background runtime",
   "先连上运行时，再决定它能不能留在后台": "Connect the runtime first, then decide whether it may stay in the background",

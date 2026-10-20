@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { Moon, Palette, Sun, SunMoon, RotateCcw } from 'lucide-react'
 import { t } from '../i18n'
 import { applyTextColor, applyTheme, clearCustomAccentColor, clearCustomTextColor, effectiveAccentColor, readCustomAccentColor, readCustomTextColor, readThemeMode, saveAccentMode, saveAccentSource, saveCustomAccentColor, saveCustomTextColor, saveThemeMode, useAccentMode, useAccentSource, useResolvedTheme, useThemeMode } from '../theme'
@@ -29,7 +29,7 @@ const ACCENT_OPTIONS: readonly { value: AccentMode; label: string; color: string
 ]
 
 /** 一个页面里只显示其中一段：字号与配色、背景、或同步到 DSH。默认全显示（组件单独测试时用）。 */
-export type AppearanceScope = 'all' | 'appearance' | 'background' | 'dsh-background'
+export type AppearanceScope = 'all' | 'appearance' | 'background' | 'dsh-background' | 'dsh-theme'
 
 /**
  * 外观设置：自包含区块，接进设置页的方式与 LanguageSettings 一致。
@@ -42,7 +42,8 @@ export type AppearanceScope = 'all' | 'appearance' | 'background' | 'dsh-backgro
 export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope }) {
   const showAppearance = scope === 'all' || scope === 'appearance'
   const showBackground = scope === 'all' || scope === 'background'
-  const showSync = scope === 'all' || scope === 'dsh-background'
+  const showSyncBackground = scope === 'all' || scope === 'dsh-background'
+  const showDshTheme = scope === 'all' || scope === 'dsh-theme'
   const mode = useThemeMode()
   const accent = useAccentMode()
   const resolved = useResolvedTheme()
@@ -178,7 +179,7 @@ export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope 
       const preset = ACCENT_OPTIONS.find(option => option.value === accent)?.color ?? ACCENT_OPTIONS[0].color
       const accentColor = effectiveAccentColor() || preset
       const surface = adaptive ? { background: adaptive.background, surface: adaptive.surface } : deriveSurface(accentColor, resolved)
-      const theme: SyncedTheme = { mode: readThemeMode(), accent: accentColor, background: surface.background, surface: surface.surface, surfaceOpacity: card.opacity, syncBackground: includeBackground && backgroundRef !== null }
+      const theme: SyncedTheme = { mode: readThemeMode(), accent: accentColor, background: surface.background, surface: surface.surface, surfaceOpacity: card.opacity, controlOpacity: card.controlOpacity, syncBackground: includeBackground && backgroundRef !== null }
       await runtimeBridge.applyHarnessTheme(theme)
       let note = '已让 DSH 使用当前主题'
       if (theme.syncBackground) {
@@ -242,7 +243,7 @@ export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope 
     <section
       className="settings-section appearance-settings"
       aria-labelledby={showAppearance ? 'appearance-title' : undefined}
-      aria-label={showAppearance ? undefined : t(scope === 'dsh-background' ? 'DSH 背景与主题同步' : '背景与卡片')}
+      aria-label={showAppearance ? undefined : t(scope === 'dsh-theme' ? 'DSH 主题与同步' : scope === 'dsh-background' ? 'DSH 背景与主题同步' : '背景与卡片')}
     >
       {showAppearance && (
         <>
@@ -366,7 +367,7 @@ export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope 
           </div>
         </>
       )}
-      {showSync && (
+      {showSyncBackground && (
           <div className="appearance-customization appearance-sync">
             <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('外壳与 DSH 是两个独立页面，主题不会自动共享；颜色与明暗模式默认同步，背景需要单独勾选。')}</span></div>
             <div className="appearance-sync-background">
@@ -375,6 +376,24 @@ export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope 
               <small>{backgroundRef ? t('已选：{0}', backgroundRef.mime) : t('只记录文件地址，视频不复制、不设大小上限')}</small>
               <small>{t('开关与所选文件会记住，重启后仍按上次的选择显示。')}</small>
             </div>
+            {scope === 'dsh-background' && syncMessage && <p role="status">{t(syncMessage)}</p>}
+          </div>
+      )}
+      {showDshTheme && (
+          <div className="appearance-customization appearance-sync">
+            <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('外壳与 DSH 是两个独立页面，主题不会自动共享。')}</span></div>
+            {/* 这一项与外壳的「按钮与输入框不透明度」是同一个值：改完点同步即可带去 DSH。 */}
+            <label className="range-field">
+              <span><strong>{t('按钮与输入框不透明度')}</strong><small>{card.controlOpacity}%</small></span>
+              <input
+                type="range"
+                min="40"
+                max="100"
+                step="1"
+                value={card.controlOpacity}
+                onChange={event => updateCard({ ...card, controlOpacity: Number(event.target.value) })}
+              />
+            </label>
             <button type="button" className="compact-button" onClick={() => void sync()} disabled={syncing}>{t('让 DSH 使用当前主题')}</button>
             <button type="button" className="compact-button" onClick={() => void unsync()} disabled={syncing}>{t('恢复 DSH 默认主题')}</button>
             <p>{syncRecord ? `${t('上次同步')} ${new Date(syncRecord.syncedAt).toLocaleString()}` : t('还没有同步过')}</p>

@@ -1,4 +1,4 @@
-import appMark from './assets/app-mark.png'
+﻿import appMark from './assets/app-mark.png'
 import { t, useLanguage } from './i18n'
 import { formatByteCount as formatBytes, formatDuration, useDownloadTelemetry } from './downloadTelemetry'
 import { PluginSettings } from './components/PluginSettings'
@@ -39,6 +39,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   BellRing,
+  Palette,
   Bot,
   CheckCircle2,
   ChevronRight,
@@ -167,6 +168,7 @@ type AppView =
   | 'settings-terminal-typography'
   | 'settings-terminal-background'
   | 'settings-terminal-dsh-background'
+  | 'settings-terminal-dsh-theme'
   | 'settings-diagnostics-log'
   | 'settings-diagnostics-capability'
   | 'settings-diagnostics-feedback'
@@ -178,7 +180,7 @@ type AppView =
 
 /** 设置二级页：把原先的单页设置按功能分类，避免所有选项挤在一屏里。 */
 type SettingsPage = 'models' | 'runtime' | 'terminal' | 'device-shell' | 'automation' | 'diagnostics' | 'automation-accessibility' | 'automation-subscreen' | 'automation-params'
-  | 'terminal-typography' | 'terminal-background' | 'terminal-dsh-background'
+  | 'terminal-typography' | 'terminal-background' | 'terminal-dsh-background' | 'terminal-dsh-theme'
   | 'diagnostics-log' | 'diagnostics-capability' | 'diagnostics-feedback'
 
 const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView; parent?: SettingsPage }> = {
@@ -189,7 +191,8 @@ const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; vi
   'terminal-typography': { title: '字号与配色', hint: '字号、屏幕常亮、明暗模式与强调色', view: 'settings-terminal-typography', parent: 'terminal' },
   'terminal-background': { title: '背景', hint: '背景图片或视频、卡片外观', view: 'settings-terminal-background', parent: 'terminal' },
   // DSH 是另一个页面：它的主题与背景单独一页，不和外壳自己的背景混在一起。
-  'terminal-dsh-background': { title: 'DSH 背景', hint: '把外壳主题与背景同步到 DSH 页面', view: 'settings-terminal-dsh-background', parent: 'terminal' },
+  'terminal-dsh-background': { title: 'DSH 背景', hint: '选择要同步到 DSH 的背景文件', view: 'settings-terminal-dsh-background', parent: 'terminal' },
+  'terminal-dsh-theme': { title: 'DSH 主题', hint: '按钮与输入框透明度、主题同步与恢复', view: 'settings-terminal-dsh-theme', parent: 'terminal' },
   'device-shell': { title: '设备 Shell 设置', hint: 'Shizuku 授权与设备命令', view: 'settings-device-shell' },
   automation: { title: '自动化设置', hint: '无障碍、副屏与自动参数', view: 'settings-automation' },
   // 自动化设置下的三个三级页：都是同一件事的三条腿，返回键统一回「自动化设置」。
@@ -203,7 +206,7 @@ const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; vi
   'diagnostics-feedback': { title: '反馈', hint: '交流群与 GitHub 反馈入口', view: 'settings-diagnostics-feedback', parent: 'diagnostics' },
 }
 
-const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'device-shell', 'automation', 'automation-accessibility', 'automation-subscreen', 'automation-params', 'diagnostics', 'diagnostics-log', 'diagnostics-capability', 'diagnostics-feedback', 'terminal-typography', 'terminal-background', 'terminal-dsh-background']
+const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'device-shell', 'automation', 'automation-accessibility', 'automation-subscreen', 'automation-params', 'diagnostics', 'diagnostics-log', 'diagnostics-capability', 'diagnostics-feedback', 'terminal-typography', 'terminal-background', 'terminal-dsh-background', 'terminal-dsh-theme']
 
 function settingsPageOf(view: AppView): SettingsPage | null {
   const entry = SETTINGS_PAGES.find(page => SETTINGS_PAGE_META[page].view === view)
@@ -2533,6 +2536,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           <SettingsPageRow icon={<Settings2 size={20} />} page="terminal-typography" onOpen={onOpenSubpage} />
           <SettingsPageRow icon={<Image size={20} />} page="terminal-background" onOpen={onOpenSubpage} />
           <SettingsPageRow icon={<RefreshCw size={20} />} page="terminal-dsh-background" onOpen={onOpenSubpage} />
+          <SettingsPageRow icon={<Palette size={20} />} page="terminal-dsh-theme" onOpen={onOpenSubpage} />
         </div>
         )}
         {page === 'terminal-typography' && (
@@ -2574,6 +2578,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         )}
         {page === 'terminal-background' && <AppearanceSettings scope="background" />}
         {page === 'terminal-dsh-background' && <AppearanceSettings scope="dsh-background" />}
+        {page === 'terminal-dsh-theme' && <AppearanceSettings scope="dsh-theme" />}
 
         {page === 'runtime' && (
         <section className="settings-section" aria-labelledby="keep-alive-settings">

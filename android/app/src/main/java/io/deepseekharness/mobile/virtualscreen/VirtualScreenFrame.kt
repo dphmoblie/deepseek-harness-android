@@ -61,6 +61,9 @@ internal class VirtualScreenFrame(context: Context) : FrameLayout(context) {
         background = GradientDrawable().apply {
             setColor(HANDLE_COLOR)
             cornerRadius = handleSizePx / 3f
+            // 描边 + 深底色：之前是 35% 白，压在浅色应用（白底列表）上几乎看不见，
+            // 用户会以为「没有缩放功能」。描边让它在深浅两种画面上都有轮廓。
+            setStroke((1.5f * density).toInt().coerceAtLeast(1), HANDLE_BORDER_COLOR)
         }
         contentDescription = AppLanguage.localizedContext(context).getString(R.string.virtual_screen_resize)
     }
@@ -124,8 +127,9 @@ internal class VirtualScreenFrame(context: Context) : FrameLayout(context) {
     private fun dp(value: Int) = (value * density).toInt()
 
     private companion object {
-        /** 手柄底色：半透明白，压在画面上仍看得见，又不至于挡住内容。 */
-        const val HANDLE_COLOR = 0x59FFFFFF
+        /** 手柄底色：半透明黑，压在浅色画面上也有轮廓；再配一道白描边。 */
+        const val HANDLE_COLOR = 0x66000000
+        const val HANDLE_BORDER_COLOR = 0xCCFFFFFF.toInt()
 
         /** 芯片底色：半透明黑 + 白字，深浅两种画面上都能看清。 */
         const val CONTROL_BACKGROUND_COLOR = 0x8C000000.toInt()

@@ -210,6 +210,11 @@ describe('存储：三份互不覆盖的配置', () => {
     const base = { mode: 'dark' as const, accent: '#6fa8dc', background: '#101820', surface: '#18222c', surfaceOpacity: 86 }
     // 老版本记录里没有这个字段：那时同步的一定只有颜色。
     expect(validateSyncedTheme(base).syncBackground).toBe(false)
+    // 控件透明度同样按 100 迁移（老记录没有这一项）。
+    expect(validateSyncedTheme(base).controlOpacity).toBe(100)
+    expect(validateSyncedTheme({ ...base, controlOpacity: 60 }).controlOpacity).toBe(60)
+    expect(() => validateSyncedTheme({ ...base, controlOpacity: 39 })).toThrow()
+    expect(() => validateSyncedTheme({ ...base, controlOpacity: 100.5 })).toThrow()
     const withBackground = saveAccentSync({ ...base, syncBackground: true }, 1700000000000)!
     expect(withBackground.theme.syncBackground).toBe(true)
     expect(readAccentSync()?.theme.syncBackground).toBe(true)

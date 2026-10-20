@@ -762,7 +762,7 @@ describe('外观设置接线', () => {
     expect(window.localStorage.getItem('dsh-mobile-theme-v1')).toBe('dark')
   })
 
-  it('「主题」摆三行入口，字号配色、背景与 DSH 背景各在自己那页', async () => {
+  it('「主题」摆四行入口，字号配色、背景、DSH 背景与 DSH 主题各在自己那页', async () => {
     render(<App />)
   await arriveAtSettingsHome()
 
@@ -770,6 +770,7 @@ describe('外观设置接线', () => {
     expect(await screen.findByRole('button', { name: /字号与配色/ })).toBeVisible()
     expect(screen.getByRole('button', { name: /^背景/ })).toBeVisible()
     expect(screen.getByRole('button', { name: /DSH 背景/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /DSH 主题/ })).toBeVisible()
     // 二级页不再直接摆控件：字号滑杆和背景卡片都不该在这里。
     expect(screen.queryByRole('slider', { name: /字号/ })).toBeNull()
     expect(screen.queryByText('应用背景与卡片')).toBeNull()
@@ -790,6 +791,13 @@ describe('外观设置接线', () => {
     expect(await screen.findByText('同步到 DSH 页面')).toBeVisible()
     expect(screen.queryByText('应用背景与卡片')).toBeNull()
     expect(screen.queryByRole('region', { name: /界面主题/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: '让 DSH 使用当前主题' })).toBeNull()
+
+    await openSettingsPage('主题', 'DSH 主题')
+    expect(await screen.findByRole('slider', { name: /按钮与输入框不透明度/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: '让 DSH 使用当前主题' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '恢复 DSH 默认主题' })).toBeVisible()
+    expect(screen.queryByText('连背景一起同步')).toBeNull()
   })
 })
 
