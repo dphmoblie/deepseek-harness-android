@@ -1,20 +1,29 @@
 import { readCustomTextColor } from './theme'
 
-/** 用户选择的背景只存本机；媒体加密存入 IndexedDB，不上传到服务端。 */
-export interface CardAppearance { opacity: number; blur: number; color: string }
+/**
+ * 卡片外观 + 按钮/输入框的底色透明度。
+ *
+ * [controlOpacity] 与卡片不透明度分开：卡片管的是承载内容的底板，按钮与输入框是可直接
+ * 操作的控件，二者对「看得清」的要求不同（控件半透明过头会连边界都找不到）。
+ * 旧版本存储没有这个键，读取时按 100% 迁移，不改变既有外观。
+ */
+export interface CardAppearance { opacity: number; blur: number; color: string; controlOpacity: number }
 const APPEARANCE_KEY = 'dsh-card-appearance-v1'
 const APPEARANCE_EVENT = 'dsh-appearance-change'
 export const BACKGROUND_EVENT = 'dsh-background-change'
-export const DEFAULT_CARD: CardAppearance = { opacity: 100, blur: 0, color: '' }
+export const DEFAULT_CARD: CardAppearance = { opacity: 100, blur: 0, color: '', controlOpacity: 100 }
 const MAX_BACKGROUND_BYTES = 50 * 1024 * 1024
 
 function validateCard(value: unknown): CardAppearance {
   if (!value || typeof value !== 'object') throw new Error('卡片参数无效')
   const data = value as Record<string, unknown>
+  // 旧存储没有 controlOpacity：按 100% 迁移，不改变既有外观。
+  const controlOpacity = data.controlOpacity === undefined ? DEFAULT_CARD.controlOpacity : data.controlOpacity
   if (typeof data.opacity !== 'number' || !Number.isInteger(data.opacity) || data.opacity < 30 || data.opacity > 100 ||
     typeof data.blur !== 'number' || !Number.isInteger(data.blur) || data.blur < 0 || data.blur > 24 ||
+    typeof controlOpacity !== 'number' || !Number.isInteger(controlOpacity) || controlOpacity < 40 || controlOpacity > 100 ||
     typeof data.color !== 'string' || (data.color !== '' && !/^#[0-9a-f]{6}$/i.test(data.color))) throw new Error('卡片参数无效')
-  return { opacity: data.opacity, blur: data.blur, color: data.color }
+  return { opacity: data.opacity, blur: data.blur, color: data.color, controlOpacity }
 }
 export function readCard(): CardAppearance {
   try { return validateCard(JSON.parse(localStorage.getItem(APPEARANCE_KEY) ?? 'null')) } catch { return { ...DEFAULT_CARD } }
@@ -24,6 +33,8 @@ export function applyCard(value: CardAppearance): void {
   const root = document.documentElement
   root.style.setProperty('--card-opacity', `${checked.opacity}%`)
   root.style.setProperty('--card-blur', `${checked.blur}px`)
+  // 按钮与输入框共用这一条：两处控件各写一个变量，迟早出现「按钮透明了、输入框没跟上」。
+  root.style.setProperty('--control-opacity', `${checked.controlOpacity}%`)
   if (checked.color) {
     root.style.setProperty('--card-color', checked.color)
     const [r, g, b] = [1, 3, 5].map(offset => parseInt(checked.color.slice(offset, offset + 2), 16))

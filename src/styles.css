@@ -3585,3 +3585,37 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   border-color: var(--blue);
   background: var(--blue-soft);
 }
+
+/*
+ * 按钮与输入框共用同一条透明度：--control-opacity 由主题设置的「按钮与输入框」滑杆写入。
+ * 默认 100%（不加透明），旧版本存储迁移后外观不变。
+ */
+.button-primary {
+  background: color-mix(in srgb, var(--blue) var(--control-opacity, 100%), transparent);
+}
+.button-secondary {
+  background: color-mix(in srgb,
+    color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent)
+    var(--control-opacity, 100%), transparent);
+}
+.field input,
+.field select,
+.mono-input {
+  background: color-mix(in srgb, var(--surface-sunken) var(--control-opacity, 100%), transparent);
+}
+
+/* 背景文件选择：原生 <input type="file"> 的「未选择文件」不代表真实状态，把它藏进按钮里，
+   实际是否已选由旁边那行状态文字回答（见 AppearanceSettings）。 */
+.background-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.background-picker-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}

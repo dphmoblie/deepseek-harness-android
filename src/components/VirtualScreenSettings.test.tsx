@@ -80,6 +80,8 @@ function reading(label: string): string {
 
 beforeEach(() => {
   saveLanguage('zh-CN')
+  // 目标应用的记忆存在 localStorage：用例之间必须清掉，否则会互相回填。
+  window.localStorage.clear()
 })
 
 describe('目标应用副屏设置页', () => {
@@ -261,6 +263,24 @@ describe('目标应用副屏设置页', () => {
       densityDpi: 320,
     }))
     expect(await screen.findByText('已请求启动副屏；画面与帧率以状态区读数为准')).toBeInTheDocument()
+  })
+
+  it('重进页面时回填上次选过的目标应用，不必重新挑一次', async () => {
+    window.localStorage.setItem('dsh-virtual-screen-target-v1', 'com.example.last')
+    const start = vi.fn().mockResolvedValue(undefined)
+    const bridge = bridgeWith({
+      getVirtualScreenSettings: vi.fn().mockResolvedValue(settings()),
+      // 会话已经结束：原生状态里没有目标应用，界面只能靠自己记住的那一份。
+      getVirtualScreenState: vi.fn().mockResolvedValue(state()),
+      startVirtualScreen: start,
+    })
+    render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
+    fireEvent.click(await screen.findByRole('button', { name: '启动副屏' }))
+    await waitFor(() => expect(start).toHaveBeenCalledWith({
+      packageName: 'com.example.last',
+      adaptive: false,
+      orientation: 'auto',
+    }))
   })
 
   it('启动副屏在规格不全时不发那三项，避免只改到一半的尺寸', async () => {

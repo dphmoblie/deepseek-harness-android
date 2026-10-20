@@ -47,6 +47,20 @@ export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope 
   const [failed, setFailed] = useState<'theme' | 'accent' | null>(null)
   const [card, setCard] = useState<CardAppearance>(() => readCard())
   const [backgroundError, setBackgroundError] = useState('')
+  /**
+   * 本地是否已经存过一份背景。
+   *
+   * 原生 `<input type="file">` 永远显示「未选择文件」，即使背景已经加密存进 IndexedDB ——
+   * 用户重进这一页会以为选择丢了。用这个状态替它显示真实结论，输入框本身只当触发按钮。
+   */
+  const [hasAppBackground, setHasAppBackground] = useState(false)
+  useEffect(() => {
+    let active = true
+    void readBackground()
+      .then(blob => { if (active) setHasAppBackground(blob !== null) })
+      .catch(() => { if (active) setHasAppBackground(false) })
+    return () => { active = false }
+  }, [])
   const [customAccent, setCustomAccent] = useState(() => readCustomAccentColor())
   const [customTextColor, setCustomTextColor] = useState(() => readCustomTextColor())
   const source = useAccentSource()
@@ -249,12 +263,33 @@ export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope 
             ))}
           </div>
           {mode === 'system' && <p className="appearance-hint">{t('当前显示：{0}', t(resolved === 'dark' ? '深色' : '浅色'))}</p>}
+          {/*
+            * 按钮与输入框是同一组：它们都是可直接操作的控件，透明度必须一起调，
+            * 否则会出现「按钮半透明、输入框还是实底」的割裂感。选中态的强调色是另一组设置。
+            */}
+          <div className="appearance-customization">
+            <div className="appearance-accent-heading">
+              <strong>{t('按钮与输入框')}</strong>
+              <span>{t('统一控制按钮与输入框的底色透明度')}</span>
+            </div>
+            <label className="range-field">
+              <span><strong>{t('按钮与输入框不透明度')}</strong><small>{card.controlOpacity}%</small></span>
+              <input
+                type="range"
+                min="40"
+                max="100"
+                step="1"
+                value={card.controlOpacity}
+                onChange={event => { updateCard({ ...card, controlOpacity: Number(event.target.value) }) }}
+              />
+            </label>
+          </div>
           <div className="appearance-accent-block">
             <div className="appearance-accent-heading">
-              <strong>{t('强调色')}</strong>
-              <span>{t('用于按钮、进度条和状态提示')}</span>
+              <strong>{t('选中的强调色')}</strong>
+              <span>{t('用于选中项、进度条和状态提示')}</span>
             </div>
-            <div className="appearance-accent-options" role="radiogroup" aria-label={t('强调色')}>
+            <div className="appearance-accent-options" role="radiogroup" aria-label={t('选中的强调色')}>
               {ACCENT_OPTIONS.map(({ value, label, color }) => (
                 <label key={value} className={!customAccent && accent === value ? 'appearance-accent-option active' : 'appearance-accent-option'}>
                   <input
@@ -281,17 +316,32 @@ export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope 
         <>
           <div className="appearance-customization">
             <div className="appearance-accent-heading"><strong>{t('应用背景与卡片')}</strong><span>{t('背景文件只保存在本机，不会上传。')}</span></div>
-            <label className="field"><span>{t('背景图片或视频')}</span><input type="file" accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm" onChange={event => {
-              const file = event.target.files?.[0]
-              if (!file) return
-              void saveBackground(file).then(() => setBackgroundError('')).catch(() => setBackgroundError(t('无法保存背景，请检查文件格式和存储空间')))
-              // React 异步回调不保留输入节点；下一次选择由系统选择器处理。
-            }} /><small>{t('支持 PNG、JPG、WebP、GIF、MP4、WebM，最大 50 MB')}</small></label>
+            <label className="field"><span>{t('背景图片或视频')}</span>
+              <span className="background-picker">
+                <span className="button button-secondary compact-button">{t('选择背景文件')}</span>
+                <input
+                  className="background-picker-input"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm"
+                  onChange={event => {
+                    const file = event.target.files?.[0]
+                    if (!file) return
+                    void saveBackground(file)
+                      .then(() => { setBackgroundError(''); setHasAppBackground(true) })
+                      .catch(() => setBackgroundError(t('无法保存背景，请检查文件格式和存储空间')))
+                    // React 异步回调不保留输入节点；下一次选择由系统选择器处理。
+                  }}
+                />
+              </span>
+              <small>{hasAppBackground
+                ? t('已选择背景，重新选择会替换当前背景')
+                : t('支持 PNG、JPG、WebP、GIF、MP4、WebM，最大 50 MB')}</small>
+            </label>
             <div className="appearance-range-grid">
               <label className="range-field"><span><strong>{t('卡片不透明度')}</strong><small>{card.opacity}%</small></span><input type="range" min="30" max="100" step="1" value={card.opacity} onChange={event => { const next = { ...card, opacity: Number(event.target.value) }; updateCard(next) }} /></label>
               <label className="range-field"><span><strong>{t('卡片背景模糊')}</strong><small>{card.blur}px</small></span><input type="range" min="0" max="24" step="1" value={card.blur} onChange={event => { const next = { ...card, blur: Number(event.target.value) }; updateCard(next) }} /></label>
             </div>
-            <label className="field"><span>{t('卡片背景色')}</span><input type="color" value={card.color || (resolved === 'dark' ? '#171d24' : '#ffffff')} onChange={event => { const next = { ...card, color: event.target.value }; updateCard(next) }} /><button type="button" className="compact-button" onClick={() => { updateCard({ ...DEFAULT_CARD }); void clearBackground().catch(() => setBackgroundError(t('无法清除背景，请重试'))) }}><RotateCcw size={16} />{t('恢复默认')}</button></label>
+            <label className="field"><span>{t('卡片背景色')}</span><input type="color" value={card.color || (resolved === 'dark' ? '#171d24' : '#ffffff')} onChange={event => { const next = { ...card, color: event.target.value }; updateCard(next) }} /><button type="button" className="compact-button" onClick={() => { updateCard({ ...DEFAULT_CARD }); void clearBackground().then(() => setHasAppBackground(false)).catch(() => setBackgroundError(t('无法清除背景，请重试'))) }}><RotateCcw size={16} />{t('恢复默认')}</button></label>
             <label className="field"><span>{t('文字颜色')}</span><input aria-label={t('文字颜色')} type="color" value={customTextColor || (resolved === 'dark' ? '#e8eef5' : '#17202b')} onChange={event => { const value = event.target.value; if (saveCustomTextColor(value)) setCustomTextColor(value) }} /><button type="button" className="compact-button" onClick={() => { clearCustomTextColor(); setCustomTextColor('') }}>{t('使用默认')}</button></label>
             {backgroundError && <p role="alert">{t(backgroundError)}</p>}
           </div>

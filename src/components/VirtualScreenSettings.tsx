@@ -36,6 +36,14 @@ import './VirtualScreenSettings.css'
 
 const SPEC_FIELDS = ['widthPx', 'heightPx', 'densityDpi'] as const
 
+/**
+ * 上次选中的目标应用包名（只存包名）。
+ *
+ * 副屏会话结束后原生状态里不再有 targetPackage，界面只能靠自己记住「上次选的是谁」，
+ * 否则每次重进这一页都要重新挑一次应用。存储失败（隐私模式/配额满）只是退化成旧行为。
+ */
+const VIRTUAL_SCREEN_TARGET_KEY = 'dsh-virtual-screen-target-v1'
+
 /** 三项手填规格的字段名。 */
 type SpecField = typeof SPEC_FIELDS[number]
 
@@ -285,7 +293,20 @@ export function VirtualScreenSettings({
   // draft 是界面上正在编辑的那一份，baseline 是最后一次认为已经落盘的那一份。
   const [draft, setDraft] = useState<VirtualScreenSettingsSnapshot | null>(null)
   const [baseline, setBaseline] = useState<VirtualScreenSettingsSnapshot | null>(null)
-  const [target, setTarget] = useState('')
+  const [target, setTarget] = useState(() => {
+    /*
+     * 上次选过的目标应用。
+     *
+     * 会话结束（关闭副屏 / 杀掉页面）后原生状态里的 targetPackage 是空串，光靠它回填，
+     * 用户每次重进这一页都要重新挑一次应用。这里只记包名，不记任何界面内容。
+     */
+    try { return window.localStorage.getItem(VIRTUAL_SCREEN_TARGET_KEY) ?? '' } catch { return '' }
+  })
+  // 记住这次选的应用：会话结束后原生不再回报它，重进页面时靠这份记录回填。
+  useEffect(() => {
+    if (target === '') return
+    try { window.localStorage.setItem(VIRTUAL_SCREEN_TARGET_KEY, target) } catch { /* 存储不可用时退化为不记忆 */ }
+  }, [target])
   const [specText, setSpecText] = useState<Record<SpecField, string>>({ widthPx: '', heightPx: '', densityDpi: '' })
   const [specHint, setSpecHint] = useState('')
   // 悬浮窗宽度只有一个维度，用一条独立的输入串（0 显示成空格子，旁边写「跟随屏幕」）。
