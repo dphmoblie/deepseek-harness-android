@@ -29,7 +29,7 @@ const ACCENT_OPTIONS: readonly { value: AccentMode; label: string; color: string
 ]
 
 /** 一个页面里只显示其中一段：字号与配色、背景、或同步到 DSH。默认全显示（组件单独测试时用）。 */
-export type AppearanceScope = 'all' | 'appearance' | 'background' | 'dsh-background' | 'dsh-theme'
+export type AppearanceScope = 'all' | 'appearance' | 'background' | 'dsh'
 
 /**
  * 外观设置：自包含区块，接进设置页的方式与 LanguageSettings 一致。
@@ -42,8 +42,8 @@ export type AppearanceScope = 'all' | 'appearance' | 'background' | 'dsh-backgro
 export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope }) {
   const showAppearance = scope === 'all' || scope === 'appearance'
   const showBackground = scope === 'all' || scope === 'background'
-  const showSyncBackground = scope === 'all' || scope === 'dsh-background'
-  const showDshTheme = scope === 'all' || scope === 'dsh-theme'
+  // DSH 的主题与背景在同一页：两者都改的是另一个页面，分开只会让人来回找。
+  const showDsh = scope === 'all' || scope === 'dsh'
   const mode = useThemeMode()
   const accent = useAccentMode()
   const resolved = useResolvedTheme()
@@ -243,7 +243,7 @@ export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope 
     <section
       className="settings-section appearance-settings"
       aria-labelledby={showAppearance ? 'appearance-title' : undefined}
-      aria-label={showAppearance ? undefined : t(scope === 'dsh-theme' ? 'DSH 主题与同步' : scope === 'dsh-background' ? 'DSH 背景与主题同步' : '背景与卡片')}
+      aria-label={showAppearance ? undefined : t(scope === 'dsh' ? 'DSH 主题与同步' : '背景与卡片')}
     >
       {showAppearance && (
         <>
@@ -367,19 +367,18 @@ export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope 
           </div>
         </>
       )}
-      {showSyncBackground && (
+      {showDsh && (
           <div className="appearance-customization appearance-sync">
-            <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('外壳与 DSH 是两个独立页面，主题不会自动共享；颜色与明暗模式默认同步，背景需要单独勾选。')}</span></div>
+            <div className="appearance-accent-heading"><strong>{t('同步背景')}</strong><span>{t('背景文件只记地址；勾选后才随主题一起画到 DSH 页面。')}</span></div>
             <div className="appearance-sync-background">
               <label><input type="checkbox" checked={withBackground} onChange={event => void toggleBackground(event.target.checked)} /><span>{t('连背景一起同步')}</span></label>
               <button type="button" className="compact-button" onClick={() => void pickBackground()}>{backgroundRef ? t('重新选择背景文件') : t('选择背景文件')}</button>
               <small>{backgroundRef ? t('已选：{0}', backgroundRef.mime) : t('只记录文件地址，视频不复制、不设大小上限')}</small>
               <small>{t('开关与所选文件会记住，重启后仍按上次的选择显示。')}</small>
             </div>
-            {scope === 'dsh-background' && syncMessage && <p role="status">{t(syncMessage)}</p>}
           </div>
       )}
-      {showDshTheme && (
+      {showDsh && (
           <div className="appearance-customization appearance-sync">
             <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('外壳与 DSH 是两个独立页面，主题不会自动共享。')}</span></div>
             {/* 这一项与外壳的「按钮与输入框不透明度」是同一个值：改完点同步即可带去 DSH。 */}

@@ -427,6 +427,8 @@ export const english: Readonly<Record<string, string>> = {
   "DSH 主题": "DSH theme",
   "DSH 主题与同步": "DSH theme and sync",
   "外壳与 DSH 是两个独立页面，主题不会自动共享。": "The shell and DSH are separate pages; the theme is not shared automatically.",
+  "同步背景": "Sync background",
+  "背景文件只记地址；勾选后才随主题一起画到 DSH 页面。": "Only the file address is stored; tick the option to paint it behind the DSH page with the theme.",
   "按钮与输入框透明度、主题同步与恢复": "Button and input opacity, theme sync, and reset",
   "背景与卡片": "Background and cards",
   "后台运行": "Background runtime",
