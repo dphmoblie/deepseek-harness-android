@@ -16,6 +16,8 @@ import {
   HardDrive,
   Loader2,
   RefreshCw,
+  Share2,
+  ExternalLink,
   ShieldCheck,
   Trash2,
 } from 'lucide-react'
@@ -83,6 +85,8 @@ interface FilesScreenProps {
   onOpenFilesDirectory: (path?: string) => void
   /** 在当前目录新建文件夹；名称由用户输入，创建前一律校验。 */
   onCreateFilesFolder: () => void
+  /** 对当前目录中的普通文件打开系统分享面板或交给其它应用打开。 */
+  onExternalFileAction: (action: 'share' | 'open', path: string) => void
   onBack: () => void
 }
 
@@ -98,7 +102,7 @@ interface FilesScreenProps {
  * 误当成「还要再搬运一次」。底层那部分重复（绑定/缓存、路径校验、列举与建目录）
  * 已经在原生侧合并成一份实现（`RuntimeDirectoryBrowser` + `OptionalBindProvider`）。
  */
-export function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailboxDirectoryReadFailed, storageAccess, storageDirs, storageDirsReadFailed, storageDirectory, storageDirectoryReadFailed, filesRoot, lastMailboxImport, lastMailboxExport, onAddStorageDirectory, onRemoveStorageDirectory, onImportMailbox, onExportMailbox, onOpenAllFilesAccess, onRefreshMailbox, onSelectFilesRoot, onOpenFilesDirectory, onCreateFilesFolder, onBack }: FilesScreenProps) {
+export function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory, mailboxDirectoryReadFailed, storageAccess, storageDirs, storageDirsReadFailed, storageDirectory, storageDirectoryReadFailed, filesRoot, lastMailboxImport, lastMailboxExport, onAddStorageDirectory, onRemoveStorageDirectory, onImportMailbox, onExportMailbox, onOpenAllFilesAccess, onRefreshMailbox, onSelectFilesRoot, onOpenFilesDirectory, onCreateFilesFolder, onExternalFileAction, onBack }: FilesScreenProps) {
   /**
    * 投递区状态文案。
    *
@@ -305,7 +309,19 @@ export function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory
                       <Folder size={17} /><span>{entry.name}</span><ChevronRight size={15} />
                     </button>
                     : <div className="mailbox-entry mailbox-entry-file" key={entry.name} role="listitem">
-                      <FileText size={17} /><span>{entry.name}</span><small>{formatBytes(entry.bytes)}</small>
+                      <FileText size={17} /><span title={entry.name}>{entry.name}</span><small>{formatBytes(entry.bytes)}</small>
+                      <div className="mailbox-entry-actions">
+                        <button className="button button-secondary compact-button" type="button"
+                          aria-label={t("其他应用打开 {0}", entry.name)} title={t("其他应用打开 {0}", entry.name)}
+                          onClick={() => onExternalFileAction('open', nextPath)} disabled={busy !== null}>
+                          <ExternalLink size={15} /><span className="mailbox-entry-action-label">{t("其他应用打开")}</span>
+                        </button>
+                        <button className="button button-secondary compact-button" type="button"
+                          aria-label={t("分享 {0}", entry.name)} title={t("分享 {0}", entry.name)}
+                          onClick={() => onExternalFileAction('share', nextPath)} disabled={busy !== null}>
+                          <Share2 size={15} /><span className="mailbox-entry-action-label">{t("分享")}</span>
+                        </button>
+                      </div>
                     </div>
                 })}
               </div>
