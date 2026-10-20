@@ -3559,3 +3559,29 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   .settings-save-bar { flex-wrap: wrap; }
   .settings-save-bar .button { width: 100%; }
 }
+
+/*
+ * 免责说明区块：动作按钮另起一行，说明文字独占整行。
+ *
+ * `section-title-action` 是三列并排（图标 / 文字 / 按钮），这条说明句又长，窄屏上文字列被
+ * 挤到只剩一个字宽，看起来就是「竖排」。说明本来就不该和按钮抢同一行。
+ */
+.settings-subsection[aria-labelledby="automation-disclaimer"] .section-title-action {
+  grid-template-columns: 40px minmax(0, 1fr);
+}
+.settings-subsection[aria-labelledby="automation-disclaimer"] .section-title-action > .button {
+  grid-column: 2;
+  justify-self: start;
+  margin-top: 8px;
+}
+
+/* 次级按钮跟随强调色：此前固定用卡片墨色 + 中性边框，二级/三级页面上看起来像没上主题。 */
+.button-secondary {
+  color: var(--blue);
+  border-color: var(--blue-line);
+}
+.button-secondary:not(:disabled):hover {
+  color: var(--blue-hover);
+  border-color: var(--blue);
+  background: var(--blue-soft);
+}

@@ -40,7 +40,6 @@ import {
   ArrowLeft,
   BellRing,
   Bot,
-  Check,
   CheckCircle2,
   ChevronRight,
   CloudDownload,
@@ -1649,22 +1648,12 @@ interface SettingsScreenProps {
   onResetAccessibilityPassword: () => void
   onRequestNotificationPermission: () => void
   onReloadSettings: () => void
-  /** 草稿里是否有未保存的修改；决定底部保存按钮是否可点。 */
-  dirty: boolean
-  /**
-   * 把当前草稿写盘。
-   *
-   * 载荷由 App 组装（它持有草稿，也持有悬浮球的原生真值）。离开页面时的自动保存走同一个
-   * 入口，所以「点保存」与「离开这一页」写下去的永远是同一份内容。
-   */
-  onSaveDraft: (options?: { background?: boolean }) => Promise<boolean>
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, dirty, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveDraft, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
-  const [autoSaved, setAutoSaved] = useState(false)
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
   const [connectivityResults, setConnectivityResults] = useState<Record<string, ModelConnectivityResult>>({})
   /** 正在拉取上游模型列表的供应商；同一时刻只允许一个请求在飞。 */
@@ -1672,28 +1661,11 @@ function SettingsScreen({ accessibility, busy, diagnostic, dirty, draft, keepAli
   const [catalogResults, setCatalogResults] = useState<Record<string, ModelCatalogResult>>({})
   /** 默认模型输入框里的原始文本（可能还没成为合法 id，因此不一定已写进草稿）。 */
   const [modelInputs, setModelInputs] = useState<Record<string, string>>({})
-  const autoSavedTimerRef = useRef<number | null>(null)
-
-  /** Only show the saved state after the native write has actually succeeded. */
-  const showAutoSaved = useCallback(() => {
-    triggerHaptic('success')
-    setAutoSaved(true)
-    if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
-    autoSavedTimerRef.current = window.setTimeout(() => setAutoSaved(false), 2000)
-  }, [])
-
-  /**
-   * 手动保存与「离开这一页」共用同一个写盘入口（[onSaveDraft]，由 App 组装载荷）。
-   *
-   * 自动保存已经不在这里了：本组件不再需要防抖定时器，也不再在输入过程中写盘 ——
-   * 输入期间一次都不落盘，离开页面时才保存（见 App 里的 `saveSettingsDraft`）。
+  /*
+   * 写盘只发生在「离开这一页 / 切到后台」时，由 App 统一执行（见 App 里的
+   * `saveSettingsDraft`）。本组件因此不持有保存按钮、定时器或「已保存」徽标 ——
+   * 页面上不再有手动保存入口，输入期间也不会落盘。
    */
-  useEffect(() => {
-    return () => {
-      // 只清提示的定时器：真正在途的写盘由 App 负责，这里取消不了也不该取消。
-      if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
-    }
-  }, [])
   /** 总开关的一次操作还在路上：按钮在这期间全部禁用，避免连点出两次动作。 */
   const [automationPending, setAutomationPending] = useState(false)
   /**
@@ -2313,13 +2285,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, dirty, draft, keepAli
     }
   }
 
-  const saveDraft = (): void => {
-    // 载荷由 App 组装：它持有草稿与悬浮球的原生真值，离开页面时的自动保存走同一个入口。
-    void onSaveDraft().then(saved => {
-      if (saved) showAutoSaved()
-    })
-  }
-
   return (
     <div className="screen settings-screen">
       <div className="screen-heading management-heading">
@@ -2327,11 +2292,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, dirty, draft, keepAli
           <p className="eyebrow">{t("应用管理")}</p>
           <div className="heading-title-row">
             <h1>{t(SETTINGS_PAGE_META[page].title)}</h1>
-            {autoSaved && (
-              <span className="auto-save-pill success" role="status">
-                <Check size={13} /> {t("已保存")}
-              </span>
-            )}
             {busy === 'save-settings' && (
               <span className="auto-save-pill saving" role="status">
                 <Loader2 size={13} className="spin" /> {t("保存中...")}
@@ -2347,15 +2307,15 @@ function SettingsScreen({ accessibility, busy, diagnostic, dirty, draft, keepAli
       {/*
         * 单行输入里的回车一律不当「保存整页」：Android 输入法的完成键就是回车，
         * 而整页表单一次提交会先跑浏览器自带的字段校验（WebView 里那条气泡贴着输入框不散，
-        * 看起来就像一直在报错），再走一次前台保存把刚输入的密钥按落盘值清空。
-        * 回车留给输入法收候选；保存只走页面上的按钮。
+        * 看起来就像一直在报错）。回车留给输入法收候选；页面上也没有保存按钮，
+        * 写盘只发生在离开这一页或切到后台时。
         */}
       <form className="settings-form" onKeyDown={event => {
         if (event.key !== 'Enter') return
         const target = event.target as HTMLElement
         if (target.tagName === 'TEXTAREA' || target.tagName === 'BUTTON') return
         event.preventDefault()
-      }} onSubmit={event => { event.preventDefault(); saveDraft() }}>
+      }} onSubmit={event => { event.preventDefault() }}>
         {page === 'models' && (
         <fieldset className="settings-model-fieldset" disabled={inputLocked}>
         <section className="settings-section" aria-labelledby="model-settings">
@@ -3357,27 +3317,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, dirty, draft, keepAli
         </section>
         </>
         )}
-        {/*
-          * 手动保存只出现在二级页与三级页（设置首页另有确认式开关，不需要整页保存）。
-          *
-          * 不点保存也不会丢：离开这一页（切页 / 返回 / 回对话 / 系统返回键 / 边缘滑动）时
-          * App 会用同一份载荷自动保存一次。按钮在「没有改动」与「保存中」时置灰。
-          */}
-        <div className="settings-save-bar">
-          <p className="settings-note settings-save-hint">
-            {autoSaved
-              ? <><Check size={16} />{t("已保存")}</>
-              : dirty ? t("离开这一页时会自动保存；也可以现在保存。") : t("没有未保存的修改")}
-          </p>
-          <button
-            className="button button-primary"
-            type="submit"
-            disabled={!dirty || busy !== null}
-          >
-            {busy === 'save-settings' ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
-            {busy === 'save-settings' ? t("保存中…") : t("保存")}
-          </button>
-        </div>
       </form>
     </div>
   )
@@ -3468,15 +3407,9 @@ export function App() {
    * 刷新是为了同步原生侧改动，绝不能把用户正在输入的内容（典型是 API Key）清掉。
    * 只在保存成功后复位：离开设置区**不再**复位，草稿要活到进程结束。
    *
-   * 同一份事实还有一份 state（[settingsDraftDirtyState]）：ref 供回调判断，state 供界面
-   * 渲染 —— 底部保存按钮要不要可点，必须是可渲染的。
+   * 它只供回调判断（离开页面时要不要写盘），不再有可渲染的「保存」按钮，因此不需要镜像 state。
    */
   const settingsDraftDirty = useRef(false)
-  const [settingsDraftDirtyState, setSettingsDraftDirtyState] = useState(false)
-  const markDraftDirty = useCallback((dirty: boolean) => {
-    settingsDraftDirty.current = dirty
-    setSettingsDraftDirtyState(dirty)
-  }, [])
   /**
    * 把当前草稿写盘的回调。
    *
@@ -3607,11 +3540,11 @@ export function App() {
    */
   const updateSettingsDraft = useCallback((update: (current: SettingsDraft) => SettingsDraft, dirty = true) => {
     if (dirty) {
-      markDraftDirty(true)
+      settingsDraftDirty.current = true
       settingsDraftRevision.current += 1
     }
     setSettingsDraft(current => (current === null ? current : update(current)))
-  }, [markDraftDirty])
+  }, [])
 
   /**
    * 用落盘设置重建草稿并解除「未保存」标记。
@@ -3624,10 +3557,10 @@ export function App() {
    * 正在组合的输入法会被打断。后台只该刷新只读状态（见 [applyRefreshedSettings]）。
    */
   const resyncSettingsDraft = useCallback((next: RuntimeSettings) => {
-    markDraftDirty(false)
+    settingsDraftDirty.current = false
     settingsDraftRevision.current += 1
     setSettingsDraft(current => draftFromSettings(next, current))
-  }, [markDraftDirty])
+  }, [])
 
   /**
    * 只刷新只读状态、保留用户眼睛底下的输入。
@@ -4864,7 +4797,7 @@ export function App() {
         applyRefreshedSettings(saved)
       } else if (background) {
         // 后台保存是「离开页面 / 切后台」触发的：只解除「未保存」，不重建草稿。
-        markDraftDirty(false)
+        settingsDraftDirty.current = false
         settingsDraftRevision.current += 1
         applyRefreshedSettings(saved)
       } else {
@@ -4928,7 +4861,7 @@ export function App() {
       }
     })
     return savedSuccessfully
-  }, [applyRefreshedSettings, markDraftDirty, notify, readOverlayBall, resyncSettingsDraft, run])
+  }, [applyRefreshedSettings, notify, readOverlayBall, resyncSettingsDraft, run])
 
   /**
    * 把当前草稿写盘（手动保存与「离开这一页」共用）。
@@ -5328,7 +5261,7 @@ export function App() {
         /** 三级页的返回键回它的二级页；二级页照旧回设置首页。 */
         const parentPage = SETTINGS_PAGE_META[page].parent
         const backTarget: AppView = parentPage === undefined ? 'settings' : SETTINGS_PAGE_META[parentPage].view
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} dirty={settingsDraftDirtyState} onSaveDraft={saveSettingsDraft} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

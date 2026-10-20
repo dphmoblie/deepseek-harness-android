@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+﻿import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge, FOREGROUND_SERVICE_SETTLE_MS, notInstalledState, openSettingsPage, readyState, settings } from './__tests__/appTestHarness'
@@ -12,15 +12,19 @@ vi.mock('./components/TerminalPanel', () => ({
 import { App } from './App'
 
 /**
- * 点一次底部「保存」并等它结算。
+ * 触发一次「切到后台」：App 在页面隐藏时自动保存当前草稿。
  *
- * 写盘只发生在三个时刻：点保存、离开这一页、切到后台。用例里凡是要断言载荷的地方都走这个
- * 入口 —— 与用户真正能做的动作一致，而不是去等一个已经不存在了的防抖定时器。
+ * 页面上已经没有手动保存按钮，用例里凡是要断言载荷的地方都走这个入口 ——
+ * 与用户真正会做的动作一致（离开页面或切后台）。
  */
 async function pressSave(): Promise<void> {
   await act(async () => {
-    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
     await Promise.resolve()
+    // 只还原状态，不再发一次 visibilitychange：否则 App 会把可见事件当成『回前台』去重读设置，
+    // 用夹具里的旧值覆盖刚保存的结果（真机上原生会回已落盘值，不会出现这个问题）。
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
   })
 }
 
@@ -140,10 +144,7 @@ describe('悬浮球设置', () => {
       const toggle = await screen.findByRole('switch', { name: /悬浮球/ })
       fireEvent.click(toggle)
       fireEvent.click(toggle)
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: '保存' }))
-        await Promise.resolve()
-      })
+      await pressSave()
 
       await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
         ...settings,
@@ -414,7 +415,7 @@ describe('设置草稿与未保存的输入', () => {
     expect(back).toHaveValue('unit-test-pending-key')
   })
 
-  it('用户主动提交保存时仍禁用编辑，完成后恢复', async () => {
+  it('切到后台触发的保存不禁用编辑，也不清空刚输入的密钥', async () => {
     let resolveSave!: (value: RuntimeSettings) => void
     const custom = {
       id: 'custom-1', name: 'Gateway', api: 'openai-completions' as const, baseUrl: 'https://gateway.example.invalid/v1',
@@ -426,20 +427,15 @@ describe('设置草稿与未保存的输入', () => {
     await arriveAtSettingsHome()
     await openSettingsPage('模型与密钥')
 
-    // 点底部「保存」。表单提交（输入法的完成键）走的是同一个入口。
     fireEvent.change(screen.getByLabelText(/DeepSeek API Key/), { target: { value: 'unit-test-save-key' } })
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '保存' }))
-      await Promise.resolve()
-    })
+    await pressSave()
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledTimes(1), { timeout: 2000 })
 
-    expect(screen.getByLabelText(/DeepSeek API Key/)).toBeDisabled()
-    expect(screen.getByLabelText('API Key')).toBeDisabled()
-    expect(screen.getByLabelText('供应商名称')).toBeDisabled()
-    expect(screen.getByRole('button', { name: '添加自定义供应商' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '登录 DeepSeek 账号' })).toBeDisabled()
-    expect(screen.queryByText('已保存')).not.toBeInTheDocument()
+    // 后台保存在途：输入控件必须仍可编辑，刚输入的字符也不能被清掉。
+    expect(screen.getByLabelText(/DeepSeek API Key/)).toBeEnabled()
+    expect(screen.getByLabelText(/DeepSeek API Key/)).toHaveValue('unit-test-save-key')
+    expect(screen.getByLabelText('API Key')).toBeEnabled()
+    expect(screen.getByLabelText('供应商名称')).toBeEnabled()
 
     await act(async () => { resolveSave({ ...settings, customModelProviders: [custom] }); await Promise.resolve() })
     await waitFor(() => expect(screen.getByLabelText(/DeepSeek API Key/)).toBeEnabled())
@@ -841,7 +837,7 @@ describe('后台页的运行时与设备 Shell 入口', () => {
     ), { timeout: 2000 })
   })
 
-  it('手动保存成功后显示已保存提示', async () => {
+  it('切到后台保存成功后提示设置已保存', async () => {
     bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
     render(<App />)
     await arriveAtSettingsHome()
@@ -849,10 +845,10 @@ describe('后台页的运行时与设备 Shell 入口', () => {
 
     fireEvent.click(await screen.findByRole('switch', { name: /悬浮球/ }))
     await pressSave()
-    expect((await screen.findAllByText('已保存')).length).toBeGreaterThanOrEqual(1)
+    expect(await screen.findByText('设置已保存')).toBeVisible()
   })
 
-  it('保存失败或仍在途时不显示已保存', async () => {
+  it('保存失败或仍在途时不谎称已保存', async () => {
     let resolveSave!: (value: RuntimeSettings) => void
     bridge.saveSettings.mockImplementationOnce(() => new Promise<RuntimeSettings>(resolve => { resolveSave = resolve }))
     render(<App />)
@@ -860,19 +856,16 @@ describe('后台页的运行时与设备 Shell 入口', () => {
     await openSettingsPage('后台', '后台保持')
 
     fireEvent.click(await screen.findByRole('switch', { name: /悬浮球/ }))
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '保存' }))
-      await Promise.resolve()
-    })
+    await pressSave()
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledTimes(1), { timeout: 2000 })
-    // 在途时只有「保存中…」，没有「已保存」。
-    expect(screen.queryByText('已保存')).not.toBeInTheDocument()
+    // 在途时页面不出现任何「已保存」/「设置已保存」字样。
+    expect(screen.queryByText('设置已保存')).not.toBeInTheDocument()
 
     await act(async () => {
       resolveSave({ ...settings, overlayBallEnabled: true })
       await Promise.resolve()
     })
-    expect((await screen.findAllByText('已保存')).length).toBeGreaterThan(0)
+    expect(await screen.findByText('设置已保存')).toBeVisible()
   })
 
   it('保存响应迟到时不会覆盖保存期间产生的新草稿', async () => {
@@ -884,10 +877,7 @@ describe('后台页的运行时与设备 Shell 入口', () => {
 
     const key = screen.getByLabelText(/DeepSeek API Key/)
     fireEvent.change(key, { target: { value: 'first-key' } })
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '保存' }))
-      await Promise.resolve()
-    })
+    await pressSave()
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledTimes(1), { timeout: 2500 })
 
     // The active save disables credential editing; a newer draft can still be

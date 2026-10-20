@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+﻿import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge, FOREGROUND_SERVICE_SETTLE_MS, keepAlive, notInstalledState, openSettingsPage, readyState, runningState, settings } from './__tests__/appTestHarness'
@@ -10,6 +10,23 @@ vi.mock('./components/TerminalPanel', () => ({
 }))
 
 import { App } from './App'
+
+/**
+ * 触发一次「切到后台」：页面隐藏时 App 会自动保存当前草稿。
+ *
+ * 页面上已经没有手动保存按钮了，用例里需要立即落盘时都走这个入口 ——
+ * 与用户真正会做的动作一致（离开页面或切到后台）。
+ */
+async function flushOnHide(): Promise<void> {
+  await act(async () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await Promise.resolve()
+    // 只还原状态，不再发一次 visibilitychange：否则 App 会把可见事件当成『回前台』去重读设置，
+    // 用夹具里的旧值覆盖刚保存的结果（真机上原生会回已落盘值，不会出现这个问题）。
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+  })
+}
 
 /**
  * 运行时与后台：「运行与后台」页承载的三件事。
@@ -38,11 +55,8 @@ describe('后台保持与恢复', () => {
     expect(toggle).toBeChecked()
     await waitFor(() => expect(bridge.requestNotificationPermission).toHaveBeenCalledTimes(1))
 
-    // 输入期间不落盘：点保存（或离开这一页）才写。
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '保存' }))
-      await Promise.resolve()
-    })
+    // 输入期间不落盘：离开这一页或切到后台才写。
+    await flushOnHide()
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, keepRuntimeInBackground: true }))
   })
 
@@ -59,11 +73,8 @@ describe('后台保持与恢复', () => {
 
     fireEvent.click(toggle)
     expect(toggle).toBeChecked()
-    // 输入期间不落盘：点保存才写。
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '保存' }))
-      await Promise.resolve()
-    })
+    // 输入期间不落盘：切到后台才写。
+    await flushOnHide()
 
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, prewarmHarness: true }))
     // 开启的当次会话也立即生效：设置回来之后才允许预启动。
@@ -148,17 +159,13 @@ describe('后台保持与恢复', () => {
       fireEvent.click(await screen.findByRole('button', { name: '打开应用设置' }))
       await openSettingsPage('后台', '后台保持')
 
-      // 开关变更本身不落盘：点一次「保存」才会写，并触发前台服务复核。
+      // 开关变更本身不落盘：离开页面 / 切到后台才写，并触发前台服务复核。
       const toggle = await screen.findByRole('switch', { name: /后台保持 Harness/ })
       fireEvent.click(toggle)
       fireEvent.click(toggle)
       // 勾选「后台保持」会顺带申请通知权限，那次操作在假时钟下要推一下才会让出忙碌锁。
       await act(async () => { await vi.advanceTimersByTimeAsync(50) })
-      expect(screen.getByRole('button', { name: '保存' })).toBeEnabled()
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: '保存' }))
-        await Promise.resolve()
-      })
+      await flushOnHide()
 
       await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
         ...settings,

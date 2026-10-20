@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+﻿import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { arriveAtShell, beforeEachAppTest, bridge, notInstalledState, openSettingsPage, readyState, runningState, settings, shizuku } from './__tests__/appTestHarness'
@@ -10,6 +10,18 @@ vi.mock('./components/TerminalPanel', () => ({
 }))
 
 import { App } from './App'
+
+/** 触发一次「切到后台」：页面隐藏时 App 自动保存当前设置草稿（页面已无保存按钮）。 */
+async function flushOnHide(): Promise<void> {
+  await act(async () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await Promise.resolve()
+    // 只还原状态，不再发一次 visibilitychange：否则 App 会把可见事件当成『回前台』去重读设置，
+    // 用夹具里的旧值覆盖刚保存的结果（真机上原生会回已落盘值，不会出现这个问题）。
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+  })
+}
 
 /**
  * 启动门禁与语言：应用从冷启动到「能进对话」这一段的前置条件。
@@ -371,11 +383,8 @@ describe('App conversation gate', () => {
     await openSettingsPage('主题', '字号与配色')
     const fontSlider = await screen.findByRole('slider', { name: /字号/ })
     fireEvent.change(fontSlider, { target: { value: '17' } })
-    // 输入期间不落盘：点保存才写。
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '保存' }))
-      await Promise.resolve()
-    })
+    // 输入期间不落盘：切到后台才写。
+    await flushOnHide()
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, terminalFontSize: 17 }))
     expect(await screen.findByText('设置已保存')).toBeInTheDocument()
   })
@@ -387,10 +396,7 @@ describe('App conversation gate', () => {
     await openSettingsPage('模型与密钥')
     fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: '保存' }))
-      await Promise.resolve()
-    })
+    await flushOnHide()
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
       ...settings,
       providerApiKeys: { openai: 'unit-test-openai-key' },
