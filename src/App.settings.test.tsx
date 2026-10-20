@@ -1,4 +1,4 @@
-﻿import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge, FOREGROUND_SERVICE_SETTLE_MS, notInstalledState, openSettingsPage, readyState, settings } from './__tests__/appTestHarness'
@@ -762,13 +762,14 @@ describe('外观设置接线', () => {
     expect(window.localStorage.getItem('dsh-mobile-theme-v1')).toBe('dark')
   })
 
-  it('「主题」只摆两行入口，字号配色与背景各在自己那页', async () => {
+  it('「主题」摆三行入口，字号配色、背景与 DSH 背景各在自己那页', async () => {
     render(<App />)
   await arriveAtSettingsHome()
 
     await openSettingsPage('主题')
     expect(await screen.findByRole('button', { name: /字号与配色/ })).toBeVisible()
-    expect(screen.getByRole('button', { name: /背景/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /^背景/ })).toBeVisible()
+    expect(screen.getByRole('button', { name: /DSH 背景/ })).toBeVisible()
     // 二级页不再直接摆控件：字号滑杆和背景卡片都不该在这里。
     expect(screen.queryByRole('slider', { name: /字号/ })).toBeNull()
     expect(screen.queryByText('应用背景与卡片')).toBeNull()
@@ -781,6 +782,13 @@ describe('外观设置接线', () => {
     await openSettingsPage('主题', '背景')
     expect(await screen.findByText('应用背景与卡片')).toBeVisible()
     expect(screen.queryByRole('slider', { name: /字号/ })).toBeNull()
+    expect(screen.queryByRole('region', { name: /界面主题/ })).toBeNull()
+    // DSH 同步已经独立成页，不再和本机背景挤在一起。
+    expect(screen.queryByText('同步到 DSH 页面')).toBeNull()
+
+    await openSettingsPage('主题', 'DSH 背景')
+    expect(await screen.findByText('同步到 DSH 页面')).toBeVisible()
+    expect(screen.queryByText('应用背景与卡片')).toBeNull()
     expect(screen.queryByRole('region', { name: /界面主题/ })).toBeNull()
   })
 })

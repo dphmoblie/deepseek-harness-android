@@ -28,19 +28,21 @@ const ACCENT_OPTIONS: readonly { value: AccentMode; label: string; color: string
   { value: 'rose', label: '玫瑰红', color: '#b33a61' },
 ]
 
-/** 一个页面里只显示其中一段：字号与配色、或背景。默认全显示（组件单独测试时用）。 */
-export type AppearanceScope = 'all' | 'appearance' | 'background'
+/** 一个页面里只显示其中一段：字号与配色、背景、或同步到 DSH。默认全显示（组件单独测试时用）。 */
+export type AppearanceScope = 'all' | 'appearance' | 'background' | 'dsh-background'
 
 /**
  * 外观设置：自包含区块，接进设置页的方式与 LanguageSettings 一致。
  *
- * `scope` 让「字号与配色」和「背景」分成两个设置页：两段各自是独立的卡片组，
+ * `scope` 把主题拆成三个设置页：字号与配色、背景、DSH 同步。前两段是应用外壳自己的外观，
+ * 最后一段要单独一页是因为它改的是**另一个页面**（DSH），与「本机长什么样」是两件事。
  * 默认 'all' 保持整块渲染，组件自身的规则测试可以直接挂载。
  * 组件只负责展示与转发，主题的解析与落地全在 src/theme.ts 里（可单独测试）。
  */
 export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope }) {
-  const showAppearance = scope !== 'background'
-  const showBackground = scope !== 'appearance'
+  const showAppearance = scope === 'all' || scope === 'appearance'
+  const showBackground = scope === 'all' || scope === 'background'
+  const showSync = scope === 'all' || scope === 'dsh-background'
   const mode = useThemeMode()
   const accent = useAccentMode()
   const resolved = useResolvedTheme()
@@ -240,7 +242,7 @@ export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope 
     <section
       className="settings-section appearance-settings"
       aria-labelledby={showAppearance ? 'appearance-title' : undefined}
-      aria-label={showAppearance ? undefined : t('背景与卡片')}
+      aria-label={showAppearance ? undefined : t(scope === 'dsh-background' ? 'DSH 背景与主题同步' : '背景与卡片')}
     >
       {showAppearance && (
         <>
@@ -362,6 +364,9 @@ export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope 
             {adaptive && <button type="button" className="compact-button" onClick={() => { clearAdaptiveAccent(); setAdaptive(null); if (source === 'adaptive') changeSource('default') }}>{t('清除提取结果')}</button>}
             {accentError && <p role="alert">{t(accentError)}</p>}
           </div>
+        </>
+      )}
+      {showSync && (
           <div className="appearance-customization appearance-sync">
             <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('外壳与 DSH 是两个独立页面，主题不会自动共享；颜色与明暗模式默认同步，背景需要单独勾选。')}</span></div>
             <div className="appearance-sync-background">
@@ -375,7 +380,6 @@ export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope 
             <p>{syncRecord ? `${t('上次同步')} ${new Date(syncRecord.syncedAt).toLocaleString()}` : t('还没有同步过')}</p>
             {syncMessage && <p role="status">{t(syncMessage)}</p>}
           </div>
-        </>
       )}
     </section>
   )

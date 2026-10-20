@@ -166,6 +166,7 @@ type AppView =
   | 'settings-runtime-keepalive'
   | 'settings-terminal-typography'
   | 'settings-terminal-background'
+  | 'settings-terminal-dsh-background'
   | 'settings-diagnostics-log'
   | 'settings-diagnostics-capability'
   | 'settings-diagnostics-feedback'
@@ -177,20 +178,18 @@ type AppView =
 
 /** 设置二级页：把原先的单页设置按功能分类，避免所有选项挤在一屏里。 */
 type SettingsPage = 'models' | 'runtime' | 'terminal' | 'device-shell' | 'automation' | 'diagnostics' | 'automation-accessibility' | 'automation-subscreen' | 'automation-params'
-  | 'runtime-connection' | 'runtime-keepalive'
-  | 'terminal-typography' | 'terminal-background'
+  | 'terminal-typography' | 'terminal-background' | 'terminal-dsh-background'
   | 'diagnostics-log' | 'diagnostics-capability' | 'diagnostics-feedback'
 
 const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView; parent?: SettingsPage }> = {
   models: { title: '模型与密钥', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
-  runtime: { title: '后台', hint: '设备连接与后台保持', view: 'settings-runtime' },
-  // 后台下的两个三级页：连接（装、启停、入口）与保活（前台服务、悬浮球）是两件事。
-  'runtime-connection': { title: '设备连接', hint: '运行时来源、两个入口与版本管理', view: 'settings-runtime-connection', parent: 'runtime' },
-  'runtime-keepalive': { title: '后台保持', hint: '保活开关、悬浮球与前台服务状态', view: 'settings-runtime-keepalive', parent: 'runtime' },
+  runtime: { title: '后台', hint: '保活、悬浮球、预启动与设备连接', view: 'settings-runtime' },
   terminal: { title: '主题', hint: '字号配色与背景', view: 'settings-terminal' },
   // 主题下的两个三级页：字号与配色、背景与卡片，两段各自立即生效。
   'terminal-typography': { title: '字号与配色', hint: '字号、屏幕常亮、明暗模式与强调色', view: 'settings-terminal-typography', parent: 'terminal' },
-  'terminal-background': { title: '背景', hint: '背景图片或视频、卡片外观与同步到 DSH', view: 'settings-terminal-background', parent: 'terminal' },
+  'terminal-background': { title: '背景', hint: '背景图片或视频、卡片外观', view: 'settings-terminal-background', parent: 'terminal' },
+  // DSH 是另一个页面：它的主题与背景单独一页，不和外壳自己的背景混在一起。
+  'terminal-dsh-background': { title: 'DSH 背景', hint: '把外壳主题与背景同步到 DSH 页面', view: 'settings-terminal-dsh-background', parent: 'terminal' },
   'device-shell': { title: '设备 Shell 设置', hint: 'Shizuku 授权与设备命令', view: 'settings-device-shell' },
   automation: { title: '自动化设置', hint: '无障碍、副屏与自动参数', view: 'settings-automation' },
   // 自动化设置下的三个三级页：都是同一件事的三条腿，返回键统一回「自动化设置」。
@@ -204,7 +203,7 @@ const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; vi
   'diagnostics-feedback': { title: '反馈', hint: '交流群与 GitHub 反馈入口', view: 'settings-diagnostics-feedback', parent: 'diagnostics' },
 }
 
-const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'device-shell', 'automation', 'automation-accessibility', 'automation-subscreen', 'automation-params', 'diagnostics', 'diagnostics-log', 'diagnostics-capability', 'diagnostics-feedback', 'runtime-connection', 'runtime-keepalive', 'terminal-typography', 'terminal-background']
+const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'device-shell', 'automation', 'automation-accessibility', 'automation-subscreen', 'automation-params', 'diagnostics', 'diagnostics-log', 'diagnostics-capability', 'diagnostics-feedback', 'terminal-typography', 'terminal-background', 'terminal-dsh-background']
 
 function settingsPageOf(view: AppView): SettingsPage | null {
   const entry = SETTINGS_PAGES.find(page => SETTINGS_PAGE_META[page].view === view)
@@ -273,7 +272,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'runtime-page',
     group: 'runtime',
     title: '后台',
-    hint: '设备连接与后台保持',
+    hint: '保活、悬浮球、预启动与设备连接',
     keywords: ['后台', '保活', '保持', '悬浮球', '前台服务', '通知', '电池', 'keepalive', 'background', 'overlay', 'foreground'],
     target: { kind: 'page', page: 'runtime' },
     icon: <Power size={20} />,
@@ -2508,16 +2507,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         )}
 
         {page === 'runtime' && (
-        <div className="settings-subsection" aria-labelledby="runtime-subpages">
-          <div className="section-title">
-            <span className="section-icon"><CloudDownload size={19} /></span>
-            <div><h3 id="runtime-subpages">{t("后台运行")}</h3><p>{t("先连上运行时，再决定它能不能留在后台")}</p></div>
-          </div>
-          <SettingsPageRow icon={<CloudDownload size={20} />} page="runtime-connection" onOpen={onOpenSubpage} />
-          <SettingsPageRow icon={<BellRing size={20} />} page="runtime-keepalive" onOpen={onOpenSubpage} />
-        </div>
-        )}
-        {page === 'runtime-connection' && (
         <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
@@ -2543,6 +2532,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           </div>
           <SettingsPageRow icon={<Settings2 size={20} />} page="terminal-typography" onOpen={onOpenSubpage} />
           <SettingsPageRow icon={<Image size={20} />} page="terminal-background" onOpen={onOpenSubpage} />
+          <SettingsPageRow icon={<RefreshCw size={20} />} page="terminal-dsh-background" onOpen={onOpenSubpage} />
         </div>
         )}
         {page === 'terminal-typography' && (
@@ -2583,8 +2573,9 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         </>
         )}
         {page === 'terminal-background' && <AppearanceSettings scope="background" />}
+        {page === 'terminal-dsh-background' && <AppearanceSettings scope="dsh-background" />}
 
-        {page === 'runtime-keepalive' && (
+        {page === 'runtime' && (
         <section className="settings-section" aria-labelledby="keep-alive-settings">
           <div className="section-title section-title-action">
             <span className="section-icon"><BellRing size={19} /></span>

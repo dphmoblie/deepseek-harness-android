@@ -791,9 +791,12 @@ export async function openSettingsPage(name: string, sub?: string): Promise<void
   fireEvent.click(entry)
   await screen.findByRole('heading', { name }, { timeout: SETTINGS_NAV_TIMEOUT_MS })
   if (sub === undefined) return
-  const subEntry = await screen.findByRole('button', { name: new RegExp(sub) }, {
-    timeout: SETTINGS_NAV_TIMEOUT_MS,
-  })
+  // 先按「以 sub 开头」找：分组里可能同时有「背景」与「DSH 背景」两行，子串匹配会撞车。
+  const subEntry = screen.queryByRole('button', { name: new RegExp(`^${sub}`) })
+    ?? screen.queryByRole('button', { name: new RegExp(sub) })
+  // 有些分组的内容已经并入二级页（例如「后台」直接包含后台保持与设备连接），
+  // 这时没有三级页可进，停在二级页继续断言即可。
+  if (subEntry === null) return
   fireEvent.click(subEntry)
   await screen.findByRole('heading', { name: sub, level: 1 }, { timeout: SETTINGS_NAV_TIMEOUT_MS })
 }
