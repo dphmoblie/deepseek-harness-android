@@ -567,6 +567,9 @@ class VirtualScreenService : Service() {
             // 免得下一次拖动拿的是上一次会话、上一次旋转之前的边界去做夹取。
             overlayParams = params
             overlayMachine.viewAdded()
+            // 启动即置前：悬浮球等本应用的其它悬浮窗可能比小窗后加入，同层窗口只按加入顺序叠放，
+            // 不主动重挂一次的话，用户会看到副屏小窗被压在下面，还得先点一下画面才浮上来。
+            bringOverlayToFront()
         } catch (e: Exception) {
             preview = null
             overlayMachine.viewAddFailed()
