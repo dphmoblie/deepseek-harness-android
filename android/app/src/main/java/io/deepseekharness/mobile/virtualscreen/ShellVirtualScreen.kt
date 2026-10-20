@@ -31,6 +31,14 @@ class ShellVirtualScreen {
     // 会话规格原样留档：`restart` 要用**同一份规格**重建显示与会话（组件、分辨率、DPI），
     // 而设备 Shell 侧没有别的来源能拿到它们（宿主只在 start 时传进来一次）。
     private var targetComponent = ""
+    /**
+     * 剪贴板通道是否已经在本进程里确认过。
+     *
+     * 确认过之后不再每次 `get-primary-clip` 读回：中文输入每敲一段都要多一次 shell 往返，
+     * 这是这条通道最容易被感知到的延迟。任何一次失败都会把它清回 false，下次重新核对。
+     */
+    @Volatile
+    private var clipboardChannelVerified = false
     private var virtualForeground: String? = null
     private var displayDpi = 0
     private var width = 0
@@ -955,21 +963,30 @@ class ShellVirtualScreen {
         val written = runCatching {
             command(listOf("/system/bin/cmd", "clipboard", "set-primary-clip", text))
         }
-        val readback = if (written.isSuccess) {
+        // 通道确认过一次之后就跳过读回：每段中文都多一次 shell 往返是这条链路最明显的延迟。
+        // 第一次、以及任何一次失败之后仍然读回核对，避免把偶发失败记成永久可用。
+        val needsReadback = VirtualScreenPolicy.clipboardProbeNeedsReadback(clipboardChannelVerified)
+        val readback = if (written.isSuccess && needsReadback) {
             runCatching { command(listOf("/system/bin/cmd", "clipboard", "get-primary-clip")) }
         } else {
             null
         }
-        val probe = VirtualScreenPolicy.clipboardProbe(
-            succeeded = readback?.isSuccess == true,
-            output = readback?.getOrNull().orEmpty(),
-            failure = written.exceptionOrNull()?.message.orEmpty(),
-            expected = text,
-        )
+        val probe = if (written.isSuccess && !needsReadback) {
+            VirtualScreenPolicy.ClipboardProbe.AVAILABLE
+        } else {
+            VirtualScreenPolicy.clipboardProbe(
+                succeeded = readback?.isSuccess == true,
+                output = readback?.getOrNull().orEmpty(),
+                failure = written.exceptionOrNull()?.message.orEmpty(),
+                expected = text,
+            )
+        }
         if (probe != VirtualScreenPolicy.ClipboardProbe.AVAILABLE) {
+            clipboardChannelVerified = false
             val (code, message) = VirtualScreenPolicy.nonAsciiTextFailure(probe)
             throw RuntimeFailure(code, message)
         }
+        clipboardChannelVerified = true
         val pasted = runCatching {
             command(listOf("/system/bin/input", "-d", id().toString(), "keyevent", CLIPBOARD_PASTE_KEYCODE.toString()))
         }
