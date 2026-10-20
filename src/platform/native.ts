@@ -1,4 +1,5 @@
 import { validatePluginCatalog, validatePluginRequest } from './plugins'
+import { harnessVersionRequest, validateHarnessProgress, validateHarnessReleases, validateHarnessVersions, type HarnessProgress, type HarnessVersionOperation } from './harnessVersions'
 import { validateInstalledApplications } from './installedApplications'
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import type { PluginListenerHandle } from '@capacitor/core'
@@ -118,6 +119,8 @@ import {
 } from './validation'
 
 interface NativeRuntimePlugin {
+  listHarnessReleases(): Promise<unknown>
+  manageHarnessVersions(options: { operation: HarnessVersionOperation; version?: string }): Promise<unknown>
   managePlugins(options: PluginRequest): Promise<PluginCatalog>
   setAppLanguage(options: { language: 'zh-CN' | 'en' }): Promise<void>
   /** 同步主题模式给原生，由原生把它落到状态栏（登记册 5.4）。 */
@@ -272,6 +275,7 @@ interface NativeRuntimePlugin {
   addListener(eventName: 'appUpdateProgress', listener: (event: AppUpdateProgress) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'terminalOutput', listener: (event: TerminalChunk) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'terminalExit', listener: (event: TerminalExit) => void): Promise<PluginListenerHandle>
+  addListener(eventName: 'harnessProgress', listener: (event: HarnessProgress) => void): Promise<PluginListenerHandle>
 }
 
 const MAX_TERMINAL_INPUT_BYTES = 256 * 1024
@@ -289,6 +293,8 @@ function validatedListener<T>(validator: (value: unknown) => T, listener: (event
 
 function createNativeBridge(): RuntimeBridge {
   return {
+    listHarnessReleases: () => NativeRuntime.listHarnessReleases().then(validateHarnessReleases),
+    manageHarnessVersions: (operation, version) => NativeRuntime.manageHarnessVersions(harnessVersionRequest(operation, version)).then(validateHarnessVersions),
     managePlugins: request => NativeRuntime.managePlugins(validatePluginRequest(request)).then(validatePluginCatalog),
     setAppLanguage: language => {
       if (language !== 'zh-CN' && language !== 'en') return Promise.reject(new Error('不支持的应用语言'))
@@ -646,6 +652,7 @@ function createNativeBridge(): RuntimeBridge {
     deleteRuntimeWorkspaceFile: path => NativeRuntime.deleteRuntimeWorkspaceFile({ path: validateRuntimeWorkspaceFilePath(path) }),
     clearDiagnosticLog: () => NativeRuntime.clearDiagnosticLog().then(validateDiagnosticLogState),
     addRuntimeProgressListener: listener => NativeRuntime.addListener('runtimeProgress', validatedListener(validateRuntimeProgress, listener)),
+  addHarnessProgressListener: listener => NativeRuntime.addListener('harnessProgress', validatedListener(validateHarnessProgress, listener)),
     addAppUpdateProgressListener: listener => NativeRuntime.addListener('appUpdateProgress', validatedListener(validateAppUpdateProgress, listener)),
     addTerminalOutputListener: listener => NativeRuntime.addListener('terminalOutput', validatedListener(validateTerminalChunk, listener)),
     addTerminalExitListener: listener => NativeRuntime.addListener('terminalExit', validatedListener(validateTerminalExit, listener)),

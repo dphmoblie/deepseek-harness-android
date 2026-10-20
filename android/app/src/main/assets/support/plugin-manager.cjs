@@ -1480,6 +1480,118 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     if (Buffer.byteLength(JSON.stringify(result)) > 220000) fail('PLUGIN_CONFIG_INVALID')
     return result
   }
+
+  /** 切换门禁：只检查已启用插件的文件与声明范围，不联网更新，不静默禁用。 */
+  function checkCompatibility() {
+    const current = runtimeDshVersion()
+    if (current === null) fail('PLUGIN_DEPENDENCY_UNSUPPORTED')
+    let checked = 0
+    for (const id of manifest().enabled) {
+      const installed = resolvePackage(id)
+      if (installed === null) fail('PLUGIN_NOT_FOUND', id)
+      const pkg = read(path.join(installed, 'package.json'))
+      const range = pkg.dsh?.engines?.dsh
+      if (range !== undefined && (typeof range !== 'string' || range.length > 256 || !satisfiesRange(current, range))) fail('PLUGIN_ENGINE_UNSUPPORTED', id)
+      if (typeof pkg.dsh?.bundle?.patch !== 'string') fail('PLUGIN_CONFIG_INVALID', id)
+      const patch = path.resolve(installed, pkg.dsh.bundle.patch)
+      if (!within(installed, patch)) fail('PLUGIN_PATH_INVALID')
+      loadPatches(safe(patch))
+      checked += 1
+    }
+    return { checked }
+  }
+  /**
+   * 更新前收拢市场等外部安装器写入 profile 的插件。复制到已受保留策略保护的目录，
+   * 成功后事务式接回保留区链接；不在线更新插件，不改启停选择，失败恢复原位置。
+   */
+  function checkpoint() {
+    recover()
+    const config = manifest()
+    let preserved = 0
+    for (const id of config.names) {
+      if (id.startsWith(RUNTIME_SCOPE) || protectedPackage(id)) continue
+      const source = resolvePackage(id)
+      if (source === null) { if (config.enabled.includes(id)) fail('PLUGIN_NOT_FOUND', id); continue }
+      if (within(home, source)) continue
+      const transactionId = crypto.randomUUID()
+      const directory = safe(path.join(home, 'versions', transactionId))
+      fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
+      const stageModules = path.join(directory, 'node_modules')
+      const seen = new Map()
+      let files = 0
+      let bytes = 0
+      function copyPackage(origin, target) {
+        origin = fs.realpathSync(safe(origin))
+        if (seen.has(origin)) {
+          fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 })
+          fs.symlinkSync(seen.get(origin), target, 'junction')
+          return
+        }
+        if (seen.size > 2048) fail('PLUGIN_DATA_TOO_LARGE')
+        seen.set(origin, target)
+        function copyTree(from, to, depth = 0) {
+          if (depth > 40 || ++files > 100000) fail('PLUGIN_DATA_TOO_LARGE')
+          const stat = fs.lstatSync(from)
+          if (stat.isSymbolicLink()) {
+            const real = fs.realpathSync(from)
+            if (!within(origin, real)) fail('PLUGIN_DATA_UNSAFE')
+            return copyTree(real, to, depth + 1)
+          }
+          if (stat.isDirectory()) {
+            fs.mkdirSync(to, { recursive: true, mode: 0o700 })
+            for (const name of fs.readdirSync(from)) if (name !== 'node_modules') copyTree(path.join(from, name), path.join(to, name), depth + 1)
+          } else if (stat.isFile()) {
+            bytes += stat.size
+            if (bytes > 512 * 1024 * 1024) fail('PLUGIN_DATA_TOO_LARGE')
+            fs.copyFileSync(from, to, fs.constants.COPYFILE_EXCL)
+            fs.chmodSync(to, stat.mode & 0o100 ? 0o700 : 0o600)
+          } else fail('PLUGIN_DATA_UNSAFE')
+        }
+        copyTree(origin, target)
+        const pkg = read(path.join(origin, 'package.json'))
+        const req = createRequire(path.join(origin, 'package.json'))
+        for (const name of Object.keys({ ...pkg.dependencies, ...pkg.optionalDependencies, ...pkg.peerDependencies })) {
+          validName(name)
+          const dependency = req.resolve.paths(name)?.map(base => path.join(base, name)).find(candidate => exists(path.join(candidate, 'package.json')))
+          if (!dependency) {
+            if (pkg.optionalDependencies?.[name] || pkg.peerDependencies?.[name]) continue
+            fail('PLUGIN_DEPENDENCY_UNSUPPORTED', name)
+          }
+          const destination = path.join(target, 'node_modules', name)
+          fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 })
+          if (name.startsWith(RUNTIME_SCOPE)) {
+            const runtime = resolvePackage(name)
+            if (runtime === null) fail('PLUGIN_DEPENDENCY_UNSUPPORTED', name)
+            fs.symlinkSync(runtime, destination, 'junction')
+          } else copyPackage(dependency, destination)
+        }
+      }
+      let committed = false
+      try {
+        copyPackage(source, path.join(stageModules, id))
+        linkUnresolvedRuntimeDependencies(stageModules, [id])
+        const target = modules.map(base => path.join(base, id)).find(exists) ?? safe(path.join(fallbackModules, id))
+        const backup = safe(path.join(home, 'backups', transactionId, '0'))
+        fs.mkdirSync(path.dirname(backup), { recursive: true, mode: 0o700 })
+        fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 })
+        atomic(journal, { entries: [{ target: path.relative(root, target), backup: path.relative(root, backup), hadOriginal: exists(target) }] })
+        if (exists(target)) fs.renameSync(target, backup)
+        fs.symlinkSync(path.join(stageModules, id), target, 'junction')
+        if (refreshState() === null) fail('PLUGIN_RECOVERY_FAILED')
+        fs.unlinkSync(journal)
+        committed = true
+        try { fs.rmSync(path.dirname(backup), { recursive: true, force: true }) } catch { /* 保留安全副本供后续清理。 */ }
+        preserved += 1
+      } catch (error) {
+        if (exists(journal)) recover()
+        if (!committed && !exists(journal)) fs.rmSync(directory, { recursive: true, force: true })
+        throw error
+      }
+    }
+    // 快照写失败阻止更新，不能把没有保留成功宣告为可以切换。
+    if (refreshState() === null) fail('PLUGIN_RECOVERY_FAILED')
+    return { preserved, lock: refreshLock() }
+  }
   function setChildEnabled(id, childId, enabled) {
     validName(id)
     if (!entryId(childId) || typeof enabled !== 'boolean') fail('PLUGIN_INPUT_INVALID')
@@ -1959,7 +2071,7 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     // 账本按事实重建：回滚后解析到的版本与事务目录都变了；来源沿用上一条（回滚不改变"当初从哪来"）。
     return { ...list(), lock: lockQuiet({ id, source: null }) }
   }
-  return { list, setEnabled, setChildEnabled, update, importPackage, rollback, recover, repair, scanRuntimeGraph, pruneVersions }
+  return { list, setEnabled, setChildEnabled, update, importPackage, rollback, recover, repair, scanRuntimeGraph, pruneVersions, checkCompatibility, checkpoint }
 }
 
 module.exports = {
@@ -1993,6 +2105,8 @@ if (require.main === module) {
     const [operation, first, second, third] = process.argv.slice(2)
     let result
     if (operation === 'list') result = manager.list()
+    else if (operation === 'verify') result = manager.checkCompatibility()
+    else if (operation === 'checkpoint') result = manager.checkpoint()
     // 状态回填只发生在 recover 里（list 保持纯读）；回填结果随恢复结果一起回传。
     // `lock` 同时出现在顶层与 `state` 里：顶层供原生侧统一读取（与其它操作的 `lock` 字段同形），
     // `state` 让恢复结果自己能说清"启停状态回填了没有、版本账本写成了没有"。

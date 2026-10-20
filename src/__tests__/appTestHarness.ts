@@ -180,6 +180,8 @@ export const bridge = {
   listSessions: vi.fn(),
   // 更新：可用版本列表与应用自更新同样有默认桩——界面一进相关页面就会读一次，
   // 缺桩会让 effect 抛错并卸载整棵树（同上一条注释里的坑）。
+  listHarnessReleases: vi.fn(),
+  manageHarnessVersions: vi.fn(),
   listRuntimeReleases: vi.fn(),
   downloadRuntimeRelease: vi.fn(),
   getAppUpdateState: vi.fn(),
@@ -201,6 +203,7 @@ export const bridge = {
   deleteRuntimeWorkspaceFile: vi.fn(),
   clearDiagnosticLog: vi.fn(),
   addRuntimeProgressListener: vi.fn(),
+  addHarnessProgressListener: vi.fn(),
   addAppUpdateProgressListener: vi.fn(),
   addTerminalOutputListener: vi.fn(),
   addTerminalExitListener: vi.fn(),
@@ -628,6 +631,8 @@ export function beforeEachAppTest(): void {
   bridge.listSessions.mockResolvedValue({ status: 'ready', sessions: [], truncated: false })
   // 默认空版本列表（没有可用版本可装）+ 未授权安装权限：多数用例只关心别的页面，
   // 真正关心更新的用例自己覆盖这几条桩。
+  bridge.listHarnessReleases.mockResolvedValue({ entries: [] })
+  bridge.manageHarnessVersions.mockResolvedValue({ active: 'bundled', bundledVersion: '0.2.0-rc.2', installed: [] })
   bridge.listRuntimeReleases.mockResolvedValue({ entries: [] })
   bridge.downloadRuntimeRelease.mockResolvedValue(undefined)
   bridge.getAppUpdateState.mockResolvedValue({
@@ -659,6 +664,7 @@ export function beforeEachAppTest(): void {
   bridge.clearDiagnosticLog.mockResolvedValue({ ...diagnostic })
   bridge.shareDiagnosticLog.mockResolvedValue({ ...diagnostic, fileName: 'dsh-diagnostic-20260912-102030.txt', exportedBytes: 512 })
   bridge.addRuntimeProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })
+  bridge.addHarnessProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })
   // 应用更新进度：订阅在挂载时就发生，所以这里必须给一个可用的默认取消句柄，
   // 否则界面一挂载就会在 `subscribeProgress(...).then` 上炸掉。
   bridge.addAppUpdateProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })

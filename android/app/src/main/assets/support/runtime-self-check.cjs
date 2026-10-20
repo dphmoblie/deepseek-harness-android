@@ -810,6 +810,17 @@ function runRepair(rootArgument) {
 // 入口
 // ---------------------------------------------------------------------------
 
+/**
+ * 访客运行时事实：Node 版本、模块 ABI、架构。
+ *
+ * 插件用到的 API 与原生模块（node-pty）都绑在访客 Node 上。出现
+ * `AbortSignal.any is not a function` 这类「运行时缺 API」的故障时，先看这一行就能
+ * 判断用户是不是换了 Node，不用再从壳、WebView、前端一路做排除法。
+ */
+function runtimeFacts() {
+  return { node: process.version, abi: process.versions.modules ?? '', arch: process.arch }
+}
+
 /** 唯一的输出点：**一行** JSON；写完立即退出，绝不输出路径或原始报错文本。 */
 function output(payload, code) {
   process.stdout.write(JSON.stringify(payload) + '\n', () => process.exit(code))
@@ -819,7 +830,7 @@ function output(payload, code) {
 
 function main(operation) {
   if (operation === 'check') {
-    return runChecks(DEFAULT_ROOT, process.env).then(checks => ({ payload: { ok: true, checks }, code: 0 }))
+    return runChecks(DEFAULT_ROOT, process.env).then(checks => ({ payload: { ok: true, runtime: runtimeFacts(), checks }, code: 0 }))
   }
   if (operation === 'repair') {
     const summary = runRepair(DEFAULT_ROOT)

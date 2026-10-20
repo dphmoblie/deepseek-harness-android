@@ -28,11 +28,22 @@ function card(bridge: Partial<RuntimeBridge>): void {
 const checkbox = (): HTMLInputElement => screen.getByRole('checkbox')
 
 describe('根通道卡片', () => {
-  it('关着的时候说清状态、原因与「没开就没有 UID 0」，开关是关的', async () => {
+  it('设置入口标题与设备能力名称分开', async () => {
+    card({ getRootEngineStatus: vi.fn().mockResolvedValue(status()) })
+    await waitFor(() => expect(screen.getByRole('heading', { name: '根通道设置' })).toBeTruthy())
+  })
+
+  it('关着的时候说清是「还没查」，不说成「这台设备没有 KernelSU」，开关是关的', async () => {
     card({ getRootEngineStatus: vi.fn().mockResolvedValue(status()) })
 
     await waitFor(() => { expect(checkbox().checked).toBe(false) })
-    expect(screen.getByText(/这台设备没有可用的 KernelSU/)).toBeTruthy()
+    /*
+     * 关着时原生不拉 su（`RootEngineAccess.status` 回 `unsupported` + `ROOT_ENGINE_DISABLED`），
+     * `unsupported` 这一档此刻只是「还没查」：说成「这台设备没有可用的 KernelSU」会与能力行的
+     * 「开关没有打开」自相矛盾（清单 M-4 的现场）。
+     */
+    expect(screen.getByText(/关着的时候本应用不拉 su/)).toBeTruthy()
+    expect(screen.queryByText(/这台设备没有可用的 KernelSU/)).toBeNull()
     /* 关着时不该出现「开关开着但还没法用」那句——它只在开着却没就绪时出现。 */
     expect(screen.queryByText(/开关开着但还没法用/)).toBeNull()
     /* 关着就不该讲降级：没有隔离可降。 */

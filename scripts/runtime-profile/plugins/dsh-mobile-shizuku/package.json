@@ -4,6 +4,9 @@
   "description": "Model-facing Shizuku device tools for the Android DeepSeek Harness profile",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",

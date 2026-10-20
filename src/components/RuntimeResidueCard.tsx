@@ -68,11 +68,11 @@ export function RuntimeResidueCard({ bridge = runtimeBridge }: { bridge?: Runtim
     {loaded && state !== null && state.count === 0 && <p className="settings-note">{t('没有可回收的残留')}</p>}
     {receivable && <p className="settings-note"><strong>{t('可回收的残留：{0} 份，共 {1}', String(state.count), formatBytes(state.bytes))}</strong></p>}
     {receivable && state.truncated && <p className="settings-note">{t('文件较多，未能统计全部大小；实际占用可能更大。')}</p>}
-    {!confirming && <button type="button" disabled={!receivable || cleaning} onClick={() => setConfirming(true)}>{t('清理残留')}</button>}
+    {!confirming && <button className="button button-secondary" type="button" disabled={!receivable || cleaning} onClick={() => setConfirming(true)}>{t('清理残留')}</button>}
     {confirming && <div role="alertdialog" aria-labelledby="runtime-residue-confirm">
       <p className="settings-note" id="runtime-residue-confirm"><strong>{t('确认清理运行时残留？')}</strong> {t('只删除运行时目录下由本应用生成的 stale-* 残留，不影响会话、设置与当前运行时。')}</p>
-      <button type="button" disabled={cleaning} onClick={() => { void clean() }}>{cleaning ? t('正在清理…') : t('确认清理')}</button>
-      <button type="button" disabled={cleaning} onClick={() => setConfirming(false)}>{t('取消')}</button>
+      <button className="button button-danger-quiet" type="button" disabled={cleaning} onClick={() => { void clean() }}>{cleaning ? t('正在清理…') : t('确认清理')}</button>
+      <button className="button button-secondary" type="button" disabled={cleaning} onClick={() => setConfirming(false)}>{t('取消')}</button>
     </div>}
     {result !== null && <p className="settings-note" role="status">
       {result.cleaned > 0
@@ -82,7 +82,7 @@ export function RuntimeResidueCard({ bridge = runtimeBridge }: { bridge?: Runtim
     {/* 原生侧那句说明里带着界面算不出来的事实（走了兜底删除器 / 被占用删不掉），原样附上。 */}
     {result !== null && <p className="settings-note">{t('清理详情：')}{result.message}</p>}
     {result !== null && receivable && <p className="settings-note"><strong>{t('仍有 {0} 份未清理，详见诊断与日志。', String(state.count))}</strong></p>}
-    {failed && <p role="alert">{t('无法读取运行时占用')} <button type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
+    {failed && <p role="alert">{t('无法读取运行时占用')} <button className="button button-quiet" type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
     {cleanFailed && <p role="alert">{t('清理没能完成，请稍后重试；仍然失败请查看诊断与日志。')}</p>}
   </div>
 }

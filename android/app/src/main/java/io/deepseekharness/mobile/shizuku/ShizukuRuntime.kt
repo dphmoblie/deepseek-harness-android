@@ -56,8 +56,8 @@ class ShizukuRuntime(
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
     /**
-     * Shizuku.bindUserService() performs a synchronous Binder RPC in the caller.  Keep it
-     * off the main looper; a stuck Shizuku server must not freeze the management WebView.
+     * Shizuku.bindUserService() 会在调用方线程里做一次同步 Binder 调用：必须离开主 looper，
+     * Shizuku 服务端卡住时不能把管理界面一起冻住。
      */
     private val bindExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "dsh-shizuku-bind").apply { isDaemon = true }
@@ -329,9 +329,8 @@ class ShizukuRuntime(
                 result.completeExceptionally(IllegalStateException("main handler rejected permission request"))
             }
             val grantResult = result.get(PERMISSION_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            // Sticky binder callbacks are delivered asynchronously and may arrive while the
-            // permission dialog is open. The permission result itself remains authoritative;
-            // binder death already completes permissionFuture exceptionally.
+            // Sticky binder 回调是异步投递的，授权窗还开着时就可能送达。
+            // 以权限申请本身的结果为准：binder 断开那条路已经让 permissionFuture 异常完成。
             permissionDeniedThisSession = grantResult != PackageManager.PERMISSION_GRANTED
             if (grantResult != PackageManager.PERMISSION_GRANTED) {
                 throw RuntimeFailure("SHIZUKU_PERMISSION_DENIED", "Shizuku 权限未授予")
@@ -353,7 +352,7 @@ class ShizukuRuntime(
                 try {
                     Shizuku.removeRequestPermissionResultListener(listener)
                 } catch (_: Throwable) {
-                    // Binder death already invalidates the listener registration.
+                    // binder 已经断了：监听注册本就失效，这里失败无需处理。
                 }
             }
             if (permissionFuture === result) permissionFuture = null
@@ -402,12 +401,15 @@ class ShizukuRuntime(
      * 返回值只表示「已完成一次 UserService 连接（或复用了现有连接）」；false 表示
      * 前置条件在执行期间不再满足。调用方可据此区分重启后的连接失败与「Shizuku 尚未
      * 运行/授权」这类无需打扰用户的状态。
+     *
+     * [stillCurrent] 由调用方给：它是「这次自动连接还算数吗」（前台任务仍在、绑定代次不变等），
+     * 每次真去碰 Binder 前都要重新问一遍——排队期间那一代可能已经作废。
      */
-    fun connectIfAuthorized(permitted: () -> Boolean, current: () -> Boolean): Boolean {
+    fun connectIfAuthorized(permitted: () -> Boolean, stillCurrent: () -> Boolean): Boolean {
         val allowed = { !closed.get() && !Thread.currentThread().isInterrupted && permitted() }
-        if (!allowed() || !current() || !tryPingBinder()) return false
+        if (!allowed() || !stillCurrent() || !tryPingBinder()) return false
         if (Shizuku.isPreV11() || Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return false
-        if (!allowed() || !current()) return false
+        if (!allowed() || !stillCurrent()) return false
         // 一旦开始绑定便由 UserService 的连接代次接管；首次 sticky 回调不能取消其他调用已复用的 future。
         requireService(allowed, waitForBinder = false)
         return true
@@ -443,10 +445,10 @@ class ShizukuRuntime(
             else throw RuntimeFailure("SHIZUKU_SERVICE_FAILED", "Shizuku 用户服务已断开")
             virtualScreenOwner = null
         } catch (error: Exception) {
-            // Keep the owner so disconnect/shutdown can retry while the old binder is alive.
+            // 旧 binder 还活着：保留持有者，让断开/停机路径能再试一次关闭。
             throw if (error is RuntimeFailure) error else RuntimeFailure("VIRTUAL_SCREEN_CLOSE_FAILED", "无法关闭副屏", error)
         } finally {
-            // A dead binder cannot be retried; a live binder remains owned on failure.
+            // binder 已死就无从重试；还活着则保留归属，交给后续清理。
             if (!owned.first.asBinder().isBinderAlive && virtualScreenOwner === owned) virtualScreenOwner = null
         }
     }
@@ -539,7 +541,7 @@ class ShizukuRuntime(
             try {
                 current.closeSession(id)
             } catch (_: RemoteException) {
-                // Service teardown owns any session that raced with bridge shutdown.
+                // 与桥停机抢跑建出来的会话归服务端拆除所有，这里只把错误抛给调用方。
             }
             throw RuntimeFailure("DEVICE_BRIDGE_STOPPED", "设备桥已停止")
         }
@@ -596,30 +598,28 @@ class ShizukuRuntime(
             if (sessions.isNotEmpty()) failSessions(255)
             return
         }
-        run {
-            val closeTask = try {
-                closeExecutor.submit {
-                    try {
-                        current.closeAll()
-                    } catch (_: RemoteException) {
-                        service = null
-                    }
-                }
-            } catch (_: Throwable) {
-                null
-            }
-            if (closeTask != null) {
+        val closeTask = try {
+            closeExecutor.submit {
                 try {
-                    val remaining = (deadline - System.nanoTime()).coerceAtLeast(1)
-                    closeTask.get(remaining, TimeUnit.NANOSECONDS)
-                } catch (_: TimeoutException) {
-                    // Binder 调用无法可靠中断；放弃等待并让会话回收路径继续。
-                } catch (error: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    throw RuntimeFailure("TERMINAL_STOP_INTERRUPTED", "等待设备 Shell 关闭时被中断", error)
-                } catch (_: java.util.concurrent.ExecutionException) {
+                    current.closeAll()
+                } catch (_: RemoteException) {
                     service = null
                 }
+            }
+        } catch (_: Throwable) {
+            null
+        }
+        if (closeTask != null) {
+            try {
+                val remaining = (deadline - System.nanoTime()).coerceAtLeast(1)
+                closeTask.get(remaining, TimeUnit.NANOSECONDS)
+            } catch (_: TimeoutException) {
+                // Binder 调用无法可靠中断；放弃等待并让会话回收路径继续。
+            } catch (error: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw RuntimeFailure("TERMINAL_STOP_INTERRUPTED", "等待设备 Shell 关闭时被中断", error)
+            } catch (_: java.util.concurrent.ExecutionException) {
+                service = null
             }
         }
         while (sessions.isNotEmpty() && System.nanoTime() < deadline) {
@@ -643,7 +643,7 @@ class ShizukuRuntime(
             try {
                 closeVirtualScreen(it.second)
             } catch (error: RuntimeFailure) {
-                // Do not hide a failed stop: callers must know the display may still be alive.
+                // 停止失败必须往上抛：调用方要知道副屏可能还活着。
                 failure = error
             }
         }
@@ -674,7 +674,7 @@ class ShizukuRuntime(
         try {
             if (connection != null) Shizuku.unbindUserService(serviceArgs, connection, true)
         } catch (_: Throwable) {
-            // Binding may already be gone after service death or permission revocation.
+            // 服务端已死或权限被收回时，绑定可能早就不在了。
         }
         service = null
         synchronized(connectionFutureLock) {
@@ -694,7 +694,7 @@ class ShizukuRuntime(
                 try {
                     currentBinder?.unlinkToDeath(deathRecipient, 0)
                 } catch (_: Throwable) {
-                    // The old UserService binder has already died.
+                    // 旧的 UserService binder 已经断开。
                 }
             }
         }
@@ -738,9 +738,9 @@ class ShizukuRuntime(
                 activeConnection = connection
                 connectionFuture = created
                 val posted = bindDispatcher.submit(
-                    current = { permitted() && isActiveConnection(generation, connection) },
+                    stillCurrent = { permitted() && isActiveConnection(generation, connection) },
                     bind = {
-                        // This is a synchronous Binder RPC; never run it on the main looper.
+                        // 这是一次同步 Binder 调用，绝不能跑在主 looper 上。
                         Shizuku.bindUserService(serviceArgs, connection)
                     },
                     fail = created::completeExceptionally,

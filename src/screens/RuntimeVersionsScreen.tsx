@@ -17,6 +17,7 @@ import {
   RotateCcw,
   Trash2,
 } from 'lucide-react'
+import { HarnessVersionsSection } from '../components/HarnessVersionsSection'
 import { ReleaseNotes } from '../components/ReleaseNotes'
 import { RuntimeCleanupCard } from '../components/RuntimeCleanupCard'
 import { RuntimeResidueCard } from '../components/RuntimeResidueCard'
@@ -685,6 +686,8 @@ export function RuntimeVersionsScreen({
           <button className="icon-button" type="button" aria-label={t("返回设置")} title={t("返回设置")} onClick={onBack}><ArrowLeft size={19} /></button>
         </div>
       </div>
+
+      <HarnessVersionsSection bridge={runtimeBridge} runtime={runtime} refreshRuntime={refreshRuntime} />
 
       <RuntimeVersionsPanel
         runtime={runtime}

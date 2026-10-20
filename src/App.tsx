@@ -907,6 +907,14 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
     : 0
   // 门屏是「用户最容易怀疑卡死」的地方：阶段切换会重置字节口径，以 phase 作为分段键。
   const downloadTelemetry = useDownloadTelemetry(runtime.downloadedBytes, runtime.totalBytes, transitioning, runtime.phase)
+  // 自动启动已移除，开机后空闲停在门屏才是常态。若空闲也沿用「正在打开」，
+  // 用户会以为界面卡在启动流程里；只有用户真的点了「打开对话」才该说「正在…」。
+  const launchingHarness = busy === 'launch'
+  // 「已就绪」与「已在运行」要分开说：服务已经跑起来时再讲「打开时才启动」是错的，
+  // 而这句话恰恰是用户判断「点了以后要不要等」的依据。
+  const serviceRunning = runtime.phase === 'running'
+  // 停止要几秒，期间打开按钮是禁用的：此时还写「点击「打开对话」开始」，用户点了没反应。
+  const stoppingHarness = busy === 'stop'
 
   return (
     <div className="screen conversation-gate">
@@ -914,7 +922,7 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
       <div className="screen-heading">
         <div>
           <p className="eyebrow">{t("Harness 对话")}</p>
-          <h1>{updateRequired ? t("更新运行环境") : runtime.phase === 'error' ? t("运行环境需要处理") : installed ? t("正在进入对话") : t("准备运行环境")}</h1>
+          <h1>{updateRequired ? t("更新运行环境") : runtime.phase === 'error' ? t("运行环境需要处理") : installed ? (launchingHarness ? t("正在进入对话") : stoppingHarness ? t("正在停止运行环境") : t("对话已就绪")) : t("准备运行环境")}</h1>
         </div>
       </div>
 
@@ -933,7 +941,13 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
               : transitioning
               ? t(PHASE_META[runtime.phase].label)
               : installed
-                ? t("正在打开 Harness 对话")
+                ? launchingHarness
+                  ? t("正在打开 Harness 对话")
+                  : stoppingHarness
+                    ? t("正在停止本机服务")
+                    : serviceRunning
+                      ? t("点击「打开对话」进入对话")
+                      : t("点击「打开对话」开始")
                 : t("首次使用需要准备运行环境")}
           </h2>
           <p>
@@ -944,7 +958,13 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
               : transitioning
               ? `${formatBytes(runtime.downloadedBytes)} / ${formatBytes(runtime.totalBytes)}`
               : installed
-                ? t("应用会自动启动本机服务并进入对话。")
+                ? launchingHarness
+                  ? t("正在启动本机服务并进入对话…")
+                  : stoppingHarness
+                    ? t("停止完成后即可重新打开对话。")
+                    : serviceRunning
+                      ? t("本机服务正在运行，打开后即可继续对话。")
+                      : t("打开对话时才会启动本机服务。")
                 : t("安装时会校验运行时完整性；从网络下载的，中断后可以继续。")}
           </p>
         </div>
@@ -2629,6 +2649,21 @@ function SettingsScreen({ accessibility, busy, diagnostic, dirty, draft, keepAli
               }}
             />
           </label>
+          {/* 预启动与「后台保持」是两件事：前者在开机时把服务拉起来（点了就几乎立刻进入），
+              后者只是提高进程存活优先级。因此既不合并成一个开关，也不互相联动：
+              用户完全可以只预启动、不保活（回到桌面后被系统回收了就下次再预启动）。 */}
+          <label className="toggle-row">
+            <span>
+              <strong>{t("打开应用时预启动服务")}</strong>
+              <small>{t("提前启动本机服务，点「打开对话」几乎立即进入；不会自动进入对话页")}</small>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={settings.prewarmHarness ?? false}
+              onChange={event => setDraft({ ...settings, prewarmHarness: event.target.checked })}
+            />
+          </label>
           {/* 悬浮球与「后台保持」是两个互相独立的开关，但各自都会提高本应用进程被系统回收的优先级：
               开悬浮球不会去拉起运行时的保活服务；悬浮球自身由独立的前台服务承载，
               与「后台保持」一样只提高优先级，不保证进程不被系统结束。 */}
@@ -3540,6 +3575,17 @@ export function App() {
   const wasRunning = useRef(false)
   const stopRequested = useRef(false)
   const [lastStop, setLastStop] = useState<LastStopReason>('none')
+  /**
+   * 「打开应用时预启动服务」的执行记录。
+   *
+   * `settingSeen` 记上一次看到的值：只有「由关变开」才预启动，因此用户手动停止后相位回到
+   * ready 不会把它重新拉起（那是「相位在变」，不是「设置刚变」）；用户在本次会话里打开
+   * 开关则立刻生效，不必等下次冷启动。
+   * `inFlight` 留着这次预启动的 promise，是为了让用户中途点开时**等**它，而不是并发再发一次
+   * `startHarness`：原生对重复启动会立刻返回「还没运行」的快照，紧接着的打开就会报错。
+   */
+  const prewarmSettingSeen = useRef(false)
+  const prewarmInFlight = useRef<Promise<RuntimeState | null> | null>(null)
 
   const notify = useCallback((message: string, tone: NoticeTone = 'info') => {
     noticeId.current += 1
@@ -4053,6 +4099,68 @@ export function App() {
     }
   }, [noteLivePhase, notify, readMailbox, readMailboxDirectory, readOverlayBall])
 
+  /*
+   * 预启动本机服务（用户显式开启「打开应用时预启动服务」时才做）。
+   *
+   * 与那次被删掉的自动启动不同：这里**只拉起服务，不打开对话页面**，界面照旧停在启动器首页，
+   * 用户仍要自己点「打开对话」。区别在于点下去时服务已经在跑，几乎立刻进入。
+   *
+   * 刻意不占用 `busy` 锁、不弹任何提示：预启动是后台准备，失败也不该在用户还没操作时弹错。
+   * 失败时静默（原生已写诊断），用户点开时会走正常启动路径并看到真实错误。
+   * 一个进程生命周期只尝试一次：依赖变化导致的反复重试会变成后台风暴。
+   */
+  useEffect(() => {
+    if (booting || onboardingOpen || settings === null) return
+    /*
+     * 触发口径是「这项设置由关变开」，且**必须区分相位**（AGENTS.md §5）：
+     *
+     * - 关掉开关要当场复位 `seen`，否则「关掉再打开」会被当成已经触发过而静默跳过；
+     * - `phase === 'running'` 时当场消费这次变更：服务已经热着，这不是「需要预启动」，
+     *   而是一个守卫——用户随后手动点「停止」把相位带回 ready 时，不能再被它拉起来；
+     * - 其余未就绪条件（下载解压 / 停止中 / 有待更新 / 还没配模型凭据）**不要提前消费**：
+     *   一旦消费了，用户「开着开关却要等下次冷启动」，而且全程没有任何提示。
+     *   留到条件成熟的那次渲染再补做。
+     */
+    const enabled = settings.prewarmHarness === true
+    if (!enabled) {
+      prewarmSettingSeen.current = false
+      return
+    }
+    if (prewarmSettingSeen.current) return
+    if (runtime.phase === 'running') {
+      prewarmSettingSeen.current = true
+      return
+    }
+    /*
+     * 只在「已安装且空闲 ready」时预启动。
+     *
+     * 用相位而不是 `installed` 判断：installed 还包含 running / stopping / 下载解压这些
+     * 正在进行的状态，在那些状态下再发一次启动会与安装或停止竞态（原生会以 RUNTIME_BUSY
+     * 之类的错误收场），而预启动本该是静默的后台准备，不该制造失败。
+     */
+    if (runtime.phase !== 'ready') return
+    if (runtime.updateAvailable) return
+    // 没有可投递的模型凭据时启动没有意义（含用户只在 Harness 内配过密钥的情况）。
+    if (!hasConfiguredModelCredential(settings)) return
+    // 到这里才消费这次「由关变开」：条件成熟、且确实要发起预启动。
+    prewarmSettingSeen.current = true
+    const attempt = runtimeBridge.startHarness()
+      .then(next => {
+        setRuntime(next)
+        return next
+      })
+      .catch(() => null)
+    prewarmInFlight.current = attempt
+    /*
+     * 落定后必须清空：它只是「还在飞的这次预启动」。留着已完成的 promise 会让之后
+     * 「先停止、再打开」拿到**过期的 running 快照**，于是跳过 startHarness 直接打开，
+     * 用户看到一条 NOT_RUNNING 错误——一次成功过的预启动反而把后来的打开搞坏了。
+     */
+    void attempt.finally(() => {
+      if (prewarmInFlight.current === attempt) prewarmInFlight.current = null
+    })
+  }, [booting, onboardingOpen, runtime, settings])
+
   useEffect(() => {
     let cancelled = false
 
@@ -4438,6 +4546,26 @@ export function App() {
        */
       const launchSequence = async (): Promise<void> => {
         let nextRuntime = launchRuntime
+        /*
+         * 预启动还在路上时**等它**，而不是再发一次 startHarness：原生对重复启动会立刻返回
+         * 「还没运行」的快照，紧接着的打开就会报 HARNESS_NOT_RUNNING——用户明明点了打开，
+         * 却收到一条错误，正是预启动最该避免的体验。等到了就用它的结果，等不到（失败/取消）
+         * 就照常自己启动一次。
+         */
+        const warming = prewarmInFlight.current
+        if (warming !== null) {
+          prewarmInFlight.current = null
+          try {
+            // 必须有上限：预启动卡死时不能让「点了打开」跟着无限挂起。
+            const warmed = await withBridgeTimeout(warming, HARNESS_START_TIMEOUT_MS)
+            if (warmed !== null && warmed.phase === 'running') {
+              launchRuntime = warmed
+              nextRuntime = warmed
+            }
+          } catch {
+            // 预启动超时/失败：照常自己启动一次，失败原因由这次启动来交代。
+          }
+        }
         if (nextRuntime.phase !== 'running') {
           nextRuntime = await withBridgeTimeout(runtimeBridge.startHarness(), HARNESS_START_TIMEOUT_MS)
           launchRuntime = nextRuntime

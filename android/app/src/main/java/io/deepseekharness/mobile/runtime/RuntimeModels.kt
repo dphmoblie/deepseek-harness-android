@@ -112,6 +112,21 @@ data class RuntimeSettings(
      * 不想保持运行时，也可能反过来，因此不合并成一个开关。
      */
     val overlayBallEnabled: Boolean = false,
+    /**
+     * 「打开应用时后台预启动本机 Harness 服务」开关。
+     *
+     * 语义是**只把服务启动起来、不打开页面**：开启后前端可以在应用启动后静默调用
+     * startHarness，让用户再点「打开 Harness」时直接用上已经跑着的运行时；
+     * 它不改变打开页面的时机与方式（页面仍由 openHarness 决定）。
+     *
+     * 与 keepRuntimeInBackground 也是两件独立的事：那个开关只提升**正在运行**的进程的
+     * 存活优先级，这个开关决定**要不要提前把运行时拉起来**，因此不合并。
+     *
+     * 默认 false，旧版本配置没有该键时同样按 false 处理：预启动会让 Harness 常驻占用
+     * CPU、内存与前台服务通知位，属于用户显式选择的能力，不能因为升级就替用户悄悄打开；
+     * 关掉时行为与以前完全一致（只在实际启动时才拉起运行时）。
+     */
+    val prewarmHarness: Boolean = false,
 )
 
 data class RootfsArtifact(
@@ -347,6 +362,7 @@ object RuntimeValidation {
         terminalFontSize: Int,
         keepRuntimeInBackground: Boolean = false,
         overlayBallEnabled: Boolean = false,
+        prewarmHarness: Boolean = false,
     ): RuntimeSettings {
         val source = source(url, digest)
         if (terminalFontSize !in 11..24) {
@@ -359,6 +375,7 @@ object RuntimeValidation {
             terminalFontSize = terminalFontSize,
             keepRuntimeInBackground = keepRuntimeInBackground,
             overlayBallEnabled = overlayBallEnabled,
+            prewarmHarness = prewarmHarness,
         )
     }
 

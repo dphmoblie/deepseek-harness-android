@@ -1,4 +1,5 @@
 import type { SelfCheckOperation, SelfCheckReport } from '../runtimeSelfCheck'
+import type { HarnessProgress, HarnessReleaseList, HarnessVersionOperation, HarnessVersionsState } from './harnessVersions'
 
 export type RuntimePhase =
   | 'not-installed'
@@ -516,6 +517,14 @@ export interface RuntimeSettings extends RuntimeSource {
    * 与 keepRuntimeInBackground 是两件独立的事，界面不要合并成一个开关。
    */
   overlayBallEnabled?: boolean
+  /**
+   * 打开应用时后台预启动 Harness 服务（默认 false）。
+   *
+   * 预启动只把本机服务拉起来，**不打开对话页面**：开机后停在启动器首页这一点不变，
+   * 用户仍然要自己点「打开对话」。收益是点了之后几乎立刻进入，代价是服务在后台常驻
+   * （与「后台保持」是两件事，后者只提高进程存活优先级）。因此默认关闭，由用户显式选择。
+   */
+  prewarmHarness?: boolean
 }
 
 export interface RuntimeSettingsUpdate extends RuntimeSettings {
@@ -1549,6 +1558,10 @@ export interface RuntimeWorkspaceFileList {
 }
 
 export interface RuntimeBridge {
+  listHarnessReleases: () => Promise<HarnessReleaseList>
+  manageHarnessVersions: (operation: HarnessVersionOperation, version?: string) => Promise<HarnessVersionsState>
+  /** Harness 包安装的阶段进度；只有安装会上报，其它操作没有事件。 */
+  addHarnessProgressListener: (listener: (event: HarnessProgress) => void) => Promise<ListenerHandle>
   managePlugins: (request: PluginRequest) => Promise<PluginCatalog>
   /** 保存应用语言，仅接受简体中文和英语。 */
   setAppLanguage: (language: 'zh-CN' | 'en') => Promise<void>

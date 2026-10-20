@@ -220,6 +220,8 @@ object DiagnosticPolicy {
         "version",
         "sdk",
         "abi",
+        // 访客 Node 的版本号（vX.Y.Z）与模块 ABI（纯数字）：排障时定位「运行时缺 API」用。
+        "node",
         // transfer 阶段的字节证据（见 [TransferFields]）：全是数字与布尔，没有路径与文本。
         "expected_bytes",
         "actual_bytes",
@@ -232,6 +234,11 @@ object DiagnosticPolicy {
         "plugins",
         "relinked",
         "missing",
+        // 一次 Harness 启动从「用户点打开」到「服务可用」的毫秒数。
+        // 它是启动优化唯一的客观口径：只看体感时，「快了」与「这次网络好」分不开，
+        // 而导出诊断里的这一列能直接对比改动前后与不同机型。取值是纯数字，
+        // 不含路径、主机名或任何凭据，因此可以安全落盘。
+        "elapsed_ms",
     )
 
     // 按字段类型校验取值。单纯用字符集是不够的：`sk-` 开头的 API Key 也能匹配
@@ -251,6 +258,8 @@ object DiagnosticPolicy {
             "plugins",
             "relinked",
             "missing",
+            // 启动耗时：纯数字（毫秒），见 [allowedKeys] 里同名条目的说明。
+            "elapsed_ms",
         )
     private val countPattern = Regex("^[0-9]{1,12}$")
     private val codePattern = Regex("^[A-Z][A-Z0-9_]{0,47}$")

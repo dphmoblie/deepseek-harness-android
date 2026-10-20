@@ -132,10 +132,33 @@ function boundedText(value, maxChars) {
     : value
 }
 
+/**
+ * 组合多个取消信号。
+ *
+ * `AbortSignal.any` 是 Node 20.3 才有的 API。更老的访客运行时（老 rootfs、用户自己换的
+ * Node）上它不存在，而设备工具都会把 `exec.signal` 传进来 —— 一旦命中就是
+ * `TypeError: AbortSignal.any is not a function`，界面表现为设备桥接整个不可用。
+ * 所以先特性探测，缺了再用手写的组合：任一信号中止即中止，语义与原生实现一致。
+ */
+function anySignal(signals) {
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any(signals)
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  for (const signal of signals) {
+    if (!signal) continue
+    if (signal.aborted) {
+      abort()
+      break
+    }
+    signal.addEventListener('abort', abort, { once: true })
+  }
+  return controller.signal
+}
+
 async function callBridge(command, param, signal, maxChars = MAX_RESULT_CHARS, allowNonZero = false) {
   const { numericPort, token } = bridgeConfig()
   const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-  const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+  const requestSignal = signal ? anySignal([signal, timeoutSignal]) : timeoutSignal
   const response = await fetch(`http://127.0.0.1:${numericPort}/device-command`, {
     method: 'POST',
     headers: {

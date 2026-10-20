@@ -150,6 +150,13 @@ class RuntimeStore(context: Context) {
     fun overlayBallEnabled(): Boolean = preferences.getBoolean(KEY_OVERLAY_BALL, false)
 
     /**
+     * 「打开应用时后台预启动 Harness」开关。
+     * 旧版本配置里没有该键，缺失时统一按 false 处理，与设置默认值保持一致：
+     * 升级不能替用户打开一个会常驻占用资源的预启动。
+     */
+    fun prewarmHarness(): Boolean = preferences.getBoolean(KEY_PREWARM_HARNESS, false)
+
+    /**
      * 由悬浮球菜单在原生侧直接关闭开关。
      *
      * 菜单是原生界面，没有前端调用栈可以回写设置，因此这里直接落盘。
@@ -300,6 +307,7 @@ class RuntimeStore(context: Context) {
             keepScreenAwake = keepScreenAwake(),
             keepRuntimeInBackground = keepRuntimeInBackground(),
             overlayBallEnabled = overlayBallEnabled(),
+            prewarmHarness = prewarmHarness(),
             terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             harnessConfiguredModelProviders = harnessCredentials.modelProviders,
@@ -323,6 +331,8 @@ class RuntimeStore(context: Context) {
         clearedCustomProviderApiKeys: Set<String> = emptySet(),
         overlayBallEnabledUpdate: Boolean? = settings.overlayBallEnabled,
         defaultModels: Map<ModelProvider, String>? = null,
+        // 省略即不改：预启动是一次显式选择，不能因为某次只带部分字段的保存被悄悄关掉。
+        prewarmHarnessUpdate: Boolean? = settings.prewarmHarness,
     ): RuntimeSettings {
         if (providerApiKeyUpdates.keys.any(clearedProviderApiKeys::contains)) {
             throw RuntimeFailure("SETTINGS_INVALID", "同一模型凭据不能同时更新和清除")
@@ -357,6 +367,7 @@ class RuntimeStore(context: Context) {
             // 整表替换：传空表就是「用户把最后一条也清掉了」，不能与「这次不碰」混为一谈。
             editor.putString(KEY_DEFAULT_MODELS, defaultModelsToJson(models).toString())
         }
+        prewarmHarnessUpdate?.let { editor.putBoolean(KEY_PREWARM_HARNESS, it) }
         if (encryptedCredentials == null) editor.remove(KEY_PROVIDER_CREDENTIALS)
         else editor.putString(KEY_PROVIDER_CREDENTIALS, encryptedCredentials)
         if (encryptedCustomCredentials == null) editor.remove(KEY_CUSTOM_PROVIDER_CREDENTIALS)
@@ -367,6 +378,7 @@ class RuntimeStore(context: Context) {
         return settings.copy(
             // Omitted updates are read after commit so a concurrent native-menu hide is preserved.
             overlayBallEnabled = overlayBallEnabledUpdate ?: overlayBallEnabled(),
+            prewarmHarness = prewarmHarnessUpdate ?: prewarmHarness(),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             harnessConfiguredModelProviders = harnessCredentials.modelProviders,
             deepSeekAccountConfigured = harnessCredentials.deepSeekAccountConfigured,
@@ -1032,12 +1044,22 @@ class RuntimeStore(context: Context) {
     fun updateInstalledManifest(manifest: RuntimeManifest?) {
         manifestCache = manifest
         manifestCacheLoaded = true
+        // 安装、更新、版本切换与清空运行时最终都落到这里。
+        //
+        // 为什么要在这里清「自检已验证」缓存：`profileKey` 里已经含清单身份与 rootfs 摘要，
+        // 换版本本来就会失配；但**同版本的重新安装**（用户点「修复」）身份没变，而 rootfs
+        // 文件可能已经被换过一遍。此时继续信任上一次的启动结论属于「拿旧证据给新环境背书」，
+        // 所以宁可让下一次启动多付一次探测。安装失败同样会走到这里再回滚，
+        // 代价只是一次探测，方向始终是安全的。
+        RuntimeGuestVerification.from(appContext).invalidate()
     }
 
     @Synchronized
     fun invalidateInstalledManifest() {
         manifestCache = null
         manifestCacheLoaded = false
+        // 中断恢复会先让清单失效再重新读取：这一路径同样代表「磁盘上的运行时可能被换过」。
+        RuntimeGuestVerification.from(appContext).invalidate()
     }
 
     fun writeInstalledManifest(destination: File, manifest: RuntimeManifest) {
@@ -1559,6 +1581,7 @@ class RuntimeStore(context: Context) {
         private const val KEY_KEEP_BACKGROUND = "keep_runtime_in_background"
         private const val KEY_OVERLAY_BALL = "overlay_ball_enabled"
         private const val KEY_DEFAULT_MODELS = "provider_default_models_v1"
+        private const val KEY_PREWARM_HARNESS = "prewarm_harness"
             // 运行时恢复记录：只保存运行意图、最近阶段与时间，绝不保存凭据。
         private const val KEY_RUNTIME_INTENT = "runtime_intent"
         private const val KEY_RUNTIME_PHASE = "runtime_last_phase"

@@ -158,6 +158,19 @@ internal fun optionalOverlayBallEnabled(data: JSONObject): Boolean? {
 }
 
 /**
+ * 「打开应用时预启动服务」参数：省略 `null`，显式布尔才算修改。
+ *
+ * 与悬浮球同一条约定，理由也一样：这个开关是一次显式选择，不能让一次「只带了部分字段」
+ * 的保存把它悄悄改成关闭。非布尔直接拒绝，不猜、不转字符串。
+ */
+internal fun optionalPrewarmHarness(data: JSONObject): Boolean? {
+    if (!data.has("prewarmHarness")) return null
+    val value = data.opt("prewarmHarness")
+    if (value !is Boolean) throw RuntimeFailure("SETTINGS_INVALID", "预启动设置格式无效")
+    return value
+}
+
+/**
  * 投递区导出的「指定子目录」参数。
  *
  * 省略、`null` 或空白一律等价于「整个工作区」；**非字符串直接拒绝**（不猜、不转字符串）。
@@ -305,8 +318,8 @@ class MobileRuntimePlugin : Plugin() {
         executor = executor,
         active = { !destroying.get() && ::controller.isInitialized },
         // 自动检测不能持有运行时生命周期锁：异常的 Shizuku Binder 不得卡住 Harness 启动。
-        connect = { current ->
-            controller.terminals.shizuku.connectIfAuthorized(permitted = { !destroying.get() }, current = current)
+        connect = { stillCurrent ->
+            controller.terminals.shizuku.connectIfAuthorized(permitted = { !destroying.get() }, stillCurrent = stillCurrent)
             Unit
         },
     )
@@ -767,6 +780,29 @@ class MobileRuntimePlugin : Plugin() {
         execute(call) { JSObject().put("entries", RuntimeReleaseCatalog().list()) }
     }
 
+    /** 应用内桥权限；目录来自固定 npm registry，只返回版本与受控标签。 */
+    @PluginMethod
+    fun listHarnessReleases(call: PluginCall) {
+        execute(call) {
+            JSObject().put("entries", org.json.JSONArray(io.deepseekharness.mobile.runtime.HarnessPackageCatalog.list().map { it.toJson() }))
+        }
+    }
+
+    /** 应用内桥权限；操作白名单与精确版本号由控制器复核，不回传路径、凭据或 npm 原始输出。 */
+    @PluginMethod
+    fun manageHarnessVersions(call: PluginCall) {
+        execute(call) {
+            val operation = call.getString("operation") ?: ""
+            if (operation == "list") JSObject(controller.manageHarnessVersions(operation, null).toString())
+            else audited(when (operation) {
+                "install" -> AuditEvent.RUNTIME_INSTALL
+                "select" -> AuditEvent.RUNTIME_VERSION_SWITCH
+                "delete" -> AuditEvent.RUNTIME_VERSION_DELETE
+                else -> throw RuntimeFailure("HARNESS_VERSION_INVALID", "Harness 版本操作无效")
+            }) { JSObject(controller.manageHarnessVersions(operation, call.getString("version")).toString()) }
+        }
+    }
+
     /**
      * 权限：应用内桥接。
      * 下载远端运行时包到本地版本库（不立即激活）。
@@ -1038,6 +1074,7 @@ class MobileRuntimePlugin : Plugin() {
             val overlayBallEnabledUpdate = optionalOverlayBallEnabled(call.data)
             // 字段缺失 = 这次保存不碰默认模型记录；显式空对象 = 用户清掉了最后一条。
             val defaultModels = call.getObject("defaultModels")?.let(RuntimeValidation::defaultModelIds)
+            val prewarmHarnessUpdate = optionalPrewarmHarness(call.data)
             val settings = RuntimeValidation.settings(
                 call.getString("manifestUrl"),
                 call.getString("manifestSha256"),
@@ -1046,6 +1083,8 @@ class MobileRuntimePlugin : Plugin() {
                 call.getBoolean("keepRuntimeInBackground", false) ?: false,
                 // 省略值只作为构造设置对象时的占位；是否写入由下面的可空更新参数决定。
                 overlayBallEnabledUpdate ?: false,
+                // 同上：占位值不参与写入，省略时保留原生侧已有选择。
+                prewarmHarnessUpdate ?: false,
             )
             val saved = controller.saveSettings(
                 settings,
@@ -1056,6 +1095,7 @@ class MobileRuntimePlugin : Plugin() {
                 clearedCustomProviderApiKeys,
                 overlayBallEnabledUpdate = overlayBallEnabledUpdate,
                 defaultModels = defaultModels,
+                prewarmHarnessUpdate = prewarmHarnessUpdate,
             )
             applyKeepScreenAwake(saved.keepScreenAwake)
             syncKeepAliveService(saved.keepRuntimeInBackground)
@@ -1096,6 +1136,13 @@ class MobileRuntimePlugin : Plugin() {
         }
         val generation = harnessStartGeneration.get()
         val accepted = execute(call) {
+            /*
+             * 启动耗时从「接单」开始算，而不是从 `controller.startHarness()` 开始：
+             * 用户体感的是「点了按钮到能用」，中间还夹着设备桥检查与语言重放，
+             * 只测内核那段会把真实等待算少，优化就会盯着错的地方。
+             */
+            val startWatch = SystemClock.elapsedRealtime()
+            val elapsedMillis = { SystemClock.elapsedRealtime() - startWatch }
             try {
                 audited(AuditEvent.RUNTIME_START) {
                     if (generation != harnessStartGeneration.get()) return@audited controller.state().toJs()
@@ -1110,15 +1157,26 @@ class MobileRuntimePlugin : Plugin() {
                             diagnostics()?.record(
                                 DiagnosticLevel.INFO,
                                 DiagnosticEvent.HARNESS_START,
-                                mapOf("result" to "ok", "phase" to snapshot.optString("phase")),
+                                mapOf(
+                                    "result" to "ok",
+                                    "phase" to snapshot.optString("phase"),
+                                    // 唯一的启动耗时客观口径：0 表示「没走到内核那段」，正常启动不会是 0。
+                                    "elapsed_ms" to elapsedMillis().toString(),
+                                ),
                             )
                         }
                     } catch (failure: Throwable) {
                         // 启动失败码是排障的核心线索：它是受控枚举，不含任何凭据或路径。
+                        // 失败也记耗时：120 秒超时与 200 毫秒就失败是两种完全不同的故障，
+                        // 只看失败码会把它们混成同一类。
                         diagnostics()?.record(
                             DiagnosticLevel.ERROR,
                             DiagnosticEvent.HARNESS_START,
-                            mapOf("result" to "failed", "code" to failureCode(failure)),
+                            mapOf(
+                                "result" to "failed",
+                                "code" to failureCode(failure),
+                                "elapsed_ms" to elapsedMillis().toString(),
+                            ),
                         )
                         throw failure
                     }
@@ -3946,6 +4004,12 @@ class MobileRuntimePlugin : Plugin() {
             if (!destroying.get()) notifyListeners("runtimeProgress", snapshot.toProgressJs())
         }
 
+        override fun onHarnessProgress(stage: String, percent: Int) {
+            if (!destroying.get()) {
+                notifyListeners("harnessProgress", JSObject().put("stage", stage).put("percent", percent))
+            }
+        }
+
         override fun onTerminalOutput(sessionId: String, dataBase64: String, suppressPublicOutput: Boolean) {
             dispatchTerminalOutput(
                 sessionId,
@@ -4018,6 +4082,8 @@ class MobileRuntimePlugin : Plugin() {
         })
         .put("keepRuntimeInBackground", keepRuntimeInBackground)
         .put("overlayBallEnabled", overlayBallEnabled)
+        // 前端据此决定应用启动后是否静默调用 startHarness；缺失时前端按 false 处理。
+        .put("prewarmHarness", prewarmHarness)
 
     private fun RuntimeKeepAliveSnapshot.toJs(): JSObject = JSObject()
         .put("keepRuntimeInBackground", keepRuntimeInBackground)

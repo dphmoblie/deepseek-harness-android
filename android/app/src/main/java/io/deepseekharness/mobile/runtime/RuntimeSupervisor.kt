@@ -128,6 +128,9 @@ class RuntimeSupervisor(
             throw RuntimeFailure(START_CANCELLED_CODE, "Harness 启动已取消")
         }
         if (!startCancellation.tryBegin()) return status.snapshot()
+        // 启动事务边界：本次启动里 `verifyGuest` 与 `launch` 都要「准备运行时」，
+        // 允许它们复用同一份准备结果（见 RuntimePreparationReuse）。事务外不缓存。
+        launchResolver.beginStart()
         try {
             if (startCancellationEpoch.get() != startEpoch) {
                 throw RuntimeFailure(START_CANCELLED_CODE, "Harness 启动已取消")
@@ -253,12 +256,22 @@ class RuntimeSupervisor(
             )
         // 启动成功之后才登记退出观察者：阶段已是 RUNNING，它才知道「自行退出」该怎么收尾。
         watchHarnessProcess(process, manifest)
+        // 到这一步才算「这次启动真的可用」：PRoot、node、dsh 与网页鉴权入口全部通过。
+        // 自检缓存只认这个信号（探测通过不算，见 RuntimeLaunchResolver.verifyGuest），
+        // 下一次启动才允许跳过那次 1~3 秒的 `dsh --version`。
+        launchResolver.markGuestVerified()
         // 显式取一次快照作为本次启动的返回值：上面的登记语句让代码块不再以 update() 结尾，
         // 而「启动成功返回运行中快照」这件事必须由这里写明，不能依赖隐式返回值。
         status.snapshot()
             }
         } catch (failure: RuntimeFailure) {
-            if (failure.code != START_CANCELLED_CODE) throw failure
+            if (failure.code != START_CANCELLED_CODE) {
+                // 任何一次启动失败都必须让「已验证」缓存失效：失败可能就来自运行时损坏，
+                // 若继续信任缓存，下一次启动会跳过自检，把「用户每次都要重试一次才发现」
+                // 变成常态。失效后下一次启动照旧探测，并给出受控错误码。
+                launchResolver.invalidateGuestVerification()
+                throw failure
+            }
             return synchronized(lock) {
                 harnessProcess?.takeIf { it.isAlive }?.let { process ->
                     terminate(process, store.installedManifest()?.harnessPort)
@@ -266,7 +279,13 @@ class RuntimeSupervisor(
                 clearHarnessState()
                 status.refreshIdle()
             }
+        } catch (failure: Throwable) {
+            // 非受控异常（编程错误、系统异常）同样不能继续被缓存信任。
+            launchResolver.invalidateGuestVerification()
+            throw failure
         } finally {
+            // 无论成功、失败还是取消，启动事务都结束：下一次启动必须重新准备 DNS/hosts。
+            launchResolver.endStart()
             startCancellation.finish()
         }
     }
@@ -680,7 +699,8 @@ class RuntimeSupervisor(
     }
 
     private fun waitForHarness(process: Process, port: Int, output: ProcessOutputTail): String {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(START_TIMEOUT_SECONDS)
+        val startedAtNanos = System.nanoTime()
+        val deadline = startedAtNanos + TimeUnit.SECONDS.toNanos(START_TIMEOUT_SECONDS)
         var authServiceReady = false
         while (System.nanoTime() < deadline) {
             throwIfStartCancelled()
@@ -690,7 +710,8 @@ class RuntimeSupervisor(
 
             if (hasExpectedAuthChallenge(port)) {
                 authServiceReady = true
-                pauseWhileStarting(HARNESS_STABILITY_MS)
+                // 复核窗口的语义见 HarnessStartupTimingPolicy：确认「没马上挂」，不是等启动。
+                pauseWhileStarting(HarnessStartupTimingPolicy.STABILITY_MS)
                 if (!process.isAlive) throwHarnessExit(output)
                 val knownFailure = RuntimeDiagnostics.harnessFailure(output.snapshot())
                 if (knownFailure.code != "HARNESS_EXITED") {
@@ -699,7 +720,13 @@ class RuntimeSupervisor(
                 val launchUrl = output.harnessLaunchUrl()
                 if (launchUrl != null && hasExpectedAuthChallenge(port)) return launchUrl
             }
-            pauseWhileStarting(POLL_INTERVAL_MS)
+            // 自适应轮询：冷启动早期探得勤（100ms），超过窗口后退到 200ms。
+            // 用「启动已过去多久」而不是轮询次数，单次探测本身的耗时才不会把窗口算歪。
+            pauseWhileStarting(
+                HarnessStartupTimingPolicy.pollIntervalMillis(
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos),
+                ),
+            )
         }
         if (authServiceReady && output.harnessLaunchUrl() == null) {
             throw RuntimeFailure("HARNESS_AUTH_UNAVAILABLE", "Harness 未提供有效的网页认证入口")
@@ -903,8 +930,6 @@ class RuntimeSupervisor(
         private const val FORCE_STOP_TIMEOUT_MS = 5_000L
         private const val PORT_RELEASE_TIMEOUT_MS = 5_000L
         private const val HARNESS_PROBE_TIMEOUT_SECONDS = 30L
-        private const val POLL_INTERVAL_MS = 200L
-        private const val HARNESS_STABILITY_MS = 600L
         private const val HTTP_PROBE_TIMEOUT_MS = 300
         private const val OUTPUT_DRAIN_TIMEOUT_MS = 750L
         private const val TOKEN_BYTES = 32

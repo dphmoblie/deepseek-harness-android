@@ -311,8 +311,22 @@ textarea {
   letter-spacing: 0;
 }
 
+/*
+ * 裸 `<button>` 的最小基线。
+ *
+ * 设计系统类是 `.button*`（类选择器会覆盖这里），但漏写类名的按钮会掉到 WebView 的默认外观上——
+ * 灰底圆角方块，在深色主题里格外扎眼（诊断页实测就是系统灰按钮）。把「长得像本应用的按钮」
+ * 提到元素层兜底，新写的按钮即使忘了带类也不会破相；尺寸与间距仍归 `.button*` 与布局类管。
+ */
 button {
   -webkit-tap-highlight-color: transparent;
+  padding: 6px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  cursor: pointer;
 }
 
 button:focus-visible,
@@ -679,6 +693,26 @@ button:disabled {
   color: var(--red);
   border-color: var(--danger-line);
   background: var(--red-soft);
+}
+
+/*
+ * 句内动作（告警句尾的「重试」这类）：读起来是一段文字里的链接，不占一块按钮的位置。
+ * 放在 `.button-danger-quiet` 之后、`.icon-button` 之前，靠源码顺序压过 `.button` 的 2.75rem 高。
+ */
+.button-quiet {
+  min-height: 0;
+  padding: 2px 6px;
+  color: var(--blue);
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.button-quiet:not(:disabled):hover {
+  color: var(--blue);
+  background: var(--blue-soft);
 }
 
 .icon-button {
@@ -1615,6 +1649,86 @@ button:disabled {
 .settings-subsection [role='alert'] { color: var(--red-text, var(--red)); }
 
 /*
+ * 自动化设置的三组（副屏 / 参数与规则 / 无障碍）。
+ *
+ * 分组本身不再套一层卡片：组内的每个区块本来就是卡片，再套会把手机一屏挤得只剩边框。
+ * 组与组之间只用一条分隔线加留白区分，标题沿用 `.section-title` 的图标列，
+ * 因此组标题与区块标题在同一根轴线上。
+ */
+.settings-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  align-items: start;
+  gap: 14px;
+  min-width: 0;
+}
+.settings-group + .settings-group {
+  margin-top: 26px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+.settings-group > .section-title {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
+}
+/* 副屏那一组只有一个宽区块（取帧/方向/分辨率/跟随），分两栏只会空掉一半。 */
+.settings-group-single { grid-template-columns: minmax(0, 1fr); }
+
+/*
+ * 副屏组件嵌在分组里时不再套页面壳：`.screen` 自带页面内边距与页级标题，
+ * 放进分组会把卡片再缩一圈，并和分组标题抢层级。
+ */
+.virtual-screen-embedded {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.virtual-screen-embedded > .screen-heading {
+  margin-bottom: 0;
+  justify-content: flex-end;
+}
+.settings-group > .section-title h2 {
+  margin: 0;
+  font-size: 1.02rem;
+  letter-spacing: 0.01em;
+}
+
+/*
+ * 自动化设置的整页容器：`.settings-form` 是两列网格（`.settings-form` 的子项会被
+ * 自动排进左右两栏），这一页要的是「副屏 → 参数与规则 → 无障碍」的纵向顺序，
+ * 所以先跨两列占满，再由组自己决定组内怎么分栏。
+ */
+.settings-stack {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* 页内分组跳转：一行三颗，滚动很长时也能直接到组。 */
+.settings-group-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.settings-group-nav a {
+  padding: 6px 13px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+.settings-group-nav a:hover,
+.settings-group-nav a:focus-visible {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+/*
  * 一张卡片最多占两屏（`vh` 就是手机上看得见的那块）。
  *
  * 独立设置页里最长的几张卡会占很多屏幕空间，因此将卡片高度限制为两屏并在卡片内滚动。
@@ -2507,13 +2621,28 @@ button:disabled {
 
 
 /* onboarding */
-.onboarding-dialog { max-width: 520px; }
+.onboarding-dialog {
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .onboarding-step-dots { display: flex; gap: 6px; margin: 2px 0 12px; }
 .onboarding-step-dots > span { width: 22px; height: 4px; border-radius: var(--radius-chip); background: var(--line-strong); }
 .onboarding-step-dots > span.active { background: var(--blue); }
 .onboarding-step-dots > span.done { background: var(--green); }
 .onboarding-title { display: flex; align-items: center; gap: 9px; margin: 0 0 10px; }
-.onboarding-body { display: flex; flex-direction: column; gap: 10px; color: var(--muted); }
+.onboarding-body {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  color: var(--muted);
+}
 .onboarding-fields { display: flex; min-width: 0; flex-direction: column; gap: 10px; margin: 0; padding: 0; border: 0; }
 .onboarding-body ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; }
 .onboarding-body code { font-size: .9em; }
@@ -2521,6 +2650,23 @@ button:disabled {
 .onboarding-status { font-size: .92em; }
 .onboarding-actions-row { display: flex; gap: 9px; flex-wrap: wrap; }
 .onboarding-nav { display: flex; align-items: center; width: 100%; }
+/*
+ * 引导六步的内容长短不一（第 2 步要放下状态、警告与安装按钮）。900px 高的横屏里
+ * 光靠 `.dialog` 自己滚动会把「下一步」压在折叠线以下，用户看不到出口。
+ *
+ * 第一版用了 `position: sticky` 贴底，结果动作行是「浮」在正文上的：正文滚到中段时
+ * 被它盖住，第 2 步的「安装运行时」只露出一条蓝边（MuMu 900×1600 实测）。
+ * 改成弹窗自己不再滚动、只有正文那一块滚，标题与动作行都是 flex 流里的固定行，
+ * 谁都不会压住谁。
+ */
+.onboarding-dialog {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.onboarding-dialog > .onboarding-body { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+.onboarding-dialog .onboarding-nav { flex: none; padding-top: 12px; }
+.onboarding-note { color: var(--muted); }
 .onboarding-spacer { flex: 1; }
 /* 折叠的高级项：默认收起，展开后与正文保持同一套间距。 */
 .onboarding-advanced { border-top: 1px solid var(--line-strong); padding-top: 9px; }

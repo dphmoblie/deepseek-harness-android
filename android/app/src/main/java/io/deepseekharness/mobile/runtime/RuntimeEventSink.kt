@@ -18,6 +18,14 @@ interface RuntimeEventSink {
 
     /** 终端会话结束。 */
     fun onTerminalExit(sessionId: String, exitCode: Int)
+
+    /**
+     * Harness 包安装的阶段进度。
+     *
+     * [percent] 是**阶段完成度**（0..100），不是字节进度：npm 解析依赖、下 tarball 时没有
+     * 稳定百分比可用。默认空实现，只有真正转给界面的事件出口才需要覆写。
+     */
+    fun onHarnessProgress(stage: String, percent: Int) = Unit
 }
 
 /**

@@ -10,7 +10,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
 /**
- * Device UI automation over an existing, user-visible device Shell session.
+ * 在**用户可见的既有设备 Shell 会话**之上做设备 UI 自动化。
  *
  * 安全模型（不变的部分）：不引入新的可执行文件；调用方只能从固定白名单操作里选一个，
  * 参数在这里校验，危险 shell 语法在构造阶段就被拒绝；命令内容不写入审计日志。
@@ -136,8 +136,8 @@ class DeviceCommandRunner(
     private val inflight = ConcurrentHashMap<String, Pending>()
 
     /**
-     * Run one allowlisted command in [sessionId] and wait for its end marker.
-     * Blocks the calling thread (a plugin executor worker) up to [timeoutMs].
+     * 在 [sessionId] 里执行一条白名单命令并等它的结束标记。
+     * 会阻塞调用线程（插件执行器的工作线程），最长 [timeoutMs]。
      *
      * [useRootEngine] 为真且命令是 [DeviceCommand.SHELL] 时，**不走 Shizuku 会话**：
      * `su -c` 由应用进程自己起（见 [RootCommandRunner] 的类注释），因为「谁执行 su」决定了

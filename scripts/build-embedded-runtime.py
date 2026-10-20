@@ -111,6 +111,29 @@ NETWORK_TOOLS_METADATA_PATH = "etc/deepseek-harness-network-tools.json"
 # 预置树体积上限：D3 式的静默降级不可接受，硬链接没保留时要当场失败
 # （丢失硬链接的 git-core 约 500 MB，正常值约 4 MB）。
 NETWORK_TOOLS_MAX_TREE_BYTES = 96 * 1024 * 1024
+BUILD_TOOLS_EXECUTABLE_PREFIXES = (
+    PurePosixPath("usr/bin"),
+    PurePosixPath("usr/lib/gcc"),
+    PurePosixPath("usr/libexec/gcc"),
+)
+BUILD_TOOLS_REQUIRED_PATHS = (
+    "usr/bin/cc",
+    "usr/bin/gcc",
+    "usr/bin/g++",
+    "usr/bin/make",
+    "usr/lib/gcc",
+    "usr/include",
+)
+BUILD_TOOLS_REQUIRED_ENTRYPOINTS = frozenset(
+    {
+        "usr/bin/cc",
+        "usr/bin/gcc",
+        "usr/bin/g++",
+        "usr/bin/make",
+    }
+)
+BUILD_TOOLS_MAX_TREE_BYTES = 320 * 1024 * 1024
+BUILD_TOOLS_METADATA_PATH = "etc/deepseek-harness-build-tools.json"
 SOURCE_MAP_SUFFIX = ".map"
 
 
@@ -608,6 +631,13 @@ def add_windows_tree(
     for current_raw, directory_names, file_names in os.walk(source_root, topdown=True, followlinks=False):
         current = Path(current_raw)
         relative = current.relative_to(source_root)
+        # 遍历顺序必须确定：`scandir` 的顺序由文件系统决定（ext4 是哈希序），而同一 inode 的
+        # 多个硬链接里「谁先被看到」决定了谁落成实体条目、谁写成硬链接。CI 上确实因此翻车过：
+        # 同一提交两次运行，一次 git-core/git 是实体、一次变成把 git-add 当实体的硬链接，
+        # 打包自检的断言随之随机失败。排序把「谁先被看到」固定下来，顺带让同一份输入的
+        # bundle 字节序保持稳定（便于比对 sha256）。
+        directory_names.sort()
+        file_names.sort()
 
         for name in list(directory_names):
             path = current / name
@@ -850,6 +880,38 @@ def add_network_tools(writer: RootfsWriter, tools_dir: Path) -> None:
     )
 
 
+def add_build_tools(writer: RootfsWriter, tools_dir: Path) -> None:
+    """把 ARM64 C 编译工具链和 make 写入 rootfs。"""
+    if tools_dir is None or not tools_dir.is_dir():
+        raise BuildError("构建工具组件目录不存在或不是目录")
+    missing = [path for path in BUILD_TOOLS_REQUIRED_PATHS if not (tools_dir / Path(path)).exists()]
+    if missing:
+        raise BuildError(f"构建工具组件缺少必需路径：{', '.join(missing)}")
+    tree_bytes = shared_tree_bytes(tools_dir)
+    if tree_bytes > BUILD_TOOLS_MAX_TREE_BYTES:
+        raise BuildError(
+            f"构建工具组件预置树异常膨胀：{tree_bytes} 字节 > {BUILD_TOOLS_MAX_TREE_BYTES}"
+        )
+    add_windows_tree(
+        writer,
+        tools_dir,
+        "",
+        executable_prefixes=BUILD_TOOLS_EXECUTABLE_PREFIXES,
+        forced_regular_paths=BUILD_TOOLS_REQUIRED_ENTRYPOINTS,
+    )
+    metadata = {
+        "components": ["build-essential", "gcc", "g++", "make", "binutils", "libc6-dev"],
+        "treeBytes": tree_bytes,
+        "note": "由 scripts/stage-build-tools.py 在同发行版同架构构建机上预置",
+    }
+    writer.add_bytes(
+        BUILD_TOOLS_METADATA_PATH,
+        (json.dumps(metadata, ensure_ascii=True, sort_keys=True, indent=2) + "\n").encode("ascii"),
+        0o644,
+    )
+    print(f"build tools: components={','.join(metadata['components'])} treeBytes={tree_bytes}")
+
+
 def add_profiles_module_fallback(
     writer: RootfsWriter,
     dsh_root: Path,
@@ -980,6 +1042,17 @@ def parse_arguments() -> argparse.Namespace:
         help="explicitly build without the network tools component group "
         "(mobile builds include it by default)",
     )
+    parser.add_argument(
+        "--build-tools-dir",
+        type=Path,
+        default=None,
+        help="预置的 ARM64 C 编译工具与 make 组件树，由 scripts/stage-build-tools.py 生成",
+    )
+    parser.add_argument(
+        "--without-build-tools",
+        action="store_true",
+        help="显式关闭 C 编译工具组件（移动构建默认启用）",
+    )
     return parser.parse_args()
 
 
@@ -1039,6 +1112,10 @@ def main() -> None:
             "network tools are both requested and disabled: do not combine "
             "--network-tools-dir with --without-network-tools"
         )
+    if args.without_build_tools and args.build_tools_dir is not None:
+        raise BuildError(
+            "build tools are both requested and disabled: do not combine --build-tools-dir with --without-build-tools"
+        )
     if (
         args.network_tools_dir is None
         and mobile_spec is not None
@@ -1051,6 +1128,12 @@ def main() -> None:
         )
     # 组件组开关：移动 profile 默认启用；显式 --without-network-tools 可关。
     network_tools_enabled = args.network_tools_dir is not None and not args.without_network_tools
+    if args.build_tools_dir is None and mobile_spec is not None and not args.without_build_tools:
+        raise BuildError(
+            "移动运行时默认包含构建工具组件（gcc/make）：请传入 scripts/stage-build-tools.py "
+            "生成的 --build-tools-dir，或显式传入 --without-build-tools 关闭"
+        )
+    build_tools_enabled = args.build_tools_dir is not None and not args.without_build_tools
     if args.output.exists() or args.manifest.exists():
         raise BuildError("output archive and manifest must not already exist")
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -1079,6 +1162,8 @@ def main() -> None:
             add_toolchain(writer, args.toolchain_dir)
             if network_tools_enabled:
                 add_network_tools(writer, args.network_tools_dir)
+            if build_tools_enabled:
+                add_build_tools(writer, args.build_tools_dir)
             writer.add_bytes("usr/local/bin/dsh-device", DEVICE_CLI, 0o755)
             writer.add_directory("sdcard/")
             disabled_profile_bundles = frozenset()
@@ -1165,6 +1250,7 @@ def main() -> None:
             },
             "harnessUrl": "http://127.0.0.1:3080/",
             "profileLinks": profile_links,
+            "buildTools": build_tools_enabled,
             **({"mobile": mobile_spec} if mobile_spec is not None else {}),
         }
         manifest_bytes = (json.dumps(manifest, ensure_ascii=True, indent=2) + "\n").encode("ascii")

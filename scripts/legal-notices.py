@@ -106,6 +106,46 @@ COMPONENTS: tuple[Component, ...] = (
         markers=("BSD", "permissive", "OpenSSH"),
         required=False,
     ),
+    Component(
+        key="gcc",
+        candidates=("gcc", "gcc-13", "gcc-14"),
+        pattern=re.compile(r"^gcc(?:-[0-9]+)?$"),
+        license="GPL-3.0 / GCC Runtime Library Exception",
+        markers=("GNU General Public License", "GCC Runtime Library Exception"),
+        required=True,
+    ),
+    Component(
+        key="g++",
+        candidates=("g++", "g++-13", "g++-14"),
+        pattern=re.compile(r"^g\+\+(?:-[0-9]+)?$"),
+        license="GPL-3.0 / GCC Runtime Library Exception",
+        markers=("GNU General Public License", "GCC Runtime Library Exception"),
+        required=True,
+    ),
+    Component(
+        key="make",
+        candidates=("make",),
+        pattern=re.compile(r"^make$"),
+        license="GPL-3.0",
+        markers=("GNU General Public License", "GPL-3"),
+        required=True,
+    ),
+    Component(
+        key="binutils",
+        candidates=("binutils", "binutils-common"),
+        pattern=re.compile(r"^binutils(?:-common)?$"),
+        license="GPL-3.0",
+        markers=("GNU General Public License", "GPL-3"),
+        required=True,
+    ),
+    Component(
+        key="libc6-dev",
+        candidates=("libc6-dev",),
+        pattern=re.compile(r"^libc6-dev(?::[a-z0-9-]+)?$"),
+        license="LGPL-2.1",
+        markers=("GNU Lesser General Public License", "LGPL"),
+        required=True,
+    ),
 )
 
 

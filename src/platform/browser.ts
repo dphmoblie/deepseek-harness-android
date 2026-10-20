@@ -69,6 +69,8 @@ const DEFAULT_SETTINGS: RuntimeSettings = {
   deepSeekAccountConfigured: false,
   // 浏览器预览没有前台服务：保持关闭，避免给出错误的保活预期。
   keepRuntimeInBackground: false,
+  // 浏览器预览里没有真正的运行时可预启动，保持关闭。
+  prewarmHarness: false,
 }
 function listenerHandle(remove: () => void): ListenerHandle {
   return {
@@ -246,6 +248,10 @@ export function createBrowserBridge(): RuntimeBridge {
         overlayBallEnabled: settings.overlayBallEnabled === undefined
           ? currentSettings.overlayBallEnabled ?? false
           : validated.overlayBallEnabled,
+        // 预启动同理：与「后台保持」「悬浮球」互不相关的保存不该把它顺手关掉。
+        prewarmHarness: settings.prewarmHarness === undefined
+          ? currentSettings.prewarmHarness ?? false
+          : validated.prewarmHarness,
         configuredModelProviders: MODEL_PROVIDER_IDS.filter(provider => configuredProviders.has(provider)),
         configuredCustomModelProviders: [...configuredCustomProviders],
       })
@@ -718,6 +724,8 @@ export function createBrowserBridge(): RuntimeBridge {
       Promise.reject(new Error('浏览器模式下不能删除运行时会话快照')),
     // 浏览器预览里没有原生侧的更新渠道，也没有可下载安装的 APK：如实拒绝，
     // 不编造版本列表或更新状态，否则界面会把「预览里的假版本」当成真能装的东西。
+    listHarnessReleases: () => Promise.reject(new Error('浏览器模式下没有 Harness 版本目录')),
+    manageHarnessVersions: () => Promise.reject(new Error('浏览器模式下不能管理 Harness 版本')),
     listRuntimeReleases: (): Promise<RuntimeReleaseList> => Promise.reject(new Error('浏览器模式下没有更新渠道')),
     downloadRuntimeRelease: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能下载运行时')),
     getAppUpdateState: (forceRefresh = false): Promise<AppUpdateState> => {
@@ -757,6 +765,7 @@ export function createBrowserBridge(): RuntimeBridge {
     // 浏览器预览里 downloadAppUpdate 直接拒绝（不能下载安装包），所以这条通道永远不会有事件；
     // 仍然返回一个可注销的句柄，让调用方的订阅/清理逻辑与真机保持一致。
     addAppUpdateProgressListener: () => Promise.resolve(listenerHandle(() => undefined)),
+  addHarnessProgressListener: () => Promise.resolve(listenerHandle(() => undefined)),
     addRuntimeProgressListener: listener => {
       progressListeners.add(listener)
       return Promise.resolve(listenerHandle(() => progressListeners.delete(listener)))
