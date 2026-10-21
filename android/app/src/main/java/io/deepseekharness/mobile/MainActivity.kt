@@ -70,6 +70,14 @@ class MainActivity : BridgeActivity() {
                 moveTaskToBack(true)
             }
         })
+
+        /*
+         * 外壳壁纸可能是视频：WebView 默认 `mediaPlaybackRequiresUserGesture = true`。
+         * 用户刚选完壁纸时那次手势还能放行播放，但冷启动后没有任何用户手势，
+         * AppBackground 里的 muted autoplay 会被拦下，壁纸就只剩一层底色。
+         * 外壳只加载本仓库打包的本地页面，这里放开自动播放不会引入外部内容。
+         */
+        bridge?.webView?.settings?.mediaPlaybackRequiresUserGesture = false
     }
 
     override fun onNewIntent(intent: Intent) {
