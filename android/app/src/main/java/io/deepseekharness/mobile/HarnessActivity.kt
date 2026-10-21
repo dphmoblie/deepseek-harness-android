@@ -265,6 +265,9 @@ class HarnessActivity : AppCompatActivity() {
                 }
                 // 每次主框架加载完都重放一次已同步的主题；没有同步过时它什么都不做。
                 HarnessThemeBridge.apply(view)
+                // 同一时刻补一次浏览器 API：老 WebView 缺 AbortSignal.any，页面自带的
+                // 「选择工作区目录」会在点开时直接报错。缺失才补，新的 WebView 上是空操作。
+                HarnessPolyfill.apply(view)
             },
         )
         clearHttpAuthCredentialsAsync()
