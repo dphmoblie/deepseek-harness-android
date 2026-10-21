@@ -4738,6 +4738,20 @@ export function App() {
   }, [filesRoot, readMailboxDirectory, readStorageDirectory, run])
 
   /**
+   * 将文件管理页当前条目交给系统：路径只在当前受控根下传递，原生侧再次做 NoFollow
+   * 校验并复制到 FileProvider 缓存，不把宿主绝对路径暴露给 WebView 或其它应用。
+   */
+  const externalFileAction = useCallback((action: 'share' | 'open', path: string) => {
+    const root = filesRootRef.current
+    void run(`external-file-${action}`, () => runtimeBridge.externalFileAction({
+      source: root.kind,
+      ...(root.kind === 'mailbox' ? { root: root.root } : { guestPath: root.guestPath }),
+      path,
+      action,
+    }), action === 'share' ? t("已打开分享面板") : t("已打开文件"))
+  }, [run])
+
+  /**
    * 在当前目录新建文件夹：名称必须由用户明确输入（避免静默写入公共存储）。
    *
    * 校验复用投递区那一个 `assertMailboxSubdirectory`（平台层只有这一份实现），并要求名称是
@@ -4883,7 +4897,7 @@ export function App() {
         />
       )
       case 'files':
-        return <FilesScreen busy={busy} filesRoot={filesRoot} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} mailbox={mailbox} mailboxDirectory={mailboxDirectory} mailboxDirectoryReadFailed={mailboxDirectoryReadFailed} mailboxReadFailed={mailboxReadFailed} storageAccess={storageAccess} storageDirectory={storageDirectory} storageDirectoryReadFailed={storageDirectoryReadFailed} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onBack={() => backToView('settings')} onCreateFilesFolder={createFilesFolder} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onOpenFilesDirectory={openFilesDirectory} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} onSelectFilesRoot={selectFilesRoot} />
+        return <FilesScreen busy={busy} filesRoot={filesRoot} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} mailbox={mailbox} mailboxDirectory={mailboxDirectory} mailboxDirectoryReadFailed={mailboxDirectoryReadFailed} mailboxReadFailed={mailboxReadFailed} storageAccess={storageAccess} storageDirectory={storageDirectory} storageDirectoryReadFailed={storageDirectoryReadFailed} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onBack={() => backToView('settings')} onCreateFilesFolder={createFilesFolder} onExternalFileAction={externalFileAction} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onOpenFilesDirectory={openFilesDirectory} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} onSelectFilesRoot={selectFilesRoot} />
       case 'settings':
         return <SettingsHomeScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={() => launchHarness()} onOpenPage={openSettings} onOpenView={setActiveView} />
       default: {

@@ -147,6 +147,41 @@ describe('文件管理（投递区与共享目录同一个浏览器）', () => {
     expect(within(await screen.findByRole('navigation', { name: '当前目录' })).getByRole('button', { name: '照片' })).toBeVisible()
   })
 
+  it('普通文件可以分享或交给其他应用打开，并按当前根传递受控相对路径', async () => {
+    bridge.getMailboxState.mockResolvedValue({ ...availableMailbox })
+    bridge.getMailboxDirectory.mockResolvedValue({
+      root: 'inbox', path: undefined,
+      entries: [{ name: 'report.pdf', kind: 'file', bytes: 12 }], truncated: false,
+    })
+    bridge.externalFileAction.mockResolvedValue(undefined)
+    bridge.getStorageDirs.mockResolvedValue(dirsState([dirEntry()]))
+    bridge.getStorageDirectory.mockResolvedValue({
+      guestPath: '/mnt/user/1', path: undefined,
+      entries: [{ name: 'summary.txt', kind: 'file', bytes: 7 }], truncated: false,
+    })
+
+    render(<App />)
+    await waitFor(() => expect(bridge.getStorageDirs).toHaveBeenCalledTimes(1))
+    await openFilesPage()
+
+    fireEvent.click(screen.getByRole('button', { name: '其他应用打开 report.pdf' }))
+    await waitFor(() => expect(bridge.externalFileAction).toHaveBeenCalledWith({
+      source: 'mailbox', root: 'inbox', path: 'report.pdf', action: 'open',
+    }))
+    fireEvent.click(screen.getByRole('button', { name: '分享 report.pdf' }))
+    await waitFor(() => expect(bridge.externalFileAction).toHaveBeenCalledWith({
+      source: 'mailbox', root: 'inbox', path: 'report.pdf', action: 'share',
+    }))
+
+    fireEvent.click(screen.getByRole('tab', { name: 'DSH-1' }))
+    await waitFor(() => expect(bridge.getStorageDirectory).toHaveBeenCalledWith('/mnt/user/1', undefined))
+    expect(screen.getByRole('button', { name: '分享 summary.txt' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '分享 summary.txt' }))
+    await waitFor(() => expect(bridge.externalFileAction).toHaveBeenCalledWith({
+      source: 'storage', guestPath: '/mnt/user/1', path: 'summary.txt', action: 'share',
+    }))
+  })
+
   it('在共享目录里新建文件夹走 createStorageFolder，不会串到投递区', async () => {
     bridge.getStorageDirs.mockResolvedValue(dirsState([dirEntry()]))
     bridge.getStorageDirectory.mockResolvedValue({

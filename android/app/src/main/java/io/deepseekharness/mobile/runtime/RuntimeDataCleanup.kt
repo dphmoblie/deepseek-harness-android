@@ -20,6 +20,9 @@ internal object RuntimeCacheEntries {
     /** 工作区对外分享的暂存目录（[RuntimeWorkspaceFiles.copyForSharing] 用的就是它）。 */
     const val WORKSPACE_SHARE = "share"
 
+    /** 文件管理交给其它应用的副本；不纳入手动缓存清理，避免接收方延迟读取 URI。 */
+    const val EXTERNAL_SHARE = "external-share"
+
     /** PRoot 的临时目录（[RuntimeCommand.hostEnvironment] 里的 `PROOT_TMP_DIR` 与 `TMPDIR`）。 */
     const val PROOT_TMP = "proot-tmp"
 

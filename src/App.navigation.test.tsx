@@ -62,6 +62,7 @@ const bridge = vi.hoisted(() => ({
   shareRuntimeWorkspaceFile: vi.fn(),
   openRuntimeWorkspaceFile: vi.fn(),
   deleteRuntimeWorkspaceFile: vi.fn(),
+  externalFileAction: vi.fn(),
   clearDiagnosticLog: vi.fn(),
   addRuntimeProgressListener: vi.fn(),
   addTerminalOutputListener: vi.fn(),
