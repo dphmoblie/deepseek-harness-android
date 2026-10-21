@@ -861,6 +861,29 @@ describe('后台页的运行时与设备 Shell 入口', () => {
     expect(await screen.findByText('设置已保存')).toBeVisible()
   })
 
+  it('模型与密钥页的保存按钮立即写盘，不用离开页面', async () => {
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
+
+    fireEvent.change(screen.getByLabelText(/DeepSeek API Key/), { target: { value: 'unit-test-inline-save' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存密钥' }))
+
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      providerApiKeys: { deepseek: 'unit-test-inline-save' },
+    })))
+    // 保存成功后仍停在这一页，输入框没有被禁用（是否清空沿用既有草稿规则）。
+    expect(screen.getByLabelText(/DeepSeek API Key/)).toBeEnabled()
+    expect(screen.getByRole('heading', { name: '模型与密钥' })).toBeVisible()
+  })
+
+  it('没有密钥改动时「保存密钥」禁用', async () => {
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
+    expect(await screen.findByRole('button', { name: '保存密钥' })).toBeDisabled()
+  })
+
   it('保存失败或仍在途时不谎称已保存', async () => {
     let resolveSave!: (value: RuntimeSettings) => void
     bridge.saveSettings.mockImplementationOnce(() => new Promise<RuntimeSettings>(resolve => { resolveSave = resolve }))
