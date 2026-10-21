@@ -3619,3 +3619,13 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   opacity: 0;
   cursor: pointer;
 }
+
+/* 密钥保存反馈：颜色跟主题走，不写死绿/红。 */
+.credential-save-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.8125rem;
+}
+.credential-save-status.success { color: var(--green); }
+.credential-save-status.error { color: var(--red); }

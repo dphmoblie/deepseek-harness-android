@@ -884,6 +884,27 @@ describe('后台页的运行时与设备 Shell 入口', () => {
     expect(await screen.findByRole('button', { name: '保存密钥' })).toBeDisabled()
   })
 
+  it('保存密钥成功后显示已保存提示', async () => {
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
+    fireEvent.change(screen.getByLabelText(/DeepSeek API Key/), { target: { value: 'unit-test-saved' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存密钥' }))
+    expect(await screen.findByText('已保存')).toBeVisible()
+  })
+
+  it('保存密钥失败时提示可重试且不清空输入', async () => {
+    bridge.saveSettings.mockRejectedValueOnce(new Error('write failed'))
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
+    fireEvent.change(screen.getByLabelText(/DeepSeek API Key/), { target: { value: 'unit-test-keep' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存密钥' }))
+    expect(await screen.findByText('保存失败，请重试')).toBeVisible()
+    expect(screen.getByLabelText(/DeepSeek API Key/)).toHaveValue('unit-test-keep')
+    expect(screen.getByRole('button', { name: '保存密钥' })).toBeEnabled()
+  })
+
   it('保存失败或仍在途时不谎称已保存', async () => {
     let resolveSave!: (value: RuntimeSettings) => void
     bridge.saveSettings.mockImplementationOnce(() => new Promise<RuntimeSettings>(resolve => { resolveSave = resolve }))

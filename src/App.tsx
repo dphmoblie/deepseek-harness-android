@@ -1663,10 +1663,12 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   const [catalogResults, setCatalogResults] = useState<Record<string, ModelCatalogResult>>({})
   /** 默认模型输入框里的原始文本（可能还没成为合法 id，因此不一定已写进草稿）。 */
   const [modelInputs, setModelInputs] = useState<Record<string, string>>({})
+  /** 密钥「立即保存」的反馈：只影响模型与密钥页那颗按钮旁边的状态。 */
+  const [credentialSaveState, setCredentialSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
   /*
-   * 写盘只发生在「离开这一页 / 切到后台」时，由 App 统一执行（见 App 里的
-   * `saveSettingsDraft`）。本组件因此不持有保存按钮、定时器或「已保存」徽标 ——
-   * 页面上不再有手动保存入口，输入期间也不会落盘。
+   * 整页写盘仍只发生在「离开这一页 / 切到后台」时，由 App 统一执行（见 App 里的
+   * `saveSettingsDraft`）。模型与密钥页额外有一颗「保存密钥」按钮：它调的也是同一个入口，
+   * 只是让用户不必先离开页面就能确认密钥已经落盘。
    */
   /** 总开关的一次操作还在路上：按钮在这期间全部禁用，避免连点出两次动作。 */
   const [automationPending, setAutomationPending] = useState(false)
@@ -2160,7 +2162,10 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     || clearedCustomProviders.length > 0
 
   /** 立即写盘：与离开页面自动保存走同一个入口（App.saveSettingsDraft）。 */
-  const saveCredentials = (): void => { void onSaveCredentials() }
+  const saveCredentials = (): void => {
+    setCredentialSaveState('saving')
+    void onSaveCredentials().then(ok => setCredentialSaveState(ok ? 'saved' : 'failed'))
+  }
 
 
   /**
@@ -2401,6 +2406,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 : selectedProviderConfigured ? t("已配置，留空保持不变") : t("输入 API Key")}
               value={credentialDrafts[selectedProvider] ?? ''}
               onValueChange={value => {
+                // 改了输入，上一次「已保存 / 保存失败」就不再对应当前内容。
+                setCredentialSaveState('idle')
                 setCredentialDrafts(current => {
                   const next = { ...current }
                   if (value === '') delete next[selectedProvider]
@@ -2423,6 +2430,14 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               {busy === 'save-settings' ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
               {busy === 'save-settings' ? t('保存中…') : t('保存密钥')}
             </button>
+            {credentialSaveState === 'saved' && (
+              <span className="credential-save-status success" role="status">
+                <CheckCircle2 size={15} />{t('已保存')}
+              </span>
+            )}
+            {credentialSaveState === 'failed' && (
+              <span className="credential-save-status error" role="alert">{t('保存失败，请重试')}</span>
+            )}
             <button
               className="button button-secondary compact-button"
               type="button"
