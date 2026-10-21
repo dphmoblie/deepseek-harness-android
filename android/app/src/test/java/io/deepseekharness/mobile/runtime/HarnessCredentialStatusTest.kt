@@ -48,7 +48,6 @@ class HarnessCredentialStatusTest {
     fun malformedOrUnsupportedDocumentsFailClosed() {
         val cases = listOf(
             "version: 2\nrefs:\n  DEEPSEEK_API_KEY: value",
-            "version: 1\nunknown: value\nrefs:\n  DEEPSEEK_API_KEY: value",
             "version: 1\nrefs:\n  DEEPSEEK_API_KEY: ''",
             "version: 1\nrefs:\n  DEEPSEEK_API_KEY: [value]",
             "version: 1\nrefs:\n  DEEPSEEK_API_KEY: first\n  DEEPSEEK_API_KEY: second",
@@ -57,6 +56,11 @@ class HarnessCredentialStatusTest {
         cases.forEach { yaml ->
             assertEquals(HarnessCredentialStatus(), parse(yaml))
         }
+        // 未知顶层键按 dsh 的口径忽略而不是整份拒绝：引用仍然要读出来。
+        assertEquals(
+            setOf(ModelProvider.DEEPSEEK),
+            parse("version: 1\nunknown: value\nrefs:\n  DEEPSEEK_API_KEY: value").modelProviders,
+        )
     }
 
     @Test

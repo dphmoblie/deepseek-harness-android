@@ -109,6 +109,35 @@ class HarnessCredentialsDocumentTest {
     }
 
     @Test
+    fun `an empty flow refs mapping is expanded instead of refused`() {
+        // dsh 的 yaml 序列化把空 refs 写成 `{}`（典型：只有账号授权记录、还没存过 API Key）。
+        // 拒绝它会让 App 回落到环境变量，dsh 随后把同一引用判成只读，模型页就保存失败。
+        val existing = "version: 1\nrecords:\n  deepseek-account-platform/default:\n    kind: oauth\nrefs: {}\n"
+        val updated = HarnessCredentialsDocument.upsert(existing, mapOf("DEEPSEEK_API_KEY" to "sk-sentinel"))!!
+
+        assertFalse(updated.contains("refs: {}"))
+        assertTrue(updated.contains("refs:\n  DEEPSEEK_API_KEY: 'sk-sentinel'\n"))
+        // 账号授权记录一个字节都不动。
+        assertTrue(updated.contains("records:\n  deepseek-account-platform/default:\n    kind: oauth\n"))
+        assertEquals(mapOf("DEEPSEEK_API_KEY" to "sk-sentinel"), HarnessCredentialsDocument.refs(updated))
+    }
+
+    @Test
+    fun `unknown top level sections are preserved like dsh does`() {
+        // dsh 对未知顶层键只 warn 然后忽略；App 若拒绝，就会回落到环境变量，
+        // 而环境层会让 dsh 把同名引用判成只读，模型页保存随即失败。
+        val existing = "version: 1\nfutureSection:\n  note: keep me\nrefs:\n  DEEPSEEK_API_KEY: 'sk-old'\n"
+        assertEquals(mapOf("DEEPSEEK_API_KEY" to "sk-old"), HarnessCredentialsDocument.refs(existing))
+
+        val updated = HarnessCredentialsDocument.upsert(existing, mapOf("OPENAI_API_KEY" to "sk-new"))!!
+        assertTrue(updated.contains("futureSection:\n  note: keep me\n"))
+        assertEquals(
+            mapOf("DEEPSEEK_API_KEY" to "sk-old", "OPENAI_API_KEY" to "sk-new"),
+            HarnessCredentialsDocument.refs(updated),
+        )
+    }
+
+    @Test
     fun `quotes and special characters in a value survive a round trip`() {
         val value = "sk-'quoted':#-value"
 
@@ -120,8 +149,6 @@ class HarnessCredentialsDocumentTest {
     @Test
     fun `documents this editor must not rewrite are refused`() {
         val refused = listOf(
-            // 顶层出现未知键：dsh 自己也会拒绝，改了只会制造一份两边都不认的文档。
-            "version: 1\nunknown: value\nrefs:\n  DEEPSEEK_API_KEY: sk\n",
             // 版本不是 1。
             "version: 2\nrefs:\n  DEEPSEEK_API_KEY: sk\n",
             // 缺少 version（pre-release 扁平布局）。
@@ -132,8 +159,8 @@ class HarnessCredentialsDocumentTest {
             "version: 1\nrefs:\n  DEEPSEEK_API_KEY: [sk]\n",
             // 重复键。
             "version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk\n  DEEPSEEK_API_KEY: sk2\n",
-            // refs 段是流式映射。
-            "version: 1\nrefs: {}\n",
+            // refs 段是**非空**流式映射：替换行会破坏同一行里的其它条目。
+            "version: 1\nrefs: {DEEPSEEK_API_KEY: sk}\n",
             // CRLF：行下标假设不成立，一律放弃编辑。
             "version: 1\r\nrefs:\r\n  DEEPSEEK_API_KEY: sk\r\n",
             // records 不是映射。
@@ -157,7 +184,6 @@ class HarnessCredentialsDocumentTest {
         // 与 HarnessCredentialStatusReader 的失败关闭口径一致：两份实现共用同一个解析器。
         val invalid = listOf(
             "version: 2\nrefs:\n  DEEPSEEK_API_KEY: value",
-            "version: 1\nunknown: value\nrefs:\n  DEEPSEEK_API_KEY: value",
             "version: 1\nrefs:\n  DEEPSEEK_API_KEY: ''",
             "version: 1\nrefs:\n  DEEPSEEK_API_KEY: [value]",
             "version: 1\nrefs:\n  DEEPSEEK_API_KEY: first\n  DEEPSEEK_API_KEY: second",
@@ -270,7 +296,7 @@ class HarnessCredentialsDocumentTest {
     }
 
     @Test
-    fun `deepseek account grant presence fails closed for unsupported document shape`() {
+    fun `deepseek account grant presence tolerates unknown sections but rejects unsupported shapes`() {
         val document = """
             version: 1
             unexpected: true
@@ -283,6 +309,9 @@ class HarnessCredentialsDocumentTest {
                   issuer: https://platform.deepseek.com
         """.trimIndent()
 
-        assertFalse(HarnessCredentialsDocument.hasDeepSeekAccountGrant(document))
+        // 未知顶层键按 dsh 的口径忽略：授权记录仍然要认出来。
+        assertTrue(HarnessCredentialsDocument.hasDeepSeekAccountGrant(document))
+        // 真正不认识的形态（refs 不是映射）仍然失败关闭。
+        assertFalse(HarnessCredentialsDocument.hasDeepSeekAccountGrant("version: 1\nrefs: []\n"))
     }
 }
