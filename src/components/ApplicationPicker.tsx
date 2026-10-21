@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Smartphone, X } from 'lucide-react'
+import { Search, Smartphone, X } from 'lucide-react'
 import type { InstalledApplication, RuntimeBridge } from '../platform/types'
 import { t } from '../i18n'
 import { isVisible, normalizeSearchQuery, orderForDisplay, type VisibilityFilters } from './applicationSearchQuery'
@@ -34,6 +34,7 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
    * 会把新一轮的 loading 清掉（或永远清不掉），这正是「永远在读取」的第二个来源。
    */
   const bridgeRef = useRef(bridge)
+  const inputRef = useRef<HTMLInputElement | null>(null)
   bridgeRef.current = bridge
   const generation = useRef(0)
   /** 上一次 effect 见过的词：只在「用户改了输入」时防抖，打开面板与重试都立刻请求。 */
@@ -81,6 +82,20 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
     generation.current++
     setAttempt(value => value + 1)
   }
+
+  /**
+   * 显式搜索：按输入框当前原文立刻查一次，不等防抖，也不依赖输入法一定派发 compositionend。
+   *
+   * 移动端拼音候选、联想补全有时会漏掉 compositionend，只靠「输入即搜」会让人以为搜索坏了；
+   * 按钮直接取 `input.value`，并把 lastQuery 清掉以跳过 200 ms 防抖。
+   */
+  function searchNow(): void {
+    const committed = inputRef.current?.value ?? query
+    setIsComposing(false)
+    lastQuery.current = null
+    setQuery(committed)
+    retry()
+  }
   function toggleFilter(setter: (value: boolean) => void, value: boolean) {
     setter(value)
     // 过滤只改可见性，不重新请求：清掉的只是已经拿到的这一页，翻页进度与已勾选都不受影响。
@@ -97,6 +112,7 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
     {opened && <div className="application-picker-panel">
       <div className="search-control application-picker-search" role="search" aria-label={t('搜索应用名称或包名')}>
           <input
+            ref={inputRef}
             type="search"
             value={query}
             maxLength={160}
@@ -115,13 +131,23 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
             onBlur={() => setIsComposing(false)}
             onKeyDown={event => {
               if (event.key === 'Enter') {
-                setIsComposing(false)
+                event.preventDefault()
+                searchNow()
               }
             }}
             onChange={event => setQuery(event.target.value)}
             placeholder={t('输入应用名称或包名')}
             aria-label={t('搜索应用名称或包名')}
           />
+          <button
+            type="button"
+            className="button button-secondary compact-button"
+            onClick={searchNow}
+            disabled={disabled}
+            aria-label={t('搜索')}
+          >
+            <Search size={16} />{t('搜索')}
+          </button>
           {query !== '' && (
             <button
               type="button"

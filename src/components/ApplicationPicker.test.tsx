@@ -54,6 +54,21 @@ describe('已安装应用选择器', () => {
     expect(screen.getByText('已选择 40 个应用；勾选后点击保存白名单。')).toBeInTheDocument()
   })
 
+  it('输入法组合态下点「搜索」按钮也能立即发起查询', async () => {
+    const { list, bridge } = bridgeReturning([{ apps: [app('wx')], nextOffset: null, total: 1 }])
+    const { container } = open(bridge)
+    const input = container.querySelector<HTMLInputElement>('.application-picker-search input')!
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(1))
+
+    // 组合态中只输入不提交：输入即搜的防抖被 isComposing 挡掉，这正是搜索「失效」的场景。
+    fireEvent.compositionStart(input)
+    fireEvent.change(input, { target: { value: 'wx' } })
+    expect(list).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: '搜索' }))
+    await waitFor(() => expect(list).toHaveBeenLastCalledWith('wx', 0))
+  })
+
   it('搜索更新后忽略上一条慢请求的返回值，并且不会被它清掉读取状态', async () => {
     let resolve!: (value: unknown) => void
     const list = vi.fn().mockImplementationOnce(() => new Promise(done => { resolve = done }))

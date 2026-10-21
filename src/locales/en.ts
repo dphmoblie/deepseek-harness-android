@@ -1393,6 +1393,7 @@ export const english: Readonly<Record<string, string>> = {
   "目录操作失败（错误码 {0}）。请重试；若持续失败，可先移除该条目再重新添加。": "The directory operation failed (error code {0}). Try again; if it keeps failing, remove the entry and add it again.",
   "从已安装应用选择": "Choose from installed apps",
   "搜索应用名称或包名": "Search app name or package",
+  "搜索": "Search",
   "输入应用名称或包名": "Enter an app name or package",
   "系统安全组件，不支持无障碍自动化": "System security component; accessibility automation is not supported",
   "已选择 {0} 个应用；勾选后点击保存白名单。": "{0} apps selected; tick the boxes, then save the whitelist.",
