@@ -30,15 +30,18 @@ internal object RuntimeShareCache {
         }.orEmpty().sortedBy { it.lastModified() }
         var bytes = remaining.sumOf { it.length() }
         var count = remaining.size
+        // Reserve one slot for the copy that the caller creates immediately after this method
+        // returns.  Checking `<= MAX_FILES` here would let the next File.createTempFile push
+        // the cache to 33 entries.
         for (file in remaining) {
-            if (count <= MAX_FILES && bytes <= MAX_BYTES - MAX_COPY_BYTES) break
+            if (count < MAX_FILES && bytes <= MAX_BYTES - MAX_COPY_BYTES) break
             val size = file.length()
             if (file.delete()) {
                 count--
                 bytes -= size
             }
         }
-        if (count > MAX_FILES || bytes > MAX_BYTES - MAX_COPY_BYTES) return null
+        if (count >= MAX_FILES || bytes > MAX_BYTES - MAX_COPY_BYTES) return null
         return directory
     }
 }

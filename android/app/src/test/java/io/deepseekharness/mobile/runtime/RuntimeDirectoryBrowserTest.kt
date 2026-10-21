@@ -50,6 +50,20 @@ class RuntimeDirectoryBrowserTest {
         assertTrue(directory.listFiles().orEmpty().size <= RuntimeShareCache.MAX_FILES)
     }
 
+    @Test
+    fun `share cache reserves a slot for the next copy`() {
+        val cache = temporaryFolder.newFolder("cache")
+        val directory = File(cache, RuntimeCacheEntries.EXTERNAL_SHARE).apply { mkdirs() }
+        repeat(RuntimeShareCache.MAX_FILES) { index ->
+            File(directory, "fresh-$index").writeBytes(ByteArray(1))
+        }
+
+        val prepared = requireNotNull(RuntimeShareCache.prepare(cache, RuntimeCacheEntries.EXTERNAL_SHARE))
+        File.createTempFile("dsh-", "-copy", prepared)
+
+        assertTrue(directory.listFiles().orEmpty().size <= RuntimeShareCache.MAX_FILES)
+    }
+
     /** 造一个已知大小的普通文件：条目里的 `bytes` 必须来自真实文件长度。 */
     private fun file(name: String, bytes: Int = 1): File {
         val target = File(temporaryFolder.root, name)
