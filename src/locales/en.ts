@@ -1122,6 +1122,8 @@ export const english: Readonly<Record<string, string>> = {
   "当前无可用更新版本。": "No available updates found.",
   "已保存": "Saved",
   "保存": "Save",
+  "保存密钥": "Save key",
+  "保存失败，请重试": "Save failed. Please retry.",
   "保存中…": "Saving…",
   "没有未保存的修改": "No unsaved changes",
   "离开这一页时会自动保存；也可以现在保存。": "Changes save automatically when you leave this page; you can also save now.",
