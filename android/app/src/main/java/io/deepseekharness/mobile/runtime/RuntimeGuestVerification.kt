@@ -24,7 +24,8 @@ import android.content.Context
  * [RuntimeStorageDirPreferences] 同一个模式：业务代码里不出现 `getSharedPreferences`，
  * 否则这条缓存逻辑就只能靠桩件去测，等于测不到。
  *
- * 线程模型：调用方始终在 `RuntimeLaunchResolver` 的锁内使用本类，这里不再加锁。
+ * 线程模型：调用方在 `RuntimeLaunchResolver` 的锁内使用本类，这里不再加锁；进程级的
+ * `invalidated` 标记是 `@Volatile`，因为安装/更新路径会在另一把锁下写它。
  */
 internal class RuntimeGuestVerification(private val storage: Storage) {
     /** 存储抽象：生产实现包 SharedPreferences，测试用内存替身。 */
@@ -34,15 +35,6 @@ internal class RuntimeGuestVerification(private val storage: Storage) {
         /** 传 null 表示删除键。 */
         fun writeToken(value: String?)
     }
-
-    /**
-     * 本进程内「已明确失效」的标记：一旦置位，[allowsSkip] 不再信任磁盘上的令牌。
-     *
-     * 用来兜住「失效写入失败」这一条：`SharedPreferences.edit().apply()` 极少失败，但失败时
-     * 磁盘上可能还留着上一次成功的令牌；如果只靠磁盘状态判断，本次启动失败之后的下一次启动
-     * 仍会跳过自检 —— 那正是「真实损坏被缓存掩盖」的最坏情况。
-     */
-    private var invalidated = false
 
     /**
      * 当前 `profileKey` 是否被上一次完整启动证明过。
@@ -81,6 +73,23 @@ internal class RuntimeGuestVerification(private val storage: Storage) {
     }
 
     companion object {
+        /**
+         * 本进程内「已明确失效」的标记：一旦置位，**任何实例**的 [allowsSkip] 都不再信任磁盘上的令牌。
+         *
+         * 为什么是伴生对象而不是实例字段：调用方按需现造实例（[RuntimeStore.invalidateInstalledManifest]
+         * 是 `from(context).invalidate()`），实例字段会跟着那个临时对象一起被丢掉；而真正决定
+         * 「跳不跳过自检」的是 [RuntimeLaunchResolver] 持有的另一个实例。放在这里才能让安装/更新
+         * 触发的失效也立刻生效。
+         *
+         * 用来兜住「失效写入失败」这一条：`SharedPreferences.edit().apply()` 极少失败，但写盘是
+         * 异步且不回报结果的，失败时磁盘上可能还留着上一次成功的令牌；如果只靠磁盘状态判断，
+         * 本次启动失败之后的下一次启动仍会跳过自检 —— 那正是「真实损坏被缓存掩盖」的最坏情况。
+         *
+         * 跨进程只能靠磁盘状态，见 [invalidate]。
+         */
+        @Volatile
+        private var invalidated = false
+
         /**
          * 令牌前缀带版本。
          *

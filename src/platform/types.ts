@@ -1920,6 +1920,14 @@ export interface RuntimeBridge {
   shareRuntimeWorkspaceFile: (path: string) => Promise<void>
   openRuntimeWorkspaceFile: (path: string) => Promise<void>
   deleteRuntimeWorkspaceFile: (path: string) => Promise<void>
+  /** 在系统分享面板分享或用其它应用打开文件管理页当前文件。 */
+  externalFileAction: (options: {
+    source: 'mailbox' | 'storage'
+    root?: MailboxRoot
+    guestPath?: string
+    path: string
+    action: 'share' | 'open'
+  }) => Promise<void>
   /** 清空全部诊断日志。 */
   clearDiagnosticLog: () => Promise<DiagnosticLogState>
   /**

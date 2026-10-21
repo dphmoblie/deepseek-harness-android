@@ -6,6 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeNoException
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -13,6 +14,7 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.SecureDirectoryStream
 
 /**
  * 共享浏览核心的用例。
@@ -33,6 +35,20 @@ class RuntimeDirectoryBrowserTest {
 
     private val mailbox = RuntimeDirectoryBrowser.MAILBOX
     private val shared = RuntimeDirectoryBrowser.SHARED_STORAGE
+
+    @Test
+    fun `share cache removes stale entries and stays bounded`() {
+        val cache = temporaryFolder.newFolder("cache")
+        val directory = File(cache, RuntimeCacheEntries.EXTERNAL_SHARE).apply { mkdirs() }
+        repeat(RuntimeShareCache.MAX_FILES + 4) { index ->
+            File(directory, "old-$index").writeBytes(ByteArray(1))
+        }
+
+        val prepared = RuntimeShareCache.prepare(cache, RuntimeCacheEntries.EXTERNAL_SHARE)
+
+        assertEquals(directory, prepared)
+        assertTrue(directory.listFiles().orEmpty().size <= RuntimeShareCache.MAX_FILES)
+    }
 
     /** 造一个已知大小的普通文件：条目里的 `bytes` 必须来自真实文件长度。 */
     private fun file(name: String, bytes: Int = 1): File {
@@ -208,6 +224,42 @@ class RuntimeDirectoryBrowserTest {
         // 同名文件与同名目录都是「已存在」，不能把文件悄悄换成目录。
         assertEquals(StorageDirCodes.FOLDER_EXISTS, failure.code)
         assertTrue(File(temporaryFolder.root, "occupied.txt").isFile)
+    }
+
+    @Test
+    fun `copies only the selected regular file for external actions`() {
+        val source = file("nested/result.json", 7)
+        val secure = Files.newDirectoryStream(temporaryFolder.root.toPath()).use { it is SecureDirectoryStream<*> }
+        assumeTrue("host filesystem has no SecureDirectoryStream", secure)
+
+        val cache = temporaryFolder.newFolder("cache")
+        val exported = RuntimeDirectoryBrowser.copyFileForSharing(
+            temporaryFolder.root,
+            "nested/result.json",
+            shared,
+            cache,
+        )
+
+        assertEquals(source.readBytes().toList(), exported.readBytes().toList())
+        assertEquals(RuntimeCacheEntries.EXTERNAL_SHARE, exported.parentFile?.name)
+    }
+
+    @Test
+    fun `external action rejects links and path escapes`() {
+        val outside = file("outside.txt", 1)
+        val link = File(temporaryFolder.root, "link.txt").toPath()
+        createSymbolicLinkOrSkip(link, outside.toPath())
+        val cache = temporaryFolder.newFolder("cache")
+
+        val linkFailure = assertThrows(RuntimeFailure::class.java) {
+            RuntimeDirectoryBrowser.copyFileForSharing(temporaryFolder.root, "link.txt", shared, cache)
+        }
+        assertTrue(linkFailure.code == StorageDirCodes.NOT_A_DIRECTORY || linkFailure.code == StorageDirCodes.DIRECTORY_FAILED)
+
+        val escapeFailure = assertThrows(RuntimeFailure::class.java) {
+            RuntimeDirectoryBrowser.copyFileForSharing(temporaryFolder.root, "../outside.txt", shared, cache)
+        }
+        assertEquals(StorageDirCodes.PATH_INVALID, escapeFailure.code)
     }
 
     @Test

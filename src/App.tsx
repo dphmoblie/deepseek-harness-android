@@ -4079,35 +4079,49 @@ export function App() {
     /*
      * 触发口径是「这项设置由关变开」，且**必须区分相位**（AGENTS.md §5）：
      *
-     * - 关掉开关要当场复位 `seen`，否则「关掉再打开」会被当成已经触发过而静默跳过；
-     * - `phase === 'running'` 时当场消费这次变更：服务已经热着，这不是「需要预启动」，
-     *   而是一个守卫——用户随后手动点「停止」把相位带回 ready 时，不能再被它拉起来；
-     * - 其余未就绪条件（下载解压 / 停止中 / 有待更新 / 还没配模型凭据）**不要提前消费**：
-     *   一旦消费了，用户「开着开关却要等下次冷启动」，而且全程没有任何提示。
-     *   留到条件成熟的那次渲染再补做。
+     * 为什么按设置值而不是按相位：若只看「空闲 ready 就预启动」，用户手动点「停止」后相位
+     * 回到 ready，效果会立刻把服务重新拉起来——用户刚关掉的东西自己又开了，比慢启动更糟。
+     * 反过来，用户在本次会话里把开关打开时应该立刻生效，不必等下次冷启动，因此记下上一次
+     * 的取值来区分「设置刚变」与「相位在变」。
+     *
+     * 「已触发」的记账时机在下面的资格判断**之后**：开关是在条件尚不成熟时被打开的（运行时还在
+     * 下载解压、有待更新的运行时、还没配模型凭据）时，若先消费掉这次变更，等条件成熟也补不回来，
+     * 用户开了开关却要等到下次冷启动才生效，而且全程没有任何提示。
+     *
+     * 例外是「服务已经在跑」：这时本来就没有要预启动的东西，而它恰恰是用户手动点「停止」之前的
+     * 那次判定 —— 在此当场消费，之后相位回到 ready 时才不会把用户刚停的服务重新拉起。
      */
-    const enabled = settings.prewarmHarness === true
-    if (!enabled) {
+    const previous = prewarmSettingSeen.current
+    // 关掉开关要当场复位：否则「关掉再打开」会被当成已经触发过，静默跳过。
+    if (settings.prewarmHarness !== true) {
       prewarmSettingSeen.current = false
       return
     }
-    if (prewarmSettingSeen.current) return
+    if (previous === true) return
+    /*
+     * 服务已在运行：本次变更到此为止，当场记账。
+     *
+     * 这是「用户手动停止后不被重新拉起」的守卫：开机那次判定看到的相位是 running，若这里不消费，
+     * 用户点「停止」把相位带回 ready 时，这次由关变开会被当成「条件尚未成熟、留着待触发」，
+     * 于是刚被用户关掉的服务立刻又被预启动拉起。
+     */
     if (runtime.phase === 'running') {
       prewarmSettingSeen.current = true
       return
     }
     /*
-     * 只在「已安装且空闲 ready」时预启动。
+     * 其余未就绪条件（运行时下载解压、停止中、有待更新、还没配置模型凭据）都保留这次由关变开，
+     * 等条件成熟的那次渲染再补做，用户不必等下次冷启动。
      *
-     * 用相位而不是 `installed` 判断：installed 还包含 running / stopping / 下载解压这些
-     * 正在进行的状态，在那些状态下再发一次启动会与安装或停止竞态（原生会以 RUNTIME_BUSY
-     * 之类的错误收场），而预启动本该是静默的后台准备，不该制造失败。
+     * 只在「已安装且空闲 ready」时预启动。用相位而不是 `installed` 判断：installed 还包含
+     * running / stopping / 下载解压这些正在进行的状态，在那些状态下再发一次启动会与安装或停止
+     * 竞态（原生会以 RUNTIME_BUSY 之类的错误收场），而预启动本该是静默的后台准备，不该制造失败。
      */
     if (runtime.phase !== 'ready') return
     if (runtime.updateAvailable) return
     // 没有可投递的模型凭据时启动没有意义（含用户只在 Harness 内配过密钥的情况）。
     if (!hasConfiguredModelCredential(settings)) return
-    // 到这里才消费这次「由关变开」：条件成熟、且确实要发起预启动。
+    // 资格齐了才记「已触发」：条件不满足的那几次渲染不消费这次变更。
     prewarmSettingSeen.current = true
     const attempt = runtimeBridge.startHarness()
       .then(next => {
@@ -5139,6 +5153,20 @@ export function App() {
   }, [filesRoot, readMailboxDirectory, readStorageDirectory, run])
 
   /**
+   * 将文件管理页当前条目交给系统：路径只在当前受控根下传递，原生侧再次做 NoFollow
+   * 校验并复制到 FileProvider 缓存，不把宿主绝对路径暴露给 WebView 或其它应用。
+   */
+  const externalFileAction = useCallback((action: 'share' | 'open', path: string) => {
+    const root = filesRootRef.current
+    void run(`external-file-${action}`, () => runtimeBridge.externalFileAction({
+      source: root.kind,
+      ...(root.kind === 'mailbox' ? { root: root.root } : { guestPath: root.guestPath }),
+      path,
+      action,
+    }), action === 'share' ? t("已打开分享面板") : t("已打开文件"))
+  }, [run])
+
+  /**
    * 在当前目录新建文件夹：名称必须由用户明确输入（避免静默写入公共存储）。
    *
    * 校验复用投递区那一个 `assertMailboxSubdirectory`（平台层只有这一份实现），并要求名称是
@@ -5284,7 +5312,7 @@ export function App() {
         />
       )
       case 'files':
-        return <FilesScreen busy={busy} filesRoot={filesRoot} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} mailbox={mailbox} mailboxDirectory={mailboxDirectory} mailboxDirectoryReadFailed={mailboxDirectoryReadFailed} mailboxReadFailed={mailboxReadFailed} storageAccess={storageAccess} storageDirectory={storageDirectory} storageDirectoryReadFailed={storageDirectoryReadFailed} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onBack={() => backToView('settings')} onCreateFilesFolder={createFilesFolder} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onOpenFilesDirectory={openFilesDirectory} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} onSelectFilesRoot={selectFilesRoot} />
+        return <FilesScreen busy={busy} filesRoot={filesRoot} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} mailbox={mailbox} mailboxDirectory={mailboxDirectory} mailboxDirectoryReadFailed={mailboxDirectoryReadFailed} mailboxReadFailed={mailboxReadFailed} storageAccess={storageAccess} storageDirectory={storageDirectory} storageDirectoryReadFailed={storageDirectoryReadFailed} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onBack={() => backToView('settings')} onCreateFilesFolder={createFilesFolder} onExternalFileAction={externalFileAction} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onOpenFilesDirectory={openFilesDirectory} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} onSelectFilesRoot={selectFilesRoot} />
       case 'settings':
         return <SettingsHomeScreen busy={busy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={() => launchHarness()} onOpenPage={openSettings} onOpenView={setActiveView} />
       default: {

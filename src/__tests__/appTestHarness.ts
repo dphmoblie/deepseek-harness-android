@@ -201,6 +201,7 @@ export const bridge = {
   shareRuntimeWorkspaceFile: vi.fn(),
   openRuntimeWorkspaceFile: vi.fn(),
   deleteRuntimeWorkspaceFile: vi.fn(),
+  externalFileAction: vi.fn(),
   clearDiagnosticLog: vi.fn(),
   addRuntimeProgressListener: vi.fn(),
   addHarnessProgressListener: vi.fn(),
@@ -506,6 +507,7 @@ export function beforeEachAppTest(): void {
   bridge.getStorageDirectory.mockResolvedValue({ guestPath: '/mnt/user/1', path: undefined, entries: [], truncated: false })
   bridge.createStorageFolder.mockResolvedValue({ guestPath: '/mnt/user/1', path: undefined, entries: [], truncated: false })
   bridge.getStorageAccessState.mockResolvedValue({ ...storageAccess })
+  bridge.externalFileAction.mockResolvedValue(undefined)
   // 与「未授予所有文件访问」的真机初始状态一致：白名单为空、档位 T0、上限照实回 8。
   // 给默认值而不只是 vi.fn()，是为了让桩在**被调用**时也返回符合契约的形状——
   // 返回 undefined 会让界面侧的载荷校验抛错，那同样会整棵树卸载。

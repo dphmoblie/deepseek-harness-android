@@ -3054,6 +3054,30 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 
 .mailbox-entry-file {
   cursor: default;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.mailbox-entry-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+}
+
+.mailbox-entry-actions .compact-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+  padding: 5px 7px;
+  white-space: nowrap;
+}
+
+.mailbox-entry-action-label {
+  color: inherit !important;
+  font-size: 0.6875rem !important;
+  overflow-wrap: normal !important;
 }
 
 @media (max-width: 520px) {
@@ -3065,6 +3089,24 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   .mailbox-create-button {
     width: 100%;
     justify-content: center;
+  }
+
+  .mailbox-entry-file {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .mailbox-entry-actions {
+    grid-column: 2 / -1;
+    justify-self: end;
+  }
+
+  .mailbox-entry-actions .compact-button {
+    min-width: 44px;
+    justify-content: center;
+  }
+
+  .mailbox-entry-action-label {
+    display: none;
   }
 }
 

@@ -270,6 +270,13 @@ interface NativeRuntimePlugin {
   shareRuntimeWorkspaceFile(options: { path: string }): Promise<void>
   openRuntimeWorkspaceFile(options: { path: string }): Promise<void>
   deleteRuntimeWorkspaceFile(options: { path: string }): Promise<void>
+  externalFileAction(options: {
+    source: 'mailbox' | 'storage'
+    root?: MailboxRoot
+    guestPath?: string
+    path: string
+    action: 'share' | 'open'
+  }): Promise<void>
   clearDiagnosticLog(): Promise<DiagnosticLogState>
   addListener(eventName: 'runtimeProgress', listener: (event: RuntimeProgress) => void): Promise<PluginListenerHandle>
   addListener(eventName: 'appUpdateProgress', listener: (event: AppUpdateProgress) => void): Promise<PluginListenerHandle>
@@ -650,6 +657,17 @@ function createNativeBridge(): RuntimeBridge {
     shareRuntimeWorkspaceFile: path => NativeRuntime.shareRuntimeWorkspaceFile({ path: validateRuntimeWorkspaceFilePath(path) }),
     openRuntimeWorkspaceFile: path => NativeRuntime.openRuntimeWorkspaceFile({ path: validateRuntimeWorkspaceFilePath(path) }),
     deleteRuntimeWorkspaceFile: path => NativeRuntime.deleteRuntimeWorkspaceFile({ path: validateRuntimeWorkspaceFilePath(path) }),
+    externalFileAction: options => {
+      if (options.source !== 'mailbox' && options.source !== 'storage') return Promise.reject(new Error('外部文件来源无效'))
+      if (options.action !== 'share' && options.action !== 'open') return Promise.reject(new Error('外部文件动作无效'))
+      const path = validateRuntimeWorkspaceFilePath(options.path)
+      if (options.source === 'mailbox') {
+        if (options.root !== 'inbox' && options.root !== 'outbox') return Promise.reject(new Error('投递区根目录无效'))
+        return NativeRuntime.externalFileAction({ source: options.source, root: options.root, path, action: options.action })
+      }
+      if (typeof options.guestPath !== 'string' || !/^\/mnt\/user\/[1-9]\d*$/.test(options.guestPath)) return Promise.reject(new Error('共享目录路径无效'))
+      return NativeRuntime.externalFileAction({ source: options.source, guestPath: options.guestPath, path, action: options.action })
+    },
     clearDiagnosticLog: () => NativeRuntime.clearDiagnosticLog().then(validateDiagnosticLogState),
     addRuntimeProgressListener: listener => NativeRuntime.addListener('runtimeProgress', validatedListener(validateRuntimeProgress, listener)),
   addHarnessProgressListener: listener => NativeRuntime.addListener('harnessProgress', validatedListener(validateHarnessProgress, listener)),

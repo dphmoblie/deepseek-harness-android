@@ -41,6 +41,7 @@ class RuntimeDataCleanupTest {
         val stranger = directory(cacheDir, "webview-cache", bytes = 4096)
         // 已下载待安装的更新包是产物、不是缓存：清掉它等于让一次更新白跑。
         val pending = directory(cacheDir, RuntimeCacheEntries.PENDING_UPDATE, bytes = 8192)
+        val externalShare = directory(cacheDir, RuntimeCacheEntries.EXTERNAL_SHARE, bytes = 128)
 
         val outcome = RuntimeCacheCleanup(cacheDir, deletingRunner()).clear()
 
@@ -58,6 +59,7 @@ class RuntimeDataCleanupTest {
         assertFalse(prootTmp.exists())
         assertTrue(stranger.isDirectory)
         assertTrue(pending.isDirectory)
+        assertTrue(externalShare.isDirectory)
     }
 
     @Test
@@ -169,6 +171,7 @@ class RuntimeDataCleanupTest {
         assertEquals("diagnostics", DIAGNOSTIC_DIRECTORY_NAME)
         assertEquals(DIAGNOSTIC_DIRECTORY_NAME, RuntimeCacheEntries.DIAGNOSTIC_EXPORTS)
         assertEquals("share", RuntimeCacheEntries.WORKSPACE_SHARE)
+        assertEquals("external-share", RuntimeCacheEntries.EXTERNAL_SHARE)
         assertEquals("proot-tmp", RuntimeCacheEntries.PROOT_TMP)
         assertEquals("app-updates", AppUpdateStorage.DIRECTORY_NAME)
         assertEquals(AppUpdateStorage.DIRECTORY_NAME, RuntimeCacheEntries.PENDING_UPDATE)
@@ -178,6 +181,7 @@ class RuntimeDataCleanupTest {
         )
         // 待安装的更新包绝不能被列进可清理项。
         assertFalse(RuntimeCacheEntries.CLEARABLE.contains(RuntimeCacheEntries.PENDING_UPDATE))
+        assertFalse(RuntimeCacheEntries.CLEARABLE.contains(RuntimeCacheEntries.EXTERNAL_SHARE))
     }
 
     @Test
