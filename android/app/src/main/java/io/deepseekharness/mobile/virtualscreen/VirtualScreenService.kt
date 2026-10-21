@@ -543,6 +543,8 @@ class VirtualScreenService : Service() {
         // 另一个窗口，于是预览页与小窗能共用同一份「多大、怎么调、怎么退」的行为。
         val frame = VirtualScreenFrame(this).also { preview = it.preview }
         frame.preview.dragHost = overlayDragHost
+        // 顶栏拖动：按下即拖，不必先长按画面；画面区域的手势照旧透传给副屏。
+        frame.installDrag(VirtualScreenDragGesture { overlayDragHost })
         frame.installResize(overlayResizeGesture)
         // 「收起」保留会话（目标应用继续跑，只是把画面收掉），「结束」走与通知同一个 stopSelf 路径：
         // 会话在 onDestroy 里统一释放，不在这里另做一套收尾。
@@ -634,11 +636,13 @@ class VirtualScreenService : Service() {
             // 用户上次拖出来的宽度（0 = 跟随屏幕最大）。横竖屏切换后可能已经超出新屏幕，
             // 夹取在 overlaySize 内部完成，这里不再判断。
             VirtualScreenPreferences.read(this).overlayWidthPx)
+        val totalHeight = VirtualScreenWindow.overlayTotalHeight(size.heightPx, metrics.density)
+            .coerceIn(1, sizingHeight.coerceAtLeast(1))
         return OverlayLayout(
             x = (bounds.width() - size.widthPx) / 2,
-            y = (bounds.height() - insetTop - insetBottom - size.heightPx) / 2,
+            y = (bounds.height() - insetTop - insetBottom - totalHeight) / 2,
             widthPx = size.widthPx,
-            heightPx = size.heightPx,
+            heightPx = totalHeight,
             area = OverlayArea(bounds.width(), bounds.height(), insetTop, insetBottom, sizingWidth, sizingHeight),
         )
     }

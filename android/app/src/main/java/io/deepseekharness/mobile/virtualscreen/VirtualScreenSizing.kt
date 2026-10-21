@@ -338,6 +338,25 @@ object VirtualScreenWindow {
     const val RESIZE_HANDLE_INSET_DP = 4f
 
     /**
+     * 小窗顶栏高度（dp）：拖动条与出口芯片都在这一条里。
+     *
+     * 顶栏在画面之上而不是压在画面上：芯片此前盖住目标应用自己的顶部按钮（搜索框、工具栏），
+     * 用户既点不到应用按钮，也找不到「拖窗口」的入口。
+     */
+    const val CHROME_HEIGHT_DP = 40f
+
+    /**
+     * 窗口总高 = 顶栏 + 内容高。
+     *
+     * 内容高可能因为会话正在收尾而拿到 0 或负数，这里一律按至少 1px 处理，避免出现 0 尺寸窗口；
+     * 顶栏高度至少 1px，密度异常时也不会塌成一条看不见的线。
+     */
+    fun overlayTotalHeight(contentHeightPx: Int, density: Float): Int {
+        val chrome = (CHROME_HEIGHT_DP * density).toInt().coerceAtLeast(1)
+        return chrome + contentHeightPx.coerceAtLeast(1)
+    }
+
+    /**
      * 在 `maxWidth × maxHeight` 的矩形内求一个宽高比等于 [aspectRatio] 的最大内容尺寸。
      *
      * 换算顺序：先按宽度顶满算出高度，若高度超出上限再反过来按高度顶满算宽度。
