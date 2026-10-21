@@ -10,6 +10,39 @@ import java.nio.file.SecureDirectoryStream
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributeView
 
+/** Bounded, short-lived cache used for files handed to another app. */
+internal object RuntimeShareCache {
+    const val MAX_FILES = 32
+    private const val MAX_BYTES = 256L * 1024 * 1024
+    private const val MAX_COPY_BYTES = 64L * 1024 * 1024
+    private const val RETENTION_MS = 24L * 60 * 60 * 1000
+
+    fun prepare(cacheDir: File, directoryName: String): File? {
+        val directory = File(cacheDir, directoryName)
+        if ((!directory.isDirectory && !directory.mkdirs()) || Files.isSymbolicLink(directory.toPath())) return null
+        val now = System.currentTimeMillis()
+        val files = directory.listFiles()?.filter { file ->
+            Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(file.toPath())
+        }.orEmpty().sortedBy { it.lastModified() }
+        files.filter { now - it.lastModified() > RETENTION_MS }.forEach { it.delete() }
+        val remaining = directory.listFiles()?.filter { file ->
+            Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS) && !Files.isSymbolicLink(file.toPath())
+        }.orEmpty().sortedBy { it.lastModified() }
+        var bytes = remaining.sumOf { it.length() }
+        var count = remaining.size
+        for (file in remaining) {
+            if (count <= MAX_FILES && bytes <= MAX_BYTES - MAX_COPY_BYTES) break
+            val size = file.length()
+            if (file.delete()) {
+                count--
+                bytes -= size
+            }
+        }
+        if (count > MAX_FILES || bytes > MAX_BYTES - MAX_COPY_BYTES) return null
+        return directory
+    }
+}
+
 /**
  * 目录浏览的**受控错误码族**。
  *
@@ -200,8 +233,8 @@ internal object RuntimeDirectoryBrowser {
             throw failure
         }
         val names = normalized.split('/')
-        val shareDirectory = File(cacheDir, RuntimeCacheEntries.WORKSPACE_SHARE)
-        if ((!shareDirectory.isDirectory && !shareDirectory.mkdirs()) || Files.isSymbolicLink(shareDirectory.toPath())) {
+        val shareDirectory = RuntimeShareCache.prepare(cacheDir, RuntimeCacheEntries.EXTERNAL_SHARE)
+        if (shareDirectory == null) {
             throw RuntimeFailure(texts.codes.directoryFailed, "无法准备文件分享目录")
         }
         val safeName = names.last().replace(Regex("[^A-Za-z0-9._-]"), "_").takeLast(80).ifEmpty { "file" }
@@ -212,16 +245,7 @@ internal object RuntimeDirectoryBrowser {
         }
         return try {
             val rootPath = root.toPath().toAbsolutePath().normalize()
-            if (!MailboxTree.isRealDirectory(rootPath)) {
-                throw RuntimeFailure(texts.codes.directoryNotFound, texts.rootUnavailable)
-            }
-            Files.newDirectoryStream(rootPath).use { stream ->
-                if (stream !is SecureDirectoryStream<*>) {
-                    throw RuntimeFailure(texts.codes.directoryFailed, "系统不支持安全访问文件")
-                }
-                @Suppress("UNCHECKED_CAST")
-                copyFromSecureDirectory(stream as SecureDirectoryStream<Path>, names, 0, target, texts)
-            }
+            withSecureRoot(rootPath, texts) { stream -> copyFromSecureDirectory(stream, names, 0, target, texts) }
             target
         } catch (error: RuntimeFailure) {
             target.delete()
@@ -232,6 +256,33 @@ internal object RuntimeDirectoryBrowser {
         } catch (error: Throwable) {
             target.delete()
             throw RuntimeFailure(texts.codes.directoryFailed, "无法准备文件分享", error)
+        }
+    }
+
+    /** Open every root component with NOFOLLOW_LINKS before reading the selected file. */
+    private fun withSecureRoot(
+        root: Path,
+        texts: DirectoryBrowseTexts,
+        action: (SecureDirectoryStream<Path>) -> Unit,
+    ) {
+        val anchor = root.root ?: throw RuntimeFailure(texts.codes.directoryNotFound, texts.rootUnavailable)
+        Files.newDirectoryStream(anchor).use { stream ->
+            if (stream !is SecureDirectoryStream<*>) {
+                throw RuntimeFailure(texts.codes.directoryFailed, "系统不支持安全访问文件")
+            }
+            @Suppress("UNCHECKED_CAST")
+            val secure = stream as SecureDirectoryStream<Path>
+            val names = anchor.relativize(root).toList()
+            fun visit(parent: SecureDirectoryStream<Path>, index: Int) {
+                if (index == names.size) {
+                    action(parent)
+                    return
+                }
+                parent.newDirectoryStream(names[index], LinkOption.NOFOLLOW_LINKS).use { child ->
+                    visit(child, index + 1)
+                }
+            }
+            visit(secure, 0)
         }
     }
 

@@ -36,6 +36,20 @@ class RuntimeDirectoryBrowserTest {
     private val mailbox = RuntimeDirectoryBrowser.MAILBOX
     private val shared = RuntimeDirectoryBrowser.SHARED_STORAGE
 
+    @Test
+    fun `share cache removes stale entries and stays bounded`() {
+        val cache = temporaryFolder.newFolder("cache")
+        val directory = File(cache, RuntimeCacheEntries.EXTERNAL_SHARE).apply { mkdirs() }
+        repeat(RuntimeShareCache.MAX_FILES + 4) { index ->
+            File(directory, "old-$index").writeBytes(ByteArray(1))
+        }
+
+        val prepared = RuntimeShareCache.prepare(cache, RuntimeCacheEntries.EXTERNAL_SHARE)
+
+        assertEquals(directory, prepared)
+        assertTrue(directory.listFiles().orEmpty().size <= RuntimeShareCache.MAX_FILES)
+    }
+
     /** 造一个已知大小的普通文件：条目里的 `bytes` 必须来自真实文件长度。 */
     private fun file(name: String, bytes: Int = 1): File {
         val target = File(temporaryFolder.root, name)
@@ -227,7 +241,7 @@ class RuntimeDirectoryBrowserTest {
         )
 
         assertEquals(source.readBytes().toList(), exported.readBytes().toList())
-        assertEquals(RuntimeCacheEntries.WORKSPACE_SHARE, exported.parentFile?.name)
+        assertEquals(RuntimeCacheEntries.EXTERNAL_SHARE, exported.parentFile?.name)
     }
 
     @Test

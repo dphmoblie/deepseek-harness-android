@@ -3493,23 +3493,29 @@ class MobileRuntimePlugin : Plugin() {
                     ?: throw RuntimeFailure(StorageDirCodes.PATH_INVALID, "共享目录访客路径缺失")
                 storageDirs().copyFileForSharing(guestPath, relative, context.cacheDir)
             }
-            val mime = MimeTypeMap.getSingleton()
-                .getMimeTypeFromExtension(relative.substringAfterLast('.', "").lowercase())
-                ?: "application/octet-stream"
-            val uri = FileProvider.getUriForFile(context, "${context.packageName}.diagnostics", target)
-            val intent = Intent(if (action == "open") Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
-                if (action == "open") setDataAndType(uri, mime) else {
-                    type = mime
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                }
-                clipData = ClipData.newRawUri(target.name, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
             try {
+                val mime = MimeTypeMap.getSingleton()
+                    .getMimeTypeFromExtension(relative.substringAfterLast('.', "").lowercase())
+                    ?: "application/octet-stream"
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.diagnostics", target)
+                val intent = Intent(if (action == "open") Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
+                    if (action == "open") setDataAndType(uri, mime) else {
+                        type = mime
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                    }
+                    clipData = ClipData.newRawUri(target.name, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                if (intent.resolveActivity(context.packageManager) == null) {
+                    throw RuntimeFailure("EXTERNAL_FILE_NO_HANDLER", "没有应用可以处理此文件")
+                }
                 context.startActivity(
                     Intent.createChooser(intent, if (action == "open") "打开 DSH 文件" else "分享 DSH 文件")
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
+            } catch (failure: RuntimeFailure) {
+                target.delete()
+                throw failure
             } catch (error: Throwable) {
                 target.delete()
                 throw RuntimeFailure("EXTERNAL_FILE_ACTION_FAILED", "无法打开系统文件操作面板", error)
