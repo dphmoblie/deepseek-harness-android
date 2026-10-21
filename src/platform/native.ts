@@ -79,6 +79,7 @@ import {
   validateMailboxDirectoryState,
   validateMailboxState,
   validateMediaPermissionResult,
+  validateModelCatalogResult,
   validateModelConnectivityResult,
   validateNotificationPermissionResult,
   validateOverlayBallState,
@@ -146,6 +147,7 @@ interface NativeRuntimePlugin {
   startHarness(): Promise<RuntimeState>
   openHarness(options?: { sessionId?: string }): Promise<void>
   testModelConnectivity(options: { providerId: string; baseUrl?: string; apiKey?: string; api?: string }): Promise<unknown>
+  listModelCatalog(options: { providerId: string; baseUrl?: string; apiKey?: string; api?: string }): Promise<unknown>
   stopRuntime(): Promise<RuntimeState>
   reset(options: { confirmation: string }): Promise<RuntimeState>
   createTerminal(options: { kind: TerminalKind; columns: number; rows: number }): Promise<{ sessionId: string }>
@@ -673,6 +675,7 @@ function createNativeBridge(): RuntimeBridge {
     addTerminalOutputListener: listener => NativeRuntime.addListener('terminalOutput', validatedListener(validateTerminalChunk, listener)),
     addTerminalExitListener: listener => NativeRuntime.addListener('terminalExit', validatedListener(validateTerminalExit, listener)),
     testModelConnectivity: options => NativeRuntime.testModelConnectivity(options).then(validateModelConnectivityResult),
+    listModelCatalog: options => NativeRuntime.listModelCatalog(options).then(validateModelCatalogResult),
   }
 }
 

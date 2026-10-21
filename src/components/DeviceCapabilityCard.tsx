@@ -65,7 +65,7 @@ const REASON_NOTES: Record<string, string> = {
   ACCESSIBILITY_ENABLED_DISCONNECTED: '无障碍服务在系统里开着，但本应用还没连上',
   ANDROID_TOO_OLD: '需要 Android 10 或更高版本',
   TEXT_INPUT_NEEDS_ACCESSIBILITY: '中文等非 ASCII 文字只能由无障碍服务写入',
-  DEVICE_SHELL_DISABLED: 'AI Shell 开关没有打开',
+  DEVICE_SHELL_DISABLED: '设备命令通道没有就绪',
   ROOT_ENGINE_DISABLED: '根通道开关没有打开（打开后才会检测这台设备支不支持）',
   KERNELSU_NOT_INSTALLED: '这台设备没有可用的 KernelSU',
   KERNELSU_PERMISSION_REQUIRED: 'KernelSU 还没有给本应用授权',
@@ -83,7 +83,7 @@ const ACTION_NOTES: Record<string, string> = {
   open_accessibility_settings: '到系统设置里开启本应用的无障碍服务',
   enable_root_engine: '到「根通道」设置里打开开关',
   grant_root_permission: '到 KernelSU 管理器里给本应用授权',
-  enable_device_shell: '到「设备 Shell 设置」开启 AI Shell',
+  enable_device_shell: '到「设备 Shell 设置」检查 Shizuku 授权',
 }
 
 /** 替代码 → 退一步还能怎么做。没有替代方式时原生侧给 `null`，这一行就不显示。 */

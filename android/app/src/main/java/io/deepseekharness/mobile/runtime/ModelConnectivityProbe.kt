@@ -5,7 +5,6 @@ import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.UnknownHostException
-import java.net.URLEncoder
 import javax.net.ssl.SSLException
 
 data class ModelConnectivityProbeResult(
@@ -43,70 +42,9 @@ object ModelConnectivityProbe {
             return invalid(error.message ?: "模型凭据格式无效")
         }
 
-        val requestUrl: String
-        val headers = mutableMapOf<String, String>()
-
-        val builtIn = ModelProvider.entries.firstOrNull { it.wireValue == providerId }
-        if (builtIn != null) {
-            when (builtIn) {
-                ModelProvider.DEEPSEEK -> {
-                    requestUrl = "https://api.deepseek.com/models"
-                    headers["Authorization"] = "Bearer $key"
-                }
-                ModelProvider.OPENAI -> {
-                    requestUrl = "https://api.openai.com/v1/models"
-                    headers["Authorization"] = "Bearer $key"
-                }
-                ModelProvider.ANTHROPIC -> {
-                    requestUrl = "https://api.anthropic.com/v1/models"
-                    headers["x-api-key"] = key
-                    headers["anthropic-version"] = "2023-06-01"
-                }
-                ModelProvider.GOOGLE -> {
-                    requestUrl = googleModelsRequestUrl(key)
-                }
-                ModelProvider.OPENROUTER -> {
-                    requestUrl = "https://openrouter.ai/api/v1/models"
-                    headers["Authorization"] = "Bearer $key"
-                }
-                ModelProvider.GROQ -> {
-                    requestUrl = "https://api.groq.com/openai/v1/models"
-                    headers["Authorization"] = "Bearer $key"
-                }
-                ModelProvider.XAI -> {
-                    requestUrl = "https://api.x.ai/v1/models"
-                    headers["Authorization"] = "Bearer $key"
-                }
-                ModelProvider.MISTRAL -> {
-                    requestUrl = "https://api.mistral.ai/v1/models"
-                    headers["Authorization"] = "Bearer $key"
-                }
-            }
-        } else {
-            val rawBase = baseUrl?.trim()
-            if (rawBase.isNullOrEmpty()) {
-                return ModelConnectivityProbeResult(
-                    ok = false,
-                    status = 0,
-                    latencyMs = 0L,
-                    message = "Base URL 不能为空",
-                )
-            }
-            val base = try {
-                RuntimeValidation.requireProviderBaseUrl(rawBase)
-            } catch (error: RuntimeFailure) {
-                return invalid(error.message ?: "Base URL 格式无效")
-            }
-            requestUrl = "$base/models"
-            when (runCatching { CustomProviderApi.parse(api.orEmpty()) }.getOrNull()) {
-                CustomProviderApi.ANTHROPIC_MESSAGES -> {
-                    headers["x-api-key"] = key
-                    headers["anthropic-version"] = "2023-06-01"
-                }
-                CustomProviderApi.OPENAI_COMPLETIONS,
-                CustomProviderApi.OPENAI_RESPONSES -> headers["Authorization"] = "Bearer $key"
-                null -> return invalid("自定义供应商 API 协议不支持")
-            }
+        val endpoint = when (val resolution = ModelEndpoints.resolve(providerId, baseUrl, key, api)) {
+            is ModelEndpointResolution.Rejected -> return invalid(resolution.message)
+            is ModelEndpointResolution.Ready -> resolution.endpoint
         }
 
         /*
@@ -120,13 +58,13 @@ object ModelConnectivityProbe {
          */
         var connection: HttpURLConnection? = null
         return try {
-            val url = URL(requestUrl)
+            val url = URL(endpoint.url)
             connection = (url.openConnection() as HttpURLConnection).apply {
                 connectTimeout = CONNECT_TIMEOUT_MS
                 readTimeout = READ_TIMEOUT_MS
                 instanceFollowRedirects = false
                 requestMethod = "GET"
-                headers.forEach { (header, value) -> setRequestProperty(header, value) }
+                endpoint.applyTo(this)
             }
 
             val start = System.currentTimeMillis()
@@ -223,8 +161,8 @@ object ModelConnectivityProbe {
         }
     }
 
-    internal fun googleModelsRequestUrl(apiKey: String): String =
-        "https://generativelanguage.googleapis.com/v1beta/models?key=${URLEncoder.encode(apiKey, Charsets.UTF_8.name())}"
+    /** 保留给既有单元测试的入口；真正的拼装规则在 [ModelEndpoints]。 */
+    internal fun googleModelsRequestUrl(apiKey: String): String = ModelEndpoints.googleModelsRequestUrl(apiKey)
 
     private fun invalid(message: String) = ModelConnectivityProbeResult(
         ok = false,
@@ -234,7 +172,7 @@ object ModelConnectivityProbe {
     )
 
     /** 3xx 只解释、不跟随：把「为什么没自动跳」说清楚，并给出用户能自己走的路。 */
-    private fun redirectMessage(code: Int, location: String?, latencyMs: Long): String {
+    internal fun redirectMessage(code: Int, location: String?, latencyMs: Long): String {
         val host = location
             ?.let { runCatching { URL(it).host }.getOrNull() }
             ?.takeIf { it.isNotEmpty() }

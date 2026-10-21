@@ -38,6 +38,13 @@ export interface SyncedTheme {
   surface: string
   surfaceOpacity: number
   /**
+   * DSH 页面里按钮与输入框的底色透明度（百分比）。
+   *
+   * 与 surfaceOpacity 分开：面板要够不透才读得清正文，控件则要能跟外壳的
+   * 「按钮与输入框不透明度」对齐。老记录没有这个字段，按 100 迁移。
+   */
+  controlOpacity?: number
+  /**
    * 「连背景一起同步」：页面是否连背景层一起画。
    *
    * 放进来而不是另开一条通道，是因为它与主题在同一次落盘里：地址、开关、颜色分两次写，
@@ -291,12 +298,18 @@ export function validateSyncedTheme(value: unknown): SyncedTheme {
   // 老记录里没有这个字段：那时同步的一定只有颜色，按 false 迁移，不再回头看用户。
   const syncBackground = data.syncBackground
   if (syncBackground !== undefined && typeof syncBackground !== 'boolean') throw new Error('同步主题参数无效')
+  // 老记录同样没有 controlOpacity：按 100（不透明）迁移，外观不变。
+  const controlOpacity = data.controlOpacity === undefined ? 100 : data.controlOpacity
+  if (typeof controlOpacity !== 'number' || !Number.isInteger(controlOpacity) || controlOpacity < 40 || controlOpacity > 100) {
+    throw new Error('同步主题参数无效')
+  }
   return {
     mode: data.mode,
     accent: data.accent,
     background: data.background,
     surface: data.surface,
     surfaceOpacity: data.surfaceOpacity,
+    controlOpacity,
     syncBackground: syncBackground === true,
   }
 }

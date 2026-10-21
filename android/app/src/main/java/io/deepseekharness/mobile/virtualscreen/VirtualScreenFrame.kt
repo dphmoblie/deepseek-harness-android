@@ -61,26 +61,50 @@ internal class VirtualScreenFrame(context: Context) : FrameLayout(context) {
         background = GradientDrawable().apply {
             setColor(HANDLE_COLOR)
             cornerRadius = handleSizePx / 3f
+            // 描边 + 深底色：之前是 35% 白，压在浅色应用（白底列表）上几乎看不见，
+            // 用户会以为「没有缩放功能」。描边让它在深浅两种画面上都有轮廓。
+            setStroke((1.5f * density).toInt().coerceAtLeast(1), HANDLE_BORDER_COLOR)
         }
         contentDescription = AppLanguage.localizedContext(context).getString(R.string.virtual_screen_resize)
     }
 
     private val controlRow = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
         visibility = View.GONE
     }
 
+    private val chromeHeightPx = (VirtualScreenWindow.CHROME_HEIGHT_DP * density).toInt().coerceAtLeast(1)
+
+    /**
+     * 顶栏：拖动条 + 出口芯片。
+     *
+     * 它占的是窗口自己的一条高度，不压在画面上——芯片此前盖住目标应用的顶部按钮，
+     * 也没给用户一个「按住这里就能挪窗口」的明确入口。
+     */
+    private val chromeBar = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setBackgroundColor(CHROME_COLOR)
+        setPadding(handleInsetPx, 0, handleInsetPx, 0)
+    }
+
     init {
-        // 画面铺满外壳；手柄最后加入 ⇒ 在右下角压在画面之上，只吃它自己那一小块触摸。
-        addView(preview, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
-        addView(controlRow, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT, Gravity.START or Gravity.TOP).apply {
-            leftMargin = handleInsetPx
-            topMargin = handleInsetPx
+        // 画面从顶栏下面开始；手柄最后加入 ⇒ 在右下角压在画面之上，只吃它自己那一小块触摸。
+        addView(preview, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
+            topMargin = chromeHeightPx
         })
+        chromeBar.addView(controlRow, LinearLayout.LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
+        addView(chromeBar, LayoutParams(LayoutParams.MATCH_PARENT, chromeHeightPx, Gravity.TOP))
         addView(handle, LayoutParams(handleSizePx, handleSizePx, Gravity.END or Gravity.BOTTOM).apply {
             rightMargin = handleInsetPx
             bottomMargin = handleInsetPx
         })
+    }
+
+    /** 顶栏拖动：按住顶栏即可移动窗口，不必先长按画面（画面区域的触摸仍透传）。 */
+    fun installDrag(gesture: VirtualScreenDragGesture) {
+        chromeBar.setOnTouchListener { _, event -> gesture.onTouch(event) }
     }
 
     /** 装载手柄的拖动逻辑；每个宿主只调一次（服务与预览页各自一份手势）。 */
@@ -124,12 +148,51 @@ internal class VirtualScreenFrame(context: Context) : FrameLayout(context) {
     private fun dp(value: Int) = (value * density).toInt()
 
     private companion object {
-        /** 手柄底色：半透明白，压在画面上仍看得见，又不至于挡住内容。 */
-        const val HANDLE_COLOR = 0x59FFFFFF
+        /** 手柄底色：半透明黑，压在浅色画面上也有轮廓；再配一道白描边。 */
+        const val HANDLE_COLOR = 0x66000000
+        const val HANDLE_BORDER_COLOR = 0xCCFFFFFF.toInt()
 
         /** 芯片底色：半透明黑 + 白字，深浅两种画面上都能看清。 */
         const val CONTROL_BACKGROUND_COLOR = 0x8C000000.toInt()
         const val CONTROL_TEXT_COLOR = 0xFFFFFFFF.toInt()
+
+        /** 顶栏底色：半透明黑，既能看清芯片，也不至于像一条实心黑边。 */
+        const val CHROME_COLOR = 0x4D000000
+    }
+}
+
+/**
+ * 顶栏拖动的手势：按下即开始拖，不需要长按。
+ *
+ * 与画面触摸流分开：画面区域继续把触摸透传给副屏，只有顶栏这一条是「挪窗口」。
+ * 全程不抛异常；宿主未就绪（没有窗口可拖）时按未开始处理。
+ */
+internal class VirtualScreenDragGesture(private val host: () -> VirtualScreenDragHost?) {
+    private var active = false
+    private var downRawX = 0f
+    private var downRawY = 0f
+
+    fun onTouch(event: MotionEvent): Boolean = when (event.actionMasked) {
+        MotionEvent.ACTION_DOWN -> {
+            downRawX = event.rawX
+            downRawY = event.rawY
+            active = runCatching { host()?.beginDrag() == true }.getOrDefault(false)
+            true
+        }
+        MotionEvent.ACTION_MOVE -> {
+            if (active) {
+                runCatching { host()?.drag((event.rawX - downRawX).toInt(), (event.rawY - downRawY).toInt()) }
+            }
+            active
+        }
+        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+            if (active) {
+                runCatching { host()?.endDrag((event.rawX - downRawX).toInt(), (event.rawY - downRawY).toInt()) }
+            }
+            active = false
+            true
+        }
+        else -> false
     }
 }
 

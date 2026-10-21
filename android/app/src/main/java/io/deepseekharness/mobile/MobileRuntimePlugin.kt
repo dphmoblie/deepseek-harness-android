@@ -63,6 +63,7 @@ import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
 import io.deepseekharness.mobile.runtime.clampHarnessTailBytes
 import io.deepseekharness.mobile.runtime.MailboxExportOutcome
+import io.deepseekharness.mobile.runtime.ModelCatalogProbe
 import io.deepseekharness.mobile.runtime.ModelConnectivityProbe
 import io.deepseekharness.mobile.runtime.MailboxDirectoryEntry
 import io.deepseekharness.mobile.runtime.MailboxDirectoryState
@@ -127,6 +128,7 @@ import io.deepseekharness.mobile.virtualscreen.VirtualScreenStart
 import io.deepseekharness.mobile.virtualscreen.VirtualScreenStartRequest
 import io.deepseekharness.mobile.virtualscreen.VirtualScreenTargetKind
 import io.deepseekharness.mobile.virtualscreen.putVirtualScreenStart
+import org.json.JSONArray
 import org.json.JSONObject
 import rikka.shizuku.Shizuku
 import java.util.concurrent.ExecutorService
@@ -1071,6 +1073,8 @@ class MobileRuntimePlugin : Plugin() {
                 allowedCustomIds,
             )
             val overlayBallEnabledUpdate = optionalOverlayBallEnabled(call.data)
+            // 字段缺失 = 这次保存不碰默认模型记录；显式空对象 = 用户清掉了最后一条。
+            val defaultModels = call.getObject("defaultModels")?.let(RuntimeValidation::defaultModelIds)
             val prewarmHarnessUpdate = optionalPrewarmHarness(call.data)
             val settings = RuntimeValidation.settings(
                 call.getString("manifestUrl"),
@@ -1091,6 +1095,7 @@ class MobileRuntimePlugin : Plugin() {
                 customProviderApiKeyUpdates,
                 clearedCustomProviderApiKeys,
                 overlayBallEnabledUpdate = overlayBallEnabledUpdate,
+                defaultModels = defaultModels,
                 prewarmHarnessUpdate = prewarmHarnessUpdate,
             )
             applyKeepScreenAwake(saved.keepScreenAwake)
@@ -1265,6 +1270,68 @@ class MobileRuntimePlugin : Plugin() {
                 put("status", result.status)
                 put("latencyMs", result.latencyMs)
                 put("message", result.message)
+            }
+        }
+    }
+
+    /**
+     * 读取供应商上游的可用模型列表（与 [testModelConnectivity] 探测同一个 `/models` 端点）。
+     *
+     * 密钥解析规则与连通性测试**完全一致**：草稿 key 用草稿 URL/API，没有草稿 key 才回落到
+     * 已保存供应商的端点与已保存密钥 —— 否则「获取模型」会变成一条绕过端点绑定的读密钥通道。
+     */
+    @PluginMethod
+    fun listModelCatalog(call: PluginCall) {
+        val providerId = call.getString("providerId")?.trim() ?: run {
+            call.reject("供应商标识缺失")
+            return
+        }
+        try {
+            RuntimeValidation.requireModelProviderId(providerId)
+        } catch (error: RuntimeFailure) {
+            call.reject(error.message ?: "供应商标识格式无效")
+            return
+        }
+        val baseUrl = call.getString("baseUrl")?.trim()
+        val apiKey = call.getString("apiKey")?.trim()
+        val api = call.getString("api")?.trim()
+        execute(call) {
+            val draftKey = apiKey?.takeIf { it.isNotEmpty() }
+            val customProvider = controller.store.settings().customModelProviders
+                .firstOrNull { it.id == providerId }
+            val savedKey = controller.store.readModelCredential(providerId)
+            val effectiveBaseUrl = if (draftKey == null && customProvider != null) {
+                customProvider.baseUrl
+            } else {
+                baseUrl
+            }
+            val effectiveApi = if (draftKey == null && customProvider != null) {
+                customProvider.api.wireValue
+            } else {
+                api
+            }
+            val result = ModelCatalogProbe.list(
+                providerId = providerId,
+                baseUrl = effectiveBaseUrl,
+                apiKey = apiKey,
+                api = effectiveApi,
+                savedApiKey = savedKey,
+            )
+            JSObject().apply {
+                put("ok", result.ok)
+                put("status", result.status)
+                put("latencyMs", result.latencyMs)
+                put("message", result.message)
+                val models = JSONArray()
+                result.models.forEach { model ->
+                    models.put(
+                        JSObject().apply {
+                            put("id", model.id)
+                            put("name", model.name)
+                        },
+                    )
+                }
+                put("models", models)
             }
         }
     }
@@ -4070,6 +4137,11 @@ class MobileRuntimePlugin : Plugin() {
         })
         .put("configuredCustomModelProviders", org.json.JSONArray(configuredCustomModelProviders))
         .put("harnessConfiguredCustomModelProviders", org.json.JSONArray(harnessConfiguredCustomModelProviders))
+        .put("defaultModels", JSObject().also { defaults ->
+            io.deepseekharness.mobile.runtime.ModelProvider.entries.forEach { provider ->
+                defaultModels[provider]?.let { defaults.put(provider.wireValue, it) }
+            }
+        })
         .put("keepRuntimeInBackground", keepRuntimeInBackground)
         .put("overlayBallEnabled", overlayBallEnabled)
         // 前端据此决定应用启动后是否静默调用 startHarness；缺失时前端按 false 处理。

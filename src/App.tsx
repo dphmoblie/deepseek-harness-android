@@ -3,7 +3,6 @@ import { t, useLanguage } from './i18n'
 import { formatByteCount as formatBytes, formatDuration, useDownloadTelemetry } from './downloadTelemetry'
 import { PluginSettings } from './components/PluginSettings'
 import { ApplicationPicker } from './components/ApplicationPicker'
-import { DeviceShellSettings } from './components/DeviceShellSettings'
 import { VirtualScreenSettings } from './components/VirtualScreenSettings'
 import { AutomationRuleForm } from './components/AutomationRuleForm'
 import type { AutomationRuleDefaults } from './components/AutomationRuleForm'
@@ -36,11 +35,11 @@ import {
 import { PhaseBadge } from './ui/phase'
 import { PHASE_META } from './ui/phaseMeta'
 import {
+  Accessibility,
   AlertTriangle,
   ArrowLeft,
   BellRing,
   Bot,
-  Check,
   CheckCircle2,
   ChevronRight,
   CloudDownload,
@@ -51,6 +50,7 @@ import {
   FolderInput,
   Gauge,
   HardDrive,
+  Image,
   KeyRound,
   LogIn,
   Loader2,
@@ -82,7 +82,9 @@ import {
 } from 'lucide-react'
 import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 import { hasConfiguredModelCredential, MODEL_PROVIDERS } from './modelProviders'
+import { firstCatalogModelId, isValidModelId } from './platform/modelCatalog'
 import { CustomProviders } from './components/CustomProviders'
+import { ApiKeyInput } from './components/ApiKeyInput'
 import { DeviceCapabilityCard } from './components/DeviceCapabilityCard'
 import { RootEngineCard } from './components/RootEngineCard'
 import { AppUpdateReminderDialog } from './components/AppUpdateReminderDialog'
@@ -119,6 +121,7 @@ import type {
   MailboxImportResult,
   MailboxRoot,
   MailboxState,
+  ModelCatalogResult,
   ModelConnectivityResult,
   ModelProviderId,
   OverlayBallState,
@@ -155,6 +158,18 @@ type AppView =
   | 'settings-device-shell'
   | 'settings-diagnostics'
   | 'settings-automation'
+  | 'settings-automation-accessibility'
+  | 'settings-automation-subscreen'
+  | 'settings-automation-params'
+  // 三级页：与二级页共用同一个 SettingsScreen，只是 [settingsPageOf] 映射到各自的 SettingsPage。
+  | 'settings-runtime-connection'
+  | 'settings-runtime-keepalive'
+  | 'settings-terminal-typography'
+  | 'settings-terminal-background'
+  | 'settings-terminal-dsh-background'
+  | 'settings-diagnostics-log'
+  | 'settings-diagnostics-capability'
+  | 'settings-diagnostics-feedback'
   | 'terminal'
   | 'environment'
   | 'plugins'
@@ -162,18 +177,34 @@ type AppView =
   | 'files'
 
 /** 设置二级页：把原先的单页设置按功能分类，避免所有选项挤在一屏里。 */
-type SettingsPage = 'models' | 'runtime' | 'terminal' | 'device-shell' | 'automation' | 'diagnostics'
+type SettingsPage = 'models' | 'runtime' | 'terminal' | 'device-shell' | 'automation' | 'diagnostics' | 'automation-accessibility' | 'automation-subscreen' | 'automation-params'
+  | 'terminal-typography' | 'terminal-background' | 'terminal-dsh-background'
+  | 'diagnostics-log' | 'diagnostics-capability' | 'diagnostics-feedback'
 
-const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView }> = {
+const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView; parent?: SettingsPage }> = {
   models: { title: '模型与密钥', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
-  runtime: { title: '后台', hint: '运行时来源与两个入口、后台保持、悬浮球与前台服务', view: 'settings-runtime' },
-  terminal: { title: '主题', hint: '字号、卡片颜色与透明度、图片与视频背景', view: 'settings-terminal' },
-  'device-shell': { title: '设备 Shell 设置', hint: 'Shizuku 授权与 AI Shell', view: 'settings-device-shell' },
-  automation: { title: '自动化设置', hint: '无障碍应用自动化与副屏', view: 'settings-automation' },
-  diagnostics: { title: '诊断与日志', hint: '采集开关、保留天数、运行日志与导出', view: 'settings-diagnostics' },
+  runtime: { title: '后台', hint: '保活、悬浮球、预启动与设备连接', view: 'settings-runtime' },
+  terminal: { title: '主题', hint: '字号配色与背景', view: 'settings-terminal' },
+  // 主题下的两个三级页：字号与配色、背景与卡片，两段各自立即生效。
+  'terminal-typography': { title: '字号与配色', hint: '字号、屏幕常亮、明暗模式与强调色', view: 'settings-terminal-typography', parent: 'terminal' },
+  'terminal-background': { title: '背景', hint: '背景图片或视频、卡片外观', view: 'settings-terminal-background', parent: 'terminal' },
+  // DSH 是另一个页面：它的主题与背景单独一页，不和外壳自己的背景混在一起。
+  // DSH 是另一个页面：它的主题、按钮透明度和背景都收在同一页，不和外壳自己的外观混在一起。
+  'terminal-dsh-background': { title: 'DSH 主题', hint: '主题同步、按钮与输入框透明度、背景文件', view: 'settings-terminal-dsh-background', parent: 'terminal' },
+  'device-shell': { title: '设备 Shell 设置', hint: 'Shizuku 授权与设备命令', view: 'settings-device-shell' },
+  automation: { title: '自动化设置', hint: '无障碍、副屏与自动参数', view: 'settings-automation' },
+  // 自动化设置下的三个三级页：都是同一件事的三条腿，返回键统一回「自动化设置」。
+  'automation-accessibility': { title: '无障碍', hint: '服务状态、白名单与验证密码', view: 'settings-automation-accessibility', parent: 'automation' },
+  'automation-subscreen': { title: '副屏', hint: '取帧档位、方向、分辨率与跟随策略', view: 'settings-automation-subscreen', parent: 'automation' },
+  'automation-params': { title: '自动参数', hint: '总开关、任务与运行记录、规则与每应用参数', view: 'settings-automation-params', parent: 'automation' },
+  diagnostics: { title: '诊断与日志', hint: '日志与采集、设备能力与反馈', view: 'settings-diagnostics' },
+  // 诊断与日志下的三个三级页：采集、能力、反馈是三件事，返回键统一回「诊断与日志」。
+  'diagnostics-log': { title: '日志与采集', hint: '采集开关、保留天数、诊断与运行日志', view: 'settings-diagnostics-log', parent: 'diagnostics' },
+  'diagnostics-capability': { title: '设备能力', hint: '运行时自检、能力清单与根通道', view: 'settings-diagnostics-capability', parent: 'diagnostics' },
+  'diagnostics-feedback': { title: '反馈', hint: '交流群与 GitHub 反馈入口', view: 'settings-diagnostics-feedback', parent: 'diagnostics' },
 }
 
-const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'device-shell', 'automation', 'diagnostics']
+const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'device-shell', 'automation', 'automation-accessibility', 'automation-subscreen', 'automation-params', 'diagnostics', 'diagnostics-log', 'diagnostics-capability', 'diagnostics-feedback', 'terminal-typography', 'terminal-background', 'terminal-dsh-background']
 
 function settingsPageOf(view: AppView): SettingsPage | null {
   const entry = SETTINGS_PAGES.find(page => SETTINGS_PAGE_META[page].view === view)
@@ -242,21 +273,11 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'runtime-page',
     group: 'runtime',
     title: '后台',
-    hint: '运行时来源与两个入口、后台保持、悬浮球与前台服务',
+    hint: '保活、悬浮球、预启动与设备连接',
     keywords: ['后台', '保活', '保持', '悬浮球', '前台服务', '通知', '电池', 'keepalive', 'background', 'overlay', 'foreground'],
     target: { kind: 'page', page: 'runtime' },
     icon: <Power size={20} />,
   },
-  {
-    id: 'terminal-view',
-    group: 'device',
-    title: '设备 Shell',
-    hint: '设备上的 Shell（需 Shizuku）',
-    keywords: ['设备shell', 'shell', 'terminal', '终端', 'shizuku', 'adb', '命令行', '控制台'],
-    target: { kind: 'view', view: 'terminal' },
-    icon: <SquareTerminal size={20} />,
-  },
-
   // —— 文件管理：手机侧与访客之间对外可见的目录都在这一个页面里。
   {
     id: 'files',
@@ -295,7 +316,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'terminal-settings',
     group: 'appearance',
     title: '主题',
-    hint: '字号、卡片颜色与透明度、图片与视频背景',
+    hint: '字号配色与背景',
     keywords: ['主题', '外观', '字号', '字体', '深色', '浅色', '背景', '壁纸', '视频', '图片', '透明度', '卡片', '颜色', '强调色', 'theme', 'font', 'appearance', 'background', 'color'],
     target: { kind: 'page', page: 'terminal' },
     icon: <SquareTerminal size={20} />,
@@ -304,7 +325,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'device-shell',
     group: 'device',
     title: '设备 Shell 设置',
-    hint: 'Shizuku 授权与 AI Shell',
+    hint: 'Shizuku 授权与设备命令',
     keywords: ['shizuku', '授权', '权限', '连接', '设备shell', 'ai shell', 'device shell'],
     target: { kind: 'page', page: 'device-shell' },
     icon: <Smartphone size={20} />,
@@ -313,7 +334,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'automation',
     group: 'device',
     title: '自动化设置',
-    hint: '无障碍应用自动化与副屏',
+    hint: '无障碍、副屏与自动参数',
     keywords: ['无障碍', '自动化', '白名单', '应用列表', '副屏', '虚拟屏幕', '小窗', '截图', '点击', 'accessibility', 'automation', 'virtual screen', 'display'],
     target: { kind: 'page', page: 'automation' },
     icon: <Bot size={20} />,
@@ -322,7 +343,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'diagnostics',
     group: 'diagnostics',
     title: '诊断与日志',
-    hint: '采集开关、保留天数、运行日志与导出',
+    hint: '日志与采集、设备能力与反馈',
     keywords: ['诊断', '日志', 'log', 'logs', '采集', '保留', '导出', '排查', '报错', '错误', '崩溃', '重启', '自检', 'self check'],
     target: { kind: 'page', page: 'diagnostics' },
     icon: <ScrollText size={20} />,
@@ -510,6 +531,16 @@ const BACKGROUND_POLL_INTERVAL_MS = 5000
 const BACKGROUND_REFRESH_STALE_MS = 30_000
 
 /**
+ * 后台自动保存的互斥 ID，用来把它和「用户主动保存」区分开。
+ *
+ * 为什么要区分：两者都会写盘，但**只有后者是用户动作**。自动保存由防抖触发，用户可能正在
+ * 敲下一个字符，因此它不能有任何可见副作用 —— 不许禁用输入控件（WebView 里被禁用的
+ * `<input>` 一定失焦，Android 随即收起输入法框），也不许清空用户刚输入的凭据。
+ * 界面上「保存中...」的徽标也只认用户主动保存那份，不要打着字闪一下。
+ */
+const AUTOSAVE_BUSY_ID = 'autosave-settings'
+
+/**
  * 用户动作的看门狗。
  *
  * 桥调用在真机上可能**永不返回**（provider 掉线、原生线程池打满、WebView 与 Service
@@ -595,6 +626,22 @@ function sameSnapshot<T extends object>(previous: T, next: T): boolean {
     if (!Object.is(left, right)) return false
   }
   return true
+}
+
+
+/**
+ * 剔除「已经落盘且没再改过」的凭据条目。
+ *
+ * 用途：保存不再清空密钥输入框（清屏会让用户以为刚打的字被吞掉），用户看到的那份原文
+ * 于是还留在草稿里。不在这里剔掉，每次自动保存、每次点「保存」都会把同一份密钥再传一遍。
+ * 值一旦变了（用户接着补字符、或整段换掉）就照常提交：判据是「值与上次落盘的一致」。
+ */
+function omitSettled(current: Record<string, string>, settled: Record<string, string>): Record<string, string> {
+  const next: Record<string, string> = {}
+  for (const [key, value] of Object.entries(current)) {
+    if (settled[key] !== value) next[key] = value
+  }
+  return next
 }
 
 
@@ -865,8 +912,7 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
   // 「已就绪」与「已在运行」要分开说：服务已经跑起来时再讲「打开时才启动」是错的，
   // 而这句话恰恰是用户判断「点了以后要不要等」的依据。
   const serviceRunning = runtime.phase === 'running'
-  // 停止要几秒，期间打开按钮是禁用的：此时还写「点击「打开对话」开始」，用户点了没反应，
-  // 与「一直正在打开」是同一类毛病——说的和正在发生的对不上。
+  // 停止要几秒，期间打开按钮是禁用的：此时还写「点击「打开对话」开始」，用户点了没反应。
   const stoppingHarness = busy === 'stop'
 
   return (
@@ -1247,12 +1293,6 @@ interface SettingsHomeScreenProps {
 }
 
 /**
- * 设置首页搜索框的长度上限：改一处就够——输入框 `maxLength`、原生直写 DOM 的截断、
- * 失焦兜底的截断必须同一个值，否则会出现「能打进去但被悄悄截掉」的错觉。
- */
-const SETTINGS_SEARCH_MAX_LENGTH = 120
-
-/**
  * 设置首页：按分组列出全部入口，分组可以筛选。
  *
  * 筛选只决定这一屏显示哪些入口，不改变任何行为：点下去走的是同一条路。
@@ -1280,7 +1320,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
 
   /** 兼容原生直接写入 DOM 的输入；限制长度并同步草稿，分类同时复位。 */
   const applySearch = (value: string): void => {
-    const nextValue = value.slice(0, SETTINGS_SEARCH_MAX_LENGTH)
+    const nextValue = value.slice(0, 120)
     setQuery(nextValue)
     setAppliedQuery(nextValue.trim())
     setCategory('all')
@@ -1339,7 +1379,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
             setIsComposing(false)
             // captureInput 可能只改 DOM；先把失焦时仍可见的文字同步回受控状态，
             // 避免结束输入法组合时 React 重绘把它清掉。
-            setQuery(event.currentTarget.value.slice(0, SETTINGS_SEARCH_MAX_LENGTH))
+            setQuery(event.currentTarget.value.slice(0, 120))
           }}
           onKeyDown={event => {
             // 组合中的 Enter 交给输入法确认候选词，不当作提交。
@@ -1348,7 +1388,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
               applySearch(event.currentTarget.value)
             }
           }}
-          maxLength={SETTINGS_SEARCH_MAX_LENGTH}
+          maxLength={120}
           placeholder={t("按功能词查找入口")}
           aria-label={t("按功能词查找入口")}
           autoComplete="off"
@@ -1412,15 +1452,42 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
 
 
 /**
+ * 二级页里的三级页入口行。
+ *
+ * 与设置首页共用 `management-row` 这一套行样式与文案：标题、说明直接取
+ * `SETTINGS_PAGE_META`，所以入口上写的字和点进去那页的标题永远是同一句。
+ * 点下去走 `setActiveView`（同一路由、同一历史栈），草稿与最近一次读数都不重读。
+ */
+function SettingsPageRow({ icon, page, onOpen }: { icon: ReactNode; page: SettingsPage; onOpen: (page: SettingsPage) => void }) {
+  const meta = SETTINGS_PAGE_META[page]
+  return (
+    <button className="management-row" type="button" onClick={() => onOpen(page)}>
+      <span className="management-icon">{icon}</span>
+      <span className="management-copy">
+        <strong>{t(meta.title)}</strong>
+        <small>{t(meta.hint)}</small>
+      </span>
+      <ChevronRight size={18} />
+    </button>
+  )
+}
+
+
+/**
  * 设置页草稿：用户尚未保存的编辑内容。
  *
  * 为什么由 App 持有：设置首页与五个二级页是**不同的组件**，页内状态在切页时随组件卸载丢掉
  * —— 用户刚输入的 API Key 只要切一次页就再也找不回来（即「输入的数据没有直接保存」）。
  * 草稿因此放在设置区之上，由设置区内的所有页面共享。
  *
+ * 生命周期 = **本次应用会话**：离开设置区（去对话、终端、文件）都不再丢弃草稿，
+ * 只有进程结束才没。用户的原话是「离开设置区即丢弃能不能改成退出应用丢弃」——
+ * 他要的是「填了一半去做别的，回来还能接着填」，而不是每次重开设置都从头再来。
+ *
  * 隐私边界：整份草稿只存在于内存（React 状态），不写 localStorage/sessionStorage、
  * 不进诊断日志，也不随任何导出离开设备。其中 [credentials] 与 [customCredentials]
- * 是密钥输入：原生侧落盘后不回显，因此它们只存在于「用户本次输入」到「保存成功」之间。
+ * 是密钥输入：原生侧落盘后不回显，草稿保留的是**用户本次会话输入过的原文**，
+ * 界面只把它显示成掩码（sk-5e****7777），进程结束后一起消失。
  */
 interface SettingsDraft {
   /** 各字段的当前编辑值，初值由落盘设置复制而来。 */
@@ -1429,7 +1496,7 @@ interface SettingsDraft {
   selectedProvider: ModelProviderId
   /** 用户在本页拨动过悬浮球开关时才有值；null 表示沿用原生侧真值。 */
   overlayBallEnabled: boolean | null
-  /** 仅内存的 API Key 输入。 */
+  /** 仅内存的 API Key 输入；活到进程结束，界面按掩码显示。 */
   credentials: ProviderApiKeys
   /** 用户点过「清除密钥」的供应商，保存时才提交。 */
   clearedProviders: ModelProviderId[]
@@ -1441,23 +1508,56 @@ interface SettingsDraft {
 /**
  * 由落盘设置建立草稿。
  *
- * 凭据输入一律为空：密钥落盘后不回显，草稿里只保留用户本次输入的内容。
- * [previous] 只用于保留用户正在查看的供应商，避免后台刷新把界面跳回默认项。
+ * 落盘值只提供 [settings]：密钥落盘后不回显，所以凭据永远从 [previous] 继承 ——
+ * 那是**本次会话里用户自己输入的原文**。继承而不是清空的理由：重建草稿的时机全是
+ * 「用户回到设置页」，此刻把他的密钥框清掉，等于告诉他「刚才那串白填了」。
+ * [selectedProvider] 同理，避免后台刷新把界面跳回默认项。
  */
 function draftFromSettings(settings: RuntimeSettings, previous: SettingsDraft | null = null): SettingsDraft {
   return {
     settings,
     selectedProvider: previous?.selectedProvider ?? 'deepseek',
     overlayBallEnabled: null,
-    credentials: {},
-    clearedProviders: [],
-    customCredentials: {},
-    clearedCustomProviders: [],
+    credentials: previous?.credentials ?? {},
+    clearedProviders: previous?.clearedProviders ?? [],
+    customCredentials: previous?.customCredentials ?? {},
+    clearedCustomProviders: previous?.clearedCustomProviders ?? [],
   }
 }
 
 /**
- * 规则写入表单的打开状态。
+ * 把设置草稿组装成一次写盘的载荷。
+ *
+ * 只有一处组装：手动点「保存」与离开页面时的自动保存写下去的必须是同一份内容 ——
+ * 两条路径各自拼一份载荷，迟早会在某个字段上分叉（典型是悬浮球开关的来源：
+ * 草稿里可能还是 `null`，真值要从原生读数兜底）。
+ *
+ * [overlayBallEnabled] 与 [overlayBallReadFailed] 是 App 持有的原生读数：读取失败时不再
+ * 覆盖已落盘的值（否则一次读失败就会把用户原来的开关悄悄改成「关」）。
+ */
+function settingsUpdateFromDraft(
+  draft: SettingsDraft,
+  overlayBallEnabled: boolean | undefined,
+  overlayBallReadFailed: boolean,
+): RuntimeSettingsUpdate {
+  const currentSettings = { ...draft.settings }
+  delete currentSettings.overlayBallEnabled
+  const effectiveOverlayBall = draft.overlayBallEnabled
+    ?? (overlayBallReadFailed ? draft.settings.overlayBallEnabled : overlayBallEnabled)
+    ?? draft.settings.overlayBallEnabled
+    ?? false
+  return {
+    ...currentSettings,
+    ...(draft.overlayBallEnabled === null ? {} : { overlayBallEnabled: effectiveOverlayBall }),
+    ...(Object.keys(draft.credentials).length === 0 ? {} : { providerApiKeys: draft.credentials }),
+    ...(draft.clearedProviders.length === 0 ? {} : { clearProviderApiKeys: draft.clearedProviders }),
+    ...(Object.keys(draft.customCredentials).length === 0 ? {} : { customProviderApiKeys: draft.customCredentials }),
+    ...(draft.clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: draft.clearedCustomProviders }),
+  }
+}
+
+/**
+ * 打开中的自动化规则表单。
  *
  * `rule` 为 `null` 只允许出现在 `create`：编辑必须先读回整条规则，
  * 因为原生侧的 `update` 是整条替换，缺字段不会保持原样。
@@ -1517,6 +1617,10 @@ interface SettingsScreenProps {
   onOpenEnvironment: () => void
   /** 跳到「设备 Shell」独立页；后台页只留入口。 */
   onOpenDeviceShell: () => void
+  /** 跳到同一页里拆出来的三级页（自动化设置里的无障碍 / 副屏 / 自动参数）。 */
+  onOpenSubpage: (page: SettingsPage) => void
+  /** 打开「设备 Shell」整屏终端（原先是设置首页的一个独立入口，现在挂在设备 Shell 设置页里）。 */
+  onOpenShellView: () => void
   onOpenAccessibilitySettings: () => void
   /**
    * 保存白名单。已设置验证密码时**必须**带上 `password`：
@@ -1544,73 +1648,28 @@ interface SettingsScreenProps {
   onResetAccessibilityPassword: () => void
   onRequestNotificationPermission: () => void
   onReloadSettings: () => void
-  onSave: (settings: RuntimeSettingsUpdate) => Promise<boolean>
+  /** 模型与密钥页的「保存密钥」：与离开页面自动保存走同一条写盘路径。 */
+  onSaveCredentials: () => Promise<boolean>
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSave, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSaveCredentials, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
-  const [autoSaved, setAutoSaved] = useState(false)
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
   const [connectivityResults, setConnectivityResults] = useState<Record<string, ModelConnectivityResult>>({})
-  const autoSaveTimerRef = useRef<number | null>(null)
-  const autoSavedTimerRef = useRef<number | null>(null)
-  const latestDraftRef = useRef(draft)
-  latestDraftRef.current = draft
-
-  /** Only show the saved state after the native write has actually succeeded. */
-  const showAutoSaved = useCallback(() => {
-    triggerHaptic('success')
-    setAutoSaved(true)
-    if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
-    autoSavedTimerRef.current = window.setTimeout(() => setAutoSaved(false), 2000)
-  }, [])
-
-  const saveDraftPayload = useCallback(async (payload: RuntimeSettingsUpdate): Promise<boolean> => {
-    try {
-      const saved = await onSave(payload)
-      if (saved) showAutoSaved()
-      return saved
-    } catch {
-      // onSave normally converts bridge failures to false; keep this boundary
-      // defensive so an unexpected rejection cannot claim a successful save.
-      return false
-    }
-  }, [onSave, showAutoSaved])
-
-  const triggerAutoSave = useCallback((delay = 500) => {
-    if (autoSaveTimerRef.current !== null) {
-      window.clearTimeout(autoSaveTimerRef.current)
-    }
-    autoSaveTimerRef.current = window.setTimeout(() => {
-      autoSaveTimerRef.current = null
-      const currentDraft = latestDraftRef.current
-      if (currentDraft === null) return
-      const currentSettings = { ...currentDraft.settings }
-      delete currentSettings.overlayBallEnabled
-      const currentOverlayBall = currentDraft.overlayBallEnabled
-        ?? (overlayBallReadFailed ? currentDraft.settings.overlayBallEnabled : overlayBall?.enabled)
-        ?? currentDraft.settings.overlayBallEnabled
-        ?? false
-      void saveDraftPayload({
-        ...currentSettings,
-        ...(currentDraft.overlayBallEnabled === null ? {} : { overlayBallEnabled: currentOverlayBall }),
-        ...(Object.keys(currentDraft.credentials).length === 0 ? {} : { providerApiKeys: currentDraft.credentials }),
-        ...(currentDraft.clearedProviders.length === 0 ? {} : { clearProviderApiKeys: currentDraft.clearedProviders }),
-        ...(Object.keys(currentDraft.customCredentials).length === 0 ? {} : { customProviderApiKeys: currentDraft.customCredentials }),
-        ...(currentDraft.clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: currentDraft.clearedCustomProviders }),
-      })
-    }, delay)
-  }, [overlayBall?.enabled, overlayBallReadFailed, saveDraftPayload])
-
-  useEffect(() => {
-    return () => {
-      // Keep a pending save alive when the user switches settings pages. The draft is
-      // owned by App, so cancelling here would silently drop a just-edited value.
-      if (autoSavedTimerRef.current !== null) window.clearTimeout(autoSavedTimerRef.current)
-    }
-  }, [])
+  /** 正在拉取上游模型列表的供应商；同一时刻只允许一个请求在飞。 */
+  const [loadingCatalog, setLoadingCatalog] = useState<string | null>(null)
+  const [catalogResults, setCatalogResults] = useState<Record<string, ModelCatalogResult>>({})
+  /** 默认模型输入框里的原始文本（可能还没成为合法 id，因此不一定已写进草稿）。 */
+  const [modelInputs, setModelInputs] = useState<Record<string, string>>({})
+  /** 密钥「立即保存」的反馈：只影响模型与密钥页那颗按钮旁边的状态。 */
+  const [credentialSaveState, setCredentialSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle')
+  /*
+   * 整页写盘仍只发生在「离开这一页 / 切到后台」时，由 App 统一执行（见 App 里的
+   * `saveSettingsDraft`）。模型与密钥页额外有一颗「保存密钥」按钮：它调的也是同一个入口，
+   * 只是让用户不必先离开页面就能确认密钥已经落盘。
+   */
   /** 总开关的一次操作还在路上：按钮在这期间全部禁用，避免连点出两次动作。 */
   const [automationPending, setAutomationPending] = useState(false)
   /**
@@ -1722,7 +1781,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   /**
    * 读取运行记录。
    *
-   * 只在「无障碍」这一页读，并且**读取失败要如实显示**：返回 `connected=false` 时列表必然为空，
+   * 只在「自动参数」这一页读，并且**读取失败要如实显示**：返回 `connected=false` 时列表必然为空，
    * 那个空列表不能当「什么都没发生」渲染（服务被回收后记录会从空开始，这是刻意的设计）。
    */
   const loadAutomationRuns = useCallback((packageName?: string) => {
@@ -1735,7 +1794,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
       .catch(() => setAutomationRunsStatus('failed'))
   }, [])
   useEffect(() => {
-    if (page !== 'automation') return
+    // 运行记录跟着总开关渲染在「自动参数」页，所以只在这一页读。
+    if (page !== 'automation-params') return
     // 总开关一变就重读：刚按下「开始」时最该看到的就是它是否真的连上了服务。
     loadAutomationRuns()
   }, [accessibility.automationRuntime, accessibility.serviceStatus, loadAutomationRuns, page])
@@ -1844,8 +1904,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     loadAutomationAppConfig(packageName, generation)
   }, [loadAutomationAppConfig, loadAutomationRules])
   useEffect(() => {
-    // 刚进这一页且白名单里已有目标应用时，先把第一个包的两份读数读出来，省掉一次点击。
-    if (page !== 'automation' || rulesPackage !== '' || automationReadPackage.current !== '') return
+    // 刚进「自动参数」且白名单里已有目标应用时，先把第一个包的两份读数读出来，省掉一次点击。
+    if (page !== 'automation-params' || rulesPackage !== '' || automationReadPackage.current !== '') return
     const first = accessibility.allowedPackages.find(name => !accessibility.alwaysAllowedPackages.includes(name))
     if (first !== undefined) selectRulesPackage(first)
   }, [accessibility.alwaysAllowedPackages, accessibility.allowedPackages, page, rulesPackage, selectRulesPackage])
@@ -2008,33 +2068,27 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    */
   const setDraft = (next: RuntimeSettings): void => {
     onDraftChange(current => ({ ...current, settings: next }))
-    triggerAutoSave(500)
   }
   const setOverlayBallDraft = (next: boolean): void => {
     triggerHaptic('medium')
     onDraftChange(current => ({ ...current, overlayBallEnabled: next }))
-    triggerAutoSave(300)
   }
   const setSelectedProvider = (next: ModelProviderId): void =>
     // 只是切换正在查看的供应商，没有改动任何字段值：不算「未保存的输入」。
     onDraftChange(current => ({ ...current, selectedProvider: next }), false)
   const setCredentialDrafts = (update: (current: ProviderApiKeys) => ProviderApiKeys): void => {
     onDraftChange(current => ({ ...current, credentials: update(current.credentials) }))
-    triggerAutoSave(800)
   }
   const setClearedProviders = (update: (current: ModelProviderId[]) => ModelProviderId[]): void => {
     triggerHaptic('medium')
     onDraftChange(current => ({ ...current, clearedProviders: update(current.clearedProviders) }))
-    triggerAutoSave(300)
   }
   const setCustomCredentials = (next: Record<string, string>): void => {
     onDraftChange(current => ({ ...current, customCredentials: next }))
-    triggerAutoSave(800)
   }
   const setClearedCustomProviders = (next: string[]): void => {
     triggerHaptic('medium')
     onDraftChange(current => ({ ...current, clearedCustomProviders: next }))
-    triggerAutoSave(300)
   }
 
   // 只为用户主动修改的开关保留草稿；原生菜单关闭悬浮球时，不影响页内其他未保存内容。
@@ -2061,9 +2115,17 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     shizuku.version ? t("服务端 API {0}", shizuku.version) : '',
   ].filter(value => value !== '').join(' · ')
   const selectedProviderOption = MODEL_PROVIDERS.find(provider => provider.id === selectedProvider) ?? MODEL_PROVIDERS[0]
+  /**
+   * 输入控件是否该锁定。
+   *
+   * 只有**用户主动发起**的保存才锁。后台自动保存用的是另一个互斥 ID：它由防抖触发，
+   * 触发时用户往往正在敲下一个字符。WebView 里被禁用的 `<input>` 一定失焦，Android 随即
+   * 收起输入法框 —— 用户看到的就是「打着字，输入法自己没了」，而他没有做过任何动作。
+   */
+  const inputLocked = busy !== null && busy !== AUTOSAVE_BUSY_ID
   const canOpenHarness = (runtime.phase === 'ready' || runtime.phase === 'running')
     && !runtime.updateAvailable
-    && busy === null
+    && !inputLocked
   const keepAliveRecordedAt = formatRecordedAt(keepAlive.lastUpdatedAtMillis)
   const lastStopLabel = t(LAST_STOP_LABELS[lastStop])
   const lastRunLabel = keepAlive.lastPhase === undefined
@@ -2078,7 +2140,48 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
       && !clearedProviders.includes(selectedProvider)
     )
   )
+  /**
+   * 草稿里是不是已经有一份待保存的凭据。
+   *
+   * `hasConfiguredModelCredential` 只看已落盘的设置。正在填第三方供应商时它还是空的，
+   * 于是「还没有可用的模型凭据」这条警告会一直红在正在输入的内容上方，像是输入本身报错。
+   */
+  const credentialPendingInDraft = Object.keys(credentialDrafts).length > 0
+    || Object.keys(customCredentials).length > 0
+    || (settings.customModelProviders ?? []).some(provider => provider.baseUrl.trim() !== '')
 
+  /**
+   * 有没有「值得马上保存」的密钥改动。
+   *
+   * 只看密钥相关字段（含清除标记），不把字号、开关之类算进来：这个按钮的语义是
+   * 「把刚填的密钥存下来」，不是替代离开页面时的整页保存。
+   */
+  const credentialDirty = Object.keys(credentialDrafts).length > 0
+    || Object.keys(customCredentials).length > 0
+    || clearedProviders.length > 0
+    || clearedCustomProviders.length > 0
+
+  /** 立即写盘：与离开页面自动保存走同一个入口（App.saveSettingsDraft）。 */
+  const saveCredentials = (): void => {
+    setCredentialSaveState('saving')
+    void onSaveCredentials().then(ok => setCredentialSaveState(ok ? 'saved' : 'failed'))
+  }
+
+
+  /**
+   * 丢掉某个供应商的连通性测试结果。
+   *
+   * 结果只对测试那一刻的密钥与 Base URL 成立。用户改完接着输入时，上一次的 401 还停在
+   * 下面，看起来就像新填的内容也报错了 —— 输一个字清一次。
+   */
+  const forgetConnectivity = (providerId: string): void => {
+    setConnectivityResults(current => {
+      if (current[providerId] === undefined) return current
+      const next = { ...current }
+      delete next[providerId]
+      return next
+    })
+  }
 
   const handleTestConnectivity = async (providerId: string) => {
     triggerHaptic('light')
@@ -2120,23 +2223,87 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     }
   }
 
-  const saveDraft = (): void => {
-    if (autoSaveTimerRef.current !== null) {
-      window.clearTimeout(autoSaveTimerRef.current)
-      autoSaveTimerRef.current = null
+  /**
+   * 拉取自定义供应商的上游模型列表。
+   *
+   * 与连通性测试共用同一套参数：草稿里的 key 与草稿里的 Base URL 优先，没有草稿 key 时
+   * 原生侧才会回落到已保存的端点与凭据。合并策略（首项置顶、其余按 id 追加）在
+   * [mergeCatalogModels] 里，组件只负责把结果交回去。
+   */
+  const handleFetchCustomModels = async (provider: CustomModelProvider, draftKey?: string): Promise<ModelCatalogResult> => {
+    triggerHaptic('light')
+    try {
+      const result = await runtimeBridge.listModelCatalog({
+        providerId: provider.id,
+        baseUrl: provider.baseUrl,
+        apiKey: draftKey,
+        api: provider.api,
+      })
+      if (result.ok) triggerHaptic('success')
+      else triggerHaptic('warning')
+      return result
+    } catch (error) {
+      triggerHaptic('error')
+      return { ok: false, status: 0, latencyMs: 0, message: errorMessage(error), models: [] }
     }
-    // 悬浮球是原生侧可被菜单直接修改的独立偏好。只有用户在本页实际拨动开关时，
-    // 才把它作为更新字段发送；否则省略该字段，让原生侧保留菜单刚写入的值。
-    const settingsWithoutOverlayBall = { ...settings }
-    delete settingsWithoutOverlayBall.overlayBallEnabled
-    void saveDraftPayload({
-      ...settingsWithoutOverlayBall,
-      ...(overlayBallDraft === null ? {} : { overlayBallEnabled }),
-      ...(Object.keys(credentialDrafts).length === 0 ? {} : { providerApiKeys: credentialDrafts }),
-      ...(clearedProviders.length === 0 ? {} : { clearProviderApiKeys: clearedProviders }),
-      ...(Object.keys(customCredentials).length === 0 ? {} : { customProviderApiKeys: customCredentials }),
-      ...(clearedCustomProviders.length === 0 ? {} : { clearCustomProviderApiKeys: clearedCustomProviders }),
-    })
+  }
+
+  /**
+   * 把「默认模型」写进草稿。
+   *
+   * 只有合法 id 才落进草稿：输入框里允许出现半成品（用户正打到一半），但草稿里只放能通过
+   * 原生校验的值 —— 否则用户点保存时会被整份拒绝，而错误提示离那个输入框很远。
+   * 空串表示「这家不记默认模型」，会把该条从表里删掉。
+   */
+  const commitDefaultModel = (providerId: ModelProviderId, value: string): void => {
+    const trimmed = value.trim()
+    if (trimmed !== '' && !isValidModelId(trimmed)) return
+    const nextDefaults = { ...(settings.defaultModels ?? {}) }
+    if (trimmed === '') delete nextDefaults[providerId]
+    else nextDefaults[providerId] = trimmed
+    setDraft({ ...settings, defaultModels: nextDefaults })
+  }
+
+  const handleDefaultModelInput = (providerId: ModelProviderId, value: string): void => {
+    setModelInputs(current => ({ ...current, [providerId]: value }))
+    commitDefaultModel(providerId, value)
+    // 模型换了，上一份「可用模型」列表仍然有效（它描述的是上游，不是这个输入框），
+    // 因此这里只清测试结果，不清列表。
+    forgetConnectivity(providerId)
+  }
+
+  /**
+   * 拉取上游模型列表，并把**最靠前的一个**自动填成默认模型。
+   *
+   * 用户仍然可以改：下面的列表点任意一项就会替换输入框。取不到时保留原值不动，
+   * 只显示失败原因 —— 不能因为一次网络失败把用户已经填好的模型清掉。
+   */
+  const handleFetchModels = async (providerId: ModelProviderId): Promise<void> => {
+    triggerHaptic('light')
+    setLoadingCatalog(providerId)
+    try {
+      const result = await runtimeBridge.listModelCatalog({
+        providerId,
+        apiKey: credentialDrafts[providerId],
+      })
+      setCatalogResults(current => ({ ...current, [providerId]: result }))
+      if (result.ok && result.models.length > 0) {
+        const first = firstCatalogModelId(result.models)
+        setModelInputs(current => ({ ...current, [providerId]: first }))
+        commitDefaultModel(providerId, first)
+        triggerHaptic('success')
+      } else {
+        triggerHaptic('warning')
+      }
+    } catch (error) {
+      setCatalogResults(current => ({
+        ...current,
+        [providerId]: { ok: false, status: 0, latencyMs: 0, message: errorMessage(error), models: [] },
+      }))
+      triggerHaptic('error')
+    } finally {
+      setLoadingCatalog(null)
+    }
   }
 
   return (
@@ -2146,11 +2313,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           <p className="eyebrow">{t("应用管理")}</p>
           <div className="heading-title-row">
             <h1>{t(SETTINGS_PAGE_META[page].title)}</h1>
-            {autoSaved && (
-              <span className="auto-save-pill success" role="status">
-                <Check size={13} /> {t("已自动保存")}
-              </span>
-            )}
             {busy === 'save-settings' && (
               <span className="auto-save-pill saving" role="status">
                 <Loader2 size={13} className="spin" /> {t("保存中...")}
@@ -2163,9 +2325,20 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         </button>
       </div>
 
-      <form className="settings-form" onSubmit={event => { event.preventDefault(); saveDraft() }}>
+      {/*
+        * 单行输入里的回车一律不当「保存整页」：Android 输入法的完成键就是回车，
+        * 而整页表单一次提交会先跑浏览器自带的字段校验（WebView 里那条气泡贴着输入框不散，
+        * 看起来就像一直在报错）。回车留给输入法收候选；页面上也没有保存按钮，
+        * 写盘只发生在离开这一页或切到后台时。
+        */}
+      <form className="settings-form" onKeyDown={event => {
+        if (event.key !== 'Enter') return
+        const target = event.target as HTMLElement
+        if (target.tagName === 'TEXTAREA' || target.tagName === 'BUTTON') return
+        event.preventDefault()
+      }} onSubmit={event => { event.preventDefault() }}>
         {page === 'models' && (
-        <fieldset className="settings-model-fieldset" disabled={busy !== null}>
+        <fieldset className="settings-model-fieldset" disabled={inputLocked}>
         <section className="settings-section" aria-labelledby="model-settings">
           <div className="section-title">
             <span className="section-icon"><Bot size={19} /></span>
@@ -2182,7 +2355,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             </button>
           </div>
           <p className="field-help">{t("打开 Harness 后，在侧栏「更多」菜单选择登录；登录完成后返回此页可刷新账号状态。")}</p>
-          {!hasConfiguredModelCredential(settings) && (
+          {!hasConfiguredModelCredential(settings) && !credentialPendingInDraft && (
             /*
              * 应用只读取 Harness 凭据文件中的白名单配置状态，不读取密钥内容，也无法识别
              * 用户自行维护的其它来源。因此保留显式放行入口，避免这类用户被永久挡在门外。
@@ -2191,7 +2364,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               <AlertTriangle size={19} />
               <div>
                 <strong>{t("还没有可用的模型凭据")}</strong>
-                <span>{t("开始对话前需登录 DeepSeek 账号或保存一份 API Key。若状态尚未同步，或凭据来自 Harness 的其他来源，可以直接打开。")}</span>
+                <span>{t("开始对话前需登录 DeepSeek 账号、保存一份 API Key，或在下方「自定义供应商」里填好第三方接口。若状态尚未同步，或凭据来自 Harness 的其他来源，可以直接打开。")}</span>
               </div>
               <button className="button button-secondary" type="button" disabled={!canOpenHarness} onClick={onLaunchConfirmed}>
                 {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Rocket size={18} />}{t("我已在 Harness 内配置过，仍要打开")}</button>
@@ -2226,18 +2399,15 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           </div>
           <label className="field">
             <span>{selectedProviderOption.label} API Key · {selectedProviderOption.environmentVariable}</span>
-            <input
-              type="password"
-              autoComplete="new-password"
-              spellCheck={false}
-              maxLength={200}
+            <ApiKeyInput
               placeholder={settings.harnessConfiguredModelProviders?.includes(selectedProvider) === true
                 && (!settings.configuredModelProviders.includes(selectedProvider) || clearedProviders.includes(selectedProvider))
                 ? t("已在 Harness 中配置，留空保持不变")
                 : selectedProviderConfigured ? t("已配置，留空保持不变") : t("输入 API Key")}
               value={credentialDrafts[selectedProvider] ?? ''}
-              onChange={event => {
-                const value = event.target.value
+              onValueChange={value => {
+                // 改了输入，上一次「已保存 / 保存失败」就不再对应当前内容。
+                setCredentialSaveState('idle')
                 setCredentialDrafts(current => {
                   const next = { ...current }
                   if (value === '') delete next[selectedProvider]
@@ -2245,10 +2415,29 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                   return next
                 })
                 if (value !== '') setClearedProviders(current => current.filter(provider => provider !== selectedProvider))
+                // 改了密钥，上一次的测试结果就不再对应当前这份输入。
+                forgetConnectivity(selectedProvider)
               }}
             />
           </label>
           <div className="credential-actions">
+            <button
+              className="button button-primary compact-button"
+              type="button"
+              disabled={!credentialDirty || busy !== null}
+              onClick={saveCredentials}
+            >
+              {busy === 'save-settings' ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
+              {busy === 'save-settings' ? t('保存中…') : t('保存密钥')}
+            </button>
+            {credentialSaveState === 'saved' && (
+              <span className="credential-save-status success" role="status">
+                <CheckCircle2 size={15} />{t('已保存')}
+              </span>
+            )}
+            {credentialSaveState === 'failed' && (
+              <span className="credential-save-status error" role="alert">{t('保存失败，请重试')}</span>
+            )}
             <button
               className="button button-secondary compact-button"
               type="button"
@@ -2271,6 +2460,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                   setClearedProviders(current => current.includes(selectedProvider)
                     ? current.filter(provider => provider !== selectedProvider)
                     : [...current, selectedProvider])
+                  forgetConnectivity(selectedProvider)
                 }}
               >
                 {clearedProviders.includes(selectedProvider) ? <RotateCcw size={16} /> : <Trash2 size={16} />}
@@ -2283,6 +2473,64 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               {connectivityResults[selectedProvider].message}
             </div>
           )}
+          {/*
+            * 「默认模型」是**本机记录**：应用投递给 Harness 的只有凭据，没有默认模型这条通道。
+            * 保留这一栏是因为用户确实需要记住「这家我用的是哪个模型」，而每次打开 Harness
+            * 再选一遍并不现实；帮助文案里把边界说清楚，避免以为这里能替 Harness 选模型。
+            */}
+          <div className="provider-model-field">
+            <label className="field">
+              <span>{t("默认模型")}</span>
+              <input
+                value={modelInputs[selectedProvider] ?? settings.defaultModels?.[selectedProvider] ?? ''}
+                placeholder={t("点「获取模型」自动填入最靠前的一个，也可以自己改")}
+                maxLength={200}
+                spellCheck={false}
+                autoComplete="off"
+                autoCapitalize="off"
+                inputMode="text"
+                disabled={inputLocked}
+                onChange={event => handleDefaultModelInput(selectedProvider, event.target.value)}
+              />
+            </label>
+            <button
+              className="button button-secondary compact-button"
+              type="button"
+              disabled={inputLocked || loadingCatalog === selectedProvider}
+              onClick={() => void handleFetchModels(selectedProvider)}
+            >
+              {loadingCatalog === selectedProvider ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+              {loadingCatalog === selectedProvider ? t("正在获取…") : t("获取模型")}
+            </button>
+          </div>
+          {catalogResults[selectedProvider] && (
+            <div className={`connectivity-result ${catalogResults[selectedProvider].ok ? 'success' : 'error'}`}>
+              {catalogResults[selectedProvider].message}
+            </div>
+          )}
+          {catalogResults[selectedProvider]?.models.length > 0 && (
+            <div className="model-catalog-list" role="list" aria-label={t("上游模型")}>
+              {catalogResults[selectedProvider].models.map(model => {
+                const active = (modelInputs[selectedProvider] ?? settings.defaultModels?.[selectedProvider] ?? '') === model.id
+                return <button
+                  key={model.id}
+                  type="button"
+                  role="listitem"
+                  className={`model-catalog-item${active ? ' is-selected' : ''}`}
+                  aria-pressed={active}
+                  disabled={inputLocked}
+                  onClick={() => {
+                    setModelInputs(current => ({ ...current, [selectedProvider]: model.id }))
+                    commitDefaultModel(selectedProvider, model.id)
+                  }}
+                >
+                  <span className="model-catalog-name">{model.name}</span>
+                  {model.name !== model.id && <span className="model-catalog-id">{model.id}</span>}
+                </button>
+              })}
+            </div>
+          )}
+          <p className="field-help">{t("「默认模型」只是本机的备忘：应用只把密钥交给 Harness，不会替你在 Harness 里切换模型。")}</p>
           <CustomProviders
             providers={settings.customModelProviders ?? []}
             configured={settings.configuredCustomModelProviders ?? []}
@@ -2293,6 +2541,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             onCredentials={setCustomCredentials}
             onClear={setClearedCustomProviders}
             onTestConnectivity={handleTestCustomConnectivity}
+            onFetchModels={handleFetchCustomModels}
           />
         </section>
         </fieldset>
@@ -2302,7 +2551,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
-            <div><h2 id="download-settings">{t("运行时与设备 Shell")}</h2><p>{t("装、启停、重置在「Ubuntu 运行时」；Shizuku 授权与 AI Shell 在「设备 Shell 设置」。")}</p></div>
+            <div><h2 id="download-settings">{t("运行时与设备 Shell")}</h2><p>{t("装、启停、重置在「Ubuntu 运行时」；Shizuku 授权在「设备 Shell 设置」。")}</p></div>
           </div>
           <div className="settings-inline-actions">
             <button className="button button-secondary" type="button" onClick={onOpenEnvironment} disabled={busy !== null}>
@@ -2314,9 +2563,21 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           </div>
           <p className="settings-note">{t("运行环境使用 APK 内置的受校验版本；需要其它版本时请在 Ubuntu 运行时的版本管理中下载并切换。")}</p>
         </section>
-        )}
 
+        )}
         {page === 'terminal' && (
+        <div className="settings-subsection" aria-labelledby="terminal-subpages">
+          <div className="section-title">
+            <span className="section-icon"><Settings2 size={19} /></span>
+            <div><h3 id="terminal-subpages">{t("外观")}</h3><p>{t("字号配色写在应用壳里，背景与卡片另开一页")}</p></div>
+          </div>
+          <SettingsPageRow icon={<Settings2 size={20} />} page="terminal-typography" onOpen={onOpenSubpage} />
+          <SettingsPageRow icon={<Image size={20} />} page="terminal-background" onOpen={onOpenSubpage} />
+          <SettingsPageRow icon={<RefreshCw size={20} />} page="terminal-dsh-background" onOpen={onOpenSubpage} />
+        </div>
+        )}
+        {page === 'terminal-typography' && (
+        <>
         <section className="settings-section" aria-labelledby="terminal-settings">
           <div className="section-title">
             <span className="section-icon"><SquareTerminal size={19} /></span>
@@ -2330,7 +2591,12 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               max={24}
               step={1}
               value={settings.terminalFontSize}
-              onChange={event => setDraft({ ...settings, terminalFontSize: Number(event.target.value) })}
+              onChange={event => {
+                const next = Number(event.target.value)
+                // 立即预览：落盘要等到离开这一页，滑块不该看起来没反应。
+                applyShellFontScale(next)
+                setDraft({ ...settings, terminalFontSize: next })
+              }}
             />
           </label>
           <label className="toggle-row">
@@ -2343,11 +2609,12 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             />
           </label>
         </section>
+        {/* 明暗模式与强调色：存储与 DOM 落地全在 src/theme.ts，这里只负责挂载。 */}
+        <AppearanceSettings scope="appearance" />
+        </>
         )}
-
-        {/* 外观（登记册 5.4）：落在「主题」页——登记册指定的现成落点。
-            组件无 props，主题的存储与 DOM 落地全在 src/theme.ts，这里只负责挂载。 */}
-        {page === 'terminal' && <AppearanceSettings />}
+        {page === 'terminal-background' && <AppearanceSettings scope="background" />}
+        {page === 'terminal-dsh-background' && <AppearanceSettings scope="dsh" />}
 
         {page === 'runtime' && (
         <section className="settings-section" aria-labelledby="keep-alive-settings">
@@ -2467,9 +2734,21 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             </div>
           )}
         </section>
-        )}
 
+        )}
         {page === 'device-shell' && (
+        <>
+        <section className="settings-section" aria-labelledby="device-shell-entry">
+          <div className="section-title section-title-action">
+            <span className="section-icon"><SquareTerminal size={19} /></span>
+            <div><h2 id="device-shell-entry">{t("设备 Shell")}</h2><p>{t("设备上的 Shell：命令以 shell 身份执行，需要下面的 Shizuku 授权")}</p></div>
+            <button className="button button-secondary" type="button" onClick={onOpenShellView} disabled={busy !== null}>
+              <ExternalLink size={18} />{t("打开设备 Shell")}</button>
+          </div>
+          <p className="settings-note">
+            {t("命令直接跑在设备上，不在 Ubuntu 里；Shizuku 没授权时也能打开，只是设备工具不可用，Ubuntu 终端与 Harness 不受影响。")}
+          </p>
+        </section>
         <section className="settings-section" aria-labelledby="shizuku-settings">
           <div className="section-title section-title-action">
             <span className="section-icon"><Smartphone size={19} /></span>
@@ -2496,344 +2775,72 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           <p className="settings-note">
             {t("Shizuku 提供设备命令和文件操作能力，权限取决于其启动模式。未安装、未授权或断开时，设备工具不可用，不影响 Ubuntu 终端与 Harness。")}
           </p>
-          <DeviceShellSettings bridge={runtimeBridge} disabled={busy !== null} />
         </section>
+        </>
         )}
 
         {/*
           自动化设置：无障碍与副屏是同一条能力的两条腿（谁去读界面、画面从哪来），
           所以合并进同一页，不再各占一个入口。
         */}
+        {
+          /*
+            自动化设置的三条腿各占一个三级页：谁去读界面（无障碍）、画面从哪来（副屏）、
+            什么时候动与怎么动（自动参数）。二级页只留入口与免责说明。
+          */
+        }
+        {/*
+          免责说明弹窗：确认模式由「开始 / 继续」触发，「回看」由入口页上那条说明的按钮触发。
+          放在自动化几张页共同的层级，入口页与「自动参数」页都能把它弹出来。
+        */}
+        {automationDisclaimer !== null && (
+          <AutomationDisclaimer
+            mode={automationDisclaimer.mode}
+            onConfirm={confirmAutomationDisclaimer}
+            onCancel={() => setAutomationDisclaimer(null)}
+          />
+        )}
         {page === 'automation' && (
         <>
-          <div className="settings-stack">
-          {/*
-            自动化设置按「副屏 / 参数与规则 / 无障碍」三组排：
-            副屏决定画面从哪来，参数与规则决定怎么动，无障碍决定有没有权限去读。
-          */}
-          <nav className="settings-group-nav" aria-label={t("本页分组")}>
-            <a href="#automation-group-display">{t("副屏")}</a>
-            <a href="#automation-group-parameters">{t("参数与规则")}</a>
-            <a href="#automation-group-accessibility">{t("无障碍")}</a>
-          </nav>
-          <section className="settings-group settings-group-single" id="automation-group-display" aria-labelledby="automation-group-display-title">
+          <div className="settings-subsection" aria-labelledby="automation-subpages">
             <div className="section-title">
-              <span className="section-icon"><Smartphone size={19} /></span>
-              <div><h2 id="automation-group-display-title">{t("副屏")}</h2><p>{t("取帧档位、屏幕方向、分辨率与跟随策略。")}</p></div>
+              <span className="section-icon"><Bot size={19} /></span>
+              <div><h3 id="automation-subpages">{t("自动化能力")}</h3><p>{t("三条腿分开摆：读取界面、副屏画面、执行参数")}</p></div>
             </div>
-            <VirtualScreenSettings bridge={runtimeBridge} embedded />
-          </section>
-          <section className="settings-group" id="automation-group-parameters" aria-labelledby="automation-group-parameters-title">
-            <div className="section-title">
-              <span className="section-icon"><SlidersHorizontal size={19} /></span>
-              <div><h2 id="automation-group-parameters-title">{t("参数与规则")}</h2><p>{t("总开关、按应用规则与每应用参数。")}</p></div>
+            <SettingsPageRow icon={<Accessibility size={20} />} page="automation-accessibility" onOpen={onOpenSubpage} />
+            <SettingsPageRow icon={<Smartphone size={20} />} page="automation-subscreen" onOpen={onOpenSubpage} />
+            <SettingsPageRow icon={<SlidersHorizontal size={20} />} page="automation-params" onOpen={onOpenSubpage} />
+          </div>
+          <div className="settings-subsection" aria-labelledby="automation-disclaimer">
+            <div className="section-title section-title-action">
+              <span className="section-icon"><ShieldCheck size={19} /></span>
+              <div><h3 id="automation-disclaimer">{t("免责说明")}</h3><p>{t("自动化可能误点或误读界面，请只对自己有权操作的应用启用。")}</p></div>
+              <button className="button button-secondary" type="button" disabled={busy !== null}
+                onClick={() => setAutomationDisclaimer({ mode: 'read' })}>
+                <ShieldCheck size={18} />{t("查看完整免责说明")}
+              </button>
             </div>
-            <div className="settings-subsection" aria-labelledby="accessibility-automation-console">
-              <div className="section-title section-title-action">
-                <span className="section-icon"><Play size={19} /></span>
-                <div><h3 id="accessibility-automation-console">{t("自动化总开关")}</h3><p>{t("停到你再明确打开为止")}</p></div>
-                <span className={`status-chip ${accessibility.automationRuntime === 'running' ? 'success' : ''}`} data-testid="automation-runtime-chip">
-                  {automationRuntimeLabel(accessibility.automationRuntime)}
-                </span>
-              </div>
-              <p className="settings-note">
-                {t("总开关只在这里改：AI 侧没有开启自动化的路径，总开关不是「运行中」时写规则的命令会被拒绝。暂停与紧急停止都不会关掉系统里的无障碍服务，也不清空白名单与规则。")}
-              </p>
-              <div className="button-row">
-                <button className="button button-primary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime === 'running'}
-                  onClick={() => changeAutomationRuntime('start')}>
-                  {automationPending ? <Loader2 className="spin" size={18} /> : <Play size={18} />}{t("开始")}</button>
-                <button className="button button-secondary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime !== 'running'}
-                  onClick={() => changeAutomationRuntime('pause')}>
-                  <Square size={18} />{t("暂停")}</button>
-                <button className="button button-secondary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime !== 'paused'}
-                  onClick={() => changeAutomationRuntime('resume')}>
-                  <Play size={18} />{t("继续")}</button>
-                <button className="button button-secondary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime === 'off'}
-                  onClick={() => changeAutomationRuntime('emergency_stop')}>
-                  <AlertTriangle size={18} />{t("紧急停止")}</button>
-              </div>
-              {/*
-                服务状态与总开关是两件事，必须分开说：`enabled_disconnected` 是「系统里开着、
-                服务实例不在」，这时候只能请用户去系统设置里重新开关一次，界面不能假装已连接。
-              */}
-              <p className="settings-note" role="status" data-testid="automation-service-status">
-                {accessibilityServiceLabel(accessibility.serviceStatus)}
-                {accessibility.serviceStatus === 'connected'
-                  ? t("：服务在跑，总开关「运行中」时才会执行规则里的动作。")
-                  : t("：需要你在系统无障碍设置里手动开启（或重新开关一次），应用内无法代劳。")}
-              </p>
-              {accessibility.serviceStatus !== 'connected' && (
-                <button className="button button-secondary" type="button" onClick={onOpenAccessibilitySettings} disabled={busy !== null}>
-                  <ExternalLink size={18} />{t("打开系统无障碍设置")}
-                </button>
-              )}
-              {/*
-                回看入口不在这里：免责说明在这一页末尾只占一条（见页面底部），
-                免得同一条说明有两个入口。
-              */}
-            </div>
-            {/*
-              免责说明弹窗：确认模式由「开始 / 继续」触发，回看模式由上面的入口触发。
-              放在控制台这一块里，读代码时「谁把它弹出来的」一目了然。
-            */}
-            {automationDisclaimer !== null && (
-              <AutomationDisclaimer
-                mode={automationDisclaimer.mode}
-                onConfirm={confirmAutomationDisclaimer}
-                onCancel={() => setAutomationDisclaimer(null)}
-              />
-            )}
-            {/*
-              任务台账的可见面：AI 按步骤执行时的当前任务，以及人叫停它的那一下。
-              位置就是阅读顺序：现在能不能动（总开关）→ 正在动什么（本卡）→ 刚才动过什么（运行记录）。
-            */}
-            <AutomationTaskCard />
-            <div className="settings-subsection" aria-labelledby="accessibility-automation-runs">
-              <div className="section-title section-title-action">
-                <span className="section-icon"><ScrollText size={19} /></span>
-                <div><h3 id="accessibility-automation-runs">{t("本次会话的运行记录")}</h3><p>{t("只保留无障碍服务本次运行期间的数据")}</p></div>
-                <button className="button button-secondary" type="button" onClick={() => loadAutomationRuns()} disabled={automationRunsStatus === 'loading'}>
-                  {automationRunsStatus === 'loading' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("刷新")}</button>
-              </div>
-              <p className="settings-note">
-                {t("记录只在无障碍服务本次运行期间存在，服务被系统回收后会从空开始——这里为空不代表没有发生过动作。记录里只有受控码与规则标识，不含界面文字、不含截图。")}
-              </p>
-              {automationRunsStatus === 'failed' && <p className="settings-note" role="alert">{t("运行记录读取失败，请稍后重试")}</p>}
-              {automationRunsStatus === 'loading' && automationRuns === null && <p className="settings-note" role="status">{t("正在读取运行记录")}</p>}
-              {automationRuns !== null && !automationRuns.connected && (
-                <p className="settings-note" role="status" data-testid="automation-runs-disconnected">
-                  {t("无障碍服务当前没连上，因此读不到运行记录。")}
-                </p>
-              )}
-              {automationRuns !== null && automationRuns.connected && automationRuns.runs.length === 0 && (
-                <p className="settings-note" role="status">{t("服务已连接，还没有运行记录。")}</p>
-              )}
-              {automationRuns !== null && automationRuns.dropped > 0 && (
-                <p className="settings-note">{t("更早的 {0} 条记录已超出容量被丢弃。", automationRuns.dropped)}</p>
-              )}
-              {automationRuns !== null && automationRuns.blocked.length > 0 && (
-                <div className="settings-note" data-testid="automation-blocked-reasons">
-                  <strong>{t("拦截原因（本次会话累计）")}</strong>
-                  <ul>
-                    {automationRuns.blocked.map(reason => (
-                      <li key={reason.code}>
-                        {reason.message ?? reason.code}
-                        <span>{t("（{0}）", reason.code)}</span>
-                        <span>{t("× {0} 次", reason.count)}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {automationRuns !== null && automationRuns.runs.length > 0 && (
-                <ul className="settings-note" data-testid="automation-run-list">
-                  {automationRuns.runs.slice(0, 20).map((run, index) => (
-                    <li key={`${run.atMs}-${run.ruleId}-${run.code}-${index}`}>
-                      <span>{formatElapsedSinceBoot(run.atMs)}</span>
-                      <span>{run.ruleId}</span>
-                      <span>{automationRunLabel(run)}</span>
-                      <span>{run.performed ? t("已执行") : t("未执行")}</span>
-                      {run.degraded && <span>{t("降级路径")}</span>}
-                      {!run.ok && <span>{t("失败")}</span>}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {automationRuns !== null && automationRuns.runs.length > 20 && (
-                <p className="settings-note">{t("只显示最近 20 条，共 {0} 条。", automationRuns.runs.length)}</p>
-              )}
-            </div>
-            <div className="settings-subsection" aria-labelledby="accessibility-automation-rules">
-              <div className="section-title section-title-action">
-                <span className="section-icon"><ListChecks size={19} /></span>
-                <div><h3 id="accessibility-automation-rules">{t("自动化规则")}</h3><p>{t("按应用查看，逐条启用或停用")}</p></div>
-                {rulesPackage !== '' && (
-                  <button className="button button-secondary" type="button"
-                    onClick={() => selectRulesPackage(rulesPackage)} disabled={automationRuleLocked || automationRulesStatus === 'loading'}>
-                    {automationRulesStatus === 'loading' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("刷新")}
-                  </button>
-                )}
-                {/* 新建入口不依赖「已经有没有规则」：一条规则都没有时它才是最该看到的按钮。 */}
-                {rulesPackage !== '' && (
-                  <button className="button button-secondary" type="button" data-testid="automation-rule-create"
-                    onClick={startCreateRule} disabled={automationRuleLocked || automationRulesStatus === 'loading'}>
-                    <Plus size={18} />{t("新建规则")}
-                  </button>
-                )}
-              </div>
-              <p className="settings-note">
-                {t("规则由 AI 生成、你在写盘前确认；这里只改「启不启用」，不改规则内容。停用一条规则不会删掉它。")}
-              </p>
-              {accessibility.allowedPackages.filter(name => !accessibility.alwaysAllowedPackages.includes(name)).length === 0 ? (
-                <p className="settings-note" role="status" data-testid="automation-rules-no-packages">
-                  {t("白名单里还没有其他应用：先在上面加入目标应用，规则才有归属。")}
-                </p>
-              ) : (
-                <div className="settings-note" data-testid="automation-rule-packages">
-                  {accessibility.allowedPackages
-                    .filter(name => !accessibility.alwaysAllowedPackages.includes(name))
-                    .map(name => (
-                      <button key={name} className="button button-secondary" type="button"
-                        onClick={() => selectRulesPackage(name)} disabled={automationRuleLocked}
-                        aria-pressed={rulesPackage === name}>
-                        {name}
-                      </button>
-                    ))}
-                </div>
-              )}
-              {automationRulesStatus === 'failed' && <p className="settings-note" role="alert">{t("规则读取失败，请稍后重试")}</p>}
-              {automationRulesStatus === 'loading' && automationRules === null && (
-                <p className="settings-note" role="status">{t("正在读取规则")}</p>
-              )}
-              {automationRules !== null && automationRules.corrupt !== null && (
-                <p className="settings-note" role="alert" data-testid="automation-rules-corrupt">
-                  {t("这个应用的规则数据不可用，已被清除：{0}（{1}）。需要重新生成规则。",
-                    automationRules.corrupt.message, automationRules.corrupt.code)}
-                </p>
-              )}
-              {automationRules !== null && automationRules.corrupt === null && !automationRules.allowed && (
-                <p className="settings-note" role="status" data-testid="automation-rules-not-allowed">
-                  {t("{0} 不在白名单里：这些规则不会被任何事件用到。", automationRules.packageName)}
-                </p>
-              )}
-              {automationRules !== null && automationRules.corrupt === null && automationRules.allowed
-                && automationRules.rules.length === 0 && (
-                <p className="settings-note" role="status">{t("这个应用还没有规则。")}</p>
-              )}
-              {automationRules !== null && automationRules.rules.length > 0 && (
-                <ul className="settings-note" data-testid="automation-rule-list">
-                  {automationRules.rules.map(rule => (
-                    <li key={rule.id}>
-                      <span>{rule.id}</span>
-                      <span>{rule.actionKind}</span>
-                      <span>{t("{0} 个选择器", rule.selectorCount)}</span>
-                      <span>{t("最多 {0} 次", rule.maxActions)}</span>
-                      <span>{rule.enabled ? t("已启用") : t("已停用")}</span>
-                      <button className="button button-secondary" type="button"
-                        onClick={() => toggleAutomationRule(rule.id, !rule.enabled)}
-                        disabled={automationRuleLocked || !automationRules.allowed}>
-                        {automationRulePending === rule.id
-                          ? <Loader2 className="spin" size={18} />
-                          : rule.enabled ? t("停用") : t("启用")}
-                      </button>
-                      {/*
-                        「编辑」只发起一次读回（startEditRule）：原生 update 是整条替换，
-                        读不回全文就打不开表单——打开一张空的，用户一保存就把选择器整片抹掉了。
-                      */}
-                      <button className="button button-secondary" type="button"
-                        aria-label={t("编辑规则 {0}", rule.id)}
-                        onClick={() => startEditRule(rule.id)}
-                        disabled={automationRuleLocked}>
-                        {automationRulePending === rule.id
-                          ? <Loader2 className="spin" size={18} />
-                          : <Pencil size={18} />}{t("编辑")}
-                      </button>
-                      <button className="button button-secondary" type="button"
-                        aria-label={t("删除规则 {0}", rule.id)}
-                        onClick={() => setAutomationRuleConfirmDelete(rule.id)}
-                        disabled={automationRuleLocked}>
-                        <Trash2 size={18} />{t("删除")}
-                      </button>
-                      {automationRuleConfirmDelete === rule.id && (
-                        <div className="automation-rule-delete-confirm" data-testid="automation-rule-delete-confirm">
-                          <p role="alert">
-                            {t("删除「{0}」是整条删除：规则本身、它的全部选择器和动作都不会留下，删了就没了。", rule.id)}
-                          </p>
-                          <button className="button button-secondary compact-button" type="button"
-                            onClick={() => deleteAutomationRule(rule.id)} disabled={automationRuleWriting !== null}>
-                            {automationRuleWriting === 'delete'
-                              ? <Loader2 className="spin" size={18} />
-                              : <Trash2 size={18} />}{t("确认删除")}
-                          </button>
-                          <button className="button button-secondary compact-button" type="button"
-                            onClick={() => setAutomationRuleConfirmDelete(null)} disabled={automationRuleWriting !== null}>
-                            {t("取消")}
-                          </button>
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {/*
-                读回 / 写入失败的原因：原样展示桥回来的文案，不改写也不吞掉。
-                表单没打开时提示显示在卡片里——「编辑」读回失败正是这种情况：
-                这里**只会出现这段原因，不会出现任何输入框**。
-              */}
-              {automationRuleError !== null && automationRuleDraft === null && (
-                <p className="settings-note" role="alert" data-testid="automation-rule-write-error">
-                  {automationRuleError}
-                </p>
-              )}
-              {automationRuleDraft !== null && (
-                // key 带上方式与标识：换一条规则编辑时表单重建，草稿不会带着上一条的内容。
-                <AutomationRuleForm
-                  key={`automation-rule-${automationRuleDraft.mode}-${automationRuleDraft.rule?.id ?? 'new'}`}
-                  packageName={rulesPackage}
-                  rule={automationRuleDraft.rule}
-                  mode={automationRuleDraft.mode}
-                  defaults={automationRuleDraft.defaults}
-                  busy={automationRuleWriting !== null}
-                  error={automationRuleError}
-                  onSubmit={saveAutomationRule}
-                  onCancel={closeAutomationRuleForm}
-                />
-              )}
-            </div>
-            {/*
-              「每应用参数」：按应用的暂停开关 + 新建规则的三个默认值。
-              单独一块是刻意的——它改的是「这个应用的行为边界」，与规则正文无关，
-              放同一张卡里会让人以为保存参数会连规则一起动。
-            */}
-            <div className="settings-subsection" aria-labelledby="accessibility-automation-app-config">
-              <div className="section-title">
-                <span className="section-icon"><SlidersHorizontal size={19} /></span>
-                <div>
-                  <h3 id="accessibility-automation-app-config">{t("每应用参数")}</h3>
-                  <p>{t("暂停与新建规则的默认值")}</p>
-                </div>
-              </div>
-              {rulesPackage === '' ? (
-                <p className="settings-note" role="status" data-testid="automation-app-config-no-package">
-                  {t("先在上面选一个应用")}
-                </p>
-              ) : (
-                // key 带上包名：换应用即重建表单，草稿不会带着上一个应用的数字。
-                <AutomationAppConfigForm
-                  key={`automation-app-config-${rulesPackage}`}
-                  packageName={rulesPackage}
-                  detail={automationAppConfig}
-                  status={automationAppConfigStatus}
-                  busy={automationAppConfigWriting}
-                  locked={automationRuleLocked}
-                  error={automationAppConfigError}
-                  onSave={saveAutomationAppConfig}
-                  onReload={() => selectRulesPackage(rulesPackage)}
-                />
-              )}
-            </div>
-          </section>
-          <section className="settings-group" id="automation-group-accessibility" aria-labelledby="automation-group-accessibility-title">
+          </div>
+        </>
+        )}
+
+        {page === 'automation-accessibility' && (
+        <>
+          <div className="settings-subsection" aria-labelledby="accessibility-automation-settings">
             <div className="section-title section-title-action">
               <span className="section-icon"><Bot size={19} /></span>
-              <div><h2 id="automation-group-accessibility-title">{t("无障碍")}</h2><p>{t("服务状态、白名单与验证密码。")}</p></div>
+              <div><h3 id="accessibility-automation-settings">{t("无障碍应用自动化")}</h3><p>{t("读取允许的应用界面并执行受控动作")}</p></div>
               <span className={`status-chip ${accessibility.enabled ? 'success' : ''}`}>{accessibility.enabled ? t("服务已开启") : t("需要手动开启")}</span>
             </div>
-            <div className="settings-subsection" aria-labelledby="accessibility-automation-settings">
-              <div className="section-title section-title-action">
-                <span className="section-icon"><Bot size={19} /></span>
-                <div><h3 id="accessibility-automation-settings">{t("无障碍应用自动化")}</h3><p>{t("读取允许的应用界面并执行受控动作")}</p></div>
-              </div>
-              <p className="settings-note">
-                {t("开启白名单限制时仅允许列表内的应用；关闭后可操作未加入名单的普通应用。锁屏、系统设置及涉及权限、支付、验证码和密码的页面仍受保护；服务必须由你在系统无障碍设置中手动开启。")}
-              </p>
+            <p className="settings-note">
+              {t("开启白名单限制时仅允许列表内的应用；关闭后可操作未加入名单的普通应用。锁屏、系统设置及涉及权限、支付、验证码和密码的页面仍受保护；服务必须由你在系统无障碍设置中手动开启。")}
+            </p>
+          </div>
+          <div className="settings-subsection" aria-labelledby="accessibility-whitelist">
+            <div className="section-title">
+              <span className="section-icon"><LockKeyhole size={19} /></span>
+              <div><h3 id="accessibility-whitelist">{t("无障碍白名单")}</h3><p>{t("开启限制后只允许名单内的应用，改完要点「保存白名单」")}</p></div>
             </div>
-            <div className="settings-subsection" aria-labelledby="accessibility-whitelist-settings">
-              <div className="section-title">
-                <span className="section-icon"><ShieldCheck size={19} /></span>
-                <div><h3 id="accessibility-whitelist-settings">{t("无障碍白名单")}</h3><p>{t("名单内的应用才允许读取界面与执行动作。")}</p></div>
-              </div>
             <label className="toggle-row">
               <span><strong>{t("启用无障碍白名单限制")}</strong><small>{t("关闭不会清空名单；修改后点击「保存白名单」生效，已设密码时仍需验证。")}</small></span>
               <input type="checkbox" role="switch" aria-label={t("启用无障碍白名单限制")}
@@ -2863,14 +2870,11 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             {accessibility.passwordConfigured && (
               <label className="field">
                 <span>{t("验证密码（修改白名单需要）")}</span>
-                <input
-                  type="password"
+                <ApiKeyInput
                   value={whitelistPassword}
-                  onChange={event => setWhitelistPassword(event.target.value)}
-                  autoComplete="off"
-                  spellCheck={false}
+                  onValueChange={setWhitelistPassword}
                   maxLength={64}
-                  aria-label={t("修改白名单的验证密码")}
+                  ariaLabel={t("修改白名单的验证密码")}
                 />
               </label>
             )}
@@ -2883,112 +2887,387 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               </button>
             </div>
             <p className="settings-note">{t("当前白名单：{0}", accessibility.allowedPackages.length ? accessibility.allowedPackages.join("、") : t("未配置"))}</p>
-            </div>
-            <div className="settings-subsection" aria-labelledby="accessibility-password-settings">
-              <div className="section-title section-title-action">
-                <span className="section-icon"><KeyRound size={19} /></span>
-                <div>
-                  <h3 id="accessibility-password-settings">{t("白名单验证密码")}</h3>
-                  <p>{t("设置后，每次修改白名单都要输入")}</p>
-                </div>
-                <span className={`status-chip ${accessibility.passwordConfigured ? 'success' : ''}`}>
-                  {accessibility.passwordConfigured ? t("已设置") : t("未设置")}
-                </span>
-              </div>
-              <p className="settings-note">
-                {t("密码只以加盐哈希保存在设备上，不写日志、不随桥返回，界面上输入后也不保留；忘记时可用系统生物识别或锁屏密码重置，重置只清密码，白名单保留。")}
-              </p>
-              {accessibility.passwordConfigured && (
-                <label className="field">
-                  <span>{t("当前密码")}</span>
-                  <input
-                    type="password"
-                    value={passwordDraft.current}
-                    onChange={event => setPasswordDraft(draft => ({ ...draft, current: event.target.value }))}
-                    autoComplete="off"
-                    spellCheck={false}
-                    maxLength={64}
-                    aria-label={t("当前验证密码")}
-                  />
-                </label>
-              )}
-              <label className="field">
-                <span>{t("新密码（6 到 64 个字符）")}</span>
-                <input
-                  type="password"
-                  value={passwordDraft.next}
-                  onChange={event => setPasswordDraft(draft => ({ ...draft, next: event.target.value }))}
-                  autoComplete="off"
-                  spellCheck={false}
-                  maxLength={64}
-                  aria-label={t("新验证密码")}
-                />
-              </label>
-              <label className="field">
-                <span>{t("再输一次新密码")}</span>
-                <input
-                  type="password"
-                  value={passwordDraft.confirm}
-                  onChange={event => setPasswordDraft(draft => ({ ...draft, confirm: event.target.value }))}
-                  autoComplete="off"
-                  spellCheck={false}
-                  maxLength={64}
-                  aria-label={t("确认新验证密码")}
-                />
-              </label>
-              <div className="settings-inline-actions">
-                <button className="button button-secondary" type="button" onClick={submitAccessibilityPassword} disabled={busy !== null}>
-                  <Save size={18} />{accessibility.passwordConfigured ? t("修改密码") : t("设置密码")}
-                </button>
-                {accessibility.passwordConfigured && (
-                  <>
-                    <button
-                      className="button button-secondary"
-                      type="button"
-                      disabled={busy !== null || passwordDraft.current === ''}
-                      onClick={() => {
-                        onClearAccessibilityPassword(passwordDraft.current)
-                        setPasswordDraft({ current: '', next: '', confirm: '' })
-                      }}
-                    >
-                      <Trash2 size={18} />{t("清除密码")}
-                    </button>
-                    <button
-                      className="button button-secondary"
-                      type="button"
-                      disabled={busy !== null}
-                      onClick={() => {
-                        onResetAccessibilityPassword()
-                        setPasswordDraft({ current: '', next: '', confirm: '' })
-                      }}
-                    >
-                      <ShieldCheck size={18} />{t("用生物识别重置")}
-                    </button>
-                  </>
-                )}
-              </div>
-              {passwordMessage !== null && <p className="settings-note" role="alert">{passwordMessage}</p>}
-            </div>
-          </section>
-          {/*
-            免责说明只占一条：标题 + 一句话，详情在弹窗里（同一段文字，不改任何状态）。
-            确认过之后不再自动弹，但「我当初到底同意了什么」随时要能查。
-          */}
-          <div className="settings-subsection" aria-labelledby="automation-disclaimer">
-            <div className="section-title section-title-action">
-              <span className="section-icon"><ShieldCheck size={19} /></span>
-              <div><h3 id="automation-disclaimer">{t("免责说明")}</h3><p>{t("自动化可能误点或误读界面，请只对自己有权操作的应用启用。")}</p></div>
-              <button className="button button-secondary" type="button" disabled={busy !== null}
-                onClick={() => setAutomationDisclaimer({ mode: 'read' })}>
-                <ShieldCheck size={18} />{t("查看完整免责说明")}
-              </button>
-            </div>
           </div>
+          <div className="settings-subsection" aria-labelledby="accessibility-password-settings">
+            <div className="section-title section-title-action">
+              <span className="section-icon"><KeyRound size={19} /></span>
+              <div>
+                <h3 id="accessibility-password-settings">{t("白名单验证密码")}</h3>
+                <p>{t("设置后，每次修改白名单都要输入")}</p>
+              </div>
+              <span className={`status-chip ${accessibility.passwordConfigured ? 'success' : ''}`}>
+                {accessibility.passwordConfigured ? t("已设置") : t("未设置")}
+              </span>
+            </div>
+            <p className="settings-note">
+              {t("密码只以加盐哈希保存在设备上，不写日志、不随桥返回，界面上输入后也不保留；忘记时可用系统生物识别或锁屏密码重置，重置只清密码，白名单保留。")}
+            </p>
+            {accessibility.passwordConfigured && (
+              <label className="field">
+                <span>{t("当前密码")}</span>
+                <ApiKeyInput
+                  value={passwordDraft.current}
+                  onValueChange={value => setPasswordDraft(draft => ({ ...draft, current: value }))}
+                  maxLength={64}
+                  ariaLabel={t("当前验证密码")}
+                />
+              </label>
+            )}
+            <label className="field">
+              <span>{t("新密码（6 到 64 个字符）")}</span>
+              <ApiKeyInput
+                value={passwordDraft.next}
+                onValueChange={value => setPasswordDraft(draft => ({ ...draft, next: value }))}
+                maxLength={64}
+                ariaLabel={t("新验证密码")}
+              />
+            </label>
+            <label className="field">
+              <span>{t("再输一次新密码")}</span>
+              <ApiKeyInput
+                value={passwordDraft.confirm}
+                onValueChange={value => setPasswordDraft(draft => ({ ...draft, confirm: value }))}
+                maxLength={64}
+                ariaLabel={t("确认新验证密码")}
+              />
+            </label>
+            <div className="settings-inline-actions">
+              <button className="button button-secondary" type="button" onClick={submitAccessibilityPassword} disabled={busy !== null}>
+                <Save size={18} />{accessibility.passwordConfigured ? t("修改密码") : t("设置密码")}
+              </button>
+              {accessibility.passwordConfigured && (
+                <>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    disabled={busy !== null || passwordDraft.current === ''}
+                    onClick={() => {
+                      onClearAccessibilityPassword(passwordDraft.current)
+                      setPasswordDraft({ current: '', next: '', confirm: '' })
+                    }}
+                  >
+                    <Trash2 size={18} />{t("清除密码")}
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => {
+                      onResetAccessibilityPassword()
+                      setPasswordDraft({ current: '', next: '', confirm: '' })
+                    }}
+                  >
+                    <ShieldCheck size={18} />{t("用生物识别重置")}
+                  </button>
+                </>
+              )}
+            </div>
+            {passwordMessage !== null && <p className="settings-note" role="alert">{passwordMessage}</p>}
           </div>
         </>
         )}
 
+        {page === 'automation-params' && (
+        <>
+          <div className="settings-subsection" aria-labelledby="accessibility-automation-console">
+            <div className="section-title section-title-action">
+              <span className="section-icon"><Play size={19} /></span>
+              <div><h3 id="accessibility-automation-console">{t("自动化总开关")}</h3><p>{t("停到你再明确打开为止")}</p></div>
+              <span className={`status-chip ${accessibility.automationRuntime === 'running' ? 'success' : ''}`} data-testid="automation-runtime-chip">
+                {automationRuntimeLabel(accessibility.automationRuntime)}
+              </span>
+            </div>
+            <p className="settings-note">
+              {t("总开关只在这里改：AI 侧没有开启自动化的路径，总开关不是「运行中」时写规则的命令会被拒绝。暂停与紧急停止都不会关掉系统里的无障碍服务，也不清空白名单与规则。")}
+            </p>
+            <div className="button-row">
+              <button className="button button-primary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime === 'running'}
+                onClick={() => changeAutomationRuntime('start')}>
+                {automationPending ? <Loader2 className="spin" size={18} /> : <Play size={18} />}{t("开始")}</button>
+              <button className="button button-secondary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime !== 'running'}
+                onClick={() => changeAutomationRuntime('pause')}>
+                <Square size={18} />{t("暂停")}</button>
+              <button className="button button-secondary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime !== 'paused'}
+                onClick={() => changeAutomationRuntime('resume')}>
+                <Play size={18} />{t("继续")}</button>
+              <button className="button button-secondary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime === 'off'}
+                onClick={() => changeAutomationRuntime('emergency_stop')}>
+                <AlertTriangle size={18} />{t("紧急停止")}</button>
+            </div>
+            {/*
+              服务状态与总开关是两件事，必须分开说：`enabled_disconnected` 是「系统里开着、
+              服务实例不在」，这时候只能请用户去系统设置里重新开关一次，界面不能假装已连接。
+            */}
+            <p className="settings-note" role="status" data-testid="automation-service-status">
+              {accessibilityServiceLabel(accessibility.serviceStatus)}
+              {accessibility.serviceStatus === 'connected'
+                ? t("：服务在跑，总开关「运行中」时才会执行规则里的动作。")
+                : t("：需要你在系统无障碍设置里手动开启（或重新开关一次），应用内无法代劳。")}
+            </p>
+            {accessibility.serviceStatus !== 'connected' && (
+              <button className="button button-secondary" type="button" onClick={onOpenAccessibilitySettings} disabled={busy !== null}>
+                <ExternalLink size={18} />{t("打开系统无障碍设置")}
+              </button>
+            )}
+            {/*
+              回看入口不在这里：免责说明在这一页末尾只占一条（见页面底部），
+              免得同一条说明有两个入口。
+            */}
+          </div>
+          {/*
+            任务台账的可见面：AI 按步骤执行时的当前任务，以及人叫停它的那一下。
+            位置就是阅读顺序：现在能不能动（总开关）→ 正在动什么（本卡）→ 刚才动过什么（运行记录）。
+          */}
+          <AutomationTaskCard />
+          <div className="settings-subsection" aria-labelledby="accessibility-automation-runs">
+            <div className="section-title section-title-action">
+              <span className="section-icon"><ScrollText size={19} /></span>
+              <div><h3 id="accessibility-automation-runs">{t("本次会话的运行记录")}</h3><p>{t("只保留无障碍服务本次运行期间的数据")}</p></div>
+              <button className="button button-secondary" type="button" onClick={() => loadAutomationRuns()} disabled={automationRunsStatus === 'loading'}>
+                {automationRunsStatus === 'loading' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("刷新")}</button>
+            </div>
+            <p className="settings-note">
+              {t("记录只在无障碍服务本次运行期间存在，服务被系统回收后会从空开始——这里为空不代表没有发生过动作。记录里只有受控码与规则标识，不含界面文字、不含截图。")}
+            </p>
+            {automationRunsStatus === 'failed' && <p className="settings-note" role="alert">{t("运行记录读取失败，请稍后重试")}</p>}
+            {automationRunsStatus === 'loading' && automationRuns === null && <p className="settings-note" role="status">{t("正在读取运行记录")}</p>}
+            {automationRuns !== null && !automationRuns.connected && (
+              <p className="settings-note" role="status" data-testid="automation-runs-disconnected">
+                {t("无障碍服务当前没连上，因此读不到运行记录。")}
+              </p>
+            )}
+            {automationRuns !== null && automationRuns.connected && automationRuns.runs.length === 0 && (
+              <p className="settings-note" role="status">{t("服务已连接，还没有运行记录。")}</p>
+            )}
+            {automationRuns !== null && automationRuns.dropped > 0 && (
+              <p className="settings-note">{t("更早的 {0} 条记录已超出容量被丢弃。", automationRuns.dropped)}</p>
+            )}
+            {automationRuns !== null && automationRuns.blocked.length > 0 && (
+              <div className="settings-note" data-testid="automation-blocked-reasons">
+                <strong>{t("拦截原因（本次会话累计）")}</strong>
+                <ul>
+                  {automationRuns.blocked.map(reason => (
+                    <li key={reason.code}>
+                      {reason.message ?? reason.code}
+                      <span>{t("（{0}）", reason.code)}</span>
+                      <span>{t("× {0} 次", reason.count)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {automationRuns !== null && automationRuns.runs.length > 0 && (
+              <ul className="settings-note" data-testid="automation-run-list">
+                {automationRuns.runs.slice(0, 20).map((run, index) => (
+                  <li key={`${run.atMs}-${run.ruleId}-${run.code}-${index}`}>
+                    <span>{formatElapsedSinceBoot(run.atMs)}</span>
+                    <span>{run.ruleId}</span>
+                    <span>{automationRunLabel(run)}</span>
+                    <span>{run.performed ? t("已执行") : t("未执行")}</span>
+                    {run.degraded && <span>{t("降级路径")}</span>}
+                    {!run.ok && <span>{t("失败")}</span>}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {automationRuns !== null && automationRuns.runs.length > 20 && (
+              <p className="settings-note">{t("只显示最近 20 条，共 {0} 条。", automationRuns.runs.length)}</p>
+            )}
+          </div>
+          <div className="settings-subsection" aria-labelledby="accessibility-automation-rules">
+            <div className="section-title section-title-action">
+              <span className="section-icon"><ListChecks size={19} /></span>
+              <div><h3 id="accessibility-automation-rules">{t("自动化规则")}</h3><p>{t("按应用查看，逐条启用或停用")}</p></div>
+              {rulesPackage !== '' && (
+                <button className="button button-secondary" type="button"
+                  onClick={() => selectRulesPackage(rulesPackage)} disabled={automationRuleLocked || automationRulesStatus === 'loading'}>
+                  {automationRulesStatus === 'loading' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("刷新")}
+                </button>
+              )}
+              {/* 新建入口不依赖「已经有没有规则」：一条规则都没有时它才是最该看到的按钮。 */}
+              {rulesPackage !== '' && (
+                <button className="button button-secondary" type="button" data-testid="automation-rule-create"
+                  onClick={startCreateRule} disabled={automationRuleLocked || automationRulesStatus === 'loading'}>
+                  <Plus size={18} />{t("新建规则")}
+                </button>
+              )}
+            </div>
+            <p className="settings-note">
+              {t("规则由 AI 生成、你在写盘前确认；这里只改「启不启用」，不改规则内容。停用一条规则不会删掉它。")}
+            </p>
+            {accessibility.allowedPackages.filter(name => !accessibility.alwaysAllowedPackages.includes(name)).length === 0 ? (
+              <p className="settings-note" role="status" data-testid="automation-rules-no-packages">
+                {t("白名单里还没有其他应用：先在上面加入目标应用，规则才有归属。")}
+              </p>
+            ) : (
+              <div className="settings-note" data-testid="automation-rule-packages">
+                {accessibility.allowedPackages
+                  .filter(name => !accessibility.alwaysAllowedPackages.includes(name))
+                  .map(name => (
+                    <button key={name} className="button button-secondary" type="button"
+                      onClick={() => selectRulesPackage(name)} disabled={automationRuleLocked}
+                      aria-pressed={rulesPackage === name}>
+                      {name}
+                    </button>
+                  ))}
+              </div>
+            )}
+            {automationRulesStatus === 'failed' && <p className="settings-note" role="alert">{t("规则读取失败，请稍后重试")}</p>}
+            {automationRulesStatus === 'loading' && automationRules === null && (
+              <p className="settings-note" role="status">{t("正在读取规则")}</p>
+            )}
+            {automationRules !== null && automationRules.corrupt !== null && (
+              <p className="settings-note" role="alert" data-testid="automation-rules-corrupt">
+                {t("这个应用的规则数据不可用，已被清除：{0}（{1}）。需要重新生成规则。",
+                  automationRules.corrupt.message, automationRules.corrupt.code)}
+              </p>
+            )}
+            {automationRules !== null && automationRules.corrupt === null && !automationRules.allowed && (
+              <p className="settings-note" role="status" data-testid="automation-rules-not-allowed">
+                {t("{0} 不在白名单里：这些规则不会被任何事件用到。", automationRules.packageName)}
+              </p>
+            )}
+            {automationRules !== null && automationRules.corrupt === null && automationRules.allowed
+              && automationRules.rules.length === 0 && (
+              <p className="settings-note" role="status">{t("这个应用还没有规则。")}</p>
+            )}
+            {automationRules !== null && automationRules.rules.length > 0 && (
+              <ul className="settings-note" data-testid="automation-rule-list">
+                {automationRules.rules.map(rule => (
+                  <li key={rule.id}>
+                    <span>{rule.id}</span>
+                    <span>{rule.actionKind}</span>
+                    <span>{t("{0} 个选择器", rule.selectorCount)}</span>
+                    <span>{t("最多 {0} 次", rule.maxActions)}</span>
+                    <span>{rule.enabled ? t("已启用") : t("已停用")}</span>
+                    <button className="button button-secondary" type="button"
+                      onClick={() => toggleAutomationRule(rule.id, !rule.enabled)}
+                      disabled={automationRuleLocked || !automationRules.allowed}>
+                      {automationRulePending === rule.id
+                        ? <Loader2 className="spin" size={18} />
+                        : rule.enabled ? t("停用") : t("启用")}
+                    </button>
+                    {/*
+                      「编辑」只发起一次读回（startEditRule）：原生 update 是整条替换，
+                      读不回全文就打不开表单——打开一张空的，用户一保存就把选择器整片抹掉了。
+                    */}
+                    <button className="button button-secondary" type="button"
+                      aria-label={t("编辑规则 {0}", rule.id)}
+                      onClick={() => startEditRule(rule.id)}
+                      disabled={automationRuleLocked}>
+                      {automationRulePending === rule.id
+                        ? <Loader2 className="spin" size={18} />
+                        : <Pencil size={18} />}{t("编辑")}
+                    </button>
+                    <button className="button button-secondary" type="button"
+                      aria-label={t("删除规则 {0}", rule.id)}
+                      onClick={() => setAutomationRuleConfirmDelete(rule.id)}
+                      disabled={automationRuleLocked}>
+                      <Trash2 size={18} />{t("删除")}
+                    </button>
+                    {automationRuleConfirmDelete === rule.id && (
+                      <div className="automation-rule-delete-confirm" data-testid="automation-rule-delete-confirm">
+                        <p role="alert">
+                          {t("删除「{0}」是整条删除：规则本身、它的全部选择器和动作都不会留下，删了就没了。", rule.id)}
+                        </p>
+                        <button className="button button-secondary compact-button" type="button"
+                          onClick={() => deleteAutomationRule(rule.id)} disabled={automationRuleWriting !== null}>
+                          {automationRuleWriting === 'delete'
+                            ? <Loader2 className="spin" size={18} />
+                            : <Trash2 size={18} />}{t("确认删除")}
+                        </button>
+                        <button className="button button-secondary compact-button" type="button"
+                          onClick={() => setAutomationRuleConfirmDelete(null)} disabled={automationRuleWriting !== null}>
+                          {t("取消")}
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {/*
+              读回 / 写入失败的原因：原样展示桥回来的文案，不改写也不吞掉。
+              表单没打开时提示显示在卡片里——「编辑」读回失败正是这种情况：
+              这里**只会出现这段原因，不会出现任何输入框**。
+            */}
+            {automationRuleError !== null && automationRuleDraft === null && (
+              <p className="settings-note" role="alert" data-testid="automation-rule-write-error">
+                {automationRuleError}
+              </p>
+            )}
+            {automationRuleDraft !== null && (
+              // key 带上方式与标识：换一条规则编辑时表单重建，草稿不会带着上一条的内容。
+              <AutomationRuleForm
+                key={`automation-rule-${automationRuleDraft.mode}-${automationRuleDraft.rule?.id ?? 'new'}`}
+                packageName={rulesPackage}
+                rule={automationRuleDraft.rule}
+                mode={automationRuleDraft.mode}
+                defaults={automationRuleDraft.defaults}
+                busy={automationRuleWriting !== null}
+                error={automationRuleError}
+                onSubmit={saveAutomationRule}
+                onCancel={closeAutomationRuleForm}
+              />
+            )}
+          </div>
+          {/*
+            「每应用参数」：按应用的暂停开关 + 新建规则的三个默认值。
+            单独一块是刻意的——它改的是「这个应用的行为边界」，与规则正文无关，
+            放同一张卡里会让人以为保存参数会连规则一起动。
+          */}
+          <div className="settings-subsection" aria-labelledby="accessibility-automation-app-config">
+            <div className="section-title">
+              <span className="section-icon"><SlidersHorizontal size={19} /></span>
+              <div>
+                <h3 id="accessibility-automation-app-config">{t("每应用参数")}</h3>
+                <p>{t("暂停与新建规则的默认值")}</p>
+              </div>
+            </div>
+            {rulesPackage === '' ? (
+              <p className="settings-note" role="status" data-testid="automation-app-config-no-package">
+                {t("先在上面选一个应用")}
+              </p>
+            ) : (
+              // key 带上包名：换应用即重建表单，草稿不会带着上一个应用的数字。
+              <AutomationAppConfigForm
+                key={`automation-app-config-${rulesPackage}`}
+                packageName={rulesPackage}
+                detail={automationAppConfig}
+                status={automationAppConfigStatus}
+                busy={automationAppConfigWriting}
+                locked={automationRuleLocked}
+                error={automationAppConfigError}
+                onSave={saveAutomationAppConfig}
+                onReload={() => selectRulesPackage(rulesPackage)}
+              />
+            )}
+          </div>
+        </>
+        )}
+
+        {
+          /*
+            副屏是自动化的第二条腿：取帧档位、方向、分辨率与跟随策略都在这一页里。
+            拆成三级页之后仍然只有这一处实现。
+          */
+        }
+        {page === 'automation-subscreen' && (
+          <VirtualScreenSettings bridge={runtimeBridge} />
+        )}
+
         {page === 'diagnostics' && (
+        <div className="settings-subsection" aria-labelledby="diagnostics-subpages">
+          <div className="section-title">
+            <span className="section-icon"><ScrollText size={19} /></span>
+            <div><h3 id="diagnostics-subpages">{t("排查与反馈")}</h3><p>{t("日志、能力与反馈分开放，导出日志在「日志与采集」里")}</p></div>
+          </div>
+          <SettingsPageRow icon={<ScrollText size={20} />} page="diagnostics-log" onOpen={onOpenSubpage} />
+          <SettingsPageRow icon={<Gauge size={20} />} page="diagnostics-capability" onOpen={onOpenSubpage} />
+          <SettingsPageRow icon={<MessageSquare size={20} />} page="diagnostics-feedback" onOpen={onOpenSubpage} />
+        </div>
+        )}
+        {page === 'diagnostics-log' && (
         <>
         <section className="settings-section" aria-labelledby="diagnostic-settings">
           <div className="section-title section-title-action">
@@ -3046,15 +3325,10 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         {/* 诊断日志正文可直接在应用内查看；运行日志是访客输出尾部，只在界面展示、不进导出。 */}
         <DiagnosticLogPanel loadDiagnosticLog={loadDiagnosticLog} />
         <HarnessLogPanel loadHarnessLog={loadHarnessLog} />
-        <section className="settings-section" aria-labelledby="feedback-title">
-          <h2 id="feedback-title">{t('问题反馈')}</h2>
-          <p>{t('反馈时请附上应用版本、屏幕方向和复现步骤。分享日志前请检查是否包含个人信息。')}</p>
-          <p>QQ {t('交流群')}：1108895375</p>
-          <a className="button button-secondary" href="https://github.com/dphmoblie/deepseek-harness-android/issues" target="_blank" rel="noopener noreferrer">
-            <ExternalLink size={18} />{t('在 GitHub 反馈问题')}
-          </a>
-        </section>
-
+        </>
+        )}
+        {page === 'diagnostics-capability' && (
+        <>
         <RuntimeSelfCheckPanel runSelfCheck={runSelfCheck} runtime={runtime} />
 
         {/* 设备能力清单：从版本管理页挪过来，回答「这台机器现在能做什么」。 */}
@@ -3063,8 +3337,18 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <RootEngineCard />
         </>
         )}
-
-        {autoSaved && <p className="settings-note settings-auto-saved" role="status"><Check size={16} />{t("已自动保存")}</p>}
+        {page === 'diagnostics-feedback' && (
+        <>
+        <section className="settings-section" aria-labelledby="feedback-title">
+          <h2 id="feedback-title">{t('问题反馈')}</h2>
+          <p>{t('反馈时请附上应用版本、屏幕方向和复现步骤。分享日志前请检查是否包含个人信息。')}</p>
+          <p>QQ {t('交流群')}：1108895375</p>
+          <a className="button button-secondary" href="https://github.com/dphmoblie/deepseek-harness-android/issues" target="_blank" rel="noopener noreferrer">
+            <ExternalLink size={18} />{t('在 GitHub 反馈问题')}
+          </a>
+        </section>
+        </>
+        )}
       </form>
     </div>
   )
@@ -3141,13 +3425,33 @@ export function App() {
    */
   const [settingsDraft, setSettingsDraft] = useState<SettingsDraft | null>(null)
   /**
+   * 草稿的同步真值。
+   *
+   * 「离开这一页就保存」发生在组件卸载之后（页面 key 变化会重建 SettingsScreen），那时
+   * React 状态还没传到回调里，所以写盘必须读这份 ref，而不是闭包里的 `settingsDraft`。
+   */
+  const settingsDraftRef = useRef<SettingsDraft | null>(null)
+  settingsDraftRef.current = settingsDraft
+  /**
    * 草稿里是否有用户尚未保存的输入。
    *
    * 为真时后台刷新（进入设置页时的重读、以及任何迟到的读取结果）**不覆盖**草稿：
    * 刷新是为了同步原生侧改动，绝不能把用户正在输入的内容（典型是 API Key）清掉。
-   * 只在「保存成功」与「离开设置区」两处复位。
+   * 只在保存成功后复位：离开设置区**不再**复位，草稿要活到进程结束。
+   *
+   * 它只供回调判断（离开页面时要不要写盘），不再有可渲染的「保存」按钮，因此不需要镜像 state。
    */
   const settingsDraftDirty = useRef(false)
+  /**
+   * 把当前草稿写盘的回调。
+   *
+   * 用 ref 转一次，是因为「离开页面」的判定写在很靠前的 effect 里，而写盘函数要用到
+   * 后面才定义的 `saveSettings`（`const`，在渲染期间还不存在）。渲染完成后赋值，
+   * effect 执行时必然已经就绪。
+   */
+  const flushSettingsDraftRef = useRef<((options?: { background?: boolean }) => Promise<boolean>) | null>(null)
+  /** 上一次渲染所在的设置页；用来判定「刚离开了哪一页」。 */
+  const settingsPageRef = useRef<SettingsPage | null>(null)
   /** Incremented for each local edit so a late save cannot discard newer input. */
   const settingsDraftRevision = useRef(0)
   const [shizuku, setShizuku] = useState<ShizukuState>(EMPTY_SHIZUKU)
@@ -3277,8 +3581,12 @@ export function App() {
   /**
    * 用落盘设置重建草稿并解除「未保存」标记。
    *
-   * 只有两个调用点：读到最新设置（且用户没有未保存的输入时）与保存成功之后。
-   * 重建时凭据输入一律清空：密钥落盘后不回显，草稿里也就不该继续留着它。
+   * 只有两类调用点：**用户重新进入设置二级页**（他要看的是落盘值），以及用户主动保存成功后。
+   * 重建只换落盘字段：用户本次会话输入过的凭据原样保留（界面显示为掩码），否则「保存成功后
+   * 回到这一页，密钥框空着」会让人以为自己没填成功、白填一遍。
+   *
+   * 后台刷新**不得**走这里：重建会换掉用户眼前的输入框内容，正在键入的那一格会被清空、
+   * 正在组合的输入法会被打断。后台只该刷新只读状态（见 [applyRefreshedSettings]）。
    */
   const resyncSettingsDraft = useCallback((next: RuntimeSettings) => {
     settingsDraftDirty.current = false
@@ -3287,16 +3595,13 @@ export function App() {
   }, [])
 
   /**
-   * Applies a fresh native snapshot without discarding unsaved form input.
-   * Harness credential presence is read-only in this UI, so it can be refreshed independently.
+   * 只刷新只读状态、保留用户眼睛底下的输入。
+   *
+   * Harness 网页凭据状态是只读的（界面不提供改写入口），可以随时同步；其余字段一律以草稿为准。
+   * 后台同步（前台恢复、窗口 focus）走这条路径 —— 用户没有动作，界面就不该有任何可见变化。
    */
-  const applyRefreshedSettings = useCallback((next: RuntimeSettings) => {
-    setSettings(next)
-    if (!settingsDraftDirty.current) {
-      resyncSettingsDraft(next)
-      return
-    }
-    setSettingsDraft(current => current === null ? current : {
+  const refreshDraftPresence = useCallback((next: RuntimeSettings) => {
+    setSettingsDraft(current => (current === null ? draftFromSettings(next) : {
       ...current,
       settings: {
         ...current.settings,
@@ -3304,8 +3609,23 @@ export function App() {
         harnessConfiguredCustomModelProviders: next.harnessConfiguredCustomModelProviders,
         deepSeekAccountConfigured: next.deepSeekAccountConfigured,
       },
-    })
-  }, [resyncSettingsDraft])
+    }))
+  }, [])
+
+  /**
+   * Applies a fresh native snapshot without discarding unsaved form input.
+   *
+   * `rebuildDraft` 只给「用户刚进入设置二级页」用：那时他要看的是落盘值。后台刷新一律
+   * 只是刷新只读状态，避免把正在编辑的输入框清空、把输入法的组合过程打断。
+   */
+  const applyRefreshedSettings = useCallback((next: RuntimeSettings, options?: { rebuildDraft?: boolean }) => {
+    setSettings(next)
+    if (options?.rebuildDraft === true && !settingsDraftDirty.current) {
+      resyncSettingsDraft(next)
+      return
+    }
+    refreshDraftPresence(next)
+  }, [refreshDraftPresence, resyncSettingsDraft])
 
   const readOverlayBall = useCallback(async (isCurrent?: () => boolean) => {
     const revision = ++overlayBallReadRevision.current
@@ -3533,22 +3853,58 @@ export function App() {
   }, [activeView, backToView, resetOpen, pendingInstall, onboardingOpen])
 
   /**
-   * 设置草稿的作用范围就是「设置区」（设置首页与五个二级页）。
+   * 「离开这一页就保存」。
    *
-   * 离开设置区立即丢弃草稿：未保存的输入不再保留，内存里的 API Key 也随之消失。
-   * 区内切页不清空 —— 那正是用户「输入 API Key 后做别的操作」的常见路径。
+   * 判定单位是**设置页**：切到另一个二级/三级页、返回上级、回对话、系统返回键与边缘滑动
+   * 返回，都会让 `activeView` 变化，从而落到这里。写盘读的是 [settingsDraftRef]（同步真值），
+   * 因为下一个渲染里 SettingsScreen 会按新的 page 重建，闭包里的旧草稿已经拿不到了。
+   *
+   * 离开设置区时也走这条路：草稿不再随离开丢弃，用户填一半去对话、再回来接着填，
+   * 这一份输入至少已经落盘，进程被回收也不会白填。
+   */
+  useEffect(() => {
+    const nextPage = isSettingsView(activeView) ? settingsPageOf(activeView) : null
+    const previousPage = settingsPageRef.current
+    settingsPageRef.current = nextPage
+    if (previousPage === null || previousPage === nextPage) return
+    if (!settingsDraftDirty.current) return
+    // 后台保存：用户已经在去别处的路上，不该再被一个前台进度占住界面。
+    void flushSettingsDraftRef.current?.({ background: true })
+  }, [activeView])
+
+  /**
+   * 被系统切到后台（含息屏）时也保存一次。
+   *
+   * 这是「离开页面」之外的兜底：用户可能再也不回这个应用，进程被回收时内存里的输入就没了。
+   * 只是尽力而为 —— WebView 进入后台后桥调用可能被系统挂起，失败由用户回到应用时的重试承担。
+   *
+   * 不再要求「当前在设置区」：草稿活到进程结束，在对话页被切到后台时它同样需要落盘。
+   */
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState !== 'hidden') return
+      if (!settingsDraftDirty.current) return
+      void flushSettingsDraftRef.current?.({ background: true })
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [])
+
+  /**
+   * 设置草稿的作用范围是**本次应用会话**，不再限定在设置区。
+   *
+   * 离开设置区（去对话、终端、文件）不再丢弃：用户填了一半跑去别处、再回来接着填，
+   * 是这条需求的原话（「离开设置区即丢弃能不能改成退出应用丢弃」）。代价是内存里的
+   * API Key 也跟着活到进程结束 —— 这是换「填过的密钥不会白填」付出的确定代价，
+   * 界面只显示掩码，进程一结束就没了。真正落盘靠上面的 visibilitychange 兜底。
    *
    * 历史回退/前进可能不经 [openSettings] 直接把二级页恢复出来，这里用已有的设置快照
    * 补建一份草稿，避免页面一直停在「正在读取设置」。
    */
   useEffect(() => {
-    if (!isSettingsView(activeView)) {
-      if (settingsDraft !== null) setSettingsDraft(null)
-      settingsDraftDirty.current = false
-      settingsDraftRevision.current += 1
-      return
+    if (isSettingsView(activeView) && settingsDraft === null && settings !== null) {
+      setSettingsDraft(draftFromSettings(settings))
     }
-    if (settingsDraft === null && settings !== null) setSettingsDraft(draftFromSettings(settings))
   }, [activeView, settings, settingsDraft])
 
   useEffect(() => {
@@ -3721,7 +4077,7 @@ export function App() {
   useEffect(() => {
     if (booting || onboardingOpen || settings === null) return
     /*
-     * 触发口径是「这项设置由关变开」（开机首次判定时 previous 为 undefined，同样算一次）。
+     * 触发口径是「这项设置由关变开」，且**必须区分相位**（AGENTS.md §5）：
      *
      * 为什么按设置值而不是按相位：若只看「空闲 ready 就预启动」，用户手动点「停止」后相位
      * 回到 ready，效果会立刻把服务重新拉起来——用户刚关掉的东西自己又开了，比慢启动更糟。
@@ -4277,7 +4633,8 @@ export function App() {
     void runtimeBridge.getSettings()
       .then(next => {
         if (revision !== settingsReadRevision.current) return
-        applyRefreshedSettings(next)
+        // 进入二级页是「用户要看落盘值」：草稿干净时按落盘值重建（本次会话输入的凭据保留，显示为掩码）。
+        applyRefreshedSettings(next, { rebuildDraft: true })
         setSettingsReadStatus('idle')
       })
       .catch(() => {
@@ -4434,22 +4791,65 @@ export function App() {
     }, t("运行环境已重置"))
   }, [run, setActiveView])
 
-  const saveSettings = useCallback(async (nextSettings: RuntimeSettingsUpdate): Promise<boolean> => {
+  /**
+   * 已经落盘的凭据值。
+   *
+   * 保存不再清空输入框（清空会让用户以为刚打的字被吞掉），代价是这份原文还留在草稿里。
+   * 值没再变过就不必重传：下一次保存（手动保存也算）把已落盘的条目剔掉，既不丢输入、
+   * 也不重复提交同一份密钥。用户点「清除密钥」时把对应条目删掉，否则清完再填回同一个值
+   * 会被误判成「已经落盘」而永远提交不上去。
+   */
+  const settledCredentials = useRef<{ providers: Record<string, string>; custom: Record<string, string> }>({
+    providers: {}, custom: {},
+  })
+
+  const saveSettings = useCallback(async (
+    nextSettings: RuntimeSettingsUpdate,
+    options?: { background?: boolean },
+  ): Promise<boolean> => {
+    const background = options?.background === true
     const draftRevisionAtStart = settingsDraftRevision.current
+    const settled = settledCredentials.current
+    const { providerApiKeys, customProviderApiKeys, ...restSettings } = nextSettings
+    // 「清除密钥」要把已落盘的记录也删掉：清完再填回同一个值必须重新提交，不能被当成没改过。
+    for (const providerId of nextSettings.clearProviderApiKeys ?? []) delete settled.providers[providerId]
+    for (const providerId of nextSettings.clearCustomProviderApiKeys ?? []) delete settled.custom[providerId]
+    // 剔掉「已落盘且没再改动」的凭据：输入框里留着那份原文只是为了不让用户以为字丢了。
+    // 手动保存也走这条路 —— 草稿里的密钥活到进程结束，不剔掉就会每点一次「保存」重传一遍。
+    const pendingProviders = providerApiKeys === undefined ? undefined : omitSettled(providerApiKeys, settled.providers)
+    const pendingCustom = customProviderApiKeys === undefined ? undefined : omitSettled(customProviderApiKeys, settled.custom)
+    const payload: RuntimeSettingsUpdate = {
+      ...restSettings,
+      ...(pendingProviders === undefined || Object.keys(pendingProviders).length === 0
+        ? {} : { providerApiKeys: pendingProviders }),
+      ...(pendingCustom === undefined || Object.keys(pendingCustom).length === 0
+        ? {} : { customProviderApiKeys: pendingCustom }),
+    }
     let savedSuccessfully = false
-    await run('save-settings', async isCurrent => {
-      const saved = await runtimeBridge.saveSettings(nextSettings)
+    await run(background ? AUTOSAVE_BUSY_ID : 'save-settings', async isCurrent => {
+      const saved = await runtimeBridge.saveSettings(payload)
       if (!isCurrent()) return
       savedSuccessfully = true
       setSettings(saved)
-      // 保存成功：草稿以后端落盘值为准重建（含清空 API Key 输入框）并解除「未保存」标记。
-      // 不做这一步的话，旧草稿会在下一次后台刷新时把刚保存的值反向覆盖回去。
-      if (settingsDraftRevision.current === draftRevisionAtStart) {
-        resyncSettingsDraft(saved)
-      } else {
+      if (pendingProviders !== undefined && Object.keys(pendingProviders).length > 0) {
+        settled.providers = { ...settled.providers, ...pendingProviders }
+      }
+      if (pendingCustom !== undefined && Object.keys(pendingCustom).length > 0) {
+        settled.custom = { ...settled.custom, ...pendingCustom }
+      }
+      if (settingsDraftRevision.current !== draftRevisionAtStart) {
         // The user edited the form while this request was in flight. Keep those
         // edits and only refresh the read-only Harness credential status.
         applyRefreshedSettings(saved)
+      } else if (background) {
+        // 后台保存是「离开页面 / 切后台」触发的：只解除「未保存」，不重建草稿。
+        settingsDraftDirty.current = false
+        settingsDraftRevision.current += 1
+        applyRefreshedSettings(saved)
+      } else {
+        // 用户主动保存：以落盘值为准重建草稿（含清空 API Key 输入框），否则旧草稿会在
+        // 下一次后台刷新时把刚保存的值反向覆盖回去。
+        resyncSettingsDraft(saved)
       }
       triggerHaptic('success')
       // 落盘成功后，状态查询失败不能被当成保存失败；三项查询互不阻塞。
@@ -4510,11 +4910,25 @@ export function App() {
   }, [applyRefreshedSettings, notify, readOverlayBall, resyncSettingsDraft, run])
 
   /**
+   * 把当前草稿写盘（手动保存与「离开这一页」共用）。
+   *
+   * 读 [settingsDraftRef] 而不是闭包里的草稿：离开页面的保存发生在组件卸载之后，
+   * 那时拿到的状态可能已经是被丢弃的旧值。没有草稿（不在设置区）时直接返回 false，
+   * 不产生任何写盘。
+   */
+  const saveSettingsDraft = useCallback((options?: { background?: boolean }): Promise<boolean> => {
+    const draft = settingsDraftRef.current
+    if (draft === null) return Promise.resolve(false)
+    return saveSettings(settingsUpdateFromDraft(draft, overlayBall?.enabled, overlayBallReadFailed), options)
+  }, [overlayBall?.enabled, overlayBallReadFailed, saveSettings])
+  flushSettingsDraftRef.current = saveSettingsDraft
+  /**
    * 申请前台服务通知权限。
    *
-   * 权限被拒绝（或调用超时）时前台服务根本起不来，「后台保持」不会生效：
-   * 部分厂商 ROM 甚至会因此终结应用进程，所以这里弹出可跳转的指引弹窗，
-   * 用户可一键到系统通知设置页手动开启，而不是只看到一条会消失的提示。
+   * 这个权限只决定常驻通知是否可见：Android 13+ 上缺它不会让前台服务起不来
+   * （`HarnessKeepAliveService.kt` 的 `startForegroundCompat()` 不再因缺权限提前返回，
+   * 那正是小米真机上的进程级闪退根因）。所以这里的弹窗是**建议**开启，便于用户
+   * 确认后台保持在跑；服务是否真的起来以原生状态为准。
    */
   const requestNotificationPermission = useCallback(() => {
     void run('notification-permission', async isCurrent => {
@@ -4642,8 +5056,9 @@ export function App() {
   /**
    * 跳到应用详情页。
    *
-   * HyperOS 的「省电策略 / 自启动」没有可稳定直达的公开 Intent，先把用户送到应用详情页，
-   * 弹窗文案里写清点哪一项；用户返回应用后由可见性刷新重新复核服务状态。
+   * 厂商 ROM 的「自启动 / 耗电管理 / 省电策略」都挂在应用详情页下面，没有可稳定直达的
+   * 公开 Intent（HyperOS 与 ColorOS 各家菜名还不同），先把用户送到应用详情页，
+   * 弹窗文案里写清两家各自点哪一项；用户返回应用后由可见性刷新重新复核服务状态。
    */
   const openApplicationSettings = useCallback(() => {
     void run('open-application-settings', () => runtimeBridge.openApplicationSettings())
@@ -4903,7 +5318,10 @@ export function App() {
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSave={saveSettings} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        /** 三级页的返回键回它的二级页；二级页照旧回设置首页。 */
+        const parentPage = SETTINGS_PAGE_META[page].parent
+        const backTarget: AppView = parentPage === undefined ? 'settings' : SETTINGS_PAGE_META[parentPage].view
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveCredentials={() => saveSettingsDraft()} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()
@@ -4972,13 +5390,14 @@ export function App() {
         <Onboarding
           busy={busy}
           runtime={runtime}
-          shizuku={shizuku}
           settings={settings}
           onInstall={installRuntime}
-          onAuthorize={requestShizukuPermission}
-          onOpenShizuku={openShizuku}
-          onOpenHarness={launchHarness}
-          onOpenHarnessConfirmed={launchHarnessConfirmed}
+          /* 没内置镜像时安装必然失败：把用户送到版本管理页在线下载一个带校验的镜像。
+             这里不写完成标记——引导还没走完，下次启动继续从这里接上。 */
+          onOpenVersions={() => {
+            setOnboardingOpen(false)
+            setActiveView('versions')
+          }}
           onDone={() => {
             try {
               window.localStorage.setItem(ONBOARDING_STORAGE_KEY, '1')

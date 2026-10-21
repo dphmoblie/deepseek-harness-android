@@ -175,7 +175,7 @@ describe('§5.6-B 渲染测量', () => {
       await tick(6_000)
       profile.reset()
 
-      await openSettingsPage('诊断与日志')
+      await openSettingsPage('诊断与日志', '设备能力')
 
       const rows = profile.sinceReset()
       report('夹具自检：设置首页 → 诊断与日志', rows)
@@ -284,7 +284,7 @@ describe('§5.6-B 渲染测量', () => {
       freshButEqualSnapshots()
       const { profile } = mountProfiledApp()
 
-      await openSettingsPage('诊断与日志')
+      await openSettingsPage('诊断与日志', '设备能力')
       await waitFor(() => expect(bridge.getKeepAliveState).toHaveBeenCalled())
       // 让挂载期与进页面时的那些读取全部落地，从稳态之后再开始数。
       await tick(6_000)

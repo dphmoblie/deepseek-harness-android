@@ -33,6 +33,13 @@ internal object HarnessThemeBridge {
     private const val KEY_BACKGROUND = "background"
     private const val KEY_SURFACE = "surface"
     private const val KEY_OPACITY = "surfaceOpacity"
+    /**
+     * DSH 页面里按钮与输入框的底色透明度（百分比）。
+     *
+     * 与面板透明度分开：面板要够不透正文才读得清，控件透明度是单独一项外观设置。
+     * 老版本载荷没有这个键，按 100（不透明）迁移。
+     */
+    private const val KEY_CONTROL_OPACITY = "controlOpacity"
     private const val KEY_SYNCED_AT = "syncedAt"
     private const val KEY_BACKGROUND_URI = "backgroundUri"
     private const val KEY_BACKGROUND_MIME = "backgroundMime"
@@ -53,8 +60,9 @@ internal object HarnessThemeBridge {
      * 单独抽出来是为了能被 JVM 单测直接驱动——这段判断是拼进 `evaluateJavascript` 的
      * 内容唯一的防线，不该只在设备上才验证得到。
      */
-    internal fun accepts(mode: String, accent: String, background: String, surface: String, opacity: Int): Boolean =
-        mode in MODES && COLOR.matches(accent) && COLOR.matches(background) && COLOR.matches(surface) && opacity in 0..100
+    internal fun accepts(mode: String, accent: String, background: String, surface: String, opacity: Int, controlOpacity: Int = 100): Boolean =
+        mode in MODES && COLOR.matches(accent) && COLOR.matches(background) && COLOR.matches(surface) &&
+            opacity in 0..100 && controlOpacity in 40..100
 
     /** 背景地址白名单：只认 `content://`，长度受限，不含引号与反斜杠。 */
     internal fun acceptsBackgroundUri(uri: String): Boolean = CONTENT_URI.matches(uri)
@@ -93,7 +101,8 @@ internal object HarnessThemeBridge {
         val background = payload.optString(KEY_BACKGROUND, "")
         val surface = payload.optString(KEY_SURFACE, "")
         val opacity = payload.optInt(KEY_OPACITY, -1)
-        if (!accepts(mode, accent, background, surface, opacity)) return false
+        val controlOpacity = payload.optInt(KEY_CONTROL_OPACITY, 100)
+        if (!accepts(mode, accent, background, surface, opacity, controlOpacity)) return false
         val hasFlag = payload.has(KEY_SYNC_BACKGROUND)
         val flag = payload.opt(KEY_SYNC_BACKGROUND)
         if (hasFlag && !acceptsSyncBackground(flag)) return false
@@ -104,6 +113,7 @@ internal object HarnessThemeBridge {
                 .putString(KEY_BACKGROUND, background)
                 .putString(KEY_SURFACE, surface)
                 .putInt(KEY_OPACITY, opacity)
+                .putInt(KEY_CONTROL_OPACITY, controlOpacity)
                 .putLong(KEY_SYNCED_AT, System.currentTimeMillis())
             // 没带这个字段就保留原值：老版本外壳只同步颜色，不该顺手把背景开关关掉。
             if (hasFlag) editor.putBoolean(KEY_SYNC_BACKGROUND, flag as Boolean)
@@ -146,6 +156,7 @@ internal object HarnessThemeBridge {
         val result = JSONObject()
         result.put(KEY_SYNC_BACKGROUND, syncBackground(context))
         result.put(KEY_SYNCED_AT, syncedAt(context))
+        result.put(KEY_CONTROL_OPACITY, controlOpacity(context))
         val uri = backgroundUri(context)
         val mime = backgroundMime(context)
         val kind = backgroundKind(context)
@@ -173,6 +184,13 @@ internal object HarnessThemeBridge {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong(KEY_SYNCED_AT, 0L)
     } catch (_: Exception) {
         0L
+    }
+
+    /** 控件透明度：老版本没有这个键，读默认 100，外观与升级前一致。 */
+    fun controlOpacity(context: Context): Int = try {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_CONTROL_OPACITY, 100).coerceIn(40, 100)
+    } catch (_: Exception) {
+        100
     }
 
     /**
@@ -296,7 +314,8 @@ internal object HarnessThemeBridge {
         val background = prefs.getString(KEY_BACKGROUND, null) ?: return null
         val surface = prefs.getString(KEY_SURFACE, null) ?: return null
         val opacity = prefs.getInt(KEY_OPACITY, 100)
-        if (!accepts(mode, accent, background, surface, opacity)) return null
+        val controlOpacity = prefs.getInt(KEY_CONTROL_OPACITY, 100).coerceIn(40, 100)
+        if (!accepts(mode, accent, background, surface, opacity, controlOpacity)) return null
         // 只有「开关打开 + 地址存在」才渲染背景层；kind 也只在真的显示时才带出去。
         val hasBackground = hasBackgroundForPage(context)
         val kind = if (hasBackground) backgroundKind(context) else null
@@ -311,6 +330,7 @@ internal object HarnessThemeBridge {
               root.style.setProperty('--dsh-theme-background', '$background');
               root.style.setProperty('--dsh-theme-surface', '$surface');
               root.style.setProperty('--dsh-theme-surface-opacity', '${opacity / 100.0}');
+              root.style.setProperty('--dsh-theme-control-opacity', '${controlOpacity / 100.0}');
               if ('$mode' !== 'system') { root.style.colorScheme = '$mode'; }
               var path = '${BACKGROUND_PATH}';
               var hasBackground = $hasBackground;

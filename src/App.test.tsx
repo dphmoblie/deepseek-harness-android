@@ -11,6 +11,18 @@ vi.mock('./components/TerminalPanel', () => ({
 
 import { App } from './App'
 
+/** 触发一次「切到后台」：页面隐藏时 App 自动保存当前设置草稿（页面已无保存按钮）。 */
+async function flushOnHide(): Promise<void> {
+  await act(async () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+    await Promise.resolve()
+    // 只还原状态，不再发一次 visibilitychange：否则 App 会把可见事件当成『回前台』去重读设置，
+    // 用夹具里的旧值覆盖刚保存的结果（真机上原生会回已落盘值，不会出现这个问题）。
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+  })
+}
+
 /**
  * 启动门禁与语言：应用从冷启动到「能进对话」这一段的前置条件。
  *
@@ -343,7 +355,8 @@ describe('App conversation gate', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    fireEvent.click(screen.getByRole('button', { name: /^设备 Shell 设备上的 Shell/ }))
+    await openSettingsPage('设备 Shell 设置')
+    fireEvent.click(await screen.findByRole('button', { name: '打开设备 Shell' }))
     expect(await screen.findByRole('heading', { name: '终端' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('tab', { name: '设备 Shell' }))
     fireEvent.click(screen.getByRole('button', { name: '请求授权' }))
@@ -356,17 +369,19 @@ describe('App conversation gate', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    // 运行时来源在「后台」页。
-    await openSettingsPage('后台')
+    // 运行时来源与设备入口都在「后台」页（原来的两个三级页已并入）。
+    await openSettingsPage('后台', '设备连接')
     expect(screen.getByText('运行环境使用 APK 内置的受校验版本；需要其它版本时请在 Ubuntu 运行时的版本管理中下载并切换。')).toBeInTheDocument()
     // 屏幕内返回按钮走的是历史回退，视图切换在 popstate 之后生效。
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
     expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()
 
     // 字号在「终端与外观」页。
-    await openSettingsPage('主题')
+    await openSettingsPage('主题', '字号与配色')
     const fontSlider = await screen.findByRole('slider', { name: /字号/ })
     fireEvent.change(fontSlider, { target: { value: '17' } })
+    // 输入期间不落盘：切到后台才写。
+    await flushOnHide()
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({ ...settings, terminalFontSize: 17 }))
     expect(await screen.findByText('设置已保存')).toBeInTheDocument()
   })
@@ -378,6 +393,7 @@ describe('App conversation gate', () => {
     await openSettingsPage('模型与密钥')
     fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
+    await flushOnHide()
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
       ...settings,
       providerApiKeys: { openai: 'unit-test-openai-key' },
@@ -441,20 +457,21 @@ describe('App conversation gate', () => {
       })
     render(<App />)
 
-    await screen.findByRole('dialog', { name: '欢迎使用 DeepSeek Harness Android' })
-    for (let index = 0; index < 5; index += 1) {
-      fireEvent.click(screen.getByRole('button', { name: /下一步/ }))
-    }
-    expect(screen.getByText(/尚未检测到模型凭据/)).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: /我已在 Harness 内配置过/ }))
-  await arriveAtSettingsHome()
+    // 首次配置窗口现在只有两步（配模型 → 装运行环境），没有旧版的「开始使用」收尾页：
+    // 本用例关心的是「回到前台后凭据状态会不会刷新」，先把窗口关掉再去模型页看。
+    const onboarding = await screen.findByRole('dialog', { name: '配置模型' })
+    fireEvent.click(within(onboarding).getByRole('button', { name: '跳过引导' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '配置模型' })).toBeNull())
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
 
+    // 刷新前：落盘设置里没有任何凭据，供应商卡片显示未配置。
+    expect(screen.getAllByText('未配置').length).toBeGreaterThan(0)
+
+    // 在 Harness 网页里配好凭据后回到前台：只读状态要跟着原生读数更新。
     fireEvent.focus(window)
 
-    await waitFor(() => expect(bridge.getSettings).toHaveBeenCalledTimes(2))
-    const onboarding = screen.getByRole('dialog', { name: '开始使用' })
-    expect(within(onboarding).getByRole('button', { name: /^打开 Harness$/ })).toBeVisible()
-    expect(within(onboarding).queryByText(/尚未检测到模型凭据/)).toBeNull()
+    expect(await screen.findByText('已在 Harness 中配置')).toBeVisible()
   })
 
   it('leaves automatic Shizuku connection to the native lifecycle', async () => {
@@ -509,7 +526,7 @@ describe('应用语言', () => {
     expect(bridge.openHarness).not.toHaveBeenCalled()
     fireEvent.change(screen.getByLabelText('语言 / Language'), { target: { value: 'en' } })
     fireEvent.click(screen.getByRole('button', { name: '继续 / Continue' }))
-    expect(await screen.findByRole('dialog', { name: 'Welcome to DeepSeek Harness Android' })).toBeVisible()
+    expect(await screen.findByRole('dialog', { name: 'Set up a model' })).toBeVisible()
     expect(bridge.setAppLanguage).toHaveBeenCalledWith('en')
     expect(window.localStorage.getItem('dsh-mobile-language-v1')).toBe('en')
     expect(document.documentElement.lang).toBe('en')

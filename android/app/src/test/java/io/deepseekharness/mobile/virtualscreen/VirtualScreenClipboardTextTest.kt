@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile.virtualscreen
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -103,6 +104,13 @@ class VirtualScreenClipboardTextTest {
         // 复核提示要求调用方别把「发了粘贴键」当成「已经粘上了」。
         assertTrue(VirtualScreenPolicy.CLIPBOARD_VERIFY_NOTE.contains("复核"))
         assertTrue(VirtualScreenPolicy.CLIPBOARD_HINT_PASTE_FAILED.contains("长按选择「粘贴」"))
+    }
+
+    @Test fun `通道确认过之后不再读回核对`() {
+        // 第一次（还没确认）必须读回：没证据就不能说通道可用。
+        assertTrue(VirtualScreenPolicy.clipboardProbeNeedsReadback(channelVerified = false))
+        // 确认过之后跳过第二次 shell 往返：中文输入每段都读回一次是主要延迟来源。
+        assertFalse(VirtualScreenPolicy.clipboardProbeNeedsReadback(channelVerified = true))
     }
 
     @Test fun `文本长度与可注入性仍沿用既有文本策略`() {

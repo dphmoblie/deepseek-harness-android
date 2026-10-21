@@ -21,6 +21,11 @@ class HarnessThemeBridgeTest {
         assertTrue(HarnessThemeBridge.accepts("dark", accent, background, surface, 86))
         assertTrue(HarnessThemeBridge.accepts("light", "#FFFFFF", "#ffffff", "#000000", 0))
         assertTrue(HarnessThemeBridge.accepts("system", accent, background, surface, 100))
+        // 控件透明度：40..100 合法，缺省按 100。
+        assertTrue(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 40))
+        assertTrue(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 100))
+        assertFalse(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 39))
+        assertFalse(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 101))
     }
 
     @Test

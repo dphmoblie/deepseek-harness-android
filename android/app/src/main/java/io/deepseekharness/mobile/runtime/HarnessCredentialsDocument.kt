@@ -26,7 +26,8 @@ import java.net.URI
  *
  * ## 安全约束（与 dsh 侧一致，任何一条不满足就拒绝写）
  *
- *  - 文档必须是 `version: 1` 的映射，顶层只允许 `version` / `refs` / `records`；
+ *  - 文档必须是 `version: 1` 的映射；`refs` / `records` 按 dsh 的形态校验，
+ *    其它顶层键按 dsh 自己的口径**忽略并原样保留**（dsh 只 warn，不拒绝整份文档）；
  *  - `refs` 的键必须是合法凭据引用名（与环境变量名同文法），取值必须是**非空**字符串；
  *  - 文档里**已存在**的 `records` 段（OAuth 授权记录等）与所有注释、空行、格式一律**逐行原样保留**：
  *    本对象只替换/追加 `refs` 段里的行，绝不重建整份文档 —— 手写 YAML 往返是丢数据的最短路径；
@@ -59,8 +60,6 @@ internal object HarnessCredentialsDocument {
      */
     private const val PLAIN_SCALAR_INDICATORS = "|>[&*!%@`?,:#"
 
-    private val TOP_LEVEL_KEYS = setOf("version", "refs", "records")
-
     private val LOAD_SETTINGS = LoadSettings.builder()
         .setLabel("Harness credentials document")
         .setAllowDuplicateKeys(false)
@@ -83,7 +82,7 @@ internal object HarnessCredentialsDocument {
             return null
         }
         val root = document as? Map<*, *> ?: return null
-        if (root.keys.any { it !is String || it !in TOP_LEVEL_KEYS }) return null
+        if (root.keys.any { it !is String }) return null
         if (root["version"] != 1) return null
         val records = root["records"]
         if (records != null && records !is Map<*, *>) return null
@@ -196,6 +195,8 @@ internal object HarnessCredentialsDocument {
         var refsHeaderLine: Int? = null
         val refEntries = mutableListOf<Pair<Int, String>>()
         var refIndent = DEFAULT_REF_INDENT
+        // `refs: {}` 需要在写入时把这一行改回块映射表头，否则追加的条目会留在流式映射外。
+        var refsFlowEmpty = false
         // 新条目插入点：refs 段最后一个条目之后；段内没有条目时是表头之后。
         var insertLine = -1
         var section: String? = null
@@ -222,13 +223,22 @@ internal object HarnessCredentialsDocument {
                         versionLine = index
                     }
                     "refs" -> {
-                        // 只认块映射形态（`refs:` 后为空）。`refs: {}` 一类的流式形态一律拒绝。
-                        if (refsHeaderLine != null || rest.isNotEmpty()) return null
+                        // 块映射形态（`refs:` 后为空）与**空流式映射**（`refs: {}`）都可编辑：
+                        // dsh 用 yaml 库序列化，空 refs 会写成 `{}`（例如只有账号授权记录、
+                        // 还没存过 API Key 的文档）。拒绝这一种会让 App 回落到环境变量，
+                        // 而环境层会让 dsh 把同一引用判成只读 —— 模型页保存随后失败。
+                        // 非空的流式映射仍然拒绝：替换行会破坏同一行里的其它条目。
+                        val flowEmpty = rest.replace(" ", "").replace("\t", "") == "{}"
+                        if (refsHeaderLine != null || (!flowEmpty && rest.isNotEmpty())) return null
                         refsHeaderLine = index
+                        refsFlowEmpty = flowEmpty
                         insertLine = index + 1
                     }
                     "records" -> Unit
-                    else -> return null
+                    // 未知顶层段按 dsh 自己的口径处理：忽略并原样保留（dsh 只 warn，
+                    // 不拒绝整份文档）。拒绝会让 App 回落到环境变量，而环境层会让
+                    // dsh 把同一引用判成只读 —— 模型页保存随后失败。
+                    else -> Unit
                 }
                 return@forEachIndexed
             }
@@ -242,7 +252,7 @@ internal object HarnessCredentialsDocument {
         }
         // 非空文档必须带 `version: 1`：没有它 dsh 自己也会拒绝读取（pre-release 扁平布局）。
         val versionIndex = versionLine ?: return null
-        return Structure(versionIndex, refsHeaderLine, refEntries, insertLine, refIndent)
+        return Structure(versionIndex, refsHeaderLine, refsFlowEmpty, refEntries, insertLine, refIndent)
     }
 
     /** 逐行重建：只替换/追加 `refs` 段里的行，其它行原样透传。 */
@@ -257,7 +267,9 @@ internal object HarnessCredentialsDocument {
         val additions = updates.filterKeys { it !in existingNames }.map { (name, value) -> indent + entry(name, value) }
         val output = mutableListOf<String>()
         lines.forEachIndexed { index, raw ->
-            output += replacements[index] ?: raw
+            // `refs: {}` 先展开成块映射表头，追加的条目才有地方落；否则它们会落在流式映射后面。
+            val header = if (structure.refsFlowEmpty && index == structure.refsHeaderLine) "refs:" else raw
+            output += replacements[index] ?: header
             when {
                 structure.refsHeaderLine != null && index == structure.insertLine - 1 -> output += additions
                 structure.refsHeaderLine == null && index == structure.versionLine -> {
@@ -301,6 +313,8 @@ internal object HarnessCredentialsDocument {
     private class Structure(
         val versionLine: Int,
         val refsHeaderLine: Int?,
+        /** `refs` 表头原本是空流式映射（`refs: {}`）：写入时要把它展开成块映射表头。 */
+        val refsFlowEmpty: Boolean,
         /** `refs` 段里的条目行：行下标 → 引用名，顺序与原文档一致。 */
         val refEntries: List<Pair<Int, String>>,
         /** 新条目的插入位置（行下标）。 */

@@ -445,6 +445,16 @@ class VirtualScreenSizingTest {
     }
 
     @Test
+    fun `窗口总高等于内容高加顶栏高`() {
+        // 顶栏 40dp 在 2.5 密度下是 100px。
+        assertEquals(1100, VirtualScreenWindow.overlayTotalHeight(1000, 2.5f))
+        // 内容高异常（0 / 负数）也至少留 1px，不返回 0 尺寸窗口。
+        val chromeAt2x = (VirtualScreenWindow.CHROME_HEIGHT_DP * 2f).toInt()
+        assertEquals(chromeAt2x + 1, VirtualScreenWindow.overlayTotalHeight(0, 2f))
+        assertEquals(chromeAt2x + 1, VirtualScreenWindow.overlayTotalHeight(-50, 2f))
+    }
+
+    @Test
     fun `档位行与底部按钮必须压在预览之上`() {
         // 页面：预览是 content 的第一个子控件（下标 0），档位行后加（下标 1）。
         assertTrue(VirtualScreenPolicy.foregroundAbove(childCount = 2, previewIndex = 0, foregroundIndex = 1))

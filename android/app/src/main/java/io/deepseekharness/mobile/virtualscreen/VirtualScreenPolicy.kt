@@ -1282,4 +1282,14 @@ object VirtualScreenPolicy {
         output.contains("clipboard set-primary-clip") || output.contains("Clipboard service") -> ClipboardProbe.AVAILABLE
         else -> ClipboardProbe.FAILED
     }
+
+    /**
+     * 还需要读回核对吗（纯函数）：同一进程里确认过一次之后就不必再读。
+     *
+     * 读回是 `cmd clipboard get-primary-clip` 的第二次 shell 往返，中文输入每敲一段都要多付一次；
+     * 通道是否存在不会因为换一段文字而改变，所以第一次确认成功后就缓存结论。
+     * 失败时必须把缓存清掉（见 ShellVirtualScreen.nonAsciiTextAction），下次重新核对，
+     * 避免把一次偶发失败记成永久可用。
+     */
+    fun clipboardProbeNeedsReadback(channelVerified: Boolean): Boolean = !channelVerified
 }

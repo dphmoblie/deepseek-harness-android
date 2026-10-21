@@ -317,6 +317,7 @@ class RuntimeStore(context: Context) {
                 provider.id.takeIf(customProviderApiKeys::containsKey)
             },
             harnessConfiguredCustomModelProviders = harnessCredentials.customProviderIds,
+            defaultModels = defaultModelIdsLocked(),
         )
     }
 
@@ -329,6 +330,7 @@ class RuntimeStore(context: Context) {
         customProviderApiKeyUpdates: Map<String, String> = emptyMap(),
         clearedCustomProviderApiKeys: Set<String> = emptySet(),
         overlayBallEnabledUpdate: Boolean? = settings.overlayBallEnabled,
+        defaultModels: Map<ModelProvider, String>? = null,
         // 省略即不改：预启动是一次显式选择，不能因为某次只带部分字段的保存被悄悄关掉。
         prewarmHarnessUpdate: Boolean? = settings.prewarmHarness,
     ): RuntimeSettings {
@@ -361,6 +363,10 @@ class RuntimeStore(context: Context) {
             .remove(KEY_API_KEY)
             .remove("device_bridge_token")
         overlayBallEnabledUpdate?.let { editor.putBoolean(KEY_OVERLAY_BALL, it) }
+        defaultModels?.let { models ->
+            // 整表替换：传空表就是「用户把最后一条也清掉了」，不能与「这次不碰」混为一谈。
+            editor.putString(KEY_DEFAULT_MODELS, defaultModelsToJson(models).toString())
+        }
         prewarmHarnessUpdate?.let { editor.putBoolean(KEY_PREWARM_HARNESS, it) }
         if (encryptedCredentials == null) editor.remove(KEY_PROVIDER_CREDENTIALS)
         else editor.putString(KEY_PROVIDER_CREDENTIALS, encryptedCredentials)
@@ -381,7 +387,33 @@ class RuntimeStore(context: Context) {
                 provider.id.takeIf(customProviderApiKeys::containsKey)
             },
             harnessConfiguredCustomModelProviders = harnessCredentials.customProviderIds,
+            defaultModels = defaultModels ?: defaultModelIdsLocked(),
         )
+    }
+
+    /**
+     * 读取本机记下的「内置供应商默认模型」。
+     *
+     * 存储里可能有旧版本或手改留下的脏数据：单个条目读不出来就丢那一条，而不是让整份设置
+     * 读取失败 —— 这份记录只是本机备注，不该把用户挡在设置页之外。
+     */
+    private fun defaultModelIdsLocked(): Map<ModelProvider, String> {
+        val raw = preferences.getString(KEY_DEFAULT_MODELS, null) ?: return emptyMap()
+        val json = runCatching { JSONObject(raw) }.getOrNull() ?: return emptyMap()
+        val result = linkedMapOf<ModelProvider, String>()
+        for (provider in ModelProvider.entries) {
+            val model = json.optString(provider.wireValue).trim()
+            if (model.isEmpty()) continue
+            if (runCatching { RuntimeValidation.requireModelId(model) }.isFailure) continue
+            result[provider] = model
+        }
+        return result
+    }
+
+    private fun defaultModelsToJson(models: Map<ModelProvider, String>): JSONObject {
+        val json = JSONObject()
+        ModelProvider.entries.forEach { provider -> models[provider]?.let { json.put(provider.wireValue, it) } }
+        return json
     }
 
     private fun harnessCredentialStatus(customProviders: List<CustomModelProvider>): HarnessCredentialStatus =
@@ -1548,6 +1580,7 @@ class RuntimeStore(context: Context) {
         private const val KEY_KEEP_AWAKE = "keep_screen_awake"
         private const val KEY_KEEP_BACKGROUND = "keep_runtime_in_background"
         private const val KEY_OVERLAY_BALL = "overlay_ball_enabled"
+        private const val KEY_DEFAULT_MODELS = "provider_default_models_v1"
         private const val KEY_PREWARM_HARNESS = "prewarm_harness"
             // 运行时恢复记录：只保存运行意图、最近阶段与时间，绝不保存凭据。
         private const val KEY_RUNTIME_INTENT = "runtime_intent"

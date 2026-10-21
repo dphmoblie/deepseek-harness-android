@@ -828,7 +828,15 @@ class DeepSeekAccessibilityService : AccessibilityService() {
                 hasFocusTarget,
             )
         }
-        val pasted = target.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        // 目标输入框没有焦点时 ACTION_PASTE 会被直接拒掉：先要一次焦点，再粘贴；
+        // 仍被拒时重试一次（有的实现第一次要焦点、第二次才接受粘贴）。
+        // 只多两次进程内调用，没有 sleep，不会拖慢这条回退链。
+        if (!target.isFocused) target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+        var pasted = target.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        if (!pasted) {
+            target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            pasted = target.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        }
         if (pasted) lastActionAt = now
         PrivateAuditLog(this).record(
             AuditEvent.ACCESSIBILITY_ACTION,

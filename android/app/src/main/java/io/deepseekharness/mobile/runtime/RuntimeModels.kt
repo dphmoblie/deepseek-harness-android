@@ -93,6 +93,13 @@ data class RuntimeSettings(
     val configuredCustomModelProviders: Set<String> = emptySet(),
     val harnessConfiguredCustomModelProviders: Set<String> = emptySet(),
     /**
+     * 内置供应商的默认模型 id（每家一个）。
+     *
+     * 只是本机记录：它是「从上游列表自动选中 / 用户自己改过」的那一项，不写进 Harness
+     * 的配置，也不参与运行时启动。没有记录供应商不会出现在这张表里。
+     */
+    val defaultModels: Map<ModelProvider, String> = emptyMap(),
+    /**
      * 后台保持 Harness：运行时启动后启用前台服务，提升本应用进程的存活优先级。
      * 默认 false，旧版本配置没有该键时同样按 false 处理。
      * 该开关不能阻止 Android 或厂商系统杀死进程。
@@ -411,6 +418,40 @@ object RuntimeValidation {
             throw RuntimeFailure("SETTINGS_INVALID", "模型凭据包含非法字符或长度无效")
         }
         return normalized
+    }
+
+    /** 校验一个模型 id（内置供应商的默认模型也走这里）。 */
+    fun requireModelId(value: String): String {
+        val normalized = value.trim()
+        if (!customModelIdPattern.matches(normalized)) {
+            throw RuntimeFailure("SETTINGS_INVALID", "模型 id 格式无效")
+        }
+        return normalized
+    }
+
+    /**
+     * 解析「内置供应商默认模型」这张表。
+     *
+     * `null`（字段缺失）与「空对象」是两件事：前者表示这次保存不碰这份记录，后者表示
+     * 用户把唯一一条也清掉了。调用方用 `Map` 而不是 `Map?` 区分：这里永远返回表，
+     * 是否写入由插件层根据 `getObject` 是否为 null 决定。
+     */
+    fun defaultModelIds(value: JSONObject?): Map<ModelProvider, String> {
+        if (value == null) return emptyMap()
+        if (value.length() > ModelProvider.entries.size) {
+            throw RuntimeFailure("SETTINGS_INVALID", "默认模型数量无效")
+        }
+        val result = linkedMapOf<ModelProvider, String>()
+        val names = value.keys()
+        while (names.hasNext()) {
+            val name = names.next()
+            val provider = ModelProvider.parse(name)
+            val rawModel = value.opt(name)
+            if (rawModel !is String) throw RuntimeFailure("SETTINGS_INVALID", "默认模型必须是字符串")
+            result[provider] = requireModelId(rawModel)
+        }
+        return ModelProvider.entries.mapNotNull { provider -> result[provider]?.let { provider to it } }
+            .toMap(linkedMapOf())
     }
 
     /** Validates IDs received across the JavaScript/native bridge before they select a credential. */

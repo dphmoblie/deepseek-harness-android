@@ -25,7 +25,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '日志与采集')
     const toggle = await screen.findByRole('switch', { name: /收集诊断日志/ })
     await waitFor(() => expect(toggle).toBeEnabled())
     expect(toggle).not.toBeChecked()
@@ -59,7 +59,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '日志与采集')
     expect(await screen.findByText('收集中')).toBeVisible()
     expect(screen.getByText('2 个文件 · 4.0 KB')).toBeVisible()
 
@@ -89,7 +89,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '日志与采集')
     fireEvent.click(await screen.findByRole('button', { name: '导出并分享' }))
 
     const alert = await screen.findByRole('alert')
@@ -103,7 +103,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '日志与采集')
     const toggle = await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ })
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     // 折叠状态不碰桥接：访客输出可能含会话内容，不展开就不带进界面。
@@ -129,7 +129,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '日志与采集')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
 
     expect(await screen.findByText('当前没有可读取的运行日志')).toBeVisible()
@@ -145,7 +145,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '日志与采集')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
 
     fireEvent.click(await screen.findByRole('button', { name: '复制' }))
@@ -164,7 +164,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '日志与采集')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
     const output = await waitFor(() => {
       const node = document.querySelector('.harness-log-output')
@@ -187,7 +187,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '日志与采集')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
 
     const insights = await screen.findByRole('group', { name: '判读提示' })
@@ -199,7 +199,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '日志与采集')
     fireEvent.click(await screen.findByRole('button', { name: /运行日志（最近 8 KB）/ }))
     await waitFor(() => expect(bridge.getHarnessLog).toHaveBeenCalledWith({ maxBytes: 8 * 1024 }))
 
@@ -219,7 +219,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '日志与采集')
     const toggle = await screen.findByRole('button', { name: /诊断日志（最近 64 KB）/ })
     // 与运行日志同样按需读取：折叠时不碰桥接。
     expect(bridge.readDiagnosticLog).not.toHaveBeenCalled()
@@ -237,7 +237,7 @@ describe('诊断与日志', () => {
     render(<App />)
   await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '日志与采集')
     fireEvent.click(await screen.findByRole('button', { name: /诊断日志（最近 64 KB）/ }))
 
     expect(await screen.findByText(/当前没有可查看的诊断日志/)).toBeVisible()

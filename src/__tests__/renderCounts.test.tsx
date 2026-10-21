@@ -203,7 +203,7 @@ describe('§5.6-B 逐组件渲染计数', () => {
    */
   it('拦截器自检：真实交互数得到渲染，且内联回调 prop 每次都换身份', async () => {
     render(<App />)
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '日志与采集')
     probe.reset()
 
     // 一次真实的状态变化（切换采集开关）：App 重渲染，当前设置页跟着重渲染。
@@ -232,7 +232,7 @@ describe('§5.6-B 逐组件渲染计数', () => {
     try {
       freshButEqualSnapshots()
       render(<App />)
-      await openSettingsPage('诊断与日志')
+      await openSettingsPage('诊断与日志', '设备能力')
       await waitFor(() => expect(bridge.getKeepAliveState).toHaveBeenCalled())
       await tick(6_000)
 

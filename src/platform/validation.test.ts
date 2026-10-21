@@ -35,6 +35,7 @@ import {
   validateMailboxImportResult,
   validateMailboxState,
   validateMediaPermissionResult,
+  validateModelCatalogResult,
   validateModelConnectivityResult,
   validateNotificationPermissionResult,
   validateOverlayBallState,
@@ -2539,5 +2540,57 @@ describe('validateModelConnectivityResult', () => {
     expect(() => validateModelConnectivityResult({ ok: true, status: '200' })).toThrow('模型连通性状态码无效')
     expect(() => validateModelConnectivityResult({ ok: true, status: 200, latencyMs: -5 })).toThrow('模型连通性延迟无效')
     expect(() => validateModelConnectivityResult({ ok: true, status: 200, latencyMs: 50, message: 123 })).toThrow('模型连通性提示无效')
+  })
+})
+
+describe('上游模型列表校验', () => {
+  const base = { ok: true, status: 200, latencyMs: 120, message: '已获取 2 个模型 (120ms)' }
+
+  it('只保留 id 与显示名，重复 id 丢弃，缺显示名时用 id 兜底', () => {
+    expect(validateModelCatalogResult({
+      ...base,
+      models: [
+        { id: 'gpt-4o', name: 'GPT-4o' },
+        { id: 'gpt-4o', name: '重复条目' },
+        { id: 'plain' },
+      ],
+    })).toEqual({
+      ...base,
+      models: [{ id: 'gpt-4o', name: 'GPT-4o' }, { id: 'plain', name: 'plain' }],
+    })
+  })
+
+  it('缺省 models 字段按空列表处理，不影响连通性结论', () => {
+    expect(validateModelCatalogResult(base).models).toEqual([])
+  })
+
+  it('拒绝非法的模型 id、非数组载荷与超长列表', () => {
+    expect(() => validateModelCatalogResult({ ...base, models: [{ id: 'has space' }] })).toThrow('模型 id 格式无效')
+    expect(() => validateModelCatalogResult({ ...base, models: 'gpt-4o' })).toThrow('模型列表格式无效')
+    const many = Array.from({ length: 501 }, (_, index) => ({ id: `model-${index}` }))
+    expect(() => validateModelCatalogResult({ ...base, models: many })).toThrow('模型列表条目过多')
+  })
+
+  it('校验连通性字段本身', () => {
+    expect(() => validateModelCatalogResult({ ok: 'true', status: 200, latencyMs: 1, message: 'ok', models: [] })).toThrow('模型连通性状态')
+  })
+})
+
+describe('内置供应商默认模型校验', () => {
+  const base = { manifestUrl: '', manifestSha256: '', keepScreenAwake: false, terminalFontSize: 14, configuredModelProviders: [] }
+
+  it('按内置供应商白名单保序归一化，非法 id 直接拒绝', () => {
+    expect(validateSettings({
+      ...base,
+      defaultModels: { openai: 'gpt-4o', deepseek: 'deepseek-chat' },
+    }).defaultModels).toEqual({ deepseek: 'deepseek-chat', openai: 'gpt-4o' })
+    expect(() => validateSettings({ ...base, defaultModels: { 'not-a-provider': 'gpt-4o' } as never })).toThrow('模型供应商格式无效')
+    expect(() => validateSettings({ ...base, defaultModels: { openai: 'has space' } })).toThrow('默认模型 id')
+  })
+
+  it('显式空对象表示「整表替换为空」，省略表示这次保存不碰它', () => {
+    expect(validateSettingsUpdate({ ...base, defaultModels: {} }).defaultModels).toEqual({})
+    expect(validateSettingsUpdate({ ...base }).defaultModels).toBeUndefined()
+    expect(validateSettingsUpdate({ ...base, defaultModels: { openai: ' gpt-4o ' } }).defaultModels).toEqual({ openai: 'gpt-4o' })
   })
 })

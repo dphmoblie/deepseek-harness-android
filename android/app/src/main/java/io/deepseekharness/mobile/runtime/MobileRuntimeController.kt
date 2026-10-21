@@ -534,6 +534,7 @@ class MobileRuntimeController(
         customProviderApiKeyUpdates: Map<String, String>,
         clearedCustomProviderApiKeys: Set<String>,
         overlayBallEnabledUpdate: Boolean? = settings.overlayBallEnabled,
+        defaultModels: Map<ModelProvider, String>? = null,
         prewarmHarnessUpdate: Boolean? = settings.prewarmHarness,
     ): RuntimeSettings = lifecycleLock.withLock {
         ensureOpen()
@@ -551,6 +552,7 @@ class MobileRuntimeController(
             customProviderApiKeyUpdates,
             clearedCustomProviderApiKeys,
             overlayBallEnabledUpdate = overlayBallEnabledUpdate,
+            defaultModels = defaultModels,
             prewarmHarnessUpdate = prewarmHarnessUpdate,
         )
         if (restartHarness) supervisor.startHarness()
