@@ -13,6 +13,8 @@ const APPEARANCE_EVENT = 'dsh-appearance-change'
 export const BACKGROUND_EVENT = 'dsh-background-change'
 export const DEFAULT_CARD: CardAppearance = { opacity: 100, blur: 0, color: '', controlOpacity: 100 }
 const MAX_BACKGROUND_BYTES = 50 * 1024 * 1024
+/** 已选背景的轻量标记（只存“有没有”，不存内容）。 */
+const BACKGROUND_PRESENT_KEY = 'dsh-background-present-v1'
 
 function validateCard(value: unknown): CardAppearance {
   if (!value || typeof value !== 'object') throw new Error('卡片参数无效')
@@ -93,7 +95,18 @@ export async function saveBackground(file: Blob): Promise<void> {
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, await file.arrayBuffer())
   await transaction('readwrite', store => store.put({ key, iv, ciphertext, type } satisfies EncryptedBackground, 'selected'))
+  try { window.localStorage.setItem(BACKGROUND_PRESENT_KEY, '1') } catch { /* 隐私模式：状态退化为每次读存储 */ }
   window.dispatchEvent(new Event(BACKGROUND_EVENT))
+}
+
+/**
+ * 本机是否存过背景的轻量标记。
+ *
+ * 页面状态文案只问「有没有选过」，不必每次解密整段视频；IndexedDB 读取失败时
+ * 也不该把已经选好的背景说成没选。真正的画面仍只由 [readBackground] 决定。
+ */
+export function hasBackgroundFlag(): boolean {
+  try { return window.localStorage.getItem(BACKGROUND_PRESENT_KEY) === '1' } catch { return false }
 }
 export async function readBackground(): Promise<Blob | null> {
   const entry = await transaction('readonly', store => store.get('selected') as IDBRequest<EncryptedBackground | undefined>)
@@ -105,5 +118,6 @@ export async function readBackground(): Promise<Blob | null> {
 }
 export async function clearBackground(): Promise<void> {
   await transaction('readwrite', store => store.delete('selected'))
+  try { window.localStorage.removeItem(BACKGROUND_PRESENT_KEY) } catch { /* 同上 */ }
   window.dispatchEvent(new Event(BACKGROUND_EVENT))
 }

@@ -6,7 +6,7 @@ import { clearAdaptiveAccent, deriveSurface, extractAccentFromBackground, readAc
 import { runtimeBridge } from '../platform/native'
 import { clearBackgroundState, readBackgroundState, saveBackgroundState, type HarnessBackgroundRef, type HarnessBackgroundState } from '../backgroundRef'
 import type { AccentMode, ThemeMode } from '../theme'
-import { applyCard, clearBackground, DEFAULT_CARD, readBackground, readCard, saveBackground, saveCard, type CardAppearance } from '../appearance'
+import { applyCard, clearBackground, DEFAULT_CARD, hasBackgroundFlag, readBackground, readCard, saveBackground, saveCard, type CardAppearance } from '../appearance'
 
 // 顺序固定为「跟随系统 / 浅色 / 深色」：默认项排在最前，避免让人以为必须二选一。
 const OPTIONS: readonly { value: ThemeMode; label: string; Icon: typeof Sun }[] = [
@@ -39,7 +39,7 @@ export type AppearanceScope = 'all' | 'appearance' | 'background' | 'dsh'
  * 默认 'all' 保持整块渲染，组件自身的规则测试可以直接挂载。
  * 组件只负责展示与转发，主题的解析与落地全在 src/theme.ts 里（可单独测试）。
  */
-export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope }) {
+export function AppearanceSettings({ scope = 'all', loadBackground = readBackground }: { scope?: AppearanceScope; loadBackground?: () => Promise<Blob | null> }) {
   const showAppearance = scope === 'all' || scope === 'appearance'
   const showBackground = scope === 'all' || scope === 'background'
   // DSH 的主题与背景在同一页：两者都改的是另一个页面，分开只会让人来回找。
@@ -56,14 +56,16 @@ export function AppearanceSettings({ scope = 'all' }: { scope?: AppearanceScope 
    * 原生 `<input type="file">` 永远显示「未选择文件」，即使背景已经加密存进 IndexedDB ——
    * 用户重进这一页会以为选择丢了。用这个状态替它显示真实结论，输入框本身只当触发按钮。
    */
-  const [hasAppBackground, setHasAppBackground] = useState(false)
+  const [hasAppBackground, setHasAppBackground] = useState(() => hasBackgroundFlag())
   useEffect(() => {
     let active = true
-    void readBackground()
+    void loadBackground()
       .then(blob => { if (active) setHasAppBackground(blob !== null) })
-      .catch(() => { if (active) setHasAppBackground(false) })
+      // 解密/存储读取失败时保留已有标记：背景可能真的还在（画面由 AppBackground 负责），
+      // 不能因为一次读取失败就把「已选择」改口成「未选择」。
+      .catch(() => undefined)
     return () => { active = false }
-  }, [])
+  }, [loadBackground])
   const [customAccent, setCustomAccent] = useState(() => readCustomAccentColor())
   const [customTextColor, setCustomTextColor] = useState(() => readCustomTextColor())
   const source = useAccentSource()
