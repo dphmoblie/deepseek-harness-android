@@ -643,6 +643,62 @@ export function VirtualScreenSettings({
         {t('在独立副屏中运行应用，通过预览页面或悬浮窗查看画面。可在此设置屏幕方向、分辨率和预览帧率。需要 Shizuku 和 Android 10 或更高版本。')}
       </p>
 
+      <section className="settings-subsection" aria-labelledby="virtual-screen-control-title">
+        <div className="section-title">
+          <span className="section-icon"><Play size={19} /></span>
+          <div>
+            <h3 id="virtual-screen-control-title">{t('控制')}</h3>
+            <p>{t('启动、停止与重启副屏。')}</p>
+          </div>
+        </div>
+        <div className="virtual-screen-actions">
+          <button
+            className="button"
+            type="button"
+            disabled={locked || target === ''}
+            onClick={() => { void start() }}
+          >
+            {busy === 'start' ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
+            {t('启动副屏')}
+          </button>
+          <button
+            className="button button-secondary"
+            type="button"
+            disabled={busy !== ''}
+            onClick={() => { void stop() }}
+          >
+            {busy === 'stop' ? <Loader2 className="spin" size={18} /> : <Square size={18} />}
+            {t('停止副屏')}
+          </button>
+          <button
+            className="button button-secondary"
+            type="button"
+            disabled={locked || target === ''}
+            onClick={() => { void restart() }}
+          >
+            {busy === 'restart' ? <Loader2 className="spin" size={18} /> : <RotateCw size={18} />}
+            {t('重启副屏')}
+          </button>
+          <button
+            className="button button-secondary"
+            type="button"
+            disabled={busy !== ''}
+            onClick={() => { void openNativePage() }}
+          >
+            {busy === 'native' ? <Loader2 className="spin" size={18} /> : <Monitor size={18} />}
+            {t('打开副屏预览')}
+          </button>
+        </div>
+        <p className="settings-note">
+          {t('即使无法读取设置，也可尝试停止正在运行的副屏。')}
+        </p>
+        <p className="settings-note">
+          {t('打开副屏预览可查看画面并使用悬浮窗；副屏设置可在本页调整。')}
+        </p>
+        {actionFailure !== '' && <p className="virtual-screen-failure" role="alert">{actionFailure}</p>}
+        {actionNotice !== '' && <p className="virtual-screen-notice" role="status">{t(actionNotice)}</p>}
+      </section>
+
       <section className="settings-subsection virtual-screen-status" aria-labelledby="virtual-screen-status-title">
         <div className="section-title">
           <span className="section-icon"><Monitor size={19} /></span>
@@ -981,61 +1037,6 @@ export function VirtualScreenSettings({
         </>
       )}
 
-      <section className="settings-subsection" aria-labelledby="virtual-screen-control-title">
-        <div className="section-title">
-          <span className="section-icon"><Play size={19} /></span>
-          <div>
-            <h3 id="virtual-screen-control-title">{t('控制')}</h3>
-            <p>{t('启动、停止与重启副屏。')}</p>
-          </div>
-        </div>
-        <div className="virtual-screen-actions">
-          <button
-            className="button"
-            type="button"
-            disabled={locked || target === ''}
-            onClick={() => { void start() }}
-          >
-            {busy === 'start' ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
-            {t('启动副屏')}
-          </button>
-          <button
-            className="button button-secondary"
-            type="button"
-            disabled={busy !== ''}
-            onClick={() => { void stop() }}
-          >
-            {busy === 'stop' ? <Loader2 className="spin" size={18} /> : <Square size={18} />}
-            {t('停止副屏')}
-          </button>
-          <button
-            className="button button-secondary"
-            type="button"
-            disabled={locked || target === ''}
-            onClick={() => { void restart() }}
-          >
-            {busy === 'restart' ? <Loader2 className="spin" size={18} /> : <RotateCw size={18} />}
-            {t('重启副屏')}
-          </button>
-          <button
-            className="button button-secondary"
-            type="button"
-            disabled={busy !== ''}
-            onClick={() => { void openNativePage() }}
-          >
-            {busy === 'native' ? <Loader2 className="spin" size={18} /> : <Monitor size={18} />}
-            {t('打开副屏预览')}
-          </button>
-        </div>
-        <p className="settings-note">
-          {t('即使无法读取设置，也可尝试停止正在运行的副屏。')}
-        </p>
-        <p className="settings-note">
-          {t('打开副屏预览可查看画面并使用悬浮窗；副屏设置可在本页调整。')}
-        </p>
-        {actionFailure !== '' && <p className="virtual-screen-failure" role="alert">{actionFailure}</p>}
-        {actionNotice !== '' && <p className="virtual-screen-notice" role="status">{t(actionNotice)}</p>}
-      </section>
     </div>
   )
 }

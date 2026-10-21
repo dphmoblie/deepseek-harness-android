@@ -84,6 +84,17 @@ beforeEach(() => {
   window.localStorage.clear()
 })
 
+it('控制卡排在副屏状态与设置之前', async () => {
+  const bridge = bridgeWith({
+    getVirtualScreenSettings: vi.fn().mockResolvedValue(settings()),
+    getVirtualScreenState: vi.fn().mockResolvedValue(state()),
+  })
+  render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
+  const sections = await screen.findAllByRole('region')
+  expect(within(sections[0]).getByRole('heading', { name: '控制' })).toBeVisible()
+  expect(within(sections[0]).getByRole('button', { name: '启动副屏' })).toBeVisible()
+})
+
 describe('目标应用副屏设置页', () => {
   it('两条读取都在进行时显示加载中，不提前显示默认值', () => {
     const bridge = bridgeWith({
