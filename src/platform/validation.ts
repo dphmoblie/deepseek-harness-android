@@ -2621,6 +2621,8 @@ export function assertVirtualScreenStartRequest(value: unknown): VirtualScreenSt
   if (present(source.widthPx)) request.widthPx = virtualScreenEdge(source.widthPx)
   if (present(source.heightPx)) request.heightPx = virtualScreenEdge(source.heightPx)
   if (present(source.densityDpi)) request.densityDpi = virtualScreenDensity(source.densityDpi)
+  if (present(source.previewMode)) request.previewMode = virtualScreenPreviewMode(source.previewMode)
+  if (present(source.autoFollow)) request.autoFollow = virtualScreenAutoFollow(source.autoFollow)
   return request
 }
 

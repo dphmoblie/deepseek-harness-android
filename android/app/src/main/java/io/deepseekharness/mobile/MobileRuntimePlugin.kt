@@ -2037,6 +2037,8 @@ class MobileRuntimePlugin : Plugin() {
             if (Build.VERSION.SDK_INT < 29) throw RuntimeFailure("VIRTUAL_SCREEN_UNSUPPORTED", "副屏需要 Android 10 或更高版本")
             if (VirtualScreenService.current != null) throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "副屏已经在运行，先停止再启动")
             val request: VirtualScreenStartRequest = VirtualScreenPreferences.parseStart(JSONObject(data.toString()))
+            // 启动即落盘：用户改完设置常常直接点启动，不先点「保存设置」。
+            VirtualScreenPreferences.apply(context, VirtualScreenPreferences.updateFromStart(request))
             val component = virtualScreenComponent(request.target)
             val settings: VirtualScreenSettings = VirtualScreenPreferences.read(context)
             val (screenWidth, screenHeight, density) = virtualScreenScreenSize()

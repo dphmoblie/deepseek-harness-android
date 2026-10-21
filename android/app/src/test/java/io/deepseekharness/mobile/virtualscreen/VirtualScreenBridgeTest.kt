@@ -196,6 +196,37 @@ class VirtualScreenBridgeTest {
     }
 
     @Test
+    fun `启动请求里给出的显示项会写回偏好`() {
+        val request = VirtualScreenPreferences.parseStart(
+            JSONObject()
+                .put("packageName", "com.example.app")
+                .put("orientation", "landscape")
+                .put("adaptive", true)
+                .put("previewMode", "165fps")
+                .put("autoFollow", "promote")
+                .put("widthPx", 720)
+                .put("heightPx", 1600)
+                .put("densityDpi", 320),
+        )
+        val update = VirtualScreenPreferences.updateFromStart(request)
+        assertEquals("landscape", update.orientation)
+        assertEquals(true, update.adaptive)
+        assertEquals("165fps", update.previewMode)
+        assertEquals("promote", update.autoFollow)
+        assertEquals(720, update.widthPx)
+        assertEquals(1600, update.heightPx)
+        assertEquals(320, update.densityDpi)
+
+        // 没有给出的字段保持 null：启动一次不该把已存的其它设置清掉。
+        val partial = VirtualScreenPreferences.updateFromStart(
+            VirtualScreenPreferences.parseStart(JSONObject().put("packageName", "com.example.app")),
+        )
+        assertNull(partial.orientation)
+        assertNull(partial.previewMode)
+        assertNull(partial.widthPx)
+    }
+
+    @Test
     fun `目标字符串区分组件名与包名`() {
         assertEquals(
             VirtualScreenTargetKind.COMPONENT,

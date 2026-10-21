@@ -1173,6 +1173,9 @@ export interface VirtualScreenStartRequest {
   widthPx?: number
   heightPx?: number
   densityDpi?: number
+  /** 启动时一并写回偏好：用户改完档位直接点启动，重进页面不该回到旧值。 */
+  previewMode?: VirtualScreenPreviewMode
+  autoFollow?: VirtualScreenAutoFollow
 }
 
 /**

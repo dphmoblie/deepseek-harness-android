@@ -272,6 +272,8 @@ describe('目标应用副屏设置页', () => {
       widthPx: 720,
       heightPx: 1600,
       densityDpi: 320,
+      previewMode: '60fps',
+      autoFollow: 'off',
     }))
     expect(await screen.findByText('已请求启动副屏；画面与帧率以状态区读数为准')).toBeInTheDocument()
   })
@@ -291,6 +293,8 @@ describe('目标应用副屏设置页', () => {
       packageName: 'com.example.last',
       adaptive: false,
       orientation: 'auto',
+      previewMode: '60fps',
+      autoFollow: 'off',
     }))
   })
 
@@ -307,6 +311,8 @@ describe('目标应用副屏设置页', () => {
       packageName: 'com.example.target',
       adaptive: false,
       orientation: 'auto',
+      previewMode: '60fps',
+      autoFollow: 'off',
     }))
   })
 
@@ -398,6 +404,19 @@ describe('目标应用副屏设置页', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存设置' }))
     expect(await screen.findByText('没有需要保存的改动')).toBeInTheDocument()
     expect(save).not.toHaveBeenCalled()
+  })
+
+  it('离开页面时自动保存还没落盘的副屏设置', async () => {
+    const save = vi.fn().mockResolvedValue(undefined)
+    const bridge = bridgeWith({
+      getVirtualScreenSettings: vi.fn().mockResolvedValue(settings()),
+      getVirtualScreenState: vi.fn().mockResolvedValue(state()),
+      setVirtualScreenSettings: save,
+    })
+    const view = render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
+    fireEvent.click(await screen.findByRole('switch', { name: '自适应（按屏幕与方向计算）' }))
+    view.unmount()
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ adaptive: true }))
   })
 
   it('改悬浮窗宽度后保存只发 overlayWidthPx，不把别的字段一起带上', async () => {
@@ -538,7 +557,8 @@ describe('副屏桥的入参校验', () => {
     expect(() => assertVirtualScreenSettingsUpdate({ densityDpi: Number.NaN })).toThrow('副屏像素密度格式无效')
     expect(() => assertVirtualScreenStartRequest({ packageName: '' })).toThrow('目标应用包名格式无效')
     expect(() => assertVirtualScreenStartRequest({ packageName: '没有点的包名' })).toThrow('目标应用包名格式无效')
-    expect(() => assertVirtualScreenStartRequest({ packageName: 'com.example.target', previewMode: '300fps' })).not.toThrow()
+    expect(() => assertVirtualScreenStartRequest({ packageName: 'com.example.target', previewMode: '300fps' })).toThrow('副屏取帧档位格式无效')
+    expect(() => assertVirtualScreenStartRequest({ packageName: 'com.example.target', autoFollow: 'follow' })).toThrow('副屏自动跟随策略格式无效')
   })
 
   it('只处理出现过的字段：没传的不能凭空补上', () => {

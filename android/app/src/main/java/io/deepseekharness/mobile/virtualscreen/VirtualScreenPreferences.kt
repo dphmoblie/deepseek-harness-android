@@ -40,7 +40,7 @@ internal data class VirtualScreenSettingsUpdate(
     val overlayWidthPx: Int? = null,
 )
 
-/** 桥的启动请求：目标应用 + 只对本次会话生效的覆盖项（不写回偏好）。 */
+/** 桥的启动请求：目标应用 + 本次会话的覆盖项（启动时会写回偏好，见 [updateFromStart]）。 */
 internal data class VirtualScreenStartRequest(
     val target: String,
     val adaptive: Boolean? = null,
@@ -48,6 +48,8 @@ internal data class VirtualScreenStartRequest(
     val widthPx: Int? = null,
     val heightPx: Int? = null,
     val densityDpi: Int? = null,
+    val previewMode: String? = null,
+    val autoFollow: String? = null,
 )
 
 /** 目标字符串的形态：完整组件名（`包名/类名`）还是包名。 */
@@ -193,8 +195,27 @@ internal object VirtualScreenPreferences {
             widthPx = update.widthPx,
             heightPx = update.heightPx,
             densityDpi = update.densityDpi,
+            previewMode = update.previewMode,
+            autoFollow = update.autoFollow,
         )
     }
+
+    /**
+     * 启动时把请求里显式给出的显示项写回偏好。
+     *
+     * 用户在这一页改完设置往往直接点「启动副屏」，不会先点「保存设置」；如果启动不落盘，
+     * 会话用的是新参数、重进页面却回到旧值 —— 看起来就是「副屏设置没有记录」。
+     */
+    fun updateFromStart(request: VirtualScreenStartRequest): VirtualScreenSettingsUpdate =
+        VirtualScreenSettingsUpdate(
+            previewMode = request.previewMode,
+            autoFollow = request.autoFollow,
+            orientation = request.orientation,
+            adaptive = request.adaptive,
+            widthPx = request.widthPx,
+            heightPx = request.heightPx,
+            densityDpi = request.densityDpi,
+        )
 
     /**
      * 把这次写请求并进设置；校验已经在 [parseUpdate] 完成，这里只负责一次性落盘。

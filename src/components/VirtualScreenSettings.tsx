@@ -230,6 +230,9 @@ function startRequest(target: string, draft: VirtualScreenSettingsSnapshot): Vir
     packageName: target,
     adaptive: draft.adaptive,
     orientation: draft.orientation,
+    // 档位与自动跟随也一并发出去：原生启动时会把它们写回偏好，重进页面才不会回到旧值。
+    previewMode: draft.previewMode,
+    autoFollow: draft.autoFollow,
   }
   if (specComplete(draft)) {
     request.widthPx = draft.widthPx
@@ -326,6 +329,11 @@ export function VirtualScreenSettings({
   // 最近一次成功读到的运行状态：设置读得比它晚时用它预填规格。
   const stateRef = useRef<VirtualScreenState | null>(null)
   const draftRef = useRef<VirtualScreenSettingsSnapshot | null>(null)
+  /** 最后一次认为已落盘的设置；离开页面时用它算「还有哪些没保存」。 */
+  const baselineRef = useRef<VirtualScreenSettingsSnapshot | null>(null)
+  /** 卸载时的自动保存要拿到最新的桥：组件卸载后 props 不再更新，闭包会过期。 */
+  const bridgeRef = useRef(bridge)
+  bridgeRef.current = bridge
 
   /** 草稿、基线与三格输入一起换：分开设的话输入框会显示上一份的值。 */
   const applyLoaded = useCallback((next: VirtualScreenSettingsSnapshot): void => {
@@ -384,6 +392,27 @@ export function VirtualScreenSettings({
   useEffect(() => {
     draftRef.current = draft
   }, [draft])
+  useEffect(() => {
+    baselineRef.current = baseline
+  }, [baseline])
+
+  /**
+   * 离开副屏设置页时自动保存还没落盘的改动。
+   *
+   * 其它设置页是全应用统一「离开页面即保存」，这一页原本只有底部那颗「保存设置」；
+   * 用户改完直接返回时改动会留在草稿里随组件卸载丢掉 —— 重进就是旧值。
+   * 只补这一条兜底，失败不弹窗（页面已经不在了），下次进入仍以原生读数为准。
+   */
+  useEffect(() => {
+    return () => {
+      const current = draftRef.current
+      const last = baselineRef.current
+      if (current === null || last === null) return
+      const update = settingsDiff(last, current)
+      if (Object.keys(update).length === 0) return
+      void bridgeRef.current.setVirtualScreenSettings(update).catch(() => undefined)
+    }
+  }, [])
 
   useEffect(() => {
     active.current = true
@@ -501,9 +530,14 @@ export function VirtualScreenSettings({
       }
       await bridge.setVirtualScreenSettings(update)
       if (!active.current) return
-      // 桥只回 void：把刚发出去的这一份当作新的落盘基线（越界的值界面已经夹过，
-      // 与原生 coerceIn 同一口径），避免用户没改过的字段被反复重发。
-      setBaseline(draft)
+      // 重新读一遍原生：保存成功不等于界面该显示的那份值。原生会夹取越界数值，
+      // 这里以读回的结果作为新基线，避免「界面还停在旧值、用户以为没保存」。
+      // 读回失败不算保存失败：写已经发出去了，退回「把刚发出去的一份当基线」。
+      const saved = await bridge.getVirtualScreenSettings().catch(() => null)
+      if (!active.current) return
+      if (saved !== null && draftRef.current === draft) applyLoaded(seeded(saved, stateRef.current))
+      else if (draftRef.current === draft) setBaseline(draft)
+      // 保存期间又改了：不动基线，让这些新改动继续算「未保存」，离开时再写一次。
       setSaveNotice(t('副屏设置已保存'))
     } catch (error) {
       if (!active.current) return
