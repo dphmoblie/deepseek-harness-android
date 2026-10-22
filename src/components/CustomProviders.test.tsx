@@ -34,6 +34,34 @@ describe('CustomProviders 自定义模型供应商', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
+  it('HTTP Base URL 显示明文传输警告', () => {
+    render(<CustomProviders
+      providers={[{ ...sampleProviders[0], baseUrl: 'http://api.example.com/v1' }]}
+      configured={[]}
+      credentials={{}}
+      cleared={[]}
+      onChange={vi.fn()}
+      onCredentials={vi.fn()}
+      onClear={vi.fn()}
+    />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent('HTTP 连接不安全：API Key 和请求内容可能以明文传输，建议改用 HTTPS。')
+  })
+
+  it('HTTPS Base URL 不显示明文传输警告', () => {
+    render(<CustomProviders
+      providers={sampleProviders}
+      configured={[]}
+      credentials={{}}
+      cleared={[]}
+      onChange={vi.fn()}
+      onCredentials={vi.fn()}
+      onClear={vi.fn()}
+    />)
+
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('点击测试连接按钮触发 onTestConnectivity 并展示测试结果', async () => {
     const onTestConnectivity = vi.fn().mockResolvedValue({
       ok: true,

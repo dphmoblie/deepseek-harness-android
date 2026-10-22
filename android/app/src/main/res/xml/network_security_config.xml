@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false" />
+    <!--
+        HTTP is opt-in at the model-provider setting boundary (with a visible warning).
+        Android's cleartext policy is process-wide, so an arbitrary user-entered provider
+        cannot be allow-listed here. All other remote download/catalog entry points remain
+        HTTPS-only through RuntimeValidation.requireHttpsUri and RuntimeHttp's fixed sources.
+    -->
+    <base-config cleartextTrafficPermitted="true" />
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">127.0.0.1</domain>
         <domain includeSubdomains="false">localhost</domain>

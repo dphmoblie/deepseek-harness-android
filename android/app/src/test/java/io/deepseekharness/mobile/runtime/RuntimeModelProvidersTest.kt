@@ -70,9 +70,12 @@ class RuntimeModelProvidersTest {
         assertThrows(RuntimeFailure::class.java) {
             RuntimeValidation.customModelProviders(JSONArray().put(JSONObject(provider.toString()).put("id", "openai")))
         }
-        assertThrows(RuntimeFailure::class.java) {
-            RuntimeValidation.customModelProviders(JSONArray().put(JSONObject(provider.toString()).put("baseUrl", "http://api.example.com")))
-        }
+        assertEquals(
+            "http://api.example.com",
+            RuntimeValidation.customModelProviders(
+                JSONArray().put(JSONObject(provider.toString()).put("baseUrl", "http://api.example.com/")),
+            ).single().baseUrl,
+        )
         assertThrows(RuntimeFailure::class.java) {
             RuntimeValidation.customModelProviders(JSONArray().put(JSONObject(provider.toString()).put("baseUrl", "https://api.example.com:0/v1")))
         }

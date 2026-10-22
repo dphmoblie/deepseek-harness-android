@@ -561,10 +561,9 @@ object RuntimeValidation {
         }
         val scheme = uri.scheme?.lowercase(Locale.ROOT)
         val host = uri.host?.lowercase(Locale.ROOT)
-        val loopback = host == "localhost" || host == "127.0.0.1" || host == "::1"
-        if ((scheme != "https" && !(scheme == "http" && loopback)) || host.isNullOrEmpty() ||
+        if ((scheme != "https" && scheme != "http") || host.isNullOrEmpty() ||
             uri.port !in -1..65535 || uri.port == 0 || uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null
-        ) throw RuntimeFailure("SETTINGS_INVALID", "Base URL 必须使用 HTTPS（本机回环可用 HTTP），且不能包含凭据、查询参数或片段")
+        ) throw RuntimeFailure("SETTINGS_INVALID", "Base URL 必须使用 HTTP 或 HTTPS，且不能包含凭据、查询参数或片段")
         return uri.toASCIIString().removeSuffix("/")
     }
 
