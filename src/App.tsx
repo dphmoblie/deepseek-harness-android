@@ -1505,6 +1505,11 @@ interface SettingsDraft {
   clearedCustomProviders: string[]
 }
 
+interface SettledCredentialsSnapshot {
+  providers: Record<string, string>
+  custom: Record<string, string>
+}
+
 /**
  * 由落盘设置建立草稿。
  *
@@ -1650,10 +1655,12 @@ interface SettingsScreenProps {
   onReloadSettings: () => void
   /** 模型与密钥页的「保存密钥」：与离开页面自动保存走同一条写盘路径。 */
   onSaveCredentials: () => Promise<boolean>
+  /** 本次会话中已经成功写入的凭据，用于准确判断「保存密钥」是否仍有待保存改动。 */
+  settledCredentials: SettledCredentialsSnapshot
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSaveCredentials, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSaveCredentials, settledCredentials, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
@@ -2148,7 +2155,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    */
   const credentialPendingInDraft = Object.keys(credentialDrafts).length > 0
     || Object.keys(customCredentials).length > 0
-    || (settings.customModelProviders ?? []).some(provider => provider.baseUrl.trim() !== '')
 
   /**
    * 有没有「值得马上保存」的密钥改动。
@@ -2156,8 +2162,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    * 只看密钥相关字段（含清除标记），不把字号、开关之类算进来：这个按钮的语义是
    * 「把刚填的密钥存下来」，不是替代离开页面时的整页保存。
    */
-  const credentialDirty = Object.keys(credentialDrafts).length > 0
-    || Object.keys(customCredentials).length > 0
+  const credentialDirty = Object.entries(credentialDrafts).some(([providerId, value]) => settledCredentials.providers[providerId] !== value)
+    || Object.entries(customCredentials).some(([providerId, value]) => settledCredentials.custom[providerId] !== value)
     || clearedProviders.length > 0
     || clearedCustomProviders.length > 0
 
@@ -2258,10 +2264,12 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   const commitDefaultModel = (providerId: ModelProviderId, value: string): void => {
     const trimmed = value.trim()
     if (trimmed !== '' && !isValidModelId(trimmed)) return
-    const nextDefaults = { ...(settings.defaultModels ?? {}) }
-    if (trimmed === '') delete nextDefaults[providerId]
-    else nextDefaults[providerId] = trimmed
-    setDraft({ ...settings, defaultModels: nextDefaults })
+    onDraftChange(current => {
+      const nextDefaults = { ...(current.settings.defaultModels ?? {}) }
+      if (trimmed === '') delete nextDefaults[providerId]
+      else nextDefaults[providerId] = trimmed
+      return { ...current, settings: { ...current.settings, defaultModels: nextDefaults } }
+    })
   }
 
   const handleDefaultModelInput = (providerId: ModelProviderId, value: string): void => {
@@ -2538,6 +2546,13 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             credentials={customCredentials}
             cleared={clearedCustomProviders}
             onChange={providers => setDraft({ ...settings, customModelProviders: providers })}
+            onUpdate={update => onDraftChange(current => ({
+              ...current,
+              settings: {
+                ...current.settings,
+                customModelProviders: update(current.settings.customModelProviders ?? []),
+              },
+            }))}
             onCredentials={setCustomCredentials}
             onClear={setClearedCustomProviders}
             onTestConnectivity={handleTestCustomConnectivity}
@@ -3591,7 +3606,12 @@ export function App() {
   const resyncSettingsDraft = useCallback((next: RuntimeSettings) => {
     settingsDraftDirty.current = false
     settingsDraftRevision.current += 1
-    setSettingsDraft(current => draftFromSettings(next, current))
+    setSettingsDraft(current => {
+      const draft = draftFromSettings(next, current)
+      // A successful save has applied every pending clear marker. Do not leave
+      // the marker in memory, or the credential button will falsely stay dirty.
+      return { ...draft, clearedProviders: [], clearedCustomProviders: [] }
+    })
   }, [])
 
   /**
@@ -4846,6 +4866,11 @@ export function App() {
         settingsDraftDirty.current = false
         settingsDraftRevision.current += 1
         applyRefreshedSettings(saved)
+        setSettingsDraft(current => current === null ? current : {
+          ...current,
+          clearedProviders: [],
+          clearedCustomProviders: [],
+        })
       } else {
         // 用户主动保存：以落盘值为准重建草稿（含清空 API Key 输入框），否则旧草稿会在
         // 下一次后台刷新时把刚保存的值反向覆盖回去。
@@ -5321,7 +5346,7 @@ export function App() {
         /** 三级页的返回键回它的二级页；二级页照旧回设置首页。 */
         const parentPage = SETTINGS_PAGE_META[page].parent
         const backTarget: AppView = parentPage === undefined ? 'settings' : SETTINGS_PAGE_META[parentPage].view
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveCredentials={() => saveSettingsDraft()} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveCredentials={() => saveSettingsDraft()} settledCredentials={settledCredentials.current} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

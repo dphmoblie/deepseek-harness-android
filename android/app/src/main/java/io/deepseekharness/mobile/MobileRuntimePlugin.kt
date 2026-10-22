@@ -65,6 +65,8 @@ import io.deepseekharness.mobile.runtime.clampHarnessTailBytes
 import io.deepseekharness.mobile.runtime.MailboxExportOutcome
 import io.deepseekharness.mobile.runtime.ModelCatalogProbe
 import io.deepseekharness.mobile.runtime.ModelConnectivityProbe
+import io.deepseekharness.mobile.runtime.draftOrSavedApi
+import io.deepseekharness.mobile.runtime.draftOrSavedBaseUrl
 import io.deepseekharness.mobile.runtime.MailboxDirectoryEntry
 import io.deepseekharness.mobile.runtime.MailboxDirectoryState
 import io.deepseekharness.mobile.runtime.TaskNotification
@@ -1242,22 +1244,16 @@ class MobileRuntimePlugin : Plugin() {
         val apiKey = call.getString("apiKey")?.trim()
         val api = call.getString("api")?.trim()
         execute(call) {
-            val draftKey = apiKey?.takeIf { it.isNotEmpty() }
             val customProvider = controller.store.settings().customModelProviders
                 .firstOrNull { it.id == providerId }
-            // A saved key may only be used with its saved endpoint. Draft credentials are
-            // explicitly supplied by the user and may test the current unsaved draft URL.
+            // A blank key means "keep the saved credential"; the user is still explicitly
+            // choosing the endpoint and protocol in the current form.
             val savedKey = controller.store.readModelCredential(providerId)
-            val effectiveBaseUrl = if (draftKey == null && customProvider != null) {
-                customProvider.baseUrl
-            } else {
-                baseUrl
-            }
-            val effectiveApi = if (draftKey == null && customProvider != null) {
-                customProvider.api.wireValue
-            } else {
-                api
-            }
+            // A blank draft key may reuse the saved credential, but the endpoint and
+            // protocol must still come from the current form. Otherwise editing a
+            // provider and testing it silently probes the old saved endpoint.
+            val effectiveBaseUrl = draftOrSavedBaseUrl(baseUrl, customProvider)
+            val effectiveApi = draftOrSavedApi(api, customProvider)
             val result = ModelConnectivityProbe.probe(
                 providerId = providerId,
                 baseUrl = effectiveBaseUrl,
@@ -1277,8 +1273,8 @@ class MobileRuntimePlugin : Plugin() {
     /**
      * 读取供应商上游的可用模型列表（与 [testModelConnectivity] 探测同一个 `/models` 端点）。
      *
-     * 密钥解析规则与连通性测试**完全一致**：草稿 key 用草稿 URL/API，没有草稿 key 才回落到
-     * 已保存供应商的端点与已保存密钥 —— 否则「获取模型」会变成一条绕过端点绑定的读密钥通道。
+     * 密钥解析规则与连通性测试**完全一致**：草稿 URL/API 始终优先，API Key 留空时才回落到
+     * 已保存密钥。这样修改地址后不会静默请求旧端点；用户仍须明确把密钥发送到当前草稿地址。
      */
     @PluginMethod
     fun listModelCatalog(call: PluginCall) {
@@ -1296,20 +1292,11 @@ class MobileRuntimePlugin : Plugin() {
         val apiKey = call.getString("apiKey")?.trim()
         val api = call.getString("api")?.trim()
         execute(call) {
-            val draftKey = apiKey?.takeIf { it.isNotEmpty() }
             val customProvider = controller.store.settings().customModelProviders
                 .firstOrNull { it.id == providerId }
             val savedKey = controller.store.readModelCredential(providerId)
-            val effectiveBaseUrl = if (draftKey == null && customProvider != null) {
-                customProvider.baseUrl
-            } else {
-                baseUrl
-            }
-            val effectiveApi = if (draftKey == null && customProvider != null) {
-                customProvider.api.wireValue
-            } else {
-                api
-            }
+            val effectiveBaseUrl = draftOrSavedBaseUrl(baseUrl, customProvider)
+            val effectiveApi = draftOrSavedApi(api, customProvider)
             val result = ModelCatalogProbe.list(
                 providerId = providerId,
                 baseUrl = effectiveBaseUrl,
