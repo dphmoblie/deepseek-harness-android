@@ -1519,16 +1519,14 @@ interface SettledCredentialsSnapshot {
  * [selectedProvider] 同理，避免后台刷新把界面跳回默认项。
  */
 function draftFromSettings(settings: RuntimeSettings, previous: SettingsDraft | null = null): SettingsDraft {
-  const configuredProviders = new Set(settings.configuredModelProviders)
-  const configuredCustomProviders = new Set(settings.configuredCustomModelProviders ?? [])
   return {
     settings,
     selectedProvider: previous?.selectedProvider ?? 'deepseek',
     overlayBallEnabled: null,
     credentials: previous?.credentials ?? {},
-    clearedProviders: (previous?.clearedProviders ?? []).filter(providerId => configuredProviders.has(providerId)),
+    clearedProviders: previous?.clearedProviders ?? [],
     customCredentials: previous?.customCredentials ?? {},
-    clearedCustomProviders: (previous?.clearedCustomProviders ?? []).filter(providerId => configuredCustomProviders.has(providerId)),
+    clearedCustomProviders: previous?.clearedCustomProviders ?? [],
   }
 }
 
@@ -2166,8 +2164,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    */
   const credentialDirty = Object.entries(credentialDrafts).some(([providerId, value]) => settledCredentials.providers[providerId] !== value)
     || Object.entries(customCredentials).some(([providerId, value]) => settledCredentials.custom[providerId] !== value)
-    || clearedProviders.some(providerId => settings.configuredModelProviders.includes(providerId))
-    || clearedCustomProviders.some(providerId => (settings.configuredCustomModelProviders ?? []).includes(providerId))
+    || clearedProviders.length > 0
+    || clearedCustomProviders.length > 0
 
   /** 立即写盘：与离开页面自动保存走同一个入口（App.saveSettingsDraft）。 */
   const saveCredentials = (): void => {
@@ -3608,7 +3606,12 @@ export function App() {
   const resyncSettingsDraft = useCallback((next: RuntimeSettings) => {
     settingsDraftDirty.current = false
     settingsDraftRevision.current += 1
-    setSettingsDraft(current => draftFromSettings(next, current))
+    setSettingsDraft(current => {
+      const draft = draftFromSettings(next, current)
+      // A successful save has applied every pending clear marker. Do not leave
+      // the marker in memory, or the credential button will falsely stay dirty.
+      return { ...draft, clearedProviders: [], clearedCustomProviders: [] }
+    })
   }, [])
 
   /**
@@ -4863,6 +4866,11 @@ export function App() {
         settingsDraftDirty.current = false
         settingsDraftRevision.current += 1
         applyRefreshedSettings(saved)
+        setSettingsDraft(current => current === null ? current : {
+          ...current,
+          clearedProviders: [],
+          clearedCustomProviders: [],
+        })
       } else {
         // 用户主动保存：以落盘值为准重建草稿（含清空 API Key 输入框），否则旧草稿会在
         // 下一次后台刷新时把刚保存的值反向覆盖回去。
