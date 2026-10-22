@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge, FOREGROUND_SERVICE_SETTLE_MS, notInstalledState, openSettingsPage, readyState, settings } from './__tests__/appTestHarness'
-import type { RuntimeSettings, RuntimeSettingsUpdate } from './platform/types'
+import type { ModelCatalogResult, RuntimeSettings, RuntimeSettingsUpdate } from './platform/types'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
 vi.mock('./components/TerminalPanel', () => ({
@@ -434,12 +434,12 @@ describe('设置草稿与未保存的输入', () => {
     // 后台保存在途：输入控件必须仍可编辑，刚输入的字符也不能被清掉。
     expect(screen.getByLabelText(/DeepSeek API Key/)).toBeEnabled()
     expect(screen.getByLabelText(/DeepSeek API Key/)).toHaveValue('unit-test-save-key')
-    expect(screen.getByLabelText('API Key')).toBeEnabled()
+    expect(screen.getByLabelText(/Gateway API Key/)).toBeEnabled()
     expect(screen.getByLabelText('供应商名称')).toBeEnabled()
 
     await act(async () => { resolveSave({ ...settings, customModelProviders: [custom] }); await Promise.resolve() })
     await waitFor(() => expect(screen.getByLabelText(/DeepSeek API Key/)).toBeEnabled())
-    expect(screen.getByLabelText('API Key')).toBeEnabled()
+    expect(screen.getByLabelText(/Gateway API Key/)).toBeEnabled()
   })
 
   it('直接点击供应商卡片切换编辑项，不再显示供应商下拉框或触发保存', async () => {
@@ -671,7 +671,7 @@ describe('设置草稿与未保存的输入', () => {
     expect(section.lastElementChild?.lastElementChild).toBe(add)
     fireEvent.change(screen.getByLabelText('供应商名称'), { target: { value: '本地网关' } })
     fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://gateway.example.invalid/v1' } })
-    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'sk-custom-gateway' } })
+    fireEvent.change(screen.getByLabelText(/本地网关 API Key/), { target: { value: 'sk-custom-gateway' } })
     // 必填的模型字段：表单本身会拦住缺项的提交，这两项属于同一个草稿。
     fireEvent.change(screen.getByLabelText('模型 ID'), { target: { value: 'local-model' } })
     fireEvent.change(screen.getByLabelText('模型名称'), { target: { value: 'Local Model' } })
@@ -691,7 +691,7 @@ describe('设置草稿与未保存的输入', () => {
     // 保存还没结算就切了页：草稿仍在内存里，密钥输入因此保留。
     // 保存成功后的清空行为由「保存成功后草稿与落盘值重新同步」那条用例覆盖。
     // 掩码那一行也在这个 <label> 里，按前缀匹配才不会因为多了「已输入 …」而认不出来。
-    expect(screen.getByLabelText(/^API Key/)).toHaveValue('sk-custom-gateway')
+    expect(screen.getByLabelText(/本地网关 API Key/)).toHaveValue('sk-custom-gateway')
 
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
       customModelProviders: [
@@ -720,8 +720,8 @@ describe('设置草稿与未保存的输入', () => {
     await openSettingsPage('模型与密钥')
 
     expect(screen.getByLabelText('供应商名称')).toHaveValue('本地网关')
-    expect(screen.getByLabelText('API Key')).toHaveValue('')
-    expect(screen.getByLabelText('API Key')).toHaveAttribute('placeholder', '已配置，留空保持不变')
+    expect(screen.getByLabelText(/本地网关 API Key/)).toHaveValue('')
+    expect(screen.getByLabelText(/本地网关 API Key/)).toHaveAttribute('placeholder', '已配置，留空保持不变')
     fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
     expect(screen.getByLabelText(/OpenAI API Key/)).toBeVisible()
     expect(screen.getByLabelText('供应商名称')).toHaveValue('本地网关')
@@ -891,6 +891,7 @@ describe('后台页的运行时与设备 Shell 入口', () => {
     fireEvent.change(screen.getByLabelText(/DeepSeek API Key/), { target: { value: 'unit-test-saved' } })
     fireEvent.click(screen.getByRole('button', { name: '保存密钥' }))
     expect(await screen.findByText('已保存')).toBeVisible()
+    expect(screen.getByRole('button', { name: '保存密钥' })).toBeDisabled()
   })
 
   it('保存密钥失败时提示可重试且不清空输入', async () => {
@@ -973,11 +974,12 @@ describe('第三方供应商的输入体验', () => {
     // 开始填第三方供应商：草稿本身就是要保存的凭据，警告不能让正在输入的人以为已经报错。
     fireEvent.click(screen.getByRole('button', { name: '添加自定义供应商' }))
     fireEvent.change(screen.getByLabelText('Base URL'), { target: { value: 'https://gateway.example.invalid/v1' } })
-    await waitFor(() => expect(screen.queryByText('还没有可用的模型凭据')).toBeNull())
+    expect(screen.getByText('还没有可用的模型凭据')).toBeVisible()
 
-    const key = screen.getByLabelText('API Key')
+    const key = screen.getByLabelText(/custom-1 API Key/)
     fireEvent.change(key, { target: { value: 'sk-third-party' } })
     expect(key).toHaveValue('sk-third-party')
+    await waitFor(() => expect(screen.queryByText('还没有可用的模型凭据')).toBeNull())
 
     // Android 输入法的完成键就是回车。这里必须被吃掉：否则整页表单提交，WebView 会
     // 弹出字段校验气泡，并再走一次前台保存把刚输入的密钥按落盘值清空。
@@ -994,6 +996,22 @@ describe('第三方供应商的输入体验', () => {
  */
 describe('内置供应商获取上游模型', () => {
   beforeEach(beforeEachAppTest)
+
+  it('获取模型响应迟到时不会覆盖期间新增的自定义供应商', async () => {
+    let resolveCatalog!: (result: ModelCatalogResult) => void
+    bridge.listModelCatalog.mockImplementationOnce(() => new Promise<ModelCatalogResult>(resolve => { resolveCatalog = resolve }))
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
+
+    fireEvent.click(screen.getByRole('button', { name: '获取模型' }))
+    fireEvent.click(screen.getByRole('button', { name: '添加自定义供应商' }))
+    fireEvent.change(screen.getByLabelText('供应商名称'), { target: { value: '保留网关' } })
+    resolveCatalog({ ok: true, status: 200, latencyMs: 10, message: '已获取 1 个模型 (10ms)', models: [{ id: 'upstream-first', name: 'Upstream First' }] })
+
+    expect(await screen.findByLabelText('供应商名称')).toHaveValue('保留网关')
+    expect(screen.getByLabelText('默认模型')).toHaveValue('upstream-first')
+  })
 
   it('获取模型后自动填入最靠前的一个，可以点列表或直接改，并随保存落盘', async () => {
     render(<App />)

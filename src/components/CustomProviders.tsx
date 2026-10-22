@@ -15,6 +15,8 @@ interface Props {
   credentials: Record<string, string>
   cleared: string[]
   onChange: (providers: CustomModelProvider[]) => void
+  /** 用最新草稿计算变更，避免异步获取模型结果覆盖用户随后编辑的内容。 */
+  onUpdate?: (update: (providers: CustomModelProvider[]) => CustomModelProvider[]) => void
   onCredentials: (credentials: Record<string, string>) => void
   onClear: (ids: string[]) => void
   onTestConnectivity?: (provider: CustomModelProvider, draftKey?: string) => Promise<ModelConnectivityResult>
@@ -29,6 +31,7 @@ export function CustomProviders({
   credentials,
   cleared,
   onChange,
+  onUpdate,
   onCredentials,
   onClear,
   onTestConnectivity,
@@ -56,15 +59,22 @@ export function CustomProviders({
    * 不经过 [update]：那个函数会顺手丢掉「测试连接」的结果，而获取模型不改变端点与密钥，
    * 上一次连接成功的结论依然成立。
    */
-  const handleFetch = async (index: number, provider: CustomModelProvider) => {
+  const handleFetch = async (provider: CustomModelProvider) => {
     if (!onFetchModels) return
     setFetchingId(provider.id)
     try {
       const result = await onFetchModels(provider, credentials[provider.id])
       setCatalogResults(current => ({ ...current, [provider.id]: result }))
       if (result.ok && result.models.length > 0) {
-        const models = mergeCatalogModels(provider.models, result.models)
-        onChange(providers.map((item, i) => i === index ? { ...item, models } : item))
+        const updateModelsFromLatest = (current: CustomModelProvider[]): CustomModelProvider[] => {
+          const index = current.findIndex(item => item.id === provider.id)
+          if (index < 0) return current
+          const latest = current[index]
+          const models = mergeCatalogModels(latest.models, result.models)
+          return current.map((item, i) => i === index ? { ...item, models } : item)
+        }
+        if (onUpdate) onUpdate(updateModelsFromLatest)
+        else onChange(updateModelsFromLatest(providers))
       }
     } finally {
       setFetchingId(null)
@@ -97,7 +107,7 @@ export function CustomProviders({
   }
 
   return <div className="custom-providers">
-    {providers.map((provider, index) => <div className="custom-provider" key={index}>
+    {providers.map((provider, index) => <div className="custom-provider" key={provider.id}>
       <div className="custom-provider-heading">
         <h3>{provider.name || t('自定义供应商')}</h3>
         <button type="button" className="icon-button" title={t('删除供应商')} aria-label={t('删除供应商')} onClick={() => {
@@ -124,7 +134,8 @@ export function CustomProviders({
         <option value="anthropic-messages">Anthropic Messages</option>
       </select></label>
       <label className="field"><span>Base URL</span><input required type="url" maxLength={2048} placeholder="https://api.example.com/v1" value={provider.baseUrl} onChange={event => update(index, { baseUrl: event.target.value })} /></label>
-      <label className="field"><span>API Key</span><ApiKeyInput
+      <label className="field"><span>{provider.name || provider.id} API Key</span><ApiKeyInput
+        ariaLabel={`${provider.name || provider.id} API Key`}
         value={credentials[provider.id] ?? ''}
         placeholder={harnessConfigured.includes(provider.id) && (!configured.includes(provider.id) || cleared.includes(provider.id))
           ? t('已在 Harness 中配置，留空保持不变')
@@ -155,8 +166,8 @@ export function CustomProviders({
           <button
             type="button"
             className="button button-secondary compact-button"
-            disabled={fetchingId === provider.id}
-            onClick={() => { void handleFetch(index, provider) }}
+            disabled={fetchingId !== null}
+            onClick={() => { void handleFetch(provider) }}
           >
             {fetchingId === provider.id ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
             {fetchingId === provider.id ? t('正在获取…') : t('获取模型')}
