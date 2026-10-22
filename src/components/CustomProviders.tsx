@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Loader2, Plus, RefreshCw, RotateCcw, Trash2, Wifi } from 'lucide-react'
+import { AlertTriangle, Loader2, Plus, RefreshCw, RotateCcw, Trash2, Wifi } from 'lucide-react'
 import { t } from '../i18n'
 import type { CustomModelProvider, CustomProviderApi, CustomProviderModel, ModelCatalogResult, ModelConnectivityResult } from '../platform/types'
 import { MAX_CUSTOM_MODELS, MAX_CUSTOM_PROVIDERS } from '../platform/customProviders'
@@ -134,6 +134,16 @@ export function CustomProviders({
         <option value="anthropic-messages">Anthropic Messages</option>
       </select></label>
       <label className="field"><span>Base URL</span><input required type="url" maxLength={2048} placeholder="https://api.example.com/v1" value={provider.baseUrl} onChange={event => update(index, { baseUrl: event.target.value })} /></label>
+      {(() => {
+        try {
+          return new URL(provider.baseUrl.trim()).protocol === 'http:'
+        } catch {
+          return false
+        }
+      })() && <div className="inline-alert warning" role="alert">
+        <AlertTriangle size={18} aria-hidden="true" />
+        <div><span>{t('HTTP 连接不安全：API Key 和请求内容可能以明文传输，建议改用 HTTPS。')}</span></div>
+      </div>}
       <label className="field"><span>{provider.name || provider.id} API Key</span><ApiKeyInput
         ariaLabel={`${provider.name || provider.id} API Key`}
         value={credentials[provider.id] ?? ''}

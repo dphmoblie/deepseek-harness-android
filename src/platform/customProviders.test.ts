@@ -14,7 +14,10 @@ describe('custom providers', () => {
   it.each(['openai', '__proto__', 'UPPER', 'gateway\n'])('rejects reserved or malformed route %s', id => {
     expect(() => validateCustomModelProviders([{ ...provider, id }])).toThrow()
   })
-  it.each(['http://api.example.com', 'https://api.example.com:0', 'https://user:secret@example.com', 'https://example.com/?token=value', 'https://example.com/#secret'])('rejects credential-bearing or insecure URL %s', baseUrl => {
+  it('accepts a public HTTP URL and normalizes it', () => {
+    expect(validateCustomModelProviders([{ ...provider, baseUrl: 'http://api.example.com/v1/' }])).toEqual([{ ...provider, baseUrl: 'http://api.example.com/v1' }])
+  })
+  it.each(['https://api.example.com:0', 'https://user:secret@example.com', 'https://example.com/?token=value', 'https://example.com/#secret'])('rejects credential-bearing or insecure URL %s', baseUrl => {
     expect(() => validateCustomModelProviders([{ ...provider, baseUrl }])).toThrow()
   })
   it('rejects duplicate routes, oversized model limits and unknown credential targets', () => {

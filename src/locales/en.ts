@@ -1,5 +1,6 @@
 // 应用界面英文词典；不翻译用户输入、凭据或终端输出。
 export const english: Readonly<Record<string, string>> = {
+  "HTTP 连接不安全：API Key 和请求内容可能以明文传输，建议改用 HTTPS。": "HTTP is insecure: the API key and request contents may be sent in plaintext. HTTPS is recommended.",
   "Harness 上游版本": "Upstream Harness versions",
   "直接安装官方 @deepseek-ai/dsh npm 包；Ubuntu 环境、会话与插件独立保留。": "Install the official @deepseek-ai/dsh npm package. Ubuntu, sessions, and plugins are kept separately.",
   "切换会重启 Harness 并检查插件；启动失败自动恢复旧默认版本。上游原版的 Android 兼容性以实际启动检查为准。": "Switching restarts Harness and checks plugins. If startup fails, the previous default is restored. Android compatibility depends on startup verification.",
