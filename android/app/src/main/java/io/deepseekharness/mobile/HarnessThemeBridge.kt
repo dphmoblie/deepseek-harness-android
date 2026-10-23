@@ -332,6 +332,32 @@ internal object HarnessThemeBridge {
               root.style.setProperty('--dsh-theme-surface-opacity', '${opacity / 100.0}');
               root.style.setProperty('--dsh-theme-control-opacity', '${controlOpacity / 100.0}');
               if ('$mode' !== 'system') { root.style.colorScheme = '$mode'; }
+              // 手机端保留一个稳定的左栏入口：按钮只负责调用官方已有 toggle，
+              // 不复制侧栏状态，也不读取会话内容。重复注入时复用同一节点。
+              var sidebarButton = document.getElementById('dsh-mobile-sidebar-button');
+              if (!sidebarButton) {
+                sidebarButton = document.createElement('button');
+                sidebarButton.id = 'dsh-mobile-sidebar-button';
+                sidebarButton.type = 'button';
+                sidebarButton.setAttribute('aria-label', '打开左侧边栏');
+                sidebarButton.title = '打开左侧边栏';
+                sidebarButton.style.cssText = 'position:fixed;left:8px;top:calc(env(safe-area-inset-top, 0px) + 8px);z-index:40;width:40px;height:40px;padding:8px;border:0;border-radius:12px;background:color-mix(in srgb, var(--dsh-theme-surface) 78%, transparent);color:var(--dsw-alias-label-primary);display:grid;place-items:center;opacity:var(--dsh-theme-control-opacity, 1);';
+                var sidebarIcon = document.createElement('img');
+                sidebarIcon.alt = '';
+                sidebarIcon.width = 24;
+                sidebarIcon.height = 24;
+                sidebarIcon.src = '/favicon.svg';
+                sidebarButton.appendChild(sidebarIcon);
+                sidebarButton.addEventListener('click', function () {
+                  var candidates = Array.prototype.slice.call(document.querySelectorAll('button,[role="button"]'));
+                  var target = candidates.find(function (item) {
+                    var label = ((item.getAttribute('aria-label') || '') + ' ' + (item.getAttribute('title') || '')).toLowerCase();
+                    return /sidebar|side bar|menu|history|会话|侧栏/.test(label) && item !== sidebarButton;
+                  });
+                  if (target) { target.click(); }
+                });
+                (document.body || root).appendChild(sidebarButton);
+              }
               var path = '${BACKGROUND_PATH}';
               var hasBackground = $hasBackground;
               var kind = '$kind';

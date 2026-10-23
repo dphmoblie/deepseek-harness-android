@@ -240,11 +240,11 @@ object OverlayBallSecondaryPolicy {
  */
 object OverlayConversationSizePolicy {
 
-    /** 最小可用的宽度（dp）。低于它对话正文基本没法读。 */
-    const val MIN_WIDTH_DP = 240
+    /** 最小可用的宽度（dp）。保留标题、输入框和正文的基本操作空间。 */
+    const val MIN_WIDTH_DP = 200
 
     /** 最小可用的高度（dp）。 */
-    const val MIN_HEIGHT_DP = 360
+    const val MIN_HEIGHT_DP = 300
 
     /** 在未指定自定义尺寸时的默认值（dp），与改动前的固定尺寸一致。 */
     const val DEFAULT_WIDTH_DP = 360

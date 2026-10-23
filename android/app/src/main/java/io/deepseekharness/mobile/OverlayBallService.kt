@@ -670,7 +670,8 @@ class OverlayBallService : Service() {
             }, FrameLayout.LayoutParams(-1, -1))
         } else {
             val web = WebView(this)
-            web.setBackgroundColor(overlayColor(R.color.harness_page_background))
+            // 主题与主屏共用同一份 HarnessThemeBridge；透明 WebView 才能让图片/视频背景层显示。
+            web.setBackgroundColor(android.graphics.Color.TRANSPARENT)
             web.settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -708,6 +709,7 @@ class OverlayBallService : Service() {
                 onDeepSeekAuthorization = ::openDeepSeekAuthorization,
                 onMainFrameFailure = { if (conversationWebView === web) error.visibility = View.VISIBLE },
                 onRendererGone = { detachConversation() },
+                onMainFrameLoaded = { loaded -> HarnessThemeBridge.apply(loaded) },
             )
             web.webChromeClient = object : WebChromeClient() {
                 override fun onCreateWindow(

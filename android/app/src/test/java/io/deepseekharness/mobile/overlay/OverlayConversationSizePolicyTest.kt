@@ -16,8 +16,8 @@ class OverlayConversationSizePolicyTest {
 
     private val availableWidth = 1080
     private val availableHeight = 1920
-    private val minWidth = 240
-    private val minHeight = 360
+    private val minWidth = 200
+    private val minHeight = 300
 
     @Test
     fun `合法尺寸原样保留`() {

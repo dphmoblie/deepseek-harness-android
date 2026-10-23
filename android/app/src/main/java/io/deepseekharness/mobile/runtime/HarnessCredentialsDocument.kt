@@ -4,6 +4,7 @@ import org.snakeyaml.engine.v2.api.Load
 import org.snakeyaml.engine.v2.api.LoadSettings
 import java.io.ByteArrayInputStream
 import java.net.URI
+import java.security.MessageDigest
 
 /**
  * `$DSH_HOME/.credentials.yaml`（访客内 `/root/.dsh/.credentials.yaml`）的**保序**读取与并写。
@@ -45,6 +46,10 @@ internal object HarnessCredentialsDocument {
 
     /** 新建或追加 `refs` 条目时的默认缩进；dsh 自己写出来的就是这个缩进。 */
     private const val DEFAULT_REF_INDENT = 2
+
+    /** App 写入的引用归属元数据；只保存摘要，不保存任何凭据明文。 */
+    private const val MANAGED_REFS_KEY = "dshMobileManagedRefs"
+    private val MANAGED_REF_DIGEST = Regex("^[a-f0-9]{64}$")
 
     /** 顶层条目：行首无缩进、键为 POSIX 标识符。 */
     private val TOP_LEVEL_ENTRY = Regex("^([A-Za-z_][A-Za-z0-9_]*):(.*)$")
@@ -97,6 +102,91 @@ internal object HarnessCredentialsDocument {
             parsed[name] = value
         }
         return parsed
+    }
+
+    /**
+     * 读取 App 写入引用的归属摘要。
+     *
+     * 元数据位于 Harness 忽略的顶层键中，值为「引用名 → 当前值 SHA-256」。
+     * 解析失败时返回 null，调用方必须失败关闭，不能猜测删除范围。
+     */
+    fun managedRefs(text: String): Map<String, String>? {
+        if (refs(text) == null) return null
+        if (text.isBlank()) return emptyMap()
+        val document = try {
+            Load(LOAD_SETTINGS).loadFromInputStream(ByteArrayInputStream(text.toByteArray(Charsets.UTF_8)))
+        } catch (_: Exception) {
+            return null
+        }
+        val root = document as? Map<*, *> ?: return null
+        val raw = root[MANAGED_REFS_KEY] ?: return emptyMap()
+        val mapping = raw as? Map<*, *> ?: return null
+        if (mapping.size > MAX_REFS) return null
+        val parsed = linkedMapOf<String, String>()
+        for ((rawName, rawDigest) in mapping) {
+            val name = rawName as? String ?: return null
+            val digest = rawDigest as? String ?: return null
+            if (!RuntimeSecretPolicy.isCredentialReferenceName(name) || !MANAGED_REF_DIGEST.matches(digest)) {
+                return null
+            }
+            parsed[name] = digest
+        }
+        return parsed
+    }
+
+    /**
+     * 把模型凭据并写入 refs，并记录这些引用由 App 管理。
+     * 旧的 [upsert] 保持原有无元数据行为，供已有纯文本编辑测试和只读兼容路径使用。
+     */
+    fun upsertManaged(text: String?, updates: Map<String, String>): String? {
+        if (updates.isEmpty()) return text
+        if (updates.any { !RuntimeSecretPolicy.isCredentialReferenceName(it.key) || !isStorableValue(it.value) }) {
+            return null
+        }
+        val existing = refs(text.orEmpty()) ?: return null
+        val managed = managedRefs(text.orEmpty()) ?: return null
+        val desired = linkedMapOf<String, String>().apply {
+            putAll(existing)
+            putAll(updates)
+        }
+        val desiredManaged = linkedMapOf<String, String>().apply {
+            putAll(managed)
+            updates.forEach { (name, value) -> put(name, digest(value)) }
+        }
+        if (desired == existing && desiredManaged == managed) return text
+        return edit(text, desired, desiredManaged)
+    }
+
+    /**
+     * 删除 App 自己写入的引用。
+     *
+     * 有归属摘要时要求摘要和当前文档值同时匹配；没有摘要的旧文档则以 expectedValues
+     * 作为兼容证据。用户在 Harness 中改过值后，值不匹配，引用会被保留。
+     */
+    fun removeManaged(text: String?, expectedValues: Map<String, String>): String? {
+        if (text.isNullOrBlank() || expectedValues.isEmpty()) return text
+        val existing = refs(text) ?: return null
+        val managed = managedRefs(text) ?: return null
+        val removals = expectedValues.filter { (name, expected) ->
+            val current = existing[name] ?: return@filter false
+            val managedDigest = managed[name]
+            val owned = if (managedDigest == null) {
+                current == expected
+            } else {
+                current == expected && managedDigest == digest(expected)
+            }
+            owned
+        }.keys
+        val desired = linkedMapOf<String, String>().apply {
+            putAll(existing)
+            removals.forEach(::remove)
+        }
+        val desiredManaged = linkedMapOf<String, String>().apply {
+            putAll(managed)
+            expectedValues.keys.forEach(::remove)
+        }
+        if (desired == existing && desiredManaged == managed) return text
+        return edit(text, desired, desiredManaged)
     }
 
     /**
@@ -169,10 +259,37 @@ internal object HarnessCredentialsDocument {
         } else {
             val lines = text.split('\n')
             val structure = scan(lines) ?: return null
-            render(lines, structure, updates)
+            val managed = managedRefs(text) ?: return null
+            render(lines, structure, desired, managed)
         }
         // 自校验：写盘前的最后一关。解析不出预期内容就当作「不能安全编辑」。
         return rendered.takeIf { refs(it) == desired }
+    }
+
+    /** 以已有文本结构为基础，同时更新 refs 和 App 归属元数据。 */
+    private fun edit(text: String?, desired: Map<String, String>, desiredManaged: Map<String, String>): String? {
+        val existing = refs(text.orEmpty()) ?: return null
+        if (text.isNullOrBlank()) {
+            val rendered = buildString {
+                append("version: 1\n")
+                append("refs:\n")
+                desired.forEach { (name, value) ->
+                    append(" ".repeat(DEFAULT_REF_INDENT))
+                    append(entry(name, value))
+                    append('\n')
+                }
+                appendManagedMetadata(desiredManaged)
+            }
+            return rendered.takeIf {
+                refs(it) == desired && managedRefs(it) == desiredManaged
+            }
+        }
+        val lines = text.split('\n')
+        val structure = scan(lines) ?: return null
+        val rendered = render(lines, structure, desired, desiredManaged)
+        return rendered.takeIf {
+            refs(it) == desired && managedRefs(it) == desiredManaged
+        }
     }
 
     /** 新建一份最小文档；`refs` 段的缩进与 dsh 自己写出来的一致。 */
@@ -256,17 +373,32 @@ internal object HarnessCredentialsDocument {
     }
 
     /** 逐行重建：只替换/追加 `refs` 段里的行，其它行原样透传。 */
-    private fun render(lines: List<String>, structure: Structure, updates: Map<String, String>): String {
+    private fun render(
+        lines: List<String>,
+        structure: Structure,
+        desired: Map<String, String>,
+        desiredManaged: Map<String, String>,
+    ): String {
         val indent = " ".repeat(structure.refIndent)
         val replacements = structure.refEntries.mapNotNull { (index, name) ->
-            updates[name]?.let { index to (indent + entry(name, it)) }
+            desired[name]?.let { index to (indent + entry(name, it)) }
         }.toMap()
         val existingNames = structure.refEntries.mapTo(linkedSetOf()) { it.second }
         // 追加的行必须带上与同段其它条目一致的缩进：少了它这些键会落到顶层，
         // 自校验会（正确地）判定文档不再是本编辑器认识的那一份并拒绝写入。
-        val additions = updates.filterKeys { it !in existingNames }.map { (name, value) -> indent + entry(name, value) }
+        val additions = desired.filterKeys { it !in existingNames }.map { (name, value) -> indent + entry(name, value) }
+        val managedLine = lines.indexOfFirst { raw -> raw.startsWith("$MANAGED_REFS_KEY:") }
+        val managedReplacement = managedMetadataLine(desiredManaged)
         val output = mutableListOf<String>()
         lines.forEachIndexed { index, raw ->
+            if (managedLine == index) {
+                managedReplacement?.let(output::add)
+                return@forEachIndexed
+            }
+            val originalName = structure.refEntries.firstOrNull { it.first == index }?.second
+            if (originalName != null && originalName !in desired) {
+                return@forEachIndexed
+            }
             // `refs: {}` 先展开成块映射表头，追加的条目才有地方落；否则它们会落在流式映射后面。
             val header = if (structure.refsFlowEmpty && index == structure.refsHeaderLine) "refs:" else raw
             output += replacements[index] ?: header
@@ -278,8 +410,39 @@ internal object HarnessCredentialsDocument {
                 }
             }
         }
+        if (managedLine < 0 && managedReplacement != null) {
+            if (output.isNotEmpty() && output.last().isNotEmpty()) output += ""
+            output += managedReplacement
+        }
         return output.joinToString("\n")
     }
+
+    private fun StringBuilder.appendManagedMetadata(managed: Map<String, String>) {
+        managedMetadataLine(managed)?.let {
+            append(it)
+            append('\n')
+        }
+    }
+
+    private fun managedMetadataLine(managed: Map<String, String>): String? {
+        if (managed.isEmpty()) return null
+        return buildString {
+            append(MANAGED_REFS_KEY)
+            append(": {")
+            managed.entries.forEachIndexed { index, (name, digest) ->
+                if (index > 0) append(", ")
+                append(name)
+                append(": '")
+                append(digest)
+                append("'")
+            }
+            append("}")
+        }
+    }
+
+    private fun digest(value: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte) }
 
     /** `NAME: 'value'`。 */
     private fun entry(name: String, value: String): String = "$name: ${yamlScalar(value)}"

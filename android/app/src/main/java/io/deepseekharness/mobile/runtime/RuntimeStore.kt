@@ -342,10 +342,22 @@ class RuntimeStore(context: Context) {
             customProviderApiKeyUpdates.keys.any { it !in allowedCustomIds } || clearedCustomProviderApiKeys.any { it !in allowedCustomIds }
         ) throw RuntimeFailure("SETTINGS_INVALID", "自定义模型凭据更新与供应商配置不一致")
         val providerApiKeys = providerApiKeysLocked().toMutableMap()
+        val clearedHarnessCredentialValues = linkedMapOf<String, String>()
+        clearedProviderApiKeys.forEach { provider ->
+            providerApiKeys[provider]?.let { clearedHarnessCredentialValues[provider.environmentVariable] = it }
+        }
         clearedProviderApiKeys.forEach(providerApiKeys::remove)
         providerApiKeys.putAll(providerApiKeyUpdates)
-        val storedCustomIds = customModelProvidersLocked().mapTo(linkedSetOf()) { it.id }
+        val storedCustomProviders = customModelProvidersLocked()
+        val storedCustomIds = storedCustomProviders.mapTo(linkedSetOf()) { it.id }
         val customProviderApiKeys = customProviderApiKeysLocked(storedCustomIds).toMutableMap()
+        val removedCustomIds = customProviderApiKeys.keys.filterTo(linkedSetOf()) { it !in allowedCustomIds }
+        (clearedCustomProviderApiKeys + removedCustomIds).forEach { providerId ->
+            val provider = storedCustomProviders.firstOrNull { it.id == providerId }
+            val environmentVariable = provider?.environmentVariable
+            val value = customProviderApiKeys[providerId]
+            if (environmentVariable != null && value != null) clearedHarnessCredentialValues[environmentVariable] = value
+        }
         customProviderApiKeys.keys.retainAll(allowedCustomIds)
         clearedCustomProviderApiKeys.forEach(customProviderApiKeys::remove)
         customProviderApiKeys.putAll(customProviderApiKeyUpdates)
@@ -372,6 +384,9 @@ class RuntimeStore(context: Context) {
         else editor.putString(KEY_PROVIDER_CREDENTIALS, encryptedCredentials)
         if (encryptedCustomCredentials == null) editor.remove(KEY_CUSTOM_PROVIDER_CREDENTIALS)
         else editor.putString(KEY_CUSTOM_PROVIDER_CREDENTIALS, encryptedCustomCredentials)
+        if (clearedHarnessCredentialValues.isNotEmpty() && !removeHarnessCredentials(clearedHarnessCredentialValues)) {
+            throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法清理 Harness 中由 App 写入的模型凭据")
+        }
         val committed = editor.commit()
         if (!committed) throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法保存运行时设置")
         val harnessCredentials = harnessCredentialStatus(customProviders)
@@ -534,10 +549,27 @@ class RuntimeStore(context: Context) {
             is CredentialsDocument.Text -> document.text
             is CredentialsDocument.Untrusted -> return false
         }
-        val updated = HarnessCredentialsDocument.upsert(existing, values) ?: return false
+        val updated = HarnessCredentialsDocument.upsertManaged(existing, values) ?: return false
         // 文档已经承载全部凭据时一个字节都不动：避免与模型页/另一个实例的写入互相覆盖。
         if (updated == existing) return true
         return writePrivateFile(harnessCredentialsFile, updated.toByteArray(Charsets.UTF_8))
+    }
+
+    /** 只删除 App 归属仍然成立的 Harness 引用；用户在 Harness 中改过的值会被保留。 */
+    private fun removeHarnessCredentials(expectedValues: Map<String, String>): Boolean {
+        try {
+            val existing = when (val document = readCredentialsDocument()) {
+                is CredentialsDocument.Absent -> return true
+                is CredentialsDocument.Text -> document.text
+                is CredentialsDocument.Untrusted -> return false
+            }
+            val updated = HarnessCredentialsDocument.removeManaged(existing, expectedValues) ?: return false
+            if (updated == existing) return true
+            return writePrivateFile(harnessCredentialsFile, updated.toByteArray(Charsets.UTF_8))
+        } catch (_: Throwable) {
+            // 文档不可信或暂时不可写时不覆盖，避免误删用户在 Harness 中维护的凭据。
+            return false
+        }
     }
 
     /**

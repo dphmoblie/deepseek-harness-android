@@ -64,6 +64,7 @@ test('安装失败只清理本次暂存，不触碰旧版本、会话、插件�
   assert.throws(() => manager.install('0.2.1-rc.2', integrity), /HARNESS_INSTALL_FAILED/u)
   assert.equal(calls.length, 1)
   assert.ok(calls[0].args.includes('--ignore-scripts'))
+  assert.equal(calls[0].args.includes('--legacy-peer-deps'), false)
   assert.equal(calls[0].options.shell, undefined)
   assert.deepEqual(Object.keys(calls[0].options.env).sort(), ['HOME', 'LANG', 'PATH', 'TMPDIR'])
   assert.deepEqual(fs.readdirSync(path.join(root, 'root/.dsh-mobile/harness-versions/versions')), [])

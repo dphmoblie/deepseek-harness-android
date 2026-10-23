@@ -88,6 +88,70 @@ class HarnessCredentialsDocumentTest {
     }
 
     @Test
+    fun `managed upsert records only a digest and preserves the document`() {
+        val updated = HarnessCredentialsDocument.upsertManaged(
+            existingDocument,
+            mapOf("OPENAI_API_KEY" to "sk-sentinel-new"),
+        )
+
+        assertNotNull(updated)
+        assertEquals(
+            mapOf("DEEPSEEK_API_KEY" to "sk-existing-value", "OPENAI_API_KEY" to "sk-sentinel-new"),
+            HarnessCredentialsDocument.refs(updated!!),
+        )
+        assertEquals(1, HarnessCredentialsDocument.managedRefs(updated).orEmpty().size)
+        assertTrue(updated.contains("dshMobileManagedRefs:"))
+        assertTrue(updated.contains("records:\n"))
+    }
+
+    @Test
+    fun `managed removal deletes matching app values but keeps changed harness values`() {
+        val managed = HarnessCredentialsDocument.upsertManaged(
+            existingDocument,
+            mapOf(
+                "DEEPSEEK_API_KEY" to "sk-app-value",
+                "OPENAI_API_KEY" to "sk-openai-value",
+            ),
+        )!!
+        val changedByHarness = managed.replace("OPENAI_API_KEY: 'sk-openai-value'", "OPENAI_API_KEY: 'sk-user-value'")
+        val removed = HarnessCredentialsDocument.removeManaged(
+            changedByHarness,
+            mapOf(
+                "DEEPSEEK_API_KEY" to "sk-app-value",
+                "OPENAI_API_KEY" to "sk-openai-value",
+            ),
+        )!!
+
+        assertEquals(mapOf("OPENAI_API_KEY" to "sk-user-value"), HarnessCredentialsDocument.refs(removed))
+        assertTrue(HarnessCredentialsDocument.managedRefs(removed).orEmpty().isEmpty())
+        assertTrue(removed.contains("records:\n"))
+    }
+
+    @Test
+    fun `legacy documents remove only values that still match the app snapshot`() {
+        val removed = HarnessCredentialsDocument.removeManaged(
+            existingDocument,
+            mapOf("DEEPSEEK_API_KEY" to "sk-existing-value"),
+        )!!
+        assertEquals(emptyMap<String, String>(), HarnessCredentialsDocument.refs(removed))
+        assertTrue(removed.contains("records:\n"))
+
+        val preserved = HarnessCredentialsDocument.removeManaged(
+            existingDocument,
+            mapOf("DEEPSEEK_API_KEY" to "sk-user-value"),
+        )!!
+        assertEquals(mapOf("DEEPSEEK_API_KEY" to "sk-existing-value"), HarnessCredentialsDocument.refs(preserved))
+    }
+
+    @Test
+    fun `malformed managed metadata fails closed`() {
+        val malformed = existingDocument + "dshMobileManagedRefs: {OPENAI_API_KEY: not-a-digest}\n"
+        assertNull(HarnessCredentialsDocument.managedRefs(malformed))
+        assertNull(HarnessCredentialsDocument.upsertManaged(malformed, mapOf("OPENAI_API_KEY" to "sk-new")))
+        assertNull(HarnessCredentialsDocument.removeManaged(malformed, mapOf("OPENAI_API_KEY" to "sk-old")))
+    }
+
+    @Test
     fun `a document already carrying every reference is returned untouched`() {
         val updates = mapOf("DEEPSEEK_API_KEY" to "sk-existing-value")
 

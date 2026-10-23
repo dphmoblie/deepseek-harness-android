@@ -149,7 +149,7 @@ function createManager(root, execute = spawnSync, report = () => {}) {
     return result.stdout
   }
   function npmArgs(command, stage) {
-    return [npm, command, '--ignore-scripts', '--legacy-peer-deps', '--no-audit', '--no-fund', '--bin-links=false',
+    return [npm, command, '--ignore-scripts', '--no-audit', '--no-fund', '--bin-links=false',
       '--registry=https://registry.npmjs.org', '--fetch-retries=1', '--fetch-timeout=30000',
       '--userconfig=' + path.join(stage, 'npmrc'), '--globalconfig=' + path.join(stage, 'global-npmrc'), '--cache=' + path.join(stage, 'cache')]
   }
