@@ -1505,6 +1505,11 @@ interface SettingsDraft {
   clearedCustomProviders: string[]
 }
 
+interface SettledCredentialsSnapshot {
+  providers: Record<string, string>
+  custom: Record<string, string>
+}
+
 /**
  * 由落盘设置建立草稿。
  *
@@ -1650,10 +1655,12 @@ interface SettingsScreenProps {
   onReloadSettings: () => void
   /** 模型与密钥页的「保存密钥」：与离开页面自动保存走同一条写盘路径。 */
   onSaveCredentials: () => Promise<boolean>
+  /** 本次会话中已经成功写入的凭据，用于准确判断「保存密钥」是否仍有待保存改动。 */
+  settledCredentials: SettledCredentialsSnapshot
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSaveCredentials, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSaveCredentials, settledCredentials, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
@@ -1661,6 +1668,10 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   /** 正在拉取上游模型列表的供应商；同一时刻只允许一个请求在飞。 */
   const [loadingCatalog, setLoadingCatalog] = useState<string | null>(null)
   const [catalogResults, setCatalogResults] = useState<Record<string, ModelCatalogResult>>({})
+  /** 供应商请求代次：输入发生变化后，迟到的旧响应不能回写当前草稿。 */
+  const connectivityRequestGeneration = useRef<Record<string, number>>({})
+  const catalogRequestGeneration = useRef<Record<string, number>>({})
+  const credentialDraftsRef = useRef<Record<string, string>>({})
   /** 默认模型输入框里的原始文本（可能还没成为合法 id，因此不一定已写进草稿）。 */
   const [modelInputs, setModelInputs] = useState<Record<string, string>>({})
   /** 密钥「立即保存」的反馈：只影响模型与密钥页那颗按钮旁边的状态。 */
@@ -2058,6 +2069,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   const overlayBallDraft = draft.overlayBallEnabled
   const selectedProvider = draft.selectedProvider
   const credentialDrafts = draft.credentials
+  credentialDraftsRef.current = credentialDrafts
   const clearedProviders = draft.clearedProviders
   const customCredentials = draft.customCredentials
   const clearedCustomProviders = draft.clearedCustomProviders
@@ -2148,7 +2160,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    */
   const credentialPendingInDraft = Object.keys(credentialDrafts).length > 0
     || Object.keys(customCredentials).length > 0
-    || (settings.customModelProviders ?? []).some(provider => provider.baseUrl.trim() !== '')
 
   /**
    * 有没有「值得马上保存」的密钥改动。
@@ -2156,8 +2167,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    * 只看密钥相关字段（含清除标记），不把字号、开关之类算进来：这个按钮的语义是
    * 「把刚填的密钥存下来」，不是替代离开页面时的整页保存。
    */
-  const credentialDirty = Object.keys(credentialDrafts).length > 0
-    || Object.keys(customCredentials).length > 0
+  const credentialDirty = Object.entries(credentialDrafts).some(([providerId, value]) => settledCredentials.providers[providerId] !== value)
+    || Object.entries(customCredentials).some(([providerId, value]) => settledCredentials.custom[providerId] !== value)
     || clearedProviders.length > 0
     || clearedCustomProviders.length > 0
 
@@ -2175,6 +2186,10 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    * 下面，看起来就像新填的内容也报错了 —— 输一个字清一次。
    */
   const forgetConnectivity = (providerId: string): void => {
+    // 使该输入变化前发出的连接请求失效；它们的响应可能仍会迟到。
+    connectivityRequestGeneration.current[providerId] = (connectivityRequestGeneration.current[providerId] ?? 0) + 1
+    // 输入变化后允许用户立即重试；旧请求的 finally 不会清掉新请求的在途标记。
+    setTestingProvider(current => current === providerId ? null : current)
     setConnectivityResults(current => {
       if (current[providerId] === undefined) return current
       const next = { ...current }
@@ -2183,25 +2198,37 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     })
   }
 
+  const invalidateCatalog = (providerId: string): void => {
+    catalogRequestGeneration.current[providerId] = (catalogRequestGeneration.current[providerId] ?? 0) + 1
+    setLoadingCatalog(current => current === providerId ? null : current)
+  }
+
   const handleTestConnectivity = async (providerId: string) => {
     triggerHaptic('light')
+    const requestGeneration = (connectivityRequestGeneration.current[providerId] ?? 0) + 1
+    connectivityRequestGeneration.current[providerId] = requestGeneration
+    const apiKey = credentialDrafts[providerId as ModelProviderId]
     setTestingProvider(providerId)
     try {
       const result = await runtimeBridge.testModelConnectivity({
         providerId,
-        apiKey: credentialDrafts[providerId as ModelProviderId],
+        apiKey,
       })
+      if (requestGeneration !== connectivityRequestGeneration.current[providerId]
+        || credentialDraftsRef.current[providerId] !== apiKey) return
       setConnectivityResults(current => ({ ...current, [providerId]: result }))
       if (result.ok) triggerHaptic('success')
       else triggerHaptic('warning')
     } catch (error) {
+      if (requestGeneration !== connectivityRequestGeneration.current[providerId]
+        || credentialDraftsRef.current[providerId] !== apiKey) return
       setConnectivityResults(current => ({
         ...current,
         [providerId]: { ok: false, status: 0, latencyMs: 0, message: errorMessage(error) },
       }))
       triggerHaptic('error')
     } finally {
-      setTestingProvider(null)
+      if (requestGeneration === connectivityRequestGeneration.current[providerId]) setTestingProvider(null)
     }
   }
 
@@ -2258,10 +2285,12 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   const commitDefaultModel = (providerId: ModelProviderId, value: string): void => {
     const trimmed = value.trim()
     if (trimmed !== '' && !isValidModelId(trimmed)) return
-    const nextDefaults = { ...(settings.defaultModels ?? {}) }
-    if (trimmed === '') delete nextDefaults[providerId]
-    else nextDefaults[providerId] = trimmed
-    setDraft({ ...settings, defaultModels: nextDefaults })
+    onDraftChange(current => {
+      const nextDefaults = { ...(current.settings.defaultModels ?? {}) }
+      if (trimmed === '') delete nextDefaults[providerId]
+      else nextDefaults[providerId] = trimmed
+      return { ...current, settings: { ...current.settings, defaultModels: nextDefaults } }
+    })
   }
 
   const handleDefaultModelInput = (providerId: ModelProviderId, value: string): void => {
@@ -2270,6 +2299,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     // 模型换了，上一份「可用模型」列表仍然有效（它描述的是上游，不是这个输入框），
     // 因此这里只清测试结果，不清列表。
     forgetConnectivity(providerId)
+    // 用户正在改默认模型时，迟到的目录响应不能把它自动改回第一项。
+    invalidateCatalog(providerId)
   }
 
   /**
@@ -2280,12 +2311,17 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    */
   const handleFetchModels = async (providerId: ModelProviderId): Promise<void> => {
     triggerHaptic('light')
+    const requestGeneration = (catalogRequestGeneration.current[providerId] ?? 0) + 1
+    catalogRequestGeneration.current[providerId] = requestGeneration
+    const apiKey = credentialDrafts[providerId]
     setLoadingCatalog(providerId)
     try {
       const result = await runtimeBridge.listModelCatalog({
         providerId,
-        apiKey: credentialDrafts[providerId],
+        apiKey,
       })
+      if (requestGeneration !== catalogRequestGeneration.current[providerId]
+        || credentialDraftsRef.current[providerId] !== apiKey) return
       setCatalogResults(current => ({ ...current, [providerId]: result }))
       if (result.ok && result.models.length > 0) {
         const first = firstCatalogModelId(result.models)
@@ -2296,13 +2332,15 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         triggerHaptic('warning')
       }
     } catch (error) {
+      if (requestGeneration !== catalogRequestGeneration.current[providerId]
+        || credentialDraftsRef.current[providerId] !== apiKey) return
       setCatalogResults(current => ({
         ...current,
         [providerId]: { ok: false, status: 0, latencyMs: 0, message: errorMessage(error), models: [] },
       }))
       triggerHaptic('error')
     } finally {
-      setLoadingCatalog(null)
+      if (requestGeneration === catalogRequestGeneration.current[providerId]) setLoadingCatalog(null)
     }
   }
 
@@ -2417,6 +2455,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 if (value !== '') setClearedProviders(current => current.filter(provider => provider !== selectedProvider))
                 // 改了密钥，上一次的测试结果就不再对应当前这份输入。
                 forgetConnectivity(selectedProvider)
+                invalidateCatalog(selectedProvider)
               }}
             />
           </label>
@@ -2461,6 +2500,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                     ? current.filter(provider => provider !== selectedProvider)
                     : [...current, selectedProvider])
                   forgetConnectivity(selectedProvider)
+                  invalidateCatalog(selectedProvider)
                 }}
               >
                 {clearedProviders.includes(selectedProvider) ? <RotateCcw size={16} /> : <Trash2 size={16} />}
@@ -2538,6 +2578,13 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             credentials={customCredentials}
             cleared={clearedCustomProviders}
             onChange={providers => setDraft({ ...settings, customModelProviders: providers })}
+            onUpdate={update => onDraftChange(current => ({
+              ...current,
+              settings: {
+                ...current.settings,
+                customModelProviders: update(current.settings.customModelProviders ?? []),
+              },
+            }))}
             onCredentials={setCustomCredentials}
             onClear={setClearedCustomProviders}
             onTestConnectivity={handleTestCustomConnectivity}
@@ -3591,7 +3638,12 @@ export function App() {
   const resyncSettingsDraft = useCallback((next: RuntimeSettings) => {
     settingsDraftDirty.current = false
     settingsDraftRevision.current += 1
-    setSettingsDraft(current => draftFromSettings(next, current))
+    setSettingsDraft(current => {
+      const draft = draftFromSettings(next, current)
+      // A successful save has applied every pending clear marker. Do not leave
+      // the marker in memory, or the credential button will falsely stay dirty.
+      return { ...draft, clearedProviders: [], clearedCustomProviders: [] }
+    })
   }, [])
 
   /**
@@ -4846,6 +4898,11 @@ export function App() {
         settingsDraftDirty.current = false
         settingsDraftRevision.current += 1
         applyRefreshedSettings(saved)
+        setSettingsDraft(current => current === null ? current : {
+          ...current,
+          clearedProviders: [],
+          clearedCustomProviders: [],
+        })
       } else {
         // 用户主动保存：以落盘值为准重建草稿（含清空 API Key 输入框），否则旧草稿会在
         // 下一次后台刷新时把刚保存的值反向覆盖回去。
@@ -5321,7 +5378,7 @@ export function App() {
         /** 三级页的返回键回它的二级页；二级页照旧回设置首页。 */
         const parentPage = SETTINGS_PAGE_META[page].parent
         const backTarget: AppView = parentPage === undefined ? 'settings' : SETTINGS_PAGE_META[parentPage].view
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveCredentials={() => saveSettingsDraft()} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveCredentials={() => saveSettingsDraft()} settledCredentials={settledCredentials.current} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

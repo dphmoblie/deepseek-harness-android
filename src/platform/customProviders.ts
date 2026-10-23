@@ -48,9 +48,8 @@ function validateCustomProviderUrl(value: unknown): string {
   }
   let url: URL
   try { url = new URL(value.trim()) } catch { throw new Error('自定义供应商 Base URL 格式无效') }
-  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.hostname === '[::1]'
-  if ((url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) || url.port === '0' || url.username || url.password || url.search || url.hash) {
-    throw new Error('Base URL 必须使用 HTTPS（本机回环可用 HTTP），且不能包含凭据、查询参数或片段')
+  if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.port === '0' || url.username || url.password || url.search || url.hash) {
+    throw new Error('Base URL 必须使用 HTTP 或 HTTPS，且不能包含凭据、查询参数或片段')
   }
   return url.toString().replace(/\/$/, '')
 }
