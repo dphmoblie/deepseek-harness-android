@@ -997,6 +997,42 @@ describe('第三方供应商的输入体验', () => {
 describe('内置供应商获取上游模型', () => {
   beforeEach(beforeEachAppTest)
 
+  it('获取模型响应迟到时不会覆盖期间修改的密钥或默认模型', async () => {
+    let resolveCatalog!: (result: ModelCatalogResult) => void
+    bridge.listModelCatalog.mockImplementationOnce(() => new Promise<ModelCatalogResult>(resolve => { resolveCatalog = resolve }))
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
+
+    fireEvent.click(screen.getByRole('button', { name: '获取模型' }))
+    const modelInput = await screen.findByLabelText('默认模型')
+    fireEvent.change(modelInput, { target: { value: 'model-picked-by-user' } })
+    fireEvent.change(screen.getByLabelText(/DeepSeek API Key/), { target: { value: 'new-key' } })
+
+    resolveCatalog({ ok: true, status: 200, latencyMs: 10, message: '已获取 1 个模型 (10ms)', models: [{ id: 'stale-model', name: 'Stale Model' }] })
+    await act(async () => { await Promise.resolve() })
+
+    expect(modelInput).toHaveValue('model-picked-by-user')
+    expect(screen.queryByText('Stale Model')).toBeNull()
+    expect(screen.getByRole('button', { name: '获取模型' })).toBeEnabled()
+  })
+
+  it('测试连接响应迟到时不会覆盖期间修改的密钥', async () => {
+    let resolveConnectivity!: (result: { ok: boolean; status: number; latencyMs: number; message: string }) => void
+    bridge.testModelConnectivity.mockImplementationOnce(() => new Promise(resolve => { resolveConnectivity = resolve }))
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('模型与密钥')
+
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    fireEvent.change(screen.getByLabelText(/DeepSeek API Key/), { target: { value: 'new-key' } })
+    resolveConnectivity({ ok: true, status: 200, latencyMs: 10, message: '旧密钥连接成功' })
+    await act(async () => { await Promise.resolve() })
+
+    expect(screen.queryByText('旧密钥连接成功')).toBeNull()
+    expect(screen.getByRole('button', { name: '测试连接' })).toBeEnabled()
+  })
+
   it('获取模型响应迟到时不会覆盖期间新增的自定义供应商', async () => {
     let resolveCatalog!: (result: ModelCatalogResult) => void
     bridge.listModelCatalog.mockImplementationOnce(() => new Promise<ModelCatalogResult>(resolve => { resolveCatalog = resolve }))

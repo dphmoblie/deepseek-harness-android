@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { CustomProviders } from './CustomProviders'
-import type { CustomModelProvider, ModelCatalogResult } from '../platform/types'
+import type { CustomModelProvider, ModelCatalogResult, ModelConnectivityResult } from '../platform/types'
 import { MAX_CUSTOM_PROVIDERS } from '../platform/customProviders'
 
 describe('CustomProviders 自定义模型供应商', () => {
@@ -247,7 +247,7 @@ describe('CustomProviders 获取上游模型', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
-  it('请求期间编辑供应商时，只合并模型，不覆盖最新地址', async () => {
+  it('请求期间编辑供应商时，丢弃旧响应，不覆盖最新地址或模型表', async () => {
     let resolveFetch!: (result: ModelCatalogResult) => void
     const onFetchModels = vi.fn(() => new Promise<ModelCatalogResult>(resolve => { resolveFetch = resolve }))
     render(<StatefulProviders onFetchModels={onFetchModels} />)
@@ -257,7 +257,31 @@ describe('CustomProviders 获取上游模型', () => {
     resolveFetch({ ok: true, status: 200, latencyMs: 20, message: '已获取 1 个模型 (20ms)', models: [{ id: 'new-model', name: 'New model' }] })
 
     await waitFor(() => expect(screen.getByLabelText('Base URL')).toHaveValue('https://new.example/v1'))
-    expect(screen.getAllByLabelText('模型 ID')[0]).toHaveValue('new-model')
+    expect(screen.getAllByLabelText('模型 ID')[0]).toHaveValue('glm-4-flash')
+    expect(screen.queryByText('已获取 1 个模型 (20ms)')).toBeNull()
+  })
+
+  it('请求期间修改密钥时，丢弃旧测试结果并停止加载状态', async () => {
+    let resolveTest!: (result: { ok: boolean; status: number; latencyMs: number; message: string }) => void
+    const onTestConnectivity = vi.fn((() => new Promise<ModelConnectivityResult>(resolve => { resolveTest = resolve })) as (provider: CustomModelProvider, draftKey?: string) => Promise<ModelConnectivityResult>)
+    const onCredentials = vi.fn()
+    render(<CustomProviders
+      providers={[provider]}
+      configured={[]}
+      credentials={{}}
+      cleared={[]}
+      onChange={vi.fn()}
+      onCredentials={onCredentials}
+      onClear={vi.fn()}
+      onTestConnectivity={onTestConnectivity}
+    />)
+
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    fireEvent.change(screen.getByLabelText(/智谱 GLM API Key/), { target: { value: 'new-secret' } })
+    resolveTest({ ok: true, status: 200, latencyMs: 10, message: '旧请求成功' })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '测试连接' })).not.toBeDisabled())
+    expect(screen.queryByText('旧请求成功')).toBeNull()
   })
 
   it('请求期间删除供应商时，不会把已删除的卡片写回来', async () => {
@@ -271,5 +295,20 @@ describe('CustomProviders 获取上游模型', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: '添加自定义供应商' })).toBeInTheDocument())
     expect(screen.queryByRole('button', { name: '删除供应商' })).toBeNull()
+  })
+
+  it('删除后重新创建同 id 时，不会接收旧卡片的迟到结果', async () => {
+    let resolveFetch!: (result: ModelCatalogResult) => void
+    const onFetchModels = vi.fn(() => new Promise<ModelCatalogResult>(resolve => { resolveFetch = resolve }))
+    render(<StatefulProviders onFetchModels={onFetchModels} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '获取模型' }))
+    fireEvent.click(screen.getByRole('button', { name: '删除供应商' }))
+    fireEvent.click(screen.getByRole('button', { name: '添加自定义供应商' }))
+    resolveFetch({ ok: true, status: 200, latencyMs: 20, message: '旧卡片结果', models: [{ id: 'old-model', name: 'Old model' }] })
+
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '删除供应商' })).toHaveLength(1))
+    expect(screen.queryByText('旧卡片结果')).toBeNull()
+    expect(screen.getAllByLabelText('模型 ID')[0]).toHaveValue('')
   })
 })

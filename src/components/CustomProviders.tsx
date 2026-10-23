@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { AlertTriangle, Loader2, Plus, RefreshCw, RotateCcw, Trash2, Wifi } from 'lucide-react'
 import { t } from '../i18n'
 import type { CustomModelProvider, CustomProviderApi, CustomProviderModel, ModelCatalogResult, ModelConnectivityResult } from '../platform/types'
@@ -42,14 +42,87 @@ export function CustomProviders({
   const [fetchingId, setFetchingId] = useState<string | null>(null)
   const [catalogResults, setCatalogResults] = useState<Record<string, ModelCatalogResult>>({})
 
-  const handleTest = async (provider: CustomModelProvider) => {
+  // Provider ids are editable, so they cannot identify a card (or an in-flight request).
+  // Keep an instance key for each array position; delete explicitly removes the key so a
+  // later provider with the same id starts with a fresh request/result namespace.
+  const cardKeysRef = useRef<string[]>([])
+  const requestVersionsRef = useRef({ test: new Map<string, number>(), fetch: new Map<string, number>() })
+  const loadingVersionsRef = useRef({ test: new Map<string, number>(), fetch: new Map<string, number>() })
+  const nextCardKeyRef = useRef(0)
+  const providersRef = useRef(providers)
+  const credentialsRef = useRef(credentials)
+  providersRef.current = providers
+  credentialsRef.current = credentials
+
+  const cardKeyAt = (index: number): string => {
+    const existing = cardKeysRef.current[index]
+    if (existing) return existing
+    const key = `custom-provider-${nextCardKeyRef.current++}`
+    cardKeysRef.current[index] = key
+    return key
+  }
+
+  // The parent normally changes providers through update/delete below. Trimming here also
+  // protects against an external removal, preventing a later same-id card from reusing state.
+  if (cardKeysRef.current.length > providers.length) cardKeysRef.current.length = providers.length
+
+  const invalidate = (cardKey: string): void => {
+    for (const versions of Object.values(requestVersionsRef.current)) {
+      versions.set(cardKey, (versions.get(cardKey) ?? 0) + 1)
+    }
+    loadingVersionsRef.current.test.delete(cardKey)
+    loadingVersionsRef.current.fetch.delete(cardKey)
+    setTestingId(current => current === cardKey ? null : current)
+    setFetchingId(current => current === cardKey ? null : current)
+  }
+
+  const beginRequest = (kind: 'test' | 'fetch', cardKey: string): number => {
+    const versions = requestVersionsRef.current[kind]
+    const version = (versions.get(cardKey) ?? 0) + 1
+    versions.set(cardKey, version)
+    return version
+  }
+
+  const isCurrentRequest = (kind: 'test' | 'fetch', cardKey: string, version: number): boolean => {
+    if (requestVersionsRef.current[kind].get(cardKey) !== version) return false
+    const index = cardKeysRef.current.indexOf(cardKey)
+    return index >= 0 && providersRef.current[index] !== undefined
+  }
+
+  const forgetResult = (cardKey: string): void => {
+    setTestResults(current => {
+      if (current[cardKey] === undefined) return current
+      const next = { ...current }
+      delete next[cardKey]
+      return next
+    })
+    setCatalogResults(current => {
+      if (current[cardKey] === undefined) return current
+      const next = { ...current }
+      delete next[cardKey]
+      return next
+    })
+  }
+
+  const handleTest = async (provider: CustomModelProvider, index: number) => {
     if (!onTestConnectivity) return
-    setTestingId(provider.id)
+    const cardKey = cardKeyAt(index)
+    const version = beginRequest('test', cardKey)
+    const snapshot = { id: provider.id, api: provider.api, baseUrl: provider.baseUrl, draftKey: credentials[provider.id] }
+    setTestingId(cardKey)
+    loadingVersionsRef.current.test.set(cardKey, version)
     try {
-      const res = await onTestConnectivity(provider, credentials[provider.id])
-      setTestResults(current => ({ ...current, [provider.id]: res }))
+      const res = await onTestConnectivity(provider, snapshot.draftKey)
+      if (!isCurrentRequest('test', cardKey, version)) return
+      const currentIndex = cardKeysRef.current.indexOf(cardKey)
+      const currentProvider = currentIndex >= 0 ? providersRef.current[currentIndex] : undefined
+      if (!currentProvider || currentProvider.id !== snapshot.id || currentProvider.api !== snapshot.api || currentProvider.baseUrl !== snapshot.baseUrl || credentialsRef.current[currentProvider.id] !== snapshot.draftKey) return
+      setTestResults(current => ({ ...current, [cardKey]: res }))
     } finally {
-      setTestingId(null)
+      if (loadingVersionsRef.current.test.get(cardKey) === version) {
+        loadingVersionsRef.current.test.delete(cardKey)
+        setTestingId(current => current === cardKey ? null : current)
+      }
     }
   }
 
@@ -59,46 +132,44 @@ export function CustomProviders({
    * 不经过 [update]：那个函数会顺手丢掉「测试连接」的结果，而获取模型不改变端点与密钥，
    * 上一次连接成功的结论依然成立。
    */
-  const handleFetch = async (provider: CustomModelProvider) => {
+  const handleFetch = async (provider: CustomModelProvider, index: number) => {
     if (!onFetchModels) return
-    setFetchingId(provider.id)
+    const cardKey = cardKeyAt(index)
+    const version = beginRequest('fetch', cardKey)
+    const snapshot = { id: provider.id, api: provider.api, baseUrl: provider.baseUrl, draftKey: credentials[provider.id] }
+    setFetchingId(cardKey)
+    loadingVersionsRef.current.fetch.set(cardKey, version)
     try {
-      const result = await onFetchModels(provider, credentials[provider.id])
-      setCatalogResults(current => ({ ...current, [provider.id]: result }))
+      const result = await onFetchModels(provider, snapshot.draftKey)
+      if (!isCurrentRequest('fetch', cardKey, version)) return
+      const currentIndex = cardKeysRef.current.indexOf(cardKey)
+      const currentProvider = currentIndex >= 0 ? providersRef.current[currentIndex] : undefined
+      if (!currentProvider || currentProvider.id !== snapshot.id || currentProvider.api !== snapshot.api || currentProvider.baseUrl !== snapshot.baseUrl || credentialsRef.current[currentProvider.id] !== snapshot.draftKey) return
+      setCatalogResults(current => ({ ...current, [cardKey]: result }))
       if (result.ok && result.models.length > 0) {
         const updateModelsFromLatest = (current: CustomModelProvider[]): CustomModelProvider[] => {
-          const index = current.findIndex(item => item.id === provider.id)
-          if (index < 0) return current
-          const latest = current[index]
+          const latestIndex = cardKeysRef.current.indexOf(cardKey)
+          if (latestIndex < 0 || !current[latestIndex]) return current
+          const latest = current[latestIndex]
           const models = mergeCatalogModels(latest.models, result.models)
-          return current.map((item, i) => i === index ? { ...item, models } : item)
+          return current.map((item, i) => i === latestIndex ? { ...item, models } : item)
         }
         if (onUpdate) onUpdate(updateModelsFromLatest)
-        else onChange(updateModelsFromLatest(providers))
+        else onChange(updateModelsFromLatest(providersRef.current))
       }
     } finally {
-      setFetchingId(null)
+      if (loadingVersionsRef.current.fetch.get(cardKey) === version) {
+        loadingVersionsRef.current.fetch.delete(cardKey)
+        setFetchingId(current => current === cardKey ? null : current)
+      }
     }
   }
 
-  /**
-   * 丢掉某家供应商的测试结果。
-   *
-   * 结果只对「当时那一份 Base URL + 密钥」成立：用户改完字段继续往上打字时，
-   * 上一次的 401 还红在下面，看起来就像新填的内容也报错了。
-   */
-  const forgetResult = (id: string): void => {
-    setTestResults(current => {
-      if (current[id] === undefined) return current
-      const next = { ...current }
-      delete next[id]
-      return next
-    })
-  }
-
   const update = (index: number, changes: Partial<CustomModelProvider>): void => {
+    const cardKey = cardKeyAt(index)
+    invalidate(cardKey)
+    forgetResult(cardKey)
     onChange(providers.map((provider, i) => i === index ? { ...provider, ...changes } : provider))
-    forgetResult(providers[index].id)
   }
 
   /** 只改模型表：不动「测试连接」的结论（端点与密钥都没变）。 */
@@ -107,10 +178,15 @@ export function CustomProviders({
   }
 
   return <div className="custom-providers">
-    {providers.map((provider, index) => <div className="custom-provider" key={provider.id}>
+    {providers.map((provider, index) => {
+      const cardKey = cardKeyAt(index)
+      return <div className="custom-provider" key={cardKey}>
       <div className="custom-provider-heading">
         <h3>{provider.name || t('自定义供应商')}</h3>
         <button type="button" className="icon-button" title={t('删除供应商')} aria-label={t('删除供应商')} onClick={() => {
+          invalidate(cardKey)
+          cardKeysRef.current.splice(index, 1)
+          forgetResult(cardKey)
           onChange(providers.filter((_, i) => i !== index))
           onCredentials(Object.fromEntries(Object.entries(credentials).filter(([id]) => id !== provider.id)))
           onClear(cleared.filter(id => id !== provider.id))
@@ -158,18 +234,19 @@ export function CustomProviders({
           else delete next[provider.id]
           onCredentials(next)
           onClear(cleared.filter(id => id !== provider.id))
-          forgetResult(provider.id)
+          invalidate(cardKey)
+          forgetResult(cardKey)
         }} /></label>
       <div className="credential-actions">
         {onTestConnectivity && (
           <button
             type="button"
             className="button button-secondary compact-button"
-            disabled={testingId === provider.id}
-            onClick={() => { void handleTest(provider) }}
+            disabled={testingId === cardKey}
+            onClick={() => { void handleTest(provider, index) }}
           >
-            {testingId === provider.id ? <Loader2 className="spin" size={16} /> : <Wifi size={16} />}
-            {testingId === provider.id ? t('正在测试…') : t('测试连接')}
+            {testingId === cardKey ? <Loader2 className="spin" size={16} /> : <Wifi size={16} />}
+            {testingId === cardKey ? t('正在测试…') : t('测试连接')}
           </button>
         )}
         {onFetchModels && (
@@ -177,31 +254,32 @@ export function CustomProviders({
             type="button"
             className="button button-secondary compact-button"
             disabled={fetchingId !== null}
-            onClick={() => { void handleFetch(provider) }}
+            onClick={() => { void handleFetch(provider, index) }}
           >
-            {fetchingId === provider.id ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-            {fetchingId === provider.id ? t('正在获取…') : t('获取模型')}
+            {fetchingId === cardKey ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+            {fetchingId === cardKey ? t('正在获取…') : t('获取模型')}
           </button>
         )}
         {configured.includes(provider.id) && <button type="button" className="button button-danger-quiet compact-button" onClick={() => {
           onCredentials(Object.fromEntries(Object.entries(credentials).filter(([id]) => id !== provider.id)))
           onClear(cleared.includes(provider.id) ? cleared.filter(id => id !== provider.id) : [...cleared, provider.id])
-          forgetResult(provider.id)
+          invalidate(cardKey)
+          forgetResult(cardKey)
         }}>{cleared.includes(provider.id) ? <RotateCcw size={16} /> : <Trash2 size={16} />}{cleared.includes(provider.id) ? t('撤销清除密钥') : t('清除密钥')}</button>}
       </div>
-      {testResults[provider.id] && (
-        <div className={`connectivity-result ${testResults[provider.id].ok ? 'success' : 'error'}`}>
-          {testResults[provider.id].message}
+      {testResults[cardKey] && (
+        <div className={`connectivity-result ${testResults[cardKey].ok ? 'success' : 'error'}`}>
+          {testResults[cardKey].message}
         </div>
       )}
-      {catalogResults[provider.id] && (
-        <div className={`connectivity-result ${catalogResults[provider.id].ok ? 'success' : 'error'}`}>
-          {catalogResults[provider.id].message}
+      {catalogResults[cardKey] && (
+        <div className={`connectivity-result ${catalogResults[cardKey].ok ? 'success' : 'error'}`}>
+          {catalogResults[cardKey].message}
         </div>
       )}
-      {catalogResults[provider.id]?.ok && catalogResults[provider.id].models.length > 1 && (
+      {catalogResults[cardKey]?.ok && catalogResults[cardKey].models.length > 1 && (
         <div className="model-catalog-list" role="list" aria-label={t('上游模型')}>
-          {catalogResults[provider.id].models.map(entry => <button
+          {catalogResults[cardKey].models.map(entry => <button
             key={entry.id}
             type="button"
             role="listitem"
@@ -229,10 +307,11 @@ export function CustomProviders({
         <button type="button" className="icon-button" title={t('删除模型')} aria-label={t('删除模型')} disabled={provider.models.length === 1} onClick={() => update(index, { models: provider.models.filter((_, i) => i !== modelIndex) })}><Trash2 size={16} /></button>
       </fieldset>)}
       <button type="button" className="button button-secondary compact-button" disabled={provider.models.length >= MAX_CUSTOM_MODELS} onClick={() => update(index, { models: [...provider.models, { id: '', name: '', contextWindow: 131072, maxTokens: 8192 }] })}><Plus size={16} />{t('添加模型')}</button>
-    </div>)}
+    </div>})}
     <button type="button" className="button button-secondary" disabled={providers.length >= MAX_CUSTOM_PROVIDERS} onClick={() => {
       let number = 1
       while (providers.some(provider => provider.id === `custom-${number}`)) number++
+      cardKeysRef.current.push(`custom-provider-${nextCardKeyRef.current++}`)
       onChange([...providers, { id: `custom-${number}`, name: '', api: 'openai-completions', baseUrl: '', models: [{ id: '', name: '', contextWindow: 131072, maxTokens: 8192 }] }])
     }}><Plus size={18} />{t('添加自定义供应商')}</button>
   </div>
