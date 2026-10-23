@@ -1668,6 +1668,10 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   /** 正在拉取上游模型列表的供应商；同一时刻只允许一个请求在飞。 */
   const [loadingCatalog, setLoadingCatalog] = useState<string | null>(null)
   const [catalogResults, setCatalogResults] = useState<Record<string, ModelCatalogResult>>({})
+  /** 供应商请求代次：输入发生变化后，迟到的旧响应不能回写当前草稿。 */
+  const connectivityRequestGeneration = useRef<Record<string, number>>({})
+  const catalogRequestGeneration = useRef<Record<string, number>>({})
+  const credentialDraftsRef = useRef<Record<string, string>>({})
   /** 默认模型输入框里的原始文本（可能还没成为合法 id，因此不一定已写进草稿）。 */
   const [modelInputs, setModelInputs] = useState<Record<string, string>>({})
   /** 密钥「立即保存」的反馈：只影响模型与密钥页那颗按钮旁边的状态。 */
@@ -2065,6 +2069,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   const overlayBallDraft = draft.overlayBallEnabled
   const selectedProvider = draft.selectedProvider
   const credentialDrafts = draft.credentials
+  credentialDraftsRef.current = credentialDrafts
   const clearedProviders = draft.clearedProviders
   const customCredentials = draft.customCredentials
   const clearedCustomProviders = draft.clearedCustomProviders
@@ -2181,6 +2186,10 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    * 下面，看起来就像新填的内容也报错了 —— 输一个字清一次。
    */
   const forgetConnectivity = (providerId: string): void => {
+    // 使该输入变化前发出的连接请求失效；它们的响应可能仍会迟到。
+    connectivityRequestGeneration.current[providerId] = (connectivityRequestGeneration.current[providerId] ?? 0) + 1
+    // 输入变化后允许用户立即重试；旧请求的 finally 不会清掉新请求的在途标记。
+    setTestingProvider(current => current === providerId ? null : current)
     setConnectivityResults(current => {
       if (current[providerId] === undefined) return current
       const next = { ...current }
@@ -2189,25 +2198,37 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     })
   }
 
+  const invalidateCatalog = (providerId: string): void => {
+    catalogRequestGeneration.current[providerId] = (catalogRequestGeneration.current[providerId] ?? 0) + 1
+    setLoadingCatalog(current => current === providerId ? null : current)
+  }
+
   const handleTestConnectivity = async (providerId: string) => {
     triggerHaptic('light')
+    const requestGeneration = (connectivityRequestGeneration.current[providerId] ?? 0) + 1
+    connectivityRequestGeneration.current[providerId] = requestGeneration
+    const apiKey = credentialDrafts[providerId as ModelProviderId]
     setTestingProvider(providerId)
     try {
       const result = await runtimeBridge.testModelConnectivity({
         providerId,
-        apiKey: credentialDrafts[providerId as ModelProviderId],
+        apiKey,
       })
+      if (requestGeneration !== connectivityRequestGeneration.current[providerId]
+        || credentialDraftsRef.current[providerId] !== apiKey) return
       setConnectivityResults(current => ({ ...current, [providerId]: result }))
       if (result.ok) triggerHaptic('success')
       else triggerHaptic('warning')
     } catch (error) {
+      if (requestGeneration !== connectivityRequestGeneration.current[providerId]
+        || credentialDraftsRef.current[providerId] !== apiKey) return
       setConnectivityResults(current => ({
         ...current,
         [providerId]: { ok: false, status: 0, latencyMs: 0, message: errorMessage(error) },
       }))
       triggerHaptic('error')
     } finally {
-      setTestingProvider(null)
+      if (requestGeneration === connectivityRequestGeneration.current[providerId]) setTestingProvider(null)
     }
   }
 
@@ -2278,6 +2299,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     // 模型换了，上一份「可用模型」列表仍然有效（它描述的是上游，不是这个输入框），
     // 因此这里只清测试结果，不清列表。
     forgetConnectivity(providerId)
+    // 用户正在改默认模型时，迟到的目录响应不能把它自动改回第一项。
+    invalidateCatalog(providerId)
   }
 
   /**
@@ -2288,12 +2311,17 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    */
   const handleFetchModels = async (providerId: ModelProviderId): Promise<void> => {
     triggerHaptic('light')
+    const requestGeneration = (catalogRequestGeneration.current[providerId] ?? 0) + 1
+    catalogRequestGeneration.current[providerId] = requestGeneration
+    const apiKey = credentialDrafts[providerId]
     setLoadingCatalog(providerId)
     try {
       const result = await runtimeBridge.listModelCatalog({
         providerId,
-        apiKey: credentialDrafts[providerId],
+        apiKey,
       })
+      if (requestGeneration !== catalogRequestGeneration.current[providerId]
+        || credentialDraftsRef.current[providerId] !== apiKey) return
       setCatalogResults(current => ({ ...current, [providerId]: result }))
       if (result.ok && result.models.length > 0) {
         const first = firstCatalogModelId(result.models)
@@ -2304,13 +2332,15 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         triggerHaptic('warning')
       }
     } catch (error) {
+      if (requestGeneration !== catalogRequestGeneration.current[providerId]
+        || credentialDraftsRef.current[providerId] !== apiKey) return
       setCatalogResults(current => ({
         ...current,
         [providerId]: { ok: false, status: 0, latencyMs: 0, message: errorMessage(error), models: [] },
       }))
       triggerHaptic('error')
     } finally {
-      setLoadingCatalog(null)
+      if (requestGeneration === catalogRequestGeneration.current[providerId]) setLoadingCatalog(null)
     }
   }
 
@@ -2425,6 +2455,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 if (value !== '') setClearedProviders(current => current.filter(provider => provider !== selectedProvider))
                 // 改了密钥，上一次的测试结果就不再对应当前这份输入。
                 forgetConnectivity(selectedProvider)
+                invalidateCatalog(selectedProvider)
               }}
             />
           </label>
@@ -2469,6 +2500,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                     ? current.filter(provider => provider !== selectedProvider)
                     : [...current, selectedProvider])
                   forgetConnectivity(selectedProvider)
+                  invalidateCatalog(selectedProvider)
                 }}
               >
                 {clearedProviders.includes(selectedProvider) ? <RotateCcw size={16} /> : <Trash2 size={16} />}
