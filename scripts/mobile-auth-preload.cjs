@@ -13,8 +13,6 @@ const USERNAME = 'dsh-mobile'
 const REALM = 'DeepSeek Harness Mobile'
 const TOKEN_COOKIE = 'dsh_mobile_token'
 const BROWSER_COOKIE = 'dsh_browser_session'
-const BROWSER_BOOTSTRAP_PATH = '/__dsh/browser'
-const BROWSER_CLAIM_PATH = '/__dsh/browser/claim'
 const SESSION_PUBLISHER = '/opt/python/bin/python3'
 const SESSION_PUBLISHER_SCRIPT = '/usr/local/lib/dsh-mobile-session-publish.py'
 const SESSION_TARGET_PATTERN = /^\/root\/\.dsh\/sessions\/[^/]{1,255}\/[^/]{1,255}\/session(?:\.v[0-9]+)?\.jsonl(?:\.zstd)?$/
@@ -30,28 +28,26 @@ const LINK_FALLBACK_CODES = new Set(['EACCES', 'EPERM', 'ENOTSUP', 'EOPNOTSUPP',
 const PUBLISH_ERRORS = { 1: 'EPERM', 2: 'ENOENT', 5: 'EIO', 13: 'EACCES', 17: 'EEXIST', 18: 'EXDEV',
   20: 'ENOTDIR', 22: 'EINVAL', 27: 'EFBIG', 28: 'ENOSPC', 30: 'EROFS', 38: 'ENOSYS', 40: 'ELOOP', 95: 'ENOTSUP' }
 const token = process.env.DSH_MOBILE_AUTH_TOKEN
-const browserClaimToken = process.env.DSH_MOBILE_BROWSER_CLAIM_TOKEN
+const browserToken = process.env.DSH_MOBILE_BROWSER_TOKEN
 
 if (typeof token !== 'string' || !TOKEN_PATTERN.test(token)) {
   throw new Error('mobile Harness authentication is unavailable')
 }
 const expectedToken = Buffer.from(token, 'ascii')
-const expectedBrowserClaimToken = typeof browserClaimToken === 'string' && TOKEN_PATTERN.test(browserClaimToken)
-  ? Buffer.from(browserClaimToken, 'ascii')
-  : null
 /**
- * 一次运行周期里允许兑换几次接管令牌。
+ * 外置浏览器用的本机凭据。
  *
- * 不是随便放开的：每次兑换都会把同一枚访客令牌种进浏览器 Cookie 罐，次数越多暴露面越大。
- * 但也确实需要重试——用户可能关掉浏览器、换一个浏览器、或者第一次打开失败，所以给 3 次，
- * 而不是「一次失败就只能重启运行时」。
+ * 与 Basic 密码**分开**：Basic 密码是 WebView 侧的，外置浏览器只需要这一枚。两者都是
+ * 每次启动重新生成、随进程消失；分成两枚只是为了不把 Basic 密码写进浏览器地址栏。
+ *
+ * 这里不再加"一次性/次数/分钟数"之类的限制：回环地址本身就决定了这条 URL 出了设备
+ * 就作废，能利用它的只有同机应用，而门已经挡住了没有令牌的同机应用。外置浏览器被当作
+ * 完整的 DSH 客户端使用，风险和桌面端打开 http://127.0.0.1 是同一量级，由用户自行
+ * 判断他点开的链接与网站。
  */
-const BROWSER_CLAIM_LIMIT = 3
-/** 接管后的浏览器会话有效期；过期后需要回到应用里重新点一次诊断入口。 */
-const BROWSER_SESSION_MS = 10 * 60_000
-let browserClaims = 0
-let browserClaimExpiresAt = 0
-let browserSessionExpiresAt = 0
+const expectedBrowserToken = typeof browserToken === 'string' && TOKEN_PATTERN.test(browserToken)
+  ? Buffer.from(browserToken, 'ascii')
+  : null
 const expected = Buffer.from(
   `Basic ${Buffer.from(`${USERNAME}:${token}`, 'ascii').toString('base64')}`,
   'ascii',
@@ -114,7 +110,7 @@ fsp.link = async (source, target) => {
 syncBuiltinESMExports()
 
 delete process.env.DSH_MOBILE_AUTH_TOKEN
-delete process.env.DSH_MOBILE_BROWSER_CLAIM_TOKEN
+delete process.env.DSH_MOBILE_BROWSER_TOKEN
 delete process.env.NODE_OPTIONS
 
 function isAuthorized(request) {
@@ -125,7 +121,7 @@ function isAuthorized(request) {
 }
 
 function hasValidBrowserCookie(request) {
-  if (browserSessionExpiresAt <= Date.now()) return false
+  if (expectedBrowserToken === null) return false
   const header = request.headers.cookie
   if (typeof header !== 'string') return false
   for (const part of header.split(';')) {
@@ -134,21 +130,56 @@ function hasValidBrowserCookie(request) {
     const value = part.slice(index + 1).trim()
     if (!TOKEN_PATTERN.test(value)) continue
     const actual = Buffer.from(value, 'ascii')
-    if (actual.length === expectedToken.length && crypto.timingSafeEqual(actual, expectedToken)) return true
+    if (actual.length === expectedBrowserToken.length &&
+      crypto.timingSafeEqual(actual, expectedBrowserToken)) return true
   }
   return false
 }
 
-function browserBootstrap(response) {
-  const body = `<!doctype html><meta charset="utf-8"><title>DeepSeek Harness</title><script>
-const token = location.hash.startsWith('#token=') ? location.hash.slice(7) : '';
-history.replaceState(null, '', location.pathname + location.search);
-if (!/^[A-Za-z0-9_-]{43}$/.test(token)) { document.body.textContent = '外部浏览器接管令牌无效或已过期'; }
-else fetch('/__dsh/browser/claim', { method: 'POST', headers: { 'content-type': 'text/plain' }, body: token, credentials: 'same-origin' })
-  .then(result => { if (!result.ok) throw new Error('claim failed'); location.replace('/'); })
-  .catch(() => { document.body.textContent = '外部浏览器接管失败，请返回应用重试'; });
-</script>`
-  response.writeHead(200, {
+/**
+ * 外置浏览器交接：查询串里的令牌 → HttpOnly Cookie → 302 去掉令牌。
+ *
+ * 为什么用查询串：片段不会发给服务器，服务器就没法直接兑换。查询串 + 302 只多一次往返，
+ * 重定向会替换浏览器历史里的当前条目，所以历史里最终留下的是 `/`，令牌不落历史。
+ *
+ * 只认根路径与 `/__dsh/browser`：避免把 dsh 自己带 `token=` 的接口请求误当成交接。
+ */
+function browserHandoff(request, response) {
+  if (request.method !== 'GET' || typeof request.url !== 'string') return false
+  const queryStart = request.url.indexOf('?')
+  if (queryStart < 0) return false
+  const pathname = request.url.slice(0, queryStart)
+  if (pathname !== '/' && pathname !== '/__dsh/browser') return false
+  const params = new URLSearchParams(request.url.slice(queryStart + 1))
+  if (!params.has('token')) return false
+  const supplied = params.get('token') ?? ''
+  const actual = Buffer.from(supplied, 'ascii')
+  const accepted = expectedBrowserToken !== null && actual.length === expectedBrowserToken.length &&
+    crypto.timingSafeEqual(actual, expectedBrowserToken)
+  if (!accepted) {
+    browserNotice(response, 403, '令牌无效，或这次运行已经结束。请回到应用里重新打开。')
+    return true
+  }
+  params.delete('token')
+  const rest = params.toString()
+  response.writeHead(302, {
+    'Cache-Control': 'no-store',
+    Location: rest === '' ? '/' : `/?${rest}`,
+    /*
+     * 与运行周期同寿：运行环境一停，令牌换了，这枚 Cookie 自然失效。
+     * Max-Age 只用来让浏览器别把它当会话 Cookie 丢掉，真正决定有效性的还是令牌本身。
+     */
+    'Set-Cookie': `${BROWSER_COOKIE}=${browserToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
+    'Content-Length': '0',
+  })
+  response.end()
+  return true
+}
+
+/** 浏览器带了一枚失效的 Cookie：给一段可读提示，不去弹没人能填的 Basic 框。 */
+function browserNotice(response, status, message) {
+  const body = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>DeepSeek Harness</title><p style="font:16px/1.6 system-ui,sans-serif;padding:24px;max-width:32em">${message}</p>`
+  response.writeHead(status, {
     'Cache-Control': 'no-store',
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Length': Buffer.byteLength(body),
@@ -156,33 +187,11 @@ else fetch('/__dsh/browser/claim', { method: 'POST', headers: { 'content-type': 
   response.end(body)
 }
 
-function browserClaim(request, response, chunks) {
-  if (request.method !== 'POST' || request.url !== BROWSER_CLAIM_PATH) return false
-  if (!expectedBrowserClaimToken || browserClaims >= BROWSER_CLAIM_LIMIT || browserClaimExpiresAt <= Date.now()) {
-    response.writeHead(410, { 'Cache-Control': 'no-store', 'Content-Length': '0' })
-    response.end()
-    return true
-  }
-  const supplied = Buffer.concat(chunks).toString('ascii')
-  const actual = Buffer.from(supplied, 'ascii')
-  if (actual.length !== expectedBrowserClaimToken.length || !crypto.timingSafeEqual(actual, expectedBrowserClaimToken)) {
-    response.writeHead(401, { 'Cache-Control': 'no-store', 'Content-Length': '0' })
-    response.end()
-    return true
-  }
-  browserClaims += 1
-  browserSessionExpiresAt = Date.now() + BROWSER_SESSION_MS
-  response.writeHead(204, {
-    'Cache-Control': 'no-store',
-    /*
-     * 只种浏览器专用那一枚。Basic 同款令牌（TOKEN_COOKIE）留给 WebView：浏览器侧不需要它，
-     * 多授一枚只会扩大暴露面——两枚令牌本来就是同一个值。
-     */
-    'Set-Cookie': `${BROWSER_COOKIE}=${token}; Path=/; Max-Age=${BROWSER_SESSION_MS / 1000}; HttpOnly; SameSite=Strict`,
-    'Content-Length': '0',
-  })
-  response.end()
-  return true
+/** 请求里是否带着浏览器会话 Cookie（不管它是否仍然有效）。 */
+function hasBrowserCookie(request) {
+  const header = request.headers.cookie
+  if (typeof header !== 'string') return false
+  return header.split(';').some(part => part.slice(0, part.indexOf('=')).trim() === BROWSER_COOKIE)
 }
 
 // DeepSeek account login completes in the Harness server itself.  The external
@@ -205,14 +214,15 @@ function hasValidCookieToken(request) {
     const index = part.indexOf('=')
     if (index <= 0) continue
     const name = part.slice(0, index).trim()
-    if (name !== TOKEN_COOKIE && name !== BROWSER_COOKIE) continue
-    if (name === BROWSER_COOKIE && browserSessionExpiresAt <= Date.now()) continue
+    // 两枚 Cookie 各认各自的令牌：WebView 用 Basic 同款那一枚，外置浏览器用浏览器专用那一枚。
+    const expectedValue = name === TOKEN_COOKIE
+      ? expectedToken
+      : name === BROWSER_COOKIE ? expectedBrowserToken : null
+    if (expectedValue === null) continue
     const value = part.slice(index + 1).trim()
     if (!TOKEN_PATTERN.test(value)) continue
     const actual = Buffer.from(value, 'ascii')
-    if (actual.length === expectedToken.length && crypto.timingSafeEqual(actual, expectedToken)) {
-      return true
-    }
+    if (actual.length === expectedValue.length && crypto.timingSafeEqual(actual, expectedValue)) return true
   }
   return false
 }
@@ -240,26 +250,13 @@ function rejectUpgrade(socket) {
 const originalEmit = http.Server.prototype.emit
 http.Server.prototype.emit = function authenticatedEmit(event, ...args) {
   const request = args[0]
-  if (event === 'request' && request?.method === 'GET' && request.url === BROWSER_BOOTSTRAP_PATH) {
-    browserClaimExpiresAt = Date.now() + 60_000
-    browserBootstrap(args[1])
-    return true
-  }
-  if (event === 'request' && request?.method === 'POST' && request.url === BROWSER_CLAIM_PATH) {
-    const response = args[1]
-    const chunks = []
-    let bytes = 0
-    let oversized = false
-    request.on('data', chunk => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-      bytes += buffer.length
-      if (bytes > expectedToken.length) oversized = true
-      if (bytes <= expectedToken.length) chunks.push(buffer)
-    })
-    request.on('end', () => browserClaim(request, response, oversized ? [Buffer.from('oversized', 'ascii')] : chunks))
-    return true
-  }
+  if (event === 'request' && browserHandoff(request, args[1])) return true
   if (event === 'request' && !isAuthorized(request) && !hasValidBrowserCookie(request) && !isOAuthCallback(request)) {
+    // 带着浏览器 Cookie 却不是当前这枚（运行环境重启过）：给可读提示，而不是 Basic 弹窗。
+    if (typeof request.headers.authorization !== 'string' && hasBrowserCookie(request)) {
+      browserNotice(args[1], 403, '这次浏览器会话已经失效（运行环境重启过）。请回到应用里重新打开。')
+      return true
+    }
     rejectRequest(args[1])
     return true
   }

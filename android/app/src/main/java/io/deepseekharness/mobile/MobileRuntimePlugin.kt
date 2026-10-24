@@ -1229,35 +1229,31 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
-     * 只用于兼容性诊断：通过一次性片段令牌把当前 Harness 交给系统浏览器。
-     * 不把 Basic 用户名、密码或长期令牌放进 URL；接管页会把片段令牌兑换成 HttpOnly Cookie。
+     * 把当前 Harness 交给外置浏览器（完整能力，不是只读预览）。
+     *
+     * URL 里只带**浏览器专用**的那枚令牌（不是 Basic 密码）。预载脚本把它换成 HttpOnly
+     * Cookie 后 302 去掉令牌，历史里只留下 `/`。回环地址让它出了设备即作废；没有令牌的
+     * 同机请求仍然进不来。浏览器里点开的链接与网站由用户自行判断。
      */
     @PluginMethod
     fun openHarnessExternal(call: PluginCall) {
         execute(call) {
             val access = controller.openHarnessAccess()
-            val claim = access.browserClaimToken
-                ?: throw RuntimeFailure("HARNESS_BROWSER_HANDOFF_UNAVAILABLE", "当前运行周期不支持外部浏览器接管")
-            val uri = io.deepseekharness.mobile.runtime.HarnessWebAuth.browserClaimUrl(access.url, claim)
-                ?: throw RuntimeFailure("HARNESS_BROWSER_HANDOFF_INVALID", "外部浏览器接管地址无效")
+            val browserToken = access.browserToken
+                ?: throw RuntimeFailure("HARNESS_BROWSER_HANDOFF_UNAVAILABLE", "当前运行周期不支持外置浏览器打开")
+            val uri = io.deepseekharness.mobile.runtime.HarnessWebAuth.browserLaunchUrl(access.url, browserToken)
+                ?: throw RuntimeFailure("HARNESS_BROWSER_HANDOFF_INVALID", "外置浏览器入口地址无效")
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri.toASCIIString()))
                 .addCategory(Intent.CATEGORY_BROWSABLE)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            /*
-             * 只交给受信任的浏览器：接管 URL 的片段里有一次性令牌，任何能声明
-             * VIEW+BROWSABLE 的应用都能收到它，因此先枚举可处理包、再按白名单收敛，
-             * 最后用 setPackage 显式指定。一个受信任的都没有就报错，不降级给任意应用。
-             */
-            @Suppress("DEPRECATION")
-            val candidates = context.packageManager.queryIntentActivities(intent, 0)
-                .mapNotNull { it.activityInfo?.packageName }
-            val browserPackage = HarnessBrowserTarget.pick(candidates)
-                ?: throw RuntimeFailure("HARNESS_BROWSER_UNAVAILABLE", "没有受信任的外部浏览器（可安装 Chrome 后再试）")
-            context.startActivity(Intent(intent).setPackage(browserPackage))
+            try {
+                context.startActivity(intent)
+            } catch (_: android.content.ActivityNotFoundException) {
+                throw RuntimeFailure("HARNESS_BROWSER_UNAVAILABLE", "没有可用的浏览器")
+            }
             null
         }
     }
-
     @PluginMethod
     fun testModelConnectivity(call: PluginCall) {
         val providerId = call.getString("providerId")?.trim() ?: run {

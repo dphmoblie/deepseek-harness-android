@@ -68,11 +68,13 @@ class HarnessWebAuthTest {
     }
 
     @Test
-    fun browserClaimUsesFragmentWithoutPuttingTheClaimTokenInTheQuery() {
+    fun browserLaunchUrlCarriesTheBrowserTokenInTheQueryAndNoFragment() {
         val browserToken = "B".repeat(43)
-        val claim = HarnessWebAuth.browserClaimUrl(entry, browserToken)
-        assertEquals("http://127.0.0.1:3080/__dsh/browser#token=$browserToken", claim?.toASCIIString())
-        assertFalse(claim?.rawQuery?.contains(browserToken) == true)
+        val launch = HarnessWebAuth.browserLaunchUrl(entry, browserToken)
+        assertEquals("http://127.0.0.1:3080/?token=$browserToken", launch?.toASCIIString())
+        assertEquals(null, launch?.rawFragment)
+        // 非法令牌一律不构造 URL，避免把半截凭据交出去。
+        assertEquals(null, HarnessWebAuth.browserLaunchUrl(entry, "too-short"))
     }
 
     private fun HarnessWebAuthCapture.feed(value: String) {

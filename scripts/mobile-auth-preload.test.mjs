@@ -9,10 +9,12 @@ import { after, before, describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 const TOKEN = 'A'.repeat(43)
+const BROWSER_TOKEN = 'B'.repeat(43)
 const USERNAME = 'dsh-mobile'
 const PRELOAD = fileURLToPath(new URL('./mobile-auth-preload.cjs', import.meta.url))
 const CHILD_SOURCE = `
-  if (process.env.DSH_MOBILE_AUTH_TOKEN !== undefined || process.env.NODE_OPTIONS !== undefined) {
+  if (process.env.DSH_MOBILE_AUTH_TOKEN !== undefined || process.env.DSH_MOBILE_BROWSER_TOKEN !== undefined ||
+    process.env.NODE_OPTIONS !== undefined) {
     throw new Error('one-time authentication environment was not cleared')
   }
   const http = require('node:http')
@@ -48,20 +50,6 @@ function request(port, authorization, requestPath = '/', method = 'GET', cookie)
   })
 }
 
-function post(port, requestPath, body) {
-  return new Promise((resolve, reject) => {
-    const outgoing = http.request({
-      host: '127.0.0.1', port, path: requestPath, method: 'POST',
-      headers: { 'Content-Type': 'text/plain', 'Content-Length': Buffer.byteLength(body) },
-    }, response => {
-      response.resume()
-      response.on('end', () => resolve({ headers: response.headers, status: response.statusCode }))
-    })
-    outgoing.on('error', reject)
-    outgoing.end(body)
-  })
-}
-
 function upgrade(port, options = {}) {
   const { authorization, cookie, requestPath = '/events' } = options
   return new Promise((resolve, reject) => {
@@ -92,7 +80,7 @@ describe('mobile Harness authentication preload', () => {
       env: {
         ...process.env,
         DSH_MOBILE_AUTH_TOKEN: TOKEN,
-        DSH_MOBILE_BROWSER_CLAIM_TOKEN: TOKEN,
+        DSH_MOBILE_BROWSER_TOKEN: BROWSER_TOKEN,
         NODE_OPTIONS: `--require=${PRELOAD}`,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -200,27 +188,31 @@ describe('mobile Harness authentication preload', () => {
     )
   })
 
-  it('redeems the claim once per browser, rejects bad bodies and stops after three uses', async () => {
-    const bootstrap = await request(port, undefined, '/__dsh/browser')
-    assert.equal(bootstrap.status, 200)
-    assert.equal(bootstrap.headers['content-type'], 'text/html; charset=utf-8')
-    // 错误长度与「前 43 位正确、后面继续拼接」都必须被拒绝。
-    assert.equal((await post(port, '/__dsh/browser/claim', 'C'.repeat(43))).status, 401)
-    assert.equal((await post(port, '/__dsh/browser/claim', `${TOKEN}extra`)).status, 401)
-    const claim = await post(port, '/__dsh/browser/claim', TOKEN)
-    assert.equal(claim.status, 204)
-    // 只种浏览器专用那一枚：Basic 同款令牌不应该也进浏览器的 Cookie 罐。
-    // Node 的 set-cookie 永远是数组；只断言这一枚，顺带钉住「没有把 Basic 令牌也种进去」。
-    assert.deepEqual(claim.headers['set-cookie'], [
-      `dsh_browser_session=${TOKEN}; Path=/; Max-Age=600; HttpOnly; SameSite=Strict`,
+  it('turns a query-string token into a browser cookie, and only that token works', async () => {
+    const handoff = await request(port, undefined, `/?token=${BROWSER_TOKEN}`)
+    assert.equal(handoff.status, 302)
+    assert.equal(handoff.headers.location, '/')
+    // 只种浏览器专用那一枚，而且不带分钟数：有效性由令牌本身（每次启动重生成）决定。
+    assert.deepEqual(handoff.headers['set-cookie'], [
+      `dsh_browser_session=${BROWSER_TOKEN}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
     ])
-    assert.equal((await request(port, undefined, '/', 'GET', `dsh_browser_session=${TOKEN}`)).status, 200)
-    // 不带 cookie 的请求照旧被挡。
-    assert.equal((await request(port, undefined, '/')).status, 401)
-    // 允许重试，但一个运行周期最多 3 次。
-    assert.equal((await post(port, '/__dsh/browser/claim', TOKEN)).status, 204)
-    assert.equal((await post(port, '/__dsh/browser/claim', TOKEN)).status, 204)
-    assert.equal((await post(port, '/__dsh/browser/claim', TOKEN)).status, 410)
+    // Cookie 拿到后 HTTP 与 WS 都放行，能力与 WebView 内一致。
+    assert.equal((await request(port, undefined, '/', 'GET', `dsh_browser_session=${BROWSER_TOKEN}`)).status, 200)
+    assert.match(
+      await upgrade(port, { cookie: `dsh_browser_session=${BROWSER_TOKEN}` }),
+      /^HTTP\/1\.1 101 Switching Protocols/,
+    )
+    // Basic 密码不能拿来交接：两者是两枚不同的令牌。
+    assert.equal((await request(port, undefined, `/?token=${TOKEN}`)).status, 403)
+    // 交接只认根路径，避免误吃 dsh 自己的 token 查询参数。
+    assert.equal((await request(port, undefined, `/api?token=${BROWSER_TOKEN}`)).status, 401)
+  })
+
+  it('tells a stale browser session to reopen instead of prompting for Basic', async () => {
+    const stale = await request(port, undefined, '/', 'GET', `dsh_browser_session=${'C'.repeat(43)}`)
+    assert.equal(stale.status, 403)
+    assert.match(stale.body, /请回到应用里重新打开/u)
+    assert.equal(stale.headers['www-authenticate'], undefined)
   })
 })
 

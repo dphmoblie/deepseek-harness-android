@@ -15,11 +15,15 @@ internal object HarnessWebAuth {
         return URI(raw)
     }
 
-    /** 构造不把启动令牌放进查询串的外部浏览器接管入口。令牌只存在 URL 片段，服务器不会收到片段。 */
-    fun browserClaimUrl(raw: String, browserToken: String): URI? {
+    /**
+     * 外置浏览器入口：令牌放查询串，由访客预载脚本兑换成 HttpOnly Cookie 后 302 去掉。
+     *
+     * 令牌是**浏览器专用**的那一枚，不是 Basic 密码；片段做不到这件事（片段不会发给服务器）。
+     */
+    fun browserLaunchUrl(raw: String, browserToken: String): URI? {
         val entry = parseLaunchUrl(raw) ?: return null
         if (!TOKEN_PATTERN.matches(browserToken)) return null
-        return URI(entry.scheme, null, entry.host, entry.port, "/__dsh/browser", null, "token=$browserToken")
+        return URI(entry.scheme, null, entry.host, entry.port, "/", "token=$browserToken", null)
     }
 
     private val TOKEN_PATTERN = Regex("[A-Za-z0-9_-]{43}")

@@ -3365,11 +3365,11 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             {t("诊断日志只包含应用内部的事件名、状态码、布尔值与计数；导出文件头另有应用版本、机型与 ROM 构建串（不含序列号、IMEI、Android ID、账号）。不含 URL、模型密钥、Harness 临时密码、设备桥令牌、终端内容或文件路径。日志保存在应用私有目录且不参与备份，到期自动删除。")}
           </p>
           <p className="field-help">
-            {t("外部浏览器接管只用于诊断：令牌放在地址片段里、每次启动最多用 3 次，浏览器会话 10 分钟后失效，届时回到应用重新点击即可。")}
+            {t("外置浏览器拿到的是与本次运行绑定的令牌，可以完整使用 Harness（不是只读预览）。运行环境停止后令牌失效；重开需要回到应用再点一次。")}
           </p>
           <div className="settings-inline-actions">
             <button className="button button-secondary" type="button" onClick={onOpenExternalHarness} disabled={busy !== null || runtime.phase !== 'running'}>
-              <ExternalLink size={18} />{t("用外部浏览器测试 Harness")}
+              <ExternalLink size={18} />{t("用外部浏览器打开 Harness")}
             </button>
             <button className="button button-secondary" type="button" onClick={onShareDiagnostic} disabled={busy !== null || diagnostic.fileCount === 0}>
               {busy === 'diagnostic-share' ? <Loader2 className="spin" size={18} /> : <Share2 size={18} />}{t("导出并分享")}</button>
@@ -4738,7 +4738,7 @@ export function App() {
   const openExternalHarness = useCallback(() => {
     void run('harness-external-browser', async () => {
       await runtimeBridge.openHarnessExternal()
-    }, t("已交给外部浏览器测试 Harness"))
+    }, t("已交给外置浏览器打开"))
   }, [run])
 
   const clearDiagnostic = useCallback(() => {

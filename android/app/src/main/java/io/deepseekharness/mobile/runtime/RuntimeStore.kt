@@ -472,13 +472,13 @@ class RuntimeStore(context: Context) {
     @Synchronized
     internal fun prepareRuntimeSecrets(
         harnessAuthToken: String?,
-        browserClaimToken: String?,
+        browserToken: String?,
         deviceBridgeAccess: DeviceBridgeAccess?,
     ): RuntimeSecretDelivery {
         if (harnessAuthToken != null && !RuntimeSecretPolicy.TOKEN_PATTERN.matches(harnessAuthToken)) {
             throw RuntimeFailure("HARNESS_AUTH_INVALID", "Harness 临时凭据无效")
         }
-        if (browserClaimToken != null && !RuntimeSecretPolicy.TOKEN_PATTERN.matches(browserClaimToken)) {
+        if (browserToken != null && !RuntimeSecretPolicy.TOKEN_PATTERN.matches(browserToken)) {
             throw RuntimeFailure("HARNESS_BROWSER_HANDOFF_INVALID", "外部浏览器接管凭据无效")
         }
         deviceBridgeAccess?.let { access ->
@@ -488,7 +488,7 @@ class RuntimeStore(context: Context) {
         }
         val ephemeralSecrets = linkedMapOf<String, String>().apply {
             harnessAuthToken?.let { put(MOBILE_AUTH_TOKEN_ENV, it) }
-            browserClaimToken?.let { put(MOBILE_BROWSER_CLAIM_TOKEN_ENV, it) }
+            browserToken?.let { put(MOBILE_BROWSER_TOKEN_ENV, it) }
             deviceBridgeAccess?.let { put(DEVICE_BRIDGE_TOKEN_ENV, it.token) }
         }
         val modelCredentials = modelCredentialValues()
@@ -1655,7 +1655,7 @@ class RuntimeStore(context: Context) {
         private const val PROVIDER_PATCH_FILENAME = "launcher-providers.patch.json"
         // 只经访客环境文件投递的两个临时令牌；取值每次启动重新生成，绝不进 .credentials.yaml。
         private const val MOBILE_AUTH_TOKEN_ENV = "DSH_MOBILE_AUTH_TOKEN"
-        private const val MOBILE_BROWSER_CLAIM_TOKEN_ENV = "DSH_MOBILE_BROWSER_CLAIM_TOKEN"
+        private const val MOBILE_BROWSER_TOKEN_ENV = "DSH_MOBILE_BROWSER_TOKEN"
         private const val DEVICE_BRIDGE_TOKEN_ENV = "DSH_DEVICE_BRIDGE_TOKEN"
     }
 }
