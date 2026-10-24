@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
@@ -27,6 +28,7 @@ import android.webkit.WebViewDatabase
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import io.deepseekharness.mobile.runtime.HarnessAccess
 import io.deepseekharness.mobile.runtime.RuntimeStore
@@ -47,6 +49,8 @@ class HarnessActivity : AppCompatActivity() {
     /** The OAuth page is opened by Harness with window.open(); keep its transport WebView detached. */
     private var authorizationPopup: WebView? = null
     private val pageRetryHandler = Handler(Looper.getMainLooper())
+    private val exitConfirmationPolicy = HarnessExitConfirmationPolicy()
+    private var exitConfirmationDialog: AlertDialog? = null
 
     /** 等待用户从系统选择器返回的 WebView 回调；同一时刻只允许一个，页面靠它继续上传。 */
     private var pendingFileChooser: ValueCallback<Array<Uri>>? = null
@@ -109,6 +113,7 @@ class HarnessActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        exitConfirmationPolicy.reset()
         // 控制台与外壳共用同一个「是否在前台」计数器：控制台叠在外壳之上，
         // 只有两者都停了才算切到后台（用布尔标志会在关闭控制台时误判，见 AppForeground 的说明）。
         AppForeground.onActivityStarted()
@@ -122,6 +127,7 @@ class HarnessActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        resetExitConfirmation()
         val resetToHome = intent.getBooleanExtra(EXTRA_RESET_TO_HOME, false)
         val nextSessionId = sessionIdExtra(intent)
         if (!::webView.isInitialized) return
@@ -206,7 +212,14 @@ class HarnessActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (webView.canGoBack()) webView.goBack() else returnToMainActivity()
+                when (exitConfirmationPolicy.onBackPressed(
+                    canGoBack = webView.canGoBack(),
+                    nowMs = SystemClock.elapsedRealtime(),
+                )) {
+                    HarnessExitConfirmationPolicy.Decision.WEB_BACK -> webView.goBack()
+                    HarnessExitConfirmationPolicy.Decision.PROMPT -> showExitConfirmation()
+                    HarnessExitConfirmationPolicy.Decision.EXIT -> returnToMainActivity()
+                }
             }
         })
     }
@@ -227,6 +240,7 @@ class HarnessActivity : AppCompatActivity() {
             return
         }
         var discardHistory = clearHistory || boundAccess != access
+        resetExitConfirmation()
         pageLoadGate.cancel()
         val gate = HarnessPageLoadGate()
         pageLoadGate = gate
@@ -297,6 +311,7 @@ class HarnessActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        resetExitConfirmation()
         pageLoadGate.cancel()
         if (!isChangingConfigurations) OverlayBallService.closeConversation()
         // 页面可能仍在等待选择结果：必须显式回传 null，否则该 input 会永久处于"等待选择文件"。
@@ -330,10 +345,47 @@ class HarnessActivity : AppCompatActivity() {
 
     private fun returnToMainActivity() {
         if (isFinishing) return
+        resetExitConfirmation()
         startActivity(
             Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP),
         )
+    }
+
+    /** 在 DSH 入口页离开前明确提醒用户，避免系统返回手势误触导致切回应用。 */
+    private fun showExitConfirmation() {
+        if (isFinishing || isDestroyed) return
+        exitConfirmationDialog?.let { dialog ->
+            if (dialog.isShowing) return
+        }
+        exitConfirmationDialog = AlertDialog.Builder(this)
+            .setTitle(R.string.harness_exit_confirm_title)
+            .setMessage(R.string.harness_exit_confirm_message)
+            .setNegativeButton(R.string.harness_exit_confirm_cancel) { _, _ ->
+                resetExitConfirmation()
+            }
+            .setPositiveButton(R.string.harness_exit_confirm_ok) { _, _ ->
+                resetExitConfirmation()
+                returnToMainActivity()
+            }
+            .create()
+            .also { dialog ->
+                // 对话框打开后再次按系统返回，视为用户完成了第二次确认；
+                // 点击对话框外部不会取消，避免误触直接离开 DSH。
+                dialog.setCanceledOnTouchOutside(false)
+                dialog.setOnCancelListener {
+                    resetExitConfirmation()
+                    returnToMainActivity()
+                }
+                dialog.setOnDismissListener { exitConfirmationDialog = null }
+                dialog.show()
+            }
+    }
+
+    private fun resetExitConfirmation() {
+        exitConfirmationPolicy.reset()
+        exitConfirmationDialog?.dismiss()
+        exitConfirmationDialog = null
     }
 
     /**

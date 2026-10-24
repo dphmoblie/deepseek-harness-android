@@ -2,6 +2,10 @@
     <string name="app_name">DeepSeek Harness</string>
     <string name="harness_title">Harness 对话</string>
     <string name="harness_back_to_app">返回应用</string>
+    <string name="harness_exit_confirm_title">退出 DSH</string>
+    <string name="harness_exit_confirm_message">确定返回应用吗？当前 DSH 页面会保留在后台。</string>
+    <string name="harness_exit_confirm_cancel">继续使用</string>
+    <string name="harness_exit_confirm_ok">返回应用</string>
     <string name="harness_open_management">打开管理设置</string>
     <string name="harness_workspace_files">工作区文件</string>
     <string name="harness_workspace_empty">工作区暂无可操作文件</string>

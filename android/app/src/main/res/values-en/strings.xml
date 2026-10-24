@@ -2,6 +2,10 @@
     <string name="app_name">DeepSeek Harness</string>
     <string name="harness_title">Harness chat</string>
     <string name="harness_back_to_app">Back to app</string>
+    <string name="harness_exit_confirm_title">Exit DSH</string>
+    <string name="harness_exit_confirm_message">Return to the app? The current DSH page will remain in the background.</string>
+    <string name="harness_exit_confirm_cancel">Continue</string>
+    <string name="harness_exit_confirm_ok">Return to app</string>
     <string name="harness_open_management">Open app settings</string>
     <string name="harness_workspace_files">Workspace files</string>
     <string name="harness_workspace_empty">No files are available in the workspace</string>
