@@ -146,6 +146,7 @@ interface NativeRuntimePlugin {
   deleteRuntimeSessionSnapshot(options: { id: string }): Promise<unknown>
   startHarness(): Promise<RuntimeState>
   openHarness(options?: { sessionId?: string }): Promise<void>
+  openHarnessExternal(): Promise<void>
   testModelConnectivity(options: { providerId: string; baseUrl?: string; apiKey?: string; api?: string }): Promise<unknown>
   listModelCatalog(options: { providerId: string; baseUrl?: string; apiKey?: string; api?: string }): Promise<unknown>
   stopRuntime(): Promise<RuntimeState>
@@ -334,6 +335,7 @@ function createNativeBridge(): RuntimeBridge {
       .then(validateRuntimeInstallResult),
     startHarness: () => NativeRuntime.startHarness().then(validateRuntimeState),
     openHarness: (sessionId?: string) => NativeRuntime.openHarness(sessionId ? { sessionId } : undefined),
+    openHarnessExternal: () => NativeRuntime.openHarnessExternal(),
     stopRuntime: () => NativeRuntime.stopRuntime().then(validateRuntimeState),
     reset: confirmation => {
       if (confirmation !== 'RESET_RUNTIME') return Promise.reject(new Error('重置确认无效'))

@@ -30,9 +30,10 @@ function authorizationHeader() {
   return `Basic ${Buffer.from(`${USERNAME}:${TOKEN}`, 'ascii').toString('base64')}`
 }
 
-function request(port, authorization, requestPath = '/', method = 'GET') {
+function request(port, authorization, requestPath = '/', method = 'GET', cookie) {
   return new Promise((resolve, reject) => {
     const headers = authorization === undefined ? {} : { Authorization: authorization }
+    if (cookie !== undefined) headers.Cookie = cookie
     const outgoing = http.request({ host: '127.0.0.1', port, path: requestPath, headers, method }, response => {
       const chunks = []
       response.on('data', chunk => chunks.push(chunk))
@@ -44,6 +45,20 @@ function request(port, authorization, requestPath = '/', method = 'GET') {
     })
     outgoing.on('error', reject)
     outgoing.end()
+  })
+}
+
+function post(port, requestPath, body) {
+  return new Promise((resolve, reject) => {
+    const outgoing = http.request({
+      host: '127.0.0.1', port, path: requestPath, method: 'POST',
+      headers: { 'Content-Type': 'text/plain', 'Content-Length': Buffer.byteLength(body) },
+    }, response => {
+      response.resume()
+      response.on('end', () => resolve({ headers: response.headers, status: response.statusCode }))
+    })
+    outgoing.on('error', reject)
+    outgoing.end(body)
   })
 }
 
@@ -77,6 +92,7 @@ describe('mobile Harness authentication preload', () => {
       env: {
         ...process.env,
         DSH_MOBILE_AUTH_TOKEN: TOKEN,
+        DSH_MOBILE_BROWSER_CLAIM_TOKEN: TOKEN,
         NODE_OPTIONS: `--require=${PRELOAD}`,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -182,6 +198,29 @@ describe('mobile Harness authentication preload', () => {
       await upgrade(port, { cookie: 'dsh_mobile_token=short' }),
       /^HTTP\/1\.1 401 Unauthorized/,
     )
+  })
+
+  it('redeems the claim once per browser, rejects bad bodies and stops after three uses', async () => {
+    const bootstrap = await request(port, undefined, '/__dsh/browser')
+    assert.equal(bootstrap.status, 200)
+    assert.equal(bootstrap.headers['content-type'], 'text/html; charset=utf-8')
+    // 错误长度与「前 43 位正确、后面继续拼接」都必须被拒绝。
+    assert.equal((await post(port, '/__dsh/browser/claim', 'C'.repeat(43))).status, 401)
+    assert.equal((await post(port, '/__dsh/browser/claim', `${TOKEN}extra`)).status, 401)
+    const claim = await post(port, '/__dsh/browser/claim', TOKEN)
+    assert.equal(claim.status, 204)
+    // 只种浏览器专用那一枚：Basic 同款令牌不应该也进浏览器的 Cookie 罐。
+    // Node 的 set-cookie 永远是数组；只断言这一枚，顺带钉住「没有把 Basic 令牌也种进去」。
+    assert.deepEqual(claim.headers['set-cookie'], [
+      `dsh_browser_session=${TOKEN}; Path=/; Max-Age=600; HttpOnly; SameSite=Strict`,
+    ])
+    assert.equal((await request(port, undefined, '/', 'GET', `dsh_browser_session=${TOKEN}`)).status, 200)
+    // 不带 cookie 的请求照旧被挡。
+    assert.equal((await request(port, undefined, '/')).status, 401)
+    // 允许重试，但一个运行周期最多 3 次。
+    assert.equal((await post(port, '/__dsh/browser/claim', TOKEN)).status, 204)
+    assert.equal((await post(port, '/__dsh/browser/claim', TOKEN)).status, 204)
+    assert.equal((await post(port, '/__dsh/browser/claim', TOKEN)).status, 410)
   })
 })
 

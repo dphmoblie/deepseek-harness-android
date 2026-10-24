@@ -1228,6 +1228,36 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /**
+     * 只用于兼容性诊断：通过一次性片段令牌把当前 Harness 交给系统浏览器。
+     * 不把 Basic 用户名、密码或长期令牌放进 URL；接管页会把片段令牌兑换成 HttpOnly Cookie。
+     */
+    @PluginMethod
+    fun openHarnessExternal(call: PluginCall) {
+        execute(call) {
+            val access = controller.openHarnessAccess()
+            val claim = access.browserClaimToken
+                ?: throw RuntimeFailure("HARNESS_BROWSER_HANDOFF_UNAVAILABLE", "当前运行周期不支持外部浏览器接管")
+            val uri = io.deepseekharness.mobile.runtime.HarnessWebAuth.browserClaimUrl(access.url, claim)
+                ?: throw RuntimeFailure("HARNESS_BROWSER_HANDOFF_INVALID", "外部浏览器接管地址无效")
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri.toASCIIString()))
+                .addCategory(Intent.CATEGORY_BROWSABLE)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            /*
+             * 只交给受信任的浏览器：接管 URL 的片段里有一次性令牌，任何能声明
+             * VIEW+BROWSABLE 的应用都能收到它，因此先枚举可处理包、再按白名单收敛，
+             * 最后用 setPackage 显式指定。一个受信任的都没有就报错，不降级给任意应用。
+             */
+            @Suppress("DEPRECATION")
+            val candidates = context.packageManager.queryIntentActivities(intent, 0)
+                .mapNotNull { it.activityInfo?.packageName }
+            val browserPackage = HarnessBrowserTarget.pick(candidates)
+                ?: throw RuntimeFailure("HARNESS_BROWSER_UNAVAILABLE", "没有受信任的外部浏览器（可安装 Chrome 后再试）")
+            context.startActivity(Intent(intent).setPackage(browserPackage))
+            null
+        }
+    }
+
     @PluginMethod
     fun testModelConnectivity(call: PluginCall) {
         val providerId = call.getString("providerId")?.trim() ?: run {

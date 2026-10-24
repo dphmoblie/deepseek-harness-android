@@ -14,6 +14,15 @@ internal object HarnessWebAuth {
         if (port !in 1024..65535 || expectedPort != null && port != expectedPort) return null
         return URI(raw)
     }
+
+    /** 构造不把启动令牌放进查询串的外部浏览器接管入口。令牌只存在 URL 片段，服务器不会收到片段。 */
+    fun browserClaimUrl(raw: String, browserToken: String): URI? {
+        val entry = parseLaunchUrl(raw) ?: return null
+        if (!TOKEN_PATTERN.matches(browserToken)) return null
+        return URI(entry.scheme, null, entry.host, entry.port, "/__dsh/browser", null, "token=$browserToken")
+    }
+
+    private val TOKEN_PATTERN = Regex("[A-Za-z0-9_-]{43}")
 }
 
 /** Captures a complete startup line independently of the bounded diagnostic tail. */

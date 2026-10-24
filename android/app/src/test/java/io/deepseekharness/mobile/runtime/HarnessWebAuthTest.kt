@@ -67,6 +67,14 @@ class HarnessWebAuthTest {
         assertFalse(diagnostic.contains("?token="))
     }
 
+    @Test
+    fun browserClaimUsesFragmentWithoutPuttingTheClaimTokenInTheQuery() {
+        val browserToken = "B".repeat(43)
+        val claim = HarnessWebAuth.browserClaimUrl(entry, browserToken)
+        assertEquals("http://127.0.0.1:3080/__dsh/browser#token=$browserToken", claim?.toASCIIString())
+        assertFalse(claim?.rawQuery?.contains(browserToken) == true)
+    }
+
     private fun HarnessWebAuthCapture.feed(value: String) {
         val bytes = value.toByteArray(Charsets.UTF_8)
         append(bytes, bytes.size)

@@ -1622,6 +1622,8 @@ export interface RuntimeBridge {
   install: (source?: RuntimeSource) => Promise<RuntimeInstallResult>
   startHarness: () => Promise<RuntimeState>
   openHarness: (sessionId?: string) => Promise<void>
+  /** 仅用于兼容性诊断：把当前 Harness 交给系统外部浏览器。 */
+  openHarnessExternal: () => Promise<void>
   stopRuntime: () => Promise<RuntimeState>
   reset: (confirmation: 'RESET_RUNTIME') => Promise<RuntimeState>
   createTerminal: (kind: TerminalKind, columns: number, rows: number) => Promise<{ sessionId: string }>

@@ -97,12 +97,13 @@ class RuntimeLaunchResolver(
     fun launch(
         entrypoint: List<String>,
         harnessAuthToken: String? = null,
+        browserClaimToken: String? = null,
         deviceBridgeAccess: DeviceBridgeAccess? = null,
         externalCancellation: () -> Boolean = { false },
     ): RuntimeLaunchSpec = synchronized(lock) {
         val resolved = resolveProfile(externalCancellation)
         throwIfStartCancelled(externalCancellation)
-        buildLaunch(resolved.profile, entrypoint, harnessAuthToken, deviceBridgeAccess)
+        buildLaunch(resolved.profile, entrypoint, harnessAuthToken, browserClaimToken, deviceBridgeAccess)
     }
 
     fun verifyGuest(
@@ -427,11 +428,12 @@ class RuntimeLaunchResolver(
         profile: ProotLaunchProfile,
         entrypoint: List<String>,
         harnessAuthToken: String? = null,
+        browserClaimToken: String? = null,
         deviceBridgeAccess: DeviceBridgeAccess? = null,
         includeCredentials: Boolean = this.includeCredentials,
     ): RuntimeLaunchSpec {
         val secrets = if (includeCredentials) {
-            store.prepareRuntimeSecrets(harnessAuthToken, deviceBridgeAccess)
+            store.prepareRuntimeSecrets(harnessAuthToken, browserClaimToken, deviceBridgeAccess)
         } else {
             RuntimeSecretDelivery.NONE
         }

@@ -21,6 +21,7 @@ data class HarnessAccess(
     val url: String,
     val username: String,
     val password: String,
+    val browserClaimToken: String? = null,
 ) {
     override fun toString(): String = "HarnessAccess(url=<redacted>, username=$username, password=<redacted>)"
 
@@ -173,6 +174,7 @@ class RuntimeSupervisor(
         }
 
         val password = generateToken()
+        val browserClaimToken = generateToken()
         val launch = try {
             val configuredProviders = store.providerApiKeys().keys
             val providerPatchPath = store.prepareProviderPatch(configuredProviders)
@@ -184,6 +186,7 @@ class RuntimeSupervisor(
             launchResolver.launch(
                 harnessEntrypoint,
                 password,
+                browserClaimToken,
                 deviceBridgeAccess,
                 startCancellation::isRequested,
             )
@@ -247,7 +250,7 @@ class RuntimeSupervisor(
         }
         throwIfStartCancelled()
         // Credentials remain native/in-memory; status snapshots retain the public manifest URL.
-        harnessAccess = HarnessAccess(launchUrl, HarnessAccess.USERNAME, password)
+        harnessAccess = HarnessAccess(launchUrl, HarnessAccess.USERNAME, password, browserClaimToken)
         status.update(
             RuntimePhase.RUNNING,
             downloaded = manifest.rootfs.compressedBytes,

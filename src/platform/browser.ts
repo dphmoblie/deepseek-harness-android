@@ -294,6 +294,14 @@ export function createBrowserBridge(): RuntimeBridge {
       window.open(url.toString(), '_blank', 'noopener,noreferrer')
       return Promise.resolve()
     },
+    openHarnessExternal: () => {
+      if (state.phase !== 'running' || state.harnessUrl === undefined) throw new Error('Harness 尚未运行')
+      const url = new URL(state.harnessUrl)
+      url.pathname = '/__dsh/browser'
+      url.hash = '#token=' + 'A'.repeat(43)
+      window.open(url.toString(), '_blank', 'noopener,noreferrer')
+      return Promise.resolve()
+    },
     stopRuntime: () => {
       state = { ...state, phase: state.installedVersion === undefined ? 'not-installed' : 'ready', harnessUrl: undefined }
       return Promise.resolve({ ...state })
