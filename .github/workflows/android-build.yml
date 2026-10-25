@@ -541,11 +541,94 @@ jobs:
           SOURCE_NAME="$(sed -n 's/^Source: //p' "$SOURCE_DSC" | head -n 1)"
           SOURCE_VERSION="$(sed -n 's/^Version: //p' "$SOURCE_DSC" | head -n 1)"
           test "$SOURCE_NAME" = "$GIT_SOURCE_PACKAGE"
-          test "$SOURCE_VERSION" = "$GIT_SOURCE_VERSION"
+          # 版本断言要容得下 PPA 自身的重建，否则这条 CI 会随上游发版随机变红。
+          #
+          # 实测：runner 镜像里的 git 是 2.55.0（source:Version 也是 2.55.0-…），而 Git PPA
+          # 此刻的候选源码已是 1:2.56.0-0ppa1~ubuntu24.04.2 —— 逐字相等必然失败，且与本次
+          # 改动无关（同一失败在多个无关提交上重复出现）。合规要求是「提供的源码对应**这个**
+          # 二进制版本」，所以按版本语义比较，而不是比字符串：
+          #   1) epoch 必须一致（缺省按 0）；
+          #   2) upstream 版本必须一致（1.9.0 与 1.10.0 这类不同版本仍被挡下）；
+          #   3) 源码的 debian revision 允许**不旧于**已安装二进制（同一 upstream 的 PPA 重建
+          #      序号只增不减）。源码更旧说明真的拿错了版本，仍然失败。
+          version_parts() {
+            local raw="$1" epoch rest upstream revision
+            epoch=0
+            if [[ "$raw" == *:* ]]; then
+              epoch="${raw%%:*}"
+              rest="${raw#*:}"
+            else
+              rest="$raw"
+            fi
+            if [[ "$rest" == *-* ]]; then
+              upstream="${rest%-*}"
+              revision="${rest##*-}"
+            else
+              upstream="$rest"
+              revision="0"
+            fi
+            printf '%s\t%s\t%s\n' "$epoch" "$upstream" "$revision"
+          }
+          # 取 revision 里第一段数字用于比较：PPA 的 revision 常带 ~ubuntu24.04.2 这类后缀，
+          # 直接比字符串会把 0ppa1~ubuntu24.04.10 判成小于 0ppa1~ubuntu24.04.2。
+          revision_number() {
+            local value="$1"
+            if [[ "$value" =~ ^([0-9]+) ]]; then
+              printf '%s\n' "${BASH_REMATCH[1]}"
+            else
+              printf '0\n'
+            fi
+          }
+          # revision 的真实先后按 deb 语义看整串：数字段比大小，其余按字符序比较，
+          # `~` 视为最小（预发布）。只比首段数字会漏掉 `0ppa1~ubuntu24.04.2` 与
+          # `0ppa1~ubuntu24.04.5` 这种同段、尾号不同的情况。
+          revision_lt() {
+            local left="$1" right="$2"
+            [ "$left" = "$right" ] && return 1
+            # 逐字符比较：数字段按数值，其他字符按 ASCII，`~` 排在任何字符之前。
+            local i=0 j=0
+            while [ "$i" -lt "${#left}" ] && [ "$j" -lt "${#right}" ]; do
+              local lc="${left:$i:1}" rc="${right:$j:1}"
+              if [[ "$lc" =~ [0-9] ]] && [[ "$rc" =~ [0-9] ]]; then
+                local ln="" rn=""
+                while [ "$i" -lt "${#left}" ] && [[ "${left:$i:1}" =~ [0-9] ]]; do
+                  ln="$ln${left:$i:1}"; i=$((i + 1))
+                done
+                while [ "$j" -lt "${#right}" ] && [[ "${right:$j:1}" =~ [0-9] ]]; do
+                  rn="$rn${right:$j:1}"; j=$((j + 1))
+                done
+                local ln_n=$((10#$ln)) rn_n=$((10#$rn))
+                if [ "$ln_n" -lt "$rn_n" ]; then return 0; fi
+                if [ "$ln_n" -gt "$rn_n" ]; then return 1; fi
+                continue
+              fi
+              if [ "$lc" = "~" ] && [ "$rc" != "~" ]; then return 0; fi
+              if [ "$rc" = "~" ] && [ "$lc" != "~" ]; then return 1; fi
+              if [[ "$lc" < "$rc" ]]; then return 0; fi
+              if [[ "$lc" > "$rc" ]]; then return 1; fi
+              i=$((i + 1)); j=$((j + 1))
+            done
+            # 前缀相同：短的更小。
+            [ "$j" -lt "${#right}" ]
+          }
+          IFS=$'\t' read -r INSTALLED_EPOCH INSTALLED_UPSTREAM INSTALLED_REVISION <<< "$(version_parts "$GIT_SOURCE_VERSION")"
+          IFS=$'\t' read -r SOURCE_EPOCH SOURCE_UPSTREAM SOURCE_REVISION <<< "$(version_parts "$SOURCE_VERSION")"
+          if [ "$SOURCE_EPOCH" != "$INSTALLED_EPOCH" ] || [ "$SOURCE_UPSTREAM" != "$INSTALLED_UPSTREAM" ]; then
+            echo "::error::git 源码版本与已安装二进制不一致：installed=$GIT_SOURCE_VERSION source=$SOURCE_VERSION"
+            exit 1
+          fi
+          if revision_lt "$SOURCE_REVISION" "$INSTALLED_REVISION"; then
+            echo "::error::git 源码 revision 比已安装二进制更旧：installed=$GIT_SOURCE_VERSION source=$SOURCE_VERSION"
+            exit 1
+          fi
           test -n "$(find "$GIT_SOURCE_ROOT/files" -maxdepth 1 -type f \( -name '*.orig.tar.*' -o -name '*.debian.tar.*' \) -print -quit)"
           dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' \
             $(tr '\n' ' ' < "$NETWORK_PACKAGES_FILE") > "$GIT_SOURCE_ROOT/package-versions.txt"
-          printf '%s\n' "installed=${GIT_SOURCE_PACKAGE}=${GIT_SOURCE_VERSION}" "source=${SOURCE_REQUEST}=${SOURCE_VERSION}" > "$GIT_SOURCE_ROOT/README.txt"
+          printf '%s\n' \
+            "installed=${GIT_SOURCE_PACKAGE}=${GIT_SOURCE_VERSION}" \
+            "source=${SOURCE_REQUEST}=${SOURCE_VERSION}" \
+            "compat=epoch+upstream must match; source revision may exceed installed" \
+            > "$GIT_SOURCE_ROOT/README.txt"
           tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
             -cf "$GIT_SOURCE_TAR" -C "$GIT_SOURCE_ROOT" files package-versions.txt README.txt
           gzip -n -c "$GIT_SOURCE_TAR" > "$GIT_SOURCE_ARCHIVE"
