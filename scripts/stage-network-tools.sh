@@ -38,9 +38,60 @@ PACKAGES=(git curl ca-certificates libexpat1)
 if [[ "$SKIP_OPENSSH" != "1" ]]; then
   PACKAGES+=(openssh-client)
 fi
+
+# 可选：先挂上 Git PPA 的**二进制**源再安装 git。
+#
+# 为什么需要：`Package Ubuntu git corresponding source` 要求提供的源码与「实际打进
+# rootfs 的那份 git」同版本。runner 镜像自带的 git 来自 Ubuntu 官方源，而源码只能从
+# Git PPA 取——PPA 一旦发布新版就不再保留旧版源码，镜像里的旧版本于是永远拿不到对应
+# 源码，那一步会一直失败到镜像更新为止。打开这个开关后 apt 直接从 PPA 装 git，二进制
+# 与源码同源同版本，不再依赖镜像的更新节奏。
+#
+# 默认关闭：本地调试与其它用途不该被一个外部 PPA 绑架；只有需要产出「对应源码」的发布
+# 流水线才显式开启（DSH_GIT_PPA=1）。
+GIT_PPA_URI="${DSH_GIT_PPA_URI:-https://ppa.launchpadcontent.net/git-core/ppa/ubuntu}"
+GIT_PPA_KEYS=(F911AB184317630C59970973E363C90F8F1B6217 E1DD270288B4E6030699E45FA1715D88E1DF1F24)
+
+install_git_from_ppa() {
+  local suite keyring_dir keyring key key_file key_bin
+  suite="${VERSION_CODENAME:-noble}"
+  keyring_dir="$(mktemp -d)"
+  keyring="$keyring_dir/git-core-ppa.gpg"
+  : > "$keyring"
+  # 与 workflow 的源码步骤同一组指纹：取回后仍用 gpg 复核完整主键指纹，
+  # 只信写在脚本里的这两个值（keyserver 的短 ID 查询不足以作为结论）。
+  for key in "${GIT_PPA_KEYS[@]}"; do
+    key_file="$keyring_dir/ppa-${key}.asc"
+    key_bin="$keyring_dir/ppa-${key}.gpg"
+    curl -fsSL --retry 3 --connect-timeout 20 \
+      "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${key}&options=mr&exact=on" \
+      -o "$key_file"
+    gpg --batch --dearmor --yes --output "$key_bin" "$key_file"
+    gpg --batch --show-keys --with-colons "$key_bin" \
+      | awk -F: -v expected="$key" \
+        'toupper($1) == "FPR" && toupper($10) == expected { found=1 } END { exit !found }'
+    cat "$key_bin" >> "$keyring"
+  done
+  sudo install -m 0644 "$keyring" /usr/share/keyrings/git-core-ppa.gpg
+  printf 'deb [signed-by=/usr/share/keyrings/git-core-ppa.gpg] %s %s main\n' \
+    "$GIT_PPA_URI" "$suite" | sudo tee /etc/apt/sources.list.d/git-core-ppa.list >/dev/null
+  rm -rf "$keyring_dir"
+  log "已挂上 Git PPA 二进制源：$GIT_PPA_URI ($suite)"
+}
+
+if [[ "${DSH_GIT_PPA:-0}" == "1" ]]; then
+  install_git_from_ppa
+fi
+
 sudo apt-get update -qq
 sudo apt-get install -y -qq --no-install-recommends "${PACKAGES[@]}"
 log "已安装: ${PACKAGES[*]}"
+log "将打进 rootfs 的 git: $(git --version)"
+if [[ "${DSH_GIT_PPA:-0}" == "1" ]]; then
+  # 开了 PPA 就必须真的装上 PPA 里的那份：否则「二进制与源码同版本」这个前提是假的，
+  # 只会让后面的源码步骤以更难懂的方式失败。这里当场把两个版本都打出来。
+  log "git 源码版本（dpkg source:Version）= $(dpkg-query -W -f='${source:Version}' git)"
+fi
 
 # ---- 2. 基线镜像已有路径（过滤掉，避免 rootfs 重复条目）------------------------
 BASE_PATHS="$(mktemp)"

@@ -394,6 +394,13 @@ jobs:
         # 访客里原本没有 git，也没有 curl 与 CA 证书：编码 Agent 无法 clone/diff/commit。
         # 组件在**同发行版同架构**的 runner 上取（apt 只跑在 runner 上，不跑在镜像里），
         # 由脚本按 rootfs 路径预置；/usr/lib/git-core 的硬链接必须保留，否则体积会失控。
+        #
+        # DSH_GIT_PPA=1：先挂上 Git PPA 的二进制源再装 git。后面的
+        # 「Package Ubuntu git corresponding source」要求源码与打进 rootfs 的 git 同版本，
+        # 而源码只在 PPA 里、且 PPA 不保留旧版本——不在这里对齐，那一步会一直失败到 runner
+        # 镜像更新为止（实测已连续多次因此变红）。
+        env:
+          DSH_GIT_PPA: '1'
         run: |
           set -euo pipefail
           bash scripts/stage-network-tools.sh /tmp/network-tools /tmp/ubuntu.tar.gz /tmp/network-tools-packages.txt
