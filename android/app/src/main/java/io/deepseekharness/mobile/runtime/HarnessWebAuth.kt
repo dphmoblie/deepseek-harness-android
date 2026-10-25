@@ -23,7 +23,7 @@ internal object HarnessWebAuth {
     fun browserLaunchUrl(raw: String, browserToken: String): URI? {
         val entry = parseLaunchUrl(raw) ?: return null
         if (!TOKEN_PATTERN.matches(browserToken)) return null
-        return URI(entry.scheme, null, entry.host, entry.port, "/", "token=$browserToken", null)
+        return URI(entry.scheme, null, entry.host, entry.port, "/", "dshMobileToken=$browserToken", null)
     }
 
     private val TOKEN_PATTERN = Regex("[A-Za-z0-9_-]{43}")

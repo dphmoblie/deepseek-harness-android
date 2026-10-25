@@ -26,6 +26,17 @@ class HarnessThemeBridgeTest {
         assertTrue(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 100))
         assertFalse(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 39))
         assertFalse(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 101))
+        // 侧栏透明度：0..100 合法，缺省按 100；越界整体拒绝。
+        assertTrue(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 100, 0))
+        assertTrue(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 100, 100))
+        assertFalse(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 100, -1))
+        assertFalse(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 100, 101))
+        // 右侧面板透明度：与左侧栏分开，0..100 合法，缺省按 40；越界整体拒绝。
+        assertTrue(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 100, 100, 0))
+        assertTrue(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 100, 100, 40))
+        assertTrue(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 100, 100, 100))
+        assertFalse(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 100, 100, -1))
+        assertFalse(HarnessThemeBridge.accepts("dark", accent, background, surface, 86, 100, 100, 101))
     }
 
     @Test

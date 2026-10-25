@@ -215,6 +215,20 @@ describe('存储：三份互不覆盖的配置', () => {
     expect(validateSyncedTheme({ ...base, controlOpacity: 60 }).controlOpacity).toBe(60)
     expect(() => validateSyncedTheme({ ...base, controlOpacity: 39 })).toThrow()
     expect(() => validateSyncedTheme({ ...base, controlOpacity: 100.5 })).toThrow()
+    // 侧栏透明度同样按 100 迁移；它可以到 0（导轨完全透出背景），但不接受负数与越界。
+    expect(validateSyncedTheme(base).sidebarOpacity).toBe(100)
+    expect(validateSyncedTheme({ ...base, sidebarOpacity: 0 }).sidebarOpacity).toBe(0)
+    expect(validateSyncedTheme({ ...base, sidebarOpacity: 45 }).sidebarOpacity).toBe(45)
+    expect(() => validateSyncedTheme({ ...base, sidebarOpacity: -1 })).toThrow()
+    expect(() => validateSyncedTheme({ ...base, sidebarOpacity: 101 })).toThrow()
+    expect(() => validateSyncedTheme({ ...base, sidebarOpacity: 45.5 })).toThrow()
+    // 右侧面板是独立一项：老记录没有字段按 40 迁移，同样允许 0..100。
+    expect(validateSyncedTheme(base).rightPanelOpacity).toBe(40)
+    expect(validateSyncedTheme({ ...base, rightPanelOpacity: 0 }).rightPanelOpacity).toBe(0)
+    expect(validateSyncedTheme({ ...base, rightPanelOpacity: 65 }).rightPanelOpacity).toBe(65)
+    expect(() => validateSyncedTheme({ ...base, rightPanelOpacity: -1 })).toThrow()
+    expect(() => validateSyncedTheme({ ...base, rightPanelOpacity: 101 })).toThrow()
+    expect(() => validateSyncedTheme({ ...base, rightPanelOpacity: 45.5 })).toThrow()
     const withBackground = saveAccentSync({ ...base, syncBackground: true }, 1700000000000)!
     expect(withBackground.theme.syncBackground).toBe(true)
     expect(readAccentSync()?.theme.syncBackground).toBe(true)

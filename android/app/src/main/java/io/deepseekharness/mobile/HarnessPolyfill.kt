@@ -27,6 +27,56 @@ internal object HarnessPolyfill {
      * `instanceof` 在跨 realm 时不可靠，这里按形态判断（`aborted` + `addEventListener`）。
      */
     const val SCRIPT: String = """(function () {
+  /*
+   * 旧 WebView 的 AbortSignal 不是 EventTarget：没有 addEventListener，dsh 前端在
+   * 目录选择里调用 signal.addEventListener 直接抛 "signal.addEventListener is not a function"
+   * （实测：选择工作区目录弹窗报 directoryPicker/list failed，只能取消）。
+   * 这里补一层最小 EventTarget 语义，并在 abort() 时派发事件。
+   */
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.prototype.addEventListener !== 'function') {
+    var registries = new WeakMap();
+    var stateOf = function (signal) {
+      var state = registries.get(signal);
+      if (!state) { state = { listeners: {}, onabort: null }; registries.set(signal, state); }
+      return state;
+    };
+    AbortSignal.prototype.addEventListener = function (type, listener) {
+      if (type !== 'abort' || typeof listener !== 'function') { return; }
+      var state = stateOf(this);
+      (state.listeners.abort || (state.listeners.abort = [])).push(listener);
+    };
+    AbortSignal.prototype.removeEventListener = function (type, listener) {
+      if (type !== 'abort') { return; }
+      var list = stateOf(this).listeners.abort;
+      if (!list) { return; }
+      var index = list.indexOf(listener);
+      if (index >= 0) { list.splice(index, 1); }
+    };
+    AbortSignal.prototype.dispatchEvent = function (event) {
+      var state = stateOf(this);
+      var listeners = (state.listeners.abort || []).slice();
+      if (typeof state.onabort === 'function') { listeners.unshift(state.onabort); }
+      for (var i = 0; i < listeners.length; i += 1) {
+        try { listeners[i].call(this, event); } catch (error) { }
+      }
+      return true;
+    };
+    Object.defineProperty(AbortSignal.prototype, 'onabort', {
+      configurable: true,
+      get: function () { return stateOf(this).onabort; },
+      set: function (value) { stateOf(this).onabort = typeof value === 'function' ? value : null; },
+    });
+    if (typeof AbortController !== 'undefined') {
+      var originalAbort = AbortController.prototype.abort;
+      AbortController.prototype.abort = function (reason) {
+        originalAbort.call(this, reason);
+        var signal = this.signal;
+        if (signal && typeof signal.dispatchEvent === 'function' && typeof Event === 'function') {
+          try { signal.dispatchEvent(new Event('abort')); } catch (error) { }
+        }
+      };
+    }
+  }
   if (typeof AbortSignal === 'undefined' || typeof AbortSignal.any === 'function') return;
   AbortSignal.any = function (signals) {
     var controller = new AbortController();

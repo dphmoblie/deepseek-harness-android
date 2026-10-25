@@ -40,6 +40,22 @@ internal object HarnessThemeBridge {
      * 老版本载荷没有这个键，按 100（不透明）迁移。
      */
     private const val KEY_CONTROL_OPACITY = "controlOpacity"
+    /**
+     * 侧边栏底色透明度（百分比）。
+     *
+     * 与正文面板分开：侧栏面积大、结构简单，可以更透；正文面板要保证正文可读。
+     * 老版本载荷没有这个键，按 100（不透明）迁移，外观与升级前一致。
+     */
+    private const val KEY_SIDEBAR_OPACITY = "sidebarOpacity"
+    /**
+     * 右侧面板底色透明度（百分比）。
+     *
+     * 右侧面板指右上角按钮打开的那一栏（「开始 / 工作区文件」），与左侧侧栏是两套
+     * 不同的界面：左栏是导航，右栏要承载正文，两者必须能分开调。
+     * 老版本载荷没有这个键，按 40 迁移——此前右栏在有背景时整层透明、等于没有底，
+     * 40% 是补上底色、又仍能透出背景的默认值。
+     */
+    private const val KEY_RIGHT_PANEL_OPACITY = "rightPanelOpacity"
     private const val KEY_SYNCED_AT = "syncedAt"
     private const val KEY_BACKGROUND_URI = "backgroundUri"
     private const val KEY_BACKGROUND_MIME = "backgroundMime"
@@ -60,9 +76,19 @@ internal object HarnessThemeBridge {
      * 单独抽出来是为了能被 JVM 单测直接驱动——这段判断是拼进 `evaluateJavascript` 的
      * 内容唯一的防线，不该只在设备上才验证得到。
      */
-    internal fun accepts(mode: String, accent: String, background: String, surface: String, opacity: Int, controlOpacity: Int = 100): Boolean =
+    internal fun accepts(
+        mode: String,
+        accent: String,
+        background: String,
+        surface: String,
+        opacity: Int,
+        controlOpacity: Int = 100,
+        sidebarOpacity: Int = 100,
+        rightPanelOpacity: Int = 40,
+    ): Boolean =
         mode in MODES && COLOR.matches(accent) && COLOR.matches(background) && COLOR.matches(surface) &&
-            opacity in 0..100 && controlOpacity in 40..100
+            opacity in 0..100 && controlOpacity in 40..100 &&
+            sidebarOpacity in 0..100 && rightPanelOpacity in 0..100
 
     /** 背景地址白名单：只认 `content://`，长度受限，不含引号与反斜杠。 */
     internal fun acceptsBackgroundUri(uri: String): Boolean = CONTENT_URI.matches(uri)
@@ -102,7 +128,9 @@ internal object HarnessThemeBridge {
         val surface = payload.optString(KEY_SURFACE, "")
         val opacity = payload.optInt(KEY_OPACITY, -1)
         val controlOpacity = payload.optInt(KEY_CONTROL_OPACITY, 100)
-        if (!accepts(mode, accent, background, surface, opacity, controlOpacity)) return false
+        val sidebarOpacity = payload.optInt(KEY_SIDEBAR_OPACITY, 100)
+        val rightPanelOpacity = payload.optInt(KEY_RIGHT_PANEL_OPACITY, 40)
+        if (!accepts(mode, accent, background, surface, opacity, controlOpacity, sidebarOpacity, rightPanelOpacity)) return false
         val hasFlag = payload.has(KEY_SYNC_BACKGROUND)
         val flag = payload.opt(KEY_SYNC_BACKGROUND)
         if (hasFlag && !acceptsSyncBackground(flag)) return false
@@ -114,6 +142,8 @@ internal object HarnessThemeBridge {
                 .putString(KEY_SURFACE, surface)
                 .putInt(KEY_OPACITY, opacity)
                 .putInt(KEY_CONTROL_OPACITY, controlOpacity)
+                .putInt(KEY_SIDEBAR_OPACITY, sidebarOpacity)
+                .putInt(KEY_RIGHT_PANEL_OPACITY, rightPanelOpacity)
                 .putLong(KEY_SYNCED_AT, System.currentTimeMillis())
             // 没带这个字段就保留原值：老版本外壳只同步颜色，不该顺手把背景开关关掉。
             if (hasFlag) editor.putBoolean(KEY_SYNC_BACKGROUND, flag as Boolean)
@@ -157,6 +187,8 @@ internal object HarnessThemeBridge {
         result.put(KEY_SYNC_BACKGROUND, syncBackground(context))
         result.put(KEY_SYNCED_AT, syncedAt(context))
         result.put(KEY_CONTROL_OPACITY, controlOpacity(context))
+        result.put(KEY_SIDEBAR_OPACITY, sidebarOpacity(context))
+        result.put(KEY_RIGHT_PANEL_OPACITY, rightPanelOpacity(context))
         val uri = backgroundUri(context)
         val mime = backgroundMime(context)
         val kind = backgroundKind(context)
@@ -191,6 +223,20 @@ internal object HarnessThemeBridge {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_CONTROL_OPACITY, 100).coerceIn(40, 100)
     } catch (_: Exception) {
         100
+    }
+
+    /** 侧栏透明度：老版本没有这个键，读默认 100（不透明），外观与升级前一致。 */
+    fun sidebarOpacity(context: Context): Int = try {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_SIDEBAR_OPACITY, 100).coerceIn(0, 100)
+    } catch (_: Exception) {
+        100
+    }
+
+    /** 右侧面板透明度：老版本没有这个键，读默认 40（补上底色，仍透出背景）。 */
+    fun rightPanelOpacity(context: Context): Int = try {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_RIGHT_PANEL_OPACITY, 40).coerceIn(0, 100)
+    } catch (_: Exception) {
+        40
     }
 
     /**
@@ -315,7 +361,9 @@ internal object HarnessThemeBridge {
         val surface = prefs.getString(KEY_SURFACE, null) ?: return null
         val opacity = prefs.getInt(KEY_OPACITY, 100)
         val controlOpacity = prefs.getInt(KEY_CONTROL_OPACITY, 100).coerceIn(40, 100)
-        if (!accepts(mode, accent, background, surface, opacity, controlOpacity)) return null
+        val sidebarOpacity = prefs.getInt(KEY_SIDEBAR_OPACITY, 100).coerceIn(0, 100)
+        val rightPanelOpacity = prefs.getInt(KEY_RIGHT_PANEL_OPACITY, 40).coerceIn(0, 100)
+        if (!accepts(mode, accent, background, surface, opacity, controlOpacity, sidebarOpacity, rightPanelOpacity)) return null
         // 只有「开关打开 + 地址存在」才渲染背景层；kind 也只在真的显示时才带出去。
         val hasBackground = hasBackgroundForPage(context)
         val kind = if (hasBackground) backgroundKind(context) else null
@@ -331,17 +379,42 @@ internal object HarnessThemeBridge {
               root.style.setProperty('--dsh-theme-surface', '$surface');
               root.style.setProperty('--dsh-theme-surface-opacity', '${opacity / 100.0}');
               root.style.setProperty('--dsh-theme-control-opacity', '${controlOpacity / 100.0}');
+              root.style.setProperty('--dsh-theme-sidebar-opacity', '${sidebarOpacity / 100.0}');
+              root.style.setProperty('--dsh-theme-right-panel-opacity', '${rightPanelOpacity / 100.0}');
               if ('$mode' !== 'system') { root.style.colorScheme = '$mode'; }
-              // 手机端保留一个稳定的左栏入口：按钮只负责调用官方已有 toggle，
-              // 不复制侧栏状态，也不读取会话内容。重复注入时复用同一节点。
+              // 官方深浅由 body[data-ds-dark-theme] 驱动；外壳切成深/浅时同步过去，
+              // 否则页面配色仍是官方上次保存的那一套（用户反馈：壳切深色，DSH 不变）。
+              if (document.body) {
+                if ('$mode' === 'dark') { document.body.setAttribute('data-ds-dark-theme', ''); }
+                else if ('$mode' === 'light') { document.body.removeAttribute('data-ds-dark-theme'); }
+              }
+              /*
+               * 手机端左栏入口：**只有官方界面自己没有侧栏开关时才自绘一个**。
+               *
+               * 之前无条件自绘，结果它正好压在官方 toggle 上：点击被自绘按钮吃掉，
+               * 自绘按钮再转手点官方 toggle，视觉上两个按钮叠在一起、谁都点不动。
+               * 官方前端本来就有开关，这里退化成「没有才补」；官方后来加上开关时，
+               * 下一轮注入会把我们的按钮摘掉。
+               */
               var sidebarButton = document.getElementById('dsh-mobile-sidebar-button');
-              if (!sidebarButton) {
+              var findSidebarToggle = function () {
+                var candidates = Array.prototype.slice.call(document.querySelectorAll('button,[role="button"]'));
+                return candidates.find(function (item) {
+                  if (item === sidebarButton) { return false; }
+                  var label = ((item.getAttribute('aria-label') || '') + ' ' + (item.getAttribute('title') || '')).toLowerCase();
+                  return /sidebar|side bar|menu|history|会话|侧栏/.test(label);
+                });
+              };
+              if (findSidebarToggle()) {
+                if (sidebarButton && sidebarButton.parentNode) { sidebarButton.parentNode.removeChild(sidebarButton); }
+              } else if (!sidebarButton) {
                 sidebarButton = document.createElement('button');
                 sidebarButton.id = 'dsh-mobile-sidebar-button';
                 sidebarButton.type = 'button';
                 sidebarButton.setAttribute('aria-label', '打开左侧边栏');
                 sidebarButton.title = '打开左侧边栏';
-                sidebarButton.style.cssText = 'position:fixed;left:8px;top:calc(env(safe-area-inset-top, 0px) + 8px);z-index:40;width:40px;height:40px;padding:8px;border:0;border-radius:12px;background:color-mix(in srgb, var(--dsh-theme-surface) 78%, transparent);color:var(--dsw-alias-label-primary);display:grid;place-items:center;opacity:var(--dsh-theme-control-opacity, 1);';
+                // 兜底按钮放在左下角：官方开关几乎都在左上，放同一点就会互相压住（实测两者都点不动）。
+                sidebarButton.style.cssText = 'position:fixed;left:8px;bottom:calc(env(safe-area-inset-bottom, 0px) + 88px);z-index:30;width:40px;height:40px;padding:8px;border:0;border-radius:12px;background:var(--dsh-theme-surface, rgba(20,24,32,0.9));color:var(--dsw-alias-label-primary);display:grid;place-items:center;';
                 var sidebarIcon = document.createElement('img');
                 sidebarIcon.alt = '';
                 sidebarIcon.width = 24;
@@ -349,11 +422,7 @@ internal object HarnessThemeBridge {
                 sidebarIcon.src = '/favicon.svg';
                 sidebarButton.appendChild(sidebarIcon);
                 sidebarButton.addEventListener('click', function () {
-                  var candidates = Array.prototype.slice.call(document.querySelectorAll('button,[role="button"]'));
-                  var target = candidates.find(function (item) {
-                    var label = ((item.getAttribute('aria-label') || '') + ' ' + (item.getAttribute('title') || '')).toLowerCase();
-                    return /sidebar|side bar|menu|history|会话|侧栏/.test(label) && item !== sidebarButton;
-                  });
+                  var target = findSidebarToggle();
                   if (target) { target.click(); }
                 });
                 (document.body || root).appendChild(sidebarButton);

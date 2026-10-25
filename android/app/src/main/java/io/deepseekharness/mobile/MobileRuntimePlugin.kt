@@ -1243,11 +1243,12 @@ class MobileRuntimePlugin : Plugin() {
                 ?: throw RuntimeFailure("HARNESS_BROWSER_HANDOFF_UNAVAILABLE", "当前运行周期不支持外置浏览器打开")
             val uri = io.deepseekharness.mobile.runtime.HarnessWebAuth.browserLaunchUrl(access.url, browserToken)
                 ?: throw RuntimeFailure("HARNESS_BROWSER_HANDOFF_INVALID", "外置浏览器入口地址无效")
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri.toASCIIString()))
+            val target = Intent(Intent.ACTION_VIEW, Uri.parse(uri.toASCIIString()))
                 .addCategory(Intent.CATEGORY_BROWSABLE)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            // 交给系统选择器：用哪个浏览器打开由用户决定。选择器本身不需要 NEW_TASK，
+            // 目标 Activity 由系统在应用任务栈里启动。
             try {
-                context.startActivity(intent)
+                context.startActivity(Intent.createChooser(target, "选择浏览器打开 Harness").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             } catch (_: android.content.ActivityNotFoundException) {
                 throw RuntimeFailure("HARNESS_BROWSER_UNAVAILABLE", "没有可用的浏览器")
             }

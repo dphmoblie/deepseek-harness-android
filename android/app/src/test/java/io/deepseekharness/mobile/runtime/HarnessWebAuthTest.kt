@@ -71,7 +71,8 @@ class HarnessWebAuthTest {
     fun browserLaunchUrlCarriesTheBrowserTokenInTheQueryAndNoFragment() {
         val browserToken = "B".repeat(43)
         val launch = HarnessWebAuth.browserLaunchUrl(entry, browserToken)
-        assertEquals("http://127.0.0.1:3080/?token=$browserToken", launch?.toASCIIString())
+        // 必须与 dsh 自己的 ?token= 区分：交接用 dshMobileToken，重定向时才由预载补上 dsh 的令牌。
+        assertEquals("http://127.0.0.1:3080/?dshMobileToken=$browserToken", launch?.toASCIIString())
         assertEquals(null, launch?.rawFragment)
         // 非法令牌一律不构造 URL，避免把半截凭据交出去。
         assertEquals(null, HarnessWebAuth.browserLaunchUrl(entry, "too-short"))

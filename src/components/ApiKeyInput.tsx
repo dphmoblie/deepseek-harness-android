@@ -66,6 +66,21 @@ export function ApiKeyInput({
         placeholder={placeholder}
         aria-label={ariaLabel}
         onChange={event => onValueChange(event.currentTarget.value)}
+        /*
+         * 安卓输入法的「粘贴」不一定派发 change：有的实现只改 value 并触发一次 input，
+         * 有的连 input 都不发。只挂 onChange 就会出现「粘完值还在 DOM 里、state 还是空」
+         * ——保存时提示未提供密钥，退出重进才"识别到"。
+         * 这里三条都补上：input 直接同步；paste 延迟到 WebView 写完 value 再读一次；
+         * 组合输入结束时也同步一次。
+         */
+        onInput={event => onValueChange(event.currentTarget.value)}
+        onPaste={() => {
+          window.setTimeout(() => {
+            const element = input.current
+            if (element !== null) onValueChange(element.value)
+          }, 0)
+        }}
+        onCompositionEnd={event => onValueChange(event.currentTarget.value)}
       />
       {value !== '' && (
         <small className="api-key-mask" aria-hidden="true">{t('已输入 {0}', maskApiKey(value))}</small>

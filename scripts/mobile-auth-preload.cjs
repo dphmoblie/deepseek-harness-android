@@ -12,6 +12,32 @@ const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
 const USERNAME = 'dsh-mobile'
 const REALM = 'DeepSeek Harness Mobile'
 const TOKEN_COOKIE = 'dsh_mobile_token'
+const MOBILE_TOKEN_PARAM = 'dshMobileToken'
+
+/*
+ * dsh web 启动时会把带自己令牌的地址打到 stdout（`dsh web: http://127.0.0.1:3080/?token=…`），
+ * 并在那层做二次鉴权。外置浏览器必须同时满足两层：我们的 Cookie + dsh 的令牌，
+ * 否则页面只会显示 "dsh web authentication required; reopen the URL printed by dsh web."
+ * 预载和 dsh 同进程，直接截获它打印的那行即可，不必让用户从日志里复制。
+ */
+let dshToken = null
+const captureDshToken = chunk => {
+  if (dshToken !== null) return
+  const text = typeof chunk === 'string' ? chunk : (Buffer.isBuffer(chunk) ? chunk.toString('utf8') : '')
+  if (text.length === 0 || text.indexOf('token=') < 0) return
+  const match = /[?&]token=([A-Za-z0-9_-]{20,})/u.exec(text)
+  if (match) dshToken = match[1]
+}
+const writeOriginal = process.stdout.write.bind(process.stdout)
+process.stdout.write = function (chunk, encoding, callback) {
+  captureDshToken(chunk)
+  return writeOriginal(chunk, encoding, callback)
+}
+const writeErrorOriginal = process.stderr.write.bind(process.stderr)
+process.stderr.write = function (chunk, encoding, callback) {
+  captureDshToken(chunk)
+  return writeErrorOriginal(chunk, encoding, callback)
+}
 const BROWSER_COOKIE = 'dsh_browser_session'
 const SESSION_PUBLISHER = '/opt/python/bin/python3'
 const SESSION_PUBLISHER_SCRIPT = '/usr/local/lib/dsh-mobile-session-publish.py'
@@ -151,20 +177,33 @@ function browserHandoff(request, response) {
   const pathname = request.url.slice(0, queryStart)
   if (pathname !== '/' && pathname !== '/__dsh/browser') return false
   const params = new URLSearchParams(request.url.slice(queryStart + 1))
-  if (!params.has('token')) return false
-  const supplied = params.get('token') ?? ''
+  // 参数名必须与 dsh 自己的 ?token= 区分开：dsh web 启动时也会打开带 ?token= 的地址，
+  // 抢同一个名字会把它的正常引导当成我们的交接，令牌不匹配就 403（实测「端口打不开/令牌无效」）。
+  if (!params.has(MOBILE_TOKEN_PARAM)) return false
+  const supplied = params.get(MOBILE_TOKEN_PARAM) ?? ''
   const actual = Buffer.from(supplied, 'ascii')
   const accepted = expectedBrowserToken !== null && actual.length === expectedBrowserToken.length &&
     crypto.timingSafeEqual(actual, expectedBrowserToken)
   if (!accepted) {
-    browserNotice(response, 403, '令牌无效，或这次运行已经结束。请回到应用里重新打开。')
+    browserNotice(response, 403, '令牌已失效（运行环境重启过，或这个地址是上一次打开留下的）。请回到应用：设置 → 诊断与日志 → 用外部浏览器打开 Harness，重新获取一个地址。')
     return true
   }
-  params.delete('token')
+  params.delete(MOBILE_TOKEN_PARAM)
   const rest = params.toString()
+  /*
+   * Location 用**绝对地址**：部分浏览器（尤其国产内核）对相对 Location 的解析不一致，
+   * 实测表现为「地址栏已跳到 127.0.0.1，但页面不加载」。Host 头就是浏览器自己请求的
+   * 主机名，直接沿用即可；缺失时退回相对路径。
+   */
+  const host = typeof request.headers.host === 'string' ? request.headers.host : ''
+  const params2 = new URLSearchParams(rest)
+  if (dshToken !== null) params2.set('token', dshToken)
+  const query = params2.toString()
+  const target = query === '' ? '/' : `/?${query}`
+  const location = /^[A-Za-z0-9.:\[\]-]{1,255}$/.test(host) ? `http://${host}${target}` : target
   response.writeHead(302, {
     'Cache-Control': 'no-store',
-    Location: rest === '' ? '/' : `/?${rest}`,
+    Location: location,
     /*
      * 与运行周期同寿：运行环境一停，令牌换了，这枚 Cookie 自然失效。
      * Max-Age 只用来让浏览器别把它当会话 Cookie 丢掉，真正决定有效性的还是令牌本身。

@@ -344,7 +344,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'diagnostics',
     title: '诊断与日志',
     hint: '日志与采集、设备能力与反馈',
-    keywords: ['诊断', '日志', 'log', 'logs', '采集', '保留', '导出', '排查', '报错', '错误', '崩溃', '重启', '自检', 'self check'],
+    keywords: ['诊断', '日志', 'log', 'logs', '采集', '保留', '导出', '排查', '报错', '错误', '崩溃', '重启', '自检', 'self check', '浏览器', '外置浏览器', 'browser', 'chrome', 'webview'],
     target: { kind: 'page', page: 'diagnostics' },
     icon: <ScrollText size={20} />,
   },
@@ -3306,6 +3306,21 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         )}
 
         {page === 'diagnostics' && (
+        <>
+        <section className="settings-section" aria-labelledby="diagnostics-external">
+          <div className="section-title">
+            <span className="section-icon"><ExternalLink size={19} /></span>
+            <div><h2 id="diagnostics-external">{t("外置浏览器")}</h2><p>{t("把 Harness 交给系统浏览器打开：旧 WebView 跑不动页面时用这条路")}</p></div>
+          </div>
+          <p className="field-help">
+            {t("外置浏览器拿到的是与本次运行绑定的令牌，可以完整使用 Harness（不是只读预览）。运行环境停止后令牌失效；重开需要回到应用再点一次。")}
+          </p>
+          <div className="settings-inline-actions">
+            <button className="button button-secondary" type="button" onClick={onOpenExternalHarness} disabled={busy !== null || runtime.phase !== 'running'}>
+              <ExternalLink size={18} />{t("用外部浏览器打开 Harness")}
+            </button>
+          </div>
+        </section>
         <div className="settings-subsection" aria-labelledby="diagnostics-subpages">
           <div className="section-title">
             <span className="section-icon"><ScrollText size={19} /></span>
@@ -3315,6 +3330,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           <SettingsPageRow icon={<Gauge size={20} />} page="diagnostics-capability" onOpen={onOpenSubpage} />
           <SettingsPageRow icon={<MessageSquare size={20} />} page="diagnostics-feedback" onOpen={onOpenSubpage} />
         </div>
+        </>
         )}
         {page === 'diagnostics-log' && (
         <>
@@ -3364,13 +3380,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           <p className="settings-note">
             {t("诊断日志只包含应用内部的事件名、状态码、布尔值与计数；导出文件头另有应用版本、机型与 ROM 构建串（不含序列号、IMEI、Android ID、账号）。不含 URL、模型密钥、Harness 临时密码、设备桥令牌、终端内容或文件路径。日志保存在应用私有目录且不参与备份，到期自动删除。")}
           </p>
-          <p className="field-help">
-            {t("外置浏览器拿到的是与本次运行绑定的令牌，可以完整使用 Harness（不是只读预览）。运行环境停止后令牌失效；重开需要回到应用再点一次。")}
-          </p>
           <div className="settings-inline-actions">
-            <button className="button button-secondary" type="button" onClick={onOpenExternalHarness} disabled={busy !== null || runtime.phase !== 'running'}>
-              <ExternalLink size={18} />{t("用外部浏览器打开 Harness")}
-            </button>
             <button className="button button-secondary" type="button" onClick={onShareDiagnostic} disabled={busy !== null || diagnostic.fileCount === 0}>
               {busy === 'diagnostic-share' ? <Loader2 className="spin" size={18} /> : <Share2 size={18} />}{t("导出并分享")}</button>
             <button className="button button-danger-quiet" type="button" onClick={onClearDiagnostic} disabled={busy !== null || diagnostic.fileCount === 0}>

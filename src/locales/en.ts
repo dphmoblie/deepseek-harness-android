@@ -1,5 +1,7 @@
 // 应用界面英文词典；不翻译用户输入、凭据或终端输出。
 export const english: Readonly<Record<string, string>> = {
+  "外置浏览器": "External browser",
+  "把 Harness 交给系统浏览器打开：旧 WebView 跑不动页面时用这条路": "Open Harness in the system browser: the way out when the WebView can't keep up",
   "HTTP 连接不安全：API Key 和请求内容可能以明文传输，建议改用 HTTPS。": "HTTP is insecure: the API key and request contents may be sent in plaintext. HTTPS is recommended.",
   "Harness 上游版本": "Upstream Harness versions",
   "直接安装官方 @deepseek-ai/dsh npm 包；Ubuntu 环境、会话与插件独立保留。": "Install the official @deepseek-ai/dsh npm package. Ubuntu, sessions, and plugins are kept separately.",
@@ -1647,6 +1649,10 @@ export const english: Readonly<Record<string, string>> = {
   "开关与所选文件会记住，重启后仍按上次的选择显示。": "Your checkbox and chosen file are remembered, so a restart restores the same choice.",
   "无法保存背景同步开关": "Could not save the background sync switch",
   "让 DSH 使用当前主题": "Use the current theme in DSH",
+  "遮盖背景的界面不透明度": "Surface opacity over the background",
+  "侧边栏不透明度": "Sidebar opacity",
+  "右侧面板不透明度": "Right panel opacity",
+  "只有勾选「连背景一起同步」时，这三项才会在 DSH 页面里透出背景。": "These three sliders only reveal the background in DSH when “Also sync the background” is checked.",
   "恢复 DSH 默认主题": "Restore the DSH default theme",
   "上次同步": "Last synced",
   "还没有同步过": "Never synced",

@@ -8,7 +8,11 @@ const { createRequire } = require('node:module')
 const { spawnSync } = require('node:child_process')
 const VERSION = /^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(?:-[a-zA-Z0-9]+(?:[.-][a-zA-Z0-9]+)*)?$/u
 const CORE = /^@deepseek-ai\/dsh(?:-[a-z0-9-]+)?$/u
-const fail = code => { throw new Error(code) }
+const fail = (code, detail) => {
+  const error = new Error(code)
+  if (detail) error.detail = detail
+  throw error
+}
 function version(value) {
   if (typeof value !== 'string' || value.length > 96 || !VERSION.test(value)) fail('HARNESS_VERSION_INVALID')
   return value
@@ -138,19 +142,48 @@ function createManager(root, execute = spawnSync, report = () => {}) {
   const bundled = path.join(root, 'opt/dsh-bundled')
   const installed = path.join(root, 'opt/dsh')
   const npm = path.join(root, 'opt/node/lib/node_modules/npm/bin/npm-cli.js')
-  function run(args, cwd, timeout = 240000) {
+  // 依赖解析在移动网络下可能超过 4 分钟；240s 会把还在下载的 npm 直接 SIGTERM 掉（实测 exit=null signal=SIGTERM）。
+  function run(args, cwd, timeout = 900000) {
     const result = execute(process.execPath, args, {
       cwd, timeout, maxBuffer: 1024 * 1024, encoding: 'utf8',
       // node-gyp 会从 PATH 查找 python3；Ubuntu 运行时把它放在 /usr/local/bin。
       // 这里仍然保留 /opt/node/bin 在最前，避免误用宿主或系统 Node。
       env: { HOME: cwd, TMPDIR: cwd, PATH: path.dirname(process.execPath) + ':/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8' },
     })
-    if (result.status !== 0 || result.error || result.signal) fail('HARNESS_INSTALL_FAILED')
+    if (result.status !== 0 || result.error || result.signal) fail('HARNESS_INSTALL_FAILED', failureDetail(result))
     return result.stdout
+  }
+
+  /**
+   * 把子进程输出收成一行可读线索，交给宿主展示/写诊断。
+   *
+   * 只留最后几行、压平空白、抹掉 URL 与绝对路径：npm 的报错里常带 registry 地址和内网路径，
+   * 这些不该出现在界面或导出日志里。
+   */
+  function failureDetail(result) {
+    // 先给可判定的证据：退出码、信号、spawn 错误、输出字节数。没有这些时，
+    // 界面上的「失败」无法区分「npm 报错」「被信号杀」「输出超限」三种情况。
+    const head = [
+      'exit=' + String(result.status),
+      'signal=' + String(result.signal ?? '-'),
+      'error=' + String(result.error?.code ?? '-'),
+      'stdout=' + String(result.stdout?.length ?? 0) + 'B',
+      'stderr=' + String(result.stderr?.length ?? 0) + 'B',
+    ].join(' ')
+    const raw = [result.stderr, result.stdout].filter(Boolean).join('\n')
+    const text = String(raw)
+      .replace(/https?:\/\/\S+/gu, '<url>')
+      .replace(/\/(?:[A-Za-z0-9._-]+\/){2,}[A-Za-z0-9._-]+/gu, '<path>')
+      .replace(/[\u0000-\u001f\u007f]/gu, ' ')
+      .replace(/\s+/gu, ' ')
+      .trim()
+    const tail = text.length > 300 ? text.slice(-300) : text
+    return tail ? head + ' | ' + tail : head
   }
   function npmArgs(command, stage) {
     return [npm, command, '--ignore-scripts', '--no-audit', '--no-fund', '--bin-links=false',
-      '--registry=https://registry.npmjs.org', '--fetch-retries=1', '--fetch-timeout=30000',
+      // 移动网络下「30 秒 + 1 次重试」太紧：上游元数据稍慢就整次安装失败。
+      '--registry=https://registry.npmjs.org', '--fetch-retries=3', '--fetch-timeout=120000',
       '--userconfig=' + path.join(stage, 'npmrc'), '--globalconfig=' + path.join(stage, 'global-npmrc'), '--cache=' + path.join(stage, 'cache')]
   }
   function verify(selected) {
@@ -323,7 +356,11 @@ if (require.main === module) {
     process.stdout.write(JSON.stringify(result) + '\n')
   } catch (error) {
     const code = /^HARNESS_[A-Z_]+$/u.test(error.message) ? error.message : 'HARNESS_PACKAGE_FAILED'
-    process.stdout.write(JSON.stringify(error.stage ? { error: code, stage: error.stage } : { error: code }) + '\n')
+    process.stdout.write(JSON.stringify({
+      error: code,
+      ...(error.stage ? { stage: error.stage } : {}),
+      ...(error.detail ? { detail: error.detail } : {}),
+    }) + '\n')
     process.exitCode = 1
   }
 }

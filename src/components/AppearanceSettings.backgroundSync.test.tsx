@@ -75,6 +75,30 @@ describe('外观设置：连背景一起同步的持久化', () => {
     expect(screen.getByText('已让 DSH 使用当前主题与背景视频')).toBeTruthy()
   })
 
+  it('遮背景的面板、左侧栏与右侧面板透明度分开调，并随载荷带给 DSH', async () => {
+    render(<AppearanceSettings />)
+
+    const overlay = screen.getByRole<HTMLInputElement>('slider', { name: /遮盖背景的界面不透明度/ })
+    const sidebar = screen.getByRole<HTMLInputElement>('slider', { name: /侧边栏不透明度/ })
+    const rightPanel = screen.getByRole<HTMLInputElement>('slider', { name: /右侧面板不透明度/ })
+    // 初值取上次同步的载荷：beforeEach 里存的是 86；侧栏与右栏字段缺失分别按 100、40 迁移。
+    expect(overlay.value).toBe('86')
+    expect(sidebar.value).toBe('100')
+    expect(rightPanel.value).toBe('40')
+
+    fireEvent.change(overlay, { target: { value: '55' } })
+    fireEvent.change(sidebar, { target: { value: '20' } })
+    fireEvent.change(rightPanel, { target: { value: '72' } })
+    fireEvent.click(screen.getByRole('button', { name: '让 DSH 使用当前主题' }))
+
+    await waitFor(() => expect(bridge.applyHarnessTheme).toHaveBeenCalled())
+    expect(bridge.applyHarnessTheme.mock.lastCall?.[0]).toMatchObject({
+      surfaceOpacity: 55,
+      sidebarOpacity: 20,
+      rightPanelOpacity: 72,
+    })
+  })
+
   it('没有文件时勾选如实说明只同步颜色，不伪造成功', async () => {
     render(<AppearanceSettings />)
     await waitFor(() => expect(bridge.harnessThemeState).toHaveBeenCalled())

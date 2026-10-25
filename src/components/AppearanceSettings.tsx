@@ -75,6 +75,15 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
   const [syncRecord, setSyncRecord] = useState(() => readAccentSync())
   const [syncing, setSyncing] = useState(false)
   const [syncMessage, setSyncMessage] = useState('')
+  /**
+   * DSH 页面的三档透明度，与外壳的「卡片不透明度」分开：
+   * 遮住背景视频的面板要够实才读得清正文，侧边栏与右侧面板则可以更透一些让视频透出来。
+   * 左右两块面板分开调：左栏是导航，右栏承载正文，同一条滑杆调不好两边。
+   * 初值取上次同步的载荷（重开设置页仍是上次的值），没同步过才回落到默认值。
+   */
+  const [overlayOpacity, setOverlayOpacity] = useState(() => syncRecord?.theme.surfaceOpacity ?? card.opacity)
+  const [sidebarOpacity, setSidebarOpacity] = useState(() => syncRecord?.theme.sidebarOpacity ?? 100)
+  const [rightPanelOpacity, setRightPanelOpacity] = useState(() => syncRecord?.theme.rightPanelOpacity ?? 40)
   // 背景默认不跟着颜色走：它体积大、还要解码，得用户自己勾。
   // 初值取本地镜像，重启后首屏就是上次的选择；原生回来后立刻对齐（见下面的 effect）。
   const [withBackground, setWithBackground] = useState(() => {
@@ -169,7 +178,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
   }
 
   /**
-   * 同步只传固定字段：明暗模式 + 三个颜色 + 面板透明度，外加「要不要带背景」。
+   * 同步只传固定字段：明暗模式 + 三个颜色 + 三档透明度与控件透明度，外加「要不要带背景」。
    *
    * 背景开关作为参数传入而不是读 state：勾选后立刻调用时，state 还没提交到这一帧，
    * 读到的会是旧值，页面就会少一次重放。
@@ -180,8 +189,10 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
     try {
       const preset = ACCENT_OPTIONS.find(option => option.value === accent)?.color ?? ACCENT_OPTIONS[0].color
       const accentColor = effectiveAccentColor() || preset
-      const surface = adaptive ? { background: adaptive.background, surface: adaptive.surface } : deriveSurface(accentColor, resolved)
-      const theme: SyncedTheme = { mode: readThemeMode(), accent: accentColor, background: surface.background, surface: surface.surface, surfaceOpacity: card.opacity, controlOpacity: card.controlOpacity, syncBackground: includeBackground && backgroundRef !== null }
+      // 面板色按「当前明暗模式」现推，不复用自适应结果：那是提取那一刻的明暗算出来的，
+      // 用户后来切到浅色再同步，就会把深色面板配浅色文字一起带过去（黑屏就是这么来的）。
+      const surface = deriveSurface(accentColor, resolved)
+      const theme: SyncedTheme = { mode: readThemeMode(), accent: accentColor, background: surface.background, surface: surface.surface, surfaceOpacity: overlayOpacity, controlOpacity: card.controlOpacity, sidebarOpacity, rightPanelOpacity, syncBackground: includeBackground && backgroundRef !== null }
       await runtimeBridge.applyHarnessTheme(theme)
       let note = '已让 DSH 使用当前主题'
       if (theme.syncBackground) {
@@ -395,6 +406,46 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
                 onChange={event => updateCard({ ...card, controlOpacity: Number(event.target.value) })}
               />
             </label>
+            {/*
+              * 遮住背景的面板、左侧栏与右侧面板分开调：正文面板要够实才读得清，
+              * 左右两栏可以更透，且各调各的——左栏是导航，右栏承载正文。
+              */}
+            <div className="appearance-range-grid">
+              <label className="range-field">
+                <span><strong>{t('遮盖背景的界面不透明度')}</strong><small>{overlayOpacity}%</small></span>
+                <input
+                  type="range"
+                  min="30"
+                  max="100"
+                  step="1"
+                  value={overlayOpacity}
+                  onChange={event => setOverlayOpacity(Number(event.target.value))}
+                />
+              </label>
+              <label className="range-field">
+                <span><strong>{t('侧边栏不透明度')}</strong><small>{sidebarOpacity}%</small></span>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={sidebarOpacity}
+                  onChange={event => setSidebarOpacity(Number(event.target.value))}
+                />
+              </label>
+              <label className="range-field">
+                <span><strong>{t('右侧面板不透明度')}</strong><small>{rightPanelOpacity}%</small></span>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={rightPanelOpacity}
+                  onChange={event => setRightPanelOpacity(Number(event.target.value))}
+                />
+              </label>
+            </div>
+            <small className="appearance-hint">{t('只有勾选「连背景一起同步」时，这三项才会在 DSH 页面里透出背景。')}</small>
             <button type="button" className="compact-button" onClick={() => void sync()} disabled={syncing}>{t('让 DSH 使用当前主题')}</button>
             <button type="button" className="compact-button" onClick={() => void unsync()} disabled={syncing}>{t('恢复 DSH 默认主题')}</button>
             <p>{syncRecord ? `${t('上次同步')} ${new Date(syncRecord.syncedAt).toLocaleString()}` : t('还没有同步过')}</p>

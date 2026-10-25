@@ -45,6 +45,21 @@ export interface SyncedTheme {
    */
   controlOpacity?: number
   /**
+   * DSH 侧边栏底色的不透明度（百分比）。
+   *
+   * 与 surfaceOpacity 分开：面板要够实才读得清正文，而侧边栏（尤其收起后的 56px 导轨）
+   * 透一些能让背景视频透出来，两者是不同用途。老记录没有这个字段，按 100 迁移。
+   */
+  sidebarOpacity?: number
+  /**
+   * DSH 右侧面板底色不透明度（百分比）。
+   *
+   * 右侧面板是右上角按钮打开的那一栏（「开始 / 工作区文件」），与左侧侧栏是两套界面：
+   * 左栏是导航，右栏承载正文，用户需要分开调。老记录没有这个字段，按 40 迁移——
+   * 此前右栏在有背景时整层透明、等于没有底，40% 是补上底色又仍透出背景的默认值。
+   */
+  rightPanelOpacity?: number
+  /**
    * 「连背景一起同步」：页面是否连背景层一起画。
    *
    * 放进来而不是另开一条通道，是因为它与主题在同一次落盘里：地址、开关、颜色分两次写，
@@ -303,6 +318,16 @@ export function validateSyncedTheme(value: unknown): SyncedTheme {
   if (typeof controlOpacity !== 'number' || !Number.isInteger(controlOpacity) || controlOpacity < 40 || controlOpacity > 100) {
     throw new Error('同步主题参数无效')
   }
+  // 侧栏透明度可以到 0（只剩按钮与文字），老记录同样按 100 迁移。
+  const sidebarOpacity = data.sidebarOpacity === undefined ? 100 : data.sidebarOpacity
+  if (typeof sidebarOpacity !== 'number' || !Number.isInteger(sidebarOpacity) || sidebarOpacity < 0 || sidebarOpacity > 100) {
+    throw new Error('同步主题参数无效')
+  }
+  // 右栏同样可到 0（整层透出背景），老记录按 40 迁移：此前右栏没有底色，补上默认档。
+  const rightPanelOpacity = data.rightPanelOpacity === undefined ? 40 : data.rightPanelOpacity
+  if (typeof rightPanelOpacity !== 'number' || !Number.isInteger(rightPanelOpacity) || rightPanelOpacity < 0 || rightPanelOpacity > 100) {
+    throw new Error('同步主题参数无效')
+  }
   return {
     mode: data.mode,
     accent: data.accent,
@@ -310,6 +335,8 @@ export function validateSyncedTheme(value: unknown): SyncedTheme {
     surface: data.surface,
     surfaceOpacity: data.surfaceOpacity,
     controlOpacity,
+    sidebarOpacity,
+    rightPanelOpacity,
     syncBackground: syncBackground === true,
   }
 }

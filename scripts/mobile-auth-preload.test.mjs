@@ -189,9 +189,10 @@ describe('mobile Harness authentication preload', () => {
   })
 
   it('turns a query-string token into a browser cookie, and only that token works', async () => {
-    const handoff = await request(port, undefined, `/?token=${BROWSER_TOKEN}`)
+    const handoff = await request(port, undefined, `/?dshMobileToken=${BROWSER_TOKEN}`)
     assert.equal(handoff.status, 302)
-    assert.equal(handoff.headers.location, '/')
+    // 绝对地址：部分浏览器不认相对 Location（实测「地址栏跳了、页面不加载」）。
+    assert.match(handoff.headers.location, /^http:\/\/127\.0\.0\.1:\d+\/$/)
     // 只种浏览器专用那一枚，而且不带分钟数：有效性由令牌本身（每次启动重生成）决定。
     assert.deepEqual(handoff.headers['set-cookie'], [
       `dsh_browser_session=${BROWSER_TOKEN}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
@@ -203,9 +204,9 @@ describe('mobile Harness authentication preload', () => {
       /^HTTP\/1\.1 101 Switching Protocols/,
     )
     // Basic 密码不能拿来交接：两者是两枚不同的令牌。
-    assert.equal((await request(port, undefined, `/?token=${TOKEN}`)).status, 403)
+    assert.equal((await request(port, undefined, `/?dshMobileToken=${TOKEN}`)).status, 403)
     // 交接只认根路径，避免误吃 dsh 自己的 token 查询参数。
-    assert.equal((await request(port, undefined, `/api?token=${BROWSER_TOKEN}`)).status, 401)
+    assert.equal((await request(port, undefined, `/api?dshMobileToken=${BROWSER_TOKEN}`)).status, 401)
   })
 
   it('tells a stale browser session to reopen instead of prompting for Basic', async () => {

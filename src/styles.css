@@ -1392,7 +1392,11 @@ button:disabled {
   min-height: 48px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  /* 搜索框同样吃主题强调色，与按钮同一组底色。这一行必须写在 border 简写之后，
+     否则 `border` 会把边框颜色重置回 --line。 */
+  border-color: color-mix(in srgb, var(--blue) 26%, var(--line));
+  /* 搜索框属于「输入框」这一组：跟按钮同一条透明度，否则按钮透了、输入框还是实底。 */
+  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--control-opacity, 100%), transparent);
   color: var(--card-ink, var(--ink));
   backdrop-filter: blur(var(--card-blur, 0px));
 }
@@ -2753,6 +2757,22 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   background: var(--blue-soft);
   color: var(--blue);
 }
+/*
+ * 主题页自己的选项按钮也要跟「按钮与输入框不透明度」走：之前只有 .button-* 与输入框读了
+ * --control-opacity，这一页的按钮（明暗模式、强调色）还是实底，滑杆看起来完全没反应。
+ */
+.appearance-option,
+.appearance-accent-option {
+  /* 底色带一点主题强调色：按钮不再只有黑白两档，跟着「强调色」走。 */
+  background: color-mix(in srgb,
+    color-mix(in srgb, var(--blue) 10%, var(--surface))
+    var(--control-opacity, 100%), transparent);
+  border-color: color-mix(in srgb, var(--blue) 26%, var(--line-strong));
+}
+.appearance-option.active,
+.appearance-accent-option.active {
+  background: color-mix(in srgb, var(--blue-soft) var(--control-opacity, 100%), transparent);
+}
 /* 原生 radio 铺满整块：既保留键盘与读屏语义，又能让整块都可点、
    焦点环也画在整块上（全局的 input:focus-visible 规则直接复用）。 */
 .appearance-option input {
@@ -3472,6 +3492,12 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 .appearance-range-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 16px; }
 .appearance-customization input[type=file] { width: 100%; min-width: 0; font-size: 0.75rem; }
 .appearance-customization input[type=color] { width: 64px; min-height: 44px; }
+/* 「连背景一起同步」这一行：勾选框与选文件按钮并排，两行说明各占一整行。
+   不给这条规则时容器还是 grid 项，label/button/small 全按行内排，文字会互相压住。 */
+.appearance-sync-background { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px 12px; align-items: center; }
+.appearance-sync-background > label { display: inline-flex; align-items: center; gap: 8px; }
+.appearance-sync-background > button { justify-self: start; }
+.appearance-sync-background > small { grid-column: 1 / -1; }
 .appearance-custom-accent { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .appearance-custom-accent > span { color: var(--card-muted, var(--muted)); }
 .session-manager-embedded { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }

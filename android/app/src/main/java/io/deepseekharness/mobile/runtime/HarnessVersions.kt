@@ -2,6 +2,8 @@ package io.deepseekharness.mobile.runtime
 
 import android.content.Context
 import android.system.Os
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -136,7 +138,22 @@ internal class HarnessVersions(private val context: Context, private val store: 
                 "HARNESS_PROFILE_CONFLICT" -> "会话配置目录存在独立核心包，请先修复插件依赖"
                 else -> "Harness 包操作失败，原版本仍保留；请查看运行时诊断后重试"
             }
-            throw RuntimeFailure(if (result.timedOut) "HARNESS_PACKAGE_TIMEOUT" else code, STAGE_LABELS[stage]?.let { "停在「$it」阶段：$message" } ?: message)
+            // 访客侧已把 npm 输出压成一行、抹掉 URL 与路径；带出来用户和诊断日志才看得到原因。
+            val detail = payload?.optString("detail").orEmpty().trim().take(300)
+            val prefix = STAGE_LABELS[stage]?.let { "停在「$it」阶段：" } ?: ""
+            val text = if (detail.isEmpty()) "$prefix$message" else "$prefix$message（$detail）"
+            store.diagnostics.record(
+                DiagnosticLevel.WARN,
+                DiagnosticEvent.RUNTIME_PHASE,
+                buildMap {
+                    put("phase", "harness-package")
+                    put("result", "failed")
+                    put("code", code)
+                    if (stage.isNotEmpty()) put("stage", stage)
+                    if (detail.isNotEmpty()) put("detail", detail)
+                },
+            )
+            throw RuntimeFailure(if (result.timedOut) "HARNESS_PACKAGE_TIMEOUT" else code, text)
         }
         return payload
     }

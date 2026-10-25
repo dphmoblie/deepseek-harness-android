@@ -64,6 +64,7 @@ export const bridge = {
   install: vi.fn(),
   startHarness: vi.fn(),
   openHarness: vi.fn(),
+  openHarnessExternal: vi.fn(),
   stopRuntime: vi.fn(),
   reset: vi.fn(),
   createTerminal: vi.fn(),
@@ -676,6 +677,7 @@ export function beforeEachAppTest(): void {
   bridge.install.mockResolvedValue({})
   bridge.startHarness.mockResolvedValue({ ...runningState })
   bridge.openHarness.mockResolvedValue(undefined)
+  bridge.openHarnessExternal.mockResolvedValue(undefined)
   bridge.stopRuntime.mockResolvedValue({ ...readyState })
   bridge.reset.mockResolvedValue({ ...notInstalledState })
   bridge.requestShizukuPermission.mockResolvedValue({ ...shizuku, permission: 'granted', connected: true })
