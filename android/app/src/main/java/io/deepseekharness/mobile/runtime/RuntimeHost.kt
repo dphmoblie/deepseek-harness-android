@@ -88,6 +88,12 @@ object RuntimeHost {
         override fun onTerminalExit(sessionId: String, exitCode: Int) {
             dispatch { sink -> sink.onTerminalExit(sessionId, exitCode) }
         }
+
+        override fun onHarnessProgress(stage: String, percent: Int) {
+            // 安装阶段进度走的是同一个扇出：漏掉这一项时事件会落到接口的空实现上，
+            // 界面只能停在「准备中…」，直到安装结束才有结果。
+            dispatch { sink -> sink.onHarnessProgress(stage, percent) }
+        }
     }
 
     private fun dispatch(action: (RuntimeEventSink) -> Unit) {

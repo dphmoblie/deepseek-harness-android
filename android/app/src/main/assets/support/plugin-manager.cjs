@@ -1380,6 +1380,25 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     if (!Array.isArray(rows) || rows.length > 512) fail('PLUGIN_CONFIG_INVALID')
     return rows
   }
+  /**
+   * 读取包声明的 bundle 补丁文件。
+   *
+   * 0.2.1-rc.2 起上游把 `dsh.bundle.patch` 从单个字符串改成了**有序数组**（一个 bundle
+   * 叠加多份预设补丁）。这里两种形态都接受，统一返回相对路径数组；空数组、超长、非字符串
+   * 一律返回 null，由调用方按原有错误码失败。只做格式校验，路径可穿越性仍由调用方用
+   * `within` + `safe` 逐层确认。
+   */
+  function bundlePatchFiles(pkg) {
+    const declared = pkg?.dsh?.bundle?.patch
+    const list = typeof declared === 'string' ? [declared] : declared
+    if (!Array.isArray(list) || list.length === 0 || list.length > 8) return null
+    const files = []
+    for (const item of list) {
+      if (typeof item !== 'string' || item.length > 160 || !/^(?:\.\/)?[A-Za-z0-9_./-]+\.(?:json|ya?ml)$/.test(item)) return null
+      files.push(item)
+    }
+    return files
+  }
   function catalog() {
     const groups = basicList().plugins
     const order = manifest().value.dshMobile?.bundleOrder ?? groups.map(group => group.id)
@@ -1428,12 +1447,14 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
         const directory = resolvePackage(group.id)
         if (!directory) fail('PLUGIN_NOT_FOUND')
         const pkg = read(path.join(directory, 'package.json'))
-        const declared = pkg.dsh?.bundle?.patch
-        if (typeof declared !== 'string' || declared.length > 160 || !/^(?:\.\/)?[A-Za-z0-9_./-]+\.(?:json|ya?ml)$/.test(declared)) fail('PLUGIN_CONFIG_INVALID')
-        const file = path.resolve(directory, declared)
-        if (!within(directory, file) || !within(directory, fs.realpathSync(safe(file)))) fail('PLUGIN_PATH_INVALID')
-        group.file = declared.replace(/^\.\//, '')
-        apply(loadPatches(file).filter(row => group.enabled || row?.insert), group.id)
+        const declared = bundlePatchFiles(pkg)
+        if (declared === null) fail('PLUGIN_CONFIG_INVALID')
+        group.file = declared[0].replace(/^\.\//, '')
+        for (const relative of declared) {
+          const file = path.resolve(directory, relative)
+          if (!within(directory, file) || !within(directory, fs.realpathSync(safe(file)))) fail('PLUGIN_PATH_INVALID')
+          apply(loadPatches(file).filter(row => group.enabled || row?.insert), group.id)
+        }
       } catch {
         entries.clear(); for (const [key, value] of before) entries.set(key, value)
         group.readable = false
@@ -1492,10 +1513,13 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
       const pkg = read(path.join(installed, 'package.json'))
       const range = pkg.dsh?.engines?.dsh
       if (range !== undefined && (typeof range !== 'string' || range.length > 256 || !satisfiesRange(current, range))) fail('PLUGIN_ENGINE_UNSUPPORTED', id)
-      if (typeof pkg.dsh?.bundle?.patch !== 'string') fail('PLUGIN_CONFIG_INVALID', id)
-      const patch = path.resolve(installed, pkg.dsh.bundle.patch)
-      if (!within(installed, patch)) fail('PLUGIN_PATH_INVALID')
-      loadPatches(safe(patch))
+      const declared = bundlePatchFiles(pkg)
+      if (declared === null) fail('PLUGIN_CONFIG_INVALID', id)
+      for (const relative of declared) {
+        const patch = path.resolve(installed, relative)
+        if (!within(installed, patch)) fail('PLUGIN_PATH_INVALID')
+        loadPatches(safe(patch))
+      }
       checked += 1
     }
     return { checked }
@@ -1706,7 +1730,15 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     safe(npm)
     if (!exists(npm)) fail('PLUGIN_UPDATER_MISSING')
     // 使用隔离配置和参数数组；不继承模型凭据，不执行依赖安装脚本。
-    const environment = { HOME: directory, PATH: path.dirname(process.execPath) + ':/usr/bin:/bin', LANG: 'C.UTF-8', TMPDIR: directory }
+    // PRoot 访客内 IPv6 不可达，Node 24 的地址族自动选择会让 npm 请求卡到超时；
+    // 显式关闭并优先 IPv4，与 harness-packages.cjs 的处理保持一致。
+    const environment = {
+      HOME: directory,
+      PATH: path.dirname(process.execPath) + ':/usr/bin:/bin',
+      LANG: 'C.UTF-8',
+      TMPDIR: directory,
+      NODE_OPTIONS: '--dns-result-order=ipv4first --no-network-family-autoselection',
+    }
     const common = ['--registry=https://registry.npmjs.org', '--userconfig=' + path.join(directory, 'npmrc'), '--globalconfig=' + path.join(directory, 'global-npmrc')]
     // 安装命令只定义一次；参数数组、`--ignore-scripts` 恒开、不经过 Shell。
     const install = spec => spawnSync(process.execPath, [npm, 'install', spec, '--ignore-scripts', '--legacy-peer-deps', '--bin-links=false', '--no-audit', '--no-fund', '--omit=dev', '--fetch-retries=1', '--fetch-timeout=30000', ...common], {
@@ -1866,10 +1898,13 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     }
     if (checkNativeAddons(path.join(stageModules, id))) fail('PLUGIN_NATIVE_UNSUPPORTED', id)
     const selected = read(path.join(stageModules, id, 'package.json'))
-    if (selected.name !== id || !VERSION.test(selected.version ?? '') || typeof selected.dsh?.bundle?.patch !== 'string') fail('PLUGIN_UPDATE_FAILED')
-    const patch = path.resolve(stageModules, id, selected.dsh.bundle.patch)
-    if (!within(path.join(stageModules, id), patch) || !fs.statSync(safe(patch)).isFile()) fail('PLUGIN_UPDATE_FAILED')
-    loadPatches(patch)
+    const declared = bundlePatchFiles(selected)
+    if (selected.name !== id || !VERSION.test(selected.version ?? '') || declared === null) fail('PLUGIN_UPDATE_FAILED')
+    for (const relative of declared) {
+      const patch = path.resolve(stageModules, id, relative)
+      if (!within(path.join(stageModules, id), patch) || !fs.statSync(safe(patch)).isFile()) fail('PLUGIN_UPDATE_FAILED')
+      loadPatches(patch)
+    }
     // 解析闭包补全。
     //
     // staging 位于 ~/.dsh-mobile/plugin-manager/versions/<txn>，而 Node 是按真实路径向上
@@ -1972,7 +2007,7 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     }
     const candidates = stagedNames.filter(name => {
       if (protectedPackage(name)) return false
-      try { return typeof read(path.join(stageModules, name, 'package.json')).dsh?.bundle?.patch === 'string' } catch { return false }
+      try { return bundlePatchFiles(read(path.join(stageModules, name, 'package.json'))) !== null } catch { return false }
     })
     if (candidates.length === 1) return candidates[0]
     const absent = candidates.filter(name => !manifest().names.includes(name))

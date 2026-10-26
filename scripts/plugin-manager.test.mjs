@@ -251,6 +251,20 @@ test('不启动 Harness 即可列出官方、第三方配置文件及子插件',
   assert.equal(groups[1].children[1].effectiveEnabled, true)
 })
 
+test('bundle 补丁声明接受上游 0.2.1-rc.2 起的数组形式并按顺序加载', t => {
+  const { write, manager } = fixture(t)
+  // 上游 rc.2 把 `dsh.bundle.patch` 从字符串改成有序数组（主补丁 + 预设），
+  // 旧解析只认字符串，整个版本会在切换前的兼容性检查里失败。
+  write('opt/dsh/node_modules/test-plugin/package.json', { name: 'test-plugin', version: '1.0.0', dsh: { bundle: { patch: ['./cordis.patch.json', './presets/extra.patch.yml'] } } })
+  write('opt/dsh/node_modules/test-plugin/presets/extra.patch.yml', [{ insert: [{ id: 'extra', name: 'test-plugin/extra' }] }])
+  write('opt/dsh/node_modules/@deepseek-ai/dsh/package.json', { name: '@deepseek-ai/dsh', version: '0.2.1-rc.2' })
+  const group = manager.list().plugins.find(row => row.id === 'test-plugin')
+  assert.equal(group.file, 'cordis.patch.json')
+  assert.deepEqual(group.children.map(row => row.id), ['tools', 'child', 'extra'])
+  // 兼容性检查与切换前的 `verify` 走同一条路径：数组声明必须能通过。
+  assert.equal(manager.checkCompatibility().checked, 2)
+})
+
 test('文件与子插件开关独立保存，恢复顺序且不写入插件源码', t => {
   const { manager, root, pluginFile } = fixture(t)
   const before = fs.readFileSync(pluginFile, 'utf8')

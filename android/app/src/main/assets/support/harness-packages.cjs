@@ -148,7 +148,18 @@ function createManager(root, execute = spawnSync, report = () => {}) {
       cwd, timeout, maxBuffer: 1024 * 1024, encoding: 'utf8',
       // node-gyp 会从 PATH 查找 python3；Ubuntu 运行时把它放在 /usr/local/bin。
       // 这里仍然保留 /opt/node/bin 在最前，避免误用宿主或系统 Node。
-      env: { HOME: cwd, TMPDIR: cwd, PATH: path.dirname(process.execPath) + ':/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8' },
+      //
+      // PRoot 访客里 IPv6 是不可达的（connect 返回 ENETUNREACH），而 Node 24 默认开启的
+      // 地址族自动选择会先去试 IPv6，随后整次请求卡到超时：npm 实测 `ETIMEDOUT`，
+      // 安装停在「解析依赖版本」阶段。关掉自动选择、显式按 IPv4 优先解析后，
+      // registry.npmjs.org 在真机上可正常访问。只影响这些子进程，不改 DSH 自身的网络行为。
+      env: {
+        HOME: cwd,
+        TMPDIR: cwd,
+        PATH: path.dirname(process.execPath) + ':/usr/local/bin:/usr/bin:/bin',
+        LANG: 'C.UTF-8',
+        NODE_OPTIONS: '--dns-result-order=ipv4first --no-network-family-autoselection',
+      },
     })
     if (result.status !== 0 || result.error || result.signal) fail('HARNESS_INSTALL_FAILED', failureDetail(result))
     return result.stdout

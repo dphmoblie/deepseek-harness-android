@@ -66,7 +66,7 @@ test('安装失败只清理本次暂存，不触碰旧版本、会话、插件�
   assert.ok(calls[0].args.includes('--ignore-scripts'))
   assert.equal(calls[0].args.includes('--legacy-peer-deps'), false)
   assert.equal(calls[0].options.shell, undefined)
-  assert.deepEqual(Object.keys(calls[0].options.env).sort(), ['HOME', 'LANG', 'PATH', 'TMPDIR'])
+  assert.deepEqual(Object.keys(calls[0].options.env).sort(), ['HOME', 'LANG', 'NODE_OPTIONS', 'PATH', 'TMPDIR'])
   assert.deepEqual(fs.readdirSync(path.join(root, 'root/.dsh-mobile/harness-versions/versions')), [])
   assert.equal(fs.readFileSync(path.join(root, 'root/.dsh/sessions/session.json'), 'utf8'), '会话')
   assert.equal(fs.readFileSync(path.join(root, 'root/.dsh-mobile/plugin-manager/user-data.json'), 'utf8'), '插件数据')
@@ -118,6 +118,9 @@ test('环境探测返回 Node ABI，并为 node-gyp 保留 /usr/local/bin', t =>
   })
   assert.throws(() => failing.install('0.2.1-rc.2', integrity), /HARNESS_INSTALL_FAILED/u)
   assert.match(calls.at(-1).options.env.PATH, /:\/usr\/local\/bin:/u)
+  // PRoot 访客里 IPv6 不可达：npm 子进程必须关闭地址族自动选择并优先 IPv4，否则整次安装超时。
+  assert.match(calls.at(-1).options.env.NODE_OPTIONS, /--no-network-family-autoselection/u)
+  assert.match(calls.at(-1).options.env.NODE_OPTIONS, /--dns-result-order=ipv4first/u)
 })
 
 // 安装链路 fixture：两步 npm install 只产出锁文件，npm ci 负责造出扁平依赖树。

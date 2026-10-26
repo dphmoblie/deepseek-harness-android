@@ -99,6 +99,15 @@ class RuntimeHostConcurrencyTest {
     }
 
     @Test
+    fun harnessInstallProgressReachesSubscribers() {
+        withSubscriber { fanOut, sink ->
+            fanOut.onHarnessProgress("fetch", 35)
+            assertEquals("fetch", sink.harnessStage)
+            assertEquals(35, sink.harnessPercent)
+        }
+    }
+
+    @Test
     fun oneSubscriberFailureDoesNotPreventOtherSubscribersFromReceivingEvents() {
         withSubscriber { fanOut, sink ->
             val subscribers = subscribers()
@@ -193,12 +202,18 @@ class RuntimeHostConcurrencyTest {
         var progress = 0
         var output = 0
         var exit = 0
+        var harnessStage: String? = null
+        var harnessPercent = -1
         override fun onProgress(snapshot: RuntimeStateSnapshot) { progress++ }
         override fun onTerminalOutput(sessionId: String, dataBase64: String, suppressPublicOutput: Boolean) {
             RuntimeHost.deviceCommandsOrNull()
             output++
         }
         override fun onTerminalExit(sessionId: String, exitCode: Int) { exit++ }
+        override fun onHarnessProgress(stage: String, percent: Int) {
+            harnessStage = stage
+            harnessPercent = percent
+        }
     }
 
     private val snapshot = RuntimeStateSnapshot(RuntimePhase.READY, "arm64-v8a", null, false, 0, 0, false, null, null)
