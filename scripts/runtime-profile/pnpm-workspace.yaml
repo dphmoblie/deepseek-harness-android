@@ -23,6 +23,11 @@ overrides:
   '@deepseek-ai/dsh-*': 0.2.1-rc.1
   # Pin pi-ai to the version upstream's lockfile uses so the exact-version patch key stays live.
   '@earendil-works/pi-ai': 1.1.0
+  # 安全修复（CI 依赖审计要求）：把 dsh 传递引入的 zod / undici 抬到已修复版本。
+  # 只锁主版本上限，避免跨大版本破坏 dsh；pnpm 11 已不读取 package.json 的 pnpm 字段，
+  # 覆盖只能写在这里。
+  zod: '>=4.6.6 <5'
+  undici: '>=8.12.2 <9'
 
 minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-acp-app@0.2.1-rc.1'
