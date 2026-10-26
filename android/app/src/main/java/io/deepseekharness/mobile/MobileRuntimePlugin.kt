@@ -60,6 +60,7 @@ import io.deepseekharness.mobile.runtime.AppUpdateInstallPolicy
 import io.deepseekharness.mobile.runtime.AppUpdateProgressThrottle
 import io.deepseekharness.mobile.runtime.AppUpdateStorage
 import io.deepseekharness.mobile.runtime.HarnessKeepAlivePolicy
+import io.deepseekharness.mobile.runtime.HarnessWebAuth
 import io.deepseekharness.mobile.runtime.HarnessOutputTailSource
 import io.deepseekharness.mobile.runtime.clampHarnessTailBytes
 import io.deepseekharness.mobile.runtime.MailboxExportOutcome
@@ -1196,6 +1197,9 @@ class MobileRuntimePlugin : Plugin() {
         val request = harnessOpenRequests.accept()
         // 获取运行时访问凭据会等待生命周期锁，不能阻塞 Capacitor 的串行桥接线程。
         execute(call) {
+            // 打开前再跑一次 Shizuku 自动检测：应用可能刚经历过进程/运行环境重启，
+            // 只在 load/resume 时尝试会留下「已授权但未连接」的空窗，设备工具随即可用。
+            shizukuAutoConnect.request()
             val sessionId = try {
                 HarnessPageUrl.requireValidSessionId(call.getString("sessionId")?.trim())
             } catch (_: IllegalArgumentException) {
@@ -1238,10 +1242,18 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun openHarnessExternal(call: PluginCall) {
         execute(call) {
+            // 与外置浏览器同理：用户可能只从设置页进入外置浏览器，resume 回调来不及覆盖
+            // 刚刚失效的 Shizuku 连接；打开动作本身再触发一次后台自动连接。
+            shizukuAutoConnect.request()
             val access = controller.openHarnessAccess()
             val browserToken = access.browserToken
                 ?: throw RuntimeFailure("HARNESS_BROWSER_HANDOFF_UNAVAILABLE", "当前运行周期不支持外置浏览器打开")
-            val uri = io.deepseekharness.mobile.runtime.HarnessWebAuth.browserLaunchUrl(access.url, browserToken)
+            // 前端在会话切换时把 `dsh.sessions.current` 镜像到这条 Cookie；外置浏览器与
+            // WebView 不共享 localStorage，只能靠它把「当前会话」带过去。
+            val lastSession = runCatching {
+                android.webkit.CookieManager.getInstance().getCookie(access.url)
+            }.getOrNull().let(HarnessWebAuth::sessionFromCookieHeader)
+            val uri = HarnessWebAuth.browserLaunchUrl(access.url, browserToken, lastSession)
                 ?: throw RuntimeFailure("HARNESS_BROWSER_HANDOFF_INVALID", "外置浏览器入口地址无效")
             val target = Intent(Intent.ACTION_VIEW, Uri.parse(uri.toASCIIString()))
                 .addCategory(Intent.CATEGORY_BROWSABLE)
