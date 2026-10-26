@@ -121,3 +121,32 @@ test('auto-disable persistence is package-scoped and example files are not scan-
     assert.match(line, /_API_KEY=REPLACE_WITH_YOUR_[A-Z_]+$/)
   }
 })
+
+/**
+ * Capacitor 的桥是单线程的（`Bridge.handlerThread`）：任何在桥线程上同步执行的方法都会把
+ * 期间**所有**桥调用堵住。下面这几个方法会 fsync、遍历目录，或去等 `lifecycleLock`
+ * （启动/安装期间最长持有 120s），因此必须走 `execute(call)` 交给后台执行器。
+ *
+ * 依据：同一个文件里的 `sessionList` 就是 `execute(call) { controller.withLifecycleLock { … } }`
+ * ——同一把锁、同样需要等待，它已经放在执行器上了。这几处漏掉会在冷启动时表现为
+ * 「点版本页/清理卡片/切语言，整个界面卡住直到看门狗超时」。
+ */
+test('bridge methods that touch disk or wait on lifecycleLock never run on the bridge thread', async () => {
+  for (const [name, next] of [
+    ['fun setAppLanguage(', 'fun setAppTheme('],
+    ['fun runtimeVersions(', 'fun listRuntimeReleases('],
+    ['fun getRuntimeSessionSnapshotState(', 'fun createRuntimeSessionSnapshot('],
+    ['fun getRuntimeCleanupState(', 'fun clearRuntimeCache('],
+    ['fun addStorageDirectory(', 'private fun storageDirectoryPicked('],
+  ]) {
+    const start = plugin.indexOf(name)
+    assert.ok(start >= 0, `找不到 ${name}`)
+    const body = plugin.slice(start, plugin.indexOf(next, start))
+    assert.match(body, /execute\(call\)/, `${name} 必须走 execute(call)，否则会阻塞串行桥线程`)
+    assert.doesNotMatch(body, /resolveWhileActive/, `${name} 不能再用 resolveWhileActive（同步跑在桥线程上）`)
+  }
+  // 语言同步必须复用 controller 持有的那个 store：插件侧自建 RuntimeStore 会绕开 lifecycleLock。
+  const language = plugin.slice(plugin.indexOf('fun setAppLanguage('), plugin.indexOf('fun setAppTheme('))
+  assert.match(language, /controller\.store\.syncHarnessLocale\(/)
+  assert.doesNotMatch(language, /RuntimeStore\(context\)/)
+})
