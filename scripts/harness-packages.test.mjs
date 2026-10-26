@@ -153,6 +153,65 @@ function installer(t, populate) {
   return { root, write, calls, events, manager, installed }
 }
 const compileCalls = calls => calls.filter(call => call.args.some(value => String(value).includes('node-gyp')))
+// 上游版本只带官方前端：适配层由校验流程从内置运行时补装（见 harness-packages.cjs 的 adapt）。
+function installedVersion(t, { sources = true } = {}) {
+  const { root, write } = fixture(t)
+  write('opt/dsh-bundled/node_modules/@deepseek-ai/dsh/package.json', { name: '@deepseek-ai/dsh', version: '0.2.1-rc.1' })
+  write('opt/dsh-bundled/node_modules/@deepseek-ai/dsh-web-frontend/package.json', { name: '@deepseek-ai/dsh-web-frontend', version: '0.2.1-rc.1' })
+  write('opt/dsh-bundled/node_modules/@deepseek-ai/dsh-web-frontend/dist/index.html', '<!doctype html>\n<html><head></head><body><div id="root"></div></body></html>\n')
+  if (sources) {
+    write('opt/dsh-bundled/node_modules/@deepseek-ai/dsh-web-frontend/dist/dsh-android.css', '/* 适配样式 */')
+    write('opt/dsh-bundled/node_modules/@deepseek-ai/dsh-web-frontend/dist/dsh-mobile-session.js', '/* 会话续接 */')
+  }
+  const relative = 'root/.dsh-mobile/harness-versions/versions/0.2.1-rc.2'
+  write(relative + '/node_modules/@deepseek-ai/dsh/package.json', { name: '@deepseek-ai/dsh', version: '0.2.1-rc.2' })
+  write(relative + '/node_modules/@deepseek-ai/dsh-web-frontend/package.json', { name: '@deepseek-ai/dsh-web-frontend', version: '0.2.1-rc.2' })
+  write(relative + '/node_modules/@deepseek-ai/dsh-web-frontend/dist/index.html',
+    '<!doctype html>\n<html lang="en">\n  <head>\n    <title>DeepSeek Harness</title>\n  </head>\n  <body>\n    <div id="root"></div>\n  </body>\n</html>\n')
+  const directory = path.join(root, relative)
+  const digest = fingerprint(directory)
+  write(relative + '/ready.json', { version: '0.2.1-rc.2', arch: process.arch, abi: process.versions.modules, sha256: digest.sha256, bytes: digest.bytes })
+  write(relative + '/inventory.json', digest.files)
+  return { root, write, directory, dist: path.join(directory, 'node_modules/@deepseek-ai/dsh-web-frontend/dist'), manager: createManager(root) }
+}
+test('校验上游版本时补装 Android 适配层、刷新指纹并保持幂等', t => {
+  const { manager, directory, dist } = installedVersion(t)
+  const readyBefore = JSON.parse(fs.readFileSync(path.join(directory, 'ready.json'), 'utf8'))
+  const before = fs.readFileSync(path.join(dist, 'index.html'), 'utf8')
+  assert.equal(manager.verify('0.2.1-rc.2').version, '0.2.1-rc.2')
+  const html = fs.readFileSync(path.join(dist, 'index.html'), 'utf8')
+  assert.ok(html.length > before.length)
+  assert.match(html, /<meta name="dsh-official-frontend" content="android-adapted-v1" \/>/u)
+  assert.match(html, /<link rel="stylesheet" href="\/dsh-android\.css" \/>/u)
+  assert.match(html, /<script src="\/dsh-mobile-session\.js"><\/script>/u)
+  assert.ok(html.indexOf('dsh-mobile-session.js') < html.indexOf('dsh-android.css'))
+  assert.equal(fs.readFileSync(path.join(dist, 'dsh-android.css'), 'utf8'), '/* 适配样式 */')
+  assert.equal(fs.readFileSync(path.join(dist, 'dsh-mobile-session.js'), 'utf8'), '/* 会话续接 */')
+  const readyAfter = JSON.parse(fs.readFileSync(path.join(directory, 'ready.json'), 'utf8'))
+  assert.notEqual(readyAfter.sha256, readyBefore.sha256)
+  const inventory = JSON.parse(fs.readFileSync(path.join(directory, 'inventory.json'), 'utf8'))
+  assert.ok(inventory.some(entry => entry.endsWith('dsh-android.css')))
+  assert.ok(inventory.some(entry => entry.endsWith('dsh-mobile-session.js')))
+  // 第二次校验：文件不再变化，且不会把刚写入的适配层当成篡改。
+  assert.equal(manager.verify('0.2.1-rc.2').version, '0.2.1-rc.2')
+  assert.equal(fs.readFileSync(path.join(dist, 'index.html'), 'utf8'), html)
+})
+test('完整性校验失败时不补装适配层', t => {
+  const { manager, dist } = installedVersion(t)
+  const index = path.join(dist, 'index.html')
+  fs.writeFileSync(index, fs.readFileSync(index, 'utf8').replace('DeepSeek Harness', '已篡改'))
+  assert.throws(() => manager.verify('0.2.1-rc.2'), /HARNESS_INTEGRITY_INVALID/u)
+  assert.equal(fs.existsSync(path.join(dist, 'dsh-android.css')), false)
+  assert.doesNotMatch(fs.readFileSync(index, 'utf8'), /dsh-official-frontend/u)
+})
+test('内置运行时缺少适配层时上游版本保持原样且仍可校验', t => {
+  const { manager, dist } = installedVersion(t, { sources: false })
+  const before = fs.readFileSync(path.join(dist, 'index.html'), 'utf8')
+  assert.equal(manager.verify('0.2.1-rc.2').version, '0.2.1-rc.2')
+  assert.equal(fs.readFileSync(path.join(dist, 'index.html'), 'utf8'), before)
+  assert.equal(fs.existsSync(path.join(dist, 'dsh-android.css')), false)
+})
+
 test('原生模块阶段：安装树自带同架构二进制时不构建也不同步', t => {
   const { manager, calls, events, installed } = installer(t, modules => {
     emit(modules, '@deepseek-ai/dsh/package.json', { name: '@deepseek-ai/dsh', version: '0.2.1-rc.2', dependencies: {} })

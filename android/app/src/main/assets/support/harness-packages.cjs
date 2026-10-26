@@ -8,6 +8,20 @@ const { createRequire } = require('node:module')
 const { spawnSync } = require('node:child_process')
 const VERSION = /^(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})(?:-[a-zA-Z0-9]+(?:[.-][a-zA-Z0-9]+)*)?$/u
 const CORE = /^@deepseek-ai\/dsh(?:-[a-z0-9-]+)?$/u
+/**
+ * 上游 npm 版本只带官方前端，没有我们的 Android 适配层（安全区与移动布局、外置浏览器会话续接）。
+ * 适配层是 dist 根目录下的静态文件，注入方式与 scripts/build-official-frontend.mjs 保持一致：
+ * 两个文件放进 dist，再在 index.html 的 `</head>` 前插入同样的三行。
+ * 这样切换上游版本后仍是移动端布局，不必修改上游代码或另起一套前端。
+ */
+const ADAPTER_FILES = ['dsh-android.css', 'dsh-mobile-session.js']
+const ADAPTER_MARKER = 'dsh-official-frontend'
+const ADAPTER_HEAD = [
+  '      <script src="/dsh-mobile-session.js"></script>',
+  '    <meta name="dsh-official-frontend" content="android-adapted-v1" />',
+  '    <link rel="stylesheet" href="/dsh-android.css" />',
+  '  </head>',
+].join('\n')
 const fail = (code, detail) => {
   const error = new Error(code)
   if (detail) error.detail = detail
@@ -197,12 +211,85 @@ function createManager(root, execute = spawnSync, report = () => {}) {
       '--registry=https://registry.npmjs.org', '--fetch-retries=3', '--fetch-timeout=120000',
       '--userconfig=' + path.join(stage, 'npmrc'), '--globalconfig=' + path.join(stage, 'global-npmrc'), '--cache=' + path.join(stage, 'cache')]
   }
+  /** 在 npm 扁平布局或内置 pnpm 隔离布局里定位前端 dist；包不存在时返回 null。 */
+  function frontendDist(base) {
+    const modules = path.join(base, 'node_modules')
+    const directory = locate(modules, path.join(modules, '@deepseek-ai/dsh/package.json'), '@deepseek-ai/dsh-web-frontend')
+    if (!directory) return null
+    const dist = path.join(directory, 'dist')
+    return fs.lstatSync(path.join(dist, 'index.html'), { throwIfNoEntry: false })?.isFile() ? dist : null
+  }
+  /** 适配层源文件取自内置运行时；旧运行时缺少这些文件时返回 null，而不是把版本判成损坏。 */
+  function adapterSources() {
+    const dist = frontendDist(bundled)
+    if (!dist) return null
+    const files = []
+    for (const name of ADAPTER_FILES) {
+      const stat = fs.lstatSync(path.join(dist, name), { throwIfNoEntry: false })
+      if (!stat?.isFile() || stat.size === 0 || stat.size > 512 * 1024) return null
+      files.push([name, fs.readFileSync(path.join(dist, name))])
+    }
+    return files
+  }
+  /**
+   * 给指定版本补装 Android 适配层，返回新增文件相对版本根目录的路径。
+   * 已适配、前端 dist 缺失或没有适配源时返回空数组（保持上游原样，不影响可用性）。
+   * 调用方必须保证此前已通过完整性校验：这里会改写 index.html。
+   */
+  function applyAdapters(target) {
+    const dist = frontendDist(target)
+    if (!dist) return []
+    const index = path.join(dist, 'index.html')
+    const stat = fs.lstatSync(index, { throwIfNoEntry: false })
+    if (!stat?.isFile() || stat.size > 1024 * 1024) return []
+    const html = fs.readFileSync(index, 'utf8')
+    if (html.includes(ADAPTER_MARKER)) return []
+    // 只处理结构可识别的官方入口；不认识的结构宁可不动，避免把版本改成无法启动的样子。
+    if (!html.includes('</head>') || !html.includes('<div id="root">')) return []
+    const sources = adapterSources()
+    if (!sources) return []
+    const temporary = index + '.' + crypto.randomUUID() + '.tmp'
+    try {
+      for (const [name, bytes] of sources) {
+        const file = path.join(dist, name)
+        if (fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) fail('HARNESS_PATH_INVALID')
+        fs.writeFileSync(file, bytes, { mode: 0o600 })
+      }
+      fs.writeFileSync(temporary, html.replace('</head>', ADAPTER_HEAD), { mode: 0o600 })
+      fs.renameSync(temporary, index)
+    } catch (error) {
+      // 失败时清掉半成品，下一次校验仍然能识别出目录不一致，不会留下"看起来已适配"的坏树。
+      fs.rmSync(temporary, { force: true })
+      for (const [name] of sources) fs.rmSync(path.join(dist, name), { force: true })
+      throw error
+    }
+    return sources.map(([name]) => path.relative(target, path.join(dist, name)))
+  }
+  /**
+   * 补装适配层并刷新指纹。
+   *
+   * 只在完整性校验**通过之后**调用：先确认目录与 ready.json 一致，再接受我们要写入的改动，
+   * 这样被篡改过的包不会被"顺手修好"。新增文件补进 inventory.json，否则下一次启动会把
+   * 自己刚写的适配层当成篡改而拒绝启动。
+   */
+  function adapt(target, ready) {
+    const inventory = read(path.join(target, 'inventory.json'))
+    const added = applyAdapters(target)
+    if (added.length === 0) return false
+    const known = new Set(inventory)
+    const digest = fingerprint(target, inventory.concat(added.filter(entry => !known.has(entry))))
+    atomic(path.join(target, 'inventory.json'), digest.files)
+    atomic(path.join(target, 'ready.json'), { ...ready, sha256: digest.sha256, bytes: digest.bytes })
+    return true
+  }
   function verify(selected) {
     const target = path.join(versions, version(selected))
     if (!fs.lstatSync(target).isDirectory() || fs.lstatSync(target).isSymbolicLink()) fail('HARNESS_PATH_INVALID')
     const ready = read(path.join(target, 'ready.json'))
     if (ready.version !== selected || ready.arch !== process.arch || ready.abi !== process.versions.modules) fail('HARNESS_ABI_MISMATCH')
     if (fingerprint(target, read(path.join(target, 'inventory.json'))).sha256 !== ready.sha256) fail('HARNESS_INTEGRITY_INVALID')
+    // 上游版本本身没有 Android 适配层：校验通过后补装，返回刷新后的元数据。
+    if (adapt(target, ready)) return read(path.join(target, 'ready.json'))
     return ready
   }
   function environment() {
@@ -295,6 +382,9 @@ function createManager(root, execute = spawnSync, report = () => {}) {
       fs.rmSync(path.join(stage, 'cache'), { recursive: true, force: true })
       phase = 'record'
       report(phase, 96)
+      // 补装 Android 适配层要在记录指纹之前完成，让 ready.json 覆盖最终安装树；
+      // 旧版本会在首次启动的 verify 里补装并刷新指纹（见 adapt）。
+      applyAdapters(stage)
       const digest = fingerprint(stage)
       atomic(path.join(stage, 'inventory.json'), digest.files)
       atomic(path.join(stage, 'ready.json'), { version: selected, abi: process.versions.modules, arch: process.arch, sha256: digest.sha256, bytes: digest.bytes })

@@ -124,7 +124,13 @@ internal class HarnessVersions(private val context: Context, private val store: 
         val result = ProcessProbe.run(
             spec = launcher.launch(argv),
             workingDirectory = store.currentRoot,
-            timeoutSeconds = if (operation == "install") 1200 else 180,
+            // verify 在首次补装 Android 适配层时要把整棵安装树再算一遍指纹（约两倍于普通校验），
+            // 低端机上也别因为超时把可用版本判成不可用；安装本身的超时另有更长的上限。
+            timeoutSeconds = when (operation) {
+                "install" -> 1200
+                "verify" -> 300
+                else -> 180
+            },
             outputLimit = 16384,
         ) { line -> progressEvent(line)?.let { event -> onProgress(event.first, event.second) } }
         val payload = runCatching { JSONObject(result.output.trimEnd().lineSequence().lastOrNull().orEmpty()) }.getOrNull()
