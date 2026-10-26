@@ -72,6 +72,7 @@ import {
   validateDiagnosticLogExport,
   validateDiagnosticLogState,
   validateDiagnosticLogText,
+  validateExternalBrowserState,
   validateHarnessLog,
   validateKeepAliveState,
   validateMailboxExportResult,
@@ -147,6 +148,8 @@ interface NativeRuntimePlugin {
   startHarness(): Promise<RuntimeState>
   openHarness(options?: { sessionId?: string }): Promise<void>
   openHarnessExternal(): Promise<void>
+  getExternalBrowsers(): Promise<unknown>
+  setExternalBrowser(options: { packageName: string | null }): Promise<void>
   testModelConnectivity(options: { providerId: string; baseUrl?: string; apiKey?: string; api?: string }): Promise<unknown>
   listModelCatalog(options: { providerId: string; baseUrl?: string; apiKey?: string; api?: string }): Promise<unknown>
   stopRuntime(): Promise<RuntimeState>
@@ -336,6 +339,14 @@ function createNativeBridge(): RuntimeBridge {
     startHarness: () => NativeRuntime.startHarness().then(validateRuntimeState),
     openHarness: (sessionId?: string) => NativeRuntime.openHarness(sessionId ? { sessionId } : undefined),
     openHarnessExternal: () => NativeRuntime.openHarnessExternal(),
+    getExternalBrowsers: async () => validateExternalBrowserState(await NativeRuntime.getExternalBrowsers()),
+    setExternalBrowser: packageName => {
+      if (packageName !== null && (typeof packageName !== 'string' || packageName.length > 255 ||
+          !/^[A-Za-z][A-Za-z0-9_.]*$/u.test(packageName))) {
+        return Promise.reject(new Error('浏览器包名无效'))
+      }
+      return NativeRuntime.setExternalBrowser({ packageName }).then(() => undefined)
+    },
     stopRuntime: () => NativeRuntime.stopRuntime().then(validateRuntimeState),
     reset: confirmation => {
       if (confirmation !== 'RESET_RUNTIME') return Promise.reject(new Error('重置确认无效'))

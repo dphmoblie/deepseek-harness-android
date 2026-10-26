@@ -30,6 +30,7 @@ import type {
   DiagnosticLogExport,
   DiagnosticLogState,
   DiagnosticLogText,
+  ExternalBrowserState,
   HarnessLog,
   KeepAliveState,
   MailboxAvailability,
@@ -603,6 +604,33 @@ export function validateRuntimeState(value: unknown): RuntimeState {
     ...(harnessUrl === undefined ? {} : { harnessUrl }),
     ...(errorCode === undefined ? {} : { errorCode }),
   }
+}
+
+/**
+ * 外置浏览器清单与选择。
+ *
+ * 原生只应返回包名与显示名；这里再验一遍格式、去重，并确认 `selected`
+ * 仍在清单里，避免界面上出现一个指向未知应用的下拉项。
+ */
+export function validateExternalBrowserState(value: unknown): ExternalBrowserState {
+  const state = asRecord(value, '浏览器清单')
+  if (!Array.isArray(state.browsers) || state.browsers.length > 32) throw new Error('浏览器清单格式无效')
+  const browsers = state.browsers.map((raw: unknown) => {
+    const browser = asRecord(raw, '浏览器信息')
+    if (typeof browser.packageName !== 'string' || browser.packageName.length > 255 ||
+        !/^[A-Za-z][A-Za-z0-9_.]*$/u.test(browser.packageName) ||
+        typeof browser.label !== 'string' || browser.label.length === 0 || browser.label.length > 120 ||
+        [...browser.label].some(char => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f)) {
+      throw new Error('浏览器信息格式无效')
+    }
+    return { packageName: browser.packageName, label: browser.label }
+  })
+  if (new Set(browsers.map(browser => browser.packageName)).size !== browsers.length) throw new Error('浏览器清单重复')
+  if (state.selected !== null && typeof state.selected !== 'string') throw new Error('浏览器选择格式无效')
+  if (typeof state.selected === 'string' && !browsers.some(browser => browser.packageName === state.selected)) {
+    throw new Error('浏览器选择不在清单内')
+  }
+  return { browsers, selected: state.selected ?? null }
 }
 
 /**

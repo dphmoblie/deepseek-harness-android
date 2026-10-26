@@ -169,6 +169,20 @@ class RuntimeStore(context: Context) {
     }
 
     /**
+     * 「用外部浏览器打开 Harness」固定的浏览器包名；null 表示每次询问系统选择器。
+     *
+     * 只保存包名，不保存 URL、令牌或浏览历史。打开前原生侧仍会核对这个包
+     * 当前是否还在可处理网页的清单里，卸载后自动退回选择器。
+     */
+    fun externalBrowserPackage(): String? = preferences.getString(KEY_EXTERNAL_BROWSER, null)
+
+    fun setExternalBrowserPackage(packageName: String?) {
+        preferences.edit().apply {
+            if (packageName == null) remove(KEY_EXTERNAL_BROWSER) else putString(KEY_EXTERNAL_BROWSER, packageName)
+        }.apply()
+    }
+
+    /**
      * 把应用界面语言同步到 Harness 运行时的 `~/.dsh/settings.yaml`（locale.preference）。
      *
      * 运行时尚未安装时视为合法空操作：允许在安装前选择语言，由 startHarness() 重放。
@@ -1617,6 +1631,8 @@ class RuntimeStore(context: Context) {
         private const val KEY_KEEP_AWAKE = "keep_screen_awake"
         private const val KEY_KEEP_BACKGROUND = "keep_runtime_in_background"
         private const val KEY_OVERLAY_BALL = "overlay_ball_enabled"
+        /** 外置浏览器包名；缺键或空值表示每次询问。 */
+        private const val KEY_EXTERNAL_BROWSER = "external_browser_package"
         private const val KEY_DEFAULT_MODELS = "provider_default_models_v1"
         private const val KEY_PREWARM_HARNESS = "prewarm_harness"
             // 运行时恢复记录：只保存运行意图、最近阶段与时间，绝不保存凭据。

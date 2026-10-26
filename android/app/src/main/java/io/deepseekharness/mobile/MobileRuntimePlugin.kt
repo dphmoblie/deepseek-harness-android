@@ -71,6 +71,7 @@ import io.deepseekharness.mobile.runtime.draftOrSavedBaseUrl
 import io.deepseekharness.mobile.runtime.MailboxDirectoryEntry
 import io.deepseekharness.mobile.runtime.MailboxDirectoryState
 import io.deepseekharness.mobile.runtime.TaskNotification
+import io.deepseekharness.mobile.runtime.WorkspaceFileSharing
 import io.deepseekharness.mobile.runtime.MailboxImportOutcome
 import io.deepseekharness.mobile.runtime.MailboxState
 import io.deepseekharness.mobile.runtime.MobileRuntimeController
@@ -1233,6 +1234,47 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 读取可用浏览器清单与已保存的选择。
+     *
+     * 权限：应用内桥接。返回值只有包名与显示名，不含浏览历史或其他应用数据；
+     * 前端据此渲染「打开方式」，不替用户默认勾选任何浏览器。
+     */
+    @PluginMethod
+    fun getExternalBrowsers(call: PluginCall) {
+        execute(call) {
+            val browsers = ExternalBrowsers.list(context)
+            val selected = controller.store.externalBrowserPackage()
+                ?.takeIf { packageName -> browsers.any { it.packageName == packageName } }
+            JSObject()
+                .put("browsers", ExternalBrowsers.toJson(browsers))
+                .put("selected", selected ?: JSONObject.NULL)
+        }
+    }
+
+    /**
+     * 保存外置浏览器选择；`packageName` 为 null 表示「每次询问」。
+     *
+     * 安全校验点：包名必须仍在可处理网页的清单里，否则拒收；不把任意字符串
+     * 写进偏好，也不允许指向本应用（清单已排除自身）。
+     */
+    @PluginMethod
+    fun setExternalBrowser(call: PluginCall) {
+        execute(call) {
+            if (!call.data.has("packageName")) throw RuntimeFailure("EXTERNAL_BROWSER_INVALID", "浏览器选择缺失")
+            val packageName = when (val raw = call.data.opt("packageName")) {
+                null, JSONObject.NULL -> null
+                is String -> raw
+                else -> throw RuntimeFailure("EXTERNAL_BROWSER_INVALID", "浏览器选择无效")
+            }
+            if (packageName != null && ExternalBrowsers.select(context, packageName) == null) {
+                throw RuntimeFailure("EXTERNAL_BROWSER_UNAVAILABLE", "所选浏览器不可用")
+            }
+            controller.store.setExternalBrowserPackage(packageName)
+            null
+        }
+    }
+
+    /**
      * 把当前 Harness 交给外置浏览器（完整能力，不是只读预览）。
      *
      * URL 里只带**浏览器专用**的那枚令牌（不是 Basic 密码）。预载脚本把它换成 HttpOnly
@@ -1257,12 +1299,22 @@ class MobileRuntimePlugin : Plugin() {
                 ?: throw RuntimeFailure("HARNESS_BROWSER_HANDOFF_INVALID", "外置浏览器入口地址无效")
             val target = Intent(Intent.ACTION_VIEW, Uri.parse(uri.toASCIIString()))
                 .addCategory(Intent.CATEGORY_BROWSABLE)
-            // 交给系统选择器：用哪个浏览器打开由用户决定。选择器本身不需要 NEW_TASK，
-            // 目标 Activity 由系统在应用任务栈里启动。
-            try {
-                context.startActivity(Intent.createChooser(target, "选择浏览器打开 Harness").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            } catch (_: android.content.ActivityNotFoundException) {
-                throw RuntimeFailure("HARNESS_BROWSER_UNAVAILABLE", "没有可用的浏览器")
+            // 用户固定过浏览器且它仍然可用时直接用它打开；没选过、已卸载或启动失败时
+            // 退回系统选择器，不让一个过期的偏好挡住入口。
+            val chosen = ExternalBrowsers.select(context, controller.store.externalBrowserPackage())
+            val launched = chosen != null && runCatching {
+                context.startActivity(
+                    Intent(target).setPackage(chosen.packageName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }.isSuccess
+            if (!launched) {
+                // 交给系统选择器：用哪个浏览器打开由用户决定。选择器本身不需要 NEW_TASK，
+                // 目标 Activity 由系统在应用任务栈里启动。
+                try {
+                    context.startActivity(Intent.createChooser(target, "选择浏览器打开 Harness").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                } catch (_: android.content.ActivityNotFoundException) {
+                    throw RuntimeFailure("HARNESS_BROWSER_UNAVAILABLE", "没有可用的浏览器")
+                }
             }
             null
         }
@@ -2466,19 +2518,9 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     private fun shareWorkspaceFile(relative: String, open: Boolean) {
-        val manager = RuntimeWorkspaceFiles(controller.store, context.cacheDir)
-        val target = manager.copyForSharing(relative)
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.diagnostics", target)
-        val intent = Intent(if (open) Intent.ACTION_VIEW else Intent.ACTION_SEND).apply {
-            val mime = manager.mimeType(relative)
-            if (open) setDataAndType(uri, mime) else {
-                type = mime
-                putExtra(Intent.EXTRA_STREAM, uri)
-            }
-            clipData = ClipData.newRawUri(target.name, uri)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        context.startActivity(Intent.createChooser(intent, if (open) "打开 DSH 文件" else "分享 DSH 文件").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        // 与内置预览面板共用同一条校验/复制/授权链路，避免两处口径漂移。
+        val chooser = WorkspaceFileSharing.chooser(context, controller.store, context.cacheDir, relative, open)
+        context.startActivity(chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     @PluginMethod

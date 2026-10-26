@@ -65,6 +65,8 @@ export const bridge = {
   startHarness: vi.fn(),
   openHarness: vi.fn(),
   openHarnessExternal: vi.fn(),
+  getExternalBrowsers: vi.fn().mockResolvedValue({ browsers: [], selected: null }),
+  setExternalBrowser: vi.fn().mockResolvedValue(undefined),
   stopRuntime: vi.fn(),
   reset: vi.fn(),
   createTerminal: vi.fn(),

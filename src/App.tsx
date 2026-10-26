@@ -114,6 +114,7 @@ import type {
   AccessibilityServiceStatus,
   AppUpdateChannel,
   CustomModelProvider,
+  ExternalBrowserState,
   HarnessLog,
   KeepAliveState,
   MailboxDirectoryState,
@@ -1617,6 +1618,10 @@ interface SettingsScreenProps {
   onLaunchConfirmed: () => void
   /** 仅用于诊断旧 WebView：把当前 Harness 交给系统外部浏览器。 */
   onOpenExternalHarness: () => void
+  /** 可用浏览器清单与当前选择；浏览器预览环境为 null 或空清单，界面不显示选择器。 */
+  externalBrowsers: ExternalBrowserState | null
+  /** 保存外置浏览器选择；传 null 表示每次询问系统选择器。 */
+  onSelectExternalBrowser: (packageName: string | null) => void
   /** 跳转到系统「显示在其他应用上层」设置页；权限只能由用户手动开启。 */
   onOpenOverlaySettings: () => void
   onOpenShizuku: () => void
@@ -1662,7 +1667,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenExternalHarness, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSaveCredentials, settledCredentials, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenExternalHarness, externalBrowsers, onSelectExternalBrowser, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSaveCredentials, settledCredentials, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
@@ -3320,6 +3325,26 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               <ExternalLink size={18} />{t("用外部浏览器打开 Harness")}
             </button>
           </div>
+          {externalBrowsers !== null && externalBrowsers.browsers.length > 0 && (
+            <>
+              <label className="field">
+                <span>{t("打开方式")}</span>
+                <select
+                  value={externalBrowsers.selected ?? ''}
+                  disabled={busy !== null}
+                  onChange={event => onSelectExternalBrowser(event.target.value === '' ? null : event.target.value)}
+                >
+                  <option value="">{t("每次询问（系统选择器）")}</option>
+                  {externalBrowsers.browsers.map(browser => (
+                    <option key={browser.packageName} value={browser.packageName}>{browser.label}</option>
+                  ))}
+                </select>
+              </label>
+              <p className="field-help">
+                {t("固定一个浏览器后，点上面的按钮就用它直接打开；选「每次询问」则每次都交给系统选择器。浏览器卸载后会自动回到每次询问。")}
+              </p>
+            </>
+          )}
         </section>
         <div className="settings-subsection" aria-labelledby="diagnostics-subpages">
           <div className="section-title">
@@ -3454,6 +3479,8 @@ export function App() {
     applyShellFontScale(settings?.terminalFontSize ?? SHELL_FONT_BASELINE_PX)
   }, [settings?.terminalFontSize])
   const [settingsReadStatus, setSettingsReadStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
+  /** 外置浏览器清单与选择；只在诊断页需要，读不到时隐藏选择器。 */
+  const [externalBrowsers, setExternalBrowsers] = useState<ExternalBrowserState | null>(null)
   const settingsReadRevision = useRef(0)
   /**
    * 后台轮询的两件状态必须放在 ref 里，**不能放在 effect 闭包里**：
@@ -4751,6 +4778,30 @@ export function App() {
     }, t("已交给外置浏览器打开"))
   }, [run])
 
+  /**
+   * 外置浏览器清单只在进入诊断页时读取。
+   *
+   * 这是一次包管理查询，管理首页不需要它；读失败时隐藏选择器即可，
+   * 「用外部浏览器打开」仍会按系统选择器工作，不阻断入口。
+   */
+  useEffect(() => {
+    if (settingsPageOf(activeView) !== 'diagnostics') return
+    let current = true
+    runtimeBridge.getExternalBrowsers().then(next => {
+      if (current) setExternalBrowsers(next)
+    }).catch(() => {
+      if (current) setExternalBrowsers(null)
+    })
+    return () => { current = false }
+  }, [activeView])
+
+  const selectExternalBrowser = useCallback((packageName: string | null) => {
+    void run('external-browser-select', async () => {
+      await runtimeBridge.setExternalBrowser(packageName)
+      setExternalBrowsers(previous => previous === null ? previous : { ...previous, selected: packageName })
+    }, t("已更新外部浏览器"))
+  }, [run])
+
   const clearDiagnostic = useCallback(() => {
     void run('diagnostic-clear', async isCurrent => {
       const next = await runtimeBridge.clearDiagnosticLog()
@@ -5402,7 +5453,7 @@ export function App() {
         /** 三级页的返回键回它的二级页；二级页照旧回设置首页。 */
         const parentPage = SETTINGS_PAGE_META[page].parent
         const backTarget: AppView = parentPage === undefined ? 'settings' : SETTINGS_PAGE_META[parentPage].view
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenExternalHarness={openExternalHarness} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveCredentials={() => saveSettingsDraft()} settledCredentials={settledCredentials.current} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenExternalHarness={openExternalHarness} externalBrowsers={externalBrowsers} onSelectExternalBrowser={selectExternalBrowser} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveCredentials={() => saveSettingsDraft()} settledCredentials={settledCredentials.current} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

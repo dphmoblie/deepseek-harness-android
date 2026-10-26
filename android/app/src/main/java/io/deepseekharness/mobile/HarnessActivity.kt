@@ -32,6 +32,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import io.deepseekharness.mobile.runtime.HarnessAccess
 import io.deepseekharness.mobile.runtime.RuntimeStore
+import io.deepseekharness.mobile.runtime.WorkspaceFileSharing
 import java.io.ByteArrayInputStream
 import java.net.URI
 import java.util.concurrent.Executors
@@ -49,6 +50,13 @@ class HarnessActivity : AppCompatActivity() {
     /** The OAuth page is opened by Harness with window.open(); keep its transport WebView detached. */
     private var authorizationPopup: WebView? = null
     private val pageRetryHandler = Handler(Looper.getMainLooper())
+    /**
+     * 预览面板分享专用线程：复制工作区文件可能到几十 MB，不能占主线程。
+     * 单线程串行，避免用户连点两次同时复制同一份大文件。
+     */
+    private val workspaceShareExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "dsh-workspace-share").apply { isDaemon = true }
+    }
     private val exitConfirmationPolicy = HarnessExitConfirmationPolicy()
     private var exitConfirmationDialog: AlertDialog? = null
 
@@ -282,7 +290,10 @@ class HarnessActivity : AppCompatActivity() {
                 // 同一时刻补一次浏览器 API：老 WebView 缺 AbortSignal.any，页面自带的
                 // 「选择工作区目录」会在点开时直接报错。缺失才补，新的 WebView 上是空操作。
                 HarnessPolyfill.apply(view)
+                // 官方预览面板没有分享入口；补一个按钮，点击回到原生分享。
+                HarnessWorkspaceShare.apply(view)
             },
+            onWorkspaceShare = ::shareWorkspaceFile,
         )
         clearHttpAuthCredentialsAsync()
         val cookies = CookieManager.getInstance().apply {
@@ -310,8 +321,46 @@ class HarnessActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 预览面板点「分享」后的原生处理。
+     *
+     * 页面传来的只是资源地址，这里重新解析成工作区相对路径；路径校验和文件复制都在
+     * 后台线程完成（只允许 `root/1` 下的普通文件），最后回到主线程弹系统分享面板。
+     * 失败时不回传具体文件路径或系统错误，只给一条通用提示。
+     */
+    private fun shareWorkspaceFile(raw: String) {
+        if (isFinishing || isDestroyed) return
+        val relative = WorkspaceShareAddress.relativePath(raw)
+        if (relative == null) {
+            Toast.makeText(this, R.string.harness_file_action_failed, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val app = this
+        workspaceShareExecutor.execute {
+            val chooser = try {
+                WorkspaceFileSharing.chooser(app, RuntimeStore(app), app.cacheDir, relative, open = false)
+            } catch (_: Exception) {
+                null
+            }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                if (chooser == null) {
+                    Toast.makeText(app, R.string.harness_file_action_failed, Toast.LENGTH_SHORT).show()
+                    return@runOnUiThread
+                }
+                try {
+                    startActivity(chooser)
+                } catch (_: Exception) {
+                    Toast.makeText(app, R.string.harness_file_action_failed, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     override fun onDestroy() {
         resetExitConfirmation()
+        // 只拒绝新任务；正在复制的那一次会自然跑完，再在主线程丢弃结果。
+        workspaceShareExecutor.shutdown()
         pageLoadGate.cancel()
         if (!isChangingConfigurations) OverlayBallService.closeConversation()
         // 页面可能仍在等待选择结果：必须显式回传 null，否则该 input 会永久处于"等待选择文件"。
@@ -607,6 +656,7 @@ class HarnessActivity : AppCompatActivity() {
             (view?.context as? HarnessActivity)?.finish()
         },
         private val onMainFrameLoaded: (WebView) -> Unit = {},
+        private val onWorkspaceShare: (String) -> Unit = {},
     ) : WebViewClient() {
         override fun onPageFinished(view: WebView?, url: String?) {
             if (view != null) onMainFrameLoaded(view)
@@ -627,6 +677,14 @@ class HarnessActivity : AppCompatActivity() {
 
         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
             val uri = request?.url ?: return true
+            // 预览面板的分享按钮：只认带用户手势的主框架 GET，且 scheme 必须是 dsh-share。
+            // 任何情况下都不让页面真的去加载这个地址（WebView 没有对应协议处理器）。
+            if (WorkspaceShareAddress.SCHEME.equals(uri.scheme, ignoreCase = true)) {
+                if (request.hasGesture() && request.method == "GET" && request.isForMainFrame) {
+                    onWorkspaceShare(uri.toString())
+                }
+                return true
+            }
             if (origin.allows(uri)) return false
             // A page must not be able to launch the external account chooser from a timer,
             // redirect, or injected script.  Popup transport gets its own one-shot allowance

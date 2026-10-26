@@ -302,6 +302,9 @@ export function createBrowserBridge(): RuntimeBridge {
       window.open(url.toString(), '_blank', 'noopener,noreferrer')
       return Promise.resolve()
     },
+    // 浏览器预览没有系统浏览器选择器；返回空清单，界面据此隐藏「打开方式」。
+    getExternalBrowsers: () => Promise.resolve({ browsers: [], selected: null }),
+    setExternalBrowser: () => Promise.resolve(),
     stopRuntime: () => {
       state = { ...state, phase: state.installedVersion === undefined ? 'not-installed' : 'ready', harnessUrl: undefined }
       return Promise.resolve({ ...state })

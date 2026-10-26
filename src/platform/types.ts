@@ -81,6 +81,23 @@ export interface RuntimeState {
   errorCode?: string
 }
 
+/** 「用外部浏览器打开 Harness」可选的浏览器；只含包名与显示名，不含浏览记录。 */
+export interface ExternalBrowser {
+  packageName: string
+  label: string
+}
+
+/**
+ * 浏览器清单与当前选择。
+ *
+ * `selected` 为 `null` 表示每次询问系统选择器；已保存的浏览器被卸载后，
+ * 原生侧也会把它当 `null` 返回，界面不需要自己推断。
+ */
+export interface ExternalBrowserState {
+  browsers: ExternalBrowser[]
+  selected: string | null
+}
+
 /**
  * 应用更新包（APK）的下载进度：原生侧按节流推送，`totalBytes` 是发布页声明的包体大小。
  *
@@ -1622,8 +1639,16 @@ export interface RuntimeBridge {
   install: (source?: RuntimeSource) => Promise<RuntimeInstallResult>
   startHarness: () => Promise<RuntimeState>
   openHarness: (sessionId?: string) => Promise<void>
-  /** 仅用于兼容性诊断：把当前 Harness 交给系统外部浏览器。 */
+  /**
+   * 仅用于兼容性诊断：把当前 Harness 交给系统外部浏览器。
+   *
+   * 用户在设置里固定过浏览器时直接用它；否则交给系统选择器。
+   */
   openHarnessExternal: () => Promise<void>
+  /** 读取可用浏览器清单与已保存的选择（只含包名与显示名）。 */
+  getExternalBrowsers: () => Promise<ExternalBrowserState>
+  /** 保存外置浏览器选择；传 `null` 表示每次询问系统选择器。 */
+  setExternalBrowser: (packageName: string | null) => Promise<void>
   stopRuntime: () => Promise<RuntimeState>
   reset: (confirmation: 'RESET_RUNTIME') => Promise<RuntimeState>
   createTerminal: (kind: TerminalKind, columns: number, rows: number) => Promise<{ sessionId: string }>

@@ -46,6 +46,17 @@
     <queries>
         <package android:name="moe.shizuku.privileged.api" />
         <provider android:authorities="moe.shizuku.privileged.api.shizuku" />
+        <!-- 「用外部浏览器打开 Harness」需要列出可用浏览器；只查询能处理网页的 Activity。 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="http" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
     </queries>
 
     <application

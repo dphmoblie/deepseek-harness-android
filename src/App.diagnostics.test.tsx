@@ -243,4 +243,38 @@ describe('诊断与日志', () => {
     expect(await screen.findByText(/当前没有可查看的诊断日志/)).toBeVisible()
     expect(document.querySelector('.diagnostic-log-output')).toBeNull()
   })
+
+  it('外置浏览器可固定选择，也能改回每次询问', async () => {
+    bridge.getExternalBrowsers.mockResolvedValue({
+      browsers: [
+        { packageName: 'com.android.chrome', label: 'Chrome' },
+        { packageName: 'com.honor.browser', label: '浏览器' },
+      ],
+      selected: null,
+    })
+    render(<App />)
+    await arriveAtSettingsHome()
+
+    await openSettingsPage('诊断与日志')
+    const select = await screen.findByRole('combobox', { name: '打开方式' })
+    await waitFor(() => expect(select).toHaveValue(''))
+
+    fireEvent.change(select, { target: { value: 'com.honor.browser' } })
+    await waitFor(() => expect(bridge.setExternalBrowser).toHaveBeenCalledWith('com.honor.browser'))
+    // 选择期间整页进入忙碌态，等它落定后再改回「每次询问」。
+    await waitFor(() => expect(select).toBeEnabled())
+
+    fireEvent.change(select, { target: { value: '' } })
+    await waitFor(() => expect(bridge.setExternalBrowser).toHaveBeenLastCalledWith(null))
+  })
+
+  it('读不到浏览器清单时不显示打开方式', async () => {
+    bridge.getExternalBrowsers.mockRejectedValue(new Error('bridge unavailable'))
+    render(<App />)
+    await arriveAtSettingsHome()
+
+    await openSettingsPage('诊断与日志')
+    expect(await screen.findByText('用外部浏览器打开 Harness')).toBeTruthy()
+    expect(screen.queryByRole('combobox', { name: '打开方式' })).not.toBeInTheDocument()
+  })
 })
