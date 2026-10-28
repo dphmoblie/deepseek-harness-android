@@ -1,18 +1,18 @@
 # 移动端 DSH 插件兼容、对话 UI 与轻量化部署设计
 
 > 目标：让桌面 DSH 插件生态（dsh-web-ui 全家桶、dshmarket、modlens、archify 等）在手机
-> WebView 内的 Harness Web UI 上可用；为各部分给出移动布局方案；应用打开后直接进入
-> Harness 对话，并通过固定 Release 运行时保持 APK 轻量。
+> WebView 内的 Harness Web UI 上可用；为各部分给出移动布局方案；用户点「打开对话」后进入
+> Harness 对话（应用启动时不自动打开），并通过固定 Release 运行时保持 APK 轻量。
 > 参考实现：kelai141 生态的 @dsh-android/dsh-client-ui-responsive（编译产物在本机
 > .dsh-dl/dsh-android-dsh-client-ui-responsive-0.1.0.tgz，本文中的模式均经其代码核实）。
 
-## 1. 现状基线（0.1.9）
+## 1. 现状基线（0.3.6）
 
 - **三端结构**：Capacitor 启动与管理 UI（src/）→ 原生 HarnessActivity 内的移动对话 UI
   （rootfs 内 dsh web，仅 127.0.0.1 + preload 认证）→ runtime profile 插件集
   （rootfs 配方：Ubuntu 24.04 ARM64 + Node 24.19 + @deepseek-ai/dsh 0.2.1-rc.1）。
-- **入口契约**：运行时就绪时启动应用直接恢复最近会话；服务、Ubuntu、终端、重置、
-  来源和 Shizuku 统一放在设置页，无额外引导或用户登录页。
+- **入口契约**：应用不会自动打开 Harness，用户点「打开对话」后才启动或复用服务并恢复最近会话；
+  服务、Ubuntu、终端、重置、来源和 Shizuku 统一放在设置页，无额外引导或用户登录页。
 - **桌面插件生态**（本机桌面 profile 实测在装）：@linxin666/dsh-web-ui-all（task-board/
   git-graph/pet/remote-web-ui/live-stats/web-ui-settings/aionui-panel/ssh/liangshen/skins/
   skin-center/describe-image）、dshmarket、modlens、archify、distill、notify、dsh-browser。
@@ -54,8 +54,8 @@
 
 ## 4. 应用入口与管理
 
-1. **直接对话**：运行时为 ready 时自动启动 Harness，为 running 时直接复用；
-   HarnessActivity 恢复最近未归档会话，没有会话时自动新建。
+1. **直接对话**：运行时为 running 时直接复用；为 ready 时由用户点「打开对话」启动
+   Harness。HarnessActivity 恢复最近未归档会话，没有会话时自动新建。
 2. **首次安装**：运行时不存在时只显示“安装并进入对话”的状态入口。官方 APK 已固定
    同一 Release 的 manifest URL 与 SHA-256，用户无需填写来源或完成额外配置步骤。
 3. **设置归位**：Harness 服务启停、Ubuntu 安装进度和重置、Ubuntu/设备终端、
@@ -67,7 +67,7 @@
 
 | 层 | 现状 | 轻量动作 |
 |---|---|---|
-| APK | `0.1.9` arm64-only，release 已开 minify+shrinkResources | APK 内嵌已校验 rootfs；Release 同时提供独立 runtime 资产 |
+| APK | `0.3.6` arm64-only，release 为 `minifyEnabled false` + `shrinkResources false`（发布版不混淆，见 `android/README.md`） | APK 内嵌已校验 rootfs；Release 同时提供独立 runtime 资产 |
 | 运行时 | CI 生成 Ubuntu + Node + dsh bundle | 与 APK 同 tag 发布；manifest URL 和摘要在构建时固定，无手工配置 |
 | 插件集 | rootfs 配方含完整 dsh | 官方前端直接提供模型、设置与插件入口，客户端插件沿用上游加载机制 |
 | 传输 | preload 认证 | HTTP Basic 与 WebSocket HttpOnly Cookie 共用每次启动的新 token |
@@ -82,7 +82,7 @@
 3. Capacitor 已采用无额外引导的直接对话入口，管理能力集中到设置，不再使用四栏主导航。
 4. Shizuku 将授权与 UserService 连接分开显示；未连接时设备终端不可用且提供显式连接。
 5. CI 打包官方前端和 rootfs，生成同 tag Release manifest，并把其 URL/摘要固定进
-   `0.1.9` 内嵌运行时 APK。
+   `0.3.6` 内嵌运行时 APK。
 6. 真机验收以 `docs/mobile-acceptance-checklist.md` 为准。
 7. 拉取相邻目录的上游源码不会更改 APK 依赖。当前打包固定使用 dsh 与官方前端 0.2.1-rc.1；升级这些依赖需要同时验证客户端、运行时和认证协议。
 
