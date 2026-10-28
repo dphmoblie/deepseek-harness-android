@@ -64,9 +64,18 @@ internal object ExternalBrowsers {
         return result.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.label })
     }
 
+    /**
+     * 包名形态是否合法。
+     *
+     * 抽成独立的纯函数，是为了让「非法形态必须在查询系统之前就被拒绝」这条边界能在 JVM 单测里
+     * 钉住：这个值最终会进显式 Intent 的 `setPackage`，不能等到打开时才失败。
+     */
+    internal fun isSelectable(packageName: String?): Boolean =
+        packageName != null && PACKAGE.matches(packageName)
+
     /** 已保存的包名必须在当前清单里；卸载或禁用后返回 null，打开时退回系统选择器。 */
     fun select(context: Context, packageName: String?): Browser? {
-        if (packageName == null || !PACKAGE.matches(packageName)) return null
+        if (!isSelectable(packageName)) return null
         return list(context).firstOrNull { it.packageName == packageName }
     }
 

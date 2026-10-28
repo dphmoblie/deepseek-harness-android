@@ -2547,6 +2547,56 @@ class MobileRuntimePlugin : Plugin() {
         resolveWhileActive(call) { JSObject().put("enabled", io.deepseekharness.mobile.shizuku.DeviceShellAccess.enabled(context)) }
     }
 
+    /**
+     * 权限：应用内桥接。
+     * 「用外部浏览器打开 Harness」可选的浏览器清单与当前选择。
+     *
+     * 只回包名与显示名，不含浏览历史或任何用户数据。`selected` 会被重新核对：
+     * 已保存的浏览器被卸载/禁用后回 `null`，让界面退回「每次询问系统选择器」，
+     * 而不是留一个指向不存在应用的下拉项。
+     *
+     * 一次包管理查询 + 至多 32 条结果，放在后台执行器上，避免占住串行桥线程。
+     */
+    @PluginMethod
+    fun getExternalBrowsers(call: PluginCall) {
+        execute(call) {
+            val browsers = ExternalBrowsers.list(context)
+            val selected = controller.store.externalBrowserPackage()
+            JSObject()
+                .put("browsers", ExternalBrowsers.toJson(browsers))
+                // 保存的包名不在当前清单里（已卸载/禁用）就当作未选择：打开时退回系统选择器。
+                .put(
+                    "selected",
+                    browsers.firstOrNull { it.packageName == selected }?.packageName ?: JSONObject.NULL,
+                )
+        }
+    }
+
+    /**
+     * 权限：应用内桥接。
+     * 保存「用哪个外部浏览器打开」，传 `null` 表示每次询问系统选择器。
+     *
+     * 包名必须在当前可处理网页的清单里——这个值最终会进显式 Intent 的 `setPackage`，
+     * 不能接受任意字符串。不在清单里就按契约错误拒绝，而不是静默存下一个打不开的值。
+     */
+    @PluginMethod
+    fun setExternalBrowser(call: PluginCall) {
+        execute(call) {
+            val requested = call.data.opt("packageName")
+            val packageName = when (requested) {
+                null, JSONObject.NULL -> null
+                is String -> requested
+                else -> throw RuntimeFailure("SETTINGS_INVALID", "外部浏览器标识格式无效")
+            }
+            if (packageName != null && ExternalBrowsers.select(context, packageName) == null) {
+                // 与清单同一份复核：既校验格式，也确认它现在真的能打开网页。
+                throw RuntimeFailure("EXTERNAL_BROWSER_UNAVAILABLE", "所选浏览器当前不可用，请重新选择")
+            }
+            controller.store.setExternalBrowserPackage(packageName)
+            null
+        }
+    }
+
     /** 只允许壳内用户修改授权；设备桥不提供开启此开关的接口。 */
     @PluginMethod
     fun setDeviceShellAccess(call: PluginCall) {

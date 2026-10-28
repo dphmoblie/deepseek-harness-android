@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -40,6 +41,37 @@ class ExternalBrowsersTest {
         )
         // 两段包名（com.example）是合法 Android 包名，保留；只有空白、前导点与本应用被剔除。
         assertEquals(setOf("com.example", "com.example.browser"), result.map { it.packageName }.toSet())
+    }
+
+    /**
+     * `isSelectable` 是「保存外部浏览器」这条桥方法的安全边界：包名最终会进显式 Intent 的
+     * `setPackage`，所以形态不符的输入必须当场判为不可用，而不是先存下来、等打开时才失败。
+     *
+     * 这里只覆盖形态校验这一半；「已卸载的包名要回 null」依赖真实 PackageManager 清单，
+     * 属于设备侧行为。
+     */
+    @Test
+    fun malformedPackageNamesAreRejectedBeforeQueryingTheSystem() {
+        val malformed = listOf(
+            null,
+            "",
+            "not a package",
+            ".com.example",
+            "com",
+            "com.example; rm -rf /",
+            "com.example\n",
+            "com.example/../other",
+        )
+        for (packageName in malformed) {
+            assertFalse(
+                "形态非法的包名必须判为不可选：$packageName",
+                ExternalBrowsers.isSelectable(packageName),
+            )
+        }
+        // 合法形态（含两段包名）仍要通过，否则真机上一个都选不了。
+        for (packageName in listOf("com.example", "com.example.browser", "org.mozilla.firefox")) {
+            assertTrue("合法包名不应被拒：$packageName", ExternalBrowsers.isSelectable(packageName))
+        }
     }
 
     @Test
