@@ -17,11 +17,14 @@ class WorkspaceShareAddressTest {
             URLEncoder.encode(address, "UTF-8").replace("+", "%20") +
             suffix
 
+    /** 只关心「解析出哪个路径」的用例：取候选列表第一项（优先级最高、未剥层的那一个）。 */
+    private fun relative(raw: String): String? = WorkspaceShareAddress.relativePaths(raw)?.first()
+
     @Test
     fun relativeSessionPathIsAccepted() {
         assertEquals(
             "src/main/App.kt",
-            WorkspaceShareAddress.relativePath(
+            relative(
                 request("dsh-resource://file/session/session-abc/src/main/App.kt"),
             ),
         )
@@ -31,7 +34,7 @@ class WorkspaceShareAddressTest {
     fun absolutePathInsideWorkspaceIsStripped() {
         assertEquals(
             "中文 文件.md",
-            WorkspaceShareAddress.relativePath(
+            relative(
                 request(
                     "dsh-resource://file/session/session-abc//root/1/%E4%B8%AD%E6%96%87%20%E6%96%87%E4%BB%B6.md",
                 ),
@@ -42,12 +45,12 @@ class WorkspaceShareAddressTest {
     @Test
     fun absolutePathOutsideWorkspaceIsRejected() {
         assertNull(
-            WorkspaceShareAddress.relativePath(
+            relative(
                 request("dsh-resource://file/session/session-abc//etc/passwd"),
             ),
         )
         assertNull(
-            WorkspaceShareAddress.relativePath(
+            relative(
                 request("dsh-resource://file/session/session-abc//root/10/secret.txt"),
             ),
         )
@@ -56,17 +59,17 @@ class WorkspaceShareAddressTest {
     @Test
     fun traversalSegmentsAreRejected() {
         assertNull(
-            WorkspaceShareAddress.relativePath(
+            relative(
                 request("dsh-resource://file/session/session-abc/../secret.txt"),
             ),
         )
         assertNull(
-            WorkspaceShareAddress.relativePath(
+            relative(
                 request("dsh-resource://file/session/session-abc/%2E%2E/secret.txt"),
             ),
         )
         assertNull(
-            WorkspaceShareAddress.relativePath(
+            relative(
                 request("dsh-resource://file/session/session-abc//root/1/../secret.txt"),
             ),
         )
@@ -75,12 +78,12 @@ class WorkspaceShareAddressTest {
     @Test
     fun encodedSeparatorCannotCreateNewSegments() {
         assertNull(
-            WorkspaceShareAddress.relativePath(
+            relative(
                 request("dsh-resource://file/session/session-abc/a%2Fb.txt"),
             ),
         )
         assertNull(
-            WorkspaceShareAddress.relativePath(
+            relative(
                 request("dsh-resource://file/session/session-abc/a%5Cb.txt"),
             ),
         )
@@ -90,7 +93,7 @@ class WorkspaceShareAddressTest {
     fun plusSignIsKeptLiteral() {
         assertEquals(
             "C++ notes.md",
-            WorkspaceShareAddress.relativePath(
+            relative(
                 request("dsh-resource://file/session/session-abc/C++%20notes.md"),
             ),
         )
@@ -99,29 +102,29 @@ class WorkspaceShareAddressTest {
     @Test
     fun onlyTheAddressParameterIsAccepted() {
         val address = "dsh-resource://file/session/session-abc/a.txt"
-        assertNull(WorkspaceShareAddress.relativePath(request(address, "&open=true")))
-        assertNull(WorkspaceShareAddress.relativePath("dsh-share://file?path=$address"))
-        assertNull(WorkspaceShareAddress.relativePath("dsh-share://file?address="))
+        assertNull(relative(request(address, "&open=true")))
+        assertNull(relative("dsh-share://file?path=$address"))
+        assertNull(relative("dsh-share://file?address="))
     }
 
     @Test
     fun wrongSchemeHostOrShapeIsRejected() {
         val address = "dsh-resource://file/session/session-abc/a.txt"
-        assertNull(WorkspaceShareAddress.relativePath("https://file?address=$address"))
-        assertNull(WorkspaceShareAddress.relativePath("dsh-share://other?address=$address"))
-        assertNull(WorkspaceShareAddress.relativePath("dsh-share://file/path?address=$address"))
-        assertNull(WorkspaceShareAddress.relativePath("dsh-share://user@file?address=$address"))
+        assertNull(relative("https://file?address=$address"))
+        assertNull(relative("dsh-share://other?address=$address"))
+        assertNull(relative("dsh-share://file/path?address=$address"))
+        assertNull(relative("dsh-share://user@file?address=$address"))
     }
 
     @Test
     fun nonSessionAddressesAreRejected() {
         assertNull(
-            WorkspaceShareAddress.relativePath(
+            relative(
                 request("dsh-resource://file/absolute//root/1/a.txt"),
             ),
         )
         assertNull(
-            WorkspaceShareAddress.relativePath(
+            relative(
                 request("dsh-resource://file/session/session-abc"),
             ),
         )
@@ -129,15 +132,73 @@ class WorkspaceShareAddressTest {
 
     @Test
     fun malformedEncodingAndControlsAreRejected() {
-        assertNull(WorkspaceShareAddress.relativePath("dsh-share://file?address=%zz"))
+        assertNull(relative("dsh-share://file?address=%zz"))
         assertNull(
-            WorkspaceShareAddress.relativePath(
+            relative(
                 request("dsh-resource://file/session/session-abc/%00file.txt"),
             ),
         )
         assertNull(
-            WorkspaceShareAddress.relativePath(
+            relative(
                 "dsh-share://file?address=dsh-resource%3A%2F%2Ffile%2Fsession%2Fsession-abc%2Fa%0Ab.txt",
+            ),
+        )
+    }
+
+    /**
+     * 相对地址的两种口径：会话工作目录就是工作区（`notes.md`），
+     * 或会话工作目录是 PRoot 的 `/root`（`1/notes.md`）。后者要额外给出剥层后的候选，
+     * 由调用方按「工作区里确实存在这个文件」决定用哪一个。
+     */
+    @Test
+    fun relativePathsAddsSessionCwdCandidateOnlyForOneSegmentPrefix() {
+        assertEquals(
+            listOf("1/notes.md", "notes.md"),
+            WorkspaceShareAddress.relativePaths(
+                request("dsh-resource://file/session/session-abc/1/notes.md"),
+            ),
+        )
+        assertEquals(
+            listOf("notes.md"),
+            WorkspaceShareAddress.relativePaths(
+                request("dsh-resource://file/session/session-abc/notes.md"),
+            ),
+        )
+        // 只有完整的一层 `1/` 才剥：`1` 本身、`10/`、`1x/` 都不是会话工作目录前缀。
+        assertEquals(
+            listOf("1"),
+            WorkspaceShareAddress.relativePaths(
+                request("dsh-resource://file/session/session-abc/1"),
+            ),
+        )
+        assertEquals(
+            listOf("10/notes.md"),
+            WorkspaceShareAddress.relativePaths(
+                request("dsh-resource://file/session/session-abc/10/notes.md"),
+            ),
+        )
+        assertEquals(
+            listOf("1x/notes.md"),
+            WorkspaceShareAddress.relativePaths(
+                request("dsh-resource://file/session/session-abc/1x/notes.md"),
+            ),
+        )
+    }
+
+    /** 绝对路径已由前端按会话工作目录处理过，只对应一个确定路径，不应再给候选。 */
+    @Test
+    fun absoluteAddressHasExactlyOneCandidate() {
+        assertEquals(
+            listOf("中文 文件.md"),
+            WorkspaceShareAddress.relativePaths(
+                request(
+                    "dsh-resource://file/session/session-abc//root/1/%E4%B8%AD%E6%96%87%20%E6%96%87%E4%BB%B6.md",
+                ),
+            ),
+        )
+        assertNull(
+            WorkspaceShareAddress.relativePaths(
+                request("dsh-resource://file/session/session-abc//etc/passwd"),
             ),
         )
     }

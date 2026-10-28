@@ -111,8 +111,8 @@ android {
         applicationId 'io.deepseekharness.mobile'
         minSdk 26
         targetSdk 35
-        versionCode 43
-        versionName '0.3.5'
+        versionCode 44
+        versionName '0.3.6'
 
         buildConfigField 'String', 'DEFAULT_MANIFEST_URL', envBuildValue('DSH_RUNTIME_MANIFEST_URL')
         buildConfigField 'String', 'DEFAULT_MANIFEST_SHA256', envBuildValue('DSH_RUNTIME_MANIFEST_SHA256')
@@ -159,8 +159,16 @@ android {
             if (teamSigning != null) {
                 signingConfig signingConfigs.team
             }
-            minifyEnabled true
-            shrinkResources true
+            // 发布版不混淆代码（项目约定，见 android/README.md「构建策略」）。
+            // 本包绝大部分体积是 rootfs，混淆省下的字节可以忽略；而 R8 会改写类名/反射入口，
+            // Shizuku 的 UserService、以及只按名字反射的桥接层最容易在这里失效——0.3.5 的
+            // Shizuku 连接超时排查就绕在这条链路上，故直接关掉，不做「部分保留规则」的折中。
+            minifyEnabled false
+            // 资源裁剪/改名对本包没有实际收益（体积 98% 是 rootfs），
+            // 却会把 res/xml/network_security_config.xml 改成 res/8G.xml 这类短路径，
+            // 让「NSC 规则冲突」这类崩溃（0.3.5 的 Shizuku UserService）现场更难核对。
+            shrinkResources false
+            // 上面两项关闭后这里不生效；保留是为了将来确有需要时不必重新查规则文件位置。
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }

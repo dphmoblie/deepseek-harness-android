@@ -106,6 +106,19 @@ Git 提交/发布规范见 [`.agents/rules/git-workflow.md`](.agents/rules/git-w
 `openHarness`、`startHarness` 必须走 `execute(call)`（后台线程池）而不是 `resolveWhileActive`
 （在 Capacitor 串行桥线程上同步执行）。获取运行时凭据要等生命周期锁，阻塞桥线程会让**所有**桥调用排队。
 
+## 10. 发布版不要打开 R8 混淆
+
+`android/app/build.gradle` 的 `release` 是 `minifyEnabled false` + `shrinkResources false`，
+原因写在 `android/README.md` 的「构建策略：发布版不混淆代码」里，别只看着两行就当成遗留配置：
+
+- 体积 98% 是 rootfs，R8 省下的几百 KB 没有实际意义；
+- Shizuku 的 UserService（按类名起服务）、Capacitor 插件注册、`FileProvider` 的 authority
+  解析都按名字工作，混淆后只会表现为「连接超时」「文件操作失败」这类误导性报错；
+- `shrinkResources false` **不等于**资源名没被改：AGP 仍会把 `res/xml/network_security_config.xml`
+  改成 `res/8G.xml`，那个开关是 `android.enableResourceOptimizations`，别拿前者推断后者。
+
+要打开混淆必须同时补保留规则、做真机验证（启动/Shizuku/分享打开文件/插件管理），并回写本条。
+
 ## 改动前先跑这些
 
 本机 pnpm 不可用时用 node 直调（PATH 前置 `node` 目录）：

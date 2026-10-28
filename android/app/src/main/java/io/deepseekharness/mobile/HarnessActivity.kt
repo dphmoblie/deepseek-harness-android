@@ -31,6 +31,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import io.deepseekharness.mobile.runtime.HarnessAccess
+import io.deepseekharness.mobile.runtime.RuntimeFailure
 import io.deepseekharness.mobile.runtime.RuntimeStore
 import io.deepseekharness.mobile.runtime.WorkspaceFileSharing
 import java.io.ByteArrayInputStream
@@ -326,26 +327,39 @@ class HarnessActivity : AppCompatActivity() {
      *
      * 页面传来的只是资源地址，这里重新解析成工作区相对路径；路径校验和文件复制都在
      * 后台线程完成（只允许 `root/1` 下的普通文件），最后回到主线程弹系统分享面板。
-     * 失败时不回传具体文件路径或系统错误，只给一条通用提示。
+     * 失败时不回传具体文件路径或系统错误，只给一条通用提示；只有「解析成功但工作区里
+     * 没有这个文件」才单独说明，便于区分页面给的地址与工作区实际内容对不上。
      */
     private fun shareWorkspaceFile(raw: String) {
         if (isFinishing || isDestroyed) return
-        val relative = WorkspaceShareAddress.relativePath(raw)
-        if (relative == null) {
+        // 相对地址可能多带一层会话工作目录前缀（见 WorkspaceShareAddress.relativePaths）。
+        val candidates = WorkspaceShareAddress.relativePaths(raw)
+        if (candidates == null) {
             Toast.makeText(this, R.string.harness_file_action_failed, Toast.LENGTH_SHORT).show()
             return
         }
         val app = this
         workspaceShareExecutor.execute {
-            val chooser = try {
-                WorkspaceFileSharing.chooser(app, RuntimeStore(app), app.cacheDir, relative, open = false)
-            } catch (_: Exception) {
-                null
+            val result = try {
+                Result.success(
+                    WorkspaceFileSharing.chooser(app, RuntimeStore(app), app.cacheDir, candidates, open = false),
+                )
+            } catch (failure: RuntimeFailure) {
+                Result.failure<Intent>(failure)
+            } catch (error: Exception) {
+                Result.failure(error)
             }
             runOnUiThread {
                 if (isFinishing || isDestroyed) return@runOnUiThread
+                val chooser = result.getOrNull()
                 if (chooser == null) {
-                    Toast.makeText(app, R.string.harness_file_action_failed, Toast.LENGTH_SHORT).show()
+                    val code = (result.exceptionOrNull() as? RuntimeFailure)?.code
+                    val message = if (code == WorkspaceFileSharing.NOT_IN_WORKSPACE) {
+                        R.string.harness_file_share_unavailable
+                    } else {
+                        R.string.harness_file_action_failed
+                    }
+                    Toast.makeText(app, message, Toast.LENGTH_SHORT).show()
                     return@runOnUiThread
                 }
                 try {

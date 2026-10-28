@@ -21,6 +21,25 @@ The Gradle wrapper JAR and Capacitor-generated files are not committed. Generate
 
 签名一致性校验：`python3 scripts/verify-apk-signature.py --apk <apk 路径>`，比对 APK 签名证书的 SHA-256 指纹是否与团队证书一致（指纹固定于脚本内，CI 构建后自动执行）。团队成员可先用该脚本校验收到的 APK 再安装。
 
+## 构建策略：发布版不混淆代码
+
+`app/build.gradle` 的 `release` 构建**关闭了 R8 代码混淆**（`minifyEnabled false`）、**关闭了资源裁剪改名**
+（`shrinkResources false`）。这是项目约定，不是遗留配置，不要为了「瘦身」改回去：
+
+1. **收益可以忽略**：APK 体积 98% 来自 rootfs bundle，R8 省下的几百 KB 对安装包大小没有实际意义。
+2. **混淆会打断按名字工作的链路**：Shizuku 的 UserService（`MobileRuntimePlugin` 起服务时按类名反射）、
+   Capacitor 插件注册、以及 `FileProvider` 的 authority 解析都依赖可读的类名/资源名。R8 改写后表现为
+   「连接超时」「文件操作失败」这类与真实原因无关的报错，排查成本高（0.3.5 的 Shizuku 连接超时即走过这条路）。
+3. **崩溃栈可读**：用户上报的堆栈不需要再对照 `mapping.txt` 反混淆，才可能在没有稳定复现步骤时定位问题。
+
+如果将来确有必须混淆的场景（例如合规要求），需要同时满足：补齐 Shizuku / Capacitor / FileProvider 的
+`proguard-rules.pro` 保留规则；跑一遍 `assembleRelease` 后的真机验证（启动、Shizuku 连接、分享/打开文件、
+插件管理）；并在 `AGENTS.md` 里记录新的取舍。
+
+补充：`shrinkResources false` **不会**阻止 AGP 的资源优化把 `res/xml/network_security_config.xml`
+改成 `res/8G.xml` 这类短名（这是 `android.enableResourceOptimizations` 控制的另一套机制）。当前不打开
+该开关，是因为它属于未经真机验证的构建改动；如果后续确认资源改名会引发问题，再单独评估。
+
 ## Runtime boundaries
 
 - `MobileRuntimePlugin` is the only JavaScript bridge. Every bridge input is validated again natively.

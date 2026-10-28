@@ -6,9 +6,11 @@
         cannot be allow-listed here. All other remote download/catalog entry points remain
         HTTPS-only through RuntimeValidation.requireHttpsUri and RuntimeHttp's fixed sources.
     -->
+    <!--
+        只保留 base-config：127.0.0.1 / localhost 已被它覆盖，再写一条 domain-config 属于
+        重复声明。0.3.5 的 Shizuku UserService 进程在 Application 初始化时直接崩在
+        `Found multiple conflicting per-domain rules`（NetworkSecurityConfigProvider），
+        就是这份「同一策略声明两遍」的配置触发的。少一条规则，语义完全等价。
+    -->
     <base-config cleartextTrafficPermitted="true" />
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">127.0.0.1</domain>
-        <domain includeSubdomains="false">localhost</domain>
-    </domain-config>
 </network-security-config>

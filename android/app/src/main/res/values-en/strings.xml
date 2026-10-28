@@ -15,6 +15,7 @@
     <string name="harness_file_delete_confirm">Delete “%1$s”? This cannot be undone.</string>
     <string name="harness_file_deleted">File deleted</string>
     <string name="harness_file_action_failed">File operation failed</string>
+    <string name="harness_file_share_unavailable">This file is not in the workspace, so it cannot be shared</string>
     <string name="harness_session_failed">Unable to establish a local Harness session</string>
     <string name="harness_page_failed">Unable to open Harness. Please retry in Settings.</string>
     <string name="shizuku_missing">Install and start Shizuku first</string>
