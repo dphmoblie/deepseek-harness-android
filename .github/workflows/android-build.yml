@@ -22,7 +22,7 @@ env:
   # 应用版本号：与 android/app/build.gradle 的 versionName 保持一致。
   # CI 据此生成运行时版本与 Release 标签：预发布走 v<版本>-mobile-<run_number>，
   # 正式版（release_type=stable）直接用 v<版本>；发布说明取自 docs/发布说明-<版本>.md（各版本改了什么写在那边，这里不重复）。
-  APP_VERSION: '0.3.6'
+  APP_VERSION: '0.3.7'
 
 jobs:
   build:
