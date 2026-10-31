@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Moon, Palette, Sun, SunMoon, RotateCcw } from 'lucide-react'
 import { t } from '../i18n'
 import { applyTextColor, applyTheme, clearCustomAccentColor, clearCustomTextColor, effectiveAccentColor, readCustomAccentColor, readCustomTextColor, readThemeMode, saveAccentMode, saveAccentSource, saveCustomAccentColor, saveCustomTextColor, saveThemeMode, useAccentMode, useAccentSource, useResolvedTheme, useThemeMode } from '../theme'
@@ -50,6 +50,9 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
   const [failed, setFailed] = useState<'theme' | 'accent' | null>(null)
   const [card, setCard] = useState<CardAppearance>(() => readCard())
   const [backgroundError, setBackgroundError] = useState('')
+  const [backgroundSaving, setBackgroundSaving] = useState(false)
+  const backgroundSaveGeneration = useRef(0)
+  const backgroundSaveQueue = useRef(Promise.resolve())
   /**
    * 本地是否已经存过一份背景。
    *
@@ -74,6 +77,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
   const [accentError, setAccentError] = useState('')
   const [syncRecord, setSyncRecord] = useState(() => readAccentSync())
   const [syncing, setSyncing] = useState(false)
+  const [backgroundToggling, setBackgroundToggling] = useState(false)
   const [syncMessage, setSyncMessage] = useState('')
   /**
    * DSH 页面的三档透明度，与外壳的「卡片不透明度」分开：
@@ -145,7 +149,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
       persistBackground(withBackground, picked)
       setSyncMessage(t('已选择背景：{0}', picked.mime))
       // 开关已经打开时换文件，页面应该立刻换成新背景，不要求用户再点一次同步。
-      if (withBackground && syncRecord) await sync(true)
+      if (withBackground && syncRecord) await sync(true, picked)
     } catch (error) {
       setAccentError(error instanceof Error ? error.message : t('选择背景失败'))
     }
@@ -158,15 +162,21 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
    * 而原生那边还认为背景在显示。两条路必须一起改。
    */
   const toggleBackground = async (enabled: boolean) => {
+    if (backgroundToggling) return
+    const previous = withBackground
     const effective = enabled && backgroundRef !== null
-    setWithBackground(enabled)
+    setWithBackground(effective)
     setAccentError('')
+    setBackgroundToggling(true)
     try {
       await runtimeBridge.setHarnessSyncBackground(effective)
       persistBackground(effective, backgroundRef)
     } catch (error) {
+      setWithBackground(previous)
       setSyncMessage(error instanceof Error ? error.message : t('无法保存背景同步开关'))
       return
+    } finally {
+      setBackgroundToggling(false)
     }
     // 没有任何文件时如实说明只同步了颜色，不把「开着但没内容」当成成功。
     if (enabled && !effective) {
@@ -183,7 +193,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
    * 背景开关作为参数传入而不是读 state：勾选后立刻调用时，state 还没提交到这一帧，
    * 读到的会是旧值，页面就会少一次重放。
    */
-  const sync = async (includeBackground = withBackground) => {
+  const sync = async (includeBackground = withBackground, background = backgroundRef) => {
     setSyncing(true)
     setSyncMessage('')
     try {
@@ -192,13 +202,13 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
       // 面板色按「当前明暗模式」现推，不复用自适应结果：那是提取那一刻的明暗算出来的，
       // 用户后来切到浅色再同步，就会把深色面板配浅色文字一起带过去（黑屏就是这么来的）。
       const surface = deriveSurface(accentColor, resolved)
-      const theme: SyncedTheme = { mode: readThemeMode(), accent: accentColor, background: surface.background, surface: surface.surface, surfaceOpacity: overlayOpacity, controlOpacity: card.controlOpacity, sidebarOpacity, rightPanelOpacity, syncBackground: includeBackground && backgroundRef !== null }
+      const theme: SyncedTheme = { mode: readThemeMode(), accent: accentColor, background: surface.background, surface: surface.surface, surfaceOpacity: overlayOpacity, controlOpacity: card.controlOpacity, sidebarOpacity, rightPanelOpacity, syncBackground: includeBackground && background !== null }
       await runtimeBridge.applyHarnessTheme(theme)
       let note = '已让 DSH 使用当前主题'
       if (theme.syncBackground) {
-        if (backgroundRef) {
+        if (background) {
           // 原生只记地址；页面播放时由 /__shell/background 流式取，不经过这里。
-          note = backgroundRef.kind === 'video' ? t('已让 DSH 使用当前主题与背景视频') : t('已让 DSH 使用当前主题与背景')
+          note = background.kind === 'video' ? t('已让 DSH 使用当前主题与背景视频') : t('已让 DSH 使用当前主题与背景')
         } else {
           // 没选过背景就只同步颜色，并把原因说清楚，不静默丢内容。
           note = t('还没有选择背景文件，已只同步颜色')
@@ -206,7 +216,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
       }
       setSyncRecord(saveAccentSync(theme))
       // 本地镜像跟着主题一起更新：下次首屏直接就是这次同步后的状态。
-      persistBackground(theme.syncBackground, backgroundRef)
+      persistBackground(theme.syncBackground, background)
       setSyncMessage(note)
     } catch (error) {
       setSyncMessage(error instanceof Error ? error.message : '同步失败，请重试')
@@ -338,13 +348,33 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
                 <input
                   className="background-picker-input"
                   type="file"
+                  disabled={backgroundSaving}
                   accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm"
                   onChange={event => {
                     const file = event.target.files?.[0]
                     if (!file) return
-                    void saveBackground(file)
-                      .then(() => { setBackgroundError(''); setHasAppBackground(true) })
-                      .catch(() => setBackgroundError(t('无法保存背景，请检查文件格式和存储空间')))
+                    const generation = ++backgroundSaveGeneration.current
+                    setBackgroundSaving(true)
+                    setBackgroundError('')
+                    // Keep writes ordered: IndexedDB transactions from an older selection
+                    // must not finish after a newer selection and overwrite it.
+                    const task = backgroundSaveQueue.current
+                      .catch(() => undefined)
+                      .then(() => saveBackground(file))
+                    backgroundSaveQueue.current = task
+                    void task
+                      .then(() => {
+                        if (generation !== backgroundSaveGeneration.current) return
+                        setHasAppBackground(true)
+                      })
+                      .catch(() => {
+                        if (generation === backgroundSaveGeneration.current) {
+                          setBackgroundError(t('无法保存背景，请检查文件格式和存储空间'))
+                        }
+                      })
+                      .finally(() => {
+                        if (generation === backgroundSaveGeneration.current) setBackgroundSaving(false)
+                      })
                     // React 异步回调不保留输入节点；下一次选择由系统选择器处理。
                   }}
                 />
@@ -384,7 +414,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
           <div className="appearance-customization appearance-sync">
             <div className="appearance-accent-heading"><strong>{t('同步背景')}</strong><span>{t('背景文件只记地址；勾选后才随主题一起画到 DSH 页面。')}</span></div>
             <div className="appearance-sync-background">
-              <label><input type="checkbox" checked={withBackground} onChange={event => void toggleBackground(event.target.checked)} /><span>{t('连背景一起同步')}</span></label>
+              <label><input type="checkbox" checked={withBackground} disabled={backgroundToggling} onChange={event => void toggleBackground(event.target.checked)} /><span>{t('连背景一起同步')}</span></label>
               <button type="button" className="compact-button" onClick={() => void pickBackground()}>{backgroundRef ? t('重新选择背景文件') : t('选择背景文件')}</button>
               <small>{backgroundRef ? t('已选：{0}', backgroundRef.mime) : t('只记录文件地址，视频不复制、不设大小上限')}</small>
               <small>{t('开关与所选文件会记住，重启后仍按上次的选择显示。')}</small>

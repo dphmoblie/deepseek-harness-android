@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { AppearanceSettings } from './AppearanceSettings'
 import { saveLanguage } from '../i18n'
 import { ACCENT_STORAGE_KEY, readCustomAccentColor, THEME_COLORS, THEME_STORAGE_KEY } from '../theme'
+import { runtimeBridge } from '../platform/native'
 
 type MediaListener = (event: { matches: boolean }) => void
 
@@ -144,6 +145,26 @@ describe('外观设置', () => {
       expect(screen.getByText('Currently showing: Light')).toBeInTheDocument()
     } finally {
       saveLanguage('zh-CN')
+    }
+  })
+
+  it('没有背景文件时勾选同步仍保持关闭', async () => {
+    render(<AppearanceSettings />)
+    const checkbox = screen.getByRole('checkbox', { name: '连背景一起同步' })
+    fireEvent.click(checkbox)
+    await waitFor(() => expect(checkbox).not.toBeChecked())
+  })
+
+  it('背景同步保存失败时恢复原开关状态', async () => {
+    const setSync = vi.spyOn(runtimeBridge, 'setHarnessSyncBackground')
+      .mockRejectedValueOnce(new Error('保存失败'))
+    try {
+      render(<AppearanceSettings />)
+      const checkbox = screen.getByRole('checkbox', { name: '连背景一起同步' })
+      fireEvent.click(checkbox)
+      await waitFor(() => expect(checkbox).not.toBeChecked())
+    } finally {
+      setSync.mockRestore()
     }
   })
 })
