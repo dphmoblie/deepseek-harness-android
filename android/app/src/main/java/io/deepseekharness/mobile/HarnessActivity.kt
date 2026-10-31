@@ -715,7 +715,15 @@ class HarnessActivity : AppCompatActivity() {
         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
             val uri = request?.url ?: return blockedResponse()
             // 外壳同步的背景：由原生按同源路径供给，支持 Range，也不放开文件权限。
-            if (uri.path == HarnessThemeBridge.BACKGROUND_PATH) {
+            // 先收紧来源、方法和框架级别：市场页等跨域资源也可能请求同名路径，不能
+            // 因为路径相同就拿到本机用户文件。
+            if (isHarnessBackgroundRequest(
+                    origin,
+                    uri,
+                    request.method,
+                    request.isForMainFrame,
+                )
+            ) {
                 val context = view?.context ?: return blockedResponse()
                 return HarnessThemeBridge.serveBackground(context, request)
             }
@@ -752,6 +760,16 @@ class HarnessActivity : AppCompatActivity() {
 internal fun blockedResponse(): WebResourceResponse = WebResourceResponse(
     "text/plain", "UTF-8", 403, "Forbidden", emptyMap(), ByteArrayInputStream(ByteArray(0)),
 )
+
+/** 背景只对当前 Harness origin 的子资源 GET/HEAD 请求开放。 */
+internal fun isHarnessBackgroundRequest(
+    origin: HarnessActivity.Origin,
+    uri: Uri,
+    method: String,
+    isForMainFrame: Boolean,
+): Boolean =
+    !isForMainFrame && method in setOf("GET", "HEAD") &&
+        uri.path == HarnessThemeBridge.BACKGROUND_PATH && origin.allows(uri)
 
 internal fun isDeepSeekAuthorizationNavigation(raw: String, method: String, isMainFrame: Boolean): Boolean =
     isMainFrame && method == "GET" && isDeepSeekAuthorizationUrl(raw)

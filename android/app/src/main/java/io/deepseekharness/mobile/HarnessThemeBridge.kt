@@ -205,11 +205,22 @@ internal object HarnessThemeBridge {
         return result
     }
 
-    fun clear(context: Context): Boolean = try {
-        releaseBackground(context)
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().commit()
-    } catch (_: Exception) {
-        false
+    fun clear(context: Context): Boolean {
+        return try {
+            val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val previousUri = preferences.getString(KEY_BACKGROUND_URI, null)
+            // Remove the reference first. If disk I/O fails, keep the old reference and
+            // its permission together so the existing background remains usable.
+            val cleared = preferences.edit().clear().commit()
+            if (!cleared) {
+                false
+            } else {
+                releaseUriPermission(context, previousUri)
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     fun syncedAt(context: Context): Long = try {
@@ -247,13 +258,28 @@ internal object HarnessThemeBridge {
     fun setBackgroundRef(context: Context, uri: String, mime: String): Boolean {
         if (!acceptsBackgroundUri(uri)) return false
         val kind = kindOf(mime) ?: return false
+        var previousUri: String? = null
         return try {
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            previousUri = preferences.getString(KEY_BACKGROUND_URI, null)
+            val saved = preferences.edit()
                 .putString(KEY_BACKGROUND_URI, uri)
                 .putString(KEY_BACKGROUND_MIME, mime)
                 .putString(KEY_BACKGROUND_KIND, kind)
                 .commit()
+            if (!saved) {
+                // The picker has already granted this URI. Do not leak that grant when
+                // the preferences write fails.
+                if (previousUri != uri) releaseUriPermission(context, uri)
+                false
+            } else {
+                // Keep the new grant before dropping the old one, so a failed picker or
+                // provider cannot leave the app without a usable background.
+                if (previousUri != null && previousUri != uri) releaseUriPermission(context, previousUri)
+                true
+            }
         } catch (_: Exception) {
+            if (previousUri != uri) releaseUriPermission(context, uri)
             false
         }
     }
@@ -277,9 +303,11 @@ internal object HarnessThemeBridge {
     }
 
     /** 清掉背景地址，并把持久授权一起还回去——否则用户删了背景，授权还挂在应用上。 */
-    fun clearBackground(context: Context): Boolean = try {
-        releaseBackground(context)
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+    fun clearBackground(context: Context): Boolean {
+        return try {
+            val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val previousUri = preferences.getString(KEY_BACKGROUND_URI, null)
+            val cleared = preferences.edit()
             .remove(KEY_BACKGROUND_URI)
             .remove(KEY_BACKGROUND_MIME)
             .remove(KEY_BACKGROUND_KIND)
@@ -287,15 +315,22 @@ internal object HarnessThemeBridge {
             // 与界面上的复选框状态不一致。
             .remove(KEY_SYNC_BACKGROUND)
             .commit()
-    } catch (_: Exception) {
-        false
+            if (!cleared) {
+                false
+            } else {
+                releaseUriPermission(context, previousUri)
+                true
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
-    private fun releaseBackground(context: Context) {
-        val uri = backgroundUri(context) ?: return
+    private fun releaseUriPermission(context: Context, rawUri: String?) {
+        val raw = rawUri ?: return
         try {
             context.contentResolver.releasePersistableUriPermission(
-                Uri.parse(uri),
+                Uri.parse(raw),
                 android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
         } catch (_: Exception) {

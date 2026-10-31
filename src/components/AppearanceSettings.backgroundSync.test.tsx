@@ -7,10 +7,18 @@ vi.mock('../platform/native', () => ({ runtimeBridge: bridge }))
 
 import { AppearanceSettings } from './AppearanceSettings'
 import { saveAccentSync } from '../adaptiveAccent'
+import { saveBackgroundState, readBackgroundState } from '../backgroundRef'
 
 const background = { uri: 'content://media/external/video/media/42', mime: 'video/mp4', kind: 'video' as const }
 
 const checkbox = () => screen.getByRole<HTMLInputElement>('checkbox', { name: '连背景一起同步' })
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej })
+  return { promise, resolve, reject }
+}
 
 beforeEach(() => {
   beforeEachAppTest()
@@ -108,5 +116,32 @@ describe('外观设置：连背景一起同步的持久化', () => {
     await waitFor(() => expect(bridge.setHarnessSyncBackground).toHaveBeenCalledWith(false))
     expect(screen.getByText('还没有选择背景文件，已只同步颜色')).toBeTruthy()
     expect(screen.getByText(/重开后仍按上次的选择显示|重启后仍按上次的选择显示/u)).toBeTruthy()
+  })
+
+  it('原生状态回读迟到时不会覆盖用户先完成的开关操作', async () => {
+    const state = deferred<{ syncBackground: boolean; syncedAt: number; background: typeof background | null }>()
+    bridge.harnessThemeState.mockReturnValue(state.promise)
+    saveBackgroundState({ syncBackground: true, syncedAt: 1700000000000, background })
+    render(<AppearanceSettings />)
+
+    fireEvent.click(checkbox())
+    await waitFor(() => expect(bridge.setHarnessSyncBackground).toHaveBeenCalledWith(false))
+    state.resolve({ syncBackground: true, syncedAt: 1700000000000, background })
+    await waitFor(() => expect(checkbox()).not.toBeChecked())
+    expect(readBackgroundState().syncBackground).toBe(false)
+  })
+
+  it('背景开关在主题重放完成前保持禁用', async () => {
+    const apply = deferred<void>()
+    bridge.applyHarnessTheme.mockReturnValue(apply.promise)
+    bridge.harnessThemeState.mockResolvedValue({ syncBackground: true, syncedAt: 1700000000000, background })
+    render(<AppearanceSettings />)
+    await waitFor(() => expect(checkbox()).toBeChecked())
+
+    fireEvent.click(checkbox())
+    await waitFor(() => expect(bridge.setHarnessSyncBackground).toHaveBeenCalledWith(false))
+    expect(checkbox()).toBeDisabled()
+    apply.resolve()
+    await waitFor(() => expect(checkbox()).not.toBeDisabled())
   })
 })
