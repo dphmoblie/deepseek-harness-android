@@ -938,6 +938,7 @@ export const english: Readonly<Record<string, string>> = {
   "「恢复默认值」只把表单填成原生默认值，不会写盘：要生效还得再点一次「保存参数」。":
     "Restore defaults only fills the form with the native defaults; nothing is written until you press Save parameters.",
   "范围 {0} 到 {1}": "Range {0} to {1}",
+  "范围 {0} 到 {1} 天": "Range {0} to {1} days",
   "选择器": "Selector",
   "选择器 {0}": "Selector {0}",
   "选择器（多个之间必须同时满足）": "Selectors (all of them must match)",

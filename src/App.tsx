@@ -1672,6 +1672,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
   const [connectivityResults, setConnectivityResults] = useState<Record<string, ModelConnectivityResult>>({})
+  /** 诊断日志保留天数的输入草稿；允许编辑中暂时为空，失焦/回车时再提交。 */
+  const [diagnosticRetentionDraft, setDiagnosticRetentionDraft] = useState(String(diagnostic.retentionDays))
   /** 正在拉取上游模型列表的供应商；同一时刻只允许一个请求在飞。 */
   const [loadingCatalog, setLoadingCatalog] = useState<string | null>(null)
   const [catalogResults, setCatalogResults] = useState<Record<string, ModelCatalogResult>>({})
@@ -1795,6 +1797,21 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     setWhitelistPassword('')
     setPasswordDraft({ current: '', next: '', confirm: '' })
   }, [accessibility.allowedPackages, accessibility.whitelistEnabled, page])
+
+  useEffect(() => {
+    setDiagnosticRetentionDraft(String(diagnostic.retentionDays))
+  }, [diagnostic.retentionDays])
+
+  const commitDiagnosticRetention = (): void => {
+    const raw = diagnosticRetentionDraft.trim()
+    const retentionDays = Number(raw)
+    if (!/^\d+$/u.test(raw) || !Number.isInteger(retentionDays)
+      || retentionDays < DIAGNOSTIC_RETENTION_MIN || retentionDays > DIAGNOSTIC_RETENTION_MAX) {
+      setDiagnosticRetentionDraft(String(diagnostic.retentionDays))
+      return
+    }
+    if (retentionDays !== diagnostic.retentionDays) onDiagnosticSettings(diagnostic.enabled, retentionDays)
+  }
 
   /**
    * 读取运行记录。
@@ -3380,17 +3397,28 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               onChange={event => onDiagnosticSettings(event.target.checked, diagnostic.retentionDays)}
             />
           </label>
-          <label className="range-field">
-            <span><strong>{t("保留天数")}</strong><small>{diagnostic.retentionDays} {t("天")}</small></span>
+          <label className="field">
+            <span>{t("保留天数")}</span>
             <input
-              type="range"
+              type="number"
+              inputMode="numeric"
               min={DIAGNOSTIC_RETENTION_MIN}
               max={DIAGNOSTIC_RETENTION_MAX}
               step={1}
-              value={diagnostic.retentionDays}
+              value={diagnosticRetentionDraft}
+              aria-label={t("保留天数")}
               disabled={busy !== null}
-              onChange={event => onDiagnosticSettings(diagnostic.enabled, Number(event.target.value))}
+              onChange={event => setDiagnosticRetentionDraft(event.target.value)}
+              onBlur={commitDiagnosticRetention}
+              onKeyDown={event => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  commitDiagnosticRetention()
+                  event.currentTarget.blur()
+                }
+              }}
             />
+            <small className="field-help">{t("范围 {0} 到 {1} 天", DIAGNOSTIC_RETENTION_MIN, DIAGNOSTIC_RETENTION_MAX)}</small>
           </label>
           <div className="settings-status-list">
             <div className="settings-status-row">

@@ -37,8 +37,26 @@ describe('诊断与日志', () => {
     await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(true, 3))
     expect(await screen.findByRole('switch', { name: /收集诊断日志/ })).toBeChecked()
 
-    fireEvent.change(screen.getByRole('slider', { name: /保留天数/ }), { target: { value: '7' } })
+    const retentionInput = screen.getByRole('spinbutton', { name: /保留天数/ })
+    fireEvent.change(retentionInput, { target: { value: '7' } })
+    fireEvent.blur(retentionInput)
     await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(true, 7))
+  })
+
+  it('保留天数输入框允许编辑，失焦时拒绝空值和越界值', async () => {
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('诊断与日志', '日志与采集')
+
+    const retentionInput = await screen.findByRole('spinbutton', { name: /保留天数/ })
+    fireEvent.change(retentionInput, { target: { value: '' } })
+    fireEvent.blur(retentionInput)
+    expect(retentionInput).toHaveValue(3)
+
+    fireEvent.change(retentionInput, { target: { value: '31' } })
+    fireEvent.blur(retentionInput)
+    expect(retentionInput).toHaveValue(3)
+    expect(bridge.setDiagnosticLogSettings).not.toHaveBeenCalled()
   })
 
   it('有日志时可导出分享与清空，并显示计数', async () => {
