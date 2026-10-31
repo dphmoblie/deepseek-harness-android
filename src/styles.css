@@ -2018,8 +2018,22 @@ button:disabled {
 }
 
 .settings-inline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
   padding-top: 14px;
   border-top: 1px solid var(--line);
+}
+
+/* 自动化总开关等短动作也走同一套可换行布局，避免裸按钮按文字流挤在一起。 */
+.button-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
 }
 
 .permission-granted {
@@ -2239,6 +2253,7 @@ button:disabled {
 
 .dialog-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 9px;
   margin-top: 20px;
@@ -3547,8 +3562,33 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 @media (max-width: 560px) {
   .settings-screen .section-title-action { grid-template-columns: 40px minmax(0, 1fr); }
   .settings-screen .section-title-action > .status-chip { grid-column: 2; justify-self: start; white-space: normal; }
+  .section-title-action > .button { grid-column: 2; justify-self: start; margin-top: 8px; white-space: nowrap; }
+  .settings-inline-actions > .button,
+  .button-row > .button,
+  .credential-actions > .button,
+  .launch-actions > .button,
+  .runtime-actions > .button,
+  .release-actions > .button,
+  .dialog-actions > .button {
+    flex: 1 1 max-content;
+    min-width: max-content;
+    white-space: nowrap;
+  }
   .settings-screen .range-field { flex-wrap: wrap; gap: 12px; }
   .settings-screen .range-field input[type="range"] { width: 100%; }
+}
+
+@media (max-width: 390px) {
+  .settings-inline-actions > .button,
+  .button-row > .button,
+  .credential-actions > .button,
+  .launch-actions > .button,
+  .runtime-actions > .button,
+  .release-actions > .button,
+  .dialog-actions > .button {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
 }
 
 /* 设置页底部常驻保存条：二级与三级页都只有一个保存动作，固定在内容末尾而不是
