@@ -28,11 +28,26 @@ internal object AutomationWindowDigest {
         bottom: Int,
     ): String = "${className.orEmpty()}|${viewId.orEmpty()}|$left,$top,$right,$bottom"
 
-    fun of(packageName: String, windowId: Int, structure: List<String>): String {
+    /**
+     * Builds a digest for the observed window structure.
+     *
+     * [truncated] is part of the canonical input.  A bounded tree walk is a
+     * deliberate fail-closed approximation; without carrying that fact in the
+     * digest, a complete tree and a prefix of the same tree could compare equal
+     * when the changed nodes are beyond the traversal budget.
+     */
+    fun of(
+        packageName: String,
+        windowId: Int,
+        structure: List<String>,
+        truncated: Boolean = false,
+    ): String {
         val canonical = buildString {
             append(packageName)
             append('|')
             append(windowId)
+            append('|')
+            append(if (truncated) "truncated" else "complete")
             structure.forEach {
                 append('|')
                 append(it)

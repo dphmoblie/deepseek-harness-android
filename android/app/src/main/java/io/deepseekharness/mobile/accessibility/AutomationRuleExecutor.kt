@@ -544,6 +544,9 @@ internal interface AutomationNodeBackend {
     /** 按判定时的下标路径 + bounds 重新取节点。**不读** children（只需要身份与可点击性）。 */
     fun resolveNode(path: List<Int>, bounds: AutomationBounds): AutomationNodeHandle?
 
+    /** Releases a platform node returned by [resolveNode] after the attempt ends. */
+    fun releaseNode(node: Any) = Unit
+
     fun clickNode(node: Any): BackendOutcome
 
     /** 从该节点向上找最近的可点击祖先并点击它（`clickCenter` 在无法派发手势时的第一近似）。 */
@@ -837,41 +840,45 @@ internal object AutomationRuleExecutor {
                 reason = "命中节点在当前窗口里已不存在（路径 ${decision.nodePathText}），本次不动作",
                 degraded = degraded,
             )
-        if (nodeDependent(decision.kind)) {
-            val fresh = nodeIdentity(
-                pathText = decision.nodePathText,
-                className = handle.snapshot.className,
-                text = handle.snapshot.text,
-                viewId = handle.snapshot.viewId,
-                bounds = handle.snapshot.bounds,
-            )
-            if (fresh != identity) {
-                return AttemptOutcome(
+        try {
+            if (nodeDependent(decision.kind)) {
+                val fresh = nodeIdentity(
+                    pathText = decision.nodePathText,
+                    className = handle.snapshot.className,
+                    text = handle.snapshot.text,
+                    viewId = handle.snapshot.viewId,
+                    bounds = handle.snapshot.bounds,
+                )
+                if (fresh != identity) {
+                    return AttemptOutcome(
+                        performed = false,
+                        ok = false,
+                        code = AutomationGateCodes.NODE_STALE,
+                        reason = "命中节点在判定与执行之间已被替换（路径 ${decision.nodePathText}），本次不动作",
+                        degraded = degraded,
+                    )
+                }
+            }
+            return when (decision.kind) {
+                AutomationRuleMatcher.ACTION_CLICK -> clickNodePath(backend, handle, null)
+                AutomationRuleMatcher.ACTION_CLICK_CENTER ->
+                    clickCenterPath(backend, handle, if (degraded) "匹配器已按「不可点击」降级为点击中心点" else null)
+                AutomationRuleMatcher.ACTION_LONG_CLICK -> longClickPath(backend, handle)
+                AutomationRuleMatcher.ACTION_BACK -> backPath(backend)
+                AutomationRuleMatcher.ACTION_SWIPE -> swipePath(backend, rule)
+                AutomationRuleMatcher.ACTION_KEY -> keyPath(backend, rule)
+                AutomationRuleMatcher.ACTION_WAIT -> waitPath(rule)
+                AutomationRuleMatcher.ACTION_LAUNCH -> launchPath(backend, rule)
+                else -> AttemptOutcome(
                     performed = false,
                     ok = false,
-                    code = AutomationGateCodes.NODE_STALE,
-                    reason = "命中节点在判定与执行之间已被替换（路径 ${decision.nodePathText}），本次不动作",
+                    code = AutomationGateCodes.ACTION_UNSUPPORTED,
+                    reason = "动作类型 ${decision.kind} 不受执行器支持",
                     degraded = degraded,
                 )
             }
-        }
-        return when (decision.kind) {
-            AutomationRuleMatcher.ACTION_CLICK -> clickNodePath(backend, handle, null)
-            AutomationRuleMatcher.ACTION_CLICK_CENTER ->
-                clickCenterPath(backend, handle, if (degraded) "匹配器已按「不可点击」降级为点击中心点" else null)
-            AutomationRuleMatcher.ACTION_LONG_CLICK -> longClickPath(backend, handle)
-            AutomationRuleMatcher.ACTION_BACK -> backPath(backend)
-            AutomationRuleMatcher.ACTION_SWIPE -> swipePath(backend, rule)
-            AutomationRuleMatcher.ACTION_KEY -> keyPath(backend, rule)
-            AutomationRuleMatcher.ACTION_WAIT -> waitPath(rule)
-            AutomationRuleMatcher.ACTION_LAUNCH -> launchPath(backend, rule)
-            else -> AttemptOutcome(
-                performed = false,
-                ok = false,
-                code = AutomationGateCodes.ACTION_UNSUPPORTED,
-                reason = "动作类型 ${decision.kind} 不受执行器支持",
-                degraded = degraded,
-            )
+        } finally {
+            backend.releaseNode(handle.node)
         }
     }
 

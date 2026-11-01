@@ -114,7 +114,7 @@ flowchart TD
 
 #### 防线 1：静态指令审查（`RootCommandGuard`）
 在命令进入底层前，原生侧解析其调用指令，快速阻断高危工具（协作防误触）：
-- 致命命令阻断列表：`reboot (bootloader|recovery|edl|fastboot)`, `fastboot`, `flash_erase`, `blockdev`, `mkfs.*`, `wipe`, `setenforce 0`, `umount /dev/block`, `mount ... remount,rw /system` 等。
+- 致命命令阻断列表：`reboot (bootloader|recovery|edl|fastboot)`, `fastboot`, `flash_erase`, `blockdev`, `mkfs.*`, `wipe`, `setenforce 0`, `setprop/resetprop`, `umount /dev/block`, `mount ... remount,rw /system` 等。`getprop` 仍可用于只读诊断。命令替换和 `${IFS}` 这类动态展开也拒绝，避免把危险命令藏在静态审查之后。
 
 > **与既有原则的关系（有意收窄，需明说）**：本项目 Shizuku 通道在 `DeviceCommandRunner.kt` 中刻意**不使用关键字黑名单**（「命令的实际能力由用户授予的身份决定」）。Root 通道引入黑名单是对该原则的有意收窄——UID 0 的破坏半径与 uid 2000 完全不同。但黑名单永远不完整（可编码混淆、可间接调用），它只是纵深防御的第一层，硬性保证只能来自防线 2~4 与 KernelSU App Profile。该审查**只作用于 Root 通道**，Shizuku 通道行为保持不变。
 

@@ -41,6 +41,13 @@ class AutomationWindowDigestTest {
     }
 
     @Test
+    fun `截断状态也参与指纹`() {
+        val complete = AutomationWindowDigest.of("com.example.app", 7, structure, truncated = false)
+        val truncated = AutomationWindowDigest.of("com.example.app", 7, structure, truncated = true)
+        assertNotEquals("完整树与受限前缀不能共用窗口指纹", complete, truncated)
+    }
+
+    @Test
     fun `结构项里没有文本的位置`() {
         // 只有类名 / viewId / 边界：屏幕上的文字进不来，指纹就不能反推出界面内容。
         assertEquals(
