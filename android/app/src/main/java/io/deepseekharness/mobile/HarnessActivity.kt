@@ -651,6 +651,9 @@ class HarnessActivity : AppCompatActivity() {
         fun allows(uri: Uri): Boolean =
             uri.scheme == scheme && uri.host == host && uri.port == port && uri.userInfo == null
 
+        fun allows(uri: URI): Boolean =
+            uri.scheme == scheme && uri.host == host && uri.port == port && uri.userInfo == null
+
         companion object {
             fun parse(raw: String?): Origin? {
                 val uri = HarnessPageUrl.parseEntryUrl(raw) ?: return null
@@ -770,6 +773,17 @@ internal fun isHarnessBackgroundRequest(
 ): Boolean =
     !isForMainFrame && method in setOf("GET", "HEAD") &&
         uri.path == HarnessThemeBridge.BACKGROUND_PATH && origin.allows(uri)
+
+/** JVM-testable form of [isHarnessBackgroundRequest] without mockable Android Uri methods. */
+internal fun isHarnessBackgroundRequest(
+    origin: HarnessActivity.Origin,
+    rawUrl: String,
+    method: String,
+    isForMainFrame: Boolean,
+): Boolean =
+    !isForMainFrame && method in setOf("GET", "HEAD") && runCatching {
+        URI(rawUrl).let { it.path == HarnessThemeBridge.BACKGROUND_PATH && origin.allows(it) }
+    }.getOrDefault(false)
 
 internal fun isDeepSeekAuthorizationNavigation(raw: String, method: String, isMainFrame: Boolean): Boolean =
     isMainFrame && method == "GET" && isDeepSeekAuthorizationUrl(raw)
