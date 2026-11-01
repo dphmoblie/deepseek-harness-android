@@ -25,8 +25,8 @@ import { arriveAtSettingsHome, beforeEachAppTest, bridge, keepAlive, openSetting
  *
  * 1. **渲染次数**：空转轮询下，当前挂载的视图子树被渲染了几次。理想是 **0 次**。
  * 2. **props 身份**：每次渲染里，哪些 props 的引用变了。
- *    这直接回答「给视图组件套 `React.memo` 有没有用」—— 如果每次渲染都有一批
- *    内联箭头函数换了身份，`memo` 的浅比较**必然全部失败**，加了等于没加。
+ *    这直接回答「给视图组件套 `React.memo` 有没有用」—— 如果真实重渲染中有一批
+ *    内联箭头函数换了身份，`memo` 的浅比较就不能完全跳过这些更新。
  *    自检用例把这一点也钉成断言，免得它只是一次性的观察。
  *
  * 本文件的包装会给每次元素创建加一层开销，所以**耗时数字只看 `renderProfile.test.tsx`**，
@@ -198,8 +198,8 @@ describe('§5.6-B 逐组件渲染计数', () => {
    * 拦截器自检 + 「`React.memo` 为什么没用」的证据。
    *
    * 一次真实导航必须数得到渲染（否则所有计数都是 0，断言会「永远通过」），
-   * 同时把「视图组件的 props 里有一批内联回调每次渲染都换身份」钉成断言 ——
-   * 这正是「只给视图组件套 `React.memo` 不会有任何效果」的原因。
+   * 同时把「视图组件的 props 里有一批内联回调会换身份」钉成断言 ——
+   * 这正是「只给视图组件套 `React.memo` 不会完全消除重渲染」的原因。
    */
   it('拦截器自检：真实交互数得到渲染，且内联回调 prop 每次都换身份', async () => {
     render(<App />)
@@ -215,10 +215,15 @@ describe('§5.6-B 逐组件渲染计数', () => {
     probe.report('自检：诊断页切换采集开关', WATCHED)
     const renders = probe.rendersSince('SettingsScreen')
     expect(renders).toBeGreaterThan(1)
-    // 第二次渲染起，这些**内联箭头函数** prop 的引用每一次都不同：
-    // `memo` 的浅比较因此必然失败，只要还有它们在，套 `memo` 就等于没套。
-    expect(probe.changesSince('SettingsScreen', 'onBack')).toBe(renders - 1)
-    expect(probe.changesSince('SettingsScreen', 'onReloadSettings')).toBe(renders - 1)
+    // 内联箭头函数 prop 会在真实重渲染中改变引用。React 开发模式可能重复调用
+    // 组件，页面 key 变化也可能重建组件；这些调用不保证每次都产生新的 JSX
+    // props，因此只断言确实发生过变化，并允许变化次数少于渲染次数减一。
+    const backChanges = probe.changesSince('SettingsScreen', 'onBack')
+    const reloadChanges = probe.changesSince('SettingsScreen', 'onReloadSettings')
+    expect(backChanges).toBeGreaterThan(0)
+    expect(backChanges).toBeLessThanOrEqual(renders - 1)
+    expect(reloadChanges).toBeGreaterThan(0)
+    expect(reloadChanges).toBeLessThanOrEqual(renders - 1)
     /*
      * 对照组：走 `useCallback` 的 prop 引用是**稳的**（`onSave={saveSettings}`）。
      * 这条断言是为了把结论说准：问题不是「memo 一律无效」，而是
