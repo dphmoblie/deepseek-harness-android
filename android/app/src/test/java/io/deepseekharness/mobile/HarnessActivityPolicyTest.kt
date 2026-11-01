@@ -1,6 +1,5 @@
 package io.deepseekharness.mobile
 
-import android.net.Uri
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -50,10 +49,10 @@ class HarnessActivityPolicyTest {
             "http://127.0.0.1:18080/",
         )
         val path = "http://127.0.0.1:18080/__shell/background"
-        assertTrue(isHarnessBackgroundRequest(origin, Uri.parse(path), "GET", false))
-        assertTrue(isHarnessBackgroundRequest(origin, Uri.parse(path), "HEAD", false))
-        assertFalse(isHarnessBackgroundRequest(origin, Uri.parse(path), "POST", false))
-        assertFalse(isHarnessBackgroundRequest(origin, Uri.parse(path), "GET", true))
-        assertFalse(isHarnessBackgroundRequest(origin, Uri.parse("https://dsh-market.com/__shell/background"), "GET", false))
+        assertTrue(isHarnessBackgroundRequest(origin, path, "GET", false))
+        assertTrue(isHarnessBackgroundRequest(origin, path, "HEAD", false))
+        assertFalse(isHarnessBackgroundRequest(origin, path, "POST", false))
+        assertFalse(isHarnessBackgroundRequest(origin, path, "GET", true))
+        assertFalse(isHarnessBackgroundRequest(origin, "https://dsh-market.com/__shell/background", "GET", false))
     }
 }
