@@ -103,6 +103,21 @@ class DiagnosticDeviceTest {
     }
 
     @Test
+    fun redactsRawDeviceAndRomValuesForExport() {
+        val lines = device(
+            manufacturer = "Acme",
+            brand = "Acme",
+            model = "Phone X",
+            device = "phone_x",
+            rom = "Acme/phone_x/phone_x:15/BUILD/123:user/release-keys",
+        ).headerLines(redact = true).joinToString("\n")
+        assertFalse(lines.contains("Acme"))
+        assertFalse(lines.contains("Phone X"))
+        assertFalse(lines.contains("release-keys"))
+        assertTrue(lines.contains("匿名-"))
+    }
+
+    @Test
     fun collapsesWhitespaceAndDropsControlCharacters() {
         assertEquals("Redmi K60", DiagnosticDevice.clean("  Redmi \t K60  "))
         assertEquals("a b", DiagnosticDevice.clean("a\n\n b"))

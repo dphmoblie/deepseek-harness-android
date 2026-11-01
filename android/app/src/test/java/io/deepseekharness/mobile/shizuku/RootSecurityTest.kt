@@ -108,6 +108,49 @@ class RootSecurityTest {
     }
 
     @Test
+    fun `RootCommandGuard 阻断系统属性修改但允许只读 getprop`() {
+        val blocked = listOf(
+            "setprop ro.product.model TestPhone",
+            "'SET'PROP ro.build.fingerprint test/build:1/user/release-keys",
+            "resetprop -n ro.product.device test-device",
+            "setprop ctl.stop zygote",
+            "echo value > /data/property/persist.sys.locale",
+            "printf value | tee /dev/__properties__/u:object_r:system_prop:s0",
+            "dd if=/data/local/tmp/property of=/data/property/persist.sys.locale",
+            "cp /data/local/tmp/property /data/property/persist.sys.locale",
+            "mv /data/local/tmp/property /dev/__properties__/u:object_r:system_prop:s0",
+            "install /data/local/tmp/property /data/property/persist.sys.locale",
+        )
+        for (command in blocked) {
+            assertTrue("应阻断系统属性修改: $command", RootCommandGuard.violations(command).isNotEmpty())
+            try {
+                RootCommandGuard.verifySafe(command)
+                fail("应阻断系统属性修改: $command")
+            } catch (error: RuntimeFailure) {
+                assertEquals("ROOT_SECURITY_VIOLATION", error.code)
+            }
+        }
+
+        for (command in listOf("getprop ro.product.model", "getprop ro.build.fingerprint")) {
+            RootCommandGuard.verifySafe(command)
+            assertTrue("只读 getprop 不应被拦截: $command", RootCommandGuard.violations(command).isEmpty())
+        }
+    }
+
+    @Test
+    fun `RootCommandGuard 阻断动态展开绕过危险命令检查`() {
+        val commands = listOf(
+            "setenforce\${IFS}0",
+            "setprop\${IFS}ro.product.model\${IFS}TestPhone",
+            "\$(printf setprop) ro.product.model TestPhone",
+            "`printf resetprop` -n ro.build.fingerprint spoofed",
+        )
+        for (command in commands) {
+            assertTrue("动态展开不得绕过 Root 护栏: $command", RootCommandGuard.violations(command).isNotEmpty())
+        }
+    }
+
+    @Test
     fun `RootCommandGuard 降级档补上命名空间本该承担的那一段`() {
         // 常规档：`mount -o remount,rw /data` 是正常运维，不该拦。
         RootCommandGuard.verifySafe("mount -o remount,rw /data")

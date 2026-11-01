@@ -31,6 +31,10 @@ object RootCommandGuard {
     private const val CORE_PARTITIONS = "(system|vendor|product|system_ext|odm|apex)"
 
     private val RULES: List<Rule> = listOf(
+        // Command substitution and IFS expansion can synthesize a dangerous
+        // command after this text check.  Ordinary `$?`/`$VAR` status or value
+        // expansion remains available to keep normal shell scripts usable.
+        Rule("动态 Shell 展开", Regex("""(`|\$\(|\$\{?ifs\b)""", RegexOption.IGNORE_CASE)),
         Rule(
             "重启到刷机模式",
             Regex("""\breboot\b[^|;&]{0,40}\b(bootloader|recovery|edl|fastboot|sideload)\b"""),
@@ -56,6 +60,16 @@ object RootCommandGuard {
         Rule("关闭 SELinux 强制模式", Regex("""\bsetenforce\s+(0|permissive)\b""")),
         Rule("写 SELinux 开关文件", Regex(""">\s*[^|;&]*/sys/fs/selinux/enforce""")),
         Rule("用内核参数关 SELinux", Regex("""\b(androidboot\.)?selinux\s*=\s*permissive\b""")),
+        // Android 属性服务位于宿主系统命名空间之外，mount namespace 不能隔离它。
+        // 因此 Root Shell 不提供 setprop/resetprop：这也避免借它伪装 ro.product.*、
+        // ro.build.fingerprint 或修改 ctl./persist.* 属性。getprop 只读，仍然允许。
+        Rule("修改 Android 系统属性", Regex("""\b(setprop|resetprop)\b""")),
+        Rule(
+            "直接写 Android 属性存储",
+            Regex(
+                """(>|tee\s+|of\s*=|\b(?:cp|mv|install)\b[^|;&]*\s)[^|;&]*(/data/property/|/dev/__properties__/?)""",
+            ),
+        ),
     )
 
     /**

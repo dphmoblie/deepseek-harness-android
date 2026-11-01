@@ -5,9 +5,60 @@ import android.os.Build
 import io.deepseekharness.mobile.BuildConfig
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import java.io.File
 import java.io.InputStream
+import java.security.KeyStore
+import java.security.MessageDigest
+import javax.crypto.KeyGenerator
+import javax.crypto.Mac
+import javax.crypto.SecretKey
 import java.util.concurrent.TimeUnit
+
+/**
+ * Stable, non-reversible device-build token used only for launch-cache invalidation.
+ *
+ * The Android build fingerprint is public ROM metadata rather than a secret, but it
+ * does not need to be persisted verbatim in SharedPreferences or guest-verification
+ * tokens.  Keep the cache semantics while avoiding raw build strings in local state.
+ * The Android Keystore HMAC key prevents offline dictionary matching of a known ROM
+ * fingerprint; the plain SHA-256 fallback is only for devices where Keystore is
+ * temporarily unavailable and still preserves cache invalidation semantics.
+ */
+internal fun runtimeDeviceFingerprintToken(raw: String): String {
+    val input = raw.toByteArray(Charsets.UTF_8)
+    val digest = runCatching {
+        synchronized(RuntimeDeviceFingerprintKey.lock) {
+            RuntimeDeviceFingerprintKey.loadOrCreate()?.let { key ->
+                Mac.getInstance("HmacSHA256").apply { init(key) }.doFinal(input)
+            }
+        }
+    }.getOrNull() ?: MessageDigest.getInstance("SHA-256").digest(input)
+    val hex = digest.joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    return "device-fp-v1:$hex"
+}
+
+private object RuntimeDeviceFingerprintKey {
+    const val ALIAS = "dsh-runtime-profile-hmac-v1"
+    val lock = Any()
+
+    fun loadOrCreate(): SecretKey? {
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        if (!store.containsAlias(ALIAS)) {
+            KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_HMAC_SHA256, "AndroidKeyStore").apply {
+                init(
+                    KeyGenParameterSpec.Builder(
+                        ALIAS,
+                        KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
+                    ).setDigests(KeyProperties.DIGEST_SHA256).build(),
+                )
+                generateKey()
+            }
+        }
+        return store.getKey(ALIAS, null) as? SecretKey
+    }
+}
 
 internal data class ProotLaunchProfile(
     val disableSeccomp: Boolean,
@@ -388,7 +439,7 @@ class RuntimeLaunchResolver(
         listOf(
             BuildConfig.VERSION_CODE,
             Build.VERSION.SDK_INT,
-            Build.FINGERPRINT,
+            runtimeDeviceFingerprintToken(Build.FINGERPRINT),
             manifest.runtimeId,
             manifest.version,
             manifest.rootfs.sha256,

@@ -148,57 +148,75 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             return failure("ACCESSIBILITY_RATE_LIMITED", "无障碍动作过于频繁，请稍后再试")
         }
         val root = rootInActiveWindow ?: return failure("ACCESSIBILITY_WINDOW_UNAVAILABLE", "当前没有可读取的应用窗口")
-        val packageName = root.packageName?.toString().orEmpty()
-        if (!AccessibilityAutomationStore.packageAllowed(this, packageName)) {
-            return failure("ACCESSIBILITY_PACKAGE_DENIED", "当前应用不在无障碍自动化白名单中")
-        }
-        if (containsSensitiveWindow(root)) return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到密码、验证码、支付或权限窗口，已拒绝自动化")
-        return when (command) {
-            "accessibilityTree" -> if (param.isBlank()) tree(root, packageName)
-            else failure("ACCESSIBILITY_ACTION_INVALID", "无障碍层级读取不接受参数")
-            "accessibilityAction" -> action(root, packageName, param).also {
-                if (it.ok) {
-                    lastActionAt = now
-                    noteAutomationTaskAction(now)
-                }
+        return try {
+            val packageName = root.packageName?.toString().orEmpty()
+            if (!AccessibilityAutomationStore.packageAllowed(this, packageName)) {
+                return failure("ACCESSIBILITY_PACKAGE_DENIED", "当前应用不在无障碍自动化白名单中")
             }
-            "tap", "inputText" -> observedAction(root, packageName, command, param).also {
-                if (it.ok) {
-                    lastActionAt = now
-                    noteAutomationTaskAction(now)
+            if (containsSensitiveWindow(root)) return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到密码、验证码、支付或权限窗口，已拒绝自动化")
+            when (command) {
+                "accessibilityTree" -> if (param.isBlank()) tree(root, packageName)
+                else failure("ACCESSIBILITY_ACTION_INVALID", "无障碍层级读取不接受参数")
+                "accessibilityAction" -> action(root, packageName, param).also {
+                    if (it.ok) {
+                        lastActionAt = now
+                        noteAutomationTaskAction(now)
+                    }
                 }
+                "tap", "inputText" -> observedAction(root, packageName, command, param).also {
+                    if (it.ok) {
+                        lastActionAt = now
+                        noteAutomationTaskAction(now)
+                    }
+                }
+                // 事件驱动自动化的入口：报告规则统计并打开本进程的事件评估（详见 [automationRules]）。
+                "automationRules" -> automationRules(packageName, param)
+                // 计划式执行的入口：只做闸门与记账，动作仍各走各的命令（详见 [automationTask]）。
+                "automationTask" -> automationTask(root, packageName, param)
+                else -> failure("DEVICE_COMMAND_INVALID", "无障碍命令不受支持")
             }
-            // 事件驱动自动化的入口：报告规则统计并打开本进程的事件评估（详见 [automationRules]）。
-            "automationRules" -> automationRules(packageName, param)
-            // 计划式执行的入口：只做闸门与记账，动作仍各走各的命令（详见 [automationTask]）。
-            "automationTask" -> automationTask(root, packageName, param)
-            else -> failure("DEVICE_COMMAND_INVALID", "无障碍命令不受支持")
+        } finally {
+            root.recycle()
         }
     }
 
     /** 坐标及输入工具复用节点动作：白名单、敏感窗口和设备端确认均不能被绕过。 */
     private fun observedAction(root: AccessibilityNodeInfo, packageName: String, command: String, param: String): DeviceCommandResult {
-        val node = if (command == "inputText") {
+        val id = if (command == "inputText") {
             if (param.length !in 1..512 || param.any { it.code < 32 || it.code == 127 }) {
                 return failure("ACCESSIBILITY_ACTION_INVALID", "输入长度或格式无效")
             }
-            root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            try {
+                focused?.viewIdResourceName
+            } finally {
+                if (focused != null && focused !== root) focused.recycle()
+            }
         } else {
             if (!Regex("^[0-9]{1,5},[0-9]{1,5}$").matches(param)) return failure("ACCESSIBILITY_ACTION_INVALID", "坐标格式无效")
             val coordinates = param.split(',').map(String::toInt)
-            val nodes = ArrayList<AccessibilityNodeInfo>()
-            fun collect(current: AccessibilityNodeInfo?, depth: Int) {
-                if (current == null || depth > MAX_TREE_DEPTH || nodes.size >= MAX_TREE_NODES) return
-                nodes.add(current)
-                for (index in 0 until current.childCount) collect(current.getChild(index), depth + 1)
+            var visited = 0
+            fun findViewId(current: AccessibilityNodeInfo?, depth: Int): String? {
+                if (current == null || depth > MAX_TREE_DEPTH || visited >= MAX_TREE_NODES) return null
+                visited++
+                var match = if (current.isVisibleToUser && current.isClickable &&
+                    !current.viewIdResourceName.isNullOrEmpty() &&
+                    Rect().also(current::getBoundsInScreen).contains(coordinates[0], coordinates[1])
+                ) current.viewIdResourceName else null
+                for (index in 0 until current.childCount) {
+                    if (visited >= MAX_TREE_NODES) break
+                    val child = current.getChild(index) ?: continue
+                    try {
+                        findViewId(child, depth + 1)?.let { match = it }
+                    } finally {
+                        child.recycle()
+                    }
+                }
+                return match
             }
-            collect(root, 0)
-            nodes.lastOrNull { candidate ->
-                candidate.isVisibleToUser && candidate.isClickable && !candidate.viewIdResourceName.isNullOrEmpty() &&
-                    Rect().also(candidate::getBoundsInScreen).contains(coordinates[0], coordinates[1])
-            }
+            findViewId(root, 0)
         } ?: return failure("ACCESSIBILITY_NODE_NOT_FOUND", "目标位置或输入框没有可用的控件标识，请重新读取节点树")
-        val id = node.viewIdResourceName ?: return failure("ACCESSIBILITY_NODE_NOT_FOUND", "目标控件没有稳定的资源标识")
+        if (id.isBlank()) return failure("ACCESSIBILITY_NODE_NOT_FOUND", "目标控件没有稳定的资源标识")
         val request = JSONObject().put("packageName", packageName)
             .put("action", if (command == "tap") "click" else "setText")
             .put("selector", JSONObject().put("viewId", id))
@@ -234,7 +252,12 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         result.put(entry)
         for (index in 0 until node.childCount) {
             if (result.length() >= MAX_TREE_NODES) break
-            appendNodes(node.getChild(index), result, depth + 1)
+            val child = node.getChild(index) ?: continue
+            try {
+                appendNodes(child, result, depth + 1)
+            } finally {
+                child.recycle()
+            }
         }
     }
 
@@ -244,12 +267,16 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         if (request.packageName != packageName) return failure("ACCESSIBILITY_PACKAGE_DENIED", "动作目标不是当前前台应用")
         val node = findByViewId(root, request.viewId)
             ?: return failure("ACCESSIBILITY_NODE_NOT_FOUND", "未找到唯一的目标节点")
-        if (node.packageName?.toString() != packageName || node.isPassword ||
-            AccessibilityAutomationPolicy.containsSensitiveText(node.viewIdResourceName)
-        ) return failure("ACCESSIBILITY_ACTION_REJECTED", "目标节点不允许此操作")
-        // 用户已在系统设置中开启无障碍服务，并将目标应用加入 DSH 白名单；
-        // 在这个授权边界内允许连续操作，用于自动跳过开屏广告。
-        return executeConfirmedAction(request)
+        return try {
+            if (node.packageName?.toString() != packageName || node.isPassword ||
+                AccessibilityAutomationPolicy.containsSensitiveText(node.viewIdResourceName)
+            ) return failure("ACCESSIBILITY_ACTION_REJECTED", "目标节点不允许此操作")
+            // 用户已在系统设置中开启无障碍服务，并将目标应用加入 DSH 白名单；
+            // 在这个授权边界内允许连续操作，用于自动跳过开屏广告。
+            executeConfirmedAction(request)
+        } finally {
+            node.recycle()
+        }
     }
 
     /** 在无障碍覆盖层中显示一次性确认，等待发生在设备桥工作线程。 */
@@ -386,33 +413,41 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         if (isLockedOrScreenOff()) return failure("ACCESSIBILITY_DEVICE_LOCKED", "设备已锁定或屏幕未交互")
         if (now - lastActionAt < ACTION_INTERVAL_MS) return failure("ACCESSIBILITY_RATE_LIMITED", "无障碍动作过于频繁，请稍后再试")
         val root = rootInActiveWindow ?: return failure("ACCESSIBILITY_WINDOW_UNAVAILABLE", "当前没有可读取的应用窗口")
-        val packageName = root.packageName?.toString().orEmpty()
-        if (packageName != request.packageName || !AccessibilityAutomationStore.packageAllowed(this, packageName)) {
-            return failure("ACCESSIBILITY_PACKAGE_DENIED", "确认后前台应用已变化")
+        return try {
+            val packageName = root.packageName?.toString().orEmpty()
+            if (packageName != request.packageName || !AccessibilityAutomationStore.packageAllowed(this, packageName)) {
+                return failure("ACCESSIBILITY_PACKAGE_DENIED", "确认后前台应用已变化")
+            }
+            if (containsSensitiveWindow(root)) return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "确认后检测到敏感窗口")
+            val node = findByViewId(root, request.viewId)
+                ?: return failure("ACCESSIBILITY_NODE_NOT_FOUND", "确认后未找到唯一的目标节点")
+            try {
+                if (node.packageName?.toString() != packageName || node.isPassword ||
+                AccessibilityAutomationPolicy.containsSensitiveText(node.viewIdResourceName)
+                ) return failure("ACCESSIBILITY_ACTION_REJECTED", "确认后目标节点不允许此操作")
+                val success = when (request.action) {
+                    "click" -> node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    "setText" -> if (!node.isEditable || request.text == null || AccessibilityAutomationPolicy.containsSensitiveText(request.text)) false
+                    else node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
+                        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, request.text)
+                    })
+                    "scroll" -> node.isScrollable && node.performAction(
+                        if (request.direction == "forward") AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                        else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD,
+                    )
+                    else -> false
+                }
+                if (success) {
+                    lastActionAt = now
+                    noteAutomationTaskAction(now)
+                    DeviceCommandResult(true, 0, "操作已执行", false, null)
+                } else failure("ACCESSIBILITY_ACTION_REJECTED", "目标节点不允许此操作")
+            } finally {
+                node.recycle()
+            }
+        } finally {
+            root.recycle()
         }
-        if (containsSensitiveWindow(root)) return failure("ACCESSIBILITY_SENSITIVE_WINDOW", "确认后检测到敏感窗口")
-        val node = findByViewId(root, request.viewId)
-            ?: return failure("ACCESSIBILITY_NODE_NOT_FOUND", "确认后未找到唯一的目标节点")
-        if (node.packageName?.toString() != packageName || node.isPassword ||
-            AccessibilityAutomationPolicy.containsSensitiveText(node.viewIdResourceName)
-        ) return failure("ACCESSIBILITY_ACTION_REJECTED", "确认后目标节点不允许此操作")
-        val success = when (request.action) {
-            "click" -> node.isClickable && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            "setText" -> if (!node.isEditable || request.text == null || AccessibilityAutomationPolicy.containsSensitiveText(request.text)) false
-            else node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, Bundle().apply {
-                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, request.text)
-            })
-            "scroll" -> node.isScrollable && node.performAction(
-                if (request.direction == "forward") AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-                else AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD,
-            )
-            else -> false
-        }
-        return if (success) {
-            lastActionAt = now
-            noteAutomationTaskAction(now)
-            DeviceCommandResult(true, 0, "操作已执行", false, null)
-        } else failure("ACCESSIBILITY_ACTION_REJECTED", "目标节点不允许此操作")
     }
 
     /**
@@ -426,7 +461,9 @@ class DeepSeekAccessibilityService : AccessibilityService() {
 
     private fun findByViewId(root: AccessibilityNodeInfo?, viewId: String): AccessibilityNodeInfo? {
         val matches = root?.findAccessibilityNodeInfosByViewId(viewId).orEmpty()
-        return matches.singleOrNull()
+        val selected = matches.singleOrNull()
+        matches.forEach { if (it !== selected) it.recycle() }
+        return selected
     }
 
     private fun safeText(value: CharSequence?): String {
@@ -457,7 +494,14 @@ class DeepSeekAccessibilityService : AccessibilityService() {
                 found = true
                 return
             }
-            for (index in 0 until node.childCount) visit(node.getChild(index), depth + 1)
+            for (index in 0 until node.childCount) {
+                val child = node.getChild(index) ?: continue
+                try {
+                    visit(child, depth + 1)
+                } finally {
+                    child.recycle()
+                }
+            }
         }
         visit(root, 0)
         return found
@@ -786,7 +830,13 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         }
         // 不在这里按下焦点：取焦点是**公开动作**（会推进节流并写审计），只能由真正要写的动作触发。
         // 这一步只如实报告「有没有一个可以写的节点」，把选择权留给调用方。
-        val focus = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable && !it.isPassword }
+        val candidate = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        val focus = if (candidate != null && candidate.isEditable && !candidate.isPassword) {
+            candidate
+        } else {
+            candidate?.recycle()
+            null
+        }
         return WriteScope(root, focus)
     }
 
@@ -1055,38 +1105,42 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         // 锁屏时不读树、不读规则：拍板口径是"锁屏一律跳过"，连评估都不做。
         if (isLockedOrScreenOff()) return
         val root = rootInActiveWindow ?: return
-        val rootPackage = root.packageName?.toString().orEmpty()
-        val windowStateChanged = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-        // 窗口身份必须先更新；100ms 内切屏可以不执行动作，但不能继续沿用旧 Activity。
-        if (!automationWindows.observe(
-                eventPackage, event.windowId, rootPackage, root.windowId,
-                event.className?.toString(), windowStateChanged,
+        try {
+            val rootPackage = root.packageName?.toString().orEmpty()
+            val windowStateChanged = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+            // 窗口身份必须先更新；100ms 内切屏可以不执行动作，但不能继续沿用旧 Activity。
+            if (!automationWindows.observe(
+                    eventPackage, event.windowId, rootPackage, root.windowId,
+                    event.className?.toString(), windowStateChanged,
+                )
+            ) return
+            if (windowStateChanged) {
+                automationGate.beginMatchWindow(AutomationRuleExecutor.baseWindowKey(
+                    automationWindows.screen(rootPackage, root.windowId),
+                ))
+            }
+            // 第 1 层只丢弃动作评估，不丢弃上面的可靠窗口状态。
+            if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) return
+            val snapshot = buildAutomationTree(root)
+            val sensitiveWindow = containsSensitiveWindow(root)
+            val rules = loadAutomationRules(snapshot.packageName)
+            if (rules.isEmpty()) return
+            runAutomationEvaluation(
+                AutomationEvaluation(
+                    allowedPackages = allowed,
+                    whitelistEnabled = whitelistEnabled,
+                    tree = snapshot,
+                    deviceLocked = false,
+                    sensitiveWindow = sensitiveWindow,
+                ),
+                rules,
+                nowMs,
+                apply = true,
+                eventSequence = automationWindows.current(snapshot.packageName),
             )
-        ) return
-        if (windowStateChanged) {
-            automationGate.beginMatchWindow(AutomationRuleExecutor.baseWindowKey(
-                automationWindows.screen(rootPackage, root.windowId),
-            ))
+        } finally {
+            root.recycle()
         }
-        // 第 1 层只丢弃动作评估，不丢弃上面的可靠窗口状态。
-        if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) return
-        val snapshot = buildAutomationTree(root)
-        val sensitiveWindow = containsSensitiveWindow(root)
-        val rules = loadAutomationRules(snapshot.packageName)
-        if (rules.isEmpty()) return
-        runAutomationEvaluation(
-            AutomationEvaluation(
-                allowedPackages = allowed,
-                whitelistEnabled = whitelistEnabled,
-                tree = snapshot,
-                deviceLocked = false,
-                sensitiveWindow = sensitiveWindow,
-            ),
-            rules,
-            nowMs,
-            apply = true,
-            eventSequence = automationWindows.current(snapshot.packageName),
-        )
     }
 
     /** 「稍后重新判定」：`wait` 动作与规则的 `matchDelayMs` 都排到这里；同时只允许一个在飞。 */
@@ -1119,40 +1173,44 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     private fun reevaluateAutomation() {
         if (!automationEnabled || !AutomationControlPolicy.admits(automationRuntime())) return
         val root = rootInActiveWindow ?: return
-        val nowMs = SystemClock.elapsedRealtime()
-        val allowed = AccessibilityAutomationStore.allowedPackages(this)
-        val whitelistEnabled = AccessibilityAutomationStore.whitelistEnabled(this)
-        if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) {
-            scheduleAutomationReevaluation(AutomationRuleGate.EVENT_THROTTLE_MS.toInt())
-            return
+        try {
+            val nowMs = SystemClock.elapsedRealtime()
+            val allowed = AccessibilityAutomationStore.allowedPackages(this)
+            val whitelistEnabled = AccessibilityAutomationStore.whitelistEnabled(this)
+            if (!AutomationRuleGate.admitEvent(automationGate, nowMs).allowed) {
+                scheduleAutomationReevaluation(AutomationRuleGate.EVENT_THROTTLE_MS.toInt())
+                return
+            }
+            val snapshot = buildAutomationTree(root)
+            if (!AccessibilityAutomationPolicy.packageAllowed(snapshot.packageName, allowed, whitelistEnabled)) return
+            // 延迟重判定也必须过按应用暂停，否则「暂停前排队的那次 wait/matchDelayMs」会绕过它按下去的那一下。
+            // 顺序与上面那道白名单一致（这里已经读了树），所以只省掉规则评估与动作。
+            // 同样记一条拦截原因，理由见 handleAutomationEvent 里那一段。
+            if (AccessibilityAppConfigStore.isPaused(this, snapshot.packageName)) {
+                automationHistory.noteBlocked(snapshot.packageName, AutomationGateCodes.APP_PAUSED)
+                return
+            }
+            if (isLockedOrScreenOff()) return
+            val rules = loadAutomationRules(snapshot.packageName)
+            if (rules.isEmpty()) return
+            runAutomationEvaluation(
+                AutomationEvaluation(
+                    allowedPackages = allowed,
+                    whitelistEnabled = whitelistEnabled,
+                    tree = snapshot,
+                    deviceLocked = false,
+                    sensitiveWindow = containsSensitiveWindow(root),
+                ),
+                rules,
+                nowMs,
+                apply = true,
+                // 重判定没有新事件，沿用最近一次窗口更新的周期：`resetOn="screen"` 的配额
+                // 不会因为「等待到期」被白白重开一次（那会让 matchDelayMs 变成绕过 maxActions 的口子）。
+                eventSequence = automationWindows.current(snapshot.packageName),
+            )
+        } finally {
+            root.recycle()
         }
-        val snapshot = buildAutomationTree(root)
-        if (!AccessibilityAutomationPolicy.packageAllowed(snapshot.packageName, allowed, whitelistEnabled)) return
-        // 延迟重判定也必须过按应用暂停，否则「暂停前排队的那次 wait/matchDelayMs」会绕过它按下去的那一下。
-        // 顺序与上面那道白名单一致（这里已经读了树），所以只省掉规则评估与动作。
-        // 同样记一条拦截原因，理由见 handleAutomationEvent 里那一段。
-        if (AccessibilityAppConfigStore.isPaused(this, snapshot.packageName)) {
-            automationHistory.noteBlocked(snapshot.packageName, AutomationGateCodes.APP_PAUSED)
-            return
-        }
-        if (isLockedOrScreenOff()) return
-        val rules = loadAutomationRules(snapshot.packageName)
-        if (rules.isEmpty()) return
-        runAutomationEvaluation(
-            AutomationEvaluation(
-                allowedPackages = allowed,
-                whitelistEnabled = whitelistEnabled,
-                tree = snapshot,
-                deviceLocked = false,
-                sensitiveWindow = containsSensitiveWindow(root),
-            ),
-            rules,
-            nowMs,
-            apply = true,
-            // 重判定没有新事件，沿用最近一次窗口更新的周期：`resetOn="screen"` 的配额
-            // 不会因为「等待到期」被白白重开一次（那会让 matchDelayMs 变成绕过 maxActions 的口子）。
-            eventSequence = automationWindows.current(snapshot.packageName),
-        )
     }
 
     /**
@@ -1365,8 +1423,17 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     /** 窗口指纹的结构材料：只有类名 / viewId / 边界，**不读文本**（见 [AutomationWindowDigest]）。 */
     private fun windowDigest(root: AccessibilityNodeInfo): String {
         val structure = ArrayList<String>()
-        collectStructure(root, 0, intArrayOf(MAX_AUTOMATION_NODES), structure)
-        return AutomationWindowDigest.of(root.packageName?.toString().orEmpty(), root.windowId, structure)
+        // budget[0] is the remaining node budget; budget[1] is a truncation flag.
+        // The flag is deliberately part of the digest so a bounded prefix cannot
+        // be mistaken for a complete, unchanged tree.
+        val budget = intArrayOf(MAX_AUTOMATION_NODES, 0)
+        collectStructure(root, 0, budget, structure)
+        return AutomationWindowDigest.of(
+            root.packageName?.toString().orEmpty(),
+            root.windowId,
+            structure,
+            truncated = budget[1] != 0,
+        )
     }
 
     private fun collectStructure(
@@ -1375,7 +1442,10 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         budget: IntArray,
         structure: MutableList<String>,
     ) {
-        if (depth > MAX_AUTOMATION_DEPTH || budget[0] <= 0) return
+        if (depth > MAX_AUTOMATION_DEPTH || budget[0] <= 0) {
+            budget[1] = 1
+            return
+        }
         budget[0]--
         val rect = Rect().also(node::getBoundsInScreen)
         structure += AutomationWindowDigest.entry(
@@ -1387,9 +1457,16 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             bottom = rect.bottom,
         )
         for (index in 0 until node.childCount) {
-            if (budget[0] <= 0) return
+            if (budget[0] <= 0) {
+                budget[1] = 1
+                return
+            }
             val child = node.getChild(index) ?: continue
-            collectStructure(child, depth + 1, budget, structure)
+            try {
+                collectStructure(child, depth + 1, budget, structure)
+            } finally {
+                child.recycle()
+            }
         }
     }
 
@@ -1493,7 +1570,11 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         for (index in 0 until childCount) {
             if (budget[0] <= 0) break
             val child = node.getChild(index) ?: continue
-            children += copyAutomationNode(child, depth + 1, budget) ?: continue
+            try {
+                copyAutomationNode(child, depth + 1, budget)?.let(children::add)
+            } finally {
+                child.recycle()
+            }
         }
         return AutomationNode(
             className = node.className?.toString(),
@@ -1524,14 +1605,30 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             if (!AutomationWindowState.sameWindow(
                     packageName, windowId, activeRoot.packageName?.toString().orEmpty(), activeRoot.windowId,
                 )
-            ) return null
+            ) {
+                activeRoot.recycle()
+                return null
+            }
             var node: AccessibilityNodeInfo? = activeRoot
             for (index in path) {
                 val current = node ?: return null
-                node = current.getChild(index) ?: return null
+                val child = current.getChild(index)
+                val isRoot = current === activeRoot
+                if (!isRoot) current.recycle()
+                if (child == null) {
+                    activeRoot.recycle()
+                    return null
+                }
+                node = child
             }
             val resolved = node ?: return null
-            return AutomationNodeHandle(resolved, snapshotOf(resolved))
+            val snapshot = snapshotOf(resolved)
+            if (resolved !== activeRoot) activeRoot.recycle()
+            return AutomationNodeHandle(resolved, snapshot)
+        }
+
+        override fun releaseNode(node: Any) {
+            (node as? AccessibilityNodeInfo)?.recycle()
         }
 
         override fun clickNode(node: Any): BackendOutcome {
@@ -1557,13 +1654,21 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             var depth = 0
             while (parent != null && depth < MAX_ANCESTOR_DEPTH) {
                 val current = parent
-                if (current.isClickable) {
-                    val performed = runCatching { current.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
-                    if (performed) return BackendOutcome.Done
+                val performed = if (current.isClickable) {
+                    runCatching { current.performAction(AccessibilityNodeInfo.ACTION_CLICK) }.getOrDefault(false)
+                } else {
+                    false
                 }
-                parent = runCatching { current.parent }.getOrNull()
+                if (performed) {
+                    current.recycle()
+                    return BackendOutcome.Done
+                }
+                val next = runCatching { current.parent }.getOrNull()
+                current.recycle()
+                parent = next
                 depth++
             }
+            parent?.recycle()
             return BackendOutcome.Refused(
                 "AUTOMATION_ANCESTOR_MISSING",
                 "向上 $MAX_ANCESTOR_DEPTH 层没有可点击的祖先节点，或可点击的祖先都拒绝了 ACTION_CLICK",
@@ -1614,7 +1719,16 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         }
 
         override fun swipe(direction: String, durationMs: Int): BackendOutcome {
-            val screen = rootInActiveWindow?.let { Rect().also(it::getBoundsInScreen) } ?: Rect()
+            val activeRoot = rootInActiveWindow
+            val screen = if (activeRoot != null) {
+                try {
+                    Rect().also(activeRoot::getBoundsInScreen)
+                } finally {
+                    activeRoot.recycle()
+                }
+            } else {
+                Rect()
+            }
             val metrics = resources.displayMetrics
             val width = if (screen.width() > 0) screen.width() else metrics.widthPixels
             val height = if (screen.height() > 0) screen.height() else metrics.heightPixels
