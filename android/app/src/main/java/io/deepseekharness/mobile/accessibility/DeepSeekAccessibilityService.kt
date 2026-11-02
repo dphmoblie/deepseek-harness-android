@@ -683,49 +683,58 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         val resolved = resolveDisplayInput(displayId, now) ?: return TextWriteResult.denied(
             "ACCESSIBILITY_WINDOW_UNAVAILABLE",
         )
-        // 候选输入框：已有聚焦可编辑节点时就是它；否则是第一个可聚焦且可编辑的节点（聚焦→再写入那一支）。
-        val focusNode = resolved.focus ?: findFocusable(resolved.root, editableOnly = true)
-        val target = resolved.focus
-            ?: focusNode
-            ?: return TextWriteResult.failure(
-                VirtualScreenTextPolicy.TextMethod.UNSUPPORTED,
-                VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
-                "副屏当前没有可编辑的输入框",
-            ).also { resolved.root.recycle() }
-        val hasFocusTarget = focusNode != null
-        val attempted = if (resolved.focus != null) {
-            VirtualScreenTextPolicy.TextMethod.SET_TEXT
-        } else {
-            VirtualScreenTextPolicy.TextMethod.FOCUS_THEN_SET_TEXT
+        // 一个节点可能同时出现在 focus、target 和候选引用中；用 identity 集合保证异常路径与
+        // 正常路径都只回收一次。Android 26..32 的 AccessibilityNodeInfo 池对重复 recycle 很敏感。
+        val released = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<AccessibilityNodeInfo, Boolean>())
+        fun release(node: AccessibilityNodeInfo?) {
+            if (node != null && released.add(node)) runCatching { node.recycle() }
         }
-        // 「聚焦后写入」这一级的真实动作：没有聚焦节点时先取一次焦点（节点自己可点时再补一次点击），
-        // 再写入。取焦点失败不提前放弃：SET_TEXT 仍然会试一次，成败由真实回执决定，不靠推测。
-        if (resolved.focus == null) acquireFocus(target, displayId)
-        val accepted = setText(target, text)
-        if (accepted) lastActionAt = SystemClock.elapsedRealtime()
-        val result = when {
-            // 只有确实写进去了才按回车：写入被拒时绝不提交，否则会把上一次留在输入框里的内容提交出去。
-            accepted -> TextWriteResult.success(
-                attempted,
-                hasFocusTarget,
-                submit && pressImeEnter(displayId, target, text.length),
-            )
-            clipboardAvailable -> pasteInto(displayId, target, text, now, hasFocusTarget, submit)
-            else -> TextWriteResult.failure(
-                attempted,
-                VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
-                if (hasFocusTarget) {
-                    "输入框拒绝了写入，且剪贴板通道不可用${tapHint(target)}"
-                } else {
-                    "输入框拒绝了写入（未能取得焦点）"
-                },
-                hasFocusTarget,
-            )
+        var focusNode: AccessibilityNodeInfo? = null
+        var target: AccessibilityNodeInfo? = null
+        try {
+            // 候选输入框：已有聚焦可编辑节点时就是它；否则是第一个可聚焦且可编辑的节点（聚焦→再写入那一支）。
+            focusNode = resolved.focus ?: findFocusable(resolved.root, editableOnly = true)
+            target = resolved.focus ?: focusNode
+                ?: return TextWriteResult.failure(
+                    VirtualScreenTextPolicy.TextMethod.UNSUPPORTED,
+                    VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
+                    "副屏当前没有可编辑的输入框",
+                )
+            val hasFocusTarget = focusNode != null
+            val attempted = if (resolved.focus != null) {
+                VirtualScreenTextPolicy.TextMethod.SET_TEXT
+            } else {
+                VirtualScreenTextPolicy.TextMethod.FOCUS_THEN_SET_TEXT
+            }
+            // 「聚焦后写入」这一级的真实动作：没有聚焦节点时先取一次焦点，再写入。
+            if (resolved.focus == null) acquireFocus(target!!, displayId)
+            val accepted = setText(target!!, text)
+            if (accepted) lastActionAt = SystemClock.elapsedRealtime()
+            return when {
+                accepted -> TextWriteResult.success(
+                    attempted,
+                    hasFocusTarget,
+                    submit && pressImeEnter(displayId, target!!, text.length),
+                )
+                clipboardAvailable -> pasteInto(displayId, target!!, text, now, hasFocusTarget, submit)
+                else -> TextWriteResult.failure(
+                    attempted,
+                    VirtualScreenTextPolicy.FailureCode.TEXT_UNSUPPORTED,
+                    if (hasFocusTarget) {
+                        "输入框拒绝了写入，且剪贴板通道不可用${tapHint(target!!)}"
+                    } else {
+                        "输入框拒绝了写入（未能取得焦点）"
+                    },
+                    hasFocusTarget,
+                )
+            }
+        } finally {
+            // release() is identity based, so aliases (focus == target == resolved.focus) are safe.
+            release(target)
+            release(focusNode)
+            release(resolved.focus)
+            release(resolved.root)
         }
-        if (focusNode != null && focusNode !== resolved.focus && focusNode !== target) focusNode.recycle()
-        if (target !== resolved.root) target.recycle()
-        resolved.root.recycle()
-        return result
     }
 
     /**
@@ -823,21 +832,35 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             rejectWrite("ACCESSIBILITY_WINDOW_UNAVAILABLE")
             return null
         }
-        if (containsSensitiveWindow(root)) {
-            root.recycle()
-            rejectWrite("ACCESSIBILITY_SENSITIVE_WINDOW")
-            return null
+        var candidate: AccessibilityNodeInfo? = null
+        var transferred = false
+        try {
+            if (containsSensitiveWindow(root)) {
+                rejectWrite("ACCESSIBILITY_SENSITIVE_WINDOW")
+                return null
+            }
+            // 不在这里按下焦点：取焦点是**公开动作**（会推进节流并写审计），只能由真正要写的动作触发。
+            // 这一步只如实报告「有没有一个可以写的节点」，把选择权留给调用方。
+            candidate = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            val focus = if (candidate != null && candidate.isEditable && !candidate.isPassword) {
+                candidate
+            } else {
+                candidate?.recycle()
+                candidate = null
+                null
+            }
+            transferred = true
+            return WriteScope(root, focus)
+        } catch (error: Throwable) {
+            // Provider invalidation can happen while reading sensitivity or focus. The caller
+            // cannot take ownership when this method throws, so release the root here.
+            throw error
+        } finally {
+            if (!transferred) {
+                runCatching { candidate?.recycle() }
+                runCatching { root.recycle() }
+            }
         }
-        // 不在这里按下焦点：取焦点是**公开动作**（会推进节流并写审计），只能由真正要写的动作触发。
-        // 这一步只如实报告「有没有一个可以写的节点」，把选择权留给调用方。
-        val candidate = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        val focus = if (candidate != null && candidate.isEditable && !candidate.isPassword) {
-            candidate
-        } else {
-            candidate?.recycle()
-            null
-        }
-        return WriteScope(root, focus)
     }
 
     /** 收到确认的聚焦/可编辑节点。 */
@@ -919,12 +942,15 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         if ((!editableOnly || node.isEditable) && node.isEnabled && node.isFocusable) return node
         for (index in 0 until node.childCount) {
             val child = node.getChild(index) ?: continue
-            val found = findFocusable(child, editableOnly)
-            if (found != null) {
-                if (found !== child) child.recycle()
-                return found
+            var found: AccessibilityNodeInfo? = null
+            try {
+                found = findFocusable(child, editableOnly)
+                if (found != null) return found
+            } finally {
+                // If recursion throws, found is null and this frame still owns child. If recursion
+                // returns a descendant, child is also ours; only a direct return of child transfers it.
+                if (found !== child) runCatching { child.recycle() }
             }
-            child.recycle()
         }
         return null
     }

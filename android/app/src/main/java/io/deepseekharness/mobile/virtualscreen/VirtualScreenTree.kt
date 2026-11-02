@@ -110,19 +110,30 @@ object VirtualScreenTree {
         val service = DeepSeekAccessibilityService.current() ?: return failure(displayId, SERVICE_UNAVAILABLE)
         val root = service.displayRootFor(displayId).let { access -> access.root ?: return failure(displayId, access.reason ?: "副屏窗口不可读") }
         val state = WalkState(maxDepth.coerceIn(0, MAX_DEPTH), maxNodes.coerceIn(1, MAX_NODES))
+        var rootTransferred = false
         // 包名必须在遍历前取：遍历结束时根节点已经被回收。
-        val packageName = try {
-            root.packageName?.toString().orEmpty()
-        } catch (_: Throwable) {
-            ""
+        try {
+            val packageName = try {
+                root.packageName?.toString().orEmpty()
+            } catch (_: Throwable) {
+                ""
+            }
+            val tree = try {
+                // Allocate the container before transferring root ownership. If allocation or
+                // any later setup fails, dump() still owns the root and its finally block releases it.
+                val json = JSONArray()
+                // snapshot() takes ownership and always recycles the root, including failures.
+                rootTransferred = true
+                json.put(summarize(state.snapshot(root, 0)))
+            } catch (_: Throwable) {
+                null
+            }
+            return tree?.let { success(displayId, packageName, state.count, state.truncated, it, imeText(service, displayId)) }
+                ?: failure(displayId, "副屏节点树读取失败：窗口在读取过程中失效，请重新读取")
+        } finally {
+            // If an exception happens before snapshot receives the node, dump() still owns it.
+            if (!rootTransferred) runCatching { root.recycle() }
         }
-        val tree = try {
-            JSONArray().put(summarize(state.snapshot(root, 0)))
-        } catch (_: Throwable) {
-            null
-        }
-        return tree?.let { success(displayId, packageName, state.count, state.truncated, it, imeText(service, displayId)) }
-            ?: failure(displayId, "副屏节点树读取失败：窗口在读取过程中失效，请重新读取")
     }
 
     /**
@@ -580,39 +591,41 @@ object VirtualScreenTree {
         var truncated = false
             private set
 
-        /** 把 [node] 转成快照并回收它（含它的子节点）；节点数或深度到顶时置 [truncated] 并停止遍历。 */
+        /** 把 [node] 转成快照并回收它（含它的子节点）；异常路径也必须释放节点池对象。 */
         fun snapshot(node: AccessibilityNodeInfo, depth: Int): Snapshot {
-            count++
-            val children = ArrayList<Snapshot>()
-            if (depth >= maxDepth) {
-                if (node.childCount > 0) truncated = true
-            } else {
-                for (index in 0 until node.childCount) {
-                    if (count >= maxNodes) {
-                        truncated = true
-                        break
+            try {
+                count++
+                val children = ArrayList<Snapshot>()
+                if (depth >= maxDepth) {
+                    if (node.childCount > 0) truncated = true
+                } else {
+                    for (index in 0 until node.childCount) {
+                        if (count >= maxNodes) {
+                            truncated = true
+                            break
+                        }
+                        val child = node.getChild(index) ?: continue
+                        children.add(snapshot(child, depth + 1))
                     }
-                    val child = node.getChild(index) ?: continue
-                    children.add(snapshot(child, depth + 1))
                 }
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                return Snapshot(
+                    className = node.className?.toString().orEmpty(),
+                    text = node.text?.toString().orEmpty(),
+                    viewId = node.viewIdResourceName.orEmpty(),
+                    contentDescription = node.contentDescription?.toString().orEmpty(),
+                    clickable = node.isClickable,
+                    editable = node.isEditable,
+                    focused = node.isFocused,
+                    enabled = node.isEnabled,
+                    bounds = intArrayOf(bounds.left, bounds.top, bounds.right, bounds.bottom),
+                    children = children,
+                )
+            } finally {
+                // Android 26..32 pool nodes must be released even when a provider invalidates a node mid-read.
+                runCatching { node.recycle() }
             }
-            val bounds = Rect()
-            node.getBoundsInScreen(bounds)
-            val snapshot = Snapshot(
-                className = node.className?.toString().orEmpty(),
-                text = node.text?.toString().orEmpty(),
-                viewId = node.viewIdResourceName.orEmpty(),
-                contentDescription = node.contentDescription?.toString().orEmpty(),
-                clickable = node.isClickable,
-                editable = node.isEditable,
-                focused = node.isFocused,
-                enabled = node.isEnabled,
-                bounds = intArrayOf(bounds.left, bounds.top, bounds.right, bounds.bottom),
-                children = children,
-            )
-            // 快照只保存 String 与基本类型，读完这一层的字段就能回收，不必等整棵树读完。
-            node.recycle()
-            return snapshot
         }
     }
 }

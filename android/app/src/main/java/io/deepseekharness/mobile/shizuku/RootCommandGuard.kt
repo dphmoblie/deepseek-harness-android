@@ -14,8 +14,8 @@ import java.util.Locale
  * 3. 只拦真正不可逆的事：引导链、分区表、块设备写入、SELinux 全局关闭、核心分区改可写。
  *    `rm`/`chmod`/普通 `mount` 交给 [RootSecurityWrapper] 的私有命名空间 + 只读重挂 + `/dev/block` 遮蔽兜住，
  *    护栏不该变成绊脚石。
- * 4. `strict = true` 时加挂 [STRICT_RULES]：那是「沙箱已降级」的执行档（设备没有挂载命名空间，
- *    遮蔽与只读重挂都没生效）。此时没有第二层兜底，护栏必须自己补上——
+ * 4. `strict = true` 时加挂 [STRICT_RULES]：这是无法证明本次载荷处于私有挂载隔离时的
+ *    fail-closed 执行档。能力探测可能在启动前失效，此时没有第二层兜底，护栏必须自己补上——
  *    于是连 `mount`/`umount`、`dd`、写 `/dev` 下的节点、改系统目录权限、加载内核模块一并拦住。
  *    代价是这台设备上做不了挂载类操作，收益是「没有第二层时不来裸奔」。
  *
@@ -31,10 +31,16 @@ object RootCommandGuard {
     private const val CORE_PARTITIONS = "(system|vendor|product|system_ext|odm|apex)"
 
     private val RULES: List<Rule> = listOf(
-        // Command substitution and IFS expansion can synthesize a dangerous
-        // command after this text check.  Ordinary `$?`/`$VAR` status or value
-        // expansion remains available to keep normal shell scripts usable.
+        // Command substitution, IFS expansion, and a second shell/eval can
+        // synthesize a dangerous command after this text check.  A root payload
+        // is already executed by our fixed shell, so there is no safe reason to
+        // permit another interpreter or an indirect command name here.
         Rule("动态 Shell 展开", Regex("""(`|\$\(|\$\{?ifs\b)""", RegexOption.IGNORE_CASE)),
+        Rule(
+            "二次 Shell 解释",
+            // normalize() folds newlines to spaces, so whitespace is also a command boundary here.
+            Regex("""\b(eval|exec|source)\b|(?:^|[;&|\s])\.\s+|\b(sh|bash|mksh)\s+-c\b"""),
+        ),
         Rule(
             "重启到刷机模式",
             Regex("""\breboot\b[^|;&]{0,40}\b(bootloader|recovery|edl|fastboot|sideload)\b"""),
@@ -73,7 +79,7 @@ object RootCommandGuard {
     )
 
     /**
-     * 降级档规则（`strict = true`）：只在「沙箱没能提供挂载隔离」时启用。
+     * 降级档规则（`strict = true`）：调用方不能证明本次载荷已处于私有挂载隔离时启用。
      *
      * 这些动作本身并不必然有害——`mount` 是常规运维、`chmod` 是修权限。它们被列进来是因为
      * 在**没有私有命名空间**的前提下，一次 `mount` 就落到宿主上，而 [RootSecurityWrapper]

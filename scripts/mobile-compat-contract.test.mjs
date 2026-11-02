@@ -60,7 +60,7 @@ test('app consumes the maintained mobile Harness adapter as a pinned submodule',
   assert.match(gitmodules, /url\s*=\s*https:\/\/github\.com\/dphmoblie\/deepseek-harness-mobile-support\.git/u)
 
   const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
-  const checkoutCount = workflow.match(/uses:\s*actions\/checkout@v4/gu)?.length ?? 0
+  const checkoutCount = workflow.match(/uses:\s*actions\/checkout@(?:v4|[0-9a-f]{40})/gu)?.length ?? 0
   const recursiveCount = workflow.match(/submodules:\s*recursive/gu)?.length ?? 0
   assert.ok(checkoutCount >= 4, 'all jobs should check out the app repository')
   assert.equal(recursiveCount, 4, 'each app workflow job must recursively check out Harness')
@@ -343,7 +343,7 @@ test('mobile session persistence ships an atomic no-replace fallback with privat
 test('stable releases are main-only and bind the release to the built commit', async () => {
   const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
   assert.match(workflow, /^permissions:\s*\r?\n\s+contents: read$/m)
-  assert.match(workflow, /github\.event\.inputs\.release_type != 'stable' \|\| github\.ref == 'refs\/heads\/main'/)
+  assert.match(workflow, /github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/main'/)
   assert.match(workflow, /permissions:\s*\r?\n\s+contents: write\s*\r?\n\s+# \u63a8\u9001\u5206\u652f/m)
   assert.match(workflow, /target_commitish:\$sha/)
 })
@@ -1114,7 +1114,7 @@ test('release builds fail closed on high-severity production dependency audits',
   assert.match(audit, /^          pnpm --dir scripts\/runtime-profile audit --prod --audit-level=high$/mu)
   assert.doesNotMatch(audit, /continue-on-error|\|\| true/u)
   assert.ok(build.indexOf('Install Shizuku plugin contract dependencies') < build.indexOf('Audit shipped production dependencies'))
-  assert.ok(build.indexOf('Audit shipped production dependencies') < build.indexOf('Build release APK + lint + unit tests'))
+  assert.ok(build.indexOf('Audit shipped production dependencies') < build.indexOf('Build signed release APK + lint + unit tests'))
 })
 
 test('release stays a draft until uploaded assets have been downloaded and verified', async () => {
