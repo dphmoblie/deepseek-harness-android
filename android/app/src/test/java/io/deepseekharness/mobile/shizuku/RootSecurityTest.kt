@@ -151,6 +151,28 @@ class RootSecurityTest {
     }
 
     @Test
+    fun `RootCommandGuard 阻断二次 shell 与间接命令执行`() {
+        val commands = listOf(
+            "x='reboot'; y='bootloader'; eval \"\$x \$y\"",
+            "payload='setprop'; eval \"\$payload ro.product.model spoofed\"",
+            "x='dd if=/data/local/tmp/x of=/dev/block/sda'; sh -c \"\$x\"",
+            "bash -c \"mount -o remount,rw /system\"",
+            "source \"\$SCRIPT\"",
+            ". \"\$SCRIPT\"",
+            "echo safe\n. \"\$SCRIPT\"",
+        )
+        for (command in commands) {
+            assertTrue("二次 shell 不得绕过 Root 护栏: $command", RootCommandGuard.violations(command).isNotEmpty())
+            try {
+                RootCommandGuard.verifySafe(command)
+                fail("二次 shell 应被阻断: $command")
+            } catch (error: RuntimeFailure) {
+                assertEquals("ROOT_SECURITY_VIOLATION", error.code)
+            }
+        }
+    }
+
+    @Test
     fun `RootCommandGuard 降级档补上命名空间本该承担的那一段`() {
         // 常规档：`mount -o remount,rw /data` 是正常运维，不该拦。
         RootCommandGuard.verifySafe("mount -o remount,rw /data")

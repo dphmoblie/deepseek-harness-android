@@ -182,8 +182,9 @@ class DeviceCommandRunner(
      * 只有 [DeviceCommand.SHELL]（用户或模型给的短脚本）够格走这里：其它命令本身不需要 UID 0，
      * 多给一份 root 能力只是扩大暴露面。
      *
-     * 闸门按顺序：参数长度与控制字符 → [RootSandboxProbe] 探测出的能力档位决定静态审查档位
-     * （没有挂载命名空间时按严格档跑）→ [RootCommandRunner] 里的命名空间包装。
+     * 闸门按顺序：参数长度与控制字符 → 严格静态审查 → [RootCommandRunner] 里的
+     * 命名空间包装。能力探测只用于诊断，不放宽静态审查：实际启动时命名空间可能因
+     * KernelSU profile、内核状态或 ROM 行为发生变化，必须始终 fail-closed。
      * 沙箱降级**不**算失败，但会写进正文：调用方与用户都该看到「这次是降级执行」。
      */
     private fun executeOnRootEngine(param: String, timeoutMs: Long): DeviceCommandResult {
@@ -192,8 +193,11 @@ class DeviceCommandRunner(
         ) {
             throw RuntimeFailure("DEVICE_COMMAND_INVALID", "Shell 脚本为空、过长或包含非法控制字符")
         }
-        val capabilities = RootSandboxProbe.detect()
-        val result = RootCommandRunner.run(param, timeoutMs, strictGuard = !capabilities.namespaceIsolation)
+        // The wrapper probes immediately before launching the payload.  The
+        // cached capability snapshot is only for the settings/status screen;
+        // probing here would add a second su process and still could not relax
+        // the fail-closed guard when unshare changes between the two launches.
+        val result = RootCommandRunner.run(param, timeoutMs, strictGuard = true)
         val degradations = result.diagnostics.filter { it.substringBefore(':') in RootSecurityWrapper.DEGRADATION_CODES }
         val body = buildString {
             append(result.output)
@@ -201,7 +205,7 @@ class DeviceCommandRunner(
                 if (isNotEmpty()) append('\n')
                 append("[根通道降级执行] 沙箱没能提供完整隔离：")
                 append(degradations.joinToString("、"))
-                append("。本次命令在没有挂载命名空间的前提下执行，静态护栏已按严格档收紧。")
+                append("。本次命令未能证明拥有完整挂载命名空间隔离，静态护栏已按严格档收紧。")
             }
         }
         val errorCode = result.errorCode ?: if (result.ok) null else "DEVICE_COMMAND_FAILED"

@@ -53,8 +53,9 @@ object RootCommandRunner {
      *
      * @param hardened 裁减 `CAP_SYS_ADMIN`/`CAP_MKNOD`；需要挂载类操作（OverlayFS 等）时传 `false`，
      *                 此时硬约束只剩 KernelSU 管理器的 App Profile。
-     * @param strictGuard 沙箱已确定降级（无挂载命名空间）时传 `true`：静态审查按降级档跑，
-     *                    补上本该由命名空间承担的那一段。见 [RootCommandGuard.verifySafe]。
+     * @param strictGuard 无法证明本次载荷处于私有挂载命名空间时传 `true`：静态审查按
+     *                    fail-closed 降级档跑，补上本该由命名空间承担的那一段。
+     *                    见 [RootCommandGuard.verifySafe]。
      */
     fun run(
         script: String,
