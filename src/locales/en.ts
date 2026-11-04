@@ -1,5 +1,6 @@
 // 应用界面英文词典；不翻译用户输入、凭据或终端输出。
 export const english: Readonly<Record<string, string>> = {
+  "常用设置": "Common settings",
   "外置浏览器": "External browser",
   "把 Harness 交给系统浏览器打开：旧 WebView 跑不动页面时用这条路": "Open Harness in the system browser: the way out when the WebView can't keep up",
   "HTTP 连接不安全：API Key 和请求内容可能以明文传输，建议改用 HTTPS。": "HTTP is insecure: the API key and request contents may be sent in plaintext. HTTPS is recommended.",

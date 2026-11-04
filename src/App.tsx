@@ -1329,6 +1329,12 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
     .filter(item => item.entries.length > 0)
   const matched = groups.reduce((total, item) => total + item.entries.length, 0)
   const searching = appliedQuery.trim() !== ''
+  const quickSettings: { page: SettingsPage; icon: ReactNode }[] = [
+    { page: 'models', icon: <KeyRound size={18} /> },
+    { page: 'runtime', icon: <Power size={18} /> },
+    { page: 'automation', icon: <Bot size={18} /> },
+    { page: 'diagnostics', icon: <ScrollText size={18} /> },
+  ]
 
   /** 兼容原生直接写入 DOM 的输入；限制长度并同步草稿，分类同时复位。 */
   const applySearch = (value: string): void => {
@@ -1336,6 +1342,7 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
     setQuery(nextValue)
     setAppliedQuery(nextValue.trim())
     setCategory('all')
+    setFilterOpen(false)
   }
 
   /** 运行环境更新提示跟随当前状态，其余入口使用固定说明。 */
@@ -1433,10 +1440,10 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
 
       {/* 收起时保留隐藏容器：aria-controls 指向的元素始终存在（与 harness-log-body 同一约定）。 */}
       <div id="settings-categories" className="settings-categories" role="listbox" aria-label={t("筛选功能分类")} hidden={!filterOpen}>
-        <button type="button" role="option" aria-label={t("筛选分类：全部分类")} aria-selected={category === 'all'} onClick={() => setCategory('all')}>{t("全部分类")}</button>
+        <button type="button" role="option" aria-label={t("筛选分类：全部分类")} aria-selected={category === 'all'} onClick={() => { setCategory('all'); setFilterOpen(false) }}>{t("全部分类")}</button>
         {SETTINGS_HOME_GROUPS.map(group => (
           <button key={group.id} type="button" role="option" aria-label={`${t("筛选分类：")} ${t(group.label)}`} aria-selected={category === group.id}
-            onClick={() => { setCategory(group.id); setQuery(''); setAppliedQuery('') }}>{t(group.label)}</button>
+            onClick={() => { setCategory(group.id); setQuery(''); setAppliedQuery(''); setFilterOpen(false) }}>{t(group.label)}</button>
         ))}
       </div>
 
@@ -1447,6 +1454,21 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
             ? t("没有匹配的入口：试试「导入」「日志」「保活」这类功能词")
             : t("找到 {0} 个匹配的入口", matched)}
         </p>
+      )}
+
+      {!searching && category === 'all' && (
+        <section className="settings-quick" aria-label={t("常用设置")}>
+          <p className="management-group-title">{t("常用设置")}</p>
+          <div className="settings-quick-grid">
+            {quickSettings.map(({ page, icon }) => (
+              <a className="settings-quick-button" key={page} href={`#${SETTINGS_PAGE_META[page].view}`} onClick={event => { event.preventDefault(); onOpenPage(page) }}>
+                <span className="settings-quick-icon">{icon}</span>
+                <span>{t(SETTINGS_PAGE_META[page].title)}</span>
+                <ChevronRight size={15} aria-hidden="true" />
+              </a>
+            ))}
+          </div>
+        </section>
       )}
 
       <div className="settings-directory">

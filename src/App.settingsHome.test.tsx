@@ -73,6 +73,26 @@ describe('设置首页：分组与分类筛选', () => {
     expect(screen.getByRole('region', { name: '后台' })).toBeVisible()
   })
 
+  it('首页提供常用设置快捷入口，搜索或分类筛选时收起', async () => {
+    await openSettingsHome()
+
+    const quick = screen.getByRole('region', { name: '常用设置' })
+    expect(within(quick).getByRole('link', { name: /模型与密钥/ })).toBeVisible()
+    expect(within(quick).getByRole('link', { name: /后台/ })).toBeVisible()
+    expect(within(quick).getByRole('link', { name: /自动化/ })).toBeVisible()
+    expect(within(quick).getByRole('link', { name: /诊断与日志/ })).toBeVisible()
+
+    fireEvent.change(screen.getByRole('searchbox', { name: '按功能词查找入口' }), { target: { value: '主题' } })
+    fireEvent.click(screen.getByRole('button', { name: '按分类筛选' }))
+    fireEvent.click(screen.getByRole('button', { name: '搜索入口' }))
+    expect(screen.queryByRole('listbox', { name: '筛选功能分类' })).toBeNull()
+    expect(screen.queryByRole('region', { name: '常用设置' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '清空查找词' }))
+    fireEvent.click(screen.getByRole('button', { name: '按分类筛选' }))
+    fireEvent.click(screen.getByRole('option', { name: /筛选分类： 设备与自动化/ }))
+    expect(screen.queryByRole('region', { name: '常用设置' })).toBeNull()
+  })
+
   it.each([
     { badge: '未安装', state: { ...shizuku, installed: false, running: false } },
     { badge: '待授权', state: { ...shizuku } },
@@ -93,8 +113,8 @@ describe('设置首页：分组与分类筛选', () => {
     expect(screen.queryByRole('listbox', { name: '筛选功能分类' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '按分类筛选' }))
     fireEvent.click(screen.getByRole('option', { name: /筛选分类： 设备与自动化/ }))
-    // 收起后筛选钮仍提示「列表正被筛选」。
-    fireEvent.click(screen.getByRole('button', { name: '按分类筛选' }))
+    // 选中后自动收起，避免用户还要再点一次；筛选钮仍提示「列表正被筛选」。
+    expect(screen.queryByRole('listbox', { name: '筛选功能分类' })).toBeNull()
     expect(screen.getByRole('button', { name: '按分类筛选' })).toHaveClass('is-filtered')
     expect(screen.queryByRole('button', { name: /模型与密钥/ })).toBeNull()
     expect(screen.queryByRole('region', { name: '模型连接' })).toBeNull()
@@ -114,6 +134,7 @@ describe('设置首页：分组与分类筛选', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '按分类筛选' }))
     fireEvent.click(screen.getByRole('option', { name: /筛选分类： 日志与排查/ }))
+    fireEvent.click(screen.getByRole('button', { name: '按分类筛选' }))
     fireEvent.click(screen.getByRole('option', { name: /筛选分类：全部分类/ }))
 
     expect(bridge.getSettings.mock.calls.length).toBe(readsBefore)

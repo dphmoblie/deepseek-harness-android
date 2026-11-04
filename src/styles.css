@@ -1617,6 +1617,66 @@ button:disabled {
   align-items: start;
 }
 
+.settings-quick {
+  display: grid;
+  gap: 8px;
+  margin: 2px 0 14px;
+}
+
+.settings-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-quick-button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 46px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card-color, var(--surface));
+  color: var(--card-ink, var(--ink));
+  font: inherit;
+  font-size: 0.86rem;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.settings-quick-button:hover,
+.settings-quick-button:focus-visible {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.settings-quick-button > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-quick-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--blue);
+}
+
+.settings-quick-button > svg {
+  flex: none;
+  margin-left: auto;
+}
+
+@media (max-width: 620px) {
+  .settings-quick-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .settings-directory .management-list {
   margin-bottom: 0;
 }
