@@ -407,6 +407,23 @@ class MobileRuntimePlugin : Plugin() {
     }
 
     /**
+     * 读取应用语言的**真实来源**，供 Web 侧在 localStorage 被清空或被限制时回填。
+     *
+     * `configured=false` 表示用户从未在这里选过：此时 `language` 只是回落值（zh-CN），
+     * 不能当成「已选择」，否则首次启动的语言引导会被悄悄跳过。
+     */
+    @PluginMethod
+    fun getAppLanguage(call: PluginCall) {
+        execute(call) {
+            val saved = AppLanguage.saved(context)
+            JSObject().apply {
+                put("language", saved ?: AppLanguage.current(context))
+                put("configured", saved != null)
+            }
+        }
+    }
+
+    /**
      * 保存应用主题模式并把它落到当前窗口的状态栏上（登记册 5.4 的原生半边）。
      *
      * 为什么需要它：主题选择是 Web 侧的偏好，但**状态栏属于窗口，Web 改不了**——

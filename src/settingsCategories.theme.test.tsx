@@ -96,9 +96,25 @@ function resolveValue(value: string, tokens: Map<string, string>): string {
   return current.trim()
 }
 
+/**
+ * 取 `@supports (color: color-mix(...))` 里同一条规则的声明体。
+ *
+ * 半透明底色现在写成「基础规则给纯色兜底 + @supports 里给 color-mix」两段（旧 WebView
+ * 会把带 var() 的 color-mix 判成无效声明，等价 unset）。现代引擎真正取用的是这一段，
+ * 所以颜色断言要读它；找不到时返回空串，调用方回落到基础规则。
+ */
+function supportsBody(selector: string): string {
+  const head = `  ${selector} {`
+  const start = STYLESHEET.indexOf(head)
+  if (start < 0) return ''
+  const end = STYLESHEET.indexOf('}', start)
+  return end < 0 ? '' : STYLESHEET.slice(start + head.length, end)
+}
+
 /** 分类芯片某个属性的最终取值（按给定主题/卡片令牌解析）。 */
 function chipValue(property: string, tokens: Map<string, string>): string {
-  const value = declarations(ruleBody(CHIP_SELECTOR)).get(property)
+  const value = declarations(supportsBody(CHIP_SELECTOR)).get(property)
+    ?? declarations(ruleBody(CHIP_SELECTOR)).get(property)
   if (value === undefined) throw new Error(`分类芯片规则里没有 ${property}`)
   return resolveValue(value, tokens)
 }

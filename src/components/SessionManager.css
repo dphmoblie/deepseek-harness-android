@@ -15,22 +15,50 @@
   padding: 8px 10px 8px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  background: var(--card-color, var(--surface));
   backdrop-filter: blur(var(--card-blur, 0px));
   color: var(--card-ink, var(--ink));
   box-shadow: var(--shadow-card);
   content-visibility: auto;
   contain-intrinsic-size: 0 68px;
 }
+@supports (color: color-mix(in srgb, red, blue)) {
+  .session-card {
+    background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  }
+}
 .session-open { display: grid; grid-template-columns: 40px minmax(0, 1fr); align-items: center; gap: 11px; min-width: 0; padding: 6px; border: 0; border-radius: var(--radius-inner); color: var(--card-ink, var(--ink)); background: transparent; text-align: left; cursor: pointer; }
-.session-open:hover { background: color-mix(in srgb, var(--card-color, var(--surface-hover)) var(--card-opacity, 100%), transparent); }
+.session-open:hover {
+  background: var(--card-color, var(--surface-hover));
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .session-open:hover {
+    background: color-mix(in srgb, var(--card-color, var(--surface-hover)) var(--card-opacity, 100%), transparent);
+  }
+}
 .session-icon { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: var(--radius-inner); color: var(--blue); background: var(--blue-soft); }
 .session-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .session-copy strong { overflow: hidden; font-size: .875rem; text-overflow: ellipsis; white-space: nowrap; }
 .session-copy small { overflow: hidden; color: var(--card-muted, var(--muted)); font-size: .75rem; text-overflow: ellipsis; white-space: nowrap; }
 .session-delete { width: 44px; height: 44px; color: var(--card-muted, var(--muted)); border-color: transparent; background: transparent; }
 .session-delete:hover { color: var(--red); border-color: var(--danger-line); background: var(--red-soft); }
-.session-empty { display: grid; place-items: center; gap: 8px; min-height: 180px; padding: 24px; border: 1px dashed var(--line-strong); border-radius: var(--radius-card); color: var(--card-muted, var(--muted)); text-align: center; background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 76%), transparent); }
+.session-empty {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-height: 180px;
+  padding: 24px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-card);
+  color: var(--card-muted, var(--muted));
+  text-align: center;
+  background: var(--card-color, var(--surface));
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .session-empty {
+    background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 76%), transparent);
+  }
+}
 /* 空态图标：占框宽 48%（落在反馈要求的 40%–55% 区间），并用 aspect-ratio 保证缩放不变形。
    原来这里只有一个 24px 的线性图标，框高却有 180px 起，视觉上就是「一片空白」。
    图片本身四角透明（是圆形徽标），所以底衬用 --blue-soft + --radius-card，

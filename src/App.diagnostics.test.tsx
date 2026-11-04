@@ -273,7 +273,7 @@ describe('诊断与日志', () => {
     render(<App />)
     await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '外置浏览器')
     const select = await screen.findByRole('combobox', { name: '打开方式' })
     await waitFor(() => expect(select).toHaveValue(''))
 
@@ -291,7 +291,7 @@ describe('诊断与日志', () => {
     render(<App />)
     await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志')
+    await openSettingsPage('诊断与日志', '外置浏览器')
     expect(await screen.findByText('用外部浏览器打开 Harness')).toBeTruthy()
     expect(screen.queryByRole('combobox', { name: '打开方式' })).not.toBeInTheDocument()
   })

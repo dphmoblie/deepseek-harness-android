@@ -146,7 +146,8 @@ describe('主题解析', () => {
     expect(window.localStorage.getItem(TEXT_COLOR_STORAGE_KEY)).toBe('#123456')
     expect(readCustomTextColor()).toBe('#123456')
     expect(document.documentElement.style.getPropertyValue('--ink')).toBe('#123456')
-    expect(document.documentElement.style.getPropertyValue('--muted')).toContain('#123456')
+    // 弱化文字是「同色 68% 不透明」：用 rgba 写死，旧 WebView 也认（color-mix 要 Chrome 111）。
+    expect(document.documentElement.style.getPropertyValue('--muted')).toBe('rgba(18, 52, 86, 0.68)')
     expect(document.documentElement.style.getPropertyValue('--card-ink')).toBe('#123456')
     expect(saveCustomTextColor('red')).toBe(false)
     clearCustomTextColor()

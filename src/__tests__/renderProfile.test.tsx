@@ -1,7 +1,7 @@
 import React, { Profiler, useState } from 'react'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { arriveAtSettingsHome, beforeEachAppTest, bridge, keepAlive, openSettingsPage, settings, shizuku  } from './appTestHarness'
+import { arriveAtSettingsHome, beforeEachAppTest, bridge, chooseProvider, keepAlive, openSettingsPage, settings, shizuku  } from './appTestHarness'
 
 vi.mock('../platform/native', () => ({ runtimeBridge: bridge }))
 vi.mock('../components/TerminalPanel', () => ({
@@ -362,7 +362,7 @@ describe('§5.6-B 渲染测量', () => {
     await openSettingsPage('模型与密钥')
     // 密钥输入框只在选中某个供应商之后才出现（默认停在已配置的 deepseek），
     // 所以先切供应商再开始计数 —— 切换供应商只改「正在看什么」，不算草稿脏。
-    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
+    await chooseProvider('OpenAI')
     const input = await screen.findByLabelText(/OpenAI API Key/)
     profile.reset()
 

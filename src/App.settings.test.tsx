@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { beforeEachAppTest, bridge, FOREGROUND_SERVICE_SETTLE_MS, notInstalledState, openSettingsPage, readyState, settings } from './__tests__/appTestHarness'
+import { beforeEachAppTest, bridge, chooseProvider, FOREGROUND_SERVICE_SETTLE_MS, notInstalledState, openSettingsPage, readyState, settings } from './__tests__/appTestHarness'
 import type { ModelCatalogResult, RuntimeSettings, RuntimeSettingsUpdate } from './platform/types'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
@@ -342,7 +342,7 @@ describe('设置草稿与未保存的输入', () => {
   await arriveAtSettingsHome()
 
     await openSettingsPage('模型与密钥')
-    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
+    await chooseProvider('OpenAI')
 
     expect(screen.getByLabelText(/OpenAI API Key/)).toHaveAttribute('placeholder', '已在 Harness 中配置，留空保持不变')
     expect(screen.queryByRole('button', { name: '清除密钥' })).toBeNull()
@@ -442,7 +442,7 @@ describe('设置草稿与未保存的输入', () => {
     expect(screen.getByLabelText(/Gateway API Key/)).toBeEnabled()
   })
 
-  it('直接点击供应商卡片切换编辑项，不再显示供应商下拉框或触发保存', async () => {
+  it('模型页只列已配置的供应商，未配置的模板在「添加其他供应商」三级页里', async () => {
     bridge.getSettings.mockResolvedValue({
       ...settings,
       configuredModelProviders: ['deepseek'],
@@ -452,21 +452,27 @@ describe('设置草稿与未保存的输入', () => {
   await arriveAtSettingsHome()
     await openSettingsPage('模型与密钥')
 
-    const list = screen.getByRole('list', { name: '供应商状态' })
+    // 二级页：只有已配置的两家。七家全列出来正是用户报的「一屏全是未配置」。
+    const list = screen.getByRole('list', { name: '已配置的供应商' })
     const row = (name: string): HTMLElement => within(list).getByText(name).closest('.provider-status-row') as HTMLElement
     expect(row('DeepSeek')).toHaveTextContent('已配置')
     expect(row('OpenAI')).toHaveTextContent('已在 Harness 中配置')
-    expect(row('Anthropic')).toHaveTextContent('未配置')
-
-    expect(screen.queryByRole('combobox', { name: '供应商' })).not.toBeInTheDocument()
-    expect(within(list).getAllByRole('button')).toHaveLength(8)
+    expect(within(list).queryByText('Anthropic')).toBeNull()
+    expect(within(list).getAllByRole('button')).toHaveLength(2)
     expect(within(list).getByRole('button', { name: /^DeepSeek / })).toHaveAttribute('aria-pressed', 'true')
-    fireEvent.click(within(list).getByRole('button', { name: /^Anthropic / }))
-    expect(within(list).getByRole('button', { name: /^Anthropic / })).toHaveAttribute('aria-pressed', 'true')
-    expect(within(list).getByRole('button', { name: /^DeepSeek / })).toHaveAttribute('aria-pressed', 'false')
-    expect(screen.getByLabelText(/Anthropic API Key/)).toBeVisible()
-    expect(within(row('Anthropic')).getByText('正在编辑')).toBeVisible()
-    expect(within(row('DeepSeek')).queryByText('正在编辑')).toBeNull()
+    expect(screen.queryByRole('combobox', { name: '供应商' })).not.toBeInTheDocument()
+
+    // 三级页：没配置的模板集中在这里；点一家就回到模型页并展开它的密钥输入框。
+    fireEvent.click(screen.getByRole('button', { name: /添加其他供应商/ }))
+    const addList = await screen.findByRole('list', { name: '可添加的供应商' })
+    expect(within(addList).queryByText('DeepSeek')).toBeNull()
+    expect(within(addList).queryByText('OpenAI')).toBeNull()
+    expect(within(addList).getAllByRole('button')).toHaveLength(6)
+    fireEvent.click(within(addList).getByRole('button', { name: /^Anthropic / }))
+
+    expect(await screen.findByLabelText(/Anthropic API Key/)).toBeVisible()
+    // 刚挑中的那家还没配置，但它必须留在页面上可编辑。
+    expect(await screen.findByRole('heading', { name: '模型与密钥' })).toBeVisible()
     expect(bridge.saveSettings).not.toHaveBeenCalled()
   })
 
@@ -494,9 +500,9 @@ describe('设置草稿与未保存的输入', () => {
   await arriveAtSettingsHome()
     await openSettingsPage('模型与密钥')
 
-    fireEvent.click(screen.getByRole('button', { name: /^Anthropic / }))
+    await chooseProvider('Anthropic')
     fireEvent.change(screen.getByLabelText(/Anthropic API Key/), { target: { value: 'unit-test-anthropic-key' } })
-    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
+    await chooseProvider('OpenAI')
     expect(screen.getByLabelText(/OpenAI API Key/)).toHaveAttribute('placeholder', '输入 API Key')
 
     bridge.getSettings.mockResolvedValue({
@@ -507,7 +513,7 @@ describe('设置草稿与未保存的输入', () => {
 
     await waitFor(() => expect(screen.getByLabelText(/OpenAI API Key/))
       .toHaveAttribute('placeholder', '已在 Harness 中配置，留空保持不变'))
-    fireEvent.click(screen.getByRole('button', { name: /^Anthropic / }))
+    await chooseProvider('Anthropic')
     expect(screen.getByLabelText(/Anthropic API Key/)).toHaveValue('unit-test-anthropic-key')
   })
 
@@ -516,7 +522,7 @@ describe('设置草稿与未保存的输入', () => {
   await arriveAtSettingsHome()
     await openSettingsPage('模型与密钥')
 
-    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
+    await chooseProvider('OpenAI')
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
     await pressSave()
     // 保存已经落盘：此刻草稿不再算「未保存」，后台刷新会走「干净草稿」那一支。
@@ -539,7 +545,7 @@ describe('设置草稿与未保存的输入', () => {
     await arriveAtSettingsHome()
     await openSettingsPage('模型与密钥')
 
-    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
+    await chooseProvider('OpenAI')
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
     // 离开这一页：后台保存带上 openai 的密钥，并把它记为「已落盘」。
     await openSettingsPage('后台', '后台保持')
@@ -560,7 +566,7 @@ describe('设置草稿与未保存的输入', () => {
   await arriveAtSettingsHome()
 
     await openSettingsPage('模型与密钥')
-    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
+    await chooseProvider('OpenAI')
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
     await pressSave()
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ providerApiKeys: { openai: 'unit-test-openai-key' } })))
@@ -616,7 +622,7 @@ describe('设置草稿与未保存的输入', () => {
       Promise.resolve({ ...settings, configuredModelProviders: ['openai'] }))
 
     await openSettingsPage('模型与密钥')
-    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
+    await chooseProvider('OpenAI')
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
     await pressSave()
     expect(await screen.findByText('设置已保存')).toBeVisible()
@@ -633,7 +639,7 @@ describe('设置草稿与未保存的输入', () => {
     // 重新进入本页：落盘字段按落盘值重建，本次会话输入过的密钥保留（界面上只显示掩码）。
     await backToSettingsHome()
     await openSettingsPage('模型与密钥')
-    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
+    await chooseProvider('OpenAI')
     expect(screen.getByLabelText(/OpenAI API Key/)).toHaveValue('unit-test-openai-key')
     expect(screen.getByText('已输入 unit-****-key')).toBeInTheDocument()
   })
@@ -722,7 +728,7 @@ describe('设置草稿与未保存的输入', () => {
     expect(screen.getByLabelText('供应商名称')).toHaveValue('本地网关')
     expect(screen.getByLabelText(/本地网关 API Key/)).toHaveValue('')
     expect(screen.getByLabelText(/本地网关 API Key/)).toHaveAttribute('placeholder', '已配置，留空保持不变')
-    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
+    await chooseProvider('OpenAI')
     expect(screen.getByLabelText(/OpenAI API Key/)).toBeVisible()
     expect(screen.getByLabelText('供应商名称')).toHaveValue('本地网关')
     expect(bridge.saveSettings).not.toHaveBeenCalled()
@@ -1061,8 +1067,12 @@ describe('内置供应商获取上游模型', () => {
     // 上游第一条自动成为默认模型，不需要用户再点一次。
     await waitFor(() => expect(input).toHaveValue('upstream-first'))
 
+    // 默认只展开最靠前的一条；其余要点「显示全部」才看得见。
+    expect(screen.queryByText('Upstream Second')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^显示全部 \d+ 个$/ }))
+
     // 点上游列表里的第二条：改选为它。
-    fireEvent.click(screen.getByText('Upstream Second'))
+    fireEvent.click(await screen.findByText('Upstream Second'))
     expect(input).toHaveValue('upstream-second')
 
     // 也可以当成普通输入框手填。

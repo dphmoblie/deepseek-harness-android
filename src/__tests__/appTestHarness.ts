@@ -17,6 +17,7 @@
  */
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { expect, vi } from 'vitest'
+import { resetLanguageSession } from '../i18n'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES } from '../platform/types'
 import type {
   DiagnosticLogState,
@@ -38,6 +39,8 @@ import type {
  */
 export const bridge = {
   setAppLanguage: vi.fn(),
+  /** 语言门禁的启动探测：默认「用户没选过」，需要「原生已选过就跳门禁」的用例自行改返回值。 */
+  getAppLanguage: vi.fn(),
   /**
    * 主题模式同步给原生（§5.4 状态栏配色）。
    *
@@ -324,6 +327,27 @@ export const storageAccess: StorageAccessState = {
 export const FOREGROUND_SERVICE_SETTLE_MS = 1500
 
 /**
+ * 在「模型与密钥」页选中一个内置供应商。
+ *
+ * 模型页只列**已配置**的供应商，未配置的要去「添加其他供应商」三级页里挑（那是二级页
+ * 「只显示已经配置过的模型」这条需求的直接结果）。这个辅助函数把两条路径合成一个动作，
+ * 用例不必关心某家供应商在当前夹具里是否配置过。必须在模型页上调用。
+ */
+export async function chooseProvider(name: string): Promise<void> {
+  const pattern = new RegExp(`^${name} `)
+  const existing = screen.queryAllByRole('button', { name: pattern })[0]
+  if (existing !== undefined) {
+    fireEvent.click(existing)
+    return
+  }
+  fireEvent.click(screen.getByRole('button', { name: /添加其他供应商/ }))
+  const list = await screen.findByRole('list', { name: '可添加的供应商' })
+  fireEvent.click(within(list).getByRole('button', { name: pattern }))
+  // 点完会回退到模型页（历史回退是异步的），等密钥框真正出现再交给用例。
+  await screen.findByLabelText(new RegExp(`${name} API Key`))
+}
+
+/**
  * 各 `App.*.test.tsx` 的 beforeEach 统一入口。
  *
  * 固定成「本地存储复位 → 清空所有 mock → 铺默认桩」的顺序：
@@ -331,12 +355,17 @@ export const FOREGROUND_SERVICE_SETTLE_MS = 1500
  */
 export function beforeEachAppTest(): void {
   window.localStorage.clear()
+  // 语言模块的进程内缓存跟着页面走：清存储不会清它，用例之间必须显式复位，否则
+  // 上一条用例选过的语言会让「首次启动应弹门禁」的用例失败。
+  resetLanguageSession()
   window.localStorage.setItem('dsh-mobile-language-v1', 'zh-CN')
   window.localStorage.setItem('dsh-mobile-onboarding-v1', '1')
   // 普通页面测试关闭自动提示；更新集成测试显式开启，避免启动弹窗掩盖被测页面。
   window.localStorage.setItem('dsh-app-update-reminder-enabled-v1', 'false')
   vi.clearAllMocks()
   bridge.setAppLanguage.mockResolvedValue(undefined)
+  // 默认「原生也没选过」：门禁用例自行改成 { configured: true, language: 'en' } 验证跳过逻辑。
+  bridge.getAppLanguage.mockResolvedValue({ configured: false, language: 'zh-CN' })
   bridge.setAppTheme.mockResolvedValue(undefined)
   bridge.applyHarnessTheme.mockResolvedValue(undefined)
   bridge.clearHarnessTheme.mockResolvedValue(undefined)

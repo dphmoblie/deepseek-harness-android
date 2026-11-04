@@ -26,10 +26,15 @@
   padding: 18px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  background: var(--card-color, var(--surface));
   backdrop-filter: blur(var(--card-blur, 0px));
   box-shadow: var(--shadow-card);
   color: var(--card-ink, var(--ink));
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .virtual-screen-screen .settings-subsection {
+    background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  }
 }
 
 .virtual-screen-screen .settings-subsection .section-title {

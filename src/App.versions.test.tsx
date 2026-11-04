@@ -553,4 +553,34 @@ describe('版本管理：本地多版本库与在线版本下载', () => {
     expect(await screen.findByText('已成功下载到版本库')).toBeVisible()
     expect(bridge.downloadRuntimeRelease).toHaveBeenCalledWith('https://example.com/manifest.json', manifestSha)
   })
+
+  it('在线可用版本默认只显示一个，其余折在「显示全部」里', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.getRuntimeVersions.mockResolvedValue({
+      versions: [],
+      library: [],
+      libraryCapacity: 5,
+      canSwitch: false,
+      canDelete: false,
+    })
+    const entry = (version: string) => ({
+      version,
+      dshVersion: '0.1.8',
+      notes: '',
+      manifestUrl: `https://example.com/${version}.json`,
+      manifestSha256: 'f'.repeat(64),
+    })
+    bridge.listRuntimeReleases.mockResolvedValue({
+      entries: [entry('2026.09.20'), entry('2026.08.10'), entry('2026.07.01')],
+    })
+
+    await openVersionsPage()
+
+    // 只留最靠前的一个：目录里的旧版本不该把「清理」和「应用更新」顶到屏幕外面。
+    expect(await screen.findByText('2026.09.20')).toBeVisible()
+    expect(screen.queryByText('2026.08.10')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '显示全部 3 条' }))
+    expect(await screen.findByText('2026.08.10')).toBeVisible()
+  })
 })

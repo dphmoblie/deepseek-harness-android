@@ -1,4 +1,5 @@
 import { readCustomTextColor } from './theme'
+import { withAlpha } from './ui/cssColor'
 
 /**
  * 卡片外观 + 按钮/输入框的底色透明度。
@@ -43,7 +44,7 @@ export function applyCard(value: CardAppearance): void {
     const dark = (r * 299 + g * 587 + b * 114) / 1000 < 150
     const customText = readCustomTextColor()
     root.style.setProperty('--card-ink', customText || (dark ? '#f4f7fb' : '#17202b'))
-    root.style.setProperty('--card-muted', customText ? `color-mix(in srgb, ${customText} 68%, transparent)` : (dark ? '#c3cbd5' : '#475362'))
+    root.style.setProperty('--card-muted', customText ? withAlpha(customText, 0.68) : (dark ? '#c3cbd5' : '#475362'))
   } else {
     for (const name of ['--card-color', '--card-ink', '--card-muted']) root.style.removeProperty(name)
   }

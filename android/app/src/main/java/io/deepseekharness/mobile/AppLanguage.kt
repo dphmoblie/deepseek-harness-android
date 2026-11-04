@@ -21,6 +21,16 @@ internal object AppLanguage {
         ?.takeIf { it == "en" || it == "zh-CN" }
         ?: "zh-CN"
 
+    /**
+     * 用户**显式保存过**的语言；从没选过时返回 null。
+     *
+     * [current] 永远有值（未设置就回落简体中文），单看它分不清「用户选了中文」和
+     * 「用户还没选」。首次启动的语言引导只能靠这个区别决定要不要弹。
+     */
+    fun saved(context: Context): String? = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+        .getString(KEY, null)
+        ?.takeIf { it == "en" || it == "zh-CN" }
+
     fun localizedContext(context: Context): Context {
         val language = current(context)
         val configuration = Configuration(context.resources.configuration)

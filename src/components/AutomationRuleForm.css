@@ -7,9 +7,14 @@
   gap: 12px;
   border: 1px solid var(--line-faint);
   border-radius: var(--radius-card);
-  background: color-mix(in srgb, var(--card-color, var(--surface-sunken)) var(--card-opacity, 86%), transparent);
+  background: var(--card-color, var(--surface-sunken));
   color: var(--card-ink, var(--ink));
   padding: 14px;
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .automation-rule-form {
+    background: color-mix(in srgb, var(--card-color, var(--surface-sunken)) var(--card-opacity, 86%), transparent);
+  }
 }
 
 .automation-rule-group {
@@ -57,8 +62,13 @@
   margin: 0;
   border: 1px dashed var(--line);
   border-radius: var(--radius-control);
-  background: color-mix(in srgb, var(--card-color, var(--surface-muted)) var(--card-opacity, 82%), transparent);
+  background: var(--card-color, var(--surface-muted));
   padding: 10px 12px;
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .automation-rule-selector {
+    background: color-mix(in srgb, var(--card-color, var(--surface-muted)) var(--card-opacity, 82%), transparent);
+  }
 }
 
 .automation-rule-selector > legend {

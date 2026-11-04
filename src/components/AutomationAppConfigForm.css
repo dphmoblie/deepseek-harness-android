@@ -7,9 +7,14 @@
   gap: 12px;
   border: 1px solid var(--line-faint);
   border-radius: var(--radius-card);
-  background: color-mix(in srgb, var(--card-color, var(--surface-sunken)) var(--card-opacity, 86%), transparent);
+  background: var(--card-color, var(--surface-sunken));
   color: var(--card-ink, var(--ink));
   padding: 14px;
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .automation-app-config {
+    background: color-mix(in srgb, var(--card-color, var(--surface-sunken)) var(--card-opacity, 86%), transparent);
+  }
 }
 
 .automation-app-config-grid {

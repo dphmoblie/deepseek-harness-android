@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { arriveAtShell, beforeEachAppTest, bridge, notInstalledState, openSettingsPage, readyState, runningState, settings, shizuku } from './__tests__/appTestHarness'
+import { arriveAtShell, beforeEachAppTest, bridge, chooseProvider, notInstalledState, openSettingsPage, readyState, runningState, settings, shizuku } from './__tests__/appTestHarness'
 import type { RuntimeProgress, RuntimeState } from './platform/types'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
@@ -391,7 +391,7 @@ describe('App conversation gate', () => {
   await arriveAtSettingsHome()
 
     await openSettingsPage('模型与密钥')
-    fireEvent.click(screen.getByRole('button', { name: /^OpenAI / }))
+    await chooseProvider('OpenAI')
     fireEvent.change(screen.getByLabelText(/OpenAI API Key/), { target: { value: 'unit-test-openai-key' } })
     await flushOnHide()
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
@@ -465,8 +465,8 @@ describe('App conversation gate', () => {
     await arriveAtSettingsHome()
     await openSettingsPage('模型与密钥')
 
-    // 刷新前：落盘设置里没有任何凭据，供应商卡片显示未配置。
-    expect(screen.getAllByText('未配置').length).toBeGreaterThan(0)
+    // 刷新前：落盘设置里没有任何凭据，模型页连供应商列表都不显示（只留「添加其他供应商」）。
+    expect(screen.queryAllByText('未配置')).toHaveLength(0)
 
     // 在 Harness 网页里配好凭据后回到前台：只读状态要跟着原生读数更新。
     fireEvent.focus(window)
@@ -557,13 +557,40 @@ describe('应用语言', () => {
     expect(document.documentElement.lang).toBe('zh-CN')
   })
 
-  it('保存失败时保留语言选择页，不自动启动运行时', async () => {
+  it('原生保存失败也不把用户关在门禁里：本地记住并照常进入', async () => {
     window.localStorage.clear()
     bridge.setAppLanguage.mockRejectedValue(new Error('LANGUAGE_SAVE_FAILED'))
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: '继续 / Continue' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('无法保存语言')
-    expect(window.localStorage.getItem('dsh-mobile-language-v1')).toBeNull()
+    // 过去这里会停在语言页并报「无法保存语言」：原生一次失败 = 永远首启。
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(window.localStorage.getItem('dsh-mobile-language-v1')).toBe('zh-CN')
     expect(bridge.openHarness).not.toHaveBeenCalled()
+  })
+
+  it('原生已保存过语言时，本地存储被清空也不再弹门禁', async () => {
+    window.localStorage.clear()
+    bridge.getAppLanguage.mockResolvedValue({ configured: true, language: 'en' })
+    render(<App />)
+    // 界面直接是英文（引导页标题），门禁一次都没出现，语言也回填进了 localStorage。
+    expect(await screen.findByRole('dialog', { name: 'Set up a model' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: '选择语言 / Choose your language' })).toBeNull()
+    expect(window.localStorage.getItem('dsh-mobile-language-v1')).toBe('en')
+  })
+
+  it('本地存储不可用时，「跳过」也能进入应用', async () => {
+    window.localStorage.clear()
+    render(<App />)
+    const skip = await screen.findByRole('button', { name: '跳过，使用简体中文' })
+    const setItem = vi.spyOn(window.Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('存储不可用') })
+    try {
+      fireEvent.click(skip)
+      // 本次必须放行——否则用户被永久卡在门禁里（提示语在门禁消失后无处可显示，
+      // 所以这里验的是「进去了」，而不是那条提示）。
+      expect(await screen.findByRole('dialog', { name: '配置模型' })).toBeVisible()
+      expect(screen.queryByRole('heading', { name: '选择语言 / Choose your language' })).toBeNull()
+    } finally {
+      setItem.mockRestore()
+    }
   })
 })

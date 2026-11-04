@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { LANGUAGE_STORAGE_KEY, readLanguage, saveLanguage, t } from './i18n'
+import { LANGUAGE_STORAGE_KEY, readLanguage, resetLanguageSession, saveLanguage, t } from './i18n'
 
 describe('语言设置校验', () => {
-  beforeEach(() => window.localStorage.clear())
+  beforeEach(() => {
+    window.localStorage.clear()
+    resetLanguageSession()
+  })
 
   it('拒绝无效或过长的语言值', () => {
     for (const value of ['fr', '../en', '<script>', 'en'.repeat(2000)]) {

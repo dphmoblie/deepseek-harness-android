@@ -106,11 +106,13 @@ export function RuntimeVersionsPanel({
   const [catalogFailed, setCatalogFailed] = useState(false)
   const [downloadingVersion, setDownloadingVersion] = useState<string | null>(null)
 
-  // release 列表折叠：超过 3 条时默认只显示最新的 3 条，底部放「显示全部」按钮。
-  // 每个列表独立控制；展开后保持到页面卸载。
+  // release 列表折叠：本地版本库超过 3 条才折叠；在线可用版本**默认只留一个**
+  // （用户要的是「只显示一个可用版本」——目录里同时挂着的旧版本不该挤掉下面「清理」与
+  // 「应用更新」的位置）。两个列表各自独立控制，展开状态保持到页面卸载。
   const [libraryExpanded, setLibraryExpanded] = useState(false)
   const [catalogExpanded, setCatalogExpanded] = useState(false)
   const COLLAPSE_AFTER = 3
+  const CATALOG_COLLAPSE_AFTER = 1
 
   const load = useCallback(() => {
     setLoading(true)
@@ -540,7 +542,7 @@ export function RuntimeVersionsPanel({
           {!catalogLoading && !catalogFailed && catalog.length > 0 && (
             <>
             <div className="release-list">
-              {(catalogExpanded ? catalog : catalog.slice(0, COLLAPSE_AFTER)).map(item => {
+              {(catalogExpanded ? catalog : catalog.slice(0, CATALOG_COLLAPSE_AFTER)).map(item => {
                 const inLibrary = library.some(lib => lib.version === item.version)
                 const isCurrentActive = list.some(l => l.active && l.version === item.version)
                 const isDownloading = downloadingVersion === item.version
@@ -578,7 +580,7 @@ export function RuntimeVersionsPanel({
                 )
               })}
             </div>
-            {catalog.length > COLLAPSE_AFTER && (
+            {catalog.length > CATALOG_COLLAPSE_AFTER && (
                 <div className="settings-inline-actions">
                   <button
                     className="button button-secondary"

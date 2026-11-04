@@ -2,6 +2,7 @@ import { useSyncExternalStore } from 'react'
 import { runtimeBridge } from './platform/native'
 import { readAccentSource, readAdaptiveAccent, saveAccentSource as persistAccentSource } from './adaptiveAccent'
 import type { AccentSource } from './adaptiveAccent'
+import { withAlpha } from './ui/cssColor'
 
 /**
  * 外壳主题：三态选择 + 跟随系统。
@@ -118,9 +119,11 @@ function applyAccent(mode: AccentMode): void {
     const [r, g, b] = [1, 3, 5].map(offset => parseInt(custom.slice(offset, offset + 2), 16) / 255)
       .map(channel => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
     root.style.setProperty('--on-blue', 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.179 ? '#000000' : '#ffffff')
-    root.style.setProperty('--blue-soft', 'color-mix(in srgb, ' + custom + ' 14%, transparent)')
-    root.style.setProperty('--blue-line', 'color-mix(in srgb, ' + custom + ' 38%, transparent)')
-    root.style.setProperty('--ring', '3px solid color-mix(in srgb, ' + custom + ' 35%, transparent)')
+    // 不用 color-mix()：旧 WebView 没有它，而带 var() 的无效声明会整条失效（等价 unset），
+    // 这正是「旧安卓上语言引导没有继续按钮」的成因之一。见 src/ui/cssColor.ts。
+    root.style.setProperty('--blue-soft', withAlpha(custom, 0.14))
+    root.style.setProperty('--blue-line', withAlpha(custom, 0.38))
+    root.style.setProperty('--ring', `3px solid ${withAlpha(custom, 0.35)}`)
   } else {
     for (const name of ['--blue', '--blue-hover', '--on-blue', '--blue-soft', '--blue-line', '--ring']) root.style.removeProperty(name)
   }
@@ -171,7 +174,8 @@ export function applyTextColor(): void {
     root.style.setProperty('--ink', custom)
     // Secondary labels use the same hue at lower opacity, so custom text color
     // does not leave descriptions and field labels in the old theme color.
-    const muted = `color-mix(in srgb, ${custom} 68%, transparent)`
+    // 同上：半透明文字色不写 color-mix()，旧 WebView 会把整条声明判为无效（等价 inherit）。
+    const muted = withAlpha(custom, 0.68)
     root.style.setProperty('--muted', muted)
     root.style.setProperty('--field-label', muted)
     root.style.setProperty('--card-ink', custom)

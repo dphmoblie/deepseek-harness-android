@@ -1577,6 +1577,17 @@ export interface RuntimeWorkspaceFileList {
   truncated: boolean
 }
 
+/**
+ * 原生侧记录的应用语言。
+ *
+ * `configured` 是**用户是否真的选过**：没有它就无法区分「用户选了简体中文」与
+ * 「用户还没选、原生回落成简体中文」，首次启动的语言引导会因此永久消失。
+ */
+export interface AppLanguageState {
+  language: 'zh-CN' | 'en'
+  configured: boolean
+}
+
 export interface RuntimeBridge {
   listHarnessReleases: () => Promise<HarnessReleaseList>
   manageHarnessVersions: (operation: HarnessVersionOperation, version?: string) => Promise<HarnessVersionsState>
@@ -1585,6 +1596,13 @@ export interface RuntimeBridge {
   managePlugins: (request: PluginRequest) => Promise<PluginCatalog>
   /** 保存应用语言，仅接受简体中文和英语。 */
   setAppLanguage: (language: 'zh-CN' | 'en') => Promise<void>
+  /**
+   * 读回原生保存的应用语言。
+   *
+   * 语言的**真值是原生偏好**，Web 侧 localStorage 只是缓存：清数据、换 WebView 进程、
+   * 存储被限制时 localStorage 会读不到，而原生那边其实已经选过。
+   */
+  getAppLanguage: () => Promise<AppLanguageState>
   /**
    * 把应用主题模式同步给原生（登记册 5.4）。
    *

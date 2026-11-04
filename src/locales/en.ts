@@ -1933,4 +1933,21 @@ export const english: Readonly<Record<string, string>> = {
   "可选：设备 Shell 与插件": "Optional: device shell and plugins",
   "Shizuku 让「设备 Shell」以 shell 权限执行系统命令，不影响 Ubuntu 终端；插件统一在设置的「插件管理」里管理。": "Shizuku lets the device shell run system commands with shell privileges and does not affect the Ubuntu terminal; plugins are managed in Settings → Plugins.",
   "配置成功后这里会出现「打开 Harness」按钮；": "Once a credential is saved, the “Open Harness” button appears here;",
+  // 模型页拆分（已配置的留在二级页，未配置的模板收进三级页）与「获取模型」折叠。
+  "已配置的供应商": "Configured providers",
+  "还没有配置任何内置供应商。到下面「添加其他供应商」挑一家填密钥，或在「自定义供应商」里接第三方接口。": "No built-in provider is configured yet. Pick one under “Add another provider” below and paste its key, or connect a third-party endpoint under “Custom providers”.",
+  "添加其他供应商": "Add another provider",
+  "还没配置的内置供应商，选一家填密钥": "Built-in providers you have not configured; pick one and paste its key",
+  "选一家就回到「模型与密钥」并展开密钥输入；没配置的模板平时不占那一页的地方": "Picking one returns to Models and keys with its key field open; unconfigured templates stay out of that page",
+  "内置供应商都已经配置过了。第三方接口请在「模型与密钥 → 自定义供应商」里添加。": "Every built-in provider is already configured. Add third-party endpoints under Models and keys → Custom providers.",
+  "可添加的供应商": "Providers you can add",
+  "密钥只在本机加密保存，保存后不再显示；Harness 里已配置过的供应商会出现在模型页，无需在这里重复添加。": "Keys are encrypted and stored on this device and are never shown again after saving. Providers already configured inside Harness appear on the Models page, so there is no need to add them here again.",
+  "显示全部 {0} 个": "Show all {0}",
+  // 语言门禁：原生是语言的真实来源，本地存储只是缓存。
+  "跳过，使用简体中文": "Skip and use Simplified Chinese",
+  "语言已切换，但本机存储不可用，下次启动可能再次询问。": "Language switched, but local storage is unavailable; you may be asked again next launch.",
+  // 旧 WebView 的降级说明（样式表已给出纯色兜底，这里只解释现象）。
+  "当前系统 WebView 版本较旧：按钮与卡片的半透明效果会简化显示，不影响功能。到系统应用商店更新 Android System WebView 或 Chrome 可获得完整外观。": "The system WebView is old: translucent buttons and cards render as solid colours. Nothing is broken; update Android System WebView or Chrome from the system app store to get the full look.",
+  "用系统浏览器打开 Harness": "Open Harness in the system browser",
+  "日志、能力、反馈与外置浏览器分开放，导出日志在「日志与采集」里": "Logs, capabilities, feedback and the external browser each have their own page; export lives under Logs and collection",
 }

@@ -1,5 +1,6 @@
 import appMark from './assets/app-mark.png'
-import { t, useLanguage } from './i18n'
+import { readLanguage, saveLanguage, t, useLanguage } from './i18n'
+import { colorMixSupported } from './legacyWebView'
 import { formatByteCount as formatBytes, formatDuration, useDownloadTelemetry } from './downloadTelemetry'
 import { PluginSettings } from './components/PluginSettings'
 import { ApplicationPicker } from './components/ApplicationPicker'
@@ -154,10 +155,12 @@ type AppView =
   | 'sessions'
   | 'settings'
   | 'settings-models'
+  | 'settings-models-providers'
   | 'settings-runtime'
   | 'settings-terminal'
   | 'settings-device-shell'
   | 'settings-diagnostics'
+  | 'settings-external-browser'
   | 'settings-automation'
   | 'settings-automation-accessibility'
   | 'settings-automation-subscreen'
@@ -178,12 +181,15 @@ type AppView =
   | 'files'
 
 /** 设置二级页：把原先的单页设置按功能分类，避免所有选项挤在一屏里。 */
-type SettingsPage = 'models' | 'runtime' | 'terminal' | 'device-shell' | 'automation' | 'diagnostics' | 'automation-accessibility' | 'automation-subscreen' | 'automation-params'
+type SettingsPage = 'models' | 'models-providers' | 'runtime' | 'terminal' | 'device-shell' | 'automation' | 'diagnostics' | 'external-browser' | 'automation-accessibility' | 'automation-subscreen' | 'automation-params'
   | 'terminal-typography' | 'terminal-background' | 'terminal-dsh-background'
   | 'diagnostics-log' | 'diagnostics-capability' | 'diagnostics-feedback'
 
 const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView; parent?: SettingsPage }> = {
   models: { title: '模型与密钥', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
+  // 模型页的三级页：已配置的供应商留在二级页，未配置的模板集中在这里，二级页不再被一长串
+  // 「未配置」占满（用户的原话：「二级页只有我已经配置过的模型」）。
+  'models-providers': { title: '添加其他供应商', hint: '还没配置的内置供应商，选一家填密钥', view: 'settings-models-providers', parent: 'models' },
   runtime: { title: '后台', hint: '保活、悬浮球、预启动与设备连接', view: 'settings-runtime' },
   terminal: { title: '主题', hint: '字号配色与背景', view: 'settings-terminal' },
   // 主题下的两个三级页：字号与配色、背景与卡片，两段各自立即生效。
@@ -199,13 +205,16 @@ const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; vi
   'automation-subscreen': { title: '副屏', hint: '取帧档位、方向、分辨率与跟随策略', view: 'settings-automation-subscreen', parent: 'automation' },
   'automation-params': { title: '自动参数', hint: '总开关、任务与运行记录、规则与每应用参数', view: 'settings-automation-params', parent: 'automation' },
   diagnostics: { title: '诊断与日志', hint: '日志与采集、设备能力与反馈', view: 'settings-diagnostics' },
+  // 外置浏览器从诊断页里拆出来：它不是「排查」的一部分，而是一条独立的浏览方式，
+  // 单开一页之后诊断页只留入口，不用先滚过一整张卡片才看到日志入口。
+  'external-browser': { title: '外置浏览器', hint: '用系统浏览器打开 Harness', view: 'settings-external-browser', parent: 'diagnostics' },
   // 诊断与日志下的三个三级页：采集、能力、反馈是三件事，返回键统一回「诊断与日志」。
   'diagnostics-log': { title: '日志与采集', hint: '采集开关、保留天数、诊断与运行日志', view: 'settings-diagnostics-log', parent: 'diagnostics' },
   'diagnostics-capability': { title: '设备能力', hint: '运行时自检、能力清单与根通道', view: 'settings-diagnostics-capability', parent: 'diagnostics' },
   'diagnostics-feedback': { title: '反馈', hint: '交流群与 GitHub 反馈入口', view: 'settings-diagnostics-feedback', parent: 'diagnostics' },
 }
 
-const SETTINGS_PAGES: SettingsPage[] = ['models', 'runtime', 'terminal', 'device-shell', 'automation', 'automation-accessibility', 'automation-subscreen', 'automation-params', 'diagnostics', 'diagnostics-log', 'diagnostics-capability', 'diagnostics-feedback', 'terminal-typography', 'terminal-background', 'terminal-dsh-background']
+const SETTINGS_PAGES: SettingsPage[] = ['models', 'models-providers', 'runtime', 'terminal', 'device-shell', 'automation', 'automation-accessibility', 'automation-subscreen', 'automation-params', 'diagnostics', 'external-browser', 'diagnostics-log', 'diagnostics-capability', 'diagnostics-feedback', 'terminal-typography', 'terminal-background', 'terminal-dsh-background']
 
 function settingsPageOf(view: AppView): SettingsPage | null {
   const entry = SETTINGS_PAGES.find(page => SETTINGS_PAGE_META[page].view === view)
@@ -375,10 +384,12 @@ const APP_VIEWS: AppView[] = [
   'sessions',
   'settings',
   'settings-models',
+  'settings-models-providers',
   'settings-runtime',
   'settings-terminal',
   'settings-device-shell',
   'settings-diagnostics',
+  'settings-external-browser',
   'settings-automation',
   'terminal',
   'environment',
@@ -1360,6 +1371,16 @@ function SettingsHomeScreen({ busy, diagnostic, keepAlive, runtime, shizuku, onL
 
       <LanguageSettings />
 
+      {/*
+        旧 WebView：样式表已经给每条 color-mix 留了纯色兜底，这里只解释「为什么有些
+        半透明效果看起来没生效」，并指向真正能修它的地方（系统组件，应用侧装不了）。
+      */}
+      {!colorMixSupported() && (
+        <p className="settings-note" data-testid="legacy-webview-note">
+          {t("当前系统 WebView 版本较旧：按钮与卡片的半透明效果会简化显示，不影响功能。到系统应用商店更新 Android System WebView 或 Chrome 可获得完整外观。")}
+        </p>
+      )}
+
       {/* 搜索框固定在入口列表上方：入口一多，用户第一反应是找框，而不是往下翻。
           刻意不做边输边筛：输入法组合中途触发筛选会把候选词顶掉，改为点搜索图标或回车确认。 */}
       <div className="settings-search" role="search" aria-label={t("搜索入口")}>
@@ -1495,6 +1516,13 @@ interface SettingsDraft {
   settings: RuntimeSettings
   /** 正在编辑的供应商；纯界面选择，切走再回来时停在原处。 */
   selectedProvider: ModelProviderId
+  /**
+   * 用户是否从「添加其他供应商」里**主动挑过**一家。
+   *
+   * 模型页只列已配置的供应商，而刚挑中的那家此刻还没配置；没有这个标记，点完就
+   * 找不到自己的密钥输入框（列表与编辑器同时消失）。
+   */
+  providerChosen: boolean
   /** 用户在本页拨动过悬浮球开关时才有值；null 表示沿用原生侧真值。 */
   overlayBallEnabled: boolean | null
   /** 仅内存的 API Key 输入；活到进程结束，界面按掩码显示。 */
@@ -1523,6 +1551,7 @@ function draftFromSettings(settings: RuntimeSettings, previous: SettingsDraft | 
   return {
     settings,
     selectedProvider: previous?.selectedProvider ?? 'deepseek',
+    providerChosen: previous?.providerChosen ?? false,
     overlayBallEnabled: null,
     credentials: previous?.credentials ?? {},
     clearedProviders: previous?.clearedProviders ?? [],
@@ -1677,6 +1706,13 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
   /** 正在拉取上游模型列表的供应商；同一时刻只允许一个请求在飞。 */
   const [loadingCatalog, setLoadingCatalog] = useState<string | null>(null)
   const [catalogResults, setCatalogResults] = useState<Record<string, ModelCatalogResult>>({})
+  /**
+   * 上游模型列表是否展开。
+   *
+   * 默认只显示最靠前的一个（原生侧已把对话模型排在前面）：一次「获取模型」回来的往往是
+   * 几十上百条，全展开会把密钥、默认模型这些真正要编辑的字段挤出屏幕。
+   */
+  const [catalogExpanded, setCatalogExpanded] = useState(false)
   /** 供应商请求代次：输入发生变化后，迟到的旧响应不能回写当前草稿。 */
   const connectivityRequestGeneration = useRef<Record<string, number>>({})
   const catalogRequestGeneration = useRef<Record<string, number>>({})
@@ -2109,9 +2145,12 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
     triggerHaptic('medium')
     onDraftChange(current => ({ ...current, overlayBallEnabled: next }))
   }
-  const setSelectedProvider = (next: ModelProviderId): void =>
+  const setSelectedProvider = (next: ModelProviderId, chosen = false): void => {
+    // 换了供应商，上一家的模型列表展开状态不该跟过来。
+    setCatalogExpanded(false)
     // 只是切换正在查看的供应商，没有改动任何字段值：不算「未保存的输入」。
-    onDraftChange(current => ({ ...current, selectedProvider: next }), false)
+    onDraftChange(current => ({ ...current, selectedProvider: next, providerChosen: current.providerChosen || chosen }), false)
+  }
   const setCredentialDrafts = (update: (current: ProviderApiKeys) => ProviderApiKeys): void => {
     onDraftChange(current => ({ ...current, credentials: update(current.credentials) }))
   }
@@ -2184,6 +2223,21 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
    */
   const credentialPendingInDraft = Object.keys(credentialDrafts).length > 0
     || Object.keys(customCredentials).length > 0
+
+  /**
+   * 「已配置过」的判据：本机存了密钥、Harness 里配过，或本次会话已经输入了密钥。
+   *
+   * 模型页只列这一组——用户的原话是「这个二级页面只有我已经配置过的模型」；
+   * 其余模板收进「添加其他供应商」三级页。
+   */
+  const providerConfigured = (id: ModelProviderId): boolean =>
+    settings.harnessConfiguredModelProviders?.includes(id) === true
+    || ((settings.configuredModelProviders.includes(id) || credentialDrafts[id] !== undefined)
+      && !clearedProviders.includes(id))
+  const configuredProviders = MODEL_PROVIDERS.filter(provider => providerConfigured(provider.id))
+  const availableProviders = MODEL_PROVIDERS.filter(provider => !providerConfigured(provider.id))
+  /** 编辑器是否展开：已配置的供应商，或用户刚在三级页里挑中的那家。 */
+  const providerEditorOpen = providerConfigured(selectedProvider) || draft.providerChosen
 
   /**
    * 有没有「值得马上保存」的密钥改动。
@@ -2347,6 +2401,8 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
       if (requestGeneration !== catalogRequestGeneration.current[providerId]
         || credentialDraftsRef.current[providerId] !== apiKey) return
       setCatalogResults(current => ({ ...current, [providerId]: result }))
+      // 新一轮结果默认只展开第一条：上一轮点开的「显示全部」不该沿用到新列表上。
+      setCatalogExpanded(false)
       if (result.ok && result.models.length > 0) {
         const first = firstCatalogModelId(result.models)
         setModelInputs(current => ({ ...current, [providerId]: first }))
@@ -2432,8 +2488,13 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Rocket size={18} />}{t("我已在 Harness 内配置过，仍要打开")}</button>
             </div>
           )}
-          <div className="provider-status" role="list" aria-label={t("供应商状态")}>
-            {MODEL_PROVIDERS.map(provider => {
+          {/*
+            * 这里只列**已经配置过**的供应商。以前把七家全列出来（六家「未配置」），
+            * 二级页被一长串同质行占满，真正在用的那家反而要自己找。
+            * 未配置的模板统一收在下面的「添加其他供应商」三级页里。
+            */}
+          <div className="provider-status" role="list" aria-label={t("已配置的供应商")}>
+            {configuredProviders.map(provider => {
               const inHarness = settings.harnessConfiguredModelProviders?.includes(provider.id) === true
               const draft = credentialDrafts[provider.id] !== undefined
               const inApp = (settings.configuredModelProviders.includes(provider.id) || draft)
@@ -2459,6 +2520,16 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               )
             })}
           </div>
+          {configuredProviders.length === 0 && (
+            <p className="settings-note" role="status" data-testid="model-providers-empty">
+              {t("还没有配置任何内置供应商。到下面「添加其他供应商」挑一家填密钥，或在「自定义供应商」里接第三方接口。")}
+            </p>
+          )}
+          <div className="settings-subsection" aria-labelledby="model-provider-more">
+            <SettingsPageRow icon={<Plus size={20} />} page="models-providers" onOpen={onOpenSubpage} />
+          </div>
+          {providerEditorOpen && (
+          <>
           <label className="field">
             <span>{selectedProviderOption.label} API Key · {selectedProviderOption.environmentVariable}</span>
             <ApiKeyInput
@@ -2573,28 +2644,45 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             </div>
           )}
           {catalogResults[selectedProvider]?.models.length > 0 && (
-            <div className="model-catalog-list" role="list" aria-label={t("上游模型")}>
-              {catalogResults[selectedProvider].models.map(model => {
-                const active = (modelInputs[selectedProvider] ?? settings.defaultModels?.[selectedProvider] ?? '') === model.id
-                return <button
-                  key={model.id}
-                  type="button"
-                  role="listitem"
-                  className={`model-catalog-item${active ? ' is-selected' : ''}`}
-                  aria-pressed={active}
-                  disabled={inputLocked}
-                  onClick={() => {
-                    setModelInputs(current => ({ ...current, [selectedProvider]: model.id }))
-                    commitDefaultModel(selectedProvider, model.id)
-                  }}
-                >
-                  <span className="model-catalog-name">{model.name}</span>
-                  {model.name !== model.id && <span className="model-catalog-id">{model.id}</span>}
-                </button>
-              })}
-            </div>
+            <>
+              <div className="model-catalog-list" role="list" aria-label={t("上游模型")}>
+                {(catalogExpanded
+                  ? catalogResults[selectedProvider].models
+                  : catalogResults[selectedProvider].models.slice(0, 1)
+                ).map(model => {
+                  const active = (modelInputs[selectedProvider] ?? settings.defaultModels?.[selectedProvider] ?? '') === model.id
+                  return <button
+                    key={model.id}
+                    type="button"
+                    role="listitem"
+                    className={`model-catalog-item${active ? ' is-selected' : ''}`}
+                    aria-pressed={active}
+                    disabled={inputLocked}
+                    onClick={() => {
+                      setModelInputs(current => ({ ...current, [selectedProvider]: model.id }))
+                      commitDefaultModel(selectedProvider, model.id)
+                    }}
+                  >
+                    <span className="model-catalog-name">{model.name}</span>
+                    {model.name !== model.id && <span className="model-catalog-id">{model.id}</span>}
+                  </button>
+                })}
+              </div>
+              {/* 一次「获取模型」可能回来上百条：默认只留最靠前的一条，其余按需展开。 */}
+              {catalogResults[selectedProvider].models.length > 1 && (
+                <div className="settings-inline-actions">
+                  <button className="button button-secondary compact-button" type="button" onClick={() => setCatalogExpanded(value => !value)}>
+                    {catalogExpanded
+                      ? t("收起")
+                      : t("显示全部 {0} 个", String(catalogResults[selectedProvider].models.length))}
+                  </button>
+                </div>
+              )}
+            </>
           )}
           <p className="field-help">{t("「默认模型」只是本机的备忘：应用只把密钥交给 Harness，不会替你在 Harness 里切换模型。")}</p>
+          </>
+          )}
           <CustomProviders
             providers={settings.customModelProviders ?? []}
             configured={settings.configuredCustomModelProviders ?? []}
@@ -2616,6 +2704,50 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           />
         </section>
         </fieldset>
+        )}
+
+        {/*
+          未配置供应商的模板页：二级页只留已配置的那几家，其余集中在这里。
+          点一家 = 选中它并回到模型页，密钥输入框随即展开（`providerChosen` 记住这次选择）。
+        */}
+        {page === 'models-providers' && (
+        <section className="settings-section" aria-labelledby="model-provider-templates">
+          <div className="section-title">
+            <span className="section-icon"><Plus size={19} /></span>
+            <div>
+              <h2 id="model-provider-templates">{t("添加其他供应商")}</h2>
+              <p>{t("选一家就回到「模型与密钥」并展开密钥输入；没配置的模板平时不占那一页的地方")}</p>
+            </div>
+          </div>
+          {availableProviders.length === 0 ? (
+            <p className="settings-note" role="status">
+              {t("内置供应商都已经配置过了。第三方接口请在「模型与密钥 → 自定义供应商」里添加。")}
+            </p>
+          ) : (
+            <div className="provider-status" role="list" aria-label={t("可添加的供应商")}>
+              {availableProviders.map(provider => (
+                <div role="listitem" key={provider.id}>
+                  <button
+                    className="provider-status-row"
+                    type="button"
+                    onClick={() => {
+                      setSelectedProvider(provider.id, true)
+                      // 选完直接回模型页：否则用户点了没反应，还得自己按返回。
+                      onBack()
+                    }}
+                  >
+                    <span className="provider-status-name">{provider.label}</span>
+                    <span className="provider-status-badge">{t("未配置")}</span>
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="settings-note">
+            {t("密钥只在本机加密保存，保存后不再显示；Harness 里已配置过的供应商会出现在模型页，无需在这里重复添加。")}
+          </p>
+        </section>
         )}
 
         {page === 'runtime' && (
@@ -3329,6 +3461,23 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
 
         {page === 'diagnostics' && (
         <>
+        <div className="settings-subsection" aria-labelledby="diagnostics-subpages">
+          <div className="section-title">
+            <span className="section-icon"><ScrollText size={19} /></span>
+            <div><h3 id="diagnostics-subpages">{t("排查与反馈")}</h3><p>{t("日志、能力、反馈与外置浏览器分开放，导出日志在「日志与采集」里")}</p></div>
+          </div>
+          <SettingsPageRow icon={<ScrollText size={20} />} page="diagnostics-log" onOpen={onOpenSubpage} />
+          <SettingsPageRow icon={<Gauge size={20} />} page="diagnostics-capability" onOpen={onOpenSubpage} />
+          <SettingsPageRow icon={<ExternalLink size={20} />} page="external-browser" onOpen={onOpenSubpage} />
+          <SettingsPageRow icon={<MessageSquare size={20} />} page="diagnostics-feedback" onOpen={onOpenSubpage} />
+        </div>
+        </>
+        )}
+        {/*
+          外置浏览器独立成页：旧 WebView 跑不动 Harness 时它是唯一可用的浏览方式，
+          与「排查」不是一类事，混在诊断页里要滚过一整张卡才看得到日志入口。
+        */}
+        {page === 'external-browser' && (
         <section className="settings-section" aria-labelledby="diagnostics-external">
           <div className="section-title">
             <span className="section-icon"><ExternalLink size={19} /></span>
@@ -3363,16 +3512,6 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             </>
           )}
         </section>
-        <div className="settings-subsection" aria-labelledby="diagnostics-subpages">
-          <div className="section-title">
-            <span className="section-icon"><ScrollText size={19} /></span>
-            <div><h3 id="diagnostics-subpages">{t("排查与反馈")}</h3><p>{t("日志、能力与反馈分开放，导出日志在「日志与采集」里")}</p></div>
-          </div>
-          <SettingsPageRow icon={<ScrollText size={20} />} page="diagnostics-log" onOpen={onOpenSubpage} />
-          <SettingsPageRow icon={<Gauge size={20} />} page="diagnostics-capability" onOpen={onOpenSubpage} />
-          <SettingsPageRow icon={<MessageSquare size={20} />} page="diagnostics-feedback" onOpen={onOpenSubpage} />
-        </div>
-        </>
         )}
         {page === 'diagnostics-log' && (
         <>
@@ -3474,6 +3613,29 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
 
 export function App() {
   const language = useLanguage()
+  /**
+   * 语言门禁的启动探测：本地没有语言记录时，先问原生再决定要不要弹门禁。
+   *
+   * 语言的**真值是原生偏好**，localStorage 只是缓存：清应用数据、WebView 数据被回收、
+   * 存储被限制，都会让这里读不到，而用户其实早就选过。过去只认 localStorage，
+   * 结果是「原生存着 en，界面却先弹一次语言门禁」；点保存失败时更是永远停在首启。
+   *
+   * 探测期间显示启动页而不是门禁：否则每次冷启动都会先闪一下选择框。
+   */
+  const [languageProbe, setLanguageProbe] = useState(() => readLanguage() === null)
+  useEffect(() => {
+    if (readLanguage() !== null) { setLanguageProbe(false); return }
+    let cancelled = false
+    void runtimeBridge.getAppLanguage()
+      .then(state => {
+        if (cancelled) return
+        // configured=false 是真首启：原生只是回落到 zh-CN，不能替他做选择。
+        if (state.configured && (state.language === 'zh-CN' || state.language === 'en')) saveLanguage(state.language)
+      })
+      .catch(() => { /* 旧原生没有这条桥：按「没选过」处理，门禁照常询问。 */ })
+      .finally(() => { if (!cancelled) setLanguageProbe(false) })
+    return () => { cancelled = true }
+  }, [])
   useEffect(() => { document.documentElement.lang = language ?? 'zh-CN' }, [language])
   /**
    * 输入法弹起时把界面整体让出被遮挡的高度（见 [observeKeyboardInset]）。
@@ -5487,6 +5649,10 @@ export function App() {
   })()
 
   if (language === null) {
+    // 探测原生语言期间不弹门禁：先给启动页，避免每次冷启动都闪一下选择框。
+    if (languageProbe) {
+      return <div className="boot-screen"><Brand /><Loader2 className="spin" size={23} /><span>{t("正在连接本机环境")}</span></div>
+    }
     return <main className="language-screen"><LanguageSettings initial /></main>
   }
 

@@ -260,10 +260,17 @@ body,
 
 body {
   overflow: hidden;
-  background:
+  background: radial-gradient(circle at 7% -12%, var(--blue), transparent 34%),
+    radial-gradient(circle at 100% 12%, var(--blue), transparent 30%),
+    var(--bg);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  body {
+    background:
     radial-gradient(circle at 7% -12%, color-mix(in srgb, var(--blue) 10%, transparent), transparent 34%),
     radial-gradient(circle at 100% 12%, color-mix(in srgb, var(--blue) 7%, transparent), transparent 30%),
     var(--bg);
+  }
 }
 
 .error-screen {
@@ -358,7 +365,16 @@ button:disabled {
 .app-background img, .app-background video { width: 100%; height: 100%; object-fit: cover; }
 /* `--card-*` 由 src/appearance.ts 写在根元素上（用户自定义卡片配色）。这里保留令牌默认值：
    变量未定义时 color-mix() 会让整条声明在计算值阶段失效，卡片底色会直接掉成透明。 */
-.settings-section, .runtime-overview, .management-row, .detail-section, .launch-panel { background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent); backdrop-filter: blur(var(--card-blur, 0px)); color: var(--card-ink, var(--ink)); }
+.settings-section, .runtime-overview, .management-row, .detail-section, .launch-panel {
+  background: var(--card-color, var(--surface));
+  backdrop-filter: blur(var(--card-blur, 0px));
+  color: var(--card-ink, var(--ink));
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .settings-section, .runtime-overview, .management-row, .detail-section, .launch-panel {
+    background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  }
+}
 .settings-section p, .management-copy small, .detail-section p { color: var(--card-muted, var(--muted)); }
 
 .app-frame {
@@ -386,9 +402,14 @@ button:disabled {
   gap: 12px;
   padding: calc(10px + env(safe-area-inset-top)) 8px 12px;
   border-right: 1px solid var(--line);
-  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 92%), transparent);
+  background: var(--card-color, var(--surface));
   backdrop-filter: blur(var(--card-blur, 0px));
   box-shadow: 6px 0 24px var(--shadow-color);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .app-sidebar {
+    background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 92%), transparent);
+  }
 }
 
 .sidebar-mark,
@@ -413,8 +434,14 @@ button:disabled {
   gap: 2px;
   min-height: 54px;
   color: var(--on-blue, var(--on-accent));
-  background: linear-gradient(150deg, var(--blue), color-mix(in srgb, var(--blue) 50%, var(--brand-bg)));
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--blue) 20%, transparent);
+  background: linear-gradient(150deg, var(--blue), var(--blue));
+  box-shadow: var(--shadow);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .sidebar-mark {
+    background: linear-gradient(150deg, var(--blue), color-mix(in srgb, var(--blue) 50%, var(--brand-bg)));
+    box-shadow: 0 8px 18px color-mix(in srgb, var(--blue) 20%, transparent);
+  }
 }
 
 
@@ -447,7 +474,14 @@ button:disabled {
   background: var(--blue-soft);
 }
 
-.sidebar-mark.is-active { box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 22%, transparent), 0 8px 18px color-mix(in srgb, var(--blue) 20%, transparent); }
+.sidebar-mark.is-active {
+  box-shadow: 0 0 0 3px var(--blue);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .sidebar-mark.is-active {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 22%, transparent), 0 8px 18px color-mix(in srgb, var(--blue) 20%, transparent);
+  }
+}
 
 .sidebar-mark:active,
 .sidebar-item:active { transform: translateY(1px); }
@@ -460,9 +494,14 @@ button:disabled {
   min-height: calc(3.625rem + env(safe-area-inset-top));
   padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
   border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--card-color, var(--header-bg)) var(--card-opacity, 92%), transparent);
+  background: var(--card-color, var(--header-bg));
   box-shadow: 0 8px 28px var(--shadow-color);
   backdrop-filter: blur(18px);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .mobile-header {
+    background: color-mix(in srgb, var(--card-color, var(--header-bg)) var(--card-opacity, 92%), transparent);
+  }
 }
 
 .header-actions,
@@ -496,8 +535,14 @@ button:disabled {
   margin-right: 8px;
   border-radius: 8px;
   color: var(--on-solid);
-  background: linear-gradient(145deg, var(--brand-bg), color-mix(in srgb, var(--blue) 45%, var(--brand-bg)));
-  box-shadow: 0 5px 14px color-mix(in srgb, var(--blue) 18%, transparent);
+  background: linear-gradient(145deg, var(--brand-bg), var(--blue));
+  box-shadow: var(--shadow);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .brand-symbol {
+    background: linear-gradient(145deg, var(--brand-bg), color-mix(in srgb, var(--blue) 45%, var(--brand-bg)));
+    box-shadow: 0 5px 14px color-mix(in srgb, var(--blue) 18%, transparent);
+  }
 }
 
 .brand-name {
@@ -664,24 +709,44 @@ button:disabled {
 .button-primary {
   color: var(--on-blue, var(--on-accent));
   background: var(--blue);
-  box-shadow: 0 7px 18px color-mix(in srgb, var(--blue) 22%, transparent);
+  box-shadow: var(--shadow);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .button-primary {
+    box-shadow: 0 7px 18px color-mix(in srgb, var(--blue) 22%, transparent);
+  }
 }
 
 .button-primary:not(:disabled):hover {
   background: var(--blue-hover);
-  box-shadow: 0 9px 22px color-mix(in srgb, var(--blue) 28%, transparent);
+  box-shadow: var(--shadow);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .button-primary:not(:disabled):hover {
+    box-shadow: 0 9px 22px color-mix(in srgb, var(--blue) 28%, transparent);
+  }
 }
 
 .button-secondary {
   color: var(--card-ink, var(--ink));
   border-color: var(--line-strong);
-  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  background: var(--card-color, var(--surface));
   backdrop-filter: blur(var(--card-blur, 0px));
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .button-secondary {
+    background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  }
 }
 
 .button-secondary:not(:disabled):hover {
   border-color: var(--line-hover);
-  background: color-mix(in srgb, var(--card-color, var(--surface-muted)) var(--card-opacity, 100%), transparent);
+  background: var(--card-color, var(--surface-muted));
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .button-secondary:not(:disabled):hover {
+    background: color-mix(in srgb, var(--card-color, var(--surface-muted)) var(--card-opacity, 100%), transparent);
+  }
 }
 
 .button-danger {
@@ -749,10 +814,17 @@ button:disabled {
   padding: 24px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  background:
+  background: linear-gradient(135deg, var(--blue-soft), var(--surface) 42%),
+    var(--surface);
+  box-shadow: var(--shadow);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .launch-panel {
+    background:
     linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 65%, var(--surface)), var(--surface) 42%),
     var(--surface);
-  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 7%, transparent);
+    box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 7%, transparent);
+  }
 }
 
 .launch-icon {
@@ -850,8 +922,14 @@ button:disabled {
   padding: 20px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 48%, var(--surface)), var(--surface) 38%);
-  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 6%, transparent);
+  background: linear-gradient(135deg, var(--blue-soft), var(--surface) 38%);
+  box-shadow: var(--shadow);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .runtime-overview {
+    background: linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 48%, var(--surface)), var(--surface) 38%);
+    box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 6%, transparent);
+  }
 }
 
 .runtime-title-row {
@@ -1392,13 +1470,17 @@ button:disabled {
   min-height: 48px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  /* 搜索框同样吃主题强调色，与按钮同一组底色。这一行必须写在 border 简写之后，
-     否则 `border` 会把边框颜色重置回 --line。 */
-  border-color: color-mix(in srgb, var(--blue) 26%, var(--line));
-  /* 搜索框属于「输入框」这一组：跟按钮同一条透明度，否则按钮透了、输入框还是实底。 */
-  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--control-opacity, 100%), transparent);
+  border-color: var(--blue);
+  background: var(--card-color, var(--surface));
   color: var(--card-ink, var(--ink));
   backdrop-filter: blur(var(--card-blur, 0px));
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .search-control,
+  .settings-search {
+    border-color: color-mix(in srgb, var(--blue) 26%, var(--line));
+    background: color-mix(in srgb, var(--card-color, var(--surface)) var(--control-opacity, 100%), transparent);
+  }
 }
 
 .search-control {
@@ -1410,7 +1492,13 @@ button:disabled {
 .search-control:focus-within,
 .settings-search:focus-within {
   border-color: var(--blue);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent);
+  box-shadow: 0 0 0 2px var(--blue);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .search-control:focus-within,
+  .settings-search:focus-within {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--blue) 18%, transparent);
+  }
 }
 
 .search-control > input {
@@ -1449,8 +1537,14 @@ button:disabled {
   border: 0;
   border-radius: 50%;
   color: var(--card-muted, var(--muted));
-  background: color-mix(in srgb, var(--card-color, var(--surface-muted)) var(--card-opacity, 76%), transparent);
+  background: var(--card-color, var(--surface-muted));
   cursor: pointer;
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .search-control-clear,
+  .settings-search-clear {
+    background: color-mix(in srgb, var(--card-color, var(--surface-muted)) var(--card-opacity, 76%), transparent);
+  }
 }
 
 .search-control-clear:hover,
@@ -1485,8 +1579,13 @@ button:disabled {
   border: 1px solid transparent;
   border-radius: 50%;
   color: var(--card-muted, var(--muted));
-  background: color-mix(in srgb, var(--card-color, var(--surface-muted)) var(--card-opacity, 76%), transparent);
+  background: var(--card-color, var(--surface-muted));
   cursor: pointer;
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .settings-search-filter {
+    background: color-mix(in srgb, var(--card-color, var(--surface-muted)) var(--card-opacity, 76%), transparent);
+  }
 }
 
 .settings-search-filter:hover, .settings-search-filter[aria-expanded="true"] { color: var(--card-ink, var(--ink)); }
@@ -1626,7 +1725,12 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
   background: var(--surface);
-  box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 5%, transparent);
+  box-shadow: var(--shadow);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .settings-section {
+    box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 5%, transparent);
+  }
 }
 
 .settings-model-fieldset {
@@ -1644,10 +1748,15 @@ button:disabled {
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  background: var(--card-color, var(--surface));
   backdrop-filter: blur(var(--card-blur, 0px));
   color: var(--card-ink, var(--ink));
   box-shadow: var(--shadow-card);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .settings-subsection {
+    background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  }
 }
 .settings-subsection :is(p, small) { color: var(--card-muted, var(--muted)); }
 .settings-subsection [role='alert'] { color: var(--red-text, var(--red)); }
@@ -1884,7 +1993,22 @@ button:disabled {
 
 /* 状态卡片同时作为供应商切换入口，沿用卡片文字与主题强调色。 */
 .provider-status { display: grid; gap: 6px; margin: 4px 0 14px; }
-.provider-account-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 10px 0 14px; padding: 12px; border: 1px solid var(--line-alt); border-radius: 10px; background: color-mix(in srgb, var(--blue-soft) 55%, transparent); }
+.provider-account-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 10px 0 14px;
+  padding: 12px;
+  border: 1px solid var(--line-alt);
+  border-radius: 10px;
+  background: var(--blue-soft);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .provider-account-card {
+    background: color-mix(in srgb, var(--blue-soft) 55%, transparent);
+  }
+}
 .provider-account-card > div { display: grid; gap: 4px; min-width: 0; }
 .provider-account-card span { color: var(--card-muted, var(--muted)); font-size: 0.82rem; }
 @media (max-width: 560px) { .provider-account-card { align-items: stretch; flex-direction: column; } .provider-account-card .button { align-self: flex-start; } }
@@ -2482,14 +2606,19 @@ button:disabled {
   .app-sidebar { display: none; }
   .mobile-session-entry { display: inline-flex; flex-shrink: 0; color: var(--blue); }
   .bottom-navigation {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 4px;
-    padding: 5px max(8px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
-    border-top: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 5px max(8px, env(safe-area-inset-right)) max(5px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+  border-top: 1px solid var(--line);
+  background: var(--card-color, var(--surface));
+  backdrop-filter: blur(var(--card-blur, 0px));
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .bottom-navigation {
     background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 92%), transparent);
-    backdrop-filter: blur(var(--card-blur, 0px));
   }
+}
   .bottom-navigation-item {
     display: flex;
     align-items: center;
@@ -2778,15 +2907,27 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
  */
 .appearance-option,
 .appearance-accent-option {
-  /* 底色带一点主题强调色：按钮不再只有黑白两档，跟着「强调色」走。 */
-  background: color-mix(in srgb,
+  background: var(--blue-soft);
+  border-color: var(--blue);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .appearance-option,
+  .appearance-accent-option {
+    background: color-mix(in srgb,
     color-mix(in srgb, var(--blue) 10%, var(--surface))
     var(--control-opacity, 100%), transparent);
-  border-color: color-mix(in srgb, var(--blue) 26%, var(--line-strong));
+    border-color: color-mix(in srgb, var(--blue) 26%, var(--line-strong));
+  }
 }
 .appearance-option.active,
 .appearance-accent-option.active {
-  background: color-mix(in srgb, var(--blue-soft) var(--control-opacity, 100%), transparent);
+  background: var(--blue-soft);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .appearance-option.active,
+  .appearance-accent-option.active {
+    background: color-mix(in srgb, var(--blue-soft) var(--control-opacity, 100%), transparent);
+  }
 }
 /* 原生 radio 铺满整块：既保留键盘与读屏语义，又能让整块都可点、
    焦点环也画在整块上（全局的 input:focus-visible 规则直接复用）。 */
@@ -2871,9 +3012,15 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
   width: 11px;
   height: 11px;
   flex: none;
-  border: 2px solid color-mix(in srgb, var(--surface) 80%, transparent);
+  border: 2px solid var(--surface);
   border-radius: 50%;
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .accent-swatch {
+    border: 2px solid color-mix(in srgb, var(--surface) 80%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 12%, transparent);
+  }
 }
 
 @media (max-width: 440px) {
@@ -2987,10 +3134,17 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 .mailbox-entry {
   border: 1px solid var(--line);
   color: var(--muted);
-  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  background: var(--card-color, var(--surface));
   color: var(--card-ink, var(--ink));
   font: inherit;
   cursor: pointer;
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .mailbox-root-tab,
+  .mailbox-breadcrumb button,
+  .mailbox-entry {
+    background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  }
 }
 
 .mailbox-root-tab {
@@ -3007,9 +3161,14 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 }
 
 .mailbox-root-tab.active {
-  border-color: color-mix(in srgb, var(--blue) 52%, var(--line));
+  border-color: var(--blue);
   color: var(--blue);
   background: var(--blue-soft);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .mailbox-root-tab.active {
+    border-color: color-mix(in srgb, var(--blue) 52%, var(--line));
+  }
 }
 
 .mailbox-root-tab:disabled,
@@ -3070,8 +3229,18 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 .mailbox-root-tab:focus-visible,
 .mailbox-breadcrumb button:hover,
 .mailbox-breadcrumb button:focus-visible {
-  border-color: color-mix(in srgb, var(--blue) 42%, var(--line));
+  border-color: var(--blue);
   color: var(--blue);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .mailbox-entry:hover,
+  .mailbox-entry:focus-visible,
+  .mailbox-root-tab:hover,
+  .mailbox-root-tab:focus-visible,
+  .mailbox-breadcrumb button:hover,
+  .mailbox-breadcrumb button:focus-visible {
+    border-color: color-mix(in srgb, var(--blue) 42%, var(--line));
+  }
 }
 
 .mailbox-entry span {
@@ -3492,15 +3661,25 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
 .management-shell { position: relative; isolation: isolate; }
 .management-shell :is(.settings-section, .runtime-overview, .management-list, .detail-section, .launch-panel) {
   --content-label: var(--card-ink, var(--field-label));
-  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  background: var(--card-color, var(--surface));
   backdrop-filter: blur(var(--card-blur, 0px));
   color: var(--card-ink, var(--ink));
 }
+@supports (color: color-mix(in srgb, red, blue)) {
+  .management-shell :is(.settings-section, .runtime-overview, .management-list, .detail-section, .launch-panel) {
+    background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  }
+}
 .management-shell .management-row { background: transparent; }
 .management-shell .management-row {
-  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  background: var(--card-color, var(--surface));
   backdrop-filter: blur(var(--card-blur, 0px));
   color: var(--card-ink, var(--ink));
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .management-shell .management-row {
+    background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  }
 }
 .management-shell :is(.settings-section, .management-list, .detail-section) :is(p, small) { color: var(--card-muted, var(--muted)); }
 .appearance-customization { display: grid; gap: 16px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); }
@@ -3547,13 +3726,24 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
    用户改「卡片颜色/不透明度/模糊」时芯片跟着一起变，不会再出现「卡片换了色、芯片还是老底色」。
    令牌没设过时回落到主题基础色（--surface/--ink），所以没自定义卡片配色的环境下外观与从前一致。 */
 .settings-categories button {
-  /* 胶囊形 + 收紧左右内边距：保持 44px 触控高度，同一行能放下更多分类。 */
-  max-width: 100%; min-height: 44px; padding: 6px 10px;
-  border: 1px solid var(--line); border-radius: 999px;
-  background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  max-width: 100%;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card-color, var(--surface));
   backdrop-filter: blur(var(--card-blur, 0px));
-  color: var(--card-ink, var(--ink)); font: inherit;
-  font-size: 0.8125rem; line-height: 1.5; overflow-wrap: anywhere; cursor: pointer;
+  color: var(--card-ink, var(--ink));
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .settings-categories button {
+    background: color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent);
+  }
 }
 .settings-categories button[aria-selected="true"] { background: var(--blue-soft); color: var(--blue); border-color: var(--blue); }
 .settings-screen .screen-heading > div, .settings-screen .section-title > div { min-width: 0; }
@@ -3699,17 +3889,34 @@ html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
  * 默认 100%（不加透明），旧版本存储迁移后外观不变。
  */
 .button-primary {
-  background: color-mix(in srgb, var(--blue) var(--control-opacity, 100%), transparent);
+  background: var(--blue);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .button-primary {
+    background: color-mix(in srgb, var(--blue) var(--control-opacity, 100%), transparent);
+  }
 }
 .button-secondary {
-  background: color-mix(in srgb,
+  background: var(--card-color, var(--surface));
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .button-secondary {
+    background: color-mix(in srgb,
     color-mix(in srgb, var(--card-color, var(--surface)) var(--card-opacity, 100%), transparent)
     var(--control-opacity, 100%), transparent);
+  }
 }
 .field input,
 .field select,
 .mono-input {
-  background: color-mix(in srgb, var(--surface-sunken) var(--control-opacity, 100%), transparent);
+  background: var(--surface-sunken);
+}
+@supports (color: color-mix(in srgb, red, blue)) {
+  .field input,
+  .field select,
+  .mono-input {
+    background: color-mix(in srgb, var(--surface-sunken) var(--control-opacity, 100%), transparent);
+  }
 }
 
 /* 背景文件选择：原生 <input type="file"> 的「未选择文件」不代表真实状态，把它藏进按钮里，

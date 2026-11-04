@@ -15,7 +15,7 @@
       （这里刻意不写「提取脚本正文」的示例命令：注释里一旦出现脚本标签本身，
       任何基于正则的提取都会先匹配到注释，反而更容易算错。）
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-G8MtLRS3pBIe/aPqrvDurqSXVXwzpFeex23qLEUNscg='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-cvihHi2rq/fva+klO+6mdU711EZ6LKhQ/CLszs/0gpM='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'" />
     <!--
       首帧脚本：必须在样式表与模块之前先把 <html data-theme> 与 <html data-accent> 定下来，否则会先按
       默认配色画一帧再切主题。它是 src/theme.ts 里 readThemeMode/resolveTheme/
@@ -31,6 +31,12 @@
   var ACCENTS = { ocean: true, mint: true, amber: true, rose: true };
   var COLORS = { light: '#f3f5f8', dark: '#111315' };
   var query = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  /* 「主色 + 透明度」不写 color-mix()：旧 WebView 没有它，带 var() 的无效声明会整条失效。
+     等价于 src/ui/cssColor.ts 的 withAlpha()，两处必须给出一模一样的字符串。 */
+  function alpha(hex, value) {
+    var rgb = [1, 3, 5].map(function (offset) { return parseInt(hex.slice(offset, offset + 2), 16); });
+    return 'rgba(' + rgb[0] + ', ' + rgb[1] + ', ' + rgb[2] + ', ' + value + ')';
+  }
   function apply() {
     var mode = 'system';
     var accent = 'ocean';
@@ -56,15 +62,15 @@
       var channels = [1, 3, 5].map(function (offset) { return parseInt(custom.slice(offset, offset + 2), 16) / 255; })
         .map(function (channel) { return channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4); });
       root.style.setProperty('--on-blue', 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2] > 0.179 ? '#000000' : '#ffffff');
-      root.style.setProperty('--blue-soft', 'color-mix(in srgb, ' + custom + ' 14%, transparent)');
-      root.style.setProperty('--blue-line', 'color-mix(in srgb, ' + custom + ' 38%, transparent)');
-      root.style.setProperty('--ring', '3px solid color-mix(in srgb, ' + custom + ' 35%, transparent)');
+      root.style.setProperty('--blue-soft', alpha(custom, 0.14));
+      root.style.setProperty('--blue-line', alpha(custom, 0.38));
+      root.style.setProperty('--ring', '3px solid ' + alpha(custom, 0.35));
     } else {
       ['--blue', '--blue-hover', '--on-blue', '--blue-soft', '--blue-line', '--ring'].forEach(function (name) { root.style.removeProperty(name); });
     }
     if (textColor) {
       root.style.setProperty('--ink', textColor);
-      var mutedText = 'color-mix(in srgb, ' + textColor + ' 68%, transparent)';
+      var mutedText = alpha(textColor, 0.68);
       root.style.setProperty('--muted', mutedText);
       root.style.setProperty('--field-label', mutedText);
       root.style.setProperty('--card-ink', textColor);

@@ -20,6 +20,7 @@ import type { DiagnosticLogState, KeepAliveState, MailboxState, RuntimeSettings,
 
 const bridge = vi.hoisted(() => ({
   setAppLanguage: vi.fn(),
+  getAppLanguage: vi.fn(),
   getState: vi.fn(),
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
@@ -190,6 +191,7 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/')
   vi.clearAllMocks()
   bridge.setAppLanguage.mockResolvedValue(undefined)
+  bridge.getAppLanguage.mockResolvedValue({ configured: false, language: 'zh-CN' })
   bridge.getState.mockResolvedValue({ ...readyState })
   bridge.getSettings.mockResolvedValue({ ...settings })
   bridge.getShizukuState.mockResolvedValue({ ...shizuku })
