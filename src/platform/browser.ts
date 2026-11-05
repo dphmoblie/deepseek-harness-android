@@ -286,6 +286,12 @@ export function createBrowserBridge(): RuntimeBridge {
       // 预览里没有原生侧的会话快照能力：安装结果不带 autoSnapshot，不编造「已自动备份」的结论。
       return {}
     },
+    repairRuntime: async (): Promise<RuntimeInstallResult> => {
+      await new Promise(resolve => window.setTimeout(resolve, 120))
+      state = { ...state, phase: 'ready', updateAvailable: false }
+      emitProgress()
+      return {}
+    },
     startHarness: () => {
       state = { ...state, phase: 'running', harnessUrl: 'http://127.0.0.1:3080/' }
       return Promise.resolve({ ...state })

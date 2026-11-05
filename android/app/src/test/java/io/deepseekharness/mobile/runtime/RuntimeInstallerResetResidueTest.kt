@@ -30,7 +30,7 @@ class RuntimeInstallerResetResidueTest {
 
     @Test
     fun `安装成功收尾会尽力回收残留`() {
-        val install = bodyOf("fun install(source: RuntimeSource)")
+        val install = bodyOf("fun install(source: RuntimeSource")
 
         // 两条成功路径都要走到：正常装完，以及「已经是当前版本」的提前返回。
         val calls = install.windowed("finishRuntimeMaintenance()".length).count { it == "finishRuntimeMaintenance()" }

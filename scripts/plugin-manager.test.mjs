@@ -292,6 +292,28 @@ test('禁止禁用安全组件及核心文件，允许管理官方可选插件',
   assert.equal(manager.setChildEnabled('@deepseek-ai/dsh-base', 'optional', false).plugins[0].children[1].enabled, false)
 })
 
+test('一键禁用第三方插件但恢复官方包，不删除插件目录与数据', t => {
+  const { manager, root, pluginFile, write } = fixture(t)
+  write('root/.dsh-mobile/plugin-manager/user-data.json', '保留的插件数据')
+  const result = manager.disableThirdParty()
+  assert.equal(result.plugins[0].enabled, true)
+  assert.equal(result.plugins[1].enabled, false)
+  assert.equal(fs.existsSync(pluginFile), true)
+  assert.equal(fs.readFileSync(path.join(root, 'root/.dsh-mobile/plugin-manager/user-data.json'), 'utf8'), '"保留的插件数据"')
+})
+
+test('一键禁用时保留受保护的运行时依赖', t => {
+  const { manager, root, write, profile } = fixture(t)
+  write('opt/dsh/node_modules/react/package.json', { name: 'react', version: '18.3.1', dsh: { bundle: { patch: './cordis.patch.json' } } })
+  write('opt/dsh/node_modules/react/cordis.patch.json', [])
+  const manifest = JSON.parse(fs.readFileSync(profile, 'utf8'))
+  manifest.dsh.profile.bundles.push('react')
+  fs.writeFileSync(profile, JSON.stringify(manifest))
+  const result = manager.disableThirdParty()
+  assert.equal(result.plugins.find(row => row.id === 'react').enabled, true)
+  assert.equal(result.plugins.find(row => row.id === 'test-plugin').enabled, false)
+})
+
 test('配置损坏时仍能禁用问题第三方文件', t => {
   const { manager, pluginFile } = fixture(t)
   fs.writeFileSync(pluginFile, 'not valid config')

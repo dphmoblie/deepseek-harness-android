@@ -141,6 +141,7 @@ interface NativeRuntimePlugin {
   getSettings(): Promise<RuntimeSettings>
   saveSettings(settings: RuntimeSettingsUpdate): Promise<RuntimeSettings>
   install(source?: RuntimeSource): Promise<unknown>
+  repairRuntime(): Promise<unknown>
   /** 会话工作区的会话元数据；返回值在 TS 侧走校验（`unknown` → validate）。 */
   sessionList(): Promise<unknown>
   getRuntimeSessionSnapshotState(): Promise<unknown>
@@ -343,6 +344,7 @@ function createNativeBridge(): RuntimeBridge {
     install: source => NativeRuntime
       .install(source === undefined ? undefined : validateRuntimeSource(source))
       .then(validateRuntimeInstallResult),
+    repairRuntime: () => NativeRuntime.repairRuntime().then(validateRuntimeInstallResult),
     startHarness: () => NativeRuntime.startHarness().then(validateRuntimeState),
     openHarness: (sessionId?: string) => NativeRuntime.openHarness(sessionId ? { sessionId } : undefined),
     openHarnessExternal: () => NativeRuntime.openHarnessExternal(),

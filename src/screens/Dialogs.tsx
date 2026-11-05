@@ -52,6 +52,33 @@ export function ResetDialog({ busy, onCancel, onConfirm }: ResetDialogProps) {
   )
 }
 
+export interface RepairDialogProps {
+  busy: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}
+
+export function RepairDialog({ busy, onCancel, onConfirm }: RepairDialogProps) {
+  return (
+    <div className="dialog-backdrop" role="presentation" onPointerDown={event => { if (event.target === event.currentTarget && !busy) onCancel() }}>
+      <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="repair-title">
+        <button className="dialog-close" type="button" aria-label={t("关闭")} onClick={onCancel} disabled={busy}><X size={19} /></button>
+        <span className="dialog-warning-icon"><RefreshCw size={23} /></span>
+        <h2 id="repair-title">{t("保留数据重置修复")}</h2>
+        <p>{t("将重新铺设一份干净的 Ubuntu 运行环境，用于修复运行时文件或插件冲突。会话、模型密钥、附件、技能、工作区和插件数据会保留。")}</p>
+        <p>{t("修复前会自动备份会话；修复期间请勿关闭应用。")}</p>
+        <div className="dialog-actions">
+          <button className="button button-secondary" type="button" onClick={onCancel} disabled={busy}>{t("取消")}</button>
+          <button className="button button-primary" type="button" onClick={onConfirm} disabled={busy}>
+            {busy ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+            {busy ? t("正在修复") : t("确认修复")}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /**
  * 悬浮球 / 后台保持「开了但没起来」的五类可操作原因。
  *

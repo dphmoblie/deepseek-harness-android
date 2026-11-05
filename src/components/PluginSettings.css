@@ -19,6 +19,19 @@
   }
 }
 .plugin-stop .button { flex-shrink: 0; }
+.plugin-stop-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.plugin-disable-confirm {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--amber);
+  border-radius: var(--radius-card);
+  background: var(--amber-soft);
+  color: var(--card-ink, var(--ink));
+}
+.plugin-disable-confirm p { margin: 0; color: var(--card-muted, var(--muted)); font-size: 0.8125rem; line-height: 1.55; }
+.plugin-disable-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .plugin-category { margin-top: 26px; }
 .plugin-category h2 { font-size: 1.0625rem; }
 .plugin-file {
@@ -220,6 +233,7 @@
   .plugin-screen { padding-right: 10px; padding-left: 10px; }
   .plugin-stop, .plugin-file-actions { align-items: stretch; flex-direction: column; }
   .plugin-stop .button, .plugin-file-actions .button { width: 100%; }
+  .plugin-stop-actions, .plugin-disable-actions { width: 100%; flex-direction: column; }
   .plugin-import-row { flex-direction: column; }
   .plugin-import-row .button { width: 100%; }
   .plugin-file-buttons { flex-direction: column; width: 100%; }

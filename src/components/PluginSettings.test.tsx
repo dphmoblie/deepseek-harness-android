@@ -35,6 +35,15 @@ describe('应用外层插件管理', () => {
     await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledOnce())
     await waitFor(() => expect(screen.getByRole('checkbox', { name: '启用文件 example-plugin' })).toBeEnabled())
   })
+  it('提供安全启动入口，一键禁用第三方插件且保留官方包', async () => {
+    const bridge = setup()
+    const button = await screen.findByRole('button', { name: '一键禁用第三方插件' })
+    fireEvent.click(button)
+    expect(screen.getByText('确认禁用全部第三方插件？')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '确认禁用' }))
+    await waitFor(() => expect(bridge.managePlugins).toHaveBeenCalledWith({ operation: 'disable' }))
+    expect(await screen.findByText('已禁用全部第三方插件，下次启动生效')).toBeInTheDocument()
+  })
   it('更新失败后显示受控错误，保留列表并允许重试', async () => {
     const bridge = setup()
     fireEvent.click(await screen.findByText('example-plugin'))

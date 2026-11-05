@@ -1657,6 +1657,25 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     return { ...list(), lock: lockQuiet() }
   }
   /**
+   * 插件冲突时的安全启动兜底：禁用全部第三方插件，保留官方包与安全组件。
+   * 只改 profile 的启停清单，不删除插件目录、版本副本或插件数据；用户之后可逐个重新启用。
+   */
+  function disableThirdParty() {
+    const config = manifest()
+    const order = config.value.dshMobile?.bundleOrder ?? config.names
+    if (!Array.isArray(order) || order.length > 32) fail('PLUGIN_CONFIG_INVALID')
+    order.forEach(validName)
+    // 只移除第三方包，官方包当前的启停选择保持不变（官方可选包也不应被强行打开）。
+    // protectedPackage 还覆盖运行时安全/核心依赖，不能被安全启动兜底关掉。
+    const bundles = config.enabled.filter(id => protectedPackage(id))
+    bundles.sort((left, right) => order.indexOf(left) - order.indexOf(right))
+    config.value.dsh.profile.bundles = bundles
+    config.value.dshMobile = { ...config.value.dshMobile, bundleOrder: order, disabledBundles: config.names.filter(name => !bundles.includes(name)) }
+    atomic(profile, config.value)
+    snapshotQuiet()
+    return { ...list(), lock: lockQuiet() }
+  }
+  /**
    * 恢复入口：先回滚未提交的安装事务，再尝试回填被重建掉的启停状态。
    *
    * 回填只在这里发生（`list()` 保持纯读）：它会写清单，因此必须挂在"启动前的恢复调用点"
@@ -2106,7 +2125,7 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     // 账本按事实重建：回滚后解析到的版本与事务目录都变了；来源沿用上一条（回滚不改变"当初从哪来"）。
     return { ...list(), lock: lockQuiet({ id, source: null }) }
   }
-  return { list, setEnabled, setChildEnabled, update, importPackage, rollback, recover, repair, scanRuntimeGraph, pruneVersions, checkCompatibility, checkpoint }
+  return { list, setEnabled, disableThirdParty, setChildEnabled, update, importPackage, rollback, recover, repair, scanRuntimeGraph, pruneVersions, checkCompatibility, checkpoint }
 }
 
 module.exports = {
@@ -2151,6 +2170,7 @@ if (require.main === module) {
     // 模块图探测是只读的：不走 recover()，也不参与 repair 的代次指纹，可随时独立触发。
     else if (operation === 'graph') result = manager.scanRuntimeGraph()
     else if (operation === 'enable' && (second === 'true' || second === 'false')) { manager.recover(); result = manager.setEnabled(first, second === 'true') }
+    else if (operation === 'disable') { manager.recover(); result = manager.disableThirdParty() }
     else if (operation === 'child' && (second === 'true' || second === 'false')) { manager.recover(); result = manager.setChildEnabled(first, third, second === 'true') }
     else if (operation === 'update') result = manager.update(first)
     // import 的参数顺序是"来源优先"：`import <来源> [<包名>]`，包名只是可选提示。

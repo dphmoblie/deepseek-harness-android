@@ -434,6 +434,21 @@ describe('App conversation gate', () => {
     expect(await screen.findByRole('button', { name: '安装并进入对话' })).toBeInTheDocument()
   })
 
+  it('提供保留数据的运行环境修复入口，不走清空重置', async () => {
+    bridge.repairRuntime.mockResolvedValue({})
+    render(<App />)
+    await arriveAtSettingsHome()
+
+    fireEvent.click(screen.getByRole('button', { name: /Ubuntu 运行时/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '保留数据重置修复' }))
+    expect(await screen.findByRole('dialog', { name: '保留数据重置修复' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '确认修复' }))
+    await waitFor(() => expect(bridge.repairRuntime).toHaveBeenCalledTimes(1))
+    expect(bridge.reset).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog', { name: '保留数据重置修复' })).toBeNull()
+  })
+
   it('does not reopen Harness when MainActivity regains focus', async () => {
     bridge.getState.mockResolvedValueOnce({ ...runningState })
     render(<App />)

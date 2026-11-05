@@ -38,6 +38,7 @@ const successNotices: Record<string, string> = {
   rollback: '已回滚到上一版本，下次启动生效',
   repair: '插件修复已执行，列表已刷新',
   prune: '已清理历史孤立副本，释放了存储空间',
+  disable: '已禁用全部第三方插件，下次启动生效',
 }
 
 /**
@@ -147,6 +148,7 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
   type FilterTab = 'all' | 'enabled' | 'relinkable' | 'thirdParty'
   const [filterTab, setFilterTab] = useState<FilterTab>('all')
   const [query, setQuery] = useState('')
+  const [disablePending, setDisablePending] = useState(false)
   const active = useRef(true)
   const pending = useRef(false)
   const run = useCallback(async (request: PluginRequest): Promise<void> => {
@@ -196,6 +198,11 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
   const repair = useCallback(() => { void run({ operation: 'repair' }) }, [run])
   /** 清理保留区中未被引用的历史孤立副本。 */
   const prune = useCallback(() => { void run({ operation: 'prune' }) }, [run])
+  /** 插件冲突时的安全启动兜底：只禁用第三方包，保留官方与安全组件。 */
+  const disableThirdParty = useCallback(() => {
+    setDisablePending(false)
+    void run({ operation: 'disable' })
+  }, [run])
   /** 已启用却在当前运行时里解析不到的插件包：升级抹掉链接后，列表就是这个样子。 */
   const unresolved = catalog?.plugins.filter(group => group.enabled && !group.installed && !group.official).length ?? 0
 
@@ -222,7 +229,15 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
       </div>
     </div>
     <p className="plugin-description">{t('无需启动 Harness 即可管理插件：每个条目是一个插件包，展开后可调整其中的子插件。')}</p>
-    <div className="plugin-stop"><span>{t('修改插件前请先停止 Harness 和 Ubuntu 终端；改动在下次启动时生效。')}</span><button className="button button-danger-quiet compact-button" type="button" disabled={busy} onClick={() => { void stop() }}>{t('停止运行环境')}</button></div>
+    <div className="plugin-stop"><span>{t('修改插件前请先停止 Harness 和 Ubuntu 终端；改动在下次启动时生效。')}</span><div className="plugin-stop-actions"><button className="button button-danger-quiet compact-button" type="button" disabled={busy} onClick={() => { void stop() }}>{t('停止运行环境')}</button><button className="button button-secondary compact-button" type="button" disabled={busy || locked} onClick={() => setDisablePending(true)}>{t('一键禁用第三方插件')}</button></div></div>
+    {disablePending && <section className="plugin-disable-confirm" aria-labelledby="plugin-disable-confirm-title">
+      <strong id="plugin-disable-confirm-title">{t('确认禁用全部第三方插件？')}</strong>
+      <p>{t('这会保留官方与安全组件，只关闭第三方插件；不会删除插件或插件数据，之后可在列表中逐个重新启用。')}</p>
+      <div className="plugin-disable-actions">
+        <button className="button button-secondary compact-button" type="button" disabled={busy} onClick={() => setDisablePending(false)}>{t('取消')}</button>
+        <button className="button button-danger-quiet compact-button" type="button" disabled={busy || locked} onClick={disableThirdParty}>{t('确认禁用')}</button>
+      </div>
+    </section>}
     {/* 受控导入：来源形态在原生与访客两侧各校验一次，这里只负责收集与提示，不做任何解析。 */}
     <section className="plugin-import" aria-labelledby="plugin-import-title">
       <h2 id="plugin-import-title">{t('通过 npm 包名或链接导入')}</h2>

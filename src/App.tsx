@@ -17,7 +17,7 @@ import { SessionManager } from './components/SessionManager'
 import { DiagnosticLogPanel, HarnessLogPanel } from './ui/logs'
 import { FilesScreen, type FilesRoot } from './screens/FilesScreen'
 import { RuntimeSelfCheckPanel } from './screens/RuntimeSelfCheckPanel'
-import { PermissionGuideDialog, ResetDialog, UpdateDialog } from './screens/Dialogs'
+import { PermissionGuideDialog, RepairDialog, ResetDialog, UpdateDialog } from './screens/Dialogs'
 import { keepAliveGuideResolved, overlayFailureGuide, overlayGuideResolved, type PermissionGuide } from './ui/permissionGuide'
 import { RuntimeVersionsScreen } from './screens/RuntimeVersionsScreen'
 import { lazy, Suspense, type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
@@ -76,6 +76,7 @@ import {
   SquareTerminal,
   Trash2,
   Wifi,
+  Wrench,
   X,
   Blocks,
   ListChecks,
@@ -274,8 +275,8 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'environment',
     group: 'runtime',
     title: 'Ubuntu 运行时',
-    hint: '安装进度、版本、来源与重置',
-    keywords: ['ubuntu', '运行时', '环境', '安装', '重置', '更新', '来源', 'proot', 'linux', 'runtime', 'reset', 'install'],
+    hint: '安装进度、版本、来源、保留数据修复与重置',
+    keywords: ['ubuntu', '运行时', '环境', '安装', '重置', '修复', '保留数据', '更新', '来源', 'proot', 'linux', 'runtime', 'reset', 'repair', 'install'],
     target: { kind: 'view', view: 'environment' },
     icon: <HardDrive size={20} />,
   },
@@ -1060,12 +1061,13 @@ interface EnvironmentScreenProps {
   onBack: () => void
   onInstall: () => void
   onReset: () => void
+  onRepair: () => void
   onStart: () => void
   onStop: () => void
   onUpdate: () => void
 }
 
-function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onStart, onStop, onUpdate }: EnvironmentScreenProps) {
+function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onRepair, onStart, onStop, onUpdate }: EnvironmentScreenProps) {
   const inProgress = ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
   const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running'
   const progress = runtime.totalBytes > 0
@@ -1177,6 +1179,11 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
             <button className="button button-secondary" type="button" onClick={onStop} disabled={busy !== null}>
               {busy === 'stop' ? <Loader2 className="spin" size={18} /> : <Power size={18} />}
               {t("停止")}</button>
+          )}
+          {installed && !inProgress && runtime.phase !== 'running' && runtime.phase !== 'stopping' && (
+            <button className="button button-secondary" type="button" onClick={onRepair} disabled={busy !== null || !runtime.runnerAvailable}>
+              <Wrench size={18} />
+              {t("保留数据重置修复")}</button>
           )}
           {(installed || runtime.phase === 'error') && (
             <button className="button button-danger-quiet" type="button" onClick={onReset} disabled={busy !== null}>
@@ -3809,6 +3816,7 @@ export function App() {
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [resetOpen, setResetOpen] = useState(false)
+  const [repairOpen, setRepairOpen] = useState(false)
   /**
    * 悬浮球 / 后台保持启动受阻时的权限指引弹窗。
    *
@@ -4112,7 +4120,7 @@ export function App() {
    * 且向右滑动超过 75px 且纵向偏差较小时，触发返回上一级并伴随轻微触感振动。
    */
   useEffect(() => {
-    if (activeView === ROOT_VIEW || resetOpen || pendingInstall !== null || onboardingOpen) return
+    if (activeView === ROOT_VIEW || resetOpen || repairOpen || pendingInstall !== null || onboardingOpen) return
 
     let startX = 0
     let startY = 0
@@ -4159,7 +4167,7 @@ export function App() {
       window.removeEventListener('touchend', handleTouchEnd)
       window.removeEventListener('touchcancel', handleTouchCancel)
     }
-  }, [activeView, backToView, resetOpen, pendingInstall, onboardingOpen])
+  }, [activeView, backToView, resetOpen, repairOpen, pendingInstall, onboardingOpen])
 
   /**
    * 「离开这一页就保存」。
@@ -4773,6 +4781,32 @@ export function App() {
   const requestRuntimeUpdate = useCallback(() => {
     requestRuntimeInstall({ manifestUrl: '', manifestSha256: '' }, null, true)
   }, [requestRuntimeInstall])
+
+  const repairRuntime = useCallback(() => {
+    void run('repair', async isCurrent => {
+      let result: RuntimeInstallResult
+      try {
+        result = await runtimeBridge.repairRuntime()
+      } catch (error) {
+        if (!isCurrent()) return
+        // 安装器在失败时会把运行时置为 error；刷新一次状态，避免设置页仍显示可启动的旧快照。
+        try {
+          const next = await runtimeBridge.getState()
+          if (isCurrent()) setRuntime(next)
+        } catch {
+          // 保留原始修复错误，状态刷新只是尽力而为。
+        }
+        throw error
+      }
+      if (!isCurrent()) return
+      const next = await runtimeBridge.getState()
+      if (!isCurrent()) return
+      setRuntime(next)
+      const outcome = result.autoSnapshot
+      if (outcome?.status === 'failed') notify(t("修复前会话备份失败：{0}", outcome.message ?? t("原因未提供")), 'error')
+      else if (outcome?.status === 'created') notify(t("修复前已自动备份会话"), 'success')
+    }, t("运行环境已修复"), undefined, INSTALL_WATCHDOG_MS)
+  }, [notify, run])
 
   const confirmPendingInstall = useCallback(() => {
     if (pendingInstall === null) return
@@ -5626,7 +5660,7 @@ export function App() {
       case 'plugins':
         return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
       case 'environment':
-        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onStart={() => launchHarness()} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} />
+        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onRepair={() => setRepairOpen(true)} onStart={() => launchHarness()} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} />
       case 'versions':
         return (
         <RuntimeVersionsScreen
@@ -5711,6 +5745,7 @@ export function App() {
       <BottomNavigation activeView={activeView} onNavigate={setActiveView} />
 
       {resetOpen && <ResetDialog busy={busy === 'reset'} onCancel={() => setResetOpen(false)} onConfirm={confirmReset} />}
+      {repairOpen && <RepairDialog busy={busy === 'repair'} onCancel={() => setRepairOpen(false)} onConfirm={() => { setRepairOpen(false); repairRuntime() }} />}
       {permissionGuide !== null && (
         <PermissionGuideDialog
           guide={permissionGuide}

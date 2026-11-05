@@ -1655,6 +1655,8 @@ export interface RuntimeBridge {
    * 快照本身的成败不影响安装结果，界面按 `phase`/`errorCode` 判断安装是否失败。
    */
   install: (source?: RuntimeSource) => Promise<RuntimeInstallResult>
+  /** 用当前已下载的运行时重铺系统目录，保留用户数据。 */
+  repairRuntime: () => Promise<RuntimeInstallResult>
   startHarness: () => Promise<RuntimeState>
   openHarness: (sessionId?: string) => Promise<void>
   /**
@@ -2278,9 +2280,10 @@ export interface PluginRequest {
    * `rollback`：回滚到该插件的上一版，需要 `id`；
    * `repair`：不带参数，由用户主动触发一次插件链接接回（绕过原生侧「同一代次只修一次」的自愈闸门），
    * 返回形状与 `list` 相同，并附带本次修复后的受控计数；
-   * `prune`：清理保留区中未被当前清单、回滚及锁文件引用的孤立 versions 历史副本。
+   * `prune`：清理保留区中未被当前清单、回滚及锁文件引用的孤立 versions 历史副本；
+   * `disable`：禁用全部第三方插件，保留官方与安全组件启用，用于插件冲突时安全启动 Harness。
    */
-  operation: 'list' | 'enable' | 'child' | 'update' | 'import' | 'rollback' | 'repair' | 'prune'
+  operation: 'list' | 'enable' | 'child' | 'update' | 'import' | 'rollback' | 'repair' | 'prune' | 'disable'
   id?: string
   enabled?: boolean
   childId?: string

@@ -65,6 +65,7 @@ export const bridge = {
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
   install: vi.fn(),
+  repairRuntime: vi.fn(),
   startHarness: vi.fn(),
   openHarness: vi.fn(),
   openHarnessExternal: vi.fn(),

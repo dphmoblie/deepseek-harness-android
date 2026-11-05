@@ -173,6 +173,28 @@ class MobileRuntimeController(
         autoSnapshot
     }
 
+    /** 重新铺设当前运行时的干净系统目录，同时沿用升级流程保留用户数据。 */
+    fun repairRuntime(): RuntimeAutoSnapshotOutcome = lifecycleLock.withLock {
+        ensureOpen()
+        if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
+            throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
+        }
+        val installed = store.installedManifest()
+            ?: throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "尚未安装运行环境")
+        supervisor.preparePluginManagement()
+        plugins.checkpointBeforeUpdate()
+        val autoSnapshot = snapshots.createBeforeUpdate()
+        installer.install(RuntimeSource(null, null, libraryId = installed.rootfs.sha256), forceReinstall = true)
+        try {
+            supervisor.preparePluginManagement()
+            plugins.recoverIfNeeded()
+            plugins.repairInstalledIfNeeded(explicit = true)
+        } catch (_: Exception) {
+            // 插件自愈失败由插件页展示，不回滚已经完成的运行时修复。
+        }
+        autoSnapshot
+    }
+
     /**
      * 运行时版本列表：当前版本、保留下来的上一版本、APK 内置版本。
      *

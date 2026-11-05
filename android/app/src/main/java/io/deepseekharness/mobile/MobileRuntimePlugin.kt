@@ -746,7 +746,7 @@ class MobileRuntimePlugin : Plugin() {
             val operation = call.getString("operation").orEmpty()
             val event = when (operation) {
                 "list" -> AuditEvent.PLUGIN_LIST
-                "enable", "child" -> AuditEvent.PLUGIN_ENABLE
+                "enable", "child", "disable" -> AuditEvent.PLUGIN_ENABLE
                 "update" -> AuditEvent.PLUGIN_UPDATE
                 "import" -> AuditEvent.PLUGIN_IMPORT
                 "rollback" -> AuditEvent.PLUGIN_ROLLBACK
@@ -1153,6 +1153,17 @@ class MobileRuntimePlugin : Plugin() {
                 // 安装前已自动拍下会话快照（controller.install 内，与手动快照同一套实现）。
                 // 快照结论单独记一条审计与诊断：安装本身照旧成功，但用户必须能看出这次有没有备份。
                 val autoSnapshot = controller.install(source)
+                recordAutoSnapshotAudit(autoSnapshot)
+                JSObject().put("autoSnapshot", autoSnapshot.toJs())
+            }
+        }
+    }
+
+    @PluginMethod
+    fun repairRuntime(call: PluginCall) {
+        execute(call) {
+            audited(AuditEvent.RUNTIME_INSTALL) {
+                val autoSnapshot = controller.repairRuntime()
                 recordAutoSnapshotAudit(autoSnapshot)
                 JSObject().put("autoSnapshot", autoSnapshot.toJs())
             }

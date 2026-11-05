@@ -55,7 +55,7 @@ class RuntimeInstaller(
      */
     private var currentStep: String = "start"
 
-    fun install(source: RuntimeSource) {
+    fun install(source: RuntimeSource, forceReinstall: Boolean = false) {
         if (!installLock.tryLock()) throw RuntimeFailure("INSTALL_IN_PROGRESS", "运行时安装正在进行")
         cancellationRequested.set(false)
         var workspace: Workspace? = null
@@ -74,7 +74,7 @@ class RuntimeInstaller(
             currentStep = "manifest"
             val manifest = loadManifest(source)
             checkCancellation()
-            if (isCurrent(manifest)) {
+            if (!forceReinstall && isCurrent(manifest)) {
                 status.update(
                     RuntimePhase.READY,
                     downloaded = manifest.rootfs.compressedBytes,

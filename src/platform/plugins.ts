@@ -77,12 +77,14 @@ function importSource(value: unknown): string {
 
 /** 原生接口和浏览器预览共用输入校验，防止任意路径或命令进入设备。 */
 export function validatePluginRequest(request: PluginRequest): PluginRequest {
-  if (!['list', 'enable', 'child', 'update', 'import', 'rollback', 'repair', 'prune'].includes(request.operation)) invalid()
+  if (!['list', 'enable', 'child', 'update', 'import', 'rollback', 'repair', 'prune', 'disable'].includes(request.operation)) invalid()
   if (request.operation === 'list') return { operation: 'list' }
   // 修复不带任何参数：原生侧只认操作名，插件目录、包名与事务都由它自己按运行时状态决定。
   if (request.operation === 'repair') return { operation: 'repair' }
   // 清理孤立版本副本同样不带参数：由访客按已登记事实、回滚与锁文件安全修剪。
   if (request.operation === 'prune') return { operation: 'prune' }
+  // 安全启动兜底：不带插件名，原生侧只禁用第三方包，官方与安全组件保持启用。
+  if (request.operation === 'disable') return { operation: 'disable' }
   if (request.operation === 'import') {
     const source = importSource(request.source)
     // `id` 只是「期望的包名」，用于地址形态装完后消歧；不填则由访客脚本按补丁声明推导。

@@ -430,7 +430,7 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
     }
 
     fun run(operation: String, id: String?, enabled: Boolean?, childId: String?, source: String? = null): JSObject {
-        if (operation !in setOf("list", "enable", "child", "update", "import", "rollback", "recover", "repair", "graph", "prune", "verify", "checkpoint")) invalid()
+        if (operation !in setOf("list", "enable", "child", "update", "import", "rollback", "recover", "repair", "graph", "prune", "verify", "checkpoint", "disable")) invalid()
         if (operation == "import") {
             // 来源必填，且与访客脚本 `validateImportSource`、前端 `src/platform/plugins.ts` 是
             // **同一套规则**（逐条对应见 `PluginSourcePolicy`）：三处任意一处放松，
@@ -438,7 +438,7 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             if (PluginSourcePolicy.classify(source) == null) invalid()
             // 包名只是"期望的名字"，用于装完后消歧；给了就必须合法。
             if (id != null && (id.length !in 1..214 || !PACKAGE.matches(id) || ".." in id)) invalid()
-        } else if (operation !in setOf("list", "recover", "repair", "graph", "prune", "verify", "checkpoint")) {
+        } else if (operation !in setOf("list", "recover", "repair", "graph", "prune", "verify", "checkpoint", "disable")) {
             if (id == null || id.length !in 1..214 || !PACKAGE.matches(id) || ".." in id) invalid()
             if (operation in setOf("enable", "child") && enabled == null) invalid()
             if (operation == "child" && (childId == null || !ENTRY.matches(childId))) invalid()
@@ -495,7 +495,7 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             } ?: detail ?: "插件操作失败，请检查运行时状态后重试"
             throw RuntimeFailure(code, message)
         }
-        if (operation in setOf("list", "enable", "child", "update", "import", "rollback") && payload.optJSONArray("plugins") == null) {
+        if (operation in setOf("list", "enable", "child", "update", "import", "rollback", "disable") && payload.optJSONArray("plugins") == null) {
             throw RuntimeFailure("PLUGIN_OPERATION_FAILED", "插件返回数据无效")
         }
         // 修复与孤立版本清理只回传计数，没有插件清单。
