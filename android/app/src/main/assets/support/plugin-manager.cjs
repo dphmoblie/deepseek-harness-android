@@ -1667,7 +1667,9 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     order.forEach(validName)
     // 只移除第三方包，官方包当前的启停选择保持不变（官方可选包也不应被强行打开）。
     // protectedPackage 还覆盖运行时安全/核心依赖，不能被安全启动兜底关掉。
-    const bundles = config.enabled.filter(id => protectedPackage(id))
+    // 配置文件损坏时可能出现重复 bundle；安全启动必须先去重，否则仍可能让 Harness
+    // 重复加载同一个核心包而继续失败。Set 保持首次出现顺序，随后再按 bundleOrder 排序。
+    const bundles = [...new Set(config.enabled.filter(id => protectedPackage(id)))]
     bundles.sort((left, right) => order.indexOf(left) - order.indexOf(right))
     config.value.dsh.profile.bundles = bundles
     config.value.dshMobile = { ...config.value.dshMobile, bundleOrder: order, disabledBundles: config.names.filter(name => !bundles.includes(name)) }

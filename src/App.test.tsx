@@ -449,6 +449,15 @@ describe('App conversation gate', () => {
     expect(screen.queryByRole('dialog', { name: '保留数据重置修复' })).toBeNull()
   })
 
+  it('本地运行时归档缺失时禁用保留数据修复入口', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState, phase: 'error', errorCode: 'RUNTIME_VERSION_MISSING' })
+    render(<App />)
+    await arriveAtSettingsHome()
+
+    fireEvent.click(screen.getByRole('button', { name: /Ubuntu 运行时/ }))
+    expect(await screen.findByRole('button', { name: '保留数据重置修复' })).toBeDisabled()
+  })
+
   it('does not reopen Harness when MainActivity regains focus', async () => {
     bridge.getState.mockResolvedValueOnce({ ...runningState })
     render(<App />)

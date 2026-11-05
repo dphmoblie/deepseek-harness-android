@@ -7,6 +7,8 @@ export const english: Readonly<Record<string, string>> = {
   "正在修复": "Repairing",
   "确认修复": "Confirm repair",
   "运行环境已修复": "Runtime repaired",
+  "当前运行时的本地归档已不存在，无法保留数据修复；请先下载或更新一份运行环境。": "The local archive for this runtime is missing, so data-preserving repair cannot run. Download or update a runtime first.",
+  "当前应用没有可用的本地运行时归档，请在设置中配置运行时来源后重新安装。": "This app has no usable local runtime archive. Configure a runtime source in Settings and install it again.",
   "修复前已自动备份会话": "Sessions were backed up before repair",
   "修复前会话备份失败：{0}": "Session backup before repair failed: {0}",
   "常用设置": "Common settings",

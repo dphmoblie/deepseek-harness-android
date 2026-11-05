@@ -1070,6 +1070,7 @@ interface EnvironmentScreenProps {
 function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onRepair, onStart, onStop, onUpdate }: EnvironmentScreenProps) {
   const inProgress = ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
   const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running'
+  const repairUnavailable = runtime.errorCode === 'RUNTIME_VERSION_MISSING' || runtime.errorCode === 'RUNTIME_SOURCE_NEEDED' || runtime.errorCode === 'RUNTIME_REPAIR_UNAVAILABLE'
   const progress = runtime.totalBytes > 0
     ? Math.min(100, Math.round((runtime.downloadedBytes / runtime.totalBytes) * 100))
     : 0
@@ -1181,7 +1182,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
               {t("停止")}</button>
           )}
           {installed && !inProgress && runtime.phase !== 'running' && runtime.phase !== 'stopping' && (
-            <button className="button button-secondary" type="button" onClick={onRepair} disabled={busy !== null || !runtime.runnerAvailable}>
+            <button className="button button-secondary" type="button" onClick={onRepair} disabled={busy !== null || !runtime.runnerAvailable || repairUnavailable}>
               <Wrench size={18} />
               {t("保留数据重置修复")}</button>
           )}

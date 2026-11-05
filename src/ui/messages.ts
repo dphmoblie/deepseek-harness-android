@@ -67,6 +67,9 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   INSTALL_CANCELLED: '运行时安装已取消，再次安装时可继续下载。',
   INSTALL_FAILED: '运行时安装失败，请稍后重试。',
   RUNTIME_BUSY: '请先停止 Harness 和 Ubuntu 终端。',
+  RUNTIME_VERSION_MISSING: '当前运行时的本地归档已不存在，无法保留数据修复；请先下载或更新一份运行环境。',
+  RUNTIME_REPAIR_UNAVAILABLE: '当前运行时的本地归档已不存在，无法保留数据修复；请先下载或更新一份运行环境。',
+  RUNTIME_SOURCE_NEEDED: '当前应用没有可用的本地运行时归档，请在设置中配置运行时来源后重新安装。',
   /*
    * 桥接实例（WebView 插件实例）被销毁、进程级运行时控制器已释放后仍来启动的失败。
    *

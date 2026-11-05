@@ -314,6 +314,16 @@ test('一键禁用时保留受保护的运行时依赖', t => {
   assert.equal(result.plugins.find(row => row.id === 'test-plugin').enabled, false)
 })
 
+test('一键禁用会去重损坏配置中的受保护包', t => {
+  const { manager, profile } = fixture(t)
+  const manifest = JSON.parse(fs.readFileSync(profile, 'utf8'))
+  manifest.dsh.profile.bundles.push('@deepseek-ai/dsh-base', '@deepseek-ai/dsh-base')
+  fs.writeFileSync(profile, JSON.stringify(manifest))
+  manager.disableThirdParty()
+  const next = JSON.parse(fs.readFileSync(profile, 'utf8'))
+  assert.deepEqual(next.dsh.profile.bundles, ['@deepseek-ai/dsh-base'])
+})
+
 test('配置损坏时仍能禁用问题第三方文件', t => {
   const { manager, pluginFile } = fixture(t)
   fs.writeFileSync(pluginFile, 'not valid config')

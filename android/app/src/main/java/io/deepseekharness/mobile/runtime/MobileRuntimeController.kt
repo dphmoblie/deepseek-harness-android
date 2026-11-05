@@ -182,9 +182,33 @@ class MobileRuntimeController(
         val installed = store.installedManifest()
             ?: throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "尚未安装运行环境")
         supervisor.preparePluginManagement()
-        plugins.checkpointBeforeUpdate()
+        // 尽力收拢终端安装的插件，但不能让它阻断修复：清单损坏或插件链接丢失
+        // 正是本入口要处理的故障。已成功收拢的插件仍按既有保留策略迁移，失败项留在旧根目录备份中。
+        try {
+            plugins.checkpointBeforeUpdate()
+        } catch (failure: Exception) {
+            store.diagnostics.record(
+                io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel.WARN,
+                io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent.REPAIR,
+                mapOf(
+                    "result" to "denied",
+                    "code" to ((failure as? RuntimeFailure)?.code ?: "PLUGIN_CHECKPOINT_FAILED"),
+                ),
+            )
+        }
         val autoSnapshot = snapshots.createBeforeUpdate()
-        installer.install(RuntimeSource(null, null, libraryId = installed.rootfs.sha256), forceReinstall = true)
+        try {
+            installer.install(RuntimeSource(null, null, libraryId = installed.rootfs.sha256), forceReinstall = true)
+        } catch (failure: RuntimeFailure) {
+            if (failure.code == "RUNTIME_VERSION_MISSING") {
+                throw RuntimeFailure(
+                    "RUNTIME_REPAIR_UNAVAILABLE",
+                    "当前运行时的本地归档已不存在，无法保留数据修复；请先下载或更新一份运行环境",
+                    failure,
+                )
+            }
+            throw failure
+        }
         try {
             supervisor.preparePluginManagement()
             plugins.recoverIfNeeded()
@@ -192,6 +216,8 @@ class MobileRuntimeController(
         } catch (_: Exception) {
             // 插件自愈失败由插件页展示，不回滚已经完成的运行时修复。
         }
+        // 修复可能持续数分钟；应用切到后台时用独立的完成通知告知用户，不把它误报成普通更新。
+        TaskNotification.postInstallCompleted(appContext, TaskNotificationKind.RUNTIME_REPAIRED)
         autoSnapshot
     }
 

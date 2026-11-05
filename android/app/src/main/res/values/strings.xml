@@ -138,6 +138,8 @@
     <string name="task_notification_installed_text">点按回到应用并打开 Harness</string>
     <string name="task_notification_updated_title">运行环境已更新</string>
     <string name="task_notification_updated_text">原有数据已保留，点按回到应用继续使用</string>
+    <string name="task_notification_repaired_title">运行环境已修复</string>
+    <string name="task_notification_repaired_text">会话与用户数据已保留，点按回到应用继续使用</string>
     <string name="shizuku_reconnect_failed_title">Shizuku 未连接</string>
     <string name="shizuku_reconnect_failed_text">设备已授权但自动连接失败，点按回到应用重试</string>
     <!-- 带条目数的两条：条目数是操作返回的确定值，不是进度百分比。 -->
