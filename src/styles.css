@@ -278,6 +278,7 @@ body {
   place-content: center;
   gap: 12px;
   width: 100%;
+  height: 100vh;
   height: 100dvh;
   padding: 24px;
   color: var(--ink);
@@ -354,6 +355,7 @@ button:disabled {
   grid-template-columns: 68px minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   width: 100%;
+  height: 100vh;
   height: 100dvh;
   /* 输入法弹起时由 src/keyboardInset.ts 写入真实高度；没有读到就当作 0，界面不动。
      让位写在壳子上而不是某个输入框：终端、设置页、对话框都一起抬起来。 */
@@ -1185,7 +1187,7 @@ button:disabled {
 }
 .workspace-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 
-.workspace-dialog { display: flex; flex-direction: column; width: min(100%, 680px); min-height: min(420px, calc(100dvh - 32px)); padding: 0; overflow: hidden; }
+.workspace-dialog { display: flex; flex-direction: column; width: min(100%, 680px); min-height: min(420px, calc(100vh - 32px)); min-height: min(420px, calc(100dvh - 32px)); padding: 0; overflow: hidden; }
 .workspace-dialog-header { display: grid; grid-template-columns: 42px minmax(0, 1fr) 44px 44px; align-items: center; gap: 8px; min-height: 70px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .workspace-dialog-header h2 { margin: 0; font-size: 1.0625rem; }
 .workspace-dialog-header p { margin: 3px 0 0; color: var(--muted); font-size: 0.75rem; }
@@ -2246,6 +2248,7 @@ button:disabled {
 
 .boot-screen {
   width: 100%;
+  height: 100vh;
   height: 100dvh;
   flex-direction: column;
   background: var(--bg);
@@ -2289,6 +2292,7 @@ button:disabled {
 .dialog {
   position: relative;
   width: min(100%, 450px);
+  max-height: calc(100vh - 32px - env(safe-area-inset-bottom));
   max-height: calc(100dvh - 32px - env(safe-area-inset-bottom));
   overflow-y: auto;
   padding: 23px;
@@ -2759,7 +2763,7 @@ button:disabled {
   }
 
   .workspace-dialog-backdrop { padding-right: 0; padding-left: 0; padding-bottom: env(safe-area-inset-bottom); }
-  .workspace-dialog { width: 100%; max-height: calc(100dvh - 16px - env(safe-area-inset-bottom)); min-height: min(52dvh, 440px); border-right: 0; border-bottom: 0; border-left: 0; border-radius: var(--radius-card) var(--radius-card) 0 0; }
+  .workspace-dialog { width: 100%; max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px - env(safe-area-inset-bottom)); min-height: min(52vh, 440px); min-height: min(52dvh, 440px); border-right: 0; border-bottom: 0; border-left: 0; border-radius: var(--radius-card) var(--radius-card) 0 0; }
   .workspace-dialog-header { grid-template-columns: 38px minmax(0, 1fr) 44px 44px; gap: 5px; padding-right: 8px; padding-left: 10px; }
   .workspace-file-row { grid-template-columns: 30px minmax(0, 1fr) auto; gap: 7px; padding-right: 7px; padding-left: 9px; }
   .workspace-file-icon { width: 30px; height: 30px; }
@@ -2885,6 +2889,7 @@ button:disabled {
 
 /* 语言页适配窄屏及英文长文案，沿用管理界面的配色与控件风格。 */
 .language-screen {
+  min-height: 100vh;
   min-height: 100dvh;
   display: grid;
   place-items: center;

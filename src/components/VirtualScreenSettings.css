@@ -112,7 +112,7 @@
   cursor: pointer;
 }
 
-.virtual-screen-choice:has(input:checked) {
+.virtual-screen-choice.is-selected {
   border-color: var(--blue);
   background: var(--blue-soft);
 }

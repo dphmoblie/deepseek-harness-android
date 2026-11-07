@@ -875,7 +875,10 @@ export function VirtualScreenSettings({
               <legend className="virtual-screen-legend">{t('屏幕方向')}</legend>
               <div className="virtual-screen-choices">
                 {VIRTUAL_SCREEN_ORIENTATION_VALUES.map(value => (
-                  <label key={value} className="virtual-screen-choice">
+                  <label
+                    key={value}
+                    className={`virtual-screen-choice${draft.orientation === value ? ' is-selected' : ''}`}
+                  >
                     <input
                       type="radio"
                       name="virtual-screen-orientation"
@@ -1037,7 +1040,10 @@ export function VirtualScreenSettings({
               <legend className="virtual-screen-legend">{t('自动跟随')}</legend>
               <div className="virtual-screen-choices">
                 {VIRTUAL_SCREEN_AUTO_FOLLOW_VALUES.map(value => (
-                  <label key={value} className="virtual-screen-choice">
+                  <label
+                    key={value}
+                    className={`virtual-screen-choice${draft.autoFollow === value ? ' is-selected' : ''}`}
+                  >
                     <input
                       type="radio"
                       name="virtual-screen-auto-follow"
