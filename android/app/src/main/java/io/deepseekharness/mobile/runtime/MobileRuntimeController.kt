@@ -200,7 +200,16 @@ class MobileRuntimeController(
         try {
             installer.install(RuntimeSource(null, null, libraryId = installed.rootfs.sha256), forceReinstall = true)
         } catch (failure: RuntimeFailure) {
-            if (failure.code == "RUNTIME_VERSION_MISSING") {
+            if (failure.code in setOf(
+                    "RUNTIME_VERSION_MISSING",
+                    "RUNTIME_LIBRARY_VERSION_MISSING",
+                    "ARCHIVE_DIGEST_MISMATCH",
+                    "MANIFEST_INVALID",
+                    "MANIFEST_DIGEST_MISMATCH",
+                )) {
+                // 安装器已经把原始码写进了状态；这里同步改成修复入口可识别的受控码，
+                // 否则界面会继续显示可点击的修复按钮，用户只能反复触发同一失败。
+                status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = "RUNTIME_REPAIR_UNAVAILABLE")
                 throw RuntimeFailure(
                     "RUNTIME_REPAIR_UNAVAILABLE",
                     "当前运行时的本地归档已不存在，无法保留数据修复；请先下载或更新一份运行环境",

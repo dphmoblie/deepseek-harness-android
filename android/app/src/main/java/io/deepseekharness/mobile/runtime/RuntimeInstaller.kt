@@ -247,11 +247,11 @@ class RuntimeInstaller(
             prepareRuntimeParent()
             // 先读清单：既能拿到切换后的版本信息，也能在缺清单时提前失败（此时还没动过任何文件）。
             val retainedManifest = store.retainedManifest()
-                ?: throw RuntimeFailure("RUNTIME_VERSION_MISSING", "没有可切换的上一版本")
+                ?: throw RuntimeFailure("RUNTIME_PREVIOUS_MISSING", "没有可切换的上一版本")
             if (!RuntimeFiles.isDirectoryNoFollow(store.currentRoot) ||
                 !RuntimeFiles.existsNoFollow(store.currentManifest)
             ) {
-                throw RuntimeFailure("RUNTIME_VERSION_MISSING", "当前运行时不可用，无法切换版本")
+                throw RuntimeFailure("RUNTIME_VERSION_SWITCH_UNAVAILABLE", "当前运行时不可用，无法切换版本")
             }
             status.update(RuntimePhase.PREPARING)
             promoteRuntime(store.retainedRoot, store.retainedManifest)
@@ -277,7 +277,7 @@ class RuntimeInstaller(
             val hasRoot = RuntimeFiles.existsNoFollow(store.retainedRoot)
             val hasManifest = RuntimeFiles.existsNoFollow(store.retainedManifest)
             if (!hasRoot && !hasManifest) {
-                throw RuntimeFailure("RUNTIME_VERSION_MISSING", "没有可删除的上一版本")
+                throw RuntimeFailure("RUNTIME_PREVIOUS_MISSING", "没有可删除的上一版本")
             }
             cleanupIfPresent(store.retainedManifest)
             cleanupIfPresent(store.retainedRoot)

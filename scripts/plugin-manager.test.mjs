@@ -292,7 +292,7 @@ test('禁止禁用安全组件及核心文件，允许管理官方可选插件',
   assert.equal(manager.setChildEnabled('@deepseek-ai/dsh-base', 'optional', false).plugins[0].children[1].enabled, false)
 })
 
-test('一键禁用第三方插件但恢复官方包，不删除插件目录与数据', t => {
+test('禁用第三方插件但保留官方包，不删除插件目录与数据', t => {
   const { manager, root, pluginFile, write } = fixture(t)
   write('root/.dsh-mobile/plugin-manager/user-data.json', '保留的插件数据')
   const result = manager.disableThirdParty()

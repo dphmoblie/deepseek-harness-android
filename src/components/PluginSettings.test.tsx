@@ -25,7 +25,7 @@ describe('应用外层插件管理', () => {
     expect(screen.getByRole('region', { name: '第三方插件' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('checkbox', { name: '启用子插件 optional' }))
     await waitFor(() => expect(bridge.managePlugins).toHaveBeenCalledWith({ operation: 'child', id: 'example-plugin', childId: 'optional', enabled: false }))
-    expect(await screen.findByText('插件设置已保存，下次启动生效')).toBeInTheDocument()
+    expect(await screen.findByText('插件设置已保存，下次启动时生效')).toBeInTheDocument()
   })
   it('运行中拒绝修改，显式停止后允许管理', async () => {
     const bridge = setup({ ...runtime, phase: 'running' })
@@ -35,14 +35,14 @@ describe('应用外层插件管理', () => {
     await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledOnce())
     await waitFor(() => expect(screen.getByRole('checkbox', { name: '启用文件 example-plugin' })).toBeEnabled())
   })
-  it('提供安全启动入口，一键禁用第三方插件且保留官方包', async () => {
+  it('提供应急入口，禁用第三方插件并保留官方包', async () => {
     const bridge = setup()
-    const button = await screen.findByRole('button', { name: '一键禁用第三方插件' })
+    const button = await screen.findByRole('button', { name: '禁用全部第三方插件' })
     fireEvent.click(button)
-    expect(screen.getByText('确认禁用全部第三方插件？')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '确认禁用' }))
+    expect(screen.getByText('要禁用全部第三方插件吗？')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '禁用' }))
     await waitFor(() => expect(bridge.managePlugins).toHaveBeenCalledWith({ operation: 'disable' }))
-    expect(await screen.findByText('已禁用全部第三方插件，下次启动生效')).toBeInTheDocument()
+    expect(await screen.findByText('第三方插件已全部禁用，下次启动时生效')).toBeInTheDocument()
   })
   it('更新失败后显示受控错误，保留列表并允许重试', async () => {
     const bridge = setup()
@@ -53,7 +53,7 @@ describe('应用外层插件管理', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('已保留原版本')
     expect(screen.queryByText('private debug details')).not.toBeInTheDocument()
     fireEvent.click(update)
-    expect(await screen.findByText('插件包已更新，下次启动生效')).toBeInTheDocument()
+    expect(await screen.findByText('插件包已更新，下次启动时生效')).toBeInTheDocument()
   })
   it('英文界面翻译管理操作', async () => {
     saveLanguage('en')
@@ -80,7 +80,7 @@ describe('插件导入与回滚', () => {
     expect(button).toBeEnabled()
     fireEvent.click(button)
     await waitFor(() => expect(bridge.managePlugins).toHaveBeenCalledWith({ operation: 'import', source: 'dsh-plugin-example' }))
-    expect(await screen.findByText('插件已导入，下次启动生效')).toBeInTheDocument()
+    expect(await screen.findByText('插件已导入，下次启动时生效')).toBeInTheDocument()
     // 成功后清空：同一条来源再点一次会命中既有安装，留着输入更容易被误解成"装了两遍"。
     expect(screen.getByRole('textbox', { name: '插件来源' })).toHaveValue('')
   })
@@ -119,7 +119,7 @@ describe('插件导入与回滚', () => {
     expect(thirdParty.getByText('可回滚到上一版本 0.9.0。')).toBeInTheDocument()
     fireEvent.click(thirdParty.getByRole('button', { name: '回滚到上一版本' }))
     await waitFor(() => expect(bridge.managePlugins).toHaveBeenCalledWith({ operation: 'rollback', id: 'example-plugin' }))
-    expect(await screen.findByText('已回滚到上一版本，下次启动生效')).toBeInTheDocument()
+    expect(await screen.findByText('已回滚到上一版本，下次启动时生效')).toBeInTheDocument()
   })
   it('没有上一版时按钮禁用并说明原因；受保护包不出现回滚按钮', async () => {
     const bridge = setup(runtime, { plugins: [

@@ -31,14 +31,14 @@ const errorMessages: Record<string, string> = {
 
 /** 各操作成功后的一句话；`list` 不提示（只是刷新）。 */
 const successNotices: Record<string, string> = {
-  enable: '插件设置已保存，下次启动生效',
-  child: '插件设置已保存，下次启动生效',
-  update: '插件包已更新，下次启动生效',
-  import: '插件已导入，下次启动生效',
-  rollback: '已回滚到上一版本，下次启动生效',
+  enable: '插件设置已保存，下次启动时生效',
+  child: '插件设置已保存，下次启动时生效',
+  update: '插件包已更新，下次启动时生效',
+  import: '插件已导入，下次启动时生效',
+  rollback: '已回滚到上一版本，下次启动时生效',
   repair: '插件修复已执行，列表已刷新',
   prune: '已清理历史孤立副本，释放了存储空间',
-  disable: '已禁用全部第三方插件，下次启动生效',
+  disable: '第三方插件已全部禁用，下次启动时生效',
 }
 
 /**
@@ -159,7 +159,7 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
       const result = await bridge.managePlugins(request)
       if (active.current) {
         setCatalog(result)
-        if (request.operation !== 'list') setNotice(successNotices[request.operation] ?? '插件设置已保存，下次启动生效')
+        if (request.operation !== 'list') setNotice(successNotices[request.operation] ?? '插件设置已保存，下次启动时生效')
         // 导入成功后清空输入：同一条来源再点一次只会命中既有安装，清空更不容易误解成"导入两次"。
         if (request.operation === 'import') { setSource(''); setExpected('') }
       }
@@ -198,7 +198,7 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
   const repair = useCallback(() => { void run({ operation: 'repair' }) }, [run])
   /** 清理保留区中未被引用的历史孤立副本。 */
   const prune = useCallback(() => { void run({ operation: 'prune' }) }, [run])
-  /** 插件冲突时的安全启动兜底：只禁用第三方包，保留官方与安全组件。 */
+  /** 插件冲突时的应急处理：只禁用第三方包，保留官方与安全组件。 */
   const disableThirdParty = useCallback(() => {
     setDisablePending(false)
     void run({ operation: 'disable' })
@@ -228,14 +228,14 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
         <button className="icon-button" type="button" title={t('返回设置')} aria-label={t('返回设置')} onClick={onBack} disabled={busy}><ArrowLeft size={19} /></button>
       </div>
     </div>
-    <p className="plugin-description">{t('无需启动 Harness 即可管理插件：每个条目是一个插件包，展开后可调整其中的子插件。')}</p>
-    <div className="plugin-stop"><span>{t('修改插件前请先停止 Harness 和 Ubuntu 终端；改动在下次启动时生效。')}</span><div className="plugin-stop-actions"><button className="button button-danger-quiet compact-button" type="button" disabled={busy} onClick={() => { void stop() }}>{t('停止运行环境')}</button><button className="button button-secondary compact-button" type="button" disabled={busy || locked} onClick={() => setDisablePending(true)}>{t('一键禁用第三方插件')}</button></div></div>
+    <p className="plugin-description">{t('无需启动 Harness 也能管理插件。每个条目对应一个插件包，展开后可以调整其中的子插件。')}</p>
+    <div className="plugin-stop"><span>{t('请先停止 Harness 和 Ubuntu 终端，再修改插件。修改会在下次启动时生效。')}</span><div className="plugin-stop-actions"><button className="button button-danger-quiet compact-button" type="button" disabled={busy} onClick={() => { void stop() }}>{t('停止运行环境')}</button><button className="button button-secondary compact-button" type="button" disabled={busy || locked} onClick={() => setDisablePending(true)}>{t('禁用全部第三方插件')}</button></div></div>
     {disablePending && <section className="plugin-disable-confirm" aria-labelledby="plugin-disable-confirm-title">
-      <strong id="plugin-disable-confirm-title">{t('确认禁用全部第三方插件？')}</strong>
-      <p>{t('这会保留官方与安全组件，只关闭第三方插件；不会删除插件或插件数据，之后可在列表中逐个重新启用。')}</p>
+      <strong id="plugin-disable-confirm-title">{t('要禁用全部第三方插件吗？')}</strong>
+      <p>{t('官方组件和安全组件会保留，第三方插件只会被停用，不会删除插件或数据。之后可以在列表中逐个重新启用。')}</p>
       <div className="plugin-disable-actions">
         <button className="button button-secondary compact-button" type="button" disabled={busy} onClick={() => setDisablePending(false)}>{t('取消')}</button>
-        <button className="button button-danger-quiet compact-button" type="button" disabled={busy || locked} onClick={disableThirdParty}>{t('确认禁用')}</button>
+        <button className="button button-danger-quiet compact-button" type="button" disabled={busy || locked} onClick={disableThirdParty}>{t('禁用')}</button>
       </div>
     </section>}
     {/* 受控导入：来源形态在原生与访客两侧各校验一次，这里只负责收集与提示，不做任何解析。 */}
@@ -254,7 +254,7 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
     </section>
     {notice && <p className="plugin-notice" role={failed ? 'alert' : 'status'}>{t(notice)}{noticeDetail !== '' && `（${noticeDetail}）`}</p>}
     {catalog && <RecoveryNotice recovery={catalog.recovery} unresolved={unresolved} locked={locked} onRepair={repair} onPrune={prune} />}
-    {busy && <p role="status">{t('正在处理插件，请稍候')}</p>}
+    {busy && <p role="status">{t('正在处理插件，请稍候。')}</p>}
 
     {/* 搜索与分类过滤 */}
     <div className="plugin-filter-bar">

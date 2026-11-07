@@ -440,22 +440,30 @@ describe('App conversation gate', () => {
     await arriveAtSettingsHome()
 
     fireEvent.click(screen.getByRole('button', { name: /Ubuntu 运行时/ }))
-    fireEvent.click(await screen.findByRole('button', { name: '保留数据重置修复' }))
-    expect(await screen.findByRole('dialog', { name: '保留数据重置修复' })).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: '保留数据修复' }))
+    expect(await screen.findByRole('dialog', { name: '修复运行环境（保留数据）' })).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: '确认修复' }))
+    fireEvent.click(screen.getByRole('button', { name: '开始修复' }))
     await waitFor(() => expect(bridge.repairRuntime).toHaveBeenCalledTimes(1))
     expect(bridge.reset).not.toHaveBeenCalled()
-    expect(screen.queryByRole('dialog', { name: '保留数据重置修复' })).toBeNull()
+    expect(screen.queryByRole('dialog', { name: '修复运行环境（保留数据）' })).toBeNull()
   })
 
-  it('本地运行时归档缺失时禁用保留数据修复入口', async () => {
-    bridge.getState.mockResolvedValue({ ...readyState, phase: 'error', errorCode: 'RUNTIME_VERSION_MISSING' })
+  it.each([
+    'RUNTIME_VERSION_MISSING',
+    'RUNTIME_REPAIR_UNAVAILABLE',
+    'RUNTIME_SOURCE_NEEDED',
+    'RUNTIME_LIBRARY_VERSION_MISSING',
+    'ARCHIVE_DIGEST_MISMATCH',
+    'MANIFEST_INVALID',
+    'MANIFEST_DIGEST_MISMATCH',
+  ])('修复源不可用（%s）时禁用保留数据修复入口', async errorCode => {
+    bridge.getState.mockResolvedValue({ ...readyState, phase: 'error', errorCode })
     render(<App />)
     await arriveAtSettingsHome()
 
     fireEvent.click(screen.getByRole('button', { name: /Ubuntu 运行时/ }))
-    expect(await screen.findByRole('button', { name: '保留数据重置修复' })).toBeDisabled()
+    expect(await screen.findByRole('button', { name: '保留数据修复' })).toBeDisabled()
   })
 
   it('does not reopen Harness when MainActivity regains focus', async () => {

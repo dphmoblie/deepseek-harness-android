@@ -1070,7 +1070,7 @@ interface EnvironmentScreenProps {
 function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onRepair, onStart, onStop, onUpdate }: EnvironmentScreenProps) {
   const inProgress = ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
   const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running'
-  const repairUnavailable = runtime.errorCode === 'RUNTIME_VERSION_MISSING' || runtime.errorCode === 'RUNTIME_SOURCE_NEEDED' || runtime.errorCode === 'RUNTIME_REPAIR_UNAVAILABLE'
+  const repairUnavailable = ['RUNTIME_VERSION_MISSING', 'RUNTIME_SOURCE_NEEDED', 'RUNTIME_REPAIR_UNAVAILABLE', 'RUNTIME_LIBRARY_VERSION_MISSING', 'ARCHIVE_DIGEST_MISMATCH', 'MANIFEST_INVALID', 'MANIFEST_DIGEST_MISMATCH'].includes(runtime.errorCode ?? '')
   const progress = runtime.totalBytes > 0
     ? Math.min(100, Math.round((runtime.downloadedBytes / runtime.totalBytes) * 100))
     : 0
@@ -1184,7 +1184,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
           {installed && !inProgress && runtime.phase !== 'running' && runtime.phase !== 'stopping' && (
             <button className="button button-secondary" type="button" onClick={onRepair} disabled={busy !== null || !runtime.runnerAvailable || repairUnavailable}>
               <Wrench size={18} />
-              {t("保留数据重置修复")}</button>
+              {t("保留数据修复")}</button>
           )}
           {(installed || runtime.phase === 'error') && (
             <button className="button button-danger-quiet" type="button" onClick={onReset} disabled={busy !== null}>
@@ -4806,7 +4806,7 @@ export function App() {
       const outcome = result.autoSnapshot
       if (outcome?.status === 'failed') notify(t("修复前会话备份失败：{0}", outcome.message ?? t("原因未提供")), 'error')
       else if (outcome?.status === 'created') notify(t("修复前已自动备份会话"), 'success')
-    }, t("运行环境已修复"), undefined, INSTALL_WATCHDOG_MS)
+    }, t("运行环境修复完成"), undefined, INSTALL_WATCHDOG_MS)
   }, [notify, run])
 
   const confirmPendingInstall = useCallback(() => {

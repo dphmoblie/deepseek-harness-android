@@ -144,11 +144,11 @@ class RuntimeLibrary(private val store: RuntimeStore) {
         } catch (_: Throwable) { fallback }
     }
 
-    /** 元数据读取入口：条目不存在或只剩一半时以 `RUNTIME_VERSION_MISSING` 明确失败。 */
+    /** 元数据读取入口：条目不存在或只剩一半时以受控错误明确失败。 */
     fun meta(id: String): LibraryMeta {
         val validId = requireId(id)
         prepare()
-        if (!present(validId)) throw RuntimeFailure("RUNTIME_VERSION_MISSING", "本地版本不存在")
+        if (!present(validId)) throw RuntimeFailure("RUNTIME_LIBRARY_VERSION_MISSING", "本地版本不存在")
         return readMeta(validId)
     }
 
@@ -161,7 +161,7 @@ class RuntimeLibrary(private val store: RuntimeStore) {
     fun setPinned(id: String, pinned: Boolean): LibraryMeta {
         val validId = requireId(id)
         prepare()
-        if (!present(validId)) throw RuntimeFailure("RUNTIME_VERSION_MISSING", "本地版本不存在")
+        if (!present(validId)) throw RuntimeFailure("RUNTIME_LIBRARY_VERSION_MISSING", "本地版本不存在")
         val current = readMeta(validId)
         val updated = LibraryMeta(pinned = pinned, downloadedAt = current.downloadedAt)
         writeMeta(validId, updated)
@@ -230,7 +230,7 @@ class RuntimeLibrary(private val store: RuntimeStore) {
         prepare()
         val file = path(id, ".json")
         if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) || Files.size(file) > RuntimeLimits.MAX_MANIFEST_BYTES) {
-            throw RuntimeFailure("RUNTIME_VERSION_MISSING", "本地版本清单不存在")
+            throw RuntimeFailure("RUNTIME_LIBRARY_VERSION_MISSING", "本地版本清单不存在")
         }
         val parsed = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS).use { RuntimeManifest.parse(it.readBytes()) }
         if (parsed.rootfs.sha256 != id) throw RuntimeFailure("MANIFEST_DIGEST_MISMATCH", "版本标识与归档不一致")
