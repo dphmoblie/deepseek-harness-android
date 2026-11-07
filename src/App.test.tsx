@@ -489,11 +489,11 @@ describe('App conversation gate', () => {
       })
     render(<App />)
 
-    // 首次配置窗口现在只有两步（配模型 → 装运行环境），没有旧版的「开始使用」收尾页：
+    // 首次配置窗口现在有三步（免费声明 → 配模型 → 装运行环境），没有旧版的「开始使用」收尾页：
     // 本用例关心的是「回到前台后凭据状态会不会刷新」，先把窗口关掉再去模型页看。
-    const onboarding = await screen.findByRole('dialog', { name: '配置模型' })
+    const onboarding = await screen.findByRole('dialog', { name: '免费声明' })
     fireEvent.click(within(onboarding).getByRole('button', { name: '跳过引导' }))
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: '配置模型' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '免费声明' })).toBeNull())
     await arriveAtSettingsHome()
     await openSettingsPage('模型与密钥')
 
@@ -558,7 +558,7 @@ describe('应用语言', () => {
     expect(bridge.openHarness).not.toHaveBeenCalled()
     fireEvent.change(screen.getByLabelText('语言 / Language'), { target: { value: 'en' } })
     fireEvent.click(screen.getByRole('button', { name: '继续 / Continue' }))
-    expect(await screen.findByRole('dialog', { name: 'Set up a model' })).toBeVisible()
+    expect(await screen.findByRole('dialog', { name: 'Free software' })).toBeVisible()
     expect(bridge.setAppLanguage).toHaveBeenCalledWith('en')
     expect(window.localStorage.getItem('dsh-mobile-language-v1')).toBe('en')
     expect(document.documentElement.lang).toBe('en')
@@ -605,7 +605,7 @@ describe('应用语言', () => {
     bridge.getAppLanguage.mockResolvedValue({ configured: true, language: 'en' })
     render(<App />)
     // 界面直接是英文（引导页标题），门禁一次都没出现，语言也回填进了 localStorage。
-    expect(await screen.findByRole('dialog', { name: 'Set up a model' })).toBeVisible()
+    expect(await screen.findByRole('dialog', { name: 'Free software' })).toBeVisible()
     expect(screen.queryByRole('heading', { name: '选择语言 / Choose your language' })).toBeNull()
     expect(window.localStorage.getItem('dsh-mobile-language-v1')).toBe('en')
   })
@@ -619,7 +619,7 @@ describe('应用语言', () => {
       fireEvent.click(skip)
       // 本次必须放行——否则用户被永久卡在门禁里（提示语在门禁消失后无处可显示，
       // 所以这里验的是「进去了」，而不是那条提示）。
-      expect(await screen.findByRole('dialog', { name: '配置模型' })).toBeVisible()
+      expect(await screen.findByRole('dialog', { name: '免费声明' })).toBeVisible()
       expect(screen.queryByRole('heading', { name: '选择语言 / Choose your language' })).toBeNull()
     } finally {
       setItem.mockRestore()

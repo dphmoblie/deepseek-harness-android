@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { t } from '../i18n'
-import { ArrowLeft, ArrowRight, Blocks, Check, KeyRound, Loader2, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Blocks, Check, Gift, KeyRound, Loader2, X } from 'lucide-react'
 import type { RuntimeSettings, RuntimeSettingsUpdate, RuntimeState } from '../platform/types'
 
 export const ONBOARDING_STORAGE_KEY = 'dsh-mobile-onboarding-v1'
@@ -20,15 +20,19 @@ interface OnboardingProps {
 }
 
 /**
- * 首次配置只留两步：配模型 → 装运行环境。
+ * 首次配置三步：免费声明 → 配模型 → 装运行环境。
  *
- * 顺序是刻意的：模型凭据不依赖运行环境，先配上，用户就不会卡在「镜像没内置 → 装不上 →
- * 连密钥页都到不了」的死路上；运行环境排在后面，装不上也不影响保存凭据。
+ * 免费声明放第一步，是因为「收费版 / 付费激活 / 加群代装」的骗局专挑刚装完、还没见到
+ * 正式界面的用户：等他配完模型再提示，钱可能已经付了。声明本身不拦人，右上角仍可跳过。
+ *
+ * 后两步的顺序也是刻意的：模型凭据不依赖运行环境，先配上，用户就不会卡在「镜像没内置 →
+ * 装不上 → 连密钥页都到不了」的死路上；运行环境排在后面，装不上也不影响保存凭据。
  *
  * 这里只放 DeepSeek 的 API Key。账号登录、自定义供应商都属于「运行环境里的事」：
  * 它们要开着 Harness 才有意义，塞进首次配置只会让一个本来能跳过的小窗口变成账号页。
  */
 const STEPS = [
+  { id: 'free', title: '免费声明', icon: Gift },
   { id: 'model', title: '配置模型', icon: KeyRound },
   { id: 'runtime', title: '安装运行环境', icon: Blocks },
 ] as const
@@ -133,6 +137,17 @@ export function Onboarding({
             <>
               <h2 id="onboarding-title" className="onboarding-title"><Icon size={22} />{t(STEPS[step].title)}</h2>
               {step === 0 && (
+                <div className="onboarding-body onboarding-free">
+                  <p>{t("本软件完全免费且开源（MIT 许可），官方下载渠道只有本项目的 GitHub Releases。")}</p>
+                  <ul>
+                    <li>{t("没有付费版、付费激活或付费代装。如果你为它付过钱，请立即申请退款，并向收费平台举报。")}</li>
+                    <li>{t("模型 API 的费用由模型供应商收取，需要你自己承担；软件本身不收取任何费用。")}</li>
+                    <li>{t("本项目与任何第三方售卖、代装或所谓「内部渠道」无关。")}</li>
+                  </ul>
+                  <p className="onboarding-status">{t("点「我已了解」后开始配置；右上角仍可跳过引导。")}</p>
+                </div>
+              )}
+              {step === 1 && (
                 <form className="onboarding-body" onSubmit={event => {
                   event.preventDefault()
                   void saveModelSettings()
@@ -178,7 +193,7 @@ export function Onboarding({
                   </fieldset>
                 </form>
               )}
-              {step === 1 && (
+              {step === 2 && (
                 <div className="onboarding-body">
                   <p>{t("应用需要一份 Ubuntu 运行环境，装一次就够，之后可离线使用。")}</p>
                   <p className="onboarding-status">
@@ -208,6 +223,8 @@ export function Onboarding({
                 <span className="onboarding-spacer" />
                 {last ? (
                   <button className="button button-primary" type="button" onClick={onDone}><Check size={18} />{t("完成")}</button>
+                ) : step === 0 ? (
+                  <button className="button button-primary" type="button" onClick={() => setStep(1)}>{t("我已了解")}<ArrowRight size={18} /></button>
                 ) : (
                   <button className="button button-primary" type="button" onClick={() => setStep(step + 1)} disabled={saving}>{t("下一步")}<ArrowRight size={18} /></button>
                 )}

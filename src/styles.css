@@ -2860,6 +2860,15 @@ button:disabled {
 .onboarding-body code { font-size: .9em; }
 .onboarding-warn { color: var(--amber); }
 .onboarding-status { font-size: .92em; }
+/* 免费声明：只用纯色与边框，不引入旧 WebView 不认的选择器或视口单位。 */
+.onboarding-free {
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-inner);
+  background: var(--surface-sunken);
+}
+.onboarding-free > p:first-child { color: var(--ink); }
+.onboarding-free li { line-height: 1.55; }
 .onboarding-actions-row { display: flex; gap: 9px; flex-wrap: wrap; }
 .onboarding-nav { display: flex; align-items: center; width: 100%; }
 /*
