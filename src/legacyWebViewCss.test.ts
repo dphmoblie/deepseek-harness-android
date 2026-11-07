@@ -152,6 +152,36 @@ describe('旧 WebView 的 CSS 兼容兜底', () => {
     expect(unbalanced).toEqual([])
   })
 
+  it('dvh 声明前必须给同属性的 vh 兜底（Chrome 108 以下整条声明会被丢弃）', () => {
+    const missing: string[] = []
+    for (const file of files) {
+      for (const rule of scanRules(readFileSync(file, 'utf8'))) {
+        rule.declarations.forEach((declaration, index) => {
+          if (!declaration.includes('dvh')) return
+          const property = propertyOf(declaration)
+          const hasFallback = rule.declarations
+            .slice(0, index)
+            .some(item => propertyOf(item) === property && item.includes('vh') && !item.includes('dvh'))
+          if (!hasFallback) missing.push(`${relative(file)} → ${rule.selector} { ${declaration} }`)
+        })
+      }
+    }
+    // 旧引擎没有 dvh 时，整条声明不存在；没有 vh 兜底就等于这个约束完全没写。
+    expect(missing).toEqual([])
+  })
+
+  it('样式里不直接使用 :has()：旧 WebView 会丢掉整条规则', () => {
+    const offenders: string[] = []
+    for (const file of files) {
+      const source = readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+      if (source.includes(':has(')) offenders.push(relative(file))
+    }
+    // 选中态这类状态改由 React 写显式类名（如 .virtual-screen-choice.is-selected）。
+    // 将来确实需要 :has() 做渐进增强时，先在这里放宽门禁，并把规则包进
+    // @supports selector(:has(*))，不要让它静默整块失效。
+    expect(offenders).toEqual([])
+  })
+
   it('扫描器没有把整个文件误判成 @supports 内部', () => {
     let inside = 0
     let outside = 0

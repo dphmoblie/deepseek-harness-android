@@ -126,6 +126,26 @@ describe('目标应用副屏设置页', () => {
     expect(screen.getByRole('button', { name: '停止副屏' })).toBeEnabled()
   })
 
+  it('选中项由 React 写显式类名：不依赖 :has()，旧 WebView 上高亮也不会丢', async () => {
+    const bridge = bridgeWith({
+      getVirtualScreenSettings: vi.fn().mockResolvedValue(settings({ orientation: 'landscape', autoFollow: 'pull_back' })),
+      getVirtualScreenState: vi.fn().mockResolvedValue(state()),
+    })
+    render(<VirtualScreenSettings bridge={bridge} onBack={() => {}} />)
+    const landscape = await screen.findByRole('radio', { name: '横屏' })
+    const pullBack = screen.getByRole('radio', { name: '移回副屏' })
+    const labelClass = (radio: HTMLElement): string => radio.closest('label')?.className ?? ''
+    expect(labelClass(landscape)).toContain('is-selected')
+    expect(labelClass(pullBack)).toContain('is-selected')
+
+    fireEvent.click(screen.getByRole('radio', { name: '竖屏' }))
+    fireEvent.click(screen.getByRole('radio', { name: '关闭' }))
+    expect(labelClass(screen.getByRole('radio', { name: '竖屏' }))).toContain('is-selected')
+    expect(labelClass(screen.getByRole('radio', { name: '关闭' }))).toContain('is-selected')
+    expect(labelClass(landscape)).not.toContain('is-selected')
+    expect(labelClass(pullBack)).not.toContain('is-selected')
+  })
+
   it('桥不可用时如实说读不到设置与状态，不假装成默认值或未运行', async () => {
     const bridge = bridgeWith({
       getVirtualScreenSettings: vi.fn().mockRejectedValue(new Error('副屏设置读取被拒绝')),

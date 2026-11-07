@@ -1,6 +1,6 @@
 .application-picker { margin: 12px 0; min-width: 0; }
 .application-picker-panel { margin-top: 12px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-inner); }
-.application-picker-list { max-height: min(360px, 48dvh); overflow-y: auto; overscroll-behavior: contain; }
+.application-picker-list { max-height: min(360px, 48vh); max-height: min(360px, 48dvh); overflow-y: auto; overscroll-behavior: contain; }
 .application-picker-row {
   display: flex;
   align-items: center;
