@@ -80,7 +80,7 @@ describe('外观设置：连背景一起同步的持久化', () => {
     expect(bridge.applyHarnessTheme.mock.lastCall?.[0]).toMatchObject({ syncBackground: true })
     // 背景地址不进载荷：原生自己记着，页面从 /__shell/background 取。
     expect(JSON.stringify(bridge.applyHarnessTheme.mock.lastCall?.[0])).not.toContain('content://')
-    expect(screen.getByText('已让 DSH 使用当前主题与背景视频')).toBeTruthy()
+    expect(screen.getByText('DSH 已切换为当前主题和背景视频')).toBeTruthy()
   })
 
   it('遮背景的面板、左侧栏与右侧面板透明度分开调，并随载荷带给 DSH', async () => {

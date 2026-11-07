@@ -201,14 +201,14 @@ const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; vi
   'terminal-dsh-background': { title: 'DSH 主题', hint: '主题同步、按钮与输入框透明度、背景文件', view: 'settings-terminal-dsh-background', parent: 'terminal' },
   'device-shell': { title: '设备 Shell 设置', hint: 'Shizuku 授权与设备命令', view: 'settings-device-shell' },
   automation: { title: '自动化设置', hint: '无障碍、副屏与自动参数', view: 'settings-automation' },
-  // 自动化设置下的三个三级页：都是同一件事的三条腿，返回键统一回「自动化设置」。
+  // 自动化设置下的三个三级页，返回键统一回「自动化设置」。
   'automation-accessibility': { title: '无障碍', hint: '服务状态、白名单与验证密码', view: 'settings-automation-accessibility', parent: 'automation' },
   'automation-subscreen': { title: '副屏', hint: '取帧档位、方向、分辨率与跟随策略', view: 'settings-automation-subscreen', parent: 'automation' },
   'automation-params': { title: '自动参数', hint: '总开关、任务与运行记录、规则与每应用参数', view: 'settings-automation-params', parent: 'automation' },
   diagnostics: { title: '诊断与日志', hint: '日志与采集、设备能力与反馈', view: 'settings-diagnostics' },
-  // 外置浏览器从诊断页里拆出来：它不是「排查」的一部分，而是一条独立的浏览方式，
+  // 系统浏览器从诊断页里拆出来：它不是「排查」的一部分，而是一条独立的浏览方式，
   // 单开一页之后诊断页只留入口，不用先滚过一整张卡片才看到日志入口。
-  'external-browser': { title: '外置浏览器', hint: '用系统浏览器打开 Harness', view: 'settings-external-browser', parent: 'diagnostics' },
+  'external-browser': { title: '系统浏览器', hint: '用系统浏览器打开 Harness', view: 'settings-external-browser', parent: 'diagnostics' },
   // 诊断与日志下的三个三级页：采集、能力、反馈是三件事，返回键统一回「诊断与日志」。
   'diagnostics-log': { title: '日志与采集', hint: '采集开关、保留天数、诊断与运行日志', view: 'settings-diagnostics-log', parent: 'diagnostics' },
   'diagnostics-capability': { title: '设备能力', hint: '运行时自检、能力清单与根通道', view: 'settings-diagnostics-capability', parent: 'diagnostics' },
@@ -355,7 +355,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'diagnostics',
     title: '诊断与日志',
     hint: '日志与采集、设备能力与反馈',
-    keywords: ['诊断', '日志', 'log', 'logs', '采集', '保留', '导出', '排查', '报错', '错误', '崩溃', '重启', '自检', 'self check', '浏览器', '外置浏览器', 'browser', 'chrome', 'webview'],
+    keywords: ['诊断', '日志', 'log', 'logs', '采集', '保留', '导出', '排查', '报错', '错误', '崩溃', '重启', '自检', 'self check', '浏览器', '系统浏览器', '外置浏览器', 'browser', 'chrome', 'webview'],
     target: { kind: 'page', page: 'diagnostics' },
     icon: <ScrollText size={20} />,
   },
@@ -706,8 +706,8 @@ function automationRuntimeLabel(runtime: AccessibilityAutomationRuntime): string
 /** 系统侧无障碍服务三态 → 界面标签。 */
 function accessibilityServiceLabel(status: AccessibilityServiceStatus): string {
   if (status === 'connected') return t("无障碍服务已连接")
-  if (status === 'enabled_disconnected') return t("系统里已开启，但服务没连上")
-  return t("系统里未开启")
+  if (status === 'enabled_disconnected') return t("系统已开启，但服务未连接")
+  return t("系统未开启")
 }
 
 /**
@@ -934,7 +934,7 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
       <div className="screen-heading">
         <div>
           <p className="eyebrow">{t("Harness 对话")}</p>
-          <h1>{updateRequired ? t("更新运行环境") : runtime.phase === 'error' ? t("运行环境需要处理") : installed ? (launchingHarness ? t("正在进入对话") : stoppingHarness ? t("正在停止运行环境") : t("对话已就绪")) : t("准备运行环境")}</h1>
+          <h1>{updateRequired ? t("更新运行环境") : runtime.phase === 'error' ? t("运行环境出现问题") : installed ? (launchingHarness ? t("正在进入对话") : stoppingHarness ? t("正在停止运行环境") : t("对话已就绪")) : t("准备运行环境")}</h1>
         </div>
       </div>
 
@@ -1675,11 +1675,11 @@ interface SettingsScreenProps {
   onLaunch: () => void
   /** 用户确认「密钥已在 Harness 内配置过」时的放行入口。 */
   onLaunchConfirmed: () => void
-  /** 仅用于诊断旧 WebView：把当前 Harness 交给系统外部浏览器。 */
+  /** 仅用于兼容旧 WebView：把当前 Harness 交给系统浏览器。 */
   onOpenExternalHarness: () => void
   /** 可用浏览器清单与当前选择；浏览器预览环境为 null 或空清单，界面不显示选择器。 */
   externalBrowsers: ExternalBrowserState | null
-  /** 保存外置浏览器选择；传 null 表示每次询问系统选择器。 */
+  /** 保存系统浏览器选择；传 null 表示每次询问系统选择器。 */
   onSelectExternalBrowser: (packageName: string | null) => void
   /** 跳转到系统「显示在其他应用上层」设置页；权限只能由用户手动开启。 */
   onOpenOverlaySettings: () => void
@@ -2746,7 +2746,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             <span className="section-icon"><Plus size={19} /></span>
             <div>
               <h2 id="model-provider-templates">{t("添加其他供应商")}</h2>
-              <p>{t("选一家就回到「模型与密钥」并展开密钥输入；没配置的模板平时不占那一页的地方")}</p>
+              <p>{t("选中后会回到「模型与密钥」并展开密钥输入；未配置的模板不会显示在该页")}</p>
             </div>
           </div>
           {availableProviders.length === 0 ? (
@@ -2784,7 +2784,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
-            <div><h2 id="download-settings">{t("运行时与设备 Shell")}</h2><p>{t("装、启停、重置在「Ubuntu 运行时」；Shizuku 授权在「设备 Shell 设置」。")}</p></div>
+            <div><h2 id="download-settings">{t("运行时与设备 Shell")}</h2><p>{t("安装、启动、停止和重置请在「Ubuntu 运行时」中操作；Shizuku 授权在「设备 Shell 设置」中完成。")}</p></div>
           </div>
           <div className="settings-inline-actions">
             <button className="button button-secondary" type="button" onClick={onOpenEnvironment} disabled={busy !== null}>
@@ -2814,7 +2814,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <section className="settings-section" aria-labelledby="terminal-settings">
           <div className="section-title">
             <span className="section-icon"><SquareTerminal size={19} /></span>
-            <div><h2 id="terminal-settings">{t("界面")}</h2><p>{t("整个应用壳子的字号与显示方式")}</p></div>
+            <div><h2 id="terminal-settings">{t("界面")}</h2><p>{t("调整应用界面的字号和显示方式")}</p></div>
           </div>
           <label className="range-field">
             <span><strong>{t("字号")}</strong><small>{settings.terminalFontSize}px</small></span>
@@ -3013,12 +3013,12 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         )}
 
         {/*
-          自动化设置：无障碍与副屏是同一条能力的两条腿（谁去读界面、画面从哪来），
+          自动化设置：无障碍与副屏共同提供自动化能力（一个读取界面，一个提供画面），
           所以合并进同一页，不再各占一个入口。
         */}
         {
           /*
-            自动化设置的三条腿各占一个三级页：谁去读界面（无障碍）、画面从哪来（副屏）、
+            自动化设置分为三个三级页：界面读取（无障碍）、副屏画面、
             什么时候动与怎么动（自动参数）。二级页只留入口与免责说明。
           */
         }
@@ -3038,7 +3038,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           <div className="settings-subsection" aria-labelledby="automation-subpages">
             <div className="section-title">
               <span className="section-icon"><Bot size={19} /></span>
-              <div><h3 id="automation-subpages">{t("自动化能力")}</h3><p>{t("三条腿分开摆：读取界面、副屏画面、执行参数")}</p></div>
+              <div><h3 id="automation-subpages">{t("自动化能力")}</h3><p>{t("自动化功能分为三个页面：界面读取、副屏画面和动作参数")}</p></div>
             </div>
             <SettingsPageRow icon={<Accessibility size={20} />} page="automation-accessibility" onOpen={onOpenSubpage} />
             <SettingsPageRow icon={<Smartphone size={20} />} page="automation-subscreen" onOpen={onOpenSubpage} />
@@ -3084,7 +3084,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               {accessibility.whitelistEnabled === false ? t("当前生效：白名单限制已关闭") : t("当前生效：白名单限制已开启")}
             </p>
             <p className="settings-note">
-              {t("本应用（{0}）始终在白名单里：服务重启、连接重建都不会掉，也不需要写进下面的列表。", accessibility.alwaysAllowedPackages.length ? accessibility.alwaysAllowedPackages.join("、") : t("未配置"))}
+              {t("本应用（{0}）始终在白名单中。服务重启或重新连接后也无需再次添加。", accessibility.alwaysAllowedPackages.length ? accessibility.alwaysAllowedPackages.join("、") : t("未配置"))}
             </p>
             <ApplicationPicker bridge={runtimeBridge} disabled={busy !== null}
               selected={[...new Set(accessibilityDraft.split(/[\n,]/u).map(value => value.trim()).filter(Boolean))]}
@@ -3156,7 +3156,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               />
             </label>
             <label className="field">
-              <span>{t("再输一次新密码")}</span>
+              <span>{t("再次输入新密码")}</span>
               <ApiKeyInput
                 value={passwordDraft.confirm}
                 onValueChange={value => setPasswordDraft(draft => ({ ...draft, confirm: value }))}
@@ -3205,13 +3205,13 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
           <div className="settings-subsection" aria-labelledby="accessibility-automation-console">
             <div className="section-title section-title-action">
               <span className="section-icon"><Play size={19} /></span>
-              <div><h3 id="accessibility-automation-console">{t("自动化总开关")}</h3><p>{t("停到你再明确打开为止")}</p></div>
+              <div><h3 id="accessibility-automation-console">{t("自动化总开关")}</h3><p>{t("暂停后需手动重新开启")}</p></div>
               <span className={`status-chip ${accessibility.automationRuntime === 'running' ? 'success' : ''}`} data-testid="automation-runtime-chip">
                 {automationRuntimeLabel(accessibility.automationRuntime)}
               </span>
             </div>
             <p className="settings-note">
-              {t("总开关只在这里改：AI 侧没有开启自动化的路径，总开关不是「运行中」时写规则的命令会被拒绝。暂停与紧急停止都不会关掉系统里的无障碍服务，也不清空白名单与规则。")}
+                {t("自动化只能在这里开启。总开关不是「运行中」时，规则动作会被拒绝。暂停或紧急停止不会关闭系统无障碍服务，也不会清空白名单和规则。")}
             </p>
             <div className="button-row">
               <button className="button button-primary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime === 'running'}
@@ -3228,14 +3228,14 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                 <AlertTriangle size={18} />{t("紧急停止")}</button>
             </div>
             {/*
-              服务状态与总开关是两件事，必须分开说：`enabled_disconnected` 是「系统里开着、
+              服务状态与总开关是两件事，必须分开说：`enabled_disconnected` 是「系统已开启、
               服务实例不在」，这时候只能请用户去系统设置里重新开关一次，界面不能假装已连接。
             */}
             <p className="settings-note" role="status" data-testid="automation-service-status">
               {accessibilityServiceLabel(accessibility.serviceStatus)}
               {accessibility.serviceStatus === 'connected'
-                ? t("：服务在跑，总开关「运行中」时才会执行规则里的动作。")
-                : t("：需要你在系统无障碍设置里手动开启（或重新开关一次），应用内无法代劳。")}
+                ? t("：服务已运行；只有总开关显示「运行中」时，规则动作才会执行。")
+                : t("：请在系统无障碍设置中手动开启（必要时先关闭再开启一次），应用无法代为开启。")}
             </p>
             {accessibility.serviceStatus !== 'connected' && (
               <button className="button button-secondary" type="button" onClick={onOpenAccessibilitySettings} disabled={busy !== null}>
@@ -3248,7 +3248,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             */}
           </div>
           {/*
-            任务台账的可见面：AI 按步骤执行时的当前任务，以及人叫停它的那一下。
+            任务台账：显示 AI 当前执行的任务，也可以随时停止任务。
             位置就是阅读顺序：现在能不能动（总开关）→ 正在动什么（本卡）→ 刚才动过什么（运行记录）。
           */}
           <AutomationTaskCard />
@@ -3266,7 +3266,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
             {automationRunsStatus === 'loading' && automationRuns === null && <p className="settings-note" role="status">{t("正在读取运行记录")}</p>}
             {automationRuns !== null && !automationRuns.connected && (
               <p className="settings-note" role="status" data-testid="automation-runs-disconnected">
-                {t("无障碍服务当前没连上，因此读不到运行记录。")}
+                {t("无障碍服务当前未连接，无法读取运行记录。")}
               </p>
             )}
             {automationRuns !== null && automationRuns.connected && automationRuns.runs.length === 0 && (
@@ -3297,7 +3297,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
                     <span>{run.ruleId}</span>
                     <span>{automationRunLabel(run)}</span>
                     <span>{run.performed ? t("已执行") : t("未执行")}</span>
-                    {run.degraded && <span>{t("降级路径")}</span>}
+                    {run.degraded && <span>{t("备用路径")}</span>}
                     {!run.ok && <span>{t("失败")}</span>}
                   </li>
                 ))}
@@ -3326,7 +3326,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               )}
             </div>
             <p className="settings-note">
-              {t("规则由 AI 生成、你在写盘前确认；这里只改「启不启用」，不改规则内容。停用一条规则不会删掉它。")}
+              {t("规则由 AI 生成，保存前需要你确认；这里只能启用或停用规则，不能修改内容。停用规则不会删除它。")}
             </p>
             {accessibility.allowedPackages.filter(name => !accessibility.alwaysAllowedPackages.includes(name)).length === 0 ? (
               <p className="settings-note" role="status" data-testid="automation-rules-no-packages">
@@ -3494,7 +3494,7 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         <div className="settings-subsection" aria-labelledby="diagnostics-subpages">
           <div className="section-title">
             <span className="section-icon"><ScrollText size={19} /></span>
-            <div><h3 id="diagnostics-subpages">{t("排查与反馈")}</h3><p>{t("日志、能力、反馈与外置浏览器分开放，导出日志在「日志与采集」里")}</p></div>
+            <div><h3 id="diagnostics-subpages">{t("排查与反馈")}</h3><p>{t("日志、能力、反馈与系统浏览器分开放，导出日志在「日志与采集」里")}</p></div>
           </div>
           <SettingsPageRow icon={<ScrollText size={20} />} page="diagnostics-log" onOpen={onOpenSubpage} />
           <SettingsPageRow icon={<Gauge size={20} />} page="diagnostics-capability" onOpen={onOpenSubpage} />
@@ -3504,21 +3504,21 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
         </>
         )}
         {/*
-          外置浏览器独立成页：旧 WebView 跑不动 Harness 时它是唯一可用的浏览方式，
+          系统浏览器独立成页：旧 WebView 无法正常加载 Harness 时，可以从这里打开，
           与「排查」不是一类事，混在诊断页里要滚过一整张卡才看得到日志入口。
         */}
         {page === 'external-browser' && (
         <section className="settings-section" aria-labelledby="diagnostics-external">
           <div className="section-title">
             <span className="section-icon"><ExternalLink size={19} /></span>
-            <div><h2 id="diagnostics-external">{t("外置浏览器")}</h2><p>{t("把 Harness 交给系统浏览器打开：旧 WebView 跑不动页面时用这条路")}</p></div>
+            <div><h2 id="diagnostics-external">{t("系统浏览器")}</h2><p>{t("使用系统浏览器打开 Harness：如果旧版 WebView 无法正常加载页面，可以用这种方式")}</p></div>
           </div>
           <p className="field-help">
-            {t("外置浏览器拿到的是与本次运行绑定的令牌，可以完整使用 Harness（不是只读预览）。运行环境停止后令牌失效；重开需要回到应用再点一次。")}
+            {t("系统浏览器拿到的是与本次运行绑定的令牌，可以完整使用 Harness（不是只读预览）。运行环境停止后令牌失效；重新打开时请回到应用再次点击。")}
           </p>
           <div className="settings-inline-actions">
             <button className="button button-secondary" type="button" onClick={onOpenExternalHarness} disabled={busy !== null || runtime.phase !== 'running'}>
-              <ExternalLink size={18} />{t("用外部浏览器打开 Harness")}
+              <ExternalLink size={18} />{t("用系统浏览器打开 Harness")}
             </button>
           </div>
           {externalBrowsers !== null && externalBrowsers.browsers.length > 0 && (
@@ -3692,14 +3692,14 @@ export function App() {
   const [runtime, setRuntime] = useState<RuntimeState>(EMPTY_RUNTIME)
   const [settings, setSettings] = useState<RuntimeSettings | null>(null)
   /**
-   * 主题页的「字号」管整个应用壳子：设置页、对话页与应用内终端一起缩放。
+   * 主题页的「字号」控制整个应用界面：设置页、对话页与应用内终端一起缩放。
    * dsh 自己界面的字号仍由 dsh 自己设置，这里不碰它。
    */
   useEffect(() => {
     applyShellFontScale(settings?.terminalFontSize ?? SHELL_FONT_BASELINE_PX)
   }, [settings?.terminalFontSize])
   const [settingsReadStatus, setSettingsReadStatus] = useState<'idle' | 'loading' | 'failed'>('idle')
-  /** 外置浏览器清单与选择；只在诊断页需要，读不到时隐藏选择器。 */
+  /** 系统浏览器清单与选择；只在该页面需要，读不到时隐藏选择器。 */
   const [externalBrowsers, setExternalBrowsers] = useState<ExternalBrowserState | null>(null)
   const settingsReadRevision = useRef(0)
   /**
@@ -5022,14 +5022,14 @@ export function App() {
   const openExternalHarness = useCallback(() => {
     void run('harness-external-browser', async () => {
       await runtimeBridge.openHarnessExternal()
-    }, t("已交给外置浏览器打开"))
+    }, t("已在系统浏览器中打开"))
   }, [run])
 
   /**
-   * 外置浏览器清单只在进入诊断页时读取。
+   * 系统浏览器清单只在进入该页面时读取。
    *
    * 这是一次包管理查询，管理首页不需要它；读失败时隐藏选择器即可，
-   * 「用外部浏览器打开」仍会按系统选择器工作，不阻断入口。
+   * 「用系统浏览器打开」仍会按系统选择器工作，不阻断入口。
    */
   useEffect(() => {
     if (settingsPageOf(activeView) !== 'diagnostics') return
@@ -5046,7 +5046,7 @@ export function App() {
     void run('external-browser-select', async () => {
       await runtimeBridge.setExternalBrowser(packageName)
       setExternalBrowsers(previous => previous === null ? previous : { ...previous, selected: packageName })
-    }, t("已更新外部浏览器"))
+    }, t("系统浏览器列表已更新"))
   }, [run])
 
   const clearDiagnostic = useCallback(() => {

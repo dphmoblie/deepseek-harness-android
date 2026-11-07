@@ -49,7 +49,7 @@ function failureCode(error: unknown): string {
 }
 
 /**
- * 「自动化任务」卡片：AI 按步骤执行时的当前任务，以及**人随时叫停它的地方**。
+ * 「自动化任务」卡片：显示 AI 当前执行的任务，也可以随时停止任务。
  *
  * 四条边界：
  *  - **「读不到」与「没有任务」必须分开说**：`connected` 为假时任务一栏是空的，但那表示
@@ -88,7 +88,7 @@ export function AutomationTaskCard({ bridge = runtimeBridge }: { bridge?: Runtim
   return <div className="settings-subsection" aria-labelledby="automation-task">
     <div className="section-title"><span className="section-icon"><ListChecks size={19} /></span>
       <div><h3 id="automation-task">{t('自动化任务')}</h3>
-        <p>{t('AI 按步骤执行时的当前任务；读不到就读不到，这里也是你随时叫停它的地方。')}</p></div>
+        <p>{t('这里显示 AI 当前执行的任务；如果暂时无法读取，会明确提示。你也可以随时在此停止任务。')}</p></div>
     </div>
     {!loaded && !failed && <p className="settings-note">{t('正在读取当前任务…')}</p>}
     {ready && !state.connected && <>

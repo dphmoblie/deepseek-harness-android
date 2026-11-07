@@ -54,7 +54,7 @@ describe('无障碍白名单与验证密码', () => {
     await openAccessibilityPage(false, ['com.example.reader'])
 
     expect(
-      await screen.findByText('本应用（io.deepseekharness.mobile）始终在白名单里：服务重启、连接重建都不会掉，也不需要写进下面的列表。'),
+      await screen.findByText('本应用（io.deepseekharness.mobile）始终在白名单中。服务重启或重新连接后也无需再次添加。'),
     ).toBeInTheDocument()
     expect(screen.getByText('当前白名单：io.deepseekharness.mobile、com.example.reader')).toBeInTheDocument()
   })
@@ -263,7 +263,7 @@ describe('无障碍自动化控制台', () => {
     expect(screen.getByRole('button', { name: '继续' })).toBeDisabled()
     // 关着的时候「紧急停止」没有对象可停：让它可点只会制造「我按了但什么都没变」。
     expect(screen.getByRole('button', { name: '紧急停止' })).toBeDisabled()
-    expect(await screen.findByTestId('automation-service-status')).toHaveTextContent('系统里未开启')
+    expect(await screen.findByTestId('automation-service-status')).toHaveTextContent('系统未开启')
   })
 
   it('服务在系统里开着但没连上时，明确说清这是两件事', async () => {
@@ -271,7 +271,7 @@ describe('无障碍自动化控制台', () => {
 
     // 总开关开着、系统里也开着，但服务实例不在：这时动作不会发生，必须说清楚。
     expect(await screen.findByTestId('automation-runtime-chip')).toHaveTextContent('自动化运行中')
-    expect(screen.getByTestId('automation-service-status')).toHaveTextContent('系统里已开启，但服务没连上')
+    expect(screen.getByTestId('automation-service-status')).toHaveTextContent('系统已开启，但服务未连接')
     expect(screen.getByRole('button', { name: '暂停' })).toBeEnabled()
     expect(screen.getByRole('button', { name: '开始' })).toBeDisabled()
   })
@@ -400,7 +400,7 @@ describe('无障碍自动化控制台', () => {
   it('读不到运行记录时说明原因，不把空列表说成什么都没发生', async () => {
     await openConsole({ automationRuntime: 'off', serviceStatus: 'off' })
 
-    expect(await screen.findByTestId('automation-runs-disconnected')).toHaveTextContent('无障碍服务当前没连上，因此读不到运行记录。')
+    expect(await screen.findByTestId('automation-runs-disconnected')).toHaveTextContent('无障碍服务当前未连接，无法读取运行记录。')
   })
 
   it('有记录时列出动作与拦截原因，未登记的码显示原始码', async () => {

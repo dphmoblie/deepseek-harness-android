@@ -239,11 +239,11 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
     const theme: SyncedTheme = { mode: readThemeMode(), accent: accentColor, background: surface.background, surface: surface.surface, surfaceOpacity: overlayOpacity, controlOpacity: card.controlOpacity, sidebarOpacity, rightPanelOpacity, syncBackground: includeBackground && background !== null }
     try {
       await runtimeBridge.applyHarnessTheme(theme)
-      let note = '已让 DSH 使用当前主题'
+      let note = t('DSH 已切换为当前主题')
       if (theme.syncBackground) {
         if (background) {
           // 原生只记地址；页面播放时由 /__shell/background 流式取，不经过这里。
-          note = background.kind === 'video' ? t('已让 DSH 使用当前主题与背景视频') : t('已让 DSH 使用当前主题与背景')
+          note = background.kind === 'video' ? t('DSH 已切换为当前主题和背景视频') : t('DSH 已切换为当前主题和背景')
         } else {
           // 没选过背景就只同步颜色，并把原因说清楚，不静默丢内容。
           note = t('还没有选择背景文件，已只同步颜色')

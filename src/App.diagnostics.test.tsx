@@ -262,7 +262,7 @@ describe('诊断与日志', () => {
     expect(document.querySelector('.diagnostic-log-output')).toBeNull()
   })
 
-  it('外置浏览器可固定选择，也能改回每次询问', async () => {
+  it('系统浏览器可固定选择，也能改回每次询问', async () => {
     bridge.getExternalBrowsers.mockResolvedValue({
       browsers: [
         { packageName: 'com.android.chrome', label: 'Chrome' },
@@ -273,7 +273,7 @@ describe('诊断与日志', () => {
     render(<App />)
     await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '外置浏览器')
+    await openSettingsPage('诊断与日志', '系统浏览器')
     const select = await screen.findByRole('combobox', { name: '打开方式' })
     await waitFor(() => expect(select).toHaveValue(''))
 
@@ -291,8 +291,8 @@ describe('诊断与日志', () => {
     render(<App />)
     await arriveAtSettingsHome()
 
-    await openSettingsPage('诊断与日志', '外置浏览器')
-    expect(await screen.findByText('用外部浏览器打开 Harness')).toBeTruthy()
+    await openSettingsPage('诊断与日志', '系统浏览器')
+    expect(await screen.findByText('用系统浏览器打开 Harness')).toBeTruthy()
     expect(screen.queryByRole('combobox', { name: '打开方式' })).not.toBeInTheDocument()
   })
 })

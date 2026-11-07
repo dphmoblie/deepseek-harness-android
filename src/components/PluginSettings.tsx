@@ -112,7 +112,7 @@ function RecoveryNotice({ recovery, unresolved, locked, onRepair, onPrune }: {
       ? t('应用升级迁移已完成，已按版本记录核对 {0} 个插件，包都在设备上。', checked)
       : t('应用升级迁移已完成。')
     : migration === 'partial'
-      ? t('应用升级迁移只完成了一部分，有插件的包已不在设备上，需要重新安装。')
+      ? t('应用升级迁移未完成，部分插件包已不在设备上，需要重新安装。')
       : migration === 'failed'
         ? t('应用升级迁移没有成功，下次启动 Harness 时会自动重试。')
         : ''

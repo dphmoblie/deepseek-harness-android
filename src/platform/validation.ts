@@ -607,7 +607,7 @@ export function validateRuntimeState(value: unknown): RuntimeState {
 }
 
 /**
- * 外置浏览器清单与选择。
+ * 系统浏览器清单与选择。
  *
  * 原生只应返回包名与显示名；这里再验一遍格式、去重，并确认 `selected`
  * 仍在清单里，避免界面上出现一个指向未知应用的下拉项。

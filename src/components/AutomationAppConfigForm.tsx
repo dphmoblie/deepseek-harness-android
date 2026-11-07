@@ -161,7 +161,7 @@ export function AutomationAppConfigForm({
           <p className="settings-note" role="alert" data-testid="automation-app-config-read-error">{error}</p>
         )}
         <p className="settings-note">
-          {t('读数没回来之前这里不会显示任何输入框，也不会拿默认值顶上：那会是一份界面编出来的数字，点一次保存就写进真机了。')}
+          {t('读取参数完成前不会显示输入框，也不会用默认值代替；否则保存时可能把未经确认的默认值写入设备。')}
         </p>
         <div className="automation-app-config-actions">
           <button className="button button-secondary" type="button"

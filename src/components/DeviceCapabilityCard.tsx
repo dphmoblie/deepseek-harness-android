@@ -62,7 +62,7 @@ const REASON_NOTES: Record<string, string> = {
   SHIZUKU_PERMISSION_UNDETERMINED: '还没有授予 Shizuku 权限',
   SHIZUKU_NOT_CONNECTED: 'Shizuku 已授权，但服务还没连上',
   ACCESSIBILITY_OFF: '无障碍服务没有开启',
-  ACCESSIBILITY_ENABLED_DISCONNECTED: '无障碍服务在系统里开着，但本应用还没连上',
+  ACCESSIBILITY_ENABLED_DISCONNECTED: '无障碍服务已开启，但应用尚未连接',
   ANDROID_TOO_OLD: '需要 Android 10 或更高版本',
   TEXT_INPUT_NEEDS_ACCESSIBILITY: '中文等非 ASCII 文字只能由无障碍服务写入',
   DEVICE_SHELL_DISABLED: '设备命令通道没有就绪',

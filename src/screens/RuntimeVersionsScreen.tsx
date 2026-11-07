@@ -252,7 +252,7 @@ export function RuntimeVersionsPanel({
       try {
         const downloader = downloadRelease ?? ((url, sha) => runtimeBridge.downloadRuntimeRelease(url, sha))
         await downloader(item.manifestUrl!, item.manifestSha256!)
-        notify(t("已成功下载到版本库"), 'success')
+        notify(t("已下载到版本库"), 'success')
         load()
       } catch (error) {
         notify(errorMessage(error), 'error')

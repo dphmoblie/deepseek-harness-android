@@ -24,9 +24,9 @@
     <string name="accessibility_service_description">读取已授权应用的当前界面节点，并按用户发起的请求执行受限点击、输入和滚动；不会处理密码、验证码、支付、权限或锁屏页面。</string>
     <!-- 后台保持前台服务通知：文案固定，不含 URL、凭据、终端内容或任何用户数据。 -->
     <string name="keep_alive_channel_name">后台运行</string>
-    <string name="keep_alive_channel_description">保持本机 Harness 运行时在后台继续运行</string>
+    <string name="keep_alive_channel_description">让本机 Harness 在后台继续运行</string>
     <string name="keep_alive_notification_title">Harness 正在后台运行</string>
-    <string name="keep_alive_notification_text">点按返回应用管理本机运行时</string>
+    <string name="keep_alive_notification_text">点按返回应用管理运行环境</string>
     <!-- 诊断日志导出：分享面板文案固定，不含文件路径或日志内容。 -->
     <string name="diagnostic_share_title">导出诊断日志</string>
     <string name="diagnostic_share_subject">DeepSeek Harness 诊断日志</string>
@@ -87,13 +87,13 @@
     <string name="virtual_screen_android_required">副屏操作需要 Android 10 或更高版本</string>
     <string name="virtual_screen_creating">正在创建目标应用副屏，请稍候…</string>
     <string name="virtual_screen_start_failed">无法启动副屏服务，请回到前台重试</string>
-    <string name="virtual_screen_app_back">应用返回</string>
-    <string name="virtual_screen_floating">小窗</string>
+    <string name="virtual_screen_app_back">返回应用</string>
+    <string name="virtual_screen_floating">悬浮窗</string>
     <string name="virtual_screen_stop">结束副屏</string>
     <string name="virtual_screen_overlay_required">请先启动副屏，并在设置中授予悬浮窗权限</string>
     <string name="virtual_screen_back_failed">无法返回，请确认目标应用仍在副屏</string>
     <string name="virtual_screen_mode_failed">帧率未生效，请确认副屏仍在运行</string>
-    <string name="virtual_screen_select_hint">选择要交给 AI 操作的目标应用。设备兼容性需要实测。</string>
+    <string name="virtual_screen_select_hint">选择要让 AI 操作的应用。不同设备的兼容性尚未验证。</string>
     <string name="virtual_screen_collapse">收起</string>
     <string name="virtual_screen_end">结束</string>
     <string name="virtual_screen_resize">拖动调整副屏画面大小</string>

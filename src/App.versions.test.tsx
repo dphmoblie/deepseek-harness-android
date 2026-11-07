@@ -550,7 +550,7 @@ describe('版本管理：本地多版本库与在线版本下载', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '下载到版本库' }))
 
-    expect(await screen.findByText('已成功下载到版本库')).toBeVisible()
+    expect(await screen.findByText('已下载到版本库')).toBeVisible()
     expect(bridge.downloadRuntimeRelease).toHaveBeenCalledWith('https://example.com/manifest.json', manifestSha)
   })
 

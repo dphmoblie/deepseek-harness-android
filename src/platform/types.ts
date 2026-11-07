@@ -81,7 +81,7 @@ export interface RuntimeState {
   errorCode?: string
 }
 
-/** 「用外部浏览器打开 Harness」可选的浏览器；只含包名与显示名，不含浏览记录。 */
+/** 「用系统浏览器打开 Harness」可选的浏览器；只含包名与显示名，不含浏览记录。 */
 export interface ExternalBrowser {
   packageName: string
   label: string
@@ -1660,14 +1660,14 @@ export interface RuntimeBridge {
   startHarness: () => Promise<RuntimeState>
   openHarness: (sessionId?: string) => Promise<void>
   /**
-   * 仅用于兼容性诊断：把当前 Harness 交给系统外部浏览器。
+   * 仅用于兼容性诊断：把当前 Harness 交给系统浏览器。
    *
    * 用户在设置里固定过浏览器时直接用它；否则交给系统选择器。
    */
   openHarnessExternal: () => Promise<void>
   /** 读取可用浏览器清单与已保存的选择（只含包名与显示名）。 */
   getExternalBrowsers: () => Promise<ExternalBrowserState>
-  /** 保存外置浏览器选择；传 `null` 表示每次询问系统选择器。 */
+  /** 保存系统浏览器选择；传 `null` 表示每次询问系统选择器。 */
   setExternalBrowser: (packageName: string | null) => Promise<void>
   stopRuntime: () => Promise<RuntimeState>
   reset: (confirmation: 'RESET_RUNTIME') => Promise<RuntimeState>

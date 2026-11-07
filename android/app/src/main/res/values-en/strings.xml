@@ -22,8 +22,8 @@
     <string name="accessibility_service_label">Harness accessibility automation</string>
     <string name="accessibility_service_description">Reads the current window of apps you explicitly allow and performs limited click, text, and scroll actions requested by you. Passwords, verification codes, payments, permissions, and lock screens are refused.</string>
     <!-- Background keep-alive foreground service notification: static text with no URL, credential, terminal output, or user data. -->
-    <string name="keep_alive_channel_name">Background run</string>
-    <string name="keep_alive_channel_description">Keeps the local Harness runtime running in the background</string>
+    <string name="keep_alive_channel_name">Background service</string>
+    <string name="keep_alive_channel_description">Keeps the local Harness runtime running in the background.</string>
     <string name="keep_alive_notification_title">Harness is running in the background</string>
     <string name="keep_alive_notification_text">Tap to return to the app and manage the runtime</string>
     <!-- Diagnostic log export: static share sheet text with no file path or log content. -->
@@ -76,16 +76,16 @@
     <string name="virtual_screen_android_required">The virtual screen requires Android 10 or later</string>
     <string name="virtual_screen_creating">Creating the target-app virtual screen. Please wait…</string>
     <string name="virtual_screen_start_failed">Unable to start the virtual screen. Return to the app and retry.</string>
-    <string name="virtual_screen_app_back">App back</string>
-    <string name="virtual_screen_floating">Float</string>
-    <string name="virtual_screen_stop">End screen</string>
+    <string name="virtual_screen_app_back">Back to app</string>
+    <string name="virtual_screen_floating">Floating window</string>
+    <string name="virtual_screen_stop">End virtual screen</string>
     <string name="virtual_screen_overlay_required">Start the virtual screen and grant overlay permission in settings first</string>
     <string name="virtual_screen_back_failed">Unable to go back. Check that the target app is still on the virtual screen.</string>
     <string name="virtual_screen_mode_failed">The frame rate did not change. Check that the virtual screen is still running.</string>
-    <string name="virtual_screen_select_hint">Choose the app for AI to operate. Device compatibility needs testing.</string>
+    <string name="virtual_screen_select_hint">Choose the app for the AI to operate. Device compatibility has not been tested.</string>
     <string name="virtual_screen_collapse">Collapse</string>
     <string name="virtual_screen_end">End</string>
-    <string name="virtual_screen_resize">Drag to resize the virtual screen picture</string>
+    <string name="virtual_screen_resize">Drag to resize the virtual screen image</string>
     <string name="virtual_screen_control_description">%1$s virtual screen preview</string>
     <string name="virtual_screen_notification_title">Target-app virtual screen is running</string>
     <string name="virtual_screen_notification_text">Tap to return to the virtual screen</string>
@@ -94,23 +94,23 @@
     <string name="virtual_screen_session_lost">The virtual screen session ended. Start it again.</string>
     <string name="virtual_screen_refresh_retry">Unable to refresh the virtual screen status. Retrying.</string>
     <string name="virtual_screen_refresh_failed">The virtual screen status could not be refreshed. Reopen this page.</string>
-    <string name="virtual_screen_preview_gone">Waiting for the virtual screen picture; display pauses when the device locks, disconnects, or the app leaves the virtual screen.</string>
+    <string name="virtual_screen_preview_gone">Waiting for a virtual screen image; the preview pauses when the device locks, disconnects, or the app leaves the virtual screen.</string>
     <string name="virtual_screen_budget_saturated"> · Preview cannot keep up: %2$d of the last %1$d frames exceeded the budget (slowest: %3$d ms)</string>
     <string name="virtual_screen_budget_degraded"> · Preview cannot keep up: %2$d of the last %1$d frames exceeded the budget</string>
     <string name="virtual_screen_touch_failed">Touch was not delivered. Check that the virtual screen is still running.</string>
     <string name="virtual_screen_action_failed">Action was not delivered. Check that the virtual screen is still running.</string>
-    <string name="virtual_screen_waiting_unreadable">Waiting for the virtual screen picture (no new frame)</string>
-    <string name="virtual_screen_waiting_blank">Waiting for the virtual screen picture (the current frame is nearly solid)</string>
+    <string name="virtual_screen_waiting_unreadable">Waiting for a virtual screen image (no new frame)</string>
+    <string name="virtual_screen_waiting_blank">Waiting for a virtual screen image (the current frame is nearly blank)</string>
     <string name="virtual_screen_rate_unknown">Frame rate pending</string>
-    <string name="virtual_screen_frame_unchanged">%1$s · Picture unchanged</string>
-    <string name="virtual_screen_frame_blank">%1$s · Current frame is nearly solid</string>
+    <string name="virtual_screen_frame_unchanged">%1$s · Screen image unchanged</string>
+    <string name="virtual_screen_frame_blank">%1$s · Current frame is nearly blank</string>
     <string name="virtual_screen_frame_unreadable">No new frame</string>
     <string name="virtual_screen_touch_stream">Direct touch</string>
     <string name="virtual_screen_touch_discrete">Tap or swipe</string>
     <string name="virtual_screen_preview_status">Virtual screen preview · %1$s · %2$s · Mode %3$s</string>
-    <string name="virtual_screen_picture_description">Target-app virtual screen picture; supports tapping and swiping</string>
+    <string name="virtual_screen_picture_description">Target-app virtual screen image; supports tapping and swiping</string>
     <string name="virtual_screen_orientation_landscape">Use a landscape virtual screen (%1$d × %2$d dp)</string>
-    <string name="virtual_screen_orientation_hint">Portrait is the default: %1$d × %2$d dp. Once started you can operate it on this page or in the floating window; the AI uses virtual-screen tools. Pictures are sent to the current model service on demand, so avoid opening pages that show private information.</string>
+    <string name="virtual_screen_orientation_hint">Portrait is the default: %1$d × %2$d dp. Once started, you can use it on this page or in the floating window; the AI uses virtual-screen tools. Screen images are sent to the selected model service when needed, so avoid opening pages that show private information.</string>
 
     <string name="task_notification_channel_name">Runtime status</string>
     <string name="task_notification_channel_description">Alerts you when the local Harness stops or fails to start</string>
@@ -131,11 +131,11 @@
     <string name="task_notification_imported_title">Imported into the workspace</string>
     <string name="task_notification_imported_text">Imported %1$d entries from the inbox</string>
     <string name="task_notification_turn_completed_title">Task completed</string>
-    <string name="task_notification_turn_completed_text">%1$d task(s) completed. Tap to return to the chat screen.</string>
+    <string name="task_notification_turn_completed_text">Completed tasks: %1$d. Tap to return to the chat screen.</string>
     <string name="overlay_conversation_resize_description">Drag to resize the chat window</string>
 
     <!-- Virtual-screen overlay: the status line below the mode buttons. It says "waiting" until a picture exists. -->
-    <string name="virtual_screen_overlay_status_waiting">Waiting for the virtual screen picture</string>
+    <string name="virtual_screen_overlay_status_waiting">Waiting for a virtual screen image</string>
     <!-- Shown right after a mode switch; the next frame pull replaces it with real readings. %1$s is the mode name. -->
     <string name="virtual_screen_overlay_mode_switched">Switched to %1$s; waiting for a fresh frame-rate reading</string>
 </resources>

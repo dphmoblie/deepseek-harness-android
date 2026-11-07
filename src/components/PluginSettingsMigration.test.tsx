@@ -55,7 +55,7 @@ describe('应用升级迁移的回显', () => {
     const bridge = setup({ plugins: [official], recovery: state({ migration: 'partial', lock: 'ok', checked: 2 }) })
     await ready(bridge)
     expect(screen.getByText('有插件需要重新安装')).toBeInTheDocument()
-    expect(screen.getByText('应用升级迁移只完成了一部分，有插件的包已不在设备上，需要重新安装。')).toBeInTheDocument()
+    expect(screen.getByText('应用升级迁移未完成，部分插件包已不在设备上，需要重新安装。')).toBeInTheDocument()
   })
 
   it('迁移正常完成时并入已有恢复文案，说清核对过几个插件', async () => {
