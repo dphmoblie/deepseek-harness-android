@@ -35,6 +35,34 @@ class HarnessPolyfillTest {
     }
 
     @Test
+    fun `补齐旧 WebView 缺少的 ES2023 数组方法`() {
+        for (method in listOf("toSorted", "toReversed", "toSpliced", "with")) {
+            assertTrue(
+                "missing Array.prototype.$method guard",
+                script.contains("typeof Array.prototype.$method !== 'function'"),
+            )
+        }
+        // 先判缺失再 defineProperty：顺序反了会把新 WebView 的原生实现替换掉。
+        assertTrue(
+            script.indexOf("typeof Array.prototype.toSorted !== 'function'") <
+                script.indexOf("Array.prototype, 'toSorted'"),
+        )
+    }
+
+    @Test
+    fun `补齐 Promise withResolvers 与 URL canParse`() {
+        assertTrue(script.contains("typeof Promise.withResolvers !== 'function'"))
+        assertTrue(script.contains("typeof URL.canParse !== 'function'"))
+    }
+
+    @Test
+    fun `脚本保持 ES5 语法，document-start 注入不会在旧 WebView 解析失败`() {
+        assertFalse(script.contains("=>"))
+        assertFalse(script.contains("const "))
+        assertFalse(script.contains("let "))
+    }
+
+    @Test
     fun `脚本自包含且可重复执行`() {
         // 整段是立即执行函数：重复注入只会再走一次「已经是函数」的早退，不产生副作用。
         assertTrue(script.startsWith("(function () {"))

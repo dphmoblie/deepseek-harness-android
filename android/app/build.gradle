@@ -223,6 +223,9 @@ dependencies {
     implementation 'androidx.activity:activity-ktx:1.10.1'
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'androidx.core:core-ktx:1.15.0'
+    // WebView 兼容补丁的 document-start 注入（WebViewCompat.addDocumentStartJavaScript）。
+    // Capacitor 已经间接带进来同一个版本；这里显式声明，避免以后传递依赖变化把 API 抽走。
+    implementation 'androidx.webkit:webkit:1.12.1'
     // 忘记验证密码时的系统身份确认（生物识别 / 锁屏密码）。用 androidx 封装而不是平台的
     // android.hardware.biometrics.BiometricPrompt：后者的 API 30 常量需要 Build.VERSION.SDK_INT
     // 守卫写在**调用点**，而回调在匿名类里，Lint 的 NewApi 看不到外层的 if（本仓库在

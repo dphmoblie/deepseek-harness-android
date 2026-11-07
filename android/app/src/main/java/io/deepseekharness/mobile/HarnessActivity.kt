@@ -48,6 +48,8 @@ class HarnessActivity : AppCompatActivity() {
     private var pageRetryCount = 0
     private var rendererRecovery = false
     private var entryUrlForRetry: String? = null
+    /** 已经装过 document-start 补丁的源；同一个 WebView 重绑定时不重复安装。 */
+    private var polyfilledOriginRule: String? = null
     /** The OAuth page is opened by Harness with window.open(); keep its transport WebView detached. */
     private var authorizationPopup: WebView? = null
     private val pageRetryHandler = Handler(Looper.getMainLooper())
@@ -296,6 +298,13 @@ class HarnessActivity : AppCompatActivity() {
             },
             onWorkspaceShare = ::shareWorkspaceFile,
         )
+        // 旧 WebView 缺 ES2023 数组方法与 AbortSignal.any：能在 document-start 注入时最先补上，
+        // 不至于等 onPageFinished 才生效；不支持该能力的 provider 由 onMainFrameLoaded 兜底。
+        val originRule = origin.originRule()
+        if (polyfilledOriginRule != originRule) {
+            HarnessPolyfill.installDocumentStart(webView, originRule)
+            polyfilledOriginRule = originRule
+        }
         clearHttpAuthCredentialsAsync()
         val cookies = CookieManager.getInstance().apply {
             setAcceptCookie(true)
@@ -648,6 +657,9 @@ class HarnessActivity : AppCompatActivity() {
     }
 
     internal class Origin(val scheme: String, val host: String, val port: Int, val initialUrl: String) {
+        /** 传给 WebViewCompat.addDocumentStartJavaScript 的源规则；没有显式端口时不能补 ":". */
+        fun originRule(): String = if (port == -1) "$scheme://$host" else "$scheme://$host:$port"
+
         fun allows(uri: Uri): Boolean =
             uri.scheme == scheme && uri.host == host && uri.port == port && uri.userInfo == null
 

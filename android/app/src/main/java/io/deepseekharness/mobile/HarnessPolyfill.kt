@@ -1,32 +1,121 @@
 package io.deepseekharness.mobile
 
 import android.webkit.WebView
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 
 /**
  * 给系统 WebView 补上 Harness 页面用到的较新 API，只在缺失时才补。
  *
  * 为什么需要它：Harness 前端（以及它的客户端插件页面）跑在**系统 WebView** 里，而不是内置
  * Node.js 里——两者版本互不相干，把运行时的 Node 提到 24 也补不了浏览器的 API。真机上已经
- * 撞到过一次：Chrome 低于 124 的 WebView 打开「选择工作区目录」时，页面直接显示
- * `AbortSignal.any is not a function`，目录列不出来，弹窗只能取消。
+ * 撞到过两次：
+ * - Chrome 低于 124 的 WebView 打开「选择工作区目录」时，页面直接显示
+ *   `AbortSignal.any is not a function`；
+ * - ColorOS 13 自带的旧 WebView 在模型列表里显示 `groups.toSorted is not a function`
+ *   （`Array.prototype.toSorted` 要 Chrome 110+）。
  *
- * 为什么是 `onPageFinished` 之后注入就够：这些 API 是**调用时**才查表的
- * （`AbortSignal.any([...])`），而触发它的操作（打开目录选择、发起请求）都发生在页面加载
- * 之后。boot 阶段就用到的 API 不在本脚本的射程内——那类只能靠 document-start 注入，
- * 而 document-start 要额外的 WebKitX 依赖，这里按实际故障点收窄，不提前上重武器。
+ * 注入时机分两层：
+ * 1. WebView 支持 `DOCUMENT_START_SCRIPT`（AndroidX WebKit）时，在主框架任何脚本之前注入，
+ *    boot 阶段就调用的 API 也能补上；
+ * 2. 不支持的 provider 退回 `onPageFinished`，仍能覆盖目录选择、模型列表这类用户交互时才
+ *    调用的 API。
  *
  * 边界：只补缺失项，已经是函数就原样返回；不覆盖、不代理、不读页面状态，也不接触凭据。
- * 脚本是纯 ECMAScript，不依赖任何页面全局变量，可被重复执行（幂等）。
+ * 脚本是纯 ECMAScript（ES5 语法），不依赖任何页面全局变量，可被重复执行（幂等）。
  */
 internal object HarnessPolyfill {
     /**
-     * 补齐 `AbortSignal.any`（Node 20.3 / Chrome 124 才有）。
+     * 补齐旧 WebView 缺少的 API。
      *
-     * 语义按规范来：任一信号已中止就用它的 reason 立刻中止；否则等第一个 abort 事件，
-     * 用它的 reason 中止，并摘掉所有监听，避免长命页面里越积越多。
-     * `instanceof` 在跨 realm 时不可靠，这里按形态判断（`aborted` + `addEventListener`）。
+     * - `Array.prototype.toSorted / toReversed / toSpliced / with`（Chrome 110）
+     * - `Promise.withResolvers`（Chrome 119）
+     * - `URL.canParse`（Chrome 120）
+     * - `AbortSignal.any`（Chrome 116）与旧 AbortSignal 的最小 EventTarget 语义
      */
     const val SCRIPT: String = """(function () {
+  /*
+   * ES2023 的数组副本方法：只复制、不原地改。旧 WebView 没有它们时，
+   * 官方前端的模型列表会直接抛 "groups.toSorted is not a function"。
+   * 先补在 AbortSignal 的早退之前——那段对已经有 AbortSignal.any 的 WebView 会 return。
+   */
+  function copyArray(source) {
+    var length = source.length >>> 0;
+    var copy = new Array(length);
+    for (var index = 0; index < length; index += 1) { copy[index] = source[index]; }
+    return copy;
+  }
+  if (typeof Array.prototype.toSorted !== 'function') {
+    Object.defineProperty(Array.prototype, 'toSorted', {
+      configurable: true,
+      writable: true,
+      value: function (compareFn) {
+        var copy = copyArray(this);
+        copy.sort(compareFn);
+        return copy;
+      },
+    });
+  }
+  if (typeof Array.prototype.toReversed !== 'function') {
+    Object.defineProperty(Array.prototype, 'toReversed', {
+      configurable: true,
+      writable: true,
+      value: function () {
+        var copy = copyArray(this);
+        copy.reverse();
+        return copy;
+      },
+    });
+  }
+  if (typeof Array.prototype.toSpliced !== 'function') {
+    Object.defineProperty(Array.prototype, 'toSpliced', {
+      configurable: true,
+      writable: true,
+      value: function () {
+        var copy = copyArray(this);
+        Array.prototype.splice.apply(copy, arguments);
+        return copy;
+      },
+    });
+  }
+  if (typeof Array.prototype.with !== 'function') {
+    Object.defineProperty(Array.prototype, 'with', {
+      configurable: true,
+      writable: true,
+      value: function (index, value) {
+        var copy = copyArray(this);
+        var length = copy.length;
+        var actual = Number(index);
+        if (actual !== actual) { actual = 0; }
+        actual = actual < 0 ? Math.ceil(actual) : Math.floor(actual);
+        if (actual < 0) { actual += length; }
+        if (actual < 0 || actual >= length) { throw new RangeError('Invalid index'); }
+        copy[actual] = value;
+        return copy;
+      },
+    });
+  }
+  if (typeof Promise !== 'undefined' && typeof Promise.withResolvers !== 'function') {
+    Object.defineProperty(Promise, 'withResolvers', {
+      configurable: true,
+      writable: true,
+      value: function () {
+        var resolve;
+        var reject;
+        var promise = new Promise(function (resolvePromise, rejectPromise) {
+          resolve = resolvePromise;
+          reject = rejectPromise;
+        });
+        return { promise: promise, resolve: resolve, reject: reject };
+      },
+    });
+  }
+  if (typeof URL !== 'undefined' && typeof URL.canParse !== 'function') {
+    URL.canParse = function (input, base) {
+      try { new URL(input, base); return true; } catch (error) { return false; }
+    };
+  }
+
   /*
    * 旧 WebView 的 AbortSignal 不是 EventTarget：没有 addEventListener，dsh 前端在
    * 目录选择里调用 signal.addEventListener 直接抛 "signal.addEventListener is not a function"
@@ -110,6 +199,19 @@ internal object HarnessPolyfill {
     return controller.signal;
   };
 })();"""
+
+    /**
+     * 在页面任何脚本执行之前注入，只对指定源生效。provider 不支持 document-start 时静默
+     * 返回，由 [apply] 在 onPageFinished 兜底。调用方要保证同一组参数只装一次，避免重复。
+     */
+    fun installDocumentStart(webView: WebView, originRule: String) {
+        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
+        try {
+            WebViewCompat.addDocumentStartJavaScript(webView, SCRIPT, setOf(originRule))
+        } catch (_: Exception) {
+            // provider 声称支持却注入失败：保留 onPageFinished 兜底，不打断页面加载。
+        }
+    }
 
     /** 页面主框架加载完成后调用；WebView 正在销毁或已 detach 时静默跳过。 */
     fun apply(webView: WebView) {
