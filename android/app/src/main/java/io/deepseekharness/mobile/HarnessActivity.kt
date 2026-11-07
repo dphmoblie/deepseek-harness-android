@@ -290,8 +290,9 @@ class HarnessActivity : AppCompatActivity() {
                 }
                 // 每次主框架加载完都重放一次已同步的主题；没有同步过时它什么都不做。
                 HarnessThemeBridge.apply(view)
-                // 同一时刻补一次浏览器 API：老 WebView 缺 AbortSignal.any，页面自带的
-                // 「选择工作区目录」会在点开时直接报错。缺失才补，新的 WebView 上是空操作。
+                // document-start 不支持时的兜底：老 WebView 缺 AbortSignal.any / toSorted，
+                // 「选择工作区目录」和模型列表会在点开时报 "is not a function"。缺失才补，
+                // 支持 document-start 的 provider 上这里只是重复执行一遍幂等脚本。
                 HarnessPolyfill.apply(view)
                 // 官方预览面板没有分享入口；补一个按钮，点击回到原生分享。
                 HarnessWorkspaceShare.apply(view)
