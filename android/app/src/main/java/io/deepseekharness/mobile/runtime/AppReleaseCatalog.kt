@@ -2,8 +2,14 @@ package io.deepseekharness.mobile.runtime
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.system.Os
 import androidx.core.content.pm.PackageInfoCompat
 import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.util.UUID
 
 /** 本机已安装的应用版本：[versionName] 给人看，[versionCode] 只作为事实回报给界面。 */
 internal data class InstalledAppInfo(val versionName: String, val versionCode: Long)
@@ -71,19 +77,34 @@ internal enum class AppUpdateChannel(val id: String) {
 
         private const val PREFS_NAME = "dsh-app-update-channel"
         private const val KEY_CHANNEL = "channel"
+        private const val BACKUP_FILE_NAME = ".dsh-app-update-channel"
+        private const val MAX_BACKUP_BYTES = 16L
 
         /** 桥入参/持久化值 → 频道；非法值返回 null，由调用方决定报错还是回默认。 */
         fun fromId(value: String?): AppUpdateChannel? = entries.firstOrNull { it.id == value }
 
-        /** 读取用户选择的频道；读不到或值被改坏时按 [DEFAULT] 处理。 */
-        fun load(context: Context): AppUpdateChannel = try {
-            fromId(
-                context.applicationContext
-                    .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    .getString(KEY_CHANNEL, null),
-            ) ?: DEFAULT
-        } catch (_: Throwable) {
-            DEFAULT
+        /**
+         * 读取用户选择的频道。
+         *
+         * SharedPreferences 是主存储；小型文件副本只在主存储缺失或损坏时恢复。
+         * 这样旧版本用户第一次升级时可以补齐副本，同时不会让一个过期副本覆盖用户
+         * 刚刚保存的频道。
+         */
+        fun load(context: Context): AppUpdateChannel {
+            val app = context.applicationContext
+            val prefs = runCatching {
+                app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            }.getOrNull()
+            // 旧版本只有 SharedPreferences：第一次读到它时补写副本，覆盖后续更新窗口。
+            val stored = runCatching { prefs?.let { fromId(it.getString(KEY_CHANNEL, null)) } }.getOrNull()
+            if (stored != null) {
+                runCatching { writeBackup(app, stored) }
+                return stored
+            }
+            val recovered = runCatching { readBackup(app) }.getOrNull() ?: return DEFAULT
+            // 回填失败不应遮蔽已经恢复出的值；commit 结果只影响下次读取。
+            prefs?.let { runCatching { it.edit().putString(KEY_CHANNEL, recovered.id).commit() } }
+            return recovered
         }
 
         /**
@@ -92,9 +113,42 @@ internal enum class AppUpdateChannel(val id: String) {
          * 失败时抛 [RuntimeFailure]，由调用方走已有的错误回退路径。
          */
         fun save(context: Context, channel: AppUpdateChannel) {
-            val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val app = context.applicationContext
+            val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val ok = prefs.edit().putString(KEY_CHANNEL, channel.id).commit()
             if (!ok) throw RuntimeFailure("APP_UPDATE_CHANNEL_SAVE_FAILED", "频道保存失败，请重试")
+            // SharedPreferences 已成功落盘；副本失败不能让用户刚保存的选择报错。
+            runCatching { writeBackup(app, channel) }
+        }
+
+        /** 供纯 JVM 测试和读路径复用的副本文本解析。 */
+        internal fun parseBackup(value: String?): AppUpdateChannel? = fromId(value?.trim())
+
+        private fun backupFile(context: Context): File = File(context.applicationContext.filesDir, BACKUP_FILE_NAME)
+
+        private fun readBackup(context: Context): AppUpdateChannel? {
+            val file = backupFile(context)
+            val path = file.toPath()
+            if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.size(path) !in 1..MAX_BACKUP_BYTES) return null
+            return parseBackup(file.readText(Charsets.US_ASCII))
+        }
+
+        private fun writeBackup(context: Context, channel: AppUpdateChannel) {
+            val target = backupFile(context)
+            val parent = target.parentFile
+                ?.takeIf { it.isDirectory && !Files.isSymbolicLink(it.toPath()) }
+                ?: error("频道副本目录不可用")
+            val temporary = File(parent, ".${target.name}.${UUID.randomUUID()}.tmp")
+            try {
+                FileOutputStream(temporary).use { output ->
+                    output.write(channel.id.toByteArray(Charsets.US_ASCII))
+                    output.fd.sync()
+                }
+                Os.chmod(temporary.absolutePath, 0x180)
+                Os.rename(temporary.absolutePath, target.absolutePath)
+            } finally {
+                runCatching { temporary.delete() }
+            }
         }
     }
 }

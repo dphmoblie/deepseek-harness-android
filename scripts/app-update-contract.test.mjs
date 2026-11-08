@@ -5,6 +5,7 @@ import { test } from 'node:test'
 
 const root = resolve(import.meta.dirname, '..')
 const plugin = (await readFile(resolve(root, 'android/app/src/main/java/io/deepseekharness/mobile/MobileRuntimePlugin.kt'), 'utf8')).replace(/\r\n/gu, '\n')
+const catalog = (await readFile(resolve(root, 'android/app/src/main/java/io/deepseekharness/mobile/runtime/AppReleaseCatalog.kt'), 'utf8')).replace(/\r\n/gu, '\n')
 
 function method(name) {
   const start = plugin.indexOf(`    fun ${name}(call: PluginCall)`)
@@ -39,4 +40,30 @@ test('安装必须核对当前发布，并只读取对应版本的已下载包',
   assert.match(install, /val release = requireAppUpdate\(\)/u)
   assert.match(install, /AppUpdateInstallPolicy\.requireInstallable\(\s*AppReleaseCatalog\.installAllowed\(context\),\s*AppUpdateStorage\.downloaded\(context\.cacheDir, release\.version\),\s*release,/u)
   assert.ok(install.indexOf('requireAppUpdate()') < install.indexOf('AppUpdateInstallPolicy.requireInstallable('))
+})
+
+test('测试频道在更新后有独立的冗余持久化与恢复路径', () => {
+  assert.match(catalog, /private const val PREFS_NAME = "dsh-app-update-channel"/u)
+  assert.match(catalog, /private const val BACKUP_FILE_NAME = "\.dsh-app-update-channel"/u)
+  assert.match(catalog, /Files\.isRegularFile\(path, LinkOption\.NOFOLLOW_LINKS\)/u)
+  assert.match(catalog, /readBackup\(app\)/u)
+  assert.match(catalog, /edit\(\)\.putString\(KEY_CHANNEL, recovered\.id\)\.commit\(\)/u)
+  assert.match(catalog, /output\.fd\.sync\(\)/u)
+
+  const loadStart = catalog.indexOf('fun load(context: Context)')
+  const storedRead = catalog.indexOf('val stored =', loadStart)
+  const backupRead = catalog.indexOf('val recovered =', loadStart)
+  assert.ok(loadStart >= 0 && storedRead > loadStart && backupRead > storedRead, 'SharedPreferences 应先于副本作为主存储读取')
+
+  const saveStart = catalog.indexOf('fun save(context: Context, channel: AppUpdateChannel)')
+  const prefsCommit = catalog.indexOf('val ok = prefs.edit().putString(KEY_CHANNEL, channel.id).commit()', saveStart)
+  const backupWrite = catalog.indexOf('runCatching { writeBackup(app, channel) }', saveStart)
+  assert.ok(saveStart >= 0 && prefsCommit > saveStart && backupWrite > prefsCommit, '主存储提交成功后才更新副本')
+})
+
+test('主存储优先，避免陈旧副本覆盖用户刚保存的频道', () => {
+  const load = catalog.slice(catalog.indexOf('fun load(context: Context)'))
+  assert.ok(load.indexOf('val stored =') < load.indexOf('val recovered ='), 'load 必须先读 SharedPreferences')
+  const save = catalog.slice(catalog.indexOf('fun save(context: Context, channel: AppUpdateChannel)'))
+  assert.ok(save.indexOf('prefs.edit().putString(KEY_CHANNEL, channel.id).commit()') < save.indexOf('runCatching { writeBackup(app, channel) }'), 'save 必须先提交主存储')
 })

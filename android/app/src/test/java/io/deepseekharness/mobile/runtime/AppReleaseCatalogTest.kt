@@ -203,6 +203,14 @@ class AppReleaseCatalogTest {
         assertEquals(AppUpdateChannel.BETA, AppUpdateChannel.fromId("beta"))
     }
 
+    @Test
+    fun channelBackupAcceptsOnlyTheTwoPersistedValues() {
+        assertEquals(AppUpdateChannel.STABLE, AppUpdateChannel.parseBackup(" stable\n"))
+        assertEquals(AppUpdateChannel.BETA, AppUpdateChannel.parseBackup("beta"))
+        assertNull(AppUpdateChannel.parseBackup("nightly"))
+        assertNull(AppUpdateChannel.parseBackup(null))
+    }
+
     // ---- 更新说明 ----
 
     @Test
