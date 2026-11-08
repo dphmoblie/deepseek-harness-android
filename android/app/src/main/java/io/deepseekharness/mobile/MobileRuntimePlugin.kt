@@ -362,6 +362,14 @@ class MobileRuntimePlugin : Plugin() {
     @Volatile
     private var pendingBiometricResetPrompt: BiometricPrompt? = null
 
+    /** 进行中的设备电源身份确认；与重置密码的提示分开保存，避免两次确认互相清掉引用。 */
+    @Volatile
+    private var pendingPowerPrompt: BiometricPrompt? = null
+
+    /** API 26–29 的锁屏凭据回调只能带一个 call，这里暂存本次动作类型。 */
+    @Volatile
+    private var pendingPowerAction: String? = null
+
     /**
      * 壳页「会话工作区」的会话元数据读取器（见 [SessionCatalog]）。
      * 懒建：没打开过会话工作区就不付 profile 解析与脚本投放的代价。
@@ -1904,8 +1912,16 @@ class MobileRuntimePlugin : Plugin() {
             if (!rootEngine && !controller.hasDeviceSession(sessionId)) {
                 throw RuntimeFailure("SESSION_NOT_FOUND", "设备 Shell 会话不存在或已结束")
             }
+            val rootGuardProfile = io.deepseekharness.mobile.shizuku.RootEngineAccess.guardProfile(context)
             val result = RuntimeHost.deviceCommands()
-                .execute(sessionId, command, call.getString("param") ?: "", DEVICE_COMMAND_TIMEOUT_MS, useRootEngine = rootEngine)
+                .execute(
+                    sessionId,
+                    command,
+                    call.getString("param") ?: "",
+                    DEVICE_COMMAND_TIMEOUT_MS,
+                    useRootEngine = rootEngine,
+                    rootGuardProfile = rootGuardProfile,
+                )
             JSObject()
                 .put("ok", result.ok)
                 .put("exitCode", result.exitCode)
@@ -1955,6 +1971,194 @@ class MobileRuntimePlugin : Plugin() {
                 ).toJs()
             }
         }
+    }
+
+    /**
+     * 设置根通道模式与护栏档位。
+     *
+     * 无效取值一律落到最保守的组合（`off` + `strict`），不把 `"true"` 这类字符串当成开启。
+     * 打开读写档只是**允许**：KernelSU 授权仍在管理器里由用户点。
+     */
+    @PluginMethod
+    fun setRootEngineMode(call: PluginCall) {
+        execute(call) {
+            val mode = io.deepseekharness.mobile.shizuku.RootEngineAccess.Mode.fromWire(call.getString("mode"))
+            val profile = io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile.fromWire(call.getString("guardProfile"))
+            audited(AuditEvent.ROOT_ENGINE_SETTING) {
+                io.deepseekharness.mobile.shizuku.RootEngineAccess.save(context, mode, profile)
+                io.deepseekharness.mobile.shizuku.KernelSuProbe.clearCache()
+                io.deepseekharness.mobile.shizuku.RootSandboxProbe.clearCache()
+                io.deepseekharness.mobile.shizuku.RootEngineAccess.status(
+                    context,
+                    packageChecker = io.deepseekharness.mobile.shizuku.RootEngineAccess.packageChecker(context),
+                ).toJs()
+            }
+        }
+    }
+
+    /**
+     * 设备电源动作：重启 / 关机。**只给设置页，不给 AI。**
+     *
+     * 设备桥没有这条命令，AI 工具也不暴露它；每次点击都必须先通过系统身份确认
+     * （API 30+ 生物识别或锁屏密码，API 26–29 锁屏凭据）。确认后由应用进程直接执行
+     * 编译期常量 `reboot` / `reboot -p`，不经过 AI 可写的命令通道。
+     */
+    @PluginMethod
+    fun requestDevicePowerAction(call: PluginCall) {
+        val action = call.getString("action")
+        if (action != "reboot" && action != "powerOff") {
+            call.reject("电源动作只能是 reboot 或 powerOff", "DEVICE_POWER_ACTION_INVALID")
+            return
+        }
+        // 这里只读模式（SharedPreferences），不在 Capacitor 桥线程上拉 `su` 探测：
+        // 界面按钮是否可点已经由卡片状态（`usable`）把关；真正的授权/可用性由执行时的
+        // `su -c` 结果回答。桥线程阻塞会让所有桥调用排队（见 AGENTS.md 第 9 条）。
+        if (io.deepseekharness.mobile.shizuku.RootEngineAccess.mode(context) !=
+            io.deepseekharness.mobile.shizuku.RootEngineAccess.Mode.READ_WRITE
+        ) {
+            call.reject("根通道当前不可用，无法执行电源操作", "ROOT_ENGINE_UNAVAILABLE")
+            return
+        }
+        val currentActivity = activity
+        if (currentActivity == null) {
+            call.reject("当前没有可用的界面，无法进行系统身份确认", "POWER_CONFIRM_UNAVAILABLE")
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            requestBiometricPowerConfirmation(currentActivity, call, action)
+        } else {
+            requestDeviceCredentialPowerConfirmation(currentActivity, call, action)
+        }
+    }
+
+    private fun powerActionLabel(action: String): String = if (action == "reboot") "重启设备" else "关机"
+
+    /** API 30+：系统生物识别或锁屏密码；通过后执行固定电源命令。 */
+    private fun requestBiometricPowerConfirmation(
+        currentActivity: android.app.Activity,
+        call: PluginCall,
+        action: String,
+    ) {
+        val fragmentActivity = currentActivity as? androidx.fragment.app.FragmentActivity
+        if (fragmentActivity == null) {
+            call.reject("当前界面不支持系统身份确认", "POWER_CONFIRM_UNAVAILABLE")
+            return
+        }
+        val manager = BiometricManager.from(fragmentActivity)
+        val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or
+            BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        if (manager.canAuthenticate(authenticators) != BiometricManager.BIOMETRIC_SUCCESS) {
+            call.reject("设备上没有可用的生物识别或锁屏密码", "POWER_CONFIRM_UNAVAILABLE")
+            return
+        }
+        pendingPowerPrompt?.cancelAuthentication()
+        lateinit var prompt: BiometricPrompt
+        prompt = BiometricPrompt(
+            fragmentActivity,
+            ContextCompat.getMainExecutor(fragmentActivity),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    clearPendingPowerPrompt(prompt)
+                    execute(call) {
+                        audited(AuditEvent.DEVICE_POWER_ACTION) { performDevicePowerAction(action) }
+                    }
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    clearPendingPowerPrompt(prompt)
+                    call.reject(
+                        "系统身份确认未通过",
+                        if (errorCode == BiometricPrompt.ERROR_USER_CANCELED ||
+                            errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+                            errorCode == BiometricPrompt.ERROR_CANCELED
+                        ) {
+                            "POWER_CONFIRM_CANCELLED"
+                        } else {
+                            "POWER_CONFIRM_FAILED"
+                        },
+                    )
+                }
+            },
+        )
+        pendingPowerPrompt = prompt
+        val label = powerActionLabel(action)
+        val info = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("确认$label")
+            .setSubtitle("通过后立即$label；此操作不会交给 AI")
+            .setAllowedAuthenticators(authenticators)
+            .build()
+        fragmentActivity.runOnUiThread {
+            try {
+                prompt.authenticate(info)
+            } catch (_: Throwable) {
+                clearPendingPowerPrompt(prompt)
+                call.reject("设备上没有可用的身份确认界面", "POWER_CONFIRM_UNAVAILABLE")
+            }
+        }
+    }
+
+    /** API 26–29：系统锁屏凭据界面；结果只认 `RESULT_OK`。 */
+    @Suppress("DEPRECATION")
+    private fun requestDeviceCredentialPowerConfirmation(
+        currentActivity: android.app.Activity,
+        call: PluginCall,
+        action: String,
+    ) {
+        val keyguard = currentActivity.getSystemService(KeyguardManager::class.java)
+        val label = powerActionLabel(action)
+        val intent = keyguard?.createConfirmDeviceCredentialIntent(
+            "确认$label",
+            "通过后立即$label；此操作不会交给 AI",
+        )
+        if (intent == null) {
+            call.reject("设备未设置锁屏密码，无法确认身份", "POWER_CONFIRM_UNAVAILABLE")
+            return
+        }
+        pendingPowerAction = action
+        currentActivity.runOnUiThread {
+            try {
+                startActivityForResult(call, intent, "devicePowerConfirmed")
+            } catch (_: Throwable) {
+                pendingPowerAction = null
+                call.reject("设备上没有可用的身份确认界面", "POWER_CONFIRM_UNAVAILABLE")
+            }
+        }
+    }
+
+    @ActivityCallback
+    private fun devicePowerConfirmed(call: PluginCall?, result: ActivityResult) {
+        val action = pendingPowerAction
+        pendingPowerAction = null
+        if (call == null) return
+        if (result.resultCode != android.app.Activity.RESULT_OK) {
+            call.reject("已取消系统身份确认", "POWER_CONFIRM_CANCELLED")
+            return
+        }
+        if (action == null) {
+            call.reject("电源操作已失效，请重试", "POWER_CONFIRM_UNAVAILABLE")
+            return
+        }
+        execute(call) {
+            audited(AuditEvent.DEVICE_POWER_ACTION) { performDevicePowerAction(action) }
+        }
+    }
+
+    /** 固定常量脚本；不接受任何调用方输入。 */
+    private fun performDevicePowerAction(action: String): JSObject {
+        val script = when (action) {
+            "reboot" -> "reboot"
+            "powerOff" -> "reboot -p"
+            else -> throw RuntimeFailure("DEVICE_POWER_ACTION_INVALID", "电源动作无效")
+        }
+        val result = io.deepseekharness.mobile.shizuku.RootCommandRunner.runSystemAction(script)
+        if (!result.ok) {
+            throw RuntimeFailure(result.errorCode ?: "DEVICE_POWER_FAILED", "设备电源操作失败")
+        }
+        return JSObject().put("ok", true).put("action", action)
+    }
+
+    private fun clearPendingPowerPrompt(prompt: BiometricPrompt) {
+        if (pendingPowerPrompt === prompt) pendingPowerPrompt = null
     }
 
     /**

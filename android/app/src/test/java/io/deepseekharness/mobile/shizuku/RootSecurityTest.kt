@@ -32,16 +32,28 @@ class RootSecurityTest {
             "ps -ef | grep node",
             "tar -czf /sdcard/backup.tar.gz /data/data/com.test.app/files",
             // 读块设备文件本身不是破坏动作：没有重定向/of=/tee 就不拦。
-            "cat /dev/block/bootdevice/by-name/bootinfo",
-            // /data 改可写是正常运维需求，核心分区才是禁区。
-            "mount -o remount,rw /data",
-            // 只是名字里含 wipe 的正常参数。
+            // 但 `cat /dev/block/...` 会命中最大档的「读写块设备」规则，见下方专门用例。
             "zip -q --wipe-cache backup.zip /data/local/tmp/x",
             "rm -rf /data/local/tmp/build",
         )
         for (cmd in safeCommands) {
             RootCommandGuard.verifySafe(cmd)
         }
+    }
+
+    @Test
+    fun `最大档才放行 mount 与普通 setprop`() {
+        RootCommandGuard.verifySafe("mount -o remount,rw /data", RootCommandGuard.Profile.MAXIMUM)
+        RootCommandGuard.verifySafe("setprop dsh.probe 1", RootCommandGuard.Profile.MAXIMUM)
+        RootCommandGuard.verifySafe("dd if=/dev/zero of=/data/local/tmp/x", RootCommandGuard.Profile.MAXIMUM)
+        assertTrue(
+            "严格档仍要拦 mount",
+            RootCommandGuard.violations("mount -o remount,rw /data", RootCommandGuard.Profile.STRICT).isNotEmpty(),
+        )
+        assertTrue(
+            "最大档也不能写核心分区",
+            RootCommandGuard.violations("mount -o remount,rw /system", RootCommandGuard.Profile.MAXIMUM).isNotEmpty(),
+        )
     }
 
     @Test
@@ -174,9 +186,10 @@ class RootSecurityTest {
 
     @Test
     fun `RootCommandGuard 降级档补上命名空间本该承担的那一段`() {
-        // 常规档：`mount -o remount,rw /data` 是正常运维，不该拦。
-        RootCommandGuard.verifySafe("mount -o remount,rw /data")
-        assertTrue(RootCommandGuard.violations("mount -o remount,rw /data").isEmpty())
+        // 最大档：`mount -o remount,rw /data` 是正常运维，不该拦；严格档见下。
+        RootCommandGuard.verifySafe("mount -o remount,rw /data", RootCommandGuard.Profile.MAXIMUM)
+        assertTrue(RootCommandGuard.violations("mount -o remount,rw /data", RootCommandGuard.Profile.MAXIMUM).isEmpty())
+        assertTrue("严格档必须拦 mount", RootCommandGuard.violations("mount -o remount,rw /data").isNotEmpty())
 
         val degradedOnly = listOf(
             "mount -o remount,rw /data",
@@ -190,9 +203,9 @@ class RootSecurityTest {
             "cat /dev/mem",
         )
         for (cmd in degradedOnly) {
-            assertTrue("降级档应命中: $cmd", RootCommandGuard.violations(cmd, strict = true).isNotEmpty())
+            assertTrue("降级档应命中: $cmd", RootCommandGuard.violations(cmd, RootCommandGuard.Profile.STRICT).isNotEmpty())
             try {
-                RootCommandGuard.verifySafe(cmd, strict = true)
+                RootCommandGuard.verifySafe(cmd, RootCommandGuard.Profile.STRICT)
                 fail("降级档应拦下: $cmd")
             } catch (e: RuntimeFailure) {
                 assertEquals("ROOT_SECURITY_VIOLATION", e.code)
@@ -201,7 +214,91 @@ class RootSecurityTest {
 
         // 降级档不是「全都不许」：只读观察类命令照旧放行。
         for (cmd in listOf("ls -la /data/data", "cat /proc/version", "echo hello", "ps -ef | grep node")) {
-            RootCommandGuard.verifySafe(cmd, strict = true)
+            RootCommandGuard.verifySafe(cmd, RootCommandGuard.Profile.STRICT)
+        }
+    }
+
+    @Test
+    fun `最大档仍拦数据销毁电源与块设备`() {
+        val blocked = listOf(
+            "rm -rf /data",
+            "rm -rf /data/*",
+            "rm -rf /data/system",
+            "rm -rf /data/adb",
+            "find /data -delete",
+            "reboot",
+            "busybox reboot",
+            "poweroff",
+            "svc power reboot",
+            "cmd power shutdown",
+            "am broadcast -a android.intent.action.REBOOT",
+            "kill -9 1",
+            "echo b > /proc/sysrq-trigger",
+            "cp /dev/block/by-name/boot /data/local/tmp/boot.img",
+            "cat /dev/block/sda",
+            "echo x > /system/etc/hosts",
+            "cp /data/foo /system/foo",
+            "setprop sys.powerctl reboot",
+            "su -c reboot",
+            "adb shell reboot",
+        )
+        for (cmd in blocked) {
+            assertTrue(
+                "最大档仍应拦截: $cmd",
+                RootCommandGuard.violations(cmd, RootCommandGuard.Profile.MAXIMUM).isNotEmpty(),
+            )
+        }
+
+        val allowed = listOf(
+            "rm -rf /data/local/tmp/build",
+            "rm -rf /data/adb/modules/foo",
+            "echo reboot",
+            "echo \"run mount now\"",
+            "mount | head -1",
+            "setprop dsh.probe 1",
+            "dd if=/dev/zero of=/data/local/tmp/x",
+            "cp /system/foo /data/foo",
+        )
+        for (cmd in allowed) {
+            assertTrue(
+                "最大档不应误杀: $cmd（命中 ${RootCommandGuard.violations(cmd, RootCommandGuard.Profile.MAXIMUM)}）",
+                RootCommandGuard.violations(cmd, RootCommandGuard.Profile.MAXIMUM).isEmpty(),
+            )
+        }
+    }
+
+    @Test
+    fun `多行脚本的第二行仍按命令起点检查`() {
+        val blocked = listOf(
+            "echo safe\nreboot",
+            "echo safe\nrm -rf /data",
+            "echo safe\ncp /data/foo /system/foo",
+            "echo safe\nadb shell reboot",
+            "if true; then reboot; fi",
+            "(reboot)",
+            "xargs reboot",
+        )
+        for (cmd in blocked) {
+            assertTrue(
+                "换行后的危险命令不能被漏掉: ${cmd.replace("\n", "\\n")}",
+                RootCommandGuard.violations(cmd, RootCommandGuard.Profile.MAXIMUM).isNotEmpty(),
+            )
+        }
+        // 注释/echo 里的词仍然不误杀。
+        assertTrue(
+            RootCommandGuard.violations("echo \"run mount now\"\necho reboot", RootCommandGuard.Profile.MAXIMUM).isEmpty(),
+        )
+    }
+
+    @Test
+    fun `RootCommandRunner 的原生电源动作不过护栏`() {
+        val previous = RootCommandRunner.processLauncher
+        try {
+            RootCommandRunner.processLauncher = { FakeProcess("", 0) }
+            assertNull(RootCommandRunner.runSystemAction("reboot").errorCode)
+            assertEquals(0, RootCommandRunner.runSystemAction("reboot -p").exitCode)
+        } finally {
+            RootCommandRunner.processLauncher = previous
         }
     }
 
@@ -521,7 +618,16 @@ class RootSecurityTest {
     @Test
     fun `根通道不可用时回退 Shizuku 且不能绕过 AI Shell 开关`() {
         listOf(KernelSuProbe.STATUS_UNSUPPORTED, KernelSuProbe.STATUS_NEEDS_ACTION).forEach { status ->
-            val root = RootEngineAccess.Status(true, status, "NOT_READY", false, emptyList(), null)
+            val root = RootEngineAccess.Status(
+                enabled = true,
+                mode = RootEngineAccess.Mode.READ_WRITE,
+                guardProfile = RootCommandGuard.Profile.STRICT,
+                kernelSuStatus = status,
+                reason = "NOT_READY",
+                degraded = false,
+                degradations = emptyList(),
+                suVersion = null,
+            )
             assertFalse(root.usable)
             assertFalse(DeviceCommand.requireShellRoute(DeviceCommand.SHELL, root.usable, shellEnabled = true))
             try {

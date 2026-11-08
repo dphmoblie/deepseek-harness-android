@@ -170,7 +170,9 @@ export const bridge = {
   // 根通道卡片紧跟设备能力清单渲染，进设置页就会读一次状态；缺桩会让 effect 抛错并卸载整棵树
   // （同上一条注释里的坑）。开关是用户点击后才调，但同样留桩。
   getRootEngineStatus: vi.fn(),
+  setRootEngineMode: vi.fn(),
   setRootEngineEnabled: vi.fn(),
+  requestDevicePowerAction: vi.fn(),
   // 任务台账：界面进「无障碍应用自动化」页会读一次当前任务，取消是用户点击后才调；
   // 缺桩同样会让 effect 抛错并卸载整棵树。
   getAutomationTaskState: vi.fn(),
@@ -631,6 +633,8 @@ export function beforeEachAppTest(): void {
   // 假装「开着且可用」会让默认桩反而在教界面显示一个真机上不存在的组合。
   bridge.getRootEngineStatus.mockResolvedValue({
     enabled: false,
+    mode: 'off',
+    guardProfile: 'strict',
     usable: false,
     kernelSuStatus: 'unsupported',
     reason: 'ROOT_ENGINE_DISABLED',
@@ -640,6 +644,8 @@ export function beforeEachAppTest(): void {
   })
   bridge.setRootEngineEnabled.mockResolvedValue({
     enabled: true,
+    mode: 'read_write',
+    guardProfile: 'strict',
     usable: false,
     kernelSuStatus: 'needs_action',
     reason: 'KERNELSU_PERMISSION_REQUIRED',
@@ -647,6 +653,18 @@ export function beforeEachAppTest(): void {
     degradations: [],
     suVersion: '3.1.0:KernelSU',
   })
+  bridge.setRootEngineMode.mockResolvedValue({
+    enabled: true,
+    mode: 'read_write',
+    guardProfile: 'strict',
+    usable: false,
+    kernelSuStatus: 'needs_action',
+    reason: 'KERNELSU_PERMISSION_REQUIRED',
+    degraded: false,
+    degradations: [],
+    suVersion: '3.1.0:KernelSU',
+  })
+  bridge.requestDevicePowerAction.mockResolvedValue({ ok: true, action: 'reboot' })
   // 任务台账默认「服务连着、当前没有任务」：多数用例只关心别的页面，不该被一块写着「有任务在跑」
   // 的读数影响；需要「读不到」（connected=false）或「有任务」的用例自己覆盖这两条桩。
   bridge.getAutomationTaskState.mockResolvedValue({ connected: true, task: null })

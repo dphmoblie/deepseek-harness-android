@@ -87,6 +87,14 @@ enum class AuditEvent {
      */
     ROOT_ENGINE_SETTING,
 
+    /**
+     * 原生的设备电源动作：重启或关机。
+     *
+     * 这不是 AI 通道：设备桥里没有电源命令，AI 工具也不暴露它；只有设置页在系统身份确认
+     * （生物识别或锁屏密码）之后才会写入这条事件。只记动作类别与受控结果，不记命令内容。
+     */
+    DEVICE_POWER_ACTION,
+
     /** 无障碍应用白名单与系统设置入口。 */
     ACCESSIBILITY_CONFIG,
 

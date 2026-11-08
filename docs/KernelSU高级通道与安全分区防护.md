@@ -452,3 +452,42 @@ Root 会话创建/修改的文件默认属主为 root。若写入本应用私有
 #### 仍待真机 / 未决
 
 `unshare` 与 `setpriv` 的探测结果、`mount --make-rprivate` 是否被适配器允许、遮蔽是否真的生效，都必须真机跑过才能冻结（TC-01 ~ TC-11）；§9.2 的 App Profile 引导流程与「挂载能力档白名单」两条仍未决。
+
+### 9.6 第六轮：分档护栏、数据销毁与手动电源（2026-11-08）
+
+用户实机（AAP-AN00 / Android 16 / KernelSU / `u:r.ksu:s0`）反馈「AI 能自动重启关机，但 root 命令基本被拦」。实测与代码复核后，本轮把「一个布尔开关」拆成**模式 + 护栏档位**，并把电源动作收回原生 UI。
+
+#### 改了什么
+
+1. **根通道模式**：`off` / `read_write`；旧 `enabled` 布尔迁移为 `true → read_write + strict`、`false → off`。状态里新增 `mode` 与 `guardProfile`，前端按三档渲染（关闭 / 读写·严格 / 读写·最大）。
+2. **两个护栏档**：
+   - `strict`（默认）：既有规则 + `mount`/`dd`/`insmod`/`chmod`/写 `/proc/sys`/`sysfs`/`setprop` 全部拒绝；
+   - `maximum`：只保留 [RULES] 里的不可逆动作，放开普通 `mount`、`dd`（普通文件）、`insmod`、普通 `setprop`、`echo "run mount now"` 这类误杀。
+3. **不可逆动作始终拦**（两个档位都拦）：
+   - bootloader/recovery/fastboot、`adb sideload`、已知第三方刷机工具；
+   - `/dev/block` 读写（含 `cat`/`cp`/`debugfs`/`fsck`/`resize2fs`/`lpmake` 等写法）；
+   - 核心分区写入（`>`、`tee`、`cp`/`mv`/`install` 到 `/system|/vendor|...`）；
+   - 数据销毁：`rm -rf /data`、`/data/*`、`/data/system|misc|vendor|apex|property|app|dalvik-cache|ota*|adb`、`find /data -delete`、`shred`/`truncate`；允许 `/data/local/tmp` 与 `/data/adb/modules/<id>`；
+   - 电源：`reboot`/`poweroff`/`shutdown`/`halt`、`svc|cmd power`、`am ... REBOOT`、`kill ... 1`、写 `/proc/sysrq-trigger`、`/sys/power/`；
+   - 物理内存：`/dev/mem`、`/dev/kmem`、`/proc/kcore`；
+   - 嵌套 `su -c` 与 `adb shell`/`exec-out`/`exec-in`：根 Shell 已经是 UID 0，再借一层只会绕开文本审查。
+4. **匹配方式**：危险命令按命令位置（行首、`;`、`|`、`&&`、`||`）匹配，并剥掉 `/system/bin/`、`busybox`、`toybox` 前缀；`echo reboot`、`echo "rm -rf /data"`、`echo "run mount now"` 不再误杀。
+5. **手动电源**：设置页新增「重启设备 / 关机」；每次点击走 `BiometricPrompt`（API 30+）或 `KeyguardManager`（26–29），确认后执行编译期常量 `reboot` / `reboot -p`。设备桥没有电源命令，AI 工具也不暴露；审计事件 `DEVICE_POWER_ACTION`。
+6. **沙箱加固**：`setpriv` 增加 `-sys_boot`（bounding/inh/ambient），在最大档放开 `mount`/`dd` 后，直接 `reboot(2)` 仍受电源软拦约束。
+
+#### 实测报告与源码的差异（必须知道）
+
+0.3.9 设备实测报告里，`ls /data/data`、`pm list packages`、`ls .../Android/data`、`cat /proc/self/attr/current` 被报 `ROOT_SECURITY_VIOLATION`；但当前仓库 HEAD/tag 的 `RootCommandGuard` 没有这些规则，`RootSecurityTest` 也明确允许 `ls -la /data/data`。用 0.3.9 源码编译的探针复跑，这四条全部放行。结论：报告大概率对应另一份构建/另一层拦截；**不要按报告补这些隐私词表**——`pm list` 可被 `cmd package` 绕过，`/data/data` 的真实边界是 SELinux/框架（实测 `stat` 返回 `ROOT_COMMAND_FAILED`），不是护栏。
+
+#### 边界口径（不要写成硬保证）
+
+- 最大档仍是**任意 UID 0 Shell**；静态护栏只是速度 bumps，能挡常见误操作，挡不住变量拼接、二进制、`app_process`、`ksud` 内部动作。
+- 实测设备上 `PROPAGATION_FAILED`/`BLOCK_MASK_SKIPPED`/`HARDENING_UNAVAILABLE` 同时出现，意味着没有命名空间、没有 `/dev/block` 遮蔽、没有能力裁剪；`/data/system`、`/data/app` 可写，`/dev/block` 可读。UI 必须如实显示降级，不能把最大档说成「已隔离」。
+- 真正的硬约束只有：核心分区 erofs/ro、`/dev/block` 遮蔽（成功时）、KernelSU App Profile。要「重启/关机绝对不可被 AI 触发」，只能去掉任意 Shell（能力代理）或在内核侧裁能力；本轮的电源按钮与静态规则是**产品层软拦**。
+- `/data/data` 读不到是 SELinux/框架边界；需要读第三方应用数据时，改 App Profile/SELinux，不是继续加 root 护栏规则。
+
+#### 回归入口
+
+- `android/app/src/test/java/io/deepseekharness/mobile/shizuku/RootSecurityTest.kt`：`最大档才放行 mount 与普通 setprop`、`最大档仍拦数据销毁电源与块设备`、`RootCommandRunner 的原生电源动作不过护栏`。
+- `src/components/RootEngineCard.test.tsx`：三档切换、最大档说明、电源按钮、身份确认取消。
+- `src/platform/validation.test.ts`：`mode`/`guardProfile` 与 `enabled`/`usable` 的交叉校验。

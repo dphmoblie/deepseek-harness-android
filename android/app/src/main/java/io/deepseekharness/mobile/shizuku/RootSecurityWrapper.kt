@@ -137,7 +137,8 @@ object RootSecurityWrapper {
         append("dsh_harden=\"\"; ")
         if (hardened) {
             // setpriv 存在还不够：参数不被接受时它会直接失败，先用 `true` 探一次。
-            append("dsh_harden=\"setpriv --bounding-set=-sys_admin,-mknod --inh-caps=-sys_admin,-mknod --ambient-caps=-sys_admin,-mknod\"; ")
+            // 同时裁掉 CAP_SYS_BOOT：最大档放开 mount/dd 后，直接 reboot(2) 仍须受电源软拦约束。
+            append("dsh_harden=\"setpriv --bounding-set=-sys_admin,-mknod,-sys_boot --inh-caps=-sys_admin,-mknod,-sys_boot --ambient-caps=-sys_admin,-mknod,-sys_boot\"; ")
             append("if command -v setpriv >/dev/null 2>&1 && ")
             append("\$dsh_harden /system/bin/sh -c true 2>/dev/null; then ")
             append("printf '%s' \"\$dsh_p\" | \$dsh_harden /system/bin/sh -s; ")

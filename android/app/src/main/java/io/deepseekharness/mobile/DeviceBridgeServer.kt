@@ -360,7 +360,14 @@ class DeviceBridgeServer(
                     val rootEngine = DeviceCommand.requireShellRoute(
                         command, command == DeviceCommand.SHELL && rootEngineUsable(), shellEnabled(),
                     )
-                    respondResult(output, runOneShot(command, param, rootEngine))
+                    val rootGuardProfile = if (rootEngine) {
+                        applicationContextOrNull()
+                            ?.let { io.deepseekharness.mobile.shizuku.RootEngineAccess.guardProfile(it) }
+                            ?: io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile.STRICT
+                    } else {
+                        io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile.STRICT
+                    }
+                    respondResult(output, runOneShot(command, param, rootEngine, rootGuardProfile))
                 } catch (error: Throwable) {
                     val code = (error as? RuntimeFailure)?.code ?: "BRIDGE_FAILED"
                     respond(
@@ -386,9 +393,20 @@ class DeviceBridgeServer(
         command: DeviceCommand,
         param: String,
         rootEngine: Boolean = false,
+        rootGuardProfile: io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile =
+            io.deepseekharness.mobile.shizuku.RootCommandGuard.Profile.STRICT,
     ): io.deepseekharness.mobile.shizuku.DeviceCommandResult {
         // 根通道不建 Shizuku 会话：会话 ID 对这个分支没有意义（`execute` 会先于任何会话操作返回）。
-        if (rootEngine) return runner.execute(ROOT_ENGINE_SESSION_ID, command, param, COMMAND_TIMEOUT_MS, useRootEngine = true)
+        if (rootEngine) {
+            return runner.execute(
+                ROOT_ENGINE_SESSION_ID,
+                command,
+                param,
+                COMMAND_TIMEOUT_MS,
+                useRootEngine = true,
+                rootGuardProfile = rootGuardProfile,
+            )
+        }
         val sessionId = shizuku.create(
             DEFAULT_COLUMNS,
             DEFAULT_ROWS,

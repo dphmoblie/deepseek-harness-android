@@ -143,8 +143,15 @@ class DeviceCommandRunner(
      * `su -c` 由应用进程自己起（见 [RootCommandRunner] 的类注释），因为「谁执行 su」决定了
      * 命名空间生命周期、`/dev/block` 遮蔽与 KernelSU App Profile 判定的归属。
      */
-    fun execute(sessionId: String, command: DeviceCommand, param: String, timeoutMs: Long, useRootEngine: Boolean = false): DeviceCommandResult {
-        if (useRootEngine && command == DeviceCommand.SHELL) return executeOnRootEngine(param, timeoutMs)
+    fun execute(
+        sessionId: String,
+        command: DeviceCommand,
+        param: String,
+        timeoutMs: Long,
+        useRootEngine: Boolean = false,
+        rootGuardProfile: RootCommandGuard.Profile = RootCommandGuard.Profile.STRICT,
+    ): DeviceCommandResult {
+        if (useRootEngine && command == DeviceCommand.SHELL) return executeOnRootEngine(param, timeoutMs, rootGuardProfile)
         val pending = Pending(UUID.randomUUID().toString(), command)
         if (inflight.putIfAbsent(sessionId, pending) != null) {
             throw RuntimeFailure("DEVICE_COMMAND_BUSY", "设备 Shell 会话正忙")
@@ -187,7 +194,11 @@ class DeviceCommandRunner(
      * KernelSU profile、内核状态或 ROM 行为发生变化，必须始终 fail-closed。
      * 沙箱降级**不**算失败，但会写进正文：调用方与用户都该看到「这次是降级执行」。
      */
-    private fun executeOnRootEngine(param: String, timeoutMs: Long): DeviceCommandResult {
+    private fun executeOnRootEngine(
+        param: String,
+        timeoutMs: Long,
+        guardProfile: RootCommandGuard.Profile,
+    ): DeviceCommandResult {
         if (param.isBlank() || param.toByteArray(Charsets.UTF_8).size > MAX_SHELL_SCRIPT_CHARS ||
             param.any { it == '\u0000' || it == '\r' }
         ) {
@@ -197,7 +208,7 @@ class DeviceCommandRunner(
         // cached capability snapshot is only for the settings/status screen;
         // probing here would add a second su process and still could not relax
         // the fail-closed guard when unshare changes between the two launches.
-        val result = RootCommandRunner.run(param, timeoutMs, strictGuard = true)
+        val result = RootCommandRunner.run(param, timeoutMs, guardProfile = guardProfile)
         val degradations = result.diagnostics.filter { it.substringBefore(':') in RootSecurityWrapper.DEGRADATION_CODES }
         val body = buildString {
             append(result.output)

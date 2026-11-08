@@ -48,8 +48,8 @@ object RootSandboxProbe {
             "if command -v unshare >/dev/null 2>&1 && unshare -m -p true 2>/dev/null; then " +
             "echo dsh_cap_pid=1; else echo dsh_cap_pid=0; fi; " +
             "if command -v setpriv >/dev/null 2>&1 && " +
-            "setpriv --bounding-set=-sys_admin,-mknod --inh-caps=-sys_admin,-mknod " +
-            "--ambient-caps=-sys_admin,-mknod /system/bin/sh -c true 2>/dev/null; then " +
+            "setpriv --bounding-set=-sys_admin,-mknod,-sys_boot --inh-caps=-sys_admin,-mknod,-sys_boot " +
+            "--ambient-caps=-sys_admin,-mknod,-sys_boot /system/bin/sh -c true 2>/dev/null; then " +
             "echo dsh_cap_harden=1; else echo dsh_cap_harden=0; fi"
 
     /** 测试注入点：默认真起一次 `su -c <探测脚本>`。 */

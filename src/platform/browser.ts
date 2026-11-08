@@ -724,8 +724,12 @@ export function createBrowserBridge(): RuntimeBridge {
     // 「用户没开这个开关」，而真实情况是「这里根本做不到」，两者对用户的下一步完全不同。
     getRootEngineStatus: (): Promise<RootEngineStatus> =>
       Promise.reject(new Error('浏览器预览不支持根通道状态查询')),
+    setRootEngineMode: (): Promise<RootEngineStatus> =>
+      Promise.reject(new Error('浏览器预览不支持根通道模式')),
     setRootEngineEnabled: (): Promise<RootEngineStatus> =>
       Promise.reject(new Error('浏览器预览不支持根通道开关')),
+    requestDevicePowerAction: () =>
+      Promise.reject(new Error('浏览器预览不支持设备电源操作')),
     // 任务台账活在无障碍服务进程里，预览里没有那个进程，也没有可取消的任务：两条都如实拒绝。
     // **不要**回 `{ connected: false, task: null }`——界面得能区分「预览做不到」与「服务没连上」，
     // 后者在真机上是有意义的状态（提示去开服务），前者提示了也没用。

@@ -139,6 +139,36 @@ Git 提交/发布规范见 [`.agents/rules/git-workflow.md`](.agents/rules/git-w
   `RuntimeOperationGateContractTest.kt` 与 `src/App.versions.test.tsx` 的
   「Harness 版本安装期间不能排队启动」用例。
 
+## 12. 根通道分档与电源操作不要合回一个布尔
+
+2026-11-08 起，根通道是「模式 + 护栏档位」两层状态：`off` / `read_write` + `strict` / `maximum`。
+这不是过度设计，是真机反馈「AI 能自动重启关机，但 root 命令基本被拦」之后的修正：
+
+- `strict` 额外拦 `mount`/`dd`/`insmod`/`setprop`/写 `/proc/sys`；`maximum` 只拦不可逆动作。
+- **两个档位**都拦：bootloader/recovery/fastboot、`/dev/block` 读写、核心分区写入、
+  `rm -rf /data` 一类数据销毁、`reboot`/`svc power`/`sysrq`/`kill 1`、`/dev/mem`、`/proc/kcore`。
+  这些规则不能因为「最大档要全权」而删；删掉就等于把格机路径重新打开。
+- 危险命令按**命令位置 + 参数路径**匹配，不要退回「词出现在注释/echo 里就拒」：
+  `echo "run mount now"`、`echo reboot` 必须放行；`busybox reboot`、`/system/bin/reboot`、
+  `cp /data/foo /system/foo` 必须拦。`normalize()` 把换行变成 `;`，否则多行脚本第二行的
+  `reboot`/`rm -rf /data` 会漏；嵌套 `su -c`、`adb shell`/`exec-out` 也按命令位置拦。
+- 电源动作**只**在设置页：`MobileRuntimePlugin.requestDevicePowerAction` 先过系统身份确认
+  （API 30+ `BiometricPrompt`，26–29 `KeyguardManager`），再执行 `RootCommandRunner.runSystemAction`
+  的编译期常量 `reboot` / `reboot -p`。设备桥没有电源命令，AI 工具也不暴露；不要为了
+  「方便」把它加进 `DeviceBridgeServer` 或插件工具表。
+- `RootSecurityWrapper` 的 `setpriv` 要保留 `-sys_boot`；最大档放开 `mount` 后，直接 `reboot(2)`
+  仍要受这层裁剪约束（它不是硬保证，但别删）。
+- 实测设备（AAP-AN00 / Android 16 / KernelSU / `u:r.ksu:s0`）上沙箱是降级的：
+  `PROPAGATION_FAILED` + `BLOCK_MASK_SKIPPED` + `HARDENING_UNAVAILABLE`，`/data/system`、
+  `/data/app` 可写，`/dev/block` 可读，`/data/data/<pkg>` 读不到是 SELinux/框架。
+  UI 必须如实显示降级，不能把 `maximum` 说成「已隔离」。
+- 0.3.9 实测报告里 `ls /data/data`、`pm list packages`、`Android/data`、`attr/current`
+  被 `ROOT_SECURITY_VIOLATION` 拦，与仓库源码不一致（源码没有这些规则，单测允许
+  `ls -la /data/data`）。**不要把这几条隐私词表加回来**；`pm list` 可用 `cmd package` 绕过，
+  `/data/data` 的真实边界是 SELinux。先核对 APK 构建版本，再谈补规则。
+- 回归入口：`RootSecurityTest.kt` 的「最大档才放行 mount 与普通 setprop」「最大档仍拦数据销毁电源与块设备」
+  「RootCommandRunner 的原生电源动作不过护栏」；`RootEngineCard.test.tsx` 的三档/电源用例。
+
 ## 改动前先跑这些
 
 本机 pnpm 不可用时用 node 直调（PATH 前置 `node` 目录）：

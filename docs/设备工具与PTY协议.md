@@ -21,6 +21,11 @@ dsh 会话里的 mobile_device_* 工具
   → DeviceCommandRunner 注入命令并解析输出
 ```
 
+> 根通道打开时，`shell` 命令不走上面这条 Shizuku 会话：由应用进程直接 `su -c`
+> （`RootCommandRunner`）。静态护栏分 `strict` / `maximum` 两档，见
+> [KernelSU高级通道与安全分区防护.md](KernelSU高级通道与安全分区防护.md) §9.6。
+> 设备桥**没有**重启/关机命令；设置页的电源按钮是原生手动入口，每次都要系统身份确认。
+
 命令类型与参数校验都在 `DeviceCommandRunner` 里完成：调用方只能选固定白名单操作，
 `tap` 坐标必须是 `0..65535` 的整数，`inputText` 只接受 1..1024 个可打印 ASCII 且不含
 引号、分号、反斜杠、`$`、反引号；`listPackages` 只接受受限包名片段并最多返回 256 行，

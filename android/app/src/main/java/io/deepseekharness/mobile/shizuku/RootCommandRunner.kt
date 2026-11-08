@@ -53,17 +53,16 @@ object RootCommandRunner {
      *
      * @param hardened 裁减 `CAP_SYS_ADMIN`/`CAP_MKNOD`；需要挂载类操作（OverlayFS 等）时传 `false`，
      *                 此时硬约束只剩 KernelSU 管理器的 App Profile。
-     * @param strictGuard 无法证明本次载荷处于私有挂载命名空间时传 `true`：静态审查按
-     *                    fail-closed 降级档跑，补上本该由命名空间承担的那一段。
-     *                    见 [RootCommandGuard.verifySafe]。
+     * @param guardProfile 静态审查档位。默认 [RootCommandGuard.Profile.STRICT]；
+     *                     用户显式选择最大档时传 [RootCommandGuard.Profile.MAXIMUM]。
      */
     fun run(
         script: String,
         timeoutMs: Long = DEFAULT_TIMEOUT_MS,
         hardened: Boolean = true,
-        strictGuard: Boolean = false,
+        guardProfile: RootCommandGuard.Profile = RootCommandGuard.Profile.STRICT,
     ): RootCommandResult {
-        RootCommandGuard.verifySafe(script, strict = strictGuard)
+        RootCommandGuard.verifySafe(script, guardProfile)
         val wrapped = RootSecurityWrapper.wrapWithProtection(script, hardened)
 
         val process = try {
@@ -109,6 +108,38 @@ object RootCommandRunner {
             truncated = truncated,
             errorCode = errorCode,
             diagnostics = diagnostics,
+        )
+    }
+
+    /**
+     * 原生电源动作专用：执行一段**编译期常量**脚本，不过护栏、不包沙箱。
+     *
+     * 只有 `MobileRuntimePlugin.requestDevicePowerAction` 用它，且脚本只能是 `reboot` /
+     * `reboot -p`。这不是给 AI 的新通道：设备桥里没有电源命令，AI 工具也不暴露它。
+     * 超时按「设备正在重启/关机」处理为已受理，不再 `destroyForcibly`。
+     */
+    internal fun runSystemAction(script: String, timeoutMs: Long = 5_000L): RootCommandResult {
+        val process = try {
+            processLauncher(listOf("su", "-c", script))
+        } catch (_: Exception) {
+            return RootCommandResult(false, -1, "", false, ERROR_SU_UNAVAILABLE)
+        }
+        val (text, truncated, completed) = readWithTimeout(process, timeoutMs)
+        if (!completed) {
+            // reboot/poweroff 可能在命令返回前就把进程带走；这不是失败。
+            return RootCommandResult(true, 0, text, truncated, null)
+        }
+        val exitCode = try {
+            process.exitValue()
+        } catch (_: Exception) {
+            -1
+        }
+        return RootCommandResult(
+            ok = exitCode == 0,
+            exitCode = exitCode,
+            output = text,
+            truncated = truncated,
+            errorCode = if (exitCode == 0) null else ERROR_COMMAND_FAILED,
         )
     }
 

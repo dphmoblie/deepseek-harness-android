@@ -2465,6 +2465,8 @@ describe('根通道状态校验', () => {
   function status(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
       enabled: false,
+      mode: 'off',
+      guardProfile: 'strict',
       usable: false,
       kernelSuStatus: 'unsupported',
       reason: 'ROOT_ENGINE_DISABLED',
@@ -2475,9 +2477,11 @@ describe('根通道状态校验', () => {
     }
   }
 
-  it('关着的时候照样给出完整状态：开关、三态、原因、降级与 su 版本', () => {
+  it('关着的时候照样给出完整状态：模式、护栏档位、三态、原因、降级与 su 版本', () => {
     expect(validateRootEngineStatus(status())).toEqual({
       enabled: false,
+      mode: 'off',
+      guardProfile: 'strict',
       usable: false,
       kernelSuStatus: 'unsupported',
       reason: 'ROOT_ENGINE_DISABLED',
@@ -2487,21 +2491,26 @@ describe('根通道状态校验', () => {
     })
   })
 
-  it('开着且 KernelSU 就绪才算可用，并带上 su 版本', () => {
+  it('读写档且 KernelSU 就绪才算可用，并带上 su 版本与护栏档位', () => {
     const value = validateRootEngineStatus(status({
       enabled: true,
+      mode: 'read_write',
+      guardProfile: 'maximum',
       usable: true,
       kernelSuStatus: 'ready',
       reason: 'READY',
       suVersion: '3.1.0:KernelSU',
     }))
     expect(value.usable).toBe(true)
+    expect(value.mode).toBe('read_write')
+    expect(value.guardProfile).toBe('maximum')
     expect(value.suVersion).toBe('3.1.0:KernelSU')
   })
 
   it('降级状态带着原因码一起返回', () => {
     const value = validateRootEngineStatus(status({
       enabled: true,
+      mode: 'read_write',
       usable: true,
       kernelSuStatus: 'ready',
       reason: 'READY',
@@ -2512,28 +2521,36 @@ describe('根通道状态校验', () => {
     expect(value.degradations).toEqual(['NAMESPACE_UNAVAILABLE', 'BLOCK_MASK_SKIPPED'])
   })
 
-  it('可用性与开关/三态不一致就整份拒绝，不让界面画出自相矛盾的两行', () => {
-    expect(() => validateRootEngineStatus(status({ enabled: true, usable: true })))
-      .toThrow('根通道的可用性与开关状态不一致')
-    expect(() => validateRootEngineStatus(status({ enabled: false, usable: true, kernelSuStatus: 'ready', reason: 'READY' })))
-      .toThrow('根通道的可用性与开关状态不一致')
+  it('可用性、模式与三态不一致就整份拒绝，不让界面画出自相矛盾的两行', () => {
+    expect(() => validateRootEngineStatus(status({ enabled: true, mode: 'off' })))
+      .toThrow('根通道的可用性与模式不一致')
+    expect(() => validateRootEngineStatus(status({ enabled: false, mode: 'read_write' })))
+      .toThrow('根通道的可用性与模式不一致')
+    expect(() => validateRootEngineStatus(status({ enabled: true, mode: 'read_write', usable: true })))
+      .toThrow('根通道的可用性与模式不一致')
+    expect(() => validateRootEngineStatus(status({ enabled: true, mode: 'read_write', kernelSuStatus: 'ready', reason: 'READY' })))
+      .toThrow('根通道的可用性与模式不一致')
   })
 
   it('未开启却报降级、降级标记与原因不一致，都拒绝', () => {
     expect(() => validateRootEngineStatus(status({ degraded: true, degradations: ['BLOCK_MASK_FAILED'] })))
       .toThrow('根通道未开启却报了降级')
-    expect(() => validateRootEngineStatus(status({ enabled: true, kernelSuStatus: 'ready', reason: 'READY', usable: true, degraded: true })))
+    expect(() => validateRootEngineStatus(status({ enabled: true, mode: 'read_write', kernelSuStatus: 'ready', reason: 'READY', usable: true, degraded: true })))
       .toThrow('根通道的降级标记与降级原因不一致')
-    expect(() => validateRootEngineStatus(status({ enabled: true, kernelSuStatus: 'ready', reason: 'READY', usable: true, degradations: ['BLOCK_MASK_FAILED'] })))
+    expect(() => validateRootEngineStatus(status({ enabled: true, mode: 'read_write', kernelSuStatus: 'ready', reason: 'READY', usable: true, degradations: ['BLOCK_MASK_FAILED'] })))
       .toThrow('根通道的降级标记与降级原因不一致')
   })
 
-  it('三态、原因码与降级码各按自己的形状校验', () => {
+  it('模式、护栏档位、三态、原因码与降级码各按自己的形状校验', () => {
+    expect(() => validateRootEngineStatus(status({ mode: 'read_only' })))
+      .toThrow('根通道的模式格式无效')
+    expect(() => validateRootEngineStatus(status({ guardProfile: 'loose' })))
+      .toThrow('根通道的护栏档位格式无效')
     expect(() => validateRootEngineStatus(status({ kernelSuStatus: 'ok' })))
       .toThrow('根通道的 KernelSU 状态格式无效')
     expect(() => validateRootEngineStatus(status({ reason: 'root_engine_disabled' })))
       .toThrow('根通道的原因格式无效')
-    expect(() => validateRootEngineStatus(status({ enabled: true, kernelSuStatus: 'ready', reason: 'READY', usable: true, degraded: true, degradations: ['block_mask_failed'] })))
+    expect(() => validateRootEngineStatus(status({ enabled: true, mode: 'read_write', kernelSuStatus: 'ready', reason: 'READY', usable: true, degraded: true, degradations: ['block_mask_failed'] })))
       .toThrow('根通道的降级原因格式无效')
     expect(() => validateRootEngineStatus(status({ degradations: null })))
       .toThrow('根通道的降级原因格式无效')

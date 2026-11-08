@@ -79,6 +79,8 @@ internal fun accessibilityStateToJs(state: JSONObject): JSObject = JSObject()
  */
 internal fun io.deepseekharness.mobile.shizuku.RootEngineAccess.Status.toJs(): JSObject = JSObject()
     .put("enabled", enabled)
+    .put("mode", mode.wireValue)
+    .put("guardProfile", guardProfile.wireValue)
     .put("usable", usable)
     .put("kernelSuStatus", kernelSuStatus)
     .put("reason", reason)

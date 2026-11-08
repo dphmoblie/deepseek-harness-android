@@ -595,13 +595,18 @@ export interface ShizukuState {
 /** Android 13+ 前台服务通知权限；unsupported 表示系统版本低于 Android 13。 */
 export type NotificationPermission = 'granted' | 'prompt' | 'unsupported'
 
+export type RootEngineMode = 'off' | 'read_write'
+
+/** 根通道静态审查档位；`maximum` 只拦不可逆动作，`strict` 额外拦 mount/dd/insmod/setprop。 */
+export type RootGuardProfile = 'strict' | 'maximum'
+
 /**
  * 根通道（KernelSU + 命名空间沙箱）状态。
  *
  * 三件事必须分开表达，否则界面只能猜：
  * - [enabled]：用户在设置里打开的总开关（**默认关闭**）。关着时原生不去拉 `su`，
  *   因此不会在用户没开的时候弹出 KernelSU 的授权窗；
- * - [usable]：由 [enabled] 与 [kernelSuStatus] **合成**的结论——现在真能执行根命令吗；
+ * - [usable]：由 [enabled]、[mode] 与 [kernelSuStatus] **合成**的结论——现在真能执行根 Shell 吗；
  * - [degraded]：能用，但沙箱只拿到部分隔离（设备 ROM 缺挂载命名空间等）。[degradations]
  *   是降级原因码，词表见原生 `RootSecurityWrapper.DEGRADATION_CODES`。
  *
@@ -609,6 +614,9 @@ export type NotificationPermission = 'granted' | 'prompt' | 'unsupported'
  */
 export interface RootEngineStatus {
   enabled: boolean
+  mode: RootEngineMode
+  /** 只在读写档有意义；关闭时保留上次选择，便于下次打开。 */
+  guardProfile: RootGuardProfile
   usable: boolean
   /** 与 [ShizukuState] 无关的独立探测结论：`ready` / `needs_action` / `unsupported`。 */
   kernelSuStatus: 'ready' | 'needs_action' | 'unsupported'
@@ -618,6 +626,12 @@ export interface RootEngineStatus {
   degradations: string[]
   /** `su -v` 的原始输出（诊断用）；读不到时为 null。 */
   suVersion: string | null
+}
+
+/** 设置页手动电源动作的结果；设备可能在返回前就开始重启。 */
+export interface DevicePowerActionResult {
+  ok: boolean
+  action: 'reboot' | 'powerOff'
 }
 /** 持久化的运行意图；unknown 表示从未记录。 */
 export type RuntimeIntent = 'running' | 'stopped' | 'unknown'
@@ -1717,12 +1731,22 @@ export interface RuntimeBridge {
    */
   getRootEngineStatus: (refresh?: boolean) => Promise<RootEngineStatus>
   /**
-   * 打开/关闭根通道。
+   * 设置根通道模式与护栏档位。
    *
    * 打开只是**允许**：真正的授权仍在 KernelSU 管理器里由用户点，应用不会也无法代点；
    * 返回值是切换之后的状态（原生切换时会清掉探测器缓存，所以拿得到的是重测结果）。
    */
+  setRootEngineMode: (mode: RootEngineMode, guardProfile: RootGuardProfile) => Promise<RootEngineStatus>
+  /**
+   * 打开/关闭根通道（兼容旧入口）。
+   *
+   * 新界面用 [setRootEngineMode]；这里保留给旧调用方，`true` 使用当前护栏档位。
+   */
   setRootEngineEnabled: (enabled: boolean) => Promise<RootEngineStatus>
+  /**
+   * 设置页手动重启/关机。**不在 AI 工具或设备桥里**；原生会先做系统身份确认。
+   */
+  requestDevicePowerAction: (action: 'reboot' | 'powerOff') => Promise<DevicePowerActionResult>
   requestShizukuPermission: () => Promise<ShizukuState>
   connectShizuku: () => Promise<ShizukuState>
   openShizuku: () => Promise<void>

@@ -27,6 +27,7 @@ import type {
   DeviceCapabilityState,
   DeviceCommand,
   DeviceCommandResult,
+  DevicePowerActionResult,
   DiagnosticLogExport,
   DiagnosticLogState,
   DiagnosticLogText,
@@ -2764,20 +2765,31 @@ export function validateDeviceCapabilityReport(value: unknown): DeviceCapability
 /** 与原生 `KernelSuProbe` 的三态逐字一致。 */
 const ROOT_ENGINE_KERNEL_SU_STATUSES = new Set<RootEngineStatus['kernelSuStatus']>(['ready', 'needs_action', 'unsupported'])
 
+/** 根通道模式与护栏档位：与原生 `RootEngineAccess.Mode` / `RootCommandGuard.Profile` 同一套线值。 */
+const ROOT_ENGINE_MODES = new Set<RootEngineStatus['mode']>(['off', 'read_write'])
+const ROOT_GUARD_PROFILES = new Set<RootEngineStatus['guardProfile']>(['strict', 'maximum'])
+
 /** 降级原因码：与原生 `RootSecurityWrapper.DEGRADATION_CODES` 同一形状（大写下划线）。 */
 const ROOT_ENGINE_DEGRADATION_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/u
 
 /**
  * 根通道状态。
  *
- * `usable` 不是独立事实，而是合成结论（`enabled && kernelSuStatus === 'ready'`），因此这里
- * **交叉校验**它：原生侧若给出互相矛盾的组合，整份拒掉。界面会照着 `enabled` 画开关、
- * 照着 `usable` 决定「能不能用」的说明，两者打架时用户看到的是「开关开着却说不能用」而没有解释。
- * 同理，`degraded` 与 `degradations` 必须一致：降级一定有原因码，有原因码就是降级。
+ * `enabled` 与 `usable` 都是合成结论，**交叉校验**它们：原生侧若给出互相矛盾的组合，整份拒掉。
+ * 界面会照着 `mode` 画三档、照着 `usable` 决定「能不能用」的说明，两者打架时用户看到的是
+ * 「开关开着却说不能用」而没有解释。同理，`degraded` 与 `degradations` 必须一致。
  */
 export function validateRootEngineStatus(value: unknown): RootEngineStatus {
   const record = asRecord(value, '根通道状态')
   const enabled = assertBooleanFlag(record.enabled, '根通道开关')
+  const mode = record.mode
+  if (typeof mode !== 'string' || !ROOT_ENGINE_MODES.has(mode as RootEngineStatus['mode'])) {
+    throw new Error('根通道的模式格式无效')
+  }
+  const guardProfile = record.guardProfile
+  if (typeof guardProfile !== 'string' || !ROOT_GUARD_PROFILES.has(guardProfile as RootEngineStatus['guardProfile'])) {
+    throw new Error('根通道的护栏档位格式无效')
+  }
   const usable = assertBooleanFlag(record.usable, '根通道可用性')
   const kernelSuStatus = record.kernelSuStatus
   if (typeof kernelSuStatus !== 'string' || !ROOT_ENGINE_KERNEL_SU_STATUSES.has(kernelSuStatus as RootEngineStatus['kernelSuStatus'])) {
@@ -2800,13 +2812,18 @@ export function validateRootEngineStatus(value: unknown): RootEngineStatus {
   if (suVersion !== null && suVersion !== undefined && typeof suVersion !== 'string') {
     throw new Error('根通道的 su 版本格式无效')
   }
-  if (usable !== (enabled && kernelSuStatus === 'ready')) {
-    throw new Error('根通道的可用性与开关状态不一致')
+  if (enabled !== (mode !== 'off')) {
+    throw new Error('根通道的可用性与模式不一致')
   }
-  if (!enabled && degraded) throw new Error('根通道未开启却报了降级')
+  if (usable !== (mode === 'read_write' && kernelSuStatus === 'ready')) {
+    throw new Error('根通道的可用性与模式不一致')
+  }
+  if (mode === 'off' && degraded) throw new Error('根通道未开启却报了降级')
   if (degraded !== (degradations.length > 0)) throw new Error('根通道的降级标记与降级原因不一致')
   return {
     enabled,
+    mode: mode as RootEngineStatus['mode'],
+    guardProfile: guardProfile as RootEngineStatus['guardProfile'],
     usable,
     kernelSuStatus: kernelSuStatus as RootEngineStatus['kernelSuStatus'],
     reason,
@@ -2814,6 +2831,15 @@ export function validateRootEngineStatus(value: unknown): RootEngineStatus {
     degradations,
     suVersion: suVersion ?? null,
   }
+}
+
+/** 设置页手动电源动作的回执。 */
+export function validateDevicePowerActionResult(value: unknown): DevicePowerActionResult {
+  const record = asRecord(value, '电源操作结果')
+  const ok = assertBooleanFlag(record.ok, '电源操作结果')
+  const action = record.action
+  if (action !== 'reboot' && action !== 'powerOff') throw new Error('电源动作格式无效')
+  return { ok, action }
 }
 
 /** 任务标识与步骤标识同一把尺子（与原生 `AutomationTaskPlan.isTaskId` 一致）。 */const AUTOMATION_TASK_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/u
