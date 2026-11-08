@@ -4875,7 +4875,8 @@ export function App() {
   const createSessionSnapshot = useCallback(() => runtimeBridge.createRuntimeSessionSnapshot(), [])
   const restoreSessionSnapshot = useCallback((id: string) => runtimeBridge.restoreRuntimeSessionSnapshot(id), [])
   const deleteSessionSnapshot = useCallback((id: string) => runtimeBridge.deleteRuntimeSessionSnapshot(id), [])
-  const loadAppUpdate = useCallback((forceRefresh = false) => runtimeBridge.getAppUpdateState(forceRefresh), [])
+  // 应用更新入口默认直连发布目录；原生仍保留缓存参数，供明确的缓存读取场景使用。
+  const loadAppUpdate = useCallback((forceRefresh = true) => runtimeBridge.getAppUpdateState(forceRefresh), [])
   const setAppUpdateChannel = useCallback((channel: AppUpdateChannel) => runtimeBridge.setAppUpdateChannel(channel), [])
   const appUpdateReminder = useAppUpdateReminder(language !== null && !booting && !onboardingOpen, loadAppUpdate)
   const downloadAppUpdate = useCallback(() => runtimeBridge.downloadAppUpdate(), [])

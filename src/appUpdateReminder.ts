@@ -40,13 +40,14 @@ function writeStored(key: string, value: string): boolean {
   }
 }
 
-function checkOnce(day: string, loadUpdate: () => Promise<AppUpdateState>): Promise<AppUpdateState | null> {
+function checkOnce(day: string, loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>): Promise<AppUpdateState | null> {
   if (dailyCheck?.day === day) return dailyCheck.result
   if (readStored(APP_UPDATE_REMINDER_CHECKED_KEY) === day) return Promise.resolve(null)
   const result = new Promise<AppUpdateState | null>(resolve => {
     const timeout = window.setTimeout(() => resolve(null), CHECK_TIMEOUT_MS)
     // 同时处理同步抛错与 Promise 拒绝，自动提醒失败不能阻断进入应用。
-    void Promise.resolve().then(loadUpdate).then(resolve, () => resolve(null)).finally(() => window.clearTimeout(timeout))
+    // 每日提醒要拿远端最新发布；失败时由调用方静默降级，不阻断启动。
+    void Promise.resolve().then(() => loadUpdate(true)).then(resolve, () => resolve(null)).finally(() => window.clearTimeout(timeout))
   }).then(state => {
     if (!state?.available) {
       writeStored(APP_UPDATE_REMINDER_CHECKED_KEY, day)
@@ -59,7 +60,7 @@ function checkOnce(day: string, loadUpdate: () => Promise<AppUpdateState>): Prom
   return result
 }
 
-export function useAppUpdateReminder(ready: boolean, loadUpdate: () => Promise<AppUpdateState>) {
+export function useAppUpdateReminder(ready: boolean, loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>) {
   const [enabled, setEnabledState] = useState(() => parseUpdateReminderEnabled(readStored(APP_UPDATE_REMINDER_ENABLED_KEY)))
   const [available, setAvailable] = useState<AppUpdateRelease | null>(null)
   const [checking, setChecking] = useState(true)

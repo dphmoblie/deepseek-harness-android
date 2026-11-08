@@ -37,7 +37,7 @@ describe('应用更新入口与缓存交互', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '查看更新' }))
     await screen.findByRole('heading', { name: '版本管理' })
     expect(await screen.findByText('0.3.0 · 4.0 KB')).toBeVisible()
-    expect(bridge.getAppUpdateState).toHaveBeenLastCalledWith(false)
+    expect(bridge.getAppUpdateState).toHaveBeenLastCalledWith(true)
     expect(bridge.openHarness).not.toHaveBeenCalled()
     expect(bridge.downloadAppUpdate).not.toHaveBeenCalled()
     expect(bridge.installAppUpdate).not.toHaveBeenCalled()
@@ -61,15 +61,15 @@ describe('应用更新入口与缓存交互', () => {
   await arriveAtSettingsHome()
   })
 
-  it('重入使用缓存读取，只有手动重新检查强刷，失败保留信息', async () => {
+  it('重入默认强制检查最新版，失败仍保留上次缓存信息', async () => {
     render(<App />)
     await openVersions()
     await screen.findByText('0.3.0 · 4.0 KB')
-    expect(bridge.getAppUpdateState).toHaveBeenCalledWith(false)
+    expect(bridge.getAppUpdateState).toHaveBeenCalledWith(true)
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
     await openVersions()
     await screen.findByText('0.3.0 · 4.0 KB')
-    expect(bridge.getAppUpdateState.mock.calls).toEqual([[false], [false]])
+    expect(bridge.getAppUpdateState.mock.calls).toEqual([[true], [true]])
     bridge.getAppUpdateState.mockRejectedValueOnce(new Error('offline'))
     fireEvent.click(screen.getByRole('button', { name: '重新检查' }))
     expect(await screen.findByText('重新检查失败，仍显示上次缓存的更新信息。')).toBeVisible()
@@ -171,7 +171,7 @@ describe('应用更新入口与缓存交互', () => {
     expect(await screen.findByText('0.3.1-mobile-401 · 4.0 KB')).toBeVisible()
     expect(screen.getByRole('switch', { name: '接收测试版本' })).toBeChecked()
     expect(screen.queryByText('0.3.0 · 4.0 KB')).toBeNull()
-    expect(bridge.getAppUpdateState).toHaveBeenLastCalledWith(false)
+    expect(bridge.getAppUpdateState).toHaveBeenLastCalledWith(true)
     expect(screen.getByRole('button', { name: '下载更新' })).toBeEnabled()
   })
 

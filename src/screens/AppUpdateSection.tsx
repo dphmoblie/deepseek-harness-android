@@ -17,7 +17,7 @@ import type {
   ListenerHandle,
 } from '../platform/types'
 interface AppUpdateSectionProps {
-  /** 读取应用自身（APK）的更新状态：包含已安装版本、是否允许安装未知来源、有没有新版本。 */
+  /** 读取应用自身（APK）的更新状态；默认联网检查最新版，明确传 false 才读取缓存。 */
   loadUpdate: (forceRefresh?: boolean) => Promise<AppUpdateState>
   /** 切换更新频道；一次往返返回最新状态，失败时回读实际频道（不做乐观态）。 */
   setUpdateChannel: (channel: AppUpdateChannel) => Promise<AppUpdateState>
@@ -71,7 +71,7 @@ export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate,
     }
   }, [subscribeProgress])
 
-  const load = useCallback((forceRefresh = false) => {
+  const load = useCallback((forceRefresh = true) => {
     const revision = ++readRevision.current
     setLoading(true)
     setFailed(false)
@@ -88,6 +88,7 @@ export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate,
   }, [loadUpdate])
 
   useEffect(() => {
+    // 进入页面默认直连发布目录，避免 24 小时缓存让用户看到旧的下一版本。
     load()
     return () => { readRevision.current += 1 }
   }, [load])
@@ -132,7 +133,7 @@ export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate,
         if (revision !== readRevision.current) return
         notify(errorMessage(error), 'error')
         try {
-          const fresh = await loadUpdate(false)
+          const fresh = await loadUpdate(true)
           if (revision === readRevision.current) setState(fresh)
         } catch {
           if (revision === readRevision.current) {

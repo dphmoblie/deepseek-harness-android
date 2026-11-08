@@ -50,6 +50,7 @@ describe('每日应用更新提醒', () => {
     hook.rerender({ ready: true })
     await settle()
     expect(load).toHaveBeenCalledTimes(1)
+    expect(load).toHaveBeenCalledWith(true)
     expect(hook.result.current.available).toEqual(release)
     expect(hook.result.current.checking).toBe(false)
     expect(localStorage.getItem(reminder.APP_UPDATE_REMINDER_SHOWN_KEY)).toBe('2026-10-12')
