@@ -128,6 +128,7 @@ import type {
   ModelConnectivityResult,
   ModelProviderId,
   OverlayBallState,
+  PageNetworkAccess,
   ProviderApiKeys,
   RuntimeInstallResult,
   RuntimePhase,
@@ -191,7 +192,7 @@ const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; vi
   // 模型页的三级页：已配置的供应商留在二级页，未配置的模板集中在这里，二级页不再被一长串
   // 「未配置」占满（用户的原话：「二级页只有我已经配置过的模型」）。
   'models-providers': { title: '添加其他供应商', hint: '还没配置的内置供应商，选一家填密钥', view: 'settings-models-providers', parent: 'models' },
-  runtime: { title: '后台', hint: '保活、悬浮球、预启动与设备连接', view: 'settings-runtime' },
+  runtime: { title: '后台', hint: '保活、悬浮球、预启动、页面网络访问与设备连接', view: 'settings-runtime' },
   terminal: { title: '主题', hint: '字号配色与背景', view: 'settings-terminal' },
   // 主题下的两个三级页：字号与配色、背景与卡片，两段各自立即生效。
   'terminal-typography': { title: '字号与配色', hint: '字号、屏幕常亮、明暗模式与强调色', view: 'settings-terminal-typography', parent: 'terminal' },
@@ -284,8 +285,8 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'runtime-page',
     group: 'runtime',
     title: '后台',
-    hint: '保活、悬浮球、预启动与设备连接',
-    keywords: ['后台', '保活', '保持', '悬浮球', '前台服务', '通知', '电池', 'keepalive', 'background', 'overlay', 'foreground'],
+    hint: '保活、悬浮球、预启动、页面网络访问与设备连接',
+    keywords: ['后台', '保活', '保持', '悬浮球', '前台服务', '通知', '电池', '网络', '网络访问', '联网', 'http', 'keepalive', 'background', 'overlay', 'foreground', 'network'],
     target: { kind: 'page', page: 'runtime' },
     icon: <Power size={20} />,
   },
@@ -1054,6 +1055,24 @@ function ConversationScreen({ busy, keepAlive, runtime, onInstall, onLaunch, onS
   )
 }
 
+/**
+ * 页面网络访问的三档，顺序即界面顺序（从最严到最宽）。
+ *
+ * 文案与 `HarnessPageNetworkPolicy` 的行为一一对应；改动档位时两边要一起改，
+ * 否则用户在设置里看到的描述会与真实放行范围不符。
+ */
+const PAGE_NETWORK_ACCESS_OPTIONS: Array<{ value: PageNetworkAccess; label: string; hint: string }> = [
+  { value: 'app', label: '仅本应用内', hint: '页面只能访问本机 Harness 服务与插件市场。' },
+  // 这一档只放开明文：公网 https 仍然拒绝，想放得全得选下一档。
+  { value: 'http', label: '允许 HTTP 连接', hint: '额外允许任意主机的明文 http（局域网自建服务）；公网 https 仍不放开。' },
+  { value: 'all', label: '全部网络连接', hint: '允许访问任意主机、任意协议，包括公网 https。' },
+]
+
+function pageNetworkAccessLabel(value: PageNetworkAccess | undefined): string {
+  const fallback = PAGE_NETWORK_ACCESS_OPTIONS[0]
+  return (PAGE_NETWORK_ACCESS_OPTIONS.find(option => option.value === (value ?? 'app')) ?? fallback).label
+}
+
 interface EnvironmentScreenProps {
   busy: string | null
   bundledSource: boolean
@@ -1065,9 +1084,10 @@ interface EnvironmentScreenProps {
   onStart: () => void
   onStop: () => void
   onUpdate: () => void
+  pageNetworkAccess?: PageNetworkAccess
 }
 
-function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onRepair, onStart, onStop, onUpdate }: EnvironmentScreenProps) {
+function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, onReset, onRepair, onStart, onStop, onUpdate, pageNetworkAccess }: EnvironmentScreenProps) {
   const inProgress = ['preparing', 'downloading', 'verifying', 'extracting'].includes(runtime.phase)
   const installed = runtime.installedVersion !== undefined || runtime.phase === 'ready' || runtime.phase === 'running'
   const repairUnavailable = ['RUNTIME_VERSION_MISSING', 'RUNTIME_SOURCE_NEEDED', 'RUNTIME_REPAIR_UNAVAILABLE', 'RUNTIME_LIBRARY_VERSION_MISSING', 'ARCHIVE_DIGEST_MISMATCH', 'MANIFEST_INVALID', 'MANIFEST_DIGEST_MISMATCH'].includes(runtime.errorCode ?? '')
@@ -1214,7 +1234,7 @@ function EnvironmentScreen({ busy, bundledSource, runtime, onBack, onInstall, on
           <div className="detail-row"><span><Cpu size={18} />{t("架构")}</span><strong>{t(runtime.architecture)}</strong></div>
           <div className="detail-row"><span><Database size={18} />{t("运行时大小")}</span><strong>{formatBytes(runtime.totalBytes)}</strong></div>
           <div className="detail-row"><span><Gauge size={18} />{t("运行组件")}</span><strong>{runtime.runnerAvailable ? t("可用") : t("不可用")}</strong></div>
-          <div className="detail-row"><span><LockKeyhole size={18} />{t("网络访问")}</span><strong>{t("仅本应用内")}</strong></div>
+          <div className="detail-row"><span><LockKeyhole size={18} />{t("网络访问")}</span><strong>{t(pageNetworkAccessLabel(pageNetworkAccess))}</strong></div>
         </div>
       </section>
     </div>
@@ -2966,6 +2986,42 @@ function SettingsScreen({ accessibility, busy, diagnostic, draft, keepAlive, loa
               </div>
             </div>
           )}
+        </section>
+
+        )}
+        {page === 'runtime' && (
+        <section className="settings-section" aria-labelledby="page-network-settings">
+          <div className="section-title">
+            <span className="section-icon"><Wifi size={19} /></span>
+            <div><h2 id="page-network-settings">{t("网络访问")}</h2><p>{t("控制 Harness 对话页面能连接哪些地址。")}</p></div>
+          </div>
+          {/* 三档从最严到最宽，默认「仅本应用内」= 引入该设置前的行为。 */}
+          <div className="network-access-options" role="radiogroup" aria-label={t("网络访问")}>
+            {PAGE_NETWORK_ACCESS_OPTIONS.map(option => {
+              const active = (settings.pageNetworkAccess ?? 'app') === option.value
+              return (
+                <label key={option.value} className={active ? 'network-access-option active' : 'network-access-option'}>
+                  <input
+                    type="radio"
+                    name="page-network-access"
+                    value={option.value}
+                    checked={active}
+                    onChange={() => setDraft({ ...settings, pageNetworkAccess: option.value })}
+                  />
+                  <span>
+                    <strong>{t(option.label)}</strong>
+                    <small>{t(option.hint)}</small>
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+          <p className="settings-note">
+            {t("放开后，页面里的内容（包括模型输出）可以把会话文本发到这些地址；明文 http 还会被同网段监听者看到。")}
+          </p>
+          <p className="settings-note">
+            {t("跨域 fetch 仍受对方服务器的 CORS 策略约束：能加载图片和媒体，不代表能直接调用对方的 API。")}
+          </p>
         </section>
 
         )}
@@ -5661,7 +5717,7 @@ export function App() {
       case 'plugins':
         return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
       case 'environment':
-        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onRepair={() => setRepairOpen(true)} onStart={() => launchHarness()} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} />
+        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onRepair={() => setRepairOpen(true)} onStart={() => launchHarness()} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} pageNetworkAccess={settings?.pageNetworkAccess} />
       case 'versions':
         return (
         <RuntimeVersionsScreen

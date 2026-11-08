@@ -40,6 +40,12 @@ or otherwise distributing them.
   version after the adapted official Harness frontend has been packaged.
 - Confirm `/` loads the original Harness entrypoint with its plugin assets;
   the retired mobile entrypoint and `plugin-workbench` copies must be absent.
+- Confirm the bundled third-party plugin market is alive without installing
+  anything: on a clean install, open Harness → **Plugins** and check the
+  **Plugin Market** entry renders and its catalog loads. Its version is pinned
+  in `scripts/runtime-profile/package.json` (`dshmarket`) and its MIT text must
+  be in `assets/legal/licenses/dshmarket-LICENSE.txt`; a missing entry fails
+  the Gradle configuration on purpose.
 - Confirm CI embeds that exact manifest and rootfs digest in the matching APK.
   Install the official APK with no prior app data and verify the install action
   works offline without entering or changing a source URL or digest.

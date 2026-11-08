@@ -251,6 +251,28 @@ test('不启动 Harness 即可列出官方、第三方配置文件及子插件',
   assert.equal(groups[1].children[1].effectiveEnabled, true)
 })
 
+test('悬空链接按未安装处理，整个插件列表仍可读且能禁用', t => {
+  const { manager, root, write } = fixture(t)
+  // 镜像自带的第三方插件（dshmarket）在切到不含它的上游 Harness 版本后，镜像期生成的
+  // 链接会指向不存在的目录。悬空链接必须只表现为“未安装”，不能把插件管理页整体打挂。
+  write('root/.dsh/profiles/web/package.json', { dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'dshmarket'] } } })
+  const modules = path.join(root, 'root/.dsh/profiles/node_modules')
+  fs.mkdirSync(modules, { recursive: true })
+  try {
+    fs.symlinkSync(path.join(root, 'opt/dsh/node_modules/dshmarket'), path.join(modules, 'dshmarket'), 'junction')
+  } catch {
+    t.skip('当前文件系统建不出符号链接')
+    return
+  }
+  const group = manager.list().plugins.find(row => row.id === 'dshmarket')
+  assert.equal(group.installed, false)
+  assert.equal(group.version, null)
+  assert.equal(group.enabled, true)
+  assert.equal(group.official, false)
+  // 未安装不等于不能禁用：配置入口必须保留。
+  assert.equal(manager.setEnabled('dshmarket', false).plugins.find(row => row.id === 'dshmarket').enabled, false)
+})
+
 test('bundle 补丁声明接受上游 0.2.1-rc.2 起的数组形式并按顺序加载', t => {
   const { write, manager } = fixture(t)
   // 上游 rc.2 把 `dsh.bundle.patch` 从字符串改成有序数组（主补丁 + 预设），

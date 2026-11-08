@@ -66,6 +66,7 @@ import io.deepseekharness.mobile.runtime.clampHarnessTailBytes
 import io.deepseekharness.mobile.runtime.MailboxExportOutcome
 import io.deepseekharness.mobile.runtime.ModelCatalogProbe
 import io.deepseekharness.mobile.runtime.ModelConnectivityProbe
+import io.deepseekharness.mobile.runtime.PageNetworkAccess
 import io.deepseekharness.mobile.runtime.draftOrSavedApi
 import io.deepseekharness.mobile.runtime.draftOrSavedBaseUrl
 import io.deepseekharness.mobile.runtime.MailboxDirectoryEntry
@@ -172,6 +173,19 @@ internal fun optionalPrewarmHarness(data: JSONObject): Boolean? {
     val value = data.opt("prewarmHarness")
     if (value !is Boolean) throw RuntimeFailure("SETTINGS_INVALID", "预启动设置格式无效")
     return value
+}
+
+/**
+ * 页面网络访问档位：省略 `null`，显式三档之一才算修改。
+ *
+ * 与悬浮球、预启动同一条约定：一次「只带了部分字段」的保存不能把用户选的档位打回默认。
+ * 未知字符串直接拒绝，不猜、不回落 —— 它会决定 WebView 放行哪些地址，静默兜底等于改权限。
+ */
+internal fun optionalPageNetworkAccess(data: JSONObject): PageNetworkAccess? {
+    if (!data.has("pageNetworkAccess")) return null
+    val value = data.opt("pageNetworkAccess")
+    if (value !is String) throw RuntimeFailure("SETTINGS_INVALID", "网络访问设置格式无效")
+    return PageNetworkAccess.parse(value) ?: throw RuntimeFailure("SETTINGS_INVALID", "网络访问设置格式无效")
 }
 
 /**
@@ -1106,6 +1120,7 @@ class MobileRuntimePlugin : Plugin() {
             // 字段缺失 = 这次保存不碰默认模型记录；显式空对象 = 用户清掉了最后一条。
             val defaultModels = call.getObject("defaultModels")?.let(RuntimeValidation::defaultModelIds)
             val prewarmHarnessUpdate = optionalPrewarmHarness(call.data)
+            val pageNetworkAccessUpdate = optionalPageNetworkAccess(call.data)
             val settings = RuntimeValidation.settings(
                 call.getString("manifestUrl"),
                 call.getString("manifestSha256"),
@@ -1116,6 +1131,8 @@ class MobileRuntimePlugin : Plugin() {
                 overlayBallEnabledUpdate ?: false,
                 // 同上：占位值不参与写入，省略时保留原生侧已有选择。
                 prewarmHarnessUpdate ?: false,
+                // 同上：省略时保留原生侧已有档位。
+                pageNetworkAccessUpdate ?: PageNetworkAccess.APP,
             )
             val saved = controller.saveSettings(
                 settings,
@@ -1127,6 +1144,7 @@ class MobileRuntimePlugin : Plugin() {
                 overlayBallEnabledUpdate = overlayBallEnabledUpdate,
                 defaultModels = defaultModels,
                 prewarmHarnessUpdate = prewarmHarnessUpdate,
+                pageNetworkAccessUpdate = pageNetworkAccessUpdate,
             )
             applyKeepScreenAwake(saved.keepScreenAwake)
             syncKeepAliveService(saved.keepRuntimeInBackground)
@@ -4276,6 +4294,8 @@ class MobileRuntimePlugin : Plugin() {
         .put("overlayBallEnabled", overlayBallEnabled)
         // 前端据此决定应用启动后是否静默调用 startHarness；缺失时前端按 false 处理。
         .put("prewarmHarness", prewarmHarness)
+        // 页面网络访问档位；缺失时前端按 `app`（只连本机）处理。
+        .put("pageNetworkAccess", pageNetworkAccess.wireValue)
 
     private fun RuntimeKeepAliveSnapshot.toJs(): JSObject = JSObject()
         .put("keepRuntimeInBackground", keepRuntimeInBackground)

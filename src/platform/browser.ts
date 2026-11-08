@@ -71,6 +71,8 @@ const DEFAULT_SETTINGS: RuntimeSettings = {
   keepRuntimeInBackground: false,
   // 浏览器预览里没有真正的运行时可预启动，保持关闭。
   prewarmHarness: false,
+  // 预览环境没有 WebView，页面的网络访问档位只用于展示与持久化。
+  pageNetworkAccess: 'app',
 }
 function listenerHandle(remove: () => void): ListenerHandle {
   return {
@@ -255,6 +257,10 @@ export function createBrowserBridge(): RuntimeBridge {
         prewarmHarness: settings.prewarmHarness === undefined
           ? currentSettings.prewarmHarness ?? false
           : validated.prewarmHarness,
+        // 网络访问同理：省略时保留已存档位，不能被一次局部保存打回「仅本应用内」。
+        pageNetworkAccess: settings.pageNetworkAccess === undefined
+          ? currentSettings.pageNetworkAccess ?? 'app'
+          : validated.pageNetworkAccess,
         configuredModelProviders: MODEL_PROVIDER_IDS.filter(provider => configuredProviders.has(provider)),
         configuredCustomModelProviders: [...configuredCustomProviders],
       })

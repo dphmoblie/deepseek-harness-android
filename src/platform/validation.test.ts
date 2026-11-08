@@ -186,6 +186,8 @@ describe('settings validation', () => {
       overlayBallEnabled: false,
       // 预启动同样是新增键：老用户不会被静默打开。
       prewarmHarness: false,
+      // 页面网络访问同样是新增键：缺省按只连本机处理。
+      pageNetworkAccess: 'app',
     })
     expect(() => validateStoredSettings({
       manifestUrl: '',
@@ -223,6 +225,8 @@ describe('settings validation', () => {
       overlayBallEnabled: false,
       // 预启动默认关闭：它会常驻占用资源，必须由用户显式选择。
       prewarmHarness: false,
+      // 页面网络访问默认只连本机：引入该档位不改变既有页面的网络出口。
+      pageNetworkAccess: 'app',
     })
   })
 
@@ -295,6 +299,40 @@ describe('settings validation', () => {
     // 显式 false 才是「关掉」。
     expect(validateSettingsUpdate({ ...base, prewarmHarness: false }).prewarmHarness).toBe(false)
     expect(validateSettingsUpdate({ ...base, prewarmHarness: true }).prewarmHarness).toBe(true)
+  })
+
+  it('页面网络访问默认只连本机，三档原样透传，未知档位被拒', () => {
+    const base = {
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: false,
+      terminalFontSize: 14,
+      configuredModelProviders: [],
+    }
+    // 默认最严：没有这个字段时页面不能因为读不到设置就被放开。
+    expect(validateSettings(base).pageNetworkAccess).toBe('app')
+    expect(validateStoredSettings(base).pageNetworkAccess).toBe('app')
+    for (const pageNetworkAccess of ['app', 'http', 'all'] as const) {
+      expect(validateSettings({ ...base, pageNetworkAccess }).pageNetworkAccess).toBe(pageNetworkAccess)
+      expect(validateStoredSettings({ ...base, pageNetworkAccess }).pageNetworkAccess).toBe(pageNetworkAccess)
+    }
+    // 未知档位不猜、不回落：它会直接决定 WebView 放行哪些请求。
+    expect(() => validateSettings({ ...base, pageNetworkAccess: 'lan' } as never)).toThrow('网络访问')
+    expect(() => validateStoredSettings({ ...base, pageNetworkAccess: 1 })).toThrow('网络访问')
+    expect(() => validateSettingsUpdate({ ...base, pageNetworkAccess: 'lan' } as never)).toThrow('网络访问')
+  })
+
+  it('更新设置时省略页面网络访问表示「不改」', () => {
+    const base = {
+      manifestUrl: '',
+      manifestSha256: '',
+      keepScreenAwake: false,
+      terminalFontSize: 14,
+      configuredModelProviders: [],
+    }
+    // 省略后字段必须真的消失：原生侧据此保留已存档位。
+    expect('pageNetworkAccess' in validateSettingsUpdate(base)).toBe(false)
+    expect(validateSettingsUpdate({ ...base, pageNetworkAccess: 'all' }).pageNetworkAccess).toBe('all')
   })
 
   it('rejects non-boolean screen settings instead of silently coercing them', () => {
@@ -388,6 +426,8 @@ describe('settings validation', () => {
       keepRuntimeInBackground: false,
       overlayBallEnabled: false,
       prewarmHarness: false,
+      // 字面量类型收窄：这个 base 会直接传给 RuntimeSettingsUpdate，不能宽化成 string。
+      pageNetworkAccess: 'app' as const,
     }
     expect(validateStoredSettings({ ...base, defaultFrontend: 'workbench' })).toEqual(base)
     expect(() => validateSettingsUpdate({ ...base, providerApiKeys: { custom: 'key' } } as never)).toThrow('供应商')

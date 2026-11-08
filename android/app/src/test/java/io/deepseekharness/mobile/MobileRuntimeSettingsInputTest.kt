@@ -1,5 +1,6 @@
 package io.deepseekharness.mobile
 
+import io.deepseekharness.mobile.runtime.PageNetworkAccess
 import io.deepseekharness.mobile.runtime.RuntimeFailure
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -20,6 +21,25 @@ class MobileRuntimeSettingsInputTest {
         listOf(JSONObject.NULL, "true", 1).forEach { invalidValue ->
             val failure = assertThrows(RuntimeFailure::class.java) {
                 optionalOverlayBallEnabled(JSONObject().put("overlayBallEnabled", invalidValue))
+            }
+            assertEquals("SETTINGS_INVALID", failure.code)
+        }
+    }
+
+    @Test
+    fun parsesOmittedAndExplicitPageNetworkAccess() {
+        assertNull(optionalPageNetworkAccess(JSONObject()))
+        assertEquals(PageNetworkAccess.APP, optionalPageNetworkAccess(JSONObject().put("pageNetworkAccess", "app")))
+        assertEquals(PageNetworkAccess.HTTP, optionalPageNetworkAccess(JSONObject().put("pageNetworkAccess", "http")))
+        assertEquals(PageNetworkAccess.ALL, optionalPageNetworkAccess(JSONObject().put("pageNetworkAccess", "all")))
+    }
+
+    @Test
+    fun rejectsUnknownPageNetworkAccessValues() {
+        // 未知档位不猜、不回落：它会直接决定 WebView 放行哪些请求。
+        listOf(JSONObject.NULL, 1, "lan", "APP").forEach { invalidValue ->
+            val failure = assertThrows(RuntimeFailure::class.java) {
+                optionalPageNetworkAccess(JSONObject().put("pageNetworkAccess", invalidValue))
             }
             assertEquals("SETTINGS_INVALID", failure.code)
         }

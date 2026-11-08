@@ -47,6 +47,7 @@ import type {
   NotificationPermission,
   NotificationPermissionResult,
   OverlayBallState,
+  PageNetworkAccess,
   ProviderApiKeys,
   RootEngineStatus,
   RuntimeInstallResult,
@@ -403,6 +404,18 @@ export function validateRuntimeSource(source: RuntimeSource): RuntimeSource {
   return { manifestUrl: parsed.toString(), manifestSha256 }
 }
 
+/**
+ * 页面网络访问档位：省略按 `app` 处理（旧存储/旧桥接的行为与升级前一致）。
+ *
+ * 只接受三个受控值：写进原生后它会直接决定 WebView 放行哪些请求，不能把任意字符串
+ * 透传下去，也不在类型不符时猜一个值。
+ */
+function pageNetworkAccessOf(value: unknown): PageNetworkAccess {
+  if (value === undefined) return 'app'
+  if (value !== 'app' && value !== 'http' && value !== 'all') throw new Error('网络访问设置格式无效')
+  return value
+}
+
 export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
   const source = validateRuntimeSource(settings)
   if (typeof settings.keepScreenAwake !== 'boolean') {
@@ -417,6 +430,7 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
   if (typeof overlayBallEnabled !== 'boolean') throw new Error('悬浮球设置格式无效')
   const prewarmHarness = settings.prewarmHarness === undefined ? false : settings.prewarmHarness
   if (typeof prewarmHarness !== 'boolean') throw new Error('预启动设置格式无效')
+  const pageNetworkAccess = pageNetworkAccessOf(settings.pageNetworkAccess)
   if (settings.deepSeekAccountConfigured !== undefined && typeof settings.deepSeekAccountConfigured !== 'boolean') {
     throw new Error('DeepSeek 账号状态格式无效')
   }
@@ -445,6 +459,7 @@ export function validateSettings(settings: RuntimeSettings): RuntimeSettings {
     keepRuntimeInBackground,
     overlayBallEnabled,
     prewarmHarness,
+    pageNetworkAccess,
   }
 }
 
@@ -469,6 +484,8 @@ export function validateSettingsUpdate(settings: RuntimeSettingsUpdate): Runtime
   if (settings.overlayBallEnabled === undefined) delete result.overlayBallEnabled
   // 与悬浮球同一语义：省略表示「不改这一项」，不能因为校验层补了默认 false 就把它写成关闭。
   if (settings.prewarmHarness === undefined) delete result.prewarmHarness
+  // 网络访问同理：只带部分字段的保存不能把用户选的档位打回「仅本应用内」。
+  if (settings.pageNetworkAccess === undefined) delete result.pageNetworkAccess
   return result
 }
 
@@ -491,6 +508,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
   if (typeof overlayBallEnabled !== 'boolean') throw new Error('悬浮球设置格式无效')
   const prewarmHarness = settings.prewarmHarness === undefined ? false : settings.prewarmHarness
   if (typeof prewarmHarness !== 'boolean') throw new Error('预启动设置格式无效')
+  const pageNetworkAccess = pageNetworkAccessOf(settings.pageNetworkAccess)
   if (settings.deepSeekAccountConfigured !== undefined && typeof settings.deepSeekAccountConfigured !== 'boolean') {
     throw new Error('DeepSeek 账号状态格式无效')
   }
@@ -523,6 +541,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
       keepRuntimeInBackground,
       overlayBallEnabled,
       prewarmHarness,
+      pageNetworkAccess,
     }
   }
   const source = validateRuntimeSource({
@@ -538,6 +557,7 @@ export function validateStoredSettings(value: unknown): RuntimeSettings {
     keepRuntimeInBackground,
     overlayBallEnabled,
     prewarmHarness,
+    pageNetworkAccess,
   }
 }
 

@@ -252,6 +252,8 @@ export const settings: RuntimeSettings = {
   // 默认视为「本机已保存过一次模型密钥」：没有密钥时应用会拦住「打开 Harness」，
   // 而这里多数用例关心的是设置与启动流程本身，门禁行为有专门用例覆盖。
   configuredModelProviders: ['deepseek'],
+  // 页面网络访问默认只连本机；显式给值，避免用例里的保存载荷少这一项。
+  pageNetworkAccess: 'app',
 }
 
 export const shizuku: ShizukuState = {

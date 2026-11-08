@@ -34,6 +34,7 @@ PRoot, and Operit runtime materials.
 | Node.js 24.19.0 and bundled dependencies | JavaScript runtime inside the rootfs | MIT and bundled dependency-specific licenses |
 | `@deepseek-ai/dsh` 0.2.1-rc.1 | Agent runtime inside the rootfs | MIT |
 | `@deepseek-ai/dsh-web-frontend` 0.2.1-rc.1 | Official Harness frontend adapted for the Android WebView | MIT |
+| `dshmarket` 1.73.14 | Bundled third-party plugin market shipped inside the rootfs (not an official DeepSeek package) | MIT |
 | PRoot v5.1.107.78 runner and loader | Userspace rootfs execution | GPL-2.0-or-later |
 | Operit2 Android runtime tooling and patch | Source/build provenance for the packaged PRoot artifacts | AGPL-3.0 |
 | Operit Terminal Core | Reference implementation consulted for the terminal integration | LGPL-3.0 |

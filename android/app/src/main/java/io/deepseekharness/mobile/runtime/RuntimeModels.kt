@@ -127,6 +127,13 @@ data class RuntimeSettings(
      * 关掉时行为与以前完全一致（只在实际启动时才拉起运行时）。
      */
     val prewarmHarness: Boolean = false,
+    /**
+     * Harness 对话页面的网络访问档位（默认 [PageNetworkAccess.APP]：只连本机）。
+     *
+     * 与模型供应商的 Base URL 是两件事：那个决定 dsh 进程能连哪里，这个决定**页面**里的
+     * 图片、媒体与 fetch 能连哪里。旧版本配置没有该键时按只连本机处理，升级后行为不变。
+     */
+    val pageNetworkAccess: PageNetworkAccess = PageNetworkAccess.APP,
 )
 
 data class RootfsArtifact(
@@ -363,6 +370,7 @@ object RuntimeValidation {
         keepRuntimeInBackground: Boolean = false,
         overlayBallEnabled: Boolean = false,
         prewarmHarness: Boolean = false,
+        pageNetworkAccess: PageNetworkAccess = PageNetworkAccess.APP,
     ): RuntimeSettings {
         val source = source(url, digest)
         if (terminalFontSize !in 11..24) {
@@ -376,6 +384,7 @@ object RuntimeValidation {
             keepRuntimeInBackground = keepRuntimeInBackground,
             overlayBallEnabled = overlayBallEnabled,
             prewarmHarness = prewarmHarness,
+            pageNetworkAccess = pageNetworkAccess,
         )
     }
 

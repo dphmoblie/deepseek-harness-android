@@ -385,6 +385,19 @@ jobs:
       - name: Check mobile adaptation anchors in the runtime plugin tree
         run: node harness-web/scripts/check-runtime-anchors.mjs /tmp/dsh-root/node_modules
 
+      - name: Verify the bundled plugin market loads in the runtime tree
+        # dshmarket 是打进镜像的第三方插件，已列在 mobile profile 的 bundles 里。
+        # 它的入口静态 import 了可选 peer `@deepseek-ai/schemastery`，而 pnpm 只把
+        # 这个 peer 链在插件的虚拟 store 目录里；构建期不实际加载一次，缺链要到真机
+        # 上插件加载时才暴露。这里用与镜像同构的 ARM64 Node 直接 import。
+        working-directory: /tmp/dsh-root
+        run: |
+          set -euo pipefail
+          test -f node_modules/dshmarket/package.json
+          test -f node_modules/dshmarket/cordis.patch.yml
+          node --input-type=module -e "const m = await import('dshmarket'); if (typeof m.apply !== 'function') throw new Error('dshmarket entry exports no apply()');"
+          node -p "'bundled plugin market: dshmarket ' + require('dshmarket/package.json').version"
+
       - name: Download pinned rootfs inputs
         run: |
           curl -fL --retry 3 -o /tmp/ubuntu.tar.gz https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.4-base-arm64.tar.gz

@@ -360,6 +360,44 @@ test('the default mobile profile avoids a second root-layout plugin', async () =
   assert.equal(profile?.mobile?.disabledOnMobile, undefined)
 })
 
+test('the image ships the plugin market as a built-in third-party bundle', async () => {
+  const profile = JSON.parse(
+    await readFile(resolve(appRoot, 'scripts/mobile-profile.example.json'), 'utf8'),
+  )
+  const runtimePackage = JSON.parse(
+    await readFile(resolve(appRoot, 'scripts/runtime-profile/package.json'), 'utf8'),
+  )
+  const runtimeLock = await readFile(
+    resolve(appRoot, 'scripts/runtime-profile/pnpm-lock.yaml'),
+    'utf8',
+  )
+  const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
+  const notices = await readFile(resolve(appRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8')
+
+  const bundles = profile?.dsh?.profile?.bundles ?? []
+  const version = runtimePackage.dependencies?.dshmarket
+  assert.match(version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u, '内置插件必须钉死精确版本，镜像才可复现')
+  // 只装进依赖、不列进 bundles，镜像里就是一个永远不会被加载的包。
+  assert.ok(
+    bundles.includes('dshmarket'),
+    'dshmarket 未列入 profile bundles 时镜像里不会有活的插件市场',
+  )
+  assert.ok(
+    bundles.indexOf('dshmarket') > bundles.indexOf('@deepseek-ai/dsh-web-app'),
+    '第三方插件必须排在官方 bundle 之后：patch 层按顺序铺，排在前面会被官方层盖住',
+  )
+  // CI 用 --frozen-lockfile 安装：只在 package.json 里加钉子会在安装阶段直接失败。
+  assert.match(
+    runtimeLock,
+    new RegExp(`\\n  dshmarket@${version.replaceAll('.', '\\.')}:`, 'u'),
+  )
+  assert.match(runtimeLock, new RegExp(`specifier: ${version.replaceAll('.', '\\.')}`, 'u'))
+  // 入口静态 import 了可选 peer @deepseek-ai/schemastery，pnpm 只把它链在插件的
+  // 虚拟 store 目录里；构建期不真的加载一次，缺链要到真机上插件加载时才暴露。
+  assert.match(workflow, /await import\('dshmarket'\)/u)
+  assert.match(notices, /^\| `dshmarket`[^|]*\| .+ \| MIT \|$/mu)
+})
+
 test('the mobile profile ships model-facing Shizuku tools without exposing bridge credentials', async () => {
   const pluginRoot = resolve(
     appRoot,
@@ -893,10 +931,16 @@ test('Harness WebView serves the system file chooser and keeps page-initiated lo
   assert.match(activity, /deliverFileChooserResult\(emptyList\(\)\)[\s\S]{0,400}?webView\.webChromeClient = null/)
 
   // 页面自身发起的非回环请求仍然被拦成 403：放开 content 访问不等于放开任意 provider 读取。
-  // 自「修复插件市场皮肤资源加载」起，市场只读资源走了严格白名单，允许条件因此从单条回环
-  // 判定扩展为「本机回环 或 白名单」，但兜底分支必须仍然是 blockedResponse()。
-  assert.match(activity, /return if \(origin\.allows\(uri\)[\s\S]{0,240}?\) null else blockedResponse\(\)/)
+  // 允许条件依次是「本机回环 / 市场白名单 / 用户显式选的网络访问档位」，三者都不命中时兜底
+  // 必须仍然是 blockedResponse()；顺序也锁住，档位判定要排在那两条固定来源之后。
+  // 「设置里允许 HTTP / 全部网络」是用户显式选择，默认档仍是 app（只连本机），
+  // 这三档的放行范围由 HarnessPageNetworkPolicy 单测覆盖。
+  assert.match(activity, /if \(origin\.allows\(uri\)[\s\S]{0,240}?\) return null/)
   assert.match(activity, /HarnessPluginResources\.allows\(/)
+  assert.match(activity, /HarnessPageNetworkPolicy\.allows\(pageNetwork\(\), uri\.toString\(\), request\.isForMainFrame\)\) return null/)
+  assert.match(activity, /return blockedResponse\(\)/)
+  // 未显式传档位时默认只连本机：调用方漏传不能变成「放开全部」。
+  assert.match(activity, /private val pageNetwork: \(\) -> PageNetworkAccess = \{ PageNetworkAccess\.APP \}/)
 })
 
 test('插件市场只读资源必须落在严格主机白名单内', async () => {
@@ -910,6 +954,28 @@ test('插件市场只读资源必须落在严格主机白名单内', async () =>
   assert.match(resources, /uri\.port in setOf\(-1, 443\)/)
   assert.match(resources, /mainFrame \|\| method !in setOf\("GET", "HEAD", "OPTIONS"\)/)
   assert.match(resources, /uri\.rawUserInfo == null/)
+})
+
+test('页面网络访问档位只放行 http-https，默认档不放行外部地址', async () => {
+  const policy = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/HarnessPageNetworkPolicy.kt',
+  ), 'utf8')
+  // 档位只影响「页面发起的请求」：主框架导航永远不放行（换站属于另一件事）。
+  assert.match(policy, /if \(mainFrame\) return false/)
+  // file://、content://、intent:// 这些协议不因为放开网络而可用。
+  assert.match(policy, /scheme != "http" && scheme != "https"/)
+  // 三档递进且最严档默认拒绝；把 APP 分支改成 true 就等于全局放开。
+  assert.match(policy, /PageNetworkAccess\.APP -> false/)
+  assert.match(policy, /PageNetworkAccess\.HTTP -> scheme == "http"/)
+  assert.match(policy, /PageNetworkAccess\.ALL -> true/)
+
+  const access = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/runtime/PageNetworkAccess.kt',
+  ), 'utf8')
+  // 缺键或存了脏值必须落回最严档：读不出来只能收紧，不能放宽。
+  assert.match(access, /fun fromStored\(value: String\?\): PageNetworkAccess = value\?\.let\(::parse\) \?: APP/)
 })
 
 test('runtime packaging leaves the version-matched official client immutable', async () => {

@@ -593,6 +593,7 @@ class MobileRuntimeController(
         overlayBallEnabledUpdate: Boolean? = settings.overlayBallEnabled,
         defaultModels: Map<ModelProvider, String>? = null,
         prewarmHarnessUpdate: Boolean? = settings.prewarmHarness,
+        pageNetworkAccessUpdate: PageNetworkAccess? = settings.pageNetworkAccess,
     ): RuntimeSettings = lifecycleLock.withLock {
         ensureOpen()
         val modelConfigurationChanged = providerApiKeyUpdates.isNotEmpty() || clearedProviderApiKeys.isNotEmpty() ||
@@ -611,6 +612,7 @@ class MobileRuntimeController(
             overlayBallEnabledUpdate = overlayBallEnabledUpdate,
             defaultModels = defaultModels,
             prewarmHarnessUpdate = prewarmHarnessUpdate,
+            pageNetworkAccessUpdate = pageNetworkAccessUpdate,
         )
         if (restartHarness) supervisor.startHarness()
         saved

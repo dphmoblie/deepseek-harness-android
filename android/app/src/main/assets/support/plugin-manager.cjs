@@ -477,10 +477,18 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
     for (const directory of modules) {
       const candidate = path.join(directory, validName(name))
       if (!exists(candidate)) continue
-      safe(candidate)
-      const resolved = fs.realpathSync(candidate)
-      if (![...modules, home, path.join(root, 'opt/dsh/plugins')].some(base => within(base, resolved))) fail('PLUGIN_PATH_INVALID')
-      return resolved
+      try {
+        safe(candidate)
+        const resolved = fs.realpathSync(candidate)
+        if (![...modules, home, path.join(root, 'opt/dsh/plugins')].some(base => within(base, resolved))) fail('PLUGIN_PATH_INVALID')
+        return resolved
+      } catch (error) {
+        // 悬空链接（切到不含该包的上游 Harness 版本后，镜像期生成的链接还在）按“没装”
+        // 处理：`exists()` 对悬空链接为真，`safe()`/`realpathSync()` 会抛 ENOENT，
+        // 让它冒出去会让整个插件列表变成一次未分类失败。越界等受控错误照旧抛。
+        if (error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) continue
+        throw error
+      }
     }
     return null
   }

@@ -157,6 +157,15 @@ class RuntimeStore(context: Context) {
     fun prewarmHarness(): Boolean = preferences.getBoolean(KEY_PREWARM_HARNESS, false)
 
     /**
+     * Harness 对话页面的网络访问档位。
+     *
+     * 缺键（老用户）或存了个无法识别的值（降级/手改）都按 [PageNetworkAccess.APP] 处理：
+     * 这个值直接决定 WebView 放行哪些请求，读不出来时只能收紧，不能放宽。
+     */
+    fun pageNetworkAccess(): PageNetworkAccess =
+        PageNetworkAccess.fromStored(preferences.getString(KEY_PAGE_NETWORK_ACCESS, null))
+
+    /**
      * 由悬浮球菜单在原生侧直接关闭开关。
      *
      * 菜单是原生界面，没有前端调用栈可以回写设置，因此这里直接落盘。
@@ -322,6 +331,7 @@ class RuntimeStore(context: Context) {
             keepRuntimeInBackground = keepRuntimeInBackground(),
             overlayBallEnabled = overlayBallEnabled(),
             prewarmHarness = prewarmHarness(),
+            pageNetworkAccess = pageNetworkAccess(),
             terminalFontSize = preferences.getInt(KEY_FONT_SIZE, 14).coerceIn(11, 24),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             harnessConfiguredModelProviders = harnessCredentials.modelProviders,
@@ -347,6 +357,8 @@ class RuntimeStore(context: Context) {
         defaultModels: Map<ModelProvider, String>? = null,
         // 省略即不改：预启动是一次显式选择，不能因为某次只带部分字段的保存被悄悄关掉。
         prewarmHarnessUpdate: Boolean? = settings.prewarmHarness,
+        // 同上：网络访问档位也是显式选择，省略表示这次保存不碰它。
+        pageNetworkAccessUpdate: PageNetworkAccess? = settings.pageNetworkAccess,
     ): RuntimeSettings {
         if (providerApiKeyUpdates.keys.any(clearedProviderApiKeys::contains)) {
             throw RuntimeFailure("SETTINGS_INVALID", "同一模型凭据不能同时更新和清除")
@@ -394,6 +406,7 @@ class RuntimeStore(context: Context) {
             editor.putString(KEY_DEFAULT_MODELS, defaultModelsToJson(models).toString())
         }
         prewarmHarnessUpdate?.let { editor.putBoolean(KEY_PREWARM_HARNESS, it) }
+        pageNetworkAccessUpdate?.let { editor.putString(KEY_PAGE_NETWORK_ACCESS, it.wireValue) }
         if (encryptedCredentials == null) editor.remove(KEY_PROVIDER_CREDENTIALS)
         else editor.putString(KEY_PROVIDER_CREDENTIALS, encryptedCredentials)
         if (encryptedCustomCredentials == null) editor.remove(KEY_CUSTOM_PROVIDER_CREDENTIALS)
@@ -408,6 +421,7 @@ class RuntimeStore(context: Context) {
             // Omitted updates are read after commit so a concurrent native-menu hide is preserved.
             overlayBallEnabled = overlayBallEnabledUpdate ?: overlayBallEnabled(),
             prewarmHarness = prewarmHarnessUpdate ?: prewarmHarness(),
+            pageNetworkAccess = pageNetworkAccessUpdate ?: pageNetworkAccess(),
             configuredModelProviders = ModelProvider.entries.filterTo(linkedSetOf()) { providerApiKeys.containsKey(it) },
             harnessConfiguredModelProviders = harnessCredentials.modelProviders,
             deepSeekAccountConfigured = harnessCredentials.deepSeekAccountConfigured,
@@ -1635,6 +1649,8 @@ class RuntimeStore(context: Context) {
         private const val KEY_EXTERNAL_BROWSER = "external_browser_package"
         private const val KEY_DEFAULT_MODELS = "provider_default_models_v1"
         private const val KEY_PREWARM_HARNESS = "prewarm_harness"
+        /** 页面网络访问档位（`app` / `http` / `all`）；缺键按 `app` 处理。 */
+        private const val KEY_PAGE_NETWORK_ACCESS = "page_network_access"
             // 运行时恢复记录：只保存运行意图、最近阶段与时间，绝不保存凭据。
         private const val KEY_RUNTIME_INTENT = "runtime_intent"
         private const val KEY_RUNTIME_PHASE = "runtime_last_phase"

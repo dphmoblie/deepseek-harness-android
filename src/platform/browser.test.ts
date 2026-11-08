@@ -31,6 +31,24 @@ describe('browser settings bridge', () => {
     expect((await bridge.saveSettings({ ...baseSettings, overlayBallEnabled: false })).overlayBallEnabled).toBe(false)
   })
 
+  it('keeps the stored page network access when an unrelated save omits it', async () => {
+    const bridge = createBrowserBridge()
+    await bridge.saveSettings({ ...baseSettings, pageNetworkAccess: 'all' })
+
+    // 局部保存不能把用户选的档位打回「仅本应用内」。
+    const saved = await bridge.saveSettings({ ...baseSettings, terminalFontSize: 18 })
+
+    expect(saved.pageNetworkAccess).toBe('all')
+    expect((await bridge.getSettings()).pageNetworkAccess).toBe('all')
+  })
+
+  it('rejects an unknown page network access value', async () => {
+    const bridge = createBrowserBridge()
+    // 校验是同步的：未知档位在返回 Promise 之前就被拒绝，不能悄悄存下一个非法值。
+    expect(() => bridge.saveSettings({ ...baseSettings, pageNetworkAccess: 'lan' as never })).toThrow('网络访问')
+    expect((await bridge.getSettings()).pageNetworkAccess).toBe('app')
+  })
+
   it('keeps API keys out of the saved settings and out of storage', async () => {
     const bridge = createBrowserBridge()
 

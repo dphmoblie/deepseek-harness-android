@@ -704,12 +704,16 @@ class OverlayBallService : Service() {
             body.addView(error, FrameLayout.LayoutParams(-1, -1))
             conversationWebView = web
             conversationError = error
+            // 档位逐请求现读（SharedPreferences 是内存缓存表）：用户在设置里改完，小窗立刻生效。
+            val settingsStore = RuntimeStore(applicationContext)
             web.webViewClient = HarnessActivity.RestrictedWebViewClient(
                 origin, access.username, access.password,
                 onDeepSeekAuthorization = ::openDeepSeekAuthorization,
                 onMainFrameFailure = { if (conversationWebView === web) error.visibility = View.VISIBLE },
                 onRendererGone = { detachConversation() },
                 onMainFrameLoaded = { loaded -> HarnessThemeBridge.apply(loaded) },
+                // 小窗与主界面共用同一份档位：改完设置立刻生效，不必重开小窗。
+                pageNetwork = { settingsStore.pageNetworkAccess() },
             )
             web.webChromeClient = object : WebChromeClient() {
                 override fun onCreateWindow(

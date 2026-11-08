@@ -498,6 +498,19 @@ export interface RuntimeSource {
   manifestUrl: string
   manifestSha256: string
 }
+
+/**
+ * Harness 对话页面能发起的网络请求档位。
+ *
+ * 页面只从本机 `127.0.0.1` 加载，默认连本机源以外的地址一律被原生拦截；这三档是**递进**的：
+ *
+ * - `app`：只允许本机 Harness 源与插件市场资源站（默认，等同旧行为）；
+ * - `http`：额外允许任意主机的明文 http，适合局域网里的自建网关、本地 MCP；
+ * - `all`：允许任意主机、任意协议（含公网 https）。
+ *
+ * 它只管页面自己发起的请求，不改变「点外部链接跳走」的拦截。
+ */
+export type PageNetworkAccess = 'app' | 'http' | 'all'
 export interface RuntimeSettings extends RuntimeSource {
   keepScreenAwake: boolean
   terminalFontSize: number
@@ -542,6 +555,13 @@ export interface RuntimeSettings extends RuntimeSource {
    * （与「后台保持」是两件事，后者只提高进程存活优先级）。因此默认关闭，由用户显式选择。
    */
   prewarmHarness?: boolean
+  /**
+   * Harness 对话页面的网络访问档位（默认 `app`：只连本机）。
+   *
+   * 与模型供应商的 Base URL 是两件事：那个决定 dsh 进程能连哪里，这个决定**页面**里的
+   * 图片、媒体与 fetch 能连哪里。缺省/旧存储按 `app` 处理，升级后行为不变。
+   */
+  pageNetworkAccess?: PageNetworkAccess
 }
 
 export interface RuntimeSettingsUpdate extends RuntimeSettings {

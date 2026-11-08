@@ -31,6 +31,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import io.deepseekharness.mobile.runtime.HarnessAccess
+import io.deepseekharness.mobile.runtime.PageNetworkAccess
 import io.deepseekharness.mobile.runtime.RuntimeFailure
 import io.deepseekharness.mobile.runtime.RuntimeStore
 import io.deepseekharness.mobile.runtime.WorkspaceFileSharing
@@ -264,10 +265,13 @@ class HarnessActivity : AppCompatActivity() {
         if (discardHistory) webView.clearHistory()
         boundAccess = access
         allowedOrigin = origin
+        // 页面网络访问档位是原生偏好：每个跨源请求现读，用户改完设置不必重开对话页。
+        // SharedPreferences 读的是内存里的缓存表，逐请求读不会碰磁盘。
+        val settingsStore = RuntimeStore(this)
         val entryUrl = HarnessPageUrl.withVersions(
             origin.initialUrl,
             BuildConfig.VERSION_NAME,
-            RuntimeStore(this).installedManifest()?.version,
+            settingsStore.installedManifest()?.version,
             sessionId,
         )
         entryUrlForRetry = entryUrl
@@ -298,6 +302,7 @@ class HarnessActivity : AppCompatActivity() {
                 HarnessWorkspaceShare.apply(view)
             },
             onWorkspaceShare = ::shareWorkspaceFile,
+            pageNetwork = { settingsStore.pageNetworkAccess() },
         )
         // 旧 WebView 缺 ES2023 数组方法与 AbortSignal.any：能在 document-start 注入时最先补上，
         // 不至于等 onPageFinished 才生效；不支持该能力的 provider 由 onMainFrameLoaded 兜底。
@@ -687,6 +692,13 @@ class HarnessActivity : AppCompatActivity() {
         },
         private val onMainFrameLoaded: (WebView) -> Unit = {},
         private val onWorkspaceShare: (String) -> Unit = {},
+        /**
+         * 页面网络访问档位，逐请求现读：默认只连本机，调用方按设置传入。
+         *
+         * 用取值函数而不是构造时的快照：悬浮球的小窗可能常开，用户在设置里改完档位
+         * 应当立刻生效，而不是等他关掉再开一次。
+         */
+        private val pageNetwork: () -> PageNetworkAccess = { PageNetworkAccess.APP },
     ) : WebViewClient() {
         override fun onPageFinished(view: WebView?, url: String?) {
             if (view != null) onMainFrameLoaded(view)
@@ -745,9 +757,13 @@ class HarnessActivity : AppCompatActivity() {
             }
             // 市场目录和缩略图由插件直接请求 HTTPS 资源站；交给 WebView 执行正常的 TLS/CORS 校验。
             // 不添加本机 Authorization 或 Cookie，也不允许资源站替换会话主页面。
-            return if (origin.allows(uri) || HarnessPluginResources.allows(
+            if (origin.allows(uri) || HarnessPluginResources.allows(
                     uri.toString(), request.method, request.isForMainFrame,
-                )) null else blockedResponse()
+                )) return null
+            // 用户选的档位只放宽「页面自己发起」的跨源请求；主框架导航仍由
+            // shouldOverrideUrlLoading 拦在外面，这里不会因为放行档位而把整个页面换掉。
+            if (HarnessPageNetworkPolicy.allows(pageNetwork(), uri.toString(), request.isForMainFrame)) return null
+            return blockedResponse()
         }
 
         override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: android.net.http.SslError?) {

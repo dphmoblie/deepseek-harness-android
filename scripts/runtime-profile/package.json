@@ -11,6 +11,7 @@
     "@deepseek-ai/dsh-base": "0.2.1-rc.1",
     "@deepseek-ai/dsh-web-app": "0.2.1-rc.1",
     "@deepseek-harness/dsh-mobile-shizuku": "workspace:0.1.0",
+    "dshmarket": "1.73.14",
     "pnpm": "11.19.0",
     "react": "18.3.1"
   },

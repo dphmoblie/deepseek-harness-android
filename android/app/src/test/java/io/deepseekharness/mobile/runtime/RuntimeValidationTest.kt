@@ -2,6 +2,7 @@ package io.deepseekharness.mobile.runtime
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -157,6 +158,51 @@ class RuntimeValidationTest {
                 terminalFontSize = 14,
             ).prewarmHarness,
         )
+    }
+
+    @Test
+    fun defaultsPageNetworkAccessToAppOnly() {
+        // 旧配置与旧前端都不传该字段：默认只连本机，升级后页面的网络出口不变。
+        val legacy = RuntimeValidation.settings(
+            "https://downloads.example.invalid/runtime.json",
+            "a".repeat(64),
+            keepScreenAwake = true,
+            terminalFontSize = 14,
+        )
+        assertEquals(PageNetworkAccess.APP, legacy.pageNetworkAccess)
+        // 数据类默认值同样只连本机，避免漏传时被当成放开。
+        assertEquals(
+            PageNetworkAccess.APP,
+            RuntimeSettings(
+                manifestUrl = "",
+                manifestSha256 = "",
+                keepScreenAwake = false,
+                terminalFontSize = 14,
+            ).pageNetworkAccess,
+        )
+
+        val all = RuntimeValidation.settings(
+            "https://downloads.example.invalid/runtime.json",
+            "a".repeat(64),
+            keepScreenAwake = true,
+            terminalFontSize = 14,
+            pageNetworkAccess = PageNetworkAccess.ALL,
+        )
+        assertEquals(PageNetworkAccess.ALL, all.pageNetworkAccess)
+        // 档位与另外三个布尔设置互不影响。
+        assertFalse(all.prewarmHarness)
+        assertFalse(all.overlayBallEnabled)
+    }
+
+    @Test
+    fun parsesOnlyKnownPageNetworkAccessWireValues() {
+        assertEquals(PageNetworkAccess.APP, PageNetworkAccess.parse("app"))
+        assertEquals(PageNetworkAccess.HTTP, PageNetworkAccess.parse("http"))
+        assertEquals(PageNetworkAccess.ALL, PageNetworkAccess.parse("all"))
+        assertNull(PageNetworkAccess.parse("lan"))
+        // 缺键或存了脏值都按最严档处理：读不出来只能收紧，不能放宽。
+        assertEquals(PageNetworkAccess.APP, PageNetworkAccess.fromStored(null))
+        assertEquals(PageNetworkAccess.APP, PageNetworkAccess.fromStored("lan"))
     }
 
     @Test

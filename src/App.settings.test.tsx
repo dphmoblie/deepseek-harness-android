@@ -1107,3 +1107,47 @@ describe('内置供应商获取上游模型', () => {
     expect(screen.getByText(/不会替你在 Harness 里切换模型/)).toBeVisible()
   })
 })
+
+describe('页面网络访问', () => {
+  beforeEach(beforeEachAppTest)
+
+  it('默认只连本机；选「全部网络连接」后按新档位保存', async () => {
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('后台')
+
+    const group = await screen.findByRole('radiogroup', { name: '网络访问' })
+    expect(within(group).getAllByRole('radio')).toHaveLength(3)
+    // 默认档位等同于引入设置前的行为：页面只能连本机。
+    expect(screen.getByRole('radio', { name: /仅本应用内/ })).toBeChecked()
+    expect(screen.getByRole('radio', { name: /全部网络连接/ })).not.toBeChecked()
+
+    fireEvent.click(screen.getByRole('radio', { name: /全部网络连接/ }))
+    expect(screen.getByRole('radio', { name: /全部网络连接/ })).toBeChecked()
+    // 输入期间不落盘：与其它设置页相同，离开页面或切后台才写。
+    expect(bridge.saveSettings).not.toHaveBeenCalled()
+
+    await pressSave()
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ pageNetworkAccess: 'all' }),
+    ))
+  })
+
+  it('已存档位会回显，改别的设置时不会被顺手打回默认', async () => {
+    bridge.getSettings.mockResolvedValue({ ...settings, pageNetworkAccess: 'http' })
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('后台')
+
+    expect(await screen.findByRole('radio', { name: /允许 HTTP 连接/ })).toBeChecked()
+
+    // 换到另一页改一个不相关的开关：设置区共享同一份草稿，保存时档位必须原样带上。
+    await openSettingsPage('主题', '字号与配色')
+    fireEvent.click(await screen.findByRole('switch', { name: /保持屏幕常亮/ }))
+    await pressSave()
+    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      pageNetworkAccess: 'http',
+      keepScreenAwake: false,
+    })))
+  })
+})
