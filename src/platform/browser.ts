@@ -754,7 +754,7 @@ export function createBrowserBridge(): RuntimeBridge {
     manageHarnessVersions: () => Promise.reject(new Error('浏览器模式下不能管理 Harness 版本')),
     listRuntimeReleases: (): Promise<RuntimeReleaseList> => Promise.reject(new Error('浏览器模式下没有更新渠道')),
     downloadRuntimeRelease: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能下载运行时')),
-    getAppUpdateState: (forceRefresh = false): Promise<AppUpdateState> => {
+    getAppUpdateState: (forceRefresh = true): Promise<AppUpdateState> => {
       if (typeof forceRefresh !== 'boolean') return Promise.reject(new Error('应用更新刷新参数无效'))
       return Promise.reject(new Error('浏览器模式下没有应用更新'))
     },

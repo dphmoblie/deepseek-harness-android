@@ -655,7 +655,7 @@ function createNativeBridge(): RuntimeBridge {
     listRuntimeReleases: () => NativeRuntime.listRuntimeReleases().then(validateRuntimeReleaseList),
     downloadRuntimeRelease: (manifestUrl, manifestSha256) =>
       NativeRuntime.downloadRuntimeRelease({ manifestUrl, manifestSha256 }).then(() => undefined),
-    getAppUpdateState: (forceRefresh = false) => {
+    getAppUpdateState: (forceRefresh = true) => {
       if (typeof forceRefresh !== 'boolean') return Promise.reject(new Error('应用更新刷新参数无效'))
       return NativeRuntime.getAppUpdateState({ forceRefresh }).then(validateAppUpdateState)
     },

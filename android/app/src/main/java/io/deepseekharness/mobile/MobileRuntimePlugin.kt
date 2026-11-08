@@ -912,7 +912,8 @@ class MobileRuntimePlugin : Plugin() {
      * 权限：应用内桥接。
      * 应用自身更新状态：本机已安装版本、是否已授权安装未知应用，以及**严格更新**时才出现的 available。
      *
-     * 默认缓存优先；forceRefresh 仅接受布尔值。没有更新时 available 键缺失，
+     * 默认检查远端最新版；forceRefresh 仅接受布尔值，明确传 false 才读取有效缓存。
+     * 没有更新时 available 键缺失，
      * cached / checkedAt 说明元数据来源；channel 是当前生效的更新频道（stable / beta），
      * 界面据此渲染「接收测试版本」开关；本机版本和安装权限始终实时读取，不回传下载地址。
      */
@@ -923,7 +924,7 @@ class MobileRuntimePlugin : Plugin() {
                 val forceRefresh = if (call.data.has("forceRefresh")) {
                     call.data.opt("forceRefresh") as? Boolean
                         ?: throw RuntimeFailure("APP_UPDATE_INPUT_INVALID", "更新检查参数无效")
-                } else false
+                } else true
                 AppUpdateCache.from(context).state(
                     AppReleaseCatalog.installed(context),
                     AppReleaseCatalog.installAllowed(context),

@@ -31,7 +31,7 @@ internal class AppUpdateCache(
         installed: InstalledAppInfo,
         installAllowed: Boolean,
         channel: AppUpdateChannel,
-        forceRefresh: Boolean = false,
+        forceRefresh: Boolean = true,
     ): JSONObject {
         val result = lookup(installed, channel, forceRefresh)
         return catalog.state(installed, installAllowed, result.snapshot.available)
