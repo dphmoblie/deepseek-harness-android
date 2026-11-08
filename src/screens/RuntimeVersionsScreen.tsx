@@ -621,6 +621,10 @@ export function RuntimeVersionsPanel({
 }
 
 interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
+  /** Harness 版本长操作是否还在跑（由 App 持有，跨页面保留）。 */
+  harnessVersionBusy: boolean
+  /** 安装/切换/删除 Harness 版本的开始与结束。 */
+  onHarnessVersionBusyChange: (busy: boolean) => void
   /** 返回设置首页：版本管理是一级页，返回键回设置首页，而不是回「后台」。 */
   onBack: () => void
   loadSnapshots: () => Promise<RuntimeSessionSnapshotState>
@@ -653,6 +657,8 @@ interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
  */
 export function RuntimeVersionsScreen({
   runtime,
+  harnessVersionBusy,
+  onHarnessVersionBusyChange,
   loadVersions,
   switchVersion,
   deleteVersion,
@@ -689,7 +695,8 @@ export function RuntimeVersionsScreen({
         </div>
       </div>
 
-      <HarnessVersionsSection bridge={runtimeBridge} runtime={runtime} refreshRuntime={refreshRuntime} />
+      <HarnessVersionsSection bridge={runtimeBridge} runtime={runtime} refreshRuntime={refreshRuntime}
+        externalBusy={harnessVersionBusy} onBusyChange={onHarnessVersionBusyChange} />
 
       <RuntimeVersionsPanel
         runtime={runtime}

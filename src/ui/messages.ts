@@ -67,6 +67,11 @@ const RUNTIME_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   INSTALL_CANCELLED: '运行时安装已取消，再次安装时可继续下载。',
   INSTALL_FAILED: '运行时安装失败，请稍后重试。',
   RUNTIME_BUSY: '请先停止 Harness 和 Ubuntu 终端。',
+  /*
+   * 与 RUNTIME_BUSY 分开：这不是「运行中不能操作」，而是「安装/修复/版本切换正在占着生命周期锁」。
+   * 启动入口在排队前就会返回它，界面因此能直接说清该等什么，而不是让用户去停一个已经在停的服务。
+   */
+  RUNTIME_OPERATION_BUSY: '运行环境或 Harness 版本操作正在进行，请完成后再试。',
   RUNTIME_PREVIOUS_MISSING: '没有可切换或删除的上一版本，请刷新版本列表。',
   RUNTIME_VERSION_SWITCH_UNAVAILABLE: '当前运行环境不可用，暂时无法切换版本；请先修复或重新安装。',
   RUNTIME_LIBRARY_VERSION_MISSING: '版本库中的安装包已不存在，请重新下载该版本。',

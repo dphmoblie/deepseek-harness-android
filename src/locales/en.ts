@@ -1,6 +1,15 @@
 // 应用界面英文词典；不翻译用户输入、凭据或终端输出。
 export const english: Readonly<Record<string, string>> = {
   "保留数据修复": "Repair runtime while keeping data",
+  "正在准备 Harness 版本": "Preparing a Harness version",
+  "Harness 版本操作进行中": "Harness version operation in progress",
+  "Harness 版本操作完成后才能打开对话；请等待安装或切换结束。": "Open chat after the Harness version operation finishes. Wait for the install or switch to complete.",
+  "Harness 版本操作仍在进行，请等待完成后再启动或修复运行环境。": "A Harness version operation is still running. Wait for it to finish before starting or repairing the runtime.",
+  "Harness 版本操作正在安装或切换，完成前不能启动、修复或重置运行环境。": "A Harness version is being installed or switched. Starting, repairing, or resetting the runtime is unavailable until it finishes.",
+  "Harness 版本操作正在进行，请等待完成后再打开对话。": "A Harness version operation is running. Wait for it to finish before opening chat.",
+  "Harness 版本操作正在进行，请等待完成后再安装或更新运行环境。": "A Harness version operation is running. Wait for it to finish before installing or updating the runtime.",
+  "Harness 版本操作正在进行，请等待完成后再修复运行环境。": "A Harness version operation is running. Wait for it to finish before repairing the runtime.",
+  "运行环境或 Harness 版本操作正在进行，请完成后再试。": "The runtime or a Harness version operation is still running. Try again after it finishes.",
   "修复运行环境（保留数据）": "Repair runtime (keep data)",
   "安装进度、版本、来源、保留数据修复与重置": "Installation progress, version, source, data-preserving repair, and reset",
   "应用会重新安装 Ubuntu 运行环境，用来修复损坏的文件或插件冲突。会话、模型密钥、附件、技能、工作区和插件数据都会保留。": "The Ubuntu runtime will be reinstalled to repair damaged files or plugin conflicts. Sessions, model keys, attachments, skills, workspace, and plugin data will be kept.",

@@ -11,7 +11,10 @@ const local = { active: 'bundled', bundledVersion: '0.2.0-rc.2', installed: [] }
  * 安装是原生侧的一次阻塞调用，界面只能靠 `harnessProgress` 事件知道走到哪一步。
  * 这里用一个永不结束的安装让界面停在「安装中」，再手动推送阶段事件。
  */
-function setup(install: () => Promise<never>) {
+function setup(
+  install: () => Promise<unknown>,
+  options: { onBusyChange?: (busy: boolean) => void; externalBusy?: boolean } = {},
+) {
   let listener: ((event: HarnessProgress) => void) | null = null
   const bridge = {
     listHarnessReleases: vi.fn().mockResolvedValue({ entries: [{ version: '0.2.1-rc.2', tags: ['latest'] }] }),
@@ -21,7 +24,8 @@ function setup(install: () => Promise<never>) {
       return Promise.resolve({ remove: vi.fn().mockResolvedValue(undefined) })
     }),
   } as unknown as RuntimeBridge
-  const view = render(<HarnessVersionsSection bridge={bridge} runtime={runtime} refreshRuntime={() => Promise.resolve()} />)
+  const view = render(<HarnessVersionsSection bridge={bridge} runtime={runtime} refreshRuntime={() => Promise.resolve()}
+    externalBusy={options.externalBusy} onBusyChange={options.onBusyChange} />)
   return { ...view, bridge, emit: (event: HarnessProgress) => act(() => { listener?.(event) }) }
 }
 
@@ -45,5 +49,33 @@ describe('Harness 版本安装进度', () => {
     fireEvent.click(await screen.findByRole('button', { name: /安装 Harness/u }))
     expect(await screen.findByText(/停在「下载并安装依赖」阶段/u)).toBeTruthy()
     expect(screen.queryByRole('progressbar')).toBeNull()
+  })
+
+  it('安装开始与结束都通知外层，卸载后也必须复位', async () => {
+    let finishInstall: (value: typeof local) => void = () => undefined
+    const onBusyChange = vi.fn()
+    const view = setup(
+      () => new Promise<typeof local>(resolve => { finishInstall = resolve }),
+      { onBusyChange },
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /安装 Harness/u }))
+    await waitFor(() => expect(onBusyChange).toHaveBeenCalledWith(true))
+
+    // 组件先卸载（用户切到别的页面），底层调用仍在跑：外层不能在卸载时自己复位。
+    view.unmount()
+    expect(onBusyChange).not.toHaveBeenLastCalledWith(false)
+
+    await act(async () => {
+      finishInstall(local)
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(onBusyChange).toHaveBeenLastCalledWith(false))
+  })
+
+  it('外层仍在忙时禁用重复安装', async () => {
+    setup(() => Promise.resolve(local), { externalBusy: true })
+
+    expect(await screen.findByRole('button', { name: /安装 Harness/u })).toBeDisabled()
+    expect(screen.getByText(/Harness 版本操作仍在进行/u)).toBeTruthy()
   })
 })

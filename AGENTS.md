@@ -119,6 +119,26 @@ Git 提交/发布规范见 [`.agents/rules/git-workflow.md`](.agents/rules/git-w
 
 要打开混淆必须同时补保留规则、做真机验证（启动/Shizuku/分享打开文件/插件管理），并回写本条。
 
+## 11. 长操作进行中，启动/打开必须快速失败，不能排队
+
+安装、修复、Harness 版本的 npm 安装、插件安装、版本切换、运行库下载与重置都会长时间持有
+`MobileRuntimeController.lifecycleLock`（Harness npm 安装上限 20 分钟）。启动请求若排在锁后，
+界面会停在「正在进入对话」，安装结束还会替用户把 Harness 拉起来——比直接报错更糟。
+
+- `RuntimeOperationGate` 与两把包装是刻意设计：`withLongOperationLock` **先**
+  `operations.begin()` 再拿锁；`withStartOperationLock` **先** `operations.requireIdle()` 再拿锁。
+  顺序反过来就重新出现排队等待，不要「简化」。
+- 新增长操作必须走 `withLongOperationLock`。只读列表/检查传 `enabled=false`，避免挡住启动。
+- 拒绝用独立受控码 `RUNTIME_OPERATION_BUSY`，不要复用 `RUNTIME_BUSY`：后者描述的是
+  「Harness/终端还在跑，先停掉」，这里描述的是「安装类操作还在跑，等它完成」。
+- 前端 `harnessVersionBusy` 只是提前禁用与文案；原生闸门才是兜底，两者都要保留。
+- `harnessVersionBusy` 期间首页禁用启动、环境页隐藏「保留数据修复」：npm 安装时
+  `runtime.phase` 仍是 `ready`，但它不是可操作的空闲态。
+- 回归入口：
+  `android/app/src/test/.../RuntimeOperationGateTest.kt`、
+  `RuntimeOperationGateContractTest.kt` 与 `src/App.versions.test.tsx` 的
+  「Harness 版本安装期间不能排队启动」用例。
+
 ## 改动前先跑这些
 
 本机 pnpm 不可用时用 node 直调（PATH 前置 `node` 目录）：

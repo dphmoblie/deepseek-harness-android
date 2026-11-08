@@ -40,6 +40,11 @@ class MobileRuntimeController(
     private val events: RuntimeEventSink,
 ) {
     private val lifecycleLock = ReentrantLock()
+    /**
+     * 长操作闸门：安装/修复/版本操作持有生命周期锁时，起停请求必须在排队之前被拒绝。
+     * 否则一次 npm 安装（最长 20 分钟）会把启动请求一起挂住，界面只能等着。
+     */
+    private val operations = RuntimeOperationGate()
     private val closed = AtomicBoolean(false)
     /** 任务通知要 Context 才能投递；只保留 application context，不持有 Activity。 */
     private val appContext = context.applicationContext
@@ -54,11 +59,39 @@ class MobileRuntimeController(
     private val versions = RuntimeVersionCatalog(store)
     private val harnessVersions = HarnessVersions(appContext, store)
 
+    /**
+     * 长操作专用的生命周期锁：**先**登记长操作闸门，**再**排队拿生命周期锁。
+     *
+     * 顺序不能反过来：先拿锁再登记会让起停请求在这段窗口里排到锁后面，正是这次要修的现象。
+     * 参数给 `false` 的入口（只读列表、`check`）不登记，避免「扫了一眼版本列表」挡住启动。
+     */
+    private inline fun <T> withLongOperationLock(enabled: Boolean = true, block: () -> T): T {
+        if (!enabled) return lifecycleLock.withLock(block)
+        operations.begin()
+        return try {
+            lifecycleLock.withLock(block)
+        } finally {
+            operations.end()
+        }
+    }
+
+    /**
+     * 起停入口专用的生命周期锁：**先**确认没有长操作在跑，**再**排队拿锁。
+     *
+     * 这一步只拒绝、不等待。npm 安装 Harness 最长 20 分钟，若让 `startHarness` 排在安装后面，
+     * 界面会一直停在「正在进入对话」，安装结束后还会替用户把 Harness 拉起来。
+     */
+    private inline fun <T> withStartOperationLock(block: () -> T): T {
+        ensureOpen()
+        operations.requireIdle()
+        return lifecycleLock.withLock(block)
+    }
+
     /** 应用内版本操作：精确版本号；安装与切换互斥，不传入模型凭据。 */
-    fun manageHarnessVersions(operation: String, version: String?): org.json.JSONObject = lifecycleLock.withLock {
+    fun manageHarnessVersions(operation: String, version: String?): org.json.JSONObject = withLongOperationLock(operation != "list") {
         ensureOpen()
         when (operation) {
-            "list" -> return@withLock harnessVersions.list()
+            "list" -> return@withLongOperationLock harnessVersions.list()
             "install", "select", "delete" -> Unit
             else -> throw RuntimeFailure("HARNESS_VERSION_INVALID", "Harness 版本操作无效")
         }
@@ -143,7 +176,7 @@ class MobileRuntimeController(
      * 返回值是**更新前自动快照**的结论：快照失败**不阻断安装**（用户选的是「更新前自动备份」，
      * 不是「备份失败就别更新」），但结论必须回到界面与审计，否则用户会以为已经有备份了。
      */
-    fun install(source: RuntimeSource): RuntimeAutoSnapshotOutcome = lifecycleLock.withLock {
+    fun install(source: RuntimeSource): RuntimeAutoSnapshotOutcome = withLongOperationLock {
         ensureOpen()
         if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
             throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
@@ -174,7 +207,7 @@ class MobileRuntimeController(
     }
 
     /** 重新铺设当前运行时的干净系统目录，同时沿用升级流程保留用户数据。 */
-    fun repairRuntime(): RuntimeAutoSnapshotOutcome = lifecycleLock.withLock {
+    fun repairRuntime(): RuntimeAutoSnapshotOutcome = withLongOperationLock {
         ensureOpen()
         if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
             throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
@@ -256,7 +289,7 @@ class MobileRuntimeController(
      * 与安装同等对待：它会改名 `currentRoot` 并把用户数据搬过去，所以必须先停掉 Harness 与终端，
      * 否则正在跑的访客进程会踩到被改名根目录。
      */
-    fun switchRuntimeVersion(target: String): List<RuntimeVersionInfo> = lifecycleLock.withLock {
+    fun switchRuntimeVersion(target: String): List<RuntimeVersionInfo> = withLongOperationLock {
         ensureOpen()
         val normalizedTarget = RuntimeVersionPolicy.requireTarget(target)
         if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
@@ -285,7 +318,7 @@ class MobileRuntimeController(
      * 这里**不**要求运行时已停止：删除只动 `retained*` 或 `library/` 目录，与正在运行的当前运行时无关，
      * 用户清理磁盘空间不该被迫先停服务。
      */
-    fun deleteRuntimeVersion(target: String): List<RuntimeVersionInfo> = lifecycleLock.withLock {
+    fun deleteRuntimeVersion(target: String): List<RuntimeVersionInfo> = withLongOperationLock {
         ensureOpen()
         val normalizedTarget = RuntimeVersionPolicy.requireTarget(target)
         if (normalizedTarget == RuntimeVersionPolicy.TARGET_BUNDLED) {
@@ -320,12 +353,12 @@ class MobileRuntimeController(
         versions.list()
     }
 
-    fun downloadToLibrary(source: RuntimeSource) = lifecycleLock.withLock {
+    fun downloadToLibrary(source: RuntimeSource) = withLongOperationLock {
         ensureOpen()
         RuntimeLibrary(store).download(source)
     }
 
-    fun startHarness(expectedStartEpoch: Long? = null): RuntimeStateSnapshot = lifecycleLock.withLock {
+    fun startHarness(expectedStartEpoch: Long? = null): RuntimeStateSnapshot = withStartOperationLock {
         ensureOpen()
         val coldStart = !supervisor.isRunning()
         if (coldStart) {
@@ -401,7 +434,7 @@ class MobileRuntimeController(
     }
 
     /** 仅应用内版本管理调用；切换后的 current 持久化为下次启动的默认版本。 */
-    fun manageRuntimeLibrary(operation: String, id: String?, source: RuntimeSource?): RuntimeLibraryResult = lifecycleLock.withLock {
+    fun manageRuntimeLibrary(operation: String, id: String?, source: RuntimeSource?): RuntimeLibraryResult = withLongOperationLock(operation == "download" || operation == "select") {
         ensureOpen()
         val library = RuntimeLibrary(store)
         // 只有「安装某个本地版本」（select）才会替换 rootfs，因此在那一支才拍自动快照；
@@ -411,7 +444,7 @@ class MobileRuntimeController(
             "list" -> Unit
             // 远端可用版本改由 MobileRuntimePlugin.listRuntimeReleases 单独回传：
             // 它要发网络请求，混进「本地版本管理」会让一次检查同时依赖本地与远端两件事。
-            "check" -> return@withLock RuntimeLibraryResult(org.json.JSONObject().put("local", library.list()), null)
+            "check" -> return@withLongOperationLock RuntimeLibraryResult(org.json.JSONObject().put("local", library.list()), null)
             "download" -> library.download(source ?: throw RuntimeFailure("SOURCE_INCOMPLETE", "缺少版本来源"))
             "select" -> {
                 if (supervisor.isRunning() || terminals.hasRuntimeSessions()) throw RuntimeFailure("RUNTIME_BUSY", "请先停止 Harness 和 Ubuntu 终端")
@@ -470,7 +503,7 @@ class MobileRuntimeController(
     }
 
     /** 权限：仅应用内部；生命周期锁防止插件写入与启动、安装、终端并发。 */
-    fun managePlugins(operation: String, id: String?, enabled: Boolean?, childId: String?, source: String? = null): com.getcapacitor.JSObject = lifecycleLock.withLock {
+    fun managePlugins(operation: String, id: String?, enabled: Boolean?, childId: String?, source: String? = null): com.getcapacitor.JSObject = withLongOperationLock(operation != "list") {
         ensureOpen()
         if (operation != "list") {
             if (supervisor.isRunning() || terminals.hasRuntimeSessions()) {
@@ -495,13 +528,13 @@ class MobileRuntimeController(
         // 修复失败则按受控错误码 reject（不吞异常，否则按钮点下去界面上什么都不会变）。
         if (operation == "repair") {
             plugins.repairInstalledIfNeeded(explicit = true)
-            return@withLock withRecovery(plugins.run("list", null, null, null, null))
+            return@withLongOperationLock withRecovery(plugins.run("list", null, null, null, null))
         }
         if (operation == "prune") {
             plugins.run("prune", null, null, null, null)
-            return@withLock withRecovery(plugins.run("list", null, null, null, null))
+            return@withLongOperationLock withRecovery(plugins.run("list", null, null, null, null))
         }
-        return@withLock withRecovery(plugins.run(operation, id, enabled, childId, source))
+        return@withLongOperationLock withRecovery(plugins.run(operation, id, enabled, childId, source))
     }
 
     /** 插件页面只需要受控迁移状态；计数由原生侧生成，避免把路径或访客日志回传到 WebView。 */
@@ -619,6 +652,7 @@ class MobileRuntimeController(
     }
 
     fun stopRuntime(): RuntimeStateSnapshot {
+        ensureOpen()
         supervisor.requestStartCancellation()
         return lifecycleLock.withLock {
             ensureOpen()
@@ -636,7 +670,7 @@ class MobileRuntimeController(
             throw RuntimeFailure("RESET_CONFIRMATION_INVALID", "重置确认文本无效")
         }
         supervisor.requestStartCancellation()
-        return lifecycleLock.withLock {
+        return withLongOperationLock {
             ensureOpen()
             BestEffortCleanup.runAll(
                 { supervisor.stop() },
@@ -656,7 +690,7 @@ class MobileRuntimeController(
      * 它与安装、重置共用同一把生命周期锁，所以不会和一次正在进行的安装删到同一份残留；
      * 单份删不掉不抛，在返回的 `failed` 与诊断日志（`phase=cleanup`）里如实体现。
      */
-    internal fun retireStaleResidue(): RuntimeResidueSweepResult = lifecycleLock.withLock {
+    internal fun retireStaleResidue(): RuntimeResidueSweepResult = withLongOperationLock {
         ensureOpen()
         installer.retireStaleResidue()
     }
@@ -755,7 +789,7 @@ class MobileRuntimeController(
         terminals.shizuku.openManager()
     }
 
-    fun openHarnessAccess(): HarnessAccess = lifecycleLock.withLock {
+    fun openHarnessAccess(): HarnessAccess = withStartOperationLock {
         ensureOpen()
         supervisor.access()
     }

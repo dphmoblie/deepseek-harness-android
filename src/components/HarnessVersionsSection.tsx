@@ -9,6 +9,16 @@ interface Props {
   bridge: RuntimeBridge
   runtime: RuntimeState
   refreshRuntime: () => Promise<void>
+  /**
+   * 把「Harness 版本长操作正在跑」告诉外层。
+   *
+   * npm 安装/切换/删除都持有原生生命周期锁数分钟；如果外层不知道，用户在别的页面点
+   * 「打开对话」时请求会排在安装后面（原生启动入口已另有快速失败，这里是界面层的提前禁用）。
+   * 组件因导航被卸载时**不能**在这里复位：底层调用仍在跑，直到 finally 才结束。
+   */
+  onBusyChange?: (busy: boolean) => void
+  /** 外层记录的忙状态：离开版本页再回来时，安装仍在进行也要禁用重复操作。 */
+  externalBusy?: boolean
 }
 
 /** 阶段名只用于界面文案；顺序与访客脚本上报顺序一致，进度条按阶段完成度推进。 */
@@ -31,7 +41,7 @@ function elapsedText(millis: number): string {
 }
 
 /** 上游 npm 目录与本地已安装版本分开加载；断网不影响离线切换。 */
-export function HarnessVersionsSection({ bridge, runtime, refreshRuntime }: Props) {
+export function HarnessVersionsSection({ bridge, runtime, refreshRuntime, onBusyChange, externalBusy = false }: Props) {
   useLanguage()
   const [local, setLocal] = useState<HarnessVersionsState | null>(null)
   const [remote, setRemote] = useState<HarnessReleaseList | null>(null)
@@ -84,6 +94,7 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime }: Prop
     if (actionLock.current) return
     actionLock.current = true
     setBusy(`${operation}:${version}`)
+    onBusyChange?.(true)
     setMessage(null)
     setProgress(null)
     setStartedAt(Date.now())
@@ -101,16 +112,21 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime }: Prop
         loadLocal()
       }
     } finally {
-      await refreshRuntime().catch(() => undefined)
       actionLock.current = false
+      // 原生操作已经结束：先放开外层启动闸门，再刷新运行时状态（刷新失败不该延长禁用）。
+      onBusyChange?.(false)
+      await refreshRuntime().catch(() => undefined)
       if (alive.current) setBusy(null)
     }
   }
   const stageLabel = progress ? t(STAGE_TEXT[progress.stage]) : t('正在处理 Harness 版本…')
   const percent = progress?.percent ?? 0
   const elapsed = elapsedText(now - startedAt)
-  const blocked = ['preparing', 'downloading', 'verifying', 'extracting', 'stopping'].includes(runtime.phase)
-  const stopped = runtime.phase !== 'running'
+  // 本页自己发起的操作看 `busy`；离开本页再回来时只剩外层的 `externalBusy`，
+  // 两者都必须禁用按钮，否则第二次点击只会排在第一次后面继续等。
+  const busyNow = busy !== null || externalBusy
+  const blocked = externalBusy || ['preparing', 'downloading', 'verifying', 'extracting', 'stopping'].includes(runtime.phase)
+  const stopped = runtime.phase !== 'running' && !externalBusy
   const releases = expanded ? remote?.entries : remote?.entries.slice(0, 5)
   return (
     <section className="card settings-card" aria-labelledby="harness-versions-title">
@@ -120,42 +136,45 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime }: Prop
       </div>
       <p className="settings-note">{t('切换会重启 Harness 并检查插件；启动失败自动恢复旧默认版本。上游原版的 Android 兼容性以实际启动检查为准。')}</p>
       {message && <p className="settings-note" role="status">{message}</p>}
+      {externalBusy && busy === null && <p className="settings-note" role="status">
+        <Loader2 size={16} className="spin" /> {t('Harness 版本操作仍在进行，请等待完成后再启动或修复运行环境。')}
+      </p>}
       {busy && <div className="download-progress" role="status">
         <p className="progress-copy"><span><Loader2 size={16} className="spin" /> {stageLabel}</span><strong>{progress ? `${percent}%` : t('准备中…')}</strong></p>
         <div className="progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}
           aria-valuetext={t('安装阶段：{0}', `${stageLabel} ${percent}%`)}><span style={{ width: `${percent}%` }} /></div>
         <div className="progress-detail"><span>{t('首次安装完整依赖需要数分钟，安装过程中不要离开此页。')}</span><span>{t('已用 {0}', elapsed)}</span></div>
       </div>}
-      {localError && <div role="alert"><p>{t('无法读取本地 Harness 版本。')}</p><button type="button" className="button button-secondary" onClick={loadLocal}>{t('重试')}</button></div>}
+      {localError && <div role="alert"><p>{t('无法读取本地 Harness 版本。')}</p><button type="button" className="button button-secondary" disabled={busyNow} onClick={loadLocal}>{t('重试')}</button></div>}
       {local && <>
         <div className="release-row"><div className="release-copy"><strong>{t('内置 Harness')}{local.bundledVersion ? ` · ${local.bundledVersion}` : ''}</strong>
           {local.active === 'bundled' && <small>{t('默认版本')}</small>}</div>
-          {local.active !== 'bundled' && <button type="button" className="button button-secondary" disabled={busy !== null || blocked} onClick={() => void act('select', 'bundled')}><RotateCcw size={16} />{t('切回内置')}</button>}
+          {local.active !== 'bundled' && <button type="button" className="button button-secondary" disabled={busyNow || blocked} onClick={() => void act('select', 'bundled')}><RotateCcw size={16} />{t('切回内置')}</button>}
         </div>
         <div className="release-list">{local.installed.map(entry => <div className="release-row" key={entry.version}>
           <div className="release-copy"><strong>{entry.version}</strong><small>{entry.invalid ? t('安装不完整') : `${formatByteCount(entry.bytes)} · ${entry.active ? t('默认版本') : t('已安装')}`}</small>
             {entry.invalid ? <small>{t('此目录缺少完整安装记录，可以删除后重新安装。')}</small> : !entry.compatible && <small>{t('当前运行时的 Node.js ABI 已变化，需删除后重装此包。')}</small>}</div>
           <div className="release-actions">
-            {!entry.active && !entry.invalid && <button type="button" className="button button-secondary" disabled={busy !== null || blocked || !entry.compatible} onClick={() => void act('select', entry.version)}>{t('使用并设为默认')}</button>}
+            {!entry.active && !entry.invalid && <button type="button" className="button button-secondary" disabled={busyNow || blocked || !entry.compatible} onClick={() => void act('select', entry.version)}>{t('使用并设为默认')}</button>}
             {!entry.active && (deleting === entry.version ? <>
-              <button type="button" className="button button-danger" disabled={busy !== null || !stopped || blocked} onClick={() => void act('delete', entry.version)}>{t('确认删除')}</button>
-              <button type="button" className="button button-secondary" disabled={busy !== null} onClick={() => setDeleting(null)}>{t('取消')}</button>
-            </> : <button type="button" className="icon-button" aria-label={t('删除 Harness {0}', entry.version)} disabled={busy !== null || !stopped || blocked} onClick={() => setDeleting(entry.version)}><Trash2 size={16} /></button>)}
+              <button type="button" className="button button-danger" disabled={busyNow || !stopped || blocked} onClick={() => void act('delete', entry.version)}>{t('确认删除')}</button>
+              <button type="button" className="button button-secondary" disabled={busyNow} onClick={() => setDeleting(null)}>{t('取消')}</button>
+            </> : <button type="button" className="icon-button" aria-label={t('删除 Harness {0}', entry.version)} disabled={busyNow || !stopped || blocked} onClick={() => setDeleting(entry.version)}><Trash2 size={16} /></button>)}
           </div>
         </div>)}</div>
         {deleting && <p className="settings-note">{t('删除只移除此 Harness 安装包，之后需要重新下载。会话与插件数据保留。')}</p>}
       </>}
       <div className="settings-subsection">
         <div className="section-title section-title-plain"><h3>{t('官方 npm 全版本')}</h3>
-          <button type="button" className="icon-button" disabled={loading || busy !== null} aria-label={t('刷新 Harness 上游版本')} onClick={loadRemote}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button></div>
+          <button type="button" className="icon-button" disabled={loading || busyNow} aria-label={t('刷新 Harness 上游版本')} onClick={loadRemote}><RefreshCw size={16} className={loading ? 'spin' : ''} /></button></div>
         {loading && <p className="harness-log-state">{t('正在读取上游 Harness 版本…')}</p>}
         {remoteError && <p className="settings-note" role="alert">{t('上游版本暂时无法读取，已安装版本仍可离线切换。')}</p>}
         {!loading && remote?.entries.length === 0 && <p className="settings-note">{t('上游尚无符合校验要求的 npm 版本。')}</p>}
-        {!stopped && <p className="settings-note">{t('安装或删除包前，请先在首页停止 Harness；切换按钮会自动重启服务。')}</p>}
+        {runtime.phase === 'running' && <p className="settings-note">{t('安装或删除包前，请先在首页停止 Harness；切换按钮会自动重启服务。')}</p>}
         <div className="release-list">{releases?.map(entry => {
           const saved = local?.installed.some(item => item.version === entry.version)
           return <div className="release-row" key={entry.version}><div className="release-copy"><strong>{entry.version}</strong><small>{entry.tags.join(' · ') || t('历史版本')}</small></div>
-            {saved ? <span className="status-chip">{t('已保存')}</span> : <button type="button" className="button button-secondary" disabled={busy !== null || blocked || !stopped || !runtime.installedVersion || !local} onClick={() => void act('install', entry.version)}><Download size={16} />{t('安装 Harness')}</button>}
+            {saved ? <span className="status-chip">{t('已保存')}</span> : <button type="button" className="button button-secondary" disabled={busyNow || blocked || !stopped || !runtime.installedVersion || !local} onClick={() => void act('install', entry.version)}><Download size={16} />{t('安装 Harness')}</button>}
           </div>
         })}</div>
         {(remote?.entries.length ?? 0) > 5 && <button type="button" className="button button-secondary" onClick={() => setExpanded(value => !value)}>{expanded ? t('收起') : t('显示全部 {0} 条', String(remote?.entries.length))}</button>}
