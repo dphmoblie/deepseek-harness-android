@@ -30,6 +30,22 @@ function fixture(t, answer, extras = {}) {
 const ok = text => ({ ok: true, exitCode: 0, text, truncated: false, errorCode: null })
 const virtualSession = '00000000-1111-2222-3333-444444444444'
 
+test('AI 可主动启动副屏，但必须提供合法包名且复用已保存设置', async t => {
+  const f = fixture(t, request => {
+    assert.equal(request.command, 'virtualScreenStart')
+    assert.deepEqual(JSON.parse(request.param), { packageName: 'com.example.app' })
+    return ok('{"action":"start","state":"starting"}')
+  })
+  const tool = f.tools.get('mobile_virtual_screen_start')
+  assert.ok(tool)
+  await tool.execute({ packageName: 'com.example.app' }, {})
+  assert.deepEqual(f.requests, [{ command: 'virtualScreenStart', param: JSON.stringify({ packageName: 'com.example.app' }) }])
+  for (const packageName of ['', 'com', 'Example App', '1com.example', 'com.example/Activity']) {
+    await assert.rejects(tool.execute({ packageName }, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
+  }
+  assert.equal(f.requests.length, 1)
+})
+
 test('统一设备能力工具只读当前快照并透传受控桥命令', async t => {
   const payload = JSON.stringify({ atMs: 1700000000000, sdkInt: 34, capabilities: [] })
   const f = fixture(t, request => {

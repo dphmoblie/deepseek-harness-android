@@ -433,6 +433,7 @@ test('the mobile profile ships model-facing Shizuku tools without exposing bridg
     registeredTools.map(tool => tool.name),
     [
       'mobile_device_capabilities',
+      'mobile_virtual_screen_start',
       'mobile_virtual_screen_state',
       'mobile_virtual_screen_screenshot',
       'mobile_virtual_screen_action',
@@ -613,6 +614,10 @@ test('副屏新动作与细分错误码从插件面一直通到设备 Shell（�
     appRoot,
     'android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/VirtualScreenCommands.kt',
   ), 'utf8')
+  const deviceBridge = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/DeviceBridgeServer.kt',
+  ), 'utf8')
 
   // AI 工具面不走 Capacitor @PluginMethod，而是 callBridge → POST /device-command → DeviceBridgeServer 分派，
   // 因此「插件枚举放行」「桥命令存在」「设备 Shell 有对应分支」三件事缺一不可。
@@ -647,6 +652,8 @@ test('副屏新动作与细分错误码从插件面一直通到设备 Shell（�
   assert.match(policy, /const val TARGET_PACKAGE_FIELD = "packageName"/)
   assert.match(policy, /fun targetRequestField\(p: JSONObject\): String \{/)
 
+  assert.match(deviceBridge, /commandName == "virtualScreenStart"/)
+  assert.match(deviceBridge, /VirtualScreenAgentStarter\.start\(context, param\)/)
   assert.match(commands, /"virtualScreenAction" -> service\.action\(request\)\.toString\(\)/)
   for (const branch of [
     /in VirtualScreenPolicy\.LIFECYCLE_ACTIONS ->/,

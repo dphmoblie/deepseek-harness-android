@@ -90,6 +90,7 @@
     <string name="virtual_screen_app_back">返回应用</string>
     <string name="virtual_screen_floating">悬浮窗</string>
     <string name="virtual_screen_stop">结束副屏</string>
+    <string name="virtual_screen_stop_failed">副屏未能正常结束，请稍后重试</string>
     <string name="virtual_screen_overlay_required">请先启动副屏，并在设置中授予悬浮窗权限</string>
     <string name="virtual_screen_back_failed">无法返回，请确认目标应用仍在副屏</string>
     <string name="virtual_screen_mode_failed">帧率未生效，请确认副屏仍在运行</string>

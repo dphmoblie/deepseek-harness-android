@@ -79,6 +79,7 @@
     <string name="virtual_screen_app_back">Back to app</string>
     <string name="virtual_screen_floating">Floating window</string>
     <string name="virtual_screen_stop">End virtual screen</string>
+    <string name="virtual_screen_stop_failed">The virtual screen could not be ended. Try again.</string>
     <string name="virtual_screen_overlay_required">Start the virtual screen and grant overlay permission in settings first</string>
     <string name="virtual_screen_back_failed">Unable to go back. Check that the target app is still on the virtual screen.</string>
     <string name="virtual_screen_mode_failed">The frame rate did not change. Check that the virtual screen is still running.</string>

@@ -549,6 +549,11 @@ export function VirtualScreenSettings({
 
   async function start(): Promise<void> {
     if (draft === null || busy !== '') return
+    if (deviceState.status === 'ready' && deviceState.state.active) {
+      setActionNotice('')
+      setActionFailure(t('副屏正在运行，请使用重启副屏'))
+      return
+    }
     if (target === '') {
       setActionNotice('')
       setActionFailure(t('请先选择要放到副屏运行的目标应用'))
@@ -632,6 +637,8 @@ export function VirtualScreenSettings({
 
   const locked = busy !== '' || draft === null
   const specReady = draft !== null && specComplete(draft)
+  // 启动接口会拒绝已经运行的会话；这时只保留「重启」入口，避免用户点「启动」后得到一条本可避免的错误。
+  const screenActive = deviceState.status === 'ready' && deviceState.state.active
   // 0 是「跟随屏幕最大」：读设置失败（draft 为 null）时这一段本来就不会渲染，这里只做兜底。
   const overlayWidth = draft === null ? 0 : overlayWidthOf(draft)
 
@@ -689,7 +696,8 @@ export function VirtualScreenSettings({
           <button
             className="button"
             type="button"
-            disabled={locked || target === ''}
+            disabled={locked || target === '' || screenActive}
+            title={screenActive ? t('副屏正在运行，请使用重启副屏') : undefined}
             onClick={() => { void start() }}
           >
             {busy === 'start' ? <Loader2 className="spin" size={18} /> : <Play size={18} />}
@@ -726,6 +734,11 @@ export function VirtualScreenSettings({
         <p className="settings-note">
           {t('即使无法读取设置，也可尝试停止正在运行的副屏。')}
         </p>
+        {screenActive && (
+          <p className="settings-note" role="status">
+            {t('副屏正在运行；如需应用新的目标或设置，请先停止或重启副屏。')}
+          </p>
+        )}
         <p className="settings-note">
           {t('打开副屏预览可查看画面并使用悬浮窗；副屏设置可在本页调整。')}
         </p>

@@ -23,6 +23,7 @@ import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.shizuku.DeviceShellAccess
 import org.json.JSONObject
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /** 原生独立页面：选择目标应用、查看副屏和切换小窗。退出页面不结束副屏。 */
 class VirtualScreenActivity : Activity() {
@@ -44,6 +45,7 @@ class VirtualScreenActivity : Activity() {
     private var selecting = true
     private var resumed = false
     private var actionPending = false
+    private var stopPending = false
     private var launchPendingUntil = 0L
     private var createdLanguage = ""
     private var createdTheme = ""
@@ -216,7 +218,10 @@ class VirtualScreenActivity : Activity() {
                 catch (_: Exception) { toast(getString(R.string.virtual_screen_overlay_required)) }
             }
         }
-        stop = Button(this).apply { setText(R.string.virtual_screen_stop); setOnClickListener { stopService(Intent(this@VirtualScreenActivity, VirtualScreenService::class.java)) } }
+        stop = Button(this).apply {
+            setText(R.string.virtual_screen_stop)
+            setOnClickListener { stopVirtualScreen() }
+        }
         listOf(back, floating, stop).forEach { controls.addView(it, LinearLayout.LayoutParams(0, -2, 1f)) }
         // 预览帧率切换：与 AI 侧的 mobile_virtual_screen_config 走同一条 config 动作，
         // 会话不重启；实际帧率受目标渲染与设备负载限制，状态行里的 fps 才是实测值。
@@ -259,6 +264,35 @@ class VirtualScreenActivity : Activity() {
         sendAction("back", getString(R.string.virtual_screen_back_failed))
     }
 
+    /**
+     * 等待服务完成真正的显示释放再更新页面。
+     *
+     * 直接调用 stopService 只会发出异步销毁请求；用户紧接着重新选择应用时，旧服务仍可能
+     * 占着 [VirtualScreenService.current]，新启动就会被误判为 BUSY。requestStop 的 future
+     * 在 onDestroy 完成后才结束，因此这里把等待放到 worker，不阻塞 UI 线程。
+     */
+    private fun stopVirtualScreen() {
+        if (stopPending) return
+        val service = VirtualScreenService.current
+        if (service == null) {
+            stopService(Intent(this, VirtualScreenService::class.java))
+            return
+        }
+        stopPending = true
+        updateControls(service.state())
+        worker.execute {
+            val result = runCatching { service.requestStop().get(30, TimeUnit.SECONDS) }
+            main.post {
+                stopPending = false
+                if (isDestroyed) return@post
+                if (result.isFailure || result.getOrNull() != true) {
+                    toast(getString(R.string.virtual_screen_stop_failed))
+                }
+                updateControls(VirtualScreenService.current?.state())
+            }
+        }
+    }
+
     /** 与 AI 侧的 mobile_virtual_screen_config 走同一条 config 动作，不重启会话。 */
     private fun selectMode(mode: String) {
         sendAction("config", getString(R.string.virtual_screen_mode_failed), mode)
@@ -290,7 +324,7 @@ class VirtualScreenActivity : Activity() {
         val running = snapshot?.optBoolean("active") == true
         back.isEnabled = running && !actionPending
         floating.isEnabled = running
-        stop.isEnabled = snapshot != null
+        stop.isEnabled = snapshot != null && !stopPending
         modes.visibility = if (running) View.VISIBLE else View.GONE
         val active = snapshot?.optString("previewMode").orEmpty()
             .let { if (it == "limited-fps") "limited" else it.removePrefix("realtime-") }

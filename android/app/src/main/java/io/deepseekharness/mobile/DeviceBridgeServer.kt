@@ -12,6 +12,7 @@ import io.deepseekharness.mobile.capability.DeviceCapabilityFacts
 import io.deepseekharness.mobile.capability.DeviceCapabilityPolicy
 import io.deepseekharness.mobile.virtualscreen.VirtualScreenService
 import io.deepseekharness.mobile.virtualscreen.VirtualScreenShellPolicy
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenAgentStarter
 import io.deepseekharness.mobile.runtime.TaskNotification
 import io.deepseekharness.mobile.runtime.TurnCompletionPolicy
 import org.json.JSONObject
@@ -286,6 +287,13 @@ class DeviceBridgeServer(
                                 errorCode = "ACCESSIBILITY_SERVICE_DISABLED",
                             )
                         respondResult(output, result)
+                        return
+                    }
+                    if (commandName == "virtualScreenStart") {
+                        if (!shellEnabled()) throw RuntimeFailure("DEVICE_SHELL_DISABLED", "请在 Shizuku 设置中开启 AI Shell")
+                        val context = applicationContextOrNull()
+                            ?: throw RuntimeFailure("VIRTUAL_SCREEN_UNAVAILABLE", "暂时无法访问应用上下文")
+                        respondResult(output, VirtualScreenAgentStarter.start(context, param))
                         return
                     }
                     if (commandName in setOf("virtualScreenState", "virtualScreenCapture", "virtualScreenAction")) {

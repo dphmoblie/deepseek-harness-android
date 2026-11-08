@@ -227,9 +227,11 @@ describe('目标应用副屏设置页', () => {
     expect(reading('输入后首帧间隔估计')).toBe('120 毫秒（最近 3 次平均 110 毫秒）')
     expect(reading('副屏当前前台应用')).toBe('com.example.target')
     expect(reading('副屏当前前台 Activity')).toBe('com.example.target/.MainActivity')
-    // 运行中的目标应用会预填到目标选择里，用户不用再选一遍。
+    // 运行中的目标应用会预填到目标选择里，用户不用再选一遍；运行中不能重复启动。
     expect(screen.getByText('将在副屏中运行 com.example.target。')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '启动副屏' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '启动副屏' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '重启副屏' })).toBeEnabled()
+    expect(screen.getByText('副屏正在运行；如需应用新的目标或设置，请先停止或重启副屏。')).toBeInTheDocument()
   })
 
   it('静止画面没有近期新帧时仍按采集时刻显示年龄', async () => {

@@ -1623,6 +1623,8 @@ export const english: Readonly<Record<string, string>> = {
   "启动、停止与重启副屏。": "Start, stop and restart the virtual display.",
   "请先选择要放到副屏运行的目标应用": "Choose the app to run on the virtual display first",
   "启动副屏": "Start virtual display",
+  "副屏正在运行，请使用重启副屏": "The virtual display is already running. Use Restart virtual display instead.",
+  "副屏正在运行；如需应用新的目标或设置，请先停止或重启副屏。": "The virtual display is running. Stop or restart it to apply a new target or settings.",
   "启动副屏失败，请确认已连接 Shizuku 后重试": "Could not start the virtual display. Make sure Shizuku is connected and try again.",
   "已请求启动副屏；画面与帧率以状态区读数为准": "Virtual display start requested; check the status readings for the actual picture and frame rate.",
   "停止副屏": "Stop virtual display",
