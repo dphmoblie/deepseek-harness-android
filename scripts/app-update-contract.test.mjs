@@ -35,9 +35,9 @@ test('频道检查及结果构建成功后才保存频道', () => {
   assert.match(change.slice(save), /AppUpdateChannel\.save\(context, channel\)\s*state/u)
 })
 
-test('应用更新桥接默认检查远端最新版', () => {
+test('应用更新桥接保留原生缓存兼容默认值', () => {
   const state = method('getAppUpdateState')
-  assert.match(state, /\} else true/u)
+  assert.match(state, /\} else false/u)
 })
 
 test('安装必须核对当前发布，并只读取对应版本的已下载包', () => {
