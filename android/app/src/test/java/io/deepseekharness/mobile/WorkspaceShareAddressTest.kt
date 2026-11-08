@@ -12,10 +12,15 @@ import org.junit.Test
  * 工作区外的绝对路径、目录跳转、编码斜杠与任何多余参数都不得变成可分享路径。
  */
 class WorkspaceShareAddressTest {
+    private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+
     private fun request(address: String, suffix: String = ""): String =
-        "dsh-share://file?address=" +
-            URLEncoder.encode(address, "UTF-8").replace("+", "%20") +
-            suffix
+        "dsh-share://file?address=" + encode(address) + suffix
+
+    /** 页面从预览标题栏 `[data-textpreview-path]` 的 `title` 取到的绝对路径。 */
+    private fun pathRequest(path: String, address: String? = null): String =
+        "dsh-share://file?path=" + encode(path) +
+            (address?.let { "&address=" + encode(it) } ?: "")
 
     /** 只关心「解析出哪个路径」的用例：取候选列表第一项（优先级最高、未剥层的那一个）。 */
     private fun relative(raw: String): String? = WorkspaceShareAddress.relativePaths(raw)?.first()
@@ -100,11 +105,11 @@ class WorkspaceShareAddressTest {
     }
 
     @Test
-    fun onlyTheAddressParameterIsAccepted() {
+    fun onlyKnownParametersAreAccepted() {
         val address = "dsh-resource://file/session/session-abc/a.txt"
         assertNull(relative(request(address, "&open=true")))
-        assertNull(relative("dsh-share://file?path=$address"))
         assertNull(relative("dsh-share://file?address="))
+        assertNull(relative("dsh-share://file?unknown=$address"))
     }
 
     @Test
@@ -201,5 +206,67 @@ class WorkspaceShareAddressTest {
                 request("dsh-resource://file/session/session-abc//etc/passwd"),
             ),
         )
+    }
+
+    /**
+     * 标题栏的绝对路径来自宿主解析，不再依赖会话工作目录：文件在 `root/1` 下就必须命中，
+     * 地址的相对基准是 `/root`、工作区本身还是工作区子目录都不影响结果。
+     */
+    @Test
+    fun absoluteTitlePathIsPreferredOverAddress() {
+        assertEquals(
+            listOf("项目/报告 1.md"),
+            WorkspaceShareAddress.relativePaths(
+                pathRequest("/root/1/项目/报告 1.md", "dsh-resource://file/session/s/报告 1.md"),
+            ),
+        )
+        assertEquals(
+            listOf("sub/report.md"),
+            WorkspaceShareAddress.relativePaths(
+                pathRequest("/root/1/sub/report.md", "dsh-resource://file/session/s/report.md"),
+            ),
+        )
+    }
+
+    /** 绝对路径不在工作区时退回地址的旧口径；不能凭页面给的工作区外路径分享任何文件。 */
+    @Test
+    fun absoluteTitlePathOutsideWorkspaceFallsBackToAddress() {
+        assertEquals(
+            listOf("1/notes.md", "notes.md"),
+            WorkspaceShareAddress.relativePaths(
+                pathRequest("/root/2/notes.md", "dsh-resource://file/session/s/1/notes.md"),
+            ),
+        )
+        assertNull(
+            WorkspaceShareAddress.relativePaths(pathRequest("/mnt/user/1/notes.md")),
+        )
+    }
+
+    @Test
+    fun malformedAbsoluteTitlePathsAreRejected() {
+        listOf(
+            "/root/1",
+            "/root/1/",
+            "/root/10/secret.txt",
+            "/etc/passwd",
+            "notes.md",
+            "/root/1/../secret.txt",
+            "/root/1/a//b.txt",
+            "/root/1/a\\b.txt",
+        ).forEach { path ->
+            assertNull(path, WorkspaceShareAddress.relativePaths(pathRequest(path)))
+        }
+    }
+
+    @Test
+    fun duplicateOrUnknownParametersAreRejected() {
+        val path = encode("/root/1/a.txt")
+        val address = encode("dsh-resource://file/session/s/a.txt")
+        assertNull(WorkspaceShareAddress.relativePaths("dsh-share://file?path=$path&path=$path"))
+        assertNull(WorkspaceShareAddress.relativePaths("dsh-share://file?address=$address&address=$address"))
+        assertNull(WorkspaceShareAddress.relativePaths("dsh-share://file?path=$path&open=true"))
+        assertNull(WorkspaceShareAddress.relativePaths("dsh-share://file?path=$path&address=$address&open=true"))
+        assertNull(WorkspaceShareAddress.relativePaths("dsh-share://file?path="))
+        assertNull(WorkspaceShareAddress.relativePaths("dsh-share://file?"))
     }
 }

@@ -3,12 +3,17 @@
  *
  * 官方预览面板只提供换行、自动刷新和重新加载，没有把当前文件交给系统分享的入口。
  * 应用侧在每次主框架加载完成后注入本脚本：它只观察 `[data-textpreview-state]` 面板，
- * 在顶栏末尾追加一个与官方工具按钮同款的分享按钮；点击后把面板自带的
- * `dsh-resource://file/session/…` 地址交给原生 `dsh-share://file?address=…`。
+ * 在顶栏末尾追加一个与官方工具按钮同款的分享按钮；点击后把标题栏的绝对路径
+ * （`[data-textpreview-path]` 的 `title`，宿主已解析）交给原生
+ * `dsh-share://file?path=…`，同时附上 `address` 供原生在路径不可用时兜底。
+ *
+ * 为什么优先绝对路径：资源地址里的路径相对于会话工作目录，cwd 可能是 `/root`、
+ * `/root/1` 或 `/root/1` 的某个子目录；原生无法从地址里还原 cwd，曾因此把文件拼到
+ * 错误位置并报「工作区里找不到这个文件」。绝对路径没有这个歧义。
  *
  * 安全边界：
- * - 不读取、不代理页面里的业务数据，只取面板自己的资源地址；
- * - 不直接访问文件系统，也不暴露任何 JS 桥；地址是否可分享由原生重新校验；
+ * - 不读取、不代理页面里的业务数据，只取面板自己的资源地址与标题栏路径；
+ * - 不直接访问文件系统，也不暴露任何 JS 桥；路径是否可分享由原生重新校验；
  * - 重复注入是幂等的，React 重渲染把按钮冲掉后会由观察器补回。
  */
 (function () {
@@ -42,6 +47,31 @@
   var addressOf = function (panel) {
     var value = panel.getAttribute('data-textpreview-url') || ''
     return value.indexOf(ADDRESS_PREFIX) === 0 ? value : ''
+  }
+
+  // 标题栏显示的是宿主解析后的绝对路径（PathLabel 的 title）；宿主还没解析出绝对路径时
+  // 它会退化成相对路径，那种值没有用，必须让给 address 的旧口径。
+  // 老版本 PathLabel 不一定写 title，可见文本同样是完整路径（超长只是 CSS 省略）。
+  var absolutePathOf = function (panel) {
+    var label = panel.querySelector('[data-textpreview-path]')
+    if (label === null) return ''
+    var value = typeof label.getAttribute === 'function' ? label.getAttribute('title') : ''
+    if (typeof value !== 'string' || value.charAt(0) !== '/') {
+      value = typeof label.textContent === 'string' ? label.textContent : ''
+    }
+    if (value.charAt(0) !== '/' || /[\r\n]/.test(value)) return ''
+    return value
+  }
+
+  // 分享目标：绝对路径优先，地址只作兜底。两者都带上，原生才能在工作区外的绝对路径
+  // （例如会话工作区是手机目录）退回旧口径，而不是把请求判成无效。
+  var shareTarget = function (panel) {
+    var address = addressOf(panel)
+    if (address === '') return ''
+    var absolute = absolutePathOf(panel)
+    if (absolute === '') return 'dsh-share://file?address=' + encodeURIComponent(address)
+    return 'dsh-share://file?path=' + encodeURIComponent(absolute) +
+      '&address=' + encodeURIComponent(address)
   }
 
   // 顶栏是路径标签的直接父级；不依赖官方哈希类名，换版本后仍能定位。
@@ -78,11 +108,11 @@
     button.addEventListener('click', function (event) {
       event.preventDefault()
       event.stopPropagation()
-      var address = addressOf(panel)
-      if (address === '') return
       // 自定义 scheme 由 HarnessActivity 的 WebViewClient 拦截：只认带用户手势的主框架 GET，
       // 并且原生会再次校验路径确实位于工作区，不会直接相信页面传来的字符串。
-      window.location.href = 'dsh-share://file?address=' + encodeURIComponent(address)
+      var target = shareTarget(panel)
+      if (target === '') return
+      window.location.href = target
     })
     header.appendChild(button)
   }
@@ -113,7 +143,7 @@
     return false
   }
 
-  window.__dshAndroidShare = { scan: scan }
+  window.__dshAndroidShare = { scan: scan, targetFor: shareTarget }
 
   if (typeof MutationObserver === 'function') {
     var observer = new MutationObserver(function (records) {
