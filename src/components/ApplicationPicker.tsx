@@ -22,6 +22,23 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
   const [hideSystem, setHideSystem] = useState(false)
   const [attempt, setAttempt] = useState(0)
   /**
+   * 「读取应用列表」权限状态。
+   *
+   * `denied` 时**不发起列表请求**：国产 ROM 上那会返回一份只有本应用的清单，看起来像
+   * 「搜索坏了」，而不是「缺权限」——必须先把原因说清楚。
+   */
+  const [access, setAccess] = useState<'checking' | 'granted' | 'denied' | 'unsupported'>('checking')
+  const [requestingAccess, setRequestingAccess] = useState(false)
+  const [accessRequested, setAccessRequested] = useState(false)
+  /**
+   * 第一页列表是否已经落定。
+   *
+   * 权限提示要等列表真的回来后才有意义：国产 ROM 上「缺权限」的表现是列表只剩本应用，
+   * 而 AOSP 上 `supported=false`；**不能**在列表还能读全的时候也拦着用户去授权
+   * （荣耀 MagicOS 11 就是 `QUERY_ALL_PACKAGES` 已够用、但这条权限同样存在）。
+   */
+  const [listed, setListed] = useState(false)
+  /**
    * 竞态票据 + 桥引用。
    *
    * `bridge` **刻意不放进依赖数组**：父组件每次渲染都新建 bridge 对象时（真机上设置页
@@ -47,6 +64,29 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
     }, 800)
     return () => window.clearTimeout(timer)
   }, [isComposing, query])
+  /**
+   * 每次展开面板先问一次权限状态。
+   *
+   * 旧原生（或测试里的简化桥）没有这两个方法时按「系统没有这条权限」处理，仍然走原来的
+   * 列表请求：这道闸只存在于国产 ROM，不能因为桥落后一版就把整个选择器弄坏。
+   */
+  useEffect(() => {
+    if (!opened) return
+    const check = bridgeRef.current.getInstalledApplicationsPermission
+    if (typeof check !== 'function') {
+      setAccess('unsupported')
+      return
+    }
+    let current = true
+    setAccess('checking')
+    void check().then(result => {
+      if (!current) return
+      setAccess(result.supported ? (result.granted ? 'granted' : 'denied') : 'unsupported')
+    }).catch(() => {
+      if (current) setAccess('unsupported')
+    })
+    return () => { current = false }
+  }, [opened])
   useEffect(() => {
     if (!opened || isComposing) return
     setLoading(true)
@@ -62,7 +102,11 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
       }).catch(() => {
         if (ticket !== generation.current) return
         setFailed(true); setApps([]); setNextOffset(null); setTotal(0)
-      }).finally(() => { if (ticket === generation.current) setLoading(false) })
+      }).finally(() => {
+        if (ticket !== generation.current) return
+        setLoading(false)
+        setListed(true)
+      })
     }, changed ? SEARCH_DEBOUNCE_MS : 0)
     return () => { window.clearTimeout(timer); generation.current = ticket + 1 }
   }, [opened, query, attempt, isComposing])
@@ -81,6 +125,37 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
   function retry() {
     generation.current++
     setAttempt(value => value + 1)
+  }
+
+  /**
+   * 申请「读取应用列表」。
+   *
+   * 系统对话框结束后由原生重新 `checkSelfPermission`，返回值是**真实状态**；这里不猜结果，
+   * 也不在拒绝后自动再弹一次——第二次多半已经点不出来，界面改为指向应用设置页。
+   */
+  async function grantAccess(): Promise<void> {
+    const request = bridgeRef.current.requestInstalledApplicationsPermission
+    if (typeof request !== 'function') {
+      setAccess('unsupported')
+      return
+    }
+    setRequestingAccess(true)
+    setAccessRequested(true)
+    try {
+      const result = await request()
+      setAccess(result.supported ? (result.granted ? 'granted' : 'denied') : 'unsupported')
+      if (result.granted) {
+        setListed(false)
+        retry()
+      }
+    } catch {
+      setAccess('denied')
+    } finally {
+      setRequestingAccess(false)
+    }
+  }
+  function openAppSettings(): void {
+    void bridgeRef.current.openApplicationSettings().catch(() => undefined)
   }
 
   /**
@@ -105,8 +180,18 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
   const visible = apps.filter(app => isVisible(app, filters))
   const hidden = apps.length - visible.length
   const searching = normalizeSearchQuery(query).length > 0
+  // 只在「列表真的只剩本应用」时提示缺权限；读得全就说明这台 ROM 不需要这条权限。
+  const restricted = access === 'denied' && listed && !failed && total <= 1
   return <div className="application-picker">
-    <button type="button" className="button button-secondary" aria-expanded={opened} onClick={() => setOpened(!opened)} disabled={disabled}>
+    <button type="button" className="button button-secondary" aria-expanded={opened} onClick={() => {
+      const next = !opened
+      setOpened(next)
+      // 重新展开时先回到「检查中」：不能拿上一次的 granted 直接下结论。
+      if (next) {
+        setAccess('checking')
+        setListed(false)
+      }
+    }} disabled={disabled}>
       <Smartphone size={18} />{t('从已安装应用选择')}
     </button>
     {opened && <div className="application-picker-panel">
@@ -162,6 +247,18 @@ export function ApplicationPicker({ bridge, selected, onChange, disabled }: {
             </button>
           )}
       </div>
+      {restricted && <div className="application-picker-permission" role="alert">
+        <p>{t('列表里只有本应用。部分国产系统需要「读取应用列表」权限才能读取其他应用。')}</p>
+        <p className="settings-note">{t('若系统没有弹出授权框，请到应用设置里手动开启。')}</p>
+        <div className="application-picker-permission-actions">
+          <button type="button" className="button button-secondary" onClick={() => { void grantAccess() }}
+            disabled={requestingAccess || disabled}>
+            {requestingAccess ? t('正在申请权限…') : t('授予权限')}
+          </button>
+          <button type="button" className="button button-quiet" onClick={openAppSettings}>{t('打开应用设置')}</button>
+        </div>
+        {accessRequested && !requestingAccess && <p role="status">{t('未获得「读取应用列表」权限；请到应用设置里手动开启。')}</p>}
+      </div>}
       <p className="settings-note">{t('支持拼音与首字母：微信可搜 wx、weixin；多个词用空格分开，顺序随意。')}</p>
       <div className="application-picker-filters" role="group" aria-label={t('列表筛选')}>
         <label><input type="checkbox" checked={automationOnly} disabled={disabled}

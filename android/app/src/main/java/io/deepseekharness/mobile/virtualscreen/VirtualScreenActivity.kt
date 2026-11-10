@@ -5,18 +5,23 @@ import android.content.Context
 import android.graphics.PorterDuff
 import android.graphics.drawable.GradientDrawable
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
 import android.view.View
 import android.view.WindowManager
 import android.widget.*
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import io.deepseekharness.mobile.APP_LIST_PERMISSION
+import io.deepseekharness.mobile.AppListAccess
 import io.deepseekharness.mobile.AppThemePreference
 import io.deepseekharness.mobile.AppLanguage
 import io.deepseekharness.mobile.R
@@ -37,6 +42,20 @@ class VirtualScreenActivity : Activity() {
     private lateinit var stop: Button
     private lateinit var modes: HorizontalScrollView
     private val modeButtons = mutableMapOf<String, Button>()
+    /**
+     * 「读取应用列表」未授予、且清单确实读空时的提示条。
+     *
+     * 不能只看「权限未授予」：荣耀 MagicOS 11 上 `QUERY_ALL_PACKAGES` 已够用，而这条
+     * OEM 权限同样存在；按权限状态直接拦会把能用的列表说成缺权限。提示条只在
+     * [appListHasEntries] 为 false 时出现。
+     */
+    private lateinit var appListNotice: LinearLayout
+    /** 上次 onResume 时是否处于「权限未授予且清单为空」：从系统设置回来后凭它决定要不要重读。 */
+    private var appListRestricted = false
+    /** 上一轮读取是否拿到了条目；默认 true，避免首次进入时提示条先闪一下。 */
+    private var appListHasEntries = true
+    /** 重新读取应用清单；权限授予后由提示条、权限回调与 onResume 调用。 */
+    private var reloadEntries: (() -> Unit)? = null
     /**
      * 页面里的预览：与悬浮小窗同样是一个 [VirtualScreenFrame]（画面 + 右下角缩放手柄），
      * 尺寸也走同一条规则与同一条偏好键，于是「预览页看到的」与「小窗里的」永远是同一个东西。
@@ -148,6 +167,29 @@ class VirtualScreenActivity : Activity() {
             override fun afterTextChanged(s: Editable?) = Unit
         })
         picker.addView(search, LinearLayout.LayoutParams(-1, dp(52)))
+        // 未授予「读取应用列表」时才显示：解释为什么列表里只有自己，并给出申请 / 设置页两个出口。
+        // 权限在 AOSP 上不存在（AppListAccess.supported=false），那里这条提示条永远不出现。
+        appListNotice = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        appListNotice.addView(TextView(this).apply {
+            text = getString(R.string.virtual_screen_app_list_permission)
+            setTextColor(ink)
+            textSize = 12f
+        })
+        val appListActions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        appListActions.addView(Button(this).apply {
+            setText(R.string.virtual_screen_app_list_grant)
+            setOnClickListener { requestAppListPermission() }
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        appListActions.addView(Button(this).apply {
+            setText(R.string.virtual_screen_app_list_settings)
+            setOnClickListener { openApplicationSettings() }
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        appListNotice.addView(appListActions)
+        picker.addView(appListNotice, LinearLayout.LayoutParams(-1, -2))
+        refreshAppListNotice()
         // 两档尺寸都从规格对象读：文案里的数字与真正建会话用的像素值同源，
         // 不会再出现「文案写 800 × 363、代码里却是 1280 × 580」这种两处各写一遍的漂移。
         val density = resources.displayMetrics.density
@@ -244,20 +286,30 @@ class VirtualScreenActivity : Activity() {
         setContentView(root)
         // 传入与页面同一枚令牌：状态栏/导航栏与页面底色同源，不会在安全区露出一条色带。
         AppThemePreference.applySafely(this, surface)
-        worker.execute {
-            val found = runCatching {
-                @Suppress("DEPRECATION")
-                packageManager.getInstalledApplications(0).mapNotNull { app ->
-                    if (app.packageName == packageName || !app.enabled) return@mapNotNull null
-                    val component = packageManager.getLaunchIntentForPackage(app.packageName)?.component?.flattenToString() ?: return@mapNotNull null
-                    if (runCatching { VirtualScreenPolicy.component(component) }.isFailure) return@mapNotNull null
-                    val label = packageManager.getApplicationLabel(app).toString()
-                        .filterNot { it.isISOControl() || it in '\u202a'..'\u202e' || it in '\u2066'..'\u2069' }.take(160)
-                    Entry(label, component)
-                }.sortedBy { it.label.lowercase() }
-            }.getOrDefault(emptyList())
-            main.post { if (!isDestroyed) { entries = found; filter() } }
+        fun loadEntries() {
+            worker.execute {
+                val found = runCatching {
+                    @Suppress("DEPRECATION")
+                    packageManager.getInstalledApplications(0).mapNotNull { app ->
+                        if (app.packageName == packageName || !app.enabled) return@mapNotNull null
+                        val component = packageManager.getLaunchIntentForPackage(app.packageName)?.component?.flattenToString() ?: return@mapNotNull null
+                        if (runCatching { VirtualScreenPolicy.component(component) }.isFailure) return@mapNotNull null
+                        val label = packageManager.getApplicationLabel(app).toString()
+                            .filterNot { it.isISOControl() || it in '\u202a'..'\u202e' || it in '\u2066'..'\u2069' }.take(160)
+                        Entry(label, component)
+                    }.sortedBy { it.label.lowercase() }
+                }.getOrDefault(emptyList())
+                main.post {
+                    if (isDestroyed) return@post
+                    entries = found
+                    appListHasEntries = found.isNotEmpty()
+                    filter()
+                    refreshAppListNotice()
+                }
+            }
         }
+        reloadEntries = { loadEntries() }
+        loadEntries()
     }
 
     private fun sendBack() {
@@ -435,6 +487,8 @@ class VirtualScreenActivity : Activity() {
             return
         }
         resumed = true
+        // 从系统设置页回来时权限可能已经变了：只在「上次未授予、这次已授予」时重读清单。
+        refreshAppListNotice()
         VirtualScreenService.current?.hideOverlay()
         main.post(refresh)
     }
@@ -446,6 +500,64 @@ class VirtualScreenActivity : Activity() {
         super.onPause()
     }
     override fun onDestroy() { main.removeCallbacksAndMessages(null); worker.shutdown(); super.onDestroy() }
+
+    /**
+     * 重新判定「读取应用列表」并同步提示条。
+     *
+     * 只有「上次未授予、这次已授予」才重读清单：初次进入由 onCreate 自己发起读取，
+     * 每次回到页面都再跑一遍 PackageManager 既无必要，也会把用户已经滚动到的位置冲掉。
+     */
+    private fun refreshAppListNotice() {
+        val restricted = AppListAccess.needsGrant(this) && !appListHasEntries
+        val grantedNow = appListRestricted && !restricted
+        appListRestricted = restricted
+        appListNotice.visibility = if (restricted) View.VISIBLE else View.GONE
+        if (grantedNow) reloadEntries?.invoke()
+    }
+
+    /**
+     * 申请国产 ROM 的「读取应用列表」权限。
+     *
+     * 系统没定义这条权限（AOSP 等）时直接返回；有的 ROM 不弹系统对话框，用户可改走
+     * 提示条里的「应用设置」手动开启，回到本页时 [onResume] 会重新判定并重读清单。
+     */
+    private fun requestAppListPermission() {
+        if (!AppListAccess.supported(this)) return
+        if (AppListAccess.granted(this)) {
+            refreshAppListNotice()
+            return
+        }
+        ActivityCompat.requestPermissions(this, arrayOf(APP_LIST_PERMISSION), APP_LIST_PERMISSION_REQUEST)
+    }
+
+    /** 厂商 ROM 的「读取应用列表」开关就挂在应用详情页下，没有稳定的公开 Intent 可以直达。 */
+    private fun openApplicationSettings() {
+        val opened = runCatching {
+            startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")),
+            )
+        }.isSuccess
+        if (!opened) toast(getString(R.string.virtual_screen_app_list_denied))
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != APP_LIST_PERMISSION_REQUEST) return
+        refreshAppListNotice()
+        if (AppListAccess.needsGrant(this) && !appListHasEntries) {
+            toast(getString(R.string.virtual_screen_app_list_denied))
+        }
+    }
+
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+
+    private companion object {
+        /** 本页自己的权限请求码；其他请求不会走 [onRequestPermissionsResult] 的这条分支。 */
+        const val APP_LIST_PERMISSION_REQUEST = 4101
+    }
 }

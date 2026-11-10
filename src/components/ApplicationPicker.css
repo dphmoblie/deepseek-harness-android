@@ -21,3 +21,7 @@
 .application-picker-filters label { display: flex; align-items: center; gap: 8px; min-height: 32px; }
 .application-picker-filters input { width: 18px; height: 18px; flex: none; }
 .application-picker-panel > p { margin: 8px 0; }
+/* 「读取应用列表」未授予时的说明块：与列表区分开，但不做成刺眼的错误条——这是预期降级，不是故障。 */
+.application-picker-permission { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-inner); }
+.application-picker-permission > p { margin: 0 0 6px; }
+.application-picker-permission-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }

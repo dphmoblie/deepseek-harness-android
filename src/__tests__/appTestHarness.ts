@@ -83,6 +83,10 @@ export const bridge = {
   openShizuku: vi.fn(),
   getAccessibilityAutomationState: vi.fn(),
   listInstalledApplications: vi.fn().mockResolvedValue({ apps: [], total: 0, nextOffset: null }),
+  // 「读取应用列表」在 AOSP 上不存在：默认按 supported=false 回答，选择器不会显示授权入口。
+  // 需要测授权流程的用例自己覆盖这两条。
+  getInstalledApplicationsPermission: vi.fn().mockResolvedValue({ supported: false, granted: true }),
+  requestInstalledApplicationsPermission: vi.fn().mockResolvedValue({ supported: false, granted: true }),
   getDeviceShellAccess: vi.fn().mockResolvedValue({ enabled: false }),
   setDeviceShellAccess: vi.fn().mockImplementation((enabled: boolean) => Promise.resolve({ enabled })),
   openVirtualScreen: vi.fn().mockResolvedValue(undefined),
@@ -393,6 +397,8 @@ export function beforeEachAppTest(): void {
     serviceStatus: 'off',
   })
   bridge.listInstalledApplications.mockResolvedValue({ apps: [], total: 0, nextOffset: null })
+  bridge.getInstalledApplicationsPermission.mockResolvedValue({ supported: false, granted: true })
+  bridge.requestInstalledApplicationsPermission.mockResolvedValue({ supported: false, granted: true })
   bridge.getDeviceShellAccess.mockResolvedValue({ enabled: false })
   bridge.setDeviceShellAccess.mockImplementation((enabled: boolean) => Promise.resolve({ enabled }))
   bridge.openVirtualScreen.mockResolvedValue(undefined)

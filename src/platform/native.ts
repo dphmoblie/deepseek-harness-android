@@ -1,6 +1,6 @@
 import { validatePluginCatalog, validatePluginRequest } from './plugins'
 import { harnessVersionRequest, validateHarnessProgress, validateHarnessReleases, validateHarnessVersions, type HarnessProgress, type HarnessVersionOperation } from './harnessVersions'
-import { validateInstalledApplications } from './installedApplications'
+import { validateInstalledApplications, validateInstalledApplicationsPermission } from './installedApplications'
 import { Capacitor, registerPlugin } from '@capacitor/core'
 import type { PluginListenerHandle } from '@capacitor/core'
 import { validateSyncedTheme } from '../adaptiveAccent'
@@ -178,6 +178,9 @@ interface NativeRuntimePlugin {
   getVirtualScreenState(): Promise<unknown>
   getAccessibilityAutomationState(): Promise<unknown>
   listInstalledApplications(options: { query: string; offset: number }): Promise<unknown>
+  /** 国产 ROM 的「读取应用列表」权限：只查状态 / 发起申请，返回 { supported, granted }。 */
+  getInstalledApplicationsPermission(): Promise<unknown>
+  requestInstalledApplicationsPermission(): Promise<unknown>
   getDeviceShellAccess(): Promise<unknown>
   setDeviceShellAccess(options: { enabled: boolean }): Promise<unknown>
   /** 保存白名单；`password` 只在用户已设置验证密码时出现，原生侧负责比对。 */
@@ -412,6 +415,13 @@ function createNativeBridge(): RuntimeBridge {
       }
       return NativeRuntime.listInstalledApplications({ query, offset }).then(validateInstalledApplications)
     },
+    // 「读取应用列表」：两个方法都只回 { supported, granted }，校验器要求两个字段都是布尔。
+    getInstalledApplicationsPermission: () => NativeRuntime
+      .getInstalledApplicationsPermission()
+      .then(validateInstalledApplicationsPermission),
+    requestInstalledApplicationsPermission: () => NativeRuntime
+      .requestInstalledApplicationsPermission()
+      .then(validateInstalledApplicationsPermission),
     // 白名单：发送前先自检一遍形状（含自动项与密码状态这几个必填字段），
     // 密码只在用户带了的时候校验——未设置密码的设备上，undefined 是合法取值。
     setAccessibilityAutomationPackages: (packages, password, whitelistEnabled) => {

@@ -4,6 +4,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 用于用户按应用名称选择自动化白名单，不上传或记录完整应用清单。 -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
+    <!-- 国产 ROM（HyperOS / MagicOS / ColorOS / OriginOS 等，T/TAF 108-2022）在
+         QUERY_ALL_PACKAGES 之外额外管控的一道运行时权限。只声明前者时
+         getInstalledApplications 只返回本应用，白名单与副屏的选择器里就只剩自己；
+         声明并申请它之后才会出现「读取应用列表」授权项。AOSP 没有这条权限，声明无副作用。
+         本应用走 GitHub Release 分发，不经 Play 审核；若将来上架需按 Play 政策重新评估。 -->
+    <uses-permission android:name="com.android.permission.GET_INSTALLED_APPS" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 仅用于用户解锁后恢复用户已开启的后台服务与悬浮球；不会静默启动界面。 -->

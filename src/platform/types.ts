@@ -767,6 +767,20 @@ export interface InstalledApplicationsPage {
   total: number
   nextOffset: number | null
 }
+/**
+ * 「读取应用列表」权限状态。
+ *
+ * 国产 ROM（HyperOS / MagicOS / ColorOS / OriginOS 等，T/TAF 108-2022）在
+ * `QUERY_ALL_PACKAGES` 之外额外管控一道运行时权限；没有它时 `getInstalledApplications`
+ * 只返回本应用，选择器里就只剩自己。
+ *
+ * `supported=false` 表示系统没有这条权限（AOSP / Pixel / 三星），此时 `granted` 恒为 true，
+ * 界面**不得**显示授权入口——不能把「不存在」画成「未授予」。
+ */
+export interface InstalledApplicationsPermission {
+  supported: boolean
+  granted: boolean
+}
 interface DeviceShellAccessState { enabled: boolean }
 
 /**
@@ -1781,6 +1795,17 @@ export interface RuntimeBridge {
   getAccessibilityAutomationState: () => Promise<AccessibilityAutomationState>
   /** 本机应用选择器的分页查询，数量不限；不向 AI 自动发送清单。 */
   listInstalledApplications: (query: string, offset: number) => Promise<InstalledApplicationsPage>
+  /**
+   * 查询「读取应用列表」权限是否存在、是否已授予；只读，不申请。
+   *
+   * 只有系统真的定义了这条权限（国产 ROM）时 `supported` 才为 true；AOSP 上不要显示授权入口。
+   */
+  getInstalledApplicationsPermission: () => Promise<InstalledApplicationsPermission>
+  /**
+   * 申请「读取应用列表」权限。返回的是申请后的**真实**授权状态：
+   * 用户拒绝、系统不弹框或没有前台 Activity 时都如实返回 false，不猜、不重试。
+   */
+  requestInstalledApplicationsPermission: () => Promise<InstalledApplicationsPermission>
   getDeviceShellAccess: () => Promise<DeviceShellAccessState>
   setDeviceShellAccess: (enabled: boolean) => Promise<DeviceShellAccessState>
   /**

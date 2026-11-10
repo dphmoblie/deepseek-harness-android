@@ -299,4 +299,83 @@ describe('已安装应用选择器', () => {
       expect(list).toHaveBeenCalledWith('weixin', 0)
     }, { timeout: 2000 })
   })
+
+  /**
+   * 国产 ROM 的「读取应用列表」：没授予时 `getInstalledApplications` 只回本应用。
+   *
+   * 判定口径是「列表真的只剩本应用」，不是「权限没授予」——荣耀 MagicOS 11 上
+   * `QUERY_ALL_PACKAGES` 已经够用，但这条权限同样存在；按后者拦会把能用的列表藏起来。
+   */
+  it('列表只剩本应用时说明原因，授予后重新读取', async () => {
+    const list = vi.fn().mockResolvedValue({ apps: [app('reader', 'com.example.reader')], nextOffset: null, total: 1 })
+    const getPermission = vi.fn().mockResolvedValue({ supported: true, granted: false })
+    const requestPermission = vi.fn().mockResolvedValue({ supported: true, granted: true })
+    const { container } = open({
+      listInstalledApplications: list,
+      getInstalledApplicationsPermission: getPermission,
+      requestInstalledApplicationsPermission: requestPermission,
+      openApplicationSettings: vi.fn().mockResolvedValue(undefined),
+    } as unknown as RuntimeBridge)
+
+    await screen.findByText('列表里只有本应用。部分国产系统需要「读取应用列表」权限才能读取其他应用。')
+    expect(list).toHaveBeenCalledOnce()
+    // 列表本身照常显示：缺权限是解释，不是把整份结果藏起来。
+    expect(screen.getByText('reader')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '授予权限' }))
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+    expect(requestPermission).toHaveBeenCalledOnce()
+    expect(container.textContent).not.toContain('列表里只有本应用')
+  })
+
+  it('权限没授予但列表读得全时不提示授权', async () => {
+    const list = vi.fn().mockResolvedValue({
+      apps: [app('reader', 'com.example.reader'), app('notes', 'com.example.notes')],
+      nextOffset: null, total: 482,
+    })
+    open({
+      listInstalledApplications: list,
+      getInstalledApplicationsPermission: vi.fn().mockResolvedValue({ supported: true, granted: false }),
+      requestInstalledApplicationsPermission: vi.fn().mockResolvedValue({ supported: true, granted: false }),
+      openApplicationSettings: vi.fn().mockResolvedValue(undefined),
+    } as unknown as RuntimeBridge)
+
+    await screen.findByText('reader')
+    expect(screen.queryByText('列表里只有本应用。部分国产系统需要「读取应用列表」权限才能读取其他应用。')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '授予权限' })).not.toBeInTheDocument()
+  })
+
+  it('申请被拒绝后不重复弹窗，改为引导到应用设置', async () => {
+    const list = vi.fn().mockResolvedValue({ apps: [app('reader', 'com.example.reader')], nextOffset: null, total: 1 })
+    const requestPermission = vi.fn().mockResolvedValue({ supported: true, granted: false })
+    const settings = vi.fn().mockResolvedValue(undefined)
+    open({
+      listInstalledApplications: list,
+      getInstalledApplicationsPermission: vi.fn().mockResolvedValue({ supported: true, granted: false }),
+      requestInstalledApplicationsPermission: requestPermission,
+      openApplicationSettings: settings,
+    } as unknown as RuntimeBridge)
+
+    await screen.findByText('列表里只有本应用。部分国产系统需要「读取应用列表」权限才能读取其他应用。')
+    fireEvent.click(screen.getByRole('button', { name: '授予权限' }))
+    await screen.findByText('未获得「读取应用列表」权限；请到应用设置里手动开启。')
+    expect(requestPermission).toHaveBeenCalledOnce()
+
+    fireEvent.click(screen.getByRole('button', { name: '打开应用设置' }))
+    expect(settings).toHaveBeenCalledOnce()
+  })
+
+  it('系统没有读取应用列表权限时（AOSP）不显示授权入口，照常读取', async () => {
+    const list = vi.fn().mockResolvedValue({ apps: [app('reader', 'com.example.reader')], nextOffset: null, total: 1 })
+    open({
+      listInstalledApplications: list,
+      getInstalledApplicationsPermission: vi.fn().mockResolvedValue({ supported: false, granted: false }),
+      requestInstalledApplicationsPermission: vi.fn().mockResolvedValue({ supported: false, granted: true }),
+      openApplicationSettings: vi.fn().mockResolvedValue(undefined),
+    } as unknown as RuntimeBridge)
+
+    await screen.findByText('reader')
+    expect(screen.queryByRole('button', { name: '授予权限' })).not.toBeInTheDocument()
+    expect(list).toHaveBeenCalledOnce()
+  })
 })

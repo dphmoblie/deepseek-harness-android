@@ -83,6 +83,11 @@
     <string name="virtual_screen_back">返回</string>
     <string name="virtual_screen_search">搜索应用名称或包名</string>
     <string name="virtual_screen_clear_search">清空查找词</string>
+    <!-- 国产 ROM 的「读取应用列表」权限：未授予时选择器只能读到本应用，提示条负责解释并给出两个出口。 -->
+    <string name="virtual_screen_app_list_permission">需要「读取应用列表」权限才能列出其他应用；未授予时列表里只有本应用。</string>
+    <string name="virtual_screen_app_list_grant">授予权限</string>
+    <string name="virtual_screen_app_list_settings">应用设置</string>
+    <string name="virtual_screen_app_list_denied">未获得「读取应用列表」权限；可在应用设置里手动开启。</string>
     <string name="virtual_screen_shell_required">请先在设置中开启 AI Shell 并连接 Shizuku</string>
     <string name="virtual_screen_android_required">副屏操作需要 Android 10 或更高版本</string>
     <string name="virtual_screen_creating">正在创建目标应用副屏，请稍候…</string>

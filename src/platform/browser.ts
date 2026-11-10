@@ -180,6 +180,10 @@ export function createBrowserBridge(): RuntimeBridge {
 
   return {
     listInstalledApplications: () => Promise.reject(new Error('应用列表仅在安卓设备上可用')),
+    // 浏览器没有系统应用清单，也就没有「读取应用列表」这道权限：如实回答「不支持」，
+    // 让选择器直接走「读取失败」，而不是显示一个浏览器里永远点不出来的授权入口。
+    getInstalledApplicationsPermission: () => Promise.resolve({ supported: false, granted: true }),
+    requestInstalledApplicationsPermission: () => Promise.resolve({ supported: false, granted: true }),
     getDeviceShellAccess: () => Promise.resolve({ enabled: false }),
     setDeviceShellAccess: () => Promise.reject(new Error('AI Shell 仅在安卓设备上可用')),
     managePlugins: request => {

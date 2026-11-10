@@ -276,6 +276,14 @@ internal fun accessibilityGuardFailure(failure: AccessibilityGuardException): Ru
 /** 前台服务通知权限别名；Android 13 以下系统不需要该权限。 */
 private const val NOTIFICATION_PERMISSION_ALIAS = "notifications"
 
+/**
+ * 国产 ROM「读取应用列表」权限的别名。
+ *
+ * 这条权限在 AOSP 上不存在，只在系统确实定义了它的 ROM（HyperOS / MagicOS /
+ * ColorOS / OriginOS 等）上申请；判定见 [AppListAccess]。
+ */
+private const val APP_LIST_PERMISSION_ALIAS = "installedApps"
+
 /*
  * 存储权限别名。
  * 媒体读取自 Android 13 起由 READ_MEDIA_* 取代 READ_EXTERNAL_STORAGE，两者不能塞进同一个
@@ -320,6 +328,8 @@ private var uncleanExitRecorded = false
         Permission(alias = MEDIA_IMAGES_ALIAS, strings = [Manifest.permission.READ_MEDIA_IMAGES]),
         Permission(alias = MEDIA_VIDEO_ALIAS, strings = [Manifest.permission.READ_MEDIA_VIDEO]),
         Permission(alias = LEGACY_STORAGE_ALIAS, strings = [Manifest.permission.READ_EXTERNAL_STORAGE]),
+        // 国产 ROM 的「读取应用列表」；AOSP 没有这条权限，申请前由 AppListAccess.supported 拦住。
+        Permission(alias = APP_LIST_PERMISSION_ALIAS, strings = [APP_LIST_PERMISSION]),
     ],
 )
 class MobileRuntimePlugin : Plugin() {
@@ -3313,6 +3323,78 @@ class MobileRuntimePlugin : Plugin() {
         }
         return value
     }
+
+    /**
+     * 权限：仅壳内桥接；只回「读取应用列表」这条国产 ROM 权限是否存在、是否已授予。
+     *
+     * `supported=false`（AOSP / Pixel / 三星）表示系统根本没有这条权限，前端按「无需申请」
+     * 处理，不能把它显示成「未授予」，否则用户会在系统设置里找一个不存在的开关。
+     */
+    @PluginMethod
+    fun getInstalledApplicationsPermission(call: PluginCall) {
+        execute(call) {
+            JSObject()
+                .put("supported", AppListAccess.supported(context))
+                .put("granted", AppListAccess.granted(context))
+        }
+    }
+
+    /**
+     * 权限：应用内桥接；仅在系统定义了「读取应用列表」权限时申请。
+     *
+     * 与通知权限同一套写法（见 [requestNotificationPermission]）：没有前台 Activity、或
+     * Activity 未到 STARTED 时直接按真实授权状态结清，不把调用挂起；Capacitor 的
+     * ActivityResultLauncher 在部分 ROM / Activity 重建竞态下会抛异常，必须在这里接住，
+     * 否则异常逃出主线程会直接闪退。拒绝后由界面引导到应用详情页（[openApplicationSettings]）。
+     */
+    @PluginMethod
+    fun requestInstalledApplicationsPermission(call: PluginCall) {
+        if (!AppListAccess.supported(context)) {
+            call.resolve(JSObject().put("supported", false).put("granted", true))
+            return
+        }
+        if (AppListAccess.granted(context)) {
+            call.resolve(JSObject().put("supported", true).put("granted", true))
+            return
+        }
+        val currentActivity = activity
+        if (currentActivity == null) {
+            // 没有前台 Activity 时弹不出系统对话框：如实返回未授予，由界面提供设置页入口。
+            call.resolve(JSObject().put("supported", true).put("granted", false))
+            return
+        }
+        currentActivity.runOnUiThread {
+            val lifecycleReady = runCatching {
+                currentActivity.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+            }.getOrDefault(false)
+            if (!lifecycleReady) {
+                runCatching { call.resolve(installedApplicationsPermissionResult()) }
+                return@runOnUiThread
+            }
+            try {
+                requestPermissionForAlias(
+                    APP_LIST_PERMISSION_ALIAS,
+                    call,
+                    "installedApplicationsPermissionCallback",
+                )
+            } catch (error: Throwable) {
+                android.util.Log.w(
+                    "dsh-runtime",
+                    "app list permission request failed: ${error.javaClass.simpleName}",
+                )
+                runCatching { call.resolve(installedApplicationsPermissionResult()) }
+            }
+        }
+    }
+
+    @PermissionCallback
+    private fun installedApplicationsPermissionCallback(call: PluginCall?) {
+        call?.resolve(installedApplicationsPermissionResult())
+    }
+
+    private fun installedApplicationsPermissionResult(): JSObject = JSObject()
+        .put("supported", AppListAccess.supported(context))
+        .put("granted", AppListAccess.granted(context))
 
     /** 权限：仅壳内桥接；查询参数有界，按页返回应用名称与包名，不返回应用数据。 */
     @PluginMethod
