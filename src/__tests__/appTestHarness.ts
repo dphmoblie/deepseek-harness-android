@@ -202,6 +202,7 @@ export const bridge = {
   downloadAppUpdate: vi.fn(),
   installAppUpdate: vi.fn(),
   openAppUpdateInstallSettings: vi.fn(),
+  getAppUpdateInstallPermission: vi.fn(),
   managePlugins: vi.fn(),
   testModelConnectivity: vi.fn(),
   listModelCatalog: vi.fn(),
@@ -702,6 +703,7 @@ export function beforeEachAppTest(): void {
     channel: 'stable',
     installAllowed: false,
   })
+  bridge.getAppUpdateInstallPermission.mockResolvedValue({ granted: false })
   // 默认回显入参频道的最小状态（与 getAppUpdateState 默认桩同源）：关心频道语义的用例自己覆盖。
   bridge.setAppUpdateChannel.mockImplementation((channel: 'stable' | 'beta') => Promise.resolve({
     installedVersion: '0.2.0',

@@ -16,6 +16,7 @@ import {
   assertTerminalSize,
   assertVirtualScreenSettingsUpdate,
   validateAllFilesAccessResult,
+  validateAppUpdateInstallPermission,
   validateAppUpdateState,
   validateDeviceCapabilityReport,
   validateRootEngineStatus,
@@ -1845,6 +1846,14 @@ describe('应用更新状态校验', () => {
     for (const value of [undefined, null, 'true', 1, 0]) {
       expect(() => validateAppUpdateState(state({ installAllowed: value })), String(value))
         .toThrow('应用更新安装权限状态无效')
+    }
+  })
+
+  it('离线读取安装未知应用权限只接受布尔值', () => {
+    expect(validateAppUpdateInstallPermission({ granted: true })).toEqual({ granted: true })
+    expect(validateAppUpdateInstallPermission({ granted: false })).toEqual({ granted: false })
+    for (const value of [undefined, null, 'true', 1, 0]) {
+      expect(() => validateAppUpdateInstallPermission({ granted: value })).toThrow('应用更新安装权限')
     }
   })
 

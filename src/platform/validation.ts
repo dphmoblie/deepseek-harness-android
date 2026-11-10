@@ -18,6 +18,7 @@ import type {
   AccessibilityAutomationState,
   AllFilesAccessResult,
   AppUpdateChannel,
+  AppUpdateInstallPermission,
   AppUpdateState,
   AutomationTaskState,
   AutomationTaskStatus,
@@ -1760,6 +1761,12 @@ export function validateAllFilesAccessResult(value: unknown): AllFilesAccessResu
     supported: requiredBoolean(source.supported, '所有文件访问支持状态'),
     granted: requiredBoolean(source.granted, '所有文件访问权限'),
   }
+}
+
+/** 校验离线读取的「安装未知应用」权限状态。 */
+export function validateAppUpdateInstallPermission(value: unknown): AppUpdateInstallPermission {
+  const result = asRecord(value, '应用更新安装权限状态')
+  return { granted: requiredBoolean(result.granted, '应用更新安装权限') }
 }
 
 /**

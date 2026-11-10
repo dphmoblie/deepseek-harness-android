@@ -2949,6 +2949,70 @@ button:disabled {
 .onboarding-dialog .onboarding-nav { flex: none; padding-top: 12px; }
 .onboarding-note { color: var(--muted); }
 .onboarding-spacer { flex: 1; }
+
+/* 首次权限说明：列表每项都把用途、风险和拒绝后的影响放在同一块，避免用户只看到系统
+   弹窗标题却不知道为什么要授权。长内容只滚动正文，底部按钮始终可见。 */
+.first-run-permissions-dialog {
+  width: min(100%, 560px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.first-run-permissions-dialog > .dialog-info-icon,
+.first-run-permissions-dialog > h2,
+.first-run-permissions-dialog > .dialog-actions { flex: none; }
+.first-run-permissions-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  color: var(--muted);
+  font-size: .8125rem;
+  line-height: 1.55;
+}
+.first-run-permissions-body > p { margin: 0; }
+.first-run-permissions-body > p + p { margin-top: 8px; }
+.first-run-permissions-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 2px 0;
+}
+.first-run-permission-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-inner);
+  background: var(--surface-sunken);
+  cursor: pointer;
+}
+.first-run-permission-item input { margin-top: 3px; accent-color: var(--blue); }
+.first-run-permission-item strong { display: block; color: var(--ink); font-size: .9rem; }
+.first-run-permission-item small { display: block; margin-top: 3px; color: var(--muted); font-size: .77rem; line-height: 1.45; }
+.first-run-permissions-note {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--amber-line, var(--line-strong));
+  border-radius: var(--radius-inner);
+  background: var(--amber-soft, var(--surface-sunken));
+  color: var(--muted);
+  font-size: .78rem;
+  line-height: 1.5;
+}
+.first-run-permissions-note p { margin: 0; }
+.first-run-permissions-note p + p { margin-top: 7px; }
+.first-run-permissions-progress,
+.first-run-permissions-results { flex: 0 1 auto; min-height: 0; overflow-y: auto; color: var(--muted); font-size: .84rem; line-height: 1.55; }
+.first-run-permissions-results p { margin: 5px 0; }
+.first-run-permissions-progress { display: grid; gap: 9px; }
+.first-run-permissions-progress p { display: flex; align-items: center; gap: 7px; margin: 0; }
+.dialog-info-icon { display: inline-flex; color: var(--blue); }
 /* 折叠的高级项：默认收起，展开后与正文保持同一套间距。 */
 .onboarding-advanced { border-top: 1px solid var(--line-strong); padding-top: 9px; }
 .onboarding-advanced > summary { cursor: pointer; font-size: .94em; color: var(--muted); }

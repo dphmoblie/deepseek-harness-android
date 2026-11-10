@@ -374,6 +374,7 @@ describe('浏览器桥的更新渠道与应用自更新', () => {
     await expect(bridge.downloadAppUpdate()).rejects.toThrow('浏览器模式下不能下载安装包')
     await expect(bridge.installAppUpdate()).rejects.toThrow('浏览器模式下不能安装应用')
     await expect(bridge.openAppUpdateInstallSettings()).rejects.toThrow('浏览器模式下不能打开安装授权页面')
+    await expect(bridge.getAppUpdateInstallPermission()).resolves.toEqual({ granted: false })
   })
 })
 

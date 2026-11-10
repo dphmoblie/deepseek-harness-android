@@ -40,6 +40,12 @@ test('应用更新桥接保留原生缓存兼容默认值', () => {
   assert.match(state, /\} else false/u)
 })
 
+test('安装权限查询只读取本地状态，不触发远端更新检查', () => {
+  const permission = method('getAppUpdateInstallPermission').split('\n    }')[0]
+  assert.match(permission, /JSObject\(\)\.put\("granted", AppReleaseCatalog\.installAllowed\(context\)\)/u)
+  assert.doesNotMatch(permission, /AppUpdateCache|requireAppUpdate\(/u)
+})
+
 test('安装必须核对当前发布，并只读取对应版本的已下载包', () => {
   const install = method('installAppUpdate')
   assert.match(install, /val release = requireAppUpdate\(\)/u)

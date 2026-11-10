@@ -1,6 +1,7 @@
 import { validatePluginRequest } from './plugins'
 import { readBackgroundState, saveBackgroundState } from '../backgroundRef'
 import type {
+  AppUpdateInstallPermission,
   AppUpdateChannel,
   AppUpdateState,
   AutomationTaskState,
@@ -773,6 +774,7 @@ export function createBrowserBridge(): RuntimeBridge {
     downloadAppUpdate: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能下载安装包')),
     installAppUpdate: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能安装应用')),
     openAppUpdateInstallSettings: (): Promise<void> => Promise.reject(new Error('浏览器模式下不能打开安装授权页面')),
+    getAppUpdateInstallPermission: (): Promise<AppUpdateInstallPermission> => Promise.resolve({ granted: false }),
     // 浏览器预览没有原生诊断日志：保持关闭且不可导出，避免给出「已经采集到东西」的错觉。
     getDiagnosticLogState: (): Promise<DiagnosticLogState> => Promise.resolve({ ...diagnosticState }),
     // 同理，预览里没有可查看的正文；返回空窗口而不是编造几条假记录。

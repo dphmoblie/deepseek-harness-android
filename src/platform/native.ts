@@ -51,6 +51,7 @@ import {
   assertVirtualScreenSettingsUpdate,
   assertVirtualScreenStartRequest,
   validateAllFilesAccessResult,
+  validateAppUpdateInstallPermission,
   validateAppUpdateState,
   assertAccessibilityAutomationAction,
   assertAccessibilityAutomationAppConfigInput,
@@ -274,6 +275,7 @@ interface NativeRuntimePlugin {
   downloadAppUpdate(): Promise<void>
   installAppUpdate(): Promise<void>
   openAppUpdateInstallSettings(): Promise<void>
+  getAppUpdateInstallPermission(): Promise<unknown>
   getDiagnosticLogState(): Promise<DiagnosticLogState>
   readDiagnosticLog(options: { maxBytes?: number }): Promise<unknown>
   setDiagnosticLogSettings(options: { enabled: boolean; retentionDays: number }): Promise<DiagnosticLogState>
@@ -682,6 +684,7 @@ function createNativeBridge(): RuntimeBridge {
     downloadAppUpdate: () => NativeRuntime.downloadAppUpdate(),
     installAppUpdate: () => NativeRuntime.installAppUpdate(),
     openAppUpdateInstallSettings: () => NativeRuntime.openAppUpdateInstallSettings(),
+    getAppUpdateInstallPermission: () => NativeRuntime.getAppUpdateInstallPermission().then(validateAppUpdateInstallPermission),
     readDiagnosticLog: options => NativeRuntime.readDiagnosticLog({ maxBytes: options?.maxBytes }).then(validateDiagnosticLogText),
     getDiagnosticLogState: () => NativeRuntime.getDiagnosticLogState().then(validateDiagnosticLogState),
     setDiagnosticLogSettings: (enabled, retentionDays) => {

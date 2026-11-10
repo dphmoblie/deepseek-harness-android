@@ -1469,6 +1469,11 @@ export interface AllFilesAccessResult {
   granted: boolean
 }
 
+/** 「安装未知应用」权限的本地状态；读取不联网，也不会打开系统设置。 */
+export interface AppUpdateInstallPermission {
+  granted: boolean
+}
+
 /** 一次导入的结果；只有计数、字节数、文件名与落点，不含内容。 */
 export interface MailboxImportResult {
   entryCount: number
@@ -2181,6 +2186,8 @@ export interface RuntimeBridge {
   listRuntimeReleases: () => Promise<RuntimeReleaseList>
   /** 应用自身的更新状态：已安装版本、当前频道，以及按频道过滤后是否有可用更新。 */
   getAppUpdateState: (forceRefresh?: boolean) => Promise<AppUpdateState>
+  /** 只读取「安装未知应用」权限，不触发更新检查；首次权限说明可离线使用。 */
+  getAppUpdateInstallPermission: () => Promise<AppUpdateInstallPermission>
   /**
    * 切换应用更新频道并返回最新状态（一次往返：联网检查成功后保存频道）。
    *
@@ -2206,7 +2213,7 @@ export interface RuntimeBridge {
    * 跳转系统「安装未知应用」授权页。
    *
    * 是否授权由用户在系统界面决定，返回成功只代表页面打开了，不代表已授权：
-   * 回来后必须重新 [RuntimeBridge.getAppUpdateState]，不能自己把 installAllowed 置为 true。
+   * 回来后须通过 [RuntimeBridge.getAppUpdateInstallPermission] 或更新状态重新查询，不能自行记为已授权。
    */
   openAppUpdateInstallSettings: () => Promise<void>
   addRuntimeProgressListener: (listener: (event: RuntimeProgress) => void) => Promise<ListenerHandle>

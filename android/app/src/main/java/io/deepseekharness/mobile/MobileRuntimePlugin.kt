@@ -1086,6 +1086,19 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /**
+     * 只读取「安装未知应用」开关，不触发联网更新检查或打开系统页面。
+     *
+     * 首次权限说明需要在离线时也能准确展示状态，因此不能复用
+     * [getAppUpdateState]（没有有效缓存时它可能检查远端发布）。
+     */
+    @PluginMethod
+    fun getAppUpdateInstallPermission(call: PluginCall) {
+        execute(call) {
+            JSObject().put("granted", AppReleaseCatalog.installAllowed(context))
+        }
+    }
+
     /** 与展示复用同一受校验缓存；桥层不暴露 URL，没有更新时明确失败。 */
     private fun requireAppUpdate(): AppReleaseCatalog.Release =
         AppUpdateCache.from(context).availableRelease(

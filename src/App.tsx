@@ -83,6 +83,7 @@ import {
   MessageSquare,
 } from 'lucide-react'
 import { Onboarding, ONBOARDING_STORAGE_KEY } from './components/Onboarding'
+import { FirstRunPermissions, FIRST_RUN_PERMISSIONS_STORAGE_KEY } from './components/FirstRunPermissions'
 import { hasConfiguredModelCredential, MODEL_PROVIDERS } from './modelProviders'
 import { firstCatalogModelId, isValidModelId } from './platform/modelCatalog'
 import { CustomProviders } from './components/CustomProviders'
@@ -92,6 +93,7 @@ import { RootEngineCard } from './components/RootEngineCard'
 import { AppUpdateReminderDialog } from './components/AppUpdateReminderDialog'
 import { useAppUpdateReminder } from './appUpdateReminder'
 import { runtimeBridge } from './platform/native'
+import { Capacitor } from '@capacitor/core'
 import { observeKeyboardInset } from './keyboardInset'
 import { applyShellFontScale, SHELL_FONT_BASELINE_PX } from './shellFont'
 import { acknowledgeAutomationDisclaimer, isAutomationDisclaimerAcknowledged } from './accessibilityDisclaimer'
@@ -247,7 +249,7 @@ const SETTINGS_HOME_GROUPS: { id: SettingsHomeGroup; label: string }[] = [
 ]
 
 /** 入口点下去要去哪：设置二级页，或外壳一级页。 */
-type SettingsHomeTarget = { kind: 'page'; page: SettingsPage } | { kind: 'view'; view: AppView }
+type SettingsHomeTarget = { kind: 'page'; page: SettingsPage } | { kind: 'view'; view: AppView } | { kind: 'permissions' }
 
 interface SettingsHomeEntry {
   /** 稳定标识：只用于 React key、图标与测试定位；改标题不影响它，也不参与匹配。 */
@@ -341,6 +343,15 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     keywords: ['shizuku', '授权', '权限', '连接', '设备shell', 'ai shell', 'device shell'],
     target: { kind: 'page', page: 'device-shell' },
     icon: <Smartphone size={20} />,
+  },
+  {
+    id: 'permissions',
+    group: 'device',
+    title: '权限说明与授权',
+    hint: '查看用途、风险，集中申请尚未授予的权限',
+    keywords: ['权限', '授权', '风险', '通知', '存储', '悬浮窗', 'permission', 'access', 'grant'],
+    target: { kind: 'permissions' },
+    icon: <ShieldCheck size={20} />,
   },
   {
     id: 'automation',
@@ -1355,6 +1366,7 @@ interface SettingsHomeScreenProps {
   onLaunch: () => void
   onOpenPage: (page: SettingsPage) => void
   onOpenView: (view: AppView) => void
+  onOpenPermissions: () => void
 }
 
 /**
@@ -1362,7 +1374,7 @@ interface SettingsHomeScreenProps {
  *
  * 筛选只决定这一屏显示哪些入口，不改变任何行为：点下去走的是同一条路。
  */
-function SettingsHomeScreen({ busy, launchBlocked, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenPage, onOpenView }: SettingsHomeScreenProps) {
+function SettingsHomeScreen({ busy, launchBlocked, diagnostic, keepAlive, runtime, shizuku, onLaunch, onOpenPage, onOpenView, onOpenPermissions }: SettingsHomeScreenProps) {
   /** 过滤词只活在组件里：离开设置首页即清空，下次进来不该被上次的搜索框卡住。 */
   const [query, setQuery] = useState('')
   /** 已确认的查找词：只有点搜索图标或按回车才落地。输入过程本身不筛选——
@@ -1378,7 +1390,7 @@ function SettingsHomeScreen({ busy, launchBlocked, diagnostic, keepAlive, runtim
   /** 每个分组只留命中的入口；整组都没命中就连标题一起不渲染，避免空标题刷屏。 */
   const groups = SETTINGS_HOME_GROUPS
     .filter(group => category === 'all' || category === group.id)
-    .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id && matchesSettingsHomeQuery(entry, appliedQuery)) }))
+    .map(group => ({ group, entries: SETTINGS_HOME_ENTRIES.filter(entry => entry.group === group.id && (entry.target.kind !== 'permissions' || Capacitor.isNativePlatform()) && matchesSettingsHomeQuery(entry, appliedQuery)) }))
     .filter(item => item.entries.length > 0)
   const matched = groups.reduce((total, item) => total + item.entries.length, 0)
   const searching = appliedQuery.trim() !== ''
@@ -1414,6 +1426,7 @@ function SettingsHomeScreen({ busy, launchBlocked, diagnostic, keepAlive, runtim
   const openEntry = (entry: SettingsHomeEntry): void => {
     if (entry.target.kind === 'page') onOpenPage(entry.target.page)
     else if (entry.target.kind === 'view') onOpenView(entry.target.view)
+    else onOpenPermissions()
   }
 
   return (
@@ -3898,6 +3911,16 @@ export function App() {
   const [onboardingOpen, setOnboardingOpen] = useState(() => {
     try { return window.localStorage.getItem(ONBOARDING_STORAGE_KEY) === null } catch { return true }
   })
+  /**
+   * 首次进入 Android 应用前的权限说明与授权流程。
+   *
+   * 浏览器预览没有系统权限，不显示这层门禁；Android 上只显示一次，拒绝某项不会
+   * 阻塞其它功能，之后仍可在各功能设置里单独补授权。
+   */
+  const [firstRunPermissionsOpen, setFirstRunPermissionsOpen] = useState(() => {
+    if (!Capacitor.isNativePlatform()) return false
+    try { return window.localStorage.getItem(FIRST_RUN_PERMISSIONS_STORAGE_KEY) === null } catch { return true }
+  })
   const [busy, setBusy] = useState<string | null>(null)
   /**
    * Harness 版本安装/切换/删除等长操作是否还在跑。
@@ -4212,7 +4235,7 @@ export function App() {
    * 且向右滑动超过 75px 且纵向偏差较小时，触发返回上一级并伴随轻微触感振动。
    */
   useEffect(() => {
-    if (activeView === ROOT_VIEW || resetOpen || repairOpen || pendingInstall !== null || onboardingOpen) return
+    if (activeView === ROOT_VIEW || resetOpen || repairOpen || pendingInstall !== null || onboardingOpen || firstRunPermissionsOpen) return
 
     let startX = 0
     let startY = 0
@@ -4259,7 +4282,7 @@ export function App() {
       window.removeEventListener('touchend', handleTouchEnd)
       window.removeEventListener('touchcancel', handleTouchCancel)
     }
-  }, [activeView, backToView, resetOpen, repairOpen, pendingInstall, onboardingOpen])
+  }, [activeView, backToView, resetOpen, repairOpen, pendingInstall, onboardingOpen, firstRunPermissionsOpen])
 
   /**
    * 「离开这一页就保存」。
@@ -4484,7 +4507,7 @@ export function App() {
    * 一个进程生命周期只尝试一次：依赖变化导致的反复重试会变成后台风暴。
    */
   useEffect(() => {
-    if (booting || onboardingOpen || settings === null) return
+    if (booting || onboardingOpen || firstRunPermissionsOpen || settings === null) return
     /*
      * 触发口径是「这项设置由关变开」，且**必须区分相位**（AGENTS.md §5）：
      *
@@ -4550,7 +4573,7 @@ export function App() {
     void attempt.finally(() => {
       if (prewarmInFlight.current === attempt) prewarmInFlight.current = null
     })
-  }, [booting, harnessVersionBusy, onboardingOpen, runtime, settings])
+  }, [booting, firstRunPermissionsOpen, harnessVersionBusy, onboardingOpen, runtime, settings])
 
   useEffect(() => {
     let cancelled = false
@@ -4925,7 +4948,7 @@ export function App() {
   // 应用更新入口默认直连发布目录；原生仍保留缓存参数，供明确的缓存读取场景使用。
   const loadAppUpdate = useCallback((forceRefresh = true) => runtimeBridge.getAppUpdateState(forceRefresh), [])
   const setAppUpdateChannel = useCallback((channel: AppUpdateChannel) => runtimeBridge.setAppUpdateChannel(channel), [])
-  const appUpdateReminder = useAppUpdateReminder(language !== null && !booting && !onboardingOpen, loadAppUpdate)
+  const appUpdateReminder = useAppUpdateReminder(language !== null && !booting && !onboardingOpen && !firstRunPermissionsOpen, loadAppUpdate)
   const downloadAppUpdate = useCallback(() => runtimeBridge.downloadAppUpdate(), [])
   const installAppUpdate = useCallback(() => runtimeBridge.installAppUpdate(), [])
   const openAppUpdateInstallSettings = useCallback(() => runtimeBridge.openAppUpdateInstallSettings(), [])
@@ -5808,7 +5831,7 @@ export function App() {
       case 'files':
         return <FilesScreen busy={busy} filesRoot={filesRoot} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} mailbox={mailbox} mailboxDirectory={mailboxDirectory} mailboxDirectoryReadFailed={mailboxDirectoryReadFailed} mailboxReadFailed={mailboxReadFailed} storageAccess={storageAccess} storageDirectory={storageDirectory} storageDirectoryReadFailed={storageDirectoryReadFailed} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onBack={() => backToView('settings')} onCreateFilesFolder={createFilesFolder} onExternalFileAction={externalFileAction} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onOpenFilesDirectory={openFilesDirectory} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} onSelectFilesRoot={selectFilesRoot} />
       case 'settings':
-        return <SettingsHomeScreen busy={busy} launchBlocked={harnessVersionBusy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={() => launchHarness()} onOpenPage={openSettings} onOpenView={setActiveView} />
+        return <SettingsHomeScreen busy={busy} launchBlocked={harnessVersionBusy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={() => launchHarness()} onOpenPage={openSettings} onOpenView={setActiveView} onOpenPermissions={() => setFirstRunPermissionsOpen(true)} />
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
@@ -5885,7 +5908,20 @@ export function App() {
         />
       )}
 
-      {onboardingOpen && (
+      {firstRunPermissionsOpen && (
+        <FirstRunPermissions
+          bridge={runtimeBridge}
+          onDone={() => {
+            try {
+              window.localStorage.setItem(FIRST_RUN_PERMISSIONS_STORAGE_KEY, '1')
+            } catch {
+              // 受限 WebView 无法落盘时仍结束本次流程；下次启动会再次说明权限。
+            }
+            setFirstRunPermissionsOpen(false)
+          }}
+        />
+      )}
+      {onboardingOpen && !firstRunPermissionsOpen && (
         <Onboarding
           busy={busy}
           runtime={runtime}
