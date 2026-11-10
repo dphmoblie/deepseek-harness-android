@@ -48,6 +48,7 @@ export const english: Readonly<Record<string, string>> = {
   "确认并依次授权": "Confirm and request selected permissions",
   "检查或申请失败": "Check or request failed",
   "未授权": "Not granted",
+  "当前无需授权或不可用": "Not required or unavailable",
   "保留数据修复": "Repair runtime while keeping data",
   "正在准备 Harness 版本": "Preparing a Harness version",
   "Harness 版本操作进行中": "Harness version operation in progress",
