@@ -13,6 +13,7 @@ import { AutomationTaskCard } from './components/AutomationTaskCard'
 import { AppBackground } from './components/AppBackground'
 import { LanguageSettings } from './components/LanguageSettings'
 import { AppearanceSettings } from './components/AppearanceSettings'
+import { AppOrientationSettings } from './components/AppOrientationSettings'
 import { SessionManager } from './components/SessionManager'
 import { DiagnosticLogPanel, HarnessLogPanel } from './ui/logs'
 import { FilesScreen, type FilesRoot } from './screens/FilesScreen'
@@ -331,7 +332,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     group: 'appearance',
     title: '主题',
     hint: '字号配色与背景',
-    keywords: ['主题', '外观', '字号', '字体', '深色', '浅色', '背景', '壁纸', '视频', '图片', '透明度', '卡片', '颜色', '强调色', 'theme', 'font', 'appearance', 'background', 'color'],
+    keywords: ['主题', '外观', '字号', '字体', '深色', '浅色', '背景', '壁纸', '视频', '图片', '透明度', '卡片', '颜色', '强调色', '方向', '横屏', '竖屏', '旋转', 'theme', 'font', 'appearance', 'background', 'color', 'orientation', 'landscape', 'portrait'],
     target: { kind: 'page', page: 'terminal' },
     icon: <SquareTerminal size={20} />,
   },
@@ -951,7 +952,7 @@ function ConversationScreen({ busy, harnessVersionBusy, keepAlive, runtime, onIn
       <div className="screen-heading">
         <div>
           <p className="eyebrow">{t("Harness 对话")}</p>
-          <h1>{versionBusy ? t("正在准备 Harness 版本") : updateRequired ? t("更新运行环境") : runtime.phase === 'error' ? t("运行环境出现问题") : installed ? (launchingHarness ? t("正在进入对话") : stoppingHarness ? t("正在停止运行环境") : t("对话已就绪")) : t("准备运行环境")}</h1>
+          <h1>{versionBusy ? t("正在处理版本") : updateRequired ? t("更新运行环境") : runtime.phase === 'error' ? t("运行环境出现问题") : installed ? (launchingHarness ? t("正在进入对话") : stoppingHarness ? t("正在停止运行环境") : t("对话已就绪")) : t("准备运行环境")}</h1>
         </div>
       </div>
 
@@ -962,7 +963,7 @@ function ConversationScreen({ busy, harnessVersionBusy, keepAlive, runtime, onIn
         <div className="launch-copy">
           <h2>
             {versionBusy
-              ? t("Harness 版本操作进行中")
+              ? t("版本操作进行中")
               : updateRequired
               ? t("安装包内置了新版运行环境")
               : runtime.phase === 'error'
@@ -983,7 +984,7 @@ function ConversationScreen({ busy, harnessVersionBusy, keepAlive, runtime, onIn
           </h2>
           <p>
             {versionBusy
-              ? t("Harness 版本操作完成后才能打开对话；请等待安装或切换结束。")
+              ? t("版本操作完成后才能打开对话，请等待当前操作结束。")
               : updateRequired
               ? t("需要先更新运行环境，才能继续打开 Harness；更新会替换其中的本地修改。")
               : runtime.phase === 'error'
@@ -1243,7 +1244,7 @@ function EnvironmentScreen({ busy, bundledSource, harnessVersionBusy, runtime, o
         </div>
         {harnessVersionBusy && (
           <p className="settings-note" role="status">
-            <Loader2 className="spin" size={16} /> {t("Harness 版本操作正在安装或切换，完成前不能启动、修复或重置运行环境。")}
+            <Loader2 className="spin" size={16} /> {t("版本操作正在进行，完成前不能启动、修复或重置运行环境。")}
           </p>
         )}
       </section>
@@ -2904,6 +2905,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
           </label>
         </section>
         {/* 明暗模式与强调色：存储与 DOM 落地全在 src/theme.ts，这里只负责挂载。 */}
+        <AppOrientationSettings />
         <AppearanceSettings scope="appearance" />
         </>
         )}
@@ -3929,6 +3931,8 @@ export function App() {
    * 首页与环境页据此提前禁用启动/修复；真正兜底的是原生 `startHarness` 的快速失败。
    */
   const [harnessVersionBusy, setHarnessVersionBusy] = useState(false)
+  const [runtimeVersionBusy, setRuntimeVersionBusy] = useState(false)
+  const versionOperationBusy = harnessVersionBusy || runtimeVersionBusy
   const [notice, setNotice] = useState<Notice | null>(null)
   const [resetOpen, setResetOpen] = useState(false)
   const [repairOpen, setRepairOpen] = useState(false)
@@ -4552,7 +4556,7 @@ export function App() {
     if (runtime.phase !== 'ready') return
     // Harness 版本安装/切换期间原生生命周期锁被占着：预启动只会在启动入口被拒绝，
     // 这次由关变开留到操作结束后的渲染再触发（不消费 seen）。
-    if (harnessVersionBusy) return
+    if (versionOperationBusy) return
     if (runtime.updateAvailable) return
     // 没有可投递的模型凭据时启动没有意义（含用户只在 Harness 内配过密钥的情况）。
     if (!hasConfiguredModelCredential(settings)) return
@@ -4573,7 +4577,7 @@ export function App() {
     void attempt.finally(() => {
       if (prewarmInFlight.current === attempt) prewarmInFlight.current = null
     })
-  }, [booting, firstRunPermissionsOpen, harnessVersionBusy, onboardingOpen, runtime, settings])
+  }, [booting, firstRunPermissionsOpen, versionOperationBusy, onboardingOpen, runtime, settings])
 
   useEffect(() => {
     let cancelled = false
@@ -4882,8 +4886,8 @@ export function App() {
   const requestRuntimeInstall = useCallback((source: RuntimeSource | undefined, version: string | null, bundled: boolean) => {
     if (busyRef.current !== null) return
     // 安装/修复与 Harness 版本操作共用原生生命周期锁：不在这里排队，直接说明原因。
-    if (harnessVersionBusy) {
-      notify(t("Harness 版本操作正在进行，请等待完成后再安装或更新运行环境。"), 'error')
+    if (versionOperationBusy) {
+      notify(t("版本操作正在进行，请等待完成后再安装或更新运行环境。"), 'error')
       return
     }
     if (runtimeInstalled(runtime)) {
@@ -4891,7 +4895,7 @@ export function App() {
       return
     }
     performRuntimeInstall(source, bundled ? t("运行环境已更新") : t("运行环境已安装"))
-  }, [harnessVersionBusy, notify, performRuntimeInstall, runtime])
+  }, [versionOperationBusy, notify, performRuntimeInstall, runtime])
 
   const installRuntime = useCallback(() => {
     requestRuntimeInstall(settings === null ? undefined : {
@@ -4906,8 +4910,8 @@ export function App() {
   }, [requestRuntimeInstall])
 
   const repairRuntime = useCallback(() => {
-    if (harnessVersionBusy) {
-      notify(t("Harness 版本操作正在进行，请等待完成后再修复运行环境。"), 'error')
+    if (versionOperationBusy) {
+      notify(t("版本操作正在进行，请等待完成后再修复运行环境。"), 'error')
       return
     }
     void run('repair', async isCurrent => {
@@ -4933,7 +4937,7 @@ export function App() {
       if (outcome?.status === 'failed') notify(t("修复前会话备份失败：{0}", outcome.message ?? t("原因未提供")), 'error')
       else if (outcome?.status === 'created') notify(t("修复前已自动备份会话"), 'success')
     }, t("运行环境修复完成"), undefined, INSTALL_WATCHDOG_MS)
-  }, [harnessVersionBusy, notify, run])
+  }, [versionOperationBusy, notify, run])
 
   const confirmPendingInstall = useCallback(() => {
     if (pendingInstall === null) return
@@ -4965,8 +4969,8 @@ export function App() {
      * 原生虽然已经会快速失败，但界面这一层先挡住能避免一次「操作正在进行」的报错，
      * 也覆盖按钮状态尚未刷新（或从别的入口）就点下来的情况。
      */
-    if (harnessVersionBusy) {
-      notify(t("Harness 版本操作正在进行，请等待完成后再打开对话。"), 'error')
+    if (versionOperationBusy) {
+      notify(t("版本操作正在进行，请等待完成后再打开对话。"), 'error')
       return
     }
     /*
@@ -5091,7 +5095,7 @@ export function App() {
         }
       }
     })()
-  }, [harnessVersionBusy, notify, requestRuntimeUpdate, runtime, setActiveView, settings])
+  }, [versionOperationBusy, notify, requestRuntimeUpdate, runtime, setActiveView, settings])
 
   /** 常规打开入口：没有本机模型凭据时会被拦下并跳转到「模型与密钥」。 */
   const launchHarness = useCallback((sessionId?: string) => openHarness(false, sessionId), [openHarness])
@@ -5266,7 +5270,7 @@ export function App() {
     setRuntime(await runtimeBridge.getState())
   }, [])
 
-  const stopRuntime = useCallback(() => {
+  const stopRuntimeAction = useCallback((returnToSettings: boolean) => {
     // 先记下「这次停止由本应用发起」：阶段变化可能早于桥接返回，晚记会把显式停止误报成自行停止。
     stopRequested.current = true
     void run('stop', async isCurrent => {
@@ -5279,9 +5283,12 @@ export function App() {
       void runtimeBridge.getKeepAliveState()
         .then(latest => { if (isCurrent()) setKeepAlive(latest) })
         .catch(() => { /* 保留上一次已知状态。 */ })
-      setActiveView('settings')
+      if (returnToSettings) setActiveView('settings')
     }, t("运行环境已停止"))
   }, [run, setActiveView])
+
+  const stopRuntime = useCallback(() => stopRuntimeAction(true), [stopRuntimeAction])
+  const stopRuntimeForVersions = useCallback(() => stopRuntimeAction(false), [stopRuntimeAction])
 
   const confirmReset = useCallback(() => {
     // 重置同样会停掉正在运行的运行时：这也是用户在本应用里主动发起的停止。
@@ -5789,7 +5796,7 @@ export function App() {
   const screen = (() => {
     switch (activeView) {
       case 'conversation':
-        return <ConversationScreen busy={busy} harnessVersionBusy={harnessVersionBusy} keepAlive={keepAlive} runtime={runtime} onInstall={installRuntime} onLaunch={() => launchHarness()} onStop={stopRuntime} onOpenTerminal={() => setActiveView('terminal')} onUpdate={requestRuntimeUpdate} />
+        return <ConversationScreen busy={busy} harnessVersionBusy={versionOperationBusy} keepAlive={keepAlive} runtime={runtime} onInstall={installRuntime} onLaunch={() => launchHarness()} onStop={stopRuntime} onOpenTerminal={() => setActiveView('terminal')} onUpdate={requestRuntimeUpdate} />
       case 'sessions':
         return <SessionManager onBack={() => backToView('conversation')} onOpenHarness={launchHarness} />
       case 'terminal':
@@ -5797,13 +5804,17 @@ export function App() {
       case 'plugins':
         return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
       case 'environment':
-        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} harnessVersionBusy={harnessVersionBusy} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onRepair={() => setRepairOpen(true)} onStart={() => launchHarness()} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} pageNetworkAccess={settings?.pageNetworkAccess} />
+        return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} harnessVersionBusy={versionOperationBusy} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onRepair={() => setRepairOpen(true)} onStart={() => launchHarness()} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} pageNetworkAccess={settings?.pageNetworkAccess} />
       case 'versions':
         return (
         <RuntimeVersionsScreen
           runtime={runtime}
           harnessVersionBusy={harnessVersionBusy}
           onHarnessVersionBusyChange={setHarnessVersionBusy}
+          runtimeBusy={busy !== null || runtimeVersionBusy}
+          onStopHarness={stopRuntimeForVersions}
+          externalBusy={harnessVersionBusy || busy !== null}
+          onBusyChange={setRuntimeVersionBusy}
           loadVersions={loadRuntimeVersions}
           switchVersion={switchRuntimeVersion}
           deleteVersion={deleteRuntimeVersion}
@@ -5831,14 +5842,14 @@ export function App() {
       case 'files':
         return <FilesScreen busy={busy} filesRoot={filesRoot} lastMailboxExport={lastMailboxExport} lastMailboxImport={lastMailboxImport} mailbox={mailbox} mailboxDirectory={mailboxDirectory} mailboxDirectoryReadFailed={mailboxDirectoryReadFailed} mailboxReadFailed={mailboxReadFailed} storageAccess={storageAccess} storageDirectory={storageDirectory} storageDirectoryReadFailed={storageDirectoryReadFailed} storageDirs={storageDirs} storageDirsReadFailed={storageDirsReadFailed} onAddStorageDirectory={addStorageDirectory} onBack={() => backToView('settings')} onCreateFilesFolder={createFilesFolder} onExternalFileAction={externalFileAction} onExportMailbox={exportMailbox} onImportMailbox={importMailbox} onOpenAllFilesAccess={openAllFilesAccessSettings} onOpenFilesDirectory={openFilesDirectory} onRefreshMailbox={refreshMailbox} onRemoveStorageDirectory={removeStorageDirectory} onSelectFilesRoot={selectFilesRoot} />
       case 'settings':
-        return <SettingsHomeScreen busy={busy} launchBlocked={harnessVersionBusy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={() => launchHarness()} onOpenPage={openSettings} onOpenView={setActiveView} onOpenPermissions={() => setFirstRunPermissionsOpen(true)} />
+        return <SettingsHomeScreen busy={busy} launchBlocked={versionOperationBusy} diagnostic={diagnostic} keepAlive={keepAlive} runtime={runtime} shizuku={shizuku} onLaunch={() => launchHarness()} onOpenPage={openSettings} onOpenView={setActiveView} onOpenPermissions={() => setFirstRunPermissionsOpen(true)} />
       default: {
         const page = settingsPageOf(activeView)
         if (page === null) return null
         /** 三级页的返回键回它的二级页；二级页照旧回设置首页。 */
         const parentPage = SETTINGS_PAGE_META[page].parent
         const backTarget: AppView = parentPage === undefined ? 'settings' : SETTINGS_PAGE_META[parentPage].view
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} harnessVersionBusy={harnessVersionBusy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenExternalHarness={openExternalHarness} externalBrowsers={externalBrowsers} onSelectExternalBrowser={selectExternalBrowser} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveCredentials={() => saveSettingsDraft()} settledCredentials={settledCredentials.current} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} harnessVersionBusy={versionOperationBusy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenExternalHarness={openExternalHarness} externalBrowsers={externalBrowsers} onSelectExternalBrowser={selectExternalBrowser} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveCredentials={() => saveSettingsDraft()} settledCredentials={settledCredentials.current} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

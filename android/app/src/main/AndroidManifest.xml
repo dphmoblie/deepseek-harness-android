@@ -191,6 +191,7 @@
 
         <activity
             android:name=".HarnessActivity"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|uiMode|navigation"
             android:exported="false"
             android:screenOrientation="unspecified"
             android:theme="@style/AppTheme.Harness"

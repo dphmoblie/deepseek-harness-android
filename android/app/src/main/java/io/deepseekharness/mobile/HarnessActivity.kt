@@ -30,6 +30,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
 import io.deepseekharness.mobile.runtime.HarnessAccess
 import io.deepseekharness.mobile.runtime.PageNetworkAccess
 import io.deepseekharness.mobile.runtime.RuntimeFailure
@@ -109,6 +110,7 @@ class HarnessActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        AppOrientationPreference.apply(this)
         // 运行时停止或自动重启会撤销上一周期的授权。此 Activity 可能仍在任务栈里，
         // 不能让它继续展示或使用旧的 WebView 凭据；管理页重新打开 Harness 时会重新绑定。
         if (::webView.isInitialized && !AppAuthenticationState.ownsHarnessAccess(authenticationOwner)) {
@@ -134,6 +136,17 @@ class HarnessActivity : AppCompatActivity() {
     override fun onStop() {
         AppForeground.onActivityStopped()
         super.onStop()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Harness 页面保留同一个 WebView；旋转只重算原生栏与安全区，不重载会话页面。
+        AppOrientationPreference.apply(this)
+        if (!::webView.isInitialized) return
+        applyNativeChrome()
+        // 监听器已在 onCreate 注册；重新注册会把已应用的 padding 当成 initial，导致
+        // 每次旋转都累加安全区。只请求已有监听器按新尺寸重新计算。
+        ViewCompat.requestApplyInsets(findViewById(android.R.id.content))
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -171,6 +184,7 @@ class HarnessActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppOrientationPreference.apply(this)
         val access = AppAuthenticationState.harnessAccess() ?: run {
             finish()
             return

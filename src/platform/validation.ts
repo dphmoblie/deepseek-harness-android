@@ -1,4 +1,5 @@
 import type {
+  AppOrientationMode,
   AccessibilityAutomationAction,
   AccessibilityAutomationActionInput,
   AccessibilityAutomationActionKind,
@@ -1767,6 +1768,15 @@ export function validateAllFilesAccessResult(value: unknown): AllFilesAccessResu
 export function validateAppUpdateInstallPermission(value: unknown): AppUpdateInstallPermission {
   const result = asRecord(value, '应用更新安装权限状态')
   return { granted: requiredBoolean(result.granted, '应用更新安装权限') }
+}
+
+export function assertAppOrientationMode(value: unknown): AppOrientationMode {
+  if (value !== 'system' && value !== 'portrait' && value !== 'landscape') throw new Error('应用方向格式无效')
+  return value
+}
+
+export function validateAppOrientation(value: unknown): AppOrientationMode {
+  return assertAppOrientationMode(asRecord(value, '应用方向').mode)
 }
 
 /**

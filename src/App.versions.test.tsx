@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { beforeEachAppTest, bridge, readyState } from './__tests__/appTestHarness'
+import { beforeEachAppTest, bridge, readyState, runningState } from './__tests__/appTestHarness'
 import type { RuntimeSessionSnapshotState } from './platform/types'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
@@ -588,6 +588,50 @@ describe('版本管理：本地多版本库与在线版本下载', () => {
 describe('版本管理：Harness 版本安装期间不能排队启动', () => {
   beforeEach(beforeEachAppTest)
 
+  it('Ubuntu 版本下载跨页继续时禁用启动和 Harness 安装，结束后恢复', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.listRuntimeReleases.mockResolvedValue({ entries: [{
+      version: '2026.09.20', dshVersion: '0.1.8', notes: '',
+      manifestUrl: 'https://example.com/manifest.json', manifestSha256: 'e'.repeat(64),
+    }] })
+    bridge.listHarnessReleases.mockResolvedValue({ entries: [{ version: '0.2.1-rc.2', tags: ['latest'] }] })
+    let finishDownload!: () => void
+    bridge.downloadRuntimeRelease.mockImplementation(() => new Promise<void>(resolve => { finishDownload = resolve }))
+    await openVersionsPage()
+    fireEvent.click(await screen.findByRole('button', { name: '下载到版本库' }))
+    await waitFor(() => expect(bridge.downloadRuntimeRelease).toHaveBeenCalledOnce())
+    expect(screen.getByRole('button', { name: '安装 Harness' })).toBeDisabled()
+
+    const nav = document.querySelector('.bottom-navigation') as HTMLElement
+    fireEvent.click(within(nav).getByRole('button', { name: '首页' }))
+    expect(await screen.findByRole('button', { name: '打开对话' })).toBeDisabled()
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+    fireEvent.click(within(nav).getByRole('button', { name: '设置' }))
+    fireEvent.click(await screen.findByRole('button', { name: /版本管理/ }))
+    expect(await screen.findByRole('button', { name: '安装 Harness' })).toBeDisabled()
+    expect(await screen.findByRole('button', { name: '下载到版本库' })).toBeDisabled()
+
+    await act(async () => { finishDownload(); await Promise.resolve() })
+    await waitFor(() => expect(screen.getByRole('button', { name: '安装 Harness' })).toBeEnabled())
+    fireEvent.click(within(nav).getByRole('button', { name: '首页' }))
+    expect(await screen.findByRole('button', { name: '打开对话' })).toBeEnabled()
+  })
+
+  it('在版本页停止 Harness 后留在原页，可以继续安装版本', async () => {
+    bridge.getState.mockResolvedValue({ ...runningState })
+    bridge.stopRuntime.mockResolvedValue({ ...readyState })
+    bridge.listHarnessReleases.mockResolvedValue({ entries: [{ version: '0.2.1-rc.2', tags: ['latest'] }] })
+
+    await openVersionsPage()
+    const section = screen.getByRole('region', { name: 'Harness 上游版本' })
+    expect(await within(section).findByRole('button', { name: '安装 Harness' })).toBeDisabled()
+    fireEvent.click(within(section).getByRole('button', { name: '停止 Harness' }))
+
+    await waitFor(() => expect(bridge.stopRuntime).toHaveBeenCalledOnce())
+    await waitFor(() => expect(within(section).getByRole('button', { name: '安装 Harness' })).toBeEnabled())
+    expect(screen.getByRole('heading', { name: '版本管理' })).toBeVisible()
+  })
+
   /**
    * npm 安装 Harness 是一次最多 20 分钟的原生调用，期间生命周期锁一直被占着。
    * 用户切到首页点「打开对话」时，启动请求若排到锁后面，界面就会停住；
@@ -605,12 +649,16 @@ describe('版本管理：Harness 版本安装期间不能排队启动', () => {
     fireEvent.click(await screen.findByRole('button', { name: /安装 Harness/u }))
     await waitFor(() => expect(bridge.manageHarnessVersions).toHaveBeenCalledWith('install', '0.2.1-rc.2'))
 
+    // 其它共用运行环境的写操作也不能在安装后排队执行。
+    const backups = screen.getByRole('region', { name: '会话备份' })
+    expect(await within(backups).findByRole('button', { name: '现在备份一次' })).toBeDisabled()
+
     // 切到首页：安装仍在原生侧跑，外层状态不能让按钮重新可点。
     const nav = document.querySelector('.bottom-navigation')
     expect(nav).toBeInstanceOf(HTMLElement)
     fireEvent.click(within(nav as HTMLElement).getByRole('button', { name: '首页' }))
 
-    expect(await screen.findByRole('heading', { name: '正在准备 Harness 版本' })).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '正在处理版本' })).toBeVisible()
     const open = screen.getByRole('button', { name: '打开对话' })
     expect(open).toBeDisabled()
     fireEvent.click(open)

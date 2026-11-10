@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  assertAppOrientationMode,
+  validateAppOrientation,
   assertAccessibilityAutomationAction,
   assertAccessibilityAutomationAppConfigInput,
   assertAccessibilityPackageName,
@@ -1768,6 +1770,22 @@ describe('运行时可用版本校验', () => {
     expect(() => validateRuntimeReleaseList({})).toThrow('运行时可用版本列表格式无效')
     expect(() => validateRuntimeReleaseList(list({ entries: 'two' }))).toThrow('运行时可用版本列表格式无效')
     expect(() => validateRuntimeReleaseList(list({ entries: [null] }))).toThrow('运行时可用版本条目格式无效')
+  })
+})
+
+describe('应用方向校验', () => {
+  it('只允许三个方向模式，不把非法值显示为默认方向', () => {
+    for (const mode of ['system', 'portrait', 'landscape'] as const) {
+      expect(assertAppOrientationMode(mode)).toBe(mode)
+      expect(validateAppOrientation({ mode })).toBe(mode)
+    }
+    for (const mode of [undefined, null, '', 'auto', 'Portrait', 1, false]) {
+      expect(() => assertAppOrientationMode(mode)).toThrow('应用方向格式无效')
+      expect(() => validateAppOrientation({ mode })).toThrow('应用方向格式无效')
+    }
+    for (const state of [undefined, null, 'portrait', []]) {
+      expect(() => validateAppOrientation(state)).toThrow('应用方向')
+    }
   })
 })
 

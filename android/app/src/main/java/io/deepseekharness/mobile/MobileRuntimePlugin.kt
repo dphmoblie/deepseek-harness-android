@@ -455,6 +455,45 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
+    /** 只读取应用宿主的方向；与目标应用副屏的 orientation 设置相互独立。 */
+    @PluginMethod
+    fun getAppOrientation(call: PluginCall) {
+        execute(call) { JSObject().put("mode", AppOrientationPreference.current(context)) }
+    }
+
+    @PluginMethod
+    fun setAppOrientation(call: PluginCall) {
+        val mode = call.data.opt("mode") as? String
+        if (mode == null || !AppOrientationPreference.isValid(mode)) {
+            call.reject("不支持的应用屏幕方向", "APP_ORIENTATION_INVALID")
+            return
+        }
+        val host = activity
+        if (host == null) {
+            call.reject("当前没有可用的界面，无法切换屏幕方向", "APP_ORIENTATION_UNAVAILABLE")
+            return
+        }
+        host.runOnUiThread {
+            if (host.isFinishing || host.isDestroyed || destroying.get()) {
+                call.reject("当前界面已关闭，无法切换屏幕方向", "APP_ORIENTATION_UNAVAILABLE")
+                return@runOnUiThread
+            }
+            try {
+                AppOrientationPreference.change(
+                    mode,
+                    host.requestedOrientation,
+                    apply = { host.requestedOrientation = it },
+                    persist = { AppOrientationPreference.save(context, it) },
+                )
+                call.resolve(JSObject().put("mode", mode))
+            } catch (failure: RuntimeFailure) {
+                call.reject(failure.message, failure.code)
+            } catch (_: Throwable) {
+                call.reject("无法切换应用屏幕方向", "APP_ORIENTATION_APPLY_FAILED")
+            }
+        }
+    }
+
     /**
      * 保存应用主题模式并把它落到当前窗口的状态栏上（登记册 5.4 的原生半边）。
      *

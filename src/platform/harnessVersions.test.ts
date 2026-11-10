@@ -19,6 +19,14 @@ describe('Harness 版本桥接校验', () => {
     expect(() => validateHarnessReleases({ entries: [entry, entry] })).toThrow('重复')
     expect(() => validateHarnessReleases({ entries: [{ ...entry, tags: ['<script>'] }] })).toThrow()
   })
+  it('兼容旧协议，运行环境探测状态只接受布尔', () => {
+    const state = { active: 'bundled', bundledVersion: null, installed: [] }
+    expect(validateHarnessVersions(state)).toEqual(state)
+    expect(validateHarnessVersions({ ...state, environmentAvailable: false }).environmentAvailable).toBe(false)
+    for (const value of [null, 'false', 0, {}, []]) {
+      expect(() => validateHarnessVersions({ ...state, environmentAvailable: value })).toThrow('Harness 运行环境状态无效')
+    }
+  })
 })
 
 describe('Harness 安装阶段进度', () => {

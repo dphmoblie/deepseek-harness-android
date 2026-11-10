@@ -76,22 +76,25 @@ class MobileRuntimeController(
     }
 
     /**
-     * 起停入口专用的生命周期锁：**先**确认没有长操作在跑，**再**排队拿锁。
+     * 起停入口专用的生命周期锁：拿锁前后检查长操作，锁竞争最多等待 100ms。
      *
-     * 这一步只拒绝、不等待。npm 安装 Harness 最长 20 分钟，若让 `startHarness` 排在安装后面，
+     * npm 安装 Harness 最长 20 分钟，若让 `startHarness` 排在安装后面，
      * 界面会一直停在「正在进入对话」，安装结束后还会替用户把 Harness 拉起来。
      */
-    private inline fun <T> withStartOperationLock(block: () -> T): T {
+    private fun <T> withStartOperationLock(block: () -> T): T {
         ensureOpen()
-        operations.requireIdle()
-        return lifecycleLock.withLock(block)
+        return operations.withStartLock(lifecycleLock, block)
     }
 
     /** 应用内版本操作：精确版本号；安装与切换互斥，不传入模型凭据。 */
-    fun manageHarnessVersions(operation: String, version: String?): org.json.JSONObject = withLongOperationLock(operation != "list") {
+    // 列表也会探测访客环境、刷新脚本或恢复切换，不能让启动请求排在这些操作后面。
+    fun manageHarnessVersions(operation: String, version: String?): org.json.JSONObject = withLongOperationLock {
         ensureOpen()
+        recoverPendingHarnessSwitch(operation)
         when (operation) {
-            "list" -> return@withLongOperationLock harnessVersions.list()
+            "list" -> return@withLongOperationLock harnessVersions.list(
+                probeEnvironment = !supervisor.isRunning() && !terminals.hasRuntimeSessions(),
+            )
             "install", "select", "delete" -> Unit
             else -> throw RuntimeFailure("HARNESS_VERSION_INVALID", "Harness 版本操作无效")
         }
@@ -114,10 +117,11 @@ class MobileRuntimeController(
             } catch (error: Exception) {
                 try {
                     supervisor.stop()
-                    harnessVersions.rollbackSwitch()
+                    val rolledBack = harnessVersions.rollbackSwitch()
                     harnessVersions.prepareProfile()
                     plugins.repairInstalledIfNeeded(explicit = true)
                     if (wasRunning) supervisor.startHarness()
+                    if (rolledBack) harnessVersions.commitSwitch()
                 } catch (rollbackError: Exception) {
                     throw RuntimeFailure("HARNESS_ROLLBACK_FAILED", "切换失败，旧版本仍保留，但自动恢复未完成；请切回内置版本", rollbackError)
                 }
@@ -132,7 +136,37 @@ class MobileRuntimeController(
                 harnessVersions.remove(target)
             }
         }
-        harnessVersions.list()
+        harnessVersions.list(
+            probeEnvironment = !supervisor.isRunning() && !terminals.hasRuntimeSessions(),
+        )
+    }
+
+    /**
+     * 进程可能死在「写入新默认值」与「提交切换」之间；版本页本身也会先读列表，
+     * 不能把 pending 的新版本当成已确认的默认值再开启下一次切换。入口串行恢复到
+     * previous，重建对应 profile 后才继续当前操作。运行中的 Harness 不碰这份状态，
+     * 直接报忙，让用户先停止后再恢复，避免磁盘选择与已挂载版本分叉。
+     */
+    private fun recoverPendingHarnessSwitch(operation: String) {
+        if (!harnessVersions.hasPendingSwitch()) {
+            // 损坏记录也要留下待恢复标记，等 profile 重建后再确认内置版本。
+            HarnessVersions.selectedOrBundled(store)
+            if (!harnessVersions.hasPendingSwitch()) return
+        }
+        if (supervisor.isRunning() || supervisor.isStarting()) {
+            if (operation == "list") return
+            throw RuntimeFailure("RUNTIME_BUSY", "检测到未完成的 Harness 切换，请先停止 Harness 后重试")
+        }
+        if (terminals.hasRuntimeSessions()) {
+            if (operation == "list") return
+            throw RuntimeFailure("RUNTIME_BUSY", "检测到未完成的 Harness 切换，请先关闭 Ubuntu 终端后重试")
+        }
+        supervisor.preparePluginManagement()
+        val hasRuntime = store.installedManifest() != null
+        if (!harnessVersions.rollbackSwitch()) return
+        // 运行时尚未安装时没有 profile 可重建，直接提交旧选择；安装后启动流程会按当前选择补建。
+        if (hasRuntime) harnessVersions.prepareProfile()
+        harnessVersions.commitSwitch()
     }
 
     /**
@@ -365,12 +399,16 @@ class MobileRuntimeController(
             supervisor.preparePluginManagement()
             // 选择文件损坏或包已失效时退回内置：一个坏包不能挡住 Harness 启动，
             // 也不能让设置页失去「切回内置」的入口。
-            val recoveredSwitch = runCatching { harnessVersions.rollbackSwitch() }.getOrDefault(false)
+            recoverPendingHarnessSwitch("start")
             val selectedHarness = HarnessVersions.selectedOrBundled(store)
             val usable = selectedHarness == HarnessVersions.BUNDLED ||
                 runCatching { harnessVersions.verify(selectedHarness) }.isSuccess
-            if (!usable) runCatching { HarnessVersions.fallBackToBundled(store) }
-            if (recoveredSwitch || selectedHarness != HarnessVersions.BUNDLED) harnessVersions.prepareProfile()
+            if (!usable) {
+                HarnessVersions.fallBackToBundled(store)
+                recoverPendingHarnessSwitch("start")
+            } else if (selectedHarness != HarnessVersions.BUNDLED) {
+                harnessVersions.prepareProfile()
+            }
             if (!terminals.hasRuntimeSessions()) {
                 RuntimeSharedInbox.withLock {
                     val sharedInbox = RuntimeSharedInbox(store)
@@ -699,6 +737,7 @@ class MobileRuntimeController(
         ensureOpen()
         if (kind == "ubuntu" && !supervisor.isRunning() && !terminals.hasRuntimeSessions()) {
             supervisor.preparePluginManagement()
+            recoverPendingHarnessSwitch("terminal")
             RuntimeSharedInbox.withLock {
                 val sharedInbox = RuntimeSharedInbox(store)
                 // 与 Harness 冷启动一致：先确认访客已停止，迁移失败不能阻断终端。

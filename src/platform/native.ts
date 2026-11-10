@@ -8,6 +8,7 @@ import { validateBackgroundRef, validateBackgroundState } from '../backgroundRef
 import { createBrowserBridge } from './browser'
 import { validateSelfCheckOperation, type SelfCheckOperation } from '../runtimeSelfCheck'
 import type {
+  AppOrientationMode,
   AppThemeMode,
   PluginRequest,
   PluginCatalog,
@@ -39,6 +40,8 @@ import {
   type AccessibilityAutomationRuleWriteMode,
 } from './types'
 import {
+  assertAppOrientationMode,
+  validateAppOrientation,
   assertBase64Input,
   assertDiagnosticRetentionDays,
   assertMailboxSubdirectory,
@@ -122,6 +125,8 @@ import {
 } from './validation'
 
 interface NativeRuntimePlugin {
+  getAppOrientation(): Promise<unknown>
+  setAppOrientation(options: { mode: AppOrientationMode }): Promise<unknown>
   listHarnessReleases(): Promise<unknown>
   manageHarnessVersions(options: { operation: HarnessVersionOperation; version?: string }): Promise<unknown>
   managePlugins(options: PluginRequest): Promise<PluginCatalog>
@@ -315,6 +320,8 @@ function validatedListener<T>(validator: (value: unknown) => T, listener: (event
 
 function createNativeBridge(): RuntimeBridge {
   return {
+    getAppOrientation: () => NativeRuntime.getAppOrientation().then(validateAppOrientation),
+    setAppOrientation: mode => NativeRuntime.setAppOrientation({ mode: assertAppOrientationMode(mode) }).then(validateAppOrientation),
     listHarnessReleases: () => NativeRuntime.listHarnessReleases().then(validateHarnessReleases),
     manageHarnessVersions: (operation, version) => NativeRuntime.manageHarnessVersions(harnessVersionRequest(operation, version)).then(validateHarnessVersions),
     managePlugins: request => NativeRuntime.managePlugins(validatePluginRequest(request)).then(validatePluginCatalog),

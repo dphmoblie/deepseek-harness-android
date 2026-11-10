@@ -73,6 +73,10 @@ export interface RuntimeVersionsPanelProps {
   /** 切换成功后重新读取运行时状态：已安装版本与阶段都会变。 */
   refreshRuntime: () => Promise<void>
   notify: (message: string, tone: NoticeTone) => void
+  /** 其它版本区块的长操作是否正在进行；用于跨区互斥。 */
+  externalBusy?: boolean
+  /** 把本区块的长操作状态交给页面外层，离开页面后仍能挡住 Harness 操作。 */
+  onBusyChange?: (busy: boolean) => void
 }
 
 /**
@@ -93,6 +97,8 @@ export function RuntimeVersionsPanel({
   listReleases,
   refreshRuntime,
   notify,
+  externalBusy = false,
+  onBusyChange,
 }: RuntimeVersionsPanelProps) {
   const [versions, setVersions] = useState<RuntimeVersionsState | null>(null)
   const [loading, setLoading] = useState(true)
@@ -104,7 +110,6 @@ export function RuntimeVersionsPanel({
   const [catalog, setCatalog] = useState<RuntimeReleaseEntry[]>([])
   const [catalogLoading, setCatalogLoading] = useState(false)
   const [catalogFailed, setCatalogFailed] = useState(false)
-  const [downloadingVersion, setDownloadingVersion] = useState<string | null>(null)
 
   // release 列表折叠：本地版本库超过 3 条才折叠；在线可用版本**默认只留一个**
   // （用户要的是「只显示一个可用版本」——目录里同时挂着的旧版本不该挤掉下面「清理」与
@@ -149,8 +154,9 @@ export function RuntimeVersionsPanel({
   useEffect(() => { loadCatalog() }, [loadCatalog])
 
   const switchToPrevious = (): void => {
-    if (busy !== null) return
+    if (busy !== null || externalBusy) return
     setBusy('switch:previous')
+    onBusyChange?.(true)
     void (async () => {
       try {
         setVersions(await switchVersion('previous'))
@@ -161,13 +167,15 @@ export function RuntimeVersionsPanel({
         notify(errorMessage(error), 'error')
       } finally {
         setBusy(null)
+        onBusyChange?.(false)
       }
     })()
   }
 
   const removePrevious = (): void => {
-    if (busy !== null) return
+    if (busy !== null || externalBusy) return
     setBusy('delete:previous')
+    onBusyChange?.(true)
     void (async () => {
       try {
         setVersions(await deleteVersion('previous'))
@@ -177,13 +185,15 @@ export function RuntimeVersionsPanel({
         notify(errorMessage(error), 'error')
       } finally {
         setBusy(null)
+        onBusyChange?.(false)
       }
     })()
   }
 
   const switchToBundled = (): void => {
-    if (busy !== null) return
+    if (busy !== null || externalBusy) return
     setBusy('switch:bundled')
+    onBusyChange?.(true)
     void (async () => {
       try {
         setVersions(await switchVersion('bundled'))
@@ -193,13 +203,15 @@ export function RuntimeVersionsPanel({
         notify(errorMessage(error), 'error')
       } finally {
         setBusy(null)
+        onBusyChange?.(false)
       }
     })()
   }
 
   const switchToLibrary = (id: string): void => {
-    if (busy !== null) return
+    if (busy !== null || externalBusy) return
     setBusy(`switch:${id}`)
+    onBusyChange?.(true)
     void (async () => {
       try {
         setVersions(await switchVersion(id))
@@ -209,13 +221,15 @@ export function RuntimeVersionsPanel({
         notify(errorMessage(error), 'error')
       } finally {
         setBusy(null)
+        onBusyChange?.(false)
       }
     })()
   }
 
   const removeLibrary = (id: string): void => {
-    if (busy !== null) return
+    if (busy !== null || externalBusy) return
     setBusy(`delete:${id}`)
+    onBusyChange?.(true)
     void (async () => {
       try {
         setVersions(await deleteVersion(id))
@@ -225,14 +239,16 @@ export function RuntimeVersionsPanel({
         notify(errorMessage(error), 'error')
       } finally {
         setBusy(null)
+        onBusyChange?.(false)
       }
     })()
   }
 
   const togglePinned = (entry: RuntimeLibraryEntry): void => {
-    if (busy !== null) return
+    if (busy !== null || externalBusy) return
     const next = !entry.pinned
     setBusy(`pin:${entry.id}`)
+    onBusyChange?.(true)
     void (async () => {
       try {
         setVersions(await setPinned(entry.id, next))
@@ -241,13 +257,15 @@ export function RuntimeVersionsPanel({
         notify(errorMessage(error), 'error')
       } finally {
         setBusy(null)
+        onBusyChange?.(false)
       }
     })()
   }
 
   const downloadToLibrary = (item: RuntimeReleaseEntry): void => {
-    if (!item.manifestUrl || !item.manifestSha256 || busy !== null) return
-    setDownloadingVersion(item.version)
+    if (!item.manifestUrl || !item.manifestSha256 || busy !== null || externalBusy) return
+    setBusy(`download:${item.version}`)
+    onBusyChange?.(true)
     void (async () => {
       try {
         const downloader = downloadRelease ?? ((url, sha) => runtimeBridge.downloadRuntimeRelease(url, sha))
@@ -257,14 +275,16 @@ export function RuntimeVersionsPanel({
       } catch (error) {
         notify(errorMessage(error), 'error')
       } finally {
-        setDownloadingVersion(null)
+        setBusy(null)
+        onBusyChange?.(false)
       }
     })()
   }
 
   const phaseBlocked = RUNTIME_VERSION_SWITCH_BLOCKED_PHASES.includes(runtime.phase)
-  const canSwitch = versions?.canSwitch === true && !phaseBlocked
-  const canDelete = versions?.canDelete === true
+  const busyNow = busy !== null || externalBusy
+  const canSwitch = versions?.canSwitch === true && !phaseBlocked && !busyNow
+  const canDelete = versions?.canDelete === true && !busyNow
   const list = versions?.versions ?? []
   const library = versions?.library ?? []
   const libraryCapacity = versions?.libraryCapacity ?? 5
@@ -332,7 +352,7 @@ export function RuntimeVersionsPanel({
               className="button button-secondary"
               type="button"
               onClick={switchToPrevious}
-              disabled={!canSwitch || busy !== null}
+              disabled={!canSwitch}
             >
               {busy === 'switch:previous' ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
               {t("切换到上一版本")}
@@ -342,7 +362,7 @@ export function RuntimeVersionsPanel({
                 className="button button-secondary"
                 type="button"
                 onClick={switchToBundled}
-                disabled={phaseBlocked || busy !== null}
+                disabled={phaseBlocked || busyNow}
               >
                 {busy === 'switch:bundled' ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
                 {t("切换到随包内置版本")}
@@ -353,21 +373,21 @@ export function RuntimeVersionsPanel({
                 className="button button-secondary"
                 type="button"
                 onClick={() => setConfirmDelete(true)}
-                disabled={!canDelete || busy !== null}
+                disabled={!canDelete}
               >
                 <Trash2 size={18} />{t("删除上一版本")}
               </button>
             )}
             {confirmDelete && (
               <>
-                <button className="button button-danger" type="button" onClick={removePrevious} disabled={busy !== null}>
+                <button className="button button-danger" type="button" onClick={removePrevious} disabled={busyNow}>
                   {busy === 'delete:previous' ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}{t("确认删除")}
                 </button>
                 <button
                   className="button button-secondary"
                   type="button"
                   onClick={() => setConfirmDelete(false)}
-                  disabled={busy !== null}
+                  disabled={busyNow}
                 >
                   {t("取消")}
                 </button>
@@ -436,7 +456,7 @@ export function RuntimeVersionsPanel({
                         className="button button-secondary"
                         type="button"
                         onClick={() => togglePinned(entry)}
-                        disabled={busy !== null}
+                        disabled={busyNow}
                         title={entry.pinned ? t("解锁后该版本可能在版本库满额时被自动淘汰") : t("锁定的版本在版本库满额时不会被自动淘汰")}
                       >
                         {busy === `pin:${entry.id}`
@@ -450,7 +470,7 @@ export function RuntimeVersionsPanel({
                             className="button button-secondary"
                             type="button"
                             onClick={() => switchToLibrary(entry.id)}
-                            disabled={phaseBlocked || busy !== null}
+                            disabled={phaseBlocked || busyNow}
                           >
                             {isSwitching ? <Loader2 className="spin" size={18} /> : <RotateCcw size={18} />}
                             {t("切换至此版本")}
@@ -461,7 +481,7 @@ export function RuntimeVersionsPanel({
                                 className="button button-danger"
                                 type="button"
                                 onClick={() => removeLibrary(entry.id)}
-                                disabled={busy !== null}
+                                disabled={busyNow}
                               >
                                 {isDeleting ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}
                                 {t("确认删除")}
@@ -470,7 +490,7 @@ export function RuntimeVersionsPanel({
                                 className="button button-secondary"
                                 type="button"
                                 onClick={() => setConfirmDeleteLibraryId(null)}
-                                disabled={busy !== null}
+                                disabled={busyNow}
                               >
                                 {t("取消")}
                               </button>
@@ -480,7 +500,7 @@ export function RuntimeVersionsPanel({
                               className="button button-secondary"
                               type="button"
                               onClick={() => setConfirmDeleteLibraryId(entry.id)}
-                              disabled={busy !== null}
+                              disabled={busyNow}
                             >
                               <Trash2 size={18} />
                               {t("删除")}
@@ -545,7 +565,7 @@ export function RuntimeVersionsPanel({
               {(catalogExpanded ? catalog : catalog.slice(0, CATALOG_COLLAPSE_AFTER)).map(item => {
                 const inLibrary = library.some(lib => lib.version === item.version)
                 const isCurrentActive = list.some(l => l.active && l.version === item.version)
-                const isDownloading = downloadingVersion === item.version
+                const isDownloading = busy === `download:${item.version}`
                 const canDownload = Boolean(item.manifestUrl && item.manifestSha256)
 
                 return (
@@ -569,7 +589,7 @@ export function RuntimeVersionsPanel({
                           className="button button-secondary"
                           type="button"
                           onClick={() => downloadToLibrary(item)}
-                          disabled={!canDownload || isDownloading || busy !== null}
+                          disabled={!canDownload || isDownloading || busyNow}
                         >
                           {isDownloading ? <Loader2 className="spin" size={18} /> : <Download size={18} />}
                           {t("下载到版本库")}
@@ -625,6 +645,8 @@ interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
   harnessVersionBusy: boolean
   /** 安装/切换/删除 Harness 版本的开始与结束。 */
   onHarnessVersionBusyChange: (busy: boolean) => void
+  runtimeBusy: boolean
+  onStopHarness: () => void
   /** 返回设置首页：版本管理是一级页，返回键回设置首页，而不是回「后台」。 */
   onBack: () => void
   loadSnapshots: () => Promise<RuntimeSessionSnapshotState>
@@ -659,6 +681,10 @@ export function RuntimeVersionsScreen({
   runtime,
   harnessVersionBusy,
   onHarnessVersionBusyChange,
+  runtimeBusy,
+  onStopHarness,
+  externalBusy,
+  onBusyChange,
   loadVersions,
   switchVersion,
   deleteVersion,
@@ -696,8 +722,10 @@ export function RuntimeVersionsScreen({
       </div>
 
       <HarnessVersionsSection bridge={runtimeBridge} runtime={runtime} refreshRuntime={refreshRuntime}
-        externalBusy={harnessVersionBusy} onBusyChange={onHarnessVersionBusyChange} />
+        externalBusy={harnessVersionBusy} onBusyChange={onHarnessVersionBusyChange}
+        runtimeBusy={runtimeBusy} onStop={onStopHarness} />
 
+      <fieldset className="settings-model-fieldset" disabled={harnessVersionBusy || runtimeBusy}>
       <RuntimeVersionsPanel
         runtime={runtime}
         loadVersions={loadVersions}
@@ -708,6 +736,8 @@ export function RuntimeVersionsScreen({
         listReleases={listReleases}
         refreshRuntime={refreshRuntime}
         notify={notify}
+        externalBusy={externalBusy}
+        onBusyChange={onBusyChange}
       />
 
       {/* 顺序即用户关心顺序：磁盘上有哪几份 → 会话备份 → 应用自身。 */}
@@ -718,6 +748,7 @@ export function RuntimeVersionsScreen({
         deleteSnapshot={deleteSnapshot}
         notify={notify}
       />
+      </fieldset>
 
       <AppUpdateSection
         loadUpdate={loadUpdate}

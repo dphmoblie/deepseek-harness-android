@@ -20,13 +20,19 @@ internal class HarnessVersions(private val context: Context, private val store: 
     private val selection get() = File(home, "selection.json")
     private val resolver = RuntimeLaunchResolver(context, store, includeCredentials = false, selectHarness = false)
 
-    fun list(): JSONObject {
+    /**
+     * 列出本地版本。运行中的 Harness 不能同时做 environment 探测：探测会刷新访客脚本，
+     * 与正在使用的 rootfs 并发写入没有价值。此时返回 environmentAvailable=false，
+     * 版本页在停止后刷新或实际切换时再判断 ABI。
+     */
+    fun list(probeEnvironment: Boolean = true): JSONObject {
         // 选择文件损坏时也要能把列表显示出来，否则用户没有入口切回内置版本。
         val current = selectedOrBundled(store)
-        val environment = runCatching { run("environment") }.getOrNull()
+        val environment = if (probeEnvironment) runCatching { run("environment") }.getOrNull() else null
         val entries = JSONArray()
-        versions.listFiles()?.sortedByDescending { it.name }?.forEach { directory ->
-            if (HarnessPackageCatalog.VERSION.matches(directory.name) && directory.name.length <= 96) {
+        versions.listFiles()?.filter { HarnessPackageCatalog.VERSION.matches(it.name) && it.name.length <= 96 }
+            ?.sortedWith { left, right -> HarnessPackageCatalog.compareVersions(right.name, left.name) }
+            ?.forEach { directory ->
                 val ready = runCatching { ready(directory) }.getOrNull()
                 val valid = ready != null
                 val compatible = valid && environment != null &&
@@ -39,8 +45,8 @@ internal class HarnessVersions(private val context: Context, private val store: 
                     .put("invalid", !valid)
                     .put("active", current == directory.name))
             }
-        }
         return JSONObject().put("active", current).put("installed", entries)
+            .put("environmentAvailable", environment != null)
             .put("bundledVersion", store.installedManifest()?.dshVersion ?: JSONObject.NULL)
     }
 
@@ -76,7 +82,7 @@ internal class HarnessVersions(private val context: Context, private val store: 
     fun beginSwitch(version: String) {
         if (version != BUNDLED) verify(version)
         prepareDirectories(store)
-        write(selection, JSONObject().put("active", version).put("previous", active(store)).put("pending", true))
+        write(selection, JSONObject().put("active", version).put("previous", selectedOrBundled(store)).put("pending", true))
     }
 
     fun commitSwitch() {
@@ -84,11 +90,22 @@ internal class HarnessVersions(private val context: Context, private val store: 
         write(selection, JSONObject().put("active", state.getString("active")))
     }
 
+    /** 进程在切换事务中断后，供控制器入口判断是否需要先做恢复。 */
+    fun hasPendingSwitch(): Boolean = runCatching {
+        read(selection)?.optBoolean("pending", false) == true
+    }.getOrDefault(false)
+
+    /**
+     * 回到切换前的默认值，保留 pending，等 profile 重建也成功后再提交；
+     * 否则 profile 重建失败会留下「选择已回滚、链接仍指向新包」的半套状态。
+     */
     fun rollbackSwitch(): Boolean {
         val state = read(selection) ?: return false
         if (!state.optBoolean("pending")) return false
         val previous = state.optString("previous", BUNDLED)
-        write(selection, JSONObject().put("active", if (previous == BUNDLED) BUNDLED else HarnessPackageCatalog.requireVersion(previous)))
+        val restored = if (previous == BUNDLED) BUNDLED else
+            runCatching { HarnessPackageCatalog.requireVersion(previous) }.getOrDefault(BUNDLED)
+        write(selection, JSONObject().put("active", restored).put("previous", restored).put("pending", true))
         return true
     }
 
@@ -129,6 +146,7 @@ internal class HarnessVersions(private val context: Context, private val store: 
             timeoutSeconds = when (operation) {
                 "install" -> 1200
                 "verify" -> 300
+                "environment" -> 30
                 else -> 180
             },
             outputLimit = 16384,
@@ -182,21 +200,27 @@ internal class HarnessVersions(private val context: Context, private val store: 
         /**
          * 宽松读取：只给启动、代次指纹和列表用。选择文件损坏、或选中的包目录已被外部删除时退回内置，
          * 否则一个坏 JSON 会同时挡住 Harness 启动和「切回内置」的设置页入口。
-         * 版本管理操作（切换、删除、重建 profile）仍走严格的 [active]。
+         * 切换时也先恢复旧选择；目标包仍由 [verify] 严格校验。
          */
-        fun selectedOrBundled(store: RuntimeStore): String = try {
-            active(store)
+        fun selectedOrBundled(store: RuntimeStore): String = selectedOrBundled(
+            readActive = { active(store) },
+            fallBack = { fallBackToBundled(store) },
+        )
+
+        internal fun selectedOrBundled(readActive: () -> String, fallBack: () -> Unit): String = try {
+            readActive()
         } catch (error: Exception) {
             // 元数据损坏时顺手把选择退回内置，让严格的版本管理入口重新可用。
-            if (error is RuntimeFailure && error.code == "HARNESS_PACKAGE_INVALID") {
-                runCatching { fallBackToBundled(store) }
+            if (error is RuntimeFailure && error.code in setOf("HARNESS_PACKAGE_INVALID", "HARNESS_VERSION_INVALID")) {
+                runCatching(fallBack)
             }
             BUNDLED
         }
 
-        /** 选中的包已不可用（环境变了或目录被删）时把默认值退回内置，不改动任何包目录。 */
+        /** 先标记回退内置；控制器重建 profile 后才提交，失败时下次继续恢复。 */
         fun fallBackToBundled(store: RuntimeStore) {
-            write(File(File(store.runtimeParent, "harness-versions"), "selection.json"), JSONObject().put("active", BUNDLED))
+            write(File(File(store.runtimeParent, "harness-versions"), "selection.json"),
+                JSONObject().put("active", BUNDLED).put("previous", BUNDLED).put("pending", true))
         }
 
 

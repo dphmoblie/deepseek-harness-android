@@ -3,6 +3,8 @@ export type HarnessVersionOperation = 'list' | 'install' | 'select' | 'delete'
 export interface HarnessVersionsState {
   active: string
   bundledVersion: string | null
+  /** false 表示未取得环境探测结果，不能据此判定所有包都 ABI 不兼容。 */
+  environmentAvailable?: boolean
   installed: { version: string; bytes: number; active: boolean; compatible: boolean; invalid?: boolean }[]
 }
 /** 安装阶段，顺序与访客脚本上报的顺序一致。 */
@@ -38,6 +40,7 @@ export function harnessVersionRequest(operation: HarnessVersionOperation, select
 export function validateHarnessVersions(value: unknown): HarnessVersionsState {
   const data = object(value)
   if (!Array.isArray(data.installed) || data.installed.length > 1000) throw new Error('Harness 版本列表无效')
+  if (data.environmentAvailable !== undefined && typeof data.environmentAvailable !== 'boolean') throw new Error('Harness 运行环境状态无效')
   const active = version(data.active, true)
   const installed = data.installed.map(item => {
     const entry = object(item)
@@ -49,7 +52,8 @@ export function validateHarnessVersions(value: unknown): HarnessVersionsState {
   })
   if (new Set(installed.map(entry => entry.version)).size !== installed.length) throw new Error('Harness 本地版本重复')
   if (active !== 'bundled' && !installed.some(entry => entry.active)) throw new Error('Harness 默认版本缺失')
-  return { active, bundledVersion: data.bundledVersion === null ? null : version(data.bundledVersion), installed }
+  return { active, bundledVersion: data.bundledVersion === null ? null : version(data.bundledVersion), installed,
+    ...(data.environmentAvailable === undefined ? {} : { environmentAvailable: data.environmentAvailable }) }
 }
 export function validateHarnessProgress(value: unknown): HarnessProgress {
   const data = object(value)

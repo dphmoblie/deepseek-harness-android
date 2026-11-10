@@ -13,6 +13,12 @@ const baseSettings = {
 describe('browser settings bridge', () => {
   beforeEach(() => localStorage.clear())
 
+  it('浏览器不模拟系统方向切换', async () => {
+    const bridge = createBrowserBridge()
+    await expect(bridge.getAppOrientation()).rejects.toThrow('应用方向仅在安卓设备上可用')
+    await expect(bridge.setAppOrientation('landscape')).rejects.toThrow('应用方向仅在安卓设备上可用')
+  })
+
   it('preserves the stored overlay-ball setting when an unrelated save omits it', async () => {
     const bridge = createBrowserBridge()
     await bridge.saveSettings({ ...baseSettings, overlayBallEnabled: true })

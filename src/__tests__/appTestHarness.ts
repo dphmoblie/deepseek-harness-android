@@ -20,6 +20,7 @@ import { expect, vi } from 'vitest'
 import { resetLanguageSession } from '../i18n'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES } from '../platform/types'
 import type {
+  AppOrientationMode,
   DiagnosticLogState,
   KeepAliveState,
   MailboxState,
@@ -38,6 +39,8 @@ import type {
  * 那时本模块早已求值完毕，所以这里可以安全地被各测试文件的 `vi.mock` 工厂引用。
  */
 export const bridge = {
+  getAppOrientation: vi.fn(),
+  setAppOrientation: vi.fn(),
   setAppLanguage: vi.fn(),
   /** 语言门禁的启动探测：默认「用户没选过」，需要「原生已选过就跳门禁」的用例自行改返回值。 */
   getAppLanguage: vi.fn(),
@@ -377,6 +380,8 @@ export function beforeEachAppTest(): void {
   // 默认「原生也没选过」：门禁用例自行改成 { configured: true, language: 'en' } 验证跳过逻辑。
   bridge.getAppLanguage.mockResolvedValue({ configured: false, language: 'zh-CN' })
   bridge.setAppTheme.mockResolvedValue(undefined)
+  bridge.getAppOrientation.mockResolvedValue('system')
+  bridge.setAppOrientation.mockImplementation((mode: AppOrientationMode) => Promise.resolve(mode))
   bridge.applyHarnessTheme.mockResolvedValue(undefined)
   bridge.clearHarnessTheme.mockResolvedValue(undefined)
   bridge.pickHarnessBackground.mockResolvedValue({ uri: 'content://test/background', mime: 'video/mp4', kind: 'video' })

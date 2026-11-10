@@ -54,6 +54,7 @@ class MainActivity : BridgeActivity() {
         warmUpWebView()
         registerPlugin(MobileRuntimePlugin::class.java)
         super.onCreate(savedInstanceState)
+        AppOrientationPreference.apply(this)
         AppWindowInsets.apply(this)
         handleExternalFileIntent(intent)
         applySystemFontScale()
@@ -97,6 +98,7 @@ class MainActivity : BridgeActivity() {
 
     override fun onResume() {
         super.onResume()
+        AppOrientationPreference.apply(this)
         // 主题可能刚在 Web 侧被改过，系统深色模式也可能在后台切换过；每次回到前台重算一次状态栏，
         // 比在每条改动路径上分别通知可靠。
         AppThemePreference.applySafely(this)

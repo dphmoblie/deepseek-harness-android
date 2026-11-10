@@ -23,6 +23,7 @@ import androidx.core.view.WindowInsetsCompat
 import io.deepseekharness.mobile.APP_LIST_PERMISSION
 import io.deepseekharness.mobile.AppListAccess
 import io.deepseekharness.mobile.AppThemePreference
+import io.deepseekharness.mobile.AppOrientationPreference
 import io.deepseekharness.mobile.AppLanguage
 import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.shizuku.DeviceShellAccess
@@ -89,6 +90,7 @@ class VirtualScreenActivity : Activity() {
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
+        AppOrientationPreference.apply(this)
         createdLanguage = AppLanguage.current(this)
         createdTheme = AppThemePreference.current(this)
         // 这一页**不再加 FLAG_SECURE**：加了以后用户自己截不了图、远端也取不了证，
@@ -482,6 +484,7 @@ class VirtualScreenActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        AppOrientationPreference.apply(this)
         if (createdLanguage != AppLanguage.current(this) || createdTheme != AppThemePreference.current(this)) {
             recreate()
             return

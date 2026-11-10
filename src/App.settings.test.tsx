@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { Capacitor } from '@capacitor/core'
 import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge, chooseProvider, FOREGROUND_SERVICE_SETTLE_MS, notInstalledState, openSettingsPage, readyState, settings } from './__tests__/appTestHarness'
@@ -766,6 +767,26 @@ describe('外观设置接线', () => {
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe('dark'))
     // 持久化也要落：否则下次打开又回到默认。
     expect(window.localStorage.getItem('dsh-mobile-theme-v1')).toBe('dark')
+  })
+
+  it('安卓主题设置能读回并切换应用方向，与界面主题的选项分开', async () => {
+    const native = vi.spyOn(Capacitor, 'isNativePlatform').mockReturnValue(true)
+    window.localStorage.setItem('dsh-mobile-permissions-v1', '1')
+    bridge.getAppOrientation.mockResolvedValue('portrait')
+    try {
+      render(<App />)
+      await arriveAtSettingsHome()
+      await openSettingsPage('主题', '字号与配色')
+      const group = await screen.findByRole('radiogroup', { name: '应用方向' })
+      await waitFor(() => expect(within(group).getByRole('radio', { name: '竖屏' })).toBeChecked())
+      fireEvent.click(within(group).getByRole('radio', { name: '横屏' }))
+      await waitFor(() => expect(within(group).getByRole('radio', { name: '横屏' })).toBeChecked())
+      expect(bridge.setAppOrientation).toHaveBeenCalledOnce()
+      expect(bridge.setAppOrientation).toHaveBeenCalledWith('landscape')
+      expect(within(screen.getByRole('region', { name: '界面主题' })).getByRole('radio', { name: '跟随系统' })).toBeChecked()
+    } finally {
+      native.mockRestore()
+    }
   })
 
   it('「主题」摆三行入口，DSH 的主题与背景合在同一页', async () => {

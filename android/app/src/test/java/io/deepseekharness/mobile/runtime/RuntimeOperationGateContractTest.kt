@@ -8,8 +8,7 @@ import org.junit.Test
 /**
  * 接线契约：闸门本身有单测，但「起停入口真的先问闸门」只能由源码结构保证。
  *
- * 顺序是这里唯一的重点：`operations.requireIdle()` 必须在 `withStartOperationLock`
- * 进入 `lifecycleLock.withLock` 之前执行。反过来写，启动请求仍会排在 npm 安装后面。
+ * 起停入口统一使用有等待上限的 `operations.withStartLock`，不能退回先检查再无限等待的两步调用。
  */
 class RuntimeOperationGateContractTest {
     @Test
@@ -23,14 +22,12 @@ class RuntimeOperationGateContractTest {
             val body = source.substring(start, end)
             assertTrue("$signature 必须走起停专用锁", body.contains("withStartOperationLock"))
         }
-        val helper = source.indexOf("private inline fun <T> withStartOperationLock")
+        val helper = source.indexOf("private fun <T> withStartOperationLock")
         assertTrue("找不到 withStartOperationLock", helper >= 0)
         val helperEnd = source.indexOf("\n    }", helper)
         assertTrue("withStartOperationLock 函数体没有正常结束", helperEnd > helper)
         val helperBody = source.substring(helper, helperEnd)
-        val gateCheck = helperBody.indexOf("operations.requireIdle()")
-        val lockAcquire = helperBody.indexOf("lifecycleLock.withLock")
-        assertTrue("起停入口必须先检查长操作闸门", gateCheck in 0 until lockAcquire)
+        assertTrue("起停入口必须使用有界等待的闸门锁", helperBody.contains("operations.withStartLock(lifecycleLock, block)"))
     }
 
     @Test
