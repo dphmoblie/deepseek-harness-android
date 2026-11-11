@@ -62,6 +62,7 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime, onBusy
   const alive = useRef(true)
   const actionLock = useRef(false)
   const previousPhase = useRef(runtime.phase)
+  const previousBlocked = useRef(externalBusy || runtimeBusy)
   const localReadRevision = useRef(0)
   const remoteReadRevision = useRef(0)
   const loadLocal = useCallback(() => {
@@ -98,6 +99,14 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime, onBusy
       loadLocal()
     }
   }, [externalBusy, loadLocal, runtime.phase, runtimeBusy])
+  // If this page is reopened while an operation is still running, its initial list read is
+  // expected to fail fast. Refresh once the operation really ends so the page self-heals.
+  useEffect(() => {
+    const blocked = externalBusy || runtimeBusy
+    const wasBlocked = previousBlocked.current
+    previousBlocked.current = blocked
+    if (wasBlocked && !blocked && !actionLock.current) loadLocal()
+  }, [externalBusy, loadLocal, runtimeBusy])
   // 阶段事件由原生在安装过程中推送；插件销毁时事件直接丢弃，这里只保留最后一次。
   useEffect(() => {
     let handle: { remove: () => Promise<void> } | null = null

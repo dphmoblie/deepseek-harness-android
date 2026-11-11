@@ -63,7 +63,8 @@ class MobileRuntimeController(
      * 长操作专用的生命周期锁：**先**登记长操作闸门，**再**排队拿生命周期锁。
      *
      * 顺序不能反过来：先拿锁再登记会让起停请求在这段窗口里排到锁后面，正是这次要修的现象。
-     * 参数给 `false` 的入口（只读列表、`check`）不登记，避免「扫了一眼版本列表」挡住启动。
+     * 只有明确传入 `false` 的纯读取入口不登记；Harness 版本列表会探测访客环境或恢复切换，
+     * 因此也按长操作处理，避免启动请求排在它后面。
      */
     private inline fun <T> withLongOperationLock(enabled: Boolean = true, block: () -> T): T {
         if (!enabled) return lifecycleLock.withLock(block)
@@ -733,7 +734,7 @@ class MobileRuntimeController(
         installer.retireStaleResidue()
     }
 
-    fun createTerminal(kind: String, columns: Int, rows: Int): String = lifecycleLock.withLock {
+    fun createTerminal(kind: String, columns: Int, rows: Int): String = withStartOperationLock {
         ensureOpen()
         if (kind == "ubuntu" && !supervisor.isRunning() && !terminals.hasRuntimeSessions()) {
             supervisor.preparePluginManagement()

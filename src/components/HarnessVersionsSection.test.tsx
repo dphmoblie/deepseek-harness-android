@@ -97,6 +97,16 @@ describe('Harness 版本安装进度', () => {
     expect(screen.getByText(/Harness 版本操作仍在进行/u)).toBeTruthy()
   })
 
+  it('从其它页面返回后会在外层操作结束时自动重读本地版本', async () => {
+    const bridge = setupBridge({ list: () => Promise.reject(new Error('busy')) })
+    const view = render(<HarnessVersionsSection bridge={bridge} runtime={runtime} refreshRuntime={() => Promise.resolve()} externalBusy />)
+    await screen.findByText('无法读取本地 Harness 版本。')
+    vi.mocked(bridge.manageHarnessVersions).mockResolvedValue(local)
+    view.rerender(<HarnessVersionsSection bridge={bridge} runtime={runtime} refreshRuntime={() => Promise.resolve()} externalBusy={false} />)
+    await waitFor(() => expect(bridge.manageHarnessVersions).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('本地 Harness 版本')).toBeVisible()
+  })
+
   it('运行中提供就地停止入口，停止不受版本列表刷新失败影响', async () => {
     const onStop = vi.fn()
     const view = setup(() => Promise.resolve(local), { runtime: { ...runtime, phase: 'running' }, onStop })

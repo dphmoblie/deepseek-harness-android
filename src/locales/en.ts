@@ -3,6 +3,7 @@ export const english: Readonly<Record<string, string>> = {
   "正在处理版本": "Version operation in progress",
   "版本操作进行中": "Version operation in progress",
   "版本操作完成后才能打开对话，请等待当前操作结束。": "Wait for the current version operation to finish before opening chat.",
+  "版本操作完成后才能打开终端，请等待当前操作结束。": "Wait for the current version operation to finish before opening a terminal.",
   "版本操作正在进行，完成前不能启动、修复或重置运行环境。": "A version operation is in progress. Wait for it to finish before starting, repairing, or resetting the runtime.",
   "版本操作正在进行，请等待完成后再安装或更新运行环境。": "Wait for the version operation to finish before installing or updating the runtime.",
   "版本操作正在进行，请等待完成后再修复运行环境。": "Wait for the version operation to finish before repairing the runtime.",

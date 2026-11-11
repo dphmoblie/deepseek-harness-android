@@ -31,6 +31,16 @@ class RuntimeOperationGateContractTest {
     }
 
     @Test
+    fun terminalCreationDoesNotQueueBehindALongOperation() {
+        val source = controllerSource()
+        val start = source.indexOf("fun createTerminal(")
+        assertTrue("找不到 createTerminal", start >= 0)
+        val end = source.indexOf("\n    fun writeTerminal", start)
+        assertTrue("createTerminal 函数体没有正常结束", end > start)
+        assertTrue("createTerminal 必须使用有界等待的闸门锁", source.substring(start, end).contains("withStartOperationLock"))
+    }
+
+    @Test
     fun longOperationsAreRegisteredBeforeTakingTheLock() {
         val source = controllerSource()
         listOf(

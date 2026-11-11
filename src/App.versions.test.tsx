@@ -681,4 +681,25 @@ describe('版本管理：Harness 版本安装期间不能排队启动', () => {
     fireEvent.click(within(nav as HTMLElement).getByRole('button', { name: '首页' }))
     await waitFor(() => expect(screen.getByRole('button', { name: '打开对话' })).toBeEnabled())
   })
+
+  it('安装进行中时设置页不允许再打开设备终端', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.listHarnessReleases.mockResolvedValue({ entries: [{ version: '0.2.1-rc.2', tags: ['latest'] }] })
+    let finishInstall: (value: unknown) => void = () => undefined
+    bridge.manageHarnessVersions.mockImplementation((operation: string) => operation === 'list'
+      ? Promise.resolve({ active: 'bundled', bundledVersion: '0.2.0-rc.2', installed: [] })
+      : new Promise(resolve => { finishInstall = resolve }))
+
+    await openVersionsPage()
+    fireEvent.click(await screen.findByRole('button', { name: /安装 Harness/u }))
+    await waitFor(() => expect(bridge.manageHarnessVersions).toHaveBeenCalledWith('install', '0.2.1-rc.2'))
+
+    const nav = document.querySelector('.bottom-navigation') as HTMLElement
+    fireEvent.click(within(nav).getByRole('button', { name: '设置' }))
+    await screen.findByRole('heading', { name: '设置' })
+    fireEvent.click(screen.getByRole('button', { name: /设备 Shell/ }))
+    expect(await screen.findByRole('button', { name: '打开设备 Shell' })).toBeDisabled()
+
+    await act(async () => { finishInstall({ active: 'bundled', bundledVersion: '0.2.0-rc.2', installed: [] }); await Promise.resolve() })
+  })
 })

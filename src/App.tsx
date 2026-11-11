@@ -1279,6 +1279,8 @@ function EnvironmentScreen({ busy, bundledSource, harnessVersionBusy, runtime, o
 interface TerminalScreenProps {
   bridge: typeof runtimeBridge
   fontSize: number
+  /** 版本/运行时长操作期间不创建新的终端会话，避免原生请求排队。 */
+  operationBusy: boolean
   onAuthorize: () => void
   onBack: () => void
   onConnect: () => void
@@ -1289,14 +1291,14 @@ interface TerminalScreenProps {
   shizuku: ShizukuState
 }
 
-function TerminalScreen({ bridge, fontSize, onAuthorize, onBack, onConnect, onError, onOpenEnvironment, onOpenShizuku, runtime, shizuku }: TerminalScreenProps) {
+function TerminalScreen({ bridge, fontSize, operationBusy, onAuthorize, onBack, onConnect, onError, onOpenEnvironment, onOpenShizuku, runtime, shizuku }: TerminalScreenProps) {
   const [kind, setKind] = useState<TerminalKind>('ubuntu')
   const [epoch, setEpoch] = useState(0)
   // Ubuntu 终端只依赖 rootfs 已安装（bash 由 PRoot 直接启动，不经过 dsh web）：
   // dsh web 启动失败（phase=error）时也必须能进终端手动排查，而不是被闸在门外。
   const ubuntuReady = runtimeInstalled(runtime) && !runtimeTransitioning(runtime)
   const deviceReady = shizuku.installed && shizuku.running && shizuku.permission === 'granted' && shizuku.connected
-  const ready = kind === 'ubuntu' ? ubuntuReady : deviceReady
+  const ready = !operationBusy && (kind === 'ubuntu' ? ubuntuReady : deviceReady)
 
   return (
     <div className="screen terminal-screen">
@@ -1323,7 +1325,13 @@ function TerminalScreen({ bridge, fontSize, onAuthorize, onBack, onConnect, onEr
           <Smartphone size={17} />{t("设备 Shell")}</button>
       </div>
 
-      {ready ? (
+      {operationBusy ? (
+        <div className="empty-terminal">
+          <span><Loader2 className="spin" size={27} /></span>
+          <h2>{t("版本操作进行中")}</h2>
+          <p className="settings-note">{t("版本操作完成后才能打开终端，请等待当前操作结束。")}</p>
+        </div>
+      ) : ready ? (
         <Suspense fallback={<div className="terminal-loading"><Loader2 className="spin" size={22} /></div>}>
           <TerminalPanel key={`${kind}-${epoch}`} bridge={bridge} fontSize={fontSize} kind={kind} onError={onError} />
         </Suspense>
@@ -3074,7 +3082,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
           <div className="section-title section-title-action">
             <span className="section-icon"><SquareTerminal size={19} /></span>
             <div><h2 id="device-shell-entry">{t("设备 Shell")}</h2><p>{t("设备上的 Shell：命令以 shell 身份执行，需要下面的 Shizuku 授权")}</p></div>
-            <button className="button button-secondary" type="button" onClick={onOpenShellView} disabled={busy !== null}>
+            <button className="button button-secondary" type="button" onClick={onOpenShellView} disabled={busy !== null || harnessVersionBusy}>
               <ExternalLink size={18} />{t("打开设备 Shell")}</button>
           </div>
           <p className="settings-note">
@@ -5800,7 +5808,7 @@ export function App() {
       case 'sessions':
         return <SessionManager onBack={() => backToView('conversation')} onOpenHarness={launchHarness} />
       case 'terminal':
-        return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
+        return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} operationBusy={versionOperationBusy} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
       case 'plugins':
         return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
       case 'environment':
