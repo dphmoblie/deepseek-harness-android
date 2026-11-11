@@ -33,7 +33,7 @@ function setup(state = runtime, first: PluginCatalog = upgraded) {
     managePlugins: vi.fn().mockResolvedValueOnce(first),
     stopRuntime: vi.fn().mockResolvedValue({ ...state, phase: 'ready' }),
   }
-  render(<PluginSettings bridge={bridge} runtime={state} onBack={vi.fn()} />)
+  render(<PluginSettings bridge={bridge} runtime={state} onBack={vi.fn()} onStopRuntime={async () => { await bridge.stopRuntime() }} />)
   return bridge
 }
 

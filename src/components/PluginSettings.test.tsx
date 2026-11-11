@@ -12,7 +12,7 @@ const catalog: PluginCatalog = { plugins: [
 ] }
 function setup(state = runtime, groups: PluginCatalog = catalog) {
   const bridge = { ...createBrowserBridge(), managePlugins: vi.fn().mockResolvedValue(groups), stopRuntime: vi.fn().mockResolvedValue({ ...runtime, phase: 'ready' }) }
-  render(<PluginSettings bridge={bridge} runtime={state} onBack={vi.fn()} />)
+  render(<PluginSettings bridge={bridge} runtime={state} onBack={vi.fn()} onStopRuntime={async () => { await bridge.stopRuntime() }} />)
   return bridge
 }
 beforeEach(() => { saveLanguage('zh-CN') })

@@ -4794,14 +4794,21 @@ export function App() {
    *
    * @param watchdogMs 看门狗时长；`null` 表示不设看门狗（仅限确实无上界的操作）。
    */
+  /**
+   * 跑一次带锁的操作。
+   *
+   * 返回值是「这次操作有没有真的跑完」：`false` 表示被别的操作挡下、或操作自己失败/超时。
+   * 调用方（例如插件页的停止）要据此决定是宣布成功还是让用户重试——把提前退出说成成功，
+   * 用户就会看到一个「已经停好了」的界面和一个其实还在跑的环境。
+   */
   const run = useCallback(async (
     id: string,
     operation: (isCurrent: () => boolean) => Promise<void>,
     success?: string,
     guide?: PermissionGuide,
     watchdogMs: number | null = ACTION_WATCHDOG_MS,
-  ) => {
-    if (busyRef.current !== null) return
+  ): Promise<boolean> => {
+    if (busyRef.current !== null) return false
     const token = ++busyToken.current
     const isCurrent = (): boolean => busyToken.current === token
     busyRef.current = id
@@ -4827,7 +4834,10 @@ export function App() {
     try {
       if (timeout === undefined) await operation(isCurrent)
       else await Promise.race([operation(isCurrent), timeout])
-      if (success !== undefined && isCurrent()) notify(success, 'success')
+      // 超时之后 `busyToken` 已被推进，`isCurrent()` 为假：这种情况按「没跑完」回报。
+      if (!isCurrent()) return false
+      if (success !== undefined) notify(success, 'success')
+      return true
     } catch (error) {
       // 超时之后才失败的错误不再重复提示：用户已经看到过那条超时说明。
       if (isCurrent()) {
@@ -4836,6 +4846,7 @@ export function App() {
         // 由调用方给出对应指引时，同时打开可跳转系统设置/Shizuku 的指引弹窗。
         if (guide !== undefined) setPermissionGuide(guide)
       }
+      return false
     } finally {
       if (watchdog !== undefined) window.clearTimeout(watchdog)
       release()
@@ -5278,10 +5289,19 @@ export function App() {
     setRuntime(await runtimeBridge.getState())
   }, [])
 
-  const stopRuntimeAction = useCallback((returnToSettings: boolean) => {
+  /**
+   * 停止运行环境。`returnToSettings` 决定停完回不回设置首页：
+   * 插件页与版本管理页都要留在原地继续操作，不能把用户弹走。
+   *
+   * 停止的**最终阶段只存在于这次调用的返回值里**：原生只在开始停时推一次 `stopping`
+   * 事件，收尾（`refreshIdle`）不再推事件。所以任何调用方都必须走这里、由外壳写回快照；
+   * 直接调 `bridge.stopRuntime()` 再把返回值丢掉，顶部阶段徽章会永远停在「正在停止」。
+   */
+  const stopRuntimeAction = useCallback(async (returnToSettings: boolean): Promise<boolean> => {
     // 先记下「这次停止由本应用发起」：阶段变化可能早于桥接返回，晚记会把显式停止误报成自行停止。
     stopRequested.current = true
-    void run('stop', async isCurrent => {
+    // 等 `run` 收口再返回：插件页要等「真的停完」才解锁管理，不能自己先宣布已停止。
+    return run('stop', async isCurrent => {
       const next = await runtimeBridge.stopRuntime()
       if (!isCurrent()) return
       setRuntime(next)
@@ -5295,8 +5315,10 @@ export function App() {
     }, t("运行环境已停止"))
   }, [run, setActiveView])
 
-  const stopRuntime = useCallback(() => stopRuntimeAction(true), [stopRuntimeAction])
-  const stopRuntimeForVersions = useCallback(() => stopRuntimeAction(false), [stopRuntimeAction])
+  const stopRuntime = useCallback(() => { void stopRuntimeAction(true) }, [stopRuntimeAction])
+  const stopRuntimeForVersions = useCallback(() => { void stopRuntimeAction(false) }, [stopRuntimeAction])
+  /** 插件页的停止：不跳页，但同样要把快照写回外壳（见 [stopRuntimeAction] 的注释）。 */
+  const stopRuntimeForPlugins = useCallback(() => stopRuntimeAction(false), [stopRuntimeAction])
 
   const confirmReset = useCallback(() => {
     // 重置同样会停掉正在运行的运行时：这也是用户在本应用里主动发起的停止。
@@ -5505,13 +5527,16 @@ export function App() {
    * 这里只把参数原样递过去，成功提示与失败提示都交给统一的 [run]。
    * 界面**不做乐观更新**：失败时不会留下一个「看起来已经关掉」的开关。
    */
-  const setAccessibilityRuleEnabled = useCallback((options: {
+  const setAccessibilityRuleEnabled = useCallback(async (options: {
     packageName: string
     ruleId: string
     enabled: boolean
-  }) => run('set-accessibility-rule', async () => {
-    await runtimeBridge.setAccessibilityAutomationRuleEnabled(options)
-  }, options.enabled ? t("规则已启用") : t("规则已停用")), [run])
+  }): Promise<void> => {
+    // 调用方（SettingsScreen）只关心「发出去并等它收口」，不需要 run() 的成功与否。
+    await run('set-accessibility-rule', async () => {
+      await runtimeBridge.setAccessibilityAutomationRuleEnabled(options)
+    }, options.enabled ? t("规则已启用") : t("规则已停用"))
+  }, [run])
 
   const saveAccessibilityPackages = useCallback((packages: string[], password?: string, whitelistEnabled?: boolean) => {
     // 已设置验证密码却没交密码：在本地就挡下来，不白发一次必然失败的桥调用。
@@ -5810,7 +5835,9 @@ export function App() {
       case 'terminal':
         return <TerminalScreen bridge={runtimeBridge} fontSize={settings?.terminalFontSize ?? 14} operationBusy={versionOperationBusy} onAuthorize={requestShizukuPermission} onBack={() => backToView('settings')} onConnect={connectShizuku} onError={terminalError} onOpenEnvironment={() => setActiveView('environment')} onOpenShizuku={openShizuku} runtime={runtime} shizuku={shizuku} />
       case 'plugins':
-        return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} />
+        // 停环境必须经外壳转手：停止的最终阶段只在返回值里，插件页直接调桥会让
+        // 顶部阶段徽章永远停在「正在停止」。
+        return <PluginSettings bridge={runtimeBridge} runtime={runtime} onBack={() => backToView('settings')} onStopRuntime={stopRuntimeForPlugins} />
       case 'environment':
         return <EnvironmentScreen busy={busy} bundledSource={settings === null || settings.manifestUrl.trim() === ''} harnessVersionBusy={versionOperationBusy} runtime={runtime} onBack={() => backToView('settings')} onInstall={installRuntime} onReset={() => setResetOpen(true)} onRepair={() => setRepairOpen(true)} onStart={() => launchHarness()} onStop={stopRuntime} onUpdate={requestRuntimeUpdate} pageNetworkAccess={settings?.pageNetworkAccess} />
       case 'versions':

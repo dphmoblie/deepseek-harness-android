@@ -133,7 +133,17 @@ function RecoveryNotice({ recovery, unresolved, locked, onRepair, onPrune }: {
   </section>
 }
 
-export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBridge; runtime: RuntimeState; onBack: () => void }) {
+export function PluginSettings({ bridge, runtime, onBack, onStopRuntime }: {
+  bridge: RuntimeBridge
+  runtime: RuntimeState
+  onBack: () => void
+  /**
+   * 停止运行环境。**必须由外壳转手**（[App] 的 `stopRuntimeNow`）：原生只在开始停时推
+   * `stopping` 事件、收尾不再推事件，停止结果只存在于这次调用的返回值里；这里若直接调
+   * `bridge.stopRuntime()` 再把返回值丢掉，顶部阶段徽章会永远停在「正在停止」。
+   */
+  onStopRuntime: () => Promise<unknown>
+}) {
   useLanguage()
   const [catalog, setCatalog] = useState<PluginCatalog | null>(null)
   const [busy, setBusy] = useState(false)
@@ -188,8 +198,17 @@ export function PluginSettings({ bridge, runtime, onBack }: { bridge: RuntimeBri
     if (pending.current) return
     pending.current = true; setBusy(true); setNotice(''); setNoticeDetail('')
     try {
-      await bridge.stopRuntime()
-      if (active.current) { setStopped(true); setNotice('运行环境已停止，可以管理插件'); setFailed(false) }
+      // 经外壳转手：它会把返回的阶段快照写回全局状态（徽章不会卡在「正在停止」）。
+      const stopped = await onStopRuntime()
+      if (!active.current) return
+      if (stopped === false) {
+        // 外壳的 run() 在「被别的操作挡下 / 失败 / 超时」时返回 false。这里不能宣布已停止，
+        // 否则界面解锁了插件管理，运行环境其实还在跑。
+        setNotice('停止运行环境失败，请重试')
+        setFailed(true)
+        return
+      }
+      setStopped(true); setNotice('运行环境已停止，可以管理插件'); setFailed(false)
     } catch { if (active.current) { setNotice('停止运行环境失败，请重试'); setFailed(true) } }
     finally { pending.current = false; if (active.current) setBusy(false) }
   }

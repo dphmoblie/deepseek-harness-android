@@ -28,7 +28,7 @@ function state(extra: Partial<PluginRecoveryState>): PluginRecoveryState {
 
 function setup(catalog: PluginCatalog) {
   const bridge = { ...createBrowserBridge(), managePlugins: vi.fn().mockResolvedValueOnce(catalog) }
-  render(<PluginSettings bridge={bridge} runtime={runtime} onBack={vi.fn()} />)
+  render(<PluginSettings bridge={bridge} runtime={runtime} onBack={vi.fn()} onStopRuntime={async () => { await bridge.stopRuntime() }} />)
   return bridge
 }
 

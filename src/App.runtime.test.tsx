@@ -788,3 +788,39 @@ describe('运行时版本管理', () => {
     expect(screen.queryByText('暂时读不到运行时版本列表')).toBeNull()
   })
 })
+
+/**
+ * 插件页的「停止运行环境」。
+ *
+ * 真机反馈：在插件页点停止后，顶部阶段徽章一直停在「正在停止」。
+ * 成因不在原生停得不干净，而在**停止结果的送达方式**：原生只在开始停时推一次
+ * `stopping` 事件，收尾阶段不再推事件，最终阶段只存在于 `stopRuntime()` 的返回值里。
+ * 插件页若自己调桥并把返回值丢掉，外壳状态就永远停在 `stopping`。
+ */
+describe('插件页停止运行环境', () => {
+  beforeEach(beforeEachAppTest)
+
+  it('停止后顶部阶段徽章不会卡在「正在停止」', async () => {
+    let listener: ((event: RuntimeProgress) => void) | undefined
+    bridge.addRuntimeProgressListener.mockImplementationOnce((next: (event: RuntimeProgress) => void) => {
+      listener = next
+      return Promise.resolve({ remove: vi.fn().mockResolvedValue(undefined) })
+    })
+    bridge.getState.mockResolvedValue({ ...runningState })
+    bridge.managePlugins.mockResolvedValue({ plugins: [] })
+    bridge.stopRuntime.mockResolvedValue({ ...readyState })
+    render(<App />)
+    await waitFor(() => expect(listener).toBeDefined())
+
+    // 原生开始停时的实时信号；旧实现只收到过这一条，于是界面停在过渡态。
+    act(() => listener?.({ phase: 'stopping', downloadedBytes: 0, totalBytes: 0 }))
+    expect((await screen.findAllByText('正在停止')).length).toBeGreaterThan(0)
+
+    fireEvent.click(await screen.findByRole('button', { name: '插件' }))
+    fireEvent.click(await screen.findByRole('button', { name: '停止运行环境' }))
+
+    expect(await screen.findByText('运行环境已停止，可以管理插件')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('正在停止')).toBeNull())
+    expect((await screen.findAllByText('已就绪')).length).toBeGreaterThan(0)
+  })
+})
