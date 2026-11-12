@@ -83,6 +83,12 @@ object PreservedMerge {
                 conflicts += relative
                 continue
             }
+            // 源里的符号链接一律按冲突处理：即便目标不存在也不能搬。移动链接本身虽不会跟随，
+            // 但回填后的新根里会留下指向旧暂存路径/外部路径的死链，和「不跟随」的边界相悖。
+            if (Files.isSymbolicLink(child.toPath())) {
+                conflicts += relative
+                continue
+            }
             val destination = File(target, child.name)
             if (!Files.exists(destination.toPath(), LinkOption.NOFOLLOW_LINKS)) {
                 Files.move(child.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
