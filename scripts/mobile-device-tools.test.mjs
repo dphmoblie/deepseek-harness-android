@@ -429,6 +429,39 @@ test('关闭开关与超时保留准确错误码，不伪装成已执行', async
   await assert.rejects(f.tools.get('mobile_device_shell').execute({ script: 'pwd' }, {}), /DEVICE_COMMAND_TIMEOUT/)
 })
 
+test('没有 Shizuku 不等于没有 Shell：说明面与受控码都要写出两条通道', async t => {
+  const f = fixture(t, () => ok(''))
+  const tool = f.tools.get('mobile_device_shell')
+  // 说明面必须同时给出根通道与 Shizuku 通道，并点名能力清单字段；
+  // 旧文案只说「需要 AI Shell + Shizuku」，模型在没有 Shizuku 的机器上会直接放弃。
+  assert.match(tool.description, /根通道/u)
+  assert.match(tool.description, /不需要 Shizuku/u)
+  assert.match(tool.description, /rootEngineStatus/u)
+  const prompt = f.prompts[0].text
+  assert.match(prompt, /根通道/u)
+  assert.match(prompt, /rootEngineEnabled/u)
+  // 两条通道都不通时，受控码必须带可执行的下一步，而不是只丢一个码。
+  const disabled = fixture(t, () => ({ ok: false, exitCode: -1, text: '', truncated: false, errorCode: 'DEVICE_SHELL_DISABLED' }))
+  await assert.rejects(disabled.tools.get('mobile_device_shell').execute({ script: 'pwd' }, {}), error => {
+    assert.match(error.message, /DEVICE_SHELL_DISABLED/u)
+    assert.match(error.message, /根通道/u)
+    assert.match(error.message, /AI Shell/u)
+    return true
+  })
+})
+
+test('原生受控失败的中文说明随码一起回给模型', async t => {
+  const f = fixture(t, () => ({
+    ok: false, exitCode: -1, text: '请先开启 AI Shell，或授权可用的根通道', truncated: false,
+    errorCode: 'DEVICE_COMMAND_PROTOCOL_ERROR',
+  }))
+  await assert.rejects(f.tools.get('mobile_device_shell').execute({ script: 'pwd' }, {}), error => {
+    assert.match(error.message, /^DEVICE_COMMAND_PROTOCOL_ERROR: /u)
+    assert.match(error.message, /授权可用的根通道/u)
+    return true
+  })
+})
+
 test('脚本按 UTF-8 字节计限并拒绝空白和协议控制字符', async t => {
   const f = fixture(t, () => ok(''))
   for (const script of [' ', '中'.repeat(5500), 'a\u0000b', 'a\rb']) {

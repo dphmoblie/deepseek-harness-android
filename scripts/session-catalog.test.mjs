@@ -47,12 +47,23 @@ function addSession(root, options) {
     updatedAt = BASE_TIME,
     compressed = false,
     compressedFrames = false,
+    // 日志第一行（`type: "session"`）的额外字段：子代理用它带 parentSession / agentPreset。
+    header = {},
     file = compressed ? 'session.v4.jsonl.zstd' : 'session.v4.jsonl',
   } = options
   const dir = join(root, project, directory)
   mkdirSync(dir, { recursive: true })
   const target = join(dir, file)
-  const text = jsonl([{ version: 4, id: directory, createdAt: BASE_TIME, isSeeded: false, delegationDepth: 0, cwd: `/root/secret-project/${SENTINEL}` }, ...lines])
+  const text = jsonl([{
+    type: 'session',
+    version: 4,
+    id: directory,
+    createdAt: BASE_TIME,
+    isSeeded: false,
+    delegationDepth: 0,
+    cwd: `/root/secret-project/${SENTINEL}`,
+    ...header,
+  }, ...lines])
   if (compressed && compressedFrames) {
     const lines = text.split('\n')
     const header = `${lines.shift()}\n`
@@ -112,15 +123,66 @@ test('只回元数据：标题取最后一条 session/title，正文与路径不
   // 排序按最近更新倒序，且 updatedAt 来自日志文件修改时间。
   assert.deepEqual(report.sessions.map((session) => session.id), ['session-bbbb2222', 'session-aaaa1111'])
   assert.ok(Math.abs(compressed.updatedAt - (BASE_TIME + 9000)) < 2000)
-  // 白名单：只有这三个字段；正文、cwd、文件名一律不出现。
+  // 白名单：只有这四个字段（depth 恒在），可选字段只在真实存在时出现；
+  // 正文、cwd、文件名一律不出现。
   for (const session of report.sessions) {
-    assert.deepEqual(Object.keys(session).sort(), ['id', 'title', 'updatedAt'])
+    assert.deepEqual(Object.keys(session).sort(), ['depth', 'id', 'title', 'updatedAt'])
   }
   const serialized = JSON.stringify(report)
   assert.ok(!serialized.includes(SENTINEL), '正文哨兵不得出现在输出里')
   assert.ok(!serialized.includes('secret-project'), '路径不得出现在输出里')
   assert.ok(!serialized.includes('.dsh'), '访客路径不得出现在输出里')
   assert.ok(!serialized.includes('session.v4.jsonl'), '会话文件名不得出现在输出里')
+})
+
+test('子代理会话带上 depth / parentId / agentName；坏字段只丢自己不丢整条', async () => {
+  const root = createRoot()
+  addSession(root, {
+    directory: 'session-parent',
+    updatedAt: BASE_TIME + 9000,
+    lines: [title('父会话')],
+  })
+  addSession(root, {
+    directory: 'session-child',
+    updatedAt: BASE_TIME + 8000,
+    header: { delegationDepth: 1, parentSession: 'session-parent', agentPreset: 'cordis' },
+    lines: [],
+  })
+  // 三个字段全不合法：深度越界、父 id 带路径片段、预设名带空格。
+  addSession(root, {
+    directory: 'session-badchild',
+    updatedAt: BASE_TIME + 7000,
+    header: { delegationDepth: 9, parentSession: '../escape', agentPreset: 'bad name!' },
+    lines: [],
+  })
+
+  const report = await buildCatalog(50, root)
+  const byId = new Map(report.sessions.map((session) => [session.id, session]))
+
+  // 主会话：深度 0，且没有父/预设两个可选字段。
+  assert.equal(byId.get('session-parent').depth, 0)
+  assert.equal('parentId' in byId.get('session-parent'), false)
+  assert.equal('agentName' in byId.get('session-parent'), false)
+
+  // 子代理：三个字段原样带出，界面据此折叠进父会话。
+  assert.deepEqual(byId.get('session-child'), {
+    id: 'session-child',
+    title: '',
+    depth: 1,
+    parentId: 'session-parent',
+    agentName: 'cordis',
+    updatedAt: byId.get('session-child').updatedAt,
+  })
+
+  // 坏字段只丢字段：会话仍然在列表里（少列一条同样是在编造「没有这个会话」）。
+  const bad = byId.get('session-badchild')
+  assert.equal(bad.depth, 0)
+  assert.equal('parentId' in bad, false)
+  assert.equal('agentName' in bad, false)
+
+  // cwd 仍然不外传（这是整条通道的第一条边界）。
+  assert.ok(!JSON.stringify(report).includes('/root/secret-project'))
+  assert.ok(!JSON.stringify(report).includes(SENTINEL))
 })
 
 test('读取 Harness 的多帧 zstd 日志：标题位于 header 后的追加帧', async () => {

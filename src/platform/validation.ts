@@ -69,6 +69,12 @@ import type {
   RuntimeSessionSnapshot,
   RuntimeSessionSnapshotRestoreResult,
   RuntimeSessionSnapshotState,
+  PreserveCategory,
+  PreserveDiscardResult,
+  PreserveItem,
+  PreservePending,
+  PreserveRecoverResult,
+  PreserveState,
   RuntimeResidueCleanupState,
   RuntimeResidueState,
   RuntimeSettings,
@@ -2266,6 +2272,10 @@ const MAX_RUNTIME_SESSIONS = 50
 const MAX_SESSION_TITLE_CHARS = 200
 /** 更新时间上限（毫秒，2100-01-01）：明显越界的取值视为不可信。 */
 const MAX_SESSION_UPDATED_AT = 4_102_444_800_000
+/** 委派深度上限：与原生侧 `SessionCatalogPayload.MAX_DEPTH`、访客脚本同值。 */
+const MAX_SESSION_DEPTH = 8
+/** 子代理预设名（`agentPreset`）：与原生侧 `AGENT_NAME` 同一套字符集与长度。 */
+const SESSION_AGENT_NAME = /^[A-Za-z0-9._-]{1,32}$/
 /** 受控的读取失败原因：多一个少一个都要在这里显式登记，界面才能给出对应说明。 */
 const SESSION_LIST_REASONS = new Set<RuntimeSessionListReason>([
   'RUNTIME_NOT_INSTALLED',
@@ -2400,7 +2410,22 @@ export function validateRuntimeSessionListResult(value: unknown): RuntimeSession
     if (!Number.isSafeInteger(updatedAt) || (updatedAt as number) < 0 || (updatedAt as number) > MAX_SESSION_UPDATED_AT) {
       throw new Error('会话更新时间格式无效')
     }
-    return { id, title, updatedAt: updatedAt as number }
+    // 分组字段是可选的（旧版桥不返回）。缺失按「主会话、无父」处理；
+    // 一旦出现就必须合法——原生侧已经做过同一套校验，这里再挡一次是最后的约定点。
+    const depth = entry.depth === undefined ? 0 : entry.depth
+    if (!Number.isSafeInteger(depth) || (depth as number) < 0 || (depth as number) > MAX_SESSION_DEPTH) {
+      throw new Error('会话委派深度格式无效')
+    }
+    const parentId = entry.parentId
+    if (parentId !== undefined && !isCatalogSessionId(parentId)) throw new Error('会话父标识格式无效')
+    const agentName = entry.agentName
+    if (agentName !== undefined && (typeof agentName !== 'string' || !SESSION_AGENT_NAME.test(agentName))) {
+      throw new Error('会话子代理名称格式无效')
+    }
+    const summary: RuntimeSessionSummary = { id, title, updatedAt: updatedAt as number, depth: depth as number }
+    if (parentId !== undefined) summary.parentId = parentId
+    if (agentName !== undefined) summary.agentName = agentName
+    return summary
   })
 
   return { status: 'ready', sessions, truncated: requiredBoolean(result.truncated, '会话列表截断标记') }
@@ -3008,3 +3033,99 @@ export function validateModelCatalogResult(value: unknown): ModelCatalogResult {
   }
   return { ...connectivity, models }
 }
+
+/**
+ * 「数据保留」页的只读状态。
+ *
+ * 上限与原生侧同值（8 个目录、每个目录 32 项）：超出的载荷视为不可信，而不是悄悄截断——
+ * 静默少列一项，用户就会以为那项数据不在了。`report` 允许为 `null`（旧版本留下的目录没有清单），
+ * 这不是错误，而是「这次没有回填记录」。
+ */
+export function validatePreserveState(value: unknown): PreserveState {
+  const result = asRecord(value, '数据保留状态')
+  const source = result.pending
+  if (!Array.isArray(source) || source.length > MAX_PRESERVE_DIRECTORIES) throw new Error('数据保留状态格式无效')
+  const pending: PreservePending[] = source.map(item => {
+    const entry = asRecord(item, '数据保留条目')
+    const id = entry.id
+    if (typeof id !== 'string' || !PRESERVE_ID.test(id)) throw new Error('数据保留目录标识格式无效')
+    const updatedAt = entry.updatedAt
+    if (!Number.isSafeInteger(updatedAt) || (updatedAt as number) < 0 || (updatedAt as number) > MAX_SESSION_UPDATED_AT) {
+      throw new Error('数据保留更新时间格式无效')
+    }
+    const items = entry.items
+    if (!Array.isArray(items) || items.length > MAX_PRESERVE_ITEMS) throw new Error('数据保留条目格式无效')
+    const parsed: PreserveItem[] = items.map(raw => {
+      const value = asRecord(raw, '数据保留项')
+      const slot = value.slot
+      if (typeof slot !== 'string' || !PRESERVE_SLOT.test(slot)) throw new Error('数据保留槽位格式无效')
+      const category = value.category
+      if (typeof category !== 'string' || !PRESERVE_CATEGORIES.has(category as PreserveCategory)) {
+        throw new Error('数据保留分类格式无效')
+      }
+      const path = value.path
+      if (typeof path !== 'string' || path.length > MAX_PRESERVE_PATH_CHARS || containsControlCharacter(path)) {
+        throw new Error('数据保留路径格式无效')
+      }
+      return {
+        slot,
+        category: category as PreserveCategory,
+        path,
+        bytes: byteCount(value.bytes, '数据保留体积格式无效'),
+        files: byteCount(value.files, '数据保留文件数格式无效'),
+      }
+    })
+    const report = entry.report === null || entry.report === undefined ? null : asRecord(entry.report, '数据保留回填结果')
+    return {
+      id,
+      updatedAt: updatedAt as number,
+      bytes: byteCount(entry.bytes, '数据保留体积格式无效'),
+      items: parsed,
+      report: report === null ? null : {
+        restored: byteCount(report.restored, '数据保留回填数格式无效'),
+        merged: byteCount(report.merged, '数据保留合并数格式无效'),
+        conflicts: Array.isArray(report.conflicts)
+          ? report.conflicts.filter((item): item is string => typeof item === 'string' && item.length <= 400)
+          : [],
+      },
+    }
+  })
+  return { pending }
+}
+
+/** 取回结果：文件数、字节数与跳过的符号链接数都必须是合法的非负整数。 */
+export function validatePreserveRecoverResult(value: unknown): PreserveRecoverResult {
+  const result = asRecord(value, '数据取回结果')
+  const id = result.id
+  if (typeof id !== 'string' || !PRESERVE_ID.test(id)) throw new Error('数据保留目录标识格式无效')
+  const target = result.target
+  if (typeof target !== 'string' || target.length === 0 || target.length > MAX_PRESERVE_PATH_CHARS || containsControlCharacter(target)) {
+    throw new Error('数据取回目标格式无效')
+  }
+  return {
+    id,
+    target,
+    files: byteCount(result.files, '数据取回文件数格式无效'),
+    bytes: byteCount(result.bytes, '数据取回体积格式无效'),
+    skippedSymlinks: byteCount(result.skippedSymlinks, '数据取回符号链接数格式无效'),
+  }
+}
+
+/** 删除结果：只接受布尔值，避免把「没删掉」显示成成功。 */
+export function validatePreserveDiscardResult(value: unknown): PreserveDiscardResult {
+  const result = asRecord(value, '数据删除结果')
+  const id = result.id
+  if (typeof id !== 'string' || !PRESERVE_ID.test(id)) throw new Error('数据保留目录标识格式无效')
+  const discarded = result.discarded
+  if (typeof discarded !== 'boolean') throw new Error('数据删除状态格式无效')
+  return { id, discarded }
+}
+
+/** 暂存目录名与原生侧 `preserve-<uuid>` 同一形态。 */
+const PRESERVE_ID = /^preserve-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
+/** 槽位名：整树槽位（可带 `/root` 下的子路径）、旧版逐项槽位，或 `workspace`/`workspace-N`。 */
+const PRESERVE_SLOT = /^(?:guest-home(?:\/[A-Za-z0-9._@+-]+)?|sessions|settings\.yaml|\.credentials\.yaml|attachments|skills|plugin-manager|workspace(?:-[0-9]+)?)$/u
+const PRESERVE_CATEGORIES = new Set<PreserveCategory>(['conversations', 'plugins', 'files', 'settings'])
+const MAX_PRESERVE_DIRECTORIES = 8
+const MAX_PRESERVE_ITEMS = 32
+const MAX_PRESERVE_PATH_CHARS = 200

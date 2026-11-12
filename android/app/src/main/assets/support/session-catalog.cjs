@@ -10,8 +10,10 @@
  * 安全边界（改动前先读 `docs/壳页会话列表接线调研.md`）：
  * - **只读**：不写盘、不改权限、不移动文件，也不解压到磁盘（全程内存流式处理）。
  * - **只回元数据**：输出对象里只有 `id`（会话目录名可逆解码）、`title`（日志里最后一条
- *   `session/title` 事件的标题，或按宿主同款规则从首条用户消息折叠出的回退标题）与
- *   `updatedAt`（会话日志的修改时间）。**不含**会话正文、消息片段、工具输出、`cwd` 或任何路径。
+ *   `session/title` 事件的标题，或按宿主同款规则从首条用户消息折叠出的回退标题）、
+ *   `updatedAt`（会话日志的修改时间），以及分组用的 `depth` / `parentId` / `agentName`
+ *   （来自日志第一行的 `delegationDepth` / `parentSession` / `agentPreset`）。
+ *   **不含**会话正文、消息片段、工具输出、`cwd` 或任何路径。
  * - **回退标题只在没有标题事件时才去扫**：整份日志里一条 `session/title` 事件都没有、且日志被
  *   完整扫完（没撞上限）时，才取窗口内读到的首条用户消息折叠成回退标题；折叠结果最多 40 字节，
  *   折叠完原始文本立刻丢弃，因此正文不会随标题漏出去（`scripts/session-catalog.test.mjs` 用哨兵串钉住了这一点）。
@@ -27,7 +29,7 @@
  *   - `limit`   返回条数上限，默认 50，最大 50；
  *   - `rootDir` **仅供本机测试**（默认 `/root/.dsh/sessions`）；应用从不传它。
  *
- * 成功：stdout 一行 `{"sessions":[{id,title,updatedAt}...],"truncated":bool}`；
+ * 成功：stdout 一行 `{"sessions":[{id,title,updatedAt,depth,parentId?,agentName?}...],"truncated":bool}`；
  * 失败：stdout 一行 `{"error":"<受控码>"}` 且退出码为 1。
  * `truncated` 为真表示「没读全」——会话条数超过上限、本次时间预算用尽，或部分项目目录
  * 无法读取；若所有项目都无法读取则走 `error`，绝不用空列表冒充「没有会话」。
@@ -65,6 +67,13 @@ const FALLBACK_MAX_BYTES = 40
 const USER_MESSAGE_MAX_CHARS = 4096
 const MAX_ID_CHARS = 200
 const ZSTD_MAGIC = 0xFD2FB528
+/**
+ * 子代理的委派深度上限：`delegationDepth` 超出 `0..8` 时按主会话（0）处理，
+ * **只丢这个字段、不丢整条会话**——少列一条会话同样是在编造「没有这个会话」。
+ */
+const MAX_DELEGATION_DEPTH = 8
+/** `agentPreset` 的真实形态是包名式标识（实测 `standard` / `cordis`），过宽就等于把任意文本带出去。 */
+const AGENT_NAME = /^[A-Za-z0-9._-]{1,32}$/
 
 /** 会话日志文件名：`session.jsonl`（旧 v0）或 `session.v<N>.jsonl`，zstd 编码再加 `.zstd`。 */
 const SESSION_FILE = /^session(?:\.v([0-9]+))?\.jsonl(?:\.zstd)?$/
@@ -152,6 +161,36 @@ function decodeSegment(name) {
   if (ID_FORBIDDEN.test(decoded)) return null
   if (decoded === '.' || decoded === '..') return null
   return decoded
+}
+
+/** 会话 id 的形态约束：与目录解码同一条规则，另外不接受空白（子代理的父 id 也走这里）。 */
+function isSessionIdentifier(value) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_ID_CHARS) return false
+  if (value.startsWith('.')) return false
+  if (ID_FORBIDDEN.test(value) || /\s/.test(value)) return false
+  return true
+}
+
+/**
+ * 会话日志第一行（`type: "session"`）里的分组元数据。
+ *
+ * 实测字段：主会话 `delegationDepth: 0`；子代理 `delegationDepth: 1` + `parentSession`
+ * （父会话 id）+ `agentPreset`（`standard` / `cordis`）。三个字段都**只决定怎么分组**，
+ * `cwd` 照旧丢弃。任何一个字段不合法都只丢该字段：
+ * - 深度越界 / 不是整数 → 0（当主会话，仍列出）；
+ * - 父 id 不合规 → 没有父（界面放进「未关联子代理」，不静默隐藏）；
+ * - 预设名不合规 → 不显示 `agentName`（界面退回「子代理」）。
+ */
+function sessionMeta(event) {
+  if (event === null || typeof event !== 'object') return { depth: 0 }
+  if (event.type !== undefined && event.type !== 'session') return { depth: 0 }
+  const rawDepth = event.delegationDepth
+  const depth = Number.isInteger(rawDepth) && rawDepth >= 0 && rawDepth <= MAX_DELEGATION_DEPTH ? rawDepth : 0
+  const parent = event.parentSession
+  const parentId = isSessionIdentifier(parent) ? parent : undefined
+  const agent = event.agentPreset
+  const agentName = typeof agent === 'string' && AGENT_NAME.test(agent) ? agent : undefined
+  return { depth, parentId, agentName }
 }
 
 /** 目录项是不是「普通子目录」：跳过软链、文件与点开头的条目（含 `.sessions-trash`）。 */
@@ -346,12 +385,15 @@ async function* boundedLog(log, deadline, scan, hooks) {
 }
 
 /**
- * 扫描一份会话日志，取出标题。
+ * 扫描一份会话日志，取出标题与分组元数据。
  *
  * 标题口径与宿主一致：**最后一条 `session/title` 事件**（`foldSessionTitle` 取 `findLast`）。
  * 回退标题只在**一条标题事件都没有、并且日志被完整扫完**时才折叠：取窗口内读到的首条用户消息，
- * 按 `dsh-base` 的配置折叠成最多 5 个词 / 40 字节。两者都取不到时返回空串（界面显示「未命名会话」）
+ * 按 `dsh-base` 的配置折叠成最多 5 个词 / 40 字节。两者都取不到时标题为空串（界面显示「未命名会话」）
  * ——不编造、也不用 cwd 冒充标题。
+ *
+ * 分组元数据取自**日志第一行**（`type: "session"`，见 {@link sessionMeta}）：它本来就要被扫到，
+ * 因此不额外多读一次文件；拿不到（旧日志、坏行）时按主会话处理。
  *
  * 读取量受 `MAX_SCAN_BYTES` 与总时间预算双重约束：到量立即停止读取并正常收尾；**到量时仍未找到
  * 标题事件就不返回标题**，不会继续读下去凑一个。用户消息的正文（`data.content`）只有在确认
@@ -359,11 +401,10 @@ async function* boundedLog(log, deadline, scan, hooks) {
  *
  * `hooks` 仅供单测观察扫描行为（运行时从不传，默认零开销）：
  * - `onScanned(bytes)`：每读完一行报告一次累计解压字节数；
- * - `onInputRead(bytes)`：关闭输入时报告实际读取字节数；
  * - `onInputRead(bytes)`：关闭输入流时报告实际读取字节数（压缩日志按压缩量统计）；
  * - `onContentParsed()`：真正去解析用户消息正文时调用一次（有标题事件时永不调用）。
  */
-async function readTitle(log, deadline, hooks = null) {
+async function readSession(log, deadline, hooks = null) {
   if (log.compressed && typeof zlib.createZstdDecompress !== 'function') {
     throw controlledError('SESSION_CATALOG_ZSTD_UNSUPPORTED')
   }
@@ -373,12 +414,18 @@ async function readTitle(log, deadline, hooks = null) {
   let consumed = 0
   let lastTitle = null
   let fallbackLine = null
+  // 分组元数据来自**日志第一行**（`type: "session"`）：它本来就要被读，所以不额外多读一次文件。
+  let meta = null
   // true 表示撞到扫描上限或时间预算，日志**没**读完：此时不允许再折叠回退标题。
   try {
     for await (const line of lines) {
       consumed += Buffer.byteLength(line, 'utf8') + 1
       if (hooks !== null && typeof hooks.onScanned === 'function') hooks.onScanned(consumed)
       // 先用子串粗筛，绝大多数行（工具输出等）连 JSON.parse 都不需要。
+      if (meta === null && line.includes('"delegationDepth"')) {
+        const header = parseEvent(line)
+        if (header !== null) meta = sessionMeta(header)
+      }
       if (line.includes('"session/title"')) {
         const event = parseEvent(line)
         const data = event !== null && event.type === 'session/title' ? event.data : null
@@ -401,16 +448,17 @@ async function readTitle(log, deadline, hooks = null) {
     lines.close()
     source.destroy()
   }
+  const detail = meta === null ? { depth: 0 } : meta
   const normalized = lastTitle === null ? '' : normalizeSessionTitle(lastTitle, MAX_TITLE_BYTES)
-  if (normalized !== '') return normalized
+  if (normalized !== '') return { ...detail, title: normalized }
   // 撞上限（或预算用尽）仍未找到标题事件：如实不返回标题，绝不继续读下去凑一个。
-  if (scan.exhausted || fallbackLine === null) return ''
+  if (scan.exhausted || fallbackLine === null) return { ...detail, title: '' }
   const event = parseEvent(fallbackLine)
-  if (event === null || event.type !== 'user/message') return ''
+  if (event === null || event.type !== 'user/message') return { ...detail, title: '' }
   if (hooks !== null && typeof hooks.onContentParsed === 'function') hooks.onContentParsed()
   const text = userMessageText(event)
-  if (text === null) return ''
-  return fallbackSessionTitle(text, FALLBACK_MAX_WORDS, FALLBACK_MAX_BYTES)
+  if (text === null) return { ...detail, title: '' }
+  return { ...detail, title: fallbackSessionTitle(text, FALLBACK_MAX_WORDS, FALLBACK_MAX_BYTES) }
 }
 
 /** 单行 JSON → 事件对象；解析失败或不是对象时返回 `null`（坏行跳过，不让整次读取失败）。 */
@@ -424,7 +472,7 @@ function parseEvent(line) {
   }
 }
 
-/** 主流程：列目录 → 按最近更新排序取前 N 条 → 逐条读标题。`hooks` 仅供单测观察（见 `readTitle`）。 */
+/** 主流程：列目录 → 按最近更新排序取前 N 条 → 逐条读标题与分组元数据。`hooks` 仅供单测观察（见 `readSession`）。 */
 async function buildCatalog(limit, root, hooks = null) {
   const started = Date.now()
   const deadline = started + TIME_BUDGET_MS
@@ -440,15 +488,19 @@ async function buildCatalog(limit, root, hooks = null) {
   let truncated = candidates.length > selected.length || unreadable > 0
   const sessions = []
   for (const candidate of selected) {
-    let title = ''
+    let detail = { depth: 0, title: '' }
     try {
-      title = await readTitle(candidate.log, deadline, hooks)
+      detail = await readSession(candidate.log, deadline, hooks)
     } catch (error) {
       if (error !== null && typeof error === 'object' && error.code === 'SESSION_CATALOG_ZSTD_UNSUPPORTED') throw error
-      // 单个会话读不动（权限、损坏）：仍然列出它的 id 与时间，只是没有标题。
-      title = ''
+      // 单个会话读不动（权限、损坏）：仍然列出它的 id 与时间，只是没有标题、按主会话处理。
+      detail = { depth: 0, title: '' }
     }
-    sessions.push({ id: candidate.id, title, updatedAt: candidate.updatedAt })
+    const session = { id: candidate.id, title: detail.title, updatedAt: candidate.updatedAt, depth: detail.depth }
+    // 可选字段只在真实存在时出现：界面据此区分「子代理」与「没有父的子代理」。
+    if (detail.parentId !== undefined) session.parentId = detail.parentId
+    if (detail.agentName !== undefined) session.agentName = detail.agentName
+    sessions.push(session)
     if (Date.now() > deadline) {
       truncated = true
       break

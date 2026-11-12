@@ -535,6 +535,28 @@ class MobileRuntimeController(
         snapshots.delete(id)
     }
 
+    /**
+     * 一次运行时更新留下的待处理数据（「数据保留」页）。
+     *
+     * 只读：不移动、不删除。旧版本留下的暂存目录没有回填清单也能列出来（按文件系统实际内容）。
+     */
+    fun preserveState(): PreserveStore.State = lifecycleLock.withLock {
+        ensureOpen()
+        PreserveStore(store.runtimeParent, store.currentRoot).state()
+    }
+
+    /** 把一份待处理副本取回到工作区 `recovered/<id>/`：复制、同名不覆盖。 */
+    fun recoverPreservedData(id: String): PreserveStore.Recovered = lifecycleLock.withLock {
+        ensureOpen()
+        PreserveStore(store.runtimeParent, store.currentRoot).recover(id)
+    }
+
+    /** 丢弃一份待处理副本（用户显式删除）。只删暂存目录，绝不触碰当前运行时。 */
+    fun discardPreservedData(id: String): Boolean = lifecycleLock.withLock {
+        ensureOpen()
+        PreserveStore(store.runtimeParent, store.currentRoot).discard(id)
+    }
+
     /** 返回当前启动代次，供系统恢复入口校验控制器身份与取消竞态。 */
     fun currentStartEpoch(): Long = lifecycleLock.withLock {
         ensureOpen()

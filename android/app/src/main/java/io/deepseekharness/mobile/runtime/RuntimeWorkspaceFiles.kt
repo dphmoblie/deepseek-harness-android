@@ -1,4 +1,4 @@
-package io.deepseekharness.mobile.runtime
+﻿package io.deepseekharness.mobile.runtime
 
 import android.webkit.MimeTypeMap
 import java.io.File
@@ -14,14 +14,14 @@ import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributeView
 import java.nio.file.attribute.BasicFileAttributes
 
-/** Restricts all host-side access to ordinary files below the DSH workspace. */
+/** Restricts all host-side access to ordinary files below the guest home (`/root`). */
 class RuntimeWorkspaceFiles internal constructor(
     private val workspace: File,
     private val cacheDir: File,
     private val trustedParent: File,
 ) {
     constructor(store: RuntimeStore, cacheDir: File) : this(
-        File(store.currentRoot, "root/1"), cacheDir, store.runtimeParent.parentFile!!,
+        File(store.currentRoot, "root"), cacheDir, store.runtimeParent.parentFile!!,
     )
 
     data class Snapshot(val files: List<String>, val truncated: Boolean)

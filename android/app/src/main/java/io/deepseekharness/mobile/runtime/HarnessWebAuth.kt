@@ -4,7 +4,7 @@ import java.net.URI
 
 /** Validates the private DSH browser entry point before it can reach a WebView. */
 internal object HarnessWebAuth {
-    private val ENTRY = Regex("http://127\\.0\\.0\\.1:([1-9][0-9]{3,4})/\\?token=[A-Za-z0-9_-]{43}")
+    private val ENTRY = Regex("http://127\\.0\\.0\\.1:([1-9][0-9]{3,4})/\\?token=([A-Za-z0-9_-]{43})")
 
     fun parseLaunchUrl(raw: String, expectedPort: Int? = null): URI? {
         // Security: exact ASCII syntax excludes encoded hosts, duplicate queries and fragments.
@@ -16,9 +16,16 @@ internal object HarnessWebAuth {
     }
 
     /**
-     * 外置浏览器入口：令牌放查询串，由访客预载脚本兑换成 HttpOnly Cookie 后 302 去掉。
+     * 外置浏览器入口：两枚令牌都放查询串，由访客预载脚本校验并兑换成 Cookie 后 302 去掉。
      *
-     * 令牌是**浏览器专用**的那一枚，不是 Basic 密码；片段做不到这件事（片段不会发给服务器）。
+     * - [browserToken] 是**浏览器专用**的那一枚，不是 Basic 密码，负责通过应用自己的门；
+     * - dsh 的启动令牌从 [raw] 的 `?token=` 中原样取出，仍使用 dsh 自己的 `token` 参数，
+     *   负责通过 dsh 的浏览器认证门。
+     *   它不再依赖预载从 stdout 猜测：Android 已经拿到唯一可信的启动 URL，直接交给预载即可，
+     *   避免预载截获不到或截获到错误行时把浏览器送到 dsh 的 401 页。
+     *
+     * 片段做不到这件事（片段不会发给服务器），所以两枚令牌都必须放查询串；预载在 302 中
+     * 同时删除它们。最终浏览器历史里只留下 `/`，令牌不会因重定向被持久化。
      *
      * [sessionId] 放在**片段**里而不是查询串：查询串会被 dsh 自己的 `?token=` 登录跳转 303
      * 到 `./` 时整段丢掉，片段不会。前端适配脚本（dsh-mobile-session.js）在启动前把它写进
@@ -28,9 +35,11 @@ internal object HarnessWebAuth {
     fun browserLaunchUrl(raw: String, browserToken: String, sessionId: String? = null): URI? {
         val entry = parseLaunchUrl(raw) ?: return null
         if (!TOKEN_PATTERN.matches(browserToken)) return null
+        val dshToken = ENTRY.matchEntire(raw)?.groupValues?.get(2) ?: return null
         val fragment = sessionId?.takeIf { SESSION_ID.matches(it) }
             ?.let { "$SESSION_FRAGMENT=$it" }
-        return URI(entry.scheme, null, entry.host, entry.port, "/", "dshMobileToken=$browserToken", fragment)
+        val query = "dshMobileToken=$browserToken&token=$dshToken"
+        return URI(entry.scheme, null, entry.host, entry.port, "/", query, fragment)
     }
 
     /**

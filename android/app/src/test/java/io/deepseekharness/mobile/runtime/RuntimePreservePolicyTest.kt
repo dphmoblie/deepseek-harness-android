@@ -2,6 +2,7 @@ package io.deepseekharness.mobile.runtime
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -193,17 +194,19 @@ class RuntimePreservePolicyTest {
     }
 
     @Test
-    fun treatsFilesAndNonEmptyDirectoriesAsRealConflicts() {
-        // 非空目录：真冲突，保留用户数据不动、不覆盖也不删除。
+    fun mergesIntoNonEmptyDirectoriesButStillTreatsFilesAsConflicts() {
+        // 非空目录：逐项合并（同名不覆盖），不再整项判冲突 —— 新镜像自带示例文件时
+        // 旧实现会把整块用户数据留在 preserve-* 里，用户看到的就是「文件没了」。
         assertEquals(
-            RuntimePreservePolicy.RestoreDecision.CONFLICT,
+            RuntimePreservePolicy.RestoreDecision.MERGE,
             RuntimePreservePolicy.decideRestore(present = true, isDirectory = true, childCount = 1),
         )
         assertEquals(
-            RuntimePreservePolicy.RestoreDecision.CONFLICT,
+            RuntimePreservePolicy.RestoreDecision.MERGE,
             RuntimePreservePolicy.decideRestore(present = true, isDirectory = true, childCount = 1024),
         )
-        // 文件（即使长度为 0）永远不是空壳，settings.yaml / .credentials.yaml 走的就是这条判定。
+        // 文件（即使长度为 0）永远不是空壳，settings.yaml / .credentials.yaml 走的就是这条判定：
+        // 同名文件只能判冲突，绝不覆盖新运行时里的配置。
         assertEquals(
             RuntimePreservePolicy.RestoreDecision.CONFLICT,
             RuntimePreservePolicy.decideRestore(present = true, isDirectory = false, childCount = 0),
@@ -212,6 +215,71 @@ class RuntimePreservePolicyTest {
             RuntimePreservePolicy.RestoreDecision.CONFLICT,
             RuntimePreservePolicy.decideRestore(present = true, isDirectory = false, childCount = 1),
         )
+        // 显式关闭合并时回到旧的「非空即冲突」语义（留给需要整项判断的调用方）。
+        assertEquals(
+            RuntimePreservePolicy.RestoreDecision.CONFLICT,
+            RuntimePreservePolicy.decideRestore(present = true, isDirectory = true, childCount = 1, merge = false),
+        )
+    }
+
+    @Test
+    fun preservesTheWholeGuestHomeAndStillUnderstandsLegacySlots() {
+        // 新口径：整块保留 `/root`，槽位只有一个。
+        assertEquals(listOf("guest-home" to "root"), RuntimePreservePolicy.preservedEntries().map { it.slot to it.path })
+        assertEquals(mapOf("guest-home" to "root"), RuntimePreservePolicy.preservedPaths())
+        // 例外表：旧令牌、旧脚本、死链与缓存不搬回新根目录；用户自己的脚本与目录照常。
+        for (skip in listOf(
+            ".dsh-mobile/runtime-secrets.env",
+            ".dsh-mobile/launcher-plugins.patch.json",
+            ".dsh-mobile/session-catalog.cjs",
+            ".dsh-mobile/sandbox-runner.sh",
+            ".dsh/profiles",
+            ".dsh/profiles/web",
+            ".dsh/cache",
+        )) {
+            assertTrue(skip, RuntimePreservePolicy.shouldRestoreGuestPath(skip))
+        }
+        for (keep in listOf(".dsh/sessions", ".dsh/settings.yaml", ".dsh-mobile/plugin-manager", "1/notes.md", "dsh/audit.md", ".bashrc")) {
+            assertFalse(keep, RuntimePreservePolicy.shouldRestoreGuestPath(keep))
+        }
+        // 旧版本留下的暂存目录（逐项槽位）仍然能被认得，并保留默认工作区与扩展槽位。
+        val legacy = RuntimePreservePolicy.restoreSlots()
+        assertEquals("root/.dsh/sessions", legacy["sessions"])
+        assertEquals("root/.dsh-mobile/plugin-manager", legacy["plugin-manager"])
+        assertEquals("root/1", legacy["workspace"])
+        assertEquals("root/1", legacy["workspace-2"])
+        assertTrue(RuntimePreservePolicy.isKnownSlot("workspace-2"))
+        assertFalse(RuntimePreservePolicy.isKnownSlot("workspace-99"))
+        // 旧清单里的路径仍然要过同一套穿越检查（只用于读旧目录，不再参与新事务）。
+        for (bad in listOf("/root/dsh", "root/../etc", "root/", "root//x", "root/a\\b", "etc/passwd", "root/a/./b")) {
+            assertNull(bad, RuntimePreservePolicy.normalizeWorkspaceRoot(bad))
+        }
+        assertEquals("root/dsh", RuntimePreservePolicy.normalizeWorkspaceRoot("root/dsh/"))
+    }
+
+    @Test
+    fun readsBackThePreserveReportAndRejectsTamperedPaths() {
+        // 新版清单只有整树槽位；旧版清单里的逐项槽位（含 workspace-2）也仍要认得。
+        val paths = LinkedHashMap<String, String>()
+        paths[RuntimePreservePolicy.GUEST_HOME_SLOT] = RuntimePreservePolicy.GUEST_HOME_ROOT
+        paths["workspace-2"] = "root/dsh"
+        val text = RuntimePreservePolicy.reportJson(paths, restored = 2, merged = 7, conflicts = listOf("workspace/audit"))
+        val parsed = RuntimePreservePolicy.parseReportPaths(text)
+        assertNotNull(parsed)
+        assertEquals("root/dsh", parsed?.get("workspace-2"))
+        assertEquals("root", parsed?.get(RuntimePreservePolicy.GUEST_HOME_SLOT))
+        // 被改坏的清单宁可整份不认：按一份可疑的路径回填等于把数据搬到别处。
+        for (bad in listOf(
+            "",
+            "not json",
+            """{"items":{"workspace":"../etc"}}""",
+            """{"items":{"workspace":"root/../escape"}}""",
+            """{"items":{"unknown-slot":"root/x"}}""",
+            """{"items":{"workspace":7}}""",
+            """{"items":{}}""",
+        )) {
+            assertNull(bad, RuntimePreservePolicy.parseReportPaths(bad))
+        }
     }
 
     @Test

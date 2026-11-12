@@ -51,6 +51,9 @@ import {
   validateRuntimeSessionListResult,
   validateRuntimeSessionSnapshotRestoreResult,
   validateRuntimeSessionSnapshotState,
+  validatePreserveState,
+  validatePreserveRecoverResult,
+  validatePreserveDiscardResult,
   validateRuntimeWorkspaceFileList,
   validateRuntimeWorkspaceFilePath,
   validateRuntimeSource,
@@ -2170,8 +2173,8 @@ describe('会话列表元数据校验', () => {
   const liveReady = {
     status: 'ready',
     sessions: [
-      { id: 'aaaa1111-bbbb-4ccc-8ddd-eeee22223333', title: '整理运行时会话列表', updatedAt: 1770000000000 },
-      { id: 'local-1700000000000', title: '', updatedAt: 1769999999000 },
+      { id: 'aaaa1111-bbbb-4ccc-8ddd-eeee22223333', title: '整理运行时会话列表', updatedAt: 1770000000000, depth: 0 },
+      { id: 'local-1700000000000', title: '', updatedAt: 1769999999000, depth: 0 },
     ],
     truncated: false,
   }
@@ -2182,7 +2185,7 @@ describe('会话列表元数据校验', () => {
     expect(validateRuntimeSessionListResult(liveReady)).toEqual(liveReady)
   })
 
-  it('只保留元数据三个键：正文、片段与路径混进载荷也到不了界面', () => {
+  it('只保留元数据键：正文、片段与路径混进载荷也到不了界面', () => {
     const tainted = ready({
       sessions: [session({
         body: 'ZZ-CONVERSATION-BODY-SENTINEL-ZZ',
@@ -2194,9 +2197,42 @@ describe('会话列表元数据校验', () => {
 
     const parsed = validateRuntimeSessionListResult(tainted)
 
-    expect(Object.keys(parsed.status === 'ready' ? parsed.sessions[0] : {})).toEqual(['id', 'title', 'updatedAt'])
+    // `depth` 是分组字段（恒在，缺省补 0）；`parentId`/`agentName` 只在原生真给了才出现。
+    expect(Object.keys(parsed.status === 'ready' ? parsed.sessions[0] : {}))
+      .toEqual(['id', 'title', 'updatedAt', 'depth'])
     expect(JSON.stringify(parsed)).not.toContain('ZZ-CONVERSATION-BODY-SENTINEL-ZZ')
     expect(JSON.stringify(parsed)).not.toContain('secret-project')
+  })
+
+  it('分组字段：depth 缺省补 0，parentId / agentName 合法才保留，非法即报错', () => {
+    const child = session({ id: 'session-child', title: '', depth: 1, parentId: 'aaaa1111-bbbb-4ccc-8ddd-eeee22223333', agentName: 'cordis' })
+    const parsed = validateRuntimeSessionListResult(ready({ sessions: [child] }))
+    expect(parsed.status === 'ready' ? parsed.sessions[0] : {}).toEqual({
+      id: 'session-child',
+      title: '',
+      updatedAt: 1770000000000,
+      depth: 1,
+      parentId: 'aaaa1111-bbbb-4ccc-8ddd-eeee22223333',
+      agentName: 'cordis',
+    })
+    // 旧版桥不返回 depth：补 0，界面不会把历史载荷当成子代理。
+    const legacy = session({ id: 'session-legacy' })
+    delete (legacy as { depth?: number }).depth
+    const legacyParsed = validateRuntimeSessionListResult(ready({ sessions: [legacy] }))
+    expect(legacyParsed.status === 'ready' ? legacyParsed.sessions[0].depth : undefined).toBe(0)
+
+    for (const depth of [-1, 9, 1.5, Number.NaN, '1', null]) {
+      expect(() => validateRuntimeSessionListResult(ready({ sessions: [session({ depth })] })), String(depth))
+        .toThrow('会话委派深度格式无效')
+    }
+    for (const parentId of ['', '.hidden', '../escape', 'a b', 'a/b', 7, null]) {
+      expect(() => validateRuntimeSessionListResult(ready({ sessions: [session({ parentId })] })), String(parentId))
+        .toThrow('会话父标识格式无效')
+    }
+    for (const agentName of ['', 'bad name', '带中文', 'x'.repeat(33), 7, null]) {
+      expect(() => validateRuntimeSessionListResult(ready({ sessions: [session({ agentName })] })), String(agentName))
+        .toThrow('会话子代理名称格式无效')
+    }
   })
 
   it('ready + 空列表是合法的：那就是「确实没有会话」', () => {
@@ -2676,5 +2712,66 @@ describe('内置供应商默认模型校验', () => {
     expect(validateSettingsUpdate({ ...base, defaultModels: {} }).defaultModels).toEqual({})
     expect(validateSettingsUpdate({ ...base }).defaultModels).toBeUndefined()
     expect(validateSettingsUpdate({ ...base, defaultModels: { openai: ' gpt-4o ' } }).defaultModels).toEqual({ openai: 'gpt-4o' })
+  })
+})
+
+describe('数据保留状态校验', () => {
+  const ID = 'preserve-0f8fad5b-d9cb-469f-a165-70867728950e'
+  const ready = {
+    pending: [{
+      id: ID,
+      updatedAt: 1_770_000_000_000,
+      bytes: 2048,
+      items: [
+        { slot: 'sessions', category: 'conversations', path: 'root/.dsh/sessions', bytes: 1024, files: 3 },
+        { slot: 'workspace-2', category: 'files', path: 'root/dsh', bytes: 1024, files: 1 },
+      ],
+      report: { restored: 1, merged: 2, conflicts: ['workspace/notes.md'] },
+    }],
+  }
+
+  it('接受原生侧的真实形状，字段逐字保留', () => {
+    expect(validatePreserveState(ready)).toEqual(ready)
+  })
+
+  it('旧版本留下的副本没有 report：允许为 null，不当作错误', () => {
+    const legacy = { pending: [{ ...ready.pending[0], report: null }] }
+    expect(validatePreserveState(legacy)).toEqual(legacy)
+  })
+
+  it('目录标识、槽位、分类与计数都按原生侧的同一套规则拒收', () => {
+    expect(() => validatePreserveState('nope')).toThrow('数据保留状态格式无效')
+    for (const id of ['', '../current', 'preserve-not-a-uuid', ID + '-x']) {
+      expect(() => validatePreserveState({ pending: [{ ...ready.pending[0], id }] }), id).toThrow('数据保留目录标识格式无效')
+    }
+    for (const slot of ['', 'workspace/x', 'unknown', '../sessions']) {
+      const items = [{ ...ready.pending[0].items[0], slot }]
+      expect(() => validatePreserveState({ pending: [{ ...ready.pending[0], items }] }), slot).toThrow('数据保留槽位格式无效')
+    }
+    for (const category of ['', 'pictures', 7]) {
+      const items = [{ ...ready.pending[0].items[0], category }]
+      expect(() => validatePreserveState({ pending: [{ ...ready.pending[0], items }] }), String(category)).toThrow('数据保留分类格式无效')
+    }
+    const negative = [{ ...ready.pending[0].items[0], bytes: -1 }]
+    expect(() => validatePreserveState({ pending: [{ ...ready.pending[0], items: negative }] })).toThrow('数据保留体积格式无效')
+    // 9 个目录、33 项都超出上限：静默截断会让用户以为那部分数据不在了。
+    const nine = Array.from({ length: 9 }, () => ready.pending[0])
+    expect(() => validatePreserveState({ pending: nine })).toThrow('数据保留状态格式无效')
+    const many = Array.from({ length: 33 }, () => ready.pending[0].items[0])
+    expect(() => validatePreserveState({ pending: [{ ...ready.pending[0], items: many }] })).toThrow('数据保留条目格式无效')
+  })
+
+  it('取回与删除结果只接受合法形状', () => {
+    expect(validatePreserveRecoverResult({ id: ID, target: `recovered/${ID}`, files: 4, bytes: 4096, skippedSymlinks: 0 }))
+      .toEqual({ id: ID, target: `recovered/${ID}`, files: 4, bytes: 4096, skippedSymlinks: 0 })
+    expect(() => validatePreserveRecoverResult({ id: 'x', target: 't', files: 1, bytes: 1, skippedSymlinks: 0 }))
+      .toThrow('数据保留目录标识格式无效')
+    expect(() => validatePreserveRecoverResult({ id: ID, target: '', files: 1, bytes: 1, skippedSymlinks: 0 }))
+      .toThrow('数据取回目标格式无效')
+    expect(() => validatePreserveRecoverResult({ id: ID, target: 't', files: -1, bytes: 1, skippedSymlinks: 0 }))
+      .toThrow('数据取回文件数格式无效')
+
+    expect(validatePreserveDiscardResult({ id: ID, discarded: true })).toEqual({ id: ID, discarded: true })
+    expect(() => validatePreserveDiscardResult({ id: ID, discarded: 'yes' })).toThrow('数据删除状态格式无效')
   })
 })

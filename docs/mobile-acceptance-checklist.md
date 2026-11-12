@@ -1,4 +1,4 @@
-# 移动端真机验收清单（随版本滚动，不绑定某个历史版本号）
+﻿# 移动端真机验收清单（随版本滚动，不绑定某个历史版本号）
 
 > 适用范围：荣耀 Android 16（arm64/16KB）及至少一台其他 arm64 真机。验收对象为
 > **同一个 Release** 中的内嵌 APK、`runtime-manifest.json` 与 `rootfs.bundle`
@@ -575,3 +575,82 @@ C 编译环境的能力探测、任务完成后的回对话与悬浮球改版。
 - [ ] 如果 S-Shizuku-1 仍失败，按顺序排除：设置页显示的应用版本是否真是 0.3.6；更新 Shizuku 后
       服务端是否已重启（旧服务端仍在运行会超时）；此前装过的临时包名测试包
       `io.deepseekharness.mobile.shizukutest` 是否已卸载。
+
+## 19. 右栏全屏时的鲸鱼入口与文件面板路径面包屑（本轮新增，六条）
+
+| # | 操作 | 预期 |
+|---|---|---|
+| S-文件-1 | 手机竖屏（≤720px）进 Harness 打开右栏「文件」标签 | 右栏标签条左侧不再有鲸鱼按钮压住「文件」标签的文件夹图标；标签整块可点 |
+| S-文件-2 | 在同一次会话里关闭右栏，再点左上角鲸鱼按钮展开左栏 | 鲸鱼按钮仍在原位、可点，左栏抽屉照旧展开（撤掉导轨只在右栏全屏打开时生效） |
+| S-文件-3 | 点「文件」标签里任意目录行展开两层（例如 `audit` → `sub`） | 顶栏路径变成 `/`、`root`、`dsh`、`audit`、`sub` 逐级可点的面包屑，最右一级高亮为当前目录 |
+| S-文件-4 | 点面包屑里的 `dsh`（工作区根） | 更深层的展开被收起，列表回到工作区根的条目；不刷新整页、不丢滚动条 |
+| S-文件-5 | 点面包屑里工作区之上的 `root` | 底部出现一条「工作区之外的目录不能浏览」的说明，**不**发起跳转、不报 `outside-workspace` 错误 |
+| S-文件-6 | 横屏、浅色/深色主题各重复一次 S-文件-3 与 S-文件-5 | 面包屑与提示都跟随主题配色，横屏下路径不被裁切成一行省略号贴住右侧工具按钮 |
+
+- [ ] 本轮两条改动都只有 JVM/jsdom 单测与静态分析（`scripts/harness-files-path.test.mjs`、
+      `harness-web/scripts/build-official-frontend.test.mjs`），**没有真机复测**；S-文件-1 与
+      S-文件-4 是本轮必测项。
+- [ ] 面包屑的跳转边界由 Host 决定：文件面板的根就是会话工作目录，`workspace-file/outside-workspace`
+      会拒绝根之上的路径，因此 `/root` 一类层级只显示原因、不提供跳转；不要为了"能点"去绕过它。
+
+## 20. 没有 Shizuku 时的通用 Shell（本轮新增，三条）
+
+| # | 操作 | 预期 |
+|---|---|---|
+| S-Shell-1 | 设备没有安装/运行 Shizuku，但在「设置 → 根通道」打开并授权 KernelSU；让模型执行 `mobile_device_shell`（例如 `pwd`） | 走根通道执行成功；`mobile_device_capabilities` 里 `rootEngineEnabled=true`、`rootEngineStatus=ready`；模型不再回答「需要 Shizuku」 |
+| S-Shell-2 | 既没有 Shizuku、也没开根通道；让模型执行 `mobile_device_shell` | 回 `DEVICE_SHELL_DISABLED`，并带「先开根通道或连上 Shizuku 并开启 AI Shell」的可执行说明；不得出现「设备不支持 Shell」这类断言，也不得改用截图/点击去猜执行结果 |
+| S-Shell-3 | 开着 Shizuku（已授权、已连接）与 AI Shell，再执行同一条 `mobile_device_shell` | 仍走 Shizuku 通道，行为与本轮改动前一致（根通道关闭时不改变原路径） |
+
+- [ ] 这三条是**路由与说明面**的验收：根通道在没有 Shizuku 的机器上是否真能起 `su`，取决于
+      KernelSU 的授权与 App Profile；`DEVICE_SHELL_DISABLED` 的说明由原生桥的 `text` 回给模型，
+      插件在 `shell` / `virtualScreenShell` 两类命令上转发，其余命令仍只抛码。
+- [ ] 本轮没有真机复测；若 S-Shell-1 失败，先看 `mobile_device_capabilities` 的
+      `rootEngineReason`（`ROOT_ENGINE_DISABLED` / `KERNELSU_PERMISSION_REQUIRED` /
+      `ROOT_IMPL_NOT_KERNELSU`），不要先怀疑 Shizuku。
+
+## 21. 会话列表里的子代理（本轮新增，五条）
+
+| # | 操作 | 预期 |
+|---|---|---|
+| S-子代理-1 | 开一个会产生子代理的对话（让模型派生子任务），再打开会话管理 | 列表默认只有主会话；父行右侧出现「N 个子代理」徽标，计数写作「X 个会话 · Y 个子代理」，不是把子代理算进会话数 |
+| S-子代理-2 | 点父行徽标 | 就地展开它的子代理（按时间倒序），再点一次收起；徽标 `aria-expanded` 跟着变，不刷新整页、不丢滚动位置 |
+| S-子代理-3 | 点一条子代理 | 打开的是**父会话**（子代理不是可独立打开的会话）；没标题的子代理显示「子代理 · <预设名>」，不显示成「未命名会话」 |
+| S-子代理-4 | 在搜索框输入预设名（例如 `cordis`），再输入父会话标题 | 前者把命中的子代理连同父行一起带出来；后者把该父会话的子代理一起带出来；都没有时显示「没有匹配的会话」 |
+| S-子代理-5 | 切到「全部」与「子代理」两个筛选；再构造一条父会话不在列表里的子代理 | 「全部」同时显示父子；「子代理」只列子代理并注明属于谁；父会话缺失的子代理进「未关联子代理」，连父标识都没有的按钮为禁用 |
+
+- [ ] 数据面：会话日志第一行的 `delegationDepth` / `parentSession` / `agentPreset` 决定分组，
+      `cwd` 仍然不外传；三个字段任一不合法时只丢字段、整条会话仍列出（`session-catalog.test.mjs`、
+      `SessionCatalogTest`、`validation.test.ts` 三条用例钉住）。
+- [ ] 本轮**没有真机复测**：S-子代理-1 与 S-子代理-3 是本轮必测项；若父会话被 50 条上限截断，
+      子代理仍应出现在「未关联子代理」里，而不是凭空消失。
+
+## 22. 运行时更新保留工作区（本轮新增，四条）
+
+| # | 操作 | 预期 |
+|---|---|---|
+| S-保留-1 | 在 `/root` 下任意位置（默认工作区 `root/1`、`/root/dsh`、`/root/.bashrc`）各放几个文件，做一次运行时更新（装同版本重装或换版本） | 文件全部还在；`runtimeParent` 下不再留下 `preserve-*` 目录（或只剩运行时产物）；`preserve-report.json` 的 `restored`/`merged` 与实际一致 |
+| S-保留-2 | 新运行时镜像里预建与用户同名的文件/非空目录（例如自带 `inbox/`、`.bashrc`），再更新 | 逐项合并：同名文件保留新镜像版本、用户版本留在暂存目录并在「数据保留」页可见；**更新不因冲突判失败** |
+| S-保留-3 | 检查 `/root/.dsh-mobile`、`/root/.dsh` 里的运行时产物 | 旧 `runtime-secrets.env`、`launcher-*.patch.json`、应用投递的 `.cjs`、`sandbox-runner.sh`、`.dsh/profiles`、`cache/tmp/logs` 都没有被搬回；新运行时启动后它们被重新生成 |
+| S-保留-4 | 更新过程中强杀应用，再启动 | 中断恢复按 `preserve-report.json` 回填；旧版本逐项槽位（`sessions`、`workspace-2`…）也能被认领，没有「文件在暂存目录里没人认领」的情况 |
+
+- [ ] 数据面单测：`RuntimePreservePolicyTest`（整树槽位、排除表、旧槽位识别、清单解析）、
+      `PreservedMergeTest`（同名不覆盖、符号链接、相对路径记账）、`PreserveStoreTest`、
+      `RuntimePromotionWorkspaceTest`（安装/切版本确实走整树保留与排除表）。
+      **没有真机复测**，S-保留-1 与 S-保留-3 是本轮必测项。
+- [ ] 仍未做：固定槽位 `preserve/last`、更新前的保留范围预检。`mobile.workspaceRoots` 已删除，
+      不再需要逐条声明工作区。
+
+## 23. 数据保留页与旧版兼容（本轮新增，五条）
+
+| # | 操作 | 预期 |
+|---|---|---|
+| S-保留页-1 | 版本管理页 →「数据保留」 | 没有待处理副本时显示「没有待处理的数据副本」，不显示动作按钮；有副本时每条按分类汇总（会话 / 插件 / 文件 / 设置与凭据）并给出体积与时间 |
+| S-保留页-2 | 点「取回」 | 副本复制到工作区 `recovered/<id>/`；文件管理里能浏览、能分享；工作区已有同名文件时顺延改名（`notes-1.md`），原文件不被覆盖；暂存目录仍在 |
+| S-保留页-3 | 点「删除」→「确认删除」 | 二次确认后才删除；删除后列表刷新；当前运行时、会话与工作区文件都不受影响 |
+| S-保留页-4 | **旧版本**（0.4.0 及更早）留下的 `preserve-*`（没有 `preserve-report.json`） | 照样列出来、能取回、能删除；不显示「上次更新」那一行；升级 App 后旧副本不会因为缺清单而看不到 |
+| S-保留页-5 | 造一个与新镜像同名文件的冲突项后触发更新，再进「数据保留」 | 更新按合并完成，冲突项仍列在待处理里；「上次更新：回填 N 项、合并 M 项；仍有 K 项待处理」与实际一致 |
+
+- [ ] 本轮只有 JVM 单测（`PreserveStoreTest`、`RuntimePreservePolicyTest`、`PreservedMergeTest`）
+      与前端单测（`DataPreservationCard.test.tsx`、`validation.test.ts`），**没有真机复测**；
+      S-保留页-2 与 S-保留页-4 是本轮必测项。
+- [ ] 「取回」是复制、不是移动：取回成功不等于释放磁盘空间，需要用户在确认副本可用后自行点「删除」。

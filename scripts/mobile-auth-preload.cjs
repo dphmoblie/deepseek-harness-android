@@ -13,20 +13,47 @@ const USERNAME = 'dsh-mobile'
 const REALM = 'DeepSeek Harness Mobile'
 const TOKEN_COOKIE = 'dsh_mobile_token'
 const MOBILE_TOKEN_PARAM = 'dshMobileToken'
+const DSH_LAUNCH_TOKEN_PARAM = 'token'
 
 /*
  * dsh web 启动时会把带自己令牌的地址打到 stdout（`dsh web: http://127.0.0.1:3080/?token=…`），
  * 并在那层做二次鉴权。外置浏览器必须同时满足两层：我们的 Cookie + dsh 的令牌，
  * 否则页面只会显示 "dsh web authentication required; reopen the URL printed by dsh web."
- * 预载和 dsh 同进程，直接截获它打印的那行即可，不必让用户从日志里复制。
+ *
+ * 正常路径由 Android 从已经校验过的启动 URL 里取出 dsh 令牌，直接放进 dsh 自己的
+ * `token` 参数交接；
+ * 这里仍保留 stdout/stderr 截获作为兼容回退（旧入口或没有携带该参数的地址）。回退必须
+ * 按完整行匹配，不能看到任意 `token=` 就锁定：插件日志也可能打印带令牌的 URL，猜错一次
+ * 就会把浏览器送到 dsh 的 401 页。按行缓冲还覆盖 stdout 分片写入。
  */
 let dshToken = null
+let pendingOutput = ''
+const DSH_TOKEN_LINE = /^dsh web: http:\/\/127\.0\.0\.1:[1-9][0-9]{3,4}\/\?token=([A-Za-z0-9_-]{43})(?: \(LAN: [^)\r\n]*\))?$/u
 const captureDshToken = chunk => {
   if (dshToken !== null) return
-  const text = typeof chunk === 'string' ? chunk : (Buffer.isBuffer(chunk) ? chunk.toString('utf8') : '')
-  if (text.length === 0 || text.indexOf('token=') < 0) return
-  const match = /[?&]token=([A-Za-z0-9_-]{20,})/u.exec(text)
-  if (match) dshToken = match[1]
+  const text = typeof chunk === 'string'
+    ? chunk
+    : Buffer.isBuffer(chunk)
+      ? chunk.toString('utf8')
+      : chunk instanceof Uint8Array
+        ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength).toString('utf8')
+        : ''
+  if (text.length === 0) return
+  pendingOutput += text
+  while (true) {
+    const index = pendingOutput.indexOf('\n')
+    if (index < 0) break
+    const line = pendingOutput.slice(0, index).replace(/\r$/u, '')
+    pendingOutput = pendingOutput.slice(index + 1)
+    const match = DSH_TOKEN_LINE.exec(line)
+    if (match) {
+      dshToken = match[1]
+      pendingOutput = ''
+      return
+    }
+  }
+  // 不换行的异常输出也不能无限增长；只保留足够匹配一行启动信息的尾部。
+  if (pendingOutput.length > 8192) pendingOutput = pendingOutput.slice(-8192)
 }
 const writeOriginal = process.stdout.write.bind(process.stdout)
 process.stdout.write = function (chunk, encoding, callback) {
@@ -188,7 +215,27 @@ function browserHandoff(request, response) {
     browserNotice(response, 403, '令牌已失效（运行环境重启过，或这个地址是上一次打开留下的）。请回到应用：设置 → 诊断与日志 → 用外部浏览器打开 Harness，重新获取一个地址。')
     return true
   }
+  const suppliedDshTokens = params.getAll(DSH_LAUNCH_TOKEN_PARAM)
+  const suppliedDshToken = suppliedDshTokens[0] ?? null
+  // dsh 的令牌由 App 从已校验的启动 URL 中提取。允许缺失以兼容旧入口（再回退到 stdout
+  // 截获）；一旦出现就必须恰好一次且形态正确。重复 token 会让 App 校验的值和真正交给
+  // dsh 的值不一致，直接拒绝。
+  if (suppliedDshTokens.length > 1 ||
+    (suppliedDshToken !== null && !TOKEN_PATTERN.test(suppliedDshToken))) {
+    browserNotice(response, 403, '外部浏览器交接参数无效。请回到应用里重新打开 Harness。')
+    return true
+  }
+  const redirectDshToken = suppliedDshToken ?? dshToken
+  /*
+   * 没有 dsh 令牌时不能继续 302：浏览器虽然能通过我们的门，却必然落在 dsh 自己的 401 页。
+   * 宁可在这里给出可重试的明确提示，也不要把用户送进一个看起来像登录失败的页面。
+   */
+  if (redirectDshToken === null) {
+    browserNotice(response, 503, 'Harness 鉴权入口尚未就绪。请回到应用后重新打开外置浏览器。')
+    return true
+  }
   params.delete(MOBILE_TOKEN_PARAM)
+  params.delete(DSH_LAUNCH_TOKEN_PARAM)
   const rest = params.toString()
   /*
    * Location 用**绝对地址**：部分浏览器（尤其国产内核）对相对 Location 的解析不一致，
@@ -197,12 +244,14 @@ function browserHandoff(request, response) {
    */
   const host = typeof request.headers.host === 'string' ? request.headers.host : ''
   const params2 = new URLSearchParams(rest)
-  if (dshToken !== null) params2.set('token', dshToken)
+  params2.set(DSH_LAUNCH_TOKEN_PARAM, redirectDshToken)
   const query = params2.toString()
   const target = query === '' ? '/' : `/?${query}`
   const location = /^[A-Za-z0-9.:\[\]-]{1,255}$/.test(host) ? `http://${host}${target}` : target
   response.writeHead(302, {
     'Cache-Control': 'no-store',
+    // 两枚令牌都在原始地址里；跳转链不应把它们带进 Referer。
+    'Referrer-Policy': 'no-referrer',
     Location: location,
     /*
      * 与运行周期同寿：运行环境一停，令牌换了，这枚 Cookie 自然失效。

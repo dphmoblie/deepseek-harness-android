@@ -92,6 +92,21 @@ def generateLegalAssets = tasks.register('generateLegalAssets', Sync) {
     }
 }
 
+// 认证预载同时是运行时文件：APK 内的副本用于刷新已安装/回退的旧 rootfs，
+// 避免只更新 APK 时设备仍跑旧脚本。源文件只保留在 scripts/，构建时生成到 assets/support。
+def authPreloadSource = new File(appSourceRoot, 'scripts/mobile-auth-preload.cjs')
+if (!authPreloadSource.isFile() || authPreloadSource.length() == 0L) {
+    throw new GradleException("Required mobile auth preload is missing: ${authPreloadSource}")
+}
+def generatedAuthPreloadAssetsDirectory = layout.buildDirectory.dir('generated/assets/authPreload')
+def generateAuthPreloadAsset = tasks.register('generateAuthPreloadAsset', Sync) {
+    into(generatedAuthPreloadAssetsDirectory)
+    from(authPreloadSource) {
+        into('support')
+        rename { 'mobile-auth-preload.cjs' }
+    }
+}
+
 android {
     namespace 'io.deepseekharness.mobile'
     compileSdk 35
@@ -140,6 +155,7 @@ android {
     sourceSets {
         main {
             assets.srcDir(generatedLegalAssetsDirectory)
+            assets.srcDir(generatedAuthPreloadAssetsDirectory)
         }
     }
 
@@ -154,6 +170,16 @@ android {
         debug {
             if (teamSigning != null) {
                 signingConfig signingConfigs.team
+            }
+            /*
+             * 真机联调时设备上可能已经装着**另一个密钥签名的正式版**（CI 发布包）。
+             * Android 不允许同包名换签名覆盖安装，硬装只能先卸载——那会连运行环境与会话一起删。
+             * 传 `-PdshTestPackage=true` 时改用 `io.deepseekharness.mobile.test` 共存安装：
+             * 数据目录、FileProvider authority、Shizuku 服务名都按 applicationId 生成，互不干扰。
+             * 默认不传这个属性，正式构建的包名不变。
+             */
+            if (project.hasProperty('dshTestPackage')) {
+                applicationIdSuffix '.test'
             }
         }
         release {
@@ -205,7 +231,7 @@ kotlin {
 }
 
 tasks.named('preBuild').configure {
-    dependsOn(generateLegalAssets)
+    dependsOn(generateLegalAssets, generateAuthPreloadAsset)
 }
 
 tasks.configureEach { task ->

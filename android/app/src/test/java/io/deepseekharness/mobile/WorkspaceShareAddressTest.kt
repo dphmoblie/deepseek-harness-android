@@ -38,7 +38,7 @@ class WorkspaceShareAddressTest {
     @Test
     fun absolutePathInsideWorkspaceIsStripped() {
         assertEquals(
-            "中文 文件.md",
+            "1/中文 文件.md",
             relative(
                 request(
                     "dsh-resource://file/session/session-abc//root/1/%E4%B8%AD%E6%96%87%20%E6%96%87%E4%BB%B6.md",
@@ -48,7 +48,13 @@ class WorkspaceShareAddressTest {
     }
 
     @Test
-    fun absolutePathOutsideWorkspaceIsRejected() {
+    fun sharesAnyFileInTheGuestHomeButNothingOutsideIt() {
+        // 分享根是访客用户空间 `/root`：用户自己建的目录（`/root/dsh`）也要能分享，
+        // 不再只认 `root/1`。
+        assertEquals(
+            "dsh/audit.md",
+            relative(request("dsh-resource://file/session/session-abc//root/dsh/audit.md")),
+        )
         assertNull(
             relative(
                 request("dsh-resource://file/session/session-abc//etc/passwd"),
@@ -56,7 +62,7 @@ class WorkspaceShareAddressTest {
         )
         assertNull(
             relative(
-                request("dsh-resource://file/session/session-abc//root/10/secret.txt"),
+                request("dsh-resource://file/session/session-abc//sdcard/notes.md"),
             ),
         )
     }
@@ -194,7 +200,7 @@ class WorkspaceShareAddressTest {
     @Test
     fun absoluteAddressHasExactlyOneCandidate() {
         assertEquals(
-            listOf("中文 文件.md"),
+            listOf("1/中文 文件.md"),
             WorkspaceShareAddress.relativePaths(
                 request(
                     "dsh-resource://file/session/session-abc//root/1/%E4%B8%AD%E6%96%87%20%E6%96%87%E4%BB%B6.md",
@@ -215,13 +221,13 @@ class WorkspaceShareAddressTest {
     @Test
     fun absoluteTitlePathIsPreferredOverAddress() {
         assertEquals(
-            listOf("项目/报告 1.md"),
+            listOf("1/项目/报告 1.md"),
             WorkspaceShareAddress.relativePaths(
                 pathRequest("/root/1/项目/报告 1.md", "dsh-resource://file/session/s/报告 1.md"),
             ),
         )
         assertEquals(
-            listOf("sub/report.md"),
+            listOf("1/sub/report.md"),
             WorkspaceShareAddress.relativePaths(
                 pathRequest("/root/1/sub/report.md", "dsh-resource://file/session/s/report.md"),
             ),
@@ -234,7 +240,7 @@ class WorkspaceShareAddressTest {
         assertEquals(
             listOf("1/notes.md", "notes.md"),
             WorkspaceShareAddress.relativePaths(
-                pathRequest("/root/2/notes.md", "dsh-resource://file/session/s/1/notes.md"),
+                pathRequest("/mnt/user/1/notes.md", "dsh-resource://file/session/s/1/notes.md"),
             ),
         )
         assertNull(
@@ -245,9 +251,7 @@ class WorkspaceShareAddressTest {
     @Test
     fun malformedAbsoluteTitlePathsAreRejected() {
         listOf(
-            "/root/1",
             "/root/1/",
-            "/root/10/secret.txt",
             "/etc/passwd",
             "notes.md",
             "/root/1/../secret.txt",
@@ -256,6 +260,8 @@ class WorkspaceShareAddressTest {
         ).forEach { path ->
             assertNull(path, WorkspaceShareAddress.relativePaths(pathRequest(path)))
         }
+        // `/root/1` 本身是目录：地址层只负责给出相对路径，目录由文件层按「不是普通文件」拒绝。
+        assertEquals(listOf("1"), WorkspaceShareAddress.relativePaths(pathRequest("/root/1")))
     }
 
     @Test

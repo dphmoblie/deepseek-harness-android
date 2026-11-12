@@ -1,4 +1,4 @@
-package io.deepseekharness.mobile.runtime
+﻿package io.deepseekharness.mobile.runtime
 
 import android.system.ErrnoException
 import android.system.Os
@@ -544,9 +544,9 @@ class RuntimeInstaller(
         if (preservedRoots.isEmpty()) return
         if (!RuntimeFiles.isDirectoryNoFollow(store.currentRoot)) return
         for (preservedRoot in preservedRoots) {
-            val unplaced = restorePreservedDirectory(preservedRoot, store.currentRoot, strict = true)
-            if (unplaced.isNotEmpty()) {
-                throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", unpreservedMessage(unplaced))
+            val outcome = restorePreservedDirectory(preservedRoot, store.currentRoot, strict = true)
+            if (outcome.unplaced.isNotEmpty()) {
+                throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", unpreservedMessage(outcome.unplaced))
             }
         }
     }
@@ -564,6 +564,8 @@ class RuntimeInstaller(
      *    旋转到 `retained*`（见 [retainPreviousRoot]）。
      */
     private fun promoteRuntime(sourceRoot: File, sourceManifest: File) = RuntimeSharedInbox.withLock {
+        // 保留范围：整块访客用户空间（`root`），回填时排除旧令牌/旧脚本/死链。
+        val preservedPaths = RuntimePreservePolicy.preservedPaths()
         val preservedRoot = File(
             store.runtimeParent,
             RuntimePreservePolicy.preserveDirectoryName(UUID.randomUUID().toString()),
@@ -575,7 +577,9 @@ class RuntimeInstaller(
         // 阶段一：移出用户数据。必须在旧根目录改名之前完成，否则无法再区分用户数据与运行时产物。
         try {
             terminalBackup = RuntimeTerminalPluginBackup.backup(store.runtimeParent, store.currentRoot)
-            movePreservedItems(store.currentRoot, preservedRoot, moved)
+            movePreservedItems(store.currentRoot, preservedRoot, moved, preservedPaths)
+            // 先落一份清单：即使随后的提升被打断，恢复流程也能按**当初**的槽位找到每一项。
+            writePreserveReport(preservedRoot, preservedPaths, restored = 0, merged = 0, conflicts = emptyList())
         } catch (error: Throwable) {
             // 半途失败：把已移出的数据放回旧根目录；放不回的原样留在 preserve-*，绝不删除。
             try {
@@ -608,14 +612,16 @@ class RuntimeInstaller(
                 ?: RuntimeFailure("RUNTIME_PROMOTION_FAILED", "无法启用新运行时", error)
         }
 
-        // 阶段三：回填用户数据。真冲突时抛受控错误码，并保留 backupRoot 供排查或人工取回。
+        // 阶段三：回填用户数据。合并后仍搬不动的项（与文件同名、符号链接）会留下并抛受控错误码，
+        // 并保留 backupRoot 供排查或人工取回。
         val unplaced = mutableListOf<String>()
-        unplaced += restorePreservedDirectory(preservedRoot, store.currentRoot, strict = true)
+        val restore = restorePreservedDirectory(preservedRoot, store.currentRoot, strict = true)
+        unplaced += restore.unplaced
         terminalBackup?.let { RuntimeTerminalPluginBackup.restore(it, store.currentRoot, strict = true) }
         // 中断遗留、且恢复流程当时没有可回填根目录的暂存目录，由新根目录一并接手。
         for (leftover in preservedWorkspaces()) {
             if (leftover.absolutePath == preservedRoot.absolutePath) continue
-            unplaced += restorePreservedDirectory(leftover, store.currentRoot, strict = true)
+            unplaced += restorePreservedDirectory(leftover, store.currentRoot, strict = true).unplaced
         }
         if (unplaced.isNotEmpty()) {
             throw RuntimeFailure("RUNTIME_PRESERVE_FAILED", unpreservedMessage(unplaced))
@@ -759,10 +765,14 @@ class RuntimeInstaller(
      * 把旧根目录里的白名单用户数据移出到 `preserve-*` 暂存目录。
      * 每条移动成功后才记入 `moved`：半途失败时调用方据此把已移出的数据放回原处。
      */
-    private fun movePreservedItems(sourceRoot: File, preservedRoot: File, moved: MutableList<String>) {
+    private fun movePreservedItems(
+        sourceRoot: File,
+        preservedRoot: File,
+        moved: MutableList<String>,
+        paths: Map<String, String>,
+    ) {
         if (!RuntimeFiles.isDirectoryNoFollow(sourceRoot)) return
-        for (name in RuntimePreservePolicy.preservedNames()) {
-            val relative = RuntimePreservePolicy.guestRelativePath(name) ?: continue
+        for ((name, relative) in paths) {
             val source = File(sourceRoot, relative)
             if (!RuntimeFiles.existsNoFollow(source)) continue
             ensureDirectory(preservedRoot, createParents = false, message = "无法创建用户数据暂存目录")
@@ -772,64 +782,172 @@ class RuntimeInstaller(
     }
 
     /** 暂存目录里当前实际存在的白名单条目：不依赖持久化台账，可跨进程中断恢复。 */
-    private fun pendingPreservedNames(preservedRoot: File): List<String> =
-        RuntimePreservePolicy.preservedNames().filter { RuntimeFiles.existsNoFollow(File(preservedRoot, it)) }
+    private fun pendingPreservedNames(preservedRoot: File, paths: Map<String, String>): List<String> =
+        paths.keys.filter { RuntimeFiles.existsNoFollow(File(preservedRoot, it)) }
+
+    /** 一次回填的结果：整体放回的项数、合并进去的条目数，以及仍留在暂存目录里的项。 */
+    private data class RestoreOutcome(
+        val unplaced: List<String>,
+        val restored: Int = 0,
+        val merged: Int = 0,
+        val conflicts: List<String> = emptyList(),
+    )
 
     /**
-     * 把单个 `preserve-*` 目录里的用户数据回填到目标根目录，返回**未回填**的条目名。
-     * 全部回填成功时顺手删掉已经空掉的暂存目录。
+     * 暂存目录对应的槽位清单：优先读它自己带的 `preserve-report.json`。
+     *
+     * 为什么不能只用当前默认值：扩展工作区槽位（`workspace-2`…）的路径只写在清单里，
+     * 按默认清单回填会把它们当成陌生条目永远留在暂存目录。清单读不出来时退回默认清单。
+     */
+    private fun preservedPathsFor(preservedRoot: File): Map<String, String> {
+        val text = try {
+            File(preservedRoot, RuntimePreservePolicy.REPORT_FILE_NAME)
+                .takeIf { RuntimeFiles.existsNoFollow(it) }
+                ?.readText(Charsets.UTF_8)
+        } catch (_: Exception) {
+            null
+        }
+        return RuntimePreservePolicy.parseReportPaths(text) ?: RuntimePreservePolicy.restoreSlots()
+    }
+
+    /** 写回填清单（先写临时文件再原子改名）。清单写不进去不算失败：数据本身已经就位。 */
+    private fun writePreserveReport(
+        preservedRoot: File,
+        paths: Map<String, String>,
+        restored: Int,
+        merged: Int,
+        conflicts: List<String>,
+    ) {
+        try {
+            ensureDirectory(preservedRoot, createParents = true, message = "无法创建用户数据暂存目录")
+            val target = File(preservedRoot, RuntimePreservePolicy.REPORT_FILE_NAME)
+            val pending = File(preservedRoot, RuntimePreservePolicy.REPORT_FILE_NAME + ".tmp")
+            pending.writeText(
+                RuntimePreservePolicy.reportJson(paths, restored, merged, conflicts),
+                Charsets.UTF_8,
+            )
+            Os.rename(pending.absolutePath, target.absolutePath)
+        } catch (_: Exception) {
+            // 清单只是可读性与中断恢复的辅助：写不进去也不能让整次更新失败。
+            File(preservedRoot, RuntimePreservePolicy.REPORT_FILE_NAME + ".tmp").delete()
+        }
+    }
+
+    /**
+     * 把单个 `preserve-*` 目录里的用户数据回填到目标根目录。
+     *
+     * 冲突判定与提升时完全一致：能放回的放回、能合并的逐项合并，搬不动的原样留在暂存目录里，
+     * 并把结果写进清单——绝不静默丢在一边，也绝不覆盖新运行时里的同名项。
      */
     private fun restorePreservedDirectory(
         preservedRoot: File,
         targetRoot: File,
         strict: Boolean,
-    ): List<String> {
-        val names = pendingPreservedNames(preservedRoot)
-        if (names.isEmpty()) {
+    ): RestoreOutcome {
+        val paths = preservedPathsFor(preservedRoot)
+        val names = pendingPreservedNames(preservedRoot, paths)
+        // 旧版本（或更新版本）留下的、当前清单里没有的条目：**不认领也不删除**。
+        // 老版本装出来的 `preserve-*` 没有清单，槽位是老的 7 项——这些都在默认清单里；
+        // 反过来，新版本写入的 `workspace-2` 之类被老版本应用接手时才会落进这里。
+        // 丢掉它们等于丢用户数据；让更新失败又太苛刻，所以原样留在暂存目录，由「数据保留」页展示。
+        val unknown = unknownSlots(preservedRoot, paths)
+        if (names.isEmpty() && unknown.isEmpty()) {
             removePreservedDirectoryQuietly(preservedRoot)
-            return emptyList()
+            return RestoreOutcome(emptyList())
         }
         // 目标根目录不可用：整个暂存目录原样保留，由调用方决定后续处理。
-        if (!RuntimeFiles.isDirectoryNoFollow(targetRoot)) return names
-        val unplaced = restorePreservedItems(preservedRoot, targetRoot, names, strict)
-        if (unplaced.isEmpty()) removePreservedDirectoryQuietly(preservedRoot)
-        return unplaced
+        if (!RuntimeFiles.isDirectoryNoFollow(targetRoot)) return RestoreOutcome(names)
+        val outcome = restorePreservedItems(preservedRoot, targetRoot, names, paths, strict)
+        if (outcome.unplaced.isEmpty() && unknown.isEmpty()) {
+            removePreservedDirectoryQuietly(preservedRoot)
+        } else {
+            // 有搬运不动的项：把结果刷新到清单里，用户/界面据此找到它们。
+            writePreserveReport(preservedRoot, paths, outcome.restored, outcome.merged, outcome.conflicts + unknown)
+        }
+        return outcome
     }
 
+    /** 暂存目录里既不在当前清单、也不是回填清单自身的条目名。 */
+    private fun unknownSlots(preservedRoot: File, paths: Map<String, String>): List<String> =
+        (preservedRoot.listFiles() ?: emptyArray())
+            .map { it.name }
+            .filter { it != RuntimePreservePolicy.REPORT_FILE_NAME && !paths.containsKey(it) }
+            .sorted()
+
     /**
-     * 按实现约定 4 把暂存目录里的条目回填到目标根目录，返回没能回填的条目名。
+     * 按实现约定 4 把暂存目录里的条目回填到目标根目录。
+     *
+     * 非空同名目录走 `MERGE`：逐项搬移、同名不覆盖；搬不动的那几项留在暂存目录并记进清单。
      * `strict = false` 时把所有失败折算成「未回填」，供回滚等不允许抛出的路径使用。
      */
     private fun restorePreservedItems(
         preservedRoot: File,
         targetRoot: File,
         names: List<String>,
+        paths: Map<String, String>,
         strict: Boolean,
-    ): List<String> {
+    ): RestoreOutcome {
         val unplaced = mutableListOf<String>()
+        val conflicts = mutableListOf<String>()
+        var restored = 0
+        var merged = 0
         for (name in names) {
-            val relative = RuntimePreservePolicy.guestRelativePath(name) ?: continue
+            val relative = paths[name] ?: continue
             val source = File(preservedRoot, name)
             if (!RuntimeFiles.existsNoFollow(source)) continue
             val target = File(targetRoot, relative)
             try {
                 when (classifyRestoreTarget(target)) {
-                    RuntimePreservePolicy.RestoreDecision.MOVE_IN -> placePreservedItem(source, target)
+                    RuntimePreservePolicy.RestoreDecision.MOVE_IN -> {
+                        placePreservedItem(source, target)
+                        restored += 1
+                    }
                     RuntimePreservePolicy.RestoreDecision.REPLACE_EMPTY_DIRECTORY -> {
                         // 新 rootfs 预建的同名空目录（例如空的 sessions、plugins 目录）：
                         // 删掉空壳后再移入，否则每次正常更新都会被判成冲突而失败。
                         removeEmptyShell(target)
                         placePreservedItem(source, target)
+                        restored += 1
                     }
-                    RuntimePreservePolicy.RestoreDecision.CONFLICT -> unplaced += name
+                    RuntimePreservePolicy.RestoreDecision.MERGE -> {
+                        // 整树回填时排除旧令牌/旧脚本/死链：它们会被新运行时重建（见 policy 注释）。
+                        val guestHome = name == RuntimePreservePolicy.GUEST_HOME_SLOT
+                        val result = PreservedMerge.merge(source, target) { relative ->
+                            guestHome && RuntimePreservePolicy.shouldRestoreGuestPath(relative)
+                        }
+                        merged += result.moved
+                        conflicts += result.conflicts.map { "$name/$it" }
+                        if (guestHome) {
+                            // 整树回填**不把冲突当更新失败**：用户要求更新后不需要任何重做，
+                            // 同名文件留在暂存目录、「数据保留」页可见即可（新镜像的同名文件优先）。
+                            if (result.conflicts.isEmpty() && PreservedMerge.hasOnlySkipped(source) {
+                                    relative -> RuntimePreservePolicy.shouldRestoreGuestPath(relative)
+                                }
+                            ) {
+                                cleanupIfPresent(source)
+                            }
+                        } else if (result.conflicts.isNotEmpty()) {
+                            unplaced += name
+                        } else if (isEmptyDirectoryNoFollow(source)) {
+                            removeEmptyShell(source)
+                        }
+                    }
+                    RuntimePreservePolicy.RestoreDecision.CONFLICT -> {
+                        unplaced += name
+                        conflicts += name
+                    }
                 }
             } catch (error: Exception) {
                 if (strict) throw error
                 unplaced += name
             }
         }
-        return unplaced
+        return RestoreOutcome(unplaced, restored, merged, conflicts)
     }
+
+    /** 目录是否为空（不跟随符号链接）；读不到内容时按「不空」处理，绝不误删。 */
+    private fun isEmptyDirectoryNoFollow(directory: File): Boolean =
+        RuntimeFiles.isDirectoryNoFollow(directory) && (directory.listFiles()?.isEmpty() ?: false)
 
     /** 取样目标同名项的真实形态，交给纯逻辑策略判定（实现约定 4）。 */
     private fun classifyRestoreTarget(target: File): RuntimePreservePolicy.RestoreDecision {
@@ -899,8 +1017,9 @@ class RuntimeInstaller(
 
     /** 未回填清单的可读说明：必须让用户知道数据还在，没有被覆盖也没有被删除。 */
     private fun unpreservedMessage(unplaced: List<String>): String =
-        "新运行时中已存在同名数据，未回填：" + unplaced.joinToString("、") +
-            "；用户数据与旧运行时备份均已保留，请先处理同名项后重试"
+        "新运行时中已存在同名条目，未回填：" + unplaced.joinToString("、") +
+            "；按需合并已完成，剩余项与旧运行时备份均已保留（回填清单见暂存目录的 " +
+            RuntimePreservePolicy.REPORT_FILE_NAME + "），请处理同名项后重试"
 
     private fun cleanResumeFilesExcept(keepName: String?) {
         val children = store.runtimeParent.listFiles() ?: return

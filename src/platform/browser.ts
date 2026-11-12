@@ -37,6 +37,9 @@ import type {
   RuntimeSessionListResult,
   RuntimeSessionSnapshotRestoreResult,
   RootEngineStatus,
+  PreserveDiscardResult,
+  PreserveRecoverResult,
+  PreserveState,
   RuntimeSessionSnapshotState,
   RuntimeSettings,
   RuntimeState,
@@ -759,6 +762,14 @@ export function createBrowserBridge(): RuntimeBridge {
       Promise.reject(new Error('浏览器模式下不能恢复运行时会话快照')),
     deleteRuntimeSessionSnapshot: (): Promise<RuntimeSessionSnapshotState> =>
       Promise.reject(new Error('浏览器模式下不能删除运行时会话快照')),
+    // 数据保留：预览里没有暂存目录，也没有工作区；三条一律如实拒绝，
+    // **不要**回空列表——那会被显示成「没有待处理数据」，等于编造一次确认。
+    getPreserveState: (): Promise<PreserveState> =>
+      Promise.reject(new Error('浏览器模式下没有运行时数据保留状态')),
+    recoverPreserveItems: (): Promise<PreserveRecoverResult> =>
+      Promise.reject(new Error('浏览器模式下不能取回更新时保留的数据')),
+    discardPreserveItems: (): Promise<PreserveDiscardResult> =>
+      Promise.reject(new Error('浏览器模式下不能删除待处理的数据副本')),
     // 浏览器预览里没有原生侧的更新渠道，也没有可下载安装的 APK：如实拒绝，
     // 不编造版本列表或更新状态，否则界面会把「预览里的假版本」当成真能装的东西。
     listHarnessReleases: () => Promise.reject(new Error('浏览器模式下没有 Harness 版本目录')),

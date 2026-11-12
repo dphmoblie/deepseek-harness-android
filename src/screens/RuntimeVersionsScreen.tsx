@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 版本管理页：运行时版本库、内置/远程版本切换、应用自身更新与会话备份的汇总入口。
  *
  * 从 `App.tsx` 整体搬出：这一屏把已经抽出的 `AppUpdateSection`、`RuntimeSnapshotsSection`
@@ -18,6 +18,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { HarnessVersionsSection } from '../components/HarnessVersionsSection'
+import { DataPreservationCard } from '../components/DataPreservationCard'
 import { ReleaseNotes } from '../components/ReleaseNotes'
 import { RuntimeCleanupCard } from '../components/RuntimeCleanupCard'
 import { RuntimeResidueCard } from '../components/RuntimeResidueCard'
@@ -635,6 +636,18 @@ export function RuntimeVersionsPanel({
         <RuntimeCleanupCard />
 
         <RuntimeResidueCard />
+      </div>
+
+      {/* 数据保留：更新时搬不动的东西总得有个入口，否则「文件还在」只是一句口号。 */}
+      <div className="settings-subsection" aria-labelledby="runtime-preserve-group">
+        <div className="section-title section-title-plain">
+          <div>
+            <h3 id="runtime-preserve-group">{t('数据保留')}</h3>
+            <p>{t('更新运行时会整块保留用户空间（/root），再合并回新根目录；旧令牌、旧脚本与缓存不会搬回，没搬回的项目留在这里。')}</p>
+          </div>
+        </div>
+
+        <DataPreservationCard />
       </div>
     </section>
   )

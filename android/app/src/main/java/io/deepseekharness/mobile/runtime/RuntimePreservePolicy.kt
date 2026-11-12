@@ -1,31 +1,29 @@
 package io.deepseekharness.mobile.runtime
 
+import org.json.JSONArray
+import org.json.JSONObject
+
 /**
  * 运行时更新时的访客用户数据保留策略。
  *
- * 本对象是**纯逻辑**（不接触文件系统），便于在 JVM 单元测试里穷举白名单与拒绝路径；
- * 真正的移动、冲突判定取样由 `RuntimeInstaller` 负责。
+ * 本对象是**纯逻辑**（不接触文件系统），便于在 JVM 单元测试里穷举保留范围与拒绝路径；
+ * 真正的移动、合并取样由 `RuntimeInstaller` / `PreservedMerge` 负责。
  *
- * 背景见 `docs/运行时更新与数据保留.md`：dsh 的用户数据写在访客的 `$DSH_HOME`
- * （即 `/root/.dsh`，对应宿主 `currentRoot/root/.dsh`），而提升新根目录时旧根目录会被整体删除，
- * 于是对话会话、用户安装的插件与 dsh 配置一起消失。
+ * 现在的口径（用户要求「更新后不需要任何重做」）：**整块保留访客用户空间 `/root`**，一次 rename
+ * 完成；回填时按 [shouldRestoreGuestPath] 把旧令牌、旧脚本与死链/缓存排除在外——它们本来就会被
+ * 新运行时重建。这样用户自己建的目录（`/root/dsh`、脚本、`.bashrc`）也一并在内，
+ * 不再需要逐条声明。
  *
- * 这里刻意采用**白名单**而不是整个 `root/.dsh`：
- * `root/.dsh/profiles/node_modules` 下是指向 rootfs 内包的符号链接，
- * `root/.dsh/profiles/web` 也是按当前 dsh 版本生成的产物。整体搬运会同时制造
- * 悬空符号链接与新旧两套运行时模块并存（即 `docs/ARCHITECTURE.md` 的
- * 「运行时依赖版本钉与 Symbol 身份」小节所述
- * 「同名包出现两份物理副本会让 Symbol 身份不一致」的同一类故障）。
- * 因此只搬运明确的用户数据，运行时产物一律由新 rootfs 重新提供。
+ * 历史的逐项白名单（`sessions` / `settings.yaml` / …）保留为 [restoreSlots]，**只用于读旧版本
+ * 留下的暂存目录**：老版本装出来的 `preserve-*` 里就是这些槽位，回填流程必须还认得它们。
  */
 object RuntimePreservePolicy {
     /** 访客 dsh 主目录相对根文件系统的路径。 */
     const val GUEST_DSH_HOME = "root/.dsh"
 
     /**
-     * 需要跨升级保留的 `$DSH_HOME` 用户数据。**全部是扁平名字**（不含路径分隔符）：
-     * 白名单只描述「`$DSH_HOME` 下的哪一项」，不做嵌套匹配，从根上消除路径穿越面。
-     * 顺序固定，便于日志与测试断言。每一项都由 dsh 源码确认过出处。
+     * 旧版逐项保留的 `$DSH_HOME` 槽位。**只用于读旧暂存目录**（见 [restoreSlots]），
+     * 新版本整块保留 `/root`，不再逐个搬运这些项。
      */
     private val PRESERVED_NAMES = listOf(
         // 对话会话（scripts/mobile-session-publish.py 的 SESSION_ROOT = /root/.dsh/sessions）。
@@ -44,20 +42,11 @@ object RuntimePreservePolicy {
     )
 
     /**
-     * 不在 `$DSH_HOME` 下、但同样必须跨版本保留的访客项：**暂存名 → 访客相对路径**。
-     *
-     * `plugin-manager` 是用户安装的插件：`plugin-manager.cjs` 把插件 npm 装到
-     * `root/.dsh-mobile/plugin-manager/versions/<txid>/node_modules/`。它**不在 `$DSH_HOME` 下**，
-     * 扁平的「`$DSH_HOME` 下名字」模型表达不了，必须显式给出完整相对路径。两条边界：
-     *  - 只保留 `plugin-manager` 这一项，**不是**整个 `root/.dsh-mobile`：同目录下的
-     *    `launcher-providers.patch.json` 由应用每次启动重新生成，保留它只会把过期配置带进新运行时；
-     *  - 跨版本保留插件目录会留下指向旧 rootfs 的悬空符号链接，这一条由插件侧的「修复动作」
-     *    负责（见 docs/项目状态.md）。
+     * 旧版逐项槽位里的「`$DSH_HOME` 之外」两项。**只用于读旧暂存目录**，新版本不再单独搬运。
      */
     private val PRESERVED_OUTSIDE_HOME = mapOf(
         "plugin-manager" to "root/.dsh-mobile/plugin-manager",
-        // The default dsh workspace is application-private and must survive rootfs upgrades.
-        "workspace" to "root/1",
+        "workspace" to DEFAULT_WORKSPACE_ROOT,
     )
 
     /**
@@ -88,6 +77,97 @@ object RuntimePreservePolicy {
     /** 用户数据暂存目录前缀：`runtimeParent/preserve-<uuid>`。 */
     const val PRESERVE_DIRECTORY_PREFIX = "preserve-"
 
+    /**
+     * 暂存目录里的回填清单：`slot → 相对根文件系统的路径`，外加本次回填结果。
+     *
+     * 它同时解决两件事：
+     * 1. 中断恢复时要按**当初**的工作区清单回填，而不是按当前默认值（否则 `workspace-2` 这类
+     *    扩展槽位就再也对不上路径，用户数据只能烂在暂存目录里）；
+     * 2. 冲突项留在暂存目录时，界面/用户可以照清单找到它们。
+     */
+    const val REPORT_FILE_NAME = "preserve-report.json"
+
+    /** 应用自己的工作区：dsh 绑定工作区时的目录。保留它是既有行为，不能因为可配置而丢掉。 */
+    const val DEFAULT_WORKSPACE_ROOT = "root/1"
+
+    /** 整块保留的访客用户空间：整个 `/root`。槽位名固定，兼容按树回填的分支。 */
+    const val GUEST_HOME_SLOT = "guest-home"
+    const val GUEST_HOME_ROOT = "root"
+
+    /**
+     * 回填时**不搬回新根目录**的访客路径（相对 `root/`）。
+     *
+     * 三条理由，逐条对应一类文件：
+     * 1. **旧令牌**：`runtime-secrets.env` 是每次启动才生成的一次性秘密文件，`launcher-*.patch.json`
+     *    指向本次启动的入口与插件补丁。搬进新运行时只会把过期取值带过去，而新运行时启动前
+     *    本来就会重写它们。保留 = 留一份没用的秘密文件在盘上。
+     * 2. **旧脚本**：`.dsh-mobile` 下的 `.cjs`、`sandbox-runner.sh`、`dsh-runner` 都是**应用投递**的脚本，
+     *    每次使用前都会按当前 APK 版本重写（`SessionCatalog.prepareScript` 等）。搬回旧副本等于让
+     *    新应用跑旧脚本；用户自己写的脚本（例如 `/root/dsh` 下的 `.sh`）不在这个列表里，照常保留。
+     * 3. **死链与缓存**：`.dsh/profiles` 里是指向旧 rootfs 的符号链接，`cache`/`tmp`/`logs`/
+     *    `llm-deepseek` 是缓存与远端绑定数据。搬过来就是死链与两份模块并存。
+     *
+     * 这些项**不删除**：合并时跳过它们，留在暂存目录里；只剩这类项时整份暂存目录在回填成功后删除
+     * （它们本来就会被新运行时重建）。
+     */
+    private val GUEST_PATHS_NOT_RESTORED = listOf(
+        ".dsh/profiles",
+        ".dsh/cache",
+        ".dsh/tmp",
+        ".dsh/logs",
+        ".dsh/llm-deepseek",
+        ".dsh-mobile/runtime-secrets.env",
+        ".dsh-mobile/launcher-providers.patch.json",
+        ".dsh-mobile/launcher-plugins.patch.json",
+        ".dsh-mobile/dsh-runner",
+        ".dsh-mobile/session-catalog.cjs",
+        ".dsh-mobile/plugin-manager.cjs",
+        ".dsh-mobile/harness-packages.cjs",
+        ".dsh-mobile/runtime-self-check.cjs",
+        ".dsh-mobile/sandbox-runner.sh",
+    )
+
+    /** `relative`（相对 `root/`）是不是「不要搬回新根目录」的运行时产物。 */
+    fun shouldRestoreGuestPath(relative: String): Boolean =
+        GUEST_PATHS_NOT_RESTORED.any { relative == it || relative.startsWith("$it/") }
+
+    /**
+     * 保留项对用户展示的分类。
+     *
+     * 机制只有一份清单，但用户看到的是「会话 / 插件 / 文件 / 设置与凭据」四类：
+     * 更新前的预检、更新后的回执、重置对话框的「将删除什么」都用这一套分类，
+     * 不再各自维护第二份列表（两份清单必然漂移）。
+     */
+    enum class Category(val wireValue: String) {
+        CONVERSATIONS("conversations"),
+        PLUGINS("plugins"),
+        FILES("files"),
+        SETTINGS("settings"),
+        ;
+
+        companion object {
+            fun fromWire(value: String?): Category = entries.firstOrNull { it.wireValue == value } ?: SETTINGS
+        }
+    }
+
+    /** 一条保留项：暂存槽位名、访客相对路径、用户看到的名字与分类。 */
+    data class PreservedEntry(
+        val slot: String,
+        val path: String,
+        val category: Category,
+        val label: String,
+    )
+
+    /** 声明式工作区根的数量上限：多到没边的清单只会把每次更新拖成整盘搬家。 */
+    const val WORKSPACE_ROOT_LIMIT = 8
+
+    /** 工作区根相对路径的长度上限。 */
+    private const val MAX_WORKSPACE_ROOT_CHARS = 200
+
+    /** 回填清单的大小与条目上限：它是我们自己写的几十行 JSON，超出即视为不可信。 */
+    private const val MAX_REPORT_CHARS = 16 * 1024
+    private const val MAX_REPORT_ITEMS = 32
+
     private val UUID_SUFFIX = Regex("^[a-f0-9-]{36}$")
 
     /**
@@ -109,8 +189,167 @@ object RuntimePreservePolicy {
     /** 白名单条目（暂存名，顺序固定：先 `$DSH_HOME` 内的，再 `$DSH_HOME` 外的）。 */
     fun preservedNames(): List<String> = PRESERVED_NAMES + PRESERVED_OUTSIDE_HOME.keys
 
+    /**
+     * 把一处声明式工作区根归一成访客相对路径；不合法返回 `null`。
+     *
+     * 只接受 `root/` 之下的相对路径：绝对路径、反斜杠、`.`/`..` 段、控制字符与空段一律拒绝——
+     * 这个值会被拼进 `rename` 的源/目标路径，任何穿越形态都不该出现在这里。
+     */
+    fun normalizeWorkspaceRoot(value: String?): String? {
+        if (value == null) return null
+        val trimmed = value.trim().trimEnd('/')
+        if (trimmed.length !in "root/x".length..MAX_WORKSPACE_ROOT_CHARS) return null
+        if (!trimmed.startsWith("root/")) return null
+        for (segment in trimmed.split('/')) {
+            if (segment.isEmpty() || segment == "." || segment == "..") return null
+            if (segment.any { it == '\\' || it.isISOControl() }) return null
+        }
+        return trimmed
+    }
+
+    /**
+     * 读旧暂存目录（没有清单、只有 `sessions` / `workspace` 这些老槽位）时靠它还原路径；
+     * 新版本的暂存目录里只有 `guest-home` 一项。
+     */
+    fun restoreSlots(): LinkedHashMap<String, String> {
+        val slots = LinkedHashMap<String, String>()
+        slots[GUEST_HOME_SLOT] = GUEST_HOME_ROOT
+        for (name in PRESERVED_NAMES) slots[name] = "$GUEST_DSH_HOME/$name"
+        slots["plugin-manager"] = PRESERVED_OUTSIDE_HOME.getValue("plugin-manager")
+        slots["workspace"] = DEFAULT_WORKSPACE_ROOT
+        for (index in 2..WORKSPACE_ROOT_LIMIT) slots["workspace-$index"] = "root/1"
+        return slots
+    }
+
+    /** 槽位是否可识别（回填清单与旧目录共用同一套判定）。 */
+    fun isKnownSlot(slot: String): Boolean =
+        slot == GUEST_HOME_SLOT || slot in PRESERVED_NAMES || slot == "plugin-manager" ||
+            slot == "workspace" || (slot.startsWith("workspace-") && slot.removePrefix("workspace-").toIntOrNull() in 2..WORKSPACE_ROOT_LIMIT)
+
+    /** 分类对应的中文名字；界面直接显示，不另写一份。 */
+    fun categoryLabel(category: Category): String = when (category) {
+        Category.CONVERSATIONS -> "会话"
+        Category.PLUGINS -> "插件"
+        Category.FILES -> "文件"
+        Category.SETTINGS -> "设置与凭据"
+    }
+
+    private fun labelOf(name: String): String = when (name) {
+        "sessions" -> "对话与会话记录"
+        "settings.yaml" -> "dsh 设置"
+        ".credentials.yaml" -> "模型凭据"
+        "attachments" -> "上传的附件"
+        "skills" -> "用户技能"
+        else -> name
+    }
+
+    /**
+     * 一次更新事务的保留清单（带分类与展示名）。
+     *
+     * 用户明确要求「更新后不需要任何重做」：**整块保留 `/root`**，一次 rename 完成；
+     * 回填时按 [shouldRestoreGuestPath] 把旧令牌、旧脚本与死链/缓存排除在外（它们本来就会被
+     * 新运行时重建）。旧版本的逐项槽位仍然能被回填流程读懂，见 [restoreSlots]。
+     */
+    fun preservedEntries(): List<PreservedEntry> =
+        listOf(PreservedEntry(GUEST_HOME_SLOT, GUEST_HOME_ROOT, Category.FILES, "整个用户空间（/root）"))
+
+    /**
+     * 一次更新事务的完整保留清单：`暂存名 → 访客相对路径`。
+     *
+     * 新版只有 `guest-home → root` 一项；旧版暂存目录里的逐项槽位由 [restoreSlots] 认领。
+     */
+    fun preservedPaths(): LinkedHashMap<String, String> {
+        val paths = LinkedHashMap<String, String>()
+        for (entry in preservedEntries()) paths[entry.slot] = entry.path
+        return paths
+    }
+
     /** 生成 `preserve-<uuid>` 暂存目录名。 */
     fun preserveDirectoryName(nonce: String): String = PRESERVE_DIRECTORY_PREFIX + nonce
+
+    /**
+     * 暂存目录里的回填清单文本。
+     *
+     * `items` 让中断恢复按**当初**的槽位还原路径；`restored` / `merged` / `conflicts` 是给
+     * 界面与用户看的结果（冲突项仍在暂存目录里，清单是唯一的「去哪儿找」）。
+     */
+    fun reportJson(items: Map<String, String>, restored: Int, merged: Int, conflicts: List<String>): String =
+        JSONObject()
+            .put("version", 1)
+            .put("items", JSONObject(items as Map<*, *>))
+            .put("categories", JSONObject(items.keys.associateWith { categoryOf(it).wireValue }))
+            .put("restored", restored)
+            .put("merged", merged)
+            .put("conflicts", JSONArray(conflicts))
+            .toString()
+
+    /** 槽位属于哪一类：只按槽位名判定，因此离线读旧清单也能分类。 */
+    fun categoryOf(slot: String): Category = when {
+        slot == GUEST_HOME_SLOT -> Category.FILES
+        slot == "sessions" -> Category.CONVERSATIONS
+        slot == "plugin-manager" -> Category.PLUGINS
+        slot == "workspace" || slot.startsWith("workspace-") -> Category.FILES
+        else -> Category.SETTINGS
+    }
+
+    /**
+     * 整树回填后，按**相对 `root/` 的路径**给出分类（「数据保留」页据此汇总）。
+     * 用户空间里 `.dsh` 主要是会话、`.dsh-mobile` 是插件与运行时脚本，其余按文件处理。
+     */
+    fun categoryOfPath(relative: String): Category = when {
+        relative == ".dsh" || relative.startsWith(".dsh/") -> Category.CONVERSATIONS
+        relative == ".dsh-mobile" || relative.startsWith(".dsh-mobile/") -> Category.PLUGINS
+        else -> Category.FILES
+    }
+
+    /** 回填结果摘要：界面只读这三个数，不解析整个清单。 */
+    data class ReportSummary(val restored: Int, val merged: Int, val conflicts: List<String>)
+
+    /** 读清单里的结果摘要；没有清单或结构不合规时返回 `null`（界面据此说明「没有记录」）。 */
+    fun parseReportSummary(text: String?): ReportSummary? {
+        if (text == null || text.isEmpty() || text.length > MAX_REPORT_CHARS) return null
+        val json = try {
+            JSONObject(text)
+        } catch (_: Exception) {
+            return null
+        }
+        val restored = json.optInt("restored", -1)
+        val merged = json.optInt("merged", -1)
+        if (restored < 0 || merged < 0) return null
+        val raw = json.optJSONArray("conflicts") ?: JSONArray()
+        val conflicts = buildList {
+            for (index in 0 until minOf(raw.length(), MAX_REPORT_ITEMS)) {
+                val value = raw.opt(index)
+                if (value is String && value.length <= 400) add(value)
+            }
+        }
+        return ReportSummary(restored, merged, conflicts)
+    }
+
+    /**
+     * 从清单里取槽位 → 相对路径；结构、键或路径不合法时返回 `null`。
+     *
+     * 返回 `null` 的调用方一律退回**当前**默认清单：宁可少认几个扩展槽位，也不按一份
+     * 被改坏的路径把数据搬到别处。
+     */
+    fun parseReportPaths(text: String?): LinkedHashMap<String, String>? {
+        if (text == null || text.isEmpty() || text.length > MAX_REPORT_CHARS) return null
+        val items = try {
+            JSONObject(text).optJSONObject("items") ?: return null
+        } catch (_: Exception) {
+            return null
+        }
+        if (items.length() == 0 || items.length() > MAX_REPORT_ITEMS) return null
+        val paths = LinkedHashMap<String, String>()
+        for (key in items.keys()) {
+            if (!isKnownSlot(key)) return null
+            val value = items.opt(key) as? String ?: return null
+            val valid = if (key == GUEST_HOME_SLOT) value == GUEST_HOME_ROOT else normalizeWorkspaceRoot(value) != null
+            if (!valid) return null
+            paths[key] = value
+        }
+        return paths
+    }
 
     /** 是否是本策略生成的暂存目录名（严格校验 UUID，避免误删重名目录）。 */
     fun isPreserveDirectoryName(name: String): Boolean =
@@ -128,7 +367,15 @@ object RuntimePreservePolicy {
         /** 目标是**空目录**：视为新 rootfs 预建的空壳，删除空壳后把用户数据移入。 */
         REPLACE_EMPTY_DIRECTORY,
 
-        /** 目标是非空目录或文件：真冲突，用户数据保持不动，不覆盖也不删除。 */
+        /**
+         * 目标是非空目录：逐项合并，**同名不覆盖**，冲突的那几项留在暂存目录里。
+         *
+         * 这是旧版「非空即冲突」的修正：新 rootfs 只要预建了一个非空的 `root/1`
+         * （自带示例或 `inbox/`），整块用户数据就再也回填不进来，从用户视角看就是「文件没了」。
+         */
+        MERGE,
+
+        /** 目标是文件或符号链接：真冲突，用户数据保持不动，不覆盖也不删除。 */
         CONFLICT,
     }
 
@@ -142,10 +389,13 @@ object RuntimePreservePolicy {
      * @param present 目标同名项是否存在（判断不跟随符号链接）
      * @param isDirectory 目标是目录（判断不跟随符号链接；符号链接一律按冲突处理）
      * @param childCount 目标目录内的条目数；文件传 0 即可（文件永远不是空壳）
+     * @param merge 非空目录是否走逐项合并。默认 `true`；整项覆盖的旧语义只留给
+     *   「整目录搬移」的纯逻辑测试显式关闭。
      */
-    fun decideRestore(present: Boolean, isDirectory: Boolean, childCount: Int): RestoreDecision {
+    fun decideRestore(present: Boolean, isDirectory: Boolean, childCount: Int, merge: Boolean = true): RestoreDecision {
         if (!present) return RestoreDecision.MOVE_IN
         if (isDirectory && childCount == 0) return RestoreDecision.REPLACE_EMPTY_DIRECTORY
+        if (isDirectory && merge) return RestoreDecision.MERGE
         return RestoreDecision.CONFLICT
     }
 

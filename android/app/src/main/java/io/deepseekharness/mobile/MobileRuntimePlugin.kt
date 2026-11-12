@@ -95,6 +95,7 @@ import io.deepseekharness.mobile.runtime.RuntimeResidueInventory
 import io.deepseekharness.mobile.runtime.RuntimeResidueSizing
 import io.deepseekharness.mobile.runtime.RuntimeSelfCheckPolicy
 import io.deepseekharness.mobile.runtime.RuntimeSessionSnapshotCodes
+import io.deepseekharness.mobile.runtime.PreserveStore
 import io.deepseekharness.mobile.runtime.RuntimeLibrary
 import io.deepseekharness.mobile.runtime.RuntimeSettings
 import io.deepseekharness.mobile.runtime.RuntimeSource
@@ -1362,8 +1363,10 @@ class MobileRuntimePlugin : Plugin() {
     /**
      * 把当前 Harness 交给外置浏览器（完整能力，不是只读预览）。
      *
-     * URL 里只带**浏览器专用**的那枚令牌（不是 Basic 密码）。预载脚本把它换成 HttpOnly
-     * Cookie 后 302 去掉令牌，历史里只留下 `/`。回环地址让它出了设备即作废；没有令牌的
+     * URL 带两枚本次运行周期的临时令牌：浏览器专用令牌负责通过应用预载的门，dsh 自己的
+     * 启动令牌负责通过 dsh 的浏览器认证门；Basic 密码绝不进入 URL。预载校验前一枚后把
+     * 两者同时删除并经 302 换成 HttpOnly Cookie，历史里只留下 `/`。dsh 令牌直接来自已经
+     * 校验过的启动 URL，不能依赖预载从 stdout 猜测。回环地址让它出了设备即作废；没有令牌的
      * 同机请求仍然进不来。浏览器里点开的链接与网站由用户自行判断。
      */
     @PluginMethod
@@ -1828,6 +1831,80 @@ class MobileRuntimePlugin : Plugin() {
                 JSObject(controller.deleteSessionSnapshot(id).toJs().toString())
             }
         }
+    }
+
+    /**
+     * 「数据保留」页：上次运行时更新留在暂存目录里的条目。
+     *
+     * 只读。旧版本留下的暂存目录没有回填清单也能列出来——按文件系统实际内容读，
+     * 分类由槽位名判定，因此升级 App 之后仍能看到旧版更新的遗留数据。
+     */
+    @PluginMethod
+    fun getPreserveState(call: PluginCall) {
+        execute(call) { preserveStateToJs(controller.preserveState()) }
+    }
+
+    /**
+     * 把一份待处理副本取回到工作区 `recovered/<id>/`。
+     *
+     * 复制而不是移动：失败时暂存目录仍是完整原件；目标同名文件顺延改名，绝不覆盖。
+     */
+    @PluginMethod
+    fun recoverPreserveItems(call: PluginCall) {
+        execute(call) {
+            val id = call.getString("id") ?: throw RuntimeFailure("PRESERVE_INVALID_ID", "数据保留目录标识缺失")
+            val result = controller.recoverPreservedData(id)
+            JSObject()
+                .put("id", result.id)
+                .put("target", result.target)
+                .put("files", result.files)
+                .put("bytes", result.bytes)
+                .put("skippedSymlinks", result.skippedSymlinks)
+        }
+    }
+
+    /** 丢弃一份待处理副本（用户显式删除）：只删暂存目录，绝不触碰当前运行时。 */
+    @PluginMethod
+    fun discardPreserveItems(call: PluginCall) {
+        execute(call) {
+            val id = call.getString("id") ?: throw RuntimeFailure("PRESERVE_INVALID_ID", "数据保留目录标识缺失")
+            JSObject().put("id", id).put("discarded", controller.discardPreservedData(id))
+        }
+    }
+
+    private fun preserveStateToJs(state: PreserveStore.State): JSObject {
+        val pending = JSArray()
+        for (entry in state.pending) {
+            val items = JSArray()
+            for (item in entry.items) {
+                items.put(
+                    JSObject()
+                        .put("slot", item.slot)
+                        .put("category", item.category)
+                        .put("path", item.path)
+                        .put("bytes", item.bytes)
+                        .put("files", item.files),
+                )
+            }
+            val report = entry.report
+            pending.put(
+                JSObject()
+                    .put("id", entry.id)
+                    .put("updatedAt", entry.updatedAtMillis)
+                    .put("bytes", entry.bytes)
+                    .put("items", items)
+                    .put(
+                        "report",
+                        report?.let {
+                            JSObject()
+                                .put("restored", it.restored)
+                                .put("merged", it.merged)
+                                .put("conflicts", JSArray(it.conflicts.toMutableList()))
+                        },
+                    ),
+            )
+        }
+        return JSObject().put("status", "ready").put("pending", pending)
     }
 
     /**

@@ -16,9 +16,11 @@ import org.json.JSONObject
 /**
  * 壳页「会话工作区」的元数据载荷：把访客脚本的输出折算成回传 WebView 的**最小集合**。
  *
- * 这一层是白名单闸门（`SessionCatalogTest` 逐条钉住）：只有 `id`、`title`、`updatedAt`
- * 三个字段能出去，其余键（`cwd`、路径、正文、snippet、事件对象……）**结构性地**不存在于输出里，
- * 而不是「靠过滤掉」。载荷不可信时返回 `null`，由调用方折算成受控错误码，
+ * 这一层是白名单闸门（`SessionCatalogTest` 逐条钉住）：只有 `id`、`title`、`updatedAt`、
+ * `depth` 以及可选的 `parentId` / `agentName` 能出去，其余键（`cwd`、路径、正文、snippet、
+ * 事件对象……）**结构性地**不存在于输出里，而不是「靠过滤掉」。`depth`/`parentId`/`agentName`
+ * 只决定列表怎么分组（子代理折叠进父会话），不携带任何会话内容。
+ * 载荷不可信时返回 `null`，由调用方折算成受控错误码，
  * **绝不**回一个空列表——那会让界面把一次失败显示成「真的没有会话」。
  *
  * 纯逻辑、不碰 Android API，因此可以在本机 JVM 单测里直接覆盖。
@@ -29,6 +31,12 @@ internal object SessionCatalogPayload {
 
     /** 标题上限（UTF-16 字符数）：宿主侧最长 80 字节，留足余量即可判定为不可信。 */
     const val MAX_TITLE_CHARS = 200
+
+    /**
+     * 子代理的委派深度上限：越界 / 不是整数时**只丢这个字段**（按主会话处理），不丢整条会话
+     * ——少列一条会话同样是编造「没有这个会话」。
+     */
+    const val MAX_DEPTH = 8
 
     /** 最大载荷字符数：访客脚本自身限 64 KiB，超出即视为不可信。 */
     const val MAX_PAYLOAD_CHARS = 64 * 1024
@@ -54,6 +62,9 @@ internal object SessionCatalogPayload {
 
     /** 标题里的控制字符：出现即丢掉整条标题（不截断、不转义，宁可显示「未命名会话」）。 */
     private val CONTROL_IN_TITLE = Regex("[\\u0000-\\u001F\\u007F]")
+
+    /** 子代理预设名（`agentPreset`）：实测 `standard` / `cordis`，过宽等于把任意文本带进界面。 */
+    private val AGENT_NAME = Regex("^[A-Za-z0-9._-]{1,32}$")
 
     /** 受控失败字段：仅返回桥接协议约定的状态和错误码，不带原始异常文本。 */
     fun unavailable(reason: String): JSONObject =
@@ -93,12 +104,15 @@ internal object SessionCatalogPayload {
             if (entry == null) continue
             val id = readIdentifier(entry) ?: continue
             val updatedAt = readTimestamp(entry) ?: continue
-            sessions.put(
-                JSONObject()
-                    .put("id", id)
-                    .put("title", readTitle(entry))
-                    .put("updatedAt", updatedAt),
-            )
+            val session = JSONObject()
+                .put("id", id)
+                .put("title", readTitle(entry))
+                .put("updatedAt", updatedAt)
+                .put("depth", readDepth(entry))
+            // 可选字段只在真的合法时出现：界面据 parentId 分组，据 agentName 让搜索命中预设名。
+            readIdentifierField(entry, "parentId")?.let { session.put("parentId", it) }
+            readAgentName(entry)?.let { session.put("agentName", it) }
+            sessions.put(session)
         }
         // 有会话却一条都没通过校验 → 载荷与约定不符，按「读不到」处理，不能显示成「没有会话」。
         if (raw.length() > 0 && sessions.length() == 0) return null
@@ -111,10 +125,31 @@ internal object SessionCatalogPayload {
     private fun readIdentifier(entry: JSONObject): String? {
         // 安全校验点：元数据类型必须符合协议，不把数值、null 或对象强制转换成字符串。
         val id = entry.opt("id") as? String ?: return null
-        if (id.isEmpty() || id.length > 200) return null
-        if (id.startsWith(".")) return null
-        if (FORBIDDEN_IN_IDENTIFIER.containsMatchIn(id)) return null
-        return id
+        return id.takeIf(::isValidIdentifier)
+    }
+
+    /** 同一个键名下的可选标识（目前只有子代理的 `parentId`）：不合法就当作没有，整条会话保留。 */
+    private fun readIdentifierField(entry: JSONObject, key: String): String? {
+        val value = entry.opt(key) as? String ?: return null
+        return value.takeIf(::isValidIdentifier)
+    }
+
+    private fun isValidIdentifier(value: String): Boolean {
+        if (value.isEmpty() || value.length > 200) return false
+        if (value.startsWith(".")) return false
+        return !FORBIDDEN_IN_IDENTIFIER.containsMatchIn(value)
+    }
+
+    /** 深度取不到或不合法时按 0（主会话）处理：这条会话仍然出现在列表里。 */
+    private fun readDepth(entry: JSONObject): Int = when (val value = entry.opt("depth")) {
+        is Int -> value.takeIf { it in 0..MAX_DEPTH } ?: 0
+        is Long -> value.takeIf { it in 0..MAX_DEPTH.toLong() }?.toInt() ?: 0
+        else -> 0
+    }
+
+    private fun readAgentName(entry: JSONObject): String? {
+        val value = entry.opt("agentName") as? String ?: return null
+        return value.takeIf { AGENT_NAME.matches(it) }
     }
 
     private fun readTimestamp(entry: JSONObject): Long? {
@@ -165,8 +200,8 @@ class SessionCatalog(context: Context, private val store: RuntimeStore) {
     /**
      * 读取会话清单。
      *
-     * 返回成功载荷 `{status:"ready",sessions:[{id,title,updatedAt}],truncated}` 或受控错误
-     * `{status:"unavailable",reason:"<码>"}`；
+     * 返回成功载荷 `{status:"ready",sessions:[{id,title,updatedAt,depth,parentId?,agentName?}],truncated}`
+     * 或受控错误 `{status:"unavailable",reason:"<码>"}`；
      * 两种情况都走 `resolve`（不是 `reject`），壳页才能在不依赖异常通道的前提下
      * 把「读不到」与「没有会话」区分开。
      */

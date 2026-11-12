@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url'
 
 const TOKEN = 'A'.repeat(43)
 const BROWSER_TOKEN = 'B'.repeat(43)
+const DSH_TOKEN = 'D'.repeat(43)
+const NATIVE_DSH_TOKEN = 'E'.repeat(43)
 const USERNAME = 'dsh-mobile'
 const PRELOAD = fileURLToPath(new URL('./mobile-auth-preload.cjs', import.meta.url))
 const CHILD_SOURCE = `
@@ -24,7 +26,17 @@ const CHILD_SOURCE = `
   server.on('upgrade', (_request, socket) => {
     socket.end('HTTP/1.1 101 Switching Protocols\\r\\nConnection: Upgrade\\r\\nUpgrade: websocket\\r\\n\\r\\n')
   })
-  server.listen(0, '127.0.0.1', () => process.stdout.write(String(server.address().port) + '\\n'))
+  server.listen(0, '127.0.0.1', () => {
+    const port = String(server.address().port)
+    process.stdout.write(port + '\\n')
+    // 干扰行：插件日志里的 token= 不能成为外置浏览器的 dsh 令牌。
+    process.stderr.write('plugin debug token=' + 'C'.repeat(43) + '\\n')
+    // 模拟 stdout 分片：任何单个 chunk 都不包含完整的启动令牌。
+    const line = 'dsh web: http://127.0.0.1:' + port + '/?token=${DSH_TOKEN}'
+    const split = line.indexOf('token=') + 'token='.length + 10
+    process.stdout.write(line.slice(0, split))
+    process.stdout.write(line.slice(split) + '\\n')
+  })
   process.on('SIGTERM', () => server.close(() => process.exit(0)))
 `
 
@@ -188,11 +200,14 @@ describe('mobile Harness authentication preload', () => {
     )
   })
 
-  it('turns a query-string token into a browser cookie, and only that token works', async () => {
+  it('hands dsh its launch token, then turns the query token into a browser cookie', async () => {
     const handoff = await request(port, undefined, `/?dshMobileToken=${BROWSER_TOKEN}`)
     assert.equal(handoff.status, 302)
     // 绝对地址：部分浏览器不认相对 Location（实测「地址栏跳了、页面不加载」）。
-    assert.match(handoff.headers.location, /^http:\/\/127\.0\.0\.1:\d+\/$/)
+    assert.equal(handoff.headers.location, `http://127.0.0.1:${port}/?token=${DSH_TOKEN}`)
+    // 原始地址里的两枚交接参数都必须删除，且不能经 Referer 外泄。
+    assert.doesNotMatch(handoff.headers.location, /dshMobileToken/u)
+    assert.equal(handoff.headers['referrer-policy'], 'no-referrer')
     // 只种浏览器专用那一枚，而且不带分钟数：有效性由令牌本身（每次启动重生成）决定。
     assert.deepEqual(handoff.headers['set-cookie'], [
       `dsh_browser_session=${BROWSER_TOKEN}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
@@ -207,6 +222,72 @@ describe('mobile Harness authentication preload', () => {
     assert.equal((await request(port, undefined, `/?dshMobileToken=${TOKEN}`)).status, 403)
     // 交接只认根路径，避免误吃 dsh 自己的 token 查询参数。
     assert.equal((await request(port, undefined, `/api?dshMobileToken=${BROWSER_TOKEN}`)).status, 401)
+  })
+
+  it('uses the app-provided dsh launch token instead of guessing from stdout', async () => {
+    const handoff = await request(
+      port,
+      undefined,
+      `/?dshMobileToken=${BROWSER_TOKEN}&token=${NATIVE_DSH_TOKEN}`,
+    )
+    assert.equal(handoff.status, 302)
+    assert.equal(handoff.headers.location, `http://127.0.0.1:${port}/?token=${NATIVE_DSH_TOKEN}`)
+    assert.doesNotMatch(handoff.headers.location, /dshMobileToken/u)
+    assert.equal((handoff.headers.location.match(/[?&]token=/gu) ?? []).length, 1)
+  })
+
+  it('rejects malformed or duplicate dsh handoff tokens with an actionable page', async () => {
+    for (const suffix of [
+      'token=short',
+      `token=${NATIVE_DSH_TOKEN}&token=${NATIVE_DSH_TOKEN}`,
+    ]) {
+      const invalid = await request(port, undefined, `/?dshMobileToken=${BROWSER_TOKEN}&${suffix}`)
+      assert.equal(invalid.status, 403, suffix)
+      assert.equal(invalid.headers.location, undefined, suffix)
+      assert.match(invalid.body, /交接参数无效/u)
+      assert.equal(invalid.headers['www-authenticate'], undefined, suffix)
+    }
+  })
+
+  it('does not redirect to the dsh auth page when no launch token is available', async () => {
+    const source = `
+      const http = require('node:http')
+      const server = http.createServer((_request, response) => response.end('unexpected'))
+      server.listen(0, '127.0.0.1', () => process.stdout.write(String(server.address().port) + '\\n'))
+      process.on('SIGTERM', () => server.close(() => process.exit(0)))
+    `
+    const fallback = spawn(process.execPath, ['-e', source], {
+      env: {
+        ...process.env,
+        DSH_MOBILE_AUTH_TOKEN: TOKEN,
+        DSH_MOBILE_BROWSER_TOKEN: BROWSER_TOKEN,
+        NODE_OPTIONS: `--require=${PRELOAD}`,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    try {
+      const line = await new Promise((resolve, reject) => {
+        let output = ''
+        fallback.stdout.setEncoding('ascii')
+        fallback.stdout.on('data', chunk => {
+          output += chunk
+          if (output.includes('\n')) resolve(output.slice(0, output.indexOf('\n')))
+        })
+        fallback.once('error', reject)
+        fallback.once('exit', code => reject(new Error(`no-token fixture exited with ${code}`)))
+      })
+      const unavailable = await request(Number(line), undefined, `/?dshMobileToken=${BROWSER_TOKEN}`)
+      assert.equal(unavailable.status, 503)
+      assert.equal(unavailable.headers.location, undefined)
+      assert.equal(unavailable.headers['www-authenticate'], undefined)
+      assert.match(unavailable.body, /鉴权入口尚未就绪/u)
+      assert.match(unavailable.body, /重新打开/u)
+    } finally {
+      if (fallback.exitCode === null) {
+        fallback.kill('SIGTERM')
+        await new Promise(resolve => fallback.once('exit', resolve))
+      }
+    }
   })
 
   it('tells a stale browser session to reopen instead of prompting for Basic', async () => {

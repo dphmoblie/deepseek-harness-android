@@ -1,4 +1,4 @@
-package io.deepseekharness.mobile.runtime
+﻿package io.deepseekharness.mobile.runtime
 
 import android.os.Build
 import org.json.JSONArray
@@ -252,6 +252,7 @@ data class RuntimeManifest(
                 dshVersion = dshVersion,
             )
         }
+
 
         private fun requiredObject(parent: JSONObject, key: String): JSONObject = try {
             parent.getJSONObject(key)

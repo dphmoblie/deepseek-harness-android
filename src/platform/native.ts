@@ -104,6 +104,9 @@ import {
   validateRuntimeSessionListResult,
   validateRuntimeSessionSnapshotRestoreResult,
   validateRuntimeSessionSnapshotState,
+  validatePreserveState,
+  validatePreserveRecoverResult,
+  validatePreserveDiscardResult,
   validateRuntimeWorkspaceFileList,
   validateRuntimeWorkspaceFilePath,
   validateRuntimeSelfCheckReport,
@@ -155,6 +158,9 @@ interface NativeRuntimePlugin {
   createRuntimeSessionSnapshot(): Promise<unknown>
   restoreRuntimeSessionSnapshot(options: { id: string }): Promise<unknown>
   deleteRuntimeSessionSnapshot(options: { id: string }): Promise<unknown>
+  getPreserveState(): Promise<unknown>
+  recoverPreserveItems(options: { id: string }): Promise<unknown>
+  discardPreserveItems(options: { id: string }): Promise<unknown>
   startHarness(): Promise<RuntimeState>
   openHarness(options?: { sessionId?: string }): Promise<void>
   openHarnessExternal(): Promise<void>
@@ -675,6 +681,16 @@ function createNativeBridge(): RuntimeBridge {
     deleteRuntimeSessionSnapshot: id => NativeRuntime
       .deleteRuntimeSessionSnapshot({ id })
       .then(validateRuntimeSessionSnapshotState),
+    // 数据保留：三条都走同一套校验；取回/删除只认 `preserve-<uuid>` 形态的 id。
+    getPreserveState: () => NativeRuntime
+      .getPreserveState()
+      .then(validatePreserveState),
+    recoverPreserveItems: id => NativeRuntime
+      .recoverPreserveItems({ id })
+      .then(validatePreserveRecoverResult),
+    discardPreserveItems: id => NativeRuntime
+      .discardPreserveItems({ id })
+      .then(validatePreserveDiscardResult),
     // 可用版本列表由原生侧给出：缺清单的条目只可展示，校验侧不允许它混成「可安装」。
     listRuntimeReleases: () => NativeRuntime.listRuntimeReleases().then(validateRuntimeReleaseList),
     downloadRuntimeRelease: (manifestUrl, manifestSha256) =>

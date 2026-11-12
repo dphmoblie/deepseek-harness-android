@@ -1,0 +1,25 @@
+/* 「数据保留」卡片：待处理副本一行一条，动作按钮靠右。
+   配色与间距沿用设置页现有变量（--card-* / --line / --radius-card），不新造一套。 */
+.data-preservation-card { display: grid; gap: 10px; }
+.data-preservation-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.data-preservation-title { color: var(--card-ink, var(--ink)); font-size: .9375rem; font-weight: 600; }
+.data-preservation-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.data-preservation-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--card-color, var(--surface));
+}
+.data-preservation-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.data-preservation-copy strong { color: var(--card-ink, var(--ink)); font-size: .875rem; }
+.data-preservation-copy small { color: var(--card-muted, var(--muted)); font-size: .75rem; line-height: 1.5; }
+.data-preservation-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 520px) {
+  .data-preservation-row { align-items: stretch; flex-direction: column; }
+  .data-preservation-actions { justify-content: flex-end; }
+}

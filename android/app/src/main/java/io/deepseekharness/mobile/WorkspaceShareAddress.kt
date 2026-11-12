@@ -1,4 +1,4 @@
-package io.deepseekharness.mobile
+﻿package io.deepseekharness.mobile
 
 import java.io.ByteArrayOutputStream
 import java.net.URI
@@ -17,8 +17,8 @@ import java.nio.charset.StandardCharsets
  *    只在页面拿不到绝对路径时使用。
  *
  * 「这个路径能不能分享」必须由原生判定——页面里的路径同样可能被注入或篡改。两条路都只
- * 产出 `root/1` 下的相对路径，随后 [io.deepseekharness.mobile.runtime.RuntimeWorkspaceFiles]
- * 还会逐层 NoFollow 校验并限制在工作区 `root/1` 下。
+ * 产出访客用户空间 `root/` 下的相对路径，随后 [io.deepseekharness.mobile.runtime.RuntimeWorkspaceFiles]
+ * 还会逐层 NoFollow 校验并限制在 `/root` 下（`/root/dsh` 这类用户目录也能分享，`/etc` 之类仍拒绝）。
  *
  * 只接受主文档 GET、已知参数各一次，且 scheme/host 必须精确匹配；其余一律视为无效。
  */
@@ -27,7 +27,7 @@ internal object WorkspaceShareAddress {
 
     private const val HOST = "file"
     private const val ADDRESS_PREFIX = "dsh-resource://file/session/"
-    private const val WORKSPACE_PATH = "/root/1/"
+    private const val WORKSPACE_PATH = "/root/"
     /**
      * 会话工作目录是 PRoot 启动目录 `/root` 时，工作区文件在地址里多出的第一层。
      *

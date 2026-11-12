@@ -49,8 +49,8 @@ describe('App conversation gate', () => {
 
     fireEvent.click(updateButton)
     const updateDialog = await screen.findByRole('dialog', { name: '更新 Ubuntu 运行环境' })
-    expect(updateDialog).toHaveTextContent('会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及插件（包括终端安装的第三方插件）会自动备份并尝试恢复')
-    expect(updateDialog).toHaveTextContent('若恢复发生冲突，请到插件管理检查')
+    expect(updateDialog).toHaveTextContent('整个用户空间 /root（会话、模型密钥、Harness 设置、附件、技能、插件、工作区文件，以及你自己在 /root 下建的目录）都会保留')
+    expect(updateDialog).toHaveTextContent('撞名没搬回的项会留在「数据保留」里可取回')
     fireEvent.click(screen.getByRole('button', { name: '确认更新' }))
 
     await waitFor(() => expect(bridge.install).toHaveBeenCalledWith({ manifestUrl: '', manifestSha256: '' }))

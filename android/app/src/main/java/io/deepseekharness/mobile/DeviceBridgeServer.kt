@@ -369,11 +369,21 @@ class DeviceBridgeServer(
                     }
                     respondResult(output, runOneShot(command, param, rootEngine, rootGuardProfile))
                 } catch (error: Throwable) {
-                    val code = (error as? RuntimeFailure)?.code ?: "BRIDGE_FAILED"
+                    val failure = error as? RuntimeFailure
+                    val code = failure?.code ?: "BRIDGE_FAILED"
+                    // 受控失败必须带回说明：只给 `DEVICE_SHELL_DISABLED` 这类码时，模型与用户
+                    // 只能猜「是没装 Shizuku、没开 AI Shell，还是根通道没开」——真机上就表现为
+                    // 「Shell 拉不起来」且没有任何下一步。message 是本应用自己写死的简体中文，
+                    // 折叠空白并截断后放进 text；errorCode 的冻结契约不变。
+                    val explanation = failure?.message
+                        ?.replace(WHITESPACE, " ")
+                        ?.trim()
+                        ?.take(MAX_FAILURE_EXPLANATION_CHARS)
+                        ?: ""
                     respond(
                         output,
                         200,
-                        JSONObject().put("ok", false).put("text", "").put("exitCode", 1)
+                        JSONObject().put("ok", false).put("text", explanation).put("exitCode", 1)
                             .put("truncated", false).put("errorCode", code).toString(),
                     )
                 }
@@ -493,5 +503,11 @@ class DeviceBridgeServer(
         private const val DEFAULT_ROWS = 24
         /** 文件上传包含 Base64；仍保持一个受控上限，避免把桥变成无限内存入口。 */
         private const val MAX_REQUEST_BODY_BYTES = 200_000
+
+        /** 受控失败说明的正文上限：只用来解释「下一步做什么」，不是日志出口。 */
+        private const val MAX_FAILURE_EXPLANATION_CHARS = 400
+
+        /** 折行、制表与连续空白：说明里的换行会破坏回执的单行结构。 */
+        private val WHITESPACE = Regex("\\s+")
     }
 }

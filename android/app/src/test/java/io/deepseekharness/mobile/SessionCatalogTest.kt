@@ -11,7 +11,8 @@ import org.junit.Test
  * 会话元数据载荷的白名单与降级语义。
  *
  * 这些用例钉住三件事：
- * 1. 只有 `id`/`title`/`updatedAt` 能出去——正文、`cwd`、路径与未知字段**结构性**消失；
+ * 1. 只有 `id`/`title`/`updatedAt`/`depth` 以及可选的 `parentId`/`agentName` 能出去——
+ *    正文、`cwd`、路径与未知字段**结构性**消失；分组字段不合法时只丢字段、不丢整条；
  * 2. 读不到时回受控错误字段，**不用空列表冒充「没有会话」**；
  * 3. 条数上限与丢弃规则不会让界面声称「这就是全部」。
  */
@@ -104,11 +105,52 @@ class SessionCatalogTest {
         )
         val result = SessionCatalogPayload.fromProbe(true, false, payload(hostile).toString())
         val session = result.getJSONArray("sessions").getJSONObject(0)
-        assertEquals(setOf("id", "title", "updatedAt"), session.keys().asSequence().toSet())
+        // `depth` 恒在（缺省 0）；`parentId` / `agentName` 是可选字段，没有就不出现。
+        assertEquals(setOf("id", "title", "updatedAt", "depth"), session.keys().asSequence().toSet())
+        assertEquals(0, session.getInt("depth"))
         val serialized = result.toString()
         for (forbidden in listOf(body, "/root", ".dsh", "cwd", "snippet", "path", "events")) {
             assertFalse("回传体里不得出现 $forbidden", serialized.contains(forbidden))
         }
+    }
+
+    @Test
+    fun keepsGroupingFieldsButDropsEachInvalidOneWithoutLosingTheSession() {
+        val result = SessionCatalogPayload.fromProbe(
+            true,
+            false,
+            payload(
+                entry("session-parent", "父会话", 3000L, mapOf("depth" to 0)),
+                entry(
+                    "session-child",
+                    "",
+                    2000L,
+                    mapOf("depth" to 1, "parentId" to "session-parent", "agentName" to "cordis"),
+                ),
+                // 三个字段都不合法：深度越界、父 id 带路径片段、预设名带空格与感叹号。
+                entry("session-bad", "坏字段", 1000L, mapOf("depth" to 9, "parentId" to "../escape", "agentName" to "bad name!")),
+            ).toString(),
+        )
+        val sessions = result.getJSONArray("sessions")
+        val parent = sessions.getJSONObject(0)
+        val child = sessions.getJSONObject(1)
+        val bad = sessions.getJSONObject(2)
+
+        // 主会话：深度 0，可选字段不出现。
+        assertEquals(0, parent.getInt("depth"))
+        assertFalse(parent.has("parentId"))
+        assertFalse(parent.has("agentName"))
+
+        // 子代理：三个字段原样保留，界面据此折叠进父会话。
+        assertEquals(1, child.getInt("depth"))
+        assertEquals("session-parent", child.getString("parentId"))
+        assertEquals("cordis", child.getString("agentName"))
+
+        // 坏字段只丢字段：整条会话仍然在列表里（少列一条同样是编造「没有这个会话」）。
+        assertEquals(0, bad.getInt("depth"))
+        assertFalse(bad.has("parentId"))
+        assertFalse(bad.has("agentName"))
+        assertEquals(3, sessions.length())
     }
 
     @Test

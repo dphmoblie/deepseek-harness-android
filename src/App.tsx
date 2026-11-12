@@ -1,4 +1,4 @@
-import appMark from './assets/app-mark.png'
+﻿import appMark from './assets/app-mark.png'
 import { readLanguage, saveLanguage, t, useLanguage } from './i18n'
 import { colorMixSupported } from './legacyWebView'
 import { formatByteCount as formatBytes, formatDuration, useDownloadTelemetry } from './downloadTelemetry'
@@ -1252,7 +1252,7 @@ function EnvironmentScreen({ busy, bundledSource, harnessVersionBusy, runtime, o
       {runtime.updateAvailable && installed && (
         <div className="inline-alert warning" role="alert">
           <AlertTriangle size={19} />
-          <div><strong>{t("安装包内置的运行环境有更新")}</strong><span>{t("更新会替换 Ubuntu 运行时的系统目录：用 apt 等装进系统的软件与其它本地修改会丢失；会话、模型密钥、Harness 设置、附件、技能、默认工作区，以及插件（包括终端安装的第三方插件）会自动备份并尝试恢复。若恢复发生冲突，请到插件管理检查。")}</span></div>
+          <div><strong>{t("安装包内置的运行环境有更新")}</strong><span>{t("更新会替换 Ubuntu 运行时的系统目录。你的整个用户空间 /root（会话、模型密钥、Harness 设置、附件、技能、插件、工作区文件，以及你自己在 /root 下建的目录）都会保留；旧令牌与旧脚本不会搬回，撞名没搬回的项会留在「数据保留」里可取回。")}</span></div>
         </div>
       )}
 

@@ -87,6 +87,120 @@ describe('会话管理页', () => {
     expect(onOpenHarness).toHaveBeenCalledWith('session-aaa')
   })
 
+  it('子代理折叠在父会话下面：默认不占会话入口，徽标展开后点开的是父会话', async () => {
+    const onOpenHarness = vi.fn()
+    const updatedAt = Date.UTC(2026, 0, 2, 3, 4, 5)
+    listSessions.mockResolvedValue({
+      status: 'ready',
+      truncated: false,
+      sessions: [
+        { id: 'session-parent', title: '主会话标题', updatedAt, depth: 0 },
+        { id: 'session-sub1', title: '', updatedAt: updatedAt - 1_000, depth: 1, parentId: 'session-parent', agentName: 'cordis' },
+        { id: 'session-sub2', title: '子任务产物', updatedAt: updatedAt - 2_000, depth: 1, parentId: 'session-parent', agentName: 'standard' },
+      ],
+    })
+
+    const { container } = render(<SessionManager onBack={vi.fn()} onOpenHarness={onOpenHarness} />)
+
+    expect(await screen.findByText('主会话标题')).toBeInTheDocument()
+    // 计数如实分开：子代理不是「会话」，但也不隐藏。
+    expect(screen.getByText('1 个会话 · 2 个子代理')).toBeInTheDocument()
+    // 默认折叠：子代理标题不出现在列表里，只有父行右侧的徽标。
+    expect(screen.queryByText('子任务产物')).not.toBeInTheDocument()
+    expect(container.querySelectorAll('[data-session-depth="0"]')).toHaveLength(1)
+    const badge = screen.getByRole('button', { name: '展开 2 个子代理' })
+    expect(badge).toHaveAttribute('aria-expanded', 'false')
+    expect(badge).toHaveTextContent('2 个子代理')
+
+    fireEvent.click(badge)
+    expect(screen.getByRole('button', { name: '收起 2 个子代理' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('子任务产物')).toBeInTheDocument()
+    // 没标题的子代理用预设名，不再显示成「未命名会话」。
+    expect(screen.getByText('子代理 · cordis')).toBeInTheDocument()
+    expect(screen.queryByText('未命名会话')).not.toBeInTheDocument()
+
+    // 点子代理打开的是**父会话**：把 childId 当普通会话打开只会得到空白页。
+    fireEvent.click(screen.getByRole('button', { name: '打开所属会话：子任务产物' }))
+    expect(onOpenHarness).toHaveBeenCalledWith('session-parent')
+
+    fireEvent.click(screen.getByRole('button', { name: '收起 2 个子代理' }))
+    expect(screen.queryByText('子任务产物')).not.toBeInTheDocument()
+  })
+
+  it('搜索能用预设名命中子代理，并把父行一起带出来', async () => {
+    listSessions.mockResolvedValue({
+      status: 'ready',
+      truncated: false,
+      sessions: [
+        { id: 'session-parent', title: '主会话标题', updatedAt: Date.UTC(2026, 0, 2), depth: 0 },
+        { id: 'session-sub1', title: '后台子任务', updatedAt: Date.UTC(2026, 0, 1), depth: 1, parentId: 'session-parent', agentName: 'cordis' },
+      ],
+    })
+
+    render(<SessionManager onBack={vi.fn()} onOpenHarness={vi.fn()} />)
+    expect(await screen.findByText('主会话标题')).toBeInTheDocument()
+
+    const searchBox = screen.getByRole('searchbox', { name: '搜索会话' })
+    fireEvent.change(searchBox, { target: { value: 'cordis' } })
+    // 只命中子代理：父行必须在结果里，否则搜到了却看不见。
+    expect(screen.getByText('主会话标题')).toBeInTheDocument()
+    expect(screen.getByText('后台子任务')).toBeInTheDocument()
+
+    // 命中父标题时它的子代理一起带出来。
+    fireEvent.change(searchBox, { target: { value: '主会话' } })
+    expect(screen.getByText('后台子任务')).toBeInTheDocument()
+
+    fireEvent.change(searchBox, { target: { value: '不存在' } })
+    expect(screen.getByText('没有匹配的会话')).toBeInTheDocument()
+  })
+
+  it('筛选切成「全部 / 子代理」时主会话与子代理分开呈现', async () => {
+    listSessions.mockResolvedValue({
+      status: 'ready',
+      truncated: false,
+      sessions: [
+        { id: 'session-parent', title: '主会话标题', updatedAt: Date.UTC(2026, 0, 2), depth: 0 },
+        { id: 'session-sub1', title: '子任务产物', updatedAt: Date.UTC(2026, 0, 1), depth: 1, parentId: 'session-parent', agentName: 'standard' },
+      ],
+    })
+
+    const { container } = render(<SessionManager onBack={vi.fn()} onOpenHarness={vi.fn()} />)
+    expect(await screen.findByText('主会话标题')).toBeInTheDocument()
+    expect(screen.queryByText('子任务产物')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: '全部' }))
+    expect(screen.getByText('子任务产物')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: '子代理' }))
+    expect(container.querySelectorAll('[data-session-depth="0"]')).toHaveLength(0)
+    expect(screen.getByText('子任务产物')).toBeInTheDocument()
+    // 子代理卡片仍能看出它属于谁。
+    expect(screen.getByText(/属于「主会话标题」/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: '主会话' }))
+    expect(screen.getByText('主会话标题')).toBeInTheDocument()
+  })
+
+  it('父会话不在列表里的子代理进「未关联子代理」，连父都指不出来的按钮禁用', async () => {
+    listSessions.mockResolvedValue({
+      status: 'ready',
+      truncated: false,
+      sessions: [
+        { id: 'session-parent', title: '主会话标题', updatedAt: Date.UTC(2026, 0, 3), depth: 0 },
+        { id: 'session-orphan', title: '孤儿子代理', updatedAt: Date.UTC(2026, 0, 2), depth: 1, parentId: 'session-missing', agentName: 'standard' },
+        { id: 'session-noparent', title: '', updatedAt: Date.UTC(2026, 0, 1), depth: 1 },
+      ],
+    })
+
+    render(<SessionManager onBack={vi.fn()} onOpenHarness={vi.fn()} />)
+    expect(await screen.findByText('未关联子代理')).toBeInTheDocument()
+    // 不静默隐藏：父会话被 50 条上限截断时，子代理仍然看得见、点得开。
+    expect(screen.getByText('孤儿子代理')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '打开所属会话：孤儿子代理' })).toBeEnabled()
+    // 连父标识都没有：不给一个点了只会空白页的入口。
+    expect(screen.getByRole('button', { name: '未关联子代理：子代理' })).toBeDisabled()
+  })
+
   it('真实会话不提供删除按钮：只读通道不承诺删得掉', async () => {
     listSessions.mockResolvedValue({
       status: 'ready',

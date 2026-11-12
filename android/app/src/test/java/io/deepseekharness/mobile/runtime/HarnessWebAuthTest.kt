@@ -68,14 +68,19 @@ class HarnessWebAuthTest {
     }
 
     @Test
-    fun browserLaunchUrlCarriesTheBrowserTokenInTheQueryAndNoFragment() {
+    fun browserLaunchUrlCarriesBothTokensInTheQueryAndNoFragment() {
         val browserToken = "B".repeat(43)
         val launch = HarnessWebAuth.browserLaunchUrl(entry, browserToken)
-        // 必须与 dsh 自己的 ?token= 区分：交接用 dshMobileToken，重定向时才由预载补上 dsh 的令牌。
-        assertEquals("http://127.0.0.1:3080/?dshMobileToken=$browserToken", launch?.toASCIIString())
+        // 应用门的交接参数用 dshMobileToken；dsh 自己的启动令牌继续沿用 token 参数，
+        // 两者同时交给预载后由 302 去掉。不能只依赖 stdout 截获。
+        assertEquals(
+            "http://127.0.0.1:3080/?dshMobileToken=$browserToken&token=$token",
+            launch?.toASCIIString(),
+        )
         assertEquals(null, launch?.rawFragment)
         // 非法令牌一律不构造 URL，避免把半截凭据交出去。
         assertEquals(null, HarnessWebAuth.browserLaunchUrl(entry, "too-short"))
+        assertEquals(null, HarnessWebAuth.browserLaunchUrl("http://127.0.0.1:3080/", browserToken))
     }
 
     @Test
@@ -84,13 +89,18 @@ class HarnessWebAuthTest {
         val session = "session-49c96fce-f065-4c1d-b1af-6c339631657a"
         val launch = HarnessWebAuth.browserLaunchUrl(entry, browserToken, session)
         // 查询串会随 dsh 的 ?token= 登录跳转 303 丢失，会话键必须放片段。
-        assertEquals("http://127.0.0.1:3080/?dshMobileToken=$browserToken#dshMobileSession=$session",
-            launch?.toASCIIString())
+        assertEquals(
+            "http://127.0.0.1:3080/?dshMobileToken=$browserToken&token=$token#dshMobileSession=$session",
+            launch?.toASCIIString(),
+        )
         // 非法会话键按「没有会话」处理，令牌交接仍然有效。
         listOf("", "session-", "not-a-session", "session-ok\r\nSet-Cookie: x=y",
             "session-" + "a".repeat(191), "session-ok&next=evil").forEach { invalid ->
-            assertEquals("非法会话键：$invalid", "http://127.0.0.1:3080/?dshMobileToken=$browserToken",
-                HarnessWebAuth.browserLaunchUrl(entry, browserToken, invalid)?.toASCIIString())
+            assertEquals(
+                "非法会话键：$invalid",
+                "http://127.0.0.1:3080/?dshMobileToken=$browserToken&token=$token",
+                HarnessWebAuth.browserLaunchUrl(entry, browserToken, invalid)?.toASCIIString(),
+            )
         }
     }
 

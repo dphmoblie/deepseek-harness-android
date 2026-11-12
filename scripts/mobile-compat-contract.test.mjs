@@ -298,6 +298,28 @@ test('mobile runtime and official frontend use the same validated Harness releas
   assert.match(builder, /Harness runtime version mismatch/)
 })
 
+test('installed runtimes receive the APK auth preload before every launch', async () => {
+  const build = await readFile(resolve(appRoot, 'android/app/build.gradle'), 'utf8')
+  const resolver = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeLaunchResolver.kt'), 'utf8')
+  const installer = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/runtime/MobileAuthPreload.kt'), 'utf8')
+  const preload = await readFile(resolve(appRoot, 'scripts/mobile-auth-preload.cjs'), 'utf8')
+
+  // 预载的源文件只保留在 scripts/，构建时作为 APK asset 打进 support/；不能出现第二份手抄副本。
+  assert.match(build, /scripts\/mobile-auth-preload\.cjs/)
+  assert.match(build, /generateAuthPreloadAsset/)
+  assert.match(build, /into\('support'\)/)
+  assert.match(build, /rename \{ 'mobile-auth-preload\.cjs' \}/)
+  assert.match(build, /assets\.srcDir\(generatedAuthPreloadAssetsDirectory\)/)
+  // 已安装/回退的运行时也必须刷新：启动事务里写固定路径，且使用原子替换。
+  assert.match(resolver, /MobileAuthPreload\.install\(store\.currentRoot\)/)
+  assert.match(installer, /usr\/local\/lib\/dsh-mobile-auth\.cjs/)
+  assert.match(installer, /ATOMIC_MOVE/)
+  // 宿主直接交接 dsh 启动令牌；stdout 截获只作回退，且必须按完整行匹配。
+  assert.match(preload, /DSH_LAUNCH_TOKEN_PARAM/)
+  assert.match(preload, /pendingOutput/)
+  assert.match(preload, /DSH_TOKEN_LINE/)
+})
+
 test('embedded runtime exposes its pinned package manager without host Node.js', async () => {
   const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
   const verifier = await readFile(resolve(appRoot, 'scripts/verify-bundle.py'), 'utf8')

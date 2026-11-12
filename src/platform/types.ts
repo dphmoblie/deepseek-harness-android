@@ -362,6 +362,63 @@ export interface RuntimeSessionSnapshotState {
 }
 
 /**
+ * 「数据保留」页的一条待处理副本。
+ *
+ * 一次运行时更新会把会话、插件、工作区文件搬进暂存目录再合并回新根目录；与新镜像同名而搬不动的
+ * 项留在那里，等用户决定「取回」还是「删除」。旧版本留下的目录没有回填清单，[report] 就是 `null`
+ * ——界面据此说「没有这次的记录」，而不是编一个 0。
+ */
+export type PreserveCategory = 'conversations' | 'plugins' | 'files' | 'settings'
+
+export interface PreserveItem {
+  /** 暂存目录里的槽位名（`sessions`、`workspace`、`workspace-2`…），只用于展示与定位。 */
+  slot: string
+  category: PreserveCategory
+  /** 访客相对路径（`root/.dsh/sessions`、`root/1`…）；未知槽位为空串。 */
+  path: string
+  bytes: number
+  files: number
+}
+
+export interface PreserveReport {
+  /** 上次回填整体放回的项数。 */
+  restored: number
+  /** 上次回填逐项合并进去的条目数。 */
+  merged: number
+  /** 仍留在暂存目录里的相对路径。 */
+  conflicts: string[]
+}
+
+export interface PreservePending {
+  /** `preserve-<uuid>` 目录名，取回/删除都用它。 */
+  id: string
+  updatedAt: number
+  bytes: number
+  items: PreserveItem[]
+  report: PreserveReport | null
+}
+
+/** 「数据保留」页的只读状态。空列表 = 真的没有待处理副本。 */
+export interface PreserveState {
+  pending: PreservePending[]
+}
+
+/** 取回结果：副本落到工作区 `recovered/<id>/`，同名文件顺延改名。 */
+export interface PreserveRecoverResult {
+  id: string
+  target: string
+  files: number
+  bytes: number
+  skippedSymlinks: number
+}
+
+/** 删除结果。`discarded=false` 表示原生侧没有真的删掉（界面如实显示）。 */
+export interface PreserveDiscardResult {
+  id: string
+  discarded: boolean
+}
+
+/**
  * 恢复一份快照的结果。
  *
  * 恢复是**合并回填**而不是覆盖：目标位置已有同名文件时跳过并计入 [skippedFileCount]。
@@ -386,6 +443,17 @@ export interface RuntimeSessionSummary {
   title: string
   /** 最近更新时间的毫秒时间戳（会话日志文件的修改时间）。 */
   updatedAt: number
+  /**
+   * 委派深度：`0`（缺省）= 主会话，`>0` = 子代理会话（实际只出现 1）。
+   *
+   * 来自会话日志第一行的 `delegationDepth`。旧版原生桥没有这个字段，校验层一律补 0，
+   * 界面也不会因此把旧载荷当成子代理。
+   */
+  depth?: number
+  /** 父会话标识：仅子代理有；缺失表示「未关联子代理」（父会话被截断或数据不合法）。 */
+  parentId?: string
+  /** 子代理的预设名（`agentPreset`，例如 `standard` / `cordis`）；只用于显示与搜索。 */
+  agentName?: string
 }
 
 /**
@@ -2182,6 +2250,12 @@ export interface RuntimeBridge {
    * `id` 不存在是 `RUNTIME_SNAPSHOT_NOT_FOUND`：如实提示即可，不用重试。
    */
   deleteRuntimeSessionSnapshot: (id: string) => Promise<RuntimeSessionSnapshotState>
+  /** 「数据保留」：上次更新留在暂存目录里的条目（只读）。 */
+  getPreserveState: () => Promise<PreserveState>
+  /** 把一份待处理副本复制到工作区 `recovered/<id>/`（同名不覆盖）。 */
+  recoverPreserveItems: (id: string) => Promise<PreserveRecoverResult>
+  /** 丢弃一份待处理副本（用户显式删除）。 */
+  discardPreserveItems: (id: string) => Promise<PreserveDiscardResult>
   /**
    * 列出原生侧已知的运行时可用版本（无参数，只读）。
    *

@@ -287,6 +287,11 @@ class RuntimeLaunchResolver(
             throw RuntimeFailure("RUNTIME_NOT_INSTALLED", "Ubuntu 运行时尚未安装")
         }
         store.prepareLaunchFiles()
+        // 运行时可以独立于 APK 更新/回退；认证预载必须跟 APK 走，否则旧 rootfs 里的抓取逻辑
+        // 会继续覆盖外置浏览器交接令牌。每次启动事务只做一次，原子替换固定文件。
+        MobileAuthPreload.install(store.currentRoot) {
+            appContext.assets.open(MobileAuthPreload.ASSET_PATH)
+        }
         HarnessVersions.prepareDirectories(store)
         // 沙箱运行器脚本随每次启动刷新：脚本必须与当前 APK 的 Kotlin 侧常量同版本
         // （访客路径、绑定点、失败签名都在两边各写了一份）。

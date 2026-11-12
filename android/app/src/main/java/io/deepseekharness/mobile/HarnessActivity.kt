@@ -314,6 +314,8 @@ class HarnessActivity : AppCompatActivity() {
                 HarnessPolyfill.apply(view)
                 // 官方预览面板没有分享入口；补一个按钮，点击回到原生分享。
                 HarnessWorkspaceShare.apply(view)
+                // 官方文件面板的路径不可点；补一层可点的面包屑（只在工作区内跳转）。
+                HarnessFilesPath.apply(view)
             },
             onWorkspaceShare = ::shareWorkspaceFile,
             pageNetwork = { settingsStore.pageNetworkAccess() },

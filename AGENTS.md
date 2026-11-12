@@ -171,6 +171,20 @@ Git 提交/发布规范见 [`.agents/rules/git-workflow.md`](.agents/rules/git-w
 - 回归入口：`RootSecurityTest.kt` 的「最大档才放行 mount 与普通 setprop」「最大档仍拦数据销毁电源与块设备」
   「RootCommandRunner 的原生电源动作不过护栏」；`RootEngineCard.test.tsx` 的三档/电源用例。
 
+## 13. 认证预载必须随 APK 刷新到已安装运行时
+
+`scripts/mobile-auth-preload.cjs` 是**唯一源文件**；构建时由
+`generateAuthPreloadAsset` 生成 `assets/support/mobile-auth-preload.cjs`，每次启动事务里再由
+`MobileAuthPreload.install` 原子写入当前运行时的 `/usr/local/lib/dsh-mobile-auth.cjs`。
+
+这不是多余的重复：运行时可以独立于 APK 安装、切换和回退，只更新 APK 里的预载不会影响设备上
+已经解压的旧 rootfs。而旧预载把 dsh 令牌的发现押在 stdout 截获上，插件日志先打印一个带
+`token=` 的地址就会猜错，外置浏览器随即落到 dsh 的 401 页。不要在 assets 里手抄第二份预载，
+也不要删掉启动事务里的刷新；二者任一缺失，都会让旧运行时继续跑旧鉴权逻辑。
+
+回归入口：`MobileAuthPreloadTest.kt`、`scripts/mobile-compat-contract.test.mjs` 的
+「installed runtimes receive the APK auth preload before every launch」。
+
 ## 改动前先跑这些
 
 本机 pnpm 不可用时用 node 直调（PATH 前置 `node` 目录）：

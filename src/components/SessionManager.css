@@ -8,7 +8,7 @@
 .session-list { display: grid; gap: 10px; }
 .session-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 8px;
   min-height: 68px;
@@ -74,4 +74,36 @@
   .session-card { min-height: 62px; padding-left: 8px; }
   .session-open { grid-template-columns: 36px minmax(0, 1fr); gap: 8px; }
   .session-icon { width: 36px; height: 36px; }
+}
+
+/* ---- 子代理分组与筛选 ----
+ * 子代理（`depth > 0`）折叠在父会话下面：默认只看主会话，父行右侧的徽标是唯一的展开入口。
+ * 徽标与卡片同色系，避免又被读成「另一个会话」。 */
+.session-filter { margin-bottom: 12px; }
+.session-filter button { display: inline-flex; align-items: center; gap: 6px; }
+.session-group { display: grid; gap: 6px; }
+.session-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--card-muted, var(--muted));
+  background: transparent;
+  font-size: .75rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.session-badge:hover { color: var(--card-ink, var(--ink)); border-color: var(--line-strong); }
+.session-subagents { display: grid; gap: 6px; padding-left: 18px; }
+.session-card-subagent { min-height: 52px; }
+.session-card-subagent .session-icon { width: 32px; height: 32px; color: var(--card-muted, var(--muted)); background: transparent; }
+.session-card-subagent .session-open { grid-template-columns: 32px minmax(0, 1fr); }
+.session-card-subagent .session-open:disabled { cursor: default; opacity: .75; }
+.session-group-title { margin: 6px 2px; color: var(--card-muted, var(--muted)); font-size: .75rem; font-weight: 600; }
+.session-orphans { padding-top: 6px; border-top: 1px dashed var(--line); }
+@media (max-width: 520px) {
+  .session-subagents { padding-left: 10px; }
 }

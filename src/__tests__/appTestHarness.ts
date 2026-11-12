@@ -191,6 +191,10 @@ export const bridge = {
   createRuntimeSessionSnapshot: vi.fn(),
   restoreRuntimeSessionSnapshot: vi.fn(),
   deleteRuntimeSessionSnapshot: vi.fn(),
+  // 数据保留：版本管理页一挂载就会读一次待处理副本，缺桩会让整页 effect 抛错。
+  getPreserveState: vi.fn(),
+  recoverPreserveItems: vi.fn(),
+  discardPreserveItems: vi.fn(),
   // 会话工作区：首页一挂载就会调一次 listSessions()，缺这个桩同样会让 effect 抛错并卸载整棵树
   // （见上面 `setAppTheme` 的注释：表现成「找不到任何元素」，与真正的界面缺陷几乎无法区分）。
   listSessions: vi.fn(),
@@ -685,6 +689,17 @@ export function beforeEachAppTest(): void {
   // 关心快照的用例自己覆盖这四条桩。上限取值与原生侧一致（3 份 / 512 MiB）。
   const emptySnapshotState = () => ({ maxSnapshots: 3, maxBytes: 512 * 1024 * 1024, totalBytes: 0, snapshots: [] })
   bridge.getRuntimeSessionSnapshotState.mockResolvedValue(emptySnapshotState())
+  // 数据保留同样默认「没有待处理副本」：版本管理页一挂载就会读一次，
+  // 返回 undefined 会让卡片按「读不到」渲染——那会让所有版本管理页用例都被一条无关提示污染。
+  bridge.getPreserveState.mockResolvedValue({ pending: [] })
+  bridge.recoverPreserveItems.mockResolvedValue({
+    id: 'preserve-00000000-0000-0000-0000-000000000000',
+    target: 'recovered/00000000-0000-0000-0000-000000000000',
+    files: 0,
+    bytes: 0,
+    skippedSymlinks: 0,
+  })
+  bridge.discardPreserveItems.mockResolvedValue({ id: 'preserve-00000000-0000-0000-0000-000000000000', discarded: true })
   bridge.createRuntimeSessionSnapshot.mockResolvedValue(emptySnapshotState())
   bridge.restoreRuntimeSessionSnapshot.mockResolvedValue({
     restoredFileCount: 0,
