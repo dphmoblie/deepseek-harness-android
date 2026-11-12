@@ -303,8 +303,13 @@ test('installed runtimes receive the APK auth preload before every launch', asyn
   const resolver = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeLaunchResolver.kt'), 'utf8')
   const installer = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/runtime/MobileAuthPreload.kt'), 'utf8')
   const preload = await readFile(resolve(appRoot, 'scripts/mobile-auth-preload.cjs'), 'utf8')
+  const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
 
   // 预载的源文件只保留在 scripts/，构建时作为 APK asset 打进 support/；不能出现第二份手抄副本。
+  // 构建脚本的 support 文件上限必须覆盖当前预载，否则 CI 会在打包 rootfs 时 fail closed。
+  const supportLimitKib = Number(/MAX_SUPPORT_FILE_BYTES = (\d+) \* 1024/u.exec(builder)?.[1])
+  assert.ok(Number.isInteger(supportLimitKib) && supportLimitKib >= 16, 'support file limit must stay explicit')
+  assert.ok(Buffer.byteLength(preload) <= supportLimitKib * 1024, 'preload must fit the runtime support-file limit')
   assert.match(build, /scripts\/mobile-auth-preload\.cjs/)
   assert.match(build, /generateAuthPreloadAsset/)
   assert.match(build, /into\('support'\)/)

@@ -26,7 +26,8 @@ MAX_EXTRACTED_BYTES = 6_442_450_944
 MAX_PATH_CHARS = 4_096
 MAX_COMPONENT_CHARS = 255
 BUFFER_SIZE = 1024 * 1024
-MAX_SUPPORT_FILE_BYTES = 16 * 1024
+# 认证预载随 APK 一起刷新到已安装运行时，包含按行缓冲与令牌校验；16 KB 已不够。
+MAX_SUPPORT_FILE_BYTES = 32 * 1024
 MOBILE_AUTH_PRELOAD = Path(__file__).with_name("mobile-auth-preload.cjs")
 MOBILE_SESSION_PUBLISHER = Path(__file__).with_name("mobile-session-publish.py")
 COMPRESSION_OUTPUT_SUFFIXES = {
