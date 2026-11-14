@@ -49,7 +49,7 @@
 - [移动端验收清单](mobile-acceptance-checklist.md)
 - [移动端插件兼容](mobile-plugin-compat.md)
 - [Android 构建与签名](android.md)
-- [发布说明（当前 0.4.0）](releases/发布说明-0.4.0.md)
+- [发布说明（当前 0.4.1）](releases/发布说明-0.4.1.md)
 - [真机缺陷与改进清单](measurements/真机缺陷与改进清单.md)
 - [首次配置](operations/首次配置.md)
 - [规格：崩溃与权限审计](specs/crash-permission-audit/spec.md)
