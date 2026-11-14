@@ -62,11 +62,16 @@ describe('数据保留卡片', () => {
   })
 
   it('取回会把副本落到工作区并重新读一次状态', async () => {
-    const target = bridge()
+    const target = bridge({
+      recoverPreserveItems: vi.fn(() => Promise.resolve({
+        id: PENDING_ID, target: `recovered/${PENDING_ID}`, files: 4, bytes: 4096, skippedSymlinks: 2,
+      })),
+    })
     render(<DataPreservationCard bridge={target} />)
     fireEvent.click(await screen.findByRole('button', { name: '取回' }))
     await waitFor(() => expect(target.recoverPreserveItems).toHaveBeenCalledWith(PENDING_ID))
     expect(await screen.findByText(/已取回 4 个文件/)).toBeInTheDocument()
+    expect(screen.getByText(/跳过 2 个符号链接/)).toBeInTheDocument()
     expect(target.getPreserveState).toHaveBeenCalledTimes(2)
   })
 

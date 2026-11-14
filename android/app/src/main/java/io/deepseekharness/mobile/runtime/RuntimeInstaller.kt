@@ -858,7 +858,7 @@ class RuntimeInstaller(
         // 目标根目录不可用：整个暂存目录原样保留，由调用方决定后续处理。
         if (!RuntimeFiles.isDirectoryNoFollow(targetRoot)) return RestoreOutcome(names)
         val outcome = restorePreservedItems(preservedRoot, targetRoot, names, paths, strict)
-        if (outcome.unplaced.isEmpty() && unknown.isEmpty()) {
+        if (outcome.unplaced.isEmpty() && outcome.conflicts.isEmpty() && unknown.isEmpty()) {
             removePreservedDirectoryQuietly(preservedRoot)
         } else {
             // 有搬运不动的项：把结果刷新到清单里，用户/界面据此找到它们。
@@ -896,8 +896,16 @@ class RuntimeInstaller(
             val source = File(preservedRoot, name)
             if (!RuntimeFiles.existsNoFollow(source)) continue
             val target = File(targetRoot, relative)
+            val guestHome = name == RuntimePreservePolicy.GUEST_HOME_SLOT
             try {
-                when (classifyRestoreTarget(target)) {
+                val decision = if (guestHome && RuntimeFiles.isDirectoryNoFollow(source) &&
+                    (!RuntimeFiles.existsNoFollow(target) || RuntimeFiles.isDirectoryNoFollow(target))) {
+                    // 即使新镜像没有预建 root，整树回填也必须经过排除表，不能整体移入旧令牌与脚本。
+                    RuntimePreservePolicy.RestoreDecision.MERGE
+                } else if (guestHome && !RuntimeFiles.isDirectoryNoFollow(source)) {
+                    RuntimePreservePolicy.RestoreDecision.CONFLICT
+                } else classifyRestoreTarget(target)
+                when (decision) {
                     RuntimePreservePolicy.RestoreDecision.MOVE_IN -> {
                         placePreservedItem(source, target)
                         restored += 1
@@ -911,7 +919,6 @@ class RuntimeInstaller(
                     }
                     RuntimePreservePolicy.RestoreDecision.MERGE -> {
                         // 整树回填时排除旧令牌/旧脚本/死链：它们会被新运行时重建（见 policy 注释）。
-                        val guestHome = name == RuntimePreservePolicy.GUEST_HOME_SLOT
                         val result = PreservedMerge.merge(source, target) { relative ->
                             guestHome && RuntimePreservePolicy.shouldRestoreGuestPath(relative)
                         }

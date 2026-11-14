@@ -67,10 +67,10 @@
     'pointer-events:none;text-align:center}',
   ].join('')
 
-  /** 统一成 `/a/b` 形态：反斜杠当分隔符、折叠重复斜杠、去掉尾部斜杠（根 `/` 保留）。 */
+  /** 折叠重复斜杠、去掉尾部斜杠；Ubuntu 文件名里的反斜杠按原样保留。 */
   var normalize = function (value) {
     if (typeof value !== 'string') return ''
-    var path = value.replace(/\\/gu, '/').replace(/\/{2,}/gu, '/')
+    var path = value.replace(/\/{2,}/gu, '/')
     if (path.length > 1) path = path.replace(/\/+$/u, '')
     return path
   }

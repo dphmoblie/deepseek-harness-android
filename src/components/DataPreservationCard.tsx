@@ -84,7 +84,9 @@ export function DataPreservationCard({ bridge = runtimeBridge }: { bridge?: Runt
     setResult(null)
     try {
       const recovered = await bridge.recoverPreserveItems(id)
-      setResult(t('已取回 {0} 个文件（{1}）到工作区 {2}', recovered.files, formatBytes(recovered.bytes), recovered.target))
+      setResult(recovered.skippedSymlinks > 0
+        ? t('已取回 {0} 个文件（{1}）到工作区 {2}；跳过 {3} 个符号链接', recovered.files, formatBytes(recovered.bytes), recovered.target, recovered.skippedSymlinks)
+        : t('已取回 {0} 个文件（{1}）到工作区 {2}', recovered.files, formatBytes(recovered.bytes), recovered.target))
       await refresh()
     } catch {
       setActionFailed(true)

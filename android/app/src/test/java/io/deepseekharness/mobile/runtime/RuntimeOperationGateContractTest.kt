@@ -47,6 +47,8 @@ class RuntimeOperationGateContractTest {
             "fun manageHarnessVersions(",
             "fun install(",
             "fun repairRuntime()",
+            "fun recoverPreservedData(",
+            "fun discardPreservedData(",
             "fun switchRuntimeVersion(",
             "fun downloadToLibrary(",
             "fun manageRuntimeLibrary(",

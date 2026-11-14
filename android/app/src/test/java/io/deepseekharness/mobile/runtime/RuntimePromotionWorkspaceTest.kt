@@ -50,4 +50,14 @@ class RuntimePromotionWorkspaceTest {
         assertTrue(policy.contains("shouldRestoreGuestPath"))
         assertTrue(policy.contains("fun restoreSlots()"))
     }
+
+    @Test
+    fun `整树回填有冲突时不能清理用户的暂存原件`() {
+        val installer = read("RuntimeInstaller.kt")
+        val restore = installer.substringAfter("val outcome = restorePreservedItems(").substringBefore("/** 暂存目录里")
+        assertTrue(
+            "删除暂存副本前必须确认冲突也为空；guest-home 冲突不在 unplaced 里",
+            restore.contains("outcome.unplaced.isEmpty() && outcome.conflicts.isEmpty() && unknown.isEmpty()"),
+        )
+    }
 }

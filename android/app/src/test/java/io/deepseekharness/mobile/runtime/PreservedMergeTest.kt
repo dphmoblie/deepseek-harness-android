@@ -104,4 +104,36 @@ class PreservedMergeTest {
         assertEquals(listOf("a/b/c/blocked.txt"), result.conflicts)
         assertEquals("image", File(target, "a/b/c/blocked.txt").readText())
     }
+
+    @Test
+    fun `目标目录缺失时仍递归应用排除表`() {
+        val source = tempDir("merge-skip-src-")
+        val target = tempDir("merge-skip-dst-")
+        File(source, ".dsh-mobile").mkdirs()
+        File(source, ".dsh-mobile/runtime-secrets.env").writeText("old-secret")
+        File(source, ".dsh-mobile/user-script.sh").writeText("user-script")
+
+        val result = PreservedMerge.merge(source, target) { path -> path == ".dsh-mobile/runtime-secrets.env" }
+
+        assertEquals(1, result.moved)
+        assertEquals(listOf(".dsh-mobile/runtime-secrets.env"), result.skipped)
+        assertTrue(File(target, ".dsh-mobile/user-script.sh").isFile)
+        assertTrue(File(source, ".dsh-mobile/runtime-secrets.env").isFile)
+    }
+
+    @Test
+    fun `目标目录缺失也不能绕过递归深度上限`() {
+        val source = tempDir("merge-depth-src-")
+        val target = tempDir("merge-depth-dst-")
+        val nested = (1..10).joinToString("/") { "level-$it" }
+        val original = File(source, "$nested/keep.txt")
+        original.parentFile?.mkdirs()
+        original.writeText("user-data")
+
+        val result = PreservedMerge.merge(source, target)
+
+        assertTrue(result.conflicts.isNotEmpty())
+        assertEquals("user-data", original.readText())
+        assertTrue(!File(target, "$nested/keep.txt").exists())
+    }
 }

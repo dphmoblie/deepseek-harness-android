@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile.runtime
 
 import java.io.File
+import java.io.RandomAccessFile
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -156,5 +157,117 @@ class PreserveStoreTest {
 
         val pending = PreserveStore(parent, root).state().pending.single()
         assertEquals(listOf("workspace"), pending.items.map { it.slot })
+    }
+
+    @Test
+    fun `取回不受界面三十二项截断影响且字节数准确`() {
+        val parent = tempDir("preserve-recover-all-")
+        val root = tempDir("preserve-root-")
+        val directory = File(parent, "preserve-44444444-5555-6666-7777-888888888888")
+        val source = File(directory, RuntimePreservePolicy.GUEST_HOME_SLOT)
+        repeat(40) { index -> write(File(source, "file-$index.txt"), "12345") }
+
+        val store = PreserveStore(parent, root)
+        val summary = store.state().pending.single()
+        assertEquals(listOf("guest-home"), summary.items.map { it.slot })
+        assertEquals(200L, summary.bytes)
+        val recovered = store.recover(directory.name)
+
+        assertEquals(40, recovered.files)
+        assertEquals(200L, recovered.bytes)
+        assertEquals(40, File(root, "root/1/recovered/${directory.name}/guest-home").listFiles()?.size)
+    }
+
+    @Test
+    fun `文件数上限共用于所有槽位且不拦截空目录`() {
+        val parent = tempDir("preserve-recover-file-limit-")
+        val root = tempDir("preserve-root-")
+        val directory = File(parent, "preserve-44444444-5555-6666-7777-888888888888")
+        try {
+            repeat(5_000) { index -> write(File(directory, "workspace/file-$index"), "") }
+            File(directory, "workspace-2/empty").mkdirs()
+            val store = PreserveStore(parent, root)
+            val recovered = store.recover(directory.name)
+
+            assertEquals(5_000, recovered.files)
+            assertTrue(File(root, "root/1/recovered/${directory.name}/workspace-2/empty").isDirectory)
+
+            write(File(directory, "workspace-2/extra.txt"), "user-data")
+            try {
+                store.recover(directory.name)
+                fail("不同槽位里的文件也必须合并计算上限")
+            } catch (error: RuntimeFailure) {
+                assertEquals("PRESERVE_RECOVER_TOO_LARGE", error.code)
+            }
+            assertEquals("user-data", File(directory, "workspace-2/extra.txt").readText())
+        } finally {
+            parent.deleteRecursively()
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `超大文件在复制前拒绝而不是先耗尽设备空间`() {
+        val parent = tempDir("preserve-large-")
+        val root = tempDir("preserve-root-")
+        val directory = File(parent, "preserve-44444444-5555-6666-7777-888888888888")
+        val source = File(directory, "workspace/large.bin")
+        source.parentFile?.mkdirs()
+        RandomAccessFile(source, "rw").use { it.setLength(256L * 1024 * 1024 + 1) }
+
+        try {
+            PreserveStore(parent, root).recover(directory.name)
+            fail("超过字节上限应被拒绝")
+        } catch (error: RuntimeFailure) {
+            assertEquals("PRESERVE_RECOVER_TOO_LARGE", error.code)
+        }
+        assertTrue(source.isFile)
+        assertFalse(File(root, "root/1/recovered/${directory.name}/workspace/large.bin").exists())
+    }
+
+    @Test
+    fun `取回拒绝工作区中的符号链接祖先且不写入外部目录`() {
+        val parent = tempDir("preserve-target-link-")
+        val root = tempDir("preserve-root-")
+        val directory = legacyPreserve(parent)
+        val outside = tempDir("preserve-outside-")
+        File(root, "root").mkdirs()
+        File(outside, "recovered/${directory.name}/workspace").mkdirs()
+        try {
+            Files.createSymbolicLink(File(root, "root/1").toPath(), outside.toPath())
+        } catch (error: Exception) {
+            org.junit.Assume.assumeNoException("当前宿主不允许创建符号链接", error)
+            return
+        }
+
+        try {
+            PreserveStore(parent, root).recover(directory.name)
+            fail("工作区祖先是符号链接时应拒绝取回")
+        } catch (error: RuntimeFailure) {
+            assertEquals("PRESERVE_RECOVER_FAILED", error.code)
+        }
+        assertFalse(File(outside, "recovered/${directory.name}/workspace/notes.md").exists())
+        assertTrue(File(directory, "workspace/notes.md").exists())
+    }
+
+    @Test
+    fun `删除超过五万条目的目录会在删除前完整拒绝`() {
+        val parent = tempDir("preserve-discard-limit-")
+        val root = tempDir("preserve-root-")
+        val directory = File(parent, "preserve-55555555-6666-7777-8888-999999999999")
+        directory.mkdirs()
+        try {
+            repeat(50_001) { index -> Files.createDirectory(File(directory, "entry-$index").toPath()) }
+            try {
+                PreserveStore(parent, root).discard(directory.name)
+                fail("超过删除条目上限应被拒绝")
+            } catch (error: RuntimeFailure) {
+                assertEquals("PRESERVE_DISCARD_FAILED", error.code)
+            }
+            assertTrue(File(directory, "entry-0").isDirectory)
+            assertTrue(File(directory, "entry-50000").isDirectory)
+        } finally {
+            directory.deleteRecursively()
+        }
     }
 }

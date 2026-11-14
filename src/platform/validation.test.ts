@@ -2744,10 +2744,17 @@ describe('数据保留状态校验', () => {
     for (const id of ['', '../current', 'preserve-not-a-uuid', ID + '-x']) {
       expect(() => validatePreserveState({ pending: [{ ...ready.pending[0], id }] }), id).toThrow('数据保留目录标识格式无效')
     }
-    for (const slot of ['', 'workspace/x', 'unknown', '../sessions']) {
+    for (const slot of ['', '.', '..', 'workspace/x', '../sessions', 'guest-home/.', 'guest-home/..', 'guest-home/a/b', 'guest-home/a\\b', 'future/x', 'future\u0000', 'x'.repeat(301)]) {
       const items = [{ ...ready.pending[0].items[0], slot }]
       expect(() => validatePreserveState({ pending: [{ ...ready.pending[0], items }] }), slot).toThrow('数据保留槽位格式无效')
     }
+    for (const name of ['资料 项目', 'a'.repeat(250)]) {
+      const items = [{ ...ready.pending[0].items[0], slot: `guest-home/${name}`, path: `root/${name}` }]
+      const expected = { pending: [{ ...ready.pending[0], items }] }
+      expect(validatePreserveState(expected)).toEqual(expected)
+    }
+    const future = { pending: [{ ...ready.pending[0], items: [{ ...ready.pending[0].items[0], slot: 'future-slot', path: '' }] }] }
+    expect(validatePreserveState(future)).toEqual(future)
     for (const category of ['', 'pictures', 7]) {
       const items = [{ ...ready.pending[0].items[0], category }]
       expect(() => validatePreserveState({ pending: [{ ...ready.pending[0], items }] }), String(category)).toThrow('数据保留分类格式无效')

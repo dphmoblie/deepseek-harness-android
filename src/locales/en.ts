@@ -2128,6 +2128,7 @@ export const english: Readonly<Record<string, string>> = {
   "取回": "Recover",
   "删除后无法恢复": "Deletion cannot be undone",
   "已取回 {0} 个文件（{1}）到工作区 {2}": "Recovered {0} files ({1}) into workspace {2}",
+  "已取回 {0} 个文件（{1}）到工作区 {2}；跳过 {3} 个符号链接": "Recovered {0} files ({1}) into workspace {2}; skipped {3} symbolic links",
   "已删除这份数据副本": "Deleted this data copy",
   "这份数据副本没有被删除": "This data copy was not deleted",
   "操作没有完成：可能是运行时正忙或路径不可写，稍后重试。": "The action did not complete. The runtime may be busy or the path is not writable; try again later.",

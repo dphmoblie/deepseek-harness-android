@@ -161,14 +161,29 @@ test('纯函数：路径切段、目录包含关系与根目录退化', () => {
   const helpers = dom.window.__dshAndroidFilesPath
   assert.deepEqual([...helpers.segmentsOf('/root/dsh/audit').map(entry => entry.path)],
     ['/root', '/root/dsh', '/root/dsh/audit'])
-  // 反斜杠、重复斜杠与尾部斜杠都按同一份路径处理。
-  assert.equal(helpers.normalize('\\root\\\\dsh\\'), '/root/dsh')
+  // 只折叠 Linux 的路径分隔符，反斜杠属于文件名。
+  assert.equal(helpers.normalize('/root//dsh/'), '/root/dsh')
+  assert.equal(helpers.normalize('/root/dsh/reports\\2026/'), '/root/dsh/reports\\2026')
   assert.equal(helpers.normalize('/'), '/')
   assert.deepEqual([...helpers.segmentsOf('/')], [])
   assert.equal(helpers.contains('/root/dsh', '/root/dsh/audit'), true)
   assert.equal(helpers.contains('/root/dsh', '/root/dsh'), true)
   assert.equal(helpers.contains('/root/dsh', '/root/dsh2'), false)
   assert.equal(helpers.contains('/', '/root'), true)
+  dom.window.close()
+})
+
+test('Ubuntu 目录名里的反斜杠不会变成虚假的上层目录', async () => {
+  const dom = loadDom(treeMarkup().replaceAll('/audit', '/reports\\2026'))
+  const document = dom.window.document
+  const crumbs = [...document.querySelectorAll('[data-dsh-files-crumb]')]
+  assert.deepEqual(crumbs.map(crumb => crumb.textContent), ['root', 'dsh', 'reports\\2026', 'sub'])
+  assert.equal(crumbs[2].getAttribute('data-dsh-files-crumb'), '/root/dsh/reports\\2026')
+  let collapsed = 0
+  document.querySelector('li[data-files-path$="/sub"] > button').addEventListener('click', () => { collapsed += 1 })
+  crumbs[2].click()
+  assert.equal(collapsed, 1, '点击真实父目录仍可收起子目录')
+  await tick()
   dom.window.close()
 })
 

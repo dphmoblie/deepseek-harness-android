@@ -546,13 +546,13 @@ class MobileRuntimeController(
     }
 
     /** 把一份待处理副本取回到工作区 `recovered/<id>/`：复制、同名不覆盖。 */
-    fun recoverPreservedData(id: String): PreserveStore.Recovered = lifecycleLock.withLock {
+    fun recoverPreservedData(id: String): PreserveStore.Recovered = withLongOperationLock {
         ensureOpen()
         PreserveStore(store.runtimeParent, store.currentRoot).recover(id)
     }
 
     /** 丢弃一份待处理副本（用户显式删除）。只删暂存目录，绝不触碰当前运行时。 */
-    fun discardPreservedData(id: String): Boolean = lifecycleLock.withLock {
+    fun discardPreservedData(id: String): Boolean = withLongOperationLock {
         ensureOpen()
         PreserveStore(store.runtimeParent, store.currentRoot).discard(id)
     }

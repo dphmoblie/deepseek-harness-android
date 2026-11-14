@@ -23,8 +23,8 @@ object PreservedMerge {
     /** 递归深度上限：用户数据目录再深也不该超过这个量级。 */
     private const val MAX_DEPTH = 8
 
-    /** 单次合并最多搬移的条目数：超出后剩下的全部记为冲突（仍留在暂存目录里）。 */
-    private const val MAX_MOVED_ENTRIES = 20_000
+    /** 单次合并最多访问的条目数：超出后剩下的全部记为冲突（仍留在暂存目录里）。 */
+    private const val MAX_VISITED_ENTRIES = 20_000
 
     /**
      * @param moved 实际搬进去的条目数
@@ -44,11 +44,12 @@ object PreservedMerge {
     fun merge(source: File, target: File, skip: (String) -> Boolean = { false }): Result {
         val conflicts = mutableListOf<String>()
         val skipped = mutableListOf<String>()
-        val counter = intArrayOf(0)
-        if (!isDirectory(source)) return Result(0, emptyList())
+        val counter = intArrayOf(0, 0)
+        if (!isDirectory(source)) return Result(0, if (Files.exists(source.toPath(), LinkOption.NOFOLLOW_LINKS)) listOf(".") else emptyList())
         if (!Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
             Files.createDirectories(target.toPath())
         }
+        if (!isDirectory(target)) return Result(0, listOf("."))
         mergeInto(source, target, "", 0, counter, conflicts, skipped, skip)
         return Result(counter[0], conflicts, skipped)
     }
@@ -75,12 +76,13 @@ object PreservedMerge {
         }
         for (child in children) {
             val relative = if (prefix.isEmpty()) child.name else "$prefix/${child.name}"
+            counter[1] += 1
+            if (counter[1] > MAX_VISITED_ENTRIES) {
+                conflicts += prefix.ifEmpty { "." }
+                return
+            }
             if (skip(relative)) {
                 skipped += relative
-                continue
-            }
-            if (counter[0] >= MAX_MOVED_ENTRIES) {
-                conflicts += relative
                 continue
             }
             // 源里的符号链接一律按冲突处理：即便目标不存在也不能搬。移动链接本身虽不会跟随，
@@ -91,8 +93,14 @@ object PreservedMerge {
             }
             val destination = File(target, child.name)
             if (!Files.exists(destination.toPath(), LinkOption.NOFOLLOW_LINKS)) {
-                Files.move(child.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
-                counter[0] += 1
+                if (isDirectory(child)) {
+                    // 目标目录缺失时也要递归，才能对其子项应用 skip（例如旧令牌和运行时脚本）。
+                    Files.createDirectories(destination.toPath())
+                    mergeInto(child, destination, relative, depth + 1, counter, conflicts, skipped, skip)
+                } else {
+                    Files.move(child.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                    counter[0] += 1
+                }
                 continue
             }
             if (isDirectory(child) && isDirectory(destination)) {
@@ -119,7 +127,7 @@ object PreservedMerge {
         val pending = ArrayDeque<Pair<File, String>>()
         pending.addLast(root to "")
         var visited = 0
-        while (pending.isNotEmpty() && visited < MAX_MOVED_ENTRIES) {
+        while (pending.isNotEmpty() && visited < MAX_VISITED_ENTRIES) {
             val (current, prefix) = pending.removeFirst()
             visited += 1
             val children = current.listFiles() ?: return false
@@ -134,6 +142,6 @@ object PreservedMerge {
                 if (!skipped) return false
             }
         }
-        return true
+        return pending.isEmpty()
     }
 }

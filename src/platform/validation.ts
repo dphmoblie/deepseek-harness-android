@@ -3058,7 +3058,7 @@ export function validatePreserveState(value: unknown): PreserveState {
     const parsed: PreserveItem[] = items.map(raw => {
       const value = asRecord(raw, '数据保留项')
       const slot = value.slot
-      if (typeof slot !== 'string' || !PRESERVE_SLOT.test(slot)) throw new Error('数据保留槽位格式无效')
+      if (typeof slot !== 'string' || !isPreserveSlot(slot)) throw new Error('数据保留槽位格式无效')
       const category = value.category
       if (typeof category !== 'string' || !PRESERVE_CATEGORIES.has(category as PreserveCategory)) {
         throw new Error('数据保留分类格式无效')
@@ -3123,9 +3123,12 @@ export function validatePreserveDiscardResult(value: unknown): PreserveDiscardRe
 
 /** 暂存目录名与原生侧 `preserve-<uuid>` 同一形态。 */
 const PRESERVE_ID = /^preserve-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
-/** 槽位名：整树槽位（可带 `/root` 下的子路径）、旧版逐项槽位，或 `workspace`/`workspace-N`。 */
-const PRESERVE_SLOT = /^(?:guest-home(?:\/[A-Za-z0-9._@+-]+)?|sessions|settings\.yaml|\.credentials\.yaml|attachments|skills|plugin-manager|workspace(?:-[0-9]+)?)$/u
+/** 允许旧版和新版留下的单层槽位名；整树槽位还可带 `/root` 下的一个文件名。 */
+function isPreserveSlot(value: string): boolean {
+  const child = value.startsWith('guest-home/') ? value.slice('guest-home/'.length) : value
+  return /^[^/\\]+$/u.test(child) && child !== '.' && child !== '..' && !containsControlCharacter(child) && value.length <= MAX_PRESERVE_PATH_CHARS
+}
 const PRESERVE_CATEGORIES = new Set<PreserveCategory>(['conversations', 'plugins', 'files', 'settings'])
 const MAX_PRESERVE_DIRECTORIES = 8
 const MAX_PRESERVE_ITEMS = 32
-const MAX_PRESERVE_PATH_CHARS = 200
+const MAX_PRESERVE_PATH_CHARS = 300

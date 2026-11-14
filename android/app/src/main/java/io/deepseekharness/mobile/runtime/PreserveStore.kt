@@ -83,21 +83,22 @@ class PreserveStore(
         val workspace = File(currentRoot, RuntimePreservePolicy.DEFAULT_WORKSPACE_ROOT)
         val target = File(File(workspace, RECOVERED_DIRECTORY), id)
         ensureDirectory(target)
-        val items = readItems(directory)
+        // UI 列表只展示前 32 项；取回不能复用这个截断结果，否则后面的用户文件会永远留在暂存目录。
+        val slots = directory.listFiles()?.asSequence()
+            ?.filter { it.name != RuntimePreservePolicy.REPORT_FILE_NAME }
+            ?.sortedBy { it.name }
+            ?.toList()
+            ?: throw RuntimeFailure("PRESERVE_RECOVER_FAILED", "无法读取待处理的数据副本")
         var files = 0
         var bytes = 0L
         var skippedSymlinks = 0
-        for (item in items) {
-            val source = File(directory, item.slot)
-            if (!Files.exists(source.toPath(), LinkOption.NOFOLLOW_LINKS)) continue
-            val destination = File(target, item.slot)
-            val result = copyTree(source, destination, RecoveryBudget())
+        val budget = RecoveryBudget()
+        for (source in slots) {
+            val destination = File(target, source.name)
+            val result = copyTree(source, destination, budget)
             bytes += result.bytes
             files += result.files
             skippedSymlinks += result.skippedSymlinks
-            if (bytes > MAX_RECOVER_BYTES) {
-                throw RuntimeFailure("PRESERVE_RECOVER_TOO_LARGE", "待取回的数据超过上限，请在文件管理里逐个目录取回")
-            }
         }
         return Recovered(id, "recovered/$id", files, bytes, skippedSymlinks)
     }
@@ -109,11 +110,11 @@ class PreserveStore(
      */
     fun discard(id: String): Boolean {
         val directory = preserveDirectory(id)
-        val count = countEntries(directory)
-        if (count > MAX_DISCARD_ENTRIES) {
-            throw RuntimeFailure("PRESERVE_DISCARD_FAILED", "待删除的暂存目录条目过多，已拒绝自动删除")
-        }
         return try {
+            val count = countEntries(directory)
+            if (count > MAX_DISCARD_ENTRIES) {
+                throw RuntimeFailure("PRESERVE_DISCARD_FAILED", "待删除的暂存目录条目过多，已拒绝自动删除")
+            }
             deleteTree(directory)
             true
         } catch (error: IOException) {
@@ -122,8 +123,12 @@ class PreserveStore(
     }
 
     private fun preserveDirectories(): List<File> =
-        (runtimeParent.listFiles() ?: emptyArray())
-            .filter { RuntimePreservePolicy.isPreserveDirectoryName(it.name) }
+        (runtimeParent.listFiles() ?: throw RuntimeFailure("PRESERVE_READ_FAILED", "无法读取待处理的数据副本目录"))
+            .filter {
+                RuntimePreservePolicy.isPreserveDirectoryName(it.name) &&
+                    Files.isDirectory(it.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                    !Files.isSymbolicLink(it.toPath())
+            }
             .sortedByDescending { it.lastModified() }
             .take(MAX_DIRECTORIES)
 
@@ -154,7 +159,9 @@ class PreserveStore(
 
     private fun readReport(directory: File): String? = try {
         val file = File(directory, RuntimePreservePolicy.REPORT_FILE_NAME)
-        if (Files.exists(file.toPath(), LinkOption.NOFOLLOW_LINKS)) file.readText(Charsets.UTF_8) else null
+        if (Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS) && Files.size(file.toPath()) <= 16 * 1024L) {
+            file.readText(Charsets.UTF_8)
+        } else null
     } catch (_: Exception) {
         null
     }
@@ -164,26 +171,35 @@ class PreserveStore(
         directory: File,
         paths: Map<String, String> = RuntimePreservePolicy.preservedPaths(),
     ): List<Item> {
-        val children = directory.listFiles()?.sortedBy { it.name } ?: return emptyList()
+        val children = directory.listFiles()?.sortedBy { it.name }
+            ?: throw RuntimeFailure("PRESERVE_READ_FAILED", "无法读取待处理的数据副本")
         val items = mutableListOf<Item>()
         for (child in children) {
             if (child.name == RuntimePreservePolicy.REPORT_FILE_NAME) continue
             if (!Files.exists(child.toPath(), LinkOption.NOFOLLOW_LINKS)) continue
             // 整树保留（`guest-home`）：按 `/root` 下的顶层条目展开，界面才有分类可看，
             // 而不是一个「整个用户空间 1 项」。槽位名带上子路径，取回/删除仍按目录 id 操作。
-            if (child.name == RuntimePreservePolicy.GUEST_HOME_SLOT) {
-                for (entry in (child.listFiles() ?: emptyArray()).sortedBy { it.name }) {
-                    val measure = measureTree(entry)
-                    items += Item(
-                        slot = "${RuntimePreservePolicy.GUEST_HOME_SLOT}/${entry.name}",
-                        category = RuntimePreservePolicy.categoryOfPath(entry.name).wireValue,
-                        path = "${RuntimePreservePolicy.GUEST_HOME_ROOT}/${entry.name}",
-                        bytes = measure.bytes,
-                        files = measure.files,
-                    )
-                    if (items.size >= MAX_ITEMS_PER_DIRECTORY) break
+            if (child.name == RuntimePreservePolicy.GUEST_HOME_SLOT &&
+                Files.isDirectory(child.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(child.toPath())) {
+                val entries = child.listFiles()
+                    ?.sortedBy { it.name }
+                    ?: throw RuntimeFailure("PRESERVE_READ_FAILED", "无法读取用户数据暂存目录")
+                if (entries.size <= MAX_ITEMS_PER_DIRECTORY - items.size &&
+                    entries.all { entry -> entry.name.length <= 289 && entry.name.none { it == '\\' || it.isISOControl() } }) {
+                    for (entry in entries) {
+                        val measure = measureTree(entry)
+                        items += Item(
+                            slot = "${RuntimePreservePolicy.GUEST_HOME_SLOT}/${entry.name}",
+                            category = RuntimePreservePolicy.categoryOfPath(entry.name).wireValue,
+                            path = "${RuntimePreservePolicy.GUEST_HOME_ROOT}/${entry.name}",
+                            bytes = measure.bytes,
+                            files = measure.files,
+                        )
+                    }
+                    continue
                 }
-                continue
+                // 条目太多时展示整块目录，不能把前 32 项伪装成这份副本的全部内容。
             }
             val measure = measureTree(child)
             items += Item(
@@ -205,6 +221,7 @@ class PreserveStore(
 
     private class RecoveryBudget {
         var files = 0
+        var entries = 0
         var bytes = 0L
         var skippedSymlinks = 0
     }
@@ -234,7 +251,24 @@ class PreserveStore(
         return Measure(files, bytes)
     }
 
-    private fun countEntries(directory: File): Int = measureTree(directory).files
+    private fun countEntries(directory: File): Int {
+        var count = 0
+        val pending = ArrayDeque<Path>()
+        pending.addLast(directory.toPath())
+        while (pending.isNotEmpty()) {
+            val current = pending.removeLast()
+            count += 1
+            if (count > MAX_DISCARD_ENTRIES) return count
+            if (!Files.isDirectory(current, LinkOption.NOFOLLOW_LINKS)) continue
+            Files.newDirectoryStream(current).use { children ->
+                for (child in children) {
+                    if (count + pending.size >= MAX_DISCARD_ENTRIES) return MAX_DISCARD_ENTRIES + 1
+                    pending.addLast(child)
+                }
+            }
+        }
+        return count
+    }
 
     private fun copyTree(source: File, destination: File, budget: RecoveryBudget): CopyResult {
         var files = 0
@@ -243,7 +277,8 @@ class PreserveStore(
         val pending = ArrayDeque<Pair<File, File>>()
         pending.addLast(source to destination)
         while (pending.isNotEmpty()) {
-            if (budget.files >= MAX_RECOVER_FILES) {
+            budget.entries += 1
+            if (budget.entries > MAX_RECOVER_ENTRIES) {
                 throw RuntimeFailure("PRESERVE_RECOVER_TOO_LARGE", "待取回的文件数超过上限，请在文件管理里逐个目录取回")
             }
             val (from, to) = pending.removeFirst()
@@ -254,20 +289,33 @@ class PreserveStore(
             }
             if (Files.isDirectory(from.toPath(), LinkOption.NOFOLLOW_LINKS)) {
                 ensureDirectory(to)
-                for (child in from.listFiles() ?: continue) pending.addLast(child to File(to, child.name))
+                Files.newDirectoryStream(from.toPath()).use { children ->
+                    for (child in children) {
+                        if (budget.entries + pending.size >= MAX_RECOVER_ENTRIES) {
+                            throw RuntimeFailure("PRESERVE_RECOVER_TOO_LARGE", "待取回的条目数超过上限，请在文件管理里逐个目录取回")
+                        }
+                        pending.addLast(child.toFile() to File(to, child.fileName.toString()))
+                    }
+                }
                 continue
+            }
+            if (!Files.isRegularFile(from.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                throw RuntimeFailure("PRESERVE_RECOVER_FAILED", "待取回的条目不是普通文件")
+            }
+            if (budget.files >= MAX_RECOVER_FILES) {
+                throw RuntimeFailure("PRESERVE_RECOVER_TOO_LARGE", "待取回的文件数超过上限，请在文件管理里逐个目录取回")
             }
             val target = uniqueTarget(to)
             ensureDirectory(target.parentFile ?: to)
+            val copiedBytes = Files.size(from.toPath())
+            if (copiedBytes > MAX_RECOVER_BYTES - budget.bytes) {
+                throw RuntimeFailure("PRESERVE_RECOVER_TOO_LARGE", "待取回的数据超过上限，请在文件管理里逐个目录取回")
+            }
             Files.copy(from.toPath(), target.toPath(), StandardCopyOption.COPY_ATTRIBUTES)
             files += 1
-            bytes += try {
-                Files.size(target.toPath())
-            } catch (_: Exception) {
-                0L
-            }
+            bytes += copiedBytes
             budget.files += 1
-            budget.bytes += bytes
+            budget.bytes += copiedBytes
         }
         return CopyResult(files, bytes, skipped)
     }
@@ -287,14 +335,19 @@ class PreserveStore(
     }
 
     private fun ensureDirectory(directory: File) {
-        val path: Path = directory.toPath()
-        if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+        val root = currentRoot.toPath().toAbsolutePath().normalize()
+        val target = directory.toPath().toAbsolutePath().normalize()
+        if (!target.startsWith(root) || !Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) {
+            throw RuntimeFailure("PRESERVE_RECOVER_FAILED", "取回目标路径不是普通目录")
+        }
+        var path = root
+        for (part in root.relativize(target)) {
+            path = path.resolve(part)
+            if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) Files.createDirectory(path)
             if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(path)) {
                 throw RuntimeFailure("PRESERVE_RECOVER_FAILED", "取回目标路径不是普通目录")
             }
-            return
         }
-        Files.createDirectories(path)
     }
 
     /** 递归删除；符号链接只删链接自身（`walkFileTree` 默认不跟随）。 */
@@ -325,6 +378,7 @@ class PreserveStore(
         private const val MAX_MEASURED_ENTRIES = 5_000
         private const val MAX_DISCARD_ENTRIES = 50_000
         private const val MAX_RECOVER_FILES = 5_000
+        private const val MAX_RECOVER_ENTRIES = 20_000
         private const val MAX_RECOVER_BYTES = 256L * 1024 * 1024
         private const val MAX_RENAME_ATTEMPTS = 100
     }
