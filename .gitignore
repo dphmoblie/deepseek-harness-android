@@ -36,6 +36,8 @@ android/keystore/
 .gradle/
 .idea/
 .vscode/
+# IDE 本地目录：`.trae/` 里的文档稿已收编到 docs/plans/，之后不再入库
+.trae/
 *.iml
 .kotlin/
 **/.cxx/
@@ -50,17 +52,31 @@ android/app/capacitor.build.gradle
 android/app/src/main/assets/capacitor.config.json
 android/app/src/main/assets/capacitor.plugins.json
 android/app/src/main/assets/public/
-android/app/src/main/assets/runtime/runtime-manifest.json
-android/app/src/main/assets/runtime/runtime-manifest.json.bak
-android/app/src/main/assets/runtime/rootfs.bundle
-android/app/src/main/assets/runtime/rootfs.bundle.bak
+# 内置运行时（rootfs.bundle / runtime-manifest.json 及其 .bak）由 CI 从构建 artifact 拷入，
+# Gradle 按目录读 assets；整目录不入库，避免几百 MB 的 bundle 被误提交。
+android/app/src/main/assets/runtime/
+# 网络工具组件的版权材料由 CI 在 runner 上收集（scripts/legal-notices.py collect），
+# 只有说明文件入库；inventory.json 与 *-copyright.txt 都是本次构建的产物。
+android/app/src/main/assets/legal/ubuntu-packages/*
+!android/app/src/main/assets/legal/ubuntu-packages/README.md
+# 认证预载的唯一源文件是 scripts/mobile-auth-preload.cjs，APK 里的副本由 Gradle 的
+# generateAuthPreloadAsset 生成；在源码树里手抄第二份会随 APK 版本漂移（AGENTS.md 第 13 条）。
+android/app/src/main/assets/support/mobile-auth-preload.cjs
 android/app/src/main/jniLibs/**/*.so
 android/gradle/wrapper/gradle-wrapper.jar
 *.apk
 *.aab
+*.apks
+*.idsig
 
 # Downloaded runtimes, logs, and temporary files
 runtime-cache/
+# android-build.yml 在仓库根创建这些目录：运行时打包产物、PRoot 运行器与外部工具链。
+# 只在 CI / 本地复现时出现（rootfs、.so、上游源码），不得入库。
+runtime-artifacts/
+proot-source/
+runners/
+operit2/
 .pnpm-pi-ai-patch/
 .patch-source/
 *.rootfs
@@ -89,3 +105,15 @@ legal/operit-license.tar
 
 # 介绍视频及其生成脚本、配乐均为本地素材，不纳入版本管理
 video/
+
+# 本地 Python 环境：仓库里的构建/校验脚本用 python3 直接跑，开发者可能另建虚拟环境
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+# 崩溃转储与编辑器/系统临时文件：真机调试与 Android Studio 会留在工作区
+*.hprof
+*.dmp
+*.swp
+*~
+desktop.ini

@@ -154,7 +154,7 @@ pnpm run android:open   # 在 Android Studio 中打开，或直接使用 Gradle 
 
 开发版构建可以不内置运行时，改为同时设置 `DSH_RUNTIME_MANIFEST_URL` 与
 `DSH_RUNTIME_MANIFEST_SHA256` 以固定远程清单。完整构建说明与签名策略见
-[android/README.md](android/README.md)。
+[docs/android.md](docs/android.md)。
 
 ### 检查与测试
 
@@ -224,5 +224,5 @@ GitHub 只提供当前累计值，所以按发布日计入、逐日累加成阶�
 - [移动端插件兼容设计](docs/mobile-plugin-compat.md)
 - [项目状态登记册（已完成、未完成与真机读数）](docs/项目状态.md)
 - [发布检查清单](docs/RELEASE_CHECKLIST.md)
-- [安卓平台构建说明](android/README.md)
+- [安卓平台构建说明](docs/android.md)
 - [第三方声明](THIRD_PARTY_NOTICES.md)

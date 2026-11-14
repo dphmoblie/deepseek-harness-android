@@ -134,7 +134,7 @@ pnpm run android:open   # 在 Android Studio 中打开，或直接使用 Gradle 
 
 개발 빌드는 런타임을 내장하지 않고 대신 `DSH_RUNTIME_MANIFEST_URL`과
 `DSH_RUNTIME_MANIFEST_SHA256`을 함께 설정해 원격 매니페스트를 고정할 수 있습니다. 전체 빌드 설명과 서명 정책은
-[android/README.md](android/README.md)를 참조하세요.
+[docs/android.md](docs/android.md)를 참조하세요.
 
 ### 검사와 테스트
 
@@ -204,5 +204,5 @@ pnpm lint          # ESLint，零警告通过
 - [모바일 플러그인 호환 설계](docs/mobile-plugin-compat.md)
 - [프로젝트 상태 대장(완료·미완료·실기기 수치)](docs/项目状态.md)
 - [릴리스 체크리스트](docs/RELEASE_CHECKLIST.md)
-- [Android 플랫폼 빌드 설명](android/README.md)
+- [Android 플랫폼 빌드 설명](docs/android.md)
 - [서드파티 고지](THIRD_PARTY_NOTICES.md)

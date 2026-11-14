@@ -134,7 +134,7 @@ pnpm run android:open   # open in Android Studio, or build directly with Gradle
 
 Development builds can skip the bundled runtime and instead pin a remote manifest by
 setting both `DSH_RUNTIME_MANIFEST_URL` and `DSH_RUNTIME_MANIFEST_SHA256`. See
-[android/README.md](android/README.md) for the full build guide and signing policy.
+[docs/android.md](docs/android.md) for the full build guide and signing policy.
 
 ### Checks and tests
 
@@ -205,5 +205,5 @@ Component sources, exact upstream versions, artifact hashes and the correspondin
 - [Mobile plugin compatibility design](docs/mobile-plugin-compat.md)
 - [Project status register (done, open, on-device readings)](docs/项目状态.md)
 - [Release checklist](docs/RELEASE_CHECKLIST.md)
-- [Android build guide](android/README.md)
+- [Android build guide](docs/android.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md)

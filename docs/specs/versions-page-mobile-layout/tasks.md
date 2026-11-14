@@ -1,6 +1,6 @@
 # 版本管理页窄屏排版故障 —— 任务清单
 
-> 依赖：`specs/versions-page-mobile-layout/spec.md`
+> 依赖：`docs/specs/versions-page-mobile-layout/spec.md`
 > 未确认项：方案 B/C 需用户批准后才执行（见 spec §6）。
 
 ## [x] T1 [必做] 修复 `.release-row` 换行（`src/styles.css`）

@@ -4,7 +4,7 @@
 请先读完本文再动手：下面每一条都曾经是真实缺陷的修法，改回去会重新引入问题。
 
 Git 提交/发布规范见 [`.agents/rules/git-workflow.md`](.agents/rules/git-workflow.md)（中文、约定式提交、
-发布说明写在 `docs/发布说明-<版本>.md`）。
+发布说明写在 `docs/发布说明-<版本>.md`）。文档放置规范见 [`.agents/rules/docs-layout.md`](.agents/rules/docs-layout.md)：唯一文档根是 `docs/`，根目录只留多语言 README、`AGENTS.md`、`LICENSE` 与 `THIRD_PARTY_NOTICES.md`。
 
 ## 1. 不要恢复「打开应用自动进入 Harness」
 
@@ -109,7 +109,7 @@ Git 提交/发布规范见 [`.agents/rules/git-workflow.md`](.agents/rules/git-w
 ## 10. 发布版不要打开 R8 混淆
 
 `android/app/build.gradle` 的 `release` 是 `minifyEnabled false` + `shrinkResources false`，
-原因写在 `android/README.md` 的「构建策略：发布版不混淆代码」里，别只看着两行就当成遗留配置：
+原因写在 `docs/android.md` 的「构建策略：发布版不混淆代码」里，别只看着两行就当成遗留配置：
 
 - 体积 98% 是 rootfs，R8 省下的几百 KB 没有实际意义；
 - Shizuku 的 UserService（按类名起服务）、Capacitor 插件注册、`FileProvider` 的 authority

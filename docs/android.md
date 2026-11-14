@@ -1,21 +1,23 @@
 # Android native runtime
 
+> 本文件是 Android 构建、签名与运行时边界说明，统一放在 `docs/`；原 `android` 目录下的 README 已收编到此处，文档总入口见 [README](README.md)。
+
 This directory is the Capacitor 7 Android platform for the DeepSeek Harness mobile control surface. It targets API 35, requires Android 8.0 or newer, and packages only `arm64-v8a`.
 
 ## Build
 
-1. Install the JavaScript dependencies from `app/` with Node.js `^22.19.0 || >=24.0.0` and `pnpm install --frozen-lockfile`.
-2. Import the release-pinned ARM64 PRoot runner and loader as `app/src/main/jniLibs/arm64-v8a/libdsh_proot.so` and `libdsh_proot_loader.so`. Both generated files are intentionally ignored by Git.
-3. For the official self-contained build, generate the ignored `app/src/main/assets/runtime/runtime-manifest.json` and `rootfs.bundle` assets from the same source revision before Gradle runs. Transaction `.bak` and `.part` files must not be present. A remote-only development build may instead set both `DSH_RUNTIME_MANIFEST_URL` and `DSH_RUNTIME_MANIFEST_SHA256` and omit the bundled runtime.
+1. Install the JavaScript dependencies from the repository root with Node.js `^22.19.0 || >=24.0.0` and `pnpm install --frozen-lockfile`.
+2. Import the release-pinned ARM64 PRoot runner and loader as `android/app/src/main/jniLibs/arm64-v8a/libdsh_proot.so` and `android/app/src/main/jniLibs/arm64-v8a/libdsh_proot_loader.so`. Both generated files are intentionally ignored by Git.
+3. For the official self-contained build, generate the ignored `android/app/src/main/assets/runtime/runtime-manifest.json` and `rootfs.bundle` assets from the same source revision before Gradle runs. Transaction `.bak` and `.part` files must not be present. A remote-only development build may instead set both `DSH_RUNTIME_MANIFEST_URL` and `DSH_RUNTIME_MANIFEST_SHA256` and omit the bundled runtime.
 4. Run `pnpm run android:sync`, then build with Android SDK 35, NDK, CMake 3.22.1, JDK 23, and Gradle 8.11.1.
 
 The Gradle wrapper JAR and Capacitor-generated files are not committed. Generate the wrapper with a trusted Gradle 8.11.1 installation when preparing a clean build machine. Do not store signing passwords, download credentials, API keys, database credentials, or tokens in Gradle files or `local.properties`.
 
 ## 团队统一签名（签名一致性）
 
-所有构建变体（debug/release）统一使用团队共享密钥库 `dsh-mobile-team.jks` 签名，包名固定为 `io.deepseekharness.mobile`（`app/build.gradle` 的 `applicationId`）。这样任何开发者或 CI 产出的 APK 都可以互相覆盖安装，不会出现「应用签名与已安装版本不一致」的提示。密钥库与密码**严禁提交 Git**（`.gitignore` 已排除），按以下方式获取：
+所有构建变体（debug/release）统一使用团队共享密钥库 `dsh-mobile-team.jks` 签名，包名固定为 `io.deepseekharness.mobile`（`android/app/build.gradle` 的 `applicationId`）。这样任何开发者或 CI 产出的 APK 都可以互相覆盖安装，不会出现「应用签名与已安装版本不一致」的提示。密钥库与密码**严禁提交 Git**（`.gitignore` 已排除），按以下方式获取：
 
-1. **本地开发**：向团队负责人索取 `android/keystore/dsh-mobile-team.jks` 与 `android/keystore.properties`（模板见 `keystore.properties.example`），放入 `android/` 目录后即可直接构建。
+1. **本地开发**：向团队负责人索取 `android/keystore/dsh-mobile-team.jks` 与 `android/keystore.properties`（模板见 `android/keystore.properties.example`），放入 `android/` 目录后即可直接构建。
 2. **CI 构建**：由 GitHub Secrets 注入环境变量 `DSH_KEYSTORE_BASE64`（密钥库文件的 base64 编码）与 `DSH_KEYSTORE_PASSWORD`，构建时自动解码使用。
 3. **缺失即失败**：两者都缺失时 Gradle 配置阶段直接终止（fail-closed），防止有人用个人 debug 密钥产出签名不一致的 APK。
 
@@ -23,7 +25,7 @@ The Gradle wrapper JAR and Capacitor-generated files are not committed. Generate
 
 ## 构建策略：发布版不混淆代码
 
-`app/build.gradle` 的 `release` 构建**关闭了 R8 代码混淆**（`minifyEnabled false`）、**关闭了资源裁剪改名**
+`android/app/build.gradle` 的 `release` 构建**关闭了 R8 代码混淆**（`minifyEnabled false`）、**关闭了资源裁剪改名**
 （`shrinkResources false`）。这是项目约定，不是遗留配置，不要为了「瘦身」改回去：
 
 1. **收益可以忽略**：APK 体积 98% 来自 rootfs bundle，R8 省下的几百 KB 对安装包大小没有实际意义。
@@ -33,7 +35,7 @@ The Gradle wrapper JAR and Capacitor-generated files are not committed. Generate
 3. **崩溃栈可读**：用户上报的堆栈不需要再对照 `mapping.txt` 反混淆，才可能在没有稳定复现步骤时定位问题。
 
 如果将来确有必须混淆的场景（例如合规要求），需要同时满足：补齐 Shizuku / Capacitor / FileProvider 的
-`proguard-rules.pro` 保留规则；跑一遍 `assembleRelease` 后的真机验证（启动、Shizuku 连接、分享/打开文件、
+`android/app/proguard-rules.pro` 保留规则；跑一遍 `assembleRelease` 后的真机验证（启动、Shizuku 连接、分享/打开文件、
 插件管理）；并在 `AGENTS.md` 里记录新的取舍。
 
 补充：`shrinkResources false` **不会**阻止 AGP 的资源优化把 `res/xml/network_security_config.xml`

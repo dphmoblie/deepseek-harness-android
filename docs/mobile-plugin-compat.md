@@ -67,7 +67,7 @@
 
 | 层 | 现状 | 轻量动作 |
 |---|---|---|
-| APK | `0.3.6` arm64-only，release 为 `minifyEnabled false` + `shrinkResources false`（发布版不混淆，见 `android/README.md`） | APK 内嵌已校验 rootfs；Release 同时提供独立 runtime 资产 |
+| APK | `0.3.6` arm64-only，release 为 `minifyEnabled false` + `shrinkResources false`（发布版不混淆，见 `docs/android.md`） | APK 内嵌已校验 rootfs；Release 同时提供独立 runtime 资产 |
 | 运行时 | CI 生成 Ubuntu + Node + dsh bundle | 与 APK 同 tag 发布；manifest URL 和摘要在构建时固定，无手工配置 |
 | 插件集 | rootfs 配方含完整 dsh | 官方前端直接提供模型、设置与插件入口，客户端插件沿用上游加载机制 |
 | 传输 | preload 认证 | HTTP Basic 与 WebSocket HttpOnly Cookie 共用每次启动的新 token |

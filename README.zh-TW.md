@@ -134,7 +134,7 @@ pnpm run android:open   # 在 Android Studio 中開啟，或直接使用 Gradle 
 
 開發版建置可以不內建執行環境，改為同時設定 `DSH_RUNTIME_MANIFEST_URL` 與
 `DSH_RUNTIME_MANIFEST_SHA256` 以固定遠端資訊清單。完整建置說明與簽章策略見
-[android/README.md](android/README.md)。
+[docs/android.md](docs/android.md)。
 
 ### 檢查與測試
 
@@ -203,5 +203,5 @@ GitHub 只提供目前累計值，因此依發佈日計入、逐日累加成階�
 - [行動裝置外掛相容性設計](docs/mobile-plugin-compat.md)
 - [專案狀態登記冊（已完成、未完成與真機讀數）](docs/项目状态.md)
 - [發行檢查清單](docs/RELEASE_CHECKLIST.md)
-- [安卓平台建置說明](android/README.md)
+- [安卓平台建置說明](docs/android.md)
 - [第三方聲明](THIRD_PARTY_NOTICES.md)

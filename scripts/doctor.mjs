@@ -108,7 +108,7 @@ const prootPath = resolve('android/app/src/main/jniLibs/arm64-v8a/libdsh_proot.s
 if (existsSync(prootPath)) {
   ok('PRoot native runner is present')
 } else {
-  warn('PRoot 运行器 (libdsh_proot.so) 缺失', '如需在真机运行容器环境，请参考 android/README.md 准备或从 CI 下载')
+  warn('PRoot 运行器 (libdsh_proot.so) 缺失', '如需在真机运行容器环境，请参考 docs/android.md 准备或从 CI 下载')
 }
 
 console.log('\n--- 诊断结果 ---')
