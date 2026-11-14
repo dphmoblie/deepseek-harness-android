@@ -1,0 +1,171 @@
+<resources>
+    <string name="app_name">DeepSeek Harness</string>
+    <string name="harness_title">Harness 대화</string>
+    <string name="harness_back_to_app">앱으로 돌아가기</string>
+    <string name="harness_exit_confirm_title">DSH 종료</string>
+    <string name="harness_exit_confirm_message">앱으로 돌아가시겠어요? 현재 DSH 화면은 백그라운드에 남아 있습니다.</string>
+    <string name="harness_exit_confirm_cancel">계속 사용</string>
+    <string name="harness_exit_confirm_ok">앱으로 돌아가기</string>
+    <string name="harness_open_management">관리 설정 열기</string>
+    <string name="harness_workspace_files">워크스페이스 파일</string>
+    <string name="harness_workspace_empty">워크스페이스에 작업할 파일이 없습니다</string>
+    <string name="harness_file_open">다른 앱으로 열기</string>
+    <string name="harness_file_share">공유</string>
+    <string name="harness_file_delete">삭제</string>
+    <string name="harness_file_delete_confirm">%1$s을(를) 삭제할까요? 되돌릴 수 없습니다.</string>
+    <string name="harness_file_deleted">파일이 삭제되었습니다</string>
+    <string name="harness_file_action_failed">파일 작업에 실패했습니다</string>
+    <!-- 공유 실패 세분화: 주소는 풀렸지만 워크스페이스에서 파일을 못 찾은 경우(경로口径 불일치 포함). 일반 실패와 구분. -->
+    <string name="harness_file_share_unavailable">워크스페이스에서 이 파일을 찾을 수 없어 공유할 수 없습니다</string>
+    <string name="harness_session_failed">로컬 Harness 세션을 만들 수 없습니다</string>
+    <string name="harness_page_failed">Harness 화면을 지금 열 수 없습니다. 설정에서 다시 시도하세요.</string>
+    <string name="shizuku_missing">먼저 Shizuku를 설치하고 실행하세요</string>
+    <string name="accessibility_service_label">Harness 접근성 자동화</string>
+    <string name="accessibility_service_description">허용한 앱의 현재 화면 요소를 읽고 사용자가 요청한 범위에서 클릭·입력·스크롤을 수행합니다. 비밀번호, 인증번호, 결제, 권한, 잠금 화면은 처리하지 않습니다.</string>
+    <!-- 백그라운드 유지 포그라운드 서비스 알림: 고정 문구로 URL·자격 증명·터미널 내용·사용자 데이터 없음. -->
+    <string name="keep_alive_channel_name">백그라운드 실행</string>
+    <string name="keep_alive_channel_description">로컬 Harness 런타임을 백그라운드에서 계속 실행합니다.</string>
+    <string name="keep_alive_notification_title">Harness가 백그라운드에서 실행 중</string>
+    <string name="keep_alive_notification_text">탭하여 앱으로 돌아가 실행 환경을 관리하세요</string>
+    <!-- 진단 로그 내보내기: 공유 시트 문구 고정, 파일 경로·로그 내용 없음. -->
+    <string name="diagnostic_share_title">진단 로그 내보내기</string>
+    <string name="diagnostic_share_subject">DeepSeek Harness 진단 로그</string>
+    <!-- 플로팅 볼. 고정 문구로 URL·포트·자격 증명·세션 내용 없음. -->
+    <!-- 볼 자체의 스크린 리더 이름: 명사구 형태로, 아래 상태 문구 형태의 알림 제목과 재사용하지 않음. -->
+    <string name="overlay_ball_content_description">플로팅 볼</string>
+    <string name="overlay_conversation_title">Harness AI 대화</string>
+    <string name="overlay_conversation_expand">전체 화면</string>
+    <string name="overlay_conversation_close">닫기</string>
+    <string name="overlay_conversation_unavailable">대화가 아직 시작되지 않았습니다. 탭하여 앱으로 돌아가 Harness를 켜세요.</string>
+    <string name="overlay_ball_channel_name">플로팅 볼</string>
+    <string name="overlay_ball_channel_description">다른 앱 위에 플로팅 볼을 표시하고, 탭하면 바로 가기 메뉴(대화 / 보조 화면)를 엽니다</string>
+    <string name="overlay_ball_notification_title">플로팅 볼이 켜져 있습니다</string>
+    <string name="overlay_ball_notification_text">탭하여 바로 가기 메뉴를 열고 대화나 보조 화면으로 이동하세요</string>
+    <string name="overlay_ball_menu_return">앱으로 돌아가기</string>
+    <string name="overlay_ball_menu_hide">플로팅 볼 숨기기</string>
+    <!--
+      2단계 플로팅 볼: 주 볼을 짧게 누르면 펼쳐지고, 각 버튼은 하나의 동작(주 볼을 길게 누르면 대화 바로 열기).
+      contentDescription과 표시 텍스트를 따로 쓴 것은 TalkBack이 버튼에 글자가 없거나 잘릴 때도
+      이 버튼이 무엇을 하는지 알려주기 위해서입니다.
+    -->
+    <string name="overlay_ball_secondary_conversation_description">Harness AI 대화 창 열기</string>
+    <string name="overlay_ball_secondary_virtual_screen_description">대상 앱 보조 화면 플로팅 창 열기</string>
+    <string name="overlay_ball_secondary_virtual_screen_unavailable_toast">보조 화면이 아직 실행되지 않았습니다. 먼저 Harness에서 “대상 앱 보조 화면”을 여세요.</string>
+    <string name="overlay_ball_secondary_return">앱으로 돌아가기</string>
+    <string name="overlay_ball_secondary_return_description">앱으로 돌아가 Harness 대화 화면 열기</string>
+    <string name="overlay_ball_secondary_hide">플로팅 볼 숨기기</string>
+    <string name="overlay_ball_secondary_hide_description">플로팅 볼을 숨기고 플로팅 볼 서비스를 종료합니다</string>
+    <string name="overlay_ball_secondary_accessibility_on">접근성 끄기</string>
+    <string name="overlay_ball_secondary_accessibility_on_description">Harness 접근성 서비스 끄기(현재 켜져 있음)</string>
+    <string name="overlay_ball_secondary_accessibility_off">접근성 꺼져 있음</string>
+    <string name="overlay_ball_secondary_accessibility_off_description">Harness 접근성 서비스가 켜져 있지 않아 끌 필요가 없습니다</string>
+    <string name="overlay_ball_secondary_accessibility_disabled_toast">접근성 서비스가 켜져 있지 않아 끌 필요가 없습니다</string>
+    <string name="overlay_ball_secondary_accessibility_closed_toast">접근성 서비스를 껐습니다</string>
+
+    <!-- 보조 화면 미리보기 단계: 보조 화면 페이지와 플로팅 창이 같은 라벨을 공유. -->
+    <string name="virtual_screen_mode_limited">절전</string>
+    <string name="virtual_screen_mode_15fps">15 FPS</string>
+    <string name="virtual_screen_mode_30fps">30 FPS</string>
+    <string name="virtual_screen_mode_60fps">60 FPS</string>
+    <string name="virtual_screen_mode_120fps">120 FPS</string>
+    <string name="virtual_screen_mode_185fps">185 FPS</string>
+    <string name="virtual_screen_mode_90fps">90 FPS</string>
+    <string name="virtual_screen_mode_144fps">144 FPS</string>
+    <string name="virtual_screen_mode_165fps">165 FPS</string>
+    <string name="virtual_screen_mode_240fps">240 FPS</string>
+
+
+    <!--
+      보조 화면 선택 페이지의 제목과 방향 문구. 두 dp 숫자 모두 VirtualScreenSpec의 두 프리셋에서
+      계산(%1$d/%2$d)되며, “800 × 363 dp” 같은 값을 문구에 하드코딩하지 않습니다. 실제 세션에 쓰는
+      픽셀 크기와 따로 두고 서로 어긋나는 것을 막기 위함입니다.
+    -->
+    <string name="virtual_screen_title">대상 앱 보조 화면</string>
+    <string name="virtual_screen_back">뒤로</string>
+    <string name="virtual_screen_search">앱 이름 또는 패키지 이름 검색</string>
+    <string name="virtual_screen_clear_search">검색어 지우기</string>
+    <!-- 국산 ROM의 “설치된 앱 보기” 권한: 없으면 선택기에서 이 앱만 읽힘. 안내줄이 이유와 두 출구를 제공. -->
+    <string name="virtual_screen_app_list_permission">“설치된 앱 보기” 권한이 있어야 다른 앱을 불러올 수 있습니다. 권한이 없으면 목록에 이 앱만 표시됩니다.</string>
+    <string name="virtual_screen_app_list_grant">권한 허용</string>
+    <string name="virtual_screen_app_list_settings">앱 설정</string>
+    <string name="virtual_screen_app_list_denied">“설치된 앱 보기” 권한을 받지 못했습니다. 앱 설정에서 직접 켤 수 있습니다.</string>
+    <string name="virtual_screen_shell_required">설정에서 먼저 AI Shell을 켜고 Shizuku를 연결하세요</string>
+    <string name="virtual_screen_android_required">보조 화면은 Android 10 이상이 필요합니다</string>
+    <string name="virtual_screen_creating">대상 앱 보조 화면을 만드는 중입니다. 잠시 기다려 주세요…</string>
+    <string name="virtual_screen_start_failed">보조 화면 서비스를 시작할 수 없습니다. 앱으로 돌아가 다시 시도하세요.</string>
+    <string name="virtual_screen_app_back">앱으로 돌아가기</string>
+    <string name="virtual_screen_floating">플로팅 창</string>
+    <string name="virtual_screen_stop">보조 화면 종료</string>
+    <string name="virtual_screen_stop_failed">보조 화면을 정상적으로 종료하지 못했습니다. 잠시 후 다시 시도하세요.</string>
+    <string name="virtual_screen_overlay_required">먼저 보조 화면을 시작하고 설정에서 플로팅 창 권한을 허용하세요</string>
+    <string name="virtual_screen_back_failed">돌아갈 수 없습니다. 대상 앱이 보조 화면에 있는지 확인하세요.</string>
+    <string name="virtual_screen_mode_failed">프레임 속도가 적용되지 않았습니다. 보조 화면이 실행 중인지 확인하세요.</string>
+    <string name="virtual_screen_select_hint">AI가 조작할 앱을 선택하세요. 기기별 호환성은 아직 확인되지 않았습니다.</string>
+    <string name="virtual_screen_collapse">접기</string>
+    <string name="virtual_screen_end">종료</string>
+    <string name="virtual_screen_resize">드래그하여 보조 화면 크기 조절</string>
+    <string name="virtual_screen_control_description">%1$s 보조 화면 미리보기</string>
+    <string name="virtual_screen_notification_title">대상 앱 보조 화면 실행 중</string>
+    <string name="virtual_screen_notification_text">탭하여 보조 화면 페이지로 돌아가기</string>
+    <string name="virtual_screen_foreground_failed">보조 화면 포그라운드 서비스를 시작할 수 없습니다. 앱으로 돌아가 다시 시도하세요.</string>
+    <string name="virtual_screen_start_error">보조 화면 시작에 실패했습니다. AI Shell과 Shizuku 상태를 확인하세요.</string>
+    <string name="virtual_screen_session_lost">보조 화면 세션이 만료되었습니다. 다시 시작하세요.</string>
+    <string name="virtual_screen_refresh_retry">보조 화면 상태 새로 고침에 실패했습니다. 다시 시도하는 중입니다.</string>
+    <string name="virtual_screen_refresh_failed">보조 화면 상태를 계속 새로 고칠 수 없습니다. 이 페이지를 다시 여세요.</string>
+    <string name="virtual_screen_preview_gone">보조 화면 화면을 기다리는 중입니다. 화면 잠금·연결 끊김·앱이 보조 화면을 떠날 때는 표시를 멈춥니다.</string>
+    <string name="virtual_screen_budget_saturated"> · 미리보기가 따라가지 못합니다: 최근 %1$d프레임 중 %2$d프레임이 예산을 초과했습니다(최대 %3$d밀리초)</string>
+    <string name="virtual_screen_budget_degraded"> · 미리보기가 따라가지 못합니다: 최근 %1$d프레임 중 %2$d프레임이 예산을 초과했습니다</string>
+    <string name="virtual_screen_touch_failed">터치가 전달되지 않았습니다. 보조 화면이 실행 중인지 확인하세요.</string>
+    <string name="virtual_screen_action_failed">동작이 전달되지 않았습니다. 보조 화면이 실행 중인지 확인하세요.</string>
+    <string name="virtual_screen_waiting_unreadable">보조 화면 화면 대기 중(새 프레임 없음)</string>
+    <string name="virtual_screen_waiting_blank">보조 화면 화면 대기 중(현재 프레임이 거의 단색)</string>
+    <string name="virtual_screen_rate_unknown">프레임 속도 측정 전</string>
+    <string name="virtual_screen_frame_unchanged">%1$s · 화면 변화 없음</string>
+    <string name="virtual_screen_frame_blank">%1$s · 현재 프레임이 거의 단색</string>
+    <string name="virtual_screen_frame_unreadable">새 프레임 없음</string>
+    <string name="virtual_screen_touch_stream">터치 직접 전달</string>
+    <string name="virtual_screen_touch_discrete">탭 또는 스와이프</string>
+    <string name="virtual_screen_preview_status">보조 화면 미리보기 · %1$s · %2$s · 설정 %3$s</string>
+    <string name="virtual_screen_picture_description">대상 앱 보조 화면 화면, 탭과 스와이프 지원</string>
+    <string name="virtual_screen_orientation_landscape">가로 보조 화면 사용(%1$d × %2$d dp)</string>
+    <string name="virtual_screen_orientation_hint">기본은 세로 %1$d × %2$d dp입니다. 시작 후 이 페이지나 플로팅 창에서 조작할 수 있고, AI는 보조 화면 전용 도구를 사용합니다. 화면은 필요할 때 현재 모델 서비스로 전송되므로 개인정보가 포함된 페이지는 열지 마세요.</string>
+
+    <!--
+      작업 알림(등록부 §5.5). 유지 알림과는 별도 채널: 유지 알림은 항상 조용히 상주해야 하지만,
+      작업 알림의 가치는 앱을 떠난 뒤에도 알림을 받는 데 있으므로 사용자 기대가 반대입니다.
+      문구에는 “실행 중”처럼 확인할 수 없는 말을 일부러 쓰지 않고, 이미 일어난 일만 서술합니다.
+    -->
+    <string name="task_notification_channel_name">실행 상태 알림</string>
+    <string name="task_notification_channel_description">로컬 Harness가 멈추거나 시작에 실패하거나 기기 서비스 연결이 끊기면 알려줍니다</string>
+    <string name="task_notification_stopped_title">Harness 중지됨</string>
+    <string name="task_notification_stopped_text">로컬 실행 환경이 스스로 종료되었습니다. 탭하여 앱으로 돌아가 확인하세요.</string>
+    <string name="task_notification_failed_title">Harness 시작 실패</string>
+    <string name="task_notification_failed_text">실행 환경이 시작 단계에서 종료되었습니다. 탭하여 앱으로 돌아가 원인을 확인하세요.</string>
+    <string name="task_notification_installed_title">실행 환경 설치 완료</string>
+    <string name="task_notification_installed_text">탭하여 앱으로 돌아가 Harness를 여세요.</string>
+    <string name="task_notification_updated_title">실행 환경 업데이트 완료</string>
+    <string name="task_notification_updated_text">기존 데이터를 유지했습니다. 탭하여 앱으로 돌아가 계속 사용하세요.</string>
+    <string name="task_notification_repaired_title">실행 환경 복구 완료</string>
+    <string name="task_notification_repaired_text">세션과 사용자 데이터를 유지했습니다. 탭하여 앱으로 돌아가 계속 사용하세요.</string>
+    <string name="shizuku_reconnect_failed_title">Shizuku 연결 안 됨</string>
+    <string name="shizuku_reconnect_failed_text">기기가 권한을 부여했지만 자동 연결에 실패했습니다. 탭하여 앱으로 돌아가 다시 시도하세요.</string>
+    <!-- 항목 수가 붙는 두 항목: 항목 수는 작업이 돌려준 확정값이며 진행률 퍼센트가 아님. -->
+    <string name="task_notification_exported_title">워크스페이스 내보내기 완료</string>
+    <string name="task_notification_exported_text">%1$d개를 전달 영역 outbox에 기록했습니다</string>
+    <string name="task_notification_imported_title">워크스페이스로 가져오기 완료</string>
+    <string name="task_notification_imported_text">전달 영역에서 %1$d개를 가져왔습니다</string>
+    <!--
+      “작업 완료”: 게스트 내 dsh의 turn/end가 기기 브리지를 통해 전달되며, 네이티브는 고정 문구만 보냄.
+      합산 개수 포함: 연속된 몇 차례는 하나로 합쳐지고, %1$d는 이번에 합쳐진 항목 수(최소 1).
+    -->
+    <string name="task_notification_turn_completed_title">작업 완료</string>
+    <string name="task_notification_turn_completed_text">%1$d개 작업을 완료했습니다. 탭하여 대화 화면으로 돌아가세요.</string>
+
+    <!-- 대화 창의 크기 조절 손잡이: 드래그하여 창 크기 변경, 우하단 4dp 안쪽. -->
+    <string name="overlay_conversation_resize_description">드래그하여 대화 창 크기 조절</string>
+
+    <!-- 보조 화면 플로팅 창: 단계 행 아래 상태 문구. 아직 화면이 없으면 “대기 중”이라고 솔직히 표시. -->
+    <string name="virtual_screen_overlay_status_waiting">보조 화면 화면 대기 중</string>
+    <!-- 단계 전환 직후 바로 표시되며, 다음 프레임 읽기가 실제 수치로 덮어씀. %1$s는 단계 이름. -->
+    <string name="virtual_screen_overlay_mode_switched">%1$s로 전환됨, 새 프레임 속도 측정 대기 중</string>
+</resources>

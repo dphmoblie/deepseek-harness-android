@@ -1,7 +1,19 @@
 import { runtimeBridge } from '../platform/native'
 import { useState } from 'react'
 import { Languages } from 'lucide-react'
-import { type Language, saveLanguage, t, useLanguage } from '../i18n'
+import { LANGUAGES, type Language, saveLanguage, t, useLanguage } from '../i18n'
+
+/**
+ * 语言选项：名称一律用**该语言自己的写法**，不做翻译。
+ * 用户在地铁里看到「日本語」比看到「日语」更快认出来。
+ */
+const LANGUAGE_NAMES: Readonly<Record<Language, string>> = {
+  'zh-CN': '简体中文',
+  'zh-TW': '繁體中文',
+  en: 'English',
+  ja: '日本語',
+  ko: '한국어',
+}
 
 export function LanguageSettings({ initial = false }: { initial?: boolean }) {
   const language = useLanguage()
@@ -33,19 +45,28 @@ export function LanguageSettings({ initial = false }: { initial?: boolean }) {
       <div className="language-copy">
         <h2 id="language-title">{initial ? '选择语言 / Choose your language' : t('界面语言')}</h2>
         <p>{initial ? '请选择应用语言，之后可在设置中更改。' : t('立即生效，下次打开仍使用此语言。')}</p>
-        {initial && <p lang="en">Choose an app language. You can change it later in Settings.</p>}
+        {initial && (
+          <p>
+            <span lang="zh-TW">請選擇應用程式語言，之後可在設定中變更。</span>
+            <br />
+            <span lang="en">Choose an app language. You can change it later in Settings.</span>
+            <br />
+            <span lang="ja">アプリの言語を選択してください。設定からいつでも変更できます。</span>
+            <br />
+            <span lang="ko">앱 언어를 선택하세요. 설정에서 언제든지 변경할 수 있습니다.</span>
+          </p>
+        )}
       </div>
       <div className="language-control">
         <label className={initial ? undefined : 'sr-only'} htmlFor="app-language">{initial ? '语言 / Language' : t('语言')}</label>
         <select disabled={saving} id="app-language" value={initial ? selected : language ?? 'zh-CN'} onChange={event => {
           const value = event.target.value
           // 安全校验：拒绝选项白名单以外的值。
-          if (value !== 'zh-CN' && value !== 'en') return
+          if (!LANGUAGES.some(item => item === value)) return
           // 首次选择**选中即提交**：少一个「看不见的继续键」就少一处卡死的可能。
-          void change(value)
+          void change(value as Language)
         }}>
-          <option value="zh-CN" lang="zh-CN">简体中文</option>
-          <option value="en" lang="en">English</option>
+          {LANGUAGES.map(item => <option key={item} value={item} lang={item}>{LANGUAGE_NAMES[item]}</option>)}
         </select>
       </div>
       {failed && <p role="alert">{t('语言已切换，但本机存储不可用，下次启动可能再次询问。')}</p>}

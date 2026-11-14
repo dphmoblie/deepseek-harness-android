@@ -1,5 +1,6 @@
 import { validatePluginRequest } from './plugins'
 import { readBackgroundState, saveBackgroundState } from '../backgroundRef'
+import { isLanguage } from '../i18n'
 import type {
   AppUpdateInstallPermission,
   AppUpdateChannel,
@@ -197,7 +198,7 @@ export function createBrowserBridge(): RuntimeBridge {
       if (request.operation !== 'list') return Promise.reject(new Error('浏览器预览不支持修改设备插件'))
       return Promise.resolve({ plugins: [] })
     },
-    setAppLanguage: language => language === 'zh-CN' || language === 'en'
+    setAppLanguage: language => isLanguage(language)
       ? Promise.resolve()
       : Promise.reject(new Error('不支持的应用语言')),
     // 浏览器预览没有原生偏好：语言的唯一来源就是 localStorage，因此这里如实回答「没选过」，

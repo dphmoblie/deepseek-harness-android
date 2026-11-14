@@ -6,6 +6,7 @@ import type { PluginListenerHandle } from '@capacitor/core'
 import { validateSyncedTheme } from '../adaptiveAccent'
 import { validateBackgroundRef, validateBackgroundState } from '../backgroundRef'
 import { createBrowserBridge } from './browser'
+import { isLanguage, type Language } from '../i18n'
 import { validateSelfCheckOperation, type SelfCheckOperation } from '../runtimeSelfCheck'
 import type {
   AppOrientationMode,
@@ -133,7 +134,7 @@ interface NativeRuntimePlugin {
   listHarnessReleases(): Promise<unknown>
   manageHarnessVersions(options: { operation: HarnessVersionOperation; version?: string }): Promise<unknown>
   managePlugins(options: PluginRequest): Promise<PluginCatalog>
-  setAppLanguage(options: { language: 'zh-CN' | 'en' }): Promise<void>
+  setAppLanguage(options: { language: Language }): Promise<void>
   /** 读回原生保存的应用语言；`configured` 区分「选过」与「回落值」。 */
   getAppLanguage(): Promise<{ language: string, configured: boolean }>
   /** 同步主题模式给原生，由原生把它落到状态栏（登记册 5.4）。 */
@@ -332,12 +333,12 @@ function createNativeBridge(): RuntimeBridge {
     manageHarnessVersions: (operation, version) => NativeRuntime.manageHarnessVersions(harnessVersionRequest(operation, version)).then(validateHarnessVersions),
     managePlugins: request => NativeRuntime.managePlugins(validatePluginRequest(request)).then(validatePluginCatalog),
     setAppLanguage: language => {
-      if (language !== 'zh-CN' && language !== 'en') return Promise.reject(new Error('不支持的应用语言'))
+      if (!isLanguage(language)) return Promise.reject(new Error('不支持的应用语言'))
       return NativeRuntime.setAppLanguage({ language })
     },
     getAppLanguage: () => NativeRuntime.getAppLanguage().then(value => ({
       // 桥上的值一律当不可信输入：非法语言按「没选过」处理，让门禁照常询问。
-      language: value.language === 'en' ? 'en' : 'zh-CN',
+      language: isLanguage(value.language) ? value.language : 'zh-CN',
       configured: value.configured === true,
     })),
     setAppTheme: mode => {

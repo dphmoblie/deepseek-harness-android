@@ -185,6 +185,23 @@ Git 提交/发布规范见 [`.agents/rules/git-workflow.md`](.agents/rules/git-w
 回归入口：`MobileAuthPreloadTest.kt`、`scripts/mobile-compat-contract.test.mjs` 的
 「installed runtimes receive the APK auth preload before every launch」。
 
+## 14. 语言白名单与词典键的三处同步（新增语言时）
+
+界面语言现在有五个：`zh-CN`（源语言）/ `zh-TW` / `en` / `ja` / `ko`。新增或调整时，
+以下三处 + 两处资源必须同时改，少一处就是「切了语言但某些屏幕还是中文」：
+
+1. `src/i18n.ts` 的 `LANGUAGES`（唯一白名单，`isLanguage` 由它派生）；
+2. `Android AppLanguage.SUPPORTED`（原生偏好、通知、悬浮球都走它）；
+3. `res/values-<语言>/strings.xml`（`scripts/check-android-resources.py` 会挡缺键）；
+4. `src/locales/<语言>.ts` —— **键必须是 src 里的简体原文**（`t()` 用它查表），
+   不是翻译后的文字；`src/i18n.keys.test.ts` 校验「键都来自 en.ts」与九成覆盖率；
+5. `src/downloadTelemetry.ts` 的 `DURATION_UNITS` 之类按语言分支的格式化表。
+
+不允许把这五个值散落在新的 `=== 'en'` 判断里：`Language` 是联合类型，
+`LANGUAGES` 是运行时白名单，两处任一漏改都会退化成「非法值当没选过」。
+Harness 运行时本身只认 `zh`/`en`，`RuntimeStore.syncHarnessLocale` 集中做映射
+（繁→zh，日/韩→en），不要在别处再写一份。
+
 ## 改动前先跑这些
 
 本机 pnpm 不可用时用 node 直调（PATH 前置 `node` 目录）：

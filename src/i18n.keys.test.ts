@@ -2,6 +2,9 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { english } from './locales/en'
+import { japanese } from './locales/ja'
+import { korean } from './locales/ko'
+import { traditionalChinese } from './locales/zh-TW'
 
 /**
  * 字面量 `t("…")` 的键必须都登记在 `src/locales/en.ts` 里。
@@ -67,5 +70,21 @@ describe('文案键与 en.ts 的一致性', () => {
 
     const report = [...missing.entries()].map(([key, where]) => `${key} ← ${where.join(', ')}`)
     expect(report).toEqual([])
+  })
+
+  /**
+   * 其余语言只做**键覆盖**检查，不要求键集合与 en.ts 完全相同：
+   * 新增文案先补英文、日/韩/繁中稍后跟进是允许的（`t()` 会回退英文），
+   * 但出现**英文源里不存在的键**一定是拼错了原文，那种永远不会被命中。
+   * 覆盖率的下限由 i18n.test.ts 的抽查与发布前人工校对兜底。
+   */
+  it('新增语言的键都来自 en.ts，覆盖率不低于九成', () => {
+    const englishKeys = new Set(Object.keys(english))
+    for (const [label, dictionary] of [['zh-TW', traditionalChinese], ['ja', japanese], ['ko', korean]] as const) {
+      const extra = Object.keys(dictionary).filter(key => !englishKeys.has(key))
+      expect({ label, extra }).toEqual({ label, extra: [] })
+      const coverage = Object.keys(dictionary).filter(key => englishKeys.has(key)).length / englishKeys.size
+      expect({ label, coverage: coverage >= 0.9 }).toEqual({ label, coverage: true })
+    }
   })
 })

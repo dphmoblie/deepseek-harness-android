@@ -9,8 +9,16 @@ internal object AppLanguage {
     private const val PREFERENCES = "app_language"
     private const val KEY = "language"
 
+    /**
+     * 支持的应用语言白名单，与 `src/i18n.ts` 的 `LANGUAGES` 逐项一致。
+     *
+     * 顺序同时决定首次启动语言引导里的选项顺序；新增语言必须同步三处：
+     * 这里、`src/i18n.ts`、`res/values-<语言>/strings.xml`。
+     */
+    val SUPPORTED = listOf("zh-CN", "zh-TW", "en", "ja", "ko")
+
     fun save(context: Context, language: String): Boolean {
-        require(language == "zh-CN" || language == "en") { "不支持的应用语言" }
+        require(language in SUPPORTED) { "不支持的应用语言" }
         return context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
             .edit().putString(KEY, language).commit()
     }
@@ -18,7 +26,7 @@ internal object AppLanguage {
     /** 读取当前应用语言；未设置或为非法值时回落到简体中文。 */
     fun current(context: Context): String = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
         .getString(KEY, null)
-        ?.takeIf { it == "en" || it == "zh-CN" }
+        ?.takeIf { it in SUPPORTED }
         ?: "zh-CN"
 
     /**
@@ -29,7 +37,7 @@ internal object AppLanguage {
      */
     fun saved(context: Context): String? = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
         .getString(KEY, null)
-        ?.takeIf { it == "en" || it == "zh-CN" }
+        ?.takeIf { it in SUPPORTED }
 
     fun localizedContext(context: Context): Context {
         val language = current(context)

@@ -141,6 +141,7 @@ export function formatByteCount(bytes: number): string {
 export function formatDuration(ms: number): string {
   const lang: Language | null = readLanguage()
   const totalSeconds = Math.max(0, Math.round(ms / 1000))
+  // 英文用 h/m/s 缩写；其余语言用各自的时间单位与数字间距（简体中文「5 秒」，繁体/日/韩「5秒」）。
   if (lang === 'en') {
     if (totalSeconds < 60) return `${totalSeconds}s`
     const enMinutes = Math.floor(totalSeconds / 60)
@@ -148,10 +149,35 @@ export function formatDuration(ms: number): string {
     if (enMinutes < 60) return enSeconds === 0 ? `${enMinutes}m` : `${enMinutes}m ${String(enSeconds).padStart(2, '0')}s`
     return `${Math.floor(enMinutes / 60)}h ${enMinutes % 60}m`
   }
-  if (totalSeconds < 60) return `${totalSeconds} 秒`
+  const units = DURATION_UNITS[lang ?? 'zh-CN']
+  if (totalSeconds < 60) return `${totalSeconds}${units.space}${units.second}`
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
-  if (minutes < 60) return seconds === 0 ? `${minutes} 分钟` : `${minutes} 分 ${String(seconds).padStart(2, '0')} 秒`
+  if (minutes < 60) return seconds === 0
+    ? `${minutes}${units.space}${units.minute}`
+    : `${minutes}${units.space}${units.minuteShort} ${String(seconds).padStart(2, '0')}${units.space}${units.second}`
   const hours = Math.floor(minutes / 60)
-  return `${hours} 小时 ${minutes % 60} 分`
+  return `${hours}${units.space}${units.hour} ${minutes % 60}${units.space}${units.minuteShort}`
+}
+
+/**
+ * 各语言的时间单位。
+ *
+ * `minute` 是「整分」时单独出现的写法（中文写「3 分钟」），`minuteShort` 是
+ * 与秒并列或跟在小时后出现的短写法（「3 分 05 秒」「2 小时 15 分」）——
+ * 这两种场合中文的用词本来就不同，合成一个字段会把「3 分 05 秒」写成「3 分钟 05 秒」。
+ * `space` 只有简体中文在数字与单位之间留空格，其余语言连写。
+ */
+const DURATION_UNITS: Readonly<Record<Language, {
+  second: string
+  minute: string
+  minuteShort: string
+  hour: string
+  space: string
+}>> = {
+  'zh-CN': { second: '秒', minute: '分钟', minuteShort: '分', hour: '小时', space: ' ' },
+  'zh-TW': { second: '秒', minute: '分鐘', minuteShort: '分', hour: '小時', space: '' },
+  en: { second: 's', minute: 'm', minuteShort: 'm', hour: 'h', space: '' },
+  ja: { second: '秒', minute: '分', minuteShort: '分', hour: '時間', space: '' },
+  ko: { second: '초', minute: '분', minuteShort: '분', hour: '시간', space: '' },
 }

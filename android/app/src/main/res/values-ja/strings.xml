@@ -1,0 +1,170 @@
+<resources>
+    <string name="app_name">DeepSeek Harness</string>
+    <string name="harness_title">Harness チャット</string>
+    <string name="harness_back_to_app">アプリに戻る</string>
+    <string name="harness_exit_confirm_title">DSH を終了</string>
+    <string name="harness_exit_confirm_message">アプリに戻りますか？現在の DSH ページはバックグラウンドに残ります。</string>
+    <string name="harness_exit_confirm_cancel">続けて使用</string>
+    <string name="harness_exit_confirm_ok">アプリに戻る</string>
+    <string name="harness_open_management">アプリ設定を開く</string>
+    <string name="harness_workspace_files">ワークスペースのファイル</string>
+    <string name="harness_workspace_empty">ワークスペースに操作可能なファイルはありません</string>
+    <string name="harness_file_open">他アプリで開く</string>
+    <string name="harness_file_share">共有</string>
+    <string name="harness_file_delete">削除</string>
+    <string name="harness_file_delete_confirm">%1$s を削除しますか？この操作は取り消せません。</string>
+    <string name="harness_file_deleted">ファイルを削除しました</string>
+    <string name="harness_file_action_failed">ファイル操作に失敗しました</string>
+    <!-- 共有失敗の詳細分類：アドレス解決は通ったがワークスペース内にファイルがない（パス表記の不一致を含む）場合、汎用の失敗と区別する。 -->
+    <string name="harness_file_share_unavailable">このファイルはワークスペースにないため、共有できません</string>
+    <string name="harness_session_failed">ローカル Harness セッションを確立できません</string>
+    <string name="harness_page_failed">Harness を開けません。設定から再試行してください</string>
+    <string name="shizuku_missing">Shizuku を先にインストールして起動してください</string>
+    <string name="accessibility_service_label">Harness ユーザー補助の自動化</string>
+    <string name="accessibility_service_description">許可したアプリの現在の画面ノードを読み取り、ユーザーが依頼した限定されたタップ・入力・スクロールを実行します。パスワード、認証コード、決済、権限、ロック画面は処理しません。</string>
+    <!-- バックグラウンド維持のフォアグラウンドサービス通知：固定文言で URL・クレデンシャル・端末出力・ユーザーデータを含まない。 -->
+    <string name="keep_alive_channel_name">バックグラウンド実行</string>
+    <string name="keep_alive_channel_description">ローカル Harness ランタイムをバックグラウンドで動かし続ける。</string>
+    <string name="keep_alive_notification_title">Harness はバックグラウンドで実行中</string>
+    <string name="keep_alive_notification_text">タップしてアプリに戻り、ランタイムを管理</string>
+    <!-- 診断ログのエクスポート：共有画面の文言は固定で、ファイルパスやログ内容を含まない。 -->
+    <string name="diagnostic_share_title">診断ログをエクスポート</string>
+    <string name="diagnostic_share_subject">DeepSeek Harness 診断ログ</string>
+    <!-- フローティングボール。固定文言：URL・ポート・クレデンシャル・セッション内容を含まない。 -->
+    <!-- 球自体の読み上げ名：名詞句。下の状態文形式の通知タイトルは使い回さない。 -->
+    <string name="overlay_ball_content_description">フローティングボール</string>
+    <string name="overlay_conversation_title">Harness AI チャット</string>
+    <string name="overlay_conversation_expand">全画面</string>
+    <string name="overlay_conversation_close">閉じる</string>
+    <string name="overlay_conversation_unavailable">チャットはまだ起動していません。タップしてアプリに戻り、Harness を開いてください</string>
+    <string name="overlay_ball_channel_name">フローティングボール</string>
+    <string name="overlay_ball_channel_description">他アプリの上にフローティングボールを表示し、タップするとショートカットメニュー（チャット / サブ画面）を開く</string>
+    <string name="overlay_ball_notification_title">フローティングボールはオン</string>
+    <string name="overlay_ball_notification_text">タップしてショートカットメニューを開き、チャットまたはサブ画面に進めます</string>
+    <string name="overlay_ball_menu_return">アプリに戻る</string>
+    <string name="overlay_ball_menu_hide">フローティングボールを隠す</string>
+    <!--
+      2段目のフローティングボール：主球を短押しで展開、各ボタンは1つの動作（主球の長押し＝チャットを直接開く）。
+      contentDescription と表示文字を分けて書くのは、ボタンに文字がない（または文字が切れる）ときも
+      TalkBack がこのボタンの動作を説明できるようにするため。
+    -->
+    <string name="overlay_ball_secondary_conversation_description">Harness AI チャットの小窓を開く</string>
+    <string name="overlay_ball_secondary_virtual_screen_description">対象アプリのサブ画面オーバーレイを開く</string>
+    <string name="overlay_ball_secondary_virtual_screen_unavailable_toast">サブ画面はまだ起動していません。先に Harness で「対象アプリのサブ画面」を開いてください</string>
+    <string name="overlay_ball_secondary_return">アプリに戻る</string>
+    <string name="overlay_ball_secondary_return_description">アプリに戻り、Harness チャット画面を開く</string>
+    <string name="overlay_ball_secondary_hide">フローティングボールを隠す</string>
+    <string name="overlay_ball_secondary_hide_description">フローティングボールを隠し、そのサービスを停止する</string>
+    <string name="overlay_ball_secondary_accessibility_on">ユーザー補助をオフにする</string>
+    <string name="overlay_ball_secondary_accessibility_on_description">Harness ユーザー補助サービスをオフにする（現在はオン）</string>
+    <string name="overlay_ball_secondary_accessibility_off">ユーザー補助はオフ</string>
+    <string name="overlay_ball_secondary_accessibility_off_description">Harness ユーザー補助サービスはオフのため、オフにするものはありません</string>
+    <string name="overlay_ball_secondary_accessibility_disabled_toast">ユーザー補助サービスはすでにオフです</string>
+    <string name="overlay_ball_secondary_accessibility_closed_toast">ユーザー補助サービスをオフにしました</string>
+
+    <!-- サブ画面のプレビューフレームレート設定：サブ画面ページとサブ画面オーバーレイで同じラベルを共有する。 -->
+    <string name="virtual_screen_mode_limited">省電力</string>
+    <string name="virtual_screen_mode_15fps">15 FPS</string>
+    <string name="virtual_screen_mode_30fps">30 FPS</string>
+    <string name="virtual_screen_mode_60fps">60 FPS</string>
+    <string name="virtual_screen_mode_120fps">120 FPS</string>
+    <string name="virtual_screen_mode_185fps">185 FPS</string>
+    <string name="virtual_screen_mode_90fps">90 FPS</string>
+    <string name="virtual_screen_mode_144fps">144 FPS</string>
+    <string name="virtual_screen_mode_165fps">165 FPS</string>
+    <string name="virtual_screen_mode_240fps">240 FPS</string>
+
+
+    <!--
+      サブ画面選択ページのタイトルと向きの文案。2か所の dp 値は VirtualScreenSpec の2つのプリセットからその場で計算（%1$d/%2$d）。
+      「800 × 363 dp」のような値を文案に固定書きせず、実際のセッション作成に使うピクセルサイズと別々に書いてずれるのを防ぐ。
+    -->
+    <string name="virtual_screen_title">対象アプリのサブ画面</string>
+    <string name="virtual_screen_back">戻る</string>
+    <string name="virtual_screen_search">アプリ名またはパッケージ名を検索</string>
+    <string name="virtual_screen_clear_search">検索語をクリア</string>
+    <!-- 国産 ROM の「インストール済みアプリの読み取り」権限：未許可の場合、選択画面は本アプリしか読めない。この注意書きが理由を説明し、2つの出口を提示する。 -->
+    <string name="virtual_screen_app_list_permission">他アプリを一覧表示するには「インストール済みアプリの読み取り」権限が必要です。未許可の場合、一覧には本アプリのみが表示されます。</string>
+    <string name="virtual_screen_app_list_grant">権限を付与</string>
+    <string name="virtual_screen_app_list_settings">アプリ設定</string>
+    <string name="virtual_screen_app_list_denied">「インストール済みアプリの読み取り」が許可されていません。アプリ設定から手動で有効にできます。</string>
+    <string name="virtual_screen_shell_required">設定で AI Shell を有効にし、Shizuku に接続してください</string>
+    <string name="virtual_screen_android_required">サブ画面の操作には Android 10 以降が必要です</string>
+    <string name="virtual_screen_creating">対象アプリのサブ画面を作成しています。しばらくお待ちください…</string>
+    <string name="virtual_screen_start_failed">サブ画面サービスを起動できません。フォアグラウンドに戻って再試行してください</string>
+    <string name="virtual_screen_app_back">アプリに戻る</string>
+    <string name="virtual_screen_floating">オーバーレイウィンドウ</string>
+    <string name="virtual_screen_stop">サブ画面を終了</string>
+    <string name="virtual_screen_stop_failed">サブ画面を正常に終了できませんでした。しばらくして再試行してください</string>
+    <string name="virtual_screen_overlay_required">先にサブ画面を起動し、設定でオーバーレイ権限を付与してください</string>
+    <string name="virtual_screen_back_failed">戻れません。対象アプリがまだサブ画面にあることを確認してください</string>
+    <string name="virtual_screen_mode_failed">フレームレートが反映されません。サブ画面がまだ実行中であることを確認してください</string>
+    <string name="virtual_screen_select_hint">AI に操作させるアプリを選択してください。端末ごとの互換性はまだ検証されていません。</string>
+    <string name="virtual_screen_collapse">折りたたむ</string>
+    <string name="virtual_screen_end">終了</string>
+    <string name="virtual_screen_resize">ドラッグしてサブ画面のサイズを変更</string>
+    <string name="virtual_screen_control_description">%1$s サブ画面プレビュー</string>
+    <string name="virtual_screen_notification_title">対象アプリのサブ画面は実行中</string>
+    <string name="virtual_screen_notification_text">タップしてサブ画面ページに戻る</string>
+    <string name="virtual_screen_foreground_failed">サブ画面のフォアグラウンドサービスを起動できません。アプリに戻って再試行してください</string>
+    <string name="virtual_screen_start_error">サブ画面の起動に失敗しました。AI Shell と Shizuku の状態を確認してください</string>
+    <string name="virtual_screen_session_lost">サブ画面セッションが無効になりました。再度起動してください</string>
+    <string name="virtual_screen_refresh_retry">サブ画面の状態更新に失敗しました。再試行中…</string>
+    <string name="virtual_screen_refresh_failed">サブ画面の状態を引き続き更新できません。このページを再度開いてください</string>
+    <string name="virtual_screen_preview_gone">サブ画面の画像を待機中。端末のロック・切断、またはアプリがサブ画面を離れたときは表示を停止します。</string>
+    <string name="virtual_screen_budget_saturated"> · プレビューがフレームレート設定に追いつきません：直近 %1$d フレーム中 %2$d フレームが予算超過（最も遅い %3$d ミリ秒）</string>
+    <string name="virtual_screen_budget_degraded"> · プレビューがフレームレート設定に追いつきません：直近 %1$d フレーム中 %2$d フレームが予算超過</string>
+    <string name="virtual_screen_touch_failed">タッチが実行されませんでした。サブ画面がまだ実行中であることを確認してください</string>
+    <string name="virtual_screen_action_failed">操作が実行されませんでした。サブ画面がまだ実行中であることを確認してください</string>
+    <string name="virtual_screen_waiting_unreadable">サブ画面の画像を待機中（新しいフレームなし）</string>
+    <string name="virtual_screen_waiting_blank">サブ画面の画像を待機中（現在のフレームはほぼ単色）</string>
+    <string name="virtual_screen_rate_unknown">フレームレートは未計測</string>
+    <string name="virtual_screen_frame_unchanged">%1$s · 画面に変化なし</string>
+    <string name="virtual_screen_frame_blank">%1$s · 現在のフレームはほぼ単色</string>
+    <string name="virtual_screen_frame_unreadable">新しいフレームなし</string>
+    <string name="virtual_screen_touch_stream">タッチ直通</string>
+    <string name="virtual_screen_touch_discrete">タップまたはスワイプ</string>
+    <string name="virtual_screen_preview_status">サブ画面プレビュー · %1$s · %2$s · フレームレート設定 %3$s</string>
+    <string name="virtual_screen_picture_description">対象アプリのサブ画面画像。タップとスワイプに対応</string>
+    <string name="virtual_screen_orientation_landscape">横向きのサブ画面を使用（%1$d × %2$d dp）</string>
+    <string name="virtual_screen_orientation_hint">既定は縦向き %1$d × %2$d dp。起動後はページまたは小窓で操作でき、AI はサブ画面専用ツールを使います。画面は必要に応じて現在のモデルサービスに送信されます。プライバシー情報を含むページは開かないでください。</string>
+
+    <!--
+      タスク通知（登記簿 §5.5）。保活通知とは別のチャンネル：保活は常駐かつ無音でなければならず、
+      タスク通知の価値はアプリを離れた後も知らせる点にあり、両者のユーザー期待は逆。
+      文案では「実行中」のような証明できないことはあえて言わず、すでに起きたことだけを述べる。
+    -->
+    <string name="task_notification_channel_name">実行状況の通知</string>
+    <string name="task_notification_channel_description">ローカル Harness が停止・起動失敗した、またはデバイスサービスの接続が失敗したときに通知する</string>
+    <string name="task_notification_stopped_title">Harness を停止しました</string>
+    <string name="task_notification_stopped_text">ローカル実行環境が自身で終了しました。タップしてアプリに戻り確認してください</string>
+    <string name="task_notification_failed_title">Harness を起動できませんでした</string>
+    <string name="task_notification_failed_text">実行環境が起動段階で終了しました。タップしてアプリに戻り原因を確認してください</string>
+    <string name="task_notification_installed_title">実行環境のインストール完了</string>
+    <string name="task_notification_installed_text">タップしてアプリに戻り、Harness を開く</string>
+    <string name="task_notification_updated_title">実行環境を更新しました</string>
+    <string name="task_notification_updated_text">既存のデータは保持されました。タップしてアプリに戻りそのまま使用してください</string>
+    <string name="task_notification_repaired_title">実行環境の修復完了</string>
+    <string name="task_notification_repaired_text">セッションとユーザーデータは保持されました。タップしてアプリに戻りそのまま使用してください</string>
+    <string name="shizuku_reconnect_failed_title">Shizuku は未接続</string>
+    <string name="shizuku_reconnect_failed_text">デバイスは認可済みですが自動接続に失敗しました。タップしてアプリに戻り再試行してください</string>
+    <!-- 件数付きの2件：件数は操作が返す確定値で、進捗のパーセントではない。 -->
+    <string name="task_notification_exported_title">ワークスペースをエクスポートしました</string>
+    <string name="task_notification_exported_text">%1$d 件を受け渡しエリア outbox に書き込みました</string>
+    <string name="task_notification_imported_title">ワークスペースにインポートしました</string>
+    <string name="task_notification_imported_text">受け渡しエリアから %1$d 件をインポートしました</string>
+    <!--
+      「タスク完了」：ゲスト内 dsh の turn/end をデバイス橋経由で伝え、ネイティブ側は固定文案のみ送信。
+      統合カウント付き：連続する数ターンは1件にまとめられ、%1$d は今回まとめた件数（最低1）。
+    -->
+    <string name="task_notification_turn_completed_title">タスク完了</string>
+    <string name="task_notification_turn_completed_text">%1$d 件のタスクを完了しました。タップしてチャット画面に戻る</string>
+
+    <!-- チャット小窓のサイズ変更ハンドル：ドラッグして小窓の大きさを変える。右下内側へ 4dp。 -->
+    <string name="overlay_conversation_resize_description">ドラッグしてチャット小窓のサイズを変更</string>
+
+    <!-- サブ画面オーバーレイ：フレームレート設定行の下の状態文字。まだ画像がないときは「待機中」とありのまま述べ、画像があるようには言わない。 -->
+    <string name="virtual_screen_overlay_status_waiting">サブ画面の画像を待機中</string>
+    <!-- フレームレート設定切り替え直後に表示し、次のフレーム取得で実際の読み取り値に置き換わる。%1$s はフレームレート設定名。 -->
+    <string name="virtual_screen_overlay_mode_switched">%1$s に切り替えました。新しいフレームレートの読み取りを待機中</string>
+</resources>

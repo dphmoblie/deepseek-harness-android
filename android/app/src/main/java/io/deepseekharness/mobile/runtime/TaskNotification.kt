@@ -13,6 +13,7 @@ import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import io.deepseekharness.mobile.AppForeground
+import io.deepseekharness.mobile.AppLanguage
 import io.deepseekharness.mobile.KeepAliveEntryActivity
 import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
@@ -250,9 +251,10 @@ internal object TaskNotification {
         if (!shouldNotify()) return
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return
-        ensureChannel(context)
-        val notification = build(context, R.string.shizuku_reconnect_failed_title)
-            .setContentText(context.getString(R.string.shizuku_reconnect_failed_text))
+        val localized = AppLanguage.localizedContext(context)
+        ensureChannel(localized)
+        val notification = build(localized, R.string.shizuku_reconnect_failed_title)
+            .setContentText(localized.getString(R.string.shizuku_reconnect_failed_text))
             .build()
         try {
             manager.notify(SHIZUKU_RECONNECT_NOTIFICATION_ID, notification)
@@ -349,10 +351,11 @@ internal object TaskNotification {
                 turnCompletedCoalescer.clear()
                 return
             }
-            ensureChannel(context)
+            val localized = AppLanguage.localizedContext(context)
+            ensureChannel(localized)
             val merged = TurnCompletionNotificationPolicy.mergedCount(count)
-            val notification = build(context, R.string.task_notification_turn_completed_title)
-                .setContentText(context.getString(R.string.task_notification_turn_completed_text, merged))
+            val notification = build(localized, R.string.task_notification_turn_completed_title)
+                .setContentText(localized.getString(R.string.task_notification_turn_completed_text, merged))
                 // 完成通知带时间戳：用户在工作间隙瞄一眼锁屏，最想知道的就是「多久之前完成的」。
                 .setShowWhen(true)
                 .setWhen(System.currentTimeMillis())
@@ -376,9 +379,10 @@ internal object TaskNotification {
         if (!shouldNotify()) return
         val manager = NotificationManagerCompat.from(context)
         if (!manager.areNotificationsEnabled()) return
-        ensureChannel(context)
-        val notification = build(context, titleRes)
-            .setContentText(context.getString(textRes, count))
+        val localized = AppLanguage.localizedContext(context)
+        ensureChannel(localized)
+        val notification = build(localized, titleRes)
+            .setContentText(localized.getString(textRes, count))
             .build()
         postSafely(manager, notification)
     }
@@ -422,9 +426,12 @@ internal object TaskNotification {
         val manager = NotificationManagerCompat.from(context)
         // areNotificationsEnabled() 覆盖两件事：用户关掉了通知，或（Android 13+）没授予权限。
         if (!manager.areNotificationsEnabled()) return
-        ensureChannel(context)
-        val notification = build(context, titleRes)
-            .setContentText(context.getString(textRes))
+        // 通知文案跟随**应用语言**而不是系统语言：用户在应用里选了日文，通知也该是日文。
+        // localizedContext 只包一层资源解析，不改变通知的投递身份。
+        val localized = AppLanguage.localizedContext(context)
+        ensureChannel(localized)
+        val notification = build(localized, titleRes)
+            .setContentText(localized.getString(textRes))
             .build()
         postSafely(manager, notification)
     }

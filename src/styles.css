@@ -3064,8 +3064,9 @@ button:disabled {
 .language-settings .language-copy h2 { margin: 0; font-size: 0.9375rem; }
 .language-settings .language-copy p { margin: 3px 0 0; font-size: 0.75rem; }
 .language-settings > [role='alert'] { grid-column: 1 / -1; margin: 0; }
-html[lang="en"] .button { white-space: normal; }
-html[lang="en"] .screen-heading h1 { overflow-wrap: anywhere; }
+/* 拉丁字母与谚文在按钮里可能比中文长，允许换行；标题同理允许任意断行，避免撑破容器。 */
+html[lang="en"] .button, html[lang="ko"] .button { white-space: normal; }
+html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1 { overflow-wrap: anywhere; }
 
 /* 外观设置：三个选项并排，窄屏或大字号下自动换行成两行，不会把文字压出容器。 */
 .appearance-settings h2 { font-size: 1.125rem; margin: 8px 0; }

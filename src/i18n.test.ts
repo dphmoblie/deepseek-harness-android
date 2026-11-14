@@ -28,4 +28,12 @@ describe('语言设置校验', () => {
     expect(saveLanguage('zh-CN')).toBe(true)
     expect(t('运行时 {0}', 'v1')).toBe('运行时 v1')
   })
+
+  it('新增语言各自查自己的词典，缺键时回退英文再回退简体原文', () => {
+    expect(saveLanguage('zh-TW')).toBe(true)
+    expect(t('界面语言')).toBe('介面語言')
+    // 词典没有的键：任何语言都保持原文，用户输入与动态数据不会被改写。
+    expect(t('用户输入')).toBe('用户输入')
+    expect(t('constructor')).toBe('constructor')
+  })
 })

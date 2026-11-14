@@ -610,6 +610,26 @@ describe('应用语言', () => {
     expect(window.localStorage.getItem('dsh-mobile-language-v1')).toBe('en')
   })
 
+  /**
+   * 新增语言必须能从原生偏好直接回填。
+   *
+   * 过去这里写死了 `zh-CN`/`en` 两个值，把繁体、日文、韩文当成「没选过」——
+   * 用户明明存过韩文，冷启动却先弹一次简体中文的语言门禁。
+   */
+  it.each([
+    { language: 'zh-TW' as const, heading: '免費宣告' },
+    { language: 'ja' as const, heading: '無料について' },
+    { language: 'ko' as const, heading: '무료 제공 안내' },
+  ])('原生已保存 $language 时直接按该语言进入', async ({ language, heading }) => {
+    window.localStorage.clear()
+    bridge.getAppLanguage.mockResolvedValue({ configured: true, language })
+    render(<App />)
+    expect(await screen.findByRole('dialog', { name: heading })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: '选择语言 / Choose your language' })).toBeNull()
+    expect(window.localStorage.getItem('dsh-mobile-language-v1')).toBe(language)
+    expect(document.documentElement.lang).toBe(language)
+  })
+
   it('本地存储不可用时，「跳过」也能进入应用', async () => {
     window.localStorage.clear()
     render(<App />)

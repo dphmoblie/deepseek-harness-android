@@ -3767,7 +3767,7 @@ export function App() {
       .then(state => {
         if (cancelled) return
         // configured=false 是真首启：原生只是回落到 zh-CN，不能替他做选择。
-        if (state.configured && (state.language === 'zh-CN' || state.language === 'en')) saveLanguage(state.language)
+        if (state.configured) saveLanguage(state.language)
       })
       .catch(() => { /* 旧原生没有这条桥：按「没选过」处理，门禁照常询问。 */ })
       .finally(() => { if (!cancelled) setLanguageProbe(false) })

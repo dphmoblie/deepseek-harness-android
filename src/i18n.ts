@@ -1,9 +1,34 @@
 import { useSyncExternalStore } from 'react'
 import { english } from './locales/en'
+import { japanese } from './locales/ja'
+import { korean } from './locales/ko'
+import { traditionalChinese } from './locales/zh-TW'
 
-export type Language = 'zh-CN' | 'en'
+/**
+ * 应用支持的界面语言。
+ *
+ * 简体中文是**源语言**：代码里的文案就是简体中文原文，其余语言按原文查词典。
+ * 新增语言时，除了这里，还要同步 `src/locales/<语言>.ts`、原生 `AppLanguage` 的
+ * 白名单与 `values-<语言>/strings.xml`，否则用户会看到中英混排。
+ */
+export const LANGUAGES = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko'] as const
+export type Language = typeof LANGUAGES[number]
+
 export const LANGUAGE_STORAGE_KEY = 'dsh-mobile-language-v1'
 const LANGUAGE_EVENT = 'dsh-language-change'
+
+/** 安全校验：语言标识只作为词典键与 `lang` 属性使用，不接受任意字符串。 */
+export function isLanguage(value: unknown): value is Language {
+  return typeof value === 'string' && (LANGUAGES as readonly string[]).includes(value)
+}
+
+const DICTIONARIES: Readonly<Record<Language, Readonly<Record<string, string>> | null>> = {
+  'zh-CN': null,
+  'zh-TW': traditionalChinese,
+  en: english,
+  ja: japanese,
+  ko: korean,
+}
 
 /**
  * 存储写不进去时的进程内语言。
@@ -19,11 +44,10 @@ export function resetLanguageSession(): void {
   sessionLanguage = null
 }
 
-// 安全校验：仅接受支持的语言标识，不把存储内容作为资源路径或 HTML 使用。
 export function readLanguage(): Language | null {
   try {
     const value = window.localStorage.getItem(LANGUAGE_STORAGE_KEY)
-    if (value === 'zh-CN' || value === 'en') return value
+    if (isLanguage(value)) return value
   } catch {
     // 存储不可用：退回本次会话里选过的语言。
   }
@@ -37,7 +61,7 @@ export function readLanguage(): Language | null {
  * 否则用户会被一个点了没反应的门禁困住。
  */
 export function saveLanguage(value: string): boolean {
-  if (value !== 'zh-CN' && value !== 'en') return false
+  if (!isLanguage(value)) return false
   sessionLanguage = value
   let persisted = true
   try {
@@ -63,8 +87,22 @@ export function useLanguage(): Language | null {
   return useSyncExternalStore(subscribe, readLanguage, () => null)
 }
 
-// 仅对受控文案查表；插值仍由 React 转义，不使用 HTML 注入。
+/**
+ * 查词典。插值仍由 React 转义，不使用 HTML 注入。
+ *
+ * 回退顺序：当前语言词典 → 英文 → 简体中文原文。英文作为第二级是为了让新增文案
+ * 在日语/韩语词典补译之前仍有可读内容；简体中文原文是最后兜底，也是源语言本身。
+ */
 export function t(message: string, ...values: (string | number)[]): string {
-  const text = readLanguage() === 'en' && Object.hasOwn(english, message) ? english[message] : message
+  const language = readLanguage()
+  let text = message
+  if (language !== null && language !== 'zh-CN') {
+    const dictionary = DICTIONARIES[language]
+    if (dictionary !== null && Object.hasOwn(dictionary, message)) {
+      text = dictionary[message]
+    } else if (Object.hasOwn(english, message)) {
+      text = english[message]
+    }
+  }
   return text.replace(/\{(\d+)\}/g, (placeholder, index: string) => String(values[Number(index)] ?? placeholder))
 }

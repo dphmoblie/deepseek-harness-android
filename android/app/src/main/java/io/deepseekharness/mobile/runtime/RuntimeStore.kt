@@ -200,9 +200,15 @@ class RuntimeStore(context: Context) {
      */
     @Synchronized
     fun syncHarnessLocale(language: String): Boolean {
+        /*
+         * Harness 运行时只提供 zh / en 两种 locale（见上游各插件包的 `locale/` 目录）。
+         * 繁体、日文、韩文是**应用界面**支持的语言：界面按所选语言显示，Harness 对话页
+         * 回落到英文，而不是硬塞一个运行时认不出的取值。这个映射必须集中在这里，
+         * 分散到调用方会让「切语言后 Harness 页面仍是旧语言」重新出现。
+         */
         val harnessLanguage = when (language) {
-            "zh-CN" -> "zh"
-            "en" -> "en"
+            "zh-CN", "zh-TW" -> "zh"
+            "en", "ja", "ko" -> "en"
             else -> throw RuntimeFailure("LANGUAGE_INVALID", "不支持的应用语言")
         }
         // 安装前选择语言是允许的；运行时文件系统就绪后由 startHarness() 重放已保存的选择。

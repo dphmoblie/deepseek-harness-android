@@ -409,7 +409,7 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun setAppLanguage(call: PluginCall) {
         val language = call.getString("language").orEmpty()
-        if (language != "zh-CN" && language != "en") {
+        if (language !in AppLanguage.SUPPORTED) {
             call.reject("不支持的应用语言", "LANGUAGE_INVALID")
             return
         }

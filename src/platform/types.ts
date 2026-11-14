@@ -1,3 +1,4 @@
+import type { Language } from '../i18n'
 import type { SelfCheckOperation, SelfCheckReport } from '../runtimeSelfCheck'
 import type { HarnessProgress, HarnessReleaseList, HarnessVersionOperation, HarnessVersionsState } from './harnessVersions'
 
@@ -1705,7 +1706,7 @@ export interface RuntimeWorkspaceFileList {
  * 「用户还没选、原生回落成简体中文」，首次启动的语言引导会因此永久消失。
  */
 export interface AppLanguageState {
-  language: 'zh-CN' | 'en'
+  language: Language
   configured: boolean
 }
 
@@ -1720,8 +1721,8 @@ export interface RuntimeBridge {
   /** Harness 包安装的阶段进度；只有安装会上报，其它操作没有事件。 */
   addHarnessProgressListener: (listener: (event: HarnessProgress) => void) => Promise<ListenerHandle>
   managePlugins: (request: PluginRequest) => Promise<PluginCatalog>
-  /** 保存应用语言，仅接受简体中文和英语。 */
-  setAppLanguage: (language: 'zh-CN' | 'en') => Promise<void>
+  /** 保存应用语言，仅接受 [LANGUAGES] 里的取值。 */
+  setAppLanguage: (language: Language) => Promise<void>
   /**
    * 读回原生保存的应用语言。
    *

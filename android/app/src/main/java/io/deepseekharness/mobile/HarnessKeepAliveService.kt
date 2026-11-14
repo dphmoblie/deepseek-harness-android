@@ -233,10 +233,13 @@ class HarnessKeepAliveService : Service() {
             ),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        // 通知文案跟随应用语言，而不是系统语言：应用内选了日文，锁屏上也该是日文。
+        // 服务自身的 getString 用的是系统配置，所以这里显式取本地化上下文。
+        val localized = AppLanguage.localizedContext(this)
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_keep_alive)
-            .setContentTitle(getString(R.string.keep_alive_notification_title))
-            .setContentText(getString(R.string.keep_alive_notification_text))
+            .setContentTitle(localized.getString(R.string.keep_alive_notification_title))
+            .setContentText(localized.getString(R.string.keep_alive_notification_text))
             .setContentIntent(openApp)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -249,12 +252,13 @@ class HarnessKeepAliveService : Service() {
 
     private fun ensureNotificationChannel() {
         val manager = getSystemService(NotificationManager::class.java) ?: return
+        val localized = AppLanguage.localizedContext(this)
         val channel = NotificationChannel(
             CHANNEL_ID,
-            getString(R.string.keep_alive_channel_name),
+            localized.getString(R.string.keep_alive_channel_name),
             NotificationManager.IMPORTANCE_LOW,
         ).apply {
-            description = getString(R.string.keep_alive_channel_description)
+            description = localized.getString(R.string.keep_alive_channel_description)
             setShowBadge(false)
             enableVibration(false)
             setSound(null, null)
