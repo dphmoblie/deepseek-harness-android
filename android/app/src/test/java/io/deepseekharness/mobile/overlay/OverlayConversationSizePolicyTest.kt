@@ -10,7 +10,7 @@ import org.junit.Test
  *
  * 这里钉的是「窗口会不会变成用户没法自救的形状」：越界的存盘值、旋转之后的旧尺寸、
  * 拖到屏幕外的尺寸，都必须收敛回一个看得见、点得到的范围。真机上的拖拽手感、
- * 与系统手势/输入法的冲突只能真机验证，见 `docs/悬浮球与内容分享.md`。
+ * 与系统手势/输入法的冲突只能真机验证，见 `docs/design/悬浮球与内容分享.md`。
  */
 class OverlayConversationSizePolicyTest {
 

@@ -95,7 +95,7 @@ class VirtualScreenActivity : Activity() {
         createdTheme = AppThemePreference.current(this)
         // 这一页**不再加 FLAG_SECURE**：加了以后用户自己截不了图、远端也取不了证，
         // 排查「预览页读到白帧」这类问题时就只能靠猜。悬浮小窗（0.2.9 起）同样没加，两边行为一致。
-        // 隐私提醒仍写在页面上与 docs/目标应用副屏.md 里：画面按需发送至当前模型服务，不要打开含隐私信息的页面。
+        // 隐私提醒仍写在页面上与 docs/design/目标应用副屏.md 里：画面按需发送至当前模型服务，不要打开含隐私信息的页面。
         val shortScreen = resources.configuration.screenHeightDp < 480
         // 颜色一律取主题令牌（res/values{,-night}/colors.xml），不在这里写死十六进制色值：
         // surface 与 Web 侧 --bg 同值、ink 与 Web 侧 --ink 同值，深浅两套在资源里成对定义。

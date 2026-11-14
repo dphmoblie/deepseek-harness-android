@@ -18,7 +18,7 @@ import react from '@vitejs/plugin-react'
  * - **样式表也要算进归属**。manualChunks 只看模块 id，`@xterm/xterm/css/xterm.css` 同样命中
  *   `@xterm/`。该 CSS 原先由 `src/main.tsx` 静态引入，于是这条「CSS 依赖」把整个 xterm 块
  *   变成入口的静态依赖，Vite 直接给 `index.html` 加了一条 `modulepreload` —— 首屏凭空多下
- *   ~290 KB 的终端 JS（实测见 `docs/终端面板握手缓冲与首屏分块.md`）。
+ *   ~290 KB 的终端 JS（实测见 `docs/design/终端面板握手缓冲与首屏分块.md`）。
  *   现在的做法是：CSS 一律不参与手工分块（跟它自己的引入方待在一起），xterm 的样式由
  *   TerminalPanel 自己引入，随终端块按需加载。
  * - 入口包变小的前提是「拆出去的块真的不在首屏」。判断依据不是看文件名，而是看

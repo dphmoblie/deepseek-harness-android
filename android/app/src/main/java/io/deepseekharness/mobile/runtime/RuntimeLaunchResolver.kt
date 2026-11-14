@@ -135,7 +135,7 @@ class RuntimeLaunchResolver(
      * ≤8 目录白名单门面。
      *
      * 与投递区并列，是**访客可见目录的唯一来源**：原先的 `/sdcard` 整体绑定已被它取代
-     * （见 `docs/存储权限与导入落点.md` §3.1）。懒初始化：构造它要读偏好，而本解析器
+     * （见 `docs/design/存储权限与导入落点.md` §3.1）。懒初始化：构造它要读偏好，而本解析器
      * 每次启动都会新建，没必要为「不涉及启动」的调用付这份代价。
      */
     private val storageDirs: RuntimeStorageDirs by lazy {

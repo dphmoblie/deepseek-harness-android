@@ -16,7 +16,7 @@ import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticPolicy
  *  - `code=<错误码>`：来自 [RuntimeFailure.code]、状态快照 errorCode 这类内部枚举的受控错误码。
  *
  * 刻意不记录任何其他内容：访客输出、路径、端口、命令与凭据一律不写进诊断日志
- * （边界见 docs/诊断日志.md）。错误码取值不可控时回落成 [FALLBACK_CODE]，
+ * （边界见 docs/design/诊断日志.md）。错误码取值不可控时回落成 [FALLBACK_CODE]，
  * 保证写进去的永远是受控枚举，而不是自由文本形态的字符串。
  *
  * 本对象不依赖 Android API，可在 JVM 单测里直接驱动；写入交给

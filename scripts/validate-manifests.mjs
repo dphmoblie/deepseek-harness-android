@@ -240,7 +240,7 @@ export function readJson(path) {
 export function defaultTargets(root = REPO_ROOT) {
   const targets = [
     {
-      file: 'docs/runtime-manifest.example.json',
+      file: 'docs/schemas/runtime-manifest.example.json',
       schema: 'scripts/schemas/runtime-manifest.schema.json',
     },
     {

@@ -2515,7 +2515,7 @@ class MobileRuntimePlugin : Plugin() {
         }
     }
 
-    /** 会话快照 + 偏好 + 真实读数合并成的状态对象；字段表见 `docs/副屏设置桥.md`。 */
+    /** 会话快照 + 偏好 + 真实读数合并成的状态对象；字段表见 `docs/design/副屏设置桥.md`。 */
     @PluginMethod
     fun getVirtualScreenState(call: PluginCall) {
         resolveWhileActive(call) { virtualScreenStatePayload() }
@@ -3014,7 +3014,7 @@ class MobileRuntimePlugin : Plugin() {
      * 权限：应用内桥接；改「自动化总开关」——开始 / 暂停 / 继续 / 紧急停止。
      *
      * **设备桥（AI 侧）没有开启路径**：`automationRules` 命令在总开关不是 `running` 时一律回
-     * `AUTOMATION_ENABLE_FORBIDDEN`（`docs/AI自动化参数设计.md` 的「AI 只能关不能开」）。
+     * `AUTOMATION_ENABLE_FORBIDDEN`（`docs/design/AI自动化参数设计.md` 的「AI 只能关不能开」）。
      * 这里只接受四个受控动作名，未知一律拒收——不能把认不出来的参数猜成「开始」。
      *
      * 暂停与紧急停止都**不关**系统里的无障碍服务（不调 `disableSelf()`），也不动白名单与规则：

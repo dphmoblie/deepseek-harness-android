@@ -2,7 +2,7 @@
 
 > **状态：正式架构设计规范 (RFC)**
 > **面向平台：Android 10+（API 29+）· Linux 内核 GKI 2.0（5.10 / 5.15 / 6.1+）· arm64-v8a**
-> **相关文档：** [应用自动化能力.md](应用自动化能力.md) · [设备桥信任边界.md](设备桥信任边界.md) · [后台应用操作与窗口形态评估.md](后台应用操作与窗口形态评估.md)
+> **相关文档：** [应用自动化能力.md](应用自动化能力.md) · [设备桥信任边界.md](设备桥信任边界.md) · [后台应用操作与窗口形态评估.md](../measurements/后台应用操作与窗口形态评估.md)
 
 ---
 
@@ -201,7 +201,7 @@ android/app/src/main/java/io/deepseekharness/mobile/
     └── RootCommandRunner.kt             # [新增] Root 通道执行器与结果协议
 ```
 
-> **注意**：既有 [`DeviceCapabilityPolicy`](../android/app/src/main/java/io/deepseekharness/mobile/capability/DeviceCapability.kt) 位于 `capability/` 包而非 `accessibility/`；[`DeviceCommandRunner.kt`](../android/app/src/main/java/io/deepseekharness/mobile/shizuku/DeviceCommandRunner.kt)（Shizuku 通道）**不做修改**——SHELL 命令在调度入口按「Root 引擎开关 + KernelSuProbe 状态」分流到两条通道之一。Root 执行严禁写入 Shizuku PTY 会话（uid 2000 的 `su` 被 KernelSU 默认放行，会绕过本应用授权门禁，见原则 4）。
+> **注意**：既有 [`DeviceCapabilityPolicy`](../../android/app/src/main/java/io/deepseekharness/mobile/capability/DeviceCapability.kt) 位于 `capability/` 包而非 `accessibility/`；[`DeviceCommandRunner.kt`](../../android/app/src/main/java/io/deepseekharness/mobile/shizuku/DeviceCommandRunner.kt)（Shizuku 通道）**不做修改**——SHELL 命令在调度入口按「Root 引擎开关 + KernelSuProbe 状态」分流到两条通道之一。Root 执行严禁写入 Shizuku PTY 会话（uid 2000 的 `su` 被 KernelSU 默认放行，会绕过本应用授权门禁，见原则 4）。
 
 ### 5.1 `RootSecurityWrapper.kt` 核心实现规格
 
@@ -318,9 +318,9 @@ Root 会话创建/修改的文件默认属主为 root。若写入本应用私有
    > **「高级 KernelSU 引擎」说明：**
    > 开启后，AI 工具与本地运行时将获得 Superuser (UID 0) 特权。本应用已启用内核级命名空间隔离与只读分区锁定以防误操作变砖，但仍可能接触您的应用私有数据。请确保您信任运行的模型与插件。
 3. **密码 / 生物识别强校验**：
-   复用 [`AccessibilityAutomationPolicy.kt`](../android/app/src/main/java/io/deepseekharness/mobile/accessibility/AccessibilityAutomationPolicy.kt) 现有的白名单密码或系统生物识别（`BiometricPrompt`），必须验证通过后才允许持久化写入开启状态。
+   复用 [`AccessibilityAutomationPolicy.kt`](../../android/app/src/main/java/io/deepseekharness/mobile/accessibility/AccessibilityAutomationPolicy.kt) 现有的白名单密码或系统生物识别（`BiometricPrompt`），必须验证通过后才允许持久化写入开启状态。
 4. **设备能力看板实时展示**：
-   在原生 [`DeviceCapabilityPolicy`](../android/app/src/main/java/io/deepseekharness/mobile/capability/DeviceCapability.kt) 中新增 `kernelsu_root` 能力项（含 `KERNELSU_NOT_INSTALLED` / `KERNELSU_NOT_AUTHORIZED` 原因码与 `open_kernelsu_manager` 动作码），并在 [`DeviceCapabilityCard.tsx`](../src/components/DeviceCapabilityCard.tsx) 的 `CAPABILITY_LABELS` / `REASON_NOTES` / `ACTION_NOTES` 中按既有闭集模式登记文案：
+   在原生 [`DeviceCapabilityPolicy`](../../android/app/src/main/java/io/deepseekharness/mobile/capability/DeviceCapability.kt) 中新增 `kernelsu_root` 能力项（含 `KERNELSU_NOT_INSTALLED` / `KERNELSU_NOT_AUTHORIZED` 原因码与 `open_kernelsu_manager` 动作码），并在 [`DeviceCapabilityCard.tsx`](../../src/components/DeviceCapabilityCard.tsx) 的 `CAPABILITY_LABELS` / `REASON_NOTES` / `ACTION_NOTES` 中按既有闭集模式登记文案：
    - `ready`：KernelSU 已授权，安全隔离通道已激活；
    - `needs_action`：检测到 KernelSU 但尚未在管理器中授权本应用（动作为「前往 KernelSU 管理器授权」）；
    - `unsupported`：设备未检测到 KernelSU。
@@ -432,7 +432,7 @@ Root 会话创建/修改的文件默认属主为 root。若写入本应用私有
 
 ### 9.5 第五轮：按用户拍板改成降级口径并接线（2026-10-15 深夜）
 
-用户对 §9.3/§9.4 遗留的四项一次性给了答复：「1.加 2.优雅降级 3.接 4.改」——①`publish-release` 的 `needs` 加 `gates`；②沙箱走**优雅降级**而不是失败即停；③把根通道**接**上调用方（设置开关）；④版本库面板「满额即失败」的**文案要改**（另见 `docs/运行时更新与数据保留.md`）。
+用户对 §9.3/§9.4 遗留的四项一次性给了答复：「1.加 2.优雅降级 3.接 4.改」——①`publish-release` 的 `needs` 加 `gates`；②沙箱走**优雅降级**而不是失败即停；③把根通道**接**上调用方（设置开关）；④版本库面板「满额即失败」的**文案要改**（另见 `docs/design/运行时更新与数据保留.md`）。
 
 | 编号 | 问题 | 证据 | 处理 |
 | :--- | :--- | :--- | :--- |

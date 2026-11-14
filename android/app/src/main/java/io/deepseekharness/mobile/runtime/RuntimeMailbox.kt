@@ -16,7 +16,7 @@ import java.util.UUID
 /**
  * 投递区可用性。
  *
- * 档位与 `docs/真机缺陷与改进清单.md` §5.1 的 T0–T3 口径一致：
+ * 档位与 `docs/measurements/真机缺陷与改进清单.md` §5.1 的 T0–T3 口径一致：
  * - [AVAILABLE] 对应 **T2**（已授予「所有文件访问」，且目录真实可读写）；
  * - [NEEDS_PERMISSION] / [UNSUPPORTED] / [UNWRITABLE] 一律落回 **T0**（控制台上传），
  *   界面必须如实说明投递区不可用——**不得静默降级到别的目录**（例如退回到应用私有目录冒充投递区）。

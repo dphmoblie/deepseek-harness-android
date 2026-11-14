@@ -150,7 +150,7 @@ export function FilesScreen({ busy, mailbox, mailboxReadFailed, mailboxDirectory
    * 未启用时的整段说明；空串表示当前可用。
    *
    * 不支持那一档必须说清**代价**（这些设备上访客内没有共享存储），否则用户会以为功能坏了
-   * ——`docs/存储权限与导入落点.md` §4.5 明确要求如此。
+   * ——`docs/design/存储权限与导入落点.md` §4.5 明确要求如此。
    */
   const storageDirsBlockedReason = storageDirs === null
     ? ''

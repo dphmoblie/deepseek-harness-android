@@ -224,7 +224,7 @@ or otherwise distributing them.
   才会暴露。本机等价：`python3 scripts/check-android-resources.py`
   （通过时打印 `[资源检查] 通过：N 个资源文件、M 个默认语言字符串，引用全部可解析`）。
 - **`Validate manifests against schemas`（`gates`）**：`node scripts/validate-manifests.mjs`，
-  校验仓库里的受管清单（`docs/runtime-manifest.example.json`、
+  校验仓库里的受管清单（`docs/schemas/runtime-manifest.example.json`、
   `scripts/fixtures/runtime-manifest.v0.2.3-mobile-323.json`、`scripts/mobile-profile.example.json`，
   以及 `scripts/runtime-profile/plugins/*/package.json` 动态发现）。挡的是清单结构与 schema 脱节：
   少了必填字段、类型写错、enum 取值非法、悄悄多出未声明字段（这类改动在运行时才炸）。

@@ -11,7 +11,7 @@ import org.junit.Test
  *
  * 球的实际绘制、触摸与窗口管理依赖 Android 框架，这里只覆盖可脱离设备验证的决策：
  * 何时显示、拖动时如何约束在屏幕内、松手后吸附到哪一侧。
- * 真机上的拖动手感、吸附动画与菜单弹出属于人工验收项（见 docs/悬浮球与内容分享.md）。
+ * 真机上的拖动手感、吸附动画与菜单弹出属于人工验收项（见 docs/design/悬浮球与内容分享.md）。
  */
 class OverlayBallPolicyTest {
     @Test

@@ -7,7 +7,7 @@
  * 由原生侧 `SessionCatalog.kt` 投放到访客 `/root/.dsh-mobile/` 下、用 `/opt/node/bin/node`
  * 执行，与 `runtime-self-check.cjs`、`plugin-manager.cjs` 走同一条投递与执行通道。
  *
- * 安全边界（改动前先读 `docs/壳页会话列表接线调研.md`）：
+ * 安全边界（改动前先读 `docs/measurements/壳页会话列表接线调研.md`）：
  * - **只读**：不写盘、不改权限、不移动文件，也不解压到磁盘（全程内存流式处理）。
  * - **只回元数据**：输出对象里只有 `id`（会话目录名可逆解码）、`title`（日志里最后一条
  *   `session/title` 事件的标题，或按宿主同款规则从首条用户消息折叠出的回退标题）、

@@ -4,7 +4,7 @@ import { t } from '../i18n'
 import { AUTOMATION_DISCLAIMER_VERSION } from '../accessibilityDisclaimer'
 
 /**
- * 免责说明的两处入口共用同一段文字，原文在 `docs/AI自动化参数设计.md` §7.1（英文见 §7.2），
+ * 免责说明的两处入口共用同一段文字，原文在 `docs/design/AI自动化参数设计.md` §7.1（英文见 §7.2），
  * 逐条对应、不增删要点：
  *
  *  - `confirm`：第一次按「开始 / 继续」时的闸门。**勾选是开启的前提**，确认之后才真的去开总开关。

@@ -4,7 +4,7 @@
 请先读完本文再动手：下面每一条都曾经是真实缺陷的修法，改回去会重新引入问题。
 
 Git 提交/发布规范见 [`.agents/rules/git-workflow.md`](.agents/rules/git-workflow.md)（中文、约定式提交、
-发布说明写在 `docs/发布说明-<版本>.md`）。文档放置规范见 [`.agents/rules/docs-layout.md`](.agents/rules/docs-layout.md)：唯一文档根是 `docs/`，根目录只留多语言 README、`AGENTS.md`、`LICENSE` 与 `THIRD_PARTY_NOTICES.md`。
+发布说明写在 `docs/releases/发布说明-<版本>.md`）。文档放置规范见 [`.agents/rules/docs-layout.md`](.agents/rules/docs-layout.md)：唯一文档根是 `docs/`，根目录只留多语言 README、`AGENTS.md`、`LICENSE` 与 `THIRD_PARTY_NOTICES.md`。
 
 ## 1. 不要恢复「打开应用自动进入 Harness」
 

@@ -33,7 +33,7 @@ const MAX_LINKED_DEPENDENCIES = 64
  * `@deepseek-ai/` 下的包通过 Symbol 在 cordis 注册表里挂服务（例如 dsh-tools 的
  * TOOL_RUNTIME_SCHEDULER），任何一份多余的物理副本都会让 Symbol 身份失配；插件自己的
  * 第三方依赖（zod、zustand 等）保持 npm 装好的真实副本，改动面越小越安全。
- * 详见 docs/插件安装与运行时单例.md。
+ * 详见 docs/design/插件安装与运行时单例.md。
  */
 const RUNTIME_SCOPE = '@deepseek-ai/'
 /** 嵌套 node_modules 的深度、目录数与包数上限：避免在大依赖树上遍历爆炸。 */
@@ -727,7 +727,7 @@ function createManager(rootDirectory, installPackage, parseYaml, probeGit) {
    *
    * 被淘汰的旧版本目录**不删除**：解析闭包补全会在别的暂存目录里建指向任意事务目录的
    * 链接（linkUnresolvedRuntimeDependencies），要靠一份廉价检查证明"没人引用它"是不成立的，
-   * 拿不准就不删——宁可留下磁盘占用，也不制造悬空链接。详见 docs/插件管理.md。
+   * 拿不准就不删——宁可留下磁盘占用，也不制造悬空链接。详见 docs/design/插件管理.md。
    */
   function recordPrevious(id, row) {
     const rows = previousEntries().filter(entry => entry.id !== id)

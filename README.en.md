@@ -46,7 +46,7 @@ No root required. The Linux environment runs in userspace through [PRoot](https:
 
 - **A complete Linux agent environment on your phone.** Ubuntu 24.04 runs entirely on-device through PRoot — no cloud server, no remote desktop, no account: both the agent runtime and the web console execute locally.
 - **A console adapted to mobile.** The shell organizes everything under three bottom tabs — Home, Plugins and Settings — with layout adaptation for narrow screens, landscape and safe areas; session management is merged into Home. Third-party web plugins differ in UI and dependencies, so compatibility must be verified per plugin and version.
-- **Plugin import, update and rollback.** Import from an npm package name, an HTTPS archive URL or a `git+https` repository address, and enable/disable packages and sub-plugins. Updates preserve data under supported directory rules, and you can switch back to the previous version. Packages that need install scripts, native compilation or a different core SDK have limitations — see [plugin management](docs/插件管理.md).
+- **Plugin import, update and rollback.** Import from an npm package name, an HTTPS archive URL or a `git+https` repository address, and enable/disable packages and sub-plugins. Updates preserve data under supported directory rules, and you can switch back to the previous version. Packages that need install scripts, native compilation or a different core SDK have limitations — see [plugin management](docs/design/插件管理.md).
 - **File and appearance management.** The inbox supports folder categories; the shell offers image or video backgrounds with adjustable card color, transparency, blur and accent color.
 - **Runs without root.** Userspace containerization through PRoot works on ordinary retail devices. The optional [Shizuku](https://shizuku.rikka.app/) integration additionally provides a shell-level device terminal (`/system/bin/sh`) after you grant it yourself. Shizuku grants Android shell privileges, not root.
 - **Works out of the box, installs offline.** Official APKs bundle a verified `rootfs.bundle` and manifest, so runtime installation completes without a network; digest-pinned remote runtime sources are also supported.
@@ -110,9 +110,9 @@ Under **Settings → AI Shell → Target-app virtual screen (experimental)** you
 
 The entry point requires Android 10 or later, an authorized and connected Shizuku, and AI Shell enabled by the user. Reading and input pause while the screen is locked or off. AI tools already cover virtual-screen state and performance readings (target frame rate, frame age, input-to-first-frame delay estimate), PNG screenshots, a virtual-screen-specific accessibility node tree, tap, swipe, back, Chinese text writing (focused accessibility write, falling back to a system clipboard paste), 15/30/60 fps tiers and ending the session; the picture is still grabbed frame by frame as PNG, **not a video-encoded stream**.
 
-As of 2026-10-02, portrait and landscape screenshots, targeted taps and session teardown for a test app were verified under MuMu Android 15 with ordinary shell privileges, along with native picker layouts at `363×800 dp` and `800×363 dp`; later versions added HONOR AAP-AN00 device receipts, listed one by one in the [virtual screen guide](docs/目标应用副屏.md) and not repeated here. **The full Shizuku authorization and binding path, real third-party apps, mini-window switching, long-lived background operation and lock-screen recovery remain unverified**; most of the capabilities added above also have unit tests and compile checks only, and emulator probe results are not a compatibility guarantee for every phone or every app.
+As of 2026-10-02, portrait and landscape screenshots, targeted taps and session teardown for a test app were verified under MuMu Android 15 with ordinary shell privileges, along with native picker layouts at `363×800 dp` and `800×363 dp`; later versions added HONOR AAP-AN00 device receipts, listed one by one in the [virtual screen guide](docs/design/目标应用副屏.md) and not repeated here. **The full Shizuku authorization and binding path, real third-party apps, mini-window switching, long-lived background operation and lock-screen recovery remain unverified**; most of the capabilities added above also have unit tests and compile checks only, and emulator probe results are not a compatibility guarantee for every phone or every app.
 
-An existing runtime also needs its `dsh-mobile-shizuku` plugin updated or repackaged before the new AI tools appear; installing a new APK alone does not rewrite existing plugin data. See the [virtual screen guide and verification record](docs/目标应用副屏.md) for the mechanism, tool interfaces and full verification scope.
+An existing runtime also needs its `dsh-mobile-shizuku` plugin updated or repackaged before the new AI tools appear; installing a new APK alone does not rewrite existing plugin data. See the [virtual screen guide and verification record](docs/design/目标应用副屏.md) for the mechanism, tool interfaces and full verification scope.
 
 ## Building from source
 
@@ -197,10 +197,10 @@ Component sources, exact upstream versions, artifact hashes and the correspondin
 
 ## Related documents
 
-- [Target-app virtual screen and verification scope](docs/目标应用副屏.md)
-- [App reading and accessibility automation](docs/应用自动化能力.md)
-- [Plugin import, data retention and rollback](docs/插件管理.md)
-- [Inbox and storage permissions](docs/存储权限与导入落点.md)
+- [Target-app virtual screen and verification scope](docs/design/目标应用副屏.md)
+- [App reading and accessibility automation](docs/design/应用自动化能力.md)
+- [Plugin import, data retention and rollback](docs/design/插件管理.md)
+- [Inbox and storage permissions](docs/design/存储权限与导入落点.md)
 - [Architecture and security boundaries](docs/ARCHITECTURE.md)
 - [Mobile plugin compatibility design](docs/mobile-plugin-compat.md)
 - [Project status register (done, open, on-device readings)](docs/项目状态.md)

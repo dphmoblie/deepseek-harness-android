@@ -68,7 +68,7 @@ class RuntimeStore(context: Context) {
      * loader 的落点：**运行时根之内**（实体拷贝，或指回 [loaderFile] 的符号链接）。
      *
      * 三种形态由 [installGuestLoader] 按**实测**挑选，结论来自真机取证（见
-     * `docs/真机缺陷与改进清单.md` 的 P0-3 段）：
+     * `docs/measurements/真机缺陷与改进清单.md` 的 P0-3 段）：
      *  - 根内**实体拷贝**在 Android 17 上根本执行不了：SELinux 拒绝
      *    `execute_no_trans` 于 `app_data_file` 的**常规文件**，而应用设不上
      *    `security.android.exec` 属性（`Os.setxattr` 静默失败，实测 `stamped=false`）；
@@ -970,7 +970,7 @@ class RuntimeStore(context: Context) {
         // `SUPPORTED_ABIS` 会把转译出来的架构也算进去（x86_64 模拟器的 abilist 是
         // `x86_64,arm64-v8a,x86`），所以判据必须是**首选 ABI**（`cpuAbi`），不是列表包含。
         // 用列表包含判会让模拟器通过检查、却在实际 execve 时 SIGSEGV（真机取证见
-        // `docs/模拟器实测-运行时启动与前端问题清单.md` 的 M-1：loader/gate 两处都崩）。
+        // `docs/measurements/模拟器实测-运行时启动与前端问题清单.md` 的 M-1：loader/gate 两处都崩）。
         // 这一条只拦「设备原生架构就不是 arm64」，不改变任何 arm64 真机的行为。
         if (Build.SUPPORTED_ABIS.firstOrNull() != RUNNER_ABI) {
             android.util.Log.w(

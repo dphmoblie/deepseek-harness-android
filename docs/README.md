@@ -7,11 +7,15 @@
 
 | 路径 | 放什么 | 约定 |
 | --- | --- | --- |
-| `docs/发布说明-<版本>.md` | 每个版本的发布说明 | 文件名固定：CI 按 `docs/发布说明-${APP_VERSION}.md` 读取并写进 Release 正文，改名或移动会让发布正文缺失 |
+| `docs/releases/发布说明-<版本>.md` | 每个版本的发布说明 | 文件名固定：CI 按 `docs/releases/发布说明-${APP_VERSION}.md` 读取并写进 Release 正文；再移动目录要同步改该路径 |
 | `docs/ARCHITECTURE.md` | 架构与安全边界总览 | 英文名沿用历史，不改 |
 | `docs/RELEASE_CHECKLIST.md` | 发布前门禁清单与坏版本处置口径 | 同上 |
 | `docs/mobile-*.md` | 移动端验收、插件兼容等长期契约 | 同上 |
-| `docs/<中文主题>.md` | 专题设计、实测记录、问题清单 | 新增文档用中文主题名，一个主题一个文件 |
+| `docs/design/` | 设计与实现口径（协议、边界、模块设计） | 中文主题名，一个主题一个文件 |
+| `docs/measurements/` | 实测、评估、调研与缺陷清单 | 带日期或设备信息的记录放这里，结论回写 `项目状态.md` |
+| `docs/operations/` | 使用与发布流程 | 首次配置、更新推送规范等面向操作步骤的文档 |
+| `docs/schemas/` | 清单示例与配套样例 | `runtime-manifest.example.json` 由 `scripts/validate-manifests.mjs` 校验 |
+| `docs/` 根 | 长期入口：ARCHITECTURE、RELEASE_CHECKLIST、mobile-*、项目状态、android | 其余专题文档按上面的分类进子目录 |
 | `docs/android.md` | Android 构建、签名与运行时边界 | 原 `android/` 目录下的 README，已收编 |
 | `docs/specs/<主题>/` | 需求与方案（`spec.md` / `tasks.md` / `checklist.md`） | 原仓库根 `specs/`，已收编 |
 | `docs/plans/` | 带日期或带背景的历史实施计划 | 从 `.trae/documents/` 收编的计划稿也在这里；文中 `file:///` 绝对链接是历史记录，不随仓库路径变化 |
@@ -45,7 +49,9 @@
 - [移动端验收清单](mobile-acceptance-checklist.md)
 - [移动端插件兼容](mobile-plugin-compat.md)
 - [Android 构建与签名](android.md)
-- [发布说明（当前 0.4.0）](发布说明-0.4.0.md)
+- [发布说明（当前 0.4.0）](releases/发布说明-0.4.0.md)
+- [真机缺陷与改进清单](measurements/真机缺陷与改进清单.md)
+- [首次配置](operations/首次配置.md)
 - [规格：崩溃与权限审计](specs/crash-permission-audit/spec.md)
 - [规格：版本管理页移动布局](specs/versions-page-mobile-layout/spec.md)
 - [历史计划：应用更新测试版频道](plans/应用更新测试版频道.md)

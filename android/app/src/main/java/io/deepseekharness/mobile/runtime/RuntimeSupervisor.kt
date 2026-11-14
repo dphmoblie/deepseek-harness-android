@@ -302,7 +302,7 @@ class RuntimeSupervisor(
      * 「dsh 为什么没起来」在设备上无法复盘。
      *
      * 记录内容由 [HarnessStartFailurePolicy] 决定：只有 `result=failed` 与受控错误码，
-     * 不含访客输出、路径、端口或凭据（见 docs/诊断日志.md 的隐私边界）。
+     * 不含访客输出、路径、端口或凭据（见 docs/design/诊断日志.md 的隐私边界）。
      *
      * @param updatePhase 为 false 只用于「还没碰到运行时状态」的前置校验失败
      *   （运行时未安装、rootfs 校验不过）：它们不改变运行时阶段，但同样是一次失败的启动。

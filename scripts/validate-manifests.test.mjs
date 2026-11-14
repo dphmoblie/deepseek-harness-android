@@ -75,7 +75,7 @@ test('校验器自检：解析失败要给出中文原因，不能把坏文件�
 })
 
 test('更新清单：docs 里的手写示例通过 schema 校验', () => {
-  const manifest = readJson(resolve(appRoot, 'docs/runtime-manifest.example.json'))
+  const manifest = readJson(resolve(appRoot, 'docs/schemas/runtime-manifest.example.json'))
   assert.deepEqual(validateManifest(manifest, runtimeManifestSchema()), [])
 })
 

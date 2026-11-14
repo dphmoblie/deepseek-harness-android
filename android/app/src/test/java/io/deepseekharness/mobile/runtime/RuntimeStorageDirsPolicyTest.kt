@@ -9,7 +9,7 @@ import org.junit.Test
 /**
  * 目录白名单**纯策略**的穷举用例：不接触文件系统，也不依赖 Android API。
  *
- * 覆盖 `docs/存储权限与导入落点.md` §3.2 的每一条判定：document id → 相对路径的映射规则、
+ * 覆盖 `docs/design/存储权限与导入落点.md` §3.2 的每一条判定：document id → 相对路径的映射规则、
  * 非 `primary:` 卷的拒绝、以及规范路径的准入规则（根、`Android/`、应用私有目录、
  * 符号链接逃逸、路径结构、PRoot 绑定源字符集）。
  */

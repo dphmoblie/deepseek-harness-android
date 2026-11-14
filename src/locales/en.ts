@@ -1634,7 +1634,7 @@ export const english: Readonly<Record<string, string>> = {
   "无障碍自动化是你自行开启、自行选择目标应用的能力；请只对自己有权操作的应用启用。": "Accessibility automation is a capability you enable yourself and point at apps you choose; enable it only for apps you are entitled to operate.",
   "自动化可能误点或误读界面，涉及支付、验证码与隐私信息的页面请自行确认，由此产生的后果由使用者承担。": "Automation may tap or read the screen incorrectly; verify pages that involve payment, verification codes or private information yourself. You bear the consequences of using it.",
   "该能力只在本机生效：服务不做后台监听，也不批量上传界面；只有你让 AI 执行操作时，读取到的界面节点才会按需进入当前会话与所选模型服务。": "This capability runs on your device only: the service does not listen in the background or bulk-upload screen content. Only when you have the AI act does the screen content it reads go to the current session and the model service you selected.",
-  // 首次开启总开关前的免责闸门（对应 docs/AI自动化参数设计.md §7.1/§7.2，逐条一一对应）。
+  // 首次开启总开关前的免责闸门（对应 docs/design/AI自动化参数设计.md §7.1/§7.2，逐条一一对应）。
   "查看完整免责说明": "Read the full disclaimer",
   "关于自动化（无障碍）功能": "About automation (accessibility)",
   "本功能会按你（或你授权的 AI 助手）写入的规则，在你指定的应用处于前台时自动点击、滑动、按键或等待。规则由你确认后长期生效，因此：": "This feature follows the rules you (or an AI assistant you authorised) write, and taps, swipes, presses keys or waits automatically while the apps you chose are in the foreground. Those rules stay in effect until you change them, so:",

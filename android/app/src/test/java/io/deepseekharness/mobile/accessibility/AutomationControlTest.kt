@@ -91,7 +91,7 @@ class AutomationControlTest {
         assertEquals(AutomationControlAction.EMERGENCY_STOP, AutomationControlPolicy.actionFromName("emergency_stop"))
 
         // 桥接侧的兜底必须是不认：一个拼错的参数若能落到 START，就等于 AI 能自己打开自动化，
-        // 那与「AI 只能关不能开」冲突（docs/AI自动化参数设计.md）。
+        // 那与「AI 只能关不能开」冲突（docs/design/AI自动化参数设计.md）。
         for (value in listOf(null, "", " ", "START", "Start", "start ", "resume\t", "on", "true", "1", "紧急停止", "emergency-stop")) {
             assertEquals("取值 ${value?.let { "「$it」" } ?: "null"} 必须被拒收", null, AutomationControlPolicy.actionFromName(value))
         }

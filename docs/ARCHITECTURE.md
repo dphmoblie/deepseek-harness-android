@@ -167,7 +167,7 @@ The Ubuntu terminal always starts a manifest-validated fixed entrypoint through 
 受信任运行器路径）判断是否存在无法复用的残留进程。只要本进程未持有正在运行的 Harness，且
 检测到残留进程或上次意图为运行中，界面就显示「需要重新连接」，由用户显式重启一个新的会话。
 前台服务在没有可管理运行时时立即结束，避免留下无法解释的通知。逐项行为与限制见
-`docs/后台保持与恢复.md`，真机验收步骤见 `docs/mobile-acceptance-checklist.md` 的 5.1 小节。
+`docs/design/后台保持与恢复.md`，真机验收步骤见 `docs/mobile-acceptance-checklist.md` 的 5.1 小节。
 
 ## Shizuku
 

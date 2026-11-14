@@ -10,7 +10,7 @@ import org.junit.Test
  *
  * 服务生命周期本身依赖 Android 框架，这里只覆盖可以脱离设备验证的决策：
  * 何时启动/停止前台服务、插件销毁时是否释放运行时、何时必须提示重新连接。
- * 设备侧的锁屏、返回桌面、划掉最近任务属于人工验收项（见 docs/后台保持与恢复.md）。
+ * 设备侧的锁屏、返回桌面、划掉最近任务属于人工验收项（见 docs/design/后台保持与恢复.md）。
  */
 class HarnessKeepAlivePolicyTest {
     @Test

@@ -9,7 +9,7 @@ import java.io.IOException
 import java.security.MessageDigest
 
 /**
- * ≤8 目录白名单的固定路径与落点（`docs/存储权限与导入落点.md` §三）。
+ * ≤8 目录白名单的固定路径与落点（`docs/design/存储权限与导入落点.md` §三）。
  *
  * ```
  * 手机侧（用户通过 SAF 显式点选）                     访客内（固定挂载点）

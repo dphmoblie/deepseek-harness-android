@@ -4,7 +4,7 @@
 （`scripts/runtime-profile/pnpm-workspace.yaml` 的 `patchedDependencies`）给它们加回退、
 回退在语义上放弃了什么、本机能验证到哪一步、以及 dsh 升级时怎么重做补丁。
 
-登记册条目：`docs/真机缺陷与改进清单.md` 的 P0-1（`write` 工具无法新建文件）与
+登记册条目：`docs/measurements/真机缺陷与改进清单.md` 的 P0-1（`write` 工具无法新建文件）与
 P0-2（附件落盘全废）。触发方是 PRoot / 主机策略（访客内 `link(2)` 一律 `EACCES`），
 **不在我们手里**；我们能修的是「dsh 侧没有回退路径」这一半。
 

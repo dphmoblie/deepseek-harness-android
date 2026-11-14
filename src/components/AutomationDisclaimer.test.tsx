@@ -8,7 +8,7 @@ import { AUTOMATION_DISCLAIMER_VERSION } from '../accessibilityDisclaimer'
  *
  * 两条契约：**确认模式**下勾选是开启的前提（没勾选，确认按钮按不动，也不回调）；
  * **回看模式**下只有关闭出口，不改任何状态。六条要点逐条钉在用例里——它们对应
- * `docs/AI自动化参数设计.md` §7.1 的六条，掉了一条就说明文案被改动了。
+ * `docs/design/AI自动化参数设计.md` §7.1 的六条，掉了一条就说明文案被改动了。
  */
 describe('免责说明弹窗', () => {
   beforeEach(() => window.localStorage.setItem('dsh-mobile-language-v1', 'zh-CN'))

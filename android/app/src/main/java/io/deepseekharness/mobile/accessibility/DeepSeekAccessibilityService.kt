@@ -1331,7 +1331,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
      * 改规则要走 AI 生成 + 用户在设置页确认的那条链路，不在本命令的范围里。
      *
      * **设备桥没有开启自动化的路径**：总开关不是 [AutomationRuntime.RUNNING] 时这条命令一律拒绝，
-     * 且不点亮 `automationEnabled`（「AI 只能关不能开」，见 `docs/AI自动化参数设计.md`）。
+     * 且不点亮 `automationEnabled`（「AI 只能关不能开」，见 `docs/design/AI自动化参数设计.md`）。
      * 开启只能由用户在设置页按下「开始」（桥接命令 `setAccessibilityAutomationRuntime`）。
      */
     private fun automationRules(rootPackage: String, param: String?): DeviceCommandResult {

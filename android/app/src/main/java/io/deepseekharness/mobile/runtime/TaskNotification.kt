@@ -20,7 +20,7 @@ import io.deepseekharness.mobile.runtime.audit.AuditResult
 import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
 
 /**
- * 任务通知的投递（登记册 §5.5，设计见 `docs/任务通知.md`）。
+ * 任务通知的投递（登记册 §5.5，设计见 `docs/design/任务通知.md`）。
  *
  * **独立通道**，不复用保活通道 `harness_keep_alive`：保活通知必须常驻、静默、
  * `IMPORTANCE_LOW`；任务通知的价值恰恰在于「离开应用后仍能得知」。塞进同一个通道，
@@ -31,7 +31,7 @@ import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
  *
  * **锁屏可见**：每条通知都设 `VISIBILITY_PUBLIC`。通知文案全部来自固定字符串资源，
  * 不含地址、端口、凭据、路径、会话内容——「锁屏能看到」因此不额外泄露任何东西，
- * 而用户在锁屏上最需要知道的恰恰是「它完事了没有」。详见 `docs/任务通知.md`。
+ * 而用户在锁屏上最需要知道的恰恰是「它完事了没有」。详见 `docs/design/任务通知.md`。
  */
 internal object TaskNotification {
     private const val CHANNEL_ID = "dsh_tasks"

@@ -206,8 +206,8 @@ test('every dsh version pin in the repository declares the same release', async 
       workspace.match(/^\s+'@deepseek-ai\/dsh-\*':\s*(\S+)\s*$/m)?.[1],
     ],
     [
-      'docs/runtime-manifest.example.json dshVersion',
-      JSON.parse(await read('docs/runtime-manifest.example.json')).dshVersion,
+      'docs/schemas/runtime-manifest.example.json dshVersion',
+      JSON.parse(await read('docs/schemas/runtime-manifest.example.json')).dshVersion,
     ],
   ]
 

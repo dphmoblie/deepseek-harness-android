@@ -1,6 +1,6 @@
 # 上游 issue 草案：dsh 0.1.5-rc.2 把显式 `undefined` 的工具入参判为非法
 
-**状态：草案，尚未提交。** 内容来自一次真机实测（见本仓库 `docs/真机缺陷与改进清单.md` 的 P1-1），
+**状态：草案，尚未提交。** 内容来自一次真机实测（见本仓库 `docs/measurements/真机缺陷与改进清单.md` 的 P1-1），
 提交前请复核报错文案的逐字符原文与 dsh 版本号。
 
 > **2026-10-01 换版后补**：内置内核已从 `0.1.5-rc.2` 升到 `0.2.0-rc.2`。这条报错文案在新内核上
@@ -75,7 +75,7 @@ const bound = Object.fromEntries(
 同一台设备上还有一条**独立**现象：本机 Android 内核没有可用的沙箱后端（自检实测
 `sandbox_probe=PROBE_UNUSABLE` / `sandbox_exec=EXEC_LAUNCHER_FAILED`），任何 `workspace-write`
 命令直接失败，报 `sandbox mode "workspace-write" is requested but no sandbox backend is usable
-on this host ...`（真机证据与归属判定见本仓库 `docs/真机缺陷与改进清单.md` 的 P0-3）。
+on this host ...`（真机证据与归属判定见本仓库 `docs/measurements/真机缺陷与改进清单.md` 的 P0-3）。
 
 两者的区别：
 
@@ -97,6 +97,6 @@ on this host ...`（真机证据与归属判定见本仓库 `docs/真机缺陷�
 
 ## 八、我们这边的环境事实（供对照，非结论）
 
-* 真机报告全文、逐条归属判定与其它上游问题：本仓库 `docs/真机缺陷与改进清单.md`
+* 真机报告全文、逐条归属判定与其它上游问题：本仓库 `docs/measurements/真机缺陷与改进清单.md`
   （本条为 P1-1，邻条 P0-3 为上面提到的沙箱问题，P3-1 为 `interrupt_agent` 的存在性校验）。
 * 本草案**不包含**我们未实测过的环境结论：没有验证过的 dsh 版本、架构、宿主形态一律未写。

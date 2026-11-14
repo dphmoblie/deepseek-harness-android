@@ -17,7 +17,7 @@ import org.junit.Test
  * 并且整行能原样通过诊断策略的受控校验（不会被丢弃任何字段）。
  *
  * 真机上的失败路径（自检不过、端口被占、启动超时等）由 RuntimeSupervisor 的
- * 统一出口写入，覆盖范围见 docs/诊断日志.md。
+ * 统一出口写入，覆盖范围见 docs/design/诊断日志.md。
  */
 class HarnessStartFailurePolicyTest {
     private val instant: Instant = Instant.parse("2026-09-15T10:20:30Z")

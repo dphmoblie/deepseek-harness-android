@@ -234,7 +234,7 @@ uiDump 的脚本顺序是：**先探测工具** → 使用 `--compressed` 写入
 
 | 现象 | 能做什么 |
 |---|---|
-| `ui_dump` 报 `UI_DUMP_EMPTY` / `UI_DUMP_NO_TOOL` | 层级读取在本机当前不可用，属设备侧事实：改用 `mobile_device_screenshot` 观察。注意本次真机上截图**取回成功但落盘失败**（`docs/真机缺陷与改进清单.md` 的 P0-2），这条替代路径的可用性取决于该缺陷是否已修复 |
+| `ui_dump` 报 `UI_DUMP_EMPTY` / `UI_DUMP_NO_TOOL` | 层级读取在本机当前不可用，属设备侧事实：改用 `mobile_device_screenshot` 观察。注意本次真机上截图**取回成功但落盘失败**（`docs/measurements/真机缺陷与改进清单.md` 的 P0-2），这条替代路径的可用性取决于该缺陷是否已修复 |
 | `tap` / `input_text` 被拒绝，且没有任何设备侧报错 | 先检查宿主授权能力、无障碍服务、目标应用白名单与锁屏状态；旧版 APK 可再检查 dsh 的审批设置（见 6.4） |
 | `DEVICE_COMMAND_TIMEOUT` / `DEVICE_COMMAND_PROTOCOL_ERROR` | 重试一次；反复出现时回应用确认 Shizuku 已授权并已连接、设备 Shell 会话正常 |
 | `DEVICE_COMMAND_SESSION_LOST` / `PLUGIN_DESTROYED` | 这次调用没有执行：确认 Shizuku 状态或重启运行时后重试 |

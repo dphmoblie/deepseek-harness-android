@@ -8,7 +8,7 @@ import type { PermissionGuide } from '../ui/permissionGuide'
  *
  * 这里钉的是「不同类型的文案各说各的对象」这条契约：
  * 后台拦截列出四类限制与各家入口，通知权限只建议开启、不谎称没有就起不来，
- * 悬浮球界面创建失败没有系统页可去。文案口径的来龙去脉见 `docs/后台保持与恢复.md`
+ * 悬浮球界面创建失败没有系统页可去。文案口径的来龙去脉见 `docs/design/后台保持与恢复.md`
  * 的「厂商后台策略」一节；掉一个厂商或改回「无法启动」都会让用例变红。
  */
 function renderGuide(guide: PermissionGuide, overrides: Partial<PermissionGuideDialogProps> = {}) {

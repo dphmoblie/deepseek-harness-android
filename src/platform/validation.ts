@@ -2566,7 +2566,7 @@ function optionalOverlayWidth(value: unknown): number {
 /**
  * 这一项到底传没传。
  *
- * 原生侧（与 `docs/副屏设置桥.md` 的约定）把 `undefined` 与 `null` 都当作「这一项不改」：
+ * 原生侧（与 `docs/design/副屏设置桥.md` 的约定）把 `undefined` 与 `null` 都当作「这一项不改」：
  * 前端必须原样放过，别把 `null` 当成非法值拦下来，也别拿默认值补上去。
  */
 function present(value: unknown): boolean {

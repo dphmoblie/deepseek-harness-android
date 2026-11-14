@@ -775,7 +775,7 @@ export interface NotificationPermissionResult {
 /**
  * 投递区可用性档位。
  *
- * 与 `docs/真机缺陷与改进清单.md` §5.1 的 T0–T3 口径一致：
+ * 与 `docs/measurements/真机缺陷与改进清单.md` §5.1 的 T0–T3 口径一致：
  * `available` 对应 T2（已授予「所有文件访问」且目录真实可读写）；
  * `needsPermission` 表示系统支持该权限但尚未授予，界面必须给出授权入口；
  * `unsupported` 表示系统不存在这一档（Android 11 以下），界面不提供授权入口；
@@ -1447,7 +1447,7 @@ export interface StorageDirectoryState {
 /**
  * 存储访问状态（原生 `getStorageAccessState` 的载荷）。
  *
- * 对应 `docs/真机缺陷与改进清单.md` §5.1 的权限分级：
+ * 对应 `docs/measurements/真机缺陷与改进清单.md` §5.1 的权限分级：
  * `mediaGranted` 是 T1（媒体只读），`allFilesGranted` 是 T2（所有文件访问，投递区的前提）。
  * `allFilesSupported` 为 false 表示系统版本低于 Android 11，界面应隐藏该入口。
  */
@@ -1508,7 +1508,7 @@ export interface StorageDirEntry {
  * ≤8 目录白名单状态。
  *
  * 这是访客内可见目录的**唯一来源**：旧的 `/sdcard` 整体绑定已被它取代
- * （`docs/存储权限与导入落点.md` §3.1），因此 `entries` 为空时访客里就没有任何用户目录。
+ * （`docs/design/存储权限与导入落点.md` §3.1），因此 `entries` 为空时访客里就没有任何用户目录。
  */
 export interface StorageDirsState {
   entries: StorageDirEntry[]
@@ -1618,7 +1618,7 @@ export interface HarnessLog {
 /**
  * 应用内查看诊断日志的结果。
  *
- * [text] 是受控字段组成的尾部窗口（见 `docs/诊断日志.md`：只有事件名、级别、
+ * [text] 是受控字段组成的尾部窗口（见 `docs/design/诊断日志.md`：只有事件名、级别、
  * 状态码与计数，不含 URL、凭据、终端内容或用户数据），因此它读进 WebView
  * 不构成新的泄露面；[truncated] 表示前面还有被裁掉的内容。
  */

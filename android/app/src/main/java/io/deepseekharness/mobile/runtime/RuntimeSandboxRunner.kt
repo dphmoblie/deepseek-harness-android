@@ -16,7 +16,7 @@ import org.json.JSONObject
  * “访客根 `/`”，而被 PRoot 真正 `execve` 的是 **APK `nativeLibraryDir` 里的
  * `libdsh_proot_loader.so`**（`PROOT_LOADER`）——真实路径在访客根之外，于是内核拒绝这次执行，
  * 报错却落在用户要运行的程序名下，界面上表现为 `PRoot 无法加载 Ubuntu 程序`。
- * 真机复现与 A/B 取证见 `docs/真机缺陷与改进清单.md` 的 P0-3 段。
+ * 真机复现与 A/B 取证见 `docs/measurements/真机缺陷与改进清单.md` 的 P0-3 段。
  *
  * **通道**：上游没有“追加授权”的入口（`landlock-run` 只读 argv，源码里没有任何 getenv）。
  * 可用的接缝是 `LocalSandboxProvider` 的 `runnerCommand`：一旦配置，它会把 bwrap 形态的档参数
