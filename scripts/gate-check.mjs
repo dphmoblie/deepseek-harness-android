@@ -29,7 +29,7 @@ runStep(2, 'Android resources integrity', pyCmd, ['scripts/check-android-resourc
 // 3. Submodule pin check
 process.stdout.write('[3/4] Checking harness-web pin consistency... ')
 try {
-  const pinPath = resolve('harness-web.pin')
+  const pinPath = resolve('scripts/harness-web.pin')
   if (existsSync(pinPath)) {
     const pinSha = readFileSync(pinPath, 'utf8')
       .split('\n')
@@ -46,7 +46,7 @@ try {
     // 是真实的发布风险，两个值都读不到是「没检查」而不是「检查通过」，必须分开报。
     if (!pinSha) {
       console.log('FAIL')
-      console.error('harness-web.pin 存在，但里面没有可用的 pin 值')
+      console.error('scripts/harness-web.pin 存在，但里面没有可用的 pin 值')
       hasError = true
     } else if (!actualSha) {
       console.log('FAIL')
@@ -54,7 +54,7 @@ try {
       hasError = true
     } else if (pinSha !== actualSha) {
       console.log('FAIL')
-      console.error(`Submodule mismatch: harness-web.pin=${pinSha}, submodule HEAD=${actualSha}`)
+      console.error(`Submodule mismatch: scripts/harness-web.pin=${pinSha}, submodule HEAD=${actualSha}`)
       hasError = true
     } else {
       console.log('PASS')

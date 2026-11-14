@@ -86,7 +86,7 @@
 B 改了样式就**必须**走既有流水线，否则手机上仍是旧样式：
 
 1. `harness-web` 子模块内提交（样式 + 必要的 `scripts/anchor-contract.mjs` 同步、单测）
-2. 更新 `harness-web.pin`（契约测试强制 pin = 索引 gitlink = HEAD gitlink，且子模块换版必须是单独可复核的提交）
+2. 更新 `scripts/harness-web.pin`（契约测试强制 pin = 索引 gitlink = HEAD gitlink，且子模块换版必须是单独可复核的提交）
 3. `python scripts/rebuild-rootfs-frontend.py` 重建 `rootfs.bundle` + `runtime-manifest.json`
    （streaming 重写 tar，含 .bak 事务回滚与逐条校验）
 4. `python scripts/verify-bundle.py` 复核

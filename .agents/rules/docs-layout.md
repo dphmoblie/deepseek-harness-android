@@ -18,6 +18,22 @@ description: 文档放置规范（唯一文档根 docs/）
 7. **图片进 `docs/images/`**，文档内用相对路径引用；`star-download-history.svg` 由 CI 生成并提交，不要手改。
 8. **移动或改名文档时同步改引用**：`git grep '<旧路径>'` 必须为空。README 多语言版本、`AGENTS.md`、`docs/` 内部链接、构建脚本注释与 `scripts/doctor.mjs` 的提示都算引用。
 
+## 仓库根目录白名单
+
+根目录只放工具链与平台要求必须在根的文件；数据文件进 `scripts/`，文档进 `docs/`，产物不入库。
+
+| 文件 | 为什么必须在根 |
+| --- | --- |
+| `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml` | pnpm 工作区根，`packages` 在这里声明 `harness-web` 子模块 |
+| `tsconfig.json`、`tsconfig.app.json`、`tsconfig.node.json` | `tsc -b` 按根的 `references` 解析 |
+| `vite.config.ts`、`vitest.config.ts`、`eslint.config.js` | Vite / Vitest / ESLint 的默认发现路径，IDE 也只按根查找 |
+| `index.html` | Vite 的入口 HTML |
+| `capacitor.config.ts` | Capacitor CLI 固定读取根配置 |
+| `.gitignore`、`.gitattributes`、`.gitmodules`、`.gitleaks.toml`、`.env.example`、`.nvmrc`、`.gitmessage` | Git、gitleaks、Node 版本与提交模板的约定位置 |
+| `README*.md`、`AGENTS.md`、`LICENSE`、`THIRD_PARTY_NOTICES.md` | 平台首页、代理发现、构建脚本按根路径读取 |
+
+- 数据文件不进根：`scripts/harness-web.pin` 与读取它的 `scripts/gate-check.mjs`、`scripts/mobile-compat-contract.test.mjs` 同域。
+- 本地产物（`*.tsbuildinfo`、`dist/`、`node_modules/`）不入库，也不作为根目录文件保留；需要时重新生成。
 ## 检查
 
 ```sh

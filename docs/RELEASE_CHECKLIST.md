@@ -168,9 +168,9 @@ or otherwise distributing them.
   的 `versionName`、`.github/workflows/android-build.yml` 的 `APP_VERSION` 必须相等，
   `versionCode` 必须是正整数。改版本号时必须三处一起改，漏一处 CI 直接失败——
   否则会产出「APK 自称旧版本、Release 标成新版本」的错版。
-- **`harness-web` 冻结指针**：`harness-web.pin` 里的 40 位 sha1 必须同时等于
+- **`harness-web` 冻结指针**：`scripts/harness-web.pin` 里的 40 位 sha1 必须同时等于
   索引里的 gitlink 与 HEAD 里已提交的 gitlink。子模块换版要单独提交：先把
-  `harness-web` 切到目标提交，再改 `harness-web.pin`，然后一起提交。
+  `harness-web` 切到目标提交，再改 `scripts/harness-web.pin`，然后一起提交。
   本地子模块工作区落后不影响 CI（CI 按 gitlink 重新检出），测试只打印提示。
 - **工具链钉死、运行器不浮动**：Node / JDK / Gradle 必须写全补丁号，
   `sdkmanager` 逐个列出带版本的组件，`runs-on` 必须写具体镜像

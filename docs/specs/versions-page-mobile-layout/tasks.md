@@ -37,7 +37,7 @@
 ## [x] T5 离线运行时包
 
 - `harness-web` 子模块内提交 `28d92f0`（单独可复核的提交）
-- `harness-web.pin` 已更新为该提交
+- `scripts/harness-web.pin` 已更新为该提交
 - **落地方式修正**：`rootfs.bundle` / `runtime-manifest.json` 位于
   `android/app/src/main/assets/runtime/`，被 `.gitignore` 忽略、**不纳入版本管理**；
   它们由 CI（`build-embedded-runtime.py` → `rebuild-rootfs-frontend.py`，见

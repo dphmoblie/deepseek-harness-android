@@ -1166,7 +1166,7 @@ test('Node versions stay inside engines.node, with .nvmrc pinned to the supporte
 })
 
 test('harness-web frozen pointer matches the index and the committed gitlink', async t => {
-  const lines = (await readFile(resolve(appRoot, 'harness-web.pin'), 'utf8'))
+  const lines = (await readFile(resolve(appRoot, 'scripts/harness-web.pin'), 'utf8'))
     .split(/\r?\n/u)
     .map(line => line.trim())
     .filter(line => line.length > 0 && !line.startsWith('#'))

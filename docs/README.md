@@ -35,6 +35,8 @@
 | `legal/licenses/*.txt` | 法律原文，`android/app/build.gradle` 按路径打包进 APK |
 | `android/app/src/main/assets/legal/ubuntu-packages/README.md` | 随 APK 分发的资产说明 |
 
+根目录完整白名单（含工具入口、锁文件与 Git 配置）见 [`.agents/rules/docs-layout.md`](../.agents/rules/docs-layout.md) 的「仓库根目录白名单」。
+
 ## 常用入口
 
 - [架构与安全边界](ARCHITECTURE.md)
