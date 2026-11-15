@@ -1,7 +1,7 @@
 import { runtimeBridge } from '../platform/native'
 import { useState } from 'react'
 import { Languages } from 'lucide-react'
-import { LANGUAGES, type Language, saveLanguage, t, useLanguage } from '../i18n'
+import { LANGUAGES, type Language, isLanguage, saveLanguage, t, useLanguage } from '../i18n'
 
 /**
  * 语言选项：名称一律用**该语言自己的写法**，不做翻译。
@@ -61,10 +61,11 @@ export function LanguageSettings({ initial = false }: { initial?: boolean }) {
         <label className={initial ? undefined : 'sr-only'} htmlFor="app-language">{initial ? '语言 / Language' : t('语言')}</label>
         <select disabled={saving} id="app-language" value={initial ? selected : language ?? 'zh-CN'} onChange={event => {
           const value = event.target.value
-          // 安全校验：拒绝选项白名单以外的值。
-          if (!LANGUAGES.some(item => item === value)) return
+          // 安全校验：拒绝选项白名单以外的值。用 isLanguage 而不是在手写一遍白名单判断，
+          // 两处各写一份会在白名单将来加归一化时悄悄分叉。
+          if (!isLanguage(value)) return
           // 首次选择**选中即提交**：少一个「看不见的继续键」就少一处卡死的可能。
-          void change(value as Language)
+          void change(value)
         }}>
           {LANGUAGES.map(item => <option key={item} value={item} lang={item}>{LANGUAGE_NAMES[item]}</option>)}
         </select>
