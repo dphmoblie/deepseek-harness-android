@@ -21,6 +21,11 @@ interface Props {
   externalBusy?: boolean
   /** 外层的运行时操作尚未完成时，版本操作也不能继续排队。 */
   runtimeBusy?: boolean
+  /**
+   * 读取本地 Harness 版本列表也是原生长操作（可能探测访客环境或恢复未完成的切换）。
+   * 用增量回调交给外层，和安装/切换的 busy 分开计数，组件卸载后读取结束也能正确减掉。
+   */
+  onListBusyChange?: (delta: 1 | -1) => void
   onStop?: () => void
 }
 
@@ -44,7 +49,7 @@ function elapsedText(millis: number): string {
 }
 
 /** 上游 npm 目录与本地已安装版本分开加载；断网不影响离线切换。 */
-export function HarnessVersionsSection({ bridge, runtime, refreshRuntime, onBusyChange, externalBusy = false, runtimeBusy = false, onStop }: Props) {
+export function HarnessVersionsSection({ bridge, runtime, refreshRuntime, onBusyChange, onListBusyChange, externalBusy = false, runtimeBusy = false, onStop }: Props) {
   useLanguage()
   const [local, setLocal] = useState<HarnessVersionsState | null>(null)
   const [remote, setRemote] = useState<HarnessReleaseList | null>(null)
@@ -69,10 +74,15 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime, onBusy
     const revision = ++localReadRevision.current
     setLocalLoading(true)
     setLocalError(false)
+    // 列表读取本身也占用原生生命周期锁：外层据此禁用启动，避免用户看到「操作正在进行」的原生报错。
+    onListBusyChange?.(1)
     void bridge.manageHarnessVersions('list').then(value => { if (alive.current && revision === localReadRevision.current) setLocal(value) })
       .catch(() => { if (alive.current && revision === localReadRevision.current) setLocalError(true) })
-      .finally(() => { if (alive.current && revision === localReadRevision.current) setLocalLoading(false) })
-  }, [bridge])
+      .finally(() => {
+        if (alive.current && revision === localReadRevision.current) setLocalLoading(false)
+        onListBusyChange?.(-1)
+      })
+  }, [bridge, onListBusyChange])
   const loadRemote = useCallback(() => {
     const revision = ++remoteReadRevision.current
     setLoading(true)

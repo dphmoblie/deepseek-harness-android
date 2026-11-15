@@ -637,6 +637,33 @@ describe('版本管理：Harness 版本安装期间不能排队启动', () => {
    * 用户切到首页点「打开对话」时，启动请求若排到锁后面，界面就会停住；
    * 界面必须提前禁用，且环境页的「保留数据修复」不应出现在这个非空闲状态。
    */
+  it('版本页还在读列表时首页不能启动，读完恢复', async () => {
+    bridge.getState.mockResolvedValue({ ...readyState })
+    bridge.listHarnessReleases.mockResolvedValue({ entries: [] })
+    let finishList!: (value: unknown) => void
+    bridge.manageHarnessVersions.mockImplementation((operation: string) => operation === 'list'
+      ? new Promise(resolve => { finishList = resolve })
+      : Promise.resolve({ active: 'bundled', bundledVersion: '0.2.0-rc.2', installed: [] }))
+
+    await openVersionsPage()
+    // 读列表也占用原生生命周期锁：离开版本页后，首页的启动必须继续被挡住。
+    const nav = document.querySelector('.bottom-navigation')
+    expect(nav).toBeInstanceOf(HTMLElement)
+    fireEvent.click(within(nav as HTMLElement).getByRole('button', { name: '首页' }))
+
+    expect(await screen.findByRole('heading', { name: '正在处理版本' })).toBeVisible()
+    const open = screen.getByRole('button', { name: '打开对话' })
+    expect(open).toBeDisabled()
+    fireEvent.click(open)
+    expect(bridge.startHarness).not.toHaveBeenCalled()
+
+    await act(async () => {
+      finishList({ active: 'bundled', bundledVersion: '0.2.0-rc.2', installed: [] })
+      await Promise.resolve()
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: '打开对话' })).toBeEnabled())
+  })
+
   it('安装进行中时首页禁用打开、环境页隐藏修复并禁用启动', async () => {
     bridge.getState.mockResolvedValue({ ...readyState })
     bridge.listHarnessReleases.mockResolvedValue({ entries: [{ version: '0.2.1-rc.2', tags: ['latest'] }] })

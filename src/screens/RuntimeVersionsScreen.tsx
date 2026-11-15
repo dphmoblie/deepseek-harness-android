@@ -658,6 +658,8 @@ interface RuntimeVersionsScreenProps extends RuntimeVersionsPanelProps {
   harnessVersionBusy: boolean
   /** 安装/切换/删除 Harness 版本的开始与结束。 */
   onHarnessVersionBusyChange: (busy: boolean) => void
+  /** 读取 Harness 版本列表也是长操作：增量计数交给 App，读列表期间禁用启动。 */
+  onHarnessListBusyChange?: (delta: 1 | -1) => void
   runtimeBusy: boolean
   onStopHarness: () => void
   /** 返回设置首页：版本管理是一级页，返回键回设置首页，而不是回「后台」。 */
@@ -694,6 +696,7 @@ export function RuntimeVersionsScreen({
   runtime,
   harnessVersionBusy,
   onHarnessVersionBusyChange,
+  onHarnessListBusyChange,
   runtimeBusy,
   onStopHarness,
   externalBusy,
@@ -736,6 +739,7 @@ export function RuntimeVersionsScreen({
 
       <HarnessVersionsSection bridge={runtimeBridge} runtime={runtime} refreshRuntime={refreshRuntime}
         externalBusy={harnessVersionBusy} onBusyChange={onHarnessVersionBusyChange}
+        onListBusyChange={onHarnessListBusyChange}
         runtimeBusy={runtimeBusy} onStop={onStopHarness} />
 
       <fieldset className="settings-model-fieldset" disabled={harnessVersionBusy || runtimeBusy}>

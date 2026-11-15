@@ -3924,7 +3924,15 @@ export function App() {
    */
   const [harnessVersionBusy, setHarnessVersionBusy] = useState(false)
   const [runtimeVersionBusy, setRuntimeVersionBusy] = useState(false)
-  const versionOperationBusy = harnessVersionBusy || runtimeVersionBusy
+  /*
+   * 读取 Harness 版本列表也占原生长操作闸门。它与安装/切换分开计数：
+   * 组件卸载后读取结束仍要减掉，不能把仍在进行的安装误判成已结束。
+   */
+  const [harnessListBusy, setHarnessListBusy] = useState(0)
+  const reportHarnessListBusy = useCallback((delta: 1 | -1) => {
+    setHarnessListBusy(current => Math.max(0, current + delta))
+  }, [])
+  const versionOperationBusy = harnessVersionBusy || runtimeVersionBusy || harnessListBusy > 0
   const [notice, setNotice] = useState<Notice | null>(null)
   const [resetOpen, setResetOpen] = useState(false)
   const [repairOpen, setRepairOpen] = useState(false)
@@ -5853,6 +5861,7 @@ export function App() {
           runtime={runtime}
           harnessVersionBusy={harnessVersionBusy}
           onHarnessVersionBusyChange={setHarnessVersionBusy}
+          onHarnessListBusyChange={reportHarnessListBusy}
           runtimeBusy={busy !== null || runtimeVersionBusy}
           onStopHarness={stopRuntimeForVersions}
           externalBusy={harnessVersionBusy || busy !== null}

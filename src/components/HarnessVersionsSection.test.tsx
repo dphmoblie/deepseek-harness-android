@@ -69,6 +69,29 @@ describe('Harness 版本安装进度', () => {
     expect(screen.queryByRole('progressbar')).toBeNull()
   })
 
+  it('读取本地版本期间占用外层闸门，读完减掉', async () => {
+    let finishList!: (value: HarnessVersionsState) => void
+    const bridge = setupBridge({ list: () => new Promise<HarnessVersionsState>(resolve => { finishList = resolve }) })
+    const onListBusyChange = vi.fn()
+    render(<HarnessVersionsSection bridge={bridge} runtime={runtime} refreshRuntime={() => Promise.resolve()} onListBusyChange={onListBusyChange} />)
+
+    await waitFor(() => expect(onListBusyChange).toHaveBeenCalledWith(1))
+    await act(async () => { finishList(local); await Promise.resolve() })
+    await waitFor(() => expect(onListBusyChange).toHaveBeenLastCalledWith(-1))
+  })
+
+  it('列表读取完成前卸载，结束仍要减掉外层计数', async () => {
+    let finishList!: (value: HarnessVersionsState) => void
+    const bridge = setupBridge({ list: () => new Promise<HarnessVersionsState>(resolve => { finishList = resolve }) })
+    const onListBusyChange = vi.fn()
+    const view = render(<HarnessVersionsSection bridge={bridge} runtime={runtime} refreshRuntime={() => Promise.resolve()} onListBusyChange={onListBusyChange} />)
+
+    await waitFor(() => expect(onListBusyChange).toHaveBeenCalledWith(1))
+    view.unmount()
+    await act(async () => { finishList(local); await Promise.resolve() })
+    await waitFor(() => expect(onListBusyChange).toHaveBeenLastCalledWith(-1))
+  })
+
   it('安装开始与结束都通知外层，卸载后也必须复位', async () => {
     let finishInstall: (value: typeof local) => void = () => undefined
     const onBusyChange = vi.fn()
