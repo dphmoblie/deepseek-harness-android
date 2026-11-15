@@ -816,8 +816,11 @@ test('background keep-alive delegates the shared runtime and never claims to def
   assert.doesNotMatch(keepAliveService, /ProcessBuilder|Runtime\.getRuntime|exec\(/)
   assert.doesNotMatch(keepAliveService, /HarnessAccess|password|apiKey/)
   // 通知内容只来自固定资源字符串。
-  assert.match(keepAliveService, /setContentTitle\(getString\(R\.string\.keep_alive_notification_title\)\)/)
-  assert.match(keepAliveService, /setContentText\(getString\(R\.string\.keep_alive_notification_text\)\)/)
+  // 接收者允许是 `localized` 这类按应用语言取的上下文：断言要挡的是「文案不是硬编码/
+  // 不是拼接用户数据」，而不是必须用 `this`/服务自身的 getString——后者跟随系统语言，
+  // 应用内切到日文时通知仍是系统语言，那才是缺陷。
+  assert.match(keepAliveService, /setContentTitle\((?:localized|context|this)?\.?getString\(R\.string\.keep_alive_notification_title\)\)/)
+  assert.match(keepAliveService, /setContentText\((?:localized|context|this)?\.?getString\(R\.string\.keep_alive_notification_text\)\)/)
 
   // 恢复记录只保存意图、阶段与时间，不含凭据。
   assert.match(keepAlivePolicy, /data class RuntimeIntentRecord\(\s*val intent: RuntimeIntent,\s*val phase: RuntimePhase\?,\s*val updatedAtMillis: Long,\s*\)/)
