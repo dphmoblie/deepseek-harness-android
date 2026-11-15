@@ -358,7 +358,7 @@ test('运行标识随开始和结束发送且不泄露桥接令牌，无运行�
 })
 
 test('runId 测试覆盖只接受十六位小写十六进制，不影响轮次去重', () => {
-  for (const runId of ['fedcba0987654321', 'secret-token', '1234567890ABCDEF', '', null]) {
+  for (const runId of ['fedcba0987654321', 'invalid-run', '1234567890ABCDEF', '', null]) {
     const ctx = fakeCtx()
     const { calls, fetchImpl } = recordingFetch()
     installTurnSignal(ctx, { bridgeConfig: bridgeOk, fetch: fetchImpl, runId })
