@@ -599,7 +599,7 @@ export const english: Readonly<Record<string, string>> = {
   "收集中": "Collecting",
   "未收集": "Not collecting",
   "收集诊断日志": "Collect diagnostic log",
-  "默认关闭；开启后记录运行时阶段、启动结果与前台服务状态": "Off by default; when on, records runtime phases, startup results, and foreground service state",
+  "默认开启；关闭后停止记录运行时阶段、启动结果与前台服务状态": "On by default; turn it off to stop recording runtime phases, startup results, and foreground service state",
   "保留天数": "Retention",
   "天": "days",
   "日志文件": "Log files",

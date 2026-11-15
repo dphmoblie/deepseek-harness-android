@@ -288,7 +288,8 @@ export const keepAlive: KeepAliveState = {
 }
 
 const diagnostic: DiagnosticLogState = {
-  enabled: false,
+  // 与产品默认一致：诊断日志默认开启；需要「用户已关闭」的用例自行覆盖。
+  enabled: true,
   retentionDays: 3,
   fileCount: 0,
   totalBytes: 0,

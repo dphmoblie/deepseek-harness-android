@@ -3644,7 +3644,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
           <label className="toggle-row">
             <span>
               <strong>{t("收集诊断日志")}</strong>
-              <small>{t("默认关闭；开启后记录运行时阶段、启动结果与前台服务状态")}</small>
+              <small>{t("默认开启；关闭后停止记录运行时阶段、启动结果与前台服务状态")}</small>
             </span>
             <input
               type="checkbox"

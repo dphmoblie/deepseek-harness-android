@@ -87,7 +87,8 @@ class DiagnosticLog(context: Context) {
     @Volatile
     private var lastPrunedDate: LocalDate? = null
 
-    fun enabled(): Boolean = preferences.getBoolean(KEY_ENABLED, false)
+    /** 默认开启：排障优先；用户显式关闭后保持关闭，不再自动打开。 */
+    fun enabled(): Boolean = preferences.getBoolean(KEY_ENABLED, true)
 
     fun retentionDays(): Int = DiagnosticPolicy.clampRetentionDays(
         preferences.getInt(KEY_RETENTION_DAYS, DiagnosticPolicy.DEFAULT_RETENTION_DAYS),

@@ -21,26 +21,26 @@ import { App } from './App'
 describe('诊断与日志', () => {
   beforeEach(beforeEachAppTest)
 
-  it('默认不收集，开关与保留天数按原生返回值更新', async () => {
+  it('默认开启，开关与保留天数按原生返回值更新', async () => {
     render(<App />)
-  await arriveAtSettingsHome()
+    await arriveAtSettingsHome()
 
     await openSettingsPage('诊断与日志', '日志与采集')
     const toggle = await screen.findByRole('switch', { name: /收集诊断日志/ })
     await waitFor(() => expect(toggle).toBeEnabled())
-    expect(toggle).not.toBeChecked()
+    expect(toggle).toBeChecked()
     // 没有任何日志时可导出/清空按钮保持禁用，避免产生空文件。
     expect(screen.getByRole('button', { name: '导出并分享' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '清空日志' })).toBeDisabled()
-
-    fireEvent.click(toggle)
-    await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(true, 3))
-    expect(await screen.findByRole('switch', { name: /收集诊断日志/ })).toBeChecked()
 
     const retentionInput = screen.getByRole('spinbutton', { name: /保留天数/ })
     fireEvent.change(retentionInput, { target: { value: '7' } })
     fireEvent.blur(retentionInput)
     await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(true, 7))
+
+    fireEvent.click(toggle)
+    await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(false, 7))
+    expect(await screen.findByRole('switch', { name: /收集诊断日志/ })).not.toBeChecked()
   })
 
   it('保留天数输入框允许编辑，失焦时拒绝空值和越界值', async () => {
