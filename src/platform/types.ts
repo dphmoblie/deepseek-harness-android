@@ -2030,6 +2030,8 @@ export interface RuntimeBridge {
   openApplicationSettings: () => Promise<void>
   /** 悬浮球状态；不含任何用户数据。 */
   getOverlayBallState: () => Promise<OverlayBallState>
+  /** 立即持久化悬浮球开关并同步服务，不依赖整页设置保存。 */
+  setOverlayBallEnabled: (enabled: boolean) => Promise<OverlayBallState>
   /** 跳转到系统「显示在其他应用上层」设置页。该权限只能由用户手动开启。 */
   openOverlaySettings: () => Promise<void>
   /**

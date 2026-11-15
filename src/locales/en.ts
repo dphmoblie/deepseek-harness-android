@@ -1,5 +1,8 @@
 ﻿// 应用界面英文词典；不翻译用户输入、凭据或终端输出。
 export const english: Readonly<Record<string, string>> = {
+  "无法保存悬浮球设置": "Could not save floating ball settings",
+  "悬浮球开关格式无效": "Invalid floating ball setting",
+  "悬浮球仅在安卓设备上可用": "The floating ball is only available on Android devices",
   "正在处理版本": "Version operation in progress",
   "版本操作进行中": "Version operation in progress",
   "版本操作完成后才能打开对话，请等待当前操作结束。": "Wait for the current version operation to finish before opening chat.",
@@ -704,7 +707,7 @@ export const english: Readonly<Record<string, string>> = {
   "打开应用时预启动服务": "Pre-start the service when opening the app",
   "提前启动本机服务，点「打开对话」几乎立即进入；不会自动进入对话页": "Starts the local service early so Open chat is nearly instant; it never opens the chat page for you",
   "悬浮球": "Floating ball",
-  "在其他应用上层显示悬浮球，点按展开 AI 对话小窗": "Shows a floating ball above other apps; tap to open a small AI chat window",
+  "在其他应用上层显示悬浮球，点按展开快捷操作，长按打开 AI 对话小窗": "Shows a floating ball above other apps; tap for quick actions, or long-press to open a small AI chat window",
   "需要「显示在其他应用上层」权限才能使用": "Requires the \"Display over other apps\" permission",
   "系统权限已关闭": "System permission is off",
   "前往系统设置开启": "Open system settings",

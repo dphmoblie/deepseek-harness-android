@@ -599,6 +599,7 @@ export function createBrowserBridge(): RuntimeBridge {
       canDrawOverlays: false,
       serviceActive: false,
     }),
+    setOverlayBallEnabled: () => Promise.reject(new Error('悬浮球仅在安卓设备上可用')),
     // 浏览器里没有可跳转的系统设置页；静默无操作，不抛错以免打断预览。
     openOverlaySettings: (): Promise<void> => Promise.resolve(),
     /**

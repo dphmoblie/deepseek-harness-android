@@ -3,7 +3,7 @@ import { Capacitor } from '@capacitor/core'
 import { arriveAtSettingsHome } from './__tests__/appTestHarness'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { beforeEachAppTest, bridge, chooseProvider, FOREGROUND_SERVICE_SETTLE_MS, notInstalledState, openSettingsPage, readyState, settings } from './__tests__/appTestHarness'
-import type { ModelCatalogResult, RuntimeSettings, RuntimeSettingsUpdate } from './platform/types'
+import type { ModelCatalogResult, OverlayBallState, RuntimeSettings } from './platform/types'
 
 vi.mock('./platform/native', () => ({ runtimeBridge: bridge }))
 vi.mock('./components/TerminalPanel', () => ({
@@ -56,23 +56,92 @@ describe('悬浮球设置', () => {
     await waitFor(() => expect(bridge.openOverlaySettings).toHaveBeenCalledTimes(1))
   })
 
-  it('已授权时可切换开关，点保存后才提交', async () => {
-    bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
+  it('开启悬浮球立即独立保存，不需要离开页面', async () => {
     render(<App />)
-  await arriveAtSettingsHome()
-
+    await arriveAtSettingsHome()
     await openSettingsPage('后台', '后台保持')
-    const toggle = await screen.findByRole('switch', { name: /悬浮球/ })
-    expect(toggle).not.toBeChecked()
-
+    const toggle = screen.getByRole('switch', { name: /悬浮球/ })
     fireEvent.click(toggle)
-    expect(toggle).toBeChecked()
-    // 输入期间一次都不落盘：这就是「离开这一页才自动保存」的另一面。
+    await waitFor(() => expect(bridge.setOverlayBallEnabled).toHaveBeenCalledWith(true))
+    await waitFor(() => expect(toggle).toBeChecked())
+    expect(toggle).toBeEnabled()
     expect(bridge.saveSettings).not.toHaveBeenCalled()
     await pressSave()
-    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ overlayBallEnabled: true }),
-    ))
+    expect(bridge.saveSettings).not.toHaveBeenCalled()
+  })
+
+  it('悬浮球保存失败保持原开关并允许重试', async () => {
+    bridge.setOverlayBallEnabled.mockRejectedValueOnce(new Error('无法保存悬浮球设置'))
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('后台', '后台保持')
+    const toggle = screen.getByRole('switch', { name: /悬浮球/ })
+    fireEvent.click(toggle)
+    await waitFor(() => expect(toggle).toBeEnabled())
+    expect(await screen.findByText('无法保存悬浮球设置')).toBeVisible()
+    expect(screen.queryByText(/设备没有在预期时间内响应/)).toBeNull()
+    expect(toggle).not.toBeChecked()
+    fireEvent.click(toggle)
+    await waitFor(() => expect(toggle).toBeChecked())
+    expect(bridge.setOverlayBallEnabled).toHaveBeenCalledTimes(2)
+  })
+
+  it('再次打开应用沿用已保存的悬浮球开关', async () => {
+    const first = render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('后台', '后台保持')
+    fireEvent.click(screen.getByRole('switch', { name: /悬浮球/ }))
+    await waitFor(() => expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked())
+    first.unmount()
+
+    bridge.getSettings.mockResolvedValue({ ...settings, overlayBallEnabled: true })
+    bridge.getOverlayBallState.mockResolvedValue({ enabled: true, canDrawOverlays: true, serviceActive: true })
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('后台', '后台保持')
+    expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked()
+    expect(bridge.setOverlayBallEnabled).toHaveBeenCalledTimes(1)
+  })
+
+  it('独立保存悬浮球不会提交其它草稿，整页保存不重放开关', async () => {
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('后台', '后台保持')
+    fireEvent.click(screen.getByRole('switch', { name: /后台保持 Harness/ }))
+    fireEvent.click(screen.getByRole('switch', { name: /悬浮球/ }))
+    await waitFor(() => expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked())
+    expect(screen.getByRole('switch', { name: /后台保持 Harness/ })).toBeChecked()
+    expect(bridge.saveSettings).not.toHaveBeenCalled()
+    await pressSave()
+    expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ keepRuntimeInBackground: true }))
+    expect(bridge.saveSettings.mock.calls[0][0]).not.toHaveProperty('overlayBallEnabled')
+  })
+
+  it('关闭悬浮球后忽略此前启动复核的迟到失败', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      render(<App />)
+      await arriveAtSettingsHome()
+      await openSettingsPage('后台', '后台保持')
+      const toggle = screen.getByRole('switch', { name: /悬浮球/ })
+      fireEvent.click(toggle)
+      await waitFor(() => expect(toggle).toBeChecked())
+
+      let resolveRecheck!: (value: OverlayBallState) => void
+      bridge.getOverlayBallState.mockImplementationOnce(() => new Promise<OverlayBallState>(resolve => { resolveRecheck = resolve }))
+      await act(async () => { await vi.advanceTimersByTimeAsync(FOREGROUND_SERVICE_SETTLE_MS + 100) })
+      expect(resolveRecheck).toBeTypeOf('function')
+      fireEvent.click(toggle)
+      await waitFor(() => expect(toggle).not.toBeChecked())
+      await act(async () => {
+        resolveRecheck({ enabled: true, canDrawOverlays: true, serviceActive: false })
+        await Promise.resolve()
+      })
+      expect(toggle).not.toBeChecked()
+      expect(screen.queryByRole('dialog')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('开关已开启但系统权限被撤销时如实显示原因', async () => {
@@ -100,12 +169,9 @@ describe('悬浮球设置', () => {
     expect(toggle).toBeEnabled()
 
     fireEvent.click(toggle)
-    expect(toggle).not.toBeChecked()
-
-    await pressSave()
-    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ overlayBallEnabled: false }),
-    ))
+    await waitFor(() => expect(toggle).not.toBeChecked())
+    expect(bridge.setOverlayBallEnabled).toHaveBeenCalledWith(false)
+    expect(bridge.saveSettings).not.toHaveBeenCalled()
   })
 
   it('进入设置二级页时重新读取设置，避免草稿把原生侧改动覆盖回去', async () => {
@@ -134,7 +200,7 @@ describe('悬浮球设置', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
       bridge.getSettings.mockResolvedValue({ ...settings, overlayBallEnabled: true })
-      bridge.saveSettings.mockImplementation((value: RuntimeSettingsUpdate) => Promise.resolve({ ...value, overlayBallEnabled: true }))
+      bridge.setOverlayBallEnabled.mockImplementation((enabled: boolean) => Promise.resolve({ enabled, canDrawOverlays: true, serviceActive: false }))
       // 权限已授予、开关已是开启状态，但悬浮球前台服务没有运行：以原生状态为准。
       bridge.getOverlayBallState.mockResolvedValue({ enabled: true, canDrawOverlays: true, serviceActive: false })
       render(<App />)
@@ -144,13 +210,9 @@ describe('悬浮球设置', () => {
 
       const toggle = await screen.findByRole('switch', { name: /悬浮球/ })
       fireEvent.click(toggle)
+      await waitFor(() => expect(toggle).not.toBeChecked())
       fireEvent.click(toggle)
-      await pressSave()
-
-      await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith({
-        ...settings,
-        overlayBallEnabled: true,
-      }))
+      await waitFor(() => expect(bridge.setOverlayBallEnabled).toHaveBeenLastCalledWith(true))
       // 悬浮球前台服务同样是异步拉起的：等宽限期后按原生状态复核，确认仍未运行才弹窗。
       await act(async () => { await vi.advanceTimersByTimeAsync(FOREGROUND_SERVICE_SETTLE_MS + 100) })
       // 不是权限缺失（canDrawOverlays 为真）：按厂商后台拦截给出自启动 / 省电策略指引与跳转入口。
@@ -234,19 +296,23 @@ describe('悬浮球设置', () => {
     expect(bridge.saveSettings).not.toHaveBeenCalled()
   })
 
-  it('已修改的悬浮球草稿不被权限状态刷新覆盖', async () => {
+  it('悬浮球保存期间保持开关禁用，不受迟到读取覆盖', async () => {
+    let resolveWrite!: (value: OverlayBallState) => void
+    bridge.setOverlayBallEnabled.mockImplementationOnce(() => new Promise<OverlayBallState>(resolve => { resolveWrite = resolve }))
     render(<App />)
-  await arriveAtSettingsHome()
+    await arriveAtSettingsHome()
     await openSettingsPage('后台', '后台保持')
     const toggle = screen.getByRole('switch', { name: /悬浮球/ })
+    let resolveRead!: (value: OverlayBallState) => void
+    bridge.getOverlayBallState.mockImplementationOnce(() => new Promise<OverlayBallState>(resolve => { resolveRead = resolve }))
+    await act(async () => { fireEvent.focus(window); await Promise.resolve() })
     fireEvent.click(toggle)
-    await act(async () => {
-      fireEvent.focus(window)
-      await Promise.resolve()
-    })
+    expect(toggle).toBeDisabled()
+    await act(async () => { resolveWrite({ enabled: true, canDrawOverlays: true, serviceActive: true }); await Promise.resolve() })
+    await act(async () => { resolveRead({ enabled: false, canDrawOverlays: true, serviceActive: false }); await Promise.resolve() })
     expect(toggle).toBeChecked()
-    await pressSave()
-    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ overlayBallEnabled: true })))
+    expect(toggle).toBeEnabled()
+    expect(bridge.saveSettings).not.toHaveBeenCalled()
   })
 
   it('悬浮球查询失败显示未知状态，重试成功后恢复权限状态', async () => {
@@ -268,7 +334,7 @@ describe('悬浮球设置', () => {
       await Promise.resolve()
     })
     expect(screen.queryByText('无法读取悬浮球状态，正在重试')).toBeNull()
-    expect(screen.getByText('在其他应用上层显示悬浮球，点按展开 AI 对话小窗')).toBeVisible()
+    expect(screen.getByText('在其他应用上层显示悬浮球，点按展开快捷操作，长按打开 AI 对话小窗')).toBeVisible()
   })
 
   it('保存成功后悬浮球查询失败不会误报保存失败', async () => {
@@ -296,16 +362,18 @@ describe('悬浮球设置', () => {
     await waitFor(() => expect(document.documentElement.style.getPropertyValue('--app-font-scale')).toBe('1.5'))
   })
 
-  it('悬浮球保存成功但状态复核失败时仍显示已保存的开关值', async () => {
+  it('悬浮球独立保存成功不依赖后续查询', async () => {
     render(<App />)
-  await arriveAtSettingsHome()
+    await arriveAtSettingsHome()
     await openSettingsPage('后台', '后台保持')
     fireEvent.click(screen.getByRole('switch', { name: /悬浮球/ }))
+    await waitFor(() => expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked())
     bridge.getOverlayBallState.mockRejectedValue(new Error('overlay read failed'))
-    await pressSave()
-    expect(await screen.findByText('设置已保存，但部分状态暂时无法确认，请稍后重试')).toBeVisible()
+    await act(async () => { fireEvent.focus(window); await Promise.resolve() })
     expect(screen.getByRole('switch', { name: /悬浮球/ })).toBeChecked()
+    expect(bridge.saveSettings).not.toHaveBeenCalled()
   })
+
 })
 
 /**
@@ -857,24 +925,16 @@ describe('后台页的运行时与设备 Shell 入口', () => {
     expect(await screen.findByRole('heading', { name: '设备 Shell 设置' })).toBeVisible()
   })
 
-  it('更改设置后无需点击保存按钮，离开这一页就自动保存', async () => {
-    bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
+  it('悬浮球开启后切页不重复整页保存', async () => {
     render(<App />)
-  await arriveAtSettingsHome()
-
+    await arriveAtSettingsHome()
     await openSettingsPage('后台', '后台保持')
-    const toggle = await screen.findByRole('switch', { name: /悬浮球/ })
-    expect(toggle).not.toBeChecked()
-
+    const toggle = screen.getByRole('switch', { name: /悬浮球/ })
     fireEvent.click(toggle)
-    expect(toggle).toBeChecked()
-    // 停留期间不写盘：写盘发生在离开这一页的时候。
-    expect(bridge.saveSettings).not.toHaveBeenCalled()
-
+    await waitFor(() => expect(toggle).toBeChecked())
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
-    await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledWith(
-      expect.objectContaining({ overlayBallEnabled: true }),
-    ), { timeout: 2000 })
+    expect(bridge.setOverlayBallEnabled).toHaveBeenCalledWith(true)
+    expect(bridge.saveSettings).not.toHaveBeenCalled()
   })
 
   it('切到后台保存成功后提示设置已保存', async () => {
@@ -940,14 +1000,14 @@ describe('后台页的运行时与设备 Shell 入口', () => {
     await arriveAtSettingsHome()
     await openSettingsPage('后台', '后台保持')
 
-    fireEvent.click(await screen.findByRole('switch', { name: /悬浮球/ }))
+    fireEvent.click(await screen.findByRole('switch', { name: /打开应用时预启动服务/ }))
     await pressSave()
     await waitFor(() => expect(bridge.saveSettings).toHaveBeenCalledTimes(1), { timeout: 2000 })
     // 在途时页面不出现任何「已保存」/「设置已保存」字样。
     expect(screen.queryByText('设置已保存')).not.toBeInTheDocument()
 
     await act(async () => {
-      resolveSave({ ...settings, overlayBallEnabled: true })
+      resolveSave({ ...settings, prewarmHarness: true })
       await Promise.resolve()
     })
     expect(await screen.findByText('设置已保存')).toBeVisible()

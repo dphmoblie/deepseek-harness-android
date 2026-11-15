@@ -166,15 +166,17 @@ class RuntimeStore(context: Context) {
         PageNetworkAccess.fromStored(preferences.getString(KEY_PAGE_NETWORK_ACCESS, null))
 
     /**
-     * 由悬浮球菜单在原生侧直接关闭开关。
+     * 设置页与悬浮球菜单独立持久化开关；调用方在后台线程执行。
      *
-     * 菜单是原生界面，没有前端调用栈可以回写设置，因此这里直接落盘。
+     * 不依赖整页设置保存，避免切后台后桥调用被挂起导致开关丢失。
      * 本方法只负责写入持久化存储，不负责通知前端；界面要看到新值，
      * 需要界面侧在进入设置页时重新读取设置，这是界面侧的职责。
      * 只写这一个布尔量，不触碰其他设置。
      */
     fun setOverlayBallEnabled(enabled: Boolean) {
-        preferences.edit().putBoolean(KEY_OVERLAY_BALL, enabled).apply()
+        if (!preferences.edit().putBoolean(KEY_OVERLAY_BALL, enabled).commit()) {
+            throw RuntimeFailure("SETTINGS_WRITE_FAILED", "无法保存悬浮球设置")
+        }
     }
 
     /**

@@ -954,6 +954,59 @@ test('keep-alive keeps the device bridge process-scoped and the notification ent
   assert.doesNotMatch(runtimeStore, /\.putBoolean\(KEY_OVERLAY_BALL, settings\.overlayBallEnabled\)/)
 })
 
+test('悬浮球开关在插件重建与回到前台时都恢复原生服务', async () => {
+  const nativePlugin = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/MobileRuntimePlugin.kt',
+  ), 'utf8')
+  const bootReceiver = await readFile(resolve(
+    appRoot,
+    'android/app/src/main/java/io/deepseekharness/mobile/BootRecoveryReceiver.kt',
+  ), 'utf8')
+
+  // Activity / WebView 重建不会再次走设置保存；load() 必须按持久化开关把球恢复，
+  // 否则用户只有重新点一次开关才能看到球。
+  const loadStart = nativePlugin.indexOf('override fun load()')
+  const resumeStart = nativePlugin.indexOf('override fun handleOnResume()')
+  assert.ok(loadStart >= 0, 'MobileRuntimePlugin must implement load()')
+  assert.ok(resumeStart > loadStart, 'handleOnResume() must follow load()')
+  const loadBody = nativePlugin.slice(loadStart, resumeStart)
+  assert.match(loadBody, /syncOverlayBallService\(controller\.store\.overlayBallEnabled\(\)\)/)
+
+  const resumeEnd = nativePlugin.indexOf('\n    override fun ', resumeStart + 1)
+  const resumeBody = nativePlugin.slice(resumeStart, resumeEnd < 0 ? nativePlugin.length : resumeEnd)
+  assert.match(resumeBody, /syncOverlayBallService\(controller\.store\.overlayBallEnabled\(\)\)/)
+
+  // 设备重启走独立接收器：只依赖持久化开关与系统权限，不能要求用户重新打开应用。
+  assert.match(bootReceiver, /store\.overlayBallEnabled\(\)\s*&&\s*Settings\.canDrawOverlays\(appContext\)/)
+  assert.match(bootReceiver, /OverlayBallService\.start\(appContext\)/)
+})
+
+test('悬浮球开关通过独立桥保存，不等待运行时设置或启动', async () => {
+  const read = relative => readFile(resolve(appRoot, relative), 'utf8')
+  const nativePlugin = await read('android/app/src/main/java/io/deepseekharness/mobile/MobileRuntimePlugin.kt')
+  const runtimeStore = await read('android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeStore.kt')
+  const nativeBridge = await read('src/platform/native.ts')
+  const bridgeTypes = await read('src/platform/types.ts')
+
+  const setter = nativePlugin.match(/fun setOverlayBallEnabled\(call: PluginCall\) \{([\s\S]*?)\n {4}\}/)?.[1] ?? ''
+  assert.ok(setter.length > 0, 'MobileRuntimePlugin must expose setOverlayBallEnabled()')
+  assert.match(setter, /call\.data\.opt\("enabled"\) as\? Boolean/)
+  assert.match(setter, /controller\.store\.setOverlayBallEnabled\(enabled\)/)
+  assert.match(setter, /overlayBallOperationLock\.withLock/)
+  assert.match(setter, /syncOverlayBallService\(controller\.store\.overlayBallEnabled\(\),\s*canDraw\)/)
+  assert.match(setter, /overlayBallStateJson\(canDraw\)/)
+  assert.doesNotMatch(setter, /(?:controller\.)?saveSettings\(/)
+  assert.doesNotMatch(setter, /(?:startHarness|openHarness)\(/)
+
+  const persistedSetter = runtimeStore.match(/fun setOverlayBallEnabled\(enabled: Boolean\) \{([\s\S]*?)\n {4}\}/)?.[1] ?? ''
+  assert.match(persistedSetter, /putBoolean\(KEY_OVERLAY_BALL, enabled\)\.commit\(\)/)
+  assert.match(persistedSetter, /SETTINGS_WRITE_FAILED/)
+  assert.match(nativeBridge, /NativeRuntime\.setOverlayBallEnabled\(\{ enabled \}\)/)
+  assert.match(nativeBridge, /setOverlayBallEnabled[\s\S]{0,300}?then\(validateOverlayBallState\)/)
+  assert.match(bridgeTypes, /setOverlayBallEnabled: \(enabled: boolean\) => Promise<OverlayBallState>/)
+})
+
 test('Harness WebView serves the system file chooser and keeps page-initiated loads blocked', async () => {
   const activity = await readFile(resolve(
     appRoot,

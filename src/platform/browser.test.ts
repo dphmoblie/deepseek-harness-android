@@ -19,6 +19,12 @@ describe('browser settings bridge', () => {
     await expect(bridge.setAppOrientation('landscape')).rejects.toThrow('应用方向仅在安卓设备上可用')
   })
 
+  it('浏览器不模拟安卓悬浮球', async () => {
+    const bridge = createBrowserBridge()
+    await expect(bridge.setOverlayBallEnabled(true)).rejects.toThrow('悬浮球仅在安卓设备上可用')
+    expect((await bridge.getOverlayBallState()).enabled).toBe(false)
+  })
+
   it('preserves the stored overlay-ball setting when an unrelated save omits it', async () => {
     const bridge = createBrowserBridge()
     await bridge.saveSettings({ ...baseSettings, overlayBallEnabled: true })

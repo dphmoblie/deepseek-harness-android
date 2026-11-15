@@ -393,6 +393,8 @@ class MobileRuntimePlugin : Plugin() {
         // 但慢网检查/下载是长操作，不能占用运行时启停的 auditedOperationLock——
         // 否则用户在更新中途想重启运行时会被锁住。两把锁分离互不影响。
         private val appUpdateOperationLock = ReentrantLock()
+        // WebView 超时不会取消原生请求，串行执行避免重试与旧写入交错。
+        private val overlayBallOperationLock = ReentrantLock(true)
 
         /** 副屏直通 Shell 的一次性设备会话尺寸；与设备桥的默认列宽/行数保持一致。 */
         private const val VIRTUAL_SCREEN_COLUMNS = 80
@@ -4203,17 +4205,31 @@ class MobileRuntimePlugin : Plugin() {
      */
     @PluginMethod
     fun overlayBallState(call: PluginCall) {
+        execute(call) { overlayBallStateJson() }
+    }
+
+    /** 单字段立即落盘，不等待运行时生命周期锁或页面退出。 */
+    @PluginMethod
+    fun setOverlayBallEnabled(call: PluginCall) {
         execute(call) {
-            val serviceActive = OverlayBallService.isRunning
-            JSObject()
-                .put("enabled", controller.store.overlayBallEnabled())
-                .put("canDrawOverlays", android.provider.Settings.canDrawOverlays(context))
-                .put("serviceActive", serviceActive)
-                .put(
-                    "startError",
-                    OverlayBallService.lastStartFailure?.takeUnless { serviceActive },
-                )
+            overlayBallOperationLock.withLock {
+                val enabled = call.data.opt("enabled") as? Boolean
+                    ?: throw RuntimeFailure("SETTINGS_INVALID", "悬浮球开关格式无效")
+                val canDraw = android.provider.Settings.canDrawOverlays(context)
+                controller.store.setOverlayBallEnabled(enabled)
+                syncOverlayBallService(controller.store.overlayBallEnabled(), canDraw)
+                overlayBallStateJson(canDraw)
+            }
         }
+    }
+
+    private fun overlayBallStateJson(canDraw: Boolean = android.provider.Settings.canDrawOverlays(context)): JSObject {
+        val serviceActive = OverlayBallService.isRunning
+        return JSObject()
+            .put("enabled", controller.store.overlayBallEnabled())
+            .put("canDrawOverlays", canDraw)
+            .put("serviceActive", serviceActive)
+            .put("startError", OverlayBallService.lastStartFailure?.takeUnless { serviceActive })
     }
 
     /**
@@ -4460,8 +4476,7 @@ class MobileRuntimePlugin : Plugin() {
      * 与 [syncKeepAliveService] 分开：两者的启动条件互不相干，合在一起会让
      * 「只想开悬浮球」的用户被动拉起运行时保活服务。
      */
-    private fun syncOverlayBallService(enabled: Boolean) {
-        val canDraw = android.provider.Settings.canDrawOverlays(context)
+    private fun syncOverlayBallService(enabled: Boolean, canDraw: Boolean = android.provider.Settings.canDrawOverlays(context)) {
         val shouldRun = OverlayBallPolicy.shouldShowBall(enabled, canDraw)
         if (shouldRun) {
             OverlayBallService.start(context)

@@ -134,6 +134,7 @@ export const bridge = {
   openAccessibilitySettings: vi.fn(),
   getKeepAliveState: vi.fn(),
   getOverlayBallState: vi.fn(),
+  setOverlayBallEnabled: vi.fn(),
   openOverlaySettings: vi.fn(),
   getMailboxState: vi.fn(),
   getMailboxDirectory: vi.fn(),
@@ -550,6 +551,7 @@ export function beforeEachAppTest(): void {
   }))
   // 默认已授予「显示在其他应用上层」权限：与用例无关的测试不该被一个禁用开关影响。
   bridge.getOverlayBallState.mockResolvedValue({ enabled: false, canDrawOverlays: true, serviceActive: false })
+  bridge.setOverlayBallEnabled.mockImplementation((enabled: boolean) => Promise.resolve({ enabled, canDrawOverlays: true, serviceActive: enabled }))
   bridge.openOverlaySettings.mockResolvedValue(undefined)
   // 默认投递区不可用（未授予「所有文件访问」）：与真机首次安装后的状态一致。
   bridge.getMailboxState.mockResolvedValue({ ...unavailableMailbox })

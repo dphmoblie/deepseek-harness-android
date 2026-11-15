@@ -246,6 +246,7 @@ interface NativeRuntimePlugin {
   openNotificationSettings(): Promise<void>
   openApplicationSettings(): Promise<void>
   overlayBallState(): Promise<unknown>
+  setOverlayBallEnabled(options: { enabled: boolean }): Promise<unknown>
   openOverlaySettings(): Promise<void>
   mailboxState(): Promise<unknown>
   mailboxDirectory(options: { root: MailboxRoot; subdirectory?: string }): Promise<unknown>
@@ -578,6 +579,9 @@ function createNativeBridge(): RuntimeBridge {
     openNotificationSettings: () => NativeRuntime.openNotificationSettings(),
     openApplicationSettings: () => NativeRuntime.openApplicationSettings(),
     getOverlayBallState: () => NativeRuntime.overlayBallState().then(validateOverlayBallState),
+    setOverlayBallEnabled: enabled => typeof enabled === 'boolean'
+      ? NativeRuntime.setOverlayBallEnabled({ enabled }).then(validateOverlayBallState)
+      : Promise.reject(new Error('悬浮球开关格式无效')),
     openOverlaySettings: () => NativeRuntime.openOverlaySettings(),
     getMailboxState: () => NativeRuntime.mailboxState().then(validateMailboxState),
     getMailboxDirectory: (root, subdirectory) => NativeRuntime
