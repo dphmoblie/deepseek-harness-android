@@ -4952,8 +4952,14 @@ export function App() {
 
   const confirmPendingInstall = useCallback(() => {
     if (pendingInstall === null) return
+    // 对话框打开后外部仍可能进入版本/运行时操作。这里不能静默 return：
+    // 按钮看起来没反应，用户只会重复点击。
+    if (busyRef.current !== null || versionOperationBusy) {
+      notify(t("版本操作正在进行，请等待完成后再安装或更新运行环境。"), "error")
+      return
+    }
     performRuntimeInstall(pendingInstall.source, pendingInstall.bundled ? t("运行环境已更新") : t("运行环境已安装"))
-  }, [pendingInstall, performRuntimeInstall])
+  }, [pendingInstall, performRuntimeInstall, versionOperationBusy, notify])
 
   /** 版本管理页读的三块数据：都只是读，失败由各自的区块自己显示。 */
   const loadSessionSnapshots = useCallback(() => runtimeBridge.getRuntimeSessionSnapshotState(), [])

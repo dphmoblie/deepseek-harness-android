@@ -2553,7 +2553,8 @@ button:disabled {
   position: fixed;
   right: 14px;
   bottom: calc(76px + env(safe-area-inset-bottom));
-  z-index: 120;
+  /* 对话框遮罩是 200：错误提示必须压在它上面，否则「确认更新」失败后用户只看到按钮没反应。 */
+  z-index: 300;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
