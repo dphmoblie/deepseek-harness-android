@@ -131,10 +131,12 @@ class HarnessActivity : AppCompatActivity() {
         // 控制台与外壳共用同一个「是否在前台」计数器：控制台叠在外壳之上，
         // 只有两者都停了才算切到后台（用布尔标志会在关闭控制台时误判，见 AppForeground 的说明）。
         AppForeground.onActivityStarted()
+        io.deepseekharness.mobile.runtime.TaskNotification.clear(this)
     }
 
     override fun onStop() {
         AppForeground.onActivityStopped()
+        io.deepseekharness.mobile.runtime.TaskNotification.refreshTaskStatus(this)
         super.onStop()
     }
 

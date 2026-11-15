@@ -42,9 +42,8 @@ import java.security.MessageDigest
  * 桥按白名单命令执行：自动创建一次性设备 Shell 会话 -> DeviceCommandRunner -> 关闭。
  * 认证：Bearer token（App 生成并注入容器环境 DSH_DEVICE_BRIDGE_TOKEN）。
  *
- * 不经过 Shell 的内建命令：`automationPolicy`（自动化授权闸门）、`deviceCapabilities`（统一能力清单）与 `notify-turn-complete`
- * （访客侧「一轮任务已完成」的收单点，只触发固定文案的通知，见
- * `TurnCompletionPolicy`）。后者受严格参数校验与限流约束，限流命中静默忽略。
+ * 不经过 Shell 的内建命令包括自动化授权、设备能力和 `notify-turn-start` / `notify-turn-complete`。
+ * 任务信号只更新状态与固定文案通知，参数由 `TurnCompletionPolicy` 校验；完成提醒另有限流。
  *
  * 注意：Android 运行时没有 com.sun.net.httpserver，这里用 ServerSocket 实现
  * 极简 HTTP/1.1 服务（只支持单个 POST 端点 + 固定 Content-Length 请求体）。
@@ -328,18 +327,20 @@ class DeviceBridgeServer(
                         respondResult(output, runOneShot(DeviceCommand.SHELL, plan.command), plan.displayId)
                         return
                     }
-                    // 访客侧「一轮任务已完成」的收单点（登记册 §5.5）。
+                    // 访客侧任务状态的收单点（登记册 §5.5）。
                     // 这条命令**只**能触发一条固定文案的通知，不读会话内容、不返回任何用户数据：
                     // 访客进程因此无法用它在通知栏或锁屏上写任意文本。
                     // 限流命中一律静默忽略（ok=true, accepted=false），不报错刷屏。
-                    if (commandName == "notify-turn-complete") {
+                    if (commandName == "notify-turn-complete" || commandName == "notify-turn-start") {
                         if (param.length > TurnCompletionPolicy.MAX_PARAM_CHARS) {
-                            throw RuntimeFailure("DEVICE_COMMAND_INVALID", "任务完成事件参数过长")
+                            throw RuntimeFailure("DEVICE_COMMAND_INVALID", "任务状态事件参数过长")
                         }
-                        val receipt = TaskNotification.recordTurnCompleted(
-                            applicationContextOrNull(),
-                            param,
-                        )
+                        val context = applicationContextOrNull()
+                        val receipt = if (commandName == "notify-turn-start") {
+                            TaskNotification.recordTurnStarted(context, param)
+                        } else {
+                            TaskNotification.recordTurnCompleted(context, param)
+                        }
                         respondResult(output, io.deepseekharness.mobile.shizuku.DeviceCommandResult(
                             ok = receipt.ok,
                             exitCode = if (receipt.ok) 0 else 1,

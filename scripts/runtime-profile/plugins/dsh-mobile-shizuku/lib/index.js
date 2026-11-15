@@ -676,7 +676,7 @@ function virtualAction(args) {
 export function apply(ctx) {
   ctx.systemPrompt.section({ name: 'tool:mobile-shizuku', order: 1800, text: PROMPT })
 
-  // 一轮任务收口的通知：订阅 dsh 会话的 turn/end 并尽力而为地上报给原生，
+  // 一轮任务开始／收口的通知：订阅 dsh 的 turn/start、turn/end 并尽力而为地上报给原生，
   // 由原生决定前台/后台怎么提示。放在最前面注册，工具审批钩子仍是最后注册的那个。
   installTurnSignal(ctx, { bridgeConfig })
 

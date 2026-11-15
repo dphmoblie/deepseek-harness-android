@@ -144,6 +144,16 @@
     <string name="task_notification_imported_text">已從投遞區匯入 %1$d 項</string>
     <!-- 「任務完成」：由訪客內 dsh 的 turn/end 經裝置橋轉達，原生側只發固定文案。帶合併計數：連續的幾輪會合併成一条，%1$d 是本次合併的條數（至少 1）。 -->
     <string name="task_notification_turn_completed_title">任務已完成</string>
+    <string name="task_notification_active_channel_name">AI 任務進度</string>
+    <string name="task_notification_active_channel_description">在背景顯示 AI 任務執行狀態；支援的系統可在頂部醒目顯示</string>
+    <string name="task_notification_active_title">AI 正在處理任務</string>
+    <string name="task_notification_active_text">正在執行 %1$d 項任務，點按返回對話</string>
+    <string name="task_notification_active_short">執行中</string>
+    <string name="task_notification_turn_error_title">AI 任務發生錯誤</string>
+    <string name="task_notification_turn_aborted_title">AI 任務已取消</string>
+    <string name="task_notification_turn_blocked_title">AI 任務受阻</string>
+    <string name="task_notification_turn_ended_title">AI 任務已結束</string>
+    <string name="task_notification_turn_ended_text">有 %1$d 項任務已結束，點按查看結果</string>
     <string name="task_notification_turn_completed_text">已完成 %1$d 項任務，點按返回對話介面</string>
 
     <!-- 對話小窗的縮放手柄：拖動它改變小窗大小，右下角內縮 4dp。 -->

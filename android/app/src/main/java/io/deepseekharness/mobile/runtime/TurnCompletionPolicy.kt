@@ -1,13 +1,13 @@
 package io.deepseekharness.mobile.runtime
 
 /**
- * 访客侧「任务完成」事件在原生侧的收单规则（登记册 §5.5 / §5.6-C）。
+ * 访客侧任务开始与收口事件在原生侧的收单规则（登记册 §5.5 / §5.6-C）。
  *
  * 这个类的全部价值是**把不受信输入挡在通知系统之外**：桥上的请求来自容器内的访客进程，
- * 它只被允许说一句「某一轮结束了」，绝不允许决定通知的内容、频率或对象。
+ * 它只被允许报告一轮任务的开始或收口，绝不允许决定通知的内容、频率或对象。
  * 因此这里做三件事，全部是纯函数，可以在 JVM 单测里逐条钉住：
  *
- *  1. 参数校验：只接受空串或一个极小 JSON（会话摘要 + 固定 reason），且长度封顶；
+ *  1. 参数校验：只接受受控字段的极小 JSON；旧版完成事件也允许空串，长度封顶；
  *  2. 限流：同秒上限与最小间隔，命中即**静默忽略**（返回受理，不发通知，不报错）；
  *  3. 事件序号：给上层一个「刚才确实受理了一次完成」的单调计数，用于前台提示。
  *
@@ -15,8 +15,11 @@ package io.deepseekharness.mobile.runtime
  */
 internal object TurnCompletionPolicy {
 
-    /** `param` 的硬长度上限（字符）。极小 JSON 的合法形态最长远小于它。 */
-    const val MAX_PARAM_CHARS = 96
+    /** `param` 的硬长度上限（字符），容纳会话摘要、轮次、固定原因与运行代次。 */
+    const val MAX_PARAM_CHARS = 128
+
+    /** JavaScript 的安全整数上限；访客侧 turn 来自 JS，原生不能接受可能失真的数字。 */
+    private const val MAX_SAFE_INTEGER = 9_007_199_254_740_991L
 
     /** 同一秒内最多受理的完成事件数；超出的**静默忽略**。 */
     const val MAX_CALLS_PER_SECOND = 3
@@ -25,7 +28,7 @@ internal object TurnCompletionPolicy {
     const val MIN_INTERVAL_MS = 1_000L
 
     /** 允许的 `reason`。固定集合，访客侧不得自造。 */
-    val REASON_CODES = setOf("turn-end", "turn-error")
+    val REASON_CODES = setOf("turn-end", "turn-error", "turn-aborted", "turn-blocked")
 
     /** `sessions` 的上限：一轮里最多允许声称完成这么多件事。 */
     const val MAX_SESSIONS = 20
@@ -33,12 +36,15 @@ internal object TurnCompletionPolicy {
     /** 会话摘要：16 位小写十六进制。不是路径、标题、cwd 或正文。 */
     private val sessionDigestPattern = Regex("^[0-9a-f]{16}$")
 
-    private val reasonPattern = Regex("^[a-z][a-z-]{0,15}$")
-
     /** 参数校验结论。 */
     sealed interface Parsed {
         /** 合法参数：`session` 为 null 表示这次事件不带会话摘要。 */
-        data class Valid(val session: String?) : Parsed
+        data class Valid(
+            val session: String?,
+            val turn: Long? = null,
+            val reason: String? = null,
+            val run: String? = null,
+        ) : Parsed
 
         /** 非法参数：不予受理，也不落任何原文。 */
         data object Invalid : Parsed
@@ -90,6 +96,13 @@ internal object TurnCompletionPolicy {
      */
     fun parseParam(param: String): Parsed {
         if (param.isEmpty()) return Parsed.Valid(null)
+        return parseJson(param, requireStart = false)
+    }
+
+    /** 开始事件必须带齐会话摘要、轮次和固定的 `turn-start` 原因；run 仅供新访客侧可选传入。 */
+    fun parseStartParam(param: String): Parsed = parseJson(param, requireStart = true)
+
+    private fun parseJson(param: String, requireStart: Boolean): Parsed {
         if (param.length > MAX_PARAM_CHARS) return Parsed.Invalid
         val json = try {
             org.json.JSONObject(param)
@@ -101,20 +114,28 @@ internal object TurnCompletionPolicy {
         val session = json.opt("session")
         val reason = json.opt("reason")
         val sessions = json.opt("sessions")
-        if (session != null && (session !is String || !sessionDigestPattern.matches(session))) {
-            return Parsed.Invalid
+        val turn = json.opt("turn")
+        val run = json.opt("run")
+        if (session != null && (session !is String || !sessionDigestPattern.matches(session))) return Parsed.Invalid
+        if (reason != null && (reason !is String ||
+                (if (requireStart) reason != START_REASON else reason !in REASON_CODES))) return Parsed.Invalid
+        if (sessions != null && (sessions !is Int || sessions !in 1..MAX_SESSIONS)) return Parsed.Invalid
+        val parsedTurn = if (turn == null) null else parseTurn(turn) ?: return Parsed.Invalid
+        if (parsedTurn != null && session !is String) return Parsed.Invalid
+        if (run != null && (run !is String || !sessionDigestPattern.matches(run) || session !is String || parsedTurn == null)) return Parsed.Invalid
+        if (requireStart) {
+            if (session !is String || parsedTurn == null || reason != START_REASON || sessions != null) return Parsed.Invalid
         }
-        if (reason != null && (reason !is String || !reasonPattern.matches(reason) || reason !in REASON_CODES)) {
-            return Parsed.Invalid
-        }
-        // `sessions` 只用于让访客侧说明「这一轮里完成了几件事」，因此只接受一个小整数。
-        // 它不进通知文案、不进审计，只是给未来可能的聚合留一个受控入口。
-        if (sessions != null && (sessions !is Int || sessions !in 1..MAX_SESSIONS)) {
-            return Parsed.Invalid
-        }
-        return Parsed.Valid(session as String?)
+        return Parsed.Valid(session as String?, parsedTurn, reason as String?, run as String?)
+    }
+
+    private fun parseTurn(value: Any?): Long? = when (value) {
+        is Int -> value.toLong().takeIf { it >= 0L }
+        is Long -> value.takeIf { it in 0L..MAX_SAFE_INTEGER }
+        else -> null
     }
 
     private const val SECOND_MS = 1_000L
-    private val KEYS = setOf("session", "reason", "sessions")
+    private const val START_REASON = "turn-start"
+    private val KEYS = setOf("session", "reason", "sessions", "turn", "run")
 }

@@ -519,11 +519,15 @@ class RuntimeStore(context: Context) {
             if (access.port !in 1024..65535 || !RuntimeSecretPolicy.TOKEN_PATTERN.matches(access.token)) {
                 throw RuntimeFailure("DEVICE_BRIDGE_INVALID", "设备桥临时连接信息无效")
             }
+            if (access.taskRunId != null && !Regex("^[0-9a-f]{16}$").matches(access.taskRunId)) {
+                throw RuntimeFailure("DEVICE_BRIDGE_INVALID", "任务状态代次无效")
+            }
         }
         val ephemeralSecrets = linkedMapOf<String, String>().apply {
             harnessAuthToken?.let { put(MOBILE_AUTH_TOKEN_ENV, it) }
             browserToken?.let { put(MOBILE_BROWSER_TOKEN_ENV, it) }
             deviceBridgeAccess?.let { put(DEVICE_BRIDGE_TOKEN_ENV, it.token) }
+            deviceBridgeAccess?.taskRunId?.let { put("DSH_TASK_RUN_ID", it) }
         }
         val modelCredentials = modelCredentialValues()
         val deliveredByFile = modelCredentials.isNotEmpty() && writeHarnessCredentials(modelCredentials)

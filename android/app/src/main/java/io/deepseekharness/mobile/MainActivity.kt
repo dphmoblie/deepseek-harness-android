@@ -89,10 +89,12 @@ class MainActivity : BridgeActivity() {
     override fun onStart() {
         super.onStart()
         AppForeground.onActivityStarted()
+        io.deepseekharness.mobile.runtime.TaskNotification.clear(this)
     }
 
     override fun onStop() {
         AppForeground.onActivityStopped()
+        io.deepseekharness.mobile.runtime.TaskNotification.refreshTaskStatus(this)
         super.onStop()
     }
 

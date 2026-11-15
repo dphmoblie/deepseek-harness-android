@@ -107,6 +107,19 @@ def generateAuthPreloadAsset = tasks.register('generateAuthPreloadAsset', Sync) 
     }
 }
 
+def turnSignalSource = new File(appSourceRoot, 'scripts/runtime-profile/plugins/dsh-mobile-shizuku/lib/turn-signal.js')
+if (!turnSignalSource.isFile() || turnSignalSource.length() == 0L) {
+    throw new GradleException("Required mobile turn signal is missing: ${turnSignalSource}")
+}
+def generatedTurnSignalAssetsDirectory = layout.buildDirectory.dir('generated/assets/turnSignal')
+def generateTurnSignalAsset = tasks.register('generateTurnSignalAsset', Sync) {
+    into(generatedTurnSignalAssetsDirectory)
+    from(turnSignalSource) {
+        into('support')
+        rename { 'mobile-turn-signal.js' }
+    }
+}
+
 android {
     namespace 'io.deepseekharness.mobile'
     compileSdk 35
@@ -156,6 +169,7 @@ android {
         main {
             assets.srcDir(generatedLegalAssetsDirectory)
             assets.srcDir(generatedAuthPreloadAssetsDirectory)
+            assets.srcDir(generatedTurnSignalAssetsDirectory)
         }
     }
 
@@ -231,7 +245,7 @@ kotlin {
 }
 
 tasks.named('preBuild').configure {
-    dependsOn(generateLegalAssets, generateAuthPreloadAsset)
+    dependsOn(generateLegalAssets, generateAuthPreloadAsset, generateTurnSignalAsset)
 }
 
 tasks.configureEach { task ->

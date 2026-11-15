@@ -158,6 +158,16 @@
       带合并计数：连续的几轮会合并成一条，%1$d 是本次合并的条数（至少 1）。
     -->
     <string name="task_notification_turn_completed_title">任务已完成</string>
+    <string name="task_notification_active_channel_name">AI 任务进度</string>
+    <string name="task_notification_active_channel_description">在后台显示 AI 任务运行状态；支持的系统可在顶部突出显示</string>
+    <string name="task_notification_active_title">AI 正在处理任务</string>
+    <string name="task_notification_active_text">正在运行 %1$d 项任务，点按返回对话</string>
+    <string name="task_notification_active_short">运行中</string>
+    <string name="task_notification_turn_error_title">AI 任务出错</string>
+    <string name="task_notification_turn_aborted_title">AI 任务已取消</string>
+    <string name="task_notification_turn_blocked_title">AI 任务受阻</string>
+    <string name="task_notification_turn_ended_title">AI 任务已结束</string>
+    <string name="task_notification_turn_ended_text">有 %1$d 项任务已结束，点按查看结果</string>
     <string name="task_notification_turn_completed_text">已完成 %1$d 项任务，点按回到对话界面</string>
 
     <!-- 对话小窗的缩放手柄：拖动它改变小窗大小，右下角内缩 4dp。 -->

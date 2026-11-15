@@ -20,7 +20,7 @@ data class ProotBindMount(
     val target: String = source,
 )
 
-data class DeviceBridgeAccess(val port: Int, val token: String)
+data class DeviceBridgeAccess(val port: Int, val token: String, val taskRunId: String? = null)
 
 /**
  * 组装一次 PRoot argv 所需的**全部**输入。

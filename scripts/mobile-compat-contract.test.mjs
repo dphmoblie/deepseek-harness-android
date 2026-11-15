@@ -325,6 +325,32 @@ test('installed runtimes receive the APK auth preload before every launch', asyn
   assert.match(preload, /DSH_TOKEN_LINE/)
 })
 
+test('installed runtimes receive the APK turn signal before every launch', async () => {
+  const build = await readFile(resolve(appRoot, 'android/app/build.gradle'), 'utf8')
+  const resolver = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/runtime/RuntimeLaunchResolver.kt'), 'utf8')
+  const installer = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/runtime/MobileAuthPreload.kt'), 'utf8')
+  const plugin = await readFile(resolve(appRoot, 'scripts/runtime-profile/plugins/dsh-mobile-shizuku/lib/index.js'), 'utf8')
+  const lock = await readFile(resolve(appRoot, 'scripts/runtime-profile/pnpm-lock.yaml'), 'utf8')
+  const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
+
+  assert.match(build, /scripts\/runtime-profile\/plugins\/dsh-mobile-shizuku\/lib\/turn-signal\.js/)
+  assert.match(build, /generateTurnSignalAsset/)
+  assert.match(build, /rename \{ 'mobile-turn-signal\.js' \}/)
+  assert.match(build, /assets\.srcDir\(generatedTurnSignalAssetsDirectory\)/)
+  assert.match(build, /dependsOn\(generateLegalAssets, generateAuthPreloadAsset, generateTurnSignalAsset\)/)
+  assert.match(resolver, /MobileAuthPreload\.installTurnSignal\(store\.currentRoot\)/)
+  assert.match(resolver, /assets\.open\(MobileAuthPreload\.TURN_SIGNAL_ASSET_PATH\)/)
+  assert.match(installer, /support\/mobile-turn-signal\.js/)
+  // workspace 包在 rootfs 中的真实目录固定；不沿 profiles/node_modules 的链接改写其它位置。
+  assert.match(lock, /version: link:plugins\/dsh-mobile-shizuku/)
+  assert.match(builder, /args\.dsh_root,\s+"opt\/dsh"/)
+  assert.match(installer, /opt\/dsh\/plugins\/dsh-mobile-shizuku\/lib\/turn-signal\.js/)
+  assert.match(installer, /install\(root, TURN_SIGNAL_GUEST_PATH,/)
+  assert.match(installer, /ATOMIC_MOVE/)
+  assert.match(plugin, /import \{ installTurnSignal \} from '\.\/turn-signal\.js'/)
+  assert.match(plugin, /installTurnSignal\(ctx, \{ bridgeConfig \}\)/)
+})
+
 test('embedded runtime exposes its pinned package manager without host Node.js', async () => {
   const builder = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
   const verifier = await readFile(resolve(appRoot, 'scripts/verify-bundle.py'), 'utf8')

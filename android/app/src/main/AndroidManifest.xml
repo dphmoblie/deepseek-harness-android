@@ -22,6 +22,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- 目标应用副屏预览需要独立的前台服务；通知用于让用户随时结束会话。 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Android 16 实时动态所需的普通权限；是否在状态栏突出显示仍由系统与用户设置决定。
+         旧系统忽略此声明，任务状态继续使用标准通知。 -->
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
     <!-- 存储访问。

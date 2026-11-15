@@ -137,6 +137,16 @@
     <string name="task_notification_imported_title">Imported into the workspace</string>
     <string name="task_notification_imported_text">Imported %1$d entries from the inbox</string>
     <string name="task_notification_turn_completed_title">Task completed</string>
+    <string name="task_notification_active_channel_name">AI task progress</string>
+    <string name="task_notification_active_channel_description">Shows AI tasks running in the background, with a prominent status on supported systems</string>
+    <string name="task_notification_active_title">AI is working</string>
+    <string name="task_notification_active_text">Running tasks: %1$d. Tap to return to the chat.</string>
+    <string name="task_notification_active_short">Working</string>
+    <string name="task_notification_turn_error_title">AI task failed</string>
+    <string name="task_notification_turn_aborted_title">AI task cancelled</string>
+    <string name="task_notification_turn_blocked_title">AI task blocked</string>
+    <string name="task_notification_turn_ended_title">AI task ended</string>
+    <string name="task_notification_turn_ended_text">Ended tasks: %1$d. Tap to view the results.</string>
     <string name="task_notification_turn_completed_text">Completed tasks: %1$d. Tap to return to the chat screen.</string>
     <string name="overlay_conversation_resize_description">Drag to resize the chat window</string>
 

@@ -292,6 +292,18 @@ class RuntimeLaunchResolver(
         MobileAuthPreload.install(store.currentRoot) {
             appContext.assets.open(MobileAuthPreload.ASSET_PATH)
         }
+        // 插件缺失或不可写只影响提醒，不能因此阻止 Harness 启动。
+        try {
+            MobileAuthPreload.installTurnSignal(store.currentRoot) {
+                appContext.assets.open(MobileAuthPreload.TURN_SIGNAL_ASSET_PATH)
+            }
+        } catch (_: RuntimeFailure) {
+            store.diagnostics.record(
+                DiagnosticLevel.WARN,
+                DiagnosticEvent.RUNTIME_PHASE,
+                mapOf("phase" to "preflight", "result" to "skipped", "reason" to "turn-signal-unavailable"),
+            )
+        }
         HarnessVersions.prepareDirectories(store)
         // 沙箱运行器脚本随每次启动刷新：脚本必须与当前 APK 的 Kotlin 侧常量同版本
         // （访客路径、绑定点、失败签名都在两边各写了一份）。

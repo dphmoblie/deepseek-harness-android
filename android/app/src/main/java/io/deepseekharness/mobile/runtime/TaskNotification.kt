@@ -27,8 +27,7 @@ import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
  * `IMPORTANCE_LOW`；任务通知的价值恰恰在于「离开应用后仍能得知」。塞进同一个通道，
  * 用户就只能同时接受或同时关闭两者——那正是 Android 通道模型要避免的事。
  *
- * **不常驻、可划掉**：没有进行中的任务时通知不该存在；做成常驻就等于第二个保活通知，
- * 会把通道语义搞混。
+ * AI 执行期间使用独立的低打扰通知；结束后撤下，再按原有策略投递结果提醒。
  *
  * **锁屏可见**：每条通知都设 `VISIBILITY_PUBLIC`。通知文案全部来自固定字符串资源，
  * 不含地址、端口、凭据、路径、会话内容——「锁屏能看到」因此不额外泄露任何东西，
@@ -66,6 +65,9 @@ internal object TaskNotification {
 
     /** 重启后 Shizuku 自动连接失败的独立提醒，避免覆盖 Harness 状态通知。 */
     private const val SHIZUKU_RECONNECT_NOTIFICATION_ID = 0x44534805
+    private const val TURN_ACTIVE_NOTIFICATION_ID = 0x44534806
+    private const val ACTIVE_CHANNEL_ID = "dsh_active_tasks"
+    private val ACTIVE_TOKEN = Any()
 
     /** 合并窗口定时器的 tag（`Handler.postAtTime` 的重排标识，只在本对象内使用）。 */
     private val FLUSH_TOKEN = Any()
@@ -105,6 +107,79 @@ internal object TaskNotification {
         private set
 
     private val turnCompletedLock = Any()
+    private val turnActivity = TurnActivityState()
+    private var harnessRunId: String? = null
+    private var pendingOutcome: String? = null
+
+    fun activeTurnSnapshot(): TurnActivityState.Snapshot = synchronized(turnCompletedLock) {
+        turnActivity.snapshot(SystemClock.elapsedRealtime())
+    }
+
+    /** 每次 Harness 启动更换代次，停止后的迟到请求不能点亮新一轮通知。 */
+    fun setHarnessRun(context: Context, runId: String?) = synchronized(turnCompletedLock) {
+        harnessRunId = runId
+        turnActivity.clear()
+        clearPendingCompletion()
+        refreshTaskStatus(context)
+    }
+
+    /** 稍后重查前后台，避免 Activity 切换和旋转时闪出通知。 */
+    fun refreshTaskStatus(context: Context) = synchronized(turnCompletedLock) {
+        val app = context.applicationContext
+        mainHandler.removeCallbacksAndMessages(ACTIVE_TOKEN)
+        mainHandler.postAtTime({ updateTaskStatus(app) }, ACTIVE_TOKEN, SystemClock.uptimeMillis() + 100L)
+    }
+
+    private fun updateTaskStatus(context: Context): Unit = synchronized(turnCompletedLock) {
+        try {
+            val manager = NotificationManagerCompat.from(context)
+            val now = SystemClock.elapsedRealtime()
+            val active = turnActivity.snapshot(now)
+            if (harnessRunId == null || active.activeCount == 0 || AppForeground.isForeground() ||
+                !manager.areNotificationsEnabled()) {
+                manager.cancel(TURN_ACTIVE_NOTIFICATION_ID)
+                return@synchronized
+            }
+            val localized = AppLanguage.localizedContext(context)
+            val channel = NotificationChannel(
+                ACTIVE_CHANNEL_ID,
+                localized.getString(R.string.task_notification_active_channel_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = localized.getString(R.string.task_notification_active_channel_description)
+                setSound(null, null)
+                enableVibration(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+            }
+            context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+            val builder = NotificationCompat.Builder(localized, ACTIVE_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_keep_alive)
+                .setContentTitle(localized.getString(R.string.task_notification_active_title))
+                .setContentText(localized.getString(R.string.task_notification_active_text, active.activeCount))
+                .setContentIntent(openAppIntent(context))
+                .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setProgress(0, 0, true)
+                .setUsesChronometer(true)
+                .setWhen(System.currentTimeMillis() - (now - (active.startedAtMs ?: now)).coerceAtLeast(0L))
+            try {
+                manager.notify(TURN_ACTIVE_NOTIFICATION_ID, TaskLiveNotificationCompat.apply(
+                    builder, localized.getString(R.string.task_notification_active_short),
+                ).build())
+            } catch (_: SecurityException) {
+                // 权限在检查与投递之间被撤销时，任务状态仍由界面显示。
+                return@synchronized
+            }
+            // 收口信号丢失时也有上限；不轮询、不启动额外服务。
+            val delay = ((active.startedAtMs ?: now) + TurnActivityState.STALE_AFTER_MS - now).coerceAtLeast(1L)
+            mainHandler.postAtTime({ updateTaskStatus(context) }, ACTIVE_TOKEN, SystemClock.uptimeMillis() + delay)
+        } catch (_: Throwable) {
+            // 通知能力由系统控制，展示失败不能影响任务执行。
+        }
+    }
 
     /**
      * 收单点的**返回契约**：桥只认这个，不解析文案。
@@ -124,18 +199,16 @@ internal object TaskNotification {
         val queued: Boolean,
     )
 
-    /**
-     * 受理一次「任务完成」事件，并（在允许时）发出完成通知。
-     *
-     * 这是 `notify-turn-complete` 命令的**唯一**收单入口：校验参数 → 限流 → 处理通知
-     * → 推进进程内状态 → 写审计。任何一步失败都返回受控结果，绝不抛出——
-     * 桥上的异常会终结那条连接，而这次事件本身只是「提醒」，不值得影响 Harness。
-     */
-    fun recordTurnCompleted(context: Context?, param: String): TurnCompletionReceipt {
-        val parsed = TurnCompletionPolicy.parseParam(param)
+    /** 开始只更新状态；收口先关闭活动任务，再决定是否提醒。 */
+    fun recordTurnStarted(context: Context?, param: String): TurnCompletionReceipt = recordTurn(context, param, true)
+
+    fun recordTurnCompleted(context: Context?, param: String): TurnCompletionReceipt = recordTurn(context, param, false)
+
+    private fun recordTurn(context: Context?, param: String, started: Boolean): TurnCompletionReceipt = synchronized(turnCompletedLock) {
+        val parsed = if (started) TurnCompletionPolicy.parseStartParam(param) else TurnCompletionPolicy.parseParam(param)
         if (parsed is TurnCompletionPolicy.Parsed.Invalid) {
             audit(context, AuditResult.FAILED, "TURN_NOTIFY_INVALID")
-            return TurnCompletionReceipt(
+            return@synchronized TurnCompletionReceipt(
                 ok = false,
                 errorCode = "TURN_NOTIFY_INVALID",
                 accepted = false,
@@ -143,8 +216,23 @@ internal object TaskNotification {
                 queued = false,
             )
         }
+        parsed as TurnCompletionPolicy.Parsed.Valid
+        if (context == null) {
+            return@synchronized TurnCompletionReceipt(false, "TURN_NOTIFY_UNAVAILABLE", false, null, false)
+        }
+        if (harnessRunId == null || (parsed.turn != null && parsed.run != harnessRunId)) {
+            return@synchronized TurnCompletionReceipt(true, null, false, null, false)
+        }
         val now = SystemClock.elapsedRealtime()
-        val dropped = synchronized(turnCompletedLock) { turnCompletionState.claim(now) }
+        if (parsed.session != null && parsed.turn != null) {
+            if (!turnActivity.record(parsed.session, parsed.turn, started, now)) {
+                return@synchronized TurnCompletionReceipt(true, null, false, null, false)
+            }
+            // 先收口再限流：即使结果提醒被限流，也必须撤下进行中状态。
+            refreshTaskStatus(context)
+        }
+        if (started) return@synchronized TurnCompletionReceipt(true, null, true, null, false)
+        val dropped = turnCompletionState.claim(now)
         if (dropped != null) {
             // 限流命中：静默忽略。审计只记受控码，请求原文一律不落。
             audit(
@@ -156,7 +244,7 @@ internal object TaskNotification {
                     "TURN_NOTIFY_RATE_LIMITED"
                 },
             )
-            return TurnCompletionReceipt(
+            return@synchronized TurnCompletionReceipt(
                 ok = true,
                 errorCode = null,
                 accepted = false,
@@ -164,22 +252,9 @@ internal object TaskNotification {
                 queued = false,
             )
         }
-        if (context == null) {
-            // 桥拿不到应用上下文（理论上只在进程启动极早期发生）：不发通知，不算受理。
-            audit(null, AuditResult.FAILED, "TURN_NOTIFY_UNAVAILABLE")
-            return TurnCompletionReceipt(
-                ok = false,
-                errorCode = "TURN_NOTIFY_UNAVAILABLE",
-                accepted = false,
-                dropped = null,
-                queued = false,
-            )
-        }
-        val queued = postTurnCompleted(context, now)
-        synchronized(turnCompletedLock) {
-            turnCompletionSequence += 1
-            lastTurnCompletedAtMillis = System.currentTimeMillis()
-        }
+        val queued = postTurnCompleted(context, now, parsed.reason)
+        turnCompletionSequence += 1
+        lastTurnCompletedAtMillis = System.currentTimeMillis()
         audit(
             context,
             AuditResult.SUCCEEDED,
@@ -189,7 +264,7 @@ internal object TaskNotification {
                 else -> "TURN_NOTIFY_COALESCED"
             },
         )
-        return TurnCompletionReceipt(
+        TurnCompletionReceipt(
             ok = true,
             errorCode = null,
             accepted = true,
@@ -288,8 +363,10 @@ internal object TaskNotification {
      * 返回 false 有两种含义：前台抑制（什么都不做），或已排入合并窗口（稍后会发）。
      * 调用方只把它用于审计详情，不参与任何决策。
      */
-    private fun postTurnCompleted(context: Context, nowMs: Long): Boolean {
+    private fun postTurnCompleted(context: Context, nowMs: Long, reason: String?): Boolean {
         if (AppForeground.isForeground()) return false
+        val outcome = reason ?: "turn-end"
+        pendingOutcome = if (turnCompletedCoalescer.pending() == 0) outcome else pendingOutcome.takeIf { it == outcome }
         val windowStartedAt = turnCompletedCoalescer.onEvent(nowMs)
         val delayMs = TurnCompletionNotificationPolicy.delayUntilNotify(
             nowMs = nowMs,
@@ -303,14 +380,9 @@ internal object TaskNotification {
         return true
     }
 
-    /**
-     * 排一次「到点把这一批发出去」。
-     *
-     * 每次事件都重排、**不取消**上一次的排程：取消再排会把「静默期顺延」和
-     * 「窗口封顶」两条规则的先后次序交给调度器决定，而这两条必须由策略说了算。
-     * 重复的到点回调由 `pending()` 与 `canFlush()` 兜住——没有待发批次时直接返回。
-     */
+    /** 只保留策略算出的下一次投递，避免旧回调越过新事件的静默期。 */
     private fun scheduleFlush(context: Context, delayMs: Long) {
+        mainHandler.removeCallbacksAndMessages(FLUSH_TOKEN)
         mainHandler.postAtTime(
             { flushTurnCompleted(context) },
             FLUSH_TOKEN,
@@ -325,10 +397,10 @@ internal object TaskNotification {
      * 整段包在 try 里：这条路径由定时器驱动，异常没有调用方可以接住，
      * 而它只是提醒，绝不能因此终结进程。
      */
-    private fun flushTurnCompleted(context: Context) {
+    private fun flushTurnCompleted(context: Context) = synchronized(turnCompletedLock) {
         try {
             val count = turnCompletedCoalescer.pending()
-            if (count <= 0) return
+            if (count <= 0) return@synchronized
             val now = SystemClock.elapsedRealtime()
             if (!TurnCompletionNotificationPolicy.canFlush(now, lastTurnCompletedPostedAtMs.takeIf { it > 0L })) {
                 scheduleFlush(
@@ -338,24 +410,33 @@ internal object TaskNotification {
                         lastTurnCompletedPostedAtMs.takeIf { it > 0L },
                     ),
                 )
-                return
+                return@synchronized
             }
             // 用户已经在看着界面：不发。批次保留仍会在回到前台时被 clear() 撤掉，
             // 但这里先清掉待发状态，避免用户切回后台时突然收到一条「刚完成」。
             if (AppForeground.isForeground()) {
-                turnCompletedCoalescer.clear()
-                return
+                clearPendingCompletion()
+                return@synchronized
             }
             val manager = NotificationManagerCompat.from(context)
             if (!manager.areNotificationsEnabled()) {
-                turnCompletedCoalescer.clear()
-                return
+                clearPendingCompletion()
+                return@synchronized
             }
             val localized = AppLanguage.localizedContext(context)
             ensureChannel(localized)
             val merged = TurnCompletionNotificationPolicy.mergedCount(count)
-            val notification = build(localized, R.string.task_notification_turn_completed_title)
-                .setContentText(localized.getString(R.string.task_notification_turn_completed_text, merged))
+            val title = when (pendingOutcome) {
+                "turn-end" -> R.string.task_notification_turn_completed_title
+                "turn-error" -> R.string.task_notification_turn_error_title
+                "turn-aborted" -> R.string.task_notification_turn_aborted_title
+                "turn-blocked" -> R.string.task_notification_turn_blocked_title
+                else -> R.string.task_notification_turn_ended_title
+            }
+            val text = if (pendingOutcome == "turn-end") R.string.task_notification_turn_completed_text
+                else R.string.task_notification_turn_ended_text
+            val notification = build(localized, title)
+                .setContentText(localized.getString(text, merged))
                 // 完成通知带时间戳：用户在工作间隙瞄一眼锁屏，最想知道的就是「多久之前完成的」。
                 .setShowWhen(true)
                 .setWhen(System.currentTimeMillis())
@@ -369,10 +450,16 @@ internal object TaskNotification {
             } catch (_: SecurityException) {
                 // 权限在检查与投递之间被撤销：通知丢了不影响运行时状态本身。
             }
-            turnCompletedCoalescer.clear()
+            clearPendingCompletion()
         } catch (_: Throwable) {
-            turnCompletedCoalescer.clear()
+            clearPendingCompletion()
         }
+    }
+
+    private fun clearPendingCompletion() {
+        mainHandler.removeCallbacksAndMessages(FLUSH_TOKEN)
+        turnCompletedCoalescer.clear()
+        pendingOutcome = null
     }
 
     private fun postWithCount(context: Context, titleRes: Int, textRes: Int, count: Int) {
@@ -445,11 +532,14 @@ internal object TaskNotification {
     }
 
     /** 用户回到应用即清掉：应用已经在前台时，这条通知没有存在价值。 */
-    fun clear(context: Context) {
+    fun clear(context: Context) = synchronized(turnCompletedLock) {
+        clearPendingCompletion()
         val manager = NotificationManagerCompat.from(context)
         manager.cancel(NOTIFICATION_ID)
         manager.cancel(TURN_COMPLETED_NOTIFICATION_ID)
         manager.cancel(SHIZUKU_RECONNECT_NOTIFICATION_ID)
+        manager.cancel(TURN_ACTIVE_NOTIFICATION_ID)
+        refreshTaskStatus(context)
     }
 
     /**

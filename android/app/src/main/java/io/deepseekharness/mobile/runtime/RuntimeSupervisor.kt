@@ -175,6 +175,7 @@ class RuntimeSupervisor(
 
         val password = generateToken()
         val browserToken = generateToken()
+        val taskRunId = java.util.UUID.randomUUID().toString().replace("-", "").take(16)
         val launch = try {
             val configuredProviders = store.providerApiKeys().keys
             val providerPatchPath = store.prepareProviderPatch(configuredProviders)
@@ -187,7 +188,7 @@ class RuntimeSupervisor(
                 harnessEntrypoint,
                 password,
                 browserToken,
-                deviceBridgeAccess,
+                deviceBridgeAccess?.copy(taskRunId = taskRunId),
                 startCancellation::isRequested,
             )
         } catch (failure: RuntimeFailure) {
@@ -209,6 +210,8 @@ class RuntimeSupervisor(
                 "count" to credentialCount.toString(),
             ),
         )
+        // 在进程真正可见前登记代次，避免 dsh 启动后立即产生的第一轮信号落在空窗口。
+        TaskNotification.setHarnessRun(appContext, taskRunId)
         val process = try {
             ProcessBuilder(harnessLaunchArgv(launch.argv))
                 .directory(store.currentRoot)
@@ -283,6 +286,7 @@ class RuntimeSupervisor(
                 status.refreshIdle()
             }
         } catch (failure: Throwable) {
+            TaskNotification.setHarnessRun(appContext, null)
             // 非受控异常（编程错误、系统异常）同样不能继续被缓存信任。
             launchResolver.invalidateGuestVerification()
             throw failure
@@ -314,6 +318,7 @@ class RuntimeSupervisor(
         updatePhase: Boolean = true,
         cleanup: () -> Unit = {},
     ): Nothing {
+        TaskNotification.setHarnessRun(appContext, null)
         if (updatePhase) {
             status.update(RuntimePhase.ERROR, nextHarnessUrl = null, nextErrorCode = failure.code)
         }
@@ -337,6 +342,7 @@ class RuntimeSupervisor(
     fun isStarting(): Boolean = startCancellation.isStarting()
 
     fun stop(): RuntimeStateSnapshot = synchronized(lock) {
+        TaskNotification.setHarnessRun(appContext, null)
         status.update(RuntimePhase.STOPPING, nextHarnessUrl = null)
         try {
             val process = harnessProcess
@@ -442,6 +448,7 @@ class RuntimeSupervisor(
     }
 
     private fun clearHarnessState() {
+        TaskNotification.setHarnessRun(appContext, null)
         // Harness 临时 Basic Auth 与进程周期绑定。停止、自动重启、异常退出和释放运行时
         // 都经过这里；先撤销 App 侧入口授权，避免通知或悬浮球继续重放上一周期的 access。
         AppAuthenticationState.revokeHarness()

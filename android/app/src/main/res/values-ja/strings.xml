@@ -158,6 +158,16 @@
       統合カウント付き：連続する数ターンは1件にまとめられ、%1$d は今回まとめた件数（最低1）。
     -->
     <string name="task_notification_turn_completed_title">タスク完了</string>
+    <string name="task_notification_active_channel_name">AI タスクの進行状況</string>
+    <string name="task_notification_active_channel_description">バックグラウンドで実行中の AI タスクを通知します。対応するシステムでは画面上部にも表示されます</string>
+    <string name="task_notification_active_title">AI がタスクを実行中</string>
+    <string name="task_notification_active_text">%1$d 件のタスクを実行中。タップしてチャットに戻る</string>
+    <string name="task_notification_active_short">実行中</string>
+    <string name="task_notification_turn_error_title">AI タスクでエラーが発生</string>
+    <string name="task_notification_turn_aborted_title">AI タスクをキャンセルしました</string>
+    <string name="task_notification_turn_blocked_title">AI タスクを続行できません</string>
+    <string name="task_notification_turn_ended_title">AI タスクが終了しました</string>
+    <string name="task_notification_turn_ended_text">%1$d 件のタスクが終了しました。タップして結果を見る</string>
     <string name="task_notification_turn_completed_text">%1$d 件のタスクを完了しました。タップしてチャット画面に戻る</string>
 
     <!-- チャット小窓のサイズ変更ハンドル：ドラッグして小窓の大きさを変える。右下内側へ 4dp。 -->

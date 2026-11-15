@@ -26,10 +26,14 @@ class TurnCompletionPolicyTest {
     }
 
     @Test
-    fun `只接受白名单里的三个字段`() {
+    fun `只接受白名单字段并保留完成事件原因与轮次`() {
         assertEquals(
-            TurnCompletionPolicy.Parsed.Valid("0123456789abcdef"),
+            TurnCompletionPolicy.Parsed.Valid("0123456789abcdef", reason = "turn-end"),
             TurnCompletionPolicy.parseParam("""{"session":"0123456789abcdef","reason":"turn-end"}"""),
+        )
+        assertEquals(
+            TurnCompletionPolicy.Parsed.Valid("0123456789abcdef", 3L, "turn-end"),
+            TurnCompletionPolicy.parseParam("""{"session":"0123456789abcdef","turn":3,"reason":"turn-end"}"""),
         )
         // 多一个字段就整条拒绝：桥的另一侧是容器，不能让「顺手多带一点信息」变成既成事实。
         // 会话正文、路径、凭据都可能被塞进这种额外字段。
@@ -73,10 +77,10 @@ class TurnCompletionPolicyTest {
     @Test
     fun `reason 与 sessions 的取值范围固定`() {
         for (reason in TurnCompletionPolicy.REASON_CODES) {
-            assertTrue(
+            assertEquals(
                 "应当接受：$reason",
-                TurnCompletionPolicy.parseParam("""{"reason":"$reason"}""")
-                    is TurnCompletionPolicy.Parsed.Valid,
+                TurnCompletionPolicy.Parsed.Valid(null, reason = reason),
+                TurnCompletionPolicy.parseParam("""{"reason":"$reason"}"""),
             )
         }
         assertTrue(
@@ -100,6 +104,65 @@ class TurnCompletionPolicyTest {
         )
         assertTrue(
             TurnCompletionPolicy.parseParam("""{"sessions":"3"}""") is TurnCompletionPolicy.Parsed.Invalid,
+        )
+    }
+
+    @Test
+    fun `开始事件要求完整会话轮次和固定原因`() {
+        assertEquals(
+            TurnCompletionPolicy.Parsed.Valid("0123456789abcdef", 3L, "turn-start"),
+            TurnCompletionPolicy.parseStartParam("""{"session":"0123456789abcdef","turn":3,"reason":"turn-start"}"""),
+        )
+        assertEquals(
+            TurnCompletionPolicy.Parsed.Valid("0123456789abcdef", 3L, "turn-start", "fedcba9876543210"),
+            TurnCompletionPolicy.parseStartParam("""{"session":"0123456789abcdef","turn":3,"reason":"turn-start","run":"fedcba9876543210"}"""),
+        )
+        for (param in listOf(
+            "",
+            "{}",
+            """{"session":"0123456789abcdef","reason":"turn-start"}""",
+            """{"turn":3,"reason":"turn-start"}""",
+            """{"session":"0123456789abcdef","turn":3}""",
+            """{"session":"0123456789abcdef","turn":3,"reason":"turn-end"}""",
+            """{"session":"0123456789abcdef","turn":3,"reason":"turn-start","sessions":1}""",
+            """{"session":"0123456789abcdef","turn":3,"reason":"turn-start","text":"private"}""",
+        )) {
+            assertTrue("应拒绝：$param", TurnCompletionPolicy.parseStartParam(param) is TurnCompletionPolicy.Parsed.Invalid)
+        }
+    }
+
+    @Test
+    fun `轮次只接受非负 JavaScript 安全整数且不能脱离会话`() {
+        val invalid = listOf(
+            """{"turn":1}""",
+            """{"session":"0123456789abcdef","turn":-1}""",
+            """{"session":"0123456789abcdef","turn":1.5}""",
+            """{"session":"0123456789abcdef","turn":1.0}""",
+            """{"session":"0123456789abcdef","turn":"1"}""",
+            """{"session":"0123456789abcdef","turn":null}""",
+            """{"session":null,"turn":1}""",
+            """{"session":"0123456789abcdef","turn":9007199254740992}""",
+            """{"session":"0123456789abcdef","turn":NaN}""",
+            """{"session":"0123456789abcdef","turn":1,"run":"bad"}""",
+            """{"session":"0123456789abcdef","run":"fedcba9876543210"}""",
+            """{"turn":1,"run":"fedcba9876543210"}""",
+            """{"session":"0123456789abcdef","turn":1,"run":null}""",
+            """{"reason":"turn-start"}""",
+        )
+        for (param in invalid) {
+            assertTrue("应拒绝：$param", TurnCompletionPolicy.parseParam(param) is TurnCompletionPolicy.Parsed.Invalid)
+        }
+        assertTrue(
+            TurnCompletionPolicy.parseParam("""{"session":"0123456789abcdef","turn":9007199254740991}""")
+                is TurnCompletionPolicy.Parsed.Valid,
+        )
+        assertEquals(
+            TurnCompletionPolicy.Parsed.Valid("0123456789abcdef", 0L, "turn-end", "fedcba9876543210"),
+            TurnCompletionPolicy.parseParam("""{"session":"0123456789abcdef","turn":0,"reason":"turn-end","run":"fedcba9876543210"}"""),
+        )
+        assertEquals(
+            TurnCompletionPolicy.Parsed.Valid("0123456789abcdef", 9_007_199_254_740_991L, "turn-blocked", "fedcba9876543210"),
+            TurnCompletionPolicy.parseParam("""{"session":"0123456789abcdef","turn":9007199254740991,"reason":"turn-blocked","run":"fedcba9876543210"}"""),
         )
     }
 

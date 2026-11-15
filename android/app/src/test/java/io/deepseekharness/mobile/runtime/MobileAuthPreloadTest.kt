@@ -4,6 +4,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeNoException
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -29,7 +30,7 @@ class MobileAuthPreloadTest {
         var leftovers = 0
         Files.newDirectoryStream(target.parent).use { entries ->
             for (entry in entries) {
-                if (entry.fileName.toString().startsWith(".dsh-mobile-auth.")) leftovers += 1
+                if (entry.fileName.toString().startsWith(".dsh-mobile-support.")) leftovers += 1
             }
         }
         assertEquals("temporary file must be removed", 0, leftovers)
@@ -86,6 +87,41 @@ class MobileAuthPreloadTest {
 
         assertEquals("RUNTIME_CONFIG_FAILED", failure.code)
         assertArrayEquals("old".toByteArray(), Files.readAllBytes(target))
+    }
+
+    @Test
+    fun refreshesTheInstalledTurnSignalAndPreservesItOnReadFailure() {
+        val root = runtimeRoot()
+        val target = root.resolve(MobileAuthPreload.TURN_SIGNAL_GUEST_PATH.removePrefix("/"))
+        Files.createDirectories(target.parent)
+        Files.write(target, "old-signal".toByteArray())
+
+        MobileAuthPreload.installTurnSignal(root.toFile()) { ByteArrayInputStream("new-signal".toByteArray()) }
+        assertArrayEquals("new-signal".toByteArray(), Files.readAllBytes(target))
+        assertThrows(RuntimeFailure::class.java) {
+            MobileAuthPreload.installTurnSignal(root.toFile()) { throw IllegalStateException("asset unavailable") }
+        }
+        assertArrayEquals("new-signal".toByteArray(), Files.readAllBytes(target))
+        Files.newDirectoryStream(target.parent).use { entries ->
+            assertEquals(listOf(target), entries.toList())
+        }
+    }
+
+    @Test
+    fun refusesToRefreshTurnSignalsThroughLinkedDirectories() {
+        val root = runtimeRoot()
+        val outside = temporaryFolder.newFolder("outside").toPath()
+        Files.createDirectories(root.resolve("opt/dsh/plugins"))
+        try {
+            Files.createSymbolicLink(root.resolve("opt/dsh/plugins/dsh-mobile-shizuku"), outside)
+        } catch (failure: Exception) {
+            assumeNoException(failure)
+        }
+
+        assertThrows(RuntimeFailure::class.java) {
+            MobileAuthPreload.installTurnSignal(root.toFile()) { ByteArrayInputStream("signal".toByteArray()) }
+        }
+        Files.newDirectoryStream(outside).use { assertTrue(it.none()) }
     }
 
     private fun runtimeRoot(): Path {

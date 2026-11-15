@@ -159,6 +159,16 @@
       합산 개수 포함: 연속된 몇 차례는 하나로 합쳐지고, %1$d는 이번에 합쳐진 항목 수(최소 1).
     -->
     <string name="task_notification_turn_completed_title">작업 완료</string>
+    <string name="task_notification_active_channel_name">AI 작업 진행 상황</string>
+    <string name="task_notification_active_channel_description">백그라운드에서 실행 중인 AI 작업을 표시합니다. 지원되는 시스템에서는 화면 상단에도 표시됩니다.</string>
+    <string name="task_notification_active_title">AI가 작업을 처리 중입니다</string>
+    <string name="task_notification_active_text">%1$d개 작업 실행 중. 탭하여 대화로 돌아가세요.</string>
+    <string name="task_notification_active_short">실행 중</string>
+    <string name="task_notification_turn_error_title">AI 작업 오류</string>
+    <string name="task_notification_turn_aborted_title">AI 작업 취소됨</string>
+    <string name="task_notification_turn_blocked_title">AI 작업을 계속할 수 없음</string>
+    <string name="task_notification_turn_ended_title">AI 작업 종료됨</string>
+    <string name="task_notification_turn_ended_text">%1$d개 작업이 종료되었습니다. 탭하여 결과를 확인하세요.</string>
     <string name="task_notification_turn_completed_text">%1$d개 작업을 완료했습니다. 탭하여 대화 화면으로 돌아가세요.</string>
 
     <!-- 대화 창의 크기 조절 손잡이: 드래그하여 창 크기 변경, 우하단 4dp 안쪽. -->
