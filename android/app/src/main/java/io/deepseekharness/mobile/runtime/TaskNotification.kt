@@ -152,6 +152,7 @@ internal object TaskNotification {
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
             context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+            val delay = ((active.startedAtMs ?: now) + TurnActivityState.STALE_AFTER_MS - now).coerceAtLeast(1L)
             val builder = NotificationCompat.Builder(localized, ACTIVE_CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_keep_alive)
                 .setContentTitle(localized.getString(R.string.task_notification_active_title))
@@ -163,6 +164,8 @@ internal object TaskNotification {
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setProgress(0, 0, true)
+                // 进程被回收后 Handler 无法执行，交给系统按同一失效时间撤下。
+                .setTimeoutAfter(delay)
                 .setUsesChronometer(true)
                 .setWhen(System.currentTimeMillis() - (now - (active.startedAtMs ?: now)).coerceAtLeast(0L))
             try {
@@ -174,7 +177,6 @@ internal object TaskNotification {
                 return@synchronized
             }
             // 收口信号丢失时也有上限；不轮询、不启动额外服务。
-            val delay = ((active.startedAtMs ?: now) + TurnActivityState.STALE_AFTER_MS - now).coerceAtLeast(1L)
             mainHandler.postAtTime({ updateTaskStatus(context) }, ACTIVE_TOKEN, SystemClock.uptimeMillis() + delay)
         } catch (_: Throwable) {
             // 通知能力由系统控制，展示失败不能影响任务执行。
