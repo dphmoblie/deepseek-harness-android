@@ -1620,8 +1620,6 @@ interface SettingsDraft {
    * 找不到自己的密钥输入框（列表与编辑器同时消失）。
    */
   providerChosen: boolean
-  /** 用户在本页拨动过悬浮球开关时才有值；null 表示沿用原生侧真值。 */
-  overlayBallEnabled: boolean | null
   /** 仅内存的 API Key 输入；活到进程结束，界面按掩码显示。 */
   credentials: ProviderApiKeys
   /** 用户点过「清除密钥」的供应商，保存时才提交。 */
@@ -1649,7 +1647,6 @@ function draftFromSettings(settings: RuntimeSettings, previous: SettingsDraft | 
     settings,
     selectedProvider: previous?.selectedProvider ?? 'deepseek',
     providerChosen: previous?.providerChosen ?? false,
-    overlayBallEnabled: null,
     credentials: previous?.credentials ?? {},
     clearedProviders: previous?.clearedProviders ?? [],
     customCredentials: previous?.customCredentials ?? {},
@@ -1661,26 +1658,14 @@ function draftFromSettings(settings: RuntimeSettings, previous: SettingsDraft | 
  * 把设置草稿组装成一次写盘的载荷。
  *
  * 只有一处组装：手动点「保存」与离开页面时的自动保存写下去的必须是同一份内容 ——
- * 两条路径各自拼一份载荷，迟早会在某个字段上分叉（典型是悬浮球开关的来源：
- * 草稿里可能还是 `null`，真值要从原生读数兜底）。
- *
- * [overlayBallEnabled] 与 [overlayBallReadFailed] 是 App 持有的原生读数：读取失败时不再
- * 覆盖已落盘的值（否则一次读失败就会把用户原来的开关悄悄改成「关」）。
+ * 两条路径各自拼一份载荷，迟早会在某个字段上分叉。
+ * 悬浮球独立立即保存，整页写盘不能重放快照里的旧开关。
  */
-function settingsUpdateFromDraft(
-  draft: SettingsDraft,
-  overlayBallEnabled: boolean | undefined,
-  overlayBallReadFailed: boolean,
-): RuntimeSettingsUpdate {
+function settingsUpdateFromDraft(draft: SettingsDraft): RuntimeSettingsUpdate {
   const currentSettings = { ...draft.settings }
   delete currentSettings.overlayBallEnabled
-  const effectiveOverlayBall = draft.overlayBallEnabled
-    ?? (overlayBallReadFailed ? draft.settings.overlayBallEnabled : overlayBallEnabled)
-    ?? draft.settings.overlayBallEnabled
-    ?? false
   return {
     ...currentSettings,
-    ...(draft.overlayBallEnabled === null ? {} : { overlayBallEnabled: effectiveOverlayBall }),
     ...(Object.keys(draft.credentials).length === 0 ? {} : { providerApiKeys: draft.credentials }),
     ...(draft.clearedProviders.length === 0 ? {} : { clearProviderApiKeys: draft.clearedProviders }),
     ...(Object.keys(draft.customCredentials).length === 0 ? {} : { customProviderApiKeys: draft.customCredentials }),
@@ -1722,6 +1707,7 @@ interface SettingsScreenProps {
   /** 读取诊断日志正文窗口；同样只在展开或切换窗口时调用。 */
   loadDiagnosticLog: (maxBytes?: number) => Promise<DiagnosticLogText>
   overlayBall: OverlayBallState | null
+  overlayBallUpdating: boolean
   overlayBallReadFailed: boolean
   page: SettingsPage
   runtime: RuntimeState
@@ -1741,6 +1727,7 @@ interface SettingsScreenProps {
    * 草稿里的值没有变化，不应妨碍后台刷新同步。
    */
   onDraftChange: (update: (current: SettingsDraft) => SettingsDraft, dirty?: boolean) => void
+  onSetOverlayBallEnabled: (enabled: boolean) => void
   onLaunch: () => void
   /** 用户确认「密钥已在 Harness 内配置过」时的放行入口。 */
   onLaunchConfirmed: () => void
@@ -1795,7 +1782,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallReadFailed, onDraftChange, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenExternalHarness, externalBrowsers, onSelectExternalBrowser, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSaveCredentials, settledCredentials, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallUpdating, overlayBallReadFailed, onDraftChange, onSetOverlayBallEnabled, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenExternalHarness, externalBrowsers, onSelectExternalBrowser, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSaveCredentials, settledCredentials, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
@@ -2225,7 +2212,6 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
 
   // 草稿由 App 持有（设置区内所有页面共享），这里只读写它，不再自己保存一份页内状态。
   const settings = draft.settings
-  const overlayBallDraft = draft.overlayBallEnabled
   const selectedProvider = draft.selectedProvider
   const credentialDrafts = draft.credentials
   credentialDraftsRef.current = credentialDrafts
@@ -2235,14 +2221,10 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
 
   /**
    * 草稿的写入入口：所有字段改动都经过 [onDraftChange]，由 App 统一标记「未保存」。
-   * 同时触发轻量防抖自动保存，并在移动端触发触觉反馈。
+   * 离开页面时保存，并在移动端触发触觉反馈。
    */
   const setDraft = (next: RuntimeSettings): void => {
     onDraftChange(current => ({ ...current, settings: next }))
-  }
-  const setOverlayBallDraft = (next: boolean): void => {
-    triggerHaptic('medium')
-    onDraftChange(current => ({ ...current, overlayBallEnabled: next }))
   }
   const setSelectedProvider = (next: ModelProviderId, chosen = false): void => {
     // 换了供应商，上一家的模型列表展开状态不该跟过来。
@@ -2265,9 +2247,8 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
     onDraftChange(current => ({ ...current, clearedCustomProviders: next }))
   }
 
-  // 只为用户主动修改的开关保留草稿；原生菜单关闭悬浮球时，不影响页内其他未保存内容。
-  const overlayBallEnabled = overlayBallDraft
-    ?? (overlayBallReadFailed ? settings.overlayBallEnabled : overlayBall?.enabled)
+  // 悬浮球立即独立保存，不参与其它设置的草稿。
+  const overlayBallEnabled = (overlayBallReadFailed ? settings.overlayBallEnabled : overlayBall?.enabled)
     ?? settings.overlayBallEnabled
     ?? false
   const overlayPermissionKnown = overlayBall !== null && !overlayBallReadFailed
@@ -2970,7 +2951,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
                 {!overlayPermissionKnown
                   ? t("暂时无法确认悬浮窗权限")
                   : overlayBall.canDrawOverlays
-                  ? t("在其他应用上层显示悬浮球，点按展开 AI 对话小窗")
+                  ? t("在其他应用上层显示悬浮球，点按展开快捷操作，长按打开 AI 对话小窗")
                   : t("需要「显示在其他应用上层」权限才能使用")}
               </small>
               {overlayBallEnabled && overlayPermissionKnown && !overlayBall.canDrawOverlays ? (
@@ -2983,8 +2964,8 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
               type="checkbox"
               role="switch"
               checked={overlayBallEnabled}
-              disabled={(!overlayPermissionKnown || !overlayBall.canDrawOverlays) && !overlayBallEnabled}
-              onChange={event => setOverlayBallDraft(event.target.checked)}
+              disabled={overlayBallUpdating || ((!overlayPermissionKnown || !overlayBall.canDrawOverlays) && !overlayBallEnabled)}
+              onChange={event => onSetOverlayBallEnabled(event.target.checked)}
             />
           </label>
           {overlayBallReadFailed && <p className="status-text-error" role="alert">{t("无法读取悬浮球状态，正在重试")}</p>}
@@ -3878,6 +3859,9 @@ export function App() {
   const [keepAlive, setKeepAlive] = useState<KeepAliveState>(EMPTY_KEEP_ALIVE)
   // 查询失败与「没有权限」分开记录，保留最近一次快照供开关关闭操作使用。
   const [overlayBall, setOverlayBall] = useState<OverlayBallState | null>(null)
+  const [overlayBallUpdating, setOverlayBallUpdating] = useState(false)
+  const overlayBallWriteInFlight = useRef(false)
+  const overlayBallWriteGeneration = useRef(0)
   const [overlayBallReadFailed, setOverlayBallReadFailed] = useState(false)
   const overlayBallReadRevision = useRef(0)
   /**
@@ -4075,14 +4059,14 @@ export function App() {
     const revision = ++overlayBallReadRevision.current
     try {
       const next = await runtimeBridge.getOverlayBallState()
-      if (revision === overlayBallReadRevision.current && (isCurrent?.() ?? true)) {
+      if (revision === overlayBallReadRevision.current && !overlayBallWriteInFlight.current && (isCurrent?.() ?? true)) {
         // 值没变就不要写状态：桥调用给的是新引用，写进去 React 只会认为「变了」并重渲染整棵视图。
         setOverlayBall(previous => (previous !== null && sameSnapshot(previous, next) ? previous : next))
         setOverlayBallReadFailed(false)
       }
       return next
     } catch (error) {
-      if (revision === overlayBallReadRevision.current && (isCurrent?.() ?? true)) setOverlayBallReadFailed(true)
+      if (revision === overlayBallReadRevision.current && !overlayBallWriteInFlight.current && (isCurrent?.() ?? true)) setOverlayBallReadFailed(true)
       throw error
     }
   }, [])
@@ -5440,26 +5424,49 @@ export function App() {
           },
         )
       }
-      if (saved.overlayBallEnabled === true && overlayResult.status === 'fulfilled' && !overlayResult.value.serviceActive) {
-        // 悬浮球走同一套节奏：原生侧把启动失败原因写进受控令牌（startError），
-        // 宽限期过后复核状态，按「悬浮窗权限 / ROM 拦截 / 界面创建失败」分流到对应指引弹窗。
-        recheckForegroundServiceAfterSettle(
-          () => readOverlayBall(isCurrent),
-          latest => {
-            if (!isCurrent()) return
-            if (latest.enabled === true && !latest.serviceActive) {
-              setPermissionGuide(
-                latest.canDrawOverlays
-                  ? overlayFailureGuide(latest.startError)
-                  : { kind: 'overlay-permission' },
-              )
-            }
-          },
-        )
-      }
     })
     return savedSuccessfully
   }, [applyRefreshedSettings, notify, readOverlayBall, resyncSettingsDraft, run])
+
+  const setOverlayBallEnabled = useCallback((enabled: boolean): void => {
+    if (overlayBallWriteInFlight.current) return
+    overlayBallWriteInFlight.current = true
+    const generation = ++overlayBallWriteGeneration.current
+    overlayBallReadRevision.current += 1
+    setOverlayBallUpdating(true)
+    triggerHaptic('medium')
+    void (async () => {
+      try {
+        const next = await withBridgeTimeout(runtimeBridge.setOverlayBallEnabled(enabled), ACTION_WATCHDOG_MS)
+        overlayBallReadRevision.current += 1
+        setOverlayBall(next)
+        setOverlayBallReadFailed(false)
+        setSettings(current => current === null ? current : { ...current, overlayBallEnabled: next.enabled })
+        setSettingsDraft(current => current === null ? current : {
+          ...current,
+          settings: { ...current.settings, overlayBallEnabled: next.enabled },
+        })
+        notify(t("设置已保存"), 'success')
+        if (next.enabled) {
+          recheckForegroundServiceAfterSettle(
+            () => readOverlayBall(),
+            latest => {
+              if (generation === overlayBallWriteGeneration.current && latest.enabled && !latest.serviceActive) {
+                setPermissionGuide(latest.canDrawOverlays
+                  ? overlayFailureGuide(latest.startError)
+                  : { kind: 'overlay-permission' })
+              }
+            },
+          )
+        }
+      } catch (error) {
+        notify(errorMessage(error), 'error')
+      } finally {
+        overlayBallWriteInFlight.current = false
+        setOverlayBallUpdating(false)
+      }
+    })()
+  }, [notify, readOverlayBall])
 
   /**
    * 把当前草稿写盘（手动保存与「离开这一页」共用）。
@@ -5471,8 +5478,8 @@ export function App() {
   const saveSettingsDraft = useCallback((options?: { background?: boolean }): Promise<boolean> => {
     const draft = settingsDraftRef.current
     if (draft === null) return Promise.resolve(false)
-    return saveSettings(settingsUpdateFromDraft(draft, overlayBall?.enabled, overlayBallReadFailed), options)
-  }, [overlayBall?.enabled, overlayBallReadFailed, saveSettings])
+    return saveSettings(settingsUpdateFromDraft(draft), options)
+  }, [saveSettings])
   flushSettingsDraftRef.current = saveSettingsDraft
   /**
    * 申请前台服务通知权限。
@@ -5884,7 +5891,7 @@ export function App() {
         /** 三级页的返回键回它的二级页；二级页照旧回设置首页。 */
         const parentPage = SETTINGS_PAGE_META[page].parent
         const backTarget: AppView = parentPage === undefined ? 'settings' : SETTINGS_PAGE_META[parentPage].view
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} harnessVersionBusy={versionOperationBusy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenExternalHarness={openExternalHarness} externalBrowsers={externalBrowsers} onSelectExternalBrowser={selectExternalBrowser} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveCredentials={() => saveSettingsDraft()} settledCredentials={settledCredentials.current} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} harnessVersionBusy={versionOperationBusy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallUpdating={overlayBallUpdating} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} onSetOverlayBallEnabled={setOverlayBallEnabled} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenExternalHarness={openExternalHarness} externalBrowsers={externalBrowsers} onSelectExternalBrowser={selectExternalBrowser} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveCredentials={() => saveSettingsDraft()} settledCredentials={settledCredentials.current} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

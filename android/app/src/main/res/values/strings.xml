@@ -1,5 +1,6 @@
 <resources>
     <string name="app_name">DeepSeek Harness</string>
+    <string name="overlay_ball_settings_failed">无法保存悬浮球设置，请重试</string>
     <string name="harness_title">Harness 对话</string>
     <string name="harness_back_to_app">返回应用</string>
     <string name="harness_exit_confirm_title">退出 DSH</string>

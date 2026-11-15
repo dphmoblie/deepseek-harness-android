@@ -24,10 +24,10 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.ContextThemeWrapper
 import android.view.Gravity
+import android.view.GestureDetector
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
-import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.HttpAuthHandler
@@ -48,6 +48,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
 import io.deepseekharness.mobile.overlay.OverlayBallPolicy
+import io.deepseekharness.mobile.overlay.OverlayBallFrameUpdates
 import io.deepseekharness.mobile.overlay.OverlayBallPreferences
 import io.deepseekharness.mobile.overlay.OverlayBallSecondaryPolicy
 import io.deepseekharness.mobile.overlay.OverlayConversationSizePolicy
@@ -123,10 +124,16 @@ class OverlayBallService : Service() {
 
     private var touchStartX = 0f
     private var touchStartY = 0f
-    private var touchStartAt = 0L
     private var initialX = 0
     private var initialY = 0
-    private var longPressFired = false
+    private var ballGestures: GestureDetector? = null
+    private var gestureCancelled = false
+    private var dragInProgress = false
+    private val ballPositionUpdates = OverlayBallFrameUpdates(
+        postFrame = { ballView?.postOnAnimation(it) },
+        removeFrame = { ballView?.removeCallbacks(it) },
+        applyPosition = ::updateBallPosition,
+    )
 
     override fun onCreate() {
         super.onCreate()
@@ -214,6 +221,7 @@ class OverlayBallService : Service() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         refreshVisibleAppearance()
+        cancelBallGesture()
         // 服务能收到的最稳定的系统回调：顺带复查一次权限。撤销后就不要再动
         // 一个可能已经失效的窗口，由 onDestroy 统一摘除。
         if (stopIfOverlayPermissionRevoked()) return
@@ -390,7 +398,25 @@ class OverlayBallService : Service() {
             if (!stopIfOverlayPermissionRevoked()) toggleConversation()
             true
         }
-        view.setOnTouchListener { touched, event -> handleTouch(touched, event, size) }
+        ballGestures = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(event: MotionEvent): Boolean = true
+
+            override fun onSingleTapUp(event: MotionEvent): Boolean =
+                !dragInProgress && view.performClick()
+
+            override fun onLongPress(event: MotionEvent) {
+                if (!gestureCancelled && !dragInProgress) view.performLongClick()
+            }
+
+            override fun onScroll(first: MotionEvent?, current: MotionEvent, distanceX: Float, distanceY: Float): Boolean {
+                if (!gestureCancelled && !dragInProgress) {
+                    detachSecondaryChoices()
+                    dragInProgress = true
+                }
+                return true
+            }
+        }).apply { setOnDoubleTapListener(null) }
+        view.setOnTouchListener { _, event -> handleTouch(event, size) }
         // 球是否还在窗口上由视图的附着回调维护：客户端侧的移除一定会回调，系统侧的移除
         // 视 ROM 实现而定，因此它只用于避免「已被摘掉的窗口挡住重挂」这一类误判，
         // 真正的清理由插件每次回前台的权限对齐（撤销 → 停服务 → 摘视图）兜底。
@@ -436,6 +462,8 @@ class OverlayBallService : Service() {
     }
 
     private fun detachBall() {
+        cancelBallGesture()
+        ballGestures = null
         ballView?.let { view ->
             ballAttached = false
             runCatching { windowManager.removeView(view) }
@@ -446,88 +474,77 @@ class OverlayBallService : Service() {
     /**
      * 触摸处理：短按弹二级球、长按直接回对话、拖动移动球。
      *
-     * 判定复用 [OverlayBallPolicy]，与单测覆盖的是同一套规则。
+     * 点按、长按和拖动阈值交给 Android GestureDetector，窗口位置按显示帧合并。
      */
-    private fun handleTouch(view: View, event: MotionEvent, size: Int): Boolean {
-        val slop = ViewConfiguration.get(this).scaledTouchSlop
+    private fun handleTouch(event: MotionEvent, size: Int): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 // 运行期复查权限：球还在屏幕上、用户仍然点得到，说明权限可能是在本服务运行期间
                 // 被撤销的（部分 ROM 不杀进程也不摘窗口）。此时立即收尾并吞掉本次触摸，
                 // 不留「球还在、通知也在」的假象。
                 if (stopIfOverlayPermissionRevoked()) return true
+                cancelBallGesture()
+                gestureCancelled = false
                 touchStartX = event.rawX
                 touchStartY = event.rawY
-                touchStartAt = SystemClock.uptimeMillis()
                 initialX = layoutParams.x
                 initialY = layoutParams.y
-                longPressFired = false
-                return true
             }
-            MotionEvent.ACTION_MOVE -> {
-                val deltaX = event.rawX - touchStartX
-                val deltaY = event.rawY - touchStartY
-                // 多指手势一律不拖动：rawX/rawY 恒取 pointer 0，第一根手指抬起、剩余手指
-                // 重编号时坐标会跳，按位移算出来的球位会跟着跳一段。
-                if (event.pointerCount > 1) return true
-                // 长按已弹出菜单后不再拖动：此时 ACTION_UP 会直接返回，跳过吸附与落盘，
-                // 球会停在非吸附位置且位置没保存，全程还被不透明遮罩挡着。
-                if (!longPressFired && !OverlayBallPolicy.isClick(deltaX, deltaY, slop)) {
-                    val metrics = resources.displayMetrics
-                    val (x, y) = OverlayBallPolicy.clampPosition(
-                        initialX + deltaX.toInt(),
-                        initialY + deltaY.toInt(),
-                        metrics.widthPixels, metrics.heightPixels, size,
-                    )
-                    layoutParams.x = x
-                    layoutParams.y = y
-                    runCatching { windowManager.updateViewLayout(ballView, layoutParams) }
-                    // 二级球跟随主球：它们的位置全部由主球坐标推导，因此这里不需要缓存
-                    // 每个按钮的旧坐标，直接按新坐标重排一次即可。
-                    layoutSecondaryChoices()
-                } else if (!longPressFired &&
-                    OverlayBallPolicy.isLongPress(
-                        deltaX, deltaY, slop,
-                        SystemClock.uptimeMillis() - touchStartAt,
-                        ViewConfiguration.getLongPressTimeout().toLong(),
-                    )
-                ) {
-                    // 拖动分支先被 isClick 排除，走到这里说明手指基本没动；
-                    // 按住不动的期间收不到新的 MOVE 事件，靠这一次到达阈值时弹出菜单。
-                    longPressFired = true
-                    view.performLongClick()
-                }
-                return true
-            }
-            MotionEvent.ACTION_UP -> {
-                val deltaX = event.rawX - touchStartX
-                val deltaY = event.rawY - touchStartY
-                if (longPressFired) return true
-                val held = SystemClock.uptimeMillis() - touchStartAt
-                if (OverlayBallPolicy.isLongPress(
-                        deltaX, deltaY, slop, held,
-                        ViewConfiguration.getLongPressTimeout().toLong(),
-                    )
-                ) {
-                    view.performLongClick()
-                    return true
-                }
-                if (OverlayBallPolicy.isClick(deltaX, deltaY, slop)) {
-                    view.performClick()
-                } else {
-                    // 拖动结束：吸附到最近边缘并记住位置。
-                    val metrics = resources.displayMetrics
-                    layoutParams.x = OverlayBallPolicy.snapToEdge(
-                        layoutParams.x, metrics.widthPixels, size,
-                    )
-                    runCatching { windowManager.updateViewLayout(ballView, layoutParams) }
-                    preferences.writePosition(layoutParams.x, layoutParams.y)
-                    layoutSecondaryChoices()
-                }
+            MotionEvent.ACTION_CANCEL, MotionEvent.ACTION_POINTER_DOWN -> {
+                finishBallDrag()
+                cancelBallGesture()
                 return true
             }
         }
-        return false
+        if (gestureCancelled) return true
+        ballGestures?.onTouchEvent(event)
+        if (dragInProgress && (event.actionMasked == MotionEvent.ACTION_MOVE || event.actionMasked == MotionEvent.ACTION_UP)) {
+            val metrics = resources.displayMetrics
+            val (x, y) = OverlayBallPolicy.clampPosition(
+                initialX + (event.rawX - touchStartX).toInt(),
+                initialY + (event.rawY - touchStartY).toInt(),
+                metrics.widthPixels, metrics.heightPixels, size,
+            )
+            ballPositionUpdates.moveTo(x, y)
+            if (event.actionMasked == MotionEvent.ACTION_UP) {
+                finishBallDrag()
+            }
+        }
+        return true
+    }
+
+    private fun finishBallDrag() {
+        if (!dragInProgress) return
+        ballPositionUpdates.flush()
+        val x = OverlayBallPolicy.snapToEdge(
+            layoutParams.x, resources.displayMetrics.widthPixels, layoutParams.width,
+        )
+        updateBallPosition(x, layoutParams.y)
+        preferences.writePosition(layoutParams.x, layoutParams.y)
+        dragInProgress = false
+    }
+
+    private fun cancelBallGesture() {
+        gestureCancelled = true
+        ballPositionUpdates.cancel()
+        dragInProgress = false
+        val now = SystemClock.uptimeMillis()
+        val cancel = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
+        try {
+            ballGestures?.onTouchEvent(cancel)
+        } finally {
+            cancel.recycle()
+        }
+    }
+
+    /** 一帧只重排一次；碰到边界且坐标没变时不重复请求窗口布局。 */
+    private fun updateBallPosition(x: Int, y: Int) {
+        val view = ballView ?: return
+        if (layoutParams.x == x && layoutParams.y == y) return
+        layoutParams.x = x
+        layoutParams.y = y
+        runCatching { windowManager.updateViewLayout(view, layoutParams) }
+        layoutSecondaryChoices()
     }
 
     /**
@@ -1254,15 +1271,10 @@ class OverlayBallService : Service() {
         }
     }
 
-    // ── 二级球（长按主球展开） ──────────────────────────────────────────────
+    // ── 二级球（短按主球展开） ──────────────────────────────────────────────
 
     /**
-     * 长按主球：展开或收起二级球。
-     *
-     * 为什么用**长按**而不是单击展开：单击已经是「打开/关闭对话小窗」，那是这个球最高频的
-     * 动作，把它换成二级球会让老用户每次都要多点一下；而长按本来就没有占用（旧实现是弹
-     * 文字菜单）。代价是二级球的可发现性依赖用户愿意长按 —— 这一点由资源文案里的
-     * `contentDescription` 与文档里的真机验收项兜住，不做额外引导蒙层。
+     * 短按主球：展开或收起二级球。
      *
      * 打开对话小窗 / 隐藏球 / 服务结束都会收起二级球：悬浮球同一时刻只应有一个「展开物」，
      * 否则用户点哪个都像是在跟另一个打架。
@@ -1545,8 +1557,17 @@ class OverlayBallService : Service() {
         // controller 与悬浮球服务相互独立，「只开球不开后台保持」的用户划掉最近任务后
         // controller 会被释放，而此时长按菜单隐藏球是最常见的操作之一。
         // 构造 store 无副作用，也不读取任何凭据。
-        runCatching { RuntimeStore(applicationContext).setOverlayBallEnabled(false) }
-        stopSelf()
+        Thread({
+            val saved = runCatching { RuntimeStore(applicationContext).setOverlayBallEnabled(false) }
+            Handler(Looper.getMainLooper()).post {
+                if (activeService !== this) return@post
+                if (saved.isSuccess) {
+                    if (!RuntimeStore(applicationContext).overlayBallEnabled()) stopSelf()
+                } else {
+                    toastCurrentThread(overlayString(R.string.overlay_ball_settings_failed))
+                }
+            }
+        }, "dsh-overlay-hide").start()
     }
 
     // ── 前台通知 ────────────────────────────────────────────────────────────
