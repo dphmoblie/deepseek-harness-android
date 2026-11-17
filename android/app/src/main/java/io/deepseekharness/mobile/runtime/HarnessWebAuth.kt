@@ -74,9 +74,9 @@ internal class HarnessWebAuthCapture(private val port: Int) {
     private var launchUrl: String? = null
 
     @Synchronized
-    fun append(bytes: ByteArray, count: Int) {
+    fun append(bytes: ByteArray, count: Int): Boolean {
         require(count in 0..bytes.size) { "Invalid output byte count" }
-        if (launchUrl != null) return
+        if (launchUrl != null) return false
         for (index in 0 until count) {
             val character = (bytes[index].toInt() and 0xff).toChar()
             if (character == '\n') {
@@ -88,7 +88,7 @@ internal class HarnessWebAuthCapture(private val port: Int) {
                 }
                 line.setLength(0)
                 oversized = false
-                if (launchUrl != null) return
+                if (launchUrl != null) return true
             } else if (!oversized) {
                 // Bound memory even if a child emits an unterminated or malformed line.
                 if (line.length >= MAX_LINE_LENGTH) {
@@ -99,6 +99,7 @@ internal class HarnessWebAuthCapture(private val port: Int) {
                 }
             }
         }
+        return false
     }
 
     @Synchronized

@@ -130,12 +130,20 @@ internal class HarnessVersions(private val context: Context, private val store: 
         val scripts = File(store.currentRoot, "root/.dsh-mobile")
         val script = File(scripts, "harness-packages.cjs")
         requirePlainPath(store.currentRoot, script, allowMissing = true)
-        val pending = Files.createTempFile(scripts.toPath(), ".harness-packages-", ".tmp").toFile()
-        try {
-            Os.chmod(pending.path, 0x180)
-            context.assets.open("support/harness-packages.cjs").use { source -> pending.outputStream().use { source.copyTo(it) } }
-            Os.rename(pending.path, script.path)
-        } finally { pending.delete() }
+        val scriptBytes = context.assets.open("support/harness-packages.cjs").use { it.readBytes() }
+        if (Files.isRegularFile(script.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+            script.length() == scriptBytes.size.toLong() &&
+            script.readBytes().contentEquals(scriptBytes)
+        ) {
+            Os.chmod(script.path, 0x180)
+        } else {
+            val pending = Files.createTempFile(scripts.toPath(), ".harness-packages-", ".tmp").toFile()
+            try {
+                Os.chmod(pending.path, 0x180)
+                pending.writeBytes(scriptBytes)
+                Os.rename(pending.path, script.path)
+            } finally { pending.delete() }
+        }
         val argv = listOf("/opt/node/bin/node", "/root/.dsh-mobile/harness-packages.cjs", operation) + listOfNotNull(version, integrity)
         val launcher = if (selected) RuntimeLaunchResolver(context, store, includeCredentials = false) else resolver
         val result = ProcessProbe.run(

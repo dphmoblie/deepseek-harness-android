@@ -2,9 +2,11 @@ package io.deepseekharness.mobile.runtime
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -141,5 +143,30 @@ class PluginMigrationStateTest {
         File(occupied, "blocker").writeText("x")
         assertThrows(IOException::class.java) { PluginMigrationState.write(occupied, record) }
         assertEquals(listOf(PluginMigrationState.FILE_NAME), temporaryFolder.root.list()!!.sorted())
+    }
+
+    @Test
+    fun `状态快照与清单 stateToken 一致且版本账本存在时视为已同步`() {
+        val token = "12345678-1234-1234-1234-123456789abc"
+        val snapshot = File(temporaryFolder.root, "state-snapshot.json").apply {
+            writeText(JSONObject().put("version", 1).put("token", token).toString())
+        }
+        val profile = File(temporaryFolder.root, "package.json").apply {
+            writeText(JSONObject().put("dshMobile", JSONObject().put("stateToken", token)).toString())
+        }
+        val lock = File(temporaryFolder.root, PluginInstallLock.FILE_NAME).apply {
+            writeText("{}")
+        }
+
+        assertTrue(RuntimePluginManager.isStateSnapshotSynced(snapshot, profile, lock))
+
+        // 运行时升级后 profile 清单被重建（无 stateToken 或不同）：必须判定为未同步以触发 recover。
+        profile.writeText(JSONObject().put("dsh", JSONObject()).toString())
+        assertFalse(RuntimePluginManager.isStateSnapshotSynced(snapshot, profile, lock))
+
+        // 恢复一致后删掉版本账本：仍需触发 recover 补齐账本。
+        profile.writeText(JSONObject().put("dshMobile", JSONObject().put("stateToken", token)).toString())
+        lock.delete()
+        assertFalse(RuntimePluginManager.isStateSnapshotSynced(snapshot, profile, lock))
     }
 }

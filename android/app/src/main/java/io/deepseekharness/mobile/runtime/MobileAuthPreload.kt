@@ -56,6 +56,14 @@ internal object MobileAuthPreload {
             throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "运行时${description}目标不是普通文件")
         }
 
+        val content = readAssetBytes(description, openAsset)
+        if (hasSameContent(targetPath, content)) {
+            runCatching {
+                Files.setPosixFilePermissions(targetPath, PosixFilePermissions.fromString("rw-r--r--"))
+            }
+            return
+        }
+
         val pending = try {
             Files.createTempFile(directory.toPath(), ".dsh-mobile-support.", ".tmp")
         } catch (error: Throwable) {
@@ -65,19 +73,7 @@ internal object MobileAuthPreload {
         try {
             Files.newOutputStream(pending, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)
                 .use { output ->
-                    openAsset().use { input ->
-                        val buffer = ByteArray(BUFFER_BYTES)
-                        var total = 0
-                        while (true) {
-                            val read = input.read(buffer)
-                            if (read < 0) break
-                            total += read
-                            if (total > MAX_BYTES) {
-                                throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "运行时${description}超过大小上限")
-                            }
-                            output.write(buffer, 0, read)
-                        }
-                    }
+                    output.write(content)
                     output.flush()
                 }
             FileChannel.open(pending, StandardOpenOption.WRITE).use { it.force(true) }
@@ -96,5 +92,34 @@ internal object MobileAuthPreload {
         } finally {
             runCatching { Files.deleteIfExists(pending) }
         }
+    }
+
+    private fun readAssetBytes(description: String, openAsset: () -> InputStream): ByteArray = try {
+        openAsset().use { input ->
+            val output = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(BUFFER_BYTES)
+            var total = 0
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                total += read
+                if (total > MAX_BYTES) {
+                    throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "运行时${description}超过大小上限")
+                }
+                output.write(buffer, 0, read)
+            }
+            output.toByteArray()
+        }
+    } catch (error: Throwable) {
+        if (error is RuntimeFailure) throw error
+        throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "无法更新运行时${description}", error)
+    }
+
+    private fun hasSameContent(targetPath: java.nio.file.Path, expected: ByteArray): Boolean = try {
+        Files.isRegularFile(targetPath, LinkOption.NOFOLLOW_LINKS) &&
+            Files.size(targetPath) == expected.size.toLong() &&
+            Files.readAllBytes(targetPath).contentEquals(expected)
+    } catch (_: Throwable) {
+        false
     }
 }

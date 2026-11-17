@@ -27,6 +27,11 @@ import java.util.concurrent.TimeUnit
  * temporarily unavailable and still preserves cache invalidation semantics.
  */
 internal fun runtimeDeviceFingerprintToken(raw: String): String {
+    synchronized(RuntimeDeviceFingerprintKey.lock) {
+        if (RuntimeDeviceFingerprintKey.cachedRaw == raw) {
+            RuntimeDeviceFingerprintKey.cachedToken?.let { return it }
+        }
+    }
     val input = raw.toByteArray(Charsets.UTF_8)
     val digest = runCatching {
         synchronized(RuntimeDeviceFingerprintKey.lock) {
@@ -36,12 +41,19 @@ internal fun runtimeDeviceFingerprintToken(raw: String): String {
         }
     }.getOrNull() ?: MessageDigest.getInstance("SHA-256").digest(input)
     val hex = digest.joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
-    return "device-fp-v1:$hex"
+    val token = "device-fp-v1:$hex"
+    synchronized(RuntimeDeviceFingerprintKey.lock) {
+        RuntimeDeviceFingerprintKey.cachedRaw = raw
+        RuntimeDeviceFingerprintKey.cachedToken = token
+    }
+    return token
 }
 
 private object RuntimeDeviceFingerprintKey {
     const val ALIAS = "dsh-runtime-profile-hmac-v1"
     val lock = Any()
+    var cachedRaw: String? = null
+    var cachedToken: String? = null
 
     fun loadOrCreate(): SecretKey? {
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -729,6 +741,8 @@ internal class ProcessOutputTail private constructor(
     private val buffer = TailBuffer(outputLimit.coerceIn(1024, 256 * 1024))
     private val pendingLine = StringBuilder()
     private val webAuth = harnessPort?.let(::HarnessWebAuthCapture)
+    private val signal = Object()
+    @Volatile private var readerClosed = false
     private val input: InputStream = process.inputStream
     private val reader = Thread({
         try {
@@ -738,14 +752,22 @@ internal class ProcessOutputTail private constructor(
                     val count = input.read(chunk)
                     if (count < 0) break
                     if (count > 0) {
-                        webAuth?.append(chunk, count)
+                        val capturedUrl = webAuth?.append(chunk, count) == true
                         buffer.append(chunk, count)
+                        if (capturedUrl) {
+                            synchronized(signal) { signal.notifyAll() }
+                        }
                         if (onLine != null) consumeLines(chunk, count, onLine)
                     }
                 }
             }
         } catch (_: Throwable) {
             // Process shutdown normally closes the pipe.
+        } finally {
+            synchronized(signal) {
+                readerClosed = true
+                signal.notifyAll()
+            }
         }
     }, threadName).apply {
         isDaemon = true
@@ -772,6 +794,22 @@ internal class ProcessOutputTail private constructor(
     fun snapshot(): String = buffer.text()
 
     fun harnessLaunchUrl(): String? = webAuth?.url()
+
+    /**
+     * 等待捕获到启动 URL 或输出流关闭，最长 [timeoutMillis] 毫秒。
+     *
+     * 让 `RuntimeSupervisor.waitForHarness` 在 `dsh` 打印鉴权地址的瞬间立即醒来，
+     * 不必白等剩下的 100~200ms 轮询间隔。
+     */
+    @Throws(InterruptedException::class)
+    fun awaitLaunchSignal(timeoutMillis: Long) {
+        if (timeoutMillis <= 0L) return
+        synchronized(signal) {
+            if (webAuth?.url() == null && !readerClosed) {
+                signal.wait(timeoutMillis)
+            }
+        }
+    }
 
     fun awaitClosed(timeoutMillis: Long) {
         try {

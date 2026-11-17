@@ -37,6 +37,21 @@ class MobileAuthPreloadTest {
     }
 
     @Test
+    fun skipsRewriteWhenInstalledPreloadAlreadyMatchesAssetContent() {
+        val root = runtimeRoot()
+        val target = root.resolve("usr/local/lib/dsh-mobile-auth.cjs")
+        val content = "same-preload-content".toByteArray()
+        Files.write(target, content)
+        val initialModifiedTime = java.nio.file.attribute.FileTime.fromMillis(1_700_000_000_000L)
+        Files.setLastModifiedTime(target, initialModifiedTime)
+
+        MobileAuthPreload.install(root.toFile()) { ByteArrayInputStream(content) }
+
+        assertArrayEquals(content, Files.readAllBytes(target))
+        assertEquals(initialModifiedTime, Files.getLastModifiedTime(target))
+    }
+
+    @Test
     fun failsClosedWhenTheRuntimeLayoutIsMissing() {
         val root = temporaryFolder.newFolder("root").toPath()
 

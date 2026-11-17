@@ -128,10 +128,14 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
         // 运行时升级通常不会留下 transaction.json：它会重建 profiles 清单，但保留
         // plugin-manager/state-snapshot.json。只检查事务文件会跳过正常升级后的状态回填，
         // 结果是市场插件本体还在保留区，清单却没有插件名，后续 repair 也无法接回链接。
-        // 两个文件都不存在时不启动 Node，避免首次安装每次启动都做无意义的恢复探测。
+        // 两个文件都不存在，或无未结事务且快照 token 已与当前 profile 清单一致时，
+        // 不启动 Node，避免每次启动或读取插件列表都做无意义的恢复探测。
         val transaction = File(home, "transaction.json").exists()
-        val snapshot = File(home, "state-snapshot.json").exists()
-        if (transaction || snapshot) {
+        val snapshotFile = File(home, "state-snapshot.json")
+        val profileFile = File(store.currentRoot, "root/.dsh/profiles/web/package.json")
+        val lockFile = File(home, PluginInstallLock.FILE_NAME)
+        val snapshotNeedsRestore = snapshotFile.exists() && !isStateSnapshotSynced(snapshotFile, profileFile, lockFile)
+        if (transaction || snapshotNeedsRestore) {
             try {
                 val result = run("recover", null, null, null)
                 val state = result.optJSONObject("state")
@@ -525,12 +529,18 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             Os.chmod(directory.absolutePath, 0x1c0)
             val target = File(directory, "plugin-manager.cjs")
             if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS) && !Files.isRegularFile(target.toPath(), LinkOption.NOFOLLOW_LINKS)) invalid()
+            val content = appContext.assets.open("support/plugin-manager.cjs").use { it.readBytes() }
+            if (Files.isRegularFile(target.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                Files.size(target.toPath()) == content.size.toLong() &&
+                Files.readAllBytes(target.toPath()).contentEquals(content)
+            ) {
+                Os.chmod(target.absolutePath, 0x180)
+                return
+            }
             val pending = Files.createTempFile(directory.toPath(), ".plugin-manager-", ".tmp")
             try {
                 Os.chmod(pending.toString(), 0x180)
-                appContext.assets.open("support/plugin-manager.cjs").use { input ->
-                    Files.newOutputStream(pending, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS).use { output -> input.copyTo(output) }
-                }
+                Files.newOutputStream(pending, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS).use { output -> output.write(content) }
                 Os.rename(pending.toString(), target.absolutePath)
             } finally { Files.deleteIfExists(pending) }
         } catch (failure: RuntimeFailure) { throw failure }
@@ -539,7 +549,9 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
 
     private fun invalid(): Nothing = throw RuntimeFailure("PLUGIN_INPUT_INVALID", "插件参数或路径无效")
 
-    private companion object {
+    internal companion object {
+        private const val SNAPSHOT_FILE_LIMIT = 65536L
+        private val STATE_TOKEN = Regex("^[a-f0-9-]{36}$")
         val PACKAGE = Regex("^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
         val ENTRY = Regex("^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
         /** 受控详情：包名、版本号与 semver 范围字符集；拒绝引号、反斜杠、冒号与控制字符。 */
@@ -554,6 +566,35 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
 
         /** 迁移跑完了，但账本不可用或仍有缺失/失败/拒绝的缺口。 */
         const val PLUGIN_MIGRATION_PARTIAL = "PLUGIN_MIGRATION_PARTIAL"
+
+        /**
+         * 判断保留区的 `state-snapshot.json` 是否已经与当前 `profiles/web/package.json` 同步。
+         *
+         * `state-snapshot.json` 一旦生成就会常驻在保留区；若只按「文件存在」决定是否拉起访客 Node，
+         * 每次冷启动 Harness 与每次打开插件列表都会白跑一次完整的 PRoot+Node 进程，而访客脚本的
+         * `restoreState()` 在看到两处 `stateToken` 相等时本就会直接返回 `reason = "current"`。
+         * 只有快照缺失/损坏、清单缺失/损坏、`stateToken` 不一致或版本账本尚未生成时，才需要真正进入
+         * 访客进程执行回填。
+         */
+        internal fun isStateSnapshotSynced(snapshotFile: File, profileFile: File, lockFile: File): Boolean = try {
+            if (!Files.isRegularFile(snapshotFile.toPath(), LinkOption.NOFOLLOW_LINKS) ||
+                !Files.isRegularFile(profileFile.toPath(), LinkOption.NOFOLLOW_LINKS) ||
+                !Files.isRegularFile(lockFile.toPath(), LinkOption.NOFOLLOW_LINKS)
+            ) {
+                false
+            } else if (snapshotFile.length() !in 1..SNAPSHOT_FILE_LIMIT || profileFile.length() !in 1..SNAPSHOT_FILE_LIMIT) {
+                false
+            } else {
+                val snapshotToken = org.json.JSONObject(snapshotFile.readText()).optString("token", "")
+                val profileToken = org.json.JSONObject(profileFile.readText())
+                    .optJSONObject("dshMobile")
+                    ?.optString("stateToken", "")
+                    .orEmpty()
+                STATE_TOKEN.matches(snapshotToken) && snapshotToken == profileToken
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 }
 

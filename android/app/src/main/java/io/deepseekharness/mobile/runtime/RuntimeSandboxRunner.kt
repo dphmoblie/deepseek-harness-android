@@ -134,16 +134,25 @@ internal object RuntimeSandboxRunner {
             ) {
                 invalid()
             }
+            val bytes = appContext.assets.open("support/$SCRIPT_NAME").use { it.readBytes() }
+            if (
+                Files.isRegularFile(target.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                runCatching {
+                    Files.size(target.toPath()) == bytes.size.toLong() &&
+                        Files.readAllBytes(target.toPath()).contentEquals(bytes)
+                }.getOrDefault(false)
+            ) {
+                Os.chmod(target.absolutePath, EXECUTABLE_FILE_MODE)
+                return
+            }
             val pending = Files.createTempFile(directory.toPath(), ".sandbox-runner-", ".tmp")
             try {
                 Os.chmod(pending.toString(), OWNER_READ_WRITE)
-                appContext.assets.open("support/$SCRIPT_NAME").use { input ->
-                    Files.newOutputStream(
-                        pending,
-                        StandardOpenOption.WRITE,
-                        LinkOption.NOFOLLOW_LINKS,
-                    ).use { output -> input.copyTo(output) }
-                }
+                Files.newOutputStream(
+                    pending,
+                    StandardOpenOption.WRITE,
+                    LinkOption.NOFOLLOW_LINKS,
+                ).use { output -> output.write(bytes) }
                 Os.chmod(pending.toString(), EXECUTABLE_FILE_MODE)
                 Os.rename(pending.toString(), target.absolutePath)
             } finally {

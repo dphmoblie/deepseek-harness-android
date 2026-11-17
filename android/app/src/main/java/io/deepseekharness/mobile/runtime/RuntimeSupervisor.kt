@@ -110,6 +110,7 @@ class RuntimeSupervisor(
     @Volatile private var lastHarnessOutput: String? = null
     private var harnessAccess: HarnessAccess? = null
     private var deviceBridgeAccess: DeviceBridgeAccess? = null
+    private var staleHarnessReapedWhileIdle = false
 
     init {
         // 桥接层（io.deepseekharness.mobile.MobileRuntimePlugin）拿不到本类的引用：
@@ -140,8 +141,11 @@ class RuntimeSupervisor(
         val existing = harnessProcess
         if (existing?.isAlive == true && harnessAccess != null) return@synchronized status.snapshot()
         // 先回收上次启动残留的 Harness 进程树（应用被回收时子进程不会随退），
-        // 再清理状态，否则 clearHarnessState 会先删掉用于识别残留的 pid 文件
-        reapStaleHarness()
+        // 再清理状态，否则 clearHarnessState 会先删掉用于识别残留的 pid 文件；
+        // 若同一次冷启动里 preparePluginManagement() 刚刚回收过，不再重复全表扫描 /proc。
+        if (!staleHarnessReapedWhileIdle) {
+            reapStaleHarness()
+        }
         clearHarnessState()
 
         // 前置校验失败不改变运行时阶段（它本来就是「未安装 / 已损坏」，不是本次启动把它弄坏的），
@@ -418,6 +422,7 @@ class RuntimeSupervisor(
         val port = store.installedManifest()?.harnessPort
         reapStaleHarness(port)
         port?.let { waitForPortRelease(it) }
+        staleHarnessReapedWhileIdle = true
     }
 
     fun access(): HarnessAccess = synchronized(lock) {
@@ -448,6 +453,7 @@ class RuntimeSupervisor(
     }
 
     private fun clearHarnessState() {
+        staleHarnessReapedWhileIdle = false
         TaskNotification.setHarnessRun(appContext, null)
         // Harness 临时 Basic Auth 与进程周期绑定。停止、自动重启、异常退出和释放运行时
         // 都经过这里；先撤销 App 侧入口授权，避免通知或悬浮球继续重放上一周期的 access。
@@ -655,6 +661,7 @@ class RuntimeSupervisor(
     private fun findMarkedHarnessProcesses(): List<HarnessProcessIdentity> {
         return File("/proc").listFiles().orEmpty().mapNotNull { entry ->
             val pid = entry.name.toIntOrNull()?.takeIf { it > 1 } ?: return@mapNotNull null
+            if (!isOwnedByApp(pid)) return@mapNotNull null
             if (!HarnessResidual.hasEnvironmentEntry(
                     readProcEnvironment(pid),
                     PID_FILE_ENV,
@@ -718,7 +725,8 @@ class RuntimeSupervisor(
                 throwHarnessExit(output)
             }
 
-            if (hasExpectedAuthChallenge(port)) {
+            val launchUrl = output.harnessLaunchUrl()
+            if (launchUrl != null && hasExpectedAuthChallenge(port)) {
                 authServiceReady = true
                 // 复核窗口的语义见 HarnessStartupTimingPolicy：确认「没马上挂」，不是等启动。
                 pauseWhileStarting(HarnessStartupTimingPolicy.STABILITY_MS)
@@ -727,12 +735,16 @@ class RuntimeSupervisor(
                 if (knownFailure.code != "HARNESS_EXITED") {
                     throw RuntimeFailure(knownFailure.code, knownFailure.message)
                 }
-                val launchUrl = output.harnessLaunchUrl()
-                if (launchUrl != null && hasExpectedAuthChallenge(port)) return launchUrl
+                val confirmedUrl = output.harnessLaunchUrl()
+                if (confirmedUrl != null && hasExpectedAuthChallenge(port)) return confirmedUrl
+            } else if (launchUrl == null && !authServiceReady && hasExpectedAuthChallenge(port)) {
+                authServiceReady = true
             }
             // 自适应轮询：冷启动早期探得勤（100ms），超过窗口后退到 200ms。
-            // 用「启动已过去多久」而不是轮询次数，单次探测本身的耗时才不会把窗口算歪。
-            pauseWhileStarting(
+            // 用「启动已过去多久」而不是轮询次数，单次探测本身的耗时才不会把窗口算歪；
+            // 尚未捕获启动 URL 时用输出信号等待，dsh 打印入口行瞬间即可唤醒。
+            waitForHarnessSignal(
+                output,
                 HarnessStartupTimingPolicy.pollIntervalMillis(
                     TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos),
                 ),
@@ -778,6 +790,19 @@ class RuntimeSupervisor(
     private fun pauseWhileStarting(milliseconds: Long) {
         try {
             Thread.sleep(milliseconds)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw RuntimeFailure("HARNESS_START_INTERRUPTED", "Harness 启动等待被中断", error)
+        }
+    }
+
+    private fun waitForHarnessSignal(output: ProcessOutputTail, milliseconds: Long) {
+        try {
+            if (output.harnessLaunchUrl() == null) {
+                output.awaitLaunchSignal(milliseconds)
+            } else {
+                Thread.sleep(milliseconds)
+            }
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
             throw RuntimeFailure("HARNESS_START_INTERRUPTED", "Harness 启动等待被中断", error)
@@ -906,11 +931,19 @@ class RuntimeSupervisor(
         }
     }
 
-    private fun isOwnedByApp(pid: Int): Boolean = try {
-        val uidLine = File("/proc/$pid/status").useLines { lines -> lines.firstOrNull { it.startsWith("Uid:") } }
-        uidLine?.trim()?.split(WHITESPACE)?.getOrNull(1)?.toIntOrNull() == android.os.Process.myUid()
-    } catch (_: Exception) {
-        false
+    private fun isOwnedByApp(pid: Int): Boolean {
+        val myUid = android.os.Process.myUid()
+        try {
+            return Os.lstat("/proc/$pid").st_uid == myUid
+        } catch (_: Throwable) {
+            // 个别内核/ROM 若不允许直接 stat /proc/<pid>，回退到读取 status 首行。
+        }
+        return try {
+            val uidLine = File("/proc/$pid/status").useLines { lines -> lines.firstOrNull { it.startsWith("Uid:") } }
+            uidLine?.trim()?.split(WHITESPACE)?.getOrNull(1)?.toIntOrNull() == myUid
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun pauseWhileStopping(milliseconds: Long) {

@@ -823,6 +823,16 @@ class RuntimeStore(context: Context) {
             Os.chmod(launcherConfigDirectory.absolutePath, 0x1c0)
             deleteGeneratedFile(pending)
             requireRegularGeneratedFileOrMissing(providerPatchFile)
+            if (
+                RuntimeFiles.existsNoFollow(providerPatchFile) &&
+                runCatching {
+                    providerPatchFile.length() == bytes.size.toLong() &&
+                        providerPatchFile.readBytes().contentEquals(bytes)
+                }.getOrDefault(false)
+            ) {
+                Os.chmod(providerPatchFile.absolutePath, 0x180)
+                return RuntimeCommand.PROVIDER_PATCH_GUEST_PATH
+            }
             FileChannel.open(
                 pending.toPath(),
                 StandardOpenOption.CREATE_NEW,

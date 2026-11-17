@@ -25,6 +25,10 @@ object RuntimeDns {
         val content = formatConfig(addresses).toByteArray(Charsets.US_ASCII)
         val parent = destination.parentFile
             ?: throw RuntimeFailure("FILESYSTEM_ERROR", "DNS 配置路径无效")
+        if (hasSameContent(destination, content)) {
+            runCatching { Os.chmod(destination.absolutePath, 0x180) }
+            return
+        }
         val temporary = File(parent, ".${destination.name}.${UUID.randomUUID()}.tmp")
         try {
             FileChannel.open(
@@ -53,6 +57,10 @@ object RuntimeDns {
         val content = "127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n".toByteArray(Charsets.US_ASCII)
         val parent = destination.parentFile
             ?: throw RuntimeFailure("FILESYSTEM_ERROR", "hosts 配置路径无效")
+        if (hasSameContent(destination, content)) {
+            runCatching { Os.chmod(destination.absolutePath, 0x180) }
+            return
+        }
         val temporary = File(parent, ".${destination.name}.${UUID.randomUUID()}.tmp")
         try {
             FileChannel.open(temporary.toPath(), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS).use { channel ->
@@ -81,6 +89,15 @@ object RuntimeDns {
             normalized.forEach { append("nameserver ").append(it).append('\n') }
             append("options timeout:2 attempts:3\n")
         }
+    }
+
+    internal fun hasSameContent(destination: File, expected: ByteArray): Boolean = try {
+        val path = destination.toPath()
+        java.nio.file.Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) &&
+            java.nio.file.Files.size(path) == expected.size.toLong() &&
+            java.nio.file.Files.readAllBytes(path).contentEquals(expected)
+    } catch (_: Throwable) {
+        false
     }
 
     private const val MAX_DNS_SERVERS = 4

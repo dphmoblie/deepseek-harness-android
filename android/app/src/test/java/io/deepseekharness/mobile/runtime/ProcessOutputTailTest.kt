@@ -2,8 +2,13 @@ package io.deepseekharness.mobile.runtime
 
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.PipedInputStream
+import java.io.PipedOutputStream
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -81,5 +86,30 @@ class ProcessOutputTailTest {
         assertEquals("fetch" to 100, HarnessVersions.progressEvent("HARNESS-PROGRESS {\"stage\":\"fetch\",\"percent\":140}"))
         assertEquals("fetch" to 0, HarnessVersions.progressEvent("HARNESS-PROGRESS {\"stage\":\"fetch\",\"percent\":-5}"))
         assertNull(HarnessVersions.progressEvent("HARNESS-PROGRESS 不是 JSON"))
+    }
+
+    @Test
+    fun `捕获到鉴权入口行时立即唤醒启动等待而不是睡满轮询周期`() {
+        val output = PipedOutputStream()
+        val input = PipedInputStream(output)
+        val tail = ProcessOutputTail.drain(FakeProcess(input), "harness", captureHarnessAuth = true)
+        try {
+            val writer = Thread {
+                Thread.sleep(30)
+                output.write("dsh web: http://127.0.0.1:3080/?token=abcdefgh12345678\n".toByteArray(Charsets.UTF_8))
+                output.flush()
+            }
+            writer.isDaemon = true
+            val startedNs = System.nanoTime()
+            writer.start()
+            tail.awaitLaunchSignal(2000)
+            val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNs)
+
+            assertNotNull(tail.harnessLaunchUrl())
+            assertTrue("expected wake before full timeout, elapsed=${elapsedMs}ms", elapsedMs < 1000)
+        } finally {
+            runCatching { output.close() }
+            tail.close()
+        }
     }
 }

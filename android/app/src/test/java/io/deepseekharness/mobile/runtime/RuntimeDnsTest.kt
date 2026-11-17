@@ -2,10 +2,16 @@ package io.deepseekharness.mobile.runtime
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import java.net.InetAddress
 
 class RuntimeDnsTest {
+    @get:Rule
+    val temporaryFolder = TemporaryFolder()
+
     @Test
     fun formatsValidatedSystemDnsAddresses() {
         val config = RuntimeDns.formatConfig(
@@ -33,5 +39,16 @@ class RuntimeDnsTest {
             config,
         )
         assertFalse(config.contains("127.0.0.1"))
+    }
+
+    @Test
+    fun detectsWhenExistingDnsOrHostsFileAlreadyHasSameContent() {
+        val file = temporaryFolder.newFile("resolv.conf")
+        val content = "nameserver 1.1.1.1\n".toByteArray(Charsets.UTF_8)
+        file.writeBytes(content)
+
+        assertTrue(RuntimeDns.hasSameContent(file, content))
+        assertFalse(RuntimeDns.hasSameContent(file, "nameserver 8.8.8.8\n".toByteArray(Charsets.UTF_8)))
+        assertFalse(RuntimeDns.hasSameContent(java.io.File(temporaryFolder.root, "missing.conf"), content))
     }
 }
