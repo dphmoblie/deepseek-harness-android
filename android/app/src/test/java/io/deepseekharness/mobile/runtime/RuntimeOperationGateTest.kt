@@ -82,6 +82,42 @@ class RuntimeOperationGateTest {
     }
 
     @Test
+    fun shortOrdinaryLockHolderDoesNotLookLikeALongOperation() {
+        val gate = RuntimeOperationGate()
+        val lock = ReentrantLock()
+        val held = CountDownLatch(1)
+        val holder = Executors.newSingleThreadExecutor()
+        try {
+            val job = holder.submit {
+                lock.withLock { held.countDown(); Thread.sleep(400) }
+            }
+            assertTrue(held.await(5, TimeUnit.SECONDS))
+            assertEquals("started", gate.withStartLock(lock) { "started" })
+            job.get(5, TimeUnit.SECONDS)
+        } finally {
+            holder.shutdownNow()
+        }
+    }
+
+    @Test
+    fun ordinaryLockHolderWaitIsBounded() {
+        val gate = RuntimeOperationGate(maxStartWaitMs = 300)
+        val lock = ReentrantLock()
+        val held = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val holder = Executors.newSingleThreadExecutor()
+        try {
+            holder.submit { lock.withLock { held.countDown(); release.await(5, TimeUnit.SECONDS) } }
+            assertTrue(held.await(5, TimeUnit.SECONDS))
+            val failure = assertThrows(RuntimeFailure::class.java) { gate.withStartLock(lock) { error("不应启动") } }
+            assertEquals(RuntimeOperationGate.BUSY_CODE, failure.code)
+        } finally {
+            release.countDown()
+            holder.shutdownNow()
+        }
+    }
+
+    @Test
     fun longOperationWinningTheLockAfterIdleCheckDoesNotQueueStart() {
         val gate = RuntimeOperationGate()
         val startReachedLock = CountDownLatch(1)

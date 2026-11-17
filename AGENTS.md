@@ -127,8 +127,9 @@ Git 提交/发布规范见 [`.agents/rules/git-workflow.md`](.agents/rules/git-w
 
 - `RuntimeOperationGate` 与两把包装是刻意设计：`withLongOperationLock` **先**
   `operations.begin()` 再拿锁；`withStartOperationLock` 通过 `operations.withStartLock`
-  在拿锁前后检查长操作，锁竞争最多等待 100ms。不能退回「先检查再无限等锁」，否则两步之间
-  安装抢到锁时，启动仍会排队。
+  在拿锁前后检查长操作，按 100ms 一片等锁、每片之间重查闸门（有长操作登记即快速失败）。不能退回「先检查再无限等锁」，否则两步之间
+  安装抢到锁时，启动仍会排队。也不能退回「100ms 拿不到锁就报忙」：开机时状态读取、设置保存等
+  普通短持锁者会被误报成「Harness 版本操作正在进行」（用户报过的真实 bug）；无长操作时等待以 15 秒封顶。
 - 新增长操作必须走 `withLongOperationLock`。纯读取列表/检查传 `enabled=false`；Harness
   版本列表会探测访客环境、刷新脚本和恢复未完成的切换，因此也必须登记长操作。
 - 拒绝用独立受控码 `RUNTIME_OPERATION_BUSY`，不要复用 `RUNTIME_BUSY`：后者描述的是
