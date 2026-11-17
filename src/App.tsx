@@ -5189,7 +5189,7 @@ export function App() {
    * 「用系统浏览器打开」仍会按系统选择器工作，不阻断入口。
    */
   useEffect(() => {
-    if (settingsPageOf(activeView) !== 'diagnostics') return
+    if (settingsPageOf(activeView) !== 'external-browser') return
     let current = true
     runtimeBridge.getExternalBrowsers().then(next => {
       if (current) setExternalBrowsers(next)

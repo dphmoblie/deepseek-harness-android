@@ -109,4 +109,37 @@ class ExternalBrowsersTest {
         assertTrue(result.single().label.isNotEmpty())
         assertEquals("com.example.browser", result.single().label)
     }
+
+    @Test
+    fun openTargetUsesChosenPackageDirectlyWithoutShowingChooser() {
+        var directPackage: String? = null
+        var chooserOpened = false
+
+        ExternalBrowsers.openTarget(
+            chosenPackage = "com.honor.browser",
+            openWithPackage = { directPackage = it },
+            openWithChooser = { chooserOpened = true },
+        )
+
+        assertEquals("com.honor.browser", directPackage)
+        assertFalse(chooserOpened)
+    }
+
+    @Test
+    fun openTargetFallsBackToChooserWhenUnsetOrDirectLaunchFails() {
+        var chooserCount = 0
+
+        ExternalBrowsers.openTarget(
+            chosenPackage = null,
+            openWithPackage = { error("未固定浏览器时不应直接定向打开") },
+            openWithChooser = { chooserCount += 1 },
+        )
+        ExternalBrowsers.openTarget(
+            chosenPackage = "com.example.removed",
+            openWithPackage = { throw IllegalStateException("missing") },
+            openWithChooser = { chooserCount += 1 },
+        )
+
+        assertEquals(2, chooserCount)
+    }
 }

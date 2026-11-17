@@ -276,6 +276,7 @@ describe('诊断与日志', () => {
     await openSettingsPage('诊断与日志', '系统浏览器')
     const select = await screen.findByRole('combobox', { name: '打开方式' })
     await waitFor(() => expect(select).toHaveValue(''))
+    expect(bridge.getExternalBrowsers).toHaveBeenCalledTimes(1)
 
     fireEvent.change(select, { target: { value: 'com.honor.browser' } })
     await waitFor(() => expect(bridge.setExternalBrowser).toHaveBeenCalledWith('com.honor.browser'))
@@ -284,6 +285,17 @@ describe('诊断与日志', () => {
 
     fireEvent.change(select, { target: { value: '' } })
     await waitFor(() => expect(bridge.setExternalBrowser).toHaveBeenLastCalledWith(null))
+  })
+
+  it('只进入诊断与日志页时不查询系统浏览器清单，进入系统浏览器子页才读取', async () => {
+    render(<App />)
+    await arriveAtSettingsHome()
+
+    await openSettingsPage('诊断与日志')
+    expect(bridge.getExternalBrowsers).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /系统浏览器/ }))
+    await waitFor(() => expect(bridge.getExternalBrowsers).toHaveBeenCalledTimes(1))
   })
 
   it('读不到浏览器清单时不显示打开方式', async () => {

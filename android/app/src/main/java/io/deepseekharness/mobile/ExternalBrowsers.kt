@@ -79,6 +79,26 @@ internal object ExternalBrowsers {
         return list(context).firstOrNull { it.packageName == packageName }
     }
 
+    /**
+     * 先尝试用用户固定的浏览器包名打开；没有固定、已不在清单或拉起失败时退回系统选择器。
+     *
+     * 抽成纯协调函数让 JVM 单测覆盖「固定浏览器直开」「直开抛异常退回选择器」
+     * 「未固定直接走选择器」三条分支，不让过期偏好或被禁用的目标挡住入口。
+     */
+    internal fun openTarget(
+        chosenPackage: String?,
+        openWithPackage: (String) -> Unit,
+        openWithChooser: () -> Unit,
+    ) {
+        val launched = chosenPackage != null && try {
+            openWithPackage(chosenPackage)
+            true
+        } catch (_: Exception) {
+            false
+        }
+        if (!launched) openWithChooser()
+    }
+
     fun toJson(browsers: List<Browser>): JSONArray = JSONArray().apply {
         browsers.forEach { browser ->
             put(JSONObject().put("packageName", browser.packageName).put("label", browser.label))
