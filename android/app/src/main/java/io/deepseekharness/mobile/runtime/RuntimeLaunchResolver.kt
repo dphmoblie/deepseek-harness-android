@@ -33,18 +33,21 @@ internal fun runtimeDeviceFingerprintToken(raw: String): String {
         }
     }
     val input = raw.toByteArray(Charsets.UTF_8)
-    val digest = runCatching {
+    val hmacDigest = runCatching {
         synchronized(RuntimeDeviceFingerprintKey.lock) {
             RuntimeDeviceFingerprintKey.loadOrCreate()?.let { key ->
                 Mac.getInstance("HmacSHA256").apply { init(key) }.doFinal(input)
             }
         }
-    }.getOrNull() ?: MessageDigest.getInstance("SHA-256").digest(input)
+    }.getOrNull()
+    val digest = hmacDigest ?: MessageDigest.getInstance("SHA-256").digest(input)
     val hex = digest.joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
     val token = "device-fp-v1:$hex"
-    synchronized(RuntimeDeviceFingerprintKey.lock) {
-        RuntimeDeviceFingerprintKey.cachedRaw = raw
-        RuntimeDeviceFingerprintKey.cachedToken = token
+    if (hmacDigest != null) {
+        synchronized(RuntimeDeviceFingerprintKey.lock) {
+            RuntimeDeviceFingerprintKey.cachedRaw = raw
+            RuntimeDeviceFingerprintKey.cachedToken = token
+        }
     }
     return token
 }
@@ -743,6 +746,7 @@ internal class ProcessOutputTail private constructor(
     private val webAuth = harnessPort?.let(::HarnessWebAuthCapture)
     private val signal = Object()
     @Volatile private var readerClosed = false
+    private var closeSignalConsumed = false
     private val input: InputStream = process.inputStream
     private val reader = Thread({
         try {
@@ -796,17 +800,28 @@ internal class ProcessOutputTail private constructor(
     fun harnessLaunchUrl(): String? = webAuth?.url()
 
     /**
-     * 等待捕获到启动 URL 或输出流关闭，最长 [timeoutMillis] 毫秒。
+     * 等待捕获到启动 URL 或输出流首次关闭，最长 [timeoutMillis] 毫秒。
      *
      * 让 `RuntimeSupervisor.waitForHarness` 在 `dsh` 打印鉴权地址的瞬间立即醒来，
-     * 不必白等剩下的 100~200ms 轮询间隔。
+     * 不必白等剩下的 100~200ms 轮询间隔；若输出流已关闭但进程尚未退出，仅首次关闭唤醒一次，
+     * 后续调用仍按 [timeoutMillis] 休眠，避免进程关闭标准输出后在退出前发生 CPU 空转。
      */
     @Throws(InterruptedException::class)
     fun awaitLaunchSignal(timeoutMillis: Long) {
         if (timeoutMillis <= 0L) return
         synchronized(signal) {
-            if (webAuth?.url() == null && !readerClosed) {
+            if (webAuth?.url() != null) return
+            if (readerClosed) {
+                if (!closeSignalConsumed) {
+                    closeSignalConsumed = true
+                    return
+                }
                 signal.wait(timeoutMillis)
+                return
+            }
+            signal.wait(timeoutMillis)
+            if (readerClosed) {
+                closeSignalConsumed = true
             }
         }
     }

@@ -531,8 +531,10 @@ class RuntimePluginManager(context: Context, private val store: RuntimeStore) {
             if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS) && !Files.isRegularFile(target.toPath(), LinkOption.NOFOLLOW_LINKS)) invalid()
             val content = appContext.assets.open("support/plugin-manager.cjs").use { it.readBytes() }
             if (Files.isRegularFile(target.toPath(), LinkOption.NOFOLLOW_LINKS) &&
-                Files.size(target.toPath()) == content.size.toLong() &&
-                Files.readAllBytes(target.toPath()).contentEquals(content)
+                runCatching {
+                    Files.size(target.toPath()) == content.size.toLong() &&
+                        Files.readAllBytes(target.toPath()).contentEquals(content)
+                }.getOrDefault(false)
             ) {
                 Os.chmod(target.absolutePath, 0x180)
                 return

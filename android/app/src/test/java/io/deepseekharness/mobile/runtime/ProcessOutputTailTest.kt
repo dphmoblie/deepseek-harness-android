@@ -112,4 +112,24 @@ class ProcessOutputTailTest {
             tail.close()
         }
     }
+
+    @Test
+    fun `输出流提前关闭且未打印入口行时仅首次立即唤醒后续仍按超时等待避免空转`() {
+        val tail = ProcessOutputTail.drain(FakeProcess(ChunkedStream("fatal error\n", 64)), "harness", harnessPort = 3080)
+        try {
+            tail.awaitClosed(1000)
+
+            val firstStartNs = System.nanoTime()
+            tail.awaitLaunchSignal(500)
+            val firstElapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - firstStartNs)
+            assertTrue("首次感知流关闭应立即返回, elapsed=${firstElapsedMs}ms", firstElapsedMs < 200)
+
+            val secondStartNs = System.nanoTime()
+            tail.awaitLaunchSignal(120)
+            val secondElapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - secondStartNs)
+            assertTrue("后续等待应按轮询周期休眠而非空转, elapsed=${secondElapsedMs}ms", secondElapsedMs >= 80)
+        } finally {
+            tail.close()
+        }
+    }
 }

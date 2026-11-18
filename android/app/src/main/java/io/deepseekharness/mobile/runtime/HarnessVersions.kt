@@ -132,8 +132,10 @@ internal class HarnessVersions(private val context: Context, private val store: 
         requirePlainPath(store.currentRoot, script, allowMissing = true)
         val scriptBytes = context.assets.open("support/harness-packages.cjs").use { it.readBytes() }
         if (Files.isRegularFile(script.toPath(), LinkOption.NOFOLLOW_LINKS) &&
-            script.length() == scriptBytes.size.toLong() &&
-            script.readBytes().contentEquals(scriptBytes)
+            runCatching {
+                script.length() == scriptBytes.size.toLong() &&
+                    script.readBytes().contentEquals(scriptBytes)
+            }.getOrDefault(false)
         ) {
             Os.chmod(script.path, 0x180)
         } else {
