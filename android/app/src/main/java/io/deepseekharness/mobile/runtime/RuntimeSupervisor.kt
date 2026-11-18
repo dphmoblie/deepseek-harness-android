@@ -718,7 +718,6 @@ class RuntimeSupervisor(
     private fun waitForHarness(process: Process, port: Int, output: ProcessOutputTail): String {
         val startedAtNanos = System.nanoTime()
         val deadline = startedAtNanos + TimeUnit.SECONDS.toNanos(START_TIMEOUT_SECONDS)
-        var authServiceReady = false
         while (System.nanoTime() < deadline) {
             throwIfStartCancelled()
             if (!process.isAlive) {
@@ -727,7 +726,6 @@ class RuntimeSupervisor(
 
             val launchUrl = output.harnessLaunchUrl()
             if (launchUrl != null && hasExpectedAuthChallenge(port)) {
-                authServiceReady = true
                 // 复核窗口的语义见 HarnessStartupTimingPolicy：确认「没马上挂」，不是等启动。
                 pauseWhileStarting(HarnessStartupTimingPolicy.STABILITY_MS)
                 if (!process.isAlive) throwHarnessExit(output)
@@ -737,8 +735,6 @@ class RuntimeSupervisor(
                 }
                 val confirmedUrl = output.harnessLaunchUrl()
                 if (confirmedUrl != null && hasExpectedAuthChallenge(port)) return confirmedUrl
-            } else if (launchUrl == null && !authServiceReady && hasExpectedAuthChallenge(port)) {
-                authServiceReady = true
             }
             // 自适应轮询：冷启动早期探得勤（100ms），超过窗口后退到 200ms。
             // 用「启动已过去多久」而不是轮询次数，单次探测本身的耗时才不会把窗口算歪；
@@ -750,7 +746,7 @@ class RuntimeSupervisor(
                 ),
             )
         }
-        if (authServiceReady && output.harnessLaunchUrl() == null) {
+        if (output.harnessLaunchUrl() == null && hasExpectedAuthChallenge(port)) {
             throw RuntimeFailure("HARNESS_AUTH_UNAVAILABLE", "Harness 未提供有效的网页认证入口")
         }
         throw RuntimeFailure("HARNESS_START_TIMEOUT", "Harness 未在限定时间内启动")

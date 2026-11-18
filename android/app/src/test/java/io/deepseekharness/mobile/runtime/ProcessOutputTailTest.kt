@@ -6,7 +6,6 @@ import java.io.PipedInputStream
 import java.io.PipedOutputStream
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -92,11 +91,12 @@ class ProcessOutputTailTest {
     fun `捕获到鉴权入口行时立即唤醒启动等待而不是睡满轮询周期`() {
         val output = PipedOutputStream()
         val input = PipedInputStream(output)
-        val tail = ProcessOutputTail.drain(FakeProcess(input), "harness", captureHarnessAuth = true)
+        val tail = ProcessOutputTail.drain(FakeProcess(input), "harness", harnessPort = 3080)
         try {
+            val token = "a".repeat(43)
             val writer = Thread {
                 Thread.sleep(30)
-                output.write("dsh web: http://127.0.0.1:3080/?token=abcdefgh12345678\n".toByteArray(Charsets.UTF_8))
+                output.write("dsh web: http://127.0.0.1:3080/?token=$token\n".toByteArray(Charsets.UTF_8))
                 output.flush()
             }
             writer.isDaemon = true
@@ -105,7 +105,7 @@ class ProcessOutputTailTest {
             tail.awaitLaunchSignal(2000)
             val elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNs)
 
-            assertNotNull(tail.harnessLaunchUrl())
+            assertEquals("http://127.0.0.1:3080/?token=$token", tail.harnessLaunchUrl())
             assertTrue("expected wake before full timeout, elapsed=${elapsedMs}ms", elapsedMs < 1000)
         } finally {
             runCatching { output.close() }
