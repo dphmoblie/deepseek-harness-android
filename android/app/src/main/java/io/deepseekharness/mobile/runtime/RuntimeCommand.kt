@@ -91,19 +91,13 @@ object RuntimeCommand {
     /**
      * 强制 Harness 不打开系统浏览器：应用内用 WebView 打开 loopback 地址。
      *
-     * dsh 的 `web` 子命令默认会调起系统浏览器；在 Android 上这是可见副作用，
-     * 用户会看到应用之外又弹出一个浏览器。参数顺序不影响 dsh 解析，统一插在 `web` 之后。
+     * `--no-open` 是 `web` 应用的参数，不是 dsh 的全局选项；追加到 argv 末尾，
+     * 避免它排在 `--patch` 等全局选项之前被 Commander 当成未知选项透传。
      */
     fun withNoOpen(entrypoint: List<String>): List<String> {
         if (entrypoint.isEmpty() || entrypoint[0] != "/usr/local/bin/dsh") return entrypoint
         if ("--no-open" in entrypoint) return entrypoint
-        val webIndex = entrypoint.indexOf("web")
-        if (webIndex < 0) return entrypoint
-        return buildList {
-            addAll(entrypoint.take(webIndex + 1))
-            add("--no-open")
-            addAll(entrypoint.drop(webIndex + 1))
-        }
+        return entrypoint + "--no-open"
     }
 
     fun withProviderPatch(entrypoint: List<String>, patchPath: String?): List<String> {
@@ -114,23 +108,49 @@ object RuntimeCommand {
     }
 
     /**
-     * 把 `--patch` 插到 dsh 之后、`web` 之前。
+     * 把 `--patch` 插到 dsh 的全局选项区，并补上 dsh 需要的 `--profile <name>`。
      *
-     * dsh 0.2.1-rc.1 的 `--patch` 是全局选项（`lib/bin.js` 的 `option("--patch <path>")`），
-     * 必须位于 profile 命令（`web`）之前；插在 `web` 之后会被 app 解析成
-     * `unknown option '--patch'`，Harness 随即退出。可重复出现，provider patch 与
-     * plugin patch 因此可以叠加。
+     * `dsh --patch file web` 会被 Commander 当成「首参数是选项」，不会走
+     * `first !== "-" ? ["--profile", ...argv]` 的隐式 profile 补全，于是直接报
+     * `error: --profile <name> is required`。带补丁时必须显式写成：
+     *
+     *     dsh --profile web --patch file --host ...
+     *
+     * `--patch` 可重复出现，provider patch 与 plugin patch 因此可以叠加。
      */
     fun withPatch(entrypoint: List<String>, patchPath: String?): List<String> {
         if (patchPath == null) return entrypoint.toList()
-        if (entrypoint.isEmpty() || entrypoint[0] != "/usr/local/bin/dsh" || "web" !in entrypoint) {
+        if (entrypoint.isEmpty() || entrypoint[0] != "/usr/local/bin/dsh") {
             throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "Harness 启动配置无效")
         }
-        return buildList(entrypoint.size + 2) {
-            add(entrypoint[0])
+        val explicitProfile = entrypoint.indexOf("--profile")
+        val base: List<String>
+        val profileValueIndex: Int
+        if (explicitProfile >= 0) {
+            if (explicitProfile + 1 >= entrypoint.size) {
+                throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "Harness 启动配置无效")
+            }
+            base = entrypoint
+            profileValueIndex = explicitProfile + 1
+        } else {
+            val webIndex = entrypoint.indexOf("web")
+            if (webIndex != 1) {
+                throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "Harness 启动配置无效")
+            }
+            base = buildList(entrypoint.size + 2) {
+                add(entrypoint[0])
+                add("--profile")
+                add("web")
+                addAll(entrypoint.drop(2))
+            }
+            profileValueIndex = 2
+        }
+        val insertAt = profileValueIndex + 1
+        return buildList(base.size + 2) {
+            addAll(base.take(insertAt))
             add("--patch")
             add(patchPath)
-            addAll(entrypoint.drop(1))
+            addAll(base.drop(insertAt))
         }
     }
 

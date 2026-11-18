@@ -12,7 +12,7 @@ class RuntimeModelProvidersTest {
     fun harnessEntrypointAlwaysDisablesTheExternalBrowser() {
         val entrypoint = listOf("/usr/local/bin/dsh", "web", "--host", "127.0.0.1", "--port", "3080")
         val pinned = RuntimeCommand.withNoOpen(entrypoint)
-        assertEquals(listOf("/usr/local/bin/dsh", "web", "--no-open", "--host", "127.0.0.1", "--port", "3080"), pinned)
+        assertEquals(listOf("/usr/local/bin/dsh", "web", "--host", "127.0.0.1", "--port", "3080", "--no-open"), pinned)
         assertEquals(pinned, RuntimeCommand.withNoOpen(pinned))
         val terminal = listOf("/bin/bash", "--login")
         assertEquals(terminal, RuntimeCommand.withNoOpen(terminal))
@@ -48,7 +48,7 @@ class RuntimeModelProvidersTest {
         val entrypoint = listOf("/usr/local/bin/dsh", "web", "--host", "127.0.0.1", "--port", "3080")
         assertEquals(entrypoint, RuntimeCommand.withProviderPatch(entrypoint, null))
         assertEquals(
-            listOf("/usr/local/bin/dsh", "--patch", RuntimeCommand.PROVIDER_PATCH_GUEST_PATH, "web",
+            listOf("/usr/local/bin/dsh", "--profile", "web", "--patch", RuntimeCommand.PROVIDER_PATCH_GUEST_PATH,
                 "--host", "127.0.0.1", "--port", "3080"),
             RuntimeCommand.withProviderPatch(entrypoint, RuntimeCommand.PROVIDER_PATCH_GUEST_PATH),
         )
@@ -58,6 +58,15 @@ class RuntimeModelProvidersTest {
         assertThrows(RuntimeFailure::class.java) {
             RuntimeCommand.withProviderPatch(listOf("/bin/sh"), RuntimeCommand.PROVIDER_PATCH_GUEST_PATH)
         }
+
+        // provider + plugin 两个补丁叠加时 --profile 只能出现一次，--patch 必须有两条。
+        val providerPatched = RuntimeCommand.withProviderPatch(
+            entrypoint, RuntimeCommand.PROVIDER_PATCH_GUEST_PATH,
+        )
+        val stacked = RuntimeCommand.withPatch(providerPatched, "/root/.dsh-mobile/launcher-plugins.patch.json")
+        assertEquals(1, stacked.count { it == "--profile" })
+        assertEquals(2, stacked.count { it == "--patch" })
+        assertEquals("--no-open", RuntimeCommand.withNoOpen(stacked).last())
     }
 
     @Test
