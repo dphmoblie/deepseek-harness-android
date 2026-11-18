@@ -209,6 +209,22 @@ describe('后台保持与恢复', () => {
     expect(screen.getByRole('button', { name: '申请通知权限' })).toBeVisible()
   })
 
+  it('Android 16+ 实况动态通知未获授权时显示状态与设置入口', async () => {
+    bridge.getKeepAliveState.mockResolvedValue({
+      ...keepAlive,
+      notificationPermission: 'granted',
+      promotedNotificationPermission: 'prompt',
+    })
+    render(<App />)
+    await arriveAtSettingsHome()
+
+    await openSettingsPage('后台', '后台保持')
+    expect(await screen.findByText('实时动态通知')).toBeVisible()
+    expect(screen.getByText('未授予')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '开启实时动态' }))
+    await waitFor(() => expect(bridge.openPromotedNotificationSettings).toHaveBeenCalledTimes(1))
+  })
+
   it('进程被系统回收后提示重新连接并可通过同一入口重启', async () => {
     bridge.getKeepAliveState.mockResolvedValue({
       ...keepAlive,

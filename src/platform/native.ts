@@ -244,6 +244,7 @@ interface NativeRuntimePlugin {
   getKeepAliveState(): Promise<KeepAliveState>
   requestNotificationPermission(): Promise<NotificationPermissionResult>
   openNotificationSettings(): Promise<void>
+  openPromotedNotificationSettings(): Promise<void>
   openApplicationSettings(): Promise<void>
   overlayBallState(): Promise<unknown>
   setOverlayBallEnabled(options: { enabled: boolean }): Promise<unknown>
@@ -577,6 +578,7 @@ function createNativeBridge(): RuntimeBridge {
     getKeepAliveState: () => NativeRuntime.getKeepAliveState().then(validateKeepAliveState),
     requestNotificationPermission: () => NativeRuntime.requestNotificationPermission().then(validateNotificationPermissionResult),
     openNotificationSettings: () => NativeRuntime.openNotificationSettings(),
+    openPromotedNotificationSettings: () => NativeRuntime.openPromotedNotificationSettings(),
     openApplicationSettings: () => NativeRuntime.openApplicationSettings(),
     getOverlayBallState: () => NativeRuntime.overlayBallState().then(validateOverlayBallState),
     setOverlayBallEnabled: enabled => typeof enabled === 'boolean'

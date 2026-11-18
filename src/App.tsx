@@ -1774,6 +1774,7 @@ interface SettingsScreenProps {
   /** 忘记密码时的退路：走系统生物识别/锁屏密码重置，只清密码、保留白名单。 */
   onResetAccessibilityPassword: () => void
   onRequestNotificationPermission: () => void
+  onOpenPromotedNotificationSettings: () => void
   onReloadSettings: () => void
   /** 模型与密钥页的「保存密钥」：与离开页面自动保存走同一条写盘路径。 */
   onSaveCredentials: () => Promise<boolean>
@@ -1782,7 +1783,7 @@ interface SettingsScreenProps {
   onShareDiagnostic: () => void
 }
 
-function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallUpdating, overlayBallReadFailed, onDraftChange, onSetOverlayBallEnabled, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenExternalHarness, externalBrowsers, onSelectExternalBrowser, onOpenOverlaySettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSaveCredentials, settledCredentials, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
+function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallUpdating, overlayBallReadFailed, onDraftChange, onSetOverlayBallEnabled, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenExternalHarness, externalBrowsers, onSelectExternalBrowser, onOpenOverlaySettings, onOpenPromotedNotificationSettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSaveCredentials, settledCredentials, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
@@ -2982,6 +2983,12 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
               <span>{t("通知权限")}</span>
               <strong>{t(NOTIFICATION_PERMISSION_LABELS[keepAlive.notificationPermission])}</strong>
             </div>
+            {keepAlive.promotedNotificationPermission && keepAlive.promotedNotificationPermission !== 'unsupported' && (
+              <div className="settings-status-row">
+                <span>{t("实时动态通知")}</span>
+                <strong>{t(NOTIFICATION_PERMISSION_LABELS[keepAlive.promotedNotificationPermission])}</strong>
+              </div>
+            )}
             <div className="settings-status-row">
               <span>{t("最近状态")}</span>
               <strong>{lastRunLabel}</strong>
@@ -2999,10 +3006,19 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
           <p className="settings-note">
             {t("后台保持可以降低应用被系统结束的概率，但无法阻止所有电池优化或内存清理。进程停止后，需要重新连接 Harness。")}
           </p>
+          {keepAlive.promotedNotificationPermission === 'prompt' && (
+            <p className="settings-note">
+              {t("系统尚未允许本应用展示实况动态通知（如状态栏胶囊或兼容的超级岛）。部分机型对手动安装包会先收紧该开关：如有需要，请先在应用信息右上角「允许受限设置」，再到系统通知设置里开启「实时更新」或相关展示权限；是否展示仍由系统与厂商策略决定。")}
+            </p>
+          )}
           <div className="settings-inline-actions">
             {keepAlive.notificationPermission === 'prompt' && (
               <button className="button button-secondary" type="button" onClick={onRequestNotificationPermission} disabled={busy !== null}>
                 <BellRing size={18} />{t("申请通知权限")}</button>
+            )}
+            {keepAlive.promotedNotificationPermission === 'prompt' && (
+              <button className="button button-secondary" type="button" onClick={onOpenPromotedNotificationSettings} disabled={busy !== null}>
+                <ExternalLink size={18} />{t("开启实时动态")}</button>
             )}
             {keepAlive.reconnectRequired && (
               <button className="button button-secondary" type="button" onClick={onLaunch} disabled={busy !== null || harnessVersionBusy || !runtimeInstalled(runtime)}>
@@ -5629,6 +5645,11 @@ export function App() {
     void run('open-notification-settings', () => runtimeBridge.openNotificationSettings())
   }, [run])
 
+  /** 跳到本应用的实况动态通知设置页（Android 16+）：侧载包在部分系统默认关闭此开关。 */
+  const openPromotedNotificationSettings = useCallback(() => {
+    void run('open-promoted-notification-settings', () => runtimeBridge.openPromotedNotificationSettings())
+  }, [run])
+
   /**
    * 跳到应用详情页。
    *
@@ -5906,7 +5927,7 @@ export function App() {
         /** 三级页的返回键回它的二级页；二级页照旧回设置首页。 */
         const parentPage = SETTINGS_PAGE_META[page].parent
         const backTarget: AppView = parentPage === undefined ? 'settings' : SETTINGS_PAGE_META[parentPage].view
-        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} harnessVersionBusy={versionOperationBusy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallUpdating={overlayBallUpdating} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} onSetOverlayBallEnabled={setOverlayBallEnabled} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenExternalHarness={openExternalHarness} externalBrowsers={externalBrowsers} onSelectExternalBrowser={selectExternalBrowser} onOpenOverlaySettings={openOverlaySettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveCredentials={() => saveSettingsDraft()} settledCredentials={settledCredentials.current} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
+        return <SettingsScreen key={`${page}-${settingsReadStatus}`} accessibility={accessibility} busy={busy} harnessVersionBusy={versionOperationBusy} diagnostic={diagnostic} draft={settingsDraft} keepAlive={keepAlive} lastStop={lastStop} loadDiagnosticLog={loadDiagnosticLog} loadHarnessLog={loadHarnessLog} overlayBall={overlayBall} overlayBallUpdating={overlayBallUpdating} overlayBallReadFailed={overlayBallReadFailed} onDraftChange={updateSettingsDraft} onSetOverlayBallEnabled={setOverlayBallEnabled} page={page} runSelfCheck={runSelfCheck} runtime={runtime} settingsReadStatus={settingsReadStatus} shizuku={shizuku} onAuthorize={requestShizukuPermission} onBack={() => backToView(backTarget)} onClearDiagnostic={clearDiagnostic} onConnect={connectShizuku} onDiagnosticSettings={saveDiagnosticSettings} onLaunch={() => launchHarness()} onLaunchConfirmed={() => launchHarnessConfirmed()} onOpenAccessibilitySettings={openAccessibilitySettings} onOpenExternalHarness={openExternalHarness} externalBrowsers={externalBrowsers} onSelectExternalBrowser={selectExternalBrowser} onOpenOverlaySettings={openOverlaySettings} onOpenPromotedNotificationSettings={openPromotedNotificationSettings} onOpenShizuku={openShizuku} onOpenEnvironment={() => setActiveView('environment')} onOpenDeviceShell={() => setActiveView('settings-device-shell')} onOpenSubpage={target => setActiveView(SETTINGS_PAGE_META[target].view)} onOpenShellView={() => setActiveView('terminal')} onReloadSettings={() => openSettings(page)} onRequestNotificationPermission={requestNotificationPermission} onSaveCredentials={() => saveSettingsDraft()} settledCredentials={settledCredentials.current} onSaveAccessibilityPackages={saveAccessibilityPackages} onSaveAccessibilityPassword={saveAccessibilityPassword} onSetAccessibilityRuntime={setAccessibilityRuntime} onSetAutomationRuleEnabled={setAccessibilityRuleEnabled} onClearAccessibilityPassword={clearAccessibilityPassword} onResetAccessibilityPassword={resetAccessibilityPassword} onShareDiagnostic={shareDiagnostic} />
       }
     }
   })()

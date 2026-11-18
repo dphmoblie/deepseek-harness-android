@@ -1002,6 +1002,16 @@ export function validateKeepAliveState(value: unknown): KeepAliveState {
   if (typeof state.notificationPermission !== 'string' || !NOTIFICATION_PERMISSIONS.has(state.notificationPermission as NotificationPermission)) {
     throw new Error('通知权限状态格式无效')
   }
+  let promotedNotificationPermission: NotificationPermission | undefined
+  if (state.promotedNotificationPermission !== undefined) {
+    if (
+      typeof state.promotedNotificationPermission !== 'string' ||
+      !NOTIFICATION_PERMISSIONS.has(state.promotedNotificationPermission as NotificationPermission)
+    ) {
+      throw new Error('实况通知权限状态格式无效')
+    }
+    promotedNotificationPermission = state.promotedNotificationPermission as NotificationPermission
+  }
   if (typeof state.lastIntent !== 'string' || !RUNTIME_INTENTS.has(state.lastIntent as RuntimeIntent)) {
     throw new Error('运行意图格式无效')
   }
@@ -1035,6 +1045,7 @@ export function validateKeepAliveState(value: unknown): KeepAliveState {
     keepRuntimeInBackground: state.keepRuntimeInBackground,
     foregroundServiceActive: state.foregroundServiceActive,
     notificationPermission: state.notificationPermission as NotificationPermission,
+    ...(promotedNotificationPermission === undefined ? {} : { promotedNotificationPermission }),
     deviceShellReady: state.deviceShellReady,
     reconnectRequired: state.reconnectRequired,
     lastIntent: state.lastIntent as RuntimeIntent,

@@ -158,6 +158,7 @@ export const bridge = {
   exportMailbox: vi.fn(),
   requestNotificationPermission: vi.fn(),
   openNotificationSettings: vi.fn(),
+  openPromotedNotificationSettings: vi.fn(),
   openApplicationSettings: vi.fn(),
   getHarnessLog: vi.fn(),
   runRuntimeSelfCheck: vi.fn(),
@@ -584,6 +585,7 @@ export function beforeEachAppTest(): void {
   bridge.openAllFilesAccessSettings.mockResolvedValue({ supported: true, granted: false })
   bridge.requestNotificationPermission.mockResolvedValue({ granted: true, supported: true })
   bridge.openNotificationSettings.mockResolvedValue(undefined)
+  bridge.openPromotedNotificationSettings.mockResolvedValue(undefined)
   bridge.openApplicationSettings.mockResolvedValue(undefined)
   bridge.getHarnessLog.mockResolvedValue({ available: true, text: 'Error: tool call failed\n    at run (dsh.js:1:1)', maxBytes: 8 * 1024 })
   // 默认是一次「全部正常」的自检：多数用例只关心设置页本身，不该被一个非 ok 项影响。

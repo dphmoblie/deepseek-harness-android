@@ -591,11 +591,23 @@ describe('后台保持状态校验', () => {
 
   it('拒绝非法枚举、非布尔值与负数时间', () => {
     expect(() => validateKeepAliveState({ ...base, notificationPermission: 'root' })).toThrow('通知权限')
+    expect(() => validateKeepAliveState({ ...base, promotedNotificationPermission: 'always' })).toThrow('实况通知权限')
     expect(() => validateKeepAliveState({ ...base, lastIntent: 'paused' })).toThrow('运行意图')
     expect(() => validateKeepAliveState({ ...base, lastPhase: 'sleeping' })).toThrow('运行时阶段')
     expect(() => validateKeepAliveState({ ...base, reconnectRequired: 'yes' })).toThrow('后台保持状态')
     expect(() => validateKeepAliveState({ ...base, lastUpdatedAtMillis: -1 })).toThrow('更新时间')
     expect(() => validateKeepAliveState(null)).toThrow('后台保持状态')
+  })
+
+  it('校验可选实况通知权限枚举并在缺省时保持兼容', () => {
+    expect(validateKeepAliveState({ ...base, promotedNotificationPermission: 'granted' })).toEqual({
+      ...base,
+      promotedNotificationPermission: 'granted',
+    })
+    expect(validateKeepAliveState({ ...base, promotedNotificationPermission: 'prompt' })).toEqual({
+      ...base,
+      promotedNotificationPermission: 'prompt',
+    })
   })
 
   it('只接受布尔型的通知权限结果', () => {

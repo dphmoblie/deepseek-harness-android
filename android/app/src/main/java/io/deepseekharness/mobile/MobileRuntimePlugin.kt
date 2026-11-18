@@ -71,6 +71,7 @@ import io.deepseekharness.mobile.runtime.draftOrSavedApi
 import io.deepseekharness.mobile.runtime.draftOrSavedBaseUrl
 import io.deepseekharness.mobile.runtime.MailboxDirectoryEntry
 import io.deepseekharness.mobile.runtime.MailboxDirectoryState
+import io.deepseekharness.mobile.runtime.TaskLiveNotificationCompat
 import io.deepseekharness.mobile.runtime.TaskNotification
 import io.deepseekharness.mobile.runtime.MailboxImportOutcome
 import io.deepseekharness.mobile.runtime.MailboxState
@@ -4256,6 +4257,7 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun openNotificationSettings(call: PluginCall) {
         execute(call) {
+            runCatching { TaskNotification.ensureActiveChannel(context) }
             val intents = buildList {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     add(
@@ -4268,18 +4270,32 @@ class MobileRuntimePlugin : Plugin() {
                         .setData(android.net.Uri.parse("package:${context.packageName}")),
                 )
             }.map { it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-            val opened = intents.any { candidate ->
-                runCatching {
-                    context.startActivity(candidate)
-                }.isSuccess
-            }
-            if (!opened) {
-                throw RuntimeFailure(
-                    "NOTIFICATION_SETTINGS_UNAVAILABLE",
-                    "无法打开系统通知设置页",
-                )
-            }
+            launchNotificationSettingsOrThrow(intents)
             null
+        }
+    }
+
+    /** 跳转到系统实况动态 / 超级岛相关通知设置页；系统无独立页面时自动回退到应用通知设置。 */
+    @PluginMethod
+    fun openPromotedNotificationSettings(call: PluginCall) {
+        execute(call) {
+            runCatching { TaskNotification.ensureActiveChannel(context) }
+            launchNotificationSettingsOrThrow(
+                TaskLiveNotificationCompat.buildPromotionSettingsIntents(context.packageName),
+            )
+            null
+        }
+    }
+
+    private fun launchNotificationSettingsOrThrow(intents: List<Intent>) {
+        val opened = intents.any { candidate ->
+            runCatching { context.startActivity(candidate) }.isSuccess
+        }
+        if (!opened) {
+            throw RuntimeFailure(
+                "NOTIFICATION_SETTINGS_UNAVAILABLE",
+                "无法打开系统通知设置页",
+            )
         }
     }
 
@@ -4747,6 +4763,7 @@ class MobileRuntimePlugin : Plugin() {
         .put("keepRuntimeInBackground", keepRuntimeInBackground)
         .put("foregroundServiceActive", foregroundServiceActive)
         .put("notificationPermission", notificationPermissionState())
+        .put("promotedNotificationPermission", TaskLiveNotificationCompat.promotedNotificationPermissionState(context))
         // 前台服务未运行时，最近一次被系统拒绝启动的原因令牌（受控枚举，null=无失败或正在运行）。
         // 界面据此区分「缺通知权限」与「厂商后台策略拒绝」，给出可操作的指引而不是一句泛化的「未生效」。
         .put(

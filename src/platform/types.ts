@@ -718,6 +718,8 @@ export interface KeepAliveState {
   foregroundServiceActive: boolean
   /** 通知权限状态；仅影响 Android 13+ 是否显示前台服务通知。 */
   notificationPermission: NotificationPermission
+  /** Android 16+ 实况动态 / 超级岛相关系统提升权限状态；低于 API 36 时为 unsupported。 */
+  promotedNotificationPermission?: NotificationPermission
   /** Shizuku 设备 Shell 是否已授权可用；仅用于辅助连接恢复，未授权时降级为 false。 */
   deviceShellReady: boolean
   /**
@@ -2026,6 +2028,8 @@ export interface RuntimeBridge {
   requestNotificationPermission: () => Promise<NotificationPermissionResult>
   /** 跳转到本应用的系统通知设置页；通知权限被拒后由用户手动开启。 */
   openNotificationSettings: () => Promise<void>
+  /** 跳转到本应用的实况动态通知设置页（API 36+）；不存在时自动回落到应用通知设置。 */
+  openPromotedNotificationSettings: () => Promise<void>
   /** 跳转到本应用的系统详情页；厂商 ROM 的省电策略 / 自启动指引从这里进入。 */
   openApplicationSettings: () => Promise<void>
   /** 悬浮球状态；不含任何用户数据。 */

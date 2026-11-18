@@ -19,6 +19,9 @@ import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
 import io.deepseekharness.mobile.runtime.audit.AuditResult
 import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
+import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLog
 
 /**
  * 任务通知的投递（登记册 §5.5，设计见 `docs/design/任务通知.md`）。
@@ -66,7 +69,6 @@ internal object TaskNotification {
     /** 重启后 Shizuku 自动连接失败的独立提醒，避免覆盖 Harness 状态通知。 */
     private const val SHIZUKU_RECONNECT_NOTIFICATION_ID = 0x44534805
     private const val TURN_ACTIVE_NOTIFICATION_ID = 0x44534806
-    private const val ACTIVE_CHANNEL_ID = "dsh_active_tasks"
     private val ACTIVE_TOKEN = Any()
 
     /** 合并窗口定时器的 tag（`Handler.postAtTime` 的重排标识，只在本对象内使用）。 */
@@ -110,6 +112,7 @@ internal object TaskNotification {
     private val turnActivity = TurnActivityState()
     private var harnessRunId: String? = null
     private var pendingOutcome: String? = null
+    private var lastActiveDiagnosticReason: String? = null
 
     fun activeTurnSnapshot(): TurnActivityState.Snapshot = synchronized(turnCompletedLock) {
         turnActivity.snapshot(SystemClock.elapsedRealtime())
@@ -118,9 +121,35 @@ internal object TaskNotification {
     /** 每次 Harness 启动更换代次，停止后的迟到请求不能点亮新一轮通知。 */
     fun setHarnessRun(context: Context, runId: String?) = synchronized(turnCompletedLock) {
         harnessRunId = runId
+        lastActiveDiagnosticReason = null
         turnActivity.clear()
         clearPendingCompletion()
         refreshTaskStatus(context)
+    }
+
+    /**
+     * 确保「AI 任务进度」使用静默 `IMPORTANCE_DEFAULT` 新通道，并清理旧的 `IMPORTANCE_LOW` 通道。
+     * 在展示进行中通知与跳系统通知设置前调用，避免设置页仍停留在旧通道级别。
+     */
+    fun ensureActiveChannel(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val systemManager = context.getSystemService(NotificationManager::class.java) ?: return
+        val localized = AppLanguage.localizedContext(context)
+        if (systemManager.getNotificationChannel(TaskLivePromotionPolicy.LEGACY_ACTIVE_CHANNEL_ID) != null) {
+            systemManager.deleteNotificationChannel(TaskLivePromotionPolicy.LEGACY_ACTIVE_CHANNEL_ID)
+        }
+        val channel = NotificationChannel(
+            TaskLivePromotionPolicy.ACTIVE_CHANNEL_ID,
+            localized.getString(R.string.task_notification_active_channel_name),
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply {
+            description = localized.getString(R.string.task_notification_active_channel_description)
+            setSound(null, null)
+            enableVibration(false)
+            setShowBadge(false)
+            lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+        }
+        systemManager.createNotificationChannel(channel)
     }
 
     /** 稍后重查前后台，避免 Activity 切换和旋转时闪出通知。 */
@@ -141,40 +170,47 @@ internal object TaskNotification {
                 return@synchronized
             }
             val localized = AppLanguage.localizedContext(context)
-            val channel = NotificationChannel(
-                ACTIVE_CHANNEL_ID,
-                localized.getString(R.string.task_notification_active_channel_name),
-                NotificationManager.IMPORTANCE_LOW,
-            ).apply {
-                description = localized.getString(R.string.task_notification_active_channel_description)
-                setSound(null, null)
-                enableVibration(false)
-                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-            }
-            context.getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
+            ensureActiveChannel(localized)
             val delay = ((active.startedAtMs ?: now) + TurnActivityState.STALE_AFTER_MS - now).coerceAtLeast(1L)
-            val builder = NotificationCompat.Builder(localized, ACTIVE_CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_keep_alive)
-                .setContentTitle(localized.getString(R.string.task_notification_active_title))
-                .setContentText(localized.getString(R.string.task_notification_active_text, active.activeCount))
-                .setContentIntent(openAppIntent(context))
-                .setCategory(NotificationCompat.CATEGORY_PROGRESS)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setOngoing(true)
-                .setOnlyAlertOnce(true)
-                .setProgress(0, 0, true)
-                // 进程被回收后 Handler 无法执行，交给系统按同一失效时间撤下。
-                .setTimeoutAfter(delay)
-                .setUsesChronometer(true)
-                .setWhen(System.currentTimeMillis() - (now - (active.startedAtMs ?: now)).coerceAtLeast(0L))
+            val whenMs = System.currentTimeMillis() - (now - (active.startedAtMs ?: now)).coerceAtLeast(0L)
+            val built = TaskLiveNotificationCompat.buildActiveTaskNotification(
+                context = localized,
+                spec = TaskLiveNotificationCompat.ActiveTaskNotificationSpec(
+                    channelId = TaskLivePromotionPolicy.ACTIVE_CHANNEL_ID,
+                    smallIconRes = R.drawable.ic_keep_alive,
+                    title = localized.getString(R.string.task_notification_active_title),
+                    text = localized.getString(R.string.task_notification_active_text, active.activeCount),
+                    shortStatus = localized.getString(R.string.task_notification_active_short),
+                    contentIntent = openAppIntent(context),
+                    // 进程被回收后 Handler 无法执行，交给系统按同一失效时间撤下。
+                    timeoutAfterMs = delay,
+                    whenMs = whenMs,
+                ),
+            )
             try {
-                manager.notify(TURN_ACTIVE_NOTIFICATION_ID, TaskLiveNotificationCompat.apply(
-                    builder, localized.getString(R.string.task_notification_active_short),
-                ).build())
+                manager.notify(TURN_ACTIVE_NOTIFICATION_ID, built.notification)
             } catch (_: SecurityException) {
                 // 权限在检查与投递之间被撤销时，任务状态仍由界面显示。
                 return@synchronized
+            }
+            val promotedPermission = TaskLiveNotificationCompat.promotedNotificationPermissionState(context)
+            val diagnosticReason = TaskLivePromotionPolicy.diagnosticReason(
+                promotedPermission = promotedPermission,
+                hasPromotable = built.hasPromotableCharacteristics,
+            )
+            if (diagnosticReason != null && diagnosticReason != lastActiveDiagnosticReason) {
+                lastActiveDiagnosticReason = diagnosticReason
+                runCatching {
+                    DiagnosticLog(context.applicationContext).record(
+                        DiagnosticLevel.WARN,
+                        DiagnosticEvent.KEEP_ALIVE,
+                        mapOf(
+                            "reason" to diagnosticReason,
+                            "permission" to if (promotedPermission == "granted") "granted" else "denied",
+                            "sdk" to Build.VERSION.SDK_INT.toString(),
+                        ),
+                    )
+                }
             }
             // 收口信号丢失时也有上限；不轮询、不启动额外服务。
             mainHandler.postAtTime({ updateTaskStatus(context) }, ACTIVE_TOKEN, SystemClock.uptimeMillis() + delay)
