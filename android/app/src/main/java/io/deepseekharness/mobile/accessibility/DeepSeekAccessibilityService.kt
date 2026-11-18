@@ -565,10 +565,13 @@ class DeepSeekAccessibilityService : AccessibilityService() {
      * `getWindows()` 只返回默认显示屏（displayId=0）的窗口；副屏窗口必须从
      * `getWindowsOnAllDisplays()` 按 displayId 取。取不到就返回 null，绝不回退主屏。
      */
-    private fun windowsForDisplay(displayId: Int): List<AccessibilityWindowInfo>? = try {
-        getWindowsOnAllDisplays().get(displayId)
-    } catch (_: Throwable) {
-        null
+    private fun windowsForDisplay(displayId: Int): List<AccessibilityWindowInfo>? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        return try {
+            getWindowsOnAllDisplays().get(displayId)
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     private fun displayWindowRoot(displayId: Int): AccessibilityNodeInfo? {
