@@ -29,6 +29,13 @@ overrides:
   zod: '>=4.6.6 <5'
   undici: '>=8.12.2 <9'
 
+# dsh-hmr 传递引入的 picomatch <=4.0.7 有 ReDoS 公告（GHSA-fc5q-39xc-vjpf），
+# 但 registry 目前最新仍是 4.0.7，尚无 >=4.0.8 的修复版本可覆盖。
+# 先记录忽略，待上游发布修复后删除本项并恢复 overrides。
+auditConfig:
+  ignoreGhsas:
+    - GHSA-fc5q-39xc-vjpf
+
 minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-acp-app@0.2.1-rc.1'
   - '@deepseek-ai/dsh-acp@0.2.1-rc.1'
