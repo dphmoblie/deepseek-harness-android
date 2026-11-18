@@ -209,7 +209,7 @@ export function Onboarding({
                   {!installed && onOpenVersions !== undefined && (
                     <>
                       <button className="button button-secondary" type="button" onClick={onOpenVersions}>{t("安装失败？去在线下载其它版本")}</button>
-                      <p className="onboarding-status">{t("自行构建的 APK 里可能没有内置镜像；这时到「版本管理 → 在线可用版本」下载一个带校验的版本即可。")}</p>
+                      <p className="onboarding-status">{t("自行构建的 APK 里可能没有内置镜像；若没有内置版本，可在「运行环境」配置自定义 manifest 地址与 SHA-256 后安装，或到「版本管理」切换已保留版本。")}</p>
                     </>
                   )}
                   <p className="onboarding-status">{t("内置工具已含 Node.js、Python 3、busybox、jq 与 unzip；不含 C 编译器，需要时自行安装。")}</p>

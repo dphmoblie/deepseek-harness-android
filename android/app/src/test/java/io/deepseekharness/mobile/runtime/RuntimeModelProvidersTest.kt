@@ -7,6 +7,17 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class RuntimeModelProvidersTest {
+
+    @Test
+    fun harnessEntrypointAlwaysDisablesTheExternalBrowser() {
+        val entrypoint = listOf("/usr/local/bin/dsh", "web", "--host", "127.0.0.1", "--port", "3080")
+        val pinned = RuntimeCommand.withNoOpen(entrypoint)
+        assertEquals(listOf("/usr/local/bin/dsh", "web", "--no-open", "--host", "127.0.0.1", "--port", "3080"), pinned)
+        assertEquals(pinned, RuntimeCommand.withNoOpen(pinned))
+        val terminal = listOf("/bin/bash", "--login")
+        assertEquals(terminal, RuntimeCommand.withNoOpen(terminal))
+    }
+
     @Test
     fun providerUpdateRejectsUnknownProvidersAndCommandSeparators() {
         assertThrows(RuntimeFailure::class.java) {
@@ -37,7 +48,7 @@ class RuntimeModelProvidersTest {
         val entrypoint = listOf("/usr/local/bin/dsh", "web", "--host", "127.0.0.1", "--port", "3080")
         assertEquals(entrypoint, RuntimeCommand.withProviderPatch(entrypoint, null))
         assertEquals(
-            listOf("/usr/local/bin/dsh", "web", "--patch", RuntimeCommand.PROVIDER_PATCH_GUEST_PATH,
+            listOf("/usr/local/bin/dsh", "--patch", RuntimeCommand.PROVIDER_PATCH_GUEST_PATH, "web",
                 "--host", "127.0.0.1", "--port", "3080"),
             RuntimeCommand.withProviderPatch(entrypoint, RuntimeCommand.PROVIDER_PATCH_GUEST_PATH),
         )

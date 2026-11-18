@@ -540,7 +540,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             return denied("ACCESSIBILITY_DEVICE_LOCKED", "设备已锁定或屏幕未交互")
         }
         val root = displayWindowRoot(displayId)
-            ?: return denied("ACCESSIBILITY_WINDOW_UNAVAILABLE", "显示编号 $displayId 上没有可读取的窗口")
+            ?: return denied("ACCESSIBILITY_WINDOW_UNAVAILABLE", "显示编号 $displayId 上没有可读取的窗口（窗口可能正在切换或刚重建，可稍后重试或先用截图）")
         if (containsSensitiveWindow(root)) {
             root.recycle()
             return denied("ACCESSIBILITY_SENSITIVE_WINDOW", "检测到密码、验证码、支付或权限窗口，已拒绝读取")
@@ -552,20 +552,28 @@ class DeepSeekAccessibilityService : AccessibilityService() {
     /**
      * 按显示编号取窗口根节点；找不到返回 null。
      *
-     * 只从 `getWindows()` 里挑 `displayId` 相等的窗口：拿不到就返回 null，**不会**退化成「当前主屏窗口」
+     * 只从 `getWindowsOnAllDisplays()` 里按 `displayId` 取窗口：拿不到就返回 null，**不会**退化成「当前主屏窗口」
      * （宁可让上层如实报「没有可读取的窗口」，也不能悄悄读到别的屏）。
      *
      * 同一显示编号上可能同时存在多个窗口（应用主窗口、弹窗、输入法）。优先级：非输入法且 `isActive` 的窗口
      * → 其它非输入法窗口 → 剩下的（输入法）。`AccessibilityWindowInfo.recycle()` 与它给出的根节点是两回事：
      * 取到根节点后就回收窗口信息，落选的根节点也一并回收，避免在旧版本上把节点池耗光。
      */
+    /**
+     * 按显示编号取窗口列表。
+     *
+     * `getWindows()` 只返回默认显示屏（displayId=0）的窗口；副屏窗口必须从
+     * `getWindowsOnAllDisplays()` 按 displayId 取。取不到就返回 null，绝不回退主屏。
+     */
+    private fun windowsForDisplay(displayId: Int): List<AccessibilityWindowInfo>? = try {
+        getWindowsOnAllDisplays().get(displayId)
+    } catch (_: Throwable) {
+        null
+    }
+
     private fun displayWindowRoot(displayId: Int): AccessibilityNodeInfo? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
-        val windows = try {
-            getWindows()
-        } catch (_: Throwable) {
-            null
-        } ?: return null
+        val windows = windowsForDisplay(displayId) ?: return null
         var best: AccessibilityNodeInfo? = null
         var bestRank = Int.MAX_VALUE
         for (window in windows) {
@@ -609,11 +617,7 @@ class DeepSeekAccessibilityService : AccessibilityService() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
         if (displayId <= 0) return null
         if (isLockedOrScreenOff()) return null
-        val windows = try {
-            getWindows()
-        } catch (_: Throwable) {
-            null
-        } ?: return null
+        val windows = windowsForDisplay(displayId) ?: return null
         var best: AccessibilityNodeInfo? = null
         var bestRank = Int.MAX_VALUE
         for (window in windows) {

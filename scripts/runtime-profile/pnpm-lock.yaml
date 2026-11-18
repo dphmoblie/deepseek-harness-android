@@ -32,6 +32,9 @@ importers:
       '@deepseek-ai/dsh-web-app':
         specifier: 0.2.1-rc.1
         version: 0.2.1-rc.1(aa907786856d48a06b3f744aaa3eb8f0)
+      '@deepseek-ai/schemastery':
+        specifier: 3.18.5
+        version: 3.18.5
       '@deepseek-harness/dsh-mobile-shizuku':
         specifier: workspace:0.1.0
         version: link:plugins/dsh-mobile-shizuku

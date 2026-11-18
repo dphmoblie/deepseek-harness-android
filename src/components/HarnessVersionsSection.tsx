@@ -122,9 +122,9 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime, onBusy
     let handle: { remove: () => Promise<void> } | null = null
     let cancelled = false
     void bridge.addHarnessProgressListener(event => { if (alive.current) setProgress(event) })
-      .then(value => { if (cancelled) void value.remove().catch(() => undefined); else handle = value })
+      .then(value => { if (cancelled) void Promise.resolve(value.remove?.()).catch(() => undefined); else handle = value })
       .catch(() => undefined)
-    return () => { cancelled = true; void handle?.remove().catch(() => undefined) }
+    return () => { cancelled = true; void Promise.resolve(handle?.remove?.()).catch(() => undefined) }
   }, [bridge])
   // 已用时间每秒走一格：npm 安装几分钟不吐可用字节数，时间是最诚实的参照。
   useEffect(() => {
@@ -188,7 +188,7 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime, onBusy
   const stopped = runtime.phase !== 'running' && !externalBusy
   const releases = expanded ? remote?.entries : remote?.entries.slice(0, 5)
   return (
-    <section className="card settings-card" aria-labelledby="harness-versions-title">
+    <section className="settings-section" aria-labelledby="harness-versions-title">
       <div className="section-title section-title-plain">
         <div><h2 id="harness-versions-title">{t('Harness 上游版本')}</h2>
           <p>{t('直接安装官方 @deepseek-ai/dsh npm 包；Ubuntu 环境、会话与插件独立保留。')}</p></div>

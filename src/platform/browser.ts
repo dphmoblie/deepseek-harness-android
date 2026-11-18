@@ -124,6 +124,8 @@ export function createBrowserBridge(): RuntimeBridge {
   let diagnosticState: DiagnosticLogState = {
     enabled: false,
     retentionDays: DIAGNOSTIC_RETENTION_DEFAULT,
+    includeHarnessLog: true,
+    harnessLogAvailable: false,
     fileCount: 0,
     totalBytes: 0,
     lastEntryAtMillis: 0,
@@ -801,8 +803,8 @@ export function createBrowserBridge(): RuntimeBridge {
       totalBytes: diagnosticState.totalBytes,
       truncated: false,
     }),
-    setDiagnosticLogSettings: (enabled: boolean, retentionDays: number) => {
-      diagnosticState = { ...diagnosticState, enabled, retentionDays }
+    setDiagnosticLogSettings: (enabled: boolean, retentionDays: number, includeHarnessLog: boolean) => {
+      diagnosticState = { ...diagnosticState, enabled, retentionDays, includeHarnessLog }
       return Promise.resolve({ ...diagnosticState })
     },
     shareDiagnosticLog: () => Promise.reject(new Error('浏览器预览不支持导出诊断日志')),

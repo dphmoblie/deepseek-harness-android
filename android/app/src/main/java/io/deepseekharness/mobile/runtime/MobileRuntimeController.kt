@@ -192,7 +192,7 @@ class MobileRuntimeController(
      * 的保留项同源。
      */
     private val snapshots = RuntimeSessionSnapshots(
-        sessionRoot = File(store.currentRoot, RuntimeSessionSnapshotLimits.SESSIONS_RELATIVE_PATH),
+        sessionRoot = File(store.currentRoot, RuntimeSessionSnapshotLimits.DATA_RELATIVE_PATH),
         snapshotsRoot = File(appContext.filesDir, RuntimeSessionSnapshotLimits.DIRECTORY_NAME),
         identity = {
             // 版本读不到就写 null，不猜：元数据里写错版本会让用户以为恢复的是另一份运行时。
@@ -203,6 +203,7 @@ class MobileRuntimeController(
                 runtimeId = manifest?.runtimeId,
             )
         },
+        cipher = RuntimeSnapshotCipher(),
     )
 
     /**
@@ -737,6 +738,14 @@ class MobileRuntimeController(
                 { supervisor.stop() },
                 { terminals.closeAllAndWait() },
             )
+            // 重置前按更新一致流程做一次兜底备份（忽略附件）与终端插件状态收拢，再暂存 /root 后清理。
+            runCatching { snapshots.createBeforeUpdate() }
+            if (store.installedManifest() != null) {
+                runCatching {
+                    supervisor.preparePluginManagement()
+                    plugins.checkpointBeforeUpdate()
+                }
+            }
             installer.resetWorkspace()
             status.snapshot()
         }

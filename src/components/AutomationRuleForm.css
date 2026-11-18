@@ -5,7 +5,7 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  border: 1px solid var(--line-faint);
+  border: 1px solid var(--line);
   border-radius: var(--radius-card);
   background: var(--card-color, var(--surface-sunken));
   color: var(--card-ink, var(--ink));
@@ -28,7 +28,7 @@
 }
 
 .automation-rule-group:disabled {
-  opacity: var(--card-opacity);
+  opacity: 0.6;
 }
 
 .automation-rule-group > legend {

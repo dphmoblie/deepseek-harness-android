@@ -26,6 +26,9 @@ class VirtualScreenTreeTest {
         enabled: Boolean = true,
         bounds: IntArray = intArrayOf(0, 0, 0, 0),
         children: List<VirtualScreenTree.Snapshot> = emptyList(),
+        checked: Boolean = false,
+        selected: Boolean = false,
+        scrollable: Boolean = false,
     ) = VirtualScreenTree.Snapshot(
         className = className,
         text = text,
@@ -37,6 +40,9 @@ class VirtualScreenTreeTest {
         enabled = enabled,
         bounds = bounds,
         children = children,
+        checked = checked,
+        selected = selected,
+        scrollable = scrollable,
     )
 
     /** 取出 bounds 数组，方便按 [left, top, right, bottom] 直接断言。 */
@@ -210,5 +216,27 @@ class VirtualScreenTreeTest {
             listOf(1, 2, 3, 4),
             boundsOf(VirtualScreenTree.summarize(snapshot(bounds = intArrayOf(1, 2, 3, 4, 5)))),
         )
+    }
+
+    @Test
+    fun `summarize 仅在为真时输出 checked selected scrollable`() {
+        val plain = VirtualScreenTree.summarize(snapshot(text = "普通文本"))
+        assertFalse(plain.has("checked"))
+        assertFalse(plain.has("selected"))
+        assertFalse(plain.has("scrollable"))
+
+        val active = VirtualScreenTree.summarize(
+            snapshot(
+                className = "android.widget.RadioButton",
+                text = "A 选项",
+                clickable = true,
+                checked = true,
+                selected = true,
+                scrollable = true,
+            ),
+        )
+        assertTrue(active.getBoolean("checked"))
+        assertTrue(active.getBoolean("selected"))
+        assertTrue(active.getBoolean("scrollable"))
     }
 }

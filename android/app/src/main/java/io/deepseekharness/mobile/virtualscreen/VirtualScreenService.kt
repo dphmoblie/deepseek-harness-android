@@ -342,10 +342,11 @@ class VirtualScreenService : Service() {
      * 返回截图与帧新鲜度元数据；图像仍只在内存和受控管道中传输。
      * `frameBlank` 由宿主状态原样透传，宿主状态里没有该字段时不给出默认值。
      */
-    fun screenshotEnvelope(id: String): JSONObject {
+    fun screenshotEnvelope(id: String, waitMillis: Int = 0): JSONObject {
         requireAccess()
         requireSession(id)
-        if (!actionSlot.tryAcquire()) throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "上一步副屏操作尚未完成")
+        if (waitMillis > 0) waitForPostInputFrame(id, waitMillis)
+        if (!actionSlot.tryAcquire(2, java.util.concurrent.TimeUnit.SECONDS)) throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "上一步副屏操作尚未完成")
         return try {
             val meta = checkNotNull(shizuku).virtualScreenScreenshot(id)
             requireAccess()
@@ -358,11 +359,55 @@ class VirtualScreenService : Service() {
                 .put("frameAtElapsedMs", frameAt)
                 .put("frameReused", reused)
             if (meta.has("frameBlank")) envelope.put("frameBlank", meta.optBoolean("frameBlank"))
+            if (meta.has("lastInputAtElapsedMs")) envelope.put("lastInputAtElapsedMs", meta.optLong("lastInputAtElapsedMs"))
+            if (meta.has("frameBeforeLastInput")) envelope.put("frameBeforeLastInput", meta.optBoolean("frameBeforeLastInput"))
             envelope
         } catch (error: Exception) {
             audit.record(AuditEvent.VIRTUAL_SCREEN_READ, AuditResult.FAILED)
             throw error
         } finally { actionSlot.release() }
+    }
+
+    /**
+     * 可选等待输入后新帧：避免高负载设备渲染慢时 AI 反复截回同一张旧帧。
+     * 只在调用方显式传入 `waitMs > 0` 时启用，且循环外持有不住任何锁。
+     */
+    private fun waitForPostInputFrame(id: String, waitMillis: Int) {
+        val deadline = SystemClock.elapsedRealtime() + waitMillis.coerceIn(0, VirtualScreenSettle.MAX_BUDGET_MILLIS)
+        while (true) {
+            requireAccess()
+            requireSession(id)
+            val live = runCatching { checkNotNull(shizuku).virtualScreenState() }.getOrNull()
+            if (live != null) {
+                snapshot = live
+                val frameAt = live.optLong("frameAtElapsedMs", 0L)
+                val inputAt = live.optLong("lastInputAtElapsedMs", 0L)
+                val satisfied = when {
+                    inputAt > 0L -> frameAt > inputAt
+                    lastAiFrameAt > 0L -> frameAt > 0L && frameAt != lastAiFrameAt
+                    else -> frameAt > 0L
+                }
+                if (satisfied) return
+            }
+            val remain = deadline - SystemClock.elapsedRealtime()
+            if (remain <= 0L) return
+            SystemClock.sleep(minOf(150L, remain))
+        }
+    }
+
+    /** 读取副屏节点树，并在显示编号刚重建或窗口刚切换时做一次有界刷新/重试，避免短暂无窗口误伤。 */
+    private fun dumpTreeWithRecovery(initialDisplayId: Int, maxDepth: Int): JSONObject {
+        val first = VirtualScreenTree.dump(initialDisplayId, maxDepth, VirtualScreenTree.MAX_NODES)
+        if (first.optBoolean("available") || !VirtualScreenTree.available()) return first
+        val latest = freshState()
+        val latestId = latest.optInt("displayId", initialDisplayId)
+        if (latestId > 0 && latestId != initialDisplayId) {
+            return VirtualScreenTree.dump(latestId, maxDepth, VirtualScreenTree.MAX_NODES)
+        }
+        if (!first.optString("reason").contains("没有可读取的窗口")) return first
+        SystemClock.sleep(150L)
+        requireAccess()
+        return VirtualScreenTree.dump(latestId.takeIf { it > 0 } ?: initialDisplayId, maxDepth, VirtualScreenTree.MAX_NODES)
     }
 
     fun action(parameters: JSONObject): JSONObject {
@@ -391,7 +436,7 @@ class VirtualScreenService : Service() {
             requireAccess()
             val id = displayId()
             if (verb == "tree") {
-                return VirtualScreenTree.dump(id, parameters.optInt("maxDepth", 4), VirtualScreenTree.MAX_NODES).also {
+                return dumpTreeWithRecovery(id, parameters.optInt("maxDepth", 4)).also {
                     audit.record(AuditEvent.VIRTUAL_SCREEN_READ, AuditResult.SUCCEEDED)
                 }
             }
@@ -403,6 +448,7 @@ class VirtualScreenService : Service() {
             checkNotNull(shizuku).virtualScreenAction(parameters.toString()).also {
                 if (verb == "config") VirtualScreenPreferences.save(this, parameters)
                 if (it.has("active")) snapshot = it
+                else if (verb == "restart" || it.has("displayId")) freshState()
                 audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.SUCCEEDED)
             }
         } catch (e: Exception) { audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.FAILED); throw e }

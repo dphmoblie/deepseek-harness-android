@@ -115,21 +115,19 @@ describe('应用更新入口与缓存交互', () => {
     expect(await screen.findByText('设置无法打开')).toBeVisible()
   })
 
-  it('历史版本与应用更新长公告分别折叠，展开后保留纯文本全文', async () => {
-    const notes = '<img src=x onerror=alert(1)>' + '历史公告'.repeat(100)
-    bridge.listRuntimeReleases.mockResolvedValue({ entries: [{ version: '0.2.9', notes }] })
+  it('应用更新长公告默认折叠，展开后保留纯文本全文并拦截标签', async () => {
+    const notes = '<img src=x onerror=alert(1)>' + '更新公告'.repeat(100)
+    bridge.getAppUpdateState.mockResolvedValue({
+      ...cachedUpdate,
+      available: { ...cachedUpdate.available!, notes },
+    })
     render(<App />)
     await openVersions()
-    const toggles = await screen.findAllByRole('button', { name: '展开完整更新公告' })
-    expect(toggles).toHaveLength(2)
+    const toggle = await screen.findByRole('button', { name: '展开完整更新公告' })
     expect(screen.queryByText(notes)).toBeNull()
-    expect(screen.queryByText(cachedUpdate.available!.notes)).toBeNull()
-    fireEvent.click(toggles[0])
+    fireEvent.click(toggle)
     expect(screen.getByText(notes)).toBeVisible()
-    expect(screen.queryByText(cachedUpdate.available!.notes)).toBeNull()
     expect(document.querySelector('.release-notes img')).toBeNull()
-    fireEvent.click(toggles[1])
-    expect(screen.getByText(cachedUpdate.available!.notes)).toBeVisible()
   })
 
   it('切换频道未结束时阻止下载和安装，返回后采用新候选', async () => {

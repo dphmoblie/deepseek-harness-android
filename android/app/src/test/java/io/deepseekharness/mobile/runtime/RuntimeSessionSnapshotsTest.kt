@@ -112,7 +112,7 @@ class RuntimeSessionSnapshotsTest {
         val harness = harness()
         harness.write("sessions/aa/one.jsonl", "会话内容一")
         val binary = ByteArray(256) { (it and 0xFF).toByte() }
-        harness.writeBytes("two.bin", binary)
+        harness.writeBytes("attachments/two.bin", binary)
 
         val state = harness.snapshots.create()
 
@@ -133,13 +133,13 @@ class RuntimeSessionSnapshotsTest {
 
         // 字节级一致：zstd 会话文件被改写一个字节就废了。
         assertEquals("会话内容一", harness.snapshotFile(meta.id, "sessions/aa/one.jsonl").readText(Charsets.UTF_8))
-        assertTrue(binary.contentEquals(harness.snapshotFile(meta.id, "two.bin").readBytes()))
+        assertTrue(binary.contentEquals(harness.snapshotFile(meta.id, "attachments/two.bin").readBytes()))
 
         // 元数据落盘且能原样读回（快照元数据是「这份快照是否完整」的唯一凭据）。
         val metadataText = harness.metadataFile(meta.id).readText(Charsets.UTF_8)
         val parsed = RuntimeSessionSnapshotPolicy.parseMetadata(meta.id, metadataText)
         assertEquals(meta, parsed)
-        assertEquals(1, JSONObject(metadataText).getInt("schemaVersion"))
+        assertEquals(2, JSONObject(metadataText).getInt("schemaVersion"))
     }
 
     @Test
@@ -296,23 +296,23 @@ class RuntimeSessionSnapshotsTest {
     fun snapshotContentNeverCollidesWithMetadataAndRestoreVerifiesIntegrity() {
         val harness = harness()
         // 会话目录里真的可能有叫 snapshot.json 的文件：它必须原样进内容目录，不能被元数据挤掉。
-        harness.write("snapshot.json", "这是会话数据，不是元数据")
+        harness.write("sessions/snapshot.json", "这是会话数据，不是元数据")
         val id = harness.snapshots.create().snapshots.first().id
 
         assertEquals(
             "这是会话数据，不是元数据",
-            harness.snapshotFile(id, "snapshot.json").readText(Charsets.UTF_8),
+            harness.snapshotFile(id, "sessions/snapshot.json").readText(Charsets.UTF_8),
         )
         assertTrue(harness.metadataFile(id).isFile)
 
         // 内容被改动（少了一个文件）时拒绝恢复：半份备份不许悄悄回填。
-        File(harness.sessionRoot, "snapshot.json").delete()
-        harness.snapshotFile(id, "snapshot.json").delete()
+        File(harness.sessionRoot, "sessions/snapshot.json").delete()
+        harness.snapshotFile(id, "sessions/snapshot.json").delete()
         assertEquals(
             RuntimeSessionSnapshotCodes.FAILED,
             harness.codeOf { harness.snapshots.restore(id) },
         )
-        assertFalse(File(harness.sessionRoot, "snapshot.json").exists())
+        assertFalse(File(harness.sessionRoot, "sessions/snapshot.json").exists())
     }
 
     @Test
@@ -536,5 +536,129 @@ class RuntimeSessionSnapshotsTest {
         val result = harness.snapshots.restore(meta.id)
         assertEquals(1, result.restoredFileCount)
         assertEquals("真实内容", harness.read("sessions/real.jsonl"))
+    }
+
+    @Test
+    fun runtimeSnapshotCipherEncryptsDecryptsCountsPlaintextAndEnforcesLayout2Header() {
+        val root = Files.createTempDirectory("cipher-snap-test").toFile()
+        try {
+            val sessionRoot = File(root, "session").apply { mkdirs() }
+            val snapshotsRoot = File(root, "snapshots")
+            val keyGenerator = javax.crypto.KeyGenerator.getInstance("AES").apply { init(256) }
+            val secretKey = keyGenerator.generateKey()
+            var allowKey = true
+            val cipher = RuntimeSnapshotCipher { createIfMissing ->
+                if (!allowKey && !createIfMissing) {
+                    throw SnapshotKeyUnavailableException("simulated keystore reset")
+                }
+                secretKey
+            }
+            val snapshots = RuntimeSessionSnapshots(
+                sessionRoot = sessionRoot,
+                snapshotsRoot = snapshotsRoot,
+                now = { 1_700_000_000_000L },
+                nonce = { "cafe0001" },
+                cipher = cipher,
+            )
+
+            val secretBytes = "super-secret-credentials-and-session".toByteArray(Charsets.UTF_8)
+            File(sessionRoot, "sessions").mkdirs()
+            File(sessionRoot, "sessions/chat.jsonl").writeBytes(secretBytes)
+            File(sessionRoot, "settings.yaml").writeBytes(ByteArray(0))
+
+            val state = snapshots.create()
+            val meta = state.snapshots.single()
+            assertEquals(2, meta.fileCount)
+            // 元数据必须按明文字节计数，而不是加上 DSH2 头/IV/GCM Tag 后的密文大小。
+            assertEquals(secretBytes.size.toLong(), meta.totalBytes)
+
+            val encryptedFile = File(snapshotsRoot, "${meta.id}/files/sessions/chat.jsonl")
+            val diskBytes = encryptedFile.readBytes()
+            assertEquals("DSH2", String(diskBytes.copyOf(4), Charsets.US_ASCII))
+            assertFalse(diskBytes.contentEquals(secretBytes))
+
+            // 恢复时走 decrypt，并正确按 plaintextBytes 校验；包含 0 字节文件。
+            File(sessionRoot, "sessions/chat.jsonl").delete()
+            File(sessionRoot, "settings.yaml").delete()
+            val restored = snapshots.restore(meta.id)
+            assertEquals(2, restored.restoredFileCount)
+            assertTrue(File(sessionRoot, "sessions/chat.jsonl").readBytes().contentEquals(secretBytes))
+            assertEquals(0L, File(sessionRoot, "settings.yaml").length())
+
+            // Keystore 密钥失效时明确拒绝并给出不可恢复提示，而非静默写入坏数据。
+            File(sessionRoot, "sessions/chat.jsonl").delete()
+            allowKey = false
+            val keyLostError = try {
+                snapshots.restore(meta.id)
+                throw AssertionError("密钥不可用时必须拒绝恢复")
+            } catch (error: RuntimeFailure) {
+                error
+            }
+            assertEquals(RuntimeSessionSnapshotCodes.FAILED, keyLostError.code)
+            assertTrue((keyLostError.message ?: "").contains("不可恢复"))
+            assertFalse(File(sessionRoot, "sessions/chat.jsonl").exists())
+            allowKey = true
+
+            // layout 2 快照缺少 DSH2 头（伪造/损坏成明文）必须直接失败，禁止把未加密内容原样拷出。
+            encryptedFile.writeBytes(secretBytes)
+            val badHeaderError = try {
+                snapshots.restore(meta.id)
+                throw AssertionError("layout 2 缺少 DSH2 加密头时必须拒绝恢复")
+            } catch (error: RuntimeFailure) {
+                error
+            }
+            assertEquals(RuntimeSessionSnapshotCodes.FAILED, badHeaderError.code)
+            assertFalse(File(sessionRoot, "sessions/chat.jsonl").exists())
+
+            // layout 1 旧版明文快照仍兼容只读恢复。
+            val legacyId = "snap-1699999999000-00000001"
+            val legacyDir = File(snapshotsRoot, legacyId)
+            val legacyFile = File(legacyDir, "files/legacy.jsonl").apply {
+                parentFile?.mkdirs()
+                writeText("旧明文会话", Charsets.UTF_8)
+            }
+            val legacyBytes = legacyFile.length()
+            File(legacyDir, "snapshot.json").writeText(
+                JSONObject()
+                    .put("schemaVersion", 2)
+                    .put("id", legacyId)
+                    .put("createdAtMs", 1_699_999_999_000L)
+                    .put("fileCount", 1)
+                    .put("totalBytes", legacyBytes)
+                    .put("layoutVersion", 1)
+                    .toString(),
+                Charsets.UTF_8,
+            )
+            val legacyRestore = snapshots.restore(legacyId)
+            assertEquals(1, legacyRestore.restoredFileCount)
+            assertEquals("旧明文会话", File(sessionRoot, "sessions/legacy.jsonl").readText(Charsets.UTF_8))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun createIncludesAttachmentsWhileAutoSnapshotOmitsAttachments() {
+        val harness = harness()
+        harness.write("sessions/chat.jsonl", "会话内容")
+        harness.write("settings.yaml", "model: deepseek")
+        harness.write(".credentials.yaml", "key: k")
+        harness.write("skills/custom/SKILL.md", "skill")
+        harness.writeBytes("attachments/photo.png", byteArrayOf(1, 2, 3, 4))
+
+        val autoOutcome = harness.snapshots.createBeforeUpdate()
+        assertEquals(RuntimeAutoSnapshotStatus.CREATED, autoOutcome.status)
+        val autoId = requireNotNull(autoOutcome.snapshotId)
+        assertTrue(harness.snapshotFile(autoId, "sessions/chat.jsonl").isFile)
+        assertTrue(harness.snapshotFile(autoId, "settings.yaml").isFile)
+        assertTrue(harness.snapshotFile(autoId, ".credentials.yaml").isFile)
+        assertTrue(harness.snapshotFile(autoId, "skills/custom/SKILL.md").isFile)
+        assertFalse(harness.snapshotFile(autoId, "attachments/photo.png").exists())
+
+        harness.clockMs += 1_000
+        val manualState = harness.snapshots.create()
+        val manualId = manualState.snapshots.first().id
+        assertEquals(5, manualState.snapshots.first().fileCount)
+        assertTrue(harness.snapshotFile(manualId, "attachments/photo.png").isFile)
     }
 }

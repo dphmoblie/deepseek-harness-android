@@ -88,20 +88,49 @@ object RuntimeCommand {
     /** `sh -c '脚本' <$0> <argv...>` 里的 `$0`：只用于占位，dsh 看到的是真正的入口。 */
     private const val GUEST_ENTRYPOINT_ARGV0 = "dsh-mobile"
 
+    /**
+     * 强制 Harness 不打开系统浏览器：应用内用 WebView 打开 loopback 地址。
+     *
+     * dsh 的 `web` 子命令默认会调起系统浏览器；在 Android 上这是可见副作用，
+     * 用户会看到应用之外又弹出一个浏览器。参数顺序不影响 dsh 解析，统一插在 `web` 之后。
+     */
+    fun withNoOpen(entrypoint: List<String>): List<String> {
+        if (entrypoint.isEmpty() || entrypoint[0] != "/usr/local/bin/dsh") return entrypoint
+        if ("--no-open" in entrypoint) return entrypoint
+        val webIndex = entrypoint.indexOf("web")
+        if (webIndex < 0) return entrypoint
+        return buildList {
+            addAll(entrypoint.take(webIndex + 1))
+            add("--no-open")
+            addAll(entrypoint.drop(webIndex + 1))
+        }
+    }
+
     fun withProviderPatch(entrypoint: List<String>, patchPath: String?): List<String> {
+        if (patchPath != null && patchPath != PROVIDER_PATCH_GUEST_PATH) {
+            throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "Harness 启动配置无效")
+        }
+        return withPatch(entrypoint, patchPath)
+    }
+
+    /**
+     * 把 `--patch` 插到 dsh 之后、`web` 之前。
+     *
+     * dsh 0.2.1-rc.1 的 `--patch` 是全局选项（`lib/bin.js` 的 `option("--patch <path>")`），
+     * 必须位于 profile 命令（`web`）之前；插在 `web` 之后会被 app 解析成
+     * `unknown option '--patch'`，Harness 随即退出。可重复出现，provider patch 与
+     * plugin patch 因此可以叠加。
+     */
+    fun withPatch(entrypoint: List<String>, patchPath: String?): List<String> {
         if (patchPath == null) return entrypoint.toList()
-        if (
-            patchPath != PROVIDER_PATCH_GUEST_PATH || entrypoint.size != 6 ||
-            entrypoint[0] != "/usr/local/bin/dsh" || entrypoint[1] != "web"
-        ) {
+        if (entrypoint.isEmpty() || entrypoint[0] != "/usr/local/bin/dsh" || "web" !in entrypoint) {
             throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "Harness 启动配置无效")
         }
         return buildList(entrypoint.size + 2) {
             add(entrypoint[0])
-            add(entrypoint[1])
             add("--patch")
-            add(PROVIDER_PATCH_GUEST_PATH)
-            addAll(entrypoint.drop(2))
+            add(patchPath)
+            addAll(entrypoint.drop(1))
         }
     }
 

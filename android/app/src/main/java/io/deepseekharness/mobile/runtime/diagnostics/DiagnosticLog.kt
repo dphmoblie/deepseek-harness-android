@@ -26,6 +26,10 @@ data class DiagnosticState(
     val enabled: Boolean,
     /** 保留天数（1..30）。 */
     val retentionDays: Int,
+    /** 导出时是否附带经过凭据脱敏处理的 Harness 运行日志尾部；默认开启。 */
+    val includeHarnessLog: Boolean = true,
+    /** 当前是否有非空的 Harness 运行日志尾部可附加导出。 */
+    val harnessLogAvailable: Boolean = false,
     /** 当前日志文件数。 */
     val fileCount: Int,
     /** 当前日志总字节数。 */
@@ -94,22 +98,26 @@ class DiagnosticLog(context: Context) {
         preferences.getInt(KEY_RETENTION_DAYS, DiagnosticPolicy.DEFAULT_RETENTION_DAYS),
     )
 
+    /** 导出是否包含 Harness 运行日志尾部；默认开启，用户可关闭。 */
+    fun includeHarnessLog(): Boolean = preferences.getBoolean(KEY_INCLUDE_HARNESS_LOG, true)
+
     /**
      * 更新收集设置。关闭时不删除已有文件——用户可能先关掉再导出；
      * 需要立即清除请调用 [clear]。真实删除仍受保留策略约束。
      */
     @Synchronized
-    fun setSettings(enabled: Boolean, retentionDays: Int): DiagnosticState {
+    fun setSettings(enabled: Boolean, retentionDays: Int, includeHarnessLog: Boolean = includeHarnessLog()): DiagnosticState {
         val days = DiagnosticPolicy.clampRetentionDays(retentionDays)
         preferences.edit()
             .putBoolean(KEY_ENABLED, enabled)
             .putInt(KEY_RETENTION_DAYS, days)
+            .putBoolean(KEY_INCLUDE_HARNESS_LOG, includeHarnessLog)
             .apply()
         // 设置变化本身是排障时最需要看到的信息之一；记录发生在写入开关生效之后。
         record(
             DiagnosticLevel.INFO,
             DiagnosticEvent.LOG_SETTINGS,
-            mapOf("enabled" to enabled.toString(), "days" to days.toString()),
+            mapOf("enabled" to enabled.toString(), "days" to days.toString(), "harness_log" to includeHarnessLog.toString()),
         )
         return state()
     }
@@ -140,6 +148,7 @@ class DiagnosticLog(context: Context) {
         return DiagnosticState(
             enabled = enabled(),
             retentionDays = retentionDays(),
+            includeHarnessLog = includeHarnessLog(),
             fileCount = entries.size,
             totalBytes = entries.sumOf { it.second },
             lastEntryAtMillis = entries.maxOfOrNull { it.third } ?: 0L,
@@ -173,9 +182,14 @@ class DiagnosticLog(context: Context) {
      * [DiagnosticPolicy.scrubExport] 作为兜底。返回 null 表示没有可导出的内容。
      */
     @Synchronized
-    fun export(instant: Instant = Instant.now()): DiagnosticExport? {
+    fun export(instant: Instant = Instant.now(), harnessLog: String? = null): DiagnosticExport? {
         val entries = listEntries().sortedBy { it.first }
-        if (entries.isEmpty()) return null
+        val includeHarness = DiagnosticPolicy.shouldExport(
+            hasDiagnosticEntries = false,
+            includeHarnessLog = includeHarnessLog(),
+            harnessLog = harnessLog,
+        )
+        if (!DiagnosticPolicy.shouldExport(entries.isNotEmpty(), includeHarnessLog(), harnessLog)) return null
         val text = buildString {
             append("# DeepSeek Harness Android 诊断日志\n")
             append("# 生成时间: ").append(instant.toString()).append('\n')
@@ -187,15 +201,18 @@ class DiagnosticLog(context: Context) {
             append("# Android SDK: ").append(Build.VERSION.SDK_INT)
                 .append("  ABI: ").append(Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown").append('\n')
             append("# 保留策略: ").append(retentionDays()).append(" 天\n")
-            append(
-                "# 内容说明: 记录只有应用内部事件名、状态码、布尔值与计数；文件头另有应用版本、"
-                    + "机型与 ROM 匿名摘要。不含原始设备值、URL、凭据、终端内容或用户数据。\n",
-            )
+            append(DiagnosticPolicy.harnessExportHeaderLine(includeHarness)).append('\n')
+            append(DiagnosticPolicy.EXPORT_CONTENT_NOTICE)
             entries.forEach { (name, _, _) ->
                 append("\n===== ").append(name).append(" =====\n")
-                // 正文过一遍脱敏（见 DiagnosticPolicy.scrubExport）：白名单已经在写入时把好了关，
+                // 正文过一遍凭据脱敏（见 DiagnosticPolicy.scrubExport）：白名单已经在写入时把好了关，
                 // 这里是产物离开私有目录前的兜底。文件头不复核——它是常量文本，不含任何取值。
                 append(DiagnosticPolicy.scrubExport(readBounded(directory.resolve(name))))
+            }
+            if (includeHarness) {
+                append(DiagnosticPolicy.HARNESS_SECTION_HEADER)
+                append(DiagnosticPolicy.scrubExport(harnessLog!!.takeLast(64 * 1024)))
+                append("\n")
             }
         }
         val fileName = DiagnosticPolicy.exportFileName(instant)
@@ -382,6 +399,7 @@ class DiagnosticLog(context: Context) {
         const val PREFERENCES = "diagnostic_log_settings"
         const val KEY_ENABLED = "diagnostic_log_enabled"
         const val KEY_RETENTION_DAYS = "diagnostic_log_retention_days"
+        const val KEY_INCLUDE_HARNESS_LOG = "diagnostic_log_include_harness_log"
         const val AUTHORITY_SUFFIX = ".diagnostics"
         const val DIRECTORY_MODE = 0b111_000_000 // 0700
         const val FILE_MODE = 0b110_000_000 // 0600

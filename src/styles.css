@@ -12,91 +12,90 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   color-scheme: light;
-  /* 表面与文字 */
+  /* 表面与文字：Porcelain Studio */
   --bg: #f3f5f8;
   --surface: #ffffff;
-  --surface-muted: #edf1f5;
-  --surface-hover: #f8fafc;
-  --surface-sunken: #fbfcfd;
-  --header-bg: rgb(255 255 255 / 96%);
-  --ink: #17202b;
-  --muted: #667181;
+  --surface-muted: #eef2f7;
+  --surface-hover: #f7f9fc;
+  --surface-sunken: #f8fafc;
+  --header-bg: rgb(255 255 255 / 92%);
+  --ink: #131b26;
+  --muted: #5d6a7c;
   /* 背景图之上压的一层暗色遮罩：同一张照片在深浅两套主题下都要保证文字可读。 */
   --bg-scrim: rgb(8 14 24 / 20%);
   /* 卡片、抽屉与分隔线的投影颜色。深色底需要更实的阴影才分得出层级。 */
-  --shadow-color: rgb(20 29 40 / 5%);
-  --field-label: #475362;
-  --icon-muted: #8893a1;
+  --shadow-color: rgb(15 23 42 / 7%);
+  --field-label: #3b4758;
+  --icon-muted: #8492a6;
   --brand-bg: #17202b;
-  --icon-solid-bg: #202831;
+  --icon-solid-bg: #1b2432;
   --on-accent: #ffffff;
   --on-solid: #ffffff;
   /* 线条、轨道与开关 */
-  --line: #dce2e9;
-  --line-strong: #c8d0da;
-  --line-hover: #9eabb9;
-  --line-alt: #d8dde2;
-  --line-faint: #e3e6e9;
-  --track: #e3e8ee;
-  --dot-idle: #9099a5;
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
+  --line-hover: #94a3b8;
+  --line-alt: #dbe3ed;
+  --line-faint: #edf1f6;
+  --track: #e2e8f0;
+  --dot-idle: #94a3b8;
   --step-idle: #8a94a2;
-  --switch-off: #aab3bf;
+  --switch-off: #cbd5e1;
   --switch-knob: #ffffff;
   /* 主色与语义色 */
-  --blue: #315fcf;
-  --blue-hover: #274faa;
-  --blue-soft: #e8efff;
-  --blue-line: #cbd9fb;
-  --green: #177a50;
-  --green-soft: #e6f5ee;
-  --green-line: #c6e5d7;
-  --green-line-strong: #b3ddcb;
-  --green-track: #a8d7c3;
-  --amber: #9a6500;
-  --amber-soft: #fff2d5;
-  --amber-line: #efd8a2;
-  --amber-line-strong: #efdba9;
-  --amber-text: #77510a;
-  --amber-text-strong: #5f4008;
-  --amber-dot: #d28b00;
-  --red: #b33535;
-  --red-soft: #fdeaea;
-  --red-line: #efc4c4;
-  --red-text: #8d2a2a;
-  --danger-line: #edc4c4;
-  --log-error: #9b2c2c;
-  --log-warn: #8a5a11;
+  --blue: #2f5fd0;
+  --blue-hover: #254eb3;
+  --blue-soft: #e9efff;
+  --blue-line: #c4d5fb;
+  --green: #157f52;
+  --green-soft: #e6f6ee;
+  --green-line: #bfe6d5;
+  --green-line-strong: #9fd8be;
+  --green-track: #96d4b8;
+  --amber: #a36200;
+  --amber-soft: #fff4dd;
+  --amber-line: #f3d79d;
+  --amber-line-strong: #ebc87e;
+  --amber-text: #7c4d08;
+  --amber-text-strong: #5f3a04;
+  --amber-dot: #d98b00;
+  --red: #c23333;
+  --red-soft: #fdecec;
+  --red-line: #f2c0c0;
+  --red-text: #942626;
+  --danger-line: #efc1c1;
+  --log-error: #a62b2b;
+  --log-warn: #8a560b;
   /* 终端：外壳在两种主题下都是深色，单独一套值以便与页面背景拉开层次 */
-  --terminal-bg: #101419;
-  --terminal-line: #2d343d;
-  --terminal-chip-bg: #1e252d;
+  --terminal-bg: #0c1016;
+  --terminal-line: #27303d;
+  --terminal-chip-bg: #171e28;
   --terminal-chip-bg-strong: #1b232c;
-  --terminal-chip-line: #3b4652;
-  --terminal-chip-text: #c6ced8;
-  --terminal-chip-text-dim: #aebacb;
+  --terminal-chip-line: #334050;
+  --terminal-chip-text: #cdd6e2;
+  --terminal-chip-text-dim: #b4c0cf;
   /* 浮动提示条：浅色页面上的深色条，两种主题下都保持深底白字 */
-  --toast-bg: #1c232b;
-  --toast-line: #333c47;
+  --toast-bg: #18202c;
+  --toast-line: #313c4d;
   --toast-text: #ffffff;
   --toast-close: #b7c0cb;
-  --toast-success: #79d4a9;
-  --toast-error: #ff9d9d;
-  --toast-info: #94b8ff;
+  --toast-success: #6ee7b7;
+  --toast-error: #fca5a5;
+  --toast-info: #93c5fd;
   --scrim: rgb(9 13 18 / 58%);
   /* 阴影与焦点环：深色下要更重才看得出层次，所以它们也是随主题变化的令牌 */
-  --shadow: 0 4px 20px rgb(27 39 55 / 5%);
-  --shadow-card: 0 1px 2px rgb(23 32 43 / 4%);
-  --shadow-segment: 0 1px 4px rgb(21 32 45 / 13%);
+  --shadow: 0 8px 24px -4px rgb(15 23 42 / 7%), 0 2px 6px -1px rgb(15 23 42 / 4%);
+  --shadow-card: 0 2px 8px -2px rgb(15 23 42 / 5%), 0 1px 2px rgb(15 23 42 / 3%);
+  --shadow-segment: 0 2px 6px rgb(15 23 42 / 10%);
   --shadow-knob: 0 1px 3px rgb(0 0 0 / 20%);
-  --shadow-toast: 0 12px 35px rgb(0 0 0 / 24%);
-  --shadow-dialog: 0 24px 70px rgb(0 0 0 / 30%);
-  --ring: 3px solid rgb(65 118 230 / 28%);
-  /* 尺度令牌与主题无关（圆角、字重不含颜色），所以只在 :root 定义一次，
-     不在深色块里成对重复——重复只会制造两处需要同步维护的假约束。 */
+  --shadow-toast: 0 14px 36px rgb(15 23 42 / 26%);
+  --shadow-dialog: 0 24px 64px -12px rgb(15 23 42 / 28%);
+  --ring: 3px solid rgb(47 95 208 / 26%);
+  /* 尺度令牌与主题无关（圆角、字重不含颜色），所以只在 :root 定义一次 */
   --radius-control: 12px;
-  --radius-card: 16px;
+  --radius-card: 18px;
   --radius-chip: 999px;
-  --radius-inner: 8px;
+  --radius-inner: 10px;
   --weight-bold: 700;
   --weight-semibold: 650;
   --weight-medium: 600;
@@ -110,78 +109,78 @@
  */
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #0f1317;
-  --surface: #171d24;
-  --surface-muted: #1f262e;
-  --surface-hover: #1c222a;
-  --surface-sunken: #12171d;
-  --header-bg: rgb(15 19 23 / 96%);
-  --ink: #e8eef5;
-  --muted: #9dabbb;
+  --bg: #111315;
+  --surface: #181d24;
+  --surface-muted: #202832;
+  --surface-hover: #1d242e;
+  --surface-sunken: #131820;
+  --header-bg: rgb(17 19 21 / 92%);
+  --ink: #edf2f7;
+  --muted: #9aa7b8;
   /* 深色主题下遮罩略重（明亮照片上仍要托得住浅色文字），阴影用纯黑而不是深蓝灰。 */
   --bg-scrim: rgb(8 14 24 / 32%);
   --shadow-color: rgb(0 0 0 / 45%);
-  --field-label: #b9c5d3;
-  --icon-muted: #8b98a7;
-  --brand-bg: #2a3440;
-  --icon-solid-bg: #2b3641;
+  --field-label: #b8c4d4;
+  --icon-muted: #8492a4;
+  --brand-bg: #252f3d;
+  --icon-solid-bg: #222c3a;
   --on-accent: #0f1317;
   --on-solid: #ffffff;
-  --line: #2b333d;
-  --line-strong: #3d4854;
-  --line-hover: #566370;
-  --line-alt: #2b333d;
-  --line-faint: #262d35;
-  --track: #242c35;
-  --dot-idle: #6b7686;
+  --line: #28313e;
+  --line-strong: #394656;
+  --line-hover: #526278;
+  --line-alt: #2b3542;
+  --line-faint: #222a35;
+  --track: #242d38;
+  --dot-idle: #6b7888;
   --step-idle: #8b97a4;
-  --switch-off: #636e7b;
-  --switch-knob: #f1f5f9;
-  --blue: #86abff;
-  --blue-hover: #a3c0ff;
-  --blue-soft: #1d2b4a;
-  --blue-line: #35507f;
-  --green: #5cc796;
-  --green-soft: #143326;
-  --green-line: #27553d;
-  --green-line-strong: #2c6047;
-  --green-track: #2c6047;
-  --amber: #e9bd6b;
-  --amber-soft: #362a12;
-  --amber-line: #57431c;
-  --amber-line-strong: #5d4a20;
-  --amber-text: #f0d29a;
-  --amber-text-strong: #f6e0b6;
-  --amber-dot: #e9bd6b;
-  --red: #ff9292;
-  --red-soft: #3a1f1f;
-  --red-line: #6c3434;
-  --red-text: #ffb5b5;
-  --danger-line: #6b3131;
+  --switch-off: #485464;
+  --switch-knob: #f8fafc;
+  --blue: #7aa3ff;
+  --blue-hover: #98b9ff;
+  --blue-soft: #1a2845;
+  --blue-line: #314b7d;
+  --green: #4fd199;
+  --green-soft: #123124;
+  --green-line: #235740;
+  --green-line-strong: #2c644b;
+  --green-track: #2c644b;
+  --amber: #f3bd5e;
+  --amber-soft: #332610;
+  --amber-line: #5e4418;
+  --amber-line-strong: #694d1c;
+  --amber-text: #f5d292;
+  --amber-text-strong: #fae3b8;
+  --amber-dot: #f3bd5e;
+  --red: #ff8e8e;
+  --red-soft: #381c1e;
+  --red-line: #6e3134;
+  --red-text: #ffb4b4;
+  --danger-line: #6b3033;
   --log-error: #ff9a9a;
-  --log-warn: #e6b768;
-  --terminal-bg: #0b0f13;
-  --terminal-line: #303a45;
-  --terminal-chip-bg: #1c242c;
-  --terminal-chip-bg-strong: #1a222a;
-  --terminal-chip-line: #3d4854;
-  --terminal-chip-text: #ccd5df;
+  --log-warn: #f0be67;
+  --terminal-bg: #0b0f14;
+  --terminal-line: #2b3542;
+  --terminal-chip-bg: #171f29;
+  --terminal-chip-bg-strong: #1a222c;
+  --terminal-chip-line: #374454;
+  --terminal-chip-text: #cdd6e2;
   --terminal-chip-text-dim: #b0bccb;
-  --toast-bg: #232b34;
-  --toast-line: #3d4854;
+  --toast-bg: #202833;
+  --toast-line: #394656;
   --toast-text: #ffffff;
   --toast-close: #b7c0cb;
-  --toast-success: #7fd8ae;
-  --toast-error: #ffa8a8;
-  --toast-info: #9dbcff;
+  --toast-success: #6ee7b7;
+  --toast-error: #fca5a5;
+  --toast-info: #93c5fd;
   --scrim: rgb(0 0 0 / 68%);
-  --shadow: 0 4px 20px rgb(0 0 0 / 25%);
-  --shadow-card: 0 1px 2px rgb(0 0 0 / 40%);
-  --shadow-segment: 0 1px 4px rgb(0 0 0 / 45%);
+  --shadow: 0 10px 28px -4px rgb(0 0 0 / 42%), inset 0 1px 0 rgb(255 255 255 / 4%);
+  --shadow-card: 0 2px 8px rgb(0 0 0 / 28%), inset 0 1px 0 rgb(255 255 255 / 3%);
+  --shadow-segment: 0 2px 6px rgb(0 0 0 / 42%);
   --shadow-knob: 0 1px 3px rgb(0 0 0 / 55%);
-  --shadow-toast: 0 12px 35px rgb(0 0 0 / 55%);
-  --shadow-dialog: 0 24px 70px rgb(0 0 0 / 65%);
-  --ring: 3px solid rgb(134 171 255 / 45%);
+  --shadow-toast: 0 14px 36px rgb(0 0 0 / 55%);
+  --shadow-dialog: 0 24px 68px rgb(0 0 0 / 66%);
+  --ring: 3px solid rgb(122 163 255 / 42%);
 }
 
 /* 强调色主题：只覆盖语义色令牌，背景与文本对比度仍由明暗主题统一管理。 */
@@ -260,15 +259,13 @@ body,
 
 body {
   overflow: hidden;
-  background: radial-gradient(circle at 7% -12%, var(--blue), transparent 34%),
-    radial-gradient(circle at 100% 12%, var(--blue), transparent 30%),
-    var(--bg);
+  background: var(--bg);
 }
 @supports (color: color-mix(in srgb, red, blue)) {
   body {
     background:
-    radial-gradient(circle at 7% -12%, color-mix(in srgb, var(--blue) 10%, transparent), transparent 34%),
-    radial-gradient(circle at 100% 12%, color-mix(in srgb, var(--blue) 7%, transparent), transparent 30%),
+    radial-gradient(circle at 7% -12%, color-mix(in srgb, var(--blue) 9%, transparent), transparent 34%),
+    radial-gradient(circle at 100% 12%, color-mix(in srgb, var(--blue) 6%, transparent), transparent 30%),
     var(--bg);
   }
 }
@@ -657,6 +654,13 @@ button:disabled {
   padding: 22px 16px 30px;
 }
 
+/* 版本管理页的每个功能区都是独立卡片，统一留白避免边框粘连。 */
+.versions-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 .screen-heading {
   display: flex;
   align-items: flex-end;
@@ -811,21 +815,20 @@ button:disabled {
 
 .launch-panel {
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
+  grid-template-columns: 56px minmax(0, 1fr);
   gap: 16px;
-  padding: 24px;
+  padding: 22px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  background: linear-gradient(135deg, var(--blue-soft), var(--surface) 42%),
-    var(--surface);
+  background: var(--card-color, var(--surface));
   box-shadow: var(--shadow);
 }
 @supports (color: color-mix(in srgb, red, blue)) {
   .launch-panel {
     background:
-    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 65%, var(--surface)), var(--surface) 42%),
-    var(--surface);
-    box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 7%, transparent);
+    linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 68%, var(--card-color, var(--surface))), var(--card-color, var(--surface)) 44%),
+    var(--card-color, var(--surface));
+    box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 8%, transparent);
   }
 }
 
@@ -833,11 +836,13 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 52px;
-  height: 52px;
-  border-radius: var(--radius-inner);
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--blue-line);
+  border-radius: var(--radius-card);
   color: var(--on-solid);
   background: var(--icon-solid-bg);
+  box-shadow: var(--shadow-card);
 }
 
 .launch-copy {
@@ -924,13 +929,13 @@ button:disabled {
   padding: 20px;
   border: 1px solid var(--line);
   border-radius: var(--radius-card);
-  background: linear-gradient(135deg, var(--blue-soft), var(--surface) 38%);
+  background: var(--card-color, var(--surface));
   box-shadow: var(--shadow);
 }
 @supports (color: color-mix(in srgb, red, blue)) {
   .runtime-overview {
-    background: linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 48%, var(--surface)), var(--surface) 38%);
-    box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 6%, transparent);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--blue-soft) 52%, var(--card-color, var(--surface))), var(--card-color, var(--surface)) 40%);
+    box-shadow: var(--shadow), 0 0 0 1px color-mix(in srgb, var(--blue) 7%, transparent);
   }
 }
 
@@ -1081,11 +1086,12 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 27px;
-  height: 27px;
+  width: 28px;
+  height: 28px;
   border: 1px solid var(--line-strong);
   border-radius: 50%;
   background: var(--surface);
+  box-shadow: var(--shadow-card);
   font-size: 0.6875rem;
   font-weight: 700;
 }
@@ -1634,19 +1640,22 @@ button:disabled {
 .settings-quick-button {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   min-width: 0;
-  min-height: 46px;
-  padding: 8px 10px;
+  min-height: 48px;
+  padding: 9px 12px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-control);
   background: var(--card-color, var(--surface));
   color: var(--card-ink, var(--ink));
+  box-shadow: var(--shadow-card);
   font: inherit;
   font-size: 0.86rem;
+  font-weight: var(--weight-medium);
   text-align: left;
   cursor: pointer;
   text-decoration: none;
+  transition: border-color 150ms ease, color 150ms ease, background-color 150ms ease;
 }
 
 .settings-quick-button:hover,
@@ -1955,6 +1964,7 @@ button:disabled {
   justify-content: center;
   width: 40px;
   height: 40px;
+  border: 1px solid var(--blue-line);
   border-radius: var(--radius-inner);
   color: var(--blue);
   background: var(--blue-soft);
@@ -2061,32 +2071,32 @@ button:disabled {
   justify-content: space-between;
   gap: 14px;
   margin: 10px 0 14px;
-  padding: 12px;
-  border: 1px solid var(--line-alt);
-  border-radius: 10px;
-  background: var(--blue-soft);
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--card-color, var(--surface-sunken));
 }
 @supports (color: color-mix(in srgb, red, blue)) {
   .provider-account-card {
-    background: color-mix(in srgb, var(--blue-soft) 55%, transparent);
+    background: color-mix(in srgb, var(--blue-soft) 36%, var(--card-color, var(--surface-sunken)));
   }
 }
 .provider-account-card > div { display: grid; gap: 4px; min-width: 0; }
 .provider-account-card span { color: var(--card-muted, var(--muted)); font-size: 0.82rem; }
 @media (max-width: 560px) { .provider-account-card { align-items: stretch; flex-direction: column; } .provider-account-card .button { align-self: flex-start; } }
-.provider-status-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; width: 100%; min-width: 0; min-height: 44px; padding: 8px 10px; border: 1px solid var(--line-alt); border-radius: 8px; background: transparent; color: inherit; text-align: left; }
+.provider-status-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; width: 100%; min-width: 0; min-height: 46px; padding: 9px 12px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--card-color, var(--surface-sunken)); color: var(--card-ink, var(--ink)); text-align: left; cursor: pointer; transition: border-color 150ms ease, background-color 150ms ease; }
 .provider-status-row:hover { border-color: var(--blue); }
-.provider-status-row.is-selected { border-color: var(--blue); background: var(--blue-soft); }
-.provider-status-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.provider-status-row.is-selected { border-color: var(--blue); background: var(--blue-soft); color: var(--ink); }
+.provider-status-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-medium); }
 .provider-status-badge {
-  flex: 0 0 auto; font-size: 0.75rem; padding: 2px 8px; border-radius: 999px;
+  flex: 0 0 auto; font-size: 0.75rem; padding: 2px 9px; border-radius: 999px;
   border: 1px solid var(--line-alt); color: var(--card-muted, var(--muted));
 }
-.provider-status-badge.is-configured { border-color: var(--blue); color: var(--blue); }
-.provider-status-current { flex: 0 0 auto; color: var(--blue); font-size: 0.75rem; }
+.provider-status-badge.is-configured { border-color: var(--blue-line); color: var(--blue); background: var(--blue-soft); }
+.provider-status-current { flex: 0 0 auto; color: var(--blue); font-size: 0.75rem; font-weight: var(--weight-semibold); }
 
 .device-capability-list { display: grid; gap: 8px; }
-.device-capability-row { margin: 0; padding: 10px 12px; border: 1px solid var(--line-alt); border-radius: 10px; font-size: 0.875rem; line-height: 1.6; }
+.device-capability-row { margin: 0; padding: 11px 13px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--card-color, var(--surface-sunken)); color: var(--card-ink, var(--ink)); font-size: 0.84rem; line-height: 1.55; }
 .device-capability-row > strong { margin-right: 4px; }
 .device-capability-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
 .device-capability-footer .settings-note { margin: 0; }
@@ -2355,9 +2365,9 @@ button:disabled {
   max-height: calc(100vh - 32px - env(safe-area-inset-bottom));
   max-height: calc(100dvh - 32px - env(safe-area-inset-bottom));
   overflow-y: auto;
-  padding: 23px;
+  padding: 24px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-card);
+  border-radius: calc(var(--radius-card) + 2px);
   background: var(--surface);
   box-shadow: var(--shadow-dialog);
   animation: dialogSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1);
@@ -2769,7 +2779,7 @@ button:disabled {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .bottom-navigation-item.is-active { color: var(--blue); background: var(--blue-soft); font-weight: var(--weight-semibold); }
+  .bottom-navigation-item.is-active { color: var(--blue); border-color: var(--blue-line); background: var(--blue-soft); font-weight: var(--weight-semibold); }
   .bottom-navigation-item:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
   .app-main { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
   .toast { bottom: calc(70px + env(safe-area-inset-bottom)); }
@@ -3108,8 +3118,8 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
  */
 .appearance-option,
 .appearance-accent-option {
-  background: var(--blue-soft);
-  border-color: var(--blue);
+  background: var(--surface-sunken);
+  border-color: var(--line-strong);
 }
 @supports (color: color-mix(in srgb, red, blue)) {
   .appearance-option,
@@ -3320,8 +3330,12 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
  */
 .files-screen .settings-subsection {
   margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
+  padding: 16px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line-faint);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .mailbox-root-tabs {
@@ -3354,10 +3368,11 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
   justify-content: center;
   gap: 6px;
   min-width: 0;
-  min-height: 34px;
-  padding: 6px 8px;
-  border-radius: var(--radius-inner);
-  font-size: 0.6875rem;
+  min-height: 38px;
+  padding: 7px 10px;
+  border-radius: var(--radius-control);
+  font-size: 0.75rem;
+  font-weight: var(--weight-medium);
   text-align: center;
 }
 
@@ -3416,11 +3431,11 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
   width: 100%;
-  min-height: 36px;
-  padding: 7px 8px;
-  border-radius: 7px;
+  min-height: 42px;
+  padding: 8px 11px;
+  border-radius: var(--radius-inner);
   text-align: left;
 }
 
@@ -3517,11 +3532,75 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
 
 .settings-note {
   margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 0.6875rem;
+  padding-top: 9px;
+  border-top: 1px solid var(--line-faint);
+  color: var(--card-muted, var(--muted));
+  font-size: 0.72rem;
   line-height: 1.55;
+}
+
+/* 根通道三档单选、电源安全操作、自动化任务步骤与清理确认面板的视觉规整（纯 CSS，不动逻辑与 DOM） */
+.settings-subsection[aria-labelledby="root-engine"] fieldset.settings-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--card-color, var(--surface-sunken));
+  color: var(--card-ink, var(--ink));
+}
+.settings-subsection[aria-labelledby="root-engine"] fieldset.settings-note > legend {
+  padding: 0 6px;
+  font-size: 0.75rem;
+  font-weight: var(--weight-semibold);
+  color: var(--content-label, var(--field-label));
+}
+.settings-subsection[aria-labelledby="root-engine"] fieldset.settings-note > label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1 1 112px;
+  min-height: 44px;
+  padding: 8px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-inner);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.8125rem;
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+.settings-subsection[aria-labelledby="root-engine"] fieldset.settings-note input[type="radio"] {
+  accent-color: var(--blue);
+}
+.settings-subsection[aria-labelledby="root-engine"] div.settings-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.settings-subsection[aria-labelledby="automation-task"] .settings-note + .button {
+  margin-top: 10px;
+  margin-right: 8px;
+}
+.settings-section[aria-labelledby="runtime-cleanup"] [role="alertdialog"] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius-control);
+  background: var(--red-soft);
+}
+.settings-section[aria-labelledby="runtime-cleanup"] [role="alertdialog"] > .settings-note {
+  flex: 1 1 100%;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+  color: var(--red-text);
 }
 
 /*
@@ -3895,7 +3974,7 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
 .appearance-sync-background > small { grid-column: 1 / -1; }
 .appearance-custom-accent { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .appearance-custom-accent > span { color: var(--card-muted, var(--muted)); }
-.session-manager-embedded { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.session-manager-embedded { margin-top: 18px; }
 .session-manager-embedded .session-toolbar { max-width: 680px; }
 .session-manager-embedded .session-list { grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); }
 .session-manager-embedded .session-note { color: var(--card-muted, var(--muted)); }

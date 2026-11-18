@@ -2744,7 +2744,7 @@ class MobileRuntimePlugin : Plugin() {
      */
     @PluginMethod
     fun getDiagnosticLogState(call: PluginCall) {
-        resolveWhileActive(call) { requireDiagnostics().state().toJs() }
+        resolveWhileActive(call) { diagnosticStateJs(requireDiagnostics()) }
     }
 
     /**
@@ -2774,20 +2774,23 @@ class MobileRuntimePlugin : Plugin() {
                 ?: throw RuntimeFailure("DIAGNOSTIC_SETTINGS_INVALID", "诊断日志开关缺失")
             val retentionDays = call.getInt("retentionDays")
                 ?: throw RuntimeFailure("DIAGNOSTIC_SETTINGS_INVALID", "诊断日志保留天数缺失")
-            requireDiagnostics().setSettings(enabled, retentionDays).toJs()
+            val log = requireDiagnostics()
+            val includeHarnessLog = call.getBoolean("includeHarnessLog") ?: log.includeHarnessLog()
+            diagnosticStateJs(log, log.setSettings(enabled, retentionDays, includeHarnessLog))
         }
     }
 
     /**
      * 权限：应用内桥接。
-     * 导出全部诊断日志并用系统分享面板交给用户选择去向；没有内容时明确失败，
-     * 不生成空文件。诊断日志只含受控状态码，因此分享本身不构成凭据外泄。
+     * 导出应用诊断日志（以及可选附带的 Harness 运行日志尾部）并用系统分享面板交给用户选择去向；
+     * 二者都为空时明确失败，不生成空文件。附加的运行日志仅自动脱敏凭据，仍可能包含路径、URL 与会话内容。
      */
     @PluginMethod
     fun shareDiagnosticLog(call: PluginCall) {
         execute(call) {
             val log = requireDiagnostics()
-            val export = log.export()
+            val harnessLog = if (log.includeHarnessLog()) HarnessOutputTailSource.read(64 * 1024) else null
+            val export = log.export(harnessLog = harnessLog)
                 ?: throw RuntimeFailure("DIAGNOSTIC_EXPORT_EMPTY", "当前没有可导出的诊断日志")
             val uri = FileProvider.getUriForFile(context, log.fileProviderAuthority(), log.exportedFile(export))
             val send = Intent(Intent.ACTION_SEND).apply {
@@ -2805,7 +2808,7 @@ class MobileRuntimePlugin : Plugin() {
             } catch (error: Throwable) {
                 throw RuntimeFailure("DIAGNOSTIC_SHARE_FAILED", "无法打开分享面板", error)
             }
-            log.state().toJs().also { json ->
+            diagnosticStateJs(log).also { json ->
                 json.put("fileName", export.fileName)
                 json.put("exportedBytes", export.sizeBytes)
             }
@@ -2928,8 +2931,18 @@ class MobileRuntimePlugin : Plugin() {
     /** 权限：应用内桥接；清空全部诊断日志。 */
     @PluginMethod
     fun clearDiagnosticLog(call: PluginCall) {
-        execute(call) { requireDiagnostics().clear().toJs() }
+        execute(call) {
+            val log = requireDiagnostics()
+            diagnosticStateJs(log, log.clear())
+        }
     }
+
+    private fun diagnosticStateJs(
+        log: io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLog,
+        state: io.deepseekharness.mobile.runtime.diagnostics.DiagnosticState = log.state(),
+    ): JSObject = state.toJs(
+        harnessLogAvailable = !HarnessOutputTailSource.read(4096).isNullOrBlank(),
+    )
 
     /**
      * 权限：应用内桥接。

@@ -185,9 +185,12 @@ class RuntimeSupervisor(
             val providerPatchPath = store.prepareProviderPatch(configuredProviders)
             val providerEntrypoint = RuntimeCommand.withProviderPatch(manifest.harnessArgv, providerPatchPath)
             val pluginPatch = File(store.currentRoot, "root/.dsh-mobile/launcher-plugins.patch.json")
-            val harnessEntrypoint = if (pluginPatch.isFile) {
-                providerEntrypoint.take(2) + listOf("--patch", "/root/.dsh-mobile/launcher-plugins.patch.json") + providerEntrypoint.drop(2)
-            } else providerEntrypoint
+            val harnessEntrypoint = RuntimeCommand.withNoOpen(
+                RuntimeCommand.withPatch(
+                    providerEntrypoint,
+                    if (pluginPatch.isFile) "/root/.dsh-mobile/launcher-plugins.patch.json" else null,
+                ),
+            )
             launchResolver.launch(
                 harnessEntrypoint,
                 password,

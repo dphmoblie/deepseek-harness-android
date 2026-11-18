@@ -36,7 +36,7 @@ export function ResetDialog({ busy, onCancel, onConfirm }: ResetDialogProps) {
         <button className="dialog-close" type="button" aria-label={t("关闭")} onClick={onCancel} disabled={busy}><X size={19} /></button>
         <span className="dialog-danger-icon"><Trash2 size={23} /></span>
         <h2 id="reset-title">{t("重置运行环境")}</h2>
-        <p>{t("已安装的 Ubuntu 运行环境会被清除，其中的用户数据（会话、密钥、插件等）一并删除，终端与 Harness 会话将立即结束。")}</p>
+        <p>{t("已安装的 Ubuntu 运行环境系统目录会被清除，终端与 Harness 会话将立即结束。重置前会自动尝试创建一次不含附件的数据备份，并暂存你的 /root 用户数据与终端插件，供后续安装或「数据保留」恢复。")}</p>
         <p className="dialog-countdown" aria-live="polite">
           {ready ? t("确认后立即开始重置。") : t("请先看清上面的影响：{0} 秒后可以确认。", remaining)}
         </p>
@@ -66,7 +66,7 @@ export function RepairDialog({ busy, onCancel, onConfirm }: RepairDialogProps) {
         <span className="dialog-warning-icon"><RefreshCw size={23} /></span>
         <h2 id="repair-title">{t("修复运行环境（保留数据）")}</h2>
         <p>{t("应用会重新安装 Ubuntu 运行环境，用来修复损坏的文件或插件冲突。会话、模型密钥、附件、技能、工作区和插件数据都会保留。")}</p>
-        <p>{t("开始前会自动备份会话。修复过程中请保持应用打开。")}</p>
+        <p>{t("开始前会自动创建不含附件的数据备份。修复过程中请保持应用打开。")}</p>
         <div className="dialog-actions">
           <button className="button button-secondary" type="button" onClick={onCancel} disabled={busy}>{t("取消")}</button>
           <button className="button button-primary" type="button" onClick={onConfirm} disabled={busy}>
@@ -214,7 +214,7 @@ export function UpdateDialog({ busy, version, onCancel, onConfirm }: UpdateDialo
             ? t("当前 APK 内置了新版运行环境。继续后会替换 Ubuntu 运行时的系统目录；你的整个用户空间 /root（会话、模型密钥、Harness 设置、附件、技能、插件、工作区文件，以及你自己在 /root 下建的目录）都会保留，应用设置也不受影响；旧令牌与旧脚本不会搬回，撞名没搬回的项会留在「数据保留」里可取回。")
             : t("即将安装运行时 {0}。继续后会替换 Ubuntu 运行时的系统目录；你的整个用户空间 /root（会话、模型密钥、Harness 设置、附件、技能、插件、工作区文件，以及你自己在 /root 下建的目录）都会保留，应用设置也不受影响；旧令牌与旧脚本不会搬回，撞名没搬回的项会留在「数据保留」里可取回。", version)}
         </p>
-        <p>{t("开始前会先把当前会话自动备份一份（在「版本管理 → 会话备份」里能看到）。新镜像里的 dsh 版本可能与现在不同，读不出旧会话时可以用那份备份恢复。")}</p>
+        <p>{t("开始前会自动创建一个不含附件的数据备份（在「版本管理 → 数据备份」里能看到；如需连同附件一起备份，请先手动备份一次）。新镜像里的 dsh 版本可能与现在不同，读不出旧会话时可以用那份备份恢复。")}</p>
         <div className="dialog-actions">
           <button className="button button-secondary" type="button" onClick={onCancel} disabled={busy}>{t("暂不更新")}</button>
           <button className="button button-danger" type="button" onClick={onConfirm} disabled={busy}>

@@ -112,9 +112,13 @@ export function DataPreservationCard({ bridge = runtimeBridge }: { bridge?: Runt
   }
 
   return (
-    <div className="data-preservation-card" aria-live="polite">
-      <div className="data-preservation-head">
-        <span className="data-preservation-title">{t('待处理的数据副本')}</span>
+    <section className="settings-section" aria-labelledby="data-preservation-title">
+      <div className="section-title section-title-action">
+        <span className="section-icon"><ArchiveRestore size={19} /></span>
+        <div>
+          <h2 id="data-preservation-title">{t('数据保留')}</h2>
+          <p>{t('更新运行时会整块保留用户空间（/root），再合并回新根目录；旧令牌、旧脚本与缓存不会搬回，没搬回的项目留在这里。')}</p>
+        </div>
         <button
           className="icon-button"
           type="button"
@@ -127,6 +131,7 @@ export function DataPreservationCard({ bridge = runtimeBridge }: { bridge?: Runt
         </button>
       </div>
 
+      <div className="data-preservation-card" aria-live="polite">
       {!loaded && !failed ? (
         <p className="settings-note"><Loader2 className="spin" size={15} /> {t('正在读取待处理数据…')}</p>
       ) : failed ? (
@@ -193,6 +198,7 @@ export function DataPreservationCard({ bridge = runtimeBridge }: { bridge?: Runt
       {result !== null && <p className="settings-note">{result}</p>}
       {actionFailed && <p className="settings-note">{t('操作没有完成：可能是运行时正忙或路径不可写，稍后重试。')}</p>}
       {confirming !== null && <p className="settings-note">{t('删除只影响这份待处理副本，不会动当前运行时；删除后无法恢复。')}</p>}
-    </div>
+      </div>
+    </section>
   )
 }

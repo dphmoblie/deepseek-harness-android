@@ -918,6 +918,7 @@ def add_profiles_module_fallback(
     dsh_root: Path,
     rootfs_dsh: str,
     excluded_package_names: frozenset[str] = frozenset(),
+    required_bundles: Iterable[str] = (),
 ) -> int:
     """预生成 $DSH_HOME/profiles/node_modules 的扁平包链接，返回链接总数。
 
@@ -985,6 +986,18 @@ def add_profiles_module_fallback(
         for dep in {**(manifest.get("dependencies") or {}), **(manifest.get("peerDependencies") or {})}:
             if dep not in links:
                 enqueue(dep, pkg_dir)
+
+    # dshmarket 的入口静态 import 了可选 peer；只把它链在 pnpm 虚拟 store 里，
+    # 真机 profile 解析不到就会在插件加载时报 Cannot find module。
+    # 如果它出现在 profile bundles 里，就要求它和它的每个 peer 都真的有扁平链接，
+    # 构建期直接失败，而不是把缺链留到真机。
+    if "dshmarket" in required_bundles:
+        if "dshmarket" not in links:
+            raise BuildError("profile bundle dshmarket is not linked into profiles/node_modules")
+        dshmarket_manifest = json.loads((links["dshmarket"] / "package.json").read_text(encoding="utf-8"))
+        for peer in (dshmarket_manifest.get("peerDependencies") or {}):
+            if peer not in links:
+                raise BuildError(f"dshmarket requires peer {peer}, but it is not linked into profiles/node_modules")
 
     for name in sorted(links):
         real = links[name]
@@ -1179,6 +1192,7 @@ def main() -> None:
                 args.dsh_root,
                 "opt/dsh",
                 disabled_profile_bundles,
+                required_bundles=profile_bundles,
             )
             writer.add_symlink("usr/local/bin/node", "../../../opt/node/bin/node")
             writer.add_symlink("usr/local/bin/npm", "../../../opt/node/bin/npm")

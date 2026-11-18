@@ -64,13 +64,13 @@ describe('版本管理：安装前的自动备份结论', () => {
   it('备份成功时报出快照标识', async () => {
     await confirmInstall({ status: 'created', snapshotId })
 
-    expect(await screen.findByText(`安装前已自动备份会话（${snapshotId}）`)).toBeVisible()
+    expect(await screen.findByText(`安装前已自动备份数据（${snapshotId}）`)).toBeVisible()
   })
 
   it('淘汰了旧备份要说清淘汰了几份', async () => {
     await confirmInstall({ status: 'created', snapshotId, evictedIds: ['snap-a', 'snap-b'] })
 
-    expect(await screen.findByText(`安装前已自动备份会话（${snapshotId}）；为满足保留限制，已删除 2 份最旧的备份。`)).toBeVisible()
+    expect(await screen.findByText(`安装前已自动备份数据（${snapshotId}）；为满足保留限制，已删除 2 份最旧的备份。`)).toBeVisible()
   })
 
   it('没有会话可备份时用原生给的原因，不报成失败', async () => {
@@ -82,7 +82,7 @@ describe('版本管理：安装前的自动备份结论', () => {
   it('备份真的失败要单独报错，但安装本身仍算成功', async () => {
     await confirmInstall({ status: 'failed', code: 'RUNTIME_SNAPSHOT_FAILED', message: '磁盘空间不足' })
 
-    expect(await screen.findByText('会话自动备份失败：磁盘空间不足')).toBeVisible()
+    expect(await screen.findByText('自动数据备份失败：磁盘空间不足')).toBeVisible()
     expect(bridge.install).toHaveBeenCalledTimes(1)
   })
 
@@ -94,18 +94,18 @@ describe('版本管理：安装前的自动备份结论', () => {
     fireEvent.click(await screen.findByRole('button', { name: '确认更新' }))
 
     await waitFor(() => expect(bridge.install).toHaveBeenCalled())
-    expect(screen.queryByText(/自动备份会话/)).toBeNull()
+    expect(screen.queryByText(/自动备份数据/)).toBeNull()
   })
 })
 
-describe('版本管理：会话备份', () => {
+describe('版本管理：数据备份', () => {
   beforeEach(beforeEachAppTest)
 
   it('进页就读一次，没有备份时如实说还没有', async () => {
     bridge.getState.mockResolvedValue({ ...readyState })
     await openVersionsPage()
 
-    expect(await screen.findByText('暂无会话备份。你可以手动创建，也可以等应用在安装运行环境前自动备份。')).toBeVisible()
+    expect(await screen.findByText('暂无数据备份。你可以手动创建，也可以等应用在安装运行环境前自动备份。')).toBeVisible()
     expect(bridge.getRuntimeSessionSnapshotState).toHaveBeenCalledTimes(1)
     expect(screen.getByText(/最多保留 3 份备份，总大小不超过 512 MB/)).toBeVisible()
   })
@@ -116,8 +116,11 @@ describe('版本管理：会话备份', () => {
     await openVersionsPage()
 
     fireEvent.click(await screen.findByRole('button', { name: '现在备份一次' }))
+    expect(bridge.createRuntimeSessionSnapshot).not.toHaveBeenCalled()
+    expect(await screen.findByText('确认创建完整数据备份？')).toBeVisible()
+    fireEvent.click(await screen.findByRole('button', { name: '继续创建' }))
 
-    expect(await screen.findByText('会话备份已创建')).toBeVisible()
+    expect(await screen.findByText('数据备份已创建')).toBeVisible()
     expect(bridge.createRuntimeSessionSnapshot).toHaveBeenCalledTimes(1)
     expect(screen.getByText(/2 个文件 · 4\.0 KB · dsh 0\.1\.5-rc\.2 · 2026\.08\.17/)).toBeVisible()
   })
@@ -134,7 +137,7 @@ describe('版本管理：会话备份', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: '恢复' }))
 
-    expect(await screen.findByText('会话恢复完成：恢复 3 个文件，跳过 2 个已存在的文件。')).toBeVisible()
+    expect(await screen.findByText('数据恢复完成：恢复 3 个文件，跳过 2 个已存在的文件。')).toBeVisible()
     expect(bridge.restoreRuntimeSessionSnapshot).toHaveBeenCalledWith(snapshotId)
   })
 
@@ -149,7 +152,7 @@ describe('版本管理：会话备份', () => {
     expect(bridge.deleteRuntimeSessionSnapshot).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole('button', { name: '确认删除' }))
 
-    expect(await screen.findByText('会话备份已删除')).toBeVisible()
+    expect(await screen.findByText('数据备份已删除')).toBeVisible()
     expect(bridge.deleteRuntimeSessionSnapshot).toHaveBeenCalledWith(snapshotId)
   })
 
@@ -158,7 +161,7 @@ describe('版本管理：会话备份', () => {
     bridge.getRuntimeSessionSnapshotState.mockRejectedValue(new Error('boom'))
     await openVersionsPage()
 
-    expect(await screen.findByText('暂时读不到会话备份列表')).toBeVisible()
+    expect(await screen.findByText('暂时读不到数据备份列表')).toBeVisible()
     bridge.getRuntimeSessionSnapshotState.mockResolvedValue(oneSnapshot)
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
 
@@ -374,51 +377,22 @@ describe('版本管理：应用自身更新', () => {
   })
 })
 
-describe('版本管理：本地多版本库与在线版本下载', () => {
+describe('版本管理：槽位切换与页面收敛', () => {
   beforeEach(beforeEachAppTest)
 
-  it('无图标子栏使用独立布局，状态与刷新不占用介绍列', async () => {
+  it('页内保留运行时版本管理、数据备份与更新入口，不展示版本库与清理卡', async () => {
     bridge.getState.mockResolvedValue({ ...readyState })
     await openVersionsPage()
 
-    for (const name of ['本地版本库', '在线可用版本', '清理']) {
-      const heading = await screen.findByRole('heading', { name })
-      const title = heading.closest('.section-title')
-      expect(title).toHaveClass('section-title-plain')
-      expect(title?.querySelector('.section-icon')).toBeNull()
-      expect(heading.parentElement?.querySelector('p')).not.toBeNull()
-    }
-    expect(screen.getByRole('button', { name: '刷新可用版本' }).parentElement).toHaveClass('section-title-plain')
-    for (const name of ['运行时版本管理', '会话备份', '应用更新']) {
+    for (const name of ['运行时版本管理', '数据备份', '应用更新']) {
       const title = screen.getByRole('heading', { name }).closest('.section-title')
       expect(title).not.toHaveClass('section-title-plain')
       expect(title?.querySelector('.section-icon')).not.toBeNull()
     }
-  })
-
-  it('进页展示本地多版本库与配额容量（X/5）', async () => {
-    const libId = 'a'.repeat(64)
-    bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.getRuntimeVersions.mockResolvedValue({
-      versions: [
-        { slot: 'current', version: '2026.09.15', dshVersion: '0.1.7-rc.2', runtimeId: 'rt-1', extractedBytes: 960 * 1024 * 1024, active: true },
-        { slot: 'bundled', version: '2026.08.01', dshVersion: '0.1.0', runtimeId: 'rt-0', extractedBytes: 0, active: false },
-      ],
-      library: [
-        { id: libId, version: '2026.09.10', dshVersion: '0.1.6', bytes: 310 * 1024 * 1024, active: false },
-      ],
-      libraryCapacity: 5,
-      canSwitch: true,
-      canDelete: true,
-    })
-
-    await openVersionsPage()
-
-    expect(await screen.findByText('本地版本库')).toBeVisible()
-    expect(screen.getByText('已保存 1 / 5')).toBeVisible()
-    expect(screen.getByText(/2026\.09\.10/)).toBeVisible()
-    expect(screen.getByText(/dsh 0\.1\.6 · 310 MB/)).toBeVisible()
-    expect(screen.getByRole('button', { name: '切换到随包内置版本' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: '本地版本库' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: '在线可用版本' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: '清理' })).toBeNull()
+    expect(bridge.listRuntimeReleases).not.toHaveBeenCalled()
   })
 
   it('可以切换到随包内置版本（Slot 0）', async () => {
@@ -447,159 +421,27 @@ describe('版本管理：本地多版本库与在线版本下载', () => {
     expect(await screen.findByText('已切换到随包内置版本')).toBeVisible()
     expect(bridge.switchRuntimeVersion).toHaveBeenCalledWith('bundled')
   })
-
-  it('可以切换和删除本地版本库中的版本', async () => {
-    const libId = 'c'.repeat(64)
-    bridge.startHarness.mockResolvedValue({ ...readyState })
-    bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.getRuntimeVersions.mockResolvedValue({
-      versions: [
-        { slot: 'current', version: '2026.09.15', dshVersion: '0.1.7-rc.2', runtimeId: 'rt-1', extractedBytes: 960 * 1024 * 1024, active: true },
-      ],
-      library: [
-        { id: libId, version: '2026.08.20', dshVersion: '0.1.5', bytes: 290 * 1024 * 1024, active: false },
-      ],
-      libraryCapacity: 5,
-      canSwitch: false,
-      canDelete: false,
-    })
-    bridge.switchRuntimeVersion.mockResolvedValue({
-      versions: [
-        { slot: 'current', version: '2026.08.20', dshVersion: '0.1.5', runtimeId: 'rt-lib', extractedBytes: 960 * 1024 * 1024, active: true },
-      ],
-      library: [
-        { id: libId, version: '2026.08.20', dshVersion: '0.1.5', bytes: 290 * 1024 * 1024, active: true },
-      ],
-      libraryCapacity: 5,
-      canSwitch: false,
-      canDelete: false,
-    })
-
-    await openVersionsPage()
-    fireEvent.click(await screen.findByRole('button', { name: '切换至此版本' }))
-
-    expect(await screen.findByText('已切换到指定版本')).toBeVisible()
-    expect(bridge.switchRuntimeVersion).toHaveBeenCalledWith(libId)
-  })
-
-  it('删除版本库条目需要二次确认', async () => {
-    const libId = 'd'.repeat(64)
-    bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.getRuntimeVersions.mockResolvedValue({
-      versions: [
-        { slot: 'current', version: '2026.09.15', dshVersion: '0.1.7-rc.2', runtimeId: 'rt-1', extractedBytes: 960 * 1024 * 1024, active: true },
-      ],
-      library: [
-        { id: libId, version: '2026.08.20', dshVersion: '0.1.5', bytes: 290 * 1024 * 1024, active: false },
-      ],
-      libraryCapacity: 5,
-      canSwitch: false,
-      canDelete: false,
-    })
-    bridge.deleteRuntimeVersion.mockResolvedValue({
-      versions: [
-        { slot: 'current', version: '2026.09.15', dshVersion: '0.1.7-rc.2', runtimeId: 'rt-1', extractedBytes: 960 * 1024 * 1024, active: true },
-      ],
-      library: [],
-      libraryCapacity: 5,
-      canSwitch: false,
-      canDelete: false,
-    })
-
-    await openVersionsPage()
-    fireEvent.click(await screen.findByRole('button', { name: '删除' }))
-
-    expect(bridge.deleteRuntimeVersion).not.toHaveBeenCalled()
-    fireEvent.click(await screen.findByRole('button', { name: '确认删除' }))
-
-    expect(await screen.findByText('已从版本库删除')).toBeVisible()
-    expect(bridge.deleteRuntimeVersion).toHaveBeenCalledWith(libId)
-  })
-
-  it('可以从在线列表下载运行时发布到本地版本库', async () => {
-    const manifestSha = 'e'.repeat(64)
-    bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.getRuntimeVersions.mockResolvedValue({
-      versions: [
-        { slot: 'current', version: '2026.09.15', dshVersion: '0.1.7-rc.2', runtimeId: 'rt-1', extractedBytes: 960 * 1024 * 1024, active: true },
-      ],
-      library: [],
-      libraryCapacity: 5,
-      canSwitch: false,
-      canDelete: false,
-    })
-    bridge.listRuntimeReleases.mockResolvedValue({
-      entries: [
-        {
-          version: '2026.09.20',
-          dshVersion: '0.1.8',
-          notes: '优化了 PRoot 启动速度',
-          manifestUrl: 'https://example.com/manifest.json',
-          manifestSha256: manifestSha,
-        },
-      ],
-    })
-    bridge.downloadRuntimeRelease.mockResolvedValue(undefined)
-
-    await openVersionsPage()
-
-    expect(await screen.findByText('在线可用版本')).toBeVisible()
-    expect(screen.getByText('2026.09.20')).toBeVisible()
-    expect(screen.getByText(/dsh 0\.1\.8/)).toBeVisible()
-    expect(screen.getByText(/优化了 PRoot 启动速度/)).toBeVisible()
-
-    fireEvent.click(screen.getByRole('button', { name: '下载到版本库' }))
-
-    expect(await screen.findByText('已下载到版本库')).toBeVisible()
-    expect(bridge.downloadRuntimeRelease).toHaveBeenCalledWith('https://example.com/manifest.json', manifestSha)
-  })
-
-  it('在线可用版本默认只显示一个，其余折在「显示全部」里', async () => {
-    bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.getRuntimeVersions.mockResolvedValue({
-      versions: [],
-      library: [],
-      libraryCapacity: 5,
-      canSwitch: false,
-      canDelete: false,
-    })
-    const entry = (version: string) => ({
-      version,
-      dshVersion: '0.1.8',
-      notes: '',
-      manifestUrl: `https://example.com/${version}.json`,
-      manifestSha256: 'f'.repeat(64),
-    })
-    bridge.listRuntimeReleases.mockResolvedValue({
-      entries: [entry('2026.09.20'), entry('2026.08.10'), entry('2026.07.01')],
-    })
-
-    await openVersionsPage()
-
-    // 只留最靠前的一个：目录里的旧版本不该把「清理」和「应用更新」顶到屏幕外面。
-    expect(await screen.findByText('2026.09.20')).toBeVisible()
-    expect(screen.queryByText('2026.08.10')).toBeNull()
-
-    fireEvent.click(screen.getByRole('button', { name: '显示全部 3 条' }))
-    expect(await screen.findByText('2026.08.10')).toBeVisible()
-  })
 })
 
 describe('版本管理：Harness 版本安装期间不能排队启动', () => {
   beforeEach(beforeEachAppTest)
 
-  it('Ubuntu 版本下载跨页继续时禁用启动和 Harness 安装，结束后恢复', async () => {
+  it('Ubuntu 版本切换跨页继续时禁用启动和 Harness 安装，结束后恢复', async () => {
     bridge.getState.mockResolvedValue({ ...readyState })
-    bridge.listRuntimeReleases.mockResolvedValue({ entries: [{
-      version: '2026.09.20', dshVersion: '0.1.8', notes: '',
-      manifestUrl: 'https://example.com/manifest.json', manifestSha256: 'e'.repeat(64),
-    }] })
+    bridge.getRuntimeVersions.mockResolvedValue({
+      versions: [
+        { slot: 'current', version: '2026.09.15', dshVersion: '0.1.7-rc.2', runtimeId: 'rt-1', extractedBytes: 960 * 1024 * 1024, active: true },
+        { slot: 'bundled', version: '2026.08.01', dshVersion: '0.1.0', runtimeId: 'rt-0', extractedBytes: 0, active: false },
+      ],
+      canSwitch: true,
+      canDelete: false,
+    })
     bridge.listHarnessReleases.mockResolvedValue({ entries: [{ version: '0.2.1-rc.2', tags: ['latest'] }] })
-    let finishDownload!: () => void
-    bridge.downloadRuntimeRelease.mockImplementation(() => new Promise<void>(resolve => { finishDownload = resolve }))
+    let finishSwitch!: (value: unknown) => void
+    bridge.switchRuntimeVersion.mockImplementation(() => new Promise(resolve => { finishSwitch = resolve }))
     await openVersionsPage()
-    fireEvent.click(await screen.findByRole('button', { name: '下载到版本库' }))
-    await waitFor(() => expect(bridge.downloadRuntimeRelease).toHaveBeenCalledOnce())
+    fireEvent.click(await screen.findByRole('button', { name: '切换到随包内置版本' }))
+    await waitFor(() => expect(bridge.switchRuntimeVersion).toHaveBeenCalledWith('bundled'))
     expect(screen.getByRole('button', { name: '安装 Harness' })).toBeDisabled()
 
     const nav = document.querySelector('.bottom-navigation') as HTMLElement
@@ -609,9 +451,18 @@ describe('版本管理：Harness 版本安装期间不能排队启动', () => {
     fireEvent.click(within(nav).getByRole('button', { name: '设置' }))
     fireEvent.click(await screen.findByRole('button', { name: /版本管理/ }))
     expect(await screen.findByRole('button', { name: '安装 Harness' })).toBeDisabled()
-    expect(await screen.findByRole('button', { name: '下载到版本库' })).toBeDisabled()
 
-    await act(async () => { finishDownload(); await Promise.resolve() })
+    await act(async () => {
+      finishSwitch({
+        versions: [
+          { slot: 'current', version: '2026.08.01', dshVersion: '0.1.0', runtimeId: 'rt-0', extractedBytes: 960 * 1024 * 1024, active: true },
+          { slot: 'bundled', version: '2026.08.01', dshVersion: '0.1.0', runtimeId: 'rt-0', extractedBytes: 0, active: true },
+        ],
+        canSwitch: false,
+        canDelete: false,
+      })
+      await Promise.resolve()
+    })
     await waitFor(() => expect(screen.getByRole('button', { name: '安装 Harness' })).toBeEnabled())
     fireEvent.click(within(nav).getByRole('button', { name: '首页' }))
     expect(await screen.findByRole('button', { name: '打开对话' })).toBeEnabled()
@@ -676,9 +527,13 @@ describe('版本管理：Harness 版本安装期间不能排队启动', () => {
     fireEvent.click(await screen.findByRole('button', { name: /安装 Harness/u }))
     await waitFor(() => expect(bridge.manageHarnessVersions).toHaveBeenCalledWith('install', '0.2.1-rc.2'))
 
-    // 其它共用运行环境的写操作也不能在安装后排队执行。
-    const backups = screen.getByRole('region', { name: '会话备份' })
+    // 其它共用运行环境的写操作与恢复/清理卡片也不能在安装期间交互。
+    const backups = screen.getByRole('region', { name: '数据备份' })
     expect(await within(backups).findByRole('button', { name: '现在备份一次' })).toBeDisabled()
+    const preservation = screen.getByRole('region', { name: '数据保留' })
+    expect(preservation.closest('fieldset')).toBeDisabled()
+    const residue = screen.getByRole('region', { name: '运行时占用与残留' })
+    expect(residue.closest('fieldset')).toBeDisabled()
 
     // 切到首页：安装仍在原生侧跑，外层状态不能让按钮重新可点。
     const nav = document.querySelector('.bottom-navigation')

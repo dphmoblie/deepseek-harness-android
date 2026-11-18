@@ -12,6 +12,18 @@ import java.time.Instant
 import java.util.Locale
 import java.util.UUID
 
+internal interface SnapshotCipher {
+    fun encrypt(source: File, destination: File)
+    fun decrypt(source: File, destination: File, requireEncrypted: Boolean = false)
+    fun plaintextBytes(file: File, requireEncrypted: Boolean = false): Long
+}
+
+internal object PlaintextSnapshotCipher : SnapshotCipher {
+    override fun encrypt(source: File, destination: File) { Files.copy(source.toPath(), destination.toPath()) }
+    override fun decrypt(source: File, destination: File, requireEncrypted: Boolean) { Files.copy(source.toPath(), destination.toPath()) }
+    override fun plaintextBytes(file: File, requireEncrypted: Boolean): Long = Files.size(file.toPath())
+}
+
 /**
  * 快照失败码：统一 `RUNTIME_SNAPSHOT_` 前缀，桥层原样回传给界面。
  *
@@ -39,11 +51,11 @@ internal object RuntimeSessionSnapshotCodes {
  * 会话快照的上限与形状常量，**集中在一处**（界面文案与桥层都从这里取值，不要在别处再写一份）。
  */
 object RuntimeSessionSnapshotLimits {
-    /** 默认最多保留 3 份。 */
-    const val MAX_COUNT = 3
+    /** 默认最多保留 10 份。 */
+    const val MAX_COUNT = 10
 
-    /** 默认合计最多 512 MiB，超出时从最旧的开始淘汰。 */
-    const val MAX_TOTAL_BYTES = 512L * 1024 * 1024
+    /** 合计上限放宽到 16 GiB：只在确实写满设备时淘汰，不再用 512 MiB 卡住用户。 */
+    const val MAX_TOTAL_BYTES = 16L * 1024 * 1024 * 1024
 
     /** 快照根目录名（位于应用私有 `filesDir` 下，**不在 rootfs 里**：更新会整体替换 rootfs）。 */
     const val DIRECTORY_NAME = "runtime-session-snapshots"
@@ -68,6 +80,8 @@ object RuntimeSessionSnapshotLimits {
      * 两处不一致会让「自动快照」悄悄备份一个并不存在的目录。
      */
     const val SESSIONS_RELATIVE_PATH = "root/.dsh/sessions"
+    /** 数据备份的访客根：会话、设置、凭据、技能（自动备份不含附件，手动备份包含附件）都在它下面。 */
+    const val DATA_RELATIVE_PATH = "root/.dsh"
 
     /** 标识最大长度。 */
     const val MAX_ID_CHARS = 96
@@ -76,8 +90,8 @@ object RuntimeSessionSnapshotLimits {
     const val MAX_METADATA_BYTES = 8 * 1024
 
     /** 单份快照的文件数上限与目录深度上限（防止异常目录结构把遍历拖死）。 */
-    const val MAX_FILES = 200_000
-    const val MAX_DEPTH = 64
+    const val MAX_FILES = 1_000_000
+    const val MAX_DEPTH = 128
 
     /**
      * 元数据里「超过一小时仍读不到内容」的残骸视为中断写入的残留，创建新快照时清理。
@@ -151,7 +165,8 @@ internal object RuntimeSessionSnapshotPolicy {
 
     /** 元数据落盘文本：可选字段写成真实 JSON null，读回时才知道「当时确实没读到」。 */
     fun metadataJson(meta: RuntimeSessionSnapshotMeta): String = JSONObject()
-        .put("schemaVersion", 1)
+        .put("schemaVersion", if (meta.layoutVersion >= 2) 2 else 1)
+        .put("layoutVersion", meta.layoutVersion)
         .put("id", meta.id)
         .put("createdAtMs", meta.createdAtMs)
         .put("dshVersion", meta.dshVersion ?: JSONObject.NULL)
@@ -173,8 +188,11 @@ internal object RuntimeSessionSnapshotPolicy {
         val createdAtMs = json.optLong("createdAtMs", 0L)
         val fileCount = json.optInt("fileCount", -1)
         val totalBytes = json.optLong("totalBytes", -1L)
+        val schemaVersion = json.optInt("schemaVersion", -1)
+        val layoutVersion = json.optInt("layoutVersion", 1)
         val usable = id == expectedId && RuntimeSessionSnapshotLimits.validId(id) &&
-            createdAtMs > 0L && fileCount >= 0 && totalBytes >= 0L
+            createdAtMs > 0L && fileCount >= 0 && totalBytes >= 0L &&
+            schemaVersion in 1..2 && layoutVersion in 1..2
         if (!usable) {
             null
         } else {
@@ -186,6 +204,7 @@ internal object RuntimeSessionSnapshotPolicy {
                 runtimeId = optionalVersion(json, "runtimeId"),
                 fileCount = fileCount,
                 totalBytes = totalBytes,
+                layoutVersion = layoutVersion,
             )
         }
     } catch (_: Throwable) {
@@ -220,6 +239,8 @@ data class RuntimeSessionSnapshotMeta(
     val runtimeId: String?,
     val fileCount: Int,
     val totalBytes: Long,
+    /** 1 = 旧会话快照；2 = 数据备份（sessions/settings/credentials/skills/attachments）。 */
+    val layoutVersion: Int = 1,
 ) {
     /**
      * 桥层载荷。字段名由平台层契约冻结：`id` / `createdAt`（ISO8601）/ `bytes` / `fileCount`
@@ -354,11 +375,11 @@ data class RuntimeAutoSnapshotOutcome(
  *     创建/淘汰/恢复/删除四条链路跑完，不依赖真机，也不碰 Android API；
  *  3. **不做事务承诺**：Harness 正在写会话时拍下的快照是尽力而为的一帧，不保证是某个一致点。
  *
- * @param sessionRoot 已安装运行时的会话目录（宿主侧 `currentRoot/root/.dsh/sessions`）。
- * @param snapshotsRoot 快照根目录（应用私有 `filesDir/runtime-session-snapshots`）。
+ * @param sessionRoot 已安装运行时的数据目录（宿主侧 `currentRoot/root/.dsh`）。
+ * @param snapshotsRoot 快照根目录（应用私有 `filesDir/runtime-session-snapshots`，生产实现逐文件加密）。
  * @param identity 当前运行时身份，写进元数据。
  */
-class RuntimeSessionSnapshots(
+internal class RuntimeSessionSnapshots(
     private val sessionRoot: File,
     private val snapshotsRoot: File,
     private val identity: () -> RuntimeIdentitySnapshot = { RuntimeIdentitySnapshot.UNKNOWN },
@@ -366,6 +387,7 @@ class RuntimeSessionSnapshots(
     private val maxBytes: Long = RuntimeSessionSnapshotLimits.MAX_TOTAL_BYTES,
     private val now: () -> Long = System::currentTimeMillis,
     private val nonce: () -> String = { UUID.randomUUID().toString().replace("-", "").take(8) },
+    private val cipher: SnapshotCipher = PlaintextSnapshotCipher,
 ) {
     private class SnapshotEntry(val relative: String, val source: File, val bytes: Long)
 
@@ -397,7 +419,7 @@ class RuntimeSessionSnapshots(
      * 顺序刻意如此：**先淘汰旧的，再写新的**，且元数据**最后写**——一旦中途失败或进程被杀，
      * 留下的目录没有 `snapshot.json`，[state] 不会把它当成可用备份（`pruneUnusable` 之后清理）。
      */
-    fun create(): RuntimeSessionSnapshotState = createInternal().state
+    fun create(): RuntimeSessionSnapshotState = createInternal(includeAttachments = true).state
 
     /**
      * 「安装/更新前自动快照」入口：**永不抛异常**。
@@ -407,7 +429,7 @@ class RuntimeSessionSnapshots(
      * 其余错误 → `failed`。
      */
     fun createBeforeUpdate(): RuntimeAutoSnapshotOutcome = try {
-        val creation = createInternal()
+        val creation = createInternal(includeAttachments = false)
         RuntimeAutoSnapshotOutcome.created(creation.createdId, creation.evictedIds)
     } catch (failure: RuntimeFailure) {
         if (failure.code == RuntimeSessionSnapshotCodes.EMPTY) {
@@ -428,23 +450,27 @@ class RuntimeSessionSnapshots(
      */
     fun restore(id: String): RuntimeSessionSnapshotRestoreResult {
         val meta = requireMeta(id)
+        val requireEncrypted = meta.layoutVersion >= 2
         // 只遍历内容目录：元数据与内容是分开两层存放的（见 FILES_DIRECTORY 的说明）。
-        val entries = collectEntries(File(snapshotDirectory(meta.id), RuntimeSessionSnapshotLimits.FILES_DIRECTORY))
-        // 内容与元数据对不上时拒绝恢复：宁可让用户看到「这份备份不可用」，
-        // 也不要把半份备份悄悄回填成看起来正常的会话目录。
-        if (entries.size != meta.fileCount || entries.sumOf { it.bytes } != meta.totalBytes) {
+        val entries = collectEntries(
+            File(snapshotDirectory(meta.id), RuntimeSessionSnapshotLimits.FILES_DIRECTORY),
+        ) { cipher.plaintextBytes(it, requireEncrypted) }
+        // 内容与元数据对不上或密文头缺失/损坏时拒绝恢复：宁可让用户看到「这份备份不可用」，
+        // 也不要把半份备份或未解密密文悄悄回填成看起来正常的数据目录。
+        if (entries.any { it.bytes < 0L } || entries.size != meta.fileCount || entries.sumOf { it.bytes } != meta.totalBytes) {
             throw RuntimeFailure(
                 RuntimeSessionSnapshotCodes.FAILED,
                 "快照内容与元数据不一致（记录 ${meta.fileCount} 个文件 / ${meta.totalBytes} 字节），已拒绝恢复",
             )
         }
-        if (!ensureSessionRoot()) {
-            throw RuntimeFailure(RuntimeSessionSnapshotCodes.FAILED, "无法准备会话目录")
+        val targetRoot = if (meta.layoutVersion >= 2) sessionRoot else File(sessionRoot, "sessions")
+        if (!(targetRoot.isDirectory || targetRoot.mkdirs())) {
+            throw RuntimeFailure(RuntimeSessionSnapshotCodes.FAILED, "无法准备数据目录")
         }
         var restored = 0
         var skipped = 0
         for (entry in entries) {
-            val target = File(sessionRoot, entry.relative)
+            val target = File(targetRoot, entry.relative)
             if (existsNoFollow(target)) {
                 skipped += 1
                 continue
@@ -455,9 +481,22 @@ class RuntimeSessionSnapshots(
                 }
             }
             try {
-                Files.copy(entry.source.toPath(), target.toPath())
+                cipher.decrypt(entry.source, target, requireEncrypted)
+                if (target.name == "settings.yaml" || target.name == ".credentials.yaml") {
+                    runCatching { Files.setPosixFilePermissions(target.toPath(), java.nio.file.attribute.PosixFilePermissions.fromString("rw-------")) }
+                }
+            } catch (error: SnapshotKeyUnavailableException) {
+                throw RuntimeFailure(
+                    RuntimeSessionSnapshotCodes.FAILED,
+                    "无法恢复加密备份：设备密钥已失效或丢失（系统锁屏变更或密钥库重置后，历史加密备份不可恢复）",
+                    error,
+                )
             } catch (error: IOException) {
-                throw RuntimeFailure(RuntimeSessionSnapshotCodes.FAILED, "无法恢复会话文件", error)
+                throw RuntimeFailure(
+                    RuntimeSessionSnapshotCodes.FAILED,
+                    "无法恢复数据文件（备份已损坏或设备密钥已失效，历史加密备份可能无法恢复）",
+                    error,
+                )
             }
             restored += 1
         }
@@ -471,8 +510,8 @@ class RuntimeSessionSnapshots(
         return state()
     }
 
-    private fun createInternal(): SnapshotCreation {
-        val entries = collectEntries(sessionRoot)
+    private fun createInternal(includeAttachments: Boolean): SnapshotCreation {
+        val entries = collectDataEntries(includeAttachments)
         if (entries.isEmpty()) {
             throw RuntimeFailure(
                 RuntimeSessionSnapshotCodes.EMPTY,
@@ -507,6 +546,7 @@ class RuntimeSessionSnapshots(
             runtimeId = currentIdentity.runtimeId,
             fileCount = entries.size,
             totalBytes = totalBytes,
+            layoutVersion = 2,
         )
         val target = snapshotDirectory(meta.id)
         if (existsNoFollow(target)) {
@@ -520,7 +560,7 @@ class RuntimeSessionSnapshots(
                 if (parent != null && !existsNoFollow(parent) && !parent.mkdirs()) {
                     throw RuntimeFailure(RuntimeSessionSnapshotCodes.FAILED, "无法创建快照目录")
                 }
-                Files.copy(entry.source.toPath(), destination.toPath())
+                cipher.encrypt(entry.source, destination)
             }
             // 元数据最后写：它存在即代表这份快照是完整的。
             File(target, RuntimeSessionSnapshotLimits.METADATA_FILE)
@@ -534,8 +574,38 @@ class RuntimeSessionSnapshots(
         return SnapshotCreation(state(), evicted, meta.id)
     }
 
+    /**
+     * 轻量数据备份的源：会话、设置、模型凭据、技能与附件。
+     *
+     * 每一项都以数据根为基准保留相对路径（`sessions/...`、`settings.yaml` 等），
+     * 恢复时按同一结构合并回填。符号链接只跳过，不复制目标。
+     */
+    private fun collectDataEntries(includeAttachments: Boolean): List<SnapshotEntry> {
+        val sources = buildList {
+            add("sessions" to File(sessionRoot, "sessions"))
+            add("settings.yaml" to File(sessionRoot, "settings.yaml"))
+            add(".credentials.yaml" to File(sessionRoot, ".credentials.yaml"))
+            add("skills" to File(sessionRoot, "skills"))
+            if (includeAttachments) {
+                add("attachments" to File(sessionRoot, "attachments"))
+            }
+        }
+        val entries = mutableListOf<SnapshotEntry>()
+        for ((prefix, root) in sources) {
+            val attributes = attributesNoFollow(root) ?: continue
+            when {
+                attributes.isSymbolicLink -> Unit
+                attributes.isDirectory -> collectEntries(root).forEach {
+                    entries += SnapshotEntry("$prefix/${it.relative}", it.source, it.bytes)
+                }
+                attributes.isRegularFile -> entries += SnapshotEntry(prefix, root, attributes.size())
+            }
+        }
+        return entries.sortedBy { it.relative }
+    }
+
     /** 枚举一份目录树里的**常规文件**：不跟随符号链接，深度与条目数都有上限，结果按相对路径排序。 */
-    private fun collectEntries(root: File): List<SnapshotEntry> {
+    private fun collectEntries(root: File, bytesOf: (File) -> Long = { Files.size(it.toPath()) }): List<SnapshotEntry> {
         if (!isDirectoryNoFollow(root)) return emptyList()
         val rootPath = root.toPath()
         val entries = mutableListOf<SnapshotEntry>()
@@ -560,7 +630,7 @@ class RuntimeSessionSnapshots(
                         entries += SnapshotEntry(
                             relative = relativePath(rootPath, child.toPath()),
                             source = child,
-                            bytes = attributes.size(),
+                            bytes = bytesOf(child),
                         )
                     }
                 }

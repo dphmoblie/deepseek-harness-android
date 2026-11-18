@@ -352,7 +352,7 @@ export interface RuntimeSessionSnapshot {
 /**
  * 会话快照总览（四条快照桥方法里三条的返回体）。
  *
- * 上限是 [maxSnapshots] 份 / [maxBytes] 字节；超限时原生侧从**最旧**的一份开始淘汰，
+ * 上限是 [maxSnapshots] 份 / [maxBytes] 字节（当前原生默认 10 份 / 16 GiB）；超限时原生侧从**最旧**的一份开始淘汰，
  * 所以界面不能假设「刚创建的那份一定还在」。[snapshots] 新的在前，顺序由原生侧决定，前端不重排。
  */
 export interface RuntimeSessionSnapshotState {
@@ -1591,6 +1591,10 @@ export interface MailboxExportResult {
 export interface DiagnosticLogState {
   enabled: boolean
   retentionDays: number
+  /** 导出时是否附带经过凭据脱敏处理的 Harness 运行日志尾部；默认开启。 */
+  includeHarnessLog: boolean
+  /** 当前是否有非空的 Harness 运行日志尾部可参与导出。 */
+  harnessLogAvailable?: boolean
   fileCount: number
   totalBytes: number
   /** 最近一条记录的时间；从未记录时为 0。 */
@@ -1607,7 +1611,7 @@ export interface DiagnosticLogExport extends DiagnosticLogState {
  * Harness 访客进程输出的尾部快照（stdout 与 stderr 已合并）。
  *
  * 与诊断日志相反，这段文本**可能包含会话内容**（工具参数、报错栈、代码片段等）：
- * 它只在设备上的界面里展示，不写入诊断日志，也不随诊断日志导出。
+ * 它只在设备上的界面里展示；开启诊断导出附加项后，会先经过原生脱敏再随诊断日志导出。
  */
 export interface HarnessLog {
   /** 当前是否有可读的进程输出；false 时 text 恒为空串。 */
@@ -2113,7 +2117,7 @@ export interface RuntimeBridge {
   /** 诊断日志状态；不含日志内容。 */
   getDiagnosticLogState: () => Promise<DiagnosticLogState>
   /** 更新采集开关与保留天数（1–30）。 */
-  setDiagnosticLogSettings: (enabled: boolean, retentionDays: number) => Promise<DiagnosticLogState>
+  setDiagnosticLogSettings: (enabled: boolean, retentionDays: number, includeHarnessLog: boolean) => Promise<DiagnosticLogState>
   /** 导出全部诊断日志并打开系统分享面板。 */
   shareDiagnosticLog: () => Promise<DiagnosticLogExport>
   shareRuntimeWorkspace: () => Promise<void>
@@ -2141,7 +2145,7 @@ export interface RuntimeBridge {
   /**
    * 读取访客进程输出的尾部（只读、不落盘）。
    *
-   * 可能包含会话内容：只在设备上的界面里展示，不写入诊断日志，也不随诊断日志导出。
+   * 可能包含会话内容：只在设备上的界面里展示，不写入诊断日志；是否随诊断日志导出由用户开关控制。
    * [maxBytes] 由原生侧收敛到受控档位（8 / 64 / 256 KB），缺省 8 KB。
    */
   getHarnessLog: (options?: { maxBytes?: number }) => Promise<HarnessLog>
@@ -2233,7 +2237,7 @@ export interface RuntimeBridge {
   /**
    * 会话快照总览（无参数，只读）。
    *
-   * 快照存在应用私有目录里：不进云备份、不进 rootfs；上限 3 份 / 512 MiB，
+   * 快照存在应用私有目录里：不进云备份、不进 rootfs；上限由原生状态返回（当前默认 10 份 / 16 GiB），
    * 超限时原生侧从最旧的一份开始淘汰，返回的只是**当前实际还在**的那些。
    */
   getRuntimeSessionSnapshotState: () => Promise<RuntimeSessionSnapshotState>

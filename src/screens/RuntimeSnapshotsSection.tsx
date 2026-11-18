@@ -39,6 +39,7 @@ export function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restore
   const [failed, setFailed] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [confirmCreate, setConfirmCreate] = useState(false)
   const [snapshotsExpanded, setSnapshotsExpanded] = useState(false)
   const COLLAPSE_AFTER = 3
 
@@ -64,7 +65,7 @@ export function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restore
     void (async () => {
       try {
         setState(await createSnapshot())
-        notify(t("会话备份已创建"), 'success')
+        notify(t("数据备份已创建"), 'success')
       } catch (error) {
         notify(errorMessage(error), 'error')
       } finally {
@@ -82,8 +83,8 @@ export function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restore
         setState(result.state)
         notify(
           result.skippedFileCount > 0
-            ? t("会话恢复完成：恢复 {0} 个文件，跳过 {1} 个已存在的文件。", String(result.restoredFileCount), String(result.skippedFileCount))
-            : t("会话恢复完成：恢复 {0} 个文件。", String(result.restoredFileCount)),
+            ? t("数据恢复完成：恢复 {0} 个文件，跳过 {1} 个已存在的文件。", String(result.restoredFileCount), String(result.skippedFileCount))
+            : t("数据恢复完成：恢复 {0} 个文件。", String(result.restoredFileCount)),
           'success',
         )
       } catch (error) {
@@ -101,7 +102,7 @@ export function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restore
       try {
         setState(await deleteSnapshot(id))
         setConfirmId(null)
-        notify(t("会话备份已删除"), 'success')
+        notify(t("数据备份已删除"), 'success')
       } catch (error) {
         notify(errorMessage(error), 'error')
       } finally {
@@ -117,16 +118,17 @@ export function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restore
       <div className="section-title">
         <span className="section-icon"><Database size={19} /></span>
         <div>
-          <h2 id="runtime-snapshots-title">{t("会话备份")}</h2>
-          <p>{t("会话备份保存在应用私有目录中，不会进入系统云备份或运行环境安装包。安装或更新运行环境前，应用会自动创建备份。")}</p>
+          <h2 id="runtime-snapshots-title">{t("数据备份")}</h2>
+          <p>{t("数据备份保存在应用私有目录中，不会进入系统云备份或运行环境安装包。安装、更新、修复或重置前，应用会自动创建不含附件的轻量备份；如需备份附件请手动创建。")}</p>
         </div>
       </div>
+      <p className="settings-note">{t("手动完整备份包含会话、设置、模型凭据、技能和附件，并使用设备密钥库加密保存在本机私有目录。若更换锁屏方式或重置系统密钥库导致密钥失效，已加密备份将不可恢复。")}</p>
 
-      {loading && <p className="harness-log-state">{t("正在读取会话备份…")}</p>}
+      {loading && <p className="harness-log-state">{t("正在读取数据备份…")}</p>}
 
       {!loading && failed && (
         <>
-          <p className="harness-log-state" role="alert">{t("暂时读不到会话备份列表")}</p>
+          <p className="harness-log-state" role="alert">{t("暂时读不到数据备份列表")}</p>
           <div className="settings-inline-actions">
             <button className="button button-secondary" type="button" onClick={load}>
               <RefreshCw size={18} />{t("重试")}
@@ -138,7 +140,7 @@ export function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restore
       {!loading && !failed && state !== null && (
         <>
           {snapshots.length === 0
-            ? <p className="harness-log-state">{t("暂无会话备份。你可以手动创建，也可以等应用在安装运行环境前自动备份。")}</p>
+            ? <p className="harness-log-state">{t("暂无数据备份。你可以手动创建，也可以等应用在安装运行环境前自动备份。")}</p>
             : (
               <>
               <div className="release-list">
@@ -208,10 +210,18 @@ export function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restore
           </p>
 
           <div className="settings-inline-actions">
-            <button className="button button-secondary" type="button" onClick={create} disabled={busy !== null}>
+            {!confirmCreate && <button className="button button-secondary" type="button" onClick={() => setConfirmCreate(true)} disabled={busy !== null}>
               {busy === 'create' ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
               {t("现在备份一次")}
-            </button>
+            </button>}
+            {confirmCreate && <div role="alertdialog" aria-labelledby="runtime-snapshot-create-confirm">
+              <p className="settings-note" id="runtime-snapshot-create-confirm"><strong>{t("确认创建完整数据备份？")}</strong> {t("备份会包含会话、模型凭据、设置、技能和附件，并加密保存在本机应用私有目录；设备密钥丢失后历史加密备份不可恢复。")}</p>
+              <button className="button button-primary" type="button" onClick={() => { setConfirmCreate(false); create() }} disabled={busy !== null}>
+                {busy === 'create' ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
+                {t("继续创建")}
+              </button>
+              <button className="button button-secondary" type="button" onClick={() => setConfirmCreate(false)} disabled={busy !== null}>{t("取消创建")}</button>
+            </div>}
           </div>
         </>
       )}

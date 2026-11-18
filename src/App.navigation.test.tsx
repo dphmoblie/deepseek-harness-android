@@ -118,6 +118,7 @@ const keepAlive: KeepAliveState = {
 const diagnostic: DiagnosticLogState = {
   enabled: false,
   retentionDays: 3,
+  includeHarnessLog: true,
   fileCount: 0,
   totalBytes: 0,
   lastEntryAtMillis: 0,

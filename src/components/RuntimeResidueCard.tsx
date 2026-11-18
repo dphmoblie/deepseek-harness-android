@@ -60,9 +60,9 @@ export function RuntimeResidueCard({ bridge = runtimeBridge }: { bridge?: Runtim
     } finally { setCleaning(false) }
   }
   const receivable = loaded && !failed && state !== null && state.count > 0
-  return <div className="settings-subsection" aria-labelledby="runtime-residue">
+  return <section className="settings-section" aria-labelledby="runtime-residue">
     <div className="section-title"><span className="section-icon"><Database size={19} /></span>
-      <div><h3 id="runtime-residue">{t('运行时占用与残留')}</h3><p>{t('运行时目录里由本应用生成的残留可以在这里回收。')}</p></div>
+      <div><h2 id="runtime-residue">{t('运行时占用与残留')}</h2><p>{t('运行时目录里由本应用生成的残留可以在这里回收。')}</p></div>
     </div>
     {!loaded && !failed && <p className="settings-note">{t('正在统计运行时占用…')}</p>}
     {loaded && state !== null && state.count === 0 && <p className="settings-note">{t('没有可回收的残留')}</p>}
@@ -84,5 +84,5 @@ export function RuntimeResidueCard({ bridge = runtimeBridge }: { bridge?: Runtim
     {result !== null && receivable && <p className="settings-note"><strong>{t('仍有 {0} 份未清理，详见诊断与日志。', String(state.count))}</strong></p>}
     {failed && <p role="alert">{t('无法读取运行时占用')} <button className="button button-quiet" type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
     {cleanFailed && <p role="alert">{t('清理没能完成，请稍后重试；仍然失败请查看诊断与日志。')}</p>}
-  </div>
+  </section>
 }

@@ -352,4 +352,19 @@ class DiagnosticPolicyTest {
             }
         }
     }
+
+    @Test
+    fun allowsExportWhenOnlyHarnessLogExistsAndStatesRealRedactionScope() {
+        assertTrue(DiagnosticPolicy.shouldExport(hasDiagnosticEntries = false, includeHarnessLog = true, harnessLog = "stderr line"))
+        assertFalse(DiagnosticPolicy.shouldExport(hasDiagnosticEntries = false, includeHarnessLog = true, harnessLog = "   "))
+        assertFalse(DiagnosticPolicy.shouldExport(hasDiagnosticEntries = false, includeHarnessLog = false, harnessLog = "stderr line"))
+        assertTrue(DiagnosticPolicy.shouldExport(hasDiagnosticEntries = true, includeHarnessLog = false, harnessLog = null))
+
+        val headerLine = DiagnosticPolicy.harnessExportHeaderLine(included = true)
+        assertTrue(headerLine.contains("仅自动脱敏凭据"))
+        assertTrue(headerLine.contains("路径"))
+        assertTrue(headerLine.contains("URL"))
+        assertTrue(DiagnosticPolicy.EXPORT_CONTENT_NOTICE.contains("仅自动脱敏凭据"))
+        assertTrue(DiagnosticPolicy.HARNESS_SECTION_HEADER.contains("仅自动脱敏凭据"))
+    }
 }

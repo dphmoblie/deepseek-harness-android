@@ -29,6 +29,8 @@ describe('诊断与日志', () => {
     const toggle = await screen.findByRole('switch', { name: /收集诊断日志/ })
     await waitFor(() => expect(toggle).toBeEnabled())
     expect(toggle).toBeChecked()
+    const harnessExportToggle = await screen.findByRole('switch', { name: /导出 Harness 运行日志/ })
+    expect(harnessExportToggle).toBeChecked()
     // 没有任何日志时可导出/清空按钮保持禁用，避免产生空文件。
     expect(screen.getByRole('button', { name: '导出并分享' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '清空日志' })).toBeDisabled()
@@ -36,11 +38,15 @@ describe('诊断与日志', () => {
     const retentionInput = screen.getByRole('spinbutton', { name: /保留天数/ })
     fireEvent.change(retentionInput, { target: { value: '7' } })
     fireEvent.blur(retentionInput)
-    await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(true, 7))
+    await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(true, 7, true))
 
     fireEvent.click(toggle)
-    await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(false, 7))
+    await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(false, 7, true))
     expect(await screen.findByRole('switch', { name: /收集诊断日志/ })).not.toBeChecked()
+
+    fireEvent.click(harnessExportToggle)
+    await waitFor(() => expect(bridge.setDiagnosticLogSettings).toHaveBeenCalledWith(false, 7, false))
+    expect(harnessExportToggle).not.toBeChecked()
   })
 
   it('保留天数输入框允许编辑，失焦时拒绝空值和越界值', async () => {
@@ -63,6 +69,7 @@ describe('诊断与日志', () => {
     const withLogs: DiagnosticLogState = {
       enabled: true,
       retentionDays: 3,
+      includeHarnessLog: true,
       fileCount: 2,
       totalBytes: 4096,
       lastEntryAtMillis: 1_700_000_000_000,
@@ -85,6 +92,7 @@ describe('诊断与日志', () => {
     const shareButton = screen.getByRole('button', { name: '导出并分享' })
     await waitFor(() => expect(shareButton).toBeEnabled())
     fireEvent.click(shareButton)
+    fireEvent.click(await screen.findByRole('button', { name: '继续导出' }))
     await waitFor(() => expect(bridge.shareDiagnosticLog).toHaveBeenCalledTimes(1))
     expect(await screen.findByText(/诊断日志已导出/)).toBeVisible()
 
@@ -99,6 +107,7 @@ describe('诊断与日志', () => {
     bridge.getDiagnosticLogState.mockResolvedValue({
       enabled: true,
       retentionDays: 3,
+      includeHarnessLog: true,
       fileCount: 1,
       totalBytes: 128,
       lastEntryAtMillis: 1_700_000_000_000,
@@ -109,10 +118,41 @@ describe('诊断与日志', () => {
 
     await openSettingsPage('诊断与日志', '日志与采集')
     fireEvent.click(await screen.findByRole('button', { name: '导出并分享' }))
+    fireEvent.click(await screen.findByRole('button', { name: '继续导出' }))
 
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('当前没有可导出的诊断日志')
     expect(bridge.getDiagnosticLogState).toHaveBeenCalled()
+  })
+
+  it('无诊断文件但存在可附加 Harness 运行日志时仍可导出并诚实提示脱敏范围', async () => {
+    const harnessOnly: DiagnosticLogState = {
+      enabled: true,
+      retentionDays: 3,
+      includeHarnessLog: true,
+      harnessLogAvailable: true,
+      fileCount: 0,
+      totalBytes: 0,
+      lastEntryAtMillis: 0,
+    }
+    bridge.getDiagnosticLogState.mockResolvedValue({ ...harnessOnly })
+    bridge.shareDiagnosticLog.mockResolvedValue({
+      ...harnessOnly,
+      fileName: 'dsh-diagnostic-20260912-102030.txt',
+      exportedBytes: 256,
+    })
+    render(<App />)
+    await arriveAtSettingsHome()
+    await openSettingsPage('诊断与日志', '日志与采集')
+
+    expect(screen.getByText(/仅自动脱敏模型密钥、授权头等凭据，仍可能包含文件路径、URL/)).toBeVisible()
+    const shareButton = screen.getByRole('button', { name: '导出并分享' })
+    await waitFor(() => expect(shareButton).toBeEnabled())
+    expect(screen.getByRole('button', { name: '清空日志' })).toBeDisabled()
+
+    fireEvent.click(shareButton)
+    fireEvent.click(await screen.findByRole('button', { name: '继续导出' }))
+    await waitFor(() => expect(bridge.shareDiagnosticLog).toHaveBeenCalledTimes(1))
   })
 
   it('运行日志折叠时不读取，展开后才按需读取并按纯文本渲染', async () => {
@@ -132,8 +172,8 @@ describe('诊断与日志', () => {
     await waitFor(() => expect(bridge.getHarnessLog).toHaveBeenCalledTimes(1))
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     // 隐私边界必须在界面上写清，而不是只藏在文档里。
-    expect(screen.getByText(/可能包含会话内容/)).toBeVisible()
-    expect(screen.getByText(/不随诊断日志导出/)).toBeVisible()
+    expect(screen.getAllByText(/可能包含会话内容/).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText(/由上方开关控制/)).toBeVisible()
 
     const output = document.querySelector('.harness-log-output')
     expect(output).not.toBeNull()

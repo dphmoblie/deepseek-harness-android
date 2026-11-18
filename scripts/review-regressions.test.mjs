@@ -33,9 +33,12 @@ test('Harness open captures its deadline before queueing and stop/reset/destroy 
 
 // Native wiring checks complement JVM policy tests; device behavior still needs instrumentation.
 test('frame state reads cached foreground; health reuses one activity dump even with follow off', () => {
-  const state = shell.slice(shell.indexOf('@Synchronized fun state()'), shell.indexOf('@Synchronized fun action('))
+  const state = shell.slice(shell.indexOf('@Synchronized fun state()'), shell.indexOf('fun action('))
   assert.match(state, /this\.virtualForeground/)
   assert.doesNotMatch(state, /command\(|foregroundComponent\(|resumeForeground\(/)
+  // actionLocked 保持实例锁内执行、awaitSettle 在实例锁外只等帧锁，不阻塞 state()。
+  const action = shell.slice(shell.indexOf('fun action('), shell.indexOf('private fun actionLocked('))
+  assert.match(action, /awaitSettle\(/)
   const tick = shell.slice(shell.indexOf('private fun autoFollowTick('), shell.indexOf('private fun tickResult('))
   assert.equal((tick.match(/"activity", "activities"/g) ?? []).length, 1)
   assert.match(tick, /virtualForeground = VirtualScreenPolicy\.resumedComponent\(dump, id\(\)\)/)

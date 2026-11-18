@@ -19,7 +19,10 @@ object VirtualScreenCommands {
                 val request = JSONObject(param)
                 VirtualScreenPolicy.session(request.getString("sessionId"))
                 when (command) {
-                    "virtualScreenCapture" -> service.screenshotEnvelope(request.getString("sessionId")).toString()
+                    "virtualScreenCapture" -> service.screenshotEnvelope(
+                        request.getString("sessionId"),
+                        VirtualScreenSettle.captureWaitBudget(request),
+                    ).toString()
                     "virtualScreenAction" -> service.action(request).toString()
                     else -> throw IllegalArgumentException("副屏命令不支持")
                 }

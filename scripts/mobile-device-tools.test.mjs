@@ -63,18 +63,25 @@ test('副屏动作只发送会话与受控动作参数，不接受任意显示�
   const f = fixture(t, () => ok('{"active":true}'))
   const tool = f.tools.get('mobile_virtual_screen_action')
   await tool.execute({ sessionId: virtualSession, action: 'tap', x: 10, y: 20 }, {})
-  assert.deepEqual(f.requests, [{ command: 'virtualScreenAction', param: JSON.stringify({ sessionId: virtualSession, action: 'tap', x: 10, y: 20 }) }])
+  assert.deepEqual(f.requests, [{ command: 'virtualScreenAction', param: JSON.stringify({ sessionId: virtualSession, action: 'tap', x: 10, y: 20, settleMs: 3000 }) }])
   for (const request of [
     { sessionId: '0', action: 'back' },
     { sessionId: virtualSession, action: 'tap', x: -1, y: 0 },
     { sessionId: virtualSession, action: 'tap', x: 0.5, y: 0 },
+    { sessionId: virtualSession, action: 'tap', x: 10, y: 20, settleMs: -1 },
+    { sessionId: virtualSession, action: 'tap', x: 10, y: 20, settleMs: 10001 },
+    { sessionId: virtualSession, action: 'tap', x: 10, y: 20, settleMs: 250.5 },
+    { sessionId: virtualSession, action: 'text', text: 'hi', settleMs: 500 },
     { sessionId: virtualSession, action: 'swipe', x: 0, y: 0, endX: 1, endY: 1, durationMs: 3000 },
   ]) await assert.rejects(tool.execute(request, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
   assert.equal(f.requests.length, 1)
-  await tool.execute({ sessionId: virtualSession, action: 'long_press', x: 10, y: 20, durationMs: 600 }, {})
-  await tool.execute({ sessionId: virtualSession, action: 'keyevent', key: 'ENTER' }, {})
+  await tool.execute({ sessionId: virtualSession, action: 'long_press', x: 10, y: 20, durationMs: 600, settleMs: 8000 }, {})
+  await tool.execute({ sessionId: virtualSession, action: 'keyevent', key: 'ENTER', settleMs: 0 }, {})
   await tool.execute({ sessionId: virtualSession, action: 'text', text: 'hello world' }, {})
   assert.deepEqual(f.requests.slice(1).map(request => JSON.parse(request.param).action), ['long_press', 'keyevent', 'text'])
+  assert.equal(JSON.parse(f.requests[1].param).settleMs, 8000)
+  assert.equal(JSON.parse(f.requests[2].param).settleMs, 0)
+  assert.equal(JSON.parse(f.requests[3].param).settleMs, undefined)
   assert.deepEqual(await f.hook({ name: 'mobile_virtual_screen_action' }, () => ({ kind: 'allow' })), { kind: 'allow' })
   assert.deepEqual(await f.hook({ name: 'mobile_virtual_screen_action' }, () => ({ kind: 'deny', reason: '用户已禁用' })), { kind: 'deny', reason: '用户已禁用' })
 })
@@ -97,6 +104,7 @@ test('副屏错误给固定恢复建议，不转发设备原文或自动重放�
     ['VIRTUAL_SCREEN_STOPPED', /当前有效 sessionId/],
     ['VIRTUAL_SCREEN_SESSION_DEAD', /原生入口重新开始/],
     ['VIRTUAL_SCREEN_TEXT_UNSUPPORTED', /可能已有部分写入/],
+    ['VIRTUAL_SCREEN_INJECTION_FAILED', /不要直接重复补点/],
   ]) {
     code = errorCode
     const before = f.requests.length
@@ -156,12 +164,17 @@ test('副屏流程按需选择树或截图，但保留同屏观察与动作后�
   assert.match(prompt, /STOPPED 或 SESSION_DEAD 时重新取状态，不复用旧 sessionId/)
   assert.match(prompt, /动作完成后重新观察验证/)
   assert.match(prompt, /敏感窗口整棵拒绝，不能用截图绕过/)
+  assert.match(prompt, /严禁沿用选中前的旧坐标/)
+  assert.match(prompt, /单选圆点/)
+  assert.match(prompt, /settle\.frameAfterInput=false/)
   const action = f.tools.get('mobile_virtual_screen_action').description
   assert.match(action, /同一副屏的最近一次观察/)
   assert.match(action, /动作后用树或截图验证结果/)
+  assert.match(action, /settleMs=3000/)
   assert.doesNotMatch(action, /动作后重新截图/)
   assert.match(f.tools.get('mobile_virtual_screen_target').description, /无需再查 state/)
   assert.match(f.tools.get('mobile_virtual_screen_tree').description, /不调用主屏无障碍动作/)
+  assert.match(f.tools.get('mobile_virtual_screen_tree').description, /checked\/selected/)
 })
 
 test('副屏截图保持真实附件格式，并说明缩放后的副屏操作坐标', async t => {
@@ -199,6 +212,49 @@ test('旧版副屏截图缺少帧元数据时不宣称拿到了新帧', t => {
   assert.match(text, /未提供帧新鲜度信息/)
   assert.doesNotMatch(text, /取得了新帧/)
   assert.match(tool.output.render({ sessionId: virtualSession }, { ok: true, image: { ...image, frameReused: false } })[0].text, /取得了新帧/)
+  const staleBeforeInput = tool.output.render(
+    { sessionId: virtualSession },
+    { ok: true, image: { ...image, frameReused: false, frameAtElapsedMs: 1000, lastInputAtElapsedMs: 2500, frameBeforeLastInput: true } },
+  )[0].text
+  assert.match(staleBeforeInput, /采集于最近一次输入之前/)
+  assert.match(staleBeforeInput, /不要直接重复补点/)
+  assert.doesNotMatch(staleBeforeInput, /本次取得了新帧/)
+})
+
+test('副屏截图支持可选 waitMs，副屏动作和状态回执渲染清晰提示', async t => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64')
+  const f = fixture(t, req => {
+    if (req.command === 'virtualScreenCapture') {
+      return ok(JSON.stringify({
+        imageBase64: png, packageName: 'com.example.target',
+        frameAtElapsedMs: 5200, frameReused: false, lastInputAtElapsedMs: 4900, frameBeforeLastInput: false,
+      }))
+    }
+    return ok('{}')
+  }, {
+    llm: { resolveModelInfo: async () => ({ inputModalities: ['image'] }) },
+    attachments: { saveImage: async () => ({ attachmentId: 'v-wait', mediaType: 'image/png', bytes: 10, width: 720, height: 1600 }) },
+  })
+  const shot = f.tools.get('mobile_virtual_screen_screenshot')
+  const shotRes = await shot.execute({ sessionId: virtualSession, waitMs: 7500 }, { agent: { session: { requestHeader: () => ({ config: { provider: 'p', model: 'm' } }) } } })
+  assert.deepEqual(f.requests, [{ command: 'virtualScreenCapture', param: JSON.stringify({ sessionId: virtualSession, waitMs: 7500 }) }])
+  assert.equal(shotRes.image.frameBeforeLastInput, false)
+  assert.equal(shotRes.image.lastInputAtElapsedMs, 4900)
+  for (const waitMs of [-1, 10001, 500.5, '5000']) {
+    await assert.rejects(shot.execute({ sessionId: virtualSession, waitMs }, { agent: { session: { requestHeader: () => ({ config: { provider: 'p', model: 'm' } }) } } }), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
+  }
+
+  const actionTool = f.tools.get('mobile_virtual_screen_action')
+  const settledText = actionTool.output.render({}, { output: JSON.stringify({ settle: { frameAfterInput: true, quiet: true, waitedMs: 450, firstFrameDelayMs: 120 } }) })[0].text
+  assert.match(settledText, /120 ms 内出现新帧且画面已稳定/)
+  const missedText = actionTool.output.render({}, { output: JSON.stringify({ settle: { frameAfterInput: false, quiet: false, waitedMs: 3000 } }) })[0].text
+  assert.match(missedText, /frameAfterInput=false/)
+  assert.match(missedText, /请勿立刻原地补点/)
+
+  const stateTool = f.tools.get('mobile_virtual_screen_state')
+  const stateText = stateTool.output.render({}, { output: JSON.stringify({ virtualForegroundPackage: 'com.quiz.app', autoFollow: 'off', frameAtElapsedMs: 1000, lastInputAtElapsedMs: 3000, frameBeforeLastInput: true, inputFrameMissed: 2 }) })[0].text
+  assert.match(stateText, /尚未采集到新画面/)
+  assert.match(stateText, /2 次输入在响应窗口内未等到画面变化/)
 })
 
 test('副屏动作允许中文文本，仍拒绝控制字符与超长输入', async t => {
@@ -320,11 +376,12 @@ test('副屏手势只回传受控的 {x,y} 点列，点数、坐标与时长都�
   await tool.execute({ sessionId: virtualSession, action: 'gesture', points: [{ x: 10, y: 20 }, { x: 300, y: 400 }], durationMs: 300 }, {})
   assert.deepEqual(f.requests, [{
     command: 'virtualScreenAction',
-    param: JSON.stringify({ sessionId: virtualSession, action: 'gesture', points: [{ x: 10, y: 20 }, { x: 300, y: 400 }], durationMs: 300 }),
+    param: JSON.stringify({ sessionId: virtualSession, action: 'gesture', points: [{ x: 10, y: 20 }, { x: 300, y: 400 }], durationMs: 300, settleMs: 3000 }),
   }])
   // 省略 durationMs 时不替调用方补默认值：设备端自己取 300，两边只保留一个默认值来源。
-  await tool.execute({ sessionId: virtualSession, action: 'gesture', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }, {})
+  await tool.execute({ sessionId: virtualSession, action: 'gesture', points: [{ x: 0, y: 0 }, { x: 1, y: 1 }], settleMs: 0 }, {})
   assert.equal(JSON.parse(f.requests[1].param).durationMs, undefined)
+  assert.equal(JSON.parse(f.requests[1].param).settleMs, 0)
   for (const request of [
     { sessionId: virtualSession, action: 'gesture', points: [{ x: 0, y: 0 }] },
     { sessionId: virtualSession, action: 'gesture', points: Array.from({ length: 65 }, () => ({ x: 0, y: 0 })) },

@@ -129,9 +129,9 @@
 .plugin-import-row input, .plugin-import-expected input {
   min-width: 0;
   padding: 9px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-inner);
-  background: var(--card-color, var(--surface-muted));
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--card-color, var(--surface-sunken));
   color: var(--card-ink, var(--ink));
   font: inherit;
 }
@@ -152,11 +152,11 @@
 .plugin-search { width: 100%; box-sizing: border-box; }
 .plugin-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
 .plugin-tab {
-  padding: 6px 12px;
+  padding: 6px 13px;
   font-size: 0.8125rem;
   font-weight: 500;
   border: 1px solid var(--line);
-  border-radius: var(--radius-inner);
+  border-radius: var(--radius-chip);
   background: var(--card-color, var(--surface));
   color: var(--card-muted, var(--muted));
   cursor: pointer;
@@ -180,7 +180,7 @@
 
 /* 插件卡片分层状态与错误高亮 */
 .plugin-dual-status { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.plugin-status-badge { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 4px; font-size: 0.6875rem; font-weight: 500; line-height: 1.4; }
+.plugin-status-badge { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: var(--radius-chip); font-size: 0.6875rem; font-weight: 600; line-height: 1.4; }
 .status-active { background: var(--green-soft); color: var(--green); }
 .status-unlinked {
   background: var(--card-color, var(--surface-muted));
@@ -214,11 +214,11 @@
   gap: 12px;
   padding: 10px 14px;
   margin: 10px 18px;
-  background: var(--amber);
-  border: 1px solid var(--amber);
-  border-radius: var(--radius-inner);
+  background: var(--amber-soft);
+  border: 1px solid var(--amber-line);
+  border-radius: var(--radius-control);
   font-size: 0.8125rem;
-  color: var(--card-ink, var(--ink));
+  color: var(--amber-text);
 }
 @supports (color: color-mix(in srgb, red, blue)) {
   .plugin-relink-banner {

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Trash2 } from 'lucide-react'
 import { t } from '../i18n'
 import { runtimeBridge } from '../platform/native'
 import type {
@@ -142,9 +141,9 @@ export function RuntimeCleanupCard({ bridge = runtimeBridge }: { bridge?: Runtim
   const ledger = ready ? state.plugin.ledger : null
   const pluginReady = ready && !running && ledger === 'ok'
 
-  return <div className="settings-subsection" aria-labelledby="runtime-cleanup">
-    <div className="section-title"><span className="section-icon"><Trash2 size={19} /></span>
-      <div><h3 id="runtime-cleanup">{t('缓存与插件数据')}</h3>
+  return <section className="settings-section" aria-labelledby="runtime-cleanup">
+    <div className="section-title section-title-plain">
+      <div><h2 id="runtime-cleanup">{t('清理')}</h2>
         <p>{t('清掉缓存与插件自己的数据；运行环境的数据在「重置运行环境」里处理。')}</p></div>
     </div>
     {!loaded && !failed && <p className="settings-note">{t('正在统计数据占用…')}</p>}
@@ -204,5 +203,5 @@ export function RuntimeCleanupCard({ bridge = runtimeBridge }: { bridge?: Runtim
     </p>}
     {failed && <p role="alert">{t('无法读取数据占用')} <button className="button button-quiet" type="button" onClick={() => { void refresh() }}>{t('重试')}</button></p>}
     {actionFailed !== null && <p role="alert">{actionFailed}</p>}
-  </div>
+  </section>
 }

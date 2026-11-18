@@ -1,4 +1,4 @@
-﻿import appMark from './assets/app-mark.png'
+import appMark from './assets/app-mark.png'
 import { readLanguage, saveLanguage, t, useLanguage } from './i18n'
 import { colorMixSupported } from './legacyWebView'
 import { formatByteCount as formatBytes, formatDuration, useDownloadTelemetry } from './downloadTelemetry'
@@ -512,6 +512,8 @@ const EMPTY_KEEP_ALIVE: KeepAliveState = {
 const EMPTY_DIAGNOSTIC: DiagnosticLogState = {
   enabled: false,
   retentionDays: DIAGNOSTIC_RETENTION_DEFAULT,
+  includeHarnessLog: true,
+  harnessLogAvailable: false,
   fileCount: 0,
   totalBytes: 0,
   lastEntryAtMillis: 0,
@@ -1721,7 +1723,7 @@ interface SettingsScreenProps {
   onBack: () => void
   onClearDiagnostic: () => void
   onConnect: () => void
-  onDiagnosticSettings: (enabled: boolean, retentionDays: number) => void
+  onDiagnosticSettings: (enabled: boolean, retentionDays: number, includeHarnessLog: boolean) => void
   /**
    * 改写草稿。[dirty] 为假表示这次只改「正在看什么」（例如点击供应商卡片），
    * 草稿里的值没有变化，不应妨碍后台刷新同步。
@@ -1784,6 +1786,7 @@ interface SettingsScreenProps {
 }
 
 function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, draft, keepAlive, loadDiagnosticLog, loadHarnessLog, lastStop, overlayBall, overlayBallUpdating, overlayBallReadFailed, onDraftChange, onSetOverlayBallEnabled, page, runSelfCheck, runtime, settingsReadStatus, shizuku, onAuthorize, onBack, onClearAccessibilityPassword, onClearDiagnostic, onConnect, onDiagnosticSettings, onLaunch, onLaunchConfirmed, onOpenAccessibilitySettings, onOpenExternalHarness, externalBrowsers, onSelectExternalBrowser, onOpenOverlaySettings, onOpenPromotedNotificationSettings, onOpenShizuku, onOpenEnvironment, onOpenDeviceShell, onOpenSubpage, onOpenShellView, onReloadSettings, onRequestNotificationPermission, onResetAccessibilityPassword, onSaveAccessibilityPackages, onSaveAccessibilityPassword, onSaveCredentials, settledCredentials, onSetAccessibilityRuntime, onSetAutomationRuleEnabled, onShareDiagnostic }: SettingsScreenProps) {
+  const [confirmDiagnosticExport, setConfirmDiagnosticExport] = useState(false)
   const [accessibilityDraft, setAccessibilityDraft] = useState(accessibility.allowedPackages.join('\n'))
   const [whitelistEnabledDraft, setWhitelistEnabledDraft] = useState(accessibility.whitelistEnabled ?? true)
   const [testingProvider, setTestingProvider] = useState<string | null>(null)
@@ -1933,7 +1936,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
       setDiagnosticRetentionDraft(String(diagnostic.retentionDays))
       return
     }
-    if (retentionDays !== diagnostic.retentionDays) onDiagnosticSettings(diagnostic.enabled, retentionDays)
+    if (retentionDays !== diagnostic.retentionDays) onDiagnosticSettings(diagnostic.enabled, retentionDays, diagnostic.includeHarnessLog)
   }
 
   /**
@@ -3667,7 +3670,20 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
               role="switch"
               checked={diagnostic.enabled}
               disabled={busy !== null}
-              onChange={event => onDiagnosticSettings(event.target.checked, diagnostic.retentionDays)}
+              onChange={event => onDiagnosticSettings(event.target.checked, diagnostic.retentionDays, diagnostic.includeHarnessLog)}
+            />
+          </label>
+          <label className="toggle-row">
+            <span>
+              <strong>{t("导出 Harness 运行日志")}</strong>
+              <small>{t("默认开启；仅自动脱敏凭据，运行日志仍可能包含文件路径、URL、会话内容或工具参数")}</small>
+            </span>
+            <input
+              type="checkbox"
+              role="switch"
+              checked={diagnostic.includeHarnessLog}
+              disabled={busy !== null}
+              onChange={event => onDiagnosticSettings(diagnostic.enabled, diagnostic.retentionDays, event.target.checked)}
             />
           </label>
           <label className="field">
@@ -3704,16 +3720,23 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
             </div>
           </div>
           <p className="settings-note">
-            {t("诊断日志只包含应用内部的事件名、状态码、布尔值与计数；导出文件头另有应用版本、Android SDK、ABI、Android 版本与安全补丁级别，以及机型与 ROM 的匿名摘要（稳定哈希，不含原始型号或构建串；不含序列号、IMEI、Android ID、账号）。不含 URL、模型密钥、Harness 临时密码、设备桥令牌、终端内容或文件路径。日志保存在应用私有目录且不参与备份，到期自动删除。")}
+            {diagnostic.includeHarnessLog
+              ? t("应用事件只含内部状态码与计数，不含路径或凭据；附加的 Harness 运行日志仅自动脱敏模型密钥、授权头等凭据，仍可能包含文件路径、URL、会话内容或工具参数。日志保存在应用私有目录且不参与备份，到期自动删除。")
+              : t("诊断日志只包含应用内部的事件名、状态码、布尔值与计数，不含设备原始标识、路径、URL 或凭据；导出不附带 Harness 运行日志。日志保存在应用私有目录且不参与备份，到期自动删除。")}
           </p>
           <div className="settings-inline-actions">
-            <button className="button button-secondary" type="button" onClick={onShareDiagnostic} disabled={busy !== null || diagnostic.fileCount === 0}>
+            <button className="button button-secondary" type="button" onClick={() => diagnostic.includeHarnessLog ? setConfirmDiagnosticExport(true) : onShareDiagnostic()} disabled={busy !== null || (diagnostic.fileCount === 0 && !(diagnostic.includeHarnessLog && diagnostic.harnessLogAvailable === true))}>
               {busy === 'diagnostic-share' ? <Loader2 className="spin" size={18} /> : <Share2 size={18} />}{t("导出并分享")}</button>
             <button className="button button-danger-quiet" type="button" onClick={onClearDiagnostic} disabled={busy !== null || diagnostic.fileCount === 0}>
               {busy === 'diagnostic-clear' ? <Loader2 className="spin" size={18} /> : <Trash2 size={18} />}{t("清空日志")}</button>
           </div>
+          {confirmDiagnosticExport && <div role="alertdialog" aria-labelledby="diagnostic-export-confirm">
+            <p className="settings-note" id="diagnostic-export-confirm"><strong>{t("确认导出包含运行日志的诊断文件？")}</strong> {t("运行日志仅自动脱敏凭据，仍可能包含文件路径、URL、会话内容、工具参数或代码片段。")}</p>
+            <button className="button button-primary" type="button" onClick={() => { setConfirmDiagnosticExport(false); onShareDiagnostic() }} disabled={busy !== null}>{t("继续导出")}</button>
+            <button className="button button-secondary" type="button" onClick={() => setConfirmDiagnosticExport(false)} disabled={busy !== null}>{t("取消导出")}</button>
+          </div>}
         </section>
-        {/* 诊断日志正文可直接在应用内查看；运行日志是访客输出尾部，只在界面展示、不进导出。 */}
+        {/* 诊断日志正文可直接在应用内查看；运行日志是否随导出附带由上方开关控制。 */}
         <DiagnosticLogPanel loadDiagnosticLog={loadDiagnosticLog} />
         <HarnessLogPanel loadHarnessLog={loadHarnessLog} />
         </>
@@ -4892,17 +4915,17 @@ export function App() {
       if (outcome === undefined) return
       if (outcome.status === 'created') {
         if (outcome.evictedIds !== undefined && outcome.evictedIds.length > 0) {
-          notify(t("安装前已自动备份会话（{0}）；为满足保留限制，已删除 {1} 份最旧的备份。", outcome.snapshotId ?? '', String(outcome.evictedIds.length)), 'success')
+          notify(t("安装前已自动备份数据（{0}）；为满足保留限制，已删除 {1} 份最旧的备份。", outcome.snapshotId ?? '', String(outcome.evictedIds.length)), 'success')
           return
         }
-        notify(t("安装前已自动备份会话（{0}）", outcome.snapshotId ?? ''), 'success')
+        notify(t("安装前已自动备份数据（{0}）", outcome.snapshotId ?? ''), 'success')
         return
       }
       if (outcome.status === 'skipped') {
-        notify(outcome.message ?? t("没有需要备份的会话数据，这次没有生成备份。"), 'info')
+        notify(outcome.message ?? t("没有需要备份的数据，这次没有生成备份。"), 'info')
         return
       }
-      notify(t("会话自动备份失败：{0}", outcome.message ?? t("原因未提供")), 'error')
+      notify(t("自动数据备份失败：{0}", outcome.message ?? t("原因未提供")), 'error')
     }, successMessage, undefined, INSTALL_WATCHDOG_MS)
   }, [notify, run, setActiveView])
 
@@ -4961,8 +4984,8 @@ export function App() {
       if (!isCurrent()) return
       setRuntime(next)
       const outcome = result.autoSnapshot
-      if (outcome?.status === 'failed') notify(t("修复前会话备份失败：{0}", outcome.message ?? t("原因未提供")), 'error')
-      else if (outcome?.status === 'created') notify(t("修复前已自动备份会话"), 'success')
+      if (outcome?.status === 'failed') notify(t("修复前自动备份失败：{0}", outcome.message ?? t("原因未提供")), 'error')
+      else if (outcome?.status === 'created') notify(t("修复前已自动备份数据"), 'success')
     }, t("运行环境修复完成"), undefined, INSTALL_WATCHDOG_MS)
   }, [versionOperationBusy, notify, run])
 
@@ -5165,9 +5188,9 @@ export function App() {
   }, [applyRefreshedSettings, readOverlayBall, setActiveView])
 
   /** 更新诊断日志采集开关与保留天数；原生侧会再次夹取保留范围。 */
-  const saveDiagnosticSettings = useCallback((enabled: boolean, retentionDays: number) => {
+  const saveDiagnosticSettings = useCallback((enabled: boolean, retentionDays: number, includeHarnessLog: boolean) => {
     void run('diagnostic-settings', async isCurrent => {
-      const next = await runtimeBridge.setDiagnosticLogSettings(enabled, retentionDays)
+      const next = await runtimeBridge.setDiagnosticLogSettings(enabled, retentionDays, includeHarnessLog)
       if (isCurrent()) setDiagnostic(next)
     })
   }, [run])
@@ -5282,20 +5305,6 @@ export function App() {
     [],
   )
 
-  /** 锁定/解锁版本库里的归档；目标必须是条目 ID（槽位不是归档），校验在桥接层完成。 */
-  const setRuntimeVersionPinned = useCallback(
-    (target: string, pinned: boolean) => runtimeBridge.setRuntimeVersionPinned(target, pinned),
-    [],
-  )
-
-  /** 下载远端运行时发布到本地版本库（不立即激活）。 */
-  const downloadRuntimeRelease = useCallback(
-    (manifestUrl: string, manifestSha256: string) => runtimeBridge.downloadRuntimeRelease(manifestUrl, manifestSha256),
-    [],
-  )
-
-  /** 查询可用版本发布列表。 */
-  const listRuntimeReleases = useCallback(() => runtimeBridge.listRuntimeReleases(), [])
 
   /** 切换成功后重新读运行时状态：已安装版本与阶段都变了，不能沿用旧值。 */
   const refreshRuntimeState = useCallback(async () => {
@@ -5896,9 +5905,7 @@ export function App() {
           loadVersions={loadRuntimeVersions}
           switchVersion={switchRuntimeVersion}
           deleteVersion={deleteRuntimeVersion}
-          setPinned={setRuntimeVersionPinned}
-          downloadRelease={downloadRuntimeRelease}
-          listReleases={listRuntimeReleases}
+
           refreshRuntime={refreshRuntimeState}
           notify={notify}
           onBack={() => backToView('settings')}

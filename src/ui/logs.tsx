@@ -64,7 +64,7 @@ interface LogTextProps {
  * 过滤让用户能盯着一个关键字，判读提示（[readLogInsights]）把已确诊的签名翻译成结论与下一步。
  *
  * 隐私边界：这里只负责显示调用方已经取到的文本。访客输出可能含会话内容，
- * 因此**不落盘、不写诊断日志、也不随诊断日志导出**；渲染一律走文本节点，
+ * 因此**不落盘、不写诊断日志**；是否随诊断日志导出由诊断页开关控制。渲染一律走文本节点，
  * 绝不用 dangerouslySetInnerHTML —— 内容不是受控文案。
  */
 export function LogText({ text, outputClassName }: LogTextProps) {
@@ -195,7 +195,7 @@ export function LogWindowPicker({ options, value, onChange }: {
  * 因此窗口可选：缓冲区按最大档分配，切换窗口只是重新截取尾部。
  *
  * 隐私边界：这段文本来自访客进程，**可能包含会话内容**（工具参数、代码片段等），
- * 因此只在本机界面展示 —— 不写入诊断日志、不新增诊断事件，也不随诊断日志导出。
+ * 因此只在本机界面展示，不写入诊断日志；是否随诊断日志导出由诊断页上方开关控制。
  * 也正因如此，读取是**按需**的：折叠状态下不碰桥接，展开时才去取一次最新尾部。
  */
 export function HarnessLogPanel({ loadHarnessLog }: HarnessLogPanelProps) {
@@ -248,7 +248,7 @@ export function HarnessLogPanel({ loadHarnessLog }: HarnessLogPanelProps) {
         {open && (
         <>
           <p className="settings-note">
-            {t("这段内容来自 Harness 进程输出，可能包含会话内容，仅供排障；它只在设备界面里显示，不会写入诊断日志，也不随诊断日志导出。")}
+            {t("这段内容来自 Harness 进程输出，可能包含会话内容，仅供排障；它只在设备界面里显示，不会写入诊断日志，是否随诊断日志导出由上方开关控制。")}
           </p>
 
           <LogWindowPicker options={HARNESS_LOG_WINDOW_OPTIONS} value={windowBytes} onChange={setWindowBytes} />

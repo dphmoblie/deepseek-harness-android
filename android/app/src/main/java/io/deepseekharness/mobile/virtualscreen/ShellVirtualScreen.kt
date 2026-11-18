@@ -101,6 +101,13 @@ class ShellVirtualScreen {
      */
     private val responseLatency = VirtualScreenLatency()
     private var awaitingFrameAt = 0L
+    /**
+     * 本次 [action] 里落地输入的时刻（0 = 这次动作没有落地输入）。只在实例监视器里读写：
+     * [action] 进锁时清零、[recordInjection] 落地时写入，出锁前读走，供监视器外的等画面稳定使用。
+     */
+    private var lastInputAt = 0L
+    /** 最近一次落地输入的时刻，随截图元数据带出，供调用方判断「这张图是不是在输入之前拍的」。 */
+    @Volatile private var latestInputAt = 0L
     private val timers = Executors.newSingleThreadScheduledExecutor()
     private val writers = Executors.newFixedThreadPool(2)
     private val transfers = Semaphore(2)
@@ -221,7 +228,9 @@ class ShellVirtualScreen {
                     // 不代表目标应用已经处理输入或操作成功。
                     // 记完立刻清掉待等标记——一次输入只认一帧，否则后面每一帧都会被算成它的响应。
                     if (awaitingFrameAt > 0L) {
-                        responseLatency.record(frameAt - awaitingFrameAt)
+                        // 超出响应窗口的不当成延迟样本（见 VirtualScreenLatency.respond）：静止页面上没有视觉反馈的输入，
+                        // 等来的是几十秒后别的动画出的帧，记成「输入延迟 7 秒」会误导模型和用户。
+                        responseLatency.respond(frameAt - awaitingFrameAt)
                         awaitingFrameAt = 0L
                     }
                     // 记录本次采集时刻并按最近若干帧重算实测帧率，不额外起采样线程。
@@ -258,9 +267,16 @@ class ShellVirtualScreen {
         // 画面字段与输入后首帧间隔在同一个锁内一次读出，避免状态里混用两份不同时刻的快照。
         val now = SystemClock.elapsedRealtime()
         val frames = synchronized(frameLock) {
+            // 待等的输入已经超出响应窗口还没出帧：记一次「未等到画面变化」并清掉标记，
+            // 免得之后某一帧把它记成一次超长延迟。
+            if (awaitingFrameAt > 0L && now - awaitingFrameAt > VirtualScreenLatency.RESPONSE_WINDOW_MILLIS) {
+                responseLatency.miss()
+                awaitingFrameAt = 0L
+            }
             FrameState(
                 frameAt, frameBlank, frameSampledAt, frameFps, frameError,
                 responseLatency.lastMillis, responseLatency.averageMillis, responseLatency.sampleCount,
+                responseLatency.missedCount,
             )
         }
         // 副屏最前台要起一个 dumpsys 进程，只查一次，供下面两个字段共用。
@@ -295,6 +311,11 @@ class ShellVirtualScreen {
             .put("inputFrameDelayLastMs", frames.responseLast)
             .put("inputFrameDelayAverageMs", frames.responseAverage)
             .put("inputFrameDelaySamples", frames.responseSamples)
+            // 输入后超出响应窗口（10 秒）一帧都没来的次数：点在不可点区域或应用没反应时会增加，
+            // 这类输入不再被算成一次超长的首帧间隔。
+            .put("inputFrameMissed", frames.responseMissed)
+            .put("lastInputAtElapsedMs", latestInputAt)
+            .put("frameBeforeLastInput", latestInputAt > 0L && frames.at <= latestInputAt)
             // 触摸通道：stream 为进程内逐事件直传，discrete 为逐事件走 input motionevent（合并采样点、丢弃过期移动）。
             .put("touchChannel", VirtualScreenInjector.channel())
             // 注入诊断：通道、上次注入的时刻/耗时/落地事件数/合并与丢弃数，以及失败原因标签（空串=没失败）。
@@ -315,9 +336,63 @@ class ShellVirtualScreen {
             .put(VirtualScreenPolicy.VIRTUAL_FOREGROUND_ACTIVITY_FIELD, virtualForeground ?: "")
     }
 
-    @Synchronized fun action(raw: String): String {
+    /**
+     * 动作入口：动作本身在实例监视器里执行；带了 `settleMs` 的输入动作再在监视器**之外**等画面稳定
+     * （见 [VirtualScreenSettle]），等待期间状态读取、自动跟随与会话结束都不被挡住。
+     */
+    fun action(raw: String): String {
         require(raw.length <= 4096)
         val p = JSONObject(raw)
+        val budget = VirtualScreenSettle.budget(p)
+        val (text, inputAt, source) = synchronized(this) {
+            lastInputAt = 0L
+            val text = actionLocked(p)
+            Triple(text, lastInputAt, reader)
+        }
+        if (budget <= 0 || inputAt <= 0L || source == null) return text
+        val settle = awaitSettle(source, inputAt, budget)
+        return runCatching {
+            val payload = JSONObject(text)
+            val updated = if (payload.has("active")) synchronized(this) { state() } else payload
+            updated.put("settle", settle).toString()
+        }.getOrDefault(text)
+    }
+
+    /** 只持帧锁等待：新帧到达时 [collectFrame] 会 notifyAll，会话被关闭时提前返回并标 aborted。 */
+    private fun awaitSettle(source: ImageReader, inputAt: Long, budget: Int): JSONObject = synchronized(frameLock) {
+        val deadline = inputAt + budget
+        val quiet = VirtualScreenSettle.quietMillis(VirtualScreenPolicy.frameInterval(frameMode))
+        var firstFrameAt = if (frameAt > inputAt) frameAt else 0L
+        var result: JSONObject? = null
+        while (result == null) {
+            val now = SystemClock.elapsedRealtime()
+            if (reader !== source) {
+                result = VirtualScreenSettle.outcome(
+                    budget, inputAt, firstFrameAt, frameAt, now,
+                    VirtualScreenSettle.Step.Done(firstFrameAt > 0L, false), aborted = true,
+                )
+                break
+            }
+            if (firstFrameAt == 0L && frameAt > inputAt) firstFrameAt = frameAt
+            when (val step = VirtualScreenSettle.step(now, inputAt, frameAt, deadline, quiet)) {
+                is VirtualScreenSettle.Step.Done ->
+                    result = VirtualScreenSettle.outcome(budget, inputAt, firstFrameAt, frameAt, now, step)
+                is VirtualScreenSettle.Step.Wait -> {
+                    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+                    (frameLock as java.lang.Object).wait(step.millis.coerceAtLeast(1L))
+                }
+            }
+        }
+        checkNotNull(result)
+    }
+
+    private fun requireTargetVisible() {
+        if (!targetVisible()) {
+            throw VirtualScreenPolicy.failure(VirtualScreenPolicy.TARGET_LEFT_CODE, VirtualScreenPolicy.TARGET_LEFT_MESSAGE)
+        }
+    }
+
+    private fun actionLocked(p: JSONObject): String {
         requireSession(p.getString("sessionId"))
         when (p.getString("action")) {
             // 会话控制。
@@ -327,8 +402,24 @@ class ShellVirtualScreen {
             "text" -> return textAction(p)
             // 分发集合与策略层共用：新增动作必须同时出现在 VirtualScreenPolicy.INPUT_ACTIONS 里。
             in VirtualScreenPolicy.INPUT_ACTIONS -> {
-                check(targetVisible()) { "目标应用已离开副屏或系统无法确认其状态" }
-                command(VirtualScreenPolicy.inputArguments(p, id(), width, height))
+                requireTargetVisible()
+                val args = VirtualScreenPolicy.inputArguments(p, id(), width, height)
+                val g = checkNotNull(gesture) { "副屏会话尚未就绪" }
+                val result = when (p.getString("action")) {
+                    "tap" -> g.tap(p.getInt("x"), p.getInt("y"))
+                    "long_press" -> g.longPress(p.getInt("x"), p.getInt("y"), p.getInt("durationMs"))
+                    "swipe" -> g.swipe(p.getInt("x"), p.getInt("y"), p.getInt("endX"), p.getInt("endY"), p.getInt("durationMs"))
+                    "keyevent", "back" -> g.keyEvent(args.last().toInt())
+                    else -> error("不支持的副屏操作")
+                }
+                recordInjection(result, SystemClock.elapsedRealtime())
+                val failure = result.optString("failure")
+                if (failure.isNotEmpty()) {
+                    throw RuntimeFailure(
+                        VirtualScreenPolicy.INJECTION_FAILED_CODE,
+                        "副屏输入注入未完成：$failure（副屏会话本身正常，可稍后重试）",
+                    )
+                }
             }
             // 生命周期动作：start/restart/reconnect。语义判定在 VirtualScreenPolicy.lifecycleOutcome 里（纯函数），
             // 这里只负责把它翻译成可区分的返回字段。做不到的动作如实返回带码的失败，绝不假装成功。
@@ -405,7 +496,7 @@ class ShellVirtualScreen {
             // 触摸直传：逐事件注入，不逐事件跑 targetVisible()（它要起 dumpsys 进程，会毁掉直传帧率）。
             "touch" -> {
                 val touch = VirtualScreenInjector.request(p, width, height)
-                if (touch.phase == "down") check(targetVisible()) { "目标应用已离开副屏或系统无法确认其状态" }
+                if (touch.phase == "down") requireTargetVisible()
                 val gesture = checkNotNull(gesture) { "副屏会话尚未就绪" }
                 val result = gesture.handle(touch)
                 // 失败只可能出在抬起阶段（离散通道那时才逐事件跑 input 命令）：照实报错并留下诊断，
@@ -427,7 +518,7 @@ class ShellVirtualScreen {
             // 注入 input motionevent（按合并/丢弃规则封顶事件数）。失败在返回里标 failure/aborted，
             // 这里翻译成注入错误码：没落地就绝不报成功。
             "gesture" -> {
-                check(targetVisible()) { "目标应用已离开副屏或系统无法确认其状态" }
+                requireTargetVisible()
                 val points = VirtualScreenPolicy.gestureRequest(p, width, height)
                 val duration = VirtualScreenPolicy.gestureDuration(p)
                 val gesture = checkNotNull(gesture) { "副屏会话尚未就绪" }
@@ -586,6 +677,8 @@ class ShellVirtualScreen {
             checkNotNull(reader)
         }
         val snapshot = awaitFrameSnapshot(source)
+        // 最近一次落地输入的时刻：宿主据此标出「这张截图早于上一步输入」，避免模型拿旧帧判断没点上。
+        val inputAt = latestInputAt
         check(transfers.tryAcquire()) { "副屏截图传输繁忙" }
         val pipe = try { ParcelFileDescriptor.createReliablePipe() } catch (error: Exception) {
             transfers.release()
@@ -599,6 +692,12 @@ class ShellVirtualScreen {
                         .put("frameAtElapsedMs", snapshot.at)
                         .put("frameBlank", snapshot.blank)
                         .put("packageName", snapshot.packageName)
+                        .apply {
+                            if (inputAt > 0L) {
+                                put("lastInputAtElapsedMs", inputAt)
+                                put("frameBeforeLastInput", snapshot.at <= inputAt)
+                            }
+                        }
                         .toString().toByteArray(Charsets.UTF_8)
                     DataOutputStream(output).use { data ->
                         data.writeInt(header.size)
@@ -710,7 +809,11 @@ class ShellVirtualScreen {
         val failure = result.optString("failure")
         // 只有真的落地了才算一次输入：没有落地事件的调用等不到「输入后首帧」，
         // 把它算进去会让下一次正常输入等到的帧被记成这次失败注入的响应。
-        if (failure.isEmpty() && result.optInt("events", 0) > 0) synchronized(frameLock) { awaitingFrameAt = at }
+        if (failure.isEmpty() && result.optInt("events", 0) > 0) {
+            synchronized(frameLock) { awaitingFrameAt = at }
+            lastInputAt = at
+            latestInputAt = at
+        }
         injectionError = if (failure.isEmpty()) "" else {
             val phase = result.optString("failedAt").ifEmpty { result.optString("phase", "unknown") }
             val kind = result.optString("failureKind").ifEmpty { "Failed" }
@@ -862,7 +965,8 @@ class ShellVirtualScreen {
         // 不合法时抛 IllegalArgumentException，上层映射成 VIRTUAL_SCREEN_INVALID。
         VirtualScreenTextPolicy.requireInjectable(text)
         if (VirtualScreenTextPolicy.classify(text).hasNonAscii) return nonAsciiTextAction(text, submit)
-        check(targetVisible()) { "目标应用已离开副屏或系统无法确认其状态" }
+        requireTargetVisible()
+        val startedAt = SystemClock.elapsedRealtime()
         val attempts = ArrayList<VirtualScreenTextPolicy.TextAttempt>(3)
         val written = runCatching { command(VirtualScreenPolicy.inputArguments(p, id(), width, height)) }
         val wholeTextWritten: Boolean
@@ -923,6 +1027,13 @@ class ShellVirtualScreen {
         }
         // 只有真的写进去之后才提交；回车送不出去时把 submit 留成 false，不宣称「已发送」。
         val submitted = wholeTextWritten && submit && runCatching { command(submitArguments()) }.isSuccess
+        if (wholeTextWritten) {
+            val landed = SystemClock.elapsedRealtime()
+            recordInjection(
+                JSONObject().put("channel", "input").put("millis", landed - startedAt).put("events", 1),
+                landed,
+            )
+        }
         return envelope(
             attempts,
             text.length,
@@ -960,6 +1071,8 @@ class ShellVirtualScreen {
      * - 这个动作会改写系统剪贴板（与主进程无障碍链的粘贴方案同源），失败时**不回滚**剪贴板内容。
      */
     private fun nonAsciiTextAction(text: String, submit: Boolean): String {
+        requireTargetVisible()
+        val startedAt = SystemClock.elapsedRealtime()
         val written = runCatching {
             command(listOf("/system/bin/cmd", "clipboard", "set-primary-clip", text))
         }
@@ -1000,6 +1113,11 @@ class ShellVirtualScreen {
         }
         // 提交键与 ASCII 路径共用同一份映射与同一条「只有真的送出去才算 submitted」的规矩。
         val submitted = submit && runCatching { command(submitArguments()) }.isSuccess
+        val landed = SystemClock.elapsedRealtime()
+        recordInjection(
+            JSONObject().put("channel", "input").put("millis", landed - startedAt).put("events", 1),
+            landed,
+        )
         val attempt = VirtualScreenTextPolicy.TextAttempt(
             VirtualScreenTextPolicy.TextMethod.PASTE,
             true,
@@ -1256,7 +1374,7 @@ class ShellVirtualScreen {
             // 采集时刻与实测帧率同属本次会话，一并清空，下一次会话重新采样。
             frameStampCount = 0; frameStampNext = 0; frameFps = 0.0
             // 输入后首帧间隔与「正在等回应」的那次注入同属本次会话：换会话后重新测，别把上一段的数字带过来。
-            responseLatency.clear(); awaitingFrameAt = 0L
+            responseLatency.clear(); awaitingFrameAt = 0L; latestInputAt = 0L
             @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
             (frameLock as java.lang.Object).notifyAll()
         }
@@ -1276,6 +1394,7 @@ class ShellVirtualScreen {
         if (targetPackage != value) {
             responseLatency.clear()
             awaitingFrameAt = 0L
+            latestInputAt = 0L
         }
         targetPackage = value
     }
@@ -1310,5 +1429,6 @@ class ShellVirtualScreen {
         val responseLast: Long,
         val responseAverage: Long,
         val responseSamples: Int,
+        val responseMissed: Int,
     )
 }

@@ -10,6 +10,8 @@ const harnessVersion = '0.2.1-rc.1'
 
 test('副屏输入后首帧间隔字段在原生、平台与 AI 描述中一致', async () => {
   const native = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/ShellVirtualScreen.kt'), 'utf8')
+  const settle = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/VirtualScreenSettle.kt'), 'utf8')
+  const injector = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/virtualscreen/VirtualScreenInjector.kt'), 'utf8')
   const platform = await readFile(resolve(appRoot, 'src/platform/types.ts'), 'utf8')
   const plugin = await readFile(resolve(appRoot, 'scripts/runtime-profile/plugins/dsh-mobile-shizuku/lib/index.js'), 'utf8')
   for (const field of ['inputFrameDelayLastMs', 'inputFrameDelayAverageMs', 'inputFrameDelaySamples']) {
@@ -17,11 +19,21 @@ test('副屏输入后首帧间隔字段在原生、平台与 AI 描述中一致'
     assert.match(platform, new RegExp(`\\b${field}: number`))
     assert.match(plugin, new RegExp(`\\b${field}\\b`))
   }
+  for (const field of ['inputFrameMissed', 'lastInputAtElapsedMs', 'frameBeforeLastInput']) {
+    assert.match(native, new RegExp(`put\\("${field}"`))
+    assert.match(plugin, new RegExp(`\\b${field}\\b`))
+  }
+  assert.match(settle, /const val MAX_BUDGET_MILLIS = 10_000/)
+  assert.match(settle, /const val AGENT_DEFAULT_BUDGET_MILLIS = 3_000/)
+  assert.match(plugin, /const MAX_SETTLE_MILLIS = 10_000/)
+  assert.match(plugin, /const DEFAULT_SETTLE_MILLIS = 3_000/)
+  assert.match(plugin, /settleMs:/)
+  assert.match(plugin, /waitMs:/)
+  assert.match(injector, /InputManagerGlobal/)
   for (const source of [native, platform, plugin]) {
     assert.doesNotMatch(source, /\bresponse(?:Last|Average|Samples)Ms?\b/u)
   }
 })
-
 test('Android rootfs workflow packages the adapted official frontend at the root', async () => {
   const workflow = await readFile(resolve(appRoot, '.github/workflows/android-build.yml'), 'utf8')
   assert.match(workflow, /Build Android-adapted official Harness frontend/)
@@ -449,6 +461,17 @@ test('the image ships the plugin market as a built-in third-party bundle', async
   // 虚拟 store 目录里；构建期不真的加载一次，缺链要到真机上插件加载时才暴露。
   assert.match(workflow, /await import\('dshmarket'\)/u)
   assert.match(notices, /^\| `dshmarket`[^|]*\| .+ \| MIT \|$/mu)
+  // 只把 peer 链在 pnpm 虚拟 store 里，真机 profile 仍然解析不到；把 schemastery 变成
+  // 直接依赖，并在构建期要求 dshmarket 与它的 peer 都落成 profiles/node_modules 的扁平链接。
+  assert.equal(
+    runtimePackage.dependencies?.['@deepseek-ai/schemastery'],
+    '3.18.5',
+    'dshmarket 的可选 peer 必须作为直接依赖安装，否则 profile 里不会有它的扁平链接',
+  )
+  assert.match(runtimeLock, /specifier: 3\.18\.5/u)
+  const buildScript = await readFile(resolve(appRoot, 'scripts/build-embedded-runtime.py'), 'utf8')
+  assert.match(buildScript, /dshmarket requires peer/u, '构建期必须校验 dshmarket 的 peer 链接')
+  assert.match(buildScript, /required_bundles=profile_bundles/u, '构建期必须把 profile bundles 交给链接校验')
 })
 
 test('the mobile profile ships model-facing Shizuku tools without exposing bridge credentials', async () => {
@@ -1384,5 +1407,19 @@ test('the published version manifest is written before the checksums and shipped
     '"bytes": path.stat().st_size',
   ]) {
     assert.ok(generator.includes(fragment), `版本清单生成器缺少字段：${fragment}`)
+  }
+})
+
+test('副屏控件树按显示编号读取窗口，不能退化为默认显示屏', async () => {
+  const service = await readFile(resolve(appRoot, 'android/app/src/main/java/io/deepseekharness/mobile/accessibility/DeepSeekAccessibilityService.kt'), 'utf8')
+  // getWindows() 只返回默认显示屏；副屏必须从 getWindowsOnAllDisplays() 按 displayId 取。
+  assert.ok(service.includes('getWindowsOnAllDisplays().get(displayId)'))
+  const rootStart = service.indexOf('private fun displayWindowRoot(')
+  const imeStart = service.indexOf('internal fun displayImeRootFor(')
+  const injectStart = service.indexOf('internal fun injectTextOnDisplay(')
+  assert.ok(rootStart >= 0 && imeStart > rootStart && injectStart > imeStart, '找不到副屏读取函数')
+  for (const body of [service.slice(rootStart, imeStart), service.slice(imeStart, injectStart)]) {
+    assert.ok(body.includes('windowsForDisplay(displayId)'))
+    assert.ok(!body.includes('getWindows()'), '副屏读取不能退回只读默认显示屏的 getWindows()')
   }
 })

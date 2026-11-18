@@ -39,6 +39,7 @@ it('导出诊断日志：成功后如实显示文件名', async () => {
   bridge.shareDiagnosticLog.mockResolvedValue({
     enabled: true,
     retentionDays: 7,
+    includeHarnessLog: true,
     fileCount: 1,
     totalBytes: 10,
     lastEntryAtMillis: 1,

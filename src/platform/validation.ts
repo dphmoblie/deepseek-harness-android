@@ -1096,9 +1096,16 @@ export function assertDiagnosticRetentionDays(value: number): number {
 export function validateDiagnosticLogState(value: unknown): DiagnosticLogState {
   const state = asRecord(value, '诊断日志状态')
   if (typeof state.enabled !== 'boolean') throw new Error('诊断日志状态格式无效')
+  const includeHarnessLog = state.includeHarnessLog === undefined ? true : state.includeHarnessLog
+  if (typeof includeHarnessLog !== 'boolean') throw new Error('诊断日志运行日志导出开关格式无效')
+  if (state.harnessLogAvailable !== undefined && typeof state.harnessLogAvailable !== 'boolean') {
+    throw new Error('诊断日志运行日志可用状态格式无效')
+  }
   return {
     enabled: state.enabled,
     retentionDays: assertDiagnosticRetentionDays(state.retentionDays as number),
+    includeHarnessLog,
+    ...(state.harnessLogAvailable === undefined ? {} : { harnessLogAvailable: state.harnessLogAvailable }),
     fileCount: diagnosticCount(state.fileCount, '诊断日志文件数'),
     totalBytes: diagnosticCount(state.totalBytes, '诊断日志总字节数'),
     lastEntryAtMillis: diagnosticCount(state.lastEntryAtMillis, '诊断日志最近记录时间'),
@@ -2296,8 +2303,8 @@ const SESSION_LIST_REASONS = new Set<RuntimeSessionListReason>([
 
 /** 会话快照份数的防御性上限：原生当前上限是 3，但上限本身会变，校验不该把 4 当非法。 */
 const MAX_RUNTIME_SESSION_SNAPSHOTS = 32
-/** 会话快照占用空间的上限（512 MiB）；与原生侧保持一致。 */
-const MAX_RUNTIME_SESSION_SNAPSHOT_BYTES = 512 * 1024 * 1024
+/** 会话快照占用空间的防御性上限（16 GiB）；与原生侧保持一致。 */
+const MAX_RUNTIME_SESSION_SNAPSHOT_BYTES = 16 * 1024 * 1024 * 1024
 /**
  * 快照标识：`snap-<毫秒时间戳>-<序号>`。
  *

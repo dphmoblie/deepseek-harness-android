@@ -404,6 +404,28 @@ object DiagnosticPolicy {
         return victims
     }
 
+    /** 是否存在可导出的内容：应用诊断文件或开启附加的 Harness 运行日志尾部任一非空即可导出。 */
+    fun shouldExport(
+        hasDiagnosticEntries: Boolean,
+        includeHarnessLog: Boolean,
+        harnessLog: String?,
+    ): Boolean = hasDiagnosticEntries || (includeHarnessLog && !harnessLog.isNullOrBlank())
+
+    fun harnessExportHeaderLine(included: Boolean): String =
+        if (included) {
+            "# 运行日志: 已包含（仅自动脱敏凭据；仍可能包含文件路径、URL、会话内容或工具参数）"
+        } else {
+            "# 运行日志: 未包含"
+        }
+
+    const val EXPORT_CONTENT_NOTICE: String =
+        "# 内容说明: 应用事件记录只有应用内部事件名、状态码、布尔值与计数（文件头另有应用版本、" +
+            "机型与 ROM 匿名摘要），不含 URL、路径或凭据；附加的 Harness 运行日志仅自动脱敏凭据，" +
+            "仍可能包含文件路径、URL、会话内容或工具参数。\n"
+
+    const val HARNESS_SECTION_HEADER: String =
+        "\n===== Harness 运行日志（仅自动脱敏凭据；仍可能包含文件路径、URL、会话内容或工具参数） =====\n"
+
     /** 导出文件名；只用 UTC 时间戳，不含包名、设备信息或用户输入。 */
     fun exportFileName(instant: Instant): String {
         val stamp = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.ROOT)

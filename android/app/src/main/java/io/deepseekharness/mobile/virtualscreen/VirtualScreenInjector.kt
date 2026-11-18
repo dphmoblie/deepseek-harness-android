@@ -1,7 +1,10 @@
 package io.deepseekharness.mobile.virtualscreen
 
 import android.os.SystemClock
+import android.view.InputDevice
 import android.view.InputEvent
+import android.view.KeyCharacterMap
+import android.view.KeyEvent
 import android.view.MotionEvent
 import org.json.JSONObject
 
@@ -38,21 +41,33 @@ object VirtualScreenInjector {
     private class Access(val manager: Any, val inject: java.lang.reflect.Method, val setDisplayId: java.lang.reflect.Method)
 
     /**
-     * 进程内注入所需的隐藏接口。任何一步失败都整体视为不可用，绝不在注入过程中反复试错：
-     * 反射失败本身有系统进程日志代价，逐事件重试会放大成噪声。
+     * 进程内注入所需的隐藏接口。Android 14（API 34）起 `InputManager.getInstance()` 迁到了
+     * `InputManagerGlobal.getInstance()`，这里按新到旧依次尝试；任何一步失败都整体视为不可用，
+     * 绝不在注入过程中反复试错。
      */
-    private val access: Access? by lazy {
-        runCatching {
-            val type = Class.forName("android.hardware.input.InputManager")
-            val manager = type.getMethod("getInstance").invoke(null) ?: return@runCatching null
-            val inject = type.getMethod("injectInputEvent", InputEvent::class.java, Int::class.javaPrimitiveType)
-            val setDisplayId = InputEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
-            Access(manager, inject, setDisplayId)
-        }.getOrNull()
+    private val access: Access? by lazy { resolveAccess() }
+
+    /** 系统明确抛出 SecurityException 拒绝进程内注入时切回离散通道，避免每次再试。 */
+    @Volatile private var streamBlocked = false
+
+    private fun resolveAccess(): Access? {
+        val setDisplayId = runCatching {
+            InputEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
+        }.getOrNull() ?: return null
+        for (className in listOf("android.hardware.input.InputManagerGlobal", "android.hardware.input.InputManager")) {
+            val resolved = runCatching {
+                val type = Class.forName(className)
+                val manager = type.getMethod("getInstance").invoke(null) ?: return@runCatching null
+                val inject = type.getMethod("injectInputEvent", InputEvent::class.java, Int::class.javaPrimitiveType)
+                Access(manager, inject, setDisplayId)
+            }.getOrNull()
+            if (resolved != null) return resolved
+        }
+        return null
     }
 
-    /** 进程内注入是否可用；不可用时触摸走离散通道，逐事件调用 `input motionevent`。 */
-    fun available(): Boolean = access != null
+    /** 进程内注入是否可用；不可用时触摸走离散通道，逐事件调用 `input` 命令。 */
+    fun available(): Boolean = access != null && !streamBlocked
 
     /** 触摸通道名称，用于会话状态与诊断：`stream` 为进程内逐事件直传，`discrete` 为逐事件走 `input` 命令。 */
     fun channel(): String = if (available()) "stream" else "discrete"
@@ -181,7 +196,86 @@ object VirtualScreenInjector {
          * （配 `failedAt`）让调用方报错；失败时补发 CANCEL，既不把按下事件留在系统里，也绝不把
          * 没落地的事件报成成功（改前的离散分支只发一次 `input swipe` 就返回成功，那正是问题所在）。
          */
-        fun stroke(path: List<VirtualScreenPolicy.GesturePoint>, durationMillis: Int): JSONObject {
+        fun stroke(path: List<VirtualScreenPolicy.GesturePoint>, durationMillis: Int): JSONObject =
+            runStroke(path, durationMillis) { samples, first, last ->
+                // 离散通道：逐事件注入（按下 → 合并后的移动 → 抬起），改前只发一次 input swipe 就当成功。
+                // 时长按 input 的既有上限夹取，不假装还是原来的时长；首尾点写进返回，便于核对走了哪一段。
+                val duration = durationMillis.coerceIn(100, 2000)
+                discreteSequence(samples, duration)
+                    .put("startX", first.x).put("startY", first.y)
+                    .put("endX", last.x).put("endY", last.y)
+            }
+
+        /**
+         * 单次点击：优先走进程内直传（DOWN → 短按 25ms → UP），不可用时退回 `input tap`。
+         * 直传只在按下与抬起之间停留 25ms，比每次起一次 Java 进程（~140ms～1s）快一个量级。
+         */
+        fun tap(x: Int, y: Int): JSONObject =
+            holdTap(25L, x, y, "tap", listOf("tap", x.toString(), y.toString()))
+
+        /** 长按：优先走进程内直传（DOWN → 等待 durationMs → UP），不可用时退回 `input swipe`。 */
+        fun longPress(x: Int, y: Int, durationMillis: Int): JSONObject = holdTap(
+            durationMillis.toLong(),
+            x,
+            y,
+            "long_press",
+            listOf("swipe", x.toString(), y.toString(), x.toString(), y.toString(), durationMillis.toString()),
+        )
+
+        /** 滑动：优先走进程内插值直传；不可用时退回单次 `input swipe`（避免慢设备上逐点起十几个进程）。 */
+        fun swipe(x: Int, y: Int, endX: Int, endY: Int, durationMillis: Int): JSONObject {
+            val result = runStroke(
+                listOf(VirtualScreenPolicy.GesturePoint(x, y), VirtualScreenPolicy.GesturePoint(endX, endY)),
+                durationMillis,
+            ) { _, _, _ ->
+                discreteCommand(
+                    "swipe",
+                    listOf("swipe", x.toString(), y.toString(), endX.toString(), endY.toString(), durationMillis.toString()),
+                    durationMillis,
+                )
+            }
+            if (result.optBoolean("aborted") && result.optString("failure").isEmpty()) {
+                result.put("failureKind", "Rejected")
+                    .put("failedAt", "swipe")
+                    .put("failure", "直传通道滑动中途被取消（已补发取消）")
+            }
+            return result
+        }
+
+        /** 按键：优先进程内注入 KeyEvent，失败时退回 `input keyevent`。 */
+        fun keyEvent(keyCode: Int): JSONObject {
+            require(displayId() > 0) { "副屏显示器尚未就绪" }
+            val startedAt = SystemClock.uptimeMillis()
+            if (available() && sendKey(KeyEvent.ACTION_DOWN, keyCode, startedAt)) {
+                val upOk = sendKey(KeyEvent.ACTION_UP, keyCode, startedAt)
+                val millis = SystemClock.uptimeMillis() - startedAt
+                if (!upOk) {
+                    sendKey(KeyEvent.ACTION_UP, keyCode, startedAt, KeyEvent.FLAG_CANCELED)
+                    return JSONObject()
+                        .put("channel", "stream").put("streamed", false)
+                        .put("events", 1).put("merged", 0).put("dropped", 0)
+                        .put("millis", millis)
+                        .put("failureKind", "Rejected").put("failedAt", "up")
+                        .put("failure", "直传通道未接受按键抬起事件（已补发取消）")
+                }
+                return JSONObject()
+                    .put("channel", "stream").put("streamed", true)
+                    .put("events", 2).put("merged", 0).put("dropped", 0)
+                    .put("millis", millis)
+                    .put("failedAt", "").put("failure", "")
+            }
+            return discreteCommand("keyevent", listOf("keyevent", keyCode.toString()))
+        }
+
+        private fun runStroke(
+            path: List<VirtualScreenPolicy.GesturePoint>,
+            durationMillis: Int,
+            fallback: (
+                samples: List<VirtualScreenPolicy.GesturePoint>,
+                first: VirtualScreenPolicy.GesturePoint,
+                last: VirtualScreenPolicy.GesturePoint,
+            ) -> JSONObject,
+        ): JSONObject {
             require(displayId() > 0) { "副屏显示器尚未就绪" }
             require(!active) { "上一次副屏触摸手势尚未结束" }
             require(path.size >= 2) { "副屏手势至少需要两个坐标点" }
@@ -192,12 +286,7 @@ object VirtualScreenInjector {
             // 用于诊断的注入耗时：从按下那一刻起算，两条通道都填进 `millis`。
             val startedAt = downTime
             if (!available() || !send(MotionEvent.ACTION_DOWN, first.x, first.y, downTime)) {
-                // 离散通道：逐事件注入（按下 → 合并后的移动 → 抬起），改前只发一次 input swipe 就当成功。
-                // 时长按 input 的既有上限夹取，不假装还是原来的时长；首尾点写进返回，便于核对走了哪一段。
-                val duration = durationMillis.coerceIn(100, 2000)
-                return discreteSequence(samples, duration)
-                    .put("startX", first.x).put("startY", first.y)
-                    .put("endX", last.x).put("endY", last.y)
+                return fallback(samples, first, last)
             }
             // 已经按下：从这里开始无论成功还是失败，都必须发出抬起或取消。
             active = true
@@ -235,6 +324,63 @@ object VirtualScreenInjector {
                 events = 1 + injected + if (aborted) 0 else 1,
                 millis = SystemClock.uptimeMillis() - startedAt,
             )
+        }
+
+        private fun holdTap(
+            holdMillis: Long,
+            x: Int,
+            y: Int,
+            actionLabel: String,
+            discreteArgs: List<String>,
+        ): JSONObject {
+            require(displayId() > 0) { "副屏显示器尚未就绪" }
+            require(!active) { "上一次副屏触摸手势尚未结束" }
+            val startedAt = SystemClock.uptimeMillis()
+            if (available() && send(MotionEvent.ACTION_DOWN, x, y, startedAt)) {
+                if (holdMillis > 0L) SystemClock.sleep(holdMillis)
+                val upOk = send(MotionEvent.ACTION_UP, x, y, startedAt)
+                val millis = SystemClock.uptimeMillis() - startedAt
+                if (!upOk) {
+                    send(MotionEvent.ACTION_CANCEL, x, y, startedAt)
+                    return JSONObject()
+                        .put("channel", "stream").put("streamed", false)
+                        .put("events", 1).put("merged", 0).put("dropped", 0)
+                        .put("millis", millis)
+                        .put("failureKind", "Rejected").put("failedAt", "up")
+                        .put("failure", "直传通道未接受抬起事件（副屏可能仍处于被按下状态，已补发取消）")
+                }
+                return JSONObject()
+                    .put("channel", "stream").put("streamed", true)
+                    .put("events", 2).put("merged", 0).put("dropped", 0)
+                    .put("millis", millis)
+                    .put("failedAt", "").put("failure", "")
+            }
+            return discreteCommand(actionLabel, discreteArgs)
+        }
+
+        private fun discreteCommand(actionLabel: String, args: List<String>, durationMillis: Int = 0): JSONObject {
+            val startedAt = SystemClock.uptimeMillis()
+            var exception = ""
+            val rejected = runCatching {
+                if (displayId() <= 0) true else VirtualScreenMotionPlan.rejected(discrete(args))
+            }.getOrElse { error ->
+                exception = error.javaClass.simpleName
+                true
+            }
+            val millis = SystemClock.uptimeMillis() - startedAt
+            val result = JSONObject()
+                .put("channel", "discrete").put("streamed", false)
+                .put("events", if (rejected) 0 else 1)
+                .put("merged", 0).put("dropped", 0)
+                .put("millis", millis)
+            if (durationMillis > 0) result.put("durationMs", durationMillis)
+            if (!rejected) return result.put("failedAt", "").put("failure", "")
+            val kind = if (exception.isEmpty()) "Rejected" else exception
+            val detail = if (exception.isEmpty()) "被系统拒绝" else "命令失败（$exception）"
+            return result
+                .put("failureKind", kind)
+                .put("failedAt", actionLabel)
+                .put("failure", "离散通道 $actionLabel 注入未完成：$detail")
         }
 
         private fun strokeResult(
@@ -360,21 +506,63 @@ object VirtualScreenInjector {
             return VirtualScreenMotionPlan.rejected(output)
         }
 
-        /** 进程内注入一个事件；任何失败都返回 false，由调用方决定是回落还是提前结束整段手势。 */
+        /** 进程内注入一个触摸事件；任何失败都返回 false，由调用方决定是回落还是提前结束整段手势。 */
         private fun send(action: Int, x: Int, y: Int, down: Long): Boolean {
+            val now = if (action == MotionEvent.ACTION_DOWN) down else SystemClock.uptimeMillis()
+            val pointerProps = arrayOf(
+                MotionEvent.PointerProperties().apply {
+                    id = 0
+                    toolType = MotionEvent.TOOL_TYPE_FINGER
+                },
+            )
+            val pointerCoords = arrayOf(
+                MotionEvent.PointerCoords().apply {
+                    this.x = x.toFloat()
+                    this.y = y.toFloat()
+                    pressure = if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) 0f else 1f
+                    size = 1f
+                },
+            )
+            val event = runCatching {
+                MotionEvent.obtain(
+                    down, now, action, 1, pointerProps, pointerCoords,
+                    0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0,
+                )
+            }.getOrNull() ?: return false
+            return try {
+                injectEvent(event)
+            } finally {
+                event.recycle()
+            }
+        }
+
+        private fun sendKey(action: Int, keyCode: Int, down: Long, extraFlags: Int = 0): Boolean {
+            val now = if (action == KeyEvent.ACTION_DOWN) down else SystemClock.uptimeMillis()
+            val event = KeyEvent(
+                down, now, action, keyCode, 0, 0,
+                KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
+                KeyEvent.FLAG_FROM_SYSTEM or extraFlags,
+                InputDevice.SOURCE_KEYBOARD,
+            )
+            return injectEvent(event)
+        }
+
+        private fun injectEvent(event: InputEvent): Boolean {
             val a = access ?: return false
             // 显示器已释放（编号回到 -1）时不再注入，避免事件落到主屏。
             val id = displayId()
             if (id <= 0) return false
-            val event = runCatching { MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x.toFloat(), y.toFloat(), 0) }
-                .getOrNull() ?: return false
             return try {
                 a.setDisplayId.invoke(event, id)
                 a.inject.invoke(a.manager, event, MODE_ASYNC) as? Boolean ?: false
+            } catch (error: java.lang.reflect.InvocationTargetException) {
+                if (error.cause is SecurityException) streamBlocked = true
+                false
+            } catch (_: SecurityException) {
+                streamBlocked = true
+                false
             } catch (_: Exception) {
                 false
-            } finally {
-                event.recycle()
             }
         }
     }

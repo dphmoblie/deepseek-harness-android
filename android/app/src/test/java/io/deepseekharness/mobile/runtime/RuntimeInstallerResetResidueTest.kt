@@ -1,6 +1,7 @@
 package io.deepseekharness.mobile.runtime
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -26,6 +27,28 @@ class RuntimeInstallerResetResidueTest {
         )
         // 清理完还要留一条盘点记录，让「重置之后盘上还剩什么」在诊断页里看得见。
         assertTrue(reset.contains("recordRuntimeInventory(\"reset\")"))
+    }
+
+    @Test
+    fun `显式重置按更新流程先暂存用户数据再清理且不删历史暂存`() {
+        val reset = bodyOf("fun resetWorkspace()")
+        val stageIndex = reset.indexOf("stageUserDataBeforeRemoval(")
+        val wipeIndex = reset.indexOf("cleanupIfPresent(store.currentRoot)")
+
+        assertTrue("resetWorkspace() 必须先暂存用户数据再删旧根目录：\n$reset", stageIndex >= 0 && wipeIndex > stageIndex)
+        assertFalse("resetWorkspace() 不允许再清理 preserve-* 暂存目录", reset.contains("cleanPreservedWorkspaces"))
+        assertFalse("resetWorkspace() 不允许再清理终端插件暂存备份", reset.contains("cleanPendingTerminalPluginBackups"))
+
+        val controllerSource = siblingSource("MobileRuntimeController.kt")
+        val resetStart = controllerSource.indexOf("fun reset(")
+        val resetEnd = controllerSource.indexOf("\n    /**", resetStart)
+        val controllerReset = controllerSource.substring(resetStart, resetEnd)
+        val snapIndex = controllerReset.indexOf("snapshots.createBeforeUpdate()")
+        val workspaceResetIndex = controllerReset.indexOf("installer.resetWorkspace()")
+        assertTrue(
+            "MobileRuntimeController.reset() 必须在 resetWorkspace() 之前触发兜底备份：\n$controllerReset",
+            snapIndex >= 0 && workspaceResetIndex > snapIndex,
+        )
     }
 
     @Test
@@ -65,8 +88,10 @@ class RuntimeInstallerResetResidueTest {
      * 单测的工作目录是 Gradle 模块目录（`android/app`），但为了不把测试钉死在启动方式上，
      * 这里按几个候选相对路径找；都找不到就明确失败，而不是让断言静默变成「文件不存在」。
      */
-    private fun installerSource(): String {
-        val relative = "src/main/java/io/deepseekharness/mobile/runtime/RuntimeInstaller.kt"
+    private fun installerSource(): String = siblingSource("RuntimeInstaller.kt")
+
+    private fun siblingSource(fileName: String): String {
+        val relative = "src/main/java/io/deepseekharness/mobile/runtime/$fileName"
         val candidates = listOf(
             File(relative),
             File("app/$relative"),
@@ -74,7 +99,7 @@ class RuntimeInstallerResetResidueTest {
         )
         val file = candidates.firstOrNull { it.isFile }
         if (file == null) {
-            fail("找不到 RuntimeInstaller.kt（工作目录：${File(".").absolutePath}）")
+            fail("找不到 $fileName（工作目录：${File(".").absolutePath}）")
             return ""
         }
         return file.readText()

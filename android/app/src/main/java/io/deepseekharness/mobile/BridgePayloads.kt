@@ -89,9 +89,11 @@ internal fun io.deepseekharness.mobile.shizuku.RootEngineAccess.Status.toJs(): J
     .put("suVersion", suVersion ?: JSONObject.NULL)
 
 /** 诊断日志状态：只有布尔值、计数与时间戳，不含任何日志内容。 */
-internal fun DiagnosticState.toJs(): JSObject = JSObject()
+internal fun DiagnosticState.toJs(harnessLogAvailable: Boolean = this.harnessLogAvailable): JSObject = JSObject()
     .put("enabled", enabled)
     .put("retentionDays", retentionDays)
+    .put("includeHarnessLog", includeHarnessLog)
+    .put("harnessLogAvailable", harnessLogAvailable)
     .put("fileCount", fileCount)
     .put("totalBytes", totalBytes)
     .put("lastEntryAtMillis", lastEntryAtMillis)

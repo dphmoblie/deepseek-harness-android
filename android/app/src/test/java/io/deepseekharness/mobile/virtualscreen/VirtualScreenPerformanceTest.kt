@@ -1,7 +1,9 @@
 package io.deepseekharness.mobile.virtualscreen
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -100,5 +102,29 @@ class VirtualScreenPerformanceTest {
     @Test
     fun `容量非法直接拒绝`() {
         assertThrows(IllegalArgumentException::class.java) { VirtualScreenLatency(capacity = 0) }
+    }
+
+    @Test
+    fun `响应窗口内的慢渲染计入首帧延迟 超窗改记未等到画面变化`() {
+        val latency = VirtualScreenLatency()
+        assertEquals(10_000L, VirtualScreenLatency.RESPONSE_WINDOW_MILLIS)
+        // 高负载设备上 7.1 秒出帧仍属有效响应样本，不被丢弃。
+        assertTrue(latency.respond(7_136L))
+        assertEquals(1, latency.sampleCount)
+        assertEquals(7_136L, latency.lastMillis)
+        assertEquals(0, latency.missedCount)
+
+        // 超出 10 秒窗口的迟来帧（如空白处误点后 46 秒别的动画）不污染首帧延迟统计。
+        assertFalse(latency.respond(46_000L))
+        assertEquals(1, latency.sampleCount)
+        assertEquals(7_136L, latency.lastMillis)
+        assertEquals(1, latency.missedCount)
+
+        latency.miss()
+        assertEquals(2, latency.missedCount)
+
+        latency.clear()
+        assertEquals(0, latency.sampleCount)
+        assertEquals(0, latency.missedCount)
     }
 }

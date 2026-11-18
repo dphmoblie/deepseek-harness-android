@@ -292,7 +292,7 @@ interface NativeRuntimePlugin {
   getAppUpdateInstallPermission(): Promise<unknown>
   getDiagnosticLogState(): Promise<DiagnosticLogState>
   readDiagnosticLog(options: { maxBytes?: number }): Promise<unknown>
-  setDiagnosticLogSettings(options: { enabled: boolean; retentionDays: number }): Promise<DiagnosticLogState>
+  setDiagnosticLogSettings(options: { enabled: boolean; retentionDays: number; includeHarnessLog: boolean }): Promise<DiagnosticLogState>
   shareDiagnosticLog(): Promise<DiagnosticLogExport>
   shareRuntimeWorkspace(): Promise<void>
   listRuntimeWorkspaceFiles(): Promise<unknown>
@@ -717,9 +717,10 @@ function createNativeBridge(): RuntimeBridge {
     getAppUpdateInstallPermission: () => NativeRuntime.getAppUpdateInstallPermission().then(validateAppUpdateInstallPermission),
     readDiagnosticLog: options => NativeRuntime.readDiagnosticLog({ maxBytes: options?.maxBytes }).then(validateDiagnosticLogText),
     getDiagnosticLogState: () => NativeRuntime.getDiagnosticLogState().then(validateDiagnosticLogState),
-    setDiagnosticLogSettings: (enabled, retentionDays) => {
+    setDiagnosticLogSettings: (enabled, retentionDays, includeHarnessLog) => {
       const days = assertDiagnosticRetentionDays(retentionDays)
-      return NativeRuntime.setDiagnosticLogSettings({ enabled, retentionDays: days }).then(validateDiagnosticLogState)
+      if (typeof includeHarnessLog !== 'boolean') return Promise.reject(new Error('诊断日志运行日志导出开关无效'))
+      return NativeRuntime.setDiagnosticLogSettings({ enabled, retentionDays: days, includeHarnessLog }).then(validateDiagnosticLogState)
     },
     shareDiagnosticLog: () => NativeRuntime.shareDiagnosticLog().then(validateDiagnosticLogExport),
     shareRuntimeWorkspace: () => NativeRuntime.shareRuntimeWorkspace(),

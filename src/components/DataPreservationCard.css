@@ -12,8 +12,8 @@
   gap: 10px;
   padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-card);
-  background: var(--card-color, var(--surface));
+  border-radius: var(--radius-control);
+  background: var(--card-color, var(--surface-sunken));
 }
 .data-preservation-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .data-preservation-copy strong { color: var(--card-ink, var(--ink)); font-size: .875rem; }

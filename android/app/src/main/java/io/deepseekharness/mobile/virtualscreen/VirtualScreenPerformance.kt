@@ -66,6 +66,35 @@ internal class VirtualScreenLatency(private val capacity: Int = DEFAULT_CAPACITY
         if (count < capacity) count++
     }
 
+    /**
+     * 「输入后在 [RESPONSE_WINDOW_MILLIS] 内一帧都没来」的次数。
+     *
+     * 改前的口径是「输入后的下一帧，不管多久」：静止页面上一次没有视觉反馈的输入（点在空白处、
+     * 应用没响应）会一直挂着待等标记，几十秒后倒计时或别的动画出了一帧，就被记成「输入延迟 7 秒」。
+     * 真机回执里 `inputFrameDelayLastMs=7136, samples=1` 正是这种假样本。超窗的不再当成延迟样本，
+     * 改记一次「没等到画面变化」。
+     */
+    var missedCount: Int = 0
+        private set
+
+    /**
+     * 按响应窗口记一次输入后首帧间隔：窗口内记成样本并返回 true；超窗不进样本、只记一次未响应并返回 false。
+     */
+    fun respond(millis: Long): Boolean {
+        if (millis < 0L) return false
+        if (millis > RESPONSE_WINDOW_MILLIS) {
+            missedCount++
+            return false
+        }
+        record(millis)
+        return true
+    }
+
+    /** 待等的输入已经超窗（还没有任何新帧）：记一次未响应。 */
+    fun miss() {
+        missedCount++
+    }
+
     /** 已记录的样本数；为 0 表示本次会话还没有测到过一次（界面必须说「尚未测到」）。 */
     val sampleCount: Int get() = count
 
@@ -85,10 +114,14 @@ internal class VirtualScreenLatency(private val capacity: Int = DEFAULT_CAPACITY
     fun clear() {
         next = 0
         count = 0
+        missedCount = 0
     }
 
     internal companion object {
         /** 最近 8 次：够看出「现在是不是卡」，又不至于把旧样本带进来。 */
         const val DEFAULT_CAPACITY = 8
+
+        /** 输入后首帧的响应窗口：与等待上限同为 10 秒，覆盖高负载设备约 7 秒的首帧渲染，超时不再当成延迟样本。 */
+        const val RESPONSE_WINDOW_MILLIS = 10_000L
     }
 }

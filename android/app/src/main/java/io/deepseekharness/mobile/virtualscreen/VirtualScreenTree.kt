@@ -442,6 +442,9 @@ object VirtualScreenTree {
             .put("editable", node.editable)
             .put("focused", node.focused)
             .put("enabled", node.enabled)
+        if (node.checked) json.put("checked", true)
+        if (node.selected) json.put("selected", true)
+        if (node.scrollable) json.put("scrollable", true)
         putField(json, "className", node.className)
         putField(json, "text", node.text)
         putField(json, "viewId", node.viewId)
@@ -472,6 +475,9 @@ object VirtualScreenTree {
         val enabled: Boolean,
         val bounds: IntArray,
         val children: List<Snapshot>,
+        val checked: Boolean = false,
+        val selected: Boolean = false,
+        val scrollable: Boolean = false,
     )
 
     /** 与系统状态无关的前置拒绝；返回 null 表示可以继续。 */
@@ -621,6 +627,9 @@ object VirtualScreenTree {
                     enabled = node.isEnabled,
                     bounds = intArrayOf(bounds.left, bounds.top, bounds.right, bounds.bottom),
                     children = children,
+                    checked = node.isChecked,
+                    selected = node.isSelected,
+                    scrollable = node.isScrollable,
                 )
             } finally {
                 // Android 26..32 pool nodes must be released even when a provider invalidates a node mid-read.

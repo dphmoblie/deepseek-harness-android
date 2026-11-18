@@ -207,11 +207,10 @@ class RuntimeInstaller(
         if (!installLock.tryLock()) throw RuntimeFailure("INSTALL_IN_PROGRESS", "安装期间不能重置运行时")
         try {
             cleanTransientWorkspaces()
-            // 用户显式清空运行时：中断更新遗留的用户数据暂存目录一并清理
-            // （与下面删除 currentRoot/backupRoot 的语义一致）。
-            cleanPreservedWorkspaces()
-            cleanPendingTerminalPluginBackups()
-            // 语义同上：删除失败被改名挪到一边的 stale-* 残留也在这里一次性收回。
+            // 与更新一致：在删除旧根目录之前先把白名单用户数据（/root）与终端插件暂存到 preserve-*，
+            // 并保留此前未回填的暂存目录与终端插件备份，待后续重装或数据恢复接管。
+            stageUserDataBeforeRemoval(writeEmptyReport = false)
+            // 删除失败被改名挪到一边的 stale-* 残留仍在这里一次性收回。
             // 它们和 current/previous 一样是整份 rootfs（约 960 MB 一份），仅仅删不掉而已，
             // 「重置环境」必须真的把盘上这些空间交还回来。
             retireStaleResidue()
@@ -564,33 +563,11 @@ class RuntimeInstaller(
      *    旋转到 `retained*`（见 [retainPreviousRoot]）。
      */
     private fun promoteRuntime(sourceRoot: File, sourceManifest: File) = RuntimeSharedInbox.withLock {
-        // 保留范围：整块访客用户空间（`root`），回填时排除旧令牌/旧脚本/死链。
-        val preservedPaths = RuntimePreservePolicy.preservedPaths()
-        val preservedRoot = File(
-            store.runtimeParent,
-            RuntimePreservePolicy.preserveDirectoryName(UUID.randomUUID().toString()),
-        )
-        val moved = mutableListOf<String>()
+        val staged = stageUserDataBeforeRemoval(writeEmptyReport = true)
+        val preservedRoot = staged.preservedRoot
+        val moved = staged.moved
+        val terminalBackup = staged.terminalBackup
         val progress = RuntimePreservePolicy.PromotionProgress()
-        var terminalBackup: RuntimeTerminalPluginBackup.Handle? = null
-
-        // 阶段一：移出用户数据。必须在旧根目录改名之前完成，否则无法再区分用户数据与运行时产物。
-        try {
-            terminalBackup = RuntimeTerminalPluginBackup.backup(store.runtimeParent, store.currentRoot)
-            movePreservedItems(store.currentRoot, preservedRoot, moved, preservedPaths)
-            // 先落一份清单：即使随后的提升被打断，恢复流程也能按**当初**的槽位找到每一项。
-            writePreserveReport(preservedRoot, preservedPaths, restored = 0, merged = 0, conflicts = emptyList())
-        } catch (error: Throwable) {
-            // 半途失败：把已移出的数据放回旧根目录；放不回的原样留在 preserve-*，绝不删除。
-            try {
-                restorePreservedDirectory(preservedRoot, store.currentRoot, strict = false)
-            } catch (_: Exception) {
-                // 放回失败时数据仍在 preserve-* 目录里，比让它随失败一起消失安全得多。
-            }
-            terminalBackup?.let { runCatching { RuntimeTerminalPluginBackup.restore(it, store.currentRoot, strict = false) } }
-            throw error as? RuntimeFailure
-                ?: RuntimeFailure("RUNTIME_PLUGIN_BACKUP_FAILED", "无法备份旧运行时中的终端插件", error)
-        }
 
         // 阶段二：备份旧运行时，提升新运行时。
         try {
@@ -618,6 +595,7 @@ class RuntimeInstaller(
         val restore = restorePreservedDirectory(preservedRoot, store.currentRoot, strict = true)
         unplaced += restore.unplaced
         terminalBackup?.let { RuntimeTerminalPluginBackup.restore(it, store.currentRoot, strict = true) }
+        restorePendingTerminalPlugins(skipDirectory = terminalBackup?.directory)
         // 中断遗留、且恢复流程当时没有可回填根目录的暂存目录，由新根目录一并接手。
         for (leftover in preservedWorkspaces()) {
             if (leftover.absolutePath == preservedRoot.absolutePath) continue
@@ -712,10 +690,11 @@ class RuntimeInstaller(
         }
     }
 
-    /** 回放设备重启/进程中断留下的终端插件备份；冲突时保留备份并让上层显示受控错误。 */
-    private fun restorePendingTerminalPlugins() {
+    /** 回放设备重启/进程中断或重置留下的终端插件备份；冲突时保留备份并让上层显示受控错误。 */
+    private fun restorePendingTerminalPlugins(skipDirectory: File? = null) {
         if (!RuntimeFiles.isDirectoryNoFollow(store.currentRoot)) return
         for (backup in RuntimeTerminalPluginBackup.pending(store.runtimeParent)) {
+            if (skipDirectory != null && backup.directory.absolutePath == skipDirectory.absolutePath) continue
             RuntimeTerminalPluginBackup.restore(backup, store.currentRoot, strict = true)
         }
     }
@@ -738,28 +717,51 @@ class RuntimeInstaller(
                 retireIfPresent(child, "transient")
             }
         }
-        // 注意：`preserve-*` 目录**不在此列**。它装的是用户数据，只允许在用户显式重置时清理。
+        // 注意：`preserve-*` 目录**不在此列**。它装的是用户数据，在更新与重置前均会被暂存保留。
     }
 
-    /** 运行时父目录下遗留的用户数据暂存目录（中断的提升留下的）。 */
+    private data class StagedPreservation(
+        val preservedRoot: File,
+        val moved: List<String>,
+        val terminalBackup: RuntimeTerminalPluginBackup.Handle?,
+    )
+
+    /**
+     * 在替换或重置旧根目录之前，把白名单用户数据（`root`）与终端插件移出到 `preserve-*` / 终端备份目录。
+     * 半途失败时尽力把已移出的数据放回原根目录；放不回的原样留在暂存目录里，绝不删除。
+     */
+    private fun stageUserDataBeforeRemoval(writeEmptyReport: Boolean): StagedPreservation {
+        val preservedPaths = RuntimePreservePolicy.preservedPaths()
+        val preservedRoot = File(
+            store.runtimeParent,
+            RuntimePreservePolicy.preserveDirectoryName(UUID.randomUUID().toString()),
+        )
+        val moved = mutableListOf<String>()
+        var terminalBackup: RuntimeTerminalPluginBackup.Handle? = null
+        try {
+            terminalBackup = RuntimeTerminalPluginBackup.backup(store.runtimeParent, store.currentRoot)
+            movePreservedItems(store.currentRoot, preservedRoot, moved, preservedPaths)
+            if (writeEmptyReport || moved.isNotEmpty()) {
+                writePreserveReport(preservedRoot, preservedPaths, restored = 0, merged = 0, conflicts = emptyList())
+            }
+        } catch (error: Throwable) {
+            try {
+                restorePreservedDirectory(preservedRoot, store.currentRoot, strict = false)
+            } catch (_: Exception) {
+                // 放回失败时数据仍在 preserve-* 目录里，比让它随失败一起消失安全得多。
+            }
+            terminalBackup?.let { runCatching { RuntimeTerminalPluginBackup.restore(it, store.currentRoot, strict = false) } }
+            throw error as? RuntimeFailure
+                ?: RuntimeFailure("RUNTIME_PLUGIN_BACKUP_FAILED", "无法备份旧运行时中的终端插件", error)
+        }
+        return StagedPreservation(preservedRoot, moved, terminalBackup)
+    }
+
+    /** 运行时父目录下遗留的用户数据暂存目录（中断的提升或重置留下的）。 */
     private fun preservedWorkspaces(): List<File> =
         (store.runtimeParent.listFiles() ?: emptyArray())
             .filter { RuntimePreservePolicy.isPreserveDirectoryName(it.name) }
             .sortedBy { it.name }
-
-    /**
-     * 清理用户数据暂存目录。只允许在用户显式重置（`resetWorkspace`）时调用：
-     * `preserve-*` 里装的是用户数据，不属于可以随时丢弃的暂存文件。
-     */
-    private fun cleanPreservedWorkspaces() {
-        for (directory in preservedWorkspaces()) cleanupIfPresent(directory)
-    }
-
-    private fun cleanPendingTerminalPluginBackups() {
-        for (backup in RuntimeTerminalPluginBackup.pending(store.runtimeParent)) {
-            RuntimeTerminalPluginBackup.remove(backup)
-        }
-    }
 
     /**
      * 把旧根目录里的白名单用户数据移出到 `preserve-*` 暂存目录。

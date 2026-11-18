@@ -622,12 +622,13 @@ describe('诊断日志校验', () => {
   const base = {
     enabled: false,
     retentionDays: 3,
+    includeHarnessLog: true,
     fileCount: 0,
     totalBytes: 0,
     lastEntryAtMillis: 0,
   }
 
-  it('只接受开关、计数与时间戳', () => {
+  it('只接受开关、导出选项、计数与时间戳', () => {
     expect(validateDiagnosticLogState(base)).toEqual(base)
     expect(validateDiagnosticLogState({ ...base, enabled: true, fileCount: 2, totalBytes: 4096, lastEntryAtMillis: 1_700_000_000_000 }))
       .toEqual({ ...base, enabled: true, fileCount: 2, totalBytes: 4096, lastEntryAtMillis: 1_700_000_000_000 })
@@ -2006,9 +2007,9 @@ describe('运行时会话快照校验', () => {
     }
     expect(validateRuntimeSessionSnapshotState(state({ maxSnapshots: 32 })).maxSnapshots).toBe(32)
     expect(() => validateRuntimeSessionSnapshotState(state({ maxSnapshots: 33 }))).toThrow('会话快照份数上限无效')
-    expect(validateRuntimeSessionSnapshotState(state({ maxBytes: 512 * 1024 * 1024 })).maxBytes)
-      .toBe(512 * 1024 * 1024)
-    expect(() => validateRuntimeSessionSnapshotState(state({ maxBytes: 512 * 1024 * 1024 + 1 })))
+    expect(validateRuntimeSessionSnapshotState(state({ maxBytes: 16 * 1024 * 1024 * 1024 })).maxBytes)
+      .toBe(16 * 1024 * 1024 * 1024)
+    expect(() => validateRuntimeSessionSnapshotState(state({ maxBytes: 16 * 1024 * 1024 * 1024 + 1 })))
       .toThrow('会话快照空间上限无效')
   })
 

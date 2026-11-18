@@ -292,6 +292,7 @@ const diagnostic: DiagnosticLogState = {
   // 与产品默认一致：诊断日志默认开启；需要「用户已关闭」的用例自行覆盖。
   enabled: true,
   retentionDays: 3,
+  includeHarnessLog: true,
   fileCount: 0,
   totalBytes: 0,
   lastEntryAtMillis: 0,
@@ -691,7 +692,7 @@ export function beforeEachAppTest(): void {
   bridge.getAutomationTaskState.mockResolvedValue({ connected: true, task: null })
   bridge.cancelAutomationTask.mockResolvedValue({ connected: true, task: null })
   // 默认「没有任何快照」：多数用例只关心别的页面，不该被一份假快照影响；
-  // 关心快照的用例自己覆盖这四条桩。上限取值与原生侧一致（3 份 / 512 MiB）。
+  // 关心快照的用例自己覆盖这四条桩；这里使用小额度夹具，验证逻辑不依赖设备实际配额。
   const emptySnapshotState = () => ({ maxSnapshots: 3, maxBytes: 512 * 1024 * 1024, totalBytes: 0, snapshots: [] })
   bridge.getRuntimeSessionSnapshotState.mockResolvedValue(emptySnapshotState())
   // 数据保留同样默认「没有待处理副本」：版本管理页一挂载就会读一次，
@@ -747,8 +748,8 @@ export function beforeEachAppTest(): void {
     totalBytes: 4096,
     truncated: false,
   })
-  bridge.setDiagnosticLogSettings.mockImplementation((enabled: boolean, retentionDays: number) =>
-    Promise.resolve({ ...diagnostic, enabled, retentionDays }))
+  bridge.setDiagnosticLogSettings.mockImplementation((enabled: boolean, retentionDays: number, includeHarnessLog: boolean) =>
+    Promise.resolve({ ...diagnostic, enabled, retentionDays, includeHarnessLog }))
   bridge.clearDiagnosticLog.mockResolvedValue({ ...diagnostic })
   bridge.shareDiagnosticLog.mockResolvedValue({ ...diagnostic, fileName: 'dsh-diagnostic-20260912-102030.txt', exportedBytes: 512 })
   bridge.addRuntimeProgressListener.mockResolvedValue({ remove: vi.fn().mockResolvedValue(undefined) })
