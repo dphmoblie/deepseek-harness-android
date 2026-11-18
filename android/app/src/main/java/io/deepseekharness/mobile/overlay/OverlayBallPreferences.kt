@@ -43,9 +43,22 @@ class OverlayBallPreferences(private val storage: Storage) {
         storage.writeInt(KEY_Y, NOT_SET)
     }
 
+    /**
+     * 上次退出时的形态：true = 贴边细线，false = 完整圆球。
+     *
+     * 默认 true：用户开启悬浮球时先给一个不挡视野的细线，点一下即可展开。
+     * 旧版本没有这个键，升级后同样落到细线；用户不需要重新设置。
+     */
+    fun readCollapsed(): Boolean = storage.readInt(KEY_COLLAPSED)?.let { it != 0 } ?: true
+
+    fun writeCollapsed(collapsed: Boolean) {
+        storage.writeInt(KEY_COLLAPSED, if (collapsed) 1 else 0)
+    }
+
     companion object {
         const val KEY_X = "ball_x"
         const val KEY_Y = "ball_y"
+        const val KEY_COLLAPSED = "ball_collapsed"
 
         /**
          * 未设置的哨兵值：[clearPosition] 主动写入它表示已清除；

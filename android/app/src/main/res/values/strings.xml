@@ -137,6 +137,10 @@
     -->
     <string name="task_notification_channel_name">运行状态提醒</string>
     <string name="task_notification_channel_description">本机 Harness 停止、启动失败或设备服务连接失败时提醒你</string>
+    <string name="background_notification_channel_name">后台通知</string>
+    <string name="background_notification_channel_description">任务、保活与副屏合并为一条</string>
+    <string name="background_notification_summary_title">%1$d 个后台通知</string>
+    <string name="background_notification_summary_text">任务、保活与副屏已合并；点按查看详情</string>
     <string name="task_notification_stopped_title">Harness 已停止</string>
     <string name="task_notification_stopped_text">本机运行环境已自行退出，点按回到应用查看</string>
     <string name="task_notification_failed_title">Harness 未能启动</string>

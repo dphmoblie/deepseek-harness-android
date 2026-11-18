@@ -136,6 +136,7 @@ class VirtualScreenService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        BackgroundNotificationGroup.sync(this)
         if (intent == null || intent.action == "stop") { stopSelf(); return START_NOT_STICKY }
         if (current != null) return START_NOT_STICKY
         current = this
@@ -635,7 +636,10 @@ class VirtualScreenService : Service() {
             ))
             frame.refreshLanguage()
         }
-        runCatching { if (!ending.get()) getSystemService(NotificationManager::class.java).notify(7321, buildNotification()) }
+        runCatching {
+            if (!ending.get()) getSystemService(NotificationManager::class.java).notify(7321, buildNotification())
+            if (!ending.get()) BackgroundNotificationGroup.sync(this)
+        }
     }
 
     private fun localString(id: Int): String = AppLanguage.localizedContext(this).getString(id)
@@ -646,7 +650,8 @@ class VirtualScreenService : Service() {
         val stop = PendingIntent.getService(this, 1, Intent(this, javaClass).setAction("stop"), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return NotificationCompat.Builder(this, CHANNEL).setSmallIcon(android.R.drawable.ic_menu_view)
             .setContentTitle(localString(R.string.virtual_screen_notification_title)).setContentText(localString(R.string.virtual_screen_notification_text))
-            .setContentIntent(open).setOngoing(true).addAction(0, localString(R.string.virtual_screen_stop), stop).build()
+            .setContentIntent(open).setOngoing(true).setGroup(BackgroundNotificationGroup.GROUP_KEY)
+            .addAction(0, localString(R.string.virtual_screen_stop), stop).build()
     }
 
     /**
@@ -849,6 +854,7 @@ class VirtualScreenService : Service() {
         ending.set(true)
         main.removeCallbacks(health)
         runCatching { ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE) }
+        BackgroundNotificationGroup.sync(this)
         // 销毁与「收起」是同一套 effect，只是状态记到 DEAD：之后不再接受显示请求。
         releaseOverlayWindow(overlayMachine.destroy())
         executor.execute {

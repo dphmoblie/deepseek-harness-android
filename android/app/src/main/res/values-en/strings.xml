@@ -121,6 +121,10 @@
 
     <string name="task_notification_channel_name">Runtime status</string>
     <string name="task_notification_channel_description">Alerts you when the local Harness stops or fails to start</string>
+    <string name="background_notification_channel_name">Background notifications</string>
+    <string name="background_notification_channel_description">Tasks, keep-alive and the virtual display are grouped into one</string>
+    <string name="background_notification_summary_title">%1$d background notifications</string>
+    <string name="background_notification_summary_text">Tasks, keep-alive and the virtual display are grouped; tap for details</string>
     <string name="task_notification_stopped_title">Harness stopped</string>
     <string name="task_notification_stopped_text">The local runtime exited on its own. Tap to return to the app.</string>
     <string name="task_notification_failed_title">Harness failed to start</string>

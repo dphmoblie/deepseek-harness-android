@@ -74,4 +74,16 @@ class OverlayBallPreferencesTest {
         preferences.clearPosition()
         assertNull(preferences.readPosition())
     }
+
+    @Test
+    fun defaultsToCollapsedAndRoundTripsTheChoice() {
+        val storage = FakeStorage()
+        val preferences = OverlayBallPreferences(storage)
+        // 新装/旧版本升级都没有该键：先给不挡视野的细线。
+        assertEquals(true, preferences.readCollapsed())
+        preferences.writeCollapsed(false)
+        assertEquals(false, preferences.readCollapsed())
+        preferences.writeCollapsed(true)
+        assertEquals(true, preferences.readCollapsed())
+    }
 }

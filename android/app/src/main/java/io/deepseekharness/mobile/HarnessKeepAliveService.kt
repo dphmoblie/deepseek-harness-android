@@ -22,6 +22,7 @@ import io.deepseekharness.mobile.runtime.RuntimeStateSnapshot
 import io.deepseekharness.mobile.runtime.RuntimeStore
 import io.deepseekharness.mobile.runtime.ShizukuReconnectResult
 import io.deepseekharness.mobile.runtime.TaskNotification
+import io.deepseekharness.mobile.runtime.BackgroundNotificationGroup
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLog
@@ -210,12 +211,15 @@ class HarnessKeepAliveService : Service() {
                 DiagnosticEvent.KEEP_ALIVE,
                 mapOf("reason" to "foreground_failed", "active" to "false"),
             )
+        } else {
+            BackgroundNotificationGroup.sync(this)
         }
         return started
     }
 
     private fun stopForegroundCompat() {
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        BackgroundNotificationGroup.sync(this)
     }
 
     /**
@@ -243,6 +247,7 @@ class HarnessKeepAliveService : Service() {
             .setContentIntent(openApp)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setGroup(BackgroundNotificationGroup.GROUP_KEY)
             .setOngoing(true)
             .setSilent(true)
             .setShowWhen(false)

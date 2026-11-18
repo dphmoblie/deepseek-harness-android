@@ -31,4 +31,6 @@
     <color name="overlay_ball_background">#111315</color>
     <color name="overlay_ball_pressed">#263C33</color>
     <color name="overlay_ball_stroke">#3A594D</color>
+    <!-- 细线收起态：与 Web 强调色同一支蓝，深浅两套成对定义。 -->
+    <color name="overlay_line">#2F5FD0</color>
 </resources>

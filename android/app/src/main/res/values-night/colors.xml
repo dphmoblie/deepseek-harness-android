@@ -26,4 +26,6 @@
     <color name="overlay_ball_background">#111315</color>
     <color name="overlay_ball_pressed">#263C33</color>
     <color name="overlay_ball_stroke">#4D7664</color>
+    <!-- 细线收起态：深色下提亮，避免贴在深色内容上消失。 -->
+    <color name="overlay_line">#7DA1FF</color>
 </resources>

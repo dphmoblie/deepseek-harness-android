@@ -114,9 +114,22 @@ object OverlayBallPolicy {
         screenWidth: Int,
         screenHeight: Int,
         ballSize: Int,
+    ): Pair<Int, Int> = clampPosition(x, y, screenWidth, screenHeight, ballSize, ballSize)
+
+    /**
+     * 非正方形窗口（收起细线）的夹取：宽高分开计算，避免用 48dp 球宽去夹 44dp 热区。
+     * 屏幕比窗口还小时收敛到 0，而不是返回负数。
+     */
+    fun clampPosition(
+        x: Int,
+        y: Int,
+        screenWidth: Int,
+        screenHeight: Int,
+        viewWidth: Int,
+        viewHeight: Int,
     ): Pair<Int, Int> {
-        val maxX = maxOffset(screenWidth, ballSize)
-        val maxY = maxOffset(screenHeight, ballSize)
+        val maxX = maxOffset(screenWidth, viewWidth)
+        val maxY = maxOffset(screenHeight, viewHeight)
         return x.coerceIn(0, maxX) to y.coerceIn(0, maxY)
     }
 
@@ -173,12 +186,22 @@ object OverlayBallPolicy {
         screenHeight: Int,
         ballSize: Int,
         marginPx: Int,
+    ): Pair<Int, Int> = defaultPosition(screenWidth, screenHeight, ballSize, ballSize, marginPx)
+
+    /** 非正方形窗口（收起细线）的默认落点：同样贴右边缘、垂直居中。 */
+    fun defaultPosition(
+        screenWidth: Int,
+        screenHeight: Int,
+        viewWidth: Int,
+        viewHeight: Int,
+        marginPx: Int,
     ): Pair<Int, Int> = clampPosition(
-        screenWidth - ballSize - marginPx,
-        ((screenHeight - ballSize) * DEFAULT_VERTICAL_RATIO).toInt(),
+        screenWidth - viewWidth - marginPx,
+        ((screenHeight - viewHeight) * DEFAULT_VERTICAL_RATIO).toInt(),
         screenWidth,
         screenHeight,
-        ballSize,
+        viewWidth,
+        viewHeight,
     )
 
     /**

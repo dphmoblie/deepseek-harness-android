@@ -137,6 +137,10 @@
     -->
     <string name="task_notification_channel_name">実行状況の通知</string>
     <string name="task_notification_channel_description">ローカル Harness が停止・起動失敗した、またはデバイスサービスの接続が失敗したときに通知する</string>
+    <string name="background_notification_channel_name">バックグラウンド通知</string>
+    <string name="background_notification_channel_description">タスク・常駐・仮想ディスプレイを 1 件にまとめます</string>
+    <string name="background_notification_summary_title">%1$d 件のバックグラウンド通知</string>
+    <string name="background_notification_summary_text">タスク・常駐・仮想ディスプレイをまとめました。タップで詳細を表示</string>
     <string name="task_notification_stopped_title">Harness を停止しました</string>
     <string name="task_notification_stopped_text">ローカル実行環境が自身で終了しました。タップしてアプリに戻り確認してください</string>
     <string name="task_notification_failed_title">Harness を起動できませんでした</string>

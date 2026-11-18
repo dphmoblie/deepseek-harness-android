@@ -167,6 +167,7 @@ internal object TaskNotification {
             if (harnessRunId == null || active.activeCount == 0 || AppForeground.isForeground() ||
                 !manager.areNotificationsEnabled()) {
                 manager.cancel(TURN_ACTIVE_NOTIFICATION_ID)
+                BackgroundNotificationGroup.sync(context)
                 return@synchronized
             }
             val localized = AppLanguage.localizedContext(context)
@@ -189,6 +190,7 @@ internal object TaskNotification {
             )
             try {
                 manager.notify(TURN_ACTIVE_NOTIFICATION_ID, built.notification)
+                BackgroundNotificationGroup.sync(context)
             } catch (_: SecurityException) {
                 // 权限在检查与投递之间被撤销时，任务状态仍由界面显示。
                 return@synchronized
@@ -371,6 +373,7 @@ internal object TaskNotification {
             .build()
         try {
             manager.notify(SHIZUKU_RECONNECT_NOTIFICATION_ID, notification)
+            BackgroundNotificationGroup.sync(context)
         } catch (_: SecurityException) {
             // 权限在检查与投递之间被撤销时，提醒丢失不影响运行时恢复。
         }
@@ -483,6 +486,7 @@ internal object TaskNotification {
                 .build()
             try {
                 manager.notify(TURN_COMPLETED_NOTIFICATION_ID, notification)
+                BackgroundNotificationGroup.sync(context)
                 lastTurnCompletedPostedAtMs = now
                 audit(context, AuditResult.SUCCEEDED, "TURN_NOTIFY_POSTED")
             } catch (_: SecurityException) {
@@ -509,7 +513,7 @@ internal object TaskNotification {
         val notification = build(localized, titleRes)
             .setContentText(localized.getString(textRes, count))
             .build()
-        postSafely(manager, notification)
+        postSafely(context, manager, notification)
     }
 
     /**
@@ -530,6 +534,7 @@ internal object TaskNotification {
             // 必须传平台/Compat 自带的常量：lint 的 WrongConstant 只认带 @IntDef 的常量，
             // 自己写一个值相等的 private const 会被判为「可疑的可见性取值」而卡住 lintRelease 门禁。
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setGroup(BackgroundNotificationGroup.GROUP_KEY)
             // 通知本身不承载动作：点一下只回到应用。隔着锁屏就能触发的破坏性入口不做。
 
     /**
@@ -558,12 +563,13 @@ internal object TaskNotification {
         val notification = build(localized, titleRes)
             .setContentText(localized.getString(textRes))
             .build()
-        postSafely(manager, notification)
+        postSafely(context, manager, notification)
     }
 
-    private fun postSafely(manager: NotificationManagerCompat, notification: Notification) {
+    private fun postSafely(context: Context, manager: NotificationManagerCompat, notification: Notification) {
         try {
             manager.notify(NOTIFICATION_ID, notification)
+            BackgroundNotificationGroup.sync(context)
         } catch (_: SecurityException) {
             // 权限在检查与投递之间被撤销时会抛：通知丢了不影响运行时状态本身。
         }
@@ -577,6 +583,7 @@ internal object TaskNotification {
         manager.cancel(TURN_COMPLETED_NOTIFICATION_ID)
         manager.cancel(SHIZUKU_RECONNECT_NOTIFICATION_ID)
         manager.cancel(TURN_ACTIVE_NOTIFICATION_ID)
+        BackgroundNotificationGroup.sync(context)
         refreshTaskStatus(context)
     }
 

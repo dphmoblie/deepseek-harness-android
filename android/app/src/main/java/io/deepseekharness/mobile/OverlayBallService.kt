@@ -52,6 +52,7 @@ import io.deepseekharness.mobile.overlay.OverlayBallFrameUpdates
 import io.deepseekharness.mobile.overlay.OverlayBallPreferences
 import io.deepseekharness.mobile.overlay.OverlayBallSecondaryPolicy
 import io.deepseekharness.mobile.overlay.OverlayConversationSizePolicy
+import io.deepseekharness.mobile.runtime.BackgroundNotificationGroup
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticEvent
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLevel
 import io.deepseekharness.mobile.runtime.diagnostics.DiagnosticLog
@@ -129,6 +130,21 @@ class OverlayBallService : Service() {
     private var ballGestures: GestureDetector? = null
     private var gestureCancelled = false
     private var dragInProgress = false
+
+    /** 当前是否为贴边细线；true 时窗口仍是 44dp 热区，只有内部细线可见。 */
+    private var ballCollapsed = true
+
+    /** 收起态内部那条 8×74dp 的细线；展开时隐藏，不销毁视图。 */
+    private var ballLineView: View? = null
+
+    /** 拖动中的临时 28dp 胶囊；松手后恢复细线。 */
+    private var dragPreview = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val collapseRunnable = Runnable {
+        if (ballView != null && !dragInProgress && secondaryViews.isEmpty() && !ballCollapsed) {
+            setBallCollapsed(true)
+        }
+    }
     private val ballPositionUpdates = OverlayBallFrameUpdates(
         postFrame = { ballView?.postOnAnimation(it) },
         removeFrame = { ballView?.removeCallbacks(it) },
@@ -233,6 +249,7 @@ class OverlayBallService : Service() {
             metrics.widthPixels,
             metrics.heightPixels,
             layoutParams.width,
+            layoutParams.height,
         )
         layoutParams.x = x
         layoutParams.y = y
@@ -257,6 +274,7 @@ class OverlayBallService : Service() {
     }
 
     override fun onDestroy() {
+        cancelCollapse()
         detachConversation()
         // 二级球必须先摘：它们的位置依赖 layoutParams，虽然在 onDestroy 里已经用不到，
         // 但顺序反过来会让「先摘主球、后摘二级球」出现一次以失效坐标重排的窗口调用。
@@ -333,6 +351,10 @@ class OverlayBallService : Service() {
         detachBall()
         val metrics = resources.displayMetrics
         val size = (BALL_SIZE_DP * metrics.density).toInt()
+        val collapsed = preferences.readCollapsed()
+        // 收起态视觉只有 8dp，但窗口必须留 44dp 热区；高度按细线 74dp 留。
+        val windowWidth = if (collapsed) dp(TOUCH_TARGET_DP) else size
+        val windowHeight = if (collapsed) dp(LINE_HEIGHT_DP) else size
 
         // 充气必须显式带 AppCompat 主题：厂商「强制深色 / 强制主题」会把服务当前主题
         // 换成平台主题，此时布局里的 AppCompat 属性解析不到，inflate 抛
@@ -355,9 +377,20 @@ class OverlayBallService : Service() {
                 stopSelf()
                 return false
             }
+        val line = View(this).apply {
+            visibility = View.GONE
+            background = lineBackground()
+        }
+        (view as android.view.ViewGroup).addView(
+            line,
+            FrameLayout.LayoutParams(dp(LINE_WIDTH_DP), dp(LINE_HEIGHT_DP), Gravity.END or Gravity.CENTER_VERTICAL),
+        )
+        ballLineView = line
+        configureBallView(view, collapsed)
+
         val params = WindowManager.LayoutParams(
-            size,
-            size,
+            windowWidth,
+            windowHeight,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             // 不可获焦：球不能抢输入法与按键，否则会打断用户正在用的应用。
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -368,20 +401,28 @@ class OverlayBallService : Service() {
         }
 
         val stored = preferences.readPosition()
-        val (x, y) = if (stored != null) {
+        val (storedX, storedY) = if (stored != null) {
             OverlayBallPolicy.clampPosition(
                 stored.first, stored.second,
-                metrics.widthPixels, metrics.heightPixels, size,
+                metrics.widthPixels, metrics.heightPixels, windowWidth, windowHeight,
             )
         } else {
             // 没存过位置：贴右边缘、垂直居中。
             OverlayBallPolicy.defaultPosition(
                 metrics.widthPixels,
                 metrics.heightPixels,
-                size,
+                windowWidth,
+                windowHeight,
                 (DEFAULT_MARGIN_DP * metrics.density).toInt(),
             )
         }
+        // 收起态必须贴边：旧位置来自圆球时代时，细线不能悬在屏幕中间。
+        val x = if (collapsed) {
+            OverlayBallPolicy.snapToEdge(storedX, metrics.widthPixels, windowWidth)
+        } else {
+            storedX
+        }
+        val y = storedY
         params.x = x
         params.y = y
 
@@ -390,12 +431,22 @@ class OverlayBallService : Service() {
         // 回到应用 / 隐藏悬浮球 / 关闭无障碍。短按是最高频的动作，因此把「选择去哪里」
         // 放在短按上，而不是继续沿用「短按直接进对话」——那会让副屏没有同等入口。
         view.setOnClickListener {
-            if (!stopIfOverlayPermissionRevoked()) toggleSecondaryChoices()
+            if (!stopIfOverlayPermissionRevoked()) {
+                if (ballCollapsed) {
+                    // 细线点击先恢复圆球，再把二级入口展开；细线本身不直接弹一列按钮。
+                    setBallCollapsed(false)
+                    showSecondaryChoices()
+                } else {
+                    toggleSecondaryChoices()
+                }
+            }
         }
         view.setOnLongClickListener {
-            // 长按＝直接打开 Harness 对话小窗（原来短按的动作搬到长按），
-            // 让熟手不必经二级球绕一次。
-            if (!stopIfOverlayPermissionRevoked()) toggleConversation()
+            // 长按＝直接打开 Harness 对话小窗；打开前先把球收回细线，避免小窗旁边再挡一块。
+            if (!stopIfOverlayPermissionRevoked()) {
+                setBallCollapsed(true)
+                toggleConversation()
+            }
             true
         }
         ballGestures = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
@@ -412,11 +463,12 @@ class OverlayBallService : Service() {
                 if (!gestureCancelled && !dragInProgress) {
                     detachSecondaryChoices()
                     dragInProgress = true
+                    showDragPreview()
                 }
                 return true
             }
         }).apply { setOnDoubleTapListener(null) }
-        view.setOnTouchListener { _, event -> handleTouch(event, size) }
+        view.setOnTouchListener { _, event -> handleTouch(event, layoutParams.width, layoutParams.height) }
         // 球是否还在窗口上由视图的附着回调维护：客户端侧的移除一定会回调，系统侧的移除
         // 视 ROM 实现而定，因此它只用于避免「已被摘掉的窗口挡住重挂」这一类误判，
         // 真正的清理由插件每次回前台的权限对齐（撤销 → 停服务 → 摘视图）兜底。
@@ -455,13 +507,17 @@ class OverlayBallService : Service() {
         }
         ballView = view
         layoutParams = params
+        ballCollapsed = collapsed
+        applyBallVisual(collapsed)
         // 乐观置位：addView 返回时窗口已登记，首次遍历（附着回调）还没跑完，
         // 这一小段空窗期不能把刚挂上的球误判成陈旧视图。
         ballAttached = true
+        if (!collapsed) scheduleCollapse()
         return true
     }
 
     private fun detachBall() {
+        cancelCollapse()
         cancelBallGesture()
         ballGestures = null
         ballView?.let { view ->
@@ -469,6 +525,8 @@ class OverlayBallService : Service() {
             runCatching { windowManager.removeView(view) }
         }
         ballView = null
+        ballLineView = null
+        dragPreview = false
     }
 
     /**
@@ -476,13 +534,14 @@ class OverlayBallService : Service() {
      *
      * 点按、长按和拖动阈值交给 Android GestureDetector，窗口位置按显示帧合并。
      */
-    private fun handleTouch(event: MotionEvent, size: Int): Boolean {
+    private fun handleTouch(event: MotionEvent, viewWidth: Int, viewHeight: Int): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 // 运行期复查权限：球还在屏幕上、用户仍然点得到，说明权限可能是在本服务运行期间
                 // 被撤销的（部分 ROM 不杀进程也不摘窗口）。此时立即收尾并吞掉本次触摸，
                 // 不留「球还在、通知也在」的假象。
                 if (stopIfOverlayPermissionRevoked()) return true
+                cancelCollapse()
                 cancelBallGesture()
                 gestureCancelled = false
                 touchStartX = event.rawX
@@ -503,7 +562,7 @@ class OverlayBallService : Service() {
             val (x, y) = OverlayBallPolicy.clampPosition(
                 initialX + (event.rawX - touchStartX).toInt(),
                 initialY + (event.rawY - touchStartY).toInt(),
-                metrics.widthPixels, metrics.heightPixels, size,
+                metrics.widthPixels, metrics.heightPixels, viewWidth, viewHeight,
             )
             ballPositionUpdates.moveTo(x, y)
             if (event.actionMasked == MotionEvent.ACTION_UP) {
@@ -516,12 +575,110 @@ class OverlayBallService : Service() {
     private fun finishBallDrag() {
         if (!dragInProgress) return
         ballPositionUpdates.flush()
+        dragPreview = false
         val x = OverlayBallPolicy.snapToEdge(
             layoutParams.x, resources.displayMetrics.widthPixels, layoutParams.width,
         )
         updateBallPosition(x, layoutParams.y)
-        preferences.writePosition(layoutParams.x, layoutParams.y)
+        setBallCollapsed(true)
         dragInProgress = false
+    }
+
+    /**
+     * 细线与圆球共用同一个根视图：收起时隐藏图标、显示内部 8×74dp 细线；
+     * 展开时恢复圆球背景与图标。窗口热区由 [layoutParams] 决定，不随视觉宽度缩小。
+     */
+    private fun configureBallView(view: View, collapsed: Boolean) {
+        val icon = (view as? android.view.ViewGroup)?.getChildAt(0)
+        val line = ballLineView
+        if (icon != null) icon.visibility = if (collapsed) View.GONE else View.VISIBLE
+        if (line != null) {
+            line.visibility = if (collapsed) View.VISIBLE else View.GONE
+            if (collapsed) {
+                val visual = if (dragPreview) dp(DRAG_PREVIEW_DP) else dp(LINE_WIDTH_DP)
+                val visualHeight = if (dragPreview) dp(DRAG_PREVIEW_DP) else dp(LINE_HEIGHT_DP)
+                line.layoutParams = FrameLayout.LayoutParams(visual, visualHeight, edgeGravity())
+                (line.background as? GradientDrawable)?.apply {
+                    cornerRadius = visual / 2f
+                    setColor(overlayColor(R.color.overlay_line))
+                }
+            }
+        }
+        if (collapsed) {
+            view.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+        } else {
+            view.background = overlayPalette().getDrawable(R.drawable.bg_overlay_ball)
+        }
+        view.contentDescription = overlayString(R.string.overlay_ball_content_description)
+    }
+
+    private fun applyBallVisual(collapsed: Boolean) {
+        val view = ballView ?: return
+        configureBallView(view, collapsed)
+    }
+
+    private fun lineBackground(): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(LINE_WIDTH_DP) / 2f
+        setColor(overlayColor(R.color.overlay_line))
+    }
+
+    private fun edgeGravity(): Int {
+        val right = if (this::layoutParams.isInitialized) {
+            layoutParams.x + layoutParams.width / 2 >= resources.displayMetrics.widthPixels / 2
+        } else {
+            true
+        }
+        return (if (right) Gravity.END else Gravity.START) or Gravity.CENTER_VERTICAL
+    }
+
+    private fun showDragPreview() {
+        if (!ballCollapsed) return
+        dragPreview = true
+        applyBallVisual(true)
+    }
+
+    /**
+     * 切换细线/圆球。收起后窗口仍保留 44dp 触摸宽度，视觉细线只占 8dp。
+     * 展开后 3 秒无操作会自动收回细线；状态写入偏好，服务重启后沿用。
+     */
+    private fun setBallCollapsed(collapsed: Boolean, persist: Boolean = true) {
+        val view = ballView ?: return
+        cancelCollapse()
+        val metrics = resources.displayMetrics
+        val centerX = layoutParams.x + layoutParams.width / 2
+        val centerY = layoutParams.y + layoutParams.height / 2
+        val right = centerX * 2 >= metrics.widthPixels
+        val newWidth = if (collapsed) dp(TOUCH_TARGET_DP) else dp(BALL_SIZE_DP)
+        val newHeight = if (collapsed) dp(LINE_HEIGHT_DP) else dp(BALL_SIZE_DP)
+        layoutParams.width = newWidth
+        layoutParams.height = newHeight
+        layoutParams.x = if (right) {
+            (metrics.widthPixels - newWidth).coerceAtLeast(0)
+        } else {
+            0
+        }
+        layoutParams.y = (centerY - newHeight / 2).coerceIn(
+            0,
+            (metrics.heightPixels - newHeight).coerceAtLeast(0),
+        )
+        ballCollapsed = collapsed
+        dragPreview = false
+        applyBallVisual(collapsed)
+        runCatching { windowManager.updateViewLayout(view, layoutParams) }
+        preferences.writePosition(layoutParams.x, layoutParams.y)
+        if (persist) preferences.writeCollapsed(collapsed)
+        if (!collapsed) scheduleCollapse()
+        layoutSecondaryChoices()
+    }
+
+    private fun scheduleCollapse() {
+        mainHandler.removeCallbacks(collapseRunnable)
+        if (!ballCollapsed) mainHandler.postDelayed(collapseRunnable, AUTO_COLLAPSE_MS)
+    }
+
+    private fun cancelCollapse() {
+        mainHandler.removeCallbacks(collapseRunnable)
     }
 
     private fun cancelBallGesture() {
@@ -1049,10 +1206,7 @@ class OverlayBallService : Service() {
 
     /** 在原视图上刷新，不销毁 WebView、认证会话或尚未提交的对话输入。 */
     private fun refreshVisibleAppearance() {
-        ballView?.apply {
-            background = overlayPalette().getDrawable(R.drawable.bg_overlay_ball)
-            contentDescription = overlayString(R.string.overlay_ball_content_description)
-        }
+        applyBallVisual(ballCollapsed)
         (conversationView?.background as? GradientDrawable)?.setColor(overlayColor(R.color.overlay_panel_background))
         fun refresh(view: View) {
             if (view is TextView) {
@@ -1082,6 +1236,7 @@ class OverlayBallService : Service() {
         runCatching {
             ensureNotificationChannel()
             if (isRunning) getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
+            if (isRunning) BackgroundNotificationGroup.sync(this)
         }
     }
 
@@ -1304,6 +1459,8 @@ class OverlayBallService : Service() {
             secondaryViews += view
         }
         layoutSecondaryChoices()
+        // 菜单开着时不让 3 秒计时把按钮收走；等菜单关闭/选择后再重新计时。
+        cancelCollapse()
     }
 
     private fun buildSecondaryChoice(
@@ -1339,6 +1496,7 @@ class OverlayBallService : Service() {
                 // 点完先收起：动作本身可能让球消失（隐藏球）或让应用切到前台，
                 // 留着展开态只会出现「球没了、按钮还在」。
                 detachSecondaryChoices()
+                setBallCollapsed(true)
                 onSecondaryChoice(choice)
             }
         }
@@ -1492,6 +1650,8 @@ class OverlayBallService : Service() {
             runCatching { windowManager.removeView(view) }
         }
         secondaryViews.clear()
+        // 菜单关闭后重新开始 3 秒计时；菜单重新展开时 showSecondaryChoices 会取消它。
+        if (ballView != null && !ballCollapsed) scheduleCollapse()
     }
 
     private fun secondaryParams(x: Int, y: Int, size: Int): WindowManager.LayoutParams =
@@ -1596,12 +1756,15 @@ class OverlayBallService : Service() {
                     DiagnosticEvent.KEEP_ALIVE,
                     mapOf("reason" to "overlay_foreground_failed", "active" to "false"),
                 )
+            } else {
+                BackgroundNotificationGroup.sync(this)
             }
         }
     }
 
     private fun stopForegroundCompat() {
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        BackgroundNotificationGroup.sync(this)
     }
 
     /** 通知只使用固定资源文案，在锁屏与通知栏都不会泄露用户数据。 */
@@ -1621,6 +1784,7 @@ class OverlayBallService : Service() {
             .setContentIntent(openApp)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setGroup(BackgroundNotificationGroup.GROUP_KEY)
             .setOngoing(true)
             .setSilent(true)
             .setShowWhen(false)
@@ -1663,6 +1827,11 @@ class OverlayBallService : Service() {
         private const val CHANNEL_ID = "harness_overlay_ball"
         private const val NOTIFICATION_ID = 0x44534802
         private const val BALL_SIZE_DP = 48
+        private const val LINE_WIDTH_DP = 8
+        private const val LINE_HEIGHT_DP = 74
+        private const val TOUCH_TARGET_DP = 44
+        private const val DRAG_PREVIEW_DP = 28
+        private const val AUTO_COLLAPSE_MS = 3_000L
         private const val DEFAULT_MARGIN_DP = 12
         private const val MENU_TEXT_SIZE_SP = 15f
 

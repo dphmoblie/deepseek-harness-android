@@ -126,6 +126,10 @@
     <!-- 任務通知（登記冊 §5.5）。與保活通知分開一個通道：保活必須常駐靜默，任務通知的價值在於離開應用程式後仍能得知，兩者的使用者預期相反。文案刻意不說「正在執行中」這類無法證實的話，只陳述已發生的事。 -->
     <string name="task_notification_channel_name">執行狀態提醒</string>
     <string name="task_notification_channel_description">本機 Harness 停止、啟動失敗或裝置服務連線失敗時提醒你</string>
+    <string name="background_notification_channel_name">背景通知</string>
+    <string name="background_notification_channel_description">任務、保活與副屏合併為一則</string>
+    <string name="background_notification_summary_title">%1$d 則背景通知</string>
+    <string name="background_notification_summary_text">任務、保活與副屏已合併；點按查看詳情</string>
     <string name="task_notification_stopped_title">Harness 已停止</string>
     <string name="task_notification_stopped_text">本機執行環境已自行結束，點按返回應用程式查看</string>
     <string name="task_notification_failed_title">Harness 未能啟動</string>

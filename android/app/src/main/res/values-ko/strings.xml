@@ -138,6 +138,10 @@
     -->
     <string name="task_notification_channel_name">실행 상태 알림</string>
     <string name="task_notification_channel_description">로컬 Harness가 멈추거나 시작에 실패하거나 기기 서비스 연결이 끊기면 알려줍니다</string>
+    <string name="background_notification_channel_name">백그라운드 알림</string>
+    <string name="background_notification_channel_description">작업, 상주, 가상 디스플레이를 하나로 묶습니다</string>
+    <string name="background_notification_summary_title">%1$d개의 백그라운드 알림</string>
+    <string name="background_notification_summary_text">작업, 상주, 가상 디스플레이가 하나로 묶였습니다. 탭하여 자세히 보기</string>
     <string name="task_notification_stopped_title">Harness 중지됨</string>
     <string name="task_notification_stopped_text">로컬 실행 환경이 스스로 종료되었습니다. 탭하여 앱으로 돌아가 확인하세요.</string>
     <string name="task_notification_failed_title">Harness 시작 실패</string>

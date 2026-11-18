@@ -136,6 +136,7 @@ internal object TaskLiveNotificationCompat {
             .setTimeoutAfter(spec.timeoutAfterMs)
             .setUsesChronometer(true)
             .setWhen(spec.whenMs)
+            .setGroup(BackgroundNotificationGroup.GROUP_KEY)
             .addExtras(Bundle().apply {
                 putBoolean(TaskLivePromotionPolicy.EXTRA_REQUEST_PROMOTED_ONGOING, true)
                 putString(TaskLivePromotionPolicy.EXTRA_SHORT_CRITICAL_TEXT, shortStatus)
@@ -174,7 +175,8 @@ internal object TaskLiveNotificationCompat {
             .setProgress(0, 0, true)
             .setTimeoutAfter(spec.timeoutAfterMs)
             .setUsesChronometer(true)
-            .setWhen(spec.whenMs),
+            .setWhen(spec.whenMs)
+            .setGroup(BackgroundNotificationGroup.GROUP_KEY),
         spec.shortStatus,
     ).build()
 
