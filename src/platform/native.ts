@@ -50,6 +50,7 @@ import {
   assertRuntimeVersionPinTarget,
   assertSessionId,
   assertStorageDirPath,
+  assertStorageGuestPath,
   assertTerminalKind,
   assertTerminalSize,
   assertVirtualScreenSettingsUpdate,
@@ -257,8 +258,13 @@ interface NativeRuntimePlugin {
   getStorageAccessState(): Promise<unknown>
   requestMediaPermission(): Promise<unknown>
   openAllFilesAccessSettings(): Promise<unknown>
-  importMailbox(): Promise<unknown>
-  exportMailbox(options: { subdirectory?: string; destinationDirectory?: string }): Promise<unknown>
+  importMailbox(options?: { root?: MailboxRoot; guestPath?: string; sourceDirectory?: string }): Promise<unknown>
+  exportMailbox(options: {
+    subdirectory?: string
+    destinationDirectory?: string
+    root?: MailboxRoot
+    guestPath?: string
+  }): Promise<unknown>
   storageDirsState(): Promise<unknown>
   addStorageDirectory(): Promise<unknown>
   removeStorageDirectory(options: { path: string }): Promise<unknown>
@@ -603,14 +609,35 @@ function createNativeBridge(): RuntimeBridge {
     getStorageAccessState: () => NativeRuntime.getStorageAccessState().then(validateStorageAccessState),
     requestMediaPermission: () => NativeRuntime.requestMediaPermission().then(validateMediaPermissionResult),
     openAllFilesAccessSettings: () => NativeRuntime.openAllFilesAccessSettings().then(validateAllFilesAccessResult),
-    importMailbox: () => NativeRuntime.importMailbox().then(validateMailboxImportResult),
+    importMailbox: options => {
+      const guestPath = assertStorageGuestPath(options?.guestPath)
+      const sourceDirectory = assertMailboxSubdirectory(options?.sourceDirectory)
+      const root = options?.root
+      if (root !== undefined && root !== 'inbox' && root !== 'outbox') {
+        throw new Error('投递区根目录格式无效')
+      }
+      const payload = {
+        ...(root === undefined ? {} : { root }),
+        ...(guestPath === undefined ? {} : { guestPath }),
+        ...(sourceDirectory === undefined ? {} : { sourceDirectory }),
+      }
+      return (Object.keys(payload).length > 0 ? NativeRuntime.importMailbox(payload) : NativeRuntime.importMailbox())
+        .then(validateMailboxImportResult)
+    },
     // 导出起点先在前端拦一道明显非法的取值（绝对路径、`..`），原生侧还有同一套规则兜底。
-    exportMailbox: (subdirectory, destinationDirectory) => {
+    exportMailbox: (subdirectory, destinationDirectory, targetLocation) => {
       const target = assertMailboxSubdirectory(subdirectory)
       const destination = assertMailboxSubdirectory(destinationDirectory)
+      const guestPath = assertStorageGuestPath(targetLocation?.guestPath)
+      const root = targetLocation?.root
+      if (root !== undefined && root !== 'inbox' && root !== 'outbox') {
+        throw new Error('投递区根目录格式无效')
+      }
       return NativeRuntime.exportMailbox({
         ...(target === undefined ? {} : { subdirectory: target }),
         ...(destination === undefined ? {} : { destinationDirectory: destination }),
+        ...(root === undefined ? {} : { root }),
+        ...(guestPath === undefined ? {} : { guestPath }),
       })
         .then(validateMailboxExportResult)
     },

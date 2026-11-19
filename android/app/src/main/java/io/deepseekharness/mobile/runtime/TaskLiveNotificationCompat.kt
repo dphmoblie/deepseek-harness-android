@@ -136,7 +136,9 @@ internal object TaskLiveNotificationCompat {
             .setTimeoutAfter(spec.timeoutAfterMs)
             .setUsesChronometer(true)
             .setWhen(spec.whenMs)
-            .setGroup(BackgroundNotificationGroup.GROUP_KEY)
+            // 进行中通知请求系统提升为独立实况节点，刻意不加入 BackgroundNotificationGroup：
+            // 在 Android 16/17 部分 ROM（如 Honor SystemUI）上，既请求 PromotedOngoing 又挂进组摘要
+            // 会触发 ShadeViewDiffer.registerNodes 报 DuplicateNodeException 并连环崩溃。
             .addExtras(Bundle().apply {
                 putBoolean(TaskLivePromotionPolicy.EXTRA_REQUEST_PROMOTED_ONGOING, true)
                 putString(TaskLivePromotionPolicy.EXTRA_SHORT_CRITICAL_TEXT, shortStatus)
@@ -175,8 +177,7 @@ internal object TaskLiveNotificationCompat {
             .setProgress(0, 0, true)
             .setTimeoutAfter(spec.timeoutAfterMs)
             .setUsesChronometer(true)
-            .setWhen(spec.whenMs)
-            .setGroup(BackgroundNotificationGroup.GROUP_KEY),
+            .setWhen(spec.whenMs),
         spec.shortStatus,
     ).build()
 

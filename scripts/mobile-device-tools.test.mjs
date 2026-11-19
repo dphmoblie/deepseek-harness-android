@@ -680,3 +680,112 @@ test('回退组合信号仍然跟着会话取消中止请求', async t => {
   controller.abort()
   assert.equal(seen[0].aborted, true)
 })
+
+test('AI 主动启动副屏支持可选同步等待、切换与悬浮窗预览参数，并渲染就绪摘要', async t => {
+  const readyPayload = JSON.stringify({
+    action: 'start',
+    state: 'active',
+    ready: true,
+    sessionId: virtualSession,
+    displayId: 7,
+    targetPackage: 'com.example.quiz',
+    treeSupported: true,
+    elementCount: 12,
+  })
+  const f = fixture(t, () => ok(readyPayload))
+  const start = f.tools.get('mobile_virtual_screen_start')
+  const result = await start.execute({
+    packageName: 'com.example.quiz',
+    waitReadyMs: 5000,
+    switchIfActive: true,
+    showOverlay: true,
+  }, {})
+  assert.deepEqual(JSON.parse(f.requests[0].param), {
+    packageName: 'com.example.quiz',
+    waitReadyMs: 5000,
+    switchIfActive: true,
+    showOverlay: true,
+  })
+  const rendered = start.output.render({}, result)[0].text
+  assert.match(rendered, /副屏已就绪.*displayId=7/u)
+  assert.match(rendered, /首屏 12 个语义控件/u)
+  for (const invalid of [
+    { packageName: 'com.example.quiz', waitReadyMs: -1 },
+    { packageName: 'com.example.quiz', waitReadyMs: 15001 },
+    { packageName: 'com.example.quiz', switchIfActive: 'yes' },
+    { packageName: 'com.example.quiz', showOverlay: 1 },
+  ]) {
+    await assert.rejects(start.execute(invalid, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
+  }
+})
+
+test('副屏无 OCR 语义树 compact 模式、语义控件动作与内联 Diff 渲染契约', async t => {
+  const actionPayload = JSON.stringify({
+    ok: true,
+    action: 'node_click',
+    method: 'accessibility_node_click',
+    observe: {
+      source: 'accessibility_diff',
+      changed: true,
+      kind: 'delta',
+      addedCount: 1,
+      removedCount: 0,
+      updatedCount: 2,
+    },
+  })
+  const f = fixture(t, () => ok(actionPayload))
+  const tree = f.tools.get('mobile_virtual_screen_tree')
+  await tree.execute({ sessionId: virtualSession, compact: true }, {})
+  assert.deepEqual(JSON.parse(f.requests[0].param), {
+    sessionId: virtualSession,
+    action: 'tree',
+    maxDepth: 4,
+    compact: true,
+  })
+
+  const action = f.tools.get('mobile_virtual_screen_action')
+  const res = await action.execute({
+    sessionId: virtualSession,
+    action: 'node_click',
+    textContains: 'D. 无需另行告知',
+    matchIndex: 0,
+    observe: true,
+  }, {})
+  assert.deepEqual(JSON.parse(f.requests[1].param), {
+    sessionId: virtualSession,
+    action: 'node_click',
+    textContains: 'D. 无需另行告知',
+    matchIndex: 0,
+    observe: true,
+  })
+  const rendered = action.output.render({}, res)[0].text
+  assert.match(rendered, /无障碍结构 Diff：新增 1、移除 0、变更 2 处/u)
+
+  // node_scroll 可以不带选择器（滚动首个可滚动容器），也支持 direction。
+  await action.execute({ sessionId: virtualSession, action: 'node_scroll', direction: 'forward' }, {})
+  assert.deepEqual(JSON.parse(f.requests[2].param), {
+    sessionId: virtualSession,
+    action: 'node_scroll',
+    direction: 'forward',
+  })
+
+  // node_click 必须提供至少一个选择器；非法参数一律拒绝。
+  for (const invalid of [
+    { sessionId: virtualSession, action: 'node_click' },
+    { sessionId: virtualSession, action: 'node_click', text: '   ' },
+    { sessionId: virtualSession, action: 'node_click', text: 'ok', matchIndex: -1 },
+    { sessionId: virtualSession, action: 'node_scroll', direction: 'sideways' },
+  ]) {
+    await assert.rejects(action.execute(invalid, {}), /VIRTUAL_SCREEN_INVALID|invalid arguments/u)
+  }
+
+  // 无障碍关闭时的 tile_diff 同样直接渲染零 OCR 反馈摘要。
+  const tileRendered = action.output.render({}, {
+    ok: true,
+    output: JSON.stringify({
+      observe: { source: 'tile_diff', changed: true, kind: 'delta', changeRatio: 0.125 },
+    }),
+    truncated: false,
+  })[0].text
+  assert.match(tileRendered, /tile_diff，变化占比 12\.5%/u)
+})

@@ -52,7 +52,7 @@ export function AppOrientationSettings() {
   return <section className="settings-section" aria-labelledby="app-orientation-title">
     <div className="section-title">
       <span className="section-icon"><RotateCw size={19} /></span>
-      <div><h2 id="app-orientation-title">{t('应用方向')}</h2><p>{t('管理页、终端和 Harness 对话使用同一方向，选择后立即生效并保存。')}</p></div>
+      <div><h2 id="app-orientation-title">{t('应用方向')}</h2><p>{t('统一控制应用方向，选择后立即生效')}</p></div>
     </div>
     <div className="appearance-options" role="radiogroup" aria-label={t('应用方向')} aria-busy={saving || (mode === null && !error)}>
       {OPTIONS.map(option => <label key={option.mode} className={mode === option.mode ? 'appearance-option active' : 'appearance-option'}>
@@ -60,7 +60,6 @@ export function AppOrientationSettings() {
         <span>{t(option.label)}</span>
       </label>)}
     </div>
-    <p className="settings-note">{t('“跟随系统”遵循手机的自动旋转设置；选择横屏或竖屏可固定本应用的方向。')}</p>
     {mode === null && !error && <p role="status">{t('正在读取应用方向…')}</p>}
     {saving && <p role="status">{t('正在切换方向…')}</p>}
     {error && <p role="alert">{t(error)}</p>}

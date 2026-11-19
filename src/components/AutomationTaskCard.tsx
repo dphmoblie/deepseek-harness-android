@@ -88,7 +88,7 @@ export function AutomationTaskCard({ bridge = runtimeBridge }: { bridge?: Runtim
   return <div className="settings-subsection" aria-labelledby="automation-task">
     <div className="section-title"><span className="section-icon"><ListChecks size={19} /></span>
       <div><h3 id="automation-task">{t('自动化任务')}</h3>
-        <p>{t('这里显示 AI 当前执行的任务；如果暂时无法读取，会明确提示。你也可以随时在此停止任务。')}</p></div>
+        <p>{t('查看 AI 当前自动化任务并支持随时停止')}</p></div>
     </div>
     {!loaded && !failed && <p className="settings-note">{t('正在读取当前任务…')}</p>}
     {ready && !state.connected && <>

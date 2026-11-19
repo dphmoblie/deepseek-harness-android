@@ -44,7 +44,7 @@ export function LanguageSettings({ initial = false }: { initial?: boolean }) {
       <Languages size={28} aria-hidden="true" />
       <div className="language-copy">
         <h2 id="language-title">{initial ? '选择语言 / Choose your language' : t('界面语言')}</h2>
-        <p>{initial ? '请选择应用语言，之后可在设置中更改。' : t('立即生效，下次打开仍使用此语言。')}</p>
+        <p>{initial ? '请选择应用语言，之后可在设置中更改。' : t('立即生效并保存')}</p>
         {initial && (
           <p>
             <span lang="zh-TW">請選擇應用程式語言，之後可在設定中變更。</span>

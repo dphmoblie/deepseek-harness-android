@@ -168,7 +168,7 @@ export function RuntimeVersionsPanel({
         <span className="section-icon"><HardDrive size={19} /></span>
         <div>
           <h2 id="runtime-versions-title">{t("运行时版本管理")}</h2>
-          <p>{t("当前使用的运行时、保留下来的上一版本，以及随安装包内置的版本。装新版本仍在运行环境页：内置更新，或填写 manifest 地址与 SHA-256。")}</p>
+          <p>{t("管理当前、上一版与内置运行时（安装新版请在运行环境页）")}</p>
         </div>
       </div>
 
@@ -210,7 +210,7 @@ export function RuntimeVersionsPanel({
       {!loading && !failed && (
         <>
           <p className="settings-note">
-            {t("上一版本是上一次安装时保留下来的完整副本，切换与删除都只动它。删除后无法恢复，也不再占用磁盘。")}
+            {t("切换或删除仅操作上一版副本，删除后不可恢复")}
           </p>
           {phaseBlocked && versions?.canSwitch === true && (
             <p className="settings-note">{t("运行中不能切换版本：请先停止运行环境与 Ubuntu 终端。")}</p>
@@ -268,7 +268,7 @@ export function RuntimeVersionsPanel({
             <p className="settings-note">{t("删除上一版本会永久删掉这份副本，无法撤销；当前使用的版本不受影响。")}</p>
           )}
           {versions !== null && !versions.canSwitch && !versions.canDelete && (
-            <p className="settings-note">{t("现在没有可切换的上一版本：安装一次新版本后才会保留。")}</p>
+            <p className="settings-note">{t("暂无上一版本，安装新版后自动保留")}</p>
           )}
         </>
       )}

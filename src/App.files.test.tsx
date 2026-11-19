@@ -12,12 +12,12 @@ vi.mock('./components/TerminalPanel', () => ({
 import { App } from './App'
 
 /**
- * 「文件管理」一级页：把投递区与共享目录收敛到**同一个浏览器**，但协议动作仍然只属于投递区。
+ * 「文件管理」一级页：把投递区与共享目录统一到两张同款卡片，并实际合并工作区导入/导出功能。
  *
- * 这一组的判据是那三条边界（用户认可的方向，ref m01855）：
- *   ① 浏览层只有一个：一个根选择器、一份面包屑、一份条目列表，两类根共用；
- *   ② 「导入到工作区」「导出工作区」只在浏览投递区根时出现，进了共享目录必须消失；
- *   ③ 底层两条链路不串：投递区走 createMailboxFolder，共享目录走 createStorageFolder。
+ * 这一组的判据：
+ *   ① 卡片元素统一：外层只有两张 `files-card`（`外部文件与工作区` 与 `挂载目录`），权限入口全页只有一份；
+ *   ② 功能真正合并：浏览投递区根（inbox/outbox）和浏览共享目录（`/mnt/user/<N>` 及子目录）都能直接导入/导出工作区归档；
+ *   ③ 底层目录创建不串：投递区走 createMailboxFolder，共享目录走 createStorageFolder。
  */
 
 /** 白名单状态夹具；`count`/`level`/`active` 从其余字段推导，手写等于埋一个非法载荷。 */
@@ -62,9 +62,9 @@ describe('文件管理（投递区与共享目录同一个浏览器）', () => {
     await waitFor(() => expect(bridge.getStorageDirs).toHaveBeenCalledTimes(1))
     await openFilesPage()
 
-    // 标题与页首说明：这一页的存在理由要写在最前面。
+    // 标题与统一卡片结构：只有两张统一卡片（外部文件与工作区、挂载目录）。
     expect(screen.getByRole('heading', { level: 1, name: '文件管理' })).toBeVisible()
-    expect(screen.getByText(/这里的目录都是访客能看到的/)).toBeVisible()
+    expect(screen.getByText(/这里的目录都挂载在访客中/)).toBeVisible()
 
     // 只有一个浏览器：投递区两个根 + 每条共享目录一个根，全在同一组标签页里。
     const tablists = screen.getAllByRole('tablist')
@@ -72,9 +72,12 @@ describe('文件管理（投递区与共享目录同一个浏览器）', () => {
     const tabs = within(tablists[0]).getAllByRole('tab').map(tab => tab.textContent)
     expect(tabs).toEqual(['inbox · 用户放入', 'outbox · 产物取出', 'DSH-1'])
 
-    // 两类根各自的专属区块都在：浏览层合并了，语义没有合并。
-    expect(screen.getByRole('region', { name: '搬运' })).toBeVisible()
-    expect(screen.getByRole('region', { name: '目录' })).toBeVisible()
+    // 两张统一卡片都在：内置投递目录与共享目录在「挂载目录」中复用同款条目元素。
+    expect(screen.getByRole('region', { name: '外部文件与工作区' })).toBeVisible()
+    const mountedCard = screen.getByRole('region', { name: '挂载目录' })
+    expect(mountedCard).toBeVisible()
+    expect(within(mountedCard).getAllByText('内置')).toHaveLength(2)
+    expect(within(mountedCard).getAllByText('共享')).toHaveLength(1)
 
     // 返回键回到设置首页（它是一级页，不是设置里的二级页）。
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
@@ -82,34 +85,78 @@ describe('文件管理（投递区与共享目录同一个浏览器）', () => {
     expect(screen.queryByRole('heading', { level: 1, name: '文件管理' })).toBeNull()
   })
 
-  it('搬运按钮只在投递区根上出现，进共享目录就消失', async () => {
+  it('投递区与共享目录合并支持工作区导入和导出，并在共享目录子目录生效', async () => {
     bridge.getMailboxState.mockResolvedValue({ ...availableMailbox })
     bridge.getStorageAccessState.mockResolvedValue({ ...storageAccess, allFilesGranted: true })
     bridge.getStorageDirs.mockResolvedValue(dirsState([dirEntry()]))
+    bridge.getStorageDirectory.mockImplementation((guestPath: string, subdirectory?: string) => Promise.resolve({
+      guestPath,
+      path: subdirectory,
+      entries: subdirectory === undefined
+        ? [
+          { name: 'backup', kind: 'directory' as const, bytes: 0 },
+          { name: 'shared.tar', kind: 'file' as const, bytes: 4096 },
+        ]
+        : [{ name: 'nested.tar', kind: 'file' as const, bytes: 2048 }],
+      truncated: false,
+    }))
+    bridge.importMailbox.mockResolvedValue({
+      entryCount: 4,
+      fileCount: 3,
+      directoryCount: 1,
+      symlinkCount: 0,
+      hardlinkCount: 0,
+      bytes: 2048,
+      tarName: 'nested.tar',
+      tarBytes: 2048,
+      verified: true,
+      manifestName: 'dsh-workspace.manifest.json',
+      ignoredFiles: 0,
+      target: 'mailbox-import',
+    })
+    bridge.exportMailbox.mockResolvedValue({
+      entryCount: 6,
+      bytes: 8192,
+      tarName: 'dsh-workspace.tar',
+      tarBytes: 10240,
+      tarSha256: 'c'.repeat(64),
+      manifestName: 'dsh-workspace.manifest.json',
+      destinationDirectory: 'backup',
+      skippedLinks: 0,
+      skippedSpecial: 0,
+    })
 
     render(<App />)
     await waitFor(() => expect(bridge.getStorageDirs).toHaveBeenCalledTimes(1))
     await openFilesPage()
 
-    // 默认根是投递区 inbox：协议动作在这里。
-    expect(await screen.findByRole('button', { name: /导入到工作区/ })).toBeVisible()
-    expect(screen.getByRole('button', { name: /导出工作区/ })).toBeVisible()
+    // 默认根是投递区 inbox：工作区导入/导出可用。
+    expect(await screen.findByRole('button', { name: /导入到工作区/ })).toBeEnabled()
+    expect(screen.getByRole('button', { name: /导出工作区/ })).toBeEnabled()
 
+    // 切到共享目录 DSH-1 并进入子目录 backup：同样显示可导入 tar，且导入/导出直接面向该共享目录。
     fireEvent.click(screen.getByRole('tab', { name: 'DSH-1' }))
     await waitFor(() => expect(bridge.getStorageDirectory).toHaveBeenCalledWith('/mnt/user/1', undefined))
+    expect(await screen.findByText(/可导入的 tar：shared\.tar/)).toBeVisible()
 
-    // 共享目录是实时挂载：没有搬运这一步，按钮就不能摆在这里。
-    expect(screen.queryByRole('button', { name: /导入到工作区/ })).toBeNull()
-    expect(screen.queryByRole('button', { name: /导出工作区/ })).toBeNull()
-    expect(screen.queryByRole('button', { name: /导出到当前目录/ })).toBeNull()
-    expect(screen.queryByRole('region', { name: '搬运' })).toBeNull()
-    // 但白名单管理仍然在这一页：发现目录不在列表里时不用跳回另一页。
-    expect(screen.getByRole('region', { name: '目录' })).toBeVisible()
-    expect(screen.getByRole('button', { name: /添加目录/ })).toBeVisible()
+    fireEvent.click(screen.getByText('backup'))
+    await waitFor(() => expect(bridge.getStorageDirectory).toHaveBeenCalledWith('/mnt/user/1', 'backup'))
+    expect(await screen.findByText(/可导入的 tar：nested\.tar/)).toBeVisible()
 
-    // 切回投递区，按钮回来。
-    fireEvent.click(screen.getByRole('tab', { name: /inbox · 用户放入/ }))
-    expect(await screen.findByRole('button', { name: /导入到工作区/ })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: /导入到工作区/ }))
+    await waitFor(() => expect(bridge.importMailbox).toHaveBeenCalledWith({
+      guestPath: '/mnt/user/1',
+      sourceDirectory: 'backup',
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: /导出到当前目录/ }))
+    await waitFor(() => expect(bridge.exportMailbox).toHaveBeenCalledWith(
+      undefined,
+      'backup',
+      { guestPath: '/mnt/user/1' },
+    ))
+    // 导出后自动刷新当前共享目录列表，让新生成的 tar 立即可见。
+    await waitFor(() => expect(bridge.getStorageDirectory).toHaveBeenCalledTimes(3))
   })
 
   it('共享目录用同一套面包屑与条目列表进入子目录', async () => {

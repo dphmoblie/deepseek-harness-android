@@ -35,12 +35,24 @@ internal class VirtualScreenPreviewPump(
      */
     private var beatStarted = false
 
+    /** 当前是否有一拍正在后台取帧途中：在途时 [nudge] 只记待加速标记，不重复排并发拍子。 */
+    private var inFlight = false
+
+    /** 在途期间收到交互提醒：本拍落地后立刻按最短安全间隔续排下一拍。 */
+    private var nudgePending = false
+
+    /** 交互突发窗口截止时刻（单调时钟毫秒）：窗口内低帧率档位临时提速到 60fps 上限。 */
+    private var burstUntilMillis = 0L
+
     /** 开始取帧：投递首拍，只有首次返回 true —— 重挂或重复调用不会复制出第二条拍子。 */
     fun start(): Boolean {
         if (running) return false
         running = true
         startedAtMillis = 0L
         beatStarted = false
+        inFlight = false
+        nudgePending = false
+        burstUntilMillis = 0L
         // 首拍等价于原来的 `Handler.post(tick)`：Handler 里 post(r) 就是 postDelayed(r, 0)。
         postDelayed(0L, beat)
         return true
@@ -49,13 +61,39 @@ internal class VirtualScreenPreviewPump(
     /** 停止取帧：取消排队中的那一拍，之后本拍落地不再续排。 */
     fun stop() {
         running = false
+        inFlight = false
+        nudgePending = false
+        burstUntilMillis = 0L
         removeCallbacks(beat)
+    }
+
+    /**
+     * 交互触发的即时拉帧提醒（由触摸/点击/滑动落地后在主线程调用）。
+     *
+     * 若当前正处于拍间休眠（例如 `limited` 档 180ms 等待中），立即取消长等待并改按安全下限
+     * [VirtualScreenPolicy.PREVIEW_PULL_FLOOR_MILLIS] 续排；若本拍正在后台取帧，则记下 [nudgePending]，
+     * 落地后立刻衔接下一拍，绝不制造重叠拍子。
+     */
+    fun nudge(burstMillis: Long = VirtualScreenCapturePacer.INTERACTIVE_BURST_MS): Boolean {
+        if (!running) return false
+        val current = now()
+        if (burstMillis > 0L) {
+            burstUntilMillis = maxOf(burstUntilMillis, current + burstMillis)
+        }
+        if (inFlight) {
+            nudgePending = true
+            return false
+        }
+        removeCallbacks(beat)
+        postDelayed(VirtualScreenPolicy.PREVIEW_PULL_FLOOR_MILLIS.toLong(), beat)
+        return true
     }
 
     /** 本拍开始：记下起始时刻并返回它（本拍的取帧与上屏耗时随后从这里扣）。 */
     fun fetchStarted(): Long {
         startedAtMillis = now()
         beatStarted = true
+        inFlight = true
         return startedAtMillis
     }
 
@@ -73,11 +111,24 @@ internal class VirtualScreenPreviewPump(
      *
      * 延迟 = [VirtualScreenPolicy.previewPullDelay]（即档位间隔减去本拍耗时，且不短于 1 毫秒）；
      * 本拍耗时超过档位间隔时不追赶积压：多花的时间从下一拍的等待里扣掉，不会连发补拍。
+     * 若本拍期间有交互提醒或在交互突发窗口内，自动把过长的休眠收窄，停止交互后平滑回落档位间隔。
      * 已经 [stop] 则不再投递，返回 0。
      */
     fun fetchLanded(mode: String): Long {
-        if (!running) return 0L
-        val delay = VirtualScreenPolicy.previewPullDelay(mode, now() - startedAtMillis)
+        inFlight = false
+        if (!running) {
+            nudgePending = false
+            return 0L
+        }
+        val baseDelay = VirtualScreenPolicy.previewPullDelay(mode, now() - startedAtMillis)
+        val delay = when {
+            nudgePending -> {
+                nudgePending = false
+                minOf(baseDelay, VirtualScreenPolicy.PREVIEW_PULL_FLOOR_MILLIS.toLong())
+            }
+            now() < burstUntilMillis -> minOf(baseDelay, VirtualScreenCapturePacer.INTERACTIVE_CAP_MS)
+            else -> baseDelay
+        }
         postDelayed(delay, beat)
         return delay
     }

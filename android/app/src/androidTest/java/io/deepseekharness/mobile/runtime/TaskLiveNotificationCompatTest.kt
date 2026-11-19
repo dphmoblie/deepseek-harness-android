@@ -10,6 +10,7 @@ import io.deepseekharness.mobile.KeepAliveEntryActivity
 import io.deepseekharness.mobile.R
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -73,6 +74,7 @@ class TaskLiveNotificationCompatTest {
         assertTrue(notification.flags and Notification.FLAG_ONGOING_EVENT != 0)
         assertEquals(Notification.CATEGORY_PROGRESS, notification.category)
         assertEquals(contentIntent, notification.contentIntent)
+        assertNull(notification.group)
         if (android.os.Build.VERSION.SDK_INT >= TaskLivePromotionPolicy.ANDROID_16_API_LEVEL) {
             assertEquals(true, built.hasPromotableCharacteristics)
         } else {

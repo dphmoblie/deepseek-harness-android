@@ -163,7 +163,7 @@ export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate,
         <span className="section-icon"><Smartphone size={19} /></span>
         <div>
           <h2 id="app-update-title">{t("应用更新")}</h2>
-          <p>{t("这里更新的是应用本身（APK），更新后会连内置运行时一起换；只换运行时请用上面的运行环境更新。")}</p>
+          <p>{t("更新应用本体（APK）及内置运行时")}</p>
         </div>
       </div>
 
@@ -172,7 +172,7 @@ export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate,
       <label className="toggle-row">
         <span>
           <strong>{t("接收测试版本")}</strong>
-          <small>{t("开启后，更新检查会包含 -mobile 后缀的测试构建；关闭后只接收正式版更新。")}</small>
+          <small>{t("包含 -mobile 测试构建；关闭则仅检查正式版")}</small>
         </span>
         <input
           type="checkbox"
@@ -187,7 +187,7 @@ export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate,
       <label className="toggle-row">
         <span>
           <strong>{t("每日更新提醒")}</strong>
-          <small>{t("每天首次打开应用时提示一次；关闭后仍可手动检查更新。")}</small>
+          <small>{t("每日首次打开提示一次，关闭后仍可手动检查")}</small>
           {!reminderStorageAvailable && <small role="status">{t("提醒偏好或日期未能持久保存，重启后可能再次提醒。")}</small>}
         </span>
         <input type="checkbox" role="switch" aria-label={t("每日更新提醒")} checked={reminderEnabled} onChange={event => onReminderEnabledChange(event.target.checked)} />
@@ -228,11 +228,11 @@ export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate,
 
           {state.installAllowed
             ? (
-              <p className="settings-note">{t("下载完成后交给系统安装器安装：会跳到系统界面，需要你确认；装完应用会重启，当前对话会中断。")}</p>
+              <p className="settings-note">{t("下载完成后交给系统安装器安装，装完应用会重启")}</p>
             )
             : (
               <>
-                <p className="settings-note">{t("系统还没有允许本应用安装其它应用。下载可以照常进行，但安装前必须先去系统设置里打开「安装未知应用」。")}</p>
+                <p className="settings-note">{t("系统还没有允许本应用安装其它应用。请先开启「安装未知应用」")}</p>
                 <div className="settings-inline-actions">
                   <button
                     className="button button-secondary"
@@ -309,7 +309,7 @@ export function AppUpdateSection({ loadUpdate, setUpdateChannel, downloadUpdate,
             </div>
           )}
 
-          <p className="settings-note">{t("安装更新需要先下载一次：没下载就点安装，会提示先下载。下载只走 GitHub 发布页，校验不过不会安装。")}</p>
+          <p className="settings-note">{t("仅从 GitHub 发布页下载，先下载校验后再安装")}</p>
         </>
       )}
     </section>

@@ -235,7 +235,7 @@ export function HarnessLogPanel({ loadHarnessLog }: HarnessLogPanelProps) {
         <span className="section-icon"><ScrollText size={19} /></span>
         <span className="harness-log-heading">
           <strong id="harness-log-title">{t("运行日志（最近 {0}）", formatLogWindow(windowBytes))}</strong>
-          <small>{t("Harness 进程输出尾部，用于排查工具调用失败")}</small>
+          <small>{t("进程输出尾部，用于排查工具调用失败")}</small>
         </span>
         {open ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
       </button>
@@ -248,7 +248,7 @@ export function HarnessLogPanel({ loadHarnessLog }: HarnessLogPanelProps) {
         {open && (
         <>
           <p className="settings-note">
-            {t("这段内容来自 Harness 进程输出，可能包含会话内容，仅供排障；它只在设备界面里显示，不会写入诊断日志，是否随诊断日志导出由上方开关控制。")}
+            {t("仅本机查看，可能包含会话内容；是否随导出由上方开关控制")}
           </p>
 
           <LogWindowPicker options={HARNESS_LOG_WINDOW_OPTIONS} value={windowBytes} onChange={setWindowBytes} />
@@ -320,7 +320,7 @@ export function DiagnosticLogPanel({ loadDiagnosticLog }: DiagnosticLogPanelProp
         <span className="section-icon"><ScrollText size={19} /></span>
         <span className="harness-log-heading">
           <strong id="diagnostic-log-title">{t("诊断日志（最近 {0}）", formatLogWindow(windowBytes))}</strong>
-          <small>{t("应用内部状态码与计数，含启动失败原因码")}</small>
+          <small>{t("内部状态码、计数与启动失败原因")}</small>
         </span>
         {open ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
       </button>
@@ -329,7 +329,7 @@ export function DiagnosticLogPanel({ loadDiagnosticLog }: DiagnosticLogPanelProp
         {open && (
         <>
           <p className="settings-note">
-            {t("只包含应用内部的事件名、级别、状态码与计数，不含 URL、凭据、终端内容或用户数据；这里显示的是最近一段，导出会给出全部文件。")}
+            {t("仅含内部状态码与计数，不含隐私；导出可获取全部文件")}
           </p>
 
           <LogWindowPicker options={DIAGNOSTIC_LOG_WINDOW_OPTIONS} value={windowBytes} onChange={setWindowBytes} />

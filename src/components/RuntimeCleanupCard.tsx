@@ -144,7 +144,7 @@ export function RuntimeCleanupCard({ bridge = runtimeBridge }: { bridge?: Runtim
   return <section className="settings-section" aria-labelledby="runtime-cleanup">
     <div className="section-title section-title-plain">
       <div><h2 id="runtime-cleanup">{t('清理')}</h2>
-        <p>{t('清掉缓存与插件自己的数据；运行环境的数据在「重置运行环境」里处理。')}</p></div>
+        <p>{t('清理缓存与插件数据（重置环境请到运行时页）')}</p></div>
     </div>
     {!loaded && !failed && <p className="settings-note">{t('正在统计数据占用…')}</p>}
     {ready && running && <p className="settings-note"><strong>{t('运行时正在运行：请先停止 Harness 与 Ubuntu 终端再清理；正在使用的临时目录与插件数据不能删。')}</strong></p>}
@@ -167,7 +167,7 @@ export function RuntimeCleanupCard({ bridge = runtimeBridge }: { bridge?: Runtim
         aria-label={t('只清插件 {0} 的数据', pkg.id)}
         onClick={() => setPending({ tier: 'plugin', packageName: pkg.id })}>{t('只清这个插件')}</button>
     </p>)}
-    <p className="settings-note">{t('插件数据清理只清空插件自己的数据目录，插件本身仍然保留。')}</p>
+    <p className="settings-note">{t('仅清空插件数据目录，保留插件本体')}</p>
 
     {pending?.tier !== 'cache' && <button className="button button-secondary" type="button" disabled={!cacheReady || busy} onClick={() => setPending({ tier: 'cache' })}>{t('清理缓存')}</button>}
     {pending?.tier === 'cache' && <div role="alertdialog" aria-labelledby="runtime-cleanup-cache-confirm">

@@ -33,6 +33,7 @@ import io.deepseekharness.mobile.AppThemePreference
 import io.deepseekharness.mobile.R
 import io.deepseekharness.mobile.shizuku.DeviceCommandResult
 import io.deepseekharness.mobile.virtualscreen.VirtualScreenTextPolicy
+import io.deepseekharness.mobile.virtualscreen.VirtualScreenTreeDiff
 import io.deepseekharness.mobile.runtime.audit.AuditEvent
 import io.deepseekharness.mobile.runtime.audit.AuditResult
 import io.deepseekharness.mobile.runtime.audit.PrivateAuditLog
@@ -800,6 +801,207 @@ class DeepSeekAccessibilityService : AccessibilityService() {
             if (sent) "display=$displayId submitted=$chars" else "ACCESSIBILITY_IME_ENTER_REJECTED",
         )
         return sent
+    }
+
+    /** 副屏语义控件直接操作结果：成功时由无障碍直接执行，拒绝时附带实时 bounds 供上层做精准中心点回退。 */
+    internal data class DisplayNodeActionResult(
+        val found: Boolean,
+        val performed: Boolean,
+        val method: String,
+        val matchedText: String = "",
+        val matchedViewId: String = "",
+        val bounds: IntArray = intArrayOf(0, 0, 0, 0),
+        val centerX: Int = 0,
+        val centerY: Int = 0,
+        val errorCode: String? = null,
+        val reason: String? = null,
+    )
+
+    /**
+     * 在指定副屏 [displayId] 上按语义选择器直接执行 `node_click` / `node_long_click` / `node_scroll`。
+     *
+     * 安全边界与 [displayRootFor] / [writeTextOnDisplay] 完全一致：
+     * 只访问 `displayId > 0` 的窗口（绝不回退主屏），强制过锁屏、敏感窗口与动作频率限制并写审计。
+     */
+    @Synchronized
+    internal fun performNodeActionOnDisplay(
+        displayId: Int,
+        selector: VirtualScreenTreeDiff.NodeSelector,
+        action: String,
+        direction: String = "forward",
+    ): DisplayNodeActionResult {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || displayId <= 0) {
+            rejectWrite("ACCESSIBILITY_ACTION_INVALID")
+            return DisplayNodeActionResult(false, false, "none", errorCode = "VIRTUAL_SCREEN_INVALID", reason = "副屏显示编号无效")
+        }
+        if (isLockedOrScreenOff()) {
+            rejectWrite("ACCESSIBILITY_DEVICE_LOCKED")
+            return DisplayNodeActionResult(false, false, "none", errorCode = "VIRTUAL_SCREEN_LOCKED", reason = "设备已锁定或熄屏")
+        }
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastActionAt < ACTION_INTERVAL_MS) {
+            rejectWrite("ACCESSIBILITY_RATE_LIMITED")
+            return DisplayNodeActionResult(false, false, "none", errorCode = "VIRTUAL_SCREEN_BUSY", reason = "副屏操作过快，请稍候")
+        }
+        val root = displayWindowRoot(displayId) ?: run {
+            rejectWrite("ACCESSIBILITY_WINDOW_UNAVAILABLE")
+            return DisplayNodeActionResult(false, false, "none", errorCode = "VIRTUAL_SCREEN_NODE_NOT_FOUND", reason = "显示编号 $displayId 上没有可读取的窗口")
+        }
+        val released = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<AccessibilityNodeInfo, Boolean>())
+        fun release(node: AccessibilityNodeInfo?) {
+            if (node != null && released.add(node)) runCatching { node.recycle() }
+        }
+        var matched: AccessibilityNodeInfo? = null
+        val ancestors = ArrayList<AccessibilityNodeInfo>()
+        try {
+            if (containsSensitiveWindow(root)) {
+                rejectWrite("ACCESSIBILITY_SENSITIVE_WINDOW")
+                return DisplayNodeActionResult(false, false, "none", errorCode = "ACCESSIBILITY_SENSITIVE_WINDOW", reason = "检测到密码、验证码、支付或权限窗口，已拒绝操作")
+            }
+            matched = if (action == "node_scroll" && !selector.isValid()) {
+                findFirstScrollable(root, maxDepth = 24, maxVisited = 1200)
+            } else {
+                findMatchingNodeOnDisplay(root, selector, maxDepth = 24, maxVisited = 1200)
+            }
+            val foundNode = matched
+                ?: return DisplayNodeActionResult(
+                    found = false,
+                    performed = false,
+                    method = "none",
+                    errorCode = "VIRTUAL_SCREEN_NODE_NOT_FOUND",
+                    reason = "副屏当前窗口未找到匹配控件",
+                )
+            val matchedText = runCatching { foundNode.text?.toString().orEmpty().trim() }.getOrDefault("")
+            val matchedViewId = runCatching { foundNode.viewIdResourceName.orEmpty().trim() }.getOrDefault("")
+            // 若命中节点自身不可点/不可滚（例如选项行里的 TextView），向上找最近的可点/可滚父容器。
+            var actionable: AccessibilityNodeInfo = foundNode
+            val wantsScroll = action == "node_scroll"
+            val wantsLongClick = action == "node_long_click"
+            fun supports(node: AccessibilityNodeInfo): Boolean = when {
+                wantsScroll -> node.isScrollable
+                wantsLongClick -> node.isLongClickable
+                else -> node.isClickable
+            }
+            if (!supports(actionable)) {
+                var current: AccessibilityNodeInfo? = foundNode
+                for (hop in 0 until 6) {
+                    val parent = runCatching { current?.parent }.getOrNull() ?: break
+                    ancestors += parent
+                    if (supports(parent)) {
+                        actionable = parent
+                        break
+                    }
+                    current = parent
+                }
+            }
+            val rect = Rect()
+            runCatching { foundNode.getBoundsInScreen(rect) }
+            if (rect.isEmpty) {
+                runCatching { actionable.getBoundsInScreen(rect) }
+            }
+            val bounds = if (rect.isEmpty) intArrayOf(0, 0, 0, 0) else intArrayOf(rect.left, rect.top, rect.right, rect.bottom)
+            val cx = if (rect.isEmpty) 0 else rect.centerX()
+            val cy = if (rect.isEmpty) 0 else rect.centerY()
+
+            val a11yAction = when (action) {
+                "node_long_click" -> AccessibilityNodeInfo.ACTION_LONG_CLICK
+                "node_scroll" -> if (direction == "backward") {
+                    AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                } else {
+                    AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+                }
+                else -> AccessibilityNodeInfo.ACTION_CLICK
+            }
+            val performed = if (supports(actionable) && actionable.isEnabled) {
+                runCatching { actionable.performAction(a11yAction) }.getOrDefault(false)
+            } else {
+                false
+            }
+            if (performed) {
+                lastActionAt = SystemClock.elapsedRealtime()
+            }
+            PrivateAuditLog(this).record(
+                AuditEvent.ACCESSIBILITY_ACTION,
+                if (performed) AuditResult.SUCCEEDED else AuditResult.DENIED,
+                "display=$displayId $action performed=$performed",
+            )
+            return DisplayNodeActionResult(
+                found = true,
+                performed = performed,
+                method = if (performed) "accessibility_$action" else "live_bounds_fallback",
+                matchedText = matchedText,
+                matchedViewId = matchedViewId,
+                bounds = bounds,
+                centerX = cx,
+                centerY = cy,
+            )
+        } finally {
+            ancestors.forEach { release(it) }
+            release(matched)
+            release(root)
+        }
+    }
+
+    private fun findMatchingNodeOnDisplay(
+        root: AccessibilityNodeInfo,
+        selector: VirtualScreenTreeDiff.NodeSelector,
+        maxDepth: Int,
+        maxVisited: Int,
+    ): AccessibilityNodeInfo? {
+        var visited = 0
+        var seenMatches = 0
+        fun dfs(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
+            if (visited >= maxVisited) return null
+            visited++
+            val viewId = runCatching { node.viewIdResourceName.orEmpty() }.getOrDefault("")
+            val text = runCatching { node.text?.toString().orEmpty() }.getOrDefault("")
+            val desc = runCatching { node.contentDescription?.toString().orEmpty() }.getOrDefault("")
+            if (VirtualScreenTreeDiff.matches(viewId, text, desc, selector)) {
+                if (seenMatches == selector.matchIndex) return node
+                seenMatches++
+            }
+            if (depth >= maxDepth) return null
+            val count = runCatching { node.childCount }.getOrDefault(0)
+            for (index in 0 until count) {
+                if (visited >= maxVisited) break
+                val child = runCatching { node.getChild(index) }.getOrNull() ?: continue
+                val found = dfs(child, depth + 1)
+                if (found != null) {
+                    if (found !== child) runCatching { child.recycle() }
+                    return found
+                }
+                runCatching { child.recycle() }
+            }
+            return null
+        }
+        return dfs(root, 0)
+    }
+
+    private fun findFirstScrollable(
+        root: AccessibilityNodeInfo,
+        maxDepth: Int,
+        maxVisited: Int,
+    ): AccessibilityNodeInfo? {
+        var visited = 0
+        fun dfs(node: AccessibilityNodeInfo, depth: Int): AccessibilityNodeInfo? {
+            if (visited >= maxVisited) return null
+            visited++
+            if (runCatching { node.isScrollable && node.isEnabled }.getOrDefault(false)) return node
+            if (depth >= maxDepth) return null
+            val count = runCatching { node.childCount }.getOrDefault(0)
+            for (index in 0 until count) {
+                if (visited >= maxVisited) break
+                val child = runCatching { node.getChild(index) }.getOrNull() ?: continue
+                val found = dfs(child, depth + 1)
+                if (found != null) {
+                    if (found !== child) runCatching { child.recycle() }
+                    return found
+                }
+                runCatching { child.recycle() }
+            }
+            return null
+        }
+        return dfs(root, 0)
     }
 
     /**

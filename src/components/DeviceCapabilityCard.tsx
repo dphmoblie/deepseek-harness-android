@@ -200,7 +200,7 @@ export function DeviceCapabilityCard({ bridge = runtimeBridge, onOpenDeviceShell
   return <section className="settings-section" aria-labelledby="device-capabilities">
     <div className="section-title"><span className="section-icon"><Cpu size={19} /></span>
       <div><h2 id="device-capabilities">{t('设备能力')}</h2>
-        <p>{t('一次看清 Shizuku、根通道、无障碍、副屏、截图与中文输入现在能不能用，以及不能用的原因。')}</p></div>
+        <p>{t('查看 Shizuku、根通道、无障碍与副屏可用状态')}</p></div>
     </div>
     {load.status === 'loading' && <p className="settings-note">{t('正在检测设备能力…')}</p>}
     {report !== null && <div className="device-capability-list" role="list">
@@ -215,7 +215,7 @@ export function DeviceCapabilityCard({ bridge = runtimeBridge, onOpenDeviceShell
         </>}
       </p>)}
     </div>}
-    {report !== null && <div className="device-capability-footer"><span className="settings-note">{t('取样时间：{0}', new Date(report.atMs).toLocaleTimeString())} · {t('连接状态变化后会自动重新检测。')}</span><RefreshAction refreshing={refreshing} label={t('重新检测')} onClick={() => { void refresh(true) }} /></div>}
+    {report !== null && <div className="device-capability-footer"><span className="settings-note">{t('取样时间：{0}', new Date(report.atMs).toLocaleTimeString())} · {t('状态变化时自动重测')}</span><RefreshAction refreshing={refreshing} label={t('重新检测')} onClick={() => { void refresh(true) }} /></div>}
     {failed && <p className="device-capability-error" role="alert">{t('无法读取设备能力清单')} <RefreshAction refreshing={refreshing} label={t('重试')} onClick={() => { void refresh(true) }} /></p>}
   </section>
 }

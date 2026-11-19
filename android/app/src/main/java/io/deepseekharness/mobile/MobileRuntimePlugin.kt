@@ -88,6 +88,8 @@ import io.deepseekharness.mobile.runtime.RuntimeHttp
 import io.deepseekharness.mobile.runtime.RuntimeIntent
 import io.deepseekharness.mobile.runtime.RuntimeKeepAliveSnapshot
 import io.deepseekharness.mobile.runtime.RuntimeMailbox
+import io.deepseekharness.mobile.runtime.RuntimeMailboxLayout
+import io.deepseekharness.mobile.runtime.RuntimeMailboxPolicy
 import io.deepseekharness.mobile.runtime.RuntimePhase
 import io.deepseekharness.mobile.runtime.RuntimeAutoSnapshotOutcome
 import io.deepseekharness.mobile.runtime.RuntimeAutoSnapshotStatus
@@ -220,6 +222,28 @@ internal fun optionalMailboxDirectory(data: JSONObject, key: String): String? {
     val value = data.opt(key)
     if (value == null || value == JSONObject.NULL) return null
     if (value !is String) throw RuntimeFailure("MAILBOX_PATH_INVALID", "投递区目标目录格式无效")
+    return value
+}
+
+/** 可选的共享目录 `guestPath` 参数；用于把工作区导入/导出与共享目录合并到同一套受控入口。 */
+internal fun optionalStorageGuestPath(data: JSONObject): String? {
+    if (!data.has("guestPath")) return null
+    val value = data.opt("guestPath")
+    if (value == null || value == JSONObject.NULL) return null
+    if (value !is String || value.isBlank()) {
+        throw RuntimeFailure(StorageDirCodes.PATH_INVALID, "共享目录访客路径格式无效")
+    }
+    return value
+}
+
+/** 可选的投递区根目录参数；未传时由调用方决定默认根（导入默认 inbox，导出默认 outbox）。 */
+internal fun optionalMailboxRoot(data: JSONObject): String? {
+    if (!data.has("root")) return null
+    val value = data.opt("root")
+    if (value == null || value == JSONObject.NULL) return null
+    if (value !is String || (value != "inbox" && value != "outbox")) {
+        throw RuntimeFailure("MAILBOX_ROOT_INVALID", "投递区根目录无效")
+    }
     return value
 }
 
@@ -3946,10 +3970,22 @@ class MobileRuntimePlugin : Plugin() {
     @PluginMethod
     fun importMailbox(call: PluginCall) {
         execute(call) {
+            val guestPath = optionalStorageGuestPath(call.data)
+            val root = optionalMailboxRoot(call.data)
+            val sourceDirectory = optionalMailboxDirectory(call.data, "sourceDirectory")
             // 先拿到结果对象再转成 JS 载荷：搬运工作区（大工作区要几十秒）属于用户主动发起、
             // 且很可能在他切走之后才完成的操作，因此要发一条完成通知（登记册 §5.5 第二类）。
             val outcome = audited(AuditEvent.MAILBOX_IMPORT) {
-                RuntimeMailbox(controller.store).importInbox()
+                val mailbox = RuntimeMailbox(controller.store)
+                if (guestPath != null) {
+                    val resolved = storageDirs().resolveDirectory(guestPath, sourceDirectory)
+                    mailbox.importFromDirectory(resolved)
+                } else {
+                    mailbox.importInbox(
+                        sourceDirectory = sourceDirectory,
+                        rootName = root ?: RuntimeMailboxLayout.INBOX_DIRECTORY,
+                    )
+                }
             }
             TaskNotification.postWorkspaceImported(context, outcome.entryCount)
             outcome.toJs()
@@ -3959,17 +3995,34 @@ class MobileRuntimePlugin : Plugin() {
     /**
      * 权限：应用内桥接；`subdirectory` 省略或留空表示导出整个工作区。
      *
-     * 一键导出：工作区（或指定子目录）→ outbox 的 `dsh-workspace.tar` +
+     * 一键导出：工作区（或指定子目录）→ 投递区或已授权共享目录的 `dsh-workspace.tar` +
      * `dsh-workspace.manifest.json` + `dsh-workspace.tar.sha256`。三个文件名固定，
-     * 重复执行只覆盖同一组产物，不会在 outbox 里堆出多份。
+     * 重复执行只覆盖同一组产物，不会在同一目录里堆出多份。
      */
     @PluginMethod
     fun exportMailbox(call: PluginCall) {
         execute(call) {
             val subdirectory = optionalMailboxSubdirectory(call.data)
             val destinationDirectory = optionalMailboxDirectory(call.data, "destinationDirectory")
+            val guestPath = optionalStorageGuestPath(call.data)
+            val root = optionalMailboxRoot(call.data)
             val outcome = audited(AuditEvent.MAILBOX_EXPORT) {
-                RuntimeMailbox(controller.store).exportWorkspace(subdirectory, destinationDirectory)
+                val mailbox = RuntimeMailbox(controller.store)
+                if (guestPath != null) {
+                    val normalizedDestination = RuntimeMailboxPolicy.normalizeSubdirectory(
+                        destinationDirectory,
+                        StorageDirCodes.PATH_INVALID,
+                        "存储目录路径无效",
+                    )
+                    val resolved = storageDirs().resolveDirectory(guestPath, normalizedDestination)
+                    mailbox.exportWorkspaceToDirectory(subdirectory, resolved, normalizedDestination)
+                } else {
+                    mailbox.exportWorkspace(
+                        subdirectory = subdirectory,
+                        destinationDirectory = destinationDirectory,
+                        rootName = root ?: RuntimeMailboxLayout.OUTBOX_DIRECTORY,
+                    )
+                }
             }
             TaskNotification.postWorkspaceExported(context, outcome.entryCount)
             outcome.toJs()

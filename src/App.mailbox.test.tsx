@@ -25,24 +25,28 @@ describe('投递区', () => {
 
     await openFilesPage()
 
-    // 档位与原因都如实显示：不把「需要授权」写成「故障」。
-    expect(await screen.findByText('需要授权')).toBeVisible()
-    expect(screen.getByText('搬运不可用')).toBeVisible()
-    expect(screen.getByText(/尚未授予「所有文件访问」/)).toBeVisible()
+    // 档位与原因都如实显示，全页只有一份权限提示与一个授权按钮。
+    const browserCard = screen.getByRole('region', { name: '外部文件与工作区' })
+    expect(await screen.findByText('需要授予「所有文件访问」')).toBeVisible()
+    expect(browserCard).toHaveTextContent('需要授权')
+    expect(screen.getByText(/授权后即可浏览、搬运工作区并挂载共享目录/)).toBeVisible()
 
-    // 两个路径固定写在界面里，用户照着往 inbox 放文件。
-    expect(screen.getByText('/storage/emulated/0/Documents/DSH/inbox')).toBeVisible()
-    expect(screen.getByText('/storage/emulated/0/Documents/DSH/outbox')).toBeVisible()
-    expect(screen.getByText('/mnt/inbox · /mnt/outbox')).toBeVisible()
+    // 两个内置路径在挂载目录卡片中清晰列出，用户照着往 inbox 放文件。
+    const mountedCard = screen.getByRole('region', { name: '挂载目录' })
+    expect(mountedCard).toHaveTextContent('/storage/emulated/0/Documents/DSH/inbox')
+    expect(mountedCard).toHaveTextContent('/storage/emulated/0/Documents/DSH/outbox')
+    expect(mountedCard).toHaveTextContent('/mnt/inbox')
+    expect(mountedCard).toHaveTextContent('/mnt/outbox')
 
     // 不可用时一键按钮必须禁用，且不能因为「点了没反应」而消失。
     expect(screen.getByRole('button', { name: /导入到工作区/ })).toBeDisabled()
     expect(screen.getByRole('button', { name: /导出工作区/ })).toBeDisabled()
-    // 授权入口可见（系统支持这一档），但文案不承诺一定授权成功。
-    const permissionEntry = screen.getByRole('button', { name: /去开启「所有文件访问」/ })
-    expect(permissionEntry).toBeEnabled()
+    // 授权入口全页唯一一份且可点。
+    const permissionButtons = screen.getAllByRole('button', { name: /去开启「所有文件访问」/ })
+    expect(permissionButtons).toHaveLength(1)
+    expect(permissionButtons[0]).toBeEnabled()
 
-    fireEvent.click(permissionEntry)
+    fireEvent.click(permissionButtons[0])
     await waitFor(() => expect(bridge.openAllFilesAccessSettings).toHaveBeenCalledTimes(1))
     expect(bridge.importMailbox).not.toHaveBeenCalled()
     expect(bridge.exportMailbox).not.toHaveBeenCalled()
@@ -60,8 +64,8 @@ describe('投递区', () => {
     await waitFor(() => expect(bridge.getMailboxState).toHaveBeenCalledTimes(1))
     await openFilesPage()
 
-    expect(await screen.findByText('不支持')).toBeVisible()
-    expect(screen.getByText(/不存在「所有文件访问」这一档/)).toBeVisible()
+    expect(await screen.findByText('当前系统不支持「所有文件访问」')).toBeVisible()
+    expect(screen.getByText(/Android 11 以下不支持共享存储/)).toBeVisible()
     // 系统根本没有这一档：不提供会跳到空页面的入口。
     expect(screen.queryByRole('button', { name: /去开启「所有文件访问」/ })).toBeNull()
     expect(screen.getByRole('button', { name: /导入到工作区/ })).toBeDisabled()
@@ -100,8 +104,8 @@ describe('投递区', () => {
     await waitFor(() => expect(bridge.getMailboxState).toHaveBeenCalledTimes(1))
     await openFilesPage()
 
-    expect(await screen.findByText('可用')).toBeVisible()
-    expect(screen.getByText(/可导入的 tar：dsh-workspace\.tar/)).toBeVisible()
+    expect(await screen.findByText(/可导入的 tar：dsh-workspace\.tar/)).toBeVisible()
+    expect(screen.getByRole('region', { name: '外部文件与工作区' })).toHaveTextContent('可用')
 
     // 仅仅进页面不会搬运：任何自动执行都是不允许的。
     expect(bridge.importMailbox).not.toHaveBeenCalled()
@@ -189,8 +193,8 @@ describe('投递区', () => {
     await waitFor(() => expect(bridge.getMailboxState).toHaveBeenCalledTimes(1))
     await openFilesPage()
 
-    expect(await screen.findByText('无法读取搬运状态，请重试')).toBeVisible()
-    expect(screen.getByText('未读取')).toBeVisible()
+    expect(await screen.findByText('文件与目录状态读取失败，请重试')).toBeVisible()
+    expect(screen.getByRole('region', { name: '外部文件与工作区' })).toHaveTextContent('未读取')
     // 状态未知时搬运按钮保持禁用：宁可让用户先重试，也不要出现「按钮可点但状态未知」。
     expect(screen.getByRole('button', { name: /导入到工作区/ })).toBeDisabled()
     expect(screen.getByRole('button', { name: /导出工作区/ })).toBeDisabled()
@@ -198,7 +202,7 @@ describe('投递区', () => {
     bridge.getMailboxState.mockResolvedValue({ ...availableMailbox })
     bridge.getStorageAccessState.mockResolvedValue({ ...storageAccess, allFilesGranted: true })
     fireEvent.click(screen.getByRole('button', { name: /重新检查/ }))
-    expect(await screen.findByText('可用')).toBeVisible()
-    expect(screen.getByRole('button', { name: /导入到工作区/ })).toBeEnabled()
+    await waitFor(() => expect(screen.getByRole('button', { name: /导入到工作区/ })).toBeEnabled())
+    expect(screen.getByRole('region', { name: '外部文件与工作区' })).toHaveTextContent('可用')
   })
 })

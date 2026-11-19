@@ -88,24 +88,24 @@ object VirtualScreenTree {
     fun available(): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && DeepSeekAccessibilityService.current() != null
 
+    /** 语义压缩遍历上限：折叠纯布局容器，深入真实应用层级避免 maxDepth=4 截断关键选项与按钮。 */
+    const val SEMANTIC_MAX_DEPTH = 24
+    const val SEMANTIC_MAX_RAW_NODES = 1200
+
     /**
      * 取副屏（[displayId]）窗口的节点树。
      *
-     * 返回的 JSON 字段固定为 `displayId`、`available`、`nodeCount`、`truncated`、`nodes`；
-     * `packageName`、`reason` 与 `imeText` 只在有值时出现（空字段不输出，省 token）。[available] 为 false 时
-     * `nodes` 恒为空数组、`reason` 说明具体原因（服务未启用 / 显示编号无效 / 没有窗口 / 敏感窗口 / 设备锁定 /
-     * 系统版本过低）。
-     *
-     * `imeText` 是**输入法窗口里正在编辑的文字**（组合中/候选区，见 [VirtualScreenImeText]）：用户用输入法
-     * 打的字若没有落到应用窗口的节点上，只靠 `nodes` 看就是一个空输入框。密码类候选不输出。
-     *
-     * `nodes` 是窗口根节点数组（通常只有一个元素），节点总数看 `nodeCount`，树形结构在节点自己的
-     * `children` 里（见 [summarize]）。
-     *
-     * [maxDepth] 与 [maxNodes] 会被夹到 [MAX_DEPTH]、[MAX_NODES] 以内（调用方给得更大也不会放开）；
-     * 触到任一上限都只把 `truncated` 置 true 并停止遍历，不会「跳过限制继续往下挖」。
+     * [compact] 为 true 时采用深层语义压缩模式（[dumpSemantic]）：最多遍历 24 层 / 1200 节点并跳过纯布局容器，
+     * 直接返回带精确 `center`、状态标志与稳定锚点的扁平 `elements` 数组，无需 OCR 或截图即可可靠交互。
      */
-    fun dump(displayId: Int, maxDepth: Int, maxNodes: Int): JSONObject {
+    fun dump(displayId: Int, maxDepth: Int, maxNodes: Int, compact: Boolean = false): JSONObject {
+        if (compact) {
+            blockReason(displayId)?.let { return failure(displayId, it) }
+            val service = DeepSeekAccessibilityService.current() ?: return failure(displayId, SERVICE_UNAVAILABLE)
+            val semantic = dumpSemanticInternal(service, displayId, VirtualScreenTreeDiff.MAX_SEMANTIC_ELEMENTS)
+            return semantic.snapshot?.toCompactJson()
+                ?: failure(displayId, semantic.reason ?: "副屏窗口不可读")
+        }
         blockReason(displayId)?.let { return failure(displayId, it) }
         val service = DeepSeekAccessibilityService.current() ?: return failure(displayId, SERVICE_UNAVAILABLE)
         val root = service.displayRootFor(displayId).let { access -> access.root ?: return failure(displayId, access.reason ?: "副屏窗口不可读") }
@@ -132,6 +132,80 @@ object VirtualScreenTree {
                 ?: failure(displayId, "副屏节点树读取失败：窗口在读取过程中失效，请重新读取")
         } finally {
             // If an exception happens before snapshot receives the node, dump() still owns it.
+            if (!rootTransferred) runCatching { root.recycle() }
+        }
+    }
+
+    /** 读取副屏深层语义快照，供动作前后结构化 Diff 与启动首屏摘要复用；不可读时返回 null。 */
+    internal fun dumpSemantic(displayId: Int, maxElements: Int = VirtualScreenTreeDiff.MAX_SEMANTIC_ELEMENTS): VirtualScreenTreeDiff.SemanticSnapshot? {
+        if (blockReason(displayId) != null) return null
+        val service = DeepSeekAccessibilityService.current() ?: return null
+        return dumpSemanticInternal(service, displayId, maxElements).snapshot
+    }
+
+    /** 在指定副屏上按语义选择器执行点击/长按/滚动，严守副屏隔离与敏感窗口拦截。 */
+    internal fun performNodeAction(
+        displayId: Int,
+        selector: VirtualScreenTreeDiff.NodeSelector,
+        action: String,
+        direction: String = "forward",
+    ): DeepSeekAccessibilityService.DisplayNodeActionResult {
+        blockReason(displayId)?.let { reason ->
+            return DeepSeekAccessibilityService.DisplayNodeActionResult(
+                found = false,
+                performed = false,
+                method = "none",
+                errorCode = "VIRTUAL_SCREEN_INVALID",
+                reason = reason,
+            )
+        }
+        val service = DeepSeekAccessibilityService.current()
+            ?: return DeepSeekAccessibilityService.DisplayNodeActionResult(
+                found = false,
+                performed = false,
+                method = "none",
+                errorCode = "ACCESSIBILITY_SERVICE_DISCONNECTED",
+                reason = SERVICE_UNAVAILABLE,
+            )
+        return service.performNodeActionOnDisplay(displayId, selector, action, direction)
+    }
+
+    private data class SemanticRead(
+        val snapshot: VirtualScreenTreeDiff.SemanticSnapshot?,
+        val reason: String?,
+    )
+
+    private fun dumpSemanticInternal(
+        service: DeepSeekAccessibilityService,
+        displayId: Int,
+        maxElements: Int,
+    ): SemanticRead {
+        val access = service.displayRootFor(displayId)
+        val root = access.root ?: return SemanticRead(null, access.reason)
+        val state = WalkState(SEMANTIC_MAX_DEPTH, SEMANTIC_MAX_RAW_NODES)
+        var rootTransferred = false
+        try {
+            val packageName = runCatching { root.packageName?.toString().orEmpty() }.getOrDefault("")
+            val rawSnapshot = try {
+                rootTransferred = true
+                state.snapshot(root, 0)
+            } catch (_: Throwable) {
+                return SemanticRead(null, "副屏节点树读取失败：窗口在读取过程中失效，请重新读取")
+            }
+            val extracted = VirtualScreenTreeDiff.extractSemantic(
+                root = rawSnapshot,
+                displayId = displayId,
+                packageName = packageName,
+                maxElements = maxElements,
+                imeText = imeText(service, displayId),
+            )
+            val combined = if (state.truncated && !extracted.truncated) {
+                extracted.copy(truncated = true)
+            } else {
+                extracted
+            }
+            return SemanticRead(combined, null)
+        } finally {
             if (!rootTransferred) runCatching { root.recycle() }
         }
     }

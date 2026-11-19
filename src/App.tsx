@@ -191,30 +191,30 @@ type SettingsPage = 'models' | 'models-providers' | 'runtime' | 'terminal' | 'de
   | 'diagnostics-log' | 'diagnostics-capability' | 'diagnostics-feedback'
 
 const SETTINGS_PAGE_META: Record<SettingsPage, { title: string; hint: string; view: AppView; parent?: SettingsPage }> = {
-  models: { title: '模型与密钥', hint: '供应商、API Key 与自定义模型', view: 'settings-models' },
+  models: { title: '模型与密钥', hint: '供应商与 API Key', view: 'settings-models' },
   // 模型页的三级页：已配置的供应商留在二级页，未配置的模板集中在这里，二级页不再被一长串
   // 「未配置」占满（用户的原话：「二级页只有我已经配置过的模型」）。
-  'models-providers': { title: '添加其他供应商', hint: '还没配置的内置供应商，选一家填密钥', view: 'settings-models-providers', parent: 'models' },
-  runtime: { title: '后台', hint: '保活、悬浮球、预启动、页面网络访问与设备连接', view: 'settings-runtime' },
+  'models-providers': { title: '添加其他供应商', hint: '选择内置供应商填写密钥', view: 'settings-models-providers', parent: 'models' },
+  runtime: { title: '后台', hint: '保活、悬浮球、预启动与联网', view: 'settings-runtime' },
   terminal: { title: '主题', hint: '字号配色与背景', view: 'settings-terminal' },
   // 主题下的两个三级页：字号与配色、背景与卡片，两段各自立即生效。
-  'terminal-typography': { title: '字号与配色', hint: '字号、屏幕常亮、明暗模式与强调色', view: 'settings-terminal-typography', parent: 'terminal' },
-  'terminal-background': { title: '背景', hint: '背景图片或视频、卡片外观', view: 'settings-terminal-background', parent: 'terminal' },
+  'terminal-typography': { title: '字号与配色', hint: '字号、常亮、明暗与强调色', view: 'settings-terminal-typography', parent: 'terminal' },
+  'terminal-background': { title: '背景', hint: '背景与卡片外观', view: 'settings-terminal-background', parent: 'terminal' },
   // DSH 是另一个页面：它的主题与背景单独一页，不和外壳自己的背景混在一起。
   // DSH 是另一个页面：它的主题、按钮透明度和背景都收在同一页，不和外壳自己的外观混在一起。
-  'terminal-dsh-background': { title: 'DSH 主题', hint: '主题同步、按钮与输入框透明度、背景文件', view: 'settings-terminal-dsh-background', parent: 'terminal' },
+  'terminal-dsh-background': { title: 'DSH 主题', hint: '同步主题、透明度与背景', view: 'settings-terminal-dsh-background', parent: 'terminal' },
   'device-shell': { title: '设备 Shell 设置', hint: 'Shizuku 授权与设备命令', view: 'settings-device-shell' },
   automation: { title: '自动化设置', hint: '无障碍、副屏与自动参数', view: 'settings-automation' },
   // 自动化设置下的三个三级页，返回键统一回「自动化设置」。
   'automation-accessibility': { title: '无障碍', hint: '服务状态、白名单与验证密码', view: 'settings-automation-accessibility', parent: 'automation' },
-  'automation-subscreen': { title: '副屏', hint: '取帧档位、方向、分辨率与跟随策略', view: 'settings-automation-subscreen', parent: 'automation' },
-  'automation-params': { title: '自动参数', hint: '总开关、任务与运行记录、规则与每应用参数', view: 'settings-automation-params', parent: 'automation' },
-  diagnostics: { title: '诊断与日志', hint: '日志与采集、设备能力与反馈', view: 'settings-diagnostics' },
+  'automation-subscreen': { title: '副屏', hint: '方向、分辨率、帧率与跟随', view: 'settings-automation-subscreen', parent: 'automation' },
+  'automation-params': { title: '自动参数', hint: '总开关、任务、记录与规则', view: 'settings-automation-params', parent: 'automation' },
+  diagnostics: { title: '诊断与日志', hint: '日志、设备能力与反馈', view: 'settings-diagnostics' },
   // 系统浏览器从诊断页里拆出来：它不是「排查」的一部分，而是一条独立的浏览方式，
   // 单开一页之后诊断页只留入口，不用先滚过一整张卡片才看到日志入口。
   'external-browser': { title: '系统浏览器', hint: '用系统浏览器打开 Harness', view: 'settings-external-browser', parent: 'diagnostics' },
   // 诊断与日志下的三个三级页：采集、能力、反馈是三件事，返回键统一回「诊断与日志」。
-  'diagnostics-log': { title: '日志与采集', hint: '采集开关、保留天数、诊断与运行日志', view: 'settings-diagnostics-log', parent: 'diagnostics' },
+  'diagnostics-log': { title: '日志与采集', hint: '采集开关、诊断与运行日志', view: 'settings-diagnostics-log', parent: 'diagnostics' },
   'diagnostics-capability': { title: '设备能力', hint: '运行时自检、能力清单与根通道', view: 'settings-diagnostics-capability', parent: 'diagnostics' },
   'diagnostics-feedback': { title: '反馈', hint: '交流群与 GitHub 反馈入口', view: 'settings-diagnostics-feedback', parent: 'diagnostics' },
 }
@@ -279,7 +279,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'environment',
     group: 'runtime',
     title: 'Ubuntu 运行时',
-    hint: '安装进度、版本、来源、保留数据修复与重置',
+    hint: '安装、更新、修复与重置',
     keywords: ['ubuntu', '运行时', '环境', '安装', '重置', '修复', '保留数据', '更新', '来源', 'proot', 'linux', 'runtime', 'reset', 'repair', 'install'],
     target: { kind: 'view', view: 'environment' },
     icon: <HardDrive size={20} />,
@@ -288,7 +288,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'runtime-page',
     group: 'runtime',
     title: '后台',
-    hint: '保活、悬浮球、预启动、页面网络访问与设备连接',
+    hint: '保活、悬浮球、预启动与联网',
     keywords: ['后台', '保活', '保持', '悬浮球', '前台服务', '通知', '电池', '网络', '网络访问', '联网', 'http', 'keepalive', 'background', 'overlay', 'foreground', 'network'],
     target: { kind: 'page', page: 'runtime' },
     icon: <Power size={20} />,
@@ -298,7 +298,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'files',
     group: 'files',
     title: '文件管理',
-    hint: '外部工作区：一处浏览、建文件夹与搬运',
+    hint: '外部工作区浏览与搬运',
     keywords: ['文件', '文件夹', '目录', '外部工作区', '投递区', '共享目录', '导入', '导出', '搬运', '浏览', '新建文件夹', 'mailbox', 'storage', 'file', 'files', 'folder', 'directory'],
     // 这组功能原属「后台」页：访客的外部工作区不再挂在那页上，
     // 搜「导入」「投递区」的人要找的是这一页。
@@ -311,7 +311,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'versions',
     group: 'versions',
     title: '版本管理',
-    hint: '保留上一版本，可一键切回；装新版本仍在运行环境页',
+    hint: '切换、备份与应用更新',
     keywords: ['版本', 'version', '运行时版本', '上一版本', '回退', '切回', '切换', '回滚', '降级', '升级', '更新', 'dsh', 'previous', 'rollback', 'switch', 'retained'],
     target: { kind: 'view', view: 'versions' },
     icon: <RotateCcw size={20} />,
@@ -322,7 +322,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'models',
     group: 'models',
     title: '模型与密钥',
-    hint: '供应商、API Key 与自定义模型',
+    hint: '供应商与 API Key',
     keywords: ['模型', '密钥', 'key', 'api', 'apikey', 'api key', '供应商', 'provider', 'token', '凭据', '自定义模型', 'deepseek', 'openai', 'anthropic'],
     target: { kind: 'page', page: 'models' },
     icon: <KeyRound size={20} />,
@@ -349,7 +349,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'permissions',
     group: 'device',
     title: '权限说明与授权',
-    hint: '查看用途、风险，集中申请尚未授予的权限',
+    hint: '查看用途并集中申请权限',
     keywords: ['权限', '授权', '风险', '通知', '存储', '悬浮窗', 'permission', 'access', 'grant'],
     target: { kind: 'permissions' },
     icon: <ShieldCheck size={20} />,
@@ -367,7 +367,7 @@ const SETTINGS_HOME_ENTRIES: SettingsHomeEntry[] = [
     id: 'diagnostics',
     group: 'diagnostics',
     title: '诊断与日志',
-    hint: '日志与采集、设备能力与反馈',
+    hint: '日志、设备能力与反馈',
     keywords: ['诊断', '日志', 'log', 'logs', '采集', '保留', '导出', '排查', '报错', '错误', '崩溃', '重启', '自检', 'self check', '浏览器', '系统浏览器', '外置浏览器', 'browser', 'chrome', 'webview'],
     target: { kind: 'page', page: 'diagnostics' },
     icon: <ScrollText size={20} />,
@@ -1085,10 +1085,10 @@ function ConversationScreen({ busy, harnessVersionBusy, keepAlive, runtime, onIn
  * 否则用户在设置里看到的描述会与真实放行范围不符。
  */
 const PAGE_NETWORK_ACCESS_OPTIONS: Array<{ value: PageNetworkAccess; label: string; hint: string }> = [
-  { value: 'app', label: '仅本应用内', hint: '页面只能访问本机 Harness 服务与插件市场。' },
+  { value: 'app', label: '仅本应用内', hint: '仅访问本机 Harness 与插件市场' },
   // 这一档只放开明文：公网 https 仍然拒绝，想放得全得选下一档。
-  { value: 'http', label: '允许 HTTP 连接', hint: '额外允许任意主机的明文 http（局域网自建服务）；公网 https 仍不放开。' },
-  { value: 'all', label: '全部网络连接', hint: '允许访问任意主机、任意协议，包括公网 https。' },
+  { value: 'http', label: '允许 HTTP 连接', hint: '额外允许明文 HTTP，不含公网 HTTPS' },
+  { value: 'all', label: '全部网络连接', hint: '允许访问任意主机与协议' },
 ]
 
 function pageNetworkAccessLabel(value: PageNetworkAccess | undefined): string {
@@ -2545,19 +2545,19 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
         <section className="settings-section" aria-labelledby="model-settings">
           <div className="section-title">
             <span className="section-icon"><Bot size={19} /></span>
-            <div><h2 id="model-settings">{t("模型供应商")}</h2><p>{t("密钥在本机加密保存，供 Harness 连接模型服务使用；保存后不再显示密钥内容。")}</p></div>
+            <div><h2 id="model-settings">{t("模型供应商")}</h2><p>{t("密钥仅本机加密保存，保存后不再回显")}</p></div>
           </div>
           <div className="provider-account-card">
             <div>
               <strong>{t("DeepSeek 账号")}</strong>
-              <span>{settings.deepSeekAccountConfigured === true ? t("已登录，可使用账号模型") : t("登录 DeepSeek 账号后使用账号模型，无需填写 API Key")}</span>
+              <span>{settings.deepSeekAccountConfigured === true ? t("已登录，可使用账号模型") : t("登录后使用账号模型，无需 API Key")}</span>
             </div>
             <button className="button button-secondary compact-button" type="button" disabled={!canOpenHarness} onClick={onLaunchConfirmed}>
               {settings.deepSeekAccountConfigured === true ? <Rocket size={16} /> : <LogIn size={16} />}
               {settings.deepSeekAccountConfigured === true ? t("打开 Harness 管理账号") : t("登录 DeepSeek 账号")}
             </button>
           </div>
-          <p className="field-help">{t("打开 Harness 后，在侧栏「更多」菜单选择登录；登录完成后返回此页可刷新账号状态。")}</p>
+          <p className="field-help">{t("在 Harness 侧栏「更多」中登录，返回刷新状态")}</p>
           {!hasConfiguredModelCredential(settings) && !credentialPendingInDraft && (
             /*
              * 应用只读取 Harness 凭据文件中的白名单配置状态，不读取密钥内容，也无法识别
@@ -2567,7 +2567,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
               <AlertTriangle size={19} />
               <div>
                 <strong>{t("还没有可用的模型凭据")}</strong>
-                <span>{t("开始对话前需登录 DeepSeek 账号、保存一份 API Key，或在下方「自定义供应商」里填好第三方接口。若状态尚未同步，或凭据来自 Harness 的其他来源，可以直接打开。")}</span>
+                <span>{t("请先登录账号、配置 API Key 或自定义供应商；已在 Harness 配过可直接打开。")}</span>
               </div>
               <button className="button button-secondary" type="button" disabled={!canOpenHarness} onClick={onLaunchConfirmed}>
                 {busy === 'launch' ? <Loader2 className="spin" size={18} /> : <Rocket size={18} />}{t("我已在 Harness 内配置过，仍要打开")}</button>
@@ -2607,7 +2607,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
           </div>
           {configuredProviders.length === 0 && (
             <p className="settings-note" role="status" data-testid="model-providers-empty">
-              {t("还没有配置任何内置供应商。到下面「添加其他供应商」挑一家填密钥，或在「自定义供应商」里接第三方接口。")}
+              {t("暂无已配供应商，可在下方添加内置或自定义接口")}
             </p>
           )}
           <div className="settings-subsection" aria-labelledby="model-provider-more">
@@ -2703,7 +2703,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
               <span>{t("默认模型")}</span>
               <input
                 value={modelInputs[selectedProvider] ?? settings.defaultModels?.[selectedProvider] ?? ''}
-                placeholder={t("点「获取模型」自动填入最靠前的一个，也可以自己改")}
+                placeholder={t("点「获取模型」填入或手动输入")}
                 maxLength={200}
                 spellCheck={false}
                 autoComplete="off"
@@ -2765,7 +2765,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
               )}
             </>
           )}
-          <p className="field-help">{t("「默认模型」只是本机的备忘：应用只把密钥交给 Harness，不会替你在 Harness 里切换模型。")}</p>
+          <p className="field-help">{t("仅作本机备忘，不会替你在 Harness 里切换模型")}</p>
           </>
           )}
           <CustomProviders
@@ -2801,12 +2801,12 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
             <span className="section-icon"><Plus size={19} /></span>
             <div>
               <h2 id="model-provider-templates">{t("添加其他供应商")}</h2>
-              <p>{t("选中后会回到「模型与密钥」并展开密钥输入；未配置的模板不会显示在该页")}</p>
+              <p>{t("选中后返回模型页填写密钥")}</p>
             </div>
           </div>
           {availableProviders.length === 0 ? (
             <p className="settings-note" role="status">
-              {t("内置供应商都已经配置过了。第三方接口请在「模型与密钥 → 自定义供应商」里添加。")}
+              {t("内置供应商已全部配置，第三方接口请用自定义供应商")}
             </p>
           ) : (
             <div className="provider-status" role="list" aria-label={t("可添加的供应商")}>
@@ -2830,7 +2830,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
             </div>
           )}
           <p className="settings-note">
-            {t("密钥只在本机加密保存，保存后不再显示；Harness 里已配置过的供应商会出现在模型页，无需在这里重复添加。")}
+            {t("仅本机加密保存，Harness 已配的无需重复添加")}
           </p>
         </section>
         )}
@@ -2839,7 +2839,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
         <section className="settings-section" aria-labelledby="download-settings">
           <div className="section-title">
             <span className="section-icon"><CloudDownload size={19} /></span>
-            <div><h2 id="download-settings">{t("运行时与设备 Shell")}</h2><p>{t("安装、启动、停止和重置请在「Ubuntu 运行时」中操作；Shizuku 授权在「设备 Shell 设置」中完成。")}</p></div>
+            <div><h2 id="download-settings">{t("运行时与设备 Shell")}</h2><p>{t("运行时管理与 Shizuku 授权入口")}</p></div>
           </div>
           <div className="settings-inline-actions">
             <button className="button button-secondary" type="button" onClick={onOpenEnvironment} disabled={busy !== null}>
@@ -2849,7 +2849,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
               <SquareTerminal size={18} />{t("设备 Shell 设置")}
             </button>
           </div>
-          <p className="settings-note">{t("运行环境使用 APK 内置的受校验版本；需要其它版本时请在 Ubuntu 运行时的版本管理中下载并切换。")}</p>
+          <p className="settings-note">{t("默认使用内置受校验版本，其他版本请在版本管理切换")}</p>
         </section>
 
         )}
@@ -2857,7 +2857,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
         <div className="settings-subsection" aria-labelledby="terminal-subpages">
           <div className="section-title">
             <span className="section-icon"><Settings2 size={19} /></span>
-            <div><h3 id="terminal-subpages">{t("外观")}</h3><p>{t("字号配色写在应用壳里，背景与卡片另开一页")}</p></div>
+            <div><h3 id="terminal-subpages">{t("外观")}</h3><p>{t("字号配色、背景卡片与 DSH 主题同步")}</p></div>
           </div>
           <SettingsPageRow icon={<Settings2 size={20} />} page="terminal-typography" onOpen={onOpenSubpage} />
           <SettingsPageRow icon={<Image size={20} />} page="terminal-background" onOpen={onOpenSubpage} />
@@ -2869,7 +2869,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
         <section className="settings-section" aria-labelledby="terminal-settings">
           <div className="section-title">
             <span className="section-icon"><SquareTerminal size={19} /></span>
-            <div><h2 id="terminal-settings">{t("界面")}</h2><p>{t("调整应用界面的字号和显示方式")}</p></div>
+            <div><h2 id="terminal-settings">{t("界面")}</h2><p>{t("字号与屏幕常亮")}</p></div>
           </div>
           <label className="range-field">
             <span><strong>{t("字号")}</strong><small>{settings.terminalFontSize}px</small></span>
@@ -2888,7 +2888,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
             />
           </label>
           <label className="toggle-row">
-            <span><strong>{t("保持屏幕常亮")}</strong><small>{t("应用管理与 Harness 对话界面均保持常亮")}</small></span>
+            <span><strong>{t("保持屏幕常亮")}</strong><small>{t("管理页与对话页均保持常亮")}</small></span>
             <input
               type="checkbox"
               role="switch"
@@ -2909,7 +2909,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
         <section className="settings-section" aria-labelledby="keep-alive-settings">
           <div className="section-title section-title-action">
             <span className="section-icon"><BellRing size={19} /></span>
-            <div><h2 id="keep-alive-settings">{t("后台保持")}</h2><p>{t("通过系统前台服务提高运行时进程的存活优先级")}</p></div>
+            <div><h2 id="keep-alive-settings">{t("后台保持")}</h2><p>{t("通过前台服务提高后台存活优先级")}</p></div>
             <span className={`status-chip ${keepAlive.foregroundServiceActive ? 'success' : ''}`}>
               {keepAlive.foregroundServiceActive ? t("前台服务运行中") : t("前台服务未运行")}
             </span>
@@ -2917,7 +2917,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
           <label className="toggle-row">
             <span>
               <strong>{t("后台保持 Harness")}</strong>
-              <small>{t("开启后需要常驻通知；锁屏、返回桌面或划掉最近任务后仍可能继续运行")}</small>
+              <small>{t("需常驻通知，切到后台后保持运行")}</small>
             </span>
             <input
               type="checkbox"
@@ -2936,7 +2936,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
           <label className="toggle-row">
             <span>
               <strong>{t("打开应用时预启动服务")}</strong>
-              <small>{t("提前启动本机服务，点「打开对话」几乎立即进入；不会自动进入对话页")}</small>
+              <small>{t("启动应用时预热服务，不自动跳转对话")}</small>
             </span>
             <input
               type="checkbox"
@@ -2955,7 +2955,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
                 {!overlayPermissionKnown
                   ? t("暂时无法确认悬浮窗权限")
                   : overlayBall.canDrawOverlays
-                  ? t("在其他应用上层显示悬浮球，点按展开快捷操作，长按打开 AI 对话小窗")
+                  ? t("点按快捷操作，长按打开对话小窗")
                   : t("需要「显示在其他应用上层」权限才能使用")}
               </small>
               {overlayBallEnabled && overlayPermissionKnown && !overlayBall.canDrawOverlays ? (
@@ -3007,11 +3007,11 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
             </div>
           </div>
           <p className="settings-note">
-            {t("后台保持可以降低应用被系统结束的概率，但无法阻止所有电池优化或内存清理。进程停止后，需要重新连接 Harness。")}
+            {t("可降低被系统杀后台的概率；进程停止后需重连")}
           </p>
           {keepAlive.promotedNotificationPermission === 'prompt' && (
             <p className="settings-note">
-              {t("系统尚未允许本应用展示实况动态通知（如状态栏胶囊或兼容的超级岛）。部分机型对手动安装包会先收紧该开关：如有需要，请先在应用信息右上角「允许受限设置」，再到系统通知设置里开启「实时更新」或相关展示权限；是否展示仍由系统与厂商策略决定。")}
+              {t("未获实况通知权限，请先允许受限设置并开启「实时更新」")}
             </p>
           )}
           <div className="settings-inline-actions">
@@ -3044,7 +3044,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
         <section className="settings-section" aria-labelledby="page-network-settings">
           <div className="section-title">
             <span className="section-icon"><Wifi size={19} /></span>
-            <div><h2 id="page-network-settings">{t("网络访问")}</h2><p>{t("控制 Harness 对话页面能连接哪些地址。")}</p></div>
+            <div><h2 id="page-network-settings">{t("网络访问")}</h2><p>{t("限制 Harness 对话页面的联网范围")}</p></div>
           </div>
           {/* 三档从最严到最宽，默认「仅本应用内」= 引入该设置前的行为。 */}
           <div className="network-access-options" role="radiogroup" aria-label={t("网络访问")}>
@@ -3068,10 +3068,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
             })}
           </div>
           <p className="settings-note">
-            {t("放开后，页面里的内容（包括模型输出）可以把会话文本发到这些地址；明文 http 还会被同网段监听者看到。")}
-          </p>
-          <p className="settings-note">
-            {t("跨域 fetch 仍受对方服务器的 CORS 策略约束：能加载图片和媒体，不代表能直接调用对方的 API。")}
+            {t("放开后页面可外发文本（HTTP 明文可见），跨域仍受 CORS 限制")}
           </p>
         </section>
 
@@ -3081,12 +3078,12 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
         <section className="settings-section" aria-labelledby="device-shell-entry">
           <div className="section-title section-title-action">
             <span className="section-icon"><SquareTerminal size={19} /></span>
-            <div><h2 id="device-shell-entry">{t("设备 Shell")}</h2><p>{t("设备上的 Shell：命令以 shell 身份执行，需要下面的 Shizuku 授权")}</p></div>
+            <div><h2 id="device-shell-entry">{t("设备 Shell")}</h2><p>{t("以 shell 身份执行设备命令，需 Shizuku 授权")}</p></div>
             <button className="button button-secondary" type="button" onClick={onOpenShellView} disabled={busy !== null || harnessVersionBusy}>
               <ExternalLink size={18} />{t("打开设备 Shell")}</button>
           </div>
           <p className="settings-note">
-            {t("命令直接跑在设备上，不在 Ubuntu 里；Shizuku 没授权时也能打开，只是设备工具不可用，Ubuntu 终端与 Harness 不受影响。")}
+            {t("直接运行在宿主机，未授权不影响 Ubuntu 与 Harness")}
           </p>
         </section>
         <section className="settings-section" aria-labelledby="shizuku-settings">
@@ -3113,7 +3110,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
             )}
           </div>
           <p className="settings-note">
-            {t("Shizuku 提供设备命令和文件操作能力，权限取决于其启动模式。未安装、未授权或断开时，设备工具不可用，不影响 Ubuntu 终端与 Harness。")}
+            {t("提供设备命令与操作权限；不可用时不影响 Harness")}
           </p>
         </section>
         </>
@@ -3145,7 +3142,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
           <div className="settings-subsection" aria-labelledby="automation-subpages">
             <div className="section-title">
               <span className="section-icon"><Bot size={19} /></span>
-              <div><h3 id="automation-subpages">{t("自动化能力")}</h3><p>{t("自动化功能分为三个页面：界面读取、副屏画面和动作参数")}</p></div>
+              <div><h3 id="automation-subpages">{t("自动化能力")}</h3><p>{t("无障碍读取、副屏画面与动作参数")}</p></div>
             </div>
             <SettingsPageRow icon={<Accessibility size={20} />} page="automation-accessibility" onOpen={onOpenSubpage} />
             <SettingsPageRow icon={<Smartphone size={20} />} page="automation-subscreen" onOpen={onOpenSubpage} />
@@ -3154,7 +3151,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
           <div className="settings-subsection" aria-labelledby="automation-disclaimer">
             <div className="section-title section-title-action">
               <span className="section-icon"><ShieldCheck size={19} /></span>
-              <div><h3 id="automation-disclaimer">{t("免责说明")}</h3><p>{t("自动化可能误点或误读界面，请只对自己有权操作的应用启用。")}</p></div>
+              <div><h3 id="automation-disclaimer">{t("免责说明")}</h3><p>{t("可能误点或误读，请仅用于本人授权应用")}</p></div>
               <button className="button button-secondary" type="button" disabled={busy !== null}
                 onClick={() => setAutomationDisclaimer({ mode: 'read' })}>
                 <ShieldCheck size={18} />{t("查看完整免责说明")}
@@ -3173,16 +3170,16 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
               <span className={`status-chip ${accessibility.enabled ? 'success' : ''}`}>{accessibility.enabled ? t("服务已开启") : t("需要手动开启")}</span>
             </div>
             <p className="settings-note">
-              {t("开启白名单限制时仅允许列表内的应用；关闭后可操作未加入名单的普通应用。锁屏、系统设置及涉及权限、支付、验证码和密码的页面仍受保护；服务必须由你在系统无障碍设置中手动开启。")}
+              {t("需手动开启服务；锁屏、支付、密码与权限页始终受保护")}
             </p>
           </div>
           <div className="settings-subsection" aria-labelledby="accessibility-whitelist">
             <div className="section-title">
               <span className="section-icon"><LockKeyhole size={19} /></span>
-              <div><h3 id="accessibility-whitelist">{t("无障碍白名单")}</h3><p>{t("开启限制后只允许名单内的应用，改完要点「保存白名单」")}</p></div>
+              <div><h3 id="accessibility-whitelist">{t("无障碍白名单")}</h3><p>{t("开启后仅允许名单内应用，修改后需保存")}</p></div>
             </div>
             <label className="toggle-row">
-              <span><strong>{t("启用无障碍白名单限制")}</strong><small>{t("关闭不会清空名单；修改后点击「保存白名单」生效，已设密码时仍需验证。")}</small></span>
+              <span><strong>{t("启用无障碍白名单限制")}</strong><small>{t("关闭不清空名单，保存后生效（设密需验证）")}</small></span>
               <input type="checkbox" role="switch" aria-label={t("启用无障碍白名单限制")}
                 checked={whitelistEnabledDraft} disabled={busy !== null}
                 onChange={event => setWhitelistEnabledDraft(event.target.checked)} />
@@ -3191,7 +3188,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
               {accessibility.whitelistEnabled === false ? t("当前生效：白名单限制已关闭") : t("当前生效：白名单限制已开启")}
             </p>
             <p className="settings-note">
-              {t("本应用（{0}）始终在白名单中。服务重启或重新连接后也无需再次添加。", accessibility.alwaysAllowedPackages.length ? accessibility.alwaysAllowedPackages.join("、") : t("未配置"))}
+              {t("本应用（{0}）始终在白名单中，无需重复添加", accessibility.alwaysAllowedPackages.length ? accessibility.alwaysAllowedPackages.join("、") : t("未配置"))}
             </p>
             <ApplicationPicker bridge={runtimeBridge} disabled={busy !== null}
               selected={[...new Set(accessibilityDraft.split(/[\n,]/u).map(value => value.trim()).filter(Boolean))]}
@@ -3240,7 +3237,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
               </span>
             </div>
             <p className="settings-note">
-              {t("密码只以加盐哈希保存在设备上，不写日志、不随桥返回，界面上输入后也不保留；忘记时可用系统生物识别或锁屏密码重置，重置只清密码，白名单保留。")}
+              {t("仅本机哈希保存；忘记可用锁屏验证重置，保留白名单")}
             </p>
             {accessibility.passwordConfigured && (
               <label className="field">
@@ -3318,7 +3315,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
               </span>
             </div>
             <p className="settings-note">
-                {t("自动化只能在这里开启。总开关不是「运行中」时，规则动作会被拒绝。暂停或紧急停止不会关闭系统无障碍服务，也不会清空白名单和规则。")}
+                {t("仅「运行中」允许执行规则；暂停不关服务也不清规则")}
             </p>
             <div className="button-row">
               <button className="button button-primary" type="button" disabled={busy !== null || automationPending || accessibility.automationRuntime === 'running'}
@@ -3341,8 +3338,8 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
             <p className="settings-note" role="status" data-testid="automation-service-status">
               {accessibilityServiceLabel(accessibility.serviceStatus)}
               {accessibility.serviceStatus === 'connected'
-                ? t("：服务已运行；只有总开关显示「运行中」时，规则动作才会执行。")
-                : t("：请在系统无障碍设置中手动开启（必要时先关闭再开启一次），应用无法代为开启。")}
+                ? t("：已连接，仅总开关运行中执行规则")
+                : t("：请在系统无障碍设置中手动开启或重开")}
             </p>
             {accessibility.serviceStatus !== 'connected' && (
               <button className="button button-secondary" type="button" onClick={onOpenAccessibilitySettings} disabled={busy !== null}>
@@ -3367,7 +3364,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
                 {automationRunsStatus === 'loading' ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}{t("刷新")}</button>
             </div>
             <p className="settings-note">
-              {t("记录只在无障碍服务本次运行期间存在，服务被系统回收后会从空开始——这里为空不代表没有发生过动作。记录里只有受控码与规则标识，不含界面文字、不含截图。")}
+              {t("仅保留本次运行记录（不含文字与截图），重启后清空")}
             </p>
             {automationRunsStatus === 'failed' && <p className="settings-note" role="alert">{t("运行记录读取失败，请稍后重试")}</p>}
             {automationRunsStatus === 'loading' && automationRuns === null && <p className="settings-note" role="status">{t("正在读取运行记录")}</p>}
@@ -3433,7 +3430,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
               )}
             </div>
             <p className="settings-note">
-              {t("规则由 AI 生成，保存前需要你确认；这里只能启用或停用规则，不能修改内容。停用规则不会删除它。")}
+              {t("保存前需确认，停用不删除规则")}
             </p>
             {accessibility.allowedPackages.filter(name => !accessibility.alwaysAllowedPackages.includes(name)).length === 0 ? (
               <p className="settings-note" role="status" data-testid="automation-rules-no-packages">
@@ -3601,7 +3598,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
         <div className="settings-subsection" aria-labelledby="diagnostics-subpages">
           <div className="section-title">
             <span className="section-icon"><ScrollText size={19} /></span>
-            <div><h3 id="diagnostics-subpages">{t("排查与反馈")}</h3><p>{t("日志、能力、反馈与系统浏览器分开放，导出日志在「日志与采集」里")}</p></div>
+            <div><h3 id="diagnostics-subpages">{t("排查与反馈")}</h3><p>{t("日志导出、设备自检、系统浏览器与反馈")}</p></div>
           </div>
           <SettingsPageRow icon={<ScrollText size={20} />} page="diagnostics-log" onOpen={onOpenSubpage} />
           <SettingsPageRow icon={<Gauge size={20} />} page="diagnostics-capability" onOpen={onOpenSubpage} />
@@ -3618,10 +3615,10 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
         <section className="settings-section" aria-labelledby="diagnostics-external">
           <div className="section-title">
             <span className="section-icon"><ExternalLink size={19} /></span>
-            <div><h2 id="diagnostics-external">{t("系统浏览器")}</h2><p>{t("使用系统浏览器打开 Harness：如果旧版 WebView 无法正常加载页面，可以用这种方式")}</p></div>
+            <div><h2 id="diagnostics-external">{t("系统浏览器")}</h2><p>{t("旧版 WebView 异常时改用系统浏览器打开")}</p></div>
           </div>
           <p className="field-help">
-            {t("系统浏览器拿到的是与本次运行绑定的令牌，可以完整使用 Harness（不是只读预览）。运行环境停止后令牌失效；重新打开时请回到应用再次点击。")}
+            {t("使用本次运行令牌完整访问，停止运行后失效")}
           </p>
           <div className="settings-inline-actions">
             <button className="button button-secondary" type="button" onClick={onOpenExternalHarness} disabled={busy !== null || runtime.phase !== 'running'}>
@@ -3644,7 +3641,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
                 </select>
               </label>
               <p className="field-help">
-                {t("固定一个浏览器后，点上面的按钮就用它直接打开；选「每次询问」则每次都交给系统选择器。浏览器卸载后会自动回到每次询问。")}
+                {t("指定后直接打开，卸载后自动恢复「每次询问」")}
               </p>
             </>
           )}
@@ -3655,7 +3652,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
         <section className="settings-section" aria-labelledby="diagnostic-settings">
           <div className="section-title section-title-action">
             <span className="section-icon"><ScrollText size={19} /></span>
-            <div><h2 id="diagnostic-settings">{t("诊断日志")}</h2><p>{t("只记录应用内部状态码与计数，用于排查问题")}</p></div>
+            <div><h2 id="diagnostic-settings">{t("诊断日志")}</h2><p>{t("记录内部状态码与计数用于排障")}</p></div>
             <span className={`status-chip ${diagnostic.enabled ? 'success' : ''}`}>
               {diagnostic.enabled ? t("收集中") : t("未收集")}
             </span>
@@ -3663,7 +3660,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
           <label className="toggle-row">
             <span>
               <strong>{t("收集诊断日志")}</strong>
-              <small>{t("默认开启；关闭后停止记录运行时阶段、启动结果与前台服务状态")}</small>
+              <small>{t("关闭后停止记录运行时与服务状态")}</small>
             </span>
             <input
               type="checkbox"
@@ -3676,7 +3673,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
           <label className="toggle-row">
             <span>
               <strong>{t("导出 Harness 运行日志")}</strong>
-              <small>{t("默认开启；仅自动脱敏凭据，运行日志仍可能包含文件路径、URL、会话内容或工具参数")}</small>
+              <small>{t("仅脱敏凭据，仍可能含路径、URL 或会话内容")}</small>
             </span>
             <input
               type="checkbox"
@@ -3721,8 +3718,8 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
           </div>
           <p className="settings-note">
             {diagnostic.includeHarnessLog
-              ? t("应用事件只含内部状态码与计数，不含路径或凭据；附加的 Harness 运行日志仅自动脱敏模型密钥、授权头等凭据，仍可能包含文件路径、URL、会话内容或工具参数。日志保存在应用私有目录且不参与备份，到期自动删除。")
-              : t("诊断日志只包含应用内部的事件名、状态码、布尔值与计数，不含设备原始标识、路径、URL 或凭据；导出不附带 Harness 运行日志。日志保存在应用私有目录且不参与备份，到期自动删除。")}
+              ? t("仅自动脱敏模型密钥、授权头等凭据，仍可能包含文件路径、URL 与会话内容；本地存放到期自动清理。")
+              : t("仅含内部状态码与计数，不含路径、URL 或凭据，到期自动清理。")}
           </p>
           <div className="settings-inline-actions">
             <button className="button button-secondary" type="button" onClick={() => diagnostic.includeHarnessLog ? setConfirmDiagnosticExport(true) : onShareDiagnostic()} disabled={busy !== null || (diagnostic.fileCount === 0 && !(diagnostic.includeHarnessLog && diagnostic.harnessLogAvailable === true))}>
@@ -3755,7 +3752,7 @@ function SettingsScreen({ accessibility, busy, harnessVersionBusy, diagnostic, d
         <>
         <section className="settings-section" aria-labelledby="feedback-title">
           <h2 id="feedback-title">{t('问题反馈')}</h2>
-          <p>{t('反馈时请附上应用版本、屏幕方向和复现步骤。分享日志前请检查是否包含个人信息。')}</p>
+          <p>{t('请附版本与复现步骤，分享日志前注意隐藏隐私')}</p>
           <p>QQ {t('交流群')}：1108895375</p>
           <a className="button button-secondary" href="https://github.com/dphmoblie/deepseek-harness-android/issues" target="_blank" rel="noopener noreferrer">
             <ExternalLink size={18} />{t('在 GitHub 反馈问题')}
@@ -5688,25 +5685,74 @@ export function App() {
   }, [readMailbox, run])
 
   /**
-   * 一键导入：inbox 的 tar → 工作区 `mailbox-import/`。
+   * 一键导入：当前目录（投递区 inbox/outbox 或已授权共享目录）的 tar → 工作区 `mailbox-import/`。
    *
    * 必须由用户点击触发（没有任何自动搬运路径）：导入会替换工作区里的落点目录，
    * 静默执行会让用户在自己的工作区里看到来历不明的目录。
    */
   const importMailbox = useCallback(() => {
+    if (filesRoot.kind === 'storage') {
+      const entry = storageDirs?.entries.find(item => item.guestPath === filesRoot.guestPath && item.path === filesRoot.path)
+      if (!entry?.available) return
+      const guestPath = filesRoot.guestPath
+      const sourceDirectory = storageDirectory?.guestPath === guestPath ? storageDirectory.path : undefined
+      void run('mailbox-import', async isCurrent => {
+        const result = await runtimeBridge.importMailbox({
+          guestPath,
+          ...(sourceDirectory === undefined ? {} : { sourceDirectory }),
+        })
+        if (!isCurrent()) return
+        setLastMailboxImport(result)
+        await readMailbox(isCurrent).catch(() => {
+          // 搬运已成功；状态重读失败不影响结果展示。
+        })
+      }, t("归档已导入工作区"))
+      return
+    }
+    if (mailbox?.available !== true) return
+    const root = filesRoot.root
+    const sourceDirectory = mailboxDirectory?.root === root ? mailboxDirectory.path : undefined
     void run('mailbox-import', async isCurrent => {
-      const result = await runtimeBridge.importMailbox()
+      const result = root === 'inbox' && sourceDirectory === undefined
+        ? await runtimeBridge.importMailbox()
+        : await runtimeBridge.importMailbox({
+          root,
+          ...(sourceDirectory === undefined ? {} : { sourceDirectory }),
+        })
       if (!isCurrent()) return
       setLastMailboxImport(result)
       await readMailbox(isCurrent).catch(() => {
         // 搬运已成功；状态重读失败不影响结果展示。
       })
     }, t("投递区已导入工作区"))
-  }, [readMailbox, run])
+  }, [filesRoot, mailbox, mailboxDirectory, readMailbox, run, storageDirectory, storageDirs])
 
-  /** 一键导出：工作区 → outbox 的 tar + manifest + sha256；同样必须由用户点击触发。 */
+  /**
+   * 一键导出：工作区 → 当前目录（outbox 或已授权共享目录）的 tar + manifest + sha256；
+   * 同样必须由用户点击触发。
+   */
   const exportMailbox = useCallback(() => {
-    if (filesRoot.kind !== 'mailbox' || mailbox?.available !== true) return
+    if (filesRoot.kind === 'storage') {
+      const entry = storageDirs?.entries.find(item => item.guestPath === filesRoot.guestPath && item.path === filesRoot.path)
+      if (!entry?.available) return
+      const guestPath = filesRoot.guestPath
+      const destinationDirectory = storageDirectory?.guestPath === guestPath ? storageDirectory.path : undefined
+      void run('mailbox-export', async isCurrent => {
+        const result = await runtimeBridge.exportMailbox(undefined, destinationDirectory, { guestPath })
+        if (!isCurrent()) return
+        setLastMailboxExport(result)
+        await readMailbox(isCurrent).catch(() => {
+          // 搬运已成功；状态重读失败不影响结果展示。
+        })
+        if (isCurrent()) {
+          await readStorageDirectory(guestPath, destinationDirectory, isCurrent).catch(() => {
+            // 产物已导出；列表重读失败可由用户手动刷新。
+          })
+        }
+      }, t("工作区已导出到当前目录"))
+      return
+    }
+    if (mailbox?.available !== true) return
     const root = filesRoot.root
     const destinationDirectory = root === 'outbox' && mailboxDirectory?.root === root ? mailboxDirectory.path : undefined
     void run('mailbox-export', async isCurrent => {
@@ -5720,14 +5766,21 @@ export function App() {
         // 产物已导出；列表重读失败可由用户手动刷新。
       })
     }, t("投递区已导出到 outbox"))
-  }, [filesRoot, mailbox, mailboxDirectory, readMailbox, readMailboxDirectory, run])
+  }, [filesRoot, mailbox, mailboxDirectory, readMailbox, readMailboxDirectory, readStorageDirectory, run, storageDirectory, storageDirs])
 
-  /** 重新检查投递区可用性：用户在系统设置里授权后手动触发，避免反复进出页面。 */
+  /** 重新检查文件与挂载目录可用性：用户在系统设置里授权后手动触发，避免反复进出页面。 */
   const refreshMailbox = useCallback(() => {
     void run('mailbox-refresh', async isCurrent => {
-      await readMailbox(isCurrent)
+      const next = await readMailbox(isCurrent)
+      if (!isCurrent()) return
+      const root = filesRootRef.current
+      if (root.kind === 'mailbox' && next.available) {
+        await readMailboxDirectory(root.root, mailboxDirectory?.root === root.root ? mailboxDirectory.path : undefined, isCurrent).catch(() => {})
+      } else if (root.kind === 'storage') {
+        await readStorageDirectory(root.guestPath, storageDirectory?.guestPath === root.guestPath ? storageDirectory.path : undefined, isCurrent).catch(() => {})
+      }
     })
-  }, [readMailbox, run])
+  }, [mailboxDirectory, readMailbox, readMailboxDirectory, readStorageDirectory, run, storageDirectory])
 
   /**
    * 切换「文件管理」页浏览的根。

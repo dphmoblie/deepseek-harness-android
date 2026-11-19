@@ -396,19 +396,134 @@ class VirtualScreenService : Service() {
         }
     }
 
-    /** 读取副屏节点树，并在显示编号刚重建或窗口刚切换时做一次有界刷新/重试，避免短暂无窗口误伤。 */
-    private fun dumpTreeWithRecovery(initialDisplayId: Int, maxDepth: Int): JSONObject {
-        val first = VirtualScreenTree.dump(initialDisplayId, maxDepth, VirtualScreenTree.MAX_NODES)
+    /** 读取副屏节点树（支持深层语义压缩 compact 模式），并在显示编号刚重建或窗口刚切换时做一次有界刷新/重试。 */
+    private fun dumpTreeWithRecovery(initialDisplayId: Int, maxDepth: Int, compact: Boolean = false): JSONObject {
+        val first = VirtualScreenTree.dump(initialDisplayId, maxDepth, VirtualScreenTree.MAX_NODES, compact = compact)
         if (first.optBoolean("available") || !VirtualScreenTree.available()) return first
         val latest = freshState()
         val latestId = latest.optInt("displayId", initialDisplayId)
         if (latestId > 0 && latestId != initialDisplayId) {
-            return VirtualScreenTree.dump(latestId, maxDepth, VirtualScreenTree.MAX_NODES)
+            return VirtualScreenTree.dump(latestId, maxDepth, VirtualScreenTree.MAX_NODES, compact = compact)
         }
         if (!first.optString("reason").contains("没有可读取的窗口")) return first
         SystemClock.sleep(150L)
         requireAccess()
-        return VirtualScreenTree.dump(latestId.takeIf { it > 0 } ?: initialDisplayId, maxDepth, VirtualScreenTree.MAX_NODES)
+        return VirtualScreenTree.dump(latestId.takeIf { it > 0 } ?: initialDisplayId, maxDepth, VirtualScreenTree.MAX_NODES, compact = compact)
+    }
+
+    /** 动作后无障碍树有界复读：若第一次读取与动作前完全一致，短暂等待异步 UI 刷新后再读一次，避免旧树误报未变化。 */
+    private fun observeSemanticAfterAction(
+        displayId: Int,
+        before: VirtualScreenTreeDiff.SemanticSnapshot?,
+        waitIfUnchangedMillis: Long,
+    ): JSONObject? {
+        if (before == null) return null
+        val firstAfter = VirtualScreenTree.dumpSemantic(displayId) ?: return null
+        val firstDiff = VirtualScreenTreeDiff.diff(before, firstAfter)
+        if (firstDiff.optBoolean("changed") || waitIfUnchangedMillis <= 0L) return firstDiff
+        SystemClock.sleep(waitIfUnchangedMillis.coerceIn(100L, 400L))
+        if (!canObserve()) return firstDiff
+        val secondAfter = VirtualScreenTree.dumpSemantic(displayId) ?: return firstDiff
+        return VirtualScreenTreeDiff.diff(before, secondAfter)
+    }
+
+    /** 解析 `node_click` / `node_long_click` / `node_scroll` 的语义选择器参数。 */
+    private fun parseNodeSelector(parameters: JSONObject): VirtualScreenTreeDiff.NodeSelector =
+        VirtualScreenTreeDiff.NodeSelector(
+            viewId = parameters.optString("viewId").takeIf { it.isNotBlank() },
+            text = parameters.optString("text").takeIf { it.isNotBlank() },
+            textContains = parameters.optString("textContains").takeIf { it.isNotBlank() },
+            desc = parameters.optString("desc").takeIf { it.isNotBlank() },
+            matchIndex = parameters.optInt("matchIndex", 0),
+        )
+
+    /**
+     * 副屏无 OCR、无坐标漂移的语义控件操作：`node_click` / `node_long_click` / `node_scroll`。
+     *
+     * 优先在主进程无障碍服务里直接对目标节点执行 `ACTION_CLICK` / `ACTION_LONG_CLICK` / `ACTION_SCROLL_*`；
+     * 若自定义控件拒绝无障碍动作，则用**此刻实时读取的 bounds 中心**自动回退到 Shizuku 副屏点击/滑动，
+     * 并在完成后附带动作前后的结构化 `observe` Diff。
+     */
+    private fun nodeActionOnDisplay(parameters: JSONObject, verb: String, displayId: Int): JSONObject {
+        val selector = parseNodeSelector(parameters)
+        if (verb != "node_scroll" && !selector.isValid()) {
+            throw RuntimeFailure("VIRTUAL_SCREEN_INVALID", "请至少提供 viewId、text、textContains 或 desc 之一")
+        }
+        val direction = parameters.optString("direction", "forward").ifBlank { "forward" }
+        if (verb == "node_scroll" && direction != "forward" && direction != "backward") {
+            throw RuntimeFailure("VIRTUAL_SCREEN_INVALID", "direction 只能是 forward 或 backward")
+        }
+        val wantObserve = parameters.optBoolean("observe", true)
+        val beforeSemantic = if (wantObserve && VirtualScreenTree.available()) VirtualScreenTree.dumpSemantic(displayId) else null
+        val result = VirtualScreenTree.performNodeAction(displayId, selector, verb, direction)
+        if (!result.found) {
+            audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.FAILED)
+            throw RuntimeFailure(
+                result.errorCode ?: "VIRTUAL_SCREEN_NODE_NOT_FOUND",
+                result.reason ?: "副屏当前窗口未找到匹配控件",
+            )
+        }
+        var executedMethod = result.method
+        var shellPayload: JSONObject? = null
+        if (!result.performed) {
+            val w = snapshot.optInt("width", spec.widthPx)
+            val h = snapshot.optInt("height", spec.heightPx)
+            val cx = result.centerX.coerceIn(0, (w - 1).coerceAtLeast(0))
+            val cy = result.centerY.coerceIn(0, (h - 1).coerceAtLeast(0))
+            val validRect = result.bounds[2] > result.bounds[0] && result.bounds[3] > result.bounds[1]
+            if (!validRect || w <= 0 || h <= 0) {
+                audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.FAILED)
+                throw RuntimeFailure("VIRTUAL_SCREEN_INJECTION_FAILED", "目标控件拒绝无障碍操作且没有可用实时坐标")
+            }
+            val fallback = JSONObject().put("sessionId", parameters.getString("sessionId"))
+            val settle = parameters.optInt("settleMs", 1500).coerceIn(0, VirtualScreenSettle.MAX_BUDGET_MILLIS)
+            when (verb) {
+                "node_long_click" -> {
+                    fallback.put("action", "long_press").put("x", cx).put("y", cy)
+                        .put("durationMs", parameters.optInt("durationMs", 700).coerceIn(500, 3000))
+                        .put("settleMs", settle)
+                    executedMethod = "live_bounds_long_press"
+                }
+                "node_scroll" -> {
+                    val span = ((result.bounds[3] - result.bounds[1]) * 0.55).toInt().coerceIn(120, (h / 2).coerceAtLeast(120))
+                    val startY = if (direction == "forward") (cy + span / 2).coerceIn(0, h - 1) else (cy - span / 2).coerceIn(0, h - 1)
+                    val endY = if (direction == "forward") (cy - span / 2).coerceIn(0, h - 1) else (cy + span / 2).coerceIn(0, h - 1)
+                    fallback.put("action", "swipe").put("x", cx).put("y", startY)
+                        .put("endX", cx).put("endY", endY).put("durationMs", 320).put("settleMs", settle)
+                    executedMethod = "live_bounds_swipe"
+                }
+                else -> {
+                    fallback.put("action", "tap").put("x", cx).put("y", cy).put("settleMs", settle)
+                    executedMethod = "live_bounds_tap"
+                }
+            }
+            shellPayload = checkNotNull(shizuku).virtualScreenAction(fallback.toString()).also {
+                if (it.has("active")) snapshot = it
+            }
+        } else if (wantObserve) {
+            // 无障碍动作是异步投递到目标应用主线程的，给 180ms 让首波布局/状态变更落地。
+            SystemClock.sleep(180L)
+        }
+        audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.SUCCEEDED)
+        val matchedJson = JSONObject()
+            .put("bounds", org.json.JSONArray().put(result.bounds[0]).put(result.bounds[1]).put(result.bounds[2]).put(result.bounds[3]))
+            .put("center", org.json.JSONArray().put(result.centerX).put(result.centerY))
+        if (result.matchedText.isNotEmpty()) matchedJson.put("text", result.matchedText)
+        if (result.matchedViewId.isNotEmpty()) matchedJson.put("viewId", result.matchedViewId)
+        val response = JSONObject()
+            .put("ok", true)
+            .put("action", verb)
+            .put("sessionId", parameters.getString("sessionId"))
+            .put("displayId", displayId)
+            .put("method", executedMethod)
+            .put("matched", matchedJson)
+        shellPayload?.optJSONObject("settle")?.let { response.put("settle", it) }
+        if (wantObserve) {
+            val observe = observeSemanticAfterAction(displayId, beforeSemantic, waitIfUnchangedMillis = 220L)
+                ?: shellPayload?.optJSONObject("tileDiff")
+            if (observe != null) response.put("observe", observe)
+        }
+        return response
     }
 
     fun action(parameters: JSONObject): JSONObject {
@@ -430,26 +545,58 @@ class VirtualScreenService : Service() {
             requireAccess()
             return checkNotNull(shizuku).virtualScreenAction(parameters.toString())
         }
-        // 节点树与**所有**文字注入都跑在本进程：无障碍回退链只有这里才拿得到服务实例；
-        // 纯 ASCII 的按键兜底再由 textOnDisplay 接回设备 Shell 的既有通道（见该函数）。
-        // 显示编号取宿主状态里的值，读不到时按可重试的瞬时状态报错。
-        if (verb == "tree" || verb == "text") {
+        // 节点树、文字注入与语义控件操作都跑在本进程：无障碍能力只有这里才拿得到服务实例；
+        // 纯 ASCII 按键与自定义控件实时坐标回退再按需接回设备 Shell 通道。
+        if (verb == "tree" || verb == "text" || verb == "node_click" || verb == "node_long_click" || verb == "node_scroll") {
             requireAccess()
             val id = displayId()
             if (verb == "tree") {
-                return dumpTreeWithRecovery(id, parameters.optInt("maxDepth", 4)).also {
+                val compact = parameters.optBoolean("compact", false)
+                return dumpTreeWithRecovery(id, parameters.optInt("maxDepth", 4), compact = compact).also {
                     audit.record(AuditEvent.VIRTUAL_SCREEN_READ, AuditResult.SUCCEEDED)
                 }
             }
-            return textOnDisplay(parameters, id)
+            if (verb == "text") {
+                val wantObserve = parameters.optBoolean("observe", true)
+                val beforeSemantic = if (wantObserve && VirtualScreenTree.available()) VirtualScreenTree.dumpSemantic(id) else null
+                val result = textOnDisplay(parameters, id)
+                if (wantObserve && beforeSemantic != null) {
+                    SystemClock.sleep(150L)
+                    observeSemanticAfterAction(id, beforeSemantic, waitIfUnchangedMillis = 180L)?.let {
+                        result.put("observe", it)
+                    }
+                }
+                return result
+            }
+            if (!actionSlot.tryAcquire(2, java.util.concurrent.TimeUnit.SECONDS)) throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "上一步副屏操作尚未完成")
+            return try {
+                requireAccess()
+                nodeActionOnDisplay(parameters, verb, id)
+            } finally {
+                actionSlot.release()
+            }
         }
         if (!actionSlot.tryAcquire(2, java.util.concurrent.TimeUnit.SECONDS)) throw RuntimeFailure("VIRTUAL_SCREEN_BUSY", "上一步副屏操作尚未完成")
         return try {
             requireAccess()
+            val isInteractive = verb in setOf("tap", "swipe", "long_press", "keyevent", "back", "gesture")
+            val wantObserve = isInteractive && parameters.optBoolean("observe", true)
+            val currentDisplayId = snapshot.optInt("displayId", 0)
+            val beforeSemantic = if (wantObserve && currentDisplayId > 0 && VirtualScreenTree.available()) {
+                VirtualScreenTree.dumpSemantic(currentDisplayId)
+            } else null
             checkNotNull(shizuku).virtualScreenAction(parameters.toString()).also {
                 if (verb == "config") VirtualScreenPreferences.save(this, parameters)
                 if (it.has("active")) snapshot = it
                 else if (verb == "restart" || it.has("displayId")) freshState()
+                if (wantObserve) {
+                    val afterDisplayId = it.optInt("displayId", currentDisplayId).takeIf { d -> d > 0 } ?: currentDisplayId
+                    val observe = if (afterDisplayId > 0 && beforeSemantic != null) {
+                        observeSemanticAfterAction(afterDisplayId, beforeSemantic, waitIfUnchangedMillis = 180L)
+                    } else null
+                    val resolvedObserve = observe ?: it.optJSONObject("tileDiff")
+                    if (resolvedObserve != null) it.put("observe", resolvedObserve)
+                }
                 audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.SUCCEEDED)
             }
         } catch (e: Exception) { audit.record(AuditEvent.VIRTUAL_SCREEN_ACTION, AuditResult.FAILED); throw e }
@@ -888,7 +1035,8 @@ class VirtualScreenService : Service() {
         @Volatile var current: VirtualScreenService? = null; private set
         @Volatile private var errorContext: Context? = null
         @Volatile private var lastErrorResource = 0
-        @Volatile private var lastErrorCode = ""
+        @Volatile internal var lastErrorCode = ""
+            private set
         val lastError: String get() {
             val context = errorContext ?: return ""
             val resource = lastErrorResource
@@ -1066,17 +1214,51 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         }
     }
 
-    /** 逐事件触摸直传；设备端对 touch 不占用单次动作信号量，串行由宿主侧保证。 */
+    /** 合并连续拖动中的过期 move，避免慢设备/Binder 抖动时在 touchExecutor 上积压一串旧坐标。 */
+    private val pendingStreamMove = java.util.concurrent.atomic.AtomicReference<PreviewTouchEffect.Stream?>(null)
+
+    /**
+     * 热路径预览状态缓存（最多复用 250ms）：避免 60fps 预览每一帧都去调用 `service.freshState()`
+     * 抢 `ShellVirtualScreen.state()` 的实例锁，从而彻底消除连续输入时的预览帧卡顿。
+     */
+    @Volatile private var cachedSessionId = ""
+    @Volatile private var cachedChannel = ""
+    @Volatile private var cachedMode = "limited"
+    @Volatile private var cachedFps = 0.0
+    @Volatile private var cachedStateAtMillis = 0L
+
+    /** 逐事件触摸直传；连续 move 自动合并为最新坐标，down/up/cancel 严格保序并在落地后立刻唤醒取帧。 */
     private fun sendTouch(worker: java.util.concurrent.ExecutorService?, service: VirtualScreenService?, effect: PreviewTouchEffect.Stream) {
         if (worker == null || service == null) return
+        if (effect.phase == "move") {
+            val firstPending = pendingStreamMove.getAndSet(effect) == null
+            if (!firstPending) return
+            worker.execute {
+                val latest = pendingStreamMove.getAndSet(null) ?: return@execute
+                deliverStreamTouch(service, latest)
+            }
+            return
+        }
+        // down / cancel 丢弃之前残留的旧 move；up 前若存在同会话最新 move 则先落盘再抬起，保证轨迹完整。
+        val pending = pendingStreamMove.getAndSet(null)
+        worker.execute {
+            if (effect.phase == "up" && pending != null && pending.session == effect.session && pending.version == effect.version) {
+                deliverStreamTouch(service, pending)
+            }
+            deliverStreamTouch(service, effect)
+        }
+    }
+
+    private fun deliverStreamTouch(service: VirtualScreenService, effect: PreviewTouchEffect.Stream) {
         val request = JSONObject().put("sessionId", effect.session).put("action", "touch").put("phase", effect.phase)
             .put("x", effect.x).put("y", effect.y)
-        worker.execute {
-            try {
-                if (previewTouchDeliveryAllowed(effect.phase, effect.version, lifecycle.generation)) service.action(request)
-            } catch (_: Exception) {
-                if (effect.phase == "down") main.post { report(AppLanguage.localizedContext(context).getString(R.string.virtual_screen_touch_failed)) }
+        try {
+            if (previewTouchDeliveryAllowed(effect.phase, effect.version, lifecycle.generation)) {
+                service.action(request)
+                if (effect.phase != "cancel") main.post { pump.nudge() }
             }
+        } catch (_: Exception) {
+            if (effect.phase == "down") main.post { report(AppLanguage.localizedContext(context).getString(R.string.virtual_screen_touch_failed)) }
         }
     }
 
@@ -1087,7 +1269,10 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
         if (effect.swipe) request.put("endX", effect.endX).put("endY", effect.endY).put("durationMs", effect.durationMs)
         worker.execute {
             try {
-                if (previewDiscreteDeliveryAllowed(effect.version, lifecycle.generation)) service.action(request)
+                if (previewDiscreteDeliveryAllowed(effect.version, lifecycle.generation)) {
+                    service.action(request)
+                    main.post { pump.nudge() }
+                }
             } catch (_: Exception) { main.post { report(AppLanguage.localizedContext(context).getString(R.string.virtual_screen_action_failed)) } }
             finally { inputBusy.set(false) }
         }
@@ -1105,6 +1290,9 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
     private fun clearFrame() {
         // 清屏时丢掉按下点（触摸流内部的那一份），与改造前 `down = null` 同一位置、同一语义。
         touchFlow.clearDownPoint()
+        pendingStreamMove.set(null)
+        cachedSessionId = ""
+        cachedStateAtMillis = 0L
         setImageDrawable(null); displayed = null
         // 观测状态（画面时刻 / 会话 / 上一次采样）与画面一起清空：判定核心持有它们，清屏只有这一条路径。
         core.clear()
@@ -1148,12 +1336,27 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                 var samples: IntArray? = null
                 try {
                     val service = checkNotNull(VirtualScreenService.current)
-                    // 帧率必须来自与这一帧同一拍的状态：health 的快照最多旧 1500 毫秒，拿它贴帧率会慢半拍。
-                    val state = service.freshState()
-                    id = state.getString("sessionId")
-                    channel = state.optString("touchChannel", "")
-                    mode = VirtualScreenPolicy.frameModeOf(state.optString(VirtualScreenPolicy.PREVIEW_FIELD))
-                    fps = state.optDouble("frameFps", 0.0)
+                    val now = SystemClock.elapsedRealtime()
+                    // 每 250ms 刷新一次 freshState（或首拍/异常后立刻刷新）；其余高频拍直接复用会话并只拉无锁的 hardwareFrame，
+                    // 既保证帧率读数新鲜，又避免 60fps 预览每帧去抢 ShellVirtualScreen.state() 的实例锁。
+                    val refreshState = cachedSessionId.isEmpty() || cachedStateAtMillis <= 0L || now - cachedStateAtMillis >= 250L
+                    if (refreshState) {
+                        val state = service.freshState()
+                        id = state.getString("sessionId")
+                        channel = state.optString("touchChannel", "")
+                        mode = VirtualScreenPolicy.frameModeOf(state.optString(VirtualScreenPolicy.PREVIEW_FIELD))
+                        fps = state.optDouble("frameFps", 0.0)
+                        cachedSessionId = id
+                        cachedChannel = channel
+                        cachedMode = mode
+                        cachedFps = fps
+                        cachedStateAtMillis = now
+                    } else {
+                        id = cachedSessionId
+                        channel = cachedChannel
+                        mode = cachedMode
+                        fps = cachedFps
+                    }
                     if (android.os.Build.VERSION.SDK_INT >= 30) {
                         val hardware = service.hardwareFrame(id)
                         hardwareFrame = true
@@ -1170,6 +1373,7 @@ class VirtualScreenPreview(context: android.content.Context) : androidx.appcompa
                 } catch (_: Exception) {
                     fetchedHardware?.close()
                     fetchedHardware = null
+                    cachedStateAtMillis = 0L
                     samples = null
                     bitmap = null
                 }

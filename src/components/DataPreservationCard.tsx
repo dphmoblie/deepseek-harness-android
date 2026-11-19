@@ -117,7 +117,7 @@ export function DataPreservationCard({ bridge = runtimeBridge }: { bridge?: Runt
         <span className="section-icon"><ArchiveRestore size={19} /></span>
         <div>
           <h2 id="data-preservation-title">{t('数据保留')}</h2>
-          <p>{t('更新运行时会整块保留用户空间（/root），再合并回新根目录；旧令牌、旧脚本与缓存不会搬回，没搬回的项目留在这里。')}</p>
+          <p>{t('更新运行时未合并回 /root 的冲突项留在此处')}</p>
         </div>
         <button
           className="icon-button"

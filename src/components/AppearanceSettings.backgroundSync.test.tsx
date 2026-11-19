@@ -115,7 +115,7 @@ describe('外观设置：连背景一起同步的持久化', () => {
 
     await waitFor(() => expect(bridge.setHarnessSyncBackground).toHaveBeenCalledWith(false))
     expect(screen.getByText('还没有选择背景文件，已只同步颜色')).toBeTruthy()
-    expect(screen.getByText(/重开后仍按上次的选择显示|重启后仍按上次的选择显示/u)).toBeTruthy()
+    expect(screen.getByText(/重启后保留/u)).toBeTruthy()
   })
 
   it('原生状态回读迟到时不会覆盖用户先完成的开关操作', async () => {

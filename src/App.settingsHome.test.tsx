@@ -161,10 +161,11 @@ describe('设置首页：分组与分类筛选', () => {
     const filesGroup = screen.getByRole('region', { name: '文件管理' })
     fireEvent.click(within(filesGroup).getByRole('button', { name: /文件管理/ }))
 
-    // 进得去，而且是一个浏览器：标题是这一页自己的，投递区与共享目录都在里面。
+    // 进得去，而且是两张统一卡片：标题是这一页自己的，投递区与共享目录合并在同一套浏览与搬运卡里。
     expect(await screen.findByRole('heading', { level: 1, name: '文件管理' })).toBeVisible()
     expect(screen.getByRole('tablist')).toBeVisible()
-    expect(screen.getByRole('region', { name: '目录' })).toBeVisible()
+    expect(screen.getByRole('region', { name: '外部文件与工作区' })).toBeVisible()
+    expect(screen.getByRole('region', { name: '挂载目录' })).toBeVisible()
   })
 
   it('切到英文后整屏入口都是英文', async () => {

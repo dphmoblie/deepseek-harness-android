@@ -638,6 +638,21 @@ internal class RuntimeStorageDirs(
     }
 
     /**
+     * 解析白名单目录（或其中的相对子目录）对应的真实宿主目录，供工作区导入/导出与共享目录共走同一套边界校验。
+     *
+     * 逐级 NoFollow 校验完全委托给 [RuntimeDirectoryBrowser.requireDirectory]，确保「能浏览」与「能搬运」同口径。
+     */
+    fun resolveDirectory(guestPath: String, subdirectory: String?): File {
+        val status = requireGuestDirectory(guestPath)
+        val normalized = normalizeSharedSubdirectory(subdirectory)
+        return RuntimeDirectoryBrowser.requireDirectory(
+            File(status.entry.path),
+            normalized,
+            RuntimeDirectoryBrowser.SHARED_STORAGE,
+        )
+    }
+
+    /**
      * 把一个访客路径（`/mnt/user/<序号>`）解析成**当前可用**的白名单条目。
      *
      * 使用持久化槽位，不按数组位置编号；移除条目不会改变其它目录的挂载点。

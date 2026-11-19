@@ -3324,23 +3324,101 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
   white-space: nowrap;
 }
 
-/*
- * 「文件管理」页现在是一张卡（「外部工作区」）里分两块：目录浏览与搬运、目录清单。
- * 两块之间只画一条分隔线，不再各占一张卡 —— 用户要的是一个口径，不是两个功能。
- */
-.files-screen .settings-subsection {
-  margin-top: 18px;
-  padding: 16px 0 0;
-  border: 0;
+/* 文件管理页：统一卡片内的路径摘要、来源徽章、工具栏与工作区导入/导出操作区。 */
+.files-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.files-alert-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.files-active-root {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-faint);
+  border-radius: var(--radius-control);
+  background: var(--card-color, var(--surface));
+}
+
+.files-active-root-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.files-kind-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-hover);
+  color: var(--muted);
+  font-size: 0.65rem;
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+.files-kind-badge--shared {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.mailbox-browser-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mailbox-browser-note,
+.mailbox-meta {
+  margin: 0;
+  color: var(--card-muted, var(--muted));
+  font-size: 0.72rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.mailbox-browser-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--amber-text-strong);
+  font-size: 0.75rem;
+}
+
+.files-transfer-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
   border-top: 1px solid var(--line-faint);
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
+}
+
+.files-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .mailbox-root-tabs {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
   gap: 6px;
 }
 
@@ -3472,9 +3550,16 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
   white-space: nowrap;
 }
 
-.mailbox-entry-file {
+.mailbox-entry-file,
+.mailbox-entry--file {
   cursor: default;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.mailbox-entry-size {
+  color: var(--muted) !important;
+  font-size: 0.6875rem !important;
+  white-space: nowrap;
 }
 
 .mailbox-entry-actions {
@@ -3485,12 +3570,13 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
   min-width: 0;
 }
 
-.mailbox-entry-actions .compact-button {
+.mailbox-entry-actions .compact-button,
+.mailbox-entry-action {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   min-height: 30px;
-  padding: 5px 7px;
+  padding: 5px 8px;
   white-space: nowrap;
 }
 
@@ -3511,7 +3597,8 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
     justify-content: center;
   }
 
-  .mailbox-entry-file {
+  .mailbox-entry-file,
+  .mailbox-entry--file {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
@@ -3531,12 +3618,12 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
 }
 
 .settings-note {
-  margin-top: 10px;
-  padding-top: 9px;
+  margin-top: 8px;
+  padding-top: 7px;
   border-top: 1px solid var(--line-faint);
   color: var(--card-muted, var(--muted));
   font-size: 0.72rem;
-  line-height: 1.55;
+  line-height: 1.45;
 }
 
 /* 根通道三档单选、电源安全操作、自动化任务步骤与清理确认面板的视觉规整（纯 CSS，不动逻辑与 DOM） */
@@ -3876,15 +3963,14 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
  * 两个路径都可能很长（宿主路径上限 240 字符），所以可断行处一律允许在任意位置断行；
  * 与投递区 `.mailbox-path` 是同一条规则，否则长路径会把整张设置卡片撑宽。
  */
-.storage-dirs-actions > .button {
-  margin-right: 8px;
+.storage-dirs-actions {
+  margin-top: 4px;
 }
 
 .storage-dir-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 12px;
 }
 
 .storage-dir-row {
@@ -3899,11 +3985,23 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
   contain-intrinsic-size: 0 76px;
 }
 
+.storage-dir-row--active {
+  border-color: var(--blue);
+}
+
 .storage-dir-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
+}
+
+.storage-dir-title {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -3934,7 +4032,9 @@ html[lang="en"] .screen-heading h1, html[lang="ko"] .screen-heading h1, html[lan
 
 .storage-dir-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 8px;
 }
 
 /* 用户自定义卡片仅影响内容表面，弹窗和输入控件保留可读底色。 */

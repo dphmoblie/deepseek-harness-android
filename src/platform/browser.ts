@@ -55,7 +55,7 @@ import type {
 } from './types'
 import { ALWAYS_ALLOWED_ACCESSIBILITY_PACKAGES, DIAGNOSTIC_RETENTION_DEFAULT, MAX_STORAGE_DIRECTORIES, MODEL_PROVIDER_IDS } from './types'
 import { validateSelfCheckOperation, type SelfCheckOperation, type SelfCheckReport } from '../runtimeSelfCheck'
-import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionPinTarget, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource, validatePluginCleanupRequest } from './validation'
+import { assertMailboxSubdirectory, assertAccessibilityAutomationAction, assertAccessibilityAutomationAppConfigInput, assertAccessibilityAutomationRuleInput, assertAccessibilityPackageName, assertAccessibilityRuleId, assertAccessibilityRuleWriteMode, assertBooleanFlag, assertRuntimeVersionPinTarget, assertRuntimeVersionTarget, assertSessionId, assertStorageDirPath, assertStorageGuestPath, validateAccessibilityPasswordInput, validateDeviceCommand, validateDeviceCommandParam, validateSettings, validateSettingsUpdate, validateRuntimeSource, validatePluginCleanupRequest } from './validation'
 
 const SETTINGS_KEY = 'dsh-mobile-settings-v1'
 /** 文档里的固定投递区路径；浏览器预览只用来**展示**，不声称它可用（见 getMailboxState）。 */
@@ -656,10 +656,21 @@ export function createBrowserBridge(): RuntimeBridge {
     requestMediaPermission: () => Promise.resolve({ granted: false }),
     openAllFilesAccessSettings: () => Promise.resolve({ supported: false, granted: false }),
     // 没有真实文件系统可搬运：明确拒绝，不编造条目数与摘要。
-    importMailbox: () => Promise.reject(new Error('浏览器预览不支持导入投递区')),
-    exportMailbox: (subdirectory, destinationDirectory) => {
+    importMailbox: options => {
+      assertStorageGuestPath(options?.guestPath)
+      assertMailboxSubdirectory(options?.sourceDirectory)
+      if (options?.root !== undefined && options.root !== 'inbox' && options.root !== 'outbox') {
+        throw new Error('投递区根目录格式无效')
+      }
+      return Promise.reject(new Error('浏览器预览不支持导入投递区'))
+    },
+    exportMailbox: (subdirectory, destinationDirectory, targetLocation) => {
       assertMailboxSubdirectory(subdirectory)
       assertMailboxSubdirectory(destinationDirectory)
+      assertStorageGuestPath(targetLocation?.guestPath)
+      if (targetLocation?.root !== undefined && targetLocation.root !== 'inbox' && targetLocation.root !== 'outbox') {
+        throw new Error('投递区根目录格式无效')
+      }
       return Promise.reject(new Error('浏览器预览不支持导出投递区'))
     },
     /**

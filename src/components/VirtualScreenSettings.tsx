@@ -681,7 +681,7 @@ export function VirtualScreenSettings({
       </div>
 
       <p className="virtual-screen-description">
-        {t('在独立副屏中运行应用，通过预览页面或悬浮窗查看画面。可在此设置屏幕方向、分辨率和预览帧率。需要 Shizuku 和 Android 10 或更高版本。')}
+        {t('在独立副屏运行目标应用，需 Shizuku 与 Android 10+')}
       </p>
 
       <section className="settings-subsection" aria-labelledby="virtual-screen-control-title">
@@ -689,7 +689,7 @@ export function VirtualScreenSettings({
           <span className="section-icon"><Play size={19} /></span>
           <div>
             <h3 id="virtual-screen-control-title">{t('控制')}</h3>
-            <p>{t('启动、停止与重启副屏。')}</p>
+            <p>{t('启动、停止、重启与预览副屏')}</p>
           </div>
         </div>
         <div className="virtual-screen-actions">
@@ -731,17 +731,11 @@ export function VirtualScreenSettings({
             {t('打开副屏预览')}
           </button>
         </div>
-        <p className="settings-note">
-          {t('即使无法读取设置，也可尝试停止正在运行的副屏。')}
-        </p>
         {screenActive && (
           <p className="settings-note" role="status">
             {t('副屏正在运行；如需应用新的目标或设置，请先停止或重启副屏。')}
           </p>
         )}
-        <p className="settings-note">
-          {t('打开副屏预览可查看画面并使用悬浮窗；副屏设置可在本页调整。')}
-        </p>
         {actionFailure !== '' && <p className="virtual-screen-failure" role="alert">{actionFailure}</p>}
         {actionNotice !== '' && <p className="virtual-screen-notice" role="status">{t(actionNotice)}</p>}
       </section>
@@ -751,7 +745,7 @@ export function VirtualScreenSettings({
           <span className="section-icon"><Monitor size={19} /></span>
           <div>
             <h3 id="virtual-screen-status-title">{t('副屏状态')}</h3>
-            <p>{t('以下显示副屏的实际运行状态；无法获取的数据将显示为「未知」。')}</p>
+            <p>{t('实时运行参数（未获取项显示「未知」）')}</p>
           </div>
         </div>
         {deviceState.status === 'loading' && <p role="status">{t('正在读取副屏状态…')}</p>}
@@ -832,9 +826,6 @@ export function VirtualScreenSettings({
                 <dd>{t(textOrUnknown(deviceState.state.virtualForegroundActivity))}</dd>
               </div>
             </dl>
-            <p className="settings-note">
-              {t('前台应用信息来自副屏，无法获取时显示「未知」。')}
-            </p>
           </>
         )}
       </section>
@@ -860,7 +851,7 @@ export function VirtualScreenSettings({
               <span className="section-icon"><SlidersHorizontal size={19} /></span>
               <div>
                 <h3 id="virtual-screen-target-title">{t('目标应用')}</h3>
-                <p>{t('选择要在副屏中启动的应用。')}</p>
+                <p>{t('选择在副屏启动的应用')}</p>
               </div>
             </div>
             <p className="settings-note">
@@ -881,7 +872,7 @@ export function VirtualScreenSettings({
               <span className="section-icon"><Monitor size={19} /></span>
               <div>
                 <h3 id="virtual-screen-orientation-title">{t('屏幕方向')}</h3>
-                <p>{t('「自动」使用手机屏幕当前的方向。')}</p>
+                <p>{t('「自动」跟随手机当前方向')}</p>
               </div>
             </div>
             <fieldset className="virtual-screen-fieldset" disabled={locked}>
@@ -912,13 +903,13 @@ export function VirtualScreenSettings({
               <span className="section-icon"><Monitor size={19} /></span>
               <div>
                 <h3 id="virtual-screen-resolution-title">{t('分辨率')}</h3>
-                <p>{t('根据手机屏幕的尺寸和方向，自动设置副屏宽高与 DPI。')}</p>
+                <p>{t('按屏幕自适应或手动指定宽高与 DPI')}</p>
               </div>
             </div>
             <label className="toggle-row">
               <span>
                 <strong>{t('自适应（按屏幕与方向计算）')}</strong>
-                <small>{t('关闭后可手动输入宽度、高度和 DPI。')}</small>
+                <small>{t('关闭后可手动设置宽高与 DPI')}</small>
               </span>
               <input
                 type="checkbox"
@@ -930,7 +921,7 @@ export function VirtualScreenSettings({
               />
             </label>
             <p className="settings-note">
-              {t('宽度和高度的允许范围为 {0}–{1} 像素，DPI 为 {2}–{3}；超出范围时会自动调整。', VIRTUAL_SCREEN_MIN_EDGE, VIRTUAL_SCREEN_MAX_EDGE, VIRTUAL_SCREEN_MIN_DPI, VIRTUAL_SCREEN_MAX_DPI)}
+              {t('宽高 {0}–{1} px，DPI {2}–{3}（超限自动夹取）', VIRTUAL_SCREEN_MIN_EDGE, VIRTUAL_SCREEN_MAX_EDGE, VIRTUAL_SCREEN_MIN_DPI, VIRTUAL_SCREEN_MAX_DPI)}
             </p>
             <div className="virtual-screen-spec">
               {SPEC_FIELDS.map(field => (
@@ -964,7 +955,7 @@ export function VirtualScreenSettings({
             )}
             {!draft.adaptive && specReady && (
               <p className="settings-note">
-                {t('启动时会根据设备限制缩小过大的尺寸，实际分辨率请查看上方的副屏状态。')}
+                {t('过大尺寸启动时自动缩小，实际值见副屏状态')}
               </p>
             )}
           </section>
@@ -974,7 +965,7 @@ export function VirtualScreenSettings({
               <span className="section-icon"><Monitor size={19} /></span>
               <div>
                 <h3 id="virtual-screen-overlay-title">{t('悬浮窗大小')}</h3>
-                <p>{t('设置宽度后，高度会按副屏画面的比例自动调整。')}</p>
+                <p>{t('仅设宽度，高度按画面比例自适应')}</p>
               </div>
             </div>
             <p className="settings-note" role="status" aria-label={t('当前悬浮窗宽度')}>
@@ -1007,10 +998,7 @@ export function VirtualScreenSettings({
             </div>
             {overlayHint !== '' && <p className="virtual-screen-notice" role="status">{overlayHint}</p>}
             <p className="settings-note">
-              {t('宽度可设为 {0}–{1} 像素，实际大小受屏幕尺寸限制；高度会按画面比例自动调整。', OVERLAY_WIDTH_MIN, OVERLAY_WIDTH_MAX)}
-            </p>
-            <p className="settings-note">
-              {t('也可拖动悬浮窗右下角调整大小，再点击本页右上角的「刷新」查看新尺寸。')}
+              {t('宽度 {0}–{1} px，也可拖动悬浮窗右下角调整', OVERLAY_WIDTH_MIN, OVERLAY_WIDTH_MAX)}
             </p>
           </section>
 
@@ -1019,7 +1007,7 @@ export function VirtualScreenSettings({
               <span className="section-icon"><SlidersHorizontal size={19} /></span>
               <div>
                 <h3 id="virtual-screen-preview-title">{t('预览帧率')}</h3>
-                <p>{t('帧率越高，预览越流畅，耗电也越多。')}</p>
+                <p>{t('帧率越高越流畅，耗电也越多')}</p>
               </div>
             </div>
             <label className="field">
@@ -1038,7 +1026,6 @@ export function VirtualScreenSettings({
                 ))}
               </select>
             </label>
-            <p className="settings-note">{t('此设置控制预览画面的采集频率。副屏实际刷新率请查看上方状态。')}</p>
           </section>
 
           <section className="settings-subsection" aria-labelledby="virtual-screen-follow-title">
@@ -1046,7 +1033,7 @@ export function VirtualScreenSettings({
               <span className="section-icon"><SlidersHorizontal size={19} /></span>
               <div>
                 <h3 id="virtual-screen-follow-title">{t('自动跟随')}</h3>
-                <p>{t('设置目标应用的自动切换方式。')}</p>
+                <p>{t('目标应用的自动跟随策略')}</p>
               </div>
             </div>
             <fieldset className="virtual-screen-fieldset" disabled={locked}>
@@ -1083,7 +1070,6 @@ export function VirtualScreenSettings({
               {busy === 'save' ? <Loader2 className="spin" size={18} /> : <Save size={18} />}
               {t('保存设置')}
             </button>
-            <span className="settings-note">{t('设置保存后，实际运行参数请查看上方的副屏状态。')}</span>
           </div>
           {saveFailure !== '' && <p className="virtual-screen-failure" role="alert">{saveFailure}</p>}
           {saveNotice !== '' && <p className="virtual-screen-notice" role="status">{t(saveNotice)}</p>}
@@ -1110,9 +1096,9 @@ function autoFollowLabel(value: (typeof VIRTUAL_SCREEN_AUTO_FOLLOW_VALUES)[numbe
 
 /** 自动跟随的一句话解释；三种策略各自「做什么」与「不做什么」都写清楚。 */
 function autoFollowHint(value: (typeof VIRTUAL_SCREEN_AUTO_FOLLOW_VALUES)[number]): string {
-  if (value === 'pull_back') return '在主屏打开目标应用时，自动将它移回副屏。'
-  if (value === 'promote') return '在副屏切换到其他应用时，将其设为新的目标应用；本应用、桌面、输入法和系统界面除外。'
-  return '不自动切换目标应用，也不在主屏与副屏之间移动应用。'
+  if (value === 'pull_back') return '主屏打开目标应用时自动移回副屏'
+  if (value === 'promote') return '副屏切换应用时自动跟进（不含系统界面）'
+  return '不自动切换或移动目标应用'
 }
 
 /** 三格规格输入的中文标签（与无障碍名称同源）。 */

@@ -45,6 +45,16 @@ class ShellVirtualScreen {
     private var height = 0
     private var independentFocus = false
     private val frameLock = Any()
+    /**
+     * 供无锁 [frame] 校验的会话标识与显示器编号（由 [frameLock] 保护，与 [session]/[display] 同步更新）。
+     *
+     * 这样预览线程取硬件缓冲时无需再抢 [ShellVirtualScreen] 实例监视器，连续输入注入、dumpsys 与自动跟随
+     * 不会再把副屏预览画面卡住。
+     */
+    private var frameSession = ""
+    private var frameDisplayId = -1
+    private val capturePacer = VirtualScreenCapturePacer()
+    private val visibilityCache = VirtualScreenTargetVisibilityCache()
     private var frame: Bitmap? = null
     private var frameAt = 0L
     // 最近一帧的空白判定；尚未采集到画面时为 true（未渲染），避免被当成有效画面。
@@ -108,6 +118,8 @@ class ShellVirtualScreen {
     private var lastInputAt = 0L
     /** 最近一次落地输入的时刻，随截图元数据带出，供调用方判断「这张图是不是在输入之前拍的」。 */
     @Volatile private var latestInputAt = 0L
+    /** 最近一次交互活动时刻（含手指按下/拖动中），仅用于采集节拍器触发交互突发窗口，不改变落地输入遥测语义。 */
+    @Volatile private var interactiveActivityAt = 0L
     private val timers = Executors.newSingleThreadScheduledExecutor()
     private val writers = Executors.newFixedThreadPool(2)
     private val transfers = Semaphore(2)
@@ -129,20 +141,29 @@ class ShellVirtualScreen {
             death = recipient
             client.linkToDeath(recipient, 0)
             worker = HandlerThread("dsh-virtual-frames").also { it.start() }
+            capturePacer.reset()
+            visibilityCache.invalidate()
+            // latestImage 常驻占用 1 槽，API 29+ 给 5 槽留足 SurfaceFlinger 三缓冲与连续滚动时的缓冲轮转空间。
             val capture = if (Build.VERSION.SDK_INT >= 29) {
                 ImageReader.newInstance(
-                    w, h, PixelFormat.RGBA_8888, 3,
+                    w, h, PixelFormat.RGBA_8888, 5,
                     HardwareBuffer.USAGE_CPU_READ_OFTEN or HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE,
                 )
-            } else ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+            } else ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 3)
             reader = capture
             val handler = Handler(worker!!.looper)
-            var scheduled = false
             capture.setOnImageAvailableListener({ source ->
-                // 延后读取最新缓冲区，既限帧又不丢弃界面静止前的最后一次更新；延迟取当前预览模式的采集间隔。
-                if (!scheduled) {
-                    scheduled = true
-                    handler.postDelayed({ scheduled = false; collectFrame(source) }, VirtualScreenPolicy.frameInterval(frameMode).toLong())
+                // 前缘立即采集 + 后缘合并 + 输入突发窗口加速：静止后的首帧不再空等一个档位周期，
+                // 连续操作期间维持流畅帧率且绝不丢失界面静止前的最后一帧。
+                val delay = capturePacer.onFrameAvailable(
+                    nowMillis = SystemClock.elapsedRealtime(),
+                    configuredIntervalMillis = VirtualScreenPolicy.frameInterval(frameMode),
+                    latestInputAtMillis = maxOf(latestInputAt, interactiveActivityAt),
+                )
+                if (delay == 0L) {
+                    collectFrame(source)
+                } else if (delay != null) {
+                    handler.postDelayed({ collectFrame(source) }, delay)
                 }
             }, handler)
             val threadClass = Class.forName("android.app.ActivityThread")
@@ -180,6 +201,10 @@ class ShellVirtualScreen {
             } else manager.createVirtualDisplay("DSH 目标应用", w, h, dpi, capture.surface, flags)
             display = created
             check(id() > 0) { "系统未创建独立副屏" }
+            synchronized(frameLock) {
+                frameSession = session
+                frameDisplayId = id()
+            }
             // 参数数组直传，不经 Shell 字符串解释；不会退回主屏启动。
             command(listOf("/system/bin/am", "start", "-W", "--display", id().toString(), "-n", component))
             check(targetVisible()) { "未能确认目标应用位于副屏，此设备或应用暂不兼容" }
@@ -192,6 +217,7 @@ class ShellVirtualScreen {
     }
 
     private fun collectFrame(source: ImageReader) {
+        capturePacer.onCollectStarted(SystemClock.elapsedRealtime())
         // 回调与关闭可能并发；迟到帧不得重新写回已销毁会话。
         runCatching {
             source.acquireLatestImage()?.let { image ->
@@ -338,12 +364,14 @@ class ShellVirtualScreen {
 
     /**
      * 动作入口：动作本身在实例监视器里执行；带了 `settleMs` 的输入动作再在监视器**之外**等画面稳定
-     * （见 [VirtualScreenSettle]），等待期间状态读取、自动跟随与会话结束都不被挡住。
+     * （见 [VirtualScreenSettle]），同时附带无 OCR、无 PNG 编解码的轻量瓦片变化摘要 `tileDiff`。
      */
     fun action(raw: String): String {
         require(raw.length <= 4096)
         val p = JSONObject(raw)
         val budget = VirtualScreenSettle.budget(p)
+        val beforeTiles = if (budget > 0) sampleTileGrid() else null
+        val beforeActivity = virtualForeground.orEmpty()
         val (text, inputAt, source) = synchronized(this) {
             lastInputAt = 0L
             val text = actionLocked(p)
@@ -351,11 +379,44 @@ class ShellVirtualScreen {
         }
         if (budget <= 0 || inputAt <= 0L || source == null) return text
         val settle = awaitSettle(source, inputAt, budget)
+        val afterTiles = if (beforeTiles != null) sampleTileGrid() else null
         return runCatching {
             val payload = JSONObject(text)
             val updated = if (payload.has("active")) synchronized(this) { state() } else payload
-            updated.put("settle", settle).toString()
+            updated.put("settle", settle)
+            if (beforeTiles != null && afterTiles != null && width > 0 && height > 0) {
+                updated.put(
+                    "tileDiff",
+                    VirtualScreenTileDiff.diff(
+                        before = beforeTiles,
+                        after = afterTiles,
+                        width = width,
+                        height = height,
+                        activityBefore = beforeActivity,
+                        activityAfter = virtualForeground.orEmpty(),
+                    ),
+                )
+            }
+            updated.toString()
         }.getOrDefault(text)
+    }
+
+    /** 按需采样最近一帧的 8×16 灰度瓦片签名（仅读 512 像素，零 Bitmap 拷贝，绝不在 collectFrame 里调用）。 */
+    private fun sampleTileGrid(): IntArray? = synchronized(frameLock) {
+        val image = latestImage ?: return@synchronized null
+        val w = image.width
+        val h = image.height
+        if (w <= 0 || h <= 0) return@synchronized null
+        runCatching {
+            val plane = image.planes[0]
+            VirtualScreenTileDiff.sampleRgba(
+                buffer = plane.buffer.duplicate(),
+                width = w,
+                height = h,
+                rowStride = plane.rowStride,
+                pixelStride = plane.pixelStride,
+            )
+        }.getOrNull()
     }
 
     /** 只持帧锁等待：新帧到达时 [collectFrame] 会 notifyAll，会话被关闭时提前返回并标 aborted。 */
@@ -392,6 +453,16 @@ class ShellVirtualScreen {
         }
     }
 
+    /**
+     * 输入热路径的目标可见性确认：1.5 秒内已确认且未发生切换/离屏时复用缓存，避免连续点击/拖动时
+     * 每次都 fork `/system/bin/dumpsys activity activities` 引入 100~300ms 延迟与锁阻塞。
+     */
+    private fun requireTargetVisibleForInput() {
+        val now = SystemClock.elapsedRealtime()
+        if (visibilityCache.isFresh(session, id(), targetPackage, now)) return
+        requireTargetVisible()
+    }
+
     private fun actionLocked(p: JSONObject): String {
         requireSession(p.getString("sessionId"))
         when (p.getString("action")) {
@@ -402,7 +473,8 @@ class ShellVirtualScreen {
             "text" -> return textAction(p)
             // 分发集合与策略层共用：新增动作必须同时出现在 VirtualScreenPolicy.INPUT_ACTIONS 里。
             in VirtualScreenPolicy.INPUT_ACTIONS -> {
-                requireTargetVisible()
+                requireTargetVisibleForInput()
+                interactiveActivityAt = SystemClock.elapsedRealtime()
                 val args = VirtualScreenPolicy.inputArguments(p, id(), width, height)
                 val g = checkNotNull(gesture) { "副屏会话尚未就绪" }
                 val result = when (p.getString("action")) {
@@ -493,10 +565,11 @@ class ShellVirtualScreen {
                     .put("prewarmError", warmUpError)
                     .toString()
             }
-            // 触摸直传：逐事件注入，不逐事件跑 targetVisible()（它要起 dumpsys 进程，会毁掉直传帧率）。
+            // 触摸直传：逐事件注入，按下时走短时缓存可见性校验，且立刻刷新 interactiveActivityAt 触发交互突发采帧。
             "touch" -> {
                 val touch = VirtualScreenInjector.request(p, width, height)
-                if (touch.phase == "down") requireTargetVisible()
+                if (touch.phase == "down") requireTargetVisibleForInput()
+                interactiveActivityAt = SystemClock.elapsedRealtime()
                 val gesture = checkNotNull(gesture) { "副屏会话尚未就绪" }
                 val result = gesture.handle(touch)
                 // 失败只可能出在抬起阶段（离散通道那时才逐事件跑 input 命令）：照实报错并留下诊断，
@@ -518,7 +591,8 @@ class ShellVirtualScreen {
             // 注入 input motionevent（按合并/丢弃规则封顶事件数）。失败在返回里标 failure/aborted，
             // 这里翻译成注入错误码：没落地就绝不报成功。
             "gesture" -> {
-                requireTargetVisible()
+                requireTargetVisibleForInput()
+                interactiveActivityAt = SystemClock.elapsedRealtime()
                 val points = VirtualScreenPolicy.gestureRequest(p, width, height)
                 val duration = VirtualScreenPolicy.gestureDuration(p)
                 val gesture = checkNotNull(gesture) { "副屏会话尚未就绪" }
@@ -770,23 +844,32 @@ class ShellVirtualScreen {
         return bitmap
     }
 
-    /** 返回最近一帧的硬件缓冲区，供页面预览直接交给 GPU；调用方完成使用后必须关闭句柄。 */
-    @Synchronized fun frame(sessionId: String): HardwareBuffer {
-        requireSession(sessionId)
+    /**
+     * 返回最近一帧的硬件缓冲区，供页面预览直接交给 GPU；调用方完成使用后必须关闭句柄。
+     *
+     * 刻意**不加实例级 `@Synchronized`**：会话校验与硬件句柄复制全部在微秒级持有的 [frameLock] 内完成，
+     * 这样连续输入注入、`dumpsys` 与自动跟随绝不会阻塞预览帧拉取。
+     */
+    fun frame(sessionId: String): HardwareBuffer {
+        VirtualScreenPolicy.session(sessionId)
         check(Build.VERSION.SDK_INT >= 30) { "硬件帧预览需要 Android 11 或更高版本" }
         // 预览路径刻意**不**查 targetVisible()：那要起一个 dumpsys 进程，每帧都查会把预览帧率打下来。
         // 也刻意**不**套 frameStale() 的两秒窗口：静止页面本来就不再产生新帧，
         // 按「帧老于两秒」判会把这帧正常的静止画面误报成过期。
         // 这里只区分「还没有任何一帧」——那才是 STALE_FRAME（调用方下一帧重试即可），而不是「副屏不可用」。
-        if (frameAt <= 0 || hardwareFrame == null) {
-            throw VirtualScreenPolicy.failure(VirtualScreenPolicy.STALE_FRAME_CODE, VirtualScreenPolicy.STALE_FRAME_MESSAGE)
-        }
         // Binder marshals the returned object after this method returns. Parcel roundtrip
         // creates an independent native handle before the collector can close the shared one.
         return synchronized(frameLock) {
+            if (frameDisplayId <= 0 || sessionId != frameSession) {
+                throw RuntimeFailure("VIRTUAL_SCREEN_STOPPED", "副屏会话已切换，请重新读取状态")
+            }
+            val current = hardwareFrame
+            if (frameAt <= 0 || current == null) {
+                throw VirtualScreenPolicy.failure(VirtualScreenPolicy.STALE_FRAME_CODE, VirtualScreenPolicy.STALE_FRAME_MESSAGE)
+            }
             val parcel = Parcel.obtain()
             try {
-                checkNotNull(hardwareFrame).writeToParcel(parcel, 0)
+                current.writeToParcel(parcel, 0)
                 parcel.setDataPosition(0)
                 HardwareBuffer.CREATOR.createFromParcel(parcel)
             } finally { parcel.recycle() }
@@ -841,8 +924,13 @@ class ShellVirtualScreen {
     /** 确认某个包名已在本次会话的副屏上 resume；热切换过程中必须传刚请求的包名，默认值只用于当前目标。 */
     private fun targetVisible(packageName: String = targetPackage): Boolean {
         val dump = command(listOf("/system/bin/dumpsys", "activity", "activities"))
-        virtualForeground = VirtualScreenPolicy.resumedComponent(dump, id())
-        return VirtualScreenPolicy.targetResumed(dump, id(), packageName)
+        val displayId = id()
+        virtualForeground = VirtualScreenPolicy.resumedComponent(dump, displayId)
+        val visible = VirtualScreenPolicy.targetResumed(dump, displayId, packageName)
+        if (packageName == targetPackage) {
+            visibilityCache.record(session, displayId, targetPackage, visible, SystemClock.elapsedRealtime())
+        }
+        return visible
     }
 
     /** 指定显示器上最前台的组件名（0 为主屏，会话副屏用 [id]）；解析不到返回 null。 */
@@ -965,7 +1053,7 @@ class ShellVirtualScreen {
         // 不合法时抛 IllegalArgumentException，上层映射成 VIRTUAL_SCREEN_INVALID。
         VirtualScreenTextPolicy.requireInjectable(text)
         if (VirtualScreenTextPolicy.classify(text).hasNonAscii) return nonAsciiTextAction(text, submit)
-        requireTargetVisible()
+        requireTargetVisibleForInput()
         val startedAt = SystemClock.elapsedRealtime()
         val attempts = ArrayList<VirtualScreenTextPolicy.TextAttempt>(3)
         val written = runCatching { command(VirtualScreenPolicy.inputArguments(p, id(), width, height)) }
@@ -1071,7 +1159,7 @@ class ShellVirtualScreen {
      * - 这个动作会改写系统剪贴板（与主进程无障碍链的粘贴方案同源），失败时**不回滚**剪贴板内容。
      */
     private fun nonAsciiTextAction(text: String, submit: Boolean): String {
-        requireTargetVisible()
+        requireTargetVisibleForInput()
         val startedAt = SystemClock.elapsedRealtime()
         val written = runCatching {
             command(listOf("/system/bin/cmd", "clipboard", "set-primary-clip", text))
@@ -1224,6 +1312,10 @@ class ShellVirtualScreen {
         close()
         start(component, w, h, dpi, client)
         session = previous
+        synchronized(frameLock) {
+            frameSession = session
+            frameDisplayId = id()
+        }
         rebindOwner(client)
     }
 
@@ -1261,6 +1353,13 @@ class ShellVirtualScreen {
         // 健康循环低频刷新前台缓存；逐帧 state() 只读取缓存，不启动系统进程。
         val dump = command(listOf("/system/bin/dumpsys", "activity", "activities"))
         virtualForeground = VirtualScreenPolicy.resumedComponent(dump, id())
+        visibilityCache.record(
+            session = session,
+            displayId = id(),
+            targetPackage = targetPackage,
+            visible = VirtualScreenPolicy.targetResumed(dump, id(), targetPackage),
+            nowMillis = SystemClock.elapsedRealtime(),
+        )
         if (policy == VirtualScreenPolicy.AUTO_FOLLOW_OFF) {
             return tickResult(policy, "", "自动跟随已关闭", applied = false)
         }
@@ -1363,7 +1462,11 @@ class ShellVirtualScreen {
         // 会话结束前取消未完成的触摸手势（进程内通道补一个取消事件，离散通道丢弃半截手势）；只在此处取消一次。
         gesture?.let { runCatching { it.abort() } }; gesture = null
         runCatching { display?.release() }; display = null
+        capturePacer.reset()
+        visibilityCache.invalidate()
         synchronized(frameLock) {
+            frameSession = ""
+            frameDisplayId = -1
             val old = reader; reader = null
             runCatching { old?.close() }
             latestImage?.close(); latestImage = null
@@ -1374,7 +1477,7 @@ class ShellVirtualScreen {
             // 采集时刻与实测帧率同属本次会话，一并清空，下一次会话重新采样。
             frameStampCount = 0; frameStampNext = 0; frameFps = 0.0
             // 输入后首帧间隔与「正在等回应」的那次注入同属本次会话：换会话后重新测，别把上一段的数字带过来。
-            responseLatency.clear(); awaitingFrameAt = 0L; latestInputAt = 0L
+            responseLatency.clear(); awaitingFrameAt = 0L; latestInputAt = 0L; interactiveActivityAt = 0L
             @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
             (frameLock as java.lang.Object).notifyAll()
         }
@@ -1387,6 +1490,7 @@ class ShellVirtualScreen {
     /** A newly selected target must never inherit the previous target's captured frame. */
     private fun setTargetPackage(value: String) = synchronized(frameLock) {
         targetPackage = value
+        visibilityCache.invalidate()
         invalidateFrameCacheLocked()
     }
 
@@ -1395,6 +1499,8 @@ class ShellVirtualScreen {
             responseLatency.clear()
             awaitingFrameAt = 0L
             latestInputAt = 0L
+            interactiveActivityAt = 0L
+            visibilityCache.invalidate()
         }
         targetPackage = value
     }

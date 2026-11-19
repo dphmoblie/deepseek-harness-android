@@ -135,7 +135,7 @@ export function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfChec
         <span className="section-icon"><ShieldCheck size={19} /></span>
         <div>
           <h2 id="runtime-self-check-title">{t("运行时自检")}</h2>
-          <p>{t("不需要 bash 也能判断运行时哪一环断了：逐项检查 Shell、Node、沙箱启动器、内核 Landlock、PTY、访客数据目录、附件目录、硬链接、ripgrep 与 C 编译环境（cc/gcc/clang、make、python3），再由宿主补上插件链接、无障碍服务、副屏所需的悬浮窗权限与系统 WebView 四项设备事实，并给出结论与下一步。")}</p>
+          <p>{t("不需要 bash 也能判断运行时哪一环断了：逐项检查运行时组件与设备状态并给出建议")}</p>
         </div>
       </div>
 
@@ -158,7 +158,7 @@ export function RuntimeSelfCheckPanel({ runSelfCheck, runtime }: RuntimeSelfChec
       </div>
 
       <p className="settings-note">{t("已安装插件列表见「插件管理」")}</p>
-      <p className="settings-note">{t("自检会单独测试 Landlock 能力，不随会话权限切换。无沙箱会话可继续运行时，沙箱检查仍可能失败。")}</p>
+      <p className="settings-note">{t("自检会单独测试 Landlock 能力，不随会话权限切换")}</p>
 
       <div className="settings-inline-actions self-check-actions">
         <button className="button button-secondary" type="button" onClick={() => start('check')} disabled={busy !== null}>

@@ -247,8 +247,8 @@ export function PluginSettings({ bridge, runtime, onBack, onStopRuntime }: {
         <button className="icon-button" type="button" title={t('返回设置')} aria-label={t('返回设置')} onClick={onBack} disabled={busy}><ArrowLeft size={19} /></button>
       </div>
     </div>
-    <p className="plugin-description">{t('无需启动 Harness 也能管理插件。每个条目对应一个插件包，展开后可以调整其中的子插件。')}</p>
-    <div className="plugin-stop"><span>{t('请先停止 Harness 和 Ubuntu 终端，再修改插件。修改会在下次启动时生效。')}</span><div className="plugin-stop-actions"><button className="button button-danger-quiet compact-button" type="button" disabled={busy} onClick={() => { void stop() }}>{t('停止运行环境')}</button><button className="button button-secondary compact-button" type="button" disabled={busy || locked} onClick={() => setDisablePending(true)}>{t('禁用全部第三方插件')}</button></div></div>
+    <p className="plugin-description">{t('无需启动 Harness 即可管理插件包与子插件')}</p>
+    <div className="plugin-stop"><span>{t('请先停止运行环境再修改，下次启动生效')}</span><div className="plugin-stop-actions"><button className="button button-danger-quiet compact-button" type="button" disabled={busy} onClick={() => { void stop() }}>{t('停止运行环境')}</button><button className="button button-secondary compact-button" type="button" disabled={busy || locked} onClick={() => setDisablePending(true)}>{t('禁用全部第三方插件')}</button></div></div>
     {disablePending && <section className="plugin-disable-confirm" aria-labelledby="plugin-disable-confirm-title">
       <strong id="plugin-disable-confirm-title">{t('要禁用全部第三方插件吗？')}</strong>
       <p>{t('官方组件和安全组件会保留，第三方插件只会被停用，不会删除插件或数据。之后可以在列表中逐个重新启用。')}</p>
@@ -260,7 +260,7 @@ export function PluginSettings({ bridge, runtime, onBack, onStopRuntime }: {
     {/* 受控导入：来源形态在原生与访客两侧各校验一次，这里只负责收集与提示，不做任何解析。 */}
     <section className="plugin-import" aria-labelledby="plugin-import-title">
       <h2 id="plugin-import-title">{t('通过 npm 包名或链接导入')}</h2>
-      <p className="plugin-description">{t('支持 npm 包名、HTTPS 压缩包直链和 git+https 仓库地址。导入时不执行包内的安装脚本；来源校验不通过时不会下载。')}</p>
+      <p className="plugin-description">{t('支持 npm 包名、HTTPS 直链与 git+https（不执行安装脚本）')}</p>
       <div className="plugin-import-row">
         <input type="text" aria-label={t('插件来源')} placeholder={t('例如插件包名，或 https://…/plugin.tgz')} value={source} disabled={busy} onChange={event => setSource(event.target.value)} />
         <button className="button compact-button" type="button" disabled={busy || locked || source.trim() === ''} onClick={() => { void run({ operation: 'import', source: source.trim(), ...(expected.trim() === '' ? {} : { id: expected.trim() }) }) }}>{t('导入')}</button>
@@ -269,7 +269,7 @@ export function PluginSettings({ bridge, runtime, onBack, onStopRuntime }: {
         <span>{t('预期包名（可选）')}</span>
         <input type="text" aria-label={t('预期包名')} value={expected} disabled={busy} onChange={event => setExpected(event.target.value)} />
       </label>
-      <p className="plugin-hint">{t('通过链接导入时，可填写预期包名，以核对安装结果；如果链接中有多个插件包，可用它指定要安装的包。')}</p>
+      <p className="plugin-hint">{t('链接导入可填预期包名用于核对或多包指定')}</p>
     </section>
     {notice && <p className="plugin-notice" role={failed ? 'alert' : 'status'}>{t(notice)}{noticeDetail !== '' && `（${noticeDetail}）`}</p>}
     {catalog && <RecoveryNotice recovery={catalog.recovery} unresolved={unresolved} locked={locked} onRepair={repair} onPrune={prune} />}
@@ -318,7 +318,7 @@ export function PluginSettings({ bridge, runtime, onBack, onStopRuntime }: {
       const groups = catalog?.plugins.filter(group => group.official === official && matchesFilter(group)) ?? []
       return <section key={String(official)} className="plugin-category" aria-label={t(official ? '官方插件' : '第三方插件')}>
         <h2>{t(official ? '官方插件' : '第三方插件')}</h2>
-        {official && <p className="plugin-description">{t('官方包随运行时更新，避免覆盖 Android 兼容修补。安全组件不可禁用。')}</p>}
+        {official && <p className="plugin-description">{t('官方包随运行时更新，安全组件不可禁用')}</p>}
         {groups.map(group => <details className="plugin-file" key={group.id}>
           <summary>
             <Package className="plugin-summary-icon" size={20} />

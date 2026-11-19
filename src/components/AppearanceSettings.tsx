@@ -315,7 +315,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
         <>
           <Palette size={28} aria-hidden="true" />
           <h2 id="appearance-title">{t('界面主题')}</h2>
-          <p>{t('立即生效，下次打开仍使用此主题。')}</p>
+          <p>{t('立即生效并保存')}</p>
           <div className="appearance-options" role="radiogroup" aria-labelledby="appearance-title">
             {OPTIONS.map(({ value, label, Icon }) => (
               <label key={value} className={mode === value ? 'appearance-option active' : 'appearance-option'}>
@@ -339,7 +339,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
           <div className="appearance-customization">
             <div className="appearance-accent-heading">
               <strong>{t('按钮与输入框')}</strong>
-              <span>{t('统一控制按钮与输入框的底色透明度')}</span>
+              <span>{t('按钮与输入框底色透明度')}</span>
             </div>
             <label className="range-field">
               <span><strong>{t('按钮与输入框不透明度')}</strong><small>{card.controlOpacity}%</small></span>
@@ -356,7 +356,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
           <div className="appearance-accent-block">
             <div className="appearance-accent-heading">
               <strong>{t('选中的强调色')}</strong>
-              <span>{t('用于选中项、进度条和状态提示')}</span>
+              <span>{t('选中项、进度条与状态色')}</span>
             </div>
             <div className="appearance-accent-options" role="radiogroup" aria-label={t('选中的强调色')}>
               {ACCENT_OPTIONS.map(({ value, label, color }) => (
@@ -384,7 +384,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
       {showBackground && (
         <>
           <div className="appearance-customization">
-            <div className="appearance-accent-heading"><strong>{t('应用背景与卡片')}</strong><span>{t('背景文件只保存在本机，不会上传。')}</span></div>
+            <div className="appearance-accent-heading"><strong>{t('应用背景与卡片')}</strong><span>{t('背景仅保存在本机')}</span></div>
             <label className="field"><span>{t('背景图片或视频')}</span>
               <span className="background-picker">
                 <span className="button button-secondary compact-button">{t('选择背景文件')}</span>
@@ -423,8 +423,8 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
                 />
               </span>
               <small>{hasAppBackground
-                ? t('已选择背景，重新选择会替换当前背景')
-                : t('支持 PNG、JPG、WebP、GIF、MP4、WebM，最大 50 MB')}</small>
+                ? t('已选背景，重选将替换')
+                : t('支持图片/视频，最大 50 MB')}</small>
             </label>
             <div className="appearance-range-grid">
               <label className="range-field"><span><strong>{t('卡片不透明度')}</strong><small>{card.opacity}%</small></span><input type="range" min="30" max="100" step="1" value={card.opacity} onChange={event => { const next = { ...card, opacity: Number(event.target.value) }; updateCard(next) }} /></label>
@@ -435,7 +435,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
             {backgroundError && <p role="alert">{t(backgroundError)}</p>}
           </div>
           <div className="appearance-customization appearance-adaptive">
-            <div className="appearance-accent-heading"><strong>{t('自适应主题色')}</strong><span>{t('从背景图片或视频首帧提取，只影响外壳外观。')}</span></div>
+            <div className="appearance-accent-heading"><strong>{t('自适应主题色')}</strong><span>{t('从背景首帧提取，仅影响外壳')}</span></div>
             <div className="appearance-accent-options" role="radiogroup" aria-label={t('强调色来源')}>
               {ACCENT_SOURCES.map(({ value, label }) => (
                 <label key={value} className={source === value ? 'appearance-accent-option active' : 'appearance-accent-option'}>
@@ -455,18 +455,17 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
       )}
       {showDsh && (
           <div className="appearance-customization appearance-sync">
-            <div className="appearance-accent-heading"><strong>{t('同步背景')}</strong><span>{t('背景文件只记地址；勾选后才随主题一起画到 DSH 页面。')}</span></div>
+            <div className="appearance-accent-heading"><strong>{t('同步背景')}</strong><span>{t('仅记地址，勾选后同步到 DSH，重启后保留')}</span></div>
             <div className="appearance-sync-background">
               <label><input type="checkbox" checked={withBackground} disabled={backgroundToggling || syncing || backgroundPicking} onChange={event => void toggleBackground(event.target.checked)} /><span>{t('连背景一起同步')}</span></label>
               <button type="button" className="compact-button" disabled={backgroundPicking || backgroundToggling || syncing} onClick={() => void pickBackground()}>{backgroundRef ? t('重新选择背景文件') : t('选择背景文件')}</button>
-              <small>{backgroundRef ? t('已选：{0}', backgroundRef.mime) : t('只记录文件地址，视频不复制、不设大小上限')}</small>
-              <small>{t('开关与所选文件会记住，重启后仍按上次的选择显示。')}</small>
+              <small>{backgroundRef ? t('已选：{0}', backgroundRef.mime) : t('仅记地址，视频不复制、无大小上限')}</small>
             </div>
           </div>
       )}
       {showDsh && (
           <div className="appearance-customization appearance-sync">
-            <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('外壳与 DSH 是两个独立页面，主题不会自动共享。')}</span></div>
+            <div className="appearance-accent-heading"><strong>{t('同步到 DSH 页面')}</strong><span>{t('将外壳主题手动同步到 DSH')}</span></div>
             {/* 这一项与外壳的「按钮与输入框不透明度」是同一个值：改完点同步即可带去 DSH。 */}
             <label className="range-field">
               <span><strong>{t('按钮与输入框不透明度')}</strong><small>{card.controlOpacity}%</small></span>
@@ -518,7 +517,7 @@ export function AppearanceSettings({ scope = 'all', loadBackground = readBackgro
                 />
               </label>
             </div>
-            <small className="appearance-hint">{t('只有勾选「连背景一起同步」时，这三项才会在 DSH 页面里透出背景。')}</small>
+            <small className="appearance-hint">{t('勾选同步背景后，透明度才会透出背景')}</small>
             <button type="button" className="compact-button" onClick={() => void sync()} disabled={syncing}>{t('让 DSH 使用当前主题')}</button>
             <button type="button" className="compact-button" onClick={() => void unsync()} disabled={syncing}>{t('恢复 DSH 默认主题')}</button>
             <p>{syncRecord ? `${t('上次同步')} ${new Date(syncRecord.syncedAt).toLocaleString()}` : t('还没有同步过')}</p>

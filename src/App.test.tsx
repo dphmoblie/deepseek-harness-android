@@ -371,7 +371,7 @@ describe('App conversation gate', () => {
 
     // 运行时来源与设备入口都在「后台」页（原来的两个三级页已并入）。
     await openSettingsPage('后台', '设备连接')
-    expect(screen.getByText('运行环境使用 APK 内置的受校验版本；需要其它版本时请在 Ubuntu 运行时的版本管理中下载并切换。')).toBeInTheDocument()
+    expect(screen.getByText('默认使用内置受校验版本，其他版本请在版本管理切换')).toBeInTheDocument()
     // 屏幕内返回按钮走的是历史回退，视图切换在 popstate 之后生效。
     fireEvent.click(screen.getByRole('button', { name: '返回设置' }))
     expect(await screen.findByRole('heading', { name: '设置' })).toBeVisible()

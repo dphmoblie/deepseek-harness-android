@@ -334,7 +334,7 @@ describe('悬浮球设置', () => {
       await Promise.resolve()
     })
     expect(screen.queryByText('无法读取悬浮球状态，正在重试')).toBeNull()
-    expect(screen.getByText('在其他应用上层显示悬浮球，点按展开快捷操作，长按打开 AI 对话小窗')).toBeVisible()
+    expect(screen.getByText('点按快捷操作，长按打开对话小窗')).toBeVisible()
   })
 
   it('保存成功后悬浮球查询失败不会误报保存失败', async () => {
@@ -908,7 +908,7 @@ describe('后台页的运行时与设备 Shell 入口', () => {
     expect(await screen.findByRole('heading', { name: '运行时与设备 Shell' })).toBeVisible()
     expect(screen.getByRole('button', { name: 'Ubuntu 运行时' })).toBeEnabled()
     expect(screen.getByRole('button', { name: '设备 Shell 设置' })).toBeEnabled()
-    expect(screen.getByText('运行环境使用 APK 内置的受校验版本；需要其它版本时请在 Ubuntu 运行时的版本管理中下载并切换。')).toBeVisible()
+    expect(screen.getByText('默认使用内置受校验版本，其他版本请在版本管理切换')).toBeVisible()
   })
 
   it('两个入口分别进入运行时页与设备 Shell 页', async () => {

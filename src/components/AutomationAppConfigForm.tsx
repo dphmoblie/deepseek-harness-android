@@ -266,7 +266,7 @@ export function AutomationAppConfigForm({
           detail.config.defaultMatchDelayMs)}
       </p>
       <p className="settings-note">
-        {t('这三个默认值只用于新建规则表单的初值，不会改动任何一条已有规则。')}
+        {t('默认值仅用于新建规则，不影响已有规则')}
       </p>
       {/*
         暂停开关：只挡规则求值。设备桥的单次动作（AI 明确要求的那一下）不经过规则求值，
@@ -275,7 +275,7 @@ export function AutomationAppConfigForm({
       <label className="toggle-row">
         <span>
           <strong>{t('暂停这个应用的自动化')}</strong>
-          <small>{t('只挡规则自动求值：设备桥的单次动作（AI 明确要求的那一下）照旧走白名单与敏感窗口判定；暂停期间被丢掉的事件会计入运行记录里的「拦截原因」。')}</small>
+          <small>{t('仅拦规则自动触发，不挡 AI 单次动作；暂停期间被丢掉的事件计入拦截原因')}</small>
         </span>
         <input type="checkbox" role="switch" aria-label={t('暂停这个应用的自动化')}
           checked={draft.paused} disabled={busy}
@@ -323,7 +323,7 @@ export function AutomationAppConfigForm({
           <RotateCcw size={18} />{t('恢复默认值')}
         </button>
         <small className="automation-app-config-hint">
-          {t('「恢复默认值」只把表单填成原生默认值，不会写盘：要生效还得再点一次「保存参数」。')}
+          {t('「恢复默认值」仅重置表单，需点「保存参数」生效')}
         </small>
       </div>
     </div>

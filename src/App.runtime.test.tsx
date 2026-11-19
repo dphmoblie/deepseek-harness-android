@@ -783,7 +783,7 @@ describe('运行时版本管理', () => {
     // 删完就没有上一版本了：不能再给一个切不动的按钮，也要说清为什么。
     expect(screen.getByRole('button', { name: '切换到上一版本' })).toBeDisabled()
     expect(screen.queryByText('上一版本')).toBeNull()
-    expect(screen.getByText('现在没有可切换的上一版本：安装一次新版本后才会保留。')).toBeVisible()
+    expect(screen.getByText('暂无上一版本，安装新版后自动保留')).toBeVisible()
   })
 
   it('读不到版本列表时给出重试入口，不谎报「没有安装运行时」', async () => {

@@ -1914,6 +1914,15 @@ export function validateMailboxDirectoryState(value: unknown): MailboxDirectoryS
  */
 const STORAGE_GUEST_PATH_PATTERN = /^\/mnt\/user\/[1-9]\d*$/
 
+/** 断言可选的共享目录访客路径入参（`/mnt/user/<序号>`）；省略或 undefined 返回 undefined。 */
+export function assertStorageGuestPath(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !STORAGE_GUEST_PATH_PATTERN.test(value)) {
+    throw new Error('共享目录路径格式无效')
+  }
+  return value
+}
+
 /**
  * 校验共享目录浏览快照；访客路径与条目都只允许白名单里的受控取值。
  *

@@ -113,6 +113,7 @@ internal object TaskNotification {
     private var harnessRunId: String? = null
     private var pendingOutcome: String? = null
     private var lastActiveDiagnosticReason: String? = null
+    private var lastActivePostedState: ActiveTaskNotificationSyncPolicy.ActiveTaskState? = null
 
     fun activeTurnSnapshot(): TurnActivityState.Snapshot = synchronized(turnCompletedLock) {
         turnActivity.snapshot(SystemClock.elapsedRealtime())
@@ -162,60 +163,95 @@ internal object TaskNotification {
     private fun updateTaskStatus(context: Context): Unit = synchronized(turnCompletedLock) {
         try {
             val manager = NotificationManagerCompat.from(context)
+            val systemManager = context.getSystemService(NotificationManager::class.java)
+            val postedInSystem = runCatching {
+                systemManager?.activeNotifications?.any { it.id == TURN_ACTIVE_NOTIFICATION_ID }
+            }.getOrNull()
             val now = SystemClock.elapsedRealtime()
             val active = turnActivity.snapshot(now)
-            if (harnessRunId == null || active.activeCount == 0 || AppForeground.isForeground() ||
-                !manager.areNotificationsEnabled()) {
-                manager.cancel(TURN_ACTIVE_NOTIFICATION_ID)
-                BackgroundNotificationGroup.sync(context)
-                return@synchronized
-            }
-            val localized = AppLanguage.localizedContext(context)
-            ensureActiveChannel(localized)
-            val delay = ((active.startedAtMs ?: now) + TurnActivityState.STALE_AFTER_MS - now).coerceAtLeast(1L)
-            val whenMs = System.currentTimeMillis() - (now - (active.startedAtMs ?: now)).coerceAtLeast(0L)
-            val built = TaskLiveNotificationCompat.buildActiveTaskNotification(
-                context = localized,
-                spec = TaskLiveNotificationCompat.ActiveTaskNotificationSpec(
-                    channelId = TaskLivePromotionPolicy.ACTIVE_CHANNEL_ID,
-                    smallIconRes = R.drawable.ic_keep_alive,
-                    title = localized.getString(R.string.task_notification_active_title),
-                    text = localized.getString(R.string.task_notification_active_text, active.activeCount),
-                    shortStatus = localized.getString(R.string.task_notification_active_short),
-                    contentIntent = openAppIntent(context),
-                    // 进程被回收后 Handler 无法执行，交给系统按同一失效时间撤下。
-                    timeoutAfterMs = delay,
-                    whenMs = whenMs,
-                ),
-            )
-            try {
-                manager.notify(TURN_ACTIVE_NOTIFICATION_ID, built.notification)
-                BackgroundNotificationGroup.sync(context)
-            } catch (_: SecurityException) {
-                // 权限在检查与投递之间被撤销时，任务状态仍由界面显示。
-                return@synchronized
-            }
-            val promotedPermission = TaskLiveNotificationCompat.promotedNotificationPermissionState(context)
-            val diagnosticReason = TaskLivePromotionPolicy.diagnosticReason(
-                promotedPermission = promotedPermission,
-                hasPromotable = built.hasPromotableCharacteristics,
-            )
-            if (diagnosticReason != null && diagnosticReason != lastActiveDiagnosticReason) {
-                lastActiveDiagnosticReason = diagnosticReason
-                runCatching {
-                    DiagnosticLog(context.applicationContext).record(
-                        DiagnosticLevel.WARN,
-                        DiagnosticEvent.KEEP_ALIVE,
-                        mapOf(
-                            "reason" to diagnosticReason,
-                            "permission" to if (promotedPermission == "granted") "granted" else "denied",
-                            "sdk" to Build.VERSION.SDK_INT.toString(),
-                        ),
+            val shouldShow = harnessRunId != null &&
+                active.activeCount > 0 &&
+                !AppForeground.isForeground() &&
+                manager.areNotificationsEnabled()
+            val localeTag = AppLanguage.current(context)
+            val candidate = if (shouldShow) {
+                active.startedAtMs?.let { startedAtMs ->
+                    ActiveTaskNotificationSyncPolicy.ActiveTaskState(
+                        runId = harnessRunId,
+                        activeCount = active.activeCount,
+                        startedAtMs = startedAtMs,
+                        localeTag = localeTag,
                     )
                 }
+            } else {
+                null
             }
-            // 收口信号丢失时也有上限；不轮询、不启动额外服务。
-            mainHandler.postAtTime({ updateTaskStatus(context) }, ACTIVE_TOKEN, SystemClock.uptimeMillis() + delay)
+            when (val decision = ActiveTaskNotificationSyncPolicy.decide(shouldShow, candidate, postedInSystem, lastActivePostedState)) {
+                ActiveTaskNotificationSyncPolicy.ActiveTaskDecision.NoOp -> {
+                    if (!shouldShow || candidate == null) {
+                        lastActivePostedState = null
+                    } else {
+                        val delay = (candidate.startedAtMs + TurnActivityState.STALE_AFTER_MS - now).coerceAtLeast(1L)
+                        mainHandler.postAtTime({ updateTaskStatus(context) }, ACTIVE_TOKEN, SystemClock.uptimeMillis() + delay)
+                    }
+                    return@synchronized
+                }
+                ActiveTaskNotificationSyncPolicy.ActiveTaskDecision.Cancel -> {
+                    manager.cancel(TURN_ACTIVE_NOTIFICATION_ID)
+                    lastActivePostedState = null
+                    return@synchronized
+                }
+                is ActiveTaskNotificationSyncPolicy.ActiveTaskDecision.Post -> {
+                    val localized = AppLanguage.localizedContext(context)
+                    ensureActiveChannel(localized)
+                    val startedAtMs = decision.state.startedAtMs
+                    val delay = (startedAtMs + TurnActivityState.STALE_AFTER_MS - now).coerceAtLeast(1L)
+                    val whenMs = System.currentTimeMillis() - (now - startedAtMs).coerceAtLeast(0L)
+                    val built = TaskLiveNotificationCompat.buildActiveTaskNotification(
+                        context = localized,
+                        spec = TaskLiveNotificationCompat.ActiveTaskNotificationSpec(
+                            channelId = TaskLivePromotionPolicy.ACTIVE_CHANNEL_ID,
+                            smallIconRes = R.drawable.ic_keep_alive,
+                            title = localized.getString(R.string.task_notification_active_title),
+                            text = localized.getString(R.string.task_notification_active_text, decision.state.activeCount),
+                            shortStatus = localized.getString(R.string.task_notification_active_short),
+                            contentIntent = openAppIntent(context),
+                            // 进程被回收后 Handler 无法执行，交给系统按同一失效时间撤下。
+                            timeoutAfterMs = delay,
+                            whenMs = whenMs,
+                        ),
+                    )
+                    try {
+                        manager.notify(TURN_ACTIVE_NOTIFICATION_ID, built.notification)
+                        lastActivePostedState = decision.state
+                    } catch (_: SecurityException) {
+                        // 权限在检查与投递之间被撤销时，任务状态仍由界面显示。
+                        lastActivePostedState = null
+                        return@synchronized
+                    }
+                    val promotedPermission = TaskLiveNotificationCompat.promotedNotificationPermissionState(context)
+                    val diagnosticReason = TaskLivePromotionPolicy.diagnosticReason(
+                        promotedPermission = promotedPermission,
+                        hasPromotable = built.hasPromotableCharacteristics,
+                    )
+                    if (diagnosticReason != null && diagnosticReason != lastActiveDiagnosticReason) {
+                        lastActiveDiagnosticReason = diagnosticReason
+                        runCatching {
+                            DiagnosticLog(context.applicationContext).record(
+                                DiagnosticLevel.WARN,
+                                DiagnosticEvent.KEEP_ALIVE,
+                                mapOf(
+                                    "reason" to diagnosticReason,
+                                    "permission" to if (promotedPermission == "granted") "granted" else "denied",
+                                    "sdk" to Build.VERSION.SDK_INT.toString(),
+                                ),
+                            )
+                        }
+                    }
+                    // 收口信号丢失时也有上限；不轮询、不启动额外服务。
+                    mainHandler.postAtTime({ updateTaskStatus(context) }, ACTIVE_TOKEN, SystemClock.uptimeMillis() + delay)
+                }
+            }
         } catch (_: Throwable) {
             // 通知能力由系统控制，展示失败不能影响任务执行。
         }
@@ -579,11 +615,24 @@ internal object TaskNotification {
     fun clear(context: Context) = synchronized(turnCompletedLock) {
         clearPendingCompletion()
         val manager = NotificationManagerCompat.from(context)
-        manager.cancel(NOTIFICATION_ID)
-        manager.cancel(TURN_COMPLETED_NOTIFICATION_ID)
-        manager.cancel(SHIZUKU_RECONNECT_NOTIFICATION_ID)
-        manager.cancel(TURN_ACTIVE_NOTIFICATION_ID)
-        BackgroundNotificationGroup.sync(context)
+        val activeIds = runCatching {
+            context.getSystemService(NotificationManager::class.java)?.activeNotifications?.mapTo(HashSet()) { it.id }
+        }.getOrNull()
+        val groupedIds = listOf(NOTIFICATION_ID, TURN_COMPLETED_NOTIFICATION_ID, SHIZUKU_RECONNECT_NOTIFICATION_ID)
+        var clearedGrouped = activeIds == null
+        for (id in groupedIds) {
+            if (activeIds == null || id in activeIds) {
+                manager.cancel(id)
+                clearedGrouped = true
+            }
+        }
+        if (activeIds == null || TURN_ACTIVE_NOTIFICATION_ID in activeIds || lastActivePostedState != null) {
+            manager.cancel(TURN_ACTIVE_NOTIFICATION_ID)
+        }
+        lastActivePostedState = null
+        if (clearedGrouped) {
+            BackgroundNotificationGroup.sync(context)
+        }
         refreshTaskStatus(context)
     }
 

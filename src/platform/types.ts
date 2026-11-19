@@ -2080,17 +2080,25 @@ export interface RuntimeBridge {
    */
   openAllFilesAccessSettings: () => Promise<AllFilesAccessResult>
   /**
-   * 一键导入：inbox 的 tar → 工作区 `mailbox-import/`。
+   * 一键导入：从当前投递区目录或已授权共享目录的 tar → 工作区 `mailbox-import/`。
    *
    * 越界条目、绝对符号链接、超限与摘要不符一律在写第一个字节之前拒绝；
    * 失败不留半截产物，重复执行幂等。**不会自动执行**，必须由用户点击触发。
    */
-  importMailbox: () => Promise<MailboxImportResult>
+  importMailbox: (options?: {
+    root?: MailboxRoot
+    guestPath?: string
+    sourceDirectory?: string
+  }) => Promise<MailboxImportResult>
   /**
-   * 一键导出：工作区（或 [subdirectory] 指定的子目录）→ outbox（或 [destinationDirectory] 子目录）的
+   * 一键导出：工作区（或 [subdirectory] 指定的子目录）→ 投递区或已授权共享目录（及可选子目录）的
    * `dsh-workspace.tar` + `dsh-workspace.manifest.json` + `dsh-workspace.tar.sha256`。
    */
-  exportMailbox: (subdirectory?: string, destinationDirectory?: string) => Promise<MailboxExportResult>
+  exportMailbox: (
+    subdirectory?: string,
+    destinationDirectory?: string,
+    target?: { root?: MailboxRoot; guestPath?: string },
+  ) => Promise<MailboxExportResult>
   /**
    * ≤8 目录白名单状态：访客内 `/mnt/user/<序号>` 的**唯一来源**。
    *

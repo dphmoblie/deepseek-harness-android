@@ -416,133 +416,45 @@ internal class RuntimeMailbox(private val store: RuntimeStore) : OptionalBindPro
      */
     override fun cacheToken(): String = mountableNow().toString()
 
-    fun importInbox(): MailboxImportOutcome {
-        val directories = requireDirectories()
-        val target = requireWorkspace()
-        val input = MailboxInputSelection.select(directories.inbox)
-        val destination = File(target, RuntimeMailboxLayout.IMPORT_DIRECTORY)
-        // 规划阶段不写任何文件：越界、绝对符号链接、超限、重复条目都在这里被拒绝，
-        // 因此被拒绝的导入在访客私有区里不产生任何改动。
-        val plan = MailboxArchiveReader().plan(input.tar, destination.toPath())
-        var verified = false
-        var manifestName: String? = null
-        input.manifest?.let { manifestFile ->
-            val manifest = MailboxManifestCodec.parse(readTextBounded(manifestFile))
-            MailboxManifestVerifier.verify(manifest, plan)
-            verified = true
-            manifestName = manifestFile.name
-        }
-        input.sha256File?.let { shaFile ->
-            val expected = readTextBounded(shaFile).trim().split(Regex("\\s+")).firstOrNull().orEmpty().lowercase()
-            if (!MailboxDigest.isValid(expected) || expected != plan.tarSha256) {
-                throw RuntimeFailure(MailboxCodes.MANIFEST_MISMATCH, "投递归档摘要与 .sha256 文件不一致")
-            }
-        }
+    /** 工作区搬运核心：与宿主目录来源解耦，既服务内置 inbox/outbox，也服务已校验的共享目录。 */
+    private val transferEngine: MailboxTransferEngine
+        get() = MailboxTransferEngine(
+            workspace = workspace,
+            stagingParent = store.runtimeParent,
+            recordOutcome = ::recordOutcome,
+        )
 
-        val staging = File(store.runtimeParent, STAGING_PREFIX + UUID.randomUUID())
-        try {
-            MailboxArchiveExtractor().extract(input.tar, plan, staging.toPath())
-            MailboxTree.replaceDirectory(staging.toPath(), destination.toPath(), store.runtimeParent.toPath())
-        } finally {
-            MailboxTree.deleteTreeQuietly(staging.toPath())
-        }
-        recordOutcome(
-            DiagnosticEvent.MAILBOX,
-            mapOf(
-                "reason" to "import",
-                "result" to "ok",
-                "files" to plan.entries.size.toString(),
-                "bytes" to plan.totalBytes.toString(),
-                "count" to plan.symlinkCount.toString(),
-            ),
-        )
-        return MailboxImportOutcome(
-            entryCount = plan.entries.size,
-            fileCount = plan.fileCount,
-            directoryCount = plan.directoryCount,
-            symlinkCount = plan.symlinkCount,
-            hardlinkCount = plan.hardlinkCount,
-            bytes = plan.totalBytes,
-            tarName = input.tar.name,
-            tarBytes = plan.tarBytes,
-            verified = verified,
-            manifestName = manifestName,
-            ignoredFiles = input.ignoredFiles,
-            target = RuntimeMailboxLayout.IMPORT_DIRECTORY,
-        )
+    fun importInbox(sourceDirectory: String? = null, rootName: String = RuntimeMailboxLayout.INBOX_DIRECTORY): MailboxImportOutcome {
+        val directories = requireDirectories()
+        val root = directoryFor(directories, rootName)
+        val normalizedSource = RuntimeMailboxPolicy.normalizeSubdirectory(sourceDirectory)
+        val source = resolveDirectory(root, normalizedSource)
+        return importFromDirectory(source)
     }
 
-    fun exportWorkspace(subdirectory: String?, destinationDirectory: String? = null): MailboxExportOutcome {
+    /** 从任意已通过边界校验的真实目录导入 tar 归档到工作区 `mailbox-import/`。 */
+    fun importFromDirectory(sourceDirectory: File): MailboxImportOutcome =
+        transferEngine.importFromDirectory(sourceDirectory)
+
+    fun exportWorkspace(
+        subdirectory: String?,
+        destinationDirectory: String? = null,
+        rootName: String = RuntimeMailboxLayout.OUTBOX_DIRECTORY,
+    ): MailboxExportOutcome {
         val directories = requireDirectories()
-        val target = requireWorkspace()
-        val normalized = RuntimeMailboxPolicy.normalizeSubdirectory(subdirectory)
+        val root = directoryFor(directories, rootName)
         val normalizedDestination = RuntimeMailboxPolicy.normalizeSubdirectory(destinationDirectory)
-        val outputDirectory = resolveDirectory(directories.outbox, normalizedDestination)
-        val plan = MailboxWorkspaceScanner().scan(target.toPath(), normalized)
-        // 导出起点：整个工作区，或用户指定的子目录。tar 条目名以子目录名为前缀，
-        // 因此写盘时必须以导出起点（而不是工作区）为基准解析源文件。
-        val exportRoot = normalized?.let { File(target, it) } ?: target
-
-        val suffix = UUID.randomUUID().toString()
-        val tarTemp = File(outputDirectory, ".dsh-export-$suffix.tar.tmp")
-        val manifestTemp = File(outputDirectory, ".dsh-export-$suffix.manifest.tmp")
-        val shaTemp = File(outputDirectory, ".dsh-export-$suffix.sha256.tmp")
-        try {
-            MailboxArchiveWriter().write(exportRoot.toPath(), plan, tarTemp)
-            val (tarBytes, tarSha256) = MailboxDigest.bytesAndSha256(tarTemp)
-            val manifestText = MailboxManifestCodec.render(
-                plan,
-                tarBytes,
-                tarSha256,
-                RuntimeMailboxLayout.EXPORT_TAR_NAME,
-            )
-            writeTextAtomic(manifestTemp, manifestText)
-            writeTextAtomic(shaTemp, "$tarSha256  ${RuntimeMailboxLayout.EXPORT_TAR_NAME}\n")
-            // 导出自证：把刚写出的归档重新读一遍，用同一份 manifest 逐条比对。
-            // 工作区在「扫描」与「写盘」之间被改动时（Agent 正在写文件），这里会失败并
-            // 丢掉临时产物，而不是留下一个 manifest 与 tar 不符的产物让导入端去拒。
-            MailboxManifestVerifier.verify(
-                MailboxManifestCodec.parse(manifestText),
-                MailboxArchiveReader().plan(tarTemp, store.runtimeParent.toPath()),
-            )
-            // 三个产物全部写完之后才改名：中途失败只会留下临时文件，不会留下半个产物。
-            MailboxTree.move(tarTemp.toPath(), File(outputDirectory, RuntimeMailboxLayout.EXPORT_TAR_NAME).toPath())
-            MailboxTree.move(
-                manifestTemp.toPath(),
-                File(outputDirectory, RuntimeMailboxLayout.EXPORT_MANIFEST_NAME).toPath(),
-            )
-            MailboxTree.move(
-                shaTemp.toPath(),
-                File(outputDirectory, RuntimeMailboxLayout.EXPORT_SHA256_NAME).toPath(),
-            )
-            recordOutcome(
-                DiagnosticEvent.MAILBOX,
-                mapOf(
-                    "reason" to "export",
-                    "result" to "ok",
-                    "files" to plan.entries.size.toString(),
-                    "bytes" to plan.totalBytes.toString(),
-                    "count" to plan.skippedLinks.toString(),
-                ),
-            )
-            return MailboxExportOutcome(
-                entryCount = plan.entries.size,
-                bytes = plan.totalBytes,
-                tarName = RuntimeMailboxLayout.EXPORT_TAR_NAME,
-                tarBytes = tarBytes,
-                tarSha256 = tarSha256,
-                manifestName = RuntimeMailboxLayout.EXPORT_MANIFEST_NAME,
-                subdirectory = normalized,
-                destinationDirectory = normalizedDestination,
-                skippedLinks = plan.skippedLinks,
-                skippedSpecial = plan.skippedSpecial,
-            )
-        } finally {
-            MailboxTree.deleteQuietly(tarTemp.toPath())
-            MailboxTree.deleteQuietly(manifestTemp.toPath())
-            MailboxTree.deleteQuietly(shaTemp.toPath())
-        }
+        val outputDirectory = resolveDirectory(root, normalizedDestination)
+        return exportWorkspaceToDirectory(subdirectory, outputDirectory, normalizedDestination)
     }
+
+    /** 将工作区（或指定子目录）导出到任意已通过边界校验的真实可写目录。 */
+    fun exportWorkspaceToDirectory(
+        subdirectory: String?,
+        outputDirectory: File,
+        destinationDirectory: String? = null,
+    ): MailboxExportOutcome =
+        transferEngine.exportWorkspaceToDirectory(subdirectory, outputDirectory, destinationDirectory)
 
     private fun requireDirectories(): HostDirectories {
         if (!accessSupported()) {
@@ -575,13 +487,6 @@ internal class RuntimeMailbox(private val store: RuntimeStore) : OptionalBindPro
      */
     private fun resolveDirectory(root: File, path: String?): File =
         RuntimeDirectoryBrowser.requireDirectory(root, path, RuntimeDirectoryBrowser.MAILBOX)
-
-    private fun requireWorkspace(): File {
-        if (!MailboxTree.isRealDirectory(workspace.toPath())) {
-            throw RuntimeFailure(MailboxCodes.WORKSPACE_UNAVAILABLE, "工作区不可用（运行时尚未安装）")
-        }
-        return workspace
-    }
 
     /**
      * 解析宿主侧目录。
@@ -657,31 +562,6 @@ internal class RuntimeMailbox(private val store: RuntimeStore) : OptionalBindPro
         .take(MAX_LISTED_TARS)
         .map { MailboxTarCandidate(it.name, MailboxTree.sizeOrNull(it.toPath()) ?: 0L) }
 
-    private fun readTextBounded(file: File): String {
-        if ((MailboxTree.sizeOrNull(file.toPath()) ?: 0L) > RuntimeMailboxLimits.MAX_MANIFEST_BYTES) {
-            throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 文件超过大小上限")
-        }
-        return try {
-            Files.newInputStream(file.toPath(), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
-                .use { it.readBytes().toString(Charsets.UTF_8) }
-        } catch (error: IOException) {
-            throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "无法读取 manifest 文件", error)
-        }
-    }
-
-    private fun writeTextAtomic(file: File, text: String) {
-        try {
-            Files.newOutputStream(
-                file.toPath(),
-                StandardOpenOption.CREATE_NEW,
-                StandardOpenOption.WRITE,
-                LinkOption.NOFOLLOW_LINKS,
-            ).use { it.write(text.toByteArray(Charsets.UTF_8)) }
-        } catch (error: IOException) {
-            throw RuntimeFailure(MailboxCodes.FILESYSTEM_ERROR, "无法写出投递产物", error)
-        }
-    }
-
     private fun accessSupported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
 
     /**
@@ -711,14 +591,214 @@ internal class RuntimeMailbox(private val store: RuntimeStore) : OptionalBindPro
     }
 
     private companion object {
-        /** 导入暂存目录前缀：与正式落点同处 `runtimeParent` 之下，保证改名是同一文件系统内的原子操作。 */
-        const val STAGING_PREFIX = "mailbox-staging-"
         const val MAX_LISTED_TARS = 5
 
         /** 写探测文件的固定前缀：既不会被当成导入输入，也不会被算作「被忽略的散文件」。 */
         const val PROBE_PREFIX = MailboxInputSelection.PROBE_PREFIX
 
         /** 写探测的内容：一个字节即可证明「能创建 + 能写 + 能删」。 */
+        val PROBE_BYTES = byteArrayOf('1'.code.toByte())
+    }
+}
+
+/**
+ * 工作区与外部目录之间的 tar/manifest/sha256 搬运核心（纯 JVM 实现，不依赖 Android Context）。
+ *
+ * 投递区（inbox/outbox）与共享目录（`/mnt/user/<序号>`）共享这一份导入/导出实现：
+ * 路径准入与权限边界由各自门面先验完，再把真实宿主目录交到这里，保证两端的安全校验、
+ * 原子替换与自证口径完全一致。
+ */
+internal class MailboxTransferEngine(
+    private val workspace: File,
+    private val stagingParent: File,
+    private val recordOutcome: (DiagnosticEvent, Map<String, String>) -> Unit = { _, _ -> },
+) {
+    fun importFromDirectory(sourceDirectory: File): MailboxImportOutcome {
+        val target = requireWorkspace()
+        if (!MailboxTree.isRealDirectory(sourceDirectory.toPath()) || !sourceDirectory.canRead()) {
+            throw RuntimeFailure(MailboxCodes.UNAVAILABLE, "导入源目录不可读或已不存在")
+        }
+        val input = MailboxInputSelection.select(sourceDirectory)
+        val destination = File(target, RuntimeMailboxLayout.IMPORT_DIRECTORY)
+        // 规划阶段不写任何文件：越界、绝对符号链接、超限、重复条目都在这里被拒绝，
+        // 因此被拒绝的导入在访客私有区里不产生任何改动。
+        val plan = MailboxArchiveReader().plan(input.tar, destination.toPath())
+        var verified = false
+        var manifestName: String? = null
+        input.manifest?.let { manifestFile ->
+            val manifest = MailboxManifestCodec.parse(readTextBounded(manifestFile))
+            MailboxManifestVerifier.verify(manifest, plan)
+            verified = true
+            manifestName = manifestFile.name
+        }
+        input.sha256File?.let { shaFile ->
+            val expected = readTextBounded(shaFile).trim().split(Regex("\\s+")).firstOrNull().orEmpty().lowercase()
+            if (!MailboxDigest.isValid(expected) || expected != plan.tarSha256) {
+                throw RuntimeFailure(MailboxCodes.MANIFEST_MISMATCH, "投递归档摘要与 .sha256 文件不一致")
+            }
+        }
+
+        val staging = File(stagingParent, STAGING_PREFIX + UUID.randomUUID())
+        try {
+            MailboxArchiveExtractor().extract(input.tar, plan, staging.toPath())
+            MailboxTree.replaceDirectory(staging.toPath(), destination.toPath(), stagingParent.toPath())
+        } finally {
+            MailboxTree.deleteTreeQuietly(staging.toPath())
+        }
+        recordOutcome(
+            DiagnosticEvent.MAILBOX,
+            mapOf(
+                "reason" to "import",
+                "result" to "ok",
+                "files" to plan.entries.size.toString(),
+                "bytes" to plan.totalBytes.toString(),
+                "count" to plan.symlinkCount.toString(),
+            ),
+        )
+        return MailboxImportOutcome(
+            entryCount = plan.entries.size,
+            fileCount = plan.fileCount,
+            directoryCount = plan.directoryCount,
+            symlinkCount = plan.symlinkCount,
+            hardlinkCount = plan.hardlinkCount,
+            bytes = plan.totalBytes,
+            tarName = input.tar.name,
+            tarBytes = plan.tarBytes,
+            verified = verified,
+            manifestName = manifestName,
+            ignoredFiles = input.ignoredFiles,
+            target = RuntimeMailboxLayout.IMPORT_DIRECTORY,
+        )
+    }
+
+    fun exportWorkspaceToDirectory(
+        subdirectory: String?,
+        outputDirectory: File,
+        destinationDirectory: String? = null,
+    ): MailboxExportOutcome {
+        val target = requireWorkspace()
+        val normalized = RuntimeMailboxPolicy.normalizeSubdirectory(subdirectory)
+        val normalizedDestination = RuntimeMailboxPolicy.normalizeSubdirectory(destinationDirectory)
+        if (!MailboxTree.isRealDirectory(outputDirectory.toPath()) || !writeProbe(outputDirectory)) {
+            throw RuntimeFailure(MailboxCodes.UNAVAILABLE, "导出目标目录不可写")
+        }
+        val plan = MailboxWorkspaceScanner().scan(target.toPath(), normalized)
+        // 导出起点：整个工作区，或用户指定的子目录。tar 条目名以子目录名为前缀，
+        // 因此写盘时必须以导出起点（而不是工作区）为基准解析源文件。
+        val exportRoot = normalized?.let { File(target, it) } ?: target
+
+        val suffix = UUID.randomUUID().toString()
+        val tarTemp = File(outputDirectory, ".dsh-export-$suffix.tar.tmp")
+        val manifestTemp = File(outputDirectory, ".dsh-export-$suffix.manifest.tmp")
+        val shaTemp = File(outputDirectory, ".dsh-export-$suffix.sha256.tmp")
+        try {
+            MailboxArchiveWriter().write(exportRoot.toPath(), plan, tarTemp)
+            val (tarBytes, tarSha256) = MailboxDigest.bytesAndSha256(tarTemp)
+            val manifestText = MailboxManifestCodec.render(
+                plan,
+                tarBytes,
+                tarSha256,
+                RuntimeMailboxLayout.EXPORT_TAR_NAME,
+            )
+            writeTextAtomic(manifestTemp, manifestText)
+            writeTextAtomic(shaTemp, "$tarSha256  ${RuntimeMailboxLayout.EXPORT_TAR_NAME}\n")
+            // 导出自证：把刚写出的归档重新读一遍，用同一份 manifest 逐条比对。
+            // 工作区在「扫描」与「写盘」之间被改动时（Agent 正在写文件），这里会失败并
+            // 丢掉临时产物，而不是留下一个 manifest 与 tar 不符的产物让导入端去拒。
+            MailboxManifestVerifier.verify(
+                MailboxManifestCodec.parse(manifestText),
+                MailboxArchiveReader().plan(tarTemp, stagingParent.toPath()),
+            )
+            // 三个产物全部写完之后才改名：中途失败只会留下临时文件，不会留下半个产物。
+            MailboxTree.move(tarTemp.toPath(), File(outputDirectory, RuntimeMailboxLayout.EXPORT_TAR_NAME).toPath())
+            MailboxTree.move(
+                manifestTemp.toPath(),
+                File(outputDirectory, RuntimeMailboxLayout.EXPORT_MANIFEST_NAME).toPath(),
+            )
+            MailboxTree.move(
+                shaTemp.toPath(),
+                File(outputDirectory, RuntimeMailboxLayout.EXPORT_SHA256_NAME).toPath(),
+            )
+            recordOutcome(
+                DiagnosticEvent.MAILBOX,
+                mapOf(
+                    "reason" to "export",
+                    "result" to "ok",
+                    "files" to plan.entries.size.toString(),
+                    "bytes" to plan.totalBytes.toString(),
+                    "count" to plan.skippedLinks.toString(),
+                ),
+            )
+            return MailboxExportOutcome(
+                entryCount = plan.entries.size,
+                bytes = plan.totalBytes,
+                tarName = RuntimeMailboxLayout.EXPORT_TAR_NAME,
+                tarBytes = tarBytes,
+                tarSha256 = tarSha256,
+                manifestName = RuntimeMailboxLayout.EXPORT_MANIFEST_NAME,
+                subdirectory = normalized,
+                destinationDirectory = normalizedDestination,
+                skippedLinks = plan.skippedLinks,
+                skippedSpecial = plan.skippedSpecial,
+            )
+        } finally {
+            MailboxTree.deleteQuietly(tarTemp.toPath())
+            MailboxTree.deleteQuietly(manifestTemp.toPath())
+            MailboxTree.deleteQuietly(shaTemp.toPath())
+        }
+    }
+
+    private fun requireWorkspace(): File {
+        if (!MailboxTree.isRealDirectory(workspace.toPath())) {
+            throw RuntimeFailure(MailboxCodes.WORKSPACE_UNAVAILABLE, "工作区不可用（运行时尚未安装）")
+        }
+        return workspace
+    }
+
+    private fun readTextBounded(file: File): String {
+        if ((MailboxTree.sizeOrNull(file.toPath()) ?: 0L) > RuntimeMailboxLimits.MAX_MANIFEST_BYTES) {
+            throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "manifest 文件超过大小上限")
+        }
+        return try {
+            Files.newInputStream(file.toPath(), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)
+                .use { it.readBytes().toString(Charsets.UTF_8) }
+        } catch (error: IOException) {
+            throw RuntimeFailure(MailboxCodes.MANIFEST_INVALID, "无法读取 manifest 文件", error)
+        }
+    }
+
+    private fun writeTextAtomic(file: File, text: String) {
+        try {
+            Files.newOutputStream(
+                file.toPath(),
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE,
+                LinkOption.NOFOLLOW_LINKS,
+            ).use { it.write(text.toByteArray(Charsets.UTF_8)) }
+        } catch (error: IOException) {
+            throw RuntimeFailure(MailboxCodes.FILESYSTEM_ERROR, "无法写出投递产物", error)
+        }
+    }
+
+    private fun writeProbe(directory: File): Boolean {
+        val probe = File(directory, "${MailboxInputSelection.PROBE_PREFIX}${UUID.randomUUID()}")
+        return try {
+            Files.newOutputStream(
+                probe.toPath(),
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE,
+                LinkOption.NOFOLLOW_LINKS,
+            ).use { it.write(PROBE_BYTES) }
+            true
+        } catch (_: Throwable) {
+            false
+        } finally {
+            probe.delete()
+        }
+    }
+
+    private companion object {
+        const val STAGING_PREFIX = "mailbox-staging-"
         val PROBE_BYTES = byteArrayOf('1'.code.toByte())
     }
 }

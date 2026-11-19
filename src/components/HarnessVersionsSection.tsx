@@ -191,9 +191,9 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime, onBusy
     <section className="settings-section" aria-labelledby="harness-versions-title">
       <div className="section-title section-title-plain">
         <div><h2 id="harness-versions-title">{t('Harness 上游版本')}</h2>
-          <p>{t('直接安装官方 @deepseek-ai/dsh npm 包；Ubuntu 环境、会话与插件独立保留。')}</p></div>
+          <p>{t('安装官方 @deepseek-ai/dsh，独立于 Ubuntu 与会话')}</p></div>
       </div>
-      <p className="settings-note">{t('切换会重启 Harness 并检查插件；启动失败自动恢复旧默认版本。上游原版的 Android 兼容性以实际启动检查为准。')}</p>
+      <p className="settings-note">{t('切换会自动重启并校验，启动失败自动回退旧版')}</p>
       {message && <p className="settings-note" role="status">{message}</p>}
       {externalBusy && busy === null && <p className="settings-note" role="status">
         <Loader2 size={16} className="spin" /> {t('Harness 版本操作仍在进行，请等待完成后再启动或修复运行环境。')}
@@ -212,7 +212,7 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime, onBusy
       {localError && <div role="alert"><p>{t('无法读取本地 Harness 版本。')}</p><button type="button" className="button button-secondary" disabled={busyNow} onClick={loadLocal}>{t('重试')}</button></div>}
       {local && <>
         <div className="section-title section-title-plain">
-          <div><h3>{t('本地 Harness 版本')}</h3><p>{t('已安装版本可离线切换；安装失败会保留原默认版本。')}</p></div>
+          <div><h3>{t('本地 Harness 版本')}</h3><p>{t('已安装版本可离线切换')}</p></div>
           <button type="button" className="icon-button" aria-label={t('刷新本地 Harness 版本')} disabled={busyNow || localLoading} onClick={loadLocal}><RefreshCw size={16} className={localLoading ? 'spin' : ''} /></button>
         </div>
         {environmentUnavailable && <p className="settings-note" role={compatibilityDeferred ? 'status' : 'alert'}>{compatibilityDeferred ? t('Harness 正在运行，切换版本时会重新检查兼容性。') : t('无法确认运行环境，刷新后重试；暂不判断已安装 Harness 是否兼容。')}</p>}
@@ -231,7 +231,7 @@ export function HarnessVersionsSection({ bridge, runtime, refreshRuntime, onBusy
             </> : <button type="button" className={entry.invalid || (local.environmentAvailable !== false && !entry.compatible) ? 'button button-secondary' : 'icon-button'} aria-label={t('删除 Harness {0}', entry.version)} disabled={busyNow || !stopped || blocked} onClick={() => setDeleting(entry.version)}><Trash2 size={16} />{(entry.invalid || (local.environmentAvailable !== false && !entry.compatible)) && t('删除后重装')}</button>)}
           </div>
         </div>)}</div>
-        {deleting && <p className="settings-note">{t('删除只移除此 Harness 安装包，之后需要重新下载。会话与插件数据保留。')}</p>}
+        {deleting && <p className="settings-note">{t('仅删除安装包，保留会话与插件数据')}</p>}
       </>}
       <div className="settings-subsection">
         <div className="section-title section-title-plain"><h3>{t('官方 npm 全版本')}</h3>

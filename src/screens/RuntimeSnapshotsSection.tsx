@@ -119,10 +119,10 @@ export function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restore
         <span className="section-icon"><Database size={19} /></span>
         <div>
           <h2 id="runtime-snapshots-title">{t("数据备份")}</h2>
-          <p>{t("数据备份保存在应用私有目录中，不会进入系统云备份或运行环境安装包。安装、更新、修复或重置前，应用会自动创建不含附件的轻量备份；如需备份附件请手动创建。")}</p>
+          <p>{t("本机私有目录备份；环境变更前自动轻备份，含附件请手动创建")}</p>
         </div>
       </div>
-      <p className="settings-note">{t("手动完整备份包含会话、设置、模型凭据、技能和附件，并使用设备密钥库加密保存在本机私有目录。若更换锁屏方式或重置系统密钥库导致密钥失效，已加密备份将不可恢复。")}</p>
+      <p className="settings-note">{t("完整备份经设备密钥加密，系统密钥失效将无法恢复")}</p>
 
       {loading && <p className="harness-log-state">{t("正在读取数据备份…")}</p>}
 
@@ -206,7 +206,7 @@ export function RuntimeSnapshotsSection({ loadSnapshots, createSnapshot, restore
             )}
 
           <p className="settings-note">
-            {t("最多保留 {0} 份备份，总大小不超过 {1}；超出限制时会删除最旧的备份。恢复时只添加缺失的文件，不覆盖同名文件。", String(state.maxSnapshots), formatBytes(state.maxBytes))}
+            {t("最多保留 {0} 份备份，总大小不超过 {1}；恢复只补缺失文件", String(state.maxSnapshots), formatBytes(state.maxBytes))}
           </p>
 
           <div className="settings-inline-actions">

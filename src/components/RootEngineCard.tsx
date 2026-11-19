@@ -162,7 +162,7 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
   return <div className="settings-subsection" aria-labelledby="root-engine">
     <div className="section-title"><span className="section-icon"><KeyRound size={19} /></span>
       <div><h3 id="root-engine">{t('根通道设置')}</h3>
-        <p>{t('打开后，AI 的设备命令可以以 UID 0 执行。严格档拦 mount、dd、insmod、setprop；最大档只拦刷机、块设备、核心分区写入、数据销毁与电源。默认关闭。')}</p></div>
+        <p>{t('以 UID 0 执行设备命令（默认关闭；分严格/最大护栏）')}</p></div>
     </div>
     {load.status === 'loading' && <p className="settings-note">{t('正在读取根通道状态…')}</p>}
     {value !== null && <fieldset className="settings-note">
@@ -208,16 +208,16 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
     </p>}
     {/* 关着时说不成「没有 KernelSU」（原生此刻不拉 su，根本没查过）：如实说「还不知道」，并讲清为什么。 */}
     {value !== null && !value.enabled && <p className="settings-note">
-      {t('关着的时候本应用不拉 su，所以现在还不知道这台设备支不支持 KernelSU；打开开关后才会检测。')}
+      {t('关着的时候本应用不拉 su，打开开关后才检测 KernelSU。')}
     </p>}
     {value !== null && value.suVersion !== null && <p className="settings-note">{t('su 版本：{0}', value.suVersion)}</p>}
     {value !== null && value.enabled && !value.usable && <p className="settings-note">
-      {t('开关开着但还没法用：设备命令仍走 Shizuku（shell 身份，没有 UID 0）。')}
+      {t('开关开着但还没法用，命令暂走 Shizuku（无 UID 0）。')}
     </p>}
     {value !== null && value.enabled && value.usable && <p className="settings-note">
       {profile === 'maximum'
         ? t('最大档：mount、dd（普通文件）、insmod、setprop（普通属性）放行；刷机、块设备、核心分区写入、数据销毁与电源仍拦截。')
-        : t('严格档：mount、dd、insmod、setprop 一律拒绝；适合没有 KernelSU App Profile 兜底的设备。')}
+        : t('严格档：拦截 mount、dd、insmod、setprop。')}
     </p>}
     {value !== null && value.degraded && <>
       <p className="settings-note">{t('隔离不完整，少了这些保护：')}</p>
@@ -230,14 +230,14 @@ export function RootEngineCard({ bridge = runtimeBridge }: { bridge?: RuntimeBri
       <p className="settings-note">{t('命令仍会执行，但静态审查已按当前档位收紧；最大档在降级设备上等于无沙箱 root，风险更高。')}</p>
     </>}
     {value !== null && <p className="settings-note">
-      {t('UID 0 的命令能改动系统数据。护栏是静态文本过滤，不是硬沙箱；不确定时请保持关闭。')}
+      {t('护栏仅为静态文本过滤，非硬沙箱；不确定请保持关闭')}
     </p>}
     {writeError !== null && <p role="alert">{t('保存根通道设置失败：{0}', writeError)}</p>}
     {value !== null && <button className="button button-secondary compact-button" type="button" disabled={busy} onClick={() => { void refresh() }}>{t('重新检测')}</button>}
 
     {value !== null && <>
       <p className="settings-note">{t('设备电源（仅手动）')}</p>
-      <p className="settings-note">{t('AI 没有重启/关机工具；每次点击都需要系统身份确认（生物识别或锁屏密码）。')}</p>
+      <p className="settings-note">{t('AI 无电源权限，操作需系统身份确认')}</p>
       <div className="settings-note">
         <button
           className="button button-secondary compact-button"

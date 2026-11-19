@@ -54,7 +54,7 @@ describe('无障碍白名单与验证密码', () => {
     await openAccessibilityPage(false, ['com.example.reader'])
 
     expect(
-      await screen.findByText('本应用（io.deepseekharness.mobile）始终在白名单中。服务重启或重新连接后也无需再次添加。'),
+      await screen.findByText('本应用（io.deepseekharness.mobile）始终在白名单中，无需重复添加'),
     ).toBeInTheDocument()
     expect(screen.getByText('当前白名单：io.deepseekharness.mobile、com.example.reader')).toBeInTheDocument()
   })

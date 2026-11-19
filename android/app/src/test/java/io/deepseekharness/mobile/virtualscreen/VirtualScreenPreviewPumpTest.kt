@@ -150,4 +150,54 @@ class VirtualScreenPreviewPumpTest {
         main.nowMillis = 4_000L
         assertEquals(0L, main.pump.elapsedMillis())
     }
+
+    @Test fun `休眠期间收到交互提醒会打断长等待并在突发窗口内维持流畅刷新`() {
+        val main = FakeMain()
+        main.nowMillis = 1_000L
+        main.pump.start()
+        main.runBeat("limited", costMillis = 5L)
+        // 无交互时按 limited 档休眠 175ms。
+        assertEquals(175L, main.delays.last())
+        assertEquals(1, main.pending.size)
+
+        // 休眠期间用户点了一下：取消长休眠并立即改排 4ms 下限，队列里仍然只有一条拍子。
+        main.nowMillis += 10L
+        assertTrue(main.pump.nudge(burstMillis = 800L))
+        assertEquals(1, main.pending.size)
+        assertEquals(VirtualScreenPolicy.PREVIEW_PULL_FLOOR_MILLIS.toLong(), main.delays.last())
+
+        // 突发窗口内即使档位仍是 limited，下一拍延迟也会收窄到 16ms（~60fps）。
+        main.runBeat("limited", costMillis = 4L)
+        assertEquals(VirtualScreenCapturePacer.INTERACTIVE_CAP_MS, main.delays.last())
+
+        // 超过 800ms 突发窗口后自动恢复到 limited 省电节奏。
+        main.nowMillis += 900L
+        main.runBeat("limited", costMillis = 4L)
+        assertEquals(176L, main.delays.last())
+    }
+
+    @Test fun `取帧在途收到交互提醒不制造重叠拍子，落地后立刻加速下一拍`() {
+        val main = FakeMain()
+        main.nowMillis = 2_000L
+        main.pump.start()
+        main.pending.clear()
+
+        main.pump.fetchStarted()
+        // 在途时 nudge 返回 false 且不额外投递，避免出现两条并发拍子。
+        assertFalse(main.pump.nudge(burstMillis = 800L))
+        assertEquals(0, main.pending.size)
+
+        main.nowMillis += 5L
+        val nextDelay = main.pump.fetchLanded("limited")
+        assertEquals(VirtualScreenPolicy.PREVIEW_PULL_FLOOR_MILLIS.toLong(), nextDelay)
+        assertEquals(1, main.pending.size)
+    }
+
+    @Test fun `停拍之后交互提醒不会重新拉起循环`() {
+        val main = FakeMain()
+        main.pump.start()
+        main.pump.stop()
+        assertFalse(main.pump.nudge())
+        assertEquals(0, main.pending.size)
+    }
 }

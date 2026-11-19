@@ -24,7 +24,7 @@ import { App } from './App'
 /** 区块容器：`<section aria-labelledby>` 有可访问名，因此按 region 查是稳定的。 */
 async function openStorageSection(): Promise<HTMLElement> {
   await openFilesPage()
-  return screen.findByRole('region', { name: '目录' })
+  return screen.findByRole('region', { name: '挂载目录' })
 }
 
 /**
@@ -74,7 +74,7 @@ function bridgeError(message: string, code?: string): Error {
 describe('共享目录（目录白名单）', () => {
   beforeEach(beforeEachAppTest)
 
-  it('未授予「所有文件访问」时禁用添加，并给出可点的开启入口', async () => {
+  it('未授予「所有文件访问」时禁用添加，并在文件页顶部提供唯一开启入口', async () => {
     bridge.getStorageDirs.mockResolvedValue(dirsState([], { supported: true, granted: false }))
 
     render(<App />)
@@ -83,14 +83,12 @@ describe('共享目录（目录白名单）', () => {
 
     // 数量与上限照实显示：上限来自平台层常量（与原生侧同一个数）。
     expect(within(section).getByText('0/8')).toBeVisible()
-    expect(within(section).getByText('需要授权')).toBeVisible()
     expect(within(section).getByText('T0 · 未授予「所有文件访问」')).toBeVisible()
-    expect(within(section).getByText('目录当前不可用')).toBeVisible()
-    expect(within(section).getByText(/还没有「所有文件访问」权限/)).toBeVisible()
+    expect(screen.getByText('需要授予「所有文件访问」')).toBeVisible()
 
-    // 没有权限时不能选目录；入口必须可点，否则用户被锁死在原地。
+    // 没有权限时不能选目录；全页统一的授权入口必须可点，否则用户被锁死在原地。
     expect(within(section).getByRole('button', { name: /添加目录/ })).toBeDisabled()
-    const permissionEntry = within(section).getByRole('button', { name: /去系统设置开启所有文件访问/ })
+    const permissionEntry = screen.getByRole('button', { name: /去开启「所有文件访问」/ })
     expect(permissionEntry).toBeEnabled()
 
     fireEvent.click(permissionEntry)
@@ -101,19 +99,34 @@ describe('共享目录（目录白名单）', () => {
   })
 
   it('系统没有「所有文件访问」这一档时说明代价：访客内不提供共享存储', async () => {
+    bridge.getMailboxState.mockResolvedValue({
+      availability: 'unsupported',
+      level: 'T0',
+      available: false,
+      supported: false,
+      granted: false,
+      inboxPath: '/storage/emulated/0/Documents/DSH/inbox',
+      outboxPath: '/storage/emulated/0/Documents/DSH/outbox',
+      guestInboxPath: '/mnt/inbox',
+      guestOutboxPath: '/mnt/outbox',
+      inboxFileCount: 0,
+      inboxTars: [],
+      exportTarName: 'dsh-workspace.tar',
+      exportManifestName: 'dsh-workspace.manifest.json',
+      importDirectory: 'mailbox-import',
+    })
     bridge.getStorageDirs.mockResolvedValue(dirsState([], { supported: false, granted: false }))
 
     render(<App />)
     await waitFor(() => expect(bridge.getStorageDirs).toHaveBeenCalledTimes(1))
     const section = await openStorageSection()
 
-    expect(within(section).getByText('系统不支持')).toBeVisible()
     expect(within(section).getByText('T0 · 本机没有这一档')).toBeVisible()
     // 如实说明这是能力回退（不是故障），并且不承诺授权后可用。
-    expect(within(section).getByText(/这些设备上访客内不提供共享存储/)).toBeVisible()
+    expect(screen.getByText(/Android 11 以下不支持共享存储/)).toBeVisible()
     expect(within(section).getByRole('button', { name: /添加目录/ })).toBeDisabled()
     // 系统根本没有这一档：不提供会跳到空页面的入口。
-    expect(within(section).queryByRole('button', { name: /去系统设置开启所有文件访问/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /去开启「所有文件访问」/ })).toBeNull()
   })
 
   it('已授权且为空时显示 0/8，添加按钮可用', async () => {
@@ -124,8 +137,8 @@ describe('共享目录（目录白名单）', () => {
     const section = await openStorageSection()
 
     expect(within(section).getByText('0/8')).toBeVisible()
-    expect(within(section).getByText('已授权')).toBeVisible()
     expect(within(section).getByText('T2 · 所有文件访问（可读可写）')).toBeVisible()
+    expect(within(section).getByText('内置 2 个 · 共享 0/8 个')).toBeVisible()
     expect(within(section).getByRole('button', { name: /添加目录/ })).toBeEnabled()
   })
 
@@ -296,7 +309,7 @@ describe('共享目录（目录白名单）', () => {
 
     // 三路（投递区 / 权限档 / 白名单）是同一批读取：读取失败时不留半个屏幕的旧值，
     // 也不能把「不知道」显示成「0 条目录」。
-    expect(within(section).getByText('无法读取目录状态，请重试')).toBeVisible()
+    expect(screen.getByText('文件与目录状态读取失败，请重试')).toBeVisible()
     expect(within(section).queryByText('0/8')).toBeNull()
     expect(within(section).getByRole('button', { name: /添加目录/ })).toBeDisabled()
   })
@@ -328,8 +341,8 @@ describe('共享目录（目录白名单）', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /重新检查/ }))
     await waitFor(() => expect(bridge.getStorageDirs).toHaveBeenCalledTimes(2))
-    const section = await screen.findByRole('region', { name: '目录' })
+    const section = await screen.findByRole('region', { name: '挂载目录' })
     expect(within(section).getByText('0/8')).toBeVisible()
-    expect(within(section).getByText('已授权')).toBeVisible()
+    expect(within(section).getByText('T2 · 所有文件访问（可读可写）')).toBeVisible()
   })
 })
