@@ -102,5 +102,26 @@ class RuntimeModelProvidersTest {
         assertThrows(RuntimeFailure::class.java) {
             RuntimeValidation.customProviderApiKeyUpdates(JSONObject().put("unknown", "placeholder"), setOf("gateway"))
         }
+
+        // 模型输入模态：支持 text / image，拒绝空数组、重复项与非法模态。
+        val visionModel = JSONObject(model.toString()).put("input", JSONArray().put("text").put("image"))
+        val visionProvider = JSONObject(provider.toString()).put("models", JSONArray().put(visionModel))
+        assertEquals(
+            listOf("text", "image"),
+            RuntimeValidation.customModelProviders(JSONArray().put(visionProvider)).single().models.single().input,
+        )
+        assertEquals(null, parsed.single().models.single().input)
+        assertThrows(RuntimeFailure::class.java) {
+            val bad = JSONObject(provider.toString()).put("models", JSONArray().put(JSONObject(model.toString()).put("input", JSONArray())))
+            RuntimeValidation.customModelProviders(JSONArray().put(bad))
+        }
+        assertThrows(RuntimeFailure::class.java) {
+            val bad = JSONObject(provider.toString()).put("models", JSONArray().put(JSONObject(model.toString()).put("input", JSONArray().put("text").put("audio"))))
+            RuntimeValidation.customModelProviders(JSONArray().put(bad))
+        }
+        assertThrows(RuntimeFailure::class.java) {
+            val bad = JSONObject(provider.toString()).put("models", JSONArray().put(JSONObject(model.toString()).put("input", JSONArray().put("image").put("image"))))
+            RuntimeValidation.customModelProviders(JSONArray().put(bad))
+        }
     }
 }

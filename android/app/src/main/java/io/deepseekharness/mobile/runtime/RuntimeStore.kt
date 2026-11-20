@@ -783,55 +783,107 @@ class RuntimeStore(context: Context) {
             throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "无法创建启动器配置目录")
         }
 
-        val providers = JSONObject()
-        enabled.forEach { provider ->
-            providers.put(provider.wireValue, JSONObject().put("apiKeyEnv", provider.environmentVariable))
-        }
-        customProviders.forEach { provider ->
-            providers.put(
-                provider.id,
-                JSONObject()
-                    .put("apiKeyEnv", provider.environmentVariable)
-                    .put("displayName", provider.name)
-                    .put("api", provider.api.wireValue)
-                    .put("baseURL", provider.baseUrl)
-                    .put("models", JSONArray().also { models ->
-                        provider.models.forEach { model ->
-                            models.put(
-                                JSONObject()
-                                    .put("id", model.id)
-                                    .put("name", model.name)
-                                    .put("contextWindow", model.contextWindow)
-                                    .put("maxTokens", model.maxTokens),
-                            )
-                        }
-                    }),
-            )
-        }
-        val providersEntry = if (enabled.isEmpty() && customProviders.isEmpty()) {
-            null
-        } else {
-            JSONObject()
-                .put("id", "llm-pi-ai")
-                .put("config", JSONObject().put("providers", providers))
-        }
-        val bytes = RuntimeSandboxRunner.overlay(providersEntry)
+        // `launcher-providers.patch.json` 经 `--patch`（命令行覆盖层）传给 dsh，只承载沙箱运行器配置；
+        // `llm-pi-ai` 必须并写到 `profiles/web/cordis.patch.yml`，避免触发 dsh-config-editor 的
+        // "Configuration for \"llm-pi-ai\" is overridden by a home patch or command-line overlay" 锁定。
+        val bytes = RuntimeSandboxRunner.overlay(null)
             .toString()
             .toByteArray(Charsets.UTF_8)
-        val pending = File(launcherConfigDirectory, ".$PROVIDER_PATCH_FILENAME.new")
+        writeGeneratedFileAtomically(
+            directory = launcherConfigDirectory,
+            target = providerPatchFile,
+            pendingName = ".$PROVIDER_PATCH_FILENAME.new",
+            bytes = bytes,
+            chmodDir = true,
+            failureMessage = "无法生成模型供应商启动配置",
+        )
+        syncProfileProvidersLocked(rootHome, enabled, customProviders)
+        return RuntimeCommand.PROVIDER_PATCH_GUEST_PATH
+    }
+
+    private fun syncProfileProvidersLocked(
+        rootHome: File,
+        enabledBuiltIn: List<ModelProvider>,
+        customProviders: List<CustomModelProvider>,
+    ) {
+        val appProviders = HarnessProfilePatchDocument.buildAppProviders(enabledBuiltIn, customProviders)
+        val previousDigests = syncedProviderDigestsLocked()
+        val dshHome = File(rootHome, ".dsh")
+        val profilesDir = File(dshHome, "profiles")
+        val webProfileDir = File(profilesDir, "web")
+        val profilePatchFile = File(webProfileDir, "cordis.patch.yml")
+
+        if (appProviders.isEmpty() && previousDigests.isEmpty() && !RuntimeFiles.existsNoFollow(profilePatchFile)) {
+            return
+        }
+
+        ensureRealDirectory(dshHome, "dsh 主目录无效")
+        ensureRealDirectory(profilesDir, "dsh profiles 目录无效")
+        ensureRealDirectory(webProfileDir, "dsh web profile 目录无效")
+        requireRegularGeneratedFileOrMissing(profilePatchFile)
+
+        val existingText = if (RuntimeFiles.existsNoFollow(profilePatchFile)) {
+            if (profilePatchFile.length() > HarnessProfilePatchDocument.MAX_DOCUMENT_BYTES.toLong()) {
+                throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "profile 配置文件过大，无法同步模型供应商")
+            }
+            try {
+                profilePatchFile.readText(Charsets.UTF_8)
+            } catch (error: Throwable) {
+                throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "无法读取 profile 配置文件", error)
+            }
+        } else {
+            null
+        }
+
+        val outcome = HarnessProfilePatchDocument.mergeLlmPiAi(existingText, appProviders, previousDigests)
+        val rendered = outcome.yamlText
+            ?: throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "profile 配置文件格式无效，无法同步模型供应商")
+
+        if (outcome.changed) {
+            writeGeneratedFileAtomically(
+                directory = webProfileDir,
+                target = profilePatchFile,
+                pendingName = ".cordis.patch.yml.new",
+                bytes = rendered.toByteArray(Charsets.UTF_8),
+                chmodDir = false,
+                failureMessage = "无法写入 profile 模型供应商配置",
+            )
+        }
+        saveSyncedProviderDigestsLocked(outcome.managedDigests)
+    }
+
+    private fun ensureRealDirectory(directory: File, invalidMessage: String) {
+        if (RuntimeFiles.existsNoFollow(directory)) {
+            if (!RuntimeFiles.isDirectoryNoFollow(directory)) {
+                throw RuntimeFailure("RUNTIME_CONFIG_FAILED", invalidMessage)
+            }
+        } else if (!directory.mkdir()) {
+            throw RuntimeFailure("RUNTIME_CONFIG_FAILED", invalidMessage)
+        }
+    }
+
+    private fun writeGeneratedFileAtomically(
+        directory: File,
+        target: File,
+        pendingName: String,
+        bytes: ByteArray,
+        chmodDir: Boolean,
+        failureMessage: String,
+    ) {
+        val pending = File(directory, pendingName)
         try {
-            Os.chmod(launcherConfigDirectory.absolutePath, 0x1c0)
+            if (chmodDir) Os.chmod(directory.absolutePath, 0x1c0)
             deleteGeneratedFile(pending)
-            requireRegularGeneratedFileOrMissing(providerPatchFile)
+            requireRegularGeneratedFileOrMissing(target)
             if (
-                RuntimeFiles.existsNoFollow(providerPatchFile) &&
+                RuntimeFiles.existsNoFollow(target) &&
                 runCatching {
-                    providerPatchFile.length() == bytes.size.toLong() &&
-                        providerPatchFile.readBytes().contentEquals(bytes)
+                    target.length() == bytes.size.toLong() &&
+                        target.readBytes().contentEquals(bytes)
                 }.getOrDefault(false)
             ) {
-                Os.chmod(providerPatchFile.absolutePath, 0x180)
-                return RuntimeCommand.PROVIDER_PATCH_GUEST_PATH
+                Os.chmod(target.absolutePath, 0x180)
+                return
             }
             FileChannel.open(
                 pending.toPath(),
@@ -846,7 +898,7 @@ class RuntimeStore(context: Context) {
                 }
             }
             Os.chmod(pending.absolutePath, 0x180)
-            Os.rename(pending.absolutePath, providerPatchFile.absolutePath)
+            Os.rename(pending.absolutePath, target.absolutePath)
         } catch (error: Throwable) {
             try {
                 deleteGeneratedFile(pending)
@@ -854,9 +906,33 @@ class RuntimeStore(context: Context) {
                 // Preserve the original bounded configuration failure.
             }
             if (error is RuntimeFailure) throw error
-            throw RuntimeFailure("RUNTIME_CONFIG_FAILED", "无法生成模型供应商启动配置", error)
+            throw RuntimeFailure("RUNTIME_CONFIG_FAILED", failureMessage, error)
         }
-        return RuntimeCommand.PROVIDER_PATCH_GUEST_PATH
+    }
+
+    private fun syncedProviderDigestsLocked(): Map<String, String> {
+        val raw = preferences.getString(KEY_SYNCED_PROVIDER_DIGESTS, null) ?: return emptyMap()
+        return runCatching {
+            val json = JSONObject(raw)
+            val result = linkedMapOf<String, String>()
+            val keys = json.keys()
+            while (keys.hasNext()) {
+                val id = keys.next()
+                val value = json.optString(id, "")
+                if (value.isNotEmpty()) result[id] = value
+            }
+            result
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun saveSyncedProviderDigestsLocked(digests: Map<String, String>) {
+        if (digests.isEmpty()) {
+            preferences.edit().remove(KEY_SYNCED_PROVIDER_DIGESTS).commit()
+            return
+        }
+        val json = JSONObject()
+        digests.forEach { (id, digest) -> json.put(id, digest) }
+        preferences.edit().putString(KEY_SYNCED_PROVIDER_DIGESTS, json.toString()).commit()
     }
 
     private fun providerApiKeysLocked(): Map<ModelProvider, String> {
@@ -961,8 +1037,11 @@ class RuntimeStore(context: Context) {
                     .put("baseUrl", provider.baseUrl)
                     .put("models", JSONArray().also { models ->
                         provider.models.forEach { model ->
-                            models.put(JSONObject().put("id", model.id).put("name", model.name)
-                                .put("contextWindow", model.contextWindow).put("maxTokens", model.maxTokens))
+                            models.put(
+                                JSONObject().put("id", model.id).put("name", model.name)
+                                    .put("contextWindow", model.contextWindow).put("maxTokens", model.maxTokens)
+                                    .apply { model.input?.let { put("input", JSONArray(it)) } },
+                            )
                         }
                     }),
             )
@@ -1682,6 +1761,7 @@ class RuntimeStore(context: Context) {
         private const val KEY_PROVIDER_CREDENTIALS = "provider_credentials_encrypted_v1"
         private const val KEY_CUSTOM_PROVIDERS = "custom_model_providers_v1"
         private const val KEY_CUSTOM_PROVIDER_CREDENTIALS = "custom_provider_credentials_encrypted_v1"
+        private const val KEY_SYNCED_PROVIDER_DIGESTS = "synced_profile_provider_digests_v1"
         private const val KEY_LEGACY_DEFAULT_FRONTEND = "default_frontend"
         private const val RUNNER_NAME = "libdsh_proot.so"
         private const val LOADER_NAME = "libdsh_proot_loader.so"

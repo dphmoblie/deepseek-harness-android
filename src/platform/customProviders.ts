@@ -1,5 +1,5 @@
-import { CUSTOM_PROVIDER_APIS, MODEL_PROVIDER_IDS } from './types'
-import type { CustomModelProvider, CustomProviderApi } from './types'
+import { CUSTOM_MODEL_INPUT_MODALITIES, CUSTOM_PROVIDER_APIS, MODEL_PROVIDER_IDS } from './types'
+import type { CustomModelInputModality, CustomModelProvider, CustomProviderApi } from './types'
 
 export const MAX_CUSTOM_PROVIDERS = 16
 export const MAX_CUSTOM_MODELS = 32
@@ -54,6 +54,25 @@ function validateCustomProviderUrl(value: unknown): string {
   return url.toString().replace(/\/$/, '')
 }
 
+function validateCustomModelInput(value: unknown): CustomModelInputModality[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length === 0 || value.length > CUSTOM_MODEL_INPUT_MODALITIES.length) {
+    throw new Error('模型输入类型格式无效')
+  }
+  const seen = new Set<CustomModelInputModality>()
+  const result: CustomModelInputModality[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || !CUSTOM_MODEL_INPUT_MODALITIES.includes(item as CustomModelInputModality)) {
+      throw new Error('模型输入类型不支持')
+    }
+    const modality = item as CustomModelInputModality
+    if (seen.has(modality)) throw new Error('模型输入类型不能重复')
+    seen.add(modality)
+    result.push(modality)
+  }
+  return result
+}
+
 export function validateCustomModelProviders(value: unknown): CustomModelProvider[] {
   if (value === undefined) return []
   if (!Array.isArray(value) || value.length > MAX_CUSTOM_PROVIDERS) throw new Error('最多可配置 16 个自定义供应商')
@@ -81,7 +100,14 @@ export function validateCustomModelProviders(value: unknown): CustomModelProvide
         const contextWindow = tokenCount(model.contextWindow, '模型上下文长度')
         const maxTokens = tokenCount(model.maxTokens, '模型最大输出长度')
         if (maxTokens > contextWindow) throw new Error('模型最大输出长度不能超过上下文长度')
-        return { id: model.id, name: name(model.name, 100, '模型名称'), contextWindow, maxTokens }
+        const input = validateCustomModelInput(model.input)
+        return {
+          id: model.id,
+          name: name(model.name, 100, '模型名称'),
+          contextWindow,
+          maxTokens,
+          ...(input === undefined ? {} : { input }),
+        }
       }),
     }
   })

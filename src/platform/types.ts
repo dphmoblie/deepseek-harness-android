@@ -55,11 +55,15 @@ export type ProviderApiKeys = Partial<Record<ModelProviderId, string>>
 export const CUSTOM_PROVIDER_APIS = ['openai-completions', 'openai-responses', 'anthropic-messages'] as const
 export type CustomProviderApi = typeof CUSTOM_PROVIDER_APIS[number]
 
+export const CUSTOM_MODEL_INPUT_MODALITIES = ['text', 'image'] as const
+export type CustomModelInputModality = typeof CUSTOM_MODEL_INPUT_MODALITIES[number]
+
 export interface CustomProviderModel {
   id: string
   name: string
   contextWindow: number
   maxTokens: number
+  input?: CustomModelInputModality[]
 }
 
 export interface CustomModelProvider {

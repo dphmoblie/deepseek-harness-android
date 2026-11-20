@@ -4806,7 +4806,8 @@ class MobileRuntimePlugin : Plugin() {
                     .put("models", org.json.JSONArray().also { models ->
                         provider.models.forEach { model ->
                             models.put(JSObject().put("id", model.id).put("name", model.name)
-                                .put("contextWindow", model.contextWindow).put("maxTokens", model.maxTokens))
+                                .put("contextWindow", model.contextWindow).put("maxTokens", model.maxTokens)
+                                .apply { model.input?.let { put("input", org.json.JSONArray(it)) } })
                         }
                     }))
             }

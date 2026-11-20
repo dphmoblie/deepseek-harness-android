@@ -523,6 +523,7 @@ export const english: Readonly<Record<string, string>> = {
   "模型名称": "Model name",
   "上下文长度": "Context window",
   "最大输出长度": "Maximum output tokens",
+  "支持图片识别": "Supports image recognition",
   "删除模型": "Delete model",
   "添加模型": "Add model",
   "添加自定义供应商": "Add custom provider",

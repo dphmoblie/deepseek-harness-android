@@ -58,6 +58,7 @@ data class CustomProviderModel(
     val name: String,
     val contextWindow: Int,
     val maxTokens: Int,
+    val input: List<String>? = null,
 )
 
 data class CustomModelProvider(
@@ -499,7 +500,14 @@ object RuntimeValidation {
                 val contextWindow = requireTokenCount(model.opt("contextWindow"), "模型上下文长度")
                 val maxTokens = requireTokenCount(model.opt("maxTokens"), "模型最大输出长度")
                 if (maxTokens > contextWindow) throw RuntimeFailure("SETTINGS_INVALID", "模型最大输出长度不能超过上下文长度")
-                CustomProviderModel(modelId, requireDisplayName(model.opt("name"), 100, "模型名称"), contextWindow, maxTokens)
+                val inputModalities = parseModelInputModalities(model.opt("input"))
+                CustomProviderModel(
+                    modelId,
+                    requireDisplayName(model.opt("name"), 100, "模型名称"),
+                    contextWindow,
+                    maxTokens,
+                    inputModalities,
+                )
             }
             CustomModelProvider(
                 id,
@@ -509,6 +517,25 @@ object RuntimeValidation {
                 models,
             )
         }
+    }
+
+    private val allowedModelInputModalities = setOf("text", "image")
+
+    private fun parseModelInputModalities(value: Any?): List<String>? {
+        if (value == null || value === JSONObject.NULL) return null
+        val array = value as? JSONArray
+            ?: throw RuntimeFailure("SETTINGS_INVALID", "模型输入类型格式无效")
+        if (array.length() !in 1..allowedModelInputModalities.size) {
+            throw RuntimeFailure("SETTINGS_INVALID", "模型输入类型至少选择一项，且仅支持 text 与 image")
+        }
+        val result = linkedSetOf<String>()
+        for (index in 0 until array.length()) {
+            val modality = array.opt(index) as? String
+            if (modality == null || modality !in allowedModelInputModalities || !result.add(modality)) {
+                throw RuntimeFailure("SETTINGS_INVALID", "模型输入类型仅支持不重复的 text 与 image")
+            }
+        }
+        return result.toList()
     }
 
     fun customProviderApiKeyUpdates(value: JSONObject?, allowedIds: Set<String>): Map<String, String> {

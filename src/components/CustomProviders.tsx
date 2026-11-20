@@ -304,7 +304,22 @@ export function CustomProviders({
           <label className="field"><span>{t('上下文长度')}</span><input required type="number" min={1} max={10000000} value={model.contextWindow} onChange={event => update(index, { models: provider.models.map((item, i) => i === modelIndex ? { ...item, contextWindow: Number(event.target.value) } : item) })} /></label>
           <label className="field"><span>{t('最大输出长度')}</span><input required type="number" min={1} max={model.contextWindow} value={model.maxTokens} onChange={event => update(index, { models: provider.models.map((item, i) => i === modelIndex ? { ...item, maxTokens: Number(event.target.value) } : item) })} /></label>
         </div>
-        <button type="button" className="icon-button" title={t('删除模型')} aria-label={t('删除模型')} disabled={provider.models.length === 1} onClick={() => update(index, { models: provider.models.filter((_, i) => i !== modelIndex) })}><Trash2 size={16} /></button>
+        <div className="custom-model-footer">
+          <label className="custom-model-modality">
+            <input
+              type="checkbox"
+              checked={model.input?.includes('image') === true}
+              onChange={event => updateModels(
+                index,
+                provider.models.map((item, i) => i === modelIndex
+                  ? { ...item, input: event.target.checked ? ['text', 'image'] : ['text'] }
+                  : item),
+              )}
+            />
+            <span>{t('支持图片识别')}</span>
+          </label>
+          <button type="button" className="icon-button" title={t('删除模型')} aria-label={t('删除模型')} disabled={provider.models.length === 1} onClick={() => update(index, { models: provider.models.filter((_, i) => i !== modelIndex) })}><Trash2 size={16} /></button>
+        </div>
       </fieldset>)}
       <button type="button" className="button button-secondary compact-button" disabled={provider.models.length >= MAX_CUSTOM_MODELS} onClick={() => update(index, { models: [...provider.models, { id: '', name: '', contextWindow: 131072, maxTokens: 8192 }] })}><Plus size={16} />{t('添加模型')}</button>
     </div>})}

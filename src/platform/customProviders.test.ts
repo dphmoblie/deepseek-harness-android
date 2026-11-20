@@ -11,6 +11,19 @@ describe('custom providers', () => {
   it('normalizes a complete provider declaration', () => {
     expect(validateCustomModelProviders([provider])).toEqual([{ ...provider, baseUrl: 'https://api.example.com/v1' }])
   })
+  it('accepts optional model input modalities and rejects invalid or duplicate entries', () => {
+    const visionProvider = {
+      ...provider,
+      models: [{ ...provider.models[0], input: ['text', 'image'] }],
+    }
+    expect(validateCustomModelProviders([visionProvider])).toEqual([{
+      ...visionProvider,
+      baseUrl: 'https://api.example.com/v1',
+    }])
+    expect(() => validateCustomModelProviders([{ ...provider, models: [{ ...provider.models[0], input: [] }] }])).toThrow()
+    expect(() => validateCustomModelProviders([{ ...provider, models: [{ ...provider.models[0], input: ['text', 'text'] }] }])).toThrow()
+    expect(() => validateCustomModelProviders([{ ...provider, models: [{ ...provider.models[0], input: ['text', 'audio'] }] }])).toThrow()
+  })
   it.each(['openai', '__proto__', 'UPPER', 'gateway\n'])('rejects reserved or malformed route %s', id => {
     expect(() => validateCustomModelProviders([{ ...provider, id }])).toThrow()
   })

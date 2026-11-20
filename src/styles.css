@@ -2109,6 +2109,9 @@ button:disabled {
 .custom-provider-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .custom-model { border: 0; border-top: 1px solid var(--line-faint); padding: 12px 0 0; margin: 0; min-width: 0; }
 .custom-model legend { font-size: 0.875rem; padding-right: 8px; }
+.custom-model-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+.custom-model-modality { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; font-size: 0.875rem; color: var(--ink); cursor: pointer; user-select: none; }
+.custom-model-modality input { width: 16px; height: 16px; margin: 0; accent-color: var(--blue); }
 .custom-providers .icon-button { width: 36px; height: 36px; flex: 0 0 36px; display: inline-grid; place-items: center; }
 @media (max-width: 560px) {
   .custom-provider-fields { grid-template-columns: minmax(0, 1fr); }

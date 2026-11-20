@@ -163,6 +163,58 @@ describe('CustomProviders 自定义模型供应商', () => {
     expect(key).toHaveValue('sk-typing')
     expect(onCredentials).toHaveBeenLastCalledWith({ 'custom-glm': 'sk-typing' })
   })
+
+  it('勾选或取消「支持图片识别」更新模型 input 且保留已有的连接测试结果', async () => {
+    const onTestConnectivity = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      latencyMs: 90,
+      message: '✓ 连接成功 (90ms)',
+    })
+    const onChange = vi.fn()
+    function Stateful() {
+      const [providers, setProviders] = useState(sampleProviders)
+      return <CustomProviders
+        providers={providers}
+        configured={[]}
+        credentials={{}}
+        cleared={[]}
+        onChange={next => {
+          onChange(next)
+          setProviders(next)
+        }}
+        onCredentials={vi.fn()}
+        onClear={vi.fn()}
+        onTestConnectivity={onTestConnectivity}
+      />
+    }
+
+    render(<Stateful />)
+    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    await screen.findByText('✓ 连接成功 (90ms)')
+
+    const checkbox = screen.getByRole('checkbox', { name: '支持图片识别' })
+    expect(checkbox).not.toBeChecked()
+
+    fireEvent.click(checkbox)
+    expect(checkbox).toBeChecked()
+    expect(onChange).toHaveBeenLastCalledWith([
+      {
+        ...sampleProviders[0],
+        models: [{ ...sampleProviders[0].models[0], input: ['text', 'image'] }],
+      },
+    ])
+    expect(screen.getByText('✓ 连接成功 (90ms)')).toBeInTheDocument()
+
+    fireEvent.click(checkbox)
+    expect(checkbox).not.toBeChecked()
+    expect(onChange).toHaveBeenLastCalledWith([
+      {
+        ...sampleProviders[0],
+        models: [{ ...sampleProviders[0].models[0], input: ['text'] }],
+      },
+    ])
+  })
 })
 
 /**
