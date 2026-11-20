@@ -139,6 +139,21 @@ class MobileAuthPreloadTest {
         Files.newDirectoryStream(outside).use { assertTrue(it.none()) }
     }
 
+    @Test
+    fun refreshesInstalledPtyGuardAndDevicePluginIndexAtomically() {
+        val root = runtimeRoot()
+        val guardTarget = root.resolve(MobileAuthPreload.PTY_GUARD_GUEST_PATH.removePrefix("/"))
+        val indexTarget = root.resolve(MobileAuthPreload.DEVICE_PLUGIN_INDEX_GUEST_PATH.removePrefix("/"))
+        Files.createDirectories(guardTarget.parent)
+        Files.write(indexTarget, "old-index".toByteArray())
+
+        MobileAuthPreload.installPtyGuard(root.toFile()) { ByteArrayInputStream("new-pty-guard".toByteArray()) }
+        MobileAuthPreload.installDevicePluginIndex(root.toFile()) { ByteArrayInputStream("new-index".toByteArray()) }
+
+        assertArrayEquals("new-pty-guard".toByteArray(), Files.readAllBytes(guardTarget))
+        assertArrayEquals("new-index".toByteArray(), Files.readAllBytes(indexTarget))
+    }
+
     private fun runtimeRoot(): Path {
         val root = temporaryFolder.newFolder("runtime").toPath()
         Files.createDirectories(root.resolve("usr/local/lib"))

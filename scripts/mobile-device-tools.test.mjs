@@ -789,3 +789,31 @@ test('副屏无 OCR 语义树 compact 模式、语义控件动作与内联 Diff 
   })[0].text
   assert.match(tileRendered, /tile_diff，变化占比 12\.5%/u)
 })
+
+test('Shizuku Binder 与用户服务连接失败全部携带中文恢复提示，不向模型裸抛错误码', async t => {
+  for (const code of [
+    'SHIZUKU_BINDER_TIMEOUT',
+    'SHIZUKU_BINDER_UNAVAILABLE',
+    'SHIZUKU_BINDER_INTERRUPTED',
+    'SHIZUKU_SERVICE_TIMEOUT',
+    'SHIZUKU_SERVICE_FAILED',
+    'SHIZUKU_SERVICE_INTERRUPTED',
+  ]) {
+    const f = fixture(t, () => ({
+      ok: false,
+      exitCode: 1,
+      text: '未能连接 Shizuku，请确认服务已启动',
+      truncated: false,
+      errorCode: code,
+    }))
+    const info = f.tools.get('mobile_device_info')
+    await assert.rejects(
+      info.execute({}, {}),
+      error => {
+        assert.ok(error.message.startsWith(`${code}: `), `${code} 缺少恢复提示，实际：${error.message}`)
+        assert.match(error.message, /不要.*重试|根通道|无障碍/u)
+        return true
+      },
+    )
+  }
+})

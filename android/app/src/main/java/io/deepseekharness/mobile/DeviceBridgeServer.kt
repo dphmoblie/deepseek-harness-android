@@ -5,6 +5,7 @@ import io.deepseekharness.mobile.runtime.RuntimeScopedResource
 import io.deepseekharness.mobile.shizuku.DeviceCommand
 import io.deepseekharness.mobile.shizuku.DeviceFilePolicy
 import io.deepseekharness.mobile.shizuku.DeviceCommandRunner
+import io.deepseekharness.mobile.shizuku.LocalDeviceFileStore
 import io.deepseekharness.mobile.shizuku.ShizukuRuntime
 import io.deepseekharness.mobile.accessibility.DeepSeekAccessibilityService
 import io.deepseekharness.mobile.accessibility.AccessibilityAutomationStore
@@ -18,6 +19,7 @@ import io.deepseekharness.mobile.runtime.TurnCompletionPolicy
 import org.json.JSONObject
 import android.content.Context
 import android.os.Build
+import android.os.Environment
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
@@ -28,6 +30,7 @@ import java.net.SocketException
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ConcurrentHashMap
@@ -59,8 +62,11 @@ class DeviceBridgeServer(
     port: Int = 0,
     private val shellEnabled: () -> Boolean = { false },
 ) : RuntimeScopedResource {
-    private val server = ServerSocket(port, 4, InetAddress.getByName("127.0.0.1"))
-    private val executor = ThreadPoolExecutor(2, 2, 0, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(4))
+    private val server = ServerSocket(port, 12, InetAddress.getByName("127.0.0.1"))
+    // 扩大有界线程池并用 shizukuSlots 单独限流阻塞型 Shizuku 调用：即使 2 条 Shizuku 调用同时卡在
+    // Binder/Shell 超时，仍有独立工作线程立即响应 deviceCapabilities、无障碍、投递区直连与任务通知。
+    private val executor = ThreadPoolExecutor(4, 6, 30, TimeUnit.SECONDS, ArrayBlockingQueue<Runnable>(12))
+    private val shizukuSlots = Semaphore(MAX_CONCURRENT_SHIZUKU_CALLS)
     private val running = AtomicBoolean(true)
     private val activeSockets = ConcurrentHashMap.newKeySet<Socket>()
     val localPort: Int get() = server.localPort
@@ -355,6 +361,15 @@ class DeviceBridgeServer(
                     }
                     val command = DeviceCommand.fromName(commandName)
                         ?: throw RuntimeFailure("DEVICE_COMMAND_INVALID", "设备命令不支持")
+                    // 投递区文件通道在宿主已具备共享存储权限时直接由本地安全执行，不再强依赖 Shizuku；
+                    // 仅当宿主无权限访问共享存储时才回退到 Shizuku 通道。
+                    if (LocalDeviceFileStore.isFileCommand(command) && hasDirectExternalStorageAccess()) {
+                        val localResult = LocalDeviceFileStore.tryExecute(command, param)
+                        if (localResult != null) {
+                            respondResult(output, localResult)
+                            return
+                        }
+                    }
                     // 根通道（用户在设置里显式打开）时，SHELL 命令由应用进程自己起 `su -c`，
                     // 既不建 Shizuku 会话，也不受「AI Shell」这个 Shizuku 通道开关约束——
                     // 那条会话的父进程是 UID 2000 的 shell，根命令的归属会变得不确定。
@@ -418,22 +433,40 @@ class DeviceBridgeServer(
                 rootGuardProfile = rootGuardProfile,
             )
         }
-        val sessionId = shizuku.create(
-            DEFAULT_COLUMNS,
-            DEFAULT_ROWS,
-            suppressPublicOutput = true,
-            permitted = running::get,
-            onSessionExit = { id -> runner.onSessionExit(id) },
-        )
+        val acquired = try {
+            shizukuSlots.tryAcquire(SHIZUKU_SLOT_WAIT_MS, TimeUnit.MILLISECONDS)
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw RuntimeFailure("SHIZUKU_BINDER_INTERRUPTED", "等待 Shizuku 通道被中断", error)
+        }
+        if (!acquired) {
+            throw RuntimeFailure("DEVICE_COMMAND_BUSY", "Shizuku 设备通道正忙，请稍后重试或改用根通道")
+        }
         try {
-            return runner.execute(sessionId, command, param, COMMAND_TIMEOUT_MS)
-        } finally {
+            val sessionId = shizuku.create(
+                DEFAULT_COLUMNS,
+                DEFAULT_ROWS,
+                suppressPublicOutput = true,
+                permitted = running::get,
+                onSessionExit = { id -> runner.onSessionExit(id) },
+                binderTimeoutSeconds = BRIDGE_BINDER_TIMEOUT_SECONDS,
+            )
             try {
-                shizuku.close(sessionId)
-            } catch (_: Throwable) {
+                return runner.execute(sessionId, command, param, COMMAND_TIMEOUT_MS)
+            } finally {
+                try {
+                    shizuku.close(sessionId)
+                } catch (_: Throwable) {
+                }
             }
+        } finally {
+            shizukuSlots.release()
         }
     }
+
+    /** API 30+ 需「所有文件访问」权限，API 26–29 交由本地尝试并在 AccessDenied 时回退 Shizuku。 */
+    private fun hasDirectExternalStorageAccess(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
 
     private fun respondResult(
         output: BufferedOutputStream,
@@ -496,6 +529,11 @@ class DeviceBridgeServer(
 
     companion object {
         private const val COMMAND_TIMEOUT_MS = 60_000L
+        /** 设备桥并发 Shizuku 槽位上限：把阻塞型 Shizuku 请求限制在 2 个槽位，留出线程池余量给快通道。 */
+        private const val MAX_CONCURRENT_SHIZUKU_CALLS = 2
+        private const val SHIZUKU_SLOT_WAIT_MS = 3_000L
+        /** AI 工具经设备桥调用 Shizuku 时缩短 Binder 等待，避免服务未启动时每次空等 8 秒。 */
+        private const val BRIDGE_BINDER_TIMEOUT_SECONDS = 2L
 
         /** 根通道分支的占位会话标识：该分支不建 Shizuku 会话，这个值不会与任何真实会话重名。 */
         private const val ROOT_ENGINE_SESSION_ID = "root-engine"

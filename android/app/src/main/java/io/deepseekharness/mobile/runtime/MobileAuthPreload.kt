@@ -27,6 +27,10 @@ internal object MobileAuthPreload {
     const val GUEST_PATH = "/usr/local/lib/dsh-mobile-auth.cjs"
     const val TURN_SIGNAL_ASSET_PATH = "support/mobile-turn-signal.js"
     const val TURN_SIGNAL_GUEST_PATH = "/opt/dsh/plugins/dsh-mobile-shizuku/lib/turn-signal.js"
+    const val PTY_GUARD_ASSET_PATH = "support/mobile-pty-guard.js"
+    const val PTY_GUARD_GUEST_PATH = "/opt/dsh/plugins/dsh-mobile-shizuku/lib/pty-guard.js"
+    const val DEVICE_PLUGIN_INDEX_ASSET_PATH = "support/mobile-shizuku-index.js"
+    const val DEVICE_PLUGIN_INDEX_GUEST_PATH = "/opt/dsh/plugins/dsh-mobile-shizuku/lib/index.js"
 
     private const val MAX_BYTES = 256 * 1024
     private const val BUFFER_BYTES = 16 * 1024
@@ -37,6 +41,14 @@ internal object MobileAuthPreload {
 
     fun installTurnSignal(root: File, openAsset: () -> InputStream) {
         install(root, TURN_SIGNAL_GUEST_PATH, "任务信号模块", openAsset)
+    }
+
+    fun installPtyGuard(root: File, openAsset: () -> InputStream) {
+        install(root, PTY_GUARD_GUEST_PATH, "PTY 诊断守卫", openAsset)
+    }
+
+    fun installDevicePluginIndex(root: File, openAsset: () -> InputStream) {
+        install(root, DEVICE_PLUGIN_INDEX_GUEST_PATH, "设备工具插件入口", openAsset)
     }
 
     private fun install(root: File, guestPath: String, description: String, openAsset: () -> InputStream) {

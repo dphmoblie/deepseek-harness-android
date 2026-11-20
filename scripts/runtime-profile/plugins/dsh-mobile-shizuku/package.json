@@ -15,6 +15,7 @@
   "files": [
     "lib/index.js",
     "lib/turn-signal.js",
+    "lib/pty-guard.js",
     "cordis.patch.yml",
     "package.json"
   ],

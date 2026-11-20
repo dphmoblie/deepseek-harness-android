@@ -120,6 +120,27 @@ def generateTurnSignalAsset = tasks.register('generateTurnSignalAsset', Sync) {
     }
 }
 
+def devicePluginIndexSource = new File(appSourceRoot, 'scripts/runtime-profile/plugins/dsh-mobile-shizuku/lib/index.js')
+def ptyGuardSource = new File(appSourceRoot, 'scripts/runtime-profile/plugins/dsh-mobile-shizuku/lib/pty-guard.js')
+if (!devicePluginIndexSource.isFile() || devicePluginIndexSource.length() == 0L) {
+    throw new GradleException("Required mobile device plugin index is missing: ${devicePluginIndexSource}")
+}
+if (!ptyGuardSource.isFile() || ptyGuardSource.length() == 0L) {
+    throw new GradleException("Required mobile PTY guard is missing: ${ptyGuardSource}")
+}
+def generatedDevicePluginAssetsDirectory = layout.buildDirectory.dir('generated/assets/devicePlugin')
+def generateDevicePluginAssets = tasks.register('generateDevicePluginAssets', Sync) {
+    into(generatedDevicePluginAssetsDirectory)
+    from(devicePluginIndexSource) {
+        into('support')
+        rename { 'mobile-shizuku-index.js' }
+    }
+    from(ptyGuardSource) {
+        into('support')
+        rename { 'mobile-pty-guard.js' }
+    }
+}
+
 android {
     namespace 'io.deepseekharness.mobile'
     compileSdk 35
@@ -170,6 +191,7 @@ android {
             assets.srcDir(generatedLegalAssetsDirectory)
             assets.srcDir(generatedAuthPreloadAssetsDirectory)
             assets.srcDir(generatedTurnSignalAssetsDirectory)
+            assets.srcDir(generatedDevicePluginAssetsDirectory)
         }
     }
 
@@ -246,6 +268,7 @@ kotlin {
 
 tasks.named('preBuild').configure {
     dependsOn(generateLegalAssets, generateAuthPreloadAsset, generateTurnSignalAsset)
+    dependsOn(generateDevicePluginAssets)
 }
 
 tasks.configureEach { task ->

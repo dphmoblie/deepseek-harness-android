@@ -510,10 +510,11 @@ class ShizukuRuntime(
         suppressPublicOutput: Boolean = false,
         permitted: () -> Boolean = { true },
         onSessionExit: ((String) -> Unit)? = null,
+        binderTimeoutSeconds: Long = BINDER_TIMEOUT_SECONDS,
     ): String {
         UbuntuTerminalManager.validateSize(columns, rows)
         if (!permitted()) throw RuntimeFailure("DEVICE_BRIDGE_STOPPED", "设备桥已停止")
-        requirePermission()
+        requirePermission(binderTimeoutSeconds)
         val current = requireService(permitted)
         if (!permitted()) throw RuntimeFailure("DEVICE_BRIDGE_STOPPED", "设备桥已停止")
         val id = synchronized(sessionCreateLock) {
@@ -778,8 +779,8 @@ class ShizukuRuntime(
         }
     }
 
-    private fun requirePermission() {
-        awaitBinder()
+    private fun requirePermission(binderTimeoutSeconds: Long = BINDER_TIMEOUT_SECONDS) {
+        awaitBinder(binderTimeoutSeconds)
         val granted = try {
             !Shizuku.isPreV11() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         } catch (_: Throwable) {
@@ -790,20 +791,29 @@ class ShizukuRuntime(
         }
     }
 
-    private fun awaitBinder() {
+    private fun awaitBinder(timeoutSeconds: Long = BINDER_TIMEOUT_SECONDS) {
         if (tryPingBinder()) return
+        val installed = try {
+            appContext.packageManager.resolveContentProvider(SHIZUKU_AUTHORITY, 0) != null
+        } catch (_: Throwable) {
+            false
+        }
+        if (!installed) {
+            throw RuntimeFailure("SHIZUKU_NOT_INSTALLED", "未安装 Shizuku，请先安装或改用根通道")
+        }
         val future = synchronized(binderFutureLock) {
             if (tryPingBinder()) return
             binderFuture?.takeUnless { it.isDone } ?: CompletableFuture<Unit>().also { binderFuture = it }
         }
         try {
-            future.get(BINDER_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            future.get(timeoutSeconds, TimeUnit.SECONDS)
         } catch (error: TimeoutException) {
-            future.completeExceptionally(error)
+            if (timeoutSeconds >= BINDER_TIMEOUT_SECONDS) {
+                future.completeExceptionally(error)
+            }
             throw RuntimeFailure("SHIZUKU_BINDER_TIMEOUT", "未能连接 Shizuku，请确认服务已启动", error)
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
-            future.completeExceptionally(error)
             throw RuntimeFailure("SHIZUKU_BINDER_INTERRUPTED", "等待 Shizuku 连接被中断", error)
         } catch (error: ExecutionException) {
             throw RuntimeFailure("SHIZUKU_BINDER_UNAVAILABLE", "Shizuku 连接已断开", error.cause ?: error)

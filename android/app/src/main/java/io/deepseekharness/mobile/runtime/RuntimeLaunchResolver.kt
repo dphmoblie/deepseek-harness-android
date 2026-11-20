@@ -307,10 +307,18 @@ class RuntimeLaunchResolver(
         MobileAuthPreload.install(store.currentRoot) {
             appContext.assets.open(MobileAuthPreload.ASSET_PATH)
         }
-        // 插件缺失或不可写只影响提醒，不能因此阻止 Harness 启动。
+        // 插件缺失或不可写只影响提醒与诊断增强，不能因此阻止 Harness 启动。
+        // 顺序约束：先落盘 turn-signal.js 与 pty-guard.js，再更新引用它们的 index.js，
+        // 避免任一依赖写入失败时留下缺模块的入口文件。
         try {
             MobileAuthPreload.installTurnSignal(store.currentRoot) {
                 appContext.assets.open(MobileAuthPreload.TURN_SIGNAL_ASSET_PATH)
+            }
+            MobileAuthPreload.installPtyGuard(store.currentRoot) {
+                appContext.assets.open(MobileAuthPreload.PTY_GUARD_ASSET_PATH)
+            }
+            MobileAuthPreload.installDevicePluginIndex(store.currentRoot) {
+                appContext.assets.open(MobileAuthPreload.DEVICE_PLUGIN_INDEX_ASSET_PATH)
             }
         } catch (_: RuntimeFailure) {
             store.diagnostics.record(

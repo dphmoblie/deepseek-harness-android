@@ -1,5 +1,6 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { installTurnSignal } from './turn-signal.js'
+import { installPtyGuard } from './pty-guard.js'
 
 export const name = 'mobile-shizuku'
 export const inject = ['tools', 'systemPrompt', 'attachments', 'llm']
@@ -103,7 +104,12 @@ const SHELL_HINTS = {
   SHIZUKU_PERMISSION_REQUIRED: 'Shizuku 还没授权：请在应用设置里请求授权后重新连接，或改用根通道。',
   SHIZUKU_PERMISSION_DENIED: 'Shizuku 授权被拒绝：请在 Shizuku 应用里重新授权，或改用根通道。',
   SHIZUKU_UNAVAILABLE: 'Shizuku 通道当前不可用：确认 Shizuku 已运行、已授权并已在应用内连接；根通道可用时优先走根通道。',
-  SHIZUKU_SERVICE_TIMEOUT: 'Shizuku 服务没有在限定时间内起来：确认 Shizuku 仍在运行；反复超时就改用根通道。',
+  SHIZUKU_BINDER_TIMEOUT: 'Shizuku 连接超时（服务未启动、刚更新未重启或 Binder 假死）：不要重复重试同一 Shizuku 工具；先查 mobile_device_capabilities，优先改用根通道（mobile_device_shell）或无障碍工具，或提示用户在 Shizuku 中重启服务。',
+  SHIZUKU_BINDER_UNAVAILABLE: 'Shizuku 连接已断开或服务不可用：不要重复重试同一 Shizuku 工具；改用根通道（mobile_device_shell）或无障碍工具，或提示用户在 Shizuku 中重启服务。',
+  SHIZUKU_BINDER_INTERRUPTED: '等待 Shizuku 连接被中断：先查 mobile_device_capabilities 确认状态，不要盲目重复重试。',
+  SHIZUKU_SERVICE_TIMEOUT: 'Shizuku 服务没有在限定时间内起来：不要反复重试；确认 Shizuku 仍在运行，优先改用根通道（mobile_device_shell）或无障碍工具。',
+  SHIZUKU_SERVICE_FAILED: 'Shizuku 用户服务连接失败或已断开：不要反复重试；改用根通道（mobile_device_shell）或无障碍工具，或提示用户在 Shizuku 中重启服务。',
+  SHIZUKU_SERVICE_INTERRUPTED: '连接 Shizuku 用户服务被中断：先查 mobile_device_capabilities 确认状态，不要盲目重复重试。',
 }
 
 /** 受控码 → 固定恢复建议。只有登记过表的命令才有建议，其余命令仍旧只回码。 */
@@ -840,6 +846,7 @@ export function apply(ctx) {
   // 一轮任务开始／收口的通知：订阅 dsh 的 turn/start、turn/end 并尽力而为地上报给原生，
   // 由原生决定前台/后台怎么提示。放在最前面注册，工具审批钩子仍是最后注册的那个。
   installTurnSignal(ctx, { bridgeConfig })
+  installPtyGuard(ctx)
 
   ctx.tools.register(defineTool({
     name: 'mobile_device_capabilities',

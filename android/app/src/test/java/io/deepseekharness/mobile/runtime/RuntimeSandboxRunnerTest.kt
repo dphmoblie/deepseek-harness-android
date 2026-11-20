@@ -69,6 +69,8 @@ class RuntimeSandboxRunnerTest {
         assertTrue("脚本要真的把 bwrap 的 --ro-bind 翻译成 --ro", script.contains("--ro-bind"))
         assertTrue("脚本要真的处理 --bind", script.contains("--bind"))
         assertTrue("脚本要调用 landlock-run", script.contains("landlock-run"))
+        assertTrue("脚本必须用引号保护位置参数，支持含空格工作目录路径", script.contains("exec \"\$LAUNCHER\" \"\$@\""))
+        assertFalse("脚本不得把带空格的合法目录名当非法路径拒绝", script.contains("*\" \"*)"))
     }
 
     @Test
