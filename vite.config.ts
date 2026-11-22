@@ -50,7 +50,21 @@ export default defineConfig({
     strictPort: false,
   },
   build: {
-    target: 'es2022',
+    /*
+     * 目标内核：Chromium 74 = Android 10 出厂镜像自带的 WebView。
+     *
+     * 原来这里是 `es2022`：产出的可选链、空值合并（Chrome 80 才支持）在旧内核上是**解析期**
+     * SyntaxError——整个外壳白屏，polyfill 一行都跑不到。语法只能靠 esbuild 降级，所以把
+     * 目标钉在真正要支持的最低内核上；API 层由 `src/legacyGlobals.ts` 补。
+     * 缺口清单与判定口径见 `node scripts/webview-compat-scan.mjs --baseline android10-stock`
+     * （`scripts/webview-compat-contract.mjs` 是同一份契约表）。
+     *
+     * `cssTarget` 不跟着降到 74：样式表里 `color-mix()`、`:has()`、`100dvh` 这些已经各自
+     * 关在 `@supports` 里做外观降级（见 `src/legacyWebView.ts`），esbuild 也不会为它们生成
+     * 兜底；把 CSS 目标压到 74 只会让构建器去警告一堆已知的降级项，改不动实际行为。
+     */
+    target: 'chrome74',
+    cssTarget: 'chrome100',
     sourcemap: false,
     rollupOptions: {
       output: { manualChunks },

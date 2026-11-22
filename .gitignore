@@ -2,6 +2,8 @@
 node_modules/
 dist/
 harness-web/.dist-android/
+# 语法降级后的派生前端产物（scripts/downlevel-harness-frontend.mjs 生成，不入库）
+harness-web/dist-legacy/
 www/
 coverage/
 target/

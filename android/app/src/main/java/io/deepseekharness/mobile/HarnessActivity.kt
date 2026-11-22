@@ -318,8 +318,8 @@ class HarnessActivity : AppCompatActivity() {
                 }
                 // 每次主框架加载完都重放一次已同步的主题；没有同步过时它什么都不做。
                 HarnessThemeBridge.apply(view)
-                // document-start 不支持时的兜底：老 WebView 缺 AbortSignal.any / toSorted，
-                // 「选择工作区目录」和模型列表会在点开时报 "is not a function"。缺失才补，
+                // document-start 不支持时的兜底：老 WebView 缺 AbortSignal.any / throwIfAborted /
+                // toSorted，「选择工作区目录」和模型列表会在点开时报 "is not a function"。缺失才补，
                 // 支持 document-start 的 provider 上这里只是重复执行一遍幂等脚本。
                 HarnessPolyfill.apply(view)
                 // 官方预览面板没有分享入口；补一个按钮，点击回到原生分享。
@@ -330,8 +330,9 @@ class HarnessActivity : AppCompatActivity() {
             onWorkspaceShare = ::shareWorkspaceFile,
             pageNetwork = { settingsStore.pageNetworkAccess() },
         )
-        // 旧 WebView 缺 ES2023 数组方法与 AbortSignal.any：能在 document-start 注入时最先补上，
-        // 不至于等 onPageFinished 才生效；不支持该能力的 provider 由 onMainFrameLoaded 兜底。
+        // 旧 WebView 缺 ES2023 数组方法、AbortSignal.any 与 throwIfAborted：能在 document-start
+        // 注入时最先补上，不至于等 onPageFinished 才生效；不支持该能力的 provider 由
+        // onMainFrameLoaded 兜底。
         val originRule = origin.originRule()
         if (polyfilledOriginRule != originRule) {
             HarnessPolyfill.installDocumentStart(webView, originRule)

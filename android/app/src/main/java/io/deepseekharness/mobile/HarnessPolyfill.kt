@@ -9,11 +9,14 @@ import androidx.webkit.WebViewFeature
  *
  * 为什么需要它：Harness 前端（以及它的客户端插件页面）跑在**系统 WebView** 里，而不是内置
  * Node.js 里——两者版本互不相干，把运行时的 Node 提到 24 也补不了浏览器的 API。真机上已经
- * 撞到过两次：
+ * 撞到过三次：
  * - Chrome 低于 124 的 WebView 打开「选择工作区目录」时，页面直接显示
  *   `AbortSignal.any is not a function`；
  * - ColorOS 13 自带的旧 WebView 在模型列表里显示 `groups.toSorted is not a function`
- *   （`Array.prototype.toSorted` 要 Chrome 110+）。
+ *   （`Array.prototype.toSorted` 要 Chrome 110+）；
+ * - 同一个旧 WebView 的 `AbortSignal` 也没有 `throwIfAborted`（Chrome 100）：官方客户端
+ *   每次 RPC 返回后都调 `signal.throwIfAborted()`，于是目录选择显示
+ *   `client api: directoryPicker/list failed: signal.throwIfAborted is not a function`。
  *
  * 注入时机分两层：
  * 1. WebView 支持 `DOCUMENT_START_SCRIPT`（AndroidX WebKit）时，在主框架任何脚本之前注入，
@@ -28,10 +31,19 @@ internal object HarnessPolyfill {
     /**
      * 补齐旧 WebView 缺少的 API。
      *
+     * 清单不是拍脑袋列的：`scripts/webview-compat-scan.mjs` 扫官方前端产物（含运行时里的
+     * 客户端插件），按调用点计数出「目标基线之上、内核没有」的项，这里只补扫描器报出来的
+     * 那些；补完在 `scripts/webview-polyfill.test.mjs` 里用缺 API 的假 realm 跑一遍语义。
+     *
      * - `Array.prototype.toSorted / toReversed / toSpliced / with`（Chrome 110）
      * - `Promise.withResolvers`（Chrome 119）
      * - `URL.canParse`（Chrome 120）
      * - `AbortSignal.any`（Chrome 116）与旧 AbortSignal 的最小 EventTarget 语义
+     * - `AbortSignal.prototype.reason`（Chrome 98）与 `throwIfAborted`（Chrome 100）
+     * - Android 10 出厂 WebView（Chromium 74）还缺的一层：`Object.hasOwn`（93）、
+     *   `at`（92）、`replaceAll`（85）、`Promise.allSettled`（76）、`findLast/findLastIndex`
+     *   （97）、`AbortSignal.timeout`（103）、`Blob.prototype.text/arrayBuffer`（76）、
+     *   `Element.prototype.replaceChildren`（86）
      */
     const val SCRIPT: String = """(function () {
   /*
@@ -117,54 +129,283 @@ internal object HarnessPolyfill {
   }
 
   /*
-   * 旧 WebView 的 AbortSignal 不是 EventTarget：没有 addEventListener，dsh 前端在
-   * 目录选择里调用 signal.addEventListener 直接抛 "signal.addEventListener is not a function"
-   * （实测：选择工作区目录弹窗报 directoryPicker/list failed，只能取消）。
-   * 这里补一层最小 EventTarget 语义，并在 abort() 时派发事件。
+   * Android 10 出厂 WebView 是 Chromium 74，比上面那些还要少一整层 ES2022 的东西。
+   * 这一段的每一项都是 scripts/webview-compat-scan.mjs 在官方产物里**数到调用点**之后
+   * 才补的，不是"顺手补一堆"：补丁越多，越容易在某台机上改变原生语义。
    */
-  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.prototype.addEventListener !== 'function') {
-    var registries = new WeakMap();
+  if (typeof Object.hasOwn !== 'function') {
+    Object.defineProperty(Object, 'hasOwn', {
+      configurable: true,
+      writable: true,
+      value: function (object, key) {
+        if (object === null || object === undefined) {
+          throw new TypeError('Cannot convert undefined or null to object');
+        }
+        return Object.prototype.hasOwnProperty.call(Object(object), key);
+      },
+    });
+  }
+  /* at()（Chrome 92）：数组与字符串共用同一套负下标换算。 */
+  function atIndex(list, index) {
+    var length = list.length >>> 0;
+    var relative = Number(index);
+    if (relative !== relative) { relative = 0; }
+    relative = relative < 0 ? Math.ceil(relative) : Math.floor(relative);
+    var actual = relative >= 0 ? relative : length + relative;
+    if (actual < 0 || actual >= length) { return undefined; }
+    return list[actual];
+  }
+  if (typeof Array.prototype.at !== 'function') {
+    Object.defineProperty(Array.prototype, 'at', {
+      configurable: true,
+      writable: true,
+      value: function (index) { return atIndex(this, index); },
+    });
+  }
+  if (typeof String.prototype.at !== 'function') {
+    Object.defineProperty(String.prototype, 'at', {
+      configurable: true,
+      writable: true,
+      value: function (index) { return atIndex(String(this), index); },
+    });
+  }
+  /*
+   * replaceAll（Chrome 85）：字符串模式转成转义后的全局正则再交给原生 replace，
+   * 这样 `$&`/`$1`/`$$` 的替换语义与规范一致；用 split/join 会把这些原样留下。
+   */
+  if (typeof String.prototype.replaceAll !== 'function') {
+    Object.defineProperty(String.prototype, 'replaceAll', {
+      configurable: true,
+      writable: true,
+      value: function (searchValue, replaceValue) {
+        if (typeof searchValue === 'string') {
+          var escaped = '';
+          for (var position = 0; position < searchValue.length; position += 1) {
+            var character = searchValue.charAt(position);
+            escaped += '\\^$.*+?()[]{}|'.indexOf(character) >= 0 ? '\\' + character : character;
+          }
+          return String(this).replace(new RegExp(escaped, 'g'), replaceValue);
+        }
+        if (searchValue !== null && typeof searchValue === 'object' &&
+          typeof Symbol !== 'undefined' && typeof searchValue[Symbol.replace] === 'function') {
+          if (searchValue.global === false) {
+            throw new TypeError('replaceAll must be called with a global RegExp');
+          }
+          return String(this).replace(searchValue, replaceValue);
+        }
+        throw new TypeError('replaceAll: searchValue must be a string or a global RegExp');
+      },
+    });
+  }
+  if (typeof Promise !== 'undefined' && typeof Promise.allSettled !== 'function') {
+    Promise.allSettled = function (iterable) {
+      return new Promise(function (resolve, reject) {
+        var items;
+        try { items = Array.prototype.slice.call(iterable); } catch (error) { reject(error); return; }
+        var results = new Array(items.length);
+        var remaining = items.length;
+        function settle(index, value, failed) {
+          results[index] = failed ? { status: 'rejected', reason: value } : { status: 'fulfilled', value: value };
+          remaining -= 1;
+          if (remaining === 0) { resolve(results); }
+        }
+        if (remaining === 0) { resolve(results); return; }
+        for (var index = 0; index < items.length; index += 1) {
+          (function (position) {
+            Promise.resolve(items[position]).then(
+              function (value) { settle(position, value, false); },
+              function (reason) { settle(position, reason, true); },
+            );
+          })(index);
+        }
+      });
+    };
+  }
+  if (typeof Array.prototype.findLast !== 'function') {
+    Object.defineProperty(Array.prototype, 'findLast', {
+      configurable: true,
+      writable: true,
+      value: function (predicate, thisArg) {
+        for (var index = (this.length >>> 0) - 1; index >= 0; index -= 1) {
+          if (predicate.call(thisArg, this[index], index, this)) { return this[index]; }
+        }
+        return undefined;
+      },
+    });
+  }
+  if (typeof Array.prototype.findLastIndex !== 'function') {
+    Object.defineProperty(Array.prototype, 'findLastIndex', {
+      configurable: true,
+      writable: true,
+      value: function (predicate, thisArg) {
+        for (var index = (this.length >>> 0) - 1; index >= 0; index -= 1) {
+          if (predicate.call(thisArg, this[index], index, this)) { return index; }
+        }
+        return -1;
+      },
+    });
+  }
+  /*
+   * 文本/二进制读取（Chrome 76）：Blob.prototype.text / arrayBuffer。只用 FileReader 实现，
+   * 不碰任何页面全局；FileReader 都不存在的环境（非浏览器 realm）直接跳过。
+   */
+  if (typeof Blob !== 'undefined' && typeof FileReader !== 'undefined' && typeof Promise !== 'undefined') {
+    var readBlobAs = function (blob, method) {
+      return new Promise(function (resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function () { resolve(reader.result); };
+        reader.onerror = function () { reject(reader.error); };
+        reader[method](blob);
+      });
+    };
+    if (typeof Blob.prototype.text !== 'function') {
+      Object.defineProperty(Blob.prototype, 'text', {
+        configurable: true,
+        writable: true,
+        value: function () { return readBlobAs(this, 'readAsText'); },
+      });
+    }
+    if (typeof Blob.prototype.arrayBuffer !== 'function') {
+      Object.defineProperty(Blob.prototype, 'arrayBuffer', {
+        configurable: true,
+        writable: true,
+        value: function () { return readBlobAs(this, 'readAsArrayBuffer'); },
+      });
+    }
+  }
+  /* replaceChildren（Chrome 86）：清空后按参数顺序追加，字符串按文本节点插入。 */
+  if (typeof Element !== 'undefined' && typeof Element.prototype.replaceChildren !== 'function') {
+    Element.prototype.replaceChildren = function () {
+      var owner = this.ownerDocument;
+      while (this.firstChild) { this.removeChild(this.firstChild); }
+      for (var index = 0; index < arguments.length; index += 1) {
+        var child = arguments[index];
+        this.appendChild(typeof child === 'string' ? owner.createTextNode(child) : child);
+      }
+    };
+  }
+
+  /*
+   * AbortSignal 的取消语义：旧 WebView 在这条链路上缺三样东西，缺哪样上游就在哪样上崩。
+   * - EventTarget（Chrome 66 之前）：没有 addEventListener，目录选择报
+   *   "signal.addEventListener is not a function"（0.3.7 起补）；
+   * - reason（Chrome 98）：中止原因恒为 undefined，取消被当成「无原因失败」；
+   * - throwIfAborted（Chrome 100）：dsh 客户端每次 RPC 返回后都调它，缺了直接报
+   *   "signal.throwIfAborted is not a function"——实测「选择工作区目录」弹窗显示
+   *   client api: directoryPicker/list failed，只能取消。
+   *
+   * 三样都只在缺失时补。补 reason 得自己记住 abort(reason) 的入参，所以只有在真要补
+   * reason、或要派发 abort 事件时，才包一层 AbortController.abort；新 WebView 上一个
+   * 原型方法都不动。
+   */
+  if (typeof AbortSignal !== 'undefined') {
+    var signalStates = new WeakMap();
     var stateOf = function (signal) {
-      var state = registries.get(signal);
-      if (!state) { state = { listeners: {}, onabort: null }; registries.set(signal, state); }
+      var state = signalStates.get(signal);
+      if (!state) {
+        state = { listeners: [], onabort: null, aborted: false, reason: undefined };
+        signalStates.set(signal, state);
+      }
       return state;
     };
-    AbortSignal.prototype.addEventListener = function (type, listener) {
-      if (type !== 'abort' || typeof listener !== 'function') { return; }
-      var state = stateOf(this);
-      (state.listeners.abort || (state.listeners.abort = [])).push(listener);
+    var abortReasonFallback = function () {
+      var message = 'signal is aborted without reason';
+      try { return new DOMException(message, 'AbortError'); } catch (error) { }
+      var fallback = new Error(message);
+      fallback.name = 'AbortError';
+      return fallback;
     };
-    AbortSignal.prototype.removeEventListener = function (type, listener) {
-      if (type !== 'abort') { return; }
-      var list = stateOf(this).listeners.abort;
-      if (!list) { return; }
-      var index = list.indexOf(listener);
-      if (index >= 0) { list.splice(index, 1); }
-    };
-    AbortSignal.prototype.dispatchEvent = function (event) {
-      var state = stateOf(this);
-      var listeners = (state.listeners.abort || []).slice();
-      if (typeof state.onabort === 'function') { listeners.unshift(state.onabort); }
-      for (var i = 0; i < listeners.length; i += 1) {
-        try { listeners[i].call(this, event); } catch (error) { }
-      }
-      return true;
-    };
-    Object.defineProperty(AbortSignal.prototype, 'onabort', {
-      configurable: true,
-      get: function () { return stateOf(this).onabort; },
-      set: function (value) { stateOf(this).onabort = typeof value === 'function' ? value : null; },
-    });
-    if (typeof AbortController !== 'undefined') {
-      var originalAbort = AbortController.prototype.abort;
-      AbortController.prototype.abort = function (reason) {
-        originalAbort.call(this, reason);
-        var signal = this.signal;
-        if (signal && typeof signal.dispatchEvent === 'function' && typeof Event === 'function') {
-          try { signal.dispatchEvent(new Event('abort')); } catch (error) { }
-        }
+    var nativeReason = 'reason' in AbortSignal.prototype;
+    var nativeEvents = typeof AbortSignal.prototype.addEventListener === 'function';
+    if (!nativeEvents) {
+      AbortSignal.prototype.addEventListener = function (type, listener) {
+        if (type !== 'abort' || typeof listener !== 'function') { return; }
+        var listeners = stateOf(this).listeners;
+        if (listeners.indexOf(listener) < 0) { listeners.push(listener); }
       };
+      AbortSignal.prototype.removeEventListener = function (type, listener) {
+        if (type !== 'abort') { return; }
+        var listeners = stateOf(this).listeners;
+        var index = listeners.indexOf(listener);
+        if (index >= 0) { listeners.splice(index, 1); }
+      };
+      AbortSignal.prototype.dispatchEvent = function (event) {
+        var state = stateOf(this);
+        var listeners = state.listeners.slice();
+        if (typeof state.onabort === 'function') { listeners.unshift(state.onabort); }
+        for (var i = 0; i < listeners.length; i += 1) {
+          try { listeners[i].call(this, event); } catch (error) { }
+        }
+        return true;
+      };
+      Object.defineProperty(AbortSignal.prototype, 'onabort', {
+        configurable: true,
+        get: function () { return stateOf(this).onabort; },
+        set: function (value) { stateOf(this).onabort = typeof value === 'function' ? value : null; },
+      });
     }
+    if (!nativeReason || !nativeEvents) {
+      if (typeof AbortController !== 'undefined') {
+        var nativeAbort = AbortController.prototype.abort;
+        AbortController.prototype.abort = function (reason) {
+          var signal = this.signal;
+          if (signal) {
+            var state = stateOf(signal);
+            state.aborted = true;
+            state.reason = arguments.length > 0 ? reason : abortReasonFallback();
+          }
+          nativeAbort.call(this, reason);
+          if (!nativeEvents && signal && typeof signal.dispatchEvent === 'function' && typeof Event === 'function') {
+            try { signal.dispatchEvent(new Event('abort')); } catch (error) { }
+          }
+        };
+      }
+    }
+    if (!nativeReason) {
+      Object.defineProperty(AbortSignal.prototype, 'reason', {
+        configurable: true,
+        get: function () {
+          if (!this.aborted) { return undefined; }
+          var state = stateOf(this);
+          return state.aborted ? state.reason : abortReasonFallback();
+        },
+      });
+    }
+    var reasonOf = function (signal) {
+      if (nativeReason) { return signal.reason; }
+      var state = stateOf(signal);
+      return state.aborted ? state.reason : abortReasonFallback();
+    };
+    if (typeof AbortSignal.prototype.throwIfAborted !== 'function') {
+      Object.defineProperty(AbortSignal.prototype, 'throwIfAborted', {
+        configurable: true,
+        writable: true,
+        value: function () {
+          if (this.aborted) { throw reasonOf(this); }
+        },
+      });
+    }
+  }
+  /*
+   * timeout（Chrome 103）：dsh 的 RPC 超时用它，缺了报 "AbortSignal.timeout is not a function"。
+   * 必须排在下面那条「已经有 any 就直接 return」之前，否则 newer-than-103 之外的内核永远补不上。
+   */
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout !== 'function') {
+    AbortSignal.timeout = function (delay) {
+      var controller = new AbortController();
+      var milliseconds = Number(delay);
+      if (milliseconds !== milliseconds || milliseconds < 0) { milliseconds = 0; }
+      setTimeout(function () {
+        var reason;
+        try { reason = new DOMException('signal timed out', 'TimeoutError'); } catch (error) { }
+        if (reason === undefined) {
+          reason = new Error('signal timed out');
+          reason.name = 'TimeoutError';
+        }
+        controller.abort(reason);
+      }, milliseconds);
+      return controller.signal;
+    };
   }
   if (typeof AbortSignal === 'undefined' || typeof AbortSignal.any === 'function') return;
   AbortSignal.any = function (signals) {

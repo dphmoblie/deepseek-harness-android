@@ -1,5 +1,8 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+// 必须是第一条 import：旧内核（Android 10 出厂 WebView = Chromium 74）缺的 API 要在
+// App/i18n 求值之前就补上，`t()` 的第一条判断就是 Object.hasOwn。详见 legacyGlobals.ts。
+import './legacyGlobals'
 // xterm 的样式表不在这里引入：终端面板本身是懒加载的（见 App.tsx 的 lazy import），
 // 样式跟着 TerminalPanel 走才能让首屏 CSS 不包含终端相关的规则。
 import './styles.css'
