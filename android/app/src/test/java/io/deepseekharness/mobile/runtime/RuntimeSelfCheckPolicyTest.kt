@@ -17,24 +17,23 @@ class RuntimeSelfCheckPolicyTest {
         RuntimeSelfCheckPolicy.RawCheck(id, status, code)
 
     /**
-     * 访客脚本产出的那 14 项（前 11 项链路 + 3 项编译环境能力）。
+     * 访客脚本产出的那 13 项（前 10 项链路 + 3 项编译环境能力）。
      *
      * 宿主追加的 4 项设备事实（`plugins`/`accessibility`/`virtualscreen`/`webview`）不在这段里：
-     * 访客脚本一行没改，因此这些用例的载荷与断言仍按这 14 项写。
+     * 访客脚本一行没改，因此这些用例的载荷与断言仍按这 13 项写。
      */
     private val guestIds = listOf(
         "shell", "node", "sandbox_launcher", "sandbox_probe", "sandbox_exec",
-        "pty", "pty_sandbox", "dsh_home", "attachments", "hardlink", "rg",
+        "pty", "pty_sandbox", "dsh_home", "attachments", "rg",
         "c_compiler", "make", "python3",
     )
 
-    /** 十四项全通过的健康载荷；顺序刻意与契约不同，用来验证归一化。 */
+    /** 十三项全通过的健康载荷；顺序刻意与契约不同，用来验证归一化。 */
     private val healthy = listOf(
         raw("python3", "ok"),
         raw("make", "ok"),
         raw("c_compiler", "ok"),
         raw("rg", "ok"),
-        raw("hardlink", "ok"),
         raw("attachments", "ok"),
         raw("dsh_home", "ok"),
         raw("pty_sandbox", "ok"),
@@ -49,7 +48,7 @@ class RuntimeSelfCheckPolicyTest {
     @Test
     fun keepsAWellFormedPayloadInContractOrder() {
         val checks = RuntimeSelfCheckPolicy.sanitize(healthy)
-        // 访客的 14 项归一化后仍是契约顺序（宿主 4 项不在这一载荷里，自然也不出现）。
+        // 访客的 13 项归一化后仍是契约顺序（宿主 4 项不在这一载荷里，自然也不出现）。
         assertEquals(guestIds, checks.map { it.id })
         assertTrue(checks.all { it.status == "ok" && it.code == null })
         // 全 ok 时汇总必须是「没有失败」：否则界面会显示一个并不存在的失败码。
@@ -99,68 +98,76 @@ class RuntimeSelfCheckPolicyTest {
     }
 
     @Test
-    fun acceptsOnlyTheHardlinkDeniedCodeOnTheHardlinkCheck() {
-        // 契约里的 id 顺序（脚本 / 原生 / 界面三处逐字一致）：hardlink 紧跟 attachments、在 rg 之前；
-        // 后三项编译环境能力项与宿主追加的四项设备事实都是追加的，既有 11 项的相对顺序一个字都不动。
+    fun keepsTheContractOrderNowThatTheHardlinkProbeIsGone() {
+        // 契约里的 id 顺序（脚本 / 原生 / 界面三处逐字一致）：`attachments` 之后直接是 `rg`；
+        // 后三项编译环境能力项与宿主追加的四项设备事实都是追加的，既有 10 项的相对顺序一个字都不动。
         assertEquals(
             listOf(
                 "shell", "node", "sandbox_launcher", "sandbox_probe", "sandbox_exec",
-                "pty", "pty_sandbox", "dsh_home", "attachments", "hardlink", "rg",
+                "pty", "pty_sandbox", "dsh_home", "attachments", "rg",
                 "c_compiler", "make", "python3",
                 "plugins", "accessibility", "virtualscreen", "webview",
             ),
             RuntimeSelfCheckPolicy.CHECK_IDS,
         )
-        assertEquals(9, RuntimeSelfCheckPolicy.CHECK_IDS.indexOf("hardlink"))
-        // 防恒真：总项数就是 18（访客 14 + 宿主 4），且前 14 项与访客契约逐字相同、宿主 4 项只能在末尾。
-        assertEquals(18, RuntimeSelfCheckPolicy.CHECK_IDS.size)
-        assertEquals(guestIds, RuntimeSelfCheckPolicy.CHECK_IDS.take(14))
+        assertEquals(8, RuntimeSelfCheckPolicy.CHECK_IDS.indexOf("attachments"))
+        assertEquals(9, RuntimeSelfCheckPolicy.CHECK_IDS.indexOf("rg"))
+        // 防恒真：总项数就是 17（访客 13 + 宿主 4），且前 13 项与访客契约逐字相同、宿主 4 项只能在末尾。
+        assertEquals(17, RuntimeSelfCheckPolicy.CHECK_IDS.size)
+        assertEquals(guestIds, RuntimeSelfCheckPolicy.CHECK_IDS.take(13))
         assertEquals(
             listOf("plugins", "accessibility", "virtualscreen", "webview"),
             RuntimeSelfCheckPolicy.CHECK_IDS.takeLast(4),
         )
 
+        // 已移除的 id 必须被丢弃：旧载荷里还带着 `hardlink` 时不给它编造任何结论。
+        assertTrue(
+            RuntimeSelfCheckPolicy.sanitize(
+                listOf(raw("hardlink", "fail", "HARDLINK_DENIED"), raw("hardlink", "ok")),
+            ).isEmpty(),
+        )
+
         val checks = RuntimeSelfCheckPolicy.sanitize(
             listOf(
-                raw("hardlink", "ok"),
+                raw("attachments", "ok"),
                 // 同一个 id 重复出现时保留首个：因此这一行被丢弃，验证的是「ok 不带码」那一支。
-                raw("hardlink", "fail", "HARDLINK_DENIED"),
+                raw("attachments", "fail", "ATTACHMENTS_NOT_WRITABLE"),
             ),
         )
-        assertEquals(listOf("hardlink"), checks.map { it.id })
+        assertEquals(listOf("attachments"), checks.map { it.id })
         assertEquals("ok", checks.single().status)
         assertNull(checks.single().code)
 
-        val denied = RuntimeSelfCheckPolicy.sanitize(listOf(raw("hardlink", "fail", "HARDLINK_DENIED")))
-        assertEquals(listOf("hardlink"), denied.map { it.id })
+        val denied = RuntimeSelfCheckPolicy.sanitize(listOf(raw("attachments", "fail", "ATTACHMENTS_NOT_WRITABLE")))
+        assertEquals(listOf("attachments"), denied.map { it.id })
         assertEquals("fail", denied.single().status)
-        assertEquals("HARDLINK_DENIED", denied.single().code)
+        assertEquals("ATTACHMENTS_NOT_WRITABLE", denied.single().code)
 
         // `ok` 带码、码属于别的检查项、状态与码不一致、码不在受控集合里：四种都整条丢弃。
         assertTrue(
             RuntimeSelfCheckPolicy.sanitize(
                 listOf(
-                    raw("hardlink", "ok", "HARDLINK_DENIED"),
-                    raw("hardlink", "fail", "ATTACHMENTS_NOT_WRITABLE"),
-                    raw("hardlink", "warn", "HARDLINK_DENIED"),
-                    raw("hardlink", "fail", "HARDLINK_OK"),
+                    raw("attachments", "ok", "ATTACHMENTS_NOT_WRITABLE"),
+                    raw("attachments", "fail", "EXEC_LAUNCHER_FAILED"),
+                    raw("attachments", "warn", "ATTACHMENTS_NOT_WRITABLE"),
+                    raw("attachments", "fail", "ATTACHMENTS_OK"),
                 ),
             ).isEmpty(),
         )
 
-        // 顺序证据：hardlink 在 attachments 之后、rg 之前，首个失败码必须按契约顺序取到它。
+        // 顺序证据：attachments 在 dsh_home 之后、rg 之前，首个失败码必须按契约顺序取到它。
         val ordered = RuntimeSelfCheckPolicy.sanitize(
             listOf(
                 raw("rg", "warn", "RG_MISSING"),
-                raw("attachments", "ok"),
-                raw("hardlink", "fail", "HARDLINK_DENIED"),
+                raw("dsh_home", "ok"),
+                raw("attachments", "fail", "ATTACHMENTS_NOT_WRITABLE"),
             ),
         )
-        assertEquals(listOf("attachments", "hardlink", "rg"), ordered.map { it.id })
+        assertEquals(listOf("dsh_home", "attachments", "rg"), ordered.map { it.id })
         assertEquals(listOf("ok", "fail", "warn"), ordered.map { it.status })
-        // `warn` 不算失败：失败项只有 hardlink 一个。
+        // `warn` 不算失败：失败项只有 attachments 一个。
         assertEquals(
-            RuntimeSelfCheckPolicy.Summary("HARDLINK_DENIED", 1),
+            RuntimeSelfCheckPolicy.Summary("ATTACHMENTS_NOT_WRITABLE", 1),
             RuntimeSelfCheckPolicy.summarize(ordered),
         )
     }

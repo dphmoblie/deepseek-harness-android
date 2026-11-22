@@ -15,7 +15,7 @@ internal object RuntimeSelfCheckPolicy {
     const val REPAIR = "repair"
 
     /**
-     * 单次载荷的条目上限；自检固定只有十八项：访客脚本产出十一项链路 + 三项编译环境能力（共 14 项），
+     * 单次载荷的条目上限；自检固定只有十七项：访客脚本产出十项链路 + 三项编译环境能力（共 13 项），
      * 宿主再追加四项设备事实（插件链接 / 无障碍 / 副屏悬浮窗 / 系统 WebView），多出来的一律不可信。
      */
     const val MAX_CHECKS = 32
@@ -29,7 +29,11 @@ internal object RuntimeSelfCheckPolicy {
     /**
      * 检查项 id：契约冻结，**这个顺序就是回传顺序**（与访客脚本、界面一致）。
      *
-     * 前 11 项链路是访客脚本的第一版契约，顺序不得改动（`hardlink` 仍是索引 9）。
+     * 前 10 项链路是访客脚本的第一版契约，顺序不得改动（`attachments` 之后直接是 `rg`）。
+     *
+     * 2026-11-22 移除 `hardlink` 项：dsh 的「新建文件」与「附件落盘」两条路径都已回退到 `rename`，
+     * `link(2)` 被拒不再意味着写入失败，探针只会在真机上每次多报一条不影响使用的失败。
+     * 决策记录见 `AGENTS.md`，不要加回来。
      */
     val CHECK_IDS = listOf(
         "shell",
@@ -41,14 +45,13 @@ internal object RuntimeSelfCheckPolicy {
         "pty_sandbox",
         "dsh_home",
         "attachments",
-        "hardlink",
         "rg",
-        // 追加的编译环境能力项：既有 11 项的 id 与相对顺序不得改动（hardlink 仍是索引 9）。
+        // 追加的编译环境能力项：既有 10 项的 id 与相对顺序不得改动。
         "c_compiler",
         "make",
         "python3",
         // 追加的宿主事实项：访客脚本**不产出**这四项，由 Android 侧读取设备事实后并入（见 SelfCheckHostFacts）。
-        // 同样只能追加在末尾：既有 14 项（访客 11 链路 + 3 编译能力）的 id 与相对顺序不得改动。
+        // 同样只能追加在末尾：既有 13 项（访客 10 链路 + 3 编译能力）的 id 与相对顺序不得改动。
         "plugins",
         "accessibility",
         "virtualscreen",
@@ -110,9 +113,6 @@ internal object RuntimeSelfCheckPolicy {
             "ATTACHMENTS_MISSING" to "warn",
             "ATTACHMENTS_NOT_WRITABLE" to "fail",
         ),
-        // 硬链接在这个环境里不可用（本机被 PRoot / 内核策略一律拒绝，跨设备则是 EXDEV）：
-        // 两种 errno 对上层是同一个结论，因此共用同一个受控码。
-        "hardlink" to mapOf("HARDLINK_DENIED" to "fail"),
         "rg" to mapOf(
             "RG_MISSING" to "warn",
             "RG_NOT_EXECUTABLE" to "warn",
@@ -170,7 +170,7 @@ internal object RuntimeSelfCheckPolicy {
     /** 校验后的条目：`code` 只在该检查项非 `ok` 时存在。 */
     internal data class Check(val id: String, val status: String, val code: String?)
 
-    /** 十八项检查（访客 14 项 + 宿主 4 项）的汇总：诊断日志只写这两个值。 */
+    /** 十七项检查（访客 13 项 + 宿主 4 项）的汇总：诊断日志只写这两个值。 */
     internal data class Summary(val firstFailureCode: String?, val failedCount: Int)
 
     /** 修复计数：`candidates` 是本次涉及的目标数，`repaired` 是实际改动的数量。 */

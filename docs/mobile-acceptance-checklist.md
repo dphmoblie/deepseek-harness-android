@@ -1,4 +1,4 @@
-﻿# 移动端真机验收清单（随版本滚动，不绑定某个历史版本号）
+# 移动端真机验收清单（随版本滚动，不绑定某个历史版本号）
 
 > 适用范围：荣耀 Android 16（arm64/16KB）及至少一台其他 arm64 真机。验收对象为
 > **同一个 Release** 中的内嵌 APK、`runtime-manifest.json` 与 `rootfs.bundle`
@@ -304,7 +304,7 @@ rootfs SHA-256：
 | R2 | 一次只放一个恶意 tar，逐个验证（`tar` 在访客内构造，例如 `cd /root/1 && tar -cf /mnt/inbox/evil.tar --transform='s|^|../|' payload` 一类可造出 `../` 条目；符号链接用 `ln -s /root/.dsh bad.link && tar -cf /mnt/inbox/evil2.tar bad.link`）→ 每次回 App 点「导入到工作区」，并在访客内 `ls -la /root/1` 对比前后 | 含 `../` 条目或指向私有区（`/root/.dsh`、`/root/1`）的**绝对**符号链接都被**拒绝**并给出明确错误（界面提示 + 受控码 `MAILBOX_PATH_INVALID` / `MAILBOX_LINK_ABSOLUTE` / `MAILBOX_LINK_ESCAPE`）；导入后 `/root/1` 与 `mailbox-import/` **没有任何新增或改动**（NoFollow 生效，不跟随链接写到私有区）。一次放多个 tar 会被判为「无法确定导入哪一个」，也属预期 |
 | R3 | 用 `write` 工具写 `/mnt/inbox/` 与 `/mnt/outbox/` 下的文件 | **失败**并返回受控错误（实测该路径对 `write` 工具是 EACCES）。这一项是**负向断言**：若它「能写」，说明投递区被当成了工作区，属回归。本轮实现**刻意不去修**它（搬运只走 App 侧按钮），因此本项通过是**预期结果** |
 | R4 | 修复 P0-4 后，在访客内执行 `cat /etc/hosts`、`getent hosts localhost`，以及一个会解析 `localhost` 的工具（如 `pnpm test` 的 vitest 启动） | `/etc/hosts` 非 0 字节且含 `127.0.0.1 localhost`；`localhost` 能解析（`127.0.0.1` 直连一直正常，不能替代本项）；不再出现 `ENOTFOUND` 导致的启动即失败 |
-| R5 | 在「诊断与日志」点「运行自检」，检查附件项与硬链接探针 | 自检**如实报出**硬链接能力：本机 `link(2)` 被拒时，探针必须以受控码报失败或降级，**不得**仍然只报 `attachments=ok`。在此之前，`attachments=ok` 不能当作「附件链路正常」的正面证据（该检查只做 open+write+unlink） |
+| R5 | ~~在「诊断与日志」点「运行自检」，检查附件项与硬链接探针~~ **已作废（2026-11-22）**：硬链接探针已从自检契约里移除，判据改为「自检列表里**不再出现**硬链接项」 | 自检不应再报硬链接失败。移除理由：dsh 的新建文件与附件落盘两条路径都已回退到 `rename`，`link(2)` 被拒不再等于写入失败，探针只会在 PRoot 访客上每次多报一条不影响使用的失败；决策记录见 `AGENTS.md` |
 | R6 | 记录工作区内的文件（含子目录）→ 触发一次运行时更新（安装新 APK 内置运行时并确认更新） | 工作区文件按 `docs/measurements/真机缺陷与改进清单.md` P0-5 的口径处置：**要么**保留，**要么**更新前的对话框如实说明会丢失。不得出现「对话框说保留、实际丢失」 |
 | R7 | 终端里 `dsh plugin --profile web add <包> --ignore-scripts` 装一个插件（并完成「包名进 `dsh.profile.bundles` → `--dump-config` 预检 → 重启 Harness」三步）后触发一次运行时更新 | 该插件要么在新运行时里仍可用，要么更新对话框**明确说明「在终端里用 `dsh plugin add` 装进运行时的插件不会保留，更新后需要重装」**。注意：对话框文案已收窄（不再笼统承诺「你安装的插件会保留」），因此本项判据是**文案与实际行为一致**：终端装的插件不保留**且**文案说了不保留，即为通过；若文案又变回笼统承诺，本项判**失败**。App 托管的插件（`root/.dsh-mobile/plugin-manager`）仍保留 |
 | R8 | 修复 P0-6 后启动 Harness，在访客内执行 `ps -eo pid,args \| grep -c DEEPSEEK_API_KEY` 与 `ps -eo pid,args \| grep -c DSH_MOBILE_AUTH_TOKEN`，并检查 `/proc/<harness-pid>/cmdline` | 两个计数都为 **0**，`cmdline` 里不出现任何密钥取值（凭据改由 0600 文件读取）。**注意**：本项只验证新代码；已暴露的 key 是否需要轮换与本项无关，属独立动作 |
@@ -329,7 +329,7 @@ R10 请附三类目录各自的截图或目录清单（至少一张共享目录�
       App 自己导出的 tar 一定附带 `dsh-workspace.manifest.json`，界面应显示它而不是「未附带」。
 - [ ] R3 是本轮的**负向断言**：通过（`write` 失败）才是正确结果，不要把它当成待修缺陷。
 - [ ] R4 需在 P0-4 的修复落地后执行；未修复时记为「待确认」，不要记为「通过」。
-- [ ] R5 是自检可信度门禁：硬链接探针未实现前，`attachments=ok` 不得作为附件链路正常的证据。
+- [ ] R5 **已作废**（2026-11-22）：硬链接探针移除后本项不再适用，勾选时按表格里的新判据（列表里不出现硬链接项）核对。
 - [ ] R6 / R7 与更新对话框文案口径绑定：**白名单、文案、验收三处同时改完**才可勾选；
       注意文案已于本轮收窄（不再承诺终端里装的插件会保留），R7 判的是「文案与实际行为一致」。
 - [ ] R8 单独核对：命令行计数为 0 只说明新代码生效；已暴露 key 的轮换另行确认。
@@ -654,3 +654,17 @@ C 编译环境的能力探测、任务完成后的回对话与悬浮球改版。
       与前端单测（`DataPreservationCard.test.tsx`、`validation.test.ts`），**没有真机复测**；
       S-保留页-2 与 S-保留页-4 是本轮必测项。
 - [ ] 「取回」是复制、不是移动：取回成功不等于释放磁盘空间，需要用户在确认副本可用后自行点「删除」。
+
+## 24. 旧 WebView（Chromium 74 档）兼容（本轮新增，三条）
+
+适配对象是「Android 10 + 出厂 WebView（Chromium 74）」与厂商自带内核（ColorOS 13 / 荣耀 116）。
+判定口径与实测数据见 [`docs/design/旧WebView兼容与polyfill补丁.md`](design/旧WebView兼容与polyfill补丁.md)。
+
+| # | 操作 | 预期 |
+|---|---|---|
+| S-内核-1 | 在 Chromium 74 档机器上冷启动应用（不进入 Harness） | 启动器首页正常渲染，不白屏；`chrome://inspect` 里没有 `SyntaxError`（外壳已按 `build.target: chrome74` 构建，且 `src/legacyGlobals.ts` 补齐了 hasOwn / allSettled / randomUUID / replaceChildren） |
+| S-内核-2 | 同一台机器点「打开对话」进入 Harness，再点「选择工作区目录」与模型列表 | 两个入口都能打开，不出现 `is not a function` / `is not defined`；若产物已按 `scripts/downlevel-harness-frontend.mjs` 降级，页面不白屏 |
+| S-内核-3 | 连接设备后跑 `node scripts/webview-compat-scan.mjs --baseline android10-stock --strict`（对设备上实际使用的前端目录） | 退出码 0；报告里没有「未补」行；「补不了」的行只有契约表里写过 `reason` 的那几项（WeakRef / structuredClone / Promise.any 一类） |
+
+- [ ] 未做真机复测前，这一节三条都算未验收。语法降级（`dist-legacy`）目前**没有**接进打包流程，
+      S-内核-2 的「不白屏」只在手动用降级产物时成立；接入决策见设计文档第 4 节。

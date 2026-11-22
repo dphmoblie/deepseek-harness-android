@@ -10,7 +10,10 @@
  * 「沙箱不可用 / 真实 confine exec 失败 / PTY（node-pty）本身失败」三者之一。
  * 本脚本把三种可能各自单独测一遍，并顺手回答「dsh 家目录与附件目录能不能写」。
  *
- * 前 11 项（`shell` … `hardlink` → `rg`，索引 0-10）是冻结契约，顺序与 id 一个字都不能动；
+ * 前 10 项（`shell` … `attachments` → `rg`，索引 0-9）是冻结契约，顺序与 id 一个字都不能动。
+ * （2026-11-22 移除 `hardlink` 探针：dsh 的新建与附件落盘两条路径都已回退到 `rename`，
+ *   `link(2)` 被拒不再等于写入失败，探针只会让每台这样的设备每次都多报一条不影响使用的错。
+ *   决策与理由见 `AGENTS.md`，不要加回来。）
  * 后 3 项（`c_compiler` / `make` / `python3`）是追加的**能力项**：如实探测本环境有没有可用的
  * C 编译环境（含 node-gyp 需要的 make 与 python3）。能力项一律 `warn`、三态必须分得清，
  * 拿不到判决时按「不可用」上报 —— 绝不让「不可用的编译器」看起来像「已支持」。
@@ -300,8 +303,8 @@ function targetOf(key) {
 // 检查项
 //
 // id 与顺序是冻结契约：shell → node → sandbox_launcher → sandbox_probe → sandbox_exec
-// → pty → pty_sandbox → dsh_home → attachments → hardlink → rg。
-// 这 11 项之后**追加**的 c_compiler / make / python3 是能力项（见下一节），既有索引一个字不动。
+// → pty → pty_sandbox → dsh_home → attachments → rg。
+// 这 10 项之后**追加**的 c_compiler / make / python3 是能力项（见下一节），既有索引一个字不动。
 // `ok` 不带 code，非 `ok` 必须带 code，且 code 只能取受控集合里的值。
 // ---------------------------------------------------------------------------
 
@@ -530,42 +533,6 @@ function checkAttachments(paths) {
   return entry('attachments', 'ok')
 }
 
-/**
- * 硬链接探测：在访客数据目录里独占创建一个小文件，再为它建一个硬链接，最后两个都删掉。
- *
- * 为什么必须单独测：dsh 的 `write` 工具**新建**文件走 `dsh-fs-local.writeFileAtomic()` 的
- * `linkFile()`，附件发布走 `dsh-attachment-local.publishStagedObject()` 的 `link()` ——
- * 两者都靠硬链接做原子安装。而「目录可写」（上两项测的）与「能建硬链接」是两件事：
- * 真机上 `open + write + unlink` 全部正常，`link(2)` 却一律被拒，
- * 于是 `attachments=ok` 会给出「附件链路正常」的假信号，这一项就是来补这个盲区的。
- *
- * 失败只回受控码，**不带 errno 文本**：EACCES / EPERM（本机 PRoot 策略拒绝）与 EXDEV（跨设备）
- * 对上层是同一个结论「硬链接在这个环境里不可用」，其中 EXDEV 的含义与权限无关，只是同样落在这里。
- *
- * 目录不存在时同样是 fail（不是抛出）：精确原因由 `dsh_home` / `attachments` 那两行给出，
- * 与 `writable()` 的处理保持一致 —— 探测本身绝不打断整次自检。
- */
-function checkHardlink(paths) {
-  const source = path.join(paths.home, '.dsh-self-check-' + crypto.randomUUID() + '.tmp')
-  const linkName = source + '.link'
-  let descriptor = null
-  try {
-    descriptor = fs.openSync(source, 'wx', 0o600)
-    fs.writeFileSync(descriptor, 'ok')
-    fs.linkSync(source, linkName)
-    return entry('hardlink', 'ok')
-  } catch {
-    return entry('hardlink', 'fail', 'HARDLINK_DENIED')
-  } finally {
-    // 两个文件都要清理：链接建不建得成都可能留下源文件。
-    if (descriptor !== null) {
-      try { fs.closeSync(descriptor) } catch { /* 已经关掉了。 */ }
-    }
-    try { fs.unlinkSync(linkName) } catch { /* 没建成就没什么可删。 */ }
-    try { fs.unlinkSync(source) } catch { /* 同上。 */ }
-  }
-}
-
 function checkRipgrep(ripgrep) {
   if (ripgrep === null) return entry('rg', 'warn', 'RG_MISSING')
   if (!isExecutable(ripgrep)) return entry('rg', 'warn', 'RG_NOT_EXECUTABLE')
@@ -738,7 +705,7 @@ function runToolchainChecks(paths, environment) {
 }
 
 /**
- * 十四项检查，顺序即契约顺序：前 11 项是冻结契约（`shell` → … → `hardlink` → `rg`，索引不变），
+ * 十三项检查，顺序即契约顺序：前 10 项是冻结契约（`shell` → … → `attachments` → `rg`，索引不变），
  * 后 3 项是追加的编译环境能力项（`c_compiler` → `make` → `python3`）。
  *
  * `environment` 缺省即 `process.env`：设备上访客脚本拿到的就是受控注入的那份环境，
@@ -762,7 +729,6 @@ async function runChecks(rootArgument, environment) {
     await checkPty(module, true, launcher, paths),
     checkHome(paths),
     checkAttachments(paths),
-    checkHardlink(paths),
     checkRipgrep(ripgrep),
     ...runToolchainChecks(paths, environmentSource),
   ]

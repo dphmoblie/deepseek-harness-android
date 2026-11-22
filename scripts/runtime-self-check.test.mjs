@@ -23,10 +23,10 @@ const selfCheck = require(scriptPath)
 
 const isWindows = process.platform === 'win32'
 
-/** 冻结契约：前 11 项来自既有版本（顺序不得变动），后 3 项是追加的编译环境能力项。 */
+/** 冻结契约：前 10 项来自既有版本（顺序不得变动），后 3 项是追加的编译环境能力项。 */
 const CONTRACT_IDS = [
   'shell', 'node', 'sandbox_launcher', 'sandbox_probe', 'sandbox_exec',
-  'pty', 'pty_sandbox', 'dsh_home', 'attachments', 'hardlink', 'rg',
+  'pty', 'pty_sandbox', 'dsh_home', 'attachments', 'rg',
   'c_compiler', 'make', 'python3',
 ]
 
@@ -68,7 +68,7 @@ function assertShape(item) {
   else assert.equal(typeof item.code, 'string', `${item.id} 非 ok 却没有结论码`)
 }
 
-test('CLI 契约：单行 JSON、十四项、顺序与受控码不变', () => {
+test('CLI 契约：单行 JSON、十三项、顺序与受控码不变', () => {
   const result = spawnSync(process.execPath, [scriptPath, 'check'], { cwd: repositoryRoot, encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr)
   const lines = result.stdout.trim().split('\n')

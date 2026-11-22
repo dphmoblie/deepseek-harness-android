@@ -124,57 +124,67 @@ describe('运行时自检载荷校验', () => {
     expect(new Set(advice.map(item => item.nextStep))).toEqual(new Set(['重新安装或更新运行环境；修复权限不能恢复缺失的程序']))
   })
 
-  it('hardlink 的合法与非法组合：ok 不带码，失败只认受控码 HARDLINK_DENIED', () => {
+  it('契约里已没有 hardlink：旧载荷带它整份拒收，attachments 之后直接是 rg', () => {
     // 四处契约（访客脚本 / Kotlin 白名单 / 前端 / scripts/runtime-self-check.test.mjs）的 id 顺序逐字一致：
-    // hardlink 紧跟 attachments、在 rg 之前。后面的编译能力项与宿主四项都是**追加**的：
-    // 既有 11 项的 id 与相对顺序（含 hardlink 在索引 9）不得变动。
+    // 2026-11-22 移除硬链接探针后，attachments 之后直接是 rg。后面的编译能力项与宿主四项都是**追加**的：
+    // 既有 10 项的 id 与相对顺序不得变动。
     expect(SELF_CHECK_IDS).toEqual([
       'shell', 'node', 'sandbox_launcher', 'sandbox_probe', 'sandbox_exec',
-      'pty', 'pty_sandbox', 'dsh_home', 'attachments', 'hardlink', 'rg',
+      'pty', 'pty_sandbox', 'dsh_home', 'attachments', 'rg',
       'c_compiler', 'make', 'python3',
-      // 访客脚本只产出上面 14 项（脚本一行未改）；下面四项由宿主追加，顺序与 Kotlin 侧一致。
+      // 访客脚本只产出上面 13 项；下面四项由宿主追加，顺序与 Kotlin 侧一致。
       'plugins', 'accessibility', 'virtualscreen', 'webview',
     ])
-    expect(SELF_CHECK_IDS.indexOf('hardlink')).toBe(9)
-    // 访客 14 项在本数组里仍是前 14 个（追加而不是插入）。
-    expect(SELF_CHECK_IDS.slice(0, 14)).toEqual([
+    expect(SELF_CHECK_IDS.indexOf('rg')).toBe(9)
+    expect(SELF_CHECK_IDS).not.toContain('hardlink')
+    // 访客 13 项在本数组里仍是前 13 个（追加而不是插入）。
+    expect(SELF_CHECK_IDS.slice(0, 13)).toEqual([
       'shell', 'node', 'sandbox_launcher', 'sandbox_probe', 'sandbox_exec',
-      'pty', 'pty_sandbox', 'dsh_home', 'attachments', 'hardlink', 'rg',
+      'pty', 'pty_sandbox', 'dsh_home', 'attachments', 'rg',
       'c_compiler', 'make', 'python3',
     ])
-    expect(SELF_CHECK_IDS.slice(14)).toEqual(['plugins', 'accessibility', 'virtualscreen', 'webview'])
-    expect(SELF_CHECK_CODES).toContain('HARDLINK_DENIED')
+    expect(SELF_CHECK_IDS.slice(13)).toEqual(['plugins', 'accessibility', 'virtualscreen', 'webview'])
+    expect(SELF_CHECK_CODES).not.toContain('HARDLINK_DENIED')
+
+    // 旧载荷（升级前那次自检）带着已移除的 id：整份拒收，不给它编造结论。
+    expect(() => validateSelfCheckReport(checkPayload({
+      checks: [{ id: 'hardlink', status: 'fail', code: 'HARDLINK_DENIED' }],
+    }))).toThrow('自检项标识无效')
+    // 那个码也从受控集合里移除：配一个还在契约里的 id 同样拒收。
+    expect(() => validateSelfCheckReport(checkPayload({
+      checks: [{ id: 'attachments', status: 'fail', code: 'HARDLINK_DENIED' }],
+    }))).toThrow('自检项结论码无效')
 
     const report = validateSelfCheckReport(checkPayload({
       checks: [
         { id: 'rg', status: 'warn', code: 'RG_MISSING' },
-        { id: 'hardlink', status: 'ok' },
+        { id: 'dsh_home', status: 'ok' },
         { id: 'attachments', status: 'ok' },
       ],
     }))
     if (report.operation !== 'check') throw new Error('载荷类型判定错误')
     // 顺序按契约归一化，不随载荷顺序变化。
-    expect(report.checks.map(item => item.id)).toEqual(['attachments', 'hardlink', 'rg'])
-    expect(report.checks[1]).toEqual({ id: 'hardlink', status: 'ok' })
+    expect(report.checks.map(item => item.id)).toEqual(['dsh_home', 'attachments', 'rg'])
+    expect(report.checks[1]).toEqual({ id: 'attachments', status: 'ok' })
 
     const denied = validateSelfCheckReport(checkPayload({
-      checks: [{ id: 'hardlink', status: 'fail', code: 'HARDLINK_DENIED' }],
+      checks: [{ id: 'attachments', status: 'fail', code: 'ATTACHMENTS_NOT_WRITABLE' }],
     }))
     if (denied.operation !== 'check') throw new Error('载荷类型判定错误')
-    expect(denied.checks).toEqual([{ id: 'hardlink', status: 'fail', code: 'HARDLINK_DENIED' }])
+    expect(denied.checks).toEqual([{ id: 'attachments', status: 'fail', code: 'ATTACHMENTS_NOT_WRITABLE' }])
 
     // 非法组合一：ok 带码（会渲染出「正常 + 修复建议」）。
     expect(() => validateSelfCheckReport(checkPayload({
-      checks: [{ id: 'hardlink', status: 'ok', code: 'HARDLINK_DENIED' }],
+      checks: [{ id: 'attachments', status: 'ok', code: 'ATTACHMENTS_NOT_WRITABLE' }],
     }))).toThrow('自检项状态与结论码不一致')
     // 非法组合二：非 ok 不带码。
     expect(() => validateSelfCheckReport(checkPayload({
-      checks: [{ id: 'hardlink', status: 'fail' }],
+      checks: [{ id: 'attachments', status: 'fail' }],
     }))).toThrow('自检项结论码无效')
     // 非法组合三：码不在受控集合里。注意前端只查全局码表与状态规则，
     // 「码是否属于这一项」由原生侧的白名单（RuntimeSelfCheckPolicy）负责。
     expect(() => validateSelfCheckReport(checkPayload({
-      checks: [{ id: 'hardlink', status: 'fail', code: 'HARDLINK_OK' }],
+      checks: [{ id: 'attachments', status: 'fail', code: 'ATTACHMENTS_OK' }],
     }))).toThrow('自检项结论码无效')
   })
 
@@ -189,7 +199,7 @@ describe('运行时自检载荷校验', () => {
       ],
     }))
     if (report.operation !== 'check') throw new Error('载荷类型判定错误')
-    // 展示顺序仍是契约顺序：宿主四项排在访客 14 项之后。
+    // 展示顺序仍是契约顺序：宿主四项排在访客 13 项之后。
     expect(report.checks.map(item => item.id)).toEqual(['plugins', 'accessibility', 'virtualscreen', 'webview'])
     expect(report.checks.map(item => item.status)).toEqual(['warn', 'warn', 'warn', 'fail'])
     // 三项可选功能的告警不应该让整次自检变红：界面据此只显示徽章，不显示「修复运行时权限」。
@@ -216,7 +226,7 @@ describe('运行时自检载荷校验', () => {
   })
 
   it('宿主四项的非法组合被拒：ok 带码、非 ok 缺码、码不在白名单里', () => {
-    // 状态与结论码自相矛盾时整份拒收（与访客 14 项同一套规则，没有免检通道）。
+    // 状态与结论码自相矛盾时整份拒收（与访客 13 项同一套规则，没有免检通道）。
     expect(() => validateSelfCheckReport(checkPayload({
       checks: [{ id: 'webview', status: 'ok', code: 'WEBVIEW_UNAVAILABLE' }],
     }))).toThrow('自检项状态与结论码不一致')
@@ -230,7 +240,7 @@ describe('运行时自检载荷校验', () => {
       checks: [{ id: 'plugins', status: 'broken', code: 'PLUGIN_LINK_MISSING' }],
     }))).toThrow('自检项状态无效')
 
-    // 前端只查全局码表与状态规则：「码是否属于这一项」由原生侧白名单负责（与 hardlink 那条同口径）。
+    // 前端只查全局码表与状态规则：「码是否属于这一项」由原生侧白名单负责（与 attachments 那条同口径）。
     const crossId = validateSelfCheckReport(checkPayload({
       checks: [{ id: 'webview', status: 'warn', code: 'ACCESSIBILITY_NOT_CONNECTED' }],
     }))
@@ -330,13 +340,14 @@ describe('运行时自检文案', () => {
     expect(advice.nextStep).not.toContain('上一条')
   })
 
-  it('hardlink 项如实指向硬链接这一层，并与 en.ts 的词条逐字对应', () => {
-    // 这里的原文就是 `src/locales/en.ts` 里词条的键：改动这一句必须同步改英文。
-    const label = '硬链接（原子写入的前提）'
-    const meaning = '本机不允许创建硬链接（同目录与跨目录都被拒绝）。dsh 的 write 工具新建文件与所有附件落盘都依赖硬链接做原子安装，因此这两条链路会失败。'
-    const nextStep = '这是运行环境（PRoot/内核策略）层面的限制，应用侧无法绕过；需要写入新文件时改用 bash 重定向或终端里的 cp/mv，图片与截图类附件在当前版本上不可用。'
-    expect(selfCheckAdvice({ id: 'hardlink', status: 'ok' }).label).toBe(label)
-    expect(selfCheckAdvice({ id: 'hardlink', status: 'fail', code: 'HARDLINK_DENIED' })).toEqual({ label, meaning, nextStep })
+  it('沙箱内执行失败时先指向内核探测，不把人引去查访客目录', () => {
+    // 真机上 `PROBE_UNUSABLE` 与 `EXEC_LAUNCHER_FAILED` 几乎总是成对出现：启动器建不出规则集
+    // （内核没有 LSM，或启动环境不转发 landlock_*）也是「启动器级失败」。旧文案只写了
+    // 「探测正常时再查访客目录」，探测已经失败时等于把用户指向错方向。
+    const advice = selfCheckAdvice({ id: 'sandbox_exec', status: 'fail', code: 'EXEC_LAUNCHER_FAILED' })
+    expect(advice.nextStep).toContain('内核 Landlock 支持')
+    expect(advice.nextStep).toContain('不具备该能力')
+    expect(advice.nextStep).not.toContain('先查看 Landlock 探测结果')
   })
 
   it('只在权限位或缺失目录相关的码上提供修复入口', () => {
@@ -345,9 +356,9 @@ describe('运行时自检文案', () => {
       expect(SELF_CHECK_REPAIRABLE_CODES).toContain(code)
       expect(selfCheckNeedsRepair([{ id: 'shell', status: 'fail', code }])).toBe(true)
     }
-    // 内核能力、Node/bash 缺失、PTY 层故障、硬链接被环境拒绝都修不了：给出修复按钮等于承诺做不到的事。
+    // 内核能力、Node/bash 缺失、PTY 层故障都修不了：给出修复按钮等于承诺做不到的事。
     // LAUNCHER_MISSING / RG_MISSING 也不在可修复集合里：缺失的程序补不了权限位，只能重装或更新运行时。
-    const notRepairable: SelfCheckCode[] = ['LAUNCHER_MISSING', 'RG_MISSING', 'PROBE_UNUSABLE', 'PROBE_PARTIAL', 'SHELL_MISSING', 'NODE_MISSING', 'PTY_EXIT_EARLY', 'HOME_NOT_WRITABLE', 'HARDLINK_DENIED']
+    const notRepairable: SelfCheckCode[] = ['LAUNCHER_MISSING', 'RG_MISSING', 'PROBE_UNUSABLE', 'PROBE_PARTIAL', 'SHELL_MISSING', 'NODE_MISSING', 'PTY_EXIT_EARLY', 'HOME_NOT_WRITABLE']
     for (const code of notRepairable) {
       expect(SELF_CHECK_REPAIRABLE_CODES).not.toContain(code)
       expect(selfCheckNeedsRepair([{ id: 'shell', status: 'fail', code }])).toBe(false)

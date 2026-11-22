@@ -191,6 +191,27 @@ Git 提交/发布规范见 [`.agents/rules/git-workflow.md`](.agents/rules/git-w
 Harness 运行时本身只认 `zh`/`en`，`RuntimeStore.syncHarnessLocale` 集中做映射
 （繁→zh，日/韩→en），不要在别处再写一份。
 
+## 15. 硬链接自检项**不要**加回来
+
+访客脚本的 `checkHardlink`、结论码 `HARDLINK_DENIED`、标签「硬链接（原子写入的前提）」已于
+2026-11-22 **整体移除**。自检载荷现在是 **17 项 = 访客脚本 13 项（10 项链路 + 3 项编译能力）+ 宿主 4 项**，
+契约顺序里 `attachments` 之后直接是 `rg`（`rg` 仍在索引 9）。
+
+- **为什么移除**：P0-1（`write` 新建文件）与 P0-2（附件落盘）两条路径都已经在 pnpm 补丁里回退到
+  `rename`（见 [`docs/design/运行时补丁与dsh写入回退.md`](docs/design/运行时补丁与dsh写入回退.md)），
+  访客内 `link(2)` 被拒**不再等于写入失败**。探针于是不再指示任何真实故障，却会在每台 PRoot 访客上
+  每次都报一条 `fail`，把自检面板的四条红项里固定占掉一条。
+- 用户已明确决定**不为硬链接重做 root（运行时根）适配**，所以「补硬链接支持让探针变绿」不是待办；
+  把探针加回来等于把一条已知无动作项的告警重新塞给所有用户。
+- 这是**契约变更**，四处必须同时改：访客脚本 `runtime-self-check.cjs`、
+  `RuntimeSelfCheckPolicy`（id 白名单 + 码表）、前端 `src/runtimeSelfCheck.ts`（id/码/标签/文案）、
+  `scripts/runtime-self-check.test.mjs` 的逐字 ID 列表；测试里另有 `take(13)` 与 17 项断言钉着。
+- 兼容口径：旧载荷里若仍带 `hardlink`，Kotlin `sanitize` 丢弃该条（不编造结论），
+  前端 `validateSelfCheckReport` 对不认识的 id 直接拒收整份载荷（报「自检项标识无效」）——
+  因此**不要**只把 id 加回白名单、脚本却不产出：两边必须一致。
+- 代价要说清：设备上 `write` 新建文件或图片附件落盘失败时，自检不再单独指认「可能是硬链接被拒」。
+  此时看 dsh 报错原文（`EACCES: permission denied, link ...`）与上面那份回退文档。
+
 ## 改动前先跑这些
 
 本机 pnpm 不可用时用 node 直调（PATH 前置 `node` 目录）：

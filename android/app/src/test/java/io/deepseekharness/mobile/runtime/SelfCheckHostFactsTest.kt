@@ -10,7 +10,7 @@ import org.junit.Test
  *
  * 这里挡的是两件会直接误导排障的事：
  *  - 把**没读到**（探测失败）当成 `ok` 或 `fail` —— 前者会掩盖问题，后者会凭空造出故障；
- *  - 让这四项的码表与访客 14 项的码表各说各话 —— 产码方与校验表必须一一对得上。
+ *  - 让这四项的码表与访客 13 项的码表各说各话 —— 产码方与校验表必须一一对得上。
  */
 class SelfCheckHostFactsTest {
     private fun entries(facts: SelfCheckHostFacts.Facts): Map<String, Pair<String, String?>> =
@@ -30,14 +30,14 @@ class SelfCheckHostFactsTest {
     fun appendsExactlyTheFourHostItemsAfterTheGuestFourteen() {
         val ids = SelfCheckHostFacts.rawChecks(healthy).map { it.id }
         assertEquals(listOf("plugins", "accessibility", "virtualscreen", "webview"), ids)
-        // 宿主四项只能追加在契约末尾：不能插到访客 14 项中间去。
+        // 宿主四项只能追加在契约末尾：不能插到访客 13 项中间去。
         assertEquals(RuntimeSelfCheckPolicy.CHECK_IDS.takeLast(4), ids)
 
-        // 与访客 14 项（这里都用 ok）合并经同一套 sanitize 后，顺序就是完整的 18 项契约顺序。
-        val guest = RuntimeSelfCheckPolicy.CHECK_IDS.take(14).map { RuntimeSelfCheckPolicy.RawCheck(it, "ok", null) }
+        // 与访客 13 项（这里都用 ok）合并经同一套 sanitize 后，顺序就是完整的 17 项契约顺序。
+        val guest = RuntimeSelfCheckPolicy.CHECK_IDS.take(13).map { RuntimeSelfCheckPolicy.RawCheck(it, "ok", null) }
         val merged = RuntimeSelfCheckPolicy.sanitize(guest + SelfCheckHostFacts.rawChecks(healthy))
         assertEquals(RuntimeSelfCheckPolicy.CHECK_IDS, merged.map { it.id })
-        assertEquals(18, merged.size)
+        assertEquals(17, merged.size)
     }
 
     @Test

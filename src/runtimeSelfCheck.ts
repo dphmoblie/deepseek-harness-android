@@ -2,7 +2,7 @@
  * 运行时自检：把原生侧逐项检查的结果，翻译成「哪一环断了 + 下一步」。
  *
  * 为什么需要它：运行时链路（Shell → Node → 沙箱启动器 → 内核 Landlock → 沙箱内执行 →
- * PTY → 访客数据目录 → 附件目录 → 硬链接 → ripgrep → C 编译环境）任何一环断掉，用户看到的往往只有一句
+ * PTY → 访客数据目录 → 附件目录 → ripgrep → C 编译环境）任何一环断掉，用户看到的往往只有一句
  * 「bash 工具不可用」，而排查通常又要靠 bash —— 可 bash 本身可能正是断掉的那一环。
  * 自检由原生侧逐环探测，不依赖 bash；本模块只负责三件事：
  *
@@ -20,7 +20,7 @@
  *
  * 再往后四项（`plugins` / `accessibility` / `virtualscreen` / `webview`）来自**宿主**而不是访客脚本：
  * 访客脚本（`android/app/src/main/assets/support/runtime-self-check.cjs`）一行未改，它仍然只产出前
- * 14 项；这四项由 Android 侧读设备事实后追加，走同一套 id / 码白名单与状态规则。语义上有三点不同：
+ * 13 项；这四项由 Android 侧读设备事实后追加，走同一套 id / 码白名单与状态规则。语义上有三点不同：
  *
  *  - 前三项是**可选功能**的状态（插件链接、无障碍服务、副屏所需的悬浮窗权限），没有它们不影响
  *    改用例与 bash，因此只报 `warn`；
@@ -47,13 +47,14 @@ export const SELF_CHECK_IDS = [
   'pty_sandbox',
   'dsh_home',
   'attachments',
-  'hardlink',
   'rg',
-  // 以下三项是**追加**的编译环境能力项：前 11 项的 id 与索引是冻结契约（`hardlink` 必须仍是索引 9）。
+  // 以下三项是**追加**的编译环境能力项：前 10 项的 id 与索引是冻结契约（`attachments` 之后直接是 `rg`）。
+  // 2026-11-22 移除 `hardlink` 项：dsh 的新建文件与附件落盘都已回退到 `rename`，`link(2)` 被拒不再
+  // 等于写入失败；探针只会在真机上每次多报一条不影响使用的失败。决策见 `AGENTS.md`。
   'c_compiler',
   'make',
   'python3',
-  // 以下四项由**宿主**追加（访客脚本仍只产出上面 14 项），顺序与原生侧 `RuntimeSelfCheckPolicy.CHECK_IDS` 一致。
+  // 以下四项由**宿主**追加（访客脚本仍只产出上面 13 项），顺序与原生侧 `RuntimeSelfCheckPolicy.CHECK_IDS` 一致。
   'plugins',
   'accessibility',
   'virtualscreen',
@@ -90,7 +91,6 @@ export const SELF_CHECK_CODES = [
   'HOME_NOT_WRITABLE',
   'ATTACHMENTS_MISSING',
   'ATTACHMENTS_NOT_WRITABLE',
-  'HARDLINK_DENIED',
   'RG_MISSING',
   'RG_NOT_EXECUTABLE',
   // 编译环境能力项：每个工具三态 —— 确实没有 / 工具给出非 0 退出码 / 没拿到退出码。
@@ -161,7 +161,6 @@ const SELF_CHECK_LABELS: Readonly<Record<SelfCheckId, string>> = {
   pty_sandbox: '沙箱内 PTY',
   dsh_home: '访客数据目录',
   attachments: '附件目录',
-  hardlink: '硬链接（原子写入的前提）',
   rg: 'ripgrep',
   c_compiler: 'C 编译器（cc / gcc / clang）',
   make: 'make 构建工具',
@@ -217,7 +216,11 @@ const SELF_CHECK_CODE_ADVICE: Readonly<Record<SelfCheckCode, { meaning: string; 
   },
   EXEC_LAUNCHER_FAILED: {
     meaning: '沙箱启动器在真正执行时失败（授权根目录不存在或启动器级错误）',
-    nextStep: '先查看 Landlock 探测结果；探测正常时再检查访客数据目录与运行日志',
+    // 真机上 `PROBE_UNUSABLE` 与这一条几乎总是同时出现：启动器建不出规则集（内核没有该 LSM，
+    // 或启动环境不转发 `landlock_*`）也会以「启动器级失败」的形状落到这里。旧文案写的是
+    // 「探测正常时再查访客目录」的反向条件，探测失败时反而把用户引向错方向，因此改成
+    // 先给出内核分支，再给出「探测正常」分支。
+    nextStep: '若「内核 Landlock 支持」同时报失败，说明内核不具备该能力，不要再查访客目录；否则再检查访客数据目录与运行日志',
   },
   EXEC_LAUNCHER_DENIED: {
     // 与上一条分开：这一条说明受限执行被内核拒绝（权限被判否），不是授权根缺失。
@@ -259,13 +262,6 @@ const SELF_CHECK_CODE_ADVICE: Readonly<Record<SelfCheckCode, { meaning: string; 
   ATTACHMENTS_NOT_WRITABLE: {
     meaning: '附件目录不可写——这正是「Unable to persist attachment」那类报错的成因',
     nextStep: '确认剩余空间；必要时重装运行时',
-  },
-  HARDLINK_DENIED: {
-    // 与 attachments 分开报的意义：目录能写 ≠ 能建硬链接。真机上 open+write+unlink 正常而
-    // link(2) 一律被拒，只有这一项才会如实报出「附件不可能落盘、write 也建不了新文件」。
-    // EXDEV（跨设备）也落在这个码上：errno 不同，结论相同 —— 硬链接在这个环境里不可用。
-    meaning: '本机不允许创建硬链接（同目录与跨目录都被拒绝）。dsh 的 write 工具新建文件与所有附件落盘都依赖硬链接做原子安装，因此这两条链路会失败。',
-    nextStep: '这是运行环境（PRoot/内核策略）层面的限制，应用侧无法绕过；需要写入新文件时改用 bash 重定向或终端里的 cp/mv，图片与截图类附件在当前版本上不可用。',
   },
   RG_MISSING: {
     meaning: '运行时里找不到 ripgrep',
