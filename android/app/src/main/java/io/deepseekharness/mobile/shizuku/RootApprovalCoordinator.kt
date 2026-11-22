@@ -1,15 +1,18 @@
 package io.deepseekharness.mobile.shizuku
 
+import android.Manifest
 import android.app.Activity
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import io.deepseekharness.mobile.AppForeground
 import io.deepseekharness.mobile.AppLanguage
 import io.deepseekharness.mobile.R
@@ -272,6 +275,11 @@ object RootApprovalCoordinator {
     }
 
     private fun postApprovalNotification(context: Context, request: HostApprovalRequest): Boolean = runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return@runCatching false
+        }
         val localized = AppLanguage.localizedContext(context)
         val manager = context.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && manager != null) {
@@ -313,8 +321,12 @@ object RootApprovalCoordinator {
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
             .build()
-        NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
-        true
+        try {
+            NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, notification)
+            true
+        } catch (_: SecurityException) {
+            false
+        }
     }.getOrDefault(false)
 
     private fun dismissNotification(context: Context?) {

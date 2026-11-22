@@ -1099,7 +1099,7 @@ class RootSecurityTest {
             launched += argv
             FakeProcess("ran-ok\n", 0)
         }
-        val token = "0123456789abcdef0123456789abcdef0123456789a"
+        val token = "A".repeat(43)
         val strictRootStatus = RootEngineAccess.Status(
             enabled = true,
             mode = RootEngineAccess.Mode.READ_WRITE,
