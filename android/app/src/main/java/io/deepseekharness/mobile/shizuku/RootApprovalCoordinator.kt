@@ -152,6 +152,7 @@ object RootApprovalCoordinator {
         } finally {
             active.compareAndSet(entry, null)
             dismissNotification(entry.context)
+            dismissApprovalActivity(request.requestId)
         }
     }
 
@@ -193,6 +194,7 @@ object RootApprovalCoordinator {
         if (requestId != null && requestId.isNotEmpty() && current.request.requestId != requestId) return false
         val completed = current.decision.complete(Outcome.CANCELLED)
         dismissNotification(current.context)
+        dismissApprovalActivity(current.request.requestId)
         return completed
     }
 
@@ -201,6 +203,7 @@ object RootApprovalCoordinator {
         val current = active.getAndSet(null) ?: return
         current.decision.complete(Outcome.CANCELLED)
         dismissNotification(current.context)
+        dismissApprovalActivity(current.request.requestId)
     }
 
     /** 纯文本清理：移除控制字符与 BiDi 视觉欺骗字符，限制长度。 */
@@ -250,11 +253,13 @@ object RootApprovalCoordinator {
         }
 
         // 2. 应用在后台（例如用户在外部浏览器或其他应用）：
-        //    始终发一条高优先级提醒通知（点按即可打开 App 警告页），并在允许后台启动时尝试直接拉起 App。
-        val notificationPosted = postApprovalNotification(appContext, request)
+        //    发高优先级提醒通知（已授予通知权限时），并在允许后台启动时尝试直接拉起 App；
+        //    即便通知与后台弹页均受限，用户切回本应用时 MainActivity/HarnessActivity.onResume()
+        //    也会通过 presentIfPending 自动弹出警告页，因此只要存在宿主 Context 即保持等待。
+        postApprovalNotification(appContext, request)
         val canStartFromBackground = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
             runCatching { Settings.canDrawOverlays(appContext) }.getOrDefault(false)
-        val launched = if (canStartFromBackground) {
+        if (canStartFromBackground) {
             runCatching {
                 val intent = RootCommandApprovalActivity.createIntent(appContext, request.requestId).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
@@ -265,13 +270,9 @@ object RootApprovalCoordinator {
                     intent,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 ).send()
-            }.isSuccess
-        } else {
-            false
+            }
         }
-        // 即使系统暂不允许后台弹页，只要通知发成功或待用户切回 App 时 onResume 自动拉起，
-        // 仍可保持等待直到用户打开 App 确认或超时。
-        return launched || notificationPosted || AppForeground.isForeground()
+        return true
     }
 
     private fun postApprovalNotification(context: Context, request: HostApprovalRequest): Boolean = runCatching {
@@ -336,5 +337,10 @@ object RootApprovalCoordinator {
         }
         val appContext = context ?: return
         runCatching { NotificationManagerCompat.from(appContext).cancel(NOTIFICATION_ID) }
+    }
+
+    private fun dismissApprovalActivity(requestId: String) {
+        val current = AppForeground.currentActivity() as? RootCommandApprovalActivity ?: return
+        runCatching { current.finishIfStale(requestId) }
     }
 }

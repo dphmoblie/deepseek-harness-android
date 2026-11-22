@@ -87,6 +87,21 @@ class RootCommandApprovalActivity : AppCompatActivity() {
         AppForeground.onActivityStarted()
     }
 
+    override fun onResume() {
+        super.onResume()
+        AppForeground.onActivityResumed(this)
+        val id = requestId
+        if (!settled && (id == null || RootApprovalCoordinator.currentRequest(id) == null)) {
+            settled = true
+            finish()
+        }
+    }
+
+    override fun onPause() {
+        AppForeground.onActivityPaused(this)
+        super.onPause()
+    }
+
     override fun onStop() {
         AppForeground.onActivityStopped()
         super.onStop()
@@ -322,7 +337,12 @@ class RootCommandApprovalActivity : AppCompatActivity() {
      * 若测试/极客设备未配置锁屏密码，降级为明确告知风险的二次弹窗确认。
      */
     private fun startFinalVerification(isCritical: Boolean) {
-        if (settled) return
+        val id = requestId
+        if (settled || id == null || RootApprovalCoordinator.currentRequest(id) == null) {
+            settled = true
+            finish()
+            return
+        }
         val title = getString(
             if (isCritical) R.string.root_approval_critical_title
             else R.string.root_approval_high_title,
@@ -388,6 +408,19 @@ class RootCommandApprovalActivity : AppCompatActivity() {
         settled = true
         requestId?.let { RootApprovalCoordinator.resolve(it, outcome) }
         finish()
+    }
+
+    internal fun finishIfStale(targetRequestId: String? = null) {
+        runOnUiThread {
+            if (settled || isFinishing || isDestroyed) return@runOnUiThread
+            val id = requestId
+            if (targetRequestId == null || id == null || id == targetRequestId || RootApprovalCoordinator.currentRequest(id) == null) {
+                settled = true
+                pendingBiometricPrompt?.cancelAuthentication()
+                pendingBiometricPrompt = null
+                finish()
+            }
+        }
     }
 
     private fun card(bgColor: Int, borderColor: Int): LinearLayout = LinearLayout(this).apply {
