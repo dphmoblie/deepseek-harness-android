@@ -160,100 +160,108 @@ internal object TaskNotification {
         mainHandler.postAtTime({ updateTaskStatus(app) }, ACTIVE_TOKEN, SystemClock.uptimeMillis() + 100L)
     }
 
-    private fun updateTaskStatus(context: Context): Unit = synchronized(turnCompletedLock) {
-        try {
-            val manager = NotificationManagerCompat.from(context)
-            val systemManager = context.getSystemService(NotificationManager::class.java)
-            val postedInSystem = runCatching {
-                systemManager?.activeNotifications?.any { it.id == TURN_ACTIVE_NOTIFICATION_ID }
-            }.getOrNull()
-            val now = SystemClock.elapsedRealtime()
-            val active = turnActivity.snapshot(now)
-            val shouldShow = harnessRunId != null &&
-                active.activeCount > 0 &&
-                !AppForeground.isForeground() &&
-                manager.areNotificationsEnabled()
-            val localeTag = AppLanguage.current(context)
-            val candidate = if (shouldShow) {
-                active.startedAtMs?.let { startedAtMs ->
-                    ActiveTaskNotificationSyncPolicy.ActiveTaskState(
-                        runId = harnessRunId,
-                        activeCount = active.activeCount,
-                        startedAtMs = startedAtMs,
-                        localeTag = localeTag,
-                    )
-                }
-            } else {
-                null
-            }
-            when (val decision = ActiveTaskNotificationSyncPolicy.decide(shouldShow, candidate, postedInSystem, lastActivePostedState)) {
-                ActiveTaskNotificationSyncPolicy.ActiveTaskDecision.NoOp -> {
-                    if (!shouldShow || candidate == null) {
-                        lastActivePostedState = null
-                    } else {
-                        val delay = (candidate.startedAtMs + TurnActivityState.STALE_AFTER_MS - now).coerceAtLeast(1L)
-                        mainHandler.postAtTime({ updateTaskStatus(context) }, ACTIVE_TOKEN, SystemClock.uptimeMillis() + delay)
+    private fun updateTaskStatus(context: Context) {
+        var diagnosticFields: Map<String, String>? = null
+        synchronized(turnCompletedLock) {
+            try {
+                val manager = NotificationManagerCompat.from(context)
+                val systemManager = context.getSystemService(NotificationManager::class.java)
+                val postedInSystem = runCatching {
+                    systemManager?.activeNotifications?.any { it.id == TURN_ACTIVE_NOTIFICATION_ID }
+                }.getOrNull()
+                val now = SystemClock.elapsedRealtime()
+                val active = turnActivity.snapshot(now)
+                val shouldShow = harnessRunId != null &&
+                    active.activeCount > 0 &&
+                    !AppForeground.isForeground() &&
+                    manager.areNotificationsEnabled()
+                val localeTag = AppLanguage.current(context)
+                val candidate = if (shouldShow) {
+                    active.startedAtMs?.let { startedAtMs ->
+                        ActiveTaskNotificationSyncPolicy.ActiveTaskState(
+                            runId = harnessRunId,
+                            activeCount = active.activeCount,
+                            startedAtMs = startedAtMs,
+                            localeTag = localeTag,
+                        )
                     }
-                    return@synchronized
+                } else {
+                    null
                 }
-                ActiveTaskNotificationSyncPolicy.ActiveTaskDecision.Cancel -> {
-                    manager.cancel(TURN_ACTIVE_NOTIFICATION_ID)
-                    lastActivePostedState = null
-                    return@synchronized
-                }
-                is ActiveTaskNotificationSyncPolicy.ActiveTaskDecision.Post -> {
-                    val localized = AppLanguage.localizedContext(context)
-                    ensureActiveChannel(localized)
-                    val startedAtMs = decision.state.startedAtMs
-                    val delay = (startedAtMs + TurnActivityState.STALE_AFTER_MS - now).coerceAtLeast(1L)
-                    val whenMs = System.currentTimeMillis() - (now - startedAtMs).coerceAtLeast(0L)
-                    val built = TaskLiveNotificationCompat.buildActiveTaskNotification(
-                        context = localized,
-                        spec = TaskLiveNotificationCompat.ActiveTaskNotificationSpec(
-                            channelId = TaskLivePromotionPolicy.ACTIVE_CHANNEL_ID,
-                            smallIconRes = R.drawable.ic_keep_alive,
-                            title = localized.getString(R.string.task_notification_active_title),
-                            text = localized.getString(R.string.task_notification_active_text, decision.state.activeCount),
-                            shortStatus = localized.getString(R.string.task_notification_active_short),
-                            contentIntent = openAppIntent(context),
-                            // 进程被回收后 Handler 无法执行，交给系统按同一失效时间撤下。
-                            timeoutAfterMs = delay,
-                            whenMs = whenMs,
-                        ),
-                    )
-                    try {
-                        manager.notify(TURN_ACTIVE_NOTIFICATION_ID, built.notification)
-                        lastActivePostedState = decision.state
-                    } catch (_: SecurityException) {
-                        // 权限在检查与投递之间被撤销时，任务状态仍由界面显示。
+                when (val decision = ActiveTaskNotificationSyncPolicy.decide(shouldShow, candidate, postedInSystem, lastActivePostedState)) {
+                    ActiveTaskNotificationSyncPolicy.ActiveTaskDecision.NoOp -> {
+                        if (!shouldShow || candidate == null) {
+                            lastActivePostedState = null
+                        } else {
+                            val delay = (candidate.startedAtMs + TurnActivityState.STALE_AFTER_MS - now).coerceAtLeast(1L)
+                            mainHandler.postAtTime({ updateTaskStatus(context) }, ACTIVE_TOKEN, SystemClock.uptimeMillis() + delay)
+                        }
+                        return@synchronized
+                    }
+                    ActiveTaskNotificationSyncPolicy.ActiveTaskDecision.Cancel -> {
+                        manager.cancel(TURN_ACTIVE_NOTIFICATION_ID)
                         lastActivePostedState = null
                         return@synchronized
                     }
-                    val promotedPermission = TaskLiveNotificationCompat.promotedNotificationPermissionState(context)
-                    val diagnosticReason = TaskLivePromotionPolicy.diagnosticReason(
-                        promotedPermission = promotedPermission,
-                        hasPromotable = built.hasPromotableCharacteristics,
-                    )
-                    if (diagnosticReason != null && diagnosticReason != lastActiveDiagnosticReason) {
-                        lastActiveDiagnosticReason = diagnosticReason
-                        runCatching {
-                            DiagnosticLog(context.applicationContext).record(
-                                DiagnosticLevel.WARN,
-                                DiagnosticEvent.KEEP_ALIVE,
-                                mapOf(
-                                    "reason" to diagnosticReason,
-                                    "permission" to if (promotedPermission == "granted") "granted" else "denied",
-                                    "sdk" to Build.VERSION.SDK_INT.toString(),
-                                ),
+                    is ActiveTaskNotificationSyncPolicy.ActiveTaskDecision.Post -> {
+                        ensureActiveChannel(context)
+                        val localized = AppLanguage.localizedContext(context)
+                        val startedAtMs = decision.state.startedAtMs
+                        val delay = (startedAtMs + TurnActivityState.STALE_AFTER_MS - now).coerceAtLeast(1L)
+                        val whenMs = System.currentTimeMillis() - (now - startedAtMs).coerceAtLeast(0L)
+                        val built = TaskLiveNotificationCompat.buildActiveTaskNotification(
+                            context = localized,
+                            spec = TaskLiveNotificationCompat.ActiveTaskNotificationSpec(
+                                channelId = TaskLivePromotionPolicy.ACTIVE_CHANNEL_ID,
+                                smallIconRes = R.drawable.ic_keep_alive,
+                                title = localized.getString(R.string.task_notification_active_title),
+                                text = localized.getString(R.string.task_notification_active_text, decision.state.activeCount),
+                                shortStatus = localized.getString(R.string.task_notification_active_short),
+                                contentIntent = openAppIntent(context),
+                                // 进程被回收后 Handler 无法执行，交给系统按同一失效时间撤下。
+                                timeoutAfterMs = delay,
+                                whenMs = whenMs,
+                            ),
+                        )
+                        try {
+                            manager.notify(TURN_ACTIVE_NOTIFICATION_ID, built.notification)
+                            lastActivePostedState = decision.state
+                        } catch (_: SecurityException) {
+                            // 权限在检查与投递之间被撤销时，任务状态仍由界面显示。
+                            lastActivePostedState = null
+                            return@synchronized
+                        }
+                        val promotedPermission = TaskLiveNotificationCompat.promotedNotificationPermissionState(context)
+                        val diagnosticReason = TaskLivePromotionPolicy.diagnosticReason(
+                            promotedPermission = promotedPermission,
+                            hasPromotable = built.hasPromotableCharacteristics,
+                        )
+                        if (TaskLivePromotionPolicy.shouldRecordDiagnostic(lastActiveDiagnosticReason, diagnosticReason)) {
+                            diagnosticFields = mapOf(
+                                "reason" to diagnosticReason!!,
+                                "permission" to if (promotedPermission == "granted") "granted" else "denied",
+                                "sdk" to Build.VERSION.SDK_INT.toString(),
                             )
                         }
+                        lastActiveDiagnosticReason = diagnosticReason
+                        // 收口信号丢失时也有上限；不轮询、不启动额外服务。
+                        mainHandler.postAtTime({ updateTaskStatus(context) }, ACTIVE_TOKEN, SystemClock.uptimeMillis() + delay)
                     }
-                    // 收口信号丢失时也有上限；不轮询、不启动额外服务。
-                    mainHandler.postAtTime({ updateTaskStatus(context) }, ACTIVE_TOKEN, SystemClock.uptimeMillis() + delay)
                 }
+            } catch (_: Throwable) {
+                // 通知能力由系统控制，展示失败不能影响任务执行。
             }
-        } catch (_: Throwable) {
-            // 通知能力由系统控制，展示失败不能影响任务执行。
+        }
+        val fieldsToRecord = diagnosticFields ?: return
+        val appContext = context.applicationContext
+        java.util.concurrent.CompletableFuture.runAsync {
+            runCatching {
+                DiagnosticLog(appContext).record(
+                    DiagnosticLevel.WARN,
+                    DiagnosticEvent.KEEP_ALIVE,
+                    fieldsToRecord,
+                )
+            }
         }
     }
 

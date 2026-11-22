@@ -102,6 +102,7 @@ object VirtualScreenAgentStarter {
             val density = metrics.density.takeIf { it > 0f } ?: context.resources.displayMetrics.density
             val request = VirtualScreenStartRequest(target = packageName)
             val spec = VirtualScreenStart.resolve(request, settings, width, height, density)
+            VirtualScreenService.clearLastError()
             ContextCompat.startForegroundService(
                 context,
                 Intent(context, VirtualScreenService::class.java)
@@ -154,29 +155,50 @@ object VirtualScreenAgentStarter {
         }
     }
 
+    internal sealed interface PollDecision {
+        data object Continue : PollDecision
+        data class Ready(val state: JSONObject) : PollDecision
+        data class Failed(val code: String, val message: String) : PollDecision
+    }
+
+    internal fun evaluatePoll(
+        state: JSONObject?,
+        lastErrorCode: String,
+        lastErrorMessage: String,
+    ): PollDecision {
+        if (state != null) {
+            val sessionId = state.optString("sessionId")
+            val displayId = state.optInt("displayId", -1)
+            if (state.optBoolean("active") && sessionId.isNotEmpty() && displayId > 0) {
+                return PollDecision.Ready(state)
+            }
+            if (state.optBoolean("stopping")) {
+                val code = lastErrorCode.ifEmpty { "VIRTUAL_SCREEN_STOPPED" }
+                return PollDecision.Failed(code, lastErrorMessage.ifEmpty { "副屏启动中断" })
+            }
+            return PollDecision.Continue
+        }
+        if (lastErrorCode.isNotEmpty()) {
+            return PollDecision.Failed(lastErrorCode, lastErrorMessage.ifEmpty { "副屏启动失败" })
+        }
+        return PollDecision.Continue
+    }
+
     /** 等待副屏服务完成异步启动；若中途启动失败则立即抛出真实错误码而非假报 starting。 */
     private fun awaitReady(waitReadyMs: Int): Pair<VirtualScreenService, JSONObject>? {
         val deadline = SystemClock.elapsedRealtime() + waitReadyMs
-        var seenService = VirtualScreenService.current != null
         while (true) {
             val service = VirtualScreenService.current
-            if (service != null) {
-                seenService = true
-                val state = service.state()
-                val sessionId = state.optString("sessionId")
-                val displayId = state.optInt("displayId", -1)
-                if (state.optBoolean("active") && sessionId.isNotEmpty() && displayId > 0) {
-                    return service to state
-                }
-                if (state.optBoolean("stopping")) {
-                    val code = VirtualScreenService.lastErrorCode.ifEmpty { "VIRTUAL_SCREEN_STOPPED" }
-                    throw RuntimeFailure(code, VirtualScreenService.lastError.ifEmpty { "副屏启动中断" })
-                }
-            } else if (seenService && VirtualScreenService.lastErrorCode.isNotEmpty()) {
-                throw RuntimeFailure(
-                    VirtualScreenService.lastErrorCode,
-                    VirtualScreenService.lastError.ifEmpty { "副屏启动失败" },
+            when (
+                val decision = evaluatePoll(
+                    state = service?.state(),
+                    lastErrorCode = VirtualScreenService.lastErrorCode,
+                    lastErrorMessage = VirtualScreenService.lastError,
                 )
+            ) {
+                is PollDecision.Ready -> if (service != null) return service to decision.state
+                is PollDecision.Failed -> throw RuntimeFailure(decision.code, decision.message)
+                PollDecision.Continue -> Unit
             }
             val remaining = deadline - SystemClock.elapsedRealtime()
             if (remaining <= 0L) return null

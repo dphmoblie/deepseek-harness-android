@@ -90,4 +90,15 @@ internal object TaskLivePromotionPolicy {
         promotedPermission == "prompt" -> "live_notification_denied"
         else -> null
     }
+
+    /**
+     * 判断本次诊断原因是否需要写入日志。
+     *
+     * 当 `currentReason` 为 `null`（即权限已恢复且通知结构可晋升）时不写日志，调用方应同步将
+     * 上一次记录的原因复位为 `null`，确保后续同一次运行内权限再次被撤销时仍能记录告警。
+     */
+    fun shouldRecordDiagnostic(
+        previousReason: String?,
+        currentReason: String?,
+    ): Boolean = currentReason != null && currentReason != previousReason
 }

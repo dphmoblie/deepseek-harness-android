@@ -1,5 +1,6 @@
 package io.deepseekharness.mobile.virtualscreen
 
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -225,5 +226,40 @@ class VirtualScreenStartTest {
         assertFalse(VirtualScreenStart.landscape(VirtualScreenSpec(600, 800, 240), "auto"))
         assertTrue(VirtualScreenStart.landscape(VirtualScreenSpec(600, 800, 240), "landscape"))
         assertFalse(VirtualScreenStart.landscape(VirtualScreenSpec(800, 600, 240), "portrait"))
+    }
+
+    @Test
+    fun `awaitReady 轮询在前台服务尚未登记 current 即失败时立即报告错误而非继续空等`() {
+        assertEquals(
+            VirtualScreenAgentStarter.PollDecision.Failed(
+                "VIRTUAL_SCREEN_FOREGROUND_FAILED",
+                "副屏前台服务启动失败 (VIRTUAL_SCREEN_FOREGROUND_FAILED)",
+            ),
+            VirtualScreenAgentStarter.evaluatePoll(
+                state = null,
+                lastErrorCode = "VIRTUAL_SCREEN_FOREGROUND_FAILED",
+                lastErrorMessage = "副屏前台服务启动失败 (VIRTUAL_SCREEN_FOREGROUND_FAILED)",
+            ),
+        )
+        assertEquals(
+            VirtualScreenAgentStarter.PollDecision.Continue,
+            VirtualScreenAgentStarter.evaluatePoll(
+                state = null,
+                lastErrorCode = "",
+                lastErrorMessage = "",
+            ),
+        )
+        val readyState = JSONObject()
+            .put("active", true)
+            .put("sessionId", "vs-123")
+            .put("displayId", 2)
+        assertEquals(
+            VirtualScreenAgentStarter.PollDecision.Ready(readyState),
+            VirtualScreenAgentStarter.evaluatePoll(
+                state = readyState,
+                lastErrorCode = "",
+                lastErrorMessage = "",
+            ),
+        )
     }
 }

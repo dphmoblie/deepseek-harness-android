@@ -84,4 +84,13 @@ class TaskLivePromotionPolicyTest {
     fun normalizeShortStatusTrimsOuterWhitespace() {
         assertEquals("运行中", TaskLivePromotionPolicy.normalizeShortStatus("  运行中 \n"))
     }
+
+    @Test
+    fun shouldRecordDiagnosticDeduplicatesAndReTriggersAfterRecovery() {
+        assertTrue(TaskLivePromotionPolicy.shouldRecordDiagnostic(null, "live_notification_denied"))
+        assertFalse(TaskLivePromotionPolicy.shouldRecordDiagnostic("live_notification_denied", "live_notification_denied"))
+        assertTrue(TaskLivePromotionPolicy.shouldRecordDiagnostic("live_notification_denied", "live_notification_unpromotable"))
+        assertFalse(TaskLivePromotionPolicy.shouldRecordDiagnostic("live_notification_denied", null))
+        assertTrue(TaskLivePromotionPolicy.shouldRecordDiagnostic(null, "live_notification_denied"))
+    }
 }

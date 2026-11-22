@@ -51,7 +51,7 @@ internal object TaskLiveNotificationCompat {
         context: Context,
         spec: ActiveTaskNotificationSpec,
     ): BuiltActiveTaskNotification {
-        var lastRejectedFramework: BuiltActiveTaskNotification? = null
+        var firstRejectedFramework: BuiltActiveTaskNotification? = null
         for (strategy in TaskLivePromotionPolicy.selectStrategies(Build.VERSION.SDK_INT)) {
             when (strategy) {
                 ActiveNotificationStrategy.FRAMEWORK_PROGRESS_STYLE,
@@ -69,11 +69,15 @@ internal object TaskLiveNotificationCompat {
                     if (TaskLivePromotionPolicy.shouldAcceptFrameworkCandidate(promotable)) {
                         return wrapped
                     }
-                    lastRejectedFramework = wrapped
+                    // 优先保留首个成功构建的原生候选（FRAMEWORK_PROGRESS_STYLE 含不确定进度样式），
+                    // 避免被后续同样未过晋升校验但无进度条的 FRAMEWORK_STANDARD 覆盖。
+                    if (firstRejectedFramework == null) {
+                        firstRejectedFramework = wrapped
+                    }
                 }
 
                 ActiveNotificationStrategy.COMPAT_PROGRESS -> {
-                    if (lastRejectedFramework != null) return lastRejectedFramework
+                    if (firstRejectedFramework != null) return firstRejectedFramework
                     val compatNotification = buildCompatNotification(context, spec)
                     return BuiltActiveTaskNotification(
                         notification = compatNotification,
@@ -154,9 +158,10 @@ internal object TaskLiveNotificationCompat {
             }
             builder.setStyle(progressStyle)
         }
-        // 在提供原生 setter 的版本（API 36 / 36.1）再同步调用一次，避免只认内部字段或不同重载。
-        invokeSingleArg(builder, "setRequestPromotedOngoing", true)
-        invokeSingleArg(builder, "setShortCriticalText", shortStatus)
+        // 在提供原生 setter 的版本（API 36 / 36.1）再同步调用一次，避免只认内部字段或不同重载；
+        // 单独容错，防止个别 ROM 的 setter 抛异常导致整条 ProgressStyle 通知回退。
+        runCatching { invokeSingleArg(builder, "setRequestPromotedOngoing", true) }
+        runCatching { invokeSingleArg(builder, "setShortCriticalText", shortStatus) }
         return builder.build()
     }
 

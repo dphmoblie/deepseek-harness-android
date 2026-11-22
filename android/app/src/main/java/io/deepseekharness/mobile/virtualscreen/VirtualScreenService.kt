@@ -1037,6 +1037,12 @@ class VirtualScreenService : Service() {
         @Volatile private var lastErrorResource = 0
         @Volatile internal var lastErrorCode = ""
             private set
+
+        internal fun clearLastError() {
+            lastErrorResource = 0
+            lastErrorCode = ""
+        }
+
         val lastError: String get() {
             val context = errorContext ?: return ""
             val resource = lastErrorResource

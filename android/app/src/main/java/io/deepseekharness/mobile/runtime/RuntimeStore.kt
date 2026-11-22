@@ -849,7 +849,9 @@ class RuntimeStore(context: Context) {
                 failureMessage = "无法写入 profile 模型供应商配置",
             )
         }
-        saveSyncedProviderDigestsLocked(outcome.managedDigests)
+        if (outcome.managedDigests != previousDigests) {
+            saveSyncedProviderDigestsLocked(outcome.managedDigests)
+        }
     }
 
     private fun ensureRealDirectory(directory: File, invalidMessage: String) {
