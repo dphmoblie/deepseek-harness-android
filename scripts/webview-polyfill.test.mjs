@@ -459,4 +459,3 @@ test('Blob.prototype.text/arrayBuffer 用 FileReader 兜底，不依赖原生实
   assert.equal(await runInContext('new Blob("hello").text()', context), 'hello')
   assert.equal(await runInContext('new Blob("hello").arrayBuffer()', context), 'buffer:hello')
 })
-
