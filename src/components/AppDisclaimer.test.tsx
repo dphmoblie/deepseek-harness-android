@@ -82,23 +82,52 @@ describe('AppDisclaimer 应用级免责条款弹窗', () => {
   })
 
   it.each([
-    { language: 'zh-CN', statutoryPhrase: '故意或重大过失', forbidden: null as RegExp | null },
-    { language: 'zh-TW', statutoryPhrase: '故意或重大過失', forbidden: /移动端|本应用/ },
-    { language: 'en', statutoryPhrase: 'willful misconduct, gross negligence', forbidden: /[\u4e00-\u9fff]/ },
-    { language: 'ja', statutoryPhrase: '故意または重過失', forbidden: /本应用|免责条款/ },
-    { language: 'ko', statutoryPhrase: '고의 또는 중대한 과실', forbidden: /[\u4e00-\u9fff]/ },
-  ])('$language 语言下条款包含法定不可免责保留条款与加粗标题，且无混用原文残留', ({ language, statutoryPhrase, forbidden }) => {
+    {
+      language: 'zh-CN',
+      requiredPhrases: ['故意或重大过失', '条款修改与版本更新', '权利保留条款', '条款解释与效力'],
+      forbidden: /最终解释权/ as RegExp | null,
+    },
+    {
+      language: 'zh-TW',
+      requiredPhrases: ['故意或重大過失', '條款修訂與版本更新', '權利保留條款', '條款解釋與效力'],
+      forbidden: /移动端|本应用|最終解釋權/,
+    },
+    {
+      language: 'en',
+      requiredPhrases: [
+        'willful misconduct, gross negligence',
+        'Amendments and version updates',
+        'Reservation of rights and non-waiver',
+        'Interpretation, language, and severability',
+      ],
+      forbidden: /[\u4e00-\u9fff]/,
+    },
+    {
+      language: 'ja',
+      requiredPhrases: ['故意または重過失', '規約の改定およびバージョン更新', '権利の留保および不放棄', '条項の解釈、言語版および分離可能性'],
+      forbidden: /本应用|免责条款/,
+    },
+    {
+      language: 'ko',
+      requiredPhrases: ['고의 또는 중대한 과실', '약관의 변경 및 버전 업데이트', '권리 유보 및 불포기', '조항 해석, 언어본 및 분리 가능성'],
+      forbidden: /[\u4e00-\u9fff]/,
+    },
+  ])('$language 语言下条款包含法定保留、条款修改、权利保留与合法解释条款，且无混用原文残留', ({ language, requiredPhrases, forbidden }) => {
     window.localStorage.setItem('dsh-mobile-language-v1', language)
     const gate = render(<AppDisclaimer mode="gate" declinedFallback onAccept={vi.fn()} onDecline={vi.fn()} />)
     const gateDialog = screen.getByTestId('app-disclaimer')
-    expect(gateDialog).toHaveTextContent(statutoryPhrase)
+    for (const phrase of requiredPhrases) {
+      expect(gateDialog).toHaveTextContent(phrase)
+    }
     expect(gateDialog.querySelectorAll('ol li strong')).toHaveLength(APP_DISCLAIMER_POINTS.length)
     if (forbidden !== null) expect(gateDialog.textContent ?? '').not.toMatch(forbidden)
     gate.unmount()
 
     render(<AppDisclaimer mode="read" onClose={vi.fn()} />)
     const readDialog = screen.getByTestId('app-disclaimer')
-    expect(readDialog).toHaveTextContent(statutoryPhrase)
+    for (const phrase of requiredPhrases) {
+      expect(readDialog).toHaveTextContent(phrase)
+    }
     if (forbidden !== null) expect(readDialog.textContent ?? '').not.toMatch(forbidden)
   })
 })

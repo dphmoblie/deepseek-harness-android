@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { APP_DISCLAIMER_STORAGE_KEY } from './appDisclaimer'
 import type { DiagnosticLogState, KeepAliveState, MailboxState, RuntimeSettings, RuntimeSettingsUpdate, RuntimeState, ShizukuState, StorageAccessState } from './platform/types'
 
 /**
@@ -187,7 +188,7 @@ async function pressForward(): Promise<void> {
 beforeEach(() => {
   window.localStorage.clear()
   window.localStorage.setItem('dsh-mobile-language-v1', 'zh-CN')
-  window.localStorage.setItem('dsh-mobile-app-disclaimer-v1', '1')
+  window.localStorage.setItem(APP_DISCLAIMER_STORAGE_KEY, '1')
   window.localStorage.setItem('dsh-mobile-onboarding-v1', '1')
   // jsdom 的会话历史在整个测试文件内共享：把当前记录复位成干净的根地址，
   // 保证每个用例的首屏都是主视图，也不会读到上一个用例留下的片段。

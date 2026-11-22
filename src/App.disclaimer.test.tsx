@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { arriveAtSettingsHome, beforeEachAppTest, bridge, settings } from './__tests__/appTestHarness'
-import { APP_DISCLAIMER_STORAGE_KEY, appDisclaimerStorageKey } from './appDisclaimer'
+import { APP_DISCLAIMER_STORAGE_KEY, APP_DISCLAIMER_VERSION, appDisclaimerStorageKey } from './appDisclaimer'
 import { FIRST_RUN_PERMISSIONS_STORAGE_KEY } from './components/FirstRunPermissions'
 import { ONBOARDING_STORAGE_KEY } from './components/Onboarding'
 
@@ -72,7 +72,7 @@ describe('应用免责条款：首次启动门禁与设置页查看', () => {
 
   it('旧版本条款同意记录失效，启动时重新弹出当前版本条款', async () => {
     window.localStorage.removeItem(APP_DISCLAIMER_STORAGE_KEY)
-    window.localStorage.setItem(appDisclaimerStorageKey(0), '1')
+    window.localStorage.setItem(appDisclaimerStorageKey(APP_DISCLAIMER_VERSION - 1), '1')
 
     render(<App />)
 
